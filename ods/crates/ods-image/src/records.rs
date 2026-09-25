@@ -63,6 +63,21 @@ impl<R: Read> Records<R> {
         Records { r, format, pos: 0 }
     }
 
+    /// Records from `pos` on, where `r` stands. `pos` must be where a
+    /// record starts (VAR files skip to block boundaries by it).
+    pub fn at(r: R, format: Format, pos: u64) -> Records<R> {
+        Records { r, format, pos }
+    }
+
+    /// Byte offset of the next record.
+    pub fn position(&self) -> u64 {
+        self.pos
+    }
+
+    pub fn format(&self) -> Format {
+        self.format
+    }
+
     /// The control area size, to skip when printing a record as text.
     pub fn control_size(&self) -> usize {
         match self.format {

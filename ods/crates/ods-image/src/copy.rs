@@ -66,7 +66,77 @@ impl Read for FileReader<'_> {
     }
 }
 
+impl FileReader<'_> {
+    /// Moves to byte `pos` of the file.
+    pub fn seek_to(&mut self, pos: u64) {
+        self.pos = pos.min(self.eof);
+    }
+
+    /// Bytes up to the end of file.
+    pub fn len(&self) -> u64 {
+        self.eof
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.eof == 0
+    }
+}
+
+/// A text file seen as lines: its size, and every 64 kB of lines the record
+/// they start with, so reading at an offset converts only from there.
+#[derive(Clone, Debug)]
+pub struct TextView {
+    pub size: u64,
+    /// (offset in the text, offset in the file) of record starts.
+    marks: Vec<(u64, u64)>,
+}
+
+const MARK_EVERY: u64 = 64 * 1024;
+
 impl Image {
+    /// Scans a file's records once to size its text view.
+    pub fn text_view(&mut self, fid: Fid) -> Result<TextView> {
+        let mut recs = self.records(fid)?;
+        let skip = recs.control_size();
+        let (mut size, mut marks) = (0u64, vec![(0, 0)]);
+        loop {
+            let at = recs.position();
+            let Some(r) = recs.next() else { break };
+            if size - marks[marks.len() - 1].0 >= MARK_EVERY {
+                marks.push((size, at));
+            }
+            size += r?.len().saturating_sub(skip) as u64 + 1;
+        }
+        Ok(TextView { size, marks })
+    }
+
+    /// Reads the text view at `offset`. Returns the bytes read.
+    pub fn read_text(&mut self, fid: Fid, view: &TextView, offset: u64, buf: &mut [u8]) -> Result<usize> {
+        let i = view.marks.partition_point(|m| m.0 <= offset).saturating_sub(1);
+        let (mut pos, raw) = view.marks[i];
+        let format = self.records(fid)?.format();
+        let mut rd = self.reader(fid)?;
+        rd.seek_to(raw);
+        let mut recs = Records::at(rd, format, raw);
+        let skip = recs.control_size();
+        let end = offset + buf.len() as u64;
+        let mut n = 0;
+        while pos < end {
+            let Some(r) = recs.next() else { break };
+            let mut line = r?;
+            line.drain(..skip.min(line.len()));
+            line.push(b'\n');
+            let (from, to) = (pos.max(offset), (pos + line.len() as u64).min(end));
+            if from < to {
+                let src = &line[(from - pos) as usize..(to - pos) as usize];
+                buf[(from - offset) as usize..(to - offset) as usize].copy_from_slice(src);
+                n = (to - offset) as usize;
+            }
+            pos += line.len() as u64;
+        }
+        Ok(n)
+    }
+
     /// A reader over the file's bytes, up to its end of file.
     pub fn reader(&mut self, fid: Fid) -> Result<FileReader<'_>> {
         let eof = self.stat(fid)?.attrs.record.eof_bytes();

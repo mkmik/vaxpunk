@@ -6,7 +6,7 @@ to test other implementations against. It reads and writes disk images on
 macOS and Linux today.
 
 ```
-  ods (CLI)       ods-fuse (planned)
+  ods (CLI)       ods-fuse (mount)
         \            /
          ods-image          image files: raw, simh; paths, records, text
              |
@@ -18,8 +18,9 @@ macOS and Linux today.
 | `crates/ods-core` | Structure layouts, mount, directories, allocation, INITIALIZE, verifier. `#![no_std]` with `alloc`, no dependencies, no `unsafe`; it builds for `aarch64-unknown-none` |
 | `crates/ods-image` | The core over image files, with advisory locking; VMS and Unix path forms; byte streams; VAR, VFC, FIX and stream records; text conversion; tree export and import with an attribute manifest; errors printed as VMS status codes |
 | `crates/ods-cli` | `ods`, a thin command layer over ods-image |
+| `crates/ods-fuse` | `ods-fuse`, a read-only FUSE mount over ods-image, with the mapping proposed in [docs/fuse.md](docs/fuse.md) |
 
-The CLI never touches the core directly; CI checks that.
+The CLI and the FUSE daemon never touch the core directly; CI checks that.
 
 ## Using it
 
@@ -46,6 +47,17 @@ $ods import disk.img ./src-tree '[COPY]'
 
 `info`, `dir`, `dump` and `verify` take `--json`. Wildcards: `*`, `%`, `?`
 and `[...]`.
+
+```sh
+ods-fuse disk.img /mnt/vms        # --versions also lists older versions as name;N
+ls /mnt/vms/SRC; grep -r TODO /mnt/vms; getfattr -d -m vms /mnt/vms/SRC/README.MD
+umount /mnt/vms                   # or Ctrl-C
+```
+
+Text files read as lines, everything else as bytes; VMS attributes are
+`vms.*` extended attributes. On Linux this needs fuse3; on macOS, macFUSE
+with its kernel extension allowed (on this project's Mac it is not, so the
+mount has been tested in a Linux container).
 
 ## Tests
 
@@ -82,7 +94,8 @@ Against the PRD's work order:
 | 7. INITIALIZE | done, modelled on VMS 7.1 |
 | 8. Writing | done, with model and power-loss tests |
 | 9. Check on real VMS | see [docs/vms-check.md](docs/vms-check.md) |
-| 10-11. FUSE | design notes in [docs/fuse.md](docs/fuse.md) |
+| 10. FUSE read-only | done with the mapping [docs/fuse.md](docs/fuse.md) proposes, for the design session to confirm; `ls`, `cat`, `grep` work on the fixtures |
+| 11. FUSE read-write | not started: waits for the mapping to be settled |
 
 Known limits: no volume sets, sparse files, UCS-2 names on write, hard
 links, or ACL editing (ACLs are kept as they are). Allocation is first fit

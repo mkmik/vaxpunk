@@ -17,18 +17,18 @@ mod tree;
 use std::fs::{File, OpenOptions};
 use std::path::Path;
 
-pub use copy::{Conversion, FileReader};
+pub use copy::{Conversion, FileReader, TextView};
 pub use device::{Container, FileDevice};
 pub use error::{Context, Error, Kind, OdsError, Result};
 pub use ods_core::layout::{self, Header, HomeBlock, NameType};
 pub use ods_core::name::{self, Spec, Version};
 pub use ods_core::{
-    Alloc, Attributes, DirEntry, Fid, FileInfo, Finding, InitParams, Level, NewFile, RecordAttrs, Report, Severity,
-    fch, rat, rfm,
+    Alloc, Attributes, DirEntry, Fid, FileInfo, Finding, InitParams, Level, MFD, NewFile, RecordAttrs, Report,
+    Severity, fch, rat, rfm,
 };
 pub use tree::{Manifest, ManifestEntry};
 
-use ods_core::{BLOCK, MFD, Volume};
+use ods_core::{BLOCK, Volume};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Mode {
