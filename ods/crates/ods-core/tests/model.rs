@@ -487,3 +487,82 @@ fn big_directories_survive_crashes() {
         crash_everywhere(seed, 120, 20000, &Model::with(many_names(200), DIR_OPS.to_vec(), 512));
     }
 }
+
+/// Fills a volume with one-cluster files and deletes every other one, so
+/// free space is all holes.
+fn fragment(v: &mut Volume<Mem>) {
+    let name = |i: usize| format!("S{i:04}.TMP").into_bytes();
+    for i in 0..600 {
+        let new = NewFile { blocks: 1, ..NewFile::default() };
+        v.create(ods_core::MFD, &name(i), None, &new).unwrap();
+    }
+    for i in (0..600).step_by(2) {
+        v.delete(ods_core::MFD, &name(i), 1).unwrap();
+    }
+}
+
+fn fragmented(blocks: usize) -> Volume<Mem> {
+    let p = InitParams { label: b"FRAG".to_vec(), cluster: 1, now: clock(), ..InitParams::default() };
+    let mut v = ods_core::initialize(Mem::new(blocks), &p).unwrap();
+    v.set_clock(clock);
+    fragment(&mut v);
+    v
+}
+
+/// A file in hundreds of pieces needs extension headers: grow it across
+/// the holes, read it back, shrink it, and check the volume each time.
+#[test]
+fn extension_headers() {
+    let mut rng = Rng(99);
+    let mut v = fragmented(4000);
+    let (fid, _) = v.create(ods_core::MFD, b"BIG.DAT", None, &NewFile::default()).unwrap();
+    let data: Vec<u8> = (0..250 * BLOCK).map(|_| rng.next() as u8).collect();
+    write_content(&mut v, fid, &data).unwrap();
+    let info = v.stat(fid).unwrap();
+    assert!(info.headers >= 3, "{} headers, {} extents", info.headers, info.extents);
+    assert_eq!(read_content(&mut v, fid), data);
+    let r = v.verify().unwrap();
+    assert!(r.findings.is_empty(), "{:#?}", r.findings);
+    for keep in [180u64, 100, 3, 0] {
+        v.truncate(fid, keep).unwrap();
+        let r = v.verify().unwrap();
+        assert!(r.findings.is_empty(), "truncated to {keep}: {:#?}", r.findings);
+        assert_eq!(read_content(&mut v, fid), data[..(keep as usize * BLOCK).min(data.len())]);
+    }
+    assert_eq!(v.stat(fid).unwrap().headers, 1);
+    write_content(&mut v, fid, &data[..200 * BLOCK]).unwrap();
+    v.delete(ods_core::MFD, b"BIG.DAT", 1).unwrap();
+    assert!(v.verify().unwrap().findings.is_empty());
+}
+
+/// The same, cut short after every write.
+#[test]
+fn extension_headers_survive_crashes() {
+    let start = fragmented(3000).dismount().unwrap();
+    let data = vec![0x5a; 180 * BLOCK];
+    let run = |dev: Mem| -> (Mem, bool) {
+        let mut v = Volume::mount(dev, true).unwrap();
+        v.set_clock(clock);
+        let ok = (|| {
+            let (fid, _) = v.create(ods_core::MFD, b"BIG.DAT", None, &NewFile::default())?;
+            write_content(&mut v, fid, &data)?;
+            v.truncate(fid, 20)?;
+            v.delete(ods_core::MFD, b"BIG.DAT", 1)
+        })()
+        .is_ok();
+        (v.dismount().unwrap(), ok)
+    };
+    let (end, ok) = run(start.clone());
+    assert!(ok);
+    let total = end.writes - start.writes;
+    for n in 0..total {
+        let mut dev = start.clone();
+        dev.fail_after = Some(start.writes + n);
+        let (mut dev, _) = run(dev);
+        dev.fail_after = None;
+        let mut v = Volume::mount(dev, false).unwrap();
+        let errors: Vec<_> =
+            v.verify().unwrap().findings.into_iter().filter(|f| f.severity == Severity::Error).collect();
+        assert!(errors.is_empty(), "crash after {n} of {total} writes: {errors:#?}");
+    }
+}
