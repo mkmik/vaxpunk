@@ -1,0 +1,6 @@
+[package]
+name = "ods-core"
+description = "Files-11 ODS-2 and ODS-5 on-disk structure, independent of the host"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
