@@ -97,10 +97,13 @@ fn run(dir: &Path, name: &str) -> Result<(), String> {
     let linked = vlink::link(&objects, &opts).map_err(|e| e.join("\n"))?;
     let exe = Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("{name}.exe"));
     fs::write(&exe, linked.image.write()).unwrap();
+    let map = exe.with_extension("map");
+    fs::write(&map, &linked.map).unwrap();
 
     let flags = std::env::var("VRUN_FLAGS").unwrap_or_default();
     let out = Command::new(env!("CARGO_BIN_EXE_vrun"))
-        .args(["--timeout", "20"])
+        .args(["--timeout", "20", "--map"])
+        .arg(&map)
         .args(flags.split_whitespace())
         .arg(&exe)
         .output()

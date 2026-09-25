@@ -16,6 +16,8 @@ pub const INFO_VA: u64 = RUNNER_VA;
 pub const RETURN_VA: u64 = RUNNER_VA + PAGE;
 pub const STACK_TOP: u64 = 0x7fff_0000;
 const STACK_SIZE: u64 = 0xe_0000;
+/// Unmapped, between the return page and the stack, so an overflow faults.
+pub const GUARD: std::ops::Range<u64> = RETURN_VA + PAGE..STACK_TOP - STACK_SIZE;
 
 /// The page tables go right after the stub region; nothing maps them.
 const TABLES: u64 = EL1_STACK;

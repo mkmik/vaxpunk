@@ -1,0 +1,3 @@
+%VRUN-F-ACCVIO, access violation, virtual address=000000007FF0FFF0, PC=0000000000010004
+-VRUN-I-PC, PC is RECURSE (image section 1 + %X4)
+-VRUN-I-STACKOVF, virtual address is below the stack: it overflowed

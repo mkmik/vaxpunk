@@ -1,0 +1,2 @@
+%VRUN-F-OPCDEC, reserved or privileged instruction, PC=000000000001000C
+-VRUN-I-PC, PC is PEEK+%X4 (image section 1 + %XC)

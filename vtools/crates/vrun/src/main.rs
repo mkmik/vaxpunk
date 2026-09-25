@@ -14,8 +14,8 @@ use vms_obj::exe::Image;
 
 use crate::layout::LOAD_BASE;
 
-const USAGE: &str =
-    "usage: vrun [--hvf] [--gdb] [--timeout SECONDS] [--verbose] IMAGE [ARGUMENTS...]";
+const USAGE: &str = "usage: vrun [--hvf] [--gdb] [--map FILE] [--timeout SECONDS] [--verbose] \
+                     IMAGE [ARGUMENTS...]";
 const STUB: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/stub.bin"));
 
 /// VMS condition values for image faults.
@@ -26,6 +26,8 @@ const SS_OPCDEC: u32 = 0x43c;
 struct Options {
     hvf: bool,
     gdb: bool,
+    /// The image's link map, for symbols in fault messages.
+    map: Option<PathBuf>,
     timeout: Option<Duration>,
     verbose: bool,
     image: PathBuf,
@@ -60,6 +62,13 @@ fn run() -> Result<u8, String> {
             opt.image.display()
         )
     })?;
+    let symbols = match &opt.map {
+        Some(path) => map_symbols(
+            &fs::read_to_string(path)
+                .map_err(|e| format!("OPENIN, cannot read {}: {e}", path.display()))?,
+        ),
+        None => Vec::new(),
+    };
     let plan = plan::plan(&image, opt.args.as_bytes(), STUB)?;
     if opt.verbose {
         for r in &plan.map {
@@ -92,10 +101,13 @@ fn run() -> Result<u8, String> {
     .arg("-device")
     .arg(format!("loader,addr={LOAD_BASE:#x},cpu-num=0"));
     if opt.gdb {
+        let start = image.transfer;
         qemu.args(["-s", "-S"]);
-        eprintln!("%VRUN-I-GDB, waiting for a debugger on port 1234, for example:");
-        eprintln!("  lldb -o 'gdb-remote 1234'");
-        eprintln!("  gdb-multiarch -ex 'target remote :1234'");
+        eprintln!(
+            "%VRUN-I-GDB, waiting for a debugger on port 1234; the image starts at {start:016X}"
+        );
+        eprintln!("  lldb -o 'gdb-remote 1234' -o 'breakpoint set -a {start:#x}' -o continue");
+        eprintln!("  gdb-multiarch -ex 'target remote :1234' -ex 'break *{start:#x}' -ex continue");
     }
     if opt.verbose {
         eprintln!("%VRUN-I-QEMU, {qemu:?}");
@@ -138,13 +150,14 @@ fn run() -> Result<u8, String> {
             Ok(host_code(status))
         }
         Some(Outcome::Fault { esr, pc, far }) => {
-            let (msg, status) = fault(esr, pc, far);
+            let (msg, status) = fault(esr, pc, far, &image, &symbols);
             eprintln!("{msg}");
             Ok(host_code(status))
         }
         Some(Outcome::StubFault { esr, pc, far }) => Err(format!(
             "STUBFAULT, the boot stub faulted: ESR={esr:016X}, PC={pc:016X}, virtual address={far:016X}"
         )),
+        None if opt.gdb => Err("NOSTATUS, the debugger ended the run".into()),
         None => Err("NOSTATUS, QEMU exited without the image's status".into()),
     }
 }
@@ -153,6 +166,7 @@ fn options(mut args: impl Iterator<Item = String>) -> Result<Options, String> {
     let mut opt = Options {
         hvf: false,
         gdb: false,
+        map: None,
         timeout: Some(Duration::from_secs(30)),
         verbose: false,
         image: PathBuf::new(),
@@ -164,6 +178,7 @@ fn options(mut args: impl Iterator<Item = String>) -> Result<Options, String> {
             "--hvf" => opt.hvf = true,
             "--gdb" => opt.gdb = true,
             "--verbose" => opt.verbose = true,
+            "--map" => opt.map = Some(args.next().ok_or_else(usage)?.into()),
             "--timeout" => {
                 let secs: u64 = args.next().and_then(|s| s.parse().ok()).ok_or_else(usage)?;
                 opt.timeout = (secs > 0).then(|| Duration::from_secs(secs));
@@ -224,24 +239,38 @@ fn parse_report(report: &[u8]) -> Option<Outcome> {
 }
 
 /// The message and VMS condition value for a fault, from its exception
-/// syndrome.
-fn fault(esr: u64, pc: u64, far: u64) -> (String, u32) {
+/// syndrome, then lines that say where the PC and the address are.
+fn fault(esr: u64, pc: u64, far: u64, image: &Image, symbols: &[(u64, String)]) -> (String, u32) {
+    let at =
+        place(pc, image, symbols).map_or(String::new(), |p| format!("\n-VRUN-I-PC, PC is {p}"));
     match esr >> 26 {
-        0x20 | 0x21 | 0x24 | 0x25 => (
-            format!("%VRUN-F-ACCVIO, access violation, virtual address={far:016X}, PC={pc:016X}"),
-            SS_ACCVIO,
-        ),
+        0x20 | 0x21 | 0x24 | 0x25 => {
+            let address = match place(far, image, symbols) {
+                Some(p) => format!("\n-VRUN-I-ADDRESS, virtual address is {p}"),
+                None if plan::GUARD.contains(&far) => {
+                    "\n-VRUN-I-STACKOVF, virtual address is below the stack: it overflowed".into()
+                }
+                None => String::new(),
+            };
+            (
+                format!(
+                    "%VRUN-F-ACCVIO, access violation, virtual address={far:016X}, \
+                     PC={pc:016X}{at}{address}"
+                ),
+                SS_ACCVIO,
+            )
+        }
         0x00 => (
-            format!("%VRUN-F-OPCDEC, reserved or privileged instruction, PC={pc:016X}"),
+            format!("%VRUN-F-OPCDEC, reserved or privileged instruction, PC={pc:016X}{at}"),
             SS_OPCDEC,
         ),
         0x01 | 0x18 => (
-            format!("%VRUN-F-OPCDEC, privileged instruction, PC={pc:016X}"),
+            format!("%VRUN-F-OPCDEC, privileged instruction, PC={pc:016X}{at}"),
             SS_OPCDEC,
         ),
         0x15 => (
             format!(
-                "%VRUN-F-OPCDEC, no monitor call SVC #{}, PC={pc:016X}",
+                "%VRUN-F-OPCDEC, no monitor call SVC #{}, PC={pc:016X}{at}",
                 esr & 0xffff
             ),
             SS_OPCDEC,
@@ -249,11 +278,46 @@ fn fault(esr: u64, pc: u64, far: u64) -> (String, u32) {
         ec => (
             format!(
                 "%VRUN-F-EXCEPT, unexpected exception class {ec:02X}, ESR={esr:016X}, \
-                 virtual address={far:016X}, PC={pc:016X}"
+                 virtual address={far:016X}, PC={pc:016X}{at}"
             ),
             SS_ABORT,
         ),
     }
+}
+
+/// Where `addr` is in the image: the nearest symbol at or before it in the
+/// same image section, if any, and the section and offset.
+fn place(addr: u64, image: &Image, symbols: &[(u64, String)]) -> Option<String> {
+    let (i, s) = image
+        .sections
+        .iter()
+        .enumerate()
+        .find(|(_, s)| (s.vaddr..s.vaddr + u64::from(s.size)).contains(&addr))?;
+    let section = format!("image section {} + %X{:X}", i + 1, addr - s.vaddr);
+    let symbol = symbols
+        .iter()
+        .filter(|(v, _)| (s.vaddr..=addr).contains(v))
+        .max_by_key(|(v, _)| *v);
+    Some(match symbol {
+        Some((v, name)) if *v == addr => format!("{name} ({section})"),
+        Some((v, name)) => format!("{name}+%X{:X} ({section})", addr - v),
+        None => section,
+    })
+}
+
+/// The symbols of a vlink map: its "Symbols By Value" list.
+fn map_symbols(map: &str) -> Vec<(u64, String)> {
+    map.lines()
+        .skip_while(|l| l.trim() != "Symbols By Value")
+        .take_while(|l| l.trim() != "Image Synopsis")
+        .filter_map(|l| {
+            let (value, name) = l.trim().split_once(' ')?;
+            Some((
+                u64::from_str_radix(value, 16).ok()?,
+                name.trim().to_string(),
+            ))
+        })
+        .collect()
 }
 
 /// Maps a VMS status to a host exit code: 0 if the low bit is set (success),
@@ -309,11 +373,68 @@ mod tests {
         assert_eq!(host_code(1), 0);
         assert_eq!(host_code(0x2c), 44);
         assert_eq!(host_code(0x100), 1);
-        assert_eq!(fault(0x9200_0006, 0, 0).1, SS_ACCVIO, "data abort from EL0");
+        let image = sample();
+        let fault = |esr| fault(esr, 0, 0, &image, &[]).1;
+        assert_eq!(fault(0x9200_0006), SS_ACCVIO, "data abort from EL0");
+        assert_eq!(fault(0x0200_0000), SS_OPCDEC, "undefined instruction");
+    }
+
+    fn sample() -> Image {
+        let section = |vaddr, size: u32| vms_obj::exe::Section {
+            vaddr,
+            size,
+            flags: 0,
+            data: vec![0; size as usize],
+        };
+        Image {
+            name: "T".into(),
+            ident: String::new(),
+            link_time: 0,
+            transfer: 0x10000,
+            sections: vec![section(0x10000, 0x20), section(0x20000, 8)],
+        }
+    }
+
+    #[test]
+    fn symbols() {
+        let map = "\
+Symbols By Name
+
+  Symbol                           Value             Module
+  START                            0000000000010000  M
+
+Symbols By Value
+
+  Value             Symbol
+  0000000000000005  FIVE
+  0000000000010000  START
+  0000000000010010  MID
+  0000000000020000  MSG
+
+Image Synopsis
+
+  Transfer address  0000000000010000 (START)
+";
+        let symbols = map_symbols(map);
+        assert_eq!(symbols.len(), 4, "{symbols:?}");
+        let image = sample();
+        let at = |addr| place(addr, &image, &symbols);
+        assert_eq!(at(0x10000).unwrap(), "START (image section 1 + %X0)");
+        assert_eq!(at(0x10014).unwrap(), "MID+%X4 (image section 1 + %X14)");
+        assert_eq!(at(0x20004).unwrap(), "MSG+%X4 (image section 2 + %X4)");
+        assert_eq!(at(5), None, "FIVE is a constant, outside the image");
         assert_eq!(
-            fault(0x0200_0000, 0, 0).1,
-            SS_OPCDEC,
-            "undefined instruction"
+            place(0x10004, &image, &[]).unwrap(),
+            "image section 1 + %X4"
+        );
+        let (msg, _) = fault(0x9200_0006, 0x10004, 0x7ff0_fff0, &image, &symbols);
+        let lines: Vec<&str> = msg.lines().skip(1).collect();
+        assert_eq!(
+            lines,
+            [
+                "-VRUN-I-PC, PC is START+%X4 (image section 1 + %X4)",
+                "-VRUN-I-STACKOVF, virtual address is below the stack: it overflowed"
+            ]
         );
     }
 }

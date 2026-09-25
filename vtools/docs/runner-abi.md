@@ -92,7 +92,35 @@ and exits as if the image had returned this status:
 | undefined, privileged or trapped instruction, unknown `SVC` | `%VRUN-F-OPCDEC` with the PC | `SS$_OPCDEC`, %X0000043C |
 | anything else | `%VRUN-F-EXCEPT` with the syndrome | `SS$_ABORT`, %X0000002C |
 
+Lines follow that say where: the PC and, for an access violation, the
+address, each as image section and offset. With `--map` and the image's link
+map (`vlink /MAP`), they also give the nearest global symbol before it in the
+same section:
+
+```
+%VRUN-F-ACCVIO, access violation, virtual address=0000000000000008, PC=0000000000010004
+-VRUN-I-PC, PC is START+%X4 (image section 1 + %X4)
+```
+
+An address in the unmapped pages below the stack means the stack overflowed,
+and `-VRUN-I-STACKOVF` says so.
+
 A hung image is stopped after `--timeout` seconds (default 30).
+
+## Debugging
+
+`vrun --gdb` starts QEMU halted, with a GDB server on port 1234, and prints
+commands that attach a debugger and stop at the image's transfer address. With
+LLDB, Xcode's included:
+
+```
+lldb -o 'gdb-remote 1234' -o 'breakpoint set -a 0x10000' -o continue
+```
+
+The debugger starts at the stub's first instruction, at 40200000. After the
+breakpoint, `si` steps through the image at EL0; addresses are the image's
+virtual addresses. The debugger has no symbols; the map does. There is no
+timeout, and quitting the debugger ends the run.
 
 ## Console protocol
 
