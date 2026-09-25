@@ -6,8 +6,9 @@ those changes. Anything it doesn't mention works exactly as described in the
 Alpha specification below. Compilers and assemblers are written against this
 document plus that specification.
 
-Status: first draft (work order step 1). The ARM64 store commands are
-provisional until the linker implements them (step 7).
+Status: `vasm` writes this format and `vlink` reads it. `vlink` implements all
+the ARM64 store commands, tested at their range limits. Procedure descriptors
+and linkage wait for the calling standard.
 
 ## Sources
 

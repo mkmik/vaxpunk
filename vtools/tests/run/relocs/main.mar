@@ -1,0 +1,127 @@
+        .TITLE  RELOCS  Every ARM64 relocation, each reaching into another module
+        .EXTERNAL LIB_ADD, LIB_ONE, LIB_DATA, LIB_WORD, LIB_MSG, LIB_MSG_END
+
+; Each check leaves its number in x9; a failed check exits with it.
+
+        .PSECT  $CODE$
+START::
+        stp     x29, x30, [sp, #-16]!
+        mov     x29, sp
+        movz    x3, #^X7788             ; the value at LIB_DATA
+        movk    x3, #^X5566, lsl #16
+        movk    x3, #^X3344, lsl #32
+        movk    x3, #^X1122, lsl #48
+
+        mov     x9, #^X10               ; BL: JUMP26
+        mov     x0, #40
+        mov     x1, #2
+        bl      LIB_ADD
+        cmp     x0, #42
+        b.ne    fail
+
+        mov     x9, #^X12               ; B: JUMP26
+        adr     x30, 1$
+        b       LIB_ONE
+1$:     cmp     x0, #1
+        b.ne    fail
+
+        mov     x9, #^X14               ; B.EQ: BRANCH19
+        mov     x0, #0
+        adr     x30, 2$
+        cmp     x0, #0
+        b.eq    LIB_ONE
+2$:     cmp     x0, #1
+        b.ne    fail
+
+        mov     x9, #^X16               ; CBZ: BRANCH19
+        mov     x0, #0
+        adr     x30, 3$
+        cbz     x0, LIB_ONE
+3$:     cmp     x0, #1
+        b.ne    fail
+
+        mov     x9, #^X18               ; TBNZ: BRANCH14
+        mov     x0, #4
+        adr     x30, 4$
+        tbnz    x0, #2, LIB_ONE
+4$:     cmp     x0, #1
+        b.ne    fail
+
+        mov     x9, #^X1A               ; ADR
+        adr     x1, LIB_DATA
+        ldr     x2, [x1]
+        cmp     x2, x3
+        b.ne    fail
+
+        mov     x9, #^X1C               ; ADRP, ADD :lo12:, LDST32 :lo12:
+        adrp    x1, LIB_WORD
+        add     x1, x1, #:lo12:LIB_WORD
+        ldr     w2, [x1]
+        adrp    x4, LIB_WORD
+        ldr     w5, [x4, #:lo12:LIB_WORD]
+        mov     w6, #^XCAFE
+        cmp     w2, w6
+        b.ne    fail
+        cmp     w5, w6
+        b.ne    fail
+
+        mov     x9, #^X1E               ; ADRP, LDST64 :lo12:
+        adrp    x1, LIB_DATA
+        ldr     x2, [x1, #:lo12:LIB_DATA]
+        cmp     x2, x3
+        b.ne    fail
+
+        mov     x9, #^X20               ; MOVZ/MOVK: MOVW_G3 to G0
+        movz    x5, #:abs_g3:LIB_DATA
+        movk    x5, #:abs_g2_nc:LIB_DATA
+        movk    x5, #:abs_g1_nc:LIB_DATA
+        movk    x5, #:abs_g0_nc:LIB_DATA
+        ldr     x2, [x5]
+        cmp     x2, x3
+        b.ne    fail
+
+        mov     x9, #^X22               ; LDR (literal): BRANCH19
+        ldr     x2, LIB_DATA
+        cmp     x2, x3
+        b.ne    fail
+
+        mov     x9, #^X24               ; .ADDRESS and .LONG of addresses
+        adrp    x1, pointers
+        add     x1, x1, #:lo12:pointers
+        adr     x4, LIB_DATA
+        ldr     x2, [x1]
+        cmp     x2, x4
+        b.ne    fail
+        adr     x4, LIB_WORD
+        ldr     w2, [x1, #8]
+        cmp     x2, x4
+        b.ne    fail
+
+        adr     x2, greeting            ; .ASCID: a descriptor
+        ldrh    w1, [x2]                ; DSC$W_LENGTH
+        ldr     w0, [x2, #4]            ; DSC$A_POINTER
+        svc     #2
+
+        adrp    x0, LIB_MSG             ; the other module's text
+        add     x0, x0, #:lo12:LIB_MSG
+        adrp    x1, LIB_MSG_END
+        add     x1, x1, #:lo12:LIB_MSG_END
+        sub     x1, x1, x0
+        svc     #2
+
+        mov     x0, #1                  ; SS$_NORMAL
+        b       done
+fail:   mov     x0, x9
+done:   ldp     x29, x30, [sp], #16
+        ret
+
+        .PSECT  $DATA$
+pointers:
+        .ADDRESS LIB_DATA
+        .LONG   LIB_WORD
+
+        .PSECT  $LITERAL$
+greeting:
+        .ASCID  "descriptor ok"<10>
+
+        .END    START

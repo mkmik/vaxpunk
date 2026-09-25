@@ -1,0 +1,32 @@
+        .TITLE  DATA    Writable and demand-zero psects
+
+        .PSECT  $BSS$                   ; demand-zero
+counter:
+        .BLKQ   1
+        .BLKB   ^X20000                 ; spans more than one page
+
+        .PSECT  $DATA$
+initial:
+        .QUAD   5
+
+        .PSECT  $CODE$
+START::
+        adrp    x0, counter
+        add     x0, x0, #:lo12:counter
+        ldr     x1, [x0]                ; demand-zero memory reads 0
+        cbnz    x1, fail
+        adrp    x2, initial
+        ldr     x3, [x2, #:lo12:initial]
+        add     x1, x1, x3
+        str     x1, [x0]                ; demand-zero memory is writable
+        str     x1, [x0, #4088]
+        ldr     x4, [x0]
+        cmp     x4, #5
+        b.ne    fail
+        str     xzr, [x2, #:lo12:initial]       ; so is $DATA$
+        mov     x0, #1
+        ret
+fail:   mov     x0, #^X2C               ; SS$_ABORT
+        ret
+
+        .END    START

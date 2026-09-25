@@ -1,6 +1,6 @@
 [package]
-name = "vrun"
-description = "Runs vaxpunk images at EL0 in a bare-metal QEMU virt machine"
+name = "vlink"
+description = "Links vaxpunk object modules into an executable image"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -10,4 +10,3 @@ vms-obj = { path = "../vms-obj" }
 
 [dev-dependencies]
 vasm = { path = "../vasm" }
-vlink = { path = "../vlink" }

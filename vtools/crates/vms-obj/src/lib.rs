@@ -12,6 +12,7 @@ mod record;
 
 pub mod exe;
 pub mod obj;
+pub mod reloc;
 
 pub use record::Error;
 
