@@ -32,7 +32,7 @@ struct handoff {
 };
 _Static_assert(offsetof(struct handoff, tcr) == 80, "tramp in entry.S hard-codes the layout");
 
-extern char tramp[]; /* entry.S, alone in its page */
+extern char tramp[]; /* entry.S, page aligned and shorter than a page */
 
 static uint64_t tables[8][512] __attribute__((aligned(4096)));
 static unsigned ntables;

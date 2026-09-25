@@ -46,6 +46,9 @@ boot info: node 0 of 1, 53 untyped caps
 root task done
 ```
 
+EDK2 prints a few `Error: Image at ... start failed` and `Tpm2...` lines
+before Limine starts. That is normal for the firmware QEMU ships.
+
 Day to day: edit `roottask/src/`, then `make run`. Only the root task is
 rebuilt and the ESP image re-stitched. On an M3, the root task prints about
 one second after the command.

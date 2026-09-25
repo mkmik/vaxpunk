@@ -29,7 +29,8 @@ vectors:
 
 /*
  * tramp(const struct handoff *h) runs at its physical address, identity
- * mapped, alone in its page. It loads everything from h while Limine's
+ * mapped. Page alignment keeps it inside the one 2 MiB block that maps it
+ * (mmu.c). It loads everything from h while Limine's
  * TTBR1 still maps it, turns the MMU off, installs seL4's MAIR, TCR and
  * tables, turns the MMU back on and enters the kernel. The same sequence as
  * the elfloader's arm_enable_mmu.

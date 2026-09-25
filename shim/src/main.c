@@ -137,6 +137,8 @@ static void check_placement(const char *what, uint64_t start, uint64_t end)
 	struct limine_memmap_response *mm = memmap_req.response;
 	uint64_t run_start = 0, run_end = 0;
 	int usable = 0, owned = 0;
+	if (end < start)
+		panic("%s 0x%lx-0x%lx wraps around the address space", what, start, end);
 	for (uint64_t i = 0; i < mm->entry_count; i++) {
 		struct limine_memmap_entry *e = mm->entries[i];
 		if (e->type != LIMINE_MEMMAP_USABLE)
