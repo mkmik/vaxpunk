@@ -1,6 +1,6 @@
 [package]
 name = "vdump"
-description = "Decoded dump of vaxpunk object modules and images, like ANALYZE/OBJECT and ANALYZE/IMAGE"
+description = "Decoded dump of vaxpunk object modules, object libraries and images, like ANALYZE/OBJECT and ANALYZE/IMAGE"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

@@ -6,8 +6,9 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use std::{env, fs};
 
 const USAGE: &str =
-    "usage: vlink [/EXE=file] [/MAP[=file]] [/BASE=address] [/TRANSFER=symbol] FILE.OBJ...
-       vlink [-o file] [-m file] [--base address] [--transfer symbol] FILE.OBJ...";
+    "usage: vlink [/EXE=file] [/MAP[=file]] [/BASE=address] [/TRANSFER=symbol] FILE...
+       vlink [-o file] [-m file] [--base address] [--transfer symbol] FILE...
+A FILE is an object module, or an object library: LIB.OLB/LIBRARY or LIB.OLB.";
 
 fn main() -> ExitCode {
     match run() {
@@ -49,10 +50,13 @@ fn run() -> Result<(), Vec<String>> {
             ("--BASE", None) => base = Some(args.next().ok_or_else(usage)?),
             ("--TRANSFER", None) => transfer = Some(args.next().ok_or_else(usage)?),
             _ if arg.starts_with('-') => return Err(usage()),
-            _ => inputs.push(PathBuf::from(arg)),
+            _ if name.ends_with("/LIBRARY") => {
+                inputs.push((PathBuf::from(&arg[..arg.len() - 8]), true));
+            }
+            _ => inputs.push((PathBuf::from(arg), false)),
         }
     }
-    let Some(first) = inputs.first() else {
+    let Some((first, _)) = inputs.first() else {
         return Err(usage());
     };
     let exe = exe.unwrap_or_else(|| first.with_extension("exe"));
@@ -65,9 +69,15 @@ fn run() -> Result<(), Vec<String>> {
     };
 
     let mut files = Vec::new();
-    for path in &inputs {
+    for (path, library) in &inputs {
         let bytes = fs::read(path)
             .map_err(|e| vec![format!("%VLINK-F-OPENIN, {}: {e}", path.display())])?;
+        if *library && !vms_obj::olb::is_library(&bytes) {
+            return Err(vec![format!(
+                "%VLINK-F-NOTLIB, {} is not an object library",
+                path.display()
+            )]);
+        }
         files.push((path.display().to_string(), bytes));
     }
     let name = exe

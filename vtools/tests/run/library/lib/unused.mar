@@ -1,0 +1,7 @@
+        .TITLE  UNUSED  Nothing needs it, so it stays in the library
+        .IDENT  /V1.0/
+
+        .PSECT  $CODE$
+START::                                 ; linking it would define START twice
+        ret
+        .END

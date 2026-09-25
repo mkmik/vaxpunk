@@ -6,6 +6,7 @@ use std::{env, fs};
 
 use vms_obj::exe::{Eisd, Image, Section};
 use vms_obj::obj::{self, Eom, Gsd, Mhd, Psc, Record, SymDef, Tir, Transfer, psc, sym};
+use vms_obj::olb::{Library, Module};
 
 fn check(name: &str, file: &[u8]) {
     let dump = vdump::dump(file).unwrap();
@@ -24,10 +25,9 @@ const CODE: [u32; 4] = [0xd28000c1, 0xd4000041, 0xd2800020, 0xd65f03c0];
 
 /// The hello program as an assembler would write it: `adr x0, msg` as a
 /// relocation to offset 0x14 of $CODE$.
-#[test]
-fn hello_obj() {
+fn hello() -> Vec<Record> {
     let code: Vec<u8> = CODE.iter().flat_map(|i| i.to_le_bytes()).collect();
-    let module = [
+    vec![
         Record::Mhd(Mhd {
             strlvl: obj::STRLVL,
             temp: 0,
@@ -89,8 +89,30 @@ fn hello_obj() {
                 tfradr: 0,
             }),
         ),
-    ];
-    check("hello.obj", &obj::write(&module));
+    ]
+}
+
+#[test]
+fn hello_obj() {
+    check("hello.obj", &obj::write(&hello()));
+}
+
+/// A library holding the hello module.
+#[test]
+fn hello_olb() {
+    let lib = Library {
+        creator: "hand-built".into(),
+        created: 0x00a1_b2c3_d4e5_f607,
+        updated: 0x00a1_b2c3_d4e5_f608,
+        modules: vec![Module {
+            name: "HELLO".into(),
+            ident: "V1.0".into(),
+            inserted: 0x00a1_b2c3_d4e5_f609,
+            symbols: vec!["HELLO".into()],
+            object: obj::write(&hello()),
+        }],
+    };
+    check("hello.olb", &lib.write());
 }
 
 /// The same program linked at 0x10000.

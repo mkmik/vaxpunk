@@ -104,6 +104,20 @@ impl Field for Vec<u8> {
     }
 }
 
+/// A counted string in an N-byte field.
+pub(crate) fn ascic<const N: usize>(s: &str) -> [u8; N] {
+    assert!(s.len() < N && s.is_ascii(), "name too long: {s}");
+    let mut b = [0; N];
+    b[0] = s.len() as u8;
+    b[1..=s.len()].copy_from_slice(s.as_bytes());
+    b
+}
+
+pub(crate) fn from_ascic(b: &[u8]) -> String {
+    let n = (b[0] as usize).min(b.len() - 1);
+    String::from_utf8_lossy(&b[1..=n]).into_owned()
+}
+
 /// Declares a record struct with `SIZE` (of its fixed fields), `read`,
 /// `parse` and `write`.
 macro_rules! record {

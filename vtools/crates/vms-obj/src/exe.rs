@@ -5,7 +5,7 @@ use alloc::string::String;
 use alloc::vec;
 use alloc::vec::Vec;
 
-use crate::record::{Field, Reader, record};
+use crate::record::{Field, Reader, ascic, from_ascic, record};
 use crate::{ARCH_ARM64, Error};
 
 /// Images are made of blocks of this size, as on VMS.
@@ -343,20 +343,6 @@ fn put(file: &mut [u8], at: usize, write: impl FnOnce(&mut Vec<u8>)) {
     let mut v = Vec::new();
     write(&mut v);
     file[at..at + v.len()].copy_from_slice(&v);
-}
-
-/// A counted string in an N-byte field.
-fn ascic<const N: usize>(s: &str) -> [u8; N] {
-    assert!(s.len() < N, "name too long: {s}");
-    let mut b = [0; N];
-    b[0] = s.len() as u8;
-    b[1..=s.len()].copy_from_slice(s.as_bytes());
-    b
-}
-
-fn from_ascic(b: &[u8]) -> String {
-    let n = (b[0] as usize).min(b.len() - 1);
-    String::from_utf8_lossy(&b[1..=n]).into_owned()
 }
 
 #[cfg(test)]

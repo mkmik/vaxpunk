@@ -1,6 +1,7 @@
 //! vlink: links object modules into an executable image at a fixed base,
 //! and writes a VMS-style map.
 //!
+//! Object libraries give the modules that define what the others need.
 //! Psects with the same name are merged across modules; CON contributions are
 //! concatenated, OVR ones overlaid. Psects go into image sections by
 //! protection: code, read-only data, writable data, demand-zero. Then each
@@ -8,10 +9,11 @@
 
 mod map;
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use vms_obj::exe::{Eisd, Image, SECTION_ALIGN, Section};
 use vms_obj::obj::{self, Gsd, Record, Tir, psc, sym};
+use vms_obj::olb::{self, Library};
 use vms_obj::reloc;
 
 pub struct Options {
@@ -36,11 +38,20 @@ pub struct Linked {
 /// The image base VMS uses by default: the first page above 64 KB.
 pub const DEFAULT_BASE: u64 = 0x10000;
 
-/// Links object files, given as (file name, contents). Errors come back as
-/// VMS messages.
+/// Links object files and object libraries, given as (file name, contents), in
+/// order. Errors come back as VMS messages.
 pub fn link(inputs: &[(String, Vec<u8>)], opts: &Options) -> Result<Linked, Vec<String>> {
     let mut l = Linker::default();
     for (file, bytes) in inputs {
+        if olb::is_library(bytes) {
+            let lib = Library::parse(bytes).map_err(|e| {
+                vec![format!(
+                    "%VLINK-F-BADLIB, {file} is not an object library: {e}"
+                )]
+            })?;
+            l.search(file, &lib)?;
+            continue;
+        }
         let records = obj::parse(bytes).map_err(|e| {
             vec![format!(
                 "%VLINK-F-BADOBJ, {file} is not an object file: {e}"
@@ -263,6 +274,43 @@ impl Linker {
             return Err(bad("the last module has no end-of-module record"));
         }
         Ok(())
+    }
+
+    /// Takes from `lib` each module that defines a symbol strongly referenced
+    /// and still undefined, until there are none. As on VMS, a library only
+    /// serves the modules before it, and the modules it gives.
+    // ponytail: rescans every definition and reference per module taken;
+    // index them if libraries grow to thousands of modules.
+    fn search(&mut self, file: &str, lib: &Library) -> Result<(), Vec<String>> {
+        let index: HashMap<&str, &olb::Module> = lib
+            .modules
+            .iter()
+            .flat_map(|m| m.symbols.iter().map(move |s| (s.as_str(), m)))
+            .collect();
+        let mut taken = HashSet::new();
+        loop {
+            let defined: HashSet<&str> = self.raw_defs.iter().map(|d| d.0.as_str()).collect();
+            let next = self
+                .refs
+                .iter()
+                .filter(|(name, _, weak)| !weak && !defined.contains(name.as_str()))
+                .find_map(|(name, ..)| {
+                    index
+                        .get(name.as_str())
+                        .filter(|m| !taken.contains(&m.name))
+                });
+            let Some(m) = next else {
+                return Ok(());
+            };
+            taken.insert(&m.name);
+            let records = obj::parse(&m.object).map_err(|e| {
+                vec![format!(
+                    "%VLINK-F-BADOBJ, module {} in {file} is not an object module: {e}",
+                    m.name
+                )]
+            })?;
+            self.add(file, records)?;
+        }
     }
 
     /// The image psect called `name`, created on first use.

@@ -1,0 +1,14 @@
+        .TITLE  LINE    Writes a number and a new line
+        .IDENT  /V1.0/
+        .LIBRARY "vrun.mlb"
+        .EXTERNAL PUT_DECIMAL           ; from the same library
+
+        .PSECT  $CODE$
+; PUT_LINE: writes x0 in decimal, then a new line. Uses x0-x4.
+PUT_LINE::
+        stp     x29, x30, [sp, #-16]!
+        bl      PUT_DECIMAL
+        $PUT    <<10>>
+        ldp     x29, x30, [sp], #16
+        ret
+        .END

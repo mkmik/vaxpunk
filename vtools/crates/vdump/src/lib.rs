@@ -1,26 +1,46 @@
-//! Decoded dumps of vaxpunk object modules and images, the equivalent of
-//! ANALYZE/OBJECT and ANALYZE/IMAGE, with code disassembled.
+//! Decoded dumps of vaxpunk object modules, object libraries and images, the
+//! equivalent of ANALYZE/OBJECT and ANALYZE/IMAGE, with code disassembled.
 
 use std::fmt::Write;
 
 use vms_obj::Error;
 use vms_obj::exe::{Eisd, Image};
 use vms_obj::obj::{self, Gsd, Record, Tir, psc, sym};
+use vms_obj::olb::{self, Library};
 use yaxpeax_arch::{Arch, Decoder, U8Reader};
 use yaxpeax_arm::armv8::a64::ARMv8;
 
 /// Indent of data and code under a TIR command.
 const DATA_INDENT: &str = "                        ";
 
-/// Dumps an image or an object module, whichever `file` is.
+/// Dumps an image, an object module or an object library, whichever `file` is.
 pub fn dump(file: &[u8]) -> Result<String, Error> {
     // An image starts with EIHD majorid 3, minorid 0; a module with EMH (8).
-    let text = if file.starts_with(&[3, 0, 0, 0, 0, 0, 0, 0]) {
+    let text = if olb::is_library(file) {
+        library(&Library::parse(file)?)?
+    } else if file.starts_with(&[3, 0, 0, 0, 0, 0, 0, 0]) {
         image(&Image::parse(file)?)
     } else {
         object(&obj::parse(file)?)
     };
     Ok(text.lines().flat_map(|l| [l.trim_end(), "\n"]).collect())
+}
+
+fn library(lib: &Library) -> Result<String, Error> {
+    let mut out = String::new();
+    let o = &mut out;
+    let _ = writeln!(o, "Object library, created by {:?}", lib.creator);
+    let _ = writeln!(o, "  created {:016X}", lib.created);
+    let _ = writeln!(o, "  updated {:016X}", lib.updated);
+    for m in &lib.modules {
+        let _ = writeln!(o, "\nModule {}, ident {:?}", m.name, m.ident);
+        let _ = writeln!(o, "  inserted {:016X}", m.inserted);
+        for s in &m.symbols {
+            let _ = writeln!(o, "  symbol {s}");
+        }
+        o.push_str(&object(&obj::parse(&m.object)?));
+    }
+    Ok(out)
 }
 
 const EISD_FLAGS: [&str; 15] = [

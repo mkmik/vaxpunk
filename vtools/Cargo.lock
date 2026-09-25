@@ -65,10 +65,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "vlib"
+version = "0.1.0"
+dependencies = [
+ "vasm",
+ "vms-obj",
+]
+
+[[package]]
 name = "vlink"
 version = "0.1.0"
 dependencies = [
  "vasm",
+ "vlib",
  "vms-obj",
 ]
 
@@ -81,6 +90,7 @@ name = "vrun"
 version = "0.1.0"
 dependencies = [
  "vasm",
+ "vlib",
  "vlink",
  "vms-obj",
 ]

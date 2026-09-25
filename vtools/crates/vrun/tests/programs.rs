@@ -2,7 +2,8 @@
 //! checks it against the files next to it: NAME.stdout (exact output,
 //! default empty), NAME.status (exit code, default 0) and NAME.stderr (a
 //! line stderr must contain). A directory NAME/ is a program of several
-//! modules, linked in name order. VRUN_FLAGS adds vrun options.
+//! modules, linked in name order, then the object library vlib makes of the
+//! modules in NAME/lib/, if there is one. VRUN_FLAGS adds vrun options.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -70,29 +71,22 @@ fn options(module: &str, source: &Path) -> vasm::Options {
 }
 
 fn run(dir: &Path, name: &str) -> Result<(), String> {
-    let sources: Vec<PathBuf> = if dir.join(name).is_dir() {
-        let mut s: Vec<PathBuf> = fs::read_dir(dir.join(name))
-            .unwrap()
-            .map(|e| e.unwrap().path())
-            .filter(|p| p.extension().is_some_and(|e| e == "mar"))
-            .collect();
-        s.sort();
-        s
-    } else {
-        vec![dir.join(format!("{name}.mar"))]
-    };
+    let program = dir.join(name);
     let mut objects = Vec::new();
-    for source in &sources {
-        let text = fs::read_to_string(source).unwrap();
-        let module = source.file_stem().unwrap().to_string_lossy().to_uppercase();
-        let records = vasm::assemble(&text, &options(&module, source)).map_err(|d| {
-            let msgs: Vec<String> = d
-                .iter()
-                .map(|d| format!("{}:{}:{}: {}", d.file, d.line, d.col, d.msg))
-                .collect();
-            msgs.join("\n")
-        })?;
-        objects.push((source.display().to_string(), vms_obj::obj::write(&records)));
+    if program.is_dir() {
+        for source in sources(&program) {
+            objects.push(assemble(&source)?);
+        }
+        if program.join("lib").is_dir() {
+            let mut lib = vlib::new(0);
+            for source in sources(&program.join("lib")) {
+                let (file, object) = assemble(&source)?;
+                vlib::replace(&mut lib, &file, &object, 0)?;
+            }
+            objects.push(("LIB.OLB".into(), lib.write()));
+        }
+    } else {
+        objects.push(assemble(&dir.join(format!("{name}.mar")))?);
     }
     let opts = vlink::Options {
         base: vlink::DEFAULT_BASE,
@@ -138,4 +132,29 @@ fn run(dir: &Path, name: &str) -> Result<(), String> {
         ));
     }
     Ok(())
+}
+
+/// The .mar files in `dir`, in name order.
+fn sources(dir: &Path) -> Vec<PathBuf> {
+    let mut s: Vec<PathBuf> = fs::read_dir(dir)
+        .unwrap()
+        .map(|e| e.unwrap().path())
+        .filter(|p| p.extension().is_some_and(|e| e == "mar"))
+        .collect();
+    s.sort();
+    s
+}
+
+/// Assembles `source`; returns its file name and the object.
+fn assemble(source: &Path) -> Result<(String, Vec<u8>), String> {
+    let text = fs::read_to_string(source).unwrap();
+    let module = source.file_stem().unwrap().to_string_lossy().to_uppercase();
+    let records = vasm::assemble(&text, &options(&module, source)).map_err(|d| {
+        let msgs: Vec<String> = d
+            .iter()
+            .map(|d| format!("{}:{}:{}: {}", d.file, d.line, d.col, d.msg))
+            .collect();
+        msgs.join("\n")
+    })?;
+    Ok((source.display().to_string(), vms_obj::obj::write(&records)))
 }

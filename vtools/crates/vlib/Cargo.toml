@@ -1,6 +1,6 @@
 [package]
-name = "vlink"
-description = "Links vaxpunk object modules into an executable image"
+name = "vlib"
+description = "Puts vaxpunk object modules into object libraries, like LIBRARY/OBJECT"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -10,4 +10,3 @@ vms-obj = { path = "../vms-obj" }
 
 [dev-dependencies]
 vasm = { path = "../vasm" }
-vlib = { path = "../vlib" }

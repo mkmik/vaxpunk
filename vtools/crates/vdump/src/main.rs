@@ -1,4 +1,4 @@
-//! vdump: decoded dump of vaxpunk object modules and images.
+//! vdump: decoded dump of vaxpunk object modules, object libraries and images.
 
 use std::process::ExitCode;
 use std::{env, fs};

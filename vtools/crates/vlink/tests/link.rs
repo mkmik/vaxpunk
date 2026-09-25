@@ -160,6 +160,53 @@ fn symbol_errors() {
     );
 }
 
+/// An object library holding `modules`.
+fn library(modules: &[(String, Vec<u8>)]) -> (String, Vec<u8>) {
+    let mut lib = vlib::new(0);
+    for (file, bytes) in modules {
+        assert_eq!(vlib::replace(&mut lib, file, bytes, 0), Ok(vec![]));
+    }
+    ("LIB.OLB".into(), lib.write())
+}
+
+/// The modules in a map's object module synopsis.
+fn linked_modules(map: &str) -> Vec<&str> {
+    map.lines()
+        .skip(3)
+        .take_while(|l| !l.is_empty())
+        .filter_map(|l| l.split_whitespace().next())
+        .collect()
+}
+
+#[test]
+fn library_search() {
+    let lib = library(&[
+        // NUM needs CH, from the same library.
+        module("NUM", ".EXTERNAL CH\n.PSECT $CODE$\nNUM:: bl CH\nret\n.END"),
+        module("CH", ".PSECT $CODE$\nCH:: ret\n.END"),
+        // Nothing needs UNUSED; taking it would define START twice.
+        module("UNUSED", ".PSECT $CODE$\nSTART:: ret\n.END"),
+        // A weak reference alone doesn't take a module.
+        module("OPTION", ".PSECT $CODE$\nOPTION:: ret\n.END"),
+    ]);
+    let main = module(
+        "MAIN",
+        ".EXTERNAL NUM\n.WEAK OPTION\n.PSECT $CODE$\nSTART:: bl NUM\n.QUAD OPTION\n.END START",
+    );
+    let linked = link(&[main.clone(), lib.clone()], vlink::DEFAULT_BASE).unwrap();
+    assert_eq!(linked_modules(&linked.map), ["MAIN", "NUM", "CH"]);
+    let option = &linked.image.sections[0].data[4..12];
+    assert_eq!(option, [0; 8], "OPTION stays undefined, so 0");
+
+    // A library only serves the modules before it.
+    let err = link(&[lib, main], vlink::DEFAULT_BASE).unwrap_err();
+    assert!(
+        err.iter()
+            .any(|e| e.contains("undefined symbol NUM, referenced by MAIN")),
+        "{err:?}"
+    );
+}
+
 #[test]
 fn bases_and_layout() {
     let source = std::fs::read_to_string(concat!(

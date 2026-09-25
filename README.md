@@ -72,7 +72,7 @@ one second after the command.
 | `roottask/` | the root task, freestanding C | `roottask/out/roottask.elf` |
 | `image/` | Limine config and the ESP builder (mtools) | `out/esp.img` |
 | `scripts/` | host setup, Limine download, QEMU wrapper and console filter | `out/serial.log` |
-| `vtools/` | VMS-style toolchain in Rust: the `vasm` assembler and `vlink` linker, object and image formats, `vdump` to inspect them, and `vrun`, which runs images in QEMU; see [vtools/PRD.md](vtools/PRD.md) | `vtools/target/` |
+| `vtools/` | VMS-style toolchain in Rust: the `vasm` assembler, `vlink` linker and `vlib` librarian, object, library and image formats, `vdump` to inspect them, and `vrun`, which runs images in QEMU; see [vtools/PRD.md](vtools/PRD.md) | `vtools/target/` |
 
 Each component builds on its own with `make -C <dir>`. The components share
 nothing but those output files. `shim/` and `roottask/` read `kernel/out/`,

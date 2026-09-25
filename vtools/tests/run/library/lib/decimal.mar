@@ -1,0 +1,22 @@
+        .TITLE  DECIMAL Writes a number in decimal
+        .IDENT  /V1.0/
+        .LIBRARY "vrun.mlb"
+
+        .PSECT  $CODE$
+; PUT_DECIMAL: writes x0, unsigned, in decimal. Uses x0-x4.
+PUT_DECIMAL::
+        sub     sp, sp, #32             ; the digits, last first
+        add     x2, sp, #32
+        mov     x3, #10
+10$:    udiv    x4, x0, x3
+        msub    x1, x4, x3, x0          ; x0 - x0 / 10 * 10
+        add     x1, x1, #'0'
+        strb    w1, [x2, #-1]!
+        mov     x0, x4
+        cbnz    x0, 10$
+        add     x1, sp, #32
+        sub     x1, x1, x2
+        $WRITE  x2, x1
+        add     sp, sp, #32
+        ret
+        .END

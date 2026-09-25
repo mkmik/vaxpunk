@@ -10,4 +10,5 @@ vms-obj = { path = "../vms-obj" }
 
 [dev-dependencies]
 vasm = { path = "../vasm" }
+vlib = { path = "../vlib" }
 vlink = { path = "../vlink" }
