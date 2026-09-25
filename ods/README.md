@@ -93,7 +93,7 @@ Against the PRD's work order:
 | 6. Verifier | done: clean on every fixture except DUNGEON, which has a real defect |
 | 7. INITIALIZE | done, modelled on VMS 7.1 |
 | 8. Writing | done, with model and power-loss tests |
-| 9. Check on real VMS | see [docs/vms-check.md](docs/vms-check.md) |
+| 9. Check on real VMS | done: OpenVMS Alpha 8.4 finds nothing wrong with `ods`'s ODS-2 and ODS-5 volumes and BACKUP copies every file off them exactly (`vms/check.py`, [docs/vms-check.md](docs/vms-check.md)) |
 | 10. FUSE read-only | done with the mapping [docs/fuse.md](docs/fuse.md) proposes, for the design session to confirm; `ls`, `cat`, `grep` work on the fixtures |
 | 11. FUSE read-write | not started: waits for the mapping to be settled |
 

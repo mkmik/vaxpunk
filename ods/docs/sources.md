@@ -11,6 +11,7 @@ came from somewhere else it says so in the note that uses it.
 | FreeVMS `lib/src/fi5def.h` (github.com/rroart/freevms, GPL-2.0), transcribing DEC's `$FI5DEF` | The ODS-5 ident area offsets: no public DEC document gives them. Read for the facts only, as AGENTS.md allows for FreeVMS | commit `master`, 2026-09-25 |
 | A volume VMS 7.1 INITIALIZEd, `samples/empty_ods2_volume.dsk.gz` in github.com/allenpomeroy/ods2v2 (MIT) | What INITIALIZE writes, field by field: see [initialize.md](initialize.md). Used as data, not code | commit `30068dc3`, fixture `vms-7.1-init.dsk` |
 | The fixtures in `fixtures/` | Everything above, confirmed on VMS V1.0 (1978) through OpenVMS Alpha 8.4-2L1 (2016) volumes; directory order; empty directories; version limits; empty header templates; simh's disk footer | `fixtures/SHA256SUMS` |
+| OpenVMS Alpha V8.4-2L1 itself, run in AXPbox ([vms-check.md](vms-check.md)) | ODS-5 as VMS writes it: the `vms-ods5.img` fixture (`vms/samples.dcl`, with DUMP/HEADER of every file in its log); and ANALYZE/DISK_STRUCTURE's verdict on volumes `ods` writes | `vms/` |
 
 The ODS-1 specification (for RSX-11) is on bitsavers too
 (`pdf/dec/pdp11/rsx11m_s/Files-11_ODS-1_Spec_Sep86.txt`); ODS-2 inherits
