@@ -85,6 +85,10 @@ impl<D: BlockDevice> Volume<D> {
         if home.rvn() > 1 || home.setcount() > 1 {
             return Err(Error::Unsupported("volume sets"));
         }
+        // With hard links a delete must count links, which ods does not.
+        if writable && home.volchar() & (1 << 6) != 0 {
+            return Err(Error::Unsupported("writing to volumes with hard links"));
+        }
         // The first 16 headers sit right after the index file bitmap, so the
         // index file's own header needs no map to be found.
         let lbn = home.ibmaplbn() as u64 + home.ibmapsize() as u64;

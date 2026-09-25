@@ -26,7 +26,7 @@ pub use ods_core::{
     Alloc, Attributes, DirEntry, Fid, FileInfo, Finding, InitParams, Level, MFD, NewFile, RecordAttrs, Report,
     Severity, fch, rat, rfm,
 };
-pub use tree::{Manifest, ManifestEntry};
+pub use tree::{Manifest, ManifestEntry, safe_host_name};
 
 use ods_core::{BLOCK, Volume};
 

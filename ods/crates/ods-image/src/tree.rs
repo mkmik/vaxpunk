@@ -127,6 +127,11 @@ fn latin1(b: &[u8]) -> String {
     b.iter().map(|&c| c as char).collect()
 }
 
+/// A single path component that stays where it is put.
+pub fn safe_host_name(s: &str) -> bool {
+    !s.is_empty() && s != "." && s != ".." && !s.contains(['/', '\0'])
+}
+
 impl Image {
     /// Copies the tree under directory `spec` to `host`, which must not
     /// exist yet, with a manifest. Returns the number of files.
@@ -157,6 +162,10 @@ impl Image {
     fn export_dir(&mut self, dir: Fid, host: &Path, rel: &str, m: &mut Manifest, seen: &mut Vec<Fid>) -> Result<()> {
         for e in self.list(dir)? {
             let name = latin1(&e.name);
+            // A damaged or hostile volume must not write outside `host`.
+            if !safe_host_name(&name) {
+                return Err(Error::usage("name unusable on the host").at(format!("{name};{}", e.version)));
+            }
             let a = match self.attributes(e.fid) {
                 Ok(a) => a,
                 Err(err) => return Err(err.at(format!("{name};{}", e.version))),
@@ -167,6 +176,9 @@ impl Image {
                 }
                 seen.push(e.fid);
                 let stem = latin1(ods_core::name::split(&e.name).0);
+                if !safe_host_name(&stem) {
+                    return Err(Error::usage("directory name unusable on the host").at(&name));
+                }
                 let sub = host.join(&stem);
                 fs::create_dir(&sub).at(sub.display())?;
                 let path = format!("{rel}{stem}");

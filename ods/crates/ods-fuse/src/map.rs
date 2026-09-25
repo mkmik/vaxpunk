@@ -55,6 +55,8 @@ pub fn listing(entries: &[DirEntry], is_dir: impl Fn(&DirEntry) -> bool, version
             out.push(Shown { host: format!("{plain};{}", e.version), entry: e.clone(), dir: false });
         }
     }
+    // Names a damaged volume could hold that no path can: ".", "..", "a/b".
+    out.retain(|s| ods_image::safe_host_name(&s.host));
     out
 }
 
@@ -71,7 +73,7 @@ fn plain_name(e: &DirEntry, dirs: &[&[u8]]) -> String {
 /// else a subdirectory of that name, else the highest version of the file
 /// (a name without a dot meaning an empty type).
 pub fn resolve<'a>(entries: &'a [DirEntry], host: &str, is_dir: impl Fn(&DirEntry) -> bool) -> Option<&'a DirEntry> {
-    if is_apple_metadata(host) {
+    if is_apple_metadata(host) || !ods_image::safe_host_name(host) {
         return None;
     }
     let (base, version) = match host.rsplit_once(';') {
