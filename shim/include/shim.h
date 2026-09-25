@@ -32,5 +32,6 @@ uint32_t fdt_size(const void *fdt);
 uint64_t fdt_find_pl011(const void *fdt);
 
 /* mmu.c */
-void mmu_init(uint64_t shim_vbase, uint64_t shim_pbase);
-void mmu_map_uart(uint64_t uart_pa);
+void mmu_init(uint64_t shim_vbase, uint64_t shim_pbase, uint64_t uart_pa);
+void dcache_clean(uint64_t va, uint64_t len);
+__attribute__((noreturn)) void mmu_enter_kernel(const struct elf *kernel, const uint64_t regs[6]);

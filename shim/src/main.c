@@ -164,12 +164,11 @@ void shim_main(void)
 	/* Nothing can be printed until the UART is found and mapped. */
 	if (!LIMINE_BASE_REVISION_SUPPORTED(base_revision) || !exec_req.response || !dtb_req.response)
 		halt();
-	mmu_init(exec_req.response->virtual_base, exec_req.response->physical_base);
 	const void *dtb = dtb_req.response->dtb_ptr;
 	uint64_t uart_pa = fdt_find_pl011(dtb);
 	if (!uart_pa)
 		halt();
-	mmu_map_uart(uart_pa);
+	mmu_init(exec_req.response->virtual_base, exec_req.response->physical_base, uart_pa);
 	uart = (volatile uint32_t *)uart_pa;
 
 	uint64_t el;
@@ -178,8 +177,8 @@ void shim_main(void)
 	      uart_pa);
 	if ((el >> 2 & 3) != 1)
 		panic("entered at EL%lu, the kernel is built for EL1", el >> 2 & 3);
-	if (!memmap_req.response)
-		panic("no memory map from Limine");
+	if (!memmap_req.response || !hhdm_req.response)
+		panic("no memory map or HHDM from Limine");
 
 	struct elf kernel, user;
 	const struct limine_file *kf = find_module("kernel"), *uf = find_module("roottask");
@@ -196,5 +195,15 @@ void shim_main(void)
 	print("shim: DTB       0x%lx-0x%lx\n", dtb_start, dtb_end);
 	print("shim: root task 0x%lx-0x%lx vaddr 0x%lx entry 0x%lx\n", ui_start, ui_end,
 	      user.vbase, user.entry);
-	halt();
+
+	uint8_t *hhdm = (uint8_t *)hhdm_req.response->offset;
+	elf_load(&kernel, hhdm + k_start);
+	memcpy(hhdm + dtb_start, dtb, dtb_end - dtb_start);
+	elf_load(&user, hhdm + ui_start);
+	dcache_clean((uint64_t)hhdm + k_start, ui_end - k_start);
+
+	print("shim: entering seL4\n");
+	const uint64_t regs[6] = { ui_start, ui_end, ui_start - user.vbase, user.entry,
+				   dtb_start, dtb_end - dtb_start };
+	mmu_enter_kernel(&kernel, regs);
 }
