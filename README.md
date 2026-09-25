@@ -27,8 +27,14 @@ make run
 ```
 
 The first run downloads Limine, builds seL4 (about 10 seconds) and boots QEMU.
-Quit QEMU with `Ctrl-A x`. The serial console shows Limine, the shim's
-placement banner, seL4's boot messages, then the root task:
+Quit QEMU with `Ctrl-A x`. EDK2 and Limine clear the console and move the
+cursor around, so `scripts/serial-filter.py` turns their output into plain
+lines before it reaches your terminal. From the shim's banner on, output
+passes through untouched: terminal handling there is the guest's business.
+Input is never filtered, and every key except `Ctrl-A` reaches the guest.
+QEMU also saves the unfiltered console
+in `out/serial.log`; read it with `less`, not `cat`. The serial console shows
+Limine, the shim's placement banner, seL4's boot messages, then the root task:
 
 ```
 vaxpunk shim: shim at 0x7fa68000, UART at 0x9000000
@@ -49,6 +55,10 @@ root task done
 EDK2 prints a few `Error: Image at ... start failed` and `Tpm2...` lines
 before Limine starts. That is normal for the firmware QEMU ships.
 
+Nothing in the guest reads the serial input yet. After a few dozen keystrokes
+QEMU stops reading the keyboard, and then `Ctrl-A x` no longer arrives. Stop
+QEMU with `pkill -f qemu-system-aarch64` instead.
+
 Day to day: edit `roottask/src/`, then `make run`. Only the root task is
 rebuilt and the ESP image re-stitched. On an M3, the root task prints about
 one second after the command.
@@ -61,7 +71,7 @@ one second after the command.
 | `shim/` | Limine-protocol program that loads seL4 and the root task; see [shim/README.md](shim/README.md) | `shim/out/shim.elf` |
 | `roottask/` | the root task, freestanding C | `roottask/out/roottask.elf` |
 | `image/` | Limine config and the ESP builder (mtools) | `out/esp.img` |
-| `scripts/` | host setup, Limine download, QEMU wrapper | |
+| `scripts/` | host setup, Limine download, QEMU wrapper and console filter | `out/serial.log` |
 
 Each component builds on its own with `make -C <dir>`. The components share
 nothing but those output files. `shim/` and `roottask/` read `kernel/out/`,
