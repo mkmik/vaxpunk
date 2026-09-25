@@ -80,6 +80,9 @@ impl Rng {
 
 type Dir = Vec<Vec<u8>>;
 
+/// A name's version limit and its versions' contents.
+type Versions = (u16, BTreeMap<u16, Vec<u8>>);
+
 /// What the volume should hold: directories, and for each name its
 /// version limit and versions with their contents.
 #[derive(Default, Clone)]
@@ -90,7 +93,7 @@ struct Model {
     /// Largest file content.
     max_len: usize,
     dirs: BTreeMap<Dir, u16>,
-    files: BTreeMap<(Dir, Vec<u8>), (u16, BTreeMap<u16, Vec<u8>>)>,
+    files: BTreeMap<(Dir, Vec<u8>), Versions>,
 }
 
 impl Model {

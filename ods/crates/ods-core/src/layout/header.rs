@@ -171,7 +171,7 @@ impl Header {
     /// are cut to what the area holds: size it first with `ident_words`.
     pub fn set_ident(&mut self, id: &Ident) {
         let from = self.idoffset() as usize * 2;
-        let n = self.ident_area().len();
+        let n = self.ident_area().len().min(FI5_MAX);
         let mut buf = [0u8; FI5_MAX];
         buf[..n].copy_from_slice(&self.0[from..from + n]);
         if self.struclev() >> 8 == 5 {

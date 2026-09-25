@@ -127,7 +127,7 @@ fn save_sets(img: &mut Image, found: &[Found]) -> u64 {
     for f in found {
         let r = img.stat(f.entry.fid).unwrap().attrs.record;
         let size = r.rsize as usize;
-        if r.rtype & 0xf != 1 || size < 2048 || r.eof_bytes() == 0 || r.eof_bytes() % size as u64 != 0 {
+        if r.rtype & 0xf != 1 || size < 2048 || r.eof_bytes() == 0 || !r.eof_bytes().is_multiple_of(size as u64) {
             continue;
         }
         let mut rd = img.reader(f.entry.fid).unwrap();
