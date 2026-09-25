@@ -117,7 +117,7 @@ fn unary(c: &mut Cursor, block: u32) -> Result<Expr> {
         // A decimal number followed by `$` is a local label.
         if skip == 0 && digits[len..].starts_with('$') {
             c.at += len + 1;
-            return Ok(Expr::Sym(format!("{text}$@{block}")));
+            return Ok(Expr::Sym(local_name(text, block)));
         }
         let Ok(n) = u64::from_str_radix(text, radix) else {
             return err(col, format!("bad number '{}'", &rest[..skip + len]));
@@ -206,6 +206,17 @@ fn abs(v: Value) -> std::result::Result<i64, String> {
     match v {
         Value::Abs(n) => Ok(n),
         _ => Err("the linker can only add or subtract a constant to an address".into()),
+    }
+}
+
+/// The internal name of local label `digits$` in `block`. Labels from 30000$
+/// up are the ones macros create; each is unique in the module, so they
+/// belong to no block.
+pub fn local_name(digits: &str, block: u32) -> String {
+    if digits.parse::<u32>().is_ok_and(|n| n >= 30000) {
+        format!("{digits}$@")
+    } else {
+        format!("{digits}$@{block}")
     }
 }
 

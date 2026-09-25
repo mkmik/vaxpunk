@@ -5,8 +5,12 @@ use vlink::{Linked, Options};
 use vms_obj::obj;
 
 fn module(name: &str, source: &str) -> (String, Vec<u8>) {
-    let records =
-        vasm::assemble(source, name, *b"25-SEP-2026 00:00").unwrap_or_else(|d| panic!("{d:?}"));
+    let opts = vasm::Options {
+        name: name.into(),
+        date: *b"25-SEP-2026 00:00",
+        ..Default::default()
+    };
+    let records = vasm::assemble(source, &opts).unwrap_or_else(|d| panic!("{d:?}"));
     (format!("{name}.obj"), obj::write(&records))
 }
 

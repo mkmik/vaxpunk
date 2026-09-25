@@ -293,11 +293,15 @@ fn gnu(source: &str) -> Vec<u8> {
 /// The code vasm produces for `source`: all of it goes into STO_IMM
 /// commands, because every branch target is in the same psect.
 fn vasm(source: &str) -> Vec<u8> {
-    let records = vasm::assemble(source, "ORACLE", *b"25-SEP-2026 00:00").unwrap_or_else(|diags| {
-        let lines: Vec<&str> = source.lines().collect();
+    let opts = vasm::Options {
+        name: "ORACLE".into(),
+        date: *b"25-SEP-2026 00:00",
+        ..Default::default()
+    };
+    let records = vasm::assemble(source, &opts).unwrap_or_else(|diags| {
         let msgs: Vec<String> = diags
             .iter()
-            .map(|d| format!("line {}: {}: {}", d.line, lines[d.line - 1].trim(), d.msg))
+            .map(|d| format!("line {}: {}: {}", d.line, d.text.trim(), d.msg))
             .collect();
         panic!("vasm errors:\n{}", msgs.join("\n"))
     });

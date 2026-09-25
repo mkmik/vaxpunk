@@ -1,0 +1,111 @@
+        .TITLE  MACROS  The macro facility and the vrun macro library
+        .IDENT  /V1.0/
+        .LIBRARY "vrun.mlb"
+
+        .MACRO  SUM     DEST, A, B=1            ; a default and keywords
+        add     DEST, A, #B
+        .ENDM   SUM
+
+        .MACRO  COUNTER NAME, START=0           ; ' concatenates
+NAME'_COUNT = START
+        .ENDM   COUNTER
+
+        .MACRO  TIMES   N, ?LOOP                ; a created local label
+        mov     x9, #N
+LOOP:   add     x10, x10, #1
+        subs    x9, x9, #1
+        b.ne    LOOP
+        .ENDM   TIMES
+
+        .MACRO  PICK    REG, VALUE              ; .IF BLANK and .IF_FALSE
+        .IF     BLANK, <VALUE>
+        mov     REG, #0
+        .IF_FALSE
+        mov     REG, #VALUE
+        .ENDC
+        .ENDM   PICK
+
+        .MACRO  FACT    N                       ; recursion, and a symbol
+        .IF     GREATER, N - 1                  ; assigned many times
+        FACT    <N - 1>
+RESULT = RESULT * (N)
+        .IF_FALSE
+RESULT = 1
+        .ENDC
+        .ENDM   FACT
+
+        .MACRO  ARGS    A, B, C                 ; .NARG and .MEXIT
+        .NARG   NARGS
+        .IIF    EQ, NARGS, .MEXIT
+        mov     x11, #NARGS
+        .ENDM   ARGS
+
+        .MACRO  CHECK   REG, VALUE, CODE, ?OK   ; exits with CODE unless
+        cmp     REG, #VALUE                     ; REG is VALUE; calls $EXIT
+        b.eq    OK
+        $EXIT   STATUS=CODE
+OK:
+        .ENDM   CHECK
+
+        .PSECT  $CODE$
+START::
+        mov     x1, #10
+        SUM     x0, x1
+        CHECK   x0, 11, ^X20
+        SUM     B=5, A=x1, DEST=x2
+        CHECK   x2, 15, ^X22
+
+        COUNTER RED, 3
+        mov     x3, #RED_COUNT
+        CHECK   x3, 3, ^X24
+
+        mov     x10, #0
+        TIMES   3
+        TIMES   4
+        CHECK   x10, 7, ^X26
+
+        PICK    x4
+        PICK    x5, 9
+        CHECK   x4, 0, ^X28
+        CHECK   x5, 9, ^X2A
+
+        FACT    5
+        mov     x6, #RESULT
+        CHECK   x6, 120, ^X2C
+
+N = 0
+        .REPEAT 5
+N = N + 1
+        .ENDR
+        mov     x7, #N
+        CHECK   x7, 5, ^X2E
+
+        mov     x11, #0
+        ARGS                                    ; .MEXITs before the mov
+        CHECK   x11, 0, ^X30
+        ARGS    a, , c                          ; three, one of them empty
+        CHECK   x11, 3, ^X32
+
+        .IIF    DF, RED_COUNT, BLUE = 2
+        .IIF    NDF, GREEN_COUNT, GREEN = 4
+        mov     x8, #BLUE + GREEN
+        CHECK   x8, 6, ^X34
+
+        adr     x12, words                      ; built by .IRP and .IRPC
+        mov     x13, #words_end - words
+        $WRITE  x12, x13
+        $PUT    "macros ok"<10>
+        $EXIT
+
+        .PSECT  $LITERAL$
+words:
+        .IRP    W, <irp, and>
+        .ASCII  /W /
+        .ENDR
+        .IRPC   CH, <irpc>
+        .ASCII  /CH/
+        .ENDR
+        .ASCII  / ok/<10>
+words_end:
+
+        .END    START

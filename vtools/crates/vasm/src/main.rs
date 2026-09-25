@@ -7,7 +7,7 @@ use std::{env, fs};
 
 use vms_obj::obj;
 
-const USAGE: &str = "usage: vasm [/OBJECT=file | -o file] SOURCE";
+const USAGE: &str = "usage: vasm [/OBJECT=file | -o file] [/INCLUDE=dir | -I dir]... SOURCE";
 
 fn main() -> ExitCode {
     match run() {
@@ -22,13 +22,22 @@ fn main() -> ExitCode {
 
 fn run() -> Result<bool, String> {
     let usage = || format!("USAGE, {USAGE}");
-    let (mut source, mut output) = (None, None);
+    let (mut source, mut output, mut include) = (None, None, Vec::new());
     let mut args = env::args().skip(1);
     while let Some(arg) = args.next() {
-        if arg.len() > 8 && arg[..8].eq_ignore_ascii_case("/OBJECT=") {
-            output = Some(PathBuf::from(&arg[8..]));
+        let qualifier = |name: &str| {
+            arg.get(..name.len())
+                .filter(|q| q.eq_ignore_ascii_case(name))
+                .map(|_| PathBuf::from(&arg[name.len()..]))
+        };
+        if let Some(path) = qualifier("/OBJECT=") {
+            output = Some(path);
+        } else if let Some(dir) = qualifier("/INCLUDE=") {
+            include.push(dir);
         } else if arg == "-o" {
             output = Some(args.next().ok_or_else(usage)?.into());
+        } else if arg == "-I" {
+            include.push(args.next().ok_or_else(usage)?.into());
         } else if source.is_none() && !arg.starts_with('-') {
             source = Some(PathBuf::from(arg));
         } else {
@@ -42,32 +51,32 @@ fn run() -> Result<bool, String> {
         .file_stem()
         .map(|s| s.to_string_lossy().to_ascii_uppercase())
         .unwrap_or_default();
-    let name: String = stem.chars().take(31).collect();
     let output = output.unwrap_or_else(|| source.with_extension("obj"));
+    let opts = vasm::Options {
+        name: stem.chars().take(31).collect(),
+        date: date(),
+        path: Some(source),
+        include,
+    };
 
-    match vasm::assemble(&text, &name, date()) {
+    match vasm::assemble(&text, &opts) {
         Ok(records) => {
             fs::write(&output, obj::write(&records))
                 .map_err(|e| format!("WRITEERR, {}: {e}", output.display()))?;
             Ok(true)
         }
         Err(diags) => {
-            let lines: Vec<&str> = text.lines().collect();
             for d in diags {
-                eprintln!(
-                    "{}:{}:{}: error: {}",
-                    source.display(),
-                    d.line,
-                    d.col,
-                    d.msg
-                );
-                if let Some(line) = d.line.checked_sub(1).and_then(|i| lines.get(i)) {
-                    let pad: String = line
-                        .chars()
-                        .take(d.col - 1)
-                        .map(|c| if c == '\t' { '\t' } else { ' ' })
-                        .collect();
-                    eprintln!("    {line}\n    {pad}^");
+                eprintln!("{}:{}:{}: error: {}", d.file, d.line, d.col, d.msg);
+                let pad: String = d
+                    .text
+                    .chars()
+                    .take(d.col.saturating_sub(1))
+                    .map(|c| if c == '\t' { '\t' } else { ' ' })
+                    .collect();
+                eprintln!("    {}\n    {pad}^", d.text);
+                for context in d.context {
+                    eprintln!("  {context}");
                 }
             }
             Ok(false)

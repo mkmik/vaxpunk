@@ -1,0 +1,37 @@
+; vrun.mlb: macros for programs that run under vrun, one per monitor call
+; (docs/runner-abi.md). Use it with .LIBRARY "vrun.mlb" and vasm -I vtools/lib.
+; A vaxpunk macro library is a text file of .MACRO definitions.
+
+; $EXIT [STATUS]: ends the run. STATUS is a VMS condition value; the default
+; is SS$_NORMAL.
+        .MACRO  $EXIT   STATUS=1
+        movz    x0, #((STATUS) & ^XFFFF)
+        movk    x0, #(((STATUS) >> 16) & ^XFFFF), lsl #16
+        svc     #1
+        .ENDM   $EXIT
+
+; $PUT TEXT: writes TEXT to the console. TEXT is written as for .ASCII, for
+; example "Hello"<10>; it goes into $LITERAL$. Uses x0 and x1.
+        .MACRO  $PUT    TEXT, ?STRING, ?AFTER
+        .SAVE_PSECT
+        .PSECT  $LITERAL$
+STRING: .ASCII  TEXT
+AFTER:
+        .RESTORE_PSECT
+        adr     x0, STRING
+        mov     x1, #AFTER - STRING
+        svc     #2
+        .ENDM   $PUT
+
+; $WRITE ADDRESS, LENGTH: writes LENGTH bytes from ADDRESS, both registers.
+; Uses x0 and x1, so LENGTH can't be x0.
+        .MACRO  $WRITE  ADDRESS, LENGTH
+        mov     x0, ADDRESS
+        mov     x1, LENGTH
+        svc     #2
+        .ENDM   $WRITE
+
+; $DUMP: prints every register.
+        .MACRO  $DUMP
+        svc     #3
+        .ENDM   $DUMP

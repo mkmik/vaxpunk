@@ -9,7 +9,12 @@ fn check(program: &str) {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
     let source =
         fs::read_to_string(root.join("../../tests/run").join(format!("{program}.mar"))).unwrap();
-    let records = vasm::assemble(&source, "TEST", *b"25-SEP-2026 00:00").expect("assembles");
+    let opts = vasm::Options {
+        name: "TEST".into(),
+        date: *b"25-SEP-2026 00:00",
+        ..Default::default()
+    };
+    let records = vasm::assemble(&source, &opts).expect("assembles");
     let dump = vdump::dump(&vms_obj::obj::write(&records)).unwrap();
     let path = root.join("tests").join(format!("{program}.obj.txt"));
     if env::var_os("UPDATE_GOLDEN").is_some() {

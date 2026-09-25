@@ -36,7 +36,7 @@ fn programs() {
 fn high_base() {
     let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/run");
     let text = fs::read_to_string(dir.join("hello.mar")).unwrap();
-    let records = vasm::assemble(&text, "HELLO", *b"25-SEP-2026 00:00").unwrap();
+    let records = vasm::assemble(&text, &options("HELLO", &dir.join("hello.mar"))).unwrap();
     let objects = [("hello.mar".to_string(), vms_obj::obj::write(&records))];
     let opts = vlink::Options {
         base: 0x4000_0000_0000,
@@ -59,11 +59,22 @@ fn high_base() {
     assert_eq!(out.status.code(), Some(0));
 }
 
+/// Assembler options for a test program: macro libraries come from vtools/lib.
+fn options(module: &str, source: &Path) -> vasm::Options {
+    vasm::Options {
+        name: module.into(),
+        date: *b"25-SEP-2026 00:00",
+        path: Some(source.to_path_buf()),
+        include: vec![Path::new(env!("CARGO_MANIFEST_DIR")).join("../../lib")],
+    }
+}
+
 fn run(dir: &Path, name: &str) -> Result<(), String> {
     let sources: Vec<PathBuf> = if dir.join(name).is_dir() {
         let mut s: Vec<PathBuf> = fs::read_dir(dir.join(name))
             .unwrap()
             .map(|e| e.unwrap().path())
+            .filter(|p| p.extension().is_some_and(|e| e == "mar"))
             .collect();
         s.sort();
         s
@@ -74,8 +85,13 @@ fn run(dir: &Path, name: &str) -> Result<(), String> {
     for source in &sources {
         let text = fs::read_to_string(source).unwrap();
         let module = source.file_stem().unwrap().to_string_lossy().to_uppercase();
-        let records = vasm::assemble(&text, &module, *b"25-SEP-2026 00:00")
-            .map_err(|d| format!("{}: {d:?}", source.display()))?;
+        let records = vasm::assemble(&text, &options(&module, source)).map_err(|d| {
+            let msgs: Vec<String> = d
+                .iter()
+                .map(|d| format!("{}:{}:{}: {}", d.file, d.line, d.col, d.msg))
+                .collect();
+            msgs.join("\n")
+        })?;
         objects.push((source.display().to_string(), vms_obj::obj::write(&records)));
     }
     let opts = vlink::Options {
