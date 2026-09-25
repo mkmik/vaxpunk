@@ -25,8 +25,8 @@ The CLI and the FUSE daemon never touch the core directly; CI checks that.
 ## Using it
 
 ```sh
-cargo build --release
-ods=target/release/ods
+cargo build --release -p ods-cli     # the crates are in the repository's Cargo workspace
+ods=../target/release/ods
 
 $ods init disk.img --size 100M --label WORK              # --ods5 for ODS-5
 $ods mkdir disk.img '[SRC]'
@@ -63,7 +63,7 @@ mount has been tested in a Linux container).
 
 ```sh
 fixtures/fetch.sh          # real VMS disks: a few MB; --all adds three CDs (1 GB)
-cargo test --release
+cargo test --release -p 'ods*'
 ```
 
 The images are kept once per user, in `vaxpunk/fixtures` in the cache

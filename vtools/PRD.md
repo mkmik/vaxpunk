@@ -58,8 +58,7 @@ All tools are written in Rust and run on the Mac. Later, the MACRO-32 and BLISS 
 ## Workspace layout
 
 ```
-vtools/
-  Cargo.toml                (workspace)
+vtools/                     (crates in the repository's Cargo workspace)
   crates/
     vms-obj/                no_std + alloc: OBJ, OLB, EXE formats
       src/obj/              module header, GSD, TIR, EOM records
