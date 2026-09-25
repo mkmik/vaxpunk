@@ -1,0 +1,8 @@
+# Images are downloaded by fetch.sh, never committed.
+*
+!.gitignore
+!fetch.sh
+!SHA256SUMS
+!*.img.xz
+!expected/
+!expected/**

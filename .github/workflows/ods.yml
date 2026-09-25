@@ -1,0 +1,42 @@
+name: ods
+
+on:
+  push:
+    branches: [main]
+    paths: ["ods/**", ".github/workflows/ods.yml"]
+  pull_request:
+    paths: ["ods/**", ".github/workflows/ods.yml"]
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        working-directory: ods
+    steps:
+      - uses: actions/checkout@v4
+      - name: Toolchain
+        run: |
+          rustup toolchain install stable --profile minimal --component clippy,rustfmt --target aarch64-unknown-none
+          rustup default stable
+      - name: Linux packages
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libarchive-tools libfuse3-dev fuse3 pkg-config
+      - name: macOS packages
+        if: runner.os == 'macOS'
+        run: brew install --cask macfuse
+      - name: The CLI and FUSE daemon use ods-image only
+        run: |
+          ! grep -rn 'ods-core' crates/ods-cli/Cargo.toml crates/ods-fuse/Cargo.toml
+          ! grep -rn 'ods_core' crates/ods-cli/src crates/ods-fuse/src
+      - name: ods-core builds without std
+        run: cargo build -p ods-core --target aarch64-unknown-none
+      - run: cargo fmt --check
+      - run: cargo clippy --all-targets -- -D warnings
+      - name: Fixtures
+        run: fixtures/fetch.sh
+      - run: cargo test --release

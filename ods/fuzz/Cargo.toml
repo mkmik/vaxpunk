@@ -1,0 +1,29 @@
+[package]
+name = "ods-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2024"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+ods-core = { path = "../crates/ods-core" }
+
+# Not part of the ods workspace: needs nightly and cargo-fuzz.
+[workspace]
+
+[[bin]]
+name = "mount"
+path = "fuzz_targets/mount.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "structures"
+path = "fuzz_targets/structures.rs"
+test = false
+doc = false
+bench = false
