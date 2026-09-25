@@ -66,6 +66,10 @@ fixtures/fetch.sh          # real VMS disks: a few MB; --all adds three CDs (1 G
 cargo test --release
 ```
 
+The images are kept once per user, in `vaxpunk/fixtures` in the cache
+directory (`~/Library/Caches` on macOS, `~/.cache` on Linux), and linked
+into each checkout's `fixtures/`.
+
 - **Fixtures**: VMS V1.0 (1978) to OpenVMS Alpha 8.4-2L1 (2016), plus a
   volume VMS 7.1 INITIALIZEd. Every home block, header and directory block
   must serialize back to its bytes, the verifier must find only the known
