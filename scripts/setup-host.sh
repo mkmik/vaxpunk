@@ -8,10 +8,17 @@ Darwin)
 	brew install aarch64-elf-gcc aarch64-elf-binutils cmake ninja dtc mtools qemu uv
 	;;
 Linux)
+	cc=gcc-aarch64-linux-gnu
+	if [ "$(uname -m)" = aarch64 ]; then
+		cc=gcc # the native gcc is aarch64-linux-gnu-gcc
+	fi
 	sudo apt-get update
-	sudo apt-get install -y gcc-aarch64-linux-gnu cmake ninja-build device-tree-compiler \
-		libxml2-utils python3 curl mtools qemu-system-arm qemu-efi-aarch64 gdb-multiarch
-	command -v uv >/dev/null || curl -LsSf https://astral.sh/uv/install.sh | sh
+	sudo apt-get install -y make git curl $cc cmake ninja-build device-tree-compiler \
+		libxml2-utils python3 mtools qemu-system-arm qemu-efi-aarch64 gdb-multiarch
+	if ! command -v uv >/dev/null; then
+		curl -LsSf https://astral.sh/uv/install.sh | sh
+		echo "setup-host: uv went to ~/.local/bin, make sure it is on PATH"
+	fi
 	;;
 *)
 	echo "unsupported host: $(uname -s)" >&2
