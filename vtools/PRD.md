@@ -23,7 +23,7 @@ All tools are written in Rust and run on the Mac. Later, the MACRO-32 and BLISS 
 
 - **No compiler.** No MACRO-32, BLISS or C front end here. Those are separate projects that consume this one.
 - **No LLVM.** No LLVM backend, no LLVM object writer, no dependency on an LLVM build. LLVM tools (`llvm-mc`, `llvm-objdump`) may be used only as test oracles for instruction encoding.
-- **No own instruction encoder if avoidable.** ARM64 encoding and decoding come from an existing Rust crate. The novel work is the object format, relocations, linking and conventions — not turning `add x0, x1, x2` into four bytes.
+- **No own instruction encoder if avoidable.** ARM64 encoding and decoding come from an existing Rust crate. The novel work is the object format, relocations, linking and conventions — not turning `add x0, x1, x2` into four bytes. Decoding does (`yaxpeax-arm`, in `vdump`). For encoding no crate fit; see *Encoding* below.
 - **No emulator of our own.** The runner uses stock QEMU system mode. We write no interpreter and no instruction-level simulation.
 - **No system services.** The runner provides a console and an exit, nothing resembling `SYS$` services, RMS, ASTs or condition handling.
 - **No shareable images, no dynamic linking** in the first version. Single statically linked EXE only. The format keeps room for them.
@@ -115,7 +115,7 @@ vtools/
 
 **Instructions: standard ARM64.** Mnemonics, register names, operand syntax and addressing modes follow the standard ARM64 assembly syntax as accepted by LLVM and GNU `as`. No invented mnemonics. Anyone who can read ARM64 assembly can read this.
 
-**Encoding: borrowed.** Instruction encoding uses an existing Rust crate rather than hand-written tables. The lead candidate is `aarchmrs-instructions` (from the `harm` project, BSD-3-Clause): one encoding function per A64 instruction variant, generated from Arm's machine-readable architecture spec. The fallback is `asm-rs`, a pure-Rust text assembler. Ruled out: `dynasm-rs` (assembles only at Rust compile time), Keystone (a fork of LLVM MC) and Capstone (decoder only). `yaxpeax-arm` is a decoder too, and serves `vdump` and checking. Neither candidate records relocations against external symbols, so the assembler encodes with a zero field and records the relocation itself — which is usually simpler anyway. `encode.rs` is the only module that calls the crate, so there is no wrapper trait.
+**Encoding: small tables, checked against GNU `as`.** No Rust crate turns ARM64 text into instructions correctly without LLVM. `asm-rs` silently mis-encodes some forms (`ldr q0, [x1, #16]` comes out as `ldr w0`, `orr w0, w1, #0x80000000` gets the wrong immediate) and has no floating point. `aarchmrs-instructions`, generated from Arm's machine-readable spec, only packs fields, with one function per mnemonic, width and form: the assembler would still parse operands and pick every form itself, and wire about 250 functions by name, for opcode constants the oracle checks anyway. `dynasm-rs` works only at Rust compile time; Keystone is LLVM. So `encode.rs` packs fields from one template per instruction class, and every supported form is checked bit for bit against GNU `as` (`tests/encode.rs`). For an instruction that refers to a symbol the linker resolves, the assembler encodes a zero field and records the relocation. `yaxpeax-arm` decodes, for `vdump`.
 
 **Directives: VMS style.** This is where the assembler diverges from the ARM64 norm, deliberately. Directives are modelled on MACRO-64, DEC's native Alpha assembler, and MACRO-32, adapted to ARM64:
 
@@ -203,7 +203,6 @@ Because the MMU is on, virtual addresses are free: an image linked at 0x10000 ru
 
 - **Spec source.** Where to get the Alpha object language and image format documentation (OpenVMS linker manual appendices, `EOBJDEF`/`EIHDDEF` definitions from published headers). GNU binutils implements the format and is a working reference: `bfd/vms-alpha.c` (objects and images), `bfd/vms-lib.c` (libraries), `include/vms/*.h` (record layouts). It is GPL-3, so the FreeVMS rule applies: learn the layouts, never copy code. Collect before writing `vms-obj`.
 - **Linkage sections.** Alpha code reaches data and other routines through a per-procedure linkage section pointed to by the procedure descriptor. ARM64 has `ADRP`+`ADD` PC-relative addressing that makes this less necessary. Keep linkage sections for fidelity with the Alpha calling standard, or drop them? Decide together with the calling standard; the object format should support both.
-- **Encoder crate.** Check that `aarchmrs-instructions` covers every instruction form in `assembler.md` before writing `encode.rs`; fall back to `asm-rs` if it doesn't.
 - **Assembler name and source suffix.** `.MAR` suggests MACRO-32, which this is not. Pick a name (and suffix) for the ARM64 MACRO-style assembler.
 - **Position-independent images.** Needed later for shareable images and possibly for address-space randomisation. The first version links at a fixed base.
 - **Debug symbol table.** Emit VMS-style DST records (so a future VMS-native debugger can use them) or just the link map for now. Leaning map only.

@@ -221,6 +221,13 @@ macro_rules! commands {
                     Tir::Other { args, .. } => out.extend_from_slice(args),
                 }
             }
+
+            /// Size in a record, the 4-byte header included.
+            pub fn size(&self) -> usize {
+                let mut args = Vec::new();
+                self.write_args(&mut args);
+                4 + args.len()
+            }
         }
     };
 }
