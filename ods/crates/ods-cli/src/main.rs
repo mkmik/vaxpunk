@@ -364,10 +364,14 @@ fn apply_record(
         r.rattrib = attrs::parse_rat(a).ok_or_else(|| Error::usage(format!("bad record attributes {a:?}")))?;
     }
     if let Some(m) = mrs {
-        r.rsize = m;
+        r.maxrec = m;
+        // A fixed-length record file's size is in both fields.
+        if r.rtype & 0xf == ods_image::rfm::FIX {
+            r.rsize = m;
+        }
     }
     if let Some(l) = lrl {
-        r.maxrec = l;
+        r.rsize = l;
     }
     if let Some(v) = vfc {
         r.vfcsize = v;
@@ -525,8 +529,8 @@ fn file_json(i: &ods_image::FileInfo) -> Value {
         "rfm": attrs::rfm_name(r.rtype),
         "org": attrs::org_name(r.rtype),
         "rat": attrs::rat_names(r.rattrib),
-        "mrs": r.rsize,
-        "lrl": r.maxrec,
+        "mrs": r.maxrec,
+        "lrl": r.rsize,
         "hiblk": r.hiblk,
         "efblk": r.efblk,
         "ffbyte": r.ffbyte,

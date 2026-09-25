@@ -535,6 +535,40 @@ fn extension_headers() {
     assert!(v.verify().unwrap().findings.is_empty());
 }
 
+/// Allocating a file's whole size when creating it, as copying in does, in
+/// hundreds of pieces: the new file needs extension headers straight away.
+#[test]
+fn created_in_pieces() {
+    let mut v = fragmented(4000);
+    let new = NewFile { blocks: 260, ..NewFile::default() };
+    let (fid, _) = v.create(ods_core::MFD, b"BIG.DAT", None, &new).unwrap();
+    let info = v.stat(fid).unwrap();
+    assert!(info.headers >= 3 && info.allocated == 260, "{} headers, {} blocks", info.headers, info.allocated);
+    let data = vec![0x3c; 260 * BLOCK];
+    write_content(&mut v, fid, &data).unwrap();
+    assert_eq!(read_content(&mut v, fid), data);
+    assert!(v.verify().unwrap().findings.is_empty());
+
+    let start = fragmented(4000).dismount().unwrap();
+    let run = |dev: Mem| {
+        let mut v = Volume::mount(dev, true).unwrap();
+        v.set_clock(clock);
+        let _ = v.create(ods_core::MFD, b"BIG.DAT", None, &new);
+        v.dismount().unwrap()
+    };
+    let total = run(start.clone()).writes - start.writes;
+    for n in 0..total {
+        let mut dev = start.clone();
+        dev.fail_after = Some(start.writes + n);
+        let mut dev = run(dev);
+        dev.fail_after = None;
+        let mut v = Volume::mount(dev, false).unwrap();
+        let errors: Vec<_> =
+            v.verify().unwrap().findings.into_iter().filter(|f| f.severity == Severity::Error).collect();
+        assert!(errors.is_empty(), "crash after {n} of {total} writes: {errors:#?}");
+    }
+}
+
 /// The same, cut short after every write.
 #[test]
 fn extension_headers_survive_crashes() {

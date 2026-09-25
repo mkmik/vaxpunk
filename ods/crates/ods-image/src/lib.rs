@@ -190,7 +190,16 @@ impl Image {
         if dir.is_empty() {
             return "[000000]".into();
         }
-        let parts: Vec<String> = dir.iter().map(|d| self.display(d, NameType::Isl1).replace('.', "^.")).collect();
+        // Every dot in a directory name is literal: display it as a name
+        // whose type is empty, then drop that type's dot.
+        let parts: Vec<String> = dir
+            .iter()
+            .map(|d| {
+                let mut s = self.display(&[&d[..], b"."].concat(), NameType::Isl1);
+                s.pop();
+                s
+            })
+            .collect();
         format!("[{}]", parts.join("."))
     }
 

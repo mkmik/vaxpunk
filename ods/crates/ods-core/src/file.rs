@@ -233,13 +233,17 @@ impl<D: BlockDevice> Volume<D> {
             e.set_ext_fid(link);
             let mut m = Vec::new();
             encode_map(chunk, &mut m);
-            e.set_map(&m);
+            if !e.set_map(&m) {
+                return Err(Error::Invalid("map pointers overflow the header"));
+            }
             self.write_header(elbn, &mut e)?;
             link = efid;
         }
         let mut m = Vec::new();
         encode_map(&ptrs, &mut m);
-        last.set_map(&m);
+        if !last.set_map(&m) {
+            return Err(Error::Invalid("map pointers overflow the header"));
+        }
         last.set_ext_fid(link);
         let added: u64 = runs.iter().map(|r| r.count).sum();
         if hs.len() == 1 {
@@ -297,7 +301,9 @@ impl<D: BlockDevice> Volume<D> {
         let (klbn, mut kh) = hs[k];
         let mut m = Vec::new();
         encode_map(&kept, &mut m);
-        kh.set_map(&m);
+        if !kh.set_map(&m) {
+            return Err(Error::Invalid("map pointers overflow the header"));
+        }
         kh.set_ext_fid(Fid::default());
         let dropped = &hs[k + 1..];
         for (lbn, h) in dropped {

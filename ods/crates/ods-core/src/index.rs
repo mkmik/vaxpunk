@@ -76,6 +76,11 @@ impl<D: BlockDevice> Volume<D> {
                 ra.efblk = vbn as u32 + 1;
                 ra.ffbyte = 0;
                 ih.set_record_attrs(&ra);
+                // Everything below the end of file is written now. VMS reads
+                // blocks past the highwater mark as zeros, headers included.
+                if ih.highwater_mark().is_some_and(|hw| hw < ra.efblk) {
+                    ih.set_highwater(ra.efblk);
+                }
                 self.write_header(ihs, &mut ih)?;
             }
             self.set_index_bit(num, true)?;
@@ -130,6 +135,11 @@ impl<D: BlockDevice> Volume<D> {
         h.set_rsoffset(0xff);
         h.set_struclev((level as u16) << 8 | 1);
         h.set_fid(fid);
+        if level == 5 && name_len.is_some() {
+            // No length hint (VMS keeps record and byte counts here).
+            let at = id as usize * 2;
+            h.0[at + 60..at + 76].fill(0xff);
+        }
         h
     }
 }

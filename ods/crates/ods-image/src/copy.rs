@@ -227,7 +227,7 @@ impl Image {
             let mut a = self.attributes(fid)?;
             a.record = ra;
             if conv == Conversion::LinesToRecords && record.is_none() {
-                a.record.maxrec = longest as u16;
+                a.record.rsize = longest as u16;
             }
             a.record.efblk = (bytes / BLOCK as u64) as u32 + 1;
             a.record.ffbyte = (bytes % BLOCK as u64) as u16;

@@ -49,9 +49,14 @@ fn round_trips(img: &mut Image, found: &[Found]) {
             encode_map(&decode_map(map).unwrap(), &mut enc);
             assert_eq!(enc, map, "map area at LBN {lbn}");
             if let Some(id) = hdr.ident() {
+                // Every byte of an ODS-2 ident area is a field `Ident`
+                // holds, so it must come back from nothing; ODS-5 ones also
+                // hold hints `set_ident` leaves alone.
                 let mut c = hdr;
-                let area = c.idoffset() as usize * 2..(c.mpoffset() as usize * 2).min(510);
-                c.0[area].fill(0xee);
+                if hdr.struclev() >> 8 == 2 {
+                    let area = c.idoffset() as usize * 2..(c.mpoffset() as usize * 2).min(510);
+                    c.0[area].fill(0xee);
+                }
                 c.set_ident(&id);
                 assert_eq!(
                     c.ident_area(),
@@ -209,6 +214,16 @@ fn dungeon() {
 #[test]
 fn vms_7_1_init() {
     check("vms-7.1-init.dsk", &[]);
+}
+
+#[test]
+fn vms_8_4_ods5() {
+    check("vms-ods5.img", &[]);
+}
+
+#[test]
+fn vms_8_4_ods2() {
+    check("vms-ods2.img", &[]);
 }
 
 #[test]

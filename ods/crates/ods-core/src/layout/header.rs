@@ -93,13 +93,19 @@ impl Header {
         self.area(self.acoffset(), self.rsoffset())
     }
 
-    /// Replaces the map area contents. The caller checks the capacity.
-    pub fn set_map(&mut self, map: &[u8]) {
+    /// Replaces the map area contents; `false`, changing nothing, if they
+    /// do not fit.
+    #[must_use]
+    pub fn set_map(&mut self, map: &[u8]) -> bool {
         let at = self.mpoffset() as usize * 2;
         let cap = self.map_capacity();
+        if map.len() > cap || map.len() / 2 > u8::MAX as usize {
+            return false;
+        }
         self.0[at..at + cap].fill(0);
         self.0[at..at + map.len()].copy_from_slice(map);
         self.set_map_inuse((map.len() / 2) as u8);
+        true
     }
 
     /// The highwater mark, when the header area is long enough to hold it
@@ -368,6 +374,8 @@ pub struct RecordAttrs {
     pub rtype: u8,
     /// FAT$M_FORTRANCC, _IMPLIEDCC, _PRINTCC, _NOSPAN, _MSBRCW.
     pub rattrib: u8,
+    /// Record size of a FIX file; otherwise the longest record written
+    /// (RMS's LRL).
     pub rsize: u16,
     /// Highest allocated VBN. On disk the two words are swapped.
     pub hiblk: u32,
@@ -377,6 +385,8 @@ pub struct RecordAttrs {
     pub ffbyte: u16,
     pub bktsize: u8,
     pub vfcsize: u8,
+    /// Maximum record size (RMS's MRS), 0 for no limit; the record size
+    /// again in a FIX file.
     pub maxrec: u16,
     pub defext: u16,
     pub gbc: u16,

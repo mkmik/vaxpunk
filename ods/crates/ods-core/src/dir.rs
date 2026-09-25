@@ -313,7 +313,9 @@ impl<D: BlockDevice> Volume<D> {
         let (plbn, mut h) = hs[0];
         let mut m = Vec::new();
         encode_map(&pointers(&runs), &mut m);
-        h.set_map(&m);
+        if !h.set_map(&m) {
+            return Err(Error::Invalid("map pointers overflow the header"));
+        }
         h.set_ext_fid(Fid::default());
         let mut r = h.record_attrs();
         r.hiblk = runs.iter().map(|r| r.count).sum::<u64>() as u32;

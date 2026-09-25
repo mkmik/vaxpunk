@@ -15,7 +15,7 @@ Defined in `crates/ods-core/src/layout/dir.rs`.
 | --- | --- | --- | --- |
 | 0 | 2 | `SIZE` | bytes after this word; always even |
 | 2 | 2 | `VERLIMIT` | the name's version limit; 32767 means none |
-| 4 | 1 | `FLAGS` | bits 0-2 type, 0 = list of versions and FIDs (the only one used); on ODS-5 bits 3-5 name type |
+| 4 | 1 | `FLAGS` | bits 0-2 type, 0 = list of versions and FIDs (the only one used); on ODS-5 bits 3-5 name type, as in the ident area: 0x08 for ISO Latin-1 names |
 | 5 | 1 | `NAMECOUNT` | name length |
 | 6 | n | `NAME` | "NAME.TYPE", the dot always there; padded to even length with one byte |
 | | 8 each | entries | version (2 bytes) and FID (6), highest version first |
@@ -29,7 +29,9 @@ down, in the same or the following blocks.
 Records are sorted by the bytes of the whole name, "NAME.TYPE", as a
 string: so `SYS$SCS.EXE` comes before `SYS.EXE` (`$` < `.`). Across all
 fixtures, 3,300 pairs of neighbouring names follow this and none follows
-"name, then type". ODS-5 names compare case-blind (ISO Latin-1 uppercase).
+"name, then type". ODS-5 names compare case-blind (ISO Latin-1 uppercase):
+VMS puts `MiXeD.CaSe` before `MixedCase.DIR` and `a file with spaces.txt`
+before `BACKUP.SYS`.
 
 ## Version limits
 

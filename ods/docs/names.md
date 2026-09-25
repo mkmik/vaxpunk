@@ -11,7 +11,9 @@ uppercased.
 ## ODS-5
 
 Name and type together up to 236 bytes (ISO Latin-1), or 118 UCS-2
-characters. Any character except C0 controls (0x00-0x1F) and
+characters. A name ODS-2 would accept uppercased is stored with the ODS-2
+name type, keeping its case; other names have the ISO Latin-1 type (see
+[directory.md](directory.md)). Any character except C0 controls (0x00-0x1F) and
 `" * \ : < > / ? |`. Case is preserved as first created (all versions of a
 name share the case of the first) and ignored when comparing and matching.
 

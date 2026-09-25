@@ -36,6 +36,12 @@ fetch() {
 	esac
 }
 
+# Volumes OpenVMS Alpha 8.4-2L1 made, ODS-5 and ODS-2 (vms/samples.dcl):
+# small enough compressed to live in the repository.
+for f in vms-ods5.img vms-ods2.img; do
+	[ -f $f ] || xz -dc $f.xz >$f
+done
+
 # simh RK07 disks: a VMS V1.0 (1978) system disk, and a user disk.
 fetch vaxvms-v1.0.rk07 "$ia/Vaxorcist_vax-vms-v-1.0/VAX-VMS_V1.0.RK7.7z"
 fetch dungeon.rk07 "$ia/Vaxorcist_vax-vms-v-1.0/DUNGEON.RK7.7z"

@@ -232,6 +232,14 @@ impl<D: BlockDevice> Volume<D> {
             if ra.efblk as u64 > mapped + 1 {
                 r.add(Warning, format!("end of file (block {}) past the allocation", ra.efblk), Some(fid), None);
             }
+            // A highwater mark below the end of file (zero means none kept):
+            // VMS itself leaves some, and ANALYZE only mentions them, but in
+            // INDEXF.SYS the headers past it read as zeros, which is fatal.
+            let used = ra.efblk.saturating_sub(1) as u64 + (ra.ffbyte != 0) as u64;
+            if let Some(hw) = s.h.highwater_mark().filter(|&hw| hw != 0 && used >= hw as u64) {
+                let sev = if fid == INDEXF { Bad } else { Warning };
+                r.add(sev, format!("data up to block {used} but the highwater mark is {hw}"), Some(fid), None);
+            }
             if s.h.filechar() & fch::CONTIG != 0 && runs.windows(2).any(|w| w[0].lbn + w[0].count != w[1].lbn) {
                 r.add(Warning, "marked contiguous but is not".into(), Some(fid), None);
             }

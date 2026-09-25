@@ -29,11 +29,12 @@ pub struct NewFile {
 }
 
 /// Directory record flags for a stored name: the name type in bits 3-5.
+/// On ODS-5, as VMS does, a name that ODS-2 would accept once uppercased
+/// is of the ODS-2 type, whatever its case; others are ISO Latin-1.
 fn name_flags(level: Level, name: &[u8]) -> (NameType, u8) {
     let t = match level {
-        Level::Ods2 => NameType::Ods2,
-        Level::Ods5 if name::validate(Level::Ods2, name).is_ok() => NameType::Ods2,
-        Level::Ods5 => NameType::Isl1,
+        Level::Ods5 if name::validate(Level::Ods2, &name.to_ascii_uppercase()).is_err() => NameType::Isl1,
+        _ => NameType::Ods2,
     };
     (t, t.code() << 3)
 }
@@ -101,7 +102,7 @@ impl<D: BlockDevice> Volume<D> {
         let full = ident_name(&stored, version);
         let mut h = self.new_header(fid, Some(full.len()));
         let mut r = f.record;
-        r.hiblk = runs.iter().map(|r| r.count).sum::<u64>() as u32;
+        r.hiblk = 0;
         r.efblk = 1;
         r.ffbyte = 0;
         h.set_record_attrs(&r);
@@ -128,10 +129,15 @@ impl<D: BlockDevice> Volume<D> {
             attdate: now,
             ..Ident::default()
         });
-        let mut m = Vec::new();
-        encode_map(&pointers(&runs), &mut m);
-        h.set_map(&m);
         self.write_header(lbn, &mut h)?;
+        // The space goes on like any extension: it may need more headers.
+        if let Err(e) = self.append_runs(fid, &runs) {
+            if !matches!(e, Error::Device(_)) {
+                self.delete_file(fid)?;
+                self.release(&runs)?;
+            }
+            return Err(e);
+        }
         let default_limit = match dh.record_attrs().versions {
             0 => MAX_VERSION,
             n => n,
@@ -219,7 +225,9 @@ impl<D: BlockDevice> Volume<D> {
         });
         let mut m = Vec::new();
         encode_map(&pointers(&runs), &mut m);
-        h.set_map(&m);
+        if !h.set_map(&m) {
+            return Err(Error::Invalid("map pointers overflow the header"));
+        }
         self.write_header(lbn, &mut h)?;
         let r = self.dir_update(parent, &full, |g: &mut Group| {
             if !g.entries.is_empty() {

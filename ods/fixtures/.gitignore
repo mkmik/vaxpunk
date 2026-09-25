@@ -3,5 +3,6 @@
 !.gitignore
 !fetch.sh
 !SHA256SUMS
+!*.img.xz
 !expected/
 !expected/**

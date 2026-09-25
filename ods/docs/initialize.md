@@ -45,7 +45,9 @@ no volume rather than a broken one.
 | 8,8 | BACKUP.SYS | FIX 64 | | 0 |
 | 9,9 | BADLOG.SYS | FIX 16 | | 0 |
 
-All are owned by the volume owner with the default file protection, except
+Their headers are structure level 2 with ODS-2 ident areas on ODS-5
+volumes too, as VMS 8.4 writes them. All are owned by the volume owner with
+the default file protection, except
 the MFD, which also grants world execute (S:RWED,O:RWED,G:RE,W:E). Each has
 an ODS-2 ident area with its name, revision 1, creation and revision dates
 the initialization time; the back link is the MFD; the highwater mark is
@@ -53,4 +55,10 @@ the allocation plus one (the MFD's: 2). The MFD lists all nine, version
 limit 1.
 
 VMS 6.1 and later also create SECURITY.SYS (10,10), a volume security
-profile; VMS 5.5 and 6.0 CDs show volumes are complete without it.
+profile; VMS 5.5 and 6.0 CDs show volumes are complete without it, and VMS
+8.4 accepts `ods`'s volumes without it at both levels.
+
+VMS 8.4 differs from 7.1 in its defaults: on a 409,600-block disk it chose
+a cluster of 16 (the maximum files still follow the formula above:
+409,600 / 34 = 12,047) and allocated BITMAP.SYS for growth to 983,040
+blocks. `ods` keeps 7.1's choices; `--cluster` picks another.

@@ -14,7 +14,7 @@ list, reserved; the last word is the checksum. Defined in
 | 2 | 1 | `ACOFFSET` | start of the ACL; 255 when there is none |
 | 3 | 1 | `RSOFFSET` | start of the reserved area; 255 when empty |
 | 4 | 2 | `SEG_NUM` | 0 for the primary header, n for the nth extension |
-| 6 | 2 | `STRUCLEV` | 2.1 (0x0201) or 5.1; decides the ident area format |
+| 6 | 2 | `STRUCLEV` | 2.1 (0x0201) or 5.1; decides the ident area format. On ODS-5 volumes the reserved files keep 2.1 |
 | 8 | 6 | `FID` | this header's file ID |
 | 14 | 6 | `EXT_FID` | next extension header, zero if none |
 | 20 | 32 | `RECATTR` | record attributes, below |
@@ -63,13 +63,13 @@ Kept for RMS; the file system only reads the end of file and allocation.
 | --- | --- | --- | --- |
 | 0 | 1 | `RTYPE` | low nibble record format: 0 UDF, 1 FIX, 2 VAR, 3 VFC, 4 STM, 5 STMLF, 6 STMCR; high nibble organization: 0 sequential, 1 relative, 2 indexed, 3 direct |
 | 1 | 1 | `RATTRIB` | bit 0 FTN, 1 CR (implied carriage control), 2 PRN, 3 BLK (records do not span blocks), 4 MSB record counts |
-| 2 | 2 | `RSIZE` | record size (FIX) or maximum (VAR, 0 for none) |
+| 2 | 2 | `RSIZE` | record size (FIX); for other formats the longest record written, RMS's LRL. VMS shows it as "longest" |
 | 4 | 4 | `HIBLK` | blocks allocated. **Stored high word first** |
 | 8 | 4 | `EFBLK` | end of file block. **High word first** |
 | 12 | 2 | `FFBYTE` | first free byte in the end of file block |
 | 14 | 1 | `BKTSIZE` | bucket size |
 | 15 | 1 | `VFCSIZE` | VFC control area size (0 means 2) |
-| 16 | 2 | `MAXREC` | longest record |
+| 16 | 2 | `MAXREC` | maximum record size, RMS's MRS, 0 for no limit ("maximum" in DIRECTORY/FULL); the record size again for FIX |
 | 18 | 2 | `DEFEXT` | default extend |
 | 20 | 2 | `GBC` | global buffer count |
 | 22 | 8 | | used by later VMS versions; preserved |
@@ -110,6 +110,13 @@ padded, and only the bytes present are ever written.
 | 52 | 8 | `EX_RECATTR`: extended record attributes |
 | 60 | 16 | `LENGTH_HINT` |
 | 76 | 44+ | `FILENAME`, `NAMELEN` bytes, continuing up to 248 bytes: the area grows with the name, and `MPOFFSET` with it |
+
+As in the ODS-2 area, the name includes `;VERSION`. The name type is 0
+(ODS-2) whenever ODS-2 would accept the name uppercased, whatever its case
+(`lower.txt`, `MiXeD.CaSe`), and 1 (ISO Latin-1) otherwise: spaces, more
+than one dot, accents, names over 39 characters. The length hint holds, on
+VMS's text files, a record count and a byte count; all ones means none,
+which is what `ods` writes and what VMS writes on directories.
 
 ## Map area and retrieval pointers
 

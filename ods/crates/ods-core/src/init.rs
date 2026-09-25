@@ -200,12 +200,13 @@ pub fn initialize<D: BlockDevice>(mut dev: D, p: &InitParams) -> Result<Volume<D
         let hiblk: u64 = runs.iter().map(|r| r.count).sum();
         let mut name_v = name.to_vec();
         name_v.extend_from_slice(b";1");
+        // Reserved files keep level 2 headers even on ODS-5, as VMS does.
         let mut h = Header::default();
         h.set_idoffset(40);
-        h.set_mpoffset(40 + Header::ident_words(p.level.number(), name_v.len()));
+        h.set_mpoffset(40 + Header::ident_words(2, name_v.len()));
         h.set_acoffset(0xff);
         h.set_rsoffset(0xff);
-        h.set_struclev(level << 8 | 1);
+        h.set_struclev(0x0201);
         h.set_fid(Fid::new(num, num as u16));
         h.set_filechar(fc);
         h.set_recprot(0xfe00);
@@ -232,7 +233,9 @@ pub fn initialize<D: BlockDevice>(mut dev: D, p: &InitParams) -> Result<Volume<D
         });
         let mut m = Vec::new();
         encode_map(&pointers(runs), &mut m);
-        h.set_map(&m);
+        if !h.set_map(&m) {
+            return Err(Error::Invalid("map pointers overflow the header"));
+        }
         h.update_checksum();
         hdrs.push(h);
     }
