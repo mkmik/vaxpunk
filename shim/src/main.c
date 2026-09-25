@@ -106,10 +106,58 @@ void shim_exception(uint64_t esr, uint64_t elr, uint64_t far)
 	panic("exception: ESR 0x%lx ELR 0x%lx FAR 0x%lx", esr, elr, far);
 }
 
+/* RAM ranges seL4 was built for, generated from kernel/out/platform_gen.json. */
+static const struct {
+	uint64_t start, end;
+} sel4_ram[] = {
+#include "sel4_ram.h"
+};
+
 static const char *const memmap_names[] = {
 	"usable", "reserved", "ACPI reclaimable", "ACPI NVS", "bad",
 	"bootloader reclaimable", "executable and modules", "framebuffer", "reserved mapped",
 };
+
+static const struct limine_file *find_module(const char *name)
+{
+	struct limine_module_response *r = module_req.response;
+	for (uint64_t i = 0; r && i < r->module_count; i++)
+		if (streq(r->modules[i]->string, name))
+			return r->modules[i];
+	panic("module '%s' not found, check module_string in limine.conf", name);
+}
+
+/*
+ * A placement must lie in RAM that is free now (Limine "usable") and that
+ * seL4 was built to own. The shim, the modules and Limine's own data are
+ * never "usable", so this also rules out overlapping any of them.
+ */
+static void check_placement(const char *what, uint64_t start, uint64_t end)
+{
+	struct limine_memmap_response *mm = memmap_req.response;
+	uint64_t run_start = 0, run_end = 0;
+	int usable = 0, owned = 0;
+	for (uint64_t i = 0; i < mm->entry_count; i++) {
+		struct limine_memmap_entry *e = mm->entries[i];
+		if (e->type != LIMINE_MEMMAP_USABLE)
+			continue;
+		if (e->base != run_end) /* entries are sorted: merge adjacent usable ones */
+			run_start = e->base;
+		run_end = e->base + e->length;
+		usable |= run_start <= start && end <= run_end;
+	}
+	for (size_t i = 0; i < sizeof(sel4_ram) / sizeof(sel4_ram[0]); i++)
+		owned |= sel4_ram[i].start <= start && end <= sel4_ram[i].end;
+	if (!usable) {
+		for (uint64_t i = 0; i < mm->entry_count; i++)
+			print("  0x%lx-0x%lx %s\n", mm->entries[i]->base,
+			      mm->entries[i]->base + mm->entries[i]->length,
+			      mm->entries[i]->type < 9 ? memmap_names[mm->entries[i]->type] : "?");
+		panic("%s 0x%lx-0x%lx overlaps memory that is not free (map above)", what, start, end);
+	}
+	if (!owned)
+		panic("%s 0x%lx-0x%lx is outside the RAM seL4 was built for", what, start, end);
+}
 
 void shim_main(void)
 {
@@ -117,7 +165,8 @@ void shim_main(void)
 	if (!LIMINE_BASE_REVISION_SUPPORTED(base_revision) || !exec_req.response || !dtb_req.response)
 		halt();
 	mmu_init(exec_req.response->virtual_base, exec_req.response->physical_base);
-	uint64_t uart_pa = fdt_find_pl011(dtb_req.response->dtb_ptr);
+	const void *dtb = dtb_req.response->dtb_ptr;
+	uint64_t uart_pa = fdt_find_pl011(dtb);
 	if (!uart_pa)
 		halt();
 	mmu_map_uart(uart_pa);
@@ -125,20 +174,27 @@ void shim_main(void)
 
 	uint64_t el;
 	__asm__ volatile("mrs %0, CurrentEL" : "=r"(el));
-	print("\nvaxpunk shim: EL%lu, shim at 0x%lx, UART at 0x%lx\n", el >> 2 & 3,
-	      exec_req.response->physical_base, uart_pa);
+	print("\nvaxpunk shim: shim at 0x%lx, UART at 0x%lx\n", exec_req.response->physical_base,
+	      uart_pa);
+	if ((el >> 2 & 3) != 1)
+		panic("entered at EL%lu, the kernel is built for EL1", el >> 2 & 3);
+	if (!memmap_req.response)
+		panic("no memory map from Limine");
 
-	struct limine_memmap_response *mm = memmap_req.response;
-	for (uint64_t i = 0; mm && i < mm->entry_count; i++) {
-		struct limine_memmap_entry *e = mm->entries[i];
-		print("  mem 0x%lx-0x%lx %s\n", e->base, e->base + e->length,
-		      e->type < 9 ? memmap_names[e->type] : "?");
-	}
-	struct limine_module_response *mods = module_req.response;
-	for (uint64_t i = 0; mods && i < mods->module_count; i++)
-		print("  module '%s' %s at 0x%lx size 0x%lx\n", mods->modules[i]->string,
-		      mods->modules[i]->path, (uint64_t)mods->modules[i]->address,
-		      mods->modules[i]->size);
-	print("hhdm 0x%lx\n", hhdm_req.response ? hhdm_req.response->offset : 0);
+	struct elf kernel, user;
+	const struct limine_file *kf = find_module("kernel"), *uf = find_module("roottask");
+	elf_parse(&kernel, "kernel", kf->address, kf->size);
+	elf_parse(&user, "roottask", uf->address, uf->size);
+
+	uint64_t k_start = kernel.pbase, k_end = k_start + (kernel.vend - kernel.vbase);
+	uint64_t dtb_start = ALIGN_UP(k_end, PAGE_SIZE), dtb_end = dtb_start + fdt_size(dtb);
+	uint64_t ui_start = ALIGN_UP(dtb_end, PAGE_SIZE), ui_end = ui_start + (user.vend - user.vbase);
+	check_placement("kernel", k_start, k_end);
+	check_placement("DTB", dtb_start, dtb_end);
+	check_placement("root task", ui_start, ui_end);
+	print("shim: kernel    0x%lx-0x%lx entry 0x%lx\n", k_start, k_end, kernel.entry);
+	print("shim: DTB       0x%lx-0x%lx\n", dtb_start, dtb_end);
+	print("shim: root task 0x%lx-0x%lx vaddr 0x%lx entry 0x%lx\n", ui_start, ui_end,
+	      user.vbase, user.entry);
 	halt();
 }

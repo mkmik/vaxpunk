@@ -21,7 +21,7 @@ static size_t slen(const char *s)
 	return n;
 }
 
-static int streq(const char *a, const char *b)
+int streq(const char *a, const char *b)
 {
 	while (*a && *a == *b)
 		a++, b++;
