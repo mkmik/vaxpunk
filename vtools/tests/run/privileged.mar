@@ -1,0 +1,13 @@
+        .TITLE  PRIVILEGED  An EL1 register read from user mode
+
+        .PSECT  $CODE$
+START::
+        bl      PEEK
+        ret
+
+PEEK::
+        nop
+        mrs     x0, sctlr_el1           ; EL1 only: OPCDEC
+        ret
+
+        .END    START

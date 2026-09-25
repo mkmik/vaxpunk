@@ -1,0 +1,19 @@
+        .TITLE  HELLO   Say hello through the runner
+        .IDENT  /V1.0/
+
+; vrun enters HELLO at EL0; SVC #2 writes x1 bytes from x0 to the console.
+
+        .PSECT  $CODE$
+HELLO::
+        adr     x0, message
+        mov     x1, #message_length
+        svc     #2                      ; put
+        mov     x0, #1                  ; SS$_NORMAL
+        ret
+
+        .PSECT  $LITERAL$
+message:
+        .ASCII  "Hello, world!"<10>
+message_length = . - message
+
+        .END    HELLO

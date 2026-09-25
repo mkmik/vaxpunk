@@ -1,0 +1,9 @@
+        .TITLE  ACCVIO  A deliberate access violation
+
+        .PSECT  $CODE$
+START::
+        mov     x1, #8
+        ldr     x0, [x1]                ; page 0 is never mapped
+        ret
+
+        .END    START

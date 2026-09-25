@@ -72,6 +72,8 @@ one second after the command.
 | `roottask/` | the root task, freestanding C | `roottask/out/roottask.elf` |
 | `image/` | Limine config and the ESP builder (mtools) | `out/esp.img` |
 | `scripts/` | host setup, Limine download, QEMU wrapper and console filter | `out/serial.log` |
+| `ods/` | Files-11 ODS-2/ODS-5 file system in Rust: the library, the `ods` CLI and a FUSE mount; see [ods/README.md](ods/README.md) | `target/` |
+| `vtools/` | VMS-style toolchain in Rust: the `vasm` assembler, `vlink` linker and `vlib` librarian, object, library and image formats, `vdump` to inspect them, and `vrun`, which runs images in QEMU; see [vtools/PRD.md](vtools/PRD.md) | `target/` |
 
 Each component builds on its own with `make -C <dir>`. The components share
 nothing but those output files. `shim/` and `roottask/` read `kernel/out/`,
@@ -87,13 +89,20 @@ so build the kernel first. The top-level `Makefile` only calls the others.
 - Pins: seL4 by submodule commit (tag 16.0.0), Limine 11.4.1 by version and
   SHA-256 in `scripts/fetch-limine.sh`. The EDK2 firmware comes from the
   QEMU install (`EDK2_FW=` overrides it).
+- The Rust projects, `ods/` and `vtools/`, are one Cargo workspace at the
+  root instead: `cargo test` tests both, `cargo test -p 'ods*'` or
+  `cargo test -p 'v*'` one. They need a Rust toolchain besides what
+  `setup-host.sh` installs, and `ods-fuse` needs FUSE (fuse3 on Linux, macFUSE
+  on macOS). vtools's tests run images under `vrun` in QEMU;
+  `VRUN_FLAGS=--hvf cargo test -p 'v*'` runs them under HVF.
 
 ## Toolchain
 
 Each component picks its compiler with `CROSS_COMPILE` (default:
 `aarch64-elf-` if installed, else `aarch64-linux-gnu-`), for example
 `make CROSS_COMPILE=aarch64-none-elf-`. `CC=` overrides the shim and root
-task compiler alone.
+task compiler alone. `vrun`'s boot stub is assembled with the same
+`CROSS_COMPILE` binutils.
 
 ## Debugging
 

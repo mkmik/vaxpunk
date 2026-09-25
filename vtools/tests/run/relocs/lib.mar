@@ -1,0 +1,22 @@
+        .TITLE  RELOCLIB Targets for RELOCS, in another module
+
+        .PSECT  $CODE$
+LIB_ADD::                               ; x0 = x0 + x1
+        add     x0, x0, x1
+        ret
+LIB_ONE::                               ; x0 = 1
+        mov     x0, #1
+        ret
+
+        .PSECT  $DATA$
+LIB_DATA::
+        .QUAD   ^X1122334455667788
+LIB_WORD::
+        .LONG   ^XCAFE
+
+        .PSECT  $LITERAL$
+LIB_MSG::
+        .ASCII  "relocs ok"<10>
+LIB_MSG_END::
+
+        .END

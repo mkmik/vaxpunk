@@ -1,0 +1,13 @@
+        .TITLE  MAIN    Calls routines that come from an object library
+        .IDENT  /V1.0/
+        .LIBRARY "vrun.mlb"
+        .EXTERNAL PUT_LINE              ; in lib/, linked as LIB.OLB
+
+        .PSECT  $CODE$
+START::
+        mov     x0, #1234
+        bl      PUT_LINE
+        mov     x0, #0
+        bl      PUT_LINE
+        $EXIT
+        .END    START

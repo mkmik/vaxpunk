@@ -1,0 +1,46 @@
+name: rust
+
+# The Rust projects, ods/ and vtools/, are one Cargo workspace.
+on:
+  push:
+    branches: [main]
+    paths: ["Cargo.toml", "Cargo.lock", "ods/**", "vtools/**", ".github/workflows/rust.yml"]
+  pull_request:
+    paths: ["Cargo.toml", "Cargo.lock", "ods/**", "vtools/**", ".github/workflows/rust.yml"]
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Toolchain
+        run: |
+          rustup toolchain install stable --profile minimal --component clippy,rustfmt --target aarch64-unknown-none
+          rustup default stable
+      # FUSE for ods-fuse; cross binutils (vrun's boot stub, vasm's GNU as
+      # oracle) and QEMU for vtools.
+      - name: Linux packages
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libarchive-tools libfuse3-dev fuse3 pkg-config binutils-aarch64-linux-gnu qemu-system-arm
+      - name: macOS packages
+        if: runner.os == 'macOS'
+        run: |
+          brew install --cask macfuse
+          brew install aarch64-elf-binutils qemu
+      - name: The ods CLI and FUSE daemon use ods-image only
+        run: |
+          ! grep -rn 'ods-core' ods/crates/ods-cli/Cargo.toml ods/crates/ods-fuse/Cargo.toml &&
+          ! grep -rn 'ods_core' ods/crates/ods-cli/src ods/crates/ods-fuse/src
+      - name: The libraries the OS will use build without std
+        run: cargo build -p ods-core -p vms-obj --target aarch64-unknown-none
+      - run: cargo fmt --check
+      - run: cargo clippy --all-targets -- -D warnings
+      - name: Fixtures
+        run: ods/fixtures/fetch.sh
+      - run: cargo test --release

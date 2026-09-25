@@ -1,0 +1,11 @@
+        .TITLE  OVERFLOW  Recursion without end, into the guard below the stack
+
+        .PSECT  $CODE$
+START::
+        bl      RECURSE
+
+RECURSE::
+        stp     x29, x30, [sp, #-16]!
+        bl      RECURSE
+
+        .END    START

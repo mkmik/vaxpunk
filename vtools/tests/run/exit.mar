@@ -1,0 +1,10 @@
+        .TITLE  EXIT    Exit through the monitor call, with an error status
+
+        .PSECT  $CODE$
+START::
+        mov     x0, #^X2C               ; SS$_ABORT
+        svc     #1                      ; exit: never returns
+        mov     x0, #1
+        ret
+
+        .END    START
