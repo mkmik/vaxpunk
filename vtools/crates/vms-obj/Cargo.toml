@@ -1,0 +1,6 @@
+[package]
+name = "vms-obj"
+description = "VMS-style object, library and image formats for ARM64 (no_std + alloc)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true

@@ -72,6 +72,7 @@ one second after the command.
 | `roottask/` | the root task, freestanding C | `roottask/out/roottask.elf` |
 | `image/` | Limine config and the ESP builder (mtools) | `out/esp.img` |
 | `scripts/` | host setup, Limine download, QEMU wrapper and console filter | `out/serial.log` |
+| `vtools/` | VMS-style toolchain in Rust: object and image formats, and `vrun`, which runs images in QEMU; see [vtools/PRD.md](vtools/PRD.md) | `vtools/target/` |
 
 Each component builds on its own with `make -C <dir>`. The components share
 nothing but those output files. `shim/` and `roottask/` read `kernel/out/`,
@@ -87,13 +88,17 @@ so build the kernel first. The top-level `Makefile` only calls the others.
 - Pins: seL4 by submodule commit (tag 16.0.0), Limine 11.4.1 by version and
   SHA-256 in `scripts/fetch-limine.sh`. The EDK2 firmware comes from the
   QEMU install (`EDK2_FW=` overrides it).
+- `vtools/` is a Cargo workspace instead: `cd vtools && cargo test`. It needs
+  a Rust toolchain besides what `setup-host.sh` installs. Its tests run images
+  under `vrun` in QEMU; `VRUN_FLAGS=--hvf cargo test` runs them under HVF.
 
 ## Toolchain
 
 Each component picks its compiler with `CROSS_COMPILE` (default:
 `aarch64-elf-` if installed, else `aarch64-linux-gnu-`), for example
 `make CROSS_COMPILE=aarch64-none-elf-`. `CC=` overrides the shim and root
-task compiler alone.
+task compiler alone. `vrun`'s boot stub is assembled with the same
+`CROSS_COMPILE` binutils.
 
 ## Debugging
 
