@@ -1,0 +1,7 @@
+# Python modules imported by the seL4 kernel and libsel4 build scripts.
+jinja2==3.1.6
+jsonschema==4.26.0
+lxml==6.1.3
+ply==3.11
+pyfdt==0.3
+pyyaml==6.0.3
