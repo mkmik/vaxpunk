@@ -4,10 +4,16 @@
 //! line stderr must contain). A directory NAME/ is a program of several
 //! modules, linked in name order, then the object library vlib makes of the
 //! modules in NAME/lib/, if there is one. VRUN_FLAGS adds vrun options.
+//! Every object, library and image made on the way must parse and write back
+//! to the same bytes.
 
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+
+use vms_obj::exe::Image;
+use vms_obj::obj;
+use vms_obj::olb::Library;
 
 #[test]
 fn programs() {
@@ -83,7 +89,9 @@ fn run(dir: &Path, name: &str) -> Result<(), String> {
                 let (file, object) = assemble(&source)?;
                 vlib::replace(&mut lib, &file, &object, 0)?;
             }
-            objects.push(("LIB.OLB".into(), lib.write()));
+            let bytes = lib.write();
+            assert_eq!(Library::parse(&bytes).unwrap().write(), bytes, "round trip");
+            objects.push(("LIB.OLB".into(), bytes));
         }
     } else {
         objects.push(assemble(&dir.join(format!("{name}.mar")))?);
@@ -96,7 +104,9 @@ fn run(dir: &Path, name: &str) -> Result<(), String> {
     };
     let linked = vlink::link(&objects, &opts).map_err(|e| e.join("\n"))?;
     let exe = Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("{name}.exe"));
-    fs::write(&exe, linked.image.write()).unwrap();
+    let bytes = linked.image.write();
+    assert_eq!(Image::parse(&bytes).unwrap().write(), bytes, "round trip");
+    fs::write(&exe, bytes).unwrap();
     let map = exe.with_extension("map");
     fs::write(&map, &linked.map).unwrap();
 
@@ -159,5 +169,11 @@ fn assemble(source: &Path) -> Result<(String, Vec<u8>), String> {
             .collect();
         msgs.join("\n")
     })?;
-    Ok((source.display().to_string(), vms_obj::obj::write(&records)))
+    let bytes = obj::write(&records);
+    assert_eq!(
+        obj::write(&obj::parse(&bytes).unwrap()),
+        bytes,
+        "round trip"
+    );
+    Ok((source.display().to_string(), bytes))
 }
