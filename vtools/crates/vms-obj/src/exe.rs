@@ -5,7 +5,7 @@ use alloc::string::String;
 use alloc::vec;
 use alloc::vec::Vec;
 
-use crate::record::{Field, record};
+use crate::record::{Field, Reader, record};
 use crate::{ARCH_ARM64, Error};
 
 /// Images are made of blocks of this size, as on VMS.
@@ -279,8 +279,7 @@ impl Image {
         let mut sections = Vec::new();
         let mut at = eihd.isdoff as usize;
         loop {
-            let size = from(hdr, at + 8)?.get(..4).ok_or(Error::Truncated)?;
-            match u32::get(size) {
+            match u32_at(hdr, at + 8)? {
                 0 => break,
                 u32::MAX => {
                     at = (at + BLOCK) & !(BLOCK - 1);
@@ -333,6 +332,10 @@ impl Image {
 
 fn from(b: &[u8], at: usize) -> Result<&[u8], Error> {
     b.get(at..).ok_or(Error::Truncated)
+}
+
+fn u32_at(b: &[u8], at: usize) -> Result<u32, Error> {
+    u32::read(&mut Reader(from(b, at)?))
 }
 
 /// Overwrites `file` at `at` with what `write` produces.
@@ -412,19 +415,15 @@ mod tests {
     #[test]
     fn alpha_layout() {
         let bytes = sample(1).write();
-        let u32_at = |at: usize| u32::get(&bytes[at..]);
-        assert_eq!((u32_at(0), u32_at(4)), (3, 0), "EIHD majorid, minorid");
-        assert_eq!(u32_at(52), Eihd::K_EXE, "EIHD$L_IMGTYPE");
-        assert_eq!(u32_at(76), 1, "EIHD$L_HDRBLKCNT");
-        assert_eq!(u32_at(100), 16, "EIHD$L_VIRT_MEM_BLOCK_SIZE");
-        assert_eq!(u32_at(112), ARCH_ARM64, "EIHD$L_ARCH");
+        let word = |at: usize| u32_at(&bytes, at).unwrap();
+        assert_eq!((word(0), word(4)), (3, 0), "EIHD majorid, minorid");
+        assert_eq!(word(52), Eihd::K_EXE, "EIHD$L_IMGTYPE");
+        assert_eq!(word(76), 1, "EIHD$L_HDRBLKCNT");
+        assert_eq!(word(100), 16, "EIHD$L_VIRT_MEM_BLOCK_SIZE");
+        assert_eq!(word(112), ARCH_ARM64, "EIHD$L_ARCH");
         assert_eq!(&bytes[510..512], &[0xff, 0xff], "EIHD$W_ALIAS");
-        let isd = u32_at(12) as usize;
-        assert_eq!(
-            u32_at(isd + 28),
-            2,
-            "the section's contents start in block 2"
-        );
+        let isd = word(12) as usize;
+        assert_eq!(word(isd + 28), 2, "the section's contents start in block 2");
         assert_eq!(&bytes[512..516], &[0x20, 0x00, 0x80, 0xd2]);
     }
 

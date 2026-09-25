@@ -1,0 +1,19 @@
+EMH MHD  module HELLO "V1.0", created 25-SEP-2026 17:00, structure level 2, architecture 183, longest record 8192
+EMH LNM  "hand-built"
+EGSD
+  PSC  0 $CODE$: 26 bytes, align 2**2, PIC REL SHR EXE RD
+  SYM  definition HELLO: psect 0 value 0000000000000000, DEF REL
+ETIR
+  STA_PQ              psect 0 ($CODE$) offset 0000000000000000
+  CTL_SETRB
+  STA_PQ              psect 0 ($CODE$) offset 0000000000000014
+  STO_A64_ADR         10000000  adr x0, $+0x0
+  STO_IMM             16 bytes
+                        0000000000000004  d28000c1  mov x1, #0x6
+                        0000000000000008  d4000041  svc #0x2
+                        000000000000000C  d2800020  mov x0, #0x1
+                        0000000000000010  d65f03c0  ret
+  STO_IMM             6 bytes
+                        0000000000000014  6c6c6568  ldnp d8, d25, [x11, #-0x140]
+                        0000000000000018  6f 0a                                            o.
+EEOM success, transfer psect 0 offset 0000000000000000

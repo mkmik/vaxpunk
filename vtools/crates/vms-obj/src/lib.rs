@@ -11,6 +11,7 @@ extern crate alloc;
 mod record;
 
 pub mod exe;
+pub mod obj;
 
 pub use record::Error;
 

@@ -1,0 +1,11 @@
+[package]
+name = "vdump"
+description = "Decoded dump of vaxpunk object modules and images, like ANALYZE/OBJECT and ANALYZE/IMAGE"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+vms-obj = { path = "../vms-obj" }
+yaxpeax-arch = { version = "0.3", default-features = false }
+yaxpeax-arm = { version = "0.5", default-features = false, features = ["std", "fmt"] }
