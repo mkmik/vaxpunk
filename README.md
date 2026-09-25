@@ -40,15 +40,15 @@ Bootstrapping kernel
 ...
 Booting all finished, dropped to user space
 hello from the root task
-boot info: node 0 of 1, 59 untyped caps
+boot info: node 0 of 1, 53 untyped caps
   untyped 0: paddr 0x0 size 2^27 device
 ...
 root task done
 ```
 
 Day to day: edit `roottask/src/`, then `make run`. Only the root task is
-rebuilt and the ESP image re-stitched. It takes about 6 seconds from the
-command to the root task's output on an M3, mostly spent in EDK2.
+rebuilt and the ESP image re-stitched. On an M3, the root task prints about
+one second after the command.
 
 ## Layout
 
@@ -93,5 +93,7 @@ gdb-multiarch roottask/out/roottask.elf -ex 'target remote :1234' -ex 'b main' -
 ```
 
 `scripts/run-qemu.sh --hvf` runs under Hypervisor.framework instead of TCG.
-This is best effort: the kernel is built for a Cortex-A57 and HVF only offers
-`-cpu host`.
+It boots the same kernel, which is why `kernel/qemu.env` picks GICv3 (HVF
+does not emulate GICv2). This is best effort: the kernel is built for a
+Cortex-A57 while HVF offers only `-cpu host`, and seL4 warns that the
+counter runs at 24 MHz instead of the 62.5 MHz it was built for.

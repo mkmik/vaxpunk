@@ -33,7 +33,8 @@ fi
 
 # The machine options must match the DTB seL4 dumped at configure time
 # (seL4/src/plat/qemu-arm-virt/config.cmake). acpi=off makes EDK2 hand the DTB
-# to Limine; with ACPI tables present it passes ACPI instead.
+# to Limine; with ACPI tables present it passes ACPI instead. splash-time=0
+# drops EDK2's 5 second boot timeout.
 exec qemu-system-aarch64 -machine "virt,secure=off,gic-version=$QEMU_GIC,acpi=off" $cpu \
 	-smp 1 -m "$QEMU_MEM" -nographic -nic none -bios "$EDK2_FW" \
-	-drive "if=virtio,format=raw,file=$root/out/esp.img" $gdb
+	-boot menu=on,splash-time=0 -drive "if=virtio,format=raw,file=$root/out/esp.img" $gdb
