@@ -211,6 +211,7 @@ impl<D: BlockDevice> Volume<D> {
         if blocks.is_empty() || !same_block {
             return self.dir_rewrite(&hs, &map, blocks, &recs).map(|_| out);
         }
+        let appending = at.is_empty() && b == last && i == blocks[last].records.len();
         let mut blk = blocks[b].clone();
         blk.records.retain(|r| key(r) != Ordering::Equal);
         blk.records.splice(i..i, recs.iter().cloned());
@@ -224,7 +225,7 @@ impl<D: BlockDevice> Volume<D> {
                 self.set_dir_eof(&hs, last as u64 + 1)?;
                 return Ok(out);
             }
-        } else if b == last && self.dir_spill(dir, &hs, &map, &blk)? {
+        } else if appending && self.dir_append_block(dir, &hs, &map, &recs)? {
             return Ok(out);
         }
         blocks[b] = blk;
@@ -244,17 +245,23 @@ impl<D: BlockDevice> Volume<D> {
         self.write_header(lbn, &mut h)
     }
 
-    /// Splits an overflowing last block in two, the second half going to
-    /// the block after the end of file: allocated already, or taken from
-    /// free space right after the directory. Writes the new block, then the
-    /// shortened one, then the end of file. `false` if there is no room.
-    fn dir_spill(&mut self, dir: Fid, hs: &[(u64, Header)], map: &[Run], blk: &DirBlock) -> Result<bool, D::Error> {
-        let used = crate::dir::used_blocks(&hs[0].1, map.iter().map(|r| r.count).sum());
-        let (first, second) = split_block(blk);
-        let (Some(a), Some(b)) = (first.to_block(), second.to_block()) else {
+    /// Puts records for a name that sorts after every other into a new
+    /// block after the end of file: already allocated, or taken from free
+    /// space right after the directory. Writes the block, then moves the end
+    /// of file over it, which is the one write that makes the entry appear.
+    /// `false` if there is no room.
+    fn dir_append_block(
+        &mut self,
+        dir: Fid,
+        hs: &[(u64, Header)],
+        map: &[Run],
+        recs: &[DirRecord],
+    ) -> Result<bool, D::Error> {
+        let Some(raw) = (DirBlock { records: recs.to_vec(), tail: Vec::new() }).to_block() else {
             return Ok(false);
         };
         let allocated: u64 = map.iter().map(|r| r.count).sum();
+        let used = used_blocks(&hs[0].1, allocated);
         let mut map = map.to_vec();
         if used >= allocated {
             let after = map.last().map(|r| r.lbn + r.count);
@@ -268,9 +275,8 @@ impl<D: BlockDevice> Volume<D> {
             }
         }
         let hs = self.headers(dir)?;
-        let lbn = |vbn: u64| map_vbn(&map, vbn).map(|(l, _)| l).unwrap_or(0);
-        self.write_block(lbn(used + 1), &b)?;
-        self.write_block(lbn(used), &a)?;
+        let lbn = map_vbn(&map, used + 1).map(|(l, _)| l).unwrap_or(0);
+        self.write_block(lbn, &raw)?;
         self.set_dir_eof(&hs, used + 2)?;
         Ok(true)
     }
@@ -348,21 +354,4 @@ fn pack(all: Vec<DirRecord>) -> Vec<DirBlock> {
     }
     out.push(cur);
     out
-}
-
-/// Splits a block's records in two halves by size.
-fn split_block(blk: &DirBlock) -> (DirBlock, DirBlock) {
-    let total = blk.used();
-    let mut acc = 0;
-    let mut cut = 0;
-    for (i, r) in blk.records.iter().enumerate() {
-        if acc + r.size() > total / 2 && i > 0 {
-            break;
-        }
-        acc += r.size();
-        cut = i + 1;
-    }
-    let cut = cut.min(blk.records.len().saturating_sub(1)).max(1);
-    let (a, b) = blk.records.split_at(cut.min(blk.records.len()));
-    (DirBlock { records: a.to_vec(), tail: Vec::new() }, DirBlock { records: b.to_vec(), tail: Vec::new() })
 }

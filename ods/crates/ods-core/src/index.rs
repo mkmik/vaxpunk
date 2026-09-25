@@ -59,6 +59,18 @@ impl<D: BlockDevice> Volume<D> {
                 }
             };
             if vbn >= eof {
+                // Everything below the end of file must be a header, so
+                // slots it is about to cover get an empty one first, as VMS
+                // does. Deleted headers stay: they hold sequence numbers.
+                for v in eof..=vbn {
+                    let at = map_vbn(&self.index_map, v).map(|(l, _)| l).unwrap_or(lbn);
+                    let slot = Header(self.read_block(at)?);
+                    if !slot.is_deleted() && !(slot.fid().num == 0 && slot.invalid() == Some("zero file number")) {
+                        let mut e = self.new_header(Fid::default(), Some(2));
+                        e.set_ident(&crate::layout::Ident { name: b".;".to_vec(), ..Default::default() });
+                        self.write_header(at, &mut e)?;
+                    }
+                }
                 let mut ih = ih;
                 let mut ra = ih.record_attrs();
                 ra.efblk = vbn as u32 + 1;
