@@ -7,3 +7,8 @@ set(KernelMaxNumNodes 1 CACHE STRING "")
 set(KernelVerificationBuild OFF CACHE BOOL "")
 set(KernelDebugBuild ON CACHE BOOL "")
 set(KernelPrinting ON CACHE BOOL "") # seL4_DebugPutChar
+# Mixed-criticality scheduling: threads run on scheduling context capabilities
+# (budget and period) instead of a fixed timeslice, and replies go through
+# reply objects. The root task gets seL4_CapInitThreadSC and the sched control
+# caps in bootinfo->schedcontrol.
+set(KernelIsMCS ON CACHE BOOL "")
