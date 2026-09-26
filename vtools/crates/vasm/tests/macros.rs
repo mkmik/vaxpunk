@@ -1,4 +1,4 @@
-//! Macro errors and rules that tests/run/macros.mar can't show by running.
+//! Errors, and macro rules that tests/run/macros.mar can't show by running.
 
 use vasm::{Diagnostic, Options};
 
@@ -35,6 +35,33 @@ fn errors_show_the_expansion() {
         [
             "in macro INNER, at <source>:6",
             "in macro OUTER, at <source>:8"
+        ]
+    );
+}
+
+#[test]
+fn errors_are_in_line_order_at_the_operand() {
+    // Pass 1 finds the errors on lines 7 and 9, pass 2 the others.
+    let source = "
+        .MACRO  STEP    A, B
+        add     A, A, B
+        .ENDM
+        STEP    x1, w2
+        b       nowhere
+        ldr     x0, [x1, x2, ror #3]
+        .IIF    EQ, 0, mov x0, w1
+        .ENDC
+";
+    let e = errors(source);
+    let at: Vec<_> = e.iter().map(|d| (d.line, &d.text[d.col - 1..])).collect();
+    assert_eq!(
+        at,
+        [
+            (3, "w2"),
+            (6, "nowhere"),
+            (7, "x2, ror #3]"),
+            (8, "w1"),
+            (9, ".ENDC"),
         ]
     );
 }
