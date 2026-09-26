@@ -98,6 +98,7 @@ enum Item {
 
 struct Stmt {
     src: Line,
+    seq: usize,
     psect: usize,
     offset: u64,
     item: Item,
@@ -221,7 +222,7 @@ struct Asm {
     ended: bool,
     /// Errors, with the order of the line they belong to.
     diags: Vec<(usize, Diagnostic)>,
-    /// The line being assembled, and how many lines were read.
+    /// The line being assembled, and its number in the order lines are read.
     src: Line,
     seq: usize,
     frames: Vec<Frame>,
@@ -366,6 +367,7 @@ impl Asm {
         let p = &mut self.psects[psect];
         self.stmts.push(Stmt {
             src: self.src.clone(),
+            seq: self.seq,
             psect,
             offset: p.size,
             item,
@@ -377,13 +379,15 @@ impl Asm {
     fn process(&mut self, raw: &str) -> Result<()> {
         let text = lex::strip_comment(raw);
         let mut c = Cursor::new(text);
+        c.skip_ws();
+        let col = c.col();
         if let Some(word) = c.name()
-            && self.conditional(&word, &mut c)?
+            && self.conditional(&word, &mut c, col)?
         {
             return Ok(());
         }
         if self.active() {
-            self.statement(text)
+            self.statement(Cursor::new(text))
         } else {
             Ok(())
         }
@@ -401,8 +405,7 @@ impl Asm {
     }
 
     /// `.IF` and friends. Returns whether `word` was one of them.
-    fn conditional(&mut self, word: &str, c: &mut Cursor) -> Result<bool> {
-        let col = c.col();
+    fn conditional(&mut self, word: &str, c: &mut Cursor, col: usize) -> Result<bool> {
         let part = match word {
             ".IF" => {
                 let outer = self.active();
@@ -475,8 +478,7 @@ impl Asm {
         })
     }
 
-    fn statement(&mut self, text: &str) -> Result<()> {
-        let mut c = Cursor::new(text);
+    fn statement(&mut self, mut c: Cursor) -> Result<()> {
         // Labels: NAME: local to the module, NAME:: global, 10$: a local label.
         loop {
             let save = c.at;
@@ -546,11 +548,7 @@ impl Asm {
             ".IIF" => {
                 let yes = self.condition(&mut c)?;
                 c.expect(',')?;
-                return if yes {
-                    self.statement(c.rest())
-                } else {
-                    Ok(())
-                };
+                return if yes { self.statement(c) } else { Ok(()) };
             }
             ".LIBRARY" => return self.library(&mut c, col),
             _ => {}
@@ -602,6 +600,7 @@ impl Asm {
         };
         self.stmts.push(Stmt {
             src: self.src.clone(),
+            seq: self.seq,
             psect: 0,
             offset: 0,
             item,
@@ -1030,15 +1029,17 @@ impl Asm {
     // ----- pass 2 -----
 
     fn pass2(mut self) -> std::result::Result<Module, Vec<Diagnostic>> {
+        let end = self.seq;
         for s in std::mem::take(&mut self.stmts) {
-            self.src = s.src.clone();
+            (self.src, self.seq) = (s.src.clone(), s.seq);
             if let Err(e) = self.encode(&s) {
                 self.error(e);
             }
         }
         let mut transfer = None;
         if let Some((e, src, col)) = self.transfer.take() {
-            self.src = src;
+            // .END is the last line read.
+            (self.src, self.seq) = (src, end);
             match self.eval(&e, col, Value::Abs(0)) {
                 Ok(Value::Psect { psect, offset }) => transfer = Some((psect, offset as u64)),
                 Ok(_) => self.error(lex::Error {

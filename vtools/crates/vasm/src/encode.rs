@@ -180,6 +180,7 @@ pub fn operands(c: &mut Cursor, block: u32) -> Result<Vec<Operand>> {
         return Ok(ops);
     }
     loop {
+        c.skip_ws();
         let col = c.col();
         let op = if c.eat('[') {
             memory(c, block)?
@@ -252,6 +253,7 @@ fn modifier(c: &mut Cursor) -> Result<Modifier> {
 }
 
 fn memory(c: &mut Cursor, block: u32) -> Result<Op> {
+    c.skip_ws();
     let col = c.col();
     let base = match c.name().and_then(|n| reg(&n)) {
         Some(r) if matches!(r.kind, Kind::X | Kind::Sp) && !(r.kind == Kind::X && r.n == 31) => r,
@@ -259,6 +261,7 @@ fn memory(c: &mut Cursor, block: u32) -> Result<Op> {
     };
     let mut index = Index::None;
     if c.eat(',') {
+        c.skip_ws();
         let col = c.col();
         index = match simple(c, block)? {
             Op::Imm(e) => Index::Imm(e),
