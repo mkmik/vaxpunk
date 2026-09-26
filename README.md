@@ -3,7 +3,10 @@
 OpenVMS remake on arm64.
 
 Milestone 0 boots an unmodified seL4 kernel on QEMU aarch64 through UEFI and
-Limine, and runs a C root task that prints over the serial console:
+Limine, and runs a C root task that prints over the serial console. seL4 is
+built with its MCS (mixed-criticality scheduling) API: threads run on
+scheduling contexts with a budget and period, and IPC replies go through
+reply objects.
 
 ```
 EDK2 -> Limine (BOOTAA64.EFI) -> shim -> seL4 (kernel.elf) -> root task (roottask.elf)
@@ -49,6 +52,8 @@ hello from the root task
 boot info: node 0 of 1, 53 untyped caps
   untyped 0: paddr 0x0 size 2^27 device
 ...
+sched control caps: 278-278
+scheduling context: budget 5000 us per 5000 us, 40846 us used
 root task done
 ```
 
@@ -79,6 +84,12 @@ Each component builds on its own with `make -C <dir>`. The components share
 nothing but those output files. `shim/` and `roottask/` read `kernel/out/`,
 so build the kernel first. The top-level `Makefile` only calls the others.
 
+- `kernel/config.cmake` sets `KernelIsMCS`, and the root task refuses to
+  build against a non-MCS libsel4. Code written for the classic API needs
+  the MCS forms: `seL4_Recv`, `seL4_NBRecv` and `seL4_ReplyRecv` take a reply
+  object cap, `seL4_Reply` and `seL4_CNode_SaveCaller` are gone, and a new
+  thread runs only once it is bound to a configured scheduling context
+  (`seL4_SchedControl_Configure`, `seL4_SchedContext_Bind`).
 - The kernel rebuilds only when `kernel/config.cmake`, `kernel/qemu.env` or
   the seL4 commit change.
 - `kernel/qemu.env` holds the QEMU CPU, RAM and GIC version. seL4 compiles in

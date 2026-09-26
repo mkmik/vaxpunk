@@ -1,11 +1,19 @@
 /*
  * The root task: the first and only user task seL4 starts, holding every
- * capability. For now it shows that seL4 handed it a valid boot info page,
- * then suspends itself.
+ * capability. For now it shows that seL4 handed it a valid boot info page and
+ * a scheduling context, then suspends itself.
+ *
+ * The kernel is built with the MCS API (KernelIsMCS in kernel/config.cmake):
+ * a thread runs only while it holds a scheduling context with budget left,
+ * seL4_Recv and seL4_ReplyRecv take a reply object, and seL4_Reply is gone.
  */
 #include <stdarg.h>
 
 #include <sel4/sel4.h>
+
+#ifndef CONFIG_KERNEL_MCS
+#error "the root task needs an MCS kernel: set KernelIsMCS in kernel/config.cmake"
+#endif
 
 /* Defined here instead of in libsel4, which the root task does not link. */
 LIBSEL4_THREAD_LOCAL seL4_IPCBuffer *__sel4_ipc_buffer;
@@ -59,8 +67,28 @@ int main(seL4_BootInfo *bi)
 		      u->isDevice ? " device" : "");
 	}
 
+	/*
+	 * seL4 starts the root task on seL4_CapInitThreadSC with a round-robin
+	 * budget of CONFIG_BOOT_THREAD_TIME_SLICE ms per period of the same
+	 * length. Reconfigure it to the same values through the node's sched
+	 * control cap to show the MCS calls work; times are in microseconds.
+	 */
+	seL4_CPtr sched_control = bi->schedcontrol.start;
+	print("sched control caps: %lu-%lu\n", sched_control, bi->schedcontrol.end - 1);
+	seL4_Time slice = CONFIG_BOOT_THREAD_TIME_SLICE * 1000;
+	seL4_Error err = seL4_SchedControl_Configure(sched_control, seL4_CapInitThreadSC, slice,
+						       slice, 0, 0);
+	if (err)
+		print("seL4_SchedControl_Configure failed: %u\n", err);
+	seL4_SchedContext_Consumed_t used = seL4_SchedContext_Consumed(seL4_CapInitThreadSC);
+	if (used.error)
+		print("seL4_SchedContext_Consumed failed: %u\n", used.error);
+	else
+		print("scheduling context: budget %lu us per %lu us, %lu us used\n", slice, slice,
+		      used.consumed);
+
 	print("root task done\n");
-	seL4_Error err = seL4_TCB_Suspend(seL4_CapInitThreadTCB);
+	err = seL4_TCB_Suspend(seL4_CapInitThreadTCB);
 	print("seL4_TCB_Suspend failed: %u\n", err);
 	return 0;
 }
