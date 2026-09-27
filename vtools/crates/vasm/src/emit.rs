@@ -60,8 +60,14 @@ pub fn records(m: &Module, name: &str, date: [u8; 17], tool: &str) -> Vec<Record
             continue;
         }
         let (flags, value, psindx) = match &s.value {
+            // A label is an address, unless its psect is absolute.
             Some(Value::Psect { psect, offset }) => {
-                (sym::DEF | sym::REL | weak, *offset, *psect as u32)
+                let rel = if m.psects[*psect].flags & psc::REL != 0 {
+                    sym::REL
+                } else {
+                    0
+                };
+                (sym::DEF | rel | weak, *offset, *psect as u32)
             }
             Some(Value::Abs(n)) => {
                 // Constants belong to the absolute psect.

@@ -24,6 +24,7 @@ fn main() {
         ident: "V1.0".into(),
         link_time: 0,
         transfer: 0x10000,
+        fixups: None,
         sections: vec![Section {
             vaddr: 0x10000,
             size: data.len() as u32,

@@ -1,0 +1,19 @@
+Image HELLO, ident "V1.0"
+  transfer address 0000000000010000
+  link time 0000000000000000
+Section 1: 0000000000010000-0000000000010019, 26 bytes, EXE
+  0000000000010000  100000a0  adr x0, $+0x14
+  0000000000010004  d28000c1  mov x1, #0x6
+  0000000000010008  d4000041  svc #0x2
+  000000000001000C  d2800020  mov x0, #0x1
+  0000000000010010  d65f03c0  ret
+  0000000000010014  6c6c6568  ldnp d8, d25, [x11, #-0x140]
+  0000000000010018  6f 0a                                            o.
+Section 2: 0000000000020000-000000000002000B, 12 bytes, CRF WRT
+  0000000000020000  14 00 01 00 00 00 00 00 14 00 01 00              ............
+Fixup section: 0000000000030000-0000000000030083, 132 bytes, FIXUPVEC
+  EIAF 0.0, header 92 bytes, flags 00000000
+  quadword relocation fixups at 92, longword relocation fixups at 112
+  longword addresses 00010014 to 00010014
+  quadword at 0000000000020000: 0000000000010014  $DATA$ + %X0
+  longword at 0000000000020008: 00010014          $DATA$ + %X8

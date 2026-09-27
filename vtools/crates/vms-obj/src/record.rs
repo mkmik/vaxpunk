@@ -63,7 +63,7 @@ macro_rules! int_field {
     )*};
 }
 
-int_field!(u8, u16, u32, u64);
+int_field!(u8, u16, u32, u64, i32);
 
 impl<const N: usize> Field for [u8; N] {
     const SIZE: usize = N;

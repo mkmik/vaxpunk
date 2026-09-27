@@ -1,0 +1,28 @@
+        .TITLE  CALLPTR Calls routines through function pointers
+        .EXTERNAL SAY_HELLO, SAY_BYE
+
+; A function pointer is the address of a procedure descriptor, as on Alpha.
+; An indirect call loads the entry address from the descriptor, then BLR.
+
+        .PSECT  $DATA$
+routines:
+        .ADDRESS SAY_HELLO, SAY_BYE     ; procedure values
+routines_end:
+
+        .PSECT  $CODE$
+START::
+        stp     x29, x30, [sp, #-16]!
+        stp     x19, x20, [sp, #-16]!
+        adrp    x19, routines
+        add     x19, x19, #:lo12:routines
+        add     x20, x19, #routines_end - routines
+10$:    ldr     x16, [x19], #8          ; a function pointer
+        ldr     x17, [x16, #8]          ; its descriptor's entry address
+        blr     x17
+        cmp     x19, x20
+        b.ne    10$
+        ldp     x19, x20, [sp], #16
+        ldp     x29, x30, [sp], #16
+        mov     x0, #1                  ; SS$_NORMAL
+        ret
+        .END    START

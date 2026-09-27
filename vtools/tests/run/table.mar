@@ -1,0 +1,28 @@
+        .TITLE  TABLE   A table of addresses in $DATA$, walked by code
+        .LIBRARY "vrun.mlb"
+
+; Each entry is the address of a counted string: a fixup the loader applies
+; if the image moves.
+
+        .PSECT  $LITERAL$
+one:    .ASCIC  "one"<10>
+two:    .ASCIC  "two"<10>
+three:  .ASCIC  "three"<10>
+
+        .PSECT  $DATA$
+table:  .ADDRESS one, two, three
+table_end:
+
+        .PSECT  $CODE$
+START::
+        adrp    x19, table
+        add     x19, x19, #:lo12:table
+        add     x20, x19, #table_end - table
+10$:    ldr     x2, [x19], #8           ; the next string
+        ldrb    w1, [x2]                ; its length
+        add     x0, x2, #1              ; its text
+        svc     #2                      ; put
+        cmp     x19, x20
+        b.ne    10$
+        $EXIT
+        .END    START

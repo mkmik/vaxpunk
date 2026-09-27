@@ -1,0 +1,10 @@
+        .TITLE  TEXT    What LDADR prints
+
+        .PSECT  $DATA$
+GREETING::
+        .ASCII  "linkage ok"<10>
+greeting_end:
+        .ALIGN  QUAD
+GREETING_LENGTH::
+        .QUAD   greeting_end - GREETING
+        .END

@@ -1,32 +1,44 @@
 //! Decoded dumps of vaxpunk object modules, object libraries and images, the
 //! equivalent of ANALYZE/OBJECT and ANALYZE/IMAGE, with code disassembled.
 
+use std::collections::HashMap;
 use std::fmt::Write;
 
 use vms_obj::Error;
-use vms_obj::exe::{Eisd, Image};
+use vms_obj::exe::{Eiaf, Eihd, Eisd, Image};
 use vms_obj::obj::{self, Gsd, Record, Tir, psc, sym};
 use vms_obj::olb::{self, Library};
+use vms_obj::reloc::{self, Need, Weight};
 use yaxpeax_arch::{Arch, Decoder, U8Reader};
 use yaxpeax_arm::armv8::a64::ARMv8;
 
 /// Indent of data and code under a TIR command.
 const DATA_INDENT: &str = "                        ";
 
+#[derive(Default)]
+pub struct Options {
+    /// For objects: the weight of each stored value, and what the store
+    /// needs for the image to move (docs/linker.md).
+    pub weights: bool,
+    /// For images: the image's link map, which names the psects.
+    pub map: Option<String>,
+}
+
 /// Dumps an image, an object module or an object library, whichever `file` is.
-pub fn dump(file: &[u8]) -> Result<String, Error> {
+pub fn dump(file: &[u8], opts: &Options) -> Result<String, Error> {
     // An image starts with EIHD majorid 3, minorid 0; a module with EMH (8).
     let text = if olb::is_library(file) {
-        library(&Library::parse(file)?)?
+        library(&Library::parse(file)?, opts)?
     } else if file.starts_with(&[3, 0, 0, 0, 0, 0, 0, 0]) {
-        image(&Image::parse(file)?)
+        let iafva = Eihd::parse(file)?.iafva;
+        image(&Image::parse(file)?, iafva, opts.map.as_deref())
     } else {
-        object(&obj::parse(file)?)
+        object(&obj::parse(file)?, opts.weights)
     };
     Ok(text.lines().flat_map(|l| [l.trim_end(), "\n"]).collect())
 }
 
-fn library(lib: &Library) -> Result<String, Error> {
+fn library(lib: &Library, opts: &Options) -> Result<String, Error> {
     let mut out = String::new();
     let o = &mut out;
     let _ = writeln!(o, "Object library, created by {:?}", lib.creator);
@@ -38,7 +50,7 @@ fn library(lib: &Library) -> Result<String, Error> {
         for s in &m.symbols {
             let _ = writeln!(o, "  symbol {s}");
         }
-        o.push_str(&object(&obj::parse(&m.object)?));
+        o.push_str(&object(&obj::parse(&m.object)?, opts.weights));
     }
     Ok(out)
 }
@@ -61,7 +73,8 @@ const EISD_FLAGS: [&str; 15] = [
     "ALLOC_64BIT",
 ];
 
-fn image(image: &Image) -> String {
+/// Dumps an image; its fixup section, if any, is at `iafva`.
+fn image(image: &Image, iafva: u64, map: Option<&str>) -> String {
     let mut out = String::new();
     let o = &mut out;
     let _ = writeln!(o, "Image {}, ident {:?}", image.name, image.ident);
@@ -83,17 +96,98 @@ fn image(image: &Image) -> String {
             hex(o, "  ", s.vaddr, &s.data);
         }
     }
+    let Some(f) = &image.fixups else {
+        return out;
+    };
+
+    // The section as vms-obj writes it, which is how it parsed.
+    let raw = f.write();
+    let h = Eiaf::parse(&raw).expect("a fixup section header");
+    let _ = writeln!(
+        o,
+        "Fixup section: {iafva:016X}-{:016X}, {} bytes, FIXUPVEC",
+        iafva + raw.len() as u64 - 1,
+        raw.len()
+    );
+    let _ = writeln!(
+        o,
+        "  EIAF {}.{}, header {} bytes, flags {:08X}",
+        h.majorid, h.minorid, h.size, h.flags
+    );
+    let _ = writeln!(
+        o,
+        "  quadword relocation fixups at {}, longword relocation fixups at {}",
+        h.qrelfixoff, h.lrelfixoff
+    );
+    if !f.long.is_empty() {
+        let _ = writeln!(
+            o,
+            "  longword addresses {:08X} to {:08X}",
+            h.lw_min, h.lw_max
+        );
+    }
+    let psects = map.map_or(Vec::new(), map_psects);
+    let start = image.sections.iter().map(|s| s.vaddr).min().unwrap_or(0);
+    for (list, size, kind) in [(&f.quad, 8, "quadword"), (&f.long, 4, "longword")] {
+        for &off in list {
+            let at = start + u64::from(off);
+            // Image::parse checked that a section holds it.
+            let (i, s) = image
+                .sections
+                .iter()
+                .enumerate()
+                .find(|(_, s)| {
+                    at.checked_sub(s.vaddr)
+                        .is_some_and(|i| i < u64::from(s.size))
+                })
+                .expect("a section");
+            let i0 = (at - s.vaddr) as usize;
+            let mut v = [0; 8];
+            v[..size].copy_from_slice(&s.data[i0..i0 + size]);
+            let value = u64::from_le_bytes(v);
+            let place = match psects.iter().find(|(_, b, n)| (*b..b + n).contains(&at)) {
+                Some((name, b, _)) => format!("{name} + %X{:X}", at - b),
+                None => format!("image section {} + %X{i0:X}", i + 1),
+            };
+            let value = format!("{value:0width$X}", width = 2 * size);
+            let _ = writeln!(o, "  {kind} at {at:016X}: {value:<16}  {place}");
+        }
+    }
     out
 }
 
-fn object(records: &[Record]) -> String {
+/// The relocatable psects in a vlink map: name, base and length.
+fn map_psects(map: &str) -> Vec<(String, u64, u64)> {
+    map.lines()
+        .skip_while(|l| l.trim() != "Program Section Synopsis")
+        .skip(1)
+        .take_while(|l| l.is_empty() || l.starts_with(' '))
+        .filter_map(|l| {
+            let &[name, base, _, len, _, attrs] = &l.split_whitespace().collect::<Vec<_>>()[..]
+            else {
+                return None;
+            };
+            attrs.split(',').any(|a| a == "REL").then_some(())?;
+            let hex = |s| u64::from_str_radix(s, 16).ok();
+            Some((name.to_string(), hex(base)?, hex(len)?))
+        })
+        .collect()
+}
+
+fn object(records: &[Record], weights: bool) -> String {
     let mut out = String::new();
     let o = &mut out;
     // Psects in definition order, for names and to know which hold code.
-    let mut psects: Vec<(String, bool)> = Vec::new();
+    let mut psects: Vec<(String, u16)> = Vec::new();
     // Where STO commands store: psect and offset, while it is known.
     let mut loc: Option<(u32, u64)> = None;
     let mut pushed: Option<(u32, u64)> = None;
+    // For weights: symbols this module defines, and the linker's stack.
+    let mut defs: HashMap<String, (u64, Weight)> = HashMap::new();
+    let mut stack: Vec<(u64, Weight)> = Vec::new();
+    if weights {
+        let _ = writeln!(o, "Weights take external symbols to be addresses.");
+    }
 
     for record in records {
         match record {
@@ -128,7 +222,7 @@ fn object(records: &[Record]) -> String {
                                 p.align,
                                 flags(p.flags.into(), &psc::NAMES)
                             );
-                            psects.push((p.name.clone(), p.flags & psc::EXE != 0));
+                            psects.push((p.name.clone(), p.flags));
                         }
                         Gsd::Def(d) => {
                             let _ = write!(
@@ -144,6 +238,8 @@ fn object(records: &[Record]) -> String {
                                 );
                             }
                             let _ = writeln!(o, ", {}", flags(d.flags.into(), &sym::NAMES));
+                            let rel = d.flags & sym::REL != 0;
+                            defs.insert(d.name.clone(), (d.value, Some(rel.into())));
                         }
                         Gsd::Ref(r) => {
                             let _ = writeln!(
@@ -167,10 +263,14 @@ fn object(records: &[Record]) -> String {
                 };
                 let _ = writeln!(o, "{kind}");
                 for cmd in cmds {
+                    let note = match record {
+                        Record::Tir(_) if weights => weigh(cmd, &mut stack, &defs, &psects, loc),
+                        _ => String::new(),
+                    };
                     let _ = write!(o, "  {:<20}", cmd.name());
                     match cmd {
                         Tir::StaGbl { name } | Tir::StoGbl { name } | Tir::StoCa { name } => {
-                            let _ = writeln!(o, "{name}");
+                            let _ = writeln!(o, "{name}{note}");
                             if !matches!(cmd, Tir::StaGbl { .. }) {
                                 advance(&mut loc, 8);
                             }
@@ -195,9 +295,13 @@ fn object(records: &[Record]) -> String {
                             advance(&mut loc, i64::from(*offset as i32) as u64);
                         }
                         Tir::StoImm { data } | Tir::StoImmr { data } => {
-                            let _ = writeln!(o, "{} bytes", data.len());
+                            let _ = writeln!(o, "{} bytes{note}", data.len());
                             match loc {
-                                Some((p, off)) if psects.get(p as usize).is_some_and(|p| p.1) => {
+                                Some((p, off))
+                                    if psects
+                                        .get(p as usize)
+                                        .is_some_and(|p| p.1 & psc::EXE != 0) =>
+                                {
                                     code(o, DATA_INDENT, off, data)
                                 }
                                 _ => hex(o, DATA_INDENT, loc.map_or(0, |l| l.1), data),
@@ -208,16 +312,16 @@ fn object(records: &[Record]) -> String {
                                 advance(&mut loc, data.len() as u64);
                             }
                         }
-                        Tir::StoB {} => stored(o, &mut loc, 1),
-                        Tir::StoW {} => stored(o, &mut loc, 2),
-                        Tir::StoLw {} => stored(o, &mut loc, 4),
-                        Tir::StoQw {} | Tir::StoOff {} => stored(o, &mut loc, 8),
+                        Tir::StoB {} => stored(o, &mut loc, 1, &note),
+                        Tir::StoW {} => stored(o, &mut loc, 2, &note),
+                        Tir::StoLw {} => stored(o, &mut loc, 4, &note),
+                        Tir::StoQw {} | Tir::StoOff {} => stored(o, &mut loc, 8, &note),
                         Tir::Other { code, args } => {
                             let _ = writeln!(o, "command {code}, {} argument bytes", args.len());
                         }
                         _ => match instruction(cmd) {
                             Some(insn) => {
-                                let _ = writeln!(o, "{insn:08x}  {}", disassemble(insn));
+                                let _ = writeln!(o, "{insn:08x}  {}{note}", disassemble(insn));
                                 advance(&mut loc, 4);
                             }
                             None => {
@@ -278,9 +382,66 @@ fn advance(loc: &mut Option<(u32, u64)>, n: u64) {
 }
 
 /// Ends the line of a store command that pops its data.
-fn stored(o: &mut String, loc: &mut Option<(u32, u64)>, n: u64) {
-    let _ = writeln!(o);
+fn stored(o: &mut String, loc: &mut Option<(u32, u64)>, n: u64, note: &str) {
+    let _ = writeln!(o, "{note}");
     advance(loc, n);
+}
+
+/// Runs `cmd` on the linker's stack of values and weights, as far as one
+/// module tells, and says what a store at `loc` needs for the image to move.
+/// External symbols count as addresses, and psects as based at 0: only a
+/// product's weight depends on values.
+fn weigh(
+    cmd: &Tir,
+    stack: &mut Vec<(u64, Weight)>,
+    defs: &HashMap<String, (u64, Weight)>,
+    psects: &[(String, u16)],
+    loc: Option<(u32, u64)>,
+) -> String {
+    use Tir::*;
+    let symbol = |name: &String| defs.get(name).copied().unwrap_or((0, Some(1)));
+    let has = |p: u32, flag: u16| psects.get(p as usize).is_some_and(|p| p.1 & flag != 0);
+    let k = match cmd {
+        StoGbl { name } | StoCa { name } => symbol(name).1,
+        StoB {} | StoW {} | StoLw {} | StoQw {} | StoOff {} | StoImmr { .. } => {
+            stack.pop().and_then(|v| v.1)
+        }
+        _ if reloc::Kind::of(cmd).is_some() => stack.pop().and_then(|v| v.1),
+        _ => {
+            match cmd {
+                StaGbl { name } => stack.push(symbol(name)),
+                StaLw { value } => stack.push((*value as i32 as u64, Some(0))),
+                StaQw { value } => stack.push((*value, Some(0))),
+                StaPq { psect, offset } => {
+                    stack.push((*offset, Some(has(*psect, psc::REL).into())))
+                }
+                CtlSetrb {} => drop(stack.pop()),
+                _ => {
+                    if let Some(n) = reloc::operands(cmd) {
+                        let args = stack.split_off(stack.len().saturating_sub(n));
+                        let result = if args.len() == n {
+                            reloc::operate(cmd, &args)
+                        } else {
+                            (0, None)
+                        };
+                        stack.push(result);
+                    }
+                }
+            }
+            return String::new();
+        }
+    };
+    let pic = loc.is_some_and(|(p, _)| has(p, psc::PIC));
+    let need = match reloc::need(cmd, k) {
+        Need::Nothing => "no fixup",
+        Need::Fixup(8) if pic => "quadword fixup in a PIC psect: NOTPIC",
+        Need::Fixup(8) => "quadword fixup",
+        Need::Fixup(_) if pic => "longword fixup in a PIC psect: NOTPIC",
+        Need::Fixup(_) => "longword fixup",
+        Need::Impossible => "can't move: NORELOC",
+    };
+    let k = k.map_or("?".to_string(), |k| k.to_string());
+    format!("  [weight {k}: {need}]")
 }
 
 /// Names of the set bits, or "none".

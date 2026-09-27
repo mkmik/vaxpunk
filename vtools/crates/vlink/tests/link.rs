@@ -1,8 +1,11 @@
 //! Linking modules that vasm builds: relocation ranges just inside and just
-//! outside each limit, and the errors the linker reports.
+//! outside each limit, and the errors the linker reports. Every link that
+//! makes a movable image is also linked at another base, and the two must
+//! differ exactly where the fixups say.
 
 use vlink::{Linked, Options};
-use vms_obj::obj;
+use vms_obj::exe::Image;
+use vms_obj::obj::{self, Eom, Gsd, Mhd, Psc, Record, SymDef, Tir, psc, sym};
 
 fn module(name: &str, source: &str) -> (String, Vec<u8>) {
     let opts = vasm::Options {
@@ -10,11 +13,74 @@ fn module(name: &str, source: &str) -> (String, Vec<u8>) {
         date: *b"25-SEP-2026 00:00",
         ..Default::default()
     };
-    let records = vasm::assemble(source, &opts).unwrap_or_else(|d| panic!("{d:?}"));
+    let records = vasm::assemble(source, &opts)
+        .unwrap_or_else(|d| panic!("{d:?}"))
+        .records;
     (format!("{name}.obj"), obj::write(&records))
 }
 
-fn link(modules: &[(String, Vec<u8>)], base: u64) -> Result<Linked, Vec<String>> {
+/// A module made by hand: 16 bytes of $DATA$ with TABLE at the start, 4 of
+/// $CODE$, and `tir`, which stores from TABLE on.
+fn handmade(name: &str, tir: Vec<Tir>) -> (String, Vec<u8>) {
+    let psect = |name: &str, flags| {
+        Gsd::Psc(Psc {
+            align: 3,
+            temp: 0,
+            flags: flags | psc::REL | psc::RD,
+            alloc: 16,
+            name: name.into(),
+        })
+    };
+    let table = Gsd::Def(SymDef {
+        datyp: 0,
+        temp: 0,
+        flags: sym::DEF | sym::REL,
+        value: 0,
+        code_address: 0,
+        ca_psindx: 0,
+        psindx: 0,
+        name: "TABLE".into(),
+    });
+    let start = [
+        Tir::StaPq {
+            psect: 0,
+            offset: 0,
+        },
+        Tir::CtlSetrb {},
+    ];
+    let records = [
+        Record::Mhd(Mhd {
+            strlvl: obj::STRLVL,
+            temp: 0,
+            arch1: vms_obj::ARCH_ARM64,
+            arch2: 0,
+            recsiz: obj::MAX_RECORD as u32,
+            name: name.into(),
+            version: String::new(),
+            date: *b"25-SEP-2026 00:00",
+        }),
+        Record::Gsd(vec![
+            psect("$DATA$", psc::WRT),
+            psect("$CODE$", psc::PIC | psc::SHR | psc::EXE),
+            table,
+        ]),
+        Record::Tir(start.into_iter().chain(tir).collect()),
+        Record::Eom(
+            Eom {
+                total_lps: 0,
+                comcod: 0,
+            },
+            None,
+        ),
+    ];
+    (format!("{name}.obj"), obj::write(&records))
+}
+
+fn link_as(
+    modules: &[(String, Vec<u8>)],
+    base: u64,
+    relocatable: bool,
+) -> Result<Linked, Vec<String>> {
     vlink::link(
         modules,
         &Options {
@@ -22,8 +88,31 @@ fn link(modules: &[(String, Vec<u8>)], base: u64) -> Result<Linked, Vec<String>>
             name: "TEST".into(),
             transfer: None,
             link_time: 0,
+            relocatable,
         },
     )
+}
+
+/// Links without /RELOCATABLE. If the modules can also link /RELOCATABLE,
+/// that image must be the same plus fixups, and must differ from itself
+/// linked elsewhere exactly at them.
+fn link(modules: &[(String, Vec<u8>)], base: u64) -> Result<Linked, Vec<String>> {
+    let linked = link_as(modules, base, false)?;
+    if let Ok(movable) = link_as(modules, base, true) {
+        let image = &movable.image;
+        let plain = Image {
+            fixups: None,
+            ..image.clone()
+        };
+        assert_eq!(plain, linked.image, "/RELOCATABLE changed the image");
+        // Some bits flipped, above 4 GB unless longword addresses must stay
+        // below 2 GB.
+        let long = !image.fixups.as_ref().unwrap().long.is_empty();
+        let other = base ^ if long { 0x0123_0000 } else { 0x1234_5678_0000 };
+        let moved = link_as(modules, other, true).unwrap();
+        vlink::check_fixups(image, &moved.image).unwrap_or_else(|e| panic!("{e}"));
+    }
+    Ok(linked)
 }
 
 /// Links `insn` in one module against FAR in another, `distance` bytes after
@@ -121,11 +210,188 @@ fn value_checks() {
         .is_ok()
     );
 
-    // A 32-bit address works below 4 GB, not above.
+    // A 32-bit address works below 2 GB, where sign-extending it on a load
+    // gives the same address, not above.
     let data = module("D", ".EXTERNAL WORD\n.PSECT $DATA$\n.LONG WORD\n.END");
-    assert!(link(&[data.clone(), target.clone()], vlink::DEFAULT_BASE).is_ok());
-    let err = link(&[data, target], 0x1_0000_0000).unwrap_err();
-    assert!(err[0].contains("doesn't fit in 4 bytes"), "{err:?}");
+    assert!(link(&[data.clone(), target.clone()], 0x7ffe_0000).is_ok());
+    let err = link(&[data, target], 0x8000_0000).unwrap_err();
+    assert_eq!(
+        err,
+        [
+            "%VLINK-E-TRUNC, address %X80000010 doesn't fit in 4 bytes, signed, at \
+             $DATA$ + %X0 in module D (D.obj)"
+        ]
+    );
+}
+
+/// The link-failure tests: each store the image can't move with, and how
+/// the linker says so.
+#[test]
+fn unmovable() {
+    let fails = |modules: &[(String, Vec<u8>)], base| link_as(modules, base, true).unwrap_err();
+
+    let code = [module(
+        "MAIN",
+        ".PSECT $CODE$\nSTART:: ret\nTABLE:: .ADDRESS START\n.END START",
+    )];
+    let at = "$CODE$ + %X4 (TABLE) in module MAIN (MAIN.obj)";
+    let warnings = link(&code, vlink::DEFAULT_BASE).unwrap().warnings;
+    let msg = format!("address in a PIC psect needs a fixup, at {at}");
+    assert_eq!(warnings, [format!("%VLINK-W-NOTPIC, {msg}")]);
+    let err = fails(&code, vlink::DEFAULT_BASE);
+    assert_eq!(err, [format!("%VLINK-E-NOTPIC, {msg}")]);
+
+    let movz = [module(
+        "MAIN",
+        ".PSECT $CODE$\nSTART:: movz x0, #:abs_g1:START\nret\n.END START",
+    )];
+    assert!(link(&movz, vlink::DEFAULT_BASE).is_ok());
+    assert_eq!(
+        fails(&movz, vlink::DEFAULT_BASE),
+        [
+            "%VLINK-E-NORELOC, STO_A64_MOVW_G1 of an address can't move, at \
+             $CODE$ + %X0 (START) in module MAIN (MAIN.obj)"
+        ]
+    );
+
+    // Linked at 0, so that the address fits in a word.
+    let word = [module(
+        "MAIN",
+        ".PSECT $DATA$\nWORDS:: .WORD 0, WORDS\n.END",
+    )];
+    assert!(link(&word, 0).is_ok());
+    assert_eq!(
+        fails(&word, 0),
+        ["%VLINK-E-NORELOC, STO_W of an address can't move, at \
+             $DATA$ + %X2 (WORDS+%X2) in module MAIN (MAIN.obj)"]
+    );
+
+    // TABLE >> 12: the count goes first.
+    let shift = [handmade(
+        "SHIFT",
+        vec![
+            Tir::StaLw {
+                value: -12i32 as u32,
+            },
+            Tir::StaPq {
+                psect: 0,
+                offset: 0,
+            },
+            Tir::OprAsh {},
+            Tir::StoQw {},
+        ],
+    )];
+    assert!(link(&shift, vlink::DEFAULT_BASE).is_ok());
+    assert_eq!(
+        fails(&shift, vlink::DEFAULT_BASE),
+        [
+            "%VLINK-E-NORELOC, STO_QW of a value computed from an address can't move, at \
+             $DATA$ + %X0 (TABLE) in module SHIFT (SHIFT.obj)"
+        ]
+    );
+}
+
+/// Stores the assembler can't write, with what the linker makes of them.
+#[test]
+fn stores_by_hand() {
+    let fixups = |tir: Vec<Tir>| {
+        let linked = link_as(&[handmade("M", tir)], vlink::DEFAULT_BASE, true)?;
+        let f = linked.image.fixups.unwrap();
+        Ok::<_, Vec<String>>((f.quad, f.long))
+    };
+    let here = || Tir::StaPq {
+        psect: 0,
+        offset: 0,
+    };
+    let code = || Tir::StaPq {
+        psect: 1,
+        offset: 0,
+    };
+    let back = || [here(), Tir::CtlSetrb {}];
+
+    // CODE - . is the same wherever the image goes.
+    let relative = vec![code(), here(), Tir::OprSub {}, Tir::StoLw {}];
+    assert!(link(&[handmade("M", relative.clone())], vlink::DEFAULT_BASE).is_ok());
+    assert_eq!(fixups(relative), Ok((vec![], vec![])));
+
+    // An address that a constant replaces needs no fixup.
+    let mut replaced = vec![code(), Tir::StoOff {}];
+    replaced.extend(back());
+    replaced.extend([Tir::StaQw { value: 5 }, Tir::StoQw {}]);
+    assert!(link(&[handmade("M", replaced.clone())], vlink::DEFAULT_BASE).is_ok());
+    assert_eq!(fixups(replaced), Ok((vec![], vec![])));
+
+    // But half an address is neither, until the other half goes too.
+    let mut halved = vec![code(), Tir::StoOff {}];
+    halved.extend(back());
+    halved.extend([Tir::StaLw { value: 0 }, Tir::StoLw {}]);
+    let mut both = halved.clone();
+    both.extend([Tir::StaLw { value: 0 }, Tir::StoLw {}]);
+    assert_eq!(
+        fixups(halved),
+        Err(vec![
+            "%VLINK-E-NORELOC, part of an address is overwritten, at \
+             $DATA$ + %X0 (TABLE) in module M (M.obj)"
+                .to_string()
+        ])
+    );
+    assert_eq!(fixups(both), Ok((vec![], vec![])));
+
+    // Neither an address in PIC code nor a value that can't move is a
+    // problem once a constant replaces it.
+    let in_code = [code(), Tir::CtlSetrb {}];
+    let mut replaced = in_code.to_vec();
+    replaced.extend([code(), Tir::StoOff {}]);
+    replaced.extend(in_code.clone());
+    replaced.extend([Tir::StaQw { value: 5 }, Tir::StoQw {}]);
+    assert_eq!(fixups(replaced), Ok((vec![], vec![])));
+    let count = Tir::StaLw {
+        value: -12i32 as u32,
+    };
+    let mut shifted = vec![count, here(), Tir::OprAsh {}, Tir::StoQw {}];
+    shifted.extend(back());
+    shifted.extend([Tir::StaQw { value: 5 }, Tir::StoQw {}]);
+    assert_eq!(fixups(shifted), Ok((vec![], vec![])));
+
+    // Offsets count from the first image section, here the code.
+    let two = vec![code(), Tir::StoOff {}, code(), Tir::StoLw {}];
+    assert_eq!(fixups(two), Ok((vec![0x10000], vec![0x10008])));
+}
+
+/// Every module's labels in an absolute psect are the offsets it assembled,
+/// to itself and to other modules alike.
+#[test]
+fn absolute_psects() {
+    let a = module("A", ".PSECT OFFS, ABS\n.BLKQ 2\n.END");
+    let b = module(
+        "B",
+        ".PSECT OFFS, ABS\n.BLKQ 1\nFIELD:: .BLKQ 1\n.PSECT $DATA$\n.QUAD FIELD\n.END",
+    );
+    let c = module("C", ".EXTERNAL FIELD\n.PSECT $DATA$\n.QUAD FIELD\n.END");
+    let linked = link(&[a, b, c], vlink::DEFAULT_BASE).unwrap();
+    let data = &linked.image.sections[0].data;
+    assert_eq!(data[..16], [8, 0, 0, 0, 0, 0, 0, 0, 8, 0, 0, 0, 0, 0, 0, 0]);
+}
+
+#[test]
+fn map_lists_fixups() {
+    let main = module(
+        "MAIN",
+        ".PSECT $DATA$\nPOINTERS:: .ADDRESS START\n.LONG START\n\
+         .PSECT $CODE$\nSTART:: ret\n.END START",
+    );
+    let linked = link_as(&[main], vlink::DEFAULT_BASE, true).unwrap();
+    assert_eq!(
+        linked.warnings,
+        ["%VLINK-I-FIXUPS, 1 quadword and 1 longword fixups"]
+    );
+    let map = &linked.map;
+    for line in [
+        "  0000000000020000  quadword  MAIN                             $DATA$ + %X0 (POINTERS)",
+        "  0000000000020008  longword  MAIN                             $DATA$ + %X8 (POINTERS+%X8)",
+    ] {
+        assert!(map.contains(line), "{map}");
+    }
 }
 
 #[test]

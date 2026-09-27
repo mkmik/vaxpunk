@@ -78,7 +78,8 @@ impl Prot {
 }
 
 /// Lays out guest RAM for `image`, with `args` as the argument string.
-pub fn plan(image: &Image, args: &[u8], stub: &[u8]) -> Result<Plan, String> {
+/// `moved` is how far vrun moved the image from its link address.
+pub fn plan(image: &Image, args: &[u8], stub: &[u8], moved: i64) -> Result<Plan, String> {
     if image.transfer == 0 {
         return Err("NOTFR, the image has no transfer address".into());
     }
@@ -95,7 +96,7 @@ pub fn plan(image: &Image, args: &[u8], stub: &[u8]) -> Result<Plan, String> {
     b.map(UART, UART, PAGE, Prot::Device)?;
 
     let pa = b.alloc(PAGE);
-    b.write(pa, &info_block(args)?);
+    b.write(pa, &info_block(args, moved)?);
     b.map(INFO_VA, pa, PAGE, Prot::ReadOnly)?;
     let pa = b.alloc(PAGE);
     b.write(pa, &SVC_EXIT.to_le_bytes());
@@ -167,10 +168,11 @@ pub fn plan(image: &Image, args: &[u8], stub: &[u8]) -> Result<Plan, String> {
     })
 }
 
-/// The runner info block: its size, the runner version, flags, and the
-/// argument string as a class S text descriptor pointing just past it.
-fn info_block(args: &[u8]) -> Result<Vec<u8>, String> {
-    const SIZE: u64 = 24;
+/// The runner info block: its size, the runner version, flags, the argument
+/// string as a class S text descriptor pointing just past the block, and how
+/// far the image moved.
+fn info_block(args: &[u8], moved: i64) -> Result<Vec<u8>, String> {
+    const SIZE: u64 = 32;
     if args.len() as u64 > PAGE - SIZE {
         return Err(format!(
             "ARGLEN, the arguments are longer than {} bytes",
@@ -185,6 +187,7 @@ fn info_block(args: &[u8]) -> Result<Vec<u8>, String> {
     b.push(14); // DSC$B_DTYPE: DSC$K_DTYPE_T, text
     b.push(1); // DSC$B_CLASS: DSC$K_CLASS_S, static
     b.extend(((INFO_VA + SIZE) as u32).to_le_bytes()); // DSC$A_POINTER
+    b.extend(moved.to_le_bytes());
     b.extend(args);
     Ok(b)
 }
@@ -276,6 +279,7 @@ mod tests {
             ident: String::new(),
             link_time: 0,
             transfer: 0x10000,
+            fixups: None,
             sections: vec![
                 Section {
                     vaddr: 0x10000,
@@ -291,7 +295,7 @@ mod tests {
                 },
             ],
         };
-        let ram = plan(&image, b"hi", &[0; 4]).unwrap().ram;
+        let ram = plan(&image, b"hi", &[0; 4], -0x20000).unwrap().ram;
 
         let code = translate(&ram, 0x10004).unwrap();
         let pa = code & 0x0000_ffff_ffff_f000;
@@ -311,13 +315,14 @@ mod tests {
             "stack guard"
         );
         let info = translate(&ram, INFO_VA).unwrap() & 0x0000_ffff_ffff_f000;
-        let info = &ram[(info - LOAD_BASE) as usize..][..26];
+        let info = &ram[(info - LOAD_BASE) as usize..][..34];
         assert_eq!(
             &info[16..20],
             &[2, 0, 14, 1],
             "descriptor length, dtype, class"
         );
-        assert_eq!(&info[24..], b"hi");
+        assert_eq!(&info[24..32], &(-0x20000i64).to_le_bytes(), "moved");
+        assert_eq!(&info[32..], b"hi");
 
         let overlap = Section {
             vaddr: 0x7ff0_0000,
@@ -329,6 +334,6 @@ mod tests {
             sections: vec![overlap],
             ..image
         };
-        assert!(plan(&bad, b"", &[]).is_err_and(|e| e.starts_with("BADVA")));
+        assert!(plan(&bad, b"", &[], 0).is_err_and(|e| e.starts_with("BADVA")));
     }
 }

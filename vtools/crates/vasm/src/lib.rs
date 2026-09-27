@@ -26,9 +26,19 @@ pub struct Options {
     pub include: Vec<PathBuf>,
 }
 
-/// Assembles `source` into object records, or returns every error found.
-pub fn assemble(source: &str, opts: &Options) -> Result<Vec<Record>, Vec<Diagnostic>> {
+/// An assembled object module.
+pub struct Object {
+    pub records: Vec<Record>,
+    pub warnings: Vec<Diagnostic>,
+}
+
+/// Assembles `source` into object records, or returns every error found,
+/// with the warnings.
+pub fn assemble(source: &str, opts: &Options) -> Result<Object, Vec<Diagnostic>> {
     let module = asm::assemble(source, opts.path.as_deref(), &opts.include)?;
     let tool = concat!("vasm ", env!("CARGO_PKG_VERSION"));
-    Ok(emit::records(&module, &opts.name, opts.date, tool))
+    Ok(Object {
+        records: emit::records(&module, &opts.name, opts.date, tool),
+        warnings: module.warnings,
+    })
 }

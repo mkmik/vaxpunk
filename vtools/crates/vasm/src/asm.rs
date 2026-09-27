@@ -15,8 +15,9 @@ use crate::expr::{self, Expr, Scope, Value};
 use crate::lex::{self, Cursor, Result, err};
 use crate::macros::{self, Line, Loc, Macro};
 
-/// An error: where (file, line and column from 1), the line's text, and
-/// the macro calls and repeat blocks it is inside of, innermost first.
+/// An error or warning: where (file, line and column from 1), the line's
+/// text, and the macro calls and repeat blocks it is inside of, innermost
+/// first.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Diagnostic {
     pub file: String,
@@ -25,6 +26,7 @@ pub struct Diagnostic {
     pub msg: String,
     pub text: String,
     pub context: Vec<String>,
+    pub warning: bool,
 }
 
 pub struct Psect {
@@ -70,6 +72,7 @@ pub struct Module {
     /// Symbols in the order they first appeared.
     pub symbols: Vec<(String, Symbol)>,
     pub transfer: Option<(usize, u64)>,
+    pub warnings: Vec<Diagnostic>,
 }
 
 enum Item {
@@ -83,8 +86,12 @@ enum Item {
         exprs: Vec<(Expr, usize)>,
     },
     Bytes(Vec<u8>),
-    /// A VMS string descriptor followed by the string.
-    Ascid(Vec<u8>),
+    /// A VMS string descriptor followed by the string: the 32-bit form, or
+    /// the 64-bit one if `wide`.
+    Ascid {
+        text: Vec<u8>,
+        wide: bool,
+    },
     /// Zero-filled space the object file doesn't store.
     Space,
     /// An assignment, done again in pass 2 so later lines see its value.
@@ -259,6 +266,19 @@ impl Scope for View<'_> {
 
 impl Asm {
     fn error(&mut self, e: lex::Error) {
+        self.diagnose(e, false);
+    }
+
+    /// Warns that PIC psect `psect` holds `what`, at `col`.
+    fn notpic(&mut self, psect: usize, what: &str, col: usize) {
+        let p = &self.psects[psect];
+        if p.flags & psc::PIC != 0 {
+            let msg = format!("%VASM-W-NOTPIC, {what} in PIC psect {}", p.name);
+            self.diagnose(lex::Error { col, msg }, true);
+        }
+    }
+
+    fn diagnose(&mut self, e: lex::Error, warning: bool) {
         let loc = &self.src.loc;
         let d = Diagnostic {
             file: loc.file.to_string(),
@@ -267,8 +287,15 @@ impl Asm {
             msg: e.msg,
             text: self.src.text.clone(),
             context: loc.context(),
+            warning,
         };
         self.diags.push((self.seq, d));
+    }
+
+    /// Whether `v` is an address in one of this module's psects, which the
+    /// linker relocates. An external symbol might be a constant.
+    fn is_address(&self, v: &Value) -> bool {
+        matches!(v, Value::Psect { psect, .. } if self.psects[*psect].flags & psc::REL != 0)
     }
 
     fn next_line(&mut self) -> Option<Line> {
@@ -862,7 +889,9 @@ impl Asm {
             ".WORD" => self.data(c, 2)?,
             ".LONG" => self.data(c, 4)?,
             ".QUAD" | ".ADDRESS" => self.data(c, 8)?,
-            ".ASCII" | ".ASCIZ" | ".ASCIC" | ".ASCID" => {
+            ".ASCII" | ".ASCIZ" | ".ASCIC" | ".ASCID" | ".ASCID64" => {
+                c.skip_ws();
+                let scol = c.col();
                 let mut s = self.strings(c)?;
                 match name {
                     ".ASCIZ" => s.push(0),
@@ -876,8 +905,15 @@ impl Asm {
                     _ => {}
                 }
                 let len = s.len() as u64;
-                if name == ".ASCID" {
-                    self.item(Item::Ascid(s), 8 + len);
+                if name.starts_with(".ASCID") {
+                    // The descriptor holds the text's address.
+                    let psect = self.current();
+                    if self.psects[psect].flags & psc::REL != 0 {
+                        self.notpic(psect, "descriptor pointer needing a fixup", scol);
+                    }
+                    let wide = name == ".ASCID64";
+                    let size = if wide { 24 } else { 8 };
+                    self.item(Item::Ascid { text: s, wide }, size + len);
                 } else {
                     self.item(Item::Bytes(s), len);
                 }
@@ -1049,9 +1085,10 @@ impl Asm {
                 Err(e) => self.error(e),
             }
         }
-        if !self.diags.is_empty() {
-            self.diags.sort_by_key(|(seq, d)| (*seq, d.col));
-            return Err(self.diags.into_iter().map(|(_, d)| d).collect());
+        self.diags.sort_by_key(|(seq, d)| (*seq, d.col));
+        let diags: Vec<Diagnostic> = self.diags.into_iter().map(|(_, d)| d).collect();
+        if diags.iter().any(|d| !d.warning) {
+            return Err(diags);
         }
         let mut symbols = std::mem::take(&mut self.symbols);
         let symbols = self
@@ -1065,6 +1102,7 @@ impl Asm {
             psects: self.psects,
             symbols,
             transfer,
+            warnings: diags,
         })
     }
 
@@ -1088,6 +1126,11 @@ impl Asm {
                 match fixup {
                     None => self.bytes(s.psect, s.offset, &word.to_le_bytes()),
                     Some((fix, target)) => {
+                        // Bits 16 and up of an address change when it moves.
+                        if matches!(fix, Fix::Movw(1.., _)) && self.is_address(&target) {
+                            let col = ops.get(1).map_or(*col, |o| o.col);
+                            self.notpic(s.psect, "absolute address bits", col);
+                        }
                         self.chunk(s.psect, s.offset, Chunk::Insn { fix, word, target })
                     }
                 }
@@ -1107,30 +1150,39 @@ impl Asm {
                             }
                             self.bytes(s.psect, offset, &n.to_le_bytes()[..usize::from(*size)]);
                         }
-                        value => self.chunk(s.psect, offset, Chunk::Data { size: *size, value }),
+                        value => {
+                            if *size >= 4 && self.is_address(&value) {
+                                self.notpic(s.psect, "address needing a fixup", *col);
+                            }
+                            self.chunk(s.psect, offset, Chunk::Data { size: *size, value })
+                        }
                     }
                 }
             }
             Item::Bytes(b) => self.bytes(s.psect, s.offset, b),
-            Item::Ascid(text) => {
+            Item::Ascid { text, wide } => {
                 // DSC$W_LENGTH, DSC$B_DTYPE (text), DSC$B_CLASS (static),
-                // then DSC$A_POINTER, the 32-bit address of the text.
-                let mut dsc = (text.len() as u16).to_le_bytes().to_vec();
-                dsc.extend([14, 1]);
-                self.bytes(s.psect, s.offset, &dsc);
-                let text_at = Value::Psect {
-                    psect: s.psect,
-                    offset: s.offset as i64 + 8,
+                // then DSC$A_POINTER, the 32-bit address of the text. The
+                // 64-bit form starts like a 32-bit descriptor that can't be:
+                // DSC64$W_MBO (1), the type and class, DSC64$L_MBMO (-1).
+                // Then DSC64$Q_LENGTH and DSC64$PQ_POINTER.
+                let (dsc, size) = if *wide {
+                    let mut dsc = vec![1, 0, 14, 1, 0xff, 0xff, 0xff, 0xff];
+                    dsc.extend((text.len() as u64).to_le_bytes());
+                    (dsc, 8)
+                } else {
+                    let [lo, hi] = (text.len() as u16).to_le_bytes();
+                    (vec![lo, hi, 14, 1], 4)
                 };
-                self.chunk(
-                    s.psect,
-                    s.offset + 4,
-                    Chunk::Data {
-                        size: 4,
-                        value: text_at,
-                    },
-                );
-                self.bytes(s.psect, s.offset + 8, text);
+                self.bytes(s.psect, s.offset, &dsc);
+                let pointer = s.offset + dsc.len() as u64;
+                let text_at = pointer + u64::from(size);
+                let value = Value::Psect {
+                    psect: s.psect,
+                    offset: text_at as i64,
+                };
+                self.chunk(s.psect, pointer, Chunk::Data { size, value });
+                self.bytes(s.psect, text_at, text);
             }
             Item::Space => {}
             Item::Assign {

@@ -1,0 +1,26 @@
+        .TITLE  ASCID64 64-bit descriptors: quadword fixups, so the image can go anywhere
+
+        .PSECT  $DATA$
+first:  .ASCID64 "64-bit"
+        .ALIGN  QUAD
+second: .ASCID64 " descriptors ok"<10>
+
+        .PSECT  $CODE$
+START::
+        stp     x29, x30, [sp, #-16]!
+        adr     x0, first
+        bl      put_dsc64
+        adr     x0, second
+        bl      put_dsc64
+        ldp     x29, x30, [sp], #16
+        mov     x0, #1                  ; SS$_NORMAL
+        ret
+
+; put_dsc64: writes the text that the 64-bit descriptor at x0 describes.
+put_dsc64:
+        ldr     x1, [x0, #8]            ; DSC64$Q_LENGTH
+        ldr     x0, [x0, #16]           ; DSC64$PQ_POINTER
+        svc     #2                      ; put
+        ret
+
+        .END    START

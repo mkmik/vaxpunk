@@ -4,12 +4,12 @@
 use std::path::Path;
 use std::{env, fs};
 
-use vms_obj::exe::{Eisd, Image, Section};
+use vms_obj::exe::{Eisd, Fixups, Image, Section};
 use vms_obj::obj::{self, Eom, Gsd, Mhd, Psc, Record, SymDef, Tir, Transfer, psc, sym};
 use vms_obj::olb::{Library, Module};
 
-fn check(name: &str, file: &[u8]) {
-    let dump = vdump::dump(file).unwrap();
+fn check(name: &str, file: &[u8], opts: &vdump::Options) {
+    let dump = vdump::dump(file, opts).unwrap();
     let path = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("tests")
         .join(format!("{name}.txt"));
@@ -94,7 +94,7 @@ fn hello() -> Vec<Record> {
 
 #[test]
 fn hello_obj() {
-    check("hello.obj", &obj::write(&hello()));
+    check("hello.obj", &obj::write(&hello()), &Default::default());
 }
 
 /// A library holding the hello module.
@@ -112,7 +112,7 @@ fn hello_olb() {
             object: obj::write(&hello()),
         }],
     };
-    check("hello.olb", &lib.write());
+    check("hello.olb", &lib.write(), &Default::default());
 }
 
 /// The same program linked at 0x10000.
@@ -129,6 +129,7 @@ fn hello_exe() {
         ident: "V1.0".into(),
         link_time: 0,
         transfer: 0x10000,
+        fixups: None,
         sections: vec![
             Section {
                 vaddr: 0x10000,
@@ -144,5 +145,66 @@ fn hello_exe() {
             },
         ],
     };
-    check("hello.exe", &image.write());
+    check("hello.exe", &image.write(), &Default::default());
+}
+
+/// The same program with a table of its message's address in $DATA$,
+/// linked /RELOCATABLE: a quadword and a longword fixup, which the map names.
+#[test]
+fn movable_exe() {
+    let mut code: Vec<u8> = [0x100000a0]
+        .iter()
+        .chain(&CODE)
+        .flat_map(|i: &u32| i.to_le_bytes())
+        .collect();
+    code.extend(b"hello\n");
+    let mut table = 0x10014u64.to_le_bytes().to_vec();
+    table.extend(0x10014u32.to_le_bytes());
+    let image = Image {
+        name: "HELLO".into(),
+        ident: "V1.0".into(),
+        link_time: 0,
+        transfer: 0x10000,
+        sections: vec![
+            Section {
+                vaddr: 0x10000,
+                size: code.len() as u32,
+                flags: Eisd::M_EXE,
+                data: code,
+            },
+            Section {
+                vaddr: 0x20000,
+                size: table.len() as u32,
+                flags: Eisd::M_WRT | Eisd::M_CRF,
+                data: table,
+            },
+        ],
+        fixups: Some(Fixups {
+            quad: vec![0x10000],
+            long: vec![0x10008],
+            long_min: 0x10014,
+            long_max: 0x10014,
+        }),
+    };
+    let map = "\
+Program Section Synopsis
+
+  Psect / Module                   Base              End               Length    Align  Attributes
+  $CODE$                           0000000000010000  0000000000010019  0000001A  2**3    PIC,CON,REL,LCL,SHR,EXE,NORD,NOWRT
+    HELLO                          0000000000010000  0000000000010019  0000001A  2**3
+  $DATA$                           0000000000020000  000000000002000B  0000000C  2**3    NOPIC,CON,REL,LCL,NOSHR,NOEXE,RD,WRT
+    HELLO                          0000000000020000  000000000002000B  0000000C  2**3
+
+Symbols By Name
+";
+    let opts = vdump::Options {
+        map: Some(map.into()),
+        ..Default::default()
+    };
+    check("movable.exe", &image.write(), &opts);
+    let bare = vdump::dump(&image.write(), &Default::default()).unwrap();
+    assert!(
+        bare.contains("00010014          image section 2 + %X8"),
+        "{bare}"
+    );
 }

@@ -5,12 +5,12 @@ Instructions are standard ARM64. Directives and macros follow MACRO-64 and
 MACRO-32.
 
 ```
-vasm [/OBJECT=file | -o file] [/INCLUDE=dir | -I dir]... SOURCE
+vasm [/OBJECT=file | -o file] [/INCLUDE=dir | -I dir]... [/NOWARNINGS=NOTPIC | --nowarnings NOTPIC] SOURCE
 ```
 
-The object file defaults to the source name with `.obj`. Errors show file, line
-and column, the line with a caret, and the macro calls it came from. Nothing is
-written if there are errors.
+The object file defaults to the source name with `.obj`. Errors and warnings
+show file, line and column, the line with a caret, and the macro calls it came
+from. Nothing is written if there are errors.
 
 Status: work order step 8. Not there yet: listings, procedure descriptors,
 literal pools (`ldr x0, =value`), and floating-point and SIMD arithmetic. Loads
@@ -61,6 +61,12 @@ external symbol. An address plus or minus a constant is still an address, and
 the linker resolves it. Two addresses in the same psect subtract to a constant,
 so `length = . - start` works. Other arithmetic on addresses is an error.
 
+vasm folds only what doesn't change when the image moves: the difference of
+two labels in one psect, constants, and branches, `adr` and literal loads to
+the same psect. Every other address reaches the object as an address, so that
+the linker knows to relocate it (`docs/linker.md`). A label in an `ABS` psect
+is a constant to the linker.
+
 ## Instructions
 
 Standard ARM64 syntax, as GNU `as` and LLVM accept it, including aliases such as
@@ -102,6 +108,7 @@ syntax:
 | `.ADDRESS` | a 64-bit address (as in MACRO-64) |
 | `.ASCII`, `.ASCIZ`, `.ASCIC` | text; with a zero byte after; with a length byte before |
 | `.ASCID` | a VMS static text descriptor (length, type 14, class 1, 32-bit pointer), then the text |
+| `.ASCID64` | the 64-bit form (`DSC64$`: 1, type 14, class 1, -1, 64-bit length, 64-bit pointer), then the text |
 | `.BLKB n`, `.BLKW`, `.BLKL`, `.BLKQ` | `n` zero bytes, words, longwords or quadwords (default 1) |
 | `.ALIGN n` | aligns to 2^`n`, or `BYTE`, `WORD`, `LONG`, `QUAD`, `OCTA`, `PAGE` (64 KB) |
 | `.END label` | ends the source; the label is the transfer address |
@@ -132,6 +139,26 @@ Attributes listed after the name start from the last row and change it:
 `EXE`/`NOEXE`, `RD`/`NORD`, `WRT`/`NOWRT`, `VEC`/`NOVEC`, `NOMOD`, and an
 alignment keyword or number. A psect can't be both `EXE` and `WRT`. Naming a
 psect again with different attributes is an error.
+
+### Position independence
+
+A `PIC` psect claims that it can be shared unchanged wherever the image goes,
+so it mustn't hold an address the loader would have to fix up
+(`docs/linker.md`). The linker checks every module; vasm warns early about
+what it can see:
+
+```
+hello.mar:12:18: warning: %VASM-W-NOTPIC, address needing a fixup in PIC psect $CODE$
+```
+
+- `.ADDRESS`, `.QUAD` and `.LONG` of an address in this module;
+- `movz` or `movk` with `:abs_g1:` or above of an address in this module;
+- `.ASCID` and `.ASCID64`, whose descriptors hold the address of their text.
+  Write descriptors in `$DATA$` or `$LINK$`. `.ASCID`'s pointer is a longword,
+  which ties the image to the low 2 GB; `.ASCID64`'s is a quadword.
+
+An external symbol may be a constant, so it waits for the linker.
+`/NOWARNINGS=NOTPIC` turns the warnings off.
 
 ## Macros
 
@@ -209,11 +236,17 @@ wins over a library's.
 `$PUT "text"<10>`, `$WRITE address, length`, `$EXIT [STATUS=value]` and
 `$DUMP`. `$PUT` stores its text in `$LITERAL$`.
 
+`vtools/lib/pic.mlb` is for position-independent code: `$LDADR reg, symbol`
+loads `symbol`'s address into `reg` from a linkage slot of its own in `$LINK$`,
+which the loader fixes up if the image moves.
+
 ## Output
 
 The module header gets the module name, the `.IDENT` version, and the creation
 time in UTC. `SOURCE_DATE_EPOCH`, if set, replaces the current time, for
 reproducible builds. The GSD has every psect, global definitions and external
-references. Absolute global symbols go into `$ABS$`. Each psect's contents
+references. A global label in a `REL` psect is an address, with `EGSY$V_REL`;
+absolute global symbols go into `$ABS$`, and labels in `ABS` psects are
+constants too. Each psect's contents
 follow as TIR commands. Uninitialized space (`.BLKx`, `.ALIGN` padding) is
 skipped with `CTL_AUGRB`, and the linker fills it with zeros.

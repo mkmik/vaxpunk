@@ -298,15 +298,38 @@ commands! {
     154 "CTL_STKDL" CtlStkdl {},
 }
 
-/// Parses an object file. Every module must be for ARM64.
+/// Parses an object file. Every module must be for ARM64, and a symbol whose
+/// value is an address (`EGSY$V_REL`) must be in a relocatable psect defined
+/// before it.
 pub fn parse(file: &[u8]) -> Result<Vec<Record>, Error> {
     let mut r = Reader(file);
     let mut records = Vec::new();
+    // Whether each psect of the current module is relocatable.
+    let mut rel = Vec::new();
     while !r.0.is_empty() {
         let rectyp = u16::read(&mut r)?;
         let size = u16::read(&mut r)? as usize;
         let body = r.take(size.checked_sub(4).ok_or(Error::Invalid("record size"))?)?;
-        records.push(parse_record(rectyp, body)?);
+        let record = parse_record(rectyp, body)?;
+        match &record {
+            Record::Mhd(_) => rel.clear(),
+            Record::Gsd(subrecords) => {
+                for sub in subrecords {
+                    match sub {
+                        Gsd::Psc(p) => rel.push(p.flags & psc::REL != 0),
+                        Gsd::Def(d)
+                            if d.flags & sym::REL != 0
+                                && rel.get(d.psindx as usize) != Some(&true) =>
+                        {
+                            return Err(Error::Invalid("REL flag of a symbol not in a REL psect"));
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            _ => {}
+        }
+        records.push(record);
     }
     Ok(records)
 }
@@ -607,5 +630,26 @@ mod tests {
         let mut bytes = write(&module());
         bytes[8] = 0;
         assert_eq!(parse(&bytes), Err(Error::Invalid("architecture")));
+    }
+
+    #[test]
+    fn rejects_addresses_in_absolute_psects() {
+        let mut records = module();
+        let Record::Gsd(gsd) = &mut records[2] else {
+            panic!("GSD")
+        };
+        let Gsd::Psc(p) = &mut gsd[0] else {
+            panic!("PSC")
+        };
+        let bad = Err(Error::Invalid("REL flag of a symbol not in a REL psect"));
+        p.flags &= !psc::REL;
+        assert_eq!(parse(&write(&records)), bad, "an ABS psect");
+        // The symbol before its psect.
+        let mut records = module();
+        let Record::Gsd(gsd) = &mut records[2] else {
+            panic!("GSD")
+        };
+        gsd.swap(0, 1);
+        assert_eq!(parse(&write(&records)), bad, "a psect defined later");
     }
 }

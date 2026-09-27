@@ -102,6 +102,13 @@ Unchanged, including the quadword alignment of every subrecord. vasm produces:
   point. The descriptor's contents belong to the calling standard and are
   opaque here.
 
+`EGSY$V_REL` says whether a symbol's value is an address, an offset in its
+psect that moves with the image, or a constant. A label in a `REL` psect has
+it; a constant (`=`, `==`) or a label in an `ABS` psect doesn't. A reader
+rejects a definition with `EGSY$V_REL` unless its psect is a `REL` one defined
+before it. The linker needs the flag to know which values are addresses
+(`docs/linker.md`).
+
 `EGSD$C_IDC`, `EGSD$C_PSC64` and the linker-only subrecords (`SPSC`, `SYMV`,
 `SYMM`, `SYMG`, `SPSC64`) keep their numbers and layouts but are not produced
 yet.
@@ -126,8 +133,8 @@ every address is 64 bits:
   `STA_PQ` value may also feed operators; Alpha requires `STO_OFF` right after.
 - Operators work on signed 64-bit values.
 - `STO_LW`, `STO_W` and `STO_B` check that the popped value fits the field,
-  signed or unsigned, and fail the link otherwise. Storing an address in a
-  longword therefore works only when the image lives below 2 GB.
+  signed or unsigned, and fail the link otherwise. An address in a longword
+  must fit signed, so it works only when the image lives below 2 GB.
 
 ### Kept
 
@@ -154,6 +161,10 @@ every address is 64 bits:
 Commands the Alpha manual marks "not supported in structure level 2" stay
 unsupported: `STA_LI`, `STA_MOD`, `STA_CKARG`, `OPR_INSV`, `OPR_USH`,
 `OPR_REDEF` and `OPR_DFLIT`.
+
+`STO_IMMR`'s repeat count, and the values `CTL_DFLOC`, `CTL_STLOC` and
+`CTL_STKDL` work with, must not depend on where the image is: weight 0, in the
+terms of `docs/linker.md`.
 
 ### Dropped
 
