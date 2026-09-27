@@ -1,4 +1,4 @@
-# PRD — ARM64 cross assembler, linker and QEMU runner for VMS object formats
+# PRD-0001 — ARM64 cross assembler, linker and QEMU runner for VMS object formats
 
 Sep 25, 2026 · @Marko Mikulicic
 
@@ -81,11 +81,11 @@ vtools/                     (crates in the repository's Cargo workspace)
     run/                    .mar programs + expected console output and exit status
 ```
 
-`docs/object-format.md` is a deliverable, not an afterthought: it is the only place the ARM64 VMS object format is defined, and later compilers are written against it.
+`vtools/docs/object-format.md` is a deliverable, not an afterthought: it is the only place the ARM64 VMS object format is defined, and later compilers are written against it.
 
 ## Object and image format
 
-**Rule: transliterate, don't invent.** The starting point is the documented OpenVMS Alpha object language and image format (the Alpha `EOBJ` record family and the Alpha image header layout). Everything that isn't specific to the instruction set is kept as-is: record framing, record types, field layouts, symbol flags, program section attributes. Changes are made only where ARM64 forces them, and every change is listed in `docs/object-format.md` with the Alpha original beside it. First task: obtain and read the Alpha object language documentation and pin it in `docs/` by reference (title, order number, edition, URL, SHA-256). The manuals are HP/VSI copyright, so the repo holds our notes in our own words, never copies.
+**Rule: transliterate, don't invent.** The starting point is the documented OpenVMS Alpha object language and image format (the Alpha `EOBJ` record family and the Alpha image header layout). Everything that isn't specific to the instruction set is kept as-is: record framing, record types, field layouts, symbol flags, program section attributes. Changes are made only where ARM64 forces them, and every change is listed in `vtools/docs/object-format.md` with the Alpha original beside it. First task: obtain and read the Alpha object language documentation and pin it in `vtools/docs/` by reference (title, order number, edition, URL, SHA-256). The manuals are HP/VSI copyright, so the repo holds our notes in our own words, never copies.
 
 **Object module (OBJ).** A sequence of variable-length, typed records, as on Alpha:
 
@@ -164,7 +164,7 @@ vtools/                     (crates in the repository's Cargo workspace)
 
 Because the MMU is on, virtual addresses are free: an image linked at 0x10000 runs exactly as linked. The upper half (`TTBR1`) stays empty for now and is the natural home for VMS system space later.
 
-**Transfer of control.** QEMU starts the stub at EL1 (`virt` default, no EL2/EL3), interrupts masked. The stub loads `MAIR_EL1`, `TCR_EL1` and `TTBR0_EL1`, turns on the MMU and caches, sets `VBAR_EL1`, enables FP/SIMD (`CPACR_EL1.FPEN`, whose reset value isn't guaranteed), and enters the image with `eret`: `SPSR_EL1` selects EL0, `ELR_EL1` holds the transfer address, `SP_EL0` the image stack, and the entry registers come from `docs/runner-abi.md`. Exceptions from EL0 switch to the stub's own stack, so even a stack overflow into the guard page gets a clean report.
+**Transfer of control.** QEMU starts the stub at EL1 (`virt` default, no EL2/EL3), interrupts masked. The stub loads `MAIR_EL1`, `TCR_EL1` and `TTBR0_EL1`, turns on the MMU and caches, sets `VBAR_EL1`, enables FP/SIMD (`CPACR_EL1.FPEN`, whose reset value isn't guaranteed), and enters the image with `eret`: `SPSR_EL1` selects EL0, `ELR_EL1` holds the transfer address, `SP_EL0` the image stack, and the entry registers come from `vtools/docs/runner-abi.md`. Exceptions from EL0 switch to the stub's own stack, so even a stack overflow into the guard page gets a clean report.
 
 **Entry ABI (provisional).** `x0` = pointer to the *runner info block* (argument string as a descriptor, runner version, flags); `lr` = the return page; `sp` = image stack. Marked provisional; replaced by the calling standard once it exists. No reserved registers: `x18` is free, unlike on macOS.
 
@@ -212,7 +212,7 @@ Because the MMU is on, virtual addresses are free: an image linked at 0x10000 ru
 
 Each step ends with something you can run or look at.
 
-1. **Spec notes.** Pin the Alpha object and image format documentation in `docs/` by reference; write the first draft of `object-format.md` as a delta. *Visible:* the document.
+1. **Spec notes.** Pin the Alpha object and image format documentation in `vtools/docs/` by reference; write the first draft of `object-format.md` as a delta. *Visible:* the document.
 2. **Hand-built image and the runner.** `vms-obj` image writer only; a test builds a tiny EXE from hand-encoded bytes (`mov x0, #1; ret`); `vrun` loads it into QEMU behind the boot stub (MMU on, image at its link address, at EL0) and runs it; the return page, status line and PSCI power-off carry the status out. *Visible:* `vrun tiny.exe` exits 0.
 3. **Console.** Runner info block and the `SVC` monitor calls (put a string, dump registers, exit). *Visible:* hand-built image prints "hello".
 4. **Object format and `vdump`.** OBJ read/write with round-trip tests; `vdump` for OBJ and EXE. *Visible:* decoded dump of a hand-built OBJ.
