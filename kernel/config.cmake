@@ -1,5 +1,5 @@
 # seL4 kernel settings, loaded with `cmake -C`. The QEMU CPU, RAM and GIC
-# version come from qemu.env through kernel/Makefile.
+# version come from qemu.env through kernel/build.rs.
 set(KernelPlatform qemu-arm-virt CACHE STRING "")
 set(KernelSel4Arch aarch64 CACHE STRING "")
 set(KernelArmHypervisorSupport OFF CACHE BOOL "") # Limine hands off at EL1

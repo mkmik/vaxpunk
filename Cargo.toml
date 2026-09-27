@@ -1,6 +1,9 @@
 [workspace]
 resolver = "3"
-members = ["ods/crates/*", "vtools/crates/*"]
+members = ["ods/crates/*", "vtools/crates/*", "kernel", "shim", "roottask", "image"]
+# kernel, shim, roottask and image (boot) build C with the cross toolchain from
+# scripts/setup-host.sh, so a plain cargo build or test leaves them out.
+default-members = ["ods/crates/*", "vtools/crates/*"]
 
 [workspace.package]
 version = "0.1.0"

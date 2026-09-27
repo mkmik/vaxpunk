@@ -1,12 +1,14 @@
 name: rust
 
-# The Rust projects, ods/ and vtools/, are one Cargo workspace.
+# The Cargo workspace. Its default members, ods/ and vtools/, are built and
+# tested. The OS crates (kernel, shim, roottask, image) need the cross C
+# toolchain, so CI only checks their formatting: their Rust is in */*.rs.
 on:
   push:
     branches: [main]
-    paths: ["Cargo.toml", "Cargo.lock", "ods/**", "vtools/**", ".github/workflows/rust.yml"]
+    paths: ["Cargo.toml", "Cargo.lock", "*/*.rs", "*/Cargo.toml", "ods/**", "vtools/**", ".github/workflows/rust.yml"]
   pull_request:
-    paths: ["Cargo.toml", "Cargo.lock", "ods/**", "vtools/**", ".github/workflows/rust.yml"]
+    paths: ["Cargo.toml", "Cargo.lock", "*/*.rs", "*/Cargo.toml", "ods/**", "vtools/**", ".github/workflows/rust.yml"]
 
 jobs:
   test:

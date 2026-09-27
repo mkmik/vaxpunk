@@ -1,8 +1,3 @@
 /out/
 /third_party/
-/kernel/build/
-/kernel/out/
-/kernel/.venv/
-/shim/out/
-/roottask/out/
 /target/

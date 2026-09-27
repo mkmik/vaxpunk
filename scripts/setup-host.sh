@@ -13,7 +13,7 @@ Linux)
 		cc=gcc # the native gcc is aarch64-linux-gnu-gcc
 	fi
 	sudo apt-get update
-	sudo apt-get install -y make git curl $cc cmake ninja-build device-tree-compiler \
+	sudo apt-get install -y git curl $cc cmake ninja-build device-tree-compiler \
 		libxml2-utils python3 mtools qemu-system-arm qemu-efi-aarch64 gdb-multiarch
 	if ! command -v uv >/dev/null; then
 		curl -LsSf https://astral.sh/uv/install.sh | sh
