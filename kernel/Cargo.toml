@@ -1,0 +1,11 @@
+[package]
+name = "kernel"
+description = "seL4, built with its own CMake for the QEMU machine in qemu.env"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+# Hands build.rs's outputs to dependents' build scripts as DEP_SEL4_*.
+links = "sel4"
+
+[lib]
+path = "lib.rs"

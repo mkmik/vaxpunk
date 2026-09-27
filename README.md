@@ -22,14 +22,16 @@ scripts/setup-host.sh
 
 It installs an aarch64 bare-metal C compiler, `cmake`, `ninja`, `dtc`, `uv`,
 `mtools`, QEMU with its EDK2 firmware, and checks out the seL4 submodule.
+Cargo drives the whole build, so you also need a Rust toolchain, for example
+from [rustup](https://rustup.rs).
 
 ## Build and run
 
 ```sh
-make run
+cargo run -p boot
 ```
 
-The first run downloads Limine, builds seL4 (about 10 seconds) and boots QEMU.
+The first run builds seL4 (about 10 seconds), downloads Limine and boots QEMU.
 Quit QEMU with `Ctrl-A x`. EDK2 and Limine clear the console and move the
 cursor around, so `scripts/serial-filter.py` turns their output into plain
 lines before it reaches your terminal. From the shim's banner on, output
@@ -64,25 +66,29 @@ Nothing in the guest reads the serial input yet. After a few dozen keystrokes
 QEMU stops reading the keyboard, and then `Ctrl-A x` no longer arrives. Stop
 QEMU with `pkill -f qemu-system-aarch64` instead.
 
-Day to day: edit `roottask/src/`, then `make run`. Only the root task is
-rebuilt and the ESP image re-stitched. On an M3, the root task prints about
-one second after the command.
+Day to day: edit `roottask/src/`, then `cargo run -p boot`. Only the root
+task is rebuilt and the ESP image re-stitched. On an M3, the root task prints
+about one second after the command.
 
 ## Layout
 
 | Directory | What | Output |
 | --- | --- | --- |
-| `kernel/` | seL4 16.0.0 (submodule), built standalone with its own CMake | `kernel/out/`: `kernel.elf`, `include/` (libsel4), `kernel.dtb`, `platform_gen.json` |
-| `shim/` | Limine-protocol program that loads seL4 and the root task; see [shim/README.md](shim/README.md) | `shim/out/shim.elf` |
-| `roottask/` | the root task, freestanding C | `roottask/out/roottask.elf` |
-| `image/` | Limine config and the ESP builder (mtools) | `out/esp.img` |
+| `kernel/` | seL4 16.0.0 (submodule), built with its own CMake | `kernel.elf`, libsel4's headers, `platform_gen.json` |
+| `shim/` | Limine-protocol program that loads seL4 and the root task; see [shim/README.md](shim/README.md) | `shim.elf` |
+| `roottask/` | the root task, freestanding C | `roottask.elf` |
+| `image/` | Limine config, the ESP builder (mtools) and `boot`, which copies the three ELFs to `out/`, stitches the ESP and runs QEMU | `out/esp.img` |
 | `scripts/` | host setup, Limine download, QEMU wrapper and console filter | `out/serial.log` |
 | `ods/` | Files-11 ODS-2/ODS-5 file system in Rust: the library, the `ods` CLI and a FUSE mount; see [ods/README.md](ods/README.md) | `target/` |
 | `vtools/` | VMS-style toolchain in Rust: the `vasm` assembler, `vlink` linker and `vlib` librarian, object, library and image formats, `vdump` to inspect them, and `vrun`, which runs images in QEMU; see [vtools/PRD.md](vtools/PRD.md) | `target/` |
 
-Each component builds on its own with `make -C <dir>`. The components share
-nothing but those output files. `shim/` and `roottask/` read `kernel/out/`,
-so build the kernel first. The top-level `Makefile` only calls the others.
+The whole repository is one Cargo workspace. `kernel/`, `shim/` and
+`roottask/` are crates whose `build.rs` runs the component's C build (seL4's
+CMake, or gcc) into Cargo's `OUT_DIR`; `cargo build -p <name>` builds one
+with what it needs. The components share nothing but those output files.
+The kernel hands `shim` and `roottask` its libsel4 headers,
+`platform_gen.json` and toolchain prefix (`links = "sel4"`), and each crate
+exports its ELF's path as `ELF` for `boot`.
 
 - `kernel/config.cmake` sets `KernelIsMCS`, and the root task refuses to
   build against a non-MCS libsel4. Code written for the classic API needs
@@ -90,8 +96,9 @@ so build the kernel first. The top-level `Makefile` only calls the others.
   object cap, `seL4_Reply` and `seL4_CNode_SaveCaller` are gone, and a new
   thread runs only once it is bound to a configured scheduling context
   (`seL4_SchedControl_Configure`, `seL4_SchedContext_Bind`).
-- The kernel rebuilds only when `kernel/config.cmake`, `kernel/qemu.env` or
-  the seL4 commit change.
+- The kernel rebuilds only when `kernel/config.cmake`, `kernel/qemu.env`,
+  `kernel/requirements.txt`, `CROSS_COMPILE` or a file in `kernel/seL4`
+  change, and the shim and root task rebuild with it.
 - `kernel/qemu.env` holds the QEMU CPU, RAM and GIC version. seL4 compiles in
   that machine's memory map, and `scripts/run-qemu.sh` reads the same file.
 - Any root task can replace `roottask.elf`: it must be a static AArch64 ELF
@@ -100,32 +107,34 @@ so build the kernel first. The top-level `Makefile` only calls the others.
 - Pins: seL4 by submodule commit (tag 16.0.0), Limine 11.4.1 by version and
   SHA-256 in `scripts/fetch-limine.sh`. The EDK2 firmware comes from the
   QEMU install (`EDK2_FW=` overrides it).
-- The Rust projects, `ods/` and `vtools/`, are one Cargo workspace at the
-  root instead: `cargo test` tests both, `cargo test -p 'ods*'` or
-  `cargo test -p 'v*'` one. They need a Rust toolchain besides what
-  `setup-host.sh` installs, and `ods-fuse` needs FUSE (fuse3 on Linux, macFUSE
-  on macOS). vtools's tests run images under `vrun` in QEMU;
-  `VRUN_FLAGS=--hvf cargo test -p 'v*'` runs them under HVF.
+- The Rust projects, `ods/` and `vtools/`, are the workspace's default
+  members, so a plain `cargo test` tests both without the C toolchain;
+  `cargo test -p 'ods*'` or `cargo test -p 'v*'` tests one. `ods-fuse` needs
+  FUSE (fuse3 on Linux, macFUSE on macOS). vtools's tests run images under
+  `vrun` in QEMU; `VRUN_FLAGS=--hvf cargo test -p 'v*'` runs them under HVF.
 
 ## Toolchain
 
-Each component picks its compiler with `CROSS_COMPILE` (default:
-`aarch64-elf-` if installed, else `aarch64-linux-gnu-`), for example
-`make CROSS_COMPILE=aarch64-none-elf-`. `CC=` overrides the shim and root
-task compiler alone. `vrun`'s boot stub is assembled with the same
-`CROSS_COMPILE` binutils.
+The kernel's `build.rs` picks the compiler with `CROSS_COMPILE` (default:
+`aarch64-elf-` if installed, else `aarch64-linux-gnu-`), and the shim and root
+task build with the same one, for example
+`CROSS_COMPILE=aarch64-none-elf- cargo run -p boot`. `vrun`'s boot stub is
+assembled with the same `CROSS_COMPILE` binutils.
 
 ## Debugging
 
-`scripts/run-qemu.sh --gdb` starts QEMU halted with a GDB server on port 1234.
-In another terminal:
+`cargo run -p boot -- --gdb` starts QEMU halted with a GDB server on port
+1234. In another terminal:
 
 ```sh
-lldb roottask/out/roottask.elf -o 'gdb-remote 1234' -o 'b main' -o c
-gdb-multiarch roottask/out/roottask.elf -ex 'target remote :1234' -ex 'b main' -ex c
+lldb out/roottask.elf -o 'gdb-remote 1234' -o 'b main' -o c
+gdb-multiarch out/roottask.elf -ex 'target remote :1234' -ex 'b main' -ex c
 ```
 
-`scripts/run-qemu.sh --hvf` runs under Hypervisor.framework instead of TCG.
+`scripts/run-qemu.sh` takes the same flags and boots the last `out/esp.img`
+without building.
+
+`cargo run -p boot -- --hvf` runs under Hypervisor.framework instead of TCG.
 It boots the same kernel, which is why `kernel/qemu.env` picks GICv3 (HVF
 does not emulate GICv2). This is best effort: the kernel is built for a
 Cortex-A57 while HVF offers only `-cpu host`, and seL4 warns that the
