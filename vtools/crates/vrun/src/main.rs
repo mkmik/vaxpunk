@@ -10,12 +10,12 @@ use std::process::{Command, ExitCode, Stdio};
 use std::time::{Duration, Instant};
 use std::{env, fs, io, process, thread};
 
-use vms_obj::exe::Image;
+use vms_obj::exe::{Image, Section};
 
 use crate::layout::LOAD_BASE;
 
-const USAGE: &str = "usage: vrun [--hvf] [--gdb] [--map FILE] [--timeout SECONDS] [--verbose] \
-                     IMAGE [ARGUMENTS...]";
+const USAGE: &str = "usage: vrun [--hvf] [--gdb] [--map FILE] [--base ADDRESS] [--timeout SECONDS] \
+                     [--verbose] IMAGE [ARGUMENTS...]";
 const STUB: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/stub.bin"));
 
 /// VMS condition values for image faults.
@@ -28,6 +28,8 @@ struct Options {
     gdb: bool,
     /// The image's link map, for symbols in fault messages.
     map: Option<PathBuf>,
+    /// Where to move a relocatable image to, instead of its link address.
+    base: Option<u64>,
     timeout: Option<Duration>,
     verbose: bool,
     image: PathBuf,
@@ -56,21 +58,30 @@ fn run() -> Result<u8, String> {
     let opt = options(env::args().skip(1))?;
     let file = fs::read(&opt.image)
         .map_err(|e| format!("OPENIN, cannot read {}: {e}", opt.image.display()))?;
-    let image = Image::parse(&file).map_err(|e| {
+    let mut image = Image::parse(&file).map_err(|e| {
         format!(
             "IMGFMT, {} is not a vaxpunk image: {e}",
             opt.image.display()
         )
     })?;
-    let symbols = match &opt.map {
+    let mut symbols = match &opt.map {
         Some(path) => map_symbols(
             &fs::read_to_string(path)
                 .map_err(|e| format!("OPENIN, cannot read {}: {e}", path.display()))?,
         ),
         None => Vec::new(),
     };
-    let plan = plan::plan(&image, opt.args.as_bytes(), STUB)?;
+    let moved = match opt.base {
+        Some(base) => relocate(&mut image, &mut symbols, base)?,
+        None => 0,
+    };
+    let plan = plan::plan(&image, opt.args.as_bytes(), STUB, moved)?;
     if opt.verbose {
+        if moved != 0 {
+            let sign = if moved < 0 { "-" } else { "+" };
+            let by = moved.unsigned_abs();
+            eprintln!("%VRUN-I-MOVED, the image moved by {sign}%X{by:X}");
+        }
         for r in &plan.map {
             eprintln!(
                 "%VRUN-I-MAP, {:016X}-{:016X} {:?} at physical {:08X}",
@@ -167,6 +178,7 @@ fn options(mut args: impl Iterator<Item = String>) -> Result<Options, String> {
         hvf: false,
         gdb: false,
         map: None,
+        base: None,
         timeout: Some(Duration::from_secs(30)),
         verbose: false,
         image: PathBuf::new(),
@@ -179,6 +191,7 @@ fn options(mut args: impl Iterator<Item = String>) -> Result<Options, String> {
             "--gdb" => opt.gdb = true,
             "--verbose" => opt.verbose = true,
             "--map" => opt.map = Some(args.next().ok_or_else(usage)?.into()),
+            "--base" => opt.base = Some(args.next().and_then(|a| number(&a)).ok_or_else(usage)?),
             "--timeout" => {
                 let secs: u64 = args.next().and_then(|s| s.parse().ok()).ok_or_else(usage)?;
                 opt.timeout = (secs > 0).then(|| Duration::from_secs(secs));
@@ -191,6 +204,45 @@ fn options(mut args: impl Iterator<Item = String>) -> Result<Options, String> {
             }
         }
     }
+}
+
+/// A number in decimal, `0x` hex or VMS `%X` hex.
+fn number(s: &str) -> Option<u64> {
+    let upper = s.to_ascii_uppercase();
+    match upper
+        .strip_prefix("0X")
+        .or_else(|| upper.strip_prefix("%X"))
+    {
+        Some(hex) => u64::from_str_radix(&hex.replace('_', ""), 16).ok(),
+        None => upper.parse().ok(),
+    }
+}
+
+/// Moves a relocatable image, and the map's symbols in it, so that its
+/// lowest section is at `base`. Returns how far it moved.
+fn relocate(image: &mut Image, symbols: &mut [(u64, String)], base: u64) -> Result<i64, String> {
+    let Some(fixups) = image.fixups.take() else {
+        return Err("NOTRELOC, the image has no fixup section; link it /RELOCATABLE".into());
+    };
+    let bad = |e| format!("BADBASE, the image can't move to {base:016X}: {e}");
+    let linked = image.sections.iter().map(|s| s.vaddr).min().unwrap_or(0);
+    let d = fixups.displacement(linked, base).map_err(bad)?;
+    for (v, _) in symbols.iter_mut() {
+        let inside = |s: &Section| (s.vaddr..=s.vaddr + u64::from(s.size)).contains(v);
+        if image.sections.iter().any(inside) {
+            *v = v.wrapping_add_signed(d);
+        }
+    }
+    for s in &mut image.sections {
+        fixups
+            .apply(d, s.vaddr - linked, &mut s.data)
+            .map_err(bad)?;
+        s.vaddr = s.vaddr.wrapping_add_signed(d);
+    }
+    if image.transfer != 0 {
+        image.transfer = image.transfer.wrapping_add_signed(d);
+    }
+    Ok(d)
 }
 
 /// Copies the guest console to `output` and returns the stub's "!vrun"
@@ -392,6 +444,7 @@ mod tests {
             link_time: 0,
             transfer: 0x10000,
             sections: vec![section(0x10000, 0x20), section(0x20000, 8)],
+            fixups: None,
         }
     }
 

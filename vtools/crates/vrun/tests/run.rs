@@ -3,7 +3,7 @@
 
 use std::process::{Command, Output};
 
-use vms_obj::exe::{Eisd, Image, Section};
+use vms_obj::exe::{Eisd, Fixups, Image, Section};
 
 const BASE: u64 = 0x10000;
 
@@ -15,6 +15,7 @@ fn image(code: &[u32]) -> Image {
         link_time: 0,
         transfer: BASE,
         sections: vec![code_section(code)],
+        fixups: None,
     }
 }
 
@@ -180,6 +181,50 @@ fn unknown_monitor_call() {
     assert_eq!(out.status.code(), Some(0x3c));
     assert!(
         stderr(&out).contains("SVC #9, PC=0000000000010000"),
+        "{}",
+        stderr(&out)
+    );
+}
+
+#[test]
+fn moves_to_another_base() {
+    // ldr x1, [x0, #24] (how far the image moved); svc #3; mov x0, #1; ret
+    let code = [0xf9400c01, 0xd4000061, 0xd2800020, 0xd65f03c0];
+    let mut image = image(&code);
+    let out = vrun_with(&image, &["--base", "0x20000"], &[]);
+    assert!(
+        stderr(&out).contains("%VRUN-F-NOTRELOC"),
+        "{}",
+        stderr(&out)
+    );
+
+    // No addresses to fix, but a fixup section that says so.
+    image.fixups = Some(Fixups::default());
+    let out = vrun_with(&image, &["--base", "0x20000"], &[]);
+    assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
+    let dump = stdout(&out);
+    assert!(dump.contains("x01 0000000000010000"), "{dump}");
+    assert!(dump.ends_with("pc  0000000000020004\n"), "{dump}");
+
+    for (base, why) in [
+        ("0x21000", "not a multiple of 64 KB"),
+        ("0x7ff00000", "overlaps vrun's range"),
+    ] {
+        let out = vrun_with(&image, &["--base", base], &[]);
+        assert!(stderr(&out).contains(why), "{base}: {}", stderr(&out));
+    }
+
+    // A longword address after the code, which must stay below 2 GB.
+    let mut image = with_data(&code, &0x10010u32.to_le_bytes());
+    image.fixups = Some(Fixups {
+        long: vec![16],
+        long_min: 0x10010,
+        long_max: 0x10010,
+        ..Fixups::default()
+    });
+    let out = vrun_with(&image, &["--base", "0x80000000"], &[]);
+    assert!(
+        stderr(&out).contains("too far for the longword"),
         "{}",
         stderr(&out)
     );

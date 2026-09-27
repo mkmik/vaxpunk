@@ -5,16 +5,17 @@
 //! Psects with the same name are merged across modules; CON contributions are
 //! concatenated, OVR ones overlaid. Psects go into image sections by
 //! protection: code, read-only data, writable data, demand-zero. Then each
-//! module's TIR commands run against the final addresses.
+//! module's TIR commands run against the final addresses, keeping track of
+//! which stored values are addresses, so that a loader can move the image.
 
 mod map;
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
-use vms_obj::exe::{Eisd, Image, SECTION_ALIGN, Section};
+use vms_obj::exe::{Eisd, Fixups, Image, SECTION_ALIGN, Section};
 use vms_obj::obj::{self, Gsd, Record, Tir, psc, sym};
 use vms_obj::olb::{self, Library};
-use vms_obj::reloc;
+use vms_obj::reloc::{self, Need, Weight};
 
 pub struct Options {
     /// Address of the first image section.
@@ -25,13 +26,16 @@ pub struct Options {
     pub transfer: Option<String>,
     /// Link time, in VMS format.
     pub link_time: u64,
+    /// Make an image a loader may move: anything that can't move is an
+    /// error, and the image gets a fixup section.
+    pub relocatable: bool,
 }
 
 #[derive(Debug)]
 pub struct Linked {
     pub image: Image,
     pub map: String,
-    /// Warnings, as VMS messages.
+    /// Warnings and information, as VMS messages.
     pub warnings: Vec<String>,
 }
 
@@ -61,7 +65,30 @@ pub fn link(inputs: &[(String, Vec<u8>)], opts: &Options) -> Result<Linked, Vec<
     }
     l.resolve()?;
     l.layout(opts.base)?;
-    let data = l.execute()?;
+    let (data, mut errors) = l.execute();
+    // A fixup in a PIC psect is always worth a warning; a store that can't
+    // move matters only if the image must.
+    for (code, msg) in l.problems() {
+        if opts.relocatable {
+            errors.push(format!("%VLINK-E-{code}, {msg}"));
+        } else if code == "NOTPIC" {
+            l.warnings.push(format!("%VLINK-W-{code}, {msg}"));
+        }
+    }
+    if !errors.is_empty() {
+        return Err(errors);
+    }
+    let fixups = if opts.relocatable {
+        let f = l.fixup_list()?;
+        l.warnings.push(format!(
+            "%VLINK-I-FIXUPS, {} quadword and {} longword fixups",
+            f.quad.len(),
+            f.long.len()
+        ));
+        Some(f)
+    } else {
+        None
+    };
 
     let transfer = match &opts.transfer {
         Some(name) => match l.value(name) {
@@ -107,6 +134,7 @@ pub fn link(inputs: &[(String, Vec<u8>)], opts: &Options) -> Result<Linked, Vec<
                 data,
             })
             .collect(),
+        fixups,
     };
     let map = map::map(&l, &image);
     Ok(Linked {
@@ -189,6 +217,17 @@ struct ImageSection {
     end: u64,
 }
 
+/// What a store left in the image that matters if the image moves: an
+/// address, which the loader fixes up, or something nothing can fix.
+struct Stored {
+    /// Bytes: 8 for a quadword address, 4 for a longword one.
+    size: u64,
+    module: usize,
+    value: u64,
+    /// Why it can't move; None for an address.
+    stuck: Option<String>,
+}
+
 #[derive(Default)]
 struct Linker {
     modules: Vec<Module>,
@@ -200,6 +239,8 @@ struct Linker {
     /// Definitions in the order they appeared: name, module, psect, value, flags.
     raw_defs: Vec<(String, usize, u32, u64, u16)>,
     warnings: Vec<String>,
+    /// What the image holds that matters if it moves, by address.
+    stored: BTreeMap<u64, Stored>,
 }
 
 impl Linker {
@@ -401,7 +442,9 @@ impl Linker {
         for p in &mut self.psects {
             let mut size = 0;
             for part in &mut p.parts {
-                if p.flags & psc::OVR != 0 {
+                // In an absolute psect, as in an overlaid one, every module's
+                // part is at 0: its labels are the constants it assembled.
+                if p.flags & psc::OVR != 0 || p.flags & psc::REL == 0 {
                     size = size.max(part.size);
                 } else {
                     part.offset = size.next_multiple_of(1 << part.align);
@@ -463,29 +506,117 @@ impl Linker {
         }
     }
 
-    /// Psect, offset and module of an address, for messages.
+    /// Where an address is, for messages: the psect and offset in the module
+    /// contribution that holds it, the nearest global label at or before it
+    /// there, and the module.
     fn place(&self, addr: u64) -> String {
-        for p in &self.psects {
+        match self.locate(addr) {
+            Some((m, at)) => {
+                let m = &self.modules[m];
+                format!("{at} in module {} ({})", m.name, m.file)
+            }
+            None => format!("%X{addr:X}"),
+        }
+    }
+
+    /// The module whose contribution holds `addr`, and where in it: psect +
+    /// offset (label+offset).
+    fn locate(&self, addr: u64) -> Option<(usize, String)> {
+        for p in self.psects.iter().filter(|p| p.flags & psc::REL != 0) {
             for part in &p.parts {
                 let start = p.base + part.offset;
-                if (start..start + part.size.max(1)).contains(&addr) {
-                    let m = &self.modules[part.module];
-                    return format!(
-                        "{} + %X{:X} in module {} ({})",
-                        p.name,
-                        addr - start,
-                        m.name,
-                        m.file
-                    );
+                if !(start..start + part.size.max(1)).contains(&addr) {
+                    continue;
                 }
+                let label = self
+                    .defs
+                    .iter()
+                    .filter(|(_, d)| d.module == part.module && d.psect.is_some())
+                    .filter_map(|(name, _)| Some((self.value(name)?, name)))
+                    .filter(|&(v, _)| (start..=addr).contains(&v))
+                    .max();
+                let label = match label {
+                    Some((v, name)) if v == addr => format!(" ({name})"),
+                    Some((v, name)) => format!(" ({name}+%X{:X})", addr - v),
+                    None => String::new(),
+                };
+                return Some((
+                    part.module,
+                    format!("{} + %X{:X}{label}", p.name, addr - start),
+                ));
             }
         }
-        format!("%X{addr:X}")
+        None
+    }
+
+    /// The relocatable psect holding `addr`.
+    fn psect_at(&self, addr: u64) -> Option<&Psect> {
+        self.psects
+            .iter()
+            .find(|p| p.flags & psc::REL != 0 && (p.base..p.base + p.size).contains(&addr))
+    }
+
+    /// The addresses the image holds, which the loader fixes up.
+    fn fixups(&self) -> impl Iterator<Item = (u64, &Stored)> {
+        self.stored
+            .iter()
+            .filter(|(_, s)| s.stuck.is_none())
+            .map(|(&at, s)| (at, s))
+    }
+
+    /// What keeps the image from moving, from what it holds in the end:
+    /// message code (NOTPIC for a fixup in a PIC psect, NORELOC for what
+    /// nothing can fix) and text, each once.
+    fn problems(&self) -> Vec<(&'static str, String)> {
+        let mut out = Vec::new();
+        for (&at, s) in &self.stored {
+            let problem = match &s.stuck {
+                Some(why) => ("NORELOC", why.clone()),
+                None if self.psect_at(at).is_some_and(|p| p.flags & psc::PIC != 0) => (
+                    "NOTPIC",
+                    format!(
+                        "address in a PIC psect needs a fixup, at {}",
+                        self.place(at)
+                    ),
+                ),
+                None => continue,
+            };
+            // The parts of one store on both sides of a later one.
+            if !out.contains(&problem) {
+                out.push(problem);
+            }
+        }
+        out
+    }
+
+    /// The fixups for the image's fixup section.
+    fn fixup_list(&self) -> Result<Fixups, Vec<String>> {
+        let start = self.sections.first().map_or(0, |s| s.start);
+        let mut f = Fixups::default();
+        let mut values = Vec::new();
+        for (at, fix) in self.fixups() {
+            let Ok(off) = u32::try_from(at - start) else {
+                return Err(vec![format!(
+                    "%VLINK-F-TOOBIG, the address at {} is 4 GB or more into the image",
+                    self.place(at)
+                )]);
+            };
+            if fix.size == 8 {
+                f.quad.push(off);
+            } else {
+                f.long.push(off);
+                // Checked when it was stored.
+                values.push(fix.value as i32);
+            }
+        }
+        f.long_min = values.iter().copied().min().unwrap_or(0);
+        f.long_max = values.iter().copied().max().unwrap_or(0);
+        Ok(f)
     }
 
     /// Runs every module's TIR commands; returns each image section's
-    /// contents.
-    fn execute(&mut self) -> Result<Vec<Vec<u8>>, Vec<String>> {
+    /// contents, and the errors.
+    fn execute(&mut self) -> (Vec<Vec<u8>>, Vec<String>) {
         let mut data: Vec<Vec<u8>> = self
             .sections
             .iter()
@@ -497,6 +628,7 @@ impl Linker {
                 }
             })
             .collect();
+        let mut stored = BTreeMap::new();
         let (mut errors, mut warnings) = (Vec::new(), Vec::new());
         for (i, m) in self.modules.iter().enumerate() {
             let mut run = Run {
@@ -505,6 +637,7 @@ impl Linker {
                 stack: Vec::new(),
                 loc: None,
                 data: &mut data,
+                stored: &mut stored,
             };
             let cmds = m.records.iter().filter_map(|r| match r {
                 Record::Tir(c) => Some(c),
@@ -524,11 +657,8 @@ impl Linker {
             }
         }
         self.warnings.extend(warnings);
-        if errors.is_empty() {
-            Ok(data)
-        } else {
-            Err(errors)
-        }
+        self.stored = stored;
+        (data, errors)
     }
 }
 
@@ -536,10 +666,12 @@ impl Linker {
 struct Run<'a> {
     l: &'a Linker,
     module: usize,
-    stack: Vec<u64>,
+    /// Values, each with its weight.
+    stack: Vec<(u64, Weight)>,
     /// The location counter, once set.
     loc: Option<u64>,
     data: &'a mut Vec<Vec<u8>>,
+    stored: &'a mut BTreeMap<u64, Stored>,
 }
 
 impl Run<'_> {
@@ -547,26 +679,62 @@ impl Run<'_> {
         &self.l.modules[self.module].name
     }
 
-    fn pop(&mut self) -> Result<u64, String> {
-        self.stack.pop().ok_or_else(|| {
-            format!(
-                "%VLINK-F-STACK, linker stack underflow in module {}",
-                self.name()
-            )
-        })
+    fn underflow(&self) -> String {
+        format!(
+            "%VLINK-F-STACK, linker stack underflow in module {}",
+            self.name()
+        )
     }
 
-    fn symbol(&self, name: &str) -> Result<u64, String> {
-        match self.l.value(name) {
-            Some(v) => Ok(v),
+    fn pop(&mut self) -> Result<(u64, Weight), String> {
+        self.stack.pop().ok_or_else(|| self.underflow())
+    }
+
+    /// A symbol's value, and its weight: 1 for an address, 0 for a constant.
+    fn symbol(&self, name: &str) -> Result<(u64, Weight), String> {
+        let Some(def) = self.l.defs.get(name) else {
             // A weak reference to a missing symbol is 0; others were reported.
-            None if !self.l.defs.contains_key(name) => Ok(0),
+            return Ok((0, Some(0)));
+        };
+        match self.l.value(name) {
+            Some(v) => Ok((v, Some(def.psect.is_some().into()))),
             None => Err(format!("%VLINK-F-BADOBJ, symbol {name} has a bad psect")),
         }
     }
 
-    /// Stores bytes at the location counter and advances it.
-    fn store(&mut self, bytes: &[u8]) -> Result<(), String> {
+    /// Notes what the `size` bytes that `cmd` stored at `at`, of `v` with
+    /// weight `k`, need for the image to move.
+    fn fix(&mut self, at: u64, size: u64, cmd: &Tir, v: u64, k: Weight) {
+        let stuck = match reloc::need(cmd, k) {
+            Need::Nothing => return,
+            Need::Fixup(_) => None,
+            Need::Impossible => {
+                let what = match k {
+                    // Only a PC-relative field needs an address.
+                    Some(0) => "a fixed address".to_string(),
+                    Some(1) => "an address".into(),
+                    Some(n) => format!("an address times {n}"),
+                    None => "a value computed from an address".into(),
+                };
+                let at = self.l.place(at);
+                Some(format!("{} of {what} can't move, at {at}", cmd.name()))
+            }
+        };
+        let module = self.module;
+        self.stored.insert(
+            at,
+            Stored {
+                size,
+                module,
+                value: v,
+                stuck,
+            },
+        );
+    }
+
+    /// Stores bytes at the location counter and advances it; returns where
+    /// they went.
+    fn store(&mut self, bytes: &[u8]) -> Result<u64, String> {
         let Some(at) = self.loc else {
             return Err(format!(
                 "%VLINK-F-NOLOC, module {} stores data before setting a location",
@@ -597,8 +765,32 @@ impl Run<'_> {
                 ));
             }
         }
+        // The bytes replace what was stored there. What an earlier store
+        // left on either side stays, but part of an address isn't one.
+        let left = (self.stored.range(..at).next_back())
+            .and_then(|(&a, s)| (a + s.size > at).then_some(a));
+        let hit: Vec<u64> = (left.into_iter())
+            .chain(self.stored.range(at..end).map(|(&a, _)| a))
+            .collect();
+        for a in hit {
+            let old = self.stored.remove(&a).unwrap();
+            let stuck = old.stuck.clone().unwrap_or_else(|| {
+                format!("part of an address is overwritten, at {}", self.l.place(a))
+            });
+            for (from, to) in [(a, at), (end, a + old.size)] {
+                if from < to {
+                    let rest = Stored {
+                        size: to - from,
+                        module: old.module,
+                        value: old.value,
+                        stuck: Some(stuck.clone()),
+                    };
+                    self.stored.insert(from, rest);
+                }
+            }
+        }
         self.loc = Some(end);
-        Ok(())
+        Ok(at)
     }
 
     fn step(&mut self, cmd: &Tir) -> Result<(), String> {
@@ -608,11 +800,15 @@ impl Run<'_> {
                 let v = self.symbol(name)?;
                 self.stack.push(v);
             }
-            StaLw { value } => self.stack.push(*value as i32 as u64),
-            StaQw { value } => self.stack.push(*value),
+            StaLw { value } => self.stack.push((*value as i32 as u64, Some(0))),
+            StaQw { value } => self.stack.push((*value, Some(0))),
             StaPq { psect, offset } => {
                 let base = self.l.part_base(self.module, *psect)?;
-                self.stack.push(base.wrapping_add(*offset));
+                // part_base checked the index.
+                let (p, _) = self.l.modules[self.module].psects[*psect as usize];
+                let rel = self.l.psects[p].flags & psc::REL != 0;
+                self.stack
+                    .push((base.wrapping_add(*offset), Some(rel.into())));
             }
             StoB {} | StoW {} | StoLw {} => {
                 let bits = match cmd {
@@ -620,79 +816,54 @@ impl Run<'_> {
                     StoW {} => 16,
                     _ => 32,
                 };
-                let v = self.pop()?;
+                let (v, k) = self.pop()?;
                 let s = v as i64;
-                if s < -(1 << (bits - 1)) || s >= 1 << bits {
+                // An address in a longword is sign-extended when it's loaded,
+                // as on VMS.
+                let address = reloc::need(cmd, k) == Need::Fixup(4);
+                let fits = if address {
+                    i32::try_from(s).is_ok()
+                } else {
+                    s >= -(1 << (bits - 1)) && s < 1 << bits
+                };
+                if !fits {
                     let at = self.loc.map_or(String::new(), |a| self.l.place(a));
+                    let (what, how) = if address {
+                        ("address ", ", signed,")
+                    } else {
+                        ("", "")
+                    };
                     return Err(format!(
-                        "%VLINK-E-TRUNC, %X{v:X} doesn't fit in {} bytes at {at}",
+                        "%VLINK-E-TRUNC, {what}%X{v:X} doesn't fit in {} bytes{how} at {at}",
                         bits / 8
                     ));
                 }
-                self.store(&v.to_le_bytes()[..bits / 8])?;
+                let at = self.store(&v.to_le_bytes()[..bits / 8])?;
+                self.fix(at, bits as u64 / 8, cmd, v, k);
             }
             StoQw {} | StoOff {} => {
-                let v = self.pop()?;
-                self.store(&v.to_le_bytes())?;
+                let (v, k) = self.pop()?;
+                let at = self.store(&v.to_le_bytes())?;
+                self.fix(at, 8, cmd, v, k);
             }
             StoImmr { data } => {
-                let n = self.pop()?;
+                let (n, k) = self.pop()?;
+                let at = self.loc.unwrap_or(0);
                 for _ in 0..n {
                     self.store(data)?;
                 }
+                self.fix(at, n.saturating_mul(data.len() as u64), cmd, n, k);
             }
             StoGbl { name } | StoCa { name } => {
-                let v = self.symbol(name)?;
-                self.store(&v.to_le_bytes())?;
+                let (v, k) = self.symbol(name)?;
+                let at = self.store(&v.to_le_bytes())?;
+                self.fix(at, 8, cmd, v, k);
             }
-            StoImm { data } => self.store(data)?,
+            StoImm { data } => {
+                self.store(data)?;
+            }
             OprNop {} => {}
-            OprNeg {} | OprCom {} => {
-                let v = self.pop()?;
-                self.stack.push(if matches!(cmd, OprNeg {}) {
-                    v.wrapping_neg()
-                } else {
-                    !v
-                });
-            }
-            OprAdd {}
-            | OprSub {}
-            | OprMul {}
-            | OprDiv {}
-            | OprAnd {}
-            | OprIor {}
-            | OprEor {}
-            | OprAsh {}
-            | OprRot {} => {
-                let b = self.pop()?;
-                let a = self.pop()?;
-                self.stack.push(match cmd {
-                    OprAdd {} => a.wrapping_add(b),
-                    OprSub {} => a.wrapping_sub(b),
-                    OprMul {} => a.wrapping_mul(b),
-                    OprDiv {} if b == 0 => 0,
-                    OprDiv {} => (a as i64).wrapping_div(b as i64) as u64,
-                    OprAnd {} => a & b,
-                    OprIor {} => a | b,
-                    OprEor {} => a ^ b,
-                    // The second value popped is the count: positive left.
-                    OprAsh {} => match a as i64 {
-                        n if n >= 0 => b.wrapping_shl(n as u32),
-                        n => ((b as i64).wrapping_shr(n.unsigned_abs() as u32)) as u64,
-                    },
-                    _ => match a as i64 {
-                        n if n >= 0 => b.rotate_left(n as u32),
-                        n => b.rotate_right(n.unsigned_abs() as u32),
-                    },
-                });
-            }
-            OprSel {} => {
-                let cond = self.pop()?;
-                let second = self.pop()?;
-                let third = self.pop()?;
-                self.stack.push(if cond & 1 != 0 { second } else { third });
-            }
-            CtlSetrb {} => self.loc = Some(self.pop()?),
+            CtlSetrb {} => self.loc = Some(self.pop()?.0),
             CtlAugrb { offset } => {
                 let Some(at) = self.loc else {
                     return Err(format!(
@@ -702,28 +873,99 @@ impl Run<'_> {
                 };
                 self.loc = Some(at.wrapping_add(*offset as i32 as u64));
             }
-            _ => match reloc::Kind::of(cmd) {
-                Some((kind, insn)) => {
-                    let s = self.pop()?;
-                    let p = self.loc.unwrap_or(0);
-                    let word = reloc::apply(kind, insn, s, p).map_err(|e| {
-                        format!(
-                            "%VLINK-E-RELOC, {e}: target %X{s:X}, instruction at {}",
-                            self.l.place(p)
-                        )
-                    })?;
-                    self.store(&word.to_le_bytes())?;
+            _ => {
+                if let Some(n) = reloc::operands(cmd) {
+                    let Some(first) = self.stack.len().checked_sub(n) else {
+                        return Err(self.underflow());
+                    };
+                    let args = self.stack.split_off(first);
+                    self.stack.push(reloc::operate(cmd, &args));
+                    return Ok(());
                 }
-                None => {
+                let Some((kind, insn)) = reloc::Kind::of(cmd) else {
                     return Err(format!(
                         "%VLINK-F-UNSUPPORTED, TIR command {} ({}) in module {}",
                         cmd.name(),
                         cmd.code(),
                         self.name()
                     ));
-                }
-            },
+                };
+                let (s, k) = self.pop()?;
+                let p = self.loc.unwrap_or(0);
+                let word = reloc::apply(kind, insn, s, p).map_err(|e| {
+                    format!(
+                        "%VLINK-E-RELOC, {e}: target %X{s:X}, instruction at {}",
+                        self.l.place(p)
+                    )
+                })?;
+                let at = self.store(&word.to_le_bytes())?;
+                self.fix(at, 4, cmd, s, k);
+            }
         }
         Ok(())
+    }
+}
+
+/// Checks that `moved` is `image` linked again at another base, a test of
+/// the fixup list: the two differ exactly where `image`'s fixups are, each
+/// by the distance between the bases.
+pub fn check_fixups(image: &Image, moved: &Image) -> Result<(), String> {
+    let fixups = image.fixups.as_ref().ok_or("the image has no fixups")?;
+    let start = |i: &Image| i.sections.first().map_or(0, |s| s.vaddr);
+    let d = start(moved).wrapping_sub(start(image));
+    // A transfer address of 0 means none.
+    let transfer = match image.transfer {
+        0 => 0,
+        t => t.wrapping_add(d),
+    };
+    let same =
+        image.sections.len() == moved.sections.len()
+            && transfer == moved.transfer
+            && image.sections.iter().zip(&moved.sections).all(|(a, b)| {
+                (a.vaddr.wrapping_add(d), a.size, a.flags) == (b.vaddr, b.size, b.flags)
+            });
+    if !same {
+        return Err("the images have different layouts".into());
+    }
+    let mut want: BTreeMap<u64, usize> = (fixups.quad.iter().map(|&o| (o, 8)))
+        .chain(fixups.long.iter().map(|&o| (o, 4)))
+        .map(|(o, size)| (u64::from(o), size))
+        .collect();
+    for (a, b) in image.sections.iter().zip(&moved.sections) {
+        let off = a.vaddr - start(image);
+        let mut i = 0;
+        while i < a.data.len() {
+            let at = off + i as u64;
+            let Some(n) = want.remove(&at) else {
+                if a.data[i] != b.data[i] {
+                    return Err(format!(
+                        "the byte at %X{at:X} changed, but no fixup covers it"
+                    ));
+                }
+                i += 1;
+                continue;
+            };
+            let get = |data: &[u8]| {
+                let mut v = [0; 8];
+                v[..n].copy_from_slice(&data[i..i + n]);
+                u64::from_le_bytes(v)
+            };
+            let (x, y) = (get(&a.data), get(&b.data));
+            let by = if n == 8 {
+                y.wrapping_sub(x)
+            } else {
+                (i64::from(y as u32 as i32) - i64::from(x as u32 as i32)) as u64
+            };
+            if by != d {
+                return Err(format!(
+                    "the address at %X{at:X} moved by %X{by:X}, not %X{d:X}"
+                ));
+            }
+            i += n;
+        }
+    }
+    match want.first_key_value() {
+        Some((at, _)) => Err(format!("the fixup at %X{at:X} is outside the contents")),
+        None => Ok(()),
     }
 }

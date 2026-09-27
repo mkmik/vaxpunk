@@ -8,7 +8,7 @@ fn object(name: &str, source: &str) -> Vec<u8> {
         date: *b"25-SEP-2026 00:00",
         ..Default::default()
     };
-    vms_obj::obj::write(&vasm::assemble(source, &opts).unwrap())
+    vms_obj::obj::write(&vasm::assemble(source, &opts).unwrap().records)
 }
 
 #[test]

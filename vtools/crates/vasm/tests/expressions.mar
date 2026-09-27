@@ -1,0 +1,45 @@
+        .TITLE  EXPRESSIONS Every form an address takes, and the TIR it becomes
+        .EXTERNAL EXT
+
+; An address must reach the object as STA_PQ or STA_GBL, never as a number.
+; Only what is truly constant folds: labels in the same psect subtracted,
+; constants, labels in absolute psects, and branches in the same psect.
+
+CONST == 5                              ; a constant: no REL flag
+        .PSECT  OFFSETS, ABS            ; labels here are constants too
+FIELD_A:: .BLKQ 1
+FIELD_B:: .BLKQ 1
+
+        .PSECT  $DATA$
+HERE::  .ADDRESS HERE                   ; an address
+        .ADDRESS HERE + 8               ; plus a constant
+        .ADDRESS 8 + HERE
+        .ADDRESS HERE - 8
+        .ADDRESS FAR                    ; in another psect
+        .ADDRESS EXT                    ; external: maybe a constant
+        .ADDRESS EXT + 8
+        .ADDRESS EXT - 8
+        .LONG   HERE                    ; a longword address
+        .LONG   EXT
+        .QUAD   . - HERE                ; the same psect: a constant
+        .ADDRESS FIELD_B                ; an absolute psect: a constant
+        .ADDRESS CONST * 2 + FIELD_B - FIELD_A
+        .WORD   HERE - .
+        .ASCID  "text"                  ; a pointer to its text
+        .ASCID64 "text"                 ; the same, 64 bits
+
+        .PSECT  $CODE$
+FAR::   adrp    x0, HERE                ; ADRP: always a relocation
+        add     x0, x0, #:lo12:HERE
+        ldr     x1, [x0, #:lo12:HERE]
+        adr     x2, HERE                ; another psect
+        adr     x3, FAR                 ; this psect: encoded directly
+        bl      FAR
+        b       EXT
+        ldr     x4, EXT                 ; a literal load
+        movz    x5, #:abs_g1:HERE       ; bits 16-31 can't move
+        movk    x5, #:abs_g0_nc:HERE    ; bits 0-15 can
+        movz    x6, #:abs_g1:CONST      ; a constant: encoded directly
+        movz    x7, #:abs_g1:EXT
+        ret
+        .END

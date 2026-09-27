@@ -6,6 +6,10 @@
 //! modules in NAME/lib/, if there is one. VRUN_FLAGS adds vrun options.
 //! Every object, library and image made on the way must parse and write back
 //! to the same bytes.
+//!
+//! Each program links /RELOCATABLE, and runs the same at its link base and
+//! moved far away. Linked again at that base, it must differ exactly where
+//! its fixups say. Without /RELOCATABLE, it is the same image minus them.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -43,13 +47,16 @@ fn programs() {
 fn high_base() {
     let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/run");
     let text = fs::read_to_string(dir.join("hello.mar")).unwrap();
-    let records = vasm::assemble(&text, &options("HELLO", &dir.join("hello.mar"))).unwrap();
+    let records = vasm::assemble(&text, &options("HELLO", &dir.join("hello.mar")))
+        .unwrap()
+        .records;
     let objects = [("hello.mar".to_string(), vms_obj::obj::write(&records))];
     let opts = vlink::Options {
         base: 0x4000_0000_0000,
         name: "HELLO".into(),
         transfer: None,
         link_time: 0,
+        relocatable: false,
     };
     let exe = Path::new(env!("CARGO_TARGET_TMPDIR")).join("hello-high.exe");
     fs::write(&exe, vlink::link(&objects, &opts).unwrap().image.write()).unwrap();
@@ -96,55 +103,92 @@ fn run(dir: &Path, name: &str) -> Result<(), String> {
     } else {
         objects.push(assemble(&dir.join(format!("{name}.mar")))?);
     }
-    let opts = vlink::Options {
-        base: vlink::DEFAULT_BASE,
-        name: name.to_uppercase(),
-        transfer: None,
-        link_time: 0,
+    let link = |base, relocatable| {
+        let opts = vlink::Options {
+            base,
+            name: name.to_uppercase(),
+            transfer: None,
+            link_time: 0,
+            relocatable,
+        };
+        vlink::link(&objects, &opts).map_err(|e| e.join("\n"))
     };
-    let linked = vlink::link(&objects, &opts).map_err(|e| e.join("\n"))?;
+    let linked = link(vlink::DEFAULT_BASE, true)?;
+    let image = &linked.image;
+    let plain = Image {
+        fixups: None,
+        ..image.clone()
+    };
+    if plain != link(vlink::DEFAULT_BASE, false)?.image {
+        return Err("/RELOCATABLE changed more than the fixup section".into());
+    }
+    let far = far_base(image);
+    vlink::check_fixups(image, &link(far, true)?.image)
+        .map_err(|e| format!("linked at {far:#x}: {e}"))?;
+
     let exe = Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("{name}.exe"));
-    let bytes = linked.image.write();
+    let bytes = image.write();
     assert_eq!(Image::parse(&bytes).unwrap().write(), bytes, "round trip");
     fs::write(&exe, bytes).unwrap();
     let map = exe.with_extension("map");
     fs::write(&map, &linked.map).unwrap();
 
-    let flags = std::env::var("VRUN_FLAGS").unwrap_or_default();
-    let out = Command::new(env!("CARGO_BIN_EXE_vrun"))
-        .args(["--timeout", "20", "--map"])
-        .arg(&map)
-        .args(flags.split_whitespace())
-        .arg(&exe)
-        .output()
-        .unwrap();
-    let (stdout, stderr) = (
-        String::from_utf8_lossy(&out.stdout),
-        String::from_utf8_lossy(&out.stderr),
-    );
     let expect = |ext: &str| fs::read_to_string(dir.join(format!("{name}.{ext}"))).ok();
     let status: i32 = expect("status").map_or(0, |s| s.trim().parse().unwrap());
-    if out.status.code() != Some(status) {
-        return Err(format!(
-            "exit {:?}, expected {status}\nstdout: {stdout}\nstderr: {stderr}",
-            out.status.code()
-        ));
-    }
     let want = expect("stdout").unwrap_or_default();
-    if stdout != want {
-        return Err(format!(
-            "stdout {stdout:?}, expected {want:?}\nstderr: {stderr}"
-        ));
-    }
-    if let Some(line) = expect("stderr")
-        && !stderr.contains(line.trim())
-    {
-        return Err(format!(
-            "stderr doesn't contain {:?}:\n{stderr}",
-            line.trim()
-        ));
+    let fault = expect("stderr").unwrap_or_default();
+    for base in [None, Some(far)] {
+        let flags = std::env::var("VRUN_FLAGS").unwrap_or_default();
+        let base_flags = base.map(|b| ["--base".to_string(), format!("{b:#x}")]);
+        let out = Command::new(env!("CARGO_BIN_EXE_vrun"))
+            .args(["--timeout", "20", "--map"])
+            .arg(&map)
+            .args(flags.split_whitespace())
+            .args(base_flags.iter().flatten())
+            .arg(&exe)
+            .output()
+            .unwrap();
+        let (stdout, stderr) = (
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr),
+        );
+        let at = base.map_or(String::new(), |b| format!(" at {b:#x}"));
+        if out.status.code() != Some(status) {
+            return Err(format!(
+                "exit {:?}{at}, expected {status}\nstdout: {stdout}\nstderr: {stderr}",
+                out.status.code()
+            ));
+        }
+        if stdout != want {
+            return Err(format!(
+                "stdout{at} {stdout:?}, expected {want:?}\nstderr: {stderr}"
+            ));
+        }
+        // Addresses change when the image moves; where they are in it doesn't.
+        let lines: Vec<&str> = match base {
+            None => vec![fault.trim()],
+            Some(_) => fault.lines().filter(|l| l.starts_with('-')).collect(),
+        };
+        if let Some(line) = lines.iter().find(|l| !stderr.contains(*l)) {
+            return Err(format!("stderr{at} doesn't contain {line:?}:\n{stderr}"));
+        }
     }
     Ok(())
+}
+
+/// Where else to run an image: far above 4 GB, unless it has longword
+/// addresses, which must stay below 2 GB. Then as high as vrun's own range,
+/// from 7FF00000, lets it go.
+fn far_base(image: &Image) -> u64 {
+    let f = image.fixups.as_ref().unwrap();
+    if f.long.is_empty() {
+        return 0x1234_5678_0000;
+    }
+    let start = image.sections[0].vaddr;
+    let end = image.sections.iter().map(|s| s.vaddr + u64::from(s.size));
+    let span = end.max().unwrap().next_multiple_of(0x1000) - start;
+    let limit = start + (i32::MAX - f.long_max) as u64;
+    (0x7ff0_0000 - span).min(limit) & !0xffff
 }
 
 /// The .mar files in `dir`, in name order.
@@ -162,13 +206,15 @@ fn sources(dir: &Path) -> Vec<PathBuf> {
 fn assemble(source: &Path) -> Result<(String, Vec<u8>), String> {
     let text = fs::read_to_string(source).unwrap();
     let module = source.file_stem().unwrap().to_string_lossy().to_uppercase();
-    let records = vasm::assemble(&text, &options(&module, source)).map_err(|d| {
-        let msgs: Vec<String> = d
-            .iter()
-            .map(|d| format!("{}:{}:{}: {}", d.file, d.line, d.col, d.msg))
-            .collect();
-        msgs.join("\n")
-    })?;
+    let records = vasm::assemble(&text, &options(&module, source))
+        .map_err(|d| {
+            let msgs: Vec<String> = d
+                .iter()
+                .map(|d| format!("{}:{}:{}: {}", d.file, d.line, d.col, d.msg))
+                .collect();
+            msgs.join("\n")
+        })?
+        .records;
     let bytes = obj::write(&records);
     assert_eq!(
         obj::write(&obj::parse(&bytes).unwrap()),

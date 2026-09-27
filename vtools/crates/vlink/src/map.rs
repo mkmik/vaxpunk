@@ -73,6 +73,23 @@ pub(crate) fn map(l: &Linker, image: &Image) -> String {
         }
     }
 
+    // Addresses stored in the image. Offsets are in the contribution of the
+    // module that holds them.
+    if l.fixups().next().is_some() {
+        let _ = writeln!(w, "\nFixups\n");
+        let _ = writeln!(
+            w,
+            "  {:<16}  Size      {:<31}  Psect + offset",
+            "Address", "Module"
+        );
+        for (at, f) in l.fixups() {
+            let size = if f.size == 8 { "quadword" } else { "longword" };
+            let place = l.locate(at).map_or(String::new(), |(_, place)| place);
+            let module = &l.modules[f.module].name;
+            let _ = writeln!(w, "  {at:016X}  {size}  {module:<31}  {place}");
+        }
+    }
+
     let mut symbols: Vec<(&str, u64, &str)> = l
         .defs
         .iter()

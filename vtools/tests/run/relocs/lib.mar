@@ -19,4 +19,6 @@ LIB_MSG::
         .ASCII  "relocs ok"<10>
 LIB_MSG_END::
 
+LIB_CONST == ^X1122334455667788         ; the value at LIB_DATA
+
         .END

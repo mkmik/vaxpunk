@@ -1,0 +1,22 @@
+        .TITLE  SAY     Routines CALLPTR calls through their procedure descriptors
+        .LIBRARY "vrun.mlb"
+
+; A routine's global symbol is its procedure descriptor, as on Alpha. Here
+; it holds only flags and the entry address, at offset 8 as on Alpha; the
+; calling standard will say what else. Addresses in a descriptor are fixups,
+; so descriptors go in $LINK$.
+
+        .PSECT  $LINK$
+SAY_HELLO::
+        .QUAD   0                       ; flags
+        .ADDRESS hello                  ; entry address
+SAY_BYE::
+        .QUAD   0
+        .ADDRESS bye
+
+        .PSECT  $CODE$
+hello:  $PUT    "called through a descriptor"<10>
+        ret
+bye:    $PUT    "calls ok"<10>
+        ret
+        .END

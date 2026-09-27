@@ -1,0 +1,26 @@
+        .TITLE  ASCID   Descriptors in $DATA$: their pointers are longword fixups
+
+        .PSECT  $DATA$
+first:  .ASCID  "descriptors"
+        .ALIGN  LONG
+second: .ASCID  " ok"<10>
+
+        .PSECT  $CODE$
+START::
+        stp     x29, x30, [sp, #-16]!
+        adr     x0, first
+        bl      put_dsc
+        adr     x0, second
+        bl      put_dsc
+        ldp     x29, x30, [sp], #16
+        mov     x0, #1                  ; SS$_NORMAL
+        ret
+
+; put_dsc: writes the text that the descriptor at x0 describes.
+put_dsc:
+        ldrh    w1, [x0]                ; DSC$W_LENGTH
+        ldr     w0, [x0, #4]            ; DSC$A_POINTER, 32 bits
+        svc     #2                      ; put
+        ret
+
+        .END    START

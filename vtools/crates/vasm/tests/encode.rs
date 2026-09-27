@@ -298,13 +298,15 @@ fn vasm(source: &str) -> Vec<u8> {
         date: *b"25-SEP-2026 00:00",
         ..Default::default()
     };
-    let records = vasm::assemble(source, &opts).unwrap_or_else(|diags| {
-        let msgs: Vec<String> = diags
-            .iter()
-            .map(|d| format!("line {}: {}: {}", d.line, d.text.trim(), d.msg))
-            .collect();
-        panic!("vasm errors:\n{}", msgs.join("\n"))
-    });
+    let records = vasm::assemble(source, &opts)
+        .unwrap_or_else(|diags| {
+            let msgs: Vec<String> = diags
+                .iter()
+                .map(|d| format!("line {}: {}: {}", d.line, d.text.trim(), d.msg))
+                .collect();
+            panic!("vasm errors:\n{}", msgs.join("\n"))
+        })
+        .records;
     let bytes = obj::write(&records);
     let mut code = Vec::new();
     for record in obj::parse(&bytes).unwrap() {

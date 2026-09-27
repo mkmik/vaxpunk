@@ -7,7 +7,8 @@ use std::{env, fs};
 
 use vms_obj::obj;
 
-const USAGE: &str = "usage: vasm [/OBJECT=file | -o file] [/INCLUDE=dir | -I dir]... SOURCE";
+const USAGE: &str = "usage: vasm [/OBJECT=file | -o file] [/INCLUDE=dir | -I dir]... \
+                     [/NOWARNINGS=NOTPIC | --nowarnings NOTPIC] SOURCE";
 
 fn main() -> ExitCode {
     match run() {
@@ -23,6 +24,8 @@ fn main() -> ExitCode {
 fn run() -> Result<bool, String> {
     let usage = || format!("USAGE, {USAGE}");
     let (mut source, mut output, mut include) = (None, None, Vec::new());
+    // The only warning so far is NOTPIC.
+    let mut warnings = true;
     let mut args = env::args().skip(1);
     while let Some(arg) = args.next() {
         let qualifier = |name: &str| {
@@ -34,10 +37,23 @@ fn run() -> Result<bool, String> {
             output = Some(path);
         } else if let Some(dir) = qualifier("/INCLUDE=") {
             include.push(dir);
+        } else if let Some(name) = qualifier("/NOWARNINGS=") {
+            if !name.as_os_str().eq_ignore_ascii_case("NOTPIC") {
+                return Err(usage());
+            }
+            warnings = false;
         } else if arg == "-o" {
             output = Some(args.next().ok_or_else(usage)?.into());
         } else if arg == "-I" {
             include.push(args.next().ok_or_else(usage)?.into());
+        } else if arg == "--nowarnings" {
+            if !args
+                .next()
+                .is_some_and(|n| n.eq_ignore_ascii_case("NOTPIC"))
+            {
+                return Err(usage());
+            }
+            warnings = false;
         } else if source.is_none() && !arg.starts_with('-') {
             source = Some(PathBuf::from(arg));
         } else {
@@ -59,29 +75,30 @@ fn run() -> Result<bool, String> {
         include,
     };
 
-    match vasm::assemble(&text, &opts) {
-        Ok(records) => {
-            fs::write(&output, obj::write(&records))
-                .map_err(|e| format!("WRITEERR, {}: {e}", output.display()))?;
-            Ok(true)
-        }
-        Err(diags) => {
-            for d in diags {
-                eprintln!("{}:{}:{}: error: {}", d.file, d.line, d.col, d.msg);
-                let pad: String = d
-                    .text
-                    .chars()
-                    .take(d.col.saturating_sub(1))
-                    .map(|c| if c == '\t' { '\t' } else { ' ' })
-                    .collect();
-                eprintln!("    {}\n    {pad}^", d.text);
-                for context in d.context {
-                    eprintln!("  {context}");
-                }
-            }
-            Ok(false)
+    let (records, diags) = match vasm::assemble(&text, &opts) {
+        Ok(object) => (Some(object.records), object.warnings),
+        Err(diags) => (None, diags),
+    };
+    for d in diags.iter().filter(|d| warnings || !d.warning) {
+        let level = if d.warning { "warning" } else { "error" };
+        eprintln!("{}:{}:{}: {level}: {}", d.file, d.line, d.col, d.msg);
+        let pad: String = d
+            .text
+            .chars()
+            .take(d.col.saturating_sub(1))
+            .map(|c| if c == '\t' { '\t' } else { ' ' })
+            .collect();
+        eprintln!("    {}\n    {pad}^", d.text);
+        for context in &d.context {
+            eprintln!("  {context}");
         }
     }
+    let Some(records) = records else {
+        return Ok(false);
+    };
+    fs::write(&output, obj::write(&records))
+        .map_err(|e| format!("WRITEERR, {}: {e}", output.display()))?;
+    Ok(true)
 }
 
 /// Now, or `SOURCE_DATE_EPOCH` for reproducible output, as `dd-mmm-yyyy hh:mm`

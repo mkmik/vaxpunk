@@ -1,0 +1,13 @@
+        .TITLE  LDADR   Reaches data in another module through linkage slots
+        .LIBRARY "vrun.mlb"
+        .LIBRARY "pic.mlb"
+        .EXTERNAL GREETING, GREETING_LENGTH
+
+        .PSECT  $CODE$
+START::
+        $LDADR  x0, GREETING            ; each from its own slot in $LINK$
+        $LDADR  x1, GREETING_LENGTH
+        ldr     x1, [x1]
+        svc     #2                      ; put
+        $EXIT
+        .END    START

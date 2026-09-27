@@ -1,5 +1,6 @@
         .TITLE  RELOCS  Every ARM64 relocation, each reaching into another module
         .EXTERNAL LIB_ADD, LIB_ONE, LIB_DATA, LIB_WORD, LIB_MSG, LIB_MSG_END
+        .EXTERNAL LIB_CONST
 
 ; Each check leaves its number in x9; a failed check exits with it.
 
@@ -71,13 +72,13 @@ START::
         cmp     x2, x3
         b.ne    fail
 
+; Of a constant: bits 16 and up of an address change when the image moves.
         mov     x9, #^X20               ; MOVZ/MOVK: MOVW_G3 to G0
-        movz    x5, #:abs_g3:LIB_DATA
-        movk    x5, #:abs_g2_nc:LIB_DATA
-        movk    x5, #:abs_g1_nc:LIB_DATA
-        movk    x5, #:abs_g0_nc:LIB_DATA
-        ldr     x2, [x5]
-        cmp     x2, x3
+        movz    x5, #:abs_g3:LIB_CONST
+        movk    x5, #:abs_g2_nc:LIB_CONST
+        movk    x5, #:abs_g1_nc:LIB_CONST
+        movk    x5, #:abs_g0_nc:LIB_CONST
+        cmp     x5, x3
         b.ne    fail
 
         mov     x9, #^X22               ; LDR (literal): BRANCH19
@@ -119,9 +120,7 @@ done:   ldp     x29, x30, [sp], #16
 pointers:
         .ADDRESS LIB_DATA
         .LONG   LIB_WORD
-
-        .PSECT  $LITERAL$
-greeting:
-        .ASCID  "descriptor ok"<10>
+greeting:                               ; it holds an address, so not in a
+        .ASCID  "descriptor ok"<10>     ; PIC psect such as $LITERAL$
 
         .END    START

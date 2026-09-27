@@ -1,0 +1,84 @@
+Weights take external symbols to be addresses.
+EMH MHD  module EXPRESSIONS "", created 25-SEP-2026 00:00, structure level 2, architecture 183, longest record 8192
+EMH LNM  "vasm 0.1.0"
+EGSD
+  PSC  0 OFFSETS: 16 bytes, align 2**3, RD WRT
+  PSC  1 $DATA$: 138 bytes, align 2**3, REL RD WRT
+  PSC  2 $CODE$: 52 bytes, align 2**3, PIC REL SHR EXE
+  SYM  reference EXT, none
+  PSC  3 $ABS$: 0 bytes, align 2**0, SHR
+  SYM  definition CONST: psect 3 value 0000000000000005, DEF
+  SYM  definition FIELD_A: psect 0 value 0000000000000000, DEF
+  SYM  definition FIELD_B: psect 0 value 0000000000000008, DEF
+  SYM  definition HERE: psect 1 value 0000000000000000, DEF REL
+  SYM  definition FAR: psect 2 value 0000000000000000, DEF REL
+ETIR
+  STA_PQ              psect 1 ($DATA$) offset 0000000000000000
+  CTL_SETRB
+  STA_PQ              psect 1 ($DATA$) offset 0000000000000000
+  STO_OFF               [weight 1: quadword fixup]
+  STA_PQ              psect 1 ($DATA$) offset 0000000000000008
+  STO_OFF               [weight 1: quadword fixup]
+  STA_PQ              psect 1 ($DATA$) offset 0000000000000008
+  STO_OFF               [weight 1: quadword fixup]
+  STA_PQ              psect 1 ($DATA$) offset FFFFFFFFFFFFFFF8
+  STO_OFF               [weight 1: quadword fixup]
+  STA_PQ              psect 2 ($CODE$) offset 0000000000000000
+  STO_OFF               [weight 1: quadword fixup]
+  STA_GBL             EXT
+  STO_QW                [weight 1: quadword fixup]
+  STA_GBL             EXT
+  STA_QW              0000000000000008
+  OPR_ADD
+  STO_QW                [weight 1: quadword fixup]
+  STA_GBL             EXT
+  STA_QW              FFFFFFFFFFFFFFF8
+  OPR_ADD
+  STO_QW                [weight 1: quadword fixup]
+  STA_PQ              psect 1 ($DATA$) offset 0000000000000000
+  STO_LW                [weight 1: longword fixup]
+  STA_GBL             EXT
+  STO_LW                [weight 1: longword fixup]
+  STO_IMM             8 bytes
+                        0000000000000048  48 00 00 00 00 00 00 00                          H.......
+  STA_PQ              psect 0 (OFFSETS) offset 0000000000000008
+  STO_OFF               [weight 0: no fixup]
+  STO_IMM             14 bytes
+                        0000000000000058  12 00 00 00 00 00 00 00 a0 ff 04 00 0e 01        ..............
+  STA_PQ              psect 1 ($DATA$) offset 000000000000006A
+  STO_LW                [weight 1: longword fixup]
+  STO_IMM             20 bytes
+                        000000000000006A  74 65 78 74 01 00 0e 01 ff ff ff ff 04 00 00 00  text............
+                        000000000000007A  00 00 00 00                                      ....
+  STA_PQ              psect 1 ($DATA$) offset 0000000000000086
+  STO_OFF               [weight 1: quadword fixup]
+  STO_IMM             4 bytes
+                        0000000000000086  74 65 78 74                                      text
+  STA_PQ              psect 2 ($CODE$) offset 0000000000000000
+  CTL_SETRB
+  STA_PQ              psect 1 ($DATA$) offset 0000000000000000
+  STO_A64_ADRP        90000000  adrp x0, $+0x0  [weight 1: no fixup]
+  STA_PQ              psect 1 ($DATA$) offset 0000000000000000
+  STO_A64_ADD_LO12    91000000  add x0, x0, #0x0  [weight 1: no fixup]
+  STA_PQ              psect 1 ($DATA$) offset 0000000000000000
+  STO_A64_LDST64_LO12 f9400001  ldr x1, [x0]  [weight 1: no fixup]
+  STA_PQ              psect 1 ($DATA$) offset 0000000000000000
+  STO_A64_ADR         10000002  adr x2, $+0x0  [weight 1: no fixup]
+  STO_IMM             8 bytes
+                        0000000000000010  10ffff83  adr x3, $-0x10
+                        0000000000000014  97fffffb  bl $-0x14
+  STA_GBL             EXT
+  STO_A64_JUMP26      14000000  b $+0x0  [weight 1: no fixup]
+  STA_GBL             EXT
+  STO_A64_BRANCH19    58000004  ldr x4, $+0x0  [weight 1: no fixup]
+  STA_PQ              psect 1 ($DATA$) offset 0000000000000000
+  STO_A64_MOVW_G1     d2a00005  mov x5, #0x0  [weight 1: can't move: NORELOC]
+  STA_PQ              psect 1 ($DATA$) offset 0000000000000000
+  STO_A64_MOVW_G0_NC  f2800005  movk x5, #0x0  [weight 1: no fixup]
+  STO_IMM             4 bytes
+                        0000000000000028  d2a00006  mov x6, #0x0
+  STA_GBL             EXT
+  STO_A64_MOVW_G1     d2a00007  mov x7, #0x0  [weight 1: can't move: NORELOC]
+  STO_IMM             4 bytes
+                        0000000000000030  d65f03c0  ret
+EEOM success

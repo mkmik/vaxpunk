@@ -17,8 +17,9 @@ privileged instruction.
 
 ## Address space
 
-The image's sections are at their link addresses, with the protection their
-section flags give. Nothing else in the lower half is mapped except:
+The image's sections are at their link addresses, or moved (see *Moving the
+image*), with the protection their section flags give. Nothing else in the
+lower half is mapped except:
 
 | Virtual address | What | Access |
 | --- | --- | --- |
@@ -48,14 +49,27 @@ fails to load. Page 0 is unmapped, and so is everything below the stack down to
 
 | Offset | Size | Field |
 | --- | --- | --- |
-| 0 | 8 | size of the block, 24 |
+| 0 | 8 | size of the block, 32 |
 | 8 | 4 | runner version, 1 |
 | 12 | 4 | flags, 0 |
 | 16 | 8 | argument string: a VMS static text descriptor (`DSC$W_LENGTH`, `DSC$B_DTYPE` = 14, `DSC$B_CLASS` = 1, 32-bit `DSC$A_POINTER`) |
+| 24 | 8 | how far vrun moved the image from its link address, signed; 0 if it didn't |
 
 The argument string is the rest of vrun's command line after the image name,
-joined with single spaces. It follows the block, in the same page, at most 4072
+joined with single spaces. It follows the block, in the same page, at most 4064
 bytes.
+
+## Moving the image
+
+`vrun --base ADDRESS` loads the image with its lowest section at `ADDRESS`
+instead, a multiple of 64 KB, moving every section by the same amount. Only an
+image with a fixup section can move (`vlink /RELOCATABLE`, see
+`docs/image-format.md`); vrun applies the fixups before it builds the page
+tables. It refuses a base that would put a section on the ranges above, or a
+longword address beyond 2 GB.
+
+Fault messages show the moved addresses. The map's symbols move with the
+image, so the places they name are the same as without `--base`.
 
 ## Monitor calls
 

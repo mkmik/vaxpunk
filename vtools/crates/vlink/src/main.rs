@@ -5,9 +5,9 @@ use std::process::ExitCode;
 use std::time::{SystemTime, UNIX_EPOCH};
 use std::{env, fs};
 
-const USAGE: &str =
-    "usage: vlink [/EXE=file] [/MAP[=file]] [/BASE=address] [/TRANSFER=symbol] FILE...
-       vlink [-o file] [-m file] [--base address] [--transfer symbol] FILE...
+const USAGE: &str = "usage: vlink [/EXE=file] [/MAP[=file]] [/BASE=address] [/TRANSFER=symbol] \
+                     [/RELOCATABLE] FILE...
+       vlink [-o file] [-m file] [--base address] [--transfer symbol] [--relocatable] FILE...
 A FILE is an object module, or an object library: LIB.OLB/LIBRARY or LIB.OLB.";
 
 fn main() -> ExitCode {
@@ -26,7 +26,7 @@ fn run() -> Result<(), Vec<String>> {
     let usage = || vec![format!("%VLINK-F-USAGE, {USAGE}")];
     let (mut inputs, mut exe, mut map, mut base, mut transfer) =
         (Vec::new(), None, None, None, None);
-    let mut want_map = false;
+    let (mut want_map, mut relocatable) = (false, false);
     let mut args = env::args().skip(1);
     while let Some(arg) = args.next() {
         // DCL qualifiers, /NAME or /NAME=value, then Unix options.
@@ -42,6 +42,7 @@ fn run() -> Result<(), Vec<String>> {
             }
             ("/BASE", Some(v)) => base = Some(v),
             ("/TRANSFER", Some(v)) => transfer = Some(v),
+            ("/RELOCATABLE" | "--RELOCATABLE", None) => relocatable = true,
             ("-O", None) => exe = Some(args.next().ok_or_else(usage)?.into()),
             ("-M", None) => {
                 want_map = true;
@@ -89,6 +90,7 @@ fn run() -> Result<(), Vec<String>> {
         name,
         transfer: transfer.map(|t| t.to_ascii_uppercase()),
         link_time: link_time(),
+        relocatable,
     };
     let linked = vlink::link(&files, &opts)?;
     for w in &linked.warnings {
