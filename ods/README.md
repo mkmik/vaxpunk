@@ -101,6 +101,7 @@ Against the PRD's work order:
 | 10. FUSE read-only | done with the mapping [docs/fuse.md](docs/fuse.md) proposes, for the design session to confirm; `ls`, `cat`, `grep` work on the fixtures |
 | 11. FUSE read-write | not started: waits for the mapping to be settled |
 
-Known limits: no volume sets, sparse files, UCS-2 names on write, hard
-links, or ACL editing (ACLs are kept as they are). Allocation is first fit
+Known limits: no volume sets, sparse files, UCS-2 names on write, making
+new hard links (existing ones are counted, and a file goes with its last
+entry), or ACL editing (ACLs are kept as they are). Allocation is first fit
 with no caching: correct first, fast later.

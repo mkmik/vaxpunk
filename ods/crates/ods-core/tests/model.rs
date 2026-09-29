@@ -150,6 +150,8 @@ fn fresh(rng: &mut Rng, level: Level, blocks: usize) -> Volume<Mem> {
         level,
         cluster: 1 + rng.below(4) as u16,
         now: clock(),
+        // ODS-5 volumes count links, so both ways of deleting get exercised.
+        hardlinks: level == Level::Ods5,
         ..InitParams::default()
     };
     let mut v = ods_core::initialize(Mem::new(blocks), &p).unwrap();
@@ -410,9 +412,9 @@ fn random_operations_ods5() {
 /// Replays a sequence of operations, cutting the power after each
 /// possible number of writes. Every state left behind must mount and
 /// verify with nothing worse than leaked space.
-fn crash_everywhere(seed: u64, steps: usize, blocks: usize, model: &Model) {
+fn crash_everywhere(seed: u64, steps: usize, blocks: usize, level: Level, model: &Model) {
     let mut rng = Rng(seed | 1);
-    let base = fresh(&mut rng, Level::Ods2, blocks);
+    let base = fresh(&mut rng, level, blocks);
     let start = base.dismount().unwrap();
     let ops_seed = rng.next();
     let total = {
@@ -448,7 +450,14 @@ fn crash_everywhere(seed: u64, steps: usize, blocks: usize, model: &Model) {
 #[test]
 fn crashes_leave_only_leaks() {
     for &seed in &SEEDS[..4] {
-        crash_everywhere(seed, 25, 3000, &Model::new(Level::Ods2));
+        crash_everywhere(seed, 25, 3000, Level::Ods2, &Model::new(Level::Ods2));
+    }
+}
+
+#[test]
+fn crashes_leave_only_leaks_with_hard_links() {
+    for &seed in &SEEDS[..4] {
+        crash_everywhere(seed, 25, 3000, Level::Ods5, &Model::new(Level::Ods5));
     }
 }
 
@@ -484,7 +493,7 @@ fn many_versions() {
 #[test]
 fn big_directories_survive_crashes() {
     for &seed in &SEEDS[..2] {
-        crash_everywhere(seed, 120, 20000, &Model::with(many_names(200), DIR_OPS.to_vec(), 512));
+        crash_everywhere(seed, 120, 20000, Level::Ods2, &Model::with(many_names(200), DIR_OPS.to_vec(), 512));
     }
 }
 

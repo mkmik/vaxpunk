@@ -36,6 +36,8 @@ pub struct InitParams {
     pub file_protection: u16,
     /// Creation time, VMS format.
     pub now: u64,
+    /// Count directory entries in file headers (ODS-5 only).
+    pub hardlinks: bool,
 }
 
 impl Default for InitParams {
@@ -51,6 +53,7 @@ impl Default for InitParams {
             protection: 0,
             file_protection: 0xfa00,
             now: 0,
+            hardlinks: false,
         }
     }
 }
@@ -105,6 +108,9 @@ pub fn initialize<D: BlockDevice>(mut dev: D, p: &InitParams) -> Result<Volume<D
     }
     if p.label.is_empty() || p.label.len() > 12 || !p.label.iter().all(|c| (0x20..0x7f).contains(c)) {
         return Err(Error::Invalid("volume label must be 1 to 12 printable characters"));
+    }
+    if p.hardlinks && p.level != Level::Ods5 {
+        return Err(Error::Invalid("hard links need ODS-5"));
     }
     let v = match p.cluster {
         0 => (if size > 50_000 { 3 } else { 1 }).max(size.div_ceil(255 * 4096)),
@@ -166,6 +172,7 @@ pub fn initialize<D: BlockDevice>(mut dev: D, p: &InitParams) -> Result<Volume<D
     home.set_protect(p.protection);
     home.set_fileprot(p.file_protection);
     home.set_recprot(0xfe00);
+    home.set_volchar(if p.hardlinks { 1 << 6 } else { 0 });
     home.set_credate(p.now);
     home.set_window(7);
     home.set_lru_lim(3);
@@ -213,6 +220,9 @@ pub fn initialize<D: BlockDevice>(mut dev: D, p: &InitParams) -> Result<Volume<D
         h.set_fileowner(p.owner);
         h.set_fileprot(if num == 4 { p.file_protection & !0x4000 } else { p.file_protection });
         h.set_backlink(Fid::new(4, 4));
+        if p.hardlinks {
+            h.set_linkcount(1);
+        }
         h.set_record_attrs(&RecordAttrs {
             rtype: if num == 4 { rfm::VAR } else { rfm::FIX },
             rattrib: if num == 4 { rat::BLK } else { 0 },

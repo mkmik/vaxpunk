@@ -365,6 +365,13 @@ impl<D: BlockDevice> Volume<D> {
                 }
                 Some(_) => {}
             }
+            let links = listed.get(&num).map_or(0, |ds| ds.len());
+            if home.volchar() & (1 << 6) != 0 && links > 0 && s.h.linkcount() as usize != links {
+                // Too few links and deleting one entry frees the file
+                // under the others.
+                let sev = if (s.h.linkcount() as usize) < links { Bad } else { Leak };
+                r.add(sev, format!("link count {} for {links} entries", s.h.linkcount()), Some(fid), Some(s.lbn));
+            }
         }
         for num in 1..=home.resfiles().min(9) as u32 {
             if !slots.contains_key(&num) {
