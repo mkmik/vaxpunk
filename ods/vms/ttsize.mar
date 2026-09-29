@@ -1,0 +1,111 @@
+	.TITLE	TTSIZE	Sets the terminal's page and width to its real size
+	.IDENT	/1.0/
+;
+; Asks the terminal where the cursor lands after moving it to row 999,
+; column 999 (it stops at the bottom right corner), then sets the page
+; length and width of TT: to that row and column, like
+; SET TERMINAL/PAGE=rows/WIDTH=columns. The console's serial line has no
+; way to report the window size (telnet NAWS stops at the emulator), so
+; SYLOGIN.COM runs this at login, in its MODE_INTERACTIVE part right after
+; the SET TERMINAL/INQUIRE block (the file ends in Exit, so not at the end):
+;
+;	$ IF F$SEARCH("SYS$SYSTEM:TTSIZE.EXE") .NES. "" THEN RUN SYS$SYSTEM:TTSIZE
+;
+; A terminal that does not answer within 3 seconds keeps its settings.
+;
+;	$ MACRO TTSIZE
+;	$ LINK TTSIZE
+;	$ COPY TTSIZE.EXE SYS$COMMON:[SYSEXE]
+
+	$DCDEF
+	$IODEF
+	$SSDEF
+
+	.PSECT	$DATA, WRT, NOEXE, LONG
+TTNAME:	.ASCID	/TT:/
+CHAN:	.BLKW	1
+IOSB:	.BLKW	4
+CHAR:	.BLKL	3			; class, type, width; characteristics,
+					; page length in the top byte; extended
+NUMS:	.BLKL	2			; rows, columns
+REPLY:	.BLKB	32
+; Save the cursor, go to the corner, ask where it is, restore the cursor.
+; The answer is ESC [ rows ; columns R.
+PROMPT:	.ASCII	<27>/7/<27>/[999;999H/<27>/[6n/<27>/8/
+PROMPT_LEN = . - PROMPT
+TERM:	.WORD	11, 0			; terminator mask, long form: only R
+	.ADDRESS MASK			; (82 = 8*10 + 2) ends the read, so
+MASK:	.BLKB	10			; the ESC in the answer does not
+	.BYTE	^X04
+
+	.PSECT	$CODE, NOWRT, EXE, SHR
+	.ENTRY	TTSIZE, ^M<R2,R3,R4,R5,R6>
+	$ASSIGN_S DEVNAM=TTNAME, CHAN=CHAN
+	BLBC	R0, 90$
+	$QIOW_S	CHAN=CHAN, FUNC=#IO$_SENSEMODE, IOSB=IOSB, P1=CHAR, P2=#12
+	BLBC	R0, 90$
+	MOVZWL	IOSB, R0
+	BLBC	R0, 90$
+	CMPB	CHAR, #DC$_TERM
+	BNEQ	80$
+	$QIOW_S	CHAN=CHAN, -
+		FUNC=#<IO$_READPROMPT!IO$M_NOECHO!IO$M_TIMED!IO$M_PURGE>, -
+		IOSB=IOSB, P1=REPLY, P2=#32, P3=#3, P4=#TERM, -
+		P5=#PROMPT, P6=#PROMPT_LEN
+	BLBC	R0, 90$
+	MOVZWL	IOSB, R0
+	BLBC	R0, 80$			; no answer: leave the terminal alone
+
+; With /ESCAPE the driver ends the read on the escape sequence itself and
+; counts it as the terminator, so scan the data and the terminator both.
+	MOVAB	REPLY, R2
+	MOVZWL	IOSB+2, R3		; data length
+	MOVZWL	IOSB+6, R4		; terminator length
+	ADDL2	R4, R3
+	CMPL	R3, #32
+	BLEQU	5$
+	MOVL	#32, R3
+5$:	ADDL2	R2, R3			; end of the answer
+	CLRQ	NUMS
+	CLRL	R5			; the number being read: 0 rows, 1 columns
+	CLRL	R6			; set inside a number
+10$:	CMPL	R2, R3
+	BGEQU	30$
+	MOVZBL	(R2)+, R1
+	SUBL2	#^A/0/, R1
+	CMPL	R1, #9
+	BGTRU	20$			; not a digit
+	MOVL	#1, R6
+	MULL3	#10, NUMS[R5], R0
+	ADDL3	R0, R1, NUMS[R5]
+	CMPL	NUMS[R5], #9999
+	BLEQ	10$
+	MOVL	#9999, NUMS[R5]		; a flood of digits must not overflow
+	BRB	10$
+20$:	TSTL	R6
+	BEQL	10$
+	CLRL	R6
+	INCL	R5
+	CMPL	R5, #2
+	BLSS	10$
+
+30$:	MOVL	NUMS, R0		; rows
+	BEQL	80$
+	MOVL	NUMS+4, R1		; columns
+	BEQL	80$
+	CMPL	R0, #255		; the largest page VMS takes
+	BLEQ	40$
+	MOVL	#255, R0
+40$:	CMPL	R1, #511		; and the widest line
+	BLEQ	50$
+	MOVL	#511, R1
+50$:	MOVW	R1, CHAR+2
+	MOVB	R0, CHAR+7
+	$QIOW_S	CHAN=CHAN, FUNC=#IO$_SETMODE, IOSB=IOSB, P1=CHAR, P2=#12
+	BLBC	R0, 90$
+	MOVZWL	IOSB, R0
+	BLBC	R0, 90$
+80$:	MOVL	#SS$_NORMAL, R0
+90$:	RET
+
+	.END	TTSIZE
