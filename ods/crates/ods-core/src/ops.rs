@@ -117,6 +117,9 @@ impl<D: BlockDevice> Volume<D> {
         h.set_fileowner(f.owner.unwrap_or(dh.fileowner()));
         h.set_fileprot(f.protection.unwrap_or(self.home.fileprot()));
         h.set_backlink(dir);
+        if self.hardlinks() {
+            h.set_linkcount(1);
+        }
         h.set_highwater(1);
         let now = (self.clock)();
         h.set_ident(&Ident {
@@ -211,6 +214,9 @@ impl<D: BlockDevice> Volume<D> {
         h.set_fileowner(ph.fileowner());
         h.set_fileprot(ph.fileprot() | 0x8888);
         h.set_backlink(parent);
+        if self.hardlinks() {
+            h.set_linkcount(1);
+        }
         h.set_highwater(2);
         let now = (self.clock)();
         h.set_ident(&Ident {
@@ -244,9 +250,10 @@ impl<D: BlockDevice> Volume<D> {
         Ok(fid)
     }
 
-    /// Deletes one version. The file goes with its entry when the entry is
-    /// its primary one (the directory its back link names); an alias entry
-    /// is just removed. A directory must be empty.
+    /// Deletes one version. With hard links the file goes with its last
+    /// entry; without, with its primary one (the directory its back link
+    /// names). Other entries are just removed. A directory that goes must
+    /// be empty.
     pub fn delete(&mut self, dir: Fid, name: &[u8], version: u16) -> Result<(), D::Error> {
         if !self.writable {
             return Err(Error::ReadOnly);
@@ -255,13 +262,23 @@ impl<D: BlockDevice> Volume<D> {
         if e.fid.num <= self.home.resfiles() as u32 {
             return Err(Error::Reserved);
         }
-        let h = self.read_header(e.fid)?;
-        if h.filechar() & fch::DIRECTORY != 0 && !self.list(e.fid)?.is_empty() {
+        let mut h = self.read_header(e.fid)?;
+        let last = match self.hardlinks() {
+            true => h.linkcount() <= 1,
+            false => h.backlink() == dir || h.backlink().num == dir.num && h.backlink().seq == 0,
+        };
+        if last && h.filechar() & fch::DIRECTORY != 0 && !self.list(e.fid)?.is_empty() {
             return Err(Error::DirNotEmpty);
         }
         self.remove_entry(dir, name, version)?;
-        if h.backlink() == dir || h.backlink().num == dir.num && h.backlink().seq == 0 {
+        if last {
             self.delete_file(e.fid)?;
+        } else if self.hardlinks() {
+            // Counted down after the entry goes: a crash leaves one link
+            // too many, never an entry the count does not cover.
+            h.set_linkcount(h.linkcount() - 1);
+            let lbn = self.header_lbn(e.fid.num).unwrap_or(0);
+            self.write_header(lbn, &mut h)?;
         }
         Ok(())
     }
@@ -362,7 +379,14 @@ impl<D: BlockDevice> Volume<D> {
             0 => MAX_VERSION,
             n => n,
         };
-        self.dir_update(to_dir, &stored, |g: &mut Group| {
+        // With hard links the count covers both entries while they both
+        // exist, so a crash in between leaves one link too many.
+        let links = self.hardlinks();
+        if links {
+            h.set_linkcount(h.linkcount().saturating_add(1));
+            self.write_header(hlbn, &mut h)?;
+        }
+        let entered = self.dir_update(to_dir, &stored, |g: &mut Group| {
             if g.entries.iter().any(|x| x.0 == version) {
                 return Err(Error::Exists);
             }
@@ -371,7 +395,14 @@ impl<D: BlockDevice> Volume<D> {
             }
             g.entries.push((version, e.fid));
             Ok(())
-        })?;
+        });
+        if let Err(err) = entered {
+            if links {
+                h.set_linkcount(h.linkcount() - 1);
+                self.write_header(hlbn, &mut h)?;
+            }
+            return Err(err);
+        }
         if let Some(mut id) = h.ident() {
             let full = ident_name(&stored, version);
             let words = crate::layout::Header::ident_words(self.level.number(), full.len());
@@ -386,6 +417,10 @@ impl<D: BlockDevice> Volume<D> {
         }
         self.write_header(hlbn, &mut h)?;
         self.remove_entry(from_dir, &e.name, e.version)?;
+        if links {
+            h.set_linkcount(h.linkcount() - 1);
+            self.write_header(hlbn, &mut h)?;
+        }
         Ok(version)
     }
 

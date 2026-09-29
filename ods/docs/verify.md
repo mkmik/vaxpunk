@@ -8,11 +8,12 @@ like ANALYZE/DISK_STRUCTURE, and sorts what it finds into three classes:
   missing file or a stale file ID; a bad header checksum below the index
   file's end of file; a valid header past it; a directory out of order or
   with versions out of order; an unparsable directory block; a broken
-  extension header chain; a reserved file missing.
+  extension header chain; a reserved file missing; on a volume with hard
+  links, a link count below the file's directory entries.
 - **Leak**: space nobody can use. Clusters allocated in the bitmap that no
   file maps; file numbers marked in use without a header; files no
   directory lists; extension headers of no file; an allocation size below
-  what the headers map.
+  what the headers map; a link count above the file's directory entries.
 - **Warning**: harmless disagreement. A back link that is not a directory
   listing the file; an allocation size above what is mapped; an end of file
   past the allocation; a file marked contiguous that is not; extents not in
@@ -35,7 +36,9 @@ stay lost (VMS's `/REPAIR` would enter them in `[SYSLOST]`).
 Files-11 has no journal. `ods` orders its writes as VMS does: space is
 allocated in the bitmaps before anything points at it, a header is written
 before the directory entry naming it, an entry is removed before its file
-is deleted. Directory and map changes are shaped so that any prefix of their
+is deleted. With hard links a header's link count goes up before an entry
+is added and down after one is removed, so it is never below the entries.
+Directory and map changes are shaped so that any prefix of their
 writes is consistent (see [directory.md](directory.md) and
 [file-header.md](file-header.md)). The tests in
 `crates/ods-core/tests/model.rs` check this: they replay random operation
