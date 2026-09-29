@@ -60,6 +60,9 @@ def main(dir, dev):
     os.chdir(dir)
     exe = "./axpbox" if os.path.isfile("axpbox") and os.access("axpbox", os.X_OK) \
         else "axpbox/build/axpbox"
+    for need in ("es40.cfg", exe):
+        if not os.path.isfile(need):
+            sys.exit(f"{dir}: no {need} (run ods/vms/setup.sh, or pass the dir that has it)")
     # AXPbox ignores bind() errors: a second one would listen on a random port.
     with socket.socket() as probe:
         if probe.connect_ex(("127.0.0.1", PORT)) == 0:
