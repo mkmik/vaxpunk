@@ -1,0 +1,72 @@
+        .TITLE  CONSOLIO  Console output, as VMS's EXE$OUT* routines
+        .IDENT  /V1.0/
+; The routines VMS's own bugcheck and init code print on the console with,
+; and drivers too: called with JSB, arguments in registers. Like VMS's, they
+; take no lock and don't change IPL; callers who share the console take it
+; first. R11 selects the device on the VAX, 0 for the console; it is ignored,
+; as on Alpha. Link this module with the program: vmacro compiles it.
+;
+;       MOVAB   MESSAGE, R1
+;       JSB     G^EXE$OUTZSTRING
+
+        .PSECT  $CODE$
+
+; EXE$OUTCHAR, CON$PUTCHAR: writes the character in R0. Keeps every
+; register. CON$PUTCHAR is the one part that knows the hardware.
+EXE$OUTCHAR::
+CON$PUTCHAR::
+        PUSHR   #^M<R0, R1>
+        MOVAB   (SP), R0                ; the saved R0: the character first
+        MOVL    #1, R1
+        svc     #2                      ; ponytail: vrun's put; a UART later
+        POPR    #^M<R0, R1>
+        RSB
+
+; EXE$OUTBLANK: writes a space. R0 = 32.
+EXE$OUTBLANK::
+        MOVZBL  #^A/ /, R0
+        BRB     EXE$OUTCHAR
+
+; EXE$OUTCRLF: writes CR and LF. R0 = 10.
+EXE$OUTCRLF::
+        MOVZBL  #13, R0
+        BSBB    EXE$OUTCHAR
+        MOVZBL  #10, R0
+        BRB     EXE$OUTCHAR
+
+; EXE$OUTBYTE: writes R1's low byte as 2 hex digits. Uses R0 and R2.
+EXE$OUTBYTE::
+        MOVL    #4, R2
+        BRB     HEX
+
+; EXE$OUTHEX: writes the longword in R1 as 8 hex digits. Uses R0 and R2.
+EXE$OUTHEX::
+        MOVL    #28, R2
+HEX:    EXTZV   R2, #4, R1, R0          ; digits from the top
+        CMPL    R0, #10
+        BLSS    10$
+        ADDL2   #^A/A/-^A/0/-10, R0
+10$:    ADDL2   #^A/0/, R0
+        BSBB    EXE$OUTCHAR
+        ACBL    #0, #-4, R2, HEX
+        RSB
+
+; EXE$OUTCSTRING: writes the counted string (.ASCIC) R1 points to, up to a
+; NUL if it has one. R1 ends past the last byte read. Uses R0 and R2.
+EXE$OUTCSTRING::
+        MOVZBL  (R1)+, R2
+        BNEQ    STRING
+        RSB                             ; VMS writes one byte of an empty one
+
+; EXE$OUTZSTRING: writes the NUL-terminated string (.ASCIZ) R1 points to, up
+; to 255 characters. R1 ends past the NUL, at the next string if they are
+; back to back. Uses R0 and R2.
+EXE$OUTZSTRING::
+        MOVZBL  #255, R2
+STRING: MOVZBL  (R1)+, R0
+        BEQL    20$
+        BSBB    EXE$OUTCHAR
+        SOBGTR  R2, STRING
+20$:    RSB
+
+        .END
