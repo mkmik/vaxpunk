@@ -1,0 +1,47 @@
+        .TITLE  ROUTINES Called with CALLS and CALLG from MAIN
+
+        .PSECT  DATA, NOEXE, WRT, LONG
+DIGITS: .BLKB   12
+
+        .PSECT  CODE, EXE, LONG
+
+; FACT(N): N!, recursively.
+        .ENTRY  FACT, ^M<R2>
+        MOVL    4(AP), R2
+        CMPL    R2, #1
+        BGTR    10$
+        MOVL    #1, R0
+        RET
+10$:    SUBL3   #1, R2, -(SP)
+        CALLS   #1, FACT
+        MULL2   R2, R0
+        RET
+
+; SUM(A, B, ...): the sum of its arguments, however many.
+        .ENTRY  SUM, ^M<R2>
+        CLRL    R0
+        MOVL    (AP), R1                ; the argument count
+        BEQL    20$
+        MOVAL   4(AP), R2
+10$:    ADDL2   (R2)+, R0
+        SOBGTR  R1, 10$
+20$:    RET
+
+; PUTNUM(N): writes N, unsigned, in decimal, and a newline.
+        .ENTRY  PUTNUM, ^M<R2, R3, R4, R5>
+        MOVL    4(AP), R2
+        MOVAB   DIGITS+12, R4
+        MOVB    #10, -(R4)
+        MOVL    #1, R5
+10$:    CLRL    R3                      ; R2:R3, a quadword
+        EDIV    #10, R2, R2, R1
+        ADDB3   #^A/0/, R1, -(R4)
+        INCL    R5
+        TSTL    R2
+        BNEQ    10$
+        MOVL    R4, R0
+        MOVL    R5, R1
+        svc     #2                      ; vrun's put
+        RET
+
+        .END

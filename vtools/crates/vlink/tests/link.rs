@@ -477,7 +477,7 @@ fn library_search() {
 fn bases_and_layout() {
     let source = std::fs::read_to_string(concat!(
         env!("CARGO_MANIFEST_DIR"),
-        "/../../examples/hello.mar"
+        "/../../examples/vasm/hello.mar"
     ))
     .unwrap();
     for base in [0x10000, 0x4000_0000_0000] {

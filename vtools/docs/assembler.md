@@ -12,6 +12,9 @@ The object file defaults to the source name with `.obj`. Errors and warnings
 show file, line and column, the line with a caret, and the macro calls it came
 from. Nothing is written if there are errors.
 
+`vmacro`, the MACRO-32 compiler, is vasm with a dialect that translates VAX
+instructions; `docs/macro32.md` describes what changes there.
+
 Status: work order step 8. Not there yet: listings, procedure descriptors,
 literal pools (`ldr x0, =value`), and floating-point and SIMD arithmetic. Loads
 and stores of B/H/S/D/Q registers work.

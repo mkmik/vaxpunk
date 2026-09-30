@@ -21,11 +21,17 @@ pub fn err<T>(col: usize, msg: impl Into<String>) -> Result<T> {
 pub struct Cursor<'a> {
     pub line: &'a str,
     pub at: usize,
+    /// Expressions in MACRO-32 syntax (`expr.rs`).
+    pub macro32: bool,
 }
 
 impl<'a> Cursor<'a> {
     pub fn new(line: &'a str) -> Self {
-        Cursor { line, at: 0 }
+        Cursor {
+            line,
+            at: 0,
+            macro32: false,
+        }
     }
 
     pub fn col(&self) -> usize {

@@ -1,6 +1,8 @@
-//! Assembles, links and runs every program in tests/run and examples under
-//! vrun, and checks it against its expected files, next to it in tests/run
-//! and in tests/examples for examples: NAME.stdout (exact output,
+//! Assembles, links and runs every program in tests/run and examples/vasm
+//! under vrun, and compiles, links and runs every MACRO-32 program in
+//! tests/macro32 and examples/macro32, and checks each against its expected
+//! files, next to it in tests/ and in tests/examples/vasm and
+//! tests/examples/macro32 for the examples: NAME.stdout (exact output,
 //! default empty), NAME.status (exit code, default 0) and NAME.stderr (a
 //! line stderr must contain). A directory NAME/ is a program of several
 //! modules, linked in name order, then the object library vlib makes of the
@@ -20,11 +22,37 @@ use vms_obj::exe::Image;
 use vms_obj::obj;
 use vms_obj::olb::Library;
 
+/// Makes an object module from a source file: vasm or vmacro.
+type Tool = fn(&str, &vasm::Options) -> Result<vasm::Object, Vec<vasm::Diagnostic>>;
+
 #[test]
 fn programs() {
+    all(
+        &[
+            ("tests/run", "tests/run"),
+            ("examples/vasm", "tests/examples/vasm"),
+        ],
+        vasm::assemble,
+        false,
+    );
+}
+
+/// MACRO-32 keeps addresses in 32-bit registers, so the image stays low.
+#[test]
+fn macro32() {
+    all(
+        &[
+            ("tests/macro32", "tests/macro32"),
+            ("examples/macro32", "tests/examples/macro32"),
+        ],
+        vmacro::compile,
+        true,
+    );
+}
+
+/// Runs the programs in each (sources, expected files) directory pair.
+fn all(dirs: &[(&str, &str)], tool: Tool, low: bool) {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-    // (sources, expected files)
-    let dirs = [("tests/run", "tests/run"), ("examples", "tests/examples")];
     let mut programs: Vec<(PathBuf, PathBuf, String)> = dirs
         .iter()
         .flat_map(|(src, exp)| {
@@ -42,7 +70,11 @@ fn programs() {
     programs.sort();
     let failures: Vec<String> = programs
         .iter()
-        .filter_map(|(src, exp, n)| run(src, exp, n).err().map(|e| format!("{n}: {e}")))
+        .filter_map(|(src, exp, n)| {
+            run(src, exp, n, tool, low)
+                .err()
+                .map(|e| format!("{n}: {e}"))
+        })
         .collect();
     assert!(
         failures.is_empty(),
@@ -56,7 +88,7 @@ fn programs() {
 /// The same image anywhere in the lower half: here 64 TB up.
 #[test]
 fn high_base() {
-    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples");
+    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/vasm");
     let text = fs::read_to_string(dir.join("hello.mar")).unwrap();
     let records = vasm::assemble(&text, &options("HELLO", &dir.join("hello.mar")))
         .unwrap()
@@ -94,17 +126,17 @@ fn options(module: &str, source: &Path) -> vasm::Options {
     }
 }
 
-fn run(dir: &Path, expected: &Path, name: &str) -> Result<(), String> {
+fn run(dir: &Path, expected: &Path, name: &str, tool: Tool, low: bool) -> Result<(), String> {
     let program = dir.join(name);
     let mut objects = Vec::new();
     if program.is_dir() {
         for source in sources(&program) {
-            objects.push(assemble(&source)?);
+            objects.push(assemble(&source, tool)?);
         }
         if program.join("lib").is_dir() {
             let mut lib = vlib::new(0);
             for source in sources(&program.join("lib")) {
-                let (file, object) = assemble(&source)?;
+                let (file, object) = assemble(&source, tool)?;
                 vlib::replace(&mut lib, &file, &object, 0)?;
             }
             let bytes = lib.write();
@@ -112,7 +144,7 @@ fn run(dir: &Path, expected: &Path, name: &str) -> Result<(), String> {
             objects.push(("LIB.OLB".into(), bytes));
         }
     } else {
-        objects.push(assemble(&dir.join(format!("{name}.mar")))?);
+        objects.push(assemble(&dir.join(format!("{name}.mar")), tool)?);
     }
     let link = |base, relocatable| {
         let opts = vlink::Options {
@@ -133,7 +165,7 @@ fn run(dir: &Path, expected: &Path, name: &str) -> Result<(), String> {
     if plain != link(vlink::DEFAULT_BASE, false)?.image {
         return Err("/RELOCATABLE changed more than the fixup section".into());
     }
-    let far = far_base(image);
+    let far = far_base(image, low);
     vlink::check_fixups(image, &link(far, true)?.image)
         .map_err(|e| format!("linked at {far:#x}: {e}"))?;
 
@@ -188,11 +220,11 @@ fn run(dir: &Path, expected: &Path, name: &str) -> Result<(), String> {
 }
 
 /// Where else to run an image: far above 4 GB, unless it has longword
-/// addresses, which must stay below 2 GB. Then as high as vrun's own range,
-/// from 7FF00000, lets it go.
-fn far_base(image: &Image) -> u64 {
+/// addresses or asks to stay `low`, which must stay below 2 GB. Then as
+/// high as vrun's own range, from 7FF00000, lets it go.
+fn far_base(image: &Image, low: bool) -> u64 {
     let f = image.fixups.as_ref().unwrap();
-    if f.long.is_empty() {
+    if f.long.is_empty() && !low {
         return 0x1234_5678_0000;
     }
     let start = image.sections[0].vaddr;
@@ -213,11 +245,11 @@ fn sources(dir: &Path) -> Vec<PathBuf> {
     s
 }
 
-/// Assembles `source`; returns its file name and the object.
-fn assemble(source: &Path) -> Result<(String, Vec<u8>), String> {
+/// Assembles or compiles `source`; returns its file name and the object.
+fn assemble(source: &Path, tool: Tool) -> Result<(String, Vec<u8>), String> {
     let text = fs::read_to_string(source).unwrap();
     let module = source.file_stem().unwrap().to_string_lossy().to_uppercase();
-    let records = vasm::assemble(&text, &options(&module, source))
+    let records = tool(&text, &options(&module, source))
         .map_err(|d| {
             let msgs: Vec<String> = d
                 .iter()

@@ -3,6 +3,7 @@
 //! language.
 
 mod asm;
+mod cli;
 mod emit;
 mod encode;
 mod expr;
@@ -12,6 +13,7 @@ mod macros;
 use std::path::PathBuf;
 
 pub use asm::Diagnostic;
+pub use cli::main;
 use vms_obj::obj::Record;
 
 #[derive(Default)]
@@ -32,11 +34,41 @@ pub struct Object {
     pub warnings: Vec<Diagnostic>,
 }
 
+/// A language layered on vasm, which translates its statements to ARM64:
+/// MACRO-32 (`vmacro`). vasm still does labels, macros, conditionals,
+/// repeat blocks and the directives the dialect leaves to it. With a
+/// dialect, expressions are in MACRO-32 syntax (`expr.rs`), and an
+/// instruction after data is aligned, with the labels just before it.
+pub trait Dialect {
+    /// Translates a statement: `word` is its first word after the labels,
+    /// in upper case, and `rest` the rest without the comment. Returns the
+    /// lines that replace it, assembled as they are, or `None` to leave it
+    /// to vasm. `constant` gives the value of an expression if it is a
+    /// constant already known.
+    fn statement(
+        &mut self,
+        word: &str,
+        rest: &str,
+        constant: &dyn Fn(&str) -> Option<i64>,
+    ) -> Option<Result<Vec<String>, String>>;
+}
+
 /// Assembles `source` into object records, or returns every error found,
 /// with the warnings.
 pub fn assemble(source: &str, opts: &Options) -> Result<Object, Vec<Diagnostic>> {
-    let module = asm::assemble(source, opts.path.as_deref(), &opts.include)?;
     let tool = concat!("vasm ", env!("CARGO_PKG_VERSION"));
+    assemble_with(source, opts, tool, None)
+}
+
+/// Assembles `source` in `dialect`, if given; `tool` goes into the module
+/// header.
+pub fn assemble_with(
+    source: &str,
+    opts: &Options,
+    tool: &str,
+    dialect: Option<&mut dyn Dialect>,
+) -> Result<Object, Vec<Diagnostic>> {
+    let module = asm::assemble(source, opts.path.as_deref(), &opts.include, dialect)?;
     Ok(Object {
         records: emit::records(&module, &opts.name, opts.date, tool),
         warnings: module.warnings,

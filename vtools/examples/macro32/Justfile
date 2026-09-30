@@ -1,0 +1,35 @@
+# Builds and runs the MACRO-32 examples with the vtools commands. `just
+# --dry-run NAME` shows the commands without running them. Output goes to
+# target/examples/macro32.
+
+bin := "../../../target/debug"
+out := "../../../target/examples/macro32"
+
+_default:
+    @just --list
+
+# Runs every example.
+all: hello calls
+
+# Checks every example's output against tests/examples/macro32.
+check:
+    just hello | diff ../../tests/examples/macro32/hello.stdout -
+    just calls | diff ../../tests/examples/macro32/calls.stdout -
+
+_build:
+    cargo build -q -p vmacro -p vlink -p vrun
+    mkdir -p {{out}}
+
+# One routine. $PUT comes from vtools/lib/vrun.mlb.
+hello: _build
+    {{bin}}/vmacro -I ../../lib -o {{out}}/hello.obj hello.mar
+    {{bin}}/vlink  -o {{out}}/hello.exe {{out}}/hello.obj
+    {{bin}}/vrun   {{out}}/hello.exe
+
+# MAIN calls routines in another module with CALLS and CALLG, and its own
+# with JSB.
+calls: _build
+    {{bin}}/vmacro -I ../../lib -o {{out}}/main.obj     calls/main.mar
+    {{bin}}/vmacro -I ../../lib -o {{out}}/routines.obj calls/routines.mar
+    {{bin}}/vlink  -o {{out}}/calls.exe {{out}}/main.obj {{out}}/routines.obj
+    {{bin}}/vrun   {{out}}/calls.exe

@@ -1,0 +1,102 @@
+        .TITLE  MIXED   Data among code, flags from results, stack arguments
+
+        .MACRO  EXPECT  COND, N, ?OK
+        B'COND  OK
+        MOVL    #<N * 2>, R0
+        RET
+OK:
+        .ENDM   EXPECT
+
+        .PSECT  DATA, NOEXE, WRT, QUAD
+QUADS:  .QUAD   ^X1122334455667788, 0
+COUNTS: .LONG   0, 0
+
+; Code with data in it, as MACRO-32 allows: instructions after the data
+; start on the next longword, and so do the labels before them.
+        .PSECT  CODE, EXE, LONG
+        .ENTRY  MIXED, ^M<R2, R3, R4, R5, R6, R7>
+        BRB     10$
+5$:     .ASCIC  /mixed/
+10$:    MOVZBL  5$, R1                  ; the count byte
+        CMPL    R1, #5
+        EXPECT  EQL, 1
+
+; Flags come from each result, wherever it went.
+        MOVL    #0, COUNTS
+        EXPECT  EQL, 2
+        MOVB    #-1, COUNTS+4
+        EXPECT  LSS, 3
+        MOVL    #-2, R2
+        ADDL2   #3, R2                  ; carries: C set
+        EXPECT  LEQU, 4                 ; C or Z set
+        MOVL    #-2, R2
+        ADDL2   #1, R2                  ; no carry, not zero
+        EXPECT  GTRU, 5                 ; C and Z clear
+        EXPECT  GEQU, 6
+        CLRL    R3
+        SUBL2   #1, R3                  ; borrows
+        EXPECT  LSSU, 13
+
+; Quadwords.
+        MOVQ    QUADS, R4
+        CMPL    R5, #^X11223344
+        EXPECT  EQL, 7
+        MOVQ    R4, QUADS+8
+        CMPL    QUADS+8, #^X55667788
+        EXPECT  EQL, 8
+        ASHQ    #-32, QUADS, R6
+        CMPL    R6, #^X11223344
+        EXPECT  EQL, 9
+        CLRQ    R4
+        TSTL    R5
+        EXPECT  EQL, 10
+
+; Computed shift counts, argument counts and destinations.
+        MOVL    #3, R2
+        ASHL    R2, #5, R3              ; 40
+        MNEGL   R2, R2
+        ASHL    R2, R3, R3              ; 5
+        CMPL    R3, #5
+        EXPECT  EQL, 11
+        PUSHL   #7
+        PUSHL   #8
+        MOVL    #2, R6
+        MOVAB   PRODUCT, R7
+        CALLS   R6, (R7)
+        CMPL    R0, #56
+        EXPECT  EQL, 12
+        MOVAB   30$, R7
+        JMP     (R7)
+        MOVL    #26, R0
+        RET
+
+; Operands are read in order, side effects included.
+30$:    MOVAL   COUNTS, R1
+        MOVL    R1, (R1)+               ; stores the old R1
+        SUBL3   #4, R1, R2
+        CMPL    (R2), R2
+        EXPECT  EQL, 14
+        MOVL    SP, R3
+        PUSHL   #1
+        PUSHL   #2
+        ADDL3   (SP)+, (SP)+, R4        ; pops both
+        CMPL    R4, #3
+        EXPECT  EQL, 15
+        CMPL    SP, R3
+        EXPECT  EQL, 16
+
+; A bit branch leaves the codes alone, though it needs registers.
+        MOVB    #-1, COUNTS+4
+        BBS     #1, COUNTS, 40$         ; an aligned address: bit 1 clear
+        EXPECT  LSS, 17
+        MOVL    #1, R0
+        RET
+40$:    MOVL    #36, R0
+        RET
+
+; PRODUCT(A, B)
+        .ENTRY  PRODUCT, ^M<>
+        MULL3   4(AP), 8(AP), R0
+        RET
+
+        .END    MIXED

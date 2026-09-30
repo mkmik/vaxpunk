@@ -1,0 +1,217 @@
+        .TITLE  ARITH   VAX arithmetic, logic, addressing modes and loops
+        .LIBRARY "vrun.mlb"
+
+; Each EXPECT checks the condition codes; a failed one returns 2 * N, an
+; error status, so the exit code says which.
+
+        .MACRO  EXPECT  COND, N, ?OK
+        B'COND  OK
+        MOVL    #<N * 2>, R0
+        RET
+OK:
+        .ENDM   EXPECT
+
+        .PSECT  DATA, NOEXE, WRT, LONG
+LONGS:  .LONG   1, 2, 3, 4
+PTR:    .ADDRESS LONGS
+WVAR:   .WORD   0
+FLAG:   .BYTE   0
+BITS:   .LONG   ^XABCD1234
+OFF = 8
+
+        .PSECT  CODE, EXE, LONG
+        .ENTRY  ARITH, ^M<R2, R3, R4, R5, R6>
+        MOVL    #5, R1
+        CMPL    R1, #5
+        EXPECT  EQL, 1
+        ADDL3   #3, R1, R2              ; 8
+        CMPL    R2, #8
+        EXPECT  EQL, 2
+        SUBL2   #10, R2                 ; -2
+        EXPECT  LSS, 3
+        MULL3   R2, #-3, R3             ; 6
+        CMPL    R3, #6
+        EXPECT  EQL, 4
+        DIVL3   #4, #-17, R4            ; -4, truncated
+        CMPL    R4, #-4
+        EXPECT  EQL, 5
+
+; Bytes and words write only their part of a register.
+        MOVL    #^X12345678, R5
+        MOVB    #^XFF, R5
+        CMPL    R5, #^X123456FF
+        EXPECT  EQL, 6
+        MOVZBL  R5, R6
+        CMPL    R6, #255
+        EXPECT  EQL, 7
+        CVTBL   R5, R6
+        CMPL    R6, #-1
+        EXPECT  EQL, 8
+        MOVW    #-2, R6
+        CMPW    R6, #-2
+        EXPECT  EQL, 9
+        TSTB    R6
+        EXPECT  LSS, 10
+
+; Signed and unsigned, carry and borrow.
+        MOVL    #-1, R1
+        CMPL    R1, #1
+        EXPECT  GTRU, 11
+        CMPL    R1, #1
+        EXPECT  LSS, 12
+        ADDL2   #1, R1                  ; carries out
+        EXPECT  CS, 13
+        TSTL    R1
+        EXPECT  EQL, 14
+        SUBL3   #1, #0, R1              ; borrows
+        EXPECT  CS, 15
+
+        CLRL    R1
+        BISL2   #^XF0, R1
+        BICL2   #^X30, R1
+        XORL2   #^XFF, R1               ; ^X3F
+        CMPL    R1, #^X3F
+        EXPECT  EQL, 16
+        ASHL    #4, #1, R2              ; 16
+        ASHL    #-2, R2, R2             ; 4
+        CMPL    R2, #4
+        EXPECT  EQL, 17
+        ASHL    #-1, #-8, R3
+        CMPL    R3, #-4
+        EXPECT  EQL, 18
+        ROTL    #8, #^X12345678, R2
+        CMPL    R2, #^X34567812
+        EXPECT  EQL, 19
+        MNEGL   #5, R2
+        CMPL    R2, #-5
+        EXPECT  EQL, 20
+        MCOML   #0, R2
+        CMPL    R2, #-1
+        EXPECT  EQL, 21
+        INCL    R2
+        EXPECT  EQL, 22
+        DECL    R2
+        EXPECT  LSS, 23
+
+; Quadwords in register pairs.
+        EMUL    #100000, #100000, #7, R2        ; 10000000007
+        CMPL    R3, #2
+        EXPECT  EQL, 24
+        CMPL    R2, #^X540BE407
+        EXPECT  EQL, 25
+        EDIV    #1000, R2, R4, R5
+        CMPL    R4, #10000000
+        EXPECT  EQL, 26
+        CMPL    R5, #7
+        EXPECT  EQL, 27
+
+; Addressing modes.
+        MOVAL   LONGS, R1
+        ADDL3   (R1)+, (R1)+, R2        ; 1 + 2
+        CMPL    R2, #3
+        EXPECT  EQL, 28
+        MOVL    4(R1), R2               ; LONGS+12
+        CMPL    R2, #4
+        EXPECT  EQL, 29
+        MOVL    #1, R3
+        MOVL    LONGS[R3], R2
+        CMPL    R2, #2
+        EXPECT  EQL, 30
+        MOVL    R2, -(SP)
+        MOVL    (SP)+, R4
+        CMPL    R4, #2
+        EXPECT  EQL, 31
+        ADDL2   #10, LONGS
+        CMPL    LONGS, #11
+        EXPECT  EQL, 32
+        MOVL    @PTR, R2
+        CMPL    R2, #11
+        EXPECT  EQL, 33
+        MOVAL   LONGS, R1
+        MOVL    OFF(R1), R2
+        CMPL    R2, #3
+        EXPECT  EQL, 34
+        MOVW    #^X1234, WVAR
+        ADDW2   #1, WVAR
+        CMPW    WVAR, #^X1235
+        EXPECT  EQL, 35
+        MOVAL   PTR, R1
+        MOVL    @(R1)+, R2              ; through PTR, to LONGS
+        CMPL    R2, #11
+        EXPECT  EQL, 36
+
+; Loops.
+        MOVL    #5, R1
+        CLRL    R2
+10$:    ADDL2   R1, R2
+        SOBGTR  R1, 10$
+        CMPL    R2, #15
+        EXPECT  EQL, 37
+        CLRL    R1
+        CLRL    R2
+20$:    INCL    R2
+        AOBLSS  #10, R1, 20$
+        CMPL    R2, #10
+        EXPECT  EQL, 38
+        CLRL    R2
+        MOVL    #10, R1
+30$:    INCL    R2
+        ACBL    #1, #-3, R1, 30$        ; 10, 7, 4, 1
+        CMPL    R2, #4
+        EXPECT  EQL, 39
+
+; CASE: a table of word displacements after the instruction.
+        MOVL    #2, R1
+        CASEL   R1, #1, #2
+40$:    .WORD   41$-40$, 42$-40$, 43$-40$
+        MOVL    #80, R0                 ; out of range
+        RET
+41$:
+43$:    MOVL    #82, R0
+        RET
+42$:    CASEB   #9, #0, #1              ; out of range: on after the table
+50$:    .WORD   51$-50$, 51$-50$
+        BRB     60$
+51$:    MOVL    #84, R0
+        RET
+
+; Bit fields and bit branches.
+60$:    MOVL    #^XABCD1234, R1
+        EXTZV   #8, #8, R1, R2
+        CMPL    R2, #^X12
+        EXPECT  EQL, 43
+        EXTV    #28, #4, R1, R2
+        CMPL    R2, #-6
+        EXPECT  EQL, 44
+        INSV    #^XF, #0, #4, R1
+        CMPL    R1, #^XABCD123F
+        EXPECT  EQL, 45
+        EXTZV   #12, #8, BITS, R2
+        CMPL    R2, #^XD1
+        EXPECT  EQL, 46
+        MOVL    #16, R3
+        EXTZV   R3, #8, BITS, R2
+        CMPL    R2, #^XCD
+        EXPECT  EQL, 47
+        INSV    #^X5A, R3, #8, BITS
+        CMPL    BITS, #^XAB5A1234
+        EXPECT  EQL, 48
+        BBC     #2, BITS, 70$           ; set
+        BBSS    #3, BITS, 70$           ; clear, then set
+        CMPL    BITS, #^XAB5A123C
+        EXPECT  EQL, 49
+        MOVL    #5, R3
+        BBCC    R3, BITS, 70$           ; set, then clear
+        BBS     R3, BITS, 70$
+        CMPL    BITS, #^XAB5A121C
+        EXPECT  EQL, 50
+        BLBC    #7, 70$
+        BLBS    R1, 80$                 ; ^XABCD123F
+70$:    MOVL    #102, R0
+        RET
+
+80$:    $PUT    "arith ok"<10>
+        MOVL    #1, R0
+        RET
+
+        .END    ARITH

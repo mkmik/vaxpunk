@@ -1,0 +1,11 @@
+        .TITLE  HELLO   MACRO-32 says hello through the runner
+        .IDENT  /V1.0/
+        .LIBRARY "vrun.mlb"
+
+        .PSECT  CODE, EXE, SHR, LONG
+        .ENTRY  HELLO, ^M<>
+        $PUT    "Hello from MACRO-32!"<10>
+        MOVL    #1, R0                  ; SS$_NORMAL
+        RET
+
+        .END    HELLO
