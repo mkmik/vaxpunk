@@ -14,6 +14,12 @@ fn main() {
         println!("cargo::rerun-if-changed={path}");
     }
     println!("cargo::rerun-if-env-changed=CROSS_COMPILE");
+    // Fresh clones and worktrees leave submodules empty.
+    if !Path::new("seL4/CMakeLists.txt").exists() {
+        let _ = Command::new("git")
+            .args(["submodule", "update", "--init", "seL4"])
+            .status();
+    }
     assert!(
         Path::new("seL4/CMakeLists.txt").exists(),
         "kernel/seL4 is missing, run: git submodule update --init"
