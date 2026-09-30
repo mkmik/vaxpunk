@@ -32,7 +32,7 @@ fn check(source: &str, weights: bool) {
 
 #[test]
 fn hello() {
-    check("tests/run/hello.mar", false);
+    check("examples/hello.mar", false);
 }
 
 /// Every form an address takes, with the weight the linker will give each

@@ -21,7 +21,7 @@ scripts/setup-host.sh
 ```
 
 It installs an aarch64 bare-metal C compiler, `cmake`, `ninja`, `dtc`, `uv`,
-`mtools`, QEMU with its EDK2 firmware, and checks out the seL4 submodule.
+`mtools`, QEMU with its EDK2 firmware, `just`, and checks out the seL4 submodule.
 Cargo drives the whole build, so you also need a Rust toolchain, for example
 from [rustup](https://rustup.rs).
 

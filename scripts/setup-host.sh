@@ -1,11 +1,11 @@
 #!/bin/sh
-# One-time host setup: installs the cross toolchain, seL4 build tools, mtools
-# and QEMU + EDK2, then checks out the seL4 submodule.
+# One-time host setup: installs the cross toolchain, seL4 build tools, mtools,
+# QEMU + EDK2 and just, then checks out the seL4 submodule.
 set -eu
 
 case "$(uname -s)" in
 Darwin)
-	brew install aarch64-elf-gcc aarch64-elf-binutils cmake ninja dtc mtools qemu uv
+	brew install aarch64-elf-gcc aarch64-elf-binutils cmake ninja dtc mtools qemu uv just
 	;;
 Linux)
 	cc=gcc-aarch64-linux-gnu
@@ -14,7 +14,7 @@ Linux)
 	fi
 	sudo apt-get update
 	sudo apt-get install -y git curl $cc cmake ninja-build device-tree-compiler \
-		libxml2-utils python3 mtools qemu-system-arm qemu-efi-aarch64 gdb-multiarch
+		libxml2-utils python3 mtools qemu-system-arm qemu-efi-aarch64 gdb-multiarch just
 	if ! command -v uv >/dev/null; then
 		curl -LsSf https://astral.sh/uv/install.sh | sh
 		echo "setup-host: uv went to ~/.local/bin, make sure it is on PATH"
