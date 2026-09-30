@@ -1,8 +1,9 @@
-//! Builds roottask.elf into OUT_DIR with the kernel's toolchain and libsel4.
+//! Builds roottask.elf into OUT_DIR with the kernel's toolchain and libsel4,
+//! and exec.exe from src/exec.mar with vmacro and vlink.
 
 use std::env;
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 const CFLAGS: &str = "-O2 -g -Wall -Wextra -ffreestanding -fno-pie -fno-stack-protector \
@@ -23,6 +24,42 @@ fn main() {
         .arg("-o")
         .arg(out.join("roottask.elf"))
         .args(sources()));
+    exec(&out.join("exec.exe"));
+}
+
+/// Compiles src/exec.mar and links it, at vlink's default base, into `exe`.
+fn exec(exe: &Path) {
+    let source = "src/exec.mar";
+    let opts = vasm::Options {
+        name: "EXEC".into(),
+        path: Some(source.into()),
+        ..Default::default()
+    };
+    let object = vmacro::compile(&fs::read_to_string(source).unwrap(), &opts);
+    let object = object.unwrap_or_else(|diags| {
+        let diags: Vec<_> = diags
+            .iter()
+            .map(|d| format!("{}:{}:{}: {}", d.file, d.line, d.col, d.msg))
+            .collect();
+        panic!("vmacro failed:\n{}", diags.join("\n"))
+    });
+    for d in &object.warnings {
+        println!("cargo::warning={}:{}: {}", d.file, d.line, d.msg);
+    }
+    let opts = vlink::Options {
+        base: vlink::DEFAULT_BASE,
+        name: "EXEC".into(),
+        transfer: None,
+        link_time: 0,
+        relocatable: false,
+    };
+    let object = vms_obj::obj::write(&object.records);
+    let linked = vlink::link(&[(source.into(), object)], &opts)
+        .unwrap_or_else(|msgs| panic!("vlink failed:\n{}", msgs.join("\n")));
+    for w in &linked.warnings {
+        println!("cargo::warning={w}");
+    }
+    fs::write(exe, linked.image.write()).unwrap();
 }
 
 /// src/*.c and src/*.S.

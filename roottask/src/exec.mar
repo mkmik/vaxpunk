@@ -1,0 +1,13 @@
+        .TITLE  EXEC    The root task's MACRO-32 part
+        .IDENT  /V0.1/
+;
+; The root task loads EXEC.EXE into its own address space and calls the
+; transfer address, then prints the R0 it returns. It runs in the root task,
+; the VMS executive's kernel mode, so no vrun monitor calls (SVC).
+;
+        .PSECT  CODE, EXE, SHR, LONG
+        .ENTRY  EXEC$START, ^M<>
+        MOVL    #42, R0
+        RET
+
+        .END    EXEC$START

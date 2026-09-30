@@ -10,3 +10,9 @@ path = "lib.rs"
 
 [dependencies]
 kernel = { path = "../kernel" }
+
+[build-dependencies]
+vasm = { path = "../vtools/crates/vasm" }
+vlink = { path = "../vtools/crates/vlink" }
+vmacro = { path = "../vtools/crates/vmacro" }
+vms-obj = { path = "../vtools/crates/vms-obj" }
