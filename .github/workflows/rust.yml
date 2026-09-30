@@ -47,4 +47,6 @@ jobs:
         run: ods/fixtures/fetch.sh
       - run: cargo test --release
       - name: The vtools examples, run by their commands
-        run: just --justfile vtools/examples/Justfile check
+        run: |
+          just --justfile vtools/examples/vasm/Justfile check
+          just --justfile vtools/examples/macro32/Justfile check

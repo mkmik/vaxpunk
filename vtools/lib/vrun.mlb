@@ -1,12 +1,13 @@
 ; vrun.mlb: macros for programs that run under vrun, one per monitor call
 ; (docs/runner-abi.md). Use it with .LIBRARY "vrun.mlb" and vasm -I vtools/lib.
-; A vaxpunk macro library is a text file of .MACRO definitions.
+; A vaxpunk macro library is a text file of .MACRO definitions. vmacro
+; (MACRO-32) can use it too, so expressions avoid << and >>.
 
 ; $EXIT [STATUS]: ends the run. STATUS is a VMS condition value; the default
 ; is SS$_NORMAL.
         .MACRO  $EXIT   STATUS=1
         movz    x0, #((STATUS) & ^XFFFF)
-        movk    x0, #(((STATUS) >> 16) & ^XFFFF), lsl #16
+        movk    x0, #(((STATUS) / 65536) & ^XFFFF), lsl #16
         svc     #1
         .ENDM   $EXIT
 

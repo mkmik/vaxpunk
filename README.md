@@ -80,7 +80,7 @@ about one second after the command.
 | `image/` | Limine config, the ESP builder (mtools) and `boot`, which copies the three ELFs to `out/`, stitches the ESP and runs QEMU | `out/esp.img` |
 | `scripts/` | host setup, Limine download, QEMU wrapper and console filter | `out/serial.log` |
 | `ods/` | Files-11 ODS-2/ODS-5 file system in Rust: the library, the `ods` CLI and a FUSE mount; see [ods/README.md](ods/README.md) | `target/` |
-| `vtools/` | VMS-style toolchain in Rust: the `vasm` assembler, `vlink` linker and `vlib` librarian, object, library and image formats, `vdump` to inspect them, and `vrun`, which runs images in QEMU; see its [PRD](docs/prd/0001-vtools.md) | `target/` |
+| `vtools/` | VMS-style toolchain in Rust: the `vasm` assembler, the `vmacro` MACRO-32 compiler, `vlink` linker and `vlib` librarian, object, library and image formats, `vdump` to inspect them, and `vrun`, which runs images in QEMU; see its [PRD](docs/prd/0001-vtools.md) | `target/` |
 | `docs/` | ADRs, PRDs and design documents, numbered per kind; see [docs/README.md](docs/README.md) | |
 
 The whole repository is one Cargo workspace. `kernel/`, `shim/` and

@@ -1,0 +1,198 @@
+# vmacro: the MACRO-32 compiler
+
+`vmacro` compiles VAX MACRO-32 source for ARM64 into an object module
+(`docs/object-format.md`), which `vlink` links like any other. It does for
+vaxpunk what the MACRO-32 compiler (AMACRO) did for OpenVMS Alpha: each VAX
+instruction becomes a few native ones, with VAX registers, condition codes
+and calls kept as the source expects them.
+
+```
+vmacro [/OBJECT=file | -o file] [/INCLUDE=dir | -I dir]... [/NOWARNINGS=NOTPIC | --nowarnings NOTPIC] SOURCE
+```
+
+The options are vasm's (`docs/assembler.md`). The object file defaults to the
+source name with `.obj`.
+
+```
+vmacro -I vtools/lib hello.mar && vlink hello.obj && vrun hello.exe
+```
+
+`vtools/examples/macro32` has examples to try, with the commands in a
+Justfile.
+
+Status: integer instructions, the calling standard's `CALLS`, `CALLG` and
+`RET`, `JSB` and `RSB`, `CASE`, bit fields, `MOVC3` and `MOVC5`. Not yet:
+floating point, packed decimal, queues, the other string instructions,
+privileged instructions, `.CALL_ENTRY`, listings.
+
+## How it works
+
+vmacro is vasm with a MACRO-32 dialect. vasm reads the source: labels,
+macros, `.IF` and repeat blocks, symbols and most directives work as in
+`docs/assembler.md`. It passes each statement to vmacro, which translates VAX
+instructions and MACRO-32's own directives into ARM64 assembly lines that vasm
+then assembles. An error in the translation shows the MACRO-32 line and the
+instruction it came from (`in MOVL, at hello.mar:12`).
+
+A mnemonic that isn't VAX is left to vasm, so ARM64 instructions can be
+mixed in, like AMACRO's `EVAX_` built-ins: `svc #2` calls vrun's put. `vrun.mlb`
+works in MACRO-32 sources, with the registers its macros use (x0 and x1 are R0
+and R1).
+
+Differences from vasm:
+
+- Expressions are MACRO-32's: binary operators apply strictly left to right
+  (`1+2*3` is 9), `<>` groups, `!` is OR, `\` XOR, `@` shifts (right if the
+  count is negative), and `^C`, `^A/text/`, `^M<R2,R3>` complement, make ASCII
+  values and register masks. `10.` is decimal. There is no `<<` or `>>`.
+- An instruction after data (`.BYTE`, `.ASCIC`...) starts on the next
+  longword, and labels on or just before it move with it. vasm itself
+  requires `.ALIGN LONG`.
+
+## Registers
+
+| VAX | ARM64 |
+| --- | --- |
+| R0-R11 | x0-x11 |
+| AP (R12) | x12 |
+| FP (R13) | x29 |
+| SP (R14) | x28 |
+| PC (R15) | no register; only in addressing modes as the VAX encodes them |
+
+Longword values live in the low 32 bits (`w` registers, zero-extended). An
+address MOVA puts in a register keeps all 64 bits; anything else that holds an
+address holds 32. So a MACRO-32 image must lie below 4 GB, below 2 GB if it
+has `.ADDRESS` or `.LONG` of addresses; `vrun --base` must keep it there. Byte
+and word writes to a register change only its low byte or word, as on the VAX.
+A quadword in registers is a pair: Rn low, Rn+1 high.
+
+x13-x18 are scratch registers for the translation; x13 also passes the
+argument list pointer in a call. MACRO-32 code must not use them.
+
+### The stack
+
+VAX SP is x28, not ARM64's `sp`: VAX pushes longwords, and `sp` must stay
+16-byte aligned at EL0 (vrun sets `SCTLR_EL1.SA0`, as seL4 and Linux do). Both
+point into the same stack: before each call vmacro sets `sp` to x28 rounded
+down to 16 bytes, so the callee's frame goes below what the caller pushed.
+
+## Calls
+
+`CALLS` and `CALLG` keep the VAX calling standard's shape: an argument list of
+longwords, a count first, that AP points to in the called routine. Provisional
+until vaxpunk's calling standard exists.
+
+- `CALLS #n, routine` pushes the count on the stack above the arguments the
+  caller pushed, points x13 at it, aligns `sp` and `bl`s the routine. On
+  return it pops the list. `CALLG arglist, routine` passes `arglist` in x13 and
+  pops nothing.
+- `.ENTRY name, ^M<R2,...>` defines a global `name` and builds a frame on `sp`:
+
+  | Offset | Holds |
+  | --- | --- |
+  | 0 | condition handler, 0 (`MOVAB handler, (FP)` sets it) |
+  | 8 | the caller's AP |
+  | 16 | the caller's FP, then LR |
+  | 32 | the caller's SP (x28) |
+  | 40 | unused |
+  | 48 | the registers in the entry mask, 8 bytes each |
+
+  FP (x29) points at the frame, AP (x12) at the argument list, and SP (x28)
+  starts at the frame, so locals made with `SUBL2 #n, SP` are at negative
+  offsets from FP, as on the VAX. Mask bits 12 and up (integer and decimal
+  overflow traps) are ignored.
+- `RET` restores what `.ENTRY` saved and returns. It belongs to the last
+  `.ENTRY` before it in the source.
+
+A routine called from outside MACRO-32 gets no argument list: vrun enters the
+transfer address with x13, and so AP, 0. Return a status in R0; vrun exits
+with it.
+
+`JSB` and `BSBx` push an 8-byte return address on the stack and jump; `RSB`
+pops it and jumps to it, so a JSB routine needs no declaration
+(`.JSB_ENTRY` is accepted and ignored). Code that pops or changes the return
+address as a longword won't work.
+
+## Condition codes
+
+ARM64's NZCV stand in for the VAX's NZVC. A compare, `ADDL`, `SUBL`, `INCL`,
+`DECL`, `MNEGL`, `BICL`, `TST` and `BIT` set them directly. After a
+subtraction or compare ARM64's C is the VAX's inverted (no borrow), and vmacro
+remembers which, choosing the matching ARM64 condition for `BLSSU`, `BCS` and
+the rest. Instructions whose result the VAX tests but ARM64 doesn't (moves,
+logic, byte and word arithmetic) leave a test for the next conditional branch,
+done only if one follows.
+
+What doesn't carry over:
+
+- A conditional branch must follow the instruction that set the codes, as
+  written in the source; codes set on another path to a label aren't known.
+- V and C are exact only for longword `ADD`, `SUB`, `INC`, `DEC`, `CMP` and
+  `MNEG`. Other
+  instructions clear them rather than leave them as the VAX would.
+- No arithmetic traps: overflow and divide by zero don't fault. A divide by
+  zero gives 0.
+
+## Instructions
+
+| Group | Instructions |
+| --- | --- |
+| Move | `MOVx`, `CLRx`, `MCOMx`, `MNEGx`, `MOVZBW`, `MOVZBL`, `MOVZWL`, `CVTBW`, `CVTBL`, `CVTWL`, `CVTWB`, `CVTLB`, `CVTLW`, `MOVAx`, `PUSHAx`, `PUSHL`, `PUSHR`, `POPR` |
+| Arithmetic and logic | `ADDx2/3`, `SUBx2/3`, `MULx2/3`, `DIVx2/3`, `BISx2/3`, `BICx2/3`, `XORx2/3`, `INCx`, `DECx`, `CMPx`, `TSTx`, `BITx`, `ASHL`, `ASHQ`, `ROTL`, `EMUL`, `EDIV` |
+| Branch | `BRB`, `BRW`, `Bcc` (all 16), `BLBS`, `BLBC`, `BBS`, `BBC`, `BBSS`, `BBSC`, `BBCS`, `BBCC`, `JMP`, `CASEB/W/L`, `ACBB/W/L`, `AOBLSS`, `AOBLEQ`, `SOBGTR`, `SOBGEQ` |
+| Call | `CALLS`, `CALLG`, `RET`, `JSB`, `BSBB`, `BSBW`, `RSB` |
+| Field and string | `EXTV`, `EXTZV`, `INSV`, `MOVC3`, `MOVC5` |
+| Other | `NOP`, `HALT` (a fault, `%VRUN-F-OPCDEC` under vrun), `BPT` (`brk`) |
+
+`x` is B, W, L, or Q where the VAX has it. Every addressing mode works:
+register, `(Rn)`, `(Rn)+`, `-(Rn)`, `@(Rn)+`, `d(Rn)` and `@d(Rn)` with or
+without `B^`/`W^`/`L^`, `#n` with `S^`/`I^`, `@#address`, `address` and
+`@address` (`G^` too), and `[Rx]` indexing any memory mode. Operands are
+evaluated left to right with their side effects, as on the VAX.
+
+Limits:
+
+- `CASE`'s limit must be an immediate. The table of `.WORD` displacements
+  follows the instruction as usual.
+- A bit field's size must be a constant, at most 32. A field in a register
+  must fit in it. A field in memory is read and written as the 8 bytes
+  around it: not atomically, and a field ending less than 8 bytes before an
+  unmapped page faults.
+- `ASHL` and `ASHQ` with a count in a register wrap counts of 32 (64) and
+  more instead of clearing the result.
+- `MOVC5` copies forwards only; `MOVC3` handles any overlap. Both copy a byte
+  at a time.
+- `PUSHR` and `POPR` take a constant mask and can't save SP or PC.
+
+## Directives
+
+vasm's directives work (`.TITLE`, `.IDENT`, `.PSECT`, data, `.ALIGN`, `.END`,
+macros, conditionals...), with these changes:
+
+| Directive | In vmacro |
+| --- | --- |
+| `.ENTRY name, mask` | a routine: see *Calls* |
+| `.ADDRESS` | a longword address, as on the VAX (vasm's is a quadword) |
+| `.BLKA` | longwords |
+| `.EXTRN` | `.EXTERNAL` |
+| `.SIGNED_BYTE`, `.SIGNED_WORD` | `.BYTE`, `.WORD` |
+| `.PSECT name, EXE, ...` | also `NOWRT`: ARM64 code can't be writable. `USR` and `LIB` are dropped |
+| `.ERROR text` | an error |
+| `.JSB_ENTRY`, listing directives (`.SBTTL`, `.PAGE`, `.LIST`, `.SHOW`, `.ENABLE`, `.DISABLE`, `.DEFAULT`, `.PRINT`, `.WARN`...) | ignored |
+
+A psect for code needs `EXE`: with vasm's defaults a psect such as `.PSECT
+CODE` is data, and running it faults. `$CODE$` has the right attributes.
+
+An operand vmacro can't evaluate yet, such as `#label` or a displacement
+defined further down, comes from a longword in `$LINK$`, which the loader
+fixes up if the image moves. A constant known at that point is built into the
+instructions.
+
+## Tests
+
+`vtools/examples/macro32/` holds examples with a Justfile that runs them
+with the vtools commands, and `vtools/tests/macro32/` programs that check
+themselves. `cargo test -p vrun --test programs macro32` compiles, links and
+runs both under vrun, at the link base and moved, against their expected
+output. `crates/vmacro/tests/errors.rs` checks
+the errors.

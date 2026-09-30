@@ -12,3 +12,4 @@ vms-obj = { path = "../vms-obj" }
 vasm = { path = "../vasm" }
 vlib = { path = "../vlib" }
 vlink = { path = "../vlink" }
+vmacro = { path = "../vmacro" }

@@ -1,5 +1,10 @@
 //! Expressions: C operators and precedence, VMS radix prefixes, symbols,
 //! local labels (`10$`) and the location counter (`.`).
+//!
+//! With `Cursor::macro32`, MACRO-32's instead: binary operators apply left
+//! to right with no precedence, `<>` groups, `!` is OR, `\` XOR, `@` an
+//! arithmetic shift (right if negative), and `^C`, `^A/text/` and `^M<regs>`
+//! are the complement, ASCII and register mask operators. `10.` is decimal.
 
 use crate::lex::{Cursor, Result, err};
 
@@ -27,6 +32,9 @@ pub enum Op {
     And,
     Xor,
     Or,
+    /// MACRO-32's `@`: left by a positive count, arithmetic right by a
+    /// negative one.
+    Ash,
 }
 
 /// A value: absolute, or relative to a psect of this module or to an
@@ -46,7 +54,42 @@ pub trait Scope {
 
 /// Parses an expression; `block` numbers the local label block.
 pub fn parse(c: &mut Cursor, block: u32) -> Result<Expr> {
+    if c.macro32 {
+        return flat(c, block);
+    }
     binary(c, block, 0)
+}
+
+/// MACRO-32 has no `<<` and `>>`, whose `>` would end a `<>` group.
+const FLAT: [(&str, Op); 11] = [
+    ("+", Op::Add),
+    ("-", Op::Sub),
+    ("*", Op::Mul),
+    ("/", Op::Div),
+    ("%", Op::Rem),
+    ("&", Op::And),
+    ("!", Op::Or),
+    ("|", Op::Or),
+    ("\\", Op::Xor),
+    ("^", Op::Xor),
+    ("@", Op::Ash),
+];
+
+/// MACRO-32: operators left to right, all of the same precedence.
+fn flat(c: &mut Cursor, block: u32) -> Result<Expr> {
+    let mut left = unary(c, block)?;
+    'more: loop {
+        c.skip_ws();
+        for &(tok, op) in &FLAT {
+            if c.rest().starts_with(tok) {
+                c.at += tok.len();
+                let right = unary(c, block)?;
+                left = Expr::Bin(op, Box::new(left), Box::new(right));
+                continue 'more;
+            }
+        }
+        return Ok(left);
+    }
 }
 
 const LEVELS: [&[(&str, Op)]; 6] = [
@@ -92,6 +135,11 @@ fn unary(c: &mut Cursor, block: u32) -> Result<Expr> {
         c.expect(')')?;
         return Ok(e);
     }
+    if c.macro32
+        && let Some(e) = macro32_unary(c, block)?
+    {
+        return Ok(e);
+    }
     let col = c.col();
     let rest = c.rest();
     if let Some(ch) = rest.strip_prefix('\'').and_then(|r| r.chars().next()) {
@@ -123,12 +171,78 @@ fn unary(c: &mut Cursor, block: u32) -> Result<Expr> {
             return err(col, format!("bad number '{}'", &rest[..skip + len]));
         };
         c.at += skip + len;
+        // MACRO-32's explicitly decimal `10.`.
+        if c.macro32 && skip == 0 && c.rest().starts_with('.') {
+            c.at += 1;
+        }
         return Ok(Expr::Num(n as i64));
     }
     match c.name() {
         Some(name) if name == "." => Ok(Expr::Here),
         Some(name) => Ok(Expr::Sym(name)),
         None => err(col, "expected an expression"),
+    }
+}
+
+/// MACRO-32's `<expr>`, `^C`, `^A` and `^M`, if one comes next.
+fn macro32_unary(c: &mut Cursor, block: u32) -> Result<Option<Expr>> {
+    if c.eat('<') {
+        let e = parse(c, block)?;
+        c.expect('>')?;
+        return Ok(Some(e));
+    }
+    let col = c.col();
+    let op = c.rest().get(..2).map(str::to_ascii_uppercase);
+    match op.as_deref() {
+        Some("^C") => {
+            c.at += 2;
+            Ok(Some(Expr::Not(Box::new(unary(c, block)?))))
+        }
+        Some("^A") => {
+            // ^A/text/: up to 8 characters, the first in the low byte.
+            c.at += 2;
+            let rest = c.rest();
+            let Some(d) = rest.chars().next() else {
+                return err(col, "expected ^A/text/");
+            };
+            let Some(len) = rest[d.len_utf8()..].find(d) else {
+                return err(col, format!("missing closing {d}"));
+            };
+            let text = &rest.as_bytes()[d.len_utf8()..d.len_utf8() + len];
+            if text.len() > 8 {
+                return err(col, "^A takes at most 8 characters");
+            }
+            let n = text.iter().rev().fold(0u64, |n, &b| n << 8 | u64::from(b));
+            c.at += len + 2 * d.len_utf8();
+            Ok(Some(Expr::Num(n as i64)))
+        }
+        Some("^M") => {
+            // ^M<R2,R3,AP>: a register mask.
+            c.at += 2;
+            c.expect('<')?;
+            let mut mask = 0i64;
+            while !c.eat('>') {
+                let rcol = c.col();
+                let bit = match c.name().as_deref() {
+                    Some("AP") => 12,
+                    Some("FP") => 13,
+                    Some("SP") => 14,
+                    Some("PC") => 15,
+                    Some(r) => match r.strip_prefix('R').and_then(|n| n.parse::<u32>().ok()) {
+                        Some(n) if n < 16 => n,
+                        _ => return err(rcol, "expected a register"),
+                    },
+                    None => return err(rcol, "expected a register"),
+                };
+                mask |= 1 << bit;
+                if !c.eat(',') {
+                    c.expect('>')?;
+                    break;
+                }
+            }
+            Ok(Some(Expr::Num(mask)))
+        }
+        _ => Ok(None),
     }
 }
 
@@ -199,6 +313,8 @@ fn arith(op: Op, l: i64, r: i64) -> std::result::Result<i64, String> {
         Op::And => l & r,
         Op::Xor => l ^ r,
         Op::Or => l | r,
+        Op::Ash if r >= 0 => l.wrapping_shl(r as u32),
+        Op::Ash => l.wrapping_shr(r.unsigned_abs() as u32),
     })
 }
 
@@ -261,6 +377,26 @@ mod tests {
         let e = parse(&mut c, 7).map_err(|e| e.msg)?;
         assert!(c.at_end(), "{text}: trailing text");
         eval(&e, &S)
+    }
+
+    fn val32(text: &str) -> std::result::Result<Value, String> {
+        let mut c = Cursor::new(text);
+        c.macro32 = true;
+        let e = parse(&mut c, 7).map_err(|e| e.msg)?;
+        assert!(c.at_end(), "{text}: trailing text");
+        eval(&e, &S)
+    }
+
+    #[test]
+    fn macro32() {
+        assert_eq!(val32("1 + 2 * 3"), Ok(Value::Abs(9)));
+        assert_eq!(val32("1 + <2 * 3>"), Ok(Value::Abs(7)));
+        assert_eq!(val32("^X10 ! 1 \\ 3 & 6"), Ok(Value::Abs(2)));
+        assert_eq!(val32("1 @ 4 + 10."), Ok(Value::Abs(26)));
+        assert_eq!(val32("-32 @ -2"), Ok(Value::Abs(-8)));
+        assert_eq!(val32("^C0 + ^A/AB/"), Ok(Value::Abs(0x4241 - 1)));
+        assert_eq!(val32("^M<R2, R3, AP>"), Ok(Value::Abs(0x100c)));
+        assert_eq!(val32("a - b"), Ok(Value::Abs(12)));
     }
 
     #[test]

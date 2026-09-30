@@ -1,0 +1,37 @@
+# Builds and runs the vasm examples with the vtools commands. `just --dry-run
+# NAME` shows the commands without running them. Output goes to
+# target/examples/vasm.
+
+bin := "../../../target/debug"
+out := "../../../target/examples/vasm"
+
+_default:
+    @just --list
+
+# Runs every example.
+all: hello library
+
+# Checks every example's output against tests/examples/vasm.
+check:
+    just hello | diff ../../tests/examples/vasm/hello.stdout -
+    just library | diff ../../tests/examples/vasm/library.stdout -
+
+_build:
+    cargo build -q -p vasm -p vlink -p vlib -p vrun
+    mkdir -p {{out}}
+
+# One module.
+hello: _build
+    {{bin}}/vasm  -o {{out}}/hello.obj hello.mar
+    {{bin}}/vlink -o {{out}}/hello.exe {{out}}/hello.obj
+    {{bin}}/vrun  {{out}}/hello.exe
+
+# MAIN calls PUT_LINE from an object library. The macros come from vtools/lib.
+library: _build
+    {{bin}}/vasm -I ../../lib -o {{out}}/main.obj    library/main.mar
+    {{bin}}/vasm -I ../../lib -o {{out}}/decimal.obj library/lib/decimal.mar
+    {{bin}}/vasm -I ../../lib -o {{out}}/line.obj    library/lib/line.mar
+    {{bin}}/vasm -I ../../lib -o {{out}}/unused.obj  library/lib/unused.mar
+    {{bin}}/vlib --create {{out}}/lib.olb {{out}}/decimal.obj {{out}}/line.obj {{out}}/unused.obj
+    {{bin}}/vlink -o {{out}}/library.exe {{out}}/main.obj {{out}}/lib.olb
+    {{bin}}/vrun  {{out}}/library.exe

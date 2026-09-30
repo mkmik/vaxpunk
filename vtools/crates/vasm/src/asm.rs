@@ -10,6 +10,7 @@ use std::rc::Rc;
 
 use vms_obj::obj::psc;
 
+use crate::Dialect;
 use crate::encode::{self, Cx, Encoded, Fix, Operand};
 use crate::expr::{self, Expr, Scope, Value};
 use crate::lex::{self, Cursor, Result, err};
@@ -122,6 +123,8 @@ struct Frame {
     narg: Option<usize>,
     /// A macro library, which may only define macros.
     library: bool,
+    /// Lines the dialect produced: ARM64, not translated again.
+    native: bool,
 }
 
 /// An open `.IF`: its condition, whether the enclosing code is being
@@ -162,11 +165,13 @@ pub fn assemble(
     source: &str,
     path: Option<&Path>,
     include: &[PathBuf],
+    dialect: Option<&mut dyn Dialect>,
 ) -> std::result::Result<Module, Vec<Diagnostic>> {
     let file: Rc<str> = path.map_or_else(|| "<source>".into(), |p| p.display().to_string().into());
     let mut a = Asm {
         next_label: 30000,
         include: include.to_vec(),
+        dialect,
         ..Asm::default()
     };
     a.frames.push(Frame {
@@ -175,6 +180,7 @@ pub fn assemble(
         conds: 0,
         narg: None,
         library: false,
+        native: false,
     });
     while let Some(line) = a.next_line() {
         a.src = line;
@@ -214,7 +220,7 @@ pub fn assemble(
 }
 
 #[derive(Default)]
-struct Asm {
+struct Asm<'d> {
     psects: Vec<Psect>,
     symbols: HashMap<String, Symbol>,
     order: Vec<String>,
@@ -240,6 +246,11 @@ struct Asm {
     /// `.SAVE_PSECT`: psect, and local label block if saved.
     saved: Vec<(Option<usize>, Option<u32>)>,
     include: Vec<PathBuf>,
+    /// Translates statements from another language, MACRO-32 so far.
+    dialect: Option<&'d mut dyn Dialect>,
+    /// Labels at the current location, with their psect, for the dialect's
+    /// instructions to move when they align it.
+    fresh: Vec<(usize, String)>,
 }
 
 /// Symbols and the location counter, as an expression sees them.
@@ -264,7 +275,7 @@ impl Scope for View<'_> {
     }
 }
 
-impl Asm {
+impl Asm<'_> {
     fn error(&mut self, e: lex::Error) {
         self.diagnose(e, false);
     }
@@ -354,6 +365,20 @@ impl Asm {
         }
     }
 
+    /// The value of `text` now, if it's a constant: what a dialect sees.
+    fn constant_now(&self, text: &str) -> Option<i64> {
+        let mut c = Cursor::new(text);
+        c.macro32 = true;
+        let e = expr::parse(&mut c, self.block).ok()?;
+        if !c.at_end() {
+            return None;
+        }
+        match self.eval(&e, 1, self.loc()).ok()? {
+            Value::Abs(n) => Some(n),
+            _ => None,
+        }
+    }
+
     /// The current psect, `$CODE$` if none was chosen.
     fn current(&mut self) -> usize {
         if self.cur.is_none() {
@@ -391,6 +416,7 @@ impl Asm {
 
     fn item(&mut self, item: Item, size: u64) {
         let psect = self.current();
+        self.fresh.retain(|(p, _)| *p != psect);
         let p = &mut self.psects[psect];
         self.stmts.push(Stmt {
             src: self.src.clone(),
@@ -405,7 +431,9 @@ impl Asm {
     /// One line: conditionals first, as they apply even while skipping.
     fn process(&mut self, raw: &str) -> Result<()> {
         let text = lex::strip_comment(raw);
+        let macro32 = self.dialect.is_some();
         let mut c = Cursor::new(text);
+        c.macro32 = macro32;
         c.skip_ws();
         let col = c.col();
         if let Some(word) = c.name()
@@ -414,7 +442,9 @@ impl Asm {
             return Ok(());
         }
         if self.active() {
-            self.statement(Cursor::new(text))
+            let mut c = Cursor::new(text);
+            c.macro32 = macro32;
+            self.statement(c)
         } else {
             Ok(())
         }
@@ -583,16 +613,50 @@ impl Asm {
         if let Some(m) = self.macros.get(&word).cloned() {
             return self.invoke(&m, c.rest(), col);
         }
+        if !self.frames.last().is_some_and(|f| f.native)
+            && let Some(d) = self.dialect.take()
+        {
+            let lines = d.statement(&word, c.rest(), &|text| self.constant_now(text));
+            self.dialect = Some(d);
+            if let Some(lines) = lines {
+                let lines = lines.or_else(|msg| err(col, msg))?;
+                let via = Rc::new((word, self.src.loc.clone()));
+                let lines = lines
+                    .into_iter()
+                    .map(|text| Line {
+                        text,
+                        loc: Loc {
+                            via: Some(via.clone()),
+                            ..self.src.loc.clone()
+                        },
+                    })
+                    .collect();
+                self.push(lines, None, col)?;
+                self.frames.last_mut().unwrap().native = true;
+                return Ok(());
+            }
+        }
         if word.starts_with('.') {
             return self.directive(&word, &mut c, col);
         }
         let ops = encode::operands(&mut c, self.block)?;
         let psect = self.current();
-        if !self.psects[psect].size.is_multiple_of(4) {
-            return err(
-                col,
-                "instruction at an address that isn't 4-byte aligned; use .ALIGN LONG",
-            );
+        let size = self.psects[psect].size;
+        if !size.is_multiple_of(4) {
+            if self.dialect.is_none() {
+                return err(
+                    col,
+                    "instruction at an address that isn't 4-byte aligned; use .ALIGN LONG",
+                );
+            }
+            // MACRO-32 mixes data and code freely: pad, and move the labels
+            // that were meant for the instruction.
+            let fresh = std::mem::take(&mut self.fresh);
+            self.item(Item::Space, size.next_multiple_of(4) - size);
+            let here = self.here();
+            for (_, name) in fresh.iter().filter(|(p, _)| *p == psect) {
+                self.symbol(name).value = Some(here.clone());
+            }
         }
         self.item(Item::Insn { mn: word, col, ops }, 4);
         Ok(())
@@ -606,6 +670,8 @@ impl Asm {
         let here = self.here();
         self.define(name, here, col, true)?;
         self.symbol(name).global |= global;
+        let psect = self.current();
+        self.fresh.push((psect, name.to_string()));
         if !local {
             self.new_block();
         }
@@ -754,6 +820,7 @@ impl Asm {
             conds: self.conds.len(),
             narg,
             library: false,
+            native: false,
         });
         Ok(())
     }

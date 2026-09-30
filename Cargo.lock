@@ -620,6 +620,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "vmacro"
+version = "0.1.0"
+dependencies = [
+ "vasm",
+]
+
+[[package]]
 name = "vms-obj"
 version = "0.1.0"
 
@@ -630,6 +637,7 @@ dependencies = [
  "vasm",
  "vlib",
  "vlink",
+ "vmacro",
  "vms-obj",
 ]
 
