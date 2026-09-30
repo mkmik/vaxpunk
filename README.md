@@ -3,13 +3,15 @@
 OpenVMS remake on arm64.
 
 Milestone 0 boots an unmodified seL4 kernel on QEMU aarch64 through UEFI and
-Limine, and runs a C root task that prints over the serial console. seL4 is
+Limine, and runs a C root task that prints over the serial console. The root
+task then loads `exec.exe`, an image compiled from MACRO-32 with vtools, into
+its own address space and calls it. seL4 is
 built with its MCS (mixed-criticality scheduling) API: threads run on
 scheduling contexts with a budget and period, and IPC replies go through
 reply objects.
 
 ```
-EDK2 -> Limine (BOOTAA64.EFI) -> shim -> seL4 (kernel.elf) -> root task (roottask.elf)
+EDK2 -> Limine (BOOTAA64.EFI) -> shim -> seL4 (kernel.elf) -> root task (roottask.elf) -> exec.exe
 ```
 
 ## Host setup (once)
@@ -45,7 +47,8 @@ Limine, the shim's placement banner, seL4's boot messages, then the root task:
 vaxpunk shim: shim at 0x7fa68000, UART at 0x9000000
 shim: kernel    0x40000000-0x40239000 entry 0xffffff8040000000
 shim: DTB       0x40239000-0x4033a000
-shim: root task 0x4033a000-0x40340000 vaddr 0x400000 entry 0x400000
+shim: root task 0x4033a000-0x40341000 vaddr 0x400000 entry 0x400000
+shim: exec.exe  0x40340000-0x40341000 vaddr 0x406000
 shim: entering seL4
 Bootstrapping kernel
 ...
@@ -56,6 +59,8 @@ boot info: node 0 of 1, 53 untyped caps
 ...
 sched control caps: 278-278
 scheduling context: budget 5000 us per 5000 us, 40846 us used
+exec.exe: calling 0x10000
+exec.exe: returned 42
 root task done
 ```
 
@@ -76,8 +81,8 @@ about one second after the command.
 | --- | --- | --- |
 | `kernel/` | seL4 16.0.0 (submodule), built with its own CMake | `kernel.elf`, libsel4's headers, `platform_gen.json` |
 | `shim/` | Limine-protocol program that loads seL4 and the root task; see [shim/README.md](shim/README.md) | `shim.elf` |
-| `roottask/` | the root task, freestanding C | `roottask.elf` |
-| `image/` | Limine config, the ESP builder (mtools) and `boot`, which copies the three ELFs to `out/`, stitches the ESP and runs QEMU | `out/esp.img` |
+| `roottask/` | the root task, freestanding C, and its MACRO-32 part, `src/exec.mar`, which `build.rs` compiles and links with the vtools crates | `roottask.elf`, `exec.exe` |
+| `image/` | Limine config, the ESP builder (mtools) and `boot`, which copies the three ELFs and `exec.exe` to `out/`, stitches the ESP and runs QEMU | `out/esp.img` |
 | `scripts/` | host setup, Limine download, QEMU wrapper and console filter | `out/serial.log` |
 | `ods/` | Files-11 ODS-2/ODS-5 file system in Rust: the library, the `ods` CLI and a FUSE mount; see [ods/README.md](ods/README.md) | `target/` |
 | `vtools/` | VMS-style toolchain in Rust: the `vasm` assembler, the `vmacro` MACRO-32 compiler, `vlink` linker and `vlib` librarian, object, library and image formats, `vdump` to inspect them, and `vrun`, which runs images in QEMU; see its [PRD](docs/prd/0001-vtools.md) | `target/` |
@@ -104,7 +109,14 @@ exports its ELF's path as `ELF` for `boot`.
   that machine's memory map, and `scripts/run-qemu.sh` reads the same file.
 - Any root task can replace `roottask.elf`: it must be a static AArch64 ELF
   whose first segment is page aligned. seL4 calls its entry point with the
-  boot info pointer in `x0`.
+  boot info pointer in `x0`. The shim appends `exec.exe` to it, so seL4 maps
+  the image at the root task's last vaddr, page aligned (`_end` in
+  `roottask/linker.ld`); `bi->userImageFrames` counts its pages too.
+- The root task maps `exec.exe`'s sections at their link addresses (vlink's
+  default base, 0x10000) with fresh frames from the largest RAM untyped, and
+  calls the transfer address with no argument list. The image runs at EL0 in
+  the root task, which is the VMS executive's kernel mode: vrun's `SVC` calls
+  aren't there.
 - Pins: seL4 by submodule commit (tag 16.0.0), Limine 11.4.1 by version and
   SHA-256 in `scripts/fetch-limine.sh`. The EDK2 firmware comes from the
   QEMU install (`EDK2_FW=` overrides it).

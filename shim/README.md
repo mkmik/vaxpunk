@@ -1,8 +1,9 @@
 # shim
 
-The shim is the Limine-protocol executable. Limine loads it with two modules,
-`kernel` (seL4) and `roottask`. The shim places both in physical memory and
-enters seL4 in the same state the stock seL4 elfloader leaves it in.
+The shim is the Limine-protocol executable. Limine loads it with three
+modules, `kernel` (seL4), `roottask` and `exec` (a MACRO-32 image the root task
+runs). The shim places them in physical memory and enters seL4 in the same
+state the stock seL4 elfloader leaves it in.
 
 ## seL4 entry contract
 
@@ -30,6 +31,9 @@ again when bumping the seL4 tag.
 - The DTB is copied to the first page boundary after the kernel's physical end.
 - The user image starts at the first page boundary after the DTB. Each segment
   goes to start + (`p_vaddr` − min vaddr). Min vaddr must be page aligned.
+- **vaxpunk addition:** the `exec` module follows the root task's last page,
+  and the user image end (`x1`) covers it, so seL4 maps it into the root task
+  at the root task's end vaddr (the linker's `_end`).
 
 ### CPU and MMU state
 
