@@ -1,5 +1,6 @@
-//! Assembles, links and runs every program in tests/run under vrun, and
-//! checks it against the files next to it: NAME.stdout (exact output,
+//! Assembles, links and runs every program in tests/run and examples under
+//! vrun, and checks it against its expected files, next to it in tests/run
+//! and in tests/examples for examples: NAME.stdout (exact output,
 //! default empty), NAME.status (exit code, default 0) and NAME.stderr (a
 //! line stderr must contain). A directory NAME/ is a program of several
 //! modules, linked in name order, then the object library vlib makes of the
@@ -21,23 +22,33 @@ use vms_obj::olb::Library;
 
 #[test]
 fn programs() {
-    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/run");
-    let mut names: Vec<String> = fs::read_dir(&dir)
-        .unwrap()
-        .map(|e| e.unwrap().path())
-        .filter(|p| p.is_dir() || p.extension().is_some_and(|e| e == "mar"))
-        .map(|p| p.file_stem().unwrap().to_string_lossy().into_owned())
-        .collect();
-    names.sort();
-    let failures: Vec<String> = names
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    // (sources, expected files)
+    let dirs = [("tests/run", "tests/run"), ("examples", "tests/examples")];
+    let mut programs: Vec<(PathBuf, PathBuf, String)> = dirs
         .iter()
-        .filter_map(|n| run(&dir, n).err().map(|e| format!("{n}: {e}")))
+        .flat_map(|(src, exp)| {
+            let (src, exp) = (root.join(src), root.join(exp));
+            fs::read_dir(&src)
+                .unwrap()
+                .map(|e| e.unwrap().path())
+                .filter(|p| p.is_dir() || p.extension().is_some_and(|e| e == "mar"))
+                .map(move |p| {
+                    let name = p.file_stem().unwrap().to_string_lossy().into_owned();
+                    (src.clone(), exp.clone(), name)
+                })
+        })
+        .collect();
+    programs.sort();
+    let failures: Vec<String> = programs
+        .iter()
+        .filter_map(|(src, exp, n)| run(src, exp, n).err().map(|e| format!("{n}: {e}")))
         .collect();
     assert!(
         failures.is_empty(),
         "{} of {} programs failed:\n{}",
         failures.len(),
-        names.len(),
+        programs.len(),
         failures.join("\n")
     );
 }
@@ -45,7 +56,7 @@ fn programs() {
 /// The same image anywhere in the lower half: here 64 TB up.
 #[test]
 fn high_base() {
-    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/run");
+    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples");
     let text = fs::read_to_string(dir.join("hello.mar")).unwrap();
     let records = vasm::assemble(&text, &options("HELLO", &dir.join("hello.mar")))
         .unwrap()
@@ -83,7 +94,7 @@ fn options(module: &str, source: &Path) -> vasm::Options {
     }
 }
 
-fn run(dir: &Path, name: &str) -> Result<(), String> {
+fn run(dir: &Path, expected: &Path, name: &str) -> Result<(), String> {
     let program = dir.join(name);
     let mut objects = Vec::new();
     if program.is_dir() {
@@ -133,7 +144,7 @@ fn run(dir: &Path, name: &str) -> Result<(), String> {
     let map = exe.with_extension("map");
     fs::write(&map, &linked.map).unwrap();
 
-    let expect = |ext: &str| fs::read_to_string(dir.join(format!("{name}.{ext}"))).ok();
+    let expect = |ext: &str| fs::read_to_string(expected.join(format!("{name}.{ext}"))).ok();
     let status: i32 = expect("status").map_or(0, |s| s.trim().parse().unwrap());
     let want = expect("stdout").unwrap_or_default();
     let fault = expect("stderr").unwrap_or_default();
