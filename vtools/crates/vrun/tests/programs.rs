@@ -6,7 +6,9 @@
 //! default empty), NAME.status (exit code, default 0) and NAME.stderr (a
 //! line stderr must contain). A directory NAME/ is a program of several
 //! modules, linked in name order, then the object library vlib makes of the
-//! modules in NAME/lib/, if there is one. VRUN_FLAGS adds vrun options.
+//! modules in NAME/lib/, if there is one. MACRO-32 programs link against
+//! vtools/lib's modules last, as VMS programs against the system's
+//! libraries. VRUN_FLAGS adds vrun options.
 //! Every object, library and image made on the way must parse and write back
 //! to the same bytes.
 //!
@@ -51,7 +53,7 @@ fn macro32() {
 }
 
 /// Runs the programs in each (sources, expected files) directory pair.
-fn all(dirs: &[(&str, &str)], tool: Tool, low: bool) {
+fn all(dirs: &[(&str, &str)], tool: Tool, macro32: bool) {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
     let mut programs: Vec<(PathBuf, PathBuf, String)> = dirs
         .iter()
@@ -71,7 +73,7 @@ fn all(dirs: &[(&str, &str)], tool: Tool, low: bool) {
     let failures: Vec<String> = programs
         .iter()
         .filter_map(|(src, exp, n)| {
-            run(src, exp, n, tool, low)
+            run(src, exp, n, tool, macro32)
                 .err()
                 .map(|e| format!("{n}: {e}"))
         })
@@ -126,7 +128,7 @@ fn options(module: &str, source: &Path) -> vasm::Options {
     }
 }
 
-fn run(dir: &Path, expected: &Path, name: &str, tool: Tool, low: bool) -> Result<(), String> {
+fn run(dir: &Path, expected: &Path, name: &str, tool: Tool, macro32: bool) -> Result<(), String> {
     let program = dir.join(name);
     let mut objects = Vec::new();
     if program.is_dir() {
@@ -134,17 +136,14 @@ fn run(dir: &Path, expected: &Path, name: &str, tool: Tool, low: bool) -> Result
             objects.push(assemble(&source, tool)?);
         }
         if program.join("lib").is_dir() {
-            let mut lib = vlib::new(0);
-            for source in sources(&program.join("lib")) {
-                let (file, object) = assemble(&source, tool)?;
-                vlib::replace(&mut lib, &file, &object, 0)?;
-            }
-            let bytes = lib.write();
-            assert_eq!(Library::parse(&bytes).unwrap().write(), bytes, "round trip");
-            objects.push(("LIB.OLB".into(), bytes));
+            objects.push(("LIB.OLB".into(), library(&program.join("lib"), tool)?));
         }
     } else {
         objects.push(assemble(&dir.join(format!("{name}.mar")), tool)?);
+    }
+    if macro32 {
+        let lib = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../lib");
+        objects.push(("SYSLIB.OLB".into(), library(&lib, tool)?));
     }
     let link = |base, relocatable| {
         let opts = vlink::Options {
@@ -165,7 +164,7 @@ fn run(dir: &Path, expected: &Path, name: &str, tool: Tool, low: bool) -> Result
     if plain != link(vlink::DEFAULT_BASE, false)?.image {
         return Err("/RELOCATABLE changed more than the fixup section".into());
     }
-    let far = far_base(image, low);
+    let far = far_base(image, macro32);
     vlink::check_fixups(image, &link(far, true)?.image)
         .map_err(|e| format!("linked at {far:#x}: {e}"))?;
 
@@ -232,6 +231,18 @@ fn far_base(image: &Image, low: bool) -> u64 {
     let span = end.max().unwrap().next_multiple_of(0x1000) - start;
     let limit = start + (i32::MAX - f.long_max) as u64;
     (0x7ff0_0000 - span).min(limit) & !0xffff
+}
+
+/// The object library vlib makes of the modules in `dir`.
+fn library(dir: &Path, tool: Tool) -> Result<Vec<u8>, String> {
+    let mut lib = vlib::new(0);
+    for source in sources(dir) {
+        let (file, object) = assemble(&source, tool)?;
+        vlib::replace(&mut lib, &file, &object, 0)?;
+    }
+    let bytes = lib.write();
+    assert_eq!(Library::parse(&bytes).unwrap().write(), bytes, "round trip");
+    Ok(bytes)
 }
 
 /// The .mar files in `dir`, in name order.

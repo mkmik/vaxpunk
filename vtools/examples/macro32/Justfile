@@ -20,10 +20,11 @@ _build:
     cargo build -q -p vmacro -p vlink -p vrun
     mkdir -p {{out}}
 
-# One routine. $PUT comes from vtools/lib/vrun.mlb.
+# One routine. It prints with EXE$OUTZSTRING, from vtools/lib/consolio.mar.
 hello: _build
-    {{bin}}/vmacro -I ../../lib -o {{out}}/hello.obj hello.mar
-    {{bin}}/vlink  -o {{out}}/hello.exe {{out}}/hello.obj
+    {{bin}}/vmacro -o {{out}}/hello.obj    hello.mar
+    {{bin}}/vmacro -o {{out}}/consolio.obj ../../lib/consolio.mar
+    {{bin}}/vlink  -o {{out}}/hello.exe {{out}}/hello.obj {{out}}/consolio.obj
     {{bin}}/vrun   {{out}}/hello.exe
 
 # MAIN calls routines in another module with CALLS and CALLG, and its own

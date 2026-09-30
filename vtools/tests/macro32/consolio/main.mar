@@ -1,0 +1,76 @@
+        .TITLE  MAIN    The EXE$OUT* console routines, called as VMS code does
+        .EXTERNAL EXE$OUTCHAR, EXE$OUTBLANK, EXE$OUTCRLF, EXE$OUTBYTE
+        .EXTERNAL EXE$OUTHEX, EXE$OUTCSTRING, EXE$OUTZSTRING
+
+; Each EXPECT checks the condition codes; a failed one returns 2 * N, an
+; error status, so the exit code says which.
+
+        .MACRO  EXPECT  COND, N, ?OK
+        B'COND  OK
+        MOVL    #<N * 2>, R0
+        RET
+OK:
+        .ENDM   EXPECT
+
+        .PSECT  DATA, NOEXE, WRT, LONG
+LABELS: .ASCIZ  "STS = "                ; back to back, as in SYSLOA's tables
+        .ASCIZ  "  CPU = "
+NAME:   .ASCIC  "consolio"
+NONE:   .ASCIC  ""
+CUT:    .ASCIC  "cut"<0>"short"
+LONG:   .REPEAT 300
+        .ASCII  "x"
+        .ENDR
+        .BYTE   0
+
+        .PSECT  $CODE$
+        .ENTRY  MAIN, ^M<R2, R3, R4, R5, R11>
+        CLRL    R11                     ; the console
+        MOVL    #^X55555555, R5         ; no routine touches it
+        MOVAB   LABELS, R1
+        JSB     G^EXE$OUTZSTRING        ; R1 moves on to the next label
+        MOVL    R1, R3
+        MOVL    #^XDEADBEEF, R1
+        JSB     G^EXE$OUTHEX
+        CMPL    R1, #^XDEADBEEF
+        EXPECT  EQL, 1
+        MOVL    R3, R1
+        JSB     G^EXE$OUTZSTRING
+        MOVL    #^X1A5, R1
+        JSB     G^EXE$OUTBYTE           ; A5
+        JSB     G^EXE$OUTCRLF
+        CMPL    R1, #^X1A5              ; OUTCHAR keeps R1
+        EXPECT  EQL, 2
+
+        MOVAB   NAME, R1
+        JSB     G^EXE$OUTCSTRING
+        MOVZBL  #^A/:/, R0
+        JSB     G^EXE$OUTCHAR
+        JSB     G^EXE$OUTBLANK
+        MOVAB   NONE, R1
+        JSB     G^EXE$OUTCSTRING        ; nothing
+        MOVAB   NONE+1, R2
+        CMPL    R1, R2
+        EXPECT  EQL, 3
+        MOVAB   CUT, R1
+        JSB     G^EXE$OUTCSTRING        ; up to the NUL
+        MOVAB   CUT+5, R2
+        CMPL    R1, R2
+        EXPECT  EQL, 4
+        JSB     G^EXE$OUTBLANK
+        MOVL    #^XBEEF, R1
+        JSB     G^EXE$OUTHEX            ; 0000BEEF
+        JSB     G^EXE$OUTCRLF
+
+        MOVAB   LONG, R1
+        JSB     G^EXE$OUTZSTRING        ; 255 of the 300
+        MOVAB   LONG+255, R2
+        CMPL    R1, R2
+        EXPECT  EQL, 5
+        JSB     G^EXE$OUTCRLF
+        CMPL    R5, #^X55555555
+        EXPECT  EQL, 6
+        MOVL    #1, R0
+        RET
+
+        .END    MAIN

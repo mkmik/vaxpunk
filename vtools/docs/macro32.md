@@ -14,7 +14,8 @@ The options are vasm's (`docs/assembler.md`). The object file defaults to the
 source name with `.obj`.
 
 ```
-vmacro -I vtools/lib hello.mar && vlink hello.obj && vrun hello.exe
+vmacro hello.mar && vmacro -o consolio.obj vtools/lib/consolio.mar
+vlink hello.obj consolio.obj && vrun hello.exe
 ```
 
 `vtools/examples/macro32` has examples to try, with the commands in a
@@ -113,6 +114,29 @@ pops it and jumps to it, so a JSB routine needs no declaration
 (`.JSB_ENTRY` is accepted and ignored). Code that pops or changes the return
 address as a longword won't work.
 
+## Console output
+
+`vtools/lib/consolio.mar` has VMS's console output routines, which its
+bugcheck and init code, and some drivers, print with. They are JSB routines,
+as on the VAX, and take no lock:
+
+| Routine | Writes |
+| --- | --- |
+| `EXE$OUTCHAR` | the character in R0 |
+| `EXE$OUTBLANK`, `EXE$OUTCRLF` | a space; CR and LF |
+| `EXE$OUTHEX`, `EXE$OUTBYTE` | R1 as 8 hex digits; its low byte as 2 |
+| `EXE$OUTZSTRING`, `EXE$OUTCSTRING` | the `.ASCIZ` (at most 255 characters) or `.ASCIC` string R1 points to; R1 ends past it |
+
+The file says which registers each one uses. It is a module, not a macro
+library: compile it and link it with the program, as the `hello` example
+does. Its output goes through
+vrun's put, one character at a time, from `CON$PUTCHAR`.
+
+```
+MOVAB   MESSAGE, R1
+JSB     G^EXE$OUTZSTRING
+```
+
 ## Condition codes
 
 ARM64's NZCV stand in for the VAX's NZVC. A compare, `ADDL`, `SUBL`, `INCL`,
@@ -194,5 +218,5 @@ instructions.
 with the vtools commands, and `vtools/tests/macro32/` programs that check
 themselves. `cargo test -p vrun --test programs macro32` compiles, links and
 runs both under vrun, at the link base and moved, against their expected
-output. `crates/vmacro/tests/errors.rs` checks
-the errors.
+output, linking each against the modules in `vtools/lib`.
+`crates/vmacro/tests/errors.rs` checks the errors.
