@@ -30,7 +30,7 @@
         .EXTERNAL SCH$REMCOM, SCH$MAKECOM, SCH$WAKEPCB, SCH$WAKE, SCH$WAIT
         .EXTERNAL SCH$SCHED, SCH$DACEFC_ALL, SGN$GW_QUANTUM
         .EXTERNAL EXE$ALONONPAGED, EXE$DEANONPGDSIZ, MMG$CREPAG, MMG$DELPAG
-        .EXTERNAL MMG$SETPRT, EXE$GL_RPB
+        .EXTERNAL MMG$SETPRT, EXE$GL_RPB, EXE$RMVTIMQ
         .EXTERNAL EXE$OUTZSTRING, EXE$OUTCSTRING, EXE$OUTHEX, EXE$OUTCRLF
 
 KSTACK = 16384                          ; a process's kernel stack
@@ -417,11 +417,16 @@ EXE$IMGACT::
         ENBINT
 10$:    BRW     EXE$DELSELF
 
-; EXE$RUNDOWN: R4 = a PCB. Gives back what its process holds: its image's
-; pages, its common event flag clusters and its slot. Uses R0-R3.
+; EXE$RUNDOWN: R4 = a PCB. Gives back what its process holds: its timer
+; queue entries, its image's pages, its common event flag clusters and its
+; slot. Uses R0-R3.
 ; ponytail: pages from $CRETVA and $EXPREG stay; per-process address
 ; spaces will take them with the process.
 EXE$RUNDOWN::
+        MOVL    PCB$L_PID(R4), R0
+        MNEGL   #1, R1
+        CLRL    R2
+        BSBW    EXE$RMVTIMQ
         MOVL    PCB$L_IMGBAS(R4), R0
         SUBL3   R0, PCB$L_IMGEND(R4), R1
         ASHL    #-MMG$C_VPCTX, R1, R1

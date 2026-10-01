@@ -8,7 +8,7 @@ on the PAL interface of [DESIGN-0001](0001-pal-interface.md). It follows
 [ADR-0003](../adr/0003-one-cpu-many-threads.md): processes are threads that
 take turns on one CPU, and IPL synchronizes them, and
 [ADR-0004](../adr/0004-interval-timer-is-a-pal-thread.md): the interval
-timer ends their quanta. Every process runs in
+timer keeps the system time, serves the timer queue and ends their quanta. Every process runs in
 kernel mode, in the address space they all share; supervisor and user mode
 come later as tasks of their own.
 
@@ -23,9 +23,9 @@ its code.
 | `exec.mar` | `EXEC$START`, the swapper, `CON$PUTCHAR` |
 | `memory.mar` | the PFN list, pages, nonpaged pool, `$CRETVA`, `$DELTVA`, `$EXPREG` |
 | `sched.mar` | state queues, `SCH$SCHED`, waits and wakes, the reschedule interrupt, quantum end |
-| `timeschdl.mar` | the interval timer and software timer interrupts |
+| `timeschdl.mar` | the interval timer and software timer interrupts, the system time, the timer queue, `$GETTIM`, `$SETIMR`, `$CANTIM`, `$SCHDWK`, `$CANWAK` |
 | `event.mar` | event flags, local and common |
-| `process.mar` | `$CREPRC`, process start, image activation, `$EXIT`, deletion, `$HIBER`, `$WAKE`, `$SUSPND`, `$RESUME`, `$SETPRI`, `$SETPRN`, `$CMKRNL` |
+| `process.mar` | `$CREPRC`, process start, image activation, `$EXIT`, deletion, `$HIBER`, `$WAKE`, `$SCHDWK`, `$CANWAK`, `$SUSPND`, `$RESUME`, `$SETPRI`, `$SETPRN`, `$CMKRNL` |
 | `syssrv.mar` | the system service vector, the `CHMK` dispatcher and the stubs |
 
 `roottask/build.rs` links them, with `vtools/lib/consolio.mar`, into
@@ -44,8 +44,10 @@ its code.
 3. `MMG$INIT`: the PFN list and the pool.
 4. `SCH$INIT`: empty queues, and the boot context becomes the swapper,
    process 1, current, at priority 16.
-5. Lowers IPL to 0 and creates `STARTUP` from `STARTUP.EXE`.
-6. Becomes the swapper: it deletes what deleted processes left behind,
+5. `EXE$INITTIM`: an empty timer queue, and the system time from
+   `RPB$L_BOOTTIME`.
+6. Lowers IPL to 0 and creates `STARTUP` from `STARTUP.EXE`.
+7. Becomes the swapper: it deletes what deleted processes left behind,
    and hibernates in between.
 
 ## Memory
@@ -123,7 +125,7 @@ on the console first, as a command interpreter would:
 ### Deletion
 
 - **Itself** (`$EXIT`, or `$DELPRC` naming itself): it runs itself down
-  (image pages, common event flag clusters, slot), goes on the swapper's
+  (timer queue entries, image pages, common event flag clusters, slot), goes on the swapper's
   queue, wakes it, and gives up the CPU for good. The swapper deletes its
   context with `DELCTX`, then frees its kernel stack and PCB, since a
   process can't free the stack it runs on.
@@ -154,7 +156,9 @@ States and queues, as VMS's `$STATEDEF`:
   queue, makes it current and `SWPCTX`es to its HWPCB, unless it is the
   process already there. The process leaving waits inside its `SWPCTX`
   until the CPU comes back, so the switch saves no registers. With no
-  process computable, the CPU waits for an interrupt (`WTINT`).
+  process computable, the CPU waits for an interrupt (`WTINT`) at
+  `IPL$_RESCHED`, so that the software timer interrupt can make one
+  computable.
 - **`SCH$WAIT`** puts the current process on a wait queue and calls
   `SCH$SCHED`. It returns when the wait is over and the CPU is back.
 - **`SCH$WAKEPCB`** takes a process off its wait queue and makes it
@@ -175,8 +179,9 @@ computable, or its quantum is up, as on VMS:
    minus `SGN$GW_QUANTUM`, 20 ticks, which `$CREPRC` sets. At 0 it requests
    the software timer interrupt, `SOFTINT #IPL$_TIMER` (7). A tick while
    the CPU is idle charges no one.
-2. **`EXE$SWTIMINT`**, at `IPL$_TIMER`, raises IPL to `IPL$_SYNCH` and calls
-   `SCH$QEND` if the quantum is still up.
+2. **`EXE$SWTIMINT`**, at `IPL$_TIMER`, raises IPL to `IPL$_SYNCH`, calls
+   `SCH$QEND` if the quantum is still up, and serves the timer queue
+   ([Time](#time)).
 3. **`SCH$QEND`** gives the process a new quantum and, if a COM queue at its
    priority or above isn't empty, requests the reschedule interrupt, which
    puts it on its queue's tail: round robin within a priority. Real-time
@@ -186,6 +191,36 @@ computable, or its quantum is up, as on VMS:
 Code at `IPL$_TIMER` or above, the scheduler included, defers quantum end
 until IPL drops.
 
+## Time
+
+The system time, `EXE$GQ_SYSTIME`, is VMS's: a quadword of 100 ns units
+since 17-Nov-1858. `EXE$INITTIM` sets it from the RTC's seconds, which
+the PAL puts in `RPB$L_BOOTTIME`, and each tick of `EXE$HWCLKINT` adds
+10 ms. ponytail: `EMUL` is signed, so the RTC's seconds fit until 2038.
+A time a service takes is a time, or, negative, a delta from now.
+
+The timer queue, `EXE$GQ_TQFL`, holds timer queue entries (`$TQEDEF`,
+48 bytes of pool) in the order they are due, at `IPL$_SYNCH`:
+
+| Type | Made by | When due |
+| --- | --- | --- |
+| `TQE$C_TMSNGL` | `$SETIMR` | sets the event flag, waking the process if its wait is over |
+| `TQE$C_WKSNGL` | `$SCHDWK` | `$WAKE`s the process |
+| `TQE$C_WKREPT` | `$SCHDWK` with a repeat time | the same, and goes back on the queue, due one repeat time later |
+
+- `EXE$GQ_1ST_TIME` holds when the first entry is due, or never.
+  `EXE$HWCLKINT` compares it with the system time on each tick and, once
+  it is due, requests the software timer interrupt. Both quadwords change
+  at `IPL$_HWCLK`, so the handler never reads half of one.
+- `EXE$SWTIMINT` takes off the queue each entry that is due and serves it
+  for its process, found by PID, or frees it if the process is gone.
+- `EXE$RMVTIMQ` removes a process's entries: `$CANTIM` its `$SETIMR`s,
+  by request identifier or all; `$CANWAK` its wakeups, and a pending
+  `$WAKE`; process rundown all of them.
+- `$SETIMR` clears its flag first. An AST address is `SS$_ILLSER`, until
+  there are ASTs. A `$SCHDWK` repeat time must be a delta of a tick or
+  more, or it is `SS$_BADPARAM`.
+
 ## Synchronization
 
 Inside the executive, IPL, as on a uniprocessor VMS. `DSBINT`, `ENBINT`,
@@ -193,8 +228,8 @@ Inside the executive, IPL, as on a uniprocessor VMS. `DSBINT`, `ENBINT`,
 
 | IPL | Protects |
 | --- | --- |
-| `IPL$_HWCLK` (24) | the interval timer interrupt runs here |
-| `IPL$_SYNCH` (8) | the scheduler's queues and PCBs, the PFN list, pool, common event blocks, the console |
+| `IPL$_HWCLK` (24) | the interval timer interrupt runs here; the system time, `EXE$GQ_1ST_TIME` |
+| `IPL$_SYNCH` (8) | the scheduler's queues and PCBs, the PFN list, pool, common event blocks, the timer queue, the console |
 | `IPL$_TIMER` (7) | the software timer interrupt runs here |
 | `IPL$_RESCHED` (3) | the reschedule interrupt runs here; below it, the CPU may move |
 | 0 | process code |
@@ -216,8 +251,9 @@ Between processes, VMS's event flags and hibernation:
   when the last process dissociates.
 - `$SETEF`, `$CLREF` and `$READEF` set, clear and read a flag; `$WAITFR`,
   `$WFLOR` and `$WFLAND` wait for one, any or all of a mask. A waiting
-  process is in `LEF`, or in `CEF` on the block's queue, and `$SETEF` on a
-  common flag wakes those whose wait it satisfies. A woken process checks
+  process is in `LEF`, or in `CEF` on the block's queue. `$SETEF` on a
+  common flag, or a `$SETIMR` that is due, wakes those whose wait it
+  satisfies. A woken process checks
   its flags again.
 - `$HIBER` sleeps until `$WAKE`; a `$WAKE` that comes first makes the next
   `$HIBER` return at once.
@@ -240,10 +276,11 @@ routines such as `EXE$OUTZSTRING` directly.
 
 | Group | Implemented | Stubs: `SS$_ILLSER` |
 | --- | --- | --- |
-| Process control | `$CREPRC`, `$DELPRC`, `$EXIT`, `$HIBER`, `$WAKE`, `$SUSPND`, `$RESUME`, `$SETPRI`, `$SETPRN`, `$CMKRNL` | `$FORCEX`, `$SCHDWK`, `$CANWAK`, `$GETJPI`, `$GETJPIW`, `$DCLEXH`, `$CANEXH`, `$SETPRV`, `$CMEXEC` |
+| Process control | `$CREPRC`, `$DELPRC`, `$EXIT`, `$HIBER`, `$WAKE`, `$SUSPND`, `$RESUME`, `$SETPRI`, `$SETPRN`, `$CMKRNL` | `$FORCEX`, `$GETJPI`, `$GETJPIW`, `$DCLEXH`, `$CANEXH`, `$SETPRV`, `$CMEXEC` |
 | Event flags | `$ASCEFC`, `$DACEFC`, `$SETEF`, `$CLREF`, `$READEF`, `$WAITFR`, `$WFLOR`, `$WFLAND` | `$DLCEFC` |
 | Memory | `$CRETVA`, `$DELTVA`, `$EXPREG` | `$CNTREG`, `$SETPRT`, `$LKWSET`, `$ULWSET`, `$LCKPAG`, `$ULKPAG`, `$CRMPSC`, `$MGBLSC` |
-| Other | | `$DCLAST`, `$SETAST`, `$GETTIM`, `$SETIMR`, `$CANTIM`, `$ASSIGN`, `$DASSGN`, `$QIO`, `$QIOW`, `$CRELNM`, `$DELLNM`, `$TRNLNM`, `$GETSYI` |
+| Time | `$GETTIM`, `$SETIMR`, `$CANTIM` | |
+| Other | | `$DCLAST`, `$SETAST`, `$ASSIGN`, `$DASSGN`, `$QIO`, `$QIOW`, `$CRELNM`, `$DELLNM`, `$TRNLNM`, `$GETSYI` |
 
 Arguments the implemented services take but ignore: `$CREPRC`'s I/O,
 privileges, quotas, UIC, mailbox and status flags, `$ASCEFC`'s protection
@@ -256,22 +293,20 @@ services at work and which `just check` boots to the end:
 
 | Program | Does |
 | --- | --- |
-| `STARTUP` | makes 4 pages with `$EXPREG`, checks and deletes them; creates `SLEEPER` at a higher priority, which runs at once, and `PING` and `PONG`; hibernates until `PONG` wakes it; deletes `SLEEPER`; creates `SVCTEST` and `HOG` |
+| `STARTUP` | makes 4 pages with `$EXPREG`, checks and deletes them; creates `SLEEPER` at a higher priority, which runs at once, and `PING` and `PONG`; hibernates until `PONG` wakes it; deletes `SLEEPER`; creates `SVCTEST`, `HOG` and `TIMETEST` |
 | `SLEEPER` | hibernates until it is deleted |
 | `PING`, `PONG` | take three turns through common event flags 64 and 65 of the cluster `PINGPONG`; `PONG` then wakes `STARTUP` |
 | `SVCTEST` | checks the statuses of the services the others don't use, and of errors: local event flags, the dispatcher's checks and a stub, `$CRETVA` and `$DELTVA`, `$CMKRNL`, `$SETPRI`, and `$SUSPND`, `$WAKE`, `$RESUME` and `$DELPRC` on a process of its own; then creates one whose image doesn't exist, which exits with `SS$_NOSUCHFILE` |
-
 | `HOG` | makes a page, creates `NUDGE` at its own priority and loops until `NUDGE` writes the page, with no system service: only quantum end lets `NUDGE` run |
 | `NUDGE` | writes `HOG`'s page |
+| `TIMETEST` | checks that `$GETTIM` reads a time after 2026; waits for `$SETIMR`s, a delta and a time, 50 ms on, and that a cancelled one never sets its flag; hibernates through three repeating `$SCHDWK` wakeups, cancels them, and checks that the next wakeup is a new one's |
 
 When every process but the swapper is gone, the CPU idles in `WTINT`,
 taking the clock's interrupts.
 
 ## Next
 
-- The system time, `$GETTIM`, and the timer queue: `$SETIMR`, `$SCHDWK`,
-  served by `EXE$SWTIMINT`. Priority boosts on wake and decay at quantum
-  end.
+- Priority boosts on wake and decay at quantum end.
 - ASTs: `$DCLAST`, AST delivery at `IPL$_ASTDEL`, and with them process
   deletion in the process's own context.
 - Supervisor and user mode, each a task per process, with `CHMx` and `REI`

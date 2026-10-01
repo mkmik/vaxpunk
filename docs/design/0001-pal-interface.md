@@ -67,6 +67,7 @@ from 0 up for these. Nothing else is mapped. The boot context starts with:
 | 8 | `RPB$L_FREEPFN` | the PFNs below this one hold what the PAL set up |
 | 12 | `RPB$L_VOLUME` | the boot volume's address |
 | 16 | `RPB$L_VOLSIZE` | its size in bytes |
+| 20 | `RPB$L_BOOTTIME` | seconds since 1970 at boot, from QEMU virt's PL031 RTC, which the PAL maps after the UART and reads once |
 | 64 | `RPB$Q_HWPCB` | the boot context's HWPCB, 128 bytes |
 
 ### The boot volume

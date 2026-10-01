@@ -51,31 +51,43 @@ SCH$GETEFC::
 90$:    MOVL    #SS$_UNASEFC, R0
         RSB
 
-; SCH$POSTEF: R1 = a cluster's flags, just set, R5 = its number. Wakes the
-; processes waiting on a common cluster whose wait is over. Only a process
-; sets its own local flags, so no one waits on them while it runs.
-; IPL$_SYNCH. Uses R0, R2, R3.
+; SCH$POSTEF: R4 = a PCB, R1 = the flags of one of its clusters, just set,
+; R5 = the cluster's number. Wakes the processes whose wait they satisfy:
+; the PCB's own process, if it waits on its local cluster, or those
+; waiting on a common one. IPL$_SYNCH. Uses R0, R2, R3.
 SCH$POSTEF::
         CMPL    R5, #2
-        BLSSU   90$
-        SUBL3   #CEB$L_EFC-CEB$L_WQFL, R1, R2   ; the wait queue
+        BGEQU   10$
+        CMPL    PCB$L_STATE(R4), #SCH$C_LEF
+        BNEQ    90$
+        CMPL    PCB$L_WEFC(R4), R5
+        BNEQ    90$
+        MOVL    R4, R3
+        BRB     CHKWAKE
+10$:    SUBL3   #CEB$L_EFC-CEB$L_WQFL, R1, R2   ; the wait queue
         MOVL    (R2), R3
-10$:    CMPL    R3, R2
+20$:    CMPL    R3, R2
         BEQL    90$
         PUSHL   (R3)                    ; the next, before this one leaves
-        BBS     #PCB$V_WALL, PCB$L_STS(R3), 20$
+        BSBB    CHKWAKE
+        MOVL    (SP)+, R3
+        BRB     20$
+90$:    RSB
+
+; CHKWAKE: R3 = a PCB waiting for flags of the cluster at R1. Wakes it if
+; its wait is satisfied. IPL$_SYNCH. Uses R0.
+CHKWAKE:
+        BBS     #PCB$V_WALL, PCB$L_STS(R3), 10$
         BITL    PCB$L_EFWM(R3), (R1)    ; any of them
-        BEQL    40$
-        BRB     30$
-20$:    MCOML   (R1), R0                ; all of them
+        BEQL    90$
+        BRB     20$
+10$:    MCOML   (R1), R0                ; all of them
         BITL    PCB$L_EFWM(R3), R0
-        BNEQ    40$
-30$:    PUSHL   R4
+        BNEQ    90$
+20$:    PUSHL   R4
         MOVL    R3, R4
         BSBW    SCH$WAKEPCB
         MOVL    (SP)+, R4
-40$:    MOVL    (SP)+, R3
-        BRB     10$
 90$:    RSB
 
 ; SCH$EFWAIT: R4 = the current PCB, R1 = a cluster's flags, R5 = its

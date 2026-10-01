@@ -81,11 +81,13 @@ PING 00000003
 PONG: woke STARTUP, exiting
 PING: done, returning
 STARTUP: woken, deleting SLEEPER
-STARTUP: done, SVCTEST and HOG next
+STARTUP: done, SVCTEST, HOG and TIMETEST next
+TIMETEST: the system time's high longword is 00BC34E7
 SLEEPER: hibernating until I'm deleted
 HOG: NUDGE ran while I computed: preempted at quantum end
 SVCTEST: ok
 %EXEC-W-EXITED, process NOSUCH exited with status 00000910
+TIMETEST: ok
 ```
 
 The CPU then idles, taking a clock interrupt every 10 ms, until QEMU is

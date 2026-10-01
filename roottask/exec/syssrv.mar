@@ -57,8 +57,8 @@ CODE = 0
         STUB    FORCEX, 3
         SERVICE HIBER, 0
         SERVICE WAKE, 2
-        STUB    SCHDWK, 4
-        STUB    CANWAK, 2
+        SERVICE SCHDWK, 4
+        SERVICE CANWAK, 2
         SERVICE SUSPND, 2
         SERVICE RESUME, 2
         SERVICE SETPRI, 4
@@ -95,9 +95,9 @@ CODE = 0
 ; ASTs, time, I/O, logical names, system information
         STUB    DCLAST, 3
         STUB    SETAST, 1
-        STUB    GETTIM, 1
-        STUB    SETIMR, 4
-        STUB    CANTIM, 2
+        SERVICE GETTIM, 1
+        SERVICE SETIMR, 4
+        SERVICE CANTIM, 2
         STUB    ASSIGN, 4
         STUB    DASSGN, 1
         STUB    QIO, 12

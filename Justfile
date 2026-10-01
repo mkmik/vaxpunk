@@ -14,7 +14,7 @@ check:
     cargo build -q -p boot || exit 1
     rm -f out/serial.log
     cargo run -q -p boot < /dev/null > /dev/null 2>&1 &
-    lines=('STARTUP: done' 'SVCTEST: ok' 'process NOSUCH exited' 'HOG: NUDGE ran')
+    lines=('STARTUP: done' 'SVCTEST: ok' 'process NOSUCH exited' 'HOG: NUDGE ran' 'TIMETEST: ok')
     all() { for line in "${lines[@]}"; do grep -aqs "$line" out/serial.log || return 1; done; }
     for _ in $(seq 120); do
         all || grep -aqs 'root task done' out/serial.log && break
