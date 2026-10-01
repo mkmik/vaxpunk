@@ -22,9 +22,9 @@ vlink hello.obj consolio.obj && vrun hello.exe
 Justfile.
 
 Status: integer instructions, the calling standard's `CALLS`, `CALLG` and
-`RET`, `JSB` and `RSB`, `CASE`, bit fields, `MOVC3` and `MOVC5`. Not yet:
-floating point, packed decimal, queues, the other string instructions,
-privileged instructions, `.CALL_ENTRY`, listings.
+`RET`, `JSB` and `RSB`, `CASE`, bit fields, `MOVC3` and `MOVC5`, and the
+privileged `MTPR`, `MFPR` and `HALT`. Not yet: floating point, packed decimal,
+queues, the other string and privileged instructions, `.CALL_ENTRY`, listings.
 
 ## How it works
 
@@ -166,7 +166,8 @@ What doesn't carry over:
 | Branch | `BRB`, `BRW`, `Bcc` (all 16), `BLBS`, `BLBC`, `BBS`, `BBC`, `BBSS`, `BBSC`, `BBCS`, `BBCC`, `JMP`, `CASEB/W/L`, `ACBB/W/L`, `AOBLSS`, `AOBLEQ`, `SOBGTR`, `SOBGEQ` |
 | Call | `CALLS`, `CALLG`, `RET`, `JSB`, `BSBB`, `BSBW`, `RSB` |
 | Field and string | `EXTV`, `EXTZV`, `INSV`, `MOVC3`, `MOVC5` |
-| Other | `NOP`, `HALT` (a fault, `%VRUN-F-OPCDEC` under vrun), `BPT` (`brk`) |
+| Privileged | `MTPR`, `MFPR`, `HALT`: PAL calls, see *Privileged instructions* |
+| Other | `NOP`, `BPT` (`brk`) |
 
 `x` is B, W, L, or Q where the VAX has it. Every addressing mode works:
 register, `(Rn)`, `(Rn)+`, `-(Rn)`, `@(Rn)+`, `d(Rn)` and `@d(Rn)` with or
@@ -187,6 +188,37 @@ Limits:
 - `MOVC5` copies forwards only; `MOVC3` handles any overlap. Both copy a byte
   at a time.
 - `PUSHR` and `POPR` take a constant mask and can't save SP or PC.
+
+## Privileged instructions
+
+The executive's privileged instructions are calls to the PAL below it, as
+AMACRO made them `CALL_PAL`s on Alpha. vmacro compiles each into `svc #0`
+with the PAL function code in x7, the argument in x0 and the result back in
+x0, keeping R0 and R7 in scratch registers around it. The interface and its
+function codes are in
+[DESIGN-0001](../../docs/design/0001-pal-interface.md).
+
+| Instruction | PAL call |
+| --- | --- |
+| `MTPR src, #PR$_IPL` | `MTPR_IPL` |
+| `MFPR #PR$_IPL, dst` | `MFPR_IPL` |
+| `MTPR src, #PR$_TXDB` | `MTPR_TXDB`, a console character |
+| `HALT` | `HALT` |
+
+The processor register must be a constant, as in AMACRO. `$PRDEF` in
+`vtools/lib/lib.mlb` defines the `PR$_` names:
+
+```
+        .LIBRARY "lib.mlb"
+        $PRDEF
+        MTPR    R0, #PR$_TXDB
+```
+
+`MTPR` and `MFPR` set N and Z from the value and clear V and C. The VAX
+leaves C alone.
+
+vrun runs programs in user mode, where these instructions don't work: each
+one stops the run with `%VRUN-F-OPCDEC`.
 
 ## Directives
 

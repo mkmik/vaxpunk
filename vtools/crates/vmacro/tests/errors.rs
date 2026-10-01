@@ -24,6 +24,9 @@ fn diagnostics() {
         MOVQ    R11, R0
         PUSHR   #^M<R2, SP>
         MOVL    R0, #1
+        MTPR    R0, R1
+        MTPR    R0, #62
+        MFPR    #35, R0
         RET
         .END    START
 ";
@@ -38,6 +41,9 @@ fn diagnostics() {
             "8:9: a quadword needs two registers, up to R10 and R11",
             "9:9: PUSHR and POPR can't save SP or PC",
             "10:9: can't write to an immediate",
+            "11:9: vmacro needs the processor register as a constant, #n",
+            "12:9: processor register 62 has no PAL call yet",
+            "13:9: MFPR can't read that processor register",
         ]
     );
 }
