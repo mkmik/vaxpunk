@@ -1,0 +1,13 @@
+        .TITLE  SNOOP   Reads the executive's memory, from user mode
+        .IDENT  /V0.1/
+;
+; S0 is in every process's address space, but its pages are the kernel's:
+; reading one is an access violation, which ends the process with
+; SS$_ACCVIO and leaves the others running.
+;
+        .PSECT  CODE, EXE, LONG
+        .ENTRY  START, ^M<>
+        MOVL    @#^X40010000, R0        ; EXEC.EXE's first page
+        RET
+
+        .END    START

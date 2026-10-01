@@ -74,6 +74,43 @@ fn chmk() {
     );
 }
 
+/// The other modes' CHMx are the same, with their own code.
+#[test]
+fn chmx() {
+    assert!(lines("CHME", "#0").contains(&"mov x7, #130".to_string()));
+    assert!(lines("CHMS", "#0").contains(&"mov x7, #132".to_string()));
+    assert!(lines("CHMU", "#0").contains(&"mov x7, #133".to_string()));
+}
+
+/// `PROBEW #3, #8, (R1)`: base, length and mode in R0-R2, which come back
+/// with R7 once the result is out of R0. A branch tests the result, x14: Z
+/// is set if the mode may not write.
+#[test]
+fn probew() {
+    assert_eq!(
+        lines("PROBEW", "#3, #8, (R1)"),
+        [
+            "movz w14, #3",
+            "movz w15, #8",
+            "mov x16, x1",
+            "mov x17, x0",
+            "mov x18, x7",
+            "mov x0, x16",
+            "mov x16, x1",
+            "mov x1, x15",
+            "mov x15, x2",
+            "mov x2, x14",
+            "mov x7, #144",
+            "svc #0",
+            "mov x14, x0",
+            "mov x2, x15",
+            "mov x1, x16",
+            "mov x7, x18",
+            "mov x0, x17",
+        ]
+    );
+}
+
 /// `CALL_PAL #5`, SWPCTX: arguments already in R0-R5, R7 kept.
 #[test]
 fn call_pal() {

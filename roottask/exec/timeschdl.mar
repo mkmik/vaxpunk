@@ -249,10 +249,13 @@ ABSTIM:
 
 ; $GETTIM timadr: the system time into timadr.
         .ENTRY  EXE$GETTIM, ^M<>
+        IFNOWRT #8, @4(AP), 90$
         DSBINT  #IPL$_HWCLK
         MOVQ    EXE$GQ_SYSTIME, @4(AP)
         ENBINT
         MOVL    #SS$_NORMAL, R0
+        RET
+90$:    MOVL    #SS$_ACCVIO, R0
         RET
 
 ; $SETIMR efn, daytim, astadr, reqidt: clears event flag efn, and sets it
@@ -263,6 +266,7 @@ ABSTIM:
         BNEQ    80$
         TSTL    8(AP)
         BEQL    85$
+        IFNORD  #8, @8(AP), 85$
         MOVL    SCH$GL_CURPCB, R4
         MOVL    4(AP), R3
         BSBW    SCH$GETEFC
@@ -304,8 +308,10 @@ ABSTIM:
         .ENTRY  EXE$SCHDWK, ^M<R2, R3, R4, R5, R6>
         MOVL    12(AP), R6
         BEQL    85$
+        IFNORD  #8, (R6), 85$
         MOVL    16(AP), R0
         BEQL    10$
+        IFNORD  #8, (R0), 85$
         TSTL    4(R0)                   ; reptim <= -TICK
         BGEQ    80$
         CMPL    4(R0), #-1

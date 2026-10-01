@@ -29,16 +29,17 @@ fn main() {
 
     let mut modules: Vec<_> = sources("exec", &["mar"]).iter().map(compile).collect();
     modules.push(compile(Path::new(LIB).join("consolio.mar")));
-    let exec = link("EXEC", vlink::DEFAULT_BASE, Some("EXEC$START"), &modules);
+    // The executive goes in S0, the system space every process shares.
+    let exec = link("EXEC", 0x4001_0000, Some("EXEC$START"), &modules);
     fs::write(out.join("exec.map"), &exec.map).unwrap();
     let stb = symbol_table(&exec.map);
+    let print = compile("sysexe/lib/print.mar");
     let mut files = vec![("EXEC.EXE".to_string(), exec.image.write())];
-    // Processes share the executive's address space, so each image gets
-    // its own 1 MB from 16 MB up.
-    for (i, source) in sources("sysexe", &["mar"]).iter().enumerate() {
+    // Each process has its own P0, so every image goes at the same address.
+    for source in sources("sysexe", &["mar"]) {
         let name = source.file_stem().unwrap().to_str().unwrap().to_uppercase();
-        let base = 0x0100_0000 + 0x10_0000 * i as u64;
-        let image = link(&name, base, None, &[compile(source), stb.clone()]);
+        let modules = [compile(&source), print.clone(), stb.clone()];
+        let image = link(&name, vlink::DEFAULT_BASE, None, &modules);
         files.push((format!("{name}.EXE"), image.image.write()));
     }
     fs::write(out.join("sys.vol"), volume(&files)).unwrap();

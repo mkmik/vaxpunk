@@ -14,19 +14,43 @@ SS$_ABORT = 44
 SS$_BADIMGHDR = 68
 SS$_DUPLNAM = 148
 SS$_ILLEFC = 236
+SS$_ILLIOFUNC = 244
 SS$_ILLPAGCNT = 252
 SS$_ILLSER = 260
 SS$_INSFARG = 276
 SS$_INSFMEM = 292
+SS$_IVCHAN = 316
 SS$_IVLOGNAM = 340
 SS$_IVSSRQ = 372
+SS$_NOIOCHAN = 436
 SS$_PAGOWNVIO = 492
 SS$_UNASEFC = 564
 SS$_VASFULL = 580
 SS$_IVMODE = 852
+SS$_OPCDEC = 1084
 SS$_NONEXPR = 2280
+SS$_NOSUCHDEV = 2312
 SS$_NOSUCHFILE = 2320
         .ENDM   $SSDEF
+
+; $PSLDEF: the processor status longword's fields and the access modes,
+; from kernel, the innermost, out to user.
+        .MACRO  $PSLDEF
+PSL$V_IPL = 16
+PSL$V_PRVMOD = 22                       ; the mode before the last change
+PSL$V_CURMOD = 24
+PSL$C_KERNEL = 0
+PSL$C_EXEC = 1
+PSL$C_SUPER = 2
+PSL$C_USER = 3
+        .ENDM   $PSLDEF
+
+; $IODEF: I/O function codes for $QIO.
+        .MACRO  $IODEF
+IO$_WRITEPBLK = 11
+IO$_WRITELBLK = 32
+IO$_WRITEVBLK = 48
+        .ENDM   $IODEF
 
 ; $PRTDEF: page protection codes, the VAX's: who may read (R) and write (W),
 ; from kernel (K) out to user (U) mode.
@@ -218,6 +242,45 @@ PRT$C_UR = 15
         .EXTERNAL SYS$CMKRNL
         CALLS   #2, G^SYS$CMKRNL
         .ENDM   $CMKRNL_S
+
+        .MACRO  $CMEXEC_S ROUTIN, ARGLST=0
+        $PUSHADR ARGLST
+        $PUSHADR ROUTIN
+        .EXTERNAL SYS$CMEXEC
+        CALLS   #2, G^SYS$CMEXEC
+        .ENDM   $CMEXEC_S
+
+        .MACRO  $ASSIGN_S DEVNAM, CHAN, ACMODE=#0, MBXNAM=0
+        $PUSHADR MBXNAM
+        PUSHL   ACMODE
+        $PUSHADR CHAN
+        $PUSHADR DEVNAM
+        .EXTERNAL SYS$ASSIGN
+        CALLS   #4, G^SYS$ASSIGN
+        .ENDM   $ASSIGN_S
+
+        .MACRO  $DASSGN_S CHAN
+        PUSHL   CHAN
+        .EXTERNAL SYS$DASSGN
+        CALLS   #1, G^SYS$DASSGN
+        .ENDM   $DASSGN_S
+
+        .MACRO  $QIOW_S EFN=#0, CHAN, FUNC, IOSB=0, ASTADR=0, ASTPRM=#0, P1=0, P2=#0, P3=#0, P4=#0, P5=#0, P6=#0
+        PUSHL   P6
+        PUSHL   P5
+        PUSHL   P4
+        PUSHL   P3
+        PUSHL   P2
+        $PUSHADR P1
+        PUSHL   ASTPRM
+        $PUSHADR ASTADR
+        $PUSHADR IOSB
+        PUSHL   FUNC
+        PUSHL   CHAN
+        PUSHL   EFN
+        .EXTERNAL SYS$QIOW
+        CALLS   #12, G^SYS$QIOW
+        .ENDM   $QIOW_S
 
         .MACRO  $GETTIM_S TIMADR
         $PUSHADR TIMADR

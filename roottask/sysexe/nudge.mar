@@ -1,13 +1,19 @@
         .TITLE  NUDGE   Sets the flag HOG computes until
-        .IDENT  /V0.1/
+        .IDENT  /V0.2/
 
         .LIBRARY "starlet.mlb"
         $SSDEF
 
+        .PSECT  DATA, NOEXE, WRT, LONG
+CLUSTER:
+        .ASCID  "HOGWASH"
+
         .PSECT  CODE, EXE, LONG
         .ENTRY  START, ^M<>
-        MOVL    #1, @#^X60010000        ; HOG's page
+        $ASCEFC_S EFN=#64, NAME=CLUSTER
+        BLBC    R0, 90$
+        $SETEF_S EFN=#64
         MOVL    #SS$_NORMAL, R0
-        RET
+90$:    RET
 
         .END    START

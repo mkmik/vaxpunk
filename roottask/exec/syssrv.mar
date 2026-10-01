@@ -1,21 +1,31 @@
-        .TITLE  SYSSRV  The system service vector and dispatcher
-        .IDENT  /V0.1/
+        .TITLE  SYSSRV  The system service vector, the change mode dispatchers
+        .IDENT  /V0.2/
 ;
 ; A program calls a system service as on VMS, with CALLS or CALLG to
 ; SYS$name, or with the $name_S macros in starlet.mlb. SYS$name changes
 ; mode to kernel with CHMK and the service's code; the PAL delivers the
-; CHMK through the SCB to EXE$CMODKRNL, which checks the argument count
-; and calls the service's EXE$name routine with the caller's argument
-; list, then REIs with its status in R0. Every process runs in kernel
-; mode for now, so CHMK changes no mode: it is the one door supervisor
-; and user mode will come through.
+; CHMK through the SCB to EXE$CMODKRNL, which checks the argument list and
+; calls the service's EXE$name routine with it, then REIs with its status
+; in R0. $CMEXEC changes mode to executive instead, with CHME, which
+; EXE$CMODEXEC serves.
+;
+; Programs run in user mode, so SYS$name, EXE$CMODEXEC and EXE$USRSTART,
+; where a process enters user mode, are in a page of their own, the
+; vector, which EXEC$START makes user readable: code an outer mode may
+; run, as VMS's system service vector is.
 ;
 ; Services that aren't implemented yet are stubs that return
-; SS$_ILLSER.
+; SS$_ILLSER. An access violation or a reserved instruction in an outer
+; mode ends the process.
 ;
         .LIBRARY "lib.mlb"
         .LIBRARY "starlet.mlb"
+        $IPLDEF
+        $PCBDEF
         $SSDEF
+
+        .EXTERNAL SCH$GL_CURPCB, EXE$EXIT
+        .EXTERNAL EXE$OUTZSTRING, EXE$OUTCSTRING, EXE$OUTHEX, EXE$OUTCRLF
 
 ; SERVICE name, nargs: SYS$name, which calls EXE$name with at least nargs
 ; arguments. STUB name, nargs: the same, with an EXE$name that fails.
@@ -37,12 +47,17 @@
         .ADDRESS EXE$'NAME
         .PSECT  EXEC$SSARG, NOEXE, NOWRT, BYTE
         .BYTE   NARGS
-        .RESTORE_PSECT
+        .PSECT  EXEC$VECTOR
         .ENTRY  SYS$'NAME, ^M<>
         CHMK    #CODE
         RET
+        .RESTORE_PSECT
 CODE = CODE + 1
         .ENDM   VECTOR
+
+; The vector: a page of its own, code an outer mode may run.
+        .PSECT  EXEC$VECTOR, EXE, NOWRT, 12
+EXE$VECTOR::                            ; its first page
 
         .PSECT  EXEC$SSTAB, NOEXE, NOWRT, LONG
 EXE$AL_SSTAB::                          ; EXE$name by code
@@ -69,7 +84,6 @@ CODE = 0
         STUB    CANEXH, 1
         STUB    SETPRV, 4
         SERVICE CMKRNL, 2
-        STUB    CMEXEC, 2
 ; Event flags
         SERVICE ASCEFC, 2
         SERVICE DACEFC, 1
@@ -98,29 +112,128 @@ CODE = 0
         SERVICE GETTIM, 1
         SERVICE SETIMR, 4
         SERVICE CANTIM, 2
-        STUB    ASSIGN, 4
-        STUB    DASSGN, 1
-        STUB    QIO, 12
-        STUB    QIOW, 12
+        SERVICE ASSIGN, 4
+        SERVICE DASSGN, 1
+        SERVICE QIO, 12
+        SERVICE QIOW, 12
         STUB    CRELNM, 5
         STUB    DELLNM, 3
         STUB    TRNLNM, 5
         STUB    GETSYI, 7
 
 ; EXE$CMODKRNL: the CHMK handler. R0 = the service's code, AP = its
-; argument list, the PAL's frame on the stack.
+; argument list, the PAL's frame on the kernel stack.
 EXE$CMODKRNL::
         CMPL    R0, #CODE
         BGEQU   80$
+        PUSHL   R0
         MOVZBL  EXE$AB_SSARG[R0], R1
-        CMPB    (AP), R1
-        BLSSU   85$
+        BSBW    ARGLIST
+        BLBC    R0, 70$
+        MOVL    (SP)+, R0
         MOVL    EXE$AL_SSTAB[R0], R1
         CALLG   (AP), (R1)
         REI
+70$:    ADDL2   #4, SP
+        REI
 80$:    MOVL    #SS$_ILLSER, R0
         REI
-85$:    MOVL    #SS$_INSFARG, R0
+
+; EXE$ACVIOLAT: the access violation handler. Below the PAL's frame, the
+; VAX's parameters: a mask, bit 2 for a write, and the address. An outer
+; mode took it, since one in kernel mode stops the system: the process
+; exits with SS$_ACCVIO, as one without a condition handler does.
+EXE$ACVIOLAT::
+        DSBINT  #IPL$_SYNCH             ; the console, a line at a time
+        MOVAB   ACCVIO, R1
+        JSB     G^EXE$OUTZSTRING
+        MOVL    12(SP), R1              ; past the IPL: the address
+        JSB     G^EXE$OUTHEX
+        MOVAB   ATPC, R1
+        JSB     G^EXE$OUTZSTRING
+        MOVL    20(SP), R1              ; the frame's PC
+        JSB     G^EXE$OUTHEX
+        BSBB    PROCESS
+        ENBINT
+        PUSHL   #SS$_ACCVIO
+        CALLS   #1, G^EXE$EXIT
+
+; EXE$OPCDEC: the reserved instruction handler: privileged instructions
+; and PAL calls, and undefined instructions, in an outer mode. The process
+; exits with SS$_OPCDEC.
+EXE$OPCDEC::
+        DSBINT  #IPL$_SYNCH
+        MOVAB   OPCDEC, R1
+        JSB     G^EXE$OUTZSTRING
+        MOVL    4(SP), R1               ; past the IPL: the frame's PC
+        JSB     G^EXE$OUTHEX
+        BSBB    PROCESS
+        ENBINT
+        PUSHL   #SS$_OPCDEC
+        CALLS   #1, G^EXE$EXIT
+
+; PROCESS: writes ", process " and the current process's name, and CR LF.
+PROCESS:
+        MOVAB   INPROC, R1
+        JSB     G^EXE$OUTZSTRING
+        MOVL    SCH$GL_CURPCB, R1
+        MOVAB   PCB$T_LNAME(R1), R1
+        JSB     G^EXE$OUTCSTRING
+        JMP     G^EXE$OUTCRLF
+
+        .PSECT  EXEC$DATA, NOEXE, WRT, QUAD
+ACCVIO: .ASCIZ  "%SYSTEM-F-ACCVIO, access violation, virtual address "
+OPCDEC: .ASCIZ  "%SYSTEM-F-OPCDEC, reserved instruction at PC "
+ATPC:   .ASCIZ  ", PC "
+INPROC: .ASCIZ  ", process "
+
+        .PSECT  EXEC$VECTOR
+; SYS$CMEXEC routin, arglst: calls routin in executive mode with arglst,
+; through CHME and EXE$CMODEXEC.
+        .ENTRY  SYS$CMEXEC, ^M<>
+        CHME    #0
+        RET
+
+; EXE$CMODEXEC: the CHME handler, in executive mode. R0 = the service's
+; code, AP = its argument list. $CMEXEC is the one executive mode service.
+; ponytail: any process may; CMEXEC privilege comes with privileges.
+EXE$CMODEXEC::
+        TSTL    R0
+        BNEQ    80$
+        MOVL    #2, R1
+        BSBB    ARGLIST
+        BLBC    R0, 90$
+        CALLG   @8(AP), @4(AP)
+90$:    REI
+80$:    MOVL    #SS$_ILLSER, R0
         REI
+
+; ARGLIST: AP = an argument list a caller passed, R1 = the fewest arguments
+; it may have. R0 = SS$_NORMAL; SS$_ACCVIO if the previous mode can't read
+; all of it, SS$_INSFARG if it is too short. Uses R1. In the vector, for
+; EXE$CMODEXEC, since executive mode may not run S0's other code.
+ARGLIST:
+        IFNORD  #4, (AP), 80$
+        CMPB    (AP), R1
+        BLSSU   85$
+        MOVZBL  (AP), R1
+        INCL    R1
+        ASHL    #2, R1, R1
+        IFNORD  R1, (AP), 80$
+        MOVL    #SS$_NORMAL, R0
+        RSB
+80$:    MOVL    #SS$_ACCVIO, R0
+        RSB
+85$:    MOVL    #SS$_INSFARG, R0
+        RSB
+
+; EXE$USRSTART: where a process enters user mode, with R1 = its image's
+; transfer address: calls the image, and exits with the status it returns.
+EXE$USRSTART::
+        CALLS   #0, (R1)
+        PUSHL   R0
+        CALLS   #1, SYS$EXIT
+        .ALIGN  12
+EXE$VECTOREND::                         ; past its last page
 
         .END

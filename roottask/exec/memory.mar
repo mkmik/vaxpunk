@@ -4,15 +4,15 @@
 ; The PAL gives the executive physical pages, numbered by PFN, and maps one
 ; at an address when the executive writes a PTE with WRPTE. The executive
 ; owns the PFN database, here a list of free PFNs, and decides what goes
-; where in the address space every process shares
-; (docs/design/0002-executive-processes.md):
+; where (docs/design/0002-executive-processes.md). P0 and P1 are each
+; process's own; a PTE written there is the current process's:
 ;
-;   ^X00010000  EXEC.EXE
-;   ^X01000000  process images, each at the address it is linked for
-;   ^X1FFF0000  the RPB; ^X20000000 the boot volume, read-only
-;   ^X40000000  nonpaged pool: PCBs, kernel stacks, common event blocks
-;   ^X50000000  pages processes make with $CRETVA and $EXPREG
-;   ^X7FFF0000  the boot stack's top
+;   ^X00010000  P0: the process's image, then its $EXPREG pages
+;   ^X40010000  S0, every process's: EXEC.EXE
+;   ^X48000000  nonpaged pool: PCBs, kernel stacks, common event blocks
+;   ^X4FFF0000  the RPB; ^X50000000 the boot volume, read-only
+;   ^X5FFF0000  the boot stack's top
+;   ^X60000000  P1: the process's $CRETVA pages, its mode stacks at the top
 ;
 ; The PFN database and the pool are synchronized at IPL$_SYNCH.
 ;
@@ -23,23 +23,22 @@
         $PALDEF
         $PTEDEF
         $PRTDEF
+        $PCBDEF
         $RPBDEF
+        $VADEF
         $SSDEF
 
-        .EXTERNAL EXE$GL_RPB
+        .EXTERNAL EXE$GL_RPB, SCH$GL_CURPCB
 
 MMG$C_MAXPFN = 4096
-POOL_VA = ^X40000000
+POOL_VA = ^X48000000
 POOL_PAGES = 128                        ; 512 KB
-MMG$C_P0BASE = ^X50000000               ; where processes make pages
-MMG$C_P0END = ^X7F000000
 KW = PTE$M_VALID ! <PRT$C_KW @ PTE$V_PROT>
+UW = PTE$M_VALID ! <PRT$C_UW @ PTE$V_PROT>
 
         .PSECT  EXEC$DATA, NOEXE, WRT, QUAD
 MMG$GL_FREECNT::                        ; free PFNs, a stack
         .LONG   0
-MMG$GL_EXPREG::                         ; where $EXPREG makes pages next
-        .LONG   MMG$C_P0BASE
 EXE$GL_NONPAGED::                       ; free pool blocks by address:
         .LONG   0                       ; each a link and a size
 MMG$AL_FREEPFN:
@@ -246,24 +245,38 @@ EXE$DEANONPGDSIZ::
         POPR    #^M<R0, R1, R2, R3, R4>
         RSB
 
-; INADR: AP = a $CRETVA or $DELTVA argument list. R0 = the first page of
-; the range its inadr gives, R1 = the page count, R0 = 0 if it isn't all
-; between MMG$C_P0BASE and MMG$C_P0END.
-INADR:  MOVL    4(AP), R1
-        MOVL    (R1), R0
-        MOVL    4(R1), R1
-        BICL2   #MMG$C_PAGESIZE-1, R0
-        BISL2   #MMG$C_PAGESIZE-1, R1
-        CMPL    R0, #MMG$C_P0BASE
+; INADR: AP = a $CRETVA or $DELTVA argument list. R2 = the first page of
+; the range its inadr gives, R3 = the page count, R0 = SS$_NORMAL;
+; SS$_ACCVIO if the caller can't read inadr or write retadr, or
+; SS$_PAGOWNVIO if the range isn't all in P0, or all in P1 below the mode
+; stacks. Uses R1.
+INADR:  MOVL    8(AP), R1
+        BEQL    10$
+        IFNOWRT #8, (R1), 80$
+10$:    MOVL    4(AP), R1
+        IFNORD  #8, (R1), 80$
+        MOVL    (R1), R2
+        MOVL    4(R1), R3
+        BICL2   #MMG$C_PAGESIZE-1, R2
+        BISL2   #MMG$C_PAGESIZE-1, R3
+        CMPL    R3, R2
         BLSSU   90$
-        CMPL    R1, #MMG$C_P0END
+        CMPL    R2, #VA$C_P0BASE
+        BLSSU   90$
+        CMPL    R3, #VA$C_S0BASE
+        BLSSU   20$                     ; all in P0
+        CMPL    R2, #VA$C_P1BASE
+        BLSSU   90$
+        CMPL    R3, #VA$C_STACKS
         BGEQU   90$
-        SUBL2   R0, R1
-        BLSSU   90$
-        INCL    R1
-        ASHL    #-MMG$C_VPCTX, R1, R1
+20$:    SUBL2   R2, R3
+        INCL    R3
+        ASHL    #-MMG$C_VPCTX, R3, R3
+        MOVL    #SS$_NORMAL, R0
         RSB
-90$:    CLRL    R0
+80$:    MOVL    #SS$_ACCVIO, R0
+        RSB
+90$:    MOVL    #SS$_PAGOWNVIO, R0
         RSB
 
 ; RETADR: R0 = a first page, R1 = a page count, R2 = the address of a
@@ -276,69 +289,87 @@ RETADR: TSTL    R2
         DECL    4(R2)
 10$:    RSB
 
-; $CRETVA inadr, retadr, acmode: makes the pages of a range, zeroed and
-; writable, replacing any there.
-        .ENTRY  EXE$CRETVA, ^M<R2, R3, R4>
+; $CRETVA inadr, retadr, acmode: makes the pages of a range of the
+; process's P0 or P1, zeroed and writable, replacing any there.
+        .ENTRY  EXE$CRETVA, ^M<R2, R3, R4, R5>
         BSBB    INADR
-        TSTL    R0
-        BEQL    90$
-        MOVQ    R0, R3
-        MOVL    #KW, R2
+        BLBC    R0, 90$
+        MOVL    R2, R4
+        MOVL    R2, R0
+        MOVL    R3, R1
+        MOVL    #UW, R2
         BSBW    MMG$CREPAG
-        BLBC    R0, 80$
-        MOVQ    R3, R0
+        BLBC    R0, 90$
+; The process's P0 and P1 now reach these pages: its rundown deletes them.
+        MOVL    SCH$GL_CURPCB, R5
+        ASHL    #MMG$C_VPCTX, R3, R1
+        ADDL2   R4, R1                  ; past the last
+        CMPL    R4, #VA$C_S0BASE
+        BGEQU   20$
+        CMPL    R1, PCB$L_FREP0VA(R5)
+        BLEQU   30$
+        MOVL    R1, PCB$L_FREP0VA(R5)
+        BRB     30$
+20$:    CMPL    R4, PCB$L_FREP1VA(R5)
+        BGEQU   30$
+        MOVL    R4, PCB$L_FREP1VA(R5)
+30$:    MOVL    R4, R0
+        MOVL    R3, R1
         MOVL    8(AP), R2
         BSBB    RETADR
         MOVL    #SS$_NORMAL, R0
-80$:    RET
-90$:    MOVL    #SS$_PAGOWNVIO, R0
-        RET
+90$:    RET
 
-; $DELTVA inadr, retadr, acmode: deletes the pages of a range.
+; $DELTVA inadr, retadr, acmode: deletes the pages of a range of the
+; process's P0 or P1.
         .ENTRY  EXE$DELTVA, ^M<R2, R3, R4>
         BSBB    INADR
-        TSTL    R0
-        BEQL    90$
-        MOVQ    R0, R3
+        BLBC    R0, 90$
+        MOVL    R2, R4
+        MOVL    R2, R0
+        MOVL    R3, R1
         BSBW    MMG$DELPAG
-        MOVQ    R3, R0
+        MOVL    R4, R0
+        MOVL    R3, R1
         MOVL    8(AP), R2
         BSBB    RETADR
         MOVL    #SS$_NORMAL, R0
-        RET
-90$:    MOVL    #SS$_PAGOWNVIO, R0
-        RET
+90$:    RET
 
 ; $EXPREG pagcnt, retadr, acmode, region: makes pagcnt pages, zeroed and
-; writable, at addresses no other $EXPREG has used.
-; ponytail: one region for every process, never given back; per-process
-; regions come with per-process address spaces.
+; writable, past the end of the process's P0.
+; ponytail: P0 only, whatever the region; P1 grows down with $CRETVA.
         .ENTRY  EXE$EXPREG, ^M<R2, R3, R4>
-        MOVL    4(AP), R1
+        MOVL    4(AP), R3
         BEQL    85$
-        CMPL    R1, #<MMG$C_P0END-MMG$C_P0BASE>/MMG$C_PAGESIZE
+        MOVL    8(AP), R2
+        BEQL    10$
+        IFNOWRT #8, (R2), 95$
+10$:    MOVL    SCH$GL_CURPCB, R4
+        CMPL    R3, #<VA$C_S0BASE-VA$C_P0BASE>/MMG$C_PAGESIZE
         BGTRU   90$
-        DSBINT  #IPL$_SYNCH
-        MOVL    MMG$GL_EXPREG, R0
-        ASHL    #MMG$C_VPCTX, R1, R2
-        ADDL2   R0, R2
-        CMPL    R2, #MMG$C_P0END
-        BGTRU   80$
-        MOVL    R2, MMG$GL_EXPREG
-        ENBINT
-        MOVQ    R0, R3
-        MOVL    #KW, R2
+        MOVL    PCB$L_FREP0VA(R4), R0   ; the first new page
+        ASHL    #MMG$C_VPCTX, R3, R1
+        ADDL2   R0, R1                  ; past the last
+        CMPL    R1, #VA$C_S0BASE
+        BGTRU   90$
+        MOVL    R1, PCB$L_FREP0VA(R4)
+        MOVL    R0, R4
+        MOVL    R3, R1
+        MOVL    #UW, R2
         BSBW    MMG$CREPAG
         BLBC    R0, 70$
-        MOVQ    R3, R0
+        MOVL    R4, R0
+        MOVL    R3, R1
         MOVL    8(AP), R2
         BSBB    RETADR
         MOVL    #SS$_NORMAL, R0
 70$:    RET
-80$:    ENBINT
+85$:    MOVL    #SS$_ILLPAGCNT, R0
+        RET
 90$:    MOVL    #SS$_VASFULL, R0
         RET
-85$:    MOVL    #SS$_ILLPAGCNT, R0
+95$:    MOVL    #SS$_ACCVIO, R0
         RET
 
         .END

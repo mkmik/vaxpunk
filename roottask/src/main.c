@@ -14,6 +14,13 @@
  * VAX's interval timer interrupt, preempting the current thread
  * (docs/adr/0004-interval-timer-is-a-pal-thread.md).
  *
+ * A process also has a thread for each outer access mode it enters,
+ * executive, supervisor and user, each in an address space of its own that
+ * holds the pages that mode may read; CHMx, REI, interrupts and exceptions
+ * move the CPU between a process's threads
+ * (docs/adr/0005-access-modes-are-threads.md). The kernel-mode threads share
+ * the executive's address space, whose P0 and P1 are the current process's.
+ *
  * The kernel is built with the MCS API (KernelIsMCS in kernel/config.cmake):
  * a thread runs only while it holds a scheduling context with budget left,
  * seL4_Recv and seL4_ReplyRecv take a reply object, and seL4_Reply is gone:
@@ -224,9 +231,11 @@ static void uart_init(seL4_BootInfo *bi)
  */
 #define PFN_COUNT 1024
 #define PHYS 0x100000000UL
-static seL4_CPtr pfn_frame[PFN_COUNT]; /* mapped at PHYS */
-static seL4_CPtr pfn_cap[PFN_COUNT];   /* mapped in the executive */
-static seL4_Word pfn_va[PFN_COUNT];    /* where, 0 if nowhere */
+static seL4_CPtr pfn_frame[PFN_COUNT];	 /* mapped at PHYS */
+static seL4_CPtr pfn_cap[PFN_COUNT];	 /* mapped in the executive's kernel mode */
+static seL4_CPtr pfn_mcap[4][PFN_COUNT]; /* in its process's modes 1-3, made as needed */
+static seL4_Word pfn_va[PFN_COUNT];	 /* where, 0 if nowhere */
+static struct ctx *pfn_ctx[PFN_COUNT];	 /* whose P0 or P1, 0 for S0 */
 
 static uint8_t *pfn_ptr(seL4_Word pfn)
 {
@@ -240,76 +249,247 @@ static uint8_t *pfn_ptr(seL4_Word pfn)
 }
 
 /*
- * The executive's address space, one for every process: the system space.
- * Its addresses stay below 2 GB, where MACRO-32's longwords reach. The PAL
- * keeps the PTE it was last given for each page, 4 MB of them to a table.
- * ponytail: 32 tables, 128 MB of scattered address space; more if needed.
+ * The executive's address space, below 2 GB, where MACRO-32's longwords
+ * reach, in the VAX's three regions: P0 and P1, each process's own, and
+ * between them S0, the system space every process shares. The PAL keeps the
+ * PTE it was last given for each page, 4 MB of them to a table: S0's in one
+ * directory, each process's P0 and P1 in its context's.
+ * ponytail: 96 tables, enough for S0 and two per process; more if needed.
  */
+#define P0_END 0x40000000UL
+#define S0_END 0x60000000UL
 #define SPACE_END 0x80000000UL
 enum { PTE_VALID = 1u << 31, PTE_EXEC = 1u << 25, PTE_PFN = 0x1fffff, PRT_NA = 0, PRT_KW = 2,
        PRT_KR = 3 };
-/* The VAX protection codes kernel mode may write: KW, UW, EW, ERKW, SW... */
-#define PRT_KERNEL_WRITES 0x7774
+/* By VAX protection code ($PRTDEF), the outermost mode that may read and
+ * the outermost that may write: 0 kernel, 1 executive, 2 supervisor, 3 user,
+ * -1 none. Code 1 is reserved. */
+static const signed char may_read[16] = { -1, -1, 0, 0, 3, 1, 1, 1, 2, 2, 2, 2, 3, 3, 3, 3 };
+static const signed char may_write[16] = { -1, -1, 0, -1, 3, 1, 0, -1, 2, 1, 0, -1, 2, 1, 0, -1 };
 static seL4_CPtr exec_vspace;
-static uint32_t *pte_table[SPACE_END >> 22];
-static uint32_t pte_pool[32][1024];
-static unsigned pte_used;
+static uint32_t *s0_dir[SPACE_END >> 22];
+static uint32_t pte_pool[96][1024];
+static uint32_t *pte_free[96];
+static unsigned pte_used, pte_nfree;
 
-static uint32_t *pte_at(seL4_Word va, int make)
+static int is_s0(seL4_Word va)
 {
-	uint32_t **t = &pte_table[va >> 22];
-	if (!*t && make) {
-		if (pte_used == sizeof pte_pool / sizeof pte_pool[0])
-			die("out of PTE tables", va);
-		*t = pte_pool[pte_used++];
-	}
-	return *t ? &(*t)[va >> seL4_PageBits & 1023] : 0;
+	return va >= P0_END && va < S0_END;
+}
+
+static unsigned prot(uint32_t pte)
+{
+	return pte >> 27 & 15;
 }
 
 static int mapped(uint32_t pte)
 {
-	return pte & PTE_VALID && (pte >> 27 & 15) != PRT_NA;
+	return pte & PTE_VALID && prot(pte) != PRT_NA;
+}
+
+/*
+ * A process context: the threads that run one executive process, made the
+ * first time the executive switches to its hardware PCB, and its P0 and P1.
+ * Its seL4 objects outlive it, for the next context in the slot.
+ */
+#define CTX_MAX 32
+static struct ctx {
+	seL4_Word hwpcb; /* the executive's HWPCB address; 0: a free slot */
+	/* A thread for each mode it has entered, and the mode's address space:
+	 * the executive's for kernel mode, one of its own for each other. */
+	seL4_CPtr tcb[4], vspace[4], reply;
+	int started, mode, prvmode; /* the PSL's current and previous modes */
+	uint32_t *dir[SPACE_END >> 22]; /* its P0 and P1 PTE tables */
+	/* Its PAL call's message while it waits in one: x0-x7, the svc's PC. */
+	seL4_Word mr[seL4_UnknownSyscall_FaultIP + 1];
+} ctx[CTX_MAX];
+static struct ctx *cur;
+
+/* The PTE of va's page: in S0's directory, or the current process's. */
+static uint32_t *pte_at(seL4_Word va, int make)
+{
+	uint32_t **t = is_s0(va) ? &s0_dir[va >> 22] : cur ? &cur->dir[va >> 22] : 0;
+	if (!t)
+		return 0;
+	if (!*t && make) {
+		if (pte_nfree)
+			*t = pte_free[--pte_nfree];
+		else if (pte_used < sizeof pte_pool / sizeof pte_pool[0])
+			*t = pte_pool[pte_used++];
+		else
+			die("out of PTE tables", va);
+	}
+	return *t ? &(*t)[va >> seL4_PageBits & 1023] : 0;
+}
+
+/* Maps a page as pte says in vspace, with what mode m may do with it. */
+static void map_pte(seL4_CPtr frame, seL4_CPtr vspace, seL4_Word va, uint32_t pte, int m)
+{
+	seL4_CapRights_t rights = m <= may_write[prot(pte)] ? seL4_ReadWrite : seL4_CanRead;
+	seL4_ARM_VMAttributes attr = seL4_ARM_Default_VMAttributes;
+	if (!(pte & PTE_EXEC))
+		attr |= seL4_ARM_ExecuteNever;
+	map(frame, vspace, va, rights, attr);
+}
+
+static void unmap(seL4_CPtr frame)
+{
+	seL4_Error err = frame ? seL4_ARM_Page_Unmap(frame) : seL4_NoError;
+	if (err)
+		die("seL4_ARM_Page_Unmap failed", err);
+}
+
+/* The frame cap that maps pfn in its process's mode m address space. */
+static seL4_CPtr mode_cap(int m, unsigned pfn)
+{
+	if (!pfn_mcap[m][pfn])
+		pfn_mcap[m][pfn] = mint(pfn_frame[pfn], 0);
+	return pfn_mcap[m][pfn];
+}
+
+/*
+ * Maps a P0 or P1 page of c's in the address spaces of each mode it has
+ * entered that may read it, or unmaps it from all of them. Kernel mode's
+ * is the executive's, which holds only the current process's pages.
+ */
+static void map_page(struct ctx *c, seL4_Word va, uint32_t pte, int on)
+{
+	unsigned pfn = pte & PTE_PFN;
+	for (int m = 0; m < 4; m++) {
+		if (!on) {
+			unmap(m ? pfn_mcap[m][pfn] : pfn_cap[pfn]);
+			continue;
+		}
+		if (!c->tcb[m] || m > may_read[prot(pte)] || (!m && c != cur))
+			continue;
+		map_pte(m ? mode_cap(m, pfn) : pfn_cap[pfn], c->vspace[m], va, pte, m);
+	}
+}
+
+/*
+ * The S0 pages an outer mode may read, such as the system service vector:
+ * each mode's address space of each process maps them when it is made.
+ * ponytail: their protection is set before any outer mode runs, and stays.
+ */
+static struct {
+	seL4_Word va;
+	uint32_t pte;
+} shared[8];
+static unsigned nshared;
+static int outer_started;
+
+static int outer(uint32_t pte)
+{
+	return mapped(pte) && may_read[prot(pte)] > 0;
 }
 
 /*
  * WRPTE: makes va's page what pte says, mapped, unmapped or with a new
- * protection, and puts the PTE it had in *old. Fails, returning 0, for an
- * address outside the system space, a reserved protection code, a PFN out
- * of range or already mapped at another address.
+ * protection, and puts the PTE it had in *old. A page in P0 or P1 is the
+ * current process's. Fails, returning 0, for an address outside the
+ * executive's space, a reserved protection code, a PFN out of range or
+ * already mapped at another address, or an S0 page outer modes may read once
+ * one of them runs.
  * ponytail: one mapping per PFN; a frame cap per extra mapping for shared
  * pages.
  */
 static int wrpte(seL4_Word va, uint32_t pte, uint32_t *old)
 {
-	unsigned prot = pte >> 27 & 15, pfn = pte & PTE_PFN;
-	if (va % PAGE_SIZE || va < PAGE_SIZE || va >= SPACE_END)
+	unsigned pfn = pte & PTE_PFN;
+	int s0 = is_s0(va);
+	struct ctx *owner = s0 ? 0 : cur;
+	if (va % PAGE_SIZE || va < PAGE_SIZE || va >= SPACE_END || (!s0 && !cur))
 		return 0;
-	if (mapped(pte) && (prot == 1 || pfn >= PFN_COUNT || (pfn_va[pfn] && pfn_va[pfn] != va)))
+	if (mapped(pte) && (prot(pte) == 1 || pfn >= PFN_COUNT ||
+			    (pfn_va[pfn] && (pfn_va[pfn] != va || pfn_ctx[pfn] != owner))))
 		return 0;
-	uint32_t *slot = pte_at(va, 1);
+	uint32_t none = 0, *slot = pte_at(va, mapped(pte));
+	if (!slot)
+		slot = &none; /* unmapping a page in no table: nothing there */
+	if (s0 && (outer(pte) || outer(*slot)) &&
+	    (outer_started || (!outer(*slot) && nshared == sizeof shared / sizeof shared[0])))
+		return 0;
 	*old = *slot;
 	if (mapped(*old)) {
-		seL4_Error err = seL4_ARM_Page_Unmap(pfn_cap[*old & PTE_PFN]);
-		if (err)
-			die("seL4_ARM_Page_Unmap failed", err);
-		pfn_va[*old & PTE_PFN] = 0;
+		unsigned o = *old & PTE_PFN;
+		if (s0)
+			unmap(pfn_cap[o]);
+		else
+			map_page(cur, va, *old, 0);
+		pfn_va[o] = 0;
+		pfn_ctx[o] = 0;
 	}
 	*slot = pte;
+	if (s0) {
+		unsigned i = 0;
+		while (i < nshared && shared[i].va != va)
+			i++;
+		if (outer(pte)) {
+			shared[i].va = va;
+			shared[i].pte = pte;
+			nshared += i == nshared;
+		} else if (i < nshared) {
+			shared[i] = shared[--nshared];
+		}
+	}
 	if (!mapped(pte))
 		return 1;
 	pfn_ptr(pfn);
-	seL4_CapRights_t rights = PRT_KERNEL_WRITES >> prot & 1 ? seL4_ReadWrite : seL4_CanRead;
-	seL4_ARM_VMAttributes attr = seL4_ARM_Default_VMAttributes;
-	if (!(pte & PTE_EXEC))
-		attr |= seL4_ARM_ExecuteNever;
-	map(pfn_cap[pfn], exec_vspace, va, rights, attr);
+	if (s0)
+		map_pte(pfn_cap[pfn], exec_vspace, va, pte, 0);
+	else
+		map_page(cur, va, pte, 1);
 	if (pte & PTE_EXEC) {
 		seL4_Error err = seL4_ARM_Page_Unify_Instruction(pfn_cap[pfn], 0, PAGE_SIZE);
 		if (err)
 			die("seL4_ARM_Page_Unify_Instruction failed", err);
 	}
 	pfn_va[pfn] = va;
+	pfn_ctx[pfn] = owner;
 	return 1;
+}
+
+/*
+ * The executive's kernel mode sees the current process's P0 and P1: on a
+ * switch, the PAL unmaps the old one's pages there (on = 0) and maps the new
+ * one's. seL4 can't swap a page table in and out, since unmapping one clears
+ * it (ADR-0005).
+ * ponytail: a seL4 call per page of the two processes; an address space of
+ * its own per process, with S0 in each, when switches cost too much.
+ */
+static void kernel_space(struct ctx *c, int on)
+{
+	for (seL4_Word i = 0; i < SPACE_END >> 22; i++)
+		for (unsigned j = 0; c->dir[i] && j < 1024; j++) {
+			uint32_t pte = c->dir[i][j];
+			if (!mapped(pte))
+				continue;
+			if (on)
+				map_pte(pfn_cap[pte & PTE_PFN], exec_vspace,
+					i << 22 | j << seL4_PageBits, pte, 0);
+			else
+				unmap(pfn_cap[pte & PTE_PFN]);
+		}
+}
+
+/* Takes back c's P0 and P1 when its context is deleted: the pages the
+ * executive left there, and the tables. */
+static void free_space(struct ctx *c)
+{
+	for (seL4_Word i = 0; i < SPACE_END >> 22; i++) {
+		uint32_t *t = c->dir[i];
+		if (!t)
+			continue;
+		for (unsigned j = 0; j < 1024; j++)
+			if (mapped(t[j])) {
+				map_page(c, i << 22 | j << seL4_PageBits, t[j], 0);
+				pfn_va[t[j] & PTE_PFN] = 0;
+				pfn_ctx[t[j] & PTE_PFN] = 0;
+			}
+		memset(t, 0, 1024 * sizeof *t);
+		pte_free[pte_nfree++] = t;
+		c->dir[i] = 0;
+	}
 }
 
 /* The executive's quadword at va, which must be 8-byte aligned and mapped. */
@@ -319,6 +499,24 @@ static uint64_t *quad(seL4_Word va)
 	if (!pte || !mapped(*pte))
 		return 0;
 	return (uint64_t *)(PHYS + (*pte & PTE_PFN) * PAGE_SIZE + va % PAGE_SIZE);
+}
+
+/*
+ * PROBER and PROBEW: whether mode m, or the PSL's previous mode if it is an
+ * outer one, may read (write) the first and the last of len bytes at base,
+ * as the VAX's PROBE checks.
+ */
+static int probe(seL4_Word base, seL4_Word len, int m, int write)
+{
+	if (m < cur->prvmode)
+		m = cur->prvmode;
+	seL4_Word at[2] = { base, base + (len ? len - 1 : 0) };
+	for (int i = 0; i < 2; i++) {
+		uint32_t *pte = at[i] < SPACE_END ? pte_at(at[i], 0) : 0;
+		if (!pte || !mapped(*pte) || m > (write ? may_write : may_read)[prot(*pte)])
+			return 0;
+	}
+	return 1;
 }
 
 /* The boot's own PFNs, from 0 up. */
@@ -411,30 +609,16 @@ extern const uint8_t _start[], _end[];
 
 /*
  * What the PAL sets up in the executive's address space before it starts
- * (DESIGN-0001): the restart parameter block, the boot volume, EXEC.EXE's
- * sections and a stack below 2 GB, where MACRO-32's longword addresses reach.
+ * (DESIGN-0001), in S0: the restart parameter block, the boot volume, and a
+ * stack; EXEC.EXE's sections are at their link addresses, in S0 too.
  */
-#define RPB_VA 0x1fff0000UL
-#define VOLUME_VA 0x20000000UL
-#define EXEC_STACK_TOP 0x7fff0000UL
+#define RPB_VA 0x4fff0000UL
+#define VOLUME_VA 0x50000000UL
+#define EXEC_STACK_TOP 0x5fff0000UL
 #define EXEC_STACK_PAGES 4
 enum { RPB_BASE = 0, RPB_PFNCNT = 4, RPB_FREEPFN = 8, RPB_VOLUME = 12, RPB_VOLSIZE = 16,
        RPB_BOOTTIME = 20, RPB_HWPCB = 64, RPB_LENGTH = 192 };
 
-/*
- * A process context: the thread that runs one executive process, made the
- * first time the executive switches to its hardware PCB. Its seL4 objects
- * outlive it, for the next context in the slot.
- */
-#define CTX_MAX 32
-static struct ctx {
-	seL4_Word hwpcb; /* the executive's HWPCB address; 0: a free slot */
-	seL4_CPtr tcb, sc, reply;
-	int started;
-	/* Its PAL call's message while it waits in one: x0-x7, the svc's PC. */
-	seL4_Word mr[seL4_UnknownSyscall_FaultIP + 1];
-} ctx[CTX_MAX];
-static struct ctx *cur;
 static seL4_CPtr fault_ep, sched_control;
 static seL4_Time slice;
 /* The current context waits in WTINT, its reply object taken: the PAL
@@ -453,47 +637,91 @@ static struct ctx *find_ctx(seL4_Word hwpcb)
 	return 0;
 }
 
+/* What the PAL's endpoint tells a context's threads by: its slot and mode. */
+static seL4_Word ctx_badge(struct ctx *c, int m)
+{
+	return (seL4_Word)(c - ctx + 1) | (seL4_Word)m << 8;
+}
+
 /*
- * A free slot for hwpcb, with a TCB in the executive's address space, an
- * empty CSpace, since it calls nothing but the PAL, and the PAL's endpoint,
- * badged with the slot, for its faults, PAL calls included. It runs below
- * the PAL's priority, so the PAL serves a call as soon as it is made.
+ * A thread in vspace with an empty CSpace, since it calls nothing but the
+ * PAL, and the PAL's endpoint, badged, for its faults, PAL calls included.
+ * It runs below the PAL's priority, so the PAL serves a call as soon as it
+ * is made.
  */
+static seL4_CPtr new_thread(seL4_CPtr vspace, seL4_Word badge)
+{
+	seL4_CPtr tcb = alloc(seL4_TCBObject, 0);
+	seL4_CPtr sc = alloc(seL4_SchedContextObject, seL4_MinSchedContextBits);
+	seL4_Error err = seL4_TCB_Configure(tcb, alloc(seL4_CapTableObject, 1), 0, vspace, 0, 0,
+					    seL4_CapNull);
+	if (!err)
+		err = seL4_SchedControl_Configure(sched_control, sc, slice, slice, 0, 0);
+	if (!err)
+		err = seL4_TCB_SetSchedParams(tcb, seL4_CapInitThreadTCB, seL4_MaxPrio - 1,
+					      seL4_MaxPrio - 1, sc, mint(fault_ep, badge));
+	if (err)
+		die("configuring a process context failed", err);
+	return tcb;
+}
+
+/* A free slot for hwpcb, whose kernel-mode thread runs in the executive's
+ * address space. */
 static struct ctx *new_ctx(seL4_Word hwpcb)
 {
 	struct ctx *c = find_ctx(0);
 	if (!c)
 		return 0;
-	if (!c->tcb) {
-		c->tcb = alloc(seL4_TCBObject, 0);
-		c->sc = alloc(seL4_SchedContextObject, seL4_MinSchedContextBits);
+	if (!c->tcb[0]) {
+		c->vspace[0] = exec_vspace;
+		c->tcb[0] = new_thread(exec_vspace, ctx_badge(c, 0));
 		c->reply = alloc(seL4_ReplyObject, 0);
-		seL4_Error err = seL4_TCB_Configure(c->tcb, alloc(seL4_CapTableObject, 1), 0,
-						    exec_vspace, 0, 0, seL4_CapNull);
-		if (!err)
-			err = seL4_SchedControl_Configure(sched_control, c->sc, slice, slice, 0, 0);
-		if (!err)
-			err = seL4_TCB_SetSchedParams(c->tcb, seL4_CapInitThreadTCB, seL4_MaxPrio - 1,
-						      seL4_MaxPrio - 1, c->sc,
-						      mint(fault_ep, c - ctx + 1));
-		if (err)
-			die("configuring a process context failed", err);
 	}
 	c->hwpcb = hwpcb;
-	c->started = 0;
+	c->started = c->mode = c->prvmode = 0;
 	return c;
+}
+
+/*
+ * The context's thread for outer mode m, made the first time it enters
+ * that mode, in an address space of its own: the process's pages m may
+ * read, and the shared S0 ones.
+ */
+static void mode_thread(struct ctx *c, int m)
+{
+	if (c->tcb[m])
+		return;
+	c->vspace[m] = alloc(seL4_ARM_VSpaceObject, 0);
+	seL4_Error err = seL4_ARM_ASIDPool_Assign(seL4_CapInitThreadASIDPool, c->vspace[m]);
+	if (err)
+		die("seL4_ARM_ASIDPool_Assign failed", err);
+	c->tcb[m] = new_thread(c->vspace[m], ctx_badge(c, m));
+	outer_started = 1;
+	for (unsigned i = 0; i < nshared; i++)
+		if (m <= may_read[prot(shared[i].pte)])
+			map_pte(mint(pfn_frame[shared[i].pte & PTE_PFN], 0), c->vspace[m],
+				shared[i].va, shared[i].pte, m);
+	for (seL4_Word i = 0; i < SPACE_END >> 22; i++)
+		for (unsigned j = 0; c->dir[i] && j < 1024; j++) {
+			uint32_t pte = c->dir[i][j];
+			if (mapped(pte) && m <= may_read[prot(pte)])
+				map_pte(mode_cap(m, pte & PTE_PFN), c->vspace[m],
+					i << 22 | j << seL4_PageBits, pte, m);
+		}
 }
 
 /* PAL function codes (docs/design/0001-pal-interface.md). */
 enum {
 	HALT = 0x00, SWPCTX = 0x05, MFPR_IPL = 0x0e, MTPR_IPL = 0x0f, MFPR_PCBB = 0x12,
 	MFPR_SCBB = 0x16, MTPR_SCBB = 0x17, MTPR_SIRR = 0x18, MFPR_SISR = 0x19, WTINT = 0x3e,
-	MTPR_TXDB = 0x40, WRPTE = 0x41, DELCTX = 0x42, CHMK = 0x83, REI = 0x92
+	MTPR_TXDB = 0x40, WRPTE = 0x41, DELCTX = 0x42, CHME = 0x82, CHMU = 0x85, PROBER = 0x8f,
+	PROBEW = 0x90, REI = 0x92
 };
 
 /* The system control block's vectors the PAL delivers through, and the
- * interval timer's IPL, the VAX's. */
-enum { SCB_CHMK = 0x40, SCB_SOFTINT = 0x80, SCB_TIMER = 0xc0, IPL_HWCLK = 24 };
+ * interval timer's IPL, the VAX's. CHMx's is SCB_CHMK + 4 * x, x the mode. */
+enum { SCB_OPCDEC = 0x10, SCB_ACCVIO = 0x20, SCB_CHMK = 0x40, SCB_SOFTINT = 0x80,
+       SCB_TIMER = 0xc0, IPL_HWCLK = 24 };
 
 /*
  * The processor state the PAL keeps for the executive's one CPU. A VAX
@@ -503,14 +731,16 @@ enum { SCB_CHMK = 0x40, SCB_SOFTINT = 0x80, SCB_TIMER = 0xc0, IPL_HWCLK = 24 };
  */
 static seL4_Word ipl = 31, pending, scbb;
 
-/* The frame on the kernel stack an interrupt or exception pushes and REI
- * pops ($INTSTKDEF), in quadwords. */
+/* The frame on the stack an interrupt or exception pushes and REI pops
+ * ($INTSTKDEF), in quadwords. */
 enum { F_PC, F_PS, F_R7, F_SP, F_X_SP, F_X13, F_X30 = F_X13 + 6, F_LENGTH };
 
-/* The PSL's condition codes, NZVC in bits 3:0, and ARM64's NZCV in 31:28. */
+/* The PSL: the current and previous modes in bits 25:24 and 23:22, IPL in
+ * 20:16, and the condition codes, NZVC in 3:0, from ARM64's NZCV in 31:28. */
 static seL4_Word psl(seL4_Word spsr)
 {
-	return ipl << 16 | (spsr >> 28 & 0xc) | (spsr >> 29 & 1) | (spsr >> 27 & 2);
+	return (seL4_Word)cur->mode << 24 | (seL4_Word)cur->prvmode << 22 | ipl << 16 |
+	       (spsr >> 28 & 0xc) | (spsr >> 29 & 1) | (spsr >> 27 & 2);
 }
 
 static seL4_Word spsr(seL4_Word psl)
@@ -518,12 +748,22 @@ static seL4_Word spsr(seL4_Word psl)
 	return (psl & 0xc) << 28 | (psl & 1) << 29 | (psl & 2) << 27;
 }
 
+/* The stack pointer of mode m the current HWPCB keeps: KSP, ESP, SSP, USP. */
+static uint64_t *hwpcb_sp(int m)
+{
+	return quad(cur->hwpcb + 8 * m);
+}
+
 /*
- * Delivers an interrupt or exception to the handler the SCB has at off: pushes
- * the frame on the kernel stack, 16-byte aligned, and raises IPL to new_ipl.
- * Returns 0 if there is no SCB, no handler or no stack to push on.
+ * Delivers an interrupt or exception to the handler the SCB has at off, in
+ * mode `to`, with prv as the previous mode, and raises IPL to new_ipl. The
+ * frame, and n parameters below it, go on the current stack, 16-byte
+ * aligned, or, if `to` is an inner mode, on its stack from the HWPCB, where
+ * the current mode's stack pointer goes. Returns 0, having changed nothing,
+ * if there is no SCB, no handler or no stack to push on.
  */
-static int vector(seL4_UserContext *r, seL4_Word off, seL4_Word new_ipl)
+static int vector(seL4_UserContext *r, seL4_Word off, seL4_Word new_ipl, int to, int prv,
+		  const seL4_Word *param, unsigned n)
 {
 	uint64_t *v = scbb ? quad((scbb + off) & ~7UL) : 0;
 	seL4_Word handler = v ? *v >> (scbb + off) % 8 * 8 & 0xffffffff : 0;
@@ -532,27 +772,43 @@ static int vector(seL4_UserContext *r, seL4_Word off, seL4_Word new_ipl)
 	seL4_Word frame[F_LENGTH] = { r->pc, psl(r->spsr), r->x7, r->x28, r->sp, r->x13, r->x14,
 				      r->x15, r->x16, r->x17, r->x18, r->x30 };
 	/* Below both stacks: vmacro moves sp first, then x28, and back. */
-	seL4_Word sp = ((r->x28 < r->sp ? r->x28 : r->sp) & ~15UL) - sizeof frame;
-	for (unsigned i = 0; i < F_LENGTH; i++) {
-		uint64_t *q = quad(sp + 8 * i);
-		if (!q)
+	seL4_Word sp = r->x28 < r->sp ? r->x28 : r->sp;
+	uint64_t *outer = 0;
+	if (to < cur->mode) {
+		uint64_t *inner = hwpcb_sp(to);
+		outer = hwpcb_sp(cur->mode);
+		if (!inner || !*inner || !outer)
 			return 0;
-		*q = frame[i];
+		sp = *inner;
 	}
+	seL4_Word params = (n * 8 + 15) & ~15UL;
+	sp = (sp & ~15UL) - sizeof frame - params;
+	uint64_t *q[F_LENGTH + 2];
+	for (unsigned i = 0; i < n + F_LENGTH; i++)
+		if (!(q[i] = quad(sp + (i < n ? 8 * i : params + 8 * (i - n)))))
+			return 0;
+	for (unsigned i = 0; i < n + F_LENGTH; i++)
+		*q[i] = i < n ? param[i] : frame[i - n];
+	if (outer)
+		*outer = r->x28;
 	r->x28 = r->sp = sp;
 	r->pc = handler;
+	cur->mode = to;
+	cur->prvmode = prv;
 	ipl = new_ipl;
+	mode_thread(cur, to);
 	return 1;
 }
 
-/* Delivers the highest pending interrupt IPL lets through. */
+/* Delivers the highest pending interrupt IPL lets through, in kernel mode,
+ * as the VAX's interrupts are, with kernel as the previous mode too. */
 static int deliver(seL4_UserContext *r)
 {
 	for (seL4_Word level = 31; level > ipl; level--)
 		if (pending >> level & 1) {
 			pending &= ~(1UL << level);
 			if (!vector(r, level == IPL_HWCLK ? SCB_TIMER : SCB_SOFTINT + 4 * level,
-				    level)) {
+				    level, 0, 0, 0, 0)) {
 				print("%%PAL-F-NOVEC, no handler for interrupt at IPL %lu\n", level);
 				return 0;
 			}
@@ -565,7 +821,13 @@ static int deliverable(void)
 	return pending >> (ipl + 1) != 0;
 }
 
-/* REI: pops the frame at VAX SP. Returns 0 if it isn't one. */
+/*
+ * REI: pops the frame at VAX SP. Returns 0 if it isn't one, or its PSL
+ * isn't one REI may load, as on the VAX: no inner mode than the current
+ * one, a previous mode no inner than the new one, IPL 0 outside kernel
+ * mode. Going out to another mode leaves the current one's stack pointer,
+ * past the frame, in the HWPCB.
+ */
 static int rei(seL4_UserContext *r)
 {
 	seL4_Word f[F_LENGTH];
@@ -575,9 +837,18 @@ static int rei(seL4_UserContext *r)
 			return 0;
 		f[i] = *q;
 	}
-	/* ponytail: kernel mode only; the other modes come with their tasks. */
-	if (f[F_PS] >> 22 & 0xf)
+	int m = f[F_PS] >> 24 & 3, prv = f[F_PS] >> 22 & 3;
+	if (m < cur->mode || prv < m || (m && f[F_PS] >> 16 & 31))
 		return 0;
+	if (m != cur->mode) {
+		uint64_t *sp = hwpcb_sp(cur->mode);
+		if (!sp)
+			return 0;
+		*sp = r->x28 + sizeof f;
+		mode_thread(cur, m);
+	}
+	cur->mode = m;
+	cur->prvmode = prv;
 	r->pc = f[F_PC];
 	r->spsr = spsr(f[F_PS]);
 	r->x7 = f[F_R7];
@@ -590,21 +861,33 @@ static int rei(seL4_UserContext *r)
 	return 1;
 }
 
+/* The CPU's registers, while the PAL works on them, and the mode whose
+ * thread they came from. */
 static seL4_UserContext regs;
+static int regs_mode;
 
 static void read_regs(void)
 {
-	seL4_Error err = seL4_TCB_ReadRegisters(cur->tcb, 0, 0, sizeof regs / sizeof(seL4_Word),
-						&regs);
+	regs_mode = cur->mode;
+	seL4_Error err = seL4_TCB_ReadRegisters(cur->tcb[regs_mode], 0, 0,
+						sizeof regs / sizeof(seL4_Word), &regs);
 	if (err)
 		die("seL4_TCB_ReadRegisters failed", err);
 }
 
-/* Resumes the current context with regs: one that is new or stopped is
- * resumed by the write, one in a PAL call by the reply. */
+/*
+ * Resumes the current context with regs, in the thread of its mode: one
+ * that is new or stopped is resumed by the write, one in a PAL call by the
+ * reply. If the mode changed, the thread regs came from stops, and its PAL
+ * call with it.
+ */
 static void write_regs(int resume)
 {
-	seL4_Error err = seL4_TCB_WriteRegisters(cur->tcb, resume, 0,
+	if (cur->mode != regs_mode) {
+		seL4_TCB_Suspend(cur->tcb[regs_mode]);
+		resume = 1;
+	}
+	seL4_Error err = seL4_TCB_WriteRegisters(cur->tcb[cur->mode], resume, 0,
 						 sizeof regs / sizeof(seL4_Word), &regs);
 	if (err)
 		die("seL4_TCB_WriteRegisters failed", err);
@@ -657,13 +940,16 @@ static int swpctx(seL4_Word hwpcb)
 		print("%%PAL-F-SWPCTX, no context for HWPCB 0x%lx\n", hwpcb);
 		return 0;
 	}
+	kernel_space(from, 0);
 	cur = to;
+	kernel_space(to, 1);
 	if (to->started) {
 		/* Blocked in its own SWPCTX: ret() replies to it. */
 		return ret(from->hwpcb);
 	}
 	to->started = 1;
 	regs = (seL4_UserContext){ .x28 = *ksp, .x0 = from->hwpcb };
+	regs_mode = 0;
 	if (!rei(&regs)) {
 		print("%%PAL-F-SWPCTX, no REI frame at KSP 0x%lx\n", (seL4_Word)*ksp);
 		return 0;
@@ -674,23 +960,56 @@ static int swpctx(seL4_Word hwpcb)
 	return 1;
 }
 
-/* Delivers CHMK through the SCB, at the same IPL, with the code in R0. */
-static int chmk(void)
+/*
+ * An exception of the current context's: delivered in kernel mode at the
+ * same IPL, with the PC of the instruction that took it, if it came from an
+ * outer mode. In kernel mode the PAL stops the executive instead, as a
+ * bugcheck, and returns 0.
+ */
+static int exception(seL4_Word off, seL4_Word pc, const seL4_Word *param, unsigned n)
 {
+	if (!cur->mode)
+		return 0;
 	read_regs();
-	regs.pc = cur->mr[seL4_UnknownSyscall_FaultIP] + 4;
-	if (!vector(&regs, SCB_CHMK, ipl)) {
-		print("%%PAL-F-NOVEC, no CHMK handler or kernel stack\n");
+	regs.pc = pc;
+	if (!vector(&regs, off, ipl, 0, cur->mode, param, n)) {
+		print("%%PAL-F-NOVEC, no handler or kernel stack for exception 0x%lx\n", off);
 		return 0;
 	}
 	write_regs(0);
 	return 1;
 }
 
+/*
+ * CHMx, x the mode, CHMK's 0 to CHMU's 3: delivers through the SCB's vector
+ * for x, at the same IPL, with the code in R0, in mode x or the current mode
+ * if that is an inner one. Without a vector or a stack for that mode, it is a
+ * reserved instruction.
+ */
+static int chmx(int x)
+{
+	seL4_Word pc = cur->mr[seL4_UnknownSyscall_FaultIP];
+	int to = x < cur->mode ? x : cur->mode;
+	read_regs();
+	regs.pc = pc + 4;
+	if (!vector(&regs, SCB_CHMK + 4 * x, ipl, to, cur->mode, 0, 0)) {
+		if (exception(SCB_OPCDEC, pc, 0, 0))
+			return 1;
+		print("%%PAL-F-NOVEC, no CHMx handler or stack for mode %u\n", to);
+		return 0;
+	}
+	write_regs(0);
+	return 1;
+}
+
+/* REI, which in an outer mode is a reserved operand: the executive gets a
+ * reserved instruction. */
 static int do_rei(void)
 {
 	read_regs();
 	if (!rei(&regs)) {
+		if (exception(SCB_OPCDEC, cur->mr[seL4_UnknownSyscall_FaultIP], 0, 0))
+			return 1;
 		print("%%PAL-F-REI, bad frame at SP 0x%lx, PC 0x%lx\n", (seL4_Word)regs.x28,
 		      (seL4_Word)regs.pc);
 		return 0;
@@ -702,23 +1021,37 @@ static int do_rei(void)
 }
 
 /*
- * One PAL call or fault from the current context. Returns 0 when the PAL
- * stops serving: the executive halted or took a fault the PAL can't
- * handle yet.
+ * One PAL call or fault from the current context. Those of an outer mode
+ * are exceptions the executive handles; those of kernel mode stop it.
+ * Returns 0 when the PAL stops serving: the executive halted or took a
+ * fault in kernel mode.
  */
 static int serve_one(seL4_MessageInfo_t msg)
 {
 	switch (seL4_MessageInfo_get_label(msg)) {
 	case seL4_Fault_UnknownSyscall:
 		break;
-	case seL4_Fault_VMFault:
-		print("%%PAL-F-ACCVIO, access violation at 0x%lx, PC 0x%lx, HWPCB 0x%lx\n",
-		      seL4_GetMR(seL4_VMFault_Addr), seL4_GetMR(seL4_VMFault_IP), cur->hwpcb);
+	case seL4_Fault_VMFault: {
+		/* The VAX's access violation parameters: a mask, bit 2 for a
+		 * write, then the address. ESR's WnR, bit 6, is a data abort's. */
+		seL4_Word addr = seL4_GetMR(seL4_VMFault_Addr), pc = seL4_GetMR(seL4_VMFault_IP);
+		seL4_Word write = !seL4_GetMR(seL4_VMFault_PrefetchFault) &&
+				  seL4_GetMR(seL4_VMFault_FSR) >> 6 & 1;
+		seL4_Word param[2] = { write << 2, addr };
+		if (exception(SCB_ACCVIO, pc, param, 2))
+			return 1;
+		print("%%PAL-F-ACCVIO, access violation at 0x%lx, PC 0x%lx, HWPCB 0x%lx\n", addr,
+		      pc, cur->hwpcb);
 		return 0;
-	case seL4_Fault_UserException:
-		print("%%PAL-F-OPCDEC, reserved instruction at PC 0x%lx, HWPCB 0x%lx\n",
-		      seL4_GetMR(seL4_UserException_FaultIP), cur->hwpcb);
+	}
+	case seL4_Fault_UserException: {
+		seL4_Word pc = seL4_GetMR(seL4_UserException_FaultIP);
+		if (exception(SCB_OPCDEC, pc, 0, 0))
+			return 1;
+		print("%%PAL-F-OPCDEC, reserved instruction at PC 0x%lx, HWPCB 0x%lx\n", pc,
+		      cur->hwpcb);
 		return 0;
+	}
 	default:
 		print("%%PAL-F-FAULT, fault %lu, HWPCB 0x%lx\n", seL4_MessageInfo_get_label(msg),
 		      cur->hwpcb);
@@ -730,6 +1063,10 @@ static int serve_one(seL4_MessageInfo_t msg)
 	seL4_Word pc = mr[seL4_UnknownSyscall_FaultIP], code = mr[seL4_UnknownSyscall_X7];
 	seL4_Word a0 = mr[seL4_UnknownSyscall_X0], a1 = mr[seL4_UnknownSyscall_X1];
 	seL4_Word v0 = a0;
+	/* Privileged calls, 0x00-0x7F, are reserved instructions outside
+	 * kernel mode. */
+	if (code < 0x80 && cur->mode)
+		return exception(SCB_OPCDEC, pc, 0, 0);
 	switch (code) {
 	case HALT:
 		print("%%PAL-I-HALT, halted at PC 0x%lx, R0 %lu\n", pc, a0 & 0xffffffff);
@@ -776,16 +1113,27 @@ static int serve_one(seL4_MessageInfo_t msg)
 		if (c == cur)
 			break;
 		if (c) {
-			seL4_TCB_Suspend(c->tcb);
+			for (int m = 0; m < 4; m++)
+				if (c->tcb[m])
+					seL4_TCB_Suspend(c->tcb[m]);
+			free_space(c);
 			c->hwpcb = 0;
 		}
 		return ret(v0);
 	}
-	case CHMK:
-		return chmk();
+	case CHME ... CHMU: {
+		static const int mode[] = { 1, 0, 2, 3 }; /* CHME, CHMK, CHMS, CHMU */
+		return chmx(mode[code - CHME]);
+	}
+	case PROBER:
+	case PROBEW:
+		return ret(probe(a0 & 0xffffffff, a1 & 0xffff, mr[seL4_UnknownSyscall_X2] & 3,
+				 code == PROBEW));
 	case REI:
 		return do_rei();
 	}
+	if (exception(SCB_OPCDEC, pc, 0, 0))
+		return 1;
 	print("%%PAL-F-OPCDEC, reserved PAL call 0x%lx at PC 0x%lx, R0 0x%lx, R1 0x%lx\n", code,
 	      pc, a0, a1);
 	return 0;
@@ -807,7 +1155,7 @@ static int tick(void)
 		idle = 0;
 		return ret(0);
 	}
-	seL4_TCB_Suspend(cur->tcb);
+	seL4_TCB_Suspend(cur->tcb[cur->mode]);
 	read_regs();
 	if (!deliver(&regs))
 		return 0;
@@ -828,8 +1176,8 @@ static void serve(void)
 				return;
 			continue;
 		}
-		if (badge != (seL4_Word)(cur - ctx + 1)) {
-			print("%%PAL-F-FAULT, a call from context %lu, not the current one\n", badge);
+		if (badge != ctx_badge(cur, cur->mode)) {
+			print("%%PAL-F-FAULT, a call from context 0x%lx, not the current one\n", badge);
 			return;
 		}
 		if (!serve_one(msg))

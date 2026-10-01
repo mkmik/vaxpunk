@@ -75,23 +75,43 @@ IPL$_POWER = 31                         ; everything blocked
         MTPR    LEVEL, #20              ; PR$_SIRR
         .ENDM   SOFTINT
 
+; IFNORD, IFNOWRT: VMS's checks of an address a caller passed: branch to
+; DEST unless MODE, or the previous mode if it is an outer one, may read
+; (write) the first and last of SIZ bytes at ADR.
+        .MACRO  IFNORD  SIZ, ADR, DEST, MODE=#0
+        PROBER  MODE, SIZ, ADR
+        BEQL    DEST
+        .ENDM   IFNORD
+
+        .MACRO  IFNOWRT SIZ, ADR, DEST, MODE=#0
+        PROBEW  MODE, SIZ, ADR
+        BEQL    DEST
+        .ENDM   IFNOWRT
+
 ; $SCBDEF: system control block vectors the PAL delivers through, at the
 ; VAX's offsets. Each holds the handler's address, a longword.
         .MACRO  $SCBDEF
+SCB$L_OPCDEC = ^X10                     ; reserved or privileged instruction
+SCB$L_ACCVIO = ^X20                     ; access violation: a mask and the address
 SCB$L_CHMK = ^X40                       ; change mode to kernel
+SCB$L_CHME = ^X44                       ; to executive
+SCB$L_CHMS = ^X48                       ; to supervisor
+SCB$L_CHMU = ^X4C                       ; to user
 SCB$L_SOFTINT = ^X80                    ; software interrupt level n at +4*n
 SCB$L_INTTIM = ^XC0                     ; interval timer, at IPL$_HWCLK
 SCB$K_LENGTH = ^XC4
         .ENDM   $SCBDEF
 
-; $INTSTKDEF: the frame the PAL pushes on the kernel stack when it delivers
-; an interrupt or an exception, and REI pops. Quadwords: the registers the
-; interrupted code may have live that VAX code doesn't save.
+; $INTSTKDEF: the frame the PAL pushes on the stack of the mode it delivers
+; an interrupt or an exception in, and REI pops. Quadwords: the registers
+; the interrupted code may have live that VAX code doesn't save. An
+; exception with parameters pushes them below the frame, and its handler
+; pops them before REI.
         .MACRO  $INTSTKDEF
 INTSTK$Q_PC = 0
-INTSTK$Q_PS = 8                         ; the PSL: IPL in 20:16, NZVC in 3:0
+INTSTK$Q_PS = 8                         ; the PSL ($PSLDEF): modes, IPL, NZVC
 INTSTK$Q_R7 = 16
-INTSTK$Q_SP = 24                        ; VAX SP before the frame
+INTSTK$Q_SP = 24                        ; the interrupted mode's VAX SP
 INTSTK$Q_X_SP = 32                      ; ARM64's sp
 INTSTK$Q_X13 = 40                       ; x13-x18, vmacro's scratch
 INTSTK$Q_X30 = 88                       ; the link register
@@ -100,12 +120,14 @@ INTSTK$K_LENGTH = 96
 
 ; $HWPCBDEF: the hardware PCB the PAL knows a process context by. Quadword
 ; aligned. When a context first runs, the PAL pops an INTSTK frame from
-; its KSP, as REI does.
+; its KSP, as REI does. Each mode's stack pointer is where the PAL pushes
+; a frame on entering it from an outer mode, and where it saves the stack
+; pointer of a mode it leaves for another.
         .MACRO  $HWPCBDEF
 HWPCB$Q_KSP = 0                         ; kernel stack pointer
-HWPCB$Q_ESP = 8
-HWPCB$Q_SSP = 16
-HWPCB$Q_USP = 24
+HWPCB$Q_ESP = 8                         ; executive
+HWPCB$Q_SSP = 16                        ; supervisor
+HWPCB$Q_USP = 24                        ; user
 HWPCB$K_LENGTH = 128
         .ENDM   $HWPCBDEF
 
@@ -121,6 +143,18 @@ PTE$M_PFN = ^X001FFFFF
 MMG$C_PAGESIZE = 4096
 MMG$C_VPCTX = 12                        ; address bits in a page
         .ENDM   $PTEDEF
+
+; $VADEF: the address space every process sees, below 2 GB: P0 and P1 are
+; its own, S0 the system's, which all share.
+        .MACRO  $VADEF
+VA$C_P0BASE = ^X00001000                ; page 0 is never mapped
+VA$C_S0BASE = ^X40000000                ; past P0's end
+VA$C_P1BASE = ^X60000000                ; past S0's end
+VA$C_STACKS = ^X7FFE8000                ; the mode stacks, executive's first
+VA$C_ESP = ^X7FFEC000                   ; the executive stack's top
+VA$C_USP = ^X7FFF0000                   ; the user stack's top
+VA$C_P1END = ^X7FFF0000
+        .ENDM   $VADEF
 
 ; $RPBDEF: the restart parameter block, which the PAL fills before the
 ; executive starts and passes in R11.
@@ -174,18 +208,20 @@ PCB$L_EFWM = 40                         ; a wait's flags
 PCB$L_WEFC = 44                         ; and their cluster, 0-3
 PCB$L_KSTACK = 48                       ; kernel stack, from pool
 PCB$L_HWPCB = 52                        ; the HWPCB the PAL knows it by
-PCB$L_IMGBAS = 56                       ; the image's pages
-PCB$L_IMGEND = 60                       ; and past the last
+PCB$L_FREP0VA = 56                      ; past its last P0 page
+PCB$L_FREP1VA = 60                      ; its first P1 page
 PCB$B_PRIB = 64                         ; base priority
 PCB$W_QUANT = 66                        ; -ticks left of its quantum
 PCB$L_OWNER = 68                        ; creator's PID
 PCB$T_LNAME = 72                        ; process name, .ASCIC, 15 characters
 PCB$T_IMAGE = 88                        ; image name, .ASCIC, 39 characters
 PCB$Q_HWPCB = 128                       ; its HWPCB, if it isn't the boot one
-PCB$K_LENGTH = 256
+PCB$L_CHANS = 256                       ; bit n: channel n is assigned
+PCB$K_LENGTH = 272
 PCB$V_WAKEPEN = 0                       ; a $WAKE came while not hibernating
 PCB$V_WALL = 1                          ; the wait is for all of EFWM
 PCB$V_SUSPEN = 2                        ; suspend when the wait ends
+PCB$V_DELPEN = 3                        ; delete it when it next has the CPU
 DYN$C_PCB = 1                           ; PCB$B_TYPE
         .ENDM   $PCBDEF
 

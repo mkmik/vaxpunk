@@ -1,0 +1,141 @@
+        .TITLE  QIO     Channels and I/O to the console
+        .IDENT  /V0.1/
+;
+; A process writes on the console as on VMS: $ASSIGN gives it a channel to
+; OPA0:, and $QIO or $QIOW writes a buffer on it. The write is done before
+; $QIO returns, which then sets the event flag and the I/O status block,
+; so $QIOW is $QIO (docs/design/0002-executive-processes.md).
+; ponytail: the console is the only device, written a buffer at a time at
+; IPL$_SYNCH, so lines don't mix; a terminal driver with I/O request
+; packets replaces this.
+;
+        .LIBRARY "lib.mlb"
+        .LIBRARY "starlet.mlb"
+        $IPLDEF
+        $PCBDEF
+        $IODEF
+        $SSDEF
+
+        .EXTERNAL SCH$GL_CURPCB, EXE$PROBER_DSC, EXE$OUTCHAR, EXE$SETEF, EXE$CLREF
+
+MAXCHAN = 31                            ; channels 1-31, a bit each in PCB$L_CHANS
+
+        .PSECT  EXEC$DATA, NOEXE, WRT, QUAD
+CONSOLE:
+        .ASCII  /OPA0/
+
+        .PSECT  $CODE$
+
+; $ASSIGN devnam, chan, acmode, mbxnam: assigns a channel to the device
+; devnam names, OPA0, with a colon or without, and puts its number in
+; chan, a word.
+        .ENTRY  EXE$ASSIGN, ^M<R2, R3, R4>
+        MOVL    4(AP), R1
+        BSBW    EXE$PROBER_DSC
+        BLBC    R0, 90$
+        IFNOWRT #2, @8(AP), 85$
+        MOVZWL  (R1), R2
+        MOVL    4(R1), R3
+        CMPL    R2, #4
+        BEQL    10$
+        CMPL    R2, #5
+        BNEQ    80$
+        CMPB    4(R3), #^A/:/
+        BNEQ    80$
+10$:    CMPL    (R3), CONSOLE
+        BNEQ    80$
+        MOVL    SCH$GL_CURPCB, R4
+        MOVL    #1, R0
+20$:    BBCS    R0, PCB$L_CHANS(R4), 30$
+        AOBLEQ  #MAXCHAN, R0, 20$
+        MOVL    #SS$_NOIOCHAN, R0
+        RET
+30$:    MOVW    R0, @8(AP)
+        MOVL    #SS$_NORMAL, R0
+        RET
+80$:    MOVL    #SS$_NOSUCHDEV, R0
+        RET
+85$:    MOVL    #SS$_ACCVIO, R0
+90$:    RET
+
+; $DASSGN chan: deassigns a channel.
+        .ENTRY  EXE$DASSGN, ^M<R4>
+        MOVL    SCH$GL_CURPCB, R4
+        MOVZWL  4(AP), R0
+        BEQL    80$
+        CMPL    R0, #MAXCHAN
+        BGTRU   80$
+        BBCC    R0, PCB$L_CHANS(R4), 80$
+        MOVL    #SS$_NORMAL, R0
+        RET
+80$:    MOVL    #SS$_IVCHAN, R0
+        RET
+
+; $QIO efn, chan, func, iosb, astadr, astprm, p1, p2, p3, p4, p5, p6:
+; writes p2 bytes at p1 on the channel's device, the console, for
+; IO$_WRITEVBLK, IO$_WRITELBLK and IO$_WRITEPBLK, the only functions. Clears
+; event flag efn first, and once the write is done sets it, and the status
+; and byte count in iosb.
+; ponytail: no ASTs yet, so an astadr is SS$_ILLSER.
+        .ENTRY  EXE$QIO, ^M<R2, R3, R4, R5>
+        MOVL    SCH$GL_CURPCB, R4
+        TSTL    20(AP)
+        BNEQ    70$
+        MOVZWL  8(AP), R0
+        BEQL    75$
+        CMPL    R0, #MAXCHAN
+        BGTRU   75$
+        BBC     R0, PCB$L_CHANS(R4), 75$
+        BICL3   #^C63, 12(AP), R0       ; the function, without modifiers
+        CMPL    R0, #IO$_WRITEVBLK
+        BEQL    10$
+        CMPL    R0, #IO$_WRITELBLK
+        BEQL    10$
+        CMPL    R0, #IO$_WRITEPBLK
+        BNEQ    80$
+10$:    MOVL    16(AP), R5
+        BEQL    15$
+        IFNOWRT #8, (R5), 85$
+15$:    MOVL    28(AP), R2
+        MOVL    32(AP), R3
+        CMPL    R3, #65535
+        BGTRU   87$
+        IFNORD  R3, (R2), 85$
+        PUSHL   4(AP)
+        CALLS   #1, G^EXE$CLREF
+        BLBC    R0, 90$
+        DSBINT  #IPL$_SYNCH             ; the console, a buffer at a time
+        CLRL    R1
+20$:    CMPL    R1, R3
+        BGEQU   30$
+        MOVZBL  (R2)[R1], R0
+        JSB     G^EXE$OUTCHAR
+        INCL    R1
+        BRB     20$
+30$:    ENBINT
+        TSTL    R5
+        BEQL    40$
+        MOVW    #SS$_NORMAL, (R5)
+        MOVW    R3, 2(R5)
+        CLRL    4(R5)
+40$:    PUSHL   4(AP)
+        CALLS   #1, G^EXE$SETEF
+        MOVL    #SS$_NORMAL, R0
+        RET
+70$:    MOVL    #SS$_ILLSER, R0
+        RET
+75$:    MOVL    #SS$_IVCHAN, R0
+        RET
+80$:    MOVL    #SS$_ILLIOFUNC, R0
+        RET
+85$:    MOVL    #SS$_ACCVIO, R0
+        RET
+87$:    MOVL    #SS$_BADPARAM, R0
+90$:    RET
+
+; $QIOW: $QIO, which has finished the I/O when it returns.
+        .ENTRY  EXE$QIOW, ^M<>
+        CALLG   (AP), G^EXE$QIO
+        RET
+
+        .END

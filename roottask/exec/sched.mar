@@ -27,7 +27,7 @@
         $RPBDEF
         $HWPCBDEF
 
-        .EXTERNAL EXE$GL_RPB
+        .EXTERNAL EXE$GL_RPB, EXE$DELSELF
 
         .PSECT  EXEC$DATA, NOEXE, WRT, QUAD
 SCH$GL_CURPCB::                         ; the current process
@@ -169,9 +169,10 @@ SCH$WAIT::
 
 ; SCH$SCHED: gives the CPU to the highest computable process. The current
 ; one is already in a queue, or deleted. If the CPU comes back to it, this
-; returns. With nothing computable, the CPU waits for an interrupt at
-; IPL$_RESCHED, below the software timer interrupt's, which may make a
-; process computable. IPL$_SYNCH. Keeps every register.
+; returns, unless $DELPRC deleted it meanwhile: then it deletes itself.
+; With nothing computable, the CPU waits for an interrupt at IPL$_RESCHED,
+; below the software timer interrupt's, which may make a process
+; computable. IPL$_SYNCH. Keeps every register.
 SCH$SCHED::
         PUSHR   #^M<R0, R1, R2, R3, R4>
 10$:    MOVL    #31, R1
@@ -192,6 +193,9 @@ SCH$SCHED::
         BEQL    50$
         MOVL    PCB$L_HWPCB(R3), R0
         CALL_PAL #PAL$_SWPCTX           ; back when the CPU is
+        MOVL    SCH$GL_CURPCB, R4
+        BBC     #PCB$V_DELPEN, PCB$L_STS(R4), 50$
+        JMP     G^EXE$DELSELF
 50$:    POPR    #^M<R0, R1, R2, R3, R4>
         RSB
 

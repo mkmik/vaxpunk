@@ -8,7 +8,8 @@
         .LIBRARY "starlet.mlb"
         .LIBRARY "sysexe.mlb"
         $SSDEF
-        .EXTERNAL SYS$SETAST
+        $IODEF
+        .EXTERNAL SYS$SETAST, SYS$EXIT, EXE$GL_RPB
 
         .PSECT  DATA, NOEXE, WRT, LONG
 OTHER_NAME:
@@ -23,10 +24,21 @@ NOSUCH_NAME:
         .ASCID  "NOSUCH"
 NOSUCH_IMAGE:
         .ASCID  "NOSUCH.EXE"
+SNOOP_IMAGE:
+        .ASCID  "SNOOP.EXE"
+SNOOP_NAME:
+        .ASCID  "SNOOP"
+USURP_IMAGE:
+        .ASCID  "USURP.EXE"
+USURP_NAME:
+        .ASCID  "USURP"
+CONSOLE:
+        .ASCID  "OPA0:"
 STATE:  .LONG   0
 PRI:    .LONG   0
-INADR:  .LONG   ^X60000000, ^X60001FFF
-LOW:    .LONG   ^X1000, ^X1FFF          ; not a process's to make
+CHAN:   .LONG   0
+INADR:  .LONG   ^X60000000, ^X60001FFF  ; in P1
+SYSTEM: .LONG   ^X40000000, ^X40000FFF  ; S0: not a process's to make
 
         .PSECT  CODE, EXE, LONG
         .ENTRY  START, ^M<R2>
@@ -72,12 +84,36 @@ LOW:    .LONG   ^X1000, ^X1FFF          ; not a process's to make
         BNEQ    90$
         $DELTVA_S INADR=INADR
         EXPECT  #SS$_NORMAL, 15
-        $CRETVA_S INADR=LOW
+        $CRETVA_S INADR=SYSTEM
         EXPECT  #SS$_PAGOWNVIO, 16
 
-; A routine in kernel mode.
+; Routines in kernel and executive mode.
         $CMKRNL_S ROUTIN=ANSWER
         EXPECT  #42, 17
+        $CMEXEC_S ROUTIN=EXEC_ANSWER
+        EXPECT  #43, 28
+
+; User mode may read and write its own data, read but not write the
+; system service vector, and do neither to the executive's data. The
+; executive won't for it either.
+        PROBEW  #0, #4, STATE
+        BEQL    90$
+        PROBER  #0, #4, G^SYS$EXIT
+        BEQL    90$
+        PROBEW  #0, #4, G^SYS$EXIT
+        BNEQ    90$
+        PROBER  #0, #4, G^EXE$GL_RPB
+        BNEQ    90$
+        $GETTIM_S TIMADR=G^EXE$GL_RPB
+        EXPECT  #SS$_ACCVIO, 29
+        $ASSIGN_S DEVNAM=CONSOLE, CHAN=CHAN
+        EXPECT  #SS$_NORMAL, 30
+        $QIOW_S CHAN=CHAN, FUNC=#IO$_WRITEVBLK, P1=G^EXE$GL_RPB, P2=#4
+        EXPECT  #SS$_ACCVIO, 31
+        $DASSGN_S CHAN=CHAN
+        EXPECT  #SS$_NORMAL, 32
+        $DASSGN_S CHAN=CHAN
+        EXPECT  #SS$_IVCHAN, 33
 
 ; Other processes: lower this one's priority below NAPPER's so it runs
 ; and hibernates; suspend it while it does, so that $WAKE leaves it
@@ -106,14 +142,27 @@ LOW:    .LONG   ^X1000, ^X1FFF          ; not a process's to make
 ; the executive reports.
         $CREPRC_S IMAGE=NOSUCH_IMAGE, PRCNAM=NOSUCH_NAME, BASPRI=#4
         EXPECT  #SS$_NORMAL, 27
+; Processes that break the rules of user mode: each exits with the
+; exception's status, which the executive reports.
+        $CREPRC_S IMAGE=SNOOP_IMAGE, PRCNAM=SNOOP_NAME, BASPRI=#4
+        EXPECT  #SS$_NORMAL, 34
+        $CREPRC_S IMAGE=USURP_IMAGE, PRCNAM=USURP_NAME, BASPRI=#4
+        EXPECT  #SS$_NORMAL, 35
         PRINT   "SVCTEST: ok"
         MOVL    #SS$_NORMAL, R0
         RET
 90$:    MOVL    #SS$_ABORT, R0
         RET
 
+; ANSWER: in kernel mode, where MFPR isn't a reserved instruction.
         .ENTRY  ANSWER, ^M<>
+        MFPR    #18, R0                 ; PR$_IPL
         MOVL    #42, R0
+        RET
+
+; EXEC_ANSWER: in executive mode, on the executive stack.
+        .ENTRY  EXEC_ANSWER, ^M<>
+        MOVL    #43, R0
         RET
 
         .END    START
