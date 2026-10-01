@@ -130,6 +130,7 @@ RPB$L_PFNCNT = 4                        ; PFNs 0 to PFNCNT-1 are the executive's
 RPB$L_FREEPFN = 8                       ; and those below this one are in use
 RPB$L_VOLUME = 12                       ; the boot volume, read-only
 RPB$L_VOLSIZE = 16                      ; its size in bytes
+RPB$L_BOOTTIME = 20                     ; seconds since 1970 at boot, from the RTC
 RPB$Q_HWPCB = 64                        ; the boot context's HWPCB
 RPB$K_LENGTH = 192
         .ENDM   $RPBDEF
@@ -199,3 +200,23 @@ CEB$L_REFC = 20                         ; processes associated
 CEB$T_EFCNAM = 24                       ; name, .ASCIC, 15 characters
 CEB$K_LENGTH = 48
         .ENDM   $CEBDEF
+
+; $TQEDEF: a timer queue entry, from pool, on EXE$GQ_TQFL in the order it
+; is due. Times are VMS's: 100 ns units since 17-Nov-1858.
+        .MACRO  $TQEDEF
+TQE$L_TQFL = 0                          ; timer queue
+TQE$L_TQBL = 4
+TQE$W_SIZE = 8
+TQE$B_TYPE = 10
+TQE$B_RQTYPE = 11                       ; TQE$C_
+TQE$L_PID = 12                          ; the process it is for
+TQE$L_ASTPRM = 16                       ; $SETIMR's reqidt
+TQE$L_EFN = 20                          ; $SETIMR's event flag
+TQE$Q_TIME = 24                         ; when it is due
+TQE$Q_DELTA = 32                        ; a repeating $SCHDWK's interval
+TQE$K_LENGTH = 48
+TQE$C_TMSNGL = 0                        ; $SETIMR: sets an event flag
+TQE$C_WKSNGL = 1                        ; $SCHDWK: wakes the process
+TQE$C_WKREPT = 2                        ; and again every TQE$Q_DELTA
+DYN$C_TQE = 15                          ; TQE$B_TYPE
+        .ENDM   $TQEDEF

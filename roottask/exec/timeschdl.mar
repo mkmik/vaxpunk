@@ -1,54 +1,366 @@
-        .TITLE  TIMESCHDL The interval timer and the software timer interrupt
-        .IDENT  /V0.1/
+        .TITLE  TIMESCHDL The interval timer, the system time and the timer queue
+        .IDENT  /V0.2/
 ;
 ; The PAL delivers the interval timer interrupt every 10 ms, at
 ; IPL$_HWCLK, wherever the current process is
 ; (docs/adr/0004-interval-timer-is-a-pal-thread.md). As on VMS, the
-; hardware clock's handler does as little as it can: it charges the tick to
-; the current process's quantum and, when the quantum is up, requests the
-; software timer interrupt, whose handler ends the quantum at a lower IPL
+; hardware clock's handler does as little as it can: it advances the
+; system time, charges the tick to the current process's quantum and,
+; when the quantum is up or the first timer queue entry is due, requests
+; the software timer interrupt, whose handler does the rest at a lower IPL
 ; (docs/design/0002-executive-processes.md).
 ;
+; Times are VMS's: a quadword of 100 ns units since 17-Nov-1858 00:00, or,
+; negative, a delta from now. The timer queue holds what $SETIMR and
+; $SCHDWK asked for, in the order it is due. It is synchronized at
+; IPL$_SYNCH; the system time, and EXE$GQ_1ST_TIME, which the hardware
+; clock's handler reads, at IPL$_HWCLK.
+;
         .LIBRARY "lib.mlb"
+        .LIBRARY "starlet.mlb"
         $PRDEF
         $IPLDEF
         $PCBDEF
         $STATEDEF
+        $RPBDEF
+        $TQEDEF
+        $SSDEF
 
-        .EXTERNAL SCH$GL_CURPCB, SCH$QEND
+        .EXTERNAL SCH$GL_CURPCB, SCH$QEND, SCH$WAKE, SCH$GETEFC, SCH$POSTEF
+        .EXTERNAL EXE$NAMPID, EXE$ALONONPAGED, EXE$DEANONPGDSIZ, EXE$GL_RPB
+
+TICK = 100000                           ; 10 ms, the PAL's TICK_US, in 100 ns units
+UNIX_HI = ^X007C9567                    ; 1-Jan-1970 in VMS time
+UNIX_LO = ^X4BEB4000
+
+        .PSECT  EXEC$DATA, NOEXE, WRT, QUAD
+EXE$GQ_SYSTIME::                        ; the system time
+        .BLKQ   1
+EXE$GQ_1ST_TIME::                       ; when the first entry is due
+        .LONG   -1, -1
+EXE$GQ_TQFL::                           ; the timer queue
+        .BLKQ   1
 
         .PSECT  $CODE$
 
-; EXE$HWCLKINT: the interval timer interrupt, at IPL$_HWCLK. Counts the
-; current process's quantum up from -SGN$GW_QUANTUM; at 0 it is up. A tick
-; before SCH$INIT, or while the CPU is idle in SCH$SCHED, has no process
-; to charge.
+; EXE$INITTIM: makes the timer queue empty and sets the system time from
+; the RTC's, which the PAL put in the RPB. IPL 31. Uses R0-R2.
+; ponytail: EMUL is signed, so the RTC's seconds work until 2038.
+EXE$INITTIM::
+        MOVAQ   EXE$GQ_TQFL, R0
+        MOVL    R0, (R0)
+        MOVL    R0, 4(R0)
+        MOVL    EXE$GL_RPB, R2
+        EMUL    RPB$L_BOOTTIME(R2), #10000000, #0, R0
+        ADDL2   #UNIX_LO, R0
+        BCC     10$
+        INCL    R1
+10$:    ADDL2   #UNIX_HI, R1
+        MOVQ    R0, EXE$GQ_SYSTIME
+        RSB
+
+; EXE$HWCLKINT: the interval timer interrupt, at IPL$_HWCLK. Advances the
+; system time, and requests the software timer interrupt if the first
+; timer queue entry is due, or if the current process's quantum is up: it
+; counts up from -SGN$GW_QUANTUM to 0. A tick before SCH$INIT, or while
+; the CPU is idle in SCH$SCHED, has no process to charge.
 EXE$HWCLKINT::
         PUSHR   #^M<R0>
-        MOVL    SCH$GL_CURPCB, R0
-        BEQL    10$
+        ADDL2   #TICK, EXE$GQ_SYSTIME
+        BCC     10$
+        INCL    EXE$GQ_SYSTIME+4
+10$:    CMPL    EXE$GQ_SYSTIME+4, EXE$GQ_1ST_TIME+4
+        BLSSU   30$
+        BGTRU   20$
+        CMPL    EXE$GQ_SYSTIME, EXE$GQ_1ST_TIME
+        BLSSU   30$
+20$:    SOFTINT #IPL$_TIMER
+30$:    MOVL    SCH$GL_CURPCB, R0
+        BEQL    40$
         CMPL    PCB$L_STATE(R0), #SCH$C_CUR
-        BNEQ    10$
+        BNEQ    40$
         INCW    PCB$W_QUANT(R0)
-        BLSS    10$
+        BLSS    40$
         SOFTINT #IPL$_TIMER
-10$:    POPR    #^M<R0>
+40$:    POPR    #^M<R0>
         REI
 
 ; EXE$SWTIMINT: the software timer interrupt, at IPL$_TIMER. Ends the
-; current process's quantum if it is up.
-; ponytail: no timer queue yet, so quantum end is all it does; $SETIMR
-; and $SCHDWK add their timer queue entries here.
+; current process's quantum if it is up, and serves the timer queue
+; entries that are due.
 EXE$SWTIMINT::
         SETIPL  #IPL$_SYNCH
-        PUSHR   #^M<R4>
+        PUSHR   #^M<R0, R1, R2, R3, R4, R5, R6>
         MOVL    SCH$GL_CURPCB, R4
         CMPL    PCB$L_STATE(R4), #SCH$C_CUR
         BNEQ    10$
         TSTW    PCB$W_QUANT(R4)
         BLSS    10$
         JSB     G^SCH$QEND
-10$:    POPR    #^M<R4>
+10$:    DSBINT  #IPL$_HWCLK
+        MOVQ    EXE$GQ_SYSTIME, R0
+        ENBINT
+20$:    MOVL    EXE$GQ_TQFL, R6
+        MOVAQ   EXE$GQ_TQFL, R2
+        CMPL    R6, R2
+        BEQL    90$
+        CMPL    TQE$Q_TIME+4(R6), R1
+        BGTRU   90$
+        BLSSU   30$
+        CMPL    TQE$Q_TIME(R6), R0
+        BGTRU   90$
+30$:    REMQUE  (R6), R6
+        PUSHR   #^M<R0, R1>
+        BSBW    TQEXPIRE
+        POPR    #^M<R0, R1>
+        BRB     20$
+90$:    BSBW    SETFIRST
+        POPR    #^M<R0, R1, R2, R3, R4, R5, R6>
         REI
+
+; TQEXPIRE: R6 = a timer queue entry that is due, off the queue. Sets its
+; event flag or wakes its process, if the process is still there, then
+; frees it, or puts it back on the queue if it repeats. IPL$_SYNCH. Uses
+; R0-R5.
+TQEXPIRE:
+        MOVAL   TQE$L_PID(R6), R2
+        CLRL    R3
+        BSBW    EXE$NAMPID              ; R1 = its PCB
+        BLBC    R0, 80$
+        CMPB    TQE$B_RQTYPE(R6), #TQE$C_TMSNGL
+        BNEQ    20$
+        PUSHL   R4
+        MOVL    R1, R4
+        MOVL    TQE$L_EFN(R6), R3
+        BSBW    SCH$GETEFC
+        BLBC    R0, 10$                 ; its common cluster is gone
+        BBSS    R2, (R1), 10$
+        BSBW    SCH$POSTEF
+10$:    MOVL    (SP)+, R4
+        BRB     80$
+20$:    BSBW    SCH$WAKE
+        CMPB    TQE$B_RQTYPE(R6), #TQE$C_WKREPT
+        BNEQ    80$
+        SUBL2   TQE$Q_DELTA(R6), TQE$Q_TIME(R6)  ; a delta: negative
+        BCC     30$
+        DECL    TQE$Q_TIME+4(R6)
+30$:    SUBL2   TQE$Q_DELTA+4(R6), TQE$Q_TIME+4(R6)
+        MOVL    R6, R5
+        BRW     EXE$INSTIMQ
+80$:    MOVL    R6, R0
+        MOVL    #TQE$K_LENGTH, R1
+        BRW     EXE$DEANONPGDSIZ
+
+; EXE$INSTIMQ: R5 = a timer queue entry, its time set. Puts it on the
+; queue after those due before it or at the same time. IPL$_SYNCH. Uses
+; R0-R3.
+EXE$INSTIMQ::
+        MOVQ    TQE$Q_TIME(R5), R0
+        MOVAQ   EXE$GQ_TQFL, R3
+        MOVL    (R3), R2
+10$:    CMPL    R2, R3
+        BEQL    30$
+        CMPL    TQE$Q_TIME+4(R2), R1
+        BGTRU   30$
+        BLSSU   20$
+        CMPL    TQE$Q_TIME(R2), R0
+        BGTRU   30$
+20$:    MOVL    (R2), R2
+        BRB     10$
+30$:    INSQUE  (R5), @4(R2)            ; before the first one due later
+        BRB     SETFIRST
+
+; EXE$RMVTIMQ: R0 = a PID, R1 = a mask of TQE$C_ request types, R2 = a
+; $SETIMR reqidt, or 0 for any. Removes the process's timer queue entries
+; of those types and frees them. Uses R0-R3.
+EXE$RMVTIMQ::
+        DSBINT  #IPL$_SYNCH
+        PUSHR   #^M<R4, R5, R6>
+        MOVAQ   EXE$GQ_TQFL, R6
+        MOVL    (R6), R5
+10$:    CMPL    R5, R6
+        BEQL    90$
+        MOVL    (R5), R3                ; the next, before this one goes
+        CMPL    TQE$L_PID(R5), R0
+        BNEQ    20$
+        MOVZBL  TQE$B_RQTYPE(R5), R4
+        BBC     R4, R1, 20$
+        TSTL    R2
+        BEQL    15$
+        CMPL    TQE$L_ASTPRM(R5), R2
+        BNEQ    20$
+15$:    REMQUE  (R5), R5
+        PUSHR   #^M<R0, R1>
+        MOVL    R5, R0
+        MOVL    #TQE$K_LENGTH, R1
+        BSBW    EXE$DEANONPGDSIZ
+        POPR    #^M<R0, R1>
+20$:    MOVL    R3, R5
+        BRB     10$
+90$:    BSBB    SETFIRST
+        POPR    #^M<R4, R5, R6>
+        ENBINT
+        RSB
+
+; SETFIRST: sets EXE$GQ_1ST_TIME from the first timer queue entry, or to
+; never. IPL$_SYNCH. Uses R0 and R1.
+SETFIRST:
+        DSBINT  #IPL$_HWCLK
+        MOVL    EXE$GQ_TQFL, R0
+        MOVAQ   EXE$GQ_TQFL, R1
+        CMPL    R0, R1
+        BEQL    10$
+        MOVQ    TQE$Q_TIME(R0), EXE$GQ_1ST_TIME
+        BRB     20$
+10$:    MNEGL   #1, EXE$GQ_1ST_TIME
+        MNEGL   #1, EXE$GQ_1ST_TIME+4
+20$:    ENBINT
+        RSB
+
+; ALLOTQE: R5 = a new timer queue entry, zeroed, R0 = SS$_NORMAL or
+; SS$_INSFMEM. Uses R1 and R2.
+ALLOTQE:
+        MOVL    #TQE$K_LENGTH, R1
+        BSBW    EXE$ALONONPAGED
+        BLBC    R0, 20$
+        MOVL    R2, R5
+        MOVL    #TQE$K_LENGTH/8, R1
+10$:    CLRQ    (R2)+
+        SOBGTR  R1, 10$
+        MOVW    #TQE$K_LENGTH, TQE$W_SIZE(R5)
+        MOVB    #DYN$C_TQE, TQE$B_TYPE(R5)
+20$:    RSB
+
+; ABSTIM: R2 = the address of a time. R0/R1 = when it is: itself, or now
+; plus it if it is a delta.
+ABSTIM:
+        DSBINT  #IPL$_HWCLK
+        MOVQ    EXE$GQ_SYSTIME, R0
+        ENBINT
+        TSTL    4(R2)
+        BGEQ    20$
+        SUBL2   (R2), R0
+        BCC     10$
+        DECL    R1
+10$:    SUBL2   4(R2), R1
+        RSB
+20$:    MOVQ    (R2), R0
+        RSB
+
+; $GETTIM timadr: the system time into timadr.
+        .ENTRY  EXE$GETTIM, ^M<>
+        DSBINT  #IPL$_HWCLK
+        MOVQ    EXE$GQ_SYSTIME, @4(AP)
+        ENBINT
+        MOVL    #SS$_NORMAL, R0
+        RET
+
+; $SETIMR efn, daytim, astadr, reqidt: clears event flag efn, and sets it
+; at daytim, a time or a delta. $CANTIM cancels it by reqidt.
+; ponytail: no ASTs yet, so an astadr is SS$_ILLSER.
+        .ENTRY  EXE$SETIMR, ^M<R2, R3, R4, R5>
+        TSTL    12(AP)
+        BNEQ    80$
+        TSTL    8(AP)
+        BEQL    85$
+        MOVL    SCH$GL_CURPCB, R4
+        MOVL    4(AP), R3
+        BSBW    SCH$GETEFC
+        BLBC    R0, 90$
+        BBCC    R2, (R1), 10$
+10$:    BSBW    ALLOTQE
+        BLBC    R0, 90$
+        MOVB    #TQE$C_TMSNGL, TQE$B_RQTYPE(R5)
+        MOVL    PCB$L_PID(R4), TQE$L_PID(R5)
+        MOVL    4(AP), TQE$L_EFN(R5)
+        MOVL    16(AP), TQE$L_ASTPRM(R5)
+        MOVL    8(AP), R2
+        BSBW    ABSTIM
+        MOVQ    R0, TQE$Q_TIME(R5)
+        DSBINT  #IPL$_SYNCH
+        BSBW    EXE$INSTIMQ
+        ENBINT
+        MOVL    #SS$_NORMAL, R0
+        RET
+80$:    MOVL    #SS$_ILLSER, R0
+        RET
+85$:    MOVL    #SS$_ACCVIO, R0
+90$:    RET
+
+; $CANTIM reqidt, acmode: cancels the current process's $SETIMR requests
+; made with reqidt, or all of them if it is 0.
+        .ENTRY  EXE$CANTIM, ^M<R2, R3>
+        MOVL    SCH$GL_CURPCB, R0
+        MOVL    PCB$L_PID(R0), R0
+        MOVL    #1@TQE$C_TMSNGL, R1
+        MOVL    4(AP), R2
+        BSBW    EXE$RMVTIMQ
+        MOVL    #SS$_NORMAL, R0
+        RET
+
+; $SCHDWK pidadr, prcnam, daytim, reptim: wakes a process at daytim, a
+; time or a delta, and, if there is reptim, a delta of a tick or more,
+; every reptim after.
+        .ENTRY  EXE$SCHDWK, ^M<R2, R3, R4, R5, R6>
+        MOVL    12(AP), R6
+        BEQL    85$
+        MOVL    16(AP), R0
+        BEQL    10$
+        TSTL    4(R0)                   ; reptim <= -TICK
+        BGEQ    80$
+        CMPL    4(R0), #-1
+        BNEQ    10$
+        CMPL    (R0), #-TICK
+        BGTRU   80$
+10$:    BSBW    ALLOTQE
+        BLBC    R0, 90$
+        MOVL    SCH$GL_CURPCB, R4
+        MOVL    4(AP), R2
+        MOVL    8(AP), R3
+        DSBINT  #IPL$_SYNCH
+        BSBW    EXE$NAMPID
+        BLBC    R0, 70$
+        MOVL    PCB$L_PID(R1), TQE$L_PID(R5)
+        MOVB    #TQE$C_WKSNGL, TQE$B_RQTYPE(R5)
+        MOVL    16(AP), R0
+        BEQL    20$
+        MOVB    #TQE$C_WKREPT, TQE$B_RQTYPE(R5)
+        MOVQ    (R0), TQE$Q_DELTA(R5)
+20$:    MOVL    R6, R2
+        BSBW    ABSTIM
+        MOVQ    R0, TQE$Q_TIME(R5)
+        BSBW    EXE$INSTIMQ
+        ENBINT
+        MOVL    #SS$_NORMAL, R0
+        RET
+70$:    ENBINT
+        PUSHL   R0
+        MOVL    R5, R0
+        MOVL    #TQE$K_LENGTH, R1
+        BSBW    EXE$DEANONPGDSIZ
+        MOVL    (SP)+, R0
+        RET
+80$:    MOVL    #SS$_BADPARAM, R0
+        RET
+85$:    MOVL    #SS$_ACCVIO, R0
+90$:    RET
+
+; $CANWAK pidadr, prcnam: cancels a process's scheduled wakeups, and a
+; $WAKE that came while it wasn't hibernating.
+        .ENTRY  EXE$CANWAK, ^M<R2, R3, R4>
+        MOVL    SCH$GL_CURPCB, R4
+        MOVL    4(AP), R2
+        MOVL    8(AP), R3
+        DSBINT  #IPL$_SYNCH
+        BSBW    EXE$NAMPID
+        BLBC    R0, 90$
+        BBCC    #PCB$V_WAKEPEN, PCB$L_STS(R1), 10$
+10$:    MOVL    PCB$L_PID(R1), R0
+        MOVL    #<1@TQE$C_WKSNGL>!<1@TQE$C_WKREPT>, R1
+        CLRL    R2
+        BSBW    EXE$RMVTIMQ
+        MOVL    #SS$_NORMAL, R0
+90$:    ENBINT
+        RET
 
         .END

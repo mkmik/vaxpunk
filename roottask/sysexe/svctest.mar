@@ -8,15 +8,7 @@
         .LIBRARY "starlet.mlb"
         .LIBRARY "sysexe.mlb"
         $SSDEF
-        .EXTERNAL SYS$GETTIM
-
-        .MACRO  EXPECT  STATUS, N, ?OK
-        CMPL    R0, STATUS
-        BEQL    OK
-        MOVL    #<N * 2>, R0
-        RET
-OK:
-        .ENDM   EXPECT
+        .EXTERNAL SYS$SETAST
 
         .PSECT  DATA, NOEXE, WRT, LONG
 OTHER_NAME:
@@ -66,10 +58,10 @@ LOW:    .LONG   ^X1000, ^X1FFF          ; not a process's to make
         EXPECT  #SS$_UNASEFC, 11
 
 ; The dispatcher: too few arguments, and a stub.
-        CALLS   #0, G^SYS$GETTIM
+        CALLS   #0, G^SYS$SETAST
         EXPECT  #SS$_INSFARG, 12
         PUSHL   #0
-        CALLS   #1, G^SYS$GETTIM
+        CALLS   #1, G^SYS$SETAST
         EXPECT  #SS$_ILLSER, 13
 
 ; Pages.

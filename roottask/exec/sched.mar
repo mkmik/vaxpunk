@@ -169,14 +169,17 @@ SCH$WAIT::
 
 ; SCH$SCHED: gives the CPU to the highest computable process. The current
 ; one is already in a queue, or deleted. If the CPU comes back to it, this
-; returns. With nothing computable, the CPU waits for an interrupt.
-; IPL$_SYNCH. Keeps every register.
+; returns. With nothing computable, the CPU waits for an interrupt at
+; IPL$_RESCHED, below the software timer interrupt's, which may make a
+; process computable. IPL$_SYNCH. Keeps every register.
 SCH$SCHED::
         PUSHR   #^M<R0, R1, R2, R3, R4>
 10$:    MOVL    #31, R1
 20$:    BBS     R1, SCH$GL_COMQS, 30$
         SOBGEQ  R1, 20$
-        CALL_PAL #PAL$_WTINT            ; ponytail: no interrupt can come yet
+        SETIPL  #IPL$_RESCHED
+        CALL_PAL #PAL$_WTINT
+        SETIPL  #IPL$_SYNCH
         BRB     10$
 30$:    MOVAQ   SCH$AQ_COMH[R1], R2
         REMQUE  @(R2), R3               ; its first process

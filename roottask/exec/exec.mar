@@ -4,8 +4,8 @@
 ; The root task, the PAL, starts EXEC.EXE as a task of its own, in kernel
 ; mode at IPL 31, with R11 pointing at the restart parameter block
 ; (docs/design/0001-pal-interface.md). EXEC$START sets up the system
-; control block, memory and the scheduler, starts the STARTUP process and
-; becomes the swapper, process 1, which deletes what deleted processes
+; control block, memory, the scheduler and the system time, starts the
+; STARTUP process and becomes the swapper, process 1, which deletes what deleted processes
 ; leave behind (docs/design/0002-executive-processes.md).
 ;
         .LIBRARY "lib.mlb"
@@ -17,7 +17,7 @@
 
         .EXTERNAL EXE$OUTZSTRING, EXE$OUTHEX, EXE$OUTCRLF
         .EXTERNAL EXE$CMODKRNL, SCH$RESCHED, MMG$INIT, SCH$INIT, MMG$GL_FREECNT
-        .EXTERNAL EXE$HWCLKINT, EXE$SWTIMINT
+        .EXTERNAL EXE$HWCLKINT, EXE$SWTIMINT, EXE$INITTIM
         .EXTERNAL SCH$GQ_DELQ, EXE$DELETEPCB
 
         .PSECT  EXEC$DATA, NOEXE, WRT, QUAD
@@ -44,6 +44,7 @@ NOSTART:
         MTPR    R0, #PR$_SCBB
         JSB     G^MMG$INIT
         JSB     G^SCH$INIT
+        JSB     G^EXE$INITTIM
         MOVAB   BANNER, R1
         JSB     G^EXE$OUTZSTRING
         MOVL    MMG$GL_FREECNT, R1

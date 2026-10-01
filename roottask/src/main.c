@@ -41,6 +41,15 @@ LIBSEL4_THREAD_LOCAL seL4_IPCBuffer *__sel4_ipc_buffer;
 enum { UART_DR = 0x00, UART_FR = 0x18, UART_FR_TXFF = 1 << 5 };
 static volatile uint32_t *uart;
 
+/*
+ * QEMU virt's PL031 RTC, 15 pages after the UART: its data register counts
+ * seconds since 1970. The PAL reads it once, for the executive's system
+ * time (RPB$L_BOOTTIME).
+ */
+#define RTC_PADDR 0x09010000UL
+#define RTC_VA 0xffffe000UL
+static uint32_t boot_time;
+
 static void uart_putc(char c)
 {
 	if (!uart)
@@ -172,9 +181,10 @@ static void map(seL4_CPtr frame, seL4_CPtr vspace, seL4_Word va, seL4_CapRights_
 }
 
 /*
- * Maps the UART's page from the device untyped that holds it. Retype carves
- * an untyped in order, so untypeds sized by the bits of the UART's offset,
- * the largest first, take up the space before it.
+ * Maps the UART's page from the device untyped that holds it, then the
+ * RTC's and reads it. Retype carves an untyped in order, so untypeds sized
+ * by the bits of the UART's offset, the largest first, take up the space
+ * before it; after it, the smallest first, each aligned, the gap to the RTC.
  */
 static void uart_init(seL4_BootInfo *bi)
 {
@@ -188,10 +198,17 @@ static void uart_init(seL4_BootInfo *bi)
 		for (int bit = u->sizeBits - 1; bit >= seL4_PageBits; bit--)
 			if (off >> bit & 1)
 				alloc(seL4_UntypedObject, bit);
-		seL4_CPtr frame = alloc(seL4_ARM_SmallPageObject, 0);
+		seL4_CPtr uart_frame = alloc(seL4_ARM_SmallPageObject, 0);
+		for (int bit = seL4_PageBits; bit < u->sizeBits; bit++)
+			if ((RTC_PADDR - UART_PADDR - PAGE_SIZE) >> bit & 1)
+				alloc(seL4_UntypedObject, bit);
+		seL4_CPtr rtc_frame = alloc(seL4_ARM_SmallPageObject, 0);
 		untyped = ram;
-		map(frame, seL4_CapInitThreadVSpace, UART_VA, seL4_ReadWrite, seL4_ARM_ExecuteNever);
+		map(uart_frame, seL4_CapInitThreadVSpace, UART_VA, seL4_ReadWrite,
+		    seL4_ARM_ExecuteNever);
 		uart = (volatile uint32_t *)UART_VA;
+		map(rtc_frame, seL4_CapInitThreadVSpace, RTC_VA, seL4_CanRead, seL4_ARM_ExecuteNever);
+		boot_time = *(volatile uint32_t *)RTC_VA;
 		return;
 	}
 }
@@ -402,7 +419,7 @@ extern const uint8_t _start[], _end[];
 #define EXEC_STACK_TOP 0x7fff0000UL
 #define EXEC_STACK_PAGES 4
 enum { RPB_BASE = 0, RPB_PFNCNT = 4, RPB_FREEPFN = 8, RPB_VOLUME = 12, RPB_VOLSIZE = 16,
-       RPB_HWPCB = 64, RPB_LENGTH = 192 };
+       RPB_BOOTTIME = 20, RPB_HWPCB = 64, RPB_LENGTH = 192 };
 
 /*
  * A process context: the thread that runs one executive process, made the
@@ -888,7 +905,7 @@ static void start_exec(seL4_BootInfo *bi)
 	uint8_t *rpb = (uint8_t *)quad(RPB_VA);
 	uint32_t fields[] = { [RPB_BASE / 4] = RPB_VA,	      [RPB_PFNCNT / 4] = PFN_COUNT,
 			      [RPB_FREEPFN / 4] = boot_pfn,   [RPB_VOLUME / 4] = VOLUME_VA,
-			      [RPB_VOLSIZE / 4] = vol_size };
+			      [RPB_VOLSIZE / 4] = vol_size,   [RPB_BOOTTIME / 4] = boot_time };
 	memcpy(rpb, fields, sizeof fields);
 
 	cur = new_ctx(RPB_VA + RPB_HWPCB);

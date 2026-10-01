@@ -34,3 +34,13 @@ L:      .ASCIZ  TEXT
         MTPR    (SP)+, #18              ; ENBINT
         ADDL2   #4, SP
         .ENDM   PRINTHEX
+
+; EXPECT status, n: returns 2 * n, an error the executive reports with the
+; process's name, unless R0 is status.
+        .MACRO  EXPECT  STATUS, N, ?OK
+        CMPL    R0, STATUS
+        BEQL    OK
+        MOVL    #<N * 2>, R0
+        RET
+OK:
+        .ENDM   EXPECT

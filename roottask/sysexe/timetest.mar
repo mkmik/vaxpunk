@@ -1,0 +1,108 @@
+        .TITLE  TIMETEST Checks the system time and the timer queue
+        .IDENT  /V0.1/
+;
+; $GETTIM reads a time after 2026, from the RTC. $SETIMR sets a local
+; event flag the process waits for, 50 ms on, as a delta, or at a time; a
+; cancelled timer never sets its flag. $SCHDWK wakes the process three
+; times, 20 ms apart, until $CANWAK. A failed EXPECT exits with 2 * N.
+;
+        .LIBRARY "starlet.mlb"
+        .LIBRARY "sysexe.mlb"
+        $SSDEF
+
+        .PSECT  DATA, NOEXE, WRT, LONG
+MS50:   .LONG   -500000, -1             ; deltas: 50 ms
+MS20:   .LONG   -200000, -1
+MS10:   .LONG   -100000, -1
+FUTURE: .LONG   0, 1                    ; a time, not a delta
+T0:     .BLKQ   1
+T1:     .BLKQ   1
+STATE:  .LONG   0
+
+        .PSECT  CODE, EXE, LONG
+        .ENTRY  START, ^M<R2>
+        $GETTIM_S TIMADR=T0
+        EXPECT  #SS$_NORMAL, 1
+        CMPL    T0+4, #^X00BB5E3A       ; 1-Jan-2026
+        BLSSU   90$
+        PRINTHEX "TIMETEST: the system time's high longword is ", T0+4
+
+; A delta: the flag is set 50 ms on, and is clear until then.
+        $SETIMR_S EFN=#5, DAYTIM=MS50
+        EXPECT  #SS$_NORMAL, 2
+        $READEF_S EFN=#5, STATE=STATE
+        EXPECT  #SS$_WASCLR, 3
+        $WAITFR_S EFN=#5
+        EXPECT  #SS$_NORMAL, 4
+        BSBW    ELAPSED
+        BLBC    R0, 90$
+
+; A cancelled timer, due before one that isn't.
+        $SETIMR_S EFN=#6, DAYTIM=MS10, REQIDT=#1
+        EXPECT  #SS$_NORMAL, 5
+        $CANTIM_S REQIDT=#1
+        EXPECT  #SS$_NORMAL, 6
+        $SETIMR_S EFN=#7, DAYTIM=MS50
+        EXPECT  #SS$_NORMAL, 7
+        $WAITFR_S EFN=#7
+        $READEF_S EFN=#6, STATE=STATE
+        EXPECT  #SS$_WASCLR, 8
+
+; A time: now plus 50 ms.
+        $GETTIM_S TIMADR=T0
+        MOVQ    T0, T1
+        ADDL2   #500000, T1
+        BCC     10$
+        INCL    T1+4
+10$:    $SETIMR_S EFN=#8, DAYTIM=T1
+        EXPECT  #SS$_NORMAL, 9
+        $WAITFR_S EFN=#8
+        BSBW    ELAPSED
+        BLBC    R0, 90$
+
+; Errors.
+        $SETIMR_S EFN=#200, DAYTIM=MS10
+        EXPECT  #SS$_ILLEFC, 10
+        $SETIMR_S EFN=#5, DAYTIM=MS10, ASTADR=START
+        EXPECT  #SS$_ILLSER, 11
+        $SCHDWK_S DAYTIM=MS10, REPTIM=FUTURE
+        EXPECT  #SS$_BADPARAM, 12
+
+; Wakeups: three, then none left once cancelled, so the next comes from
+; a $SCHDWK 50 ms on.
+        $SCHDWK_S DAYTIM=MS20, REPTIM=MS20
+        EXPECT  #SS$_NORMAL, 13
+        MOVL    #3, R2
+20$:    $HIBER_S
+        SOBGTR  R2, 20$
+        $CANWAK_S
+        EXPECT  #SS$_NORMAL, 14
+        $GETTIM_S TIMADR=T0
+        $SCHDWK_S DAYTIM=MS50
+        EXPECT  #SS$_NORMAL, 15
+        $HIBER_S
+        BSBW    ELAPSED
+        BLBC    R0, 90$
+        PRINT   "TIMETEST: ok"
+        MOVL    #SS$_NORMAL, R0
+        RET
+90$:    MOVL    #SS$_ABORT, R0
+        RET
+
+; ELAPSED: R0 = 1 if 50 ms or more have gone by since T0, else 0. Uses R1.
+ELAPSED:
+        $GETTIM_S TIMADR=T1
+        MOVQ    T1, R0
+        SUBL2   T0, R0
+        BCC     10$
+        DECL    R1
+10$:    SUBL2   T0+4, R1
+        BNEQ    80$                     ; a long time, or before T0
+        CMPL    R0, #500000
+        BLSSU   80$
+        MOVL    #1, R0
+        RSB
+80$:    CLRL    R0
+        RSB
+
+        .END    START
