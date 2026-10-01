@@ -19,7 +19,7 @@
         $SSDEF
 
         .EXTERNAL SCH$GL_CURPCB, SCH$GQ_LEFWQ, SCH$GQ_CEBHD
-        .EXTERNAL SCH$WAIT, SCH$WAKEPCB, EXE$MATCHNAME
+        .EXTERNAL SCH$WAIT, SCH$WAKEPCB, EXE$MATCHNAME, EXE$PROBER_DSC
         .EXTERNAL EXE$ALONONPAGED, EXE$DEANONPGDSIZ
 
         .PSECT  $CODE$
@@ -149,6 +149,7 @@ SCH$EFWAIT::
 ; $READEF efn, state: the flag's cluster into state; SS$_WASSET or
 ; SS$_WASCLR for the flag.
         .ENTRY  EXE$READEF, ^M<R2, R3, R4, R5>
+        IFNOWRT #4, @8(AP), 40$
         MOVL    SCH$GL_CURPCB, R4
         MOVL    4(AP), R3
         BSBW    SCH$GETEFC
@@ -158,6 +159,8 @@ SCH$EFWAIT::
         BBS     R2, (R1), 30$
         MOVL    #SS$_WASCLR, R0
 30$:    RET
+40$:    MOVL    #SS$_ACCVIO, R0
+        RET
 
 ; $WAITFR efn: waits for one event flag.
         .ENTRY  EXE$WAITFR, ^M<R2, R3, R4, R5, R6>
@@ -201,6 +204,9 @@ WFL:    MOVL    SCH$GL_CURPCB, R4
         CMPL    R3, #127
         BGTRU   80$
         MOVL    8(AP), R6               ; the name's descriptor
+        MOVL    R6, R1
+        BSBW    EXE$PROBER_DSC
+        BLBC    R0, 90$
         MOVZWL  (R6), R7
         BEQL    85$
         CMPL    R7, #15
@@ -242,7 +248,7 @@ WFL:    MOVL    SCH$GL_CURPCB, R4
 80$:    MOVL    #SS$_ILLEFC, R0
         RET
 85$:    MOVL    #SS$_IVLOGNAM, R0
-        RET
+90$:    RET
 
 ; $DACEFC efn: dissociates efn's common cluster.
         .ENTRY  EXE$DACEFC, ^M<R2, R3, R4>

@@ -1,0 +1,12 @@
+        .TITLE  USURP   Raises IPL, from user mode
+        .IDENT  /V0.1/
+;
+; MTPR is privileged: in user mode it is a reserved instruction, which
+; ends the process with SS$_OPCDEC and leaves the others running.
+;
+        .PSECT  CODE, EXE, LONG
+        .ENTRY  START, ^M<>
+        MTPR    #31, #18                ; PR$_IPL
+        RET
+
+        .END    START

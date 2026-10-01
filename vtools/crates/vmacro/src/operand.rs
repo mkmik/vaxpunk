@@ -63,6 +63,9 @@ pub enum Mode {
     Abs(String),
     /// `address`, PC-relative on the VAX.
     Rel(String),
+    /// `G^address`: an address anywhere, as in another image; the same as
+    /// `address`, but a jump or call to it reaches past `bl`'s ±128 MB.
+    Gen(String),
     /// `@address`
     RelDef(String),
 }
@@ -141,6 +144,7 @@ pub fn parse(text: &str) -> Result<Opnd> {
     if deferred && let Some(e) = t.strip_prefix('#') {
         return Ok(Opnd::Mem(Mode::Abs(e.trim().to_string()), None));
     }
+    let general = !deferred && t.get(..2).is_some_and(|q| q.eq_ignore_ascii_case("G^"));
     let t = ["B^", "W^", "L^", "G^"]
         .iter()
         .find(|p| t.get(..2).is_some_and(|q| q.eq_ignore_ascii_case(p)))
@@ -181,6 +185,8 @@ pub fn parse(text: &str) -> Result<Opnd> {
     Ok(Opnd::Mem(
         if deferred {
             Mode::RelDef(e)
+        } else if general {
+            Mode::Gen(e)
         } else {
             Mode::Rel(e)
         },
@@ -340,7 +346,7 @@ impl<'a> Gen<'a> {
                 self.imm_into(&t, e, Size::L)?;
                 (t, 0)
             }
-            Mode::Rel(e) => (self.rel(e)?, 0),
+            Mode::Rel(e) | Mode::Gen(e) => (self.rel(e)?, 0),
             Mode::RelDef(e) => {
                 let t = self.rel(e)?;
                 self.emit(format!("ldr {}, [{t}]", w(&t)));
@@ -645,7 +651,7 @@ mod tests {
         assert_eq!(parse("@8(FP)"), Ok(mem(Mode::DispDef("8".into(), 13))));
         assert_eq!(parse("<A+B>(R3)"), Ok(mem(Mode::Disp("<A+B>".into(), 3))));
         assert_eq!(parse("@#^X200"), Ok(mem(Mode::Abs("^X200".into()))));
-        assert_eq!(parse("G^TABLE"), Ok(mem(Mode::Rel("TABLE".into()))));
+        assert_eq!(parse("G^TABLE"), Ok(mem(Mode::Gen("TABLE".into()))));
         assert_eq!(parse("@PTR"), Ok(mem(Mode::RelDef("PTR".into()))));
         assert_eq!(parse("RX"), Ok(mem(Mode::Rel("RX".into()))));
         assert_eq!(

@@ -23,7 +23,7 @@ Justfile.
 
 Status: integer instructions, the calling standard's `CALLS`, `CALLG` and
 `RET`, `JSB` and `RSB`, `CASE`, bit fields, `MOVC3` and `MOVC5`, `INSQUE` and
-`REMQUE`, the privileged `MTPR`, `MFPR`, `HALT`, `CHMK` and `REI`, and Alpha's
+`REMQUE`, the privileged `MTPR`, `MFPR`, `HALT`, `CHMx`, `PROBEx` and `REI`, and Alpha's
 `CALL_PAL`. Not yet: floating point, packed decimal, the interlocked queue
 instructions, the other string and privileged instructions, `.CALL_ENTRY`,
 listings.
@@ -170,7 +170,7 @@ What doesn't carry over:
 | Call | `CALLS`, `CALLG`, `RET`, `JSB`, `BSBB`, `BSBW`, `RSB` |
 | Field and string | `EXTV`, `EXTZV`, `INSV`, `MOVC3`, `MOVC5` |
 | Queue | `INSQUE`, `REMQUE` |
-| Privileged | `MTPR`, `MFPR`, `HALT`, `CHMK`, `REI`, `CALL_PAL`: PAL calls, see *Privileged instructions* |
+| Privileged | `MTPR`, `MFPR`, `HALT`, `CHMK`, `CHME`, `CHMS`, `CHMU`, `PROBER`, `PROBEW`, `REI`, `CALL_PAL`: PAL calls, see *Privileged instructions* |
 | Other | `NOP`, `BPT` (`brk`) |
 
 `x` is B, W, L, or Q where the VAX has it. Every addressing mode works:
@@ -178,6 +178,11 @@ register, `(Rn)`, `(Rn)+`, `-(Rn)`, `@(Rn)+`, `d(Rn)` and `@d(Rn)` with or
 without `B^`/`W^`/`L^`, `#n` with `S^`/`I^`, `@#address`, `address` and
 `@address` (`G^` too), and `[Rx]` indexing any memory mode. Operands are
 evaluated left to right with their side effects, as on the VAX.
+
+A jump or call to `address` is `b` or `bl`, which reach ±128 MB: the image
+it is in. One to `G^address`, which may be in another image, as `SYS$name`
+in the executive is, takes the address with `adrp` and `add`, ±4 GB, and
+goes through a register.
 
 Limits:
 
@@ -213,7 +218,8 @@ function codes are in
 | `MTPR src, #PR$_SCBB`, `MFPR #PR$_SCBB, dst` | `MTPR_SCBB`, `MFPR_SCBB` |
 | `MTPR src, #PR$_SIRR`, `MFPR #PR$_SISR, dst` | `MTPR_SIRR`, `MFPR_SISR` |
 | `MTPR src, #PR$_TXDB` | `MTPR_TXDB`, a console character |
-| `CHMK #code` | `CHMK`: the code goes in R0, and R0 comes back with what the service left there |
+| `CHMK #code`, `CHME`, `CHMS`, `CHMU` | `CHMK`, `CHME`, `CHMS`, `CHMU`: the code goes in R0, and R0 comes back with what the service left there |
+| `PROBER mode, len, base`, `PROBEW` | `PROBER`, `PROBEW`: base, len and mode in R0-R2, which come back, as R7 does; Z is set if the mode may not read (write) the first and last byte, as on the VAX |
 | `REI` | `REI`: resumes at the PC in the frame on the stack, with R7 from it too |
 | `HALT` | `HALT` |
 | `CALL_PAL #code` | any PAL call, as on Alpha: arguments in R0-R5, the result in R0, R7 kept |
@@ -232,7 +238,8 @@ The processor register must be a constant, as in AMACRO. `$PRDEF` in
 ```
 
 `MTPR` and `MFPR` set N and Z from the value and clear V and C. The VAX
-leaves C alone. `CHMK` and `CALL_PAL` set them from R0.
+leaves C alone. `CHMx` and `CALL_PAL` set them from R0, `PROBEx` from the
+PAL's result.
 
 `lib.mlb` also has the executive's structures (`$PCBDEF`, `$PTEDEF`,
 `$RPBDEF`...) and VMS's IPL macros, `SETIPL`, `DSBINT`, `ENBINT` and

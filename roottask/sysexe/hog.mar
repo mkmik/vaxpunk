@@ -1,8 +1,8 @@
         .TITLE  HOG     Computes until NUDGE, at the same priority, runs
-        .IDENT  /V0.1/
+        .IDENT  /V0.2/
 ;
-; HOG makes a page, clears its first longword, creates NUDGE at its own
-; priority and loops reading the longword, with no system service and no
+; HOG associates common event flag cluster 2 with the cluster HOGWASH,
+; creates NUDGE at its own priority and loops reading flag 64, with no
 ; wait. NUDGE sets it, so it can only run if the interval timer takes the
 ; CPU from HOG when its quantum is up.
 ;
@@ -15,18 +15,21 @@ NUDGE_IMAGE:
         .ASCID  "NUDGE.EXE"
 NUDGE_NAME:
         .ASCID  "NUDGE"
-FLAG:   .LONG   ^X60010000, ^X60010FFF  ; NUDGE.MAR has the address too
+CLUSTER:
+        .ASCID  "HOGWASH"               ; NUDGE.MAR has the name too
+STATE:  .LONG   0
 
         .PSECT  CODE, EXE, LONG
         .ENTRY  START, ^M<>
-        $CRETVA_S INADR=FLAG
+        $ASCEFC_S EFN=#64, NAME=CLUSTER
         BLBC    R0, 90$
         $CREPRC_S IMAGE=NUDGE_IMAGE, PRCNAM=NUDGE_NAME, BASPRI=#4
         BLBC    R0, 90$
-10$:    TSTL    @FLAG
-        BEQL    10$
+10$:    $READEF_S EFN=#64, STATE=STATE
+        CMPL    R0, #SS$_WASSET
+        BNEQ    10$
         PRINT   "HOG: NUDGE ran while I computed: preempted at quantum end"
-        $DELTVA_S INADR=FLAG
+        MOVL    #SS$_NORMAL, R0
 90$:    RET
 
         .END    START

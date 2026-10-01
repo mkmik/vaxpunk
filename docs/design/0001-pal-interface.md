@@ -12,10 +12,12 @@ The interface between the vaxpunk executive and the PAL below it:
 It builds on [ADR-0001](../adr/0001-pal-interface-vms-vocabulary.md), which
 sets the vocabulary, [ADR-0002](../adr/0002-root-task-is-the-pal.md), which
 makes the root task the PAL and the executive a task calling it with
-privileged instructions, and [ADR-0003](../adr/0003-one-cpu-many-threads.md),
-which makes processes threads that take turns on one CPU, and
+privileged instructions, [ADR-0003](../adr/0003-one-cpu-many-threads.md),
+which makes processes threads that take turns on one CPU,
 [ADR-0004](../adr/0004-interval-timer-is-a-pal-thread.md), which makes the
-interval timer a thread of the PAL's.
+interval timer a thread of the PAL's, and
+[ADR-0005](../adr/0005-access-modes-are-threads.md), which gives each access
+mode of a process a thread and an address space of its own.
 [DESIGN-0002](0002-executive-processes.md) covers what the executive does
 with it.
 
@@ -31,15 +33,15 @@ in its interface.
 ## What the PAL sets up
 
 The root task (`roottask/src/main.c`) finds `EXEC.EXE` on the boot volume,
-which the shim appends to the root task's image, and starts it. The
-executive's address space, which every process shares:
+which the shim appends to the root task's image, and starts it, in S0, the
+system space every process shares (*Memory*):
 
 | Address | What | Protection |
 | --- | --- | --- |
-| `0x10000` up | `EXEC.EXE`'s sections, at their link addresses | theirs |
-| `0x1FFF0000` | the restart parameter block, one page | kernel write |
-| `0x20000000` up | the boot volume | kernel read |
-| `0x7FFEC000`-`0x7FFF0000` | the boot stack, 16 KB | kernel write |
+| `0x40010000` up | `EXEC.EXE`'s sections, at their link addresses | theirs |
+| `0x4FFF0000` | the restart parameter block, one page | kernel write |
+| `0x50000000` up | the boot volume | kernel read |
+| `0x5FFEC000`-`0x5FFF0000` | the boot stack, 16 KB | kernel write |
 
 Every page is a PFN of the executive's (*Memory*), and the PAL uses PFNs
 from 0 up for these. Nothing else is mapped. The boot context starts with:
@@ -49,8 +51,8 @@ from 0 up for these. Nothing else is mapped. The boot context starts with:
   Everything else is 0: AP is 0, as for a `CALLS` with no argument list,
   and so is the return address. A `RET` from the transfer routine
   therefore faults at 0.
-- **Processor state.** Kernel mode, IPL 31, as a VAX starts. No SCB, no
-  software interrupts pending. The clock is already ticking: its interrupt
+- **Processor state.** Kernel mode, the previous mode kernel too, IPL 31,
+  as a VAX starts. No SCB, no software interrupts pending. The clock is already ticking: its interrupt
   waits for IPL to drop below 24.
 - **Process context.** Its HWPCB is the RPB's (`RPB$Q_HWPCB`).
 - **Scheduling.** Its own scheduling context, with the root task's budget
@@ -108,9 +110,8 @@ the way (*Interrupts and exceptions*), or the call is `REI`, `CHMK` or
   - Codes 0x00-0x7F are privileged: kernel mode only.
   - Codes 0x80-0xBF are for any mode.
   - Any other code, an unimplemented one, or a privileged call from another
-    mode is a reserved instruction.
-  - Today the executive is always in kernel mode, and the PAL stops it on a
-    reserved instruction.
+    mode is a reserved instruction: an exception in an outer mode
+    (*Exceptions*), and in kernel mode the PAL stops the executive.
 
 ## Memory
 
@@ -120,10 +121,22 @@ keeps the PFN database: which PFNs are free, which hold what. A PFN is a
 untyped. ponytail: 1024 PFNs, 4 MB, as many as the root CNode's 4096 slots
 leave room for.
 
+The address space is the VAX's three regions, below 2 GB, where MACRO-32's
+sign-extended longwords reach (ADR-0005):
+
+| Region | Addresses | Whose |
+| --- | --- | --- |
+| P0 | `0x00000000`-`0x3FFFFFFF` | the current process's: its image, from `0x10000` |
+| S0 | `0x40000000`-`0x5FFFFFFF` | the system's, the same in every process |
+| P1 | `0x60000000`-`0x7FFFFFFF` | the current process's: its stacks, at the top |
+
+Page 0 is never mapped.
+
 The executive maps a page by writing its PTE with `WRPTE`, which takes the
 place of the VAX's writing a PTE in memory and then `MTPR #PR$_TBIS`
-(ADR-0001: explicit calls instead of a page table the PAL walks). A PTE is
-the VAX's longword (`$PTEDEF`), with one change:
+(ADR-0001: explicit calls instead of a page table the PAL walks). A PTE in
+P0 or P1 is the current process's, as the VAX's P0 and P1 page tables are.
+A PTE is the VAX's longword (`$PTEDEF`), with one change:
 
 | Bits | Field | Meaning |
 | --- | --- | --- |
@@ -134,8 +147,24 @@ the VAX's longword (`$PTEDEF`), with one change:
 
 A valid PTE with protection `NA` maps nothing. `WRPTE` maps, unmaps or
 changes protection at once, and returns the PTE the page had, so the
-executive learns which PFN it freed. A PFN maps at one address at a time.
-ponytail: a frame capability per extra mapping, for shared pages.
+executive learns which PFN it freed. A PFN maps at one address at a time,
+in one process if it is in P0 or P1. ponytail: a frame capability per extra
+mapping, for shared pages.
+
+What each mode sees of a page is its protection code's (`$PRTDEF`): a mode
+may read a page whose code lets it or an outer mode read, and write one
+whose code lets it or an outer mode write, as on the VAX. Each mode's
+thread has an address space of its own (*Process contexts*) holding
+exactly that:
+- **Kernel mode** shares the executive's address space. It holds S0 and
+  the current process's P0 and P1: on `SWPCTX` the PAL unmaps the old
+  process's pages there and maps the new one's.
+- **An outer mode**'s holds its process's P0 and P1 pages that mode may
+  read, writable if it may write them, and the S0 pages it may read. Those
+  S0 pages, such as the executive's system service vector, are the same in
+  every process, and their protection is set before any outer mode runs:
+  a `WRPTE` that changes an outer mode's access to an S0 page after that
+  fails.
 
 The PAL sees every PFN at an address of its own, the way Alpha PALcode read
 memory physically. It reads and writes the executive's memory there to push
@@ -144,10 +173,13 @@ and pop interrupt frames and to read HWPCBs and the SCB.
 ## Process contexts
 
 A process context is a thread in the executive's address space
-([ADR-0003](../adr/0003-one-cpu-many-threads.md)). The executive names it by
-its hardware PCB: a 128-byte, quadword-aligned block (`$HWPCBDEF`) whose
-first quadword is the kernel stack pointer. Only the current context's
-thread runs; `MFPR #PR$_PCBB` returns its HWPCB.
+([ADR-0003](../adr/0003-one-cpu-many-threads.md)), for kernel mode, and a
+thread for each outer mode the process has entered, each in an address
+space of its own ([ADR-0005](../adr/0005-access-modes-are-threads.md)). The
+executive names it by its hardware PCB: a 128-byte, quadword-aligned block
+(`$HWPCBDEF`) whose first four quadwords are the stack pointers of kernel,
+executive, supervisor and user mode. Only the current context's thread of
+the current mode runs; `MFPR #PR$_PCBB` returns its HWPCB.
 
 `SWPCTX` (a0 = the new HWPCB) gives the CPU to the context of the HWPCB:
 
@@ -160,36 +192,59 @@ thread runs; `MFPR #PR$_PCBB` returns its HWPCB.
 - Either gets the HWPCB the CPU left in v0, as on Alpha.
 - IPL is the CPU's: `SWPCTX` doesn't change it, but a new context's `REI`
   sets it from its frame.
+- The current and previous modes are the context's: a context that has run
+  is in kernel mode, in its `SWPCTX`, and gets back the previous mode it
+  had.
 
 `DELCTX` (a0 = a HWPCB) deletes the context of a process that isn't
-current, and stops its thread. The executive then frees the HWPCB and the
-kernel stack. A HWPCB the PAL has no context for is fine.
+current, and stops its threads. The PAL unmaps any pages its P0 and P1
+still have; the executive frees their PFNs first, from the process itself.
+The executive then frees the HWPCB and the kernel stack. A HWPCB the PAL
+has no context for is fine.
 
 ## Interrupts and exceptions
 
 The PAL delivers through the system control block, whose address the
 executive sets with `MTPR #PR$_SCBB`. Its vectors are longwords at the
-VAX's offsets (`$SCBDEF`): 0x40 for `CHMK`, 0x80 + 4n for software
-interrupt level n, 0xC0 for the interval timer. To deliver, the PAL pushes
-a frame on the current stack, 16-byte aligned and below both VAX SP and
-ARM64's `sp`, and jumps to the vector:
+VAX's offsets (`$SCBDEF`): 0x10 for a reserved instruction, 0x20 for an
+access violation, 0x40 + 4x for `CHMx`, 0x80 + 4n for software interrupt
+level n, 0xC0 for the interval timer.
+
+The PSL holds the current mode in bits 25:24, the previous mode in 23:22,
+IPL in 20:16 and NZVC in 3:0. Modes are 0 kernel, 1 executive,
+2 supervisor, 3 user (`$PSLDEF`). The PAL keeps the modes per context
+and IPL for the CPU.
+
+To deliver, the PAL pushes a frame and jumps to the vector, in the mode
+the event goes to:
+- **The same mode:** the frame goes on the current stack, 16-byte aligned
+  and below both VAX SP and ARM64's `sp`.
+- **An inner mode:** the PAL saves the current mode's VAX SP in the HWPCB
+  and pushes the frame on the inner mode's stack, from the HWPCB, then
+  moves the CPU to that mode's thread: it copies the registers and stops
+  the thread it leaves.
 
 | Offset | Holds |
 | --- | --- |
 | 0 | PC |
-| 8 | PSL: IPL in bits 20:16, modes in 25:22 (0, kernel), NZVC in 3:0 |
+| 8 | PSL |
 | 16 | R7 |
-| 24 | VAX SP before the frame |
-| 32 | ARM64 `sp` |
+| 24 | the interrupted VAX SP |
+| 32 | the interrupted ARM64 `sp` |
 | 40-80 | x13-x18, vmacro's scratch registers |
 | 88 | x30 |
 
 This is `$INTSTKDEF`. It holds what VAX code may have live that the code
 it interrupts doesn't save: vmacro keeps operands and R0 and R7 in x13-x18
-across a PAL call. A handler saves the VAX registers it uses, as on the
-VAX, and returns with `REI`, which pops the frame, sets IPL and the
-condition codes from the PSL and resumes at the PC. ponytail: `REI` to
-kernel mode only, until there are other modes.
+across a PAL call. An exception with parameters pushes them below the
+frame, and its handler pops them before `REI`. A handler saves the VAX
+registers it uses, as on the VAX, and returns with `REI`, which pops the
+frame, sets the modes, IPL and the condition codes from the PSL and resumes
+at the PC, with the SPs from the frame. As the VAX's, `REI` may not go to
+an inner mode than the current one, nor to a previous mode inner than the
+new one, nor to an outer mode above IPL 0; such a frame is a reserved
+instruction. Going out to another mode, it saves the current mode's SP,
+past the frame, in the HWPCB.
 
 An interrupt can come between any two instructions, so a handler keeps
 every register it uses, R0 included.
@@ -208,16 +263,38 @@ every register it uses, R0 included.
   clock runs from boot; it has no `ICCS` to enable it. ponytail: the tick
   is a thread of the PAL's that seL4 wakes each period (ADR-0004); a timer
   driver replaces it on hardware that has a free timer.
-- **`CHMK`.** The code in R0. The PAL pushes the frame and jumps to the SCB's
-  `CHMK` vector at the same IPL. The handler leaves the service's status in
-  R0, which `REI` doesn't change.
+- Interrupts go to kernel mode, with kernel as the previous mode, as the
+  VAX's do.
+- **`CHMx`**, x the mode: `CHMK` 0, `CHME` 1, `CHMS` 2, `CHMU` 3. The code in
+  R0. The PAL delivers through the SCB's vector for x, at the same IPL, to
+  mode x, or to the current mode if that is an inner one, with the current
+  mode as the previous one. The handler leaves the service's status in R0,
+  which `REI` doesn't change. Without a vector, or a stack in the HWPCB for
+  the mode, `CHMx` is a reserved instruction.
+- **`PROBER`, `PROBEW`** (a0 = an address, a1 = a length, a2 = a mode):
+  v0 = 1 if the mode, or the previous mode if it is an outer one, may read
+  (write) the first and the last of the a1 bytes at a0, else 0, as the
+  VAX's `PROBE`. Services check the addresses their callers pass with it.
 - **`WTINT`.** Returns once an interrupt IPL lets through has been
   delivered: at once if one is pending, or at the next tick.
 
+### Exceptions
+
+A fault or a reserved instruction in an outer mode is an exception: the
+PAL delivers it through the SCB in kernel mode, at the same IPL, with the
+mode that took it as the previous mode and the PC of the instruction that
+took it.
+
+| Event | Vector | Parameters, below the frame |
+| --- | --- | --- |
+| Undefined instruction, `brk`, a privileged or unimplemented PAL call, a `CHMx` with no vector, a bad `REI` | 0x10, reserved instruction | none |
+| Page fault | 0x20, access violation | a mask, bit 2 set for a write, then the address |
+
 ### Faults and HALT
 
-The executive's faults go to the PAL too. For now each of them stops the
-executive, as `HALT` does, naming the HWPCB of the process that took it:
+A fault or reserved instruction in kernel mode stops the executive, as
+`HALT` does, and the PAL prints it, naming the HWPCB of the process that
+took it:
 
 | Event | The PAL prints |
 | --- | --- |
@@ -228,9 +305,7 @@ executive, as `HALT` does, naming the HWPCB of the process that took it:
 | `REI` without a frame | `%PAL-F-REI` |
 | `HALT` | `%PAL-I-HALT` with the PC and R0 |
 
-The root task then prints `root task done` and suspends itself. Later, the
-PAL reflects faults to the executive as access violations and reserved
-instructions through the SCB, as on Alpha.
+The root task then prints `root task done` and suspends itself.
 
 ## How MACRO-32 calls it
 
@@ -273,7 +348,8 @@ and gets:
 | `MTPR src, #PR$_SIRR` | `MTPR_SIRR` |
 | `MFPR #PR$_SISR, dst` | `MFPR_SISR` |
 | `MTPR src, #PR$_TXDB` | `MTPR_TXDB` |
-| `CHMK #code` | `CHMK`, R0 = code; R0 isn't kept |
+| `CHMK #code`, `CHME`, `CHMS`, `CHMU` | `CHMK`, `CHME`, `CHMS`, `CHMU`, R0 = code; R0 isn't kept |
+| `PROBER mode, len, base`, `PROBEW` | `PROBER`, `PROBEW`, a0 = base, a1 = len, a2 = mode; Z set if v0 is 0, no access |
 | `REI` | `REI` |
 | `HALT` | `HALT` |
 | `CALL_PAL #code` | any call: a0-a5 in R0-R5, v0 in R0, as on Alpha |
@@ -305,8 +381,13 @@ unused.
 | 0x40 | `MTPR_TXDB` | vaxpunk | a0 = character | | writes a0's low byte on the console |
 | 0x41 | `WRPTE` | vaxpunk | a0 = address, a1 = PTE | v0 = old PTE | maps, unmaps or protects a page |
 | 0x42 | `DELCTX` | vaxpunk | a0 = HWPCB | | deletes a context that isn't current |
-| 0x83 | `CHMK` | Alpha | a0 = code | | delivers through the SCB |
-| 0x92 | `REI` | Alpha | | | pops a frame: PC, PSL, registers |
+| 0x82 | `CHME` | Alpha | a0 = code | | delivers through the SCB, to executive mode |
+| 0x83 | `CHMK` | Alpha | a0 = code | | delivers through the SCB, to kernel mode |
+| 0x84 | `CHMS` | Alpha | a0 = code | | delivers through the SCB, to supervisor mode |
+| 0x85 | `CHMU` | Alpha | a0 = code | | delivers through the SCB, in user mode |
+| 0x8F | `PROBER` | Alpha | a0 = address, a1 = length, a2 = mode | v0 = 1 if readable | checks a mode's read access |
+| 0x90 | `PROBEW` | Alpha | a0 = address, a1 = length, a2 = mode | v0 = 1 if writable | checks a mode's write access |
+| 0x92 | `REI` | Alpha | | | pops a frame: PC, PSL, registers, SPs |
 
 `MTPR_TXDB` stands in for the VAX console transmit register: VMS's
 `CON$PUTCHAR` writes each character with `MTPR R0, #PR$_TXDB`. Alpha had no
@@ -356,10 +437,10 @@ Unprivileged, 0x80-0xBF:
 | --- | --- | --- |
 | 0x80 | `BPT` | kept; today `BPT` is `brk`, an undefined-instruction fault |
 | 0x81 | `BUGCHK` | kept |
-| 0x82-0x85 | `CHME`, `CHMK`, `CHMS`, `CHMU` | changed: the PAL moves the call to the task for that mode; `CHMK` implemented, from kernel mode |
+| 0x82-0x85 | `CHME`, `CHMK`, `CHMS`, `CHMU` | changed, implemented: the PAL moves the call to the process's thread for that mode |
 | 0x86 | `IMB` | kept |
 | 0x87-0x8E, 0x93-0x9A, 0xA2-0xA9 | `INSQHIL` ... `REMQUEQ/D`, the resident forms | kept; `INSQUE` and `REMQUE` are inline code, since one thread runs at a time |
-| 0x8F, 0x90 | `PROBER`, `PROBEW` | kept |
+| 0x8F, 0x90 | `PROBER`, `PROBEW` | kept, implemented |
 | 0x91, 0x92 | `RD_PS`, `REI` | kept; `REI` implemented |
 | 0x9B, 0x9C | `SWASTEN`, `WR_PS_SW` | kept |
 | 0x9D | `RSCC` | kept |

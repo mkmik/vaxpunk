@@ -64,7 +64,10 @@ pub enum Op {
     Mtpr,
     Mfpr,
     Rei,
-    Chmk,
+    /// CHMK, CHME, CHMS, CHMU: their PAL call.
+    Chm(u32),
+    /// PROBER and PROBEW: whether it is PROBEW.
+    Probe(bool),
     /// Alpha's CALL_PAL: arguments in R0-R5, the result in R0.
     CallPal,
     Insque,
@@ -125,7 +128,12 @@ pub fn kind(mn: &str) -> Option<(Op, Size)> {
         "MTPR" => (Op::Mtpr, L),
         "MFPR" => (Op::Mfpr, L),
         "REI" => (Op::Rei, L),
-        "CHMK" => (Op::Chmk, W),
+        "CHMK" => (Op::Chm(CHMK), W),
+        "CHME" => (Op::Chm(CHME), W),
+        "CHMS" => (Op::Chm(CHMS), W),
+        "CHMU" => (Op::Chm(CHMU), W),
+        "PROBER" => (Op::Probe(false), B),
+        "PROBEW" => (Op::Probe(true), B),
         "CALL_PAL" => (Op::CallPal, L),
         "INSQUE" => (Op::Insque, B),
         "REMQUE" => (Op::Remque, B),
@@ -193,7 +201,8 @@ pub fn arity(op: Op) -> usize {
     match op {
         Op::Rsb | Op::Ret | Op::Nop | Op::Halt | Op::Bpt | Op::Rei => 0,
         Op::Clr | Op::Pusha | Op::Pushl | Op::Inc | Op::Dec | Op::Tst | Op::Bcc | Op::Br => 1,
-        Op::Chmk | Op::CallPal => 1,
+        Op::Chm(_) | Op::CallPal => 1,
+        Op::Probe(_) => 3,
         Op::Jmp | Op::Jsb | Op::Pushr | Op::Popr => 1,
         Op::Arith(_, true) | Op::Case | Op::Ash | Op::Rot | Op::Movc3 | Op::Aob(_) => 3,
         Op::Bb(..) => 3,
@@ -958,17 +967,51 @@ pub fn compile(
             g.emit("svc #0");
             Ok(None)
         }
-        Op::Chmk => {
+        Op::Chm(code) => {
             // The code goes in R0, as on Alpha, and the service's status
             // comes back there: R0 isn't kept.
             let v = g.read(&ops[0], size, Ext::Sext)?;
             let r7 = g.tmp()?;
             g.emit(format!("mov {r7}, x7"));
             g.emit(format!("mov w0, {v}"));
-            g.emit(format!("mov x7, #{CHMK}"));
+            g.emit(format!("mov x7, #{code}"));
             g.emit("svc #0");
             g.emit(format!("mov x7, {r7}"));
             Ok(Some(test("w0", Size::L)))
+        }
+        Op::Probe(write) => {
+            // PROBEx mode, len, base: a0 = base, a1 = len, a2 = mode, as
+            // Alpha's PROBER and PROBEW take them; v0 = 1 if the mode may
+            // read (write) the first and last byte. Each operand is copied
+            // first; once it is in its argument register, its scratch
+            // register keeps R1 or R2. Z is set if it may not, as on the VAX.
+            let mode = g.read(&ops[0], Size::B, Ext::Zext)?;
+            let mode = copy(g, &mode)?;
+            let len = g.read(&ops[1], Size::W, Ext::Zext)?;
+            let len = copy(g, &len)?;
+            let base = g.address(&ops[2], Size::B)?;
+            let base = copy(g, &base)?;
+            let (r0, r7) = (g.tmp()?, g.tmp()?);
+            let code = if write { PROBEW } else { PROBER };
+            for line in [
+                format!("mov {r0}, x0"),
+                format!("mov {r7}, x7"),
+                format!("mov x0, {base}"),
+                format!("mov {base}, x1"),
+                format!("mov x1, {len}"),
+                format!("mov {len}, x2"),
+                format!("mov x2, {mode}"),
+                format!("mov x7, #{code}"),
+                "svc #0".into(),
+                format!("mov {mode}, x0"),
+                format!("mov x2, {len}"),
+                format!("mov x1, {base}"),
+                format!("mov x7, {r7}"),
+                format!("mov x0, {r0}"),
+            ] {
+                g.emit(line);
+            }
+            Ok(Some(test(&mode, Size::L)))
         }
         Op::CallPal => {
             let code = match &ops[0] {
@@ -1035,7 +1078,12 @@ const MTPR_SCBB: u32 = 0x17;
 const MTPR_SIRR: u32 = 0x18;
 const MFPR_SISR: u32 = 0x19;
 const MTPR_TXDB: u32 = 0x40;
+const CHME: u32 = 0x82;
 const CHMK: u32 = 0x83;
+const CHMS: u32 = 0x84;
+const CHMU: u32 = 0x85;
+const PROBER: u32 = 0x8F;
+const PROBEW: u32 = 0x90;
 const REI: u32 = 0x92;
 
 /// The PAL calls that write and read a VAX processor register, by its

@@ -1,38 +1,29 @@
 ; sysexe.mlb: console output for the boot volume's programs, which run in
-; kernel mode and print with the executive's EXE$OUT* routines. Each line
-; is written at IPL$_SYNCH, 8, so that no other process's comes in between.
+; user mode and print with PUT_LINE in lib/print.mar, a line on OPA0: with
+; $QIOW. Each line is written whole, so no other process's comes in
+; between.
 
-; PRINT "text": writes text and CR LF. Uses R0-R2.
+; PRINT "text": writes text and CR LF. Uses R0-R1.
         .MACRO  PRINT   TEXT, ?L
-        .EXTERNAL EXE$OUTZSTRING
+        .EXTERNAL PUT_LINE
         .SAVE_PSECT LOCAL_BLOCK
         .PSECT  $LITERAL$
-L:      .ASCIZ  TEXT<13><10>
+L:      .ASCIC  TEXT
         .RESTORE_PSECT
-        MFPR    #18, -(SP)              ; DSBINT #IPL$_SYNCH
-        MTPR    #8, #18
-        MOVAB   L, R1
-        JSB     G^EXE$OUTZSTRING
-        MTPR    (SP)+, #18              ; ENBINT
+        PUSHAB  L
+        CALLS   #1, G^PUT_LINE
         .ENDM   PRINT
 
-; PRINTHEX "text", value: writes text, value in hex, and CR LF. Uses R0-R2.
+; PRINTHEX "text", value: writes text, value in hex, and CR LF. Uses R0-R1.
         .MACRO  PRINTHEX TEXT, VALUE, ?L
-        .EXTERNAL EXE$OUTZSTRING, EXE$OUTHEX, EXE$OUTCRLF
+        .EXTERNAL PUT_LINE
         .SAVE_PSECT LOCAL_BLOCK
         .PSECT  $LITERAL$
-L:      .ASCIZ  TEXT
+L:      .ASCIC  TEXT
         .RESTORE_PSECT
         PUSHL   VALUE
-        MFPR    #18, -(SP)              ; DSBINT #IPL$_SYNCH
-        MTPR    #8, #18
-        MOVAB   L, R1
-        JSB     G^EXE$OUTZSTRING
-        MOVL    4(SP), R1
-        JSB     G^EXE$OUTHEX
-        JSB     G^EXE$OUTCRLF
-        MTPR    (SP)+, #18              ; ENBINT
-        ADDL2   #4, SP
+        PUSHAB  L
+        CALLS   #2, G^PUT_LINE
         .ENDM   PRINTHEX
 
 ; EXPECT status, n: returns 2 * n, an error the executive reports with the
