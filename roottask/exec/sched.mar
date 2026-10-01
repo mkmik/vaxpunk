@@ -14,6 +14,10 @@
 ; process's registers in its own thread, so the switch saves nothing: the
 ; process leaving waits inside its SWPCTX until the CPU comes back to it.
 ;
+; The interval timer takes the CPU from a process whose quantum is up, if
+; another computable one has its priority or a higher one: SCH$QEND, round
+; robin within a priority.
+;
         .LIBRARY "lib.mlb"
         $PRDEF
         $IPLDEF
@@ -52,6 +56,8 @@ SCH$GL_PCBVEC::
         .BLKL   SCH$C_MAXPIX
 SCH$GL_SEQ::
         .LONG   1
+SGN$GW_QUANTUM::                        ; ticks of 10 ms in a quantum, as SYSGEN's QUANTUM
+        .WORD   20
 ; The swapper, process 1: the boot context, whose HWPCB is the RPB's.
         .ALIGN  QUAD
 SWAPPER:
@@ -76,6 +82,7 @@ SCH$INIT::
         MOVB    #DYN$C_PCB, PCB$B_TYPE(R0)
         MOVB    #16, PCB$B_PRI(R0)
         MOVB    #16, PCB$B_PRIB(R0)
+        MNEGW   SGN$GW_QUANTUM, PCB$W_QUANT(R0)
         MOVL    #SCH$C_CUR, PCB$L_STATE(R0)
         MOVL    #^X00010001, PCB$L_PID(R0)
         MOVL    EXE$GL_RPB, R1
@@ -196,5 +203,24 @@ SCH$RESCHED::
         BSBW    SCH$SCHED
         MOVL    (SP)+, R4
         REI
+
+; SCH$QEND: R4 = the current PCB, whose quantum is up. Gives it a new
+; quantum and, if a computable process has its priority or a higher one,
+; requests a reschedule, which puts it on its COM queue's tail. Real-time
+; processes, priority 16 and up, keep the CPU. IPL$_SYNCH. Keeps every
+; register.
+; ponytail: no priority decay toward the base, since nothing boosts yet.
+SCH$QEND::
+        MNEGW   SGN$GW_QUANTUM, PCB$W_QUANT(R4)
+        CMPB    PCB$B_PRI(R4), #16
+        BGEQU   20$
+        PUSHR   #^M<R0>
+        MOVZBL  PCB$B_PRI(R4), R0
+        ASHL    R0, #1, R0
+        CMPL    SCH$GL_COMQS, R0
+        BLSSU   10$                     ; no COM queue at its priority or above
+        SOFTINT #IPL$_RESCHED
+10$:    POPR    #^M<R0>
+20$:    RSB
 
         .END
