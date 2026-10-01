@@ -6,11 +6,12 @@ How the MACRO-32 executive (`roottask/exec/`) manages memory, creates,
 schedules and deletes processes, synchronizes, and serves system calls,
 on the PAL interface of [DESIGN-0001](0001-pal-interface.md). It follows
 [ADR-0003](../adr/0003-one-cpu-many-threads.md): processes are threads that
-take turns on one CPU, and IPL synchronizes them, and
+take turns on one CPU, and IPL synchronizes them,
 [ADR-0004](../adr/0004-interval-timer-is-a-pal-thread.md): the interval
-timer keeps the system time, serves the timer queue and ends their quanta. Every process runs in
-kernel mode, in the address space they all share; supervisor and user mode
-come later as tasks of their own.
+timer keeps the system time, serves the timer queue and ends their quanta,
+and [ADR-0005](../adr/0005-access-modes-are-threads.md): each process has
+P0 and P1 of its own and runs its image in user mode, entering the inner
+modes through system services.
 
 The executive borrows VMS's structure and names (PCB, `SCH$`, `MMG$`,
 `EXE$` routines, `SS$_` codes, the system service interfaces) but none of
@@ -25,11 +26,12 @@ its code.
 | `sched.mar` | state queues, `SCH$SCHED`, waits and wakes, the reschedule interrupt, quantum end |
 | `timeschdl.mar` | the interval timer and software timer interrupts, the system time, the timer queue, `$GETTIM`, `$SETIMR`, `$CANTIM`, `$SCHDWK`, `$CANWAK` |
 | `event.mar` | event flags, local and common |
-| `process.mar` | `$CREPRC`, process start, image activation, `$EXIT`, deletion, `$HIBER`, `$WAKE`, `$SCHDWK`, `$CANWAK`, `$SUSPND`, `$RESUME`, `$SETPRI`, `$SETPRN`, `$CMKRNL` |
-| `syssrv.mar` | the system service vector, the `CHMK` dispatcher and the stubs |
+| `process.mar` | `$CREPRC`, process start, image activation, `$EXIT`, deletion, `$HIBER`, `$WAKE`, `$SUSPND`, `$RESUME`, `$SETPRI`, `$SETPRN`, `$CMKRNL` |
+| `qio.mar` | `$ASSIGN`, `$DASSGN`, `$QIO`, `$QIOW`: writes on the console |
+| `syssrv.mar` | the system service vector, the `CHMK` and `CHME` dispatchers, `$CMEXEC`, the exception handlers and the stubs |
 
 `roottask/build.rs` links them, with `vtools/lib/consolio.mar`, into
-`EXEC.EXE`. The structures are in `vtools/lib/lib.mlb` (`$PCBDEF`,
+`EXEC.EXE`, in S0 at `0x40010000`. The structures are in `vtools/lib/lib.mlb` (`$PCBDEF`,
 `$CEBDEF`, `$PTEDEF`, `$RPBDEF`...), what programs need in
 `vtools/lib/starlet.mlb` (`$SSDEF`, `$PRTDEF`, the `$name_S` macros).
 
@@ -38,10 +40,12 @@ its code.
 `EXEC$START` runs in the boot context at IPL 31:
 
 1. Saves the RPB address from R11.
-2. Fills the SCB: `CHMK` to `EXE$CMODKRNL`, software interrupt level 3 to
-   `SCH$RESCHED`, level 7 to `EXE$SWTIMINT`, the interval timer to
-   `EXE$HWCLKINT`. `MTPR #PR$_SCBB`.
-3. `MMG$INIT`: the PFN list and the pool.
+2. Fills the SCB: reserved instructions to `EXE$OPCDEC`, access violations
+   to `EXE$ACVIOLAT`, `CHMK` to `EXE$CMODKRNL`, `CHME` to `EXE$CMODEXEC`,
+   software interrupt level 3 to `SCH$RESCHED`, level 7 to `EXE$SWTIMINT`,
+   the interval timer to `EXE$HWCLKINT`. `MTPR #PR$_SCBB`.
+3. `MMG$INIT`: the PFN list and the pool. Then makes the vector's pages
+   user readable (*System services*), before any outer mode runs.
 4. `SCH$INIT`: empty queues, and the boot context becomes the swapper,
    process 1, current, at priority 16.
 5. `EXE$INITTIM`: an empty timer queue, and the system time from
@@ -52,16 +56,18 @@ its code.
 
 ## Memory
 
-The address space every process shares:
+The address space, VAX-shaped (DESIGN-0001, *Memory*; `$VADEF`). P0 and
+P1 are each process's own, S0 every process's:
 
 | Address | What |
 | --- | --- |
-| `0x00010000` | `EXEC.EXE` |
-| `0x01000000` | process images, each linked at its own 1 MB (`build.rs`) |
-| `0x1FFF0000` | the RPB; `0x20000000` the boot volume, read-only |
-| `0x40000000` | nonpaged pool, 512 KB: PCBs, kernel stacks, common event blocks |
-| `0x50000000` | the pages processes make with `$CRETVA` and `$EXPREG` |
-| `0x7FFF0000` | the boot stack's top |
+| `0x00010000` | P0: the process's image, linked there (`build.rs`), then its `$EXPREG` pages |
+| `0x40010000` | S0: `EXEC.EXE` |
+| `0x48000000` | nonpaged pool, 512 KB: PCBs, kernel stacks, common event blocks |
+| `0x4FFF0000` | the RPB; `0x50000000` the boot volume, read-only |
+| `0x5FFF0000` | the boot stack's top |
+| `0x60000000` | P1: the process's `$CRETVA` pages |
+| `0x7FFE8000` | its executive stack, 16 KB, executive write; above it its user stack, 16 KB, to `0x7FFF0000` |
 
 - **PFNs.** `MMG$INIT` puts the PFNs from `RPB$L_FREEPFN` up on a free list,
   a stack. `MMG$ALLOCPFN` and `MMG$DEALLOCPFN` take and give back one.
@@ -70,22 +76,26 @@ The address space every process shares:
   asked for. A page that was there goes back to the free list.
   `MMG$DELPAG` unmaps pages and frees their PFNs; `MMG$SETPRT` changes the
   protection of pages that exist. `WRPTE` returns the old PTE, so the
-  executive keeps no page tables of its own.
+  executive keeps no page tables of its own. A page in P0 or P1 is the
+  current process's.
 - **Pool.** `EXE$ALONONPAGED` allocates first fit from a list of free
   blocks sorted by address, in 16-byte units; `EXE$DEANONPGDSIZ` frees,
   merging neighbours.
 - **Services.** `$CRETVA` and `$DELTVA` make and delete the pages of a range
-  between `0x50000000` and `0x7F000000`; anything else is
-  `SS$_PAGOWNVIO`. `$EXPREG` makes pages above the last it made.
-  ponytail: one region for every process, never given back.
+  of the process's own: all in P0, or all in P1 below the mode stacks;
+  anything else is `SS$_PAGOWNVIO`. `$EXPREG` makes pages past the end of
+  P0. Pages they make are user writable. The PCB keeps how far P0 and P1
+  reach (`PCB$L_FREP0VA`, `PCB$L_FREP1VA`), and rundown deletes every page
+  in between.
 
 The PFN list and the pool are synchronized at `IPL$_SYNCH`.
 
 ## Processes
 
-A process is a PCB (`$PCBDEF`, 256 bytes, from pool), a 16 KB kernel stack
-from pool, an image, and the thread the PAL makes for its HWPCB, which is
-inside the PCB. `SCH$GL_PCBVEC` holds the PCBs by index; a PID is a
+A process is a PCB (`$PCBDEF`, 272 bytes, from pool), a 16 KB kernel stack
+from pool, an image and stacks in its P0 and P1, and the threads the PAL
+makes for its HWPCB, which is inside the PCB: one for kernel mode and one
+for each outer mode it enters. `SCH$GL_PCBVEC` holds the PCBs by index; a PID is a
 sequence number in the high word and the index in the low.
 
 ### Creation
@@ -107,12 +117,15 @@ The scheduler's first `SWPCTX` to the new HWPCB starts its thread at
 `EXE$PROCSTRT` after `SHELL` built its kernel stack:
 
 1. `EXE$IMGACT`, the image activator, finds the image on the boot volume
-   (`FIL$OPENFILE`), checks its header, makes sure no other process's image
-   uses its addresses, and maps each section: zeroed pages, the contents
-   copied in, then the protection: code read and execute, read-only data
-   read, the rest kernel write.
-2. `CALLS #0` to the image's transfer address.
-3. `$EXIT` with the status it returns.
+   (`FIL$OPENFILE`), checks its header and that it is all in P0, and maps
+   each section: zeroed pages, the contents copied in, then the
+   protection: code user read and execute, read-only data user read, the
+   rest user write.
+2. Makes the executive and user stacks at the top of P1 and puts their
+   tops in the HWPCB.
+3. `REI` to `EXE$USRSTART`, in user mode, on the user stack, with the
+   image's transfer address in R1. There it calls the image with
+   `CALLS #0`, and `$EXIT`s with the status it returns.
 
 A process has no command interpreter, so, as on VMS without one, the end of
 its image is its own end: `$EXIT` deletes it. A failure status is reported
@@ -125,19 +138,19 @@ on the console first, as a command interpreter would:
 ### Deletion
 
 - **Itself** (`$EXIT`, or `$DELPRC` naming itself): it runs itself down
-  (timer queue entries, image pages, common event flag clusters, slot), goes on the swapper's
-  queue, wakes it, and gives up the CPU for good. The swapper deletes its
-  context with `DELCTX`, then frees its kernel stack and PCB, since a
-  process can't free the stack it runs on.
-- **Another** (`$DELPRC`): it isn't running, so it is in a state queue. It
-  leaves the queue and its slot at `IPL$_SYNCH`, and is run down and
-  deleted at once. ponytail: from outside rather than by a kernel AST in
-  its context, which is fine while a process holds nothing but its queue
-  entry.
+  (timer queue entries, every page of its P0 and P1, common event flag
+  clusters, channels, slot), goes on the swapper's queue, wakes it, and
+  gives up the CPU for good. The swapper deletes its context with
+  `DELCTX`, then frees its kernel stack and PCB, since a process can't free
+  the stack it runs on.
+- **Another** (`$DELPRC`): its P0 and P1 can only be reached from itself,
+  so it deletes itself. At `IPL$_SYNCH` it leaves its slot, so that no one
+  finds it any more, gets `PCB$V_DELPEN`, and its wait ends. The next time
+  it has the CPU, when `SCH$SCHED` returns to it or it starts at
+  `EXE$PROCSTRT`, it deletes itself as above. ponytail: a flag the
+  scheduler checks, standing in for VMS's kernel AST.
 
-The swapper can't be deleted. ponytail: pages from `$CRETVA` and `$EXPREG`
-outlive the process that made them, until processes have address spaces of
-their own.
+The swapper can't be deleted.
 
 ## Scheduling
 
@@ -155,7 +168,9 @@ States and queues, as VMS's `$STATEDEF`:
 - **`SCH$SCHED`** takes the first process from the highest non-empty COM
   queue, makes it current and `SWPCTX`es to its HWPCB, unless it is the
   process already there. The process leaving waits inside its `SWPCTX`
-  until the CPU comes back, so the switch saves no registers. With no
+  until the CPU comes back, so the switch saves no registers. A process
+  that `$DELPRC` deleted meanwhile deletes itself when its `SWPCTX`
+  returns. With no
   process computable, the CPU waits for an interrupt (`WTINT`) at
   `IPL$_RESCHED`, so that the software timer interrupt can make one
   computable.
@@ -236,8 +251,9 @@ Inside the executive, IPL, as on a uniprocessor VMS. `DSBINT`, `ENBINT`,
 
 Code at or above `IPL$_SYNCH` keeps the CPU: only the interval timer
 interrupt reaches it, which takes nothing away, and it only gives the CPU
-away by calling `SCH$SCHED`. The console is shared, so a line is written at
-`IPL$_SYNCH`, or another process's could come in the middle of it. The
+away by calling `SCH$SCHED`. The console is shared, so a line, or a
+`$QIO`'s buffer, is written at `IPL$_SYNCH`, or another process's could
+come in the middle of it. The
 queue instructions, `INSQUE` and `REMQUE`, are plain code, since only one
 thread runs. A second CPU will need spinlocks, which on VMS also raise IPL
 (ADR-0003).
@@ -263,42 +279,83 @@ Between processes, VMS's event flags and hibernation:
 A program calls `SYS$name` with `CALLS` or `CALLG`, or with the `$name_S`
 macros of `starlet.mlb`, which push the arguments. `SYS$name` is a routine
 in `syssrv.mar` that does `CHMK #code` and returns. The PAL delivers the
-`CHMK` to `EXE$CMODKRNL`, which checks the code and the argument count
-(`SS$_ILLSER`, `SS$_INSFARG`), calls `EXE$name` with `CALLG` on the caller's
-argument list, and `REI`s with its status in R0. Every process is in
-kernel mode, so `CHMK` changes no mode yet; it is where supervisor and
-user mode will come in.
+`CHMK` to `EXE$CMODKRNL`, in kernel mode, which checks the code and the
+argument list (`SS$_ILLSER`, `SS$_INSFARG`, `SS$_ACCVIO`), calls `EXE$name`
+with `CALLG` on the caller's argument list, and `REI`s with its status in
+R0, back to the caller's mode. `$CMEXEC` does `CHME #0` instead, to
+`EXE$CMODEXEC` in executive mode.
+
+Programs run in user mode, so the `SYS$name` routines, `EXE$CMODEXEC` and
+`EXE$USRSTART` are in a psect of their own, `EXEC$VECTOR`, page aligned,
+between `EXE$VECTOR` and `EXE$VECTOREND`: the vector, which `EXEC$START`
+makes user readable and executable, as VMS's system service vector is.
+The rest of S0 is the kernel's.
+
+A service checks every address its caller passes before using it, with
+VMS's `IFNORD` and `IFNOWRT` macros, which `PROBE` the caller's mode, and
+`EXE$PROBER_DSC` for string descriptors: one its mode can't read, or write
+if the service writes it, is `SS$_ACCVIO`.
 
 Programs link against `SYS.STB`, which `build.rs` makes from `EXEC.EXE`'s
-map: every global symbol of the executive as a constant, as kernel-mode
-code on VMS linked against `SYS.STB`. So they reach `SYS$name` and executive
-routines such as `EXE$OUTZSTRING` directly.
+map: every global symbol of the executive as a constant, as code on VMS
+linked against `SYS.STB`. So they reach `SYS$name`, with `G^`, from P0 to
+S0; the executive's other routines and data are there too, but user mode
+can't reach them.
 
 | Group | Implemented | Stubs: `SS$_ILLSER` |
 | --- | --- | --- |
-| Process control | `$CREPRC`, `$DELPRC`, `$EXIT`, `$HIBER`, `$WAKE`, `$SUSPND`, `$RESUME`, `$SETPRI`, `$SETPRN`, `$CMKRNL` | `$FORCEX`, `$GETJPI`, `$GETJPIW`, `$DCLEXH`, `$CANEXH`, `$SETPRV`, `$CMEXEC` |
+| Process control | `$CREPRC`, `$DELPRC`, `$EXIT`, `$HIBER`, `$WAKE`, `$SUSPND`, `$RESUME`, `$SETPRI`, `$SETPRN`, `$CMKRNL`, `$CMEXEC` | `$FORCEX`, `$GETJPI`, `$GETJPIW`, `$DCLEXH`, `$CANEXH`, `$SETPRV` |
 | Event flags | `$ASCEFC`, `$DACEFC`, `$SETEF`, `$CLREF`, `$READEF`, `$WAITFR`, `$WFLOR`, `$WFLAND` | `$DLCEFC` |
 | Memory | `$CRETVA`, `$DELTVA`, `$EXPREG` | `$CNTREG`, `$SETPRT`, `$LKWSET`, `$ULWSET`, `$LCKPAG`, `$ULKPAG`, `$CRMPSC`, `$MGBLSC` |
 | Time | `$GETTIM`, `$SETIMR`, `$CANTIM` | |
-| Other | | `$DCLAST`, `$SETAST`, `$ASSIGN`, `$DASSGN`, `$QIO`, `$QIOW`, `$CRELNM`, `$DELLNM`, `$TRNLNM`, `$GETSYI` |
+| I/O | `$ASSIGN`, `$DASSGN`, `$QIO`, `$QIOW` | |
+| Other | | `$DCLAST`, `$SETAST`, `$CRELNM`, `$DELLNM`, `$TRNLNM`, `$GETSYI` |
 
 Arguments the implemented services take but ignore: `$CREPRC`'s I/O,
 privileges, quotas, UIC, mailbox and status flags, `$ASCEFC`'s protection
-and permanence (every cluster is temporary), the access modes.
+and permanence (every cluster is temporary), the access modes. Any process
+may call `$CMKRNL` and `$CMEXEC`. ponytail: until there are privileges.
+
+### I/O
+
+The console is the one device. `$ASSIGN` gives a channel to `OPA0:`, one of
+31, a bit in `PCB$L_CHANS`. `$QIO` writes a buffer on it, for
+`IO$_WRITEVBLK`, `IO$_WRITELBLK` and `IO$_WRITEPBLK`, at `IPL$_SYNCH`, then
+sets the event flag and the I/O status block, so the I/O is done when it
+returns and `$QIOW` is `$QIO`. ponytail: a terminal driver with I/O
+request packets replaces it.
+
+### Exceptions
+
+An access violation or a reserved instruction in an outer mode reaches
+the executive through the SCB (DESIGN-0001, *Exceptions*).
+`EXE$ACVIOLAT` and `EXE$OPCDEC` report it on the console and exit the
+process with `SS$_ACCVIO` or `SS$_OPCDEC`, as VMS does for an image with
+no condition handler:
+
+```
+%SYSTEM-F-ACCVIO, access violation, virtual address 40010000, PC 00010020, process SNOOP
+%EXEC-W-EXITED, process SNOOP exited with status 0000000C
+```
 
 ## The boot volume's programs
 
 `roottask/sysexe/` holds the programs on the boot volume, which show the
-services at work and which `just check` boots to the end:
+services at work and which `just check` boots to the end. They run in user
+mode, and write on the console with `PRINT` and `PRINTHEX` from
+`sysexe.mlb`, which call `PUT_LINE` in `sysexe/lib/print.mar`, linked into
+each: a line at a time on `OPA0:`, with `$QIOW`.
 
 | Program | Does |
 | --- | --- |
 | `STARTUP` | makes 4 pages with `$EXPREG`, checks and deletes them; creates `SLEEPER` at a higher priority, which runs at once, and `PING` and `PONG`; hibernates until `PONG` wakes it; deletes `SLEEPER`; creates `SVCTEST`, `HOG` and `TIMETEST` |
 | `SLEEPER` | hibernates until it is deleted |
 | `PING`, `PONG` | take three turns through common event flags 64 and 65 of the cluster `PINGPONG`; `PONG` then wakes `STARTUP` |
-| `SVCTEST` | checks the statuses of the services the others don't use, and of errors: local event flags, the dispatcher's checks and a stub, `$CRETVA` and `$DELTVA`, `$CMKRNL`, `$SETPRI`, and `$SUSPND`, `$WAKE`, `$RESUME` and `$DELPRC` on a process of its own; then creates one whose image doesn't exist, which exits with `SS$_NOSUCHFILE` |
-| `HOG` | makes a page, creates `NUDGE` at its own priority and loops until `NUDGE` writes the page, with no system service: only quantum end lets `NUDGE` run |
-| `NUDGE` | writes `HOG`'s page |
+| `SVCTEST` | checks the statuses of the services the others don't use, and of errors: local event flags, the dispatcher's checks and a stub, `$CRETVA` and `$DELTVA`, `$CMKRNL` and `$CMEXEC`; what user mode may `PROBE`, and that services refuse it the executive's data; the console's channels; `$SETPRI`, and `$SUSPND`, `$WAKE`, `$RESUME` and `$DELPRC` on a process of its own; then creates one whose image doesn't exist, which exits with `SS$_NOSUCHFILE`, and `SNOOP` and `USURP` |
+| `SNOOP` | reads S0 from user mode, and exits with `SS$_ACCVIO` |
+| `USURP` | raises IPL from user mode, and exits with `SS$_OPCDEC` |
+| `HOG` | associates a common event flag cluster, creates `NUDGE` at its own priority and loops reading flag 64 until `NUDGE` sets it, with no wait: only quantum end lets `NUDGE` run |
+| `NUDGE` | sets `HOG`'s flag |
 | `TIMETEST` | checks that `$GETTIM` reads a time after 2026; waits for `$SETIMR`s, a delta and a time, 50 ms on, and that a cancelled one never sets its flag; hibernates through three repeating `$SCHDWK` wakeups, cancels them, and checks that the next wakeup is a new one's |
 
 When every process but the swapper is gone, the CPU idles in `WTINT`,
@@ -308,7 +365,8 @@ taking the clock's interrupts.
 
 - Priority boosts on wake and decay at quantum end.
 - ASTs: `$DCLAST`, AST delivery at `IPL$_ASTDEL`, and with them process
-  deletion in the process's own context.
-- Supervisor and user mode, each a task per process, with `CHMx` and `REI`
-  between them, `PROBE`, and per-process address spaces for P0 and P1.
+  deletion by a kernel AST.
+- Privileges, for `$CMKRNL` and `$CMEXEC`, and condition handlers in place
+  of exiting on an exception.
+- A command interpreter, in supervisor mode.
 - A disk driver and Files-11, in place of the boot volume.

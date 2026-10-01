@@ -167,14 +167,16 @@ def parse_mar(path):
 
 
 def parse_sstab(path):
-    services, group, prev = [], "", ""
+    services, group, prev, code = [], "", "", 0
     for line in path.read_text().splitlines():
-        m = re.match(r"\s+(SERVICE|STUB)\s+(\w+),\s*(\d+)", line)
+        m = re.match(r"\s+(SERVICE|STUB|ESERVICE)\s+(\w+),\s*(\d+)", line)
         if m:
             if prev.startswith(";"):
                 group = comment(prev)
-            services.append({"name": m[2], "code": len(services), "nargs": int(m[3]),
-                             "stub": m[1] == "STUB", "group": group})
+            chme = m[1] == "ESERVICE"  # the executive mode one: CHME #0
+            services.append({"name": m[2], "code": 0 if chme else code, "nargs": int(m[3]),
+                             "stub": m[1] == "STUB", "group": group, "chme": chme})
+            code += not chme
         prev = line.strip()
     return services
 
@@ -270,7 +272,9 @@ PALMAP = [
     (r"DSBINT\b", lambda m: ["MFPR_IPL", "MTPR_IPL"]),
     (r"(SETIPL|ENBINT)\b", lambda m: ["MTPR_IPL"]),
     (r"SOFTINT\b", lambda m: ["MTPR_SIRR"]),
-    (r"(REI|HALT|CHMK)\b", lambda m: [m[1].upper()]),
+    (r"(REI|HALT|CHMK|CHME|CHMS|CHMU|PROBER|PROBEW)\b", lambda m: [m[1].upper()]),
+    (r"IFNORD\b", lambda m: ["PROBER"]),
+    (r"IFNOWRT\b", lambda m: ["PROBEW"]),
 ]
 
 for r in routines.values():
@@ -533,7 +537,8 @@ def service_entry(svc):
     fields = [
         ("Format", f"<code><b>SYS${svc['name']}</b> {link(r['args'])}</code>"),
         ("Macro", f"<code>{link(mac['name'])} {link(mac['params'])}</code>" if mac else ""),
-        ("Dispatch", f"<code>CHMK #{svc['code']}</code> to {link('EXE$CMODKRNL')}, "
+        ("Dispatch", f"<code>{'CHME' if svc['chme'] else 'CHMK'} #{svc['code']}</code> to "
+                     f"{link('EXE$CMODEXEC' if svc['chme'] else 'EXE$CMODKRNL')}, "
                      f"which calls {esc(r['name'])} with at least {svc['nargs']} arguments"),
         ("Description", prose(r["doc"])),
         ("IPL", link(r["ipl"])),
@@ -592,10 +597,12 @@ def pal_entry(p):
 
 def ch_overview():
     rows = [["Tag", "How it is called"],
-            ["Service", "`SYS$name` with `CALLS` or `CALLG`, or the `$name_S` macro; `CHMK` takes it to the executive"],
+            ["Service", "`SYS$name` with `CALLS` or `CALLG`, or the `$name_S` macro; `CHMK`, or for "
+                        "`$CMEXEC` `CHME`, takes it to the executive"],
             ["CALL", "`CALLS` or `CALLG`: arguments in the argument list at AP, status in R0, `RET`"],
             ["JSB", "`JSB` or `BSBW`: arguments and results in registers, `RSB`"],
-            ["Handler", "an SCB vector: the PAL delivers an interrupt or `CHMK` to it; it ends with `REI`"],
+            ["Handler", "an SCB vector: the PAL delivers an interrupt, an exception or `CHMx` to it; "
+                        "it ends with `REI`"],
             ["PAL", "a privileged VAX instruction, or `CALL_PAL`; vmacro compiles it into `svc #0`"],
             ["Macro", "a macro from a `.LIBRARY`; Definitions macros define symbols"]]
     intro = (
@@ -623,8 +630,10 @@ def ch_services():
         body += section(f"1.{i}", f"svc-group-{i}", esc(g), intro, "".join(service_entry(s) for s in items), g)
     intro = ("<p>Called from any mode with <code>CALLS</code> or <code>CALLG</code> to <code>SYS$name</code>, "
              "which is in <code>syssrv.mar</code>, or with the <code>$name_S</code> macros of "
-             '<a href="#lib-starlet">starlet.mlb</a>. Every process runs in kernel mode for now. A service '
-             "called with fewer arguments than it takes returns SS$_INSFARG.</p>")
+             '<a href="#lib-starlet">starlet.mlb</a>. Programs run in user mode, and <code>SYS$name</code> is '
+             "in the vector, a page user mode may run. A service called with fewer arguments than it takes "
+             "returns SS$_INSFARG, and one with an argument list or an address its caller's mode can't reach "
+             "SS$_ACCVIO.</p>")
     return chapter("1", "ch-services", "System services", link_intro(intro), body)
 
 

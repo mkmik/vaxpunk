@@ -41,6 +41,17 @@
         RET
         .ENDM   STUB
 
+; ESERVICE name, nargs: SYS$name for the executive mode service, which
+; changes mode with CHME instead, to EXE$CMODEXEC.
+        .MACRO  ESERVICE NAME, NARGS
+        .SAVE_PSECT
+        .PSECT  EXEC$VECTOR
+        .ENTRY  SYS$'NAME, ^M<>
+        CHME    #0
+        RET
+        .RESTORE_PSECT
+        .ENDM   ESERVICE
+
         .MACRO  VECTOR  NAME, NARGS
         .SAVE_PSECT
         .PSECT  EXEC$SSTAB, NOEXE, NOWRT, LONG
@@ -55,9 +66,10 @@
 CODE = CODE + 1
         .ENDM   VECTOR
 
-; The vector: a page of its own, code an outer mode may run.
         .PSECT  EXEC$VECTOR, EXE, NOWRT, 12
-EXE$VECTOR::                            ; its first page
+; EXE$VECTOR: the vector's first page, code an outer mode may run, up to
+; EXE$VECTOREND. Not a routine.
+EXE$VECTOR::
 
         .PSECT  EXEC$SSTAB, NOEXE, NOWRT, LONG
 EXE$AL_SSTAB::                          ; EXE$name by code
@@ -84,6 +96,7 @@ CODE = 0
         STUB    CANEXH, 1
         STUB    SETPRV, 4
         SERVICE CMKRNL, 2
+        ESERVICE CMEXEC, 2
 ; Event flags
         SERVICE ASCEFC, 2
         SERVICE DACEFC, 1
@@ -188,25 +201,25 @@ ATPC:   .ASCIZ  ", PC "
 INPROC: .ASCIZ  ", process "
 
         .PSECT  EXEC$VECTOR
-; SYS$CMEXEC routin, arglst: calls routin in executive mode with arglst,
-; through CHME and EXE$CMODEXEC.
-        .ENTRY  SYS$CMEXEC, ^M<>
-        CHME    #0
-        RET
-
 ; EXE$CMODEXEC: the CHME handler, in executive mode. R0 = the service's
-; code, AP = its argument list. $CMEXEC is the one executive mode service.
-; ponytail: any process may; CMEXEC privilege comes with privileges.
+; code, AP = its argument list. $CMEXEC is the one executive mode service,
+; code 0.
 EXE$CMODEXEC::
         TSTL    R0
         BNEQ    80$
         MOVL    #2, R1
         BSBB    ARGLIST
         BLBC    R0, 90$
-        CALLG   @8(AP), @4(AP)
+        CALLG   (AP), EXE$CMEXEC
 90$:    REI
 80$:    MOVL    #SS$_ILLSER, R0
         REI
+
+; $CMEXEC routin, arglst: calls routin in executive mode with arglst.
+; ponytail: any process may; CMEXEC privilege comes with privileges.
+        .ENTRY  EXE$CMEXEC, ^M<>
+        CALLG   @8(AP), @4(AP)
+        RET
 
 ; ARGLIST: AP = an argument list a caller passed, R1 = the fewest arguments
 ; it may have. R0 = SS$_NORMAL; SS$_ACCVIO if the previous mode can't read
@@ -234,6 +247,7 @@ EXE$USRSTART::
         PUSHL   R0
         CALLS   #1, SYS$EXIT
         .ALIGN  12
-EXE$VECTOREND::                         ; past its last page
+; EXE$VECTOREND: past the vector's last page. Not a routine.
+EXE$VECTOREND::
 
         .END
