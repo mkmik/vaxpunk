@@ -1,0 +1,18 @@
+        .TITLE  CONPUTCHAR  The console character output vrun has
+        .IDENT  /V1.0/
+; CON$PUTCHAR for programs that run under vrun, which has no console
+; register: consolio.mar's routines print through it. The executive links
+; its own, which writes PR$_TXDB.
+
+        .PSECT  $CODE$
+
+; CON$PUTCHAR: writes the character in R0. Keeps every register.
+CON$PUTCHAR::
+        PUSHR   #^M<R0, R1>
+        MOVAB   (SP), R0                ; the saved R0: the character first
+        MOVL    #1, R1
+        svc     #2                      ; vrun's put
+        POPR    #^M<R0, R1>
+        RSB
+
+        .END

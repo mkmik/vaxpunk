@@ -1,0 +1,72 @@
+        .TITLE  STARTUP The first process, which starts the others
+        .IDENT  /V0.1/
+;
+; EXEC$START creates this process. It puts the executive's services to
+; work: it makes pages and deletes them, starts SLEEPER at a higher
+; priority, which runs at once, then PING and PONG, sleeps until PONG wakes
+; it, deletes SLEEPER, starts SVCTEST and returns, which ends the process.
+;
+        .LIBRARY "starlet.mlb"
+        .LIBRARY "sysexe.mlb"
+        $SSDEF
+
+PAGES = 4
+
+        .PSECT  DATA, NOEXE, WRT, LONG
+SLEEPER_IMAGE:
+        .ASCID  "SLEEPER.EXE"
+SLEEPER_NAME:
+        .ASCID  "SLEEPER"
+PING_IMAGE:
+        .ASCID  "PING.EXE"
+PING_NAME:
+        .ASCID  "PING"
+PONG_IMAGE:
+        .ASCID  "PONG.EXE"
+PONG_NAME:
+        .ASCID  "PONG"
+SVCTEST_IMAGE:
+        .ASCID  "SVCTEST.EXE"
+SVCTEST_NAME:
+        .ASCID  "SVCTEST"
+PID:    .LONG   0
+RANGE:  .BLKL   2                       ; first and last byte
+
+        .PSECT  CODE, EXE, LONG
+        .ENTRY  START, ^M<R2, R3>
+        $EXPREG_S PAGCNT=#PAGES, RETADR=RANGE
+        BLBC    R0, 90$
+        MOVL    RANGE, R2               ; fill them, then check
+        MOVL    #PAGES*4096/4, R3
+10$:    MOVL    R3, (R2)+
+        SOBGTR  R3, 10$
+        MOVL    RANGE, R2
+        CMPL    (R2), #PAGES*4096/4
+        BNEQ    80$
+        SUBL3   #3, RANGE+4, R2         ; the last longword
+        CMPL    (R2), #1
+        BNEQ    80$
+        PRINTHEX "STARTUP: $EXPREG made 4 pages, and they hold what I wrote, at ", RANGE
+        $DELTVA_S INADR=RANGE
+        BLBC    R0, 90$
+        $CREPRC_S PIDADR=PID, IMAGE=SLEEPER_IMAGE, PRCNAM=SLEEPER_NAME, BASPRI=#6
+        BLBC    R0, 90$
+        PRINTHEX "STARTUP: created SLEEPER, which ran first, PID ", PID
+        $CREPRC_S PIDADR=PID, IMAGE=PING_IMAGE, PRCNAM=PING_NAME, BASPRI=#4
+        BLBC    R0, 90$
+        $CREPRC_S PIDADR=PID, IMAGE=PONG_IMAGE, PRCNAM=PONG_NAME, BASPRI=#4
+        BLBC    R0, 90$
+        PRINT   "STARTUP: created PING and PONG; hibernating until PONG wakes me"
+        $HIBER_S
+        PRINT   "STARTUP: woken, deleting SLEEPER"
+        $DELPRC_S PRCNAM=SLEEPER_NAME
+        BLBC    R0, 90$
+        $CREPRC_S IMAGE=SVCTEST_IMAGE, PRCNAM=SVCTEST_NAME, BASPRI=#4
+        BLBC    R0, 90$
+        PRINT   "STARTUP: done, SVCTEST next"
+        MOVL    #SS$_NORMAL, R0
+        RET
+80$:    MOVL    #SS$_ABORT, R0
+90$:    RET
+
+        .END    START

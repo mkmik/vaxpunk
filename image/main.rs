@@ -1,5 +1,5 @@
 //! cargo run -p boot [-- [--gdb] [--hvf]]: copies the kernel, shim, root task
-//! and exec.exe cargo built into out/, stitches out/esp.img with mkesp.sh and becomes
+//! and boot volume cargo built into out/, stitches out/esp.img with mkesp.sh and becomes
 //! scripts/run-qemu.sh, which gets the arguments.
 
 use std::os::unix::process::CommandExt;
@@ -19,7 +19,7 @@ fn boot() -> io::Result<()> {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
     let out = root.join("out");
     fs::create_dir_all(&out)?;
-    for file in [kernel::ELF, shim::ELF, roottask::ELF, roottask::EXE].map(Path::new) {
+    for file in [kernel::ELF, shim::ELF, roottask::ELF, roottask::VOL].map(Path::new) {
         fs::copy(file, out.join(file.file_name().unwrap()))?;
     }
     let mkesp = Command::new(root.join("image/mkesp.sh")).status()?;

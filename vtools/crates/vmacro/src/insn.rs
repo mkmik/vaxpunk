@@ -63,6 +63,12 @@ pub enum Op {
     Bpt,
     Mtpr,
     Mfpr,
+    Rei,
+    Chmk,
+    /// Alpha's CALL_PAL: arguments in R0-R5, the result in R0.
+    CallPal,
+    Insque,
+    Remque,
 }
 
 /// A VAX mnemonic's operation and operand size, if it is one vmacro knows.
@@ -118,6 +124,11 @@ pub fn kind(mn: &str) -> Option<(Op, Size)> {
         "BPT" => (Op::Bpt, L),
         "MTPR" => (Op::Mtpr, L),
         "MFPR" => (Op::Mfpr, L),
+        "REI" => (Op::Rei, L),
+        "CHMK" => (Op::Chmk, W),
+        "CALL_PAL" => (Op::CallPal, L),
+        "INSQUE" => (Op::Insque, B),
+        "REMQUE" => (Op::Remque, B),
         "BNEQ" | "BNEQU" | "BEQL" | "BEQLU" | "BGTR" | "BLEQ" | "BGEQ" | "BLSS" | "BGTRU"
         | "BLEQU" | "BVC" | "BVS" | "BCC" | "BCS" | "BGEQU" | "BLSSU" => (Op::Bcc, L),
         _ => return sized(mn),
@@ -180,8 +191,9 @@ fn sized(mn: &str) -> Option<(Op, Size)> {
 /// How many operands `op` takes.
 pub fn arity(op: Op) -> usize {
     match op {
-        Op::Rsb | Op::Ret | Op::Nop | Op::Halt | Op::Bpt => 0,
+        Op::Rsb | Op::Ret | Op::Nop | Op::Halt | Op::Bpt | Op::Rei => 0,
         Op::Clr | Op::Pusha | Op::Pushl | Op::Inc | Op::Dec | Op::Tst | Op::Bcc | Op::Br => 1,
+        Op::Chmk | Op::CallPal => 1,
         Op::Jmp | Op::Jsb | Op::Pushr | Op::Popr => 1,
         Op::Arith(_, true) | Op::Case | Op::Ash | Op::Rot | Op::Movc3 | Op::Aob(_) => 3,
         Op::Bb(..) => 3,
@@ -940,6 +952,75 @@ pub fn compile(
             g.store(&p, size, &v)?;
             Ok(Some(test(&v, size)))
         }
+        Op::Rei => {
+            // The PAL resumes at the PC in the frame, with R7 from it too.
+            g.emit(format!("mov x7, #{REI}"));
+            g.emit("svc #0");
+            Ok(None)
+        }
+        Op::Chmk => {
+            // The code goes in R0, as on Alpha, and the service's status
+            // comes back there: R0 isn't kept.
+            let v = g.read(&ops[0], size, Ext::Sext)?;
+            let r7 = g.tmp()?;
+            g.emit(format!("mov {r7}, x7"));
+            g.emit(format!("mov w0, {v}"));
+            g.emit(format!("mov x7, #{CHMK}"));
+            g.emit("svc #0");
+            g.emit(format!("mov x7, {r7}"));
+            Ok(Some(test("w0", Size::L)))
+        }
+        Op::CallPal => {
+            let code = match &ops[0] {
+                Opnd::Imm(e) => g.constant(e),
+                _ => None,
+            };
+            let code = code
+                .filter(|c| (0..=0xBF).contains(c))
+                .ok_or("CALL_PAL needs a function code from 0 to ^XBF, #n")?;
+            let r7 = g.tmp()?;
+            g.emit(format!("mov {r7}, x7"));
+            g.emit(format!("mov x7, #{code}"));
+            g.emit("svc #0");
+            g.emit(format!("mov x7, {r7}"));
+            Ok(Some(test("w0", Size::L)))
+        }
+        Op::Insque => {
+            // Links are longwords: the queue must be below 4 GB.
+            let e = g.address(&ops[0], size)?;
+            let p = g.address(&ops[1], size)?;
+            let s = w(&g.tmp()?);
+            g.emit(format!("ldr {s}, [{p}]"));
+            g.emit(format!("str {s}, [{e}]"));
+            g.emit(format!("str {}, [{e}, #4]", w(&p)));
+            g.emit(format!("str {}, [{}, #4]", w(&e), x(&s)));
+            g.emit(format!("str {}, [{p}]", w(&e)));
+            // Z: the entry is the only one.
+            g.emit(format!("cmp {s}, {}", w(&p)));
+            live(true)
+        }
+        Op::Remque => {
+            let e = g.address(&ops[0], size)?;
+            let (f, b) = (w(&g.tmp()?), w(&g.tmp()?));
+            g.emit(format!("ldr {f}, [{e}]"));
+            g.emit(format!("ldr {b}, [{e}, #4]"));
+            g.emit(format!("str {f}, [{}]", x(&b)));
+            g.emit(format!("str {b}, [{}, #4]", x(&f)));
+            let p = g.place(&ops[1], Size::L)?;
+            g.store(&p, Size::L, &e)?;
+            // V: the queue was empty, and the "entry" its header. Z: it is
+            // empty now.
+            let (full, done) = (g.label(), g.label());
+            g.emit(format!("cmp {}, {f}", w(&e)));
+            g.emit(format!("b.ne {full}"));
+            g.emit(format!("movz {b}, #0x7000, lsl #16"));
+            g.emit(format!("msr nzcv, {}", x(&b)));
+            g.emit(format!("b {done}"));
+            g.place_label(&full);
+            g.emit(format!("cmp {f}, {b}"));
+            g.place_label(&done);
+            live(true)
+        }
     }
 }
 
@@ -948,7 +1029,14 @@ pub fn compile(
 const HALT: u32 = 0x00;
 const MFPR_IPL: u32 = 0x0E;
 const MTPR_IPL: u32 = 0x0F;
+const MFPR_PCBB: u32 = 0x12;
+const MFPR_SCBB: u32 = 0x16;
+const MTPR_SCBB: u32 = 0x17;
+const MTPR_SIRR: u32 = 0x18;
+const MFPR_SISR: u32 = 0x19;
 const MTPR_TXDB: u32 = 0x40;
+const CHMK: u32 = 0x83;
+const REI: u32 = 0x92;
 
 /// The PAL calls that write and read a VAX processor register, by its
 /// number (PR$_ in $PRDEF), which must be a constant, as in AMACRO.
@@ -958,8 +1046,12 @@ fn ipr(g: &mut Gen, op: &Opnd) -> Result<(Option<u32>, Option<u32>)> {
         _ => None,
     };
     match n.ok_or("vmacro needs the processor register as a constant, #n")? {
+        16 => Ok((None, Some(MFPR_PCBB))), // PR$_PCBB, read-only
+        17 => Ok((Some(MTPR_SCBB), Some(MFPR_SCBB))), // PR$_SCBB
         18 => Ok((Some(MTPR_IPL), Some(MFPR_IPL))), // PR$_IPL
-        35 => Ok((Some(MTPR_TXDB), None)),          // PR$_TXDB, write-only
+        20 => Ok((Some(MTPR_SIRR), None)), // PR$_SIRR, write-only
+        21 => Ok((None, Some(MFPR_SISR))), // PR$_SISR, read-only
+        35 => Ok((Some(MTPR_TXDB), None)), // PR$_TXDB, write-only
         n => Err(format!("processor register {n} has no PAL call yet")),
     }
 }

@@ -1,0 +1,127 @@
+        .TITLE  SVCTEST Checks the system services the other programs don't use
+        .IDENT  /V0.1/
+;
+; Each EXPECT checks a service's status. A failed one exits with 2 * N,
+; an error, which the executive reports with the process's name, so the
+; status says which.
+;
+        .LIBRARY "starlet.mlb"
+        .LIBRARY "sysexe.mlb"
+        $SSDEF
+        .EXTERNAL SYS$GETTIM
+
+        .MACRO  EXPECT  STATUS, N, ?OK
+        CMPL    R0, STATUS
+        BEQL    OK
+        MOVL    #<N * 2>, R0
+        RET
+OK:
+        .ENDM   EXPECT
+
+        .PSECT  DATA, NOEXE, WRT, LONG
+OTHER_NAME:
+        .ASCID  "SVCTEST2"
+MY_NAME:
+        .ASCID  "SVCTEST"
+NAPPER_NAME:
+        .ASCID  "NAPPER"
+SLEEPER_IMAGE:
+        .ASCID  "SLEEPER.EXE"
+NOSUCH_NAME:
+        .ASCID  "NOSUCH"
+NOSUCH_IMAGE:
+        .ASCID  "NOSUCH.EXE"
+STATE:  .LONG   0
+PRI:    .LONG   0
+INADR:  .LONG   ^X60000000, ^X60001FFF
+LOW:    .LONG   ^X1000, ^X1FFF          ; not a process's to make
+
+        .PSECT  CODE, EXE, LONG
+        .ENTRY  START, ^M<R2>
+        $SETPRN_S PRCNAM=OTHER_NAME
+        EXPECT  #SS$_NORMAL, 1
+        $SETPRN_S PRCNAM=MY_NAME
+        EXPECT  #SS$_NORMAL, 2
+
+; Local event flags.
+        $CLREF_S EFN=#3
+        EXPECT  #SS$_WASCLR, 3
+        $SETEF_S EFN=#3
+        EXPECT  #SS$_WASCLR, 4
+        $SETEF_S EFN=#3
+        EXPECT  #SS$_WASSET, 5
+        $READEF_S EFN=#3, STATE=STATE
+        EXPECT  #SS$_WASSET, 6
+        CMPL    STATE, #^X8
+        BNEQ    90$
+        $WAITFR_S EFN=#3                ; set: returns at once
+        EXPECT  #SS$_NORMAL, 7
+        $WFLAND_S EFN=#0, MASK=#^X8
+        EXPECT  #SS$_NORMAL, 8
+        $WFLOR_S EFN=#0, MASK=#^X18
+        EXPECT  #SS$_NORMAL, 9
+        $SETEF_S EFN=#128
+        EXPECT  #SS$_ILLEFC, 10
+        $SETEF_S EFN=#100               ; cluster 3 has no common block
+        EXPECT  #SS$_UNASEFC, 11
+
+; The dispatcher: too few arguments, and a stub.
+        CALLS   #0, G^SYS$GETTIM
+        EXPECT  #SS$_INSFARG, 12
+        PUSHL   #0
+        CALLS   #1, G^SYS$GETTIM
+        EXPECT  #SS$_ILLSER, 13
+
+; Pages.
+        $CRETVA_S INADR=INADR
+        EXPECT  #SS$_NORMAL, 14
+        MOVL    #^X12345678, @#^X60001FFC
+        CMPL    @#^X60001FFC, #^X12345678
+        BNEQ    90$
+        $DELTVA_S INADR=INADR
+        EXPECT  #SS$_NORMAL, 15
+        $CRETVA_S INADR=LOW
+        EXPECT  #SS$_PAGOWNVIO, 16
+
+; A routine in kernel mode.
+        $CMKRNL_S ROUTIN=ANSWER
+        EXPECT  #42, 17
+
+; Other processes: lower this one's priority below NAPPER's so it runs
+; and hibernates; suspend it while it does, so that $WAKE leaves it
+; suspended; resume it, and delete it.
+        $CREPRC_S IMAGE=SLEEPER_IMAGE, PRCNAM=NAPPER_NAME, BASPRI=#4
+        EXPECT  #SS$_NORMAL, 18
+        $CREPRC_S IMAGE=SLEEPER_IMAGE, PRCNAM=NAPPER_NAME, BASPRI=#4
+        EXPECT  #SS$_DUPLNAM, 19
+        $SETPRI_S PRI=#2, PRVPRI=PRI
+        EXPECT  #SS$_NORMAL, 20
+        CMPL    PRI, #4
+        BNEQ    90$
+        $SETPRI_S PRI=#4
+        EXPECT  #SS$_NORMAL, 21
+        $SUSPND_S PRCNAM=NAPPER_NAME
+        EXPECT  #SS$_NORMAL, 22
+        $WAKE_S PRCNAM=NAPPER_NAME
+        EXPECT  #SS$_NORMAL, 23
+        $RESUME_S PRCNAM=NAPPER_NAME
+        EXPECT  #SS$_NORMAL, 24
+        $DELPRC_S PRCNAM=NAPPER_NAME
+        EXPECT  #SS$_NORMAL, 25
+        $WAKE_S PRCNAM=NAPPER_NAME
+        EXPECT  #SS$_NONEXPR, 26
+; A process whose image isn't there: it exits with SS$_NOSUCHFILE, which
+; the executive reports.
+        $CREPRC_S IMAGE=NOSUCH_IMAGE, PRCNAM=NOSUCH_NAME, BASPRI=#4
+        EXPECT  #SS$_NORMAL, 27
+        PRINT   "SVCTEST: ok"
+        MOVL    #SS$_NORMAL, R0
+        RET
+90$:    MOVL    #SS$_ABORT, R0
+        RET
+
+        .ENTRY  ANSWER, ^M<>
+        MOVL    #42, R0
+        RET
+
+        .END    START

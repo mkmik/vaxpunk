@@ -22,9 +22,11 @@ vlink hello.obj consolio.obj && vrun hello.exe
 Justfile.
 
 Status: integer instructions, the calling standard's `CALLS`, `CALLG` and
-`RET`, `JSB` and `RSB`, `CASE`, bit fields, `MOVC3` and `MOVC5`, and the
-privileged `MTPR`, `MFPR` and `HALT`. Not yet: floating point, packed decimal,
-queues, the other string and privileged instructions, `.CALL_ENTRY`, listings.
+`RET`, `JSB` and `RSB`, `CASE`, bit fields, `MOVC3` and `MOVC5`, `INSQUE` and
+`REMQUE`, the privileged `MTPR`, `MFPR`, `HALT`, `CHMK` and `REI`, and Alpha's
+`CALL_PAL`. Not yet: floating point, packed decimal, the interlocked queue
+instructions, the other string and privileged instructions, `.CALL_ENTRY`,
+listings.
 
 ## How it works
 
@@ -129,8 +131,9 @@ as on the VAX, and take no lock:
 
 The file says which registers each one uses. It is a module, not a macro
 library: compile it and link it with the program, as the `hello` example
-does. Its output goes through
-vrun's put, one character at a time, from `CON$PUTCHAR`.
+does. Its output goes one character at a time through `CON$PUTCHAR`, which
+it doesn't define: under vrun, `vtools/lib/conputchar.mar` writes with
+vrun's put; the executive has its own, which writes `PR$_TXDB`.
 
 ```
 MOVAB   MESSAGE, R1
@@ -166,7 +169,8 @@ What doesn't carry over:
 | Branch | `BRB`, `BRW`, `Bcc` (all 16), `BLBS`, `BLBC`, `BBS`, `BBC`, `BBSS`, `BBSC`, `BBCS`, `BBCC`, `JMP`, `CASEB/W/L`, `ACBB/W/L`, `AOBLSS`, `AOBLEQ`, `SOBGTR`, `SOBGEQ` |
 | Call | `CALLS`, `CALLG`, `RET`, `JSB`, `BSBB`, `BSBW`, `RSB` |
 | Field and string | `EXTV`, `EXTZV`, `INSV`, `MOVC3`, `MOVC5` |
-| Privileged | `MTPR`, `MFPR`, `HALT`: PAL calls, see *Privileged instructions* |
+| Queue | `INSQUE`, `REMQUE` |
+| Privileged | `MTPR`, `MFPR`, `HALT`, `CHMK`, `REI`, `CALL_PAL`: PAL calls, see *Privileged instructions* |
 | Other | `NOP`, `BPT` (`brk`) |
 
 `x` is B, W, L, or Q where the VAX has it. Every addressing mode works:
@@ -188,6 +192,10 @@ Limits:
 - `MOVC5` copies forwards only; `MOVC3` handles any overlap. Both copy a byte
   at a time.
 - `PUSHR` and `POPR` take a constant mask and can't save SP or PC.
+- `INSQUE` and `REMQUE` aren't interlocked, and the queue's links are
+  longwords, so it must lie below 4 GB. They set Z as the VAX does: the
+  entry inserted is the only one, the queue removed from is now empty;
+  `REMQUE` sets V when the queue was empty and there was nothing to remove.
 
 ## Privileged instructions
 
@@ -200,10 +208,19 @@ function codes are in
 
 | Instruction | PAL call |
 | --- | --- |
-| `MTPR src, #PR$_IPL` | `MTPR_IPL` |
-| `MFPR #PR$_IPL, dst` | `MFPR_IPL` |
+| `MTPR src, #PR$_IPL`, `MFPR #PR$_IPL, dst` | `MTPR_IPL`, `MFPR_IPL` |
+| `MFPR #PR$_PCBB, dst` | `MFPR_PCBB` |
+| `MTPR src, #PR$_SCBB`, `MFPR #PR$_SCBB, dst` | `MTPR_SCBB`, `MFPR_SCBB` |
+| `MTPR src, #PR$_SIRR`, `MFPR #PR$_SISR, dst` | `MTPR_SIRR`, `MFPR_SISR` |
 | `MTPR src, #PR$_TXDB` | `MTPR_TXDB`, a console character |
+| `CHMK #code` | `CHMK`: the code goes in R0, and R0 comes back with what the service left there |
+| `REI` | `REI`: resumes at the PC in the frame on the stack, with R7 from it too |
 | `HALT` | `HALT` |
+| `CALL_PAL #code` | any PAL call, as on Alpha: arguments in R0-R5, the result in R0, R7 kept |
+
+`CALL_PAL` is for the calls the VAX has no instruction for, `SWPCTX`,
+`WTINT`, `WRPTE` and `DELCTX`, whose codes `$PALDEF` names. The code must
+be a constant.
 
 The processor register must be a constant, as in AMACRO. `$PRDEF` in
 `vtools/lib/lib.mlb` defines the `PR$_` names:
@@ -215,7 +232,13 @@ The processor register must be a constant, as in AMACRO. `$PRDEF` in
 ```
 
 `MTPR` and `MFPR` set N and Z from the value and clear V and C. The VAX
-leaves C alone.
+leaves C alone. `CHMK` and `CALL_PAL` set them from R0.
+
+`lib.mlb` also has the executive's structures (`$PCBDEF`, `$PTEDEF`,
+`$RPBDEF`...) and VMS's IPL macros, `SETIPL`, `DSBINT`, `ENBINT` and
+`SOFTINT`. `vtools/lib/starlet.mlb` is for programs that call system
+services: `$SSDEF`, `$PRTDEF`, and the `$name_S` macros, which push the
+arguments and call `SYS$name`.
 
 vrun runs programs in user mode, where these instructions don't work: each
 one stops the run with `%VRUN-F-OPCDEC`.

@@ -21,6 +21,7 @@ not numbered, because the code cites them by path.
 | --- | --- | --- |
 | [ADR-0001](adr/0001-pal-interface-vms-vocabulary.md) | PAL interface speaks only VMS vocabulary | Accepted |
 | [ADR-0002](adr/0002-root-task-is-the-pal.md) | The root task is the PAL; the executive is a task that calls it with privileged instructions | Accepted |
+| [ADR-0003](adr/0003-one-cpu-many-threads.md) | Processes are threads that take turns on one VMS CPU | Accepted |
 
 ### PRDs
 
@@ -33,6 +34,7 @@ not numbered, because the code cites them by path.
 | Design | Title |
 | --- | --- |
 | [DESIGN-0001](design/0001-pal-interface.md) | PAL interface |
+| [DESIGN-0002](design/0002-executive-processes.md) | Processes, memory and system services in the executive |
 
 ## Adding a document
 

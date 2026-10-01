@@ -5,15 +5,20 @@ OpenVMS remake on arm64.
 Milestone 0 boots an unmodified seL4 kernel on QEMU aarch64 through UEFI and
 Limine, and runs a C root task that prints over the serial console. The root
 task is the PAL ([ADR-0002](docs/adr/0002-root-task-is-the-pal.md)): it
-starts `exec.exe`, an image compiled from MACRO-32 with vtools, as a task of
-its own and serves the PAL calls its privileged instructions make
-([DESIGN-0001](docs/design/0001-pal-interface.md)). seL4 is
+starts `EXEC.EXE`, the executive, an image compiled from MACRO-32 with
+vtools, as a task of its own and serves the PAL calls its privileged
+instructions make ([DESIGN-0001](docs/design/0001-pal-interface.md)). The
+executive manages memory, and creates, schedules and deletes processes,
+each a thread running an image from the boot volume, which take turns on
+one CPU and synchronize with IPL and event flags
+([ADR-0003](docs/adr/0003-one-cpu-many-threads.md),
+[DESIGN-0002](docs/design/0002-executive-processes.md)). seL4 is
 built with its MCS (mixed-criticality scheduling) API: threads run on
 scheduling contexts with a budget and period, and IPC replies go through
 reply objects.
 
 ```
-EDK2 -> Limine (BOOTAA64.EFI) -> shim -> seL4 (kernel.elf) -> root task (roottask.elf) -> exec.exe
+EDK2 -> Limine (BOOTAA64.EFI) -> shim -> seL4 (kernel.elf) -> root task (roottask.elf) -> EXEC.EXE -> processes
 ```
 
 ## Host setup (once)
@@ -47,10 +52,10 @@ Limine, the shim's placement banner, seL4's boot messages, then the root task:
 
 ```
 vaxpunk shim: shim at 0x7fa68000, UART at 0x9000000
-shim: kernel    0x40000000-0x40239000 entry 0xffffff8040000000
-shim: DTB       0x40239000-0x4033a000
-shim: root task 0x4033a000-0x40341000 vaddr 0x400000 entry 0x400000
-shim: exec.exe  0x40340000-0x40341000 vaddr 0x406000
+shim: kernel    0x40000000-0x40243000 entry 0xffffff8040000000
+shim: DTB       0x40243000-0x40344000
+shim: root task 0x40344000-0x40380000 vaddr 0x400000 entry 0x400000
+shim: volume    0x40373000-0x40380000 vaddr 0x42f000
 shim: entering seL4
 Bootstrapping kernel
 ...
@@ -60,12 +65,32 @@ boot info: node 0 of 1, 53 untyped caps
   untyped 0: paddr 0x0 size 2^27 device
 ...
 sched control caps: 278-278
-scheduling context: budget 5000 us per 5000 us, 40846 us used
-exec.exe: started at 0x10000
-hello from the executive
-%PAL-I-HALT, exec halted at PC 0x100bc, R0 8
-root task done
+scheduling context: budget 5000 us per 5000 us, 12897 us used
+EXEC.EXE: started at 0x10aa8, 29 of 1024 pages in use
+%EXEC-I-START, vaxpunk executive, free pages: 00000363
+STARTUP: $EXPREG made 4 pages, and they hold what I wrote, at 50000000
+SLEEPER: hibernating until I'm deleted
+STARTUP: created SLEEPER, which ran first, PID 00030003
+STARTUP: created PING and PONG; hibernating until PONG wakes me
+PING 00000001
+  PONG 00000001
+PING 00000002
+  PONG 00000002
+PING 00000003
+  PONG 00000003
+PONG: woke STARTUP, exiting
+PING: done, returning
+STARTUP: woken, deleting SLEEPER
+STARTUP: done, SVCTEST next
+SLEEPER: hibernating until I'm deleted
+SVCTEST: ok
+%EXEC-W-EXITED, process NOSUCH exited with status 00000910
+%PAL-I-IDLE, the CPU is idle and no interrupt can come
+root task done, 772 of 4096 slots used
 ```
+
+`just check` boots the same way without a console, prints the executive's
+part and fails unless the processes ran to the end.
 
 EDK2 prints a few `Error: Image at ... start failed` and `Tpm2...` lines
 before Limine starts. That is normal for the firmware QEMU ships.
@@ -74,8 +99,9 @@ Nothing in the guest reads the serial input yet. After a few dozen keystrokes
 QEMU stops reading the keyboard, and then `Ctrl-A x` no longer arrives. Stop
 QEMU with `pkill -f qemu-system-aarch64` instead.
 
-Day to day: edit `roottask/src/`, then `cargo run -p boot`. Only the root
-task is rebuilt and the ESP image re-stitched. On an M3, the root task prints
+Day to day: edit `roottask/` (`src/` for the PAL, `exec/` for the
+executive, `sysexe/` for the programs on the boot volume), then `cargo run
+-p boot`. Only the root task is rebuilt and the ESP image re-stitched. On an M3, the root task prints
 about one second after the command.
 
 ## Layout
@@ -84,8 +110,8 @@ about one second after the command.
 | --- | --- | --- |
 | `kernel/` | seL4 16.0.0 (submodule), built with its own CMake | `kernel.elf`, libsel4's headers, `platform_gen.json` |
 | `shim/` | Limine-protocol program that loads seL4 and the root task; see [shim/README.md](shim/README.md) | `shim.elf` |
-| `roottask/` | the root task, freestanding C, and its MACRO-32 part, `src/exec.mar`, which `build.rs` compiles and links with the vtools crates | `roottask.elf`, `exec.exe` |
-| `image/` | Limine config, the ESP builder (mtools) and `boot`, which copies the three ELFs and `exec.exe` to `out/`, stitches the ESP and runs QEMU | `out/esp.img` |
+| `roottask/` | the root task, the PAL, in freestanding C (`src/`); the MACRO-32 executive (`exec/`) and the programs it runs (`sysexe/`), which `build.rs` compiles and links with the vtools crates and packs into the boot volume | `roottask.elf`, `sys.vol` |
+| `image/` | Limine config, the ESP builder (mtools) and `boot`, which copies the three ELFs and `sys.vol` to `out/`, stitches the ESP and runs QEMU | `out/esp.img` |
 | `scripts/` | host setup, Limine download, QEMU wrapper and console filter | `out/serial.log` |
 | `ods/` | Files-11 ODS-2/ODS-5 file system in Rust: the library, the `ods` CLI and a FUSE mount; see [ods/README.md](ods/README.md) | `target/` |
 | `vtools/` | VMS-style toolchain in Rust: the `vasm` assembler, the `vmacro` MACRO-32 compiler, `vlink` linker and `vlib` librarian, object, library and image formats, `vdump` to inspect them, and `vrun`, which runs images in QEMU; see its [PRD](docs/prd/0001-vtools.md) | `target/` |
@@ -112,16 +138,17 @@ exports its ELF's path as `ELF` for `boot`.
   that machine's memory map, and `scripts/run-qemu.sh` reads the same file.
 - Any root task can replace `roottask.elf`: it must be a static AArch64 ELF
   whose first segment is page aligned. seL4 calls its entry point with the
-  boot info pointer in `x0`. The shim appends `exec.exe` to it, so seL4 maps
-  the image at the root task's last vaddr, page aligned (`_end` in
+  boot info pointer in `x0`. The shim appends the boot volume to it, so seL4
+  maps the volume at the root task's last vaddr, page aligned (`_end` in
   `roottask/linker.ld`); `bi->userImageFrames` counts its pages too.
-- The root task maps `exec.exe`'s sections at their link addresses (vlink's
+- The root task maps `EXEC.EXE`'s sections at their link addresses (vlink's
   default base, 0x10000) in a new address space, with fresh frames from the
   largest RAM untyped, and starts a thread there at the transfer address.
   That thread, the executive, has no capabilities: its privileged
   instructions trap to the root task, which is its fault handler
-  ([DESIGN-0001](docs/design/0001-pal-interface.md)). vrun's `SVC` calls
-  aren't there.
+  ([DESIGN-0001](docs/design/0001-pal-interface.md)). So do its processes'
+  threads, which the root task makes when the executive first switches to
+  them. vrun's `SVC` calls aren't there.
 - Pins: seL4 by submodule commit (tag 16.0.0), Limine 11.4.1 by version and
   SHA-256 in `scripts/fetch-limine.sh`. The EDK2 firmware comes from the
   QEMU install (`EDK2_FW=` overrides it).

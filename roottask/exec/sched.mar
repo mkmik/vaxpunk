@@ -1,0 +1,200 @@
+        .TITLE  SCHED   The scheduler
+        .IDENT  /V0.1/
+;
+; Processes are threads in the executive's address space, and only one of
+; them runs at a time: the current process, SCH$GL_CURPCB. The others wait
+; in a state queue: one per priority for those that are computable (COM),
+; one per wait state for the rest (docs/design/0002-executive-processes.md).
+; The scheduler's database is synchronized at IPL$_SYNCH, as on a
+; uniprocessor VMS: below it, the reschedule interrupt at IPL$_RESCHED may
+; take the CPU away; at or above it, nothing does.
+;
+; A process gives up the CPU by calling SCH$SCHED, which picks the highest
+; computable process and hands it the CPU with SWPCTX. The PAL keeps each
+; process's registers in its own thread, so the switch saves nothing: the
+; process leaving waits inside its SWPCTX until the CPU comes back to it.
+;
+        .LIBRARY "lib.mlb"
+        $PRDEF
+        $IPLDEF
+        $PALDEF
+        $PCBDEF
+        $STATEDEF
+        $RPBDEF
+        $HWPCBDEF
+
+        .EXTERNAL EXE$GL_RPB
+
+        .PSECT  EXEC$DATA, NOEXE, WRT, QUAD
+SCH$GL_CURPCB::                         ; the current process
+        .LONG   0
+SCH$GL_COMQS::                          ; bit n: COM queue n isn't empty
+        .LONG   0
+SCH$GL_SWPPCB::                         ; the swapper's PCB
+        .LONG   0
+; Queue headers: flink, blink. SCH$INIT links each to itself.
+SCH$AQ_COMH::                           ; computable, by priority
+        .BLKQ   32
+SCH$GQ_HIBWQ::                          ; hibernating
+        .BLKQ   1
+SCH$GQ_LEFWQ::                          ; waiting for local event flags
+        .BLKQ   1
+SCH$GQ_SUSPWQ::                         ; suspended
+        .BLKQ   1
+SCH$GQ_DELQ::                           ; deleted, for the swapper to reap
+        .BLKQ   1
+SCH$GQ_CEBHD::                          ; common event blocks
+        .BLKQ   1
+QUEUES = 32 + 5
+; Processes by index, the low word of their PID; the high word counts
+; processes made, so a PID isn't reused soon.
+SCH$GL_PCBVEC::
+        .BLKL   SCH$C_MAXPIX
+SCH$GL_SEQ::
+        .LONG   1
+; The swapper, process 1: the boot context, whose HWPCB is the RPB's.
+        .ALIGN  QUAD
+SWAPPER:
+        .BLKB   PCB$K_LENGTH
+
+        .PSECT  $CODE$
+
+; SCH$INIT: makes the queues empty and the boot context the swapper, the
+; current process. Uses R0-R2.
+SCH$INIT::
+        MOVAQ   SCH$AQ_COMH, R0
+        MOVL    #QUEUES, R1
+10$:    MOVL    R0, (R0)
+        MOVL    R0, 4(R0)
+        ADDL2   #8, R0
+        SOBGTR  R1, 10$
+        MOVAB   SWAPPER, R0
+        MOVL    R0, SCH$GL_SWPPCB
+        MOVL    R0, SCH$GL_CURPCB
+        MOVL    R0, SCH$GL_PCBVEC+4     ; index 1
+        MOVW    #PCB$K_LENGTH, PCB$W_SIZE(R0)
+        MOVB    #DYN$C_PCB, PCB$B_TYPE(R0)
+        MOVB    #16, PCB$B_PRI(R0)
+        MOVB    #16, PCB$B_PRIB(R0)
+        MOVL    #SCH$C_CUR, PCB$L_STATE(R0)
+        MOVL    #^X00010001, PCB$L_PID(R0)
+        MOVL    EXE$GL_RPB, R1
+        MOVAB   RPB$Q_HWPCB(R1), PCB$L_HWPCB(R0)
+        MOVAB   PCB$T_LNAME(R0), R1
+        MOVB    #7, (R1)+
+        MOVL    #^A/SWAP/, (R1)+
+        MOVW    #^A/PE/, (R1)+
+        MOVB    #^A/R/, (R1)
+        RSB
+
+; SCH$INSCOM: R4 = a PCB in no queue. Makes it computable: on the tail of
+; the COM queue of its priority. IPL$_SYNCH. Keeps every register.
+SCH$INSCOM::
+        PUSHR   #^M<R0, R1>
+        MOVL    #SCH$C_COM, PCB$L_STATE(R4)
+        MOVZBL  PCB$B_PRI(R4), R0
+        MOVAQ   SCH$AQ_COMH[R0], R1
+        INSQUE  (R4), @4(R1)
+        BBSS    R0, SCH$GL_COMQS, 10$
+10$:    POPR    #^M<R0, R1>
+        RSB
+
+; SCH$REMCOM: R4 = a computable PCB. Takes it off its COM queue.
+; IPL$_SYNCH. Keeps every register.
+SCH$REMCOM::
+        PUSHR   #^M<R0, R1>
+        REMQUE  (R4), R1
+        BNEQ    10$                     ; others left at its priority
+        MOVZBL  PCB$B_PRI(R4), R0
+        BBCC    R0, SCH$GL_COMQS, 10$
+10$:    POPR    #^M<R0, R1>
+        RSB
+
+; SCH$MAKECOM: R4 = a PCB in no queue. Makes it computable, and requests a
+; reschedule if it should run before the current process. IPL$_SYNCH.
+; Keeps every register.
+SCH$MAKECOM::
+        PUSHR   #^M<R0>
+        BSBW    SCH$INSCOM
+        MOVL    SCH$GL_CURPCB, R0
+        CMPB    PCB$B_PRI(R4), PCB$B_PRI(R0)
+        BLEQU   10$
+        SOFTINT #IPL$_RESCHED
+10$:    POPR    #^M<R0>
+        RSB
+
+; SCH$WAKEPCB: R4 = a waiting PCB. Ends its wait: it becomes computable,
+; or suspended if a $SUSPND came while it waited. IPL$_SYNCH. Keeps every
+; register.
+SCH$WAKEPCB::
+        PUSHR   #^M<R0>
+        REMQUE  (R4), R0
+        BBCC    #PCB$V_SUSPEN, PCB$L_STS(R4), 10$
+        MOVL    #SCH$C_SUSP, PCB$L_STATE(R4)
+        INSQUE  (R4), @SCH$GQ_SUSPWQ+4
+        BRB     20$
+10$:    BSBW    SCH$MAKECOM
+20$:    POPR    #^M<R0>
+        RSB
+
+; SCH$WAKE: R1 = a PCB. $WAKE's work: ends its hibernation, or, if it isn't
+; hibernating, makes its next $HIBER return at once. IPL$_SYNCH. Keeps
+; every register.
+SCH$WAKE::
+        CMPL    PCB$L_STATE(R1), #SCH$C_HIB
+        BNEQ    10$
+        PUSHL   R4
+        MOVL    R1, R4
+        BSBW    SCH$WAKEPCB
+        MOVL    (SP)+, R4
+        RSB
+10$:    BBSS    #PCB$V_WAKEPEN, PCB$L_STS(R1), 20$
+20$:    RSB
+
+; SCH$WAIT: R4 = the current PCB, its state set to the wait's, R0 = the
+; wait queue. Puts it on the queue's tail and gives up the CPU; returns
+; when the wait is over and the CPU is back. IPL$_SYNCH. Keeps every
+; register.
+SCH$WAIT::
+        INSQUE  (R4), @4(R0)
+        BSBW    SCH$SCHED
+        RSB
+
+; SCH$SCHED: gives the CPU to the highest computable process. The current
+; one is already in a queue, or deleted. If the CPU comes back to it, this
+; returns. With nothing computable, the CPU waits for an interrupt.
+; IPL$_SYNCH. Keeps every register.
+SCH$SCHED::
+        PUSHR   #^M<R0, R1, R2, R3, R4>
+10$:    MOVL    #31, R1
+20$:    BBS     R1, SCH$GL_COMQS, 30$
+        SOBGEQ  R1, 20$
+        CALL_PAL #PAL$_WTINT            ; ponytail: no interrupt can come yet
+        BRB     10$
+30$:    MOVAQ   SCH$AQ_COMH[R1], R2
+        REMQUE  @(R2), R3               ; its first process
+        BNEQ    40$
+        BBCC    R1, SCH$GL_COMQS, 40$   ; that was the last
+40$:    MOVL    #SCH$C_CUR, PCB$L_STATE(R3)
+        MOVL    SCH$GL_CURPCB, R4
+        MOVL    R3, SCH$GL_CURPCB
+        CMPL    R3, R4
+        BEQL    50$
+        MOVL    PCB$L_HWPCB(R3), R0
+        CALL_PAL #PAL$_SWPCTX           ; back when the CPU is
+50$:    POPR    #^M<R0, R1, R2, R3, R4>
+        RSB
+
+; SCH$RESCHED: the IPL$_RESCHED software interrupt, which SCH$MAKECOM
+; requests. Puts the current process back on its COM queue's tail and
+; gives the CPU to the highest computable one.
+SCH$RESCHED::
+        SETIPL  #IPL$_SYNCH
+        PUSHL   R4
+        MOVL    SCH$GL_CURPCB, R4
+        BSBW    SCH$INSCOM
+        BSBW    SCH$SCHED
+        MOVL    (SP)+, R4
+        REI
+
+        .END

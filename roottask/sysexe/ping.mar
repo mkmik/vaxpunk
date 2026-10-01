@@ -1,0 +1,35 @@
+        .TITLE  PING    Takes turns with PONG through common event flags
+        .IDENT  /V0.1/
+;
+; PING and PONG associate common event flag cluster 2 with the cluster
+; called PINGPONG. Each round PING sets flag 64 and waits for 65; PONG
+; waits for 64 and sets 65.
+;
+        .LIBRARY "starlet.mlb"
+        .LIBRARY "sysexe.mlb"
+        $SSDEF
+
+PING_EF = 64
+PONG_EF = 65
+ROUNDS = 3
+
+        .PSECT  DATA, NOEXE, WRT, LONG
+CLUSTER:
+        .ASCID  "PINGPONG"
+
+        .PSECT  CODE, EXE, LONG
+        .ENTRY  START, ^M<R3>
+        $ASCEFC_S EFN=#PING_EF, NAME=CLUSTER
+        BLBC    R0, 90$
+        MOVL    #1, R3
+10$:    PRINTHEX "PING ", R3
+        $SETEF_S EFN=#PING_EF
+        $WAITFR_S EFN=#PONG_EF
+        BLBC    R0, 90$
+        $CLREF_S EFN=#PONG_EF
+        AOBLEQ  #ROUNDS, R3, 10$
+        PRINT   "PING: done, returning"
+        MOVL    #SS$_NORMAL, R0
+90$:    RET
+
+        .END    START

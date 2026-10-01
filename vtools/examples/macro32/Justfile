@@ -20,11 +20,13 @@ _build:
     cargo build -q -p vmacro -p vlink -p vrun
     mkdir -p {{out}}
 
-# One routine. It prints with EXE$OUTZSTRING, from vtools/lib/consolio.mar.
+# One routine. It prints with EXE$OUTZSTRING, from vtools/lib/consolio.mar,
+# which writes through CON$PUTCHAR in conputchar.mar.
 hello: _build
     {{bin}}/vmacro -o {{out}}/hello.obj    hello.mar
     {{bin}}/vmacro -o {{out}}/consolio.obj ../../lib/consolio.mar
-    {{bin}}/vlink  -o {{out}}/hello.exe {{out}}/hello.obj {{out}}/consolio.obj
+    {{bin}}/vmacro -o {{out}}/conputchar.obj ../../lib/conputchar.mar
+    {{bin}}/vlink  -o {{out}}/hello.exe {{out}}/hello.obj {{out}}/consolio.obj {{out}}/conputchar.obj
     {{bin}}/vrun   {{out}}/hello.exe
 
 # MAIN calls routines in another module with CALLS and CALLG, and its own
