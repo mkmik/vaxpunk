@@ -1,0 +1,17 @@
+name: apidoc
+
+# docs/api/index.html is generated from the sources by scripts/apidoc.py:
+# fail if it wasn't regenerated with them.
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  current:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: scripts/apidoc.py
+      - name: docs/api is current
+        run: git diff --exit-code docs/api || { echo "::error::docs/api is stale: run scripts/apidoc.py and commit it"; exit 1; }

@@ -25,3 +25,7 @@ check:
     for line in "${lines[@]}"; do
         grep -aq "$line" out/serial.log || { echo "check: no \"$line\"" >&2; exit 1; }
     done
+
+# Regenerates the API reference, docs/api/index.html, from the sources.
+apidoc:
+    scripts/apidoc.py
