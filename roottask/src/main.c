@@ -28,6 +28,27 @@
 /* Defined here instead of in libsel4, which the root task does not link. */
 LIBSEL4_THREAD_LOCAL seL4_IPCBuffer *__sel4_ipc_buffer;
 
+/*
+ * The console: QEMU virt's PL011 UART, which the PAL drives itself, so it
+ * needs no debug kernel. A debug kernel prints on it too.
+ * ponytail: QEMU virt's address; read it from the DTB for other boards.
+ */
+#define UART_PADDR 0x09000000UL
+#define UART_VA 0xfffff000UL /* below PHYS */
+enum { UART_DR = 0x00, UART_FR = 0x18, UART_FR_TXFF = 1 << 5 };
+static volatile uint32_t *uart;
+
+static void uart_putc(char c)
+{
+	if (!uart)
+		return;
+	if (c == '\n')
+		uart_putc('\r');
+	while (uart[UART_FR / 4] & UART_FR_TXFF)
+		;
+	uart[UART_DR / 4] = (uint8_t)c;
+}
+
 static void putnum(unsigned long v, unsigned base)
 {
 	char buf[20];
@@ -37,7 +58,7 @@ static void putnum(unsigned long v, unsigned base)
 		v /= base;
 	} while (v);
 	while (n)
-		seL4_DebugPutChar(buf[--n]);
+		uart_putc(buf[--n]);
 }
 
 /* printf subset: %s, %c, %u, %x, %lu, %lx, %%. */
@@ -47,18 +68,18 @@ static void __attribute__((format(printf, 1, 2))) print(const char *fmt, ...)
 	va_start(ap, fmt);
 	for (; *fmt; fmt++) {
 		if (*fmt != '%') {
-			seL4_DebugPutChar(*fmt);
+			uart_putc(*fmt);
 			continue;
 		}
 		int wide = *++fmt == 'l';
 		fmt += wide;
 		if (*fmt == '%')
-			seL4_DebugPutChar('%');
+			uart_putc('%');
 		else if (*fmt == 's')
 			for (const char *s = va_arg(ap, const char *); *s; s++)
-				seL4_DebugPutChar(*s);
+				uart_putc(*s);
 		else if (*fmt == 'c')
-			seL4_DebugPutChar(va_arg(ap, int));
+			uart_putc(va_arg(ap, int));
 		else
 			putnum(wide ? va_arg(ap, unsigned long) : va_arg(ap, unsigned),
 			       *fmt == 'x' ? 16 : 10);
@@ -144,6 +165,31 @@ static void map(seL4_CPtr frame, seL4_CPtr vspace, seL4_Word va, seL4_CapRights_
 	}
 	if (err)
 		die("seL4_ARM_Page_Map failed", err);
+}
+
+/*
+ * Maps the UART's page from the device untyped that holds it. Retype carves
+ * an untyped in order, so untypeds sized by the bits of the UART's offset,
+ * the largest first, take up the space before it.
+ */
+static void uart_init(seL4_BootInfo *bi)
+{
+	for (seL4_Word i = 0; i < bi->untyped.end - bi->untyped.start; i++) {
+		seL4_UntypedDesc *u = &bi->untypedList[i];
+		seL4_Word off = UART_PADDR - u->paddr;
+		if (!u->isDevice || UART_PADDR < u->paddr || off >> u->sizeBits)
+			continue;
+		seL4_CPtr ram = untyped;
+		untyped = bi->untyped.start + i;
+		for (int bit = u->sizeBits - 1; bit >= seL4_PageBits; bit--)
+			if (off >> bit & 1)
+				alloc(seL4_UntypedObject, bit);
+		seL4_CPtr frame = alloc(seL4_ARM_SmallPageObject, 0);
+		untyped = ram;
+		map(frame, seL4_CapInitThreadVSpace, UART_VA, seL4_ReadWrite, seL4_ARM_ExecuteNever);
+		uart = (volatile uint32_t *)UART_VA;
+		return;
+	}
 }
 
 /*
@@ -687,7 +733,7 @@ static int serve_one(seL4_MessageInfo_t msg)
 		}
 		return ret(0);
 	case MTPR_TXDB:
-		seL4_DebugPutChar(a0);
+		uart_putc(a0);
 		return ret(v0);
 	case WRPTE: {
 		uint32_t old;
@@ -770,9 +816,21 @@ static void start_exec(seL4_BootInfo *bi)
 int main(seL4_BootInfo *bi)
 {
 	seL4_SetIPCBuffer(bi->ipcBuffer);
+
+	/* The largest RAM untyped; empty slots follow the boot info's caps. */
+	seL4_Word n = bi->untyped.end - bi->untyped.start;
+	seL4_Word best = n;
+	for (seL4_Word i = 0; i < n; i++)
+		if (!bi->untypedList[i].isDevice &&
+		    (best == n || bi->untypedList[i].sizeBits > bi->untypedList[best].sizeBits))
+			best = i;
+	if (best == n)
+		die("no RAM untyped", n);
+	untyped = bi->untyped.start + best;
+	next_slot = bi->empty.start;
+	uart_init(bi);
 	print("hello from the root task\n");
 
-	seL4_Word n = bi->untyped.end - bi->untyped.start;
 	print("boot info: node %lu of %lu, %lu untyped caps\n", bi->nodeID, bi->numNodes, n);
 	for (seL4_Word i = 0; i < n; i++) {
 		seL4_UntypedDesc *u = &bi->untypedList[i];
@@ -800,16 +858,6 @@ int main(seL4_BootInfo *bi)
 		print("scheduling context: budget %lu us per %lu us, %lu us used\n", slice, slice,
 		      used.consumed);
 
-	/* The largest RAM untyped; empty slots follow the boot info's caps. */
-	seL4_Word best = n;
-	for (seL4_Word i = 0; i < n; i++)
-		if (!bi->untypedList[i].isDevice &&
-		    (best == n || bi->untypedList[i].sizeBits > bi->untypedList[best].sizeBits))
-			best = i;
-	if (best == n)
-		die("no RAM untyped", n);
-	untyped = bi->untyped.start + best;
-	next_slot = bi->empty.start;
 	fault_ep = alloc(seL4_EndpointObject, 0);
 	start_exec(bi);
 	serve();
