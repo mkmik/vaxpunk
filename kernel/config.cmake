@@ -6,7 +6,7 @@ set(KernelArmHypervisorSupport OFF CACHE BOOL "") # Limine hands off at EL1
 set(KernelMaxNumNodes 1 CACHE STRING "")
 set(KernelVerificationBuild OFF CACHE BOOL "")
 set(KernelDebugBuild ON CACHE BOOL "")
-set(KernelPrinting ON CACHE BOOL "") # seL4_DebugPutChar
+set(KernelPrinting ON CACHE BOOL "") # the kernel's own messages; the PAL drives the UART itself
 # Mixed-criticality scheduling: threads run on scheduling context capabilities
 # (budget and period) instead of a fixed timeslice, and replies go through
 # reply objects. The root task gets seL4_CapInitThreadSC and the sched control

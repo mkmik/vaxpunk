@@ -310,8 +310,9 @@ unused.
 `MTPR_TXDB` stands in for the VAX console transmit register: VMS's
 `CON$PUTCHAR` writes each character with `MTPR R0, #PR$_TXDB`. Alpha had no
 such register; its console output went through firmware callbacks.
-ponytail: the PAL writes with `seL4_DebugPutChar`, which only a debug seL4
-has; a UART driver in the PAL replaces it.
+The PAL writes it on the PL011 UART, which it maps from its device untyped
+and drives itself, so the console needs no debug seL4. ponytail: QEMU
+virt's UART address, polled; from the DTB, with interrupts, later.
 
 ### The Alpha calls
 
