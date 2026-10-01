@@ -1,6 +1,6 @@
-//! cargo run -p boot [-- [--gdb] [--hvf]]: copies the kernel, shim, root task
-//! and boot volume cargo built into out/, stitches out/esp.img with mkesp.sh and becomes
-//! scripts/run-qemu.sh, which gets the arguments.
+//! cargo run -p boot [-- [--gdb] [--hvf] [--uart1[=PORT]]]: copies the kernel,
+//! shim, root task and boot volume cargo built into out/, stitches out/esp.img
+//! with mkesp.sh and becomes scripts/run-qemu.sh, which gets the arguments.
 
 use std::os::unix::process::CommandExt;
 use std::path::Path;

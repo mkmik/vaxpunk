@@ -1,8 +1,9 @@
 #!/bin/sh
 # Boot out/esp.img: EDK2 -> Limine -> shim -> seL4 -> root task.
-# Usage: run-qemu.sh [--gdb] [--hvf]. Quit with Ctrl-A x.
-#   --gdb  wait for a debugger on localhost:1234 (-s -S)
-#   --hvf  use Hypervisor.framework instead of TCG (best effort, macOS only)
+# Usage: run-qemu.sh [--gdb] [--hvf] [--uart1[=PORT]]. Quit with Ctrl-A x.
+#   --gdb    wait for a debugger on localhost:1234 (-s -S)
+#   --hvf    use Hypervisor.framework instead of TCG (best effort, macOS only)
+#   --uart1  serve the second UART on telnet localhost:PORT (default 4444)
 # EDK2_FW overrides the firmware image.
 set -eu
 
@@ -11,11 +12,14 @@ root=$(cd "$(dirname "$0")/.." && pwd)
 
 cpu="-cpu $QEMU_CPU"
 gdb=""
+uart1=null
 for arg; do
 	case $arg in
 	--gdb) gdb="-s -S" ;;
 	--hvf) cpu="-accel hvf -cpu host" ;;
-	*) echo "usage: $0 [--gdb] [--hvf]" >&2; exit 2 ;;
+	--uart1) uart1=telnet:localhost:4444,server,nowait ;;
+	--uart1=*) uart1=telnet:localhost:${arg#--uart1=},server,nowait ;;
+	*) echo "usage: $0 [--gdb] [--hvf] [--uart1[=PORT]]" >&2; exit 2 ;;
 	esac
 done
 
@@ -38,8 +42,12 @@ fi
 # sets up (serial and monitor muxed on stdio, Ctrl-C goes to the guest) plus
 # a raw log in out/serial.log. serial-filter.py keeps EDK2's and Limine's
 # screen control off the terminal.
+# The second -serial is UART1 (PL011 at 0x09040000, SPI 8). It always exists,
+# so the guest sees the same machine with or without --uart1; without it the
+# UART goes nowhere. seL4's DTB lacks it, which is fine: the kernel never uses
+# it, and the root task gets its page in the device untyped at 0x9000000.
 qemu-system-aarch64 -machine "virt,secure=off,gic-version=$QEMU_GIC,acpi=off" $cpu \
 	-smp 1 -m "$QEMU_MEM" -display none -nic none -bios "$EDK2_FW" \
 	-boot menu=on,splash-time=0 -drive "if=virtio,format=raw,file=$root/out/esp.img" \
 	-chardev "stdio,id=con,mux=on,signal=off,logfile=$root/out/serial.log" \
-	-serial chardev:con -monitor chardev:con $gdb | "$root/scripts/serial-filter.py"
+	-serial chardev:con -serial "$uart1" -monitor chardev:con $gdb | "$root/scripts/serial-filter.py"
