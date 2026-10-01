@@ -15,10 +15,23 @@ fn main() {
     }
     println!("cargo::rerun-if-env-changed=CROSS_COMPILE");
     // Fresh clones and worktrees leave submodules empty.
+    // Worktrees borrow objects from the main checkout's copy instead of
+    // downloading seL4 again; --dissociate copies them so nothing breaks
+    // if that copy goes away.
     if !Path::new("seL4/CMakeLists.txt").exists() {
-        let _ = Command::new("git")
-            .args(["submodule", "update", "--init", "seL4"])
-            .status();
+        let mut git = Command::new("git");
+        git.args(["submodule", "update", "--init"]);
+        let common = Command::new("git")
+            .args(["rev-parse", "--path-format=absolute", "--git-common-dir"])
+            .output();
+        if let Ok(out) = common {
+            let local =
+                Path::new(String::from_utf8_lossy(&out.stdout).trim()).join("modules/kernel/seL4");
+            if local.join("objects").exists() {
+                git.arg("--reference").arg(local).arg("--dissociate");
+            }
+        }
+        let _ = git.arg("seL4").status();
     }
     assert!(
         Path::new("seL4/CMakeLists.txt").exists(),
