@@ -184,3 +184,11 @@ It boots the same kernel, which is why `kernel/qemu.env` picks GICv3 (HVF
 does not emulate GICv2). This is best effort: the kernel is built for a
 Cortex-A57 while HVF offers only `-cpu host`, and seL4 warns that the
 counter runs at 24 MHz instead of the 62.5 MHz it was built for.
+
+`cargo run -p boot -- --uart1` serves the second serial port on telnet
+`localhost:4444` (`--uart1=PORT` picks another port, for QEMUs in parallel
+worktrees). Connect with `telnet localhost 4444` after setting `mode
+character`, or `socat -,raw,echo=0 tcp:localhost:4444`. The port is a PL011
+at `0x09040000` on SPI 8 (GIC IRQ 40), alias `serial1` in QEMU's DTB. It is
+always there, so the guest sees the same machine with or without the flag;
+without it the port goes nowhere. Nothing in the guest drives it yet.
