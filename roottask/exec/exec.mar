@@ -4,9 +4,10 @@
 ; The root task, the PAL, starts EXEC.EXE as a task of its own, in kernel
 ; mode at IPL 31, with R11 pointing at the restart parameter block
 ; (docs/design/0001-pal-interface.md). EXEC$START sets up the system
-; control block, memory, the scheduler and the system time, starts the
-; STARTUP process and becomes the swapper, process 1, which deletes what deleted processes
-; leave behind (docs/design/0002-executive-processes.md).
+; control block, memory, the scheduler, the system time and the console,
+; starts the console's process, SYSTEM, which runs DCL, and becomes the
+; swapper, process 1, which deletes what deleted processes leave behind
+; (docs/design/0002-executive-processes.md).
 ;
         .LIBRARY "lib.mlb"
         .LIBRARY "starlet.mlb"
@@ -22,6 +23,7 @@
         .EXTERNAL SCH$RESCHED, MMG$INIT, SCH$INIT, MMG$GL_FREECNT, MMG$SETPRT
         .EXTERNAL EXE$HWCLKINT, EXE$SWTIMINT, EXE$INITTIM
         .EXTERNAL SCH$GQ_DELQ, EXE$DELETEPCB, EXE$VECTOR, EXE$VECTOREND
+        .EXTERNAL TTY$INIT, TTY$RCVINT, TTY$IOPOST
 
 UREXEC = PTE$M_VALID ! <PRT$C_UR @ PTE$V_PROT> ! PTE$M_EXEC
 
@@ -30,13 +32,13 @@ EXE$GL_RPB::                            ; the restart parameter block
         .LONG   0
 EXE$AL_SCB::                            ; the system control block
         .BLKB   SCB$K_LENGTH
-STARTUP_IMAGE:
-        .ASCID  "STARTUP.EXE"
-STARTUP_NAME:
-        .ASCID  "STARTUP"
+CONSOLE_IMAGE:
+        .ASCID  "DCL.EXE"
+CONSOLE_NAME:
+        .ASCID  "SYSTEM"
 BANNER: .ASCIZ  "%EXEC-I-START, vaxpunk executive, free pages: "
 NOSTART:
-        .ASCIZ  "%EXEC-F-NOSTART, can't create STARTUP, status "
+        .ASCIZ  "%EXEC-F-NOSTART, can't create SYSTEM, status "
 
         .PSECT  $CODE$
         .ENTRY  EXEC$START, ^M<>
@@ -46,8 +48,10 @@ NOSTART:
         MOVAB   EXE$CMODKRNL, EXE$AL_SCB+SCB$L_CHMK
         MOVAB   EXE$CMODEXEC, EXE$AL_SCB+SCB$L_CHME
         MOVAB   SCH$RESCHED, EXE$AL_SCB+SCB$L_SOFTINT+<4*IPL$_RESCHED>
+        MOVAB   TTY$IOPOST, EXE$AL_SCB+SCB$L_SOFTINT+<4*IPL$_IOPOST>
         MOVAB   EXE$SWTIMINT, EXE$AL_SCB+SCB$L_SOFTINT+<4*IPL$_TIMER>
         MOVAB   EXE$HWCLKINT, EXE$AL_SCB+SCB$L_INTTIM
+        MOVAB   TTY$RCVINT, EXE$AL_SCB+SCB$L_CONSRCV
         MOVAB   EXE$AL_SCB, R0
         MTPR    R0, #PR$_SCBB
         JSB     G^MMG$INIT
@@ -59,13 +63,14 @@ NOSTART:
         JSB     G^MMG$SETPRT
         JSB     G^SCH$INIT
         JSB     G^EXE$INITTIM
+        JSB     G^TTY$INIT
         MOVAB   BANNER, R1
         JSB     G^EXE$OUTZSTRING
         MOVL    MMG$GL_FREECNT, R1
         JSB     G^EXE$OUTHEX
         JSB     G^EXE$OUTCRLF
         SETIPL  #0
-        $CREPRC_S IMAGE=STARTUP_IMAGE, PRCNAM=STARTUP_NAME, BASPRI=#4
+        $CREPRC_S IMAGE=CONSOLE_IMAGE, PRCNAM=CONSOLE_NAME, BASPRI=#4
         BLBS    R0, SWAPPER
         MOVL    R0, R2
         MOVAB   NOSTART, R1

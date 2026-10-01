@@ -9,10 +9,11 @@
 ; in R0. $CMEXEC changes mode to executive instead, with CHME, which
 ; EXE$CMODEXEC serves.
 ;
-; Programs run in user mode, so SYS$name, EXE$CMODEXEC and EXE$USRSTART,
-; where a process enters user mode, are in a page of their own, the
-; vector, which EXEC$START makes user readable: code an outer mode may
-; run, as VMS's system service vector is.
+; Programs run in user mode, and command interpreters in supervisor mode,
+; so SYS$name, EXE$CMODEXEC, and EXE$USRSTART and EXE$CLISTART, where a
+; process enters those modes, are in a page of their own, the vector,
+; which EXEC$START makes user readable: code an outer mode may run, as
+; VMS's system service vector is.
 ;
 ; Services that aren't implemented yet are stubs that return
 ; SS$_ILLSER. An access violation or a reserved instruction in an outer
@@ -133,6 +134,8 @@ CODE = 0
         STUB    DELLNM, 3
         STUB    TRNLNM, 5
         STUB    GETSYI, 7
+; Images
+        SERVICE IMGACT, 1
 
 ; EXE$CMODKRNL: the CHMK handler. R0 = the service's code, AP = its
 ; argument list, the PAL's frame on the kernel stack.
@@ -246,6 +249,16 @@ EXE$USRSTART::
         CALLS   #0, (R1)
         PUSHL   R0
         CALLS   #1, SYS$EXIT
+
+; EXE$CLISTART: where a process enters its command interpreter, in
+; supervisor mode, with R1 = its transfer address and R0 = the status of
+; the image that ran last: calls it with the status, and deletes the
+; process if it returns.
+EXE$CLISTART::
+        PUSHL   R0
+        CALLS   #1, (R1)
+        CLRQ    -(SP)
+        CALLS   #2, SYS$DELPRC
         .ALIGN  12
 ; EXE$VECTOREND: past the vector's last page. Not a routine.
 EXE$VECTOREND::

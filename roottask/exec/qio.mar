@@ -1,28 +1,48 @@
         .TITLE  QIO     Channels and I/O to the console
-        .IDENT  /V0.1/
+        .IDENT  /V0.2/
 ;
-; A process writes on the console as on VMS: $ASSIGN gives it a channel to
-; OPA0:, and $QIO or $QIOW writes a buffer on it. The write is done before
-; $QIO returns, which then sets the event flag and the I/O status block,
-; so $QIOW is $QIO (docs/design/0002-executive-processes.md).
+; A process uses the console as on VMS: $ASSIGN gives it a channel to
+; OPA0:, and $QIO or $QIOW writes a buffer on it, or reads a line into one.
+; The I/O is done before $QIO returns, which then sets the event flag and
+; the I/O status block, so $QIOW is $QIO
+; (docs/design/0002-executive-processes.md).
+;
+; What the console receives, its receive interrupt puts in the type-ahead
+; buffer, and wakes the readers through the IPL$_IOPOST software
+; interrupt. A read takes the characters from the buffer, echoing and
+; editing the line, up to a carriage return, and waits while it is empty.
 ; ponytail: the console is the only device, written a buffer at a time at
 ; IPL$_SYNCH, so lines don't mix; a terminal driver with I/O request
 ; packets replaces this.
 ;
         .LIBRARY "lib.mlb"
         .LIBRARY "starlet.mlb"
+        $PRDEF
         $IPLDEF
         $PCBDEF
+        $STATEDEF
         $IODEF
         $SSDEF
 
-        .EXTERNAL SCH$GL_CURPCB, EXE$PROBER_DSC, EXE$OUTCHAR, EXE$SETEF, EXE$CLREF
+        .EXTERNAL SCH$GL_CURPCB, SCH$WAIT, SCH$WAKEPCB
+        .EXTERNAL EXE$PROBER_DSC, EXE$OUTCHAR, EXE$OUTCRLF, EXE$SETEF, EXE$CLREF
 
 MAXCHAN = 31                            ; channels 1-31, a bit each in PCB$L_CHANS
+TYPEAHEAD = 256                         ; the type-ahead buffer, a ring
+RXCS$V_DONE = 7                         ; RXCS: a character is waiting
+RXCS$M_IE = ^X40                        ; interrupt when one is
 
         .PSECT  EXEC$DATA, NOEXE, WRT, QUAD
 CONSOLE:
         .ASCII  /OPA0/
+TTY$GQ_READQ::                          ; processes waiting in a read for a character
+        .BLKQ   1
+TTY$GL_PUT::                            ; where the next character received goes in the ring
+        .LONG   0
+TTY$GL_GET::                            ; where a read takes the next from
+        .LONG   0
+TTY$AB_RING::                           ; the type-ahead buffer: received, not yet read
+        .BLKB   TYPEAHEAD
 
         .PSECT  $CODE$
 
@@ -72,10 +92,13 @@ CONSOLE:
         RET
 
 ; $QIO efn, chan, func, iosb, astadr, astprm, p1, p2, p3, p4, p5, p6:
-; writes p2 bytes at p1 on the channel's device, the console, for
-; IO$_WRITEVBLK, IO$_WRITELBLK and IO$_WRITEPBLK, the only functions. Clears
-; event flag efn first, and once the write is done sets it, and the status
-; and byte count in iosb.
+; I/O on the channel's device, the console: writes p2 bytes at p1, for
+; IO$_WRITEVBLK, IO$_WRITELBLK and IO$_WRITEPBLK, or reads a line into
+; them, for IO$_READVBLK, IO$_READLBLK and IO$_READPBLK, and for
+; IO$_READPROMPT once it has written the p6 bytes at p5. Clears event flag
+; efn first, and once the I/O is done sets it, and in iosb the status, the
+; byte count and, for a read, the terminator, a carriage return, and its
+; size.
 ; ponytail: no ASTs yet, so an astadr is SS$_ILLSER.
         .ENTRY  EXE$QIO, ^M<R2, R3, R4, R5>
         MOVL    SCH$GL_CURPCB, R4
@@ -87,11 +110,22 @@ CONSOLE:
         BGTRU   75$
         BBC     R0, PCB$L_CHANS(R4), 75$
         BICL3   #^C63, 12(AP), R0       ; the function, without modifiers
+        CLRL    R4                      ; 0: a write
         CMPL    R0, #IO$_WRITEVBLK
         BEQL    10$
         CMPL    R0, #IO$_WRITELBLK
         BEQL    10$
         CMPL    R0, #IO$_WRITEPBLK
+        BEQL    10$
+        INCL    R4                      ; 1: a read
+        CMPL    R0, #IO$_READVBLK
+        BEQL    10$
+        CMPL    R0, #IO$_READLBLK
+        BEQL    10$
+        CMPL    R0, #IO$_READPBLK
+        BEQL    10$
+        INCL    R4                      ; 2: a read with a prompt
+        CMPL    R0, #IO$_READPROMPT
         BNEQ    80$
 10$:    MOVL    16(AP), R5
         BEQL    15$
@@ -100,24 +134,41 @@ CONSOLE:
         MOVL    32(AP), R3
         CMPL    R3, #65535
         BGTRU   87$
+        TSTL    R4
+        BNEQ    17$
         IFNORD  R3, (R2), 85$
-        PUSHL   4(AP)
+        BRB     18$
+17$:    IFNOWRT R3, (R2), 85$
+        CMPL    R4, #2
+        BNEQ    18$
+        CMPL    48(AP), #65535
+        BGTRU   87$
+        IFNORD  48(AP), @44(AP), 85$
+18$:    PUSHL   4(AP)
         CALLS   #1, G^EXE$CLREF
         BLBC    R0, 90$
         DSBINT  #IPL$_SYNCH             ; the console, a buffer at a time
-        CLRL    R1
-20$:    CMPL    R1, R3
-        BGEQU   30$
-        MOVZBL  (R2)[R1], R0
-        JSB     G^EXE$OUTCHAR
-        INCL    R1
-        BRB     20$
+        TSTL    R4
+        BNEQ    20$
+        BSBW    WRITE
+        CLRL    R1                      ; no terminator
+        BRB     30$
+20$:    CMPL    R4, #2
+        BNEQ    25$
+        PUSHR   #^M<R2, R3>
+        MOVL    44(AP), R2
+        MOVL    48(AP), R3
+        BSBW    WRITE
+        POPR    #^M<R2, R3>
+25$:    BSBW    READ
+        MOVL    R1, R3                  ; the line's length
+        MOVL    #<1@16>!13, R1          ; a carriage return, one byte
 30$:    ENBINT
         TSTL    R5
         BEQL    40$
         MOVW    #SS$_NORMAL, (R5)
         MOVW    R3, 2(R5)
-        CLRL    4(R5)
+        MOVL    R1, 4(R5)
 40$:    PUSHL   4(AP)
         CALLS   #1, G^EXE$SETEF
         MOVL    #SS$_NORMAL, R0
@@ -137,5 +188,128 @@ CONSOLE:
         .ENTRY  EXE$QIOW, ^M<>
         CALLG   (AP), G^EXE$QIO
         RET
+
+; WRITE: writes the R3 bytes at R2 on the console. IPL$_SYNCH. Uses R0
+; and R1.
+WRITE:  CLRL    R1
+10$:    CMPL    R1, R3
+        BGEQU   20$
+        MOVZBL  (R2)[R1], R0
+        JSB     G^EXE$OUTCHAR
+        INCL    R1
+        BRB     10$
+20$:    RSB
+
+; READ: reads a line from the console into the R3 bytes at R2, which the
+; current process may write, taking each character from the type-ahead
+; buffer and echoing it, and waiting while the buffer is empty. A carriage
+; return ends the line, echoed as CR LF. DEL or BS erases the last
+; character, CTRL/U all of them; other control characters, and those past
+; R3 bytes, are dropped. R1 = the line's length. IPL$_SYNCH. Uses R0.
+; ponytail: no CTRL/Y, escape sequences or command recall.
+READ:   PUSHL   R4
+        MOVL    SCH$GL_CURPCB, R4
+        CLRL    R1
+10$:    DSBINT  #IPL$_CONSOLE           ; the ring, which the receive interrupt fills
+        CMPL    TTY$GL_GET, TTY$GL_PUT
+        BEQL    60$
+        MOVL    TTY$GL_GET, R0
+        INCL    TTY$GL_GET
+        BICL2   #^C<TYPEAHEAD-1>, TTY$GL_GET
+        MOVZBL  TTY$AB_RING[R0], R0
+        ENBINT
+        CMPB    R0, #13
+        BEQL    50$
+        CMPB    R0, #127
+        BEQL    20$
+        CMPB    R0, #8
+        BEQL    20$
+        CMPB    R0, #21
+        BEQL    30$
+        CMPB    R0, #^A/ /
+        BLSSU   10$
+        CMPB    R0, #126
+        BGTRU   10$
+        CMPL    R1, R3
+        BGEQU   10$
+        MOVB    R0, (R2)[R1]
+        INCL    R1
+        JSB     G^EXE$OUTCHAR
+        BRB     10$
+20$:    TSTL    R1                      ; DEL: erase the last
+        BEQL    10$
+        BSBB    ERASE
+        BRB     10$
+30$:    TSTL    R1                      ; CTRL/U: erase all
+        BEQL    10$
+        BSBB    ERASE
+        BRB     30$
+50$:    JSB     G^EXE$OUTCRLF
+        MOVL    (SP)+, R4
+        RSB
+60$:    ENBINT                          ; empty: wait for more
+        MOVL    #SCH$C_MWAIT, PCB$L_STATE(R4)
+        MOVAQ   TTY$GQ_READQ, R0
+        BSBW    SCH$WAIT
+        BRB     10$
+
+; ERASE: erases the last of the R1 characters of a line from the screen.
+; R1 = one less. Uses R0.
+ERASE:  DECL    R1
+        MOVZBL  #8, R0
+        JSB     G^EXE$OUTCHAR
+        MOVZBL  #^A/ /, R0
+        JSB     G^EXE$OUTCHAR
+        MOVZBL  #8, R0
+        JMP     G^EXE$OUTCHAR
+
+; TTY$INIT: empties the type-ahead buffer and the readers' queue, and
+; enables the console receive interrupt. The SCB must have TTY$RCVINT for
+; it, and TTY$IOPOST for IPL$_IOPOST. Uses R0.
+TTY$INIT::
+        MOVAQ   TTY$GQ_READQ, R0
+        MOVL    R0, (R0)
+        MOVL    R0, 4(R0)
+        CLRL    TTY$GL_PUT
+        CLRL    TTY$GL_GET
+        MOVL    #RXCS$M_IE, R0
+        MTPR    R0, #PR$_RXCS
+        RSB
+
+; TTY$RCVINT: the console receive interrupt, at IPL$_CONSOLE. Puts each
+; character the console received in the type-ahead buffer, or drops it if
+; the buffer is full, and requests the IPL$_IOPOST software interrupt,
+; which wakes the readers.
+TTY$RCVINT::
+        PUSHR   #^M<R0, R1>
+10$:    MFPR    #PR$_RXCS, R0
+        BBC     #RXCS$V_DONE, R0, 30$
+        MFPR    #PR$_RXDB, R0
+        ADDL3   #1, TTY$GL_PUT, R1
+        BICL2   #^C<TYPEAHEAD-1>, R1
+        CMPL    R1, TTY$GL_GET
+        BEQL    10$                     ; full
+        PUSHL   R1
+        MOVL    TTY$GL_PUT, R1
+        MOVB    R0, TTY$AB_RING[R1]
+        MOVL    (SP)+, TTY$GL_PUT
+        BRB     10$
+30$:    SOFTINT #IPL$_IOPOST
+        POPR    #^M<R0, R1>
+        REI
+
+; TTY$IOPOST: the IPL$_IOPOST software interrupt. Ends the wait of each
+; process waiting in a read, which looks at the type-ahead buffer again.
+TTY$IOPOST::
+        SETIPL  #IPL$_SYNCH
+        PUSHR   #^M<R0, R4>
+        MOVAQ   TTY$GQ_READQ, R0
+10$:    MOVL    (R0), R4
+        CMPL    R4, R0
+        BEQL    20$
+        BSBW    SCH$WAKEPCB
+        BRB     10$
+20$:    POPR    #^M<R0, R4>
+        REI
 
         .END

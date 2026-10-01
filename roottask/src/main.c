@@ -45,7 +45,7 @@ LIBSEL4_THREAD_LOCAL seL4_IPCBuffer *__sel4_ipc_buffer;
  */
 #define UART_PADDR 0x09000000UL
 #define UART_VA 0xfffff000UL /* below PHYS */
-enum { UART_DR = 0x00, UART_FR = 0x18, UART_FR_TXFF = 1 << 5 };
+enum { UART_DR = 0x00, UART_FR = 0x18, UART_FR_RXFE = 1 << 4, UART_FR_TXFF = 1 << 5 };
 static volatile uint32_t *uart;
 
 /*
@@ -66,6 +66,12 @@ static void uart_putc(char c)
 	while (uart[UART_FR / 4] & UART_FR_TXFF)
 		;
 	uart[UART_DR / 4] = (uint8_t)c;
+}
+
+/* Whether the UART has a character the console hasn't read. */
+static int uart_rx_ready(void)
+{
+	return uart && !(uart[UART_FR / 4] & UART_FR_RXFE);
 }
 
 static void putnum(unsigned long v, unsigned base)
@@ -714,22 +720,28 @@ static void mode_thread(struct ctx *c, int m)
 enum {
 	HALT = 0x00, SWPCTX = 0x05, MFPR_IPL = 0x0e, MTPR_IPL = 0x0f, MFPR_PCBB = 0x12,
 	MFPR_SCBB = 0x16, MTPR_SCBB = 0x17, MTPR_SIRR = 0x18, MFPR_SISR = 0x19, WTINT = 0x3e,
-	MTPR_TXDB = 0x40, WRPTE = 0x41, DELCTX = 0x42, CHME = 0x82, CHMU = 0x85, PROBER = 0x8f,
+	MTPR_TXDB = 0x40, WRPTE = 0x41, DELCTX = 0x42, MTPR_RXCS = 0x43, MFPR_RXCS = 0x44,
+	MFPR_RXDB = 0x45, CHME = 0x82, CHMU = 0x85, PROBER = 0x8f,
 	PROBEW = 0x90, REI = 0x92
 };
 
 /* The system control block's vectors the PAL delivers through, and the
- * interval timer's IPL, the VAX's. CHMx's is SCB_CHMK + 4 * x, x the mode. */
+ * interval timer's and console's IPLs, the VAX's. CHMx's is SCB_CHMK + 4 * x,
+ * x the mode. */
 enum { SCB_OPCDEC = 0x10, SCB_ACCVIO = 0x20, SCB_CHMK = 0x40, SCB_SOFTINT = 0x80,
-       SCB_TIMER = 0xc0, IPL_HWCLK = 24 };
+       SCB_TIMER = 0xc0, SCB_CONSRCV = 0xf8, IPL_CONSOLE = 20, IPL_HWCLK = 24 };
+
+/* The console receive status register's bits, the VAX's RXCS: a character
+ * is waiting (DONE), and interrupt when one is (IE). */
+enum { RXCS_DONE = 0x80, RXCS_IE = 0x40 };
 
 /*
  * The processor state the PAL keeps for the executive's one CPU. A VAX
  * starts at IPL 31. pending has a bit per IPL with an interrupt requested
- * and not yet delivered: software interrupts at 1-15, SISR, and the
- * interval timer at IPL_HWCLK.
+ * and not yet delivered: software interrupts at 1-15, SISR, the console at
+ * IPL_CONSOLE and the interval timer at IPL_HWCLK. rxcs holds RXCS_IE.
  */
-static seL4_Word ipl = 31, pending, scbb;
+static seL4_Word ipl = 31, pending, scbb, rxcs;
 
 /* The frame on the stack an interrupt or exception pushes and REI pops
  * ($INTSTKDEF), in quadwords. */
@@ -807,8 +819,10 @@ static int deliver(seL4_UserContext *r)
 	for (seL4_Word level = 31; level > ipl; level--)
 		if (pending >> level & 1) {
 			pending &= ~(1UL << level);
-			if (!vector(r, level == IPL_HWCLK ? SCB_TIMER : SCB_SOFTINT + 4 * level,
-				    level, 0, 0, 0, 0)) {
+			seL4_Word off = level == IPL_HWCLK     ? SCB_TIMER :
+					level == IPL_CONSOLE ? SCB_CONSRCV :
+							       SCB_SOFTINT + 4 * level;
+			if (!vector(r, off, level, 0, 0, 0, 0)) {
 				print("%%PAL-F-NOVEC, no handler for interrupt at IPL %lu\n", level);
 				return 0;
 			}
@@ -1102,6 +1116,15 @@ static int serve_one(seL4_MessageInfo_t msg)
 	case MTPR_TXDB:
 		uart_putc(a0);
 		return ret(v0);
+	case MTPR_RXCS:
+		rxcs = a0 & RXCS_IE;
+		if (rxcs && uart_rx_ready())
+			pending |= 1UL << IPL_CONSOLE;
+		return ret(v0);
+	case MFPR_RXCS:
+		return ret(rxcs | (uart_rx_ready() ? RXCS_DONE : 0));
+	case MFPR_RXDB:
+		return ret(uart_rx_ready() ? uart[UART_DR / 4] & 0xff : 0);
 	case WRPTE: {
 		uint32_t old;
 		if (!wrpte(a0 & 0xffffffff, a1, &old))
@@ -1140,8 +1163,9 @@ static int serve_one(seL4_MessageInfo_t msg)
 }
 
 /*
- * A tick of the clock: requests the interval timer interrupt and, if IPL
- * lets it through, delivers it. The current context is running, since the
+ * A tick of the clock: requests the interval timer interrupt, and the
+ * console's if a character waits and RXCS asks for it, and, if IPL lets
+ * them through, delivers them. The current context is running, since the
  * PAL outranks it and serves each of its PAL calls at once, or waits in
  * WTINT. A running one is stopped wherever it is, and resumes at the
  * handler.
@@ -1149,6 +1173,8 @@ static int serve_one(seL4_MessageInfo_t msg)
 static int tick(void)
 {
 	pending |= 1UL << IPL_HWCLK;
+	if (rxcs && uart_rx_ready())
+		pending |= 1UL << IPL_CONSOLE;
 	if (!deliverable())
 		return 1;
 	if (idle) {

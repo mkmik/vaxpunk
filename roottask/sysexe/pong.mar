@@ -7,13 +7,12 @@
 
 PING_EF = 64
 PONG_EF = 65
+STARTUP_EF = 66
 ROUNDS = 3
 
         .PSECT  DATA, NOEXE, WRT, LONG
 CLUSTER:
         .ASCID  "PINGPONG"
-STARTUP:
-        .ASCID  "STARTUP"
 
         .PSECT  CODE, EXE, LONG
         .ENTRY  START, ^M<R3>
@@ -26,7 +25,7 @@ STARTUP:
         PRINTHEX "  PONG ", R3
         $SETEF_S EFN=#PONG_EF
         AOBLEQ  #ROUNDS, R3, 10$
-        $WAKE_S PRCNAM=STARTUP
+        $SETEF_S EFN=#STARTUP_EF
         PRINT   "PONG: woke STARTUP, exiting"
         $EXIT_S
 90$:    $EXIT_S R0

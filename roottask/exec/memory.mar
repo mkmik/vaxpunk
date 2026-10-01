@@ -12,7 +12,8 @@
 ;   ^X48000000  nonpaged pool: PCBs, kernel stacks, common event blocks
 ;   ^X4FFF0000  the RPB; ^X50000000 the boot volume, read-only
 ;   ^X5FFF0000  the boot stack's top
-;   ^X60000000  P1: the process's $CRETVA pages, its mode stacks at the top
+;   ^X60000000  P1: the process's $CRETVA pages
+;   ^X7FF00000  its command interpreter, if it has one, then its mode stacks
 ;
 ; The PFN database and the pool are synchronized at IPL$_SYNCH.
 ;
@@ -248,8 +249,8 @@ EXE$DEANONPGDSIZ::
 ; INADR: AP = a $CRETVA or $DELTVA argument list. R2 = the first page of
 ; the range its inadr gives, R3 = the page count, R0 = SS$_NORMAL;
 ; SS$_ACCVIO if the caller can't read inadr or write retadr, or
-; SS$_PAGOWNVIO if the range isn't all in P0, or all in P1 below the mode
-; stacks. Uses R1.
+; SS$_PAGOWNVIO if the range isn't all in P0, or all in P1 below the
+; command interpreter's and the mode stacks' VA$C_CLI. Uses R1.
 INADR:  MOVL    8(AP), R1
         BEQL    10$
         IFNOWRT #8, (R1), 80$
@@ -267,7 +268,7 @@ INADR:  MOVL    8(AP), R1
         BLSSU   20$                     ; all in P0
         CMPL    R2, #VA$C_P1BASE
         BLSSU   90$
-        CMPL    R3, #VA$C_STACKS
+        CMPL    R3, #VA$C_CLI
         BGEQU   90$
 20$:    SUBL2   R2, R3
         INCL    R3

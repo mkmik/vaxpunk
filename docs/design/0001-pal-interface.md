@@ -208,7 +208,7 @@ The PAL delivers through the system control block, whose address the
 executive sets with `MTPR #PR$_SCBB`. Its vectors are longwords at the
 VAX's offsets (`$SCBDEF`): 0x10 for a reserved instruction, 0x20 for an
 access violation, 0x40 + 4x for `CHMx`, 0x80 + 4n for software interrupt
-level n, 0xC0 for the interval timer.
+level n, 0xC0 for the interval timer, 0xF8 for the console receiver.
 
 The PSL holds the current mode in bits 25:24, the previous mode in 23:22,
 IPL in 20:16 and NZVC in 3:0. Modes are 0 kernel, 1 executive,
@@ -263,6 +263,16 @@ every register it uses, R0 included.
   clock runs from boot; it has no `ICCS` to enable it. ponytail: the tick
   is a thread of the PAL's that seL4 wakes each period (ADR-0004); a timer
   driver replaces it on hardware that has a free timer.
+- **The console receiver.** The VAX's console registers: `RXCS` has DONE,
+  bit 7, set while a character the console received waits, and IE, bit 6,
+  which the executive sets with `MTPR #PR$_RXCS` to be interrupted;
+  `MFPR #PR$_RXDB` takes the character, in bits 7:0. With IE set, the PAL
+  requests an interrupt at IPL 20, the VAX console's, through vector 0xF8,
+  when a character waits, and delivers it as the interval timer's. The
+  handler reads characters until DONE is clear. ponytail: the PAL looks at
+  the UART on each tick, and on the `MTPR` that sets IE, so a character
+  waits up to 10 ms; the UART's own interrupt, through seL4's IRQ handler,
+  later.
 - Interrupts go to kernel mode, with kernel as the previous mode, as the
   VAX's do.
 - **`CHMx`**, x the mode: `CHMK` 0, `CHME` 1, `CHMS` 2, `CHMU` 3. The code in
@@ -348,6 +358,8 @@ and gets:
 | `MTPR src, #PR$_SIRR` | `MTPR_SIRR` |
 | `MFPR #PR$_SISR, dst` | `MFPR_SISR` |
 | `MTPR src, #PR$_TXDB` | `MTPR_TXDB` |
+| `MTPR src, #PR$_RXCS`, `MFPR #PR$_RXCS, dst` | `MTPR_RXCS`, `MFPR_RXCS` |
+| `MFPR #PR$_RXDB, dst` | `MFPR_RXDB` |
 | `CHMK #code`, `CHME`, `CHMS`, `CHMU` | `CHMK`, `CHME`, `CHMS`, `CHMU`, R0 = code; R0 isn't kept |
 | `PROBER mode, len, base`, `PROBEW` | `PROBER`, `PROBEW`, a0 = base, a1 = len, a2 = mode; Z set if v0 is 0, no access |
 | `REI` | `REI` |
@@ -381,6 +393,9 @@ unused.
 | 0x40 | `MTPR_TXDB` | vaxpunk | a0 = character | | writes a0's low byte on the console |
 | 0x41 | `WRPTE` | vaxpunk | a0 = address, a1 = PTE | v0 = old PTE | maps, unmaps or protects a page |
 | 0x42 | `DELCTX` | vaxpunk | a0 = HWPCB | | deletes a context that isn't current |
+| 0x43 | `MTPR_RXCS` | vaxpunk | a0 = RXCS | | sets IE, bit 6: interrupt when a character waits |
+| 0x44 | `MFPR_RXCS` | vaxpunk | | v0 = RXCS | DONE, bit 7, if a character waits, and IE |
+| 0x45 | `MFPR_RXDB` | vaxpunk | | v0 = character | takes the character that waits, or 0 if none does |
 | 0x82 | `CHME` | Alpha | a0 = code | | delivers through the SCB, to executive mode |
 | 0x83 | `CHMK` | Alpha | a0 = code | | delivers through the SCB, to kernel mode |
 | 0x84 | `CHMS` | Alpha | a0 = code | | delivers through the SCB, to supervisor mode |
@@ -393,8 +408,10 @@ unused.
 `CON$PUTCHAR` writes each character with `MTPR R0, #PR$_TXDB`. Alpha had no
 such register; its console output went through firmware callbacks.
 The PAL writes it on the PL011 UART, which it maps from its device untyped
-and drives itself, so the console needs no debug seL4. ponytail: QEMU
-virt's UART address, polled; from the DTB, with interrupts, later.
+and drives itself, so the console needs no debug seL4. `MTPR_RXCS`,
+`MFPR_RXCS` and `MFPR_RXDB` stand in for the receive registers the same way,
+reading the UART (*Interrupts and exceptions*). ponytail: QEMU virt's UART
+address, polled; from the DTB, with interrupts, later.
 
 ### The Alpha calls
 
@@ -456,3 +473,4 @@ vaxpunk's own, 0x40-0x7F:
 | 0x40 | `MTPR_TXDB` | the VAX console transmit register |
 | 0x41 | `WRPTE` | writing a PTE in memory, then `MTPR_TBIS` |
 | 0x42 | `DELCTX` | the PAL's half of deleting a process |
+| 0x43-0x45 | `MTPR_RXCS`, `MFPR_RXCS`, `MFPR_RXDB` | the VAX console receive registers |

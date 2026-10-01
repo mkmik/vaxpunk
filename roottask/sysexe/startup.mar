@@ -1,19 +1,22 @@
-        .TITLE  STARTUP The first process, which starts the others
-        .IDENT  /V0.1/
+        .TITLE  STARTUP Starts the other test programs
+        .IDENT  /V0.2/
 ;
-; EXEC$START creates this process. It puts the executive's services to
-; work: it makes pages and deletes them, starts SLEEPER at a higher
-; priority, which runs at once, then PING and PONG, sleeps until PONG wakes
-; it, deletes SLEEPER, starts SVCTEST, HOG and TIMETEST and returns,
-; which ends the process.
+; RUN STARTUP at the console's DCL prompt runs this. It puts the
+; executive's services to work: it makes pages and deletes them, starts
+; SLEEPER at a higher priority, which runs at once, then PING and PONG,
+; waits until PONG sets a flag of their cluster, deletes SLEEPER, starts
+; SVCTEST, HOG and TIMETEST and returns, which ends the image.
 ;
         .LIBRARY "starlet.mlb"
         .LIBRARY "sysexe.mlb"
         $SSDEF
 
 PAGES = 4
+STARTUP_EF = 66                         ; PONG's for me, in PING and PONG's cluster
 
         .PSECT  DATA, NOEXE, WRT, LONG
+CLUSTER:
+        .ASCID  "PINGPONG"
 SLEEPER_IMAGE:
         .ASCID  "SLEEPER.EXE"
 SLEEPER_NAME:
@@ -43,6 +46,8 @@ RANGE:  .BLKL   2                       ; first and last byte
 
         .PSECT  CODE, EXE, LONG
         .ENTRY  START, ^M<R2, R3>
+        $ASCEFC_S EFN=#STARTUP_EF, NAME=CLUSTER
+        BLBC    R0, 90$
         $EXPREG_S PAGCNT=#PAGES, RETADR=RANGE
         BLBC    R0, 90$
         MOVL    RANGE, R2               ; fill them, then check
@@ -65,8 +70,9 @@ RANGE:  .BLKL   2                       ; first and last byte
         BLBC    R0, 90$
         $CREPRC_S PIDADR=PID, IMAGE=PONG_IMAGE, PRCNAM=PONG_NAME, BASPRI=#4
         BLBC    R0, 90$
-        PRINT   "STARTUP: created PING and PONG; hibernating until PONG wakes me"
-        $HIBER_S
+        PRINT   "STARTUP: created PING and PONG; waiting until PONG wakes me"
+        $WAITFR_S EFN=#STARTUP_EF
+        BLBC    R0, 90$
         PRINT   "STARTUP: woken, deleting SLEEPER"
         $DELPRC_S PRCNAM=SLEEPER_NAME
         BLBC    R0, 90$

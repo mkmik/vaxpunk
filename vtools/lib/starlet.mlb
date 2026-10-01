@@ -50,6 +50,10 @@ PSL$C_USER = 3
 IO$_WRITEPBLK = 11
 IO$_WRITELBLK = 32
 IO$_WRITEVBLK = 48
+IO$_READPBLK = 12
+IO$_READLBLK = 33
+IO$_READVBLK = 49
+IO$_READPROMPT = 55                     ; writes the prompt in p5 and p6 first
         .ENDM   $IODEF
 
 ; $PRTDEF: page protection codes, the VAX's: who may read (R) and write (W),
@@ -319,3 +323,10 @@ PRT$C_UR = 15
         .EXTERNAL SYS$CANWAK
         CALLS   #2, G^SYS$CANWAK
         .ENDM   $CANWAK_S
+
+        .MACRO  $IMGACT_S IMAGE, CMDLIN=0
+        $PUSHADR CMDLIN
+        $PUSHADR IMAGE
+        .EXTERNAL SYS$IMGACT
+        CALLS   #2, G^SYS$IMGACT
+        .ENDM   $IMGACT_S
