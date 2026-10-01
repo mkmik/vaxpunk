@@ -12,7 +12,7 @@ const LDFLAGS: &str = "-nostdlib -static -no-pie -T linker.ld -Wl,--build-id=non
     -Wl,-z,max-page-size=4096";
 
 fn main() {
-    for path in ["src", "linker.ld"] {
+    for path in ["src", "linker.ld", LIB] {
         println!("cargo::rerun-if-changed={path}");
     }
     let out = PathBuf::from(env::var("OUT_DIR").unwrap());
@@ -27,12 +27,16 @@ fn main() {
     exec(&out.join("exec.exe"));
 }
 
+/// Where `.LIBRARY` finds lib.mlb.
+const LIB: &str = "../vtools/lib";
+
 /// Compiles src/exec.mar and links it, at vlink's default base, into `exe`.
 fn exec(exe: &Path) {
     let source = "src/exec.mar";
     let opts = vasm::Options {
         name: "EXEC".into(),
         path: Some(source.into()),
+        include: vec![LIB.into()],
         ..Default::default()
     };
     let object = vmacro::compile(&fs::read_to_string(source).unwrap(), &opts);

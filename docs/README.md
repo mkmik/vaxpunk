@@ -20,6 +20,7 @@ not numbered, because the code cites them by path.
 | ADR | Title | Status |
 | --- | --- | --- |
 | [ADR-0001](adr/0001-pal-interface-vms-vocabulary.md) | PAL interface speaks only VMS vocabulary | Accepted |
+| [ADR-0002](adr/0002-root-task-is-the-pal.md) | The root task is the PAL; the executive is a task that calls it with privileged instructions | Accepted |
 
 ### PRDs
 
@@ -29,7 +30,9 @@ not numbered, because the code cites them by path.
 
 ### Design documents
 
-None yet. The first is the PAL interface that ADR-0001 asks for.
+| Design | Title |
+| --- | --- |
+| [DESIGN-0001](design/0001-pal-interface.md) | PAL interface |
 
 ## Adding a document
 

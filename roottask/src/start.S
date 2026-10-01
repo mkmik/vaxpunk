@@ -26,13 +26,3 @@ stack_top:
 	.balign	16
 tls_block:
 	.space	64
-
-/*
- * exe_call(entry): calls a MACRO-32 routine as code outside MACRO-32 does,
- * with no argument list (AP, x13, is 0), and returns its R0.
- */
-	.text
-	.global	exe_call
-exe_call:
-	mov	x13, xzr
-	br	x0

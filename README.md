@@ -4,8 +4,10 @@ OpenVMS remake on arm64.
 
 Milestone 0 boots an unmodified seL4 kernel on QEMU aarch64 through UEFI and
 Limine, and runs a C root task that prints over the serial console. The root
-task then loads `exec.exe`, an image compiled from MACRO-32 with vtools, into
-its own address space and calls it. seL4 is
+task is the PAL ([ADR-0002](docs/adr/0002-root-task-is-the-pal.md)): it
+starts `exec.exe`, an image compiled from MACRO-32 with vtools, as a task of
+its own and serves the PAL calls its privileged instructions make
+([DESIGN-0001](docs/design/0001-pal-interface.md)). seL4 is
 built with its MCS (mixed-criticality scheduling) API: threads run on
 scheduling contexts with a budget and period, and IPC replies go through
 reply objects.
@@ -59,8 +61,9 @@ boot info: node 0 of 1, 53 untyped caps
 ...
 sched control caps: 278-278
 scheduling context: budget 5000 us per 5000 us, 40846 us used
-exec.exe: calling 0x10000
-exec.exe: returned 42
+exec.exe: started at 0x10000
+hello from the executive
+%PAL-I-HALT, exec halted at PC 0x100bc, R0 8
 root task done
 ```
 
@@ -113,9 +116,11 @@ exports its ELF's path as `ELF` for `boot`.
   the image at the root task's last vaddr, page aligned (`_end` in
   `roottask/linker.ld`); `bi->userImageFrames` counts its pages too.
 - The root task maps `exec.exe`'s sections at their link addresses (vlink's
-  default base, 0x10000) with fresh frames from the largest RAM untyped, and
-  calls the transfer address with no argument list. The image runs at EL0 in
-  the root task, which is the VMS executive's kernel mode: vrun's `SVC` calls
+  default base, 0x10000) in a new address space, with fresh frames from the
+  largest RAM untyped, and starts a thread there at the transfer address.
+  That thread, the executive, has no capabilities: its privileged
+  instructions trap to the root task, which is its fault handler
+  ([DESIGN-0001](docs/design/0001-pal-interface.md)). vrun's `SVC` calls
   aren't there.
 - Pins: seL4 by submodule commit (tag 16.0.0), Limine 11.4.1 by version and
   SHA-256 in `scripts/fetch-limine.sh`. The EDK2 firmware comes from the

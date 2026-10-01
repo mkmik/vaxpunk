@@ -1,0 +1,35 @@
+; lib.mlb: definitions executive code uses, like VMS's LIB.MLB. Use it with
+; .LIBRARY "lib.mlb" and vasm -I vtools/lib.
+
+; $PRDEF: the VAX processor registers every VAX has, PR$_name, the numbers
+; MTPR and MFPR take. vmacro compiles those it has PAL calls for
+; (docs/design/0001-pal-interface.md at the repository root).
+        .MACRO  $PRDEF
+PR$_KSP = 0                             ; stack pointers, per access mode
+PR$_ESP = 1
+PR$_SSP = 2
+PR$_USP = 3
+PR$_ISP = 4                             ; interrupt stack pointer
+PR$_P0BR = 8                            ; page table base and length
+PR$_P0LR = 9
+PR$_P1BR = 10
+PR$_P1LR = 11
+PR$_SBR = 12
+PR$_SLR = 13
+PR$_PCBB = 16                           ; process control block base
+PR$_SCBB = 17                           ; system control block base
+PR$_IPL = 18                            ; interrupt priority level
+PR$_ASTLVL = 19
+PR$_SIRR = 20                           ; software interrupt request
+PR$_SISR = 21                           ; software interrupt summary
+PR$_ICCS = 24                           ; interval clock control
+PR$_RXCS = 32                           ; console receive status and data
+PR$_RXDB = 33
+PR$_TXCS = 34                           ; console transmit status and data
+PR$_TXDB = 35
+PR$_MAPEN = 56                          ; memory management enable
+PR$_TBIA = 57                           ; translation buffer invalidates
+PR$_TBIS = 58
+PR$_SID = 62                            ; system identification
+PR$_TBCHK = 63
+        .ENDM   $PRDEF

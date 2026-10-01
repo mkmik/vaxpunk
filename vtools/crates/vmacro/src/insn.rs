@@ -61,6 +61,8 @@ pub enum Op {
     Nop,
     Halt,
     Bpt,
+    Mtpr,
+    Mfpr,
 }
 
 /// A VAX mnemonic's operation and operand size, if it is one vmacro knows.
@@ -114,6 +116,8 @@ pub fn kind(mn: &str) -> Option<(Op, Size)> {
         "NOP" => (Op::Nop, L),
         "HALT" => (Op::Halt, L),
         "BPT" => (Op::Bpt, L),
+        "MTPR" => (Op::Mtpr, L),
+        "MFPR" => (Op::Mfpr, L),
         "BNEQ" | "BNEQU" | "BEQL" | "BEQLU" | "BGTR" | "BLEQ" | "BGEQ" | "BLSS" | "BGTRU"
         | "BLEQU" | "BVC" | "BVS" | "BCC" | "BCS" | "BGEQU" | "BLSSU" => (Op::Bcc, L),
         _ => return sized(mn),
@@ -912,14 +916,70 @@ pub fn compile(
             Ok(None)
         }
         Op::Halt => {
-            g.emit("udf #0");
+            pal(g, HALT, None)?;
             Ok(None)
         }
         Op::Bpt => {
             g.emit("brk #0");
             Ok(None)
         }
+        Op::Mtpr => {
+            let v = g.read(&ops[0], size, Ext::Any)?;
+            let (Some(code), _) = ipr(g, &ops[1])? else {
+                return Err("MTPR can't write that processor register".into());
+            };
+            pal(g, code, Some(&v))?;
+            Ok(Some(test(&v, size)))
+        }
+        Op::Mfpr => {
+            let (_, Some(code)) = ipr(g, &ops[0])? else {
+                return Err("MFPR can't read that processor register".into());
+            };
+            let p = g.place(&ops[1], size)?;
+            let v = w(&pal(g, code, None)?);
+            g.store(&p, size, &v)?;
+            Ok(Some(test(&v, size)))
+        }
     }
+}
+
+/// PAL function codes (docs/design/0001-pal-interface.md): Alpha OpenVMS's,
+/// and vaxpunk's own from 0x40.
+const HALT: u32 = 0x00;
+const MFPR_IPL: u32 = 0x0E;
+const MTPR_IPL: u32 = 0x0F;
+const MTPR_TXDB: u32 = 0x40;
+
+/// The PAL calls that write and read a VAX processor register, by its
+/// number (PR$_ in $PRDEF), which must be a constant, as in AMACRO.
+fn ipr(g: &mut Gen, op: &Opnd) -> Result<(Option<u32>, Option<u32>)> {
+    let n = match op {
+        Opnd::Imm(e) => g.constant(e),
+        _ => None,
+    };
+    match n.ok_or("vmacro needs the processor register as a constant, #n")? {
+        18 => Ok((Some(MTPR_IPL), Some(MFPR_IPL))), // PR$_IPL
+        35 => Ok((Some(MTPR_TXDB), None)),          // PR$_TXDB, write-only
+        n => Err(format!("processor register {n} has no PAL call yet")),
+    }
+}
+
+/// A PAL call: `svc #0` with the function code in x7, the argument and the
+/// result in x0 (docs/design/0001-pal-interface.md). x0 and x7 are VAX R0
+/// and R7, so they wait in scratch registers. Returns the result's register.
+fn pal(g: &mut Gen, code: u32, arg: Option<&str>) -> Result<String> {
+    let (r0, r7, v) = (g.tmp()?, g.tmp()?, g.tmp()?);
+    g.emit(format!("mov {r0}, x0"));
+    g.emit(format!("mov {r7}, x7"));
+    if let Some(a) = arg {
+        g.emit(format!("mov w0, {}", w(a)));
+    }
+    g.emit(format!("mov x7, #{code}"));
+    g.emit("svc #0");
+    g.emit(format!("mov {v}, x0"));
+    g.emit(format!("mov x7, {r7}"));
+    g.emit(format!("mov x0, {r0}"));
+    Ok(v)
 }
 
 /// `v` in a scratch register, as an x register, so that R0-R5 can change.
