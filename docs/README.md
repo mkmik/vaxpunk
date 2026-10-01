@@ -30,6 +30,7 @@ kept current, like a design document.
 | [ADR-0003](adr/0003-one-cpu-many-threads.md) | Processes are threads that take turns on one VMS CPU | Accepted |
 | [ADR-0004](adr/0004-interval-timer-is-a-pal-thread.md) | The interval timer is a periodic thread of the PAL's | Accepted |
 | [ADR-0005](adr/0005-access-modes-are-threads.md) | Each access mode of a process is a thread with an address space of its own | Accepted |
+| [ADR-0006](adr/0006-cli-in-p1-runs-images-in-its-process.md) | The command interpreter lives in P1 in supervisor mode and runs images in its own process | Accepted |
 
 ### PRDs
 

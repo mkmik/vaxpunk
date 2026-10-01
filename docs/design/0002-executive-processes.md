@@ -9,9 +9,12 @@ on the PAL interface of [DESIGN-0001](0001-pal-interface.md). It follows
 take turns on one CPU, and IPL synchronizes them,
 [ADR-0004](../adr/0004-interval-timer-is-a-pal-thread.md): the interval
 timer keeps the system time, serves the timer queue and ends their quanta,
-and [ADR-0005](../adr/0005-access-modes-are-threads.md): each process has
+[ADR-0005](../adr/0005-access-modes-are-threads.md): each process has
 P0 and P1 of its own and runs its image in user mode, entering the inner
-modes through system services.
+modes through system services, and
+[ADR-0006](../adr/0006-cli-in-p1-runs-images-in-its-process.md): a command
+interpreter lives in P1 in supervisor mode and runs images in its own
+process.
 
 The executive borrows VMS's structure and names (PCB, `SCH$`, `MMG$`,
 `EXE$` routines, `SS$_` codes, the system service interfaces) but none of
@@ -26,9 +29,9 @@ its code.
 | `sched.mar` | state queues, `SCH$SCHED`, waits and wakes, the reschedule interrupt, quantum end |
 | `timeschdl.mar` | the interval timer and software timer interrupts, the system time, the timer queue, `$GETTIM`, `$SETIMR`, `$CANTIM`, `$SCHDWK`, `$CANWAK` |
 | `event.mar` | event flags, local and common |
-| `process.mar` | `$CREPRC`, process start, image activation, `$EXIT`, deletion, `$HIBER`, `$WAKE`, `$SUSPND`, `$RESUME`, `$SETPRI`, `$SETPRN`, `$CMKRNL` |
-| `qio.mar` | `$ASSIGN`, `$DASSGN`, `$QIO`, `$QIOW`: writes on the console |
-| `syssrv.mar` | the system service vector, the `CHMK` and `CHME` dispatchers, `$CMEXEC`, the exception handlers and the stubs |
+| `process.mar` | `$CREPRC`, process start, image activation, `$IMGACT`, `$EXIT`, image rundown, deletion, `$HIBER`, `$WAKE`, `$SUSPND`, `$RESUME`, `$SETPRI`, `$SETPRN`, `$CMKRNL` |
+| `qio.mar` | `$ASSIGN`, `$DASSGN`, `$QIO`, `$QIOW`: writes on the console and reads from it; the console receive interrupt and the type-ahead buffer |
+| `syssrv.mar` | the system service vector, the `CHMK` and `CHME` dispatchers, `$CMEXEC`, where processes enter user and supervisor mode, the exception handlers and the stubs |
 
 `roottask/build.rs` links them, with `vtools/lib/consolio.mar`, into
 `EXEC.EXE`, in S0 at `0x40010000`. The structures are in `vtools/lib/lib.mlb` (`$PCBDEF`,
@@ -42,15 +45,18 @@ its code.
 1. Saves the RPB address from R11.
 2. Fills the SCB: reserved instructions to `EXE$OPCDEC`, access violations
    to `EXE$ACVIOLAT`, `CHMK` to `EXE$CMODKRNL`, `CHME` to `EXE$CMODEXEC`,
-   software interrupt level 3 to `SCH$RESCHED`, level 7 to `EXE$SWTIMINT`,
-   the interval timer to `EXE$HWCLKINT`. `MTPR #PR$_SCBB`.
+   software interrupt level 3 to `SCH$RESCHED`, level 4 to `TTY$IOPOST`,
+   level 7 to `EXE$SWTIMINT`, the interval timer to `EXE$HWCLKINT`, the
+   console receiver to `TTY$RCVINT`. `MTPR #PR$_SCBB`.
 3. `MMG$INIT`: the PFN list and the pool. Then makes the vector's pages
    user readable (*System services*), before any outer mode runs.
 4. `SCH$INIT`: empty queues, and the boot context becomes the swapper,
    process 1, current, at priority 16.
 5. `EXE$INITTIM`: an empty timer queue, and the system time from
-   `RPB$L_BOOTTIME`.
-6. Lowers IPL to 0 and creates `STARTUP` from `STARTUP.EXE`.
+   `RPB$L_BOOTTIME`. `TTY$INIT`: an empty type-ahead buffer, and the
+   console receive interrupt enabled.
+6. Lowers IPL to 0 and creates the console's process, `SYSTEM`, from
+   `DCL.EXE` (*The command interpreter*).
 7. Becomes the swapper: it deletes what deleted processes left behind,
    and hibernates in between.
 
@@ -67,7 +73,9 @@ P1 are each process's own, S0 every process's:
 | `0x4FFF0000` | the RPB; `0x50000000` the boot volume, read-only |
 | `0x5FFF0000` | the boot stack's top |
 | `0x60000000` | P1: the process's `$CRETVA` pages |
-| `0x7FFE8000` | its executive stack, 16 KB, executive write; above it its user stack, 16 KB, to `0x7FFF0000` |
+| `0x7FF00000` | `VA$C_CLI`: its command interpreter, if it has one, `DCL.EXE` |
+| `0x7FFE4000` | its executive stack, 16 KB, executive write; above it its supervisor stack, supervisor write, and its user stack, each 16 KB, to `0x7FFF0000` |
+| `0x7FFEFF00` | `VA$C_FOREIGN`, at the user stack's top: the image's command line, `.ASCIC`, which `$IMGACT` puts there |
 
 - **PFNs.** `MMG$INIT` puts the PFNs from `RPB$L_FREEPFN` up on a free list,
   a stack. `MMG$ALLOCPFN` and `MMG$DEALLOCPFN` take and give back one.
@@ -82,7 +90,7 @@ P1 are each process's own, S0 every process's:
   blocks sorted by address, in 16-byte units; `EXE$DEANONPGDSIZ` frees,
   merging neighbours.
 - **Services.** `$CRETVA` and `$DELTVA` make and delete the pages of a range
-  of the process's own: all in P0, or all in P1 below the mode stacks;
+  of the process's own: all in P0, or all in P1 below `VA$C_CLI`;
   anything else is `SS$_PAGOWNVIO`. `$EXPREG` makes pages past the end of
   P0. Pages they make are user writable. The PCB keeps how far P0 and P1
   reach (`PCB$L_FREP0VA`, `PCB$L_FREP1VA`), and rundown deletes every page
@@ -116,20 +124,23 @@ The scheduler's first `SWPCTX` to the new HWPCB starts its thread at
 `EXE$PROCSTRT`, in kernel mode at IPL 0, as a VMS process starts in
 `EXE$PROCSTRT` after `SHELL` built its kernel stack:
 
-1. `EXE$IMGACT`, the image activator, finds the image on the boot volume
-   (`FIL$OPENFILE`), checks its header and that it is all in P0, and maps
-   each section: zeroed pages, the contents copied in, then the
-   protection: code user read and execute, read-only data user read, the
-   rest user write.
-2. Makes the executive and user stacks at the top of P1 and puts their
-   tops in the HWPCB.
-3. `REI` to `EXE$USRSTART`, in user mode, on the user stack, with the
-   image's transfer address in R1. There it calls the image with
-   `CALLS #0`, and `$EXIT`s with the status it returns.
+1. Makes the executive, supervisor and user stacks at the top of P1 and
+   puts their tops in the HWPCB.
+2. `IMG$ACTIVATE`, the image activator, finds the image on the boot volume
+   (`FIL$OPENFILE`), checks its header and that it is all in P0, or all
+   from `VA$C_CLI` to the stacks in P1, and maps each section: zeroed
+   pages, the contents copied in, then the protection: code read and
+   execute, read-only data read, the rest write, for user mode in P0 and
+   supervisor mode in P1.
+3. An image in P1 is a command interpreter: `EXE$CLIENTRY` (*The command
+   interpreter*). Any other, `EXE$USRENTRY`: `REI` to `EXE$USRSTART`, in
+   user mode, on an empty user stack, with the image's transfer address in
+   R1. There it calls the image with `CALLS #0`, and `$EXIT`s with the
+   status it returns.
 
-A process has no command interpreter, so, as on VMS without one, the end of
-its image is its own end: `$EXIT` deletes it. A failure status is reported
-on the console first, as a command interpreter would:
+A process without a command interpreter, as on VMS, ends with its image:
+`$EXIT` deletes it. A failure status is reported on the console first, as
+a command interpreter would:
 
 ```
 %EXEC-W-EXITED, process NOSUCH exited with status 00000910
@@ -137,9 +148,10 @@ on the console first, as a command interpreter would:
 
 ### Deletion
 
-- **Itself** (`$EXIT`, or `$DELPRC` naming itself): it runs itself down
-  (timer queue entries, every page of its P0 and P1, common event flag
-  clusters, channels, slot), goes on the swapper's queue, wakes it, and
+- **Itself** (`$EXIT` without a command interpreter, or `$DELPRC` naming
+  itself): it runs itself down (timer queue entries, every page of its P0
+  and P1, common event flag clusters, channels, slot), goes on the
+  swapper's queue, wakes it, and
   gives up the CPU for good. The swapper deletes its context with
   `DELCTX`, then frees its kernel stack and PCB, since a process can't free
   the stack it runs on.
@@ -151,6 +163,50 @@ on the console first, as a command interpreter would:
   scheduler checks, standing in for VMS's kernel AST.
 
 The swapper can't be deleted.
+
+### The command interpreter
+
+[ADR-0006](../adr/0006-cli-in-p1-runs-images-in-its-process.md): an image
+linked in P1, at `VA$C_CLI`, is a command interpreter, `DCL.EXE` the one
+there is. The image activator puts its transfer address in
+`PCB$L_CLI`, and the process keeps it, in supervisor mode, for its life:
+
+- **`EXE$CLIENTRY`** empties the kernel stack and `REI`s to `EXE$CLISTART`
+  in supervisor mode, on an empty supervisor stack, which calls the
+  command interpreter with one argument, a status: `SS$_NORMAL` when the
+  process starts, and after that each image's. If it returns, the process
+  deletes itself with `$DELPRC`.
+- **`$IMGACT image, cmdlin`** runs an image in the current process. It
+  copies the name into the PCB, and the command line, if there is one, up
+  to 255 characters, to `VA$C_FOREIGN`, where the image finds it.
+  It remembers the channels the process has in `PCB$L_CLICHANS`, runs the
+  old image down, activates the new one, which must be in P0, and calls it
+  in user mode at `EXE$USRENTRY`, on an empty user stack below the command
+  line. It returns only if the activation fails, with its status.
+  ponytail: a fixed address, standing in for `LIB$GET_FOREIGN`, which asks
+  the command interpreter.
+- **`$EXIT`**, the image's or an exception's, in a process with a command
+  interpreter: `EXE$IMGRUNDOWN` gives back the image's timer queue
+  entries, P0 pages and common event flag clusters, and the channels not
+  in `PCB$L_CLICHANS`; then `EXE$CLIENTRY` with the status.
+
+The command interpreter keeps nothing on its stack across an image; what
+it remembers is in its P1 data. `EXEC$START` creates the console's
+process, `SYSTEM`, with `DCL.EXE`:
+
+| Command | Does |
+| --- | --- |
+| `RUN image` | `$IMGACT`, with `.EXE` if the name has no type |
+| `DIRECTORY [spec]` | `$IMGACT` of `DIRECTORY.EXE`, with the spec, in capitals, as its command line |
+| `HELP` | lists the commands |
+| `LOGOUT` | returns, which deletes the process |
+
+Verbs may be abbreviated. DCL reads a line with `IO$_READPROMPT` and the
+prompt `$ `, and reports a failure status as VMS does one it has no text
+for, `%NONAME-F-NOMSG, Message number 0000000C`, after
+`%DCL-W-ACTIMAGE` if `$IMGACT` returned it. ponytail: no CTRL/Y, so an
+image that never exits keeps the console; no message texts, symbols,
+qualifiers or command procedures.
 
 ## Scheduling
 
@@ -164,6 +220,7 @@ States and queues, as VMS's `$STATEDEF`:
 | `LEF` | `SCH$GQ_LEFWQ` |
 | `CEF` | the common event block's own queue |
 | `SUSP` | `SCH$GQ_SUSPWQ` |
+| `MWAIT` | the resource's own queue: `TTY$GQ_READQ` for a console read |
 
 - **`SCH$SCHED`** takes the first process from the highest non-empty COM
   queue, makes it current and `SWPCTX`es to its HWPCB, unless it is the
@@ -244,13 +301,15 @@ Inside the executive, IPL, as on a uniprocessor VMS. `DSBINT`, `ENBINT`,
 | IPL | Protects |
 | --- | --- |
 | `IPL$_HWCLK` (24) | the interval timer interrupt runs here; the system time, `EXE$GQ_1ST_TIME` |
+| `IPL$_CONSOLE` (20) | the console receive interrupt runs here; the type-ahead buffer |
 | `IPL$_SYNCH` (8) | the scheduler's queues and PCBs, the PFN list, pool, common event blocks, the timer queue, the console |
 | `IPL$_TIMER` (7) | the software timer interrupt runs here |
+| `IPL$_IOPOST` (4) | the software interrupt that wakes the console's readers runs here |
 | `IPL$_RESCHED` (3) | the reschedule interrupt runs here; below it, the CPU may move |
 | 0 | process code |
 
 Code at or above `IPL$_SYNCH` keeps the CPU: only the interval timer
-interrupt reaches it, which takes nothing away, and it only gives the CPU
+and console interrupts reach it, which take nothing away, and it only gives the CPU
 away by calling `SCH$SCHED`. The console is shared, so a line, or a
 `$QIO`'s buffer, is written at `IPL$_SYNCH`, or another process's could
 come in the middle of it. The
@@ -309,6 +368,7 @@ can't reach them.
 | Memory | `$CRETVA`, `$DELTVA`, `$EXPREG` | `$CNTREG`, `$SETPRT`, `$LKWSET`, `$ULWSET`, `$LCKPAG`, `$ULKPAG`, `$CRMPSC`, `$MGBLSC` |
 | Time | `$GETTIM`, `$SETIMR`, `$CANTIM` | |
 | I/O | `$ASSIGN`, `$DASSGN`, `$QIO`, `$QIOW` | |
+| Images | `$IMGACT` | |
 | Other | | `$DCLAST`, `$SETAST`, `$CRELNM`, `$DELLNM`, `$TRNLNM`, `$GETSYI` |
 
 Arguments the implemented services take but ignore: `$CREPRC`'s I/O,
@@ -320,37 +380,65 @@ may call `$CMKRNL` and `$CMEXEC`. ponytail: until there are privileges.
 
 The console is the one device. `$ASSIGN` gives a channel to `OPA0:`, one of
 31, a bit in `PCB$L_CHANS`. `$QIO` writes a buffer on it, for
-`IO$_WRITEVBLK`, `IO$_WRITELBLK` and `IO$_WRITEPBLK`, at `IPL$_SYNCH`, then
-sets the event flag and the I/O status block, so the I/O is done when it
-returns and `$QIOW` is `$QIO`. ponytail: a terminal driver with I/O
-request packets replaces it.
+`IO$_WRITEVBLK`, `IO$_WRITELBLK` and `IO$_WRITEPBLK`, or reads a line into
+one, for `IO$_READVBLK`, `IO$_READLBLK`, `IO$_READPBLK`, and
+`IO$_READPROMPT`, which writes the prompt in p5 and p6 first. Then it sets
+the event flag and the I/O status block: the status, the byte count and,
+for a read, the terminator, a carriage return. So the I/O is done when
+`$QIO` returns, and `$QIOW` is `$QIO`.
+
+- **Receiving.** `TTY$RCVINT`, the console receive interrupt
+  (DESIGN-0001), puts each character in `TTY$AB_RING`, the 256-byte
+  type-ahead buffer, or drops it if the buffer is full, and requests the
+  `IPL$_IOPOST` software interrupt. `TTY$IOPOST` ends the wait of each
+  process in `TTY$GQ_READQ`.
+- **Reading**, at `IPL$_SYNCH`: takes characters from the buffer, at
+  `IPL$_CONSOLE`, and echoes them, up to a carriage return, echoed as
+  CR LF. DEL and BS erase a character, CTRL/U the line; other control
+  characters, and those past the buffer's size, are dropped. While the
+  buffer is empty the process waits in `MWAIT` on `TTY$GQ_READQ`. Echo is
+  the reader's, so what is typed ahead shows when it is read.
+
+ponytail: a buffer at a time, at `IPL$_SYNCH`, so lines don't mix; a
+terminal driver with I/O request packets, CTRL/Y and escape sequences
+replaces it.
 
 ### Exceptions
 
 An access violation or a reserved instruction in an outer mode reaches
 the executive through the SCB (DESIGN-0001, *Exceptions*).
-`EXE$ACVIOLAT` and `EXE$OPCDEC` report it on the console and exit the
-process with `SS$_ACCVIO` or `SS$_OPCDEC`, as VMS does for an image with
-no condition handler:
+`EXE$ACVIOLAT` and `EXE$OPCDEC` report it on the console and `$EXIT` with
+`SS$_ACCVIO` or `SS$_OPCDEC`, as VMS does for an image with no condition
+handler. That ends the process, or, under DCL, the image:
 
 ```
 %SYSTEM-F-ACCVIO, access violation, virtual address 40010000, PC 00010020, process SNOOP
 %EXEC-W-EXITED, process SNOOP exited with status 0000000C
 ```
 
+```
+$ RUN SNOOP
+%SYSTEM-F-ACCVIO, access violation, virtual address 40010000, PC 00010020, process SYSTEM
+%NONAME-F-NOMSG, Message number 0000000C
+```
+
 ## The boot volume's programs
 
-`roottask/sysexe/` holds the programs on the boot volume, which show the
-services at work and which `just check` boots to the end. They run in user
-mode, and write on the console with `PRINT` and `PRINTHEX` from
-`sysexe.mlb`, which call `PUT_LINE` in `sysexe/lib/print.mar`, linked into
-each: a line at a time on `OPA0:`, with `$QIOW`.
+`roottask/sysexe/` holds the programs on the boot volume: DCL, and those
+which show the services at work, which `just check` runs from DCL's
+prompt (`RUN STARTUP`, `RUN SNOOP`, a bad verb and `DIR P%NG`) and to the end. They
+run in user mode, DCL in supervisor mode, and write on the console with
+`PRINT` and `PRINTHEX` from `sysexe.mlb`, which call `PUT_LINE` in
+`sysexe/lib/print.mar`, linked into each: a line at a time on `OPA0:`,
+with `$QIOW`.
 
 | Program | Does |
 | --- | --- |
-| `STARTUP` | makes 4 pages with `$EXPREG`, checks and deletes them; creates `SLEEPER` at a higher priority, which runs at once, and `PING` and `PONG`; hibernates until `PONG` wakes it; deletes `SLEEPER`; creates `SVCTEST`, `HOG` and `TIMETEST` |
+| `DCL` | the command interpreter (*The command interpreter*) |
+| `DIRECTORY` | lists the files on the boot volume that match its command line, `*` and `%` wildcards, with their sizes in blocks, as `DIRECTORY/SIZE`; it copies the volume's directory block with `$CMKRNL`. ponytail: RMS `$SEARCH` on Files-11 replaces that |
+| `STARTUP` | makes 4 pages with `$EXPREG`, checks and deletes them; creates `SLEEPER` at a higher priority, which runs at once, and `PING` and `PONG`; waits until `PONG` sets flag 66 of their cluster; deletes `SLEEPER`; creates `SVCTEST`, `HOG` and `TIMETEST` |
 | `SLEEPER` | hibernates until it is deleted |
-| `PING`, `PONG` | take three turns through common event flags 64 and 65 of the cluster `PINGPONG`; `PONG` then wakes `STARTUP` |
+| `PING`, `PONG` | take three turns through common event flags 64 and 65 of the cluster `PINGPONG`; `PONG` then sets flag 66, which `STARTUP` waits for |
 | `SVCTEST` | checks the statuses of the services the others don't use, and of errors: local event flags, the dispatcher's checks and a stub, `$CRETVA` and `$DELTVA`, `$CMKRNL` and `$CMEXEC`; what user mode may `PROBE`, and that services refuse it the executive's data; the console's channels; `$SETPRI`, and `$SUSPND`, `$WAKE`, `$RESUME` and `$DELPRC` on a process of its own; then creates one whose image doesn't exist, which exits with `SS$_NOSUCHFILE`, and `SNOOP` and `USURP` |
 | `SNOOP` | reads S0 from user mode, and exits with `SS$_ACCVIO` |
 | `USURP` | raises IPL from user mode, and exits with `SS$_OPCDEC` |
@@ -358,7 +446,7 @@ each: a line at a time on `OPA0:`, with `$QIOW`.
 | `NUDGE` | sets `HOG`'s flag |
 | `TIMETEST` | checks that `$GETTIM` reads a time after 2026; waits for `$SETIMR`s, a delta and a time, 50 ms on, and that a cancelled one never sets its flag; hibernates through three repeating `$SCHDWK` wakeups, cancels them, and checks that the next wakeup is a new one's |
 
-When every process but the swapper is gone, the CPU idles in `WTINT`,
+When every process but the swapper waits, the CPU idles in `WTINT`,
 taking the clock's interrupts.
 
 ## Next
@@ -368,5 +456,5 @@ taking the clock's interrupts.
   deletion by a kernel AST.
 - Privileges, for `$CMKRNL` and `$CMEXEC`, and condition handlers in place
   of exiting on an exception.
-- A command interpreter, in supervisor mode.
+- CTRL/Y, to take the console back from an image, and `$FORCEX`.
 - A disk driver and Files-11, in place of the boot volume.

@@ -9,7 +9,12 @@
 ; at IPL 0. There it activates its image from the boot volume and REIs to
 ; user mode, which calls the image; when the image returns, or calls $EXIT,
 ; the process is deleted, as a VMS process is when its image exits and it
-; has no command interpreter (docs/design/0002-executive-processes.md).
+; has no command interpreter.
+;
+; An image linked in P1 is a command interpreter: it is activated there
+; and called in supervisor mode, and stays. It runs images with $IMGACT,
+; and when one exits, the process runs it down and calls the command
+; interpreter again (docs/design/0002-executive-processes.md).
 ;
         .LIBRARY "lib.mlb"
         .LIBRARY "starlet.mlb"
@@ -33,13 +38,15 @@
         .EXTERNAL SCH$REMCOM, SCH$MAKECOM, SCH$WAKEPCB, SCH$WAKE, SCH$WAIT
         .EXTERNAL SCH$SCHED, SCH$DACEFC_ALL, SGN$GW_QUANTUM
         .EXTERNAL EXE$ALONONPAGED, EXE$DEANONPGDSIZ, MMG$CREPAG, MMG$DELPAG
-        .EXTERNAL MMG$SETPRT, EXE$GL_RPB, EXE$RMVTIMQ, EXE$USRSTART
+        .EXTERNAL MMG$SETPRT, EXE$GL_RPB, EXE$RMVTIMQ, EXE$USRSTART, EXE$CLISTART
         .EXTERNAL EXE$OUTZSTRING, EXE$OUTCSTRING, EXE$OUTHEX, EXE$OUTCRLF
 
 KSTACK = 16384                          ; a process's kernel stack
 KW = PTE$M_VALID ! <PRT$C_KW @ PTE$V_PROT>
 UR = PTE$M_VALID ! <PRT$C_UR @ PTE$V_PROT>
 UW = PTE$M_VALID ! <PRT$C_UW @ PTE$V_PROT>
+SR = PTE$M_VALID ! <PRT$C_SR @ PTE$V_PROT>
+SW = PTE$M_VALID ! <PRT$C_SW @ PTE$V_PROT>
 EW = PTE$M_VALID ! <PRT$C_EW @ PTE$V_PROT>
 ; Image header fields (vtools/docs/image-format.md).
 EIHD$L_SIZE = 8
@@ -283,44 +290,77 @@ EXE$NAMPID::
         RET
 
 ; EXE$PROCSTRT: where a process starts, in kernel mode at IPL 0 on its
-; kernel stack. Activates its image, makes its stacks in P1, user and
-; executive, and REIs to EXE$USRSTART in user mode, with the image's
-; transfer address in R1. A process deleted before it ran deletes itself.
+; kernel stack. Makes its stacks in P1, executive, supervisor and user,
+; and activates its image. Calls a command interpreter in supervisor mode,
+; at EXE$CLIENTRY, and any other image in user mode, at EXE$USRENTRY. A
+; process deleted before it ran deletes itself.
 EXE$PROCSTRT::
         MOVL    SCH$GL_CURPCB, R4
         BBC     #PCB$V_DELPEN, PCB$L_STS(R4), 10$
         BRW     EXE$DELSELF
 10$:    MOVL    #VA$C_P0BASE, PCB$L_FREP0VA(R4)
         MOVL    #VA$C_STACKS, PCB$L_FREP1VA(R4)
-        BSBW    EXE$IMGACT
-        BLBC    R0, 90$
-        MOVL    R1, R6
         MOVL    #VA$C_STACKS, R0
         MOVL    #<VA$C_ESP-VA$C_STACKS>/MMG$C_PAGESIZE, R1
         MOVL    #EW, R2
         BSBW    MMG$CREPAG
         BLBC    R0, 90$
         MOVL    #VA$C_ESP, R0
-        MOVL    #<VA$C_USP-VA$C_ESP>/MMG$C_PAGESIZE, R1
+        MOVL    #<VA$C_SSP-VA$C_ESP>/MMG$C_PAGESIZE, R1
+        MOVL    #SW, R2
+        BSBW    MMG$CREPAG
+        BLBC    R0, 90$
+        MOVL    #VA$C_SSP, R0
+        MOVL    #<VA$C_USP-VA$C_SSP>/MMG$C_PAGESIZE, R1
         MOVL    #UW, R2
         BSBW    MMG$CREPAG
         BLBC    R0, 90$
         MOVL    PCB$L_HWPCB(R4), R0
         MOVL    #VA$C_ESP, HWPCB$Q_ESP(R0)
+        MOVL    #VA$C_SSP, HWPCB$Q_SSP(R0)
         MOVL    #VA$C_USP, HWPCB$Q_USP(R0)
-        SUBL2   #INTSTK$K_LENGTH, SP
-        MOVL    #INTSTK$K_LENGTH/8, R0
-        MOVL    SP, R1
-20$:    CLRQ    (R1)+
-        SOBGTR  R0, 20$
-        MOVAB   EXE$USRSTART, INTSTK$Q_PC(SP)
-        MOVL    #<PSL$C_USER@PSL$V_CURMOD>!<PSL$C_USER@PSL$V_PRVMOD>, INTSTK$Q_PS(SP)
-        MOVL    #VA$C_USP, INTSTK$Q_SP(SP)
-        MOVL    #VA$C_USP, INTSTK$Q_X_SP(SP)
-        MOVL    R6, R1
-        REI
+        MOVL    #1, R5                  ; it may be a command interpreter
+        BSBW    IMG$ACTIVATE
+        BLBC    R0, 90$
+        TSTL    PCB$L_CLI(R4)
+        BNEQ    20$
+        BRW     EXE$USRENTRY
+20$:    BRW     EXE$CLIENTRY
 90$:    $EXIT_S R0
         HALT                            ; $EXIT doesn't return
+
+; EXE$USRENTRY: R4 = the current PCB, R1 = an image's transfer address.
+; Calls the image in user mode, at EXE$USRSTART, on an empty user stack
+; below VA$C_FOREIGN, which holds its command line. Doesn't return.
+EXE$USRENTRY::
+        MOVAB   EXE$USRSTART, R2
+        MOVL    #<PSL$C_USER@PSL$V_CURMOD>!<PSL$C_USER@PSL$V_PRVMOD>, R3
+        MOVL    #VA$C_FOREIGN, R5       ; below the command line
+        BRB     REIOUT
+
+; EXE$CLIENTRY: R4 = the current PCB, which has a command interpreter,
+; R0 = the status of the image that ran last. Calls the command
+; interpreter with it, in supervisor mode, at EXE$CLISTART, on an empty
+; supervisor stack. Doesn't return.
+EXE$CLIENTRY::
+        MOVL    PCB$L_CLI(R4), R1
+        MOVAB   EXE$CLISTART, R2
+        MOVL    #<PSL$C_SUPER@PSL$V_CURMOD>!<PSL$C_SUPER@PSL$V_PRVMOD>, R3
+        MOVL    #VA$C_SSP, R5
+; REIOUT: R2 = a PC, R3 = a PSL with an outer mode, R5 = that mode's stack
+; pointer. Empties the kernel stack and REIs there, with R0 and R1 as they
+; are.
+REIOUT: ADDL3   #KSTACK, PCB$L_KSTACK(R4), SP
+        SUBL2   #INTSTK$K_LENGTH, SP
+        MOVL    #INTSTK$K_LENGTH/8, R6
+        MOVL    SP, R7
+10$:    CLRQ    (R7)+
+        SOBGTR  R6, 10$
+        MOVL    R2, INTSTK$Q_PC(SP)
+        MOVL    R3, INTSTK$Q_PS(SP)
+        MOVL    R5, INTSTK$Q_SP(SP)
+        MOVL    R5, INTSTK$Q_X_SP(SP)
+        REI
 
 ; FIL$OPENFILE: R6 = a file name, R7 = its length. Finds the file on the
 ; boot volume: R1 = its address, R2 = its size, R0 = SS$_NORMAL or
@@ -364,15 +404,19 @@ NEXTISD:
 30$:    CLRL    R3
         RSB
 
-; EXE$IMGACT: R4 = the current PCB. Activates the image the PCB names:
-; maps its sections at their addresses, which must be in P0, with their
-; contents and protection, user readable and, if they are writable, user
-; writable, and sets the end of P0 past them. R1 = its transfer address,
-; R0 = SS$_NORMAL, SS$_NOSUCHFILE, SS$_BADIMGHDR, SS$_VASFULL or
-; SS$_INSFMEM.
+; IMG$ACTIVATE: R4 = the current PCB, R5 = 1 if the image may be a command
+; interpreter, else 0. Activates the image the PCB names: maps its
+; sections at their addresses, with their contents and protection. An
+; image in P0 is user readable and, where it is writable, user writable,
+; and the end of P0 goes past it. One from VA$C_CLI up to the stacks in P1
+; is a command interpreter: supervisor readable and writable instead,
+; P1 starts at it, and its transfer address goes in PCB$L_CLI. R1 = the
+; transfer address, R0 = SS$_NORMAL, SS$_NOSUCHFILE, SS$_BADIMGHDR,
+; SS$_VASFULL or SS$_INSFMEM.
 ; ponytail: images run where they are linked; the EIAF moves them.
-EXE$IMGACT::
+IMG$ACTIVATE::
         PUSHR   #^M<R2, R3, R4, R5, R6, R7, R8, R9, R10, R11>
+        PUSHL   R5
         MOVZBL  PCB$T_IMAGE(R4), R7
         MOVAB   PCB$T_IMAGE+1(R4), R6
         BSBW    FIL$OPENFILE
@@ -408,9 +452,22 @@ EXE$IMGACT::
         BRB     10$
 20$:    CMPL    R9, #VA$C_P0BASE
         BLSSU   95$
+        MOVL    #UW, R6                 ; writable sections' PTE
+        MOVL    #UR, R7                 ; the others'
         CMPL    R11, #VA$C_S0BASE
-        BGTRU   95$
+        BGTRU   30$
         MOVL    R11, PCB$L_FREP0VA(R4)
+        BRB     35$
+30$:    TSTL    (SP)                    ; a command interpreter
+        BEQL    95$
+        CMPL    R9, #VA$C_CLI
+        BLSSU   95$
+        CMPL    R11, #VA$C_STACKS
+        BGTRU   95$
+        MOVL    R9, PCB$L_FREP1VA(R4)
+        MOVL    #SW, R6
+        MOVL    #SR, R7
+35$:
 ; Each section: zeroed pages, the contents, the protection.
         MOVL    EIHD$L_ISDOFF(R8), R10
 40$:    BSBW    NEXTISD
@@ -432,17 +489,22 @@ EXE$IMGACT::
         MOVC3   EISD$L_SECSIZE(R3), (R0), @EISD$Q_VIRT_ADDR(R3)
         MOVL    (SP)+, R3
 45$:    POPR    #^M<R0, R1>
-        MOVL    #UW, R2
+        MOVL    R6, R2
         BBS     #EISD$V_WRT, EISD$L_FLAGS(R3), 50$
-        MOVL    #UR, R2
+        MOVL    R7, R2
         BBC     #EISD$V_EXE, EISD$L_FLAGS(R3), 50$
         BISL2   #PTE$M_EXEC, R2
 50$:    BSBW    MMG$SETPRT
         BRB     40$
 60$:    ADDL3   R8, EIHD$L_ACTIVOFF(R8), R0
         MOVL    EIHA$Q_TFRADR1(R0), R1
-        MOVL    #SS$_NORMAL, R0
-99$:    POPR    #^M<R2, R3, R4, R5, R6, R7, R8, R9, R10, R11>
+        CMPL    R11, #VA$C_S0BASE
+        BLEQU   65$
+        MOVL    SCH$GL_CURPCB, R0       ; R4 is gone
+        MOVL    R1, PCB$L_CLI(R0)
+65$:    MOVL    #SS$_NORMAL, R0
+99$:    TSTL    (SP)+                   ; R5's copy
+        POPR    #^M<R2, R3, R4, R5, R6, R7, R8, R9, R10, R11>
         RSB
 90$:    MOVL    #SS$_BADIMGHDR, R0
         BRB     99$
@@ -451,12 +513,20 @@ EXE$IMGACT::
 95$:    MOVL    #SS$_VASFULL, R0
         BRB     99$
 
-; $EXIT code: ends the image. A process has no command interpreter yet, so
-; its image's end is its own: it is deleted. A failure status is reported
-; on the console, as a command interpreter would. Doesn't return.
+; $EXIT code: ends the image. In a process with a command interpreter, it
+; runs the image down and calls the command interpreter with code. In one
+; without, the image's end is the process's: it is deleted, and a failure
+; status is reported on the console, as a command interpreter would.
+; Doesn't return.
         .ENTRY  EXE$EXIT, ^M<>
         MOVL    SCH$GL_CURPCB, R4
-        BLBS    4(AP), 10$
+        TSTL    PCB$L_CLI(R4)
+        BEQL    5$
+        MOVL    4(AP), R8
+        BSBW    EXE$IMGRUNDOWN
+        MOVL    R8, R0
+        BRW     EXE$CLIENTRY
+5$:     BLBS    4(AP), 10$
         DSBINT  #IPL$_SYNCH             ; the console, a line at a time
         MOVAB   EXITMSG, R1
         JSB     G^EXE$OUTZSTRING
@@ -470,31 +540,47 @@ EXE$IMGACT::
         ENBINT
 10$:    BRW     EXE$DELSELF
 
-; EXE$RUNDOWN: R4 = the current PCB. Gives back what its process holds:
-; its timer queue entries, its pages in P0 and P1, its common event flag
-; clusters, its channels and its slot, unless $DELPRC gave that to another
-; process already. Runs in the process's own context, since P0 and P1 are
-; the current process's. Uses R0-R3.
-; ponytail: every page from P0's start to its end, mapped or not; a list
-; of the pages a process has if that gets slow.
-EXE$RUNDOWN::
+; EXE$IMGRUNDOWN: R4 = the current PCB. Gives back what the image that ran
+; in it holds: its timer queue entries, its pages in P0, its common event
+; flag clusters, and its channels, all but the command interpreter's,
+; PCB$L_CLICHANS. Uses R0-R3.
+; ponytail: what the command interpreter holds too, but its channels; it
+; uses nothing else yet.
+EXE$IMGRUNDOWN::
         MOVL    PCB$L_PID(R4), R0
         MNEGL   #1, R1
         CLRL    R2
         BSBW    EXE$RMVTIMQ
-        MOVL    #VA$C_P0BASE, R0
+        BSBB    DELP0
+        BSBW    SCH$DACEFC_ALL
+        MCOML   PCB$L_CLICHANS(R4), R0
+        BICL2   R0, PCB$L_CHANS(R4)
+        RSB
+
+; DELP0: R4 = the current PCB. Deletes the pages of its P0. Uses R0-R3.
+; ponytail: every page from P0's start to its end, mapped or not; a list
+; of the pages a process has if that gets slow.
+DELP0:  MOVL    #VA$C_P0BASE, R0
         SUBL3   R0, PCB$L_FREP0VA(R4), R1
         BLEQ    10$
         ASHL    #-MMG$C_VPCTX, R1, R1
         BSBW    MMG$DELPAG
-10$:    MOVL    PCB$L_FREP1VA(R4), R0
+10$:    MOVL    #VA$C_P0BASE, PCB$L_FREP0VA(R4)
+        RSB
+
+; EXE$RUNDOWN: R4 = the current PCB. Gives back what its process holds:
+; what EXE$IMGRUNDOWN does, then its pages in P1, its other channels, and
+; its slot, unless $DELPRC gave that to another process already. Runs in
+; the process's own context, since P0 and P1 are the current process's.
+; Uses R0-R3.
+EXE$RUNDOWN::
+        BSBW    EXE$IMGRUNDOWN
+        MOVL    PCB$L_FREP1VA(R4), R0
         SUBL3   R0, #VA$C_P1END, R1
         BLEQ    20$
         ASHL    #-MMG$C_VPCTX, R1, R1
         BSBW    MMG$DELPAG
-20$:    MOVL    #VA$C_P0BASE, PCB$L_FREP0VA(R4)
-        MOVL    #VA$C_P1END, PCB$L_FREP1VA(R4)
-        BSBW    SCH$DACEFC_ALL
+20$:    MOVL    #VA$C_P1END, PCB$L_FREP1VA(R4)
         CLRL    PCB$L_CHANS(R4)
         DSBINT  #IPL$_SYNCH
         MOVZWL  PCB$L_PID(R4), R0
@@ -713,5 +799,64 @@ SUSPEND:
         .ENTRY  EXE$CMKRNL, ^M<>
         CALLG   @8(AP), @4(AP)
         RET
+
+; $IMGACT image, cmdlin: runs image in the current process, as a command
+; interpreter does: runs down the image there was, keeping the channels
+; the process has now, activates image in P0 and calls it in user mode,
+; with cmdlin, the rest of its command line, if there is one, at
+; VA$C_FOREIGN. Returns only if the activation fails, with its status;
+; SS$_IVLOGNAM for a name longer than 39 characters, SS$_BADPARAM for a
+; command line longer than 255. When the image exits, the command
+; interpreter is called again with its status.
+; ponytail: VMS's $IMGACT only activates, and the command interpreter
+; calls the image itself, which asks it for the command line with
+; LIB$GET_FOREIGN.
+        .ENTRY  EXE$IMGACT, ^M<R2, R3, R4, R5, R6, R7, R8>
+        MOVL    4(AP), R6
+        BEQL    85$
+        MOVL    R6, R1
+        BSBW    EXE$PROBER_DSC
+        BLBC    R0, 90$
+        MOVZWL  (R6), R7
+        BEQL    85$
+        CMPL    R7, #39
+        BGTRU   85$
+        CLRL    R8                      ; the command line, if any
+        CMPB    (AP), #2
+        BLSSU   10$
+        MOVL    8(AP), R8
+        BEQL    10$
+        MOVL    R8, R1
+        BSBW    EXE$PROBER_DSC
+        BLBC    R0, 90$
+        CMPW    (R8), #255
+        BGTRU   87$
+; Both before P0, which may hold them, goes. The user stack starts below
+; the command line.
+10$:    MOVL    SCH$GL_CURPCB, R4
+        MOVAB   PCB$T_IMAGE(R4), R0
+        MOVB    R7, (R0)+
+        MOVL    4(R6), R1
+        BSBW    COPYNAME
+        CLRB    @#VA$C_FOREIGN
+        TSTL    R8
+        BEQL    20$
+        MOVB    (R8), @#VA$C_FOREIGN
+        MOVC3   (R8), @4(R8), @#VA$C_FOREIGN+1
+20$:    MOVL    SCH$GL_CURPCB, R4
+        MOVL    PCB$L_CHANS(R4), PCB$L_CLICHANS(R4)
+        BSBW    EXE$IMGRUNDOWN
+        CLRL    R5                      ; P0 only
+        BSBW    IMG$ACTIVATE
+        BLBC    R0, 80$
+        BRW     EXE$USRENTRY
+80$:    MOVL    R0, R6
+        BSBW    DELP0
+        MOVL    R6, R0
+        RET
+85$:    MOVL    #SS$_IVLOGNAM, R0
+        RET
+87$:    MOVL    #SS$_BADPARAM, R0
+90$:    RET
 
         .END

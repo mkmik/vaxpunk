@@ -1078,6 +1078,9 @@ const MTPR_SCBB: u32 = 0x17;
 const MTPR_SIRR: u32 = 0x18;
 const MFPR_SISR: u32 = 0x19;
 const MTPR_TXDB: u32 = 0x40;
+const MTPR_RXCS: u32 = 0x43;
+const MFPR_RXCS: u32 = 0x44;
+const MFPR_RXDB: u32 = 0x45;
 const CHME: u32 = 0x82;
 const CHMK: u32 = 0x83;
 const CHMS: u32 = 0x84;
@@ -1099,6 +1102,8 @@ fn ipr(g: &mut Gen, op: &Opnd) -> Result<(Option<u32>, Option<u32>)> {
         18 => Ok((Some(MTPR_IPL), Some(MFPR_IPL))), // PR$_IPL
         20 => Ok((Some(MTPR_SIRR), None)), // PR$_SIRR, write-only
         21 => Ok((None, Some(MFPR_SISR))), // PR$_SISR, read-only
+        32 => Ok((Some(MTPR_RXCS), Some(MFPR_RXCS))), // PR$_RXCS
+        33 => Ok((None, Some(MFPR_RXDB))), // PR$_RXDB, read-only
         35 => Ok((Some(MTPR_TXDB), None)), // PR$_TXDB, write-only
         n => Err(format!("processor register {n} has no PAL call yet")),
     }

@@ -35,11 +35,18 @@ fn main() {
     let stb = symbol_table(&exec.map);
     let print = compile("sysexe/lib/print.mar");
     let mut files = vec![("EXEC.EXE".to_string(), exec.image.write())];
-    // Each process has its own P0, so every image goes at the same address.
+    // Each process has its own P0, so every image goes at the same address,
+    // but DCL: linked in P1, at VA$C_CLI, it is a command interpreter, which
+    // stays while the images it runs come and go in P0.
     for source in sources("sysexe", &["mar"]) {
         let name = source.file_stem().unwrap().to_str().unwrap().to_uppercase();
         let modules = [compile(&source), print.clone(), stb.clone()];
-        let image = link(&name, vlink::DEFAULT_BASE, None, &modules);
+        let base = if name == "DCL" {
+            0x7FF0_0000
+        } else {
+            vlink::DEFAULT_BASE
+        };
+        let image = link(&name, base, None, &modules);
         files.push((format!("{name}.EXE"), image.image.write()));
     }
     fs::write(out.join("sys.vol"), volume(&files)).unwrap();

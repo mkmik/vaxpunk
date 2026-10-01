@@ -52,6 +52,7 @@ IPL$_RESCHED = 3                        ; rescheduling software interrupt
 IPL$_IOPOST = 4                         ; I/O post processing
 IPL$_TIMER = 7                          ; software timer: quantum end
 IPL$_SYNCH = 8                          ; the scheduler's database
+IPL$_CONSOLE = 20                       ; console receive interrupt
 IPL$_HWCLK = 24                         ; interval timer interrupt
 IPL$_POWER = 31                         ; everything blocked
         .ENDM   $IPLDEF
@@ -99,7 +100,8 @@ SCB$L_CHMS = ^X48                       ; to supervisor
 SCB$L_CHMU = ^X4C                       ; to user
 SCB$L_SOFTINT = ^X80                    ; software interrupt level n at +4*n
 SCB$L_INTTIM = ^XC0                     ; interval timer, at IPL$_HWCLK
-SCB$K_LENGTH = ^XC4
+SCB$L_CONSRCV = ^XF8                    ; console receive, at IPL$_CONSOLE
+SCB$K_LENGTH = ^XFC
         .ENDM   $SCBDEF
 
 ; $INTSTKDEF: the frame the PAL pushes on the stack of the mode it delivers
@@ -150,9 +152,12 @@ MMG$C_VPCTX = 12                        ; address bits in a page
 VA$C_P0BASE = ^X00001000                ; page 0 is never mapped
 VA$C_S0BASE = ^X40000000                ; past P0's end
 VA$C_P1BASE = ^X60000000                ; past S0's end
-VA$C_STACKS = ^X7FFE8000                ; the mode stacks, executive's first
-VA$C_ESP = ^X7FFEC000                   ; the executive stack's top
+VA$C_CLI = ^X7FF00000                   ; a command interpreter's image, up to the stacks
+VA$C_STACKS = ^X7FFE4000                ; the mode stacks, executive's first
+VA$C_ESP = ^X7FFE8000                   ; the executive stack's top
+VA$C_SSP = ^X7FFEC000                   ; the supervisor stack's top
 VA$C_USP = ^X7FFF0000                   ; the user stack's top
+VA$C_FOREIGN = ^X7FFEFF00               ; an image's command line, .ASCIC, from $IMGACT, above its stack
 VA$C_P1END = ^X7FFF0000
         .ENDM   $VADEF
 
@@ -181,6 +186,7 @@ BVD$C_BLOCK = 512
 
 ; $STATEDEF: scheduling states, SCH$C_.
         .MACRO  $STATEDEF
+SCH$C_MWAIT = 2                         ; resource wait: the console, for a read
 SCH$C_CEF = 3                           ; common event flag wait
 SCH$C_LEF = 5                           ; local event flag wait
 SCH$C_HIB = 7                           ; hibernating
@@ -217,6 +223,8 @@ PCB$T_LNAME = 72                        ; process name, .ASCIC, 15 characters
 PCB$T_IMAGE = 88                        ; image name, .ASCIC, 39 characters
 PCB$Q_HWPCB = 128                       ; its HWPCB, if it isn't the boot one
 PCB$L_CHANS = 256                       ; bit n: channel n is assigned
+PCB$L_CLI = 260                         ; its command interpreter's transfer address, or 0
+PCB$L_CLICHANS = 264                    ; the channels it keeps when an image exits
 PCB$K_LENGTH = 272
 PCB$V_WAKEPEN = 0                       ; a $WAKE came while not hibernating
 PCB$V_WALL = 1                          ; the wait is for all of EFWM

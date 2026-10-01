@@ -218,6 +218,8 @@ function codes are in
 | `MTPR src, #PR$_SCBB`, `MFPR #PR$_SCBB, dst` | `MTPR_SCBB`, `MFPR_SCBB` |
 | `MTPR src, #PR$_SIRR`, `MFPR #PR$_SISR, dst` | `MTPR_SIRR`, `MFPR_SISR` |
 | `MTPR src, #PR$_TXDB` | `MTPR_TXDB`, a console character |
+| `MTPR src, #PR$_RXCS`, `MFPR #PR$_RXCS, dst` | `MTPR_RXCS`, `MFPR_RXCS`: the console receive status, a character waiting and its interrupt enable |
+| `MFPR #PR$_RXDB, dst` | `MFPR_RXDB`, the console character received |
 | `CHMK #code`, `CHME`, `CHMS`, `CHMU` | `CHMK`, `CHME`, `CHMS`, `CHMU`: the code goes in R0, and R0 comes back with what the service left there |
 | `PROBER mode, len, base`, `PROBEW` | `PROBER`, `PROBEW`: base, len and mode in R0-R2, which come back, as R7 does; Z is set if the mode may not read (write) the first and last byte, as on the VAX |
 | `REI` | `REI`: resumes at the PC in the frame on the stack, with R7 from it too |

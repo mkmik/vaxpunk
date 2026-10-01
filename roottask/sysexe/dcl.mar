@@ -1,0 +1,243 @@
+        .TITLE  DCL     The command interpreter
+        .IDENT  /V0.1/
+;
+; A small DCL. build.rs links it in P1, at VA$C_CLI, which makes it a
+; command interpreter: EXEC$START creates the console's process, SYSTEM,
+; with it, and the executive calls it in supervisor mode, with SS$_NORMAL
+; at first and then, each time an image it runs exits, with the image's
+; status (docs/design/0002-executive-processes.md). Its data stays in P1
+; from one call to the next. It reports a failure status, prompts for a
+; command on the console and does it:
+;
+;   RUN image   runs image, image.EXE if it has no type, in this process
+;   DIRECTORY [spec]
+;               runs DIRECTORY.EXE, with spec as its command line
+;   HELP        lists the commands
+;   LOGOUT      ends the process
+;
+; A verb may be abbreviated, to as little as its first letter.
+; ponytail: no message texts, symbols, qualifiers or command procedures.
+;
+        .LIBRARY "starlet.mlb"
+        .LIBRARY "sysexe.mlb"
+        $SSDEF
+        $IODEF
+
+        .EXTERNAL PUT_LINE
+
+LINESIZE = 255
+
+; ADDTEXT "text": appends text to the message in MSG. Uses R0-R2.
+        .MACRO  ADDTEXT TEXT, ?L
+        .SAVE_PSECT LOCAL_BLOCK
+        .PSECT  $LITERAL$
+L:      .ASCIC  TEXT
+        .RESTORE_PSECT
+        MOVAB   L, R1
+        BSBW    ADDCSTR
+        .ENDM   ADDTEXT
+
+        .PSECT  DATA, NOEXE, WRT, LONG
+CHAN:   .LONG   0                       ; OPA0:'s, once assigned
+OPA0:   .ASCID  "OPA0:"
+PROMPT: .ASCII  "$ "
+IOSB:   .BLKQ   1
+LINE:   .BLKB   LINESIZE                ; the command line
+TOKEN:  .BLKB   LINESIZE+4              ; a word of it, in capitals, and room for .EXE
+TOKDSC: .LONG   0                       ; a descriptor of TOKEN: its length
+        .ADDRESS TOKEN
+DIRIMG: .ASCID  "DIRECTORY.EXE"
+MSG:    .BLKB   256                     ; a message being made, .ASCIC
+CHAR:   .BLKB   1
+V_RUN:  .ASCIC  "RUN"
+V_HELP: .ASCIC  "HELP"
+V_LOGOUT:
+        .ASCIC  "LOGOUT"
+V_DIRECTORY:
+        .ASCIC  "DIRECTORY"
+DOTEXE: .ASCII  ".EXE"
+SEVERITY:
+        .ASCII  "WSEIF???"
+HEX:    .ASCII  "0123456789ABCDEF"
+
+        .PSECT  CODE, EXE, LONG
+        .ENTRY  DCL, ^M<R2, R3, R4, R5, R6, R7, R8>
+        TSTL    CHAN
+        BNEQ    10$
+        $ASSIGN_S DEVNAM=OPA0, CHAN=CHAN
+        BLBC    R0, QUIT
+10$:    BLBS    4(AP), NEXT
+        MOVZBL  #^A/%/, R0
+        MOVL    4(AP), R1
+        BSBW    STATUS
+NEXT:   $QIOW_S CHAN=CHAN, FUNC=#IO$_READPROMPT, IOSB=IOSB, P1=LINE, P2=#LINESIZE, P5=#PROMPT, P6=#2
+        BLBC    R0, QUIT
+        MOVAB   LINE, R6
+        MOVZWL  IOSB+2, R7
+        ADDL2   R6, R7                  ; past the line
+        BSBW    WORD
+        TSTL    R8
+        BEQL    NEXT
+        MOVAB   V_RUN, R1
+        BSBW    VERB
+        BLBS    R0, RUN
+        MOVAB   V_HELP, R1
+        BSBW    VERB
+        BLBS    R0, HELP
+        MOVAB   V_LOGOUT, R1
+        BSBW    VERB
+        BLBS    R0, LOGOUT
+        MOVAB   V_DIRECTORY, R1
+        BSBW    VERB
+        BLBS    R0, DIRECTORY
+        PRINT   "%DCL-W-IVVERB, unrecognized command verb - check validity and spelling"
+        ADDTEXT " \"
+        BSBW    ADDTOKEN
+        ADDTEXT "\"
+        BSBW    SAY
+        BRB     NEXT
+LOGOUT: MOVL    #SS$_NORMAL, R0         ; the process ends
+QUIT:   RET
+
+HELP:   PRINT   "  RUN image   runs image, image.EXE if it has no type"
+        PRINT   "  DIRECTORY [spec]"
+        PRINT   "              lists the files spec names, * and % wildcards"
+        PRINT   "  HELP        lists the commands"
+        PRINT   "  LOGOUT      ends the process"
+        BRW     NEXT
+
+; RUN image: runs it with $IMGACT, which returns only if it can't.
+RUN:    BSBW    WORD
+        TSTL    R8
+        BNEQ    10$
+        PRINT   "%DCL-W-INSFPRM, missing command parameters - supply all required parameters"
+        BRW     NEXT
+10$:    CLRL    R0                      ; a type?
+15$:    CMPB    TOKEN[R0], #^A/./
+        BEQL    20$
+        AOBLSS  R8, R0, 15$
+        MOVAB   TOKEN[R8], R0
+        MOVL    DOTEXE, (R0)
+        ADDL2   #4, R8
+20$:    MOVL    R8, TOKDSC
+        $IMGACT_S IMAGE=TOKDSC
+        MOVAB   TOKDSC, R1
+        BRB     ACTFAIL
+
+; DIRECTORY [spec]: runs DIRECTORY.EXE with the spec, if there is one.
+DIRECTORY:
+        BSBW    WORD
+        MOVL    R8, TOKDSC
+        $IMGACT_S IMAGE=DIRIMG, CMDLIN=TOKDSC
+        MOVAB   DIRIMG, R1
+; ACTFAIL: R0 = the status $IMGACT returned, R1 = the image's descriptor.
+; Reports it, and prompts for the next command.
+ACTFAIL:
+        PUSHL   R0
+        PUSHL   R1
+        ADDTEXT "%DCL-W-ACTIMAGE, error activating image "
+        MOVL    (SP)+, R0
+        MOVZWL  (R0), R2
+        MOVL    4(R0), R1
+        BSBW    ADD
+        BSBW    SAY
+        MOVZBL  #^A/-/, R0
+        MOVL    (SP)+, R1
+        BSBW    STATUS
+        BRW     NEXT
+
+; WORD: R6 = the next character of the line, R7 = past its last. Skips
+; blanks, then copies the characters up to the next blank, in capitals, to
+; TOKEN, with R6 past them. R8 = their count, 0 at the end of the line.
+; Uses R0.
+WORD:   CLRL    R8
+10$:    CMPL    R6, R7
+        BGEQU   40$
+        CMPB    (R6), #^A/ /
+        BNEQ    20$
+        INCL    R6
+        BRB     10$
+20$:    CMPL    R6, R7
+        BGEQU   40$
+        MOVZBL  (R6), R0
+        CMPB    R0, #^A/ /
+        BEQL    40$
+        CMPB    R0, #^A/a/
+        BLSSU   30$
+        CMPB    R0, #^A/z/
+        BGTRU   30$
+        SUBB2   #^A/a/-^A/A/, R0
+30$:    MOVB    R0, TOKEN[R8]
+        INCL    R8
+        INCL    R6
+        BRB     20$
+40$:    RSB
+
+; VERB: R1 = a verb, .ASCIC. R0 = 1 if the R8 characters in TOKEN are
+; its first ones, else 0. Uses R2.
+VERB:   CLRL    R0
+        MOVZBL  (R1)+, R2
+        CMPL    R8, R2
+        BGTRU   90$
+        CLRL    R2
+10$:    CMPL    R2, R8
+        BGEQU   80$
+        CMPB    TOKEN[R2], (R1)[R2]
+        BNEQ    90$
+        INCL    R2
+        BRB     10$
+80$:    MOVL    #1, R0
+90$:    RSB
+
+; STATUS: R0 = % for a message, - for one that follows another, R1 = a
+; status. Writes the message VMS writes for a status it has no text for.
+; Uses R0-R5.
+STATUS: MOVL    R1, R4
+        BSBB    ADDCHAR
+        ADDTEXT "NONAME-"
+        BICL3   #^C7, R4, R0
+        MOVZBL  SEVERITY[R0], R0
+        BSBB    ADDCHAR
+        ADDTEXT "-NOMSG, Message number "
+        MOVL    #8, R5
+10$:    ROTL    #4, R4, R4
+        EXTZV   #0, #4, R4, R0
+        MOVZBL  HEX[R0], R0
+        BSBB    ADDCHAR
+        SOBGTR  R5, 10$
+; SAY: writes the message in MSG, and empties it. Uses R0 and R1.
+SAY:    PUSHAB  MSG
+        CALLS   #1, G^PUT_LINE
+        CLRB    MSG
+        RSB
+
+; ADDTOKEN: appends the R8 characters in TOKEN to MSG. Uses R0-R2.
+ADDTOKEN:
+        MOVAB   TOKEN, R1
+        MOVL    R8, R2
+        BRB     ADD
+
+; ADDCHAR: appends the character in R0 to MSG. Uses R0-R2.
+ADDCHAR:
+        MOVB    R0, CHAR
+        MOVAB   CHAR, R1
+        MOVL    #1, R2
+        BRB     ADD
+
+; ADDCSTR: appends the .ASCIC string at R1 to MSG. Uses R0-R2.
+ADDCSTR:
+        MOVZBL  (R1)+, R2
+; ADD: appends the R2 bytes at R1 to MSG, as many as fit. Uses R0-R2.
+ADD:    MOVZBL  MSG, R0
+10$:    TSTL    R2
+        BEQL    20$
+        CMPL    R0, #255
+        BGEQU   20$
+        INCL    R0
+        MOVB    (R1)+, MSG[R0]
+        DECL    R2
+        BRB     10$
+20$:    MOVB    R0, MSG
+        RSB
+
+        .END    DCL

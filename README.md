@@ -66,12 +66,23 @@ boot info: node 0 of 1, 53 untyped caps
 ...
 sched control caps: 278-278
 scheduling context: budget 5000 us per 5000 us, 12897 us used
-EXEC.EXE: started at 0x10aa8, 29 of 1024 pages in use
-%EXEC-I-START, vaxpunk executive, free pages: 00000363
-STARTUP: $EXPREG made 4 pages, and they hold what I wrote, at 50000000
+EXEC.EXE: started at 0x40010b68, 43 of 1024 pages in use
+%EXEC-I-START, vaxpunk executive, free pages: 00000355
+$
+```
+
+The `$` is DCL's prompt, on the console's process, `SYSTEM`. `RUN image`
+runs an image from the boot volume (`.EXE` is the default type),
+`DIRECTORY` lists the volume's files (`DIR P%NG`, `DIR *.EXE`), `HELP`
+lists the commands and `LOGOUT` ends the process. `RUN STARTUP` starts the
+programs that put the executive's services to work:
+
+```
+$ RUN STARTUP
+STARTUP: $EXPREG made 4 pages, and they hold what I wrote, at 00031000
 SLEEPER: hibernating until I'm deleted
 STARTUP: created SLEEPER, which ran first, PID 00030003
-STARTUP: created PING and PONG; hibernating until PONG wakes me
+STARTUP: created PING and PONG; waiting until PONG wakes me
 PING 00000001
   PONG 00000001
 PING 00000002
@@ -82,24 +93,29 @@ PONG: woke STARTUP, exiting
 PING: done, returning
 STARTUP: woken, deleting SLEEPER
 STARTUP: done, SVCTEST, HOG and TIMETEST next
-TIMETEST: the system time's high longword is 00BC34E7
+$ TIMETEST: the system time's high longword is 00BC3534
 SLEEPER: hibernating until I'm deleted
 HOG: NUDGE ran while I computed: preempted at quantum end
 SVCTEST: ok
 %EXEC-W-EXITED, process NOSUCH exited with status 00000910
+%SYSTEM-F-ACCVIO, access violation, virtual address 40010000, PC 00010020, process SNOOP
+%EXEC-W-EXITED, process SNOOP exited with status 0000000C
+%SYSTEM-F-OPCDEC, reserved instruction at PC 00010030, process USURP
+%EXEC-W-EXITED, process USURP exited with status 0000043C
 TIMETEST: ok
 ```
 
-The CPU then idles, taking a clock interrupt every 10 ms, until QEMU is
-stopped. `just check` boots the same way without a console, prints the
-executive's part and fails unless the processes ran to the end.
+STARTUP runs in `SYSTEM`, and DCL prompts again once it returns, while
+the processes it created go on. Between commands the CPU idles, taking a
+clock interrupt every 10 ms. There is no CTRL/Y yet: an image that never
+exits, such as `SLEEPER`, keeps the console until QEMU is stopped. `just
+check` boots the same way without a terminal, types `RUN STARTUP`, `RUN
+SNOOP`, a bad verb and `DIR P%NG`, prints the executive's part and fails unless the
+processes ran to the end.
 
 EDK2 prints a few `Error: Image at ... start failed` and `Tpm2...` lines
-before Limine starts. That is normal for the firmware QEMU ships.
-
-Nothing in the guest reads the serial input yet. After a few dozen keystrokes
-QEMU stops reading the keyboard, and then `Ctrl-A x` no longer arrives. Stop
-QEMU with `pkill -f qemu-system-aarch64` instead.
+before Limine starts. That is normal for the firmware QEMU ships. Don't
+type before DCL's prompt: EDK2 and Limine read keys too.
 
 Day to day: edit `roottask/` (`src/` for the PAL, `exec/` for the
 executive, `sysexe/` for the programs on the boot volume), then `cargo run

@@ -1,0 +1,225 @@
+        .TITLE  DIRECTORY Lists the files on the boot volume
+        .IDENT  /V0.1/
+;
+; DCL's DIRECTORY [spec] runs this, with spec, in capitals, as its command
+; line at VA$C_FOREIGN. Lists the files on the boot volume whose names
+; match spec, as DIRECTORY/SIZE does: each name, with version 1, and its
+; size in blocks, then the totals. * matches any characters, % one; a
+; spec without a type matches any type, and a version is ignored. No spec
+; is *.*.
+; ponytail: copies the executive's boot volume directory with $CMKRNL;
+; RMS $SEARCH on a Files-11 volume replaces that.
+;
+        .LIBRARY "lib.mlb"
+        .LIBRARY "starlet.mlb"
+        .LIBRARY "sysexe.mlb"
+        $VADEF
+        $RPBDEF
+        $BVDDEF
+        $SSDEF
+
+        .EXTERNAL EXE$GL_RPB, PUT_LINE
+
+NAMECOL = 20                            ; where the size goes
+
+        .PSECT  DATA, NOEXE, WRT, LONG
+DIR:    .BLKB   BVD$C_BLOCK             ; the boot volume's directory
+SPEC:   .BLKB   260                     ; what to list, with .* if it has no type
+LINE:   .BLKB   256                     ; a line being made, .ASCIC
+CHAR:   .BLKB   1
+FILES:  .LONG   0
+BLOCKS: .LONG   0
+SPECLEN:
+        .LONG   0                       ; SPEC's length
+
+        .PSECT  CODE, EXE, LONG
+        .ENTRY  START, ^M<R2, R3, R4, R5, R6, R7, R8, R9, R10, R11>
+        $CMKRNL_S ROUTIN=GETDIR
+        BLBC    R0, 90$
+; The spec: the command line up to a version, *.* if empty, .* added if
+; it has no type.
+        MOVZBL  @#VA$C_FOREIGN, R1
+        MOVL    #VA$C_FOREIGN+1, R3
+        CLRL    R5
+10$:    CMPL    R5, R1
+        BGEQU   15$
+        MOVB    (R3)[R5], R0
+        CMPB    R0, #59                 ; a semicolon: the version
+        BEQL    15$
+        MOVB    R0, SPEC[R5]
+        INCL    R5
+        BRB     10$
+15$:    TSTL    R5
+        BNEQ    20$
+        MOVB    #^A/*/, SPEC
+        INCL    R5
+20$:    CLRL    R0
+25$:    CMPB    SPEC[R0], #^A/./
+        BEQL    30$
+        AOBLSS  R5, R0, 25$
+        MOVB    #^A/./, SPEC[R5]
+        MOVB    #^A/*/, SPEC+1[R5]
+        ADDL2   #2, R5
+; Each matching file.
+30$:    MOVL    R5, SPECLEN
+        PRINT   ""
+        PRINT   "Directory SYS$SYSTEM:"
+        PRINT   ""
+        MOVAB   DIR, R6
+        MOVL    #BVD$C_BLOCK/BVD$K_LENGTH, R7
+40$:    MOVZBL  (R6), R2
+        BEQL    60$
+        MOVAB   1(R6), R3
+        BSBW    MATCH
+        BLBC    R0, 50$
+        MOVAB   1(R6), R1
+        BSBW    ADD
+        MOVZBL  #59, R0                 ; a semicolon
+        BSBW    ADDCHAR
+        MOVZBL  #^A/1/, R0
+        BSBW    ADDCHAR
+45$:    MOVZBL  #^A/ /, R0
+        BSBW    ADDCHAR
+        CMPB    LINE, #NAMECOL
+        BLSSU   45$
+        ADDL3   #BVD$C_BLOCK-1, BVD$L_SIZE(R6), R1
+        DIVL2   #BVD$C_BLOCK, R1
+        ADDL2   R1, BLOCKS
+        MOVL    #6, R3
+        BSBW    ADDDEC
+        BSBW    SAY
+        INCL    FILES
+50$:    ADDL2   #BVD$K_LENGTH, R6
+        SOBGTR  R7, 40$
+60$:    TSTL    FILES
+        BNEQ    70$
+        PRINT   "%DIRECT-W-NOFILES, no files found"
+        BRB     80$
+70$:    PRINT   ""
+        MOVAB   TOTAL, R1
+        MOVZBL  (R1)+, R2
+        BSBW    ADD
+        MOVL    FILES, R1
+        CLRL    R3
+        BSBW    ADDDEC
+        MOVAB   TOTAL2, R1
+        CMPL    FILES, #1
+        BNEQ    75$
+        MOVAB   TOTAL1, R1
+75$:    MOVZBL  (R1)+, R2
+        BSBW    ADD
+        MOVL    BLOCKS, R1
+        CLRL    R3
+        BSBW    ADDDEC
+        MOVAB   TOTAL3, R1
+        MOVZBL  (R1)+, R2
+        BSBW    ADD
+        BSBW    SAY
+80$:    MOVL    #SS$_NORMAL, R0
+90$:    RET
+
+        .PSECT  $LITERAL$
+TOTAL:  .ASCIC  "Total of "
+TOTAL1: .ASCIC  " file, "
+TOTAL2: .ASCIC  " files, "
+TOTAL3: .ASCIC  " blocks."
+        .PSECT  CODE
+
+; GETDIR: in kernel mode, through $CMKRNL: copies the boot volume's
+; directory block to DIR.
+        .ENTRY  GETDIR, ^M<R2, R3, R4, R5>
+        MOVL    G^EXE$GL_RPB, R0
+        MOVL    RPB$L_VOLUME(R0), R1
+        MOVC3   #BVD$C_BLOCK, (R1), DIR
+        MOVL    #SS$_NORMAL, R0
+        RET
+
+; MATCH: R3 = a name, R2 = its length, and the SPECLEN characters of SPEC.
+; R0 = 1 if the name matches them, else 0: * matches any characters, %
+; any one. Uses R8-R11.
+MATCH:  CLRL    R8                      ; in the name
+        CLRL    R9                      ; in SPEC
+        MNEGL   #1, R10                 ; past the last *, to try again from
+        CLRL    R11                     ; where in the name it matched from
+10$:    CMPL    R8, R2
+        BGEQU   50$
+        CMPL    R9, SPECLEN
+        BGEQU   30$
+        MOVB    SPEC[R9], R0
+        CMPB    R0, #^A/*/
+        BEQL    20$
+        CMPB    R0, #^A/%/
+        BEQL    15$
+        CMPB    R0, (R3)[R8]
+        BNEQ    30$
+15$:    INCL    R8
+        INCL    R9
+        BRB     10$
+20$:    MOVL    R9, R10                 ; *: match nothing first
+        MOVL    R8, R11
+        INCL    R9
+        BRB     10$
+30$:    TSTL    R10                     ; no: the last * takes one more
+        BLSS    80$
+        ADDL3   #1, R10, R9
+        INCL    R11
+        MOVL    R11, R8
+        BRB     10$
+50$:    CMPL    R9, SPECLEN              ; the name's end: only *s may be left
+        BGEQU   70$
+        CMPB    SPEC[R9], #^A/*/
+        BNEQ    80$
+        INCL    R9
+        BRB     50$
+70$:    MOVL    #1, R0
+        RSB
+80$:    CLRL    R0
+        RSB
+
+; ADDDEC: appends R1 in decimal to LINE, right aligned in R3 columns.
+; Uses R0-R5.
+ADDDEC: CLRL    R4                      ; digits, on the stack
+10$:    DIVL3   #10, R1, R5
+        MULL3   #10, R5, R0
+        SUBL3   R0, R1, R0
+        ADDL2   #^A/0/, R0
+        PUSHL   R0
+        INCL    R4
+        MOVL    R5, R1
+        BNEQ    10$
+20$:    CMPL    R4, R3
+        BGEQ    30$
+        MOVZBL  #^A/ /, R0
+        BSBB    ADDCHAR
+        DECL    R3
+        BRB     20$
+30$:    MOVL    (SP)+, R0
+        BSBB    ADDCHAR
+        SOBGTR  R4, 30$
+        RSB
+
+; SAY: writes the line in LINE, and empties it. Uses R0 and R1.
+SAY:    PUSHAB  LINE
+        CALLS   #1, G^PUT_LINE
+        CLRB    LINE
+        RSB
+
+; ADDCHAR: appends the character in R0 to LINE. Uses R0-R2.
+ADDCHAR:
+        MOVB    R0, CHAR
+        MOVAB   CHAR, R1
+        MOVL    #1, R2
+; ADD: appends the R2 bytes at R1 to LINE, as many as fit. Uses R0-R2.
+ADD:    MOVZBL  LINE, R0
+10$:    TSTL    R2
+        BEQL    20$
+        CMPL    R0, #255
+        BGEQU   20$
+        INCL    R0
+        MOVB    (R1)+, LINE[R0]
+        DECL    R2
+        BRB     10$
+20$:    MOVB    R0, LINE
+        RSB
+
+        .END    START
