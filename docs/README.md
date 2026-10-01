@@ -13,6 +13,9 @@ documented next to its code, in that component's `docs/` (`vtools/docs/`,
 `ods/docs/`) or README (`shim/README.md`). Those files are named by topic,
 not numbered, because the code cites them by path.
 
+[boot.md](boot.md) walks through the boot sequence in plain words. It is
+kept current, like a design document.
+
 `api/index.html`, the API reference, is generated from the sources by
 `scripts/apidoc.py`: don't edit it, regenerate it (see AGENTS.md).
 

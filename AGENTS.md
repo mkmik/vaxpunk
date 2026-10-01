@@ -18,6 +18,11 @@ FreeVMS is GPL-2.0 and vaxpunk is MIT: borrow ideas and designs, never copy code
 ADRs, PRDs and design documents live in [docs/](docs/), numbered per kind. Code follows the accepted ADRs.
 To add or change one, follow [docs/README.md](docs/README.md).
 
+[docs/boot.md](docs/boot.md) walks through the boot sequence step by step. A PR that changes what boot
+does (a new stage, a new init routine, a new STARTUP process) updates it too. Write it like the rest of
+that file: plain words a newcomer can follow, the real names (routines, files, console lines), and no
+silly analogies.
+
 ## API reference
 
 [docs/api/index.html](docs/api/index.html) documents every internal API: system services, executive
