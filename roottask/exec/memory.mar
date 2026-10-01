@@ -1,0 +1,344 @@
+        .TITLE  MEMORY  Memory management: pages, pool and the memory services
+        .IDENT  /V0.1/
+;
+; The PAL gives the executive physical pages, numbered by PFN, and maps one
+; at an address when the executive writes a PTE with WRPTE. The executive
+; owns the PFN database, here a list of free PFNs, and decides what goes
+; where in the address space every process shares
+; (docs/design/0002-executive-processes.md):
+;
+;   ^X00010000  EXEC.EXE
+;   ^X01000000  process images, each at the address it is linked for
+;   ^X1FFF0000  the RPB; ^X20000000 the boot volume, read-only
+;   ^X40000000  nonpaged pool: PCBs, kernel stacks, common event blocks
+;   ^X50000000  pages processes make with $CRETVA and $EXPREG
+;   ^X7FFF0000  the boot stack's top
+;
+; The PFN database and the pool are synchronized at IPL$_SYNCH.
+;
+        .LIBRARY "lib.mlb"
+        .LIBRARY "starlet.mlb"
+        $PRDEF
+        $IPLDEF
+        $PALDEF
+        $PTEDEF
+        $PRTDEF
+        $RPBDEF
+        $SSDEF
+
+        .EXTERNAL EXE$GL_RPB
+
+MMG$C_MAXPFN = 4096
+POOL_VA = ^X40000000
+POOL_PAGES = 128                        ; 512 KB
+MMG$C_P0BASE = ^X50000000               ; where processes make pages
+MMG$C_P0END = ^X7F000000
+KW = PTE$M_VALID ! <PRT$C_KW @ PTE$V_PROT>
+
+        .PSECT  EXEC$DATA, NOEXE, WRT, QUAD
+MMG$GL_FREECNT::                        ; free PFNs, a stack
+        .LONG   0
+MMG$GL_EXPREG::                         ; where $EXPREG makes pages next
+        .LONG   MMG$C_P0BASE
+EXE$GL_NONPAGED::                       ; free pool blocks by address:
+        .LONG   0                       ; each a link and a size
+MMG$AL_FREEPFN:
+        .BLKL   MMG$C_MAXPFN
+
+        .PSECT  $CODE$
+
+; MMG$INIT: puts the PFNs the boot left free on the free list and makes
+; the pool. Uses R0-R5.
+MMG$INIT::
+        MOVL    EXE$GL_RPB, R5
+        MOVL    RPB$L_PFNCNT(R5), R2
+        CMPL    R2, #MMG$C_MAXPFN
+        BLEQU   10$
+        MOVL    #MMG$C_MAXPFN, R2
+10$:    CLRL    R1                      ; the high PFNs go in first,
+20$:    DECL    R2                      ; so the low ones come out first
+        CMPL    R2, RPB$L_FREEPFN(R5)
+        BLSSU   30$
+        MOVL    R2, MMG$AL_FREEPFN[R1]
+        INCL    R1
+        BRB     20$
+30$:    MOVL    R1, MMG$GL_FREECNT
+        MOVL    #POOL_VA, R0
+        MOVL    #POOL_PAGES, R1
+        MOVL    #KW, R2
+        BSBW    MMG$CREPAG
+        MOVL    #POOL_VA, R0
+        MOVL    R0, EXE$GL_NONPAGED
+        CLRL    (R0)
+        MOVL    #POOL_PAGES*MMG$C_PAGESIZE, 4(R0)
+        RSB
+
+; MMG$ALLOCPFN: R0 = a free PFN, or 0 if there is none: PFN 0 is the
+; boot's. IPL$_SYNCH.
+MMG$ALLOCPFN::
+        MOVL    MMG$GL_FREECNT, R0
+        BEQL    10$
+        DECL    R0
+        MOVL    R0, MMG$GL_FREECNT
+        MOVL    MMG$AL_FREEPFN[R0], R0
+10$:    RSB
+
+; MMG$DEALLOCPFN: R0 = a PFN to free. IPL$_SYNCH. Keeps every register.
+MMG$DEALLOCPFN::
+        PUSHL   R1
+        MOVL    MMG$GL_FREECNT, R1
+        MOVL    R0, MMG$AL_FREEPFN[R1]
+        INCL    MMG$GL_FREECNT
+        MOVL    (SP)+, R1
+        RSB
+
+; MMG$CREPAG: R0 = a page's address, R1 = a page count, R2 = the PTE's
+; valid bit, protection and execute bit. Makes those pages, zeroed, with
+; that protection, replacing any there. R0 = SS$_NORMAL, or SS$_INSFMEM
+; when the PFNs run out, with the pages made so far left. Uses R0-R2.
+MMG$CREPAG::
+        PUSHR   #^M<R3, R4, R5, R6>
+        DSBINT  #IPL$_SYNCH
+        MOVL    R0, R3
+        MOVL    R1, R4
+        MOVL    R2, R5
+10$:    TSTL    R4
+        BEQL    40$
+        BSBW    MMG$ALLOCPFN
+        TSTL    R0
+        BEQL    50$
+        MOVL    R0, R6
+        BISL3   #KW, R6, R1             ; writable first, to zero it
+        MOVL    R3, R0
+        CALL_PAL #PAL$_WRPTE
+        BSBB    FREEOLD
+        MOVL    R3, R1
+        MOVL    #MMG$C_PAGESIZE/8, R2
+20$:    CLRQ    (R1)+
+        SOBGTR  R2, 20$
+        CMPL    R5, #KW                 ; then the protection it gets
+        BEQL    30$
+        BISL3   R5, R6, R1
+        MOVL    R3, R0
+        CALL_PAL #PAL$_WRPTE
+30$:    ADDL2   #MMG$C_PAGESIZE, R3
+        DECL    R4
+        BRB     10$
+40$:    MOVL    #SS$_NORMAL, R0
+45$:    ENBINT
+        POPR    #^M<R3, R4, R5, R6>
+        RSB
+50$:    MOVL    #SS$_INSFMEM, R0
+        BRB     45$
+
+; FREEOLD: R0 = a PTE WRPTE replaced. Frees its PFN if it had one.
+FREEOLD:
+        BBC     #PTE$V_VALID, R0, 10$
+        BICL2   #^C<PTE$M_PFN>, R0
+        BSBW    MMG$DEALLOCPFN
+10$:    RSB
+
+; MMG$DELPAG: R0 = a page's address, R1 = a page count. Deletes those
+; pages and frees their PFNs. Uses R0-R1.
+MMG$DELPAG::
+        PUSHR   #^M<R2, R3>
+        DSBINT  #IPL$_SYNCH
+        MOVL    R0, R2
+        MOVL    R1, R3
+        BEQL    20$
+10$:    MOVL    R2, R0
+        CLRL    R1
+        CALL_PAL #PAL$_WRPTE
+        BSBB    FREEOLD
+        ADDL2   #MMG$C_PAGESIZE, R2
+        SOBGTR  R3, 10$
+20$:    ENBINT
+        POPR    #^M<R2, R3>
+        RSB
+
+; MMG$SETPRT: R0 = a page's address, R1 = a page count, R2 = the PTE's
+; new valid bit, protection and execute bit. Changes the protection of
+; pages that exist. Uses R0-R2.
+MMG$SETPRT::
+        PUSHR   #^M<R3, R4>
+        DSBINT  #IPL$_SYNCH
+        MOVL    R0, R3
+        MOVL    R1, R4
+        BEQL    20$
+10$:    MOVL    R3, R0
+        CLRL    R1
+        CALL_PAL #PAL$_WRPTE            ; R0 = the PTE, with the PFN
+        BBC     #PTE$V_VALID, R0, 15$
+        BICL3   #^C<PTE$M_PFN>, R0, R1
+        BISL2   R2, R1
+        MOVL    R3, R0
+        CALL_PAL #PAL$_WRPTE
+15$:    ADDL2   #MMG$C_PAGESIZE, R3
+        SOBGTR  R4, 10$
+20$:    ENBINT
+        POPR    #^M<R3, R4>
+        RSB
+
+; EXE$ALONONPAGED: R1 = a size in bytes. Allocates a block of nonpaged
+; pool, 16-byte aligned, first fit: R2 = its address, R1 = the size it
+; got, R0 = SS$_NORMAL or SS$_INSFMEM. The block isn't zeroed.
+EXE$ALONONPAGED::
+        PUSHR   #^M<R3, R4>
+        DSBINT  #IPL$_SYNCH
+        ADDL2   #15, R1
+        BICL2   #15, R1
+        BEQL    90$
+        MOVAL   EXE$GL_NONPAGED, R3     ; the link to the block
+10$:    MOVL    (R3), R2
+        BEQL    90$
+        CMPL    4(R2), R1
+        BGEQU   20$
+        MOVL    R2, R3
+        BRB     10$
+20$:    SUBL3   R1, 4(R2), R4           ; what is left
+        BEQL    30$
+        MOVL    R4, 4(R2)               ; hand out its end
+        ADDL2   R4, R2
+        BRB     40$
+30$:    MOVL    (R2), (R3)              ; all of it
+40$:    MOVL    #SS$_NORMAL, R0
+50$:    ENBINT
+        POPR    #^M<R3, R4>
+        RSB
+90$:    CLRL    R2
+        MOVL    #SS$_INSFMEM, R0
+        BRB     50$
+
+; EXE$DEANONPGDSIZ: R0 = a pool block, R1 = its size. Frees it, merging
+; it with free neighbours. Keeps every register.
+EXE$DEANONPGDSIZ::
+        PUSHR   #^M<R0, R1, R2, R3, R4>
+        DSBINT  #IPL$_SYNCH
+        ADDL2   #15, R1
+        BICL2   #15, R1
+        MOVAL   EXE$GL_NONPAGED, R3     ; the link to the next block
+        CLRL    R4                      ; the block before, if any
+10$:    MOVL    (R3), R2
+        BEQL    20$
+        CMPL    R2, R0
+        BGTRU   20$
+        MOVL    R2, R4
+        MOVL    R2, R3
+        BRB     10$
+20$:    MOVL    R2, (R0)
+        MOVL    R1, 4(R0)
+        MOVL    R0, (R3)
+        TSTL    R2                      ; merge with the next
+        BEQL    30$
+        ADDL3   R0, R1, R3
+        CMPL    R3, R2
+        BNEQ    30$
+        ADDL2   4(R2), 4(R0)
+        MOVL    (R2), (R0)
+30$:    TSTL    R4                      ; and with the one before
+        BEQL    40$
+        ADDL3   R4, 4(R4), R3
+        CMPL    R3, R0
+        BNEQ    40$
+        ADDL2   4(R0), 4(R4)
+        MOVL    (R0), (R4)
+40$:    ENBINT
+        POPR    #^M<R0, R1, R2, R3, R4>
+        RSB
+
+; INADR: AP = a $CRETVA or $DELTVA argument list. R0 = the first page of
+; the range its inadr gives, R1 = the page count, R0 = 0 if it isn't all
+; between MMG$C_P0BASE and MMG$C_P0END.
+INADR:  MOVL    4(AP), R1
+        MOVL    (R1), R0
+        MOVL    4(R1), R1
+        BICL2   #MMG$C_PAGESIZE-1, R0
+        BISL2   #MMG$C_PAGESIZE-1, R1
+        CMPL    R0, #MMG$C_P0BASE
+        BLSSU   90$
+        CMPL    R1, #MMG$C_P0END
+        BGEQU   90$
+        SUBL2   R0, R1
+        BLSSU   90$
+        INCL    R1
+        ASHL    #-MMG$C_VPCTX, R1, R1
+        RSB
+90$:    CLRL    R0
+        RSB
+
+; RETADR: R0 = a first page, R1 = a page count, R2 = the address of a
+; retadr argument, 0 if none. Stores the range's first and last bytes.
+RETADR: TSTL    R2
+        BEQL    10$
+        MOVL    R0, (R2)
+        ASHL    #MMG$C_VPCTX, R1, R1
+        ADDL3   R0, R1, 4(R2)
+        DECL    4(R2)
+10$:    RSB
+
+; $CRETVA inadr, retadr, acmode: makes the pages of a range, zeroed and
+; writable, replacing any there.
+        .ENTRY  EXE$CRETVA, ^M<R2, R3, R4>
+        BSBB    INADR
+        TSTL    R0
+        BEQL    90$
+        MOVQ    R0, R3
+        MOVL    #KW, R2
+        BSBW    MMG$CREPAG
+        BLBC    R0, 80$
+        MOVQ    R3, R0
+        MOVL    8(AP), R2
+        BSBB    RETADR
+        MOVL    #SS$_NORMAL, R0
+80$:    RET
+90$:    MOVL    #SS$_PAGOWNVIO, R0
+        RET
+
+; $DELTVA inadr, retadr, acmode: deletes the pages of a range.
+        .ENTRY  EXE$DELTVA, ^M<R2, R3, R4>
+        BSBB    INADR
+        TSTL    R0
+        BEQL    90$
+        MOVQ    R0, R3
+        BSBW    MMG$DELPAG
+        MOVQ    R3, R0
+        MOVL    8(AP), R2
+        BSBB    RETADR
+        MOVL    #SS$_NORMAL, R0
+        RET
+90$:    MOVL    #SS$_PAGOWNVIO, R0
+        RET
+
+; $EXPREG pagcnt, retadr, acmode, region: makes pagcnt pages, zeroed and
+; writable, at addresses no other $EXPREG has used.
+; ponytail: one region for every process, never given back; per-process
+; regions come with per-process address spaces.
+        .ENTRY  EXE$EXPREG, ^M<R2, R3, R4>
+        MOVL    4(AP), R1
+        BEQL    85$
+        CMPL    R1, #<MMG$C_P0END-MMG$C_P0BASE>/MMG$C_PAGESIZE
+        BGTRU   90$
+        DSBINT  #IPL$_SYNCH
+        MOVL    MMG$GL_EXPREG, R0
+        ASHL    #MMG$C_VPCTX, R1, R2
+        ADDL2   R0, R2
+        CMPL    R2, #MMG$C_P0END
+        BGTRU   80$
+        MOVL    R2, MMG$GL_EXPREG
+        ENBINT
+        MOVQ    R0, R3
+        MOVL    #KW, R2
+        BSBW    MMG$CREPAG
+        BLBC    R0, 70$
+        MOVQ    R3, R0
+        MOVL    8(AP), R2
+        BSBB    RETADR
+        MOVL    #SS$_NORMAL, R0
+70$:    RET
+80$:    ENBINT
+90$:    MOVL    #SS$_VASFULL, R0
+        RET
+85$:    MOVL    #SS$_ILLPAGCNT, R0
+        RET
+
+        .END

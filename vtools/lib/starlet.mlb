@@ -1,0 +1,220 @@
+; starlet.mlb: what programs that call system services use, like VMS's
+; STARLET.MLB. Use it with .LIBRARY "starlet.mlb" and vasm -I vtools/lib.
+
+; $SSDEF: system service status codes, as VMS numbers them.
+        .MACRO  $SSDEF
+SS$_NORMAL = 1
+SS$_WASCLR = 1
+SS$_WASSET = 9
+SS$_ACCVIO = 12
+SS$_BADPARAM = 20
+SS$_EXQUOTA = 28
+SS$_NOPRIV = 36
+SS$_ABORT = 44
+SS$_BADIMGHDR = 68
+SS$_DUPLNAM = 148
+SS$_ILLEFC = 236
+SS$_ILLPAGCNT = 252
+SS$_ILLSER = 260
+SS$_INSFARG = 276
+SS$_INSFMEM = 292
+SS$_IVLOGNAM = 340
+SS$_IVSSRQ = 372
+SS$_PAGOWNVIO = 492
+SS$_UNASEFC = 564
+SS$_VASFULL = 580
+SS$_IVMODE = 852
+SS$_NONEXPR = 2280
+SS$_NOSUCHFILE = 2320
+        .ENDM   $SSDEF
+
+; $PRTDEF: page protection codes, the VAX's: who may read (R) and write (W),
+; from kernel (K) out to user (U) mode.
+        .MACRO  $PRTDEF
+PRT$C_NA = 0
+PRT$C_KW = 2
+PRT$C_KR = 3
+PRT$C_UW = 4
+PRT$C_EW = 5
+PRT$C_ERKW = 6
+PRT$C_ER = 7
+PRT$C_SW = 8
+PRT$C_SREW = 9
+PRT$C_SRKW = 10
+PRT$C_SR = 11
+PRT$C_URSW = 12
+PRT$C_UREW = 13
+PRT$C_URKW = 14
+PRT$C_UR = 15
+        .ENDM   $PRTDEF
+
+; The _S forms of the system services: each pushes its arguments, last
+; first, and calls SYS$name. A value argument is pushed as written
+; (EFN=#65); an address argument is pushed as an address (PIDADR=PID), or
+; as 0 if it is 0, the default.
+
+        .MACRO  $PUSHADR ADDR
+        .IF     IDN <ADDR>, <0>
+        PUSHL   #0
+        .IFF
+        PUSHAB  ADDR
+        .ENDC
+        .ENDM   $PUSHADR
+
+        .MACRO  $CREPRC_S PIDADR=0, IMAGE=0, INPUT=0, OUTPUT=0, ERROR=0, PRVADR=0, QUOTA=0, PRCNAM=0, BASPRI=#2, UIC=#0, MBXUNT=#0, STSFLG=#0
+        PUSHL   STSFLG
+        PUSHL   MBXUNT
+        PUSHL   UIC
+        PUSHL   BASPRI
+        $PUSHADR PRCNAM
+        $PUSHADR QUOTA
+        $PUSHADR PRVADR
+        $PUSHADR ERROR
+        $PUSHADR OUTPUT
+        $PUSHADR INPUT
+        $PUSHADR IMAGE
+        $PUSHADR PIDADR
+        .EXTERNAL SYS$CREPRC
+        CALLS   #12, G^SYS$CREPRC
+        .ENDM   $CREPRC_S
+
+        .MACRO  $DELPRC_S PIDADR=0, PRCNAM=0
+        $PUSHADR PRCNAM
+        $PUSHADR PIDADR
+        .EXTERNAL SYS$DELPRC
+        CALLS   #2, G^SYS$DELPRC
+        .ENDM   $DELPRC_S
+
+        .MACRO  $EXIT_S CODE=#1
+        PUSHL   CODE
+        .EXTERNAL SYS$EXIT
+        CALLS   #1, G^SYS$EXIT
+        .ENDM   $EXIT_S
+
+        .MACRO  $HIBER_S
+        .EXTERNAL SYS$HIBER
+        CALLS   #0, G^SYS$HIBER
+        .ENDM   $HIBER_S
+
+        .MACRO  $WAKE_S PIDADR=0, PRCNAM=0
+        $PUSHADR PRCNAM
+        $PUSHADR PIDADR
+        .EXTERNAL SYS$WAKE
+        CALLS   #2, G^SYS$WAKE
+        .ENDM   $WAKE_S
+
+        .MACRO  $SUSPND_S PIDADR=0, PRCNAM=0, FLAGS=#0
+        PUSHL   FLAGS
+        $PUSHADR PRCNAM
+        $PUSHADR PIDADR
+        .EXTERNAL SYS$SUSPND
+        CALLS   #3, G^SYS$SUSPND
+        .ENDM   $SUSPND_S
+
+        .MACRO  $RESUME_S PIDADR=0, PRCNAM=0
+        $PUSHADR PRCNAM
+        $PUSHADR PIDADR
+        .EXTERNAL SYS$RESUME
+        CALLS   #2, G^SYS$RESUME
+        .ENDM   $RESUME_S
+
+        .MACRO  $SETPRI_S PIDADR=0, PRCNAM=0, PRI, PRVPRI=0
+        $PUSHADR PRVPRI
+        PUSHL   PRI
+        $PUSHADR PRCNAM
+        $PUSHADR PIDADR
+        .EXTERNAL SYS$SETPRI
+        CALLS   #4, G^SYS$SETPRI
+        .ENDM   $SETPRI_S
+
+        .MACRO  $SETPRN_S PRCNAM=0
+        $PUSHADR PRCNAM
+        .EXTERNAL SYS$SETPRN
+        CALLS   #1, G^SYS$SETPRN
+        .ENDM   $SETPRN_S
+
+        .MACRO  $ASCEFC_S EFN, NAME, PROT=#0, PERM=#0
+        PUSHL   PERM
+        PUSHL   PROT
+        $PUSHADR NAME
+        PUSHL   EFN
+        .EXTERNAL SYS$ASCEFC
+        CALLS   #4, G^SYS$ASCEFC
+        .ENDM   $ASCEFC_S
+
+        .MACRO  $DACEFC_S EFN
+        PUSHL   EFN
+        .EXTERNAL SYS$DACEFC
+        CALLS   #1, G^SYS$DACEFC
+        .ENDM   $DACEFC_S
+
+        .MACRO  $SETEF_S EFN
+        PUSHL   EFN
+        .EXTERNAL SYS$SETEF
+        CALLS   #1, G^SYS$SETEF
+        .ENDM   $SETEF_S
+
+        .MACRO  $CLREF_S EFN
+        PUSHL   EFN
+        .EXTERNAL SYS$CLREF
+        CALLS   #1, G^SYS$CLREF
+        .ENDM   $CLREF_S
+
+        .MACRO  $READEF_S EFN, STATE
+        $PUSHADR STATE
+        PUSHL   EFN
+        .EXTERNAL SYS$READEF
+        CALLS   #2, G^SYS$READEF
+        .ENDM   $READEF_S
+
+        .MACRO  $WAITFR_S EFN
+        PUSHL   EFN
+        .EXTERNAL SYS$WAITFR
+        CALLS   #1, G^SYS$WAITFR
+        .ENDM   $WAITFR_S
+
+        .MACRO  $WFLOR_S EFN, MASK
+        PUSHL   MASK
+        PUSHL   EFN
+        .EXTERNAL SYS$WFLOR
+        CALLS   #2, G^SYS$WFLOR
+        .ENDM   $WFLOR_S
+
+        .MACRO  $WFLAND_S EFN, MASK
+        PUSHL   MASK
+        PUSHL   EFN
+        .EXTERNAL SYS$WFLAND
+        CALLS   #2, G^SYS$WFLAND
+        .ENDM   $WFLAND_S
+
+        .MACRO  $CRETVA_S INADR, RETADR=0, ACMODE=#0
+        PUSHL   ACMODE
+        $PUSHADR RETADR
+        $PUSHADR INADR
+        .EXTERNAL SYS$CRETVA
+        CALLS   #3, G^SYS$CRETVA
+        .ENDM   $CRETVA_S
+
+        .MACRO  $DELTVA_S INADR, RETADR=0, ACMODE=#0
+        PUSHL   ACMODE
+        $PUSHADR RETADR
+        $PUSHADR INADR
+        .EXTERNAL SYS$DELTVA
+        CALLS   #3, G^SYS$DELTVA
+        .ENDM   $DELTVA_S
+
+        .MACRO  $EXPREG_S PAGCNT, RETADR=0, ACMODE=#0, REGION=#0
+        PUSHL   REGION
+        PUSHL   ACMODE
+        $PUSHADR RETADR
+        PUSHL   PAGCNT
+        .EXTERNAL SYS$EXPREG
+        CALLS   #4, G^SYS$EXPREG
+        .ENDM   $EXPREG_S
+
+        .MACRO  $CMKRNL_S ROUTIN, ARGLST=0
+        $PUSHADR ARGLST
+        $PUSHADR ROUTIN
+        .EXTERNAL SYS$CMKRNL
+        CALLS   #2, G^SYS$CMKRNL
+        .ENDM   $CMKRNL_S

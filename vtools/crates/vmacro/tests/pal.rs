@@ -51,3 +51,43 @@ fn mfpr() {
 fn halt() {
     assert!(lines("HALT", "").contains(&"mov x7, #0".to_string()));
 }
+
+/// `REI` doesn't come back to the next instruction: the PAL restores R7.
+#[test]
+fn rei() {
+    assert_eq!(lines("REI", ""), ["mov x7, #146", "svc #0"]);
+}
+
+/// `CHMK #3`: the code in R0, which brings the service's status back.
+#[test]
+fn chmk() {
+    assert_eq!(
+        lines("CHMK", "#3"),
+        [
+            "movz w14, #3",
+            "mov x15, x7",
+            "mov w0, w14",
+            "mov x7, #131",
+            "svc #0",
+            "mov x7, x15",
+        ]
+    );
+}
+
+/// `CALL_PAL #5`, SWPCTX: arguments already in R0-R5, R7 kept.
+#[test]
+fn call_pal() {
+    assert_eq!(
+        lines("CALL_PAL", "#5"),
+        ["mov x14, x7", "mov x7, #5", "svc #0", "mov x7, x14"]
+    );
+}
+
+/// The registers the scheduler and the software interrupts use.
+#[test]
+fn registers() {
+    assert!(lines("MFPR", "#16, R1").contains(&"mov x7, #18".to_string()));
+    assert!(lines("MTPR", "R2, #17").contains(&"mov x7, #23".to_string()));
+    assert!(lines("MTPR", "#3, #20").contains(&"mov x7, #24".to_string()));
+    assert!(lines("MFPR", "#21, R0").contains(&"mov x7, #25".to_string()));
+}

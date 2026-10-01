@@ -1,0 +1,278 @@
+        .TITLE  EVENT   Event flag services
+        .IDENT  /V0.1/
+;
+; Each process has 128 event flags in four clusters of 32. Clusters 0 and 1
+; (flags 0-63) are its own, local. Clusters 2 and 3 (64-127) are common:
+; $ASCEFC associates each with a common event block, a named cluster that
+; every process associated with it shares, which is how processes
+; synchronize with each other. A process waiting for flags is in the LEF
+; state for local ones and in the CEB's wait queue, state CEF, for common
+; ones; $SETEF wakes those whose wait it satisfies.
+;
+        .LIBRARY "lib.mlb"
+        .LIBRARY "starlet.mlb"
+        $PRDEF
+        $IPLDEF
+        $PCBDEF
+        $CEBDEF
+        $STATEDEF
+        $SSDEF
+
+        .EXTERNAL SCH$GL_CURPCB, SCH$GQ_LEFWQ, SCH$GQ_CEBHD
+        .EXTERNAL SCH$WAIT, SCH$WAKEPCB, EXE$MATCHNAME
+        .EXTERNAL EXE$ALONONPAGED, EXE$DEANONPGDSIZ
+
+        .PSECT  $CODE$
+
+; SCH$GETEFC: R3 = an event flag number, R4 = a PCB. Finds its cluster:
+; R1 = the address of the cluster's flags, R2 = the flag's bit in them,
+; R5 = the cluster number. R0 = SS$_NORMAL, SS$_ILLEFC or SS$_UNASEFC.
+SCH$GETEFC::
+        CMPL    R3, #127
+        BGTRU   80$
+        EXTZV   #5, #2, R3, R5
+        EXTZV   #0, #5, R3, R2
+        CASEL   R5, #0, #3
+10$:    .WORD   20$-10$, 30$-10$, 40$-10$, 50$-10$
+20$:    MOVAL   PCB$L_EFCS(R4), R1
+        BRB     70$
+30$:    MOVAL   PCB$L_EFCU(R4), R1
+        BRB     70$
+40$:    MOVL    PCB$L_EFC2P(R4), R1
+        BEQL    90$
+        BRB     60$
+50$:    MOVL    PCB$L_EFC3P(R4), R1
+        BEQL    90$
+60$:    MOVAL   CEB$L_EFC(R1), R1
+70$:    MOVL    #SS$_NORMAL, R0
+        RSB
+80$:    MOVL    #SS$_ILLEFC, R0
+        RSB
+90$:    MOVL    #SS$_UNASEFC, R0
+        RSB
+
+; SCH$POSTEF: R1 = a cluster's flags, just set, R5 = its number. Wakes the
+; processes waiting on a common cluster whose wait is over. Only a process
+; sets its own local flags, so no one waits on them while it runs.
+; IPL$_SYNCH. Uses R0, R2, R3.
+SCH$POSTEF::
+        CMPL    R5, #2
+        BLSSU   90$
+        SUBL3   #CEB$L_EFC-CEB$L_WQFL, R1, R2   ; the wait queue
+        MOVL    (R2), R3
+10$:    CMPL    R3, R2
+        BEQL    90$
+        PUSHL   (R3)                    ; the next, before this one leaves
+        BBS     #PCB$V_WALL, PCB$L_STS(R3), 20$
+        BITL    PCB$L_EFWM(R3), (R1)    ; any of them
+        BEQL    40$
+        BRB     30$
+20$:    MCOML   (R1), R0                ; all of them
+        BITL    PCB$L_EFWM(R3), R0
+        BNEQ    40$
+30$:    PUSHL   R4
+        MOVL    R3, R4
+        BSBW    SCH$WAKEPCB
+        MOVL    (SP)+, R4
+40$:    MOVL    (SP)+, R3
+        BRB     10$
+90$:    RSB
+
+; SCH$EFWAIT: R4 = the current PCB, R1 = a cluster's flags, R5 = its
+; number, R6 = a mask of flags in it, R2 = 1 to wait for all of them, 0
+; for any. Returns once the wait is satisfied, R0 = SS$_NORMAL.
+SCH$EFWAIT::
+        DSBINT  #IPL$_SYNCH
+10$:    TSTL    R2
+        BNEQ    20$
+        BITL    R6, (R1)
+        BNEQ    80$
+        BRB     30$
+20$:    MCOML   (R1), R0
+        BITL    R6, R0
+        BEQL    80$
+30$:    MOVL    R6, PCB$L_EFWM(R4)
+        MOVL    R5, PCB$L_WEFC(R4)
+        INSV    R2, #PCB$V_WALL, #1, PCB$L_STS(R4)
+        CMPL    R5, #2
+        BGEQU   40$
+        MOVL    #SCH$C_LEF, PCB$L_STATE(R4)
+        MOVAQ   SCH$GQ_LEFWQ, R0
+        BRB     50$
+40$:    MOVL    #SCH$C_CEF, PCB$L_STATE(R4)
+        SUBL3   #CEB$L_EFC-CEB$L_WQFL, R1, R0
+50$:    BSBW    SCH$WAIT
+        BRB     10$
+80$:    ENBINT
+        MOVL    #SS$_NORMAL, R0
+        RSB
+
+; $SETEF efn: sets an event flag. SS$_WASSET or SS$_WASCLR, as it was.
+        .ENTRY  EXE$SETEF, ^M<R2, R3, R4, R5>
+        MOVL    SCH$GL_CURPCB, R4
+        MOVL    4(AP), R3
+        BSBW    SCH$GETEFC
+        BLBC    R0, 30$
+        DSBINT  #IPL$_SYNCH
+        MOVL    #SS$_WASSET, R0
+        BBSS    R2, (R1), 20$
+        MOVL    #SS$_WASCLR, R0
+20$:    PUSHL   R0
+        BSBW    SCH$POSTEF
+        MOVL    (SP)+, R0
+        ENBINT
+30$:    RET
+
+; $CLREF efn: clears an event flag. SS$_WASSET or SS$_WASCLR.
+        .ENTRY  EXE$CLREF, ^M<R2, R3, R4, R5>
+        MOVL    SCH$GL_CURPCB, R4
+        MOVL    4(AP), R3
+        BSBW    SCH$GETEFC
+        BLBC    R0, 30$
+        MOVL    #SS$_WASCLR, R0
+        BBCC    R2, (R1), 30$
+        MOVL    #SS$_WASSET, R0
+30$:    RET
+
+; $READEF efn, state: the flag's cluster into state; SS$_WASSET or
+; SS$_WASCLR for the flag.
+        .ENTRY  EXE$READEF, ^M<R2, R3, R4, R5>
+        MOVL    SCH$GL_CURPCB, R4
+        MOVL    4(AP), R3
+        BSBW    SCH$GETEFC
+        BLBC    R0, 30$
+        MOVL    (R1), @8(AP)
+        MOVL    #SS$_WASSET, R0
+        BBS     R2, (R1), 30$
+        MOVL    #SS$_WASCLR, R0
+30$:    RET
+
+; $WAITFR efn: waits for one event flag.
+        .ENTRY  EXE$WAITFR, ^M<R2, R3, R4, R5, R6>
+        MOVL    SCH$GL_CURPCB, R4
+        MOVL    4(AP), R3
+        BSBW    SCH$GETEFC
+        BLBC    R0, 30$
+        ASHL    R2, #1, R6
+        CLRL    R2
+        BSBW    SCH$EFWAIT
+30$:    RET
+
+; $WFLOR efn, mask: waits for any of the flags of efn's cluster in mask.
+        .ENTRY  EXE$WFLOR, ^M<R2, R3, R4, R5, R6>
+        CLRL    R2
+        BRB     WFL
+
+; $WFLAND efn, mask: waits for all of them. $WFLOR shares the code after
+; this, and the RET: both entries save the same registers.
+        .ENTRY  EXE$WFLAND, ^M<R2, R3, R4, R5, R6>
+        MOVL    #1, R2
+WFL:    MOVL    SCH$GL_CURPCB, R4
+        MOVL    4(AP), R3
+        PUSHL   R2
+        BSBW    SCH$GETEFC
+        MOVL    (SP)+, R2
+        BLBC    R0, 30$
+        MOVL    8(AP), R6
+        BSBW    SCH$EFWAIT
+30$:    RET
+
+; $ASCEFC efn, name, prot, perm: associates efn's common cluster, 2 or 3,
+; with the common event block called name, made if there isn't one. Any
+; cluster it had goes first. prot and perm are ignored: every cluster is
+; temporary, gone when no process has it.
+        .ENTRY  EXE$ASCEFC, ^M<R2, R3, R4, R5, R6, R7>
+        MOVL    SCH$GL_CURPCB, R4
+        MOVL    4(AP), R3
+        CMPL    R3, #64
+        BLSSU   80$
+        CMPL    R3, #127
+        BGTRU   80$
+        MOVL    8(AP), R6               ; the name's descriptor
+        MOVZWL  (R6), R7
+        BEQL    85$
+        CMPL    R7, #15
+        BGTRU   85$
+        MOVL    4(R6), R6
+        BSBW    DACEFC
+        DSBINT  #IPL$_SYNCH
+        MOVAQ   SCH$GQ_CEBHD, R3
+        MOVL    R3, R2
+10$:    MOVL    (R2), R2                ; the next cluster
+        CMPL    R2, R3
+        BEQL    20$                     ; none has the name: make one
+        MOVAB   CEB$T_EFCNAM(R2), R0
+        BSBW    EXE$MATCHNAME
+        BLBC    R0, 10$
+        BRB     40$
+20$:    MOVL    #CEB$K_LENGTH, R1
+        BSBW    EXE$ALONONPAGED
+        BLBC    R0, 70$
+        MOVL    #<CEB$K_LENGTH/8>, R0
+        MOVL    R2, R1
+30$:    CLRQ    (R1)+
+        SOBGTR  R0, 30$
+        MOVAL   CEB$L_WQFL(R2), R0
+        MOVL    R0, (R0)
+        MOVL    R0, 4(R0)
+        MOVAB   CEB$T_EFCNAM(R2), R0
+        MOVB    R7, (R0)+
+        CLRL    R1
+35$:    MOVB    (R6)[R1], (R0)[R1]
+        AOBLSS  R7, R1, 35$
+        INSQUE  (R2), @4(R3)
+40$:    INCL    CEB$L_REFC(R2)
+        EXTZV   #5, #2, 4(AP), R0
+        MOVL    R2, PCB$L_EFC2P-8(R4)[R0]
+        MOVL    #SS$_NORMAL, R0
+70$:    ENBINT
+        RET
+80$:    MOVL    #SS$_ILLEFC, R0
+        RET
+85$:    MOVL    #SS$_IVLOGNAM, R0
+        RET
+
+; $DACEFC efn: dissociates efn's common cluster.
+        .ENTRY  EXE$DACEFC, ^M<R2, R3, R4>
+        MOVL    SCH$GL_CURPCB, R4
+        MOVL    4(AP), R3
+        CMPL    R3, #64
+        BLSSU   80$
+        CMPL    R3, #127
+        BGTRU   80$
+        BSBW    DACEFC
+        MOVL    #SS$_NORMAL, R0
+        RET
+80$:    MOVL    #SS$_ILLEFC, R0
+        RET
+
+; DACEFC: R4 = a PCB, R3 = a common event flag number. Dissociates the
+; flag's cluster, if it has one, and deletes the cluster if no process has
+; it any more. Uses R0-R2.
+DACEFC: DSBINT  #IPL$_SYNCH
+        EXTZV   #5, #2, R3, R0
+        MOVAL   PCB$L_EFC2P-8(R4)[R0], R1       ; the PCB's pointer to it
+        MOVL    (R1), R0
+        BEQL    90$
+        CLRL    (R1)
+        DECL    CEB$L_REFC(R0)
+        BNEQ    90$
+        MOVAL   CEB$L_WQFL(R0), R1
+        CMPL    (R1), R1
+        BNEQ    90$                     ; ponytail: kept while processes wait on it
+        REMQUE  (R0), R0
+        MOVL    #CEB$K_LENGTH, R1
+        BSBW    EXE$DEANONPGDSIZ
+90$:    ENBINT
+        RSB
+
+; SCH$DACEFC_ALL: R4 = a PCB. Dissociates both its common clusters, for
+; process deletion. Uses R0-R3.
+SCH$DACEFC_ALL::
+        MOVL    #64, R3
+        BSBW    DACEFC
+        MOVL    #96, R3
+        BSBW    DACEFC
+        RSB
+
+        .END

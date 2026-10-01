@@ -1,0 +1,78 @@
+        .TITLE  EXEC    The executive's start, and the swapper
+        .IDENT  /V0.3/
+;
+; The root task, the PAL, starts EXEC.EXE as a task of its own, in kernel
+; mode at IPL 31, with R11 pointing at the restart parameter block
+; (docs/design/0001-pal-interface.md). EXEC$START sets up the system
+; control block, memory and the scheduler, starts the STARTUP process and
+; becomes the swapper, process 1, which deletes what deleted processes
+; leave behind (docs/design/0002-executive-processes.md).
+;
+        .LIBRARY "lib.mlb"
+        .LIBRARY "starlet.mlb"
+        $PRDEF
+        $IPLDEF
+        $SCBDEF
+        $SSDEF
+
+        .EXTERNAL EXE$OUTZSTRING, EXE$OUTHEX, EXE$OUTCRLF
+        .EXTERNAL EXE$CMODKRNL, SCH$RESCHED, MMG$INIT, SCH$INIT, MMG$GL_FREECNT
+        .EXTERNAL SCH$GQ_DELQ, EXE$DELETEPCB
+
+        .PSECT  EXEC$DATA, NOEXE, WRT, QUAD
+EXE$GL_RPB::                            ; the restart parameter block
+        .LONG   0
+EXE$AL_SCB::                            ; the system control block
+        .BLKB   SCB$K_LENGTH
+STARTUP_IMAGE:
+        .ASCID  "STARTUP.EXE"
+STARTUP_NAME:
+        .ASCID  "STARTUP"
+BANNER: .ASCIZ  "%EXEC-I-START, vaxpunk executive, free pages: "
+NOSTART:
+        .ASCIZ  "%EXEC-F-NOSTART, can't create STARTUP, status "
+
+        .PSECT  $CODE$
+        .ENTRY  EXEC$START, ^M<>
+        MOVL    R11, EXE$GL_RPB
+        MOVAB   EXE$CMODKRNL, EXE$AL_SCB+SCB$L_CHMK
+        MOVAB   SCH$RESCHED, EXE$AL_SCB+SCB$L_SOFTINT+<4*IPL$_RESCHED>
+        MOVAB   EXE$AL_SCB, R0
+        MTPR    R0, #PR$_SCBB
+        JSB     G^MMG$INIT
+        JSB     G^SCH$INIT
+        MOVAB   BANNER, R1
+        JSB     G^EXE$OUTZSTRING
+        MOVL    MMG$GL_FREECNT, R1
+        JSB     G^EXE$OUTHEX
+        JSB     G^EXE$OUTCRLF
+        SETIPL  #0
+        $CREPRC_S IMAGE=STARTUP_IMAGE, PRCNAM=STARTUP_NAME, BASPRI=#4
+        BLBS    R0, SWAPPER
+        MOVL    R0, R2
+        MOVAB   NOSTART, R1
+        JSB     G^EXE$OUTZSTRING
+        MOVL    R2, R1
+        JSB     G^EXE$OUTHEX
+        JSB     G^EXE$OUTCRLF
+        HALT
+
+; The swapper: deletes the context, kernel stack and PCB of each process
+; that deleted itself, then hibernates until another does.
+SWAPPER:
+10$:    SETIPL  #IPL$_SYNCH
+        REMQUE  @SCH$GQ_DELQ, R4
+        BVS     20$
+        JSB     G^EXE$DELETEPCB
+        BRB     10$
+20$:    SETIPL  #0
+        $HIBER_S
+        BRB     10$
+
+; CON$PUTCHAR: writes the character in R0 on the console, for consolio's
+; EXE$OUT* routines. Keeps every register.
+CON$PUTCHAR::
+        MTPR    R0, #PR$_TXDB
+        RSB
+
+        .END    EXEC$START

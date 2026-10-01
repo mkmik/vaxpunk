@@ -33,3 +33,165 @@ PR$_TBIS = 58
 PR$_SID = 62                            ; system identification
 PR$_TBCHK = 63
         .ENDM   $PRDEF
+
+; $PALDEF: function codes for CALL_PAL, the PAL calls that have no VAX
+; instruction (docs/design/0001-pal-interface.md). Arguments go in R0-R5,
+; the result comes back in R0.
+        .MACRO  $PALDEF
+PAL$_HALT = ^X00
+PAL$_SWPCTX = ^X05                      ; R0 = new HWPCB; R0 = the one left
+PAL$_WTINT = ^X3E                       ; wait for an interrupt
+PAL$_WRPTE = ^X41                       ; R0 = address, R1 = PTE; R0 = old PTE
+PAL$_DELCTX = ^X42                      ; R0 = HWPCB of a context to delete
+        .ENDM   $PALDEF
+
+; $IPLDEF: interrupt priority levels the executive synchronizes at.
+        .MACRO  $IPLDEF
+IPL$_ASTDEL = 2                         ; AST delivery
+IPL$_RESCHED = 3                        ; rescheduling software interrupt
+IPL$_IOPOST = 4                         ; I/O post processing
+IPL$_SYNCH = 8                          ; the scheduler's database
+IPL$_POWER = 31                         ; everything blocked
+        .ENDM   $IPLDEF
+
+; SETIPL, DSBINT, ENBINT, SOFTINT: VMS's IPL macros. DSBINT saves the IPL
+; (on the stack unless DST says) and raises it; ENBINT puts it back.
+        .MACRO  SETIPL  IPL=#31
+        MTPR    IPL, #18                ; PR$_IPL
+        .ENDM   SETIPL
+
+        .MACRO  DSBINT  IPL=#31, DST=-(SP)
+        MFPR    #18, DST
+        MTPR    IPL, #18
+        .ENDM   DSBINT
+
+        .MACRO  ENBINT  SRC=(SP)+
+        MTPR    SRC, #18
+        .ENDM   ENBINT
+
+        .MACRO  SOFTINT LEVEL
+        MTPR    LEVEL, #20              ; PR$_SIRR
+        .ENDM   SOFTINT
+
+; $SCBDEF: system control block vectors the PAL delivers through, at the
+; VAX's offsets. Each holds the handler's address, a longword.
+        .MACRO  $SCBDEF
+SCB$L_CHMK = ^X40                       ; change mode to kernel
+SCB$L_SOFTINT = ^X80                    ; software interrupt level n at +4*n
+SCB$K_LENGTH = ^XC0
+        .ENDM   $SCBDEF
+
+; $INTSTKDEF: the frame the PAL pushes on the kernel stack when it delivers
+; an interrupt or an exception, and REI pops. Quadwords: the registers the
+; interrupted code may have live that VAX code doesn't save.
+        .MACRO  $INTSTKDEF
+INTSTK$Q_PC = 0
+INTSTK$Q_PS = 8                         ; the PSL: IPL in 20:16, NZVC in 3:0
+INTSTK$Q_R7 = 16
+INTSTK$Q_SP = 24                        ; VAX SP before the frame
+INTSTK$Q_X_SP = 32                      ; ARM64's sp
+INTSTK$Q_X13 = 40                       ; x13-x18, vmacro's scratch
+INTSTK$Q_X30 = 88                       ; the link register
+INTSTK$K_LENGTH = 96
+        .ENDM   $INTSTKDEF
+
+; $HWPCBDEF: the hardware PCB the PAL knows a process context by. Quadword
+; aligned. When a context first runs, the PAL pops an INTSTK frame from
+; its KSP, as REI does.
+        .MACRO  $HWPCBDEF
+HWPCB$Q_KSP = 0                         ; kernel stack pointer
+HWPCB$Q_ESP = 8
+HWPCB$Q_SSP = 16
+HWPCB$Q_USP = 24
+HWPCB$K_LENGTH = 128
+        .ENDM   $HWPCBDEF
+
+; $PTEDEF: a page table entry, as WRPTE takes it: the VAX's, with an
+; execute bit, which ARM64 has and the VAX didn't. Pages are 4 KB.
+        .MACRO  $PTEDEF
+PTE$V_VALID = 31
+PTE$M_VALID = ^X80000000
+PTE$V_PROT = 27                         ; 4 bits, PRT$C_ codes
+PTE$V_EXEC = 25
+PTE$M_EXEC = ^X02000000
+PTE$M_PFN = ^X001FFFFF
+MMG$C_PAGESIZE = 4096
+MMG$C_VPCTX = 12                        ; address bits in a page
+        .ENDM   $PTEDEF
+
+; $RPBDEF: the restart parameter block, which the PAL fills before the
+; executive starts and passes in R11.
+        .MACRO  $RPBDEF
+RPB$L_BASE = 0                          ; the RPB's own address
+RPB$L_PFNCNT = 4                        ; PFNs 0 to PFNCNT-1 are the executive's
+RPB$L_FREEPFN = 8                       ; and those below this one are in use
+RPB$L_VOLUME = 12                       ; the boot volume, read-only
+RPB$L_VOLSIZE = 16                      ; its size in bytes
+RPB$Q_HWPCB = 64                        ; the boot context's HWPCB
+RPB$K_LENGTH = 192
+        .ENDM   $RPBDEF
+
+; $BVDDEF: the boot volume's directory, in its first 512-byte block: one
+; entry per file, ended by an empty name. Each file starts on a block.
+        .MACRO  $BVDDEF
+BVD$T_NAME = 0                          ; .ASCIC, up to 23 characters
+BVD$L_LBN = 24                          ; first block
+BVD$L_SIZE = 28                         ; bytes
+BVD$K_LENGTH = 32
+BVD$C_BLOCK = 512
+        .ENDM   $BVDDEF
+
+; $STATEDEF: scheduling states, SCH$C_.
+        .MACRO  $STATEDEF
+SCH$C_CEF = 3                           ; common event flag wait
+SCH$C_LEF = 5                           ; local event flag wait
+SCH$C_HIB = 7                           ; hibernating
+SCH$C_SUSP = 9                          ; suspended
+SCH$C_COM = 12                          ; computable
+SCH$C_CUR = 14                          ; current
+SCH$C_MAXPIX = 32                       ; process slots: index 0 unused, 1 the swapper
+        .ENDM   $STATEDEF
+
+; $PCBDEF: the software process control block.
+        .MACRO  $PCBDEF
+PCB$L_SQFL = 0                          ; state queue: COM queue or a wait queue
+PCB$L_SQBL = 4
+PCB$W_SIZE = 8
+PCB$B_TYPE = 10
+PCB$B_PRI = 11                          ; current priority, 0-31, higher first
+PCB$L_STATE = 12                        ; SCH$C_
+PCB$L_PID = 16
+PCB$L_STS = 20                          ; PCB$V_
+PCB$L_EFCS = 24                         ; event flags 0-31
+PCB$L_EFCU = 28                         ; 32-63
+PCB$L_EFC2P = 32                        ; common cluster 2 (64-95): its CEB
+PCB$L_EFC3P = 36                        ; 3 (96-127)
+PCB$L_EFWM = 40                         ; a wait's flags
+PCB$L_WEFC = 44                         ; and their cluster, 0-3
+PCB$L_KSTACK = 48                       ; kernel stack, from pool
+PCB$L_HWPCB = 52                        ; the HWPCB the PAL knows it by
+PCB$L_IMGBAS = 56                       ; the image's pages
+PCB$L_IMGEND = 60                       ; and past the last
+PCB$B_PRIB = 64                         ; base priority
+PCB$L_OWNER = 68                        ; creator's PID
+PCB$T_LNAME = 72                        ; process name, .ASCIC, 15 characters
+PCB$T_IMAGE = 88                        ; image name, .ASCIC, 39 characters
+PCB$Q_HWPCB = 128                       ; its HWPCB, if it isn't the boot one
+PCB$K_LENGTH = 256
+PCB$V_WAKEPEN = 0                       ; a $WAKE came while not hibernating
+PCB$V_WALL = 1                          ; the wait is for all of EFWM
+PCB$V_SUSPEN = 2                        ; suspend when the wait ends
+DYN$C_PCB = 1                           ; PCB$B_TYPE
+        .ENDM   $PCBDEF
+
+; $CEBDEF: a common event block, a named cluster of 32 common event flags.
+        .MACRO  $CEBDEF
+CEB$L_CEBFL = 0                         ; all clusters
+CEB$L_CEBBL = 4
+CEB$L_WQFL = 8                          ; processes waiting on it
+CEB$L_WQBL = 12
+CEB$L_EFC = 16                          ; the flags
+CEB$L_REFC = 20                         ; processes associated
+CEB$T_EFCNAM = 24                       ; name, .ASCIC, 15 characters
+CEB$K_LENGTH = 48
+        .ENDM   $CEBDEF

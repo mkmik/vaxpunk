@@ -1,0 +1,34 @@
+        .TITLE  PONG    Takes turns with PING, then wakes STARTUP
+        .IDENT  /V0.1/
+
+        .LIBRARY "starlet.mlb"
+        .LIBRARY "sysexe.mlb"
+        $SSDEF
+
+PING_EF = 64
+PONG_EF = 65
+ROUNDS = 3
+
+        .PSECT  DATA, NOEXE, WRT, LONG
+CLUSTER:
+        .ASCID  "PINGPONG"
+STARTUP:
+        .ASCID  "STARTUP"
+
+        .PSECT  CODE, EXE, LONG
+        .ENTRY  START, ^M<R3>
+        $ASCEFC_S EFN=#PING_EF, NAME=CLUSTER
+        BLBC    R0, 90$
+        MOVL    #1, R3
+10$:    $WAITFR_S EFN=#PING_EF
+        BLBC    R0, 90$
+        $CLREF_S EFN=#PING_EF
+        PRINTHEX "  PONG ", R3
+        $SETEF_S EFN=#PONG_EF
+        AOBLEQ  #ROUNDS, R3, 10$
+        $WAKE_S PRCNAM=STARTUP
+        PRINT   "PONG: woke STARTUP, exiting"
+        $EXIT_S
+90$:    $EXIT_S R0
+
+        .END    START

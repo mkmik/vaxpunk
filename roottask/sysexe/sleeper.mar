@@ -1,0 +1,13 @@
+        .TITLE  SLEEPER A process that hibernates until it is deleted
+        .IDENT  /V0.1/
+
+        .LIBRARY "starlet.mlb"
+        .LIBRARY "sysexe.mlb"
+
+        .PSECT  CODE, EXE, LONG
+        .ENTRY  START, ^M<>
+        PRINT   "SLEEPER: hibernating until I'm deleted"
+10$:    $HIBER_S
+        BRB     10$
+
+        .END    START

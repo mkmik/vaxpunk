@@ -1,0 +1,126 @@
+        .TITLE  SYSSRV  The system service vector and dispatcher
+        .IDENT  /V0.1/
+;
+; A program calls a system service as on VMS, with CALLS or CALLG to
+; SYS$name, or with the $name_S macros in starlet.mlb. SYS$name changes
+; mode to kernel with CHMK and the service's code; the PAL delivers the
+; CHMK through the SCB to EXE$CMODKRNL, which checks the argument count
+; and calls the service's EXE$name routine with the caller's argument
+; list, then REIs with its status in R0. Every process runs in kernel
+; mode for now, so CHMK changes no mode: it is the one door supervisor
+; and user mode will come through.
+;
+; Services that aren't implemented yet are stubs that return
+; SS$_ILLSER.
+;
+        .LIBRARY "lib.mlb"
+        .LIBRARY "starlet.mlb"
+        $SSDEF
+
+; SERVICE name, nargs: SYS$name, which calls EXE$name with at least nargs
+; arguments. STUB name, nargs: the same, with an EXE$name that fails.
+        .MACRO  SERVICE NAME, NARGS
+        .EXTERNAL EXE$'NAME
+        VECTOR  NAME, NARGS
+        .ENDM   SERVICE
+
+        .MACRO  STUB    NAME, NARGS
+        VECTOR  NAME, NARGS
+        .ENTRY  EXE$'NAME, ^M<>
+        MOVL    #SS$_ILLSER, R0
+        RET
+        .ENDM   STUB
+
+        .MACRO  VECTOR  NAME, NARGS
+        .SAVE_PSECT
+        .PSECT  EXEC$SSTAB, NOEXE, NOWRT, LONG
+        .ADDRESS EXE$'NAME
+        .PSECT  EXEC$SSARG, NOEXE, NOWRT, BYTE
+        .BYTE   NARGS
+        .RESTORE_PSECT
+        .ENTRY  SYS$'NAME, ^M<>
+        CHMK    #CODE
+        RET
+CODE = CODE + 1
+        .ENDM   VECTOR
+
+        .PSECT  EXEC$SSTAB, NOEXE, NOWRT, LONG
+EXE$AL_SSTAB::                          ; EXE$name by code
+        .PSECT  EXEC$SSARG, NOEXE, NOWRT, BYTE
+EXE$AB_SSARG::                          ; argument counts by code
+        .PSECT  $CODE$
+CODE = 0
+; Process control
+        SERVICE CREPRC, 12
+        SERVICE DELPRC, 2
+        SERVICE EXIT, 1
+        STUB    FORCEX, 3
+        SERVICE HIBER, 0
+        SERVICE WAKE, 2
+        STUB    SCHDWK, 4
+        STUB    CANWAK, 2
+        SERVICE SUSPND, 2
+        SERVICE RESUME, 2
+        SERVICE SETPRI, 4
+        SERVICE SETPRN, 1
+        STUB    GETJPI, 7
+        STUB    GETJPIW, 7
+        STUB    DCLEXH, 1
+        STUB    CANEXH, 1
+        STUB    SETPRV, 4
+        SERVICE CMKRNL, 2
+        STUB    CMEXEC, 2
+; Event flags
+        SERVICE ASCEFC, 2
+        SERVICE DACEFC, 1
+        STUB    DLCEFC, 1
+        SERVICE SETEF, 1
+        SERVICE CLREF, 1
+        SERVICE READEF, 2
+        SERVICE WAITFR, 1
+        SERVICE WFLOR, 2
+        SERVICE WFLAND, 2
+; Memory
+        SERVICE CRETVA, 2
+        SERVICE DELTVA, 2
+        SERVICE EXPREG, 2
+        STUB    CNTREG, 4
+        STUB    SETPRT, 5
+        STUB    LKWSET, 3
+        STUB    ULWSET, 3
+        STUB    LCKPAG, 3
+        STUB    ULKPAG, 3
+        STUB    CRMPSC, 12
+        STUB    MGBLSC, 7
+; ASTs, time, I/O, logical names, system information
+        STUB    DCLAST, 3
+        STUB    SETAST, 1
+        STUB    GETTIM, 1
+        STUB    SETIMR, 4
+        STUB    CANTIM, 2
+        STUB    ASSIGN, 4
+        STUB    DASSGN, 1
+        STUB    QIO, 12
+        STUB    QIOW, 12
+        STUB    CRELNM, 5
+        STUB    DELLNM, 3
+        STUB    TRNLNM, 5
+        STUB    GETSYI, 7
+
+; EXE$CMODKRNL: the CHMK handler. R0 = the service's code, AP = its
+; argument list, the PAL's frame on the stack.
+EXE$CMODKRNL::
+        CMPL    R0, #CODE
+        BGEQU   80$
+        MOVZBL  EXE$AB_SSARG[R0], R1
+        CMPB    (AP), R1
+        BLSSU   85$
+        MOVL    EXE$AL_SSTAB[R0], R1
+        CALLG   (AP), (R1)
+        REI
+80$:    MOVL    #SS$_ILLSER, R0
+        REI
+85$:    MOVL    #SS$_INSFARG, R0
+        REI
+
+        .END

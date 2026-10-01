@@ -5,22 +5,18 @@
 ; take no lock and don't change IPL; callers who share the console take it
 ; first. R11 selects the device on the VAX, 0 for the console; it is ignored,
 ; as on Alpha. Link this module with the program: vmacro compiles it.
+; CON$PUTCHAR, the one part that knows the hardware, comes from elsewhere:
+; conputchar.mar under vrun, the executive's own under the PAL.
 ;
 ;       MOVAB   MESSAGE, R1
 ;       JSB     G^EXE$OUTZSTRING
 
+        .EXTRN  CON$PUTCHAR
         .PSECT  $CODE$
 
-; EXE$OUTCHAR, CON$PUTCHAR: writes the character in R0. Keeps every
-; register. CON$PUTCHAR is the one part that knows the hardware.
+; EXE$OUTCHAR: writes the character in R0. Keeps every register.
 EXE$OUTCHAR::
-CON$PUTCHAR::
-        PUSHR   #^M<R0, R1>
-        MOVAB   (SP), R0                ; the saved R0: the character first
-        MOVL    #1, R1
-        svc     #2                      ; ponytail: vrun's put; a UART later
-        POPR    #^M<R0, R1>
-        RSB
+        JMP     G^CON$PUTCHAR
 
 ; EXE$OUTBLANK: writes a space. R0 = 32.
 EXE$OUTBLANK::

@@ -1,0 +1,28 @@
+; sysexe.mlb: console output for the boot volume's programs, which run in
+; kernel mode and print with the executive's EXE$OUT* routines.
+
+; PRINT "text": writes text and CR LF. Uses R0-R2.
+        .MACRO  PRINT   TEXT, ?L
+        .EXTERNAL EXE$OUTZSTRING
+        .SAVE_PSECT LOCAL_BLOCK
+        .PSECT  $LITERAL$
+L:      .ASCIZ  TEXT<13><10>
+        .RESTORE_PSECT
+        MOVAB   L, R1
+        JSB     G^EXE$OUTZSTRING
+        .ENDM   PRINT
+
+; PRINTHEX "text", value: writes text, value in hex, and CR LF. Uses R0-R2.
+        .MACRO  PRINTHEX TEXT, VALUE, ?L
+        .EXTERNAL EXE$OUTZSTRING, EXE$OUTHEX, EXE$OUTCRLF
+        .SAVE_PSECT LOCAL_BLOCK
+        .PSECT  $LITERAL$
+L:      .ASCIZ  TEXT
+        .RESTORE_PSECT
+        PUSHL   VALUE
+        MOVAB   L, R1
+        JSB     G^EXE$OUTZSTRING
+        MOVL    (SP)+, R1
+        JSB     G^EXE$OUTHEX
+        JSB     G^EXE$OUTCRLF
+        .ENDM   PRINTHEX

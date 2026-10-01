@@ -1,0 +1,64 @@
+        .TITLE  QUEUE   INSQUE and REMQUE on a doubly linked queue
+        .LIBRARY "vrun.mlb"
+
+; A failed EXPECT returns 2 * N, an error status, so the exit code says which.
+
+        .MACRO  EXPECT  COND, N, ?OK
+        B'COND  OK
+        MOVL    #<N * 2>, R0
+        RET
+OK:
+        .ENDM   EXPECT
+
+        .PSECT  DATA, NOEXE, WRT, QUAD
+HEAD:   .BLKL   2                       ; flink, blink
+A:      .BLKL   2
+B:      .BLKL   2
+C:      .BLKL   2
+
+        .PSECT  CODE, EXE, LONG
+        .ENTRY  QUEUE, ^M<R2, R3>
+        MOVAL   HEAD, R2                ; an empty queue points at itself
+        MOVL    R2, (R2)
+        MOVL    R2, 4(R2)
+        REMQUE  (R2), R3                ; nothing to remove
+        EXPECT  VS, 1
+        INSQUE  A, (R2)                 ; first entry: Z
+        EXPECT  EQL, 2
+        INSQUE  B, @4(R2)               ; at the tail
+        EXPECT  NEQ, 3
+        INSQUE  C, A                    ; after A: A C B
+        MOVAL   A, R1
+        CMPL    (R2), R1
+        EXPECT  EQL, 4
+        MOVAL   C, R1
+        CMPL    A, R1
+        EXPECT  EQL, 5
+        MOVAL   B, R1
+        CMPL    4(R2), R1
+        EXPECT  EQL, 6
+        CMPL    B+4, #C                 ; B's blink
+        EXPECT  EQL, 7
+        REMQUE  @(R2), R3               ; the head: A, leaving C B
+        EXPECT  VC, 8
+        EXPECT  NEQ, 9
+        MOVAL   A, R1
+        CMPL    R3, R1
+        EXPECT  EQL, 10
+        REMQUE  @4(R2), R3              ; the tail: B, leaving C
+        EXPECT  NEQ, 11
+        REMQUE  @(R2), R3               ; C, the last: Z
+        EXPECT  EQL, 12
+        EXPECT  VC, 13
+        MOVAL   C, R1
+        CMPL    R3, R1
+        EXPECT  EQL, 14
+        CMPL    (R2), R2                ; empty again
+        EXPECT  EQL, 15
+        CMPL    4(R2), R2
+        EXPECT  EQL, 16
+        $PUT    "queue ok"<10>
+        MOVL    #1, R0
+        RET
+
+        .END    QUEUE
