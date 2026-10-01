@@ -28,7 +28,7 @@
         .EXTERNAL SCH$GL_CURPCB, SCH$GL_SWPPCB, SCH$GL_PCBVEC, SCH$GL_SEQ
         .EXTERNAL SCH$GQ_HIBWQ, SCH$GQ_SUSPWQ, SCH$GQ_DELQ
         .EXTERNAL SCH$REMCOM, SCH$MAKECOM, SCH$WAKEPCB, SCH$WAKE, SCH$WAIT
-        .EXTERNAL SCH$SCHED, SCH$DACEFC_ALL
+        .EXTERNAL SCH$SCHED, SCH$DACEFC_ALL, SGN$GW_QUANTUM
         .EXTERNAL EXE$ALONONPAGED, EXE$DEANONPGDSIZ, MMG$CREPAG, MMG$DELPAG
         .EXTERNAL MMG$SETPRT, EXE$GL_RPB
         .EXTERNAL EXE$OUTZSTRING, EXE$OUTCSTRING, EXE$OUTHEX, EXE$OUTCRLF
@@ -179,6 +179,7 @@ EXE$NAMPID::
 20$:    BICL3   #^C31, 36(AP), R0
         MOVB    R0, PCB$B_PRI(R8)
         MOVB    R0, PCB$B_PRIB(R8)
+        MNEGW   SGN$GW_QUANTUM, PCB$W_QUANT(R8)
         MOVL    PCB$L_PID(R4), PCB$L_OWNER(R8)
         MOVAB   PCB$Q_HWPCB(R8), PCB$L_HWPCB(R8)
 ; The kernel stack, and on it the frame the PAL pops, as REI does, when
@@ -403,6 +404,7 @@ EXE$IMGACT::
         .ENTRY  EXE$EXIT, ^M<>
         MOVL    SCH$GL_CURPCB, R4
         BLBS    4(AP), 10$
+        DSBINT  #IPL$_SYNCH             ; the console, a line at a time
         MOVAB   EXITMSG, R1
         JSB     G^EXE$OUTZSTRING
         MOVAB   PCB$T_LNAME(R4), R1
@@ -412,6 +414,7 @@ EXE$IMGACT::
         MOVL    4(AP), R1
         JSB     G^EXE$OUTHEX
         JSB     G^EXE$OUTCRLF
+        ENBINT
 10$:    BRW     EXE$DELSELF
 
 ; EXE$RUNDOWN: R4 = a PCB. Gives back what its process holds: its image's

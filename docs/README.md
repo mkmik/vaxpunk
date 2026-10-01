@@ -22,6 +22,7 @@ not numbered, because the code cites them by path.
 | [ADR-0001](adr/0001-pal-interface-vms-vocabulary.md) | PAL interface speaks only VMS vocabulary | Accepted |
 | [ADR-0002](adr/0002-root-task-is-the-pal.md) | The root task is the PAL; the executive is a task that calls it with privileged instructions | Accepted |
 | [ADR-0003](adr/0003-one-cpu-many-threads.md) | Processes are threads that take turns on one VMS CPU | Accepted |
+| [ADR-0004](adr/0004-interval-timer-is-a-pal-thread.md) | The interval timer is a periodic thread of the PAL's | Accepted |
 
 ### PRDs
 

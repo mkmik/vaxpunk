@@ -1,0 +1,13 @@
+        .TITLE  NUDGE   Sets the flag HOG computes until
+        .IDENT  /V0.1/
+
+        .LIBRARY "starlet.mlb"
+        $SSDEF
+
+        .PSECT  CODE, EXE, LONG
+        .ENTRY  START, ^M<>
+        MOVL    #1, @#^X60010000        ; HOG's page
+        MOVL    #SS$_NORMAL, R0
+        RET
+
+        .END    START

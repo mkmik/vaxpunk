@@ -1,0 +1,32 @@
+        .TITLE  HOG     Computes until NUDGE, at the same priority, runs
+        .IDENT  /V0.1/
+;
+; HOG makes a page, clears its first longword, creates NUDGE at its own
+; priority and loops reading the longword, with no system service and no
+; wait. NUDGE sets it, so it can only run if the interval timer takes the
+; CPU from HOG when its quantum is up.
+;
+        .LIBRARY "starlet.mlb"
+        .LIBRARY "sysexe.mlb"
+        $SSDEF
+
+        .PSECT  DATA, NOEXE, WRT, LONG
+NUDGE_IMAGE:
+        .ASCID  "NUDGE.EXE"
+NUDGE_NAME:
+        .ASCID  "NUDGE"
+FLAG:   .LONG   ^X60010000, ^X60010FFF  ; NUDGE.MAR has the address too
+
+        .PSECT  CODE, EXE, LONG
+        .ENTRY  START, ^M<>
+        $CRETVA_S INADR=FLAG
+        BLBC    R0, 90$
+        $CREPRC_S IMAGE=NUDGE_IMAGE, PRCNAM=NUDGE_NAME, BASPRI=#4
+        BLBC    R0, 90$
+10$:    TSTL    @FLAG
+        BEQL    10$
+        PRINT   "HOG: NUDGE ran while I computed: preempted at quantum end"
+        $DELTVA_S INADR=FLAG
+90$:    RET
+
+        .END    START

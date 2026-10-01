@@ -9,7 +9,10 @@
  * The executive's processes are threads in its address space, one seL4 TCB
  * each, and only one of them runs at a time: the PAL hands the one CPU the
  * executive sees from thread to thread when it calls SWPCTX
- * (docs/adr/0003-one-cpu-many-threads.md).
+ * (docs/adr/0003-one-cpu-many-threads.md). A clock thread of the PAL's
+ * ticks every 10 ms, and the PAL delivers each tick to the executive as the
+ * VAX's interval timer interrupt, preempting the current thread
+ * (docs/adr/0004-interval-timer-is-a-pal-thread.md).
  *
  * The kernel is built with the MCS API (KernelIsMCS in kernel/config.cmake):
  * a thread runs only while it holds a scheduling context with budget left,
@@ -120,7 +123,8 @@ static seL4_CPtr alloc(seL4_Word type, seL4_Word size_bits)
 	return next_slot++;
 }
 
-/* A copy of cap, with a badge if it is an endpoint and badge isn't 0. */
+/* A copy of cap, with a badge if it is an endpoint or notification and
+ * badge isn't 0. */
 static seL4_CPtr mint(seL4_CPtr cap, seL4_Word badge)
 {
 	seL4_Error err = seL4_CNode_Mint(seL4_CapInitThreadCNode, next_slot, seL4_WordBits,
@@ -370,6 +374,13 @@ static struct ctx {
 static struct ctx *cur;
 static seL4_CPtr fault_ep, sched_control;
 static seL4_Time slice;
+/* The current context waits in WTINT, its reply object taken: the PAL
+ * receives on idle_reply meanwhile. */
+static int idle;
+static seL4_CPtr idle_reply;
+/* The clock ticks every TICK_US, signalling the PAL with CLOCK_BADGE. */
+#define TICK_US 10000
+#define CLOCK_BADGE (1UL << 32)
 
 static struct ctx *find_ctx(seL4_Word hwpcb)
 {
@@ -417,15 +428,17 @@ enum {
 	MTPR_TXDB = 0x40, WRPTE = 0x41, DELCTX = 0x42, CHMK = 0x83, REI = 0x92
 };
 
-/* The system control block's vectors the PAL delivers through. */
-enum { SCB_CHMK = 0x40, SCB_SOFTINT = 0x80 };
+/* The system control block's vectors the PAL delivers through, and the
+ * interval timer's IPL, the VAX's. */
+enum { SCB_CHMK = 0x40, SCB_SOFTINT = 0x80, SCB_TIMER = 0xc0, IPL_HWCLK = 24 };
 
 /*
  * The processor state the PAL keeps for the executive's one CPU. A VAX
- * starts at IPL 31. SISR has a bit per software interrupt level requested
- * and not yet delivered.
+ * starts at IPL 31. pending has a bit per IPL with an interrupt requested
+ * and not yet delivered: software interrupts at 1-15, SISR, and the
+ * interval timer at IPL_HWCLK.
  */
-static seL4_Word ipl = 31, sisr, scbb;
+static seL4_Word ipl = 31, pending, scbb;
 
 /* The frame on the kernel stack an interrupt or exception pushes and REI
  * pops ($INTSTKDEF), in quadwords. */
@@ -455,7 +468,8 @@ static int vector(seL4_UserContext *r, seL4_Word off, seL4_Word new_ipl)
 		return 0;
 	seL4_Word frame[F_LENGTH] = { r->pc, psl(r->spsr), r->x7, r->x28, r->sp, r->x13, r->x14,
 				      r->x15, r->x16, r->x17, r->x18, r->x30 };
-	seL4_Word sp = (r->x28 & ~15UL) - sizeof frame;
+	/* Below both stacks: vmacro moves sp first, then x28, and back. */
+	seL4_Word sp = ((r->x28 < r->sp ? r->x28 : r->sp) & ~15UL) - sizeof frame;
 	for (unsigned i = 0; i < F_LENGTH; i++) {
 		uint64_t *q = quad(sp + 8 * i);
 		if (!q)
@@ -468,14 +482,15 @@ static int vector(seL4_UserContext *r, seL4_Word off, seL4_Word new_ipl)
 	return 1;
 }
 
-/* Delivers the software interrupts IPL lets through, highest first. */
+/* Delivers the highest pending interrupt IPL lets through. */
 static int deliver(seL4_UserContext *r)
 {
-	for (seL4_Word level = 15; level > ipl; level--)
-		if (sisr >> level & 1) {
-			sisr &= ~(1UL << level);
-			if (!vector(r, SCB_SOFTINT + 4 * level, level)) {
-				print("%%PAL-F-NOVEC, no handler for software interrupt %lu\n", level);
+	for (seL4_Word level = 31; level > ipl; level--)
+		if (pending >> level & 1) {
+			pending &= ~(1UL << level);
+			if (!vector(r, level == IPL_HWCLK ? SCB_TIMER : SCB_SOFTINT + 4 * level,
+				    level)) {
+				print("%%PAL-F-NOVEC, no handler for interrupt at IPL %lu\n", level);
 				return 0;
 			}
 		}
@@ -484,7 +499,7 @@ static int deliver(seL4_UserContext *r)
 
 static int deliverable(void)
 {
-	return sisr >> (ipl + 1) != 0;
+	return pending >> (ipl + 1) != 0;
 }
 
 /* REI: pops the frame at VAX SP. Returns 0 if it isn't one. */
@@ -522,15 +537,15 @@ static void read_regs(void)
 		die("seL4_TCB_ReadRegisters failed", err);
 }
 
-/* Resumes the current context with regs, which it has already been given if
- * it is new. */
-static void write_regs(int start)
+/* Resumes the current context with regs: one that is new or stopped is
+ * resumed by the write, one in a PAL call by the reply. */
+static void write_regs(int resume)
 {
-	seL4_Error err = seL4_TCB_WriteRegisters(cur->tcb, start, 0,
+	seL4_Error err = seL4_TCB_WriteRegisters(cur->tcb, resume, 0,
 						 sizeof regs / sizeof(seL4_Word), &regs);
 	if (err)
 		die("seL4_TCB_WriteRegisters failed", err);
-	if (!start)
+	if (!resume)
 		seL4_Send(cur->reply, seL4_MessageInfo_new(0, 0, 0, 0));
 }
 
@@ -673,19 +688,17 @@ static int serve_one(seL4_MessageInfo_t msg)
 		return ret(v0);
 	case MTPR_SIRR:
 		if (a0 & 15)
-			sisr |= 1UL << (a0 & 15);
+			pending |= 1UL << (a0 & 15);
 		return ret(v0);
 	case MFPR_SISR:
-		return ret(sisr);
+		return ret(pending & 0xfffe);
 	case WTINT:
-		/* Returns once an interrupt IPL lets through has been delivered.
-		 * ponytail: no device interrupts yet, so if none is pending
-		 * now, none ever comes. */
-		if (!deliverable()) {
-			print("%%PAL-I-IDLE, the CPU is idle and no interrupt can come\n");
-			return 0;
-		}
-		return ret(0);
+		/* Returns once an interrupt IPL lets through has been delivered:
+		 * now, or at a tick. */
+		if (deliverable())
+			return ret(0);
+		idle = 1;
+		return 1;
 	case MTPR_TXDB:
 		seL4_DebugPutChar(a0);
 		return ret(v0);
@@ -715,13 +728,43 @@ static int serve_one(seL4_MessageInfo_t msg)
 	return 0;
 }
 
-/* Serves the current context's PAL calls and faults; the others wait in a
- * PAL call, SWPCTX, or haven't started. */
+/*
+ * A tick of the clock: requests the interval timer interrupt and, if IPL
+ * lets it through, delivers it. The current context is running, since the
+ * PAL outranks it and serves each of its PAL calls at once, or waits in
+ * WTINT. A running one is stopped wherever it is, and resumes at the
+ * handler.
+ */
+static int tick(void)
+{
+	pending |= 1UL << IPL_HWCLK;
+	if (!deliverable())
+		return 1;
+	if (idle) {
+		idle = 0;
+		return ret(0);
+	}
+	seL4_TCB_Suspend(cur->tcb);
+	read_regs();
+	if (!deliver(&regs))
+		return 0;
+	write_regs(1);
+	return 1;
+}
+
+/* Serves the clock's ticks and the current context's PAL calls and faults;
+ * the other contexts wait in a PAL call, SWPCTX, or haven't started. */
 static void serve(void)
 {
 	for (;;) {
 		seL4_Word badge;
-		seL4_MessageInfo_t msg = seL4_Recv(fault_ep, &badge, cur->reply);
+		seL4_MessageInfo_t msg = seL4_Recv(fault_ep, &badge,
+						   idle ? idle_reply : cur->reply);
+		if (badge == CLOCK_BADGE) {
+			if (!tick())
+				return;
+			continue;
+		}
 		if (badge != (seL4_Word)(cur - ctx + 1)) {
 			print("%%PAL-F-FAULT, a call from context %lu, not the current one\n", badge);
 			return;
@@ -729,6 +772,49 @@ static void serve(void)
 		if (!serve_one(msg))
 			return;
 	}
+}
+
+/*
+ * The interval timer: a thread of the PAL's that signals the PAL every
+ * TICK_US. Its scheduling context has a budget smaller than its period, so
+ * seL4_Yield, which gives up the rest of the budget, sleeps until the next
+ * period. It outranks the executive's threads, so a tick comes on time.
+ * ponytail: the PAL's notification and seL4_Yield, no IPC buffer or TLS;
+ * a timer device driver when the PAL has one.
+ */
+static seL4_CPtr clock_cap;
+static uint64_t clock_stack[256] __attribute__((aligned(16)));
+
+static void clock_thread(void)
+{
+	for (;;) {
+		seL4_Yield();
+		seL4_Signal(clock_cap);
+	}
+}
+
+static void start_clock(void)
+{
+	seL4_CPtr ntfn = alloc(seL4_NotificationObject, 0);
+	seL4_CPtr tcb = alloc(seL4_TCBObject, 0), sc = alloc(seL4_SchedContextObject,
+								seL4_MinSchedContextBits);
+	clock_cap = mint(ntfn, CLOCK_BADGE);
+	idle_reply = alloc(seL4_ReplyObject, 0);
+	seL4_Error err = seL4_TCB_BindNotification(seL4_CapInitThreadTCB, ntfn);
+	if (!err)
+		err = seL4_TCB_Configure(tcb, seL4_CapInitThreadCNode, 0, seL4_CapInitThreadVSpace,
+					 0, 0, seL4_CapNull);
+	if (!err)
+		err = seL4_SchedControl_Configure(sched_control, sc, TICK_US / 10, TICK_US, 0, 0);
+	if (!err)
+		err = seL4_TCB_SetSchedParams(tcb, seL4_CapInitThreadTCB, seL4_MaxPrio,
+					      seL4_MaxPrio, sc, seL4_CapNull);
+	seL4_UserContext r = { .pc = (seL4_Word)clock_thread,
+			       .sp = (seL4_Word)(clock_stack + 256) };
+	if (!err)
+		err = seL4_TCB_WriteRegisters(tcb, 1, 0, sizeof r / sizeof(seL4_Word), &r);
+	if (err)
+		die("starting the clock failed", err);
 }
 
 /*
@@ -811,6 +897,7 @@ int main(seL4_BootInfo *bi)
 	untyped = bi->untyped.start + best;
 	next_slot = bi->empty.start;
 	fault_ep = alloc(seL4_EndpointObject, 0);
+	start_clock();
 	start_exec(bi);
 	serve();
 

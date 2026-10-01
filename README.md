@@ -81,16 +81,16 @@ PING 00000003
 PONG: woke STARTUP, exiting
 PING: done, returning
 STARTUP: woken, deleting SLEEPER
-STARTUP: done, SVCTEST next
+STARTUP: done, SVCTEST and HOG next
 SLEEPER: hibernating until I'm deleted
+HOG: NUDGE ran while I computed: preempted at quantum end
 SVCTEST: ok
 %EXEC-W-EXITED, process NOSUCH exited with status 00000910
-%PAL-I-IDLE, the CPU is idle and no interrupt can come
-root task done, 772 of 4096 slots used
 ```
 
-`just check` boots the same way without a console, prints the executive's
-part and fails unless the processes ran to the end.
+The CPU then idles, taking a clock interrupt every 10 ms, until QEMU is
+stopped. `just check` boots the same way without a console, prints the
+executive's part and fails unless the processes ran to the end.
 
 EDK2 prints a few `Error: Image at ... start failed` and `Tpm2...` lines
 before Limine starts. That is normal for the firmware QEMU ships.

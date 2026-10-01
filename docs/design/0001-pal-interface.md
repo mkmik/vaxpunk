@@ -6,13 +6,16 @@ The interface between the vaxpunk executive and the PAL below it:
 - how the executive calls the PAL;
 - what each call does;
 - what the PAL sets up before the executive runs;
-- how the PAL delivers interrupts and exceptions, and runs processes.
+- how the PAL delivers interrupts and exceptions, and runs processes;
+- the interval timer.
 
 It builds on [ADR-0001](../adr/0001-pal-interface-vms-vocabulary.md), which
 sets the vocabulary, [ADR-0002](../adr/0002-root-task-is-the-pal.md), which
 makes the root task the PAL and the executive a task calling it with
 privileged instructions, and [ADR-0003](../adr/0003-one-cpu-many-threads.md),
-which makes processes threads that take turns on one CPU.
+which makes processes threads that take turns on one CPU, and
+[ADR-0004](../adr/0004-interval-timer-is-a-pal-thread.md), which makes the
+interval timer a thread of the PAL's.
 [DESIGN-0002](0002-executive-processes.md) covers what the executive does
 with it.
 
@@ -47,7 +50,8 @@ from 0 up for these. Nothing else is mapped. The boot context starts with:
   and so is the return address. A `RET` from the transfer routine
   therefore faults at 0.
 - **Processor state.** Kernel mode, IPL 31, as a VAX starts. No SCB, no
-  software interrupts pending.
+  software interrupts pending. The clock is already ticking: its interrupt
+  waits for IPL to drop below 24.
 - **Process context.** Its HWPCB is the RPB's (`RPB$Q_HWPCB`).
 - **Scheduling.** Its own scheduling context, with the root task's budget
   and period, and a priority one below the root task's.
@@ -165,8 +169,9 @@ kernel stack. A HWPCB the PAL has no context for is fine.
 The PAL delivers through the system control block, whose address the
 executive sets with `MTPR #PR$_SCBB`. Its vectors are longwords at the
 VAX's offsets (`$SCBDEF`): 0x40 for `CHMK`, 0x80 + 4n for software
-interrupt level n. To deliver, the PAL pushes a frame on the current stack,
-16-byte aligned, and jumps to the vector:
+interrupt level n, 0xC0 for the interval timer. To deliver, the PAL pushes
+a frame on the current stack, 16-byte aligned and below both VAX SP and
+ARM64's `sp`, and jumps to the vector:
 
 | Offset | Holds |
 | --- | --- |
@@ -185,18 +190,28 @@ VAX, and returns with `REI`, which pops the frame, sets IPL and the
 condition codes from the PSL and resumes at the PC. ponytail: `REI` to
 kernel mode only, until there are other modes.
 
+An interrupt can come between any two instructions, so a handler keeps
+every register it uses, R0 included.
+
 - **Software interrupts.** `MTPR #PR$_SIRR` requests level 1-15;
   `MFPR #PR$_SISR` shows which are pending. The PAL delivers the highest
-  pending one above IPL, at its level, when a call lowers IPL: `MTPR
+  pending interrupt above IPL, at its level, when a call lowers IPL: `MTPR
   #PR$_IPL`, `REI`, a new context's start. A request above IPL is delivered
   on the `MTPR` that makes it.
+- **The interval timer.** Every 10 ms the PAL requests an interrupt at
+  IPL 24, the VAX's interval timer's, through vector 0xC0. If IPL is below
+  24, the PAL delivers it at once: it stops the current context wherever it
+  is and resumes it at the handler, or, if it waits in `WTINT`, returns from
+  that. Otherwise it stays pending, like a software interrupt, until IPL
+  drops below 24. A tick while one is pending is lost, as on the VAX. The
+  clock runs from boot; it has no `ICCS` to enable it. ponytail: the tick
+  is a thread of the PAL's that seL4 wakes each period (ADR-0004); a timer
+  driver replaces it on hardware that has a free timer.
 - **`CHMK`.** The code in R0. The PAL pushes the frame and jumps to the SCB's
   `CHMK` vector at the same IPL. The handler leaves the service's status in
   R0, which `REI` doesn't change.
 - **`WTINT`.** Returns once an interrupt IPL lets through has been
-  delivered. ponytail: there are no device interrupts yet, so if no
-  software interrupt is pending above IPL, none ever comes: the PAL reports
-  the CPU idle and stops.
+  delivered: at once if one is pending, or at the next tick.
 
 ### Faults and HALT
 
@@ -211,7 +226,6 @@ executive, as `HALT` does, naming the HWPCB of the process that took it:
 | Delivery with no vector or stack | `%PAL-F-NOVEC` |
 | `REI` without a frame | `%PAL-F-REI` |
 | `HALT` | `%PAL-I-HALT` with the PC and R0 |
-| `WTINT` with nothing to wait for | `%PAL-I-IDLE` |
 
 The root task then prints `root task done` and suspends itself. Later, the
 PAL reflects faults to the executive as access violations and reserved
@@ -286,7 +300,7 @@ unused.
 | 0x17 | `MTPR_SCBB` | Alpha | a0 = SCB | | the SCB's address, longword aligned |
 | 0x18 | `MTPR_SIRR` | Alpha | a0 = level | | requests a software interrupt, 1-15 |
 | 0x19 | `MFPR_SISR` | Alpha | | v0 = summary | bit n: level n pending |
-| 0x3E | `WTINT` | Alpha | | v0 = 0 | waits for an interrupt |
+| 0x3E | `WTINT` | Alpha | | v0 = 0 | waits for an interrupt; the clock's comes within 10 ms |
 | 0x40 | `MTPR_TXDB` | vaxpunk | a0 = character | | writes a0's low byte on the console |
 | 0x41 | `WRPTE` | vaxpunk | a0 = address, a1 = PTE | v0 = old PTE | maps, unmaps or protects a page |
 | 0x42 | `DELCTX` | vaxpunk | a0 = HWPCB | | deletes a context that isn't current |

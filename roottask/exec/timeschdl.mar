@@ -1,0 +1,54 @@
+        .TITLE  TIMESCHDL The interval timer and the software timer interrupt
+        .IDENT  /V0.1/
+;
+; The PAL delivers the interval timer interrupt every 10 ms, at
+; IPL$_HWCLK, wherever the current process is
+; (docs/adr/0004-interval-timer-is-a-pal-thread.md). As on VMS, the
+; hardware clock's handler does as little as it can: it charges the tick to
+; the current process's quantum and, when the quantum is up, requests the
+; software timer interrupt, whose handler ends the quantum at a lower IPL
+; (docs/design/0002-executive-processes.md).
+;
+        .LIBRARY "lib.mlb"
+        $PRDEF
+        $IPLDEF
+        $PCBDEF
+        $STATEDEF
+
+        .EXTERNAL SCH$GL_CURPCB, SCH$QEND
+
+        .PSECT  $CODE$
+
+; EXE$HWCLKINT: the interval timer interrupt, at IPL$_HWCLK. Counts the
+; current process's quantum up from -SGN$GW_QUANTUM; at 0 it is up. A tick
+; before SCH$INIT, or while the CPU is idle in SCH$SCHED, has no process
+; to charge.
+EXE$HWCLKINT::
+        PUSHR   #^M<R0>
+        MOVL    SCH$GL_CURPCB, R0
+        BEQL    10$
+        CMPL    PCB$L_STATE(R0), #SCH$C_CUR
+        BNEQ    10$
+        INCW    PCB$W_QUANT(R0)
+        BLSS    10$
+        SOFTINT #IPL$_TIMER
+10$:    POPR    #^M<R0>
+        REI
+
+; EXE$SWTIMINT: the software timer interrupt, at IPL$_TIMER. Ends the
+; current process's quantum if it is up.
+; ponytail: no timer queue yet, so quantum end is all it does; $SETIMR
+; and $SCHDWK add their timer queue entries here.
+EXE$SWTIMINT::
+        SETIPL  #IPL$_SYNCH
+        PUSHR   #^M<R4>
+        MOVL    SCH$GL_CURPCB, R4
+        CMPL    PCB$L_STATE(R4), #SCH$C_CUR
+        BNEQ    10$
+        TSTW    PCB$W_QUANT(R4)
+        BLSS    10$
+        JSB     G^SCH$QEND
+10$:    POPR    #^M<R4>
+        REI
+
+        .END

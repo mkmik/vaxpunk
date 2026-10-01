@@ -1,5 +1,6 @@
 ; sysexe.mlb: console output for the boot volume's programs, which run in
-; kernel mode and print with the executive's EXE$OUT* routines.
+; kernel mode and print with the executive's EXE$OUT* routines. Each line
+; is written at IPL$_SYNCH, 8, so that no other process's comes in between.
 
 ; PRINT "text": writes text and CR LF. Uses R0-R2.
         .MACRO  PRINT   TEXT, ?L
@@ -8,8 +9,11 @@
         .PSECT  $LITERAL$
 L:      .ASCIZ  TEXT<13><10>
         .RESTORE_PSECT
+        MFPR    #18, -(SP)              ; DSBINT #IPL$_SYNCH
+        MTPR    #8, #18
         MOVAB   L, R1
         JSB     G^EXE$OUTZSTRING
+        MTPR    (SP)+, #18              ; ENBINT
         .ENDM   PRINT
 
 ; PRINTHEX "text", value: writes text, value in hex, and CR LF. Uses R0-R2.
@@ -20,9 +24,13 @@ L:      .ASCIZ  TEXT<13><10>
 L:      .ASCIZ  TEXT
         .RESTORE_PSECT
         PUSHL   VALUE
+        MFPR    #18, -(SP)              ; DSBINT #IPL$_SYNCH
+        MTPR    #8, #18
         MOVAB   L, R1
         JSB     G^EXE$OUTZSTRING
-        MOVL    (SP)+, R1
+        MOVL    4(SP), R1
         JSB     G^EXE$OUTHEX
         JSB     G^EXE$OUTCRLF
+        MTPR    (SP)+, #18              ; ENBINT
+        ADDL2   #4, SP
         .ENDM   PRINTHEX

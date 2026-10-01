@@ -50,7 +50,9 @@ PAL$_DELCTX = ^X42                      ; R0 = HWPCB of a context to delete
 IPL$_ASTDEL = 2                         ; AST delivery
 IPL$_RESCHED = 3                        ; rescheduling software interrupt
 IPL$_IOPOST = 4                         ; I/O post processing
+IPL$_TIMER = 7                          ; software timer: quantum end
 IPL$_SYNCH = 8                          ; the scheduler's database
+IPL$_HWCLK = 24                         ; interval timer interrupt
 IPL$_POWER = 31                         ; everything blocked
         .ENDM   $IPLDEF
 
@@ -78,7 +80,8 @@ IPL$_POWER = 31                         ; everything blocked
         .MACRO  $SCBDEF
 SCB$L_CHMK = ^X40                       ; change mode to kernel
 SCB$L_SOFTINT = ^X80                    ; software interrupt level n at +4*n
-SCB$K_LENGTH = ^XC0
+SCB$L_INTTIM = ^XC0                     ; interval timer, at IPL$_HWCLK
+SCB$K_LENGTH = ^XC4
         .ENDM   $SCBDEF
 
 ; $INTSTKDEF: the frame the PAL pushes on the kernel stack when it delivers
@@ -173,6 +176,7 @@ PCB$L_HWPCB = 52                        ; the HWPCB the PAL knows it by
 PCB$L_IMGBAS = 56                       ; the image's pages
 PCB$L_IMGEND = 60                       ; and past the last
 PCB$B_PRIB = 64                         ; base priority
+PCB$W_QUANT = 66                        ; -ticks left of its quantum
 PCB$L_OWNER = 68                        ; creator's PID
 PCB$T_LNAME = 72                        ; process name, .ASCIC, 15 characters
 PCB$T_IMAGE = 88                        ; image name, .ASCIC, 39 characters
