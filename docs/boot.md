@@ -112,6 +112,9 @@ interpreter. It is linked high in P1, which tells the executive it is one
   the ones it is given, `DIR [SYSEXE]`, `DIR [000000]`. `TYPE file` runs
   `TYPE.EXE`, which reads the file with `$OPEN` and `$GET` and writes it
   on the console. `HELP` lists the commands, and `LOGOUT` deletes SYSTEM.
+  When the swapper deletes what SYSTEM left, it prints `%EXEC-I-LOGOUT`
+  and halts, and the root task powers QEMU off with a semihosting
+  `SYS_EXIT`.
 
 The system disk is read only, and there's no login yet, and no CTRL/Y: a
 program that never exits keeps the console.
