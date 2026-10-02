@@ -13,9 +13,14 @@ commands.
 
 QEMU's firmware finds the boot disk (`out/esp.img`) and starts Limine, a
 bootloader. As [image/limine.conf](../image/limine.conf) says, Limine loads
-four files into memory: the shim, the seL4 kernel, the root task and
-`sys.vol`. `sys.vol` is the boot volume, a small disk image that holds the
-VMS executable files. Limine then jumps to the shim.
+three files into memory: the shim, the seL4 kernel and the root task.
+Limine then jumps to the shim.
+
+QEMU has a second disk, the system disk (`out/sysdisk.img`). It is a
+Files-11 ODS-2 volume, the file system VMS uses, which
+[roottask/build.rs](../roottask/build.rs) makes at build time: the VMS
+executable files in `[SYSEXE]` and a text file in `[SYSMGR]`. The firmware
+and Limine leave it alone; the root task reads it later.
 
 ## 2. The shim
 
@@ -26,15 +31,14 @@ program. Its job is to put the machine in the state seL4 expects at startup
 - It looks up the serial port's address in the hardware description (the
   DTB) so it can print. That's the `vaxpunk shim:` line.
 - It copies the kernel, then the DTB, then the root task into physical
-  memory, one after another. The boot volume goes right after the root task,
-  so seL4 will treat it as part of the root task's program.
+  memory, one after another.
 - It sets up the MMU and jumps into seL4.
 
 ## 3. seL4
 
 seL4, the microkernel, takes over the CPU and memory. It creates one
 program, the root task, and gives it every permission ("capability") in the
-system. The boot volume is mapped at the end of the root task's memory.
+system.
 
 ## 4. The root task, also called the PAL
 
@@ -50,10 +54,15 @@ the role PALcode played on an Alpha: it's the "hardware" layer underneath VMS
   On each wakeup the PAL also checks the serial port for typed
   characters, and once the executive asks for it, raises the console
   receive interrupt when there are some.
-- `start_exec` finds `EXEC.EXE` on the boot volume and loads it. It also
-  creates the restart parameter block (RPB), a page describing memory, the
-  volume and the boot time. It then starts EXEC in kernel mode at IPL 31,
-  with R11 pointing at the RPB.
+- `disk_init` finds the system disk, a virtio block device, and prints
+  `disk: virtio-blk, 4096 blocks`. From then on the PAL can read the
+  disk's blocks, by number, for itself and for the executive.
+- `start_exec` reads `EXEC.EXE` from the system disk, as VMS's first
+  bootstrap did: the home block, the index file, the top directory,
+  `[SYSEXE]`, then the file (`f11_boot_file`). It loads it, and creates
+  the restart parameter block (RPB), a page describing memory and the
+  boot time. It then starts EXEC in kernel mode at IPL 31, with R11
+  pointing at the RPB.
 - After that it loops in `serve`: it handles the executive's PAL calls
   (MTPR, SWPCTX, REI, CHMx…), page faults and clock ticks
   ([DESIGN-0001](design/0001-pal-interface.md)). It only stops on a halt or
@@ -73,6 +82,9 @@ The executive is the VMS kernel, written in MACRO-32.
   program reads them, and turns on the console receive interrupt
   (`TTY$INIT`)
 - prints `%EXEC-I-START … free pages`
+- mounts the system disk, `DKA0:`: it reads the volume's home block and
+  the index file's header, which says where every other file's header is
+  (`FIL$MOUNT`), and prints `%MOUNT-I-MOUNTED, VAXPUNK mounted on _DKA0:`
 - lowers IPL to 0 and creates the console's process, SYSTEM, which runs
   `DCL.EXE`
 - then becomes the swapper (process 1). The swapper cleans up deleted
@@ -85,20 +97,24 @@ interpreter. It is linked high in P1, which tells the executive it is one
 ([ADR-0006](adr/0006-cli-in-p1-runs-images-in-its-process.md)):
 
 - When SYSTEM starts (`EXE$PROCSTRT`), the executive makes its stacks,
-  loads `DCL.EXE` into P1 and calls it in supervisor mode.
+  reads `DKA0:[SYSEXE]DCL.EXE` from the disk (`FIL$OPENFILE`), loads it
+  into P1 and calls it in supervisor mode.
 - DCL opens a channel to the console, `OPA0:`, prints the `$` prompt and
   waits for a line. That's where the boot ends: the CPU idles, taking
   clock ticks, until you type something.
-- `RUN image` loads the image into the same process's P0 (`$IMGACT`) and
-  runs it in user mode. When the image exits, the executive throws away
-  its pages and the channels it opened, and calls DCL again with the
-  exit status. DCL prints a message if the status is an error, then the
-  prompt again.
-- `DIRECTORY` (`DIR`) runs `DIRECTORY.EXE`, which lists the files on the
-  boot volume. `HELP` lists the commands, and `LOGOUT` deletes SYSTEM.
+- `RUN image` reads the image from `[SYSEXE]` and loads it into the same
+  process's P0 (`$IMGACT`) and runs it in user mode. When the image
+  exits, the executive throws away its pages and the channels and files
+  it opened, and calls DCL again with the exit status. DCL prints a
+  message if the status is an error, then the prompt again.
+- `DIRECTORY` (`DIR`) runs `DIRECTORY.EXE`, which lists files with RMS's
+  `$PARSE` and `$SEARCH`: those in `[SYSMGR]`, the default directory, or
+  the ones it is given, `DIR [SYSEXE]`, `DIR [000000]`. `TYPE file` runs
+  `TYPE.EXE`, which reads the file with `$OPEN` and `$GET` and writes it
+  on the console. `HELP` lists the commands, and `LOGOUT` deletes SYSTEM.
 
-There's no login or disk driver yet, and no CTRL/Y: a program that never
-exits keeps the console.
+The system disk is read only, and there's no login yet, and no CTRL/Y: a
+program that never exits keeps the console.
 
 ## 7. STARTUP and the test processes
 
@@ -128,5 +144,5 @@ executive feature:
   the others finish.
 
 `just check` boots the system, types `RUN STARTUP`, `RUN SNOOP`, a bad
-command and `DIR P%NG` at the prompt, and looks for the success lines in
-`out/serial.log`.
+command, `DIR [SYSEXE]P%NG` and `TYPE WELCOME.TXT` at the prompt, and looks
+for the success lines in `out/serial.log`.

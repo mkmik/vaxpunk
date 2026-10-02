@@ -1,7 +1,8 @@
 //! Builds roottask.elf into OUT_DIR with the kernel's toolchain and libsel4,
-//! and the boot volume, sys.vol: EXEC.EXE, linked from exec/*.mar, and an
-//! image for each sysexe/*.mar, linked against SYS.STB, the executive's
-//! symbols.
+//! and the system disk, sysdisk.img, a Files-11 ODS-2 volume: in [SYSEXE],
+//! EXEC.EXE, linked from exec/*.mar, and an image for each sysexe/*.mar,
+//! linked against SYS.STB, the executive's symbols; in [SYSMGR], the files
+//! in sysmgr/, as text.
 
 use std::env;
 use std::fs;
@@ -14,7 +15,7 @@ const LDFLAGS: &str = "-nostdlib -static -no-pie -T linker.ld -Wl,--build-id=non
     -Wl,-z,max-page-size=4096";
 
 fn main() {
-    for path in ["src", "exec", "sysexe", "linker.ld", LIB] {
+    for path in ["src", "exec", "sysexe", "sysmgr", "linker.ld", LIB] {
         println!("cargo::rerun-if-changed={path}");
     }
     let out = PathBuf::from(env::var("OUT_DIR").unwrap());
@@ -49,7 +50,7 @@ fn main() {
         let image = link(&name, base, None, &modules);
         files.push((format!("{name}.EXE"), image.image.write()));
     }
-    fs::write(out.join("sys.vol"), volume(&files)).unwrap();
+    disk(&out.join("sysdisk.img"), &files);
 }
 
 /// Where `.LIBRARY` finds lib.mlb and starlet.mlb.
@@ -128,31 +129,41 @@ fn symbol_table(map: &str) -> (String, Vec<u8>) {
     ("SYS.STB".into(), vms_obj::obj::write(&object.records))
 }
 
-/// The boot volume ($BVDDEF in vtools/lib/lib.mlb): a directory block of
-/// 32-byte entries, a .ASCIC name, the first block and the size, then each
-/// file from a 512-byte block.
-fn volume(files: &[(String, Vec<u8>)]) -> Vec<u8> {
-    const BLOCK: usize = 512;
-    assert!(
-        files.len() <= BLOCK / 32,
-        "too many files for the boot volume"
-    );
-    let mut vol = vec![0; BLOCK];
-    for (i, (name, data)) in files.iter().enumerate() {
-        assert!(
-            name.len() <= 23,
-            "{name}: a boot volume name is at most 23 characters"
-        );
-        let lbn = (vol.len() / BLOCK) as u32;
-        let e = &mut vol[32 * i..32 * (i + 1)];
-        e[0] = name.len() as u8;
-        e[1..=name.len()].copy_from_slice(name.as_bytes());
-        e[24..28].copy_from_slice(&lbn.to_le_bytes());
-        e[28..32].copy_from_slice(&(data.len() as u32).to_le_bytes());
-        vol.extend(data);
-        vol.resize(vol.len().next_multiple_of(BLOCK), 0);
+/// The system disk: an ODS-2 volume labelled VAXPUNK with the images in
+/// [SYSEXE], fixed 512-byte records as VMS's are, and sysmgr/'s files in
+/// [SYSMGR], their lines variable-length records, with names in capitals.
+fn disk(path: &Path, images: &[(String, Vec<u8>)]) {
+    use ods_image::{Conversion, Image, InitParams, RecordAttrs, rfm};
+    let _ = fs::remove_file(path);
+    let params = InitParams {
+        label: b"VAXPUNK".to_vec(),
+        ..Default::default()
+    };
+    fn ok<T>(r: ods_image::Result<T>) -> T {
+        r.unwrap_or_else(|e| panic!("the system disk: {e}"))
     }
-    vol
+    let mut vol = ok(Image::create(path, 4096, &params));
+    ok(vol.mkdir("[SYSEXE]"));
+    ok(vol.mkdir("[SYSMGR]"));
+    let image = RecordAttrs {
+        rtype: rfm::FIX,
+        rsize: 512,
+        maxrec: 512,
+        ..Default::default()
+    };
+    for (name, data) in images {
+        let spec = format!("[SYSEXE]{name}");
+        let size = Some(data.len() as u64);
+        ok(vol.copy_in(&mut &data[..], &spec, Conversion::Binary, size, Some(image)));
+    }
+    for source in sources("sysmgr", &["txt"]) {
+        let name = source.file_name().unwrap().to_str().unwrap().to_uppercase();
+        let text = fs::read(&source).unwrap();
+        let spec = format!("[SYSMGR]{name}");
+        let (size, lines) = (Some(text.len() as u64), Conversion::LinesToRecords);
+        ok(vol.copy_in(&mut &text[..], &spec, lines, size, None));
+    }
+    ok(vol.flush());
 }
 
 /// The files in `dir` with one of `exts`, sorted.

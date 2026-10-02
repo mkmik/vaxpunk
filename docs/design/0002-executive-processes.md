@@ -14,7 +14,9 @@ P0 and P1 of its own and runs its image in user mode, entering the inner
 modes through system services, and
 [ADR-0006](../adr/0006-cli-in-p1-runs-images-in-its-process.md): a command
 interpreter lives in P1 in supervisor mode and runs images in its own
-process.
+process, and
+[ADR-0007](../adr/0007-system-disk-files-11-and-rms.md): the files are on a
+Files-11 volume, which the executive reads by LBN, with RMS on top.
 
 The executive borrows VMS's structure and names (PCB, `SCH$`, `MMG$`,
 `EXE$` routines, `SS$_` codes, the system service interfaces) but none of
@@ -32,11 +34,15 @@ its code.
 | `process.mar` | `$CREPRC`, process start, image activation, `$IMGACT`, `$EXIT`, image rundown, deletion, `$HIBER`, `$WAKE`, `$SUSPND`, `$RESUME`, `$SETPRI`, `$SETPRN`, `$CMKRNL` |
 | `qio.mar` | `$ASSIGN`, `$DASSGN`, `$QIO`, `$QIOW`: writes on the console and reads from it; the console receive interrupt and the type-ahead buffer |
 | `syssrv.mar` | the system service vector, the `CHMK` and `CHME` dispatchers, `$CMEXEC`, where processes enter user and supervisor mode, the exception handlers and the stubs |
+| `f11.mar` | the system disk, Files-11 ODS-2, read only: `FIL$MOUNT`, headers, maps, directories, `FIL$OPENFILE` for the image activator |
+| `rms.mar` | RMS: file specifications, `$PARSE`, `$SEARCH`, `$OPEN`, `$CONNECT`, `$GET`, `$DISCONNECT`, `$CLOSE` |
 
 `roottask/build.rs` links them, with `vtools/lib/consolio.mar`, into
 `EXEC.EXE`, in S0 at `0x40010000`. The structures are in `vtools/lib/lib.mlb` (`$PCBDEF`,
 `$CEBDEF`, `$PTEDEF`, `$RPBDEF`...), what programs need in
-`vtools/lib/starlet.mlb` (`$SSDEF`, `$PRTDEF`, the `$name_S` macros).
+`vtools/lib/starlet.mlb` (`$SSDEF`, `$PRTDEF`, the `$name_S` macros, RMS's
+`$FABDEF`, `$RABDEF`, `$NAMDEF`, `$RMSDEF` and the `$FAB`, `$RAB`, `$NAM`
+blocks and `$OPEN`... calls).
 
 ## Start
 
@@ -55,9 +61,12 @@ its code.
 5. `EXE$INITTIM`: an empty timer queue, and the system time from
    `RPB$L_BOOTTIME`. `TTY$INIT`: an empty type-ahead buffer, and the
    console receive interrupt enabled.
-6. Lowers IPL to 0 and creates the console's process, `SYSTEM`, from
+6. `FIL$MOUNT` mounts the system disk (*Files*) and prints
+   `%MOUNT-I-MOUNTED, VAXPUNK mounted on _DKA0:`. If it can't, the
+   executive halts with `%EXEC-F-NOMOUNT` and the status.
+7. Lowers IPL to 0 and creates the console's process, `SYSTEM`, from
    `DCL.EXE` (*The command interpreter*).
-7. Becomes the swapper: it deletes what deleted processes left behind,
+8. Becomes the swapper: it deletes what deleted processes left behind,
    and hibernates in between.
 
 ## Memory
@@ -69,8 +78,8 @@ P1 are each process's own, S0 every process's:
 | --- | --- |
 | `0x00010000` | P0: the process's image, linked there (`build.rs`), then its `$EXPREG` pages |
 | `0x40010000` | S0: `EXEC.EXE` |
-| `0x48000000` | nonpaged pool, 512 KB: PCBs, kernel stacks, common event blocks |
-| `0x4FFF0000` | the RPB; `0x50000000` the boot volume, read-only |
+| `0x48000000` | nonpaged pool, 512 KB: PCBs, kernel stacks, common event blocks, open files, images being activated |
+| `0x4FFF0000` | the RPB |
 | `0x5FFF0000` | the boot stack's top |
 | `0x60000000` | P1: the process's `$CRETVA` pages |
 | `0x7FF00000` | `VA$C_CLI`: its command interpreter, if it has one, `DCL.EXE` |
@@ -100,7 +109,7 @@ The PFN list and the pool are synchronized at `IPL$_SYNCH`.
 
 ## Processes
 
-A process is a PCB (`$PCBDEF`, 272 bytes, from pool), a 16 KB kernel stack
+A process is a PCB (`$PCBDEF`, 344 bytes, from pool), a 16 KB kernel stack
 from pool, an image and stacks in its P0 and P1, and the threads the PAL
 makes for its HWPCB, which is inside the PCB: one for kernel mode and one
 for each outer mode it enters. `SCH$GL_PCBVEC` holds the PCBs by index; a PID is a
@@ -126,12 +135,13 @@ The scheduler's first `SWPCTX` to the new HWPCB starts its thread at
 
 1. Makes the executive, supervisor and user stacks at the top of P1 and
    puts their tops in the HWPCB.
-2. `IMG$ACTIVATE`, the image activator, finds the image on the boot volume
-   (`FIL$OPENFILE`), checks its header and that it is all in P0, or all
+2. `IMG$ACTIVATE`, the image activator, reads the image from the system
+   disk, in `DKA0:[SYSEXE]` unless its name says where, into pool
+   (`FIL$OPENFILE`, *Files*), checks its header and that it is all in P0, or all
    from `VA$C_CLI` to the stacks in P1, and maps each section: zeroed
    pages, the contents copied in, then the protection: code read and
    execute, read-only data read, the rest write, for user mode in P0 and
-   supervisor mode in P1.
+   supervisor mode in P1. Then it frees the pool.
 3. An image in P1 is a command interpreter: `EXE$CLIENTRY` (*The command
    interpreter*). Any other, `EXE$USRENTRY`: `REI` to `EXE$USRSTART`, in
    user mode, on an empty user stack, with the image's transfer address in
@@ -143,14 +153,14 @@ A process without a command interpreter, as on VMS, ends with its image:
 a command interpreter would:
 
 ```
-%EXEC-W-EXITED, process NOSUCH exited with status 00000910
+%EXEC-W-EXITED, process NOSUCH exited with status 00018292
 ```
 
 ### Deletion
 
 - **Itself** (`$EXIT` without a command interpreter, or `$DELPRC` naming
   itself): it runs itself down (timer queue entries, every page of its P0
-  and P1, common event flag clusters, channels, slot), goes on the
+  and P1, common event flag clusters, channels, open files, slot), goes on the
   swapper's queue, wakes it, and
   gives up the CPU for good. The swapper deletes its context with
   `DELCTX`, then frees its kernel stack and PCB, since a process can't free
@@ -179,7 +189,8 @@ there is. The image activator puts its transfer address in
 - **`$IMGACT image, cmdlin`** runs an image in the current process. It
   copies the name into the PCB, and the command line, if there is one, up
   to 255 characters, to `VA$C_FOREIGN`, where the image finds it.
-  It remembers the channels the process has in `PCB$L_CLICHANS`, runs the
+  It remembers the channels and files the process has in `PCB$L_CLICHANS`
+  and `PCB$L_CLIFILES`, runs the
   old image down, activates the new one, which must be in P0, and calls it
   in user mode at `EXE$USRENTRY`, on an empty user stack below the command
   line. It returns only if the activation fails, with its status.
@@ -187,8 +198,9 @@ there is. The image activator puts its transfer address in
   the command interpreter.
 - **`$EXIT`**, the image's or an exception's, in a process with a command
   interpreter: `EXE$IMGRUNDOWN` gives back the image's timer queue
-  entries, P0 pages and common event flag clusters, and the channels not
-  in `PCB$L_CLICHANS`; then `EXE$CLIENTRY` with the status.
+  entries, P0 pages and common event flag clusters, the channels not in
+  `PCB$L_CLICHANS` and the files not in `PCB$L_CLIFILES`; then
+  `EXE$CLIENTRY` with the status.
 
 The command interpreter keeps nothing on its stack across an image; what
 it remembers is in its P1 data. `EXEC$START` creates the console's
@@ -198,6 +210,7 @@ process, `SYSTEM`, with `DCL.EXE`:
 | --- | --- |
 | `RUN image` | `$IMGACT`, with `.EXE` if the name has no type |
 | `DIRECTORY [spec]` | `$IMGACT` of `DIRECTORY.EXE`, with the spec, in capitals, as its command line |
+| `TYPE spec` | `$IMGACT` of `TYPE.EXE`, the same way |
 | `HELP` | lists the commands |
 | `LOGOUT` | returns, which deletes the process |
 
@@ -369,6 +382,7 @@ can't reach them.
 | Time | `$GETTIM`, `$SETIMR`, `$CANTIM` | |
 | I/O | `$ASSIGN`, `$DASSGN`, `$QIO`, `$QIOW` | |
 | Images | `$IMGACT` | |
+| RMS | `$PARSE`, `$SEARCH`, `$OPEN`, `$CONNECT`, `$GET`, `$DISCONNECT`, `$CLOSE` | |
 | Other | | `$DCLAST`, `$SETAST`, `$CRELNM`, `$DELLNM`, `$TRNLNM`, `$GETSYI` |
 
 Arguments the implemented services take but ignore: `$CREPRC`'s I/O,
@@ -403,6 +417,59 @@ ponytail: a buffer at a time, at `IPL$_SYNCH`, so lines don't mix; a
 terminal driver with I/O request packets, CTRL/Y and escape sequences
 replaces it.
 
+### Files
+
+The system disk, `DKA0:`, is a Files-11 ODS-2 volume, which the PAL reads
+a block at a time with `READLBLK` (DESIGN-0001, *The system disk*).
+`f11.mar` reads Files-11 (`ods/docs/`) as VMS's XQP does, read only:
+
+- **`FIL$MOUNT`**, at boot, reads the home block at LBN 1, checks its
+  format, `DECFILE11B`, keeps where file headers start in the index file
+  and its label, and reads the index file's header, through whose map it
+  finds every other header.
+- **`FIL$READHDR`** reads file number n's header, VBN
+  `IBMAPVBN + IBMAPSIZE + n - 1` of the index file, and checks its
+  checksum and number. **`FIL$MAPVBN`** finds a VBN's LBN in a header's
+  map, retrieval pointers of formats 1 to 3, and **`FIL$READVBN`** reads a
+  file's blocks, an extent at a time. ponytail: no extension headers.
+- **`FIL$SEARCHDIR`** reads a directory's blocks up to its end of file and
+  finds the next record whose name, `NAME.TYPE`, matches a pattern with
+  `*` and `%`, and the version asked for: any, the highest (the first of
+  the name's record) or one. It can skip matches, which is how `$SEARCH`
+  goes on from where it was.
+- **`FIL$OPENFILE`** finds an image and reads it whole into pool, for the
+  image activator, which frees it once the sections are copied.
+
+RMS (`rms.mar`) is a set of system services on VMS's FAB, RAB and NAM
+blocks. A file specification is `[DKA0:][[dir.dir]]name.type;version`.
+`RMS$PARSE` splits it, and the FAB's default specification, and
+`DKA0:[SYSMGR]`, the console process's default directory, into device,
+directory, name, type and version, takes each part from the first that
+has it, in capitals, into the expanded specification, checks it, and walks
+the directory from the MFD, each name `NAME.DIR;1` in the one before
+(`[000000]` is the MFD). The images' default is `DKA0:[SYSEXE]` instead.
+
+| Service | Does |
+| --- | --- |
+| `$PARSE fab` | the expanded string, its parts and the directory's ID into the FAB's NAM block |
+| `$SEARCH fab` | the next file the NAM block's expanded string names: its resultant string, parts and file ID; `RMS$_FNF` if there is none, then `RMS$_NMF` |
+| `$OPEN fab` | opens one file, the highest version unless the specification gives one, for reading; `RMS$_WLK` for writing. Its IFI, record format, attributes, maximum record size and allocation into the FAB, its resultant string into the NAM block if there is one |
+| `$CONNECT rab` | connects the RAB to the file its FAB opened, at its start |
+| `$GET rab` | the next record into the RAB's user buffer: `RAB$W_RSZ`, `RAB$L_RBF`; `RMS$_RTB` if it didn't fit, `RMS$_EOF` past the end; VAR and FIX records only |
+| `$DISCONNECT rab`, `$CLOSE fab` | undo `$CONNECT` and `$OPEN` |
+
+An open file is an IFAB, 1,040 bytes of pool: the file's header, the block
+`$GET` reads in, and where it is. The PCB holds up to 15, by IFI, in
+`PCB$A_IFAB`, a bit each in `PCB$L_FILES`; `$CONNECT` puts the IFI in
+`RAB$W_ISI` too. `RMS$RUNDOWN` closes a process's files at image exit
+and process deletion.
+
+The services, and `FIL$OPENFILE`, run in kernel mode at `IPL$_SYNCH`, one
+at a time, which keeps the file system's buffers theirs. They return
+VMS's `RMS$_` statuses (`$RMSDEF`) and put them in `FAB$L_STS` or
+`RAB$L_STS`. ponytail: VMS's RMS runs in executive mode; no ASTs,
+completion routines, logical names, wildcard directories or block I/O.
+
 ### Exceptions
 
 An access violation or a reserved instruction in an outer mode reaches
@@ -422,11 +489,13 @@ $ RUN SNOOP
 %NONAME-F-NOMSG, Message number 0000000C
 ```
 
-## The boot volume's programs
+## The system disk's programs
 
-`roottask/sysexe/` holds the programs on the boot volume: DCL, and those
-which show the services at work, which `just check` runs from DCL's
-prompt (`RUN STARTUP`, `RUN SNOOP`, a bad verb and `DIR P%NG`) and to the end. They
+`roottask/sysexe/` holds the programs in `DKA0:[SYSEXE]`: DCL, DIRECTORY,
+TYPE, and those which show the services at work, which `just check` runs
+from DCL's prompt (`RUN STARTUP`, `RUN SNOOP`, a bad verb,
+`DIR [SYSEXE]P%NG` and `TYPE WELCOME.TXT`) and to the end.
+`roottask/sysmgr/` holds the text files in `DKA0:[SYSMGR]`. They
 run in user mode, DCL in supervisor mode, and write on the console with
 `PRINT` and `PRINTHEX` from `sysexe.mlb`, which call `PUT_LINE` in
 `sysexe/lib/print.mar`, linked into each: a line at a time on `OPA0:`,
@@ -435,11 +504,12 @@ with `$QIOW`.
 | Program | Does |
 | --- | --- |
 | `DCL` | the command interpreter (*The command interpreter*) |
-| `DIRECTORY` | lists the files on the boot volume that match its command line, `*` and `%` wildcards, with their sizes in blocks, as `DIRECTORY/SIZE`; it copies the volume's directory block with `$CMKRNL`. ponytail: RMS `$SEARCH` on Files-11 replaces that |
+| `DIRECTORY` | `$PARSE`s its command line, with `*.*;*` for what it leaves out, and lists the files `$SEARCH` finds: the directory, the names four to a line, how many |
+| `TYPE` | `$OPEN`s the file its command line names and writes each record `$GET` reads on the console, a line each |
 | `STARTUP` | makes 4 pages with `$EXPREG`, checks and deletes them; creates `SLEEPER` at a higher priority, which runs at once, and `PING` and `PONG`; waits until `PONG` sets flag 66 of their cluster; deletes `SLEEPER`; creates `SVCTEST`, `HOG` and `TIMETEST` |
 | `SLEEPER` | hibernates until it is deleted |
 | `PING`, `PONG` | take three turns through common event flags 64 and 65 of the cluster `PINGPONG`; `PONG` then sets flag 66, which `STARTUP` waits for |
-| `SVCTEST` | checks the statuses of the services the others don't use, and of errors: local event flags, the dispatcher's checks and a stub, `$CRETVA` and `$DELTVA`, `$CMKRNL` and `$CMEXEC`; what user mode may `PROBE`, and that services refuse it the executive's data; the console's channels; `$SETPRI`, and `$SUSPND`, `$WAKE`, `$RESUME` and `$DELPRC` on a process of its own; then creates one whose image doesn't exist, which exits with `SS$_NOSUCHFILE`, and `SNOOP` and `USURP` |
+| `SVCTEST` | checks the statuses of the services the others don't use, and of errors: local event flags, the dispatcher's checks and a stub, `$CRETVA` and `$DELTVA`, `$CMKRNL` and `$CMEXEC`; what user mode may `PROBE`, and that services refuse it the executive's data; the console's channels; `$SETPRI`, and `$SUSPND`, `$WAKE`, `$RESUME` and `$DELPRC` on a process of its own; then creates one whose image doesn't exist, which exits with `RMS$_FNF`, and `SNOOP` and `USURP` |
 | `SNOOP` | reads S0 from user mode, and exits with `SS$_ACCVIO` |
 | `USURP` | raises IPL from user mode, and exits with `SS$_OPCDEC` |
 | `HOG` | associates a common event flag cluster, creates `NUDGE` at its own priority and loops reading flag 64 until `NUDGE` sets it, with no wait: only quantum end lets `NUDGE` run |
@@ -457,4 +527,5 @@ taking the clock's interrupts.
 - Privileges, for `$CMKRNL` and `$CMEXEC`, and condition handlers in place
   of exiting on an exception.
 - CTRL/Y, to take the console back from an image, and `$FORCEX`.
-- A disk driver and Files-11, in place of the boot volume.
+- Writing the system disk, the disk's interrupt, `$QIO` on disk
+  channels, logical names and `SET DEFAULT`.

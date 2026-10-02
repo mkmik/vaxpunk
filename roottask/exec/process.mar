@@ -6,7 +6,7 @@
 ; scheduler switches to the process's HWPCB, and the first time it enters
 ; each outer mode. $CREPRC builds the PCB and a kernel stack holding the
 ; frame REI pops, which starts the process at EXE$PROCSTRT, in kernel mode
-; at IPL 0. There it activates its image from the boot volume and REIs to
+; at IPL 0. There it activates its image from the system disk and REIs to
 ; user mode, which calls the image; when the image returns, or calls $EXIT,
 ; the process is deleted, as a VMS process is when its image exits and it
 ; has no command interpreter.
@@ -24,10 +24,8 @@
         $PCBDEF
         $PSLDEF
         $STATEDEF
-        $RPBDEF
         $HWPCBDEF
         $INTSTKDEF
-        $BVDDEF
         $PTEDEF
         $PRTDEF
         $VADEF
@@ -38,10 +36,12 @@
         .EXTERNAL SCH$REMCOM, SCH$MAKECOM, SCH$WAKEPCB, SCH$WAKE, SCH$WAIT
         .EXTERNAL SCH$SCHED, SCH$DACEFC_ALL, SGN$GW_QUANTUM
         .EXTERNAL EXE$ALONONPAGED, EXE$DEANONPGDSIZ, MMG$CREPAG, MMG$DELPAG
-        .EXTERNAL MMG$SETPRT, EXE$GL_RPB, EXE$RMVTIMQ, EXE$USRSTART, EXE$CLISTART
+        .EXTERNAL MMG$SETPRT, EXE$RMVTIMQ, EXE$USRSTART, EXE$CLISTART
+        .EXTERNAL FIL$OPENFILE, RMS$RUNDOWN
         .EXTERNAL EXE$OUTZSTRING, EXE$OUTCSTRING, EXE$OUTHEX, EXE$OUTCRLF
 
 KSTACK = 16384                          ; a process's kernel stack
+BLOCK = 512                             ; an image's blocks
 KW = PTE$M_VALID ! <PRT$C_KW @ PTE$V_PROT>
 UR = PTE$M_VALID ! <PRT$C_UR @ PTE$V_PROT>
 UW = PTE$M_VALID ! <PRT$C_UW @ PTE$V_PROT>
@@ -362,29 +362,6 @@ REIOUT: ADDL3   #KSTACK, PCB$L_KSTACK(R4), SP
         MOVL    R5, INTSTK$Q_X_SP(SP)
         REI
 
-; FIL$OPENFILE: R6 = a file name, R7 = its length. Finds the file on the
-; boot volume: R1 = its address, R2 = its size, R0 = SS$_NORMAL or
-; SS$_NOSUCHFILE. Uses R3 and R5.
-; ponytail: the boot volume's directory; Files-11 with a disk driver.
-FIL$OPENFILE::
-        MOVL    EXE$GL_RPB, R2
-        MOVL    RPB$L_VOLUME(R2), R3
-        MOVL    #BVD$C_BLOCK/BVD$K_LENGTH, R5
-10$:    TSTB    (R3)
-        BEQL    90$
-        MOVL    R3, R0
-        BSBW    EXE$MATCHNAME
-        BLBS    R0, 20$
-        ADDL2   #BVD$K_LENGTH, R3
-        SOBGTR  R5, 10$
-90$:    MOVL    #SS$_NOSUCHFILE, R0
-        RSB
-20$:    MULL3   #BVD$C_BLOCK, BVD$L_LBN(R3), R1
-        ADDL2   RPB$L_VOLUME(R2), R1
-        MOVL    BVD$L_SIZE(R3), R2
-        MOVL    #SS$_NORMAL, R0
-        RSB
-
 ; NEXTISD: R8 = an image file, R10 = the offset of an EISD in its header.
 ; R3 = that EISD, or 0 past the last, and R10 = the next one's offset.
 ; Uses R0.
@@ -396,8 +373,8 @@ NEXTISD:
         BEQL    30$
         CMPL    R0, #-1
         BNEQ    20$
-        ADDL2   #BVD$C_BLOCK, R10       ; on in the next block
-        BICL2   #BVD$C_BLOCK-1, R10
+        ADDL2   #BLOCK, R10             ; on in the next block
+        BICL2   #BLOCK-1, R10
         BRB     10$
 20$:    ADDL2   R0, R10
         RSB
@@ -405,14 +382,15 @@ NEXTISD:
         RSB
 
 ; IMG$ACTIVATE: R4 = the current PCB, R5 = 1 if the image may be a command
-; interpreter, else 0. Activates the image the PCB names: maps its
+; interpreter, else 0. Activates the image the PCB names, which
+; FIL$OPENFILE reads from DKA0:[SYSEXE] unless its name says where: maps its
 ; sections at their addresses, with their contents and protection. An
 ; image in P0 is user readable and, where it is writable, user writable,
 ; and the end of P0 goes past it. One from VA$C_CLI up to the stacks in P1
 ; is a command interpreter: supervisor readable and writable instead,
 ; P1 starts at it, and its transfer address goes in PCB$L_CLI. R1 = the
-; transfer address, R0 = SS$_NORMAL, SS$_NOSUCHFILE, SS$_BADIMGHDR,
-; SS$_VASFULL or SS$_INSFMEM.
+; transfer address, R0 = SS$_NORMAL, FIL$OPENFILE's error, such as
+; RMS$_FNF, SS$_BADIMGHDR, SS$_VASFULL or SS$_INSFMEM.
 ; ponytail: images run where they are linked; the EIAF moves them.
 IMG$ACTIVATE::
         PUSHR   #^M<R2, R3, R4, R5, R6, R7, R8, R9, R10, R11>
@@ -420,7 +398,9 @@ IMG$ACTIVATE::
         MOVZBL  PCB$T_IMAGE(R4), R7
         MOVAB   PCB$T_IMAGE+1(R4), R6
         BSBW    FIL$OPENFILE
-        BLBC    R0, 99$
+        BLBC    R0, 98$
+        PUSHL   R3                      ; the file's pool block, to free
+        PUSHL   R1
         MOVL    R1, R8
         CMPL    (R8), #3                ; an ARM64 executable image
         BNEQ    90$
@@ -483,7 +463,7 @@ IMG$ACTIVATE::
         BLBC    R0, 92$
         BBS     #EISD$V_DZRO, EISD$L_FLAGS(R3), 45$
         SUBL3   #1, EISD$L_VBN(R3), R0
-        MULL2   #BVD$C_BLOCK, R0
+        MULL2   #BLOCK, R0
         ADDL2   R8, R0
         PUSHL   R3
         MOVC3   EISD$L_SECSIZE(R3), (R0), @EISD$Q_VIRT_ADDR(R3)
@@ -503,7 +483,14 @@ IMG$ACTIVATE::
         MOVL    SCH$GL_CURPCB, R0       ; R4 is gone
         MOVL    R1, PCB$L_CLI(R0)
 65$:    MOVL    #SS$_NORMAL, R0
-99$:    TSTL    (SP)+                   ; R5's copy
+99$:    MOVL    (SP)+, R2               ; the file's pool block
+        MOVL    (SP)+, R3
+        PUSHR   #^M<R0, R1>
+        MOVL    R2, R0
+        MOVL    R3, R1
+        BSBW    EXE$DEANONPGDSIZ
+        POPR    #^M<R0, R1>
+98$:    TSTL    (SP)+                   ; R5's copy
         POPR    #^M<R2, R3, R4, R5, R6, R7, R8, R9, R10, R11>
         RSB
 90$:    MOVL    #SS$_BADIMGHDR, R0
@@ -542,8 +529,8 @@ IMG$ACTIVATE::
 
 ; EXE$IMGRUNDOWN: R4 = the current PCB. Gives back what the image that ran
 ; in it holds: its timer queue entries, its pages in P0, its common event
-; flag clusters, and its channels, all but the command interpreter's,
-; PCB$L_CLICHANS. Uses R0-R3.
+; flag clusters, and its channels and files, all but the command
+; interpreter's, PCB$L_CLICHANS and PCB$L_CLIFILES. Uses R0-R3.
 ; ponytail: what the command interpreter holds too, but its channels; it
 ; uses nothing else yet.
 EXE$IMGRUNDOWN::
@@ -555,7 +542,8 @@ EXE$IMGRUNDOWN::
         BSBW    SCH$DACEFC_ALL
         MCOML   PCB$L_CLICHANS(R4), R0
         BICL2   R0, PCB$L_CHANS(R4)
-        RSB
+        MOVL    PCB$L_CLIFILES(R4), R0
+        BRW     RMS$RUNDOWN
 
 ; DELP0: R4 = the current PCB. Deletes the pages of its P0. Uses R0-R3.
 ; ponytail: every page from P0's start to its end, mapped or not; a list
@@ -569,7 +557,8 @@ DELP0:  MOVL    #VA$C_P0BASE, R0
         RSB
 
 ; EXE$RUNDOWN: R4 = the current PCB. Gives back what its process holds:
-; what EXE$IMGRUNDOWN does, then its pages in P1, its other channels, and
+; what EXE$IMGRUNDOWN does, then its pages in P1, its other channels and
+; files, and
 ; its slot, unless $DELPRC gave that to another process already. Runs in
 ; the process's own context, since P0 and P1 are the current process's.
 ; Uses R0-R3.
@@ -582,6 +571,8 @@ EXE$RUNDOWN::
         BSBW    MMG$DELPAG
 20$:    MOVL    #VA$C_P1END, PCB$L_FREP1VA(R4)
         CLRL    PCB$L_CHANS(R4)
+        CLRL    R0
+        BSBW    RMS$RUNDOWN
         DSBINT  #IPL$_SYNCH
         MOVZWL  PCB$L_PID(R4), R0
         CMPL    SCH$GL_PCBVEC[R0], R4
@@ -802,7 +793,8 @@ SUSPEND:
 
 ; $IMGACT image, cmdlin: runs image in the current process, as a command
 ; interpreter does: runs down the image there was, keeping the channels
-; the process has now, activates image in P0 and calls it in user mode,
+; and files the process has now, activates image in P0 and calls it in
+; user mode,
 ; with cmdlin, the rest of its command line, if there is one, at
 ; VA$C_FOREIGN. Returns only if the activation fails, with its status;
 ; SS$_IVLOGNAM for a name longer than 39 characters, SS$_BADPARAM for a
@@ -845,6 +837,7 @@ SUSPEND:
         MOVC3   (R8), @4(R8), @#VA$C_FOREIGN+1
 20$:    MOVL    SCH$GL_CURPCB, R4
         MOVL    PCB$L_CHANS(R4), PCB$L_CLICHANS(R4)
+        MOVL    PCB$L_FILES(R4), PCB$L_CLIFILES(R4)
         BSBW    EXE$IMGRUNDOWN
         CLRL    R5                      ; P0 only
         BSBW    IMG$ACTIVATE

@@ -1,0 +1,49 @@
+        .TITLE  TYPE    Writes a file on the console
+        .IDENT  /V0.1/
+;
+; DCL's TYPE spec runs this, with spec, in capitals, as its command line
+; at VA$C_FOREIGN. Opens the file spec names, in DKA0:[SYSMGR] unless it
+; says where, with RMS, and writes each of its records on the console, a
+; line each. Returns RMS's status if it can't.
+; ponytail: one file, no wildcards; a record past 255 characters is cut
+; there.
+;
+        .LIBRARY "lib.mlb"
+        .LIBRARY "starlet.mlb"
+        $VADEF
+        $SSDEF
+        $RMSDEF
+        $FABDEF
+        $RABDEF
+
+        .EXTERNAL PUT_LINE
+
+        .PSECT  DATA, NOEXE, WRT, LONG
+FAB:    $FAB    FNA=VA$C_FOREIGN+1
+RAB:    $RAB    FAB=FAB, UBF=REC+1, USZ=255
+REC:    .BLKB   256                     ; a record, .ASCIC
+
+        .PSECT  CODE, EXE, LONG
+        .ENTRY  START, ^M<R2>
+        MOVB    @#VA$C_FOREIGN, FAB+FAB$B_FNS
+        $OPEN   FAB=FAB
+        BLBC    R0, 90$
+        $CONNECT RAB=RAB
+        BLBC    R0, 80$
+10$:    $GET    RAB=RAB
+        BLBS    R0, 20$
+        CMPL    R0, #RMS$_RTB           ; too long: what fits
+        BNEQ    30$
+20$:    MOVB    RAB+RAB$W_RSZ, REC
+        PUSHAB  REC
+        CALLS   #1, G^PUT_LINE
+        BRB     10$
+30$:    CMPL    R0, #RMS$_EOF
+        BNEQ    80$
+        MOVL    #SS$_NORMAL, R0
+80$:    MOVL    R0, R2
+        $CLOSE  FAB=FAB
+        MOVL    R2, R0
+90$:    RET
+
+        .END    START

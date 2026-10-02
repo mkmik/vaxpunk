@@ -1,0 +1,10 @@
+
+        Welcome to vaxpunk, an OpenVMS clone for arm64
+
+This file is SYS$MANAGER:WELCOME.TXT, on a Files-11 ODS-2 volume, the
+system disk, DKA0:. TYPE read it with RMS: $OPEN, $CONNECT, and a $GET
+for each of its variable-length records.
+
+DIRECTORY lists the files in [SYSMGR], DIRECTORY [SYSEXE] the images,
+and DIRECTORY [000000] the volume's own files: INDEXF.SYS, BITMAP.SYS
+and the rest of what INITIALIZE made.

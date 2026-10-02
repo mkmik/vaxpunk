@@ -1,4 +1,4 @@
-; sysexe.mlb: console output for the boot volume's programs, which run in
+; sysexe.mlb: console output for the system disk's programs, which run in
 ; user mode and print with PUT_LINE in lib/print.mar, a line on OPA0: with
 ; $QIOW. Each line is written whole, so no other process's comes in
 ; between.

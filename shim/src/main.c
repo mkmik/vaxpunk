@@ -184,16 +184,12 @@ void shim_main(void)
 
 	struct elf kernel, user;
 	const struct limine_file *kf = find_module("kernel"), *uf = find_module("roottask");
-	const struct limine_file *vf = find_module("volume");
 	elf_parse(&kernel, "kernel", kf->address, kf->size);
 	elf_parse(&user, "roottask", uf->address, uf->size);
 
 	uint64_t k_start = kernel.pbase, k_end = k_start + (kernel.vend - kernel.vbase);
 	uint64_t dtb_start = ALIGN_UP(k_end, PAGE_SIZE), dtb_end = dtb_start + fdt_size(dtb);
 	uint64_t ui_start = ALIGN_UP(dtb_end, PAGE_SIZE), ui_end = ui_start + (user.vend - user.vbase);
-	/* The boot volume rides in the user image, so seL4 maps it right after the root task. */
-	uint64_t vol_start = ui_end;
-	ui_end = ALIGN_UP(vol_start + vf->size, PAGE_SIZE);
 	check_placement("kernel", k_start, k_end);
 	check_placement("DTB", dtb_start, dtb_end);
 	check_placement("root task", ui_start, ui_end);
@@ -201,13 +197,11 @@ void shim_main(void)
 	print("shim: DTB       0x%lx-0x%lx\n", dtb_start, dtb_end);
 	print("shim: root task 0x%lx-0x%lx vaddr 0x%lx entry 0x%lx\n", ui_start, ui_end,
 	      user.vbase, user.entry);
-	print("shim: volume    0x%lx-0x%lx vaddr 0x%lx\n", vol_start, ui_end, user.vend);
 
 	uint8_t *hhdm = (uint8_t *)hhdm_req.response->offset;
 	elf_load(&kernel, hhdm + k_start);
 	memcpy(hhdm + dtb_start, dtb, dtb_end - dtb_start);
 	elf_load(&user, hhdm + ui_start);
-	memcpy(hhdm + vol_start, vf->address, vf->size);
 	dcache_clean((uint64_t)hhdm + k_start, ui_end - k_start);
 
 	print("shim: entering seL4\n");
