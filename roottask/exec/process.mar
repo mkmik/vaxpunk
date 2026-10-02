@@ -184,8 +184,9 @@ EXE$NAMPID::
 ; prcnam, at priority baspri, and puts its PID in pidadr. input, output
 ; and error, if given, are the equivalence strings of its process-permanent
 ; logical names SYS$INPUT, SYS$OUTPUT and SYS$ERROR; SS$_BADPARAM for one
-; that is empty or longer than 255. The other arguments are ignored: there
-; is no privilege, quota or UIC yet.
+; that is empty or longer than 255. It starts in its creator's default
+; directory. The other arguments are ignored: there is no privilege, quota
+; or UIC yet.
         .ENTRY  EXE$CREPRC, ^M<R2, R3, R4, R5, R6, R7, R8, R9, R10>
         MOVL    SCH$GL_CURPCB, R4
         MOVL    4(AP), R1
@@ -245,6 +246,9 @@ EXE$NAMPID::
         MOVB    R0, PCB$B_PRIB(R8)
         MNEGW   SGN$GW_QUANTUM, PCB$W_QUANT(R8)
         MOVL    PCB$L_PID(R4), PCB$L_OWNER(R8)
+        PUSHR   #^M<R3, R4>                     ; the creator's default directory
+        MOVC3   #64, PCB$T_DEFDIR(R4), PCB$T_DEFDIR(R8)
+        POPR    #^M<R3, R4>
         MOVAB   PCB$Q_HWPCB(R8), PCB$L_HWPCB(R8)
         BSBW    PPNAMES
         BLBC    R0, 80$

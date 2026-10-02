@@ -80,8 +80,9 @@ RMS. `ods dir out/sysdisk.img '[...]'` lists it on the host.
 
 The `$` is DCL's prompt, on the console's process, `SYSTEM`. `RUN image`
 runs an image from `[SYSEXE]` (`.EXE` is the default type), `DIRECTORY`
-lists files, in `[SYSMGR]` unless told where (`DIR`, `DIR [SYSEXE]P%NG`,
-`DIR [000000]`), `TYPE file` writes a text file (`TYPE WELCOME.TXT`),
+lists files, in the default directory unless told where (`DIR`, `DIR
+[SYSEXE]P%NG`, `DIR [000000]`), `SET DEFAULT [dir]` and `SHOW DEFAULT` set
+and show that, `[SYSMGR]` at first, `TYPE file` writes a text file (`TYPE WELCOME.TXT`),
 `DEFINE name equivalence`, `DEASSIGN name` and `SHOW LOGICAL name` make,
 delete and translate logical names (`SHOW LOGICAL SYS$INPUT`, or `SHOW
 LOGICAL` alone to list them all), `HELP` lists the commands and `LOGOUT` ends the process:
@@ -136,8 +137,8 @@ clock interrupt every 10 ms. There is no CTRL/Y yet: an image that never
 exits, such as `SLEEPER`, keeps the console until QEMU is stopped. `just
 check` boots the same way without a terminal, types `RUN STARTUP`, `RUN
 SNOOP`, a bad verb, `DIR [SYSEXE]P%NG`, `TYPE WELCOME.TXT`, and a logical
-name's `DEFINE`, `SHOW LOGICAL` and `DEASSIGN`, and `SHOW LOGICAL` alone,
-prints the executive's part and fails unless the processes ran to the end.
+name's `DEFINE`, `SHOW LOGICAL` and `DEASSIGN`, `SHOW LOGICAL` alone, and
+`SET DEFAULT` and `SHOW DEFAULT`, prints the executive's part and fails unless the processes ran to the end.
 
 EDK2 prints a few `Error: Image at ... start failed` and `Tpm2...` lines
 before Limine starts. That is normal for the firmware QEMU ships. Don't

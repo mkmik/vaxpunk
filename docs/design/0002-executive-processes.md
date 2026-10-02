@@ -219,6 +219,8 @@ process, `SYSTEM`, with `DCL.EXE`:
 | `DEASSIGN name` | `$DELLNM` from `LNM$PROCESS` |
 | `SHOW LOGICAL name` | `$TRNLNM` in `LNM$FILE_DEV`: `"name" = "equivalence" (table)`, or `%SHOW-S-NOTRAN` |
 | `SHOW LOGICAL [*]` | lists every name, the process's table's and then the system's, in the order they were made, under each table's name; it copies them one at a time with `$CMKRNL`. ponytail: VMS's DCL asks the executive's logical name routines, and sorts them |
+| `SET DEFAULT [dev:][dir]` | `$PARSE`s it, which must name no file, and `$SETDDIR` with the directory it expands to; one that doesn't exist is still set, after `%DCL-I-INVDEF`. ponytail: no `[-]` or `[.dir]`, since RMS has none |
+| `SHOW DEFAULT` | the device and directory `$PARSE` expands an empty specification to |
 | `HELP` | lists the commands |
 | `LOGOUT` | returns, which deletes the process |
 
@@ -497,7 +499,7 @@ a block at a time with `READLBLK` (DESIGN-0001, *The system disk*).
 RMS (`rms.mar`) is a set of system services on VMS's FAB, RAB and NAM
 blocks. A file specification is `[DKA0:][[dir.dir]]name.type;version`.
 `RMS$PARSE` splits it, and the FAB's default specification, and
-`DKA0:[SYSMGR]`, the console process's default directory, into device,
+`DKA0:` with the process's default directory, into device,
 directory, name, type and version, takes each part from the first that
 has it, in capitals, into the expanded specification, checks it, and walks
 the directory from the MFD, each name `NAME.DIR;1` in the one before
@@ -511,6 +513,14 @@ the directory from the MFD, each name `NAME.DIR;1` in the one before
 | `$CONNECT rab` | connects the RAB to the file its FAB opened, at its start |
 | `$GET rab` | the next record into the RAB's user buffer: `RAB$W_RSZ`, `RAB$L_RBF`; `RMS$_RTB` if it didn't fit, `RMS$_EOF` past the end; VAR and FIX records only |
 | `$DISCONNECT rab`, `$CLOSE fab` | undo `$CONNECT` and `$OPEN` |
+| `$SETDDIR newdir, oldlen, olddir` | the old default directory into `olddir`, then `newdir`, `[dir.dir]` up to 63 characters, the new one, unchecked against the disk; `RMS$_DIR` if it isn't one |
+
+A process's default directory is `PCB$T_DEFDIR`. It starts as its
+creator's: the swapper's is `[SYSMGR]`, which `SYSTEM` and the processes
+it creates inherit. `$PARSE` gives the expanded string even when it
+returns `RMS$_DNF`, which is how `SET DEFAULT` names a directory that isn't
+there. ponytail: VMS keeps it in P1, and the device in `SYS$DISK`; here
+the device is always `DKA0:`.
 
 An open file is an IFAB, 1,040 bytes of pool: the file's header, the block
 `$GET` reads in, and where it is. The PCB holds up to 15, by IFI, in
@@ -583,5 +593,5 @@ taking the clock's interrupts.
 - CTRL/Y, to take the console back from an image, and `$FORCEX`.
 - Writing the system disk, the disk's interrupt, `$QIO` on disk
   channels, logical names in file specifications (`SYS$SYSTEM:DCL.EXE`)
-  and `SET DEFAULT`.
+  and `SYS$DISK`.
 - Access modes and search lists for logical names.

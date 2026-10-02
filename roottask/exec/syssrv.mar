@@ -144,6 +144,7 @@ CODE = 0
         SERVICE GET, 1
         SERVICE PARSE, 1
         SERVICE SEARCH, 1
+        SERVICE SETDDIR, 3
 
 ; EXE$CMODKRNL: the CHMK handler. R0 = the service's code, AP = its
 ; argument list, the PAL's frame on the kernel stack.

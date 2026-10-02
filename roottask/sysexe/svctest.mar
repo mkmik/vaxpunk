@@ -10,6 +10,7 @@
         $SSDEF
         $IODEF
         $LNMDEF
+        $RMSDEF
         .EXTERNAL SYS$SETAST, SYS$EXIT, EXE$GL_RPB
 
         .PSECT  DATA, NOEXE, WRT, LONG
@@ -86,6 +87,15 @@ EQVLEN: .LONG   0
 TABBUF: .BLKB   31
 TABLEN: .WORD   0
 SYSTEM: .LONG   ^X40000000, ^X40000FFF  ; S0: not a process's to make
+SYSEXE: .ASCID  "[SYSEXE]"
+WILDDIR:
+        .ASCID  "[SYS*]"
+OLDDIR: .LONG   63                      ; the default directory it started in:
+                                        ; oldlen, its length, overwrites 63
+        .ADDRESS OLDBUF
+OLDBUF: .BLKB   63
+SHORT:  .LONG   4                       ; too short a buffer for one
+        .ADDRESS BUF
 
         .PSECT  CODE, EXE, LONG
         .ENTRY  START, ^M<R2>
@@ -202,6 +212,21 @@ SYSTEM: .LONG   ^X40000000, ^X40000FFF  ; S0: not a process's to make
         EXPECT  #SS$_NORMAL, 48
         $DELLNM_S TABNAM=LNM_PROCESS, LOGNAM=OUT_NAME
         EXPECT  #SS$_NOLOGNAM, 49
+
+; The default directory: set [SYSEXE], keeping the old one; one with a
+; wildcard isn't one; read back as much as fits; set the old one again.
+        $SETDDIR_S NEWDIR=SYSEXE, OLDLEN=OLDDIR, OLDDIR=OLDDIR
+        EXPECT  #RMS$_NORMAL, 50
+        $SETDDIR_S NEWDIR=WILDDIR
+        EXPECT  #RMS$_DIR, 51
+        $SETDDIR_S OLDLEN=BUFLEN, OLDDIR=SHORT
+        EXPECT  #RMS$_NORMAL, 52
+        CMPW    BUFLEN, #4
+        BNEQ    90$
+        CMPL    BUF, #^X5359535B        ; "[SYS"
+        BNEQ    90$
+        $SETDDIR_S NEWDIR=OLDDIR
+        EXPECT  #RMS$_NORMAL, 53
 
 ; Other processes: lower this one's priority below NAPPER's so it runs
 ; and hibernates; suspend it while it does, so that $WAKE leaves it

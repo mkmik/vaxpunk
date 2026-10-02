@@ -20,13 +20,18 @@
 ;   SHOW LOGICAL [name]
 ;               translates a logical name, as $ASSIGN would; with no
 ;               name, or *, lists them all
+;   SET DEFAULT [dev:][dir]
+;               sets the process's default directory, with $SETDDIR
+;   SHOW DEFAULT
+;               shows it, with the device
 ;   HELP        lists the commands
 ;   LOGOUT      ends the process
 ;
 ; A verb may be abbreviated, to as little as its first letter; the first
 ; that matches is the one. It reads the commands from SYS$INPUT.
 ; ponytail: no message texts, symbols, qualifiers, quoted strings or
-; command procedures.
+; command procedures; no relative directories, [-] or [.dir], in SET
+; DEFAULT, since RMS has none.
 ;
         .LIBRARY "lib.mlb"
         .LIBRARY "starlet.mlb"
@@ -37,6 +42,9 @@
         $SSDEF
         $IODEF
         $LNMDEF
+        $RMSDEF
+        $FABDEF
+        $NAMDEF
 
         .EXTERNAL PUT_LINE, SCH$GL_CURPCB, LNM$GQ_SYSTEM
 
@@ -106,7 +114,15 @@ V_DEASSIGN:
 V_SHOW: .ASCIC  "SHOW"
 V_LOGICAL:
         .ASCIC  "LOGICAL"
+V_SET:  .ASCIC  "SET"
+V_DEFAULT:
+        .ASCIC  "DEFAULT"
 DOTEXE: .ASCII  ".EXE"
+        .ALIGN  LONG
+DEFFAB: $FAB    FNA=TOKEN, NAM=DEFNAM   ; SET and SHOW DEFAULT's $PARSE
+DEFNAM: $NAM    ESA=EXP, ESS=255
+EXP:    .BLKB   255                     ; its expanded string
+DIRDSC: .LONG   0, 0                    ; a descriptor of the directory in it
 SEVERITY:
         .ASCII  "WSEIF???"
 HEX:    .ASCII  "0123456789ABCDEF"
@@ -153,6 +169,9 @@ NEXT:   $QIOW_S CHAN=CHAN, FUNC=#IO$_READPROMPT, IOSB=IOSB, P1=LINE, P2=#LINESIZ
         MOVAB   V_SHOW, R1
         BSBW    VERB
         BLBS    R0, SHOW
+        MOVAB   V_SET, R1
+        BSBW    VERB
+        BLBS    R0, SET
         PRINT   "%DCL-W-IVVERB, unrecognized command verb - check validity and spelling"
         ADDTEXT " \"
         BSBW    ADDTOKEN
@@ -172,6 +191,10 @@ HELP:   PRINT   "  RUN image   runs image, image.EXE if it has no type"
         PRINT   "              deletes one"
         PRINT   "  SHOW LOGICAL [name]"
         PRINT   "              translates one, or lists them all"
+        PRINT   "  SET DEFAULT [dev:][dir]"
+        PRINT   "              sets the default directory"
+        PRINT   "  SHOW DEFAULT"
+        PRINT   "              shows it"
         PRINT   "  HELP        lists the commands"
         PRINT   "  LOGOUT      ends the process"
         BRW     NEXT
@@ -259,20 +282,84 @@ DONE:   BLBS    R0, 10$
         BSBW    STATUS
 10$:    BRW     NEXT
 
-; SHOW LOGICAL [name]: translates name in LNM$FILE_DEV, and shows the
-; equivalence and the table it is in. With no name, or *, lists them all.
-SHOW:   BSBW    WORD
+; SET DEFAULT spec: $PARSEs spec, which must name no file, and makes the
+; directory it expands to the default, with $SETDDIR. One that doesn't
+; exist is still set, as VMS does, with a message.
+SET:    BSBW    WORD
         TSTL    R8
-        BEQL    INSFPRM
-        MOVAB   V_LOGICAL, R1
+        BEQL    5$
+        MOVAB   V_DEFAULT, R1
         BSBW    VERB
-        BLBS    R0, 10$
-        PRINT   "%DCL-W-IVKEYW, unrecognized keyword - check validity and spelling"
+        BLBC    R0, IVKEYW
+        BSBW    WORD
+        TSTL    R8
+5$:     BEQL    INSFPRM
+        MOVB    R8, DEFFAB+FAB$B_FNS
+        $PARSE  FAB=DEFFAB
+        MOVL    R0, R6
+        CMPL    R0, #RMS$_DNF
+        BEQL    10$
+        BLBC    R0, 20$
+10$:    MOVL    #RMS$_SYN, R0
+        TSTB    DEFNAM+NAM$B_NAME
+        BNEQ    20$
+        MOVZBL  DEFNAM+NAM$B_DIR, DIRDSC
+        MOVL    DEFNAM+NAM$L_DIR, DIRDSC+4
+        $SETDDIR_S NEWDIR=DIRDSC
+        BLBC    R0, 20$
+        CMPL    R6, #RMS$_DNF
+        BNEQ    20$
+        ADDTEXT "%DCL-I-INVDEF, "
+        BSBW    ADDDEF
+        ADDTEXT " does not exist"
+        BSBW    SAY
+        BRW     NEXT
+20$:    BRW     DONE
+
+; IVKEYW: reports the word in TOKEN as a keyword DCL doesn't know, and
+; prompts for the next command.
+IVKEYW: PRINT   "%DCL-W-IVKEYW, unrecognized keyword - check validity and spelling"
         ADDTEXT " \"
         BSBW    ADDTOKEN
         ADDTEXT "\"
         BSBW    SAY
         BRW     NEXT
+
+; SHOW DEFAULT: shows the default device and directory, what $PARSE
+; expands an empty specification to.
+SHOWDEF:
+        CLRB    DEFFAB+FAB$B_FNS
+        $PARSE  FAB=DEFFAB
+        CMPL    R0, #RMS$_DNF
+        BEQL    10$
+        BLBC    R0, 20$
+10$:    ADDTEXT "  "
+        BSBW    ADDDEF
+        BSBW    SAY
+        MOVL    #SS$_NORMAL, R0
+20$:    BRW     DONE
+
+; ADDDEF: appends the device and directory $PARSE left in DEFNAM to MSG.
+; Uses R0-R2.
+ADDDEF: MOVL    DEFNAM+NAM$L_DEV, R1
+        MOVZBL  DEFNAM+NAM$B_DEV, R2
+        ADDB2   DEFNAM+NAM$B_DIR, R2
+        BRW     ADD
+
+; SHOW LOGICAL [name]: translates name in LNM$FILE_DEV, and shows the
+; equivalence and the table it is in. With no name, or *, lists them all.
+; SHOW DEFAULT: as SHOWDEF.
+SHOW:   BSBW    WORD
+        TSTL    R8
+        BEQL    5$
+        MOVAB   V_DEFAULT, R1
+        BSBW    VERB
+        BLBS    R0, SHOWDEF
+        MOVAB   V_LOGICAL, R1
+        BSBW    VERB
+        BLBS    R0, 10$
+        BRB     IVKEYW
+5$:     BRW     INSFPRM
 10$:    BSBW    NAMEWORD
         TSTL    R8
         BEQL    LIST
