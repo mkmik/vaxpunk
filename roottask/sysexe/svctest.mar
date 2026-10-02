@@ -90,6 +90,7 @@ SYSTEM: .LONG   ^X40000000, ^X40000FFF  ; S0: not a process's to make
 SYSEXE: .ASCID  "[SYSEXE]"
 WILDDIR:
         .ASCID  "[SYS*]"
+PARENT: .ASCID  "[-]"
 OLDDIR: .LONG   63                      ; the default directory it started in:
                                         ; oldlen, its length, overwrites 63
         .ADDRESS OLDBUF
@@ -214,11 +215,13 @@ SHORT:  .LONG   4                       ; too short a buffer for one
         EXPECT  #SS$_NOLOGNAM, 49
 
 ; The default directory: set [SYSEXE], keeping the old one; one with a
-; wildcard isn't one; read back as much as fits; set the old one again.
+; wildcard isn't one, nor a relative one; read back as much as fits; set the old one again.
         $SETDDIR_S NEWDIR=SYSEXE, OLDLEN=OLDDIR, OLDDIR=OLDDIR
         EXPECT  #RMS$_NORMAL, 50
         $SETDDIR_S NEWDIR=WILDDIR
         EXPECT  #RMS$_DIR, 51
+        $SETDDIR_S NEWDIR=PARENT        ; relative: $PARSE's to resolve
+        EXPECT  #RMS$_DIR, 54
         $SETDDIR_S OLDLEN=BUFLEN, OLDDIR=SHORT
         EXPECT  #RMS$_NORMAL, 52
         CMPW    BUFLEN, #4
