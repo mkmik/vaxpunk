@@ -5,7 +5,8 @@
 //! there, and DIRECTORY its own from the ramdisk, MDA0:, made the default
 //! device, around a COPY to it from SYS$SYSDEVICE:, a logical name, an EDIT
 //! in line mode and keypad mode that writes a second version and DELETEs,
-//! then INITIALIZE, MOUNT and COPY on the data disk, DKB0:, made afresh in
+//! a line edited and one recalled with the up arrow, then INITIALIZE,
+//! MOUNT and COPY on the data disk, DKB0:, made afresh in
 //! out/check-datadisk.img, not the one you keep, SHOW DEVICES, SHOW PROCESS
 //! and SHOW SYSTEM, or the root task is done, which is only on a halt or a fault. DCL reads what was
 //! typed ahead a line at a time. Then it types a CONTINUE with nothing stopped, and stops
@@ -46,6 +47,7 @@ const LINES: &[&str] = &[
     "Unable to write the file, status 000182BA",
     "\"FOO\" = \"SYS$INPUT\" (LNM$PROCESS_TABLE)",
     "no translation for logical name FOO",
+    "\"ZOO\" = \"TWO\" (LNM$PROCESS_TABLE)",
     "(LNM$SYSTEM_TABLE)",
     "  \"SYS$ERROR\" = \"_OPA0:\"",
     "  \"SYS$SYSTEM\" = \"SYS$SYSDEVICE:[SYSEXE]\"",
@@ -147,6 +149,10 @@ fn boot() {
         }
         if typed == 3 && text.contains("MDA0:[000000]RAM.TXT;2") {
             type_("DIR *.TXT\rDELETE RAM.TXT;1\rDELETE RAM.TXT;2\rDIR *.TXT\r");
+            // Line editing: the up arrow recalls DEFINE, three DELs and TWO
+            // change it, and the arrows, CTRL/H and CTRL/E make SHOW LOGICAL ZOO.
+            type_("DEFINE ZOO ONE\r\x1b[A\x7f\x7f\x7fTWO\r");
+            type_("LOGICAL OO\x1b[D\x1b[DZ\x08SHOW \x05\r");
             typed = 4;
         }
         // Then the data disk.
