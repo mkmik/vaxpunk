@@ -11,8 +11,8 @@
 ;
 ;   RUN image   runs image, image.EXE if it has no type, in this process
 ;   DIRECTORY [spec]
-;               runs DIRECTORY.EXE, with spec as its command line
-;   TYPE spec   runs TYPE.EXE, with spec as its command line
+;               runs DIRECTORY.EXE
+;   TYPE spec   runs TYPE.EXE
 ;   DEFINE name equivalence
 ;               makes a logical name in the process's table
 ;   DEASSIGN name
@@ -25,11 +25,21 @@
 ;   SHOW DEFAULT
 ;               shows it, with the device
 ;   EDIT spec   runs EDIT.EXE, with spec as its command line
+;   COPY from to
+;               runs COPY.EXE
+;   DELETE spec runs DELETE.EXE
+;   INITIALIZE device label
+;               runs INIT.EXE
+;   MOUNT device label
+;               runs MOUNT.EXE
 ;   HELP        lists the commands
 ;   LOGOUT      ends the process
 ;
-; A verb may be abbreviated, to as little as its first letter; the first
-; that matches is the one. It reads the commands from SYS$INPUT.
+; An image a command runs gets the command's parameters as its command
+; line, in capitals, a blank between each two. A verb may be abbreviated,
+; to as little as its first letter; the first that matches is the one. A
+; status with STS$M_INHIB_MSG set is one the image reported itself. It
+; reads the commands from SYS$INPUT.
 ; ponytail: no message texts, symbols, qualifiers, quoted strings or
 ; command procedures.
 ;
@@ -49,6 +59,7 @@
         .EXTERNAL PUT_LINE, SCH$GL_CURPCB, LNM$GQ_SYSTEM
 
 LINESIZE = 255
+INHIB_MSG = 28                          ; STS$V_INHIB_MSG
 
 ; ADDTEXT "text": appends text to the message in MSG. Uses R0-R2.
         .MACRO  ADDTEXT TEXT, ?L
@@ -100,6 +111,13 @@ TYPEIMG:
         .ASCID  "TYPE.EXE"
 EDITIMG:
         .ASCID  "EDIT.EXE"
+COPYIMG:
+        .ASCID  "COPY.EXE"
+DELIMG: .ASCID  "DELETE.EXE"
+INITIMG:
+        .ASCID  "INIT.EXE"
+MOUNTIMG:
+        .ASCID  "MOUNT.EXE"
 MSG:    .BLKB   256                     ; a message being made, .ASCIC
 CHAR:   .BLKB   1
 V_RUN:  .ASCIC  "RUN"
@@ -120,6 +138,13 @@ V_SET:  .ASCIC  "SET"
 V_DEFAULT:
         .ASCIC  "DEFAULT"
 V_EDIT: .ASCIC  "EDIT"
+V_COPY: .ASCIC  "COPY"
+V_DELETE:
+        .ASCIC  "DELETE"
+V_INITIALIZE:
+        .ASCIC  "INITIALIZE"
+V_MOUNT:
+        .ASCIC  "MOUNT"
 DOTEXE: .ASCII  ".EXE"
         .ALIGN  LONG
 DEFFAB: $FAB    FNA=TOKEN, NAM=DEFNAM   ; SET and SHOW DEFAULT's $PARSE
@@ -137,6 +162,7 @@ HEX:    .ASCII  "0123456789ABCDEF"
         $ASSIGN_S DEVNAM=INPUT, CHAN=CHAN
         BLBC    R0, QUIT
 10$:    BLBS    4(AP), NEXT
+        BBS     #INHIB_MSG, 4(AP), NEXT
         MOVZBL  #^A/%/, R0
         MOVL    4(AP), R1
         BSBW    STATUS
@@ -178,6 +204,18 @@ NEXT:   $QIOW_S CHAN=CHAN, FUNC=#IO$_READPROMPT, IOSB=IOSB, P1=LINE, P2=#LINESIZ
         MOVAB   V_EDIT, R1
         BSBW    VERB
         BLBS    R0, EDIT
+        MOVAB   V_COPY, R1
+        BSBW    VERB
+        BLBS    R0, COPY
+        MOVAB   V_DELETE, R1
+        BSBW    VERB
+        BLBS    R0, DELETE
+        MOVAB   V_INITIALIZE, R1
+        BSBW    VERB
+        BLBS    R0, INITIALIZE
+        MOVAB   V_MOUNT, R1
+        BSBW    VERB
+        BLBS    R0, MOUNT
         PRINT   "%DCL-W-IVVERB, unrecognized command verb - check validity and spelling"
         ADDTEXT " \"
         BSBW    ADDTOKEN
@@ -202,6 +240,13 @@ HELP:   PRINT   "  RUN image   runs image, image.EXE if it has no type"
         PRINT   "  SHOW DEFAULT"
         PRINT   "              shows it"
         PRINT   "  EDIT spec   looks at the file spec names with EDT, read only"
+        PRINT   "  COPY from to"
+        PRINT   "              copies a file"
+        PRINT   "  DELETE spec deletes the files spec names, ;version or ;*"
+        PRINT   "  INITIALIZE device label"
+        PRINT   "              writes an empty volume on MDA0:, the ramdisk"
+        PRINT   "  MOUNT device label"
+        PRINT   "              mounts the volume, MDA0: then names its files"
         PRINT   "  HELP        lists the commands"
         PRINT   "  LOGOUT      ends the process"
         BRW     NEXT
@@ -222,13 +267,35 @@ RUN:    BSBW    WORD
         MOVAB   TOKDSC, R1
         BRB     ACTFAIL
 
-; TYPE spec: runs TYPE.EXE with the spec.
-TYPE:   BSBW    WORD
-        TSTL    R8
-        BEQL    INSFPRM
+; The commands that run an image with their parameters: R4 = its
+; descriptor, R3 = how many parameters it needs.
+DIRECTORY:
+        MOVAB   DIRIMG, R4
+        CLRL    R3
+        BRB     FOREIGN
+TYPE:   MOVAB   TYPEIMG, R4
+        MOVL    #1, R3
+        BRB     FOREIGN
+COPY:   MOVAB   COPYIMG, R4
+        MOVL    #2, R3
+        BRB     FOREIGN
+DELETE: MOVAB   DELIMG, R4
+        MOVL    #1, R3
+        BRB     FOREIGN
+INITIALIZE:
+        MOVAB   INITIMG, R4
+        MOVL    #2, R3
+        BRB     FOREIGN
+MOUNT:  MOVAB   MOUNTIMG, R4
+        MOVL    #2, R3
+FOREIGN:
+        BSBW    REST
+        CMPL    R2, R3
+        BLSSU   INSFPRM
         MOVL    R8, TOKDSC
-        $IMGACT_S IMAGE=TYPEIMG, CMDLIN=TOKDSC
-        MOVAB   TYPEIMG, R1
+        PUSHL   R4
+        $IMGACT_S IMAGE=(R4), CMDLIN=TOKDSC
+        MOVL    (SP)+, R1
         BRB     ACTFAIL
 
 ; EDIT spec: runs EDIT.EXE with the spec.
@@ -244,12 +311,6 @@ INSFPRM:
         PRINT   "%DCL-W-INSFPRM, missing command parameters - supply all required parameters"
         BRW     NEXT
 
-; DIRECTORY [spec]: runs DIRECTORY.EXE with the spec, if there is one.
-DIRECTORY:
-        BSBW    WORD
-        MOVL    R8, TOKDSC
-        $IMGACT_S IMAGE=DIRIMG, CMDLIN=TOKDSC
-        MOVAB   DIRIMG, R1
 ; ACTFAIL: R0 = the status $IMGACT returned, R1 = the image's descriptor.
 ; Reports it, and prompts for the next command.
 ACTFAIL:
@@ -507,6 +568,38 @@ WORD:   CLRL    R8
         INCL    R6
         BRB     20$
 40$:    RSB
+
+; REST: R6 = the next character of the line, R7 = past its last. Copies
+; the words left to TOKEN, in capitals, a blank between each two, with R6
+; at the line's end: R8 = their length, R2 = how many. Uses R0.
+REST:   CLRL    R8
+        CLRL    R2
+10$:    CMPL    R6, R7                  ; past the blanks
+        BGEQU   50$
+        CMPB    (R6), #^A/ /
+        BNEQ    20$
+        INCL    R6
+        BRB     10$
+20$:    TSTL    R2
+        BEQL    25$
+        MOVB    #^A/ /, TOKEN[R8]
+        INCL    R8
+25$:    INCL    R2
+30$:    CMPL    R6, R7                  ; the word
+        BGEQU   50$
+        MOVZBL  (R6), R0
+        CMPB    R0, #^A/ /
+        BEQL    10$
+        CMPB    R0, #^A/a/
+        BLSSU   40$
+        CMPB    R0, #^A/z/
+        BGTRU   40$
+        SUBB2   #^A/a/-^A/A/, R0
+40$:    MOVB    R0, TOKEN[R8]
+        INCL    R8
+        INCL    R6
+        BRB     30$
+50$:    RSB
 
 ; VERB: R1 = a verb, .ASCIC. R0 = 1 if the R8 characters in TOKEN are
 ; its first ones, else 0. Uses R2.

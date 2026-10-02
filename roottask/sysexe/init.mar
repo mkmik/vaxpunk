@@ -1,0 +1,29 @@
+        .TITLE  INIT    Writes an empty Files-11 volume on a disk
+        .IDENT  /V0.1/
+;
+; DCL's INITIALIZE device label runs this, with the two as its command
+; line: $INIT_VOL writes an empty ODS-2 volume with that label, up to 12
+; characters, on the device, which must be MDA0:, the ramdisk, and not
+; mounted; MOUNT then mounts it. Returns $INIT_VOL's status.
+; ponytail: no qualifiers.
+;
+        .LIBRARY "starlet.mlb"
+
+        .EXTERNAL GET_PARAM
+
+        .PSECT  DATA, NOEXE, WRT, LONG
+DEVICE: .LONG   0, 0                    ; descriptors of the parameters
+LABEL:  .LONG   0, 0
+
+        .PSECT  CODE, EXE, LONG
+        .ENTRY  START, ^M<>
+        PUSHAB  DEVICE
+        PUSHL   #1
+        CALLS   #2, G^GET_PARAM
+        PUSHAB  LABEL
+        PUSHL   #2
+        CALLS   #2, G^GET_PARAM
+        $INIT_VOL_S DEVNAM=DEVICE, VOLNAM=LABEL
+        RET
+
+        .END    START

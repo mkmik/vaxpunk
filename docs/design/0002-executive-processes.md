@@ -16,7 +16,9 @@ modes through system services, and
 interpreter lives in P1 in supervisor mode and runs images in its own
 process, and
 [ADR-0007](../adr/0007-system-disk-files-11-and-rms.md): the files are on a
-Files-11 volume, which the executive reads by LBN, with RMS on top.
+Files-11 volume, which the executive reads by LBN, with RMS on top, and
+[ADR-0009](../adr/0009-ramdisk-writable-files-11.md): a ramdisk, `MDA0:`,
+holds a Files-11 volume the executive writes.
 
 The executive borrows VMS's structure and names (PCB, `SCH$`, `MMG$`,
 `EXE$` routines, `SS$_` codes, the system service interfaces) but none of
@@ -35,15 +37,17 @@ its code.
 | `lnm.mar` | logical name tables, `$CRELNM`, `$DELLNM`, `$TRNLNM` |
 | `qio.mar` | `$ASSIGN`, `$DASSGN`, `$QIO`, `$QIOW`: writes on the console and reads from it; the console receive interrupt and the type-ahead buffer |
 | `syssrv.mar` | the system service vector, the `CHMK` and `CHME` dispatchers, `$CMEXEC`, where processes enter user and supervisor mode, the exception handlers and the stubs |
-| `f11.mar` | the system disk, Files-11 ODS-2, read only: `FIL$MOUNT`, headers, maps, directories, `FIL$OPENFILE` for the image activator |
-| `rms.mar` | RMS: file specifications, `$PARSE`, `$SEARCH`, `$OPEN`, `$CONNECT`, `$GET`, `$DISCONNECT`, `$CLOSE` |
+| `f11.mar` | Files-11 ODS-2 volumes: the disks' VCBs, reading and writing their blocks, `FIL$MOUNT` and `$MOUNT`, headers, maps, directories, `FIL$OPENFILE` for the image activator |
+| `f11wrt.mar` | Files-11 writes: headers, blocks, directory entries, `FIL$INIT` and `$INIT_VOL` |
+| `mddriver.mar` | `MDA0:`, the ramdisk |
+| `rms.mar` | RMS: file specifications, `$PARSE`, `$SEARCH`, `$OPEN`, `$CREATE`, `$CONNECT`, `$GET`, `$PUT`, `$DISCONNECT`, `$CLOSE`, `$ERASE` |
 
 `roottask/build.rs` links them, with `vtools/lib/consolio.mar`, into
 `EXEC.EXE`, in S0 at `0x40010000`. The structures are in `vtools/lib/lib.mlb` (`$PCBDEF`,
-`$CEBDEF`, `$PTEDEF`, `$RPBDEF`...), what programs need in
+`$CEBDEF`, `$PTEDEF`, `$RPBDEF`, `$VCBDEF`...), what programs need in
 `vtools/lib/starlet.mlb` (`$SSDEF`, `$PRTDEF`, the `$name_S` macros, RMS's
 `$FABDEF`, `$RABDEF`, `$NAMDEF`, `$RMSDEF` and the `$FAB`, `$RAB`, `$NAM`
-blocks and `$OPEN`... calls).
+blocks and `$OPEN`... calls, `$MNTDEF`).
 
 ## Start
 
@@ -81,6 +85,7 @@ P1 are each process's own, S0 every process's:
 | `0x40010000` | S0: `EXEC.EXE` |
 | `0x48000000` | nonpaged pool, 512 KB: PCBs, kernel stacks, common event blocks, timer queue entries, logical names, open files, images being activated |
 | `0x4FFF0000` | the RPB |
+| `0x50000000` | `MDA0:`'s blocks, 512 KB, once `INITIALIZE` makes them |
 | `0x5FFF0000` | the boot stack's top |
 | `0x60000000` | P1: the process's `$CRETVA` pages |
 | `0x7FF00000` | `VA$C_CLI`: its command interpreter, if it has one, `DCL.EXE` |
@@ -222,13 +227,19 @@ process, `SYSTEM`, with `DCL.EXE`:
 | `SET DEFAULT [dev:][dir]` | `$PARSE`s it, which must name no file, and `$SETDDIR` with the directory it expands to; one that doesn't exist is still set, after `%DCL-I-INVDEF` |
 | `SHOW DEFAULT` | the device and directory `$PARSE` expands an empty specification to |
 | `EDIT spec` | `$IMGACT` of `EDIT.EXE`, the same way |
+| `COPY from to` | `$IMGACT` of `COPY.EXE`, with the two, a blank between |
+| `DELETE spec` | `$IMGACT` of `DELETE.EXE` |
+| `INITIALIZE device label` | `$IMGACT` of `INIT.EXE` |
+| `MOUNT device label` | `$IMGACT` of `MOUNT.EXE` |
 | `HELP` | lists the commands |
 | `LOGOUT` | returns, which deletes the process |
 
-Verbs may be abbreviated, the first that matches winning. DCL reads a line
+Verbs may be abbreviated, the first that matches winning. A command
+with fewer parameters than it needs is `%DCL-W-INSFPRM`. DCL reads a line
 from `SYS$INPUT` with `IO$_READPROMPT` and the prompt `$ `, and reports a failure status as VMS does one it has no text
 for, `%NONAME-F-NOMSG, Message number 0000000C`, after
-`%DCL-W-ACTIMAGE` if `$IMGACT` returned it. ponytail: no CTRL/Y, so an
+`%DCL-W-ACTIMAGE` if `$IMGACT` returned it, unless the status has
+`STS$M_INHIB_MSG`, bit 28, set: the image reported it. ponytail: no CTRL/Y, so an
 image that never exits keeps the console; no message texts, symbols,
 qualifiers, quoted strings or command procedures.
 
@@ -394,7 +405,8 @@ can't reach them.
 | I/O | `$ASSIGN`, `$DASSGN`, `$QIO`, `$QIOW` | |
 | Logical names | `$CRELNM`, `$DELLNM`, `$TRNLNM` | |
 | Images | `$IMGACT` | |
-| RMS | `$PARSE`, `$SEARCH`, `$OPEN`, `$CONNECT`, `$GET`, `$DISCONNECT`, `$CLOSE` | |
+| RMS | `$PARSE`, `$SEARCH`, `$OPEN`, `$CREATE`, `$CONNECT`, `$GET`, `$PUT`, `$DISCONNECT`, `$CLOSE`, `$ERASE`, `$SETDDIR` | |
+| Volumes | `$MOUNT`, `$INIT_VOL` | |
 | Other | | `$DCLAST`, `$SETAST`, `$GETSYI` |
 
 Arguments the implemented services take but ignore: `$CREPRC`'s
@@ -476,14 +488,25 @@ replaces it.
 
 ### Files
 
-The system disk, `DKA0:`, is a Files-11 ODS-2 volume, which the PAL reads
-a block at a time with `READLBLK` (DESIGN-0001, *The system disk*).
-`f11.mar` reads Files-11 (`ods/docs/`) as VMS's XQP does, read only:
+There are two disks, each with a VCB (`$VCBDEF`) in `f11.mar`: the system
+disk, `DKA0:`, a Files-11 ODS-2 volume which the PAL reads a block at a
+time with `READLBLK` (DESIGN-0001, *The system disk*), and `MDA0:`, a
+ramdisk (`mddriver.mar`), as DECram's: 1,024 blocks in pages of S0, which
+`$INIT_VOL` makes, zeroed, and which last until the system stops.
+`FIL$READLBLK` and `FIL$WRITELBLK` read and write `F11$GL_VCB`'s disk,
+copying for the ramdisk; `DKA0:` can't be written (`SS$_WRITLCK`), and
+`MDA0:` is offline until it is made (`SS$_MEDOFL`). `FIL$SELECT` picks the
+VCB by device name. `f11.mar` reads Files-11 (`ods/docs/`) as VMS's XQP
+does:
 
-- **`FIL$MOUNT`**, at boot, reads the home block at LBN 1, checks its
-  format, `DECFILE11B`, keeps where file headers start in the index file
-  and its label, and reads the index file's header, through whose map it
-  finds every other header.
+- **`FIL$MOUNT`**, at boot for `DKA0:` and from `$MOUNT itmlst`, which
+  takes `MNT$_DEVNAM` and `MNT$_VOLNAM`, reads the home block at LBN 1,
+  checks its format, `DECFILE11B`, and its label against the one asked
+  for, keeps where file headers start in the index file, and reads the
+  index file's header, through whose map it finds every other header.
+  On a disk it can write, it finds the storage bitmap, `BITMAP.SYS`'s
+  second block. It reports the volume on the console:
+  `%MOUNT-I-MOUNTED, RAM mounted on _MDA0:`.
 - **`FIL$READHDR`** reads file number n's header, VBN
   `IBMAPVBN + IBMAPSIZE + n - 1` of the index file, and checks its
   checksum and number. **`FIL$MAPVBN`** finds a VBN's LBN in a header's
@@ -497,8 +520,33 @@ a block at a time with `READLBLK` (DESIGN-0001, *The system disk*).
 - **`FIL$OPENFILE`** finds an image and reads it whole into pool, for the
   image activator, which frees it once the sections are copied.
 
+`f11wrt.mar` writes, as the XQP does, on a disk that can be written:
+
+- **`FIL$CREHDR`** takes the first free slot of the index file bitmap and
+  makes an empty header for it, with the slot's next sequence number;
+  **`FIL$WRITEHDR`** writes a header, with its checksum.
+- **`FIL$EXTEND`** gives a file more blocks, the first free runs of the
+  storage bitmap (a set bit is a free block), a format 2 map pointer each,
+  or added to the last one when they follow it. **`FIL$DELHDR`** gives a
+  file's blocks and header slot back and marks the header deleted.
+- **`FIL$ENTER`** and **`FIL$REMOVE`** add and take away a directory
+  entry: the directory's records are copied into pool, sorted by name,
+  versions from the highest, with the entry entered (a new version one
+  above the highest unless one is given) or removed, packed into blocks
+  again, each ended by a record size of all ones, and written back, the
+  directory extended if it grew.
+- **`FIL$INIT`**, for `$INIT_VOL devnam, volnam`, writes an empty volume
+  on the ramdisk, as `INITIALIZE` lays one out (`ods/docs/initialize.md`):
+  the boot block, the home block, the index file bitmap, 64 header
+  slots, `BITMAP.SYS`'s SCB and bitmap and the MFD's first block, and the
+  nine reserved files, (1,1,0) to (9,9,0), in the MFD.
+
+ponytail: a cluster is a block, each bitmap one block, the index file
+never extended, so a volume has at most 4,096 blocks and the 64 files
+`FIL$INIT` made room for; no backup home block or index file header.
 RMS (`rms.mar`) is a set of system services on VMS's FAB, RAB and NAM
-blocks. A file specification is `[DKA0:][[dir.dir]]name.type;version`.
+blocks. A file specification is `[dev:][[dir.dir]]name.type;version`,
+the device `DKA0:` or `MDA0:` with a volume mounted (`RMS$_DNR`).
 `RMS$PARSE` splits it, and the FAB's default specification, and
 `DKA0:` with the process's default directory, into device,
 directory, name, type and version, takes each part from the first that
@@ -515,9 +563,12 @@ a directory in one of those. The MFD has no parent: `RMS$_DIR`.
 | `$PARSE fab` | the expanded string, its parts and the directory's ID into the FAB's NAM block |
 | `$SEARCH fab` | the next file the NAM block's expanded string names: its resultant string, parts and file ID; `RMS$_FNF` if there is none, then `RMS$_NMF` |
 | `$OPEN fab` | opens one file, the highest version unless the specification gives one, for reading; `RMS$_WLK` for writing. Its IFI, record format, attributes, maximum record size and allocation into the FAB, its resultant string into the NAM block if there is one |
+| `$CREATE fab` | makes a new file, one version above the highest unless the specification gives one (`RMS$_FEX` if it is there), with the FAB's organization, record format and attributes, maximum record size and `FAB$L_ALQ` blocks, and opens it for `$PUT`; `RMS$_WLK` on `DKA0:`, `RMS$_FUL` if the volume is full |
 | `$CONNECT rab` | connects the RAB to the file its FAB opened, at its start |
 | `$GET rab` | the next record into the RAB's user buffer: `RAB$W_RSZ`, `RAB$L_RBF`; `RMS$_RTB` if it didn't fit, `RMS$_EOF` past the end; VAR and FIX records only |
-| `$DISCONNECT rab`, `$CLOSE fab` | undo `$CONNECT` and `$OPEN` |
+| `$PUT rab` | appends the record at `RAB$L_RBF`, `RAB$W_RSZ` bytes, to a file `$CREATE` made: VAR records with their size first, FIX ones of the file's size (`RMS$_RSZ`), each on a word; a block at a time, extending the file by 8 blocks as it fills |
+| `$DISCONNECT rab`, `$CLOSE fab` | undo `$CONNECT` and `$OPEN`; `$CLOSE` writes a new file's last block and its end of file |
+| `$ERASE fab` | deletes a file, the highest version unless the specification gives one, or, with `FAB$M_NAM` in `FAB$L_FOP`, the one the NAM block's resultant string names, and the next `$SEARCH` finds the one after it; `RMS$_PRV` for the volume's own files, 1 to 9 |
 | `$SETDDIR newdir, oldlen, olddir` | the old default directory into `olddir`, then `newdir`, `[dir.dir]` up to 63 characters, the new one, unchecked against the disk; `RMS$_DIR` if it isn't one |
 
 A process's default directory is `PCB$T_DEFDIR`. It starts as its
@@ -527,17 +578,22 @@ returns `RMS$_DNF`, which is how `SET DEFAULT` names a directory that isn't
 there. ponytail: VMS keeps it in P1, and the device in `SYS$DISK`; here
 the device is always `DKA0:`.
 
-An open file is an IFAB, 1,040 bytes of pool: the file's header, the block
-`$GET` reads in, and where it is. The PCB holds up to 15, by IFI, in
+An open file is an IFAB, 1,056 bytes of pool: the file's header, its
+volume, the block `$GET` reads in or `$PUT` fills, and where it is. The PCB holds up to 15, by IFI, in
 `PCB$A_IFAB`, a bit each in `PCB$L_FILES`; `$CONNECT` puts the IFI in
 `RAB$W_ISI` too. `RMS$RUNDOWN` closes a process's files at image exit
-and process deletion.
+and process deletion, writing those `$CREATE` made as `$CLOSE` does.
+`NAM$L_WCC` counts the matches `$SEARCH` skips, and its top bit says it
+found one, so `RMS$_FNF` and `RMS$_NMF` stay apart when `$ERASE` takes a
+match away.
 
 The services, and `FIL$OPENFILE`, run in kernel mode at `IPL$_SYNCH`, one
 at a time, which keeps the file system's buffers theirs. They return
 VMS's `RMS$_` statuses (`$RMSDEF`) and put them in `FAB$L_STS` or
 `RAB$L_STS`. ponytail: VMS's RMS runs in executive mode; no ASTs,
-completion routines, logical names, wildcard directories or block I/O.
+completion routines, logical names, wildcard directories, block I/O,
+file sharing or locking, and `$PUT` only appends to a file `$CREATE`
+made.
 
 ### Exceptions
 
@@ -561,15 +617,18 @@ $ RUN SNOOP
 ## The system disk's programs
 
 `roottask/sysexe/` holds the programs in `DKA0:[SYSEXE]`: DCL, DIRECTORY,
-TYPE, EDIT, and those which show the services at work, which `just check` runs
-from DCL's prompt (`RUN STARTUP`, `RUN SNOOP`, a bad verb,
-`DIR [SYSEXE]P%NG`, `TYPE WELCOME.TXT` and an `EDIT WELCOME.TXT` session)
-and to the end.
-`roottask/sysmgr/` holds the text files in `DKA0:[SYSMGR]`. They
-run in user mode, DCL in supervisor mode, and write on the console with
-`PRINT` and `PRINTHEX` from `sysexe.mlb`, which call `PUT_LINE` in
-`sysexe/lib/print.mar`, linked into each: a line at a time on `OPA0:`,
-with `$QIOW`.
+TYPE, EDIT, COPY, DELETE, INIT and MOUNT, and those which show the services at
+work, which `just check` runs from DCL's prompt (`RUN STARTUP`,
+`RUN SNOOP`, a bad verb, `DIR [SYSEXE]P%NG`, `TYPE WELCOME.TXT` and an `EDIT WELCOME.TXT`
+session, then
+`INIT` and `MOUNT MDA0: RAM`, a `COPY` to it, `DIR`, `DELETE` and `DIR`
+again) and to the end. `roottask/sysmgr/` holds the text files in
+`DKA0:[SYSMGR]`. They run in user mode, DCL in supervisor mode, and write
+on the console with `PRINT` and `PRINTHEX` from `sysexe.mlb`, which call
+`PUT_LINE` in `sysexe/lib/print.mar`: a line at a time on `OPA0:`, with
+`$QIOW`. `GET_PARAM n, desc`, in `sysexe/lib/param.mar`, points a
+descriptor at the nth parameter of the command line. `build.rs` links
+`sysexe/lib/` into each.
 
 | Program | Does |
 | --- | --- |
@@ -577,6 +636,10 @@ with `$QIOW`.
 | `DIRECTORY` | `$PARSE`s its command line, with `*.*;*` for what it leaves out, and lists the files `$SEARCH` finds: the directory, the names four to a line, how many |
 | `TYPE` | `$OPEN`s the file its command line names and writes each record `$GET` reads on the console, a line each |
 | `EDIT` | EDT's line mode, read only: `$GET`s the file its command line names into a buffer, a line a record, and at its `*` prompt, read with `IO$_READPROMPT`, types the lines a range names (numbers, `.`, `BEGIN`, `END`, `WHOLE`, `REST`, `"text"` searches), until `EXIT` or `QUIT` |
+| `COPY` | `$OPEN`s its first parameter, `$CREATE`s its second, with the first's attributes and its name and type for what the second leaves out, and copies each record with `$GET` and `$PUT` |
+| `DELETE` | `$PARSE`s its parameter, which must give a version or `;*` (`%DELETE-E-DELVER`), and `$ERASE`s each file `$SEARCH` finds |
+| `INIT` | `$INIT_VOL` with its two parameters, the device and the label |
+| `MOUNT` | `$MOUNT` with its two parameters, the device and the label |
 | `STARTUP` | makes 4 pages with `$EXPREG`, checks and deletes them; creates `SLEEPER` at a higher priority, which runs at once, and `PING` and `PONG`; waits until `PONG` sets flag 66 of their cluster; deletes `SLEEPER`; creates `SVCTEST`, `HOG` and `TIMETEST` |
 | `SLEEPER` | hibernates until it is deleted |
 | `PING`, `PONG` | take three turns through common event flags 64 and 65 of the cluster `PINGPONG`; `PONG` then sets flag 66, which `STARTUP` waits for |
@@ -602,3 +665,5 @@ taking the clock's interrupts.
   channels, logical names in file specifications (`SYS$SYSTEM:DCL.EXE`)
   and `SYS$DISK`.
 - Access modes and search lists for logical names.
+- `DISMOUNT`, `INITIALIZE/SIZE`, subdirectories, and the index file
+  extended past the headers `INITIALIZE` made room for.

@@ -1,0 +1,54 @@
+        .TITLE  DELETE  Deletes files
+        .IDENT  /V0.1/
+;
+; DCL's DELETE spec runs this, with spec as its command line. Deletes
+; each file spec names, which must give a version, or * for every
+; version: $PARSE and $SEARCH find them, as DIRECTORY's do, and $ERASE
+; deletes each one $SEARCH found, by its NAM block. Returns RMS's status
+; if it can't, RMS$_FNF if there are none.
+; ponytail: one specification, no qualifiers.
+;
+        .LIBRARY "starlet.mlb"
+        .LIBRARY "sysexe.mlb"
+        $SSDEF
+        $RMSDEF
+        $FABDEF
+        $NAMDEF
+
+        .EXTERNAL GET_PARAM
+
+INHIB_MSG = ^X10000000                  ; STS$M_INHIB_MSG: reported already
+
+        .PSECT  DATA, NOEXE, WRT, LONG
+FAB:    $FAB    NAM=NAM
+NAM:    $NAM    ESA=EXP, ESS=255, RSA=RES, RSS=255
+DESC:   .LONG   0, 0
+EXP:    .BLKB   255
+RES:    .BLKB   255
+
+        .PSECT  CODE, EXE, LONG
+        .ENTRY  START, ^M<>
+        PUSHAB  DESC
+        PUSHL   #1
+        CALLS   #2, G^GET_PARAM
+        MOVL    DESC+4, FAB+FAB$L_FNA
+        MOVB    DESC, FAB+FAB$B_FNS
+        MOVL    #FAB$M_NAM, FAB+FAB$L_FOP
+        $PARSE  FAB=FAB
+        BLBC    R0, 90$
+        CMPB    NAM+NAM$B_VER, #1       ; no more than its semicolon
+        BGTRU   10$
+        PRINT   "%DELETE-E-DELVER, explicit version number or wild card required"
+        MOVL    #RMS$_VER!INHIB_MSG, R0
+        RET
+10$:    $SEARCH FAB=FAB
+        BLBC    R0, 20$
+        $ERASE  FAB=FAB
+        BLBS    R0, 10$
+        RET
+20$:    CMPL    R0, #RMS$_NMF
+        BNEQ    90$
+        MOVL    #SS$_NORMAL, R0
+90$:    RET
+
+        .END    START

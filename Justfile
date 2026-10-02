@@ -7,8 +7,9 @@ boot:
 
 # Boots without a terminal, types commands at the console's DCL prompt
 # once the executive has started, and waits until the processes have
-# printed their last lines (roottask/sysexe/), and DIRECTORY, TYPE and
-# EDIT theirs from the system disk, or the root task is done,
+# printed their last lines (roottask/sysexe/), DIRECTORY, TYPE and EDIT
+# theirs from the system disk, and DIRECTORY its own from the ramdisk,
+# MDA0:, around a COPY to it and a DELETE, or the root task is done,
 # which is only on a halt or a fault. DCL reads what was typed ahead a line
 # at a time. The CPU then idles, taking clock interrupts.
 check:
@@ -29,9 +30,10 @@ check:
            $'    9\tand DIRECTORY [000000]' 'String was not found'
            '"FOO" = "SYS$INPUT" (LNM$PROCESS_TABLE)' 'no translation for logical name FOO'
            '(LNM$SYSTEM_TABLE)' '  "SYS$ERROR" = "_OPA0:"' '  DKA0:[SYSMGR]' '  DKA0:[SYSEXE]'
-           'DCL.EXE;1           DIRECTORY.EXE;1' '%DCL-I-INVDEF, DKA0:[NOSUCH] does not exist'
+           'DCL.EXE;1           DELETE.EXE;1        DIRECTORY.EXE;1' '%DCL-I-INVDEF, DKA0:[NOSUCH] does not exist'
            '  DKA0:[NOSUCH]' '  DKA0:[000000]' 'Directory DKA0:[SYSMGR]' 'WELCOME.TXT;1'
-           '%NONAME-F-NOMSG, Message number 000184CC')
+           '%NONAME-F-NOMSG, Message number 000184CC'
+           '%MOUNT-I-MOUNTED, RAM mounted on _MDA0:' 'RAM.TXT;1' '%DIRECT-W-NOFILES, no files found')
     all() { for line in "${lines[@]}"; do grep -aqsF "$line" out/serial.log || return 1; done; }
     typed=
     for _ in $(seq 120); do
@@ -43,6 +45,12 @@ check:
         if [ "$typed" = 1 ] && grep -aqs 'String was not found' out/serial.log; then
             printf 'DEFINE FOO SYS$INPUT\rSHOW LOGICAL FOO\rSHOW LOGICAL\rDEASSIGN FOO\rSHOW LOGICAL FOO\rSHOW DEFAULT\rSET DEFAULT [SYSEXE]\rSHOW DEFAULT\rDIR D*\rSET DEFAULT [NOSUCH]\rSHOW DEFAULT\rSET DEFAULT [-]\rSHOW DEFAULT\rDIR [.SYSMGR]W*\rSET DEFAULT [-]\r' >&3
             typed=2
+        fi
+        # Then, once SET DEFAULT [-] has failed in [000000], the ramdisk.
+        if [ "$typed" = 2 ] && grep -aqs 'Message number 000184CC' out/serial.log; then
+            printf 'INIT MDA0: RAM\rMOUNT MDA0: RAM\rCOPY [SYSMGR]WELCOME.TXT MDA0:[000000]RAM.TXT\r' >&3
+            printf 'DIR MDA0:[000000]*.TXT\rDELETE MDA0:[000000]RAM.TXT;1\rDIR MDA0:[000000]*.TXT\r' >&3
+            typed=3
         fi
         all || grep -aqs 'root task done' out/serial.log && break
         sleep 1

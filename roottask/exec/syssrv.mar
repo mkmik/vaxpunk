@@ -136,7 +136,7 @@ CODE = 0
         STUB    GETSYI, 7
 ; Images
         SERVICE IMGACT, 1
-; RMS: files on the system disk
+; RMS: files on Files-11 volumes
         SERVICE OPEN, 1
         SERVICE CLOSE, 1
         SERVICE CONNECT, 1
@@ -145,6 +145,12 @@ CODE = 0
         SERVICE PARSE, 1
         SERVICE SEARCH, 1
         SERVICE SETDDIR, 3
+        SERVICE CREATE, 1
+        SERVICE PUT, 1
+        SERVICE ERASE, 1
+; Volumes
+        SERVICE MOUNT, 1
+        SERVICE INIT_VOL, 2
 
 ; EXE$CMODKRNL: the CHMK handler. R0 = the service's code, AP = its
 ; argument list, the PAL's frame on the kernel stack.

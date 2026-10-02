@@ -1,8 +1,8 @@
 //! Builds roottask.elf into OUT_DIR with the kernel's toolchain and libsel4,
 //! and the system disk, sysdisk.img, a Files-11 ODS-2 volume: in [SYSEXE],
 //! EXEC.EXE, linked from exec/*.mar, and an image for each sysexe/*.mar,
-//! linked against SYS.STB, the executive's symbols; in [SYSMGR], the files
-//! in sysmgr/, as text.
+//! linked with sysexe/lib/*.mar and against SYS.STB, the executive's
+//! symbols; in [SYSMGR], the files in sysmgr/, as text.
 
 use std::env;
 use std::fs;
@@ -34,14 +34,19 @@ fn main() {
     let exec = link("EXEC", 0x4001_0000, Some("EXEC$START"), &modules);
     fs::write(out.join("exec.map"), &exec.map).unwrap();
     let stb = symbol_table(&exec.map);
-    let print = compile("sysexe/lib/print.mar");
+    let libs: Vec<_> = sources("sysexe/lib", &["mar"])
+        .iter()
+        .map(compile)
+        .collect();
     let mut files = vec![("EXEC.EXE".to_string(), exec.image.write())];
     // Each process has its own P0, so every image goes at the same address,
     // but DCL: linked in P1, at VA$C_CLI, it is a command interpreter, which
     // stays while the images it runs come and go in P0.
     for source in sources("sysexe", &["mar"]) {
         let name = source.file_stem().unwrap().to_str().unwrap().to_uppercase();
-        let modules = [compile(&source), print.clone(), stb.clone()];
+        let mut modules = vec![compile(&source)];
+        modules.extend(libs.iter().cloned());
+        modules.push(stb.clone());
         let base = if name == "DCL" {
             0x7FF0_0000
         } else {
