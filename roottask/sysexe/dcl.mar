@@ -22,7 +22,8 @@
 ;               translates a logical name, as $ASSIGN would; with no
 ;               name, or *, lists them all
 ;   SET DEFAULT [dev:][dir]
-;               sets the process's default directory, with $SETDDIR
+;               sets the process's default directory, with $SETDDIR,
+;               and device, its SYS$DISK
 ;   SHOW DEFAULT
 ;               shows it, with the device
 ;   EDIT spec   runs EDIT.EXE, with spec as its command line
@@ -156,6 +157,10 @@ DEFFAB: $FAB    FNA=TOKEN, NAM=DEFNAM   ; SET and SHOW DEFAULT's $PARSE
 DEFNAM: $NAM    ESA=EXP, ESS=255
 EXP:    .BLKB   255                     ; its expanded string
 DIRDSC: .LONG   0, 0                    ; a descriptor of the directory in it
+DISK:   .ASCID  "SYS$DISK"
+DISKITEMS:                              ; $CRELNM's: the device in EXP
+        .WORD   0, LNM$_STRING
+        .LONG   0, 0, 0
 SEVERITY:
         .ASCII  "WSEIF???"
 HEX:    .ASCII  "0123456789ABCDEF"
@@ -375,7 +380,8 @@ DONE:   BLBS    R0, 10$
 10$:    BRW     NEXT
 
 ; SET DEFAULT spec: $PARSEs spec, which must name no file, and makes the
-; directory it expands to the default, with $SETDDIR. One that doesn't
+; directory it expands to the default, with $SETDDIR, and its device the
+; process's SYS$DISK. One that doesn't
 ; exist is still set, as VMS does, with a message.
 SET:    BSBW    WORD
         TSTL    R8
@@ -398,6 +404,10 @@ SET:    BSBW    WORD
         MOVZBL  DEFNAM+NAM$B_DIR, DIRDSC
         MOVL    DEFNAM+NAM$L_DIR, DIRDSC+4
         $SETDDIR_S NEWDIR=DIRDSC
+        BLBC    R0, 20$
+        MOVZBW  DEFNAM+NAM$B_DEV, DISKITEMS
+        MOVL    DEFNAM+NAM$L_DEV, DISKITEMS+4
+        $CRELNM_S TABNAM=PROCESS, LOGNAM=DISK, ITMLST=DISKITEMS
         BLBC    R0, 20$
         CMPL    R6, #RMS$_DNF
         BNEQ    20$

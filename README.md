@@ -79,10 +79,11 @@ reads `EXEC.EXE` from it, and the executive mounts it and reads files with
 RMS. `ods dir out/sysdisk.img '[...]'` lists it on the host.
 
 The `$` is DCL's prompt, on the console's process, `SYSTEM`. `RUN image`
-runs an image from `[SYSEXE]` (`.EXE` is the default type), `DIRECTORY`
+runs an image from `SYS$SYSTEM:` (`.EXE` is the default type), `DIRECTORY`
 lists files, in the default directory unless told where (`DIR`, `DIR
-[SYSEXE]P%NG`, `DIR [000000]`), `SET DEFAULT [dir]` (or `[-]`, `[.dir]`) and
-`SHOW DEFAULT` set and show that, `[SYSMGR]` at first, `TYPE file` writes a text file (`TYPE WELCOME.TXT`),
+[SYSEXE]P%NG`, `DIR [000000]`, `DIR SYS$SYSTEM:`; a device may be a
+logical name), `SET DEFAULT [dev:][dir]` (or `[-]`, `[.dir]`) and
+`SHOW DEFAULT` set and show that, `DKA0:[SYSMGR]` at first, `TYPE file` writes a text file (`TYPE WELCOME.TXT`),
 `EDIT file` edits one with EDT's line mode, and writes a new version
 on `EXIT`, on the ramdisk (`HELP` at its `*` prompt),
 `DEFINE name equivalence`, `DEASSIGN name` and `SHOW LOGICAL name` make,

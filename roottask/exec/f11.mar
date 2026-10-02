@@ -79,8 +79,8 @@ MOUNTED:
         .ASCIZ  "%MOUNT-I-MOUNTED, "
 ONDEV:  .ASCIZ  " mounted on _"
 DEVNAM: .BLKB   6                       ; the device's, .ASCIZ
-IMAGEDEF:                               ; where images are, SYS$SYSTEM
-        .ASCIC  "DKA0:[SYSEXE]"
+IMAGEDEF:                               ; where images are
+        .ASCIC  "SYS$SYSTEM:"
 LABEL:  .BLKB   13                      ; the label $MOUNT asks for, .ASCIC
 
         .PSECT  $CODE$
@@ -551,7 +551,7 @@ MATCH:  PUSHR   #^M<R3, R4, R5, R8>
         RSB
 
 ; FIL$OPENFILE: R6 = an image's file specification, R7 = its length.
-; Reads the file, from DKA0:[SYSEXE] unless the specification says
+; Reads the file, from SYS$SYSTEM: unless the specification says
 ; otherwise, from any mounted volume, into a block of pool: R1 = its address, R2 = the file's size
 ; in bytes, R3 = the block's size, for EXE$DEANONPGDSIZ. R0 = SS$_NORMAL,
 ; an RMS error such as RMS$_FNF, SS$_INSFMEM, or the disk's error. Keeps

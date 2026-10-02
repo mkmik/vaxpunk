@@ -85,6 +85,10 @@ The executive is the VMS kernel, written in MACRO-32.
 - mounts the system disk, `DKA0:`: it reads the volume's home block and
   the index file's header, which says where every other file's header is
   (`FIL$MOUNT`), and prints `%MOUNT-I-MOUNTED, VAXPUNK mounted on _DKA0:`
+- defines the system's logical names for it, in `LNM$SYSTEM_TABLE`:
+  `SYS$SYSDEVICE` is `DKA0:`, `SYS$DISK`, the default device, is
+  `SYS$SYSDEVICE:`, and `SYS$SYSTEM`, where the images are, is
+  `SYS$SYSDEVICE:[SYSEXE]`
 - lowers IPL to 0 and creates the console's process, SYSTEM, which runs
   `DCL.EXE`, with the logical names `SYS$INPUT`, `SYS$OUTPUT` and
   `SYS$ERROR` standing for the console, `_OPA0:`, in its process table
@@ -98,20 +102,23 @@ interpreter. It is linked high in P1, which tells the executive it is one
 ([ADR-0006](adr/0006-cli-in-p1-runs-images-in-its-process.md)):
 
 - When SYSTEM starts (`EXE$PROCSTRT`), the executive makes its stacks,
-  reads `DKA0:[SYSEXE]DCL.EXE` from the disk (`FIL$OPENFILE`), loads it
+  reads `SYS$SYSTEM:DCL.EXE`, which is `DKA0:[SYSEXE]DCL.EXE`, from the
+  disk (`FIL$OPENFILE`), loads it
   into P1 and calls it in supervisor mode.
 - DCL opens a channel to `SYS$INPUT`, which `$ASSIGN` translates to the
   console, `OPA0:`, prints the `$` prompt and waits for a line. That's where the boot ends: the CPU idles, taking
   clock ticks, until you type something.
-- `RUN image` reads the image from `[SYSEXE]` and loads it into the same
+- `RUN image` reads the image from `SYS$SYSTEM:` and loads it into the same
   process's P0 (`$IMGACT`) and runs it in user mode. When the image
   exits, the executive throws away its pages and the channels and files
   it opened, and calls DCL again with the exit status. DCL prints a
   message if the status is an error, then the prompt again.
 - `DIRECTORY` (`DIR`) runs `DIRECTORY.EXE`, which lists files with RMS's
   `$PARSE` and `$SEARCH`: those in the default directory, `[SYSMGR]` until
-  `SET DEFAULT` changes it (`$SETDDIR`; `SHOW DEFAULT` shows it), or
-  the ones it is given, `DIR [SYSEXE]`, `DIR [000000]`. `TYPE file` runs
+  `SET DEFAULT` changes it (`$SETDDIR`, and `SYS$DISK` for the device;
+  `SHOW DEFAULT` shows it), or the ones it is given, `DIR [SYSEXE]`,
+  `DIR [000000]`, `DIR SYS$SYSTEM:`: RMS translates a device that is a
+  logical name. `TYPE file` runs
   `TYPE.EXE`, which reads the file with `$OPEN` and `$GET` and writes it
   on the console. `EDIT file` runs `EDIT.EXE`, EDT's line mode: it reads
   the file the same way and, at its `*` prompt, types the lines you ask

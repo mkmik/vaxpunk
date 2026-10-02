@@ -2,8 +2,9 @@
 //! console's DCL prompt once the executive has started, and waits until the
 //! processes have printed their last lines (roottask/sysexe/), DIRECTORY,
 //! TYPE and EDIT theirs from the system disk, EDIT's EXIT that can't write
-//! there, and DIRECTORY its own from the ramdisk, MDA0:, around a COPY to it,
-//! an EDIT that writes a second version and DELETEs, or the root task is
+//! there, and DIRECTORY its own from the ramdisk, MDA0:, made the default
+//! device, around a COPY to it from SYS$SYSDEVICE:, a logical name, an EDIT
+//! that writes a second version and DELETEs, or the root task is
 //! done, which is only on a halt or a fault. DCL reads what was typed ahead a
 //! line at a time. Then it types a CONTINUE with nothing stopped, and stops
 //! SPIN and SLEEPER with CTRL/Y, twice each, with a CONTINUE in between, a
@@ -41,6 +42,7 @@ const LINES: &[&str] = &[
     "no translation for logical name FOO",
     "(LNM$SYSTEM_TABLE)",
     "  \"SYS$ERROR\" = \"_OPA0:\"",
+    "  \"SYS$SYSTEM\" = \"SYS$SYSDEVICE:[SYSEXE]\"",
     "  DKA0:[SYSMGR]",
     "  DKA0:[SYSEXE]",
     "DCL.EXE;1           DELETE.EXE;1        DIRECTORY.EXE;1",
@@ -51,6 +53,8 @@ const LINES: &[&str] = &[
     "WELCOME.TXT;1",
     "%NONAME-F-NOMSG, Message number 000184CC",
     "%MOUNT-I-MOUNTED, RAM mounted on _MDA0:",
+    "  MDA0:[000000]",
+    "Directory MDA0:[000000]",
     "MDA0:[000000]RAM.TXT;2",
     "RAM.TXT;2           RAM.TXT;1",
     "%DIRECT-W-NOFILES, no files found",
@@ -109,16 +113,14 @@ fn boot() {
         }
         // Then, once SET DEFAULT [-] has failed in [000000], the ramdisk.
         if typed == 2 && text.contains("Message number 000184CC") {
-            type_(
-                "INIT MDA0: RAM\rMOUNT MDA0: RAM\rCOPY [SYSMGR]WELCOME.TXT MDA0:[000000]RAM.TXT\r",
-            );
-            type_("EDIT MDA0:[000000]RAM.TXT\rD 3:END\rI\rEdited with EDT.\r\x1aEXIT\r");
-            type_("TYPE MDA0:[000000]RAM.TXT\r");
+            type_("INIT MDA0: RAM\rMOUNT MDA0: RAM\rSET DEFAULT MDA0:[000000]\rSHOW DEFAULT\r");
+            type_("COPY SYS$SYSDEVICE:[SYSMGR]WELCOME.TXT RAM.TXT\r");
+            type_("EDIT RAM.TXT\rD 3:END\rI\rEdited with EDT.\r\x1aEXIT\r");
+            type_("TYPE RAM.TXT\r");
             typed = 3;
         }
         if typed == 3 && text.contains("MDA0:[000000]RAM.TXT;2") {
-            type_("DIR MDA0:[000000]*.TXT\rDELETE MDA0:[000000]RAM.TXT;1\r");
-            type_("DELETE MDA0:[000000]RAM.TXT;2\rDIR MDA0:[000000]*.TXT\r");
+            type_("DIR *.TXT\rDELETE RAM.TXT;1\rDELETE RAM.TXT;2\rDIR *.TXT\r");
             type_("CONTINUE\rRUN SPIN\r");
             typed = 4;
         }
