@@ -26,7 +26,7 @@ silly analogies.
 ## API reference
 
 [docs/api/index.html](docs/api/index.html) documents every internal API: system services, executive
-routines and data, PAL calls, macro libraries and condition values. `scripts/apidoc.py` (`just apidoc`)
+routines and data, PAL calls, macro libraries and condition values. `cargo run -p apidoc` ([apidoc/](apidoc/))
 generates it from the sources, so maintaining it means maintaining what it reads:
 
 - Every global routine, `NAME::` or `.ENTRY`, has a comment block right above it whose first line is

@@ -17,7 +17,7 @@ not numbered, because the code cites them by path.
 kept current, like a design document.
 
 `api/index.html`, the API reference, is generated from the sources by
-`scripts/apidoc.py`: don't edit it, regenerate it (see AGENTS.md).
+`cargo run -p apidoc`: don't edit it, regenerate it (see AGENTS.md).
 
 ## Index
 
