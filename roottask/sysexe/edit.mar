@@ -1,5 +1,5 @@
-        .TITLE  EDIT    The EDT editor's line mode
-        .IDENT  /V0.1/
+        .TITLE  EDIT    The EDT editor: line mode and keypad mode
+        .IDENT  /V0.2/
 ;
 ; DCL's EDIT spec runs this, with spec, in capitals, as its command line
 ; at VA$C_FOREIGN. As EDT does in line mode, it reads the file spec names,
@@ -17,6 +17,7 @@
 ;               deletes the lines
 ;   REPLACE [range]
 ;               deletes the lines, then inserts as INSERT does
+;   CHANGE      edits the buffer on the screen, keypad mode, until CTRL/Z
 ;   EXIT        writes the buffer to a new version of the file, and ends
 ;               the session
 ;   QUIT        ends the session without writing
@@ -33,9 +34,22 @@
 ; those deleted. EXIT writes variable length records with carriage
 ; return control, as EDT does, and types the new file's name; if RMS
 ; can't, it types its status and the session goes on.
-; ponytail: no screen mode, which needs a terminal driver that reads a
-; key at a time, and no SUBSTITUTE, MOVE, COPY or WRITE. At most MAXLINES
-; lines, TEXTSIZE bytes, which deleted lines don't give back.
+; Keypad mode, on a VT100, shows ROWS lines around the current one and
+; reads a key at a time (IO$M_NOFILTR): a character goes in at the
+; cursor, RETURN breaks the line, DEL deletes the character before, BS
+; goes to the start of the line, the arrows move, CTRL/W paints the
+; screen again and CTRL/Z goes back to line mode. The keypad, or F1-F4 for
+; PF1-PF4, is EDT's: PF1 GOLD, PF2 HELP, PF3 FINDNXT, GOLD PF3 FIND, PF4
+; DEL L, comma DEL C, 0 LINE, 2 EOL, 3 CHAR, 4 ADVANCE, 5 BACKUP, GOLD 4
+; BOTTOM, GOLD 5 TOP, 8 SECT, and PREV and NEXT SCREEN a section back and
+; on.
+; ponytail: a VT100's 24 by 80 screen, whatever the terminal's size;
+; lines of at most LINESIZE characters, MAXLINES of them, shown up to
+; COLS with a tab as a space; no SUBSTITUTE, MOVE, COPY or WRITE in line
+; mode, no WORD, PAGE, SELECT, CUT or UNDELETE in keypad mode, and a
+; backward FIND finds the first match on a line, not the last. At most
+; TEXTSIZE bytes; only keypad mode takes back the room of lines deleted
+; or changed.
 ;
         .LIBRARY "lib.mlb"
         .LIBRARY "starlet.mlb"
@@ -53,6 +67,21 @@
 LINESIZE = 255
 MAXLINES = 2000
 TEXTSIZE = 65536
+ROWS = 22                               ; keypad mode's text rows; messages on MSGROW
+MSGROW = 24
+COLS = 80
+SECTION = 16                            ; the lines SECT moves
+RESERVE = 1024                          ; the room a change may take in TEXT
+SBUFSIZE = 4096
+ESC = 27
+; Keys, as GETKEY returns them; GOLD adds K_GOLD to the cursor and keypad keys.
+K_UP = 256                              ; to K_UP+3: up, down, right, left, as ESC [ A-D
+K_PF1 = 260                             ; to K_PF1+3, ESC O P-S
+K_KP0 = 264                             ; to K_KP0+9, ESC O p-y
+K_PREV = 274                            ; PREV SCREEN, ESC [ 5 ~
+K_NEXT = 275                            ; NEXT SCREEN, ESC [ 6 ~
+K_COMMA = 276                           ; ESC O l
+K_GOLD = 32
 
         .PSECT  DATA, NOEXE, WRT, LONG
 FAB:    $FAB    FNA=VA$C_FOREIGN+1, NAM=NAM
@@ -71,7 +100,7 @@ TOKEN:  .BLKB   LINESIZE                ; a word of it, in capitals
 OUT:    .BLKB   256                     ; a line being typed, .ASCIC
 NLINES: .LONG   0                       ; the lines in the buffer
 CUR:    .LONG   1                       ; the current line, NLINES+1 at [EOB]
-FREE:   .ADDRESS TEXT                   ; TEXT's first unused byte
+FREE:   .ADDRESS TEXT                   ; the arena's first unused byte
 V_TYPE: .ASCIC  "TYPE"
 V_INSERT:
         .ASCIC  "INSERT"
@@ -82,6 +111,8 @@ V_REPLACE:
 V_EXIT: .ASCIC  "EXIT"
 V_QUIT: .ASCIC  "QUIT"
 V_HELP: .ASCIC  "HELP"
+V_CHANGE:
+        .ASCIC  "CHANGE"
 K_BEGIN:
         .ASCIC  "BEGIN"
 K_END:  .ASCIC  "END"
@@ -92,9 +123,42 @@ E_CMD:  .ASCIC  "Unrecognized command"
 E_FIND: .ASCIC  "String was not found"
 E_RANGE:
         .ASCIC  "Invalid range"
+E_FULL: .ASCIC  "Buffer is full"
+E_LONG: .ASCIC  "Line too long"
+E_NOSTR:
+        .ASCIC  "No search string"
+E_KEYS: .ASCIC  "PF1 GOLD PF3 FINDNXT G-PF3 FIND PF4 DEL L , DEL C 4/5 ADV/BACK G-4/5 BOT/TOP"
+S_ENTER:
+        .ASCIC  <ESC>"="<ESC>"[2J"     ; keypad application mode, a clear screen
+S_LEAVE:
+        .ASCIC  <ESC>">"<ESC>"[24;1H"<ESC>"[K"
+S_EOL:  .ASCIC  <ESC>"[K"
+S_EOB:  .ASCIC  "[EOB]"
+S_FIND: .ASCII  <ESC>"[24;1H"<ESC>"[KSearch for: "
+S_FINDLEN = .-S_FIND
+EMPTY:  .BYTE   0                       ; an empty line, .ASCIC
+KEY:    .BLKB   1                       ; a key read in keypad mode
+STR:    .BLKB   LINESIZE                ; what FIND looks for
+OPEN:   .BLKB   LINESIZE+1              ; the line being changed, .ASCIC
         .ALIGN  LONG
-LINES:  .BLKL   MAXLINES+1              ; LINES[n]: line n, .ASCIC in TEXT
+STRLEN: .LONG   0
+OPENED: .LONG   0                       ; that line, LINES[OPENED] = OPEN, or 0
+ORIG:   .LONG   0                       ; its old copy, which it goes back to if it fits
+COL:    .LONG   0                       ; the cursor's column, past the end after up or down
+TOP:    .LONG   1                       ; the line on the first row
+DIR:    .LONG   1                       ; 1 after ADVANCE, -1 after BACKUP
+GOLD:   .LONG   0                       ; 1: PF1 came before this key
+PAINT:  .LONG   0                       ; what to paint: bit 0 the current line, 1 the screen
+MSGON:  .LONG   0                       ; 1: a message is on MSGROW
+MCOL:   .LONG   0                       ; the column MATCH found the text at
+SLEN:   .LONG   0                       ; the bytes in SBUF
+SBUF:   .BLKB   SBUFSIZE                ; what keypad mode writes, until FLUSH
+        .ALIGN  LONG
+BASE:   .ADDRESS TEXT                   ; the arena the lines are in, TEXT or TEXT2
+LIMIT:  .ADDRESS TEXT+TEXTSIZE          ; its end
+LINES:  .BLKL   MAXLINES+1              ; LINES[n]: line n, .ASCIC in BASE's arena
 TEXT:   .BLKB   TEXTSIZE
+TEXT2:  .BLKB   TEXTSIZE                ; the other arena, which COMPACT copies to
 
         .PSECT  CODE, EXE, LONG
         .ENTRY  START, ^M<R2, R3, R4, R5, R6, R7, R8, R9, R10, R11>
@@ -143,6 +207,11 @@ NEXT:   $QIOW_S CHAN=CHAN, FUNC=#IO$_READPROMPT, IOSB=IOSB, P1=CMD, P2=#LINESIZE
         MOVAB   V_HELP, R1
         BSBW    VERB
         BLBS    R0, HELP
+        MOVAB   V_CHANGE, R1
+        BSBW    VERB
+        BLBC    R0, TYPE1
+        BSBW    SCREEN
+        BRW     NEXT
 TYPE1:  MOVL    R9, R6
 TYPE:   BSBW    RANGE
         BLBC    R0, ERROR
@@ -187,6 +256,7 @@ HELP:   PRINT   "  range       types the lines range names"
         PRINT   "              deletes the lines"
         PRINT   "  REPLACE [range]"
         PRINT   "              deletes the lines, then inserts"
+        PRINT   "  CHANGE      edits on the screen until CTRL/Z, PF2 there lists keys"
         PRINT   "  EXIT        writes a new version of the file, and ends"
         PRINT   "  QUIT        ends without writing"
         PRINT   "  HELP        lists the commands"
@@ -210,8 +280,7 @@ LOAD:   MOVB    @#VA$C_FOREIGN, FAB+FAB$B_FNS
         BLBC    R0, 80$
 20$:    CMPL    NLINES, #MAXLINES
         BGEQU   60$
-        MOVAB   TEXT+TEXTSIZE, R0
-        SUBL2   FREE, R0
+        SUBL3   FREE, LIMIT, R0
         CMPL    R0, #LINESIZE+1
         BLSSU   60$
         ADDL3   #1, FREE, RAB+RAB$L_UBF
@@ -244,8 +313,7 @@ LOAD:   MOVB    @#VA$C_FOREIGN, FAB+FAB$B_FNS
 ADD:    MOVL    CUR, R10
 10$:    CMPL    NLINES, #MAXLINES
         BGEQU   80$
-        MOVAB   TEXT+TEXTSIZE, R0
-        SUBL2   FREE, R0
+        SUBL3   FREE, LIMIT, R0
         CMPL    R0, #LINESIZE+1
         BLSSU   80$
         ADDL3   #1, FREE, R0
@@ -430,6 +498,7 @@ LINE:   PUSHR   #^M<R2, R3, R4, R5>
 12$:    CMPL    R1, NLINES
         BGEQU   70$
         INCL    R1
+        CLRL    R0
         BSBW    MATCH
         BLBS    R0, 80$
         BRB     12$
@@ -445,6 +514,7 @@ LINE:   PUSHR   #^M<R2, R3, R4, R5>
 22$:    CMPL    R1, #1
         BLEQU   70$
         DECL    R1
+        CLRL    R0
         BSBW    MATCH
         BLBS    R0, 80$
         BRB     22$
@@ -519,13 +589,16 @@ STRING: MOVZBL  (R6)+, R0
 20$:    SUBL3   R4, R6, R5
         RSB
 
-; MATCH: R1 = a line, R4 = text, R5 = its length. R0 = 1 if the line has
-; the text in it, case ignored, else 0. Keeps every register but R0.
+; MATCH: R1 = a line, R4 = text, R5 = its length, R0 = a column. R0 = 1
+; if the line has the text in it from that column on, case ignored, and
+; MCOL = where, else 0. Keeps every register but R0.
 MATCH:  PUSHR   #^M<R2, R3, R8, R9>
         MOVL    LINES[R1], R2
         MOVZBL  (R2)+, R3
-        SUBL2   R5, R3                  ; the places it may start, less one
+        SUBL2   R5, R3
+        SUBL2   R0, R3                  ; the places it may start, less one
         BLSS    80$
+        ADDL2   R0, R2
 10$:    CLRL    R9
 20$:    CMPL    R9, R5
         BGEQU   70$
@@ -542,7 +615,9 @@ MATCH:  PUSHR   #^M<R2, R3, R8, R9>
         SOBGEQ  R3, 10$
 80$:    CLRL    R0
         BRB     90$
-70$:    MOVL    #1, R0
+70$:    SUBL3   LINES[R1], R2, R0
+        SUBL3   #1, R0, MCOL
+        MOVL    #1, R0
 90$:    POPR    #^M<R2, R3, R8, R9>
         RSB
 
@@ -608,5 +683,738 @@ KEYWORD:
         BNEQ    10$
         BRB     VERB
 10$:    RSB
+
+; SCREEN: keypad mode, from the current line until CTRL/Z, which leaves
+; the cursor's line the current one, and the line being changed back in
+; the arena, for line mode's commands. Uses R0-R7.
+SCREEN: CLRL    COL
+        CLRL    GOLD
+        MOVL    #1, DIR
+        MOVAB   S_ENTER, R1
+        BSBW    PUTS
+        MOVL    #2, PAINT
+10$:    BSBW    SHOWSCR
+        BSBW    GETKEY
+        TSTL    MSGON
+        BEQL    15$
+        CLRL    MSGON
+        PUSHL   R0
+        MOVL    #MSGROW, R1
+        CLRL    R2
+        BSBW    GOTO
+        MOVAB   S_EOL, R1
+        BSBW    PUTS
+        MOVL    (SP)+, R0
+15$:    CMPL    R0, #26                 ; CTRL/Z
+        BEQL    90$
+        CMPL    R0, #K_PF1
+        BNEQ    20$
+        MOVL    #1, GOLD
+        BRB     10$
+20$:    TSTL    GOLD
+        BEQL    25$
+        CLRL    GOLD
+        CMPL    R0, #K_UP
+        BLSSU   25$
+        ADDL2   #K_GOLD, R0
+25$:    CMPL    R0, #^A/ /
+        BLSSU   30$
+        CMPL    R0, #126
+        BGTRU   30$
+        BSBW    INSCHR
+        BRB     10$
+30$:    MOVAL   KEYS, R6
+40$:    TSTL    (R6)
+        BEQL    10$                     ; not one of them
+        CMPL    R0, (R6)+
+        BEQL    50$
+        TSTL    (R6)+
+        BRB     40$
+50$:    JSB     @(R6)+
+        BRB     10$
+90$:    BSBW    COMMIT
+        MOVAB   S_LEAVE, R1
+        BSBW    PUTS
+        BRW     FLUSH
+
+; KEY code, routine: the routine keypad mode calls with R0 = code for it.
+        .MACRO  KEY     CODE, ROUTINE
+        .LONG   CODE
+        .ADDRESS ROUTINE
+        .ENDM   KEY
+
+KEYS:   KEY     8, BOL                  ; BS
+        KEY     9, INSCHR               ; TAB
+        KEY     13, SPLIT
+        KEY     23, REFRESH             ; CTRL/W
+        KEY     127, RUBOUT             ; DEL
+        KEY     K_UP, UP
+        KEY     K_UP+1, DOWN
+        KEY     K_UP+2, RIGHT
+        KEY     K_UP+3, LEFT
+        KEY     K_PF1+1, HELPKEY
+        KEY     K_PF1+2, FINDNXT
+        KEY     K_PF1+2+K_GOLD, FIND
+        KEY     K_PF1+3, DELL
+        KEY     K_COMMA, DELC
+        KEY     K_KP0, LINEKEY
+        KEY     K_KP0+2, EOLKEY
+        KEY     K_KP0+3, CHARKEY
+        KEY     K_KP0+4, ADVANCE
+        KEY     K_KP0+5, BACKUP
+        KEY     K_KP0+4+K_GOLD, BOTTOM
+        KEY     K_KP0+5+K_GOLD, TOPKEY
+        KEY     K_KP0+8, SECT
+        KEY     K_PREV, PREV
+        KEY     K_NEXT, NEXTSCR
+        .LONG   0
+
+; GETKEY: R0 = the next key: a character, a K_ code for the escape
+; sequence a cursor, keypad or function key sends, or 0 for another.
+; Uses R0-R2.
+GETKEY: BSBW    READKEY
+        CMPL    R0, #ESC
+        BNEQ    90$
+        BSBW    READKEY
+        CMPL    R0, #91                 ; [
+        BEQL    20$
+        CMPL    R0, #^A/O/
+        BNEQ    80$
+        BSBW    READKEY                 ; ESC O x
+        MOVAB   SS3, R2
+10$:    TSTB    (R2)
+        BEQL    80$
+        CMPB    R0, (R2)
+        BLSSU   15$
+        CMPB    R0, 1(R2)
+        BGTRU   15$
+        SUBB2   (R2), R0
+        ADDW2   2(R2), R0
+        RSB
+15$:    ADDL2   #4, R2
+        BRB     10$
+20$:    BSBW    READKEY                 ; ESC [ A-D, or ESC [ n ~
+        CMPL    R0, #^A/A/
+        BLSSU   30$
+        CMPL    R0, #^A/D/
+        BGTRU   80$
+        ADDL2   #K_UP-^A/A/, R0
+        RSB
+30$:    CLRL    R2
+40$:    CMPL    R0, #^A/~/
+        BEQL    50$
+        SUBL2   #^A/0/, R0
+        CMPL    R0, #9
+        BGTRU   80$
+        MULL2   #10, R2
+        ADDL2   R0, R2
+        BSBW    READKEY
+        BRB     40$
+50$:    MOVL    #K_PREV, R0
+        CMPL    R2, #5
+        BEQL    90$
+        MOVL    #K_NEXT, R0
+        CMPL    R2, #6
+        BEQL    90$
+        SUBL3   #11, R2, R0             ; 11-14: F1-F4
+        CMPL    R0, #3
+        BGTRU   80$
+        ADDL2   #K_PF1, R0
+        RSB
+80$:    CLRL    R0
+90$:    RSB
+
+; SS3: what ESC O and a character in each range is: the range's first
+; and last character, and the key of the first.
+SS3:    .BYTE   ^A/A/, ^A/D/
+        .WORD   K_UP
+        .BYTE   ^A/P/, ^A/S/
+        .WORD   K_PF1
+        .BYTE   ^A/p/, ^A/y/
+        .WORD   K_KP0
+        .BYTE   ^A/l/, ^A/l/
+        .WORD   K_COMMA
+        .BYTE   ^A/M/, ^A/M/            ; ENTER
+        .WORD   13
+        .BYTE   0
+
+; READKEY: R0 = the next character typed, without echo; a carriage
+; return if it ended the read, and CTRL/Z if the read fails. Uses R0, R1.
+READKEY:
+        $QIOW_S CHAN=CHAN, FUNC=#IO$_READVBLK!IO$M_NOECHO!IO$M_NOFILTR, IOSB=IOSB, P1=KEY, P2=#1
+        BLBC    R0, 80$
+        MOVZBL  #13, R0
+        TSTW    IOSB+2
+        BEQL    90$
+        MOVZBL  KEY, R0
+        RSB
+80$:    MOVZBL  #26, R0
+90$:    RSB
+
+; SHOWSCR: scrolls the current line to the middle of the screen if it is
+; off it, paints what PAINT says, and puts the cursor at its column.
+; Uses R0-R6.
+SHOWSCR:
+        SUBL3   TOP, CUR, R0
+        CMPL    R0, #ROWS               ; unsigned: above the top too
+        BLSSU   20$
+        SUBL3   #ROWS/2, CUR, R0
+        BGTR    10$
+        MOVL    #1, R0
+10$:    MOVL    R0, TOP
+        MOVL    #2, PAINT
+20$:    BBC     #1, PAINT, 40$
+        MOVL    #1, R6                  ; every row but MSGROW's
+30$:    MOVL    R6, R1
+        CLRL    R2
+        BSBW    GOTO
+        CMPL    R6, #ROWS
+        BGTRU   35$
+        ADDL3   TOP, R6, R1
+        DECL    R1
+        BSBW    DRAW
+35$:    MOVAB   S_EOL, R1
+        BSBW    PUTS
+        AOBLSS  #MSGROW, R6, 30$
+        BRB     50$
+40$:    BLBC    PAINT, 50$
+        SUBL3   TOP, CUR, R1
+        INCL    R1
+        CLRL    R2
+        BSBW    GOTO
+        MOVL    CUR, R1
+        BSBW    DRAW
+        MOVAB   S_EOL, R1
+        BSBW    PUTS
+50$:    CLRL    PAINT
+        BSBW    CLAMP
+        CMPL    R0, #COLS-1
+        BLEQU   60$
+        MOVL    #COLS-1, R0
+60$:    MOVL    R0, R2
+        SUBL3   TOP, CUR, R1
+        INCL    R1
+        BSBW    GOTO
+        BRW     FLUSH
+
+; DRAW: R1 = a line. Writes it, up to COLS characters, with a control
+; character as a space, [EOB] past the last line and nothing past that.
+; Uses R0-R4.
+DRAW:   CMPL    R1, NLINES
+        BLEQU   10$
+        DECL    R1
+        CMPL    R1, NLINES
+        BNEQ    90$
+        MOVAB   S_EOB, R1
+        BRW     PUTS
+10$:    MOVL    LINES[R1], R3
+        MOVZBL  (R3)+, R4
+        BEQL    90$
+        CMPL    R4, #COLS
+        BLEQU   20$
+        MOVL    #COLS, R4
+20$:    MOVZBL  (R3)+, R0
+        CMPL    R0, #^A/ /
+        BLSSU   25$
+        CMPL    R0, #126
+        BLEQU   30$
+25$:    MOVZBL  #^A/ /, R0
+30$:    BSBW    PUTC
+        SOBGTR  R4, 20$
+90$:    RSB
+
+; MSG: R1 = a message, .ASCIC. Writes it on MSGROW, until the next key.
+; Uses R0-R3.
+MSG:    PUSHL   R1
+        MOVL    #MSGROW, R1
+        CLRL    R2
+        BSBW    GOTO
+        MOVL    (SP)+, R1
+        BSBW    PUTS
+        MOVAB   S_EOL, R1
+        BSBW    PUTS
+        MOVL    #1, MSGON
+        RSB
+
+; GOTO: R1 = a row, from 1, R2 = a column, from 0. Moves the cursor
+; there. Uses R0-R2.
+GOTO:   PUSHL   R2
+        PUSHL   R1
+        MOVZBL  #ESC, R0
+        BSBB    PUTC
+        MOVZBL  #91, R0                 ; [
+        BSBB    PUTC
+        MOVL    (SP)+, R0
+        BSBB    PUTNUM
+        MOVZBL  #59, R0                 ; a semicolon
+        BSBB    PUTC
+        ADDL3   #1, (SP)+, R0
+        BSBB    PUTNUM
+        MOVZBL  #^A/H/, R0
+        BRB     PUTC
+
+; PUTNUM: R0 = a number, 0-99. Writes it in decimal. Uses R0-R2.
+PUTNUM: DIVL3   #10, R0, R2
+        MULL3   #10, R2, R1
+        SUBL2   R1, R0
+        PUSHL   R0
+        TSTL    R2
+        BEQL    10$
+        ADDL3   #^A/0/, R2, R0
+        BSBB    PUTC
+10$:    ADDL3   #^A/0/, (SP)+, R0
+        BRB     PUTC
+
+; PUTS: R1 = text, .ASCIC. Writes it. Uses R0-R3.
+PUTS:   MOVL    R1, R3
+        MOVZBL  (R3)+, R2
+        BEQL    20$
+10$:    MOVZBL  (R3)+, R0
+        BSBB    PUTC
+        SOBGTR  R2, 10$
+20$:    RSB
+
+; PUTC: R0 = a character. Writes it, in SBUF until FLUSH. Uses R1.
+PUTC:   MOVL    SLEN, R1
+        CMPL    R1, #SBUFSIZE
+        BLSSU   10$
+        PUSHL   R0
+        BSBB    FLUSH
+        MOVL    (SP)+, R0
+        CLRL    R1
+10$:    MOVB    R0, SBUF[R1]
+        INCL    SLEN
+        RSB
+
+; FLUSH: writes what is in SBUF on the console. Uses R0, R1.
+FLUSH:  $QIOW_S CHAN=CHAN, FUNC=#IO$_WRITEVBLK, P1=SBUF, P2=SLEN
+        CLRL    SLEN
+        RSB
+
+; LEN: R1 = a line, 1 to NLINES+1. R0 = its length, 0 for [EOB].
+LEN:    CLRL    R0
+        CMPL    R1, NLINES
+        BGTRU   10$
+        MOVL    LINES[R1], R0
+        MOVZBL  (R0), R0
+10$:    RSB
+
+; CLAMP: R0 = the cursor's column, at most the end of the current line,
+; R1 = that line's length.
+CLAMP:  MOVL    CUR, R1
+        BSBB    LEN
+        MOVL    R0, R1
+        MOVL    COL, R0
+        CMPL    R0, R1
+        BLEQU   10$
+        MOVL    R1, R0
+10$:    RSB
+
+; The keys' routines. Each may use R0-R7.
+UP:     CMPL    CUR, #1
+        BLEQU   10$
+        DECL    CUR
+10$:    RSB
+
+DOWN:   CMPL    CUR, NLINES
+        BGTRU   10$
+        INCL    CUR
+10$:    RSB
+
+RIGHT:  BSBB    CLAMP
+        CMPL    R0, R1
+        BGEQU   10$
+        ADDL3   #1, R0, COL
+        RSB
+10$:    CMPL    CUR, NLINES
+        BGTRU   20$
+        INCL    CUR
+        CLRL    COL
+20$:    RSB
+
+LEFT:   BSBB    CLAMP
+        TSTL    R0
+        BEQL    10$
+        SUBL3   #1, R0, COL
+        RSB
+10$:    CMPL    CUR, #1
+        BLEQU   20$
+        DECL    CUR
+        MOVL    CUR, R1
+        BSBB    LEN
+        MOVL    R0, COL
+20$:    RSB
+
+BOL:    BSBB    CLAMP                   ; the start of the line, or the one before
+        TSTL    R0
+        BNEQ    10$
+        BSBB    UP
+10$:    CLRL    COL
+        RSB
+
+LINEKEY:
+        TSTL    DIR                     ; the next line's start, or this one's
+        BLSS    BOL
+        BSBB    DOWN
+        CLRL    COL
+        RSB
+
+EOLKEY: TSTL    DIR                     ; this line's end, or the one after or before
+        BGTR    10$
+        BSBB    UP
+        BRB     20$
+10$:    BSBB    CLAMP
+        CMPL    R0, R1
+        BLSSU   20$
+        BSBB    DOWN
+20$:    MOVL    CUR, R1
+        BSBB    LEN
+        MOVL    R0, COL
+        RSB
+
+CHARKEY:
+        TSTL    DIR
+        BLSS    LEFT
+        BRB     RIGHT
+
+ADVANCE:
+        MOVL    #1, DIR
+        RSB
+
+BACKUP: MNEGL   #1, DIR
+        RSB
+
+TOPKEY: MOVL    #1, CUR
+        CLRL    COL
+        RSB
+
+BOTTOM: ADDL3   #1, NLINES, CUR
+        CLRL    COL
+        RSB
+
+SECT:   MOVL    DIR, R2
+        BRB     MOVESECT
+PREV:   MNEGL   #1, R2
+        BRB     MOVESECT
+NEXTSCR:
+        MOVL    #1, R2
+; MOVESECT: R2 = 1 or -1. Moves SECTION lines that way, to the start of
+; the line, the first or [EOB] at most.
+MOVESECT:
+        MULL3   #SECTION, R2, R0
+        ADDL2   CUR, R0
+        BGTR    10$
+        MOVL    #1, R0
+10$:    ADDL3   #1, NLINES, R1
+        CMPL    R0, R1
+        BLEQ    20$
+        MOVL    R1, R0
+20$:    MOVL    R0, CUR
+        CLRL    COL
+        RSB
+
+REFRESH:
+        MOVL    #2, PAINT
+        RSB
+
+HELPKEY:
+        MOVAB   E_KEYS, R1
+        BRW     MSG
+
+; FIND: reads what to look for on MSGROW, and finds it as FINDNXT does.
+FIND:   BSBW    FLUSH
+        $QIOW_S CHAN=CHAN, FUNC=#IO$_READPROMPT, IOSB=IOSB, P1=STR, P2=#LINESIZE, P5=#S_FIND, P6=#S_FINDLEN
+        MOVL    #2, PAINT               ; the echo of RETURN scrolled the screen
+        BLBC    R0, 10$
+        MOVZWL  IOSB+2, R0
+        BEQL    10$
+        MOVL    R0, STRLEN
+        BRB     FINDNXT
+10$:    RSB
+
+; FINDNXT: moves to the next place with what FIND looked for, case
+; ignored, after the cursor in ADVANCE, on a line before it in BACKUP.
+FINDNXT:
+        MOVL    STRLEN, R5
+        BNEQ    10$
+        MOVAB   E_NOSTR, R1
+        BRW     MSG
+10$:    MOVAB   STR, R4
+        TSTL    DIR
+        BLSS    40$
+        BSBW    CLAMP
+        INCL    R0
+        MOVL    CUR, R1
+20$:    CMPL    R1, NLINES
+        BGTRU   80$
+        BSBW    MATCH
+        BLBS    R0, 70$
+        INCL    R1
+        CLRL    R0
+        BRB     20$
+40$:    MOVL    CUR, R1
+50$:    DECL    R1
+        BEQL    80$
+        CLRL    R0
+        BSBW    MATCH
+        BLBC    R0, 50$
+70$:    MOVL    R1, CUR
+        MOVL    MCOL, COL
+        RSB
+80$:    MOVAB   E_FIND, R1
+        BRW     MSG
+
+; INSCHR: R0 = a character. Puts it in at the cursor.
+INSCHR: MOVL    R0, R7
+        BSBW    ROOM
+        BLBC    R0, 90$
+        BSBW    OPENLN
+        BLBC    R0, 90$
+        BSBW    CLAMP
+        CMPL    R1, #LINESIZE
+        BGEQU   80$
+        ADDL3   #1, R0, COL
+        INCB    OPEN
+        SUBL2   R0, R1                  ; the characters after it
+        MOVAB   OPEN+1[R0], R6
+        MOVC3   R1, (R6), 1(R6)
+        MOVB    R7, (R6)
+        BISL2   #1, PAINT
+90$:    RSB
+80$:    MOVAB   E_LONG, R1
+        BRW     MSG
+
+; SPLIT: RETURN. Breaks the line at the cursor, which goes to the start
+; of the new one; at [EOB], puts an empty line before it.
+SPLIT:  BSBW    ROOM
+        BLBC    R0, 90$
+        CMPL    NLINES, #MAXLINES
+        BGEQU   80$
+        CMPL    CUR, NLINES
+        BLEQU   10$
+        MOVAB   EMPTY, R1
+        MOVL    CUR, R2
+        BSBW    INSLINE
+        BRB     20$
+10$:    BSBW    OPENLN
+        BSBW    CLAMP
+        MOVB    R0, OPEN                ; this line, up to the cursor
+        SUBL2   R0, R1                  ; and the rest, a new one
+        MOVAB   OPEN+1[R0], R0
+        MOVL    FREE, R6
+        MOVB    R1, (R6)
+        ADDL3   #1, R1, R2
+        ADDL2   R2, FREE
+        MOVC3   R1, (R0), 1(R6)
+        MOVL    R6, R1
+        ADDL3   #1, CUR, R2
+        BSBW    INSLINE
+20$:    INCL    CUR
+        CLRL    COL
+90$:    RSB
+80$:    MOVAB   E_FULL, R1
+        BRW     MSG
+
+; RUBOUT: DEL. Deletes the character before the cursor, at the start of
+; a line the end of the one before.
+RUBOUT: BSBW    ROOM
+        BLBC    R0, 90$
+        BSBW    CLAMP
+        TSTL    R0
+        BEQL    10$
+        DECL    R0
+        MOVL    R0, COL
+        BSBW    OPENLN
+        MOVL    COL, R0
+        BRB     DELCHR
+10$:    CMPL    CUR, #1
+        BLEQU   90$
+        DECL    CUR
+        MOVL    CUR, R1
+        BSBW    LEN
+        MOVL    R0, COL
+        BRB     JOIN
+90$:    RSB
+
+; DELC: deletes the character at the cursor, at the end of a line the
+; end itself.
+DELC:   BSBW    ROOM
+        BLBC    R0, 90$
+        BSBW    CLAMP
+        MOVL    R0, COL
+        CMPL    R0, R1
+        BGEQU   JOIN
+        BSBW    OPENLN
+        MOVL    COL, R0
+        BRB     DELCHR
+90$:    RSB
+
+; DELL: deletes from the cursor to the start of the next line.
+DELL:   BSBW    ROOM
+        BLBC    R0, 90$
+        CMPL    CUR, NLINES
+        BGTRU   90$
+        BSBW    CLAMP
+        MOVL    R0, COL
+        BSBW    OPENLN
+        MOVB    COL, OPEN
+        BISL2   #1, PAINT
+        BRB     JOIN
+90$:    RSB
+
+; DELCHR: R0 = a column of OPEN, before its end. Deletes the character
+; there.
+DELCHR: MOVZBL  OPEN, R1
+        SUBL2   R0, R1
+        DECL    R1                      ; the characters after it
+        DECB    OPEN
+        MOVAB   OPEN+1[R0], R2
+        MOVC3   R1, 1(R2), (R2)
+        BISL2   #1, PAINT
+        RSB
+
+; JOIN: puts the next line at the end of the current one, if there is
+; one and the two fit in a line.
+JOIN:   CMPL    CUR, NLINES
+        BGEQU   90$
+        BSBW    OPENLN
+        ADDL3   #1, CUR, R7
+        MOVL    LINES[R7], R1
+        MOVZBL  (R1)+, R0
+        MOVZBL  OPEN, R2
+        ADDL3   R0, R2, R3
+        CMPL    R3, #LINESIZE
+        BGTRU   80$
+        MOVB    R3, OPEN
+        MOVAB   OPEN+1[R2], R2
+        MOVC3   R0, (R1), (R2)
+        MOVL    R7, R2
+        BRW     DELLINE
+80$:    MOVAB   E_LONG, R1
+        BRW     MSG
+90$:    RSB
+
+; ROOM: R0 = 1 if TEXT has RESERVE bytes for a change, compacted if it
+; must be, else 0, and a message. Uses R0-R7.
+ROOM:   SUBL3   FREE, LIMIT, R0
+        CMPL    R0, #RESERVE
+        BGEQU   10$
+        BSBB    COMPACT
+        SUBL3   FREE, LIMIT, R0
+        CMPL    R0, #RESERVE
+        BGEQU   10$
+        MOVAB   E_FULL, R1
+        BSBW    MSG
+        CLRL    R0
+        RSB
+10$:    MOVL    #1, R0
+        RSB
+
+; COMPACT: copies the lines, the one being changed too, to the other
+; arena, one after another, and goes on in that one, without the copies
+; changes left behind. Uses R0-R7.
+COMPACT:
+        MOVAB   TEXT, R6
+        CMPL    BASE, R6
+        BNEQ    10$
+        MOVAB   TEXT2, R6
+10$:    MOVL    R6, BASE
+        ADDL3   #TEXTSIZE, R6, LIMIT
+        CLRL    OPENED
+        MOVL    #1, R7
+20$:    CMPL    R7, NLINES
+        BGTRU   30$
+        MOVL    LINES[R7], R1
+        MOVL    R6, LINES[R7]
+        MOVZBL  (R1), R0
+        INCL    R0
+        PUSHL   R0
+        MOVC3   R0, (R1), (R6)
+        ADDL3   (SP)+, LINES[R7], R6
+        INCL    R7
+        BRB     20$
+30$:    MOVL    R6, FREE
+        RSB
+
+; OPENLN: makes the current line the one being changed, in OPEN, after
+; it puts the one that was back; at [EOB], a new empty line. R0 = 1, or
+; 0 if there is no room for it. Uses R0-R5.
+OPENLN: CMPL    OPENED, CUR
+        BEQL    80$
+        BSBB    COMMIT
+        CMPL    CUR, NLINES
+        BLEQU   10$
+        CMPL    NLINES, #MAXLINES
+        BGEQU   85$
+        MOVAB   EMPTY, R1
+        MOVL    CUR, R2
+        BSBB    INSLINE
+10$:    MOVL    CUR, R5
+        MOVL    LINES[R5], R1
+        MOVL    R1, ORIG
+        MOVAB   OPEN, LINES[R5]
+        MOVL    R5, OPENED
+        MOVZBL  (R1), R0
+        INCL    R0
+        MOVC3   R0, (R1), OPEN
+80$:    MOVL    #1, R0
+        RSB
+85$:    MOVAB   E_FULL, R1
+        BSBW    MSG
+        CLRL    R0
+        RSB
+
+; COMMIT: puts the line being changed back in TEXT: where it was if it
+; fits, else at FREE. Uses R0-R5.
+COMMIT: MOVL    OPENED, R5
+        BEQL    90$
+        CLRL    OPENED
+        MOVZBL  OPEN, R0
+        INCL    R0
+        MOVL    ORIG, R3
+        CMPB    OPEN, (R3)
+        BLEQU   10$
+        MOVL    FREE, R3
+        ADDL2   R0, FREE
+10$:    MOVL    R3, LINES[R5]
+        MOVC3   R0, OPEN, (R3)
+90$:    RSB
+
+; INSLINE: R1 = a line, .ASCIC, R2 = where it goes, 1 to NLINES+1. Puts
+; it there, and the lines from there on one further. Uses R0-R5.
+INSLINE:
+        PUSHR   #^M<R1, R2>
+        SUBL3   R2, NLINES, R0
+        INCL    R0
+        MULL2   #4, R0
+        MOVAL   LINES[R2], R1
+        MOVC3   R0, (R1), 4(R1)
+        POPR    #^M<R1, R2>
+        MOVL    R1, LINES[R2]
+        INCL    NLINES
+        CMPL    OPENED, R2
+        BLSSU   10$
+        INCL    OPENED
+10$:    MOVL    #2, PAINT
+        RSB
+
+; DELLINE: R2 = a line, 1 to NLINES. Takes it out, and the lines after
+; it one back. Uses R0-R5.
+DELLINE:
+        PUSHL   R2
+        SUBL3   R2, NLINES, R0
+        MULL2   #4, R0
+        MOVAL   LINES[R2], R1
+        MOVC3   R0, 4(R1), (R1)
+        MOVL    (SP)+, R2
+        DECL    NLINES
+        CMPL    OPENED, R2
+        BLSSU   20$
+        BNEQ    10$
+        CLRL    OPENED
+        BRB     20$
+10$:    DECL    OPENED
+20$:    MOVL    #2, PAINT
+        RSB
 
         .END    START

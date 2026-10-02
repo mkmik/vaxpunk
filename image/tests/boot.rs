@@ -4,11 +4,11 @@
 //! TYPE and EDIT theirs from the system disk, EDIT's EXIT that can't write
 //! there, and DIRECTORY its own from the ramdisk, MDA0:, made the default
 //! device, around a COPY to it from SYS$SYSDEVICE:, a logical name, an EDIT
-//! that writes a second version and DELETEs, then INITIALIZE, MOUNT and
-//! COPY on the data disk, DKB0:, made afresh in out/check-datadisk.img, not
-//! the one you keep, and SHOW DEVICES, or the root task is
-//! done, which is only on a halt or a fault. DCL reads what was typed ahead a
-//! line at a time. Then it types a CONTINUE with nothing stopped, and stops
+//! in line mode and keypad mode that writes a second version and DELETEs,
+//! then INITIALIZE, MOUNT and COPY on the data disk, DKB0:, made afresh in
+//! out/check-datadisk.img, not the one you keep, and SHOW DEVICES, or the
+//! root task is done, which is only on a halt or a fault. DCL reads what was
+//! typed ahead a line at a time. Then it types a CONTINUE with nothing stopped, and stops
 //! SPIN and SLEEPER with CTRL/Y, twice each, with a CONTINUE in between, a
 //! step at a time: each waits until a line has come so many times, the echo
 //! of what it typed before included, and types.
@@ -62,6 +62,7 @@ const LINES: &[&str] = &[
     "  MDA0:[000000]",
     "Directory MDA0:[000000]",
     "MDA0:[000000]RAM.TXT;2",
+    "        Welcome to vaxpunk, an EDT-edited clone for arm64\n",
     "RAM.TXT;2           RAM.TXT;1",
     "%DIRECT-W-NOFILES, no files found",
     "%MOUNT-I-MOUNTED, DATA mounted on _DKB0:",
@@ -102,7 +103,8 @@ fn boot() {
         .unwrap();
     let mut console = qemu.stdin.take().unwrap();
     let mut type_ = |s: &str| console.write_all(s.as_bytes()).unwrap();
-    let log = || String::from_utf8_lossy(&fs::read(&log_path).unwrap_or_default()).into_owned();
+    let log =
+        || String::from_utf8_lossy(&fs::read(&log_path).unwrap_or_default()).replace('\r', "");
 
     let mut typed = 0;
     let mut step = 0;
@@ -131,7 +133,12 @@ fn boot() {
         if typed == 2 && text.contains("error in directory name") {
             type_("INIT MDA0: RAM\rMOUNT MDA0: RAM\rSET DEFAULT MDA0:[000000]\rSHOW DEFAULT\r");
             type_("COPY SYS$SYSDEVICE:[SYSMGR]WELCOME.TXT RAM.TXT\r");
-            type_("EDIT RAM.TXT\rD 3:END\rI\rEdited with EDT.\r\x1aEXIT\r");
+            type_("EDIT RAM.TXT\rD 3:END\rI\rEdited with EDT.\r\x1a");
+            // Keypad mode: GOLD 5 goes to the top, GOLD PF3 finds OpenVMS,
+            // seven DEL Cs delete it, and EDT-edited goes in its place.
+            type_("C\r\x1bOP\x1bOu\x1bOP\x1bOROpenVMS\r");
+            type_(&"\x1bOl".repeat(7));
+            type_("EDT-edited\x1aEXIT\r");
             type_("TYPE RAM.TXT\r");
             typed = 3;
         }
@@ -159,7 +166,7 @@ fn boot() {
     drop(console);
     let _ = qemu.wait();
 
-    let text = log().replace('\r', "");
+    let text = log();
     if let Some(start) = text.find("EXEC.EXE:") {
         let start = text[..start].rfind('\n').map_or(0, |i| i + 1);
         print!("{}", &text[start..]);
