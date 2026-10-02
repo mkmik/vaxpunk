@@ -7,7 +7,6 @@ ARM64 programs to assemble, link and run with the vtools commands, through
 cd vtools/examples/vasm
 just hello              # builds the tools, then assembles, links and runs hello
 just --dry-run library  # shows the commands without running them
-just check              # checks every example against tests/examples/vasm
 ```
 
 The [Justfile](Justfile) holds the commands. `cargo test -p vrun` also runs
