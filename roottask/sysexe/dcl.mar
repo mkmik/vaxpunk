@@ -24,6 +24,7 @@
 ;               sets the process's default directory, with $SETDDIR
 ;   SHOW DEFAULT
 ;               shows it, with the device
+;   EDIT spec   runs EDIT.EXE, with spec as its command line
 ;   HELP        lists the commands
 ;   LOGOUT      ends the process
 ;
@@ -98,6 +99,8 @@ TOKDSC: .LONG   0                       ; a descriptor of TOKEN: its length
 DIRIMG: .ASCID  "DIRECTORY.EXE"
 TYPEIMG:
         .ASCID  "TYPE.EXE"
+EDITIMG:
+        .ASCID  "EDIT.EXE"
 MSG:    .BLKB   256                     ; a message being made, .ASCIC
 CHAR:   .BLKB   1
 V_RUN:  .ASCIC  "RUN"
@@ -117,6 +120,7 @@ V_LOGICAL:
 V_SET:  .ASCIC  "SET"
 V_DEFAULT:
         .ASCIC  "DEFAULT"
+V_EDIT: .ASCIC  "EDIT"
 DOTEXE: .ASCII  ".EXE"
         .ALIGN  LONG
 DEFFAB: $FAB    FNA=TOKEN, NAM=DEFNAM   ; SET and SHOW DEFAULT's $PARSE
@@ -172,6 +176,9 @@ NEXT:   $QIOW_S CHAN=CHAN, FUNC=#IO$_READPROMPT, IOSB=IOSB, P1=LINE, P2=#LINESIZ
         MOVAB   V_SET, R1
         BSBW    VERB
         BLBS    R0, SET
+        MOVAB   V_EDIT, R1
+        BSBW    VERB
+        BLBS    R0, EDIT
         PRINT   "%DCL-W-IVVERB, unrecognized command verb - check validity and spelling"
         ADDTEXT " \"
         BSBW    ADDTOKEN
@@ -195,6 +202,7 @@ HELP:   PRINT   "  RUN image   runs image, image.EXE if it has no type"
         PRINT   "              sets the default directory"
         PRINT   "  SHOW DEFAULT"
         PRINT   "              shows it"
+        PRINT   "  EDIT spec   looks at the file spec names with EDT, read only"
         PRINT   "  HELP        lists the commands"
         PRINT   "  LOGOUT      ends the process"
         BRW     NEXT
@@ -222,6 +230,15 @@ TYPE:   BSBW    WORD
         MOVL    R8, TOKDSC
         $IMGACT_S IMAGE=TYPEIMG, CMDLIN=TOKDSC
         MOVAB   TYPEIMG, R1
+        BRB     ACTFAIL
+
+; EDIT spec: runs EDIT.EXE with the spec.
+EDIT:   BSBW    WORD
+        TSTL    R8
+        BEQL    INSFPRM
+        MOVL    R8, TOKDSC
+        $IMGACT_S IMAGE=EDITIMG, CMDLIN=TOKDSC
+        MOVAB   EDITIMG, R1
         BRB     ACTFAIL
 
 INSFPRM:

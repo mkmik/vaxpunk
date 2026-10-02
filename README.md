@@ -83,6 +83,8 @@ runs an image from `[SYSEXE]` (`.EXE` is the default type), `DIRECTORY`
 lists files, in the default directory unless told where (`DIR`, `DIR
 [SYSEXE]P%NG`, `DIR [000000]`), `SET DEFAULT [dir]` and `SHOW DEFAULT` set
 and show that, `[SYSMGR]` at first, `TYPE file` writes a text file (`TYPE WELCOME.TXT`),
+`EDIT file` looks at one with EDT's line mode, read only (`HELP` at its
+`*` prompt),
 `DEFINE name equivalence`, `DEASSIGN name` and `SHOW LOGICAL name` make,
 delete and translate logical names (`SHOW LOGICAL SYS$INPUT`, or `SHOW
 LOGICAL` alone to list them all), `HELP` lists the commands and `LOGOUT` ends the process:
@@ -92,12 +94,12 @@ $ DIR [SYSEXE]
 
 Directory DKA0:[SYSEXE]
 
-DCL.EXE;1           DIRECTORY.EXE;1     EXEC.EXE;1          HOG.EXE;1
-NUDGE.EXE;1         PING.EXE;1          PONG.EXE;1          SLEEPER.EXE;1
-SNOOP.EXE;1         STARTUP.EXE;1       SVCTEST.EXE;1       TIMETEST.EXE;1
-TYPE.EXE;1          USURP.EXE;1
+DCL.EXE;1           DIRECTORY.EXE;1     EDIT.EXE;1          EXEC.EXE;1
+HOG.EXE;1           NUDGE.EXE;1         PING.EXE;1          PONG.EXE;1
+SLEEPER.EXE;1       SNOOP.EXE;1         STARTUP.EXE;1       SVCTEST.EXE;1
+TIMETEST.EXE;1      TYPE.EXE;1          USURP.EXE;1
 
-Total of 14 files.
+Total of 15 files.
 ```
 
 `RUN STARTUP` starts the programs that put the executive's services to
@@ -136,7 +138,8 @@ the processes it created go on. Between commands the CPU idles, taking a
 clock interrupt every 10 ms. There is no CTRL/Y yet: an image that never
 exits, such as `SLEEPER`, keeps the console until QEMU is stopped. `just
 check` boots the same way without a terminal, types `RUN STARTUP`, `RUN
-SNOOP`, a bad verb, `DIR [SYSEXE]P%NG`, `TYPE WELCOME.TXT`, and a logical
+SNOOP`, a bad verb, `DIR [SYSEXE]P%NG`, `TYPE WELCOME.TXT`, an `EDIT
+WELCOME.TXT` session, and a logical
 name's `DEFINE`, `SHOW LOGICAL` and `DEASSIGN`, `SHOW LOGICAL` alone, and
 `SET DEFAULT` and `SHOW DEFAULT`, prints the executive's part and fails unless the processes ran to the end.
 

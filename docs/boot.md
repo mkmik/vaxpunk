@@ -113,7 +113,10 @@ interpreter. It is linked high in P1, which tells the executive it is one
   `SET DEFAULT` changes it (`$SETDDIR`; `SHOW DEFAULT` shows it), or
   the ones it is given, `DIR [SYSEXE]`, `DIR [000000]`. `TYPE file` runs
   `TYPE.EXE`, which reads the file with `$OPEN` and `$GET` and writes it
-  on the console. `DEFINE`, `DEASSIGN` and `SHOW LOGICAL` make, delete
+  on the console. `EDIT file` runs `EDIT.EXE`, EDT's line mode: it reads
+  the file the same way and, at its `*` prompt, types the lines you ask
+  for, until `EXIT` or `QUIT`. It can't change them yet. `DEFINE`,
+  `DEASSIGN` and `SHOW LOGICAL` make, delete
   and translate logical names (`$CRELNM`, `$DELLNM`, `$TRNLNM`), and
   `SHOW LOGICAL` alone lists them. `HELP` lists the commands, and `LOGOUT` deletes SYSTEM.
   When the swapper deletes what SYSTEM left, it prints `%EXEC-I-LOGOUT`
@@ -151,6 +154,7 @@ executive feature:
   the others finish.
 
 `just check` boots the system, types `RUN STARTUP`, `RUN SNOOP`, a bad
-command, `DIR [SYSEXE]P%NG`, `TYPE WELCOME.TXT`, and `DEFINE`, `SHOW
+command, `DIR [SYSEXE]P%NG`, `TYPE WELCOME.TXT`, an `EDIT WELCOME.TXT`
+session, and `DEFINE`, `SHOW
 LOGICAL` and `DEASSIGN` of a logical name, `SHOW LOGICAL` alone, and
 `SET DEFAULT` and `SHOW DEFAULT` with a `DIR` between, at the prompt, and looks for the success lines in `out/serial.log`.

@@ -1,0 +1,465 @@
+        .TITLE  EDIT    The EDT editor's line mode, read only
+        .IDENT  /V0.1/
+;
+; DCL's EDIT spec runs this, with spec, in capitals, as its command line
+; at VA$C_FOREIGN. As EDT does in line mode, it reads the file spec names,
+; in the default directory unless it says where, with RMS, into its buffer, types
+; the first line and prompts with * for a command:
+;
+;   range       types the lines range names
+;   TYPE [range]
+;               the same, the current line if there is no range
+;   (RETURN)    moves to the next line and types it
+;   EXIT, QUIT  ends the session
+;   HELP        lists the commands
+;
+; A range is a line, or two with a colon between them: a number, . the
+; current line, BEGIN the first, END the end of the buffer, "text" or
+; 'text' the next line with text in it, -"text" the last one before, case
+; ignored;
+; or WHOLE, every line, or REST, the current line and those after. The
+; last line typed becomes the current line. A line is typed after its
+; number, and the end of the buffer as [EOB].
+; ponytail: RMS is read only, so there are no commands that change the
+; buffer, and EXIT is QUIT; no screen mode, which needs a terminal driver
+; that reads a key at a time. At most MAXLINES lines, TEXTSIZE bytes.
+;
+        .LIBRARY "lib.mlb"
+        .LIBRARY "starlet.mlb"
+        .LIBRARY "sysexe.mlb"
+        $VADEF
+        $SSDEF
+        $IODEF
+        $RMSDEF
+        $FABDEF
+        $RABDEF
+
+        .EXTERNAL PUT_LINE
+
+LINESIZE = 255
+MAXLINES = 2000
+TEXTSIZE = 65536
+
+        .PSECT  DATA, NOEXE, WRT, LONG
+FAB:    $FAB    FNA=VA$C_FOREIGN+1
+RAB:    $RAB    FAB=FAB, USZ=LINESIZE
+CHAN:   .LONG   0                       ; OPA0:'s, once assigned
+OPA0:   .ASCID  "OPA0:"
+PROMPT: .ASCII  "*"
+IOSB:   .BLKQ   1
+CMD:    .BLKB   LINESIZE                ; the command line
+TOKEN:  .BLKB   LINESIZE                ; a word of it, in capitals
+OUT:    .BLKB   256                     ; a line being typed, .ASCIC
+NLINES: .LONG   0                       ; the lines in the buffer
+CUR:    .LONG   1                       ; the current line, NLINES+1 at [EOB]
+FREE:   .ADDRESS TEXT                   ; TEXT's first unused byte
+V_TYPE: .ASCIC  "TYPE"
+V_EXIT: .ASCIC  "EXIT"
+V_QUIT: .ASCIC  "QUIT"
+V_HELP: .ASCIC  "HELP"
+K_BEGIN:
+        .ASCIC  "BEGIN"
+K_END:  .ASCIC  "END"
+K_WHOLE:
+        .ASCIC  "WHOLE"
+K_REST: .ASCIC  "REST"
+E_CMD:  .ASCIC  "Unrecognized command"
+E_FIND: .ASCIC  "String was not found"
+E_RANGE:
+        .ASCIC  "Invalid range"
+        .ALIGN  LONG
+LINES:  .BLKL   MAXLINES+1              ; LINES[n]: line n, .ASCIC in TEXT
+TEXT:   .BLKB   TEXTSIZE
+
+        .PSECT  CODE, EXE, LONG
+        .ENTRY  START, ^M<R2, R3, R4, R5, R6, R7, R8, R9, R10, R11>
+        $ASSIGN_S DEVNAM=OPA0, CHAN=CHAN
+        BLBC    R0, QUIT
+        BSBW    LOAD
+        BLBC    R0, QUIT
+        MOVL    CUR, R1
+        BSBW    SHOW
+NEXT:   $QIOW_S CHAN=CHAN, FUNC=#IO$_READPROMPT, IOSB=IOSB, P1=CMD, P2=#LINESIZE, P5=#PROMPT, P6=#1
+        BLBC    R0, QUIT
+        MOVAB   CMD, R6
+        MOVZWL  IOSB+2, R7
+        ADDL2   R6, R7                  ; past the line
+        BSBW    BLANKS
+        CMPL    R6, R7
+        BLSSU   10$
+        CMPL    CUR, NLINES             ; RETURN: the next line
+        BGTRU   5$
+        INCL    CUR
+5$:     MOVL    CUR, R1
+        BSBW    SHOW
+        BRB     NEXT
+10$:    MOVL    R6, R9                  ; a range, unless it is a verb
+        BSBW    WORD
+        TSTL    R8
+        BEQL    TYPE1
+        MOVAB   V_TYPE, R1
+        BSBW    VERB
+        BLBS    R0, TYPE
+        MOVAB   V_EXIT, R1
+        BSBW    VERB
+        BLBS    R0, EXIT
+        MOVAB   V_QUIT, R1
+        BSBW    VERB
+        BLBS    R0, EXIT
+        MOVAB   V_HELP, R1
+        BSBW    VERB
+        BLBS    R0, HELP
+TYPE1:  MOVL    R9, R6
+TYPE:   BSBW    RANGE
+        BLBC    R0, ERROR
+        MOVL    R2, R10
+10$:    MOVL    R10, R1
+        BSBW    SHOW
+        AOBLEQ  R3, R10, 10$
+        MOVL    R3, CUR
+        BRB     NEXT
+EXIT:   MOVL    #SS$_NORMAL, R0
+QUIT:   RET
+
+ERROR:  PUSHL   R1
+        CALLS   #1, G^PUT_LINE
+        BRW     NEXT
+
+HELP:   PRINT   "  range       types the lines range names"
+        PRINT   "  TYPE [range]"
+        PRINT   "              the same, the current line if there is no range"
+        PRINT   "  (RETURN)    moves to the next line and types it"
+        PRINT   "  EXIT, QUIT  ends the session"
+        PRINT   "  HELP        lists the commands"
+        PRINT   "A range is a line, or two with a colon between them: a number,"
+        PRINT   ". the current line, BEGIN, END, 'text' the next line with text"
+        PRINT   "in it, -'text' the last one before; or WHOLE, or REST."
+        BRW     NEXT
+
+; LOAD: reads the file the command line names into the buffer, a record a
+; line, up to MAXLINES of them and TEXTSIZE bytes. A file that doesn't
+; exist leaves it empty. R0 = SS$_NORMAL, or RMS's error. Uses R0-R5.
+LOAD:   MOVB    @#VA$C_FOREIGN, FAB+FAB$B_FNS
+        $OPEN   FAB=FAB
+        BLBS    R0, 10$
+        CMPL    R0, #RMS$_FNF
+        BNEQ    90$
+        PRINT   "Input file does not exist"
+        MOVL    #SS$_NORMAL, R0
+        RSB
+10$:    $CONNECT RAB=RAB
+        BLBC    R0, 80$
+20$:    CMPL    NLINES, #MAXLINES
+        BGEQU   60$
+        MOVAB   TEXT+TEXTSIZE, R0
+        SUBL2   FREE, R0
+        CMPL    R0, #LINESIZE+1
+        BLSSU   60$
+        ADDL3   #1, FREE, RAB+RAB$L_UBF
+        $GET    RAB=RAB
+        BLBS    R0, 30$
+        CMPL    R0, #RMS$_RTB           ; too long: what fits
+        BEQL    30$
+        CMPL    R0, #RMS$_EOF
+        BNEQ    80$
+        MOVL    #SS$_NORMAL, R0
+        BRB     80$
+30$:    INCL    NLINES
+        MOVL    NLINES, R1
+        MOVL    FREE, LINES[R1]
+        MOVZWL  RAB+RAB$W_RSZ, R0
+        MOVB    R0, @FREE
+        INCL    R0
+        ADDL2   R0, FREE
+        BRB     20$
+60$:    PRINT   "The file is too long: the buffer has its first lines"
+        MOVL    #SS$_NORMAL, R0
+80$:    PUSHL   R0
+        $CLOSE  FAB=FAB
+        MOVL    (SP)+, R0
+90$:    RSB
+
+; SHOW: R1 = a line, 1 to NLINES+1. Types it after its number, or [EOB]
+; past the last. Uses R0 and R1.
+SHOW:   CMPL    R1, NLINES
+        BLEQU   10$
+        PRINT   "[EOB]"
+        RSB
+10$:    PUSHR   #^M<R2, R3, R4, R5>
+        MOVL    R1, R2
+        MOVL    #5, R3                  ; the number, in OUT+1 to OUT+5
+20$:    DIVL3   #10, R2, R4
+        MULL3   #10, R4, R5
+        SUBL3   R5, R2, R5
+        ADDB3   #^A/0/, R5, OUT[R3]
+        DECL    R3
+        MOVL    R4, R2
+        BNEQ    20$
+30$:    TSTL    R3
+        BEQL    40$
+        MOVB    #^A/ /, OUT[R3]
+        DECL    R3
+        BRB     30$
+40$:    MOVB    #9, OUT+6
+        MOVL    LINES[R1], R0
+        MOVZBL  (R0)+, R2
+        CMPL    R2, #255-6
+        BLEQU   50$
+        MOVL    #255-6, R2              ; what fits
+50$:    ADDB3   #6, R2, OUT
+        MOVC3   R2, (R0), OUT+7
+        PUSHAB  OUT
+        CALLS   #1, G^PUT_LINE
+        POPR    #^M<R2, R3, R4, R5>
+        RSB
+
+; RANGE: R6 = the next character of the command, R7 = past its last.
+; Reads a range, the current line if the command ends here, up to the end
+; of the command. R0 = 1, R2 = its first line and R3 its last, 1 to
+; NLINES+1, or R0 = 0 and R1 = an error message, .ASCIC. Uses R0-R5, R8
+; and R9.
+RANGE:  BSBW    BLANKS
+        MOVL    CUR, R2
+        MOVL    CUR, R3
+        CMPL    R6, R7
+        BGEQU   80$
+        MOVL    R6, R9
+        BSBW    WORD
+        MOVAB   K_WHOLE, R1
+        BSBW    KEYWORD
+        BLBC    R0, 10$
+        MOVL    #1, R2
+        BRB     15$
+10$:    MOVAB   K_REST, R1
+        BSBW    KEYWORD
+        BLBC    R0, 20$
+        MOVL    CUR, R2
+15$:    ADDL3   #1, NLINES, R3
+        BRB     60$
+20$:    MOVL    R9, R6
+        BSBW    LINE
+        BLBC    R0, 90$
+        MOVL    R1, R2
+        MOVL    R1, R3
+        BSBW    BLANKS
+        CMPL    R6, R7
+        BGEQU   80$
+        CMPB    (R6), #^A/:/
+        BNEQ    60$
+        INCL    R6
+        BSBW    LINE
+        BLBC    R0, 90$
+        MOVL    R1, R3
+60$:    BSBW    BLANKS
+        MOVAB   E_CMD, R1
+        CLRL    R0
+        CMPL    R6, R7
+        BLSSU   90$
+        MOVAB   E_RANGE, R1
+        CMPL    R2, R3
+        BGTRU   90$
+80$:    MOVL    #1, R0
+90$:    RSB
+
+; LINE: R6 = the next character of the command, R7 = past its last.
+; Reads a line: a number, ., BEGIN, END, "text" or -"text". R0 = 1 and
+; R1 = the line, 1 to NLINES+1, or R0 = 0 and R1 = an error message,
+; .ASCIC. Uses R0, R1, R6, R8.
+LINE:   PUSHR   #^M<R2, R3, R4, R5>
+        BSBW    BLANKS
+        MOVAB   E_CMD, R1
+        CLRL    R0
+        CMPL    R6, R7
+        BGEQU   90$
+        CMPB    (R6), #^A/./
+        BNEQ    10$
+        INCL    R6
+        MOVL    CUR, R1
+        BRB     80$
+10$:    BSBW    QUOTE
+        BLBC    R0, 20$
+        BSBW    STRING
+        MOVL    CUR, R1                 ; forwards, from the next line
+12$:    CMPL    R1, NLINES
+        BGEQU   70$
+        INCL    R1
+        BSBW    MATCH
+        BLBS    R0, 80$
+        BRB     12$
+20$:    CMPB    (R6), #^A/-/
+        BNEQ    30$
+        INCL    R6
+        CMPL    R6, R7
+        BGEQU   90$
+        BSBW    QUOTE
+        BLBC    R0, 90$
+        BSBW    STRING
+        MOVL    CUR, R1                 ; backwards, from the one before
+22$:    CMPL    R1, #1
+        BLEQU   70$
+        DECL    R1
+        BSBW    MATCH
+        BLBS    R0, 80$
+        BRB     22$
+30$:    CMPB    (R6), #^A/0/
+        BLSSU   50$
+        CMPB    (R6), #^A/9/
+        BGTRU   50$
+        CLRL    R1                      ; a number: the first line from it on
+35$:    CMPL    R6, R7
+        BGEQU   40$
+        CMPB    (R6), #^A/0/
+        BLSSU   40$
+        CMPB    (R6), #^A/9/
+        BGTRU   40$
+        MOVZBL  (R6)+, R0
+        CMPL    R1, #MAXLINES+1
+        BGTRU   35$
+        SUBL2   #^A/0/, R0
+        MULL2   #10, R1
+        ADDL2   R0, R1
+        BRB     35$
+40$:    TSTL    R1
+        BNEQ    45$
+        MOVL    #1, R1
+45$:    ADDL3   #1, NLINES, R0
+        CMPL    R1, R0
+        BLEQU   80$
+        MOVL    R0, R1
+        BRB     80$
+50$:    BSBW    WORD                    ; BEGIN or END
+        MOVAB   K_BEGIN, R1
+        BSBW    KEYWORD
+        BLBC    R0, 55$
+        MOVL    #1, R1
+        BRB     80$
+55$:    MOVAB   K_END, R1
+        BSBW    KEYWORD
+        BLBC    R0, 60$
+        ADDL3   #1, NLINES, R1
+        BRB     80$
+60$:    MOVAB   E_CMD, R1
+        CLRL    R0
+        BRB     90$
+70$:    MOVAB   E_FIND, R1
+        CLRL    R0
+        BRB     90$
+80$:    MOVL    #1, R0
+90$:    POPR    #^M<R2, R3, R4, R5>
+        RSB
+
+; QUOTE: R6 = a character of the command. R0 = 1 if it is " or ', else 0.
+QUOTE:  MOVL    #1, R0
+        CMPB    (R6), #^A/"/
+        BEQL    10$
+        CMPB    (R6), #^A/'/
+        BEQL    10$
+        CLRL    R0
+10$:    RSB
+
+; STRING: R6 = a quote in the command, R7 = past its last character. R4 =
+; the text after it, R5 = its length, up to the same quote again or the
+; end of the command, and R6 past them. Uses R0.
+STRING: MOVZBL  (R6)+, R0
+        MOVL    R6, R4
+10$:    CMPL    R6, R7
+        BGEQU   20$
+        CMPB    (R6)+, R0
+        BNEQ    10$
+        SUBL3   R4, R6, R5
+        DECL    R5
+        RSB
+20$:    SUBL3   R4, R6, R5
+        RSB
+
+; MATCH: R1 = a line, R4 = text, R5 = its length. R0 = 1 if the line has
+; the text in it, case ignored, else 0. Keeps every register but R0.
+MATCH:  PUSHR   #^M<R2, R3, R8, R9>
+        MOVL    LINES[R1], R2
+        MOVZBL  (R2)+, R3
+        SUBL2   R5, R3                  ; the places it may start, less one
+        BLSS    80$
+10$:    CLRL    R9
+20$:    CMPL    R9, R5
+        BGEQU   70$
+        MOVZBL  (R2)[R9], R0
+        BSBB    UPCASE
+        MOVL    R0, R8
+        MOVZBL  (R4)[R9], R0
+        BSBB    UPCASE
+        CMPL    R0, R8
+        BNEQ    30$
+        INCL    R9
+        BRB     20$
+30$:    INCL    R2
+        SOBGEQ  R3, 10$
+80$:    CLRL    R0
+        BRB     90$
+70$:    MOVL    #1, R0
+90$:    POPR    #^M<R2, R3, R8, R9>
+        RSB
+
+; UPCASE: R0 = a character, in capitals.
+UPCASE: CMPB    R0, #^A/a/
+        BLSSU   10$
+        CMPB    R0, #^A/z/
+        BGTRU   10$
+        SUBL2   #^A/a/-^A/A/, R0
+10$:    RSB
+
+; BLANKS: R6 = the next character of the command, R7 = past its last.
+; Moves R6 past blanks and tabs.
+BLANKS: CMPL    R6, R7
+        BGEQU   10$
+        CMPB    (R6), #^A/ /
+        BEQL    5$
+        CMPB    (R6), #9
+        BNEQ    10$
+5$:     INCL    R6
+        BRB     BLANKS
+10$:    RSB
+
+; WORD: R6 = the next character of the command, R7 = past its last.
+; Copies the letters there to TOKEN, in capitals, with R6 past them. R8 =
+; their count, 0 if there is none. Uses R0.
+WORD:   CLRL    R8
+10$:    CMPL    R6, R7
+        BGEQU   20$
+        MOVZBL  (R6), R0
+        BSBB    UPCASE
+        CMPB    R0, #^A/A/
+        BLSSU   20$
+        CMPB    R0, #^A/Z/
+        BGTRU   20$
+        MOVB    R0, TOKEN[R8]
+        INCL    R8
+        INCL    R6
+        BRB     10$
+20$:    RSB
+
+; VERB: R1 = a verb, .ASCIC. R0 = 1 if the R8 characters in TOKEN are
+; its first ones, else 0. Uses R1-R3.
+VERB:   CLRL    R0
+        MOVZBL  (R1)+, R2
+        CMPL    R8, R2
+        BGTRU   90$
+        CLRL    R3
+10$:    CMPL    R3, R8
+        BGEQU   80$
+        CMPB    TOKEN[R3], (R1)[R3]
+        BNEQ    90$
+        INCL    R3
+        BRB     10$
+80$:    MOVL    #1, R0
+90$:    RSB
+
+; KEYWORD: R1 = a keyword, .ASCIC. R0 = 1 if the R8 characters in TOKEN
+; are all of it, else 0. Uses R1-R3.
+KEYWORD:
+        CLRL    R0
+        CMPB    R8, (R1)
+        BNEQ    10$
+        BRB     VERB
+10$:    RSB
+
+        .END    START
