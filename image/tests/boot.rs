@@ -1,8 +1,9 @@
 //! cargo test -p boot: boots without a terminal, types commands at the
 //! console's DCL prompt once the executive has started, and waits until the
 //! processes have printed their last lines (roottask/sysexe/), DIRECTORY,
-//! TYPE and EDIT theirs from the system disk, and DIRECTORY its own from the
-//! ramdisk, MDA0:, around a COPY to it and a DELETE, or the root task is
+//! TYPE and EDIT theirs from the system disk, EDIT's EXIT that can't write
+//! there, and DIRECTORY its own from the ramdisk, MDA0:, around a COPY to it,
+//! an EDIT that writes a second version and DELETEs, or the root task is
 //! done, which is only on a halt or a fault. DCL reads what was typed ahead a
 //! line at a time. Then it types a CONTINUE with nothing stopped, and stops
 //! SPIN and SLEEPER with CTRL/Y, twice each, with a CONTINUE in between, a
@@ -35,6 +36,7 @@ const LINES: &[&str] = &[
     "and the rest of what INITIALIZE made.",
     "    9\tand DIRECTORY [000000]",
     "String was not found",
+    "Unable to write the file, status 000182BA",
     "\"FOO\" = \"SYS$INPUT\" (LNM$PROCESS_TABLE)",
     "no translation for logical name FOO",
     "(LNM$SYSTEM_TABLE)",
@@ -49,7 +51,8 @@ const LINES: &[&str] = &[
     "WELCOME.TXT;1",
     "%NONAME-F-NOMSG, Message number 000184CC",
     "%MOUNT-I-MOUNTED, RAM mounted on _MDA0:",
-    "RAM.TXT;1",
+    "MDA0:[000000]RAM.TXT;2",
+    "RAM.TXT;2           RAM.TXT;1",
     "%DIRECT-W-NOFILES, no files found",
     "CONTINUE    goes back to the image CTRL/Y stopped",
 ];
@@ -87,9 +90,9 @@ fn boot() {
         let text = log();
         if typed == 0 && text.contains("%EXEC-I-START") {
             type_("RUN STARTUP\rRUN SNOOP\rFOO\rDIR [SYSEXE]P%NG\rTYPE WELCOME.TXT\r");
-            type_("EDIT WELCOME.TXT\r\"index\"\r\"zzz\"\rQUIT\r");
+            type_("EDIT WELCOME.TXT\r\"index\"\r\"zzz\"\rEXIT\rQUIT\r");
             typed = 1;
-        } else if typed == 3 && step < STEPS.len() {
+        } else if typed == 4 && step < STEPS.len() {
             let (line, times, keys) = STEPS[step];
             if text.lines().filter(|l| l.contains(line)).count() >= times {
                 type_(keys);
@@ -109,11 +112,15 @@ fn boot() {
             type_(
                 "INIT MDA0: RAM\rMOUNT MDA0: RAM\rCOPY [SYSMGR]WELCOME.TXT MDA0:[000000]RAM.TXT\r",
             );
-            type_(
-                "DIR MDA0:[000000]*.TXT\rDELETE MDA0:[000000]RAM.TXT;1\rDIR MDA0:[000000]*.TXT\r",
-            );
-            type_("CONTINUE\rRUN SPIN\r");
+            type_("EDIT MDA0:[000000]RAM.TXT\rD 3:END\rI\rEdited with EDT.\r\x1aEXIT\r");
+            type_("TYPE MDA0:[000000]RAM.TXT\r");
             typed = 3;
+        }
+        if typed == 3 && text.contains("MDA0:[000000]RAM.TXT;2") {
+            type_("DIR MDA0:[000000]*.TXT\rDELETE MDA0:[000000]RAM.TXT;1\r");
+            type_("DELETE MDA0:[000000]RAM.TXT;2\rDIR MDA0:[000000]*.TXT\r");
+            type_("CONTINUE\rRUN SPIN\r");
+            typed = 4;
         }
         if LINES.iter().all(|l| text.contains(l)) || text.contains("root task done") {
             break;

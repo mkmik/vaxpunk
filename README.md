@@ -83,8 +83,8 @@ runs an image from `[SYSEXE]` (`.EXE` is the default type), `DIRECTORY`
 lists files, in the default directory unless told where (`DIR`, `DIR
 [SYSEXE]P%NG`, `DIR [000000]`), `SET DEFAULT [dir]` (or `[-]`, `[.dir]`) and
 `SHOW DEFAULT` set and show that, `[SYSMGR]` at first, `TYPE file` writes a text file (`TYPE WELCOME.TXT`),
-`EDIT file` looks at one with EDT's line mode, read only (`HELP` at its
-`*` prompt),
+`EDIT file` edits one with EDT's line mode, and writes a new version
+on `EXIT`, on the ramdisk (`HELP` at its `*` prompt),
 `DEFINE name equivalence`, `DEASSIGN name` and `SHOW LOGICAL name` make,
 delete and translate logical names (`SHOW LOGICAL SYS$INPUT`, or `SHOW
 LOGICAL` alone to list them all), `COPY` and `DELETE` copy and delete

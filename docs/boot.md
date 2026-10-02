@@ -115,7 +115,10 @@ interpreter. It is linked high in P1, which tells the executive it is one
   `TYPE.EXE`, which reads the file with `$OPEN` and `$GET` and writes it
   on the console. `EDIT file` runs `EDIT.EXE`, EDT's line mode: it reads
   the file the same way and, at its `*` prompt, types the lines you ask
-  for, until `EXIT` or `QUIT`. It can't change them yet. `DEFINE`,
+  for, and `INSERT`s, `DELETE`s and `REPLACE`s them; lines to insert end
+  with CTRL/Z. `EXIT` writes the buffer to the file's next version with
+  `$CREATE` and `$PUT`, which works on the ramdisk only, and `QUIT`
+  leaves without writing. `DEFINE`,
   `DEASSIGN` and `SHOW LOGICAL` make, delete
   and translate logical names (`$CRELNM`, `$DELLNM`, `$TRNLNM`), and
   `SHOW LOGICAL` alone lists them. `HELP` lists the commands, and `LOGOUT` deletes SYSTEM.
@@ -175,6 +178,7 @@ session, and `DEFINE`, `SHOW
 LOGICAL` and `DEASSIGN` of a logical name, `SHOW LOGICAL` alone, and
 `SET DEFAULT` and `SHOW DEFAULT` with a `DIR` between, then `[-]` and a
 `DIR [.SYSMGR]`, at the prompt, then initializes and mounts `MDA0:`,
-copies a file to it, lists it, deletes it and lists it again, then
+copies a file to it, edits it into a second version, lists them,
+deletes them and lists again, then
 stops SPIN and SLEEPER with CTRL/Y and continues them, and looks for the
 success lines in `out/serial.log`.
