@@ -569,9 +569,14 @@ buffer filled. So the I/O is done when
   interpreter*).
 - **Reading**, at `IPL$_SYNCH`: takes characters from the buffer, at
   `IPL$_CONSOLE`, and echoes them, up to a carriage return, echoed as
-  CR LF, or a CTRL/Z, echoed as `*EXIT*`. DEL and BS erase a character, CTRL/U the line; other control
-  characters are dropped, and the buffer's last character ends the read
-  too. With `IO$M_NOECHO` nothing is echoed, and with `IO$M_NOFILTR`
+  CR LF, or a CTRL/Z, echoed as `*EXIT*`. The line is edited as on VMS,
+  in insert mode: the left and right arrows move the cursor, CTRL/H to
+  the start and CTRL/E to the end, DEL erases the character before the
+  cursor and CTRL/U all of them. The up arrow or CTRL/B recalls the line
+  read before, and again the one before that, up to 16, from
+  `TTY$AB_RECALL`, and the down arrow goes back. Other control characters
+  and escape sequences are dropped, and the buffer's last character ends
+  the read too. With `IO$M_NOECHO` nothing is echoed or recalled, and with `IO$M_NOFILTR`
   every character but a carriage return goes in the buffer as it is, so
   a read of one byte reads a key, as EDT's keypad mode does, escape
   sequences a character at a time. While the
@@ -579,8 +584,9 @@ buffer filled. So the I/O is done when
   the reader's, so what is typed ahead shows when it is read.
 
 ponytail: a buffer at a time, at `IPL$_SYNCH`, so lines don't mix; a
-terminal driver with I/O request packets, CTRL/C, CTRL/Y ASTs and escape
-sequences replaces it.
+terminal driver with I/O request packets, CTRL/C and CTRL/Y ASTs replaces
+it. The recall buffer is the console's, shared by every reader, where VMS
+has DCL's own, with `RECALL`.
 
 ### Devices
 
