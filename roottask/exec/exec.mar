@@ -61,6 +61,8 @@ SYSLNM: .ASCIC  "SYS$SYSDEVICE"         ; the system disk
         .ASCIC  "SYS$SYSDEVICE:"
         .ASCIC  "SYS$SYSTEM"            ; the images
         .ASCIC  "SYS$SYSDEVICE:[SYSEXE]"
+        .ASCIC  "SYS$MANAGER"           ; the system manager's files
+        .ASCIC  "SYS$SYSDEVICE:[SYSMGR]"
         .BYTE   0
 
         .PSECT  $CODE$

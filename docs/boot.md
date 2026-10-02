@@ -93,8 +93,9 @@ The executive is the VMS kernel, written in MACRO-32.
   unmounted, without a word.
 - defines the system's logical names for it, in `LNM$SYSTEM_TABLE`:
   `SYS$SYSDEVICE` is `DKA0:`, `SYS$DISK`, the default device, is
-  `SYS$SYSDEVICE:`, and `SYS$SYSTEM`, where the images are, is
-  `SYS$SYSDEVICE:[SYSEXE]`
+  `SYS$SYSDEVICE:`, `SYS$SYSTEM`, where the images are, is
+  `SYS$SYSDEVICE:[SYSEXE]`, and `SYS$MANAGER`, where the system manager's
+  files are, is `SYS$SYSDEVICE:[SYSMGR]`
 - lowers IPL to 0 and creates the console's process, SYSTEM, which runs
   `DCL.EXE`, with the logical names `SYS$INPUT`, `SYS$OUTPUT` and
   `SYS$ERROR` standing for the console, `_OPA0:`, in its process table
@@ -112,8 +113,24 @@ interpreter. It is linked high in P1, which tells the executive it is one
   disk (`FIL$OPENFILE`), loads it
   into P1 and calls it in supervisor mode.
 - DCL opens a channel to `SYS$INPUT`, which `$ASSIGN` translates to the
-  console, `OPA0:`, prints the `$` prompt and waits for a line. That's where the boot ends: the CPU idles, taking
-  clock ticks, until you type something.
+  console, `OPA0:`. Its first command is `@SYS$MANAGER:SYLOGIN`, which
+  runs the command procedure `DKA0:[SYSMGR]SYLOGIN.COM`, as VMS runs it
+  at each login: it defines the global symbol `HOME`, a command that goes
+  back to `[SYSMGR]`. Then DCL prints the `$` prompt and waits for a
+  line. That's where the boot ends: the CPU idles, taking clock ticks,
+  until you type something.
+- `@file` runs a command procedure the same way: DCL reads the whole file,
+  `file.COM` if it has no type, with RMS's `$OPEN` and `$GET`, into a
+  buffer in P1, and closes it, so nothing stays open while the images it
+  runs come and go. Then it takes its commands from there, the lines that
+  start with `$`, until the end or an `EXIT`, before it prompts again. The
+  words after the file name are the local symbols `P1` to `P8`.
+  `name = expression` makes a local symbol, which the procedure that made
+  it and those it calls see, and `name == expression` a global one;
+  `'name'` in a command stands for its value. `IF expression THEN
+  command`, `GOTO label` and `WRITE SYS$OUTPUT` work in procedures as in
+  VMS's, and `$STATUS` holds the last command's status: one that is an
+  error ends the procedures, as VMS's default `ON ERROR THEN EXIT` does.
 - `RUN image` reads the image from `SYS$SYSTEM:` and loads it into the same
   process's P0 (`$IMGACT`) and runs it in user mode. When the image
   exits, the executive throws away its pages and the channels and files
@@ -210,7 +227,11 @@ executive feature:
 register, and checks them, so CTRL/Y and `CONTINUE` can be tried on it.
 
 `cargo test -p boot` boots the system, types `RUN STARTUP`, `RUN SNOOP`, a bad
-command, `DIR [SYSEXE]P%NG`, `TYPE WELCOME.TXT`, an `EDIT WELCOME.TXT`
+command, `DIR [SYSEXE]P%NG`, `TYPE WELCOME.TXT`,
+`@DCLTEST 3 "Two words"`, whose procedure, `[SYSMGR]DCLTEST.COM`, counts
+in a loop, checks expressions and calls itself, `@DCLTEST FAIL`, which
+stops at a `TYPE` that fails, `SHOW SYMBOL $STATUS`, a symbol it writes,
+and `HOME`, SYLOGIN's, then an `EDIT WELCOME.TXT`
 session, and `DEFINE`, `SHOW
 LOGICAL` and `DEASSIGN` of a logical name, `SHOW LOGICAL` alone, and
 `SET DEFAULT` and `SHOW DEFAULT` with a `DIR` between, then `[-]` and a
