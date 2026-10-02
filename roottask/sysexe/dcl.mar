@@ -31,8 +31,7 @@
 ; A verb may be abbreviated, to as little as its first letter; the first
 ; that matches is the one. It reads the commands from SYS$INPUT.
 ; ponytail: no message texts, symbols, qualifiers, quoted strings or
-; command procedures; no relative directories, [-] or [.dir], in SET
-; DEFAULT, since RMS has none.
+; command procedures.
 ;
         .LIBRARY "lib.mlb"
         .LIBRARY "starlet.mlb"

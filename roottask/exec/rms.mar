@@ -79,6 +79,9 @@ RESF:   .BLKQ   5                       ; its parts
 RESNAME:
         .LONG   0, 0                    ; the name found, and its length
 RESVER: .LONG   0
+DEFDIR: .BLKB   256                     ; the default's and the specification's
+SPECDIR:                                ; directories, made absolute
+        .BLKB   256
 SYSDEF: .BYTE   0                       ; the system's default: DKA0: and the
 DKA0:   .ASCII  "DKA0:"                 ; process's default directory, .ASCIC
         .BLKB   63
@@ -91,7 +94,8 @@ DOTDIR: .ASCII  ".DIR"
 ; RMS$PARSE: R0 = a file specification, R1 = its length, R2 = a default
 ; one, R3 = its length, 0 if there is none, R4 = the system's default,
 ; .ASCIC. Expands the specification into RMS$T_EXP, the parts it leaves
-; out taken from the default, then from the system's, checks it, finds
+; out taken from the default, then from the system's, a relative
+; directory made absolute (RESOLVE), checks it, finds
 ; its directory and reads the directory's header into RMS$AB_DIRHDR. R0 =
 ; RMS$_NORMAL, RMS$_SYN, RMS$_DEV, RMS$_DIR, RMS$_FNM, RMS$_VER, RMS$_DNF,
 ; or the disk's error. The strings must be readable. IPL$_SYNCH. Uses R1.
@@ -114,6 +118,8 @@ RMS$PARSE::
         MOVAQ   SYST, R2
         BSBW    SPLIT
 10$:    ADDL2   #12, SP
+        BLBC    R0, 90$
+        BSBW    RESOLVE
         BLBC    R0, 90$
         BSBW    MERGE
         BLBC    R0, 90$
@@ -199,6 +205,109 @@ SPLIT:  CLRQ    (R2)
 85$:    MOVL    #RMS$_DIR, R0
         RSB
 87$:    MOVL    #RMS$_SYN, R0
+        RSB
+
+; RESOLVE: makes the directories in SPECT and DEFT absolute, as VMS's RMS
+; does: the default's relative to the system's, the specification's to the
+; default's if it has one, else to the system's. R0 = RMS$_NORMAL or
+; RMS$_DIR. Uses R0-R9.
+RESOLVE:
+        MOVAQ   DEFT+8, R0
+        MOVAQ   SYST+8, R1
+        MOVAB   DEFDIR, R2
+        BSBB    RELDIR
+        BLBC    R0, 90$
+        MOVAQ   SPECT+8, R0
+        MOVAQ   DEFT+8, R1
+        TSTL    4(R1)
+        BNEQ    10$
+        MOVAQ   SYST+8, R1
+10$:    MOVAB   SPECDIR, R2
+        BSBB    RELDIR
+90$:    RSB
+
+; RELDIR: R0 = a directory part, its address and length, in a table of
+; parts, R1 = the absolute one it is relative to, the same, R2 = a
+; 256-byte buffer. If the part is relative, [] the same directory, [-]
+; its parent, [--] the one above, [.dir] or [-.dir] a directory in one of
+; those, writes the absolute one in the buffer and points the part at it.
+; The MFD, [000000], has no parent. R0 = RMS$_NORMAL or RMS$_DIR. Uses
+; R0-R9.
+RELDIR: MOVL    4(R0), R3               ; the part's length
+        CMPL    R3, #2
+        BLSSU   70$                     ; none, or CHECK's to report
+        MOVL    (R0), R4
+        CMPL    R3, #2                  ; []
+        BEQL    5$
+        CMPB    1(R4), #^A/-/
+        BEQL    5$
+        CMPB    1(R4), #^A/./
+        BNEQ    70$
+5$:     ADDL3   #1, R4, R5              ; R5 = past the bracket, then the rest
+        ADDL3   R4, R3, R6
+        DECL    R6                      ; R6 = at the closing bracket
+        CLRL    R7                      ; how many levels up
+10$:    CMPL    R5, R6
+        BGEQU   15$
+        CMPB    (R5), #^A/-/
+        BNEQ    12$
+        INCL    R7
+        INCL    R5
+        BRB     10$
+12$:    CMPB    (R5)+, #^A/./           ; a dot, then names
+        BNEQ    80$
+        CMPL    R5, R6
+        BGEQU   80$
+15$:    MOVL    (R1), R9                ; the base's names: R9, R8 long
+        SUBL3   #2, 4(R1), R8
+        BLEQ    80$
+        INCL    R9
+        CMPL    R8, #6                  ; the MFD's are none
+        BNEQ    20$
+        CMPL    (R9), MFDNAME
+        BNEQ    20$
+        CMPW    4(R9), MFDNAME+4
+        BNEQ    20$
+        CLRL    R8
+20$:    TSTL    R7                      ; up a level: drop the last name
+        BEQL    40$
+25$:    TSTL    R8
+        BEQL    80$
+30$:    DECL    R8
+        BEQL    35$
+        CMPB    (R9)[R8], #^A/./
+        BNEQ    30$
+35$:    SOBGTR  R7, 25$
+40$:    MOVL    R2, R3                  ; [, the base's names, a dot, the rest, ]
+        MOVAB   255(R2), R4
+        MOVB    #91, (R3)+
+        TSTL    R8
+        BEQL    50$
+45$:    MOVB    (R9)+, (R3)+
+        SOBGTR  R8, 45$
+        CMPL    R5, R6
+        BGEQU   60$
+        MOVB    #^A/./, (R3)+
+        BRB     55$
+50$:    CMPL    R5, R6                  ; no names and no rest: the MFD
+        BLSSU   55$
+        MOVL    MFDNAME, (R3)+
+        MOVW    MFDNAME+4, (R3)+
+        BRB     60$
+55$:    CMPL    R5, R6
+        BGEQU   60$
+        CMPL    R3, R4
+        BGEQU   80$
+        MOVB    (R5)+, (R3)+
+        BRB     55$
+60$:    CMPL    R3, R4
+        BGTRU   80$
+        MOVB    #93, (R3)+
+        MOVL    R2, (R0)
+        SUBL3   R2, R3, 4(R0)
+70$:    MOVL    #RMS$_NORMAL, R0
+        RSB
+80$:    MOVL    #RMS$_DIR, R0
         RSB
 
 ; MERGE: builds RMS$T_EXP from the parts in SPECT, else DEFT, else SYST,
@@ -997,7 +1106,7 @@ RMS$RUNDOWN::
 ; the one a file specification without one is in. Writes the old one
 ; first, as much as fits, in olddir's buffer, and the length written in
 ; the word at oldlen. Each argument may be 0. newdir is [dir.dir...] or
-; <...>, up to 63 characters: RMS$_DIR if it isn't, SS$_ACCVIO if the
+; <...>, up to 63 characters, not relative: RMS$_DIR if it isn't, SS$_ACCVIO if the
 ; caller can't read or write an argument. It isn't looked for on the disk.
         .ENTRY  EXE$SETDDIR, ^M<R2, R3, R4, R5, R6>
         DSBINT  #IPL$_SYNCH
@@ -1036,9 +1145,13 @@ RMS$RUNDOWN::
         CMPB    (R1), #60
         BNEQ    85$
 35$:    CMPB    -1(R1)[R2], #93         ; ] or >
-        BEQL    40$
+        BEQL    37$
         CMPB    -1(R1)[R2], #62
         BNEQ    85$
+37$:    CMPB    1(R1), #^A/-/           ; not a relative one
+        BEQL    85$
+        CMPB    1(R1), #^A/./
+        BEQL    85$
 40$:    PUSHR   #^M<R1, R2>
         INCL    R1
         SUBL2   #2, R2

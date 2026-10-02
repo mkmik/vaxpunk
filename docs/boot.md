@@ -157,4 +157,5 @@ executive feature:
 command, `DIR [SYSEXE]P%NG`, `TYPE WELCOME.TXT`, an `EDIT WELCOME.TXT`
 session, and `DEFINE`, `SHOW
 LOGICAL` and `DEASSIGN` of a logical name, `SHOW LOGICAL` alone, and
-`SET DEFAULT` and `SHOW DEFAULT` with a `DIR` between, at the prompt, and looks for the success lines in `out/serial.log`.
+`SET DEFAULT` and `SHOW DEFAULT` with a `DIR` between, then `[-]` and a
+`DIR [.SYSMGR]`, at the prompt, and looks for the success lines in `out/serial.log`.

@@ -30,7 +30,8 @@ check:
            '"FOO" = "SYS$INPUT" (LNM$PROCESS_TABLE)' 'no translation for logical name FOO'
            '(LNM$SYSTEM_TABLE)' '  "SYS$ERROR" = "_OPA0:"' '  DKA0:[SYSMGR]' '  DKA0:[SYSEXE]'
            'DCL.EXE;1           DIRECTORY.EXE;1' '%DCL-I-INVDEF, DKA0:[NOSUCH] does not exist'
-           '  DKA0:[NOSUCH]')
+           '  DKA0:[NOSUCH]' '  DKA0:[000000]' 'Directory DKA0:[SYSMGR]' 'WELCOME.TXT;1'
+           '%NONAME-F-NOMSG, Message number 000184CC')
     all() { for line in "${lines[@]}"; do grep -aqsF "$line" out/serial.log || return 1; done; }
     typed=
     for _ in $(seq 120); do
@@ -40,7 +41,7 @@ check:
         fi
         # The rest once EDIT is done: the type-ahead buffer holds 255 characters.
         if [ "$typed" = 1 ] && grep -aqs 'String was not found' out/serial.log; then
-            printf 'DEFINE FOO SYS$INPUT\rSHOW LOGICAL FOO\rSHOW LOGICAL\rDEASSIGN FOO\rSHOW LOGICAL FOO\rSHOW DEFAULT\rSET DEFAULT [SYSEXE]\rSHOW DEFAULT\rDIR D*\rSET DEFAULT [NOSUCH]\rSHOW DEFAULT\r' >&3
+            printf 'DEFINE FOO SYS$INPUT\rSHOW LOGICAL FOO\rSHOW LOGICAL\rDEASSIGN FOO\rSHOW LOGICAL FOO\rSHOW DEFAULT\rSET DEFAULT [SYSEXE]\rSHOW DEFAULT\rDIR D*\rSET DEFAULT [NOSUCH]\rSHOW DEFAULT\rSET DEFAULT [-]\rSHOW DEFAULT\rDIR [.SYSMGR]W*\rSET DEFAULT [-]\r' >&3
             typed=2
         fi
         all || grep -aqs 'root task done' out/serial.log && break

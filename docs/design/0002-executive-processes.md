@@ -219,7 +219,7 @@ process, `SYSTEM`, with `DCL.EXE`:
 | `DEASSIGN name` | `$DELLNM` from `LNM$PROCESS` |
 | `SHOW LOGICAL name` | `$TRNLNM` in `LNM$FILE_DEV`: `"name" = "equivalence" (table)`, or `%SHOW-S-NOTRAN` |
 | `SHOW LOGICAL [*]` | lists every name, the process's table's and then the system's, in the order they were made, under each table's name; it copies them one at a time with `$CMKRNL`. ponytail: VMS's DCL asks the executive's logical name routines, and sorts them |
-| `SET DEFAULT [dev:][dir]` | `$PARSE`s it, which must name no file, and `$SETDDIR` with the directory it expands to; one that doesn't exist is still set, after `%DCL-I-INVDEF`. ponytail: no `[-]` or `[.dir]`, since RMS has none |
+| `SET DEFAULT [dev:][dir]` | `$PARSE`s it, which must name no file, and `$SETDDIR` with the directory it expands to; one that doesn't exist is still set, after `%DCL-I-INVDEF` |
 | `SHOW DEFAULT` | the device and directory `$PARSE` expands an empty specification to |
 | `EDIT spec` | `$IMGACT` of `EDIT.EXE`, the same way |
 | `HELP` | lists the commands |
@@ -505,6 +505,10 @@ directory, name, type and version, takes each part from the first that
 has it, in capitals, into the expanded specification, checks it, and walks
 the directory from the MFD, each name `NAME.DIR;1` in the one before
 (`[000000]` is the MFD). The images' default is `DKA0:[SYSEXE]` instead.
+A relative directory is made absolute first, against the default
+specification's directory if it has one, else the process's: `[]` is
+that one, `[-]` its parent, `[--]` the one above, `[.SUB]` and `[-.SUB]`
+a directory in one of those. The MFD has no parent: `RMS$_DIR`.
 
 | Service | Does |
 | --- | --- |
