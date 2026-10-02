@@ -448,7 +448,7 @@ NEXTISD:
 
 ; IMG$ACTIVATE: R4 = the current PCB, R5 = 1 if the image may be a command
 ; interpreter, else 0. Activates the image the PCB names, which
-; FIL$OPENFILE reads from DKA0:[SYSEXE] unless its name says where: maps its
+; FIL$OPENFILE reads from SYS$SYSTEM: unless its name says where: maps its
 ; sections at their addresses, with their contents and protection. An
 ; image in P0 is user readable and, where it is writable, user writable,
 ; and the end of P0 goes past it. One from VA$C_CLI up to the stacks in P1

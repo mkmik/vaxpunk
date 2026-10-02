@@ -5,7 +5,8 @@
 ; mode at IPL 31, with R11 pointing at the restart parameter block
 ; (docs/design/0001-pal-interface.md). EXEC$START sets up the system
 ; control block, memory, the scheduler, the system time and the console,
-; mounts the system disk, starts the console's process, SYSTEM, which
+; mounts the system disk, defines the system's logical names for it,
+; starts the console's process, SYSTEM, which
 ; runs DCL, and becomes the
 ; swapper, process 1, which deletes what deleted processes leave behind
 ; (docs/design/0002-executive-processes.md). When SYSTEM is deleted, at
@@ -27,6 +28,7 @@
         .EXTERNAL EXE$HWCLKINT, EXE$SWTIMINT, EXE$INITTIM
         .EXTERNAL SCH$GQ_DELQ, EXE$DELETEPCB, EXE$VECTOR, EXE$VECTOREND
         .EXTERNAL TTY$INIT, TTY$RCVINT, TTY$IOPOST, FIL$MOUNT
+        .EXTERNAL LNM$CREATE, LNM$GQ_SYSTEM
 
 UREXEC = PTE$M_VALID ! <PRT$C_UR @ PTE$V_PROT> ! PTE$M_EXEC
 
@@ -49,6 +51,16 @@ NOSTART:
         .ASCIZ  "%EXEC-F-NOSTART, can't create SYSTEM, status "
 NOMOUNT:
         .ASCIZ  "%EXEC-F-NOMOUNT, can't mount the system disk, DKA0:, status "
+; The logical names in LNM$SYSTEM_TABLE at boot, each name and its
+; equivalence, .ASCIC. A process's SYS$DISK, which SET DEFAULT defines,
+; goes before the system's.
+SYSLNM: .ASCIC  "SYS$SYSDEVICE"         ; the system disk
+        .ASCIC  "DKA0:"
+        .ASCIC  "SYS$DISK"              ; the default device
+        .ASCIC  "SYS$SYSDEVICE:"
+        .ASCIC  "SYS$SYSTEM"            ; the images
+        .ASCIC  "SYS$SYSDEVICE:[SYSEXE]"
+        .BYTE   0
 
         .PSECT  $CODE$
         .ENTRY  EXEC$START, ^M<>
@@ -84,7 +96,17 @@ NOMOUNT:
         BLBS    R0, 10$
         MOVAB   NOMOUNT, R1
         BRB     FAIL
-10$:    SETIPL  #0
+10$:    MOVAB   SYSLNM, R8
+        MOVAQ   LNM$GQ_SYSTEM, R5
+20$:    MOVZBL  (R8)+, R7
+        BEQL    30$
+        MOVL    R8, R6
+        ADDL2   R7, R8
+        MOVZBL  (R8)+, R9
+        JSB     G^LNM$CREATE
+        ADDL2   R9, R8
+        BRB     20$
+30$:    SETIPL  #0
         $CREPRC_S PIDADR=CONSOLE_PID, IMAGE=CONSOLE_IMAGE, INPUT=CONSOLE_DEVICE, OUTPUT=CONSOLE_DEVICE, ERROR=CONSOLE_DEVICE, PRCNAM=CONSOLE_NAME, BASPRI=#4
         BLBS    R0, SWAPPER
         MOVAB   NOSTART, R1

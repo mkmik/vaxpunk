@@ -68,7 +68,9 @@ blocks and `$OPEN`... calls, `$MNTDEF`).
    console receive interrupt enabled.
 6. `FIL$MOUNT` mounts the system disk (*Files*) and prints
    `%MOUNT-I-MOUNTED, VAXPUNK mounted on _DKA0:`. If it can't, the
-   executive halts with `%EXEC-F-NOMOUNT` and the status.
+   executive halts with `%EXEC-F-NOMOUNT` and the status. Then
+   `LNM$CREATE` puts the system's logical names in `LNM$SYSTEM_TABLE`
+   (*Logical names*).
 7. Lowers IPL to 0 and creates the console's process, `SYSTEM`, from
    `DCL.EXE` (*The command interpreter*).
 8. Becomes the swapper: it deletes what deleted processes left behind,
@@ -145,7 +147,7 @@ The scheduler's first `SWPCTX` to the new HWPCB starts its thread at
 1. Makes the executive, supervisor and user stacks at the top of P1 and
    puts their tops in the HWPCB.
 2. `IMG$ACTIVATE`, the image activator, reads the image from the system
-   disk, in `DKA0:[SYSEXE]` unless its name says where, into pool
+   disk, in `SYS$SYSTEM:` unless its name says where, into pool
    (`FIL$OPENFILE`, *Files*), checks its header and that it is all in P0, or all
    from `VA$C_CLI` to the stacks in P1, and maps each section: zeroed
    pages, the contents copied in, then the protection: code read and
@@ -237,7 +239,7 @@ process, `SYSTEM`, with `DCL.EXE`:
 | `DEASSIGN name` | `$DELLNM` from `LNM$PROCESS` |
 | `SHOW LOGICAL name` | `$TRNLNM` in `LNM$FILE_DEV`: `"name" = "equivalence" (table)`, or `%SHOW-S-NOTRAN` |
 | `SHOW LOGICAL [*]` | lists every name, the process's table's and then the system's, in the order they were made, under each table's name; it copies them one at a time with `$CMKRNL`. ponytail: VMS's DCL asks the executive's logical name routines, and sorts them |
-| `SET DEFAULT [dev:][dir]` | `$PARSE`s it, which must name no file, and `$SETDDIR` with the directory it expands to; one that doesn't exist is still set, after `%DCL-I-INVDEF` |
+| `SET DEFAULT [dev:][dir]` | `$PARSE`s it, which must name no file, `$SETDDIR` with the directory it expands to, and `$CRELNM` of `SYS$DISK` in `LNM$PROCESS` with its device; one that doesn't exist is still set, after `%DCL-I-INVDEF` |
 | `SHOW DEFAULT` | the device and directory `$PARSE` expands an empty specification to |
 | `EDIT spec` | `$IMGACT` of `EDIT.EXE`, the same way |
 | `COPY from to` | `$IMGACT` of `COPY.EXE`, with the two, a blank between |
@@ -467,6 +469,12 @@ word for the length returned, and a longword 0 at the end (`$LNMDEF`).
   are the equivalences of the new process's `SYS$INPUT`, `SYS$OUTPUT` and
   `SYS$ERROR`, those it was given. `EXEC$START` gives `SYSTEM` `_OPA0:` for
   all three, as `LOGINOUT` gives a terminal's process its terminal.
+- **System names.** `EXEC$START` makes `SYS$SYSDEVICE`, `DKA0:`;
+  `SYS$DISK`, `SYS$SYSDEVICE:`, the default device, which `SET DEFAULT`
+  gives a process one of its own of; and `SYS$SYSTEM`,
+  `SYS$SYSDEVICE:[SYSEXE]`, where the images are. ponytail: VMS's
+  `SYS$SYSTEM` is `SYS$SYSROOT:[SYSEXE]`, a rooted directory in
+  `[SYS0.]`, and `LOGINOUT` defines each process's `SYS$DISK`.
 
 ponytail: one equivalence string per name, so no search lists; no access
 modes, so no user-mode names that image rundown deletes and no names an
@@ -569,11 +577,20 @@ RMS (`rms.mar`) is a set of system services on VMS's FAB, RAB and NAM
 blocks. A file specification is `[dev:][[dir.dir]]name.type;version`,
 the device `DKA0:` or `MDA0:` with a volume mounted (`RMS$_DNR`).
 `RMS$PARSE` splits it, and the FAB's default specification, and
-`DKA0:` with the process's default directory, into device,
-directory, name, type and version, takes each part from the first that
-has it, in capitals, into the expanded specification, checks it, and walks
+`SYS$DISK:` with the process's default directory, into device,
+directory, name, type and version. A device that is a logical name in
+`LNM$FILE_DEV`, and has no underscore before it, is translated (`XLATE`),
+up to `LNM$C_MAXDEPTH` times: the equivalence is split the same way, its
+device takes the logical name's place and its other parts fill in those
+the specification leaves out, so `SYS$SYSTEM:DCL.EXE` is
+`DKA0:[SYSEXE]DCL.EXE` and `SYS$SYSTEM:[SYSMGR]` is `DKA0:[SYSMGR]`. It
+takes each part from the first that has it, in capitals, into the
+expanded specification, checks it, and walks
 the directory from the MFD, each name `NAME.DIR;1` in the one before
-(`[000000]` is the MFD). The images' default is `DKA0:[SYSEXE]` instead.
+(`[000000]` is the MFD). The images' default is `SYS$SYSTEM:` instead.
+ponytail: no search lists, rooted directories or concealed devices; the
+expanded string has the device a name translates to, as VMS's does
+without them.
 A relative directory is made absolute first, against the default
 specification's directory if it has one, else the process's: `[]` is
 that one, `[-]` its parent, `[--]` the one above, `[.SUB]` and `[-.SUB]`
@@ -596,8 +613,8 @@ A process's default directory is `PCB$T_DEFDIR`. It starts as its
 creator's: the swapper's is `[SYSMGR]`, which `SYSTEM` and the processes
 it creates inherit. `$PARSE` gives the expanded string even when it
 returns `RMS$_DNF`, which is how `SET DEFAULT` names a directory that isn't
-there. ponytail: VMS keeps it in P1, and the device in `SYS$DISK`; here
-the device is always `DKA0:`.
+there. The default device is `SYS$DISK`. ponytail: VMS keeps the
+directory in P1.
 
 An open file is an IFAB, 1,056 bytes of pool: the file's header, its
 volume, the block `$GET` reads in or `$PUT` fills, and where it is. The PCB holds up to 15, by IFI, in

@@ -7,10 +7,12 @@
 ; $SEARCH find the files a specification with wildcards names, into a
 ; NAM block (starlet.mlb's $FABDEF, $RABDEF, $NAMDEF, with VMS's
 ; layouts). A specification is [dev:][[dir.dir...]]name.type;ver: what it
-; leaves out comes from the FAB's default specification, then from DKA0:
-; and the process's default directory, which $SETDDIR sets. The device is
-; DKA0:, the system disk, or MDA0:, the ramdisk, with a volume mounted on
-; it, which f11.mar reads and f11wrt.mar writes.
+; leaves out comes from the FAB's default specification, then from
+; SYS$DISK: and the process's default directory, which $SETDDIR sets. A
+; device may be a logical name, SYS$SYSTEM:, which stands for some of the
+; parts: those the specification gives win. The device is DKA0:, the
+; system disk, or MDA0:, the ramdisk, with a volume mounted on it, which
+; f11.mar reads and f11wrt.mar writes.
 ;
 ; $OPEN reads the file's header into an IFAB, a block of pool, which the
 ; process's PCB holds by IFI, the index $OPEN puts in FAB$W_IFI; $CONNECT
@@ -26,7 +28,7 @@
 ; the file system's buffers to one caller; VMS's RMS runs in executive
 ; mode, in the process's own P1. One stream per file; $OPEN only reads
 ; and $PUT only appends to a file $CREATE made; no file sharing or
-; locking, logical names, ASTs or completion routines, and $SEARCH finds
+; locking, search lists or concealed devices, ASTs or completion routines, and $SEARCH finds
 ; its place again by counting the matches it skips.
 ;
         .LIBRARY "lib.mlb"
@@ -34,6 +36,8 @@
         $IPLDEF
         $PCBDEF
         $SSDEF
+        $LNMBDEF
+        $LNMDEF
         $RMSDEF
         $FABDEF
         $RABDEF
@@ -44,7 +48,7 @@
         .EXTERNAL FIL$READHDR, FIL$READVBN, FIL$SEARCHDIR, FIL$EOF, FIL$ISDIR
         .EXTERNAL FIL$SELECT, FIL$CREHDR, FIL$WRITEHDR, FIL$SETNAME, FIL$EXTEND
         .EXTERNAL FIL$ENTER, FIL$REMOVE, FIL$DELHDR, FIL$WRITEVBN
-        .EXTERNAL F11$GW_FID, F11$GL_VCB
+        .EXTERNAL F11$GW_FID, F11$GL_VCB, LNM$TRNLOG
 
 BLOCK = 512
 MFD = 4                                 ; the MFD's file number
@@ -78,10 +82,12 @@ FH2$W_BACKLINK = 66
         .PSECT  EXEC$DATA, NOEXE, WRT, QUAD
 ; A specification split into its five parts, device, directory, name,
 ; type and version, each an address and a length, 0 if it is absent: the
-; file's, its default's, and the system's.
+; file's, its default's, and the system's, and a logical name's
+; equivalence string's.
 SPECT:  .BLKQ   5
 DEFT:   .BLKQ   5
 SYST:   .BLKQ   5
+EQUT:   .BLKQ   5
 RMS$T_EXP::                             ; the expanded specification
         .BLKB   256
 EXPLEN: .LONG   0
@@ -102,8 +108,9 @@ RESVER: .LONG   0
 DEFDIR: .BLKB   256                     ; the default's and the specification's
 SPECDIR:                                ; directories, made absolute
         .BLKB   256
-SYSDEF: .BYTE   0                       ; the system's default: DKA0: and the
-DKA0:   .ASCII  "DKA0:"                 ; process's default directory, .ASCIC
+SYSDEF: .BYTE   0                       ; the system's default: SYS$DISK: and
+SYSDISK:                                ; the process's default directory, .ASCIC
+        .ASCII  "SYS$DISK:"
         .BLKB   63
 HDRBUF: .BLKB   BLOCK                   ; the header of a file $ERASE deletes
 MFDNAME:
@@ -114,7 +121,8 @@ DOTDIR: .ASCII  ".DIR"
 
 ; RMS$PARSE: R0 = a file specification, R1 = its length, R2 = a default
 ; one, R3 = its length, 0 if there is none, R4 = the system's default,
-; .ASCIC. Expands the specification into RMS$T_EXP, the parts it leaves
+; .ASCIC. Expands the specification into RMS$T_EXP, each one's device
+; translated (XLATE), the parts it leaves
 ; out taken from the default, then from the system's, a relative
 ; directory made absolute (RESOLVE), checks it, finds
 ; its directory and reads the directory's header into RMS$AB_DIRHDR. R0 =
@@ -129,15 +137,21 @@ RMS$PARSE::
         MOVAQ   SPECT, R2
         BSBW    SPLIT
         BLBC    R0, 10$
+        BSBW    XLATE
+        BLBC    R0, 10$
         MOVL    (SP), R0
         MOVL    4(SP), R1
         MOVAQ   DEFT, R2
         BSBW    SPLIT
         BLBC    R0, 10$
+        BSBW    XLATE
+        BLBC    R0, 10$
         MOVL    8(SP), R0
         MOVZBL  (R0)+, R1
         MOVAQ   SYST, R2
         BSBW    SPLIT
+        BLBC    R0, 10$
+        BSBW    XLATE
 10$:    ADDL2   #12, SP
         BLBC    R0, 90$
         BSBW    RESOLVE
@@ -226,6 +240,41 @@ SPLIT:  CLRQ    (R2)
 85$:    MOVL    #RMS$_DIR, R0
         RSB
 87$:    MOVL    #RMS$_SYN, R0
+        RSB
+
+; XLATE: R2 = a table of parts. While its device is a logical name in
+; LNM$FILE_DEV, without an underscore before it, up to LNM$C_MAXDEPTH
+; times, splits the equivalence string into EQUT: its device becomes the
+; table's, and its other parts fill in those the table leaves out.
+; SYS$SYSTEM:DCL.EXE is DKA0:[SYSEXE]DCL.EXE. R0 = RMS$_NORMAL, or
+; SPLIT's error. IPL$_SYNCH. Uses R0-R9.
+XLATE:  MOVL    R2, R8
+        MOVL    #LNM$C_MAXDEPTH, R9
+10$:    MOVL    (R8), R6                ; the device, without its colon
+        SUBL3   #1, 4(R8), R7
+        BLEQ    80$
+        CMPB    (R6), #^A/_/
+        BEQL    80$
+        BSBW    LNM$TRNLOG
+        TSTL    R1
+        BEQL    80$
+        MOVZBL  LNMB$T_NAME(R1), R0
+        MOVAB   LNMB$T_NAME+1(R1)[R0], R0
+        MOVZBL  (R0)+, R1
+        MOVAQ   EQUT, R2
+        BSBW    SPLIT
+        BLBC    R0, 90$
+        MOVQ    EQUT, (R8)
+        MOVL    #1, R0
+20$:    MOVAQ   (R8)[R0], R1
+        TSTL    4(R1)
+        BNEQ    30$
+        MOVAQ   EQUT[R0], R2
+        MOVQ    (R2), (R1)
+30$:    AOBLSS  #5, R0, 20$
+        SOBGTR  R9, 10$
+80$:    MOVL    #RMS$_NORMAL, R0
+90$:    MOVL    R8, R2
         RSB
 
 ; RESOLVE: makes the directories in SPECT and DEFT absolute, as VMS's RMS
@@ -747,15 +796,15 @@ PARSEFAB:
 80$:    MOVL    #SS$_ACCVIO, R0
         RSB
 
-; SYSDFLT: R4 = SYSDEF, DKA0: and the current process's default
+; SYSDFLT: R4 = SYSDEF, SYS$DISK: and the current process's default
 ; directory. Keeps every other register.
 SYSDFLT:
         PUSHR   #^M<R0, R1, R2>
         MOVL    SCH$GL_CURPCB, R0
         MOVAB   PCB$T_DEFDIR(R0), R0
         MOVZBL  (R0)+, R1
-        ADDB3   #5, R1, SYSDEF
-        MOVAB   DKA0+5, R2
+        ADDB3   #9, R1, SYSDEF
+        MOVAB   SYSDISK+9, R2
         TSTL    R1
         BEQL    20$
 10$:    MOVB    (R0)+, (R2)+
