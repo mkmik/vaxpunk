@@ -2,8 +2,8 @@
         .IDENT  /V0.1/
 ;
 ; DCL's TYPE spec runs this, with spec, in capitals, as its command line
-; at VA$C_FOREIGN. Opens the file spec names, in DKA0:[SYSMGR] unless it
-; says where, with RMS, and writes each of its records on the console, a
+; at VA$C_FOREIGN. Opens the file spec names, in the default directory
+; unless it says where, with RMS, and writes each of its records on the console, a
 ; line each. Returns RMS's status if it can't.
 ; ponytail: one file, no wildcards; a record past 255 characters is cut
 ; there.

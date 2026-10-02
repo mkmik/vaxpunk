@@ -5,7 +5,7 @@
 ; line at VA$C_FOREIGN. Lists the files spec names, as VMS's DIRECTORY
 ; does: the directory, then their names, four to a line, then how many.
 ; RMS's $PARSE expands spec, what it leaves out taken from *.*;*, and the
-; directory from DKA0:[SYSMGR]; $SEARCH finds each file. * matches any
+; directory from the default one; $SEARCH finds each file. * matches any
 ; characters, % one.
 ; ponytail: one directory, since RMS has no wildcard directories.
 ;

@@ -109,7 +109,8 @@ interpreter. It is linked high in P1, which tells the executive it is one
   it opened, and calls DCL again with the exit status. DCL prints a
   message if the status is an error, then the prompt again.
 - `DIRECTORY` (`DIR`) runs `DIRECTORY.EXE`, which lists files with RMS's
-  `$PARSE` and `$SEARCH`: those in `[SYSMGR]`, the default directory, or
+  `$PARSE` and `$SEARCH`: those in the default directory, `[SYSMGR]` until
+  `SET DEFAULT` changes it (`$SETDDIR`; `SHOW DEFAULT` shows it), or
   the ones it is given, `DIR [SYSEXE]`, `DIR [000000]`. `TYPE file` runs
   `TYPE.EXE`, which reads the file with `$OPEN` and `$GET` and writes it
   on the console. `DEFINE`, `DEASSIGN` and `SHOW LOGICAL` make, delete
@@ -151,5 +152,5 @@ executive feature:
 
 `just check` boots the system, types `RUN STARTUP`, `RUN SNOOP`, a bad
 command, `DIR [SYSEXE]P%NG`, `TYPE WELCOME.TXT`, and `DEFINE`, `SHOW
-LOGICAL` and `DEASSIGN` of a logical name, and `SHOW LOGICAL` alone, at the
-prompt, and looks for the success lines in `out/serial.log`.
+LOGICAL` and `DEASSIGN` of a logical name, `SHOW LOGICAL` alone, and
+`SET DEFAULT` and `SHOW DEFAULT` with a `DIR` between, at the prompt, and looks for the success lines in `out/serial.log`.

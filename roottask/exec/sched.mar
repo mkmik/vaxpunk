@@ -95,6 +95,10 @@ SCH$INIT::
         MOVL    #^A/SWAP/, (R1)+
         MOVW    #^A/PE/, (R1)+
         MOVB    #^A/R/, (R1)
+        MOVAB   PCB$T_DEFDIR(R0), R1    ; [SYSMGR], which its processes inherit
+        MOVB    #8, (R1)+
+        MOVL    #^X5359535B, (R1)+      ; "[SYS"
+        MOVL    #^X5D52474D, (R1)       ; "MGR]"
         RSB
 
 ; SCH$INSCOM: R4 = a PCB in no queue. Makes it computable: on the tail of

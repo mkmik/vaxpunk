@@ -7,8 +7,8 @@
 ; names, into a NAM block (starlet.mlb's $FABDEF, $RABDEF, $NAMDEF, with
 ; VMS's layouts). A specification is [DKA0:][[dir.dir...]]name.type;ver:
 ; what it leaves out comes from the FAB's default specification, then
-; from DKA0:[SYSMGR], the console process's default directory. The files
-; are on the system disk, which f11.mar reads.
+; from DKA0: and the process's default directory, which $SETDDIR sets.
+; The files are on the system disk, which f11.mar reads.
 ;
 ; $OPEN reads the file's header into an IFAB, a block of pool, which the
 ; process's PCB holds by IFI, the index $OPEN puts in FAB$W_IFI; $CONNECT
@@ -32,7 +32,7 @@
         $RABDEF
         $NAMDEF
 
-        .EXTERNAL SCH$GL_CURPCB, EXE$ALONONPAGED, EXE$DEANONPGDSIZ
+        .EXTERNAL SCH$GL_CURPCB, EXE$ALONONPAGED, EXE$DEANONPGDSIZ, EXE$PROBER_DSC
         .EXTERNAL FIL$READHDR, FIL$READVBN, FIL$SEARCHDIR, FIL$EOF, FIL$ISDIR
         .EXTERNAL F11$GW_FID
 
@@ -79,8 +79,9 @@ RESF:   .BLKQ   5                       ; its parts
 RESNAME:
         .LONG   0, 0                    ; the name found, and its length
 RESVER: .LONG   0
-SYSDEF: .ASCIC  "DKA0:[SYSMGR]"         ; SYS$LOGIN, for now
-DKA0:   .ASCII  "DKA0:"
+SYSDEF: .BYTE   0                       ; the system's default: DKA0: and the
+DKA0:   .ASCII  "DKA0:"                 ; process's default directory, .ASCIC
+        .BLKB   63
 MFDNAME:
         .ASCII  "000000"
 DOTDIR: .ASCII  ".DIR"
@@ -614,9 +615,26 @@ PARSEFAB:
         MOVZBL  FAB$B_DNS(R10), R3
         BEQL    20$
         IFNORD  R3, (R2), 80$
-20$:    MOVAB   SYSDEF, R4
+20$:    BSBW    SYSDFLT
         BRW     RMS$PARSE
 80$:    MOVL    #SS$_ACCVIO, R0
+        RSB
+
+; SYSDFLT: R4 = SYSDEF, DKA0: and the current process's default
+; directory. Keeps every other register.
+SYSDFLT:
+        PUSHR   #^M<R0, R1, R2>
+        MOVL    SCH$GL_CURPCB, R0
+        MOVAB   PCB$T_DEFDIR(R0), R0
+        MOVZBL  (R0)+, R1
+        ADDB3   #5, R1, SYSDEF
+        MOVAB   DKA0+5, R2
+        TSTL    R1
+        BEQL    20$
+10$:    MOVB    (R0)+, (R2)+
+        SOBGTR  R1, 10$
+20$:    MOVAB   SYSDEF, R4
+        POPR    #^M<R0, R1, R2>
         RSB
 
 ; FABDONE: R0 = a FAB service's status, R10 = the FAB. Puts it in
@@ -641,7 +659,8 @@ L:      ENBINT
 ; $PARSE fab: parses the FAB's file specification, with its default one,
 ; into its NAM block: the expanded string, if the NAM block has an area
 ; for it, its parts, its directory's ID, and NAM$M_WILDCARD. $SEARCH
-; then finds the files it names.
+; then finds the files it names. RMS$_DNF, when the directory doesn't
+; exist, still gives the expanded string and its parts.
         .ENTRY  EXE$PARSE, ^M<R2, R3, R4, R5, R6, R7, R8, R9, R10, R11>
         DSBINT  #IPL$_SYNCH
         BSBW    FABNAM
@@ -650,8 +669,11 @@ L:      ENBINT
         TSTL    R11
         BEQL    90$
         BSBW    PARSEFAB
+        MOVL    R0, R9
+        CMPL    R0, #RMS$_DNF
+        BEQL    5$
         BLBC    R0, 90$
-        CLRL    NAM$L_WCC(R11)
+5$:     CLRL    NAM$L_WCC(R11)
         MOVZBL  NAM$B_ESS(R11), R4
         BEQL    10$
         MOVAB   RMS$T_EXP, R0
@@ -668,7 +690,7 @@ L:      ENBINT
         TSTL    WILD
         BEQL    20$
         MOVL    #NAM$M_WILDCARD, NAM$L_FNB(R11)
-20$:    MOVL    #RMS$_NORMAL, R0
+20$:    MOVL    R9, R0
 90$:    FABDONE
 
 ; $SEARCH fab: finds the next file the expanded string $PARSE left in the
@@ -688,7 +710,7 @@ L:      ENBINT
         MOVL    NAM$L_ESA(R11), R0
         IFNORD  R1, (R0), 85$
         CLRQ    R2
-        MOVAB   SYSDEF, R4
+        BSBW    SYSDFLT
         BSBW    RMS$PARSE
         BLBC    R0, 90$
         MOVL    NAM$L_WCC(R11), R9
@@ -970,5 +992,69 @@ RMS$RUNDOWN::
 20$:    AOBLEQ  #MAXIFI, R8, 10$
         POPR    #^M<R7, R8, R9>
         RSB
+
+        ; $SETDDIR newdir, oldlen, olddir: sets the process's default directory,
+; the one a file specification without one is in. Writes the old one
+; first, as much as fits, in olddir's buffer, and the length written in
+; the word at oldlen. Each argument may be 0. newdir is [dir.dir...] or
+; <...>, up to 63 characters: RMS$_DIR if it isn't, SS$_ACCVIO if the
+; caller can't read or write an argument. It isn't looked for on the disk.
+        .ENTRY  EXE$SETDDIR, ^M<R2, R3, R4, R5, R6>
+        DSBINT  #IPL$_SYNCH
+        MOVL    SCH$GL_CURPCB, R6
+        MOVAB   PCB$T_DEFDIR(R6), R6
+        MOVZBL  (R6), R5                ; the old one's length
+        MOVL    12(AP), R1
+        BEQL    20$
+        IFNORD  #8, (R1), 80$
+        MOVZWL  (R1), R2
+        CMPL    R5, R2
+        BGEQU   10$
+        MOVL    R5, R2
+10$:    MOVL    R2, R5
+        BEQL    20$
+        MOVL    4(R1), R3
+        IFNOWRT R2, (R3), 80$
+15$:    MOVB    (R6)[R2], -1(R3)[R2]
+        SOBGTR  R2, 15$
+20$:    MOVL    8(AP), R1
+        BEQL    30$
+        IFNOWRT #2, (R1), 80$
+        MOVW    R5, (R1)
+30$:    MOVL    4(AP), R1
+        BEQL    70$
+        BSBW    EXE$PROBER_DSC
+        BLBC    R0, 90$
+        MOVZWL  (R1), R2
+        MOVL    4(R1), R1
+        CMPL    R2, #3
+        BLSSU   85$
+        CMPL    R2, #63
+        BGTRU   85$
+        CMPB    (R1), #91               ; [ or <
+        BEQL    35$
+        CMPB    (R1), #60
+        BNEQ    85$
+35$:    CMPB    -1(R1)[R2], #93         ; ] or >
+        BEQL    40$
+        CMPB    -1(R1)[R2], #62
+        BNEQ    85$
+40$:    PUSHR   #^M<R1, R2>
+        INCL    R1
+        SUBL2   #2, R2
+        MOVL    #2, R3                  ; dots, no wildcards
+        BSBW    CHARS
+        POPR    #^M<R1, R2>
+        BLBC    R0, 85$
+        MOVB    R2, (R6)+
+45$:    MOVB    (R1)+, (R6)+
+        SOBGTR  R2, 45$
+70$:    MOVL    #RMS$_NORMAL, R0
+        BRB     90$
+80$:    MOVL    #SS$_ACCVIO, R0
+        BRB     90$
+85$:    MOVL    #RMS$_DIR, R0
+90$:    ENBINT
+        RET
 
         .END
