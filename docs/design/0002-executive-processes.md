@@ -221,6 +221,7 @@ process, `SYSTEM`, with `DCL.EXE`:
 | `SHOW LOGICAL [*]` | lists every name, the process's table's and then the system's, in the order they were made, under each table's name; it copies them one at a time with `$CMKRNL`. ponytail: VMS's DCL asks the executive's logical name routines, and sorts them |
 | `SET DEFAULT [dev:][dir]` | `$PARSE`s it, which must name no file, and `$SETDDIR` with the directory it expands to; one that doesn't exist is still set, after `%DCL-I-INVDEF`. ponytail: no `[-]` or `[.dir]`, since RMS has none |
 | `SHOW DEFAULT` | the device and directory `$PARSE` expands an empty specification to |
+| `EDIT spec` | `$IMGACT` of `EDIT.EXE`, the same way |
 | `HELP` | lists the commands |
 | `LOGOUT` | returns, which deletes the process |
 
@@ -556,9 +557,10 @@ $ RUN SNOOP
 ## The system disk's programs
 
 `roottask/sysexe/` holds the programs in `DKA0:[SYSEXE]`: DCL, DIRECTORY,
-TYPE, and those which show the services at work, which `just check` runs
+TYPE, EDIT, and those which show the services at work, which `just check` runs
 from DCL's prompt (`RUN STARTUP`, `RUN SNOOP`, a bad verb,
-`DIR [SYSEXE]P%NG` and `TYPE WELCOME.TXT`) and to the end.
+`DIR [SYSEXE]P%NG`, `TYPE WELCOME.TXT` and an `EDIT WELCOME.TXT` session)
+and to the end.
 `roottask/sysmgr/` holds the text files in `DKA0:[SYSMGR]`. They
 run in user mode, DCL in supervisor mode, and write on the console with
 `PRINT` and `PRINTHEX` from `sysexe.mlb`, which call `PUT_LINE` in
@@ -570,6 +572,7 @@ with `$QIOW`.
 | `DCL` | the command interpreter (*The command interpreter*) |
 | `DIRECTORY` | `$PARSE`s its command line, with `*.*;*` for what it leaves out, and lists the files `$SEARCH` finds: the directory, the names four to a line, how many |
 | `TYPE` | `$OPEN`s the file its command line names and writes each record `$GET` reads on the console, a line each |
+| `EDIT` | EDT's line mode, read only: `$GET`s the file its command line names into a buffer, a line a record, and at its `*` prompt, read with `IO$_READPROMPT`, types the lines a range names (numbers, `.`, `BEGIN`, `END`, `WHOLE`, `REST`, `"text"` searches), until `EXIT` or `QUIT` |
 | `STARTUP` | makes 4 pages with `$EXPREG`, checks and deletes them; creates `SLEEPER` at a higher priority, which runs at once, and `PING` and `PONG`; waits until `PONG` sets flag 66 of their cluster; deletes `SLEEPER`; creates `SVCTEST`, `HOG` and `TIMETEST` |
 | `SLEEPER` | hibernates until it is deleted |
 | `PING`, `PONG` | take three turns through common event flags 64 and 65 of the cluster `PINGPONG`; `PONG` then sets flag 66, which `STARTUP` waits for |

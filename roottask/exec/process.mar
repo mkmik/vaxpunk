@@ -525,9 +525,19 @@ IMG$ACTIVATE::
         SUBL3   #1, EISD$L_VBN(R3), R0
         MULL2   #BLOCK, R0
         ADDL2   R8, R0
-        PUSHL   R3
-        MOVC3   EISD$L_SECSIZE(R3), (R0), @EISD$Q_VIRT_ADDR(R3)
-        MOVL    (SP)+, R3
+        PUSHR   #^M<R3, R4, R9>
+        MOVL    R0, R1
+        MOVL    EISD$L_SECSIZE(R3), R9  ; the bytes left
+        MOVL    EISD$Q_VIRT_ADDR(R3), R3
+42$:    MOVL    R9, R2                  ; MOVC3 copies 65535 at most
+        CMPL    R2, #65535
+        BLEQU   43$
+        MOVL    #65535, R2
+43$:    SUBL2   R2, R9
+        MOVC3   R2, (R1), (R3)
+        TSTL    R9
+        BNEQ    42$
+        POPR    #^M<R3, R4, R9>
 45$:    POPR    #^M<R0, R1>
         MOVL    R6, R2
         BBS     #EISD$V_WRT, EISD$L_FLAGS(R3), 50$
