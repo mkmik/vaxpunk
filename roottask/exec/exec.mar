@@ -8,7 +8,8 @@
 ; mounts the system disk, starts the console's process, SYSTEM, which
 ; runs DCL, and becomes the
 ; swapper, process 1, which deletes what deleted processes leave behind
-; (docs/design/0002-executive-processes.md).
+; (docs/design/0002-executive-processes.md). When SYSTEM is deleted, at
+; LOGOUT, the swapper halts, and the PAL powers the machine off.
 ;
         .LIBRARY "lib.mlb"
         .LIBRARY "starlet.mlb"
@@ -18,6 +19,7 @@
         $PTEDEF
         $PRTDEF
         $SSDEF
+        $PCBDEF
 
         .EXTERNAL EXE$OUTZSTRING, EXE$OUTHEX, EXE$OUTCRLF
         .EXTERNAL EXE$CMODKRNL, EXE$CMODEXEC, EXE$ACVIOLAT, EXE$OPCDEC
@@ -37,6 +39,9 @@ CONSOLE_IMAGE:
         .ASCID  "DCL.EXE"
 CONSOLE_NAME:
         .ASCID  "SYSTEM"
+CONSOLE_PID:                            ; SYSTEM's PID
+        .LONG   0
+LOGOUT: .ASCIZ  "%EXEC-I-LOGOUT, SYSTEM logged out, halting"
 BANNER: .ASCIZ  "%EXEC-I-START, vaxpunk executive, free pages: "
 NOSTART:
         .ASCIZ  "%EXEC-F-NOSTART, can't create SYSTEM, status "
@@ -77,7 +82,7 @@ NOMOUNT:
         MOVAB   NOMOUNT, R1
         BRB     FAIL
 10$:    SETIPL  #0
-        $CREPRC_S IMAGE=CONSOLE_IMAGE, PRCNAM=CONSOLE_NAME, BASPRI=#4
+        $CREPRC_S PIDADR=CONSOLE_PID, IMAGE=CONSOLE_IMAGE, PRCNAM=CONSOLE_NAME, BASPRI=#4
         BLBS    R0, SWAPPER
         MOVAB   NOSTART, R1
 ; FAIL: R1 = a message, R0 = a status. Writes them and halts.
@@ -89,16 +94,24 @@ FAIL:   MOVL    R0, R2
         HALT
 
 ; The swapper: deletes the context, kernel stack and PCB of each process
-; that deleted itself, then hibernates until another does.
+; that deleted itself, then hibernates until another does. Once SYSTEM
+; has, the system halts.
 SWAPPER:
 10$:    SETIPL  #IPL$_SYNCH
         REMQUE  @SCH$GQ_DELQ, R4
         BVS     20$
+        CMPL    PCB$L_PID(R4), CONSOLE_PID
+        BEQL    30$
         JSB     G^EXE$DELETEPCB
         BRB     10$
 20$:    SETIPL  #0
         $HIBER_S
         BRB     10$
+30$:    MOVAB   LOGOUT, R1
+        JSB     G^EXE$OUTZSTRING
+        JSB     G^EXE$OUTCRLF
+        MOVL    #SS$_NORMAL, R0
+        HALT
 
 ; CON$PUTCHAR: writes the character in R0 on the console, for consolio's
 ; EXE$OUT* routines. Keeps every register.

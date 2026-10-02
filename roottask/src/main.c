@@ -1058,6 +1058,9 @@ enum { RXCS_DONE = 0x80, RXCS_IE = 0x40 };
  */
 static seL4_Word ipl = 31, pending, scbb, rxcs;
 
+/* Set when the executive halts, rather than faults: the PAL powers off. */
+static int halted;
+
 /* The frame on the stack an interrupt or exception pushes and REI pops
  * ($INTSTKDEF), in quadwords. */
 enum { F_PC, F_PS, F_R7, F_SP, F_X_SP, F_X13, F_X30 = F_X13 + 6, F_LENGTH };
@@ -1399,6 +1402,7 @@ static int serve_one(seL4_MessageInfo_t msg)
 	switch (code) {
 	case HALT:
 		print("%%PAL-I-HALT, halted at PC 0x%lx, R0 %lu\n", pc, a0 & 0xffffffff);
+		halted = 1;
 		return 0;
 	case SWPCTX:
 		return swpctx(a0);
@@ -1508,6 +1512,19 @@ static int tick(void)
 
 /* Serves the clock's ticks and the current context's PAL calls and faults;
  * the other contexts wait in a PAL call, SWPCTX, or haven't started. */
+/*
+ * Powers QEMU off with semihosting's SYS_EXIT, which run-qemu.sh lets EL0
+ * call: QEMU's PSCI conduit on this machine is HVC, which EL0 can't issue.
+ * ponytail: QEMU only, and only under TCG; with --hvf the HLT is a fault
+ * that stops the root task, as seL4_TCB_Suspend would.
+ */
+static void poweroff(void)
+{
+	static const seL4_Word block[2] = { 0x20026, 0 }; /* ADP_Stopped_ApplicationExit */
+	register seL4_Word x0 asm("x0") = 0x18, x1 asm("x1") = (seL4_Word)block;
+	asm volatile("hlt #0xf000" : "+r"(x0) : "r"(x1) : "memory");
+}
+
 static void serve(void)
 {
 	for (;;) {
@@ -1655,6 +1672,8 @@ int main(seL4_BootInfo *bi)
 	serve();
 
 	print("root task done, %lu of %u slots used\n", next_slot, 1u << CONFIG_ROOT_CNODE_SIZE_BITS);
+	if (halted)
+		poweroff();
 	err = seL4_TCB_Suspend(seL4_CapInitThreadTCB);
 	print("seL4_TCB_Suspend failed: %u\n", err);
 	return 0;
