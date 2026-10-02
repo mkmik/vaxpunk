@@ -129,10 +129,15 @@ interpreter. It is linked high in P1, which tells the executive it is one
   When the swapper deletes what SYSTEM left, it prints `%EXEC-I-LOGOUT`
   and halts, and the root task powers QEMU off with a semihosting
   `SYS_EXIT`.
+- CTRL/Y while an image runs stops it where it is: the console prints
+  `*INTERRUPT*`, and the executive calls DCL again with `SS$_CONTROLY`,
+  leaving the image as it was on the kernel stack (`EXE$CTRLY`,
+  [ADR-0010](adr/0010-ctrly-calls-the-cli-on-top-of-the-image.md)). DCL
+  prompts. `CONTINUE` goes back to the image with `$CONTINUE`; a command
+  that runs another image throws the stopped one away first.
 
 The system disk is read only, the ramdisk is gone when the system stops,
-and there's no login yet, and no CTRL/Y: a program that never exits keeps
-the console.
+and there's no login yet.
 
 ## 7. STARTUP and the test processes
 
@@ -161,10 +166,15 @@ executive feature:
 - STARTUP prints `STARTUP: done` and exits, and DCL prompts again while
   the others finish.
 
+`RUN SPIN` starts **SPIN**, which computes forever with a value in each
+register, and checks them, so CTRL/Y and `CONTINUE` can be tried on it.
+
 `just check` boots the system, types `RUN STARTUP`, `RUN SNOOP`, a bad
 command, `DIR [SYSEXE]P%NG`, `TYPE WELCOME.TXT`, an `EDIT WELCOME.TXT`
 session, and `DEFINE`, `SHOW
 LOGICAL` and `DEASSIGN` of a logical name, `SHOW LOGICAL` alone, and
 `SET DEFAULT` and `SHOW DEFAULT` with a `DIR` between, then `[-]` and a
 `DIR [.SYSMGR]`, at the prompt, then initializes and mounts `MDA0:`,
-copies a file to it, lists it, deletes it and lists it again, and looks for the success lines in `out/serial.log`.
+copies a file to it, lists it, deletes it and lists it again, then
+stops SPIN and SLEEPER with CTRL/Y and continues them, and looks for the
+success lines in `out/serial.log`.

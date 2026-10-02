@@ -152,14 +152,15 @@ TIMETEST: ok
 
 STARTUP runs in `SYSTEM`, and DCL prompts again once it returns, while
 the processes it created go on. Between commands the CPU idles, taking a
-clock interrupt every 10 ms. There is no CTRL/Y yet: an image that never
-exits, such as `SLEEPER`, keeps the console until QEMU is stopped. `just
-check` boots the same way without a terminal, types `RUN STARTUP`, `RUN
-SNOOP`, a bad verb, `DIR [SYSEXE]P%NG`, `TYPE WELCOME.TXT`, an `EDIT
-WELCOME.TXT` session, and a logical
+clock interrupt every 10 ms. CTRL/Y stops an image that never exits,
+such as `SPIN` or `SLEEPER`, and gives the `$` prompt back; `CONTINUE`
+goes on with it. `just check` boots the same way without a terminal,
+types `RUN STARTUP`, `RUN SNOOP`, a bad verb, `DIR [SYSEXE]P%NG`, `TYPE
+WELCOME.TXT`, an `EDIT WELCOME.TXT` session, and a logical
 name's `DEFINE`, `SHOW LOGICAL` and `DEASSIGN`, `SHOW LOGICAL` alone, and
 `SET DEFAULT` and `SHOW DEFAULT`, and a round trip through the ramdisk,
-prints the executive's part and fails unless the processes ran to the end.
+stops `SPIN` and `SLEEPER` with CTRL/Y and continues them, prints the
+executive's part and fails unless the processes ran to the end.
 
 EDK2 prints a few `Error: Image at ... start failed` and `Tpm2...` lines
 before Limine starts. That is normal for the firmware QEMU ships. Don't

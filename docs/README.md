@@ -34,6 +34,7 @@ kept current, like a design document.
 | [ADR-0007](adr/0007-system-disk-files-11-and-rms.md) | The system disk is a Files-11 volume the PAL reads by LBN, with the file system and RMS in the executive | Accepted |
 | [ADR-0008](adr/0008-host-powers-qemu-off-on-halt.md) | On a halt the root task prints a line, and the host powers QEMU off | Proposed |
 | [ADR-0009](adr/0009-ramdisk-writable-files-11.md) | MDA0:, a ramdisk the executive drives, holds a Files-11 volume the file system writes | Proposed |
+| [ADR-0010](adr/0010-ctrly-calls-the-cli-on-top-of-the-image.md) | CTRL/Y calls the command interpreter on top of the stopped image, and $CONTINUE goes back to it | Accepted |
 
 ### PRDs
 

@@ -38,6 +38,7 @@ SS$_VASFULL = 580
 SS$_WRITLCK = 604                       ; the device is write locked
 SS$_IVMODE = 852
 SS$_OPCDEC = 1084
+SS$_CONTROLY = 1553                     ; CTRL/Y stopped the image
 SS$_SUPERSEDE = 1585                    ; success: a name by that name was replaced
 SS$_NONEXPR = 2280
 SS$_NOSUCHDEV = 2312
@@ -630,3 +631,8 @@ PRT$C_UR = 15
         .EXTERNAL SYS$MOUNT
         CALLS   #1, G^SYS$MOUNT
         .ENDM   $MOUNT_S
+
+        .MACRO  $CONTINUE_S
+        .EXTERNAL SYS$CONTINUE
+        CALLS   #0, G^SYS$CONTINUE
+        .ENDM   $CONTINUE_S
