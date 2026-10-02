@@ -10,7 +10,8 @@
 ; What the console receives, its receive interrupt puts in the type-ahead
 ; buffer, and wakes the readers through the IPL$_IOPOST software
 ; interrupt. A read takes the characters from the buffer, echoing and
-; editing the line, up to a carriage return, and waits while it is empty.
+; editing the line, up to a carriage return or CTRL/Z, and waits while
+; it is empty.
 ; CTRL/Y empties the buffer instead, and stops the image the console's
 ; command interpreter runs, which then prompts (ADR-0010).
 ; ponytail: the console is the only device, written a buffer at a time at
@@ -39,6 +40,7 @@ TYPEAHEAD = 256                         ; the type-ahead buffer, a ring
 RXCS$V_DONE = 7                         ; RXCS: a character is waiting
 RXCS$M_IE = ^X40                        ; interrupt when one is
 CTRLY = 25
+CTRLZ = 26
 
         .PSECT  EXEC$DATA, NOEXE, WRT, QUAD
 CONSOLE:
@@ -55,6 +57,7 @@ TTY$GL_CTRLY::                          ; 1: CTRL/Y came, for TTY$IOPOST
         .LONG   0
 INTERRUPT:
         .ASCIZ  <13><10>"*INTERRUPT*"<13><10>
+EXIT:   .ASCIZ  "*EXIT*"<13><10>
 
         .PSECT  $CODE$
 
@@ -136,8 +139,8 @@ INTERRUPT:
 ; them, for IO$_READVBLK, IO$_READLBLK and IO$_READPBLK, and for
 ; IO$_READPROMPT once it has written the p6 bytes at p5. Clears event flag
 ; efn first, and once the I/O is done sets it, and in iosb the status, the
-; byte count and, for a read, the terminator, a carriage return, and its
-; size.
+; byte count and, for a read, the terminator, a carriage return or
+; CTRL/Z, and its size.
 ; ponytail: no ASTs yet, so an astadr is SS$_ILLSER.
         .ENTRY  EXE$QIO, ^M<R2, R3, R4, R5>
         MOVL    SCH$GL_CURPCB, R4
@@ -201,7 +204,7 @@ INTERRUPT:
         POPR    #^M<R2, R3>
 25$:    BSBW    READ
         MOVL    R1, R3                  ; the line's length
-        MOVL    #<1@16>!13, R1          ; a carriage return, one byte
+        BISL3   #1@16, R0, R1           ; the terminator, one byte
 30$:    ENBINT
         TSTL    R5
         BEQL    40$
@@ -242,9 +245,10 @@ WRITE:  CLRL    R1
 ; READ: reads a line from the console into the R3 bytes at R2, which the
 ; current process may write, taking each character from the type-ahead
 ; buffer and echoing it, and waiting while the buffer is empty. A carriage
-; return ends the line, echoed as CR LF. DEL or BS erases the last
-; character, CTRL/U all of them; other control characters, and those past
-; R3 bytes, are dropped. R1 = the line's length. IPL$_SYNCH. Uses R0.
+; return ends the line, echoed as CR LF, or CTRL/Z, echoed as *EXIT*. DEL
+; or BS erases the last character, CTRL/U all of them; other control
+; characters, and those past R3 bytes, are dropped. R0 = the terminator,
+; R1 = the line's length. IPL$_SYNCH.
 ; ponytail: no escape sequences or command recall.
 READ:   PUSHL   R4
         MOVL    SCH$GL_CURPCB, R4
@@ -259,6 +263,8 @@ READ:   PUSHL   R4
         ENBINT
         CMPB    R0, #13
         BEQL    50$
+        CMPB    R0, #CTRLZ
+        BEQL    40$
         CMPB    R0, #127
         BEQL    20$
         CMPB    R0, #8
@@ -283,8 +289,15 @@ READ:   PUSHL   R4
         BEQL    10$
         BSBB    ERASE
         BRB     30$
+40$:    PUSHR   #^M<R1, R2>             ; CTRL/Z
+        MOVAB   EXIT, R1
+        JSB     G^EXE$OUTZSTRING
+        POPR    #^M<R1, R2>
+        MOVZBL  #CTRLZ, R0
+        BRB     55$
 50$:    JSB     G^EXE$OUTCRLF
-        MOVL    (SP)+, R4
+        MOVZBL  #13, R0
+55$:    MOVL    (SP)+, R4
         RSB
 60$:    ENBINT                          ; empty: wait for more
         MOVL    #SCH$C_MWAIT, PCB$L_STATE(R4)

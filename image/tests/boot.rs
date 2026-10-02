@@ -1,9 +1,10 @@
 //! cargo test -p boot: boots without a terminal, types commands at the
 //! console's DCL prompt once the executive has started, and waits until the
 //! processes have printed their last lines (roottask/sysexe/), DIRECTORY,
-//! TYPE and EDIT theirs from the system disk, and DIRECTORY its own from the
-//! ramdisk, MDA0:, made the default device, around a COPY to it from
-//! SYS$SYSDEVICE:, a logical name, and a DELETE, or the root task is
+//! TYPE and EDIT theirs from the system disk, EDIT's EXIT that can't write
+//! there, and DIRECTORY its own from the ramdisk, MDA0:, made the default
+//! device, around a COPY to it from SYS$SYSDEVICE:, a logical name, an EDIT
+//! that writes a second version and DELETEs, or the root task is
 //! done, which is only on a halt or a fault. DCL reads what was typed ahead a
 //! line at a time. Then it types a CONTINUE with nothing stopped, and stops
 //! SPIN and SLEEPER with CTRL/Y, twice each, with a CONTINUE in between, a
@@ -36,6 +37,7 @@ const LINES: &[&str] = &[
     "and the rest of what INITIALIZE made.",
     "    9\tand DIRECTORY [000000]",
     "String was not found",
+    "Unable to write the file, status 000182BA",
     "\"FOO\" = \"SYS$INPUT\" (LNM$PROCESS_TABLE)",
     "no translation for logical name FOO",
     "(LNM$SYSTEM_TABLE)",
@@ -53,7 +55,8 @@ const LINES: &[&str] = &[
     "%MOUNT-I-MOUNTED, RAM mounted on _MDA0:",
     "  MDA0:[000000]",
     "Directory MDA0:[000000]",
-    "RAM.TXT;1",
+    "MDA0:[000000]RAM.TXT;2",
+    "RAM.TXT;2           RAM.TXT;1",
     "%DIRECT-W-NOFILES, no files found",
     "CONTINUE    goes back to the image CTRL/Y stopped",
 ];
@@ -91,9 +94,9 @@ fn boot() {
         let text = log();
         if typed == 0 && text.contains("%EXEC-I-START") {
             type_("RUN STARTUP\rRUN SNOOP\rFOO\rDIR [SYSEXE]P%NG\rTYPE WELCOME.TXT\r");
-            type_("EDIT WELCOME.TXT\r\"index\"\r\"zzz\"\rQUIT\r");
+            type_("EDIT WELCOME.TXT\r\"index\"\r\"zzz\"\rEXIT\rQUIT\r");
             typed = 1;
-        } else if typed == 3 && step < STEPS.len() {
+        } else if typed == 4 && step < STEPS.len() {
             let (line, times, keys) = STEPS[step];
             if text.lines().filter(|l| l.contains(line)).count() >= times {
                 type_(keys);
@@ -110,14 +113,16 @@ fn boot() {
         }
         // Then, once SET DEFAULT [-] has failed in [000000], the ramdisk.
         if typed == 2 && text.contains("Message number 000184CC") {
-            type_(
-                "INIT MDA0: RAM\rMOUNT MDA0: RAM\rSET DEFAULT MDA0:[000000]\rSHOW DEFAULT\r",
-            );
-            type_(
-                "COPY SYS$SYSDEVICE:[SYSMGR]WELCOME.TXT RAM.TXT\rDIR *.TXT\rDELETE RAM.TXT;1\rDIR *.TXT\r",
-            );
-            type_("CONTINUE\rRUN SPIN\r");
+            type_("INIT MDA0: RAM\rMOUNT MDA0: RAM\rSET DEFAULT MDA0:[000000]\rSHOW DEFAULT\r");
+            type_("COPY SYS$SYSDEVICE:[SYSMGR]WELCOME.TXT RAM.TXT\r");
+            type_("EDIT RAM.TXT\rD 3:END\rI\rEdited with EDT.\r\x1aEXIT\r");
+            type_("TYPE RAM.TXT\r");
             typed = 3;
+        }
+        if typed == 3 && text.contains("MDA0:[000000]RAM.TXT;2") {
+            type_("DIR *.TXT\rDELETE RAM.TXT;1\rDELETE RAM.TXT;2\rDIR *.TXT\r");
+            type_("CONTINUE\rRUN SPIN\r");
+            typed = 4;
         }
         if LINES.iter().all(|l| text.contains(l)) || text.contains("root task done") {
             break;

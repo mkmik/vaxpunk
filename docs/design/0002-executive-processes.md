@@ -494,7 +494,7 @@ device's own name and is dropped. So `SYS$INPUT` is `_OPA0:`, the console. `$QIO
 one, for `IO$_READVBLK`, `IO$_READLBLK`, `IO$_READPBLK`, and
 `IO$_READPROMPT`, which writes the prompt in p5 and p6 first. Then it sets
 the event flag and the I/O status block: the status, the byte count and,
-for a read, the terminator, a carriage return. So the I/O is done when
+for a read, the terminator, a carriage return or CTRL/Z. So the I/O is done when
 `$QIO` returns, and `$QIOW` is `$QIO`.
 
 - **Receiving.** `TTY$RCVINT`, the console receive interrupt
@@ -506,7 +506,7 @@ for a read, the terminator, a carriage return. So the I/O is done when
   interpreter*).
 - **Reading**, at `IPL$_SYNCH`: takes characters from the buffer, at
   `IPL$_CONSOLE`, and echoes them, up to a carriage return, echoed as
-  CR LF. DEL and BS erase a character, CTRL/U the line; other control
+  CR LF, or a CTRL/Z, echoed as `*EXIT*`. DEL and BS erase a character, CTRL/U the line; other control
   characters, and those past the buffer's size, are dropped. While the
   buffer is empty the process waits in `MWAIT` on `TTY$GQ_READQ`. Echo is
   the reader's, so what is typed ahead shows when it is read.
@@ -659,8 +659,8 @@ TYPE, EDIT, COPY, DELETE, INIT and MOUNT, and those which show the services at
 work, which `cargo test -p boot` runs from DCL's prompt (`RUN STARTUP`,
 `RUN SNOOP`, a bad verb, `DIR [SYSEXE]P%NG`, `TYPE WELCOME.TXT` and an `EDIT WELCOME.TXT`
 session, then
-`INIT` and `MOUNT MDA0: RAM`, a `COPY` to it, `DIR`, `DELETE` and `DIR`
-again) and to the end. `roottask/sysmgr/` holds the text files in
+`INIT` and `MOUNT MDA0: RAM`, a `COPY` to it, an `EDIT` that writes a
+second version, `DIR`, `DELETE`s and `DIR` again) and to the end. `roottask/sysmgr/` holds the text files in
 `DKA0:[SYSMGR]`. They run in user mode, DCL in supervisor mode, and write
 on the console with `PRINT` and `PRINTHEX` from `sysexe.mlb`, which call
 `PUT_LINE` in `sysexe/lib/print.mar`: a line at a time on `OPA0:`, with
@@ -673,7 +673,7 @@ descriptor at the nth parameter of the command line. `build.rs` links
 | `DCL` | the command interpreter (*The command interpreter*) |
 | `DIRECTORY` | `$PARSE`s its command line, with `*.*;*` for what it leaves out, and lists the files `$SEARCH` finds: the directory, the names four to a line, how many |
 | `TYPE` | `$OPEN`s the file its command line names and writes each record `$GET` reads on the console, a line each |
-| `EDIT` | EDT's line mode, read only: `$GET`s the file its command line names into a buffer, a line a record, and at its `*` prompt, read with `IO$_READPROMPT`, types the lines a range names (numbers, `.`, `BEGIN`, `END`, `WHOLE`, `REST`, `"text"` searches), until `EXIT` or `QUIT` |
+| `EDIT` | EDT's line mode: `$GET`s the file its command line names into a buffer, a line a record, and at its `*` prompt, read with `IO$_READPROMPT`, types the lines a range names (numbers, `.`, `BEGIN`, `END`, `WHOLE`, `REST`, `"text"` searches), `INSERT`s lines typed up to a CTRL/Z before it, `DELETE`s or `REPLACE`s them; `EXIT` `$CREATE`s the next version and `$PUT`s the buffer to it, `QUIT` doesn't |
 | `COPY` | `$OPEN`s its first parameter, `$CREATE`s its second, with the first's attributes and its name and type for what the second leaves out, and copies each record with `$GET` and `$PUT` |
 | `DELETE` | `$PARSE`s its parameter, which must give a version or `;*` (`%DELETE-E-DELVER`), and `$ERASE`s each file `$SEARCH` finds |
 | `INIT` | `$INIT_VOL` with its two parameters, the device and the label |
