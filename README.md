@@ -154,7 +154,7 @@ STARTUP runs in `SYSTEM`, and DCL prompts again once it returns, while
 the processes it created go on. Between commands the CPU idles, taking a
 clock interrupt every 10 ms. CTRL/Y stops an image that never exits,
 such as `SPIN` or `SLEEPER`, and gives the `$` prompt back; `CONTINUE`
-goes on with it. `just check` boots the same way without a terminal,
+goes on with it. `cargo test -p boot` boots the same way without a terminal,
 types `RUN STARTUP`, `RUN SNOOP`, a bad verb, `DIR [SYSEXE]P%NG`, `TYPE
 WELCOME.TXT`, an `EDIT WELCOME.TXT` session, and a logical
 name's `DEFINE`, `SHOW LOGICAL` and `DEASSIGN`, `SHOW LOGICAL` alone, and

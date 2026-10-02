@@ -67,7 +67,7 @@ calls `seL4_Yield`, which gives up the rest of its budget.
 - Code that shares something must raise IPL for it, as it should have
   already. The boot volume's programs print a line at a time at
   `IPL$_SYNCH`, and so does `$EXIT`'s report.
-- The CPU never idles for good: `%PAL-I-IDLE` is gone, and `just check`
+- The CPU never idles for good: `%PAL-I-IDLE` is gone, and `cargo test -p boot`
   stops QEMU once the programs have printed their last lines.
 
 **What stays easy.**

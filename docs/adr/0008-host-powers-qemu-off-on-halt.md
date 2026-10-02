@@ -79,7 +79,7 @@ seL4, at EL1, could issue it, and seL4 has no system call to do that.
 
 - QEMU powers off on a halt under both TCG and HVF.
 - QEMU powers off only when it runs through `run-qemu.sh`, since the filter
-  is what stops it. `cargo run -p boot`, `just boot` and `just check` all go through it.
+  is what stops it. `cargo run -p boot`, `just boot` and `cargo test -p boot` all go through it.
   Started any other way, QEMU stays up after a halt, as it does under HVF
   today.
 - The root task no longer needs semihosting from EL0, which let any EL0
