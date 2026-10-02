@@ -80,6 +80,9 @@ SCH$INIT::
         MOVL    R0, SCH$GL_PCBVEC+4     ; index 1
         MOVW    #PCB$K_LENGTH, PCB$W_SIZE(R0)
         MOVB    #DYN$C_PCB, PCB$B_TYPE(R0)
+        MOVAQ   PCB$Q_LNMHD(R0), R1     ; no logical names
+        MOVL    R1, (R1)
+        MOVL    R1, 4(R1)
         MOVB    #16, PCB$B_PRI(R0)
         MOVB    #16, PCB$B_PRIB(R0)
         MNEGW   SGN$GW_QUANTUM, PCB$W_QUANT(R0)

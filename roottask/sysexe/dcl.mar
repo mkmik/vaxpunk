@@ -13,18 +13,32 @@
 ;   DIRECTORY [spec]
 ;               runs DIRECTORY.EXE, with spec as its command line
 ;   TYPE spec   runs TYPE.EXE, with spec as its command line
+;   DEFINE name equivalence
+;               makes a logical name in the process's table
+;   DEASSIGN name
+;               deletes it
+;   SHOW LOGICAL [name]
+;               translates a logical name, as $ASSIGN would; with no
+;               name, or *, lists them all
 ;   HELP        lists the commands
 ;   LOGOUT      ends the process
 ;
-; A verb may be abbreviated, to as little as its first letter.
-; ponytail: no message texts, symbols, qualifiers or command procedures.
+; A verb may be abbreviated, to as little as its first letter; the first
+; that matches is the one. It reads the commands from SYS$INPUT.
+; ponytail: no message texts, symbols, qualifiers, quoted strings or
+; command procedures.
 ;
+        .LIBRARY "lib.mlb"
         .LIBRARY "starlet.mlb"
         .LIBRARY "sysexe.mlb"
+        $IPLDEF
+        $PCBDEF
+        $LNMBDEF
         $SSDEF
         $IODEF
+        $LNMDEF
 
-        .EXTERNAL PUT_LINE
+        .EXTERNAL PUT_LINE, SCH$GL_CURPCB, LNM$GQ_SYSTEM
 
 LINESIZE = 255
 
@@ -39,8 +53,34 @@ L:      .ASCIC  TEXT
         .ENDM   ADDTEXT
 
         .PSECT  DATA, NOEXE, WRT, LONG
-CHAN:   .LONG   0                       ; OPA0:'s, once assigned
-OPA0:   .ASCID  "OPA0:"
+CHAN:   .LONG   0                       ; SYS$INPUT's, once assigned
+INPUT:  .ASCID  "SYS$INPUT"
+PROCESS:
+        .ASCID  "LNM$PROCESS"
+FILE_DEV:
+        .ASCID  "LNM$FILE_DEV"
+NAMDSC: .LONG   0                       ; a logical name: its length
+        .ADDRESS NAME
+NAME:   .BLKB   LINESIZE
+CREITEMS:                               ; $CRELNM's: the equivalence, in TOKEN
+        .WORD   0, LNM$_STRING
+        .ADDRESS TOKEN
+        .LONG   0, 0
+TRNITEMS:                               ; $TRNLNM's: the equivalence and the table
+        .WORD   LINESIZE, LNM$_STRING
+        .ADDRESS EQV, EQVLEN
+        .WORD   31, LNM$_TABLE
+        .ADDRESS TABNAM, TABLEN
+        .LONG   0
+EQV:    .BLKB   LINESIZE
+EQVLEN: .WORD   0
+TABNAM: .BLKB   31
+TABLEN: .WORD   0
+LNMARGS:                                ; GETLNM's: a table and an index
+        .LONG   2, 0, 0
+PROCTAB:
+        .ASCIC  "LNM$PROCESS_TABLE"
+SYSTAB: .ASCIC  "LNM$SYSTEM_TABLE"
 PROMPT: .ASCII  "$ "
 IOSB:   .BLKQ   1
 LINE:   .BLKB   LINESIZE                ; the command line
@@ -59,6 +99,13 @@ V_LOGOUT:
 V_DIRECTORY:
         .ASCIC  "DIRECTORY"
 V_TYPE: .ASCIC  "TYPE"
+V_DEFINE:
+        .ASCIC  "DEFINE"
+V_DEASSIGN:
+        .ASCIC  "DEASSIGN"
+V_SHOW: .ASCIC  "SHOW"
+V_LOGICAL:
+        .ASCIC  "LOGICAL"
 DOTEXE: .ASCII  ".EXE"
 SEVERITY:
         .ASCII  "WSEIF???"
@@ -68,7 +115,7 @@ HEX:    .ASCII  "0123456789ABCDEF"
         .ENTRY  DCL, ^M<R2, R3, R4, R5, R6, R7, R8>
         TSTL    CHAN
         BNEQ    10$
-        $ASSIGN_S DEVNAM=OPA0, CHAN=CHAN
+        $ASSIGN_S DEVNAM=INPUT, CHAN=CHAN
         BLBC    R0, QUIT
 10$:    BLBS    4(AP), NEXT
         MOVZBL  #^A/%/, R0
@@ -97,6 +144,15 @@ NEXT:   $QIOW_S CHAN=CHAN, FUNC=#IO$_READPROMPT, IOSB=IOSB, P1=LINE, P2=#LINESIZ
         MOVAB   V_TYPE, R1
         BSBW    VERB
         BLBS    R0, TYPE
+        MOVAB   V_DEFINE, R1
+        BSBW    VERB
+        BLBS    R0, DEFINE
+        MOVAB   V_DEASSIGN, R1
+        BSBW    VERB
+        BLBS    R0, DEASSIGN
+        MOVAB   V_SHOW, R1
+        BSBW    VERB
+        BLBS    R0, SHOW
         PRINT   "%DCL-W-IVVERB, unrecognized command verb - check validity and spelling"
         ADDTEXT " \"
         BSBW    ADDTOKEN
@@ -110,6 +166,12 @@ HELP:   PRINT   "  RUN image   runs image, image.EXE if it has no type"
         PRINT   "  DIRECTORY [spec]"
         PRINT   "              lists the files spec names, * and % wildcards"
         PRINT   "  TYPE spec   writes the file spec names on the console"
+        PRINT   "  DEFINE name equivalence"
+        PRINT   "              makes a logical name"
+        PRINT   "  DEASSIGN name"
+        PRINT   "              deletes one"
+        PRINT   "  SHOW LOGICAL [name]"
+        PRINT   "              translates one, or lists them all"
         PRINT   "  HELP        lists the commands"
         PRINT   "  LOGOUT      ends the process"
         BRW     NEXT
@@ -117,9 +179,8 @@ HELP:   PRINT   "  RUN image   runs image, image.EXE if it has no type"
 ; RUN image: runs it with $IMGACT, which returns only if it can't.
 RUN:    BSBW    WORD
         TSTL    R8
-        BNEQ    10$
-        BRB     INSFPRM
-10$:    CLRL    R0                      ; a type?
+        BEQL    INSFPRM
+        CLRL    R0                      ; a type?
 15$:    CMPB    TOKEN[R0], #^A/./
         BEQL    20$
         AOBLSS  R8, R0, 15$
@@ -165,6 +226,157 @@ ACTFAIL:
         MOVL    (SP)+, R1
         BSBW    STATUS
         BRW     NEXT
+
+; DEFINE name equivalence: makes name a logical name in the process's
+; table, telling if it replaced one.
+DEFINE: BSBW    NAMEWORD
+        TSTL    R8
+        BEQL    INSFPRM
+        BSBW    WORD
+        TSTL    R8
+        BEQL    INSFPRM
+        MOVW    R8, CREITEMS
+        $CRELNM_S TABNAM=PROCESS, LOGNAM=NAMDSC, ITMLST=CREITEMS
+        CMPL    R0, #SS$_SUPERSEDE
+        BNEQ    DONE
+        ADDTEXT "%DCL-I-SUPERSEDE, previous value of "
+        BSBW    ADDNAME
+        ADDTEXT " has been superseded"
+        BSBW    SAY
+        BRW     NEXT
+
+; DEASSIGN name: deletes the logical name from the process's table.
+DEASSIGN:
+        BSBW    NAMEWORD
+        TSTL    R8
+        BEQL    INSFPRM
+        $DELLNM_S TABNAM=PROCESS, LOGNAM=NAMDSC
+; DONE: R0 = a command's status. Reports it if it is an error, and prompts
+; for the next command.
+DONE:   BLBS    R0, 10$
+        MOVL    R0, R1
+        MOVZBL  #^A/%/, R0
+        BSBW    STATUS
+10$:    BRW     NEXT
+
+; SHOW LOGICAL [name]: translates name in LNM$FILE_DEV, and shows the
+; equivalence and the table it is in. With no name, or *, lists them all.
+SHOW:   BSBW    WORD
+        TSTL    R8
+        BEQL    INSFPRM
+        MOVAB   V_LOGICAL, R1
+        BSBW    VERB
+        BLBS    R0, 10$
+        PRINT   "%DCL-W-IVKEYW, unrecognized keyword - check validity and spelling"
+        ADDTEXT " \"
+        BSBW    ADDTOKEN
+        ADDTEXT "\"
+        BSBW    SAY
+        BRW     NEXT
+10$:    BSBW    NAMEWORD
+        TSTL    R8
+        BEQL    LIST
+        CMPL    R8, #1
+        BNEQ    15$
+        CMPB    NAME, #^A/*/
+        BEQL    LIST
+15$:    $TRNLNM_S TABNAM=FILE_DEV, LOGNAM=NAMDSC, ITMLST=TRNITEMS
+        BLBS    R0, 20$
+        CMPL    R0, #SS$_NOLOGNAM
+        BNEQ    DONE
+        ADDTEXT "%SHOW-S-NOTRAN, no translation for logical name "
+        BSBW    ADDNAME
+        BSBW    SAY
+        BRW     NEXT
+20$:    ADDTEXT "   "
+        BSBW    PAIR
+        ADDTEXT " ("
+        MOVAB   TABNAM, R1
+        MOVZWL  TABLEN, R2
+        BSBW    ADD
+        ADDTEXT ")"
+        BSBW    SAY
+        BRW     NEXT
+
+; LIST: lists the logical names of the process's table, then the system's,
+; as VMS's SHOW LOGICAL does, under each table's name.
+LIST:   CLRL    R6                      ; the table: 0 the process's, 1 the system's
+10$:    PRINT   ""
+        ADDTEXT "("
+        MOVAB   PROCTAB, R1
+        TSTL    R6
+        BEQL    15$
+        MOVAB   SYSTAB, R1
+15$:    BSBW    ADDCSTR
+        ADDTEXT ")"
+        BSBW    SAY
+        PRINT   ""
+        CLRL    R7                      ; the name's index
+20$:    MOVL    R6, LNMARGS+4
+        MOVL    R7, LNMARGS+8
+        $CMKRNL_S ROUTIN=GETLNM, ARGLST=LNMARGS
+        BLBC    R0, 30$
+        ADDTEXT "  "
+        BSBW    PAIR
+        BSBW    SAY
+        INCL    R7
+        BRB     20$
+30$:    AOBLEQ  #1, R6, 10$
+        BRW     NEXT
+
+; GETLNM table, index: in kernel mode, copies the index'th logical name of
+; a table, 0 the process's and 1 the system's, to NAME and NAMDSC, and its
+; equivalence to EQV and EQVLEN. SS$_NOLOGNAM past the last. A name made
+; or deleted between calls may be missed or shown twice.
+; ponytail: walks the executive's tables itself, as DIRECTORY reads the
+; boot volume; VMS's DCL asks the executive's logical name routines.
+        .ENTRY  GETLNM, ^M<R2, R3, R4, R5>
+        MOVL    G^SCH$GL_CURPCB, R2
+        MOVAQ   PCB$Q_LNMHD(R2), R2
+        TSTL    4(AP)
+        BEQL    10$
+        MOVAQ   G^LNM$GQ_SYSTEM, R2
+10$:    MOVL    8(AP), R3
+        DSBINT  #IPL$_SYNCH             ; the tables
+        MOVL    R2, R1
+20$:    MOVL    (R1), R1
+        CMPL    R1, R2
+        BEQL    80$
+        SOBGEQ  R3, 20$
+        PUSHL   R1
+        MOVZBL  LNMB$T_NAME(R1), NAMDSC
+        MOVC3   NAMDSC, LNMB$T_NAME+1(R1), NAME
+        MOVL    (SP)+, R1
+        MOVZBL  LNMB$T_NAME(R1), R0
+        MOVAB   LNMB$T_NAME+1(R1)[R0], R1
+        MOVZBL  (R1)+, R0
+        MOVW    R0, EQVLEN
+        MOVC3   R0, (R1), EQV
+        MOVL    #SS$_NORMAL, R0
+        BRB     90$
+80$:    MOVL    #SS$_NOLOGNAM, R0
+90$:    ENBINT
+        RET
+
+; PAIR: appends "name" = "equivalence", of NAME and EQV, to MSG. Uses
+; R0-R2.
+PAIR:   BSBW    QUOTE
+        BSBW    ADDNAME
+        BSBW    QUOTE
+        ADDTEXT " = "
+        BSBW    QUOTE
+        MOVAB   EQV, R1
+        MOVZWL  EQVLEN, R2
+        BSBW    ADD
+        BRW     QUOTE
+
+; NAMEWORD: the next word of the line, as WORD, copied to NAME, which
+; NAMDSC describes. R8 = its length, 0 if there is none. Uses R0-R5.
+NAMEWORD:
+        BSBW    WORD
+        MOVC3   R8, TOKEN, NAME
+        MOVL    R8, NAMDSC
+        RSB
 
 ; WORD: R6 = the next character of the line, R7 = past its last. Skips
 ; blanks, then copies the characters up to the next blank, in capitals, to
@@ -230,6 +442,16 @@ SAY:    PUSHAB  MSG
         CALLS   #1, G^PUT_LINE
         CLRB    MSG
         RSB
+
+; ADDNAME: appends the logical name in NAME to MSG. Uses R0-R2.
+ADDNAME:
+        MOVAB   NAME, R1
+        MOVL    NAMDSC, R2
+        BRB     ADD
+
+; QUOTE: appends a double quote to MSG. Uses R0-R2.
+QUOTE:  MOVZBL  #34, R0
+        BRB     ADDCHAR
 
 ; ADDTOKEN: appends the R8 characters in TOKEN to MSG. Uses R0-R2.
 ADDTOKEN:

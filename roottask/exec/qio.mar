@@ -2,7 +2,7 @@
         .IDENT  /V0.2/
 ;
 ; A process uses the console as on VMS: $ASSIGN gives it a channel to
-; OPA0:, and $QIO or $QIOW writes a buffer on it, or reads a line into one.
+; OPA0:, named so or by a logical name, and $QIO or $QIOW writes a buffer on it, or reads a line into one.
 ; The I/O is done before $QIO returns, which then sets the event flag and
 ; the I/O status block, so $QIOW is $QIO
 ; (docs/design/0002-executive-processes.md).
@@ -22,10 +22,13 @@
         $PCBDEF
         $STATEDEF
         $IODEF
+        $LNMBDEF
+        $LNMDEF
         $SSDEF
 
         .EXTERNAL SCH$GL_CURPCB, SCH$WAIT, SCH$WAKEPCB
         .EXTERNAL EXE$PROBER_DSC, EXE$OUTCHAR, EXE$OUTCRLF, EXE$SETEF, EXE$CLREF
+        .EXTERNAL LNM$TRNLOG
 
 MAXCHAN = 31                            ; channels 1-31, a bit each in PCB$L_CHANS
 TYPEAHEAD = 256                         ; the type-ahead buffer, a ring
@@ -47,15 +50,43 @@ TTY$AB_RING::                           ; the type-ahead buffer: received, not y
         .PSECT  $CODE$
 
 ; $ASSIGN devnam, chan, acmode, mbxnam: assigns a channel to the device
-; devnam names, OPA0, with a colon or without, and puts its number in
-; chan, a word.
-        .ENTRY  EXE$ASSIGN, ^M<R2, R3, R4>
+; devnam names, and puts its number in chan, a word. devnam is translated
+; as a logical name, without its colon, in LNM$FILE_DEV, and what it
+; translates to, up to LNM$C_MAXDEPTH times, until a name starts with an
+; underscore, which is dropped, or doesn't translate. That must be the
+; console, OPA0, with a colon or without.
+        .ENTRY  EXE$ASSIGN, ^M<R2, R3, R4, R5, R6, R7>
         MOVL    4(AP), R1
         BSBW    EXE$PROBER_DSC
         BLBC    R0, 90$
         IFNOWRT #2, @8(AP), 85$
         MOVZWL  (R1), R2
         MOVL    4(R1), R3
+        DSBINT  #IPL$_SYNCH             ; the names it translates to stay
+        MOVL    #LNM$C_MAXDEPTH, R5
+2$:     TSTL    R2
+        BEQL    8$
+        CMPB    (R3), #^A/_/            ; a device's own name
+        BNEQ    4$
+        INCL    R3
+        DECL    R2
+        BRB     8$
+4$:     MOVL    R3, R6
+        MOVL    R2, R7
+        ADDL3   R2, R3, R0
+        CMPB    -1(R0), #^A/:/
+        BNEQ    6$
+        DECL    R7
+6$:     PUSHR   #^M<R2, R3>
+        BSBW    LNM$TRNLOG
+        POPR    #^M<R2, R3>
+        TSTL    R1
+        BEQL    8$
+        MOVZBL  LNMB$T_NAME(R1), R0
+        MOVAB   LNMB$T_NAME+1(R1)[R0], R3
+        MOVZBL  (R3)+, R2
+        SOBGTR  R5, 2$
+8$:     MOVL    #SS$_NOSUCHDEV, R0
         CMPL    R2, #4
         BEQL    10$
         CMPL    R2, #5
@@ -65,15 +96,14 @@ TTY$AB_RING::                           ; the type-ahead buffer: received, not y
 10$:    CMPL    (R3), CONSOLE
         BNEQ    80$
         MOVL    SCH$GL_CURPCB, R4
-        MOVL    #1, R0
-20$:    BBCS    R0, PCB$L_CHANS(R4), 30$
-        AOBLEQ  #MAXCHAN, R0, 20$
+        MOVL    #1, R1
+20$:    BBCS    R1, PCB$L_CHANS(R4), 30$
+        AOBLEQ  #MAXCHAN, R1, 20$
         MOVL    #SS$_NOIOCHAN, R0
-        RET
-30$:    MOVW    R0, @8(AP)
+        BRB     80$
+30$:    MOVW    R1, @8(AP)
         MOVL    #SS$_NORMAL, R0
-        RET
-80$:    MOVL    #SS$_NOSUCHDEV, R0
+80$:    ENBINT
         RET
 85$:    MOVL    #SS$_ACCVIO, R0
 90$:    RET

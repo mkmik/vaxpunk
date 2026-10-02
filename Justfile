@@ -25,12 +25,14 @@ check:
            'process NOSUCH exited' 'HOG: NUDGE ran' 'TIMETEST: ok'
            'process SNOOP exited with status 0000000C' 'process USURP exited with status 0000043C'
            '%NONAME-F-NOMSG, Message number 0000000C' ' \FOO\' 'PING.EXE;1          PONG.EXE;1'
-           'Total of 2 files.' 'and the rest of what INITIALIZE made.')
+           'Total of 2 files.' 'and the rest of what INITIALIZE made.'
+           '"FOO" = "SYS$INPUT" (LNM$PROCESS_TABLE)' 'no translation for logical name FOO'
+           '(LNM$SYSTEM_TABLE)' '  "SYS$ERROR" = "_OPA0:"')
     all() { for line in "${lines[@]}"; do grep -aqsF "$line" out/serial.log || return 1; done; }
     typed=
     for _ in $(seq 120); do
         if [ -z "$typed" ] && grep -aqs '%EXEC-I-START' out/serial.log; then
-            printf 'RUN STARTUP\rRUN SNOOP\rFOO\rDIR [SYSEXE]P%%NG\rTYPE WELCOME.TXT\r' >&3
+            printf 'RUN STARTUP\rRUN SNOOP\rFOO\rDIR [SYSEXE]P%%NG\rTYPE WELCOME.TXT\rDEFINE FOO SYS$INPUT\rSHOW LOGICAL FOO\rSHOW LOGICAL\rDEASSIGN FOO\rSHOW LOGICAL FOO\r' >&3
             typed=1
         fi
         all || grep -aqs 'root task done' out/serial.log && break

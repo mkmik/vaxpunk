@@ -86,7 +86,8 @@ The executive is the VMS kernel, written in MACRO-32.
   the index file's header, which says where every other file's header is
   (`FIL$MOUNT`), and prints `%MOUNT-I-MOUNTED, VAXPUNK mounted on _DKA0:`
 - lowers IPL to 0 and creates the console's process, SYSTEM, which runs
-  `DCL.EXE`
+  `DCL.EXE`, with the logical names `SYS$INPUT`, `SYS$OUTPUT` and
+  `SYS$ERROR` standing for the console, `_OPA0:`, in its process table
 - then becomes the swapper (process 1). The swapper cleans up deleted
   processes and sleeps the rest of the time.
 
@@ -99,8 +100,8 @@ interpreter. It is linked high in P1, which tells the executive it is one
 - When SYSTEM starts (`EXE$PROCSTRT`), the executive makes its stacks,
   reads `DKA0:[SYSEXE]DCL.EXE` from the disk (`FIL$OPENFILE`), loads it
   into P1 and calls it in supervisor mode.
-- DCL opens a channel to the console, `OPA0:`, prints the `$` prompt and
-  waits for a line. That's where the boot ends: the CPU idles, taking
+- DCL opens a channel to `SYS$INPUT`, which `$ASSIGN` translates to the
+  console, `OPA0:`, prints the `$` prompt and waits for a line. That's where the boot ends: the CPU idles, taking
   clock ticks, until you type something.
 - `RUN image` reads the image from `[SYSEXE]` and loads it into the same
   process's P0 (`$IMGACT`) and runs it in user mode. When the image
@@ -111,7 +112,9 @@ interpreter. It is linked high in P1, which tells the executive it is one
   `$PARSE` and `$SEARCH`: those in `[SYSMGR]`, the default directory, or
   the ones it is given, `DIR [SYSEXE]`, `DIR [000000]`. `TYPE file` runs
   `TYPE.EXE`, which reads the file with `$OPEN` and `$GET` and writes it
-  on the console. `HELP` lists the commands, and `LOGOUT` deletes SYSTEM.
+  on the console. `DEFINE`, `DEASSIGN` and `SHOW LOGICAL` make, delete
+  and translate logical names (`$CRELNM`, `$DELLNM`, `$TRNLNM`), and
+  `SHOW LOGICAL` alone lists them. `HELP` lists the commands, and `LOGOUT` deletes SYSTEM.
   When the swapper deletes what SYSTEM left, it prints `%EXEC-I-LOGOUT`
   and halts, and the root task powers QEMU off with a semihosting
   `SYS_EXIT`.
@@ -147,5 +150,6 @@ executive feature:
   the others finish.
 
 `just check` boots the system, types `RUN STARTUP`, `RUN SNOOP`, a bad
-command, `DIR [SYSEXE]P%NG` and `TYPE WELCOME.TXT` at the prompt, and looks
-for the success lines in `out/serial.log`.
+command, `DIR [SYSEXE]P%NG`, `TYPE WELCOME.TXT`, and `DEFINE`, `SHOW
+LOGICAL` and `DEASSIGN` of a logical name, and `SHOW LOGICAL` alone, at the
+prompt, and looks for the success lines in `out/serial.log`.

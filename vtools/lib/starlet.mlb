@@ -23,13 +23,16 @@ SS$_INSFARG = 276
 SS$_INSFMEM = 292
 SS$_IVCHAN = 316
 SS$_IVLOGNAM = 340
+SS$_IVLOGTAB = 348
 SS$_IVSSRQ = 372
 SS$_NOIOCHAN = 436
+SS$_NOLOGNAM = 444
 SS$_PAGOWNVIO = 492
 SS$_UNASEFC = 564
 SS$_VASFULL = 580
 SS$_IVMODE = 852
 SS$_OPCDEC = 1084
+SS$_SUPERSEDE = 1585                    ; success: a name by that name was replaced
 SS$_NONEXPR = 2280
 SS$_NOSUCHDEV = 2312
 SS$_NOSUCHFILE = 2320
@@ -38,6 +41,7 @@ SS$_BADFILEHDR = 2064
 SS$_BADIRECTORY = 2088
 SS$_ENDOFFILE = 2160
 SS$_NOMOREFILES = 2352
+SS$_NOLOGTAB = 8852
         .ENDM   $SSDEF
 
 ; $RMSDEF: RMS status codes, as VMS numbers them.
@@ -245,6 +249,18 @@ IO$_READLBLK = 33
 IO$_READVBLK = 49
 IO$_READPROMPT = 55                     ; writes the prompt in p5 and p6 first
         .ENDM   $IODEF
+
+; $LNMDEF: logical names: item codes for the item lists of $CRELNM and
+; $TRNLNM, and limits. An item list is 12-byte items, each a word buffer
+; length, a word item code, a buffer address and the address of a word
+; for the length returned, or 0; a longword 0 ends it.
+        .MACRO  $LNMDEF
+LNM$_STRING = 2                         ; the equivalence string
+LNM$_TABLE = 4                          ; the name of the table it was found in
+LNM$_LENGTH = 5                         ; the equivalence string's length, a longword
+LNM$C_NAMLENGTH = 255                   ; the longest name or equivalence string
+LNM$C_MAXDEPTH = 10                     ; translations of a device name, at most
+        .ENDM   $LNMDEF
 
 ; $PRTDEF: page protection codes, the VAX's: who may read (R) and write (W),
 ; from kernel (K) out to user (U) mode.
@@ -513,6 +529,34 @@ PRT$C_UR = 15
         .EXTERNAL SYS$CANWAK
         CALLS   #2, G^SYS$CANWAK
         .ENDM   $CANWAK_S
+
+        .MACRO  $CRELNM_S ATTR=0, TABNAM, LOGNAM, ACMODE=0, ITMLST
+        $PUSHADR ITMLST
+        $PUSHADR ACMODE
+        $PUSHADR LOGNAM
+        $PUSHADR TABNAM
+        $PUSHADR ATTR
+        .EXTERNAL SYS$CRELNM
+        CALLS   #5, G^SYS$CRELNM
+        .ENDM   $CRELNM_S
+
+        .MACRO  $DELLNM_S TABNAM, LOGNAM, ACMODE=0
+        $PUSHADR ACMODE
+        $PUSHADR LOGNAM
+        $PUSHADR TABNAM
+        .EXTERNAL SYS$DELLNM
+        CALLS   #3, G^SYS$DELLNM
+        .ENDM   $DELLNM_S
+
+        .MACRO  $TRNLNM_S ATTR=0, TABNAM, LOGNAM, ACMODE=0, ITMLST
+        $PUSHADR ITMLST
+        $PUSHADR ACMODE
+        $PUSHADR LOGNAM
+        $PUSHADR TABNAM
+        $PUSHADR ATTR
+        .EXTERNAL SYS$TRNLNM
+        CALLS   #5, G^SYS$TRNLNM
+        .ENDM   $TRNLNM_S
 
         .MACRO  $IMGACT_S IMAGE, CMDLIN=0
         $PUSHADR CMDLIN

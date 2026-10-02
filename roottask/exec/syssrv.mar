@@ -130,9 +130,9 @@ CODE = 0
         SERVICE DASSGN, 1
         SERVICE QIO, 12
         SERVICE QIOW, 12
-        STUB    CRELNM, 5
-        STUB    DELLNM, 3
-        STUB    TRNLNM, 5
+        SERVICE CRELNM, 5
+        SERVICE DELLNM, 3
+        SERVICE TRNLNM, 5
         STUB    GETSYI, 7
 ; Images
         SERVICE IMGACT, 1

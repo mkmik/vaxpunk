@@ -217,7 +217,8 @@ PCB$L_CLICHANS = 264                    ; the channels it keeps when an image ex
 PCB$A_IFAB = 272                        ; its open files' IFABs, by IFI 1-15, or 0
 PCB$L_FILES = 336                       ; bit n: IFI n is open
 PCB$L_CLIFILES = 340                    ; the files it keeps open when an image exits
-PCB$K_LENGTH = 344
+PCB$Q_LNMHD = 344                       ; its logical name table, LNM$PROCESS_TABLE: LNMBs
+PCB$K_LENGTH = 352
 PCB$V_WAKEPEN = 0                       ; a $WAKE came while not hibernating
 PCB$V_WALL = 1                          ; the wait is for all of EFWM
 PCB$V_SUSPEN = 2                        ; suspend when the wait ends
@@ -236,6 +237,16 @@ CEB$L_REFC = 20                         ; processes associated
 CEB$T_EFCNAM = 24                       ; name, .ASCIC, 15 characters
 CEB$K_LENGTH = 48
         .ENDM   $CEBDEF
+
+; $LNMBDEF: a logical name block, from pool, on its table's queue: a
+; logical name and its equivalence string.
+        .MACRO  $LNMBDEF
+LNMB$L_FLINK = 0                        ; the table
+LNMB$L_BLINK = 4
+LNMB$W_SIZE = 8                         ; its size, as allocated
+LNMB$T_NAME = 10                        ; the name, .ASCIC, then the equivalence, .ASCIC
+LNMB$K_LENGTH = 10                      ; past that, both strings
+        .ENDM   $LNMBDEF
 
 ; $TQEDEF: a timer queue entry, from pool, on EXE$GQ_TQFL in the order it
 ; is due. Times are VMS's: 100 ns units since 17-Nov-1858.
