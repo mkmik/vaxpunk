@@ -39,6 +39,8 @@ UNIX_LO = ^X4BEB4000
         .PSECT  EXEC$DATA, NOEXE, WRT, QUAD
 EXE$GQ_SYSTIME::                        ; the system time
         .BLKQ   1
+EXE$GQ_BOOTTIME::                       ; the system time at boot
+        .BLKQ   1
 EXE$GQ_1ST_TIME::                       ; when the first entry is due
         .LONG   -1, -1
 EXE$GQ_TQFL::                           ; the timer queue
@@ -46,8 +48,8 @@ EXE$GQ_TQFL::                           ; the timer queue
 
         .PSECT  $CODE$
 
-; EXE$INITTIM: makes the timer queue empty and sets the system time from
-; the RTC's, which the PAL put in the RPB. IPL 31. Uses R0-R2.
+; EXE$INITTIM: makes the timer queue empty and sets the system time, and
+; EXE$GQ_BOOTTIME, from the RTC's, which the PAL put in the RPB. IPL 31. Uses R0-R2.
 ; ponytail: EMUL is signed, so the RTC's seconds work until 2038.
 EXE$INITTIM::
         MOVAQ   EXE$GQ_TQFL, R0
@@ -60,6 +62,7 @@ EXE$INITTIM::
         INCL    R1
 10$:    ADDL2   #UNIX_HI, R1
         MOVQ    R0, EXE$GQ_SYSTIME
+        MOVQ    R0, EXE$GQ_BOOTTIME
         RSB
 
 ; EXE$HWCLKINT: the interval timer interrupt, at IPL$_HWCLK. Advances the

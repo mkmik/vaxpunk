@@ -1,0 +1,194 @@
+        .TITLE  GETJPI  $GETJPI and $GETSYI: about the processes and the system
+        .IDENT  /V0.1/
+;
+; A program asks about a process with $GETJPI, and about the system with
+; $GETSYI, as on VMS, with VMS's item codes (starlet.mlb's $JPIDEF and
+; $SYIDEF) in an item list as $GETDVI's. $GETJPI's pidadr pointing at -1
+; starts a wildcard scan: each call returns the next process, keeping
+; where the scan is in that longword, until SS$_NOMOREPROC; SHOW SYSTEM
+; lists the processes so. A table says, for each item code, how big the
+; value is and where: at an offset in the PCB, or at an address.
+; ponytail: done at once, no AST; no CPU times, quotas or counts, as
+; nothing keeps them, and no cluster, so $GETSYI's csidadr and nodename
+; are ignored.
+;
+        .LIBRARY "lib.mlb"
+        .LIBRARY "starlet.mlb"
+        $IPLDEF
+        $PCBDEF
+        $STATEDEF
+        $SSDEF
+        $JPIDEF
+        $SYIDEF
+
+        .EXTERNAL EXE$NAMPID, EXE$SETEF, EXE$CLREF, EXE$GQ_BOOTTIME
+        .EXTERNAL SCH$GL_CURPCB, SCH$GL_PCBVEC, SGN$GW_QUANTUM
+
+; ITMENT code, size, at: a table's entry. size is 1, 2 or 4 for a byte, word
+; or longword, returned as a longword, 8 for a quadword, or 0 for a
+; .ASCIC string, returned without its count.
+        .MACRO  ITMENT  CODE, SIZE, AT
+        .WORD   CODE, SIZE
+        .LONG   AT
+        .ENDM   ITMENT
+
+        .PSECT  EXEC$DATA, NOEXE, WRT, QUAD
+JPITAB: ITMENT  JPI$_PID, 4, PCB$L_PID  ; at an offset in the PCB
+        ITMENT  JPI$_PRCNAM, 0, PCB$T_LNAME
+        ITMENT  JPI$_IMAGNAME, 0, PCB$T_IMAGE
+        ITMENT  JPI$_STATE, 4, PCB$L_STATE
+        ITMENT  JPI$_PRI, 1, PCB$B_PRI
+        ITMENT  JPI$_PRIB, 1, PCB$B_PRIB
+        ITMENT  JPI$_OWNER, 4, PCB$L_OWNER
+        ITMENT  JPI$_STS, 4, PCB$L_STS
+        .LONG   0
+SYITAB: ITMENT  SYI$_VERSION, 8, VERSION ; at an address
+        ITMENT  SYI$_MAXPROCESSCNT, 4, MAXPRC
+        ITMENT  SYI$_QUANTUM, 2, SGN$GW_QUANTUM
+        ITMENT  SYI$_BOOTTIME, 8, EXE$GQ_BOOTTIME
+        .LONG   0
+VERSION:
+        .ASCII  "V0.1    "
+MAXPRC: .LONG   SCH$C_MAXPIX-1          ; the slots, but index 0
+VALUE:  .LONG   0                       ; a byte or word item's, made a longword
+
+        .PSECT  $CODE$
+
+; $GETJPI efn, pidadr, prcnam, itmlst, iosb, astadr, astprm: returns what
+; the item list asks about a process: the one pidadr or prcnam names, as
+; $WAKE's, or the next one of a wildcard scan if pidadr points at a
+; negative number, -1 to start. Clears the event flag, then sets it, and
+; writes SS$_NORMAL in the IOSB's first word, if there is one.
+; SS$_NONEXPR for a process that isn't there, SS$_NOMOREPROC past the
+; scan's last, SS$_BADPARAM for an item code it doesn't know.
+        .ENTRY  EXE$GETJPI, ^M<R2, R3, R4, R5, R6, R7, R8, R9, R10, R11>
+        BSBW    CHKIOSB
+        BLBC    R0, 90$
+        DSBINT  #IPL$_SYNCH             ; the PCBs
+        MOVL    SCH$GL_CURPCB, R4
+        MOVL    8(AP), R2
+        BEQL    20$
+        IFNOWRT #4, (R2), 84$
+        MNEGL   (R2), R1                ; the scan's next index
+        BLEQ    20$                     ; a PID, or 0
+10$:    CMPL    R1, #SCH$C_MAXPIX
+        BGEQU   82$
+        MOVL    SCH$GL_PCBVEC[R1], R5
+        INCL    R1
+        TSTL    R5
+        BEQL    10$
+        MNEGL   R1, (R2)
+        BRB     30$
+20$:    MOVL    12(AP), R3
+        BSBW    EXE$NAMPID
+        BLBC    R0, 80$
+        MOVL    R1, R5
+30$:    MOVAB   JPITAB, R6
+        BRW     RETITEMS
+82$:    MOVL    #SS$_NOMOREPROC, R0
+        BRB     80$
+84$:    MOVL    #SS$_ACCVIO, R0
+80$:    ENBINT
+90$:    RET
+
+; $GETJPIW efn, pidadr, prcnam, itmlst, iosb, astadr, astprm: as $GETJPI,
+; which is done when it returns, so has nothing to wait for.
+        .ENTRY  EXE$GETJPIW, ^M<>
+        CALLG   (AP), EXE$GETJPI
+        RET
+
+; $GETSYI efn, csidadr, nodename, itmlst, iosb, astadr, astprm: returns
+; what the item list asks about the system. As $GETJPI otherwise.
+        .ENTRY  EXE$GETSYI, ^M<R2, R3, R4, R5, R6, R7, R8, R9, R10, R11>
+        BSBW    CHKIOSB
+        BLBC    R0, 90$
+        DSBINT  #IPL$_SYNCH             ; as RETITEMS expects
+        CLRL    R5
+        MOVAB   SYITAB, R6
+        BRW     RETITEMS
+90$:    RET
+
+; $GETSYIW efn, csidadr, nodename, itmlst, iosb, astadr, astprm: as
+; $GETSYI.
+        .ENTRY  EXE$GETSYIW, ^M<>
+        CALLG   (AP), EXE$GETSYI
+        RET
+
+; CHKIOSB: AP = a $GETJPI or $GETSYI argument list. Checks the IOSB can be
+; written and clears the event flag. R0 = SS$_NORMAL, SS$_ACCVIO or
+; $CLREF's error. Uses R0-R1.
+CHKIOSB:
+        MOVL    20(AP), R0
+        BEQL    10$
+        IFNOWRT #8, (R0), 80$
+10$:    PUSHL   4(AP)
+        CALLS   #1, G^EXE$CLREF
+        RSB
+80$:    MOVL    #SS$_ACCVIO, R0
+        RSB
+
+; RETITEMS: AP = a $GETJPI or $GETSYI argument list, R6 = its table,
+; R5 = the PCB, or 0 for addresses. Fills in the item list's buffers,
+; each with as much of its value as fits, then lowers IPL, writes the
+; IOSB, sets the event flag and returns from the service. IPL$_SYNCH. Not a routine.
+RETITEMS:
+        MOVL    16(AP), R8
+10$:    IFNORD  #4, (R8), 84$
+        TSTL    (R8)
+        BEQL    70$
+        IFNORD  #12, (R8), 84$
+        MOVZWL  (R8), R9                ; the buffer: its length,
+        MOVL    4(R8), R11              ; its address
+        IFNOWRT R9, (R11), 84$
+        MOVL    8(R8), R0
+        BEQL    20$
+        IFNOWRT #2, (R0), 84$
+20$:    MOVL    R6, R7                  ; the item's entry
+30$:    TSTL    (R7)
+        BEQL    82$
+        CMPW    (R7), 2(R8)
+        BEQL    40$
+        ADDL2   #8, R7
+        BRB     30$
+40$:    ADDL3   4(R7), R5, R1           ; the value
+        MOVZWL  2(R7), R2
+        BNEQ    42$
+        MOVZBL  (R1)+, R2               ; .ASCIC
+        BRB     50$
+42$:    CMPL    R2, #2
+        BGTRU   50$
+        MOVZWL  (R1), VALUE
+        BLBC    R2, 44$
+        MOVZBL  (R1), VALUE
+44$:    MOVAB   VALUE, R1
+        MOVL    #4, R2
+50$:    CMPL    R2, R9                  ; as much as fits
+        BLEQU   55$
+        MOVL    R9, R2
+55$:    CLRL    R3
+56$:    CMPL    R3, R2
+        BGEQU   58$
+        MOVB    (R1)[R3], (R11)[R3]
+        INCL    R3
+        BRB     56$
+58$:    MOVL    8(R8), R0
+        BEQL    60$
+        MOVW    R2, (R0)
+60$:    ADDL2   #12, R8
+        BRB     10$
+70$:    ENBINT
+        MOVL    20(AP), R0
+        BEQL    75$
+        MOVL    #SS$_NORMAL, (R0)
+        CLRL    4(R0)
+75$:    PUSHL   4(AP)
+        CALLS   #1, G^EXE$SETEF
+        MOVL    #SS$_NORMAL, R0
+        RET
+82$:    MOVL    #SS$_BADPARAM, R0
+        BRB     90$
+84$:    MOVL    #SS$_ACCVIO, R0
+90$:    ENBINT
+        RET
+
+        .END

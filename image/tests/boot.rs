@@ -6,8 +6,8 @@
 //! device, around a COPY to it from SYS$SYSDEVICE:, a logical name, an EDIT
 //! in line mode and keypad mode that writes a second version and DELETEs,
 //! then INITIALIZE, MOUNT and COPY on the data disk, DKB0:, made afresh in
-//! out/check-datadisk.img, not the one you keep, and SHOW DEVICES, or the
-//! root task is done, which is only on a halt or a fault. DCL reads what was
+//! out/check-datadisk.img, not the one you keep, SHOW DEVICES, SHOW PROCESS
+//! and SHOW SYSTEM, or the root task is done, which is only on a halt or a fault. DCL reads what was
 //! typed ahead a line at a time. Then it types a CONTINUE with nothing stopped, and stops
 //! SPIN and SLEEPER with CTRL/Y, twice each, with a CONTINUE in between, a
 //! step at a time: each waits until a line has come so many times, the echo
@@ -72,6 +72,9 @@ const LINES: &[&str] = &[
     "DKB0:                   Mounted              0  DATA",
     "MDA0:                   Mounted              0  RAM",
     "OPA0:                   Online               0",
+    "Process name:       \"SYSTEM\"",
+    "00010001 SWAPPER",
+    "SYSTEM          CUR     4 SHOW.EXE",
     "CONTINUE    goes back to the image CTRL/Y stopped",
 ];
 
@@ -150,7 +153,9 @@ fn boot() {
         if typed == 4 && text.contains("no files found") {
             type_("INIT DKB0: DATA\rMOUNT DKB0: DATA\r");
             type_("COPY SYS$SYSDEVICE:[SYSMGR]WELCOME.TXT DKB0:[000000]DATA.TXT\r");
-            type_("DIR DKB0:[000000]\rSHOW DEVICES\rCONTINUE\rRUN SPIN\r");
+            type_(
+                "DIR DKB0:[000000]\rSHOW DEVICES\rSHOW PROCESS\rSHOW SYSTEM\rCONTINUE\rRUN SPIN\r",
+            );
             typed = 5;
         }
         if LINES.iter().all(|l| text.contains(l)) || text.contains("root task done") {

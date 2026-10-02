@@ -112,7 +112,8 @@ lists the devices, `TYPE file` writes a text file (`TYPE WELCOME.TXT`),
 on the screen),
 `DEFINE name equivalence`, `DEASSIGN name` and `SHOW LOGICAL name` make,
 delete and translate logical names (`SHOW LOGICAL SYS$INPUT`, or `SHOW
-LOGICAL` alone to list them all), `COPY` and `DELETE` copy and delete
+LOGICAL` alone to list them all), `SHOW PROCESS` and `SHOW SYSTEM` show
+the process and list them all, `COPY` and `DELETE` copy and delete
 files, `INITIALIZE` and `MOUNT` make and mount a volume on the data disk,
 `DKB0:`, or the ramdisk, `MDA0:`, the disks they can write
 ([ADR-0009](docs/adr/0009-ramdisk-writable-files-11.md)), `HELP` lists
@@ -186,6 +187,7 @@ name's `DEFINE`, `SHOW LOGICAL` and `DEASSIGN`, `SHOW LOGICAL` alone, and
 `SET DEFAULT` and `SHOW DEFAULT`, a round trip through the ramdisk with
 a keypad-mode `EDIT` on it, a
 `COPY` to the data disk, made afresh, which `ods` then checks on the host,
+`SHOW PROCESS` and `SHOW SYSTEM`,
 stops `SPIN` and `SLEEPER` with CTRL/Y and continues them, prints the
 executive's part and fails unless the processes ran to the end.
 

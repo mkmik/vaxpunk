@@ -91,8 +91,8 @@ CODE = 0
         SERVICE RESUME, 2
         SERVICE SETPRI, 4
         SERVICE SETPRN, 1
-        STUB    GETJPI, 7
-        STUB    GETJPIW, 7
+        SERVICE GETJPI, 7
+        SERVICE GETJPIW, 7
         STUB    DCLEXH, 1
         STUB    CANEXH, 1
         STUB    SETPRV, 4
@@ -134,7 +134,8 @@ CODE = 0
         SERVICE CRELNM, 5
         SERVICE DELLNM, 3
         SERVICE TRNLNM, 5
-        STUB    GETSYI, 7
+        SERVICE GETSYI, 7
+        SERVICE GETSYIW, 7
 ; Images
         SERVICE IMGACT, 1
         SERVICE CONTINUE, 0
