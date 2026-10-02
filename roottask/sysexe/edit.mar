@@ -1,4 +1,4 @@
-        .TITLE  EDIT    The EDT editor's line mode, read only
+        .TITLE  EDIT    The EDT editor's line mode
         .IDENT  /V0.1/
 ;
 ; DCL's EDIT spec runs this, with spec, in capitals, as its command line
@@ -10,7 +10,16 @@
 ;   TYPE [range]
 ;               the same, the current line if there is no range
 ;   (RETURN)    moves to the next line and types it
-;   EXIT, QUIT  ends the session
+;   INSERT [range]
+;               inserts the lines typed next, up to a CTRL/Z, before
+;               the range's first line, the current line if there is no range
+;   DELETE [range]
+;               deletes the lines
+;   REPLACE [range]
+;               deletes the lines, then inserts as INSERT does
+;   EXIT        writes the buffer to a new version of the file, and ends
+;               the session
+;   QUIT        ends the session without writing
 ;   HELP        lists the commands
 ;
 ; A range is a line, or two with a colon between them: a number, . the
@@ -19,10 +28,14 @@
 ; ignored;
 ; or WHOLE, every line, or REST, the current line and those after. The
 ; last line typed becomes the current line. A line is typed after its
-; number, and the end of the buffer as [EOB].
-; ponytail: RMS is read only, so there are no commands that change the
-; buffer, and EXIT is QUIT; no screen mode, which needs a terminal driver
-; that reads a key at a time. At most MAXLINES lines, TEXTSIZE bytes.
+; number, and the end of the buffer as [EOB]. After an INSERT the current
+; line is the one the lines went before, after a DELETE the one after
+; those deleted. EXIT writes variable length records with carriage
+; return control, as EDT does, and types the new file's name; if RMS
+; can't, it types its status and the session goes on.
+; ponytail: no screen mode, which needs a terminal driver that reads a
+; key at a time, and no SUBSTITUTE, MOVE, COPY or WRITE. At most MAXLINES
+; lines, TEXTSIZE bytes, which deleted lines don't give back.
 ;
         .LIBRARY "lib.mlb"
         .LIBRARY "starlet.mlb"
@@ -33,6 +46,7 @@
         $RMSDEF
         $FABDEF
         $RABDEF
+        $NAMDEF
 
         .EXTERNAL PUT_LINE
 
@@ -41,11 +55,16 @@ MAXLINES = 2000
 TEXTSIZE = 65536
 
         .PSECT  DATA, NOEXE, WRT, LONG
-FAB:    $FAB    FNA=VA$C_FOREIGN+1
+FAB:    $FAB    FNA=VA$C_FOREIGN+1, NAM=NAM
+NAM:    $NAM    RSA=RES, RSS=255
 RAB:    $RAB    FAB=FAB, USZ=LINESIZE
+OUTFAB: $FAB    FNA=VA$C_FOREIGN+1
+OUTRAB: $RAB    FAB=OUTFAB
+RES:    .BLKB   255                     ; the file's name, once opened
 CHAN:   .LONG   0                       ; OPA0:'s, once assigned
 OPA0:   .ASCID  "OPA0:"
 PROMPT: .ASCII  "*"
+TAB:    .ASCII  <9>                     ; INSERT's prompt
 IOSB:   .BLKQ   1
 CMD:    .BLKB   LINESIZE                ; the command line
 TOKEN:  .BLKB   LINESIZE                ; a word of it, in capitals
@@ -54,6 +73,12 @@ NLINES: .LONG   0                       ; the lines in the buffer
 CUR:    .LONG   1                       ; the current line, NLINES+1 at [EOB]
 FREE:   .ADDRESS TEXT                   ; TEXT's first unused byte
 V_TYPE: .ASCIC  "TYPE"
+V_INSERT:
+        .ASCIC  "INSERT"
+V_DELETE:
+        .ASCIC  "DELETE"
+V_REPLACE:
+        .ASCIC  "REPLACE"
 V_EXIT: .ASCIC  "EXIT"
 V_QUIT: .ASCIC  "QUIT"
 V_HELP: .ASCIC  "HELP"
@@ -100,12 +125,21 @@ NEXT:   $QIOW_S CHAN=CHAN, FUNC=#IO$_READPROMPT, IOSB=IOSB, P1=CMD, P2=#LINESIZE
         MOVAB   V_TYPE, R1
         BSBW    VERB
         BLBS    R0, TYPE
+        MOVAB   V_INSERT, R1
+        BSBW    VERB
+        BLBS    R0, INSERT
+        MOVAB   V_DELETE, R1
+        BSBW    VERB
+        BLBS    R0, DELETE
+        MOVAB   V_REPLACE, R1
+        BSBW    VERB
+        BLBS    R0, REPLACE
         MOVAB   V_EXIT, R1
         BSBW    VERB
         BLBS    R0, EXIT
         MOVAB   V_QUIT, R1
         BSBW    VERB
-        BLBS    R0, EXIT
+        BLBS    R0, QUIT1
         MOVAB   V_HELP, R1
         BSBW    VERB
         BLBS    R0, HELP
@@ -117,8 +151,26 @@ TYPE:   BSBW    RANGE
         BSBW    SHOW
         AOBLEQ  R3, R10, 10$
         MOVL    R3, CUR
-        BRB     NEXT
-EXIT:   MOVL    #SS$_NORMAL, R0
+        BRW     NEXT
+INSERT: BSBW    RANGE
+        BLBC    R0, ERROR
+        MOVL    R2, CUR
+        BRB     ADD1
+REPLACE:
+        BSBW    RANGE
+        BLBC    R0, ERROR
+        BSBW    REMOVE
+ADD1:   BSBW    ADD
+        BRW     NEXT
+DELETE: BSBW    RANGE
+        BLBC    R0, ERROR
+        BSBW    REMOVE
+        BRW     NEXT
+EXIT:   BSBW    SAVE
+        BLBS    R0, QUIT1
+        PRINTHEX "Unable to write the file, status ", R0
+        BRW     NEXT
+QUIT1:  MOVL    #SS$_NORMAL, R0
 QUIT:   RET
 
 ERROR:  PUSHL   R1
@@ -129,7 +181,14 @@ HELP:   PRINT   "  range       types the lines range names"
         PRINT   "  TYPE [range]"
         PRINT   "              the same, the current line if there is no range"
         PRINT   "  (RETURN)    moves to the next line and types it"
-        PRINT   "  EXIT, QUIT  ends the session"
+        PRINT   "  INSERT [range]"
+        PRINT   "              inserts lines, up to a CTRL/Z, before the range"
+        PRINT   "  DELETE [range]"
+        PRINT   "              deletes the lines"
+        PRINT   "  REPLACE [range]"
+        PRINT   "              deletes the lines, then inserts"
+        PRINT   "  EXIT        writes a new version of the file, and ends"
+        PRINT   "  QUIT        ends without writing"
         PRINT   "  HELP        lists the commands"
         PRINT   "A range is a line, or two with a colon between them: a number,"
         PRINT   ". the current line, BEGIN, END, 'text' the next line with text"
@@ -176,6 +235,94 @@ LOAD:   MOVB    @#VA$C_FOREIGN, FAB+FAB$B_FNS
         MOVL    #SS$_NORMAL, R0
 80$:    PUSHL   R0
         $CLOSE  FAB=FAB
+        MOVL    (SP)+, R0
+90$:    RSB
+
+; ADD: reads lines from the console, each after a tab, up to a CTRL/Z,
+; and inserts them before the current line, while the buffer has room.
+; The current line stays the one they went before. Uses R0-R5 and R10.
+ADD:    MOVL    CUR, R10
+10$:    CMPL    NLINES, #MAXLINES
+        BGEQU   80$
+        MOVAB   TEXT+TEXTSIZE, R0
+        SUBL2   FREE, R0
+        CMPL    R0, #LINESIZE+1
+        BLSSU   80$
+        ADDL3   #1, FREE, R0
+        $QIOW_S CHAN=CHAN, FUNC=#IO$_READPROMPT, IOSB=IOSB, P1=(R0), P2=#LINESIZE, P5=#TAB, P6=#1
+        BLBC    R0, 90$
+        CMPB    IOSB+4, #26             ; CTRL/Z
+        BEQL    90$
+        SUBL3   R10, NLINES, R0         ; LINES[R10] on up, one up
+        INCL    R0
+        MULL2   #4, R0
+        MOVAL   LINES[R10], R1
+        MOVC3   R0, (R1), 4(R1)
+        MOVL    FREE, LINES[R10]
+        MOVZWL  IOSB+2, R0
+        MOVB    R0, @FREE
+        INCL    R0
+        ADDL2   R0, FREE
+        INCL    NLINES
+        INCL    R10
+        BRB     10$
+80$:    PRINT   "The buffer is full"
+90$:    MOVL    R10, CUR
+        RSB
+
+; REMOVE: R2 = a line, R3 = a line after it, 1 to NLINES+1. Deletes them,
+; but [EOB], and the current line is then the one after. Uses R0-R5.
+REMOVE: MOVL    R2, CUR
+        CMPL    R3, NLINES
+        BLEQU   10$
+        MOVL    NLINES, R3
+10$:    SUBL3   R2, R3, R4              ; the lines, less one
+        BLSS    90$
+        SUBL3   R3, NLINES, R0          ; those after them, down
+        MULL2   #4, R0
+        SUBL2   R4, NLINES
+        DECL    NLINES
+        MOVAL   LINES+4[R3], R1
+        MOVAL   LINES[R2], R3
+        MOVC3   R0, (R1), (R3)
+90$:    RSB
+
+; SAVE: creates a new version of the file, the version LOAD opened or
+; else the one the command line names, and writes the buffer to it, a
+; record a line. Types its name. R0 = RMS$_NORMAL or RMS's error. Uses
+; R0-R5 and R10.
+SAVE:   MOVZBL  NAM+NAM$B_RSL, R0
+        BEQL    10$
+        MOVAB   RES, OUTFAB+FAB$L_FNA   ; its name, without the version
+        SUBL3   #RES, NAM+NAM$L_VER, R0
+        MOVB    R0, OUTFAB+FAB$B_FNS
+        BRB     20$
+10$:    MOVB    @#VA$C_FOREIGN, OUTFAB+FAB$B_FNS
+20$:    MOVB    #FAB$C_VAR, OUTFAB+FAB$B_RFM
+        MOVB    #FAB$M_CR, OUTFAB+FAB$B_RAT
+        MOVAB   NAM, OUTFAB+FAB$L_NAM   ; its new name, in RES
+        $CREATE FAB=OUTFAB
+        BLBC    R0, 90$
+        $CONNECT RAB=OUTRAB
+        BLBC    R0, 80$
+        MOVL    #1, R10
+30$:    CMPL    R10, NLINES
+        BGTRU   70$
+        MOVL    LINES[R10], R0
+        MOVZBW  (R0)+, OUTRAB+RAB$W_RSZ
+        MOVL    R0, OUTRAB+RAB$L_RBF
+        $PUT    RAB=OUTRAB
+        BLBC    R0, 80$
+        INCL    R10
+        BRB     30$
+70$:    MOVZBL  NAM+NAM$B_RSL, R0
+        MOVB    R0, OUT
+        MOVC3   R0, RES, OUT+1
+        PUSHAB  OUT
+        CALLS   #1, G^PUT_LINE
+        MOVL    #RMS$_NORMAL, R0
+80$:    PUSHL   R0
+        $CLOSE  FAB=OUTFAB
         MOVL    (SP)+, R0
 90$:    RSB
 
