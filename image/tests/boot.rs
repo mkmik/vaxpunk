@@ -1,7 +1,8 @@
 //! cargo test -p boot: boots without a terminal, types commands at the
 //! console's DCL prompt once the executive has started, and waits until the
 //! processes have printed their last lines (roottask/sysexe/), DIRECTORY,
-//! TYPE and EDIT theirs from the system disk, EDIT's EXIT that can't write
+//! TYPE and EDIT theirs from the system disk, DCLTEST.COM's and DCL's
+//! with symbols, those SYLOGIN.COM defined too, EDIT's EXIT that can't write
 //! there, and DIRECTORY its own from the ramdisk, MDA0:, made the default
 //! device, around a COPY to it from SYS$SYSDEVICE:, a logical name, an EDIT
 //! in line mode and keypad mode that writes a second version and DELETEs,
@@ -78,7 +79,15 @@ const LINES: &[&str] = &[
     "00010001 SWAPPER",
     "SYSTEM          CUR     4 SHOW.EXE",
     "CONTINUE    goes back to the image CTRL/Y stopped",
+    "DCLTEST: ok, 3 and 4",
+    "%RMS-E-FNF, file not found",
+    "  $STATUS == 268534418   Hex = 10018292  Octal = 02000301222",
+    "X is 42",
+    "  HOME == \"SET DEFAULT SYS$MANAGER:\"",
 ];
+
+/// What it must not: the lines of DCLTEST.COM's a failure skips or reaches.
+const ABSENT: &[&str] = &["DCLTEST: not here", "DCLTEST: failed"];
 
 /// Once the ramdisk is done: when a line has come so many times, type.
 const STEPS: &[(&str, usize, &str)] = &[
@@ -117,6 +126,8 @@ fn boot() {
         let text = log();
         if typed == 0 && text.contains("%EXEC-I-START") {
             type_("RUN STARTUP\rRUN SNOOP\rFOO\rDIR [SYSEXE]P%NG\rTYPE WELCOME.TXT\r");
+            type_("@DCLTEST 3 \"Two words\"\r@DCLTEST FAIL\rSHOW SYMBOL $STATUS\r");
+            type_("X = 6 * 7\rWRITE SYS$OUTPUT \"X is \", X\rSHOW SYMBOL HOME\rHOME\r");
             type_("EDIT WELCOME.TXT\r\"index\"\r\"zzz\"\rEXIT\rQUIT\r");
             typed = 1;
         } else if typed == 5 && step < STEPS.len() {
@@ -184,6 +195,8 @@ fn boot() {
     }
     let missing: Vec<_> = LINES.iter().filter(|l| !text.contains(*l)).collect();
     assert!(missing.is_empty(), "no {missing:?}");
+    let present: Vec<_> = ABSENT.iter().filter(|l| text.contains(*l)).collect();
+    assert!(present.is_empty(), "{present:?}");
     assert!(
         !text.contains("SPIN: a register changed"),
         "SPIN's registers changed"

@@ -257,6 +257,10 @@ process, `SYSTEM`, with `DCL.EXE`:
 | `CONTINUE` | `$CONTINUE` |
 | `HELP` | lists the commands |
 | `LOGOUT` | returns, which deletes the process |
+| `@file [p1 ... p8]` | reads `file.COM` with RMS and takes its `$` lines as commands |
+| `name = expression`, `name := string` | sets a symbol, `==` and `:==` a global one |
+| `IF`, `GOTO`, `EXIT`, `WRITE SYS$OUTPUT` | as in VMS's procedures |
+| `SHOW SYMBOL name`, `DELETE/SYMBOL name` | shows a symbol, deletes a local one |
 
 Verbs may be abbreviated, the first that matches winning. A command
 with fewer parameters than it needs is `%DCL-W-INSFPRM`. DCL reads a line
@@ -268,8 +272,7 @@ services' statuses, or as VMS does one it has no text for,
 `%DCL-W-ACTIMAGE` if `$IMGACT` returned it, unless the status has
 `STS$M_INHIB_MSG`, bit 28, set: the image reported it. ponytail:
 message texts in DCL rather than message files and `$GETMSG`; no
-symbols, qualifiers, quoted strings or command procedures,
-and no `STOP`: another command that runs an image ends the one CTRL/Y
+qualifiers, and no `STOP`: another command that runs an image ends the one CTRL/Y
 stopped.
 
 ## Scheduling

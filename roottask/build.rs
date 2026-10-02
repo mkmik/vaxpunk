@@ -161,7 +161,7 @@ fn disk(path: &Path, images: &[(String, Vec<u8>)]) {
         let size = Some(data.len() as u64);
         ok(vol.copy_in(&mut &data[..], &spec, Conversion::Binary, size, Some(image)));
     }
-    for source in sources("sysmgr", &["txt"]) {
+    for source in sources("sysmgr", &["txt", "com"]) {
         let name = source.file_name().unwrap().to_str().unwrap().to_uppercase();
         let text = fs::read(&source).unwrap();
         let spec = format!("[SYSMGR]{name}");
