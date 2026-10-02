@@ -2,7 +2,7 @@
         .IDENT  /V0.1/
 ;
 ; What VMS's XQP does when files are written, on F11$GL_VCB's volume
-; (f11.mar), which must be on a disk that can be written, the ramdisk:
+; (f11.mar), which must be on a disk that can be written, DKB0: or MDA0::
 ; a new file gets a header from the index file bitmap, blocks from the
 ; storage bitmap (ods/docs/bitmap.md), with a map pointer for each run of
 ; them, and an entry in a directory (ods/docs/directory.md); deleting it
@@ -31,6 +31,7 @@ BITS = BLOCK*8                          ; in a bitmap block
 MFD = 4
 MAXVER = 32767
 MAXRUN = 16384                          ; blocks a format 2 pointer maps
+DK$C_BLOCKS = BITS                      ; DKB0:'s volume: what one bitmap block maps
 ; A file header (ods/docs/file-header.md).
 FH2$B_IDOFFSET = 0
 FH2$B_MPOFFSET = 1
@@ -91,6 +92,8 @@ DU_DONE:                                ; 1 once the name's record is written
 DU_OUT: .LONG   0, 0                    ; the directory being made: pool, its size
 DU_POS: .LONG   0                       ; the next byte of it
 LABEL:  .BLKB   12                      ; FIL$INIT's label, padded with blanks
+VOLSIZE:                                ; and the volume's size in blocks
+        .LONG   0
 ; The reserved files: name, record type and attributes, record size,
 ; characteristics, first LBN and blocks.
 RESFILES:
@@ -797,14 +800,16 @@ ENDBLK: BICL3   #^C<BLOCK-1>, DU_POS, R0
         BICL2   #BLOCK-1, DU_POS
 20$:    RSB
 
-; FIL$INIT: R1 = a label, R2 = its length, 1 to 12. Writes an empty
-; Files-11 ODS-2 volume on F11$GL_VCB's disk, the ramdisk, which
-; MD$CREATE has just made, zeroed: the home block, the bitmaps, and the
-; reserved files' headers, as INITIALIZE does, and the reserved files in
-; the MFD. R0 = SS$_NORMAL, or the disk's error. IPL$_SYNCH. Uses R0-R11.
+; FIL$INIT: R1 = a label, R2 = its length, 1 to 12, R3 = the volume's
+; size in blocks, up to 4096. Writes an empty Files-11 ODS-2 volume on
+; F11$GL_VCB's disk: the home block, the bitmaps, and the reserved files'
+; headers, as INITIALIZE does, and the reserved files in the MFD. The
+; blocks past the bitmaps are free, whatever they hold. R0 = SS$_NORMAL,
+; or the disk's error. IPL$_SYNCH. Uses R0-R11.
 ; ponytail: no backup home block or index file header: the home block's
 ; backup LBNs are the primary ones.
 FIL$INIT::
+        MOVL    R3, VOLSIZE
         PUSHR   #^M<R1, R2>
         MOVC5   #0, (R1), #^A/ /, #12, LABEL
         POPR    #^M<R1, R2>
@@ -824,7 +829,7 @@ FIL$INIT::
 5$:     MOVC5   #0, BITBLK, #0, #BLOCK, BITBLK
         MOVL    #MFDLBN+1, R2
 10$:    BBSS    R2, BITBLK, 15$
-15$:    AOBLSS  MD$GL_BLOCKS, R2, 10$
+15$:    AOBLSS  VOLSIZE, R2, 10$
         MOVL    #3, R0
         BSBW    BITMAP
         BLBS    R0, 20$
@@ -834,11 +839,11 @@ FIL$INIT::
         MOVAB   BITBLK, R1
         MOVW    #^X0201, (R1)           ; structure level
         MOVW    #1, 2(R1)               ; cluster
-        MOVL    MD$GL_BLOCKS, 4(R1)     ; volume size
+        MOVL    VOLSIZE, 4(R1)     ; volume size
         MOVL    #1, 8(R1)               ; block size
         MOVL    #1, 12(R1)              ; sectors
         MOVL    #1, 16(R1)              ; tracks
-        MOVL    MD$GL_BLOCKS, 20(R1)    ; cylinders
+        MOVL    VOLSIZE, 20(R1)    ; cylinders
         MOVL    #255, R2
         BSBW    CHECKSUM
         MOVW    R0, BLOCK-2(R1)
@@ -960,11 +965,12 @@ RESHDR: MOVL    R10, R6
 
 ; $INIT_VOL devnam, volnam, itmlst: writes an empty Files-11 ODS-2
 ; volume labelled volnam, up to 12 characters, on the disk devnam names,
-; which must be MDA0:, the ramdisk, and not mounted. The ramdisk is made
-; afresh first, zeroed. SS$_WRITLCK for DKA0:, SS$_DEVMOUNT if a volume
-; is mounted there, SS$_BADPARAM for a label too long or empty,
-; SS$_INSFMEM if there isn't the memory for the ramdisk.
-; ponytail: no items; any process may.
+; DKB0:, the data disk, or MDA0:, the ramdisk, which is made afresh
+; first, zeroed. The disk mustn't be mounted. SS$_WRITLCK for DKA0:,
+; SS$_DEVMOUNT if a volume is mounted there, SS$_BADPARAM for a label too
+; long or empty, SS$_INSFMEM if there isn't the memory for the ramdisk.
+; ponytail: no items; any process may. DKB0:'s volume is 4096 blocks
+; whatever the disk's size, which one bitmap block maps.
         .ENTRY  EXE$INIT_VOL, ^M<R2, R3, R4, R5, R6, R7, R8, R9, R10, R11>
         MOVL    4(AP), R6               ; devnam
         IFNORD  #8, (R6), 85$
@@ -990,10 +996,13 @@ RESHDR: MOVL    R10, R6
         MOVL    #SS$_DEVMOUNT, R0
         BBS     #VCB$V_MOUNTED, VCB$L_STATUS(R1), 80$
         MOVL    #SS$_WRITLCK, R0
-        BBC     #VCB$V_RAMDISK, VCB$L_STATUS(R1), 80$
+        BBC     #VCB$V_WRITE, VCB$L_STATUS(R1), 80$
+        MOVL    #DK$C_BLOCKS, R3
+        BBC     #VCB$V_RAMDISK, VCB$L_STATUS(R1), 50$
         BSBW    MD$CREATE
         BLBC    R0, 80$
-        MOVL    R8, R1
+        MOVL    MD$GL_BLOCKS, R3
+50$:    MOVL    R8, R1
         MOVL    R9, R2
         BSBW    FIL$INIT
 80$:    ENBINT

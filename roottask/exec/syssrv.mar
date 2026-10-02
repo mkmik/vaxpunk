@@ -153,6 +153,10 @@ CODE = 0
 ; Volumes
         SERVICE MOUNT, 1
         SERVICE INIT_VOL, 2
+; Devices
+        SERVICE GETDVI, 8
+        SERVICE GETDVIW, 8
+        SERVICE DEVICE_SCAN, 5
 
 ; EXE$CMODKRNL: the CHMK handler. R0 = the service's code, AP = its
 ; argument list, the PAL's frame on the kernel stack. A CTRL/Y that came

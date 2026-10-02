@@ -4,7 +4,7 @@
 #   --gdb    wait for a debugger on localhost:1234 (-s -S)
 #   --hvf    use Hypervisor.framework instead of TCG (best effort, macOS only)
 #   --uart1  serve the second UART on telnet localhost:PORT (default 4444)
-# EDK2_FW overrides the firmware image.
+# EDK2_FW overrides the firmware image, DATADISK the data disk's.
 set -eu
 
 root=$(cd "$(dirname "$0")/.." && pwd)
@@ -48,13 +48,21 @@ fi
 # it, and the root task gets its page in the device untyped at 0x9000000.
 # The system disk, out/sysdisk.img, is a read-only virtio-blk on virt's
 # virtio-mmio transports, which the root task drives itself: modern virtio
-# (force-legacy=false), as it expects. The ESP stays on PCI, for EDK2.
+# (force-legacy=false), as it expects. The data disk, DKB0:, is another,
+# out/datadisk.img, which may be written: 2 MB of zeros the first time,
+# until INITIALIZE DKB0: writes a volume on it, then kept from boot to
+# boot. They are unit 0 and 1 in the order of their -device options. The
+# ESP stays on PCI, for EDK2.
 # Semihosting, from EL0 too, is how the root task powers QEMU off on a halt.
+datadisk=${DATADISK:-$root/out/datadisk.img}
+[ -f "$datadisk" ] || dd if=/dev/zero of="$datadisk" bs=512 count=4096 2>/dev/null
 qemu-system-aarch64 -machine "virt,secure=off,gic-version=$QEMU_GIC,acpi=off" $cpu \
 	-smp 1 -m "$QEMU_MEM" -display none -nic none -bios "$EDK2_FW" \
 	-boot menu=on,splash-time=0 -drive "if=virtio,format=raw,file=$root/out/esp.img" \
 	-drive "if=none,id=sysdisk,format=raw,readonly=on,file=$root/out/sysdisk.img" \
-	-device virtio-blk-device,drive=sysdisk -global virtio-mmio.force-legacy=false \
+	-device virtio-blk-device,drive=sysdisk \
+	-drive "if=none,id=datadisk,format=raw,file=$datadisk" \
+	-device virtio-blk-device,drive=datadisk -global virtio-mmio.force-legacy=false \
 	-chardev "stdio,id=con,mux=on,signal=off,logfile=$root/out/serial.log" \
 	-serial chardev:con -serial "$uart1" -monitor chardev:con \
 	-semihosting-config enable=on,target=native,userspace=on $gdb | "$root/scripts/serial-filter.py"

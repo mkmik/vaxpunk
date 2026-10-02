@@ -3,8 +3,8 @@
 ;
 ; DCL's INITIALIZE device label runs this, with the two as its command
 ; line: $INIT_VOL writes an empty ODS-2 volume with that label, up to 12
-; characters, on the device, which must be MDA0:, the ramdisk, and not
-; mounted; MOUNT then mounts it. Returns $INIT_VOL's status.
+; characters, on the device, which must be DKB0:, the data disk, or MDA0:,
+; the ramdisk, and not mounted; MOUNT then mounts it. Returns $INIT_VOL's status.
 ; ponytail: no qualifiers.
 ;
         .LIBRARY "starlet.mlb"

@@ -75,6 +75,37 @@ EXIT:   .ASCIZ  "*EXIT*"<13><10>
         MOVZWL  (R1), R2
         MOVL    4(R1), R3
         DSBINT  #IPL$_SYNCH             ; the names it translates to stay
+        BSBW    IOC$TRNDEVNAM
+        MOVL    #SS$_NOSUCHDEV, R0
+        CMPL    R2, #4
+        BEQL    10$
+        CMPL    R2, #5
+        BNEQ    80$
+        CMPB    4(R3), #^A/:/
+        BNEQ    80$
+10$:    CMPL    (R3), CONSOLE
+        BNEQ    80$
+        MOVL    SCH$GL_CURPCB, R4
+        MOVL    #1, R1
+20$:    BBCS    R1, PCB$L_CHANS(R4), 30$
+        AOBLEQ  #MAXCHAN, R1, 20$
+        MOVL    #SS$_NOIOCHAN, R0
+        BRB     80$
+30$:    MOVW    R1, @8(AP)
+        MOVL    #SS$_NORMAL, R0
+80$:    ENBINT
+        RET
+85$:    MOVL    #SS$_ACCVIO, R0
+90$:    RET
+
+; IOC$TRNDEVNAM: R2 = a device name's length, R3 = its address.
+; Translates it as $ASSIGN does: as a logical name, without its colon, in
+; LNM$FILE_DEV, and what it translates to, up to LNM$C_MAXDEPTH times,
+; until a name starts with an underscore, which is dropped, or doesn't
+; translate. R2 and R3 = the name it ends with, in the logical name's
+; block if it is an equivalence. IPL$_SYNCH, which keeps that. Uses R0,
+; R1, R5-R7.
+IOC$TRNDEVNAM::
         MOVL    #LNM$C_MAXDEPTH, R5
 2$:     TSTL    R2
         BEQL    8$
@@ -98,27 +129,7 @@ EXIT:   .ASCIZ  "*EXIT*"<13><10>
         MOVAB   LNMB$T_NAME+1(R1)[R0], R3
         MOVZBL  (R3)+, R2
         SOBGTR  R5, 2$
-8$:     MOVL    #SS$_NOSUCHDEV, R0
-        CMPL    R2, #4
-        BEQL    10$
-        CMPL    R2, #5
-        BNEQ    80$
-        CMPB    4(R3), #^A/:/
-        BNEQ    80$
-10$:    CMPL    (R3), CONSOLE
-        BNEQ    80$
-        MOVL    SCH$GL_CURPCB, R4
-        MOVL    #1, R1
-20$:    BBCS    R1, PCB$L_CHANS(R4), 30$
-        AOBLEQ  #MAXCHAN, R1, 20$
-        MOVL    #SS$_NOIOCHAN, R0
-        BRB     80$
-30$:    MOVW    R1, @8(AP)
-        MOVL    #SS$_NORMAL, R0
-80$:    ENBINT
-        RET
-85$:    MOVL    #SS$_ACCVIO, R0
-90$:    RET
+8$:     RSB
 
 ; $DASSGN chan: deassigns a channel.
         .ENTRY  EXE$DASSGN, ^M<R4>

@@ -37,7 +37,7 @@ in its interface.
 ## What the PAL sets up
 
 The root task (`roottask/src/main.c`) reads `[SYSEXE]EXEC.EXE` from the
-system disk (*The system disk*) and starts it, in S0, the system space
+system disk (*The disks*) and starts it, in S0, the system space
 every process shares (*Memory*):
 
 | Address | What | Protection |
@@ -73,28 +73,32 @@ from 0 up for these. Nothing else is mapped. The boot context starts with:
 | 12 | `RPB$L_BOOTTIME` | seconds since 1970 at boot, from QEMU virt's PL031 RTC, which the PAL maps after the UART and reads once |
 | 64 | `RPB$Q_HWPCB` | the boot context's HWPCB, 128 bytes |
 
-### The system disk
+### The disks
 
-`sysdisk.img`, a Files-11 ODS-2 volume labelled `VAXPUNK`, which
-`roottask/build.rs` writes with `ods-image`: the images in `[SYSEXE]`,
-SYSTEM's files in `[SYSMGR]`. QEMU attaches it read only as a virtio-blk
-device on one of QEMU virt's 32 virtio-mmio transports, from `0x0a000000`,
-in modern (virtio 1) mode: `scripts/run-qemu.sh` sets
-`virtio-mmio.force-legacy=false`.
+Unit 0, the system disk, is `sysdisk.img`, a Files-11 ODS-2 volume
+labelled `VAXPUNK`, which `roottask/build.rs` writes with `ods-image`:
+the images in `[SYSEXE]`, SYSTEM's files in `[SYSMGR]`. QEMU attaches it
+read only as a virtio-blk device on one of QEMU virt's 32 virtio-mmio
+transports, from `0x0a000000`, in modern (virtio 1) mode:
+`scripts/run-qemu.sh` sets `virtio-mmio.force-legacy=false`. Unit 1, the
+data disk, is `datadisk.img`, another, read-write, which the script makes,
+4,096 blocks of zeros, if it isn't there ([ADR-0012](../adr/0012-data-disk-writable-files-11.md)).
+QEMU gives the first `-device` the highest transport, so the PAL numbers
+the block devices from there down.
 
 The PAL maps the transports from their device untyped, finds the block
-device among them and sets up one queue of four descriptors. Its queue, a
-request's header and status share one page of the PAL's, and the data
-goes through another, eight blocks at a time; seL4 tells the PAL their
-physical addresses. It reads a request at a time and polls the used ring
-until the device is done. ponytail: polled and synchronous; the device's
+devices among them and sets up one queue of four descriptors for each.
+A disk's queue, a request's header and status share one page of the
+PAL's, and the data of both goes through another, eight blocks at a time;
+seL4 tells the PAL their physical addresses. It does a request at a time
+and polls the used ring until the device is done. ponytail: polled and synchronous; the device's
 interrupt, through seL4's IRQ handler, when I/O is asynchronous.
 
 To boot, the PAL reads Files-11 as VMS's VMB did, enough to find the
 executive: the home block at LBN 1, the index file's header from it, the
 MFD's (file 4), `SYSEXE.DIR` in the MFD, `EXEC.EXE` in that, then the
 file, through the map in its header, up to its end of file. The executive
-reads the disk with `READLBLK` (*Function codes*).
+reads and writes the disks with `READLBLK` and `WRITELBLK` (*Function codes*).
 
 ## Calling the PAL
 
@@ -391,7 +395,7 @@ and gets:
 | `CALL_PAL #code` | any call: a0-a5 in R0-R5, v0 in R0, as on Alpha |
 
 `CALL_PAL` reaches the calls the VAX has no instruction for: `SWPCTX`,
-`WTINT`, `WRPTE`, `DELCTX`, `READLBLK`. `$PALDEF` in `lib.mlb` names their
+`WTINT`, `WRPTE`, `DELCTX`, `READLBLK`, `WRITELBLK`. `$PALDEF` in `lib.mlb` names their
 codes.
 
 ## Function codes
@@ -421,7 +425,8 @@ unused.
 | 0x43 | `MTPR_RXCS` | vaxpunk | a0 = RXCS | | sets IE, bit 6: interrupt when a character waits |
 | 0x44 | `MFPR_RXCS` | vaxpunk | | v0 = RXCS | DONE, bit 7, if a character waits, and IE |
 | 0x45 | `MFPR_RXDB` | vaxpunk | | v0 = character | takes the character that waits, or 0 if none does |
-| 0x46 | `READLBLK` | vaxpunk | a0 = buffer, a1 = byte count, a2 = LBN | v0 = status | reads the system disk's blocks from the LBN into the buffer, which kernel mode must be able to write |
+| 0x46 | `READLBLK` | vaxpunk | a0 = buffer, a1 = byte count, a2 = LBN, a3 = unit | v0 = status | reads a disk's blocks from the LBN into the buffer, which kernel mode must be able to write |
+| 0x47 | `WRITELBLK` | vaxpunk | a0 = buffer, a1 = byte count, a2 = LBN, a3 = unit | v0 = status | writes the buffer, which kernel mode must be able to read, to a disk's blocks from the LBN |
 | 0x82 | `CHME` | Alpha | a0 = code | | delivers through the SCB, to executive mode |
 | 0x83 | `CHMK` | Alpha | a0 = code | | delivers through the SCB, to kernel mode |
 | 0x84 | `CHMS` | Alpha | a0 = code | | delivers through the SCB, to supervisor mode |
@@ -440,12 +445,16 @@ and drives itself, so the console needs no debug seL4. `MTPR_RXCS`,
 reading the UART (*Interrupts and exceptions*). ponytail: QEMU virt's UART
 address, polled; from the DTB, with interrupts, later.
 
-`READLBLK` reads the system disk the way Alpha's console `READ` callback
-read the boot disk for VMS's bootstrap, with `IO$_READLBLK`'s P1-P3 as its
-arguments. It reads whole blocks and writes the first a1 bytes of them,
-at most 65,535. Its status is `SS$_NORMAL`, `SS$_ACCVIO` if a page of the
-buffer isn't one kernel mode may write, `SS$_ILLBLKNUM` past the disk's
-end, `SS$_NOSUCHDEV` with no disk and `SS$_DRVERR` if the device fails.
+`READLBLK` reads a disk the way Alpha's console `READ` callback read the
+boot disk for VMS's bootstrap, with `IO$_READLBLK`'s P1-P3 as its
+arguments and the disk's unit, 0 for the system disk, 1 for the data disk
+(*The disks*). It reads whole blocks and writes the first a1 bytes of
+them, at most 65,535. `WRITELBLK` writes a1 bytes the same way, as
+console `WRITE` did, a last block in part padded with zeros. Their status
+is `SS$_NORMAL`, `SS$_ACCVIO` if a page of the buffer isn't one kernel
+mode may write (read), `SS$_ILLBLKNUM` past the disk's end,
+`SS$_NOSUCHDEV` with no such disk and `SS$_DRVERR` if the device fails,
+as it does for a write to the system disk, which QEMU attaches read only.
 The executive waits in it until the device is done.
 
 ### The Alpha calls

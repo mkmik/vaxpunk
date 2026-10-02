@@ -2,8 +2,9 @@
         .IDENT  /V0.2/
 ;
 ; Each disk has a VCB: DKA0:, the system disk, a Files-11 ODS-2 volume
-; (ods/docs/) that the PAL reads a block at a time with READLBLK, and
-; MDA0:, the ramdisk (mddriver.mar), which the file system can write.
+; (ods/docs/) that the PAL reads a block at a time with READLBLK; DKB0:,
+; the data disk, which the PAL also writes, with WRITELBLK; and MDA0:,
+; the ramdisk (mddriver.mar). The file system can write the last two.
 ; FIL$MOUNT mounts a volume: it reads the home block and keeps the index
 ; file's header, through which every other file's header is found. The
 ; rest reads what VMS's XQP reads: a file's header by its number, its
@@ -12,7 +13,7 @@
 ; call them at IPL$_SYNCH, which keeps their buffers, and F11$GL_VCB, the
 ; volume they work on, to one caller at a time.
 ; ponytail: no extension headers, so a file's map is what its one header
-; holds; DKA0:'s reads wait for the device, at IPL$_SYNCH.
+; holds; DKA0:'s and DKB0:'s I/O waits for the device, at IPL$_SYNCH.
 ;
         .LIBRARY "lib.mlb"
         .LIBRARY "starlet.mlb"
@@ -31,6 +32,7 @@ MAXREAD = 127                           ; blocks a READLBLK reads, below 64 KB
 MFD = 4                                 ; the MFD's file number
 BITMAP = 2                              ; BITMAP.SYS's
 ; The home block.
+HM2$W_CLUSTER = 14
 HM2$W_IBMAPVBN = 22
 HM2$L_IBMAPLBN = 24
 HM2$W_IBMAPSIZE = 32
@@ -62,11 +64,16 @@ F11$AB_DKA0::                           ; DKA0:'s VCB, the system disk's
         .LONG   0, 0, 0, 0              ; STATUS, HDRVBN, IBMAPLBN, SBMAPLBN
         .ASCII  "DKA0:"
         .BLKB   VCB$K_LENGTH-VCB$T_DEVNAM-5
+F11$AB_DKB0::                           ; DKB0:'s, the data disk's
+        .LONG   1@VCB$V_WRITE, 0, 0, 0
+        .ASCII  "DKB0:"
+        .BYTE   1                       ; VCB$B_UNIT
+        .BLKB   VCB$K_LENGTH-VCB$T_DEVNAM-6
 F11$AB_MDA0::                           ; MDA0:'s, the ramdisk's
         .LONG   <1@VCB$V_WRITE>!<1@VCB$V_RAMDISK>, 0, 0, 0
         .ASCII  "MDA0:"
         .BLKB   VCB$K_LENGTH-VCB$T_DEVNAM-5
-VCBEND:
+F11$A_VCBEND::                          ; past the last VCB
 F11$AB_DIRBLK::                         ; the directory block FIL$SEARCHDIR reads
         .BLKB   BLOCK
 F11$AB_FILHDR::                         ; the header FIL$OPENFILE reads
@@ -103,12 +110,17 @@ FIL$WRITELBLK::
 LBLK:   MULL2   #BLOCK, R1
         PUSHL   R4
         MOVL    F11$GL_VCB, R4
-        BBS     #VCB$V_RAMDISK, VCB$L_STATUS(R4), 20$
-        BLBS    R3, 30$
-        MOVL    (SP)+, R4
-        MOVL    (SP)+, R3
+        BLBC    R3, 10$
+        BBC     #VCB$V_WRITE, VCB$L_STATUS(R4), 30$
+10$:    BBS     #VCB$V_RAMDISK, VCB$L_STATUS(R4), 20$
+        MOVZBL  VCB$B_UNIT(R4), R4
+        BLBS    R3, 15$
+        MOVL    R4, R3
         CALL_PAL #PAL$_READLBLK
-        RSB
+        BRB     40$
+15$:    MOVL    R4, R3
+        CALL_PAL #PAL$_WRITELBLK
+        BRB     40$
 20$:    BSBW    MD$IO
         BRB     40$
 30$:    MOVL    #SS$_WRITLCK, R0
@@ -116,7 +128,7 @@ LBLK:   MULL2   #BLOCK, R1
         MOVL    (SP)+, R3
         RSB
 
-; FIL$SELECT: R1 = a device name, R2 = its length: DKA0 or MDA0, with a
+; FIL$SELECT: R1 = a device name, R2 = its length: DKA0, DKB0 or MDA0, with a
 ; colon after it or not, an underscore before it or not. Makes its VCB
 ; F11$GL_VCB. R0 = SS$_NORMAL, or SS$_NOSUCHDEV and F11$GL_VCB as it was.
 ; Uses R1-R3.
@@ -138,7 +150,7 @@ FIL$SELECT::
 20$:    CMPL    (R1), VCB$T_DEVNAM(R3)
         BEQL    30$
         ADDL2   #VCB$K_LENGTH, R3
-        MOVAB   VCBEND, R0
+        MOVAB   F11$A_VCBEND, R0
         CMPL    R3, R0
         BLSSU   20$
 80$:    MOVL    #SS$_NOSUCHDEV, R0
@@ -182,6 +194,7 @@ FIL$MOUNT::
         BNEQ    85$
         SOBGTR  R0, 22$
 25$:    MOVAB   VCB$AB_INDEXF(R5), R3
+        MOVW    HM2$W_CLUSTER(R3), VCB$W_CLUSTER(R5)
         MOVZWL  HM2$W_IBMAPVBN(R3), R0
         MOVZWL  HM2$W_IBMAPSIZE(R3), R1
         ADDL3   R0, R1, VCB$L_HDRVBN(R5)
@@ -225,7 +238,7 @@ FIL$MOUNT::
 90$:    RSB
 
 ; $MOUNT itmlst: mounts the Files-11 volume on the disk the item list's
-; MNT$_DEVNAM names, MDA0: or DKA0:, if its label is MNT$_VOLNAM's.
+; MNT$_DEVNAM names, DKA0:, DKB0: or MDA0:, if its label is MNT$_VOLNAM's.
 ; SS$_DEVMOUNT if one is mounted there already.
 ; ponytail: no other items, flags or logical name; any process may.
         .ENTRY  EXE$MOUNT, ^M<R2, R3, R4, R5, R6, R7, R8>
@@ -274,6 +287,47 @@ FIL$MOUNT::
         RET
 88$:    MOVL    #SS$_INCVOLLABEL, R0
 90$:    RET
+
+; FIL$FREEBLOCKS: R0 = the free blocks on F11$GL_VCB's volume, which
+; must be mounted: a cluster for each set bit of BITMAP.SYS's storage
+; bitmap, the blocks past its SCB. R1 = SS$_NORMAL, or the disk's error
+; and R0 = 0. IPL$_SYNCH. Uses R0-R1.
+; ponytail: counted each time, a bit at a time; VMS keeps the count in
+; the VCB, up to date as files grow and shrink.
+FIL$FREEBLOCKS::
+        PUSHR   #^M<R2, R3, R4, R5, R6, R7>
+        MOVL    #BITMAP, R0
+        MOVAB   F11$AB_FILHDR, R1
+        BSBW    FIL$READHDR
+        BLBC    R0, 90$
+        BSBW    FIL$EOF
+        ADDL2   #BLOCK-1, R0
+        DIVL3   #BLOCK, R0, R7          ; its blocks, the SCB's and the bitmap's
+        CLRL    R6                      ; the set bits
+        MOVL    #2, R5                  ; the bitmap's VBN
+10$:    CMPL    R5, R7
+        BGTRU   50$
+        MOVL    R5, R0
+        MOVL    #1, R1
+        MOVAB   F11$AB_DIRBLK, R2
+        MOVAB   F11$AB_FILHDR, R3
+        BSBW    FIL$READVBN
+        BLBC    R0, 90$
+        CLRL    R4
+20$:    BBC     R4, F11$AB_DIRBLK, 30$
+        INCL    R6
+30$:    AOBLSS  #BLOCK*8, R4, 20$
+        INCL    R5
+        BRB     10$
+50$:    MOVL    F11$GL_VCB, R0
+        MOVZWL  VCB$W_CLUSTER(R0), R0
+        MULL2   R6, R0
+        MOVL    #SS$_NORMAL, R1
+        BRB     95$
+90$:    MOVL    R0, R1
+        CLRL    R0
+95$:    POPR    #^M<R2, R3, R4, R5, R6, R7>
+        RSB
 
 ; FIL$MAPVBN: R0 = a VBN, R1 = a file header. R0 = the LBN the header's
 ; map gives it, R1 = the blocks from there to its extent's end; both 0 if
@@ -463,7 +517,7 @@ FIL$SEARCHDIR::
         BEQL    60$
         MOVAB   6(R11), R1
         MOVZBL  5(R11), R2
-        BSBW    MATCH
+        BSBW    FIL$MATCH
         BLBC    R0, 50$
         ADDL3   #1, R2, R4              ; the first entry, past the even name
         BICL2   #1, R4
@@ -506,10 +560,11 @@ FIL$SEARCHDIR::
 95$:    POPR    #^M<R3, R6, R7, R8, R9, R10, R11>
         RSB
 
-; MATCH: R1 = a name, R2 = its length, R6 = a pattern, R7 = its length.
-; R0 = 1 if the name matches it, else 0: * matches any characters, % any
-; one.
-MATCH:  PUSHR   #^M<R3, R4, R5, R8>
+; FIL$MATCH: R1 = a name, R2 = its length, R6 = a pattern, R7 = its
+; length. R0 = 1 if the name matches it, else 0: * matches any
+; characters, % any one. Keeps every other register.
+FIL$MATCH::
+        PUSHR   #^M<R3, R4, R5, R8>
         CLRL    R3                      ; in the name
         CLRL    R4                      ; in the pattern
         MNEGL   #1, R5                  ; past the last *, to try again from

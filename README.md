@@ -65,7 +65,8 @@ boot info: node 0 of 1, 53 untyped caps
 ...
 sched control caps: 278-278
 scheduling context: budget 5000 us per 5000 us, 12897 us used
-disk: virtio-blk, 4096 blocks
+disk 0: virtio-blk, 4096 blocks
+disk 1: virtio-blk, 4096 blocks
 EXEC.EXE: started at 0x40010b68, 23 of 1024 pages in use
 %EXEC-I-START, vaxpunk executive, free pages: 00000369
 %MOUNT-I-MOUNTED, VAXPUNK mounted on _DKA0:
@@ -76,21 +77,42 @@ The system disk, `DKA0:`, is a Files-11 ODS-2 volume, `out/sysdisk.img`,
 which the build makes with `ods` and QEMU attaches read only
 ([ADR-0007](docs/adr/0007-system-disk-files-11-and-rms.md)). The root task
 reads `EXEC.EXE` from it, and the executive mounts it and reads files with
-RMS. `ods dir out/sysdisk.img '[...]'` lists it on the host.
+RMS. `ods dir out/sysdisk.img '[...]'` lists it on the host. The data
+disk, `DKB0:`, is another, `out/datadisk.img`, which QEMU attaches
+read-write and `run-qemu.sh` makes, blank, the first time
+([ADR-0012](docs/adr/0012-data-disk-writable-files-11.md)). Once
+`INITIALIZE DKB0: label` has written a volume there, each boot mounts it,
+and what you put there stays; delete the file to start afresh. `SHOW
+DEVICES` lists the disks and what is mounted on them:
+
+```
+$ SHOW DEVICES
+
+Device                  Device           Error    Volume         Free
+ Name                   Status           Count     Label        Blocks
+DKA0:                   Mounted wrtlck       0  VAXPUNK           3560
+DKB0:                   Mounted              0  DATA              4025
+MDA0:                   Offline              0
+
+Device                  Device           Error
+ Name                   Status           Count
+OPA0:                   Online               0
+```
 
 The `$` is DCL's prompt, on the console's process, `SYSTEM`. `RUN image`
 runs an image from `SYS$SYSTEM:` (`.EXE` is the default type), `DIRECTORY`
 lists files, in the default directory unless told where (`DIR`, `DIR
 [SYSEXE]P%NG`, `DIR [000000]`, `DIR SYS$SYSTEM:`; a device may be a
 logical name), `SET DEFAULT [dev:][dir]` (or `[-]`, `[.dir]`) and
-`SHOW DEFAULT` set and show that, `DKA0:[SYSMGR]` at first, `TYPE file` writes a text file (`TYPE WELCOME.TXT`),
+`SHOW DEFAULT` set and show that, `DKA0:[SYSMGR]` at first, `SHOW DEVICES`
+lists the devices, `TYPE file` writes a text file (`TYPE WELCOME.TXT`),
 `EDIT file` edits one with EDT's line mode, and writes a new version
 on `EXIT`, on the ramdisk (`HELP` at its `*` prompt),
 `DEFINE name equivalence`, `DEASSIGN name` and `SHOW LOGICAL name` make,
 delete and translate logical names (`SHOW LOGICAL SYS$INPUT`, or `SHOW
 LOGICAL` alone to list them all), `COPY` and `DELETE` copy and delete
-files, `INITIALIZE` and `MOUNT` make and mount a volume on the ramdisk,
-`MDA0:`, the one disk they can write
+files, `INITIALIZE` and `MOUNT` make and mount a volume on the data disk,
+`DKB0:`, or the ramdisk, `MDA0:`, the disks they can write
 ([ADR-0009](docs/adr/0009-ramdisk-writable-files-11.md)), `HELP` lists
 the commands and `LOGOUT` ends the process:
 
@@ -159,7 +181,8 @@ goes on with it. `cargo test -p boot` boots the same way without a terminal,
 types `RUN STARTUP`, `RUN SNOOP`, a bad verb, `DIR [SYSEXE]P%NG`, `TYPE
 WELCOME.TXT`, an `EDIT WELCOME.TXT` session, and a logical
 name's `DEFINE`, `SHOW LOGICAL` and `DEASSIGN`, `SHOW LOGICAL` alone, and
-`SET DEFAULT` and `SHOW DEFAULT`, and a round trip through the ramdisk,
+`SET DEFAULT` and `SHOW DEFAULT`, a round trip through the ramdisk, a
+`COPY` to the data disk, made afresh, which `ods` then checks on the host,
 stops `SPIN` and `SLEEPER` with CTRL/Y and continues them, prints the
 executive's part and fails unless the processes ran to the end.
 

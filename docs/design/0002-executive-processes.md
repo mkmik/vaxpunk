@@ -19,6 +19,8 @@ process, and
 Files-11 volume, which the executive reads by LBN, with RMS on top, and
 [ADR-0009](../adr/0009-ramdisk-writable-files-11.md): a ramdisk, `MDA0:`,
 holds a Files-11 volume the executive writes, and
+[ADR-0012](../adr/0012-data-disk-writable-files-11.md): so does a second
+virtio disk, `DKB0:`, which the PAL writes, and
 [ADR-0011](../adr/0011-asts-on-the-kernel-stack.md): ASTs are delivered
 when the PAL asks, on top of the kernel stack.
 
@@ -39,6 +41,7 @@ its code.
 | `process.mar` | `$CREPRC`, process start, image activation, `$IMGACT`, `$EXIT`, image rundown, CTRL/Y and `$CONTINUE`, deletion, `$HIBER`, `$WAKE`, `$SUSPND`, `$RESUME`, `$SETPRI`, `$SETPRN`, `$CMKRNL` |
 | `lnm.mar` | logical name tables, `$CRELNM`, `$DELLNM`, `$TRNLNM` |
 | `qio.mar` | `$ASSIGN`, `$DASSGN`, `$QIO`, `$QIOW`: writes on the console and reads from it; the console receive interrupt and the type-ahead buffer |
+| `getdvi.mar` | `$GETDVI`, `$GETDVIW`, `$DEVICE_SCAN`: what the devices are |
 | `syssrv.mar` | the system service vector, the `CHMK` and `CHME` dispatchers, `$CMEXEC`, where processes enter user and supervisor mode, the exception handlers and the stubs |
 | `f11.mar` | Files-11 ODS-2 volumes: the disks' VCBs, reading and writing their blocks, `FIL$MOUNT` and `$MOUNT`, headers, maps, directories, `FIL$OPENFILE` for the image activator |
 | `f11wrt.mar` | Files-11 writes: headers, blocks, directory entries, `FIL$INIT` and `$INIT_VOL` |
@@ -71,7 +74,9 @@ blocks and `$OPEN`... calls, `$MNTDEF`).
    console receive interrupt enabled.
 6. `FIL$MOUNT` mounts the system disk (*Files*) and prints
    `%MOUNT-I-MOUNTED, VAXPUNK mounted on _DKA0:`. If it can't, the
-   executive halts with `%EXEC-F-NOMOUNT` and the status. Then
+   executive halts with `%EXEC-F-NOMOUNT` and the status. Then it mounts
+   the data disk, `DKB0:`, if it holds a volume, and goes on if it doesn't.
+   Then
    `LNM$CREATE` puts the system's logical names in `LNM$SYSTEM_TABLE`
    (*Logical names*).
 7. Lowers IPL to 0 and creates the console's process, `SYSTEM`, from
@@ -255,11 +260,15 @@ process, `SYSTEM`, with `DCL.EXE`:
 
 Verbs may be abbreviated, the first that matches winning. A command
 with fewer parameters than it needs is `%DCL-W-INSFPRM`. DCL reads a line
-from `SYS$INPUT` with `IO$_READPROMPT` and the prompt `$ `, and reports a failure status as VMS does one it has no text
-for, `%NONAME-F-NOMSG, Message number 0000000C`, after
+from `SYS$INPUT` with `IO$_READPROMPT` and the prompt `$ `, and reports a
+failure status with its message, `%RMS-E-DNF, directory not found`, VMS's
+text from a table in DCL of the file system's, RMS's and the volume
+services' statuses, or as VMS does one it has no text for,
+`%NONAME-F-NOMSG, Message number 0000000C`, after
 `%DCL-W-ACTIMAGE` if `$IMGACT` returned it, unless the status has
-`STS$M_INHIB_MSG`, bit 28, set: the image reported it. ponytail: no
-message texts, symbols, qualifiers, quoted strings or command procedures,
+`STS$M_INHIB_MSG`, bit 28, set: the image reported it. ponytail:
+message texts in DCL rather than message files and `$GETMSG`; no
+symbols, qualifiers, quoted strings or command procedures,
 and no `STOP`: another command that runs an image ends the one CTRL/Y
 stopped.
 
@@ -568,20 +577,54 @@ ponytail: a buffer at a time, at `IPL$_SYNCH`, so lines don't mix; a
 terminal driver with I/O request packets, CTRL/C, CTRL/Y ASTs and escape
 sequences replaces it.
 
+### Devices
+
+The devices are the disks, each a VCB (*Files*), and the console,
+`OPA0:`, numbered in that order: `DKA0:`, `DKB0:`, `MDA0:`, `OPA0:`.
+`getdvi.mar` answers what they are, with VMS's services, item codes and
+bits (`$DVIDEF`, `$DVSDEF`, `$DCDEF`, `$DEVDEF` in `starlet.mlb`):
+
+- **`$DEVICE_SCAN return_devnam, retlen, search_devnam, itmlst, contxt`**
+  returns the next device's name, `_DDCU:`, whose name matches
+  `search_devnam`, with `*` and `%` (`FIL$MATCH`), and whose class is
+  `DVS$_DEVCLASS`'s, `DC$_DISK` or `DC$_TERM`, if the item list has it.
+  `contxt`, a quadword, 0 at first, keeps the next device's number.
+  `SS$_NOMOREDEV` after the last.
+- **`$GETDVI efn, chan, devnam, itmlst, iosb, astadr, astprm, nullarg`**
+  finds the device `devnam` names, translated as `$ASSIGN` translates it
+  (`IOC$TRNDEVNAM`), or else `chan`'s, the console, and returns the items
+  asked for: `DVI$_DEVCHAR` (`DEV$M_FOD`, `DIR`, `SHR`, `AVL`, `IDV`,
+  `ODV`, `RND` for a disk, with `MNT` once mounted and `SWL` too if read
+  only; `REC`, `CCL`, `TRM`, `AVL`, `IDV`, `ODV` for the console),
+  `DEVCLASS`, `UNIT` and `ERRCNT` (0), `DEVNAM`, `VOLNAM`, `FREEBLOCKS`
+  (`FIL$FREEBLOCKS`), `CLUSTER`, `MOUNTCNT`, the `AVL`, `MNT` and `SWL`
+  bits, and `STS`, `UCB$M_ONLINE` if the device is there: the console, a
+  mounted disk, the ramdisk once made, a PAL disk whose first block
+  reads. Others are `SS$_BADPARAM`. It clears and sets the event flag and
+  fills the IOSB, done at once; `$GETDVIW` is `$GETDVI`.
+
+DCL's `SHOW DEVICES` scans the disks, then the terminals, and asks
+`$GETDVIW` about each. ponytail: no I/O database: no DDBs or UCBs, so no
+error, operation or reference counts, device types or `MAXBLOCK`; no
+ASTs.
+
 ### Files
 
-There are two disks, each with a VCB (`$VCBDEF`) in `f11.mar`: the system
-disk, `DKA0:`, a Files-11 ODS-2 volume which the PAL reads a block at a
-time with `READLBLK` (DESIGN-0001, *The system disk*), and `MDA0:`, a
+There are three disks, each with a VCB (`$VCBDEF`) in `f11.mar`: the
+system disk, `DKA0:`, a Files-11 ODS-2 volume which the PAL reads a block
+at a time with `READLBLK` (DESIGN-0001, *The disks*); the data disk,
+`DKB0:`, a disk image of the host's, which the PAL also writes, with
+`WRITELBLK`, and which keeps its volume from boot to boot; and `MDA0:`, a
 ramdisk (`mddriver.mar`), as DECram's: 1,024 blocks in pages of S0, which
 `$INIT_VOL` makes, zeroed, and which last until the system stops.
 `FIL$READLBLK` and `FIL$WRITELBLK` read and write `F11$GL_VCB`'s disk,
-copying for the ramdisk; `DKA0:` can't be written (`SS$_WRITLCK`), and
-`MDA0:` is offline until it is made (`SS$_MEDOFL`). `FIL$SELECT` picks the
+calling the PAL with the VCB's unit, `VCB$B_UNIT`, or copying for the
+ramdisk; `DKA0:` can't be written (`SS$_WRITLCK`), and `MDA0:` is offline
+until it is made (`SS$_MEDOFL`). `FIL$SELECT` picks the
 VCB by device name. `f11.mar` reads Files-11 (`ods/docs/`) as VMS's XQP
 does:
 
-- **`FIL$MOUNT`**, at boot for `DKA0:` and from `$MOUNT itmlst`, which
+- **`FIL$MOUNT`**, at boot for `DKA0:` and `DKB0:` and from `$MOUNT itmlst`, which
   takes `MNT$_DEVNAM` and `MNT$_VOLNAM`, reads the home block at LBN 1,
   checks its format, `DECFILE11B`, and its label against the one asked
   for, keeps where file headers start in the index file, and reads the
@@ -594,6 +637,10 @@ does:
   checksum and number. **`FIL$MAPVBN`** finds a VBN's LBN in a header's
   map, retrieval pointers of formats 1 to 3, and **`FIL$READVBN`** reads a
   file's blocks, an extent at a time. ponytail: no extension headers.
+- **`FIL$FREEBLOCKS`** counts a mounted volume's free blocks, the set
+  bits of its storage bitmap times its cluster, which `FIL$MOUNT` keeps
+  in the VCB, for `$GETDVI`'s `DVI$_FREEBLOCKS` (*Devices*). ponytail:
+  counted each time; VMS keeps the count in the VCB.
 - **`FIL$SEARCHDIR`** reads a directory's blocks up to its end of file and
   finds the next record whose name, `NAME.TYPE`, matches a pattern with
   `*` and `%`, and the version asked for: any, the highest (the first of
@@ -618,7 +665,7 @@ does:
   again, each ended by a record size of all ones, and written back, the
   directory extended if it grew.
 - **`FIL$INIT`**, for `$INIT_VOL devnam, volnam`, writes an empty volume
-  on the ramdisk, as `INITIALIZE` lays one out (`ods/docs/initialize.md`):
+  on `DKB0:`, 4,096 blocks, or the ramdisk, 1,024, as `INITIALIZE` lays one out (`ods/docs/initialize.md`):
   the boot block, the home block, the index file bitmap, 64 header
   slots, `BITMAP.SYS`'s SCB and bitmap and the MFD's first block, and the
   nine reserved files, (1,1,0) to (9,9,0), in the MFD.
@@ -628,7 +675,7 @@ never extended, so a volume has at most 4,096 blocks and the 64 files
 `FIL$INIT` made room for; no backup home block or index file header.
 RMS (`rms.mar`) is a set of system services on VMS's FAB, RAB and NAM
 blocks. A file specification is `[dev:][[dir.dir]]name.type;version`,
-the device `DKA0:` or `MDA0:` with a volume mounted (`RMS$_DNR`).
+the device `DKA0:`, `DKB0:` or `MDA0:` with a volume mounted (`RMS$_DNR`).
 `RMS$PARSE` splits it, and the FAB's default specification, and
 `SYS$DISK:` with the process's default directory, into device,
 directory, name, type and version. A device that is a logical name in
