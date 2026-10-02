@@ -537,6 +537,20 @@ PRT$C_UR = 15
         CALLS   #12, G^SYS$QIOW
         .ENDM   $QIOW_S
 
+        .MACRO  $DCLAST_S ASTADR, ASTPRM=#0, ACMODE=#0
+        PUSHL   ACMODE
+        PUSHL   ASTPRM
+        $PUSHADR ASTADR
+        .EXTERNAL SYS$DCLAST
+        CALLS   #3, G^SYS$DCLAST
+        .ENDM   $DCLAST_S
+
+        .MACRO  $SETAST_S ENBFLG
+        PUSHL   ENBFLG
+        .EXTERNAL SYS$SETAST
+        CALLS   #1, G^SYS$SETAST
+        .ENDM   $SETAST_S
+
         .MACRO  $GETTIM_S TIMADR
         $PUSHADR TIMADR
         .EXTERNAL SYS$GETTIM

@@ -1037,14 +1037,18 @@ enum {
 	MFPR_SCBB = 0x16, MTPR_SCBB = 0x17, MTPR_SIRR = 0x18, MFPR_SISR = 0x19, WTINT = 0x3e,
 	MTPR_TXDB = 0x40, WRPTE = 0x41, DELCTX = 0x42, MTPR_RXCS = 0x43, MFPR_RXCS = 0x44,
 	MFPR_RXDB = 0x45, READLBLK = 0x46, CHME = 0x82, CHMU = 0x85, PROBER = 0x8f,
-	PROBEW = 0x90, REI = 0x92
+	PROBEW = 0x90, RD_PS = 0x91, REI = 0x92
 };
 
 /* The system control block's vectors the PAL delivers through, and the
  * interval timer's and console's IPLs, the VAX's. CHMx's is SCB_CHMK + 4 * x,
  * x the mode. */
 enum { SCB_OPCDEC = 0x10, SCB_ACCVIO = 0x20, SCB_CHMK = 0x40, SCB_SOFTINT = 0x80,
-       SCB_TIMER = 0xc0, SCB_CONSRCV = 0xf8, IPL_CONSOLE = 20, IPL_HWCLK = 24 };
+       SCB_TIMER = 0xc0, SCB_CONSRCV = 0xf8, IPL_ASTDEL = 2, IPL_CONSOLE = 20, IPL_HWCLK = 24 };
+
+/* The HWPCB's AST enable and summary bytes, Alpha's ASTEN and ASTSR
+ * ($HWPCBDEF): bit n of each is access mode n's. */
+enum { HWPCB_ASTEN = 32 };
 
 /* The console receive status register's bits, the VAX's RXCS: a character
  * is waiting (DONE), and interrupt when one is (IE). */
@@ -1089,7 +1093,8 @@ static uint64_t *hwpcb_sp(int m)
  * mode `to`, with prv as the previous mode, and raises IPL to new_ipl. The
  * frame, and n parameters below it, go on the current stack, 16-byte
  * aligned, or, if `to` is an inner mode, on its stack from the HWPCB, where
- * the current mode's stack pointer goes. Returns 0, having changed nothing,
+ * the current mode's stack pointer goes, the lower of VAX SP and sp, so
+ * that an AST routine called on it overwrites nothing. Returns 0, having changed nothing,
  * if there is no SCB, no handler or no stack to push on.
  */
 static int vector(seL4_UserContext *r, seL4_Word off, seL4_Word new_ipl, int to, int prv,
@@ -1102,7 +1107,7 @@ static int vector(seL4_UserContext *r, seL4_Word off, seL4_Word new_ipl, int to,
 	seL4_Word frame[F_LENGTH] = { r->pc, psl(r->spsr), r->x7, r->x28, r->sp, r->x13, r->x14,
 				      r->x15, r->x16, r->x17, r->x18, r->x30 };
 	/* Below both stacks: vmacro moves sp first, then x28, and back. */
-	seL4_Word sp = r->x28 < r->sp ? r->x28 : r->sp;
+	seL4_Word sp = r->x28 < r->sp ? r->x28 : r->sp, below = sp;
 	uint64_t *outer = 0;
 	if (to < cur->mode) {
 		uint64_t *inner = hwpcb_sp(to);
@@ -1120,7 +1125,7 @@ static int vector(seL4_UserContext *r, seL4_Word off, seL4_Word new_ipl, int to,
 	for (unsigned i = 0; i < n + F_LENGTH; i++)
 		*q[i] = i < n ? param[i] : frame[i - n];
 	if (outer)
-		*outer = r->x28;
+		*outer = below;
 	r->x28 = r->sp = sp;
 	r->pc = handler;
 	cur->mode = to;
@@ -1130,10 +1135,26 @@ static int vector(seL4_UserContext *r, seL4_Word off, seL4_Word new_ipl, int to,
 	return 1;
 }
 
+/*
+ * Requests the AST delivery interrupt, software interrupt IPL_ASTDEL, if
+ * IPL is below it and an AST is pending (ASTSR) and enabled (ASTEN) for the
+ * current mode or an inner one, as the VAX's REI did with ASTLVL. The
+ * executive writes both bytes in the HWPCB, and the PAL reads them each
+ * time IPL or the mode may let an AST through.
+ */
+static void astchk(void)
+{
+	uint64_t *q = quad(cur->hwpcb + HWPCB_ASTEN);
+	seL4_Word ast = q ? *q : 0;
+	if (ipl < IPL_ASTDEL && ast & ast >> 8 & ((2UL << cur->mode) - 1))
+		pending |= 1UL << IPL_ASTDEL;
+}
+
 /* Delivers the highest pending interrupt IPL lets through, in kernel mode,
  * as the VAX's interrupts are, with kernel as the previous mode too. */
 static int deliver(seL4_UserContext *r)
 {
+	astchk();
 	for (seL4_Word level = 31; level > ipl; level--)
 		if (pending >> level & 1) {
 			pending &= ~(1UL << level);
@@ -1150,6 +1171,7 @@ static int deliver(seL4_UserContext *r)
 
 static int deliverable(void)
 {
+	astchk();
 	return pending >> (ipl + 1) != 0;
 }
 
@@ -1473,6 +1495,8 @@ static int serve_one(seL4_MessageInfo_t msg)
 	case PROBEW:
 		return ret(probe(a0 & 0xffffffff, a1 & 0xffff, mr[seL4_UnknownSyscall_X2] & 3,
 				 code == PROBEW));
+	case RD_PS:
+		return ret(psl(seL4_GetMR(seL4_UnknownSyscall_SPSR)));
 	case REI:
 		return do_rei();
 	}

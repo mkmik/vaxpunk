@@ -44,6 +44,7 @@ PAL$_WTINT = ^X3E                       ; wait for an interrupt
 PAL$_WRPTE = ^X41                       ; R0 = address, R1 = PTE; R0 = old PTE
 PAL$_DELCTX = ^X42                      ; R0 = HWPCB of a context to delete
 PAL$_READLBLK = ^X46                    ; R0 = buffer, R1 = byte count, R2 = LBN; R0 = status
+PAL$_RD_PS = ^X91                       ; R0 = the PSL: the modes and IPL
         .ENDM   $PALDEF
 
 ; $IPLDEF: interrupt priority levels the executive synchronizes at.
@@ -125,12 +126,16 @@ INTSTK$K_LENGTH = 96
 ; aligned. When a context first runs, the PAL pops an INTSTK frame from
 ; its KSP, as REI does. Each mode's stack pointer is where the PAL pushes
 ; a frame on entering it from an outer mode, and where it saves the stack
-; pointer of a mode it leaves for another.
+; pointer of a mode it leaves for another. The PAL requests the AST
+; delivery interrupt, at IPL$_ASTDEL, when IPL is below it and a mode bit
+; set in both ASTEN and ASTSR is the current mode's or an inner one's.
         .MACRO  $HWPCBDEF
 HWPCB$Q_KSP = 0                         ; kernel stack pointer
 HWPCB$Q_ESP = 8                         ; executive
 HWPCB$Q_SSP = 16                        ; supervisor
 HWPCB$Q_USP = 24                        ; user
+HWPCB$B_ASTEN = 32                      ; bit n: mode n's ASTs may be delivered
+HWPCB$B_ASTSR = 33                      ; bit n: an AST for mode n is queued
 HWPCB$K_LENGTH = 128
         .ENDM   $HWPCBDEF
 
@@ -220,11 +225,14 @@ PCB$L_CLIFILES = 340                    ; the files it keeps open when an image 
 PCB$Q_LNMHD = 344                       ; its logical name table, LNM$PROCESS_TABLE: LNMBs
 PCB$T_DEFDIR = 352                      ; default directory, .ASCIC, 63 characters: $SETDDIR's
 PCB$L_CTRLY = 416                       ; while CTRL/Y has its image stopped, where on the kernel stack it was, else 0
-PCB$K_LENGTH = 424
+PCB$Q_ASTQFL = 424                      ; its ACBs, by access mode, kernel's first
+PCB$L_ASTSP = 432                       ; while an AST routine runs, where on the kernel stack what it interrupted is, else 0
+PCB$B_ASTEN = 436                       ; bit n: $SETAST has mode n's ASTs enabled
+PCB$B_ASTACT = 437                      ; bit n: an AST routine of mode n runs
+PCB$K_LENGTH = 440
 PCB$V_WAKEPEN = 0                       ; a $WAKE came that $HIBER hasn't seen
 PCB$V_WALL = 1                          ; the wait is for all of EFWM
 PCB$V_SUSPEN = 2                        ; suspend when the wait ends
-PCB$V_DELPEN = 3                        ; delete it when it next has the CPU
 PCB$V_CTRLY = 4                         ; CTRL/Y was typed: stop its image, call its command interpreter
 DYN$C_PCB = 1                           ; PCB$B_TYPE
         .ENDM   $PCBDEF
@@ -252,7 +260,9 @@ LNMB$K_LENGTH = 10                      ; past that, both strings
         .ENDM   $LNMBDEF
 
 ; $TQEDEF: a timer queue entry, from pool, on EXE$GQ_TQFL in the order it
-; is due. Times are VMS's: 100 ns units since 17-Nov-1858.
+; is due. Times are VMS's: 100 ns units since 17-Nov-1858. A $SETIMR
+; entry with an AST becomes its ACB when it is due: TQE$L_PID, TQE$L_AST
+; and TQE$L_ASTPRM are where $ACBDEF has them.
         .MACRO  $TQEDEF
 TQE$L_TQFL = 0                          ; timer queue
 TQE$L_TQBL = 4
@@ -260,16 +270,34 @@ TQE$W_SIZE = 8
 TQE$B_TYPE = 10
 TQE$B_RQTYPE = 11                       ; TQE$C_
 TQE$L_PID = 12                          ; the process it is for
-TQE$L_ASTPRM = 16                       ; $SETIMR's reqidt
-TQE$L_EFN = 20                          ; $SETIMR's event flag
+TQE$L_AST = 16                          ; $SETIMR's AST routine, or 0
+TQE$L_ASTPRM = 20                       ; $SETIMR's reqidt, the AST's parameter
 TQE$Q_TIME = 24                         ; when it is due
 TQE$Q_DELTA = 32                        ; a repeating $SCHDWK's interval
+TQE$B_RMOD = 40                         ; the access mode of $SETIMR's caller
+TQE$L_EFN = 44                          ; $SETIMR's event flag
 TQE$K_LENGTH = 48
 TQE$C_TMSNGL = 0                        ; $SETIMR: sets an event flag
 TQE$C_WKSNGL = 1                        ; $SCHDWK: wakes the process
 TQE$C_WKREPT = 2                        ; and again every TQE$Q_DELTA
 DYN$C_TQE = 15                          ; TQE$B_TYPE
         .ENDM   $TQEDEF
+
+; $ACBDEF: an AST control block, from pool, on its process's AST queue,
+; PCB$Q_ASTQFL, until the AST is delivered (roottask/exec/astdel.mar).
+        .MACRO  $ACBDEF
+ACB$L_ASTQFL = 0                        ; the AST queue
+ACB$L_ASTQBL = 4
+ACB$W_SIZE = 8
+ACB$B_TYPE = 10
+ACB$B_RMOD = 11                         ; the access mode the AST is for
+ACB$L_PID = 12                          ; the process it is for
+ACB$L_AST = 16                          ; the AST routine, called in that mode
+ACB$L_ASTPRM = 20                       ; its parameter
+ACB$L_KAST = 24                         ; or the executive's routine, for a kernel mode AST: JSB'd with R4 = the PCB, R5 = the ACB, which it frees, at IPL$_SYNCH
+ACB$K_LENGTH = 32
+DYN$C_ACB = 2                           ; ACB$B_TYPE
+        .ENDM   $ACBDEF
 
 ; $VCBDEF: a volume control block: a disk and the Files-11 volume mounted
 ; on it, if one is (roottask/exec/f11.mar).

@@ -18,7 +18,9 @@ process, and
 [ADR-0007](../adr/0007-system-disk-files-11-and-rms.md): the files are on a
 Files-11 volume, which the executive reads by LBN, with RMS on top, and
 [ADR-0009](../adr/0009-ramdisk-writable-files-11.md): a ramdisk, `MDA0:`,
-holds a Files-11 volume the executive writes.
+holds a Files-11 volume the executive writes, and
+[ADR-0011](../adr/0011-asts-on-the-kernel-stack.md): ASTs are delivered
+when the PAL asks, on top of the kernel stack.
 
 The executive borrows VMS's structure and names (PCB, `SCH$`, `MMG$`,
 `EXE$` routines, `SS$_` codes, the system service interfaces) but none of
@@ -31,6 +33,7 @@ its code.
 | `exec.mar` | `EXEC$START`, the swapper, `CON$PUTCHAR` |
 | `memory.mar` | the PFN list, pages, nonpaged pool, `$CRETVA`, `$DELTVA`, `$EXPREG` |
 | `sched.mar` | state queues, `SCH$SCHED`, waits and wakes, the reschedule interrupt, quantum end |
+| `astdel.mar` | AST queues, `SCH$QAST`, the AST delivery interrupt, `$DCLAST`, `$SETAST`, `$ASTEXIT` |
 | `timeschdl.mar` | the interval timer and software timer interrupts, the system time, the timer queue, `$GETTIM`, `$SETIMR`, `$CANTIM`, `$SCHDWK`, `$CANWAK` |
 | `event.mar` | event flags, local and common |
 | `process.mar` | `$CREPRC`, process start, image activation, `$IMGACT`, `$EXIT`, image rundown, CTRL/Y and `$CONTINUE`, deletion, `$HIBER`, `$WAKE`, `$SUSPND`, `$RESUME`, `$SETPRI`, `$SETPRN`, `$CMKRNL` |
@@ -56,7 +59,7 @@ blocks and `$OPEN`... calls, `$MNTDEF`).
 1. Saves the RPB address from R11.
 2. Fills the SCB: reserved instructions to `EXE$OPCDEC`, access violations
    to `EXE$ACVIOLAT`, `CHMK` to `EXE$CMODKRNL`, `CHME` to `EXE$CMODEXEC`,
-   software interrupt level 3 to `SCH$RESCHED`, level 4 to `TTY$IOPOST`,
+   software interrupt level 2 to `SCH$ASTDEL`, level 3 to `SCH$RESCHED`, level 4 to `TTY$IOPOST`,
    level 7 to `EXE$SWTIMINT`, the interval timer to `EXE$HWCLKINT`, the
    console receiver to `TTY$RCVINT`. `MTPR #PR$_SCBB`.
 3. `MMG$INIT`: the PFN list and the pool. Then makes the vector's pages
@@ -117,7 +120,7 @@ The PFN list and the pool are synchronized at `IPL$_SYNCH`.
 
 ## Processes
 
-A process is a PCB (`$PCBDEF`, 352 bytes, from pool), a 16 KB kernel stack
+A process is a PCB (`$PCBDEF`, 440 bytes, from pool), a 16 KB kernel stack
 from pool, an image and stacks in its P0 and P1, and the threads the PAL
 makes for its HWPCB, which is inside the PCB: one for kernel mode and one
 for each outer mode it enters. `SCH$GL_PCBVEC` holds the PCBs by index; a PID is a
@@ -177,11 +180,11 @@ a command interpreter would:
   `DELCTX`, then frees its kernel stack and PCB, since a process can't free
   the stack it runs on.
 - **Another** (`$DELPRC`): its P0 and P1 can only be reached from itself,
-  so it deletes itself. At `IPL$_SYNCH` it leaves its slot, so that no one
-  finds it any more, gets `PCB$V_DELPEN`, and its wait ends. The next time
-  it has the CPU, when `SCH$SCHED` returns to it or it starts at
-  `EXE$PROCSTRT`, it deletes itself as above. ponytail: a flag the
-  scheduler checks, standing in for VMS's kernel AST.
+  so it deletes itself, in a kernel mode AST (*ASTs*) that runs it down as
+  above. At `IPL$_SYNCH` `$DELPRC` queues the AST, which ends its wait or
+  suspension, and the process leaves its slot, so that no one finds it
+  any more. It gets the AST the next time it runs at an IPL below
+  `IPL$_ASTDEL`, or ends a wait: at once if it never ran.
 
 The swapper can't be deleted.
 
@@ -285,8 +288,9 @@ States and queues, as VMS's `$STATEDEF`:
   computable.
 - **`SCH$WAIT`** puts the current process on a wait queue and calls
   `SCH$SCHED`. It returns when the wait is over and the CPU is back. A
-  CTRL/Y ends the wait early, so its callers look again at what they wait
-  for.
+  CTRL/Y or an AST ends the wait early, so its callers look again at what
+  they wait for. It delivers the ASTs the mode that called the service
+  waiting lets through (*ASTs*).
 - **`SCH$WAKEPCB`** takes a process off its wait queue and makes it
   computable, or suspended if a `$SUSPND` came while it waited.
 - **`SCH$MAKECOM`** puts a process on its COM queue and, if it outranks the
@@ -331,7 +335,7 @@ The timer queue, `EXE$GQ_TQFL`, holds timer queue entries (`$TQEDEF`,
 
 | Type | Made by | When due |
 | --- | --- | --- |
-| `TQE$C_TMSNGL` | `$SETIMR` | sets the event flag, waking the process if its wait is over |
+| `TQE$C_TMSNGL` | `$SETIMR` | sets the event flag, waking the process if its wait is over, and, with an AST, becomes its ACB |
 | `TQE$C_WKSNGL` | `$SCHDWK` | `$WAKE`s the process |
 | `TQE$C_WKREPT` | `$SCHDWK` with a repeat time | the same, and goes back on the queue, due one repeat time later |
 
@@ -344,8 +348,9 @@ The timer queue, `EXE$GQ_TQFL`, holds timer queue entries (`$TQEDEF`,
 - `EXE$RMVTIMQ` removes a process's entries: `$CANTIM` its `$SETIMR`s,
   by request identifier or all; `$CANWAK` its wakeups, and a pending
   `$WAKE`; process rundown all of them.
-- `$SETIMR` clears its flag first. An AST address is `SS$_ILLSER`, until
-  there are ASTs. A `$SCHDWK` repeat time must be a delta of a tick or
+- `$SETIMR` clears its flag first. With an AST address, the entry, when
+  it is due, goes on the process's AST queue as its ACB, for the mode
+  that called `$SETIMR`, with `reqidt` as its parameter. A `$SCHDWK` repeat time must be a delta of a tick or
   more, or it is `SS$_BADPARAM`.
 
 ## Synchronization
@@ -361,6 +366,7 @@ Inside the executive, IPL, as on a uniprocessor VMS. `DSBINT`, `ENBINT`,
 | `IPL$_TIMER` (7) | the software timer interrupt runs here |
 | `IPL$_IOPOST` (4) | the software interrupt that wakes the console's readers runs here |
 | `IPL$_RESCHED` (3) | the reschedule interrupt runs here; below it, the CPU may move |
+| `IPL$_ASTDEL` (2) | the AST delivery interrupt runs here; below it, kernel mode ASTs come |
 | 0 | process code |
 
 Code at or above `IPL$_SYNCH` keeps the CPU: only the interval timer
@@ -388,6 +394,52 @@ Between processes, VMS's event flags and hibernation:
 - `$HIBER` sleeps until `$WAKE`; a `$WAKE` that comes first makes the next
   `$HIBER` return at once. `$WAKE` sets `PCB$V_WAKEPEN` and `$HIBER` takes
   it, so a hibernation that ends without one goes on.
+
+### ASTs
+
+An AST is a call a process gets in one of its access modes, on top of
+whatever it was doing ([ADR-0011](../adr/0011-asts-on-the-kernel-stack.md)).
+An AST control block (`$ACBDEF`, 32 bytes of pool) names the process, the
+mode, and the AST routine and its parameter, or, for a kernel mode AST,
+an executive routine, `ACB$L_KAST`.
+
+- **`SCH$QAST`** puts an ACB on the process's queue, `PCB$Q_ASTQFL`,
+  after those of its mode and the inner ones, and ends its wait, if it
+  waits. It keeps the HWPCB's two bytes the PAL reads (DESIGN-0001,
+  *Interrupts and exceptions*): `ASTSR`, the modes with an ACB queued, and
+  `ASTEN`, those whose ASTs `$SETAST` enabled (`PCB$B_ASTEN`) less those
+  whose AST routine runs (`PCB$B_ASTACT`).
+- **Delivery.** When IPL is below `IPL$_ASTDEL` and a mode set in both is
+  the current mode or an inner one, the PAL requests the level 2 software
+  interrupt, `SCH$ASTDEL`, which delivers in the mode it interrupted.
+  `SCH$WAIT` delivers too, when a wait ends, in the mode that called the
+  service waiting, which `RD_PS` reads from the PSL. `EXE$ASTDEL` takes
+  the first ACB that mode lets through, kernel mode's first. It `JSB`s an
+  executive routine at `IPL$_SYNCH`, which frees the ACB. For an AST
+  routine, it frees the ACB, marks the mode's AST active, pushes the
+  registers and IPL on the kernel stack, links them to the AST routine
+  before it in `PCB$L_ASTSP`, and `REI`s below them to `EXE$ASTDISP`, in
+  the vector, in the AST's mode at IPL 0. That mode's stack is the one in
+  the HWPCB, which the PAL left there when it entered kernel mode.
+  `EXE$ASTDISP` calls the routine, `CALLS #1`, with the parameter.
+- **`$ASTEXIT`**, which `EXE$ASTDISP` calls when the routine returns,
+  puts the kernel stack pointer back from `PCB$L_ASTSP`, and `EXE$ASTDEL`
+  goes on: the next AST, or a return to what the AST interrupted, every
+  register as it was.
+- **Rundown.** Image rundown frees the user mode ACBs, enables user mode
+  ASTs again and forgets the AST routines that run, whose state goes with
+  the kernel stack. Process rundown frees the rest.
+
+| Service | Does |
+| --- | --- |
+| `$DCLAST astadr, astprm, acmode` | queues an AST to the current process, in `acmode` or the caller's mode, whichever is the outer one |
+| `$SETAST enbflg` | enables or disables the caller's mode's ASTs: `SS$_WASSET` or `SS$_WASCLR` |
+| `$ASTEXIT` | ends the AST routine that runs; with none, does nothing |
+
+`$SETIMR`'s AST comes from its timer queue entry (*Time*), and `$DELPRC`'s
+kernel mode AST deletes the process (*Deletion*). ponytail: the routine
+gets its parameter only, not VMS's R0, R1, PC and PSL after it; no AST
+quotas; `$QIO` ignores its `astadr`.
 
 ## System services
 
@@ -428,7 +480,8 @@ can't reach them.
 | Images | `$IMGACT`, `$CONTINUE` | |
 | RMS | `$PARSE`, `$SEARCH`, `$OPEN`, `$CREATE`, `$CONNECT`, `$GET`, `$PUT`, `$DISCONNECT`, `$CLOSE`, `$ERASE`, `$SETDDIR` | |
 | Volumes | `$MOUNT`, `$INIT_VOL` | |
-| Other | | `$DCLAST`, `$SETAST`, `$GETSYI` |
+| ASTs | `$DCLAST`, `$SETAST`, `$ASTEXIT` | |
+| Other | | `$GETSYI` |
 
 Arguments the implemented services take but ignore: `$CREPRC`'s
 privileges, quotas, UIC, mailbox and status flags, the logical name
@@ -678,7 +731,7 @@ descriptor at the nth parameter of the command line. `build.rs` links
 | `DELETE` | `$PARSE`s its parameter, which must give a version or `;*` (`%DELETE-E-DELVER`), and `$ERASE`s each file `$SEARCH` finds |
 | `INIT` | `$INIT_VOL` with its two parameters, the device and the label |
 | `MOUNT` | `$MOUNT` with its two parameters, the device and the label |
-| `STARTUP` | makes 4 pages with `$EXPREG`, checks and deletes them; creates `SLEEPER` at a higher priority, which runs at once, and `PING` and `PONG`; waits until `PONG` sets flag 66 of their cluster; deletes `SLEEPER`; creates `SVCTEST`, `HOG` and `TIMETEST` |
+| `STARTUP` | makes 4 pages with `$EXPREG`, checks and deletes them; creates `SLEEPER` at a higher priority, which runs at once, and `PING` and `PONG`; waits until `PONG` sets flag 66 of their cluster; deletes `SLEEPER`; creates `SVCTEST`, `HOG`, `TIMETEST` and `ASTTEST` |
 | `SLEEPER` | hibernates until it is deleted |
 | `PING`, `PONG` | take three turns through common event flags 64 and 65 of the cluster `PINGPONG`; `PONG` then sets flag 66, which `STARTUP` waits for |
 | `SVCTEST` | checks the statuses of the services the others don't use, and of errors: local event flags, the dispatcher's checks and a stub, `$CRETVA` and `$DELTVA`, `$CMKRNL` and `$CMEXEC`; what user mode may `PROBE`, and that services refuse it the executive's data; the console's channels; logical names in both tables, `$ASSIGN` through two of them, and the errors; `$SETPRI`, and `$SUSPND`, `$WAKE`, `$RESUME` and `$DELPRC` on a process of its own; then creates one whose image doesn't exist, which exits with `RMS$_FNF`, and `SNOOP` and `USURP` |
@@ -687,6 +740,7 @@ descriptor at the nth parameter of the command line. `build.rs` links
 | `HOG` | associates a common event flag cluster, creates `NUDGE` at its own priority and loops reading flag 64 until `NUDGE` sets it, with no wait: only quantum end lets `NUDGE` run |
 | `NUDGE` | sets `HOG`'s flag |
 | `TIMETEST` | checks that `$GETTIM` reads a time after 2026; waits for `$SETIMR`s, a delta and a time, 50 ms on, and that a cancelled one never sets its flag; hibernates through three repeating `$SCHDWK` wakeups, cancels them, and checks that the next wakeup is a new one's |
+| `ASTTEST` | checks that `$DCLAST`'s AST is delivered as the service returns, or when `$SETAST` enables ASTs again; that one declared in an AST routine waits until it returns; that a `$SETIMR` AST's `$WAKE` ends a `$HIBER`; and that one delivered while it computes in user mode leaves every register as it was |
 
 When every process but the swapper waits, the CPU idles in `WTINT`,
 taking the clock's interrupts.
@@ -694,8 +748,7 @@ taking the clock's interrupts.
 ## Next
 
 - Priority boosts on wake and decay at quantum end.
-- ASTs: `$DCLAST`, AST delivery at `IPL$_ASTDEL`, and with them process
-  deletion by a kernel AST.
+- `$QIO` completion ASTs.
 - Privileges, for `$CMKRNL` and `$CMEXEC`, and condition handlers in place
   of exiting on an exception.
 - A CTRL/Y AST in place of `EXE$CTRLY` and `$CONTINUE`, CTRL/C, DCL's
