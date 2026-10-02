@@ -1,0 +1,14 @@
+[package]
+name = "apidoc"
+description = "Writes docs/api/index.html, the API reference, from the sources: cargo run -p apidoc"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "apidoc"
+path = "main.rs"
+
+[dependencies]
+regex = "1"
+serde_json = "1"
