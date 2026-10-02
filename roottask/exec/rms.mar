@@ -1,26 +1,33 @@
-        .TITLE  RMS     Record Management Services: files on the system disk
-        .IDENT  /V0.1/
+        .TITLE  RMS     Record Management Services: files on Files-11 volumes
+        .IDENT  /V0.2/
 ;
-; A program reads a file as on VMS: a FAB names it and a RAB reads its
-; records, with $OPEN, $CONNECT, $GET, $DISCONNECT and $CLOSE, and
-; $PARSE and $SEARCH find the files a specification with wildcards
-; names, into a NAM block (starlet.mlb's $FABDEF, $RABDEF, $NAMDEF, with
-; VMS's layouts). A specification is [DKA0:][[dir.dir...]]name.type;ver:
-; what it leaves out comes from the FAB's default specification, then
-; from DKA0: and the process's default directory, which $SETDDIR sets.
-; The files are on the system disk, which f11.mar reads.
+; A program reads and writes files as on VMS: a FAB names a file and a
+; RAB reads or writes its records, with $OPEN or $CREATE, $CONNECT, $GET
+; or $PUT, $DISCONNECT and $CLOSE; $ERASE deletes one, and $PARSE and
+; $SEARCH find the files a specification with wildcards names, into a
+; NAM block (starlet.mlb's $FABDEF, $RABDEF, $NAMDEF, with VMS's
+; layouts). A specification is [dev:][[dir.dir...]]name.type;ver: what it
+; leaves out comes from the FAB's default specification, then from DKA0:
+; and the process's default directory, which $SETDDIR sets. The device is
+; DKA0:, the system disk, or MDA0:, the ramdisk, with a volume mounted on
+; it, which f11.mar reads and f11wrt.mar writes.
 ;
 ; $OPEN reads the file's header into an IFAB, a block of pool, which the
 ; process's PCB holds by IFI, the index $OPEN puts in FAB$W_IFI; $CONNECT
 ; puts the same index in RAB$W_ISI. $GET reads sequential files' VAR and
-; FIX records, a block at a time. An image's files close when it exits,
+; FIX records, a block at a time. $CREATE makes a new file, a version
+; above the highest there is unless the specification gives one, with
+; the FAB's record attributes and allocation, and $PUT appends records
+; to it, a block at a time, extending it as it fills; $CLOSE writes its
+; last block and its end of file. An image's files close when it exits,
 ; those its command interpreter opened when the process does.
 ;
 ; ponytail: the services run in kernel mode at IPL$_SYNCH, which keeps
 ; the file system's buffers to one caller; VMS's RMS runs in executive
-; mode, in the process's own P1. Read only, one stream per file, no
-; logical names, ASTs or completion routines, and $SEARCH finds its place
-; again by counting the matches it skips.
+; mode, in the process's own P1. One stream per file; $OPEN only reads
+; and $PUT only appends to a file $CREATE made; no file sharing or
+; locking, logical names, ASTs or completion routines, and $SEARCH finds
+; its place again by counting the matches it skips.
 ;
         .LIBRARY "lib.mlb"
         .LIBRARY "starlet.mlb"
@@ -31,29 +38,42 @@
         $FABDEF
         $RABDEF
         $NAMDEF
+        $VCBDEF
 
         .EXTERNAL SCH$GL_CURPCB, EXE$ALONONPAGED, EXE$DEANONPGDSIZ, EXE$PROBER_DSC
         .EXTERNAL FIL$READHDR, FIL$READVBN, FIL$SEARCHDIR, FIL$EOF, FIL$ISDIR
-        .EXTERNAL F11$GW_FID
+        .EXTERNAL FIL$SELECT, FIL$CREHDR, FIL$WRITEHDR, FIL$SETNAME, FIL$EXTEND
+        .EXTERNAL FIL$ENTER, FIL$REMOVE, FIL$DELHDR, FIL$WRITEVBN
+        .EXTERNAL F11$GW_FID, F11$GL_VCB
 
 BLOCK = 512
 MFD = 4                                 ; the MFD's file number
 MAXIFI = 15                             ; PCB$A_IFAB's slots, 1-15
+RESFILES = 9                            ; the volume's own files, 1-9
+EXTEND = 8                              ; blocks $PUT extends a file by
+WCC_FOUND = ^X80000000                  ; in NAM$L_WCC: $SEARCH found a file
 ; An IFAB: an open file.
-IFB$L_POS = 0                           ; the next byte $GET reads
+IFB$L_POS = 0                           ; the next byte $GET reads, or $PUT writes
 IFB$L_EOF = 4                           ; the bytes in the file
 IFB$L_BLOCK = 8                         ; the VBN in IFB$AB_BUF, or 0
-IFB$AB_HDR = 16                         ; the file's header
-IFB$AB_BUF = 528                        ; a block of the file
-IFB$K_LENGTH = 1040
+IFB$L_VCB = 12                          ; its volume
+IFB$L_FLAGS = 16                        ; IFB$V_
+IFB$AB_HDR = 32                         ; the file's header
+IFB$AB_BUF = 544                        ; a block of the file
+IFB$K_LENGTH = 1056
+IFB$V_WRITE = 0                         ; $CREATE made it: $PUT writes it
 ; A file header's record attributes (ods/docs/file-header.md).
 FAT$B_RTYPE = 20
 FAT$B_RATTRIB = 21
 FAT$W_RSIZE = 22
 FAT$L_HIBLK = 24                        ; high word first
+FAT$L_EFBLK = 28                        ; high word first
+FAT$W_FFBYTE = 32
 FAT$B_VFCSIZE = 35
 FAT$W_MAXREC = 36
 FH2$W_FID = 8
+FH2$B_FID_NMX = 13
+FH2$W_BACKLINK = 66
 
         .PSECT  EXEC$DATA, NOEXE, WRT, QUAD
 ; A specification split into its five parts, device, directory, name,
@@ -85,6 +105,7 @@ SPECDIR:                                ; directories, made absolute
 SYSDEF: .BYTE   0                       ; the system's default: DKA0: and the
 DKA0:   .ASCII  "DKA0:"                 ; process's default directory, .ASCIC
         .BLKB   63
+HDRBUF: .BLKB   BLOCK                   ; the header of a file $ERASE deletes
 MFDNAME:
         .ASCII  "000000"
 DOTDIR: .ASCII  ".DIR"
@@ -356,25 +377,22 @@ MERGE:  MOVAB   RMS$T_EXP, R6           ; the next character
 80$:    MOVL    #RMS$_SYN, R0
         RSB
 
-; CHECK: checks the parts in FIELDS: the device is DKA0:, the directory
+; CHECK: checks the parts in FIELDS: the device is DKA0: or MDA0:, with a
+; volume mounted, which becomes F11$GL_VCB, the directory
 ; and the name and type are made of letters, digits, $, _ and -, with
 ; dots between the directory's names, wildcards in the name, type and
 ; version, and the version is a number up to 32767, * or nothing. Sets
 ; WILD for a wildcard and RMS$L_VERSION. R0 = RMS$_NORMAL, RMS$_DEV,
-; RMS$_DIR, RMS$_FNM or RMS$_VER. Uses R0-R4.
-CHECK:  MOVL    FIELDS, R1              ; the device, _DKA0: or DKA0:
+; RMS$_DNR, RMS$_DIR, RMS$_FNM or RMS$_VER. Uses R0-R4.
+CHECK:  MOVL    FIELDS, R1              ; the device
         MOVL    FIELDS+4, R2
-        CMPB    (R1), #^A/_/
-        BNEQ    5$
-        INCL    R1
-        DECL    R2
-5$:     CMPL    R2, #5
-        BNEQ    80$
-        CLRL    R3
-7$:     CMPB    (R1)[R3], DKA0[R3]
-        BNEQ    80$
-        AOBLSS  #5, R3, 7$
-        ADDL3   #1, FIELDS+8, R1        ; the directory, inside its brackets
+        BSBW    FIL$SELECT
+        BLBC    R0, 80$
+        MOVL    F11$GL_VCB, R1
+        BBS     #VCB$V_MOUNTED, VCB$L_STATUS(R1), 7$
+        MOVL    #RMS$_DNR, R0
+        RSB
+7$:     ADDL3   #1, FIELDS+8, R1        ; the directory, inside its brackets
         SUBL3   #2, FIELDS+12, R2
         BLEQ    85$
         MOVL    #2, R3                  ; dots, no wildcards
@@ -805,7 +823,8 @@ L:      ENBINT
 ; $SEARCH fab: finds the next file the expanded string $PARSE left in the
 ; FAB's NAM block names, and puts its resultant string, its parts and its
 ; file ID there. RMS$_FNF if there is none at all, then RMS$_NMF when
-; there are no more, and the next $SEARCH starts again.
+; there are no more, and the next $SEARCH starts again. NAM$L_WCC counts
+; the matches to skip, and WCC_FOUND says one was found.
         .ENTRY  EXE$SEARCH, ^M<R2, R3, R4, R5, R6, R7, R8, R9, R10, R11>
         DSBINT  #IPL$_SYNCH
         BSBW    FABNAM
@@ -822,7 +841,7 @@ L:      ENBINT
         BSBW    SYSDFLT
         BSBW    RMS$PARSE
         BLBC    R0, 90$
-        MOVL    NAM$L_WCC(R11), R9
+        BICL3   #WCC_FOUND, NAM$L_WCC(R11), R9
         BSBW    SEARCH
         BLBS    R0, 20$
         CMPL    R0, #SS$_NOMOREFILES
@@ -834,6 +853,7 @@ L:      ENBINT
 10$:    CLRL    NAM$L_WCC(R11)
         BRB     90$
 20$:    INCL    NAM$L_WCC(R11)
+        BISL2   #WCC_FOUND, NAM$L_WCC(R11)
         BSBW    PUTRES
         BRB     90$
 85$:    MOVL    #SS$_ACCVIO, R0
@@ -853,19 +873,8 @@ L:      ENBINT
         BNEQ    90$
         BSBW    PARSEFAB
         BLBC    R0, 90$
-        MOVL    SCH$GL_CURPCB, R9       ; a free IFI
-        MOVL    #1, R8
-10$:    TSTL    PCB$A_IFAB(R9)[R8]
-        BEQL    20$
-        AOBLEQ  #MAXIFI, R8, 10$
-        MOVL    #RMS$_DME, R0
-        BRB     90$
-20$:    MOVL    #IFB$K_LENGTH, R1
-        BSBW    EXE$ALONONPAGED
-        BLBS    R0, 25$
-        MOVL    #RMS$_DME, R0
-        BRB     90$
-25$:    MOVL    R2, R7
+        BSBW    NEWIFAB
+        BLBC    R0, 90$
         PUSHR   #^M<R7, R8, R9>
         MOVAB   IFB$AB_HDR(R7), R1
         BSBW    RMS$FIND
@@ -875,15 +884,10 @@ L:      ENBINT
         BEQL    30$
         BSBW    PUTRES
         BLBC    R0, 80$
-30$:    CLRL    IFB$L_POS(R7)
-        CLRL    IFB$L_BLOCK(R7)
-        MOVAB   IFB$AB_HDR(R7), R1
+30$:    MOVAB   IFB$AB_HDR(R7), R1
         BSBW    FIL$EOF
         MOVL    R0, IFB$L_EOF(R7)
-        MOVL    R7, PCB$A_IFAB(R9)[R8]
-        ASHL    R8, #1, R0
-        BISL2   R0, PCB$L_FILES(R9)
-        MOVW    R8, FAB$W_IFI(R10)
+        BSBW    INSTALL
         MOVZBL  IFB$AB_HDR+FAT$B_RTYPE(R7), R0
         BICB3   #^XF0, R0, FAB$B_RFM(R10)
         BICB3   #^X0F, R0, FAB$B_ORG(R10)
@@ -903,6 +907,39 @@ L:      ENBINT
         MOVL    (SP)+, R0
 90$:    FABDONE
 
+; NEWIFAB: R9 = the current PCB, R8 = an IFI it has free, R7 = an IFAB
+; for it, on F11$GL_VCB's volume, at the file's start, which INSTALL gives
+; it. R0 = RMS$_NORMAL or RMS$_DME. Uses R0-R3.
+NEWIFAB:
+        MOVL    SCH$GL_CURPCB, R9       ; a free IFI
+        MOVL    #1, R8
+10$:    TSTL    PCB$A_IFAB(R9)[R8]
+        BEQL    20$
+        AOBLEQ  #MAXIFI, R8, 10$
+        BRB     80$
+20$:    MOVL    #IFB$K_LENGTH, R1
+        BSBW    EXE$ALONONPAGED
+        BLBC    R0, 80$
+        MOVL    R2, R7
+        CLRL    IFB$L_POS(R7)
+        CLRL    IFB$L_EOF(R7)
+        CLRL    IFB$L_BLOCK(R7)
+        CLRL    IFB$L_FLAGS(R7)
+        MOVL    F11$GL_VCB, IFB$L_VCB(R7)
+        MOVL    #RMS$_NORMAL, R0
+        RSB
+80$:    MOVL    #RMS$_DME, R0
+        RSB
+
+; INSTALL: R7 = an IFAB, R8 = its IFI, R9 = the current PCB, R10 = a FAB.
+; Gives the process the open file, and the FAB its IFI. Uses R0.
+INSTALL:
+        MOVL    R7, PCB$A_IFAB(R9)[R8]
+        ASHL    R8, #1, R0
+        BISL2   R0, PCB$L_FILES(R9)
+        MOVW    R8, FAB$W_IFI(R10)
+        RSB
+
 ; GETIFAB: R8 = an IFI. R7 = its IFAB, R9 = the current PCB, R0 =
 ; RMS$_NORMAL, or RMS$_IFI if the process has no such file open.
 GETIFAB:
@@ -918,15 +955,38 @@ GETIFAB:
 80$:    MOVL    #RMS$_IFI, R0
         RSB
 
-; CLOSEIFI: R8 = an IFI, R7 = its IFAB, R9 = the current PCB. Closes it.
-; Uses R0 and R1.
+; CLOSEIFI: R8 = an IFI, R7 = its IFAB, R9 = the current PCB. Closes it:
+; a file $CREATE made gets its last block and its header written. R0 =
+; RMS$_NORMAL, or RMS$_WER if they couldn't be. IPL$_SYNCH. Uses R0 and
+; R1.
 CLOSEIFI:
-        CLRL    PCB$A_IFAB(R9)[R8]
+        PUSHL   #RMS$_NORMAL
+        BBC     #IFB$V_WRITE, IFB$L_FLAGS(R7), 20$
+        PUSHR   #^M<R2, R3, R4, R5>
+        MOVL    IFB$L_VCB(R7), F11$GL_VCB
+        BICL3   #^C<BLOCK-1>, IFB$L_POS(R7), R0
+        BEQL    10$
+        DIVL3   #BLOCK, IFB$L_POS(R7), R1       ; the last block, partly
+        INCL    R1
+        BSBW    WRITEBLK
+        BLBC    R0, 15$
+10$:    DIVL3   #BLOCK, IFB$L_POS(R7), R0       ; the end of file
+        INCL    R0
+        ROTL    #16, R0, IFB$AB_HDR+FAT$L_EFBLK(R7)
+        BICW3   #^C<BLOCK-1>, IFB$L_POS(R7), IFB$AB_HDR+FAT$W_FFBYTE(R7)
+        MOVAB   IFB$AB_HDR(R7), R1
+        BSBW    FIL$WRITEHDR
+15$:    POPR    #^M<R2, R3, R4, R5>
+        BLBS    R0, 20$
+        MOVL    #RMS$_WER, (SP)
+20$:    CLRL    PCB$A_IFAB(R9)[R8]
         ASHL    R8, #1, R0
         BICL2   R0, PCB$L_FILES(R9)
         MOVL    R7, R0
         MOVL    #IFB$K_LENGTH, R1
-        BRW     EXE$DEANONPGDSIZ
+        BSBW    EXE$DEANONPGDSIZ
+        MOVL    (SP)+, R0
+        RSB
 
 ; $CLOSE fab: closes the file $OPEN opened.
         .ENTRY  EXE$CLOSE, ^M<R2, R3, R4, R5, R6, R7, R8, R9, R10, R11>
@@ -938,7 +998,6 @@ CLOSEIFI:
         BLBC    R0, 90$
         BSBB    CLOSEIFI
         CLRW    FAB$W_IFI(R10)
-        MOVL    #RMS$_NORMAL, R0
 90$:    FABDONE
 
 ; RABCHK: AP = a service's arguments, a RAB first. R10 = the RAB, R0 =
@@ -1045,6 +1104,299 @@ RABCHK: MOVL    4(AP), R10
 88$:    MOVL    R1, R0
 90$:    RABDONE
 
+; $CREATE fab: makes a new file, as the FAB names it, with its
+; organization, record format and attributes, maximum record size, VFC
+; header size and allocation, FAB$L_ALQ blocks, and opens it for $PUT:
+; its IFI goes in the FAB, and in its NAM block, if it has one, its
+; resultant string and file ID. Its version is one above the highest
+; there is, unless the specification gives one. RMS$_WLD for a wildcard,
+; RMS$_WLK on a volume that can't be written, RMS$_FEX if that version is
+; there, RMS$_FUL if the volume is full, RMS$_CRE for another error from
+; the file system, which goes in FAB$L_STV.
+        .ENTRY  EXE$CREATE, ^M<R2, R3, R4, R5, R6, R7, R8, R9, R10, R11>
+        DSBINT  #IPL$_SYNCH
+        BSBW    FABNAM
+        BLBC    R0, 90$
+        BSBW    PARSEFAB
+        BLBC    R0, 90$
+        MOVL    #RMS$_WLD, R0
+        TSTL    WILD
+        BNEQ    90$
+        MOVL    F11$GL_VCB, R1
+        MOVL    #RMS$_WLK, R0
+        BBC     #VCB$V_WRITE, VCB$L_STATUS(R1), 90$
+        BSBW    NEWIFAB
+        BLBC    R0, 90$
+        MOVAB   IFB$AB_HDR(R7), R1
+        BSBW    FIL$CREHDR
+        BLBC    R0, 70$
+        BISB3   FAB$B_ORG(R10), FAB$B_RFM(R10), IFB$AB_HDR+FAT$B_RTYPE(R7)
+        MOVB    FAB$B_RAT(R10), IFB$AB_HDR+FAT$B_RATTRIB(R7)
+        MOVW    FAB$W_MRS(R10), IFB$AB_HDR+FAT$W_MAXREC(R7)
+        CMPB    FAB$B_RFM(R10), #FAB$C_FIX
+        BNEQ    10$
+        MOVW    FAB$W_MRS(R10), IFB$AB_HDR+FAT$W_RSIZE(R7)
+10$:    MOVB    FAB$B_FSZ(R10), IFB$AB_HDR+FAT$B_VFCSIZE(R7)
+        MOVL    DIRFID, IFB$AB_HDR+FH2$W_BACKLINK(R7)
+        MOVW    DIRFID+4, IFB$AB_HDR+FH2$W_BACKLINK+4(R7)
+        MOVL    FAB$L_ALQ(R10), R1
+        BEQL    20$
+        MOVAB   IFB$AB_HDR(R7), R3
+        BSBW    FIL$EXTEND
+        BLBC    R0, 60$
+20$:    BSBW    CRENTER
+        BLBC    R0, 60$
+        MOVAB   IFB$AB_HDR(R7), R1
+        BSBW    FIL$WRITEHDR
+        BLBC    R0, 60$
+        MOVL    FIELDS+16, R1           ; its resultant string
+        ADDL3   FIELDS+20, FIELDS+28, R2
+        BSBW    MKRES
+        MOVL    IFB$AB_HDR+FH2$W_FID(R7), F11$GW_FID
+        MOVW    IFB$AB_HDR+FH2$W_FID+4(R7), F11$GW_FID+4
+        TSTL    R11
+        BEQL    30$
+        BSBW    PUTRES
+30$:    BISL2   #1@IFB$V_WRITE, IFB$L_FLAGS(R7)
+        MOVC5   #0, (R7), #0, #BLOCK, IFB$AB_BUF(R7)
+        BSBW    INSTALL
+        ROTL    #16, IFB$AB_HDR+FAT$L_HIBLK(R7), FAB$L_ALQ(R10)
+        MOVL    #RMS$_NORMAL, R0
+        BRB     90$
+60$:    PUSHL   R0                      ; its blocks and header go back
+        MOVAB   IFB$AB_HDR(R7), R1
+        BSBW    FIL$DELHDR
+        MOVL    (SP)+, R0
+70$:    MOVL    R0, FAB$L_STV(R10)
+        MOVL    R0, R1
+        MOVL    #RMS$_FUL, R0
+        CMPL    R1, #SS$_DEVICEFULL
+        BEQL    75$
+        MOVL    #RMS$_FEX, R0
+        CMPL    R1, #SS$_DUPFILENAME
+        BEQL    75$
+        MOVL    #RMS$_CRE, R0
+75$:    PUSHL   R0
+        MOVL    R7, R0
+        MOVL    #IFB$K_LENGTH, R1
+        BSBW    EXE$DEANONPGDSIZ
+        MOVL    (SP)+, R0
+90$:    FABDONE
+
+; CRENTER: R7 = an IFAB with a new file's header. Enters the file in the
+; directory RMS$PARSE found, with the expanded specification's name and
+; version, and puts the name in the header: R4 = the version. R0 =
+; SS$_NORMAL or FIL$ENTER's error. Uses R0-R6.
+CRENTER:
+        PUSHR   #^M<R7, R8>
+        MOVAB   IFB$AB_HDR+FH2$W_FID(R7), R5
+        MOVAB   RMS$AB_DIRHDR, R3
+        MOVL    FIELDS+16, R6           ; NAME.TYPE
+        ADDL3   FIELDS+20, FIELDS+28, R7
+        MOVL    RMS$L_VERSION, R8
+        BSBW    FIL$ENTER
+        BLBC    R0, 90$
+        MOVL    (SP), R1
+        MOVAB   IFB$AB_HDR(R1), R1
+        BSBW    FIL$SETNAME
+90$:    POPR    #^M<R7, R8>
+        RSB
+
+; $ERASE fab: deletes the file the FAB names, its highest version unless
+; the specification gives one: its directory entry, its header and its
+; blocks. With FAB$M_NAM in FAB$L_FOP, the file its NAM block's resultant
+; string names, which $SEARCH found, and the NAM block's next $SEARCH
+; finds the file after it. RMS$_WLD for a wildcard, RMS$_FNF if there is
+; no such file, RMS$_WLK on a volume that can't be written, RMS$_PRV for
+; the volume's own files, RMS$_MKD if the file system fails, with its
+; error in FAB$L_STV.
+; ponytail: an open file is deleted all the same.
+        .ENTRY  EXE$ERASE, ^M<R2, R3, R4, R5, R6, R7, R8, R9, R10, R11>
+        DSBINT  #IPL$_SYNCH
+        BSBW    FABNAM
+        BLBC    R0, 90$
+        CLRL    R9                      ; 1: by the NAM block
+        TSTL    R11
+        BEQL    10$
+        BITL    #FAB$M_NAM, FAB$L_FOP(R10)
+        BEQL    10$
+        MOVZBL  NAM$B_RSL(R11), R1
+        BEQL    10$
+        MOVL    NAM$L_RSA(R11), R0
+        IFNORD  R1, (R0), 85$
+        MOVL    #1, R9
+        CLRQ    R2
+        BSBW    SYSDFLT
+        BSBW    RMS$PARSE
+        BRB     15$
+10$:    BSBW    PARSEFAB
+15$:    BLBC    R0, 90$
+        MOVL    F11$GL_VCB, R1
+        MOVL    #RMS$_WLK, R0
+        BBC     #VCB$V_WRITE, VCB$L_STATUS(R1), 90$
+        PUSHL   R9
+        MOVAB   HDRBUF, R1
+        BSBW    RMS$FIND
+        MOVL    (SP)+, R9
+        BLBC    R0, 90$
+        MOVL    #RMS$_PRV, R0
+        TSTB    HDRBUF+FH2$B_FID_NMX
+        BNEQ    20$
+        CMPW    HDRBUF+FH2$W_FID, #RESFILES
+        BLEQU   90$
+20$:    MOVAB   RMS$AB_DIRHDR, R3
+        MOVL    FIELDS+16, R6           ; NAME.TYPE
+        ADDL3   FIELDS+20, FIELDS+28, R7
+        MOVL    RESVER, R8
+        BSBW    FIL$REMOVE
+        BLBC    R0, 80$
+        MOVAB   HDRBUF, R1
+        BSBW    FIL$DELHDR
+        BLBC    R0, 80$
+        BLBC    R9, 30$                 ; one match fewer to skip
+        BITL    #^C<WCC_FOUND>, NAM$L_WCC(R11)
+        BEQL    30$
+        DECL    NAM$L_WCC(R11)
+30$:    MOVL    #RMS$_NORMAL, R0
+        BRB     90$
+80$:    MOVL    R0, FAB$L_STV(R10)
+        MOVL    #RMS$_MKD, R0
+        BRB     90$
+85$:    MOVL    #SS$_ACCVIO, R0
+90$:    FABDONE
+
+; $PUT rab: appends the record RAB$L_RBF points at, RAB$W_RSZ bytes, to
+; the file $CREATE made: a VAR record with its size first, a FIX one as
+; it is, each on a word, and a VAR one that would cross into the next
+; block in it, if the file's records don't span blocks. RMS$_IOP for a
+; file $OPEN opened, RMS$_RSZ for a FIX record of another size than the
+; file's or a VAR one longer than its maximum, RMS$_RFM for another record
+; format, RMS$_WER if the file system fails, with its error in RAB$L_STV.
+        .ENTRY  EXE$PUT, ^M<R2, R3, R4, R5, R6, R7, R8, R9, R10, R11>
+        DSBINT  #IPL$_SYNCH
+        BSBW    RABCHK
+        BLBC    R0, 90$
+        MOVZWL  RAB$W_ISI(R10), R8
+        BSBW    GETIFAB
+        BLBC    R0, 87$
+        MOVL    #RMS$_IOP, R0
+        BBC     #IFB$V_WRITE, IFB$L_FLAGS(R7), 90$
+        MOVL    IFB$L_VCB(R7), F11$GL_VCB
+        MOVL    RAB$L_RBF(R10), R6
+        MOVZWL  RAB$W_RSZ(R10), R5
+        BEQL    10$
+        IFNORD  R5, (R6), 85$
+10$:    MOVL    #RMS$_RSZ, R0
+        BICB3   #^XF0, IFB$AB_HDR+FAT$B_RTYPE(R7), R1
+        CMPB    R1, #FAB$C_FIX
+        BNEQ    20$
+        CMPW    R5, IFB$AB_HDR+FAT$W_RSIZE(R7)
+        BNEQ    90$
+        BSBW    ALIGN
+        BLBC    R1, 88$
+        BRB     45$
+20$:    CMPB    R1, #FAB$C_VAR
+        BNEQ    86$
+        TSTW    IFB$AB_HDR+FAT$W_MAXREC(R7)
+        BEQL    25$
+        CMPW    R5, IFB$AB_HDR+FAT$W_MAXREC(R7)
+        BGTRU   90$
+25$:    CMPW    R5, IFB$AB_HDR+FAT$W_RSIZE(R7)  ; the longest record
+        BLEQU   30$
+        MOVW    R5, IFB$AB_HDR+FAT$W_RSIZE(R7)
+30$:    BSBW    ALIGN
+        BLBC    R1, 88$
+        BITB    #FAB$M_BLK, IFB$AB_HDR+FAT$B_RATTRIB(R7)
+        BEQL    35$
+        BICL3   #^C<BLOCK-1>, IFB$L_POS(R7), R0
+        BEQL    35$
+        ADDL2   R5, R0
+        ADDL2   #2, R0
+        CMPL    R0, #BLOCK
+        BLEQU   35$
+32$:    MNEGL   #1, R0                  ; the block ends here: all ones
+        BSBW    PUTBYTE
+        BLBC    R1, 88$
+        BICL3   #^C<BLOCK-1>, IFB$L_POS(R7), R0
+        BNEQ    32$
+35$:    MOVL    R5, R0                  ; the size, low byte first
+        BSBW    PUTBYTE
+        BLBC    R1, 88$
+        ASHL    #-8, R5, R0
+        BSBW    PUTBYTE
+        BLBC    R1, 88$
+45$:    CLRL    R4
+50$:    CMPL    R4, R5
+        BGEQU   60$
+        MOVZBL  (R6)[R4], R0
+        BSBW    PUTBYTE
+        BLBC    R1, 88$
+        INCL    R4
+        BRB     50$
+60$:    MOVL    #RMS$_NORMAL, R0
+        BRB     90$
+85$:    MOVL    #SS$_ACCVIO, R0
+        BRB     90$
+86$:    MOVL    #RMS$_RFM, R0
+        BRB     90$
+87$:    MOVL    #RMS$_ISI, R0
+        BRB     90$
+88$:    MOVL    R1, RAB$L_STV(R10)
+        MOVL    #RMS$_WER, R0
+90$:    RABDONE
+
+; ALIGN: R7 = an IFAB $PUT writes. Writes a byte if it is at an odd one,
+; so the next record starts on a word. R1 = PUTBYTE's status. Uses R0.
+ALIGN:  MOVL    #RMS$_NORMAL, R1
+        BLBC    IFB$L_POS(R7), 10$
+        CLRL    R0
+        BSBB    PUTBYTE
+10$:    RSB
+
+; PUTBYTE: R7 = an IFAB $PUT writes, R0 = a byte. Writes it at the file's
+; end, a block at a time. R1 = RMS$_NORMAL, or the file system's error.
+PUTBYTE:
+        BICL3   #^C<BLOCK-1>, IFB$L_POS(R7), R1
+        MOVB    R0, IFB$AB_BUF(R7)[R1]
+        INCL    IFB$L_POS(R7)
+        BICL3   #^C<BLOCK-1>, IFB$L_POS(R7), R1
+        BNEQ    80$
+        PUSHR   #^M<R0, R2, R3, R4, R5>  ; the block is full
+        DIVL3   #BLOCK, IFB$L_POS(R7), R1
+        BSBB    WRITEBLK
+        PUSHL   R0
+        MOVC5   #0, (R7), #0, #BLOCK, IFB$AB_BUF(R7)
+        MOVL    (SP)+, R1
+        POPR    #^M<R0, R2, R3, R4, R5>
+        RSB
+80$:    MOVL    #RMS$_NORMAL, R1
+        RSB
+
+; WRITEBLK: R7 = an IFAB $PUT writes, R1 = a VBN. Writes the IFAB's block
+; there, extending the file first if it hasn't that many, by EXTEND
+; blocks at least. R0 = SS$_NORMAL, or the file system's error. Keeps
+; every other register.
+WRITEBLK:
+        PUSHR   #^M<R1, R2, R3>
+        MOVAB   IFB$AB_HDR(R7), R3
+        ROTL    #16, FAT$L_HIBLK(R3), R0
+        CMPL    R1, R0
+        BLEQU   10$
+        SUBL3   R0, R1, R1
+        CMPL    R1, #EXTEND
+        BGEQU   5$
+        MOVL    #EXTEND, R1
+5$:     BSBW    FIL$EXTEND
+        ROTL    #16, FAT$L_HIBLK(R3), R1        ; enough, even if not all?
+        CMPL    (SP), R1
+        BGTRU   90$
+10$:    MOVL    (SP), R0
+        MOVL    #1, R1
+        MOVAB   IFB$AB_BUF(R7), R2
+        BSBW    FIL$WRITEVBN
+90$:    POPR    #^M<R1, R2, R3>
+        RSB
+
 ; GETWORD: R7 = an IFAB. R0 = the next word of its file, low byte first,
 ; R1 = RMS$_NORMAL, RMS$_EOF or the disk's error.
 GETWORD:
@@ -1072,6 +1424,7 @@ GETBYTE:
         CMPL    R0, IFB$L_BLOCK(R7)
         BEQL    20$
         PUSHL   R0
+        MOVL    IFB$L_VCB(R7), F11$GL_VCB
         MOVL    #1, R1
         MOVAB   IFB$AB_BUF(R7), R2
         MOVAB   IFB$AB_HDR(R7), R3
@@ -1091,6 +1444,7 @@ GETBYTE:
 ; process's files but those. Uses R0-R3.
 RMS$RUNDOWN::
         PUSHR   #^M<R7, R8, R9>
+        DSBINT  #IPL$_SYNCH
         MOVL    R0, R3
         MOVL    R4, R9
         MOVL    #1, R8
@@ -1099,6 +1453,7 @@ RMS$RUNDOWN::
         MOVL    PCB$A_IFAB(R4)[R8], R7
         BSBW    CLOSEIFI
 20$:    AOBLEQ  #MAXIFI, R8, 10$
+        ENBINT
         POPR    #^M<R7, R8, R9>
         RSB
 

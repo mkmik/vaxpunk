@@ -1,0 +1,1004 @@
+        .TITLE  F11WRT  Files-11 writes: headers, blocks, directories, INITIALIZE
+        .IDENT  /V0.1/
+;
+; What VMS's XQP does when files are written, on F11$GL_VCB's volume
+; (f11.mar), which must be on a disk that can be written, the ramdisk:
+; a new file gets a header from the index file bitmap, blocks from the
+; storage bitmap (ods/docs/bitmap.md), with a map pointer for each run of
+; them, and an entry in a directory (ods/docs/directory.md); deleting it
+; gives all three back. FIL$INIT, which $INIT_VOL calls, writes an empty
+; volume, laid out as INITIALIZE does (ods/docs/initialize.md). RMS
+; (rms.mar) calls these at IPL$_SYNCH, as it calls f11.mar's.
+; ponytail: a cluster is a block, and the bitmaps are a block each, so a
+; volume has at most 4096 blocks and 4096 files; the index file isn't
+; extended, so a volume has the headers INITIALIZE made room for; map
+; pointers are format 2, and a directory is rewritten whole on each
+; change, so a version is entered in the first record with its name.
+;
+        .LIBRARY "lib.mlb"
+        .LIBRARY "starlet.mlb"
+        $IPLDEF
+        $SSDEF
+        $VCBDEF
+
+        .EXTERNAL F11$GL_VCB, F11$AB_DIRBLK, EXE$GQ_SYSTIME, MD$GL_BLOCKS
+        .EXTERNAL FIL$READLBLK, FIL$WRITELBLK, FIL$READVBN, FIL$WRITEVBN
+        .EXTERNAL FIL$READHDR, FIL$MAPVBN, FIL$EOF, FIL$SELECT, MD$CREATE
+        .EXTERNAL EXE$ALONONPAGED, EXE$DEANONPGDSIZ
+
+BLOCK = 512
+BITS = BLOCK*8                          ; in a bitmap block
+MFD = 4
+MAXVER = 32767
+MAXRUN = 16384                          ; blocks a format 2 pointer maps
+; A file header (ods/docs/file-header.md).
+FH2$B_IDOFFSET = 0
+FH2$B_MPOFFSET = 1
+FH2$B_ACOFFSET = 2
+FH2$B_RSOFFSET = 3
+FH2$W_STRUCLEV = 6
+FH2$W_FID = 8
+FH2$W_FID_SEQ = 10
+FH2$B_FID_NMX = 13
+FH2$W_RECATTR = 20
+FH2$L_FILECHAR = 52
+FH2$B_MAP_INUSE = 58
+FH2$L_FILEOWNER = 60
+FH2$W_FILEPROT = 64
+FH2$W_BACKLINK = 66
+FH2$W_CHECKSUM = 510
+FCH$V_MARKDEL = 15
+FCH$M_CONTIG = ^X80
+FCH$M_DIRECTORY = ^X2000
+IDOFFSET = 40                           ; words: the ident area, then the map
+MPOFFSET = 100
+FI2$T_FILENAME = 0                      ; in the ident area
+FI2$W_REVISION = 20
+FI2$Q_CREDATE = 22
+FI2$Q_REVDATE = 30
+FI2$T_FILENAMEXT = 54
+; Its record attributes.
+FAT$B_RTYPE = FH2$W_RECATTR+0
+FAT$B_RATTRIB = FH2$W_RECATTR+1
+FAT$W_RSIZE = FH2$W_RECATTR+2
+FAT$L_HIBLK = FH2$W_RECATTR+4           ; high word first
+FAT$L_EFBLK = FH2$W_RECATTR+8           ; high word first
+FAT$W_FFBYTE = FH2$W_RECATTR+12
+FAT$W_MAXREC = FH2$W_RECATTR+16
+; What INITIALIZE writes: the boot block at LBN 0, the home block at 1,
+; the index file bitmap at 2, HEADERS headers from 3, then BITMAP.SYS,
+; its SCB and the storage bitmap, then the MFD's first block.
+HEADERS = 64
+HDRLBN = 3
+SCBLBN = HDRLBN+HEADERS
+MFDLBN = SCBLBN+2
+OWNER = ^X00010004                      ; [1,4]
+FILEPROT = ^XFA00                       ; S:RWED,O:RWED,G:RE,W:
+RECSIZE = 20                            ; a RESFILES row
+
+        .PSECT  EXEC$DATA, NOEXE, WRT, QUAD
+BITBLK: .BLKB   BLOCK                   ; a bitmap block, or the home block
+NEWHDR: .BLKB   BLOCK                   ; a header FIL$INIT makes
+RECBUF: .BLKB   BLOCK                   ; a directory record being made
+DU_MODE:                                ; DIRUPD's: 0 enter, 1 remove
+        .LONG   0
+DU_NAME:                                ; the name, NAME.TYPE, and its length
+        .LONG   0, 0
+DU_VER: .LONG   0                       ; the version
+DU_FID: .BLKW   4                       ; the file ID, after the version
+DU_DONE:                                ; 1 once the name's record is written
+        .LONG   0
+DU_OUT: .LONG   0, 0                    ; the directory being made: pool, its size
+DU_POS: .LONG   0                       ; the next byte of it
+LABEL:  .BLKB   12                      ; FIL$INIT's label, padded with blanks
+; The reserved files: name, record type and attributes, record size,
+; characteristics, first LBN and blocks.
+RESFILES:
+        .ASCII  "INDEXF.SYS"
+        .BYTE   1, 0
+        .WORD   512, 0, 0, HDRLBN+HEADERS
+        .ASCII  "BITMAP.SYS"
+        .BYTE   1, 0
+        .WORD   512, FCH$M_CONTIG, SCBLBN, 2
+        .ASCII  "BADBLK.SYS"
+        .BYTE   1, 0
+        .WORD   512, 0, 0, 0
+        .ASCII  "000000.DIR"
+        .BYTE   2, 8
+        .WORD   512, FCH$M_CONTIG!FCH$M_DIRECTORY, MFDLBN, 1
+        .ASCII  "CORIMG.SYS"
+        .BYTE   1, 0
+        .WORD   512, 0, 0, 0
+        .ASCII  "VOLSET.SYS"
+        .BYTE   1, 0
+        .WORD   64, 0, 0, 0
+        .ASCII  "CONTIN.SYS"
+        .BYTE   1, 0
+        .WORD   512, 0, 0, 0
+        .ASCII  "BACKUP.SYS"
+        .BYTE   1, 0
+        .WORD   64, 0, 0, 0
+        .ASCII  "BADLOG.SYS"
+        .BYTE   1, 0
+        .WORD   16, 0, 0, 0
+RESEND:
+FORMAT: .ASCII  "DECFILE11B  "
+
+        .PSECT  $CODE$
+
+; CHECKSUM: R1 = a block, R2 = a word count. R0 = the sum of its first R2
+; words, a word. Uses R3.
+CHECKSUM:
+        CLRL    R0
+        CLRL    R3
+10$:    ADDW2   (R1)[R3], R0
+        AOBLSS  R2, R3, 10$
+        MOVZWL  R0, R0
+        RSB
+
+; FIL$WRITEHDR: R1 = a file header. Writes it, with its checksum, in its
+; file's slot of F11$GL_VCB's index file. R0 = SS$_NORMAL or the disk's
+; error. IPL$_SYNCH. Keeps every other register.
+FIL$WRITEHDR::
+        PUSHR   #^M<R1, R2, R3>
+        MOVL    #255, R2
+        BSBB    CHECKSUM
+        MOVW    R0, FH2$W_CHECKSUM(R1)
+        BSBB    HDRVBN
+        MOVL    R1, R2
+        MOVL    #1, R1
+        BSBW    FIL$WRITEVBN
+        POPR    #^M<R1, R2, R3>
+        RSB
+
+; HDRVBN: R1 = a file header. R0 = its slot's VBN in the index file, R3 =
+; the index file's header.
+HDRVBN: MOVZBL  FH2$B_FID_NMX(R1), R0
+        ASHL    #16, R0, R0
+        MOVW    FH2$W_FID(R1), R0
+        MOVL    F11$GL_VCB, R3
+        ADDL2   VCB$L_HDRVBN(R3), R0
+        DECL    R0
+        MOVAB   VCB$AB_INDEXF(R3), R3
+        RSB
+
+; BITMAP: R0 = 0 to read the index file bitmap's block into BITBLK, 1 to
+; write it from there, 2 and 3 the same for the storage bitmap's. R0 =
+; SS$_NORMAL or the disk's error. Keeps every other register.
+BITMAP: PUSHR   #^M<R1, R2>
+        MOVL    F11$GL_VCB, R2
+        BBS     #1, R0, 10$
+        MOVL    VCB$L_IBMAPLBN(R2), R2
+        BRB     20$
+10$:    MOVL    VCB$L_SBMAPLBN(R2), R2
+20$:    MOVL    #1, R1
+        BLBS    R0, 30$
+        MOVAB   BITBLK, R0
+        BSBW    FIL$READLBLK
+        BRB     40$
+30$:    MOVAB   BITBLK, R0
+        BSBW    FIL$WRITELBLK
+40$:    POPR    #^M<R1, R2>
+        RSB
+
+; EMPTYHDR: R1 = a buffer, R2 = a file number, R3 = a sequence number.
+; Makes an empty header there for the file: no blocks, no name, owned by
+; [1,4], in the MFD, made and revised now. Uses R0-R5.
+EMPTYHDR:
+        PUSHR   #^M<R1, R2, R3>
+        MOVC5   #0, (R1), #0, #BLOCK, (R1)
+        POPR    #^M<R1, R2, R3>
+        MOVB    #IDOFFSET, FH2$B_IDOFFSET(R1)
+        MOVB    #MPOFFSET, FH2$B_MPOFFSET(R1)
+        MOVB    #255, FH2$B_ACOFFSET(R1)
+        MOVB    #255, FH2$B_RSOFFSET(R1)
+        MOVW    #^X0201, FH2$W_STRUCLEV(R1)
+        MOVW    R2, FH2$W_FID(R1)
+        MOVW    R3, FH2$W_FID_SEQ(R1)
+        ASHL    #-16, R2, R2
+        MOVB    R2, FH2$B_FID_NMX(R1)
+        MOVL    #OWNER, FH2$L_FILEOWNER(R1)
+        MOVW    #FILEPROT, FH2$W_FILEPROT(R1)
+        MOVW    #MFD, FH2$W_BACKLINK(R1)
+        MOVW    #MFD, FH2$W_BACKLINK+2(R1)
+        MOVAB   IDOFFSET*2(R1), R2
+        MOVW    #1, FI2$W_REVISION(R2)
+        MOVQ    EXE$GQ_SYSTIME, FI2$Q_CREDATE(R2)
+        MOVQ    EXE$GQ_SYSTIME, FI2$Q_REVDATE(R2)
+        RSB
+
+; FIL$SETNAME: R1 = a file header, R6 = a name, NAME.TYPE, R7 = its
+; length, R4 = a version. Puts NAME.TYPE;VERSION in the header's ident
+; area, padded with blanks. Keeps every register.
+FIL$SETNAME::
+        PUSHR   #^M<R0, R2, R3, R5, R6, R7, R8>
+        MOVAB   IDOFFSET*2(R1), R8
+        CLRL    R2                      ; the characters written
+        CLRL    R3
+10$:    CMPL    R3, R7
+        BGEQU   20$
+        MOVZBL  (R6)[R3], R0
+        BSBB    40$
+        INCL    R3
+        BRB     10$
+20$:    MOVZBL  #59, R0                 ; a semicolon, then the version
+        BSBB    40$
+        CLRL    R5                      ; its digits, on the stack
+        MOVL    R4, R6
+25$:    DIVL3   #10, R6, R7
+        MULL3   #10, R7, R0
+        SUBL3   R0, R6, R0
+        ADDL2   #^A/0/, R0
+        PUSHL   R0
+        INCL    R5
+        MOVL    R7, R6
+        BNEQ    25$
+30$:    MOVL    (SP)+, R0
+        BSBB    40$
+        SOBGTR  R5, 30$
+35$:    CMPL    R2, #86                 ; the rest blank
+        BGEQU   38$
+        MOVZBL  #^A/ /, R0
+        BSBB    40$
+        BRB     35$
+38$:    POPR    #^M<R0, R2, R3, R5, R6, R7, R8>
+        RSB
+; The R2th character of the name is R0: the first 20 in FI2$T_FILENAME,
+; the rest in FI2$T_FILENAMEXT.
+40$:    CMPL    R2, #20
+        BGEQU   45$
+        MOVB    R0, FI2$T_FILENAME(R8)[R2]
+        BRB     48$
+45$:    MOVB    R0, FI2$T_FILENAMEXT-20(R8)[R2]
+48$:    INCL    R2
+        RSB
+
+; FIL$CREHDR: R1 = a buffer. Takes the first free file number from the
+; index file bitmap, and makes an empty header for it in the buffer, with
+; the next sequence number for its slot; FIL$WRITEHDR writes it. R0 =
+; SS$_NORMAL, SS$_IDXFILEFULL if every header the index file has room for
+; is in use, or the disk's error. IPL$_SYNCH. Keeps every other register.
+FIL$CREHDR::
+        PUSHR   #^M<R1, R2, R3, R4, R5, R6>
+        MOVL    R1, R6
+        CLRL    R0
+        BSBB    BITMAP
+        BLBC    R0, 90$
+        CLRL    R4                      ; the bit for file R4 + 1
+10$:    BBC     R4, BITBLK, 20$
+        AOBLSS  #BITS, R4, 10$
+        BRB     80$
+20$:    MOVL    F11$GL_VCB, R5          ; its slot, in the index file?
+        ADDL3   VCB$L_HDRVBN(R5), R4, R0
+        MOVAB   VCB$AB_INDEXF(R5), R1
+        BSBW    FIL$MAPVBN
+        TSTL    R1
+        BEQL    80$
+        ADDL3   VCB$L_HDRVBN(R5), R4, R0        ; what was in it
+        MOVL    #1, R1
+        MOVL    R6, R2
+        MOVAB   VCB$AB_INDEXF(R5), R3
+        BSBW    FIL$READVBN
+        BLBC    R0, 90$
+        MOVZWL  FH2$W_FID_SEQ(R6), R3
+        INCW    R3
+        BNEQ    30$
+        INCW    R3
+30$:    BBSS    R4, BITBLK, 35$
+35$:    MOVL    #1, R0
+        BSBW    BITMAP
+        BLBC    R0, 90$
+        MOVL    R6, R1
+        ADDL3   #1, R4, R2
+        BSBW    EMPTYHDR
+        MOVL    #SS$_NORMAL, R0
+        BRB     90$
+80$:    MOVL    #SS$_IDXFILEFULL, R0
+90$:    POPR    #^M<R1, R2, R3, R4, R5, R6>
+        RSB
+
+; ALLOCBLK: R1 = a block count. Takes the first run of free blocks from
+; the storage bitmap, as many as R1 at most: R2 = its first LBN, R1 = its
+; length. R0 = SS$_NORMAL, SS$_DEVICEFULL if no block is free, or the
+; disk's error. Uses R3.
+ALLOCBLK:
+        PUSHL   R4
+        MOVL    #2, R0
+        BSBW    BITMAP
+        BLBC    R0, 90$
+        CLRL    R2                      ; a set bit is a free block
+10$:    BBS     R2, BITBLK, 20$
+        AOBLSS  #BITS, R2, 10$
+        MOVL    #SS$_DEVICEFULL, R0
+        BRB     90$
+20$:    MOVL    R2, R3
+        CLRL    R4                      ; the run
+30$:    BBCC    R3, BITBLK, 40$
+        INCL    R4
+        INCL    R3
+        CMPL    R4, R1
+        BGEQU   40$
+        CMPL    R3, #BITS
+        BLSSU   30$
+40$:    MOVL    R4, R1
+        MOVL    #3, R0
+        BSBW    BITMAP
+90$:    MOVL    (SP)+, R4
+        RSB
+
+; FREEBLK: R1 = a block count, R2 = an LBN. Gives the blocks back to the
+; storage bitmap. R0 = SS$_NORMAL or the disk's error. Uses R1-R2.
+FREEBLK:
+        MOVL    #2, R0
+        BSBW    BITMAP
+        BLBC    R0, 90$
+        TSTL    R1
+        BEQL    20$
+10$:    BBSS    R2, BITBLK, 15$
+15$:    INCL    R2
+        SOBGTR  R1, 10$
+20$:    MOVL    #3, R0
+        BSBW    BITMAP
+90$:    RSB
+
+; GETHIBLK: R3 = a file header. R0 = the blocks allocated to it. And
+; PUTHIBLK, R0 = the blocks to set it to. Keep every other register.
+GETHIBLK:
+        ROTL    #16, FAT$L_HIBLK(R3), R0
+        RSB
+PUTHIBLK:
+        ROTL    #16, R0, FAT$L_HIBLK(R3)
+        RSB
+
+; ADDMAP: R1 = a block count, R2 = an LBN, R3 = a file header. Maps the
+; blocks past the file's last, merging them into its last pointer if they
+; follow it; if they don't, the file is no longer contiguous. R0 =
+; SS$_NORMAL, or SS$_HEADERFULL if its map is full. Uses R4-R5.
+ADDMAP: MOVZBL  FH2$B_MPOFFSET(R3), R4
+        MOVZBL  FH2$B_MAP_INUSE(R3), R5
+        CMPL    R5, #3
+        BLSSU   20$
+        ADDL2   R5, R4                  ; the last pointer, if a format 2 one
+        SUBL2   #3, R4
+        MOVAW   (R3)[R4], R4
+        MOVZWL  (R4), R0
+        EXTZV   #14, #2, R0, R5
+        CMPL    R5, #2
+        BNEQ    15$
+        BICL2   #^XC000, R0
+        INCL    R0                      ; its count
+        ADDL3   2(R4), R0, R5
+        CMPL    R5, R2
+        BNEQ    15$
+        ADDL2   R1, R0
+        CMPL    R0, #MAXRUN
+        BGTRU   15$
+        DECL    R0
+        BISW3   #^X8000, R0, (R4)
+        BRB     70$
+15$:    BICL2   #FCH$M_CONTIG, FH2$L_FILECHAR(R3)
+        MOVZBL  FH2$B_MPOFFSET(R3), R4
+        MOVZBL  FH2$B_MAP_INUSE(R3), R5
+20$:    ADDL2   R5, R4                  ; a new pointer past the last
+        ADDL3   #3, R4, R0
+        MOVZBL  FH2$B_ACOFFSET(R3), R5
+        CMPL    R0, R5
+        BGTRU   80$
+        MOVAW   (R3)[R4], R4
+        SUBL3   #1, R1, R0
+        BISW3   #^X8000, R0, (R4)
+        MOVL    R2, 2(R4)
+        ADDB2   #3, FH2$B_MAP_INUSE(R3)
+70$:    MOVL    #SS$_NORMAL, R0
+        RSB
+80$:    MOVL    #SS$_HEADERFULL, R0
+        RSB
+
+; FIL$EXTEND: R1 = a block count, R3 = a file header. Allocates that many
+; blocks more to the file, in as few runs as the storage bitmap has, and
+; maps them; FIL$WRITEHDR writes the header. R0 = SS$_NORMAL,
+; SS$_DEVICEFULL, SS$_HEADERFULL, or the disk's error, with the blocks
+; mapped until then still the file's. IPL$_SYNCH. Keeps every other
+; register.
+FIL$EXTEND::
+        PUSHR   #^M<R1, R2, R4, R5, R6>
+        MOVL    R1, R6                  ; the blocks left
+10$:    TSTL    R6
+        BEQL    40$
+        MOVL    R6, R1
+        CMPL    R1, #MAXRUN
+        BLEQU   20$
+        MOVL    #MAXRUN, R1
+20$:    PUSHL   R3
+        BSBW    ALLOCBLK
+        MOVL    (SP)+, R3
+        BLBC    R0, 90$
+        BSBW    ADDMAP
+        BLBC    R0, 80$
+        SUBL2   R1, R6
+        BSBB    GETHIBLK
+        ADDL2   R1, R0
+        BSBB    PUTHIBLK
+        BRB     10$
+40$:    MOVL    #SS$_NORMAL, R0
+        BRB     90$
+80$:    PUSHL   R0                      ; the map is full: the run goes back
+        BSBW    FREEBLK
+        MOVL    (SP)+, R0
+90$:    POPR    #^M<R1, R2, R4, R5, R6>
+        RSB
+
+; FIL$DELHDR: R1 = a file header. Deletes the file: gives its blocks back
+; to the storage bitmap and its slot to the index file bitmap, and marks
+; the header deleted, its sequence number kept for the slot's next file.
+; R0 = SS$_NORMAL or the disk's error. IPL$_SYNCH. Uses R1-R5.
+FIL$DELHDR::
+        PUSHL   R6
+        MOVL    R1, R6
+        MOVL    #1, R4                  ; the next VBN
+10$:    MOVL    R4, R0
+        MOVL    R6, R1
+        BSBW    FIL$MAPVBN
+        TSTL    R1
+        BEQL    20$
+        ADDL2   R1, R4
+        MOVL    R0, R2
+        BSBW    FREEBLK
+        BLBC    R0, 90$
+        BRB     10$
+20$:    MOVL    R6, R1
+        BSBW    HDRVBN
+        PUSHL   R0                      ; the slot's VBN
+        MOVZBL  FH2$B_FID_NMX(R6), R4   ; the file number
+        ASHL    #16, R4, R4
+        MOVW    FH2$W_FID(R6), R4
+        MOVZWL  FH2$W_FID_SEQ(R6), R5
+        PUSHR   #^M<R4, R5>
+        MOVC5   #0, (R6), #0, #BLOCK, (R6)
+        POPR    #^M<R4, R5>
+        MOVW    R5, FH2$W_FID_SEQ(R6)
+        BISL2   #1@FCH$V_MARKDEL, FH2$L_FILECHAR(R6)
+        MOVL    (SP)+, R0
+        MOVL    #1, R1
+        MOVL    R6, R2
+        MOVL    F11$GL_VCB, R3
+        MOVAB   VCB$AB_INDEXF(R3), R3
+        BSBW    FIL$WRITEVBN
+        BLBC    R0, 90$
+        CLRL    R0
+        BSBW    BITMAP
+        BLBC    R0, 90$
+        DECL    R4
+        BBCC    R4, BITBLK, 30$
+30$:    MOVL    #1, R0
+        BSBW    BITMAP
+90$:    MOVL    (SP)+, R6
+        RSB
+
+; FIL$ENTER: R3 = a directory's header, R6 = a name, NAME.TYPE, R7 = its
+; length, R8 = a version, or 0 for one above the highest the directory
+; has, R5 = a file ID's address. Enters the file in the directory: R4 =
+; its version. R0 = SS$_NORMAL, SS$_DUPFILENAME if that version is there,
+; SS$_BADFILEVER if it would be above 32767, SS$_INSFMEM, or the disk's
+; error. IPL$_SYNCH. Uses R0-R5.
+FIL$ENTER::
+        CLRL    DU_MODE
+        MOVL    R8, DU_VER
+        MOVL    (R5), DU_FID
+        MOVW    4(R5), DU_FID+4
+        BSBB    DIRUPD
+        MOVL    DU_VER, R4
+        RSB
+
+; FIL$REMOVE: R3 = a directory's header, R6 = a name, NAME.TYPE, R7 = its
+; length, R8 = a version. Removes the file's entry from the directory: R5
+; = its file number. R0 = SS$_NORMAL, SS$_NOSUCHFILE if there is no such
+; entry, SS$_INSFMEM, or the disk's error. IPL$_SYNCH. Uses R0-R5.
+FIL$REMOVE::
+        MOVL    #1, DU_MODE
+        MOVL    R8, DU_VER
+        BSBB    DIRUPD
+        MOVZBL  DU_FID+5, R5
+        ASHL    #16, R5, R5
+        MOVW    DU_FID, R5
+        RSB
+
+; DIRUPD: R3 = a directory's header, R6 = a name, R7 = its length, and
+; DU_MODE, DU_VER and DU_FID. Copies the directory's records into a block
+; of pool, entering or removing the entry on the way, packs them into
+; blocks again, and writes them back, extending the directory if it grew,
+; and its header, with its new end of file. R0 = SS$_NORMAL, or the
+; error, and the directory as it was. Uses R0-R5.
+DIRUPD: PUSHR   #^M<R6, R7, R8, R9, R10, R11>
+        MOVL    R6, DU_NAME
+        MOVL    R7, DU_NAME+4
+        CLRL    DU_DONE
+        CLRL    DU_POS
+        MOVL    R3, R9                  ; the header
+        MOVL    R9, R1
+        BSBW    FIL$EOF
+        ADDL2   #BLOCK-1, R0
+        DIVL2   #BLOCK, R0
+        MOVL    R0, R10                 ; the blocks in use
+        ADDL3   #2, R10, R1             ; and one more for a new record
+        MULL2   #BLOCK, R1
+        BSBW    EXE$ALONONPAGED
+        BLBS    R0, 5$
+        BRW     95$
+5$:     MOVL    R1, DU_OUT+4
+        MOVL    R2, DU_OUT
+        MOVC5   #0, (R2), #0, R1, (R2)
+        MOVL    #1, R11                 ; the VBN
+10$:    CMPL    R11, R10
+        BGTRU   50$
+        MOVL    R11, R0
+        MOVL    #1, R1
+        MOVAB   F11$AB_DIRBLK, R2
+        MOVL    R9, R3
+        BSBW    FIL$READVBN
+        BLBS    R0, 15$
+        BRW     90$
+15$:    MOVAB   F11$AB_DIRBLK, R8       ; the record
+20$:    MOVAB   F11$AB_DIRBLK+BLOCK-2, R0
+        CMPL    R8, R0
+        BGEQU   40$
+        CMPW    (R8), #^XFFFF           ; the block's end
+        BEQL    40$
+        BSBW    ONEREC
+        BLBS    R0, 30$
+        BRW     90$
+30$:    MOVZWL  (R8), R0
+        ADDL2   #2, R0
+        ADDL2   R0, R8
+        BRB     20$
+40$:    INCL    R11
+        BRB     10$
+50$:    TSTL    DU_DONE                 ; past the last record
+        BNEQ    60$
+        MOVL    #SS$_NOSUCHFILE, R0
+        TSTL    DU_MODE
+        BNEQ    90$
+        BSBW    NEWREC
+        BSBW    EMIT
+        BLBC    R0, 90$
+60$:    BSBW    ENDBLK
+        DIVL3   #BLOCK, DU_POS, R10     ; the blocks it takes now
+        MOVL    R9, R3
+        BSBW    GETHIBLK
+        SUBL3   R0, R10, R1
+        BLEQ    70$
+        BSBW    FIL$EXTEND
+        BLBC    R0, 90$
+70$:    MOVL    #1, R0
+        MOVL    R10, R1
+        MOVL    DU_OUT, R2
+        MOVL    R9, R3
+        BSBW    FIL$WRITEVBN
+        BLBC    R0, 90$
+        ADDL3   #1, R10, R0             ; the end of file: past the last block
+        ROTL    #16, R0, FAT$L_EFBLK(R9)
+        CLRW    FAT$W_FFBYTE(R9)
+        MOVL    R9, R1
+        BSBW    FIL$WRITEHDR
+90$:    MOVL    R0, R6
+        MOVL    DU_OUT, R0
+        MOVL    DU_OUT+4, R1
+        BSBW    EXE$DEANONPGDSIZ
+        MOVL    R6, R0
+95$:    MOVL    R9, R3
+        POPR    #^M<R6, R7, R8, R9, R10, R11>
+        RSB
+
+; ONEREC: R8 = a directory record, and DIRUPD's. Copies it, entering the
+; new record before it, or the entry in it, or removing the entry from it.
+; R0 = SS$_NORMAL, or the error. Uses R0-R6.
+ONEREC: TSTL    DU_DONE
+        BNEQ    50$
+        MOVAB   6(R8), R1
+        MOVZBL  5(R8), R2
+        BSBW    COMPARE
+        TSTL    R0
+        BLSS    50$                     ; before the name
+        BGTR    20$
+        TSTL    DU_MODE                 ; the name's record
+        BNEQ    10$
+        BSBW    ADDENTRY
+        BLBC    R0, 90$
+        BRB     15$
+10$:    BSBW    DELENTRY
+        BLBC    R0, 50$                 ; not there
+        TSTL    R2
+        BEQL    18$                     ; none left
+15$:    BSBW    EMIT
+        BLBC    R0, 90$
+18$:    MOVL    #1, DU_DONE
+        MOVL    #SS$_NORMAL, R0
+        RSB
+20$:    TSTL    DU_MODE                 ; past it: a new record goes here
+        BNEQ    50$
+        BSBW    NEWREC
+        BSBW    EMIT
+        BLBC    R0, 90$
+        MOVL    #1, DU_DONE
+50$:
+        MOVL    R8, R1
+        MOVZWL  (R8), R2
+        ADDL2   #2, R2
+        BRW     EMIT
+90$:    RSB
+
+; COMPARE: R1 = a name, R2 = its length. R0 = -1, 0 or 1 as it sorts
+; before DU_NAME, is it, or sorts after it: byte by byte, a shorter name
+; first. Uses R3-R4.
+COMPARE:
+        CLRL    R3
+        MOVL    DU_NAME, R4
+10$:    CMPL    R3, R2
+        BGEQU   30$
+        CMPL    R3, DU_NAME+4
+        BGEQU   50$
+        CMPB    (R1)[R3], (R4)[R3]
+        BLSSU   40$
+        BGTRU   50$
+        INCL    R3
+        BRB     10$
+30$:    CLRL    R0
+        CMPL    R3, DU_NAME+4
+        BEQL    60$
+40$:    MNEGL   #1, R0
+        RSB
+50$:    MOVL    #1, R0
+60$:    RSB
+
+; NEWREC: makes a record for DU_NAME in RECBUF, with an entry for DU_FID,
+; version DU_VER, 1 if that is 0: R1 = RECBUF, R2 = its length. Uses
+; R0-R6.
+NEWREC: MOVAB   RECBUF, R3
+        MOVW    #MAXVER, 2(R3)          ; the version limit
+        CLRB    4(R3)                   ; the flags
+        MOVB    DU_NAME+4, 5(R3)
+        MOVC3   DU_NAME+4, @DU_NAME, 6(R3)
+        MOVAB   RECBUF, R3
+        MOVZBL  5(R3), R0
+        CLRB    6(R3)[R0]               ; the pad, if the name's length is odd
+        INCL    R0
+        BICL2   #1, R0
+        ADDL2   #6, R0
+        ADDL3   R3, R0, R6              ; the entry
+        TSTL    DU_VER
+        BNEQ    10$
+        MOVL    #1, DU_VER
+10$:    BSBB    PUTENTRY
+        BRB     RECEND
+
+; PUTENTRY: R6 = where an entry goes. Writes DU_VER's and DU_FID's
+; there, R6 past it.
+PUTENTRY:
+        MOVW    DU_VER, (R6)+
+        MOVL    DU_FID, (R6)+
+        MOVW    DU_FID+4, (R6)+
+        RSB
+
+; RECEND: R3 = a record being made, R6 = past it. Sets its size: R1 =
+; it, R2 = its length.
+RECEND: SUBL3   R3, R6, R2
+        SUBW3   #2, R2, (R3)
+        MOVL    R3, R1
+        RSB
+
+; RECHEAD: R8 = a directory record. Copies its size, version limit,
+; flags and name to RECBUF: R3 = RECBUF, R6 = past what was copied there,
+; R4 = the record's first entry, R5 = past its last. Uses R0-R6.
+RECHEAD:
+        MOVZBL  5(R8), R2
+        INCL    R2
+        BICL2   #1, R2
+        ADDL2   #6, R2
+        PUSHL   R2
+        MOVC3   R2, (R8), RECBUF
+        MOVL    (SP)+, R2
+        MOVAB   RECBUF, R3
+        ADDL3   R3, R2, R6
+        ADDL3   R8, R2, R4
+        MOVZWL  (R8), R5
+        ADDL2   R8, R5
+        ADDL2   #2, R5
+        RSB
+
+; ADDENTRY: R8 = DU_NAME's record. Makes it in RECBUF with an entry for
+; DU_FID, version DU_VER, or one above the record's first, the highest, if
+; that is 0; versions go from highest to lowest. R1 = RECBUF, R2 = its
+; length, R0 = SS$_NORMAL, SS$_DUPFILENAME or SS$_BADFILEVER. Uses R0-R6.
+ADDENTRY:
+        BSBB    RECHEAD
+        TSTL    DU_VER
+        BNEQ    10$
+        MOVZWL  (R4), R0
+        INCL    R0
+        CMPL    R0, #MAXVER
+        BGTRU   85$
+        MOVL    R0, DU_VER
+10$:    CMPL    R4, R5                  ; the higher versions
+        BGEQU   20$
+        CMPW    (R4), DU_VER
+        BLSSU   20$
+        BEQL    80$
+        MOVQ    (R4)+, (R6)+
+        BRB     10$
+20$:    BSBB    PUTENTRY                ; the new one
+30$:    CMPL    R4, R5                  ; the lower ones
+        BGEQU   40$
+        MOVQ    (R4)+, (R6)+
+        BRB     30$
+40$:    BSBB    RECEND
+        MOVL    #SS$_NORMAL, R0
+        RSB
+80$:    MOVL    #SS$_DUPFILENAME, R0
+        RSB
+85$:    MOVL    #SS$_BADFILEVER, R0
+        RSB
+
+; DELENTRY: R8 = DU_NAME's record. Makes it in RECBUF without the entry
+; for version DU_VER, whose file ID goes to DU_FID: R1 = RECBUF, R2 = its
+; length, 0 if no entry is left. R0 = 1, or 0 if the record has no such
+; entry. Uses R0-R6.
+DELENTRY:
+        BSBB    RECHEAD
+        PUSHL   R6                      ; past the head
+        CLRL    R0
+10$:    CMPL    R4, R5
+        BGEQU   30$
+        CMPW    (R4), DU_VER
+        BNEQ    20$
+        MOVL    2(R4), DU_FID
+        MOVW    6(R4), DU_FID+4
+        MOVL    #1, R0
+        ADDL2   #8, R4
+        BRB     10$
+20$:    MOVQ    (R4)+, (R6)+
+        BRB     10$
+30$:    BSBB    RECEND
+        CMPL    R6, (SP)+
+        BNEQ    40$
+        CLRL    R2
+40$:    RSB
+
+; EMIT: R1 = a directory record, R2 = its length. Appends it to the
+; directory being made, in the next block if it doesn't fit in this one.
+; R0 = SS$_NORMAL, or SS$_BADIRECTORY if it doesn't fit in a block. Uses
+; R0-R5.
+EMIT:   CMPL    R2, #BLOCK
+        BGTRU   80$
+        BICL3   #^C<BLOCK-1>, DU_POS, R0
+        ADDL2   R2, R0
+        CMPL    R0, #BLOCK
+        BLEQU   10$
+        PUSHR   #^M<R1, R2>
+        BSBB    ENDBLK
+        POPR    #^M<R1, R2>
+10$:    ADDL3   DU_OUT, DU_POS, R3
+        ADDL2   R2, DU_POS
+        MOVC3   R2, (R1), (R3)
+        MOVL    #SS$_NORMAL, R0
+        RSB
+80$:    MOVL    #SS$_BADIRECTORY, R0
+        RSB
+
+; ENDBLK: ends the block being made, with a record size of all ones if
+; there is room for it, and starts the next. The first block always has
+; one. Uses R0-R1.
+ENDBLK: BICL3   #^C<BLOCK-1>, DU_POS, R0
+        BNEQ    10$
+        TSTL    DU_POS
+        BNEQ    20$
+10$:    ADDL3   DU_OUT, DU_POS, R1
+        MNEGW   #1, (R1)
+        ADDL2   #BLOCK, DU_POS
+        BICL2   #BLOCK-1, DU_POS
+20$:    RSB
+
+; FIL$INIT: R1 = a label, R2 = its length, 1 to 12. Writes an empty
+; Files-11 ODS-2 volume on F11$GL_VCB's disk, the ramdisk, which
+; MD$CREATE has just made, zeroed: the home block, the bitmaps, and the
+; reserved files' headers, as INITIALIZE does, and the reserved files in
+; the MFD. R0 = SS$_NORMAL, or the disk's error. IPL$_SYNCH. Uses R0-R11.
+; ponytail: no backup home block or index file header: the home block's
+; backup LBNs are the primary ones.
+FIL$INIT::
+        PUSHR   #^M<R1, R2>
+        MOVC5   #0, (R1), #^A/ /, #12, LABEL
+        POPR    #^M<R1, R2>
+        MOVC3   R2, (R1), LABEL
+        MOVL    F11$GL_VCB, R11
+        MOVL    #HDRLBN-1, VCB$L_IBMAPLBN(R11)
+        MOVL    #SCBLBN+1, VCB$L_SBMAPLBN(R11)
+        MOVL    #HDRLBN+1, VCB$L_HDRVBN(R11)    ; VBNs: boot, home, bitmap
+; The index file bitmap: file 1, for now.
+        MOVC5   #0, BITBLK, #0, #BLOCK, BITBLK
+        MOVB    #1, BITBLK
+        MOVL    #1, R0
+        BSBW    BITMAP
+        BLBS    R0, 5$
+        BRW     90$
+; The storage bitmap: the blocks past the MFD's first are free.
+5$:     MOVC5   #0, BITBLK, #0, #BLOCK, BITBLK
+        MOVL    #MFDLBN+1, R2
+10$:    BBSS    R2, BITBLK, 15$
+15$:    AOBLSS  MD$GL_BLOCKS, R2, 10$
+        MOVL    #3, R0
+        BSBW    BITMAP
+        BLBS    R0, 20$
+        BRW     90$
+; The SCB, before it: the volume's size, and a made-up geometry.
+20$:    MOVC5   #0, BITBLK, #0, #BLOCK, BITBLK
+        MOVAB   BITBLK, R1
+        MOVW    #^X0201, (R1)           ; structure level
+        MOVW    #1, 2(R1)               ; cluster
+        MOVL    MD$GL_BLOCKS, 4(R1)     ; volume size
+        MOVL    #1, 8(R1)               ; block size
+        MOVL    #1, 12(R1)              ; sectors
+        MOVL    #1, 16(R1)              ; tracks
+        MOVL    MD$GL_BLOCKS, 20(R1)    ; cylinders
+        MOVL    #255, R2
+        BSBW    CHECKSUM
+        MOVW    R0, BLOCK-2(R1)
+        MOVAB   BITBLK, R0
+        MOVL    #1, R1
+        MOVL    #SCBLBN, R2
+        BSBW    FIL$WRITELBLK
+        BLBS    R0, 25$
+        BRW     90$
+; INDEXF.SYS's header, in the VCB, where FIL$WRITEHDR finds the index
+; file's map, then the others', each in a slot FIL$CREHDR takes.
+25$:    MOVAB   VCB$AB_INDEXF(R11), R1
+        MOVL    #1, R2
+        MOVL    #1, R3
+        BSBW    EMPTYHDR
+        MOVAB   VCB$AB_INDEXF(R11), R1
+        MOVAB   RESFILES, R10
+        BSBW    RESHDR
+        BLBC    R0, 90$
+30$:    ADDL2   #RECSIZE, R10
+        MOVAB   RESEND, R0
+        CMPL    R10, R0
+        BGEQU   40$
+        MOVAB   NEWHDR, R1
+        BSBW    FIL$CREHDR
+        BLBC    R0, 90$
+        MOVW    FH2$W_FID(R1), FH2$W_FID_SEQ(R1)        ; (n,n)
+        BSBW    RESHDR
+        BLBC    R0, 90$
+        BRB     30$
+; The MFD lists them all, version 1.
+40$:    MOVL    #MFD, R0
+        MOVAB   NEWHDR, R1
+        BSBW    FIL$READHDR
+        BLBC    R0, 90$
+        MOVAB   RESFILES, R10
+        MOVL    #1, R9                  ; the file number
+50$:    MOVW    R9, DU_FID              ; its file ID, (n,n,0)
+        MOVW    R9, DU_FID+2
+        CLRW    DU_FID+4
+        MOVAB   NEWHDR, R3
+        MOVL    R10, R6
+        MOVL    #10, R7
+        MOVL    #1, R8
+        MOVAB   DU_FID, R5
+        BSBW    FIL$ENTER
+        BLBC    R0, 90$
+        ADDL2   #RECSIZE, R10
+        INCL    R9
+        CMPL    R9, #9
+        BLEQU   50$
+; The home block, last, which makes it a volume.
+        MOVC5   #0, BITBLK, #0, #BLOCK, BITBLK
+        MOVAB   BITBLK, R1
+        MOVL    #1, (R1)                ; home LBN
+        MOVL    #1, 4(R1)               ; backup home LBN
+        MOVL    #HDRLBN, 8(R1)          ; backup index file header LBN
+        MOVW    #^X0201, 12(R1)         ; structure level
+        MOVW    #1, 14(R1)              ; cluster
+        MOVW    #2, 16(R1)              ; home VBN
+        MOVW    #2, 18(R1)              ; backup home VBN
+        MOVW    #HDRLBN+1, 20(R1)       ; backup index file header VBN
+        MOVW    #HDRLBN, 22(R1)         ; index file bitmap VBN
+        MOVL    #HDRLBN-1, 24(R1)       ; and LBN
+        MOVL    #HEADERS, 28(R1)        ; maximum files
+        MOVW    #1, 32(R1)              ; index file bitmap blocks
+        MOVW    #9, 34(R1)              ; reserved files
+        MOVL    #OWNER, 44(R1)          ; volume owner
+        MOVW    #FILEPROT, 54(R1)       ; default file protection
+        MOVQ    EXE$GQ_SYSTIME, 60(R1)  ; made
+        MOVB    #7, 68(R1)              ; window
+        MOVB    #3, 69(R1)              ; directory LRU limit
+        MOVW    #5, 70(R1)              ; default extend
+        MOVC5   #0, BITBLK, #^A/ /, #12, BITBLK+460     ; structure name
+        MOVC3   #12, LABEL, BITBLK+472                  ; volume name
+        MOVC5   #0, BITBLK, #^A/ /, #12, BITBLK+484     ; owner name
+        MOVC3   #12, FORMAT, BITBLK+496
+        MOVAB   BITBLK, R1
+        MOVL    #29, R2
+        BSBW    CHECKSUM
+        MOVW    R0, 58(R1)
+        MOVL    #255, R2
+        BSBW    CHECKSUM
+        MOVW    R0, BLOCK-2(R1)
+        MOVAB   BITBLK, R0
+        MOVL    #1, R1
+        MOVL    #1, R2
+        BSBW    FIL$WRITELBLK
+90$:    RSB
+
+; RESHDR: R1 = a reserved file's empty header, R10 = its RESFILES row.
+; Gives it its name, version 1, record attributes and blocks, and writes
+; it. R0 = SS$_NORMAL or the disk's error. Uses R0-R7.
+RESHDR: MOVL    R10, R6
+        MOVL    #10, R7
+        MOVL    #1, R4
+        BSBW    FIL$SETNAME
+        MOVL    R1, R3
+        MOVB    10(R10), FAT$B_RTYPE(R3)
+        MOVB    11(R10), FAT$B_RATTRIB(R3)
+        MOVW    12(R10), FAT$W_RSIZE(R3)
+        MOVW    12(R10), FAT$W_MAXREC(R3)
+        MOVZWL  14(R10), FH2$L_FILECHAR(R3)
+        MOVZWL  18(R10), R1             ; its blocks
+        BEQL    10$
+        MOVZWL  16(R10), R2
+        BSBW    ADDMAP
+        BLBC    R0, 90$
+        MOVL    R1, R0
+        BSBW    PUTHIBLK
+10$:    INCL    R1                      ; the end of file: past them,
+        BITW    #FCH$M_DIRECTORY, 14(R10)
+        BEQL    20$
+        MOVL    #1, R1                  ; but the MFD's is FIL$ENTER's
+20$:    ROTL    #16, R1, FAT$L_EFBLK(R3)
+        MOVL    R3, R1
+        BRW     FIL$WRITEHDR
+90$:    RSB
+
+; $INIT_VOL devnam, volnam, itmlst: writes an empty Files-11 ODS-2
+; volume labelled volnam, up to 12 characters, on the disk devnam names,
+; which must be MDA0:, the ramdisk, and not mounted. The ramdisk is made
+; afresh first, zeroed. SS$_WRITLCK for DKA0:, SS$_DEVMOUNT if a volume
+; is mounted there, SS$_BADPARAM for a label too long or empty,
+; SS$_INSFMEM if there isn't the memory for the ramdisk.
+; ponytail: no items; any process may.
+        .ENTRY  EXE$INIT_VOL, ^M<R2, R3, R4, R5, R6, R7, R8, R9, R10, R11>
+        MOVL    4(AP), R6               ; devnam
+        IFNORD  #8, (R6), 85$
+        MOVZWL  (R6), R7
+        MOVL    4(R6), R6
+        IFNORD  R7, (R6), 85$
+        MOVL    8(AP), R8               ; volnam
+        IFNORD  #8, (R8), 85$
+        MOVZWL  (R8), R9
+        MOVL    4(R8), R8
+        IFNORD  R9, (R8), 85$
+        MOVL    #SS$_BADPARAM, R0
+        TSTL    R9
+        BEQL    90$
+        CMPL    R9, #12
+        BGTRU   90$
+        DSBINT  #IPL$_SYNCH
+        MOVL    R6, R1
+        MOVL    R7, R2
+        BSBW    FIL$SELECT
+        BLBC    R0, 80$
+        MOVL    F11$GL_VCB, R1
+        MOVL    #SS$_DEVMOUNT, R0
+        BBS     #VCB$V_MOUNTED, VCB$L_STATUS(R1), 80$
+        MOVL    #SS$_WRITLCK, R0
+        BBC     #VCB$V_RAMDISK, VCB$L_STATUS(R1), 80$
+        BSBW    MD$CREATE
+        BLBC    R0, 80$
+        MOVL    R8, R1
+        MOVL    R9, R2
+        BSBW    FIL$INIT
+80$:    ENBINT
+        RET
+85$:    MOVL    #SS$_ACCVIO, R0
+90$:    RET
+
+        .END

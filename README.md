@@ -87,19 +87,36 @@ lists files, in the default directory unless told where (`DIR`, `DIR
 `*` prompt),
 `DEFINE name equivalence`, `DEASSIGN name` and `SHOW LOGICAL name` make,
 delete and translate logical names (`SHOW LOGICAL SYS$INPUT`, or `SHOW
-LOGICAL` alone to list them all), `HELP` lists the commands and `LOGOUT` ends the process:
+LOGICAL` alone to list them all), `COPY` and `DELETE` copy and delete
+files, `INITIALIZE` and `MOUNT` make and mount a volume on the ramdisk,
+`MDA0:`, the one disk they can write
+([ADR-0009](docs/adr/0009-ramdisk-writable-files-11.md)), `HELP` lists
+the commands and `LOGOUT` ends the process:
 
 ```
 $ DIR [SYSEXE]
 
 Directory DKA0:[SYSEXE]
 
-DCL.EXE;1           DIRECTORY.EXE;1     EDIT.EXE;1          EXEC.EXE;1
-HOG.EXE;1           NUDGE.EXE;1         PING.EXE;1          PONG.EXE;1
+COPY.EXE;1          DCL.EXE;1           DELETE.EXE;1        DIRECTORY.EXE;1
+EDIT.EXE;1          EXEC.EXE;1          HOG.EXE;1           INIT.EXE;1
+MOUNT.EXE;1         NUDGE.EXE;1         PING.EXE;1          PONG.EXE;1
 SLEEPER.EXE;1       SNOOP.EXE;1         STARTUP.EXE;1       SVCTEST.EXE;1
 TIMETEST.EXE;1      TYPE.EXE;1          USURP.EXE;1
 
-Total of 15 files.
+Total of 19 files.
+$ INITIALIZE MDA0: RAM
+$ MOUNT MDA0: RAM
+%MOUNT-I-MOUNTED, RAM mounted on _MDA0:
+$ COPY [SYSMGR]WELCOME.TXT MDA0:[000000]
+$ DIR MDA0:[000000]WELCOME.TXT;*
+
+Directory MDA0:[000000]
+
+WELCOME.TXT;1
+
+Total of 1 file.
+$ DELETE MDA0:[000000]WELCOME.TXT;1
 ```
 
 `RUN STARTUP` starts the programs that put the executive's services to
@@ -141,7 +158,8 @@ check` boots the same way without a terminal, types `RUN STARTUP`, `RUN
 SNOOP`, a bad verb, `DIR [SYSEXE]P%NG`, `TYPE WELCOME.TXT`, an `EDIT
 WELCOME.TXT` session, and a logical
 name's `DEFINE`, `SHOW LOGICAL` and `DEASSIGN`, `SHOW LOGICAL` alone, and
-`SET DEFAULT` and `SHOW DEFAULT`, prints the executive's part and fails unless the processes ran to the end.
+`SET DEFAULT` and `SHOW DEFAULT`, and a round trip through the ramdisk,
+prints the executive's part and fails unless the processes ran to the end.
 
 EDK2 prints a few `Error: Image at ... start failed` and `Tpm2...` lines
 before Limine starts. That is normal for the firmware QEMU ships. Don't

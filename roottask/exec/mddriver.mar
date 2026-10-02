@@ -1,0 +1,73 @@
+        .TITLE  MDDRIVER MDA0:, a ramdisk, as DECram's
+        .IDENT  /V0.1/
+;
+; MDA0: is a disk in memory, as DECram's MDDRIVER made one on VMS: its
+; blocks are pages of S0 from MD_VA, which the first INITIALIZE of MDA0:
+; makes ($INIT_VOL, f11wrt.mar) and every later one makes afresh, zeroed.
+; Until then the device is offline. Reads and writes are copies, at once:
+; the file system (f11.mar) calls MD$IO where it would call the PAL for
+; DKA0:. The pages are the system's, so the volume outlives the processes
+; that wrote it, but not the system.
+; ponytail: a fixed size, MD$GL_BLOCKS; DECram's INITIALIZE/SIZE when
+; DCL has qualifiers.
+;
+        .LIBRARY "lib.mlb"
+        .LIBRARY "starlet.mlb"
+        $PTEDEF
+        $PRTDEF
+        $SSDEF
+
+        .EXTERNAL MMG$CREPAG
+
+BLOCK = 512
+MD_VA = ^X50000000                      ; in S0, past the RPB
+MD$C_BLOCKS = 1024                      ; 512 KB
+KW = PTE$M_VALID ! <PRT$C_KW @ PTE$V_PROT>
+
+        .PSECT  EXEC$DATA, NOEXE, WRT, QUAD
+MD$GL_BASE::                            ; the ramdisk's first block, or 0: offline
+        .LONG   0
+MD$GL_BLOCKS::                          ; its size in blocks
+        .LONG   MD$C_BLOCKS
+
+        .PSECT  $CODE$
+
+; MD$CREATE: makes the ramdisk's pages, zeroed, replacing any it had. R0 =
+; SS$_NORMAL, or SS$_INSFMEM, and the ramdisk offline. Uses R0-R2.
+MD$CREATE::
+        CLRL    MD$GL_BASE
+        MOVL    #MD_VA, R0
+        MOVL    #MD$C_BLOCKS*BLOCK/MMG$C_PAGESIZE, R1
+        MOVL    #KW, R2
+        BSBW    MMG$CREPAG
+        BLBC    R0, 10$
+        MOVL    #MD_VA, MD$GL_BASE
+10$:    RSB
+
+; MD$IO: R0 = a buffer, R1 = a byte count, R2 = an LBN, R3 = 0 to read the
+; blocks there into the buffer, 1 to write the buffer there. R0 =
+; SS$_NORMAL, SS$_MEDOFL before MD$CREATE, or SS$_ILLBLKNUM past the
+; ramdisk's end. Uses R1.
+MD$IO:: PUSHR   #^M<R2, R3, R4, R5>
+        TSTL    MD$GL_BASE
+        BEQL    80$
+        CMPL    R2, #MD$C_BLOCKS
+        BGEQU   85$
+        MULL2   #BLOCK, R2
+        ADDL3   R2, R1, R4
+        CMPL    R4, #MD$C_BLOCKS*BLOCK
+        BGTRU   85$
+        ADDL2   MD$GL_BASE, R2
+        BLBS    R3, 10$
+        MOVC3   R1, (R2), (R0)
+        BRB     70$
+10$:    MOVC3   R1, (R0), (R2)
+70$:    MOVL    #SS$_NORMAL, R0
+        BRB     90$
+80$:    MOVL    #SS$_MEDOFL, R0
+        BRB     90$
+85$:    MOVL    #SS$_ILLBLKNUM, R0
+90$:    POPR    #^M<R2, R3, R4, R5>
+        RSB
+
+        .END

@@ -79,6 +79,7 @@ NOMOUNT:
         MOVL    MMG$GL_FREECNT, R1
         JSB     G^EXE$OUTHEX
         JSB     G^EXE$OUTCRLF
+        CLRL    R1                      ; DKA0:, whatever its label
         JSB     G^FIL$MOUNT
         BLBS    R0, 10$
         MOVAB   NOMOUNT, R1

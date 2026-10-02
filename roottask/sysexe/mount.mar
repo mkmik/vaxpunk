@@ -1,0 +1,32 @@
+        .TITLE  MOUNT   Mounts a Files-11 volume
+        .IDENT  /V0.1/
+;
+; DCL's MOUNT device label runs this, with the two as its command line:
+; $MOUNT mounts the volume on the device if its label is that one, and
+; the executive reports it on the console. Returns $MOUNT's status.
+; ponytail: no qualifiers.
+;
+        .LIBRARY "starlet.mlb"
+        $MNTDEF
+
+        .EXTERNAL GET_PARAM
+
+        .PSECT  DATA, NOEXE, WRT, LONG
+ITEMS:  .WORD   0, MNT$_DEVNAM          ; GET_PARAM fills each length and address
+        .LONG   0, 0
+        .WORD   0, MNT$_VOLNAM
+        .LONG   0, 0
+        .LONG   0
+
+        .PSECT  CODE, EXE, LONG
+        .ENTRY  START, ^M<>
+        PUSHAB  ITEMS
+        PUSHL   #1
+        CALLS   #2, G^GET_PARAM
+        PUSHAB  ITEMS+12
+        PUSHL   #2
+        CALLS   #2, G^GET_PARAM
+        $MOUNT_S ITMLST=ITEMS
+        RET
+
+        .END    START

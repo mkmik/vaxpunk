@@ -1,0 +1,80 @@
+        .TITLE  COPY    Copies a file
+        .IDENT  /V0.1/
+;
+; DCL's COPY from to runs this, with the two as its command line. Opens
+; from with RMS, creates to with its organization, record attributes and
+; size, what to leaves out of its name taken from from's name and type,
+; and copies its records, a $GET and a $PUT each. The new file is the
+; next version unless to gives one. Returns RMS's status if it can't.
+; ponytail: one file, no wildcards or qualifiers; records up to RECSIZE.
+;
+        .LIBRARY "starlet.mlb"
+        $SSDEF
+        $RMSDEF
+        $FABDEF
+        $RABDEF
+        $NAMDEF
+
+        .EXTERNAL GET_PARAM
+
+RECSIZE = 8192
+
+        .PSECT  DATA, NOEXE, WRT, LONG
+INFAB:  $FAB    NAM=INNAM
+INNAM:  $NAM    RSA=INRES, RSS=255
+INRAB:  $RAB    FAB=INFAB, UBF=REC, USZ=RECSIZE
+OUTFAB: $FAB
+OUTRAB: $RAB    FAB=OUTFAB
+DESC:   .LONG   0, 0                    ; a parameter's descriptor
+INRES:  .BLKB   255
+REC:    .BLKB   RECSIZE
+
+        .PSECT  CODE, EXE, LONG
+        .ENTRY  START, ^M<R2>
+        PUSHAB  DESC
+        PUSHL   #1
+        CALLS   #2, G^GET_PARAM
+        MOVL    DESC+4, INFAB+FAB$L_FNA
+        MOVB    DESC, INFAB+FAB$B_FNS
+        $OPEN   FAB=INFAB
+        BLBS    R0, 10$
+        RET
+10$:    PUSHAB  DESC
+        PUSHL   #2
+        CALLS   #2, G^GET_PARAM
+        MOVL    DESC+4, OUTFAB+FAB$L_FNA
+        MOVB    DESC, OUTFAB+FAB$B_FNS
+        MOVL    INNAM+NAM$L_NAME, OUTFAB+FAB$L_DNA      ; from's NAME.TYPE
+        ADDB3   INNAM+NAM$B_NAME, INNAM+NAM$B_TYPE, OUTFAB+FAB$B_DNS
+        MOVB    INFAB+FAB$B_ORG, OUTFAB+FAB$B_ORG
+        MOVB    INFAB+FAB$B_RFM, OUTFAB+FAB$B_RFM
+        MOVB    INFAB+FAB$B_RAT, OUTFAB+FAB$B_RAT
+        MOVW    INFAB+FAB$W_MRS, OUTFAB+FAB$W_MRS
+        MOVB    INFAB+FAB$B_FSZ, OUTFAB+FAB$B_FSZ
+        MOVL    INFAB+FAB$L_ALQ, OUTFAB+FAB$L_ALQ
+        $CREATE FAB=OUTFAB
+        MOVL    R0, R2
+        BLBC    R0, 80$
+        $CONNECT RAB=INRAB
+        BLBC    R0, 70$
+        $CONNECT RAB=OUTRAB
+        BLBC    R0, 70$
+20$:    $GET    RAB=INRAB
+        BLBC    R0, 30$
+        MOVL    INRAB+RAB$L_RBF, OUTRAB+RAB$L_RBF
+        MOVW    INRAB+RAB$W_RSZ, OUTRAB+RAB$W_RSZ
+        $PUT    RAB=OUTRAB
+        BLBS    R0, 20$
+        BRB     70$
+30$:    CMPL    R0, #RMS$_EOF
+        BNEQ    70$
+        MOVL    #SS$_NORMAL, R0
+70$:    MOVL    R0, R2
+        $CLOSE  FAB=OUTFAB
+        BLBC    R2, 80$                 ; the first error is the one
+        MOVL    R0, R2
+80$:    $CLOSE  FAB=INFAB
+        MOVL    R2, R0
+        RET
+
+        .END    START

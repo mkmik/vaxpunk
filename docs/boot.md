@@ -119,12 +119,20 @@ interpreter. It is linked high in P1, which tells the executive it is one
   `DEASSIGN` and `SHOW LOGICAL` make, delete
   and translate logical names (`$CRELNM`, `$DELLNM`, `$TRNLNM`), and
   `SHOW LOGICAL` alone lists them. `HELP` lists the commands, and `LOGOUT` deletes SYSTEM.
+- `INITIALIZE MDA0: label` runs `INIT.EXE`, whose `$INIT_VOL` makes the
+  ramdisk, `MDA0:`, 512 KB of memory, and writes an empty volume on it.
+  `MOUNT MDA0: label` runs `MOUNT.EXE`, whose `$MOUNT` mounts it and prints
+  `%MOUNT-I-MOUNTED, label mounted on _MDA0:`. Then `COPY` makes files
+  there (`COPY WELCOME.TXT MDA0:[000000]`, from `[SYSMGR]`, the default), `DELETE` deletes them
+  (`DELETE MDA0:[000000]WELCOME.TXT;1`), and `DIRECTORY`, `TYPE` and `RUN`
+  read them as they do the system disk's.
   When the swapper deletes what SYSTEM left, it prints `%EXEC-I-LOGOUT`
   and halts, and the root task powers QEMU off with a semihosting
   `SYS_EXIT`.
 
-The system disk is read only, and there's no login yet, and no CTRL/Y: a
-program that never exits keeps the console.
+The system disk is read only, the ramdisk is gone when the system stops,
+and there's no login yet, and no CTRL/Y: a program that never exits keeps
+the console.
 
 ## 7. STARTUP and the test processes
 
@@ -158,4 +166,5 @@ command, `DIR [SYSEXE]P%NG`, `TYPE WELCOME.TXT`, an `EDIT WELCOME.TXT`
 session, and `DEFINE`, `SHOW
 LOGICAL` and `DEASSIGN` of a logical name, `SHOW LOGICAL` alone, and
 `SET DEFAULT` and `SHOW DEFAULT` with a `DIR` between, then `[-]` and a
-`DIR [.SYSMGR]`, at the prompt, and looks for the success lines in `out/serial.log`.
+`DIR [.SYSMGR]`, at the prompt, then initializes and mounts `MDA0:`,
+copies a file to it, lists it, deletes it and lists it again, and looks for the success lines in `out/serial.log`.

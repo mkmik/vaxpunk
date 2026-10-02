@@ -11,6 +11,8 @@ SS$_BADPARAM = 20
 SS$_EXQUOTA = 28
 SS$_NOPRIV = 36
 SS$_ABORT = 44
+SS$_DEVMOUNT = 108                      ; the device is already mounted
+SS$_DEVNOTMOUNT = 124
 SS$_BADIMGHDR = 68
 SS$_DRVERR = 140
 SS$_DUPLNAM = 148
@@ -19,17 +21,21 @@ SS$_ILLEFC = 236
 SS$_ILLIOFUNC = 244
 SS$_ILLPAGCNT = 252
 SS$_ILLSER = 260
+SS$_INCVOLLABEL = 268                   ; the volume's label isn't the one asked for
 SS$_INSFARG = 276
 SS$_INSFMEM = 292
 SS$_IVCHAN = 316
+SS$_IVDEVNAM = 324                      ; no device name, or a bad one
 SS$_IVLOGNAM = 340
 SS$_IVLOGTAB = 348
 SS$_IVSSRQ = 372
+SS$_MEDOFL = 420                        ; the medium is offline: a ramdisk not made yet
 SS$_NOIOCHAN = 436
 SS$_NOLOGNAM = 444
 SS$_PAGOWNVIO = 492
 SS$_UNASEFC = 564
 SS$_VASFULL = 580
+SS$_WRITLCK = 604                       ; the device is write locked
 SS$_IVMODE = 852
 SS$_OPCDEC = 1084
 SS$_SUPERSEDE = 1585                    ; success: a name by that name was replaced
@@ -38,8 +44,14 @@ SS$_NOSUCHDEV = 2312
 SS$_NOSUCHFILE = 2320
 SS$_BADCHKSUM = 2056
 SS$_BADFILEHDR = 2064
+SS$_BADFILEVER = 2080                   ; a version above 32767
 SS$_BADIRECTORY = 2088
+SS$_DEVICEFULL = 2128                   ; no free blocks left
+SS$_DUPFILENAME = 2152                  ; that name and version is in the directory already
 SS$_ENDOFFILE = 2160
+SS$_HEADERFULL = 2248                   ; the file's map is full
+SS$_IDXFILEFULL = 2256                  ; no free file headers left
+SS$_NOHOMEBLK = 2272                    ; no Files-11 home block
 SS$_NOMOREFILES = 2352
 SS$_NOLOGTAB = 8852
         .ENDM   $SSDEF
@@ -69,15 +81,26 @@ RMS$_RSS = ^X18694                      ; resultant string area too small
 RMS$_SYN = ^X186D4                      ; file specification syntax
 RMS$_VER = ^X186FC                      ; bad version
 RMS$_WLD = ^X18744                      ; wildcard where one may not be
+RMS$_DNR = ^X18272                      ; device not ready: not mounted
+RMS$_FEX = ^X18282                      ; file already exists
+RMS$_PRV = ^X1829A                      ; privilege violation: a reserved file
+RMS$_FUL = ^X18544                      ; device full
+RMS$_IOP = ^X18574                      ; operation the file wasn't opened for
+RMS$_RSZ = ^X186A4                      ; record size: a FIX record of another size
+RMS$_CRE = ^X1C00A                      ; the file system couldn't create the file
+RMS$_ENT = ^X1C01A                      ; or enter it in its directory
+RMS$_MKD = ^X1C032                      ; or delete it
+RMS$_WER = ^X1C114                      ; or write it
         .ENDM   $RMSDEF
 
-; $FABDEF: the file access block. Only RMS's sequential reads use these.
+; $FABDEF: the file access block, for RMS's sequential files.
         .MACRO  $FABDEF
 FAB$C_BID = 3
 FAB$C_BLN = 80
 FAB$B_BID = 0
 FAB$B_BLN = 1
-FAB$W_IFI = 2                           ; internal file index, from $OPEN
+FAB$W_IFI = 2                           ; internal file index, from $OPEN or $CREATE
+FAB$L_FOP = 4                           ; file processing options: FAB$M_NAM
 FAB$L_STS = 8                           ; the status of the last operation
 FAB$L_STV = 12
 FAB$L_ALQ = 16                          ; blocks allocated
@@ -99,6 +122,8 @@ FAB$M_UPD = 8
 FAB$M_TRN = 16
 FAB$C_SEQ = 0
 FAB$M_CR = 2
+FAB$M_BLK = 8                           ; records don't span blocks
+FAB$M_NAM = ^X1000000                   ; $ERASE the file the NAM block's resultant string names
 FAB$C_UDF = 0
 FAB$C_FIX = 1
 FAB$C_VAR = 2
@@ -117,7 +142,7 @@ RAB$L_STV = 12
 RAB$W_USZ = 32                          ; the user's buffer: its size
 RAB$W_RSZ = 34                          ; the record's size
 RAB$L_UBF = 36                          ; and address
-RAB$L_RBF = 40                          ; where $GET put the record
+RAB$L_RBF = 40                          ; where $GET put the record, what $PUT writes
 RAB$L_FAB = 60                          ; the FAB $CONNECT connects to
         .ENDM   $RABDEF
 
@@ -149,6 +174,12 @@ NAM$L_TYPE = 80
 NAM$L_VER = 84
 NAM$M_WILDCARD = ^X100                  ; the specification has a wildcard
         .ENDM   $NAMDEF
+
+; $MNTDEF: $MOUNT's item codes.
+        .MACRO  $MNTDEF
+MNT$_DEVNAM = 1                         ; the device
+MNT$_VOLNAM = 2                         ; the volume's label
+        .ENDM   $MNTDEF
 
 ; $FAB, $RAB, $NAM: a FAB, RAB or name block, with the fields given and
 ; the rest 0. Lengths are values (FNS=#5 is FNS=5 here), addresses labels.
@@ -191,8 +222,9 @@ NAM$M_WILDCARD = ^X100                  ; the specification has a wildcard
         .BLKB   80                      ; RLF to the end
         .ENDM   $NAM
 
-; $OPEN, $CLOSE, $PARSE, $SEARCH FAB=fab and $CONNECT, $DISCONNECT, $GET
-; RAB=rab: the RMS services, which take the block's address.
+; $OPEN, $CREATE, $CLOSE, $ERASE, $PARSE, $SEARCH FAB=fab and $CONNECT,
+; $DISCONNECT, $GET, $PUT RAB=rab: the RMS services, which take the
+; block's address.
         .MACRO  $RMSCALL NAME, BLOCK
         PUSHAB  BLOCK
         .EXTERNAL SYS$'NAME
@@ -203,9 +235,17 @@ NAM$M_WILDCARD = ^X100                  ; the specification has a wildcard
         $RMSCALL OPEN, FAB
         .ENDM   $OPEN
 
+        .MACRO  $CREATE FAB
+        $RMSCALL CREATE, FAB
+        .ENDM   $CREATE
+
         .MACRO  $CLOSE  FAB
         $RMSCALL CLOSE, FAB
         .ENDM   $CLOSE
+
+        .MACRO  $ERASE  FAB
+        $RMSCALL ERASE, FAB
+        .ENDM   $ERASE
 
         .MACRO  $PARSE  FAB
         $RMSCALL PARSE, FAB
@@ -226,6 +266,10 @@ NAM$M_WILDCARD = ^X100                  ; the specification has a wildcard
         .MACRO  $GET    RAB
         $RMSCALL GET, RAB
         .ENDM   $GET
+
+        .MACRO  $PUT    RAB
+        $RMSCALL PUT, RAB
+        .ENDM   $PUT
 
 ; $PSLDEF: the processor status longword's fields and the access modes,
 ; from kernel, the innermost, out to user.
@@ -572,3 +616,17 @@ PRT$C_UR = 15
         .EXTERNAL SYS$IMGACT
         CALLS   #2, G^SYS$IMGACT
         .ENDM   $IMGACT_S
+
+        .MACRO  $INIT_VOL_S DEVNAM, VOLNAM, ITMLST=0
+        $PUSHADR ITMLST
+        $PUSHADR VOLNAM
+        $PUSHADR DEVNAM
+        .EXTERNAL SYS$INIT_VOL
+        CALLS   #3, G^SYS$INIT_VOL
+        .ENDM   $INIT_VOL_S
+
+        .MACRO  $MOUNT_S ITMLST
+        $PUSHADR ITMLST
+        .EXTERNAL SYS$MOUNT
+        CALLS   #1, G^SYS$MOUNT
+        .ENDM   $MOUNT_S

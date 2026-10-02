@@ -268,3 +268,19 @@ TQE$C_WKSNGL = 1                        ; $SCHDWK: wakes the process
 TQE$C_WKREPT = 2                        ; and again every TQE$Q_DELTA
 DYN$C_TQE = 15                          ; TQE$B_TYPE
         .ENDM   $TQEDEF
+
+; $VCBDEF: a volume control block: a disk and the Files-11 volume mounted
+; on it, if one is (roottask/exec/f11.mar).
+        .MACRO  $VCBDEF
+VCB$L_STATUS = 0                        ; VCB$V_
+VCB$L_HDRVBN = 4                        ; INDEXF.SYS's VBN of file 1's header
+VCB$L_IBMAPLBN = 8                      ; the index file bitmap's LBN
+VCB$L_SBMAPLBN = 12                     ; the storage bitmap's LBN
+VCB$T_DEVNAM = 16                       ; the device's name, DDCU:, 5 characters
+VCB$T_VOLNAME = 24                      ; the volume's label, .ASCIC, 12 characters
+VCB$AB_INDEXF = 48                      ; INDEXF.SYS's header, 512 bytes
+VCB$K_LENGTH = 560
+VCB$V_MOUNTED = 0                       ; a volume is mounted on it
+VCB$V_WRITE = 1                         ; the device can be written
+VCB$V_RAMDISK = 2                       ; the device is the ramdisk, MDA0:, not the PAL's disk
+        .ENDM   $VCBDEF

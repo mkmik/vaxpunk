@@ -1,16 +1,18 @@
-        .TITLE  F11     The system disk, a Files-11 ODS-2 volume, read only
-        .IDENT  /V0.1/
+        .TITLE  F11     Files-11 ODS-2 volumes: mounting them, reading and writing blocks
+        .IDENT  /V0.2/
 ;
-; The system disk, DKA0:, is a Files-11 ODS-2 volume (ods/docs/) that the
-; PAL reads a block at a time with READLBLK. FIL$MOUNT mounts it at boot:
-; it reads the home block and keeps the index file's header, through
-; which every other file's header is found. The rest reads what VMS's
-; XQP reads: a file's header by its number, its blocks through the
-; header's map, and a directory's records, with wildcards. RMS (rms.mar)
-; and the image activator call them at IPL$_SYNCH, which keeps their
-; buffers to one caller at a time.
-; ponytail: read only; no extension headers, so a file's map is what its
-; one header holds; the disk read waits for the device, at IPL$_SYNCH.
+; Each disk has a VCB: DKA0:, the system disk, a Files-11 ODS-2 volume
+; (ods/docs/) that the PAL reads a block at a time with READLBLK, and
+; MDA0:, the ramdisk (mddriver.mar), which the file system can write.
+; FIL$MOUNT mounts a volume: it reads the home block and keeps the index
+; file's header, through which every other file's header is found. The
+; rest reads what VMS's XQP reads: a file's header by its number, its
+; blocks through the header's map, and a directory's records, with
+; wildcards. f11wrt.mar writes them. RMS (rms.mar) and the image activator
+; call them at IPL$_SYNCH, which keeps their buffers, and F11$GL_VCB, the
+; volume they work on, to one caller at a time.
+; ponytail: no extension headers, so a file's map is what its one header
+; holds; DKA0:'s reads wait for the device, at IPL$_SYNCH.
 ;
         .LIBRARY "lib.mlb"
         .LIBRARY "starlet.mlb"
@@ -18,13 +20,16 @@
         $IPLDEF
         $SSDEF
         $RMSDEF
+        $VCBDEF
+        $MNTDEF
 
         .EXTERNAL EXE$OUTZSTRING, EXE$OUTCSTRING, EXE$OUTCRLF
-        .EXTERNAL EXE$ALONONPAGED, EXE$DEANONPGDSIZ, RMS$PARSE, RMS$FIND
+        .EXTERNAL EXE$ALONONPAGED, EXE$DEANONPGDSIZ, RMS$PARSE, RMS$FIND, MD$IO
 
 BLOCK = 512
 MAXREAD = 127                           ; blocks a READLBLK reads, below 64 KB
 MFD = 4                                 ; the MFD's file number
+BITMAP = 2                              ; BITMAP.SYS's
 ; The home block.
 HM2$W_IBMAPVBN = 22
 HM2$L_IBMAPLBN = 24
@@ -51,45 +56,111 @@ FAT$B_VFCSIZE = 15
 FAT$W_MAXREC = 16
 
         .PSECT  EXEC$DATA, NOEXE, WRT, QUAD
-F11$GL_HDRVBN::                         ; INDEXF.SYS's VBN of file 1's header
-        .LONG   0
-F11$AB_INDEXF::                         ; INDEXF.SYS's header
-        .BLKB   BLOCK
+F11$GL_VCB::                            ; the volume the routines here work on
+        .ADDRESS F11$AB_DKA0
+F11$AB_DKA0::                           ; DKA0:'s VCB, the system disk's
+        .LONG   0, 0, 0, 0              ; STATUS, HDRVBN, IBMAPLBN, SBMAPLBN
+        .ASCII  "DKA0:"
+        .BLKB   VCB$K_LENGTH-VCB$T_DEVNAM-5
+F11$AB_MDA0::                           ; MDA0:'s, the ramdisk's
+        .LONG   <1@VCB$V_WRITE>!<1@VCB$V_RAMDISK>, 0, 0, 0
+        .ASCII  "MDA0:"
+        .BLKB   VCB$K_LENGTH-VCB$T_DEVNAM-5
+VCBEND:
 F11$AB_DIRBLK::                         ; the directory block FIL$SEARCHDIR reads
         .BLKB   BLOCK
 F11$AB_FILHDR::                         ; the header FIL$OPENFILE reads
         .BLKB   BLOCK
 F11$GW_FID::                            ; the file ID FIL$SEARCHDIR found
         .BLKW   3
-F11$T_VOLNAME::                         ; the volume's label, .ASCIC
-        .BLKB   13
 F11$T_FORMAT:
         .ASCII  "DECFILE11B"
 MOUNTED:
         .ASCIZ  "%MOUNT-I-MOUNTED, "
-ONDKA0: .ASCIZ  " mounted on _DKA0:"
+ONDEV:  .ASCIZ  " mounted on _"
+DEVNAM: .BLKB   6                       ; the device's, .ASCIZ
 IMAGEDEF:                               ; where images are, SYS$SYSTEM
         .ASCIC  "DKA0:[SYSEXE]"
+LABEL:  .BLKB   13                      ; the label $MOUNT asks for, .ASCIC
 
         .PSECT  $CODE$
 
+;
 ; FIL$READLBLK: R0 = a buffer, R1 = a block count, R2 = an LBN. Reads the
-; blocks from the disk. R0 = SS$_NORMAL, or the PAL's error. Uses R1.
+; blocks from F11$GL_VCB's disk. R0 = SS$_NORMAL, or the device's error.
+; Uses R1.
 FIL$READLBLK::
-        MULL2   #BLOCK, R1
+        PUSHL   R3
+        CLRL    R3
+        BRB     LBLK
+
+; FIL$WRITELBLK: R0 = a buffer, R1 = a block count, R2 = an LBN. Writes
+; the blocks to F11$GL_VCB's disk. R0 = SS$_NORMAL, SS$_WRITLCK if the
+; disk is read only, or the device's error. Uses R1.
+FIL$WRITELBLK::
+        PUSHL   R3
+        MOVL    #1, R3
+LBLK:   MULL2   #BLOCK, R1
+        PUSHL   R4
+        MOVL    F11$GL_VCB, R4
+        BBS     #VCB$V_RAMDISK, VCB$L_STATUS(R4), 20$
+        BLBS    R3, 30$
+        MOVL    (SP)+, R4
+        MOVL    (SP)+, R3
         CALL_PAL #PAL$_READLBLK
         RSB
+20$:    BSBW    MD$IO
+        BRB     40$
+30$:    MOVL    #SS$_WRITLCK, R0
+40$:    MOVL    (SP)+, R4
+        MOVL    (SP)+, R3
+        RSB
 
-; FIL$MOUNT: mounts the system disk: reads its home block and INDEXF.SYS's
-; header, which maps the others, and reports it on the console. R0 =
-; SS$_NORMAL, SS$_BADFILEHDR if there is no ODS-2 home block, or the
-; disk's error. Uses R0-R4.
+; FIL$SELECT: R1 = a device name, R2 = its length: DKA0 or MDA0, with a
+; colon after it or not, an underscore before it or not. Makes its VCB
+; F11$GL_VCB. R0 = SS$_NORMAL, or SS$_NOSUCHDEV and F11$GL_VCB as it was.
+; Uses R1-R3.
+FIL$SELECT::
+        TSTL    R2
+        BEQL    80$
+        CMPB    (R1), #^A/_/
+        BNEQ    10$
+        INCL    R1
+        DECL    R2
+10$:    CMPL    R2, #5
+        BNEQ    15$
+        CMPB    4(R1), #^A/:/
+        BNEQ    80$
+        DECL    R2
+15$:    CMPL    R2, #4
+        BNEQ    80$
+        MOVAB   F11$AB_DKA0, R3
+20$:    CMPL    (R1), VCB$T_DEVNAM(R3)
+        BEQL    30$
+        ADDL2   #VCB$K_LENGTH, R3
+        MOVAB   VCBEND, R0
+        CMPL    R3, R0
+        BLSSU   20$
+80$:    MOVL    #SS$_NOSUCHDEV, R0
+        RSB
+30$:    MOVL    R3, F11$GL_VCB
+        MOVL    #SS$_NORMAL, R0
+        RSB
+
+; FIL$MOUNT: R1 = the label the volume must have, .ASCIC, or 0 for any.
+; Mounts F11$GL_VCB's volume: reads its home block and INDEXF.SYS's
+; header, which maps the others, and, if the disk can be written, finds
+; the storage bitmap, and reports it on the console. R0 = SS$_NORMAL,
+; SS$_NOHOMEBLK if there is no ODS-2 home block, SS$_INCVOLLABEL if the
+; label isn't R1's, or the disk's error. IPL$_SYNCH. Uses R0-R5.
 FIL$MOUNT::
-        MOVAB   F11$AB_INDEXF, R3       ; the home block, for now
+        MOVL    F11$GL_VCB, R5
+        MOVL    R1, R4
+        MOVAB   VCB$AB_INDEXF(R5), R3   ; the home block, for now
         MOVL    R3, R0
         MOVL    #1, R1
         MOVL    #1, R2
-        BSBB    FIL$READLBLK
+        BSBW    FIL$READLBLK
         BLBC    R0, 90$
         CLRL    R1
 10$:    CMPB    HM2$T_FORMAT(R3)[R1], F11$T_FORMAT[R1]
@@ -99,32 +170,110 @@ FIL$MOUNT::
 15$:    CMPB    HM2$T_VOLNAME-1(R3)[R0], #^A/ /
         BNEQ    20$
         SOBGTR  R0, 15$
-20$:    MOVB    R0, F11$T_VOLNAME
-        MOVC3   R0, HM2$T_VOLNAME(R3), F11$T_VOLNAME+1
-        MOVAB   F11$AB_INDEXF, R3
+20$:    MOVB    R0, VCB$T_VOLNAME(R5)
+        PUSHR   #^M<R3, R4, R5>
+        MOVC3   R0, HM2$T_VOLNAME(R3), VCB$T_VOLNAME+1(R5)
+        POPR    #^M<R3, R4, R5>
+        TSTL    R4                      ; the one asked for?
+        BEQL    25$
+        MOVZBL  (R4), R0
+        INCL    R0
+22$:    CMPB    -1(R4)[R0], VCB$T_VOLNAME-1(R5)[R0]
+        BNEQ    85$
+        SOBGTR  R0, 22$
+25$:    MOVAB   VCB$AB_INDEXF(R5), R3
         MOVZWL  HM2$W_IBMAPVBN(R3), R0
         MOVZWL  HM2$W_IBMAPSIZE(R3), R1
-        ADDL3   R0, R1, F11$GL_HDRVBN
+        ADDL3   R0, R1, VCB$L_HDRVBN(R5)
+        MOVL    HM2$L_IBMAPLBN(R3), VCB$L_IBMAPLBN(R5)
         ADDL3   HM2$L_IBMAPLBN(R3), R1, R2      ; file 1's header
-        MOVAB   F11$AB_INDEXF, R0
+        MOVL    R3, R0
         MOVL    #1, R1
-        BSBB    FIL$READLBLK
+        BSBW    FIL$READLBLK
         BLBC    R0, 90$
         MOVL    #1, R0                  ; checked, as any other header
-        MOVAB   F11$AB_INDEXF, R1
+        MOVAB   VCB$AB_INDEXF(R5), R1
         BSBW    FIL$READHDR
         BLBC    R0, 90$
+        BBC     #VCB$V_WRITE, VCB$L_STATUS(R5), 30$
+        MOVL    #BITMAP, R0             ; the storage bitmap, past the SCB
+        MOVAB   F11$AB_FILHDR, R1
+        BSBW    FIL$READHDR
+        BLBC    R0, 90$
+        MOVL    #2, R0
+        BSBW    FIL$MAPVBN
+        TSTL    R1
+        BEQL    80$
+        MOVL    R0, VCB$L_SBMAPLBN(R5)
+30$:    BISL2   #1@VCB$V_MOUNTED, VCB$L_STATUS(R5)
         MOVAB   MOUNTED, R1
         JSB     G^EXE$OUTZSTRING
-        MOVAB   F11$T_VOLNAME, R1
+        MOVAB   VCB$T_VOLNAME(R5), R1
         JSB     G^EXE$OUTCSTRING
-        MOVAB   ONDKA0, R1
+        MOVAB   ONDEV, R1
+        JSB     G^EXE$OUTZSTRING
+        MOVL    VCB$T_DEVNAM(R5), DEVNAM
+        MOVB    VCB$T_DEVNAM+4(R5), DEVNAM+4
+        MOVAB   DEVNAM, R1
         JSB     G^EXE$OUTZSTRING
         JSB     G^EXE$OUTCRLF
         MOVL    #SS$_NORMAL, R0
         RSB
-80$:    MOVL    #SS$_BADFILEHDR, R0
+80$:    MOVL    #SS$_NOHOMEBLK, R0
+        RSB
+85$:    MOVL    #SS$_INCVOLLABEL, R0
 90$:    RSB
+
+; $MOUNT itmlst: mounts the Files-11 volume on the disk the item list's
+; MNT$_DEVNAM names, MDA0: or DKA0:, if its label is MNT$_VOLNAM's.
+; SS$_DEVMOUNT if one is mounted there already.
+; ponytail: no other items, flags or logical name; any process may.
+        .ENTRY  EXE$MOUNT, ^M<R2, R3, R4, R5, R6, R7, R8>
+        CLRQ    R6                      ; the device name: its address, length
+        CLRB    LABEL
+        MOVL    4(AP), R8
+10$:    IFNORD  #4, (R8), 85$
+        TSTL    (R8)
+        BEQL    40$
+        IFNORD  #12, (R8), 85$
+        MOVZWL  (R8), R2
+        MOVL    4(R8), R1
+        IFNORD  R2, (R1), 85$
+        CMPW    2(R8), #MNT$_DEVNAM
+        BNEQ    20$
+        MOVL    R1, R6
+        MOVL    R2, R7
+        BRB     30$
+20$:    CMPW    2(R8), #MNT$_VOLNAM
+        BNEQ    30$
+        CMPL    R2, #12
+        BGTRU   88$
+        MOVB    R2, LABEL
+        MOVC3   R2, (R1), LABEL+1
+30$:    ADDL2   #12, R8
+        BRB     10$
+40$:    MOVL    #SS$_IVDEVNAM, R0
+        TSTL    R7
+        BEQL    90$
+        DSBINT  #IPL$_SYNCH
+        MOVL    R6, R1
+        MOVL    R7, R2
+        BSBW    FIL$SELECT
+        BLBC    R0, 80$
+        MOVL    F11$GL_VCB, R1
+        MOVL    #SS$_DEVMOUNT, R0
+        BBS     #VCB$V_MOUNTED, VCB$L_STATUS(R1), 80$
+        MOVAB   LABEL, R1
+        TSTB    (R1)
+        BNEQ    50$
+        CLRL    R1
+50$:    BSBW    FIL$MOUNT
+80$:    ENBINT
+        RET
+85$:    MOVL    #SS$_ACCVIO, R0
+        RET
+88$:    MOVL    #SS$_INCVOLLABEL, R0
+90$:    RET
 
 ; FIL$MAPVBN: R0 = a VBN, R1 = a file header. R0 = the LBN the header's
 ; map gives it, R1 = the blocks from there to its extent's end; both 0 if
@@ -180,10 +329,20 @@ FIL$MAPVBN::
 ; SS$_ENDOFFILE if the map ends first, or the disk's error. Keeps every
 ; other register.
 FIL$READVBN::
-        PUSHR   #^M<R1, R2, R4, R5, R6, R7, R8>
-        MOVL    R0, R6                  ; the next VBN
+        PUSHR   #^M<R1, R2, R4, R5, R6, R7, R8, R9>
+        CLRL    R9
+        BRB     VBLK
+
+; FIL$WRITEVBN: R0 = a VBN, R1 = a block count, R2 = a buffer, R3 = a file
+; header. Writes the buffer to the file's blocks from that VBN. R0 =
+; SS$_NORMAL, SS$_ENDOFFILE if the map ends first, or the disk's error.
+; Keeps every other register.
+FIL$WRITEVBN::
+        PUSHR   #^M<R1, R2, R4, R5, R6, R7, R8, R9>
+        MOVL    #1, R9
+VBLK:   MOVL    R0, R6                  ; the next VBN
         MOVL    R1, R7                  ; the blocks left
-        MOVL    R2, R8                  ; where they go
+        MOVL    R2, R8                  ; where they are
 10$:    TSTL    R7
         BEQL    40$
         MOVL    R6, R0
@@ -200,8 +359,11 @@ FIL$READVBN::
 30$:    MOVL    R1, R4
         MOVL    R0, R2
         MOVL    R8, R0
+        BLBS    R9, 35$
         BSBW    FIL$READLBLK
-        BLBC    R0, 60$
+        BRB     37$
+35$:    BSBW    FIL$WRITELBLK
+37$:    BLBC    R0, 60$
         ADDL2   R4, R6
         SUBL2   R4, R7
         MULL2   #BLOCK, R4
@@ -210,11 +372,11 @@ FIL$READVBN::
 40$:    MOVL    #SS$_NORMAL, R0
         BRB     60$
 50$:    MOVL    #SS$_ENDOFFILE, R0
-60$:    POPR    #^M<R1, R2, R4, R5, R6, R7, R8>
+60$:    POPR    #^M<R1, R2, R4, R5, R6, R7, R8, R9>
         RSB
 
 ; FIL$READHDR: R0 = a file number, R1 = a buffer. Reads the file's
-; header there. R0 = SS$_NORMAL; SS$_NOSUCHFILE if the slot holds
+; header on F11$GL_VCB's volume there. R0 = SS$_NORMAL; SS$_NOSUCHFILE if the slot holds
 ; another file, SS$_BADCHKSUM if it holds no header, or the disk's error.
 ; Keeps every other register.
 FIL$READHDR::
@@ -222,11 +384,12 @@ FIL$READHDR::
         MOVL    R1, R4
         MOVL    R0, R5
         BEQL    80$
-        ADDL3   F11$GL_HDRVBN, R5, R0
+        MOVL    F11$GL_VCB, R3
+        ADDL3   VCB$L_HDRVBN(R3), R5, R0
         DECL    R0
         MOVL    #1, R1
         MOVL    R4, R2
-        MOVAB   F11$AB_INDEXF, R3
+        MOVAB   VCB$AB_INDEXF(R3), R3
         BSBW    FIL$READVBN
         BLBC    R0, 90$
         CLRL    R1                      ; the sum of words 0-254
@@ -389,7 +552,7 @@ MATCH:  PUSHR   #^M<R3, R4, R5, R8>
 
 ; FIL$OPENFILE: R6 = an image's file specification, R7 = its length.
 ; Reads the file, from DKA0:[SYSEXE] unless the specification says
-; otherwise, into a block of pool: R1 = its address, R2 = the file's size
+; otherwise, from any mounted volume, into a block of pool: R1 = its address, R2 = the file's size
 ; in bytes, R3 = the block's size, for EXE$DEANONPGDSIZ. R0 = SS$_NORMAL,
 ; an RMS error such as RMS$_FNF, SS$_INSFMEM, or the disk's error. Keeps
 ; every other register.

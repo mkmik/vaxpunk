@@ -12,6 +12,7 @@
 ;   ^X48000000  nonpaged pool: PCBs, kernel stacks, common event blocks,
 ;               timer queue entries, logical names
 ;   ^X4FFF0000  the RPB
+;   ^X50000000  MDA0:'s blocks, the ramdisk's, once INITIALIZE makes them
 ;   ^X5FFF0000  the boot stack's top
 ;   ^X60000000  P1: the process's $CRETVA pages
 ;   ^X7FF00000  its command interpreter, if it has one, then its mode stacks
