@@ -54,9 +54,11 @@ the role PALcode played on an Alpha: it's the "hardware" layer underneath VMS
   On each wakeup the PAL also checks the serial port for typed
   characters, and once the executive asks for it, raises the console
   receive interrupt when there are some.
-- `disk_init` finds the system disk, a virtio block device, and prints
-  `disk: virtio-blk, 4096 blocks`. From then on the PAL can read the
-  disk's blocks, by number, for itself and for the executive.
+- `disk_init` finds the disks, virtio block devices: unit 0, the system
+  disk, and unit 1, the data disk, `out/datadisk.img`, and prints
+  `disk 0: virtio-blk, 4096 blocks` and `disk 1: ...` for them. From then
+  on the PAL can read the disks' blocks, by number, for itself and for the
+  executive, and write the data disk's for the executive.
 - `start_exec` reads `EXEC.EXE` from the system disk, as VMS's first
   bootstrap did: the home block, the index file, the top directory,
   `[SYSEXE]`, then the file (`f11_boot_file`). It loads it, and creates
@@ -85,6 +87,10 @@ The executive is the VMS kernel, written in MACRO-32.
 - mounts the system disk, `DKA0:`: it reads the volume's home block and
   the index file's header, which says where every other file's header is
   (`FIL$MOUNT`), and prints `%MOUNT-I-MOUNTED, VAXPUNK mounted on _DKA0:`
+- mounts the data disk, `DKB0:`, the same way, if an `INITIALIZE DKB0:`
+  wrote a volume there, at this boot or an earlier one, and prints
+  `%MOUNT-I-MOUNTED, label mounted on _DKB0:`. A blank one stays
+  unmounted, without a word.
 - defines the system's logical names for it, in `LNM$SYSTEM_TABLE`:
   `SYS$SYSDEVICE` is `DKA0:`, `SYS$DISK`, the default device, is
   `SYS$SYSDEVICE:`, and `SYS$SYSTEM`, where the images are, is
@@ -136,6 +142,21 @@ interpreter. It is linked high in P1, which tells the executive it is one
   there (`COPY WELCOME.TXT MDA0:[000000]`, from `[SYSMGR]`, the default), `DELETE` deletes them
   (`DELETE MDA0:[000000]WELCOME.TXT;1`), and `DIRECTORY`, `TYPE` and `RUN`
   read them as they do the system disk's.
+- `INITIALIZE DKB0: label` and `MOUNT DKB0: label` do the same on the
+  data disk, `DKB0:`, a disk image on the host which the PAL writes with
+  `WRITELBLK` ([ADR-0012](adr/0012-data-disk-writable-files-11.md)). What
+  `COPY` and `DELETE` do there is still there at the next boot, which
+  mounts it by itself, and `ods dir out/datadisk.img '[000000]'` lists it
+  on the host.
+- `SHOW DEVICES` (`SHO DEV`) lists the disks, mounted or not, with their
+  volumes' labels and free blocks, then the console, `OPA0:`, as VMS
+  does: it finds them with the `$DEVICE_SCAN` system service and asks
+  `$GETDVIW` about each, which counts the free blocks in the volume's
+  storage bitmap (`FIL$FREEBLOCKS`). `SHOW DEVICES DK` lists only the
+  devices whose names start with `DK`.
+- A command that fails prints VMS's message for the status, when DCL
+  knows it: `DIR DKB0:` looks in `DKB0:[SYSMGR]`, the default directory
+  on that disk, and prints `%RMS-E-DNF, directory not found`.
   When the swapper deletes what SYSTEM left, it prints `%EXEC-I-LOGOUT`
   and halts, and the root task powers QEMU off with a semihosting
   `SYS_EXIT`.
@@ -191,5 +212,8 @@ LOGICAL` and `DEASSIGN` of a logical name, `SHOW LOGICAL` alone, and
 `DIR [.SYSMGR]`, at the prompt, then initializes and mounts `MDA0:`,
 copies a file to it, edits it into a second version, lists them,
 deletes them and lists again, then
+initializes and mounts `DKB0:`, made afresh, copies a file there and lists
+it, runs `SHOW DEVICES`, then
 stops SPIN and SLEEPER with CTRL/Y and continues them, and looks for the
-success lines in `out/serial.log`.
+success lines in `out/serial.log`. Once QEMU is gone, `ods-image` checks
+the data disk's volume and finds the file on it.

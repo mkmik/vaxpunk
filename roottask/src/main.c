@@ -250,13 +250,15 @@ static void uart_init(seL4_BootInfo *bi)
 }
 
 /*
- * The system disk: a virtio block device on one of QEMU virt's 32
- * virtio-mmio transports, 0x200 bytes apart from 0x0a000000, which the
- * PAL drives itself, polled, a request at a time (virtio 1.x, modern
- * MMIO: QEMU needs virtio-mmio.force-legacy=false). Its queue and a
- * request's header and status are in one page of the PAL's, the data in
- * another, at the physical addresses seL4 tells.
- * ponytail: polled and synchronous, the CPU waits for each read; the
+ * The disks: virtio block devices on QEMU virt's 32 virtio-mmio
+ * transports, 0x200 bytes apart from 0x0a000000, which the PAL drives
+ * itself, polled, a request at a time (virtio 1.x, modern MMIO: QEMU needs
+ * virtio-mmio.force-legacy=false). Unit 0 is the system disk, DKA0:, and
+ * unit 1 the data disk, DKB0:, in the order of QEMU's -device options,
+ * which take the transports from the highest down. Each unit's queue and
+ * a request's header and status are in a page of the PAL's, the data of
+ * both in another, at the physical addresses seL4 tells.
+ * ponytail: polled and synchronous, the CPU waits for each request; the
  * device's interrupt, through seL4's IRQ handler, when I/O is
  * asynchronous.
  */
@@ -264,6 +266,7 @@ static void uart_init(seL4_BootInfo *bi)
 #define VIRTIO_VA 0xffff0000UL /* 4 pages, below the RTC */
 #define VIRTIO_SLOTS 32
 #define DISK_BLOCK 512
+#define DISK_UNITS 2
 enum { VIO_MAGIC = 0x000, VIO_VERSION = 0x004, VIO_DEVICE = 0x008, VIO_DRVFEAT = 0x020,
        VIO_DRVFEATSEL = 0x024, VIO_QSEL = 0x030, VIO_QNUMMAX = 0x034, VIO_QNUM = 0x038,
        VIO_QREADY = 0x044, VIO_QNOTIFY = 0x050, VIO_INTSTATUS = 0x060, VIO_INTACK = 0x064,
@@ -271,9 +274,7 @@ enum { VIO_MAGIC = 0x000, VIO_VERSION = 0x004, VIO_DEVICE = 0x008, VIO_DRVFEAT =
        VIO_CAPACITY = 0x100 };
 enum { VIO_ACK = 1, VIO_DRIVER = 2, VIO_DRIVER_OK = 4, VIO_FEATURES_OK = 8, VIO_BLK = 2,
        VIO_QSIZE = 4, VIOD_NEXT = 1, VIOD_WRITE = 2 };
-static volatile uint32_t *vio;
-static uint64_t disk_blocks;
-static struct vio_queue {
+struct vio_queue {
 	struct {
 		uint64_t addr;
 		uint32_t len;
@@ -293,9 +294,14 @@ static struct vio_queue {
 		uint64_t sector;
 	} req __attribute__((aligned(64)));
 	uint8_t status;
-} *vq;
+};
+static struct disk {
+	volatile uint32_t *vio; /* 0: no such unit */
+	uint64_t blocks;
+	struct vio_queue *vq;
+} disks[DISK_UNITS];
 static uint8_t *vio_data; /* a page: 8 blocks */
-#define VQ_VA 0xfffe0000UL
+#define VQ_VA 0xfffe0000UL /* a page per unit */
 #define VIO_DATA_VA 0xfffd0000UL
 
 /* A page of the PAL's for the device, mapped at va, and its physical address. */
@@ -311,13 +317,45 @@ static uint64_t dma_page(seL4_Word va)
 	return a.paddr;
 }
 
-static void wr64(unsigned reg, uint64_t v)
+static void wr64(volatile uint32_t *vio, unsigned reg, uint64_t v)
 {
 	vio[reg / 4] = (uint32_t)v;
 	vio[reg / 4 + 1] = v >> 32;
 }
 
-/* Finds the disk among the virtio-mmio transports and sets it up. */
+/* Sets up the block device at vio as unit u, whose data goes through the
+ * page at data. */
+static void disk_setup(unsigned u, volatile uint32_t *vio, uint64_t data)
+{
+	vio[VIO_STATUS / 4] = 0;
+	vio[VIO_STATUS / 4] = VIO_ACK | VIO_DRIVER;
+	vio[VIO_DRVFEATSEL / 4] = 1; /* VIRTIO_F_VERSION_1, and nothing else */
+	vio[VIO_DRVFEAT / 4] = 1;
+	vio[VIO_STATUS / 4] = VIO_ACK | VIO_DRIVER | VIO_FEATURES_OK;
+	if (!(vio[VIO_STATUS / 4] & VIO_FEATURES_OK) || vio[VIO_QNUMMAX / 4] < VIO_QSIZE)
+		return;
+	seL4_Word va = VQ_VA + u * PAGE_SIZE;
+	uint64_t q = dma_page(va);
+	struct vio_queue *vq = (struct vio_queue *)va;
+	vio[VIO_QSEL / 4] = 0;
+	vio[VIO_QNUM / 4] = VIO_QSIZE;
+	wr64(vio, VIO_QDESC, q + __builtin_offsetof(struct vio_queue, desc));
+	wr64(vio, VIO_QDRIVER, q + __builtin_offsetof(struct vio_queue, avail));
+	wr64(vio, VIO_QDEVICE, q + __builtin_offsetof(struct vio_queue, used));
+	vio[VIO_QREADY / 4] = 1;
+	vio[VIO_STATUS / 4] = VIO_ACK | VIO_DRIVER | VIO_FEATURES_OK | VIO_DRIVER_OK;
+	/* The request: its header, the data and the status, a chain of three. */
+	vq->desc[0] = (typeof(vq->desc[0])){ q + __builtin_offsetof(struct vio_queue, req), 16,
+					     VIOD_NEXT, 1 };
+	vq->desc[1] = (typeof(vq->desc[0])){ data, 0, VIOD_NEXT, 2 };
+	vq->desc[2] = (typeof(vq->desc[0])){ q + __builtin_offsetof(struct vio_queue, status), 1,
+					     VIOD_WRITE, 0 };
+	disks[u] = (struct disk){ vio, vio[VIO_CAPACITY / 4] | (uint64_t)vio[VIO_CAPACITY / 4 + 1] << 32,
+				  vq };
+	print("disk %u: virtio-blk, %lu blocks\n", u, (seL4_Word)disks[u].blocks);
+}
+
+/* Finds the disks among the virtio-mmio transports and sets them up. */
 static void disk_init(seL4_BootInfo *bi)
 {
 	for (unsigned p = 0; p < VIRTIO_SLOTS * 0x200 / PAGE_SIZE; p++) {
@@ -327,74 +365,53 @@ static void disk_init(seL4_BootInfo *bi)
 		map(frame, seL4_CapInitThreadVSpace, VIRTIO_VA + p * PAGE_SIZE, seL4_ReadWrite,
 		    seL4_ARM_ExecuteNever);
 	}
-	for (unsigned s = 0; s < VIRTIO_SLOTS && !vio; s++) {
+	uint64_t data = dma_page(VIO_DATA_VA);
+	vio_data = (uint8_t *)VIO_DATA_VA;
+	unsigned u = 0;
+	for (unsigned s = VIRTIO_SLOTS; s-- && u < DISK_UNITS;) {
 		volatile uint32_t *r = (volatile uint32_t *)(VIRTIO_VA + s * 0x200);
 		if (r[VIO_MAGIC / 4] == 0x74726976 && r[VIO_VERSION / 4] == 2 &&
 		    r[VIO_DEVICE / 4] == VIO_BLK)
-			vio = r;
+			disk_setup(u++, r, data);
 	}
-	if (!vio)
-		return;
-	uint64_t q = dma_page(VQ_VA), data = dma_page(VIO_DATA_VA);
-	vq = (struct vio_queue *)VQ_VA;
-	vio_data = (uint8_t *)VIO_DATA_VA;
-	vio[VIO_STATUS / 4] = 0;
-	vio[VIO_STATUS / 4] = VIO_ACK | VIO_DRIVER;
-	vio[VIO_DRVFEATSEL / 4] = 1; /* VIRTIO_F_VERSION_1, and nothing else */
-	vio[VIO_DRVFEAT / 4] = 1;
-	vio[VIO_STATUS / 4] = VIO_ACK | VIO_DRIVER | VIO_FEATURES_OK;
-	if (!(vio[VIO_STATUS / 4] & VIO_FEATURES_OK) || vio[VIO_QNUMMAX / 4] < VIO_QSIZE) {
-		vio = 0;
-		return;
-	}
-	vio[VIO_QSEL / 4] = 0;
-	vio[VIO_QNUM / 4] = VIO_QSIZE;
-	wr64(VIO_QDESC, q + __builtin_offsetof(struct vio_queue, desc));
-	wr64(VIO_QDRIVER, q + __builtin_offsetof(struct vio_queue, avail));
-	wr64(VIO_QDEVICE, q + __builtin_offsetof(struct vio_queue, used));
-	vio[VIO_QREADY / 4] = 1;
-	vio[VIO_STATUS / 4] = VIO_ACK | VIO_DRIVER | VIO_FEATURES_OK | VIO_DRIVER_OK;
-	disk_blocks = vio[VIO_CAPACITY / 4] | (uint64_t)vio[VIO_CAPACITY / 4 + 1] << 32;
-	/* The request: its header, the data and the status, a chain of three. */
-	vq->desc[0] = (typeof(vq->desc[0])){ q + __builtin_offsetof(struct vio_queue, req), 16,
-					     VIOD_NEXT, 1 };
-	vq->desc[1] = (typeof(vq->desc[0])){ data, 0, VIOD_NEXT | VIOD_WRITE, 2 };
-	vq->desc[2] = (typeof(vq->desc[0])){ q + __builtin_offsetof(struct vio_queue, status), 1,
-					     VIOD_WRITE, 0 };
-	print("disk: virtio-blk, %lu blocks\n", (seL4_Word)disk_blocks);
 }
 
-/* Reads n blocks, at most 8, from lbn into vio_data. Returns 0 on an error. */
-static int disk_read8(uint64_t lbn, unsigned n)
+/* Reads (write 0) or writes (1) n blocks, at most 8, of unit d at lbn,
+ * from or to vio_data. Returns 0 on an error. */
+static int disk_io8(struct disk *d, uint64_t lbn, unsigned n, int write)
 {
-	vq->req.type = 0; /* VIRTIO_BLK_T_IN */
+	struct vio_queue *vq = d->vq;
+	vq->req.type = write; /* VIRTIO_BLK_T_IN, VIRTIO_BLK_T_OUT */
 	vq->req.sector = lbn;
 	vq->desc[1].len = n * DISK_BLOCK;
+	vq->desc[1].flags = write ? VIOD_NEXT : VIOD_NEXT | VIOD_WRITE;
 	vq->status = 0xff;
 	uint16_t idx = vq->avail.idx;
 	vq->avail.ring[idx % VIO_QSIZE] = 0;
 	__asm__ volatile("dmb sy" ::: "memory");
 	vq->avail.idx = idx + 1;
 	__asm__ volatile("dmb sy" ::: "memory");
-	vio[VIO_QNOTIFY / 4] = 0;
+	d->vio[VIO_QNOTIFY / 4] = 0;
 	while (*(volatile uint16_t *)&vq->used.idx != (uint16_t)(idx + 1))
 		;
 	__asm__ volatile("dmb sy" ::: "memory");
-	vio[VIO_INTACK / 4] = vio[VIO_INTSTATUS / 4];
+	d->vio[VIO_INTACK / 4] = d->vio[VIO_INTSTATUS / 4];
 	return vq->status == 0;
 }
 
 /*
- * Reads n blocks from lbn into the PAL's memory at dst. Returns 0 if there
- * is no disk, the blocks run past its end or the device fails.
+ * Reads n blocks of the system disk from lbn into the PAL's memory at dst.
+ * Returns 0 if there is no disk, the blocks run past its end or the device
+ * fails.
  */
 static int disk_read(uint64_t lbn, uint8_t *dst, seL4_Word n)
 {
-	if (!vio || lbn + n > disk_blocks)
+	struct disk *d = &disks[0];
+	if (!d->vio || lbn + n > d->blocks)
 		return 0;
 	while (n) {
 		unsigned k = n < PAGE_SIZE / DISK_BLOCK ? n : PAGE_SIZE / DISK_BLOCK;
-		if (!disk_read8(lbn, k))
+		if (!disk_io8(d, lbn, k, 0))
 			return 0;
 		memcpy(dst, vio_data, k * DISK_BLOCK);
 		dst += k * DISK_BLOCK, lbn += k, n -= k;
@@ -684,38 +701,48 @@ static uint64_t *quad(seL4_Word va)
 }
 
 /*
- * READLBLK: reads the blocks from lbn into the len bytes at va, which
- * kernel mode must be able to write, as Alpha's console READ callback
- * read the boot disk for VMS's bootstrap. Returns an SS$ status: NORMAL,
- * ACCVIO for a buffer kernel mode can't write, ILLBLKNUM past the disk's
- * end, NOSUCHDEV without a disk, DRVERR if the device fails.
+ * READLBLK and WRITELBLK: read the blocks of unit u from lbn into the len
+ * bytes at va, or write those bytes there, as Alpha's console READ and
+ * WRITE callbacks did for VMS's bootstrap. Kernel mode must be able to
+ * write (read) the buffer. Return an SS$ status: NORMAL, ACCVIO for a
+ * buffer kernel mode can't, ILLBLKNUM past the disk's end, NOSUCHDEV
+ * without the disk, DRVERR if the device fails, as it does for a write to
+ * the system disk, which QEMU attaches read only.
  */
 enum { SS_NORMAL = 1, SS_ACCVIO = 12, SS_DRVERR = 140, SS_ILLBLKNUM = 220, SS_NOSUCHDEV = 2312 };
 
-static seL4_Word readlblk(seL4_Word va, seL4_Word len, seL4_Word lbn)
+static seL4_Word lblk(seL4_Word va, seL4_Word len, seL4_Word lbn, seL4_Word u, int write)
 {
 	uint8_t *at[2 + 0xffff / PAGE_SIZE]; /* the PAL's view of each page */
 	seL4_Word first = va & ~(PAGE_SIZE - 1);
 	for (seL4_Word p = first, i = 0; p < va + len; p += PAGE_SIZE, i++) {
 		uint32_t *pte = p < SPACE_END ? pte_at(p, 0) : 0;
-		if (!pte || !mapped(*pte) || may_write[prot(*pte)] < 0)
+		if (!pte || !mapped(*pte) || (!write && may_write[prot(*pte)] < 0))
 			return SS_ACCVIO;
 		at[i] = (uint8_t *)(PHYS + (*pte & PTE_PFN) * PAGE_SIZE);
 	}
-	if (!vio)
+	if (u >= DISK_UNITS || !disks[u].vio)
 		return SS_NOSUCHDEV;
+	struct disk *d = &disks[u];
 	seL4_Word blocks = (len + DISK_BLOCK - 1) / DISK_BLOCK;
-	if (lbn + blocks > disk_blocks)
+	if (lbn + blocks > d->blocks)
 		return SS_ILLBLKNUM;
 	for (seL4_Word done = 0; done < len;) {
 		unsigned k = blocks < 8 ? blocks : 8;
-		if (!disk_read8(lbn, k))
+		seL4_Word n = len - done < k * DISK_BLOCK ? len - done : k * DISK_BLOCK;
+		if (write) /* a last block in part is padded with zeros */
+			memset(vio_data, 0, k * DISK_BLOCK);
+		for (seL4_Word i = 0; write && i < n; i++) {
+			seL4_Word off = va + done + i - first;
+			vio_data[i] = at[off / PAGE_SIZE][off % PAGE_SIZE];
+		}
+		if (!disk_io8(d, lbn, k, write))
 			return SS_DRVERR;
-		for (seL4_Word i = 0; i < k * DISK_BLOCK && done < len; i++, done++) {
-			seL4_Word off = va + done - first;
+		for (seL4_Word i = 0; !write && i < n; i++) {
+			seL4_Word off = va + done + i - first;
 			at[off / PAGE_SIZE][off % PAGE_SIZE] = vio_data[i];
 		}
-		lbn += k, blocks -= k;
+		done += n, lbn += k, blocks -= k;
 	}
 	return SS_NORMAL;
 }
@@ -1036,7 +1063,7 @@ enum {
 	HALT = 0x00, SWPCTX = 0x05, MFPR_IPL = 0x0e, MTPR_IPL = 0x0f, MFPR_PCBB = 0x12,
 	MFPR_SCBB = 0x16, MTPR_SCBB = 0x17, MTPR_SIRR = 0x18, MFPR_SISR = 0x19, WTINT = 0x3e,
 	MTPR_TXDB = 0x40, WRPTE = 0x41, DELCTX = 0x42, MTPR_RXCS = 0x43, MFPR_RXCS = 0x44,
-	MFPR_RXDB = 0x45, READLBLK = 0x46, CHME = 0x82, CHMU = 0x85, PROBER = 0x8f,
+	MFPR_RXDB = 0x45, READLBLK = 0x46, WRITELBLK = 0x47, CHME = 0x82, CHMU = 0x85, PROBER = 0x8f,
 	PROBEW = 0x90, RD_PS = 0x91, REI = 0x92
 };
 
@@ -1467,7 +1494,9 @@ static int serve_one(seL4_MessageInfo_t msg)
 	case MFPR_RXDB:
 		return ret(uart_rx_ready() ? uart[UART_DR / 4] & 0xff : 0);
 	case READLBLK:
-		return ret(readlblk(a0 & 0xffffffff, a1 & 0xffff, mr[seL4_UnknownSyscall_X2] & 0xffffffff));
+	case WRITELBLK:
+		return ret(lblk(a0 & 0xffffffff, a1 & 0xffff, mr[seL4_UnknownSyscall_X2] & 0xffffffff,
+				mr[seL4_UnknownSyscall_X3] & 0xffffffff, code == WRITELBLK));
 	case WRPTE: {
 		uint32_t old;
 		if (!wrpte(a0 & 0xffffffff, a1, &old))

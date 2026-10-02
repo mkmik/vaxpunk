@@ -98,6 +98,7 @@ name = "boot"
 version = "0.1.0"
 dependencies = [
  "kernel",
+ "ods-image",
  "roottask",
  "shim",
 ]

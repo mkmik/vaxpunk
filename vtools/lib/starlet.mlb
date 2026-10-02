@@ -54,6 +54,7 @@ SS$_HEADERFULL = 2248                   ; the file's map is full
 SS$_IDXFILEFULL = 2256                  ; no free file headers left
 SS$_NOHOMEBLK = 2272                    ; no Files-11 home block
 SS$_NOMOREFILES = 2352
+SS$_NOMOREDEV = 2648                    ; no more devices to list
 SS$_NOLOGTAB = 8852
         .ENDM   $SSDEF
 
@@ -175,6 +176,60 @@ NAM$L_TYPE = 80
 NAM$L_VER = 84
 NAM$M_WILDCARD = ^X100                  ; the specification has a wildcard
         .ENDM   $NAMDEF
+
+; $DVIDEF: $GETDVI's item codes, VMS's, those vaxpunk knows.
+        .MACRO  $DVIDEF
+DVI$_DEVCHAR = 2                        ; the DEV$ bits, a longword
+DVI$_DEVCLASS = 4                       ; DC$_DISK or DC$_TERM
+DVI$_UNIT = 12
+DVI$_ERRCNT = 20
+DVI$_DEVNAM = 32                        ; the device's name, _DDCU:
+DVI$_VOLNAM = 34                        ; the mounted volume's label
+DVI$_FREEBLOCKS = 42                    ; its free blocks
+DVI$_MOUNTCNT = 56                      ; 1 if a volume is mounted, else 0
+DVI$_CLUSTER = 58                       ; its cluster, in blocks
+DVI$_AVL = 98                           ; DEVCHAR's bits, each 1 or 0
+DVI$_MNT = 100
+DVI$_SWL = 112
+DVI$_STS = 226                          ; the UCB$ status bits: UCB$M_ONLINE
+        .ENDM   $DVIDEF
+
+; $DVSDEF: $DEVICE_SCAN's item codes.
+        .MACRO  $DVSDEF
+DVS$_DEVCLASS = 1                       ; only devices of this class, a longword
+        .ENDM   $DVSDEF
+
+; $DCDEF: device classes.
+        .MACRO  $DCDEF
+DC$_DISK = 1
+DC$_TERM = 66
+        .ENDM   $DCDEF
+
+; $DEVDEF: device characteristics, DVI$_DEVCHAR's bits.
+        .MACRO  $DEVDEF
+DEV$M_REC = ^X1                         ; record oriented
+DEV$M_CCL = ^X2                         ; carriage control
+DEV$M_TRM = ^X4                         ; a terminal
+DEV$M_DIR = ^X8                         ; directory structured
+DEV$M_FOD = ^X4000                      ; files oriented
+DEV$M_SHR = ^X10000                     ; shareable
+DEV$M_AVL = ^X40000                     ; available
+DEV$V_AVL = 18
+DEV$M_MNT = ^X80000                     ; a volume is mounted
+DEV$V_MNT = 19
+DEV$M_SWL = ^X2000000                   ; software write locked: the volume is read only
+DEV$V_SWL = 25
+DEV$M_IDV = ^X4000000                   ; input
+DEV$M_ODV = ^X8000000                   ; output
+DEV$M_RND = ^X10000000                  ; random access
+        .ENDM   $DEVDEF
+
+; $UCBDEF: DVI$_STS's bits, a unit control block's status on VMS; vaxpunk
+; has no UCBs.
+        .MACRO  $UCBDEF
+UCB$V_ONLINE = 4                        ; the device is online
+UCB$M_ONLINE = ^X10
+        .ENDM   $UCBDEF
 
 ; $MNTDEF: $MOUNT's item codes.
         .MACRO  $MNTDEF
@@ -639,6 +694,42 @@ PRT$C_UR = 15
         .EXTERNAL SYS$INIT_VOL
         CALLS   #3, G^SYS$INIT_VOL
         .ENDM   $INIT_VOL_S
+
+        .MACRO  $GETDVI_S EFN=#0, CHAN=#0, DEVNAM=0, ITMLST, IOSB=0, ASTADR=0, ASTPRM=#0, NULLARG=0
+        $PUSHADR NULLARG
+        PUSHL   ASTPRM
+        $PUSHADR ASTADR
+        $PUSHADR IOSB
+        $PUSHADR ITMLST
+        $PUSHADR DEVNAM
+        PUSHL   CHAN
+        PUSHL   EFN
+        .EXTERNAL SYS$GETDVI
+        CALLS   #8, G^SYS$GETDVI
+        .ENDM   $GETDVI_S
+
+        .MACRO  $GETDVIW_S EFN=#0, CHAN=#0, DEVNAM=0, ITMLST, IOSB=0, ASTADR=0, ASTPRM=#0, NULLARG=0
+        $PUSHADR NULLARG
+        PUSHL   ASTPRM
+        $PUSHADR ASTADR
+        $PUSHADR IOSB
+        $PUSHADR ITMLST
+        $PUSHADR DEVNAM
+        PUSHL   CHAN
+        PUSHL   EFN
+        .EXTERNAL SYS$GETDVIW
+        CALLS   #8, G^SYS$GETDVIW
+        .ENDM   $GETDVIW_S
+
+        .MACRO  $DEVICE_SCAN_S RETURN_DEVNAM, RETLEN=0, SEARCH_DEVNAM=0, ITMLST=0, CONTXT=0
+        $PUSHADR CONTXT
+        $PUSHADR ITMLST
+        $PUSHADR SEARCH_DEVNAM
+        $PUSHADR RETLEN
+        $PUSHADR RETURN_DEVNAM
+        .EXTERNAL SYS$DEVICE_SCAN
+        CALLS   #5, G^SYS$DEVICE_SCAN
+        .ENDM   $DEVICE_SCAN_S
 
         .MACRO  $MOUNT_S ITMLST
         $PUSHADR ITMLST

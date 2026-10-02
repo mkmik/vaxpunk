@@ -11,6 +11,10 @@
         $IODEF
         $LNMDEF
         $RMSDEF
+        $DVIDEF
+        $DVSDEF
+        $DCDEF
+        $DEVDEF
         .EXTERNAL SYS$DCLEXH, SYS$EXIT, EXE$GL_RPB
 
         .PSECT  DATA, NOEXE, WRT, LONG
@@ -36,6 +40,45 @@ USURP_NAME:
         .ASCID  "USURP"
 CONSOLE:
         .ASCID  "OPA0:"
+DKA0:   .ASCID  "DKA0"
+A0:     .ASCID  "*A0"
+DVI_ITEMS:                              ; $GETDVIW's: the class and the name
+        .WORD   4, DVI$_DEVCLASS
+        .ADDRESS CLASS
+        .LONG   0
+        .WORD   8, DVI$_DEVNAM
+        .ADDRESS DEVNAME
+        .ADDRESS DEVLEN
+        .LONG   0
+CHAR_ITEMS:                             ; the characteristics
+        .WORD   4, DVI$_DEVCHAR
+        .ADDRESS DEVCHAR
+        .LONG   0
+        .LONG   0
+BAD_ITEMS:                              ; DVI$_DEVTYPE, which it doesn't know
+        .WORD   4, 6
+        .ADDRESS DEVCHAR
+        .LONG   0
+        .LONG   0
+DVS_ITEMS:                              ; $DEVICE_SCAN's: disks only
+        .WORD   4, DVS$_DEVCLASS
+        .ADDRESS DISKCLASS
+        .LONG   0
+        .LONG   0
+DISKCLASS:
+        .LONG   DC$_DISK
+CLASS:  .LONG   0
+DEVCHAR:
+        .LONG   0
+DEVNAME:
+        .BLKB   8
+DEVLEN: .WORD   0
+DEVDSC: .LONG   8
+        .ADDRESS DEVNAME
+SCANCTX:
+        .BLKQ   1
+DVI_IOSB:
+        .BLKQ   1
 STATE:  .LONG   0
 PRI:    .LONG   0
 CHAN:   .LONG   0
@@ -230,6 +273,49 @@ SHORT:  .LONG   4                       ; too short a buffer for one
         BNEQ    90$
         $SETDDIR_S NEWDIR=OLDDIR
         EXPECT  #RMS$_NORMAL, 53
+
+; Devices: $GETDVIW about the console by its name and by a channel, and
+; about the system disk, mounted read only; an item it doesn't know, and
+; a device that isn't there. $DEVICE_SCAN finds the disks whose names
+; end in A0, DKA0: and MDA0:, and no more.
+        $GETDVIW_S DEVNAM=CONSOLE, ITMLST=DVI_ITEMS, IOSB=DVI_IOSB
+        EXPECT  #SS$_NORMAL, 55
+        CMPW    DVI_IOSB, #SS$_NORMAL
+        BNEQ    90$
+        CMPL    CLASS, #DC$_TERM
+        BNEQ    90$
+        CMPW    DEVLEN, #6
+        BNEQ    90$
+        CMPL    DEVNAME, #^A/_OPA/
+        BNEQ    90$
+        CLRL    CLASS
+        $ASSIGN_S DEVNAM=CONSOLE, CHAN=CHAN
+        $GETDVIW_S CHAN=CHAN, ITMLST=DVI_ITEMS
+        EXPECT  #SS$_NORMAL, 56
+        CMPL    CLASS, #DC$_TERM
+        BNEQ    90$
+        $DASSGN_S CHAN=CHAN
+        $GETDVIW_S DEVNAM=DKA0, ITMLST=CHAR_ITEMS
+        EXPECT  #SS$_NORMAL, 57
+        BICL3   #^C<DEV$M_MNT!DEV$M_SWL!DEV$M_FOD>, DEVCHAR, R0
+        CMPL    R0, #DEV$M_MNT!DEV$M_SWL!DEV$M_FOD
+        BNEQ    90$
+        $GETDVIW_S DEVNAM=DKA0, ITMLST=BAD_ITEMS
+        EXPECT  #SS$_BADPARAM, 58
+        $GETDVIW_S DEVNAM=NOSUCH_NAME, ITMLST=CHAR_ITEMS
+        EXPECT  #SS$_NOSUCHDEV, 59
+        $DEVICE_SCAN_S RETURN_DEVNAM=DEVDSC, RETLEN=DEVLEN, SEARCH_DEVNAM=A0, ITMLST=DVS_ITEMS, CONTXT=SCANCTX
+        EXPECT  #SS$_NORMAL, 60
+        CMPL    DEVNAME, #^A/_DKA/
+        BNEQ    90$
+        $DEVICE_SCAN_S RETURN_DEVNAM=DEVDSC, RETLEN=DEVLEN, SEARCH_DEVNAM=A0, ITMLST=DVS_ITEMS, CONTXT=SCANCTX
+        EXPECT  #SS$_NORMAL, 61
+        CMPL    DEVNAME, #^A/_MDA/
+        BNEQ    90$
+        CMPW    DEVLEN, #6
+        BNEQ    90$
+        $DEVICE_SCAN_S RETURN_DEVNAM=DEVDSC, RETLEN=DEVLEN, SEARCH_DEVNAM=A0, ITMLST=DVS_ITEMS, CONTXT=SCANCTX
+        EXPECT  #SS$_NOMOREDEV, 62
 
 ; Other processes: lower this one's priority below NAPPER's so it runs
 ; and hibernates; suspend it while it does, so that $WAKE leaves it

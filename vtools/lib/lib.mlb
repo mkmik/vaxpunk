@@ -43,7 +43,8 @@ PAL$_SWPCTX = ^X05                      ; R0 = new HWPCB; R0 = the one left
 PAL$_WTINT = ^X3E                       ; wait for an interrupt
 PAL$_WRPTE = ^X41                       ; R0 = address, R1 = PTE; R0 = old PTE
 PAL$_DELCTX = ^X42                      ; R0 = HWPCB of a context to delete
-PAL$_READLBLK = ^X46                    ; R0 = buffer, R1 = byte count, R2 = LBN; R0 = status
+PAL$_READLBLK = ^X46                    ; R0 = buffer, R1 = byte count, R2 = LBN, R3 = unit; R0 = status
+PAL$_WRITELBLK = ^X47                   ; the same, writing the buffer there
 PAL$_RD_PS = ^X91                       ; R0 = the PSL: the modes and IPL
         .ENDM   $PALDEF
 
@@ -307,10 +308,12 @@ VCB$L_HDRVBN = 4                        ; INDEXF.SYS's VBN of file 1's header
 VCB$L_IBMAPLBN = 8                      ; the index file bitmap's LBN
 VCB$L_SBMAPLBN = 12                     ; the storage bitmap's LBN
 VCB$T_DEVNAM = 16                       ; the device's name, DDCU:, 5 characters
+VCB$B_UNIT = 21                         ; the PAL's unit: 0 DKA0:, 1 DKB0:
+VCB$W_CLUSTER = 22                      ; the volume's cluster, in blocks
 VCB$T_VOLNAME = 24                      ; the volume's label, .ASCIC, 12 characters
 VCB$AB_INDEXF = 48                      ; INDEXF.SYS's header, 512 bytes
 VCB$K_LENGTH = 560
 VCB$V_MOUNTED = 0                       ; a volume is mounted on it
 VCB$V_WRITE = 1                         ; the device can be written
-VCB$V_RAMDISK = 2                       ; the device is the ramdisk, MDA0:, not the PAL's disk
+VCB$V_RAMDISK = 2                       ; the device is the ramdisk, MDA0:, not one of the PAL's disks
         .ENDM   $VCBDEF

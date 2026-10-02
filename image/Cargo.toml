@@ -13,3 +13,6 @@ path = "main.rs"
 kernel = { path = "../kernel" }
 roottask = { path = "../roottask" }
 shim = { path = "../shim" }
+
+[dev-dependencies]
+ods-image = { path = "../ods/crates/ods-image" }

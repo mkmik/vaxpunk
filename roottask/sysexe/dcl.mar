@@ -26,6 +26,8 @@
 ;               and device, its SYS$DISK
 ;   SHOW DEFAULT
 ;               shows it, with the device
+;   SHOW DEVICES [name]
+;               lists the devices, those whose names start with name
 ;   EDIT spec   runs EDIT.EXE, with spec as its command line
 ;   COPY from to
 ;               runs COPY.EXE
@@ -44,8 +46,8 @@
 ; status with STS$M_INHIB_MSG set is one the image reported itself. It
 ; reads the commands from SYS$INPUT. A command that runs an image runs
 ; down the one CTRL/Y stopped.
-; ponytail: no message texts, symbols, qualifiers, quoted strings or
-; command procedures.
+; ponytail: message texts for a few statuses only; no symbols,
+; qualifiers, quoted strings or command procedures.
 ;
         .LIBRARY "lib.mlb"
         .LIBRARY "starlet.mlb"
@@ -59,6 +61,10 @@
         $RMSDEF
         $FABDEF
         $NAMDEF
+        $DVIDEF
+        $DVSDEF
+        $DCDEF
+        $UCBDEF
 
         .EXTERNAL PUT_LINE, SCH$GL_CURPCB, LNM$GQ_SYSTEM
 
@@ -141,6 +147,58 @@ V_LOGICAL:
 V_SET:  .ASCIC  "SET"
 V_DEFAULT:
         .ASCIC  "DEFAULT"
+V_DEVICES:
+        .ASCIC  "DEVICES"
+SCANCTX:                                ; $DEVICE_SCAN's context
+        .BLKQ   1
+PATDSC: .LONG   0                       ; its search name, in TOKEN
+        .ADDRESS TOKEN
+DVSITEMS:                               ; its items: the class
+        .WORD   4, DVS$_DEVCLASS
+        .ADDRESS DEVCLASS
+        .LONG   0
+        .LONG   0
+DEVCLASS:
+        .LONG   0
+DEVDSC: .LONG   8                       ; the device's name it found, _DDCU:
+        .ADDRESS DEVNAME
+DVINAM: .LONG   0                       ; and its length, a descriptor of it
+        .ADDRESS DEVNAME
+DEVNAME:
+        .BLKB   8
+DVIITEMS:                               ; what $GETDVIW returns of it
+        .WORD   4, DVI$_MNT
+        .ADDRESS V_MNT
+        .LONG   0
+        .WORD   4, DVI$_SWL
+        .ADDRESS V_SWL
+        .LONG   0
+        .WORD   4, DVI$_STS
+        .ADDRESS V_STS
+        .LONG   0
+        .WORD   12, DVI$_VOLNAM
+        .ADDRESS DEVLABEL+1
+        .ADDRESS LABLEN
+        .WORD   4, DVI$_FREEBLOCKS
+        .ADDRESS DEVFREE
+        .LONG   0
+        .LONG   0
+V_MNT:  .LONG   0                       ; 1 if a volume is mounted,
+V_SWL:  .LONG   0                       ; 1 if it is read only,
+V_STS:  .LONG   0                       ; UCB$M_ONLINE if the device is there,
+DEVLABEL:                               ; the volume's label, after a byte,
+        .BLKB   13
+LABLEN: .WORD   0                       ; its length,
+DEVFREE:                                ; and its free blocks
+        .LONG   0
+S_MOUNTED:
+        .ASCIC  "Mounted"
+S_WRTLCK:
+        .ASCIC  "Mounted wrtlck"
+S_ONLINE:
+        .ASCIC  "Online"
+S_OFFLINE:
+        .ASCIC  "Offline"
 V_EDIT: .ASCIC  "EDIT"
 V_COPY: .ASCIC  "COPY"
 V_DELETE:
@@ -163,6 +221,138 @@ DISKITEMS:                              ; $CRELNM's: the device in EXP
         .LONG   0, 0, 0
 SEVERITY:
         .ASCII  "WSEIF???"
+; The messages STATUS knows: a status, its facility, its name and its
+; text, VMS's, each .ASCIC, until a status of 0.
+MESSAGES:
+        .LONG   RMS$_EOF
+        .ASCIC  "RMS"
+        .ASCIC  "EOF"
+        .ASCIC  "end of file detected"
+        .LONG   RMS$_FNF
+        .ASCIC  "RMS"
+        .ASCIC  "FNF"
+        .ASCIC  "file not found"
+        .LONG   RMS$_WLK
+        .ASCIC  "RMS"
+        .ASCIC  "WLK"
+        .ASCIC  "device currently write locked"
+        .LONG   RMS$_NMF
+        .ASCIC  "RMS"
+        .ASCIC  "NMF"
+        .ASCIC  "no more files found"
+        .LONG   RMS$_DNF
+        .ASCIC  "RMS"
+        .ASCIC  "DNF"
+        .ASCIC  "directory not found"
+        .LONG   RMS$_DEV
+        .ASCIC  "RMS"
+        .ASCIC  "DEV"
+        .ASCIC  "error in device name or inappropriate device type for operation"
+        .LONG   RMS$_DIR
+        .ASCIC  "RMS"
+        .ASCIC  "DIR"
+        .ASCIC  "error in directory name"
+        .LONG   RMS$_DME
+        .ASCIC  "RMS"
+        .ASCIC  "DME"
+        .ASCIC  "dynamic memory exhausted"
+        .LONG   RMS$_FNM
+        .ASCIC  "RMS"
+        .ASCIC  "FNM"
+        .ASCIC  "error in file name"
+        .LONG   RMS$_RFM
+        .ASCIC  "RMS"
+        .ASCIC  "RFM"
+        .ASCIC  "invalid record format"
+        .LONG   RMS$_SYN
+        .ASCIC  "RMS"
+        .ASCIC  "SYN"
+        .ASCIC  "file specification syntax error"
+        .LONG   RMS$_VER
+        .ASCIC  "RMS"
+        .ASCIC  "VER"
+        .ASCIC  "error in version number"
+        .LONG   RMS$_WLD
+        .ASCIC  "RMS"
+        .ASCIC  "WLD"
+        .ASCIC  "invalid wildcard operation"
+        .LONG   RMS$_DNR
+        .ASCIC  "RMS"
+        .ASCIC  "DNR"
+        .ASCIC  "device not ready, not mounted, or unavailable"
+        .LONG   RMS$_FEX
+        .ASCIC  "RMS"
+        .ASCIC  "FEX"
+        .ASCIC  "file already exists, not superseded"
+        .LONG   RMS$_PRV
+        .ASCIC  "RMS"
+        .ASCIC  "PRV"
+        .ASCIC  "insufficient privilege or file protection violation"
+        .LONG   RMS$_FUL
+        .ASCIC  "RMS"
+        .ASCIC  "FUL"
+        .ASCIC  "device full (insufficient space for allocation)"
+        .LONG   RMS$_CRE
+        .ASCIC  "RMS"
+        .ASCIC  "CRE"
+        .ASCIC  "ACP file create failed"
+        .LONG   RMS$_ENT
+        .ASCIC  "RMS"
+        .ASCIC  "ENT"
+        .ASCIC  "ACP enter function failed"
+        .LONG   RMS$_MKD
+        .ASCIC  "RMS"
+        .ASCIC  "MKD"
+        .ASCIC  "ACP could not mark file for deletion"
+        .LONG   RMS$_WER
+        .ASCIC  "RMS"
+        .ASCIC  "WER"
+        .ASCIC  "file write error"
+        .LONG   SS$_BADPARAM
+        .ASCIC  "SYSTEM"
+        .ASCIC  "BADPARAM"
+        .ASCIC  "bad parameter value"
+        .LONG   SS$_DEVMOUNT
+        .ASCIC  "SYSTEM"
+        .ASCIC  "DEVMOUNT"
+        .ASCIC  "device is already mounted"
+        .LONG   SS$_INCVOLLABEL
+        .ASCIC  "SYSTEM"
+        .ASCIC  "INCVOLLABEL"
+        .ASCIC  "incorrect volume label"
+        .LONG   SS$_IVDEVNAM
+        .ASCIC  "SYSTEM"
+        .ASCIC  "IVDEVNAM"
+        .ASCIC  "invalid device name"
+        .LONG   SS$_MEDOFL
+        .ASCIC  "SYSTEM"
+        .ASCIC  "MEDOFL"
+        .ASCIC  "medium is offline"
+        .LONG   SS$_WRITLCK
+        .ASCIC  "SYSTEM"
+        .ASCIC  "WRITLCK"
+        .ASCIC  "write-locked"
+        .LONG   SS$_NOSUCHDEV
+        .ASCIC  "SYSTEM"
+        .ASCIC  "NOSUCHDEV"
+        .ASCIC  "no such device available"
+        .LONG   SS$_NOHOMEBLK
+        .ASCIC  "SYSTEM"
+        .ASCIC  "NOHOMEBLK"
+        .ASCIC  "Files-11 home block not found on volume"
+        .LONG   SS$_DEVICEFULL
+        .ASCIC  "SYSTEM"
+        .ASCIC  "DEVICEFULL"
+        .ASCIC  "device full - allocation failure"
+        .LONG   SS$_IDXFILEFULL
+        .ASCIC  "SYSTEM"
+        .ASCIC  "IDXFILEFULL"
+        .ASCIC  "index file full"
+        .LONG   SS$_HEADERFULL
+        .ASCIC  "SYSTEM"
+        .ASCIC  "HEADERFULL"
+        .ASCIC  "file header full"
+        .LONG   0
 HEX:    .ASCII  "0123456789ABCDEF"
 
         .PSECT  CODE, EXE, LONG
@@ -258,14 +448,16 @@ HELP:   PRINT   "  RUN image   runs image, image.EXE if it has no type"
         PRINT   "              sets the default directory"
         PRINT   "  SHOW DEFAULT"
         PRINT   "              shows it"
+        PRINT   "  SHOW DEVICES [name]"
+        PRINT   "              lists the devices, or those whose names start with name"
         PRINT   "  EDIT spec   edits the file spec names with EDT"
         PRINT   "  COPY from to"
         PRINT   "              copies a file"
         PRINT   "  DELETE spec deletes the files spec names, ;version or ;*"
         PRINT   "  INITIALIZE device label"
-        PRINT   "              writes an empty volume on MDA0:, the ramdisk"
+        PRINT   "              writes an empty volume on DKB0: or MDA0:, the ramdisk"
         PRINT   "  MOUNT device label"
-        PRINT   "              mounts the volume, MDA0: then names its files"
+        PRINT   "              mounts the volume, DKB0: or MDA0: then names its files"
         PRINT   "  CONTINUE    goes back to the image CTRL/Y stopped"
         PRINT   "  HELP        lists the commands"
         PRINT   "  LOGOUT      ends the process"
@@ -441,6 +633,124 @@ SHOWDEF:
         MOVL    #SS$_NORMAL, R0
 20$:    BRW     DONE
 
+; SHOW DEVICES [name]: lists the disks, with their status and their
+; volumes' labels and free blocks, then the terminal, under VMS's
+; headings, or only the devices whose names start with name, with *
+; and % wildcards: SHOW DEVICES DK. It finds them with $DEVICE_SCAN, a
+; class at a time, and asks each about itself with $GETDVIW.
+; SS$_NOSUCHDEV if none matches.
+; ponytail: no error counts, transactions or mount counts, which nothing
+; keeps; no /FULL or other qualifiers.
+SHOWDEV:
+        BSBW    WORD
+        TSTL    R8                      ; name*, without its colon
+        BEQL    5$
+        CMPB    TOKEN-1[R8], #^A/:/
+        BNEQ    3$
+        DECL    R8
+3$:     MOVB    #^A/*/, TOKEN[R8]
+        INCL    R8
+5$:     MOVL    R8, PATDSC
+        CLRL    R7                      ; the devices listed
+        MOVL    #DC$_DISK, DEVCLASS
+        BSBB    SCAN
+        MOVL    #DC$_TERM, DEVCLASS
+        BSBB    SCAN
+        MOVL    #SS$_NORMAL, R0
+        TSTL    R7
+        BNEQ    10$
+        MOVL    #SS$_NOSUCHDEV, R0
+10$:    BRW     DONE
+
+; SCAN: lists the devices of DEVCLASS's class whose names match PATDSC's,
+; under their headings, if there are any. R7 = how many there were, and
+; as many more. Uses R0-R6.
+SCAN:   CLRQ    SCANCTX
+        CLRL    R6                      ; 1 once the headings are out
+10$:    $DEVICE_SCAN_S RETURN_DEVNAM=DEVDSC, RETLEN=DVINAM, SEARCH_DEVNAM=PATDSC, ITMLST=DVSITEMS, CONTXT=SCANCTX
+        BLBC    R0, 90$
+        $GETDVIW_S DEVNAM=DVINAM, ITMLST=DVIITEMS
+        BLBC    R0, 10$
+        TSTL    R6
+        BNEQ    20$
+        INCL    R6
+        PRINT   ""
+        CMPL    DEVCLASS, #DC$_DISK
+        BNEQ    15$
+        PRINT   "Device                  Device           Error    Volume         Free"
+        PRINT   " Name                   Status           Count     Label        Blocks"
+        BRB     20$
+15$:    PRINT   "Device                  Device           Error"
+        PRINT   " Name                   Status           Count"
+20$:    INCL    R7
+        MOVAB   DEVNAME+1, R1           ; without its underscore
+        MOVZWL  DVINAM, R2
+        DECL    R2
+        BSBW    ADD
+        MOVL    #24, R3
+        BSBW    PADTO
+        MOVAB   S_OFFLINE, R1
+        BITL    #UCB$M_ONLINE, V_STS
+        BEQL    25$
+        MOVAB   S_ONLINE, R1
+25$:    TSTL    V_MNT
+        BEQL    30$
+        MOVAB   S_MOUNTED, R1
+        TSTL    V_SWL
+        BEQL    30$
+        MOVAB   S_WRTLCK, R1
+30$:    BSBW    ADDCSTR
+        MOVL    #41, R3
+        BSBW    PADTO
+        CLRL    R1                      ; the error count
+        MOVL    #5, R3
+        BSBW    ADDDEC
+        TSTL    V_MNT
+        BEQL    40$
+        ADDTEXT "  "
+        MOVAB   DEVLABEL+1, R1
+        MOVZWL  LABLEN, R2
+        BSBW    ADD
+        MOVL    #62, R3
+        BSBW    PADTO
+        MOVL    DEVFREE, R1
+        MOVL    #8, R3
+        BSBW    ADDDEC
+40$:    BSBW    SAY
+        BRW     10$
+90$:    RSB
+
+; PADTO: R3 = a column. Appends blanks to MSG up to it. Uses R0-R2.
+PADTO:  MOVZBL  MSG, R0
+        CMPL    R0, R3
+        BGEQ    10$
+        MOVZBL  #^A/ /, R0
+        BSBW    ADDCHAR
+        BRB     PADTO
+10$:    RSB
+
+; ADDDEC: appends R1 in decimal to MSG, right-aligned in R3 columns.
+; Uses R0-R5.
+ADDDEC: CLRL    R4                      ; digits, on the stack
+10$:    DIVL3   #10, R1, R5
+        MULL3   #10, R5, R0
+        SUBL3   R0, R1, R0
+        ADDL2   #^A/0/, R0
+        PUSHL   R0
+        INCL    R4
+        MOVL    R5, R1
+        BNEQ    10$
+20$:    CMPL    R3, R4
+        BLEQ    30$
+        MOVZBL  #^A/ /, R0
+        BSBW    ADDCHAR
+        DECL    R3
+        BRB     20$
+30$:    MOVL    (SP)+, R0
+        BSBW    ADDCHAR
+        SOBGTR  R4, 30$
+        RSB
+
 ; ADDDEF: appends the device and directory $PARSE left in DEFNAM to MSG.
 ; Uses R0-R2.
 ADDDEF: MOVL    DEFNAM+NAM$L_DEV, R1
@@ -450,13 +760,16 @@ ADDDEF: MOVL    DEFNAM+NAM$L_DEV, R1
 
 ; SHOW LOGICAL [name]: translates name in LNM$FILE_DEV, and shows the
 ; equivalence and the table it is in. With no name, or *, lists them all.
-; SHOW DEFAULT: as SHOWDEF.
+; SHOW DEFAULT: as SHOWDEF. SHOW DEVICES: as SHOWDEV.
 SHOW:   BSBW    WORD
         TSTL    R8
         BEQL    5$
         MOVAB   V_DEFAULT, R1
         BSBW    VERB
         BLBS    R0, SHOWDEF
+        MOVAB   V_DEVICES, R1
+        BSBW    VERB
+        BLBS    R0, SHOWDEV
         MOVAB   V_LOGICAL, R1
         BSBW    VERB
         BLBS    R0, 10$
@@ -643,11 +956,27 @@ VERB:   CLRL    R0
 90$:    RSB
 
 ; STATUS: R0 = % for a message, - for one that follows another, R1 = a
-; status. Writes the message VMS writes for a status it has no text for.
+; status. Writes its message, %FACILITY-S-NAME, text, from MESSAGES, or
+; the one VMS writes for a status it has no text for.
 ; Uses R0-R5.
+; ponytail: a table in DCL for the file system's and RMS's statuses; VMS
+; finds every facility's in message files, with $GETMSG.
 STATUS: MOVL    R1, R4
-        BSBB    ADDCHAR
-        ADDTEXT "NONAME-"
+        BSBW    ADDCHAR
+        BICL3   #^XF0000000, R4, R3     ; without its control bits
+        MOVAB   MESSAGES, R5
+5$:     TSTL    (R5)
+        BEQL    8$
+        CMPL    (R5)+, R3
+        BEQL    20$
+        MOVL    #3, R3                  ; past the three strings
+6$:     MOVZBL  (R5), R0
+        ADDL2   R0, R5
+        INCL    R5
+        SOBGTR  R3, 6$
+        BICL3   #^XF0000000, R4, R3
+        BRB     5$
+8$:     ADDTEXT "NONAME-"
         BICL3   #^C7, R4, R0
         MOVZBL  SEVERITY[R0], R0
         BSBB    ADDCHAR
@@ -658,10 +987,30 @@ STATUS: MOVL    R1, R4
         MOVZBL  HEX[R0], R0
         BSBB    ADDCHAR
         SOBGTR  R5, 10$
+        BRB     SAY
+20$:    BSBB    ADDSTEP                 ; the facility
+        ADDTEXT "-"
+        BICL3   #^C7, R4, R0
+        MOVZBL  SEVERITY[R0], R0
+        BSBB    ADDCHAR
+        ADDTEXT "-"
+        BSBB    ADDSTEP                 ; the name
+        ADDTEXT ", "
+        BSBB    ADDSTEP                 ; the text
 ; SAY: writes the message in MSG, and empties it. Uses R0 and R1.
 SAY:    PUSHAB  MSG
         CALLS   #1, G^PUT_LINE
         CLRB    MSG
+        RSB
+
+; ADDSTEP: R5 = a .ASCIC string. Appends it to MSG, with R5 past it.
+; Uses R0-R2.
+ADDSTEP:
+        MOVL    R5, R1
+        BSBW    ADDCSTR
+        MOVZBL  (R5), R0
+        ADDL2   R0, R5
+        INCL    R5
         RSB
 
 ; ADDNAME: appends the logical name in NAME to MSG. Uses R0-R2.
