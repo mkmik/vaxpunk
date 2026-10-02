@@ -11,6 +11,8 @@
 ; buffer, and wakes the readers through the IPL$_IOPOST software
 ; interrupt. A read takes the characters from the buffer, echoing and
 ; editing the line, up to a carriage return, and waits while it is empty.
+; CTRL/Y empties the buffer instead, and stops the image the console's
+; command interpreter runs, which then prompts (ADR-0010).
 ; ponytail: the console is the only device, written a buffer at a time at
 ; IPL$_SYNCH, so lines don't mix; a terminal driver with I/O request
 ; packets replaces this.
@@ -25,15 +27,18 @@
         $LNMBDEF
         $LNMDEF
         $SSDEF
+        $VADEF
 
-        .EXTERNAL SCH$GL_CURPCB, SCH$WAIT, SCH$WAKEPCB
-        .EXTERNAL EXE$PROBER_DSC, EXE$OUTCHAR, EXE$OUTCRLF, EXE$SETEF, EXE$CLREF
+        .EXTERNAL SCH$GL_CURPCB, SCH$GL_PCBVEC, SCH$WAIT, SCH$WAKEPCB
+        .EXTERNAL EXE$PROBER_DSC, EXE$OUTCHAR, EXE$OUTCRLF, EXE$OUTZSTRING
+        .EXTERNAL EXE$SETEF, EXE$CLREF, EXE$CTRLYCHK
         .EXTERNAL LNM$TRNLOG
 
 MAXCHAN = 31                            ; channels 1-31, a bit each in PCB$L_CHANS
 TYPEAHEAD = 256                         ; the type-ahead buffer, a ring
 RXCS$V_DONE = 7                         ; RXCS: a character is waiting
 RXCS$M_IE = ^X40                        ; interrupt when one is
+CTRLY = 25
 
         .PSECT  EXEC$DATA, NOEXE, WRT, QUAD
 CONSOLE:
@@ -46,6 +51,10 @@ TTY$GL_GET::                            ; where a read takes the next from
         .LONG   0
 TTY$AB_RING::                           ; the type-ahead buffer: received, not yet read
         .BLKB   TYPEAHEAD
+TTY$GL_CTRLY::                          ; 1: CTRL/Y came, for TTY$IOPOST
+        .LONG   0
+INTERRUPT:
+        .ASCIZ  <13><10>"*INTERRUPT*"<13><10>
 
         .PSECT  $CODE$
 
@@ -236,7 +245,7 @@ WRITE:  CLRL    R1
 ; return ends the line, echoed as CR LF. DEL or BS erases the last
 ; character, CTRL/U all of them; other control characters, and those past
 ; R3 bytes, are dropped. R1 = the line's length. IPL$_SYNCH. Uses R0.
-; ponytail: no CTRL/Y, escape sequences or command recall.
+; ponytail: no escape sequences or command recall.
 READ:   PUSHL   R4
         MOVL    SCH$GL_CURPCB, R4
         CLRL    R1
@@ -309,13 +318,19 @@ TTY$INIT::
 ; TTY$RCVINT: the console receive interrupt, at IPL$_CONSOLE. Puts each
 ; character the console received in the type-ahead buffer, or drops it if
 ; the buffer is full, and requests the IPL$_IOPOST software interrupt,
-; which wakes the readers.
+; which wakes the readers. CTRL/Y empties the buffer, for TTY$IOPOST to
+; stop the image.
 TTY$RCVINT::
         PUSHR   #^M<R0, R1>
 10$:    MFPR    #PR$_RXCS, R0
         BBC     #RXCS$V_DONE, R0, 30$
         MFPR    #PR$_RXDB, R0
-        ADDL3   #1, TTY$GL_PUT, R1
+        CMPB    R0, #CTRLY
+        BNEQ    20$
+        MOVL    TTY$GL_PUT, TTY$GL_GET
+        MOVL    #1, TTY$GL_CTRLY
+        BRB     10$
+20$:    ADDL3   #1, TTY$GL_PUT, R1
         BICL2   #^C<TYPEAHEAD-1>, R1
         CMPL    R1, TTY$GL_GET
         BEQL    10$                     ; full
@@ -329,17 +344,56 @@ TTY$RCVINT::
         REI
 
 ; TTY$IOPOST: the IPL$_IOPOST software interrupt. Ends the wait of each
-; process waiting in a read, which looks at the type-ahead buffer again.
+; process waiting in a read, which looks at the type-ahead buffer again,
+; and passes a CTRL/Y on. If that is for the process it interrupted, in
+; user mode, it stops the image now.
 TTY$IOPOST::
         SETIPL  #IPL$_SYNCH
-        PUSHR   #^M<R0, R4>
+        PUSHR   #^M<R0, R1, R2, R4>
         MOVAQ   TTY$GQ_READQ, R0
 10$:    MOVL    (R0), R4
         CMPL    R4, R0
         BEQL    20$
         BSBW    SCH$WAKEPCB
         BRB     10$
-20$:    POPR    #^M<R0, R4>
+20$:    DSBINT  #IPL$_CONSOLE
+        MOVL    TTY$GL_CTRLY, R0
+        CLRL    TTY$GL_CTRLY
+        ENBINT
+        BLBC    R0, 30$
+        BSBB    CTRLY_TYPED
+30$:    POPR    #^M<R0, R1, R2, R4>
+        JSB     G^EXE$CTRLYCHK
         REI
+
+; CTRLY_TYPED: CTRL/Y came. Finds the process with a command interpreter
+; that runs an image CTRL/Y hasn't stopped yet, echoes *INTERRUPT*, and
+; makes CTRL/Y pending there, which EXE$CTRLY serves: at once if that
+; process is in user mode now, else when it next waits, goes back to user
+; mode or ends a service. Ends its wait if it waits, but not a suspension.
+; Without such a process, CTRL/Y does nothing. IPL$_SYNCH. Uses R0-R2 and
+; R4.
+; ponytail: the console has no owner yet, so CTRL/Y goes to the only
+; process with a command interpreter, SYSTEM, without being enabled by
+; $QIO's IO$M_CTRLYAST, and it doesn't cancel the image's read.
+CTRLY_TYPED:
+        MOVL    #SCH$C_MAXPIX-1, R2
+10$:    MOVL    SCH$GL_PCBVEC[R2], R4
+        BEQL    20$
+        TSTL    PCB$L_CLI(R4)
+        BEQL    20$
+        CMPL    PCB$L_FREP0VA(R4), #VA$C_P0BASE ; it runs no image
+        BEQL    20$
+        TSTL    PCB$L_CTRLY(R4)
+        BNEQ    20$
+        BBSS    #PCB$V_CTRLY, PCB$L_STS(R4), 30$
+        MOVAB   INTERRUPT, R1
+        JSB     G^EXE$OUTZSTRING
+        CMPL    PCB$L_STATE(R4), #SCH$C_SUSP    ; a wait state
+        BGEQU   30$
+        BSBW    SCH$WAKEPCB
+        RSB
+20$:    SOBGTR  R2, 10$
+30$:    RSB
 
         .END

@@ -27,7 +27,7 @@
         $RPBDEF
         $HWPCBDEF
 
-        .EXTERNAL EXE$GL_RPB, EXE$DELSELF
+        .EXTERNAL EXE$GL_RPB, EXE$DELSELF, EXE$CTRLY, EXE$CTRLYCHK
 
         .PSECT  EXEC$DATA, NOEXE, WRT, QUAD
 SCH$GL_CURPCB::                         ; the current process
@@ -151,28 +151,30 @@ SCH$WAKEPCB::
 20$:    POPR    #^M<R0>
         RSB
 
-; SCH$WAKE: R1 = a PCB. $WAKE's work: ends its hibernation, or, if it isn't
-; hibernating, makes its next $HIBER return at once. IPL$_SYNCH. Keeps
-; every register.
+; SCH$WAKE: R1 = a PCB. $WAKE's work: leaves it a wakeup, which its
+; $HIBER takes, and ends its hibernation if it hibernates. IPL$_SYNCH.
+; Keeps every register.
 SCH$WAKE::
-        CMPL    PCB$L_STATE(R1), #SCH$C_HIB
-        BNEQ    10$
+        BBSS    #PCB$V_WAKEPEN, PCB$L_STS(R1), 10$
+10$:    CMPL    PCB$L_STATE(R1), #SCH$C_HIB
+        BNEQ    20$
         PUSHL   R4
         MOVL    R1, R4
         BSBW    SCH$WAKEPCB
         MOVL    (SP)+, R4
-        RSB
-10$:    BBSS    #PCB$V_WAKEPEN, PCB$L_STS(R1), 20$
 20$:    RSB
 
 ; SCH$WAIT: R4 = the current PCB, its state set to the wait's, R0 = the
 ; wait queue. Puts it on the queue's tail and gives up the CPU; returns
-; when the wait is over and the CPU is back. IPL$_SYNCH. Keeps every
-; register.
+; when the wait is over and the CPU is back. CTRL/Y ends a wait early,
+; and stops the image here; the caller must look again at what it waited
+; for. IPL$_SYNCH. Keeps every register.
 SCH$WAIT::
         INSQUE  (R4), @4(R0)
         BSBW    SCH$SCHED
-        RSB
+        BBC     #PCB$V_CTRLY, PCB$L_STS(R4), 10$
+        JSB     G^EXE$CTRLY
+10$:    RSB
 
 ; SCH$SCHED: gives the CPU to the highest computable process. The current
 ; one is already in a queue, or deleted. If the CPU comes back to it, this
@@ -208,7 +210,8 @@ SCH$SCHED::
 
 ; SCH$RESCHED: the IPL$_RESCHED software interrupt, which SCH$MAKECOM
 ; requests. Puts the current process back on its COM queue's tail and
-; gives the CPU to the highest computable one.
+; gives the CPU to the highest computable one. A CTRL/Y that came while
+; it waited for the CPU in user mode stops its image when it has it back.
 SCH$RESCHED::
         SETIPL  #IPL$_SYNCH
         PUSHL   R4
@@ -216,6 +219,7 @@ SCH$RESCHED::
         BSBW    SCH$INSCOM
         BSBW    SCH$SCHED
         MOVL    (SP)+, R4
+        JSB     G^EXE$CTRLYCHK
         REI
 
 ; SCH$QEND: R4 = the current PCB, whose quantum is up. Gives it a new

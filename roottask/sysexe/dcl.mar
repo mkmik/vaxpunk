@@ -5,7 +5,8 @@
 ; command interpreter: EXEC$START creates the console's process, SYSTEM,
 ; with it, and the executive calls it in supervisor mode, with SS$_NORMAL
 ; at first and then, each time an image it runs exits, with the image's
-; status (docs/design/0002-executive-processes.md). Its data stays in P1
+; status (docs/design/0002-executive-processes.md), or with SS$_CONTROLY
+; when CTRL/Y stops the image it runs (ADR-0010). Its data stays in P1
 ; from one call to the next. It reports a failure status, prompts for a
 ; command on the console and does it:
 ;
@@ -32,6 +33,7 @@
 ;               runs INIT.EXE
 ;   MOUNT device label
 ;               runs MOUNT.EXE
+;   CONTINUE    goes back to the image CTRL/Y stopped
 ;   HELP        lists the commands
 ;   LOGOUT      ends the process
 ;
@@ -39,7 +41,8 @@
 ; line, in capitals, a blank between each two. A verb may be abbreviated,
 ; to as little as its first letter; the first that matches is the one. A
 ; status with STS$M_INHIB_MSG set is one the image reported itself. It
-; reads the commands from SYS$INPUT.
+; reads the commands from SYS$INPUT. A command that runs an image runs
+; down the one CTRL/Y stopped.
 ; ponytail: no message texts, symbols, qualifiers, quoted strings or
 ; command procedures.
 ;
@@ -145,6 +148,8 @@ V_INITIALIZE:
         .ASCIC  "INITIALIZE"
 V_MOUNT:
         .ASCIC  "MOUNT"
+V_CONTINUE:
+        .ASCIC  "CONTINUE"
 DOTEXE: .ASCII  ".EXE"
         .ALIGN  LONG
 DEFFAB: $FAB    FNA=TOKEN, NAM=DEFNAM   ; SET and SHOW DEFAULT's $PARSE
@@ -216,6 +221,9 @@ NEXT:   $QIOW_S CHAN=CHAN, FUNC=#IO$_READPROMPT, IOSB=IOSB, P1=LINE, P2=#LINESIZ
         MOVAB   V_MOUNT, R1
         BSBW    VERB
         BLBS    R0, MOUNT
+        MOVAB   V_CONTINUE, R1
+        BSBW    VERB
+        BLBS    R0, CONTINUE
         PRINT   "%DCL-W-IVVERB, unrecognized command verb - check validity and spelling"
         ADDTEXT " \"
         BSBW    ADDTOKEN
@@ -224,6 +232,12 @@ NEXT:   $QIOW_S CHAN=CHAN, FUNC=#IO$_READPROMPT, IOSB=IOSB, P1=LINE, P2=#LINESIZ
         BRB     NEXT
 LOGOUT: MOVL    #SS$_NORMAL, R0         ; the process ends
 QUIT:   RET
+
+; CONTINUE: $CONTINUE goes back to the image CTRL/Y stopped, and returns
+; only if there is none, when CONTINUE does nothing.
+CONTINUE:
+        $CONTINUE_S
+        BRB     NEXT
 
 HELP:   PRINT   "  RUN image   runs image, image.EXE if it has no type"
         PRINT   "  DIRECTORY [spec]"
@@ -247,6 +261,7 @@ HELP:   PRINT   "  RUN image   runs image, image.EXE if it has no type"
         PRINT   "              writes an empty volume on MDA0:, the ramdisk"
         PRINT   "  MOUNT device label"
         PRINT   "              mounts the volume, MDA0: then names its files"
+        PRINT   "  CONTINUE    goes back to the image CTRL/Y stopped"
         PRINT   "  HELP        lists the commands"
         PRINT   "  LOGOUT      ends the process"
         BRW     NEXT

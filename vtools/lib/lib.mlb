@@ -219,11 +219,13 @@ PCB$L_FILES = 336                       ; bit n: IFI n is open
 PCB$L_CLIFILES = 340                    ; the files it keeps open when an image exits
 PCB$Q_LNMHD = 344                       ; its logical name table, LNM$PROCESS_TABLE: LNMBs
 PCB$T_DEFDIR = 352                      ; default directory, .ASCIC, 63 characters: $SETDDIR's
-PCB$K_LENGTH = 416
-PCB$V_WAKEPEN = 0                       ; a $WAKE came while not hibernating
+PCB$L_CTRLY = 416                       ; while CTRL/Y has its image stopped, where on the kernel stack it was, else 0
+PCB$K_LENGTH = 424
+PCB$V_WAKEPEN = 0                       ; a $WAKE came that $HIBER hasn't seen
 PCB$V_WALL = 1                          ; the wait is for all of EFWM
 PCB$V_SUSPEN = 2                        ; suspend when the wait ends
 PCB$V_DELPEN = 3                        ; delete it when it next has the CPU
+PCB$V_CTRLY = 4                         ; CTRL/Y was typed: stop its image, call its command interpreter
 DYN$C_PCB = 1                           ; PCB$B_TYPE
         .ENDM   $PCBDEF
 

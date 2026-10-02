@@ -33,7 +33,7 @@ its code.
 | `sched.mar` | state queues, `SCH$SCHED`, waits and wakes, the reschedule interrupt, quantum end |
 | `timeschdl.mar` | the interval timer and software timer interrupts, the system time, the timer queue, `$GETTIM`, `$SETIMR`, `$CANTIM`, `$SCHDWK`, `$CANWAK` |
 | `event.mar` | event flags, local and common |
-| `process.mar` | `$CREPRC`, process start, image activation, `$IMGACT`, `$EXIT`, image rundown, deletion, `$HIBER`, `$WAKE`, `$SUSPND`, `$RESUME`, `$SETPRI`, `$SETPRN`, `$CMKRNL` |
+| `process.mar` | `$CREPRC`, process start, image activation, `$IMGACT`, `$EXIT`, image rundown, CTRL/Y and `$CONTINUE`, deletion, `$HIBER`, `$WAKE`, `$SUSPND`, `$RESUME`, `$SETPRI`, `$SETPRN`, `$CMKRNL` |
 | `lnm.mar` | logical name tables, `$CRELNM`, `$DELLNM`, `$TRNLNM` |
 | `qio.mar` | `$ASSIGN`, `$DASSGN`, `$QIO`, `$QIOW`: writes on the console and reads from it; the console receive interrupt and the type-ahead buffer |
 | `syssrv.mar` | the system service vector, the `CHMK` and `CHME` dispatchers, `$CMEXEC`, where processes enter user and supervisor mode, the exception handlers and the stubs |
@@ -210,6 +210,19 @@ there is. The image activator puts its transfer address in
   entries, P0 pages and common event flag clusters, the channels not in
   `PCB$L_CLICHANS` and the files not in `PCB$L_CLIFILES`; then
   `EXE$CLIENTRY` with the status.
+- **CTRL/Y** ([ADR-0010](../adr/0010-ctrly-calls-the-cli-on-top-of-the-image.md))
+  stops the image: `TTY$IOPOST` sets `PCB$V_CTRLY` in the process with a
+  command interpreter that runs an image, and ends its wait, if it waits.
+  The process serves it in `EXE$CTRLY` going back to user mode, from
+  `TTY$IOPOST`, `SCH$RESCHED` or a system service (`EXE$CTRLYCHK`), or
+  ending a wait, in `SCH$WAIT`. `EXE$CTRLY` pushes the registers and the
+  IPL on the kernel stack, keeps the stack pointer in `PCB$L_CTRLY`, and
+  calls the command interpreter as `EXE$CLIENTRY` does, with
+  `SS$_CONTROLY`, but below that, so the stopped image's state stays.
+- **`$CONTINUE`** puts back that stack pointer, the IPL and the registers,
+  and returns from `EXE$CTRLY`, so the image goes on. Without a stopped
+  image it does nothing. `$IMGACT` while one is stopped runs it down, and
+  keeps `PCB$L_CLICHANS` and `PCB$L_CLIFILES` as they were when it ran.
 
 The command interpreter keeps nothing on its stack across an image; what
 it remembers is in its P1 data. `EXEC$START` creates the console's
@@ -231,6 +244,7 @@ process, `SYSTEM`, with `DCL.EXE`:
 | `DELETE spec` | `$IMGACT` of `DELETE.EXE` |
 | `INITIALIZE device label` | `$IMGACT` of `INIT.EXE` |
 | `MOUNT device label` | `$IMGACT` of `MOUNT.EXE` |
+| `CONTINUE` | `$CONTINUE` |
 | `HELP` | lists the commands |
 | `LOGOUT` | returns, which deletes the process |
 
@@ -239,9 +253,10 @@ with fewer parameters than it needs is `%DCL-W-INSFPRM`. DCL reads a line
 from `SYS$INPUT` with `IO$_READPROMPT` and the prompt `$ `, and reports a failure status as VMS does one it has no text
 for, `%NONAME-F-NOMSG, Message number 0000000C`, after
 `%DCL-W-ACTIMAGE` if `$IMGACT` returned it, unless the status has
-`STS$M_INHIB_MSG`, bit 28, set: the image reported it. ponytail: no CTRL/Y, so an
-image that never exits keeps the console; no message texts, symbols,
-qualifiers, quoted strings or command procedures.
+`STS$M_INHIB_MSG`, bit 28, set: the image reported it. ponytail: no
+message texts, symbols, qualifiers, quoted strings or command procedures,
+and no `STOP`: another command that runs an image ends the one CTRL/Y
+stopped.
 
 ## Scheduling
 
@@ -267,14 +282,17 @@ States and queues, as VMS's `$STATEDEF`:
   `IPL$_RESCHED`, so that the software timer interrupt can make one
   computable.
 - **`SCH$WAIT`** puts the current process on a wait queue and calls
-  `SCH$SCHED`. It returns when the wait is over and the CPU is back.
+  `SCH$SCHED`. It returns when the wait is over and the CPU is back. A
+  CTRL/Y ends the wait early, so its callers look again at what they wait
+  for.
 - **`SCH$WAKEPCB`** takes a process off its wait queue and makes it
   computable, or suspended if a `$SUSPND` came while it waited.
 - **`SCH$MAKECOM`** puts a process on its COM queue and, if it outranks the
   current one, requests the reschedule interrupt:
   `SOFTINT #IPL$_RESCHED`.
 - **`SCH$RESCHED`**, the level 3 software interrupt, puts the current
-  process back on its COM queue's tail and calls `SCH$SCHED`.
+  process back on its COM queue's tail and calls `SCH$SCHED`. A CTRL/Y
+  that came meanwhile stops the image before it goes back to user mode.
 
 ### Quantum end
 
@@ -366,7 +384,8 @@ Between processes, VMS's event flags and hibernation:
   satisfies. A woken process checks
   its flags again.
 - `$HIBER` sleeps until `$WAKE`; a `$WAKE` that comes first makes the next
-  `$HIBER` return at once.
+  `$HIBER` return at once. `$WAKE` sets `PCB$V_WAKEPEN` and `$HIBER` takes
+  it, so a hibernation that ends without one goes on.
 
 ## System services
 
@@ -404,7 +423,7 @@ can't reach them.
 | Time | `$GETTIM`, `$SETIMR`, `$CANTIM` | |
 | I/O | `$ASSIGN`, `$DASSGN`, `$QIO`, `$QIOW` | |
 | Logical names | `$CRELNM`, `$DELLNM`, `$TRNLNM` | |
-| Images | `$IMGACT` | |
+| Images | `$IMGACT`, `$CONTINUE` | |
 | RMS | `$PARSE`, `$SEARCH`, `$OPEN`, `$CREATE`, `$CONNECT`, `$GET`, `$PUT`, `$DISCONNECT`, `$CLOSE`, `$ERASE`, `$SETDDIR` | |
 | Volumes | `$MOUNT`, `$INIT_VOL` | |
 | Other | | `$DCLAST`, `$SETAST`, `$GETSYI` |
@@ -474,7 +493,9 @@ for a read, the terminator, a carriage return. So the I/O is done when
   (DESIGN-0001), puts each character in `TTY$AB_RING`, the 256-byte
   type-ahead buffer, or drops it if the buffer is full, and requests the
   `IPL$_IOPOST` software interrupt. `TTY$IOPOST` ends the wait of each
-  process in `TTY$GQ_READQ`.
+  process in `TTY$GQ_READQ`. CTRL/Y empties the buffer instead, and
+  `TTY$IOPOST` echoes `*INTERRUPT*` and stops the image (*The command
+  interpreter*).
 - **Reading**, at `IPL$_SYNCH`: takes characters from the buffer, at
   `IPL$_CONSOLE`, and echoes them, up to a carriage return, echoed as
   CR LF. DEL and BS erase a character, CTRL/U the line; other control
@@ -483,8 +504,8 @@ for a read, the terminator, a carriage return. So the I/O is done when
   the reader's, so what is typed ahead shows when it is read.
 
 ponytail: a buffer at a time, at `IPL$_SYNCH`, so lines don't mix; a
-terminal driver with I/O request packets, CTRL/Y and escape sequences
-replaces it.
+terminal driver with I/O request packets, CTRL/C, CTRL/Y ASTs and escape
+sequences replaces it.
 
 ### Files
 
@@ -660,7 +681,8 @@ taking the clock's interrupts.
   deletion by a kernel AST.
 - Privileges, for `$CMKRNL` and `$CMEXEC`, and condition handlers in place
   of exiting on an exception.
-- CTRL/Y, to take the console back from an image, and `$FORCEX`.
+- A CTRL/Y AST in place of `EXE$CTRLY` and `$CONTINUE`, CTRL/C, DCL's
+  `STOP`, and `$FORCEX`.
 - Writing the system disk, the disk's interrupt, `$QIO` on disk
   channels, logical names in file specifications (`SYS$SYSTEM:DCL.EXE`)
   and `SYS$DISK`.

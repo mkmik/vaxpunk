@@ -14,7 +14,9 @@
 ; An image linked in P1 is a command interpreter: it is activated there
 ; and called in supervisor mode, and stays. It runs images with $IMGACT,
 ; and when one exits, the process runs it down and calls the command
-; interpreter again (docs/design/0002-executive-processes.md).
+; interpreter again (docs/design/0002-executive-processes.md). CTRL/Y
+; stops the image where it is and calls the command interpreter on top of
+; it, and $CONTINUE goes back to it (ADR-0010).
 ;
         .LIBRARY "lib.mlb"
         .LIBRARY "starlet.mlb"
@@ -403,15 +405,18 @@ EXE$USRENTRY::
 ; interpreter with it, in supervisor mode, at EXE$CLISTART, on an empty
 ; supervisor stack. Doesn't return.
 EXE$CLIENTRY::
+        ADDL3   #KSTACK, PCB$L_KSTACK(R4), SP   ; an empty kernel stack
+CLICALL:
         MOVL    PCB$L_CLI(R4), R1
         MOVAB   EXE$CLISTART, R2
         MOVL    #<PSL$C_SUPER@PSL$V_CURMOD>!<PSL$C_SUPER@PSL$V_PRVMOD>, R3
         MOVL    #VA$C_SSP, R5
+        BRB     REISP
 ; REIOUT: R2 = a PC, R3 = a PSL with an outer mode, R5 = that mode's stack
 ; pointer. Empties the kernel stack and REIs there, with R0 and R1 as they
-; are.
+; are. REISP: the same, on the kernel stack as it is, 16-byte aligned.
 REIOUT: ADDL3   #KSTACK, PCB$L_KSTACK(R4), SP
-        SUBL2   #INTSTK$K_LENGTH, SP
+REISP:  SUBL2   #INTSTK$K_LENGTH, SP
         MOVL    #INTSTK$K_LENGTH/8, R6
         MOVL    SP, R7
 10$:    CLRQ    (R7)+
@@ -600,7 +605,8 @@ IMG$ACTIVATE::
 ; EXE$IMGRUNDOWN: R4 = the current PCB. Gives back what the image that ran
 ; in it holds: its timer queue entries, its pages in P0, its common event
 ; flag clusters, and its channels and files, all but the command
-; interpreter's, PCB$L_CLICHANS and PCB$L_CLIFILES. Uses R0-R3.
+; interpreter's, PCB$L_CLICHANS and PCB$L_CLIFILES. An image CTRL/Y
+; stopped can't be continued any more. Uses R0-R3.
 ; ponytail: what the command interpreter holds too, but its channels; it
 ; uses nothing else yet.
 EXE$IMGRUNDOWN::
@@ -609,6 +615,10 @@ EXE$IMGRUNDOWN::
         CLRL    R2
         BSBW    EXE$RMVTIMQ
         BSBB    DELP0
+        DSBINT  #IPL$_SYNCH
+        CLRL    PCB$L_CTRLY(R4)
+        BICL2   #<1@PCB$V_CTRLY>, PCB$L_STS(R4)
+        ENBINT
         BSBW    SCH$DACEFC_ALL
         MCOML   PCB$L_CLICHANS(R4), R0
         BICL2   R0, PCB$L_CHANS(R4)
@@ -717,14 +727,14 @@ EXE$DELETEPCB::
         .ENTRY  EXE$HIBER, ^M<R4>
         MOVL    SCH$GL_CURPCB, R4
         DSBINT  #IPL$_SYNCH
-        BBCC    #PCB$V_WAKEPEN, PCB$L_STS(R4), 10$
-        BRB     20$
-10$:    MOVL    #SCH$C_HIB, PCB$L_STATE(R4)
-        MOVAQ   SCH$GQ_HIBWQ, R0
-        BSBW    SCH$WAIT
-20$:    ENBINT
+10$:    BBCC    #PCB$V_WAKEPEN, PCB$L_STS(R4), 20$
+        ENBINT
         MOVL    #SS$_NORMAL, R0
         RET
+20$:    MOVL    #SCH$C_HIB, PCB$L_STATE(R4)
+        MOVAQ   SCH$GQ_HIBWQ, R0
+        BSBW    SCH$WAIT
+        BRB     10$
 
 ; $WAKE pidadr, prcnam: wakes a hibernating process.
         .ENTRY  EXE$WAKE, ^M<R2, R3, R4>
@@ -867,7 +877,7 @@ SUSPEND:
 ; and files the process has now, activates image in P0 and calls it in
 ; user mode,
 ; with cmdlin, the rest of its command line, if there is one, at
-; VA$C_FOREIGN. Returns only if the activation fails, with its status;
+; VA$C_FOREIGN. An image CTRL/Y stopped is run down too. Returns only if the activation fails, with its status;
 ; SS$_IVLOGNAM for a name longer than 39 characters, SS$_BADPARAM for a
 ; command line longer than 255. When the image exits, the command
 ; interpreter is called again with its status.
@@ -907,9 +917,11 @@ SUSPEND:
         MOVB    (R8), @#VA$C_FOREIGN
         MOVC3   (R8), @4(R8), @#VA$C_FOREIGN+1
 20$:    MOVL    SCH$GL_CURPCB, R4
+        TSTL    PCB$L_CTRLY(R4)         ; after CTRL/Y, what it had when its image ran
+        BNEQ    25$
         MOVL    PCB$L_CHANS(R4), PCB$L_CLICHANS(R4)
         MOVL    PCB$L_FILES(R4), PCB$L_CLIFILES(R4)
-        BSBW    EXE$IMGRUNDOWN
+25$:    BSBW    EXE$IMGRUNDOWN
         CLRL    R5                      ; P0 only
         BSBW    IMG$ACTIVATE
         BLBC    R0, 80$
@@ -922,5 +934,55 @@ SUSPEND:
         RET
 87$:    MOVL    #SS$_BADPARAM, R0
 90$:    RET
+
+; EXE$CTRLY: R4 = the current PCB, which has CTRL/Y pending, and an image
+; stopped where it can be left: in user mode, or waiting. Calls the
+; command interpreter with SS$_CONTROLY, as EXE$CLIENTRY does, but on the
+; kernel stack as it is, which keeps the image's registers and the service
+; or interrupt it was in, and returns when the command interpreter calls
+; $CONTINUE. If it runs another image or logs out instead, this never
+; returns. Keeps every register.
+EXE$CTRLY::
+        PUSHR   #^M<R0, R1, R2, R3, R4, R5, R6, R7, R8, R9, R10, R11, AP, FP>
+        DSBINT  #IPL$_SYNCH
+        BICL2   #<1@PCB$V_CTRLY>, PCB$L_STS(R4)
+        MOVL    SP, PCB$L_CTRLY(R4)
+        BICL2   #15, SP
+        MOVL    #SS$_CONTROLY, R0
+        BRW     CLICALL
+
+; EXE$CTRLYCHK: JSB'd just before an REI, whose frame is above the return
+; address. If the REI goes to user mode in a process with CTRL/Y pending,
+; calls EXE$CTRLY first. Keeps every register.
+EXE$CTRLYCHK::
+        PUSHR   #^M<R0, R4>
+        EXTZV   #PSL$V_CURMOD, #2, 16+INTSTK$Q_PS(SP), R0
+        CMPL    R0, #PSL$C_USER
+        BNEQ    10$
+        MOVL    SCH$GL_CURPCB, R4
+        BBC     #PCB$V_CTRLY, PCB$L_STS(R4), 10$
+        BSBW    EXE$CTRLY
+10$:    POPR    #^M<R0, R4>
+        RSB
+
+; $CONTINUE: goes back to the image CTRL/Y stopped in the current process,
+; where it was, and doesn't return. Without one, it returns SS$_NORMAL, as
+; VMS's CONTINUE does nothing then. The command interpreter calls it for
+; CONTINUE.
+; ponytail: VMS's DCL returns from its CTRL/Y AST instead; there are no
+; ASTs yet, and DCL is called afresh, so a return would be a LOGOUT.
+        .ENTRY  EXE$CONTINUE, ^M<>
+        MOVL    SCH$GL_CURPCB, R0
+        SETIPL  #IPL$_SYNCH
+        MOVL    PCB$L_CTRLY(R0), R1
+        BEQL    90$
+        CLRL    PCB$L_CTRLY(R0)
+        MOVL    R1, SP
+        ENBINT
+        POPR    #^M<R0, R1, R2, R3, R4, R5, R6, R7, R8, R9, R10, R11, AP, FP>
+        RSB
+90$:    SETIPL  #0
+        MOVL    #SS$_NORMAL, R0
+        RET
 
         .END
