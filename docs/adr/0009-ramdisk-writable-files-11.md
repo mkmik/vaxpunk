@@ -85,7 +85,7 @@ against real VMS.
 - Two kinds of disk behind one file system: the VCB says which, and every
   RMS service selects it first. `$INIT_VOL` and `$MOUNT` take no other
   items, and any process may call them, until there are privileges.
-- The volume is in memory only: `just check` sees it through DCL. Its
+- The volume is in memory only: `cargo test -p boot` sees it through DCL. Its
   structure was checked by saving QEMU's RAM from the monitor, putting
   the ramdisk's pages back in order and running `ods verify`, which found
   no errors, leaks or warnings, but that isn't automated.

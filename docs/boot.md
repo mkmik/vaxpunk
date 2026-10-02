@@ -169,7 +169,7 @@ executive feature:
 `RUN SPIN` starts **SPIN**, which computes forever with a value in each
 register, and checks them, so CTRL/Y and `CONTINUE` can be tried on it.
 
-`just check` boots the system, types `RUN STARTUP`, `RUN SNOOP`, a bad
+`cargo test -p boot` boots the system, types `RUN STARTUP`, `RUN SNOOP`, a bad
 command, `DIR [SYSEXE]P%NG`, `TYPE WELCOME.TXT`, an `EDIT WELCOME.TXT`
 session, and `DEFINE`, `SHOW
 LOGICAL` and `DEASSIGN` of a logical name, `SHOW LOGICAL` alone, and

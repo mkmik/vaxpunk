@@ -11,11 +11,6 @@ _default:
 # Runs every example.
 all: hello calls
 
-# Checks every example's output against tests/examples/macro32.
-check:
-    just hello | diff ../../tests/examples/macro32/hello.stdout -
-    just calls | diff ../../tests/examples/macro32/calls.stdout -
-
 _build:
     cargo build -q -p vmacro -p vlink -p vrun
     mkdir -p {{out}}

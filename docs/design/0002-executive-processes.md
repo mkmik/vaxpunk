@@ -639,7 +639,7 @@ $ RUN SNOOP
 
 `roottask/sysexe/` holds the programs in `DKA0:[SYSEXE]`: DCL, DIRECTORY,
 TYPE, EDIT, COPY, DELETE, INIT and MOUNT, and those which show the services at
-work, which `just check` runs from DCL's prompt (`RUN STARTUP`,
+work, which `cargo test -p boot` runs from DCL's prompt (`RUN STARTUP`,
 `RUN SNOOP`, a bad verb, `DIR [SYSEXE]P%NG`, `TYPE WELCOME.TXT` and an `EDIT WELCOME.TXT`
 session, then
 `INIT` and `MOUNT MDA0: RAM`, a `COPY` to it, `DIR`, `DELETE` and `DIR`

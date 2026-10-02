@@ -8,7 +8,6 @@ describes what `vmacro` takes.
 cd vtools/examples/macro32
 just hello              # builds the tools, then compiles, links and runs hello
 just --dry-run calls    # shows the commands without running them
-just check              # checks every example against tests/examples/macro32
 ```
 
 The [Justfile](Justfile) holds the commands. `cargo test -p vrun` also runs

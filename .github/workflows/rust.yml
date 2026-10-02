@@ -24,17 +24,17 @@ jobs:
           rustup toolchain install stable --profile minimal --component clippy,rustfmt --target aarch64-unknown-none
           rustup default stable
       # FUSE for ods-fuse; cross binutils (vrun's boot stub, vasm's GNU as
-      # oracle), QEMU and just for vtools.
+      # oracle), QEMU for vtools.
       - name: Linux packages
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y libarchive-tools libfuse3-dev fuse3 pkg-config binutils-aarch64-linux-gnu qemu-system-arm just
+          sudo apt-get install -y libarchive-tools libfuse3-dev fuse3 pkg-config binutils-aarch64-linux-gnu qemu-system-arm
       - name: macOS packages
         if: runner.os == 'macOS'
         run: |
           brew install --cask macfuse
-          brew install aarch64-elf-binutils qemu just
+          brew install aarch64-elf-binutils qemu
       - name: The ods CLI and FUSE daemon use ods-image only
         run: |
           ! grep -rn 'ods-core' ods/crates/ods-cli/Cargo.toml ods/crates/ods-fuse/Cargo.toml &&
@@ -46,7 +46,3 @@ jobs:
       - name: Fixtures
         run: ods/fixtures/fetch.sh
       - run: cargo test --release
-      - name: The vtools examples, run by their commands
-        run: |
-          just --justfile vtools/examples/vasm/Justfile check
-          just --justfile vtools/examples/macro32/Justfile check
