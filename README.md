@@ -82,7 +82,9 @@ The `$` is DCL's prompt, on the console's process, `SYSTEM`. `RUN image`
 runs an image from `[SYSEXE]` (`.EXE` is the default type), `DIRECTORY`
 lists files, in `[SYSMGR]` unless told where (`DIR`, `DIR [SYSEXE]P%NG`,
 `DIR [000000]`), `TYPE file` writes a text file (`TYPE WELCOME.TXT`),
-`HELP` lists the commands and `LOGOUT` ends the process:
+`DEFINE name equivalence`, `DEASSIGN name` and `SHOW LOGICAL name` make,
+delete and translate logical names (`SHOW LOGICAL SYS$INPUT`, or `SHOW
+LOGICAL` alone to list them all), `HELP` lists the commands and `LOGOUT` ends the process:
 
 ```
 $ DIR [SYSEXE]
@@ -133,8 +135,9 @@ the processes it created go on. Between commands the CPU idles, taking a
 clock interrupt every 10 ms. There is no CTRL/Y yet: an image that never
 exits, such as `SLEEPER`, keeps the console until QEMU is stopped. `just
 check` boots the same way without a terminal, types `RUN STARTUP`, `RUN
-SNOOP`, a bad verb, `DIR [SYSEXE]P%NG` and `TYPE WELCOME.TXT`, prints the
-executive's part and fails unless the processes ran to the end.
+SNOOP`, a bad verb, `DIR [SYSEXE]P%NG`, `TYPE WELCOME.TXT`, and a logical
+name's `DEFINE`, `SHOW LOGICAL` and `DEASSIGN`, and `SHOW LOGICAL` alone,
+prints the executive's part and fails unless the processes ran to the end.
 
 EDK2 prints a few `Error: Image at ... start failed` and `Tpm2...` lines
 before Limine starts. That is normal for the firmware QEMU ships. Don't

@@ -29,6 +29,7 @@
         $PTEDEF
         $PRTDEF
         $VADEF
+        $LNMDEF
         $SSDEF
 
         .EXTERNAL SCH$GL_CURPCB, SCH$GL_SWPPCB, SCH$GL_PCBVEC, SCH$GL_SEQ
@@ -39,6 +40,7 @@
         .EXTERNAL MMG$SETPRT, EXE$RMVTIMQ, EXE$USRSTART, EXE$CLISTART
         .EXTERNAL FIL$OPENFILE, RMS$RUNDOWN
         .EXTERNAL EXE$OUTZSTRING, EXE$OUTCSTRING, EXE$OUTHEX, EXE$OUTCRLF
+        .EXTERNAL LNM$CREATE, LNM$DELTBL
 
 KSTACK = 16384                          ; a process's kernel stack
 BLOCK = 512                             ; an image's blocks
@@ -71,6 +73,11 @@ EXITMSG:
         .ASCIZ  "%EXEC-W-EXITED, process "
 EXITMSG2:
         .ASCIZ  " exited with status "
+STDNAMES:                               ; for $CREPRC's input, output and error
+        .ASCIC  "SYS$INPUT"
+        .ASCIC  "SYS$OUTPUT"
+        .ASCIC  "SYS$ERROR"
+        .BYTE   0
 
         .PSECT  $CODE$
 
@@ -174,14 +181,29 @@ EXE$NAMPID::
 
 ; $CREPRC pidadr, image, input, output, error, prvadr, quota, prcnam,
 ; baspri, uic, mbxunt, stsflg: makes a process that runs image, called
-; prcnam, at priority baspri, and puts its PID in pidadr. The other
-; arguments are ignored: there is no I/O, privilege, quota or UIC yet.
-        .ENTRY  EXE$CREPRC, ^M<R2, R3, R4, R5, R6, R7, R8>
+; prcnam, at priority baspri, and puts its PID in pidadr. input, output
+; and error, if given, are the equivalence strings of its process-permanent
+; logical names SYS$INPUT, SYS$OUTPUT and SYS$ERROR; SS$_BADPARAM for one
+; that is empty or longer than 255. The other arguments are ignored: there
+; is no privilege, quota or UIC yet.
+        .ENTRY  EXE$CREPRC, ^M<R2, R3, R4, R5, R6, R7, R8, R9, R10>
         MOVL    SCH$GL_CURPCB, R4
         MOVL    4(AP), R1
-        BEQL    5$
+        BEQL    3$
         IFNOWRT #4, (R1), 95$
-5$:     MOVL    8(AP), R6               ; the image's descriptor
+3$:     MOVAL   12(AP), R2              ; input, output, error
+4$:     MOVL    (R2)+, R1
+        BEQL    5$
+        BSBW    EXE$PROBER_DSC
+        BLBC    R0, 90$
+        TSTW    (R1)
+        BEQL    87$
+        CMPW    (R1), #LNM$C_NAMLENGTH
+        BGTRU   87$
+5$:     SUBL3   AP, R2, R0
+        CMPL    R0, #24
+        BLSSU   4$
+        MOVL    8(AP), R6               ; the image's descriptor
         BEQL    85$
         MOVL    R6, R1
         BSBW    EXE$PROBER_DSC
@@ -224,6 +246,8 @@ EXE$NAMPID::
         MNEGW   SGN$GW_QUANTUM, PCB$W_QUANT(R8)
         MOVL    PCB$L_PID(R4), PCB$L_OWNER(R8)
         MOVAB   PCB$Q_HWPCB(R8), PCB$L_HWPCB(R8)
+        BSBW    PPNAMES
+        BLBC    R0, 80$
 ; The kernel stack, and on it the frame the PAL pops, as REI does, when
 ; the process first runs: PC EXE$PROCSTRT, PSL kernel mode at IPL 0.
         MOVL    #KSTACK, R1
@@ -279,6 +303,8 @@ EXE$NAMPID::
         BSBW    EXE$DEANONPGDSIZ
         MOVL    (SP)+, R0
 80$:    PUSHL   R0
+        MOVAQ   PCB$Q_LNMHD(R8), R2
+        BSBW    LNM$DELTBL
         MOVL    R8, R0
         MOVL    #PCB$K_LENGTH, R1
         BSBW    EXE$DEANONPGDSIZ
@@ -286,8 +312,38 @@ EXE$NAMPID::
         RET
 85$:    MOVL    #SS$_IVLOGNAM, R0
 90$:    RET
+87$:    MOVL    #SS$_BADPARAM, R0
+        RET
 95$:    MOVL    #SS$_ACCVIO, R0
         RET
+
+; PPNAMES: R8 = a new PCB, AP = $CREPRC's arguments, checked. Makes its
+; logical name table, with its process-permanent names: SYS$INPUT,
+; SYS$OUTPUT and SYS$ERROR, those of input, output and error it was given.
+; R0 = SS$_NORMAL or SS$_INSFMEM. Uses R1, R2, R5-R7, R9 and R10.
+PPNAMES:
+        PUSHR   #^M<R3, R8>
+        MOVAQ   PCB$Q_LNMHD(R8), R5
+        MOVL    R5, (R5)
+        MOVL    R5, 4(R5)
+        MOVAL   12(AP), R2              ; input, output, error
+        MOVAB   STDNAMES, R10           ; SYS$INPUT, SYS$OUTPUT, SYS$ERROR
+10$:    MOVZBL  (R10)+, R7
+        BEQL    70$
+        MOVL    R10, R6
+        ADDL2   R7, R10
+        MOVL    (R2)+, R1
+        BEQL    10$
+        MOVZWL  (R1), R9
+        MOVL    4(R1), R8
+        PUSHL   R2
+        BSBW    LNM$CREATE
+        MOVL    (SP)+, R2
+        BLBS    R0, 10$
+        BRB     80$
+70$:    MOVL    #SS$_NORMAL, R0
+80$:    POPR    #^M<R3, R8>
+        RSB
 
 ; EXE$PROCSTRT: where a process starts, in kernel mode at IPL 0 on its
 ; kernel stack. Makes its stacks in P1, executive, supervisor and user,
@@ -557,13 +613,14 @@ DELP0:  MOVL    #VA$C_P0BASE, R0
         RSB
 
 ; EXE$RUNDOWN: R4 = the current PCB. Gives back what its process holds:
-; what EXE$IMGRUNDOWN does, then its pages in P1, its other channels and
-; files, and
-; its slot, unless $DELPRC gave that to another process already. Runs in
-; the process's own context, since P0 and P1 are the current process's.
+; what EXE$IMGRUNDOWN does, then its logical names, its pages in P1, its
+; other channels and files, and its slot, unless $DELPRC gave that to
+; another process already. Runs in the process's own context, since P0 and P1 are the current process's.
 ; Uses R0-R3.
 EXE$RUNDOWN::
         BSBW    EXE$IMGRUNDOWN
+        MOVAQ   PCB$Q_LNMHD(R4), R2
+        BSBW    LNM$DELTBL
         MOVL    PCB$L_FREP1VA(R4), R0
         SUBL3   R0, #VA$C_P1END, R1
         BLEQ    20$

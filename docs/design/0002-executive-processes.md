@@ -32,6 +32,7 @@ its code.
 | `timeschdl.mar` | the interval timer and software timer interrupts, the system time, the timer queue, `$GETTIM`, `$SETIMR`, `$CANTIM`, `$SCHDWK`, `$CANWAK` |
 | `event.mar` | event flags, local and common |
 | `process.mar` | `$CREPRC`, process start, image activation, `$IMGACT`, `$EXIT`, image rundown, deletion, `$HIBER`, `$WAKE`, `$SUSPND`, `$RESUME`, `$SETPRI`, `$SETPRN`, `$CMKRNL` |
+| `lnm.mar` | logical name tables, `$CRELNM`, `$DELLNM`, `$TRNLNM` |
 | `qio.mar` | `$ASSIGN`, `$DASSGN`, `$QIO`, `$QIOW`: writes on the console and reads from it; the console receive interrupt and the type-ahead buffer |
 | `syssrv.mar` | the system service vector, the `CHMK` and `CHME` dispatchers, `$CMEXEC`, where processes enter user and supervisor mode, the exception handlers and the stubs |
 | `f11.mar` | the system disk, Files-11 ODS-2, read only: `FIL$MOUNT`, headers, maps, directories, `FIL$OPENFILE` for the image activator |
@@ -78,7 +79,7 @@ P1 are each process's own, S0 every process's:
 | --- | --- |
 | `0x00010000` | P0: the process's image, linked there (`build.rs`), then its `$EXPREG` pages |
 | `0x40010000` | S0: `EXEC.EXE` |
-| `0x48000000` | nonpaged pool, 512 KB: PCBs, kernel stacks, common event blocks, open files, images being activated |
+| `0x48000000` | nonpaged pool, 512 KB: PCBs, kernel stacks, common event blocks, timer queue entries, logical names, open files, images being activated |
 | `0x4FFF0000` | the RPB |
 | `0x5FFF0000` | the boot stack's top |
 | `0x60000000` | P1: the process's `$CRETVA` pages |
@@ -109,7 +110,7 @@ The PFN list and the pool are synchronized at `IPL$_SYNCH`.
 
 ## Processes
 
-A process is a PCB (`$PCBDEF`, 344 bytes, from pool), a 16 KB kernel stack
+A process is a PCB (`$PCBDEF`, 352 bytes, from pool), a 16 KB kernel stack
 from pool, an image and stacks in its P0 and P1, and the threads the PAL
 makes for its HWPCB, which is inside the PCB: one for kernel mode and one
 for each outer mode it enters. `SCH$GL_PCBVEC` holds the PCBs by index; a PID is a
@@ -119,7 +120,10 @@ sequence number in the high word and the index in the low.
 
 `$CREPRC` (in the creator's context):
 
-1. Copies the image and process names into a new PCB, and the priority.
+1. Copies the image and process names into a new PCB, and the priority,
+   and makes its logical name table, with `SYS$INPUT`, `SYS$OUTPUT` and
+   `SYS$ERROR` for its `input`, `output` and `error` arguments, those it
+   was given (*Logical names*).
 2. Allocates the kernel stack and builds at its top the frame the PAL pops
    when the process first runs: PC `EXE$PROCSTRT`, PSL kernel mode at IPL 0,
    the stack top as SP. The HWPCB's KSP points at it.
@@ -160,7 +164,7 @@ a command interpreter would:
 
 - **Itself** (`$EXIT` without a command interpreter, or `$DELPRC` naming
   itself): it runs itself down (timer queue entries, every page of its P0
-  and P1, common event flag clusters, channels, open files, slot), goes on the
+  and P1, common event flag clusters, logical names, channels, open files, slot), goes on the
   swapper's queue, wakes it, and
   gives up the CPU for good. The swapper deletes its context with
   `DELCTX`, then frees its kernel stack and PCB, since a process can't free
@@ -211,15 +215,19 @@ process, `SYSTEM`, with `DCL.EXE`:
 | `RUN image` | `$IMGACT`, with `.EXE` if the name has no type |
 | `DIRECTORY [spec]` | `$IMGACT` of `DIRECTORY.EXE`, with the spec, in capitals, as its command line |
 | `TYPE spec` | `$IMGACT` of `TYPE.EXE`, the same way |
+| `DEFINE name equivalence` | `$CRELNM` in `LNM$PROCESS`, and `%DCL-I-SUPERSEDE` if it replaced one |
+| `DEASSIGN name` | `$DELLNM` from `LNM$PROCESS` |
+| `SHOW LOGICAL name` | `$TRNLNM` in `LNM$FILE_DEV`: `"name" = "equivalence" (table)`, or `%SHOW-S-NOTRAN` |
+| `SHOW LOGICAL [*]` | lists every name, the process's table's and then the system's, in the order they were made, under each table's name; it copies them one at a time with `$CMKRNL`. ponytail: VMS's DCL asks the executive's logical name routines, and sorts them |
 | `HELP` | lists the commands |
 | `LOGOUT` | returns, which deletes the process |
 
-Verbs may be abbreviated. DCL reads a line with `IO$_READPROMPT` and the
-prompt `$ `, and reports a failure status as VMS does one it has no text
+Verbs may be abbreviated, the first that matches winning. DCL reads a line
+from `SYS$INPUT` with `IO$_READPROMPT` and the prompt `$ `, and reports a failure status as VMS does one it has no text
 for, `%NONAME-F-NOMSG, Message number 0000000C`, after
 `%DCL-W-ACTIMAGE` if `$IMGACT` returned it. ponytail: no CTRL/Y, so an
 image that never exits keeps the console; no message texts, symbols,
-qualifiers or command procedures.
+qualifiers, quoted strings or command procedures.
 
 ## Scheduling
 
@@ -315,7 +323,7 @@ Inside the executive, IPL, as on a uniprocessor VMS. `DSBINT`, `ENBINT`,
 | --- | --- |
 | `IPL$_HWCLK` (24) | the interval timer interrupt runs here; the system time, `EXE$GQ_1ST_TIME` |
 | `IPL$_CONSOLE` (20) | the console receive interrupt runs here; the type-ahead buffer |
-| `IPL$_SYNCH` (8) | the scheduler's queues and PCBs, the PFN list, pool, common event blocks, the timer queue, the console |
+| `IPL$_SYNCH` (8) | the scheduler's queues and PCBs, the PFN list, pool, common event blocks, the timer queue, the logical name tables, the console |
 | `IPL$_TIMER` (7) | the software timer interrupt runs here |
 | `IPL$_IOPOST` (4) | the software interrupt that wakes the console's readers runs here |
 | `IPL$_RESCHED` (3) | the reschedule interrupt runs here; below it, the CPU may move |
@@ -381,19 +389,65 @@ can't reach them.
 | Memory | `$CRETVA`, `$DELTVA`, `$EXPREG` | `$CNTREG`, `$SETPRT`, `$LKWSET`, `$ULWSET`, `$LCKPAG`, `$ULKPAG`, `$CRMPSC`, `$MGBLSC` |
 | Time | `$GETTIM`, `$SETIMR`, `$CANTIM` | |
 | I/O | `$ASSIGN`, `$DASSGN`, `$QIO`, `$QIOW` | |
+| Logical names | `$CRELNM`, `$DELLNM`, `$TRNLNM` | |
 | Images | `$IMGACT` | |
 | RMS | `$PARSE`, `$SEARCH`, `$OPEN`, `$CONNECT`, `$GET`, `$DISCONNECT`, `$CLOSE` | |
-| Other | | `$DCLAST`, `$SETAST`, `$CRELNM`, `$DELLNM`, `$TRNLNM`, `$GETSYI` |
+| Other | | `$DCLAST`, `$SETAST`, `$GETSYI` |
 
-Arguments the implemented services take but ignore: `$CREPRC`'s I/O,
-privileges, quotas, UIC, mailbox and status flags, `$ASCEFC`'s protection
+Arguments the implemented services take but ignore: `$CREPRC`'s
+privileges, quotas, UIC, mailbox and status flags, the logical name
+services' attributes, `$ASCEFC`'s protection
 and permanence (every cluster is temporary), the access modes. Any process
 may call `$CMKRNL` and `$CMEXEC`. ponytail: until there are privileges.
+
+### Logical names
+
+A logical name stands for a string, its equivalence, as on VMS: a
+program opens `SYS$OUTPUT`, and the process says what that is. `lnm.mar`
+keeps two logical name tables, queues of logical name blocks (`$LNMBDEF`,
+from pool) holding a name and its equivalence, each up to 255 characters,
+case sensitive:
+
+| Table | Queue | Whose |
+| --- | --- | --- |
+| `LNM$PROCESS_TABLE` | `PCB$Q_LNMHD` | the process's; process rundown deletes its names |
+| `LNM$SYSTEM_TABLE` | `LNM$GQ_SYSTEM` | every process's |
+
+A service's `tabnam` is one of those, `LNM$PROCESS` or `LNM$SYSTEM` for
+them, or `LNM$FILE_DEV`, the process's table and then the system's; any
+other is `SS$_NOLOGTAB`. An item list is VMS's: 12-byte items, each a
+buffer length and item code, words, a buffer address and the address of a
+word for the length returned, and a longword 0 at the end (`$LNMDEF`).
+
+- **`$CRELNM`** makes a name, in the process's table for `LNM$FILE_DEV`,
+  with the equivalence of the `LNM$_STRING` item, the one item it takes.
+  A name already there by that name goes: `SS$_SUPERSEDE`.
+- **`$DELLNM`** deletes a name, from the process's table for
+  `LNM$FILE_DEV`; `SS$_NOLOGNAM` if it isn't there.
+- **`$TRNLNM`** looks a name up and fills in its items, as much of each
+  as fits: `LNM$_STRING`, the equivalence; `LNM$_TABLE`, the table it was
+  found in; `LNM$_LENGTH`, the equivalence's length. `SS$_NOLOGNAM` if no
+  table has it. One level, as on VMS: the equivalence may be a logical
+  name too.
+- **Process-permanent names.** `$CREPRC`'s `input`, `output` and `error`
+  are the equivalences of the new process's `SYS$INPUT`, `SYS$OUTPUT` and
+  `SYS$ERROR`, those it was given. `EXEC$START` gives `SYSTEM` `_OPA0:` for
+  all three, as `LOGINOUT` gives a terminal's process its terminal.
+
+ponytail: one equivalence string per name, so no search lists; no access
+modes, so no user-mode names that image rundown deletes and no names an
+outer mode can't delete; no `LNM$JOB` or `LNM$GROUP`, no tables of one's
+own, no directory tables, and `$DELLNM` without a name doesn't empty the
+table. VMS's logical name directories, hash table and mutex replace this.
 
 ### I/O
 
 The console is the one device. `$ASSIGN` gives a channel to `OPA0:`, one of
-31, a bit in `PCB$L_CHANS`. `$QIO` writes a buffer on it, for
+31, a bit in `PCB$L_CHANS`. It translates the device name it is given
+first, as VMS does: without a colon at its end, in `LNM$FILE_DEV`, and
+what that translates to, up to `LNM$C_MAXDEPTH`, 10, times, until a name
+doesn't translate, or starts with an underscore, which says it is a
+device's own name and is dropped. So `SYS$INPUT` is `_OPA0:`, the console. `$QIO` writes a buffer on it, for
 `IO$_WRITEVBLK`, `IO$_WRITELBLK` and `IO$_WRITEPBLK`, or reads a line into
 one, for `IO$_READVBLK`, `IO$_READLBLK`, `IO$_READPBLK`, and
 `IO$_READPROMPT`, which writes the prompt in p5 and p6 first. Then it sets
@@ -509,7 +563,7 @@ with `$QIOW`.
 | `STARTUP` | makes 4 pages with `$EXPREG`, checks and deletes them; creates `SLEEPER` at a higher priority, which runs at once, and `PING` and `PONG`; waits until `PONG` sets flag 66 of their cluster; deletes `SLEEPER`; creates `SVCTEST`, `HOG` and `TIMETEST` |
 | `SLEEPER` | hibernates until it is deleted |
 | `PING`, `PONG` | take three turns through common event flags 64 and 65 of the cluster `PINGPONG`; `PONG` then sets flag 66, which `STARTUP` waits for |
-| `SVCTEST` | checks the statuses of the services the others don't use, and of errors: local event flags, the dispatcher's checks and a stub, `$CRETVA` and `$DELTVA`, `$CMKRNL` and `$CMEXEC`; what user mode may `PROBE`, and that services refuse it the executive's data; the console's channels; `$SETPRI`, and `$SUSPND`, `$WAKE`, `$RESUME` and `$DELPRC` on a process of its own; then creates one whose image doesn't exist, which exits with `RMS$_FNF`, and `SNOOP` and `USURP` |
+| `SVCTEST` | checks the statuses of the services the others don't use, and of errors: local event flags, the dispatcher's checks and a stub, `$CRETVA` and `$DELTVA`, `$CMKRNL` and `$CMEXEC`; what user mode may `PROBE`, and that services refuse it the executive's data; the console's channels; logical names in both tables, `$ASSIGN` through two of them, and the errors; `$SETPRI`, and `$SUSPND`, `$WAKE`, `$RESUME` and `$DELPRC` on a process of its own; then creates one whose image doesn't exist, which exits with `RMS$_FNF`, and `SNOOP` and `USURP` |
 | `SNOOP` | reads S0 from user mode, and exits with `SS$_ACCVIO` |
 | `USURP` | raises IPL from user mode, and exits with `SS$_OPCDEC` |
 | `HOG` | associates a common event flag cluster, creates `NUDGE` at its own priority and loops reading flag 64 until `NUDGE` sets it, with no wait: only quantum end lets `NUDGE` run |
@@ -528,4 +582,6 @@ taking the clock's interrupts.
   of exiting on an exception.
 - CTRL/Y, to take the console back from an image, and `$FORCEX`.
 - Writing the system disk, the disk's interrupt, `$QIO` on disk
-  channels, logical names and `SET DEFAULT`.
+  channels, logical names in file specifications (`SYS$SYSTEM:DCL.EXE`)
+  and `SET DEFAULT`.
+- Access modes and search lists for logical names.

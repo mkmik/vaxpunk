@@ -9,6 +9,7 @@
         .LIBRARY "sysexe.mlb"
         $SSDEF
         $IODEF
+        $LNMDEF
         .EXTERNAL SYS$SETAST, SYS$EXIT, EXE$GL_RPB
 
         .PSECT  DATA, NOEXE, WRT, LONG
@@ -38,6 +39,52 @@ STATE:  .LONG   0
 PRI:    .LONG   0
 CHAN:   .LONG   0
 INADR:  .LONG   ^X60000000, ^X60001FFF  ; in P1
+LNM_SYSTEM:
+        .ASCID  "LNM$SYSTEM"
+LNM_PROCESS:
+        .ASCID  "LNM$PROCESS"
+FILE_DEV:
+        .ASCID  "LNM$FILE_DEV"
+LNM_JOB:
+        .ASCID  "LNM$JOB"
+TERM_NAME:
+        .ASCID  "SVCTEST_TERM"
+OUT_NAME:
+        .ASCID  "SVCTEST_OUT"
+TERM_ITEMS:                             ; SVCTEST_TERM: the console
+        .WORD   6, LNM$_STRING
+        .ADDRESS TERM_EQV
+        .LONG   0, 0
+OUT_ITEMS:                              ; SVCTEST_OUT: SVCTEST_TERM
+        .WORD   13, LNM$_STRING
+        .ADDRESS OUT_EQV
+        .LONG   0, 0
+TERM_EQV:
+        .ASCII  "_OPA0:"
+OUT_EQV:
+        .ASCII  "SVCTEST_TERM:"
+TRN_ITEMS:                              ; too short a buffer, the length, the table
+        .WORD   4, LNM$_STRING
+        .ADDRESS BUF, BUFLEN
+        .WORD   4, LNM$_LENGTH
+        .ADDRESS EQVLEN
+        .LONG   0
+        .WORD   31, LNM$_TABLE
+        .ADDRESS TABBUF, TABLEN
+        .LONG   0
+LEN_ITEMS:                              ; not one $CRELNM takes
+        .WORD   4, LNM$_LENGTH
+        .ADDRESS EQVLEN
+        .LONG   0, 0
+SYS_ITEMS:                              ; a buffer user mode can't write
+        .WORD   4, LNM$_STRING
+        .ADDRESS EXE$GL_RPB
+        .LONG   0, 0
+BUF:    .BLKB   4
+BUFLEN: .WORD   0
+EQVLEN: .LONG   0
+TABBUF: .BLKB   31
+TABLEN: .WORD   0
 SYSTEM: .LONG   ^X40000000, ^X40000FFF  ; S0: not a process's to make
 
         .PSECT  CODE, EXE, LONG
@@ -114,6 +161,47 @@ SYSTEM: .LONG   ^X40000000, ^X40000FFF  ; S0: not a process's to make
         EXPECT  #SS$_NORMAL, 32
         $DASSGN_S CHAN=CHAN
         EXPECT  #SS$_IVCHAN, 33
+
+; Logical names: one in the system's table, and one in the process's that
+; translates to it, which $ASSIGN follows to the console. $TRNLNM in
+; LNM$FILE_DEV finds the system's after the process's, and fills in as
+; much as fits.
+        $CRELNM_S TABNAM=LNM_SYSTEM, LOGNAM=TERM_NAME, ITMLST=TERM_ITEMS
+        EXPECT  #SS$_NORMAL, 36
+        $CRELNM_S TABNAM=LNM_PROCESS, LOGNAM=OUT_NAME, ITMLST=OUT_ITEMS
+        EXPECT  #SS$_NORMAL, 37
+        $CRELNM_S TABNAM=FILE_DEV, LOGNAM=OUT_NAME, ITMLST=OUT_ITEMS
+        EXPECT  #SS$_SUPERSEDE, 38
+        $ASSIGN_S DEVNAM=OUT_NAME, CHAN=CHAN
+        EXPECT  #SS$_NORMAL, 39
+        $DASSGN_S CHAN=CHAN
+        EXPECT  #SS$_NORMAL, 40
+        $TRNLNM_S TABNAM=FILE_DEV, LOGNAM=TERM_NAME, ITMLST=TRN_ITEMS
+        EXPECT  #SS$_NORMAL, 41
+        CMPW    BUFLEN, #4
+        BNEQ    90$
+        CMPL    BUF, #^A/_OPA/
+        BNEQ    90$
+        CMPL    EQVLEN, #6
+        BNEQ    90$
+        CMPW    TABLEN, #16             ; LNM$SYSTEM_TABLE
+        BNEQ    90$
+        $TRNLNM_S TABNAM=LNM_PROCESS, LOGNAM=TERM_NAME, ITMLST=TRN_ITEMS
+        EXPECT  #SS$_NOLOGNAM, 42
+        $TRNLNM_S TABNAM=LNM_JOB, LOGNAM=TERM_NAME, ITMLST=TRN_ITEMS
+        EXPECT  #SS$_NOLOGTAB, 43
+        $TRNLNM_S TABNAM=FILE_DEV, LOGNAM=TERM_NAME, ITMLST=SYS_ITEMS
+        EXPECT  #SS$_ACCVIO, 44
+        $CRELNM_S TABNAM=LNM_PROCESS, LOGNAM=OUT_NAME, ITMLST=LEN_ITEMS
+        EXPECT  #SS$_BADPARAM, 45
+        $DELLNM_S TABNAM=LNM_SYSTEM, LOGNAM=TERM_NAME
+        EXPECT  #SS$_NORMAL, 46
+        $ASSIGN_S DEVNAM=OUT_NAME, CHAN=CHAN    ; SVCTEST_TERM: isn't a device
+        EXPECT  #SS$_NOSUCHDEV, 47
+        $DELLNM_S TABNAM=LNM_PROCESS, LOGNAM=OUT_NAME
+        EXPECT  #SS$_NORMAL, 48
+        $DELLNM_S TABNAM=LNM_PROCESS, LOGNAM=OUT_NAME
+        EXPECT  #SS$_NOLOGNAM, 49
 
 ; Other processes: lower this one's priority below NAPPER's so it runs
 ; and hibernates; suspend it while it does, so that $WAKE leaves it

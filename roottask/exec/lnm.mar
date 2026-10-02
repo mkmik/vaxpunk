@@ -1,0 +1,326 @@
+        .TITLE  LNM     Logical names
+        .IDENT  /V0.1/
+;
+; A logical name stands for a string, its equivalence: SYS$INPUT for
+; _OPA0:. $CRELNM makes one in a logical name table, $DELLNM deletes it,
+; and $TRNLNM translates it; $ASSIGN translates a device name with
+; LNM$TRNLOG (docs/design/0002-executive-processes.md). There are two
+; tables: each process's own, LNM$PROCESS_TABLE, a queue in its PCB, which
+; goes with the process, and every process's, LNM$SYSTEM_TABLE. Services
+; name a table by that name, or LNM$PROCESS or LNM$SYSTEM, or LNM$FILE_DEV:
+; for $TRNLNM the process's table and then the system's, for the others
+; the process's. Each name is a logical name block from pool, and the
+; tables are synchronized at IPL$_SYNCH.
+; ponytail: one equivalence string per name, no access modes, attributes,
+; job or group tables, or tables of one's own; VMS's logical name
+; directories, hash table and mutex replace this.
+;
+        .LIBRARY "lib.mlb"
+        .LIBRARY "starlet.mlb"
+        $IPLDEF
+        $PCBDEF
+        $LNMBDEF
+        $LNMDEF
+        $SSDEF
+
+        .EXTERNAL SCH$GL_CURPCB, EXE$MATCHNAME, EXE$PROBER_DSC
+        .EXTERNAL EXE$ALONONPAGED, EXE$DEANONPGDSIZ
+
+PROCESS = 1                             ; a table name's tables: the process's,
+SYSTEM = 2                              ; the system's, or both, in that order
+
+        .PSECT  EXEC$DATA, NOEXE, WRT, QUAD
+LNM$GQ_SYSTEM::                         ; LNM$SYSTEM_TABLE: LNMBs
+        .ADDRESS LNM$GQ_SYSTEM, LNM$GQ_SYSTEM
+; The table names a service knows, each .ASCIC and a byte of its tables.
+TABNAMES:
+PROCNAM:
+        .ASCIC  "LNM$PROCESS_TABLE"
+        .BYTE   PROCESS
+SYSNAM: .ASCIC  "LNM$SYSTEM_TABLE"
+        .BYTE   SYSTEM
+        .ASCIC  "LNM$PROCESS"
+        .BYTE   PROCESS
+        .ASCIC  "LNM$SYSTEM"
+        .BYTE   SYSTEM
+        .ASCIC  "LNM$FILE_DEV"
+        .BYTE   PROCESS ! SYSTEM
+        .BYTE   0
+
+        .PSECT  $CODE$
+
+; $CRELNM attr, tabnam, lognam, acmode, itmlst: makes lognam a logical name
+; in the table tabnam names, the process's for LNM$FILE_DEV, with the
+; equivalence string of the LNM$_STRING item in itmlst. One by that name
+; there goes: SS$_SUPERSEDE. SS$_BADPARAM without that item, with another
+; or with a string longer than 255; SS$_IVLOGNAM for a name longer than
+; 255. attr and acmode are ignored.
+        .ENTRY  EXE$CRELNM, ^M<R2, R3, R4, R5, R6, R7, R8, R9>
+        MOVL    8(AP), R1
+        BSBW    TABLE
+        BLBC    R0, 90$
+        MOVL    R2, R5
+        MOVL    12(AP), R1
+        BSBW    NAME
+        BLBC    R0, 90$
+        CLRL    R9                      ; no string yet
+        MOVL    20(AP), R4
+10$:    IFNORD  #4, (R4), 80$
+        TSTL    (R4)
+        BEQL    20$
+        IFNORD  #12, (R4), 80$
+        CMPW    2(R4), #LNM$_STRING
+        BNEQ    85$
+        MOVZWL  (R4), R9
+        MOVL    4(R4), R8
+        ADDL2   #12, R4
+        BRB     10$
+20$:    TSTL    R9
+        BEQL    85$
+        CMPL    R9, #LNM$C_NAMLENGTH
+        BGTRU   85$
+        IFNORD  R9, (R8), 80$
+        BSBW    LNM$CREATE
+90$:    RET
+80$:    MOVL    #SS$_ACCVIO, R0
+        RET
+85$:    MOVL    #SS$_BADPARAM, R0
+        RET
+
+; $DELLNM tabnam, lognam, acmode: deletes lognam from the table tabnam
+; names, the process's for LNM$FILE_DEV. SS$_NOLOGNAM if it isn't there.
+; acmode is ignored.
+; ponytail: VMS deletes every name in the table when there is no lognam.
+        .ENTRY  EXE$DELLNM, ^M<R2, R3, R6, R7>
+        MOVL    4(AP), R1
+        BSBW    TABLE
+        BLBC    R0, 90$
+        MOVL    8(AP), R1
+        BSBW    NAME
+        BLBC    R0, 90$
+        DSBINT  #IPL$_SYNCH
+        BSBW    FIND
+        MOVL    #SS$_NOLOGNAM, R0
+        TSTL    R1
+        BEQL    80$
+        REMQUE  (R1), R0
+        MOVZWL  LNMB$W_SIZE(R0), R1
+        BSBW    EXE$DEANONPGDSIZ
+        MOVL    #SS$_NORMAL, R0
+80$:    ENBINT
+90$:    RET
+
+; $TRNLNM attr, tabnam, lognam, acmode, itmlst: translates lognam, looked
+; up in the table tabnam names, or for LNM$FILE_DEV the process's and then
+; the system's. For each item of itmlst, writes in its buffer, as much as
+; fits, and the length written in its return length word: LNM$_STRING,
+; the equivalence string; LNM$_TABLE, the name of the table it was in;
+; LNM$_LENGTH, the string's length, a longword. SS$_NOLOGNAM if no table
+; has it, SS$_BADPARAM for another item code. attr and acmode are ignored.
+        .ENTRY  EXE$TRNLNM, ^M<R2, R3, R4, R5, R6, R7, R8>
+        MOVL    8(AP), R1
+        BSBW    TABLE
+        BLBC    R0, 90$
+        MOVL    12(AP), R1
+        BSBW    NAME
+        BLBC    R0, 90$
+        DSBINT  #IPL$_SYNCH
+        BSBW    LOOKUP
+        MOVL    #SS$_NOLOGNAM, R0
+        TSTL    R1
+        BEQL    80$
+        MOVAB   PROCNAM, R8             ; which table it was in
+        MOVAQ   LNM$GQ_SYSTEM, R0
+        CMPL    R2, R0
+        BNEQ    10$
+        MOVAB   SYSNAM, R8
+10$:    MOVL    20(AP), R4
+        BSBB    ITEMS
+80$:    ENBINT
+90$:    RET
+
+; ITEMS: R1 = a logical name block, R8 = its table's name, .ASCIC, R4 = a
+; $TRNLNM item list. Fills in each item. R0 = SS$_NORMAL, SS$_ACCVIO or
+; SS$_BADPARAM. Uses R2-R7.
+ITEMS:  MOVZBL  LNMB$T_NAME(R1), R0
+        MOVAB   LNMB$T_NAME+1(R1)[R0], R7       ; the equivalence string
+10$:    IFNORD  #4, (R4), 80$
+        TSTL    (R4)
+        BEQL    70$
+        IFNORD  #12, (R4), 80$
+        MOVZWL  (R4), R2                ; the buffer's length
+        MOVL    4(R4), R3
+        IFNOWRT R2, (R3), 80$
+        CMPW    2(R4), #LNM$_LENGTH
+        BEQL    40$
+        MOVL    R7, R5
+        CMPW    2(R4), #LNM$_STRING
+        BEQL    20$
+        MOVL    R8, R5
+        CMPW    2(R4), #LNM$_TABLE
+        BNEQ    85$
+20$:    MOVZBL  (R5)+, R6               ; a string: as much as fits
+        CMPL    R6, R2
+        BLEQU   30$
+        MOVL    R2, R6
+30$:    PUSHL   R1
+        MOVL    R6, R0
+        MOVL    R5, R1
+        BSBW    COPY
+        MOVL    (SP)+, R1
+        BRB     50$
+40$:    CMPL    R2, #4                  ; the length: a longword
+        BLSSU   85$
+        MOVZBL  (R7), (R3)
+        MOVL    #4, R6
+50$:    MOVL    8(R4), R0               ; the length written
+        BEQL    60$
+        IFNOWRT #2, (R0), 80$
+        MOVW    R6, (R0)
+60$:    ADDL2   #12, R4
+        BRB     10$
+70$:    MOVL    #SS$_NORMAL, R0
+        RSB
+80$:    MOVL    #SS$_ACCVIO, R0
+        RSB
+85$:    MOVL    #SS$_BADPARAM, R0
+        RSB
+
+; TABLE: R1 = the address of a table name's descriptor, from a caller. R2 =
+; the queue head of the table it names, R3 = the one to look in after it,
+; or 0. R0 = SS$_NORMAL, SS$_ACCVIO, or SS$_NOLOGTAB if there is no such
+; table. Uses R1, R6 and R7.
+TABLE:  BSBW    EXE$PROBER_DSC
+        BLBC    R0, 90$
+        MOVZWL  (R1), R7
+        MOVL    4(R1), R6
+        MOVAB   TABNAMES, R3
+10$:    MOVZBL  (R3), R2
+        BEQL    80$
+        MOVL    R3, R0
+        BSBW    EXE$MATCHNAME
+        ADDL2   R2, R3
+        INCL    R3                      ; its tables
+        BLBS    R0, 20$
+        INCL    R3
+        BRB     10$
+20$:    MOVZBL  (R3), R1
+        MOVL    SCH$GL_CURPCB, R2
+        MOVAQ   PCB$Q_LNMHD(R2), R2
+        MOVAQ   LNM$GQ_SYSTEM, R3
+        BBS     #1, R1, 30$             ; the system's, alone or after
+        CLRL    R3
+        BRB     70$
+30$:    BLBS    R1, 70$
+        MOVL    R3, R2
+        CLRL    R3
+70$:    MOVL    #SS$_NORMAL, R0
+        RSB
+80$:    MOVL    #SS$_NOLOGTAB, R0
+90$:    RSB
+
+; NAME: R1 = the address of a logical name's descriptor, from a caller. R6
+; = the name, R7 = its length. R0 = SS$_NORMAL, SS$_ACCVIO, or
+; SS$_IVLOGNAM if it is empty or longer than 255.
+NAME:   BSBW    EXE$PROBER_DSC
+        BLBC    R0, 90$
+        MOVZWL  (R1), R7
+        BEQL    80$
+        CMPL    R7, #LNM$C_NAMLENGTH
+        BGTRU   80$
+        MOVL    4(R1), R6
+        RSB
+80$:    MOVL    #SS$_IVLOGNAM, R0
+90$:    RSB
+
+; LNM$TRNLOG: R6 = a name, R7 = its length. Looks it up in LNM$FILE_DEV:
+; the current process's table, then the system's. R1 = its logical name
+; block, or 0. IPL$_SYNCH. Uses R0, R2 and R3.
+LNM$TRNLOG::
+        MOVL    SCH$GL_CURPCB, R2
+        MOVAQ   PCB$Q_LNMHD(R2), R2
+        MOVAQ   LNM$GQ_SYSTEM, R3
+; LOOKUP: R2 = a table's queue head, R3 = the next one's, or 0, R6 = a
+; name, R7 = its length. Looks it up in the first table, then in the next.
+; R1 = its logical name block, or 0, R2 = the table it is in. IPL$_SYNCH.
+; Uses R0.
+LOOKUP: BSBB    FIND
+        TSTL    R1
+        BNEQ    10$
+        MOVL    R3, R2
+        BEQL    10$
+        BSBB    FIND
+10$:    RSB
+
+; FIND: R2 = a table's queue head, R6 = a name, R7 = its length. R1 = the
+; name's logical name block, or 0 if the table hasn't it. IPL$_SYNCH. Uses
+; R0.
+FIND:   MOVL    R2, R1
+10$:    MOVL    (R1), R1
+        CMPL    R1, R2
+        BEQL    80$
+        MOVAB   LNMB$T_NAME(R1), R0
+        PUSHL   R1
+        BSBW    EXE$MATCHNAME
+        MOVL    (SP)+, R1
+        BLBC    R0, 10$
+        RSB
+80$:    CLRL    R1
+        RSB
+
+; LNM$CREATE: R5 = a table's queue head, R6 = a name, R7 = its length, R8
+; = an equivalence string, R9 = its length, each 1-255 bytes the caller
+; may read. Makes the name in the table, in place of one by that name
+; there. R0 = SS$_NORMAL, SS$_SUPERSEDE or SS$_INSFMEM. Uses R1-R3.
+LNM$CREATE::
+        ADDL3   R7, R9, R1
+        ADDL2   #LNMB$K_LENGTH+2, R1
+        BSBW    EXE$ALONONPAGED
+        BLBC    R0, 90$
+        MOVW    R1, LNMB$W_SIZE(R2)
+        MOVAB   LNMB$T_NAME(R2), R3
+        MOVB    R7, (R3)+
+        MOVL    R7, R0
+        MOVL    R6, R1
+        BSBB    COPY
+        MOVB    R9, (R3)+
+        MOVL    R9, R0
+        MOVL    R8, R1
+        BSBB    COPY
+        MOVL    R2, R3                  ; the new block
+        DSBINT  #IPL$_SYNCH
+        MOVL    R5, R2
+        BSBB    FIND
+        INSQUE  (R3), @4(R5)
+        MOVL    #SS$_NORMAL, R0
+        TSTL    R1
+        BEQL    80$
+        REMQUE  (R1), R0                ; the old one
+        MOVZWL  LNMB$W_SIZE(R0), R1
+        BSBW    EXE$DEANONPGDSIZ
+        MOVL    #SS$_SUPERSEDE, R0
+80$:    ENBINT
+90$:    RSB
+
+; LNM$DELTBL: R2 = a table's queue head. Deletes every name in it. Uses
+; R0 and R1.
+LNM$DELTBL::
+        DSBINT  #IPL$_SYNCH
+10$:    MOVL    (R2), R0
+        CMPL    R0, R2
+        BEQL    20$
+        REMQUE  (R0), R0
+        MOVZWL  LNMB$W_SIZE(R0), R1
+        BSBW    EXE$DEANONPGDSIZ
+        BRB     10$
+20$:    ENBINT
+        RSB
+
+; COPY: copies R0 bytes from R1 to R3, with R3 past them. Uses R0 and R1.
+COPY:   TSTL    R0
+        BEQL    20$
+10$:    MOVB    (R1)+, (R3)+
+        SOBGTR  R0, 10$
+20$:    RSB
+
+        .END

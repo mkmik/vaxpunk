@@ -42,6 +42,8 @@ CONSOLE_NAME:
 CONSOLE_PID:                            ; SYSTEM's PID
         .LONG   0
 LOGOUT: .ASCIZ  "%EXEC-I-LOGOUT, SYSTEM logged out, halting"
+CONSOLE_DEVICE:                         ; its SYS$INPUT, SYS$OUTPUT and SYS$ERROR
+        .ASCID  "_OPA0:"
 BANNER: .ASCIZ  "%EXEC-I-START, vaxpunk executive, free pages: "
 NOSTART:
         .ASCIZ  "%EXEC-F-NOSTART, can't create SYSTEM, status "
@@ -82,7 +84,7 @@ NOMOUNT:
         MOVAB   NOMOUNT, R1
         BRB     FAIL
 10$:    SETIPL  #0
-        $CREPRC_S PIDADR=CONSOLE_PID, IMAGE=CONSOLE_IMAGE, PRCNAM=CONSOLE_NAME, BASPRI=#4
+        $CREPRC_S PIDADR=CONSOLE_PID, IMAGE=CONSOLE_IMAGE, INPUT=CONSOLE_DEVICE, OUTPUT=CONSOLE_DEVICE, ERROR=CONSOLE_DEVICE, PRCNAM=CONSOLE_NAME, BASPRI=#4
         BLBS    R0, SWAPPER
         MOVAB   NOSTART, R1
 ; FAIL: R1 = a message, R0 = a status. Writes them and halts.

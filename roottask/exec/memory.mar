@@ -9,7 +9,8 @@
 ;
 ;   ^X00010000  P0: the process's image, then its $EXPREG pages
 ;   ^X40010000  S0, every process's: EXEC.EXE
-;   ^X48000000  nonpaged pool: PCBs, kernel stacks, common event blocks
+;   ^X48000000  nonpaged pool: PCBs, kernel stacks, common event blocks,
+;               timer queue entries, logical names
 ;   ^X4FFF0000  the RPB
 ;   ^X5FFF0000  the boot stack's top
 ;   ^X60000000  P1: the process's $CRETVA pages
