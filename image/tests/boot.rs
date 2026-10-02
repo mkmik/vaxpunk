@@ -153,7 +153,9 @@ fn boot() {
         if typed == 4 && text.contains("no files found") {
             type_("INIT DKB0: DATA\rMOUNT DKB0: DATA\r");
             type_("COPY SYS$SYSDEVICE:[SYSMGR]WELCOME.TXT DKB0:[000000]DATA.TXT\r");
-            type_("DIR DKB0:[000000]\rSHOW DEVICES\rSHOW PROCESS\rSHOW SYSTEM\rCONTINUE\rRUN SPIN\r");
+            type_(
+                "DIR DKB0:[000000]\rSHOW DEVICES\rSHOW PROCESS\rSHOW SYSTEM\rCONTINUE\rRUN SPIN\r",
+            );
             typed = 5;
         }
         if LINES.iter().all(|l| text.contains(l)) || text.contains("root task done") {
