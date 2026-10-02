@@ -106,8 +106,10 @@ lists files, in the default directory unless told where (`DIR`, `DIR
 logical name), `SET DEFAULT [dev:][dir]` (or `[-]`, `[.dir]`) and
 `SHOW DEFAULT` set and show that, `DKA0:[SYSMGR]` at first, `SHOW DEVICES`
 lists the devices, `TYPE file` writes a text file (`TYPE WELCOME.TXT`),
-`EDIT file` edits one with EDT's line mode, and writes a new version
-on `EXIT`, on the ramdisk (`HELP` at its `*` prompt),
+`EDIT file` edits one with EDT: its line mode types and changes lines,
+`CHANGE` at its `*` prompt goes to keypad mode, on the screen, and
+`EXIT` writes a new version, on the ramdisk (`HELP` at the prompt, PF2
+on the screen),
 `DEFINE name equivalence`, `DEASSIGN name` and `SHOW LOGICAL name` make,
 delete and translate logical names (`SHOW LOGICAL SYS$INPUT`, or `SHOW
 LOGICAL` alone to list them all), `COPY` and `DELETE` copy and delete
@@ -181,7 +183,8 @@ goes on with it. `cargo test -p boot` boots the same way without a terminal,
 types `RUN STARTUP`, `RUN SNOOP`, a bad verb, `DIR [SYSEXE]P%NG`, `TYPE
 WELCOME.TXT`, an `EDIT WELCOME.TXT` session, and a logical
 name's `DEFINE`, `SHOW LOGICAL` and `DEASSIGN`, `SHOW LOGICAL` alone, and
-`SET DEFAULT` and `SHOW DEFAULT`, a round trip through the ramdisk, a
+`SET DEFAULT` and `SHOW DEFAULT`, a round trip through the ramdisk with
+a keypad-mode `EDIT` on it, a
 `COPY` to the data disk, made afresh, which `ods` then checks on the host,
 stops `SPIN` and `SLEEPER` with CTRL/Y and continues them, prints the
 executive's part and fails unless the processes ran to the end.

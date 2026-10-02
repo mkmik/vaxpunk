@@ -129,9 +129,11 @@ interpreter. It is linked high in P1, which tells the executive it is one
   on the console. `EDIT file` runs `EDIT.EXE`, EDT's line mode: it reads
   the file the same way and, at its `*` prompt, types the lines you ask
   for, and `INSERT`s, `DELETE`s and `REPLACE`s them; lines to insert end
-  with CTRL/Z. `EXIT` writes the buffer to the file's next version with
-  `$CREATE` and `$PUT`, which works on the ramdisk only, and `QUIT`
-  leaves without writing. `DEFINE`,
+  with CTRL/Z. `CHANGE` goes to keypad mode, which shows the file on the
+  screen, reads a key at a time (`$QIO` with `IO$M_NOFILTR`) and changes
+  the text, until CTRL/Z. `EXIT` writes the buffer to the file's next
+  version with `$CREATE` and `$PUT`, which works on the ramdisk only, and
+  `QUIT` leaves without writing. `DEFINE`,
   `DEASSIGN` and `SHOW LOGICAL` make, delete
   and translate logical names (`$CRELNM`, `$DELLNM`, `$TRNLNM`), and
   `SHOW LOGICAL` alone lists them. `HELP` lists the commands, and `LOGOUT` deletes SYSTEM.
@@ -210,7 +212,8 @@ session, and `DEFINE`, `SHOW
 LOGICAL` and `DEASSIGN` of a logical name, `SHOW LOGICAL` alone, and
 `SET DEFAULT` and `SHOW DEFAULT` with a `DIR` between, then `[-]` and a
 `DIR [.SYSMGR]`, at the prompt, then initializes and mounts `MDA0:`,
-copies a file to it, edits it into a second version, lists them,
+copies a file to it, changes it in `EDIT`'s line and keypad modes into
+a second version, lists them,
 deletes them and lists again, then
 initializes and mounts `DKB0:`, made afresh, copies a file there and lists
 it, runs `SHOW DEVICES`, then

@@ -348,6 +348,10 @@ IO$_READPBLK = 12
 IO$_READLBLK = 33
 IO$_READVBLK = 49
 IO$_READPROMPT = 55                     ; writes the prompt in p5 and p6 first
+IO$V_NOECHO = 6                         ; a read doesn't echo
+IO$M_NOECHO = ^X40
+IO$V_NOFILTR = 9                        ; a read doesn't edit: DEL, CTRL/U are data
+IO$M_NOFILTR = ^X200
         .ENDM   $IODEF
 
 ; $LNMDEF: logical names: item codes for the item lists of $CRELNM and

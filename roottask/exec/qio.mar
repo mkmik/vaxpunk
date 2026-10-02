@@ -10,8 +10,8 @@
 ; What the console receives, its receive interrupt puts in the type-ahead
 ; buffer, and wakes the readers through the IPL$_IOPOST software
 ; interrupt. A read takes the characters from the buffer, echoing and
-; editing the line, up to a carriage return or CTRL/Z, and waits while
-; it is empty.
+; editing the line, up to a carriage return or CTRL/Z, or a key at a
+; time with IO$M_NOFILTR, and waits while it is empty.
 ; CTRL/Y empties the buffer instead, and stops the image the console's
 ; command interpreter runs, which then prompts (ADR-0010).
 ; ponytail: the console is the only device, written a buffer at a time at
@@ -148,12 +148,13 @@ IOC$TRNDEVNAM::
 ; I/O on the channel's device, the console: writes p2 bytes at p1, for
 ; IO$_WRITEVBLK, IO$_WRITELBLK and IO$_WRITEPBLK, or reads a line into
 ; them, for IO$_READVBLK, IO$_READLBLK and IO$_READPBLK, and for
-; IO$_READPROMPT once it has written the p6 bytes at p5. Clears event flag
-; efn first, and once the I/O is done sets it, and in iosb the status, the
-; byte count and, for a read, the terminator, a carriage return or
-; CTRL/Z, and its size.
+; IO$_READPROMPT once it has written the p6 bytes at p5, without echo for
+; IO$M_NOECHO and a key at a time for IO$M_NOFILTR (READ). Clears event
+; flag efn first, and once the I/O is done sets it, and in iosb the
+; status, the byte count and, for a read, the terminator, a carriage
+; return or CTRL/Z, and its size, or 0 if the buffer filled.
 ; ponytail: no ASTs yet, so an astadr is SS$_ILLSER.
-        .ENTRY  EXE$QIO, ^M<R2, R3, R4, R5>
+        .ENTRY  EXE$QIO, ^M<R2, R3, R4, R5, R6>
         MOVL    SCH$GL_CURPCB, R4
         TSTL    20(AP)
         BNEQ    70$
@@ -197,7 +198,8 @@ IOC$TRNDEVNAM::
         CMPL    48(AP), #65535
         BGTRU   87$
         IFNORD  48(AP), @44(AP), 85$
-18$:    PUSHL   4(AP)
+18$:    MOVL    12(AP), R6              ; the modifiers, for READ
+        PUSHL   4(AP)
         CALLS   #1, G^EXE$CLREF
         BLBC    R0, 90$
         DSBINT  #IPL$_SYNCH             ; the console, a buffer at a time
@@ -215,7 +217,7 @@ IOC$TRNDEVNAM::
         POPR    #^M<R2, R3>
 25$:    BSBW    READ
         MOVL    R1, R3                  ; the line's length
-        BISL3   #1@16, R0, R1           ; the terminator, one byte
+        MOVL    R0, R1                  ; its terminator
 30$:    ENBINT
         TSTL    R5
         BEQL    40$
@@ -256,15 +258,23 @@ WRITE:  CLRL    R1
 ; READ: reads a line from the console into the R3 bytes at R2, which the
 ; current process may write, taking each character from the type-ahead
 ; buffer and echoing it, and waiting while the buffer is empty. A carriage
-; return ends the line, echoed as CR LF, or CTRL/Z, echoed as *EXIT*. DEL
-; or BS erases the last character, CTRL/U all of them; other control
-; characters, and those past R3 bytes, are dropped. R0 = the terminator,
-; R1 = the line's length. IPL$_SYNCH.
-; ponytail: no escape sequences or command recall.
+; return ends the line, echoed as CR LF, or CTRL/Z, echoed as *EXIT*, and
+; so does the R3rd character. DEL or BS erases the last character, CTRL/U
+; all of them; other control characters are dropped. R6 = $QIO's
+; function: with IO$M_NOECHO nothing is echoed, and with IO$M_NOFILTR
+; every character but a carriage return goes in the buffer as it is, so
+; a buffer of one byte reads a key. R1 = the line's length, R0 = its
+; terminator, as in the I/O status block: the character, one byte, or 0
+; if the buffer filled. IPL$_SYNCH.
+; ponytail: no escape sequences or command recall; VMS ends a read with
+; IO$M_NOFILTR at any control character in the terminator mask too.
 READ:   PUSHL   R4
         MOVL    SCH$GL_CURPCB, R4
         CLRL    R1
-10$:    DSBINT  #IPL$_CONSOLE           ; the ring, which the receive interrupt fills
+10$:    CLRL    R0
+        CMPL    R1, R3
+        BGEQU   55$                     ; full
+        DSBINT  #IPL$_CONSOLE           ; the ring, which the receive interrupt fills
         CMPL    TTY$GL_GET, TTY$GL_PUT
         BEQL    60$
         MOVL    TTY$GL_GET, R0
@@ -274,6 +284,7 @@ READ:   PUSHL   R4
         ENBINT
         CMPB    R0, #13
         BEQL    50$
+        BBS     #IO$V_NOFILTR, R6, 15$
         CMPB    R0, #CTRLZ
         BEQL    40$
         CMPB    R0, #127
@@ -286,10 +297,9 @@ READ:   PUSHL   R4
         BLSSU   10$
         CMPB    R0, #126
         BGTRU   10$
-        CMPL    R1, R3
-        BGEQU   10$
-        MOVB    R0, (R2)[R1]
+15$:    MOVB    R0, (R2)[R1]
         INCL    R1
+        BBS     #IO$V_NOECHO, R6, 10$
         JSB     G^EXE$OUTCHAR
         BRB     10$
 20$:    TSTL    R1                      ; DEL: erase the last
@@ -300,14 +310,16 @@ READ:   PUSHL   R4
         BEQL    10$
         BSBB    ERASE
         BRB     30$
-40$:    PUSHR   #^M<R1, R2>             ; CTRL/Z
+40$:    BBS     #IO$V_NOECHO, R6, 45$   ; CTRL/Z
+        PUSHR   #^M<R1, R2>
         MOVAB   EXIT, R1
         JSB     G^EXE$OUTZSTRING
         POPR    #^M<R1, R2>
-        MOVZBL  #CTRLZ, R0
+45$:    MOVL    #<1@16>!CTRLZ, R0       ; CTRL/Z, one byte
         BRB     55$
-50$:    JSB     G^EXE$OUTCRLF
-        MOVZBL  #13, R0
+50$:    BBS     #IO$V_NOECHO, R6, 52$
+        JSB     G^EXE$OUTCRLF
+52$:    MOVL    #<1@16>!13, R0          ; a carriage return, one byte
 55$:    MOVL    (SP)+, R4
         RSB
 60$:    ENBINT                          ; empty: wait for more
@@ -316,10 +328,12 @@ READ:   PUSHL   R4
         BSBW    SCH$WAIT
         BRB     10$
 
-; ERASE: erases the last of the R1 characters of a line from the screen.
-; R1 = one less. Uses R0.
+; ERASE: erases the last of the R1 characters of a line from the screen,
+; unless R6 has IO$M_NOECHO. R1 = one less. Uses R0.
 ERASE:  DECL    R1
-        MOVZBL  #8, R0
+        BBC     #IO$V_NOECHO, R6, 10$
+        RSB
+10$:    MOVZBL  #8, R0
         JSB     G^EXE$OUTCHAR
         MOVZBL  #^A/ /, R0
         JSB     G^EXE$OUTCHAR
