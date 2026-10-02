@@ -136,7 +136,10 @@ interpreter. It is linked high in P1, which tells the executive it is one
   `QUIT` leaves without writing. `DEFINE`,
   `DEASSIGN` and `SHOW LOGICAL` make, delete
   and translate logical names (`$CRELNM`, `$DELLNM`, `$TRNLNM`), and
-  `SHOW LOGICAL` alone lists them. `HELP` lists the commands, and `LOGOUT` deletes SYSTEM.
+  `SHOW LOGICAL` alone lists them. `SHOW PROCESS` and `SHOW SYSTEM` run
+  `SHOW.EXE`, which asks `$GETJPI` about this process, and `$GETSYI` how
+  long the system has been up, then `$GETJPI` with a wildcard for a line
+  per process: its PID, name, state, priority and image. `HELP` lists the commands, and `LOGOUT` deletes SYSTEM.
 - `INITIALIZE MDA0: label` runs `INIT.EXE`, whose `$INIT_VOL` makes the
   ramdisk, `MDA0:`, 512 KB of memory, and writes an empty volume on it.
   `MOUNT MDA0: label` runs `MOUNT.EXE`, whose `$MOUNT` mounts it and prints
@@ -216,7 +219,7 @@ copies a file to it, changes it in `EDIT`'s line and keypad modes into
 a second version, lists them,
 deletes them and lists again, then
 initializes and mounts `DKB0:`, made afresh, copies a file there and lists
-it, runs `SHOW DEVICES`, then
+it, runs `SHOW DEVICES`, `SHOW PROCESS` and `SHOW SYSTEM`, then
 stops SPIN and SLEEPER with CTRL/Y and continues them, and looks for the
 success lines in `out/serial.log`. Once QEMU is gone, `ods-image` checks
 the data disk's volume and finds the file on it.

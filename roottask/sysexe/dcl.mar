@@ -28,6 +28,8 @@
 ;               shows it, with the device
 ;   SHOW DEVICES [name]
 ;               lists the devices, those whose names start with name
+;   SHOW PROCESS, SHOW SYSTEM
+;               run SHOW.EXE, with PROCESS or SYSTEM as its command line
 ;   EDIT spec   runs EDIT.EXE, with spec as its command line
 ;   COPY from to
 ;               runs COPY.EXE
@@ -128,6 +130,8 @@ INITIMG:
         .ASCID  "INIT.EXE"
 MOUNTIMG:
         .ASCID  "MOUNT.EXE"
+SHOWIMG:
+        .ASCID  "SHOW.EXE"
 MSG:    .BLKB   256                     ; a message being made, .ASCIC
 CHAR:   .BLKB   1
 V_RUN:  .ASCIC  "RUN"
@@ -199,6 +203,10 @@ S_ONLINE:
         .ASCIC  "Online"
 S_OFFLINE:
         .ASCIC  "Offline"
+V_PROCESS:
+        .ASCIC  "PROCESS"
+V_SYSTEM:
+        .ASCIC  "SYSTEM"
 V_EDIT: .ASCIC  "EDIT"
 V_COPY: .ASCIC  "COPY"
 V_DELETE:
@@ -450,6 +458,10 @@ HELP:   PRINT   "  RUN image   runs image, image.EXE if it has no type"
         PRINT   "              shows it"
         PRINT   "  SHOW DEVICES [name]"
         PRINT   "              lists the devices, or those whose names start with name"
+        PRINT   "  SHOW PROCESS"
+        PRINT   "              shows this process"
+        PRINT   "  SHOW SYSTEM"
+        PRINT   "              lists the processes"
         PRINT   "  EDIT spec   edits the file spec names with EDT"
         PRINT   "  COPY from to"
         PRINT   "              copies a file"
@@ -760,7 +772,8 @@ ADDDEF: MOVL    DEFNAM+NAM$L_DEV, R1
 
 ; SHOW LOGICAL [name]: translates name in LNM$FILE_DEV, and shows the
 ; equivalence and the table it is in. With no name, or *, lists them all.
-; SHOW DEFAULT: as SHOWDEF. SHOW DEVICES: as SHOWDEV.
+; SHOW DEFAULT: as SHOWDEF. SHOW DEVICES: as SHOWDEV. SHOW PROCESS and
+; SHOW SYSTEM run SHOW.EXE.
 SHOW:   BSBW    WORD
         TSTL    R8
         BEQL    5$
@@ -773,8 +786,18 @@ SHOW:   BSBW    WORD
         MOVAB   V_LOGICAL, R1
         BSBW    VERB
         BLBS    R0, 10$
-        BRB     IVKEYW
+        MOVAB   V_PROCESS, R1
+        BSBW    VERB
+        BLBS    R0, 7$
+        MOVAB   V_SYSTEM, R1
+        BSBW    VERB
+        BLBS    R0, 7$
+        BRW     IVKEYW
 5$:     BRW     INSFPRM
+7$:     SUBL2   R8, R6                  ; the keyword is SHOW.EXE's command line
+        MOVAB   SHOWIMG, R4
+        MOVL    #1, R3
+        BRW     FOREIGN
 10$:    BSBW    NAMEWORD
         TSTL    R8
         BEQL    LIST

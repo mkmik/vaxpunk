@@ -1,0 +1,258 @@
+        .TITLE  SHOW    Shows the process and the system
+        .IDENT  /V0.1/
+;
+; DCL's SHOW PROCESS and SHOW SYSTEM run this, with PROCESS or SYSTEM as
+; its command line, as VMS's DCL runs SHOW.EXE for them. SHOW PROCESS
+; shows this process, what $GETJPI says of it. SHOW SYSTEM shows the
+; version and how long the system has been up, from $GETSYI, then a line
+; for each process, from a wildcard $GETJPI: its PID, name, state,
+; priority and image.
+; ponytail: no date, node, CPU time, I/O or page counts: $ASCTIM and
+; the counters don't exist yet.
+;
+        .LIBRARY "starlet.mlb"
+        .LIBRARY "sysexe.mlb"
+        $SSDEF
+        $JPIDEF
+        $SYIDEF
+
+        .EXTERNAL PUT_LINE, GET_PARAM
+
+; ADDTEXT "text": appends text to LINE. Uses R0-R2.
+        .MACRO  ADDTEXT TEXT, ?L
+        .SAVE_PSECT LOCAL_BLOCK
+        .PSECT  $LITERAL$
+L:      .ASCIC  TEXT
+        .RESTORE_PSECT
+        MOVAB   L, R1
+        MOVZBL  (R1)+, R2
+        BSBW    ADD
+        .ENDM   ADDTEXT
+
+        .PSECT  DATA, NOEXE, WRT, LONG
+DESC:   .LONG   0, 0                    ; the command line's parameter
+CTX:    .LONG   -1                      ; the wildcard $GETJPI's scan
+JPIITEMS:                               ; what $GETJPIW returns of a process
+        .WORD   4, JPI$_PID
+        .ADDRESS PID
+        .LONG   0
+        .WORD   15, JPI$_PRCNAM
+        .ADDRESS NAME
+        .ADDRESS NAMLEN
+        .WORD   4, JPI$_STATE
+        .ADDRESS STATE
+        .LONG   0
+        .WORD   4, JPI$_PRI
+        .ADDRESS PRI
+        .LONG   0
+        .WORD   4, JPI$_PRIB
+        .ADDRESS PRIB
+        .LONG   0
+        .WORD   39, JPI$_IMAGNAME
+        .ADDRESS IMAGE
+        .ADDRESS IMGLEN
+        .LONG   0
+SYIITEMS:                               ; and $GETSYIW of the system
+        .WORD   8, SYI$_VERSION
+        .ADDRESS VERSION
+        .LONG   0
+        .WORD   8, SYI$_BOOTTIME
+        .ADDRESS BOOTTIME
+        .LONG   0
+        .LONG   0
+PID:    .LONG   0
+STATE:  .LONG   0
+PRI:    .LONG   0
+PRIB:   .LONG   0
+NAMLEN: .WORD   0
+IMGLEN: .WORD   0
+NAME:   .BLKB   15
+IMAGE:  .BLKB   39
+VERSION:
+        .BLKB   8
+BOOTTIME:
+        .BLKQ   1
+NOW:    .BLKQ   1
+; The scheduling states' names, VMS's, by SCH$C_ value, 5 characters each.
+STATES: .ASCII  "     COLPGMWAITCEF  PFW  LEF  LEFO HIB  "
+        .ASCII  "HIBO SUSP SUSPOFPG  COM  COMO CUR  "
+MAXSTATE = 14
+HEX:    .ASCII  "0123456789ABCDEF"
+LINE:   .BLKB   256                     ; a line being made, .ASCIC
+CHAR:   .BLKB   1
+
+        .PSECT  CODE, EXE, LONG
+        .ENTRY  START, ^M<R2, R3, R4, R5>
+        PUSHAB  DESC
+        PUSHL   #1
+        CALLS   #2, G^GET_PARAM
+        BLBC    R0, SYSTEM
+        CMPB    @DESC+4, #^A/P/
+        BNEQ    SYSTEM
+
+; SHOW PROCESS
+        $GETJPIW_S ITMLST=JPIITEMS
+        BLBC    R0, 90$
+        PRINT   ""
+        ADDTEXT "Process ID:         "
+        MOVL    PID, R1
+        BSBW    ADDHEX
+        BSBW    SAY
+        ADDTEXT "Process name:       "
+        MOVZBL  #34, R0
+        BSBW    ADDCHAR
+        BSBW    ADDNAME
+        MOVZBL  #34, R0
+        BSBW    ADDCHAR
+        BSBW    SAY
+        ADDTEXT "Priority:           "
+        MOVL    PRI, R1
+        BSBW    ADDDEC
+        BSBW    SAY
+        ADDTEXT "Base priority:      "
+        MOVL    PRIB, R1
+        BSBW    ADDDEC
+        BSBW    SAY
+        MOVL    #SS$_NORMAL, R0
+90$:    RET
+
+; SHOW SYSTEM
+SYSTEM: $GETSYIW_S ITMLST=SYIITEMS
+        BLBC    R0, 90$
+        $GETTIM_S TIMADR=NOW
+        SUBL2   BOOTTIME+4, NOW+4       ; how long it has been up,
+        SUBL2   BOOTTIME, NOW
+        BCC     5$
+        DECL    NOW+4
+5$:        EDIV    #10000000, NOW, R4, R0  ; in seconds
+        ADDTEXT "vaxpunk "
+        MOVAB   VERSION, R1
+        MOVL    #8, R2
+        BSBW    ADD
+        ADDTEXT "  Uptime  "
+        DIVL3   #86400, R4, R1          ; days
+        MULL3   #86400, R1, R0
+        SUBL2   R0, R4
+        BSBW    ADDDEC
+        ADDTEXT " "
+        DIVL3   #3600, R4, R1           ; hours
+        MULL3   #3600, R1, R0
+        SUBL2   R0, R4
+        BSBW    ADD2
+        ADDTEXT ":"
+        DIVL3   #60, R4, R1             ; minutes
+        MULL3   #60, R1, R0
+        SUBL2   R0, R4
+        BSBW    ADD2
+        ADDTEXT ":"
+        MOVL    R4, R1                  ; seconds
+        BSBW    ADD2
+        BSBW    SAY
+        PRINT   "  Pid    Process Name    State  Pri Image"
+10$:    $GETJPIW_S PIDADR=CTX, ITMLST=JPIITEMS
+        CMPL    R0, #SS$_NOMOREPROC
+        BEQL    80$
+        BLBC    R0, 90$
+        MOVL    PID, R1
+        BSBW    ADDHEX
+        ADDTEXT " "
+        BSBW    ADDNAME
+        MOVL    #25, R3
+        BSBW    PADTO
+        MOVL    STATE, R1
+        CMPL    R1, #MAXSTATE
+        BLEQU   20$
+        CLRL    R1
+20$:    MULL2   #5, R1
+        MOVAB   STATES[R1], R1
+        MOVL    #5, R2
+        BSBW    ADD
+        MOVL    #32, R3
+        BSBW    PADTO
+        MOVL    PRI, R1
+        CMPL    R1, #10
+        BGEQU   30$
+        ADDTEXT " "
+        MOVL    PRI, R1
+30$:    BSBW    ADDDEC
+        ADDTEXT " "
+        MOVAB   IMAGE, R1
+        MOVZWL  IMGLEN, R2
+        BSBW    ADD
+        BSBW    SAY
+        BRW     10$
+80$:    MOVL    #SS$_NORMAL, R0
+90$:    RET
+
+; ADDNAME: appends the process's name, NAME, to LINE. Uses R0-R2.
+ADDNAME:
+        MOVAB   NAME, R1
+        MOVZWL  NAMLEN, R2
+        BRB     ADD
+
+; PADTO: appends blanks to LINE until it is R3 characters long. Uses R0-R2.
+PADTO:  MOVZBL  LINE, R0
+        CMPL    R0, R3
+        BGEQU   10$
+        MOVZBL  #^A/ /, R0
+        BSBB    ADDCHAR
+        BRB     PADTO
+10$:    RSB
+
+; ADDHEX: appends R1 in 8 hex digits to LINE. Uses R0-R5.
+ADDHEX: MOVL    R1, R4
+        MOVL    #8, R5
+10$:    ROTL    #4, R4, R4
+        EXTZV   #0, #4, R4, R0
+        MOVZBL  HEX[R0], R0
+        BSBB    ADDCHAR
+        SOBGTR  R5, 10$
+        RSB
+
+; ADD2: appends R1, below 100, in 2 decimal digits to LINE. Uses R0-R5.
+ADD2:   CMPL    R1, #10
+        BGEQU   ADDDEC
+        PUSHL   R1
+        MOVZBL  #^A/0/, R0
+        BSBB    ADDCHAR
+        MOVL    (SP)+, R1
+; ADDDEC: appends R1 in decimal to LINE. Uses R0-R3, R5.
+ADDDEC: CLRL    R3                      ; digits, on the stack
+10$:    DIVL3   #10, R1, R5
+        MULL3   #10, R5, R0
+        SUBL3   R0, R1, R0
+        ADDL2   #^A/0/, R0
+        PUSHL   R0
+        INCL    R3
+        MOVL    R5, R1
+        BNEQ    10$
+30$:    MOVL    (SP)+, R0
+        BSBB    ADDCHAR
+        SOBGTR  R3, 30$
+        RSB
+
+; SAY: writes the line in LINE, and empties it. Uses R0 and R1.
+SAY:    PUSHAB  LINE
+        CALLS   #1, G^PUT_LINE
+        CLRB    LINE
+        RSB
+
+; ADDCHAR: appends the character in R0 to LINE. Uses R0-R2.
+ADDCHAR:
+        MOVB    R0, CHAR
+        MOVAB   CHAR, R1
+        MOVL    #1, R2
+; ADD: appends the R2 bytes at R1 to LINE, as many as fit. Uses R0-R2.
+ADD:    MOVZBL  LINE, R0
+10$:    TSTL    R2
+        BEQL    20$
+        CMPL    R0, #255
+        BGEQU   20$
+        INCL    R0
+        MOVB    (R1)+, LINE[R0]
+        DECL    R2
+        BRB     10$
+20$:    MOVB    R0, LINE
+        RSB
+
+        .END    START

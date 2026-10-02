@@ -41,6 +41,7 @@ SS$_OPCDEC = 1084
 SS$_CONTROLY = 1553                     ; CTRL/Y stopped the image
 SS$_SUPERSEDE = 1585                    ; success: a name by that name was replaced
 SS$_NONEXPR = 2280
+SS$_NOMOREPROC = 2472                   ; a wildcard $GETJPI is past the last process
 SS$_NOSUCHDEV = 2312
 SS$_NOSUCHFILE = 2320
 SS$_BADCHKSUM = 2056
@@ -366,6 +367,27 @@ LNM$C_NAMLENGTH = 255                   ; the longest name or equivalence string
 LNM$C_MAXDEPTH = 10                     ; translations of a device name, at most
         .ENDM   $LNMDEF
 
+; $JPIDEF: $GETJPI's item codes, VMS's, those vaxpunk knows. The item list
+; is as $LNMDEF says.
+        .MACRO  $JPIDEF
+JPI$_PRI = ^X302                        ; the current priority, 0-31, a longword
+JPI$_OWNER = ^X303                      ; the creator's PID
+JPI$_STS = ^X305                        ; the PCB$V_ bits
+JPI$_STATE = ^X306                      ; the scheduling state, SCH$C_
+JPI$_PRIB = ^X309                       ; the base priority
+JPI$_PID = ^X319
+JPI$_PRCNAM = ^X31C                     ; the process's name
+JPI$_IMAGNAME = ^X207                   ; the image it runs, or ran last
+        .ENDM   $JPIDEF
+
+; $SYIDEF: $GETSYI's item codes, VMS's, those vaxpunk knows.
+        .MACRO  $SYIDEF
+SYI$_VERSION = 4096                     ; the system's version, 8 characters
+SYI$_MAXPROCESSCNT = 4105               ; how many processes there may be
+SYI$_QUANTUM = 4137                     ; ticks of 10 ms in a quantum
+SYI$_BOOTTIME = 4286                    ; the system time at boot, a quadword
+        .ENDM   $SYIDEF
+
 ; $PRTDEF: page protection codes, the VAX's: who may read (R) and write (W),
 ; from kernel (K) out to user (U) mode.
         .MACRO  $PRTDEF
@@ -470,6 +492,54 @@ PRT$C_UR = 15
         .EXTERNAL SYS$SETPRN
         CALLS   #1, G^SYS$SETPRN
         .ENDM   $SETPRN_S
+
+        .MACRO  $GETJPI_S EFN=#0, PIDADR=0, PRCNAM=0, ITMLST, IOSB=0, ASTADR=0, ASTPRM=#0
+        PUSHL   ASTPRM
+        $PUSHADR ASTADR
+        $PUSHADR IOSB
+        $PUSHADR ITMLST
+        $PUSHADR PRCNAM
+        $PUSHADR PIDADR
+        PUSHL   EFN
+        .EXTERNAL SYS$GETJPI
+        CALLS   #7, G^SYS$GETJPI
+        .ENDM   $GETJPI_S
+
+        .MACRO  $GETJPIW_S EFN=#0, PIDADR=0, PRCNAM=0, ITMLST, IOSB=0, ASTADR=0, ASTPRM=#0
+        PUSHL   ASTPRM
+        $PUSHADR ASTADR
+        $PUSHADR IOSB
+        $PUSHADR ITMLST
+        $PUSHADR PRCNAM
+        $PUSHADR PIDADR
+        PUSHL   EFN
+        .EXTERNAL SYS$GETJPIW
+        CALLS   #7, G^SYS$GETJPIW
+        .ENDM   $GETJPIW_S
+
+        .MACRO  $GETSYI_S EFN=#0, CSIDADR=0, NODENAME=0, ITMLST, IOSB=0, ASTADR=0, ASTPRM=#0
+        PUSHL   ASTPRM
+        $PUSHADR ASTADR
+        $PUSHADR IOSB
+        $PUSHADR ITMLST
+        $PUSHADR NODENAME
+        $PUSHADR CSIDADR
+        PUSHL   EFN
+        .EXTERNAL SYS$GETSYI
+        CALLS   #7, G^SYS$GETSYI
+        .ENDM   $GETSYI_S
+
+        .MACRO  $GETSYIW_S EFN=#0, CSIDADR=0, NODENAME=0, ITMLST, IOSB=0, ASTADR=0, ASTPRM=#0
+        PUSHL   ASTPRM
+        $PUSHADR ASTADR
+        $PUSHADR IOSB
+        $PUSHADR ITMLST
+        $PUSHADR NODENAME
+        $PUSHADR CSIDADR
+        PUSHL   EFN
+        .EXTERNAL SYS$GETSYIW
+        CALLS   #7, G^SYS$GETSYIW
+        .ENDM   $GETSYIW_S
 
         .MACRO  $ASCEFC_S EFN, NAME, PROT=#0, PERM=#0
         PUSHL   PERM

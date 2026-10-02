@@ -480,7 +480,7 @@ can't reach them.
 
 | Group | Implemented | Stubs: `SS$_ILLSER` |
 | --- | --- | --- |
-| Process control | `$CREPRC`, `$DELPRC`, `$EXIT`, `$HIBER`, `$WAKE`, `$SUSPND`, `$RESUME`, `$SETPRI`, `$SETPRN`, `$CMKRNL`, `$CMEXEC` | `$FORCEX`, `$GETJPI`, `$GETJPIW`, `$DCLEXH`, `$CANEXH`, `$SETPRV` |
+| Process control | `$CREPRC`, `$DELPRC`, `$EXIT`, `$HIBER`, `$WAKE`, `$SUSPND`, `$RESUME`, `$SETPRI`, `$SETPRN`, `$GETJPI`, `$GETJPIW`, `$CMKRNL`, `$CMEXEC` | `$FORCEX`, `$DCLEXH`, `$CANEXH`, `$SETPRV` |
 | Event flags | `$ASCEFC`, `$DACEFC`, `$SETEF`, `$CLREF`, `$READEF`, `$WAITFR`, `$WFLOR`, `$WFLAND` | `$DLCEFC` |
 | Memory | `$CRETVA`, `$DELTVA`, `$EXPREG` | `$CNTREG`, `$SETPRT`, `$LKWSET`, `$ULWSET`, `$LCKPAG`, `$ULKPAG`, `$CRMPSC`, `$MGBLSC` |
 | Time | `$GETTIM`, `$SETIMR`, `$CANTIM` | |
@@ -490,7 +490,7 @@ can't reach them.
 | RMS | `$PARSE`, `$SEARCH`, `$OPEN`, `$CREATE`, `$CONNECT`, `$GET`, `$PUT`, `$DISCONNECT`, `$CLOSE`, `$ERASE`, `$SETDDIR` | |
 | Volumes | `$MOUNT`, `$INIT_VOL` | |
 | ASTs | `$DCLAST`, `$SETAST`, `$ASTEXIT` | |
-| Other | | `$GETSYI` |
+| Other | `$GETSYI`, `$GETSYIW` | |
 
 Arguments the implemented services take but ignore: `$CREPRC`'s
 privileges, quotas, UIC, mailbox and status flags, the logical name
