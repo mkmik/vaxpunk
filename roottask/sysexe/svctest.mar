@@ -11,7 +11,7 @@
         $IODEF
         $LNMDEF
         $RMSDEF
-        .EXTERNAL SYS$SETAST, SYS$EXIT, EXE$GL_RPB
+        .EXTERNAL SYS$DCLEXH, SYS$EXIT, EXE$GL_RPB
 
         .PSECT  DATA, NOEXE, WRT, LONG
 OTHER_NAME:
@@ -128,10 +128,10 @@ SHORT:  .LONG   4                       ; too short a buffer for one
         EXPECT  #SS$_UNASEFC, 11
 
 ; The dispatcher: too few arguments, and a stub.
-        CALLS   #0, G^SYS$SETAST
+        CALLS   #0, G^SYS$DCLEXH
         EXPECT  #SS$_INSFARG, 12
         PUSHL   #0
-        CALLS   #1, G^SYS$SETAST
+        CALLS   #1, G^SYS$DCLEXH
         EXPECT  #SS$_ILLSER, 13
 
 ; Pages.

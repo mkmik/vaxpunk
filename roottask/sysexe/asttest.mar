@@ -1,0 +1,108 @@
+        .TITLE  ASTTEST Checks ASTs
+        .IDENT  /V0.1/
+;
+; $DCLAST's AST is delivered as the service returns, unless $SETAST has
+; ASTs disabled: then when it enables them again. An AST declared in an
+; AST routine waits until that routine returns. $SETIMR's AST is
+; delivered while the process hibernates, and its routine's $WAKE ends
+; the hibernation; another while it computes in user mode, after which
+; every register is as it was. A failed EXPECT exits with 2 * N.
+;
+        .LIBRARY "starlet.mlb"
+        .LIBRARY "sysexe.mlb"
+        $SSDEF
+
+        .PSECT  DATA, NOEXE, WRT, LONG
+MS20:   .LONG   -200000, -1             ; a delta: 20 ms
+COUNT:  .LONG   0                       ; ADD's and WAKER's parameters, summed
+ORDER:  .LONG   0                       ; OUTER's 1 and INNER's 2, a hex digit each
+DONE:   .LONG   0                       ; FLAG ran
+
+        .PSECT  CODE, EXE, LONG
+        .ENTRY  START, ^M<R2, R3, R4, R5, R6, R7, R8, R9, R10, R11>
+        $DCLAST_S ASTADR=ADD, ASTPRM=#1
+        EXPECT  #SS$_NORMAL, 1
+        MOVL    COUNT, R0
+        EXPECT  #1, 2
+
+; Disabled, then enabled again.
+        $SETAST_S ENBFLG=#0
+        EXPECT  #SS$_WASSET, 3
+        $DCLAST_S ASTADR=ADD, ASTPRM=#2
+        MOVL    COUNT, R0
+        EXPECT  #1, 4
+        $SETAST_S ENBFLG=#1
+        EXPECT  #SS$_WASCLR, 5
+        MOVL    COUNT, R0
+        EXPECT  #3, 6
+
+; One declared in an AST routine.
+        $DCLAST_S ASTADR=OUTER
+        MOVL    ORDER, R0
+        EXPECT  #^X12, 7
+
+; In a hibernation, which the AST ends.
+        $SETIMR_S DAYTIM=MS20, ASTADR=WAKER, REQIDT=#4
+        EXPECT  #SS$_NORMAL, 8
+        $HIBER_S
+        MOVL    COUNT, R0
+        EXPECT  #7, 9
+
+; Computing, with Rn = n * 11111111 hex.
+        $SETIMR_S DAYTIM=MS20, ASTADR=FLAG
+        EXPECT  #SS$_NORMAL, 10
+        CLRL    R0
+        MOVL    #^X11111111, R1
+        MOVL    #^X22222222, R2
+        MOVL    #^X33333333, R3
+        MOVL    #^X44444444, R4
+        MOVL    #^X55555555, R5
+        MOVL    #^X66666666, R6
+        MOVL    #^X77777777, R7
+        MOVL    #^X88888888, R8
+        MOVL    #^X99999999, R9
+        MOVL    #^XAAAAAAAA, R10
+        MOVL    #^XBBBBBBBB, R11
+10$:    TSTL    DONE
+        BEQL    10$
+        PUSHR   #^M<R0, R1, R2, R3, R4, R5, R6, R7, R8, R9, R10, R11>
+        CLRL    R1
+20$:    MULL3   #^X11111111, R1, R0
+        CMPL    (SP)[R1], R0
+        BNEQ    80$
+        AOBLEQ  #11, R1, 20$
+        PRINT   "ASTTEST: ok"
+        MOVL    #SS$_NORMAL, R0
+        RET
+80$:    MOVL    #22, R0
+        RET
+
+; ADD: adds its parameter to COUNT.
+        .ENTRY  ADD, ^M<>
+        ADDL2   4(AP), COUNT
+        RET
+
+; OUTER: declares INNER, which runs after it, then puts its digit in ORDER.
+        .ENTRY  OUTER, ^M<>
+        $DCLAST_S ASTADR=INNER
+        MULL2   #16, ORDER
+        INCL    ORDER
+        RET
+
+        .ENTRY  INNER, ^M<>
+        MULL2   #16, ORDER
+        ADDL2   #2, ORDER
+        RET
+
+; WAKER: adds its parameter to COUNT and wakes the process.
+        .ENTRY  WAKER, ^M<>
+        ADDL2   4(AP), COUNT
+        $WAKE_S
+        RET
+
+; FLAG: sets DONE.
+        .ENTRY  FLAG, ^M<>
+        MOVL    #1, DONE
+        RET
+
+        .END    START

@@ -1,0 +1,264 @@
+        .TITLE  ASTDEL  Asynchronous system traps
+        .IDENT  /V0.1/
+;
+; An AST is a call a process gets in one of its access modes, on top of
+; whatever it was doing there, as on VMS (docs/adr/0011-asts-on-the-kernel-stack.md).
+; SCH$QAST puts an AST control block on the process's AST queue, by mode,
+; kernel's first, and keeps the HWPCB's ASTSR, a bit per mode with an ACB
+; queued, and ASTEN, a bit per mode whose ASTs may be delivered: those
+; $SETAST enabled, less those whose AST routine runs. The PAL requests the
+; AST delivery interrupt, at IPL$_ASTDEL, when IPL is below it and a mode
+; with a bit in both is the current mode or an inner one, as the VAX's REI
+; did with ASTLVL. SCH$ASTDEL delivers there, and SCH$WAIT ends a wait to
+; deliver too, in the mode that called the service waiting.
+;
+; EXE$ASTDEL calls an AST routine as EXE$CTRLY calls the command
+; interpreter: it saves the registers and IPL on the kernel stack and REIs
+; below them, to EXE$ASTDISP in the AST's mode, which calls the routine and
+; then $ASTEXIT, which puts the stack pointer back and returns.
+;
+        .LIBRARY "lib.mlb"
+        .LIBRARY "starlet.mlb"
+        $IPLDEF
+        $PALDEF
+        $PCBDEF
+        $PSLDEF
+        $STATEDEF
+        $HWPCBDEF
+        $INTSTKDEF
+        $ACBDEF
+        $SSDEF
+
+        .EXTERNAL SCH$GL_CURPCB, SCH$GL_PCBVEC, SCH$WAKEPCB
+        .EXTERNAL EXE$ALONONPAGED, EXE$DEANONPGDSIZ, EXE$REISP, EXE$ASTDISP
+
+        .PSECT  $CODE$
+
+; SCH$QAST: R5 = an ACB, its mode and PID set. Queues it to the process,
+; after its ACBs of that mode and the inner ones, and ends its wait, if it
+; waits, so that it can deliver the AST. If the process is gone, frees the
+; ACB. R0 = SS$_NORMAL or SS$_NONEXPR. IPL$_SYNCH. Uses R1-R3.
+SCH$QAST::
+        MOVZWL  ACB$L_PID(R5), R1
+        CMPL    R1, #SCH$C_MAXPIX
+        BGEQU   80$
+        MOVL    SCH$GL_PCBVEC[R1], R1
+        BEQL    80$
+        CMPL    PCB$L_PID(R1), ACB$L_PID(R5)
+        BNEQ    80$
+        MOVAQ   PCB$Q_ASTQFL(R1), R2
+        MOVL    R2, R3
+10$:    MOVL    (R3), R3                ; the first ACB of an outer mode
+        CMPL    R3, R2
+        BEQL    20$
+        CMPB    ACB$B_RMOD(R3), ACB$B_RMOD(R5)
+        BLEQU   10$
+20$:    INSQUE  (R5), @4(R3)            ; before it
+        PUSHL   R4
+        MOVL    R1, R4
+        BSBB    ASTBITS
+        CMPL    PCB$L_STATE(R4), #SCH$C_SUSP    ; a wait state
+        BGEQU   30$
+        BSBW    SCH$WAKEPCB
+30$:    MOVL    (SP)+, R4
+        MOVL    #SS$_NORMAL, R0
+        RSB
+80$:    MOVL    R5, R0
+        MOVZWL  ACB$W_SIZE(R5), R1
+        BSBW    EXE$DEANONPGDSIZ
+        MOVL    #SS$_NONEXPR, R0
+        RSB
+
+; ASTBITS: R4 = a PCB. Sets its HWPCB's ASTSR from the modes of its ACBs,
+; and ASTEN from PCB$B_ASTEN less PCB$B_ASTACT. IPL$_SYNCH. Uses R0-R2.
+ASTBITS:
+        PUSHL   R3
+        CLRL    R1
+        MOVAQ   PCB$Q_ASTQFL(R4), R2
+        MOVL    R2, R0
+10$:    MOVL    (R0), R0
+        CMPL    R0, R2
+        BEQL    20$
+        MOVZBL  ACB$B_RMOD(R0), R3
+        ASHL    R3, #1, R3
+        BISL2   R3, R1
+        BRB     10$
+20$:    MOVL    PCB$L_HWPCB(R4), R0
+        MOVB    R1, HWPCB$B_ASTSR(R0)
+        BICB3   PCB$B_ASTACT(R4), PCB$B_ASTEN(R4), HWPCB$B_ASTEN(R0)
+        MOVL    (SP)+, R3
+        RSB
+
+; SCH$ASTDEL: the AST delivery interrupt, at IPL$_ASTDEL, which the PAL
+; requests when an AST waits that the interrupted mode lets through.
+; Delivers it, and those after it, in that mode.
+SCH$ASTDEL::
+        PUSHR   #^M<R0, R4>
+        EXTZV   #PSL$V_CURMOD, #2, 8+INTSTK$Q_PS(SP), R0
+        MOVL    SCH$GL_CURPCB, R4
+        BSBB    EXE$ASTDEL
+        POPR    #^M<R0, R4>
+        REI
+
+; EXE$ASTDEL: R4 = the current PCB, R0 = the access mode the process is
+; in. Delivers the ASTs queued for that mode or an inner one whose ASTEN
+; bit is set, kernel mode's first, and returns when none is left. An
+; executive routine, ACB$L_KAST, is JSB'd here. For an AST routine, it
+; saves the registers and IPL on the kernel stack, keeps where in
+; PCB$L_ASTSP, and REIs below them to EXE$ASTDISP in the AST's mode, on
+; that mode's stack; $ASTEXIT comes back here. Keeps every register.
+EXE$ASTDEL::
+        PUSHR   #^M<R0, R1, R2, R3, R4, R5, R6, R7, R8, R9, R10, R11, AP, FP>
+        DSBINT  #IPL$_SYNCH
+NEXT:   MOVL    PCB$L_HWPCB(R4), R1
+        MOVAQ   PCB$Q_ASTQFL(R4), R2
+        MOVL    R2, R5
+10$:    MOVL    (R5), R5
+        CMPL    R5, R2
+        BEQL    90$
+        MOVZBL  ACB$B_RMOD(R5), R3
+        CMPL    R3, 4(SP)               ; the mode the process is in
+        BGTRU   90$                     ; an outer one's, and so are the rest
+        BBC     R3, HWPCB$B_ASTEN(R1), 10$
+        REMQUE  (R5), R5
+        BSBB    ASTBITS
+        MOVL    ACB$L_KAST(R5), R0
+        BEQL    20$
+        JSB     (R0)
+        BRB     NEXT
+20$:    MOVL    ACB$L_ASTPRM(R5), R6
+        MOVL    ACB$L_AST(R5), R7
+        MOVL    R5, R0
+        MOVZWL  ACB$W_SIZE(R5), R1
+        BSBW    EXE$DEANONPGDSIZ
+        ASHL    R3, #1, R0
+        BISB2   R0, PCB$B_ASTACT(R4)
+        BSBB    ASTBITS
+        PUSHL   R3                      ; its mode
+        PUSHL   PCB$L_ASTSP(R4)         ; the AST routine this one interrupts
+        MOVL    SP, PCB$L_ASTSP(R4)
+        BICL2   #15, SP
+        MOVL    SP, R5                  ; kernel mode's stack, or
+        TSTL    R3
+        BEQL    30$
+        ASHL    #3, R3, R5              ; the mode's own, from the HWPCB
+        ADDL2   PCB$L_HWPCB(R4), R5
+        MOVL    (R5), R5
+        BICL2   #15, R5
+30$:    ASHL    #PSL$V_PRVMOD, R3, R2
+        ASHL    #PSL$V_CURMOD, R3, R3
+        BISL2   R2, R3
+        MOVL    R6, R0
+        MOVL    R7, R1
+        MOVAB   G^EXE$ASTDISP, R2
+        JMP     G^EXE$REISP
+90$:    ENBINT
+        POPR    #^M<R0, R1, R2, R3, R4, R5, R6, R7, R8, R9, R10, R11, AP, FP>
+        RSB
+
+; EXE$FLUSHAST: R4 = the current PCB, R0 = an access mode. Frees its ACBs
+; for that mode and the outer ones, enables their ASTs again, and forgets
+; the AST routines that run, whose state on the kernel stack the caller
+; is throwing away: image rundown, for user mode, and process rundown.
+; IPL$_SYNCH. Uses R0-R3.
+EXE$FLUSHAST::
+        PUSHL   R5
+        MOVL    R0, R3
+        MOVAQ   PCB$Q_ASTQFL(R4), R2
+        MOVL    (R2), R5
+10$:    CMPL    R5, R2
+        BEQL    20$
+        MOVL    R5, R0
+        MOVL    (R5), R5                ; the next, before this one goes
+        CMPB    ACB$B_RMOD(R0), R3
+        BLSSU   10$
+        REMQUE  (R0), R0
+        MOVZWL  ACB$W_SIZE(R0), R1
+        BSBW    EXE$DEANONPGDSIZ
+        BRB     10$
+20$:    ASHL    R3, #1, R1              ; the mode's bit and the outer ones'
+        DECL    R1
+        BICL3   R1, #^XF, R1
+        BISB2   R1, PCB$B_ASTEN(R4)
+        CLRB    PCB$B_ASTACT(R4)
+        CLRL    PCB$L_ASTSP(R4)
+        BSBW    ASTBITS
+        MOVL    (SP)+, R5
+        RSB
+
+; PRVMODE: R0 = the previous mode, the mode that called the service
+; running.
+PRVMODE:
+        CALL_PAL #PAL$_RD_PS
+        EXTZV   #PSL$V_PRVMOD, #2, R0, R0
+        RSB
+
+; $DCLAST astadr, astprm, acmode: queues an AST to the current process,
+; which calls astadr with astprm, in acmode or the caller's mode, whichever
+; is the outer one. SS$_INSFMEM if there is no pool for it.
+        .ENTRY  EXE$DCLAST, ^M<R2, R3, R4, R5>
+        MOVL    #ACB$K_LENGTH, R1
+        BSBW    EXE$ALONONPAGED
+        BLBC    R0, 90$
+        MOVL    R2, R5
+        MOVW    R1, ACB$W_SIZE(R5)
+        MOVB    #DYN$C_ACB, ACB$B_TYPE(R5)
+        MOVL    SCH$GL_CURPCB, R4
+        MOVL    PCB$L_PID(R4), ACB$L_PID(R5)
+        MOVL    4(AP), ACB$L_AST(R5)
+        MOVL    8(AP), ACB$L_ASTPRM(R5)
+        CLRL    ACB$L_KAST(R5)
+        BSBB    PRVMODE
+        BICL3   #^C3, 12(AP), R1
+        CMPL    R1, R0
+        BGEQU   10$
+        MOVL    R0, R1
+10$:    MOVB    R1, ACB$B_RMOD(R5)
+        DSBINT  #IPL$_SYNCH
+        BSBW    SCH$QAST
+        ENBINT
+90$:    RET
+
+; $SETAST enbflg: enables the ASTs of the caller's mode if enbflg's low bit
+; is set, else disables them. SS$_WASSET if they were enabled, else
+; SS$_WASCLR.
+        .ENTRY  EXE$SETAST, ^M<R2, R3, R4>
+        MOVL    SCH$GL_CURPCB, R4
+        BSBB    PRVMODE
+        MOVL    R0, R3
+        MOVL    #SS$_WASCLR, R2
+        DSBINT  #IPL$_SYNCH
+        BBC     R3, PCB$B_ASTEN(R4), 10$
+        MOVL    #SS$_WASSET, R2
+10$:    ASHL    R3, #1, R3
+        BICB2   R3, PCB$B_ASTEN(R4)
+        BLBC    4(AP), 20$
+        BISB2   R3, PCB$B_ASTEN(R4)
+20$:    PUSHL   R2
+        BSBW    ASTBITS
+        MOVL    (SP)+, R0
+        ENBINT
+        RET
+
+; $ASTEXIT: ends the AST routine that runs, the one delivered last: puts
+; the kernel stack back to where EXE$ASTDEL left it, which delivers the
+; next AST or returns to what the routine interrupted. EXE$ASTDISP calls it
+; when the routine returns. With no AST routine running, it returns
+; SS$_NORMAL and does nothing.
+        .ENTRY  EXE$ASTEXIT, ^M<>
+        MOVL    SCH$GL_CURPCB, R4
+        DSBINT  #IPL$_SYNCH
+        MOVL    PCB$L_ASTSP(R4), R0
+        BEQL    90$
+        MOVL    R0, SP
+        MOVL    (SP)+, PCB$L_ASTSP(R4)
+        MOVL    (SP)+, R3               ; its mode
+        ASHL    R3, #1, R0
+        BICB2   R0, PCB$B_ASTACT(R4)
+        BSBW    ASTBITS
+        BRW     NEXT
+90$:    ENBINT
+        MOVL    #SS$_NORMAL, R0
+        RET
+
+        .END

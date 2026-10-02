@@ -19,7 +19,9 @@ interval timer a thread of the PAL's, and
 [ADR-0005](../adr/0005-access-modes-are-threads.md), which gives each access
 mode of a process a thread and an address space of its own, and
 [ADR-0007](../adr/0007-system-disk-files-11-and-rms.md), which has the PAL
-drive the system disk.
+drive the system disk, and
+[ADR-0011](../adr/0011-asts-on-the-kernel-stack.md), which has it request
+AST delivery from bits in the HWPCB.
 [DESIGN-0002](0002-executive-processes.md) covers what the executive does
 with it.
 
@@ -192,7 +194,8 @@ thread for each outer mode the process has entered, each in an address
 space of its own ([ADR-0005](../adr/0005-access-modes-are-threads.md)). The
 executive names it by its hardware PCB: a 128-byte, quadword-aligned block
 (`$HWPCBDEF`) whose first four quadwords are the stack pointers of kernel,
-executive, supervisor and user mode. Only the current context's thread of
+executive, supervisor and user mode, followed by Alpha's ASTEN and ASTSR, a
+byte each (*Interrupts and exceptions*). Only the current context's thread of
 the current mode runs; `MFPR #PR$_PCBB` returns its HWPCB.
 
 `SWPCTX` (a0 = the new HWPCB) gives the CPU to the context of the HWPCB:
@@ -233,8 +236,8 @@ To deliver, the PAL pushes a frame and jumps to the vector, in the mode
 the event goes to:
 - **The same mode:** the frame goes on the current stack, 16-byte aligned
   and below both VAX SP and ARM64's `sp`.
-- **An inner mode:** the PAL saves the current mode's VAX SP in the HWPCB
-  and pushes the frame on the inner mode's stack, from the HWPCB, then
+- **An inner mode:** the PAL saves the current mode's stack pointer in the
+  HWPCB, the lower of VAX SP and `sp`, and pushes the frame on the inner mode's stack, from the HWPCB, then
   moves the CPU to that mode's thread: it copies the registers and stops
   the thread it leaves.
 
@@ -268,6 +271,13 @@ every register it uses, R0 included.
   pending interrupt above IPL, at its level, when a call lowers IPL: `MTPR
   #PR$_IPL`, `REI`, a new context's start. A request above IPL is delivered
   on the `MTPR` that makes it.
+- **ASTs.** The HWPCB's `ASTSR` byte has bit n set while an AST for mode
+  n is queued, and `ASTEN` while mode n's ASTs may be delivered. The
+  executive writes both, for any process; the PAL reads the current
+  context's each time it may deliver, and requests software interrupt
+  level 2, the VAX's AST delivery interrupt, if IPL is below 2 and a bit
+  set in both is the current mode's or an inner one's, as the VAX's `REI`
+  did with `ASTLVL`.
 - **The interval timer.** Every 10 ms the PAL requests an interrupt at
   IPL 24, the VAX's interval timer's, through vector 0xC0. If IPL is below
   24, the PAL delivers it at once: it stops the current context wherever it
@@ -418,6 +428,7 @@ unused.
 | 0x85 | `CHMU` | Alpha | a0 = code | | delivers through the SCB, in user mode |
 | 0x8F | `PROBER` | Alpha | a0 = address, a1 = length, a2 = mode | v0 = 1 if readable | checks a mode's read access |
 | 0x90 | `PROBEW` | Alpha | a0 = address, a1 = length, a2 = mode | v0 = 1 if writable | checks a mode's write access |
+| 0x91 | `RD_PS` | Alpha | | v0 = PSL | the current and previous modes, IPL and the condition codes |
 | 0x92 | `REI` | Alpha | | | pops a frame: PC, PSL, registers, SPs |
 
 `MTPR_TXDB` stands in for the VAX console transmit register: VMS's
@@ -453,7 +464,7 @@ Privileged, 0x00-0x3F:
 | 0x03, 0x04 | `LDQP`, `STQP` | dropped: the executive has no physical addresses |
 | 0x05 | `SWPCTX` | changed, implemented: contexts are threads, made on first switch, deleted by `DELCTX` |
 | 0x06 | `MFPR_ASN` | dropped: address space numbers are seL4's |
-| 0x07, 0x08, 0x26, 0x27 | `MTPR_ASTEN`, `MTPR_ASTSR`, `MFPR_ASTEN`, `MFPR_ASTSR` | kept |
+| 0x07, 0x08, 0x26, 0x27 | `MTPR_ASTEN`, `MTPR_ASTSR`, `MFPR_ASTEN`, `MFPR_ASTSR` | changed: bytes of the HWPCB, which the executive writes and the PAL reads ([ADR-0011](../adr/0011-asts-on-the-kernel-stack.md)) |
 | 0x09, 0x0A | `CSERVE`, `SWPPAL` | dropped: firmware services |
 | 0x0B, 0x0C | `MFPR_FEN`, `MTPR_FEN` | kept, with floating point |
 | 0x0D | `MTPR_IPIR` | kept, with more than one CPU |
@@ -482,8 +493,8 @@ Unprivileged, 0x80-0xBF:
 | 0x86 | `IMB` | kept |
 | 0x87-0x8E, 0x93-0x9A, 0xA2-0xA9 | `INSQHIL` ... `REMQUEQ/D`, the resident forms | kept; `INSQUE` and `REMQUE` are inline code, since one thread runs at a time |
 | 0x8F, 0x90 | `PROBER`, `PROBEW` | kept, implemented |
-| 0x91, 0x92 | `RD_PS`, `REI` | kept; `REI` implemented |
-| 0x9B, 0x9C | `SWASTEN`, `WR_PS_SW` | kept |
+| 0x91, 0x92 | `RD_PS`, `REI` | kept, implemented |
+| 0x9B, 0x9C | `SWASTEN`, `WR_PS_SW` | `SWASTEN` changed: `$SETAST` writes `ASTEN`; `WR_PS_SW` kept |
 | 0x9D | `RSCC` | kept |
 | 0x9E, 0x9F | `READ_UNQ`, `WRITE_UNQ` | dropped: user mode writes TPIDR_EL0 itself |
 | 0xA0, 0xA1 | `AMOVRR`, `AMOVRM` | dropped: ARM64 has atomics |

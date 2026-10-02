@@ -173,6 +173,10 @@ executive feature:
 - **HOG** spins without ever waiting. **NUDGE** can only run if the timer
   interrupt takes the CPU away from HOG, so it tests preemption.
 - **TIMETEST** checks reading the time, timers and scheduled wakeups.
+- **ASTTEST** checks ASTs: one `$DCLAST` declares, which runs as the
+  service returns; one held back by `$SETAST` until ASTs are enabled
+  again; a timer's, whose routine wakes it from `$HIBER`; and one that
+  comes while it computes, after which its registers are as they were.
 - STARTUP prints `STARTUP: done` and exits, and DCL prompts again while
   the others finish.
 

@@ -121,8 +121,9 @@ CODE = 0
         STUB    CRMPSC, 12
         STUB    MGBLSC, 7
 ; ASTs, time, I/O, logical names, system information
-        STUB    DCLAST, 3
-        STUB    SETAST, 1
+        SERVICE DCLAST, 3
+        SERVICE SETAST, 1
+        SERVICE ASTEXIT, 0
         SERVICE GETTIM, 1
         SERVICE SETIMR, 4
         SERVICE CANTIM, 2
@@ -267,6 +268,14 @@ EXE$USRSTART::
         CALLS   #0, (R1)
         PUSHL   R0
         CALLS   #1, SYS$EXIT
+
+; EXE$ASTDISP: where an AST routine is called, in the AST's access mode,
+; with R1 = the routine and R0 = its parameter: calls it with the
+; parameter, then $ASTEXIT, which goes back to what the AST interrupted.
+EXE$ASTDISP::
+        PUSHL   R0
+        CALLS   #1, (R1)
+        CALLS   #0, SYS$ASTEXIT
 
 ; EXE$CLISTART: where a process enters its command interpreter, in
 ; supervisor mode, with R1 = its transfer address and R0 = the status of

@@ -32,6 +32,7 @@
         $PRTDEF
         $VADEF
         $LNMDEF
+        $ACBDEF
         $SSDEF
 
         .EXTERNAL SCH$GL_CURPCB, SCH$GL_SWPPCB, SCH$GL_PCBVEC, SCH$GL_SEQ
@@ -42,7 +43,7 @@
         .EXTERNAL MMG$SETPRT, EXE$RMVTIMQ, EXE$USRSTART, EXE$CLISTART
         .EXTERNAL FIL$OPENFILE, RMS$RUNDOWN
         .EXTERNAL EXE$OUTZSTRING, EXE$OUTCSTRING, EXE$OUTHEX, EXE$OUTCRLF
-        .EXTERNAL LNM$CREATE, LNM$DELTBL
+        .EXTERNAL LNM$CREATE, LNM$DELTBL, SCH$QAST, EXE$FLUSHAST
 
 KSTACK = 16384                          ; a process's kernel stack
 BLOCK = 512                             ; an image's blocks
@@ -252,6 +253,13 @@ EXE$NAMPID::
         MOVC3   #64, PCB$T_DEFDIR(R4), PCB$T_DEFDIR(R8)
         POPR    #^M<R3, R4>
         MOVAB   PCB$Q_HWPCB(R8), PCB$L_HWPCB(R8)
+        MOVL    #VA$C_P0BASE, PCB$L_FREP0VA(R8) ; no pages yet, should it be deleted first
+        MOVL    #VA$C_P1END, PCB$L_FREP1VA(R8)
+        MOVAQ   PCB$Q_ASTQFL(R8), R0    ; no ASTs, all of them enabled
+        MOVL    R0, (R0)
+        MOVL    R0, 4(R0)
+        MOVB    #^XF, PCB$B_ASTEN(R8)
+        MOVB    #^XF, PCB$Q_HWPCB+HWPCB$B_ASTEN(R8)
         BSBW    PPNAMES
         BLBC    R0, 80$
 ; The kernel stack, and on it the frame the PAL pops, as REI does, when
@@ -354,13 +362,9 @@ PPNAMES:
 ; EXE$PROCSTRT: where a process starts, in kernel mode at IPL 0 on its
 ; kernel stack. Makes its stacks in P1, executive, supervisor and user,
 ; and activates its image. Calls a command interpreter in supervisor mode,
-; at EXE$CLIENTRY, and any other image in user mode, at EXE$USRENTRY. A
-; process deleted before it ran deletes itself.
+; at EXE$CLIENTRY, and any other image in user mode, at EXE$USRENTRY.
 EXE$PROCSTRT::
         MOVL    SCH$GL_CURPCB, R4
-        BBC     #PCB$V_DELPEN, PCB$L_STS(R4), 10$
-        BRW     EXE$DELSELF
-10$:    MOVL    #VA$C_P0BASE, PCB$L_FREP0VA(R4)
         MOVL    #VA$C_STACKS, PCB$L_FREP1VA(R4)
         MOVL    #VA$C_STACKS, R0
         MOVL    #<VA$C_ESP-VA$C_STACKS>/MMG$C_PAGESIZE, R1
@@ -411,12 +415,17 @@ CLICALL:
         MOVAB   EXE$CLISTART, R2
         MOVL    #<PSL$C_SUPER@PSL$V_CURMOD>!<PSL$C_SUPER@PSL$V_PRVMOD>, R3
         MOVL    #VA$C_SSP, R5
-        BRB     REISP
+        BRB     EXE$REISP
 ; REIOUT: R2 = a PC, R3 = a PSL with an outer mode, R5 = that mode's stack
 ; pointer. Empties the kernel stack and REIs there, with R0 and R1 as they
-; are. REISP: the same, on the kernel stack as it is, 16-byte aligned.
+; are.
 REIOUT: ADDL3   #KSTACK, PCB$L_KSTACK(R4), SP
-REISP:  SUBL2   #INTSTK$K_LENGTH, SP
+
+; EXE$REISP: R2 = a PC, R3 = a PSL, R5 = the stack pointer of its mode.
+; REIs there on the kernel stack as it is, 16-byte aligned, with R0 and R1
+; as they are, leaving what is above it there. Doesn't return.
+EXE$REISP::
+        SUBL2   #INTSTK$K_LENGTH, SP
         MOVL    #INTSTK$K_LENGTH/8, R6
         MOVL    SP, R7
 10$:    CLRQ    (R7)+
@@ -603,10 +612,11 @@ IMG$ACTIVATE::
 10$:    BRW     EXE$DELSELF
 
 ; EXE$IMGRUNDOWN: R4 = the current PCB. Gives back what the image that ran
-; in it holds: its timer queue entries, its pages in P0, its common event
-; flag clusters, and its channels and files, all but the command
-; interpreter's, PCB$L_CLICHANS and PCB$L_CLIFILES. An image CTRL/Y
-; stopped can't be continued any more. Uses R0-R3.
+; in it holds: its timer queue entries, its user mode ASTs, its pages in
+; P0, its common event flag clusters, and its channels and files, all but
+; the command interpreter's, PCB$L_CLICHANS and PCB$L_CLIFILES. An image
+; CTRL/Y stopped can't be continued any more, nor AST routines that ran.
+; Uses R0-R3.
 ; ponytail: what the command interpreter holds too, but its channels; it
 ; uses nothing else yet.
 EXE$IMGRUNDOWN::
@@ -618,6 +628,8 @@ EXE$IMGRUNDOWN::
         DSBINT  #IPL$_SYNCH
         CLRL    PCB$L_CTRLY(R4)
         BICL2   #<1@PCB$V_CTRLY>, PCB$L_STS(R4)
+        MOVL    #PSL$C_USER, R0
+        BSBW    EXE$FLUSHAST
         ENBINT
         BSBW    SCH$DACEFC_ALL
         MCOML   PCB$L_CLICHANS(R4), R0
@@ -637,12 +649,16 @@ DELP0:  MOVL    #VA$C_P0BASE, R0
         RSB
 
 ; EXE$RUNDOWN: R4 = the current PCB. Gives back what its process holds:
-; what EXE$IMGRUNDOWN does, then its logical names, its pages in P1, its
-; other channels and files, and its slot, unless $DELPRC gave that to
-; another process already. Runs in the process's own context, since P0 and P1 are the current process's.
-; Uses R0-R3.
+; what EXE$IMGRUNDOWN does, then its other ASTs, its logical names, its
+; pages in P1, its other channels and files, and its slot, unless
+; $DELPRC gave that to another process already. Runs in the process's own
+; context, since P0 and P1 are the current process's. Uses R0-R3.
 EXE$RUNDOWN::
         BSBW    EXE$IMGRUNDOWN
+        DSBINT  #IPL$_SYNCH
+        CLRL    R0
+        BSBW    EXE$FLUSHAST
+        ENBINT
         MOVAQ   PCB$Q_LNMHD(R4), R2
         BSBW    LNM$DELTBL
         MOVL    PCB$L_FREP1VA(R4), R0
@@ -690,11 +706,10 @@ EXE$DELETEPCB::
 
 ; $DELPRC pidadr, prcnam: deletes a process, the current one if none is
 ; named. Another one's P0 and P1 aren't the current process's, so it runs
-; itself down: it leaves its slot at once, so no one finds it any more,
-; ends any wait, and deletes itself the next time it has the CPU, when
-; SCH$SCHED returns to it or it starts.
-; ponytail: a flag the scheduler checks, standing in for VMS's kernel AST.
-        .ENTRY  EXE$DELPRC, ^M<R2, R3, R4>
+; itself down, in a kernel mode AST, DELKAST, which ends its wait or
+; suspension; it leaves its slot at once, so no one finds it any more.
+; SS$_INSFMEM if there is no pool for the AST.
+        .ENTRY  EXE$DELPRC, ^M<R2, R3, R4, R5>
         MOVL    SCH$GL_CURPCB, R4
         MOVL    4(AP), R2
         MOVL    8(AP), R3
@@ -706,14 +721,23 @@ EXE$DELETEPCB::
         CMPL    R1, R4
         BEQL    50$
         MOVL    R1, R4
+        MOVL    #ACB$K_LENGTH, R1
+        BSBW    EXE$ALONONPAGED
+        BLBC    R0, 90$
+        MOVL    R2, R5
+        MOVW    R1, ACB$W_SIZE(R5)
+        MOVB    #DYN$C_ACB, ACB$B_TYPE(R5)
+        CLRB    ACB$B_RMOD(R5)
+        MOVL    PCB$L_PID(R4), ACB$L_PID(R5)
+        MOVAB   DELKAST, ACB$L_KAST(R5)
+        BICL2   #<1@PCB$V_SUSPEN>, PCB$L_STS(R4)
+        CMPL    PCB$L_STATE(R4), #SCH$C_SUSP
+        BNEQ    30$
+        BSBW    SCH$WAKEPCB
+30$:    BSBW    SCH$QAST                ; and it ends a wait
         MOVZWL  PCB$L_PID(R4), R0
         CLRL    SCH$GL_PCBVEC[R0]
-        BISL2   #<1@PCB$V_DELPEN>, PCB$L_STS(R4)
-        BICL2   #<1@PCB$V_SUSPEN>, PCB$L_STS(R4)
-        CMPL    PCB$L_STATE(R4), #SCH$C_COM
-        BEQL    30$
-        BSBW    SCH$WAKEPCB
-30$:    ENBINT
+        ENBINT
         MOVL    #SS$_NORMAL, R0
         RET
 50$:    ENBINT
@@ -721,6 +745,14 @@ EXE$DELETEPCB::
 80$:    MOVL    #SS$_NOPRIV, R0
 90$:    ENBINT
         RET
+
+; DELKAST: $DELPRC's kernel mode AST. R4 = the current PCB, R5 = the ACB:
+; frees it and deletes the process.
+DELKAST:
+        MOVL    R5, R0
+        MOVZWL  ACB$W_SIZE(R5), R1
+        BSBW    EXE$DEANONPGDSIZ
+        BRW     EXE$DELSELF
 
 ; $HIBER: sleeps until a $WAKE, or returns at once if one came since the
 ; last $HIBER.

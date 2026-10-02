@@ -20,13 +20,16 @@
         .LIBRARY "starlet.mlb"
         $PRDEF
         $IPLDEF
+        $PALDEF
+        $PSLDEF
         $PCBDEF
         $STATEDEF
         $RPBDEF
         $TQEDEF
+        $ACBDEF
         $SSDEF
 
-        .EXTERNAL SCH$GL_CURPCB, SCH$QEND, SCH$WAKE, SCH$GETEFC, SCH$POSTEF
+        .EXTERNAL SCH$GL_CURPCB, SCH$QEND, SCH$WAKE, SCH$GETEFC, SCH$POSTEF, SCH$QAST
         .EXTERNAL EXE$NAMPID, EXE$ALONONPAGED, EXE$DEANONPGDSIZ, EXE$GL_RPB
 
 TICK = 100000                           ; 10 ms, the PAL's TICK_US, in 100 ns units
@@ -120,8 +123,9 @@ EXE$SWTIMINT::
 
 ; TQEXPIRE: R6 = a timer queue entry that is due, off the queue. Sets its
 ; event flag or wakes its process, if the process is still there, then
-; frees it, or puts it back on the queue if it repeats. IPL$_SYNCH. Uses
-; R0-R5.
+; frees it, or puts it back on the queue if it repeats. A $SETIMR entry
+; with an AST becomes its ACB, and goes on the process's AST queue.
+; IPL$_SYNCH. Uses R0-R5.
 TQEXPIRE:
         MOVAL   TQE$L_PID(R6), R2
         CLRL    R3
@@ -137,7 +141,12 @@ TQEXPIRE:
         BBSS    R2, (R1), 10$
         BSBW    SCH$POSTEF
 10$:    MOVL    (SP)+, R4
-        BRB     80$
+        TSTL    TQE$L_AST(R6)
+        BEQL    80$
+        MOVB    TQE$B_RMOD(R6), ACB$B_RMOD(R6)
+        CLRL    ACB$L_KAST(R6)
+        MOVL    R6, R5
+        BRW     SCH$QAST
 20$:    BSBW    SCH$WAKE
         CMPB    TQE$B_RQTYPE(R6), #TQE$C_WKREPT
         BNEQ    80$
@@ -259,11 +268,10 @@ ABSTIM:
         RET
 
 ; $SETIMR efn, daytim, astadr, reqidt: clears event flag efn, and sets it
-; at daytim, a time or a delta. $CANTIM cancels it by reqidt.
-; ponytail: no ASTs yet, so an astadr is SS$_ILLSER.
+; at daytim, a time or a delta, and then, if there is astadr, queues an
+; AST to the caller's mode, which calls astadr with reqidt. $CANTIM
+; cancels it by reqidt.
         .ENTRY  EXE$SETIMR, ^M<R2, R3, R4, R5>
-        TSTL    12(AP)
-        BNEQ    80$
         TSTL    8(AP)
         BEQL    85$
         IFNORD  #8, @8(AP), 85$
@@ -277,7 +285,11 @@ ABSTIM:
         MOVB    #TQE$C_TMSNGL, TQE$B_RQTYPE(R5)
         MOVL    PCB$L_PID(R4), TQE$L_PID(R5)
         MOVL    4(AP), TQE$L_EFN(R5)
+        MOVL    12(AP), TQE$L_AST(R5)
         MOVL    16(AP), TQE$L_ASTPRM(R5)
+        CALL_PAL #PAL$_RD_PS
+        EXTZV   #PSL$V_PRVMOD, #2, R0, R0
+        MOVB    R0, TQE$B_RMOD(R5)
         MOVL    8(AP), R2
         BSBW    ABSTIM
         MOVQ    R0, TQE$Q_TIME(R5)
@@ -285,8 +297,6 @@ ABSTIM:
         BSBW    EXE$INSTIMQ
         ENBINT
         MOVL    #SS$_NORMAL, R0
-        RET
-80$:    MOVL    #SS$_ILLSER, R0
         RET
 85$:    MOVL    #SS$_ACCVIO, R0
 90$:    RET
