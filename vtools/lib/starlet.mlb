@@ -12,7 +12,9 @@ SS$_EXQUOTA = 28
 SS$_NOPRIV = 36
 SS$_ABORT = 44
 SS$_BADIMGHDR = 68
+SS$_DRVERR = 140
 SS$_DUPLNAM = 148
+SS$_ILLBLKNUM = 220
 SS$_ILLEFC = 236
 SS$_ILLIOFUNC = 244
 SS$_ILLPAGCNT = 252
@@ -31,7 +33,195 @@ SS$_OPCDEC = 1084
 SS$_NONEXPR = 2280
 SS$_NOSUCHDEV = 2312
 SS$_NOSUCHFILE = 2320
+SS$_BADCHKSUM = 2056
+SS$_BADFILEHDR = 2064
+SS$_BADIRECTORY = 2088
+SS$_ENDOFFILE = 2160
+SS$_NOMOREFILES = 2352
         .ENDM   $SSDEF
+
+; $RMSDEF: RMS status codes, as VMS numbers them.
+        .MACRO  $RMSDEF
+RMS$_NORMAL = ^X10001
+RMS$_EOF = ^X1827A                      ; end of file
+RMS$_FNF = ^X18292                      ; file not found
+RMS$_WLK = ^X182BA                      ; device write locked: the volume is read-only
+RMS$_NMF = ^X182CA                      ; no more files
+RMS$_RTB = ^X181A8                      ; record too big for the user's buffer
+RMS$_DNF = ^X1C04A                      ; directory not found
+RMS$_DEV = ^X184C4                      ; bad device
+RMS$_DIR = ^X184CC                      ; bad directory
+RMS$_DME = ^X184D4                      ; dynamic memory exhausted
+RMS$_ESA = ^X184FC                      ; no expanded string area
+RMS$_ESS = ^X18504                      ; expanded string area too small
+RMS$_FAB = ^X1850C                      ; not a FAB
+RMS$_FNM = ^X1852C                      ; bad file name
+RMS$_IFI = ^X18564                      ; bad internal file index
+RMS$_ISI = ^X18584                      ; bad internal stream index
+RMS$_NAM = ^X185DC                      ; not a NAM block
+RMS$_RAB = ^X1863C                      ; not a RAB
+RMS$_RFM = ^X18664                      ; record format RMS can't read
+RMS$_RSS = ^X18694                      ; resultant string area too small
+RMS$_SYN = ^X186D4                      ; file specification syntax
+RMS$_VER = ^X186FC                      ; bad version
+RMS$_WLD = ^X18744                      ; wildcard where one may not be
+        .ENDM   $RMSDEF
+
+; $FABDEF: the file access block. Only RMS's sequential reads use these.
+        .MACRO  $FABDEF
+FAB$C_BID = 3
+FAB$C_BLN = 80
+FAB$B_BID = 0
+FAB$B_BLN = 1
+FAB$W_IFI = 2                           ; internal file index, from $OPEN
+FAB$L_STS = 8                           ; the status of the last operation
+FAB$L_STV = 12
+FAB$L_ALQ = 16                          ; blocks allocated
+FAB$B_FAC = 22                          ; access wanted: FAB$M_
+FAB$B_ORG = 29                          ; organization: FAB$C_SEQ
+FAB$B_RAT = 30                          ; record attributes: FAB$M_CR
+FAB$B_RFM = 31                          ; record format: FAB$C_
+FAB$L_NAM = 40                          ; a NAM block, or 0
+FAB$L_FNA = 44                          ; the file specification
+FAB$L_DNA = 48                          ; the default one
+FAB$B_FNS = 52                          ; their lengths
+FAB$B_DNS = 53
+FAB$W_MRS = 54                          ; maximum record size
+FAB$B_FSZ = 63                          ; VFC header size
+FAB$M_PUT = 1
+FAB$M_GET = 2
+FAB$M_DEL = 4
+FAB$M_UPD = 8
+FAB$M_TRN = 16
+FAB$C_SEQ = 0
+FAB$M_CR = 2
+FAB$C_UDF = 0
+FAB$C_FIX = 1
+FAB$C_VAR = 2
+FAB$C_VFC = 3
+        .ENDM   $FABDEF
+
+; $RABDEF: the record access block.
+        .MACRO  $RABDEF
+RAB$C_BID = 1
+RAB$C_BLN = 68
+RAB$B_BID = 0
+RAB$B_BLN = 1
+RAB$W_ISI = 2                           ; internal stream index, from $CONNECT
+RAB$L_STS = 8
+RAB$L_STV = 12
+RAB$W_USZ = 32                          ; the user's buffer: its size
+RAB$W_RSZ = 34                          ; the record's size
+RAB$L_UBF = 36                          ; and address
+RAB$L_RBF = 40                          ; where $GET put the record
+RAB$L_FAB = 60                          ; the FAB $CONNECT connects to
+        .ENDM   $RABDEF
+
+; $NAMDEF: the name block, which $PARSE, $SEARCH and $OPEN fill.
+        .MACRO  $NAMDEF
+NAM$C_BID = 2
+NAM$C_BLN = 96
+NAM$B_BID = 0
+NAM$B_BLN = 1
+NAM$B_RSS = 2                           ; the resultant string area: size
+NAM$B_RSL = 3                           ; the string's length
+NAM$L_RSA = 4                           ; its address
+NAM$B_ESS = 10                          ; the expanded string area: size
+NAM$B_ESL = 11
+NAM$L_ESA = 12
+NAM$W_FID = 36                          ; file ID, 3 words
+NAM$W_DID = 42                          ; directory ID, 3 words
+NAM$L_WCC = 48                          ; $SEARCH's context
+NAM$L_FNB = 52                          ; NAM$M_ bits
+NAM$B_DEV = 57                          ; the lengths of the string's parts
+NAM$B_DIR = 58
+NAM$B_NAME = 59
+NAM$B_TYPE = 60
+NAM$B_VER = 61
+NAM$L_DEV = 68                          ; and their addresses
+NAM$L_DIR = 72
+NAM$L_NAME = 76
+NAM$L_TYPE = 80
+NAM$L_VER = 84
+NAM$M_WILDCARD = ^X100                  ; the specification has a wildcard
+        .ENDM   $NAMDEF
+
+; $FAB, $RAB, $NAM: a FAB, RAB or name block, with the fields given and
+; the rest 0. Lengths are values (FNS=#5 is FNS=5 here), addresses labels.
+        .MACRO  $FAB    FNA=0, FNS=0, DNA=0, DNS=0, NAM=0, FAC=0
+        .BYTE   3, 80                   ; BID, BLN
+        .WORD   0                       ; IFI
+        .LONG   0, 0, 0, 0              ; FOP, STS, STV, ALQ
+        .WORD   0                       ; DEQ
+        .BYTE   FAC, 0                  ; FAC, SHR
+        .LONG   0                       ; CTX
+        .BYTE   0, 0, 0, 0              ; RTV, ORG, RAT, RFM
+        .LONG   0, 0                    ; JNL, XAB
+        .ADDRESS NAM, FNA, DNA
+        .BYTE   FNS, DNS
+        .BLKB   26                      ; MRS to the end
+        .ENDM   $FAB
+
+        .MACRO  $RAB    FAB=0, UBF=0, USZ=0
+        .BYTE   1, 68                   ; BID, BLN
+        .WORD   0                       ; ISI
+        .LONG   0, 0, 0                 ; ROP, STS, STV
+        .WORD   0, 0, 0, 0              ; RFA, and a word
+        .LONG   0                       ; CTX
+        .BYTE   0, 0, 0, 0              ; two bytes, RAC, TMO
+        .WORD   USZ, 0                  ; USZ, RSZ
+        .ADDRESS UBF
+        .LONG   0, 0, 0                 ; RBF, RHB, KBF
+        .BYTE   0, 0, 0, 0              ; KSZ, KRF, MBF, MBC
+        .LONG   0                       ; BKT
+        .ADDRESS FAB
+        .LONG   0                       ; XAB
+        .ENDM   $RAB
+
+        .MACRO  $NAM    ESA=0, ESS=0, RSA=0, RSS=0
+        .BYTE   2, 96                   ; BID, BLN
+        .BYTE   RSS, 0                  ; RSS, RSL
+        .ADDRESS RSA
+        .BYTE   0, 0, ESS, 0            ; NOP, RFS, ESS, ESL
+        .ADDRESS ESA
+        .BLKB   80                      ; RLF to the end
+        .ENDM   $NAM
+
+; $OPEN, $CLOSE, $PARSE, $SEARCH FAB=fab and $CONNECT, $DISCONNECT, $GET
+; RAB=rab: the RMS services, which take the block's address.
+        .MACRO  $RMSCALL NAME, BLOCK
+        PUSHAB  BLOCK
+        .EXTERNAL SYS$'NAME
+        CALLS   #1, G^SYS$'NAME
+        .ENDM   $RMSCALL
+
+        .MACRO  $OPEN   FAB
+        $RMSCALL OPEN, FAB
+        .ENDM   $OPEN
+
+        .MACRO  $CLOSE  FAB
+        $RMSCALL CLOSE, FAB
+        .ENDM   $CLOSE
+
+        .MACRO  $PARSE  FAB
+        $RMSCALL PARSE, FAB
+        .ENDM   $PARSE
+
+        .MACRO  $SEARCH FAB
+        $RMSCALL SEARCH, FAB
+        .ENDM   $SEARCH
+
+        .MACRO  $CONNECT RAB
+        $RMSCALL CONNECT, RAB
+        .ENDM   $CONNECT
+
+        .MACRO  $DISCONNECT RAB
+        $RMSCALL DISCONNECT, RAB
+        .ENDM   $DISCONNECT
+
+        .MACRO  $GET    RAB
+        $RMSCALL GET, RAB
+        .ENDM   $GET
 
 ; $PSLDEF: the processor status longword's fields and the access modes,
 ; from kernel, the innermost, out to user.

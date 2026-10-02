@@ -1,10 +1,10 @@
 /*
  * The root task: the first user task seL4 starts, holding every capability.
  * It is the PAL (docs/adr/0002-root-task-is-the-pal.md): it shows that seL4
- * handed it a valid boot info page and a scheduling context, loads EXEC.EXE,
- * the MACRO-32 executive, from the boot volume, starts it as a task of its
- * own and serves its PAL calls and faults (docs/design/0001-pal-interface.md)
- * until it halts.
+ * handed it a valid boot info page and a scheduling context, drives the
+ * system disk, loads EXEC.EXE, the MACRO-32 executive, from it, starts it
+ * as a task of its own and serves its PAL calls and faults
+ * (docs/design/0001-pal-interface.md) until it halts.
  *
  * The executive's processes are threads in its address space, one seL4 TCB
  * each, and only one of them runs at a time: the PAL hands the one CPU the
@@ -140,6 +140,15 @@ void *memset(void *dst, int c, seL4_Word n)
 	return dst;
 }
 
+int memcmp(const void *a, const void *b, seL4_Word n)
+{
+	const unsigned char *x = a, *y = b;
+	for (; n; n--, x++, y++)
+		if (*x != *y)
+			return *x - *y;
+	return 0;
+}
+
 static uint32_t u32(const uint8_t *p)
 {
 	uint32_t v;
@@ -194,36 +203,203 @@ static void map(seL4_CPtr frame, seL4_CPtr vspace, seL4_Word va, seL4_CapRights_
 }
 
 /*
- * Maps the UART's page from the device untyped that holds it, then the
- * RTC's and reads it. Retype carves an untyped in order, so untypeds sized
- * by the bits of the UART's offset, the largest first, take up the space
- * before it; after it, the smallest first, each aligned, the gap to the RTC.
+ * A frame for the device page at paddr, from the device untyped that holds
+ * it, or 0 if none does. Retype carves an untyped in order, from where it
+ * last stopped, so untypeds, each aligned and as large as fits, take up
+ * the gap before the page.
+ * ponytail: the pages of one untyped must come in increasing order.
  */
-static void uart_init(seL4_BootInfo *bi)
+static seL4_CPtr device_frame(seL4_BootInfo *bi, seL4_Word paddr)
 {
+	static seL4_Word carved[CONFIG_MAX_NUM_BOOTINFO_UNTYPED_CAPS];
 	for (seL4_Word i = 0; i < bi->untyped.end - bi->untyped.start; i++) {
 		seL4_UntypedDesc *u = &bi->untypedList[i];
-		seL4_Word off = UART_PADDR - u->paddr;
-		if (!u->isDevice || UART_PADDR < u->paddr || off >> u->sizeBits)
+		seL4_Word off = paddr - u->paddr;
+		if (!u->isDevice || paddr < u->paddr || off >> u->sizeBits)
 			continue;
+		if (off < carved[i])
+			die("device pages out of order", paddr);
 		seL4_CPtr ram = untyped;
 		untyped = bi->untyped.start + i;
-		for (int bit = u->sizeBits - 1; bit >= seL4_PageBits; bit--)
-			if (off >> bit & 1)
-				alloc(seL4_UntypedObject, bit);
-		seL4_CPtr uart_frame = alloc(seL4_ARM_SmallPageObject, 0);
-		for (int bit = seL4_PageBits; bit < u->sizeBits; bit++)
-			if ((RTC_PADDR - UART_PADDR - PAGE_SIZE) >> bit & 1)
-				alloc(seL4_UntypedObject, bit);
-		seL4_CPtr rtc_frame = alloc(seL4_ARM_SmallPageObject, 0);
+		while (carved[i] < off) {
+			int bit = seL4_PageBits;
+			while (!(carved[i] & ((2UL << bit) - 1)) && carved[i] + (2UL << bit) <= off)
+				bit++;
+			alloc(seL4_UntypedObject, bit);
+			carved[i] += 1UL << bit;
+		}
+		seL4_CPtr frame = alloc(seL4_ARM_SmallPageObject, 0);
+		carved[i] += PAGE_SIZE;
 		untyped = ram;
-		map(uart_frame, seL4_CapInitThreadVSpace, UART_VA, seL4_ReadWrite,
+		return frame;
+	}
+	return 0;
+}
+
+/* Maps the UART's page, then the RTC's, and reads the RTC. */
+static void uart_init(seL4_BootInfo *bi)
+{
+	seL4_CPtr uart_frame = device_frame(bi, UART_PADDR);
+	seL4_CPtr rtc_frame = device_frame(bi, RTC_PADDR);
+	if (!uart_frame || !rtc_frame)
+		return;
+	map(uart_frame, seL4_CapInitThreadVSpace, UART_VA, seL4_ReadWrite, seL4_ARM_ExecuteNever);
+	uart = (volatile uint32_t *)UART_VA;
+	map(rtc_frame, seL4_CapInitThreadVSpace, RTC_VA, seL4_CanRead, seL4_ARM_ExecuteNever);
+	boot_time = *(volatile uint32_t *)RTC_VA;
+}
+
+/*
+ * The system disk: a virtio block device on one of QEMU virt's 32
+ * virtio-mmio transports, 0x200 bytes apart from 0x0a000000, which the
+ * PAL drives itself, polled, a request at a time (virtio 1.x, modern
+ * MMIO: QEMU needs virtio-mmio.force-legacy=false). Its queue and a
+ * request's header and status are in one page of the PAL's, the data in
+ * another, at the physical addresses seL4 tells.
+ * ponytail: polled and synchronous, the CPU waits for each read; the
+ * device's interrupt, through seL4's IRQ handler, when I/O is
+ * asynchronous.
+ */
+#define VIRTIO_PADDR 0x0a000000UL
+#define VIRTIO_VA 0xffff0000UL /* 4 pages, below the RTC */
+#define VIRTIO_SLOTS 32
+#define DISK_BLOCK 512
+enum { VIO_MAGIC = 0x000, VIO_VERSION = 0x004, VIO_DEVICE = 0x008, VIO_DRVFEAT = 0x020,
+       VIO_DRVFEATSEL = 0x024, VIO_QSEL = 0x030, VIO_QNUMMAX = 0x034, VIO_QNUM = 0x038,
+       VIO_QREADY = 0x044, VIO_QNOTIFY = 0x050, VIO_INTSTATUS = 0x060, VIO_INTACK = 0x064,
+       VIO_STATUS = 0x070, VIO_QDESC = 0x080, VIO_QDRIVER = 0x090, VIO_QDEVICE = 0x0a0,
+       VIO_CAPACITY = 0x100 };
+enum { VIO_ACK = 1, VIO_DRIVER = 2, VIO_DRIVER_OK = 4, VIO_FEATURES_OK = 8, VIO_BLK = 2,
+       VIO_QSIZE = 4, VIOD_NEXT = 1, VIOD_WRITE = 2 };
+static volatile uint32_t *vio;
+static uint64_t disk_blocks;
+static struct vio_queue {
+	struct {
+		uint64_t addr;
+		uint32_t len;
+		uint16_t flags, next;
+	} desc[VIO_QSIZE];
+	struct {
+		uint16_t flags, idx, ring[VIO_QSIZE];
+	} avail __attribute__((aligned(64)));
+	struct {
+		uint16_t flags, idx;
+		struct {
+			uint32_t id, len;
+		} ring[VIO_QSIZE];
+	} used __attribute__((aligned(64)));
+	struct {
+		uint32_t type, reserved;
+		uint64_t sector;
+	} req __attribute__((aligned(64)));
+	uint8_t status;
+} *vq;
+static uint8_t *vio_data; /* a page: 8 blocks */
+#define VQ_VA 0xfffe0000UL
+#define VIO_DATA_VA 0xfffd0000UL
+
+/* A page of the PAL's for the device, mapped at va, and its physical address. */
+static uint64_t dma_page(seL4_Word va)
+{
+	seL4_CPtr frame = alloc(seL4_ARM_SmallPageObject, 0);
+	map(frame, seL4_CapInitThreadVSpace, va, seL4_ReadWrite,
+	    seL4_ARM_Default_VMAttributes | seL4_ARM_ExecuteNever);
+	seL4_ARM_Page_GetAddress_t a = seL4_ARM_Page_GetAddress(frame);
+	if (a.error)
+		die("seL4_ARM_Page_GetAddress failed", a.error);
+	memset((void *)va, 0, PAGE_SIZE);
+	return a.paddr;
+}
+
+static void wr64(unsigned reg, uint64_t v)
+{
+	vio[reg / 4] = (uint32_t)v;
+	vio[reg / 4 + 1] = v >> 32;
+}
+
+/* Finds the disk among the virtio-mmio transports and sets it up. */
+static void disk_init(seL4_BootInfo *bi)
+{
+	for (unsigned p = 0; p < VIRTIO_SLOTS * 0x200 / PAGE_SIZE; p++) {
+		seL4_CPtr frame = device_frame(bi, VIRTIO_PADDR + p * PAGE_SIZE);
+		if (!frame)
+			return;
+		map(frame, seL4_CapInitThreadVSpace, VIRTIO_VA + p * PAGE_SIZE, seL4_ReadWrite,
 		    seL4_ARM_ExecuteNever);
-		uart = (volatile uint32_t *)UART_VA;
-		map(rtc_frame, seL4_CapInitThreadVSpace, RTC_VA, seL4_CanRead, seL4_ARM_ExecuteNever);
-		boot_time = *(volatile uint32_t *)RTC_VA;
+	}
+	for (unsigned s = 0; s < VIRTIO_SLOTS && !vio; s++) {
+		volatile uint32_t *r = (volatile uint32_t *)(VIRTIO_VA + s * 0x200);
+		if (r[VIO_MAGIC / 4] == 0x74726976 && r[VIO_VERSION / 4] == 2 &&
+		    r[VIO_DEVICE / 4] == VIO_BLK)
+			vio = r;
+	}
+	if (!vio)
+		return;
+	uint64_t q = dma_page(VQ_VA), data = dma_page(VIO_DATA_VA);
+	vq = (struct vio_queue *)VQ_VA;
+	vio_data = (uint8_t *)VIO_DATA_VA;
+	vio[VIO_STATUS / 4] = 0;
+	vio[VIO_STATUS / 4] = VIO_ACK | VIO_DRIVER;
+	vio[VIO_DRVFEATSEL / 4] = 1; /* VIRTIO_F_VERSION_1, and nothing else */
+	vio[VIO_DRVFEAT / 4] = 1;
+	vio[VIO_STATUS / 4] = VIO_ACK | VIO_DRIVER | VIO_FEATURES_OK;
+	if (!(vio[VIO_STATUS / 4] & VIO_FEATURES_OK) || vio[VIO_QNUMMAX / 4] < VIO_QSIZE) {
+		vio = 0;
 		return;
 	}
+	vio[VIO_QSEL / 4] = 0;
+	vio[VIO_QNUM / 4] = VIO_QSIZE;
+	wr64(VIO_QDESC, q + __builtin_offsetof(struct vio_queue, desc));
+	wr64(VIO_QDRIVER, q + __builtin_offsetof(struct vio_queue, avail));
+	wr64(VIO_QDEVICE, q + __builtin_offsetof(struct vio_queue, used));
+	vio[VIO_QREADY / 4] = 1;
+	vio[VIO_STATUS / 4] = VIO_ACK | VIO_DRIVER | VIO_FEATURES_OK | VIO_DRIVER_OK;
+	disk_blocks = vio[VIO_CAPACITY / 4] | (uint64_t)vio[VIO_CAPACITY / 4 + 1] << 32;
+	/* The request: its header, the data and the status, a chain of three. */
+	vq->desc[0] = (typeof(vq->desc[0])){ q + __builtin_offsetof(struct vio_queue, req), 16,
+					     VIOD_NEXT, 1 };
+	vq->desc[1] = (typeof(vq->desc[0])){ data, 0, VIOD_NEXT | VIOD_WRITE, 2 };
+	vq->desc[2] = (typeof(vq->desc[0])){ q + __builtin_offsetof(struct vio_queue, status), 1,
+					     VIOD_WRITE, 0 };
+	print("disk: virtio-blk, %lu blocks\n", (seL4_Word)disk_blocks);
+}
+
+/* Reads n blocks, at most 8, from lbn into vio_data. Returns 0 on an error. */
+static int disk_read8(uint64_t lbn, unsigned n)
+{
+	vq->req.type = 0; /* VIRTIO_BLK_T_IN */
+	vq->req.sector = lbn;
+	vq->desc[1].len = n * DISK_BLOCK;
+	vq->status = 0xff;
+	uint16_t idx = vq->avail.idx;
+	vq->avail.ring[idx % VIO_QSIZE] = 0;
+	__asm__ volatile("dmb sy" ::: "memory");
+	vq->avail.idx = idx + 1;
+	__asm__ volatile("dmb sy" ::: "memory");
+	vio[VIO_QNOTIFY / 4] = 0;
+	while (*(volatile uint16_t *)&vq->used.idx != (uint16_t)(idx + 1))
+		;
+	__asm__ volatile("dmb sy" ::: "memory");
+	vio[VIO_INTACK / 4] = vio[VIO_INTSTATUS / 4];
+	return vq->status == 0;
+}
+
+/*
+ * Reads n blocks from lbn into the PAL's memory at dst. Returns 0 if there
+ * is no disk, the blocks run past its end or the device fails.
+ */
+static int disk_read(uint64_t lbn, uint8_t *dst, seL4_Word n)
+{
+	if (!vio || lbn + n > disk_blocks)
+		return 0;
+	while (n) {
+		unsigned k = n < PAGE_SIZE / DISK_BLOCK ? n : PAGE_SIZE / DISK_BLOCK;
+		if (!disk_read8(lbn, k))
+			return 0;
+		memcpy(dst, vio_data, k * DISK_BLOCK);
+		dst += k * DISK_BLOCK, lbn += k, n -= k;
+	}
+	return 1;
 }
 
 /*
@@ -508,6 +684,43 @@ static uint64_t *quad(seL4_Word va)
 }
 
 /*
+ * READLBLK: reads the blocks from lbn into the len bytes at va, which
+ * kernel mode must be able to write, as Alpha's console READ callback
+ * read the boot disk for VMS's bootstrap. Returns an SS$ status: NORMAL,
+ * ACCVIO for a buffer kernel mode can't write, ILLBLKNUM past the disk's
+ * end, NOSUCHDEV without a disk, DRVERR if the device fails.
+ */
+enum { SS_NORMAL = 1, SS_ACCVIO = 12, SS_DRVERR = 140, SS_ILLBLKNUM = 220, SS_NOSUCHDEV = 2312 };
+
+static seL4_Word readlblk(seL4_Word va, seL4_Word len, seL4_Word lbn)
+{
+	uint8_t *at[2 + 0xffff / PAGE_SIZE]; /* the PAL's view of each page */
+	seL4_Word first = va & ~(PAGE_SIZE - 1);
+	for (seL4_Word p = first, i = 0; p < va + len; p += PAGE_SIZE, i++) {
+		uint32_t *pte = p < SPACE_END ? pte_at(p, 0) : 0;
+		if (!pte || !mapped(*pte) || may_write[prot(*pte)] < 0)
+			return SS_ACCVIO;
+		at[i] = (uint8_t *)(PHYS + (*pte & PTE_PFN) * PAGE_SIZE);
+	}
+	if (!vio)
+		return SS_NOSUCHDEV;
+	seL4_Word blocks = (len + DISK_BLOCK - 1) / DISK_BLOCK;
+	if (lbn + blocks > disk_blocks)
+		return SS_ILLBLKNUM;
+	for (seL4_Word done = 0; done < len;) {
+		unsigned k = blocks < 8 ? blocks : 8;
+		if (!disk_read8(lbn, k))
+			return SS_DRVERR;
+		for (seL4_Word i = 0; i < k * DISK_BLOCK && done < len; i++, done++) {
+			seL4_Word off = va + done - first;
+			at[off / PAGE_SIZE][off % PAGE_SIZE] = vio_data[i];
+		}
+		lbn += k, blocks -= k;
+	}
+	return SS_NORMAL;
+}
+
+/*
  * PROBER and PROBEW: whether mode m, or the PSL's previous mode if it is an
  * outer one, may read (write) the first and the last of len bytes at base,
  * as the VAX's PROBE checks.
@@ -591,39 +804,141 @@ static seL4_Word load_image(const uint8_t *file, seL4_Word size)
 }
 
 /*
- * The boot volume (vtools/lib/lib.mlb, $BVDDEF): a directory in its first
- * 512-byte block, entries of a .ASCIC name, a first block and a size, then
- * the files. Returns the file called name, or 0.
+ * Files-11 ODS-2 (ods/docs/), as much of it as VMS's primary bootstrap,
+ * VMB, read to find the executive on the system disk: the home block, the
+ * index file's header, the directories on the way and the file's map.
  */
-static const uint8_t *find_file(const uint8_t *vol, seL4_Word size, const char *name,
-				seL4_Word *file_size)
+static uint8_t f11_indexf[DISK_BLOCK], f11_blk[DISK_BLOCK];
+static uint32_t f11_hdrvbn; /* the index file's VBN of file 1's header */
+
+static uint16_t u16(const uint8_t *p)
 {
-	for (const uint8_t *e = vol; e < vol + 512 && *e; e += 32) {
-		seL4_Word n = 0;
-		while (name[n] && n < *e && e[1 + n] == name[n])
-			n++;
-		seL4_Word at = (seL4_Word)u32(e + 24) * 512;
-		*file_size = u32(e + 28);
-		if (n == *e && !name[n] && at <= size && *file_size <= size - at)
-			return vol + at;
+	return p[0] | p[1] << 8;
+}
+
+/* The LBN of virtual block vbn of the file whose header is hdr, and in *n
+ * how many blocks follow it in the same extent; 0 if the map ends first. */
+static uint32_t f11_map(const uint8_t *hdr, uint32_t vbn, uint32_t *n)
+{
+	const uint8_t *p = hdr + 2 * hdr[1], *end = p + 2 * hdr[58];
+	for (uint32_t base = 1; p < end;) {
+		uint32_t w = u16(p), count, lbn;
+		switch (w >> 14) {
+		case 0:
+			p += 2;
+			continue;
+		case 1:
+			count = (w & 0xff) + 1, lbn = (w >> 8 & 0x3f) << 16 | u16(p + 2), p += 4;
+			break;
+		case 2:
+			count = (w & 0x3fff) + 1, lbn = u32(p + 2), p += 6;
+			break;
+		default:
+			count = ((w & 0x3fff) << 16 | u16(p + 2)) + 1, lbn = u32(p + 4), p += 8;
+			break;
+		}
+		if (vbn < base + count) {
+			*n = base + count - vbn;
+			return lbn + vbn - base;
+		}
+		base += count;
 	}
 	return 0;
 }
 
-/* The linker's: the root task's first and past-the-last page. */
-extern const uint8_t _start[], _end[];
+/* Reads n blocks of hdr's file from vbn into dst. Returns 0 on an error. */
+static int f11_read(const uint8_t *hdr, uint32_t vbn, uint8_t *dst, uint32_t n)
+{
+	while (n) {
+		uint32_t k, lbn = f11_map(hdr, vbn, &k);
+		if (!lbn)
+			return 0;
+		k = k < n ? k : n;
+		if (!disk_read(lbn, dst, k))
+			return 0;
+		dst += k * DISK_BLOCK, vbn += k, n -= k;
+	}
+	return 1;
+}
+
+/* The header of file number fnum, in hdr. Returns 0 if it isn't one. */
+static int f11_header(uint32_t fnum, uint8_t *hdr)
+{
+	uint16_t sum = 0;
+	if (!f11_read(f11_indexf, f11_hdrvbn + fnum - 1, hdr, 1))
+		return 0;
+	for (int i = 0; i < 255; i++)
+		sum += u16(hdr + 2 * i);
+	return sum == u16(hdr + 510) && (uint32_t)(u16(hdr + 8) | hdr[13] << 16) == fnum;
+}
+
+/* The end of file of hdr's file: its blocks in use, the last maybe partly. */
+static uint32_t f11_eof(const uint8_t *hdr, uint32_t *ffbyte)
+{
+	*ffbyte = u16(hdr + 32);
+	return (uint32_t)u16(hdr + 28) << 16 | u16(hdr + 30); /* high word first */
+}
+
+/* The file number of name, "NAME.TYPE", its highest version, in the
+ * directory whose number is dir; 0 if there is none. */
+static uint32_t f11_lookup(uint32_t dir, const char *name)
+{
+	uint8_t hdr[DISK_BLOCK];
+	uint32_t ff, len = 0;
+	while (name[len])
+		len++;
+	if (!f11_header(dir, hdr))
+		return 0;
+	for (uint32_t vbn = 1, eof = f11_eof(hdr, &ff); vbn < eof + (ff != 0); vbn++) {
+		if (!f11_read(hdr, vbn, f11_blk, 1))
+			return 0;
+		for (uint32_t off = 0; off < DISK_BLOCK - 2 && u16(f11_blk + off) != 0xffff;
+		     off += 2 + u16(f11_blk + off)) {
+			const uint8_t *r = f11_blk + off;
+			uint32_t i = 0;
+			while (i < len && i < r[5] && r[6 + i] == name[i])
+				i++;
+			if (i == len && r[5] == len) {
+				const uint8_t *e = r + 6 + ((len + 1) & ~1u);
+				return u16(e + 2) | e[7] << 16;
+			}
+		}
+	}
+	return 0;
+}
+
+/* Mounts the system disk and reads [SYSEXE]EXEC.EXE into buf, at most size
+ * bytes. Returns its size, or 0. */
+static seL4_Word f11_boot_file(uint8_t *buf, seL4_Word size)
+{
+	enum { HM2_IBMAPVBN = 22, HM2_IBMAPLBN = 24, HM2_IBMAPSIZE = 32, HM2_FORMAT = 496, MFD = 4 };
+	uint8_t *home = f11_blk, hdr[DISK_BLOCK];
+	if (!disk_read(1, home, 1) || memcmp(home + HM2_FORMAT, "DECFILE11B", 10))
+		return 0;
+	f11_hdrvbn = u16(home + HM2_IBMAPVBN) + u16(home + HM2_IBMAPSIZE);
+	if (!disk_read(u32(home + HM2_IBMAPLBN) + u16(home + HM2_IBMAPSIZE), f11_indexf, 1))
+		return 0;
+	uint32_t dir = f11_lookup(MFD, "SYSEXE.DIR"), file = dir ? f11_lookup(dir, "EXEC.EXE") : 0;
+	uint32_t ff, eof;
+	if (!file || !f11_header(file, hdr))
+		return 0;
+	eof = f11_eof(hdr, &ff);
+	seL4_Word bytes = (seL4_Word)(eof - 1) * DISK_BLOCK + ff;
+	if (!eof || bytes > size || !f11_read(hdr, 1, buf, (bytes + DISK_BLOCK - 1) / DISK_BLOCK))
+		return 0;
+	return bytes;
+}
 
 /*
  * What the PAL sets up in the executive's address space before it starts
- * (DESIGN-0001), in S0: the restart parameter block, the boot volume, and a
- * stack; EXEC.EXE's sections are at their link addresses, in S0 too.
+ * (DESIGN-0001), in S0: the restart parameter block and a stack;
+ * EXEC.EXE's sections are at their link addresses, in S0 too.
  */
 #define RPB_VA 0x4fff0000UL
-#define VOLUME_VA 0x50000000UL
 #define EXEC_STACK_TOP 0x5fff0000UL
 #define EXEC_STACK_PAGES 4
-enum { RPB_BASE = 0, RPB_PFNCNT = 4, RPB_FREEPFN = 8, RPB_VOLUME = 12, RPB_VOLSIZE = 16,
-       RPB_BOOTTIME = 20, RPB_HWPCB = 64, RPB_LENGTH = 192 };
+enum { RPB_BASE = 0, RPB_PFNCNT = 4, RPB_FREEPFN = 8, RPB_BOOTTIME = 12, RPB_HWPCB = 64,
+       RPB_LENGTH = 192 };
 
 static seL4_CPtr fault_ep, sched_control;
 static seL4_Time slice;
@@ -721,7 +1036,7 @@ enum {
 	HALT = 0x00, SWPCTX = 0x05, MFPR_IPL = 0x0e, MTPR_IPL = 0x0f, MFPR_PCBB = 0x12,
 	MFPR_SCBB = 0x16, MTPR_SCBB = 0x17, MTPR_SIRR = 0x18, MFPR_SISR = 0x19, WTINT = 0x3e,
 	MTPR_TXDB = 0x40, WRPTE = 0x41, DELCTX = 0x42, MTPR_RXCS = 0x43, MFPR_RXCS = 0x44,
-	MFPR_RXDB = 0x45, CHME = 0x82, CHMU = 0x85, PROBER = 0x8f,
+	MFPR_RXDB = 0x45, READLBLK = 0x46, CHME = 0x82, CHMU = 0x85, PROBER = 0x8f,
 	PROBEW = 0x90, REI = 0x92
 };
 
@@ -1125,6 +1440,8 @@ static int serve_one(seL4_MessageInfo_t msg)
 		return ret(rxcs | (uart_rx_ready() ? RXCS_DONE : 0));
 	case MFPR_RXDB:
 		return ret(uart_rx_ready() ? uart[UART_DR / 4] & 0xff : 0);
+	case READLBLK:
+		return ret(readlblk(a0 & 0xffffffff, a1 & 0xffff, mr[seL4_UnknownSyscall_X2] & 0xffffffff));
 	case WRPTE: {
 		uint32_t old;
 		if (!wrpte(a0 & 0xffffffff, a1, &old))
@@ -1255,31 +1572,27 @@ static void start_clock(void)
 }
 
 /*
- * Starts EXEC.EXE from the boot volume, which seL4 mapped after the root
- * task, in a context of its own whose HWPCB is the RPB's: kernel mode,
- * IPL 31, R11 pointing at the RPB.
+ * Starts [SYSEXE]EXEC.EXE from the system disk in a context of its own
+ * whose HWPCB is the RPB's: kernel mode, IPL 31, R11 pointing at the RPB.
  */
-static void start_exec(seL4_BootInfo *bi)
+static uint8_t exe_file[256 * 1024];
+
+static void start_exec(void)
 {
 	exec_vspace = alloc(seL4_ARM_VSpaceObject, 0);
 	seL4_Error err = seL4_ARM_ASIDPool_Assign(seL4_CapInitThreadASIDPool, exec_vspace);
 	if (err)
 		die("seL4_ARM_ASIDPool_Assign failed", err);
-	/* seL4 maps the user image, the boot volume included, frame after frame from _start. */
-	seL4_Word mapped_size = (bi->userImageFrames.end - bi->userImageFrames.start) << seL4_PageBits;
-	seL4_Word vol_size = (seL4_Word)_start + mapped_size - (seL4_Word)_end, exe_size;
-	const uint8_t *exe = find_file(_end, vol_size, "EXEC.EXE", &exe_size);
-	if (!exe)
-		die("no EXEC.EXE on the boot volume", vol_size);
-	seL4_Word entry = load_image(exe, exe_size);
-	boot_pages(VOLUME_VA, _end, vol_size, PRT_KR << 27);
+	seL4_Word exe_size = f11_boot_file(exe_file, sizeof exe_file);
+	if (!exe_size)
+		die("no [SYSEXE]EXEC.EXE on the system disk", sizeof exe_file);
+	seL4_Word entry = load_image(exe_file, exe_size);
 	boot_pages(EXEC_STACK_TOP - EXEC_STACK_PAGES * PAGE_SIZE, 0, EXEC_STACK_PAGES * PAGE_SIZE,
 		   PRT_KW << 27);
 	boot_pages(RPB_VA, 0, PAGE_SIZE, PRT_KW << 27);
 	uint8_t *rpb = (uint8_t *)quad(RPB_VA);
-	uint32_t fields[] = { [RPB_BASE / 4] = RPB_VA,	      [RPB_PFNCNT / 4] = PFN_COUNT,
-			      [RPB_FREEPFN / 4] = boot_pfn,   [RPB_VOLUME / 4] = VOLUME_VA,
-			      [RPB_VOLSIZE / 4] = vol_size,   [RPB_BOOTTIME / 4] = boot_time };
+	uint32_t fields[] = { [RPB_BASE / 4] = RPB_VA, [RPB_PFNCNT / 4] = PFN_COUNT,
+			      [RPB_FREEPFN / 4] = boot_pfn, [RPB_BOOTTIME / 4] = boot_time };
 	memcpy(rpb, fields, sizeof fields);
 
 	cur = new_ctx(RPB_VA + RPB_HWPCB);
@@ -1337,7 +1650,8 @@ int main(seL4_BootInfo *bi)
 
 	fault_ep = alloc(seL4_EndpointObject, 0);
 	start_clock();
-	start_exec(bi);
+	disk_init(bi);
+	start_exec();
 	serve();
 
 	print("root task done, %lu of %u slots used\n", next_slot, 1u << CONFIG_ROOT_CNODE_SIZE_BITS);

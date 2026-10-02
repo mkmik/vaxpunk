@@ -9,7 +9,7 @@ starts `EXEC.EXE`, the executive, an image compiled from MACRO-32 with
 vtools, as a task of its own and serves the PAL calls its privileged
 instructions make ([DESIGN-0001](docs/design/0001-pal-interface.md)). The
 executive manages memory, and creates, schedules and deletes processes,
-each a thread running an image from the boot volume, which take turns on
+each a thread running an image from the system disk, which take turns on
 one CPU and synchronize with IPL and event flags
 ([ADR-0003](docs/adr/0003-one-cpu-many-threads.md),
 [DESIGN-0002](docs/design/0002-executive-processes.md)). seL4 is
@@ -55,7 +55,6 @@ vaxpunk shim: shim at 0x7fa68000, UART at 0x9000000
 shim: kernel    0x40000000-0x40243000 entry 0xffffff8040000000
 shim: DTB       0x40243000-0x40344000
 shim: root task 0x40344000-0x40380000 vaddr 0x400000 entry 0x400000
-shim: volume    0x40373000-0x40380000 vaddr 0x42f000
 shim: entering seL4
 Bootstrapping kernel
 ...
@@ -66,16 +65,40 @@ boot info: node 0 of 1, 53 untyped caps
 ...
 sched control caps: 278-278
 scheduling context: budget 5000 us per 5000 us, 12897 us used
-EXEC.EXE: started at 0x40010b68, 43 of 1024 pages in use
-%EXEC-I-START, vaxpunk executive, free pages: 00000355
+disk: virtio-blk, 4096 blocks
+EXEC.EXE: started at 0x40010b68, 23 of 1024 pages in use
+%EXEC-I-START, vaxpunk executive, free pages: 00000369
+%MOUNT-I-MOUNTED, VAXPUNK mounted on _DKA0:
 $
 ```
 
+The system disk, `DKA0:`, is a Files-11 ODS-2 volume, `out/sysdisk.img`,
+which the build makes with `ods` and QEMU attaches read only
+([ADR-0007](docs/adr/0007-system-disk-files-11-and-rms.md)). The root task
+reads `EXEC.EXE` from it, and the executive mounts it and reads files with
+RMS. `ods dir out/sysdisk.img '[...]'` lists it on the host.
+
 The `$` is DCL's prompt, on the console's process, `SYSTEM`. `RUN image`
-runs an image from the boot volume (`.EXE` is the default type),
-`DIRECTORY` lists the volume's files (`DIR P%NG`, `DIR *.EXE`), `HELP`
-lists the commands and `LOGOUT` ends the process. `RUN STARTUP` starts the
-programs that put the executive's services to work:
+runs an image from `[SYSEXE]` (`.EXE` is the default type), `DIRECTORY`
+lists files, in `[SYSMGR]` unless told where (`DIR`, `DIR [SYSEXE]P%NG`,
+`DIR [000000]`), `TYPE file` writes a text file (`TYPE WELCOME.TXT`),
+`HELP` lists the commands and `LOGOUT` ends the process:
+
+```
+$ DIR [SYSEXE]
+
+Directory DKA0:[SYSEXE]
+
+DCL.EXE;1           DIRECTORY.EXE;1     EXEC.EXE;1          HOG.EXE;1
+NUDGE.EXE;1         PING.EXE;1          PONG.EXE;1          SLEEPER.EXE;1
+SNOOP.EXE;1         STARTUP.EXE;1       SVCTEST.EXE;1       TIMETEST.EXE;1
+TYPE.EXE;1          USURP.EXE;1
+
+Total of 14 files.
+```
+
+`RUN STARTUP` starts the programs that put the executive's services to
+work:
 
 ```
 $ RUN STARTUP
@@ -110,16 +133,17 @@ the processes it created go on. Between commands the CPU idles, taking a
 clock interrupt every 10 ms. There is no CTRL/Y yet: an image that never
 exits, such as `SLEEPER`, keeps the console until QEMU is stopped. `just
 check` boots the same way without a terminal, types `RUN STARTUP`, `RUN
-SNOOP`, a bad verb and `DIR P%NG`, prints the executive's part and fails unless the
-processes ran to the end.
+SNOOP`, a bad verb, `DIR [SYSEXE]P%NG` and `TYPE WELCOME.TXT`, prints the
+executive's part and fails unless the processes ran to the end.
 
 EDK2 prints a few `Error: Image at ... start failed` and `Tpm2...` lines
 before Limine starts. That is normal for the firmware QEMU ships. Don't
 type before DCL's prompt: EDK2 and Limine read keys too.
 
 Day to day: edit `roottask/` (`src/` for the PAL, `exec/` for the
-executive, `sysexe/` for the programs on the boot volume), then `cargo run
--p boot`. Only the root task is rebuilt and the ESP image re-stitched. On an M3, the root task prints
+executive, `sysexe/` for the programs on the system disk, `sysmgr/` for
+its text files), then `cargo run -p boot`. Only the root task and the
+system disk are rebuilt and the ESP image re-stitched. On an M3, the root task prints
 about one second after the command.
 
 ## Layout
@@ -128,8 +152,8 @@ about one second after the command.
 | --- | --- | --- |
 | `kernel/` | seL4 16.0.0 (submodule), built with its own CMake | `kernel.elf`, libsel4's headers, `platform_gen.json` |
 | `shim/` | Limine-protocol program that loads seL4 and the root task; see [shim/README.md](shim/README.md) | `shim.elf` |
-| `roottask/` | the root task, the PAL, in freestanding C (`src/`); the MACRO-32 executive (`exec/`) and the programs it runs (`sysexe/`), which `build.rs` compiles and links with the vtools crates and packs into the boot volume | `roottask.elf`, `sys.vol` |
-| `image/` | Limine config, the ESP builder (mtools) and `boot`, which copies the three ELFs and `sys.vol` to `out/`, stitches the ESP and runs QEMU | `out/esp.img` |
+| `roottask/` | the root task, the PAL, in freestanding C (`src/`); the MACRO-32 executive (`exec/`) and the programs it runs (`sysexe/`), which `build.rs` compiles and links with the vtools crates and writes, with `sysmgr/`'s text, to the system disk with `ods-image` | `roottask.elf`, `sysdisk.img` |
+| `image/` | Limine config, the ESP builder (mtools) and `boot`, which copies the three ELFs and `sysdisk.img` to `out/`, stitches the ESP and runs QEMU | `out/esp.img` |
 | `scripts/` | host setup, Limine download, QEMU wrapper and console filter | `out/serial.log` |
 | `ods/` | Files-11 ODS-2/ODS-5 file system in Rust: the library, the `ods` CLI and a FUSE mount; see [ods/README.md](ods/README.md) | `target/` |
 | `vtools/` | VMS-style toolchain in Rust: the `vasm` assembler, the `vmacro` MACRO-32 compiler, `vlink` linker and `vlib` librarian, object, library and image formats, `vdump` to inspect them, and `vrun`, which runs images in QEMU; see its [PRD](docs/prd/0001-vtools.md) | `target/` |
@@ -156,9 +180,11 @@ exports its ELF's path as `ELF` for `boot`.
   that machine's memory map, and `scripts/run-qemu.sh` reads the same file.
 - Any root task can replace `roottask.elf`: it must be a static AArch64 ELF
   whose first segment is page aligned. seL4 calls its entry point with the
-  boot info pointer in `x0`. The shim appends the boot volume to it, so seL4
-  maps the volume at the root task's last vaddr, page aligned (`_end` in
-  `roottask/linker.ld`); `bi->userImageFrames` counts its pages too.
+  boot info pointer in `x0`.
+- The root task drives the system disk itself: a virtio-blk device on QEMU
+  virt's virtio-mmio transports (from `0x0a000000`), polled, in modern
+  mode, which `scripts/run-qemu.sh` asks for with
+  `virtio-mmio.force-legacy=false`. The ESP stays on PCI, for EDK2.
 - The root task maps `EXEC.EXE`'s sections at their link addresses (vlink's
   default base, 0x10000) in a new address space, with fresh frames from the
   largest RAM untyped, and starts a thread there at the transfer address.

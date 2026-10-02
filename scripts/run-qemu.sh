@@ -46,8 +46,13 @@ fi
 # so the guest sees the same machine with or without --uart1; without it the
 # UART goes nowhere. seL4's DTB lacks it, which is fine: the kernel never uses
 # it, and the root task gets its page in the device untyped at 0x9000000.
+# The system disk, out/sysdisk.img, is a read-only virtio-blk on virt's
+# virtio-mmio transports, which the root task drives itself: modern virtio
+# (force-legacy=false), as it expects. The ESP stays on PCI, for EDK2.
 qemu-system-aarch64 -machine "virt,secure=off,gic-version=$QEMU_GIC,acpi=off" $cpu \
 	-smp 1 -m "$QEMU_MEM" -display none -nic none -bios "$EDK2_FW" \
 	-boot menu=on,splash-time=0 -drive "if=virtio,format=raw,file=$root/out/esp.img" \
+	-drive "if=none,id=sysdisk,format=raw,readonly=on,file=$root/out/sysdisk.img" \
+	-device virtio-blk-device,drive=sysdisk -global virtio-mmio.force-legacy=false \
 	-chardev "stdio,id=con,mux=on,signal=off,logfile=$root/out/serial.log" \
 	-serial chardev:con -serial "$uart1" -monitor chardev:con $gdb | "$root/scripts/serial-filter.py"

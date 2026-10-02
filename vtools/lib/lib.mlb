@@ -43,6 +43,7 @@ PAL$_SWPCTX = ^X05                      ; R0 = new HWPCB; R0 = the one left
 PAL$_WTINT = ^X3E                       ; wait for an interrupt
 PAL$_WRPTE = ^X41                       ; R0 = address, R1 = PTE; R0 = old PTE
 PAL$_DELCTX = ^X42                      ; R0 = HWPCB of a context to delete
+PAL$_READLBLK = ^X46                    ; R0 = buffer, R1 = byte count, R2 = LBN; R0 = status
         .ENDM   $PALDEF
 
 ; $IPLDEF: interrupt priority levels the executive synchronizes at.
@@ -167,22 +168,10 @@ VA$C_P1END = ^X7FFF0000
 RPB$L_BASE = 0                          ; the RPB's own address
 RPB$L_PFNCNT = 4                        ; PFNs 0 to PFNCNT-1 are the executive's
 RPB$L_FREEPFN = 8                       ; and those below this one are in use
-RPB$L_VOLUME = 12                       ; the boot volume, read-only
-RPB$L_VOLSIZE = 16                      ; its size in bytes
-RPB$L_BOOTTIME = 20                     ; seconds since 1970 at boot, from the RTC
+RPB$L_BOOTTIME = 12                     ; seconds since 1970 at boot, from the RTC
 RPB$Q_HWPCB = 64                        ; the boot context's HWPCB
 RPB$K_LENGTH = 192
         .ENDM   $RPBDEF
-
-; $BVDDEF: the boot volume's directory, in its first 512-byte block: one
-; entry per file, ended by an empty name. Each file starts on a block.
-        .MACRO  $BVDDEF
-BVD$T_NAME = 0                          ; .ASCIC, up to 23 characters
-BVD$L_LBN = 24                          ; first block
-BVD$L_SIZE = 28                         ; bytes
-BVD$K_LENGTH = 32
-BVD$C_BLOCK = 512
-        .ENDM   $BVDDEF
 
 ; $STATEDEF: scheduling states, SCH$C_.
         .MACRO  $STATEDEF
@@ -225,7 +214,10 @@ PCB$Q_HWPCB = 128                       ; its HWPCB, if it isn't the boot one
 PCB$L_CHANS = 256                       ; bit n: channel n is assigned
 PCB$L_CLI = 260                         ; its command interpreter's transfer address, or 0
 PCB$L_CLICHANS = 264                    ; the channels it keeps when an image exits
-PCB$K_LENGTH = 272
+PCB$A_IFAB = 272                        ; its open files' IFABs, by IFI 1-15, or 0
+PCB$L_FILES = 336                       ; bit n: IFI n is open
+PCB$L_CLIFILES = 340                    ; the files it keeps open when an image exits
+PCB$K_LENGTH = 344
 PCB$V_WAKEPEN = 0                       ; a $WAKE came while not hibernating
 PCB$V_WALL = 1                          ; the wait is for all of EFWM
 PCB$V_SUSPEN = 2                        ; suspend when the wait ends

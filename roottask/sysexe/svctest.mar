@@ -138,7 +138,7 @@ SYSTEM: .LONG   ^X40000000, ^X40000FFF  ; S0: not a process's to make
         EXPECT  #SS$_NORMAL, 25
         $WAKE_S PRCNAM=NAPPER_NAME
         EXPECT  #SS$_NONEXPR, 26
-; A process whose image isn't there: it exits with SS$_NOSUCHFILE, which
+; A process whose image isn't there: it exits with RMS$_FNF, which
 ; the executive reports.
         $CREPRC_S IMAGE=NOSUCH_IMAGE, PRCNAM=NOSUCH_NAME, BASPRI=#4
         EXPECT  #SS$_NORMAL, 27

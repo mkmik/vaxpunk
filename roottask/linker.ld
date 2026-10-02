@@ -12,9 +12,6 @@ SECTIONS
 	.tdata : { *(.tdata .tdata.*) }
 	.tbss : { *(.tbss .tbss.*) }
 	.bss : { *(.bss .bss.*) *(COMMON) }
-	/* The shim appends exec.exe here, and seL4 maps it with the root task. */
-	. = ALIGN(4096);
-	_end = .;
 
 	/DISCARD/ : { *(.comment) *(.note .note.*) *(.eh_frame*) }
 }

@@ -227,8 +227,8 @@ function codes are in
 | `CALL_PAL #code` | any PAL call, as on Alpha: arguments in R0-R5, the result in R0, R7 kept |
 
 `CALL_PAL` is for the calls the VAX has no instruction for, `SWPCTX`,
-`WTINT`, `WRPTE` and `DELCTX`, whose codes `$PALDEF` names. The code must
-be a constant.
+`WTINT`, `WRPTE`, `DELCTX` and `READLBLK`, whose codes `$PALDEF` names.
+The code must be a constant.
 
 The processor register must be a constant, as in AMACRO. `$PRDEF` in
 `vtools/lib/lib.mlb` defines the `PR$_` names:

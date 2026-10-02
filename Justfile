@@ -7,7 +7,8 @@ boot:
 
 # Boots without a terminal, types commands at the console's DCL prompt
 # once the executive has started, and waits until the processes have
-# printed their last lines (roottask/sysexe/), or the root task is done,
+# printed their last lines (roottask/sysexe/), and DIRECTORY and TYPE
+# theirs from the system disk, or the root task is done,
 # which is only on a halt or a fault. DCL reads what was typed ahead a line
 # at a time. The CPU then idles, taking clock interrupts.
 check:
@@ -20,14 +21,16 @@ check:
     cargo run -q -p boot < "$fifo" > /dev/null 2>&1 &
     exec 3> "$fifo"
     rm "$fifo"
-    lines=('STARTUP: done' 'SVCTEST: ok' 'process NOSUCH exited' 'HOG: NUDGE ran' 'TIMETEST: ok'
+    lines=('%MOUNT-I-MOUNTED, VAXPUNK mounted on _DKA0:' 'STARTUP: done' 'SVCTEST: ok'
+           'process NOSUCH exited' 'HOG: NUDGE ran' 'TIMETEST: ok'
            'process SNOOP exited with status 0000000C' 'process USURP exited with status 0000043C'
-           '%NONAME-F-NOMSG, Message number 0000000C' ' \FOO\' 'Total of 2 files, 10 blocks.')
+           '%NONAME-F-NOMSG, Message number 0000000C' ' \FOO\' 'PING.EXE;1          PONG.EXE;1'
+           'Total of 2 files.' 'and the rest of what INITIALIZE made.')
     all() { for line in "${lines[@]}"; do grep -aqsF "$line" out/serial.log || return 1; done; }
     typed=
     for _ in $(seq 120); do
         if [ -z "$typed" ] && grep -aqs '%EXEC-I-START' out/serial.log; then
-            printf 'RUN STARTUP\rRUN SNOOP\rFOO\rDIR P%%NG\r' >&3
+            printf 'RUN STARTUP\rRUN SNOOP\rFOO\rDIR [SYSEXE]P%%NG\rTYPE WELCOME.TXT\r' >&3
             typed=1
         fi
         all || grep -aqs 'root task done' out/serial.log && break

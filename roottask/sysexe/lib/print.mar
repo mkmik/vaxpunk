@@ -1,4 +1,4 @@
-        .TITLE  PRINT   Console output for the boot volume's programs
+        .TITLE  PRINT   Console output for the system disk's programs
         .IDENT  /V0.1/
 ;
 ; The programs run in user mode, so they write on the console as a VMS

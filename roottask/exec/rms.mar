@@ -1,0 +1,974 @@
+        .TITLE  RMS     Record Management Services: files on the system disk
+        .IDENT  /V0.1/
+;
+; A program reads a file as on VMS: a FAB names it and a RAB reads its
+; records, with $OPEN, $CONNECT, $GET, $DISCONNECT and $CLOSE, and
+; $PARSE and $SEARCH find the files a specification with wildcards
+; names, into a NAM block (starlet.mlb's $FABDEF, $RABDEF, $NAMDEF, with
+; VMS's layouts). A specification is [DKA0:][[dir.dir...]]name.type;ver:
+; what it leaves out comes from the FAB's default specification, then
+; from DKA0:[SYSMGR], the console process's default directory. The files
+; are on the system disk, which f11.mar reads.
+;
+; $OPEN reads the file's header into an IFAB, a block of pool, which the
+; process's PCB holds by IFI, the index $OPEN puts in FAB$W_IFI; $CONNECT
+; puts the same index in RAB$W_ISI. $GET reads sequential files' VAR and
+; FIX records, a block at a time. An image's files close when it exits,
+; those its command interpreter opened when the process does.
+;
+; ponytail: the services run in kernel mode at IPL$_SYNCH, which keeps
+; the file system's buffers to one caller; VMS's RMS runs in executive
+; mode, in the process's own P1. Read only, one stream per file, no
+; logical names, ASTs or completion routines, and $SEARCH finds its place
+; again by counting the matches it skips.
+;
+        .LIBRARY "lib.mlb"
+        .LIBRARY "starlet.mlb"
+        $IPLDEF
+        $PCBDEF
+        $SSDEF
+        $RMSDEF
+        $FABDEF
+        $RABDEF
+        $NAMDEF
+
+        .EXTERNAL SCH$GL_CURPCB, EXE$ALONONPAGED, EXE$DEANONPGDSIZ
+        .EXTERNAL FIL$READHDR, FIL$READVBN, FIL$SEARCHDIR, FIL$EOF, FIL$ISDIR
+        .EXTERNAL F11$GW_FID
+
+BLOCK = 512
+MFD = 4                                 ; the MFD's file number
+MAXIFI = 15                             ; PCB$A_IFAB's slots, 1-15
+; An IFAB: an open file.
+IFB$L_POS = 0                           ; the next byte $GET reads
+IFB$L_EOF = 4                           ; the bytes in the file
+IFB$L_BLOCK = 8                         ; the VBN in IFB$AB_BUF, or 0
+IFB$AB_HDR = 16                         ; the file's header
+IFB$AB_BUF = 528                        ; a block of the file
+IFB$K_LENGTH = 1040
+; A file header's record attributes (ods/docs/file-header.md).
+FAT$B_RTYPE = 20
+FAT$B_RATTRIB = 21
+FAT$W_RSIZE = 22
+FAT$L_HIBLK = 24                        ; high word first
+FAT$B_VFCSIZE = 35
+FAT$W_MAXREC = 36
+FH2$W_FID = 8
+
+        .PSECT  EXEC$DATA, NOEXE, WRT, QUAD
+; A specification split into its five parts, device, directory, name,
+; type and version, each an address and a length, 0 if it is absent: the
+; file's, its default's, and the system's.
+SPECT:  .BLKQ   5
+DEFT:   .BLKQ   5
+SYST:   .BLKQ   5
+RMS$T_EXP::                             ; the expanded specification
+        .BLKB   256
+EXPLEN: .LONG   0
+FIELDS: .BLKQ   5                       ; its parts
+RMS$L_VERSION::                         ; the version it asks for: -1 any, 0 the highest
+        .LONG   0
+WILD:   .LONG   0                       ; 1 if it has a wildcard
+RMS$AB_DIRHDR::                         ; its directory's header
+        .BLKB   BLOCK
+DIRFID: .BLKW   3                       ; and file ID
+DIRPAT: .BLKB   48                      ; a directory's name, NAME.DIR
+RES:    .BLKB   512                     ; the resultant specification
+RESLEN: .LONG   0
+RESF:   .BLKQ   5                       ; its parts
+RESNAME:
+        .LONG   0, 0                    ; the name found, and its length
+RESVER: .LONG   0
+SYSDEF: .ASCIC  "DKA0:[SYSMGR]"         ; SYS$LOGIN, for now
+DKA0:   .ASCII  "DKA0:"
+MFDNAME:
+        .ASCII  "000000"
+DOTDIR: .ASCII  ".DIR"
+
+        .PSECT  $CODE$
+
+; RMS$PARSE: R0 = a file specification, R1 = its length, R2 = a default
+; one, R3 = its length, 0 if there is none, R4 = the system's default,
+; .ASCIC. Expands the specification into RMS$T_EXP, the parts it leaves
+; out taken from the default, then from the system's, checks it, finds
+; its directory and reads the directory's header into RMS$AB_DIRHDR. R0 =
+; RMS$_NORMAL, RMS$_SYN, RMS$_DEV, RMS$_DIR, RMS$_FNM, RMS$_VER, RMS$_DNF,
+; or the disk's error. The strings must be readable. IPL$_SYNCH. Uses R1.
+RMS$PARSE::
+        PUSHR   #^M<R2, R3, R4, R5, R6, R7, R8, R9, R10, R11>
+        CLRL    WILD
+        PUSHL   R4
+        PUSHL   R3
+        PUSHL   R2
+        MOVAQ   SPECT, R2
+        BSBW    SPLIT
+        BLBC    R0, 10$
+        MOVL    (SP), R0
+        MOVL    4(SP), R1
+        MOVAQ   DEFT, R2
+        BSBW    SPLIT
+        BLBC    R0, 10$
+        MOVL    8(SP), R0
+        MOVZBL  (R0)+, R1
+        MOVAQ   SYST, R2
+        BSBW    SPLIT
+10$:    ADDL2   #12, SP
+        BLBC    R0, 90$
+        BSBW    MERGE
+        BLBC    R0, 90$
+        BSBW    CHECK
+        BLBC    R0, 90$
+        BSBW    DIRWALK
+90$:    POPR    #^M<R2, R3, R4, R5, R6, R7, R8, R9, R10, R11>
+        RSB
+
+; SPLIT: R0 = a specification, R1 = its length, R2 = a table of five
+; parts. Splits it: [dev:][[dir]][name][.type][;ver]. A part's punctuation
+; is in it: the colon, the brackets, the dot, the semicolon. R0 =
+; RMS$_NORMAL, RMS$_DIR or RMS$_SYN. Uses R1-R6.
+SPLIT:  CLRQ    (R2)
+        CLRQ    8(R2)
+        CLRQ    16(R2)
+        CLRQ    24(R2)
+        CLRQ    32(R2)
+        ADDL3   R0, R1, R6              ; past the end
+        MOVL    R0, R3                  ; where the next part starts
+        MOVL    R3, R4                  ; the device: up to a colon
+10$:    CMPL    R4, R6
+        BGEQU   20$
+        CMPB    (R4), #^A/:/
+        BEQL    15$
+        INCL    R4
+        BRB     10$
+15$:    INCL    R4
+        MOVL    R3, (R2)
+        SUBL3   R3, R4, 4(R2)
+        MOVL    R4, R3
+20$:    CMPL    R3, R6                  ; the directory: [...] or <...>
+        BGEQU   40$
+        CMPB    (R3), #91               ; [
+        BEQL    25$
+        CMPB    (R3), #60               ; <
+        BNEQ    40$
+25$:    MOVL    R3, R4
+30$:    INCL    R4
+        CMPL    R4, R6
+        BGEQU   85$
+        CMPB    (R4), #93               ; ]
+        BEQL    35$
+        CMPB    (R4), #62               ; >
+        BNEQ    30$
+35$:    INCL    R4
+        MOVL    R3, 8(R2)
+        SUBL3   R3, R4, 12(R2)
+        MOVL    R4, R3
+40$:    MOVL    R3, R4                  ; the name: up to a dot or semicolon
+45$:    CMPL    R4, R6
+        BGEQU   50$
+        CMPB    (R4), #^A/./
+        BEQL    50$
+        CMPB    (R4), #59                 ; a semicolon
+        BEQL    50$
+        INCL    R4
+        BRB     45$
+50$:    MOVL    R3, 16(R2)
+        SUBL3   R3, R4, 20(R2)
+        MOVL    R4, R3
+        CMPL    R3, R6                  ; the type: from a dot to a semicolon
+        BGEQU   80$
+        CMPB    (R3), #^A/./
+        BNEQ    60$
+        MOVL    R3, R4
+55$:    INCL    R4
+        CMPL    R4, R6
+        BGEQU   57$
+        CMPB    (R4), #59                 ; a semicolon
+        BNEQ    55$
+57$:    MOVL    R3, 24(R2)
+        SUBL3   R3, R4, 28(R2)
+        MOVL    R4, R3
+        CMPL    R3, R6                  ; the version: the rest
+        BGEQU   80$
+60$:    CMPB    (R3), #59                 ; a semicolon
+        BNEQ    87$
+        MOVL    R3, 32(R2)
+        SUBL3   R3, R6, 36(R2)
+80$:    MOVL    #RMS$_NORMAL, R0
+        RSB
+85$:    MOVL    #RMS$_DIR, R0
+        RSB
+87$:    MOVL    #RMS$_SYN, R0
+        RSB
+
+; MERGE: builds RMS$T_EXP from the parts in SPECT, else DEFT, else SYST,
+; in capitals, and FIELDS from where each part went. An empty type is a
+; dot, an empty version a semicolon. R0 = RMS$_NORMAL, or RMS$_SYN if it
+; is longer than 255 characters. Uses R0-R6.
+MERGE:  MOVAB   RMS$T_EXP, R6           ; the next character
+        CLRL    R5                      ; the part
+10$:    MOVAQ   SPECT[R5], R1
+        TSTL    4(R1)
+        BNEQ    20$
+        MOVAQ   DEFT[R5], R1
+        TSTL    4(R1)
+        BNEQ    20$
+        MOVAQ   SYST[R5], R1
+20$:    MOVAQ   FIELDS[R5], R4
+        MOVL    R6, (R4)
+        MOVL    (R1), R2
+        MOVL    4(R1), R3
+        BNEQ    30$
+        MOVZBL  #^A/./, R0              ; nothing there: the punctuation
+        CMPL    R5, #3
+        BEQL    35$
+        MOVZBL  #59, R0                 ; a semicolon
+        CMPL    R5, #4
+        BEQL    35$
+        BRB     40$
+30$:    MOVZBL  (R2)+, R0
+        CMPB    R0, #^A/a/
+        BLSSU   35$
+        CMPB    R0, #^A/z/
+        BGTRU   35$
+        SUBB2   #^A/a/-^A/A/, R0
+35$:    MOVAB   RMS$T_EXP+255, R1
+        CMPL    R6, R1
+        BGEQU   80$
+        MOVB    R0, (R6)+
+        DECL    R3
+        BGTR    30$
+40$:    SUBL3   (R4), R6, 4(R4)
+        AOBLSS  #5, R5, 10$
+        MOVAB   RMS$T_EXP, R0
+        SUBL3   R0, R6, EXPLEN
+        MOVL    #RMS$_NORMAL, R0
+        RSB
+80$:    MOVL    #RMS$_SYN, R0
+        RSB
+
+; CHECK: checks the parts in FIELDS: the device is DKA0:, the directory
+; and the name and type are made of letters, digits, $, _ and -, with
+; dots between the directory's names, wildcards in the name, type and
+; version, and the version is a number up to 32767, * or nothing. Sets
+; WILD for a wildcard and RMS$L_VERSION. R0 = RMS$_NORMAL, RMS$_DEV,
+; RMS$_DIR, RMS$_FNM or RMS$_VER. Uses R0-R4.
+CHECK:  MOVL    FIELDS, R1              ; the device, _DKA0: or DKA0:
+        MOVL    FIELDS+4, R2
+        CMPB    (R1), #^A/_/
+        BNEQ    5$
+        INCL    R1
+        DECL    R2
+5$:     CMPL    R2, #5
+        BNEQ    80$
+        CLRL    R3
+7$:     CMPB    (R1)[R3], DKA0[R3]
+        BNEQ    80$
+        AOBLSS  #5, R3, 7$
+        ADDL3   #1, FIELDS+8, R1        ; the directory, inside its brackets
+        SUBL3   #2, FIELDS+12, R2
+        BLEQ    85$
+        MOVL    #2, R3                  ; dots, no wildcards
+        BSBW    CHARS
+        BLBC    R0, 85$
+        MOVL    FIELDS+16, R1           ; the name
+        MOVL    FIELDS+20, R2
+        CMPL    R2, #39
+        BGTRU   87$
+        MOVL    #1, R3
+        BSBW    CHARS
+        BLBC    R0, 87$
+        ADDL3   #1, FIELDS+24, R1       ; the type, past its dot
+        SUBL3   #1, FIELDS+28, R2
+        CMPL    R2, #39
+        BGTRU   87$
+        MOVL    #1, R3
+        BSBW    CHARS
+        BLBC    R0, 87$
+        ADDL3   #1, FIELDS+32, R1       ; the version, past its semicolon
+        SUBL3   #1, FIELDS+36, R2
+        BNEQ    20$
+        CLRL    RMS$L_VERSION           ; none: the highest
+        BRB     70$
+20$:    CMPB    (R1), #^A/*/
+        BNEQ    25$
+        CMPL    R2, #1
+        BNEQ    89$
+        MNEGL   #1, RMS$L_VERSION
+        MOVL    #1, WILD
+        BRB     70$
+25$:    CLRL    R0
+30$:    MOVZBL  (R1)+, R3
+        SUBL2   #^A/0/, R3
+        CMPL    R3, #9
+        BGTRU   89$
+        MULL2   #10, R0
+        ADDL2   R3, R0
+        CMPL    R0, #32767
+        BGTRU   89$
+        SOBGTR  R2, 30$
+        MOVL    R0, RMS$L_VERSION
+70$:    MOVL    #RMS$_NORMAL, R0
+        RSB
+80$:    MOVL    #RMS$_DEV, R0
+        RSB
+85$:    MOVL    #RMS$_DIR, R0
+        RSB
+87$:    MOVL    #RMS$_FNM, R0
+        RSB
+89$:    MOVL    #RMS$_VER, R0
+        RSB
+
+; CHARS: R1 = a string, R2 = its length, R3 = bit 0 set if it may have
+; the wildcards * and %, bit 1 if dots. R0 = 1 if it is made of letters,
+; digits, $, _, - and those, else 0. Sets WILD for a wildcard. Uses R4.
+CHARS:  CLRL    R4
+10$:    CMPL    R4, R2
+        BGEQU   70$
+        MOVZBL  (R1)[R4], R0
+        CMPB    R0, #^A/A/
+        BLSSU   20$
+        CMPB    R0, #^A/Z/
+        BLEQU   60$
+20$:    CMPB    R0, #^A/0/
+        BLSSU   30$
+        CMPB    R0, #^A/9/
+        BLEQU   60$
+30$:    CMPB    R0, #^A/$/
+        BEQL    60$
+        CMPB    R0, #^A/_/
+        BEQL    60$
+        CMPB    R0, #^A/-/
+        BEQL    60$
+        CMPB    R0, #^A/./
+        BNEQ    40$
+        BBS     #1, R3, 60$
+        BRB     80$
+40$:    CMPB    R0, #^A/*/
+        BEQL    45$
+        CMPB    R0, #^A/%/
+        BNEQ    80$
+45$:    BBC     #0, R3, 80$
+        MOVL    #1, WILD
+60$:    INCL    R4
+        BRB     10$
+70$:    MOVL    #1, R0
+        RSB
+80$:    CLRL    R0
+        RSB
+
+; DIRWALK: finds the directory in FIELDS, from the MFD down, each name
+; NAME.DIR;1 in the one before: [000000] is the MFD itself. Reads its
+; header into RMS$AB_DIRHDR and its file ID into DIRFID. R0 =
+; RMS$_NORMAL, RMS$_DNF, RMS$_DIR if a name isn't a directory, or the
+; disk's error. Uses R0-R11.
+DIRWALK:
+        MOVL    #MFD, R0
+        MOVAB   RMS$AB_DIRHDR, R1
+        BSBW    FIL$READHDR
+        BLBC    R0, 99$
+        ADDL3   #1, FIELDS+8, R10       ; the next name
+        ADDL3   FIELDS+8, FIELDS+12, R11
+        DECL    R11                     ; at the closing bracket
+10$:    CMPL    R10, R11
+        BLSSU   15$
+        BRW     80$
+15$:    MOVL    R10, R4                 ; the name's end
+20$:    CMPL    R4, R11
+        BGEQU   25$
+        CMPB    (R4), #^A/./
+        BEQL    25$
+        INCL    R4
+        BRB     20$
+25$:    SUBL3   R10, R4, R7             ; its length
+        BEQL    95$
+        CMPL    R7, #6                  ; 000000: the MFD, where we are
+        BNEQ    35$
+        CLRL    R0
+30$:    CMPB    (R10)[R0], MFDNAME[R0]
+        BNEQ    35$
+        AOBLSS  #6, R0, 30$
+        BRB     70$
+35$:    CMPL    R7, #39
+        BGTRU   95$
+        CLRL    R0                      ; NAME.DIR
+40$:    MOVB    (R10)[R0], DIRPAT[R0]
+        AOBLSS  R7, R0, 40$
+        MOVAB   DIRPAT[R7], R0
+        MOVL    DOTDIR, (R0)
+        ADDL2   #4, R7
+        MOVAB   DIRPAT, R6
+        MOVL    #1, R8
+        CLRL    R9
+        MOVAB   RMS$AB_DIRHDR, R3
+        PUSHL   R4
+        BSBW    FIL$SEARCHDIR
+        MOVL    (SP)+, R4
+        BLBS    R0, 50$
+        CMPL    R0, #SS$_NOMOREFILES
+        BEQL    90$
+        BRB     99$
+50$:    MOVL    R5, R0
+        MOVAB   RMS$AB_DIRHDR, R1
+        BSBW    FIL$READHDR
+        BLBC    R0, 99$
+        MOVAB   RMS$AB_DIRHDR, R1
+        BSBW    FIL$ISDIR
+        BLBC    R0, 95$
+70$:    ADDL3   #1, R4, R10             ; past the dot
+        BRW     10$
+80$:    MOVL    RMS$AB_DIRHDR+FH2$W_FID, DIRFID
+        MOVW    RMS$AB_DIRHDR+FH2$W_FID+4, DIRFID+4
+        MOVL    #RMS$_NORMAL, R0
+        RSB
+90$:    MOVL    #RMS$_DNF, R0
+        RSB
+95$:    MOVL    #RMS$_DIR, R0
+99$:    RSB
+
+; RMS$FIND: after RMS$PARSE, R1 = a buffer. Finds the one file the
+; expanded specification names, its highest version unless it gives one,
+; makes its resultant specification and reads its header into the
+; buffer. R0 = RMS$_NORMAL, RMS$_WLD, RMS$_FNF, or the disk's error.
+; IPL$_SYNCH. Uses R0-R9.
+RMS$FIND::
+        TSTL    WILD
+        BNEQ    80$
+        PUSHL   R1
+        CLRL    R9
+        BSBB    SEARCH
+        MOVL    (SP)+, R1
+        BLBS    R0, 10$
+        CMPL    R0, #SS$_NOMOREFILES
+        BNEQ    90$
+        MOVL    #RMS$_FNF, R0
+        RSB
+10$:    MOVL    R5, R0
+        BRW     FIL$READHDR
+80$:    MOVL    #RMS$_WLD, R0
+90$:    RSB
+
+; SEARCH: after RMS$PARSE, R9 = how many matches to skip. Finds the next
+; file the expanded specification names, and makes its resultant
+; specification. R5 = its file number, R0 = SS$_NORMAL, SS$_NOMOREFILES
+; or the disk's error. Uses R0-R8.
+SEARCH: MOVAB   RMS$AB_DIRHDR, R3
+        MOVL    FIELDS+16, R6           ; NAME.TYPE
+        ADDL3   FIELDS+20, FIELDS+28, R7
+        MOVL    RMS$L_VERSION, R8
+        BSBW    FIL$SEARCHDIR
+        BLBC    R0, 90$
+        PUSHL   R5
+        BSBB    MKRES
+        MOVL    (SP)+, R5
+        MOVL    #SS$_NORMAL, R0
+90$:    RSB
+
+; MKRES: R1 = a name, NAME.TYPE, R2 = its length, R4 = a version. Makes
+; the resultant specification in RES, with the expanded one's device and
+; directory, and its parts in RESF. Uses R0-R6.
+MKRES:  MOVL    R1, RESNAME
+        MOVL    R2, RESNAME+4
+        MOVL    R4, RESVER
+        MOVAB   RES, R6
+        CLRL    R5                      ; the device and directory
+10$:    MOVAQ   RESF[R5], R3
+        MOVL    R6, (R3)
+        MOVAQ   FIELDS[R5], R0
+        MOVL    (R0), R1
+        MOVL    4(R0), R2
+        BSBB    APPEND
+        SUBL3   (R3), R6, 4(R3)
+        AOBLSS  #2, R5, 10$
+        MOVL    RESNAME, R1             ; the name, up to the dot
+        CLRL    R2
+20$:    CMPL    R2, RESNAME+4
+        BGEQU   25$
+        CMPB    (R1)[R2], #^A/./
+        BEQL    25$
+        INCL    R2
+        BRB     20$
+25$:    MOVL    R6, RESF+16
+        BSBB    APPEND
+        SUBL3   RESF+16, R6, RESF+20
+        MOVL    R6, RESF+24             ; the type, the rest
+        ADDL2   R2, R1
+        SUBL3   R2, RESNAME+4, R2
+        BSBB    APPEND
+        SUBL3   RESF+24, R6, RESF+28
+        MOVL    R6, RESF+32             ; the version
+        MOVB    #59, (R6)+                ; a semicolon
+        MOVL    RESVER, R1
+        BSBB    DECIMAL
+        SUBL3   RESF+32, R6, RESF+36
+        MOVAB   RES, R0
+        SUBL3   R0, R6, RESLEN
+        RSB
+
+; APPEND: copies the R2 bytes at R1 to R6, and R6 past them. Uses R0.
+APPEND: CLRL    R0
+10$:    CMPL    R0, R2
+        BGEQU   20$
+        MOVB    (R1)[R0], (R6)+
+        INCL    R0
+        BRB     10$
+20$:    RSB
+
+; DECIMAL: writes R1 in decimal at R6, and R6 past it. Uses R0-R3.
+DECIMAL:
+        CLRL    R2                      ; digits, on the stack
+10$:    DIVL3   #10, R1, R0
+        MULL3   #10, R0, R3
+        SUBL3   R3, R1, R3
+        ADDL2   #^A/0/, R3
+        PUSHL   R3
+        INCL    R2
+        MOVL    R0, R1
+        BNEQ    10$
+20$:    MOVL    (SP)+, R0
+        MOVB    R0, (R6)+
+        SOBGTR  R2, 20$
+        RSB
+
+; PUTSTR: R0 = a specification, R1 = its length, R2 = its parts, R3 = a
+; caller's string area in a NAM block, R4 = the area's size, R5 = the
+; status if it is too small, R11 = the NAM block. Copies the
+; specification to the area and points the NAM block's parts at it. R0 =
+; RMS$_NORMAL, R5's status, or SS$_ACCVIO. Uses R0-R5.
+PUTSTR: CMPL    R1, R4
+        BLEQU   10$
+        MOVL    R5, R0
+        RSB
+10$:    IFNOWRT R1, (R3), 80$
+        PUSHL   R0
+        CLRL    R5
+20$:    CMPL    R5, R1
+        BGEQU   30$
+        MOVB    (R0)[R5], (R3)[R5]
+        INCL    R5
+        BRB     20$
+30$:    CLRL    R5
+40$:    MOVAQ   (R2)[R5], R1
+        MOVB    4(R1), NAM$B_DEV(R11)[R5]
+        SUBL3   (SP), (R1), R4
+        ADDL2   R3, R4
+        MOVL    R4, NAM$L_DEV(R11)[R5]
+        AOBLSS  #5, R5, 40$
+        TSTL    (SP)+
+        MOVL    #RMS$_NORMAL, R0
+        RSB
+80$:    MOVL    #SS$_ACCVIO, R0
+        RSB
+
+; PUTRES: R11 = a NAM block. Copies the resultant specification to its
+; resultant string area, if it has one, and the file's and directory's
+; IDs. R0 = RMS$_NORMAL, RMS$_RSS or SS$_ACCVIO. Uses R0-R5.
+PUTRES: MOVZBL  NAM$B_RSS(R11), R4
+        BEQL    10$
+        MOVAB   RES, R0
+        MOVL    RESLEN, R1
+        MOVAQ   RESF, R2
+        MOVL    NAM$L_RSA(R11), R3
+        MOVL    #RMS$_RSS, R5
+        BSBW    PUTSTR
+        BLBC    R0, 90$
+        MOVB    RESLEN, NAM$B_RSL(R11)
+10$:    MOVL    F11$GW_FID, NAM$W_FID(R11)
+        MOVW    F11$GW_FID+4, NAM$W_FID+4(R11)
+        MOVL    DIRFID, NAM$W_DID(R11)
+        MOVW    DIRFID+4, NAM$W_DID+4(R11)
+        MOVL    #RMS$_NORMAL, R0
+90$:    RSB
+
+; FABNAM: AP = a service's arguments, a FAB first. R10 = the FAB, R11 =
+; its NAM block, or 0. R0 = RMS$_NORMAL; RMS$_FAB if the caller can't
+; write a FAB there, RMS$_NAM if it can't a NAM block.
+FABNAM: MOVL    4(AP), R10
+        IFNOWRT #FAB$C_BLN, (R10), 80$
+        CMPB    FAB$B_BID(R10), #FAB$C_BID
+        BNEQ    80$
+        CMPB    FAB$B_BLN(R10), #FAB$C_BLN
+        BLSSU   80$
+        MOVL    FAB$L_NAM(R10), R11
+        BEQL    70$
+        IFNOWRT #NAM$C_BLN, (R11), 85$
+        CMPB    NAM$B_BID(R11), #NAM$C_BID
+        BNEQ    85$
+        CMPB    NAM$B_BLN(R11), #NAM$C_BLN
+        BLSSU   85$
+70$:    MOVL    #RMS$_NORMAL, R0
+        RSB
+80$:    MOVL    #RMS$_FAB, R0
+        RSB
+85$:    MOVL    #RMS$_NAM, R0
+        RSB
+
+; PARSEFAB: R10 = a FAB. RMS$PARSE with its file specification and its
+; default one, if the caller can read them. R0 = RMS$PARSE's status or
+; SS$_ACCVIO. Uses R0-R4.
+PARSEFAB:
+        MOVL    FAB$L_FNA(R10), R0
+        MOVZBL  FAB$B_FNS(R10), R1
+        BEQL    10$
+        IFNORD  R1, (R0), 80$
+10$:    MOVL    FAB$L_DNA(R10), R2
+        MOVZBL  FAB$B_DNS(R10), R3
+        BEQL    20$
+        IFNORD  R3, (R2), 80$
+20$:    MOVAB   SYSDEF, R4
+        BRW     RMS$PARSE
+80$:    MOVL    #SS$_ACCVIO, R0
+        RSB
+
+; FABDONE: R0 = a FAB service's status, R10 = the FAB. Puts it in
+; FAB$L_STS, unless the FAB isn't one, and returns it.
+        .MACRO  FABDONE ?L
+        CMPL    R0, #RMS$_FAB
+        BEQL    L
+        MOVL    R0, FAB$L_STS(R10)
+L:      ENBINT
+        RET
+        .ENDM   FABDONE
+
+; RABDONE: the same for a RAB service, with the RAB in R10.
+        .MACRO  RABDONE ?L
+        CMPL    R0, #RMS$_RAB
+        BEQL    L
+        MOVL    R0, RAB$L_STS(R10)
+L:      ENBINT
+        RET
+        .ENDM   RABDONE
+
+; $PARSE fab: parses the FAB's file specification, with its default one,
+; into its NAM block: the expanded string, if the NAM block has an area
+; for it, its parts, its directory's ID, and NAM$M_WILDCARD. $SEARCH
+; then finds the files it names.
+        .ENTRY  EXE$PARSE, ^M<R2, R3, R4, R5, R6, R7, R8, R9, R10, R11>
+        DSBINT  #IPL$_SYNCH
+        BSBW    FABNAM
+        BLBC    R0, 90$
+        MOVL    #RMS$_NAM, R0
+        TSTL    R11
+        BEQL    90$
+        BSBW    PARSEFAB
+        BLBC    R0, 90$
+        CLRL    NAM$L_WCC(R11)
+        MOVZBL  NAM$B_ESS(R11), R4
+        BEQL    10$
+        MOVAB   RMS$T_EXP, R0
+        MOVL    EXPLEN, R1
+        MOVAQ   FIELDS, R2
+        MOVL    NAM$L_ESA(R11), R3
+        MOVL    #RMS$_ESS, R5
+        BSBW    PUTSTR
+        BLBC    R0, 90$
+        MOVB    EXPLEN, NAM$B_ESL(R11)
+10$:    MOVL    DIRFID, NAM$W_DID(R11)
+        MOVW    DIRFID+4, NAM$W_DID+4(R11)
+        CLRL    NAM$L_FNB(R11)
+        TSTL    WILD
+        BEQL    20$
+        MOVL    #NAM$M_WILDCARD, NAM$L_FNB(R11)
+20$:    MOVL    #RMS$_NORMAL, R0
+90$:    FABDONE
+
+; $SEARCH fab: finds the next file the expanded string $PARSE left in the
+; FAB's NAM block names, and puts its resultant string, its parts and its
+; file ID there. RMS$_FNF if there is none at all, then RMS$_NMF when
+; there are no more, and the next $SEARCH starts again.
+        .ENTRY  EXE$SEARCH, ^M<R2, R3, R4, R5, R6, R7, R8, R9, R10, R11>
+        DSBINT  #IPL$_SYNCH
+        BSBW    FABNAM
+        BLBC    R0, 90$
+        MOVL    #RMS$_NAM, R0
+        TSTL    R11
+        BEQL    90$
+        MOVL    #RMS$_ESA, R0
+        MOVZBL  NAM$B_ESL(R11), R1
+        BEQL    90$
+        MOVL    NAM$L_ESA(R11), R0
+        IFNORD  R1, (R0), 85$
+        CLRQ    R2
+        MOVAB   SYSDEF, R4
+        BSBW    RMS$PARSE
+        BLBC    R0, 90$
+        MOVL    NAM$L_WCC(R11), R9
+        BSBW    SEARCH
+        BLBS    R0, 20$
+        CMPL    R0, #SS$_NOMOREFILES
+        BNEQ    90$
+        MOVL    #RMS$_NMF, R0
+        TSTL    NAM$L_WCC(R11)
+        BNEQ    10$
+        MOVL    #RMS$_FNF, R0
+10$:    CLRL    NAM$L_WCC(R11)
+        BRB     90$
+20$:    INCL    NAM$L_WCC(R11)
+        BSBW    PUTRES
+        BRB     90$
+85$:    MOVL    #SS$_ACCVIO, R0
+90$:    FABDONE
+
+; $OPEN fab: opens the file the FAB names, for reading: puts its IFI in
+; the FAB, with its organization, record format and attributes, maximum
+; record size, allocation and VFC header size, and in its NAM block, if
+; it has one, its resultant string and file ID. RMS$_WLK if the FAB asks
+; to write: the volume is read only.
+        .ENTRY  EXE$OPEN, ^M<R2, R3, R4, R5, R6, R7, R8, R9, R10, R11>
+        DSBINT  #IPL$_SYNCH
+        BSBW    FABNAM
+        BLBC    R0, 90$
+        MOVL    #RMS$_WLK, R0
+        BITB    #FAB$M_PUT!FAB$M_DEL!FAB$M_UPD!FAB$M_TRN, FAB$B_FAC(R10)
+        BNEQ    90$
+        BSBW    PARSEFAB
+        BLBC    R0, 90$
+        MOVL    SCH$GL_CURPCB, R9       ; a free IFI
+        MOVL    #1, R8
+10$:    TSTL    PCB$A_IFAB(R9)[R8]
+        BEQL    20$
+        AOBLEQ  #MAXIFI, R8, 10$
+        MOVL    #RMS$_DME, R0
+        BRB     90$
+20$:    MOVL    #IFB$K_LENGTH, R1
+        BSBW    EXE$ALONONPAGED
+        BLBS    R0, 25$
+        MOVL    #RMS$_DME, R0
+        BRB     90$
+25$:    MOVL    R2, R7
+        PUSHR   #^M<R7, R8, R9>
+        MOVAB   IFB$AB_HDR(R7), R1
+        BSBW    RMS$FIND
+        POPR    #^M<R7, R8, R9>
+        BLBC    R0, 80$
+        TSTL    R11
+        BEQL    30$
+        BSBW    PUTRES
+        BLBC    R0, 80$
+30$:    CLRL    IFB$L_POS(R7)
+        CLRL    IFB$L_BLOCK(R7)
+        MOVAB   IFB$AB_HDR(R7), R1
+        BSBW    FIL$EOF
+        MOVL    R0, IFB$L_EOF(R7)
+        MOVL    R7, PCB$A_IFAB(R9)[R8]
+        ASHL    R8, #1, R0
+        BISL2   R0, PCB$L_FILES(R9)
+        MOVW    R8, FAB$W_IFI(R10)
+        MOVZBL  IFB$AB_HDR+FAT$B_RTYPE(R7), R0
+        BICB3   #^XF0, R0, FAB$B_RFM(R10)
+        BICB3   #^X0F, R0, FAB$B_ORG(R10)
+        MOVB    IFB$AB_HDR+FAT$B_RATTRIB(R7), FAB$B_RAT(R10)
+        MOVW    IFB$AB_HDR+FAT$W_MAXREC(R7), FAB$W_MRS(R10)
+        MOVB    IFB$AB_HDR+FAT$B_VFCSIZE(R7), FAB$B_FSZ(R10)
+        MOVZWL  IFB$AB_HDR+FAT$L_HIBLK(R7), R0  ; high word first
+        ASHL    #16, R0, R0
+        MOVW    IFB$AB_HDR+FAT$L_HIBLK+2(R7), R0
+        MOVL    R0, FAB$L_ALQ(R10)
+        MOVL    #RMS$_NORMAL, R0
+        BRB     90$
+80$:    PUSHL   R0
+        MOVL    R7, R0
+        MOVL    #IFB$K_LENGTH, R1
+        BSBW    EXE$DEANONPGDSIZ
+        MOVL    (SP)+, R0
+90$:    FABDONE
+
+; GETIFAB: R8 = an IFI. R7 = its IFAB, R9 = the current PCB, R0 =
+; RMS$_NORMAL, or RMS$_IFI if the process has no such file open.
+GETIFAB:
+        MOVL    SCH$GL_CURPCB, R9
+        TSTL    R8
+        BEQL    80$
+        CMPL    R8, #MAXIFI
+        BGTRU   80$
+        MOVL    PCB$A_IFAB(R9)[R8], R7
+        BEQL    80$
+        MOVL    #RMS$_NORMAL, R0
+        RSB
+80$:    MOVL    #RMS$_IFI, R0
+        RSB
+
+; CLOSEIFI: R8 = an IFI, R7 = its IFAB, R9 = the current PCB. Closes it.
+; Uses R0 and R1.
+CLOSEIFI:
+        CLRL    PCB$A_IFAB(R9)[R8]
+        ASHL    R8, #1, R0
+        BICL2   R0, PCB$L_FILES(R9)
+        MOVL    R7, R0
+        MOVL    #IFB$K_LENGTH, R1
+        BRW     EXE$DEANONPGDSIZ
+
+; $CLOSE fab: closes the file $OPEN opened.
+        .ENTRY  EXE$CLOSE, ^M<R2, R3, R4, R5, R6, R7, R8, R9, R10, R11>
+        DSBINT  #IPL$_SYNCH
+        BSBW    FABNAM
+        BLBC    R0, 90$
+        MOVZWL  FAB$W_IFI(R10), R8
+        BSBB    GETIFAB
+        BLBC    R0, 90$
+        BSBB    CLOSEIFI
+        CLRW    FAB$W_IFI(R10)
+        MOVL    #RMS$_NORMAL, R0
+90$:    FABDONE
+
+; RABCHK: AP = a service's arguments, a RAB first. R10 = the RAB, R0 =
+; RMS$_NORMAL, or RMS$_RAB if the caller can't write a RAB there.
+RABCHK: MOVL    4(AP), R10
+        IFNOWRT #RAB$C_BLN, (R10), 80$
+        CMPB    RAB$B_BID(R10), #RAB$C_BID
+        BNEQ    80$
+        CMPB    RAB$B_BLN(R10), #RAB$C_BLN
+        BLSSU   80$
+        MOVL    #RMS$_NORMAL, R0
+        RSB
+80$:    MOVL    #RMS$_RAB, R0
+        RSB
+
+; $CONNECT rab: connects the RAB to the file its FAB opened, at its start.
+        .ENTRY  EXE$CONNECT, ^M<R2, R3, R4, R5, R6, R7, R8, R9, R10, R11>
+        DSBINT  #IPL$_SYNCH
+        BSBB    RABCHK
+        BLBC    R0, 90$
+        MOVL    RAB$L_FAB(R10), R1
+        IFNORD  #FAB$C_BLN, (R1), 80$
+        MOVZWL  FAB$W_IFI(R1), R8
+        BSBB    GETIFAB
+        BLBC    R0, 90$
+        CLRL    IFB$L_POS(R7)
+        MOVW    R8, RAB$W_ISI(R10)
+        MOVL    #RMS$_NORMAL, R0
+        BRB     90$
+80$:    MOVL    #RMS$_FAB, R0
+90$:    RABDONE
+
+; $DISCONNECT rab: disconnects the RAB from its file.
+        .ENTRY  EXE$DISCONNECT, ^M<R2, R3, R4, R5, R6, R7, R8, R9, R10, R11>
+        DSBINT  #IPL$_SYNCH
+        BSBW    RABCHK
+        BLBC    R0, 90$
+        MOVZWL  RAB$W_ISI(R10), R8
+        BSBW    GETIFAB
+        BLBC    R0, 80$
+        CLRW    RAB$W_ISI(R10)
+        BRB     90$
+80$:    MOVL    #RMS$_ISI, R0
+90$:    RABDONE
+
+; $GET rab: reads the next record into the RAB's user buffer, as much of
+; it as fits: RAB$L_RBF points at it and RAB$W_RSZ is its size.
+; RMS$_RTB if it didn't all fit, RMS$_EOF past the last, RMS$_RFM for a
+; file whose records are neither VAR nor FIX.
+        .ENTRY  EXE$GET, ^M<R2, R3, R4, R5, R6, R7, R8, R9, R10, R11>
+        DSBINT  #IPL$_SYNCH
+        BSBW    RABCHK
+        BLBC    R0, 90$
+        MOVZWL  RAB$W_ISI(R10), R8
+        BSBW    GETIFAB
+        BLBC    R0, 87$
+        MOVL    RAB$L_UBF(R10), R6
+        MOVZWL  RAB$W_USZ(R10), R5
+        BEQL    10$
+        IFNOWRT R5, (R6), 85$
+10$:    BITL    #1, IFB$L_POS(R7)       ; records start on a word
+        BEQL    15$
+        INCL    IFB$L_POS(R7)
+15$:    BICB3   #^XF0, IFB$AB_HDR+FAT$B_RTYPE(R7), R0
+        CMPB    R0, #FAB$C_FIX
+        BEQL    20$
+        CMPB    R0, #FAB$C_VAR
+        BNEQ    86$
+        BSBW    GETWORD                 ; VAR: its size first
+        BLBC    R1, 88$
+        CMPL    R0, #^XFFFF             ; none left in the block
+        BNEQ    25$
+        ADDL2   #BLOCK-1, IFB$L_POS(R7)
+        BICL2   #BLOCK-1, IFB$L_POS(R7)
+        BRB     15$
+20$:    MOVZWL  IFB$AB_HDR+FAT$W_RSIZE(R7), R0
+25$:    MOVL    R0, R4                  ; the record's size
+        MOVL    R0, R2                  ; the bytes left of it
+        CLRL    R3                      ; the bytes read
+30$:    TSTL    R2
+        BEQL    40$
+        BSBW    GETBYTE
+        BLBC    R1, 88$
+        CMPL    R3, R5
+        BGEQU   35$
+        MOVB    R0, (R6)[R3]
+35$:    INCL    R3
+        DECL    R2
+        BRB     30$
+40$:    MOVL    R6, RAB$L_RBF(R10)
+        MOVL    #RMS$_NORMAL, R0
+        CMPL    R4, R5
+        BLEQU   45$
+        MOVL    R5, R4
+        MOVL    #RMS$_RTB, R0
+45$:    MOVW    R4, RAB$W_RSZ(R10)
+        BRB     90$
+85$:    MOVL    #SS$_ACCVIO, R0
+        BRB     90$
+86$:    MOVL    #RMS$_RFM, R0
+        BRB     90$
+87$:    MOVL    #RMS$_ISI, R0
+        BRB     90$
+88$:    MOVL    R1, R0
+90$:    RABDONE
+
+; GETWORD: R7 = an IFAB. R0 = the next word of its file, low byte first,
+; R1 = RMS$_NORMAL, RMS$_EOF or the disk's error.
+GETWORD:
+        BSBB    GETBYTE
+        BLBC    R1, 90$
+        PUSHL   R0
+        BSBB    GETBYTE
+        BLBC    R1, 80$
+        ASHL    #8, R0, R0
+        BISL2   (SP)+, R0
+        RSB
+80$:    TSTL    (SP)+
+90$:    RSB
+
+; GETBYTE: R7 = an IFAB. R0 = the next byte of its file, read a block at
+; a time, R1 = RMS$_NORMAL, RMS$_EOF past its end of file, or the disk's
+; error.
+GETBYTE:
+        MOVL    #RMS$_EOF, R1
+        CMPL    IFB$L_POS(R7), IFB$L_EOF(R7)
+        BGEQU   90$
+        PUSHR   #^M<R2, R3>
+        DIVL3   #BLOCK, IFB$L_POS(R7), R0
+        INCL    R0                      ; the byte's VBN
+        CMPL    R0, IFB$L_BLOCK(R7)
+        BEQL    20$
+        PUSHL   R0
+        MOVL    #1, R1
+        MOVAB   IFB$AB_BUF(R7), R2
+        MOVAB   IFB$AB_HDR(R7), R3
+        BSBW    FIL$READVBN
+        MOVL    R0, R1
+        MOVL    (SP)+, R0
+        BLBC    R1, 80$
+        MOVL    R0, IFB$L_BLOCK(R7)
+20$:    BICL3   #^C<BLOCK-1>, IFB$L_POS(R7), R0
+        MOVZBL  IFB$AB_BUF(R7)[R0], R0
+        INCL    IFB$L_POS(R7)
+        MOVL    #RMS$_NORMAL, R1
+80$:    POPR    #^M<R2, R3>
+90$:    RSB
+
+; RMS$RUNDOWN: R4 = the current PCB, R0 = a mask of IFIs. Closes the
+; process's files but those. Uses R0-R3.
+RMS$RUNDOWN::
+        PUSHR   #^M<R7, R8, R9>
+        MOVL    R0, R3
+        MOVL    R4, R9
+        MOVL    #1, R8
+10$:    BBC     R8, PCB$L_FILES(R4), 20$
+        BBS     R8, R3, 20$
+        MOVL    PCB$A_IFAB(R4)[R8], R7
+        BSBW    CLOSEIFI
+20$:    AOBLEQ  #MAXIFI, R8, 10$
+        POPR    #^M<R7, R8, R9>
+        RSB
+
+        .END

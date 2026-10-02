@@ -12,6 +12,7 @@
 ;   RUN image   runs image, image.EXE if it has no type, in this process
 ;   DIRECTORY [spec]
 ;               runs DIRECTORY.EXE, with spec as its command line
+;   TYPE spec   runs TYPE.EXE, with spec as its command line
 ;   HELP        lists the commands
 ;   LOGOUT      ends the process
 ;
@@ -47,6 +48,8 @@ TOKEN:  .BLKB   LINESIZE+4              ; a word of it, in capitals, and room fo
 TOKDSC: .LONG   0                       ; a descriptor of TOKEN: its length
         .ADDRESS TOKEN
 DIRIMG: .ASCID  "DIRECTORY.EXE"
+TYPEIMG:
+        .ASCID  "TYPE.EXE"
 MSG:    .BLKB   256                     ; a message being made, .ASCIC
 CHAR:   .BLKB   1
 V_RUN:  .ASCIC  "RUN"
@@ -55,6 +58,7 @@ V_LOGOUT:
         .ASCIC  "LOGOUT"
 V_DIRECTORY:
         .ASCIC  "DIRECTORY"
+V_TYPE: .ASCIC  "TYPE"
 DOTEXE: .ASCII  ".EXE"
 SEVERITY:
         .ASCII  "WSEIF???"
@@ -90,6 +94,9 @@ NEXT:   $QIOW_S CHAN=CHAN, FUNC=#IO$_READPROMPT, IOSB=IOSB, P1=LINE, P2=#LINESIZ
         MOVAB   V_DIRECTORY, R1
         BSBW    VERB
         BLBS    R0, DIRECTORY
+        MOVAB   V_TYPE, R1
+        BSBW    VERB
+        BLBS    R0, TYPE
         PRINT   "%DCL-W-IVVERB, unrecognized command verb - check validity and spelling"
         ADDTEXT " \"
         BSBW    ADDTOKEN
@@ -102,6 +109,7 @@ QUIT:   RET
 HELP:   PRINT   "  RUN image   runs image, image.EXE if it has no type"
         PRINT   "  DIRECTORY [spec]"
         PRINT   "              lists the files spec names, * and % wildcards"
+        PRINT   "  TYPE spec   writes the file spec names on the console"
         PRINT   "  HELP        lists the commands"
         PRINT   "  LOGOUT      ends the process"
         BRW     NEXT
@@ -110,8 +118,7 @@ HELP:   PRINT   "  RUN image   runs image, image.EXE if it has no type"
 RUN:    BSBW    WORD
         TSTL    R8
         BNEQ    10$
-        PRINT   "%DCL-W-INSFPRM, missing command parameters - supply all required parameters"
-        BRW     NEXT
+        BRB     INSFPRM
 10$:    CLRL    R0                      ; a type?
 15$:    CMPB    TOKEN[R0], #^A/./
         BEQL    20$
@@ -123,6 +130,19 @@ RUN:    BSBW    WORD
         $IMGACT_S IMAGE=TOKDSC
         MOVAB   TOKDSC, R1
         BRB     ACTFAIL
+
+; TYPE spec: runs TYPE.EXE with the spec.
+TYPE:   BSBW    WORD
+        TSTL    R8
+        BEQL    INSFPRM
+        MOVL    R8, TOKDSC
+        $IMGACT_S IMAGE=TYPEIMG, CMDLIN=TOKDSC
+        MOVAB   TYPEIMG, R1
+        BRB     ACTFAIL
+
+INSFPRM:
+        PRINT   "%DCL-W-INSFPRM, missing command parameters - supply all required parameters"
+        BRW     NEXT
 
 ; DIRECTORY [spec]: runs DIRECTORY.EXE with the spec, if there is one.
 DIRECTORY:
