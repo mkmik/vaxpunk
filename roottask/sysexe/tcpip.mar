@@ -1,0 +1,268 @@
+        .TITLE  TCPIP   Sets and shows the network interface
+        .IDENT  /V0.1/
+;
+; DCL's SET INTERFACE address mask gateway and SHOW INTERFACE run this,
+; with INTERFACE and the rest as its command line, in the spirit of TCP/IP
+; Services' TCPIP SET INTERFACE. An address is four numbers and dots.
+; SET sets the interface with IO$_SETCHAR on BGA0:, the network's port
+; driver (netdriver.mar), and saves the command in TCPIP$CONFIG.DAT on
+; the data disk, the one that may be written. SHOW senses them with
+; IO$_SENSECHAR and writes them, and whether the link is up. With no
+; command line, as SYLOGIN.COM runs it at boot, it sets the interface
+; from the saved command, if there is one, and says so, and starts
+; TELNETD, the remote login server SET HOST talks to.
+; ponytail: one interface; a saved file only once INITIALIZE DKB0: has
+; made a volume there.
+;
+        .LIBRARY "lib.mlb"
+        .LIBRARY "starlet.mlb"
+        .LIBRARY "sysexe.mlb"
+        $VADEF
+        $SSDEF
+        $RMSDEF
+        $FABDEF
+        $RABDEF
+        $IODEF
+
+        .EXTERNAL PUT_LINE, INET_ADDR
+
+        .PSECT  DATA, NOEXE, WRT, LONG
+BGA0:   .ASCID  "BGA0:"
+CHAN:   .LONG   0
+IOSB:   .BLKQ   1
+SETTINGS:                               ; address, mask, gateway, flags: 2 the link is up
+        .BLKL   4
+CMD:    .BLKB   256                     ; the command, .ASCIC: the command line's, or the saved one
+FAB:    $FAB    FNA=CONFIG, FNS=CONFIGLEN
+RAB:    $RAB    FAB=FAB, UBF=CMD+1, USZ=255
+LINE:   .BLKB   256                     ; a line being written, .ASCIC
+CONFIG: .ASCII  "DKB0:[000000]TCPIP$CONFIG.DAT"
+CONFIGLEN = . - CONFIG
+INTERFACE:
+        .ASCII  "INTERFACE"
+TELNETD:
+        .ASCID  "TELNETD.EXE"
+TELNETD_NAME:
+        .ASCID  "TCPIP$TELNET"
+
+        .PSECT  CODE, EXE, LONG
+        .ENTRY  START, ^M<R2, R3, R4, R5, R6>
+        $ASSIGN_S DEVNAM=BGA0, CHAN=CHAN
+        BLBC    R0, 90$
+        MOVZBL  @#VA$C_FOREIGN, R0
+        BEQL    BOOT
+        MOVC3   R0, @#VA$C_FOREIGN+1, CMD+1
+        MOVB    @#VA$C_FOREIGN, CMD
+        MOVL    #1, R2                  ; the first word must be INTERFACE
+        BSBW    WORD
+        CMPL    R1, #9
+        BNEQ    80$
+        CMPL    (R0), INTERFACE
+        BNEQ    80$
+        CMPL    4(R0), INTERFACE+4
+        BNEQ    80$
+        CMPB    8(R0), INTERFACE+8
+        BNEQ    80$
+        MOVL    #2, R2
+        BSBW    WORD
+        TSTL    R1
+        BEQL    SHOW
+        BSBW    SET
+        BLBC    R0, 90$
+        BRW     SAVE
+80$:    MOVL    #SS$_BADPARAM, R0
+90$:    RET
+
+; BOOT: no command line: unless the interface has an address already,
+; the saved command, if there is one, from the data disk. Then the
+; remote login server, TELNETD, unless it runs already. Without a
+; network, nothing.
+BOOT:   BSBW    SENSE
+        BLBC    R0, 80$
+        TSTL    SETTINGS
+        BNEQ    50$
+        $OPEN   FAB=FAB
+        BLBC    R0, 50$
+        $CONNECT RAB=RAB
+        BLBC    R0, 40$
+        $GET    RAB=RAB
+        BLBC    R0, 40$
+        MOVB    RAB+RAB$W_RSZ, CMD
+        BSBW    SET
+        BLBC    R0, 40$
+        BSBW    SENSE
+        BLBC    R0, 40$
+        MOVAB   SETMSG, R1
+        BSBW    SHOWLINE
+40$:    MOVL    R0, R2
+        $CLOSE  FAB=FAB
+        BLBC    R2, 90$
+50$:    $CREPRC_S IMAGE=TELNETD, PRCNAM=TELNETD_NAME, BASPRI=#4
+80$:    MOVL    #SS$_NORMAL, R0
+        RET
+90$:    MOVL    R2, R0
+        RET
+
+; SAVE: writes CMD in a new version of the saved command.
+SAVE:   MOVB    #FAB$C_VAR, FAB+FAB$B_RFM
+        MOVB    #FAB$M_CR, FAB+FAB$B_RAT
+        $CREATE FAB=FAB
+        BLBC    R0, 80$
+        $CONNECT RAB=RAB
+        BLBC    R0, 70$
+        MOVAB   CMD+1, RAB+RAB$L_RBF
+        MOVZBW  CMD, RAB+RAB$W_RSZ
+        $PUT    RAB=RAB
+70$:    MOVL    R0, R2
+        $CLOSE  FAB=FAB
+        BLBC    R2, 80$
+        MOVL    #SS$_NORMAL, R0
+        RET
+80$:    PRINTHEX "%TCPIP-W-NOTSAVED, the interface is set, but not saved on DKB0:, status ", R0
+        MOVL    #SS$_NORMAL, R0
+        RET
+
+; SET: CMD = INTERFACE address mask gateway. Sets the interface so. R0 =
+; a status. Uses R0-R6.
+SET:    MOVL    #2, R2
+        MOVAB   SETTINGS, R6
+10$:    BSBW    WORD
+        BSBW    ADDRESS
+        BLBC    R0, 90$
+        MOVL    R3, (R6)+
+        AOBLEQ  #4, R2, 10$
+        $QIOW_S CHAN=CHAN, FUNC=#IO$_SETCHAR, IOSB=IOSB, P1=SETTINGS
+        BLBC    R0, 90$
+        MOVZWL  IOSB, R0
+90$:    RSB
+
+; SHOW: writes the interface's address, mask and gateway, and the link's
+; state.
+SHOW:   BSBW    SENSE
+        BLBC    R0, 90$
+        PRINT   "Interface  IP_Addr          Network mask     Gateway          Link"
+        MOVAB   SHOWMSG, R1
+        BSBW    SHOWLINE
+        MOVL    #SS$_NORMAL, R0
+90$:    RET
+
+; SENSE: senses the settings. R0 = a status.
+SENSE:  $QIOW_S CHAN=CHAN, FUNC=#IO$_SENSECHAR, IOSB=IOSB, P1=SETTINGS
+        BLBC    R0, 90$
+        MOVZWL  IOSB, R0
+90$:    RSB
+
+; SHOWLINE: R1 = a heading, .ASCIC. Writes it, then the settings, each in
+; 17 columns, and the link's state. Keeps R0.
+SHOWLINE:
+        PUSHL   R0
+        MOVB    (R1)+, LINE
+        MOVZBL  LINE, R2
+        MOVC3   R2, (R1), LINE+1
+        MOVAB   SETTINGS, R6
+10$:    MOVL    (R6)+, R3
+        MOVZBL  LINE, R4
+        BSBW    ADDTEXT
+        ADDB3   #17, R4, R5             ; pad to the column's end
+20$:    CMPB    LINE, R5
+        BGEQU   30$
+        MOVZBL  LINE, R0
+        MOVB    #^A/ /, LINE+1[R0]
+        INCB    LINE
+        BRB     20$
+30$:    MOVAB   SETTINGS+12, R0
+        CMPL    R6, R0
+        BLSSU   10$
+        MOVAB   DOWN, R1
+        BBC     #1, (R6), 40$
+        MOVAB   UP, R1
+40$:    MOVZBL  (R1)+, R2
+        MOVZBL  LINE, R0
+        ADDB2   R2, LINE
+        MOVC3   R2, (R1), LINE+1[R0]
+        PUSHAB  LINE
+        CALLS   #1, G^PUT_LINE
+        MOVL    (SP)+, R0
+        RSB
+SHOWMSG:
+        .ASCIC  " BGA0      "
+SETMSG: .ASCIC  "%TCPIP-I-SET, BGA0: "
+UP:     .ASCIC  "up"
+DOWN:   .ASCIC  "down"
+
+; ADDTEXT: R3 = an address. Appends it to LINE, four numbers and dots.
+; Uses R0-R3.
+ADDTEXT:
+        CLRL    R2                      ; the byte
+10$:    EXTZV   #0, #8, R3, R0
+        ASHL    #-8, R3, R3
+        BICL2   #^XFF000000, R3
+        MOVL    #100, R1                ; its digits, without leading zeros
+        TSTL    R0
+        BNEQ    15$
+        MOVL    #1, R1
+15$:    CMPL    R0, R1
+        BGEQU   20$
+        DIVL2   #10, R1
+        BRB     15$
+20$:    PUSHL   R2
+25$:    DIVL3   R1, R0, R2
+        MULL3   R2, R1, -(SP)
+        SUBL2   (SP)+, R0
+        ADDB2   #^A/0/, R2
+        PUSHL   R0
+        MOVZBL  LINE, R0
+        MOVB    R2, LINE+1[R0]
+        INCB    LINE
+        MOVL    (SP)+, R0
+        DIVL2   #10, R1
+        BNEQ    25$
+        MOVL    (SP)+, R2
+        INCL    R2
+        CMPL    R2, #4
+        BGEQU   90$
+        MOVZBL  LINE, R0
+        MOVB    #^A/./, LINE+1[R0]
+        INCB    LINE
+        BRB     10$
+90$:    RSB
+
+; WORD: R2 = n. R0 = the address of CMD's nth word, from 1, R1 = its
+; length, 0 if there are fewer. Keeps every other register.
+WORD:   PUSHR   #^M<R2, R3, R4>
+        MOVAB   CMD+1, R0
+        MOVZBL  CMD, R3
+        ADDL2   R0, R3                  ; past the last character
+10$:    CMPL    R0, R3                  ; past the blanks
+        BGEQU   80$
+        CMPB    (R0), #^A/ /
+        BNEQ    20$
+        INCL    R0
+        BRB     10$
+20$:    MOVL    R0, R4                  ; to the next blank
+30$:    CMPL    R0, R3
+        BGEQU   40$
+        CMPB    (R0), #^A/ /
+        BEQL    40$
+        INCL    R0
+        BRB     30$
+40$:    SOBGTR  R2, 10$
+        SUBL3   R4, R0, R1
+        MOVL    R4, R0
+        BRB     90$
+80$:    CLRL    R1
+90$:    POPR    #^M<R2, R3, R4>
+        RSB
+
+; ADDRESS: R0 and R1 = a word. R3 = the address it is (INET_ADDR), and
+; R0 = SS$_NORMAL, or SS$_IVADDR. Keeps R2.
+ADDRESS:
+        CLRL    -(SP)
+        PUSHAL  (SP)
+        PUSHL   R0
+        PUSHL   R1
+        CALLS   #3, G^INET_ADDR
+        MOVL    (SP)+, R3
+        RSB
+
+        .END    START

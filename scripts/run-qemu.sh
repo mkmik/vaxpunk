@@ -4,7 +4,10 @@
 #   --gdb    wait for a debugger on localhost:1234 (-s -S)
 #   --hvf    use Hypervisor.framework instead of TCG (best effort, macOS only)
 #   --uart1  serve the second UART on telnet localhost:PORT (default 4444)
-# EDK2_FW overrides the firmware image, DATADISK the data disk's.
+# EDK2_FW overrides the firmware image, DATADISK the data disk's, LOG the
+# console log's, NETDEV the network's QEMU -netdev (QEMU's user network,
+# slirp, by default) and MAC the network device's address: a second
+# vaxpunk on the same network needs its own of the last four.
 set -eu
 
 root=$(cd "$(dirname "$0")/.." && pwd)
@@ -53,16 +56,20 @@ fi
 # until INITIALIZE DKB0: writes a volume on it, then kept from boot to
 # boot. They are unit 0 and 1 in the order of their -device options. The
 # ESP stays on PCI, for EDK2.
+# The network device, virtio-net, is a third virtio-mmio transport, after
+# the disks, which the TCP/IP component drives. On QEMU's user network the
+# guest is 10.0.2.15/24 and the host 10.0.2.2, its gateway.
 # Semihosting, from EL0 too, is how the root task powers QEMU off on a halt.
 datadisk=${DATADISK:-$root/out/datadisk.img}
 [ -f "$datadisk" ] || dd if=/dev/zero of="$datadisk" bs=512 count=4096 2>/dev/null
 qemu-system-aarch64 -machine "virt,secure=off,gic-version=$QEMU_GIC,acpi=off" $cpu \
-	-smp 1 -m "$QEMU_MEM" -display none -nic none -bios "$EDK2_FW" \
-	-boot menu=on,splash-time=0 -drive "if=virtio,format=raw,file=$root/out/esp.img" \
+	-smp 1 -m "$QEMU_MEM" -display none -bios "$EDK2_FW" \
+	-boot menu=on,splash-time=0 -drive "if=virtio,format=raw,readonly=on,file=$root/out/esp.img" \
 	-drive "if=none,id=sysdisk,format=raw,readonly=on,file=$root/out/sysdisk.img" \
 	-device virtio-blk-device,drive=sysdisk \
 	-drive "if=none,id=datadisk,format=raw,file=$datadisk" \
 	-device virtio-blk-device,drive=datadisk -global virtio-mmio.force-legacy=false \
-	-chardev "stdio,id=con,mux=on,signal=off,logfile=$root/out/serial.log" \
+	-netdev "${NETDEV:-user,id=net0}" -device "virtio-net-device,netdev=net0${MAC:+,mac=$MAC}" \
+	-chardev "stdio,id=con,mux=on,signal=off,logfile=${LOG:-$root/out/serial.log}" \
 	-serial chardev:con -serial "$uart1" -monitor chardev:con \
 	-semihosting-config enable=on,target=native,userspace=on $gdb | "$root/scripts/serial-filter.py"

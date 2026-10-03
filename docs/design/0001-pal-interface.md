@@ -23,7 +23,8 @@ drive the system disk, and
 [ADR-0011](../adr/0011-asts-on-the-kernel-stack.md), which has it request
 AST delivery from bits in the HWPCB.
 [DESIGN-0002](0002-executive-processes.md) covers what the executive does
-with it.
+with it, and [DESIGN-0003](0003-tcpip-port.md) the TCP/IP component the
+PAL starts beside it and the port they share.
 
 ## The vocabulary rule
 
@@ -43,6 +44,7 @@ every process shares (*Memory*):
 | Address | What | Protection |
 | --- | --- | --- |
 | `0x40010000` up | `EXEC.EXE`'s sections, at their link addresses | theirs |
+| `0x4FF00000`-`0x4FF11000` | the port's 17 pages, with a network device only ([DESIGN-0003](0003-tcpip-port.md)) | kernel write |
 | `0x4FFF0000` | the restart parameter block, one page | kernel write |
 | `0x5FFEC000`-`0x5FFF0000` | the boot stack, 16 KB | kernel write |
 
@@ -59,7 +61,8 @@ from 0 up for these. Nothing else is mapped. The boot context starts with:
   waits for IPL to drop below 24.
 - **Process context.** Its HWPCB is the RPB's (`RPB$Q_HWPCB`).
 - **Scheduling.** Its own scheduling context, with the root task's budget
-  and period, and a priority one below the root task's.
+  and period, and a priority two below the root task's, one below the
+  TCP/IP component's.
 
 ### The restart parameter block
 
@@ -71,6 +74,7 @@ from 0 up for these. Nothing else is mapped. The boot context starts with:
 | 4 | `RPB$L_PFNCNT` | how many PFNs the executive has: 0 to `PFNCNT` - 1 |
 | 8 | `RPB$L_FREEPFN` | the PFNs below this one hold what the PAL set up |
 | 12 | `RPB$L_BOOTTIME` | seconds since 1970 at boot, from QEMU virt's PL031 RTC, which the PAL maps after the UART and reads once |
+| 16 | `RPB$L_PORT` | port 0's pages, `0x4FF00000`, or 0 without a network device |
 | 64 | `RPB$Q_HWPCB` | the boot context's HWPCB, 128 bytes |
 
 ### The disks
@@ -229,7 +233,8 @@ The PAL delivers through the system control block, whose address the
 executive sets with `MTPR #PR$_SCBB`. Its vectors are longwords at the
 VAX's offsets (`$SCBDEF`): 0x10 for a reserved instruction, 0x20 for an
 access violation, 0x40 + 4x for `CHMx`, 0x80 + 4n for software interrupt
-level n, 0xC0 for the interval timer, 0xF8 for the console receiver.
+level n, 0xC0 for the interval timer, 0xF8 for the console receiver,
+0x100 for port 0's completion.
 
 The PSL holds the current mode in bits 25:24, the previous mode in 23:22,
 IPL in 20:16 and NZVC in 3:0. Modes are 0 kernel, 1 executive,
@@ -301,6 +306,12 @@ every register it uses, R0 included.
   the UART on each tick, and on the `MTPR` that sets IE, so a character
   waits up to 10 ms; the UART's own interrupt, through seL4's IRQ handler,
   later.
+- **The port.** `MTPR #n, #PR$_DOORBELL` rings port n's doorbell: the
+  PAL signals the TCP/IP component's notification, and returns at once.
+  When the component signals back, the PAL requests an interrupt at IPL
+  21 and delivers it through vector 0x100 as the console's
+  ([DESIGN-0003](0003-tcpip-port.md)). Only port 0 exists, and only with a
+  network device; without one the doorbell does nothing.
 - Interrupts go to kernel mode, with kernel as the previous mode, as the
   VAX's do.
 - **`CHMx`**, x the mode: `CHMK` 0, `CHME` 1, `CHMS` 2, `CHMU` 3. The code in
@@ -388,6 +399,7 @@ and gets:
 | `MTPR src, #PR$_TXDB` | `MTPR_TXDB` |
 | `MTPR src, #PR$_RXCS`, `MFPR #PR$_RXCS, dst` | `MTPR_RXCS`, `MFPR_RXCS` |
 | `MFPR #PR$_RXDB, dst` | `MFPR_RXDB` |
+| `MTPR src, #PR$_DOORBELL` | `MTPR_DOORBELL` |
 | `CHMK #code`, `CHME`, `CHMS`, `CHMU` | `CHMK`, `CHME`, `CHMS`, `CHMU`, R0 = code; R0 isn't kept |
 | `PROBER mode, len, base`, `PROBEW` | `PROBER`, `PROBEW`, a0 = base, a1 = len, a2 = mode; Z set if v0 is 0, no access |
 | `REI` | `REI` |
@@ -427,6 +439,7 @@ unused.
 | 0x45 | `MFPR_RXDB` | vaxpunk | | v0 = character | takes the character that waits, or 0 if none does |
 | 0x46 | `READLBLK` | vaxpunk | a0 = buffer, a1 = byte count, a2 = LBN, a3 = unit | v0 = status | reads a disk's blocks from the LBN into the buffer, which kernel mode must be able to write |
 | 0x47 | `WRITELBLK` | vaxpunk | a0 = buffer, a1 = byte count, a2 = LBN, a3 = unit | v0 = status | writes the buffer, which kernel mode must be able to read, to a disk's blocks from the LBN |
+| 0x48 | `MTPR_DOORBELL` | vaxpunk | a0 = port | | signals the port's component; never waits |
 | 0x82 | `CHME` | Alpha | a0 = code | | delivers through the SCB, to executive mode |
 | 0x83 | `CHMK` | Alpha | a0 = code | | delivers through the SCB, to kernel mode |
 | 0x84 | `CHMS` | Alpha | a0 = code | | delivers through the SCB, to supervisor mode |
@@ -518,3 +531,5 @@ vaxpunk's own, 0x40-0x7F:
 | 0x41 | `WRPTE` | writing a PTE in memory, then `MTPR_TBIS` |
 | 0x42 | `DELCTX` | the PAL's half of deleting a process |
 | 0x43-0x45 | `MTPR_RXCS`, `MFPR_RXCS`, `MFPR_RXDB` | the VAX console receive registers |
+| 0x46, 0x47 | `READLBLK`, `WRITELBLK` | Alpha's console `READ` and `WRITE` callbacks |
+| 0x48 | `MTPR_DOORBELL` | a smart peripheral's doorbell, as an MSCP port's polling register |

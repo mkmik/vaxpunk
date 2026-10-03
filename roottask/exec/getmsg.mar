@@ -137,6 +137,34 @@ MESSAGES:
         .ASCIC  "SYSTEM"
         .ASCIC  "NOSUCHDEV"
         .ASCIC  "no such device available"
+        .LONG   SS$_TIMEOUT
+        .ASCIC  "SYSTEM"
+        .ASCIC  "TIMEOUT"
+        .ASCIC  "device timeout"
+        .LONG   SS$_REJECT
+        .ASCIC  "SYSTEM"
+        .ASCIC  "REJECT"
+        .ASCIC  "network connect rejected"
+        .LONG   SS$_LINKDISCON
+        .ASCIC  "SYSTEM"
+        .ASCIC  "LINKDISCON"
+        .ASCIC  "network partner disconnected logical link"
+        .LONG   SS$_LINKABORT
+        .ASCIC  "SYSTEM"
+        .ASCIC  "LINKABORT"
+        .ASCIC  "network partner aborted logical link"
+        .LONG   SS$_UNREACHABLE
+        .ASCIC  "SYSTEM"
+        .ASCIC  "UNREACHABLE"
+        .ASCIC  "remote node is not currently reachable"
+        .LONG   SS$_IVADDR
+        .ASCIC  "SYSTEM"
+        .ASCIC  "IVADDR"
+        .ASCIC  "invalid media address"
+        .LONG   SS$_DEVOFFLINE
+        .ASCIC  "SYSTEM"
+        .ASCIC  "DEVOFFLINE"
+        .ASCIC  "device is not in configuration or not available"
         .LONG   SS$_NOHOMEBLK
         .ASCIC  "SYSTEM"
         .ASCIC  "NOHOMEBLK"

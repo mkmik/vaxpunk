@@ -29,6 +29,11 @@
 ;               lists the devices, those whose names start with name
 ;   SHOW PROCESS, SHOW SYSTEM
 ;               run SHOW.EXE, with PROCESS or SYSTEM as its command line
+;   SET INTERFACE address mask gateway, SHOW INTERFACE
+;               run TCPIP.EXE, with INTERFACE and the rest as its
+;               command line
+;   SET HOST address
+;               runs RTPAD.EXE, a remote login to address
 ;   EDIT spec   runs EDIT.EXE, with spec as its command line
 ;   COPY from to
 ;               runs COPY.EXE
@@ -206,6 +211,13 @@ MOUNTIMG:
         .ASCID  "MOUNT.EXE"
 SHOWIMG:
         .ASCID  "SHOW.EXE"
+TCPIPIMG:
+        .ASCID  "TCPIP.EXE"
+RTPADIMG:
+        .ASCID  "RTPAD.EXE"
+V_HOST: .ASCIC  "HOST"
+V_INTERFACE:
+        .ASCIC  "INTERFACE"
 MSG:    .BLKB   256                     ; a message being made, .ASCIC
 CHAR:   .BLKB   1
 V_RUN:  .ASCIC  "RUN"
@@ -433,6 +445,10 @@ NEXT:   MOVL    SAVESP, SP
 PROMPT1:
         $QIOW_S CHAN=CHAN, FUNC=#IO$_READPROMPT, IOSB=IOSB, P1=LINE, P2=#LINESIZE, P5=#PROMPT, P6=#2
         BLBC    R0, QUIT
+        CMPW    IOSB, #SS$_LINKDISCON   ; SET HOST's: the line is gone
+        BEQL    QUIT
+        CMPW    IOSB, #SS$_LINKABORT
+        BEQL    QUIT
         MOVZWL  IOSB+2, R7
 ; GOTLINE: R7 = the length of the command in LINE.
 GOTLINE:
@@ -604,6 +620,12 @@ HELP:   PRINT   "  RUN image   runs image, image.EXE if it has no type"
         PRINT   "              shows this process"
         PRINT   "  SHOW SYSTEM"
         PRINT   "              lists the processes"
+        PRINT   "  SET INTERFACE address mask gateway"
+        PRINT   "              sets the network interface's, and saves them"
+        PRINT   "  SHOW INTERFACE"
+        PRINT   "              shows them"
+        PRINT   "  SET HOST address"
+        PRINT   "              logs in to another vaxpunk"
         PRINT   "  EDIT spec   edits the file spec names with EDT"
         PRINT   "  COPY from to"
         PRINT   "              copies a file"
@@ -671,6 +693,12 @@ INITIALIZE:
         BRB     FOREIGN
 MOUNT:  MOVAB   MOUNTIMG, R4
         MOVL    #2, R3
+        BRB     FOREIGN
+; INTERFACE: SET INTERFACE and SHOW INTERFACE, R3 = the parameters they
+; need, INTERFACE's included, which goes on TCPIP.EXE's command line.
+INTERFACE:
+        SUBL2   R8, R6
+        MOVAB   TCPIPIMG, R4
 FOREIGN:
         BSBW    REST
         CMPL    R2, R3
@@ -772,11 +800,23 @@ OK:     MOVL    #SS$_NORMAL, LASTSTAT
 ; SET DEFAULT spec: $PARSEs spec, which must name no file, and makes the
 ; directory it expands to the default, with $SETDDIR, and its device the
 ; process's SYS$DISK. One that doesn't
-; exist is still set, as VMS does, with a message.
+; exist is still set, as VMS does, with a message. SET INTERFACE runs
+; TCPIP.EXE, SET HOST RTPAD.EXE.
 SET:    BSBW    WORD
         TSTL    R8
         BEQL    5$
-        MOVAB   V_DEFAULT, R1
+        MOVAB   V_INTERFACE, R1
+        BSBW    VERB
+        BLBC    R0, 2$
+        MOVL    #4, R3
+        BRW     INTERFACE
+2$:     MOVAB   V_HOST, R1
+        BSBW    VERB
+        BLBC    R0, 3$
+        MOVAB   RTPADIMG, R4
+        MOVL    #1, R3
+        BRW     FOREIGN
+3$:     MOVAB   V_DEFAULT, R1
         BSBW    VERB
         BLBC    R0, IVKEYW
         BSBW    WORD
@@ -959,7 +999,7 @@ ADDDEF: MOVL    DEFNAM+NAM$L_DEV, R1
 ; SHOW LOGICAL [name]: translates name in LNM$FILE_DEV, and shows the
 ; equivalence and the table it is in. With no name, or *, lists them all.
 ; SHOW DEFAULT: as SHOWDEF. SHOW DEVICES: as SHOWDEV. SHOW PROCESS and
-; SHOW SYSTEM run SHOW.EXE.
+; SHOW SYSTEM run SHOW.EXE, SHOW INTERFACE TCPIP.EXE.
 SHOW:   BSBW    WORD
         TSTL    R8
         BEQL    5$
@@ -980,8 +1020,13 @@ SHOW:   BSBW    WORD
         BLBS    R0, 7$
         MOVAB   V_SYMBOL, R1
         BSBW    VERB
-        BLBC    R0, 6$
+        BLBC    R0, 4$
         BRW     SHOWSYM
+4$:     MOVAB   V_INTERFACE, R1
+        BSBW    VERB
+        BLBC    R0, 6$
+        MOVL    #1, R3
+        BRW     INTERFACE
 6$:     BRW     IVKEYW
 5$:     BRW     INSFPRM
 7$:     SUBL2   R8, R6                  ; the keyword is SHOW.EXE's command line
