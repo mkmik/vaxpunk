@@ -15,7 +15,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest]
+        # macOS is off: slow, and rarely needed for kernel work. To bring it
+        # back, add macos-latest here; the "macOS packages" step is still in place.
+        os: [ubuntu-latest]
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
