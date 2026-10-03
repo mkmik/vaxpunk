@@ -11,7 +11,9 @@
 //! out/check-datadisk.img, not the one you keep, SHOW DEVICES, SHOW PROCESS
 //! and SHOW SYSTEM, or the root task is done, which is only on a halt or a fault. DCL reads what was
 //! typed ahead a line at a time. Then it types a CONTINUE with nothing stopped, and stops
-//! SPIN and SLEEPER with CTRL/Y, twice each, with a CONTINUE in between, a
+//! SPIN and SLEEPER with CTRL/Y, twice each, with a CONTINUE in between, and
+//! EDIT while it reads, whose read CTRL/Y ends, so that DCL reads SHOW
+//! DEFAULT and CONTINUE, and EDIT takes the empty line as RETURN, a
 //! step at a time: each waits until a line has come so many times, the echo
 //! of what it typed before included, and types.
 //! STARTUP's SLEEPER and SVCTEST's NAPPER say they hibernate before SLEEPER
@@ -84,6 +86,7 @@ const LINES: &[&str] = &[
     "  $STATUS == 268534418   Hex = 10018292  Octal = 02000301222",
     "X is 42",
     "  HOME == \"SET DEFAULT SYS$MANAGER:\"",
+    "    2\t        Welcome to vaxpunk, an OpenVMS clone for arm64",
 ];
 
 /// What it must not: the lines of DCLTEST.COM's a failure skips or reaches.
@@ -99,6 +102,13 @@ const STEPS: &[(&str, usize, &str)] = &[
     ("*INTERRUPT*", 3, "CONTINUE\r"),
     ("CONTINUE", 3, "\x19"),
     ("*INTERRUPT*", 4, "HELP\r"),
+    (
+        "deletes a local symbol",
+        1,
+        "EDIT SYS$MANAGER:WELCOME.TXT\r",
+    ),
+    ("    1\t", 3, "\x19"),
+    ("*INTERRUPT*", 5, "SHOW DEFAULT\rCONTINUE\r"),
 ];
 
 #[test]

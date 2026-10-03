@@ -22,7 +22,10 @@ holds a Files-11 volume the executive writes, and
 [ADR-0012](../adr/0012-data-disk-writable-files-11.md): so does a second
 virtio disk, `DKB0:`, which the PAL writes, and
 [ADR-0011](../adr/0011-asts-on-the-kernel-stack.md): ASTs are delivered
-when the PAL asks, on top of the kernel stack.
+when the PAL asks, on top of the kernel stack, and
+[ADR-0013](../adr/0013-qio-irps-and-drivers.md): `$QIO` queues an I/O
+request packet to the device's driver, and its completion is a kernel
+mode AST.
 
 The executive borrows VMS's structure and names (PCB, `SCH$`, `MMG$`,
 `EXE$` routines, `SS$_` codes, the system service interfaces) but none of
@@ -40,7 +43,8 @@ its code.
 | `event.mar` | event flags, local and common |
 | `process.mar` | `$CREPRC`, process start, image activation, `$IMGACT`, `$EXIT`, image rundown, CTRL/Y and `$CONTINUE`, deletion, `$HIBER`, `$WAKE`, `$SUSPND`, `$RESUME`, `$SETPRI`, `$SETPRN`, `$CMKRNL` |
 | `lnm.mar` | logical name tables, `$CRELNM`, `$DELLNM`, `$TRNLNM` |
-| `qio.mar` | `$ASSIGN`, `$DASSGN`, `$QIO`, `$QIOW`: writes on the console and reads from it; the console receive interrupt and the type-ahead buffer |
+| `qio.mar` | the devices' UCBs, `$ASSIGN`, `$DASSGN`, `$QIO`, `$QIOW`; IRPs, their completion and cancelling |
+| `ttdriver.mar` | the console's terminal driver: writes, queued reads and their editing, the console receive interrupt and the type-ahead buffer, CTRL/Y |
 | `getdvi.mar` | `$GETDVI`, `$GETDVIW`, `$DEVICE_SCAN`: what the devices are |
 | `syssrv.mar` | the system service vector, the `CHMK` and `CHME` dispatchers, `$CMEXEC`, where processes enter user and supervisor mode, the exception handlers and the stubs |
 | `f11.mar` | Files-11 ODS-2 volumes: the disks' VCBs, reading and writing their blocks, `FIL$MOUNT` and `$MOUNT`, headers, maps, directories, `FIL$OPENFILE` for the image activator |
@@ -222,7 +226,8 @@ there is. The image activator puts its transfer address in
   `EXE$CLIENTRY` with the status.
 - **CTRL/Y** ([ADR-0010](../adr/0010-ctrly-calls-the-cli-on-top-of-the-image.md))
   stops the image: `TTY$IOPOST` sets `PCB$V_CTRLY` in the process with a
-  command interpreter that runs an image, and ends its wait, if it waits.
+  command interpreter that runs an image, ends its console reads with
+  `SS$_CONTROLY` and its wait, if it waits.
   The process serves it in `EXE$CTRLY` going back to user mode, from
   `TTY$IOPOST`, `SCH$RESCHED` or a system service (`EXE$CTRLYCHK`), or
   ending a wait, in `SCH$WAIT`. `EXE$CTRLY` pushes the registers and the
@@ -287,7 +292,6 @@ States and queues, as VMS's `$STATEDEF`:
 | `LEF` | `SCH$GQ_LEFWQ` |
 | `CEF` | the common event block's own queue |
 | `SUSP` | `SCH$GQ_SUSPWQ` |
-| `MWAIT` | the resource's own queue: `TTY$GQ_READQ` for a console read |
 
 - **`SCH$SCHED`** takes the first process from the highest non-empty COM
   queue, makes it current and `SWPCTX`es to its HWPCB, unless it is the
@@ -374,9 +378,9 @@ Inside the executive, IPL, as on a uniprocessor VMS. `DSBINT`, `ENBINT`,
 | --- | --- |
 | `IPL$_HWCLK` (24) | the interval timer interrupt runs here; the system time, `EXE$GQ_1ST_TIME` |
 | `IPL$_CONSOLE` (20) | the console receive interrupt runs here; the type-ahead buffer |
-| `IPL$_SYNCH` (8) | the scheduler's queues and PCBs, the PFN list, pool, common event blocks, the timer queue, the logical name tables, the console |
+| `IPL$_SYNCH` (8) | the scheduler's queues and PCBs, the PFN list, pool, common event blocks, the timer queue, the logical name tables, the UCBs and their IRPs, the console |
 | `IPL$_TIMER` (7) | the software timer interrupt runs here |
-| `IPL$_IOPOST` (4) | the software interrupt that wakes the console's readers runs here |
+| `IPL$_IOPOST` (4) | the software interrupt that gives typed characters to the console's reads runs here |
 | `IPL$_RESCHED` (3) | the reschedule interrupt runs here; below it, the CPU may move |
 | `IPL$_ASTDEL` (2) | the AST delivery interrupt runs here; below it, kernel mode ASTs come |
 | 0 | process code |
@@ -451,7 +455,7 @@ an executive routine, `ACB$L_KAST`.
 `$SETIMR`'s AST comes from its timer queue entry (*Time*), and `$DELPRC`'s
 kernel mode AST deletes the process (*Deletion*). ponytail: the routine
 gets its parameter only, not VMS's R0, R1, PC and PSL after it; no AST
-quotas; `$QIO` ignores its `astadr`.
+quotas.
 
 ## System services
 
@@ -549,47 +553,90 @@ table. VMS's logical name directories, hash table and mutex replace this.
 
 ### I/O
 
-The console is the one device. `$ASSIGN` gives a channel to `OPA0:`, one of
-31, a bit in `PCB$L_CHANS`. It translates the device name it is given
-first, as VMS does: without a colon at its end, in `LNM$FILE_DEV`, and
-what that translates to, up to `LNM$C_MAXDEPTH`, 10, times, until a name
-doesn't translate, or starts with an underscore, which says it is a
-device's own name and is dropped. So `SYS$INPUT` is `_OPA0:`, the console. `$QIO` writes a buffer on it, for
-`IO$_WRITEVBLK`, `IO$_WRITELBLK` and `IO$_WRITEPBLK`, or reads a line into
-one, for `IO$_READVBLK`, `IO$_READLBLK`, `IO$_READPBLK`, and
-`IO$_READPROMPT`, which writes the prompt in p5 and p6 first. Then it sets
-the event flag and the I/O status block: the status, the byte count and,
-for a read, the terminator, a carriage return or CTRL/Z, or none if the
-buffer filled. So the I/O is done when
-`$QIO` returns, and `$QIOW` is `$QIO`.
+[ADR-0013](../adr/0013-qio-irps-and-drivers.md): a request goes to the
+device's driver in an I/O request packet, and comes back to the process
+as a kernel mode AST.
 
+- **Devices.** Each has a unit control block (`$UCBDEF`) in `qio.mar`,
+  `IOC$AB_UCB`: `OPA0:`, `DKA0:`, `DKB0:`, `MDA0:`. A UCB holds a queue of
+  IRPs waiting for the device, its driver's FDT routine, and a disk's VCB.
+- **Channels.** `$ASSIGN` gives one of 31, a bit in `PCB$L_CHANS`, with
+  the device's UCB in `PCB$AL_CCB`. It translates the device name it is
+  given first, as VMS does: without a colon at its end, in
+  `LNM$FILE_DEV`, and what that translates to, up to `LNM$C_MAXDEPTH`,
+  10, times, until a name doesn't translate, or starts with an
+  underscore, which says it is a device's own name and is dropped. So
+  `SYS$INPUT` is `_OPA0:`, the console. `$DASSGN` cancels the channel's
+  requests and gives it back.
+- **`$QIO`** checks the channel and that the caller can write the IOSB,
+  clears the event flag, and calls the FDT routine at `IPL$_SYNCH` with
+  its arguments. That checks the function and its parameters, a failure
+  being `$QIO`'s status, makes the IRP (`$IRPDEF`, `IOC$ALLOCIRP`, from
+  pool, up to 64 KB with a buffered read's prompt and data), and does
+  the I/O or queues it.
+- **Completion.** A driver ends a request with `IOC$REQCOM`, which puts
+  the IOSB's two longwords in the IRP and queues it, whose head is an
+  ACB's, to the process as a kernel mode AST, `IOC$POST`. In the process,
+  that copies a buffered read's data to the caller's buffer, writes the
+  IOSB and sets the event flag. If the caller gave an AST, the IRP goes
+  on the AST queue again as an ACB for it, in the caller's mode, with
+  `astprm`; else it is freed.
+- **`$QIOW`** is `$QIO`, then `$WAITFR` on the event flag, until the
+  IOSB, if there is one, has a status: a flag set before that, for
+  something else, is cleared and waited for again, as VMS's `$SYNCH`
+  does.
+- **Cancelling.** `IOC$CANCEL` frees a process's IRPs for some of its
+  channels, unfinished, from the UCBs and from its AST queue: image
+  rundown cancels the image's channels before its P0 goes, process
+  rundown all of them, `$DASSGN` the one.
+
+The console's driver, `ttdriver.mar`, `TT$FDT`:
+
+- **Writing**, for `IO$_WRITEVBLK`, `IO$_WRITELBLK` and `IO$_WRITEPBLK`,
+  is done in the FDT routine, from the caller's buffer, at `IPL$_SYNCH`,
+  so lines don't mix; then the request is completed with the byte count.
+  A write doesn't wait behind a read.
+- **Reading**, for `IO$_READVBLK`, `IO$_READLBLK`, `IO$_READPBLK`, and
+  `IO$_READPROMPT`, whose prompt is in p5 and p6, queues the IRP, with
+  the prompt copied in, on `OPA0:`'s UCB. The read at the head writes its
+  prompt and takes the characters typed, one at a time, editing the line
+  in the IRP; when it ends it is completed, with the line's length and,
+  in the IOSB's second longword, its terminator, a carriage return or
+  CTRL/Z, or none if the buffer filled, and the next read starts.
 - **Receiving.** `TTY$RCVINT`, the console receive interrupt
   (DESIGN-0001), puts each character in `TTY$AB_RING`, the 256-byte
   type-ahead buffer, or drops it if the buffer is full, and requests the
-  `IPL$_IOPOST` software interrupt. `TTY$IOPOST` ends the wait of each
-  process in `TTY$GQ_READQ`. CTRL/Y empties the buffer instead, and
-  `TTY$IOPOST` echoes `*INTERRUPT*` and stops the image (*The command
-  interpreter*).
-- **Reading**, at `IPL$_SYNCH`: takes characters from the buffer, at
-  `IPL$_CONSOLE`, and echoes them, up to a carriage return, echoed as
-  CR LF, or a CTRL/Z, echoed as `*EXIT*`. The line is edited as on VMS,
-  in insert mode: the left and right arrows move the cursor, CTRL/H to
-  the start and CTRL/E to the end, DEL erases the character before the
+  `IPL$_IOPOST` software interrupt. `TTY$IOPOST` gives the buffer's
+  characters to the read at the head, at `IPL$_SYNCH`. CTRL/Y empties the
+  buffer instead, and `TTY$IOPOST` echoes `*INTERRUPT*`, completes the
+  stopped process's reads with `SS$_CONTROLY` and stops the image (*The
+  command interpreter*).
+- **Editing**: each character is echoed, up to a carriage return, echoed
+  as CR LF, or a CTRL/Z, echoed as `*EXIT*`. The line is edited as on
+  VMS, in insert mode: the left and right arrows move the cursor, CTRL/H
+  to the start and CTRL/E to the end, DEL erases the character before the
   cursor and CTRL/U all of them. The up arrow or CTRL/B recalls the line
   read before, and again the one before that, up to 16, from
   `TTY$AB_RECALL`, and the down arrow goes back. Other control characters
   and escape sequences are dropped, and the buffer's last character ends
-  the read too. With `IO$M_NOECHO` nothing is echoed or recalled, and with `IO$M_NOFILTR`
-  every character but a carriage return goes in the buffer as it is, so
-  a read of one byte reads a key, as EDT's keypad mode does, escape
-  sequences a character at a time. While the
-  buffer is empty the process waits in `MWAIT` on `TTY$GQ_READQ`. Echo is
-  the reader's, so what is typed ahead shows when it is read.
+  the read too. With `IO$M_NOECHO` nothing is echoed or recalled, and with
+  `IO$M_NOFILTR` every character but a carriage return goes in the buffer
+  as it is, so a read of one byte reads a key, as EDT's keypad mode does,
+  escape sequences a character at a time. Echo is the read's, so what is
+  typed ahead shows when a read takes it.
 
-ponytail: a buffer at a time, at `IPL$_SYNCH`, so lines don't mix; a
-terminal driver with I/O request packets, CTRL/C and CTRL/Y ASTs replaces
-it. The recall buffer is the console's, shared by every reader, where VMS
-has DCL's own, with `RECALL`.
+The disks' driver, `DK$FDT` in `f11.mar`, reads the blocks from LBN p3
+into the p2 bytes at p1, for `IO$_READLBLK` and `IO$_READPBLK`, or writes
+them there, for `IO$_WRITELBLK` and `IO$_WRITEPBLK`, at once, as the file
+system does (*Files*), and completes the request with the status, and the
+byte count if it is a success: `SS$_WRITLCK` for `DKA0:`.
+
+ponytail: the console's line being read is kept in `ttdriver.mar`, not
+its UCB, since there is one terminal; output waits for the console at
+`IPL$_SYNCH`, and a write in the middle of a line being read doesn't
+redisplay it. The recall buffer is the console's, shared by every
+reader, where VMS has DCL's own, with `RECALL`. No `$CANCEL`, no
+quotas, no `IO$_SETMODE`.
 
 ### Devices
 
@@ -618,9 +665,9 @@ bits (`$DVIDEF`, `$DVSDEF`, `$DCDEF`, `$DEVDEF` in `starlet.mlb`):
   fills the IOSB, done at once; `$GETDVIW` is `$GETDVI`.
 
 DCL's `SHOW DEVICES` scans the disks, then the terminals, and asks
-`$GETDVIW` about each. ponytail: no I/O database: no DDBs or UCBs, so no
-error, operation or reference counts, device types or `MAXBLOCK`; no
-ASTs.
+`$GETDVIW` about each. ponytail: a VCB, or none for the console, stands
+for the device rather than its UCB, which has no error, operation or
+reference counts, device type or `MAXBLOCK` yet; no ASTs.
 
 ### Files
 

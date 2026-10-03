@@ -5,8 +5,8 @@
 ; $GETDVI, as on VMS, with VMS's item codes (starlet.mlb's $DVIDEF and
 ; $DVSDEF). The devices are the disks, in f11.mar's order, each a VCB,
 ; then the console, OPA0:, the one terminal: DEVICE numbers them so.
-; ponytail: no I/O database, so no DDBs or UCBs; a VCB stands for a
-; disk's, and the console has none. $GETDVI is done when it returns, and
+; ponytail: a VCB stands for a disk, and 0 for the console, not their UCBs
+; (qio.mar), which have no counts or device types yet. $GETDVI is done when it returns, and
 ; takes no AST.
 ;
         .LIBRARY "lib.mlb"
@@ -109,7 +109,7 @@ ONLINE: TSTL    R5
 
 ; $GETDVI efn, chan, devnam, itmlst, iosb, astadr, astprm, nullarg:
 ; returns what the item list asks about a device: the one devnam names,
-; translated as $ASSIGN translates it, or else chan's, the console. Each
+; translated as $ASSIGN translates it, or else chan's. Each
 ; item is a buffer length and an item code, words, then the buffer's
 ; address and the address of a word for the length returned, or 0; a
 ; longword of 0 ends the list. A value is a longword, a string as long
@@ -152,13 +152,14 @@ ONLINE: TSTL    R5
         BRB     15$
 18$:    MOVL    #SS$_NOSUCHDEV, R0
         BRB     80$
-20$:    MOVZWL  8(AP), R0               ; else the channel's: the console
+20$:    MOVZWL  8(AP), R0               ; else the channel's
         BEQL    25$
         CMPL    R0, #MAXCHAN
         BGTRU   25$
         MOVL    SCH$GL_CURPCB, R1
         BBC     R0, PCB$L_CHANS(R1), 25$
-        CLRL    R5
+        MOVL    PCB$AL_CCB(R1)[R0], R5  ; its UCB
+        MOVL    UCB$L_VCB(R5), R5
         BRB     30$
 25$:    MOVL    #SS$_IVCHAN, R0
         BRB     80$

@@ -1,0 +1,577 @@
+        .TITLE  TTDRIVER The console's terminal driver
+        .IDENT  /V0.3/
+;
+; OPA0:, the console, is a terminal, and this is its driver
+; (docs/adr/0013-qio-irps-and-drivers.md). $QIO calls TT$FDT, which
+; writes a buffer at once, and queues a read on the console's UCB, in an
+; IRP that holds its prompt and the line read.
+;
+; What the console receives, its receive interrupt puts in the type-ahead
+; buffer, and requests the IPL$_IOPOST software interrupt, where the read
+; at the head of the queue takes the characters, echoing and editing the
+; line, or recalling one read before, up to a carriage return or CTRL/Z,
+; or a key at a time with IO$M_NOFILTR. A read that ends is completed,
+; and the next one writes its prompt and goes on from there. What is
+; typed while no read is queued waits in the buffer.
+; CTRL/Y empties the buffer instead, ends the reads of the process whose
+; image it stops with SS$_CONTROLY, and stops the image, so that the
+; console's command interpreter prompts (ADR-0010).
+; ponytail: one terminal, so the line being read is kept here, not in its
+; UCB; output is written a buffer at a time at IPL$_SYNCH, waiting for
+; the console, so lines don't mix.
+;
+        .LIBRARY "lib.mlb"
+        .LIBRARY "starlet.mlb"
+        $PRDEF
+        $IPLDEF
+        $PCBDEF
+        $UCBDEF
+        $IRPDEF
+        $STATEDEF
+        $IODEF
+        $SSDEF
+        $VADEF
+
+        .EXTERNAL SCH$GL_PCBVEC, SCH$WAKEPCB
+        .EXTERNAL EXE$OUTCHAR, EXE$OUTCRLF, EXE$OUTZSTRING, EXE$CTRLYCHK
+        .EXTERNAL IOC$AB_OPA0, IOC$ALLOCIRP, IOC$REQCOM
+
+TYPEAHEAD = 256                         ; the type-ahead buffer, a ring
+RXCS$V_DONE = 7                         ; RXCS: a character is waiting
+RXCS$M_IE = ^X40                        ; interrupt when one is
+CTRLY = 25
+CTRLZ = 26
+RECALL = 16                             ; lines in the recall buffer, a power of 2
+
+        .PSECT  EXEC$DATA, NOEXE, WRT, QUAD
+TTY$GL_PUT::                            ; where the next character received goes in the ring
+        .LONG   0
+TTY$GL_GET::                            ; where a read takes the next from
+        .LONG   0
+TTY$AB_RING::                           ; the type-ahead buffer: received, not yet read
+        .BLKB   TYPEAHEAD
+TTY$GL_CTRLY::                          ; 1: CTRL/Y came, for TTY$IOPOST
+        .LONG   0
+TTY$GL_LEN::                            ; the line being read: its length,
+        .LONG   0
+TTY$GL_CURSOR::                         ; where the cursor is in it,
+        .LONG   0
+TTY$GL_BACK::                           ; how many lines back a recall is, 0: none,
+        .LONG   0
+TTY$GL_ESC::                            ; and 1 after an ESC, 2 in an escape sequence
+        .LONG   0
+TTY$GL_RECALL::                         ; the recall buffer's slot the next line read goes in
+        .LONG   0
+TTY$GL_NRECALL::                        ; how many lines the recall buffer holds
+        .LONG   0
+TTY$AB_RECALL::                         ; the lines read, 256 bytes each: .ASCIC
+        .BLKB   RECALL*256
+INTERRUPT:
+        .ASCIZ  <13><10>"*INTERRUPT*"<13><10>
+EXIT:   .ASCIZ  "*EXIT*"<13><10>
+
+        .PSECT  $CODE$
+
+; TT$FDT: the console's FDT routine, which $QIO calls. R4 = the current
+; PCB, R5 = OPA0:'s UCB, AP = $QIO's arguments. Writes p2 bytes at p1, for
+; IO$_WRITEVBLK, IO$_WRITELBLK and IO$_WRITEPBLK, and completes the
+; request with the count. Queues a read of a line into them, for
+; IO$_READVBLK, IO$_READLBLK and IO$_READPBLK, and for IO$_READPROMPT
+; once it has written the p6 bytes at p5, without echo for IO$M_NOECHO
+; and a key at a time for IO$M_NOFILTR (EDIT). Its IOSB has the line's
+; length and its terminator, a carriage return or CTRL/Z, and its size, or
+; 0 if the buffer filled. R0 = SS$_NORMAL, SS$_ILLIOFUNC, SS$_ACCVIO,
+; SS$_BADPARAM, or IOC$ALLOCIRP's failure. IPL$_SYNCH. Uses R0-R8.
+TT$FDT::
+        BICL3   #^C63, 12(AP), R0       ; the function, without modifiers
+        MOVL    28(AP), R2
+        MOVL    32(AP), R3
+        CMPL    R3, #65535
+        BGTRU   87$
+        CMPL    R0, #IO$_WRITEVBLK
+        BEQL    10$
+        CMPL    R0, #IO$_WRITELBLK
+        BEQL    10$
+        CMPL    R0, #IO$_WRITEPBLK
+        BEQL    10$
+        CMPL    R0, #IO$_READVBLK
+        BEQL    20$
+        CMPL    R0, #IO$_READLBLK
+        BEQL    20$
+        CMPL    R0, #IO$_READPBLK
+        BEQL    20$
+        CMPL    R0, #IO$_READPROMPT
+        BEQL    20$
+        MOVL    #SS$_ILLIOFUNC, R0
+        RSB
+10$:    IFNORD  R3, (R2), 85$           ; a write
+        CLRL    R1
+        BSBW    IOC$ALLOCIRP
+        BLBC    R0, 90$
+        PUSHL   R3
+        MOVL    28(AP), R2
+        MOVL    32(AP), R3
+        BSBW    WRITE
+        MOVL    (SP)+, R3
+        ASHL    #16, IRP$L_BCNT(R3), R0
+        BISL2   #SS$_NORMAL, R0
+        CLRL    R1
+        BRW     IOC$REQCOM
+20$:    IFNOWRT R3, (R2), 85$           ; a read
+        CLRL    R6                      ; its prompt's size
+        CMPL    R0, #IO$_READPROMPT
+        BNEQ    25$
+        MOVL    48(AP), R6
+        CMPL    R6, #65535
+        BGTRU   87$
+        IFNORD  R6, @44(AP), 85$
+25$:    ADDL3   R6, R3, R1
+        BSBW    IOC$ALLOCIRP
+        BLBC    R0, 90$
+        MOVL    R6, IRP$L_PROMPT(R3)
+        MOVL    #IRP$M_BUFIO, IRP$L_STS(R3)
+        TSTL    R6
+        BEQL    30$
+        PUSHR   #^M<R3, R4, R5>
+        MOVC3   R6, @44(AP), IRP$K_LENGTH(R3)
+        POPR    #^M<R3, R4, R5>
+30$:    INSQUE  (R3), @UCB$L_IOQBL(R5)
+        BSBW    STARTIO
+        MOVL    #SS$_NORMAL, R0
+        RSB
+85$:    MOVL    #SS$_ACCVIO, R0
+        RSB
+87$:    MOVL    #SS$_BADPARAM, R0
+90$:    RSB
+
+; WRITE: writes the R3 bytes at R2 on the console. IPL$_SYNCH. Uses R0
+; and R1.
+WRITE:  CLRL    R1
+10$:    CMPL    R1, R3
+        BGEQU   20$
+        MOVZBL  (R2)[R1], R0
+        JSB     G^EXE$OUTCHAR
+        INCL    R1
+        BRB     10$
+20$:    RSB
+
+; STARTIO: works on the console's queue of reads: the one at its head
+; writes its prompt, if it hasn't, and takes the characters in the
+; type-ahead buffer, editing the line in its IRP, until the buffer is
+; empty or the line ends. Then it is completed, and the next one goes on.
+; IPL$_SYNCH. Uses R0-R8.
+STARTIO:
+10$:    MOVAB   G^IOC$AB_OPA0, R0
+        MOVL    UCB$L_IOQFL(R0), R4     ; the read at the head
+        CMPL    R4, R0
+        BEQL    90$                     ; none
+        BBSS    #IRP$V_STARTED, IRP$L_STS(R4), 20$
+        CLRL    TTY$GL_LEN              ; it starts: an empty line, after the prompt
+        CLRL    TTY$GL_CURSOR
+        CLRL    TTY$GL_BACK
+        CLRL    TTY$GL_ESC
+        MOVAB   IRP$K_LENGTH(R4), R2
+        MOVL    IRP$L_PROMPT(R4), R3
+        BSBB    WRITE
+20$:    MOVL    TTY$GL_LEN, R1
+        MOVL    TTY$GL_CURSOR, R5
+        MOVL    TTY$GL_BACK, R7
+        ADDL3   #IRP$K_LENGTH, IRP$L_PROMPT(R4), R2
+        ADDL2   R4, R2
+        MOVL    IRP$L_BCNT(R4), R3
+        MOVL    IRP$L_FUNC(R4), R6
+        CLRL    R0
+        CMPL    R1, R3
+        BGEQU   40$                     ; full
+        BSBW    GETCHAR
+        BLSS    30$                     ; no more yet
+        BSBW    EDIT
+        MOVL    R1, TTY$GL_LEN
+        MOVL    R5, TTY$GL_CURSOR
+        MOVL    R7, TTY$GL_BACK
+        TSTL    R0
+        BLSS    20$
+40$:    REMQUE  (R4), R3                ; it ends
+        MOVL    R0, R8
+        ASHL    #16, R1, R0
+        BISL2   #SS$_NORMAL, R0
+        MOVL    R8, R1
+        BSBW    IOC$REQCOM
+        BRB     10$
+30$:    MOVL    R1, TTY$GL_LEN
+        MOVL    R5, TTY$GL_CURSOR
+        MOVL    R7, TTY$GL_BACK
+90$:    RSB
+
+; EDIT: R0 = a character typed, for the line at R2, R3 bytes, R1 of them
+; read, the cursor at R5, R7 lines back in the recall buffer, R6 = the
+; read's function. Echoes the character and edits the line, as VMS does,
+; in insert mode: the left and right arrows move the cursor, CTRL/H to the
+; line's start and CTRL/E to its end, DEL erases the character before the
+; cursor and CTRL/U all of them. The up arrow or CTRL/B recalls the line
+; read before, again for the one before that, up to RECALL lines, and the
+; down arrow goes back down, to an empty line past the last. Other control
+; characters and escape sequences are dropped. A carriage return ends the
+; line, echoed as CR LF, or CTRL/Z, echoed as *EXIT*. With IO$M_NOECHO
+; nothing is echoed or recalled, and with IO$M_NOFILTR every character but
+; a carriage return goes in the line as it is, so a buffer of one byte
+; reads a key. R0 = the terminator, as in the I/O status block: the
+; character, one byte, if it ended the line, else -1. Uses R8.
+; ponytail: insert mode only, no CTRL/A for overstrike or CTRL/J; the
+; recall buffer is the console's, every reader's, not DCL's, and has no
+; RECALL command; VMS ends a read with IO$M_NOFILTR at any control
+; character in the terminator mask too.
+EDIT:   TSTL    TTY$GL_ESC
+        BEQL    10$
+        BRW     60$
+10$:    CMPB    R0, #13
+        BNEQ    12$
+        BRW     50$
+12$:    BBS     #IO$V_NOFILTR, R6, 15$
+        CMPB    R0, #CTRLZ
+        BEQL    40$
+        CMPB    R0, #127
+        BEQL    20$
+        CMPB    R0, #8
+        BEQL    30$
+        CMPB    R0, #5
+        BEQL    32$
+        CMPB    R0, #21
+        BEQL    25$
+        CMPB    R0, #2
+        BEQL    35$
+        CMPB    R0, #27
+        BEQL    38$
+        CMPB    R0, #^A/ /
+        BLSSU   39$
+        CMPB    R0, #126
+        BGTRU   39$
+        MOVL    R1, R8                  ; insert at the cursor
+13$:    CMPL    R8, R5
+        BLEQU   14$
+        MOVB    -1(R2)[R8], (R2)[R8]
+        SOBGTR  R8, 13$
+14$:    MOVB    R0, (R2)[R5]
+        INCL    R1
+        BSBW    RIGHT
+        BSBW    TAIL
+        BRB     39$
+15$:    MOVB    R0, (R2)[R1]            ; IO$M_NOFILTR
+        INCL    R1
+        BSBW    ECHO
+        BRB     39$
+20$:    TSTL    R5                      ; DEL: erase the character before the cursor
+        BEQL    39$
+        BSBW    RUBOUT
+        BRB     39$
+25$:    TSTL    R5                      ; CTRL/U: erase all before the cursor
+        BEQL    39$
+        BSBW    RUBOUT
+        BRB     25$
+30$:    BSBW    START                   ; CTRL/H
+        BRB     39$
+32$:    CMPL    R5, R1                  ; CTRL/E
+        BGEQU   39$
+        BSBW    RIGHT
+        BRB     32$
+35$:    BBS     #IO$V_NOECHO, R6, 39$  ; up, or CTRL/B: the line before
+        CMPL    R7, TTY$GL_NRECALL
+        BGEQU   39$
+        INCL    R7
+        BSBW    FETCH
+        BRB     39$
+38$:    MOVL    #1, TTY$GL_ESC
+39$:    MNEGL   #1, R0
+        RSB
+40$:    BBS     #IO$V_NOECHO, R6, 45$   ; CTRL/Z
+        PUSHR   #^M<R1, R2>
+        MOVAB   EXIT, R1
+        JSB     G^EXE$OUTZSTRING
+        POPR    #^M<R1, R2>
+45$:    MOVL    #<1@16>!CTRLZ, R0       ; CTRL/Z, one byte
+        RSB
+50$:    BBS     #IO$V_NOFILTR, R6, 51$
+        BBS     #IO$V_NOECHO, R6, 51$
+        TSTL    R1
+        BEQL    51$
+        BSBW    SAVE
+51$:    BBS     #IO$V_NOECHO, R6, 52$
+        JSB     G^EXE$OUTCRLF
+52$:    MOVL    #<1@16>!13, R0          ; a carriage return, one byte
+        RSB
+60$:    CMPL    TTY$GL_ESC, #1          ; after ESC: [ or O, then the key
+        BNEQ    62$
+        CLRL    TTY$GL_ESC
+        CMPB    R0, #^A/[/
+        BEQL    61$
+        CMPB    R0, #^A/O/
+        BNEQ    39$
+61$:    MOVL    #2, TTY$GL_ESC
+        BRB     39$
+62$:    CMPB    R0, #^A/0/              ; past ESC [ n ; n
+        BLSSU   63$
+        CMPB    R0, #59                 ; a semicolon
+        BLEQU   39$
+63$:    CLRL    TTY$GL_ESC
+        CMPB    R0, #^A/A/
+        BEQL    35$
+        CMPB    R0, #^A/B/
+        BEQL    65$
+        CMPB    R0, #^A/C/
+        BEQL    67$
+        CMPB    R0, #^A/D/
+        BEQL    69$
+        BRB     39$
+65$:    TSTL    R7                      ; down: the line after
+        BEQL    39$
+        DECL    R7
+        BSBW    FETCH
+        BRB     39$
+67$:    CMPL    R5, R1                  ; right
+        BGEQU   39$
+        BSBW    RIGHT
+        BRB     39$
+69$:    TSTL    R5                      ; left
+        BEQL    39$
+        BSBW    LEFT
+        BRB     39$
+
+; GETCHAR: R0 = the next character in the type-ahead buffer, or -1 if it
+; is empty, and the condition codes for it.
+GETCHAR:
+        DSBINT  #IPL$_CONSOLE           ; the ring, which the receive interrupt fills
+        MNEGL   #1, R0
+        CMPL    TTY$GL_GET, TTY$GL_PUT
+        BEQL    10$
+        MOVL    TTY$GL_GET, R0
+        INCL    TTY$GL_GET
+        BICL2   #^C<TYPEAHEAD-1>, TTY$GL_GET
+        MOVZBL  TTY$AB_RING[R0], R0
+10$:    ENBINT
+        TSTL    R0
+        RSB
+
+; ECHO: echoes the character in R0, unless R6 has IO$M_NOECHO. Keeps
+; every register.
+ECHO:   BBS     #IO$V_NOECHO, R6, 10$
+        JMP     G^EXE$OUTCHAR
+10$:    RSB
+
+; RIGHT: moves the cursor, R5, right over the character the line, R2,
+; has there, echoing it. Uses R0.
+RIGHT:  MOVZBL  (R2)[R5], R0
+        INCL    R5
+        BRB     ECHO
+
+; LEFT: moves the cursor, R5, left. Uses R0.
+LEFT:   DECL    R5
+        MOVZBL  #8, R0
+        BRB     ECHO
+
+; START: moves the cursor, R5, to the line's start. Uses R0.
+START:  TSTL    R5
+        BEQL    10$
+        BSBB    LEFT
+        BRB     START
+10$:    RSB
+
+; TAIL: echoes the line, R2, from the cursor, R5, to its end, R1, then
+; moves back to the cursor. TAILB does too, with a blank past the end,
+; over the character erased there. Uses R0 and R8.
+TAIL:   BSBB    ECHOTAIL
+        BRB     BACK
+TAILB:  BSBB    ECHOTAIL
+        MOVZBL  #^A/ /, R0
+        BSBB    ECHO
+        INCL    R8
+BACK:   MOVZBL  #8, R0
+10$:    CMPL    R8, R5
+        BLEQU   20$
+        BSBB    ECHO
+        DECL    R8
+        BRB     10$
+20$:    RSB
+ECHOTAIL:
+        MOVL    R5, R8
+10$:    CMPL    R8, R1
+        BGEQU   20$
+        MOVZBL  (R2)[R8], R0
+        BSBB    ECHO
+        INCL    R8
+        BRB     10$
+20$:    RSB
+
+; RUBOUT: erases the character before the cursor, R5, from the line, R2,
+; R1 long, and from the screen. Uses R0 and R8.
+RUBOUT: BSBB    LEFT
+        MOVL    R5, R8
+10$:    ADDL3   #1, R8, R0
+        CMPL    R0, R1
+        BGEQU   20$
+        MOVB    (R2)[R0], (R2)[R8]
+        MOVL    R0, R8
+        BRB     10$
+20$:    DECL    R1
+        BRB     TAILB
+
+; FETCH: puts in the line, R2, in place of the R1 characters there, the
+; one read R7 lines back, or an empty one for 0, up to R3 characters, and
+; leaves the cursor, R5, at its end. Uses R0 and R8.
+FETCH:  BSBB    START
+        PUSHL   R1                      ; the old line's length
+        CLRL    R1
+        TSTL    R7
+        BEQL    20$
+        SUBL3   R7, TTY$GL_RECALL, R8
+        BICL2   #^C<RECALL-1>, R8
+        ASHL    #8, R8, R8
+        MOVAB   TTY$AB_RECALL[R8], R8
+        MOVZBL  (R8)+, R1
+        CMPL    R1, R3
+        BLEQU   10$
+        MOVL    R3, R1
+10$:    CMPL    R5, R1
+        BGEQU   20$
+        MOVB    (R8)[R5], (R2)[R5]
+        BSBB    RIGHT
+        BRB     10$
+20$:    SUBL3   R1, (SP)+, R8           ; blank the rest of the old line
+        BLEQ    40$
+        PUSHL   R8
+        MOVZBL  #^A/ /, R0
+30$:    BSBB    ECHO
+        SOBGTR  R8, 30$
+        MOVL    (SP)+, R8
+        MOVZBL  #8, R0
+35$:    BSBB    ECHO
+        SOBGTR  R8, 35$
+40$:    RSB
+
+; SAVE: puts the R1 characters of the line, R2, up to 255, in the recall
+; buffer, over its oldest line once it is full. Uses R0, R5 and R8.
+SAVE:   MOVL    TTY$GL_RECALL, R8
+        ASHL    #8, R8, R8
+        MOVAB   TTY$AB_RECALL[R8], R8
+        MOVZBL  #255, R0
+        CMPL    R1, R0
+        BGEQU   10$
+        MOVL    R1, R0
+10$:    MOVB    R0, (R8)+
+        CLRL    R5
+20$:    CMPL    R5, R0
+        BGEQU   30$
+        MOVB    (R2)[R5], (R8)[R5]
+        INCL    R5
+        BRB     20$
+30$:    INCL    TTY$GL_RECALL
+        BICL2   #^C<RECALL-1>, TTY$GL_RECALL
+        CMPL    TTY$GL_NRECALL, #RECALL
+        BGEQU   40$
+        INCL    TTY$GL_NRECALL
+40$:    RSB
+
+; TTY$INIT: empties the type-ahead buffer and enables the console receive
+; interrupt. The SCB must have TTY$RCVINT for it, and TTY$IOPOST for
+; IPL$_IOPOST. Uses R0.
+TTY$INIT::
+        CLRL    TTY$GL_PUT
+        CLRL    TTY$GL_GET
+        MOVL    #RXCS$M_IE, R0
+        MTPR    R0, #PR$_RXCS
+        RSB
+
+; TTY$RCVINT: the console receive interrupt, at IPL$_CONSOLE. Puts each
+; character the console received in the type-ahead buffer, or drops it if
+; the buffer is full, and requests the IPL$_IOPOST software interrupt,
+; which gives them to the reads. CTRL/Y empties the buffer, for TTY$IOPOST to
+; stop the image.
+TTY$RCVINT::
+        PUSHR   #^M<R0, R1>
+10$:    MFPR    #PR$_RXCS, R0
+        BBC     #RXCS$V_DONE, R0, 30$
+        MFPR    #PR$_RXDB, R0
+        CMPB    R0, #CTRLY
+        BNEQ    20$
+        MOVL    TTY$GL_PUT, TTY$GL_GET
+        MOVL    #1, TTY$GL_CTRLY
+        BRB     10$
+20$:    ADDL3   #1, TTY$GL_PUT, R1
+        BICL2   #^C<TYPEAHEAD-1>, R1
+        CMPL    R1, TTY$GL_GET
+        BEQL    10$                     ; full
+        PUSHL   R1
+        MOVL    TTY$GL_PUT, R1
+        MOVB    R0, TTY$AB_RING[R1]
+        MOVL    (SP)+, TTY$GL_PUT
+        BRB     10$
+30$:    SOFTINT #IPL$_IOPOST
+        POPR    #^M<R0, R1>
+        REI
+
+; TTY$IOPOST: the IPL$_IOPOST software interrupt. Passes a CTRL/Y on,
+; then gives what is in the type-ahead buffer to the console's reads. If
+; CTRL/Y is for the process it interrupted, in user mode, it stops the
+; image now.
+TTY$IOPOST::
+        SETIPL  #IPL$_SYNCH
+        PUSHR   #^M<R0, R1, R2, R3, R4, R5, R6, R7, R8>
+        DSBINT  #IPL$_CONSOLE
+        MOVL    TTY$GL_CTRLY, R0
+        CLRL    TTY$GL_CTRLY
+        ENBINT
+        BLBC    R0, 30$
+        BSBB    CTRLY_TYPED
+30$:    BSBW    STARTIO
+        POPR    #^M<R0, R1, R2, R3, R4, R5, R6, R7, R8>
+        JSB     G^EXE$CTRLYCHK
+        REI
+
+; CTRLY_TYPED: CTRL/Y came. Finds the process with a command interpreter
+; that runs an image CTRL/Y hasn't stopped yet, echoes *INTERRUPT*, ends
+; its reads on the console with SS$_CONTROLY, and makes CTRL/Y pending
+; there, which EXE$CTRLY serves: at once if that process is in user mode
+; now, else when it next waits, goes back to user mode or ends a service.
+; Ends its wait if it waits, but not a suspension. Without such a
+; process, CTRL/Y does nothing. IPL$_SYNCH. Uses R0-R5.
+; ponytail: the console has no owner yet, so CTRL/Y goes to the only
+; process with a command interpreter, SYSTEM, without being enabled by
+; IO$M_CTRLYAST.
+CTRLY_TYPED:
+        MOVL    #SCH$C_MAXPIX-1, R2
+10$:    MOVL    SCH$GL_PCBVEC[R2], R4
+        BEQL    20$
+        TSTL    PCB$L_CLI(R4)
+        BEQL    20$
+        CMPL    PCB$L_FREP0VA(R4), #VA$C_P0BASE ; it runs no image
+        BEQL    20$
+        TSTL    PCB$L_CTRLY(R4)
+        BNEQ    20$
+        BBSS    #PCB$V_CTRLY, PCB$L_STS(R4), 30$
+        MOVAB   INTERRUPT, R1
+        JSB     G^EXE$OUTZSTRING
+        BSBB    ABORT
+        CMPL    PCB$L_STATE(R4), #SCH$C_SUSP    ; a wait state
+        BGEQU   30$
+        BSBW    SCH$WAKEPCB
+        RSB
+20$:    SOBGTR  R2, 10$
+30$:    RSB
+
+; ABORT: R4 = a PCB. Completes its reads on the console with SS$_CONTROLY.
+; IPL$_SYNCH. Uses R0-R3 and R5.
+ABORT:  MOVAB   G^IOC$AB_OPA0, R5
+        MOVL    UCB$L_IOQFL(R5), R3
+10$:    CMPL    R3, R5
+        BEQL    90$
+        PUSHL   (R3)                    ; the next, before this one goes
+        CMPL    IRP$L_PID(R3), PCB$L_PID(R4)
+        BNEQ    20$
+        REMQUE  (R3), R3
+        MOVZWL  #SS$_CONTROLY, R0
+        CLRL    R1
+        BSBW    IOC$REQCOM
+20$:    MOVL    (SP)+, R3
+        BRB     10$
+90$:    RSB
+
+        .END

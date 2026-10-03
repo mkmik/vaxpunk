@@ -56,7 +56,7 @@ SCH$QAST::
 20$:    INSQUE  (R5), @4(R3)            ; before it
         PUSHL   R4
         MOVL    R1, R4
-        BSBB    ASTBITS
+        BSBB    SCH$ASTBITS
         CMPL    PCB$L_STATE(R4), #SCH$C_SUSP    ; a wait state
         BGEQU   30$
         BSBW    SCH$WAKEPCB
@@ -69,9 +69,10 @@ SCH$QAST::
         MOVL    #SS$_NONEXPR, R0
         RSB
 
-; ASTBITS: R4 = a PCB. Sets its HWPCB's ASTSR from the modes of its ACBs,
-; and ASTEN from PCB$B_ASTEN less PCB$B_ASTACT. IPL$_SYNCH. Uses R0-R2.
-ASTBITS:
+; SCH$ASTBITS: R4 = a PCB. Sets its HWPCB's ASTSR from the modes of its
+; ACBs, and ASTEN from PCB$B_ASTEN less PCB$B_ASTACT, after its AST queue
+; changes. IPL$_SYNCH. Uses R0-R2.
+SCH$ASTBITS::
         PUSHL   R3
         CLRL    R1
         MOVAQ   PCB$Q_ASTQFL(R4), R2
@@ -121,7 +122,7 @@ NEXT:   MOVL    PCB$L_HWPCB(R4), R1
         BGTRU   90$                     ; an outer one's, and so are the rest
         BBC     R3, HWPCB$B_ASTEN(R1), 10$
         REMQUE  (R5), R5
-        BSBB    ASTBITS
+        BSBB    SCH$ASTBITS
         MOVL    ACB$L_KAST(R5), R0
         BEQL    20$
         JSB     (R0)
@@ -133,7 +134,7 @@ NEXT:   MOVL    PCB$L_HWPCB(R4), R1
         BSBW    EXE$DEANONPGDSIZ
         ASHL    R3, #1, R0
         BISB2   R0, PCB$B_ASTACT(R4)
-        BSBB    ASTBITS
+        BSBB    SCH$ASTBITS
         PUSHL   R3                      ; its mode
         PUSHL   PCB$L_ASTSP(R4)         ; the AST routine this one interrupts
         MOVL    SP, PCB$L_ASTSP(R4)
@@ -182,7 +183,7 @@ EXE$FLUSHAST::
         BISB2   R1, PCB$B_ASTEN(R4)
         CLRB    PCB$B_ASTACT(R4)
         CLRL    PCB$L_ASTSP(R4)
-        BSBW    ASTBITS
+        BSBW    SCH$ASTBITS
         MOVL    (SP)+, R5
         RSB
 
@@ -235,7 +236,7 @@ PRVMODE:
         BLBC    4(AP), 20$
         BISB2   R3, PCB$B_ASTEN(R4)
 20$:    PUSHL   R2
-        BSBW    ASTBITS
+        BSBW    SCH$ASTBITS
         MOVL    (SP)+, R0
         ENBINT
         RET
@@ -255,7 +256,7 @@ PRVMODE:
         MOVL    (SP)+, R3               ; its mode
         ASHL    R3, #1, R0
         BICB2   R0, PCB$B_ASTACT(R4)
-        BSBW    ASTBITS
+        BSBW    SCH$ASTBITS
         BRW     NEXT
 90$:    ENBINT
         MOVL    #SS$_NORMAL, R0

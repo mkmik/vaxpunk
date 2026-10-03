@@ -6,17 +6,23 @@
 ; AST routine waits until that routine returns. $SETIMR's AST is
 ; delivered while the process hibernates, and its routine's $WAKE ends
 ; the hibernation; another while it computes in user mode, after which
-; every register is as it was. A failed EXPECT exits with 2 * N.
+; every register is as it was. A $QIO's AST is delivered once the I/O is
+; done, after its IOSB is written. A failed EXPECT exits with 2 * N.
 ;
         .LIBRARY "starlet.mlb"
         .LIBRARY "sysexe.mlb"
         $SSDEF
+        $IODEF
 
         .PSECT  DATA, NOEXE, WRT, LONG
 MS20:   .LONG   -200000, -1             ; a delta: 20 ms
 COUNT:  .LONG   0                       ; ADD's and WAKER's parameters, summed
 ORDER:  .LONG   0                       ; OUTER's 1 and INNER's 2, a hex digit each
 DONE:   .LONG   0                       ; FLAG ran
+CONSOLE:
+        .ASCID  "OPA0:"
+CHAN:   .LONG   0
+IOSB:   .QUAD   0
 
         .PSECT  CODE, EXE, LONG
         .ENTRY  START, ^M<R2, R3, R4, R5, R6, R7, R8, R9, R10, R11>
@@ -47,6 +53,17 @@ DONE:   .LONG   0                       ; FLAG ran
         $HIBER_S
         MOVL    COUNT, R0
         EXPECT  #7, 9
+
+; A write of nothing on the console, done at once: its AST comes as $QIO
+; returns.
+        $ASSIGN_S DEVNAM=CONSOLE, CHAN=CHAN
+        EXPECT  #SS$_NORMAL, 12
+        $QIO_S  CHAN=CHAN, FUNC=#IO$_WRITEVBLK, IOSB=IOSB, ASTADR=ADD, ASTPRM=#8, P1=COUNT
+        EXPECT  #SS$_NORMAL, 13
+        MOVL    COUNT, R0
+        EXPECT  #15, 14
+        MOVL    IOSB, R0
+        EXPECT  #SS$_NORMAL, 15
 
 ; Computing, with Rn = n * 11111111 hex.
         $SETIMR_S DAYTIM=MS20, ASTADR=FLAG
