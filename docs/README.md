@@ -39,6 +39,7 @@ kept current, like a design document.
 | [ADR-0012](adr/0012-data-disk-writable-files-11.md) | DKB0:, a second virtio disk the PAL writes, holds a Files-11 volume that outlives the system | Proposed |
 | [ADR-0013](adr/0013-qio-irps-and-drivers.md) | $QIO queues an I/O request packet to the device's driver, and its completion is a kernel mode AST | Proposed |
 | [ADR-0014](adr/0014-ctrlc-ctrly-asts.md) | CTRL/C and CTRL/Y are ASTs enabled with IO$_SETMODE, and DCL's CTRL/Y AST stops the image | Proposed |
+| [ADR-0015](adr/0015-file-system-io-through-the-disk-driver.md) | The file system hands its block I/O to the disk's start I/O routine in an IRP of its own | Proposed |
 
 ### PRDs
 
