@@ -137,6 +137,7 @@ CODE = 0
         SERVICE TRNLNM, 5
         SERVICE GETSYI, 7
         SERVICE GETSYIW, 7
+        SERVICE GETMSG, 5
 ; Images
         SERVICE IMGACT, 1
 ; RMS: files on Files-11 volumes

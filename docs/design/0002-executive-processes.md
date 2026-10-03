@@ -270,10 +270,10 @@ process, `SYSTEM`, with `DCL.EXE`:
 Verbs may be abbreviated, the first that matches winning. A command
 with fewer parameters than it needs is `%DCL-W-INSFPRM`. DCL reads a line
 from `SYS$INPUT` with `IO$_READPROMPT` and the prompt `$ `, and reports a
-failure status with its message, `%RMS-E-DNF, directory not found`, VMS's
-text from a table in DCL of the file system's, RMS's and the volume
-services' statuses, or as VMS does one it has no text for,
-`%NONAME-F-NOMSG, Message number 0000000C`, after
+failure status with its message, `%RMS-E-DNF, directory not found`, from
+`$GETMSG`, whose table in the executive has VMS's texts of the file
+system's, RMS's and the volume services' statuses, or as VMS does one it
+has no text for, `%NONAME-F-NOMSG, Message number 0000000C`, after
 `%DCL-W-ACTIMAGE` if `$IMGACT` returned it, unless the status has
 `STS$M_INHIB_MSG`, bit 28, set: the image reported it.
 
@@ -284,8 +284,8 @@ goes to the command loop, where `CONTINUE` enables the AST again and
 returns from it; a command that runs another image runs the stopped one
 down. With none, the AST enables itself again, and DCL ends its
 procedures at the next command; the read CTRL/Y ended gives it an empty
-line. ponytail:
-message texts in DCL rather than message files and `$GETMSG`; no
+line. ponytail: one message table in the executive rather than message
+files; no
 qualifiers, and no `STOP`: another command that runs an image ends the one CTRL/Y
 stopped.
 
@@ -507,7 +507,7 @@ can't reach them.
 | RMS | `$PARSE`, `$SEARCH`, `$OPEN`, `$CREATE`, `$CONNECT`, `$GET`, `$PUT`, `$DISCONNECT`, `$CLOSE`, `$ERASE`, `$SETDDIR` | |
 | Volumes | `$MOUNT`, `$INIT_VOL` | |
 | ASTs | `$DCLAST`, `$SETAST`, `$ASTEXIT` | |
-| Other | `$GETSYI`, `$GETSYIW` | |
+| Other | `$GETSYI`, `$GETSYIW`, `$GETMSG` | |
 
 Arguments the implemented services take but ignore: `$CREPRC`'s
 privileges, quotas, UIC, mailbox and status flags, the logical name

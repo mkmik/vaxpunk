@@ -38,8 +38,10 @@ SS$_VASFULL = 580
 SS$_WRITLCK = 604                       ; the device is write locked
 SS$_IVMODE = 852
 SS$_OPCDEC = 1084
+SS$_BUFFEROVF = 1537                    ; success: the output didn't all fit in the buffer
 SS$_CONTROLY = 1553                     ; CTRL/Y stopped the image
 SS$_CONTROLC = 1617                     ; CTRL/C, which no CTRL/C AST took, stopped the image
+SS$_MSGNOTFND = 1569                    ; success: $GETMSG has no text for the status
 SS$_SUPERSEDE = 1585                    ; success: a name by that name was replaced
 SS$_NONEXPR = 2280
 SS$_NOMOREPROC = 2472                   ; a wildcard $GETJPI is past the last process
@@ -548,6 +550,16 @@ PRT$C_UR = 15
         .EXTERNAL SYS$GETSYIW
         CALLS   #7, G^SYS$GETSYIW
         .ENDM   $GETSYIW_S
+
+        .MACRO  $GETMSG_S MSGID, MSGLEN=0, BUFADR, FLAGS=#0, OUTADR=0
+        $PUSHADR OUTADR
+        PUSHL   FLAGS
+        $PUSHADR BUFADR
+        $PUSHADR MSGLEN
+        PUSHL   MSGID
+        .EXTERNAL SYS$GETMSG
+        CALLS   #5, G^SYS$GETMSG
+        .ENDM   $GETMSG_S
 
         .MACRO  $ASCEFC_S EFN, NAME, PROT=#0, PERM=#0
         PUSHL   PERM

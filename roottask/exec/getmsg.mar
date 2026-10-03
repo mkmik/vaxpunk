@@ -1,0 +1,270 @@
+        .TITLE  GETMSG  $GETMSG: a status's message text
+        .IDENT  /V0.1/
+;
+; A program asks for a status's message, %FACILITY-S-NAME, text, with
+; $GETMSG, as on VMS, so DCL writes %RMS-E-FNF, file not found. VMS finds
+; a facility's messages in its message file or the image's message
+; section; here a table in the executive holds the file system's and
+; RMS's. A status it has no text for is VMS's %NONAME-F-NOMSG, Message
+; number 0000000C, with the status's severity, and SS$_MSGNOTFND.
+; ponytail: one table, no message files or $PUTMSG; add them when an image
+; brings its own facility's messages.
+;
+        .LIBRARY "lib.mlb"
+        .LIBRARY "starlet.mlb"
+        $SSDEF
+        $RMSDEF
+
+        .PSECT  EXEC$DATA, NOEXE, WRT, QUAD
+SEVERITY:                               ; a severity's letter, by its value
+        .ASCII  "WSEIF???"
+HEX:    .ASCII  "0123456789ABCDEF"      ; a hex digit's character
+NOMSG:  .ASCIC  "NONAME"                ; a status with no text's facility and name
+        .ASCIC  "NOMSG"
+        .ASCIC  "Message number "
+; The messages $GETMSG knows: a status, without its control bits, its
+; facility, its name and its text, VMS's, each .ASCIC, until a status of 0.
+MESSAGES:
+        .LONG   RMS$_EOF
+        .ASCIC  "RMS"
+        .ASCIC  "EOF"
+        .ASCIC  "end of file detected"
+        .LONG   RMS$_FNF
+        .ASCIC  "RMS"
+        .ASCIC  "FNF"
+        .ASCIC  "file not found"
+        .LONG   RMS$_WLK
+        .ASCIC  "RMS"
+        .ASCIC  "WLK"
+        .ASCIC  "device currently write locked"
+        .LONG   RMS$_NMF
+        .ASCIC  "RMS"
+        .ASCIC  "NMF"
+        .ASCIC  "no more files found"
+        .LONG   RMS$_DNF
+        .ASCIC  "RMS"
+        .ASCIC  "DNF"
+        .ASCIC  "directory not found"
+        .LONG   RMS$_DEV
+        .ASCIC  "RMS"
+        .ASCIC  "DEV"
+        .ASCIC  "error in device name or inappropriate device type for operation"
+        .LONG   RMS$_DIR
+        .ASCIC  "RMS"
+        .ASCIC  "DIR"
+        .ASCIC  "error in directory name"
+        .LONG   RMS$_DME
+        .ASCIC  "RMS"
+        .ASCIC  "DME"
+        .ASCIC  "dynamic memory exhausted"
+        .LONG   RMS$_FNM
+        .ASCIC  "RMS"
+        .ASCIC  "FNM"
+        .ASCIC  "error in file name"
+        .LONG   RMS$_RFM
+        .ASCIC  "RMS"
+        .ASCIC  "RFM"
+        .ASCIC  "invalid record format"
+        .LONG   RMS$_SYN
+        .ASCIC  "RMS"
+        .ASCIC  "SYN"
+        .ASCIC  "file specification syntax error"
+        .LONG   RMS$_VER
+        .ASCIC  "RMS"
+        .ASCIC  "VER"
+        .ASCIC  "error in version number"
+        .LONG   RMS$_WLD
+        .ASCIC  "RMS"
+        .ASCIC  "WLD"
+        .ASCIC  "invalid wildcard operation"
+        .LONG   RMS$_DNR
+        .ASCIC  "RMS"
+        .ASCIC  "DNR"
+        .ASCIC  "device not ready, not mounted, or unavailable"
+        .LONG   RMS$_FEX
+        .ASCIC  "RMS"
+        .ASCIC  "FEX"
+        .ASCIC  "file already exists, not superseded"
+        .LONG   RMS$_PRV
+        .ASCIC  "RMS"
+        .ASCIC  "PRV"
+        .ASCIC  "insufficient privilege or file protection violation"
+        .LONG   RMS$_FUL
+        .ASCIC  "RMS"
+        .ASCIC  "FUL"
+        .ASCIC  "device full (insufficient space for allocation)"
+        .LONG   RMS$_CRE
+        .ASCIC  "RMS"
+        .ASCIC  "CRE"
+        .ASCIC  "ACP file create failed"
+        .LONG   RMS$_ENT
+        .ASCIC  "RMS"
+        .ASCIC  "ENT"
+        .ASCIC  "ACP enter function failed"
+        .LONG   RMS$_MKD
+        .ASCIC  "RMS"
+        .ASCIC  "MKD"
+        .ASCIC  "ACP could not mark file for deletion"
+        .LONG   RMS$_WER
+        .ASCIC  "RMS"
+        .ASCIC  "WER"
+        .ASCIC  "file write error"
+        .LONG   SS$_BADPARAM
+        .ASCIC  "SYSTEM"
+        .ASCIC  "BADPARAM"
+        .ASCIC  "bad parameter value"
+        .LONG   SS$_DEVMOUNT
+        .ASCIC  "SYSTEM"
+        .ASCIC  "DEVMOUNT"
+        .ASCIC  "device is already mounted"
+        .LONG   SS$_INCVOLLABEL
+        .ASCIC  "SYSTEM"
+        .ASCIC  "INCVOLLABEL"
+        .ASCIC  "incorrect volume label"
+        .LONG   SS$_IVDEVNAM
+        .ASCIC  "SYSTEM"
+        .ASCIC  "IVDEVNAM"
+        .ASCIC  "invalid device name"
+        .LONG   SS$_MEDOFL
+        .ASCIC  "SYSTEM"
+        .ASCIC  "MEDOFL"
+        .ASCIC  "medium is offline"
+        .LONG   SS$_WRITLCK
+        .ASCIC  "SYSTEM"
+        .ASCIC  "WRITLCK"
+        .ASCIC  "write-locked"
+        .LONG   SS$_NOSUCHDEV
+        .ASCIC  "SYSTEM"
+        .ASCIC  "NOSUCHDEV"
+        .ASCIC  "no such device available"
+        .LONG   SS$_NOHOMEBLK
+        .ASCIC  "SYSTEM"
+        .ASCIC  "NOHOMEBLK"
+        .ASCIC  "Files-11 home block not found on volume"
+        .LONG   SS$_DEVICEFULL
+        .ASCIC  "SYSTEM"
+        .ASCIC  "DEVICEFULL"
+        .ASCIC  "device full - allocation failure"
+        .LONG   SS$_IDXFILEFULL
+        .ASCIC  "SYSTEM"
+        .ASCIC  "IDXFILEFULL"
+        .ASCIC  "index file full"
+        .LONG   SS$_HEADERFULL
+        .ASCIC  "SYSTEM"
+        .ASCIC  "HEADERFULL"
+        .ASCIC  "file header full"
+        .LONG   0
+
+        .PSECT  $CODE$
+
+; $GETMSG msgid, msglen, bufadr, flags, outadr: writes the message of the
+; status msgid in the buffer bufadr describes, as much as fits, and its
+; length in the word at msglen, if there is one. flags says what it
+; holds: bit 0 the text, bit 1 the name, bit 2 the severity, bit 3 the
+; facility, 0 all four. Writes 0 in the longword at outadr, if there is
+; one: no FAO arguments. SS$_MSGNOTFND for a status it has no text for,
+; SS$_BUFFEROVF if the message didn't fit, SS$_ACCVIO.
+        .ENTRY  EXE$GETMSG, ^M<R2, R3, R4, R5, R6, R7, R8, R9>
+        MOVL    12(AP), R0              ; the buffer
+        IFNORD  #8, (R0), 84$
+        MOVZWL  (R0), R7
+        MOVL    4(R0), R6
+        TSTL    R7
+        BEQL    1$
+        IFNOWRT R7, (R6), 84$
+1$:     MOVL    8(AP), R0
+        BEQL    2$
+        IFNOWRT #2, (R0), 84$
+2$:     MOVL    20(AP), R0
+        BEQL    4$
+        IFNOWRT #4, (R0), 84$
+        CLRL    (R0)
+4$:     MOVL    16(AP), R9
+        BNEQ    5$
+        MOVL    #15, R9
+5$:     MOVL    4(AP), R4
+        BICL3   #^XF0000000, R4, R3     ; without its control bits
+        MOVAB   MESSAGES, R5
+6$:     TSTL    (R5)
+        BEQL    8$
+        CMPL    (R5)+, R3
+        BEQL    10$
+        MOVL    #3, R1                  ; past the three strings
+7$:     MOVZBL  (R5), R0
+        ADDL2   R0, R5
+        INCL    R5
+        SOBGTR  R1, 7$
+        BRB     6$
+8$:     MOVAB   NOMSG, R5
+        BISL2   #^X40000000, R9         ; not found
+10$:    CLRL    R8                      ; the characters written
+        MOVZBL  #^A/%/, R3              ; what goes before the next part
+        BBC     #3, R9, 20$
+        BSBB    SEP
+        MOVL    R5, R1                  ; the facility
+        BSBB    PUTC
+20$:    MOVZBL  (R5), R0
+        ADDL2   R0, R5
+        INCL    R5                      ; the name
+        BBC     #2, R9, 30$
+        BSBB    SEP
+        BICL3   #^C7, R4, R0
+        MOVZBL  SEVERITY[R0], R0
+        BSBB    PUTCHR
+30$:    BBC     #1, R9, 40$
+        BSBB    SEP
+        MOVL    R5, R1
+        BSBB    PUTC
+40$:    MOVZBL  (R5), R0
+        ADDL2   R0, R5
+        INCL    R5                      ; the text
+        BBC     #0, R9, 60$
+        CMPB    R3, #^A/%/
+        BEQL    45$                     ; no parts before it
+        MOVZBL  #44, R0                 ; a comma
+        BSBB    PUTCHR
+        MOVZBL  #^A/ /, R0
+        BSBB    PUTCHR
+45$:    MOVL    R5, R1
+        BSBB    PUTC
+        BBC     #30, R9, 60$
+        MOVL    #8, R2                  ; the status, in hex
+50$:    ROTL    #4, R4, R4
+        EXTZV   #0, #4, R4, R0
+        MOVZBL  HEX[R0], R0
+        BSBB    PUTCHR
+        SOBGTR  R2, 50$
+60$:    MOVL    8(AP), R0
+        BEQL    62$
+        MOVW    R8, (R0)
+62$:    MOVL    #SS$_BUFFEROVF, R0
+        BBS     #31, R9, 90$
+        MOVL    #SS$_MSGNOTFND, R0
+        BBS     #30, R9, 90$
+        MOVL    #SS$_NORMAL, R0
+        RET
+84$:    MOVL    #SS$_ACCVIO, R0
+90$:    RET
+
+; SEP: R3 = a character. Writes it, then makes R3 a dash. Uses R0 and R3.
+SEP:    MOVL    R3, R0
+        MOVZBL  #^A/-/, R3
+; PUTCHR: R0 = a character. Writes it at R6[R8] if R8 is below R7, the
+; buffer's length, else sets bit 31 of R9: it overflowed. Uses R0.
+PUTCHR: CMPL    R8, R7
+        BGEQU   10$
+        MOVB    R0, (R6)[R8]
+        INCL    R8
+        RSB
+10$:    BISL2   #^X80000000, R9
+        RSB
+
+; PUTC: R1 = a .ASCIC string. Writes it with PUTCHR. Uses R0-R2.
+PUTC:   MOVZBL  (R1)+, R2
+        BRB     20$
+10$:    MOVZBL  (R1)+, R0
+        BSBB    PUTCHR
+20$:    SOBGEQ  R2, 10$
+        RSB
+
+        .END
