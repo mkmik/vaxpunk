@@ -10,9 +10,9 @@
 ; as a kernel mode AST, IOC$POST: there the data, the I/O status block
 ; and the event flag are written, and the caller's AST queued. $QIOW waits
 ; for that.
-; The drivers: the console's, ttdriver.mar, and the disks', DK$FDT in
+; The drivers: the console's, ttdriver.mar, the disks', DK$FDT in
 ; f11.mar, whose start I/O routine, DK$STARTIO, the file system's own
-; reads and writes go through too.
+; reads and writes go through too, and the network's, netdriver.mar.
 ;
         .LIBRARY "lib.mlb"
         .LIBRARY "starlet.mlb"
@@ -30,6 +30,7 @@
         .EXTERNAL EXE$PROBER_DSC, EXE$CLREF, EXE$WAITFR
         .EXTERNAL EXE$ALONONPAGED, EXE$DEANONPGDSIZ
         .EXTERNAL LNM$TRNLOG, TT$FDT, DK$FDT, DK$STARTIO, TTY$Q_CTRLC, TTY$Q_CTRLY
+        .EXTERNAL NET$FDT, NET$CANCEL, NET$FINDUNIT, NET$ASSIGNED
         .EXTERNAL F11$AB_DKA0, F11$AB_DKB0, F11$AB_MDA0
 
 MAXCHAN = 31                            ; channels 1-31, a bit each in PCB$L_CHANS
@@ -53,6 +54,11 @@ IOC$AB_MDA0::                           ; the ramdisk's
         .ADDRESS IOC$AB_MDA0, IOC$AB_MDA0, DK$FDT, F11$AB_MDA0
         .ASCII  /MDA0/
         .ADDRESS DK$STARTIO
+IOC$AB_BGA0::                           ; the network's template device (netdriver.mar)
+        .ADDRESS IOC$AB_BGA0, IOC$AB_BGA0, NET$FDT
+        .LONG   0
+        .ASCII  /BGA0/
+        .LONG   0
 IOC$A_UCBEND::                          ; past the last UCB
 
         .PSECT  $CODE$
@@ -62,7 +68,8 @@ IOC$A_UCBEND::                          ; past the last UCB
 ; as a logical name, without its colon, in LNM$FILE_DEV, and what it
 ; translates to, up to LNM$C_MAXDEPTH times, until a name starts with an
 ; underscore, which is dropped, or doesn't translate. That must be a
-; device, OPA0, DKA0, DKB0 or MDA0, with a colon or without.
+; device, OPA0, DKA0, DKB0, MDA0, BGA0 or a network unit, BGnn, with a
+; colon or without.
         .ENTRY  EXE$ASSIGN, ^M<R2, R3, R4, R5, R6, R7>
         MOVL    4(AP), R1
         BSBW    EXE$PROBER_DSC
@@ -86,7 +93,9 @@ IOC$A_UCBEND::                          ; past the last UCB
         MOVAB   IOC$A_UCBEND, R1
         CMPL    R5, R1
         BLSSU   15$
-        BRB     80$
+        BSBW    NET$FINDUNIT            ; a network unit, BGnn?
+        TSTL    R5
+        BEQL    80$
 18$:    MOVL    SCH$GL_CURPCB, R4
         MOVL    #1, R1
 20$:    BBCS    R1, PCB$L_CHANS(R4), 30$
@@ -94,6 +103,7 @@ IOC$A_UCBEND::                          ; past the last UCB
         MOVL    #SS$_NOIOCHAN, R0
         BRB     80$
 30$:    MOVL    R5, PCB$AL_CCB(R4)[R1]
+        BSBW    NET$ASSIGNED
         MOVW    R1, @8(AP)
         MOVL    #SS$_NORMAL, R0
 80$:    ENBINT
@@ -334,6 +344,7 @@ IOC$CANCEL::
         PUSHR   #^M<R5, R6, R7>
         MOVL    R0, R6
         MOVL    R1, R7
+        BSBW    NET$CANCEL              ; the requests on the port
         MOVAB   IOC$AB_UCB, R5
 10$:    BSBB    CANCELQ
         ADDL2   #UCB$K_LENGTH, R5

@@ -2,15 +2,18 @@
         .IDENT  /V0.1/
 ;
 ; The programs run in user mode, so they write on the console as a VMS
-; program does: on a channel to OPA0:, with $QIOW, a line at a time, which
-; the executive writes whole. build.rs links this module into each of
+; program does: on a channel to SYS$OUTPUT, or OPA0: for a process that
+; has none, with $QIOW, a line at a time, which the executive writes
+; whole. SYS$OUTPUT is the console, or a network unit for a SET HOST
+; session. build.rs links this module into each of
 ; them; sysexe.mlb's PRINT and PRINTHEX call it.
 ;
         .LIBRARY "starlet.mlb"
         $IODEF
 
         .PSECT  PRINT_DATA, NOEXE, WRT, LONG
-CHAN:   .LONG   0                       ; OPA0:'s, once assigned
+CHAN:   .LONG   0                       ; SYS$OUTPUT's, once assigned
+OUTPUT: .ASCID  "SYS$OUTPUT"
 OPA0:   .ASCID  "OPA0:"
 HEX:    .ASCII  "0123456789ABCDEF"
 LINE:   .BLKB   272
@@ -41,6 +44,8 @@ LINE:   .BLKB   272
         ADDL2   #2, R3
         TSTL    CHAN
         BNEQ    50$
+        $ASSIGN_S DEVNAM=OUTPUT, CHAN=CHAN
+        BLBS    R0, 50$
         $ASSIGN_S DEVNAM=OPA0, CHAN=CHAN
         BLBC    R0, 90$
 50$:    $QIOW_S CHAN=CHAN, FUNC=#IO$_WRITEVBLK, P1=LINE, P2=R3

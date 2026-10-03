@@ -30,7 +30,7 @@ scripts/setup-host.sh
 ```
 
 It installs an aarch64 bare-metal C compiler, `cmake`, `ninja`, `dtc`, `uv`,
-`mtools`, QEMU with its EDK2 firmware, `just`, and checks out the seL4 submodule.
+`mtools`, QEMU with its EDK2 firmware, `just`, and checks out the seL4 and lwIP submodules.
 Cargo drives the whole build, so you also need a Rust toolchain, for example
 from [rustup](https://rustup.rs).
 
@@ -68,6 +68,7 @@ scheduling context: budget 5000 us per 5000 us, 12897 us used
 disk 0: virtio-blk, 4096 blocks
 disk 1: virtio-blk, 4096 blocks
 EXEC.EXE: started at 0x40010b68, 23 of 1024 pages in use
+tcpip: lwIP 2.2.1 on virtio-net, MAC 52:54:0:12:34:56
 %EXEC-I-START, vaxpunk executive, free pages: 00000369
 %MOUNT-I-MOUNTED, VAXPUNK mounted on _DKA0:
 $
@@ -113,7 +114,9 @@ on the screen),
 `DEFINE name equivalence`, `DEASSIGN name` and `SHOW LOGICAL name` make,
 delete and translate logical names (`SHOW LOGICAL SYS$INPUT`, or `SHOW
 LOGICAL` alone to list them all), `SHOW PROCESS` and `SHOW SYSTEM` show
-the process and list them all, `COPY` and `DELETE` copy and delete
+the process and list them all, `SET INTERFACE address mask gateway` and
+`SHOW INTERFACE` set and show the network's (*Networking*), `SET HOST
+address` logs in to another vaxpunk, `COPY` and `DELETE` copy and delete
 files, `INITIALIZE` and `MOUNT` make and mount a volume on the data disk,
 `DKB0:`, or the ramdisk, `MDA0:`, the disks they can write
 ([ADR-0009](docs/adr/0009-ramdisk-writable-files-11.md)), `HELP` lists
@@ -207,6 +210,7 @@ about one second after the command.
 | --- | --- | --- |
 | `kernel/` | seL4 16.0.0 (submodule), built with its own CMake | `kernel.elf`, libsel4's headers, `platform_gen.json` |
 | `shim/` | Limine-protocol program that loads seL4 and the root task; see [shim/README.md](shim/README.md) | `shim.elf` |
+| `tcpip/` | the TCP/IP component the root task starts below the executive: lwIP (submodule) with a virtio-net driver and the port adapter, in freestanding C; see [DESIGN-0003](docs/design/0003-tcpip-port.md) | `tcpip.elf` |
 | `roottask/` | the root task, the PAL, in freestanding C (`src/`); the MACRO-32 executive (`exec/`) and the programs it runs (`sysexe/`), which `build.rs` compiles and links with the vtools crates and writes, with `sysmgr/`'s text, to the system disk with `ods-image` | `roottask.elf`, `sysdisk.img` |
 | `image/` | Limine config, the ESP builder (mtools) and `boot`, which copies the three ELFs and `sysdisk.img` to `out/`, stitches the ESP and runs QEMU | `out/esp.img` |
 | `scripts/` | host setup, Limine download, QEMU wrapper and console filter | `out/serial.log` |
@@ -248,7 +252,8 @@ exports its ELF's path as `ELF` for `boot`.
   ([DESIGN-0001](docs/design/0001-pal-interface.md)). So do its processes'
   threads, which the root task makes when the executive first switches to
   them. vrun's `SVC` calls aren't there.
-- Pins: seL4 by submodule commit (tag 16.0.0), Limine 11.4.1 by version and
+- Pins: seL4 by submodule commit (tag 16.0.0), lwIP likewise (tag
+  STABLE-2_2_1_RELEASE), Limine 11.4.1 by version and
   SHA-256 in `scripts/fetch-limine.sh`. The EDK2 firmware comes from the
   QEMU install (`EDK2_FW=` overrides it).
 - The Rust projects, `ods/` and `vtools/`, are the workspace's default
@@ -264,6 +269,44 @@ The kernel's `build.rs` picks the compiler with `CROSS_COMPILE` (default:
 task build with the same one, for example
 `CROSS_COMPILE=aarch64-none-elf- cargo run -p boot`. `vrun`'s boot stub is
 assembled with the same `CROSS_COMPILE` binutils.
+
+## Networking
+
+QEMU has a virtio-net device on its user network, where the guest is
+`10.0.2.15/24`, the host `10.0.2.2`. The root task starts the TCP/IP
+component, lwIP, beside the executive, which talks to it through a port
+of shared pages and drives it as `BGA0:`
+([DESIGN-0003](docs/design/0003-tcpip-port.md)). The interface starts
+with no address:
+
+```
+$ SET INTERFACE 10.0.2.15 255.255.255.0 10.0.2.2
+$ SHOW INTERFACE
+Interface  IP_Addr          Network mask     Gateway          Link
+ BGA0      10.0.2.15        255.255.255.0    10.0.2.2         up
+```
+
+`SET INTERFACE` saves the settings on the data disk, once `INITIALIZE
+DKB0:` has made a volume there, and each boot sets them again. Every
+system with a network runs `TCPIP$TELNET`, which takes `SET HOST`
+logins on TCP port 23: `SET HOST 10.0.2.15` logs in to the system
+itself.
+
+`run-qemu.sh` reads `NETDEV`, QEMU's `-netdev` for the network, and
+`MAC`, `LOG` and `DATADISK`, so that a second vaxpunk can share a network
+with the first, out of the same `out/`. Two on a socket network:
+
+```sh
+LOG=out/a.log DATADISK=out/a-data.img MAC=52:54:00:00:00:0a \
+  NETDEV=socket,id=net0,listen=127.0.0.1:12345 scripts/run-qemu.sh
+LOG=out/b.log DATADISK=out/b-data.img MAC=52:54:00:00:00:0b \
+  NETDEV=socket,id=net0,connect=127.0.0.1:12345 scripts/run-qemu.sh
+```
+
+Give them addresses, say `10.0.0.1` and `10.0.0.2`, and `SET HOST
+10.0.0.1` on the second. `NETDEV=user,id=net0,hostfwd=tcp::2323-:23`
+lets the host in, line at a time (`nc localhost 2323`). `cargo test -p
+boot --test network` does all this.
 
 ## Debugging
 

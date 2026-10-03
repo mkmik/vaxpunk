@@ -1,0 +1,759 @@
+        .TITLE  NETDRIVER BGA0:, TCP/IP through the port
+        .IDENT  /V0.1/
+;
+; The network's port driver (docs/design/0003-tcpip-port.md). TCP/IP is a
+; component below the executive, the TCP/IP component, which shares the
+; port's pages with it ($PORTDEF): the driver writes a command in the
+; port's command ring for each request and rings the doorbell, MTPR to
+; PR$_DOORBELL; the component answers in the response ring, in any order,
+; and interrupts at IPL$_PORT, through SCB$L_PORT. NET$INTERRUPT requests
+; the IPL$_NETPOST fork, where NET$FORK completes the requests the
+; responses are for.
+;
+; BGA0: is a template device, as TCP/IP Services' BG0: was: IO$_SETMODE
+; on a channel assigned to it opens a TCP connection, and the channel goes
+; to a unit of its own, a UCB cloned from it that holds the connection's
+; number on the port, until the channel is deassigned, which closes it.
+; On the template, IO$_SETCHAR and IO$_SENSECHAR set and sense the
+; interface's address, mask and gateway.
+;
+; A command takes a tag, a credit, which its response gives back. A send
+; or a receive needs a tag with a buffer, the first PORT$K_BUFFERS, for
+; its data; a request waits on BGA0:'s queue until a tag is free. A send's
+; data is copied into its IRP at once, and from there to the buffer; a
+; receive's data from the buffer into its IRP, which IOC$POST copies to
+; the caller's buffer, as a buffered read.
+; ponytail: one port, 0; BGA0: isn't one of the devices $DEVICE_SCAN
+; and $GETDVI see.
+;
+        .LIBRARY "lib.mlb"
+        .LIBRARY "starlet.mlb"
+        $PRDEF
+        $IPLDEF
+        $PCBDEF
+        $UCBDEF
+        $IRPDEF
+        $RPBDEF
+        $PORTDEF
+        $IODEF
+        $SSDEF
+
+        .EXTERNAL EXE$GL_RPB, EXE$ALONONPAGED, EXE$DEANONPGDSIZ
+        .EXTERNAL IOC$AB_BGA0, IOC$ALLOCIRP, IOC$REQCOM
+
+MAXCHAN = 31                            ; as qio.mar's
+; An IRP of this driver's holds the command after the packet, and a
+; send's or receive's data after that.
+NIRP$A_MSG = IRP$K_LENGTH               ; the command, PORTMSG$K_LENGTH bytes
+NIRP$A_DATA = IRP$K_LENGTH+PORTMSG$K_LENGTH
+NIRP$V_LINE = 2                         ; IRP$L_STS: a READPROMPT's receive, a line
+ORPHAN = 1                              ; NET$AL_TAG: busy, its IRP gone
+CTRLZ = 26
+
+        .PSECT  EXEC$DATA, NOEXE, WRT, QUAD
+NET$GL_PORT::                           ; port 0's pages, from the RPB, or 0 without a network
+        .LONG   0
+NET$AL_TAG::                            ; each tag's IRP, 0 if the tag is free, or ORPHAN
+        .BLKL   PORT$K_TAGS
+NET$GL_UNITS::                          ; the network units, linked by UCB$L_LINK
+        .LONG   0
+NET$GL_UNIT::                           ; the last unit's number, 1-99 then again
+        .LONG   0
+; The SS$_ status for each PORT$C_ST_.
+STATUS: .LONG   SS$_NORMAL, SS$_BADPARAM, SS$_INSFMEM, SS$_DUPLNAM, SS$_REJECT
+        .LONG   SS$_LINKABORT, SS$_TIMEOUT, SS$_ABORT, SS$_UNREACHABLE, SS$_LINKDISCON
+
+        .PSECT  $CODE$
+
+; NET$INIT: finds port 0 in the RPB. Uses R0.
+NET$INIT::
+        MOVL    G^EXE$GL_RPB, R0
+        MOVL    RPB$L_PORT(R0), NET$GL_PORT
+        RSB
+
+; NET$INTERRUPT: port 0's completion interrupt, at IPL$_PORT. Requests
+; the IPL$_NETPOST fork, which takes the responses.
+NET$INTERRUPT::
+        SOFTINT #IPL$_NETPOST
+        REI
+
+; NET$FORK: the IPL$_NETPOST software interrupt. Takes each response in
+; the ring and completes the request it is for, then sends what waits for
+; its tag.
+NET$FORK::
+        SETIPL  #IPL$_SYNCH
+        PUSHR   #^M<R0, R1, R2, R3, R4, R5, R6, R7, R8>
+        MOVL    NET$GL_PORT, R8
+10$:    CMPL    PORT$L_RSPGET(R8), PORT$L_RSPPUT(R8)
+        BEQL    80$
+        BICL3   #^C<PORT$K_RING-1>, PORT$L_RSPGET(R8), R6
+        ASHL    #5, R6, R6
+        MOVAB   PORT$A_RSP(R8)[R6], R6  ; the response
+        MOVZWL  PORTMSG$W_TAG(R6), R2
+        CMPL    R2, #PORT$K_TAGS
+        BGEQU   70$
+        MOVL    NET$AL_TAG[R2], R3
+        BEQL    70$                     ; no request had it
+        CLRL    NET$AL_TAG[R2]
+        CMPL    R3, #ORPHAN
+        BNEQ    20$
+        BSBW    ORPHANED
+        BRB     70$
+20$:    TSTL    IRP$L_PID(R3)
+        BNEQ    30$
+        MOVL    R3, R0                  ; the driver's own
+        MOVZWL  IRP$W_SIZE(R0), R1
+        BSBW    EXE$DEANONPGDSIZ
+        BRB     70$
+30$:    BSBW    COMPLETE
+70$:    INCL    PORT$L_RSPGET(R8)
+        BRB     10$
+80$:    BSBW    SENDWAIT
+        POPR    #^M<R0, R1, R2, R3, R4, R5, R6, R7, R8>
+        REI
+
+; ORPHANED: R6 = a response for a request that is gone. A connection it
+; made, OPEN's or ACCEPT's, has no unit: it is closed. IPL$_SYNCH. Uses
+; R0-R3.
+ORPHANED:
+        TSTL    PORTMSG$L_STATUS(R6)
+        BNEQ    90$
+        MOVL    PORTMSG$L_CONN(R6), R0
+        CMPB    PORTMSG$B_TYPE(R6), #PORT$C_OPEN
+        BEQL    10$
+        MOVL    PORTMSG$L_ARG1(R6), R0
+        CMPB    PORTMSG$B_TYPE(R6), #PORT$C_ACCEPT
+        BNEQ    90$
+10$:    MOVL    #PORT$C_CLOSE, R1
+        BRW     INTERNAL
+90$:    RSB
+
+; COMPLETE: R3 = an IRP, R6 = its response, in the buffer of tag R2.
+; Completes it, with the SS$_ status for the response's, and what the
+; command gives back. IPL$_SYNCH. Uses R0-R5, R7.
+COMPLETE:
+        MOVL    PORTMSG$L_STATUS(R6), R0
+        CMPL    R0, #PORT$C_ST_CLOSED
+        BLEQU   5$
+        MOVL    #PORT$C_ST_BADPARAM, R0
+5$:     MOVL    STATUS[R0], R7
+        MOVL    IRP$L_UCB(R3), R5
+        CLRL    R1
+        CMPB    PORTMSG$B_TYPE(R6), #PORT$C_OPEN
+        BNEQ    10$
+        MOVL    PORTMSG$L_CONN(R6), UCB$L_CONN(R5)
+        BRW     80$
+10$:    CMPB    PORTMSG$B_TYPE(R6), #PORT$C_ACCEPT
+        BNEQ    20$
+        BLBC    R7, 80$
+        MOVL    IRP$L_BUFADR(R3), R0    ; the new channel's unit
+        MOVL    PORTMSG$L_ARG1(R6), UCB$L_CONN(R0)
+        MOVZWL  PORTMSG$W_PORT(R6), R0  ; and the peer, in the IOSB
+        ASHL    #16, R0, R0
+        BISL2   R0, R7
+        MOVL    PORTMSG$L_ADDR(R6), R1
+        BRB     80$
+20$:    CMPB    PORTMSG$B_TYPE(R6), #PORT$C_CLOSE
+        BNEQ    30$
+        CLRL    UCB$L_CONN(R5)
+        BRB     80$
+30$:    CMPB    PORTMSG$B_TYPE(R6), #PORT$C_SEND
+        BNEQ    40$
+        BRB     70$
+40$:    CMPB    PORTMSG$B_TYPE(R6), #PORT$C_RECV
+        BNEQ    50$
+        PUSHR   #^M<R1, R3>
+        BSBW    BUFFER
+        MOVC3   PORTMSG$L_LEN(R6), (R0), NIRP$A_DATA(R3)
+        POPR    #^M<R1, R3>
+        BBC     #NIRP$V_LINE, IRP$L_STS(R3), 70$
+        BLBC    R7, 70$
+        MOVL    PORTMSG$L_LEN(R6), R0   ; a line: without its end
+        MOVL    #<1@16>!13, R1          ; ended by a carriage return
+45$:    TSTL    R0
+        BEQL    48$
+        CMPB    NIRP$A_DATA-1(R3)[R0], #13
+        BEQL    46$
+        CMPB    NIRP$A_DATA-1(R3)[R0], #10
+        BEQL    46$
+        TSTB    NIRP$A_DATA-1(R3)[R0]
+        BNEQ    48$
+46$:    DECL    R0
+        BRB     45$
+48$:    ASHL    #16, R0, R0
+        BISL2   R0, R7
+        BRB     80$
+50$:    CMPB    PORTMSG$B_TYPE(R6), #PORT$C_IFCONFIG
+        BNEQ    80$
+        BBC     #IRP$V_BUFIO, IRP$L_STS(R3), 80$
+        MOVL    PORTMSG$L_ADDR(R6), NIRP$A_DATA(R3)     ; a sense: the settings
+        MOVL    PORTMSG$L_ARG1(R6), NIRP$A_DATA+4(R3)
+        MOVL    PORTMSG$L_ARG2(R6), NIRP$A_DATA+8(R3)
+        MOVZBL  PORTMSG$B_FLAGS(R6), NIRP$A_DATA+12(R3)
+        BISL2   #<16@16>, R7
+        BRB     80$
+70$:    ASHL    #16, PORTMSG$L_LEN(R6), R0      ; a byte count
+        BISL2   R0, R7
+80$:    MOVL    R7, R0
+        BRW     IOC$REQCOM
+
+; BUFFER: R2 = a tag. R0 = its buffer, in the port. Keeps every other
+; register.
+BUFFER: ADDL3   #1, R2, R0
+        ASHL    #12, R0, R0
+        ADDL2   NET$GL_PORT, R0
+        RSB
+
+; NET$FDT: BGA0:'s FDT routine, and its units'. R4 = the current PCB, R5 =
+; the channel's UCB, AP = $QIO's arguments.
+; On BGA0: itself:
+;   IO$_SETMODE    opens a connection: the channel goes to a new unit.
+;                  p1 = its characteristics, as TCP/IP Services': a word,
+;                  the protocol, 6 for TCP, and two bytes, the type and
+;                  the address family, which are only TCP's
+;   IO$_SETCHAR    sets the interface: p1 = 12 bytes, its address, mask
+;                  and gateway, each a longword in network order
+;   IO$_SENSECHAR  writes those to the 16 bytes at p1, then the flags, 2
+;                  if the link is up
+; On a unit:
+;   IO$_SETMODE!IO$M_BIND    binds it to the local address p3, port p4
+;   IO$_SETMODE!IO$M_LISTEN  listens, p4 connections waiting at most
+;   IO$_ACCESS     connects to the address p3, port p4
+;   IO$_ACCESS!IO$M_ACCEPT   accepts a connection on channel p4, which
+;                  must be assigned to BGA0:, and goes to a new unit;
+;                  the IOSB has the peer's port and address
+;   IO$_WRITEVBLK  sends the p2 bytes at p1, 4096 at most
+;   IO$_READVBLK   receives up to p2 bytes into p1, those that came;
+;                  SS$_LINKDISCON once the peer has closed
+;   IO$_DEACCESS   closes the connection
+;   IO$_SENSEMODE  the IOSB has the unit's number, nn in its name, _BGnn:,
+;                  and the channels assigned to it
+; and as a terminal, for a process whose SYS$INPUT it is:
+;   IO$_READPROMPT sends the p6 bytes at p5, then receives a line into
+;                  p1, at most p2 bytes, as IO$_READVBLK, without its
+;                  CR LF; the IOSB has a carriage return as its terminator
+;   IO$_SETMODE!IO$M_CTRLCAST or IO$M_CTRLYAST does nothing
+; An address is a longword in network order: its first byte is the
+; address's first number. R0 = SS$_NORMAL, SS$_DEVOFFLINE without the
+; TCP/IP component, SS$_ILLIOFUNC, SS$_BADPARAM, SS$_ACCVIO,
+; SS$_IVBUFLEN, SS$_IVCHAN, SS$_INSFMEM. IPL$_SYNCH. Uses R0-R8.
+NET$FDT::
+        MOVL    NET$GL_PORT, R0
+        BEQL    10$
+        CMPL    PORT$L_VERSION(R0), #PORT$K_VERSION
+        BEQL    20$
+10$:    MOVL    #SS$_DEVOFFLINE, R0
+        RSB
+20$:    BICL3   #^C63, 12(AP), R6       ; the function
+        MOVL    12(AP), R7              ; and its modifiers
+        MOVAB   G^IOC$AB_BGA0, R0
+        CMPL    R5, R0
+        BNEQ    UNIT
+        CMPL    R6, #IO$_SETMODE
+        BNEQ    30$
+        BRW     OPEN
+30$:    CMPL    R6, #IO$_SETCHAR
+        BNEQ    40$
+        BRW     SETCHAR
+40$:    CMPL    R6, #IO$_SENSECHAR
+        BNEQ    ILLFUNC
+        BRW     SENSECHAR
+ILLFUNC:
+        MOVL    #SS$_ILLIOFUNC, R0
+        RSB
+
+UNIT:   CMPL    R6, #IO$_SETMODE
+        BNEQ    15$
+        BBC     #IO$V_BIND, R7, 10$
+        MOVL    #PORT$C_BIND, R8
+        BRW     ADDRESS
+10$:    BBC     #IO$V_LISTEN, R7, 12$
+        MOVL    #PORT$C_LISTEN, R8
+        BRW     LISTEN
+12$:    BITL    #IO$M_CTRLCAST!IO$M_CTRLYAST, R7
+        BEQL    BADPARAM
+        CLRL    R1                      ; a terminal's CTRL/C or CTRL/Y AST: none come
+        BRW     NOW
+15$:    CMPL    R6, #IO$_SENSEMODE
+        BNEQ    18$
+        BRW     SENSEMODE
+18$:    CMPL    R6, #IO$_READPROMPT
+        BNEQ    20$
+        BRW     PROMPT
+20$:    CMPL    R6, #IO$_ACCESS
+        BNEQ    30$
+        BBS     #IO$V_ACCEPT, R7, 25$
+        MOVL    #PORT$C_CONNECT, R8
+        BRW     ADDRESS
+25$:    BRW     ACCEPT
+30$:    CMPL    R6, #IO$_WRITEVBLK
+        BNEQ    40$
+        BRW     SEND
+40$:    CMPL    R6, #IO$_READVBLK
+        BNEQ    50$
+        BRW     RECV
+50$:    CMPL    R6, #IO$_DEACCESS
+        BNEQ    ILLFUNC
+        MOVL    #PORT$C_CLOSE, R8
+        CLRL    R1
+        BSBW    NEWIRP
+        BLBC    R0, 90$
+        BRW     QUEUE
+90$:    RSB
+BADPARAM:
+        MOVL    #SS$_BADPARAM, R0
+        RSB
+
+; NEWIRP: R1 = the bytes of data past the command, R8 = a PORT$C_, and
+; what NET$FDT has. Makes the request's IRP, with the command, of that
+; type and otherwise 0: R3 = it, R0 = SS$_NORMAL, or IOC$ALLOCIRP's
+; failure. Uses R1 and R2.
+NEWIRP: ADDL2   #PORTMSG$K_LENGTH, R1
+        BSBW    IOC$ALLOCIRP
+        BLBC    R0, 90$
+        MOVL    #PORTMSG$K_LENGTH, IRP$L_PROMPT(R3)
+        MOVAB   NIRP$A_MSG(R3), R1
+        MOVL    #PORTMSG$K_LENGTH/4, R2
+10$:    CLRL    (R1)+
+        SOBGTR  R2, 10$
+        MOVB    R8, NIRP$A_MSG+PORTMSG$B_TYPE(R3)
+90$:    RSB
+
+; NEWUNIT: R4 = the current PCB, R0 = a channel assigned to BGA0:. Clones
+; BGA0:'s UCB, with no connection yet, as unit BGnn, the next number,
+; for the channel to go to, its one channel. R0 = SS$_NORMAL, and R2 =
+; the new UCB, or SS$_INSFMEM. Uses R1.
+; ponytail: the numbers go round at 99, whether a unit has one or not.
+NEWUNIT:
+        PUSHL   R0
+        MOVL    #UCB$K_NETLENGTH, R1
+        BSBW    EXE$ALONONPAGED
+        MOVL    (SP)+, R1
+        BLBC    R0, 90$
+        MOVL    R2, UCB$L_IOQFL(R2)
+        MOVL    R2, UCB$L_IOQBL(R2)
+        MOVAB   NET$FDT, UCB$L_FDT(R2)
+        CLRL    UCB$L_VCB(R2)
+        CLRL    UCB$L_START(R2)
+        CLRL    UCB$L_CONN(R2)
+        MOVL    NET$GL_UNITS, UCB$L_LINK(R2)
+        MOVL    R2, NET$GL_UNITS
+        MOVL    #1, UCB$L_REFC(R2)
+        MOVL    R2, PCB$AL_CCB(R4)[R1]
+        AOBLEQ  #99, NET$GL_UNIT, 10$
+        MOVL    #1, NET$GL_UNIT
+10$:    MOVL    NET$GL_UNIT, R0
+        MOVL    R0, UCB$L_UNIT(R2)
+        MOVW    #^A/BG/, UCB$T_NAME(R2)
+        CLRL    R1                      ; nn: R1 tens, R0 ones
+        EDIV    #10, R0, R1, R0
+        ADDB3   #^A/0/, R1, UCB$T_NAME+2(R2)
+        ADDB3   #^A/0/, R0, UCB$T_NAME+3(R2)
+        MOVL    #SS$_NORMAL, R0
+90$:    RSB
+
+; NOW: R1 = the IOSB's second longword. Completes the request at once,
+; successfully.
+NOW:    PUSHL   R1
+        CLRL    R1
+        BSBW    IOC$ALLOCIRP
+        MOVL    (SP)+, R1
+        BLBC    R0, 90$
+        MOVL    #SS$_NORMAL, R0
+        BRW     IOC$REQCOM
+90$:    RSB
+
+; SENSEMODE: IO$_SENSEMODE on a unit: its number and its channels.
+SENSEMODE:
+        MOVL    UCB$L_UNIT(R5), R0
+        ASHL    #16, R0, R7
+        BISL2   #SS$_NORMAL, R7
+        CLRL    R1
+        BSBW    IOC$ALLOCIRP
+        BLBC    R0, 90$
+        MOVL    R7, R0
+        MOVL    UCB$L_REFC(R5), R1
+        BRW     IOC$REQCOM
+90$:    RSB
+
+; PROMPT: IO$_READPROMPT on a unit: a send of the prompt, for the driver
+; itself, then a receive of a line.
+PROMPT: MOVL    48(AP), R6
+        BEQL    10$
+        CMPL    R6, #PORT$K_BUFSIZE
+        BGTRU   80$
+        IFNORD  R6, @44(AP), 85$
+        MOVL    #PORT$C_SEND, R8
+        MOVL    R6, R1
+        BSBW    NEWIRP
+        BLBC    R0, 90$
+        CLRL    IRP$L_PID(R3)           ; the driver's own
+        MOVL    R6, NIRP$A_MSG+PORTMSG$L_LEN(R3)
+        PUSHR   #^M<R3, R4, R5>
+        MOVC3   R6, @44(AP), NIRP$A_DATA(R3)
+        POPR    #^M<R3, R4, R5>
+        PUSHR   #^M<R4, R5>
+        BSBW    QUEUE
+        POPR    #^M<R4, R5>
+10$:    MOVL    #<1@NIRP$V_LINE>, R7
+        BRW     RECV1
+80$:    MOVL    #SS$_IVBUFLEN, R0
+        RSB
+85$:    MOVL    #SS$_ACCVIO, R0
+90$:    RSB
+
+; OPEN: IO$_SETMODE on BGA0:. The channel goes to a new unit, which the
+; response gives its connection.
+OPEN:   MOVL    28(AP), R2
+        IFNORD  #4, (R2), 85$
+        CMPW    (R2), #PORT$C_TCP
+        BEQL    5$
+        BRW     BADPARAM
+85$:    MOVL    #SS$_ACCVIO, R0
+        RSB
+5$:
+        MOVZWL  8(AP), R0
+        BSBB    NEWUNIT
+        BLBC    R0, 90$
+        MOVL    R2, R5
+        MOVL    #PORT$C_OPEN, R8
+        CLRL    R1
+        BSBW    NEWIRP
+        BLBS    R0, 10$
+        MOVZWL  8(AP), R1               ; no IRP: back to BGA0:
+        MOVAB   G^IOC$AB_BGA0, PCB$AL_CCB(R4)[R1]
+        PUSHL   R0
+        MOVL    R5, R0
+        MOVL    #UCB$K_NETLENGTH, R1
+        BSBW    EXE$DEANONPGDSIZ
+        MOVL    (SP)+, R0
+        RSB
+10$:    MOVW    #PORT$C_TCP, NIRP$A_MSG+PORTMSG$W_PROTO(R3)
+        BRW     QUEUE
+90$:    RSB
+
+; SETCHAR, SENSECHAR: IO$_SETCHAR and IO$_SENSECHAR on BGA0:, IFCONFIG
+; on the control connection.
+SETCHAR:
+        MOVL    28(AP), R2
+        IFNORD  #12, (R2), 85$
+        MOVL    #PORT$C_IFCONFIG, R8
+        CLRL    R1
+        BSBW    NEWIRP
+        BLBC    R0, 90$
+        MOVL    28(AP), R2
+        MOVB    #PORT$M_SET, NIRP$A_MSG+PORTMSG$B_FLAGS(R3)
+        MOVL    (R2), NIRP$A_MSG+PORTMSG$L_ADDR(R3)
+        MOVL    4(R2), NIRP$A_MSG+PORTMSG$L_ARG1(R3)
+        MOVL    8(R2), NIRP$A_MSG+PORTMSG$L_ARG2(R3)
+        BRW     QUEUE
+85$:    MOVL    #SS$_ACCVIO, R0
+90$:    RSB
+SENSECHAR:
+        MOVL    28(AP), R2
+        IFNOWRT #16, (R2), 85$
+        MOVL    #PORT$C_IFCONFIG, R8
+        MOVL    #16, R1
+        BSBW    NEWIRP
+        BLBC    R0, 90$
+        MOVL    #16, IRP$L_BCNT(R3)
+        MOVL    #IRP$M_BUFIO, IRP$L_STS(R3)
+        BRW     QUEUE
+85$:    MOVL    #SS$_ACCVIO, R0
+90$:    RSB
+
+; ADDRESS: R8 = PORT$C_BIND or PORT$C_CONNECT, with the address p3, port p4.
+ADDRESS:
+        CMPL    40(AP), #65535
+        BGTRU   80$
+        CLRL    R1
+        BSBW    NEWIRP
+        BLBC    R0, 90$
+        MOVL    36(AP), NIRP$A_MSG+PORTMSG$L_ADDR(R3)
+        MOVW    40(AP), NIRP$A_MSG+PORTMSG$W_PORT(R3)
+        BRW     QUEUE
+80$:    MOVL    #SS$_BADPARAM, R0
+90$:    RSB
+
+; LISTEN: IO$_SETMODE!IO$M_LISTEN, backlog p4.
+LISTEN: CLRL    R1
+        BSBW    NEWIRP
+        BLBC    R0, 90$
+        MOVL    40(AP), NIRP$A_MSG+PORTMSG$L_ARG1(R3)
+        BRW     QUEUE
+90$:    RSB
+
+; ACCEPT: IO$_ACCESS!IO$M_ACCEPT, the new channel p4, which goes to a new
+; unit at once; the response gives it its connection.
+ACCEPT: MOVL    40(AP), R0
+        BEQL    80$
+        CMPL    R0, #MAXCHAN
+        BGTRU   80$
+        BBC     R0, PCB$L_CHANS(R4), 80$
+        MOVAB   G^IOC$AB_BGA0, R1
+        CMPL    PCB$AL_CCB(R4)[R0], R1
+        BNEQ    80$
+        BSBW    NEWUNIT
+        BLBC    R0, 90$
+        PUSHL   R2
+        MOVL    #PORT$C_ACCEPT, R8
+        CLRL    R1
+        BSBW    NEWIRP
+        MOVL    (SP)+, R2
+        BLBC    R0, 90$
+        MOVL    R2, IRP$L_BUFADR(R3)    ; the new unit
+        BRW     QUEUE
+80$:    MOVL    #SS$_IVCHAN, R0
+90$:    RSB
+
+; SEND: IO$_WRITEVBLK, p2 bytes at p1, which go into the IRP at once.
+SEND:   MOVL    28(AP), R2
+        MOVL    32(AP), R6
+        CMPL    R6, #PORT$K_BUFSIZE
+        BGTRU   80$
+        IFNORD  R6, (R2), 85$
+        MOVL    #PORT$C_SEND, R8
+        MOVL    R6, R1
+        BSBW    NEWIRP
+        BLBC    R0, 90$
+        MOVL    R6, NIRP$A_MSG+PORTMSG$L_LEN(R3)
+        PUSHR   #^M<R3, R4, R5>
+        MOVC3   R6, @28(AP), NIRP$A_DATA(R3)
+        POPR    #^M<R3, R4, R5>
+        BRW     QUEUE
+80$:    MOVL    #SS$_IVBUFLEN, R0
+        RSB
+85$:    MOVL    #SS$_ACCVIO, R0
+90$:    RSB
+
+; RECV: IO$_READVBLK, at most p2 bytes into p1, 4096 if p2 is more, a
+; buffered read. RECV1: the same, with R7 = more IRP$L_STS bits.
+RECV:   CLRL    R7
+RECV1:  MOVL    28(AP), R2
+        MOVL    32(AP), R6
+        IFNOWRT R6, (R2), 85$
+        CMPL    R6, #PORT$K_BUFSIZE
+        BLEQU   10$
+        MOVL    #PORT$K_BUFSIZE, R6
+10$:    MOVL    #PORT$C_RECV, R8
+        MOVL    R6, R1
+        BSBW    NEWIRP
+        BLBC    R0, 90$
+        MOVL    R6, NIRP$A_MSG+PORTMSG$L_LEN(R3)
+        MOVL    R6, IRP$L_BCNT(R3)
+        BISL3   #IRP$M_BUFIO, R7, IRP$L_STS(R3)
+        BRW     QUEUE
+85$:    MOVL    #SS$_ACCVIO, R0
+90$:    RSB
+
+; QUEUE: R3 = an IRP with its command. Sends it if a tag is free, or
+; queues it on BGA0: until one is. R0 = SS$_NORMAL, for an FDT routine to
+; return. IPL$_SYNCH. Uses R0-R5.
+QUEUE:  BSBB    TAG
+        BLBS    R0, 10$
+        MOVAB   G^IOC$AB_BGA0, R0
+        INSQUE  (R3), @UCB$L_IOQBL(R0)
+        BRB     90$
+10$:    BSBB    SENDCMD
+90$:    MOVL    #SS$_NORMAL, R0
+        RSB
+
+; TAG: R3 = an IRP with its command. R0 = 1 and R2 = a free tag for it,
+; one with a buffer for a send or a receive, else 0. Uses R1.
+TAG:    CLRL    R2
+        MOVL    #PORT$K_BUFFERS, R1
+        CMPB    NIRP$A_MSG+PORTMSG$B_TYPE(R3), #PORT$C_SEND
+        BEQL    10$
+        CMPB    NIRP$A_MSG+PORTMSG$B_TYPE(R3), #PORT$C_RECV
+        BEQL    10$
+        MOVL    #PORT$K_BUFFERS, R2     ; the others take one without
+        MOVL    #PORT$K_TAGS, R1
+10$:    TSTL    NET$AL_TAG[R2]
+        BEQL    20$
+        AOBLSS  R1, R2, 10$
+        CLRL    R0
+        RSB
+20$:    MOVL    #1, R0
+        RSB
+
+; SENDCMD: R3 = an IRP with its command, R2 = a free tag for it. Writes
+; the command in the ring, with the tag and the connection, its unit's,
+; or the command's own if the IRP is for BGA0:, and a send's data in the
+; tag's buffer, and rings the doorbell. IPL$_SYNCH. Uses R0-R5.
+SENDCMD:
+        MOVL    R3, NET$AL_TAG[R2]
+        PUSHR   #^M<R6, R7, R8>
+        MOVL    NET$GL_PORT, R8
+        BICL3   #^C<PORT$K_RING-1>, PORT$L_CMDPUT(R8), R7
+        ASHL    #5, R7, R7
+        MOVAB   PORT$A_CMD(R8)[R7], R7  ; the entry
+        MOVAB   NIRP$A_MSG(R3), R6
+        MOVL    #PORTMSG$K_LENGTH/4, R0
+10$:    MOVL    (R6)+, (R7)+
+        SOBGTR  R0, 10$
+        SUBL2   #PORTMSG$K_LENGTH, R7
+        MOVW    R2, PORTMSG$W_TAG(R7)
+        MOVL    IRP$L_UCB(R3), R0
+        MOVAB   G^IOC$AB_BGA0, R1
+        CMPL    R0, R1
+        BEQL    20$
+        MOVL    UCB$L_CONN(R0), PORTMSG$L_CONN(R7)
+20$:    CMPB    PORTMSG$B_TYPE(R7), #PORT$C_SEND
+        BNEQ    30$
+        BSBW    BUFFER
+        PUSHR   #^M<R7>
+        MOVC3   PORTMSG$L_LEN(R7), NIRP$A_DATA(R3), (R0)
+        POPR    #^M<R7>
+30$:    INCL    PORT$L_CMDPUT(R8)
+        MTPR    #0, #PR$_DOORBELL
+        POPR    #^M<R6, R7, R8>
+        RSB
+
+; SENDWAIT: sends the requests waiting on BGA0: while there are tags for
+; them, in order. IPL$_SYNCH. Uses R0-R5.
+SENDWAIT:
+10$:    MOVAB   G^IOC$AB_BGA0, R0
+        MOVL    UCB$L_IOQFL(R0), R3
+        CMPL    R3, R0
+        BEQL    90$
+        BSBW    TAG
+        BLBC    R0, 90$
+        REMQUE  (R3), R3
+        BSBW    SENDCMD
+        BRB     10$
+90$:    RSB
+
+; INTERNAL: R0 = a connection, R1 = PORT$C_CLOSE or PORT$C_CANCEL. Sends
+; that command for the driver itself, in an IRP of no process's, for BGA0:
+; Without pool for it, the command isn't sent. IPL$_SYNCH. Uses R0-R3.
+; ponytail: a connection whose CLOSE finds no pool stays open.
+INTERNAL:
+        PUSHR   #^M<R4, R5>
+        PUSHR   #^M<R0, R1>
+        MOVL    #IRP$K_LENGTH+PORTMSG$K_LENGTH, R1
+        BSBW    EXE$ALONONPAGED
+        BLBS    R0, 10$
+        POPR    #^M<R0, R1>
+        BRB     90$
+10$:    MOVL    R2, R3
+        MOVW    R1, IRP$W_SIZE(R3)
+        MOVB    #DYN$C_IRP, IRP$B_TYPE(R3)
+        CLRL    IRP$L_PID(R3)
+        MOVAB   G^IOC$AB_BGA0, IRP$L_UCB(R3)
+        MOVAB   NIRP$A_MSG(R3), R1
+        MOVL    #PORTMSG$K_LENGTH/4, R2
+20$:    CLRL    (R1)+
+        SOBGTR  R2, 20$
+        POPR    #^M<R0, R1>
+        MOVL    R0, NIRP$A_MSG+PORTMSG$L_CONN(R3)
+        MOVB    R1, NIRP$A_MSG+PORTMSG$B_TYPE(R3)
+        BSBW    QUEUE
+90$:    POPR    #^M<R4, R5>
+        RSB
+
+; NET$CANCEL: R4 = the current PCB, R0 = a mask of its channels, R1 = a
+; status, or 0, as IOC$CANCEL has them. The requests on the port for
+; those channels end: with that status, and a CANCEL for their
+; connections, or, for 0, unfinished, since the channels are going: a
+; unit's connection is closed then, and the unit freed. A request's tag
+; stays taken until its response comes. Those waiting on BGA0: are
+; IOC$CANCEL's. A unit is closed and freed once its last channel goes.
+; IPL$_SYNCH. Uses R0-R3.
+NET$CANCEL::
+        PUSHR   #^M<R4, R5, R6, R7, R8>
+        MOVL    R0, R6
+        MOVL    R1, R7
+        CLRL    R8                      ; the tag
+10$:    MOVL    NET$AL_TAG[R8], R3
+        CMPL    R3, #ORPHAN
+        BLEQU   40$
+        TSTL    IRP$L_PID(R3)
+        BEQL    40$
+        CMPL    IRP$L_PID(R3), PCB$L_PID(R4)
+        BNEQ    40$
+        MOVZWL  IRP$W_CHAN(R3), R0
+        BBC     R0, R6, 40$
+        MOVL    #ORPHAN, NET$AL_TAG[R8]
+        TSTL    R7
+        BNEQ    20$
+        MOVL    R3, R0                  ; the channel is going
+        MOVZWL  IRP$W_SIZE(R0), R1
+        BSBW    EXE$DEANONPGDSIZ
+        BRB     40$
+20$:    MOVL    IRP$L_UCB(R3), R0       ; $CANCEL
+        MOVAB   G^IOC$AB_BGA0, R1
+        CMPL    R0, R1
+        BEQL    30$
+        PUSHL   R3
+        MOVL    UCB$L_CONN(R0), R0
+        MOVL    #PORT$C_CANCEL, R1
+        BSBW    INTERNAL
+        MOVL    (SP)+, R3
+30$:    MOVL    R7, R0
+        CLRL    R1
+        BSBW    IOC$REQCOM
+40$:    AOBLSS  #PORT$K_TAGS, R8, 10$
+        TSTL    R7
+        BNEQ    90$
+        MOVL    #1, R8                  ; the units of the channels going
+50$:    BBC     R8, R6, 70$
+        MOVL    PCB$AL_CCB(R4)[R8], R5
+        BSBW    NETUNIT
+        BLBC    R0, 70$
+        MOVAB   G^IOC$AB_BGA0, PCB$AL_CCB(R4)[R8]
+        SOBGTR  UCB$L_REFC(R5), 70$     ; others still have it
+        MOVL    UCB$L_CONN(R5), R0
+        BEQL    60$
+        MOVL    #PORT$C_CLOSE, R1
+        BSBW    INTERNAL
+60$:    MOVAL   NET$GL_UNITS, R0        ; off the list
+65$:    CMPL    (R0), R5
+        BEQL    67$
+        MOVL    (R0), R0
+        ADDL2   #UCB$L_LINK, R0
+        BRB     65$
+67$:    MOVL    UCB$L_LINK(R5), (R0)
+        MOVL    R5, R0
+        MOVL    #UCB$K_NETLENGTH, R1
+        BSBW    EXE$DEANONPGDSIZ
+70$:    AOBLEQ  #MAXCHAN, R8, 50$
+90$:    POPR    #^M<R4, R5, R6, R7, R8>
+        RSB
+
+; NETUNIT: R5 = a UCB. R0 = 1 if it is a network unit, not BGA0:, else 0.
+NETUNIT:
+        CLRL    R0
+        PUSHL   R1
+        MOVAB   NET$FDT, R1
+        CMPL    UCB$L_FDT(R5), R1
+        BNEQ    90$
+        MOVAB   G^IOC$AB_BGA0, R1
+        CMPL    R5, R1
+        BEQL    90$
+        INCL    R0
+90$:    MOVL    (SP)+, R1
+        RSB
+
+; NET$FINDUNIT: R3 = a device name's four characters, DDCU. R5 = the
+; network unit by that name, or 0. Keeps every other register.
+NET$FINDUNIT::
+        MOVL    NET$GL_UNITS, R5
+10$:    TSTL    R5
+        BEQL    90$
+        CMPL    (R3), UCB$T_NAME(R5)
+        BEQL    90$
+        MOVL    UCB$L_LINK(R5), R5
+        BRB     10$
+90$:    RSB
+
+; NET$ASSIGNED: R5 = the UCB a channel was just assigned to. A network
+; unit has one more channel. Keeps every register.
+NET$ASSIGNED::
+        PUSHL   R0
+        BSBW    NETUNIT
+        BLBC    R0, 10$
+        INCL    UCB$L_REFC(R5)
+10$:    MOVL    (SP)+, R0
+        RSB
+
+        .END

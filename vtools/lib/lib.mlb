@@ -32,6 +32,7 @@ PR$_TBIA = 57                           ; translation buffer invalidates
 PR$_TBIS = 58
 PR$_SID = 62                            ; system identification
 PR$_TBCHK = 63
+PR$_DOORBELL = 64                       ; vaxpunk's: rings port n's doorbell
         .ENDM   $PRDEF
 
 ; $PALDEF: function codes for CALL_PAL, the PAL calls that have no VAX
@@ -45,6 +46,7 @@ PAL$_WRPTE = ^X41                       ; R0 = address, R1 = PTE; R0 = old PTE
 PAL$_DELCTX = ^X42                      ; R0 = HWPCB of a context to delete
 PAL$_READLBLK = ^X46                    ; R0 = buffer, R1 = byte count, R2 = LBN, R3 = unit; R0 = status
 PAL$_WRITELBLK = ^X47                   ; the same, writing the buffer there
+PAL$_DOORBELL = ^X48                    ; R0 = a port: MTPR #n, #PR$_DOORBELL
 PAL$_RD_PS = ^X91                       ; R0 = the PSL: the modes and IPL
         .ENDM   $PALDEF
 
@@ -53,9 +55,11 @@ PAL$_RD_PS = ^X91                       ; R0 = the PSL: the modes and IPL
 IPL$_ASTDEL = 2                         ; AST delivery
 IPL$_RESCHED = 3                        ; rescheduling software interrupt
 IPL$_IOPOST = 4                         ; I/O post processing
+IPL$_NETPOST = 6                        ; the port's responses, a fork level
 IPL$_TIMER = 7                          ; software timer: quantum end
 IPL$_SYNCH = 8                          ; the scheduler's database
 IPL$_CONSOLE = 20                       ; console receive interrupt
+IPL$_PORT = 21                          ; the port's completion interrupt
 IPL$_HWCLK = 24                         ; interval timer interrupt
 IPL$_POWER = 31                         ; everything blocked
         .ENDM   $IPLDEF
@@ -104,7 +108,8 @@ SCB$L_CHMU = ^X4C                       ; to user
 SCB$L_SOFTINT = ^X80                    ; software interrupt level n at +4*n
 SCB$L_INTTIM = ^XC0                     ; interval timer, at IPL$_HWCLK
 SCB$L_CONSRCV = ^XF8                    ; console receive, at IPL$_CONSOLE
-SCB$K_LENGTH = ^XFC
+SCB$L_PORT = ^X100                      ; port 0's completion, at IPL$_PORT
+SCB$K_LENGTH = ^X104
         .ENDM   $SCBDEF
 
 ; $INTSTKDEF: the frame the PAL pushes on the stack of the mode it delivers
@@ -175,6 +180,7 @@ RPB$L_BASE = 0                          ; the RPB's own address
 RPB$L_PFNCNT = 4                        ; PFNs 0 to PFNCNT-1 are the executive's
 RPB$L_FREEPFN = 8                       ; and those below this one are in use
 RPB$L_BOOTTIME = 12                     ; seconds since 1970 at boot, from the RTC
+RPB$L_PORT = 16                         ; port 0's pages, in S0, or 0 without a network
 RPB$Q_HWPCB = 64                        ; the boot context's HWPCB
 RPB$K_LENGTH = 192
         .ENDM   $RPBDEF
@@ -329,6 +335,11 @@ UCB$L_VCB = 12                          ; a disk's VCB, or 0
 UCB$T_NAME = 16                         ; the device's name, DDCU, 4 characters
 UCB$L_START = 20                        ; a disk driver's start I/O routine, which does an IRP's I/O, or 0
 UCB$K_LENGTH = 24
+UCB$L_CONN = 24                         ; a network unit's connection on the port, 0 none yet
+UCB$L_LINK = 28                         ; the next network unit
+UCB$L_REFC = 32                         ; the channels assigned to it
+UCB$L_UNIT = 36                         ; its number, nn in its name, BGnn
+UCB$K_NETLENGTH = 40                    ; a network unit, which BGA0: clones
 UCB$V_ONLINE = 4                        ; the device is online
 UCB$M_ONLINE = ^X10
         .ENDM   $UCBDEF
@@ -366,3 +377,59 @@ IRP$M_BUFIO = 1
 IRP$V_STARTED = 1                       ; the terminal has written its prompt
 DYN$C_IRP = 10                          ; IRP$B_TYPE
         .ENDM   $IRPDEF
+
+; $PORTDEF: the port, the pages the executive shares with the TCP/IP
+; component below it (tcpip/include/port.h, which this must match;
+; docs/design/0003-tcpip-port.md). Page 0 is the header and two rings of
+; PORT$K_RING messages, the executive's commands and the component's
+; responses; page 1 + n is tag n's buffer, for the first PORT$K_BUFFERS.
+        .MACRO  $PORTDEF
+PORT$K_VERSION = 1                      ; PORT$L_VERSION once the component is ready
+PORT$K_PAGES = 17
+PORT$K_RING = 32                        ; messages in a ring
+PORT$K_TAGS = 32                        ; tags, a command's each: the credits
+PORT$K_BUFFERS = 16                     ; the tags that have a buffer
+PORT$K_BUFSIZE = 4096
+PORT$L_VERSION = 0
+PORT$L_CMDPUT = 4                       ; commands written, by the executive
+PORT$L_CMDGET = 8                       ; and taken, by the component
+PORT$L_RSPPUT = 12                      ; responses written, by the component
+PORT$L_RSPGET = 16                      ; and taken, by the executive
+PORT$A_CMD = ^X100                      ; the command ring
+PORT$A_RSP = ^X500                      ; the response ring
+PORTMSG$B_TYPE = 0                      ; PORT$C_
+PORTMSG$B_FLAGS = 1
+PORTMSG$W_TAG = 2                       ; the executive's, echoed in the response
+PORTMSG$L_CONN = 4                      ; the connection, 0 the control connection
+PORTMSG$L_STATUS = 8                    ; a response's PORT$C_ST_
+PORTMSG$L_LEN = 12                      ; bytes in the tag's buffer
+PORTMSG$L_ADDR = 16                     ; an IPv4 address, network order
+PORTMSG$W_PORT = 20                     ; a TCP port
+PORTMSG$W_PROTO = 22
+PORTMSG$L_ARG1 = 24
+PORTMSG$L_ARG2 = 28
+PORTMSG$K_LENGTH = 32
+PORT$C_OPEN = 1                         ; PROTO: TCP; response: CONN
+PORT$C_BIND = 2                         ; ADDR, PORT: the local address
+PORT$C_LISTEN = 3                       ; ARG1: the backlog
+PORT$C_ACCEPT = 4                       ; response: ARG1 the new connection, ADDR and PORT the peer's
+PORT$C_CONNECT = 5                      ; ADDR, PORT: the peer's
+PORT$C_SEND = 6                         ; LEN bytes from the buffer
+PORT$C_RECV = 7                         ; at most LEN bytes into the buffer; 0 if the peer closed
+PORT$C_CLOSE = 8
+PORT$C_IFCONFIG = 9                     ; FLAGS SET: ADDR, ARG1 mask, ARG2 gateway; response: those
+PORT$C_CANCEL = 10                      ; ends the connection's commands
+PORT$C_TCP = 6
+PORT$M_SET = 1                          ; IFCONFIG: set, not only sense
+PORT$M_LINKUP = 2                       ; IFCONFIG's response: the link is up
+PORT$C_ST_OK = 0                        ; the statuses, which the driver maps to SS$_
+PORT$C_ST_BADPARAM = 1
+PORT$C_ST_NOMEM = 2
+PORT$C_ST_INUSE = 3
+PORT$C_ST_REFUSED = 4
+PORT$C_ST_RESET = 5
+PORT$C_ST_TIMEOUT = 6
+PORT$C_ST_ABORTED = 7
+PORT$C_ST_UNREACH = 8
+PORT$C_ST_CLOSED = 9
+        .ENDM   $PORTDEF

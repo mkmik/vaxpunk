@@ -1,0 +1,116 @@
+        .TITLE  TCPTEST TCP over $QIO, both ways
+        .IDENT  /V0.1/
+;
+; Tries BGA0:, the network's port driver, both ways. It connects to port
+; 7777 on 10.0.2.100, which QEMU's user network forwards to a server on
+; the host (image/tests/network.rs), sends a line, writes the line that
+; comes back and closes. Then it listens on port 7778, which the
+; host reaches through QEMU, accepts a connection, writes the line that
+; comes, sends it back and closes. Each step says what it
+; did, and the first that fails ends it with its status.
+;
+        .LIBRARY "starlet.mlb"
+        .LIBRARY "sysexe.mlb"
+        $SSDEF
+        $IODEF
+
+        .EXTERNAL PUT_LINE
+
+        .PSECT  DATA, NOEXE, WRT, LONG
+BGA0:   .ASCID  "BGA0:"
+CHAN:   .LONG   0                       ; the connection's channel
+LCHAN:  .LONG   0                       ; the listening one's
+IOSB:   .BLKQ   1
+SOCKCHAR:                               ; a TCP socket: protocol, type, family
+        .WORD   6
+        .BYTE   1, 2
+HOST:   .BYTE   10, 0, 2, 100           ; 10.0.2.100
+HELLO:  .ASCII  "hello from vaxpunk"<13><10>
+HELLOLEN = . - HELLO
+LEN:    .LONG   0                       ; what came: its length,
+LINE:   .BLKB   1                       ; and it, .ASCIC, without its line end
+BUF:    .BLKB   255
+
+        .PSECT  CODE, EXE, LONG
+        .ENTRY  START, ^M<R2>
+        $ASSIGN_S DEVNAM=BGA0, CHAN=CHAN
+        BLBC    R0, 90$
+        $QIOW_S CHAN=CHAN, FUNC=#IO$_SETMODE, IOSB=IOSB, P1=SOCKCHAR
+        BSBW    STATUS
+        BLBC    R0, 90$
+        $QIOW_S CHAN=CHAN, FUNC=#IO$_ACCESS, IOSB=IOSB, P3=HOST, P4=#7777
+        BSBW    STATUS
+        BLBC    R0, 90$
+        PRINT   "TCPTEST: connected to 10.0.2.100 port 7777"
+        $QIOW_S CHAN=CHAN, FUNC=#IO$_WRITEVBLK, IOSB=IOSB, P1=HELLO, P2=#HELLOLEN
+        BSBW    STATUS
+        BLBC    R0, 90$
+        BSBW    READ
+        BLBC    R0, 90$
+        $QIOW_S CHAN=CHAN, FUNC=#IO$_DEACCESS, IOSB=IOSB
+        BSBW    STATUS
+        BLBC    R0, 90$
+        PRINT   "TCPTEST: closed"
+        $DASSGN_S CHAN=CHAN
+        BRB     LISTEN
+90$:    RET
+
+LISTEN: $ASSIGN_S DEVNAM=BGA0, CHAN=LCHAN
+        BLBC    R0, 95$
+        $QIOW_S CHAN=LCHAN, FUNC=#IO$_SETMODE, IOSB=IOSB, P1=SOCKCHAR
+        BSBW    STATUS
+        BLBC    R0, 95$
+        $QIOW_S CHAN=LCHAN, FUNC=#IO$_SETMODE!IO$M_BIND, IOSB=IOSB, P3=#0, P4=#7778
+        BSBW    STATUS
+        BLBC    R0, 95$
+        $QIOW_S CHAN=LCHAN, FUNC=#IO$_SETMODE!IO$M_LISTEN, IOSB=IOSB, P4=#1
+        BSBW    STATUS
+        BLBC    R0, 95$
+        PRINT   "TCPTEST: listening on port 7778"
+        $ASSIGN_S DEVNAM=BGA0, CHAN=CHAN
+        BLBC    R0, 95$
+        $QIOW_S CHAN=LCHAN, FUNC=#IO$_ACCESS!IO$M_ACCEPT, IOSB=IOSB, P4=CHAN
+        BSBW    STATUS
+        BLBC    R0, 95$
+        PRINTHEX "TCPTEST: accepted a connection from address ", IOSB+4
+        BSBW    READ
+        BLBC    R0, 95$
+        $QIOW_S CHAN=CHAN, FUNC=#IO$_WRITEVBLK, IOSB=IOSB, P1=BUF, P2=LEN
+        BSBW    STATUS
+        BLBC    R0, 95$
+        $QIOW_S CHAN=CHAN, FUNC=#IO$_DEACCESS, IOSB=IOSB
+        BSBW    STATUS
+        BLBC    R0, 95$
+        $DASSGN_S CHAN=CHAN
+        $DASSGN_S CHAN=LCHAN
+        PRINT   "TCPTEST: ok"
+        MOVL    #SS$_NORMAL, R0
+95$:    RET
+
+; READ: receives what comes into BUF, LEN bytes, and writes it, without
+; its line end. R0 = the status.
+READ:   $QIOW_S CHAN=CHAN, FUNC=#IO$_READVBLK, IOSB=IOSB, P1=BUF, P2=#255
+        BSBW    STATUS
+        BLBC    R0, 90$
+        MOVZWL  IOSB+2, R1
+        MOVL    R1, LEN
+10$:    TSTL    R1                      ; without the CR LF
+        BEQL    20$
+        CMPB    BUF-1[R1], #13
+        BEQL    15$
+        CMPB    BUF-1[R1], #10
+        BNEQ    20$
+15$:    DECL    R1
+        BRB     10$
+20$:    MOVB    R1, LINE
+        PUSHAB  LINE
+        CALLS   #1, G^PUT_LINE
+        MOVL    #SS$_NORMAL, R0
+90$:    RSB
+
+; STATUS: R0 = $QIOW's status. R0 = the IOSB's, if that was a success.
+STATUS: BLBC    R0, 90$
+        MOVZWL  IOSB, R0
+90$:    RSB
+
+        .END    START
