@@ -311,7 +311,8 @@ VCB$B_UNIT = 21                         ; the PAL's unit: 0 DKA0:, 1 DKB0:
 VCB$W_CLUSTER = 22                      ; the volume's cluster, in blocks
 VCB$T_VOLNAME = 24                      ; the volume's label, .ASCIC, 12 characters
 VCB$AB_INDEXF = 48                      ; INDEXF.SYS's header, 512 bytes
-VCB$K_LENGTH = 560
+VCB$L_UCB = 560                         ; the disk's UCB, whose driver the file system's I/O goes through
+VCB$K_LENGTH = 564
 VCB$V_MOUNTED = 0                       ; a volume is mounted on it
 VCB$V_WRITE = 1                         ; the device can be written
 VCB$V_RAMDISK = 2                       ; the device is the ramdisk, MDA0:, not one of the PAL's disks
@@ -326,13 +327,14 @@ UCB$L_IOQBL = 4
 UCB$L_FDT = 8                           ; the driver's FDT routine, which $QIO JSBs
 UCB$L_VCB = 12                          ; a disk's VCB, or 0
 UCB$T_NAME = 16                         ; the device's name, DDCU, 4 characters
-UCB$K_LENGTH = 20
+UCB$L_START = 20                        ; a disk driver's start I/O routine, which does an IRP's I/O, or 0
+UCB$K_LENGTH = 24
 UCB$V_ONLINE = 4                        ; the device is online
 UCB$M_ONLINE = ^X10
         .ENDM   $UCBDEF
 
 ; $IRPDEF: an I/O request packet, from pool, which a driver makes for a
-; $QIO. Its head is an ACB's: IOC$REQCOM queues it to its process as a
+; $QIO, or the file system's own, with no process. Its head is an ACB's: IOC$REQCOM queues it to its process as a
 ; kernel mode AST, IOC$POST, and that may queue it again as the caller's
 ; AST. A buffered read's prompt and data follow it.
         .MACRO  $IRPDEF
@@ -357,7 +359,8 @@ IRP$L_IOST2 = 56                        ; and its second
 IRP$L_BUFADR = 60                       ; the caller's buffer, p1
 IRP$L_BCNT = 64                         ; its size, p2
 IRP$L_PROMPT = 68                       ; a read's prompt's size: it is past IRP$K_LENGTH, and the data past it
-IRP$K_LENGTH = 72
+IRP$L_MEDIA = 72                        ; a disk's LBN, p3
+IRP$K_LENGTH = 76
 IRP$V_BUFIO = 0                         ; a read whose data IOC$POST copies to the caller's buffer
 IRP$M_BUFIO = 1
 IRP$V_STARTED = 1                       ; the terminal has written its prompt

@@ -5,8 +5,8 @@
 ; blocks are pages of S0 from MD_VA, which the first INITIALIZE of MDA0:
 ; makes ($INIT_VOL, f11wrt.mar) and every later one makes afresh, zeroed.
 ; Until then the device is offline. Reads and writes are copies, at once:
-; the file system (f11.mar) calls MD$IO where it would call the PAL for
-; DKA0:. The pages are the system's, so the volume outlives the processes
+; the disks' driver (DK$STARTIO, f11.mar) calls MD$IO where it would
+; call the PAL for DKA0:. The pages are the system's, so the volume outlives the processes
 ; that wrote it, but not the system.
 ; ponytail: a fixed size, MD$GL_BLOCKS; DECram's INITIALIZE/SIZE when
 ; DCL has qualifiers.

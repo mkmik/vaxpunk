@@ -86,7 +86,8 @@ The executive is the VMS kernel, written in MACRO-32.
 - prints `%EXEC-I-START … free pages`
 - mounts the system disk, `DKA0:`: it reads the volume's home block and
   the index file's header, which says where every other file's header is
-  (`FIL$MOUNT`), and prints `%MOUNT-I-MOUNTED, VAXPUNK mounted on _DKA0:`
+  (`FIL$MOUNT`), handing each read to the disk's driver (`DK$STARTIO`) in
+  an I/O request packet, as the file system always does, and prints `%MOUNT-I-MOUNTED, VAXPUNK mounted on _DKA0:`
 - mounts the data disk, `DKB0:`, the same way, if an `INITIALIZE DKB0:`
   wrote a volume there, at this boot or an earlier one, and prints
   `%MOUNT-I-MOUNTED, label mounted on _DKB0:`. A blank one stays

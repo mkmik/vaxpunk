@@ -11,7 +11,8 @@
 ; and the event flag are written, and the caller's AST queued. $QIOW waits
 ; for that.
 ; The drivers: the console's, ttdriver.mar, and the disks', DK$FDT in
-; f11.mar.
+; f11.mar, whose start I/O routine, DK$STARTIO, the file system's own
+; reads and writes go through too.
 ;
         .LIBRARY "lib.mlb"
         .LIBRARY "starlet.mlb"
@@ -28,7 +29,7 @@
         .EXTERNAL SCH$GL_CURPCB, SCH$QAST, SCH$ASTBITS, SCH$GETEFC, SCH$POSTEF
         .EXTERNAL EXE$PROBER_DSC, EXE$CLREF, EXE$WAITFR
         .EXTERNAL EXE$ALONONPAGED, EXE$DEANONPGDSIZ
-        .EXTERNAL LNM$TRNLOG, TT$FDT, DK$FDT, TTY$Q_CTRLC, TTY$Q_CTRLY
+        .EXTERNAL LNM$TRNLOG, TT$FDT, DK$FDT, DK$STARTIO, TTY$Q_CTRLC, TTY$Q_CTRLY
         .EXTERNAL F11$AB_DKA0, F11$AB_DKB0, F11$AB_MDA0
 
 MAXCHAN = 31                            ; channels 1-31, a bit each in PCB$L_CHANS
@@ -39,12 +40,19 @@ IOC$AB_OPA0::                           ; the console's
         .ADDRESS IOC$AB_OPA0, IOC$AB_OPA0, TT$FDT
         .LONG   0
         .ASCII  /OPA0/
-DKA0:   .ADDRESS DKA0, DKA0, DK$FDT, F11$AB_DKA0
+        .LONG   0
+IOC$AB_DKA0::                           ; the system disk's
+        .ADDRESS IOC$AB_DKA0, IOC$AB_DKA0, DK$FDT, F11$AB_DKA0
         .ASCII  /DKA0/
-DKB0:   .ADDRESS DKB0, DKB0, DK$FDT, F11$AB_DKB0
+        .ADDRESS DK$STARTIO
+IOC$AB_DKB0::                           ; the data disk's
+        .ADDRESS IOC$AB_DKB0, IOC$AB_DKB0, DK$FDT, F11$AB_DKB0
         .ASCII  /DKB0/
-MDA0:   .ADDRESS MDA0, MDA0, DK$FDT, F11$AB_MDA0
+        .ADDRESS DK$STARTIO
+IOC$AB_MDA0::                           ; the ramdisk's
+        .ADDRESS IOC$AB_MDA0, IOC$AB_MDA0, DK$FDT, F11$AB_MDA0
         .ASCII  /MDA0/
+        .ADDRESS DK$STARTIO
 IOC$A_UCBEND::                          ; past the last UCB
 
         .PSECT  $CODE$
@@ -261,18 +269,21 @@ IOC$ALLOCIRP::
 
 ; IOC$REQCOM: R3 = an IRP, done, R0 = its IOSB's first longword, a status
 ; and a byte count in the high word, R1 = its second. Queues it to its
-; process as a kernel mode AST, IOC$POST. R0 = SS$_NORMAL, for an FDT
-; routine to return. IPL$_SYNCH. Uses R1-R3.
+; process as a kernel mode AST, IOC$POST, unless it is the file system's,
+; with no process, which finds the status in the IRP. R0 = SS$_NORMAL, for
+; an FDT routine to return. IPL$_SYNCH. Uses R1-R3.
 IOC$REQCOM::
         MOVL    R0, IRP$L_IOST1(R3)
         MOVL    R1, IRP$L_IOST2(R3)
+        TSTL    IRP$L_PID(R3)
+        BEQL    10$
         CLRB    IRP$B_RMOD(R3)
         MOVAB   IOC$POST, IRP$L_KAST(R3)
         PUSHL   R5
         MOVL    R3, R5
         BSBW    SCH$QAST
         MOVL    (SP)+, R5
-        MOVL    #SS$_NORMAL, R0
+10$:    MOVL    #SS$_NORMAL, R0
         RSB
 
 ; IOC$POST: a done IRP's kernel mode AST, in its process. R4 = the PCB, R5

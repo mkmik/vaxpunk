@@ -569,7 +569,9 @@ as a kernel mode AST.
 
 - **Devices.** Each has a unit control block (`$UCBDEF`) in `qio.mar`,
   `IOC$AB_UCB`: `OPA0:`, `DKA0:`, `DKB0:`, `MDA0:`. A UCB holds a queue of
-  IRPs waiting for the device, its driver's FDT routine, and a disk's VCB.
+  IRPs waiting for the device, its driver's FDT routine, a disk's VCB, and
+  a disk driver's start I/O routine, which the file system calls too
+  ([ADR-0015](../adr/0015-file-system-io-through-the-disk-driver.md)).
 - **Channels.** `$ASSIGN` gives one of 31, a bit in `PCB$L_CHANS`, with
   the device's UCB in `PCB$AL_CCB`. It translates the device name it is
   given first, as VMS does: without a colon at its end, in
@@ -644,11 +646,16 @@ The console's driver, `ttdriver.mar`, `TT$FDT`:
   escape sequences a character at a time. Echo is the read's, so what is
   typed ahead shows when a read takes it.
 
-The disks' driver, `DK$FDT` in `f11.mar`, reads the blocks from LBN p3
-into the p2 bytes at p1, for `IO$_READLBLK` and `IO$_READPBLK`, or writes
-them there, for `IO$_WRITELBLK` and `IO$_WRITEPBLK`, at once, as the file
-system does (*Files*), and completes the request with the status, and the
-byte count if it is a success: `SS$_WRITLCK` for `DKA0:`.
+The disks' driver, in `f11.mar`, reads the blocks from LBN p3 into the
+p2 bytes at p1, for `IO$_READLBLK` and `IO$_READPBLK`, or writes them
+there, for `IO$_WRITELBLK` and `IO$_WRITEPBLK`. Its FDT routine,
+`DK$FDT`, checks the function and the buffer and makes the IRP, with the
+LBN in `IRP$L_MEDIA`; its start I/O routine, `DK$STARTIO`, does the I/O
+at once, calling the PAL with the VCB's unit, or `MD$IO` for the ramdisk,
+and completes the request with the status, and the byte count if it is a
+success: `SS$_WRITLCK` for `DKA0:`, `SS$_MEDOFL` for `MDA0:` until it is
+made. The file system's own reads and writes go to `DK$STARTIO` too
+(*Files*).
 
 ponytail: the console's line being read is kept in `ttdriver.mar`, not
 its UCB, since there is one terminal; output waits for the console at
@@ -697,10 +704,14 @@ at a time with `READLBLK` (DESIGN-0001, *The disks*); the data disk,
 `WRITELBLK`, and which keeps its volume from boot to boot; and `MDA0:`, a
 ramdisk (`mddriver.mar`), as DECram's: 1,024 blocks in pages of S0, which
 `$INIT_VOL` makes, zeroed, and which last until the system stops.
-`FIL$READLBLK` and `FIL$WRITELBLK` read and write `F11$GL_VCB`'s disk,
-calling the PAL with the VCB's unit, `VCB$B_UNIT`, or copying for the
-ramdisk; `DKA0:` can't be written (`SS$_WRITLCK`), and `MDA0:` is offline
-until it is made (`SS$_MEDOFL`). `FIL$SELECT` picks the
+`FIL$READLBLK` and `FIL$WRITELBLK` read and write `F11$GL_VCB`'s disk
+through its driver, as VMS's XQP does
+([ADR-0015](../adr/0015-file-system-io-through-the-disk-driver.md)):
+they fill in `F11$AB_IRP`, the file system's own IRP, with no process,
+and call the start I/O routine of the VCB's UCB, `VCB$L_UCB`. The driver
+completes it with `IOC$REQCOM`, which, for an IRP with no process, only
+leaves the status in it. ponytail: the file system doesn't wait; the
+disk's driver is done when it returns. `FIL$SELECT` picks the
 VCB by device name. `f11.mar` reads Files-11 (`ods/docs/`) as VMS's XQP
 does:
 
