@@ -43,7 +43,7 @@
         .EXTERNAL MMG$SETPRT, EXE$RMVTIMQ, EXE$USRSTART, EXE$CLISTART
         .EXTERNAL FIL$OPENFILE, RMS$RUNDOWN
         .EXTERNAL EXE$OUTZSTRING, EXE$OUTCSTRING, EXE$OUTHEX, EXE$OUTCRLF
-        .EXTERNAL LNM$CREATE, LNM$DELTBL, SCH$QAST, EXE$FLUSHAST
+        .EXTERNAL LNM$CREATE, LNM$DELTBL, SCH$QAST, EXE$FLUSHAST, IOC$CANCEL
 
 KSTACK = 16384                          ; a process's kernel stack
 BLOCK = 512                             ; an image's blocks
@@ -614,12 +614,17 @@ IMG$ACTIVATE::
 ; EXE$IMGRUNDOWN: R4 = the current PCB. Gives back what the image that ran
 ; in it holds: its timer queue entries, its user mode ASTs, its pages in
 ; P0, its common event flag clusters, and its channels and files, all but
-; the command interpreter's, PCB$L_CLICHANS and PCB$L_CLIFILES. An image
+; the command interpreter's, PCB$L_CLICHANS and PCB$L_CLIFILES, whose I/O
+; is cancelled first, while P0 is still there. An image
 ; CTRL/Y stopped can't be continued any more, nor AST routines that ran.
 ; Uses R0-R3.
 ; ponytail: what the command interpreter holds too, but its channels; it
 ; uses nothing else yet.
 EXE$IMGRUNDOWN::
+        DSBINT  #IPL$_SYNCH
+        BICL3   PCB$L_CLICHANS(R4), PCB$L_CHANS(R4), R0
+        BSBW    IOC$CANCEL
+        ENBINT
         MOVL    PCB$L_PID(R4), R0
         MNEGL   #1, R1
         CLRL    R2
@@ -656,6 +661,8 @@ DELP0:  MOVL    #VA$C_P0BASE, R0
 EXE$RUNDOWN::
         BSBW    EXE$IMGRUNDOWN
         DSBINT  #IPL$_SYNCH
+        MOVL    PCB$L_CHANS(R4), R0
+        BSBW    IOC$CANCEL
         CLRL    R0
         BSBW    EXE$FLUSHAST
         ENBINT

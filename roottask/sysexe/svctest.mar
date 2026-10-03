@@ -125,6 +125,7 @@ SYS_ITEMS:                              ; a buffer user mode can't write
         .ADDRESS EXE$GL_RPB
         .LONG   0, 0
 BUF:    .BLKB   4
+BLOCK:  .BLKB   512                     ; a disk block, $QIOW's
 BUFLEN: .WORD   0
 EQVLEN: .LONG   0
 TABBUF: .BLKB   31
@@ -316,6 +317,23 @@ SHORT:  .LONG   4                       ; too short a buffer for one
         BNEQ    90$
         $DEVICE_SCAN_S RETURN_DEVNAM=DEVDSC, RETLEN=DEVLEN, SEARCH_DEVNAM=A0, ITMLST=DVS_ITEMS, CONTXT=SCANCTX
         EXPECT  #SS$_NOMOREDEV, 62
+
+; The disks' driver: the system disk's home block, read by its LBN, has
+; the volume's format. A write there fails, as the IOSB says: the disk is
+; write locked.
+        $ASSIGN_S DEVNAM=DKA0, CHAN=CHAN
+        EXPECT  #SS$_NORMAL, 63
+        $QIOW_S CHAN=CHAN, FUNC=#IO$_READLBLK, IOSB=DVI_IOSB, P1=BLOCK, P2=#512, P3=#1
+        EXPECT  #SS$_NORMAL, 64
+        CMPL    DVI_IOSB, #<512@16>!SS$_NORMAL
+        BNEQ    90$
+        CMPL    BLOCK+496, #^A/DECF/    ; DECFILE11B
+        BNEQ    90$
+        $QIOW_S CHAN=CHAN, FUNC=#IO$_WRITELBLK, IOSB=DVI_IOSB, P1=BLOCK, P2=#512, P3=#1
+        EXPECT  #SS$_NORMAL, 65
+        CMPW    DVI_IOSB, #SS$_WRITLCK
+        BNEQ    90$
+        $DASSGN_S CHAN=CHAN
 
 ; Other processes: lower this one's priority below NAPPER's so it runs
 ; and hibernates; suspend it while it does, so that $WAKE leaves it

@@ -116,9 +116,14 @@ interpreter. It is linked high in P1, which tells the executive it is one
   console, `OPA0:`. Its first command is `@SYS$MANAGER:SYLOGIN`, which
   runs the command procedure `DKA0:[SYSMGR]SYLOGIN.COM`, as VMS runs it
   at each login: it defines the global symbol `HOME`, a command that goes
-  back to `[SYSMGR]`. Then DCL prints the `$` prompt and waits for a
-  line. That's where the boot ends: the CPU idles, taking clock ticks,
-  until you type something.
+  back to `[SYSMGR]`. Then DCL reads a line with the `$` prompt: `$QIOW`
+  hands the read to the console's driver, which writes the prompt and
+  holds the request until a line is typed, and DCL waits for its event
+  flag ([ADR-0013](adr/0013-qio-irps-and-drivers.md)). That's where the
+  boot ends: the CPU idles, taking clock ticks, until you type something.
+  Each key you type comes in through the console receive interrupt, and
+  the driver echoes it and edits the line; a carriage return completes
+  the read, and DCL gets the line.
 - `@file` runs a command procedure the same way: DCL reads the whole file,
   `file.COM` if it has no type, with RMS's `$OPEN` and `$GET`, into a
   buffer in P1, and closes it, so nothing stays open while the images it
@@ -183,7 +188,8 @@ interpreter. It is linked high in P1, which tells the executive it is one
   and halts, and the root task powers QEMU off with a semihosting
   `SYS_EXIT`.
 - CTRL/Y while an image runs stops it where it is: the console prints
-  `*INTERRUPT*`, and the executive calls DCL again with `SS$_CONTROLY`,
+  `*INTERRUPT*`, ends the image's reads with `SS$_CONTROLY`, and the
+  executive calls DCL again with `SS$_CONTROLY`,
   leaving the image as it was on the kernel stack (`EXE$CTRLY`,
   [ADR-0010](adr/0010-ctrly-calls-the-cli-on-top-of-the-image.md)). DCL
   prompts. `CONTINUE` goes back to the image with `$CONTINUE`; a command
@@ -207,7 +213,8 @@ executive feature:
 - **PING/PONG** take turns sending signals to each other through shared
   event flags. PONG then sets a third flag of theirs, which STARTUP waits
   for.
-- **SVCTEST** checks the status that each system service returns. It also
+- **SVCTEST** checks the status that each system service returns, and
+  reads the system disk's home block by its LBN with `$QIOW`. It also
   starts:
   - **SNOOP**, which reads kernel memory and should die with an access
     violation (status `0C`)
@@ -218,8 +225,9 @@ executive feature:
 - **TIMETEST** checks reading the time, timers and scheduled wakeups.
 - **ASTTEST** checks ASTs: one `$DCLAST` declares, which runs as the
   service returns; one held back by `$SETAST` until ASTs are enabled
-  again; a timer's, whose routine wakes it from `$HIBER`; and one that
-  comes while it computes, after which its registers are as they were.
+  again; a timer's, whose routine wakes it from `$HIBER`; a `$QIO`'s,
+  once the I/O is done; and one that comes while it computes, after
+  which its registers are as they were.
 - STARTUP prints `STARTUP: done` and exits, and DCL prompts again while
   the others finish.
 
@@ -241,6 +249,7 @@ a second version, lists them,
 deletes them and lists again, then
 initializes and mounts `DKB0:`, made afresh, copies a file there and lists
 it, runs `SHOW DEVICES`, `SHOW PROCESS` and `SHOW SYSTEM`, then
-stops SPIN and SLEEPER with CTRL/Y and continues them, and looks for the
+stops SPIN and SLEEPER with CTRL/Y and continues them, and EDIT while it
+reads, so that DCL reads the next commands, and looks for the
 success lines in `out/serial.log`. Once QEMU is gone, `ods-image` checks
 the data disk's volume and finds the file on it.

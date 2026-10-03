@@ -37,6 +37,7 @@ kept current, like a design document.
 | [ADR-0010](adr/0010-ctrly-calls-the-cli-on-top-of-the-image.md) | CTRL/Y calls the command interpreter on top of the stopped image, and $CONTINUE goes back to it | Accepted |
 | [ADR-0011](adr/0011-asts-on-the-kernel-stack.md) | The PAL requests AST delivery from bits in the HWPCB, and the executive calls AST routines on top of the kernel stack | Proposed |
 | [ADR-0012](adr/0012-data-disk-writable-files-11.md) | DKB0:, a second virtio disk the PAL writes, holds a Files-11 volume that outlives the system | Proposed |
+| [ADR-0013](adr/0013-qio-irps-and-drivers.md) | $QIO queues an I/O request packet to the device's driver, and its completion is a kernel mode AST | Proposed |
 
 ### PRDs
 

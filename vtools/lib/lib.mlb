@@ -181,7 +181,7 @@ RPB$K_LENGTH = 192
 
 ; $STATEDEF: scheduling states, SCH$C_.
         .MACRO  $STATEDEF
-SCH$C_MWAIT = 2                         ; resource wait: the console, for a read
+SCH$C_MWAIT = 2                         ; resource wait
 SCH$C_CEF = 3                           ; common event flag wait
 SCH$C_LEF = 5                           ; local event flag wait
 SCH$C_HIB = 7                           ; hibernating
@@ -230,7 +230,8 @@ PCB$Q_ASTQFL = 424                      ; its ACBs, by access mode, kernel's fir
 PCB$L_ASTSP = 432                       ; while an AST routine runs, where on the kernel stack what it interrupted is, else 0
 PCB$B_ASTEN = 436                       ; bit n: $SETAST has mode n's ASTs enabled
 PCB$B_ASTACT = 437                      ; bit n: an AST routine of mode n runs
-PCB$K_LENGTH = 440
+PCB$AL_CCB = 440                        ; channel n's device, at 4*n: its UCB
+PCB$K_LENGTH = 568
 PCB$V_WAKEPEN = 0                       ; a $WAKE came that $HIBER hasn't seen
 PCB$V_WALL = 1                          ; the wait is for all of EFWM
 PCB$V_SUSPEN = 2                        ; suspend when the wait ends
@@ -317,3 +318,50 @@ VCB$V_MOUNTED = 0                       ; a volume is mounted on it
 VCB$V_WRITE = 1                         ; the device can be written
 VCB$V_RAMDISK = 2                       ; the device is the ramdisk, MDA0:, not one of the PAL's disks
         .ENDM   $VCBDEF
+
+; $UCBDEF: a unit control block: a device, the requests waiting for it,
+; and its driver (roottask/exec/qio.mar). UCB$L_STS's bits are also
+; $GETDVI's DVI$_STS.
+        .MACRO  $UCBDEF
+UCB$L_IOQFL = 0                         ; IRPs waiting for the device
+UCB$L_IOQBL = 4
+UCB$L_FDT = 8                           ; the driver's FDT routine, which $QIO JSBs
+UCB$L_VCB = 12                          ; a disk's VCB, or 0
+UCB$T_NAME = 16                         ; the device's name, DDCU, 4 characters
+UCB$K_LENGTH = 20
+UCB$V_ONLINE = 4                        ; the device is online
+UCB$M_ONLINE = ^X10
+        .ENDM   $UCBDEF
+
+; $IRPDEF: an I/O request packet, from pool, which a driver makes for a
+; $QIO. Its head is an ACB's: IOC$REQCOM queues it to its process as a
+; kernel mode AST, IOC$POST, and that may queue it again as the caller's
+; AST. A buffered read's prompt and data follow it.
+        .MACRO  $IRPDEF
+IRP$L_IOQFL = 0                         ; the UCB's queue, then the AST queue
+IRP$L_IOQBL = 4
+IRP$W_SIZE = 8                          ; with the prompt and data
+IRP$B_TYPE = 10
+IRP$B_RMOD = 11                         ; the AST's mode: kernel, then the caller's
+IRP$L_PID = 12                          ; the process it is for
+IRP$L_AST = 16                          ; the caller's AST routine, or 0
+IRP$L_ASTPRM = 20                       ; its parameter
+IRP$L_KAST = 24                         ; IOC$POST once done, then 0
+IRP$L_UCB = 28                          ; the device
+IRP$L_FUNC = 32                         ; the function code and its modifiers
+IRP$L_EFN = 36                          ; the event flag
+IRP$L_IOSB = 40                         ; the caller's I/O status block, or 0
+IRP$W_CHAN = 44                         ; the channel
+IRP$B_PMOD = 46                         ; the caller's access mode
+IRP$L_STS = 48                          ; IRP$V_
+IRP$L_IOST1 = 52                        ; once done, the IOSB's first longword: a status and a byte count
+IRP$L_IOST2 = 56                        ; and its second
+IRP$L_BUFADR = 60                       ; the caller's buffer, p1
+IRP$L_BCNT = 64                         ; its size, p2
+IRP$L_PROMPT = 68                       ; a read's prompt's size: it is past IRP$K_LENGTH, and the data past it
+IRP$K_LENGTH = 72
+IRP$V_BUFIO = 0                         ; a read whose data IOC$POST copies to the caller's buffer
+IRP$M_BUFIO = 1
+IRP$V_STARTED = 1                       ; the terminal has written its prompt
+DYN$C_IRP = 10                          ; IRP$B_TYPE
+        .ENDM   $IRPDEF

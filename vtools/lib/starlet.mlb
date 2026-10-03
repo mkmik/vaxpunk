@@ -225,13 +225,6 @@ DEV$M_ODV = ^X8000000                   ; output
 DEV$M_RND = ^X10000000                  ; random access
         .ENDM   $DEVDEF
 
-; $UCBDEF: DVI$_STS's bits, a unit control block's status on VMS; vaxpunk
-; has no UCBs.
-        .MACRO  $UCBDEF
-UCB$V_ONLINE = 4                        ; the device is online
-UCB$M_ONLINE = ^X10
-        .ENDM   $UCBDEF
-
 ; $MNTDEF: $MOUNT's item codes.
         .MACRO  $MNTDEF
 MNT$_DEVNAM = 1                         ; the device
@@ -665,6 +658,23 @@ PRT$C_UR = 15
         .EXTERNAL SYS$QIOW
         CALLS   #12, G^SYS$QIOW
         .ENDM   $QIOW_S
+
+        .MACRO  $QIO_S EFN=#0, CHAN, FUNC, IOSB=0, ASTADR=0, ASTPRM=#0, P1=0, P2=#0, P3=#0, P4=#0, P5=#0, P6=#0
+        PUSHL   P6
+        PUSHL   P5
+        PUSHL   P4
+        PUSHL   P3
+        PUSHL   P2
+        $PUSHADR P1
+        PUSHL   ASTPRM
+        $PUSHADR ASTADR
+        $PUSHADR IOSB
+        PUSHL   FUNC
+        PUSHL   CHAN
+        PUSHL   EFN
+        .EXTERNAL SYS$QIO
+        CALLS   #12, G^SYS$QIO
+        .ENDM   $QIO_S
 
         .MACRO  $DCLAST_S ASTADR, ASTPRM=#0, ACMODE=#0
         PUSHL   ACMODE

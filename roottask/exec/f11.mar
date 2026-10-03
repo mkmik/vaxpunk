@@ -5,6 +5,7 @@
 ; (ods/docs/) that the PAL reads a block at a time with READLBLK; DKB0:,
 ; the data disk, which the PAL also writes, with WRITELBLK; and MDA0:,
 ; the ramdisk (mddriver.mar). The file system can write the last two.
+; DK$FDT is their driver, for $QIO's reads and writes by LBN.
 ; FIL$MOUNT mounts a volume: it reads the home block and keeps the index
 ; file's header, through which every other file's header is found. The
 ; rest reads what VMS's XQP reads: a file's header by its number, its
@@ -23,9 +24,12 @@
         $RMSDEF
         $VCBDEF
         $MNTDEF
+        $UCBDEF
+        $IODEF
 
         .EXTERNAL EXE$OUTZSTRING, EXE$OUTCSTRING, EXE$OUTCRLF
         .EXTERNAL EXE$ALONONPAGED, EXE$DEANONPGDSIZ, RMS$PARSE, RMS$FIND, MD$IO
+        .EXTERNAL IOC$ALLOCIRP, IOC$REQCOM
 
 BLOCK = 512
 MAXREAD = 127                           ; blocks a READLBLK reads, below 64 KB
@@ -110,23 +114,79 @@ FIL$WRITELBLK::
 LBLK:   MULL2   #BLOCK, R1
         PUSHL   R4
         MOVL    F11$GL_VCB, R4
-        BLBC    R3, 10$
+        BSBB    DISKIO
+        MOVL    (SP)+, R4
+        MOVL    (SP)+, R3
+        RSB
+
+; DISKIO: R0 = a buffer, R1 = a byte count, R2 = an LBN, R3 = 0 to read
+; the blocks there into the buffer, 1 to write it there, R4 = the disk's
+; VCB. R0 = SS$_NORMAL, SS$_WRITLCK if the disk is read only, or the
+; device's error. Uses R1, R3 and R4.
+DISKIO: BLBC    R3, 10$
         BBC     #VCB$V_WRITE, VCB$L_STATUS(R4), 30$
 10$:    BBS     #VCB$V_RAMDISK, VCB$L_STATUS(R4), 20$
         MOVZBL  VCB$B_UNIT(R4), R4
         BLBS    R3, 15$
         MOVL    R4, R3
         CALL_PAL #PAL$_READLBLK
-        BRB     40$
+        RSB
 15$:    MOVL    R4, R3
         CALL_PAL #PAL$_WRITELBLK
-        BRB     40$
-20$:    BSBW    MD$IO
-        BRB     40$
-30$:    MOVL    #SS$_WRITLCK, R0
-40$:    MOVL    (SP)+, R4
-        MOVL    (SP)+, R3
         RSB
+20$:    BRW     MD$IO
+30$:    MOVL    #SS$_WRITLCK, R0
+        RSB
+
+; DK$FDT: the disks' FDT routine, which $QIO calls. R4 = the current PCB,
+; R5 = the disk's UCB, AP = $QIO's arguments. For IO$_READLBLK and
+; IO$_READPBLK reads the blocks from LBN p3 into the p2 bytes at p1, and
+; for IO$_WRITELBLK and IO$_WRITEPBLK writes those bytes there, at once,
+; and completes the request with the status, and the count if it is a
+; success. R0 = SS$_NORMAL, SS$_ILLIOFUNC, SS$_ACCVIO, SS$_BADPARAM, or
+; IOC$ALLOCIRP's failure. IPL$_SYNCH. Uses R0-R6.
+; ponytail: any process may read or write any block of any disk, mounted
+; or not; VMS asks for LOG_IO or PHY_IO.
+DK$FDT::
+        BICL3   #^C63, 12(AP), R0       ; the function, without modifiers
+        MOVL    28(AP), R2
+        MOVL    32(AP), R3
+        CMPL    R3, #65535
+        BGTRU   87$
+        CLRL    R6                      ; 0: a read
+        CMPL    R0, #IO$_READLBLK
+        BEQL    10$
+        CMPL    R0, #IO$_READPBLK
+        BEQL    10$
+        INCL    R6                      ; 1: a write
+        CMPL    R0, #IO$_WRITELBLK
+        BEQL    20$
+        CMPL    R0, #IO$_WRITEPBLK
+        BEQL    20$
+        MOVL    #SS$_ILLIOFUNC, R0
+        RSB
+10$:    IFNOWRT R3, (R2), 85$
+        BRB     30$
+20$:    IFNORD  R3, (R2), 85$
+30$:    CLRL    R1
+        BSBW    IOC$ALLOCIRP
+        BLBC    R0, 90$
+        PUSHR   #^M<R3, R4>
+        MOVL    28(AP), R0
+        MOVL    32(AP), R1
+        MOVL    36(AP), R2
+        MOVL    R6, R3
+        MOVL    UCB$L_VCB(R5), R4
+        BSBW    DISKIO
+        POPR    #^M<R3, R4>
+        BLBC    R0, 40$
+        INSV    32(AP), #16, #16, R0
+40$:    CLRL    R1
+        BRW     IOC$REQCOM
+85$:    MOVL    #SS$_ACCVIO, R0
+        RSB
+87$:    MOVL    #SS$_BADPARAM, R0
+90$:    RSB
 
 ; FIL$SELECT: R1 = a device name, R2 = its length: DKA0, DKB0 or MDA0, with a
 ; colon after it or not, an underscore before it or not. Makes its VCB
