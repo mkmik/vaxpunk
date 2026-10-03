@@ -1,0 +1,49 @@
+        .TITLE  CTRLC   Checks a CTRL/C AST and $CANCEL
+        .IDENT  /V0.1/
+;
+; RUN CTRLC at the console's DCL prompt runs this. It enables a CTRL/C
+; AST on the console with IO$_SETMODE, starts a read and waits for it.
+; CTRL/C delivers the AST, with its parameter, and not to DCL, and the
+; AST routine cancels the read with $CANCEL, which ends it with
+; SS$_ABORT. A failed EXPECT exits with 2 * N.
+;
+        .LIBRARY "starlet.mlb"
+        .LIBRARY "sysexe.mlb"
+        $SSDEF
+        $IODEF
+
+        .PSECT  DATA, NOEXE, WRT, LONG
+CONSOLE:
+        .ASCID  "SYS$INPUT"
+CHAN:   .LONG   0
+IOSB:   .QUAD   0
+PARAM:  .LONG   0                       ; the AST's parameter, once it came
+BUF:    .BLKB   80
+
+        .PSECT  CODE, EXE, LONG
+        .ENTRY  START, ^M<>
+        $ASSIGN_S DEVNAM=CONSOLE, CHAN=CHAN
+        EXPECT  #SS$_NORMAL, 1
+        $QIOW_S CHAN=CHAN, FUNC=#IO$_SETMODE!IO$M_CTRLCAST, P1=CANCEL, P2=#42
+        EXPECT  #SS$_NORMAL, 2
+        $QIO_S  EFN=#1, CHAN=CHAN, FUNC=#IO$_READVBLK, IOSB=IOSB, P1=BUF, P2=#80
+        EXPECT  #SS$_NORMAL, 3
+        PRINT   "CTRLC: waiting for CTRL/C"
+        $WAITFR_S EFN=#1
+        MOVL    PARAM, R0
+        EXPECT  #42, 4
+        MOVZWL  IOSB, R0
+        EXPECT  #SS$_ABORT, 5
+        $CANCEL_S CHAN=#0
+        EXPECT  #SS$_IVCHAN, 6
+        PRINT   "CTRLC: ok"
+        MOVL    #SS$_NORMAL, R0
+        RET
+
+; CANCEL: the CTRL/C AST. Keeps its parameter and cancels the read.
+        .ENTRY  CANCEL, ^M<>
+        MOVL    4(AP), PARAM
+        $CANCEL_S CHAN=CHAN
+        RET
+
+        .END    START

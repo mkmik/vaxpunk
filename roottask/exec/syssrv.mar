@@ -25,7 +25,7 @@
         $PCBDEF
         $SSDEF
 
-        .EXTERNAL SCH$GL_CURPCB, EXE$EXIT, EXE$CTRLYCHK
+        .EXTERNAL SCH$GL_CURPCB, EXE$EXIT
         .EXTERNAL EXE$OUTZSTRING, EXE$OUTCSTRING, EXE$OUTHEX, EXE$OUTCRLF
 
 ; SERVICE name, nargs: SYS$name, which calls EXE$name with at least nargs
@@ -82,7 +82,7 @@ CODE = 0
         SERVICE CREPRC, 12
         SERVICE DELPRC, 2
         SERVICE EXIT, 1
-        STUB    FORCEX, 3
+        SERVICE FORCEX, 3
         SERVICE HIBER, 0
         SERVICE WAKE, 2
         SERVICE SCHDWK, 4
@@ -129,6 +129,7 @@ CODE = 0
         SERVICE CANTIM, 2
         SERVICE ASSIGN, 4
         SERVICE DASSGN, 1
+        SERVICE CANCEL, 1
         SERVICE QIO, 12
         SERVICE QIOW, 12
         SERVICE CRELNM, 5
@@ -138,7 +139,6 @@ CODE = 0
         SERVICE GETSYIW, 7
 ; Images
         SERVICE IMGACT, 1
-        SERVICE CONTINUE, 0
 ; RMS: files on Files-11 volumes
         SERVICE OPEN, 1
         SERVICE CLOSE, 1
@@ -160,8 +160,7 @@ CODE = 0
         SERVICE DEVICE_SCAN, 5
 
 ; EXE$CMODKRNL: the CHMK handler. R0 = the service's code, AP = its
-; argument list, the PAL's frame on the kernel stack. A CTRL/Y that came
-; while an image was in a service stops it on its way out.
+; argument list, the PAL's frame on the kernel stack.
 EXE$CMODKRNL::
         CMPL    R0, #CODE
         BGEQU   80$
@@ -172,7 +171,6 @@ EXE$CMODKRNL::
         MOVL    (SP)+, R0
         MOVL    EXE$AL_SSTAB[R0], R1
         CALLG   (AP), (R1)
-        JSB     G^EXE$CTRLYCHK
         REI
 70$:    ADDL2   #4, SP
         REI

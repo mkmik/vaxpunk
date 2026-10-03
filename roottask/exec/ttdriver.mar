@@ -13,32 +13,32 @@
 ; or a key at a time with IO$M_NOFILTR. A read that ends is completed,
 ; and the next one writes its prompt and goes on from there. What is
 ; typed while no read is queued waits in the buffer.
-; CTRL/Y empties the buffer instead, ends the reads of the process whose
-; image it stops with SS$_CONTROLY, and stops the image, so that the
-; console's command interpreter prompts (ADR-0010).
-; ponytail: one terminal, so the line being read is kept here, not in its
-; UCB; output is written a buffer at a time at IPL$_SYNCH, waiting for
-; the console, so lines don't mix.
+; IO$_SETMODE enables a CTRL/C or CTRL/Y AST, once. CTRL/C and CTRL/Y
+; empty the buffer instead, and deliver the ASTs enabled for them; CTRL/Y
+; ends the reads of the processes it goes to with SS$_CONTROLY, so that
+; DCL, whose AST it is, prompts on top of the image (ADR-0014). CTRL/C
+; that no AST is enabled for is CTRL/Y.
+; ponytail: one terminal, so the line being read and the ASTs are kept
+; here, not in its UCB; output is written a buffer at a time at
+; IPL$_SYNCH, waiting for the console, so lines don't mix.
 ;
         .LIBRARY "lib.mlb"
         .LIBRARY "starlet.mlb"
         $PRDEF
         $IPLDEF
-        $PCBDEF
         $UCBDEF
         $IRPDEF
-        $STATEDEF
         $IODEF
         $SSDEF
-        $VADEF
 
-        .EXTERNAL SCH$GL_PCBVEC, SCH$WAKEPCB
-        .EXTERNAL EXE$OUTCHAR, EXE$OUTCRLF, EXE$OUTZSTRING, EXE$CTRLYCHK
+        .EXTERNAL SCH$QAST, EXE$DEANONPGDSIZ
+        .EXTERNAL EXE$OUTCHAR, EXE$OUTCRLF, EXE$OUTZSTRING
         .EXTERNAL IOC$AB_OPA0, IOC$ALLOCIRP, IOC$REQCOM
 
 TYPEAHEAD = 256                         ; the type-ahead buffer, a ring
 RXCS$V_DONE = 7                         ; RXCS: a character is waiting
 RXCS$M_IE = ^X40                        ; interrupt when one is
+CTRLC = 3
 CTRLY = 25
 CTRLZ = 26
 RECALL = 16                             ; lines in the recall buffer, a power of 2
@@ -52,6 +52,12 @@ TTY$AB_RING::                           ; the type-ahead buffer: received, not y
         .BLKB   TYPEAHEAD
 TTY$GL_CTRLY::                          ; 1: CTRL/Y came, for TTY$IOPOST
         .LONG   0
+TTY$GL_CTRLC::                          ; 1: CTRL/C came
+        .LONG   0
+TTY$Q_CTRLC::                           ; the CTRL/C ASTs enabled: IRPs, as ACBs
+        .ADDRESS TTY$Q_CTRLC, TTY$Q_CTRLC
+TTY$Q_CTRLY::                           ; and the CTRL/Y ones
+        .ADDRESS TTY$Q_CTRLY, TTY$Q_CTRLY
 TTY$GL_LEN::                            ; the line being read: its length,
         .LONG   0
 TTY$GL_CURSOR::                         ; where the cursor is in it,
@@ -68,6 +74,7 @@ TTY$AB_RECALL::                         ; the lines read, 256 bytes each: .ASCIC
         .BLKB   RECALL*256
 INTERRUPT:
         .ASCIZ  <13><10>"*INTERRUPT*"<13><10>
+CANCEL: .ASCIZ  <13><10>"*CANCEL*"<13><10>
 EXIT:   .ASCIZ  "*EXIT*"<13><10>
 
         .PSECT  $CODE$
@@ -80,11 +87,18 @@ EXIT:   .ASCIZ  "*EXIT*"<13><10>
 ; once it has written the p6 bytes at p5, without echo for IO$M_NOECHO
 ; and a key at a time for IO$M_NOFILTR (EDIT). Its IOSB has the line's
 ; length and its terminator, a carriage return or CTRL/Z, and its size, or
-; 0 if the buffer filled. R0 = SS$_NORMAL, SS$_ILLIOFUNC, SS$_ACCVIO,
-; SS$_BADPARAM, or IOC$ALLOCIRP's failure. IPL$_SYNCH. Uses R0-R8.
+; 0 if the buffer filled. IO$_SETMODE with IO$M_CTRLCAST or
+; IO$M_CTRLYAST enables an AST for CTRL/C or CTRL/Y, in place of the one
+; the channel had: p1 is its routine, or 0 to disable it, p2 its
+; parameter and p3 its mode, or the caller's if that is an outer one.
+; R0 = SS$_NORMAL, SS$_ILLIOFUNC, SS$_ACCVIO, SS$_BADPARAM, or
+; IOC$ALLOCIRP's failure. IPL$_SYNCH. Uses R0-R8.
 TT$FDT::
         BICL3   #^C63, 12(AP), R0       ; the function, without modifiers
-        MOVL    28(AP), R2
+        CMPL    R0, #IO$_SETMODE
+        BNEQ    5$
+        BRW     SETMODE
+5$:     MOVL    28(AP), R2
         MOVL    32(AP), R3
         CMPL    R3, #65535
         BGTRU   87$
@@ -142,6 +156,60 @@ TT$FDT::
 85$:    MOVL    #SS$_ACCVIO, R0
         RSB
 87$:    MOVL    #SS$_BADPARAM, R0
+90$:    RSB
+
+; SETMODE: TT$FDT's IO$_SETMODE. Takes the channel's AST off the queue,
+; CTRL/C's or CTRL/Y's, and puts the one p1 names at its tail, in an IRP,
+; the request's, which is completed with a second.
+; ponytail: no terminal characteristics to set or sense.
+SETMODE:
+        MOVAQ   TTY$Q_CTRLC, R8
+        BBS     #IO$V_CTRLCAST, 12(AP), 10$
+        MOVAQ   TTY$Q_CTRLY, R8
+        BBS     #IO$V_CTRLYAST, 12(AP), 10$
+        MOVL    #SS$_ILLIOFUNC, R0
+        RSB
+10$:    CLRL    R1                      ; the AST's, then the request's
+        BSBW    IOC$ALLOCIRP
+        BLBC    R0, 90$
+        MOVL    R3, R6
+        CLRL    R1
+        BSBW    IOC$ALLOCIRP
+        BLBS    R0, 20$
+        PUSHL   R0
+        MOVL    R6, R0
+        MOVZWL  IRP$W_SIZE(R0), R1
+        BSBW    EXE$DEANONPGDSIZ
+        MOVL    (SP)+, R0
+        RSB
+20$:    MOVL    (R8), R2                ; the channel's old one goes
+30$:    CMPL    R2, R8
+        BEQL    40$
+        MOVL    R2, R0
+        MOVL    (R2), R2
+        CMPL    IRP$L_PID(R0), IRP$L_PID(R6)
+        BNEQ    30$
+        CMPW    IRP$W_CHAN(R0), IRP$W_CHAN(R6)
+        BNEQ    30$
+        REMQUE  (R0), R0
+        MOVZWL  IRP$W_SIZE(R0), R1
+        BSBW    EXE$DEANONPGDSIZ
+        BRB     30$
+40$:    MOVL    28(AP), IRP$L_AST(R6)
+        BEQL    50$
+        MOVL    32(AP), IRP$L_ASTPRM(R6)
+        BICB3   #^C3, 36(AP), IRP$B_RMOD(R6)
+        CMPB    IRP$B_RMOD(R6), IRP$B_PMOD(R6)
+        BGEQU   45$
+        MOVB    IRP$B_PMOD(R6), IRP$B_RMOD(R6)
+45$:    INSQUE  (R6), @4(R8)
+        BRB     60$
+50$:    MOVL    R6, R0                  ; disabled: the AST isn't needed
+        MOVZWL  IRP$W_SIZE(R0), R1
+        BSBW    EXE$DEANONPGDSIZ
+60$:    MOVL    #SS$_NORMAL, R0
+        CLRL    R1
+        BRW     IOC$REQCOM
 90$:    RSB
 
 ; WRITE: writes the R3 bytes at R2 on the console. IPL$_SYNCH. Uses R0
@@ -483,17 +551,22 @@ TTY$INIT::
 ; TTY$RCVINT: the console receive interrupt, at IPL$_CONSOLE. Puts each
 ; character the console received in the type-ahead buffer, or drops it if
 ; the buffer is full, and requests the IPL$_IOPOST software interrupt,
-; which gives them to the reads. CTRL/Y empties the buffer, for TTY$IOPOST to
-; stop the image.
+; which gives them to the reads. CTRL/C and CTRL/Y empty the buffer, for
+; TTY$IOPOST to deliver their ASTs.
 TTY$RCVINT::
         PUSHR   #^M<R0, R1>
 10$:    MFPR    #PR$_RXCS, R0
         BBC     #RXCS$V_DONE, R0, 30$
         MFPR    #PR$_RXDB, R0
         CMPB    R0, #CTRLY
-        BNEQ    20$
+        BNEQ    15$
         MOVL    TTY$GL_PUT, TTY$GL_GET
         MOVL    #1, TTY$GL_CTRLY
+        BRB     10$
+15$:    CMPB    R0, #CTRLC
+        BNEQ    20$
+        MOVL    TTY$GL_PUT, TTY$GL_GET
+        MOVL    #1, TTY$GL_CTRLC
         BRB     10$
 20$:    ADDL3   #1, TTY$GL_PUT, R1
         BICL2   #^C<TYPEAHEAD-1>, R1
@@ -508,70 +581,72 @@ TTY$RCVINT::
         POPR    #^M<R0, R1>
         REI
 
-; TTY$IOPOST: the IPL$_IOPOST software interrupt. Passes a CTRL/Y on,
-; then gives what is in the type-ahead buffer to the console's reads. If
-; CTRL/Y is for the process it interrupted, in user mode, it stops the
-; image now.
+; TTY$IOPOST: the IPL$_IOPOST software interrupt. Delivers the ASTs of a
+; CTRL/C or CTRL/Y that came, then gives what is in the type-ahead buffer
+; to the console's reads.
 TTY$IOPOST::
         SETIPL  #IPL$_SYNCH
         PUSHR   #^M<R0, R1, R2, R3, R4, R5, R6, R7, R8>
         DSBINT  #IPL$_CONSOLE
-        MOVL    TTY$GL_CTRLY, R0
+        MOVL    TTY$GL_CTRLC, R6
+        CLRL    TTY$GL_CTRLC
+        MOVL    TTY$GL_CTRLY, R7
         CLRL    TTY$GL_CTRLY
         ENBINT
-        BLBC    R0, 30$
-        BSBB    CTRLY_TYPED
-30$:    BSBW    STARTIO
-        POPR    #^M<R0, R1, R2, R3, R4, R5, R6, R7, R8>
-        JSB     G^EXE$CTRLYCHK
-        REI
-
-; CTRLY_TYPED: CTRL/Y came. Finds the process with a command interpreter
-; that runs an image CTRL/Y hasn't stopped yet, echoes *INTERRUPT*, ends
-; its reads on the console with SS$_CONTROLY, and makes CTRL/Y pending
-; there, which EXE$CTRLY serves: at once if that process is in user mode
-; now, else when it next waits, goes back to user mode or ends a service.
-; Ends its wait if it waits, but not a suspension. Without such a
-; process, CTRL/Y does nothing. IPL$_SYNCH. Uses R0-R5.
-; ponytail: the console has no owner yet, so CTRL/Y goes to the only
-; process with a command interpreter, SYSTEM, without being enabled by
-; IO$M_CTRLYAST.
-CTRLY_TYPED:
-        MOVL    #SCH$C_MAXPIX-1, R2
-10$:    MOVL    SCH$GL_PCBVEC[R2], R4
-        BEQL    20$
-        TSTL    PCB$L_CLI(R4)
-        BEQL    20$
-        CMPL    PCB$L_FREP0VA(R4), #VA$C_P0BASE ; it runs no image
-        BEQL    20$
-        TSTL    PCB$L_CTRLY(R4)
-        BNEQ    20$
-        BBSS    #PCB$V_CTRLY, PCB$L_STS(R4), 30$
+        BLBC    R6, 20$
+        MOVAQ   TTY$Q_CTRLC, R8         ; CTRL/C
+        CMPL    (R8), R8
+        BEQL    10$                     ; no AST for it: CTRL/Y
+        MOVAB   CANCEL, R1
+        JSB     G^EXE$OUTZSTRING
+        BSBW    DELIVER
+        BRB     20$
+10$:    MOVL    #1, R7
+20$:    BLBC    R7, 30$
+        MOVAQ   TTY$Q_CTRLY, R8         ; CTRL/Y
+        CMPL    (R8), R8
+        BEQL    30$                     ; no AST for it
         MOVAB   INTERRUPT, R1
         JSB     G^EXE$OUTZSTRING
-        BSBB    ABORT
-        CMPL    PCB$L_STATE(R4), #SCH$C_SUSP    ; a wait state
-        BGEQU   30$
-        BSBW    SCH$WAKEPCB
-        RSB
-20$:    SOBGTR  R2, 10$
-30$:    RSB
+        BSBW    DELIVER
+30$:    BSBW    STARTIO
+        POPR    #^M<R0, R1, R2, R3, R4, R5, R6, R7, R8>
+        REI
 
-; ABORT: R4 = a PCB. Completes its reads on the console with SS$_CONTROLY.
-; IPL$_SYNCH. Uses R0-R3 and R5.
-ABORT:  MOVAB   G^IOC$AB_OPA0, R5
-        MOVL    UCB$L_IOQFL(R5), R3
-10$:    CMPL    R3, R5
-        BEQL    90$
-        PUSHL   (R3)                    ; the next, before this one goes
-        CMPL    IRP$L_PID(R3), PCB$L_PID(R4)
+; DELIVER: R8 = TTY$Q_CTRLC or TTY$Q_CTRLY. Queues each AST there to its
+; process, which disables it, after ending that process's reads on the
+; console with SS$_CONTROLY for CTRL/Y. IPL$_SYNCH. Uses R0-R5.
+DELIVER:
+10$:    REMQUE  @(R8), R5
+        BVS     90$                     ; none left
+        MOVAQ   TTY$Q_CTRLY, R0
+        CMPL    R8, R0
         BNEQ    20$
+        MOVL    IRP$L_PID(R5), R2
+        BSBB    ABORT
+20$:    BSBW    SCH$QAST
+        BRB     10$
+90$:    RSB
+
+; ABORT: R2 = a PID. Completes its reads on the console with SS$_CONTROLY.
+; IPL$_SYNCH. Uses R0-R4.
+ABORT:  PUSHL   R5
+        MOVAB   G^IOC$AB_OPA0, R5
+        MOVL    UCB$L_IOQFL(R5), R4
+10$:    CMPL    R4, R5
+        BEQL    90$
+        MOVL    R4, R3
+        MOVL    (R4), R4                ; the next, before this one goes
+        CMPL    IRP$L_PID(R3), R2
+        BNEQ    10$
         REMQUE  (R3), R3
         MOVZWL  #SS$_CONTROLY, R0
         CLRL    R1
+        PUSHL   R2
         BSBW    IOC$REQCOM
-20$:    MOVL    (SP)+, R3
+        MOVL    (SP)+, R2
         BRB     10$
-90$:    RSB
+90$:    MOVL    (SP)+, R5
+        RSB
 
         .END

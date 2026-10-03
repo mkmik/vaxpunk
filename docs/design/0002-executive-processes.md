@@ -41,10 +41,10 @@ its code.
 | `astdel.mar` | AST queues, `SCH$QAST`, the AST delivery interrupt, `$DCLAST`, `$SETAST`, `$ASTEXIT` |
 | `timeschdl.mar` | the interval timer and software timer interrupts, the system time, the timer queue, `$GETTIM`, `$SETIMR`, `$CANTIM`, `$SCHDWK`, `$CANWAK` |
 | `event.mar` | event flags, local and common |
-| `process.mar` | `$CREPRC`, process start, image activation, `$IMGACT`, `$EXIT`, image rundown, CTRL/Y and `$CONTINUE`, deletion, `$HIBER`, `$WAKE`, `$SUSPND`, `$RESUME`, `$SETPRI`, `$SETPRN`, `$CMKRNL` |
+| `process.mar` | `$CREPRC`, process start, image activation, `$IMGACT`, `$EXIT`, image rundown, deletion, `$FORCEX`, `$HIBER`, `$WAKE`, `$SUSPND`, `$RESUME`, `$SETPRI`, `$SETPRN`, `$CMKRNL` |
 | `lnm.mar` | logical name tables, `$CRELNM`, `$DELLNM`, `$TRNLNM` |
-| `qio.mar` | the devices' UCBs, `$ASSIGN`, `$DASSGN`, `$QIO`, `$QIOW`; IRPs, their completion and cancelling |
-| `ttdriver.mar` | the console's terminal driver: writes, queued reads and their editing, the console receive interrupt and the type-ahead buffer, CTRL/Y |
+| `qio.mar` | the devices' UCBs, `$ASSIGN`, `$DASSGN`, `$CANCEL`, `$QIO`, `$QIOW`; IRPs, their completion and cancelling |
+| `ttdriver.mar` | the console's terminal driver: writes, queued reads and their editing, the console receive interrupt and the type-ahead buffer, CTRL/C and CTRL/Y ASTs |
 | `getdvi.mar` | `$GETDVI`, `$GETDVIW`, `$DEVICE_SCAN`: what the devices are |
 | `syssrv.mar` | the system service vector, the `CHMK` and `CHME` dispatchers, `$CMEXEC`, where processes enter user and supervisor mode, the exception handlers and the stubs |
 | `f11.mar` | Files-11 ODS-2 volumes: the disks' VCBs, reading and writing their blocks, `FIL$MOUNT` and `$MOUNT`, headers, maps, directories, `FIL$OPENFILE` for the image activator |
@@ -224,20 +224,20 @@ there is. The image activator puts its transfer address in
   entries, P0 pages and common event flag clusters, the channels not in
   `PCB$L_CLICHANS` and the files not in `PCB$L_CLIFILES`; then
   `EXE$CLIENTRY` with the status.
-- **CTRL/Y** ([ADR-0010](../adr/0010-ctrly-calls-the-cli-on-top-of-the-image.md))
-  stops the image: `TTY$IOPOST` sets `PCB$V_CTRLY` in the process with a
-  command interpreter that runs an image, ends its console reads with
-  `SS$_CONTROLY` and its wait, if it waits.
-  The process serves it in `EXE$CTRLY` going back to user mode, from
-  `TTY$IOPOST`, `SCH$RESCHED` or a system service (`EXE$CTRLYCHK`), or
-  ending a wait, in `SCH$WAIT`. `EXE$CTRLY` pushes the registers and the
-  IPL on the kernel stack, keeps the stack pointer in `PCB$L_CTRLY`, and
-  calls the command interpreter as `EXE$CLIENTRY` does, with
-  `SS$_CONTROLY`, but below that, so the stopped image's state stays.
-- **`$CONTINUE`** puts back that stack pointer, the IPL and the registers,
-  and returns from `EXE$CTRLY`, so the image goes on. Without a stopped
-  image it does nothing. `$IMGACT` while one is stopped runs it down, and
-  keeps `PCB$L_CLICHANS` and `PCB$L_CLIFILES` as they were when it ran.
+- **CTRL/Y** ([ADR-0014](../adr/0014-ctrlc-ctrly-asts.md)) is the
+  command interpreter's supervisor mode AST, which it enables on the
+  console with `IO$_SETMODE` (*I/O*). Delivered on top of the image, in
+  user mode or in a wait, as any AST (*ASTs*), it leaves the image's
+  registers and the service it was in on the kernel stack, and the command
+  interpreter prompts inside it. Returning from the AST routine goes back
+  to the image. `$IMGACT` while one is stopped runs it down, which forgets
+  the AST routine, and keeps `PCB$L_CLICHANS` and `PCB$L_CLIFILES` as they
+  were when it ran; it empties the supervisor stack too, by setting the
+  HWPCB's `SSP` to its top.
+- **`$FORCEX pidadr, prcnam, code`** makes a process's image exit: it
+  queues a user mode AST whose routine is `SYS$EXIT`, with code, or
+  `SS$_FORCEDEXIT` for 0, which comes when the image next runs in user
+  mode, and ends a wait. `$EXIT` then does what it does for any image.
 
 The command interpreter keeps nothing on its stack across an image; what
 it remembers is in its P1 data. `EXEC$START` creates the console's
@@ -259,9 +259,9 @@ process, `SYSTEM`, with `DCL.EXE`:
 | `DELETE spec` | `$IMGACT` of `DELETE.EXE` |
 | `INITIALIZE device label` | `$IMGACT` of `INIT.EXE` |
 | `MOUNT device label` | `$IMGACT` of `MOUNT.EXE` |
-| `CONTINUE` | `$CONTINUE` |
+| `CONTINUE` | returns from the CTRL/Y AST, which goes back to the image |
 | `HELP` | lists the commands |
-| `LOGOUT` | returns, which deletes the process |
+| `LOGOUT` | `$DELPRC` |
 | `@file [p1 ... p8]` | reads `file.COM` with RMS and takes its `$` lines as commands |
 | `name = expression`, `name := string` | sets a symbol, `==` and `:==` a global one |
 | `IF`, `GOTO`, `EXIT`, `WRITE SYS$OUTPUT` | as in VMS's procedures |
@@ -275,7 +275,16 @@ text from a table in DCL of the file system's, RMS's and the volume
 services' statuses, or as VMS does one it has no text for,
 `%NONAME-F-NOMSG, Message number 0000000C`, after
 `%DCL-W-ACTIMAGE` if `$IMGACT` returned it, unless the status has
-`STS$M_INHIB_MSG`, bit 28, set: the image reported it. ponytail:
+`STS$M_INHIB_MSG`, bit 28, set: the image reported it.
+
+DCL enables its CTRL/Y AST, `CTRLY`, when it starts, before each image it
+runs and when it continues one, and keeps whether an image runs. With
+one, the AST ends the procedures running, keeps its frame pointer and
+goes to the command loop, where `CONTINUE` enables the AST again and
+returns from it; a command that runs another image runs the stopped one
+down. With none, the AST enables itself again, and DCL ends its
+procedures at the next command; the read CTRL/Y ended gives it an empty
+line. ponytail:
 message texts in DCL rather than message files and `$GETMSG`; no
 qualifiers, and no `STOP`: another command that runs an image ends the one CTRL/Y
 stopped.
@@ -303,9 +312,9 @@ States and queues, as VMS's `$STATEDEF`:
   `IPL$_RESCHED`, so that the software timer interrupt can make one
   computable.
 - **`SCH$WAIT`** puts the current process on a wait queue and calls
-  `SCH$SCHED`. It returns when the wait is over and the CPU is back. A
-  CTRL/Y or an AST ends the wait early, so its callers look again at what
-  they wait for. It delivers the ASTs the mode that called the service
+  `SCH$SCHED`. It returns when the wait is over and the CPU is back. An
+  AST ends the wait early, so its callers look again at what they wait
+  for. It delivers the ASTs the mode that called the service
   waiting lets through (*ASTs*).
 - **`SCH$WAKEPCB`** takes a process off its wait queue and makes it
   computable, or suspended if a `$SUSPND` came while it waited.
@@ -313,8 +322,7 @@ States and queues, as VMS's `$STATEDEF`:
   current one, requests the reschedule interrupt:
   `SOFTINT #IPL$_RESCHED`.
 - **`SCH$RESCHED`**, the level 3 software interrupt, puts the current
-  process back on its COM queue's tail and calls `SCH$SCHED`. A CTRL/Y
-  that came meanwhile stops the image before it goes back to user mode.
+  process back on its COM queue's tail and calls `SCH$SCHED`.
 
 ### Quantum end
 
@@ -452,8 +460,10 @@ an executive routine, `ACB$L_KAST`.
 | `$SETAST enbflg` | enables or disables the caller's mode's ASTs: `SS$_WASSET` or `SS$_WASCLR` |
 | `$ASTEXIT` | ends the AST routine that runs; with none, does nothing |
 
-`$SETIMR`'s AST comes from its timer queue entry (*Time*), and `$DELPRC`'s
-kernel mode AST deletes the process (*Deletion*). ponytail: the routine
+`$SETIMR`'s AST comes from its timer queue entry (*Time*), `$DELPRC`'s
+kernel mode AST deletes the process (*Deletion*), `$FORCEX`'s user mode
+one calls `$EXIT` (*The command interpreter*), and CTRL/C and CTRL/Y are
+the ASTs a terminal channel enabled (*I/O*). ponytail: the routine
 gets its parameter only, not VMS's R0, R1, PC and PSL after it; no AST
 quotas.
 
@@ -487,13 +497,13 @@ can't reach them.
 
 | Group | Implemented | Stubs: `SS$_ILLSER` |
 | --- | --- | --- |
-| Process control | `$CREPRC`, `$DELPRC`, `$EXIT`, `$HIBER`, `$WAKE`, `$SUSPND`, `$RESUME`, `$SETPRI`, `$SETPRN`, `$GETJPI`, `$GETJPIW`, `$CMKRNL`, `$CMEXEC` | `$FORCEX`, `$DCLEXH`, `$CANEXH`, `$SETPRV` |
+| Process control | `$CREPRC`, `$DELPRC`, `$EXIT`, `$FORCEX`, `$HIBER`, `$WAKE`, `$SUSPND`, `$RESUME`, `$SETPRI`, `$SETPRN`, `$GETJPI`, `$GETJPIW`, `$CMKRNL`, `$CMEXEC` | `$DCLEXH`, `$CANEXH`, `$SETPRV` |
 | Event flags | `$ASCEFC`, `$DACEFC`, `$SETEF`, `$CLREF`, `$READEF`, `$WAITFR`, `$WFLOR`, `$WFLAND` | `$DLCEFC` |
 | Memory | `$CRETVA`, `$DELTVA`, `$EXPREG` | `$CNTREG`, `$SETPRT`, `$LKWSET`, `$ULWSET`, `$LCKPAG`, `$ULKPAG`, `$CRMPSC`, `$MGBLSC` |
 | Time | `$GETTIM`, `$SETIMR`, `$CANTIM` | |
-| I/O | `$ASSIGN`, `$DASSGN`, `$QIO`, `$QIOW` | |
+| I/O | `$ASSIGN`, `$DASSGN`, `$CANCEL`, `$QIO`, `$QIOW` | |
 | Logical names | `$CRELNM`, `$DELLNM`, `$TRNLNM` | |
-| Images | `$IMGACT`, `$CONTINUE` | |
+| Images | `$IMGACT` | |
 | RMS | `$PARSE`, `$SEARCH`, `$OPEN`, `$CREATE`, `$CONNECT`, `$GET`, `$PUT`, `$DISCONNECT`, `$CLOSE`, `$ERASE`, `$SETDDIR` | |
 | Volumes | `$MOUNT`, `$INIT_VOL` | |
 | ASTs | `$DCLAST`, `$SETAST`, `$ASTEXIT` | |
@@ -585,10 +595,12 @@ as a kernel mode AST.
   IOSB, if there is one, has a status: a flag set before that, for
   something else, is cleared and waited for again, as VMS's `$SYNCH`
   does.
-- **Cancelling.** `IOC$CANCEL` frees a process's IRPs for some of its
-  channels, unfinished, from the UCBs and from its AST queue: image
-  rundown cancels the image's channels before its P0 goes, process
-  rundown all of them, `$DASSGN` the one.
+- **Cancelling.** `IOC$CANCEL` takes a process's IRPs for some of its
+  channels off the UCBs, and its CTRL/C and CTRL/Y ASTs off the console's
+  queues. `$CANCEL` completes the requests with `SS$_ABORT`, and leaves
+  those done already. Rundown and `$DASSGN` free them unfinished, from
+  its AST queue too: image rundown cancels the image's channels before
+  its P0 goes, process rundown all of them, `$DASSGN` the one.
 
 The console's driver, `ttdriver.mar`, `TT$FDT`:
 
@@ -607,10 +619,17 @@ The console's driver, `ttdriver.mar`, `TT$FDT`:
   (DESIGN-0001), puts each character in `TTY$AB_RING`, the 256-byte
   type-ahead buffer, or drops it if the buffer is full, and requests the
   `IPL$_IOPOST` software interrupt. `TTY$IOPOST` gives the buffer's
-  characters to the read at the head, at `IPL$_SYNCH`. CTRL/Y empties the
-  buffer instead, and `TTY$IOPOST` echoes `*INTERRUPT*`, completes the
-  stopped process's reads with `SS$_CONTROLY` and stops the image (*The
-  command interpreter*).
+  characters to the read at the head, at `IPL$_SYNCH`. CTRL/C and CTRL/Y
+  empty the buffer instead, and `TTY$IOPOST` delivers their ASTs.
+- **CTRL/C and CTRL/Y ASTs.** `IO$_SETMODE` with `IO$M_CTRLCAST` or
+  `IO$M_CTRLYAST` puts the AST p1 names, with p2 its parameter, in p3's
+  mode or the caller's, the outer one, in an IRP on `TTY$Q_CTRLC` or
+  `TTY$Q_CTRLY`, in place of the one the channel had; p1 = 0 only takes
+  that off. `TTY$IOPOST` echoes `*CANCEL*` or `*INTERRUPT*` and queues
+  every AST on the key's queue, which takes it off: one enable, one AST.
+  CTRL/Y first completes the console reads of each process it goes to
+  with `SS$_CONTROLY`, so that DCL's own read isn't queued behind the
+  image's. CTRL/C with no AST is CTRL/Y; CTRL/Y with none does nothing.
 - **Editing**: each character is echoed, up to a carriage return, echoed
   as CR LF, or a CTRL/Z, echoed as `*EXIT*`. The line is edited as on
   VMS, in insert mode: the left and right arrows move the cursor, CTRL/H
@@ -635,8 +654,8 @@ ponytail: the console's line being read is kept in `ttdriver.mar`, not
 its UCB, since there is one terminal; output waits for the console at
 `IPL$_SYNCH`, and a write in the middle of a line being read doesn't
 redisplay it. The recall buffer is the console's, shared by every
-reader, where VMS has DCL's own, with `RECALL`. No `$CANCEL`, no
-quotas, no `IO$_SETMODE`.
+reader, where VMS has DCL's own, with `RECALL`. No quotas, and
+`IO$_SETMODE` sets no terminal characteristics.
 
 ### Devices
 
@@ -842,12 +861,13 @@ descriptor at the nth parameter of the command line. `build.rs` links
 | `STARTUP` | makes 4 pages with `$EXPREG`, checks and deletes them; creates `SLEEPER` at a higher priority, which runs at once, and `PING` and `PONG`; waits until `PONG` sets flag 66 of their cluster; deletes `SLEEPER`; creates `SVCTEST`, `HOG`, `TIMETEST` and `ASTTEST` |
 | `SLEEPER` | hibernates until it is deleted |
 | `PING`, `PONG` | take three turns through common event flags 64 and 65 of the cluster `PINGPONG`; `PONG` then sets flag 66, which `STARTUP` waits for |
-| `SVCTEST` | checks the statuses of the services the others don't use, and of errors: local event flags, the dispatcher's checks and a stub, `$CRETVA` and `$DELTVA`, `$CMKRNL` and `$CMEXEC`; what user mode may `PROBE`, and that services refuse it the executive's data; the console's channels; logical names in both tables, `$ASSIGN` through two of them, and the errors; `$SETPRI`, and `$SUSPND`, `$WAKE`, `$RESUME` and `$DELPRC` on a process of its own; then creates one whose image doesn't exist, which exits with `RMS$_FNF`, and `SNOOP` and `USURP` |
+| `SVCTEST` | checks the statuses of the services the others don't use, and of errors: local event flags, the dispatcher's checks and a stub, `$CRETVA` and `$DELTVA`, `$CMKRNL` and `$CMEXEC`; what user mode may `PROBE`, and that services refuse it the executive's data; the console's channels; logical names in both tables, `$ASSIGN` through two of them, and the errors; `$SETPRI`, and `$SUSPND`, `$WAKE`, `$RESUME` and `$DELPRC` on a process of its own, and `$FORCEX` on another, which exits with `SS$_FORCEDEXIT` before its image runs; then creates one whose image doesn't exist, which exits with `RMS$_FNF`, and `SNOOP` and `USURP` |
 | `SNOOP` | reads S0 from user mode, and exits with `SS$_ACCVIO` |
 | `USURP` | raises IPL from user mode, and exits with `SS$_OPCDEC` |
 | `HOG` | associates a common event flag cluster, creates `NUDGE` at its own priority and loops reading flag 64 until `NUDGE` sets it, with no wait: only quantum end lets `NUDGE` run |
 | `NUDGE` | sets `HOG`'s flag |
 | `TIMETEST` | checks that `$GETTIM` reads a time after 2026; waits for `$SETIMR`s, a delta and a time, 50 ms on, and that a cancelled one never sets its flag; hibernates through three repeating `$SCHDWK` wakeups, cancels them, and checks that the next wakeup is a new one's |
+| `CTRLC` | enables a CTRL/C AST, starts a console read and waits for it; the AST, once CTRL/C is typed, `$CANCEL`s the read, which ends with `SS$_ABORT` |
 | `ASTTEST` | checks that `$DCLAST`'s AST is delivered as the service returns, or when `$SETAST` enables ASTs again; that one declared in an AST routine waits until it returns; that a `$SETIMR` AST's `$WAKE` ends a `$HIBER`; and that one delivered while it computes in user mode leaves every register as it was |
 
 When every process but the swapper waits, the CPU idles in `WTINT`,
@@ -856,11 +876,10 @@ taking the clock's interrupts.
 ## Next
 
 - Priority boosts on wake and decay at quantum end.
-- `$QIO` completion ASTs.
 - Privileges, for `$CMKRNL` and `$CMEXEC`, and condition handlers in place
   of exiting on an exception.
-- A CTRL/Y AST in place of `EXE$CTRLY` and `$CONTINUE`, CTRL/C, DCL's
-  `STOP`, and `$FORCEX`.
+- DCL's `STOP` and `SET NOCONTROL`, and exit handlers for `$FORCEX` to
+  run.
 - Writing the system disk, the disk's interrupt, `$QIO` on disk
   channels, logical names in file specifications (`SYS$SYSTEM:DCL.EXE`)
   and `SYS$DISK`.

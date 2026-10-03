@@ -358,6 +358,14 @@ SHORT:  .LONG   4                       ; too short a buffer for one
         EXPECT  #SS$_NORMAL, 25
         $WAKE_S PRCNAM=NAPPER_NAME
         EXPECT  #SS$_NONEXPR, 26
+; Another NAPPER, whose image $FORCEX ends before it runs, with
+; SS$_FORCEDEXIT, which the executive reports.
+        $CREPRC_S IMAGE=SLEEPER_IMAGE, PRCNAM=NAPPER_NAME, BASPRI=#4
+        EXPECT  #SS$_NORMAL, 66
+        $FORCEX_S PRCNAM=NAPPER_NAME
+        EXPECT  #SS$_NORMAL, 67
+        $FORCEX_S PRCNAM=NOSUCH_NAME
+        EXPECT  #SS$_NONEXPR, 68
 ; A process whose image isn't there: it exits with RMS$_FNF, which
 ; the executive reports.
         $CREPRC_S IMAGE=NOSUCH_IMAGE, PRCNAM=NOSUCH_NAME, BASPRI=#4

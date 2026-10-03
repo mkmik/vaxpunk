@@ -187,13 +187,18 @@ interpreter. It is linked high in P1, which tells the executive it is one
   When the swapper deletes what SYSTEM left, it prints `%EXEC-I-LOGOUT`
   and halts, and the root task powers QEMU off with a semihosting
   `SYS_EXIT`.
-- CTRL/Y while an image runs stops it where it is: the console prints
-  `*INTERRUPT*`, ends the image's reads with `SS$_CONTROLY`, and the
-  executive calls DCL again with `SS$_CONTROLY`,
-  leaving the image as it was on the kernel stack (`EXE$CTRLY`,
-  [ADR-0010](adr/0010-ctrly-calls-the-cli-on-top-of-the-image.md)). DCL
-  prompts. `CONTINUE` goes back to the image with `$CONTINUE`; a command
-  that runs another image throws the stopped one away first.
+- CTRL/Y is an AST of DCL's: when DCL starts, and before each image it
+  runs, it asks the console's driver for one with `IO$_SETMODE`
+  ([ADR-0014](adr/0014-ctrlc-ctrly-asts.md)). CTRL/Y while an image runs
+  makes the console print `*INTERRUPT*` and end the image's reads with
+  `SS$_CONTROLY`, and queues the AST. The executive delivers it on top of
+  the image, in supervisor mode, leaving the image as it was on the kernel
+  stack, and DCL prompts inside it. `CONTINUE` returns from the AST, and
+  the image goes on; a command that runs another image throws the stopped
+  one away first. CTRL/Y at the prompt ends the line being typed, and any
+  command procedure. CTRL/C is the same, unless a program asked for a
+  CTRL/C AST of its own: then the console prints `*CANCEL*` and that AST
+  comes instead.
 
 The system disk is read only, the ramdisk is gone when the system stops,
 and there's no login yet.
@@ -214,8 +219,9 @@ executive feature:
   event flags. PONG then sets a third flag of theirs, which STARTUP waits
   for.
 - **SVCTEST** checks the status that each system service returns, and
-  reads the system disk's home block by its LBN with `$QIOW`. It also
-  starts:
+  reads the system disk's home block by its LBN with `$QIOW`. It starts a
+  second SLEEPER, NAPPER, and makes it exit with `$FORCEX` before its
+  image runs (status `217C`). It also starts:
   - **SNOOP**, which reads kernel memory and should die with an access
     violation (status `0C`)
   - **USURP**, which runs a privileged instruction in user mode and should
@@ -233,6 +239,8 @@ executive feature:
 
 `RUN SPIN` starts **SPIN**, which computes forever with a value in each
 register, and checks them, so CTRL/Y and `CONTINUE` can be tried on it.
+`RUN CTRLC` starts **CTRLC**, which asks for a CTRL/C AST and waits for a
+line; CTRL/C runs its AST, which cancels the read with `$CANCEL`.
 
 `cargo test -p boot` boots the system, types `RUN STARTUP`, `RUN SNOOP`, a bad
 command, `DIR [SYSEXE]P%NG`, `TYPE WELCOME.TXT`,
@@ -248,8 +256,9 @@ copies a file to it, changes it in `EDIT`'s line and keypad modes into
 a second version, lists them,
 deletes them and lists again, then
 initializes and mounts `DKB0:`, made afresh, copies a file there and lists
-it, runs `SHOW DEVICES`, `SHOW PROCESS` and `SHOW SYSTEM`, then
-stops SPIN and SLEEPER with CTRL/Y and continues them, and EDIT while it
+it, runs `SHOW DEVICES`, `SHOW PROCESS` and `SHOW SYSTEM`, then runs
+CTRLC and types CTRL/C, types CTRL/Y at the prompt, stops SPIN, with a
+CTRL/C, and SLEEPER with CTRL/Y and continues them, and EDIT while it
 reads, so that DCL reads the next commands, and looks for the
 success lines in `out/serial.log`. Once QEMU is gone, `ods-image` checks
 the data disk's volume and finds the file on it.
