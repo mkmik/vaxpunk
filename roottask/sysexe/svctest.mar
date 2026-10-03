@@ -141,6 +141,12 @@ OLDDIR: .LONG   63                      ; the default directory it started in:
 OLDBUF: .BLKB   63
 SHORT:  .LONG   4                       ; too short a buffer for one
         .ADDRESS BUF
+MSGDSC: .LONG   63                      ; $GETMSG's buffer
+        .ADDRESS MSGBUF
+MSGBUF: .BLKB   63
+MSGLEN: .WORD   0
+FNFMSG: .ASCII  "%RMS-E-FNF, file not found"
+FNFEND:
 
         .PSECT  CODE, EXE, LONG
         .ENTRY  START, ^M<R2>
@@ -334,6 +340,36 @@ SHORT:  .LONG   4                       ; too short a buffer for one
         CMPW    DVI_IOSB, #SS$_WRITLCK
         BNEQ    90$
         $DASSGN_S CHAN=CHAN
+
+; Messages: one it knows, its text alone, one it doesn't, and one
+; that doesn't fit.
+        $GETMSG_S MSGID=#RMS$_FNF, MSGLEN=MSGLEN, BUFADR=MSGDSC
+        EXPECT  #SS$_NORMAL, 69
+        CMPW    MSGLEN, #<FNFEND-FNFMSG>
+        BNEQ    80$
+        CMPL    MSGBUF, FNFMSG
+        BNEQ    80$
+        CMPL    MSGBUF+22, FNFMSG+22    ; ound
+        BNEQ    80$
+        $GETMSG_S MSGID=#RMS$_FNF, MSGLEN=MSGLEN, BUFADR=MSGDSC, FLAGS=#1
+        EXPECT  #SS$_NORMAL, 70
+        CMPW    MSGLEN, #14
+        BNEQ    80$
+        CMPL    MSGBUF, FNFMSG+12       ; file
+        BNEQ    80$
+        $GETMSG_S MSGID=#^X0FFF0002, MSGLEN=MSGLEN, BUFADR=MSGDSC
+        EXPECT  #SS$_MSGNOTFND, 71
+        CMPW    MSGLEN, #40             ; %NONAME-E-NOMSG, Message number 0FFF0002
+        BNEQ    80$
+        CMPL    MSGBUF+36, #^A/0002/
+        BNEQ    80$
+        $GETMSG_S MSGID=#RMS$_FNF, MSGLEN=MSGLEN, BUFADR=SHORT
+        EXPECT  #SS$_BUFFEROVF, 72
+        CMPW    MSGLEN, #4
+        BNEQ    80$
+        BRB     81$
+80$:    BRW     90$
+81$:
 
 ; Other processes: lower this one's priority below NAPPER's so it runs
 ; and hibernates; suspend it while it does, so that $WAKE leaves it
