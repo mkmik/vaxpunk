@@ -43,6 +43,7 @@ kept current, like a design document.
 | PRD | Title |
 | --- | --- |
 | [PRD-0001](prd/0001-vtools.md) | ARM64 cross assembler, linker and QEMU runner for VMS object formats |
+| [PRD-0002](prd/0002-networking.md) | TCP/IP through a port to an lwIP component |
 
 ### Design documents
 
