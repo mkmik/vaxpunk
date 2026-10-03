@@ -10,8 +10,10 @@
 //! MOUNT and COPY on the data disk, DKB0:, made afresh in
 //! out/check-datadisk.img, not the one you keep, SHOW DEVICES, SHOW PROCESS
 //! and SHOW SYSTEM, or the root task is done, which is only on a halt or a fault. DCL reads what was
-//! typed ahead a line at a time. Then it types a CONTINUE with nothing stopped, and stops
-//! SPIN and SLEEPER with CTRL/Y, twice each, with a CONTINUE in between, and
+//! typed ahead a line at a time. Then it types a CONTINUE with nothing stopped, a CTRL/C
+//! for CTRLC's AST, which cancels its read, a CTRL/Y at the prompt, and stops SPIN,
+//! first with a CTRL/C no AST takes, and SLEEPER with CTRL/Y, twice each, with a
+//! CONTINUE in between, and
 //! EDIT while it reads, whose read CTRL/Y ends, so that DCL reads SHOW
 //! DEFAULT and CONTINUE, and EDIT takes the empty line as RETURN, a
 //! step at a time: each waits until a line has come so many times, the echo
@@ -34,6 +36,7 @@ const LINES: &[&str] = &[
     "%MOUNT-I-MOUNTED, VAXPUNK mounted on _DKA0:",
     "STARTUP: done",
     "SVCTEST: ok",
+    "process NAPPER exited with status 0000217C",
     "process NOSUCH exited",
     "HOG: NUDGE ran",
     "TIMETEST: ok",
@@ -81,6 +84,8 @@ const LINES: &[&str] = &[
     "00010001 SWAPPER",
     "SYSTEM          CUR     4 SHOW.EXE",
     "CONTINUE    goes back to the image CTRL/Y stopped",
+    "*CANCEL*",
+    "CTRLC: ok",
     "DCLTEST: ok, 3 and 4",
     "%RMS-E-FNF, file not found",
     "  $STATUS == 268534418   Hex = 10018292  Octal = 02000301222",
@@ -94,21 +99,24 @@ const ABSENT: &[&str] = &["DCLTEST: not here", "DCLTEST: failed"];
 
 /// Once the ramdisk is done: when a line has come so many times, type.
 const STEPS: &[(&str, usize, &str)] = &[
-    ("SPIN: spinning", 1, "\x19"),
-    ("*INTERRUPT*", 1, "CONTINUE\r"),
+    ("CTRLC: waiting for CTRL/C", 1, "\x03"),
+    ("CTRLC: ok", 1, "\x19"),
+    ("*INTERRUPT*", 1, "RUN SPIN\r"),
+    ("SPIN: spinning", 1, "\x03"),
+    ("*INTERRUPT*", 2, "CONTINUE\r"),
     ("CONTINUE", 2, "\x19"),
-    ("*INTERRUPT*", 2, "RUN SLEEPER\r"),
+    ("*INTERRUPT*", 3, "RUN SLEEPER\r"),
     ("SLEEPER: hibernating", 3, "\x19"),
-    ("*INTERRUPT*", 3, "CONTINUE\r"),
+    ("*INTERRUPT*", 4, "CONTINUE\r"),
     ("CONTINUE", 3, "\x19"),
-    ("*INTERRUPT*", 4, "HELP\r"),
+    ("*INTERRUPT*", 5, "HELP\r"),
     (
         "deletes a local symbol",
         1,
         "EDIT SYS$MANAGER:WELCOME.TXT\r",
     ),
     ("    1\t", 3, "\x19"),
-    ("*INTERRUPT*", 5, "SHOW DEFAULT\rCONTINUE\r"),
+    ("*INTERRUPT*", 6, "SHOW DEFAULT\rCONTINUE\r"),
 ];
 
 #[test]
@@ -181,7 +189,7 @@ fn boot() {
             type_("INIT DKB0: DATA\rMOUNT DKB0: DATA\r");
             type_("COPY SYS$SYSDEVICE:[SYSMGR]WELCOME.TXT DKB0:[000000]DATA.TXT\r");
             type_(
-                "DIR DKB0:[000000]\rSHOW DEVICES\rSHOW PROCESS\rSHOW SYSTEM\rCONTINUE\rRUN SPIN\r",
+                "DIR DKB0:[000000]\rSHOW DEVICES\rSHOW PROCESS\rSHOW SYSTEM\rCONTINUE\rRUN CTRLC\r",
             );
             typed = 5;
         }

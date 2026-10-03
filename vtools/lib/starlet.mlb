@@ -39,6 +39,7 @@ SS$_WRITLCK = 604                       ; the device is write locked
 SS$_IVMODE = 852
 SS$_OPCDEC = 1084
 SS$_CONTROLY = 1553                     ; CTRL/Y stopped the image
+SS$_CONTROLC = 1617                     ; CTRL/C, which no CTRL/C AST took, stopped the image
 SS$_SUPERSEDE = 1585                    ; success: a name by that name was replaced
 SS$_NONEXPR = 2280
 SS$_NOMOREPROC = 2472                   ; a wildcard $GETJPI is past the last process
@@ -56,6 +57,7 @@ SS$_IDXFILEFULL = 2256                  ; no free file headers left
 SS$_NOHOMEBLK = 2272                    ; no Files-11 home block
 SS$_NOMOREFILES = 2352
 SS$_NOMOREDEV = 2648                    ; no more devices to list
+SS$_FORCEDEXIT = 8572                   ; $FORCEX ended the image
 SS$_NOLOGTAB = 8852
         .ENDM   $SSDEF
 
@@ -342,6 +344,11 @@ IO$_READPBLK = 12
 IO$_READLBLK = 33
 IO$_READVBLK = 49
 IO$_READPROMPT = 55                     ; writes the prompt in p5 and p6 first
+IO$_SETMODE = 35                        ; a terminal: enables a CTRL/C or CTRL/Y AST
+IO$V_CTRLYAST = 7                       ; SETMODE: the AST is CTRL/Y's
+IO$M_CTRLYAST = ^X80
+IO$V_CTRLCAST = 8                       ; SETMODE: the AST is CTRL/C's
+IO$M_CTRLCAST = ^X100
 IO$V_NOECHO = 6                         ; a read doesn't echo
 IO$M_NOECHO = ^X40
 IO$V_NOFILTR = 9                        ; a read doesn't edit: DEL, CTRL/U are data
@@ -443,6 +450,14 @@ PRT$C_UR = 15
         .EXTERNAL SYS$EXIT
         CALLS   #1, G^SYS$EXIT
         .ENDM   $EXIT_S
+
+        .MACRO  $FORCEX_S PIDADR=0, PRCNAM=0, CODE=#0
+        PUSHL   CODE
+        $PUSHADR PRCNAM
+        $PUSHADR PIDADR
+        .EXTERNAL SYS$FORCEX
+        CALLS   #3, G^SYS$FORCEX
+        .ENDM   $FORCEX_S
 
         .MACRO  $HIBER_S
         .EXTERNAL SYS$HIBER
@@ -642,6 +657,12 @@ PRT$C_UR = 15
         CALLS   #1, G^SYS$DASSGN
         .ENDM   $DASSGN_S
 
+        .MACRO  $CANCEL_S CHAN
+        PUSHL   CHAN
+        .EXTERNAL SYS$CANCEL
+        CALLS   #1, G^SYS$CANCEL
+        .ENDM   $CANCEL_S
+
         .MACRO  $QIOW_S EFN=#0, CHAN, FUNC, IOSB=0, ASTADR=0, ASTPRM=#0, P1=0, P2=#0, P3=#0, P4=#0, P5=#0, P6=#0
         PUSHL   P6
         PUSHL   P5
@@ -821,7 +842,3 @@ PRT$C_UR = 15
         CALLS   #1, G^SYS$MOUNT
         .ENDM   $MOUNT_S
 
-        .MACRO  $CONTINUE_S
-        .EXTERNAL SYS$CONTINUE
-        CALLS   #0, G^SYS$CONTINUE
-        .ENDM   $CONTINUE_S

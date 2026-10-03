@@ -15,8 +15,8 @@
 ; and called in supervisor mode, and stays. It runs images with $IMGACT,
 ; and when one exits, the process runs it down and calls the command
 ; interpreter again (docs/design/0002-executive-processes.md). CTRL/Y
-; stops the image where it is and calls the command interpreter on top of
-; it, and $CONTINUE goes back to it (ADR-0010).
+; is the command interpreter's supervisor mode AST, which stops the image
+; where it is, and returns to it for CONTINUE (ADR-0014).
 ;
         .LIBRARY "lib.mlb"
         .LIBRARY "starlet.mlb"
@@ -43,7 +43,7 @@
         .EXTERNAL MMG$SETPRT, EXE$RMVTIMQ, EXE$USRSTART, EXE$CLISTART
         .EXTERNAL FIL$OPENFILE, RMS$RUNDOWN
         .EXTERNAL EXE$OUTZSTRING, EXE$OUTCSTRING, EXE$OUTHEX, EXE$OUTCRLF
-        .EXTERNAL LNM$CREATE, LNM$DELTBL, SCH$QAST, EXE$FLUSHAST, IOC$CANCEL
+        .EXTERNAL LNM$CREATE, LNM$DELTBL, SCH$QAST, EXE$FLUSHAST, IOC$CANCEL, SYS$EXIT
 
 KSTACK = 16384                          ; a process's kernel stack
 BLOCK = 512                             ; an image's blocks
@@ -623,6 +623,7 @@ IMG$ACTIVATE::
 EXE$IMGRUNDOWN::
         DSBINT  #IPL$_SYNCH
         BICL3   PCB$L_CLICHANS(R4), PCB$L_CHANS(R4), R0
+        CLRL    R1
         BSBW    IOC$CANCEL
         ENBINT
         MOVL    PCB$L_PID(R4), R0
@@ -631,8 +632,6 @@ EXE$IMGRUNDOWN::
         BSBW    EXE$RMVTIMQ
         BSBB    DELP0
         DSBINT  #IPL$_SYNCH
-        CLRL    PCB$L_CTRLY(R4)
-        BICL2   #<1@PCB$V_CTRLY>, PCB$L_STS(R4)
         MOVL    #PSL$C_USER, R0
         BSBW    EXE$FLUSHAST
         ENBINT
@@ -662,6 +661,7 @@ EXE$RUNDOWN::
         BSBW    EXE$IMGRUNDOWN
         DSBINT  #IPL$_SYNCH
         MOVL    PCB$L_CHANS(R4), R0
+        CLRL    R1
         BSBW    IOC$CANCEL
         CLRL    R0
         BSBW    EXE$FLUSHAST
@@ -760,6 +760,40 @@ DELKAST:
         MOVZWL  ACB$W_SIZE(R5), R1
         BSBW    EXE$DEANONPGDSIZ
         BRW     EXE$DELSELF
+
+; $FORCEX pidadr, prcnam, code: makes a process's image exit with code, or
+; SS$_FORCEDEXIT for 0, as if it called $EXIT: queues it a user mode AST
+; whose routine is SYS$EXIT, which comes when the image next runs in user
+; mode, and ends its wait if it waits. Not while CTRL/Y has it stopped,
+; but after CONTINUE. SS$_INSFMEM if there is no pool for the AST.
+        .ENTRY  EXE$FORCEX, ^M<R2, R3, R4, R5>
+        MOVL    SCH$GL_CURPCB, R4
+        MOVL    4(AP), R2
+        MOVL    8(AP), R3
+        DSBINT  #IPL$_SYNCH
+        BSBW    EXE$NAMPID
+        BLBC    R0, 90$
+        CMPL    R1, SCH$GL_SWPPCB
+        BEQL    80$
+        MOVL    R1, R4
+        MOVL    #ACB$K_LENGTH, R1
+        BSBW    EXE$ALONONPAGED
+        BLBC    R0, 90$
+        MOVL    R2, R5
+        MOVW    R1, ACB$W_SIZE(R5)
+        MOVB    #DYN$C_ACB, ACB$B_TYPE(R5)
+        MOVB    #PSL$C_USER, ACB$B_RMOD(R5)
+        MOVL    PCB$L_PID(R4), ACB$L_PID(R5)
+        MOVAB   G^SYS$EXIT, ACB$L_AST(R5)
+        MOVL    12(AP), ACB$L_ASTPRM(R5)
+        BNEQ    20$
+        MOVL    #SS$_FORCEDEXIT, ACB$L_ASTPRM(R5)
+20$:    CLRL    ACB$L_KAST(R5)
+        BSBW    SCH$QAST
+        BRB     90$
+80$:    MOVL    #SS$_NOPRIV, R0
+90$:    ENBINT
+        RET
 
 ; $HIBER: sleeps until a $WAKE, or returns at once if one came since the
 ; last $HIBER.
@@ -916,10 +950,12 @@ SUSPEND:
 ; and files the process has now, activates image in P0 and calls it in
 ; user mode,
 ; with cmdlin, the rest of its command line, if there is one, at
-; VA$C_FOREIGN. An image CTRL/Y stopped is run down too. Returns only if the activation fails, with its status;
-; SS$_IVLOGNAM for a name longer than 39 characters, SS$_BADPARAM for a
-; command line longer than 255. When the image exits, the command
-; interpreter is called again with its status.
+; VA$C_FOREIGN. An image CTRL/Y stopped is run down too, and the
+; command interpreter's CTRL/Y AST forgotten. Returns only if the
+; activation fails, with its status; SS$_IVLOGNAM for a name longer than
+; 39 characters, SS$_BADPARAM for a command line longer than 255. When the
+; image exits, the command interpreter is called again with its status, on
+; an empty supervisor stack, which the image leaves alone meanwhile.
 ; ponytail: VMS's $IMGACT only activates, and the command interpreter
 ; calls the image itself, which asks it for the command line with
 ; LIB$GET_FOREIGN.
@@ -956,14 +992,15 @@ SUSPEND:
         MOVB    (R8), @#VA$C_FOREIGN
         MOVC3   (R8), @4(R8), @#VA$C_FOREIGN+1
 20$:    MOVL    SCH$GL_CURPCB, R4
-        TSTL    PCB$L_CTRLY(R4)         ; after CTRL/Y, what it had when its image ran
-        BNEQ    25$
+        BBS     #PSL$C_SUPER, PCB$B_ASTACT(R4), 25$     ; after CTRL/Y, what it had when its image ran
         MOVL    PCB$L_CHANS(R4), PCB$L_CLICHANS(R4)
         MOVL    PCB$L_FILES(R4), PCB$L_CLIFILES(R4)
 25$:    BSBW    EXE$IMGRUNDOWN
         CLRL    R5                      ; P0 only
         BSBW    IMG$ACTIVATE
         BLBC    R0, 80$
+        MOVL    PCB$L_HWPCB(R4), R2
+        MOVL    #VA$C_SSP, HWPCB$Q_SSP(R2)
         BRW     EXE$USRENTRY
 80$:    MOVL    R0, R6
         BSBW    DELP0
@@ -973,55 +1010,5 @@ SUSPEND:
         RET
 87$:    MOVL    #SS$_BADPARAM, R0
 90$:    RET
-
-; EXE$CTRLY: R4 = the current PCB, which has CTRL/Y pending, and an image
-; stopped where it can be left: in user mode, or waiting. Calls the
-; command interpreter with SS$_CONTROLY, as EXE$CLIENTRY does, but on the
-; kernel stack as it is, which keeps the image's registers and the service
-; or interrupt it was in, and returns when the command interpreter calls
-; $CONTINUE. If it runs another image or logs out instead, this never
-; returns. Keeps every register.
-EXE$CTRLY::
-        PUSHR   #^M<R0, R1, R2, R3, R4, R5, R6, R7, R8, R9, R10, R11, AP, FP>
-        DSBINT  #IPL$_SYNCH
-        BICL2   #<1@PCB$V_CTRLY>, PCB$L_STS(R4)
-        MOVL    SP, PCB$L_CTRLY(R4)
-        BICL2   #15, SP
-        MOVL    #SS$_CONTROLY, R0
-        BRW     CLICALL
-
-; EXE$CTRLYCHK: JSB'd just before an REI, whose frame is above the return
-; address. If the REI goes to user mode in a process with CTRL/Y pending,
-; calls EXE$CTRLY first. Keeps every register.
-EXE$CTRLYCHK::
-        PUSHR   #^M<R0, R4>
-        EXTZV   #PSL$V_CURMOD, #2, 16+INTSTK$Q_PS(SP), R0
-        CMPL    R0, #PSL$C_USER
-        BNEQ    10$
-        MOVL    SCH$GL_CURPCB, R4
-        BBC     #PCB$V_CTRLY, PCB$L_STS(R4), 10$
-        BSBW    EXE$CTRLY
-10$:    POPR    #^M<R0, R4>
-        RSB
-
-; $CONTINUE: goes back to the image CTRL/Y stopped in the current process,
-; where it was, and doesn't return. Without one, it returns SS$_NORMAL, as
-; VMS's CONTINUE does nothing then. The command interpreter calls it for
-; CONTINUE.
-; ponytail: VMS's DCL returns from its CTRL/Y AST instead; there are no
-; ASTs yet, and DCL is called afresh, so a return would be a LOGOUT.
-        .ENTRY  EXE$CONTINUE, ^M<>
-        MOVL    SCH$GL_CURPCB, R0
-        SETIPL  #IPL$_SYNCH
-        MOVL    PCB$L_CTRLY(R0), R1
-        BEQL    90$
-        CLRL    PCB$L_CTRLY(R0)
-        MOVL    R1, SP
-        ENBINT
-        POPR    #^M<R0, R1, R2, R3, R4, R5, R6, R7, R8, R9, R10, R11, AP, FP>
-        RSB
-90$:    SETIPL  #0
-        MOVL    #SS$_NORMAL, R0
-        RET
 
         .END

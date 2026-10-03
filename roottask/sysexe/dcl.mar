@@ -5,8 +5,7 @@
 ; command interpreter: EXEC$START creates the console's process, SYSTEM,
 ; with it, and the executive calls it in supervisor mode, with SS$_NORMAL
 ; at first and then, each time an image it runs exits, with the image's
-; status (docs/design/0002-executive-processes.md), or with SS$_CONTROLY
-; when CTRL/Y stops the image it runs (ADR-0010). Its data stays in P1
+; status (docs/design/0002-executive-processes.md). Its data stays in P1
 ; from one call to the next. It reports a failure status, prompts for a
 ; command on the console and does it:
 ;
@@ -68,8 +67,13 @@
 ; "SET DEFAULT [SYSMGR]" makes HOME a command. A status with
 ; STS$M_INHIB_MSG set is one the image reported itself. It reads the
 ; commands from SYS$INPUT, but SYS$MANAGER:SYLOGIN.COM's, which it runs
-; first, and a command procedure's, whose lines start with $. A command
-; that runs an image runs down the one CTRL/Y stopped.
+; first, and a command procedure's, whose lines start with $.
+;
+; CTRL/Y is DCL's supervisor mode AST, which it enables on the console
+; with IO$_SETMODE (ADR-0014). It stops the image DCL runs, where it is,
+; and DCL prompts on top of it: CONTINUE returns from the AST, and the
+; image goes on; a command that runs an image runs the stopped one down.
+; With no image, CTRL/Y ends the line being typed.
 ;
 ; Before a command is done, ! outside quotes starts a comment, and
 ; 'name' outside quotes, ''name' in them, becomes the symbol's value.
@@ -81,14 +85,12 @@
 ; and .NOT. in front of an operand. + joins two strings; a string
 ; elsewhere is its integer, or 1 if it starts with T or Y, else 0. A
 ; command whose status is an error or a fatal error ends every procedure,
-; as VMS's ON ERROR THEN EXIT does; so does CTRL/Y.
+; as VMS's ON ERROR THEN EXIT does; so does CTRL/Y, at the next command.
 ; ponytail: message texts for a few statuses only; no qualifiers. @
 ; reads the whole procedure into PBUF, and it goes when the procedure
 ; ends: 16 KB for those running at once. No ON, IF blocks, lexical
 ; functions, OPEN or READ; lines without $, an image's input on VMS, are
-; skipped. A procedure that loops without running an image can't be
-; stopped, since CTRL/Y comes only to user mode. .NOT. takes an operand,
-; not a comparison.
+; skipped. .NOT. takes an operand, not a comparison.
 ;
         .LIBRARY "lib.mlb"
         .LIBRARY "starlet.mlb"
@@ -357,6 +359,11 @@ LINE2:  .BLKB   LINESIZE                ; a command being made
 DOTEXE: .ASCII  ".EXE"
         .ALIGN  LONG
 SAVESP: .LONG   0                       ; SP as DCL was called, where errors go back to
+IMGRUN: .LONG   0                       ; 1 while an image runs, or is about to
+CTRLYFP:                                ; while CTRL/Y has it stopped, FP in the AST, else 0
+        .LONG   0
+CTRLYHIT:                               ; 1: CTRL/Y came with no image
+        .LONG   0
 LASTSTAT:                               ; $STATUS
         .LONG   SS$_NORMAL
 DEPTH:  .LONG   0                       ; the procedure running, 0 for none
@@ -521,24 +528,24 @@ HEX:    .ASCII  "0123456789ABCDEF"
         .PSECT  CODE, EXE, LONG
         .ENTRY  DCL, ^M<R2, R3, R4, R5, R6, R7, R8, R9, R10, R11>
         MOVL    SP, SAVESP
+        CLRL    IMGRUN
         TSTL    CHAN
         BNEQ    10$
         $ASSIGN_S DEVNAM=INPUT, CHAN=CHAN
         BLBC    R0, QUIT
+        BSBW    CTRLYON
         MOVZBL  SYLOGIN, R7             ; @SYS$MANAGER:SYLOGIN first
         MOVC3   R7, SYLOGIN+1, LINE
         BRB     GOTLINE
-10$:    CMPL    4(AP), #SS$_CONTROLY
-        BNEQ    20$
-        BSBW    ENDPROCS
-        BRB     NEXT
-20$:    MOVL    4(AP), R0
+10$:    MOVL    4(AP), R0
         BRW     DONE
 
 ; NEXT: reads the next command, from the procedure running or from the
 ; console, and does it.
 NEXT:   MOVL    SAVESP, SP
-        TSTL    DEPTH
+        BBCC    #0, CTRLYHIT, 5$
+        BSBW    ENDPROCS
+5$:     TSTL    DEPTH
         BEQL    PROMPT1
         BSBW    GETPROC
         BLBS    R0, 10$
@@ -693,14 +700,19 @@ VERBS:  MOVAB   V_RUN, R1
         ADDTEXT "\"
         BSBW    SAY
         BRW     WARN
-LOGOUT: MOVL    #SS$_NORMAL, R0         ; the process ends
-QUIT:   RET
+LOGOUT:                                 ; the process ends
+QUIT:   $DELPRC_S
 
-; CONTINUE: $CONTINUE goes back to the image CTRL/Y stopped, and returns
-; only if there is none, when CONTINUE does nothing.
+; CONTINUE: returns from the CTRL/Y AST to the image it stopped, with
+; CTRL/Y enabled again, or does nothing if there is none.
 CONTINUE:
-        $CONTINUE_S
-        BRW     OK
+        TSTL    CTRLYFP
+        BEQL    10$
+        BSBW    CTRLYON
+        MOVL    CTRLYFP, FP
+        CLRL    CTRLYFP
+        RET
+10$:    BRW     OK
 
 HELP:   PRINT   "  RUN image   runs image, image.EXE if it has no type"
         PRINT   "  DIRECTORY [spec]"
@@ -763,6 +775,7 @@ RUN:    BSBW    WORD
         MOVL    DOTEXE, (R0)
         ADDL2   #4, R8
 20$:    MOVL    R8, TOKDSC
+        BSBW    RUNNING
         $IMGACT_S IMAGE=TOKDSC
         MOVAB   TOKDSC, R1
         BRB     ACTFAIL
@@ -793,6 +806,7 @@ FOREIGN:
         CMPL    R2, R3
         BLSSU   INSFPRM
         MOVL    R8, TOKDSC
+        BSBW    RUNNING
         PUSHL   R4
         $IMGACT_S IMAGE=(R4), CMDLIN=TOKDSC
         MOVL    (SP)+, R1
@@ -803,6 +817,7 @@ EDIT:   BSBW    WORD
         TSTL    R8
         BEQL    INSFPRM
         MOVL    R8, TOKDSC
+        BSBW    RUNNING
         $IMGACT_S IMAGE=EDITIMG, CMDLIN=TOKDSC
         MOVAB   EDITIMG, R1
         BRB     ACTFAIL
@@ -814,8 +829,11 @@ WARN:   MOVL    #CLIWARN, R0
         BRW     DONE
 
 ; ACTFAIL: R0 = the status $IMGACT returned, R1 = the image's descriptor.
-; Reports it, and prompts for the next command.
+; Reports it, and prompts for the next command. The image CTRL/Y stopped,
+; if there was one, is gone.
 ACTFAIL:
+        CLRL    IMGRUN
+        CLRL    CTRLYFP
         PUSHL   R0
         PUSHL   R1
         ADDTEXT "%DCL-W-ACTIMAGE, error activating image "
@@ -2417,5 +2435,31 @@ ADDOCT: MOVL    R1, R4
         SUBL2   #3, R5
         BGEQ    10$
         RSB
+
+; RUNNING: before $IMGACT. Enables CTRL/Y for the image, which CTRL/Y's
+; AST may not have, and says an image runs. Uses R0 and R1.
+RUNNING:
+        MOVL    #1, IMGRUN
+; CTRLYON: enables DCL's CTRL/Y AST on the console. Uses R0 and R1.
+CTRLYON:
+        $QIOW_S CHAN=CHAN, FUNC=#IO$_SETMODE!IO$M_CTRLYAST, P1=CTRLY
+        RSB
+
+; CTRLY: DCL's CTRL/Y AST, in supervisor mode, on top of what CTRL/Y
+; stopped. With an image running, ends the procedures running and does
+; commands, until CONTINUE returns from here, or a command runs another
+; image. Without, it is enabled again, and DCL ends the procedures at its
+; next command. Saves the registers DCL does, so that CONTINUE can return
+; from here.
+        .ENTRY  CTRLY, ^M<R2, R3, R4, R5, R6, R7, R8, R9, R10, R11>
+        TSTL    IMGRUN
+        BNEQ    10$
+        MOVL    #1, CTRLYHIT
+        BSBW    CTRLYON
+        RET
+10$:    MOVL    FP, CTRLYFP
+        MOVL    SP, SAVESP
+        BSBW    ENDPROCS
+        BRW     NEXT
 
         .END    DCL

@@ -2,7 +2,7 @@
 
 Oct 2, 2026 · @Marko Mikulicic
 
-Accepted. CTRL/Y on the console stops the image the console's command
+Superseded by [ADR-0014](0014-ctrlc-ctrly-asts.md). CTRL/Y on the console stops the image the console's command
 interpreter runs, where it is, and calls the command interpreter in
 supervisor mode with `SS$_CONTROLY`, on the process's kernel stack as it
 is, so the image's registers and the service or interrupt it was in stay

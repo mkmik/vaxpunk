@@ -12,10 +12,11 @@
 ; did with ASTLVL. SCH$ASTDEL delivers there, and SCH$WAIT ends a wait to
 ; deliver too, in the mode that called the service waiting.
 ;
-; EXE$ASTDEL calls an AST routine as EXE$CTRLY calls the command
-; interpreter: it saves the registers and IPL on the kernel stack and REIs
-; below them, to EXE$ASTDISP in the AST's mode, which calls the routine and
-; then $ASTEXIT, which puts the stack pointer back and returns.
+; EXE$ASTDEL calls an AST routine on top of what it interrupts: it saves
+; the registers and IPL on the kernel stack and REIs below them, to
+; EXE$ASTDISP in the AST's mode, which calls the routine and then
+; $ASTEXIT, which puts the stack pointer back and returns. The command
+; interpreter's CTRL/Y AST stops an image so (ADR-0014).
 ;
         .LIBRARY "lib.mlb"
         .LIBRARY "starlet.mlb"

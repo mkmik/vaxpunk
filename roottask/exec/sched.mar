@@ -29,7 +29,7 @@
         $HWPCBDEF
         $PSLDEF
 
-        .EXTERNAL EXE$GL_RPB, EXE$CTRLY, EXE$CTRLYCHK, EXE$ASTDEL
+        .EXTERNAL EXE$GL_RPB, EXE$ASTDEL
 
         .PSECT  EXEC$DATA, NOEXE, WRT, QUAD
 SCH$GL_CURPCB::                         ; the current process
@@ -171,17 +171,14 @@ SCH$WAKE::
 
 ; SCH$WAIT: R4 = the current PCB, its state set to the wait's, R0 = the
 ; wait queue. Puts it on the queue's tail and gives up the CPU; returns
-; when the wait is over and the CPU is back. CTRL/Y ends a wait early,
-; and stops the image here, and so does an AST, which is delivered here
-; if it is for the mode that called the service waiting, or an inner one;
-; the caller must look again at what it waited for. IPL$_SYNCH. Keeps
-; every register.
+; when the wait is over and the CPU is back. An AST ends a wait early,
+; and is delivered here if it is for the mode that called the service
+; waiting, or an inner one; the caller must look again at what it waited
+; for. IPL$_SYNCH. Keeps every register.
 SCH$WAIT::
         INSQUE  (R4), @4(R0)
         BSBW    SCH$SCHED
-        BBC     #PCB$V_CTRLY, PCB$L_STS(R4), 10$
-        JSB     G^EXE$CTRLY
-10$:    PUSHL   R0
+        PUSHL   R0
         CALL_PAL #PAL$_RD_PS
         EXTZV   #PSL$V_PRVMOD, #2, R0, R0
         JSB     G^EXE$ASTDEL
@@ -218,8 +215,7 @@ SCH$SCHED::
 
 ; SCH$RESCHED: the IPL$_RESCHED software interrupt, which SCH$MAKECOM
 ; requests. Puts the current process back on its COM queue's tail and
-; gives the CPU to the highest computable one. A CTRL/Y that came while
-; it waited for the CPU in user mode stops its image when it has it back.
+; gives the CPU to the highest computable one.
 SCH$RESCHED::
         SETIPL  #IPL$_SYNCH
         PUSHL   R4
@@ -227,7 +223,6 @@ SCH$RESCHED::
         BSBW    SCH$INSCOM
         BSBW    SCH$SCHED
         MOVL    (SP)+, R4
-        JSB     G^EXE$CTRLYCHK
         REI
 
 ; SCH$QEND: R4 = the current PCB, whose quantum is up. Gives it a new
