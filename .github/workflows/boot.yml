@@ -1,0 +1,51 @@
+name: boot
+
+# Builds the OS with the cross toolchain and boots it in QEMU: cargo test -p
+# boot. The toolchain is a container image, .github/toolchain.Dockerfile,
+# kept on ghcr.io under the Dockerfile's hash and built only when that tag
+# is missing.
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  toolchain:
+    runs-on: ubuntu-latest
+    permissions:
+      packages: write
+    outputs:
+      image: ${{ steps.tag.outputs.image }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: tag
+        run: echo "image=ghcr.io/${GITHUB_REPOSITORY,,}-toolchain:${{ hashFiles('.github/toolchain.Dockerfile') }}" >> "$GITHUB_OUTPUT"
+      - run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+      - name: Build and push unless already there
+        run: |
+          image=${{ steps.tag.outputs.image }}
+          docker manifest inspect "$image" >/dev/null 2>&1 && exit 0
+          docker build -t "$image" -f .github/toolchain.Dockerfile \
+            --label org.opencontainers.image.source=https://github.com/${{ github.repository }} .github
+          docker push "$image"
+
+  boot:
+    needs: toolchain
+    runs-on: ubuntu-latest
+    permissions:
+      packages: read
+    container:
+      image: ${{ needs.toolchain.outputs.image }}
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+      - run: cargo test --release -p boot
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: serial.log
+          path: out/serial.log
