@@ -2,9 +2,11 @@
 //!
 //! Nothing in the page is written by hand: it is all read from the code and the
 //! design documents, so keeping it current means keeping these current:
-//! - the executive's routines and data (roottask/exec/*.mar, consolio.mar): the
-//!   comment block right above each `NAME::` or `.ENTRY`, whose first line reads
-//!   `NAME: what it does` or, for a system service, `$NAME args: what it does`;
+//! - the executive's routines and data (roottask/exec/*.mar, consolio.mar), and
+//!   the global ones of the libraries the system disk's images link
+//!   (roottask/sysexe/lib/*.mar): the comment block right above each `NAME::`
+//!   or `.ENTRY`, whose first line reads `NAME: what it does` or, for a system
+//!   service, `$NAME args: what it does`;
 //! - the system service vector, the SERVICE and STUB lines of syssrv.mar;
 //! - the macro libraries (vtools/lib/*.mlb, roottask/sysexe/*.mlb): the comment
 //!   block right above each `.MACRO`, and the `SYM = value ; meaning` lines of
@@ -157,6 +159,8 @@ fn facts(doc: Doc) -> (Doc, String, String) {
 
 #[derive(Default)]
 struct Module {
+    /// One of the libraries images link, not the executive's.
+    image: bool,
     path: String,
     stem: String,
     title: String,
@@ -622,11 +626,29 @@ impl Api {
         let (mut routines, mut data, mut macros) = (vec![], vec![], vec![]);
         let mut exec = glob(&root.join("roottask/exec"), "mar");
         exec.push(root.join("vtools/lib/consolio.mar"));
-        let mods: Vec<Module> = exec
+        let mut mods: Vec<Module> = exec
             .iter()
             .enumerate()
             .map(|(i, p)| parse_mar(root, p, i, &mut routines, &mut data))
             .collect();
+        // The images' libraries: their global routines and data only, since
+        // their local names may be the executive's too.
+        for p in glob(&root.join("roottask/sysexe/lib"), "mar") {
+            let (mut rs, mut ds) = (vec![], vec![]);
+            let mut m = parse_mar(root, &p, mods.len(), &mut rs, &mut ds);
+            m.image = true;
+            m.routines.clear();
+            m.data.clear();
+            for r in rs.into_iter().filter(|r| r.global) {
+                m.routines.push(routines.len());
+                routines.push(r);
+            }
+            for d in ds {
+                m.data.push(data.len());
+                data.push(d);
+            }
+            mods.push(m);
+        }
         let mut lib_paths = glob(&root.join("vtools/lib"), "mlb");
         lib_paths.extend(glob(&root.join("roottask/sysexe"), "mlb"));
         let libs: Vec<Lib> = lib_paths
@@ -679,6 +701,8 @@ impl Api {
             svc.mac = starlet.get(&format!("${}_S", svc.name)).copied();
         }
 
+        let rs_global: Vec<bool> = routines.iter().map(|r| r.global).collect();
+        let rs_module: Vec<usize> = routines.iter().map(|r| r.module).collect();
         for (ri, r) in routines.iter_mut().enumerate() {
             let (_, args, doc) = head(&blocks(&r.comment));
             let (doc, regs, ipl) = facts(doc);
@@ -713,7 +737,12 @@ impl Api {
                 if let Some(svc) = target.strip_prefix("SYS$") {
                     push_new(&mut r.svcs, [format!("${svc}")]);
                 }
-                let Some(callee) = callee.filter(|&c| c != ri) else {
+                // a local routine, or a label in one, is only its own module's
+                let mi = r.module;
+                let Some(callee) = callee
+                    .filter(|&c| c != ri)
+                    .filter(|&c| rs_global[c] || rs_module[c] == mi)
+                else {
                     continue;
                 };
                 let passes = if ["BRB", "BRW", "JMP"].contains(&m[1].to_uppercase().as_str()) {
@@ -1273,7 +1302,7 @@ impl Page<'_> {
                 .collect();
             fields.push(("Symbols", self.table(&rows, Self::link, Some(&ids))));
             if mi != api.ssdef {
-                // chapter 5 indexes those
+                // chapter 6 indexes those
                 for (name, value, note) in &mac.defs {
                     let note = if note.is_empty() {
                         String::new()
@@ -1395,8 +1424,8 @@ impl Page<'_> {
         .map(|r| r.iter().map(|c| c.to_string()).collect())
         .collect();
         let intro = concat!(
-            "<p>The interfaces of vaxpunk's executive and the PAL below it, as code written against them sees ",
-            "them. Every entry is read from the sources by <code>cargo run -p apidoc</code>: the comment above ",
+            "<p>The interfaces of vaxpunk's executive and the PAL below it, and of the libraries its images ",
+            "link, as code written against them sees them. Every entry is read from the sources by <code>cargo run -p apidoc</code>: the comment above ",
             "each routine and macro, the system service vector, and the tables of ",
             r#"<a href="../design/0001-pal-interface.md">DESIGN-0001</a>. How the pieces fit is in "#,
             r#"<a href="../design/0001-pal-interface.md">DESIGN-0001</a> (the PAL) and "#,
@@ -1458,9 +1487,34 @@ impl Page<'_> {
     }
 
     fn ch_routines(&mut self) -> String {
+        let body = self.modules("2", false);
+        let intro = concat!(
+            "<p>Routines and data of <code>EXEC.EXE</code>, by module. Programs link against ",
+            "<code>SYS.STB</code>, so kernel-mode code reaches every global here directly. The system ",
+            r##"services' own routines, <code>EXE$name</code>, are in <a href="#ch-services">chapter 1</a>; "##,
+            "local routines can only be called from their own module.</p>"
+        );
+        self.chapter("2", "ch-routines", "Executive routines", intro, &body)
+    }
+
+    fn ch_images(&mut self) -> String {
+        let body = self.modules("3", true);
+        let intro = concat!(
+            "<p>Routines and data of the libraries in <code>roottask/sysexe/lib</code>, which ",
+            "<code>build.rs</code> links into every image on the system disk, and into DCL: ",
+            "console output, and the command parser and the <code>CLI$</code> routines ",
+            r#"(<a href="../adr/0017-command-tables-from-cld-with-vcdu.md">ADR-0017</a>). "#,
+            "Only their global names are here.</p>"
+        );
+        self.chapter("3", "ch-images", "Routines for images", intro, &body)
+    }
+
+    /// The executive's modules, or the images' libraries, as sections of
+    /// chapter `num`.
+    fn modules(&mut self, num: &str, image: bool) -> String {
         let api = self.api;
         let mut body = String::new();
-        for (i, m) in api.mods.iter().enumerate() {
+        for (i, m) in api.mods.iter().filter(|m| m.image == image).enumerate() {
             let mut rs: Vec<usize> = m
                 .routines
                 .iter()
@@ -1506,7 +1560,7 @@ impl Page<'_> {
                 esc(&m.title)
             );
             body += &self.section(
-                &format!("2.{}", i + 1),
+                &format!("{num}.{}", i + 1),
                 &format!("mod-{}", m.stem),
                 &title,
                 &intro,
@@ -1514,13 +1568,7 @@ impl Page<'_> {
                 Some(&m.stem.to_uppercase()),
             );
         }
-        let intro = concat!(
-            "<p>Routines and data of <code>EXEC.EXE</code>, by module. Programs link against ",
-            "<code>SYS.STB</code>, so kernel-mode code reaches every global here directly. The system ",
-            r##"services' own routines, <code>EXE$name</code>, are in <a href="#ch-services">chapter 1</a>; "##,
-            "local routines can only be called from their own module.</p>"
-        );
-        self.chapter("2", "ch-routines", "Executive routines", intro, &body)
+        body
     }
 
     fn ch_pal(&mut self) -> String {
@@ -1528,7 +1576,7 @@ impl Page<'_> {
         let mut order: Vec<usize> = (0..api.pals.len()).collect();
         order.sort_by_key(|&p| api.pals[p].code);
         let entries: String = order.into_iter().map(|p| self.pal_entry(p)).collect();
-        let mut body = self.section("3.1", "pal-calls", "Calls", "", &entries, None);
+        let mut body = self.section("4.1", "pal-calls", "Calls", "", &entries, None);
         for (i, (title, heading)) in PAL_REFS.iter().enumerate() {
             let mut t = String::new();
             for (cap, rows) in md_tables(&api.paldoc, heading) {
@@ -1548,7 +1596,7 @@ impl Page<'_> {
                 esc(heading.trim_start_matches(['#', ' ']))
             );
             body += &self.section(
-                &format!("3.{}", i + 2),
+                &format!("4.{}", i + 2),
                 &anchor,
                 &esc(title),
                 &intro,
@@ -1561,7 +1609,7 @@ impl Page<'_> {
             "x7, arguments in x0-x5, the result in x0. MACRO-32 code doesn't write that: vmacro compiles ",
             "privileged VAX instructions and <code>CALL_PAL</code> into it.</p>"
         );
-        self.chapter("3", "ch-pal", "PAL calls", intro, &body)
+        self.chapter("4", "ch-pal", "PAL calls", intro, &body)
     }
 
     fn ch_libs(&mut self) -> String {
@@ -1572,7 +1620,7 @@ impl Page<'_> {
             let intro = format!(r#"<p class="meta">{}</p>{notes}"#, src(&lib.path, 1));
             let entries: String = lib.macros.iter().map(|&m| self.macro_entry(m)).collect();
             body += &self.section(
-                &format!("4.{}", i + 1),
+                &format!("5.{}", i + 1),
                 &format!("lib-{}", lib.stem),
                 &esc(&lib.name),
                 &intro,
@@ -1581,7 +1629,7 @@ impl Page<'_> {
             );
         }
         let intro = "<p>Macro libraries, for <code>.LIBRARY</code> with <code>vasm -I</code>.</p>";
-        self.chapter("4", "ch-libs", "Macros and definitions", intro, &body)
+        self.chapter("5", "ch-libs", "Macros and definitions", intro, &body)
     }
 
     fn ch_status(&mut self) -> String {
@@ -1629,7 +1677,7 @@ impl Page<'_> {
             "are the severity: odd is success.</p>"
         );
         let t = self.table(&rows, Self::link, Some(&ids));
-        self.chapter("5", "ch-status", "Condition values", intro, &t)
+        self.chapter("6", "ch-status", "Condition values", intro, &t)
     }
 
     fn ch_index(&mut self) -> String {
@@ -1710,6 +1758,7 @@ fn main() {
     let mut chapters = page.ch_overview();
     chapters += &page.ch_services();
     chapters += &page.ch_routines();
+    chapters += &page.ch_images();
     chapters += &page.ch_pal();
     chapters += &page.ch_libs();
     chapters += &page.ch_status();

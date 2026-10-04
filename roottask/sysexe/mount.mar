@@ -1,32 +1,31 @@
         .TITLE  MOUNT   Mounts a Files-11 volume
         .IDENT  /V0.1/
 ;
-; DCL's MOUNT device [label] runs this, with them as its command line:
-; $MOUNT mounts the volume on the device if its label is that one, or
-; whatever it is without one, as /OVERRIDE=IDENTIFICATION does on VMS,
-; and the executive reports it on the console. Returns $MOUNT's status.
+; DCL's MOUNT device [label] runs this: $MOUNT mounts the volume on the
+; device if its label is that one, or whatever it is without one, as
+; /OVERRIDE=IDENTIFICATION does on VMS, and the executive reports it on
+; the console. Returns $MOUNT's status.
 ; ponytail: no qualifiers.
 ;
         .LIBRARY "starlet.mlb"
+        .LIBRARY "sysexe.mlb"
         $MNTDEF
 
-        .EXTERNAL GET_PARAM
-
         .PSECT  DATA, NOEXE, WRT, LONG
-ITEMS:  .WORD   0, MNT$_DEVNAM          ; GET_PARAM fills each length and address
-        .LONG   0, 0
-        .WORD   0, MNT$_VOLNAM
-        .LONG   0, 0
+ITEMS:  .WORD   64, MNT$_DEVNAM         ; each a descriptor too, which GETVALUE fills
+        .ADDRESS DEVBUF
         .LONG   0
+        .WORD   64, MNT$_VOLNAM
+        .ADDRESS LABBUF
+        .LONG   0
+        .LONG   0
+DEVBUF: .BLKB   64
+LABBUF: .BLKB   64
 
         .PSECT  CODE, EXE, LONG
         .ENTRY  START, ^M<>
-        PUSHAB  ITEMS
-        PUSHL   #1
-        CALLS   #2, G^GET_PARAM
-        PUSHAB  ITEMS+12
-        PUSHL   #2
-        CALLS   #2, G^GET_PARAM
+        GETVALUE "DEVICE", ITEMS, ITEMS
+        GETVALUE "LABEL", ITEMS+12, ITEMS+12
         BLBS    R0, 10$
         CLRL    ITEMS+12                ; no label: the list ends before it
 10$:    $MOUNT_S ITMLST=ITEMS

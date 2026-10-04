@@ -1,0 +1,11 @@
+[package]
+name = "vcdu"
+description = "Compiles Command Definition Language into command tables, like SET COMMAND/OBJECT"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+vasm = { path = "../vasm" }
+vmacro = { path = "../vmacro" }
+vms-obj = { path = "../vms-obj" }

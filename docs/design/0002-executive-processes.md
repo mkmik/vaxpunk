@@ -104,7 +104,7 @@ P1 are each process's own, S0 every process's:
 | `0x60000000` | P1: the process's `$CRETVA` pages |
 | `0x7FF00000` | `VA$C_CLI`: its command interpreter, if it has one, `DCL.EXE` |
 | `0x7FFE4000` | its executive stack, 16 KB, executive write; above it its supervisor stack, supervisor write, and its user stack, each 16 KB, to `0x7FFF0000` |
-| `0x7FFEFF00` | `VA$C_FOREIGN`, at the user stack's top: the image's command line, `.ASCIC`, which `$IMGACT` puts there |
+| `0x7FFEF800` | `VA$C_CLI_RESULT`, at the user stack's top: the parse of the image's command, up to 2 KB, which `$IMGACT` puts there (*The command interpreter*) |
 
 - **PFNs.** `MMG$INIT` puts the PFNs from `RPB$L_FREEPFN` up on a free list,
   a stack. `MMG$ALLOCPFN` and `MMG$DEALLOCPFN` take and give back one.
@@ -210,15 +210,17 @@ there is. The image activator puts its transfer address in
   process starts, and after that each image's. If it returns, the process
   deletes itself with `$DELPRC`.
 - **`$IMGACT image, cmdlin`** runs an image in the current process. It
-  copies the name into the PCB, and the command line, if there is one, up
-  to 255 characters, to `VA$C_FOREIGN`, where the image finds it.
+  copies the name into the PCB, and `cmdlin`, the result block of the
+  command's parse, if there is one, up to `VA$C_CLI_RESMAX` bytes, to
+  `VA$C_CLI_RESULT`. There the image's `CLI$PRESENT` and `CLI$GET_VALUE`
+  find it (*Commands*).
   It remembers the channels and files the process has in `PCB$L_CLICHANS`
   and `PCB$L_CLIFILES`, runs the
   old image down, activates the new one, which must be in P0, and calls it
   in user mode at `EXE$USRENTRY`, on an empty user stack below the command
   line. It returns only if the activation fails, with its status.
-  ponytail: a fixed address, standing in for `LIB$GET_FOREIGN`, which asks
-  the command interpreter.
+  ponytail: a copy at a fixed address. VMS's `CLI$` routines read the
+  parse in DCL's own pages, which user mode may read.
 - **`$EXIT`**, the image's or an exception's, in a process with a command
   interpreter: `EXE$IMGRUNDOWN` gives back the image's timer queue
   entries, P0 pages and common event flag clusters, the channels not in
@@ -245,43 +247,46 @@ process, `SYSTEM`, with `DCL.EXE`, whose first commands, before it
 prompts, are `@SYS$MANAGER:SYSTARTUP_VMS`, the site's startup, which
 mounts `DKB0:`, and `@SYS$MANAGER:SYLOGIN`. ponytail: VMS runs
 `SYSTARTUP_VMS.COM` in a `STARTUP` process of its own, before anyone
-logs in.
+logs in. Its verbs are those of `DCL$TABLES` (*Commands*); a verb with
+an image runs it with `$IMGACT` and the parse:
 
 | Command | Does |
 | --- | --- |
-| `RUN image` | `$IMGACT`, with `.EXE` if the name has no type |
-| `DIRECTORY [spec]` | `$IMGACT` of `DIRECTORY.EXE`, with the spec, in capitals, as its command line |
-| `TYPE spec` | `$IMGACT` of `TYPE.EXE`, the same way |
-| `DEFINE name equivalence` | `$CRELNM` in `LNM$PROCESS`, and `%DCL-I-SUPERSEDE` if it replaced one |
-| `DEASSIGN name` | `$DELLNM` from `LNM$PROCESS` |
-| `SHOW LOGICAL name` | `$TRNLNM` in `LNM$FILE_DEV`: `"name" = "equivalence" (table)`, or `%SHOW-S-NOTRAN` |
-| `SHOW LOGICAL [*]` | lists every name, the process's table's and then the system's, in the order they were made, under each table's name; it copies them one at a time with `$CMKRNL`. ponytail: VMS's DCL asks the executive's logical name routines, and sorts them |
+| `RUN image` | `$IMGACT`, with `.EXE` if the name has no type, and no parse |
+| `DIRECTORY [spec]` | `DIRECTORY.EXE` |
+| `TYPE spec` | `TYPE.EXE` |
+| `DEFINE name equivalence` | `$CRELNM` in `LNM$PROCESS`, and `%DCL-I-SUPERSEDE` if it replaced one, unless `/NOLOG`; `/SYSTEM`, `/PROCESS` or `/TABLE=table` names the table, one of those `lnm.mar` knows, else `SS$_NOLOGTAB` |
+| `DEASSIGN name` | `$DELLNM` from `LNM$PROCESS`, or the table the same qualifiers name |
+| `SHOW LOGICAL name` | `$TRNLNM` in `LNM$FILE_DEV`, or the table the same qualifiers name: `"name" = "equivalence" (table)`, or `%SHOW-S-NOTRAN` |
+| `SHOW LOGICAL [*]` | lists every name, the process's table's and then the system's, or only that table's, in the order they were made, under each table's name; it copies them one at a time with `$CMKRNL`. ponytail: VMS's DCL asks the executive's logical name routines, and sorts them |
 | `SET DEFAULT [dev:][dir]` | `$PARSE`s it, which must name no file, `$SETDDIR` with the directory it expands to, and `$CRELNM` of `SYS$DISK` in `LNM$PROCESS` with its device; one that doesn't exist is still set, after `%DCL-I-INVDEF` |
 | `SHOW DEFAULT` | the device and directory `$PARSE` expands an empty specification to |
-| `EDIT spec` | `$IMGACT` of `EDIT.EXE`, the same way |
-| `COPY from to` | `$IMGACT` of `COPY.EXE`, with the two, a blank between |
-| `DELETE spec` | `$IMGACT` of `DELETE.EXE` |
-| `INITIALIZE device label` | `$IMGACT` of `INIT.EXE` |
-| `MOUNT device [label]` | `$IMGACT` of `MOUNT.EXE` |
-| `DISMOUNT device` | `$IMGACT` of `DISMOUNT.EXE` |
-| `CREATE/DIRECTORY spec` | `$IMGACT` of `CREATE.EXE`; `CREATE` alone isn't a verb |
+| `EDIT spec` | `EDIT.EXE` |
+| `COPY[/LOG] from to` | `COPY.EXE` |
+| `DELETE[/LOG] spec` | `DELETE.EXE` |
+| `INITIALIZE device label` | `INIT.EXE` |
+| `MOUNT device [label]` | `MOUNT.EXE` |
+| `DISMOUNT device` | `DISMOUNT.EXE` |
+| `CREATE/DIRECTORY spec` | `CREATE.EXE`; without `/DIRECTORY`, `%CREATE-E-NOTDIR` |
+| `SHOW PROCESS`, `SHOW SYSTEM` | `SHOW.EXE`, whose `OPTION` says which |
+| `SET INTERFACE address mask gateway`, `SET CONFIGURATION INTERFACE address mask gateway`, `SHOW INTERFACE` | `TCPIP.EXE`, which takes `OPTION`, `ADDRESS`, `MASK` and `GATEWAY` from the parse |
+| `SET HOST address` | `RTPAD.EXE`, whose `NODE` is the address |
 | `CONTINUE` | returns from the CTRL/Y AST, which goes back to the image |
-| `HELP` | lists the commands |
+| `HELP [verb]` | `HELP.EXE`, which describes the verbs from `DCL$TABLES` (*The system disk's programs*) |
 | `LOGOUT` | `$DELPRC` |
 | `@file [p1 ... p8]` | reads `file.COM` with RMS and takes its `$` lines as commands |
 | `name = expression`, `name := string` | sets a symbol, `==` and `:==` a global one |
 | `IF`, `GOTO`, `EXIT`, `WRITE SYS$OUTPUT` | as in VMS's procedures |
-| `SHOW SYMBOL name`, `DELETE/SYMBOL name` | shows a symbol, deletes a local one |
+| `SHOW SYMBOL name`, `DELETE/SYMBOL name` | shows a symbol, the nearest, deletes a local one; `/LOCAL` or `/GLOBAL` says which; `/ALL` instead of a name shows or deletes all of those |
 
-Verbs may be abbreviated, the first that matches winning. A command
-with fewer parameters than it needs is `%DCL-W-INSFPRM`. DCL reads a line
+DCL reads a line
 from `SYS$INPUT` with `IO$_READPROMPT` and the prompt `$ `, and reports a
 failure status with its message, `%RMS-E-DNF, directory not found`, from
 `$GETMSG`, whose table in the executive has VMS's texts of the file
 system's, RMS's and the volume services' statuses, or as VMS does one it
 has no text for, `%NONAME-F-NOMSG, Message number 0000000C`, after
 `%DCL-W-ACTIMAGE` if `$IMGACT` returned it, unless the status has
-`STS$M_INHIB_MSG`, bit 28, set: the image reported it.
+`STS$M_INHIB_MSG`, bit 28, set: the image, or the parse, reported it.
 
 DCL enables its CTRL/Y AST, `CTRLY`, when it starts, before each image it
 runs and when it continues one, and keeps whether an image runs. With
@@ -292,8 +297,89 @@ down. With none, the AST enables itself again, and DCL ends its
 procedures at the next command; the read CTRL/Y ended gives it an empty
 line. ponytail: one message table in the executive rather than message
 files; no
-qualifiers, and no `STOP`: another command that runs an image ends the one CTRL/Y
+`STOP`: another command that runs an image ends the one CTRL/Y
 stopped.
+
+### Commands
+
+[ADR-0017](../adr/0017-command-tables-from-cld-with-vcdu.md): commands are
+defined in CLD, which vcdu compiles into command tables at build time
+(`vtools/docs/command-tables.md`). `CLI`, `roottask/sysexe/lib/cli.mar`,
+parses commands with them, and is linked into DCL and into every image:
+
+- **`CLI$DCL_PARSE line, table [,prompt]`** parses a command into the
+  result block, `CLI$$RESULT`, of the image it runs in. It works as
+  VMS's DCL does:
+  - A verb, or a qualifier, matches on its first 4 characters; one of
+    fewer must be the only one it abbreviates. A keyword matches if it
+    abbreviates only one.
+  - Parameters are separated by blanks. Qualifiers, `/name`,
+    `/NOname`, `/name=value` or `/name=(value,...)`, may come after the
+    verb or any parameter.
+  - A `LIST` parameter's values are separated by commas, and a
+    concatenating one's by plus signs.
+  - A word is taken in capitals. Text in quotes is kept as it is, `""`
+    a quote.
+  - A keyword or qualifier with `SYNTAX=` makes the parse start again
+    with that syntax, unless the parse switched to it once already: a
+    `SYNTAX=` back to an earlier syntax stays in the later one, so
+    `DELETE/SYMBOL/ALL` stays `DELETE_SYMBOL_ALL`. ponytail: again from
+    the verb, so a qualifier the syntax doesn't have is an error, not
+    ignored as VMS's `IGNQUAL`.
+  - At the end, a required parameter missing is prompted for, `_From: `,
+    if there is a prompt routine. The answer goes on the line, and the
+    parse goes on with it. Then the defaults are set, and `DISALLOW`
+    is checked.
+
+  An error is written as `%CLI-W-IVQUAL, unrecognized qualifier - check
+  validity, spelling, and placement`, then ` \FOO\`, and returned with
+  `STS$M_INHIB_MSG`; DCL's facility, for its own parses, is `DCL`.
+  ponytail: the parse is limited to 128 entities and 128 values of up to
+  255 characters, 1 KB of value text, a 512-byte line and a 2 KB result
+  block, each `CLI$_BUFOVF` past that.
+- **The result block** holds no addresses. It is a word, its length (0
+  for no command), a spare word, then an entry for `$VERB`, `$LINE`
+  and each parameter, qualifier and keyword of the command, given or
+  not. An entry is:
+  - a word, its length;
+  - a byte, its state: absent, present, negated or defaulted;
+  - a byte, then a word, the cursor of `CLI$GET_VALUE`;
+  - its path, `.ASCIC`: its label, after its parent's and a dot for a
+    keyword (`MODE.SLOW`);
+  - its values, each `.ASCIC` and a byte, the comma, plus or 0 that
+    followed it.
+
+  A defaulted parameter, and an absent or defaulted entity with a
+  default value, have that value.
+- **`CLI$PRESENT name`** answers from the block: `CLI$_PRESENT`,
+  `CLI$_DEFAULTED`, `CLI$_NEGATED` or `CLI$_ABSENT`.
+- **`CLI$GET_VALUE name, retdesc [,retlen]`** returns the next value
+  each call, `CLI$_COMMA`, `CLI$_CONCAT` or `SS$_NORMAL` for the last,
+  then `CLI$_ABSENT`, and starts again.
+- Both read the block of the last parse in the image or, if there was
+  none, the one at `VA$C_CLI_RESULT`; with no command, every name is
+  absent. A name the command doesn't have is `%CLI-F-SYNTAX, error
+  parsing 'NAME'`, `-CLI-E-ENTNF`, and the image exits with
+  `CLI$_ENTNF`.
+
+DCL parses each command, after symbol substitution, labels and
+assignments, with `DCL$TABLES`. It passes a prompt routine at the
+console, which reads with `IO$_READPROMPT`, and none in procedures.
+Then:
+
+- A verb or syntax with an `IMAGE` (`CLI$$IMAGE`) runs it, with
+  `CLI$$RESULT` as `$IMGACT`'s `cmdlin`.
+- One with a `CLIROUTINE` (`CLI$$ROUTINE`) is DCL's own, which DCL
+  finds by name.
+  - Each takes its values with `CLI$GET_VALUE`. `IF`, `EXIT` and
+    `WRITE`'s expressions are a `$REST_OF_LINE`, which DCL's expression
+    code reads.
+- `DELETE/SYMBOL` is the `DELETE_SYMBOL` syntax of `DELETE`, and
+  `DELETE/SYMBOL/ALL` its `DELETE_SYMBOL_ALL`, which has no
+  parameters. `SHOW DEVICES`, `SHOW LOGICAL` and `SHOW SYMBOL` are
+  syntaxes too, each with its parameter and its qualifiers.
+  `SHOW PROCESS` and `SHOW SYSTEM` are `SHOW_IMAGE`, a syntax with
+  `IMAGE SHOW`.
 
 ## Scheduling
 
@@ -697,7 +783,8 @@ bits (`$DVIDEF`, `$DVSDEF`, `$DCDEF`, `$DEVDEF` in `starlet.mlb`):
   fills the IOSB, done at once; `$GETDVIW` is `$GETDVI`.
 
 DCL's `SHOW DEVICES` scans the disks, then the terminals, and asks
-`$GETDVIW` about each. ponytail: a VCB, or none for the console, stands
+`$GETDVIW` about each; with `/MOUNTED` it lists only the devices with a
+volume mounted. ponytail: a VCB, or none for the console, stands
 for the device rather than its UCB, which has no error, operation or
 reference counts, device type or `MAXBLOCK` yet; no ASTs.
 
@@ -867,24 +954,26 @@ TYPE, EDIT, COPY, DELETE, INIT, MOUNT, DISMOUNT and CREATE, and those which show
 work, which `cargo test -p boot` runs from DCL's prompt (`RUN STARTUP`,
 `RUN SNOOP`, a bad verb, `DIR [SYSEXE]P%NG`, `TYPE WELCOME.TXT` and an `EDIT WELCOME.TXT`
 session, then
-`INIT` and `MOUNT MDA0: RAM`, a `COPY` to it, an `EDIT` in keypad mode
-that writes a second version, `DIR`, `DELETE`s and `DIR` again) and to the end. `roottask/sysmgr/` holds the text files in
+`INIT` and `MOUNT MDA0: RAM`, a `COPY/LOG` to it, which prompts for its
+parameters, an `EDIT` in keypad mode that writes a second version, `DIR`,
+`DELETE`s and `DIR` again, `RUN CLITEST`) and to the end. `roottask/sysmgr/` holds the text files in
 `DKA0:[SYSMGR]`, among them `SYSTARTUP_VMS.COM`, which mounts `DKB0:` at
 boot, and `SYLOGIN.COM`. They run in user mode, DCL in supervisor mode, and write
 on the console with `PRINT` and `PRINTHEX` from `sysexe.mlb`, which call
 `PUT_LINE` in `sysexe/lib/print.mar`: a line at a time on `OPA0:`, with
-`$QIOW`. `GET_PARAM n, desc`, in `sysexe/lib/param.mar`, points a
-descriptor at the nth parameter of the command line. `build.rs` links
-`sysexe/lib/` into each.
+`$QIOW`. They take their parameters and qualifiers with `GETVALUE` and
+`PRESENT`, also in `sysexe.mlb`, which call `CLI$GET_VALUE` and
+`CLI$PRESENT` in `sysexe/lib/cli.mar` (*Commands*). `build.rs` links
+`sysexe/lib/` into each, and `sysexe/NAME.cld`'s table into `NAME.EXE`.
 
 | Program | Does |
 | --- | --- |
 | `DCL` | the command interpreter (*The command interpreter*) |
-| `DIRECTORY` | `$PARSE`s its command line, with `*.*;*` for what it leaves out, and lists the files `$SEARCH` finds: the directory, the names four to a line, how many |
-| `TYPE` | `$OPEN`s the file its command line names and writes each record `$GET` reads on the console, a line each |
-| `EDIT` | EDT: `$GET`s the file its command line names into a buffer, a line a record, and at its `*` prompt, read with `IO$_READPROMPT`, types the lines a range names (numbers, `.`, `BEGIN`, `END`, `WHOLE`, `REST`, `"text"` searches), `INSERT`s lines typed up to a CTRL/Z before it, `DELETE`s or `REPLACE`s them; `CHANGE` goes to keypad mode, which paints a VT100 screen, reads a key at a time with `IO$M_NOECHO` and `IO$M_NOFILTR` and changes the buffer, until CTRL/Z; `EXIT` `$CREATE`s the next version and `$PUT`s the buffer to it, `QUIT` doesn't |
-| `COPY` | `$OPEN`s its first parameter, `$CREATE`s its second, with the first's attributes and its name and type for what the second leaves out, and copies each record with `$GET` and `$PUT` |
-| `DELETE` | `$PARSE`s its parameter, which must give a version or `;*` (`%DELETE-E-DELVER`), and `$ERASE`s each file `$SEARCH` finds |
+| `DIRECTORY` | `$PARSE`s its parameter, with `*.*;*` for what it leaves out, and lists the files `$SEARCH` finds: the directory, the names four to a line, how many |
+| `TYPE` | `$OPEN`s the file its parameter names and writes each record `$GET` reads on the console, a line each |
+| `EDIT` | EDT: `$GET`s the file its parameter names into a buffer, a line a record, and at its `*` prompt, read with `IO$_READPROMPT`, types the lines a range names (numbers, `.`, `BEGIN`, `END`, `WHOLE`, `REST`, `"text"` searches), `INSERT`s lines typed up to a CTRL/Z before it, `DELETE`s or `REPLACE`s them; `CHANGE` goes to keypad mode, which paints a VT100 screen, reads a key at a time with `IO$M_NOECHO` and `IO$M_NOFILTR` and changes the buffer, until CTRL/Z; `EXIT` `$CREATE`s the next version and `$PUT`s the buffer to it, `QUIT` doesn't |
+| `COPY` | `$OPEN`s its first parameter, `$CREATE`s its second, with the first's attributes and its name and type for what the second leaves out, and copies each record with `$GET` and `$PUT`; with `/LOG`, `%COPY-S-COPIED, from copied to to (n records)` |
+| `DELETE` | `$PARSE`s its parameter, which must give a version or `;*` (`%DELETE-E-DELVER`), and `$ERASE`s each file `$SEARCH` finds; with `/LOG`, `%DELETE-I-FILDEL, name deleted` for each |
 | `INIT` | `$INIT_VOL` with its two parameters, the device and the label |
 | `MOUNT` | `$MOUNT` with its parameters, the device and the label, if there is one |
 | `DISMOUNT` | `$DISMOU` with its parameter, the device |
@@ -899,6 +988,8 @@ descriptor at the nth parameter of the command line. `build.rs` links
 | `NUDGE` | sets `HOG`'s flag |
 | `TIMETEST` | checks that `$GETTIM` reads a time after 2026; waits for `$SETIMR`s, a delta and a time, 50 ms on, and that a cancelled one never sets its flag; hibernates through three repeating `$SCHDWK` wakeups, cancels them, and checks that the next wakeup is a new one's |
 | `CTRLC` | enables a CTRL/C AST, starts a console read and waits for it; the AST, once CTRL/C is typed, `$CANCEL`s the read, which ends with `SS$_ABORT` |
+| `HELP` | describes DCL's verbs, from `DCL$TABLES`, which `build.rs` links into it as into DCL: with no topic, each verb and its parameters, then what DCL does without a verb; with one, each verb whose name starts with it, its parameters, the keywords a parameter may be and the qualifiers, then each syntax a qualifier or keyword leads to that has parameters or qualifiers of its own. ponytail: no text, which VMS's HELP reads from a help library |
+| `CLITEST` | parses commands with its own tables, `CLITEST.CLD`, and `CLI$DCL_PARSE`, and checks what `CLI$PRESENT` and `CLI$GET_VALUE` say of them: lists, concatenation, quoted strings, default values, negation, keywords and their values, a syntax switched to, abbreviations, and each error |
 | `ASTTEST` | checks that `$DCLAST`'s AST is delivered as the service returns, or when `$SETAST` enables ASTs again; that one declared in an AST routine waits until it returns; that a `$SETIMR` AST's `$WAKE` ends a `$HIBER`; and that one delivered while it computes in user mode leaves every register as it was |
 
 When every process but the swapper waits, the CPU idles in `WTINT`,

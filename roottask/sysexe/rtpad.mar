@@ -1,8 +1,8 @@
         .TITLE  RTPAD   SET HOST: a remote login
         .IDENT  /V0.1/
 ;
-; DCL's SET HOST address runs this, with the address as its command line,
-; as VMS's DCL ran RTPAD.EXE. It connects to TCP port 23 there, where
+; DCL's SET HOST address runs this, NODE the address, as VMS's DCL ran
+; RTPAD.EXE. It connects to TCP port 23 there, where
 ; another vaxpunk's TELNETD gives it a DCL of its own, and passes lines
 ; both ways: what comes on the connection it writes on the terminal, and
 ; each line read on the terminal, edited there, it sends with a CR LF.
@@ -10,10 +10,8 @@
 ; ponytail: line at a time, the local terminal's editing and echo, no
 ; Telnet option negotiation; good for DCL, not for EDIT's keypad mode.
 ;
-        .LIBRARY "lib.mlb"
         .LIBRARY "starlet.mlb"
         .LIBRARY "sysexe.mlb"
-        $VADEF
         $SSDEF
         $IODEF
 
@@ -30,6 +28,10 @@ SOCKCHAR:                               ; a TCP socket: protocol, type, family
 NCHAN:  .LONG   0                       ; the connection's channel
 TCHAN:  .LONG   0                       ; the terminal's
 ADDR:   .LONG   0                       ; the other end's address
+NODE:   .LONG   64                      ; NODE, the parameter: its address, in text
+        .ADDRESS NODEBUF
+NODEBUF:
+        .BLKB   64
 NIOSB:  .BLKQ   1                       ; the connection's read's
 TIOSB:  .BLKQ   1                       ; the terminal's
 IOSB:   .BLKQ   1                       ; a write's
@@ -38,9 +40,10 @@ TBUF:   .BLKB   BUFSIZE+2               ; a line typed, and its CR LF
 
         .PSECT  CODE, EXE, LONG
         .ENTRY  START, ^M<R2>
+        GETVALUE "NODE", NODE, NODE
         PUSHAL  ADDR
-        PUSHAB  @#VA$C_FOREIGN+1
-        MOVZBL  @#VA$C_FOREIGN, -(SP)
+        PUSHAB  NODEBUF
+        MOVZWL  NODE, -(SP)
         CALLS   #3, G^INET_ADDR
         BLBC    R0, 90$
         $ASSIGN_S DEVNAM=BGA0, CHAN=NCHAN

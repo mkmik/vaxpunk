@@ -2,8 +2,10 @@
 //! with the TCP/IP component's tcpip.elf in it,
 //! and the system disk, sysdisk.img, a Files-11 ODS-2 volume: in [SYSEXE],
 //! EXEC.EXE, linked from exec/*.mar, and an image for each sysexe/*.mar,
-//! linked with sysexe/lib/*.mar and against SYS.STB, the executive's
-//! symbols; in [SYSMGR], the files in sysmgr/, as text.
+//! linked with sysexe/lib/*.mar, its command table if there is a
+//! sysexe/NAME.cld, and against SYS.STB, the executive's symbols; DCL and
+//! HELP with DCL$TABLES, from cld/*.cld; in [SYSMGR], the files in sysmgr/,
+//! as text.
 
 use std::env;
 use std::fs;
@@ -16,7 +18,7 @@ const LDFLAGS: &str = "-nostdlib -static -no-pie -T linker.ld -Wl,--build-id=non
     -Wl,-z,max-page-size=4096";
 
 fn main() {
-    for path in ["src", "exec", "sysexe", "sysmgr", "linker.ld", LIB] {
+    for path in ["src", "exec", "sysexe", "sysmgr", "cld", "linker.ld", LIB] {
         println!("cargo::rerun-if-changed={path}");
     }
     let out = PathBuf::from(env::var("OUT_DIR").unwrap());
@@ -51,6 +53,13 @@ fn main() {
     for source in sources("sysexe", &["mar"]) {
         let name = source.file_stem().unwrap().to_str().unwrap().to_uppercase();
         let mut modules = vec![compile(&source)];
+        let cld = source.with_extension("cld");
+        if cld.exists() {
+            modules.push(tables(&name, &[cld]));
+        }
+        if name == "DCL" || name == "HELP" {
+            modules.push(tables("DCL$TABLES", &sources("cld", &["cld"])));
+        }
         modules.extend(libs.iter().cloned());
         modules.push(stb.clone());
         let base = if name == "DCL" {
@@ -90,6 +99,24 @@ fn compile(source: impl AsRef<Path>) -> (String, Vec<u8>) {
     }
     let file = source.display().to_string();
     (file, vms_obj::obj::write(&object.records))
+}
+
+/// Compiles `.CLD` files with vcdu into one command table, an object
+/// module whose global symbol is `name`, unless they say MODULE.
+fn tables(name: &str, clds: &[PathBuf]) -> (String, Vec<u8>) {
+    let texts: Vec<_> = clds
+        .iter()
+        .map(|p| (p.display().to_string(), fs::read_to_string(p).unwrap()))
+        .collect();
+    let source = vcdu::compile(name, &texts)
+        .unwrap_or_else(|msgs| panic!("vcdu failed:\n{}", msgs.join("\n")));
+    let opts = vasm::Options {
+        name: name.into(),
+        ..Default::default()
+    };
+    let object = vmacro::compile(&source, &opts)
+        .unwrap_or_else(|_| panic!("{name}'s tables don't compile:\n{source}"));
+    (format!("{name}.CLD"), vms_obj::obj::write(&object.records))
 }
 
 /// Links object modules into an image at `base`.

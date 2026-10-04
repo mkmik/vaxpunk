@@ -1,21 +1,23 @@
         .TITLE  COPY    Copies a file
         .IDENT  /V0.1/
 ;
-; DCL's COPY from to runs this, with the two as its command line. Opens
+; DCL's COPY from to runs this. Opens
 ; from with RMS, creates to with its organization, record attributes and
 ; size, what to leaves out of its name taken from from's name and type,
 ; and copies its records, a $GET and a $PUT each. The new file is the
 ; next version unless to gives one. Returns RMS's status if it can't.
-; ponytail: one file, no wildcards or qualifiers; records up to RECSIZE.
+; With /LOG, says what it copied where, as VMS's COPY does.
+; ponytail: one file, no wildcards; records up to RECSIZE.
 ;
         .LIBRARY "starlet.mlb"
+        .LIBRARY "sysexe.mlb"
         $SSDEF
         $RMSDEF
         $FABDEF
         $RABDEF
         $NAMDEF
 
-        .EXTERNAL GET_PARAM
+        .EXTERNAL PUT_LINE
 
 RECSIZE = 8192
 
@@ -23,26 +25,34 @@ RECSIZE = 8192
 INFAB:  $FAB    NAM=INNAM
 INNAM:  $NAM    RSA=INRES, RSS=255
 INRAB:  $RAB    FAB=INFAB, UBF=REC, USZ=RECSIZE
-OUTFAB: $FAB
+OUTFAB: $FAB    NAM=OUTNAM
+OUTNAM: $NAM    RSA=OUTRES, RSS=255
 OUTRAB: $RAB    FAB=OUTFAB
-DESC:   .LONG   0, 0                    ; a parameter's descriptor
+DESC:   .LONG   255                     ; a parameter's descriptor
+        .ADDRESS SPEC
+SPEC:   .BLKB   255
+RECORDS:                                ; how many it copied
+        .LONG   0
+MSG:    .BLKB   256                     ; /LOG's message, .ASCIC
+COPIED: .ASCIC  "%COPY-S-COPIED, "
+TO:     .ASCIC  " copied to "
+OPEN:   .ASCIC  " ("
+CLOSE:  .ASCIC  " records)"
 INRES:  .BLKB   255
+OUTRES: .BLKB   255
 REC:    .BLKB   RECSIZE
 
         .PSECT  CODE, EXE, LONG
-        .ENTRY  START, ^M<R2>
-        PUSHAB  DESC
-        PUSHL   #1
-        CALLS   #2, G^GET_PARAM
-        MOVL    DESC+4, INFAB+FAB$L_FNA
+        .ENTRY  START, ^M<R2, R3, R4, R5>
+        GETVALUE "FROM", DESC, DESC
+        MOVAB   SPEC, INFAB+FAB$L_FNA
         MOVB    DESC, INFAB+FAB$B_FNS
         $OPEN   FAB=INFAB
         BLBS    R0, 10$
         RET
-10$:    PUSHAB  DESC
-        PUSHL   #2
-        CALLS   #2, G^GET_PARAM
-        MOVL    DESC+4, OUTFAB+FAB$L_FNA
+10$:    MOVL    #255, DESC
+        GETVALUE "TO", DESC, DESC
+        MOVAB   SPEC, OUTFAB+FAB$L_FNA
         MOVB    DESC, OUTFAB+FAB$B_FNS
         MOVL    INNAM+NAM$L_NAME, OUTFAB+FAB$L_DNA      ; from's NAME.TYPE
         ADDB3   INNAM+NAM$B_NAME, INNAM+NAM$B_TYPE, OUTFAB+FAB$B_DNS
@@ -64,10 +74,12 @@ REC:    .BLKB   RECSIZE
         MOVL    INRAB+RAB$L_RBF, OUTRAB+RAB$L_RBF
         MOVW    INRAB+RAB$W_RSZ, OUTRAB+RAB$W_RSZ
         $PUT    RAB=OUTRAB
-        BLBS    R0, 20$
-        BRB     70$
+        BLBC    R0, 70$
+        INCL    RECORDS
+        BRB     20$
 30$:    CMPL    R0, #RMS$_EOF
         BNEQ    70$
+        BSBB    LOG
         MOVL    #SS$_NORMAL, R0
 70$:    MOVL    R0, R2
         $CLOSE  FAB=OUTFAB
@@ -76,5 +88,61 @@ REC:    .BLKB   RECSIZE
 80$:    $CLOSE  FAB=INFAB
         MOVL    R2, R0
         RET
+
+; LOG: with /LOG, writes %COPY-S-COPIED, from copied to to (n records).
+; Uses R0-R5.
+LOG:    PRESENT "LOG"
+        BLBC    R0, 90$
+        MOVAB   COPIED, R1
+        BSBB    ADDTEXT
+        MOVAB   INNAM, R1
+        BSBB    ADDNAM
+        MOVAB   TO, R1
+        BSBB    ADDTEXT
+        MOVAB   OUTNAM, R1
+        BSBB    ADDNAM
+        MOVAB   OPEN, R1
+        BSBB    ADDTEXT
+        MOVL    RECORDS, R3             ; in decimal: digits on the stack
+        CLRL    R4
+10$:    DIVL3   #10, R3, R5
+        MULL3   #10, R5, R0
+        SUBL3   R0, R3, R0
+        ADDL2   #^A/0/, R0
+        PUSHL   R0
+        INCL    R4
+        MOVL    R5, R3
+        BNEQ    10$
+20$:    MOVL    (SP)+, R0
+        MOVB    R0, SPEC
+        MOVAB   SPEC, R1
+        MOVL    #1, R2
+        BSBB    ADD
+        SOBGTR  R4, 20$
+        MOVAB   CLOSE, R1
+        BSBB    ADDTEXT
+        PUSHAB  MSG
+        CALLS   #1, G^PUT_LINE
+90$:    RSB
+
+; ADDNAM: R1 = a NAM block. Appends its resultant name to MSG. ADD:
+; appends the R2 characters at R1, as many as fit. ADDTEXT: the .ASCIC
+; string at R1. Use R0-R2.
+ADDNAM: MOVZBL  NAM$B_RSL(R1), R2
+        MOVL    NAM$L_RSA(R1), R1
+        BRB     ADD
+ADDTEXT:
+        MOVZBL  (R1)+, R2
+ADD:    MOVZBL  MSG, R0
+10$:    TSTL    R2
+        BEQL    20$
+        CMPL    R0, #255
+        BGEQU   20$
+        INCL    R0
+        MOVB    (R1)+, MSG[R0]
+        DECL    R2
+        BRB     10$
+20$:    MOVB    R0, MSG
+        RSB
 
         .END    START

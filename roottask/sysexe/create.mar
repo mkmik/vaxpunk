@@ -1,24 +1,33 @@
         .TITLE  CREATE  Makes directories
         .IDENT  /V0.1/
 ;
-; DCL's CREATE/DIRECTORY spec runs this, with spec as its command line:
-; $CREATE_DIR makes the directory, [dev:][dir.dir...], and those above it
-; that aren't there. Returns its status: SS$_CREATED, or SS$_NORMAL if
-; the directory was there already.
-; ponytail: one directory, no qualifiers; VMS's CREATE also makes files.
+; DCL's CREATE/DIRECTORY spec runs this: $CREATE_DIR makes the
+; directory, [dev:][dir.dir...], and those above it that aren't there.
+; Returns its status: SS$_CREATED, or SS$_NORMAL if the directory was
+; there already.
+; ponytail: one directory; CREATE without /DIRECTORY, which makes a file
+; on VMS, is %CREATE-E-NOTDIR and SS$_BADPARAM.
 ;
         .LIBRARY "starlet.mlb"
+        .LIBRARY "sysexe.mlb"
+        $SSDEF
 
-        .EXTERNAL GET_PARAM
+INHIB = ^X10000000                      ; STS$M_INHIB_MSG: reported already
 
         .PSECT  DATA, NOEXE, WRT, LONG
-SPEC:   .LONG   0, 0                    ; a descriptor of the parameter
+SPEC:   .LONG   255                     ; FILE, the parameter
+        .ADDRESS SPECBUF
+SPECBUF:
+        .BLKB   255
 
         .PSECT  CODE, EXE, LONG
         .ENTRY  START, ^M<>
-        PUSHAB  SPEC
-        PUSHL   #1
-        CALLS   #2, G^GET_PARAM
+        PRESENT "DIRECTORY"
+        BLBS    R0, 10$
+        PRINT   "%CREATE-E-NOTDIR, only CREATE/DIRECTORY makes anything yet"
+        MOVL    #SS$_BADPARAM!INHIB, R0
+        RET
+10$:    GETVALUE "FILE", SPEC, SPEC
         $CREATE_DIR_S DEVDIRSPEC=SPEC
         RET
 

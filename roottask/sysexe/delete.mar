@@ -1,12 +1,13 @@
         .TITLE  DELETE  Deletes files
         .IDENT  /V0.1/
 ;
-; DCL's DELETE spec runs this, with spec as its command line. Deletes
+; DCL's DELETE spec runs this. Deletes
 ; each file spec names, which must give a version, or * for every
 ; version: $PARSE and $SEARCH find them, as DIRECTORY's do, and $ERASE
 ; deletes each one $SEARCH found, by its NAM block. Returns RMS's status
-; if it can't, RMS$_FNF if there are none.
-; ponytail: one specification, no qualifiers.
+; if it can't, RMS$_FNF if there are none. With /LOG, says which it
+; deleted, as VMS's DELETE does.
+; ponytail: one specification; no block counts in /LOG's messages.
 ;
         .LIBRARY "starlet.mlb"
         .LIBRARY "sysexe.mlb"
@@ -15,23 +16,27 @@
         $FABDEF
         $NAMDEF
 
-        .EXTERNAL GET_PARAM
+        .EXTERNAL PUT_LINE
 
 INHIB_MSG = ^X10000000                  ; STS$M_INHIB_MSG: reported already
 
         .PSECT  DATA, NOEXE, WRT, LONG
 FAB:    $FAB    NAM=NAM
 NAM:    $NAM    ESA=EXP, ESS=255, RSA=RES, RSS=255
-DESC:   .LONG   0, 0
+DESC:   .LONG   255                     ; FILE, the parameter
+        .ADDRESS SPEC
+SPEC:   .BLKB   255
+MSG:    .BLKB   256                     ; /LOG's message, .ASCIC
+FILDEL: .ASCIC  "%DELETE-I-FILDEL, "
+DELETED:
+        .ASCIC  " deleted"
 EXP:    .BLKB   255
 RES:    .BLKB   255
 
         .PSECT  CODE, EXE, LONG
-        .ENTRY  START, ^M<>
-        PUSHAB  DESC
-        PUSHL   #1
-        CALLS   #2, G^GET_PARAM
-        MOVL    DESC+4, FAB+FAB$L_FNA
+        .ENTRY  START, ^M<R2>
+        GETVALUE "FILE", DESC, DESC
+        MOVAB   SPEC, FAB+FAB$L_FNA
         MOVB    DESC, FAB+FAB$B_FNS
         MOVL    #FAB$M_NAM, FAB+FAB$L_FOP
         $PARSE  FAB=FAB
@@ -44,11 +49,42 @@ RES:    .BLKB   255
 10$:    $SEARCH FAB=FAB
         BLBC    R0, 20$
         $ERASE  FAB=FAB
-        BLBS    R0, 10$
-        RET
+        BLBC    R0, 90$
+        PRESENT "LOG"
+        BLBC    R0, 10$
+        MOVAB   FILDEL, R1              ; %DELETE-I-FILDEL, name deleted
+        BSBB    ADDTEXT
+        MOVAB   NAM, R1
+        BSBB    ADDNAM
+        MOVAB   DELETED, R1
+        BSBB    ADDTEXT
+        PUSHAB  MSG
+        CALLS   #1, G^PUT_LINE
+        CLRB    MSG
+        BRB     10$
 20$:    CMPL    R0, #RMS$_NMF
         BNEQ    90$
         MOVL    #SS$_NORMAL, R0
 90$:    RET
+
+; ADDNAM: R1 = a NAM block. Appends its resultant name to MSG. ADD:
+; appends the R2 characters at R1, as many as fit. ADDTEXT: the .ASCIC
+; string at R1. Use R0-R2.
+ADDNAM: MOVZBL  NAM$B_RSL(R1), R2
+        MOVL    NAM$L_RSA(R1), R1
+        BRB     ADD
+ADDTEXT:
+        MOVZBL  (R1)+, R2
+ADD:    MOVZBL  MSG, R0
+10$:    TSTL    R2
+        BEQL    20$
+        CMPL    R0, #255
+        BGEQU   20$
+        INCL    R0
+        MOVB    (R1)+, MSG[R0]
+        DECL    R2
+        BRB     10$
+20$:    MOVB    R0, MSG
+        RSB
 
         .END    START

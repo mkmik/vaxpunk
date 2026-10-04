@@ -397,11 +397,11 @@ EXE$PROCSTRT::
 
 ; EXE$USRENTRY: R4 = the current PCB, R1 = an image's transfer address.
 ; Calls the image in user mode, at EXE$USRSTART, on an empty user stack
-; below VA$C_FOREIGN, which holds its command line. Doesn't return.
+; below VA$C_CLI_RESULT, which holds its command's parse. Doesn't return.
 EXE$USRENTRY::
         MOVAB   EXE$USRSTART, R2
         MOVL    #<PSL$C_USER@PSL$V_CURMOD>!<PSL$C_USER@PSL$V_PRVMOD>, R3
-        MOVL    #VA$C_FOREIGN, R5       ; below the command line
+        MOVL    #VA$C_CLI_RESULT, R5    ; below the command's parse
         BRB     REIOUT
 
 ; EXE$CLIENTRY: R4 = the current PCB, which has a command interpreter,
@@ -948,17 +948,18 @@ SUSPEND:
 ; $IMGACT image, cmdlin: runs image in the current process, as a command
 ; interpreter does: runs down the image there was, keeping the channels
 ; and files the process has now, activates image in P0 and calls it in
-; user mode,
-; with cmdlin, the rest of its command line, if there is one, at
-; VA$C_FOREIGN. An image CTRL/Y stopped is run down too, and the
+; user mode, with cmdlin, the result block of its command's parse
+; (ADR-0017), if there is one, at VA$C_CLI_RESULT, where CLI$PRESENT and
+; CLI$GET_VALUE find it. An image CTRL/Y stopped is run down too, and the
 ; command interpreter's CTRL/Y AST forgotten. Returns only if the
 ; activation fails, with its status; SS$_IVLOGNAM for a name longer than
-; 39 characters, SS$_BADPARAM for a command line longer than 255. When the
-; image exits, the command interpreter is called again with its status, on
-; an empty supervisor stack, which the image leaves alone meanwhile.
+; 39 characters, SS$_BADPARAM for a block longer than VA$C_CLI_RESMAX.
+; When the image exits, the command interpreter is called again with its
+; status, on an empty supervisor stack, which the image leaves alone
+; meanwhile.
 ; ponytail: VMS's $IMGACT only activates, and the command interpreter
-; calls the image itself, which asks it for the command line with
-; LIB$GET_FOREIGN.
+; calls the image itself, whose CLI$ routines read the parse in DCL's
+; pages.
         .ENTRY  EXE$IMGACT, ^M<R2, R3, R4, R5, R6, R7, R8>
         MOVL    4(AP), R6
         BEQL    85$
@@ -977,20 +978,19 @@ SUSPEND:
         MOVL    R8, R1
         BSBW    EXE$PROBER_DSC
         BLBC    R0, 90$
-        CMPW    (R8), #255
+        CMPW    (R8), #VA$C_CLI_RESMAX
         BGTRU   87$
 ; Both before P0, which may hold them, goes. The user stack starts below
-; the command line.
+; the parse.
 10$:    MOVL    SCH$GL_CURPCB, R4
         MOVAB   PCB$T_IMAGE(R4), R0
         MOVB    R7, (R0)+
         MOVL    4(R6), R1
         BSBW    COPYNAME
-        CLRB    @#VA$C_FOREIGN
+        CLRW    @#VA$C_CLI_RESULT
         TSTL    R8
         BEQL    20$
-        MOVB    (R8), @#VA$C_FOREIGN
-        MOVC3   (R8), @4(R8), @#VA$C_FOREIGN+1
+        MOVC3   (R8), @4(R8), @#VA$C_CLI_RESULT
 20$:    MOVL    SCH$GL_CURPCB, R4
         BBS     #PSL$C_SUPER, PCB$B_ASTACT(R4), 25$     ; after CTRL/Y, what it had when its image ran
         MOVL    PCB$L_CHANS(R4), PCB$L_CLICHANS(R4)

@@ -14,6 +14,7 @@ tcpip = { path = "../tcpip" }
 
 [build-dependencies]
 vasm = { path = "../vtools/crates/vasm" }
+vcdu = { path = "../vtools/crates/vcdu" }
 vlink = { path = "../vtools/crates/vlink" }
 vmacro = { path = "../vtools/crates/vmacro" }
 vms-obj = { path = "../vtools/crates/vms-obj" }

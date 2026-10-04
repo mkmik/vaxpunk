@@ -159,6 +159,17 @@ interpreter. It is linked high in P1, which tells the executive it is one
   command`, `GOTO label` and `WRITE SYS$OUTPUT` work in procedures as in
   VMS's, and `$STATUS` holds the last command's status: one that is an
   error ends the procedures, as VMS's default `ON ERROR THEN EXIT` does.
+- DCL parses each command with its command tables, `DCL$TABLES`, which
+  `roottask/build.rs` compiled from the verbs' definitions in
+  `roottask/cld/*.cld` with vcdu, and linked into `DCL.EXE`. The parser,
+  `CLI$$DCL_PARSE` in `roottask/sysexe/lib/cli.mar`, matches the verb on
+  its first 4 characters, then its parameters and its qualifiers, such as
+  `/LOG`. It prompts for a parameter the command needs but lacks, `_From: `,
+  and reports a mistake as VMS does: `%DCL-W-IVQUAL, unrecognized
+  qualifier - check validity, spelling, and placement`, then the word in
+  backslashes. A verb that runs an image passes it the parse, which the
+  image reads with `CLI$GET_VALUE` and `CLI$PRESENT`; DCL does the others
+  itself, and reads their values and qualifiers the same way.
 - `RUN image` reads the image from `SYS$SYSTEM:` and loads it into the same
   process's P0 (`$IMGACT`) and runs it in user mode. When the image
   exits, the executive throws away its pages and the channels and files
@@ -184,7 +195,9 @@ interpreter. It is linked high in P1, which tells the executive it is one
   `SHOW LOGICAL` alone lists them. `SHOW PROCESS` and `SHOW SYSTEM` run
   `SHOW.EXE`, which asks `$GETJPI` about this process, and `$GETSYI` how
   long the system has been up, then `$GETJPI` with a wildcard for a line
-  per process: its PID, name, state, priority and image. `HELP` lists the commands, and `LOGOUT` deletes SYSTEM.
+  per process: its PID, name, state, priority and image. `HELP` runs
+  `HELP.EXE`, which lists the commands from DCL's command tables, and
+  `LOGOUT` deletes SYSTEM.
 - `INITIALIZE MDA0: label` runs `INIT.EXE`, whose `$INIT_VOL` makes the
   ramdisk, `MDA0:`, 512 KB of memory, and writes an empty volume on it.
   `MOUNT MDA0: label` runs `MOUNT.EXE`, whose `$MOUNT` mounts it and prints
@@ -297,9 +310,13 @@ session, and `DEFINE`, `SHOW
 LOGICAL` and `DEASSIGN` of a logical name, `SHOW LOGICAL` alone, and
 `SET DEFAULT` and `SHOW DEFAULT` with a `DIR` between, then `[-]` and a
 `DIR [.SYSMGR]`, at the prompt, then initializes and mounts `MDA0:`,
-copies a file to it, changes it in `EDIT`'s line and keypad modes into
+copies a file to it with `COPY/LOG`, which prompts for the two files,
+changes it in `EDIT`'s line and keypad modes into
 a second version, lists them,
-deletes them and lists again, then
+deletes them, the first with `DELETE/LOG`, and lists again, runs
+**CLITEST**, which checks the command parser on commands of its own,
+a `DIR/BRIEFLY`, a qualifier `DIRECTORY` doesn't have, `HELP SHOW`, and
+a `DEFINE/SYSTEM` it looks up with `SHOW LOGICAL/SYSTEM`, then
 initializes and mounts `DKB0:`, made afresh, which `SYSTARTUP_VMS.COM`
 couldn't mount at boot, copies a file there and lists
 it, makes `[SUB.DEEP]` there with `CREATE/DIRECTORY` and copies a file

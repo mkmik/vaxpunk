@@ -4,7 +4,10 @@
 //! TYPE and EDIT theirs from the system disk, DCLTEST.COM's and DCL's
 //! with symbols, those SYLOGIN.COM defined too, EDIT's EXIT that can't write
 //! there, and DIRECTORY its own from the ramdisk, MDA0:, made the default
-//! device, around a COPY to it from SYS$SYSDEVICE:, a logical name, an EDIT
+//! device, around a COPY/LOG to it from SYS$SYSDEVICE:, which prompts for
+//! its parameters, a DELETE/LOG, CLITEST's checks of the command parser, a
+//! qualifier DIRECTORY doesn't have, HELP SHOW, a logical name in the
+//! system table, a logical name, an EDIT
 //! in line mode and keypad mode that writes a second version and DELETEs,
 //! a line edited and one recalled with the up arrow, then INITIALIZE,
 //! MOUNT and COPY on the data disk, DKB0:, made afresh in
@@ -79,6 +82,13 @@ const LINES: &[&str] = &[
     "        Welcome to vaxpunk, an EDT-edited clone for arm64\n",
     "RAM.TXT;2           RAM.TXT;1",
     "%DIRECT-W-NOFILES, no files found",
+    "_From: SYS$SYSDEVICE:[SYSMGR]WELCOME.TXT",
+    "_To: RAM.TXT",
+    "%COPY-S-COPIED, DKA0:[SYSMGR]WELCOME.TXT;1 copied to MDA0:[000000]RAM.TXT;1 (10 records)",
+    "%DELETE-I-FILDEL, MDA0:[000000]RAM.TXT;1 deleted",
+    "CLITEST: ok",
+    "%DCL-W-IVQUAL, unrecognized qualifier - check validity, spelling, and placement",
+    " \\BRIEFLY\\",
     "%MOUNT-I-MOUNTED, DATA mounted on _DKB0:",
     "Directory DKB0:[000000]",
     "DATA.TXT;1",
@@ -97,7 +107,10 @@ const LINES: &[&str] = &[
     "Process name:       \"SYSTEM\"",
     "00010001 SWAPPER",
     "SYSTEM          CUR     4 SHOW.EXE",
-    "CONTINUE    goes back to the image CTRL/Y stopped",
+    "  INITIALIZE device label",
+    "  SHOW LOGICAL [logical_name]",
+    "    /[NO]MOUNTED",
+    "   \"ZZZ\" = \"YYY\" (LNM$SYSTEM_TABLE)",
     "*CANCEL*",
     "CTRLC: ok",
     "DCLTEST: ok, 3 and 4",
@@ -125,7 +138,7 @@ const STEPS: &[(&str, usize, &str)] = &[
     ("CONTINUE", 3, "\x19"),
     ("*INTERRUPT*", 5, "HELP\r"),
     (
-        "deletes a local symbol",
+        "HELP verb describes a verb",
         1,
         "EDIT SYS$MANAGER:WELCOME.TXT\r",
     ),
@@ -180,7 +193,7 @@ fn boot() {
         // Then, once SET DEFAULT [-] has failed in [000000], the ramdisk.
         if typed == 2 && text.contains("error in directory name") {
             type_("INIT MDA0: RAM\rMOUNT MDA0: RAM\rSET DEFAULT MDA0:[000000]\rSHOW DEFAULT\r");
-            type_("COPY SYS$SYSDEVICE:[SYSMGR]WELCOME.TXT RAM.TXT\r");
+            type_("COPY/LOG\rSYS$SYSDEVICE:[SYSMGR]WELCOME.TXT\rRAM.TXT\r");
             type_("EDIT RAM.TXT\rD 3:END\rI\rEdited with EDT.\r\x1a");
             // Keypad mode: GOLD 5 goes to the top, GOLD PF3 finds OpenVMS,
             // seven DEL Cs delete it, and EDT-edited goes in its place.
@@ -191,7 +204,9 @@ fn boot() {
             typed = 3;
         }
         if typed == 3 && text.contains("MDA0:[000000]RAM.TXT;2") {
-            type_("DIR *.TXT\rDELETE RAM.TXT;1\rDELETE RAM.TXT;2\rDIR *.TXT\r");
+            type_("DIR *.TXT\rDELETE/LOG RAM.TXT;1\rDELETE RAM.TXT;2\rDIR *.TXT\r");
+            type_("RUN CLITEST\rDIR/BRIEFLY\rHELP SHOW\r");
+            type_("DEFINE/SYSTEM/NOLOG ZZZ YYY\rSHOW LOGICAL/SYSTEM ZZZ\r");
             // Line editing: the up arrow recalls DEFINE, three DELs and TWO
             // change it, and the arrows, CTRL/H and CTRL/E make SHOW LOGICAL ZOO.
             type_("DEFINE ZOO ONE\r\x1b[A\x7f\x7f\x7fTWO\r");

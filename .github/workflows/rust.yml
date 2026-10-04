@@ -4,12 +4,13 @@ name: rust
 # tested. The OS crates (kernel, shim, roottask, image) need the cross C
 # toolchain, so here CI only checks their formatting: their Rust is in */*.rs.
 # boot.yml builds and boots them.
+# vrun's tests run CLITEST, the command parser's check, from roottask/sysexe.
 on:
   push:
     branches: [main]
-    paths: ["Cargo.toml", "Cargo.lock", "*/*.rs", "*/Cargo.toml", "ods/**", "vtools/**", ".github/workflows/rust.yml"]
+    paths: ["Cargo.toml", "Cargo.lock", "*/*.rs", "*/Cargo.toml", "ods/**", "vtools/**", "roottask/sysexe/**", ".github/workflows/rust.yml"]
   pull_request:
-    paths: ["Cargo.toml", "Cargo.lock", "*/*.rs", "*/Cargo.toml", "ods/**", "vtools/**", ".github/workflows/rust.yml"]
+    paths: ["Cargo.toml", "Cargo.lock", "*/*.rs", "*/Cargo.toml", "ods/**", "vtools/**", "roottask/sysexe/**", ".github/workflows/rust.yml"]
 
 jobs:
   test:

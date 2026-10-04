@@ -1,8 +1,7 @@
         .TITLE  EDIT    The EDT editor: line mode and keypad mode
         .IDENT  /V0.2/
 ;
-; DCL's EDIT spec runs this, with spec, in capitals, as its command line
-; at VA$C_FOREIGN. As EDT does in line mode, it reads the file spec names,
+; DCL's EDIT spec runs this. As EDT does in line mode, it reads the file spec names,
 ; in the default directory unless it says where, with RMS, into its buffer, types
 ; the first line and prompts with * for a command:
 ;
@@ -54,7 +53,6 @@
         .LIBRARY "lib.mlb"
         .LIBRARY "starlet.mlb"
         .LIBRARY "sysexe.mlb"
-        $VADEF
         $SSDEF
         $IODEF
         $RMSDEF
@@ -84,10 +82,14 @@ K_COMMA = 276                           ; ESC O l
 K_GOLD = 32
 
         .PSECT  DATA, NOEXE, WRT, LONG
-FAB:    $FAB    FNA=VA$C_FOREIGN+1, NAM=NAM
+FAB:    $FAB    FNA=SPEC, NAM=NAM
+SPECDSC:                                ; FILE, the parameter
+        .LONG   255
+        .ADDRESS SPEC
+SPEC:   .BLKB   255
 NAM:    $NAM    RSA=RES, RSS=255
 RAB:    $RAB    FAB=FAB, USZ=LINESIZE
-OUTFAB: $FAB    FNA=VA$C_FOREIGN+1
+OUTFAB: $FAB    FNA=SPEC
 OUTRAB: $RAB    FAB=OUTFAB
 RES:    .BLKB   255                     ; the file's name, once opened
 CHAN:   .LONG   0                       ; OPA0:'s, once assigned
@@ -268,7 +270,8 @@ HELP:   PRINT   "  range       types the lines range names"
 ; LOAD: reads the file the command line names into the buffer, a record a
 ; line, up to MAXLINES of them and TEXTSIZE bytes. A file that doesn't
 ; exist leaves it empty. R0 = SS$_NORMAL, or RMS's error. Uses R0-R5.
-LOAD:   MOVB    @#VA$C_FOREIGN, FAB+FAB$B_FNS
+LOAD:   GETVALUE "FILE", SPECDSC, SPECDSC
+        MOVB    SPECDSC, FAB+FAB$B_FNS
         $OPEN   FAB=FAB
         BLBS    R0, 10$
         CMPL    R0, #RMS$_FNF
@@ -365,7 +368,7 @@ SAVE:   MOVZBL  NAM+NAM$B_RSL, R0
         SUBL3   #RES, NAM+NAM$L_VER, R0
         MOVB    R0, OUTFAB+FAB$B_FNS
         BRB     20$
-10$:    MOVB    @#VA$C_FOREIGN, OUTFAB+FAB$B_FNS
+10$:    MOVB    SPECDSC, OUTFAB+FAB$B_FNS
 20$:    MOVB    #FAB$C_VAR, OUTFAB+FAB$B_RFM
         MOVB    #FAB$M_CR, OUTFAB+FAB$B_RAT
         MOVAB   NAM, OUTFAB+FAB$L_NAM   ; its new name, in RES

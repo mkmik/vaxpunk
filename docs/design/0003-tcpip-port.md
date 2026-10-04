@@ -195,20 +195,21 @@ and 11, past the terminal's modifiers, because a unit is a terminal too.
 
 - **`TCPIP.EXE`.** DCL's `SET INTERFACE address mask gateway`, `SHOW
   INTERFACE` and `SET CONFIGURATION INTERFACE address mask gateway` run
-  it. As in TCP/IP Services, the first changes the running system and the
+  it, which reads `OPTION`, `ADDRESS`, `MASK` and `GATEWAY` from the
+  parse ([ADR-0017](../adr/0017-command-tables-from-cld-with-vcdu.md)).
+  As in TCP/IP Services, the first changes the running system and the
   last the saved configuration, which the next boot applies. `SET
   INTERFACE` issues `IO$_SETCHAR`; `SET CONFIGURATION INTERFACE` writes
   `INTERFACE address mask gateway` in a new version of
   `DKB0:[000000]TCPIP$CONFIG.DAT`, the writable disk, where TCP/IP
   Services kept `TCPIP$CONFIGURATION.DAT` in `SYS$SYSTEM`; `SHOW
-  INTERFACE` senses and prints. With no command line, as `SYLOGIN.COM`
-  runs it, it applies the saved configuration, unless the interface has
+  INTERFACE` senses and prints. With no command, as `SYLOGIN.COM`
+  runs it with `RUN`, it applies the saved configuration, unless the interface has
   an address already, prints `%TCPIP-I-SET`, and creates `TCPIP$TELNET`,
   the remote login server, unless it is there already. Without a network
   it does nothing. ponytail: the default gateway is part of the
   interface; TCP/IP Services made it a route (`SET ROUTE /DEFAULT
-  /GATEWAY=`, `SET CONFIGURATION ROUTE`), which waits for DCL's
-  qualifiers.
+  /GATEWAY=`, `SET CONFIGURATION ROUTE`), which isn't there yet.
 - **`TELNETD.EXE`**, process `TCPIP$TELNET`. Listens on TCP port 23; for
   each connection creates a process running `DCL.EXE` with the
   connection's unit, `_BGnn:`, as `SYS$INPUT`, `SYS$OUTPUT` and

@@ -1,0 +1,31 @@
+! CLITEST.CLD: the commands CLITEST parses with CLI$DCL_PARSE, which
+! build.rs links into CLITEST.EXE as CLITEST_TABLES.
+module CLITEST_TABLES
+
+define verb SEND
+	image CLITEST
+	parameter P1, label=TO, prompt="To", value(required, list)
+	parameter P2, label=TEXT, value(type=$quoted_string)
+	parameter P3, value(default="DFLT")
+	qualifier LOG
+	qualifier COPIES, value(default="1", type=$number)
+	qualifier MODE, default, value(type=MODE_TYPE)
+	qualifier CONFIRM, nonnegatable
+	qualifier KEEP, nonnegatable, syntax=SEND_KEEP
+	disallow LOG and CONFIRM
+
+define type MODE_TYPE
+	keyword FAST, default
+	keyword SLOW, value(required)
+
+! SEND/KEEP file: another syntax, with its own parameter.
+define syntax SEND_KEEP
+	parameter P1, label=FILE, value(required)
+
+define verb SHOW
+	cliroutine SHOW
+	parameter P1, value(required, type=WHAT)
+
+define type WHAT
+	keyword USERS
+	keyword USAGE
