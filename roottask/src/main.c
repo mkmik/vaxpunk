@@ -31,6 +31,9 @@
 
 #include <sel4/sel4.h>
 
+#include "component.h"
+#include "port.h"
+
 #ifndef CONFIG_KERNEL_MCS
 #error "the root task needs an MCS kernel: set KernelIsMCS in kernel/config.cmake"
 #endif
@@ -237,9 +240,11 @@ static seL4_CPtr device_frame(seL4_BootInfo *bi, seL4_Word paddr)
 }
 
 /* Maps the UART's page, then the RTC's, and reads the RTC. */
+static seL4_CPtr uart_frame;
+
 static void uart_init(seL4_BootInfo *bi)
 {
-	seL4_CPtr uart_frame = device_frame(bi, UART_PADDR);
+	uart_frame = device_frame(bi, UART_PADDR);
 	seL4_CPtr rtc_frame = device_frame(bi, RTC_PADDR);
 	if (!uart_frame || !rtc_frame)
 		return;
@@ -272,7 +277,7 @@ enum { VIO_MAGIC = 0x000, VIO_VERSION = 0x004, VIO_DEVICE = 0x008, VIO_DRVFEAT =
        VIO_QREADY = 0x044, VIO_QNOTIFY = 0x050, VIO_INTSTATUS = 0x060, VIO_INTACK = 0x064,
        VIO_STATUS = 0x070, VIO_QDESC = 0x080, VIO_QDRIVER = 0x090, VIO_QDEVICE = 0x0a0,
        VIO_CAPACITY = 0x100 };
-enum { VIO_ACK = 1, VIO_DRIVER = 2, VIO_DRIVER_OK = 4, VIO_FEATURES_OK = 8, VIO_BLK = 2,
+enum { VIO_ACK = 1, VIO_DRIVER = 2, VIO_DRIVER_OK = 4, VIO_FEATURES_OK = 8, VIO_NET = 1, VIO_BLK = 2,
        VIO_QSIZE = 4, VIOD_NEXT = 1, VIOD_WRITE = 2 };
 struct vio_queue {
 	struct {
@@ -301,6 +306,8 @@ static struct disk {
 	struct vio_queue *vq;
 } disks[DISK_UNITS];
 static uint8_t *vio_data; /* a page: 8 blocks */
+static seL4_CPtr vio_frame[VIRTIO_SLOTS * 0x200 / 4096]; /* the transports' pages */
+static int net_slot = -1; /* the virtio-net device's transport, or -1 */
 #define VQ_VA 0xfffe0000UL /* a page per unit */
 #define VIO_DATA_VA 0xfffd0000UL
 
@@ -355,11 +362,12 @@ static void disk_setup(unsigned u, volatile uint32_t *vio, uint64_t data)
 	print("disk %u: virtio-blk, %lu blocks\n", u, (seL4_Word)disks[u].blocks);
 }
 
-/* Finds the disks among the virtio-mmio transports and sets them up. */
+/* Finds the disks among the virtio-mmio transports and sets them up, and
+ * the network device, for the TCP/IP component. */
 static void disk_init(seL4_BootInfo *bi)
 {
 	for (unsigned p = 0; p < VIRTIO_SLOTS * 0x200 / PAGE_SIZE; p++) {
-		seL4_CPtr frame = device_frame(bi, VIRTIO_PADDR + p * PAGE_SIZE);
+		seL4_CPtr frame = vio_frame[p] = device_frame(bi, VIRTIO_PADDR + p * PAGE_SIZE);
 		if (!frame)
 			return;
 		map(frame, seL4_CapInitThreadVSpace, VIRTIO_VA + p * PAGE_SIZE, seL4_ReadWrite,
@@ -368,11 +376,14 @@ static void disk_init(seL4_BootInfo *bi)
 	uint64_t data = dma_page(VIO_DATA_VA);
 	vio_data = (uint8_t *)VIO_DATA_VA;
 	unsigned u = 0;
-	for (unsigned s = VIRTIO_SLOTS; s-- && u < DISK_UNITS;) {
+	for (unsigned s = VIRTIO_SLOTS; s--;) {
 		volatile uint32_t *r = (volatile uint32_t *)(VIRTIO_VA + s * 0x200);
-		if (r[VIO_MAGIC / 4] == 0x74726976 && r[VIO_VERSION / 4] == 2 &&
-		    r[VIO_DEVICE / 4] == VIO_BLK)
+		if (r[VIO_MAGIC / 4] != 0x74726976 || r[VIO_VERSION / 4] != 2)
+			continue;
+		if (r[VIO_DEVICE / 4] == VIO_BLK && u < DISK_UNITS)
 			disk_setup(u++, r, data);
+		else if (r[VIO_DEVICE / 4] == VIO_NET && net_slot < 0)
+			net_slot = s;
 	}
 }
 
@@ -962,9 +973,11 @@ static seL4_Word f11_boot_file(uint8_t *buf, seL4_Word size)
  * EXEC.EXE's sections are at their link addresses, in S0 too.
  */
 #define RPB_VA 0x4fff0000UL
+#define PORT_VA 0x4ff00000UL /* the port's pages, if there is a network device */
 #define EXEC_STACK_TOP 0x5fff0000UL
 #define EXEC_STACK_PAGES 4
-enum { RPB_BASE = 0, RPB_PFNCNT = 4, RPB_FREEPFN = 8, RPB_BOOTTIME = 12, RPB_HWPCB = 64,
+enum { RPB_BASE = 0, RPB_PFNCNT = 4, RPB_FREEPFN = 8, RPB_BOOTTIME = 12, RPB_PORT = 16,
+       RPB_HWPCB = 64,
        RPB_LENGTH = 192 };
 
 static seL4_CPtr fault_ep, sched_control;
@@ -976,6 +989,10 @@ static seL4_CPtr idle_reply;
 /* The clock ticks every TICK_US, signalling the PAL with CLOCK_BADGE. */
 #define TICK_US 10000
 #define CLOCK_BADGE (1UL << 32)
+/* The TCP/IP component signals the PAL's notification with PORT_BADGE,
+ * and faults to its endpoint with TCPIP_BADGE. */
+#define PORT_BADGE (1UL << 33)
+#define TCPIP_BADGE (1UL << 34)
 
 static struct ctx *find_ctx(seL4_Word hwpcb)
 {
@@ -995,7 +1012,7 @@ static seL4_Word ctx_badge(struct ctx *c, int m)
  * A thread in vspace with an empty CSpace, since it calls nothing but the
  * PAL, and the PAL's endpoint, badged, for its faults, PAL calls included.
  * It runs below the PAL's priority, so the PAL serves a call as soon as it
- * is made.
+ * is made, and the TCP/IP component's, so a doorbell is answered at once.
  */
 static seL4_CPtr new_thread(seL4_CPtr vspace, seL4_Word badge)
 {
@@ -1006,8 +1023,8 @@ static seL4_CPtr new_thread(seL4_CPtr vspace, seL4_Word badge)
 	if (!err)
 		err = seL4_SchedControl_Configure(sched_control, sc, slice, slice, 0, 0);
 	if (!err)
-		err = seL4_TCB_SetSchedParams(tcb, seL4_CapInitThreadTCB, seL4_MaxPrio - 1,
-					      seL4_MaxPrio - 1, sc, mint(fault_ep, badge));
+		err = seL4_TCB_SetSchedParams(tcb, seL4_CapInitThreadTCB, seL4_MaxPrio - 2,
+					      seL4_MaxPrio - 2, sc, mint(fault_ep, badge));
 	if (err)
 		die("configuring a process context failed", err);
 	return tcb;
@@ -1063,7 +1080,7 @@ enum {
 	HALT = 0x00, SWPCTX = 0x05, MFPR_IPL = 0x0e, MTPR_IPL = 0x0f, MFPR_PCBB = 0x12,
 	MFPR_SCBB = 0x16, MTPR_SCBB = 0x17, MTPR_SIRR = 0x18, MFPR_SISR = 0x19, WTINT = 0x3e,
 	MTPR_TXDB = 0x40, WRPTE = 0x41, DELCTX = 0x42, MTPR_RXCS = 0x43, MFPR_RXCS = 0x44,
-	MFPR_RXDB = 0x45, READLBLK = 0x46, WRITELBLK = 0x47, CHME = 0x82, CHMU = 0x85, PROBER = 0x8f,
+	MFPR_RXDB = 0x45, READLBLK = 0x46, WRITELBLK = 0x47, MTPR_DOORBELL = 0x48, CHME = 0x82, CHMU = 0x85, PROBER = 0x8f,
 	PROBEW = 0x90, RD_PS = 0x91, REI = 0x92
 };
 
@@ -1071,7 +1088,8 @@ enum {
  * interval timer's and console's IPLs, the VAX's. CHMx's is SCB_CHMK + 4 * x,
  * x the mode. */
 enum { SCB_OPCDEC = 0x10, SCB_ACCVIO = 0x20, SCB_CHMK = 0x40, SCB_SOFTINT = 0x80,
-       SCB_TIMER = 0xc0, SCB_CONSRCV = 0xf8, IPL_ASTDEL = 2, IPL_CONSOLE = 20, IPL_HWCLK = 24 };
+       SCB_TIMER = 0xc0, SCB_CONSRCV = 0xf8, SCB_PORT = 0x100, IPL_ASTDEL = 2, IPL_CONSOLE = 20,
+       IPL_PORT = 21, IPL_HWCLK = 24 };
 
 /* The HWPCB's AST enable and summary bytes, Alpha's ASTEN and ASTSR
  * ($HWPCBDEF): bit n of each is access mode n's. */
@@ -1085,9 +1103,14 @@ enum { RXCS_DONE = 0x80, RXCS_IE = 0x40 };
  * The processor state the PAL keeps for the executive's one CPU. A VAX
  * starts at IPL 31. pending has a bit per IPL with an interrupt requested
  * and not yet delivered: software interrupts at 1-15, SISR, the console at
- * IPL_CONSOLE and the interval timer at IPL_HWCLK. rxcs holds RXCS_IE.
+ * IPL_CONSOLE, the port's completion at IPL_PORT and the interval timer at
+ * IPL_HWCLK. rxcs holds RXCS_IE.
  */
 static seL4_Word ipl = 31, pending, scbb, rxcs;
+
+/* The TCP/IP component's notification, badged for a tick and for the
+ * doorbell; 0 without the component. */
+static seL4_CPtr tcpip_tick, doorbell;
 
 /* Set when the executive halts, rather than faults: the PAL powers off. */
 static int halted;
@@ -1187,6 +1210,7 @@ static int deliver(seL4_UserContext *r)
 			pending &= ~(1UL << level);
 			seL4_Word off = level == IPL_HWCLK     ? SCB_TIMER :
 					level == IPL_CONSOLE ? SCB_CONSRCV :
+					level == IPL_PORT    ? SCB_PORT :
 							       SCB_SOFTINT + 4 * level;
 			if (!vector(r, off, level, 0, 0, 0, 0)) {
 				print("%%PAL-F-NOVEC, no handler for interrupt at IPL %lu\n", level);
@@ -1484,6 +1508,10 @@ static int serve_one(seL4_MessageInfo_t msg)
 	case MTPR_TXDB:
 		uart_putc(a0);
 		return ret(v0);
+	case MTPR_DOORBELL:
+		if (a0 == 0 && doorbell)
+			seL4_Signal(doorbell);
+		return ret(v0);
 	case MTPR_RXCS:
 		rxcs = a0 & RXCS_IE;
 		if (rxcs && uart_rx_ready())
@@ -1537,16 +1565,20 @@ static int serve_one(seL4_MessageInfo_t msg)
 }
 
 /*
- * A tick of the clock: requests the interval timer interrupt, and the
- * console's if a character waits and RXCS asks for it, and, if IPL lets
+ * A tick of the clock, or the port's completion, or both, by the bits of
+ * badge: requests the interval timer interrupt, and the console's if a
+ * character waits and RXCS asks for it, or the port's, and, if IPL lets
  * them through, delivers them. The current context is running, since the
  * PAL outranks it and serves each of its PAL calls at once, or waits in
  * WTINT. A running one is stopped wherever it is, and resumes at the
  * handler.
  */
-static int tick(void)
+static int tick(seL4_Word badge)
 {
-	pending |= 1UL << IPL_HWCLK;
+	if (badge & PORT_BADGE)
+		pending |= 1UL << IPL_PORT;
+	if (badge & CLOCK_BADGE)
+		pending |= 1UL << IPL_HWCLK;
 	if (rxcs && uart_rx_ready())
 		pending |= 1UL << IPL_CONSOLE;
 	if (!deliverable())
@@ -1584,10 +1616,15 @@ static void serve(void)
 		seL4_Word badge;
 		seL4_MessageInfo_t msg = seL4_Recv(fault_ep, &badge,
 						   idle ? idle_reply : cur->reply);
-		if (badge == CLOCK_BADGE) {
-			if (!tick())
+		if (badge & (CLOCK_BADGE | PORT_BADGE)) {
+			if (!tick(badge))
 				return;
 			continue;
+		}
+		if (badge == TCPIP_BADGE) {
+			print("%%PAL-F-TCPIP, the TCP/IP component faulted (%lu), PC 0x%lx\n",
+			      seL4_MessageInfo_get_label(msg), seL4_GetMR(seL4_VMFault_IP));
+			return;
 		}
 		if (badge != ctx_badge(cur, cur->mode)) {
 			print("%%PAL-F-FAULT, a call from context 0x%lx, not the current one\n", badge);
@@ -1606,7 +1643,7 @@ static void serve(void)
  * ponytail: the PAL's notification and seL4_Yield, no IPC buffer or TLS;
  * a timer device driver when the PAL has one.
  */
-static seL4_CPtr clock_cap;
+static seL4_CPtr clock_cap, pal_ntfn;
 static uint64_t clock_stack[256] __attribute__((aligned(16)));
 
 static void clock_thread(void)
@@ -1614,12 +1651,14 @@ static void clock_thread(void)
 	for (;;) {
 		seL4_Yield();
 		seL4_Signal(clock_cap);
+		if (tcpip_tick)
+			seL4_Signal(tcpip_tick);
 	}
 }
 
 static void start_clock(void)
 {
-	seL4_CPtr ntfn = alloc(seL4_NotificationObject, 0);
+	seL4_CPtr ntfn = pal_ntfn = alloc(seL4_NotificationObject, 0);
 	seL4_CPtr tcb = alloc(seL4_TCBObject, 0), sc = alloc(seL4_SchedContextObject,
 								seL4_MinSchedContextBits);
 	clock_cap = mint(ntfn, CLOCK_BADGE);
@@ -1646,6 +1685,7 @@ static void start_clock(void)
  * whose HWPCB is the RPB's: kernel mode, IPL 31, R11 pointing at the RPB.
  */
 static uint8_t exe_file[256 * 1024];
+static seL4_Word port_pfn; /* the port's first page */
 
 static void start_exec(void)
 {
@@ -1660,9 +1700,14 @@ static void start_exec(void)
 	boot_pages(EXEC_STACK_TOP - EXEC_STACK_PAGES * PAGE_SIZE, 0, EXEC_STACK_PAGES * PAGE_SIZE,
 		   PRT_KW << 27);
 	boot_pages(RPB_VA, 0, PAGE_SIZE, PRT_KW << 27);
+	if (net_slot >= 0) {
+		port_pfn = boot_pfn;
+		boot_pages(PORT_VA, 0, PORT_PAGES * PAGE_SIZE, PRT_KW << 27);
+	}
 	uint8_t *rpb = (uint8_t *)quad(RPB_VA);
 	uint32_t fields[] = { [RPB_BASE / 4] = RPB_VA, [RPB_PFNCNT / 4] = PFN_COUNT,
-			      [RPB_FREEPFN / 4] = boot_pfn, [RPB_BOOTTIME / 4] = boot_time };
+			      [RPB_FREEPFN / 4] = boot_pfn, [RPB_BOOTTIME / 4] = boot_time,
+			      [RPB_PORT / 4] = net_slot >= 0 ? PORT_VA : 0 };
 	memcpy(rpb, fields, sizeof fields);
 
 	cur = new_ctx(RPB_VA + RPB_HWPCB);
@@ -1671,6 +1716,111 @@ static void start_exec(void)
 				   .x11 = RPB_VA };
 	write_regs(1);
 	print("EXEC.EXE: started at 0x%lx, %lu of %u pages in use\n", entry, boot_pfn, PFN_COUNT);
+}
+
+/*
+ * The TCP/IP component (docs/prd/0002-networking.md): tcpip.elf, which
+ * build.rs embeds in the root task, started as a thread in an address
+ * space and a CSpace of its own (tcpip/include/component.h) if QEMU has a
+ * virtio-net device. Its image, data and DMA buffers are one 2 MB large
+ * page, so their physical addresses follow from the page's. It shares the
+ * port's pages with the executive, drives the device's transport itself
+ * and takes its interrupt. The PAL's clock thread signals it each tick,
+ * and the executive's doorbell, MTPR_DOORBELL, signals it too. It
+ * signals the PAL's notification with PORT_BADGE, which the PAL delivers
+ * to the executive as the port's interrupt.
+ * ponytail: the 2 MB page is mapped writable and executable; a frame per
+ * segment, with its own rights, if the component ever runs code it
+ * doesn't trust.
+ */
+extern const uint8_t tcpip_elf[], tcpip_elf_end[];
+#define TCPIP_PAL_VA 0x200000000UL /* where the PAL sees the large page */
+
+static void start_tcpip(void)
+{
+	if (net_slot < 0)
+		return;
+	const uint8_t *elf = tcpip_elf;
+	seL4_Word size = tcpip_elf_end - tcpip_elf;
+	if (size < 64 || u32(elf) != 0x464c457f)
+		die("tcpip.elf is not an ELF file", size);
+	seL4_CPtr page = alloc(seL4_ARM_LargePageObject, 0);
+	map(page, seL4_CapInitThreadVSpace, TCPIP_PAL_VA, seL4_ReadWrite,
+	    seL4_ARM_Default_VMAttributes | seL4_ARM_ExecuteNever);
+	uint64_t phoff = u64(elf + 32);
+	unsigned phnum = u16(elf + 56), phentsize = u16(elf + 54);
+	for (unsigned i = 0; i < phnum; i++) {
+		const uint8_t *ph = elf + phoff + i * phentsize;
+		uint64_t off = u64(ph + 8), va = u64(ph + 16), filesz = u64(ph + 32),
+			 memsz = u64(ph + 40);
+		if (u32(ph) != 1) /* PT_LOAD */
+			continue;
+		if (va < TCPIP_BASE || va + memsz > TCPIP_BASE + (1UL << seL4_LargePageBits) ||
+		    off + filesz > size)
+			die("tcpip.elf: a segment outside its page", va);
+		memcpy((uint8_t *)(TCPIP_PAL_VA + va - TCPIP_BASE), elf + off, filesz);
+	}
+	seL4_ARM_Page_GetAddress_t pa = seL4_ARM_Page_GetAddress(page);
+	unmap(page);
+
+	seL4_CPtr vspace = alloc(seL4_ARM_VSpaceObject, 0);
+	seL4_Error err = seL4_ARM_ASIDPool_Assign(seL4_CapInitThreadASIDPool, vspace);
+	if (err)
+		die("seL4_ARM_ASIDPool_Assign failed", err);
+	map(page, vspace, TCPIP_BASE, seL4_ReadWrite, seL4_ARM_Default_VMAttributes);
+	err = seL4_ARM_Page_Unify_Instruction(page, 0, 1UL << seL4_LargePageBits);
+	if (err)
+		die("seL4_ARM_Page_Unify_Instruction failed", err);
+	for (seL4_Word i = 0; i < PORT_PAGES; i++)
+		map(mint(pfn_frame[port_pfn + i], 0), vspace, TCPIP_PORT_VA + i * PAGE_SIZE,
+		    seL4_ReadWrite, seL4_ARM_Default_VMAttributes | seL4_ARM_ExecuteNever);
+	seL4_Word transport = net_slot * 0x200;
+	map(mint(vio_frame[transport / PAGE_SIZE], 0), vspace, TCPIP_MMIO_VA, seL4_ReadWrite,
+	    seL4_ARM_ExecuteNever);
+	map(mint(uart_frame, 0), vspace, TCPIP_UART_VA, seL4_ReadWrite, seL4_ARM_ExecuteNever);
+	seL4_CPtr ipcbuf = alloc(seL4_ARM_SmallPageObject, 0);
+	map(ipcbuf, vspace, TCPIP_IPCBUF_VA, seL4_ReadWrite,
+	    seL4_ARM_Default_VMAttributes | seL4_ARM_ExecuteNever);
+
+	/* Its CSpace: its notification, the PAL's, and its IRQ's handler. QEMU
+	 * virt's virtio-mmio transport n interrupts on SPI 16 + n. */
+	seL4_CPtr cnode = alloc(seL4_CapTableObject, TCPIP_CNODE_BITS);
+	seL4_CPtr ntfn = alloc(seL4_NotificationObject, 0);
+	seL4_CPtr irq = next_slot++;
+	err = seL4_IRQControl_Get(seL4_CapIRQControl, 32 + 16 + net_slot, seL4_CapInitThreadCNode,
+				  irq, seL4_WordBits);
+	if (!err)
+		err = seL4_IRQHandler_SetNotification(irq, mint(ntfn, TCPIP_IRQ));
+	struct {
+		seL4_CPtr cap;
+		seL4_Word badge;
+	} caps[] = { [TCPIP_CAP_NTFN] = { ntfn, 0 }, [TCPIP_CAP_EXEC] = { pal_ntfn, PORT_BADGE },
+		     [TCPIP_CAP_IRQ] = { irq, 0 } };
+	for (unsigned i = 1; !err && i < sizeof caps / sizeof caps[0]; i++)
+		err = seL4_CNode_Mint(cnode, i, TCPIP_CNODE_BITS, seL4_CapInitThreadCNode,
+				      caps[i].cap, seL4_WordBits, seL4_AllRights, caps[i].badge);
+	if (err)
+		die("the TCP/IP component's capabilities", err);
+	tcpip_tick = mint(ntfn, TCPIP_TICK);
+	doorbell = mint(ntfn, TCPIP_DOORBELL);
+
+	/* It outranks the executive, which waits for it, and has half of
+	 * each tick's time at most. */
+	seL4_CPtr tcb = alloc(seL4_TCBObject, 0);
+	seL4_CPtr sc = alloc(seL4_SchedContextObject, seL4_MinSchedContextBits);
+	err = seL4_TCB_Configure(tcb, cnode,
+				 seL4_CNode_CapData_new(0, seL4_WordBits - TCPIP_CNODE_BITS).words[0],
+				 vspace, 0, TCPIP_IPCBUF_VA, ipcbuf);
+	if (!err)
+		err = seL4_SchedControl_Configure(sched_control, sc, TICK_US / 2, TICK_US, 0, 0);
+	if (!err)
+		err = seL4_TCB_SetSchedParams(tcb, seL4_CapInitThreadTCB, seL4_MaxPrio - 1,
+					      seL4_MaxPrio - 1, sc, mint(fault_ep, TCPIP_BADGE));
+	seL4_UserContext r = { .pc = u64(elf + 24), .x0 = pa.paddr, .x1 = transport % PAGE_SIZE };
+	if (!err)
+		err = seL4_TCB_WriteRegisters(tcb, 1, 0, sizeof r / sizeof(seL4_Word), &r);
+	if (err)
+		die("starting the TCP/IP component failed", err);
 }
 
 int main(seL4_BootInfo *bi)
@@ -1722,6 +1872,7 @@ int main(seL4_BootInfo *bi)
 	start_clock();
 	disk_init(bi);
 	start_exec();
+	start_tcpip();
 	serve();
 
 	print("root task done, %lu of %u slots used\n", next_slot, 1u << CONFIG_ROOT_CNODE_SIZE_BITS);

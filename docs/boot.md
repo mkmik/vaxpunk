@@ -58,13 +58,26 @@ the role PALcode played on an Alpha: it's the "hardware" layer underneath VMS
   disk, and unit 1, the data disk, `out/datadisk.img`, and prints
   `disk 0: virtio-blk, 4096 blocks` and `disk 1: ...` for them. From then
   on the PAL can read the disks' blocks, by number, for itself and for the
-  executive, and write the data disk's for the executive.
+  executive, and write the data disk's for the executive. It also
+  notes the network device, virtio-net, if QEMU has one.
 - `start_exec` reads `EXEC.EXE` from the system disk, as VMS's first
   bootstrap did: the home block, the index file, the top directory,
   `[SYSEXE]`, then the file (`f11_boot_file`). It loads it, and creates
   the restart parameter block (RPB), a page describing memory and the
-  boot time. It then starts EXEC in kernel mode at IPL 31, with R11
-  pointing at the RPB.
+  boot time. With a network device it also makes the port's 17 pages
+  for the executive, at `0x4FF00000`, and puts their address in the RPB.
+  It then starts EXEC in kernel mode at IPL 31, with R11 pointing at the
+  RPB.
+- `start_tcpip` starts the TCP/IP component, if there is a network
+  device ([DESIGN-0003](design/0003-tcpip-port.md)): `tcpip.elf`, lwIP
+  and a virtio-net driver, which the root task carries inside itself. It
+  copies it into a 2 MB page, gives it an address space with the port's
+  pages, the device's registers and the console, and a few capabilities:
+  its own notification, the PAL's, and the device's interrupt. It runs
+  above the executive's threads and below the PAL. It sets up the device
+  and prints `tcpip: lwIP 2.2.1 on virtio-net, MAC ...`, marks the port
+  ready, and waits: for the executive's doorbell, the device's interrupt
+  or the clock's tick, which the PAL's clock thread now gives it too.
 - After that it loops in `serve`: it handles the executive's PAL calls
   (MTPR, SWPCTX, REI, CHMx…), page faults and clock ticks
   ([DESIGN-0001](design/0001-pal-interface.md)). It only stops on a halt or
@@ -83,6 +96,8 @@ The executive is the VMS kernel, written in MACRO-32.
 - empties the type-ahead buffer, where typed characters wait until a
   program reads them, and turns on the console receive interrupt
   (`TTY$INIT`)
+- finds the port in the RPB (`NET$INIT`); its interrupt, at IPL 21, and
+  the software interrupt it requests, at IPL 6, are in the SCB too
 - prints `%EXEC-I-START … free pages`
 - mounts the system disk, `DKA0:`: it reads the volume's home block and
   the index file's header, which says where every other file's header is
@@ -117,7 +132,11 @@ interpreter. It is linked high in P1, which tells the executive it is one
   console, `OPA0:`. Its first command is `@SYS$MANAGER:SYLOGIN`, which
   runs the command procedure `DKA0:[SYSMGR]SYLOGIN.COM`, as VMS runs it
   at each login: it defines the global symbol `HOME`, a command that goes
-  back to `[SYSMGR]`. Then DCL reads a line with the `$` prompt: `$QIOW`
+  back to `[SYSMGR]`, and runs `TCPIP.EXE`. With a network, that sets
+  the interface's address, mask and gateway as `SET INTERFACE` last
+  saved them on the data disk, and prints `%TCPIP-I-SET, BGA0: ...`, and
+  creates the process `TCPIP$TELNET`, which runs `TELNETD.EXE` and waits
+  on TCP port 23 for `SET HOST` from another vaxpunk. Then DCL reads a line with the `$` prompt: `$QIOW`
   hands the read to the console's driver, which writes the prompt and
   holds the request until a line is typed, and DCL waits for its event
   flag ([ADR-0013](adr/0013-qio-irps-and-drivers.md)). That's where the
@@ -201,6 +220,16 @@ interpreter. It is linked high in P1, which tells the executive it is one
   CTRL/C AST of its own: then the console prints `*CANCEL*` and that AST
   comes instead.
 
+- `SET INTERFACE address mask gateway` and `SHOW INTERFACE` run
+  `TCPIP.EXE`, which sets and senses them with `$QIOW` on `BGA0:`, the
+  network's port driver, and saves the settings for the next boot.
+  `SET HOST address` runs `RTPAD.EXE`, which connects to port 23 there:
+  the other side's `TELNETD` creates a process named after the
+  connection's unit, `_BG02:`, running DCL with the connection as its
+  input and output, and RTPAD passes lines both ways until `LOGOUT` there
+  prints `%REM-S-END` here. `RUN TCPTEST` connects to a server on the
+  host and accepts a connection from it.
+
 The system disk is read only, the ramdisk is gone when the system stops,
 and there's no login yet.
 
@@ -263,3 +292,9 @@ CTRL/C, and SLEEPER with CTRL/Y and continues them, and EDIT while it
 reads, so that DCL reads the next commands, and looks for the
 success lines in `out/serial.log`. Once QEMU is gone, `ods-image` checks
 the data disk's volume and finds the file on it.
+
+`cargo test -p boot --test network` boots one system on QEMU's user
+network, sets and shows the interface, runs TCPTEST against a server and
+a client of its own, and logs in to the system itself with `SET HOST`.
+Then it boots two, on one QEMU socket network, each with a data disk it
+made holding saved settings, and logs in from one to the other.

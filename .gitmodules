@@ -1,3 +1,6 @@
 [submodule "kernel/seL4"]
 	path = kernel/seL4
 	url = https://github.com/seL4/seL4.git
+[submodule "tcpip/lwip"]
+	path = tcpip/lwip
+	url = https://github.com/lwip-tcpip/lwip.git

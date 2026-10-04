@@ -10,6 +10,7 @@ path = "lib.rs"
 
 [dependencies]
 kernel = { path = "../kernel" }
+tcpip = { path = "../tcpip" }
 
 [build-dependencies]
 vasm = { path = "../vtools/crates/vasm" }

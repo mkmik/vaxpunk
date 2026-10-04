@@ -40,6 +40,7 @@ kept current, like a design document.
 | [ADR-0013](adr/0013-qio-irps-and-drivers.md) | $QIO queues an I/O request packet to the device's driver, and its completion is a kernel mode AST | Proposed |
 | [ADR-0014](adr/0014-ctrlc-ctrly-asts.md) | CTRL/C and CTRL/Y are ASTs enabled with IO$_SETMODE, and DCL's CTRL/Y AST stops the image | Proposed |
 | [ADR-0015](adr/0015-file-system-io-through-the-disk-driver.md) | The file system hands its block I/O to the disk's start I/O routine in an IRP of its own | Proposed |
+| [ADR-0016](adr/0016-tcpip-component-and-bga0.md) | The TCP/IP component is lwIP and a virtio-net driver of our own that the PAL starts, and BGA0: clones a unit per connection | Proposed |
 
 ### PRDs
 
@@ -54,6 +55,7 @@ kept current, like a design document.
 | --- | --- |
 | [DESIGN-0001](design/0001-pal-interface.md) | PAL interface |
 | [DESIGN-0002](design/0002-executive-processes.md) | Processes, memory and system services in the executive |
+| [DESIGN-0003](design/0003-tcpip-port.md) | TCP/IP through the port |
 
 ## Adding a document
 

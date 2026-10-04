@@ -1,0 +1,96 @@
+        .TITLE  RTPAD   SET HOST: a remote login
+        .IDENT  /V0.1/
+;
+; DCL's SET HOST address runs this, with the address as its command line,
+; as VMS's DCL ran RTPAD.EXE. It connects to TCP port 23 there, where
+; another vaxpunk's TELNETD gives it a DCL of its own, and passes lines
+; both ways: what comes on the connection it writes on the terminal, and
+; each line read on the terminal, edited there, it sends with a CR LF.
+; When the other end closes, at its LOGOUT, it says so and returns.
+; ponytail: line at a time, the local terminal's editing and echo, no
+; Telnet option negotiation; good for DCL, not for EDIT's keypad mode.
+;
+        .LIBRARY "lib.mlb"
+        .LIBRARY "starlet.mlb"
+        .LIBRARY "sysexe.mlb"
+        $VADEF
+        $SSDEF
+        $IODEF
+
+        .EXTERNAL INET_ADDR
+
+BUFSIZE = 1024
+
+        .PSECT  DATA, NOEXE, WRT, LONG
+BGA0:   .ASCID  "BGA0:"
+INPUT:  .ASCID  "SYS$INPUT"
+SOCKCHAR:                               ; a TCP socket: protocol, type, family
+        .WORD   6
+        .BYTE   1, 2
+NCHAN:  .LONG   0                       ; the connection's channel
+TCHAN:  .LONG   0                       ; the terminal's
+ADDR:   .LONG   0                       ; the other end's address
+NIOSB:  .BLKQ   1                       ; the connection's read's
+TIOSB:  .BLKQ   1                       ; the terminal's
+IOSB:   .BLKQ   1                       ; a write's
+NBUF:   .BLKB   BUFSIZE                 ; what came on the connection
+TBUF:   .BLKB   BUFSIZE+2               ; a line typed, and its CR LF
+
+        .PSECT  CODE, EXE, LONG
+        .ENTRY  START, ^M<R2>
+        PUSHAL  ADDR
+        PUSHAB  @#VA$C_FOREIGN+1
+        MOVZBL  @#VA$C_FOREIGN, -(SP)
+        CALLS   #3, G^INET_ADDR
+        BLBC    R0, 90$
+        $ASSIGN_S DEVNAM=BGA0, CHAN=NCHAN
+        BLBC    R0, 90$
+        $QIOW_S CHAN=NCHAN, FUNC=#IO$_SETMODE, IOSB=IOSB, P1=SOCKCHAR
+        BSBW    STATUS
+        BLBC    R0, 90$
+        $QIOW_S CHAN=NCHAN, FUNC=#IO$_ACCESS, IOSB=IOSB, P3=ADDR, P4=#23
+        BSBW    STATUS
+        BLBC    R0, 90$
+        $ASSIGN_S DEVNAM=INPUT, CHAN=TCHAN
+        BLBC    R0, 90$
+        BSBW    NREAD
+        BSBW    TREAD
+10$:    $WFLOR_S EFN=#1, MASK=#6        ; flag 1 or 2
+        TSTW    NIOSB                   ; something came
+        BEQL    20$
+        MOVZWL  NIOSB, R0
+        BLBC    R0, 80$                 ; the other end closed
+        MOVZWL  NIOSB+2, R0
+        $QIOW_S CHAN=TCHAN, FUNC=#IO$_WRITEVBLK, IOSB=IOSB, P1=NBUF, P2=R0
+        BSBW    NREAD
+20$:    TSTW    TIOSB                   ; a line was typed
+        BEQL    10$
+        MOVZWL  TIOSB, R0
+        BLBC    R0, 80$
+        MOVZWL  TIOSB+2, R0
+        MOVB    #13, TBUF[R0]
+        MOVB    #10, TBUF+1[R0]
+        ADDL2   #2, R0
+        $QIOW_S CHAN=NCHAN, FUNC=#IO$_WRITEVBLK, IOSB=IOSB, P1=TBUF, P2=R0
+        BSBW    TREAD
+        BRB     10$
+80$:    $CANCEL_S CHAN=TCHAN
+        PRINT   "%REM-S-END, control returned to the local node"
+        MOVL    #SS$_NORMAL, R0
+90$:    RET
+
+; NREAD, TREAD: read the connection, with event flag 1, and the
+; terminal, with 2, each into its buffer.
+NREAD:  CLRQ    NIOSB
+        $QIO_S  EFN=#1, CHAN=NCHAN, FUNC=#IO$_READVBLK, IOSB=NIOSB, P1=NBUF, P2=#BUFSIZE
+        RSB
+TREAD:  CLRQ    TIOSB
+        $QIO_S  EFN=#2, CHAN=TCHAN, FUNC=#IO$_READVBLK, IOSB=TIOSB, P1=TBUF, P2=#BUFSIZE
+        RSB
+
+; STATUS: R0 = $QIOW's status. R0 = the IOSB's, if that was a success.
+STATUS: BLBC    R0, 90$
+        MOVZWL  IOSB, R0
+90$:    RSB
+
+        .END    START

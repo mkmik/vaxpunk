@@ -1,6 +1,6 @@
 #!/bin/sh
 # One-time host setup: installs the cross toolchain, seL4 build tools, mtools,
-# QEMU + EDK2 and just, then checks out the seL4 submodule.
+# QEMU + EDK2 and just, then checks out the seL4 and lwIP submodules.
 set -eu
 
 case "$(uname -s)" in

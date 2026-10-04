@@ -1,0 +1,52 @@
+        .TITLE  INET    Internet addresses, for the system disk's programs
+        .IDENT  /V0.1/
+;
+; build.rs links this module into each image, as it does lib/print.mar.
+;
+        .LIBRARY "starlet.mlb"
+        $SSDEF
+
+        .PSECT  INET_CODE, EXE, LONG
+; INET_ADDR len, adr, result: the address in the len characters at adr,
+; four numbers up to 255 and three dots, a.b.c.d, in network order, a in
+; its first byte, in the longword at result. R0 = SS$_NORMAL, or
+; SS$_IVADDR if it isn't one.
+        .ENTRY  INET_ADDR, ^M<R2, R3, R4, R5>
+        MOVL    8(AP), R0
+        ADDL3   R0, 4(AP), R5           ; past the text
+        CLRL    R3
+        CLRL    R2                      ; the number, 0-3
+10$:    CLRL    R4                      ; its value
+        CMPL    R0, R5
+        BGEQU   80$
+20$:    CMPL    R0, R5
+        BGEQU   30$
+        CMPB    (R0), #^A/./
+        BEQL    30$
+        SUBB3   #^A/0/, (R0)+, R1
+        CMPB    R1, #9
+        BGTRU   80$
+        MULL2   #10, R4
+        MOVZBL  R1, R1
+        ADDL2   R1, R4
+        CMPL    R4, #255
+        BGTRU   80$
+        BRB     20$
+30$:    ASHL    #3, R2, R1
+        INSV    R4, R1, #8, R3
+        INCL    R2
+        CMPL    R2, #4
+        BEQL    40$
+        CMPL    R0, R5                  ; a dot, and another number
+        BGEQU   80$
+        INCL    R0
+        BRB     10$
+40$:    CMPL    R0, R5
+        BNEQ    80$
+        MOVL    R3, @12(AP)
+        MOVL    #SS$_NORMAL, R0
+        RET
+80$:    MOVL    #SS$_IVADDR, R0
+        RET
+
+        .END

@@ -1,4 +1,5 @@
 //! Builds roottask.elf into OUT_DIR with the kernel's toolchain and libsel4,
+//! with the TCP/IP component's tcpip.elf in it,
 //! and the system disk, sysdisk.img, a Files-11 ODS-2 volume: in [SYSEXE],
 //! EXEC.EXE, linked from exec/*.mar, and an image for each sysexe/*.mar,
 //! linked with sysexe/lib/*.mar and against SYS.STB, the executive's
@@ -20,9 +21,14 @@ fn main() {
     }
     let out = PathBuf::from(env::var("OUT_DIR").unwrap());
     let cc = format!("{}gcc", env::var("DEP_SEL4_CROSS_COMPILE").unwrap());
+    // The TCP/IP component, which the PAL embeds (src/tcpip.S) and starts.
+    let tcpip = env::var("DEP_TCPIP_ELF").unwrap();
+    println!("cargo::rerun-if-changed={tcpip}");
     gcc(Command::new(cc)
         .args(CFLAGS.split_whitespace())
         .arg(format!("-I{}", env::var("DEP_SEL4_INCLUDE").unwrap()))
+        .arg("-I../tcpip/include")
+        .arg(format!("-DTCPIP_ELF=\"{tcpip}\""))
         .args(LDFLAGS.split_whitespace())
         .arg("-o")
         .arg(out.join("roottask.elf"))
