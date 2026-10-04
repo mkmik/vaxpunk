@@ -7,9 +7,11 @@
 //! SET HOST to itself, SHOW SYSTEM there, and LOGOUT.
 //!
 //! Two vaxpunks on one QEMU socket network, A and B, each with a data disk
-//! made here holding the SET INTERFACE it saved, which TCPIP.EXE replays
-//! at boot: B logs in to A with SET HOST, SHOW SYSTEM lists A's processes,
-//! and LOGOUT comes back to B.
+//! made here holding the configuration SET CONFIGURATION INTERFACE saves,
+//! which TCPIP.EXE applies at boot: B logs in to A with SET HOST, SHOW
+//! SYSTEM lists A's processes, and LOGOUT comes back to B. Then B saves
+//! another address, which SHOW INTERFACE doesn't show, since it is for the
+//! next boot, and which is on its data disk once it is down.
 
 use std::fs;
 use std::io::{Read, Write};
@@ -19,7 +21,7 @@ use std::process::{Child, ChildStdin, Command, Stdio};
 use std::thread::{self, sleep};
 use std::time::{Duration, Instant};
 
-use ods_image::{Conversion, Image, InitParams};
+use ods_image::{Conversion, Image, InitParams, Mode};
 
 /// A vaxpunk in QEMU, its console and its log.
 struct Vax {
@@ -105,8 +107,8 @@ fn free_port() -> u16 {
         .port()
 }
 
-/// A data disk with TCPIP$CONFIG.DAT holding command, as SET INTERFACE
-/// saves it.
+/// A data disk with TCPIP$CONFIG.DAT holding command, as SET
+/// CONFIGURATION INTERFACE saves it.
 fn data_disk(path: &Path, command: &str) {
     let _ = fs::remove_file(path);
     let params = InitParams {
@@ -227,6 +229,7 @@ fn network() {
     b.command("SET HOST 10.0.0.1");
     b.command("SHOW SYSTEM");
     b.command("LOGOUT");
+    b.command("SET CONFIGURATION INTERFACE 10.0.0.3 255.255.255.0 10.0.0.1");
     b.command("SHOW INTERFACE");
     let (a, b) = (a.stop(), b.stop());
     print!("{a}{b}");
@@ -240,4 +243,13 @@ fn network() {
     ] {
         assert!(b.contains(line), "no {line:?}");
     }
+    let mut img = Image::open(out.join("b-data.img"), Mode::ReadOnly).unwrap();
+    let fid = img.lookup("[000000]TCPIP$CONFIG.DAT").unwrap();
+    let mut saved = Vec::new();
+    img.copy_out(fid, &mut saved, Conversion::RecordsToLines)
+        .unwrap();
+    assert_eq!(
+        String::from_utf8_lossy(&saved),
+        "INTERFACE 10.0.0.3 255.255.255.0 10.0.0.1\n"
+    );
 }
