@@ -2,7 +2,8 @@ name: rust
 
 # The Cargo workspace. Its default members, ods/ and vtools/, are built and
 # tested. The OS crates (kernel, shim, roottask, image) need the cross C
-# toolchain, so CI only checks their formatting: their Rust is in */*.rs.
+# toolchain, so here CI only checks their formatting: their Rust is in */*.rs.
+# boot.yml builds and boots them.
 on:
   push:
     branches: [main]
