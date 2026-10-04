@@ -1,0 +1,6 @@
+! CREATE/DIRECTORY spec: CREATE.EXE makes a directory. ponytail: CREATE
+! without /DIRECTORY, which makes a file on VMS, is CREATE.EXE's error.
+define verb CREATE
+	image CREATE
+	parameter P1, label=FILE, prompt="File", value(required, type=$file)
+	qualifier DIRECTORY

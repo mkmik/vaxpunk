@@ -1,0 +1,237 @@
+        .TITLE  CLITEST Checks the command parser and the CLI$ routines
+        .IDENT  /V0.1/
+;
+; CLI$DCL_PARSE parses commands with CLITEST.CLD's tables, as a utility
+; parses its own commands, and CLI$PRESENT and CLI$GET_VALUE answer for
+; them: lists, concatenation, quoted strings, default values,
+; qualifiers and their negation, keywords and their values, a syntax
+; switched to, verbs and keywords abbreviated, a parameter prompted for,
+; a blank line, and the errors, which the parser reports as %CLI-W-. A failed check exits with 2 * N, N its
+; number in this file.
+;
+        .LIBRARY "starlet.mlb"
+        .LIBRARY "sysexe.mlb"
+        $SSDEF
+        $CLIMSGDEF
+
+        .EXTERNAL CLI$DCL_PARSE, CLI$PRESENT, CLI$GET_VALUE, CLITEST_TABLES
+
+INHIB = ^X10000000                      ; STS$M_INHIB_MSG
+CHECK = 0
+
+; PARSE line: parses the .ASCID string at line. R0 = the status.
+        .MACRO  PARSE   LINE
+        PUSHAB  G^CLITEST_TABLES
+        PUSHAQ  LINE
+        CALLS   #2, G^CLI$DCL_PARSE
+        .ENDM   PARSE
+
+; OKAY line: parses it, which must work.
+        .MACRO  OKAY    LINE
+        PARSE   LINE
+        CHECK = CHECK + 1
+        EXPECT  #SS$_NORMAL, CHECK
+        .ENDM   OKAY
+
+; FAILS line, status: parsing it must fail with status, reported.
+        .MACRO  FAILS   LINE, STATUS
+        PARSE   LINE
+        CHECK = CHECK + 1
+        EXPECT  #STATUS!INHIB, CHECK
+        .ENDM   FAILS
+
+; IS "name", status: CLI$PRESENT of name must be status.
+        .MACRO  IS      NAME, STATUS, ?L
+        .SAVE_PSECT LOCAL_BLOCK
+        .PSECT  CLI_NAMES, NOEXE, NOWRT, LONG
+L:      .ASCID  NAME
+        .RESTORE_PSECT
+        PUSHAQ  L
+        CALLS   #1, G^CLI$PRESENT
+        CHECK = CHECK + 1
+        EXPECT  #STATUS, CHECK
+        .ENDM   IS
+
+; VALUE "name", text, status: name's next value must be text, .ASCIC,
+; and CLI$GET_VALUE's status status.
+        .MACRO  VALUE   NAME, TEXT, STATUS, ?L
+        .SAVE_PSECT LOCAL_BLOCK
+        .PSECT  CLI_NAMES, NOEXE, NOWRT, LONG
+L:      .ASCID  NAME
+        .RESTORE_PSECT
+        PUSHAW  BUFLEN
+        PUSHAQ  BUFDSC
+        PUSHAQ  L
+        CALLS   #3, G^CLI$GET_VALUE
+        CHECK = CHECK + 1
+        EXPECT  #STATUS, CHECK
+        MOVAB   TEXT, R1
+        BSBW    SAMEVAL
+        CHECK = CHECK + 1
+        EXPECT  #1, CHECK
+        .ENDM   VALUE
+
+; NOVALUE "name": name must have no value left.
+        .MACRO  NOVALUE NAME, ?L
+        .SAVE_PSECT LOCAL_BLOCK
+        .PSECT  CLI_NAMES, NOEXE, NOWRT, LONG
+L:      .ASCID  NAME
+        .RESTORE_PSECT
+        PUSHAW  BUFLEN
+        PUSHAQ  BUFDSC
+        PUSHAQ  L
+        CALLS   #3, G^CLI$GET_VALUE
+        CHECK = CHECK + 1
+        EXPECT  #CLI$_ABSENT, CHECK
+        .ENDM   NOVALUE
+
+        .PSECT  DATA, NOEXE, WRT, LONG
+BUFDSC: .LONG   64                      ; CLI$GET_VALUE's: BUF
+        .ADDRESS BUF
+BUFLEN: .WORD   0
+BUF:    .BLKB   64
+LIST:   .ASCID  "SEND A,B+c"
+QUALS:  .ASCID  |se/log/copies=%X1F x "Hi ""there"""|
+KEYWD:  .ASCID  "SEND/NOLOG/MODE=(SLOW=7) X"
+KEEP:   .ASCID  "SEND/KEEP F"
+SHOWUS: .ASCID  "SHOW USE"
+INSF:   .ASCID  "SEND"
+CONFL:  .ASCID  "SEND/LOG/CONFIRM X"
+NOTNEG: .ASCID  "SEND/NOCONFIRM X"
+IVQUAL: .ASCID  "SEND/FOO X"
+MAXP:   .ASCID  "SEND X Y Z W"
+NUMBER: .ASCID  "SEND/COPIES=ABC X"
+VALREQ: .ASCID  "SEND/MODE=SLOW X"
+NOVALU: .ASCID  "SEND/LOG=1 X"
+NOLIST: .ASCID  "SEND X Y,Z"
+ABVERB: .ASCID  "S X"
+IVVERB: .ASCID  "XYZZY"
+ABKEYW: .ASCID  "SHOW US"
+BLANK:  .ASCID  "   "
+PROMPT: .ASCIC  "_To: "                 ; what ANSWER must be asked
+ASKED:  .LONG   0                       ; how many times it was
+T_A:    .ASCIC  "A"
+T_B:    .ASCIC  "B"
+T_C:    .ASCIC  "C"
+T_X:    .ASCIC  "X"
+T_F:    .ASCIC  "F"
+T_ANS:  .ASCIC  "ANSWERED"
+T_1:    .ASCIC  "1"
+T_7:    .ASCIC  "7"
+T_X1F:  .ASCIC  "%X1F"
+T_DFLT: .ASCIC  "DFLT"
+T_SEND: .ASCIC  "SEND"
+T_SLOW: .ASCIC  "SLOW"
+T_USERS:
+        .ASCIC  "USERS"
+T_HI:   .ASCIC  /"Hi ""there"""/
+
+        .PSECT  CODE, EXE, LONG
+        .ENTRY  START, ^M<R2, R3>
+; A list with a comma and a plus; defaults.
+        OKAY    LIST
+        VALUE   "TO", T_A, CLI$_COMMA
+        VALUE   "to", T_B, CLI$_CONCAT
+        VALUE   "TO", T_C, SS$_NORMAL
+        NOVALUE "TO"
+        VALUE   "TO", T_A, CLI$_COMMA   ; again from the first
+        IS      "TO", CLI$_PRESENT
+        IS      "TEXT", CLI$_ABSENT
+        IS      "P3", CLI$_DEFAULTED
+        VALUE   "P3", T_DFLT, SS$_NORMAL
+        IS      "LOG", CLI$_ABSENT
+        IS      "COPIES", CLI$_ABSENT
+        VALUE   "COPIES", T_1, SS$_NORMAL
+        IS      "MODE", CLI$_DEFAULTED
+        IS      "MODE.FAST", CLI$_DEFAULTED
+        IS      "MODE.SLOW", CLI$_ABSENT
+        VALUE   "$VERB", T_SEND, SS$_NORMAL
+; Qualifiers, a number, a quoted string, an abbreviated verb.
+        OKAY    QUALS
+        IS      "LOG", CLI$_PRESENT
+        VALUE   "COPIES", T_X1F, SS$_NORMAL
+        VALUE   "TO", T_X, SS$_NORMAL
+        VALUE   "TEXT", T_HI, SS$_NORMAL
+        VALUE   "$VERB", T_SEND, SS$_NORMAL
+; Negation, a keyword with a value.
+        OKAY    KEYWD
+        IS      "LOG", CLI$_NEGATED
+        NOVALUE "LOG"
+        IS      "MODE", CLI$_PRESENT
+        VALUE   "MODE", T_SLOW, SS$_NORMAL
+        IS      "MODE.SLOW", CLI$_PRESENT
+        VALUE   "MODE.SLOW", T_7, SS$_NORMAL
+; Another syntax, and a keyword parameter.
+        OKAY    KEEP
+        IS      "KEEP", CLI$_PRESENT
+        VALUE   "FILE", T_F, SS$_NORMAL
+        OKAY    SHOWUS
+        VALUE   "P1", T_USERS, SS$_NORMAL
+        IS      "P1.USERS", CLI$_PRESENT
+; A parameter prompted for: the answer goes on the line.
+        PUSHAB  ANSWER
+        PUSHAB  G^CLITEST_TABLES
+        PUSHAQ  INSF
+        CALLS   #3, G^CLI$DCL_PARSE
+        CHECK = CHECK + 1
+        EXPECT  #SS$_NORMAL, CHECK
+        CMPL    ASKED, #1
+        CHECK = CHECK + 1
+        BEQL    10$
+        MOVL    #<CHECK * 2>, R0
+        RET
+10$:    VALUE   "TO", T_ANS, SS$_NORMAL
+; A blank line is no command, and no message.
+        PARSE   BLANK
+        CHECK = CHECK + 1
+        EXPECT  #CLI$_NOCOMD, CHECK
+; The errors.
+        FAILS   INSF, CLI$_INSFPRM
+        FAILS   CONFL, CLI$_CONFLICT
+        FAILS   NOTNEG, CLI$_NOTNEG
+        FAILS   IVQUAL, CLI$_IVQUAL
+        FAILS   MAXP, CLI$_MAXPARM
+        FAILS   NUMBER, CLI$_NUMBER
+        FAILS   VALREQ, CLI$_VALREQ
+        FAILS   NOVALU, CLI$_NOVALU
+        FAILS   NOLIST, CLI$_NOLIST
+        FAILS   ABVERB, CLI$_ABVERB
+        FAILS   IVVERB, CLI$_IVVERB
+        FAILS   ABKEYW, CLI$_ABKEYW
+        IS      "LOG", CLI$_ABSENT      ; no command after a failure
+        PRINT   "CLITEST: ok"
+        MOVL    #SS$_NORMAL, R0
+        RET
+
+; ANSWER answer, prompt, anslen: CLI$DCL_PARSE's param_routine. Must be
+; asked with PROMPT; answers ANSWERED, if so, and counts the times.
+        .ENTRY  ANSWER, ^M<R2, R3>
+        MOVL    8(AP), R0
+        MOVZWL  (R0), BUFLEN
+        MOVC3   BUFLEN, @4(R0), BUF
+        MOVAB   PROMPT, R1
+        BSBB    SAMEVAL
+        BLBC    R0, 10$
+        INCL    ASKED
+        MOVL    4(AP), R0
+        MOVC3   #8, T_ANS+1, @4(R0)
+        MOVW    #8, @12(AP)
+10$:    MOVL    #SS$_NORMAL, R0
+        RET
+
+; SAMEVAL: R1 = a .ASCIC string. R0 = 1 if the value in BUF is it.
+; Uses R2, R3.
+SAMEVAL:
+        CLRL    R0
+        MOVZBL  (R1)+, R2
+        CMPW    R2, BUFLEN
+        BNEQ    20$
+10$:    DECL    R2
+        BLSS    15$
+        CMPB    (R1)[R2], BUF[R2]
+        BEQL    10$
+        RSB
+15$:    MOVL    #1, R0
+20$:    RSB
+
+        .END    START

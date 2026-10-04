@@ -35,3 +35,32 @@ L:      .ASCIC  TEXT
         RET
 OK:
         .ENDM   EXPECT
+
+; GETVALUE "name", desc, len: CLI$GET_VALUE of the command's entity name
+; into the string desc describes, its length into the word len. R0 =
+; SS$_NORMAL, CLI$_COMMA or CLI$_CONCAT, or CLI$_ABSENT, low bit clear,
+; past the last value (ADR-0017).
+        .MACRO  GETVALUE NAME, DESC, LEN, ?L
+        .EXTERNAL CLI$GET_VALUE
+        .SAVE_PSECT LOCAL_BLOCK
+        .PSECT  CLI_NAMES, NOEXE, NOWRT, LONG
+L:      .ASCID  NAME
+        .RESTORE_PSECT
+        PUSHAW  LEN
+        PUSHAQ  DESC
+        PUSHAQ  L
+        CALLS   #3, G^CLI$GET_VALUE
+        .ENDM   GETVALUE
+
+; PRESENT "name": CLI$PRESENT of the command's entity name. R0 =
+; CLI$_PRESENT or CLI$_DEFAULTED, low bit set, or CLI$_NEGATED or
+; CLI$_ABSENT, clear.
+        .MACRO  PRESENT NAME, ?L
+        .EXTERNAL CLI$PRESENT
+        .SAVE_PSECT LOCAL_BLOCK
+        .PSECT  CLI_NAMES, NOEXE, NOWRT, LONG
+L:      .ASCID  NAME
+        .RESTORE_PSECT
+        PUSHAQ  L
+        CALLS   #1, G^CLI$PRESENT
+        .ENDM   PRESENT

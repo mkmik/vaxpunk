@@ -75,6 +75,42 @@ SS$_FORCEDEXIT = 8572                   ; $FORCEX ended the image
 SS$_NOLOGTAB = 8852
         .ENDM   $SSDEF
 
+; $CLIMSGDEF: the command language interpreter's status codes, facility
+; CLI, as VMS numbers them. DCL reports them as %DCL-.
+        .MACRO  $CLIMSGDEF
+CLI$_ABVERB = ^X38008                   ; ambiguous command verb
+CLI$_ABKEYW = ^X38010                   ; ambiguous qualifier or keyword
+CLI$_BUFOVF = ^X38018                   ; command buffer overflow
+CLI$_INSFPRM = ^X38048                  ; missing command parameters
+CLI$_IVKEYW = ^X38060                   ; unrecognized keyword
+CLI$_IVVERB = ^X38090                   ; unrecognized command verb
+CLI$_MAXPARM = ^X38098                  ; too many parameters
+CLI$_NOCCAT = ^X380A8                   ; parameter concatenation not allowed
+CLI$_NOCOMD = ^X380B0                   ; no command on line
+CLI$_NOKEYW = ^X380B8                   ; qualifier name is missing
+CLI$_NOLIST = ^X380C0                   ; list of parameter values not allowed
+CLI$_NOQUAL = ^X380C8                   ; qualifiers not allowed
+CLI$_NOVALU = ^X380D0                   ; value not allowed
+CLI$_NOTNEG = ^X380D8                   ; qualifier or keyword not negatable
+CLI$_NUMBER = ^X380E8                   ; invalid numeric value
+CLI$_PARMDEL = ^X38110                  ; invalid parameter delimiter
+CLI$_VALREQ = ^X38150                   ; missing qualifier or keyword value
+CLI$_ONEVAL = ^X38158                   ; list of values not allowed
+CLI$_ABSENT = ^X381F0                   ; entity or value absent from command string
+CLI$_NEGATED = ^X381F8                  ; entity explicitly negated
+CLI$_LOCNEG = ^X38230                   ; entity explicitly and locally negated
+CLI$_IVQUAL = ^X38240                   ; unrecognized qualifier
+CLI$_CONFLICT = ^X38258                 ; illegal combination of command elements
+CLI$_NOPAREN = ^X38288                  ; value improperly delimited
+CLI$_INVTAB = ^X38922                   ; command tables have invalid format
+CLI$_ENTNF = ^X38932                    ; entity not found in command tables
+CLI$_PRESENT = ^X3FD19                  ; entity value is present
+CLI$_DEFAULTED = ^X3FD21                ; entity defaulted present
+CLI$_CONCAT = ^X3FD29                   ; value terminated by a plus sign
+CLI$_LOCPRES = ^X3FD31                  ; entity value is locally present
+CLI$_COMMA = ^X3FD39                    ; value terminated by a comma
+        .ENDM   $CLIMSGDEF
+
 ; $RMSDEF: RMS status codes, as VMS numbers them.
         .MACRO  $RMSDEF
 RMS$_NORMAL = ^X10001

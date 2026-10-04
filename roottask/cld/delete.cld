@@ -1,0 +1,19 @@
+! DELETE spec: DELETE.EXE deletes files. DELETE/SYMBOL name, DCL's own,
+! deletes a symbol, and DELETE/SYMBOL/ALL every one of a level.
+define verb DELETE
+	image DELETE
+	parameter P1, label=FILE, prompt="File", value(required, type=$infile)
+	qualifier LOG
+	qualifier SYMBOL, nonnegatable, syntax=DELETE_SYMBOL
+
+define syntax DELETE_SYMBOL
+	cliroutine DELSYM
+	parameter P1, label=SYMBOL, prompt="Symbol", value(required)
+	qualifier SYMBOL, nonnegatable, syntax=DELETE_SYMBOL
+	qualifier ALL, nonnegatable, syntax=DELETE_SYMBOL_ALL
+	qualifier GLOBAL
+	qualifier LOCAL
+	disallow GLOBAL and LOCAL
+
+define syntax DELETE_SYMBOL_ALL
+	noparameters

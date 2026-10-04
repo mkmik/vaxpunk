@@ -1,18 +1,15 @@
         .TITLE  DIRECTORY Lists files
         .IDENT  /V0.2/
 ;
-; DCL's DIRECTORY [spec] runs this, with spec, in capitals, as its command
-; line at VA$C_FOREIGN. Lists the files spec names, as VMS's DIRECTORY
+; DCL's DIRECTORY [spec] runs this. Lists the files spec names, as VMS's DIRECTORY
 ; does: the directory, then their names, four to a line, then how many.
 ; RMS's $PARSE expands spec, what it leaves out taken from *.*;*, and the
 ; directory from the default one; $SEARCH finds each file. * matches any
 ; characters, % one.
 ; ponytail: one directory, since RMS has no wildcard directories.
 ;
-        .LIBRARY "lib.mlb"
         .LIBRARY "starlet.mlb"
         .LIBRARY "sysexe.mlb"
-        $VADEF
         $SSDEF
         $RMSDEF
         $FABDEF
@@ -39,7 +36,11 @@ DEFSPEC:                                ; what spec leaves out
         .ASCII  "*.*;*"
 DEFLEN = .-DEFSPEC
         .ALIGN  LONG
-FAB:    $FAB    FNA=VA$C_FOREIGN+1, DNA=DEFSPEC, DNS=DEFLEN, NAM=NAM
+FAB:    $FAB    FNA=SPEC, DNA=DEFSPEC, DNS=DEFLEN, NAM=NAM
+SPECDSC:                                ; FILE, the parameter, if given
+        .LONG   255
+        .ADDRESS SPEC
+SPEC:   .BLKB   255
 NAM:    $NAM    ESA=EXP, ESS=255, RSA=RES, RSS=255
 EXP:    .BLKB   255
 RES:    .BLKB   255
@@ -48,7 +49,10 @@ FILES:  .LONG   0
 
         .PSECT  CODE, EXE, LONG
         .ENTRY  START, ^M<R2, R3, R4, R5, R6>
-        MOVB    @#VA$C_FOREIGN, FAB+FAB$B_FNS
+        GETVALUE "FILE", SPECDSC, SPECDSC
+        BLBS    R0, 5$
+        CLRL    SPECDSC
+5$:     MOVB    SPECDSC, FAB+FAB$B_FNS
         $PARSE  FAB=FAB
         BLBC    R0, 90$
 10$:    $SEARCH FAB=FAB

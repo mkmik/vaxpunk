@@ -1,0 +1,4 @@
+! DIRECTORY [spec]: DIRECTORY.EXE lists files.
+define verb DIRECTORY
+	image DIRECTORY
+	parameter P1, label=FILE, value(type=$infile)

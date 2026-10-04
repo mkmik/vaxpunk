@@ -1,0 +1,4 @@
+! DISMOUNT device: DISMOUNT.EXE dismounts a volume.
+define verb DISMOUNT
+	image DISMOUNT
+	parameter P1, label=DEVICE, prompt="Device", value(required)

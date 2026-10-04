@@ -2,9 +2,10 @@
         .IDENT  /V0.1/
 ;
 ; DCL's SET INTERFACE address mask gateway, SHOW INTERFACE and SET
-; CONFIGURATION INTERFACE address mask gateway run this, with what
-; follows SET or SHOW as its command line, in the spirit of TCP/IP
-; Services' TCPIP commands. An address is four numbers and dots. As
+; CONFIGURATION INTERFACE address mask gateway run this, in the spirit of
+; TCP/IP Services' TCPIP commands: OPTION, the parse's first parameter,
+; says which, and the command is INTERFACE and the ADDRESS, MASK and
+; GATEWAY parameters, as it is saved. An address is four numbers and dots. As
 ; there, SET INTERFACE changes the running system and SET CONFIGURATION
 ; INTERFACE the saved configuration, which the next boot applies:
 ; SET INTERFACE sets the interface with IO$_SETCHAR on BGA0:, the
@@ -19,19 +20,17 @@
 ; made a volume there.
 ; ponytail: the default gateway is part of the interface; TCP/IP
 ; Services made it a route, SET ROUTE /DEFAULT /GATEWAY=address, and SET
-; CONFIGURATION ROUTE to save it. Do that once DCL parses qualifiers.
+; CONFIGURATION ROUTE to save it.
 ;
-        .LIBRARY "lib.mlb"
         .LIBRARY "starlet.mlb"
         .LIBRARY "sysexe.mlb"
-        $VADEF
         $SSDEF
         $RMSDEF
         $FABDEF
         $RABDEF
         $IODEF
 
-        .EXTERNAL PUT_LINE, INET_ADDR
+        .EXTERNAL PUT_LINE, INET_ADDR, CLI$GET_VALUE
 
         .PSECT  DATA, NOEXE, WRT, LONG
 BGA0:   .ASCID  "BGA0:"
@@ -39,7 +38,16 @@ CHAN:   .LONG   0
 IOSB:   .BLKQ   1
 SETTINGS:                               ; address, mask, gateway, flags: 2 the link is up
         .BLKL   4
-CMD:    .BLKB   256                     ; the command, .ASCIC: the command line's, or the saved one
+CMD:    .BLKB   256                     ; the command, .ASCIC: the parse's, or the saved one
+OPTION: .LONG   16                      ; OPTION, the parameter: INTERFACE or CONFIGURATION
+        .ADDRESS OPTBUF
+OPTBUF: .BLKB   16
+VERB:   .LONG   4                       ; $VERB: SET or SHOW
+        .ADDRESS VERBBUF
+VERBBUF:
+        .BLKB   4
+VALUE:  .LONG   0                       ; a parameter, after the command in CMD
+        .LONG   0
 FAB:    $FAB    FNA=CONFIG, FNS=CONFIGLEN
 RAB:    $RAB    FAB=FAB, UBF=CMD+1, USZ=255
 LINE:   .BLKB   256                     ; a line being written, .ASCIC
@@ -47,8 +55,12 @@ CONFIG: .ASCII  "DKB0:[000000]TCPIP$CONFIG.DAT"
 CONFIGLEN = . - CONFIG
 INTERFACE:
         .ASCIC  "INTERFACE"
-CONFIGURATION:
-        .ASCIC  "CONFIGURATION"
+PARAMS: .ADDRESS P_ADDRESS, P_MASK, P_GATEWAY ; the parameters, in CMD's order
+P_ADDRESS:
+        .ASCID  "ADDRESS"
+P_MASK: .ASCID  "MASK"
+P_GATEWAY:
+        .ASCID  "GATEWAY"
 TELNETD:
         .ASCID  "TELNETD.EXE"
 TELNETD_NAME:
@@ -58,39 +70,45 @@ TELNETD_NAME:
         .ENTRY  START, ^M<R2, R3, R4, R5, R6>
         $ASSIGN_S DEVNAM=BGA0, CHAN=CHAN
         BLBC    R0, 90$
-        MOVZBL  @#VA$C_FOREIGN, R0
-        BEQL    BOOT
-        MOVC3   R0, @#VA$C_FOREIGN+1, CMD+1
-        MOVB    @#VA$C_FOREIGN, CMD
-        MOVL    #1, R2                  ; INTERFACE ...
-        MOVAB   INTERFACE, R3
-        BSBW    ISWORD
-        BLBC    R0, 10$
-        MOVL    #2, R2
-        BSBW    WORD
-        TSTL    R1
-        BEQL    SHOW
+        GETVALUE "OPTION", OPTION, OPTION
+        BLBS    R0, 5$
+        BRW     BOOT                    ; no command
+5$:     CMPB    OPTBUF, #^A/C/          ; SET CONFIGURATION INTERFACE
+        BEQL    10$
+        GETVALUE "$VERB", VERB, VERB
+        CMPB    VERBBUF+1, #^A/H/       ; SHOW INTERFACE
+        BNEQ    7$
+        BRW     SHOW
+7$:     BSBW    COMMAND                 ; SET INTERFACE
         BSBW    SET
         RET
-10$:    MOVAB   CONFIGURATION, R3       ; or CONFIGURATION INTERFACE ...
-        BSBW    ISWORD
-        BLBC    R0, 80$
-        MOVL    #2, R2
-        MOVAB   INTERFACE, R3
-        BSBW    ISWORD
-        BLBC    R0, 80$
-        BSBW    WORD                    ; what is saved starts at INTERFACE
-        MOVAB   CMD+1, R2
-        MOVZBL  CMD, R1
-        ADDL2   R2, R1
-        SUBL2   R0, R1
-        MOVB    R1, CMD
-        MOVC3   R1, (R0), (R2)
+10$:    BSBW    COMMAND
         BSBW    PARSE
         BLBC    R0, 90$
         BRW     SAVE
-80$:    MOVL    #SS$_BADPARAM, R0
 90$:    RET
+
+; COMMAND: CMD = INTERFACE address mask gateway, from the parse. Uses
+; R0-R5.
+COMMAND:
+        MOVZBL  INTERFACE, R0
+        MOVB    R0, CMD
+        MOVC3   R0, INTERFACE+1, CMD+1
+        MOVAB   PARAMS, R5
+10$:    MOVZBL  CMD, R0                 ; a blank, then the value
+        INCB    CMD
+        MOVB    #^A/ /, CMD+1[R0]
+        MOVAB   CMD+2[R0], VALUE+4
+        SUBL3   R0, #254, VALUE
+        PUSHAW  VALUE
+        PUSHAQ  VALUE
+        PUSHL   (R5)+
+        CALLS   #3, G^CLI$GET_VALUE
+        ADDB2   VALUE, CMD
+        MOVAB   PARAMS+12, R0
+        CMPL    R5, R0
+        BLSSU   10$
+        RSB
 
 ; BOOT: no command line: unless the interface has an address already,
 ; the saved command, if there is one, from the data disk. Then the
@@ -158,24 +176,6 @@ PARSE:  MOVL    #2, R2
         MOVL    R3, (R6)+
         AOBLEQ  #4, R2, 10$
 90$:    RSB
-
-; ISWORD: R2 = n, R3 = a word, .ASCIC. R0 = 1 if CMD's nth word is it,
-; else 0. Keeps R2 and R3.
-ISWORD: PUSHR   #^M<R2, R3, R4>
-        BSBW    WORD
-        MOVZBL  (R3)+, R4
-        CMPL    R1, R4
-        BNEQ    80$
-10$:    DECL    R1
-        BLSS    20$
-        CMPB    (R0)[R1], (R3)[R1]
-        BEQL    10$
-        BRB     80$
-20$:    MOVL    #1, R0
-        BRB     90$
-80$:    CLRL    R0
-90$:    POPR    #^M<R2, R3, R4>
-        RSB
 
 ; SHOW: writes the interface's address, mask and gateway, and the link's
 ; state.

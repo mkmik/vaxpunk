@@ -1,0 +1,5 @@
+! MOUNT device [label]: MOUNT.EXE mounts a volume.
+define verb MOUNT
+	image MOUNT
+	parameter P1, label=DEVICE, prompt="Device", value(required)
+	parameter P2, label=LABEL

@@ -169,7 +169,8 @@ VA$C_STACKS = ^X7FFE4000                ; the mode stacks, executive's first
 VA$C_ESP = ^X7FFE8000                   ; the executive stack's top
 VA$C_SSP = ^X7FFEC000                   ; the supervisor stack's top
 VA$C_USP = ^X7FFF0000                   ; the user stack's top
-VA$C_FOREIGN = ^X7FFEFF00               ; an image's command line, .ASCIC, from $IMGACT, above its stack
+VA$C_CLI_RESULT = ^X7FFEF800            ; the parse of an image's command, from $IMGACT, above its stack
+VA$C_CLI_RESMAX = 2048                  ; its size, at most
 VA$C_P1END = ^X7FFF0000
         .ENDM   $VADEF
 

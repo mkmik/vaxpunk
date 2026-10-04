@@ -1,23 +1,22 @@
         .TITLE  DISMOUNT Dismounts a Files-11 volume
         .IDENT  /V0.1/
 ;
-; DCL's DISMOUNT device runs this, with the device as its command line:
-; $DISMOU dismounts the volume on it, DKB0: or MDA0:, which then needs a
-; MOUNT before its files can be named again. Returns $DISMOU's status.
+; DCL's DISMOUNT device runs this: $DISMOU dismounts the volume on it,
+; DKB0: or MDA0:, which then needs a MOUNT before its files can be named
+; again. Returns $DISMOU's status.
 ; ponytail: no qualifiers.
 ;
         .LIBRARY "starlet.mlb"
-
-        .EXTERNAL GET_PARAM
+        .LIBRARY "sysexe.mlb"
 
         .PSECT  DATA, NOEXE, WRT, LONG
-DEVICE: .LONG   0, 0                    ; a descriptor of the parameter
+DEVICE: .LONG   64                      ; DEVICE, the parameter
+        .ADDRESS DEVBUF
+DEVBUF: .BLKB   64
 
         .PSECT  CODE, EXE, LONG
         .ENTRY  START, ^M<>
-        PUSHAB  DEVICE
-        PUSHL   #1
-        CALLS   #2, G^GET_PARAM
+        GETVALUE "DEVICE", DEVICE, DEVICE
         $DISMOU_S DEVNAM=DEVICE
         RET
 

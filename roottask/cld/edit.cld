@@ -1,0 +1,4 @@
+! EDIT spec: EDIT.EXE, EDT.
+define verb EDIT
+	image EDIT
+	parameter P1, label=FILE, prompt="File", value(required, type=$file)

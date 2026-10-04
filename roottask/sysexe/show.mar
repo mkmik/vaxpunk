@@ -1,8 +1,8 @@
         .TITLE  SHOW    Shows the process and the system
         .IDENT  /V0.1/
 ;
-; DCL's SHOW PROCESS and SHOW SYSTEM run this, with PROCESS or SYSTEM as
-; its command line, as VMS's DCL runs SHOW.EXE for them. SHOW PROCESS
+; DCL's SHOW PROCESS and SHOW SYSTEM run this, as VMS's DCL runs SHOW.EXE
+; for them; OPTION, the parameter, says which. SHOW PROCESS
 ; shows this process, what $GETJPI says of it. SHOW SYSTEM shows the
 ; version and how long the system has been up, from $GETSYI, then a line
 ; for each process, from a wildcard $GETJPI: its PID, name, state,
@@ -16,7 +16,7 @@
         $JPIDEF
         $SYIDEF
 
-        .EXTERNAL PUT_LINE, GET_PARAM
+        .EXTERNAL PUT_LINE
 
 ; ADDTEXT "text": appends text to LINE. Uses R0-R2.
         .MACRO  ADDTEXT TEXT, ?L
@@ -30,7 +30,9 @@ L:      .ASCIC  TEXT
         .ENDM   ADDTEXT
 
         .PSECT  DATA, NOEXE, WRT, LONG
-DESC:   .LONG   0, 0                    ; the command line's parameter
+DESC:   .LONG   8                       ; OPTION, the keyword
+        .ADDRESS WHAT
+WHAT:   .BLKB   8
 CTX:    .LONG   -1                      ; the wildcard $GETJPI's scan
 JPIITEMS:                               ; what $GETJPIW returns of a process
         .WORD   4, JPI$_PID
@@ -83,11 +85,9 @@ CHAR:   .BLKB   1
 
         .PSECT  CODE, EXE, LONG
         .ENTRY  START, ^M<R2, R3, R4, R5>
-        PUSHAB  DESC
-        PUSHL   #1
-        CALLS   #2, G^GET_PARAM
+        GETVALUE "OPTION", DESC, DESC
         BLBC    R0, SYSTEM
-        CMPB    @DESC+4, #^A/P/
+        CMPB    WHAT, #^A/P/
         BNEQ    SYSTEM
 
 ; SHOW PROCESS

@@ -1,0 +1,132 @@
+! The verbs DCL does itself: CLIROUTINE names the code in DCL that does
+! each, which takes its values from the parse.
+
+define verb CONTINUE
+	cliroutine CONTINUE
+
+define verb DEASSIGN
+	cliroutine DEASSIGN
+	parameter P1, label=LOGICAL_NAME, prompt="Log_name", value(required)
+	qualifier PROCESS
+	qualifier SYSTEM
+	qualifier TABLE, value(required)
+	disallow any2(PROCESS, SYSTEM, TABLE)
+
+define verb DEFINE
+	cliroutine DEFINE
+	parameter P1, label=LOGICAL_NAME, prompt="Log_name", value(required)
+	parameter P2, label=EQUIVALENCE_NAME, prompt="Equ_name", value(required)
+	qualifier LOG, default
+	qualifier PROCESS
+	qualifier SYSTEM
+	qualifier TABLE, value(required)
+	disallow any2(PROCESS, SYSTEM, TABLE)
+
+define verb EXIT
+	cliroutine EXIT
+	parameter P1, label=STATUS, value(type=$rest_of_line)
+
+define verb GOTO
+	cliroutine GOTO
+	parameter P1, label=LABEL, prompt="Label", value(required)
+
+define verb HELP
+	image HELP
+	parameter P1, label=TOPIC, value(type=$rest_of_line)
+
+define verb IF
+	cliroutine IF
+	parameter P1, label=EXPRESSION, prompt="Expression", value(required, type=$rest_of_line)
+
+define verb LOGOUT
+	cliroutine LOGOUT
+
+define verb RUN
+	cliroutine RUN
+	parameter P1, label=FILE, prompt="File", value(required, type=$infile)
+
+define verb SET
+	cliroutine SET
+	parameter P1, label=OPTION, prompt="What", value(required, type=SET_OPTIONS)
+
+define type SET_OPTIONS
+	keyword CONFIGURATION, syntax=SET_CONFIGURATION
+	keyword DEFAULT, syntax=SET_DEFAULT
+	keyword HOST, syntax=SET_HOST
+	keyword INTERFACE, syntax=SET_INTERFACE
+
+define syntax SET_DEFAULT
+	parameter P1, label=OPTION, value(required, type=SET_OPTIONS)
+	parameter P2, label=DIRECTORY, prompt="Directory", value(required)
+
+! SET HOST address: RTPAD.EXE, a remote login.
+define syntax SET_HOST
+	image RTPAD
+	parameter P1, label=OPTION, value(required, type=SET_OPTIONS)
+	parameter P2, label=NODE, prompt="Node", value(required)
+
+! SET INTERFACE, SET CONFIGURATION INTERFACE, SHOW INTERFACE: TCPIP.EXE.
+define syntax SET_INTERFACE
+	image TCPIP
+	parameter P1, label=OPTION, value(required, type=SET_OPTIONS)
+	parameter P2, label=ADDRESS, prompt="Address", value(required)
+	parameter P3, label=MASK, prompt="Mask", value(required)
+	parameter P4, label=GATEWAY, prompt="Gateway", value(required)
+
+define syntax SET_CONFIGURATION
+	image TCPIP
+	parameter P1, label=OPTION, value(required, type=SET_OPTIONS)
+	parameter P2, label=COMPONENT, prompt="Component", value(required, type=CONFIGURATION_OPTIONS)
+	parameter P3, label=ADDRESS, prompt="Address", value(required)
+	parameter P4, label=MASK, prompt="Mask", value(required)
+	parameter P5, label=GATEWAY, prompt="Gateway", value(required)
+
+define type CONFIGURATION_OPTIONS
+	keyword INTERFACE
+
+define verb SHOW
+	cliroutine SHOW
+	parameter P1, label=OPTION, prompt="What", value(required, type=SHOW_OPTIONS)
+
+define type SHOW_OPTIONS
+	keyword DEFAULT
+	keyword DEVICES, syntax=SHOW_DEVICES
+	keyword INTERFACE, syntax=SHOW_INTERFACE
+	keyword LOGICAL, syntax=SHOW_LOGICAL
+	keyword PROCESS, syntax=SHOW_IMAGE
+	keyword SYMBOL, syntax=SHOW_SYMBOL
+	keyword SYSTEM, syntax=SHOW_IMAGE
+
+define syntax SHOW_DEVICES
+	parameter P1, label=OPTION, value(required, type=SHOW_OPTIONS)
+	parameter P2, label=DEVICE_NAME
+	qualifier MOUNTED
+
+define syntax SHOW_LOGICAL
+	parameter P1, label=OPTION, value(required, type=SHOW_OPTIONS)
+	parameter P2, label=LOGICAL_NAME
+	qualifier PROCESS
+	qualifier SYSTEM
+	qualifier TABLE, value(required)
+	disallow any2(PROCESS, SYSTEM, TABLE)
+
+define syntax SHOW_SYMBOL
+	parameter P1, label=OPTION, value(required, type=SHOW_OPTIONS)
+	parameter P2, label=SYMBOL
+	qualifier ALL
+	qualifier GLOBAL
+	qualifier LOCAL
+	disallow GLOBAL and LOCAL
+	disallow P2 and ALL
+
+! SHOW PROCESS and SHOW SYSTEM: SHOW.EXE.
+define syntax SHOW_IMAGE
+	image SHOW
+
+define syntax SHOW_INTERFACE
+	image TCPIP
+
+define verb WRITE
+	cliroutine WRITE
+	parameter P1, label=LOGICAL_NAME, prompt="Log_name", value(required)
+	parameter P2, label=EXPRESSION, prompt="Expression", value(required, type=$rest_of_line)

@@ -14,31 +14,35 @@
 ;               runs DIRECTORY.EXE
 ;   TYPE spec   runs TYPE.EXE
 ;   DEFINE name equivalence
-;               makes a logical name in the process's table
+;               makes a logical name in the process's table, or with
+;               /SYSTEM or /TABLE=table that one's; /NOLOG says nothing
+;               of the one it replaced
 ;   DEASSIGN name
-;               deletes it
+;               deletes it, with the same qualifiers
 ;   SHOW LOGICAL [name]
 ;               translates a logical name, as $ASSIGN would; with no
-;               name, or *, lists them all
+;               name, or *, lists them all; /PROCESS, /SYSTEM and
+;               /TABLE=table look in that table only
 ;   SET DEFAULT [dev:][dir]
 ;               sets the process's default directory, with $SETDDIR,
 ;               and device, its SYS$DISK
 ;   SHOW DEFAULT
 ;               shows it, with the device
 ;   SHOW DEVICES [name]
-;               lists the devices, those whose names start with name
+;               lists the devices, those whose names start with name;
+;               /MOUNTED those with a volume mounted
 ;   SHOW PROCESS, SHOW SYSTEM
-;               run SHOW.EXE, with PROCESS or SYSTEM as its command line
+;               run SHOW.EXE
 ;   SET INTERFACE address mask gateway, SHOW INTERFACE,
 ;   SET CONFIGURATION INTERFACE address mask gateway
-;               run TCPIP.EXE, with what follows SET or SHOW as its
-;               command line
+;               run TCPIP.EXE
 ;   SET HOST address
 ;               runs RTPAD.EXE, a remote login to address
 ;   EDIT spec   runs EDIT.EXE, with spec as its command line
-;   COPY from to
+;   COPY[/LOG] from to
 ;               runs COPY.EXE
-;   DELETE spec runs DELETE.EXE
+;   DELETE[/LOG] spec
+;               runs DELETE.EXE
 ;   INITIALIZE device label
 ;               runs INIT.EXE
 ;   MOUNT device [label]
@@ -48,7 +52,7 @@
 ;   CREATE/DIRECTORY spec
 ;               runs CREATE.EXE
 ;   CONTINUE    goes back to the image CTRL/Y stopped
-;   HELP        lists the commands
+;   HELP [verb] runs HELP.EXE, which lists the commands from DCL$TABLES
 ;   LOGOUT      ends the process
 ;   @file [p1 ... p8]
 ;               runs the command procedure file, file.COM if it has no
@@ -66,14 +70,20 @@
 ;   WRITE SYS$OUTPUT expression[,...]
 ;               writes the values on the console
 ;   SHOW SYMBOL name
-;               shows a symbol's value
+;               shows a symbol's value: the nearest, or with /LOCAL or
+;               /GLOBAL that one; /ALL instead of a name shows them all
 ;   DELETE/SYMBOL name
-;               deletes a local symbol
+;               deletes a local symbol, or with /GLOBAL a global one;
+;               /ALL instead of a name deletes them all
 ;
-; An image a command runs gets the command's parameters as its command
-; line, in capitals, a blank between each two. A verb may be abbreviated,
-; to as little as its first letter; the first that matches is the one. A
-; symbol may stand for the verb, and the words after it: HOME ==
+; The verbs are DCL$TABLES's, from roottask/cld/*.cld (ADR-0017).
+; CLI$$DCL_PARSE parses each command with them, and prompts for the
+; parameters it needs at the console: a verb, or a qualifier, may be
+; abbreviated to 4 characters, or fewer that no other starts with. An
+; image a verb runs gets the parse, which it reads with CLI$PRESENT and
+; CLI$GET_VALUE. A verb DCL does itself has a CLIROUTINE, the name of its
+; code in ROUTINES. A symbol may stand for the verb, and the words after
+; it: HOME ==
 ; "SET DEFAULT [SYSMGR]" makes HOME a command. A status with
 ; STS$M_INHIB_MSG set is one the image reported itself. It reads the
 ; commands from SYS$INPUT, but SYS$MANAGER:SYSTARTUP_VMS.COM's and
@@ -97,7 +107,7 @@
 ; elsewhere is its integer, or 1 if it starts with T or Y, else 0. A
 ; command whose status is an error or a fatal error ends every procedure,
 ; as VMS's ON ERROR THEN EXIT does; so does CTRL/Y, at the next command.
-; ponytail: message texts for a few statuses only; no qualifiers. @
+; ponytail: message texts for a few statuses only. @
 ; reads the whole procedure into PBUF, and it goes when the procedure
 ; ends: 16 KB for those running at once. No ON, IF blocks, lexical
 ; functions, OPEN or READ; lines without $, an image's input on VMS, are
@@ -122,6 +132,8 @@
         $UCBDEF
 
         .EXTERNAL PUT_LINE, SCH$GL_CURPCB, LNM$GQ_SYSTEM
+        .EXTERNAL DCL$TABLES, CLI$$DCL_PARSE, CLI$$RESULT, CLI$$IMAGE, CLI$$ROUTINE
+        .EXTERNAL CLI$GET_VALUE, CLI$PRESENT
 
 LINESIZE = 255
 INHIB_MSG = 28                          ; STS$V_INHIB_MSG
@@ -132,6 +144,7 @@ PBUFSIZE = 16384
 NSYM = 64                               ; symbols
 NVAL = 16                               ; values an expression may hold at once
 GLOBAL = -1                             ; a global symbol's level
+ANY = -2                                ; SCOPE: neither /LOCAL nor /GLOBAL
 ; A value: an integer or a string.
 VAL$L_TYPE = 0                          ; 0 an integer, 1 a string
 VAL$L_INT = 4                           ; the integer
@@ -203,49 +216,94 @@ LINE:   .BLKB   LINESIZE                ; the command line
 TOKEN:  .BLKB   LINESIZE+4              ; a word of it, in capitals, and room for .EXE
 TOKDSC: .LONG   0                       ; a descriptor of TOKEN: its length
         .ADDRESS TOKEN
-DIRIMG: .ASCID  "DIRECTORY.EXE"
-TYPEIMG:
-        .ASCID  "TYPE.EXE"
-EDITIMG:
-        .ASCID  "EDIT.EXE"
-COPYIMG:
-        .ASCID  "COPY.EXE"
-DELIMG: .ASCID  "DELETE.EXE"
-INITIMG:
-        .ASCID  "INIT.EXE"
-MOUNTIMG:
-        .ASCID  "MOUNT.EXE"
-DISMIMG:
-        .ASCID  "DISMOUNT.EXE"
-CREIMG: .ASCID  "CREATE.EXE"
-SHOWIMG:
-        .ASCID  "SHOW.EXE"
-TCPIPIMG:
-        .ASCID  "TCPIP.EXE"
-RTPADIMG:
-        .ASCID  "RTPAD.EXE"
-V_HOST: .ASCIC  "HOST"
-V_INTERFACE:
-        .ASCIC  "INTERFACE"
-V_CONFIGURATION:
-        .ASCIC  "CONFIGURATION"
 MSG:    .BLKB   256                     ; a message being made, .ASCIC
-CHAR:   .BLKB   1
-V_RUN:  .ASCIC  "RUN"
-V_HELP: .ASCIC  "HELP"
-V_LOGOUT:
-        .ASCIC  "LOGOUT"
-V_DIRECTORY:
-        .ASCIC  "DIRECTORY"
-V_TYPE: .ASCIC  "TYPE"
-V_DEFINE:
-        .ASCIC  "DEFINE"
-V_DEASSIGN:
+CMDDSC: .LONG   0, 0                    ; a command, for CLI$$DCL_PARSE
+RESDSC: .LONG   0, 0                    ; its parse, for $IMGACT
+DCLFAC: .ASCIC  "DCL"                   ; the facility its errors are
+V_FILE: .ASCID  "FILE"                  ; the entities DCL's own verbs get
+V_LOGNAM:
+        .ASCID  "LOGICAL_NAME"
+V_EQUNAM:
+        .ASCID  "EQUIVALENCE_NAME"
+V_LABEL:
+        .ASCID  "LABEL"
+V_EXPR: .ASCID  "EXPRESSION"
+V_OPTION:
+        .ASCID  "OPTION"
+V_DIR:  .ASCID  "DIRECTORY"
+V_DEVNAM:
+        .ASCID  "DEVICE_NAME"
+V_SYMBOL:
+        .ASCID  "SYMBOL"
+V_STATUS:
+        .ASCID  "STATUS"
+V_LOG:  .ASCID  "LOG"
+V_PROCQ:
+        .ASCID  "PROCESS"
+V_SYSQ: .ASCID  "SYSTEM"
+V_TABLE:
+        .ASCID  "TABLE"
+V_MOUNTED:
+        .ASCID  "MOUNTED"
+V_ALL:  .ASCID  "ALL"
+V_GLOBAL:
+        .ASCID  "GLOBAL"
+V_LOCAL:
+        .ASCID  "LOCAL"
+TABMASK:                                ; LNMTAB's tables: 1 the process's, 2 the system's
+        .LONG   0
+TABNAMES:                               ; the tables' names, .ASCIC, and their TABMASK
+        .ASCIC  "LNM$PROCESS_TABLE"
+        .BYTE   1
+        .ASCIC  "LNM$SYSTEM_TABLE"
+        .BYTE   2
+        .ASCIC  "LNM$PROCESS"
+        .BYTE   1
+        .ASCIC  "LNM$SYSTEM"
+        .BYTE   2
+        .ASCIC  "LNM$FILE_DEV"
+        .BYTE   3
+        .BYTE   0
+TABDSCS:                                ; the names LNMTAB gives the services, by TABMASK
+        .ADDRESS PROCESS, PROCESS, SYSTEM, FILE_DEV
+SYSTEM: .ASCID  "LNM$SYSTEM"
+MOUNTED:                                ; SHOW DEVICES/MOUNTED: 1 for mounted volumes only
+        .LONG   0
+TABDSC: .LONG   0                       ; LNMTAB's table name, a descriptor's address
+VALDSC: .LONG   LINESIZE                ; GETVAL's: TOKEN
+        .ADDRESS TOKEN
+VALLEN: .WORD   0
+; The CLIROUTINEs of DCL$TABLES: each name, .ASCIC, and its code, until
+; a 0.
+ROUTINES:
+        .ASCIC  "CONTINUE"
+        .ADDRESS CONTINUE
         .ASCIC  "DEASSIGN"
-V_SHOW: .ASCIC  "SHOW"
+        .ADDRESS DEASSIGN
+        .ASCIC  "DEFINE"
+        .ADDRESS DEFINE
+        .ASCIC  "DELSYM"
+        .ADDRESS DELSYM
+        .ASCIC  "EXIT"
+        .ADDRESS EXIT
+        .ASCIC  "GOTO"
+        .ADDRESS GOTO
+        .ASCIC  "IF"
+        .ADDRESS IF
+        .ASCIC  "LOGOUT"
+        .ADDRESS LOGOUT
+        .ASCIC  "RUN"
+        .ADDRESS RUN
+        .ASCIC  "SET"
+        .ADDRESS SET
+        .ASCIC  "SHOW"
+        .ADDRESS SHOW
+        .ASCIC  "WRITE"
+        .ADDRESS WRITE
+        .BYTE   0
+CHAR:   .BLKB   1
 V_LOGICAL:
         .ASCIC  "LOGICAL"
-V_SET:  .ASCIC  "SET"
 V_DEFAULT:
         .ASCIC  "DEFAULT"
 V_DEVICES:
@@ -300,34 +358,7 @@ S_ONLINE:
         .ASCIC  "Online"
 S_OFFLINE:
         .ASCIC  "Offline"
-V_PROCESS:
-        .ASCIC  "PROCESS"
-V_SYSTEM:
-        .ASCIC  "SYSTEM"
-V_EDIT: .ASCIC  "EDIT"
-V_COPY: .ASCIC  "COPY"
-V_DELETE:
-        .ASCIC  "DELETE"
-V_INITIALIZE:
-        .ASCIC  "INITIALIZE"
-V_MOUNT:
-        .ASCIC  "MOUNT"
-V_DISMOUNT:
-        .ASCIC  "DISMOUNT"
-V_CREDIR:
-        .ASCIC  "CREATE/DIRECTORY"
-V_CONTINUE:
-        .ASCIC  "CONTINUE"
-V_IF:   .ASCIC  "IF"
 V_THEN: .ASCIC  "THEN"
-V_GOTO: .ASCIC  "GOTO"
-V_EXIT: .ASCIC  "EXIT"
-V_WRITE:
-        .ASCIC  "WRITE"
-V_SYMBOL:
-        .ASCIC  "SYMBOL"
-V_DELSYM:
-        .ASCIC  "DELETE/SYMBOL"
 V_OUTPUT:
         .ASCIC  "SYS$OUTPUT"
 V_ERROR:
@@ -541,80 +572,42 @@ COMMAND:
         BSBW    WORD
         TSTL    R8
         BEQL    5$
-VERBS:  MOVAB   V_RUN, R1
-        BSBW    VERB
-        BLBS    R0, RUN
-        MOVAB   V_HELP, R1
-        BSBW    VERB
-        BLBS    R0, HELP
-        MOVAB   V_LOGOUT, R1
-        BSBW    VERB
-        BLBS    R0, LOGOUT
-        MOVAB   V_DIRECTORY, R1
-        BSBW    VERB
-        BLBS    R0, DIRECTORY
-        MOVAB   V_TYPE, R1
-        BSBW    VERB
-        BLBS    R0, TYPE
-        MOVAB   V_DEFINE, R1
-        BSBW    VERB
-        BLBS    R0, DEFINE
-        MOVAB   V_DEASSIGN, R1
-        BSBW    VERB
-        BLBS    R0, DEASSIGN
-        MOVAB   V_SHOW, R1
-        BSBW    VERB
-        BLBS    R0, SHOW
-        MOVAB   V_SET, R1
-        BSBW    VERB
-        BLBS    R0, SET
-        MOVAB   V_EDIT, R1
-        BSBW    VERB
-        BLBS    R0, EDIT
-        MOVAB   V_COPY, R1
-        BSBW    VERB
-        BLBS    R0, COPY
-        MOVAB   V_DELETE, R1
-        BSBW    VERB
-        BLBS    R0, DELETE
-        MOVAB   V_INITIALIZE, R1
-        BSBW    VERB
-        BLBS    R0, INITIALIZE
-        MOVAB   V_MOUNT, R1
-        BSBW    VERB
-        BLBS    R0, MOUNT
-        MOVAB   V_DISMOUNT, R1
-        BSBW    VERB
-        BLBS    R0, DISMOUNT
-        MOVAB   V_CONTINUE, R1
-        BSBW    VERB
-        BLBS    R0, CONTINUE
-        MOVAB   V_IF, R1
-        BSBW    VERB
-        BLBS    R0, IF
-        MOVAB   V_GOTO, R1
-        BSBW    VERB
-        BLBS    R0, GOTO
-        MOVAB   V_EXIT, R1
-        BSBW    VERB
-        BLBS    R0, EXIT
-        MOVAB   V_WRITE, R1
-        BSBW    VERB
-        BLBS    R0, WRITE
-        MOVAB   V_DELSYM, R1
-        BSBW    VERB
-        BLBS    R0, DELSYM
-        MOVAB   V_CREDIR, R1
-        BSBW    VERB
-        BLBC    R0, 60$
-        CMPL    R8, #8                  ; CREATE/D at least: CREATE alone makes files
-        BLSSU   60$
-        BRW     CREDIR
-60$:    PRINT   "%DCL-W-IVVERB, unrecognized command verb - check validity and spelling"
-        ADDTEXT " \"
-        BSBW    ADDTOKEN
-        ADDTEXT "\"
-        BSBW    SAY
+; VERBS: R6 = past the verb, R8 = its length. Parses the command with
+; DCL$TABLES (ADR-0017), prompting for missing parameters at the
+; console, and runs the verb's image with the parse, or does the verb's
+; CLIROUTINE, which takes its values from the parse.
+VERBS:  SUBL3   R8, R6, R0              ; the command
+        MOVL    R0, CMDDSC+4
+        SUBL3   R0, R7, CMDDSC
+        CLRL    R1                      ; prompts only at the console
+        TSTL    DEPTH
+        BNEQ    10$
+        MOVAB   PROMPTFOR, R1
+10$:    PUSHAB  DCLFAC
+        PUSHL   R1
+        PUSHAB  G^DCL$TABLES
+        PUSHAQ  CMDDSC
+        CALLS   #4, G^CLI$$DCL_PARSE
+        BLBS    R0, 20$
+        BRW     DONE                    ; reported
+20$:    TSTB    G^CLI$$ROUTINE
+        BNEQ    30$
+        BRW     IMGVERB
+30$:    MOVAB   ROUTINES, R10           ; which one
+40$:    MOVZBL  (R10), R0
+        BEQL    60$
+        MOVL    R10, R1
+        MOVAB   G^CLI$$ROUTINE, R2
+        BSBW    SAMESTR
+        MOVZBL  (R10), R1
+        ADDL2   R1, R10
+        INCL    R10
+        BLBS    R0, 50$
+        ADDL2   #4, R10
+        BRB     40$
+50$:    MOVL    (R10), R0
+        JMP     (R0)
+60$:    PRINT   "%DCL-W-INVROUT, invalid routine specified in command tables - check .CLD file"
         BRW     WARN
 LOGOUT:                                 ; the process ends
 QUIT:   $DELPRC_S
@@ -630,72 +623,24 @@ CONTINUE:
         RET
 10$:    BRW     OK
 
-HELP:   PRINT   "  RUN image   runs image, image.EXE if it has no type"
-        PRINT   "  DIRECTORY [spec]"
-        PRINT   "              lists the files spec names, * and % wildcards"
-        PRINT   "  TYPE spec   writes the file spec names on the console"
-        PRINT   "  DEFINE name equivalence"
-        PRINT   "              makes a logical name"
-        PRINT   "  DEASSIGN name"
-        PRINT   "              deletes one"
-        PRINT   "  SHOW LOGICAL [name]"
-        PRINT   "              translates one, or lists them all"
-        PRINT   "  SET DEFAULT [dev:][dir]"
-        PRINT   "              sets the default directory"
-        PRINT   "  SHOW DEFAULT"
-        PRINT   "              shows it"
-        PRINT   "  SHOW DEVICES [name]"
-        PRINT   "              lists the devices, or those whose names start with name"
-        PRINT   "  SHOW PROCESS"
-        PRINT   "              shows this process"
-        PRINT   "  SHOW SYSTEM"
-        PRINT   "              lists the processes"
-        PRINT   "  SET INTERFACE address mask gateway"
-        PRINT   "              sets the network interface's"
-        PRINT   "  SHOW INTERFACE"
-        PRINT   "              shows them"
-        PRINT   "  SET CONFIGURATION INTERFACE address mask gateway"
-        PRINT   "              saves them for the next boot"
-        PRINT   "  SET HOST address"
-        PRINT   "              logs in to another vaxpunk"
-        PRINT   "  EDIT spec   edits the file spec names with EDT"
-        PRINT   "  COPY from to"
-        PRINT   "              copies a file"
-        PRINT   "  DELETE spec deletes the files spec names, ;version or ;*"
-        PRINT   "  INITIALIZE device label"
-        PRINT   "              writes an empty volume on DKB0: or MDA0:, the ramdisk"
-        PRINT   "  MOUNT device [label]"
-        PRINT   "              mounts the volume, DKB0: or MDA0: then names its files"
-        PRINT   "  DISMOUNT device"
-        PRINT   "              dismounts it"
-        PRINT   "  CREATE/DIRECTORY spec"
-        PRINT   "              makes the directory, [dev:][dir.dir...], and those above it"
-        PRINT   "  CONTINUE    goes back to the image CTRL/Y stopped"
-        PRINT   "  HELP        lists the commands"
-        PRINT   "  LOGOUT      ends the process"
-        PRINT   "  @file [p1 ... p8]"
-        PRINT   "              runs the command procedure file, file.COM if it has no type"
-        PRINT   "  name = expression, name == expression"
-        PRINT   "              sets a local symbol, or a global one; := and :== to a string"
-        PRINT   "  'name'      stands for the symbol's value in a command"
-        PRINT   "  IF expression THEN command"
-        PRINT   "              does command if the expression is true"
-        PRINT   "  GOTO label  goes on from the procedure's line label:"
-        PRINT   "  EXIT [status]"
-        PRINT   "              ends the procedure"
-        PRINT   "  WRITE SYS$OUTPUT expression[,...]"
-        PRINT   "              writes the values"
-        PRINT   "  SHOW SYMBOL name"
-        PRINT   "              shows a symbol's value"
-        PRINT   "  DELETE/SYMBOL name"
-        PRINT   "              deletes a local symbol"
-        BRW     OK
 
 ; RUN image: runs it with $IMGACT, which returns only if it can't.
-RUN:    BSBW    WORD
-        TSTL    R8
-        BEQL    INSFPRM
-        CLRL    R0                      ; a type?
+RUN:    MOVAB   V_FILE, R1
+        BSBW    GETVAL
+        CLRL    R9                      ; no command line
+        BRB     IMAGE
+
+; IMGVERB: runs the parsed verb's image, with the parse as its command.
+IMGVERB:
+        MOVZBL  G^CLI$$IMAGE, R8
+        MOVC3   R8, G^CLI$$IMAGE+1, TOKEN
+        MOVAB   G^CLI$$RESULT, R0
+        MOVZWL  (R0), RESDSC
+        MOVL    R0, RESDSC+4
+        MOVAB   RESDSC, R9
+; IMAGE: TOKEN = an image's name, R8 = its length, R9 = the parse's
+; descriptor, or 0. Runs it, IMAGE.EXE if it has no type.
+IMAGE:  CLRL    R0                      ; a type?
 15$:    CMPB    TOKEN[R0], #^A/./
         BEQL    20$
         AOBLSS  R8, R0, 15$
@@ -704,64 +649,8 @@ RUN:    BSBW    WORD
         ADDL2   #4, R8
 20$:    MOVL    R8, TOKDSC
         BSBW    RUNNING
-        $IMGACT_S IMAGE=TOKDSC
+        $IMGACT_S IMAGE=TOKDSC, CMDLIN=(R9)
         MOVAB   TOKDSC, R1
-        BRB     ACTFAIL
-
-; The commands that run an image with their parameters: R4 = its
-; descriptor, R3 = how many parameters it needs.
-DIRECTORY:
-        MOVAB   DIRIMG, R4
-        CLRL    R3
-        BRB     FOREIGN
-TYPE:   MOVAB   TYPEIMG, R4
-        MOVL    #1, R3
-        BRB     FOREIGN
-COPY:   MOVAB   COPYIMG, R4
-        MOVL    #2, R3
-        BRB     FOREIGN
-DELETE: MOVAB   DELIMG, R4
-        MOVL    #1, R3
-        BRB     FOREIGN
-INITIALIZE:
-        MOVAB   INITIMG, R4
-        MOVL    #2, R3
-        BRB     FOREIGN
-MOUNT:  MOVAB   MOUNTIMG, R4
-        MOVL    #1, R3
-        BRB     FOREIGN
-DISMOUNT:
-        MOVAB   DISMIMG, R4
-        MOVL    #1, R3
-        BRB     FOREIGN
-CREDIR: MOVAB   CREIMG, R4
-        MOVL    #1, R3
-        BRB     FOREIGN
-; INTERFACE: SET INTERFACE, SHOW INTERFACE and SET CONFIGURATION, R3 =
-; the parameters they need, the keyword's included, which goes on
-; TCPIP.EXE's command line.
-INTERFACE:
-        SUBL2   R8, R6
-        MOVAB   TCPIPIMG, R4
-FOREIGN:
-        BSBW    REST
-        CMPL    R2, R3
-        BLSSU   INSFPRM
-        MOVL    R8, TOKDSC
-        BSBW    RUNNING
-        PUSHL   R4
-        $IMGACT_S IMAGE=(R4), CMDLIN=TOKDSC
-        MOVL    (SP)+, R1
-        BRB     ACTFAIL
-
-; EDIT spec: runs EDIT.EXE with the spec.
-EDIT:   BSBW    WORD
-        TSTL    R8
-        BEQL    INSFPRM
-        MOVL    R8, TOKDSC
-        BSBW    RUNNING
-        $IMGACT_S IMAGE=EDITIMG, CMDLIN=TOKDSC
-        MOVAB   EDITIMG, R1
         BRB     ACTFAIL
 
 INSFPRM:
@@ -791,30 +680,37 @@ ACTFAIL:
         BISL3   #INHIB, (SP)+, R0
         BRW     DONE
 
-; DEFINE name equivalence: makes name a logical name in the process's
-; table, telling if it replaced one.
-DEFINE: BSBW    NAMEWORD
-        TSTL    R8
-        BEQL    INSFPRM
-        BSBW    WORD
-        TSTL    R8
-        BEQL    INSFPRM
+; DEFINE[/PROCESS|/SYSTEM|/TABLE=table][/[NO]LOG] name equivalence:
+; makes name a logical name in the table, the process's by default,
+; telling if it replaced one, unless /NOLOG.
+DEFINE: MOVL    #1, R1
+        BSBW    LNMTAB
+        MOVAB   V_LOGNAM, R1
+        BSBW    NAMEVAL
+        MOVAB   V_EQUNAM, R1
+        BSBW    GETVAL
         MOVW    R8, CREITEMS
-        $CRELNM_S TABNAM=PROCESS, LOGNAM=NAMDSC, ITMLST=CREITEMS
+        $CRELNM_S TABNAM=@TABDSC, LOGNAM=NAMDSC, ITMLST=CREITEMS
         CMPL    R0, #SS$_SUPERSEDE
         BNEQ    DONE
-        ADDTEXT "%DCL-I-SUPERSEDE, previous value of "
+        MOVAB   V_LOG, R1
+        BSBW    ISPRES
+        BLBS    R0, 10$
+        BRW     OK
+10$:    ADDTEXT "%DCL-I-SUPERSEDE, previous value of "
         BSBW    ADDNAME
         ADDTEXT " has been superseded"
         BSBW    SAY
         BRW     OK
 
-; DEASSIGN name: deletes the logical name from the process's table.
+; DEASSIGN[/PROCESS|/SYSTEM|/TABLE=table] name: deletes the logical
+; name from the table, the process's by default.
 DEASSIGN:
-        BSBW    NAMEWORD
-        TSTL    R8
-        BEQL    INSFPRM
-        $DELLNM_S TABNAM=PROCESS, LOGNAM=NAMDSC
+        MOVL    #1, R1
+        BSBW    LNMTAB
+        MOVAB   V_LOGNAM, R1
+        BSBW    NAMEVAL
+        $DELLNM_S TABNAM=@TABDSC, LOGNAM=NAMDSC
 ; DONE: R0 = a command's status, or an image's. Makes it $STATUS, and
 ; reports it if it is a failure no one reported, which it then marks
 ; reported. An error or a fatal error ends the procedures running. Then
@@ -844,33 +740,13 @@ OK:     MOVL    #SS$_NORMAL, LASTSTAT
 ; SET DEFAULT spec: $PARSEs spec, which must name no file, and makes the
 ; directory it expands to the default, with $SETDDIR, and its device the
 ; process's SYS$DISK. One that doesn't
-; exist is still set, as VMS does, with a message. SET INTERFACE and SET
-; CONFIGURATION run TCPIP.EXE, SET HOST RTPAD.EXE.
-SET:    BSBW    WORD
+; exist is still set, as VMS does, with a message.
+SET:    MOVAB   V_DIR, R1
+        BSBW    GETVAL
         TSTL    R8
-        BEQL    5$
-        MOVAB   V_INTERFACE, R1
-        BSBW    VERB
-        BLBC    R0, 2$
-        MOVL    #4, R3
-        BRW     INTERFACE
-2$:     MOVAB   V_HOST, R1
-        BSBW    VERB
-        BLBC    R0, 3$
-        MOVAB   RTPADIMG, R4
-        MOVL    #1, R3
-        BRW     FOREIGN
-3$:     MOVAB   V_CONFIGURATION, R1
-        BSBW    VERB
-        BLBC    R0, 4$
-        MOVL    #5, R3
-        BRW     INTERFACE
-4$:     MOVAB   V_DEFAULT, R1
-        BSBW    VERB
-        BLBC    R0, IVKEYW
-        BSBW    WORD
-        TSTL    R8
-5$:     BEQL    INSFPRM
+        BNEQ    5$
+        BRW     INSFPRM
+5$:
         MOVB    R8, DEFFAB+FAB$B_FNS
         $PARSE  FAB=DEFFAB
         MOVL    R0, R6
@@ -897,15 +773,6 @@ SET:    BSBW    WORD
         BRW     OK
 20$:    BRW     DONE
 
-; IVKEYW: reports the word in TOKEN as a keyword DCL doesn't know, and
-; prompts for the next command.
-IVKEYW: PRINT   "%DCL-W-IVKEYW, unrecognized keyword - check validity and spelling"
-        ADDTEXT " \"
-        BSBW    ADDTOKEN
-        ADDTEXT "\"
-        BSBW    SAY
-        BRW     WARN
-
 ; SHOW DEFAULT: shows the default device and directory, what $PARSE
 ; expands an empty specification to.
 SHOWDEF:
@@ -926,10 +793,15 @@ SHOWDEF:
 ; and % wildcards: SHOW DEVICES DK. It finds them with $DEVICE_SCAN, a
 ; class at a time, and asks each about itself with $GETDVIW.
 ; SS$_NOSUCHDEV if none matches.
+; With /MOUNTED, only the devices with a volume mounted.
 ; ponytail: no error counts, transactions or mount counts, which nothing
-; keeps; no /FULL or other qualifiers.
+; keeps; no /FULL.
 SHOWDEV:
-        BSBW    WORD
+        MOVAB   V_MOUNTED, R1
+        BSBW    ISPRES
+        BICL3   #^C1, R0, MOUNTED
+        MOVAB   V_DEVNAM, R1
+        BSBW    GETVAL
         TSTL    R8                      ; name*, without its colon
         BEQL    5$
         CMPB    TOKEN-1[R8], #^A/:/
@@ -958,7 +830,11 @@ SCAN:   CLRQ    SCANCTX
         BLBC    R0, 90$
         $GETDVIW_S DEVNAM=DVINAM, ITMLST=DVIITEMS
         BLBC    R0, 10$
-        TSTL    R6
+        TSTL    MOUNTED
+        BEQL    12$
+        TSTL    V_MNT
+        BEQL    10$
+12$:    TSTL    R6
         BNEQ    20$
         INCL    R6
         PRINT   ""
@@ -1045,13 +921,13 @@ ADDDEF: MOVL    DEFNAM+NAM$L_DEV, R1
         ADDB2   DEFNAM+NAM$B_DIR, R2
         BRW     ADD
 
-; SHOW LOGICAL [name]: translates name in LNM$FILE_DEV, and shows the
-; equivalence and the table it is in. With no name, or *, lists them all.
+; SHOW LOGICAL[/PROCESS|/SYSTEM|/TABLE=table] [name]: translates name in
+; the table, LNM$FILE_DEV by default, and shows the equivalence and the
+; table it is in. With no name, or *, lists the table's names.
 ; SHOW DEFAULT: as SHOWDEF. SHOW DEVICES: as SHOWDEV. SHOW PROCESS and
-; SHOW SYSTEM run SHOW.EXE, SHOW INTERFACE TCPIP.EXE.
-SHOW:   BSBW    WORD
-        TSTL    R8
-        BEQL    5$
+; SHOW SYSTEM are SHOW_IMAGE's, SHOW.EXE's.
+SHOW:   MOVAB   V_OPTION, R1            ; the keyword, all of it
+        BSBW    GETVAL
         MOVAB   V_DEFAULT, R1
         BSBW    VERB
         BLBS    R0, SHOWDEF
@@ -1061,35 +937,18 @@ SHOW:   BSBW    WORD
         MOVAB   V_LOGICAL, R1
         BSBW    VERB
         BLBS    R0, 10$
-        MOVAB   V_PROCESS, R1
-        BSBW    VERB
-        BLBS    R0, 7$
-        MOVAB   V_SYSTEM, R1
-        BSBW    VERB
-        BLBS    R0, 7$
-        MOVAB   V_SYMBOL, R1
-        BSBW    VERB
-        BLBC    R0, 4$
-        BRW     SHOWSYM
-4$:     MOVAB   V_INTERFACE, R1
-        BSBW    VERB
-        BLBC    R0, 6$
-        MOVL    #1, R3
-        BRW     INTERFACE
-6$:     BRW     IVKEYW
-5$:     BRW     INSFPRM
-7$:     SUBL2   R8, R6                  ; the keyword is SHOW.EXE's command line
-        MOVAB   SHOWIMG, R4
-        MOVL    #1, R3
-        BRW     FOREIGN
-10$:    BSBW    NAMEWORD
+        BRW     SHOWSYM                 ; SYMBOL
+10$:    MOVL    #3, R1
+        BSBW    LNMTAB
+        MOVAB   V_LOGNAM, R1
+        BSBW    NAMEVAL
         TSTL    R8
         BEQL    LIST
         CMPL    R8, #1
         BNEQ    15$
         CMPB    NAME, #^A/*/
         BEQL    LIST
-15$:    $TRNLNM_S TABNAM=FILE_DEV, LOGNAM=NAMDSC, ITMLST=TRNITEMS
+15$:    $TRNLNM_S TABNAM=@TABDSC, LOGNAM=NAMDSC, ITMLST=TRNITEMS
         BLBS    R0, 20$
         CMPL    R0, #SS$_NOLOGNAM
         BNEQ    DONE
@@ -1108,9 +967,11 @@ SHOW:   BSBW    WORD
         BRW     OK
 
 ; LIST: lists the logical names of the process's table, then the system's,
-; as VMS's SHOW LOGICAL does, under each table's name.
+; those TABMASK has, as VMS's SHOW LOGICAL does, under each table's name.
 LIST:   CLRL    R6                      ; the table: 0 the process's, 1 the system's
-10$:    PRINT   ""
+10$:    BBS     R6, TABMASK, 12$
+        BRW     30$
+12$:    PRINT   ""
         ADDTEXT "("
         MOVAB   PROCTAB, R1
         TSTL    R6
@@ -1179,13 +1040,105 @@ PAIR:   BSBW    QUOTE
         BSBW    ADD
         BRW     QUOTE
 
-; NAMEWORD: the next word of the line, as WORD, copied to NAME, which
-; NAMDSC describes. R8 = its length, 0 if there is none. Uses R0-R5.
-NAMEWORD:
-        BSBW    WORD
+; GETVAL: R1 = an entity's name, .ASCID. Copies its first value in the
+; command's parse to TOKEN: R8 = its length, 0 if it has none. Uses R0,
+; R1.
+GETVAL: PUSHAW  VALLEN
+        PUSHAQ  VALDSC
+        PUSHL   R1
+        CALLS   #3, G^CLI$GET_VALUE
+        MOVZWL  VALLEN, R8
+        BLBS    R0, 10$
+        CLRL    R8
+10$:    RSB
+
+; ISPRES: R1 = an entity's name, .ASCID. R0 = CLI$PRESENT's status for
+; it, odd if it is present or defaulted. Uses R0, R1.
+ISPRES: PUSHL   R1
+        CALLS   #1, G^CLI$PRESENT
+        RSB
+
+; SCOPE: R10 = the level a symbol command's /LOCAL or /GLOBAL says: the
+; procedure running's, GLOBAL, or ANY for neither. Uses R0, R1.
+SCOPE:  MOVL    #GLOBAL, R10
+        MOVAB   V_GLOBAL, R1
+        BSBB    ISPRES
+        BLBS    R0, 10$
+        MOVL    DEPTH, R10
+        MOVAB   V_LOCAL, R1
+        BSBB    ISPRES
+        BLBS    R0, 10$
+        MOVL    #ANY, R10
+10$:    RSB
+
+; LNMTAB: R1 = the tables a logical name command uses by default, as
+; TABMASK. Makes TABMASK and TABDSC those its /PROCESS, /SYSTEM or
+; /TABLE=table say: SS$_NOLOGTAB, to DONE, for a table there isn't.
+; Uses R0-R5, R8.
+LNMTAB: MOVL    R1, TABMASK
+        MOVAB   V_PROCQ, R1
+        BSBB    ISPRES
+        BLBC    R0, 10$
+        MOVL    #1, TABMASK
+10$:    MOVAB   V_SYSQ, R1
+        BSBB    ISPRES
+        BLBC    R0, 20$
+        MOVL    #2, TABMASK
+20$:    MOVAB   V_TABLE, R1
+        BSBB    ISPRES
+        BLBC    R0, 50$
+        MOVAB   V_TABLE, R1
+        BSBW    GETVAL
+        MOVAB   TABNAMES, R2
+30$:    MOVZBL  (R2), R3
+        BEQL    40$
+        CMPL    R3, R8
+        BNEQ    35$
+        MOVAB   1(R2), R1               ; the same length: the same name?
+        MOVAB   TOKEN, R4
+        CLRL    R5
+32$:    CMPL    R5, R8
+        BGEQU   37$
+        CMPB    (R1)[R5], (R4)[R5]
+        BNEQ    35$
+        INCL    R5
+        BRB     32$
+35$:    ADDL2   R3, R2                  ; past the name and its mask
+        ADDL2   #2, R2
+        BRB     30$
+37$:    MOVZBL  1(R2)[R3], TABMASK
+        BRB     50$
+40$:    MOVL    #SS$_NOLOGTAB, R0
+        BRW     DONE
+50$:    MOVL    TABMASK, R0
+        MOVL    TABDSCS[R0], TABDSC
+        RSB
+
+; NAMEVAL: the same, copied to NAME, which NAMDSC describes. Uses R0-R5.
+NAMEVAL:
+        BSBB    GETVAL
         MOVC3   R8, TOKEN, NAME
         MOVL    R8, NAMDSC
         RSB
+
+; RESTVAL: R1 = an entity's name, .ASCID, a $REST_OF_LINE. Copies its
+; value to LINE: R6 = LINE, R7 = past it, where IF, EXIT and WRITE read
+; their expressions. Uses R0-R5, R8.
+RESTVAL:
+        BSBB    GETVAL
+        MOVC3   R8, TOKEN, LINE
+        MOVAB   LINE, R6
+        ADDL3   R6, R8, R7
+        RSB
+
+; VALNAME: R1 = an entity's name, .ASCID. Its first value, as a symbol
+; name, to SYMNAM, as NAMESCAN makes it: R8 = its length. Uses R0, R1,
+; R6, R7.
+VALNAME:
+        BSBB    GETVAL
+        MOVAB   TOKEN, R6
+        ADDL3   R6, R8, R7
+        BRW     NAMESCAN
 
 ; WORD: R6 = the next character of the line, R7 = past its last. Skips
 ; blanks, then copies the characters up to the next blank, in capitals, to
@@ -1287,12 +1240,6 @@ ADDNAME:
 ; QUOTE: appends a double quote to MSG. Uses R0-R2.
 QUOTE:  MOVZBL  #34, R0
         BRB     ADDCHAR
-
-; ADDTOKEN: appends the R8 characters in TOKEN to MSG. Uses R0-R2.
-ADDTOKEN:
-        MOVAB   TOKEN, R1
-        MOVL    R8, R2
-        BRB     ADD
 
 ; ADDCHAR: appends the character in R0 to MSG. Uses R0-R2.
 ADDCHAR:
@@ -1464,7 +1411,9 @@ SETTARGET:
         BRW     OK
 
 ; IF expression THEN command: does command if the expression is true.
-IF:     MOVAB   VSTACK, R9
+IF:     MOVAB   V_EXPR, R1
+        BSBW    RESTVAL
+        MOVAB   VSTACK, R9
         BSBW    EXPR
         BSBW    TOINT
         PUSHL   VAL$L_INT(R9)
@@ -1482,12 +1431,9 @@ IF:     MOVAB   VSTACK, R9
 
 ; GOTO label: goes on from the line of the procedure running that starts
 ; with label:. Does nothing at the console.
-GOTO:   BSBW    SKIP
-        BSBW    NAMESCAN
-        TSTL    R8
-        BNEQ    5$
-        BRW     INSFPRM
-5$:     MOVL    DEPTH, R11
+GOTO:   MOVAB   V_LABEL, R1
+        BSBW    VALNAME
+        MOVL    DEPTH, R11
         TSTL    R11
         BNEQ    7$
         BRW     OK
@@ -1533,7 +1479,8 @@ GOTO:   BSBW    SKIP
 
 ; EXIT [status]: ends the procedure running, if one is, with status, or
 ; $STATUS.
-EXIT:   BSBW    SKIP
+EXIT:   MOVAB   V_STATUS, R1
+        BSBW    RESTVAL
         MOVL    LASTSTAT, R0
         CMPL    R6, R7
         BGEQU   10$
@@ -1550,11 +1497,9 @@ EXIT:   BSBW    SKIP
 
 ; WRITE SYS$OUTPUT expression[,...]: writes the values, as strings, one
 ; after the other, on a line.
-WRITE:  BSBW    WORD
-        TSTL    R8
-        BNEQ    5$
-        BRW     INSFPRM
-5$:     CMPB    R8, V_OUTPUT
+WRITE:  MOVAB   V_LOGNAM, R1
+        BSBW    GETVAL
+        CMPB    R8, V_OUTPUT
         BNEQ    7$
         MOVAB   V_OUTPUT, R1
         BSBW    VERB
@@ -1566,10 +1511,8 @@ WRITE:  BSBW    WORD
         BLBS    R0, 10$
 8$:     PRINT   "%DCL-W-UNDFIL, file has not been opened by DCL - check logical name"
         BRW     WARN
-10$:    BSBW    SKIP
-        CMPL    R6, R7
-        BLSSU   15$
-        BRW     INSFPRM
+10$:    MOVAB   V_EXPR, R1
+        BSBW    RESTVAL
 15$:    MOVAB   VSTACK, R9
         BSBW    EXPR
         BSBW    TOSTR
@@ -1587,26 +1530,93 @@ WRITE:  BSBW    WORD
 20$:    BSBW    SAY
         BRW     OK
 
-; SHOWSYM, SHOW SYMBOL name: shows its value, as VMS does: name = "string",
-; or name = integer, in hex and octal too; == for a global symbol.
+; SHOWSYM, SHOW SYMBOL[/LOCAL|/GLOBAL] name: shows its value, as VMS
+; does: name = "string", or name = integer, in hex and octal too; == for
+; a global symbol. The nearest, or the local one of the procedure running
+; or the global one. With /ALL instead of a name, every local symbol of
+; the procedure running, or every global one.
 SHOWSYM:
-        BSBW    SKIP
-        BSBW    NAMESCAN
+        MOVAB   V_ALL, R1
+        BSBW    ISPRES
+        BLBC    R0, 2$
+        BRW     SHOWALL
+2$:     MOVAB   V_SYMBOL, R1
+        BSBW    VALNAME
         TSTL    R8
         BNEQ    5$
         BRW     INSFPRM
-5$:     BSBW    FINDSYM
+5$:     BSBW    SCOPE
+        CMPL    R10, #ANY
+        BEQL    20$
+        BSBW    FINDAT
+        TSTL    R1
+        BNEQ    10$
+        CMPL    R10, #GLOBAL            ; $STATUS and $SEVERITY are global
+        BNEQ    7$
+        MOVAB   STATNAM, R1
+        MOVAB   SYMNAM, R2
+        BSBW    SAMESTR
+        BLBS    R0, 20$
+        MOVAB   SEVNAM, R1
+        MOVAB   SYMNAM, R2
+        BSBW    SAMESTR
+        BLBS    R0, 20$
+7$:     BRW     UNDSYM
+10$:    BSBB    VALUEOF
+        BSBB    SHOW1
+        BRW     OK
+20$:    BSBW    FINDSYM
         MOVL    #1, R11                 ; 1 if global: $STATUS and $SEVERITY are
         TSTL    R1
-        BEQL    7$
+        BEQL    27$
         CMPL    SYM$L_LEVEL(R1), #GLOBAL
-        BEQL    7$
+        BEQL    27$
         CLRL    R11
-7$:     MOVAB   VSTACK, R9
+27$:    MOVAB   VSTACK, R9
         BSBW    GETSYM
-        BLBS    R0, 10$
+        BLBS    R0, 30$
         BRW     UNDSYM
-10$:    ADDTEXT "  "
+30$:    BSBB    SHOW1
+        BRW     OK
+
+; SHOWALL: SHOW SYMBOL/ALL: shows each symbol of the scope SCOPE says, the
+; procedure running's local ones if it says none.
+SHOWALL:
+        BSBW    SCOPE
+        CMPL    R10, #ANY
+        BNEQ    5$
+        MOVL    DEPTH, R10
+5$:     MOVAB   SYMTAB, R8
+10$:    TSTB    SYM$T_NAME(R8)
+        BEQL    20$
+        CMPL    SYM$L_LEVEL(R8), R10
+        BNEQ    20$
+        PUSHL   R10
+        MOVC3   #32, SYM$T_NAME(R8), SYMNAM
+        MOVL    R8, R1
+        BSBB    VALUEOF
+        BSBB    SHOW1
+        MOVL    (SP)+, R10
+20$:    ADDL2   #SYM$K_LENGTH, R8
+        MOVAB   SYMEND, R0
+        CMPL    R8, R0
+        BLSSU   10$
+        BRW     OK
+
+; VALUEOF: R1 = a symbol. Copies its value to VSTACK, R9 at it: R11 = 1
+; if it is global. Uses R0-R5.
+VALUEOF:
+        CLRL    R11
+        CMPL    SYM$L_LEVEL(R1), #GLOBAL
+        BNEQ    10$
+        INCL    R11
+10$:    MOVAB   VSTACK, R9
+        MOVC3   #VAL$K_LENGTH, SYM$R_VALUE(R1), (R9)
+        RSB
+
+; SHOW1: SYMNAM = a symbol's name, R9 = its value, R11 = 1 if it is
+; global. Writes it as SHOW SYMBOL does. Uses R0-R5, R10.
+SHOW1:  ADDTEXT "  "
         BSBW    ADDSYM
         ADDTEXT " ="
         TSTL    R11
@@ -1628,22 +1638,36 @@ SHOWSYM:
         ADDTEXT "  Octal = "
         MOVL    R10, R1
         BSBW    ADDOCT
-30$:    BSBW    SAY
-        BRW     OK
+30$:    BRW     SAY
 
-; DELSYM, DELETE/SYMBOL name: deletes the local symbol name of the
-; procedure running, or the console's.
-DELSYM: BSBW    SKIP
-        BSBW    NAMESCAN
-        TSTL    R8
+; DELSYM, DELETE/SYMBOL[/LOCAL|/GLOBAL] name: deletes the local symbol
+; name of the procedure running, or the console's, or the global one.
+; DELETE/SYMBOL/ALL deletes every one of them.
+DELSYM: BSBW    SCOPE
+        CMPL    R10, #ANY
         BNEQ    5$
-        BRW     INSFPRM
-5$:     MOVL    DEPTH, R10
+        MOVL    DEPTH, R10
+5$:     MOVAB   V_ALL, R1
+        BSBW    ISPRES
+        BLBC    R0, 20$
+        MOVAB   SYMTAB, R1              ; /ALL
+10$:    CMPL    SYM$L_LEVEL(R1), R10
+        BNEQ    15$
+        CLRB    SYM$T_NAME(R1)
+15$:    ADDL2   #SYM$K_LENGTH, R1
+        MOVAB   SYMEND, R0
+        CMPL    R1, R0
+        BLSSU   10$
+        BRW     OK
+20$:    PUSHL   R10
+        MOVAB   V_SYMBOL, R1
+        BSBW    VALNAME
+        MOVL    (SP)+, R10
         BSBW    FINDAT
         TSTL    R1
-        BNEQ    10$
+        BNEQ    30$
         BRW     UNDSYM
-10$:    CLRB    SYM$T_NAME(R1)
+30$:    CLRB    SYM$T_NAME(R1)
         BRW     OK
 
 ; The errors in an expression or a symbol, which can come from deep in
@@ -2361,6 +2385,25 @@ ADDOCT: MOVL    R1, R4
         SUBL2   #3, R5
         BGEQ    10$
         RSB
+
+; PROMPTFOR answer, prompt, anslen: CLI$$DCL_PARSE's prompt routine, as
+; LIB$GET_INPUT: reads a line from SYS$INPUT after the prompt, into the
+; string answer describes, and its length into the word anslen.
+; SS$_ABORT if CTRL/Y came.
+        .ENTRY  PROMPTFOR, ^M<R2, R3>
+        MOVL    4(AP), R2
+        MOVZWL  (R2), R3
+        MOVL    8(AP), R1
+        MOVZWL  (R1), R0
+        $QIOW_S CHAN=CHAN, FUNC=#IO$_READPROMPT, IOSB=IOSB, P1=@4(R2), P2=R3, P5=4(R1), P6=R0
+        BLBC    R0, 90$
+        MOVZWL  IOSB, R0
+        BLBC    R0, 90$
+        MOVW    IOSB+2, @12(AP)
+        TSTL    CTRLYHIT
+        BEQL    90$
+        MOVL    #SS$_ABORT, R0
+90$:    RET
 
 ; RUNNING: before $IMGACT. Enables CTRL/Y for the image, which CTRL/Y's
 ; AST may not have, and says an image runs. Uses R0 and R1.

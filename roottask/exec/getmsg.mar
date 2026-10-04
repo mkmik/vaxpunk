@@ -193,6 +193,10 @@ MESSAGES:
         .ASCIC  "SYSTEM"
         .ASCIC  "HEADERFULL"
         .ASCIC  "file header full"
+        .LONG   SS$_NOLOGTAB
+        .ASCIC  "SYSTEM"
+        .ASCIC  "NOLOGTAB"
+        .ASCIC  "no logical name table matched the specified name"
         .LONG   0
 
         .PSECT  $CODE$

@@ -1,16 +1,14 @@
         .TITLE  TYPE    Writes a file on the console
         .IDENT  /V0.1/
 ;
-; DCL's TYPE spec runs this, with spec, in capitals, as its command line
-; at VA$C_FOREIGN. Opens the file spec names, in the default directory
+; DCL's TYPE spec runs this. Opens the file spec names, in the default directory
 ; unless it says where, with RMS, and writes each of its records on the console, a
 ; line each. Returns RMS's status if it can't.
 ; ponytail: one file, no wildcards; a record past 255 characters is cut
 ; there.
 ;
-        .LIBRARY "lib.mlb"
         .LIBRARY "starlet.mlb"
-        $VADEF
+        .LIBRARY "sysexe.mlb"
         $SSDEF
         $RMSDEF
         $FABDEF
@@ -19,13 +17,18 @@
         .EXTERNAL PUT_LINE
 
         .PSECT  DATA, NOEXE, WRT, LONG
-FAB:    $FAB    FNA=VA$C_FOREIGN+1
+FAB:    $FAB    FNA=SPEC
+SPECDSC:                                ; FILE, the parameter
+        .LONG   255
+        .ADDRESS SPEC
+SPEC:   .BLKB   255
 RAB:    $RAB    FAB=FAB, UBF=REC+1, USZ=255
 REC:    .BLKB   256                     ; a record, .ASCIC
 
         .PSECT  CODE, EXE, LONG
         .ENTRY  START, ^M<R2>
-        MOVB    @#VA$C_FOREIGN, FAB+FAB$B_FNS
+        GETVALUE "FILE", SPECDSC, SPECDSC
+        MOVB    SPECDSC, FAB+FAB$B_FNS
         $OPEN   FAB=FAB
         BLBC    R0, 90$
         $CONNECT RAB=RAB

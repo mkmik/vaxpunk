@@ -488,6 +488,7 @@ dependencies = [
  "ods-image",
  "tcpip",
  "vasm",
+ "vcdu",
  "vlink",
  "vmacro",
  "vms-obj",
@@ -654,6 +655,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "vcdu"
+version = "0.1.0"
+dependencies = [
+ "vasm",
+ "vmacro",
+ "vms-obj",
+]
+
+[[package]]
 name = "vdump"
 version = "0.1.0"
 dependencies = [
@@ -695,6 +705,7 @@ name = "vrun"
 version = "0.1.0"
 dependencies = [
  "vasm",
+ "vcdu",
  "vlib",
  "vlink",
  "vmacro",

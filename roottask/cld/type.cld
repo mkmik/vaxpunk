@@ -1,0 +1,4 @@
+! TYPE spec: TYPE.EXE writes a file on the terminal.
+define verb TYPE
+	image TYPE
+	parameter P1, label=FILE, prompt="File", value(required, type=$infile)
