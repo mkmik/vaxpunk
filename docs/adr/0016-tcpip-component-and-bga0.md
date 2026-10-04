@@ -53,9 +53,11 @@ names, and processes write their output on the console's `OPA0:`.
    unit, which reads lines and writes like a terminal without echo; the
    local side edits the line and sends it. Programs print through
    `SYS$OUTPUT`, not `OPA0:`.
-5. **`SET INTERFACE address mask gateway`**, saved in
-   `DKB0:[000000]TCPIP$CONFIG.DAT` and replayed by `SYLOGIN.COM`'s `RUN
-   TCPIP`, and **`SHOW INTERFACE`**. TCP only for now; lwIP has UDP built
+5. **`SET INTERFACE address mask gateway`** changes the running system
+   and **`SET CONFIGURATION INTERFACE address mask gateway`** the saved
+   configuration, in `DKB0:[000000]TCPIP$CONFIG.DAT`, which
+   `SYLOGIN.COM`'s `RUN TCPIP` applies at boot, as TCP/IP Services split
+   them; **`SHOW INTERFACE`** shows the running one. TCP only for now; lwIP has UDP built
    in for when a port message needs it.
 
 ## Alternatives considered
@@ -88,4 +90,5 @@ names, and processes write their output on the console's `OPA0:`.
   pseudo-terminal.
 - Follow-ups: the sockets library (PRD-0002 step 7), which needs a way to
   build C for vaxpunk; UDP messages; `$GETDVI` on network units; a
-  terminal-class remote device.
+  terminal-class remote device; the default gateway as a route, `SET
+  ROUTE /DEFAULT /GATEWAY=`, once DCL parses qualifiers.

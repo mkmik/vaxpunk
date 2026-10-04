@@ -29,8 +29,9 @@
 ;               lists the devices, those whose names start with name
 ;   SHOW PROCESS, SHOW SYSTEM
 ;               run SHOW.EXE, with PROCESS or SYSTEM as its command line
-;   SET INTERFACE address mask gateway, SHOW INTERFACE
-;               run TCPIP.EXE, with INTERFACE and the rest as its
+;   SET INTERFACE address mask gateway, SHOW INTERFACE,
+;   SET CONFIGURATION INTERFACE address mask gateway
+;               run TCPIP.EXE, with what follows SET or SHOW as its
 ;               command line
 ;   SET HOST address
 ;               runs RTPAD.EXE, a remote login to address
@@ -226,6 +227,8 @@ RTPADIMG:
 V_HOST: .ASCIC  "HOST"
 V_INTERFACE:
         .ASCIC  "INTERFACE"
+V_CONFIGURATION:
+        .ASCIC  "CONFIGURATION"
 MSG:    .BLKB   256                     ; a message being made, .ASCIC
 CHAR:   .BLKB   1
 V_RUN:  .ASCIC  "RUN"
@@ -648,9 +651,11 @@ HELP:   PRINT   "  RUN image   runs image, image.EXE if it has no type"
         PRINT   "  SHOW SYSTEM"
         PRINT   "              lists the processes"
         PRINT   "  SET INTERFACE address mask gateway"
-        PRINT   "              sets the network interface's, and saves them"
+        PRINT   "              sets the network interface's"
         PRINT   "  SHOW INTERFACE"
         PRINT   "              shows them"
+        PRINT   "  SET CONFIGURATION INTERFACE address mask gateway"
+        PRINT   "              saves them for the next boot"
         PRINT   "  SET HOST address"
         PRINT   "              logs in to another vaxpunk"
         PRINT   "  EDIT spec   edits the file spec names with EDT"
@@ -732,8 +737,9 @@ DISMOUNT:
 CREDIR: MOVAB   CREIMG, R4
         MOVL    #1, R3
         BRB     FOREIGN
-; INTERFACE: SET INTERFACE and SHOW INTERFACE, R3 = the parameters they
-; need, INTERFACE's included, which goes on TCPIP.EXE's command line.
+; INTERFACE: SET INTERFACE, SHOW INTERFACE and SET CONFIGURATION, R3 =
+; the parameters they need, the keyword's included, which goes on
+; TCPIP.EXE's command line.
 INTERFACE:
         SUBL2   R8, R6
         MOVAB   TCPIPIMG, R4
@@ -838,8 +844,8 @@ OK:     MOVL    #SS$_NORMAL, LASTSTAT
 ; SET DEFAULT spec: $PARSEs spec, which must name no file, and makes the
 ; directory it expands to the default, with $SETDDIR, and its device the
 ; process's SYS$DISK. One that doesn't
-; exist is still set, as VMS does, with a message. SET INTERFACE runs
-; TCPIP.EXE, SET HOST RTPAD.EXE.
+; exist is still set, as VMS does, with a message. SET INTERFACE and SET
+; CONFIGURATION run TCPIP.EXE, SET HOST RTPAD.EXE.
 SET:    BSBW    WORD
         TSTL    R8
         BEQL    5$
@@ -854,7 +860,12 @@ SET:    BSBW    WORD
         MOVAB   RTPADIMG, R4
         MOVL    #1, R3
         BRW     FOREIGN
-3$:     MOVAB   V_DEFAULT, R1
+3$:     MOVAB   V_CONFIGURATION, R1
+        BSBW    VERB
+        BLBC    R0, 4$
+        MOVL    #5, R3
+        BRW     INTERFACE
+4$:     MOVAB   V_DEFAULT, R1
         BSBW    VERB
         BLBC    R0, IVKEYW
         BSBW    WORD

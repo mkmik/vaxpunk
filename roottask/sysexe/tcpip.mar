@@ -1,18 +1,25 @@
         .TITLE  TCPIP   Sets and shows the network interface
         .IDENT  /V0.1/
 ;
-; DCL's SET INTERFACE address mask gateway and SHOW INTERFACE run this,
-; with INTERFACE and the rest as its command line, in the spirit of TCP/IP
-; Services' TCPIP SET INTERFACE. An address is four numbers and dots.
-; SET sets the interface with IO$_SETCHAR on BGA0:, the network's port
-; driver (netdriver.mar), and saves the command in TCPIP$CONFIG.DAT on
-; the data disk, the one that may be written. SHOW senses them with
+; DCL's SET INTERFACE address mask gateway, SHOW INTERFACE and SET
+; CONFIGURATION INTERFACE address mask gateway run this, with what
+; follows SET or SHOW as its command line, in the spirit of TCP/IP
+; Services' TCPIP commands. An address is four numbers and dots. As
+; there, SET INTERFACE changes the running system and SET CONFIGURATION
+; INTERFACE the saved configuration, which the next boot applies:
+; SET INTERFACE sets the interface with IO$_SETCHAR on BGA0:, the
+; network's port driver (netdriver.mar); SET CONFIGURATION INTERFACE
+; saves INTERFACE and the addresses in a new version of TCPIP$CONFIG.DAT
+; on the data disk, the one that may be written. SHOW senses them with
 ; IO$_SENSECHAR and writes them, and whether the link is up. With no
 ; command line, as SYLOGIN.COM runs it at boot, it sets the interface
 ; from the saved command, if there is one, and says so, and starts
 ; TELNETD, the remote login server SET HOST talks to.
 ; ponytail: one interface; a saved file only once INITIALIZE DKB0: has
 ; made a volume there.
+; ponytail: the default gateway is part of the interface; TCP/IP
+; Services made it a route, SET ROUTE /DEFAULT /GATEWAY=address, and SET
+; CONFIGURATION ROUTE to save it. Do that once DCL parses qualifiers.
 ;
         .LIBRARY "lib.mlb"
         .LIBRARY "starlet.mlb"
@@ -39,7 +46,9 @@ LINE:   .BLKB   256                     ; a line being written, .ASCIC
 CONFIG: .ASCII  "DKB0:[000000]TCPIP$CONFIG.DAT"
 CONFIGLEN = . - CONFIG
 INTERFACE:
-        .ASCII  "INTERFACE"
+        .ASCIC  "INTERFACE"
+CONFIGURATION:
+        .ASCIC  "CONFIGURATION"
 TELNETD:
         .ASCID  "TELNETD.EXE"
 TELNETD_NAME:
@@ -53,21 +62,31 @@ TELNETD_NAME:
         BEQL    BOOT
         MOVC3   R0, @#VA$C_FOREIGN+1, CMD+1
         MOVB    @#VA$C_FOREIGN, CMD
-        MOVL    #1, R2                  ; the first word must be INTERFACE
-        BSBW    WORD
-        CMPL    R1, #9
-        BNEQ    80$
-        CMPL    (R0), INTERFACE
-        BNEQ    80$
-        CMPL    4(R0), INTERFACE+4
-        BNEQ    80$
-        CMPB    8(R0), INTERFACE+8
-        BNEQ    80$
+        MOVL    #1, R2                  ; INTERFACE ...
+        MOVAB   INTERFACE, R3
+        BSBW    ISWORD
+        BLBC    R0, 10$
         MOVL    #2, R2
         BSBW    WORD
         TSTL    R1
         BEQL    SHOW
         BSBW    SET
+        RET
+10$:    MOVAB   CONFIGURATION, R3       ; or CONFIGURATION INTERFACE ...
+        BSBW    ISWORD
+        BLBC    R0, 80$
+        MOVL    #2, R2
+        MOVAB   INTERFACE, R3
+        BSBW    ISWORD
+        BLBC    R0, 80$
+        BSBW    WORD                    ; what is saved starts at INTERFACE
+        MOVAB   CMD+1, R2
+        MOVZBL  CMD, R1
+        ADDL2   R2, R1
+        SUBL2   R0, R1
+        MOVB    R1, CMD
+        MOVC3   R1, (R0), (R2)
+        BSBW    PARSE
         BLBC    R0, 90$
         BRW     SAVE
 80$:    MOVL    #SS$_BADPARAM, R0
@@ -103,7 +122,8 @@ BOOT:   BSBW    SENSE
 90$:    MOVL    R2, R0
         RET
 
-; SAVE: writes CMD in a new version of the saved command.
+; SAVE: writes CMD in a new version of the saved command. R0 = RMS's
+; status if it can't.
 SAVE:   MOVB    #FAB$C_VAR, FAB+FAB$B_RFM
         MOVB    #FAB$M_CR, FAB+FAB$B_RAT
         $CREATE FAB=FAB
@@ -115,26 +135,47 @@ SAVE:   MOVB    #FAB$C_VAR, FAB+FAB$B_RFM
         $PUT    RAB=RAB
 70$:    MOVL    R0, R2
         $CLOSE  FAB=FAB
-        BLBC    R2, 80$
-        MOVL    #SS$_NORMAL, R0
-        RET
-80$:    PRINTHEX "%TCPIP-W-NOTSAVED, the interface is set, but not saved on DKB0:, status ", R0
-        MOVL    #SS$_NORMAL, R0
-        RET
+        MOVL    R2, R0
+80$:    RET
 
 ; SET: CMD = INTERFACE address mask gateway. Sets the interface so. R0 =
 ; a status. Uses R0-R6.
-SET:    MOVL    #2, R2
+SET:    BSBB    PARSE
+        BLBC    R0, 90$
+        $QIOW_S CHAN=CHAN, FUNC=#IO$_SETCHAR, IOSB=IOSB, P1=SETTINGS
+        BLBC    R0, 90$
+        MOVZWL  IOSB, R0
+90$:    RSB
+
+; PARSE: CMD = INTERFACE address mask gateway. Puts the three in
+; SETTINGS. R0 = SS$_NORMAL, or SS$_IVADDR for one that isn't an address
+; or isn't there. Uses R0-R6.
+PARSE:  MOVL    #2, R2
         MOVAB   SETTINGS, R6
 10$:    BSBW    WORD
         BSBW    ADDRESS
         BLBC    R0, 90$
         MOVL    R3, (R6)+
         AOBLEQ  #4, R2, 10$
-        $QIOW_S CHAN=CHAN, FUNC=#IO$_SETCHAR, IOSB=IOSB, P1=SETTINGS
-        BLBC    R0, 90$
-        MOVZWL  IOSB, R0
 90$:    RSB
+
+; ISWORD: R2 = n, R3 = a word, .ASCIC. R0 = 1 if CMD's nth word is it,
+; else 0. Keeps R2 and R3.
+ISWORD: PUSHR   #^M<R2, R3, R4>
+        BSBW    WORD
+        MOVZBL  (R3)+, R4
+        CMPL    R1, R4
+        BNEQ    80$
+10$:    DECL    R1
+        BLSS    20$
+        CMPB    (R0)[R1], (R3)[R1]
+        BEQL    10$
+        BRB     80$
+20$:    MOVL    #1, R0
+        BRB     90$
+80$:    CLRL    R0
+90$:    POPR    #^M<R2, R3, R4>
+        RSB
 
 ; SHOW: writes the interface's address, mask and gateway, and the link's
 ; state.
