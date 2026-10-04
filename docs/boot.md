@@ -133,8 +133,8 @@ interpreter. It is linked high in P1, which tells the executive it is one
   runs the command procedure `DKA0:[SYSMGR]SYLOGIN.COM`, as VMS runs it
   at each login: it defines the global symbol `HOME`, a command that goes
   back to `[SYSMGR]`, and runs `TCPIP.EXE`. With a network, that sets
-  the interface's address, mask and gateway as `SET INTERFACE` last
-  saved them on the data disk, and prints `%TCPIP-I-SET, BGA0: ...`, and
+  the interface's address, mask and gateway as `SET CONFIGURATION
+  INTERFACE` last saved them on the data disk, and prints `%TCPIP-I-SET, BGA0: ...`, and
   creates the process `TCPIP$TELNET`, which runs `TELNETD.EXE` and waits
   on TCP port 23 for `SET HOST` from another vaxpunk. Then DCL reads a line with the `$` prompt: `$QIOW`
   hands the read to the console's driver, which writes the prompt and
@@ -222,7 +222,8 @@ interpreter. It is linked high in P1, which tells the executive it is one
 
 - `SET INTERFACE address mask gateway` and `SHOW INTERFACE` run
   `TCPIP.EXE`, which sets and senses them with `$QIOW` on `BGA0:`, the
-  network's port driver, and saves the settings for the next boot.
+  network's port driver. `SET CONFIGURATION INTERFACE address mask
+  gateway` saves them on the data disk for the next boot instead.
   `SET HOST address` runs `RTPAD.EXE`, which connects to port 23 there:
   the other side's `TELNETD` creates a process named after the
   connection's unit, `_BG02:`, running DCL with the connection as its

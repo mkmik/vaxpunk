@@ -115,7 +115,8 @@ on the screen),
 delete and translate logical names (`SHOW LOGICAL SYS$INPUT`, or `SHOW
 LOGICAL` alone to list them all), `SHOW PROCESS` and `SHOW SYSTEM` show
 the process and list them all, `SET INTERFACE address mask gateway` and
-`SHOW INTERFACE` set and show the network's (*Networking*), `SET HOST
+`SHOW INTERFACE` set and show the network's (*Networking*), `SET
+CONFIGURATION INTERFACE` saves them for the next boot, `SET HOST
 address` logs in to another vaxpunk, `COPY` and `DELETE` copy and delete
 files, `INITIALIZE` and `MOUNT` make and mount a volume on the data disk,
 `DKB0:`, or the ramdisk, `MDA0:`, the disks they can write
@@ -286,8 +287,10 @@ Interface  IP_Addr          Network mask     Gateway          Link
  BGA0      10.0.2.15        255.255.255.0    10.0.2.2         up
 ```
 
-`SET INTERFACE` saves the settings on the data disk, once `INITIALIZE
-DKB0:` has made a volume there, and each boot sets them again. Every
+`SET INTERFACE` changes the running system only. `SET CONFIGURATION
+INTERFACE address mask gateway` saves the settings on the data disk, once
+`INITIALIZE DKB0:` has made a volume there, and each boot sets them from
+there, as TCP/IP Services split them. Every
 system with a network runs `TCPIP$TELNET`, which takes `SET HOST`
 logins on TCP port 23: `SET HOST 10.0.2.15` logs in to the system
 itself.
