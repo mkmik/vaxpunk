@@ -103,10 +103,6 @@ The executive is the VMS kernel, written in MACRO-32.
   the index file's header, which says where every other file's header is
   (`FIL$MOUNT`), handing each read to the disk's driver (`DK$STARTIO`) in
   an I/O request packet, as the file system always does, and prints `%MOUNT-I-MOUNTED, VAXPUNK mounted on _DKA0:`
-- mounts the data disk, `DKB0:`, the same way, if an `INITIALIZE DKB0:`
-  wrote a volume there, at this boot or an earlier one, and prints
-  `%MOUNT-I-MOUNTED, label mounted on _DKB0:`. A blank one stays
-  unmounted, without a word.
 - defines the system's logical names for it, in `LNM$SYSTEM_TABLE`:
   `SYS$SYSDEVICE` is `DKA0:`, `SYS$DISK`, the default device, is
   `SYS$SYSDEVICE:`, `SYS$SYSTEM`, where the images are, is
@@ -129,8 +125,15 @@ interpreter. It is linked high in P1, which tells the executive it is one
   disk (`FIL$OPENFILE`), loads it
   into P1 and calls it in supervisor mode.
 - DCL opens a channel to `SYS$INPUT`, which `$ASSIGN` translates to the
-  console, `OPA0:`. Its first command is `@SYS$MANAGER:SYLOGIN`, which
-  runs the command procedure `DKA0:[SYSMGR]SYLOGIN.COM`, as VMS runs it
+  console, `OPA0:`. Its first command is `@SYS$MANAGER:SYSTARTUP_VMS`,
+  which runs the command procedure `DKA0:[SYSMGR]SYSTARTUP_VMS.COM`, the
+  site's own startup, as VMS runs it once at boot: its `MOUNT DKB0:`
+  mounts the data disk, whatever its label, if an `INITIALIZE DKB0:`
+  wrote a volume there, at this boot or an earlier one, and prints
+  `%MOUNT-I-MOUNTED, label mounted on _DKB0:`. On a blank disk it prints
+  `%SYSTEM-W-NOHOMEBLK` instead, and the disk stays unmounted. The second
+  is `@SYS$MANAGER:SYLOGIN`, which
+  runs `DKA0:[SYSMGR]SYLOGIN.COM`, as VMS runs it
   at each login: it defines the global symbol `HOME`, a command that goes
   back to `[SYSMGR]`, and runs `TCPIP.EXE`. With a network, that sets
   the interface's address, mask and gateway as `SET INTERFACE` last
@@ -192,9 +195,20 @@ interpreter. It is linked high in P1, which tells the executive it is one
 - `INITIALIZE DKB0: label` and `MOUNT DKB0: label` do the same on the
   data disk, `DKB0:`, a disk image on the host which the PAL writes with
   `WRITELBLK` ([ADR-0012](adr/0012-data-disk-writable-files-11.md)). What
-  `COPY` and `DELETE` do there is still there at the next boot, which
-  mounts it by itself, and `ods dir out/datadisk.img '[000000]'` lists it
-  on the host.
+  `COPY` and `DELETE` do there is still there at the next boot, whose
+  `SYSTARTUP_VMS.COM` mounts it, and `ods dir out/datadisk.img '[000000]'`
+  lists it on the host.
+- `CREATE/DIRECTORY DKB0:[SUB.DEEP]` runs `CREATE.EXE`, whose
+  `$CREATE_DIR` walks the directories from the MFD, as RMS does to find
+  a file, and makes each one that isn't there, `SUB.DIR;1` in
+  `[000000]`, then `DEEP.DIR;1` in `[SUB]`: an empty directory is a
+  header marked a directory and one block (`FIL$MKDIR`). `COPY`,
+  `DIRECTORY` and `SET DEFAULT` then take `[SUB.DEEP]` as any other.
+  `DELETE` refuses a directory with files in it (`%RMS-E-MKD`).
+- `DISMOUNT DKB0:` runs `DISMOUNT.EXE`, whose `$DISMOU` makes the file
+  system forget the volume, unless a process has a file on it open, so
+  it can be mounted again, or initialized afresh. The system disk can't
+  be dismounted (`%SYSTEM-F-DEVACTIVE`).
 - `SHOW DEVICES` (`SHO DEV`) lists the disks, mounted or not, with their
   volumes' labels and free blocks, then the console, `OPA0:`, as VMS
   does: it finds them with the `$DEVICE_SCAN` system service and asks
@@ -285,13 +299,17 @@ LOGICAL` and `DEASSIGN` of a logical name, `SHOW LOGICAL` alone, and
 copies a file to it, changes it in `EDIT`'s line and keypad modes into
 a second version, lists them,
 deletes them and lists again, then
-initializes and mounts `DKB0:`, made afresh, copies a file there and lists
-it, runs `SHOW DEVICES`, `SHOW PROCESS` and `SHOW SYSTEM`, then runs
+initializes and mounts `DKB0:`, made afresh, which `SYSTARTUP_VMS.COM`
+couldn't mount at boot, copies a file there and lists
+it, makes `[SUB.DEEP]` there with `CREATE/DIRECTORY` and copies a file
+into it, runs `SHOW DEVICES`, tries to dismount `DKA0:`, dismounts
+`DKB0:`, fails to list it, mounts it again, without a label, lists
+`[SUB.DEEP]`, fails to delete `SUB.DIR`, runs `SHOW PROCESS` and `SHOW SYSTEM`, then runs
 CTRLC and types CTRL/C, types CTRL/Y at the prompt, stops SPIN, with a
 CTRL/C, and SLEEPER with CTRL/Y and continues them, and EDIT while it
 reads, so that DCL reads the next commands, and looks for the
 success lines in `out/serial.log`. Once QEMU is gone, `ods-image` checks
-the data disk's volume and finds the file on it.
+the data disk's volume and finds the files on it, `[SUB.DEEP]`'s too.
 
 `cargo test -p boot --test network` boots one system on QEMU's user
 network, sets and shows the interface, runs TCPTEST against a server and

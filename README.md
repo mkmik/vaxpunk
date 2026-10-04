@@ -71,6 +71,7 @@ EXEC.EXE: started at 0x40010b68, 23 of 1024 pages in use
 tcpip: lwIP 2.2.1 on virtio-net, MAC 52:54:0:12:34:56
 %EXEC-I-START, vaxpunk executive, free pages: 00000369
 %MOUNT-I-MOUNTED, VAXPUNK mounted on _DKA0:
+%SYSTEM-W-NOHOMEBLK, Files-11 home block not found on volume
 $
 ```
 
@@ -83,7 +84,9 @@ disk, `DKB0:`, is another, `out/datadisk.img`, which QEMU attaches
 read-write and `run-qemu.sh` makes, blank, the first time
 ([ADR-0012](docs/adr/0012-data-disk-writable-files-11.md)). Once
 `INITIALIZE DKB0: label` has written a volume there, each boot mounts it,
-and what you put there stays; delete the file to start afresh. `SHOW
+with the `MOUNT DKB0:` in `SYS$MANAGER:SYSTARTUP_VMS.COM`, which says
+`NOHOMEBLK` until then, and what you put there stays; delete the file to
+start afresh. `SHOW
 DEVICES` lists the disks and what is mounted on them:
 
 ```
@@ -117,9 +120,10 @@ LOGICAL` alone to list them all), `SHOW PROCESS` and `SHOW SYSTEM` show
 the process and list them all, `SET INTERFACE address mask gateway` and
 `SHOW INTERFACE` set and show the network's (*Networking*), `SET HOST
 address` logs in to another vaxpunk, `COPY` and `DELETE` copy and delete
-files, `INITIALIZE` and `MOUNT` make and mount a volume on the data disk,
-`DKB0:`, or the ramdisk, `MDA0:`, the disks they can write
-([ADR-0009](docs/adr/0009-ramdisk-writable-files-11.md)), `HELP` lists
+files, `INITIALIZE`, `MOUNT` and `DISMOUNT` make, mount and dismount a
+volume on the data disk, `DKB0:`, or the ramdisk, `MDA0:`, the disks they
+can write ([ADR-0009](docs/adr/0009-ramdisk-writable-files-11.md)), where
+`CREATE/DIRECTORY [A.B]` makes directories, `HELP` lists
 the commands and `LOGOUT` ends the process:
 
 ```

@@ -43,12 +43,13 @@
         $RABDEF
         $NAMDEF
         $VCBDEF
+        $STATEDEF
 
         .EXTERNAL SCH$GL_CURPCB, EXE$ALONONPAGED, EXE$DEANONPGDSIZ, EXE$PROBER_DSC
         .EXTERNAL FIL$READHDR, FIL$READVBN, FIL$SEARCHDIR, FIL$EOF, FIL$ISDIR
         .EXTERNAL FIL$SELECT, FIL$CREHDR, FIL$WRITEHDR, FIL$SETNAME, FIL$EXTEND
-        .EXTERNAL FIL$ENTER, FIL$REMOVE, FIL$DELHDR, FIL$WRITEVBN
-        .EXTERNAL F11$GW_FID, F11$GL_VCB, LNM$TRNLOG
+        .EXTERNAL FIL$ENTER, FIL$REMOVE, FIL$DELHDR, FIL$WRITEVBN, FIL$MKDIR
+        .EXTERNAL F11$GW_FID, F11$GL_VCB, F11$AB_DIRBLK, LNM$TRNLOG, SCH$GL_PCBVEC
 
 BLOCK = 512
 MFD = 4                                 ; the MFD's file number
@@ -95,6 +96,7 @@ FIELDS: .BLKQ   5                       ; its parts
 RMS$L_VERSION::                         ; the version it asks for: -1 any, 0 the highest
         .LONG   0
 WILD:   .LONG   0                       ; 1 if it has a wildcard
+CREDIR: .LONG   0                       ; 0, or 1 + the directories DIRWALK made
 RMS$AB_DIRHDR::                         ; its directory's header
         .BLKB   BLOCK
 DIRFID: .BLKW   3                       ; and file ID
@@ -535,9 +537,11 @@ CHARS:  CLRL    R4
 
 ; DIRWALK: finds the directory in FIELDS, from the MFD down, each name
 ; NAME.DIR;1 in the one before: [000000] is the MFD itself. Reads its
-; header into RMS$AB_DIRHDR and its file ID into DIRFID. R0 =
-; RMS$_NORMAL, RMS$_DNF, RMS$_DIR if a name isn't a directory, or the
-; disk's error. Uses R0-R11.
+; header into RMS$AB_DIRHDR and its file ID into DIRFID. With CREDIR set,
+; makes each one that isn't there, counting them in CREDIR. R0 =
+; RMS$_NORMAL, RMS$_DNF, RMS$_DIR if a name isn't a directory, RMS$_WLK
+; if one can't be made on the volume, or the file system's error. Uses
+; R0-R11.
 DIRWALK:
         MOVL    #MFD, R0
         MOVAB   RMS$AB_DIRHDR, R1
@@ -582,8 +586,18 @@ DIRWALK:
         MOVL    (SP)+, R4
         BLBS    R0, 50$
         CMPL    R0, #SS$_NOMOREFILES
+        BNEQ    99$
+        TSTL    CREDIR
         BEQL    90$
-        BRB     99$
+        MOVL    F11$GL_VCB, R0          ; not there: make it
+        BBC     #VCB$V_WRITE, VCB$L_STATUS(R0), 97$
+        PUSHL   R4
+        BSBW    FIL$MKDIR
+        BLBC    R0, 98$
+        MOVC3   #BLOCK, (R1), RMS$AB_DIRHDR
+        MOVL    (SP)+, R4
+        INCL    CREDIR
+        BRB     70$
 50$:    MOVL    R5, R0
         MOVAB   RMS$AB_DIRHDR, R1
         BSBW    FIL$READHDR
@@ -600,6 +614,10 @@ DIRWALK:
 90$:    MOVL    #RMS$_DNF, R0
         RSB
 95$:    MOVL    #RMS$_DIR, R0
+        RSB
+97$:    MOVL    #RMS$_WLK, R0
+        RSB
+98$:    TSTL    (SP)+
 99$:    RSB
 
 ; RMS$FIND: after RMS$PARSE, R1 = a buffer. Finds the one file the
@@ -1258,7 +1276,7 @@ CRENTER:
 ; finds the file after it. RMS$_WLD for a wildcard, RMS$_FNF if there is
 ; no such file, RMS$_WLK on a volume that can't be written, RMS$_PRV for
 ; the volume's own files, RMS$_MKD if the file system fails, with its
-; error in FAB$L_STV.
+; error in FAB$L_STV: SS$_DIRNOTEMPTY for a directory with files in it.
 ; ponytail: an open file is deleted all the same.
         .ENTRY  EXE$ERASE, ^M<R2, R3, R4, R5, R6, R7, R8, R9, R10, R11>
         DSBINT  #IPL$_SYNCH
@@ -1293,7 +1311,19 @@ CRENTER:
         BNEQ    20$
         CMPW    HDRBUF+FH2$W_FID, #RESFILES
         BLEQU   90$
-20$:    MOVAB   RMS$AB_DIRHDR, R3
+20$:    MOVAB   HDRBUF, R1              ; a directory must be empty
+        BSBW    FIL$ISDIR
+        BLBC    R0, 25$
+        MOVL    #1, R0
+        MOVL    #1, R1
+        MOVAB   F11$AB_DIRBLK, R2
+        MOVAB   HDRBUF, R3
+        BSBW    FIL$READVBN
+        BLBC    R0, 80$
+        MOVL    #SS$_DIRNOTEMPTY, R0
+        CMPW    F11$AB_DIRBLK, #^XFFFF
+        BNEQ    80$
+25$:    MOVAB   RMS$AB_DIRHDR, R3
         MOVL    FIELDS+16, R6           ; NAME.TYPE
         ADDL3   FIELDS+20, FIELDS+28, R7
         MOVL    RESVER, R8
@@ -1488,6 +1518,55 @@ GETBYTE:
         MOVL    #RMS$_NORMAL, R1
 80$:    POPR    #^M<R2, R3>
 90$:    RSB
+
+; $CREATE_DIR devdirspec: makes the directory devdirspec names,
+; [dev:][dir.dir...], what it leaves out from SYS$DISK: and the default
+; directory, and each one above it that isn't there either: an empty
+; NAME.DIR;1 in the one above it. SS$_CREATED if it made one, SS$_NORMAL
+; if they were all there, SS$_ACCVIO if the caller can't read devdirspec,
+; RMS$_WLK on a volume that can't be written, or RMS$PARSE's or the file
+; system's error, with the ones above made.
+; ponytail: a service; VMS's LIB$CREATE_DIR asks the XQP with $QIO
+; IO$_CREATE, and there are no XQP functions on disk channels. No owner,
+; protection or version limit.
+        .ENTRY  EXE$CREATE_DIR, ^M<R2, R3, R4, R5, R6, R7, R8, R9, R10, R11>
+        MOVL    4(AP), R1
+        BSBW    EXE$PROBER_DSC
+        BLBC    R0, 90$
+        MOVZWL  (R1), R2
+        MOVL    4(R1), R0
+        MOVL    R2, R1
+        DSBINT  #IPL$_SYNCH
+        MOVL    #1, CREDIR
+        CLRQ    R2
+        BSBW    SYSDFLT
+        BSBW    RMS$PARSE
+        BLBC    R0, 80$
+        MOVL    #SS$_NORMAL, R0
+        CMPL    CREDIR, #1
+        BEQL    80$
+        MOVL    #SS$_CREATED, R0
+80$:    CLRL    CREDIR
+        ENBINT
+90$:    RET
+
+; RMS$VOLIDLE: R1 = a VCB. R0 = SS$_NORMAL if no process has a file on
+; its volume open, else SS$_DEVACTIVE. IPL$_SYNCH. Uses R0 and R2-R4.
+RMS$VOLIDLE::
+        MOVL    #SCH$C_MAXPIX-1, R2
+10$:    MOVL    SCH$GL_PCBVEC[R2], R3
+        BEQL    40$
+        MOVL    #1, R4
+20$:    BBC     R4, PCB$L_FILES(R3), 30$
+        MOVL    PCB$A_IFAB(R3)[R4], R0
+        CMPL    IFB$L_VCB(R0), R1
+        BEQL    80$
+30$:    AOBLEQ  #MAXIFI, R4, 20$
+40$:    SOBGTR  R2, 10$
+        MOVL    #SS$_NORMAL, R0
+        RSB
+80$:    MOVL    #SS$_DEVACTIVE, R0
+        RSB
 
 ; RMS$RUNDOWN: R4 = the current PCB, R0 = a mask of IFIs. Closes the
 ; process's files but those. Uses R0-R3.

@@ -152,9 +152,11 @@ CODE = 0
         SERVICE CREATE, 1
         SERVICE PUT, 1
         SERVICE ERASE, 1
+        SERVICE CREATE_DIR, 1
 ; Volumes
         SERVICE MOUNT, 1
         SERVICE INIT_VOL, 2
+        SERVICE DISMOU, 2
 ; Devices
         SERVICE GETDVI, 8
         SERVICE GETDVIW, 8

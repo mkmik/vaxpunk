@@ -13,11 +13,12 @@ SS$_EXQUOTA = 28
 SS$_NOPRIV = 36
 SS$_ABORT = 44
 SS$_DEVMOUNT = 108                      ; the device is already mounted
-SS$_DEVNOTMOUNT = 124
+SS$_DEVNOTMOUNT = 124                   ; no volume is mounted on the device
 SS$_BADIMGHDR = 68
 SS$_DRVERR = 140
 SS$_DUPLNAM = 148
 SS$_ILLBLKNUM = 220
+SS$_DEVACTIVE = 708                     ; the device is in use: the system disk, or one with files open
 SS$_ILLEFC = 236
 SS$_ILLIOFUNC = 244
 SS$_ILLPAGCNT = 252
@@ -47,6 +48,7 @@ SS$_OPCDEC = 1084
 SS$_BUFFEROVF = 1537                    ; success: the output didn't all fit in the buffer
 SS$_CONTROLY = 1553                     ; CTRL/Y stopped the image
 SS$_CONTROLC = 1617                     ; CTRL/C, which no CTRL/C AST took, stopped the image
+SS$_CREATED = 1561                      ; success: it wasn't there, and was made
 SS$_MSGNOTFND = 1569                    ; success: $GETMSG has no text for the status
 SS$_SUPERSEDE = 1585                    ; success: a name by that name was replaced
 SS$_NONEXPR = 2280
@@ -68,6 +70,7 @@ SS$_NOMOREDEV = 2648                    ; no more devices to list
 SS$_UNREACHABLE = 8340                  ; no route to the peer
 SS$_LINKABORT = 8420                    ; the connection was reset
 SS$_LINKDISCON = 8428                   ; the peer closed the connection
+SS$_DIRNOTEMPTY = 8564                  ; a directory to delete has files in it
 SS$_FORCEDEXIT = 8572                   ; $FORCEX ended the image
 SS$_NOLOGTAB = 8852
         .ENDM   $SSDEF
@@ -873,4 +876,17 @@ PRT$C_UR = 15
         .EXTERNAL SYS$MOUNT
         CALLS   #1, G^SYS$MOUNT
         .ENDM   $MOUNT_S
+
+        .MACRO  $DISMOU_S DEVNAM, FLAGS=#0
+        PUSHL   FLAGS
+        $PUSHADR DEVNAM
+        .EXTERNAL SYS$DISMOU
+        CALLS   #2, G^SYS$DISMOU
+        .ENDM   $DISMOU_S
+
+        .MACRO  $CREATE_DIR_S DEVDIRSPEC
+        $PUSHADR DEVDIRSPEC
+        .EXTERNAL SYS$CREATE_DIR
+        CALLS   #1, G^SYS$CREATE_DIR
+        .ENDM   $CREATE_DIR_S
 
