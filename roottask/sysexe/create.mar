@@ -1,0 +1,25 @@
+        .TITLE  CREATE  Makes directories
+        .IDENT  /V0.1/
+;
+; DCL's CREATE/DIRECTORY spec runs this, with spec as its command line:
+; $CREATE_DIR makes the directory, [dev:][dir.dir...], and those above it
+; that aren't there. Returns its status: SS$_CREATED, or SS$_NORMAL if
+; the directory was there already.
+; ponytail: one directory, no qualifiers; VMS's CREATE also makes files.
+;
+        .LIBRARY "starlet.mlb"
+
+        .EXTERNAL GET_PARAM
+
+        .PSECT  DATA, NOEXE, WRT, LONG
+SPEC:   .LONG   0, 0                    ; a descriptor of the parameter
+
+        .PSECT  CODE, EXE, LONG
+        .ENTRY  START, ^M<>
+        PUSHAB  SPEC
+        PUSHL   #1
+        CALLS   #2, G^GET_PARAM
+        $CREATE_DIR_S DEVDIRSPEC=SPEC
+        RET
+
+        .END    START

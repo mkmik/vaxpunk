@@ -78,8 +78,8 @@ blocks and `$OPEN`... calls, `$MNTDEF`).
    console receive interrupt enabled.
 6. `FIL$MOUNT` mounts the system disk (*Files*) and prints
    `%MOUNT-I-MOUNTED, VAXPUNK mounted on _DKA0:`. If it can't, the
-   executive halts with `%EXEC-F-NOMOUNT` and the status. Then it mounts
-   the data disk, `DKB0:`, if it holds a volume, and goes on if it doesn't.
+   executive halts with `%EXEC-F-NOMOUNT` and the status. The data disk,
+   `DKB0:`, is left to `SYSTARTUP_VMS.COM` (*The command interpreter*).
    Then
    `LNM$CREATE` puts the system's logical names in `LNM$SYSTEM_TABLE`
    (*Logical names*).
@@ -241,7 +241,11 @@ there is. The image activator puts its transfer address in
 
 The command interpreter keeps nothing on its stack across an image; what
 it remembers is in its P1 data. `EXEC$START` creates the console's
-process, `SYSTEM`, with `DCL.EXE`:
+process, `SYSTEM`, with `DCL.EXE`, whose first commands, before it
+prompts, are `@SYS$MANAGER:SYSTARTUP_VMS`, the site's startup, which
+mounts `DKB0:`, and `@SYS$MANAGER:SYLOGIN`. ponytail: VMS runs
+`SYSTARTUP_VMS.COM` in a `STARTUP` process of its own, before anyone
+logs in.
 
 | Command | Does |
 | --- | --- |
@@ -258,7 +262,9 @@ process, `SYSTEM`, with `DCL.EXE`:
 | `COPY from to` | `$IMGACT` of `COPY.EXE`, with the two, a blank between |
 | `DELETE spec` | `$IMGACT` of `DELETE.EXE` |
 | `INITIALIZE device label` | `$IMGACT` of `INIT.EXE` |
-| `MOUNT device label` | `$IMGACT` of `MOUNT.EXE` |
+| `MOUNT device [label]` | `$IMGACT` of `MOUNT.EXE` |
+| `DISMOUNT device` | `$IMGACT` of `DISMOUNT.EXE` |
+| `CREATE/DIRECTORY spec` | `$IMGACT` of `CREATE.EXE`; `CREATE` alone isn't a verb |
 | `CONTINUE` | returns from the CTRL/Y AST, which goes back to the image |
 | `HELP` | lists the commands |
 | `LOGOUT` | `$DELPRC` |
@@ -504,8 +510,8 @@ can't reach them.
 | I/O | `$ASSIGN`, `$DASSGN`, `$CANCEL`, `$QIO`, `$QIOW` | |
 | Logical names | `$CRELNM`, `$DELLNM`, `$TRNLNM` | |
 | Images | `$IMGACT` | |
-| RMS | `$PARSE`, `$SEARCH`, `$OPEN`, `$CREATE`, `$CONNECT`, `$GET`, `$PUT`, `$DISCONNECT`, `$CLOSE`, `$ERASE`, `$SETDDIR` | |
-| Volumes | `$MOUNT`, `$INIT_VOL` | |
+| RMS | `$PARSE`, `$SEARCH`, `$OPEN`, `$CREATE`, `$CONNECT`, `$GET`, `$PUT`, `$DISCONNECT`, `$CLOSE`, `$ERASE`, `$SETDDIR`, `$CREATE_DIR` | |
+| Volumes | `$MOUNT`, `$DISMOU`, `$INIT_VOL` | |
 | ASTs | `$DCLAST`, `$SETAST`, `$ASTEXIT` | |
 | Other | `$GETSYI`, `$GETSYIW`, `$GETMSG` | |
 
@@ -715,14 +721,20 @@ disk's driver is done when it returns. `FIL$SELECT` picks the
 VCB by device name. `f11.mar` reads Files-11 (`ods/docs/`) as VMS's XQP
 does:
 
-- **`FIL$MOUNT`**, at boot for `DKA0:` and `DKB0:` and from `$MOUNT itmlst`, which
+- **`FIL$MOUNT`**, at boot for `DKA0:` and from `$MOUNT itmlst`, which
   takes `MNT$_DEVNAM` and `MNT$_VOLNAM`, reads the home block at LBN 1,
   checks its format, `DECFILE11B`, and its label against the one asked
   for, keeps where file headers start in the index file, and reads the
   index file's header, through whose map it finds every other header.
   On a disk it can write, it finds the storage bitmap, `BITMAP.SYS`'s
   second block. It reports the volume on the console:
-  `%MOUNT-I-MOUNTED, RAM mounted on _MDA0:`.
+  `%MOUNT-I-MOUNTED, RAM mounted on _MDA0:`. Without `MNT$_VOLNAM`, any
+  label will do.
+- **`$DISMOU devnam, flags`** clears the VCB's `VCB$V_MOUNTED`, so the
+  volume can be mounted again, or another written there:
+  `SS$_DEVNOTMOUNT` if none is, `SS$_DEVACTIVE` for `DKA0:`, or while
+  a process has a file on it open (`RMS$VOLIDLE` looks through every
+  PCB's IFABs). ponytail: no flags.
 - **`FIL$READHDR`** reads file number n's header, VBN
   `IBMAPVBN + IBMAPSIZE + n - 1` of the index file, and checks its
   checksum and number. **`FIL$MAPVBN`** finds a VBN's LBN in a header's
@@ -755,6 +767,10 @@ does:
   above the highest unless one is given) or removed, packed into blocks
   again, each ended by a record size of all ones, and written back, the
   directory extended if it grew.
+- **`FIL$MKDIR`** makes an empty directory, `NAME.DIR;1`, in another, as
+  `INITIALIZE` makes the MFD: a header marked a directory and contiguous,
+  VAR records in blocks of 512, no delete access, and one block holding
+  only the end of block's -1, entered last.
 - **`FIL$INIT`**, for `$INIT_VOL devnam, volnam`, writes an empty volume
   on `DKB0:`, 4,096 blocks, or the ramdisk, 1,024, as `INITIALIZE` lays one out (`ods/docs/initialize.md`):
   the boot block, the home block, the index file bitmap, 64 header
@@ -797,7 +813,8 @@ a directory in one of those. The MFD has no parent: `RMS$_DIR`.
 | `$GET rab` | the next record into the RAB's user buffer: `RAB$W_RSZ`, `RAB$L_RBF`; `RMS$_RTB` if it didn't fit, `RMS$_EOF` past the end; VAR and FIX records only |
 | `$PUT rab` | appends the record at `RAB$L_RBF`, `RAB$W_RSZ` bytes, to a file `$CREATE` made: VAR records with their size first, FIX ones of the file's size (`RMS$_RSZ`), each on a word; a block at a time, extending the file by 8 blocks as it fills |
 | `$DISCONNECT rab`, `$CLOSE fab` | undo `$CONNECT` and `$OPEN`; `$CLOSE` writes a new file's last block and its end of file |
-| `$ERASE fab` | deletes a file, the highest version unless the specification gives one, or, with `FAB$M_NAM` in `FAB$L_FOP`, the one the NAM block's resultant string names, and the next `$SEARCH` finds the one after it; `RMS$_PRV` for the volume's own files, 1 to 9 |
+| `$ERASE fab` | deletes a file, the highest version unless the specification gives one, or, with `FAB$M_NAM` in `FAB$L_FOP`, the one the NAM block's resultant string names, and the next `$SEARCH` finds the one after it; `RMS$_PRV` for the volume's own files, 1 to 9, `RMS$_MKD` with `SS$_DIRNOTEMPTY` in `FAB$L_STV` for a directory with files in it |
+| `$CREATE_DIR devdirspec` | makes the directory `[dev:][dir.dir]` names, and those above it that aren't there, with `FIL$MKDIR`, as the directory walk finds each missing: `SS$_CREATED`, or `SS$_NORMAL` if they were all there. ponytail: VMS's `LIB$CREATE_DIR` is a library routine that asks the XQP with `$QIO`; here it is a service |
 | `$SETDDIR newdir, oldlen, olddir` | the old default directory into `olddir`, then `newdir`, `[dir.dir]` up to 63 characters, the new one, unchecked against the disk; `RMS$_DIR` if it isn't one |
 
 A process's default directory is `PCB$T_DEFDIR`. It starts as its
@@ -846,13 +863,14 @@ $ RUN SNOOP
 ## The system disk's programs
 
 `roottask/sysexe/` holds the programs in `DKA0:[SYSEXE]`: DCL, DIRECTORY,
-TYPE, EDIT, COPY, DELETE, INIT and MOUNT, and those which show the services at
+TYPE, EDIT, COPY, DELETE, INIT, MOUNT, DISMOUNT and CREATE, and those which show the services at
 work, which `cargo test -p boot` runs from DCL's prompt (`RUN STARTUP`,
 `RUN SNOOP`, a bad verb, `DIR [SYSEXE]P%NG`, `TYPE WELCOME.TXT` and an `EDIT WELCOME.TXT`
 session, then
 `INIT` and `MOUNT MDA0: RAM`, a `COPY` to it, an `EDIT` in keypad mode
 that writes a second version, `DIR`, `DELETE`s and `DIR` again) and to the end. `roottask/sysmgr/` holds the text files in
-`DKA0:[SYSMGR]`. They run in user mode, DCL in supervisor mode, and write
+`DKA0:[SYSMGR]`, among them `SYSTARTUP_VMS.COM`, which mounts `DKB0:` at
+boot, and `SYLOGIN.COM`. They run in user mode, DCL in supervisor mode, and write
 on the console with `PRINT` and `PRINTHEX` from `sysexe.mlb`, which call
 `PUT_LINE` in `sysexe/lib/print.mar`: a line at a time on `OPA0:`, with
 `$QIOW`. `GET_PARAM n, desc`, in `sysexe/lib/param.mar`, points a
@@ -868,7 +886,9 @@ descriptor at the nth parameter of the command line. `build.rs` links
 | `COPY` | `$OPEN`s its first parameter, `$CREATE`s its second, with the first's attributes and its name and type for what the second leaves out, and copies each record with `$GET` and `$PUT` |
 | `DELETE` | `$PARSE`s its parameter, which must give a version or `;*` (`%DELETE-E-DELVER`), and `$ERASE`s each file `$SEARCH` finds |
 | `INIT` | `$INIT_VOL` with its two parameters, the device and the label |
-| `MOUNT` | `$MOUNT` with its two parameters, the device and the label |
+| `MOUNT` | `$MOUNT` with its parameters, the device and the label, if there is one |
+| `DISMOUNT` | `$DISMOU` with its parameter, the device |
+| `CREATE` | `$CREATE_DIR` with its parameter, for `CREATE/DIRECTORY` |
 | `STARTUP` | makes 4 pages with `$EXPREG`, checks and deletes them; creates `SLEEPER` at a higher priority, which runs at once, and `PING` and `PONG`; waits until `PONG` sets flag 66 of their cluster; deletes `SLEEPER`; creates `SVCTEST`, `HOG`, `TIMETEST` and `ASTTEST` |
 | `SLEEPER` | hibernates until it is deleted |
 | `PING`, `PONG` | take three turns through common event flags 64 and 65 of the cluster `PINGPONG`; `PONG` then sets flag 66, which `STARTUP` waits for |
@@ -895,5 +915,5 @@ taking the clock's interrupts.
   channels, logical names in file specifications (`SYS$SYSTEM:DCL.EXE`)
   and `SYS$DISK`.
 - Access modes and search lists for logical names.
-- `DISMOUNT`, `INITIALIZE/SIZE`, subdirectories, and the index file
-  extended past the headers `INITIALIZE` made room for.
+- `INITIALIZE/SIZE`, and the index file extended past the headers
+  `INITIALIZE` made room for.

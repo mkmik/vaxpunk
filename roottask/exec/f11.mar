@@ -10,7 +10,8 @@
 ; FIL$READLBLK and FIL$WRITELBLK hand the driver an IRP, through the
 ; disk's UCB.
 ; FIL$MOUNT mounts a volume: it reads the home block and keeps the index
-; file's header, through which every other file's header is found. The
+; file's header, through which every other file's header is found;
+; $DISMOU forgets it. The
 ; rest reads what VMS's XQP reads: a file's header by its number, its
 ; blocks through the header's map, and a directory's records, with
 ; wildcards. f11wrt.mar writes them. RMS (rms.mar) and the image activator
@@ -36,6 +37,7 @@
         .EXTERNAL EXE$OUTZSTRING, EXE$OUTCSTRING, EXE$OUTCRLF
         .EXTERNAL EXE$ALONONPAGED, EXE$DEANONPGDSIZ, RMS$PARSE, RMS$FIND, MD$IO
         .EXTERNAL IOC$ALLOCIRP, IOC$REQCOM, IOC$AB_DKA0, IOC$AB_DKB0, IOC$AB_MDA0
+        .EXTERNAL EXE$PROBER_DSC, RMS$VOLIDLE
 
 BLOCK = 512
 MAXREAD = 127                           ; blocks a READLBLK reads, below 64 KB
@@ -378,6 +380,34 @@ FIL$MOUNT::
 85$:    MOVL    #SS$_ACCVIO, R0
         RET
 88$:    MOVL    #SS$_INCVOLLABEL, R0
+90$:    RET
+
+; $DISMOU devnam, flags: dismounts the volume on the disk devnam names,
+; DKB0: or MDA0:: the file system forgets it, and $MOUNT may mount it
+; again, or $INIT_VOL write another there. SS$_DEVNOTMOUNT if none is
+; mounted there, SS$_DEVACTIVE for the system disk, DKA0:, or while a
+; process has a file on the volume open.
+; ponytail: no flags; any process may.
+        .ENTRY  EXE$DISMOU, ^M<R2, R3, R4>
+        MOVL    4(AP), R1
+        BSBW    EXE$PROBER_DSC
+        BLBC    R0, 90$
+        MOVZWL  (R1), R2
+        MOVL    4(R1), R1
+        DSBINT  #IPL$_SYNCH
+        BSBW    FIL$SELECT
+        BLBC    R0, 80$
+        MOVL    F11$GL_VCB, R1
+        MOVL    #SS$_DEVNOTMOUNT, R0
+        BBC     #VCB$V_MOUNTED, VCB$L_STATUS(R1), 80$
+        MOVL    #SS$_DEVACTIVE, R0
+        MOVAB   F11$AB_DKA0, R2
+        CMPL    R1, R2
+        BEQL    80$
+        BSBW    RMS$VOLIDLE
+        BLBC    R0, 80$
+        BICL2   #1@VCB$V_MOUNTED, VCB$L_STATUS(R1)
+80$:    ENBINT
 90$:    RET
 
 ; FIL$FREEBLOCKS: R0 = the free blocks on F11$GL_VCB's volume, which

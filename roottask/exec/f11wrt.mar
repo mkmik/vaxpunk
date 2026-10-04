@@ -6,7 +6,7 @@
 ; a new file gets a header from the index file bitmap, blocks from the
 ; storage bitmap (ods/docs/bitmap.md), with a map pointer for each run of
 ; them, and an entry in a directory (ods/docs/directory.md); deleting it
-; gives all three back. FIL$INIT, which $INIT_VOL calls, writes an empty
+; gives all three back. FIL$MKDIR makes a directory the same way. FIL$INIT, which $INIT_VOL calls, writes an empty
 ; volume, laid out as INITIALIZE does (ods/docs/initialize.md). RMS
 ; (rms.mar) calls these at IPL$_SYNCH, as it calls f11.mar's.
 ; ponytail: a cluster is a block, and the bitmaps are a block each, so a
@@ -504,6 +504,59 @@ FIL$REMOVE::
         MOVZBL  DU_FID+5, R5
         ASHL    #16, R5, R5
         MOVW    DU_FID, R5
+        RSB
+
+; FIL$MKDIR: R3 = a directory's header, R6 = a name, NAME.DIR, R7 = its
+; length. Makes an empty directory, NAME.DIR;1, in it, as INITIALIZE
+; makes the MFD: a header marked a directory and contiguous, with VAR
+; records in blocks, and a block holding only the end of block's -1. R1 =
+; its header, R0 = SS$_NORMAL, or FIL$CREHDR's, FIL$EXTEND's or
+; FIL$ENTER's error, with nothing made. IPL$_SYNCH. Uses R0-R5.
+FIL$MKDIR::
+        PUSHR   #^M<R8, R9>
+        MOVL    R3, R9                  ; the one it goes in
+        MOVAB   NEWHDR, R1
+        BSBW    FIL$CREHDR
+        BLBC    R0, 90$
+        MOVAB   NEWHDR, R3
+        MOVB    #2, FAT$B_RTYPE(R3)     ; VAR
+        MOVB    #8, FAT$B_RATTRIB(R3)   ; BLK
+        MOVW    #BLOCK, FAT$W_RSIZE(R3)
+        MOVW    #BLOCK, FAT$W_MAXREC(R3)
+        MOVL    #FCH$M_CONTIG!FCH$M_DIRECTORY, FH2$L_FILECHAR(R3)
+        BISW2   #^X8888, FH2$W_FILEPROT(R3)     ; no one may delete it
+        MOVL    FH2$W_FID(R9), FH2$W_BACKLINK(R3)
+        MOVW    FH2$W_FID+4(R9), FH2$W_BACKLINK+4(R3)
+        MOVL    #1, R1
+        BSBW    FIL$EXTEND
+        BLBC    R0, 80$
+        ROTL    #16, #2, FAT$L_EFBLK(R3)        ; one block in use
+        MOVC5   #0, (SP), #0, #BLOCK, BITBLK
+        MNEGW   #1, BITBLK
+        MOVL    #1, R0
+        MOVL    #1, R1
+        MOVAB   BITBLK, R2
+        MOVAB   NEWHDR, R3
+        BSBW    FIL$WRITEVBN
+        BLBC    R0, 80$
+        MOVAB   NEWHDR, R1
+        MOVL    #1, R4
+        BSBW    FIL$SETNAME
+        BSBW    FIL$WRITEHDR
+        BLBC    R0, 80$
+        MOVL    R9, R3
+        MOVL    #1, R8
+        MOVAB   NEWHDR+FH2$W_FID, R5
+        BSBW    FIL$ENTER
+        BLBC    R0, 80$
+        MOVAB   NEWHDR, R1
+        BRB     90$
+80$:    PUSHL   R0                      ; its block and header go back
+        MOVAB   NEWHDR, R1
+        BSBW    FIL$DELHDR
+        MOVL    (SP)+, R0
+90$:    MOVL    R9, R3
+        POPR    #^M<R8, R9>
         RSB
 
 ; DIRUPD: R3 = a directory's header, R6 = a name, R7 = its length, and

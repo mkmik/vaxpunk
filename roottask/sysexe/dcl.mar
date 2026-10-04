@@ -40,8 +40,12 @@
 ;   DELETE spec runs DELETE.EXE
 ;   INITIALIZE device label
 ;               runs INIT.EXE
-;   MOUNT device label
+;   MOUNT device [label]
 ;               runs MOUNT.EXE
+;   DISMOUNT device
+;               runs DISMOUNT.EXE
+;   CREATE/DIRECTORY spec
+;               runs CREATE.EXE
 ;   CONTINUE    goes back to the image CTRL/Y stopped
 ;   HELP        lists the commands
 ;   LOGOUT      ends the process
@@ -71,8 +75,9 @@
 ; symbol may stand for the verb, and the words after it: HOME ==
 ; "SET DEFAULT [SYSMGR]" makes HOME a command. A status with
 ; STS$M_INHIB_MSG set is one the image reported itself. It reads the
-; commands from SYS$INPUT, but SYS$MANAGER:SYLOGIN.COM's, which it runs
-; first, and a command procedure's, whose lines start with $.
+; commands from SYS$INPUT, but SYS$MANAGER:SYSTARTUP_VMS.COM's and
+; SYLOGIN.COM's, which it runs first, and a command procedure's, whose
+; lines start with $.
 ;
 ; CTRL/Y is DCL's supervisor mode AST, which it enables on the console
 ; with IO$_SETMODE (ADR-0014). It stops the image DCL runs, where it is,
@@ -209,6 +214,9 @@ INITIMG:
         .ASCID  "INIT.EXE"
 MOUNTIMG:
         .ASCID  "MOUNT.EXE"
+DISMIMG:
+        .ASCID  "DISMOUNT.EXE"
+CREIMG: .ASCID  "CREATE.EXE"
 SHOWIMG:
         .ASCID  "SHOW.EXE"
 TCPIPIMG:
@@ -301,6 +309,10 @@ V_INITIALIZE:
         .ASCIC  "INITIALIZE"
 V_MOUNT:
         .ASCIC  "MOUNT"
+V_DISMOUNT:
+        .ASCIC  "DISMOUNT"
+V_CREDIR:
+        .ASCIC  "CREATE/DIRECTORY"
 V_CONTINUE:
         .ASCIC  "CONTINUE"
 V_IF:   .ASCIC  "IF"
@@ -321,8 +333,9 @@ S_NOT:  .ASCIC  "NOT"
 STATNAM:
         .ASCIC  "$STATUS"
 SEVNAM: .ASCIC  "$SEVERITY"
-SYLOGIN:                                ; the first command
+FIRST:  .ASCIC  "@SYS$MANAGER:SYSTARTUP_VMS"     ; the first commands, until a 0
         .ASCIC  "@SYS$MANAGER:SYLOGIN"
+        .BYTE   0
 DOTCOM: .ASCII  ".COM"
 PNAME:  .ASCIC  "P1"                    ; a parameter's symbol, P1 to P8
 ; The operators: each name, .ASCIC, its level, 1 binding the least, and
@@ -371,6 +384,7 @@ LINE2:  .BLKB   LINESIZE                ; a command being made
 DOTEXE: .ASCII  ".EXE"
         .ALIGN  LONG
 SAVESP: .LONG   0                       ; SP as DCL was called, where errors go back to
+FIRSTP: .ADDRESS FIRST                  ; the next of the first commands
 IMGRUN: .LONG   0                       ; 1 while an image runs, or is about to
 CTRLYFP:                                ; while CTRL/Y has it stopped, FP in the AST, else 0
         .LONG   0
@@ -416,9 +430,7 @@ HEX:    .ASCII  "0123456789ABCDEF"
         $ASSIGN_S DEVNAM=INPUT, CHAN=CHAN
         BLBC    R0, QUIT
         BSBW    CTRLYON
-        MOVZBL  SYLOGIN, R7             ; @SYS$MANAGER:SYLOGIN first
-        MOVC3   R7, SYLOGIN+1, LINE
-        BRB     GOTLINE
+        BRB     NEXT
 10$:    MOVL    4(AP), R0
         BRW     DONE
 
@@ -443,7 +455,13 @@ NEXT:   MOVL    SAVESP, SP
         INCL    R6
         BRB     SUBLINE
 PROMPT1:
-        $QIOW_S CHAN=CHAN, FUNC=#IO$_READPROMPT, IOSB=IOSB, P1=LINE, P2=#LINESIZE, P5=#PROMPT, P6=#2
+        MOVL    FIRSTP, R1              ; the first commands, before the console's
+        MOVZBL  (R1)+, R7
+        BEQL    20$
+        ADDL3   R1, R7, FIRSTP
+        MOVC3   R7, (R1), LINE
+        BRB     GOTLINE
+20$:    $QIOW_S CHAN=CHAN, FUNC=#IO$_READPROMPT, IOSB=IOSB, P1=LINE, P2=#LINESIZE, P5=#PROMPT, P6=#2
         BLBC    R0, QUIT
         CMPW    IOSB, #SS$_LINKDISCON   ; SET HOST's: the line is gone
         BEQL    QUIT
@@ -562,6 +580,9 @@ VERBS:  MOVAB   V_RUN, R1
         MOVAB   V_MOUNT, R1
         BSBW    VERB
         BLBS    R0, MOUNT
+        MOVAB   V_DISMOUNT, R1
+        BSBW    VERB
+        BLBS    R0, DISMOUNT
         MOVAB   V_CONTINUE, R1
         BSBW    VERB
         BLBS    R0, CONTINUE
@@ -580,7 +601,13 @@ VERBS:  MOVAB   V_RUN, R1
         MOVAB   V_DELSYM, R1
         BSBW    VERB
         BLBS    R0, DELSYM
-        PRINT   "%DCL-W-IVVERB, unrecognized command verb - check validity and spelling"
+        MOVAB   V_CREDIR, R1
+        BSBW    VERB
+        BLBC    R0, 60$
+        CMPL    R8, #8                  ; CREATE/D at least: CREATE alone makes files
+        BLSSU   60$
+        BRW     CREDIR
+60$:    PRINT   "%DCL-W-IVVERB, unrecognized command verb - check validity and spelling"
         ADDTEXT " \"
         BSBW    ADDTOKEN
         ADDTEXT "\"
@@ -632,8 +659,12 @@ HELP:   PRINT   "  RUN image   runs image, image.EXE if it has no type"
         PRINT   "  DELETE spec deletes the files spec names, ;version or ;*"
         PRINT   "  INITIALIZE device label"
         PRINT   "              writes an empty volume on DKB0: or MDA0:, the ramdisk"
-        PRINT   "  MOUNT device label"
+        PRINT   "  MOUNT device [label]"
         PRINT   "              mounts the volume, DKB0: or MDA0: then names its files"
+        PRINT   "  DISMOUNT device"
+        PRINT   "              dismounts it"
+        PRINT   "  CREATE/DIRECTORY spec"
+        PRINT   "              makes the directory, [dev:][dir.dir...], and those above it"
         PRINT   "  CONTINUE    goes back to the image CTRL/Y stopped"
         PRINT   "  HELP        lists the commands"
         PRINT   "  LOGOUT      ends the process"
@@ -692,7 +723,14 @@ INITIALIZE:
         MOVL    #2, R3
         BRB     FOREIGN
 MOUNT:  MOVAB   MOUNTIMG, R4
-        MOVL    #2, R3
+        MOVL    #1, R3
+        BRB     FOREIGN
+DISMOUNT:
+        MOVAB   DISMIMG, R4
+        MOVL    #1, R3
+        BRB     FOREIGN
+CREDIR: MOVAB   CREIMG, R4
+        MOVL    #1, R3
         BRB     FOREIGN
 ; INTERFACE: SET INTERFACE and SHOW INTERFACE, R3 = the parameters they
 ; need, INTERFACE's included, which goes on TCPIP.EXE's command line.

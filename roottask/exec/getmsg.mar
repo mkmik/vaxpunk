@@ -117,6 +117,18 @@ MESSAGES:
         .ASCIC  "SYSTEM"
         .ASCIC  "DEVMOUNT"
         .ASCIC  "device is already mounted"
+        .LONG   SS$_DEVNOTMOUNT
+        .ASCIC  "SYSTEM"
+        .ASCIC  "DEVNOTMOUNT"
+        .ASCIC  "device is not mounted"
+        .LONG   SS$_DEVACTIVE
+        .ASCIC  "SYSTEM"
+        .ASCIC  "DEVACTIVE"
+        .ASCIC  "device is active"
+        .LONG   SS$_DIRNOTEMPTY
+        .ASCIC  "SYSTEM"
+        .ASCIC  "DIRNOTEMPTY"
+        .ASCIC  "directory file is not empty"
         .LONG   SS$_INCVOLLABEL
         .ASCIC  "SYSTEM"
         .ASCIC  "INCVOLLABEL"

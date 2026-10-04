@@ -30,7 +30,6 @@
         .EXTERNAL TTY$INIT, TTY$RCVINT, TTY$IOPOST, FIL$MOUNT
         .EXTERNAL NET$INIT, NET$INTERRUPT, NET$FORK
         .EXTERNAL LNM$CREATE, LNM$GQ_SYSTEM
-        .EXTERNAL F11$GL_VCB, F11$AB_DKA0, F11$AB_DKB0
 
 UREXEC = PTE$M_VALID ! <PRT$C_UR @ PTE$V_PROT> ! PTE$M_EXEC
 
@@ -104,11 +103,7 @@ SYSLNM: .ASCIC  "SYS$SYSDEVICE"         ; the system disk
         BLBS    R0, 10$
         MOVAB   NOMOUNT, R1
         BRB     FAIL
-10$:    MOVAB   F11$AB_DKB0, F11$GL_VCB ; DKB0:'s too, if INITIALIZE made one there
-        CLRL    R1
-        JSB     G^FIL$MOUNT
-        MOVAB   F11$AB_DKA0, F11$GL_VCB
-        MOVAB   SYSLNM, R8
+10$:    MOVAB   SYSLNM, R8
         MOVAQ   LNM$GQ_SYSTEM, R5
 20$:    MOVZBL  (R8)+, R7
         BEQL    30$

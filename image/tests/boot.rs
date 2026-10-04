@@ -8,7 +8,12 @@
 //! in line mode and keypad mode that writes a second version and DELETEs,
 //! a line edited and one recalled with the up arrow, then INITIALIZE,
 //! MOUNT and COPY on the data disk, DKB0:, made afresh in
-//! out/check-datadisk.img, not the one you keep, SHOW DEVICES, SHOW PROCESS
+//! out/check-datadisk.img, not the one you keep, which SYSTARTUP_VMS.COM
+//! couldn't mount at boot, a CREATE/DIRECTORY two levels deep there and a
+//! COPY into it, SHOW DEVICES, a DISMOUNT of DKA0: that fails and one of
+//! DKB0: that doesn't, a DIRECTORY there that fails, a MOUNT without a
+//! label, a DIRECTORY of the new directory and a DELETE of the one above
+//! it, which has a file in it and stays, SHOW PROCESS
 //! and SHOW SYSTEM, or the root task is done, which is only on a halt or a fault. DCL reads what was
 //! typed ahead a line at a time. Then it types a CONTINUE with nothing stopped, a CTRL/C
 //! for CTRLC's AST, which cancels its read, a CTRL/Y at the prompt, and stops SPIN,
@@ -20,7 +25,7 @@
 //! of what it typed before included, and types.
 //! STARTUP's SLEEPER and SVCTEST's NAPPER say they hibernate before SLEEPER
 //! does. The CPU then idles, taking clock interrupts. Once this QEMU is
-//! gone, ods-image checks the data disk's volume and finds the file there.
+//! gone, ods-image checks the data disk's volume and finds the files there.
 
 use std::fs;
 use std::io::Write;
@@ -34,6 +39,7 @@ use ods_image::{Conversion, Image, Mode, Severity};
 /// What the serial log must hold.
 const LINES: &[&str] = &[
     "%MOUNT-I-MOUNTED, VAXPUNK mounted on _DKA0:",
+    "%SYSTEM-W-NOHOMEBLK, Files-11 home block not found on volume",
     "STARTUP: done",
     "SVCTEST: ok",
     "process NAPPER exited with status 0000217C",
@@ -76,6 +82,14 @@ const LINES: &[&str] = &[
     "%MOUNT-I-MOUNTED, DATA mounted on _DKB0:",
     "Directory DKB0:[000000]",
     "DATA.TXT;1",
+    "SUB.DIR;1",
+    "Directory DKB0:[SUB]",
+    "DEEP.DIR;1",
+    "%SYSTEM-F-DEVACTIVE, device is active",
+    "%RMS-E-DNR, device not ready, not mounted, or unavailable",
+    "Directory DKB0:[SUB.DEEP]",
+    "DEEP.TXT;1",
+    "%RMS-E-MKD, ACP could not mark file for deletion",
     "DKA0:                   Mounted wrtlck       0  VAXPUNK",
     "DKB0:                   Mounted              0  DATA",
     "MDA0:                   Mounted              0  RAM",
@@ -148,7 +162,7 @@ fn boot() {
             type_("X = 6 * 7\rWRITE SYS$OUTPUT \"X is \", X\rSHOW SYMBOL HOME\rHOME\r");
             type_("EDIT WELCOME.TXT\r\"index\"\r\"zzz\"\rEXIT\rQUIT\r");
             typed = 1;
-        } else if typed == 5 && step < STEPS.len() {
+        } else if typed == 6 && step < STEPS.len() {
             let (line, times, keys) = STEPS[step];
             if text.lines().filter(|l| l.contains(line)).count() >= times {
                 type_(keys);
@@ -188,10 +202,19 @@ fn boot() {
         if typed == 4 && text.contains("no files found") {
             type_("INIT DKB0: DATA\rMOUNT DKB0: DATA\r");
             type_("COPY SYS$SYSDEVICE:[SYSMGR]WELCOME.TXT DKB0:[000000]DATA.TXT\r");
+            type_("CREATE/DIRECTORY DKB0:[SUB.DEEP]\r");
             type_(
-                "DIR DKB0:[000000]\rSHOW DEVICES\rSHOW PROCESS\rSHOW SYSTEM\rCONTINUE\rRUN CTRLC\r",
+                "COPY SYS$SYSDEVICE:[SYSMGR]WELCOME.TXT DKB0:[SUB.DEEP]DEEP.TXT\rDIR DKB0:[SUB]\r",
             );
             typed = 5;
+        }
+        if typed == 5 && text.contains("Directory DKB0:[SUB]") {
+            type_("DIR DKB0:[000000]\rSHOW DEVICES\rDISMOUNT DKA0:\rDISMOUNT DKB0:\r");
+            type_(
+                "DIR DKB0:[000000]\rMOUNT DKB0:\rDIR DKB0:[SUB.DEEP]\rDELETE DKB0:[000000]SUB.DIR;1\r",
+            );
+            type_("SHOW PROCESS\rSHOW SYSTEM\rCONTINUE\rRUN CTRLC\r");
+            typed = 6;
         }
         if LINES.iter().all(|l| text.contains(l)) || text.contains("root task done") {
             break;
@@ -229,4 +252,5 @@ fn boot() {
     img.copy_out(fid, &mut data, Conversion::RecordsToLines)
         .unwrap();
     assert!(String::from_utf8_lossy(&data).contains("and the rest of what INITIALIZE made."));
+    assert!(img.lookup("[SUB.DEEP]DEEP.TXT").is_ok());
 }
