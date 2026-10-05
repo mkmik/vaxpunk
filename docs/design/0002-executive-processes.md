@@ -221,9 +221,18 @@ there is. The image activator puts its transfer address in
   line. It returns only if the activation fails, with its status.
   ponytail: a copy at a fixed address. VMS's `CLI$` routines read the
   parse in DCL's own pages, which user mode may read.
+- **Exit handlers.** `$DCLEXH desblk` puts an exit handler first on the
+  caller's mode's list, `PCB$AL_EXH`, and `$CANEXH` takes one off, or all.
+  `$EXIT` calls them, last declared first, in the mode that called it:
+  while the list has one, `EXE$EXIT` takes it off and returns it to
+  `SYS$EXIT`, in the vector, which writes the status where the block says,
+  calls the handler with the block's argument list, and calls `$EXIT`
+  again. Image rundown forgets user mode's. ponytail: an exception ends
+  the image at `EXE$IMGEXIT`, past the handlers.
 - **`$EXIT`**, the image's or an exception's, in a process with a command
   interpreter: `EXE$IMGRUNDOWN` gives back the image's timer queue
-  entries, P0 pages and common event flag clusters, the channels not in
+  entries, P0 pages, common event flag clusters and user mode exit
+  handlers, the channels not in
   `PCB$L_CLICHANS` and the files not in `PCB$L_CLIFILES`; then
   `EXE$CLIENTRY` with the status.
 - **CTRL/Y** ([ADR-0014](../adr/0014-ctrlc-ctrly-asts.md)) is the
@@ -239,7 +248,8 @@ there is. The image activator puts its transfer address in
 - **`$FORCEX pidadr, prcnam, code`** makes a process's image exit: it
   queues a user mode AST whose routine is `SYS$EXIT`, with code, or
   `SS$_FORCEDEXIT` for 0, which comes when the image next runs in user
-  mode, and ends a wait. `$EXIT` then does what it does for any image.
+  mode, and ends a wait. `$EXIT` then does what it does for any image,
+  exit handlers first.
 
 The command interpreter keeps nothing on its stack across an image; what
 it remembers is in its P1 data. `EXEC$START` creates the console's
@@ -272,13 +282,14 @@ an image runs it with `$IMGACT` and the parse:
 | `SET INTERFACE address mask gateway`, `SET CONFIGURATION INTERFACE address mask gateway`, `SHOW INTERFACE` | `TCPIP.EXE`, which takes `OPTION`, `ADDRESS`, `MASK` and `GATEWAY` from the parse |
 | `SET HOST address` | `RTPAD.EXE`, whose `NODE` is the address |
 | `CONTINUE` | returns from the CTRL/Y AST, which goes back to the image |
+| `STOP [process-name]` | `$DELPRC`; with no name, ends the procedures, and the image CTRL/Y stopped with `$EXIT` from DCL, which skips its exit handlers, user mode's, with `SS$_ABORT` |
 | `HELP [verb]` | `HELP.EXE`, which describes the verbs from `DCL$TABLES` (*The system disk's programs*) |
 | `LOGOUT` | `$DELPRC` |
 | `@file [p1 ... p8]` | reads `file.COM` with RMS and takes its `$` lines as commands |
 | `SET COMMAND file` | compiles `file.CLD`'s verbs into the process's tables, which DCL parses with first |
 | `name := $image`, then `name args` | runs `image`, a foreign command, which reads `args` with `LIB$GET_FOREIGN` |
 | `name = expression`, `name := string` | sets a symbol, `==` and `:==` a global one |
-| `IF`, `GOTO`, `EXIT`, `WRITE SYS$OUTPUT` | as in VMS's procedures |
+| `IF`, `GOTO`, `EXIT`, `WRITE SYS$OUTPUT` | as in VMS's procedures; `EXIT [status]` outside a procedure `$FORCEX`es the image CTRL/Y stopped and continues it, so that it exits through its exit handlers |
 | `SHOW SYMBOL name`, `DELETE/SYMBOL name` | shows a symbol, the nearest, deletes a local one; `/LOCAL` or `/GLOBAL` says which; `/ALL` instead of a name shows or deletes all of those |
 
 DCL reads a line
@@ -297,10 +308,9 @@ goes to the command loop, where `CONTINUE` enables the AST again and
 returns from it; a command that runs another image runs the stopped one
 down. With none, the AST enables itself again, and DCL ends its
 procedures at the next command; the read CTRL/Y ended gives it an empty
-line. ponytail: one message table in the executive rather than message
-files; no
-`STOP`: another command that runs an image ends the one CTRL/Y
-stopped.
+line. A command that runs an image ends the one CTRL/Y stopped, as
+`STOP` does. ponytail: one message table in the executive rather than
+message files.
 
 ### Commands
 
@@ -615,7 +625,7 @@ can't reach them.
 
 | Group | Implemented | Stubs: `SS$_ILLSER` |
 | --- | --- | --- |
-| Process control | `$CREPRC`, `$DELPRC`, `$EXIT`, `$FORCEX`, `$HIBER`, `$WAKE`, `$SUSPND`, `$RESUME`, `$SETPRI`, `$SETPRN`, `$GETJPI`, `$GETJPIW`, `$CMKRNL`, `$CMEXEC` | `$DCLEXH`, `$CANEXH`, `$SETPRV` |
+| Process control | `$CREPRC`, `$DELPRC`, `$EXIT`, `$FORCEX`, `$HIBER`, `$WAKE`, `$SUSPND`, `$RESUME`, `$SETPRI`, `$SETPRN`, `$GETJPI`, `$GETJPIW`, `$CMKRNL`, `$CMEXEC`, `$DCLEXH`, `$CANEXH` | `$SETPRV` |
 | Event flags | `$ASCEFC`, `$DACEFC`, `$SETEF`, `$CLREF`, `$READEF`, `$WAITFR`, `$WFLOR`, `$WFLAND` | `$DLCEFC` |
 | Memory | `$CRETVA`, `$DELTVA`, `$EXPREG` | `$CNTREG`, `$SETPRT`, `$LKWSET`, `$ULWSET`, `$LCKPAG`, `$ULKPAG`, `$CRMPSC`, `$MGBLSC` |
 | Time | `$GETTIM`, `$SETIMR`, `$CANTIM` | |
@@ -1007,7 +1017,7 @@ on the console with `PRINT` and `PRINTHEX` from `sysexe.mlb`, which call
 | `STARTUP` | makes 4 pages with `$EXPREG`, checks and deletes them; creates `SLEEPER` at a higher priority, which runs at once, and `PING` and `PONG`; waits until `PONG` sets flag 66 of their cluster; deletes `SLEEPER`; creates `SVCTEST`, `HOG`, `TIMETEST` and `ASTTEST` |
 | `SLEEPER` | hibernates until it is deleted |
 | `PING`, `PONG` | take three turns through common event flags 64 and 65 of the cluster `PINGPONG`; `PONG` then sets flag 66, which `STARTUP` waits for |
-| `SVCTEST` | checks the statuses of the services the others don't use, and of errors: local event flags, the dispatcher's checks and a stub, `$CRETVA` and `$DELTVA`, `$CMKRNL` and `$CMEXEC`; what user mode may `PROBE`, and that services refuse it the executive's data; the console's channels; logical names in both tables, `$ASSIGN` through two of them, and the errors; `$SETPRI`, and `$SUSPND`, `$WAKE`, `$RESUME` and `$DELPRC` on a process of its own, and `$FORCEX` on another, which exits with `SS$_FORCEDEXIT` before its image runs; then creates one whose image doesn't exist, which exits with `RMS$_FNF`, and `SNOOP` and `USURP` |
+| `SVCTEST` | checks the statuses of the services the others don't use, and of errors: local event flags, the dispatcher's checks and a stub, `$CRETVA` and `$DELTVA`, `$CMKRNL` and `$CMEXEC`; what user mode may `PROBE`, and that services refuse it the executive's data; the console's channels; logical names in both tables, `$ASSIGN` through two of them, and the errors; `$SETPRI`, and `$SUSPND`, `$WAKE`, `$RESUME` and `$DELPRC` on a process of its own, and `$FORCEX` on another, which exits with `SS$_FORCEDEXIT` before its image runs; `$DCLEXH` and `$CANEXH`, and a `$FORCEX` of itself, whose `$EXIT` calls its exit handler, which says it is ok; then creates one whose image doesn't exist, which exits with `RMS$_FNF`, and `SNOOP` and `USURP` |
 | `SNOOP` | reads S0 from user mode, and exits with `SS$_ACCVIO` |
 | `USURP` | raises IPL from user mode, and exits with `SS$_OPCDEC` |
 | `HOG` | associates a common event flag cluster, creates `NUDGE` at its own priority and loops reading flag 64 until `NUDGE` sets it, with no wait: only quantum end lets `NUDGE` run |
@@ -1026,8 +1036,7 @@ taking the clock's interrupts.
 - Priority boosts on wake and decay at quantum end.
 - Privileges, for `$CMKRNL` and `$CMEXEC`, and condition handlers in place
   of exiting on an exception.
-- DCL's `STOP` and `SET NOCONTROL`, and exit handlers for `$FORCEX` to
-  run.
+- DCL's `SET NOCONTROL`, and `STOP/IDENTIFICATION`.
 - Writing the system disk, the disk's interrupt, `$QIO` on disk
   channels, logical names in file specifications (`SYS$SYSTEM:DCL.EXE`)
   and `SYS$DISK`.

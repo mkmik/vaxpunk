@@ -279,7 +279,9 @@ executive feature:
 - **SVCTEST** checks the status that each system service returns, and
   reads the system disk's home block by its LBN with `$QIOW`. It starts a
   second SLEEPER, NAPPER, and makes it exit with `$FORCEX` before its
-  image runs (status `217C`). It also starts:
+  image runs (status `217C`). It ends by `$FORCEX`ing itself, so that
+  its exit handler, declared with `$DCLEXH`, is what prints `SVCTEST: ok`.
+  It also starts:
   - **SNOOP**, which reads kernel memory and should die with an access
     violation (status `0C`)
   - **USURP**, which runs a privileged instruction in user mode and should

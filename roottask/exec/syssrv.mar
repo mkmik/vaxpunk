@@ -25,14 +25,14 @@
         $PCBDEF
         $SSDEF
 
-        .EXTERNAL SCH$GL_CURPCB, EXE$EXIT
+        .EXTERNAL SCH$GL_CURPCB, EXE$IMGEXIT
         .EXTERNAL EXE$OUTZSTRING, EXE$OUTCSTRING, EXE$OUTHEX, EXE$OUTCRLF
 
-; SERVICE name, nargs: SYS$name, which calls EXE$name with at least nargs
-; arguments. STUB name, nargs: the same, with an EXE$name that fails.
-        .MACRO  SERVICE NAME, NARGS
+; SERVICE name, nargs[, EXH]: SYS$name, which calls EXE$name with at least
+; nargs arguments. STUB name, nargs: the same, with an EXE$name that fails.
+        .MACRO  SERVICE NAME, NARGS, EXH
         .EXTERNAL EXE$'NAME
-        VECTOR  NAME, NARGS
+        VECTOR  NAME, NARGS, EXH
         .ENDM   SERVICE
 
         .MACRO  STUB    NAME, NARGS
@@ -53,7 +53,13 @@
         .RESTORE_PSECT
         .ENDM   ESERVICE
 
-        .MACRO  VECTOR  NAME, NARGS
+; VECTOR name, nargs[, EXH]: SYS$name and its entries in the tables. With
+; EXH, $EXIT's: SYS$EXIT calls the caller's mode's exit handlers in that
+; mode. EXE$EXIT returns SS$_NORMAL with R1 = the next one's block, which
+; it took off the list: SYS$EXIT writes the status where the block says,
+; calls the handler with the block's argument list, and calls EXE$EXIT
+; again. Any other status is an error, which it returns.
+        .MACRO  VECTOR  NAME, NARGS, EXH, ?L1, ?L2
         .SAVE_PSECT
         .PSECT  EXEC$SSTAB, NOEXE, NOWRT, LONG
         .ADDRESS EXE$'NAME
@@ -61,8 +67,18 @@
         .BYTE   NARGS
         .PSECT  EXEC$VECTOR
         .ENTRY  SYS$'NAME, ^M<>
+        .IF     BLANK <EXH>
         CHMK    #CODE
         RET
+        .IFF
+L1:     CHMK    #CODE
+        CMPL    R0, #SS$_NORMAL
+        BNEQ    L2
+        MOVL    4(AP), @12(R1)
+        CALLG   8(R1), @4(R1)
+        BRB     L1
+L2:     RET
+        .ENDC
         .RESTORE_PSECT
 CODE = CODE + 1
         .ENDM   VECTOR
@@ -81,7 +97,7 @@ CODE = 0
 ; Process control
         SERVICE CREPRC, 12
         SERVICE DELPRC, 2
-        SERVICE EXIT, 1
+        SERVICE EXIT, 1, EXH
         SERVICE FORCEX, 3
         SERVICE HIBER, 0
         SERVICE WAKE, 2
@@ -93,8 +109,8 @@ CODE = 0
         SERVICE SETPRN, 1
         SERVICE GETJPI, 7
         SERVICE GETJPIW, 7
-        STUB    DCLEXH, 1
-        STUB    CANEXH, 1
+        SERVICE DCLEXH, 1
+        SERVICE CANEXH, 1
         STUB    SETPRV, 4
         SERVICE CMKRNL, 2
         ESERVICE CMEXEC, 2
@@ -197,7 +213,7 @@ EXE$ACVIOLAT::
         BSBB    PROCESS
         ENBINT
         PUSHL   #SS$_ACCVIO
-        CALLS   #1, G^EXE$EXIT
+        CALLS   #1, G^EXE$IMGEXIT
 
 ; EXE$OPCDEC: the reserved instruction handler: privileged instructions
 ; and PAL calls, and undefined instructions, in an outer mode. The process
@@ -211,7 +227,7 @@ EXE$OPCDEC::
         BSBB    PROCESS
         ENBINT
         PUSHL   #SS$_OPCDEC
-        CALLS   #1, G^EXE$EXIT
+        CALLS   #1, G^EXE$IMGEXIT
 
 ; PROCESS: writes ", process " and the current process's name, and CR LF.
 PROCESS:
