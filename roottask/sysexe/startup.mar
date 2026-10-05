@@ -5,8 +5,8 @@
 ; executive's services to work: it makes pages and deletes them, starts
 ; SLEEPER at a higher priority, which runs at once, then PING and PONG,
 ; waits until PONG sets a flag of their cluster, deletes SLEEPER, starts
-; SVCTEST, HOG, TIMETEST, ASTTEST and MBXTEST and returns, which ends the
-; image.
+; SVCTEST, HOG, TIMETEST, ASTTEST, MBXTEST and two FSTESTs and returns,
+; which ends the image.
 ;
         .LIBRARY "starlet.mlb"
         .LIBRARY "sysexe.mlb"
@@ -50,6 +50,12 @@ MBXTEST_IMAGE:
         .ASCID  "MBXTEST.EXE"
 MBXTEST_NAME:
         .ASCID  "MBXTEST"
+FSTEST_IMAGE:
+        .ASCID  "FSTEST.EXE"
+FSTEST1_NAME:
+        .ASCID  "FSTEST1"
+FSTEST2_NAME:
+        .ASCID  "FSTEST2"
 PID:    .LONG   0
 RANGE:  .BLKL   2                       ; first and last byte
 
@@ -95,7 +101,11 @@ RANGE:  .BLKL   2                       ; first and last byte
         BLBC    R0, 90$
         $CREPRC_S IMAGE=MBXTEST_IMAGE, PRCNAM=MBXTEST_NAME, BASPRI=#4
         BLBC    R0, 90$
-        PRINT   "STARTUP: done, SVCTEST, HOG, TIMETEST, ASTTEST and MBXTEST next"
+        $CREPRC_S IMAGE=FSTEST_IMAGE, PRCNAM=FSTEST1_NAME, BASPRI=#4
+        BLBC    R0, 90$
+        $CREPRC_S IMAGE=FSTEST_IMAGE, PRCNAM=FSTEST2_NAME, BASPRI=#4
+        BLBC    R0, 90$
+        PRINT   "STARTUP: done, SVCTEST, HOG, TIMETEST, ASTTEST, MBXTEST and FSTEST next"
         MOVL    #SS$_NORMAL, R0
         RET
 80$:    MOVL    #SS$_ABORT, R0

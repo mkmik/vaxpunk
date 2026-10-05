@@ -7,8 +7,8 @@
 ; then the console, OPA0:, the one terminal: DEVICE numbers them so.
 ; A channel to a mailbox has its name, class and unit too.
 ; ponytail: a VCB stands for a disk, and 0 for the console, not their UCBs
-; (qio.mar), which have no counts or device types yet. $GETDVI is done when it returns, and
-; takes no AST.
+; (qio.mar), which have no device types yet; a disk's error count is its
+; UCB's. $GETDVI is done when it returns, and takes no AST.
 ;
         .LIBRARY "lib.mlb"
         .LIBRARY "starlet.mlb"
@@ -24,6 +24,7 @@
 
         .EXTERNAL F11$GL_VCB, F11$AB_DKA0, F11$A_VCBEND, F11$AB_DIRBLK
         .EXTERNAL FIL$FREEBLOCKS, FIL$READLBLK, FIL$MATCH, MD$GL_BASE
+        .EXTERNAL FIL$LOCK, FIL$UNLOCK
         .EXTERNAL IOC$TRNDEVNAM, EXE$PROBER_DSC, EXE$SETEF, EXE$CLREF
         .EXTERNAL SCH$GL_CURPCB, MB$FDT
 
@@ -86,8 +87,8 @@ DEVCHAR:
 
 ; ONLINE: R5 = a device's VCB, or 0. R0 = UCB$M_ONLINE if the device is
 ; there: the console, a disk with a volume mounted, the ramdisk once
-; made, or a PAL disk whose first block reads; else 0. IPL$_SYNCH. Uses
-; R1-R2.
+; made, or a PAL disk whose first block reads; else 0. Holding FIL$LOCK.
+; Uses R1-R2.
 ONLINE: TSTL    R5
         BEQL    70$
         BBS     #VCB$V_MOUNTED, VCB$L_STATUS(R5), 70$
@@ -129,7 +130,8 @@ ONLINE: TSTL    R5
 5$:     PUSHL   4(AP)
         CALLS   #1, G^EXE$CLREF
         BLBC    R0, 90$
-        DSBINT  #IPL$_SYNCH             ; logical names, VCBs, buffers
+        BSBW    FIL$LOCK                ; VCBs, the file system's buffers
+        DSBINT  #IPL$_SYNCH             ; logical names
         MOVL    12(AP), R1              ; the device's name
         BEQL    20$
         BSBW    EXE$PROBER_DSC
@@ -172,7 +174,8 @@ ONLINE: TSTL    R5
         BRB     30$
 25$:    MOVL    #SS$_IVCHAN, R0
         BRB     80$
-30$:    MOVL    16(AP), R8              ; the items
+30$:    ENBINT
+        MOVL    16(AP), R8              ; the items
 40$:    IFNORD  #4, (R8), 84$
         TSTL    (R8)
         BEQL    70$
@@ -185,7 +188,7 @@ ONLINE: TSTL    R5
         IFNOWRT #2, (R0), 84$
 42$:    MOVZWL  2(R8), R10
         BSBW    ITEM
-        BLBC    R0, 80$
+        BLBC    R0, 82$
         CMPL    R2, R9                  ; as much as fits
         BLEQU   44$
         MOVL    R9, R2
@@ -200,7 +203,7 @@ ONLINE: TSTL    R5
         MOVW    R2, (R0)
 50$:    ADDL2   #12, R8
         BRB     40$
-70$:    ENBINT
+70$:    BSBW    FIL$UNLOCK
         MOVL    20(AP), R0
         BEQL    75$
         MOVL    #SS$_NORMAL, (R0)
@@ -210,7 +213,9 @@ ONLINE: TSTL    R5
         MOVL    #SS$_NORMAL, R0
         RET
 84$:    MOVL    #SS$_ACCVIO, R0
+        BRB     82$
 80$:    ENBINT
+82$:    BSBW    FIL$UNLOCK
         RET
 85$:    MOVL    #SS$_ACCVIO, R0
 90$:    RET
@@ -224,7 +229,7 @@ ONLINE: TSTL    R5
 ; ITEM: R10 = an item code, R5 = the device's VCB, or 0, R6 = a
 ; mailbox's UCB, or 0. R1 = what to return, R2 = its length. R0 =
 ; SS$_NORMAL, SS$_BADPARAM for a code it doesn't know, or the disk's
-; error. IPL$_SYNCH. Uses R0-R3.
+; error. Holding FIL$LOCK. Uses R0-R3.
 ITEM:   TSTL    R6
         BEQL    5$
         BRW     MBXITEM
@@ -255,6 +260,11 @@ ITEM:   TSTL    R6
         BEQL    32$
         CMPL    R10, #DVI$_ERRCNT
         BNEQ    35$
+        TSTL    R5                      ; the console's is 0
+        BEQL    32$
+        MOVL    VCB$L_UCB(R5), R0
+        MOVL    UCB$L_ERRCNT(R0), R0
+        BRW     LONG
 32$:    CLRL    R0
         BRW     LONG
 35$:    CMPL    R10, #DVI$_FREEBLOCKS

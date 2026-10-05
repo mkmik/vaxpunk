@@ -434,6 +434,7 @@ States and queues, as VMS's `$STATEDEF`:
 | `HIB` | `SCH$GQ_HIBWQ` |
 | `LEF` | `SCH$GQ_LEFWQ` |
 | `CEF` | the common event block's own queue |
+| `MWAIT` | `f11.mar`'s, for the file system's lock (*Files*) |
 | `SUSP` | `SCH$GQ_SUSPWQ` |
 
 - **`SCH$SCHED`** takes the first process from the highest non-empty COM
@@ -704,9 +705,10 @@ as a kernel mode AST.
 
 - **Devices.** Each has a unit control block (`$UCBDEF`) in `qio.mar`,
   `IOC$AB_UCB`: `OPA0:`, `DKA0:`, `DKB0:`, `MDA0:`. A UCB holds a queue of
-  IRPs waiting for the device, its driver's FDT routine, a disk's VCB, and
-  a disk driver's start I/O routine, which the file system calls too
-  ([ADR-0015](../adr/0015-file-system-io-through-the-disk-driver.md)).
+  IRPs waiting for the device, its driver's FDT routine, a disk's VCB, a
+  disk driver's start I/O routine, which the file system calls too
+  ([ADR-0015](../adr/0015-file-system-io-through-the-disk-driver.md)),
+  and the count of errors the device reported, `UCB$L_ERRCNT`.
 - **Channels.** `$ASSIGN` gives one of 31, a bit in `PCB$L_CHANS`, with
   the device's UCB in `PCB$AL_CCB`. It translates the device name it is
   given first, as VMS does: without a colon at its end, in
@@ -789,8 +791,9 @@ LBN in `IRP$L_MEDIA`; its start I/O routine, `DK$STARTIO`, does the I/O
 at once, calling the PAL with the VCB's unit, or `MD$IO` for the ramdisk,
 and completes the request with the status, and the byte count if it is a
 success: `SS$_WRITLCK` for `DKA0:`, `SS$_MEDOFL` for `MDA0:` until it is
-made. The file system's own reads and writes go to `DK$STARTIO` too
-(*Files*).
+made. `SS$_DRVERR`, the PAL's word that the device itself failed, adds
+one to the UCB's error count. The file system's own reads and writes go
+to `DK$STARTIO` too (*Files*).
 
 ponytail: the console's line being read is kept in `ttdriver.mar`, not
 its UCB, since there is one terminal; output waits for the console at
@@ -818,7 +821,8 @@ bits (`$DVIDEF`, `$DVSDEF`, `$DCDEF`, `$DEVDEF` in `starlet.mlb`):
   asked for: `DVI$_DEVCHAR` (`DEV$M_FOD`, `DIR`, `SHR`, `AVL`, `IDV`,
   `ODV`, `RND` for a disk, with `MNT` once mounted and `SWL` too if read
   only; `REC`, `CCL`, `TRM`, `AVL`, `IDV`, `ODV` for the console),
-  `DEVCLASS`, `UNIT` and `ERRCNT` (0), `DEVNAM`, `VOLNAM`, `FREEBLOCKS`
+  `DEVCLASS`, `UNIT` (0), `ERRCNT` (a disk's UCB's, 0 for the
+  console), `DEVNAM`, `VOLNAM`, `FREEBLOCKS`
   (`FIL$FREEBLOCKS`), `CLUSTER`, `MOUNTCNT`, the `AVL`, `MNT` and `SWL`
   bits, and `STS`, `UCB$M_ONLINE` if the device is there: the console, a
   mounted disk, the ramdisk once made, a PAL disk whose first block
@@ -828,7 +832,7 @@ bits (`$DVIDEF`, `$DVSDEF`, `$DCDEF`, `$DEVDEF` in `starlet.mlb`):
 DCL's `SHOW DEVICES` scans the disks, then the terminals, and asks
 `$GETDVIW` about each; with `/MOUNTED` it lists only the devices with a
 volume mounted. ponytail: a VCB, or none for the console, stands
-for the device rather than its UCB, which has no error, operation or
+for the device rather than its UCB, which has no operation or
 reference counts, device type or `MAXBLOCK` yet; no ASTs.
 
 ### Files
@@ -847,8 +851,24 @@ they fill in `F11$AB_IRP`, the file system's own IRP, with no process,
 and call the start I/O routine of the VCB's UCB, `VCB$L_UCB`. The driver
 completes it with `IOC$REQCOM`, which, for an IRP with no process, only
 leaves the status in it. ponytail: the file system doesn't wait; the
-disk's driver is done when it returns. `FIL$SELECT` picks the
-VCB by device name. `f11.mar` reads Files-11 (`ods/docs/`) as VMS's XQP
+disk's driver is done when it returns.
+
+The file system, RMS, `$MOUNT`, `$DISMOU`, `$INIT_VOL`, `$GETDVI` and
+the image activator use it holding the file system's lock
+([ADR-0020](../adr/0020-file-system-lock-below-ipl-synch.md)), as VMS's
+XQP holds its volume's. `FIL$LOCK` waits, in `MWAIT`, while another
+process holds it, then raises IPL to `IPL$_ASTDEL`, where kernel mode
+ASTs, a `$DELPRC` among them, wait for `FIL$UNLOCK`, but reschedules and
+interrupts don't: other processes run while one is in the file system.
+The lock keeps the file system's buffers, `F11$AB_IRP` and `F11$GL_VCB`
+to one process. `FIL$READLBLK` raises IPL to `IPL$_SYNCH` for the
+driver's call, `RMS$PARSE` while it holds pointers into logical names'
+blocks, and `RMS$VOLIDLE` while it looks through the PCBs. At boot,
+`FIL$MOUNT` mounts `DKA0:` without it, before there is another process.
+ponytail: one lock for every volume, where the XQP `$ENQ`s one per
+volume and one per file; no priority boost for the holder.
+
+`FIL$SELECT` picks the VCB by device name. `f11.mar` reads Files-11 (`ods/docs/`) as VMS's XQP
 does:
 
 - **`FIL$MOUNT`**, at boot for `DKA0:` and from `$MOUNT itmlst`, which

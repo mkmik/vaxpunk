@@ -52,6 +52,7 @@ const LINES: &[&str] = &[
     "process NOSUCH exited",
     "HOG: NUDGE ran",
     "TIMETEST: ok",
+    "FSTEST: ok",
     "ASTTEST: ok",
     "MBXTEST: ok",
     "process SNOOP exited with status 0000000C",
@@ -130,8 +131,13 @@ const LINES: &[&str] = &[
     "$STATUS == 3   Hex = 00000003",
 ];
 
-/// What it must not: the lines of DCLTEST.COM's a failure skips or reaches.
-const ABSENT: &[&str] = &["DCLTEST: not here", "DCLTEST: failed"];
+/// What it must not: the lines of DCLTEST.COM's a failure skips or reaches,
+/// and FSTEST's when two processes in the file system got in each other's way.
+const ABSENT: &[&str] = &[
+    "DCLTEST: not here",
+    "DCLTEST: failed",
+    "FSTEST: a count changed",
+];
 
 /// Once the ramdisk is done: when a line has come so many times, type.
 const STEPS: &[(&str, usize, &str)] = &[

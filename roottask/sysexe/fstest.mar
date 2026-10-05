@@ -1,0 +1,55 @@
+        .TITLE  FSTEST  Two processes in the file system at once
+        .IDENT  /V0.1/
+;
+; STARTUP starts two of these, FSTEST1 and FSTEST2, at HOG's priority.
+; Each counts the files in SYS$SYSTEM: with $PARSE and $SEARCH, LOOPS
+; times, so that the interval timer takes the CPU from one while it holds
+; the file system's lock, and the other waits for it (FIL$LOCK, in
+; f11.mar). Every count must be the first's.
+;
+        .LIBRARY "starlet.mlb"
+        .LIBRARY "sysexe.mlb"
+        $SSDEF
+        $RMSDEF
+        $FABDEF
+        $NAMDEF
+
+LOOPS = 50
+
+        .PSECT  DATA, NOEXE, WRT, LONG
+SPEC:   .ASCII  "SYS$SYSTEM:*.*;*"
+SPECLEN = .-SPEC
+        .ALIGN  LONG
+FAB:    $FAB    FNA=SPEC, FNS=SPECLEN, NAM=NAM
+NAM:    $NAM    ESA=EXP, ESS=255, RSA=RES, RSS=255
+EXP:    .BLKB   255
+RES:    .BLKB   255
+        .ALIGN  LONG
+FIRST:  .LONG   0                       ; the first count
+
+        .PSECT  CODE, EXE, LONG
+        .ENTRY  START, ^M<R2, R3>
+        MOVL    #LOOPS, R3
+10$:    CLRL    R2
+        $PARSE  FAB=FAB
+        BLBC    R0, 90$
+20$:    $SEARCH FAB=FAB
+        BLBC    R0, 30$
+        INCL    R2
+        BRB     20$
+30$:    CMPL    R0, #RMS$_NMF
+        BNEQ    90$
+        TSTL    FIRST
+        BNEQ    40$
+        MOVL    R2, FIRST
+40$:    CMPL    R2, FIRST
+        BNEQ    80$
+        SOBGTR  R3, 10$
+        PRINT   "FSTEST: ok"
+        MOVL    #SS$_NORMAL, R0
+        RET
+80$:    PRINT   "FSTEST: a count changed"
+        MOVL    #SS$_ABORT, R0
+90$:    RET
+
+        .END    START
