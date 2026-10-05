@@ -93,6 +93,11 @@ SCH$INIT::
         MNEGW   SGN$GW_QUANTUM, PCB$W_QUANT(R0)
         MOVL    #SCH$C_CUR, PCB$L_STATE(R0)
         MOVL    #^X00010001, PCB$L_PID(R0)
+        MNEGL   #1, PCB$Q_PRIV(R0)      ; every privilege, which SYSTEM inherits
+        MOVL    #^X7F, PCB$Q_PRIV+4(R0)
+        MOVQ    PCB$Q_PRIV(R0), PCB$Q_AUTHPRIV(R0)
+        MOVQ    PCB$Q_PRIV(R0), PCB$Q_PROCPRIV(R0)
+        MOVL    #^X00010004, PCB$L_UIC(R0)      ; [1,4], SYSTEM's
         MOVL    EXE$GL_RPB, R1
         MOVAB   RPB$Q_HWPCB(R1), PCB$L_HWPCB(R0)
         MOVAB   PCB$T_LNAME(R0), R1

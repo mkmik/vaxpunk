@@ -19,6 +19,7 @@
         .LIBRARY "starlet.mlb"
         $IPLDEF
         $PCBDEF
+        $PRVDEF
         $LNMBDEF
         $LNMDEF
         $SSDEF
@@ -54,10 +55,13 @@ SYSNAM: .ASCIC  "LNM$SYSTEM_TABLE"
 ; equivalence string of the LNM$_STRING item in itmlst. One by that name
 ; there goes: SS$_SUPERSEDE. SS$_BADPARAM without that item, with another
 ; or with a string longer than 255; SS$_IVLOGNAM for a name longer than
-; 255. attr and acmode are ignored.
+; 255; SS$_NOPRIV in the system table without SYSNAM. attr and acmode
+; are ignored.
         .ENTRY  EXE$CRELNM, ^M<R2, R3, R4, R5, R6, R7, R8, R9>
         MOVL    8(AP), R1
         BSBW    TABLE
+        BLBC    R0, 90$
+        BSBW    WRITABLE
         BLBC    R0, 90$
         MOVL    R2, R5
         MOVL    12(AP), R1
@@ -88,12 +92,14 @@ SYSNAM: .ASCIC  "LNM$SYSTEM_TABLE"
         RET
 
 ; $DELLNM tabnam, lognam, acmode: deletes lognam from the table tabnam
-; names, the process's for LNM$FILE_DEV. SS$_NOLOGNAM if it isn't there.
-; acmode is ignored.
+; names, the process's for LNM$FILE_DEV. SS$_NOLOGNAM if it isn't there,
+; SS$_NOPRIV in the system table without SYSNAM. acmode is ignored.
 ; ponytail: VMS deletes every name in the table when there is no lognam.
         .ENTRY  EXE$DELLNM, ^M<R2, R3, R6, R7>
         MOVL    4(AP), R1
         BSBW    TABLE
+        BLBC    R0, 90$
+        BSBW    WRITABLE
         BLBC    R0, 90$
         MOVL    8(AP), R1
         BSBW    NAME
@@ -217,6 +223,19 @@ TABLE:  BSBW    EXE$PROBER_DSC
 70$:    MOVL    #SS$_NORMAL, R0
         RSB
 80$:    MOVL    #SS$_NOLOGTAB, R0
+90$:    RSB
+
+; WRITABLE: R2 = a table TABLE found. R0 = SS$_NORMAL if the current
+; process may change it: its own, or the system's with SYSNAM; else
+; SS$_NOPRIV. Uses R1.
+WRITABLE:
+        MOVL    #SS$_NORMAL, R0
+        MOVAQ   LNM$GQ_SYSTEM, R1
+        CMPL    R2, R1
+        BNEQ    90$
+        MOVL    SCH$GL_CURPCB, R1
+        IFPRIV  SYSNAM, 90$, R1
+        MOVL    #SS$_NOPRIV, R0
 90$:    RSB
 
 ; NAME: R1 = the address of a logical name's descriptor, from a caller. R6

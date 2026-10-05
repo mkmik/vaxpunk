@@ -181,7 +181,7 @@ until the hardware or size changes; leave it.
 
 | # | Notes | What closes them |
 | --- | --- | --- |
-| 1 | No privileges: `$CMKRNL`, `$CMEXEC` (`process.mar`, `syssrv.mar`, DESIGN-0002 *System services*); `DK$FDT` lets anyone do logical I/O (`f11.mar`); `$MOUNT`, `$DISMOU`, `$INIT_VOL` by anyone (`f11.mar`, `f11wrt.mar`); mailboxes with no `PRMMBX` or protection (ADR-0019, `mbdriver.mar`) | *Privileges, UICs and protection* |
+| 1 | Privileges done (step 1); left: mailboxes with no protection mask (ADR-0019, `mbdriver.mar`); `$INIT_VOL` takes `VOLPRO` for every volume until volumes have owners (`f11wrt.mar`); a `$CREMBX` logical name takes `SYSNAM` until `LNM$JOB` (`mbdriver.mar`) | *Privileges, UICs and protection* |
 | 2 | No username or password: `TELNETD` logs in as `SYSTEM` (`telnetd.mar`, DESIGN-0003); the link address picks the command interpreter (ADR-0006); `SYS$DISK` and `SYSTARTUP_VMS.COM` set up by DCL, not `LOGINOUT` and `STARTUP` (DESIGN-0002) | *Login* |
 | 3 | One terminal: the line, the ASTs and the recall buffer live in `ttdriver.mar`, not the UCB; no characteristics for `IO$_SETMODE`/`IO$_SENSEMODE` (ADR-0014, `ttdriver.mar`); EDIT still writes on the console in a remote login (DESIGN-0003) | *Terminals* |
 | 4 | No quotas: `BIOLM`, `DIOLM`, `BYTLM` (ADR-0013), `BUFQUO` (ADR-0019), ASTs (DESIGN-0002 *ASTs*); `$GETJPI` has no CPU times, quotas or counts (`getjpi.mar`, `show.mar`) | *Quotas* |

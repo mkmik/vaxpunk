@@ -43,7 +43,7 @@ its code.
 | `astdel.mar` | AST queues, `SCH$QAST`, the AST delivery interrupt, `$DCLAST`, `$SETAST`, `$ASTEXIT` |
 | `timeschdl.mar` | the interval timer and software timer interrupts, the system time, the timer queue, `$GETTIM`, `$SETIMR`, `$CANTIM`, `$SCHDWK`, `$CANWAK` |
 | `event.mar` | event flags, local and common |
-| `process.mar` | `$CREPRC`, process start, image activation, `$IMGACT`, `$EXIT`, image rundown, deletion, `$FORCEX`, `$HIBER`, `$WAKE`, `$SUSPND`, `$RESUME`, `$SETPRI`, `$SETPRN`, `$CMKRNL` |
+| `process.mar` | `$CREPRC`, process start, image activation, `$IMGACT`, `$EXIT`, image rundown, deletion, `$FORCEX`, `$HIBER`, `$WAKE`, `$SUSPND`, `$RESUME`, `$SETPRI`, `$SETPRN`, `$CMKRNL`, `$SETPRV` |
 | `lnm.mar` | logical name tables, `$CRELNM`, `$DELLNM`, `$TRNLNM` |
 | `qio.mar` | the devices' UCBs, `$ASSIGN`, `$DASSGN`, `$CANCEL`, `$QIO`, `$QIOW`; IRPs, their completion and cancelling |
 | `mbdriver.mar` | mailboxes: `$CREMBX`, `$DELMBX`, their driver, and `MB$SEND`, which writes the termination message |
@@ -143,14 +143,14 @@ sequence number in the high word and the index in the low.
 
 `$CREPRC` (in the creator's context):
 
-1. Copies the image and process names into a new PCB, and the priority,
-   and makes its logical name table, with `SYS$INPUT`, `SYS$OUTPUT` and
+1. Copies the image and process names into a new PCB, the priority, the
+   UIC and the privileges (*Privileges*), and makes its logical name table, with `SYS$INPUT`, `SYS$OUTPUT` and
    `SYS$ERROR` for its `input`, `output` and `error` arguments, those it
    was given (*Logical names*).
 2. Allocates the kernel stack and builds at its top the frame the PAL pops
    when the process first runs: PC `EXE$PROCSTRT`, PSL kernel mode at IPL 0,
    the stack top as SP. The HWPCB's KSP points at it.
-3. At `IPL$_SYNCH`: checks that the name is unique, takes a slot and a PID,
+3. At `IPL$_SYNCH`: checks that the name is unique in its UIC group, takes a slot and a PID,
    and puts the PCB on the COM queue of its priority. If it outranks the
    creator, it requests a reschedule, and runs as soon as IPL drops.
 
@@ -275,7 +275,7 @@ an image runs it with `$IMGACT` and the parse:
 | `DEFINE name equivalence` | `$CRELNM` in `LNM$PROCESS`, and `%DCL-I-SUPERSEDE` if it replaced one, unless `/NOLOG`; `/SYSTEM`, `/PROCESS` or `/TABLE=table` names the table, one of those `lnm.mar` knows, else `SS$_NOLOGTAB` |
 | `DEASSIGN name` | `$DELLNM` from `LNM$PROCESS`, or the table the same qualifiers name |
 | `SHOW LOGICAL name` | `$TRNLNM` in `LNM$FILE_DEV`, or the table the same qualifiers name: `"name" = "equivalence" (table)`, or `%SHOW-S-NOTRAN` |
-| `SHOW LOGICAL [*]` | lists every name, the process's table's and then the system's, or only that table's, in the order they were made, under each table's name; it copies them one at a time with `$CMKRNL`. ponytail: VMS's DCL asks the executive's logical name routines, and sorts them |
+| `SHOW LOGICAL [*]` | lists every name, the process's table's and then the system's, or only that table's, in the order they were made, under each table's name; it copies them one at a time with `$CMKRNL`, so it takes CMKRNL. ponytail: VMS's DCL asks the executive's logical name routines, and sorts them |
 | `SET DEFAULT [dev:][dir]` | `$PARSE`s it, which must name no file, `$SETDDIR` with the directory it expands to, and `$CRELNM` of `SYS$DISK` in `LNM$PROCESS` with its device; one that doesn't exist is still set, after `%DCL-I-INVDEF` |
 | `SHOW DEFAULT` | the device and directory `$PARSE` expands an empty specification to |
 | `EDIT spec` | `EDIT.EXE` |
@@ -285,7 +285,8 @@ an image runs it with `$IMGACT` and the parse:
 | `MOUNT device [label]` | `MOUNT.EXE` |
 | `DISMOUNT device` | `DISMOUNT.EXE` |
 | `CREATE/DIRECTORY spec` | `CREATE.EXE`; without `/DIRECTORY`, `%CREATE-E-NOTDIR` |
-| `SHOW PROCESS`, `SHOW SYSTEM` | `SHOW.EXE`, whose `OPTION` says which |
+| `SHOW PROCESS[/PRIVILEGES]`, `SHOW SYSTEM` | `SHOW.EXE`, whose `OPTION` says which |
+| `SET PROCESS/PRIVILEGES=(priv[,...])` | `SET.EXE` |
 | `SET INTERFACE address mask`, `SET CONFIGURATION INTERFACE address mask`, `SET ROUTE /DEFAULT /GATEWAY=address [/PERMANENT]`, `SHOW INTERFACE` | `TCPIP.EXE`, which takes `OPTION`, `ADDRESS`, `MASK`, `GATEWAY` and `PERMANENT` from the parse |
 | `SET [NO]CONTROL[=Y]` | enables DCL's CTRL/Y AST again, or disables it with `IO$_SETMODE`, so that CTRL/Y, and CTRL/C no image has an AST for, do nothing, until `SET CONTROL`. ponytail: no `T`, there is no CTRL/T |
 | `SET HOST address` | `RTPAD.EXE`, whose `NODE` is the address |
@@ -637,7 +638,7 @@ can't reach them.
 
 | Group | Implemented | Stubs: `SS$_ILLSER` |
 | --- | --- | --- |
-| Process control | `$CREPRC`, `$DELPRC`, `$EXIT`, `$FORCEX`, `$HIBER`, `$WAKE`, `$SUSPND`, `$RESUME`, `$SETPRI`, `$SETPRN`, `$GETJPI`, `$GETJPIW`, `$CMKRNL`, `$CMEXEC`, `$DCLEXH`, `$CANEXH` | `$SETPRV` |
+| Process control | `$CREPRC`, `$DELPRC`, `$EXIT`, `$FORCEX`, `$HIBER`, `$WAKE`, `$SUSPND`, `$RESUME`, `$SETPRI`, `$SETPRN`, `$GETJPI`, `$GETJPIW`, `$SETPRV`, `$CMKRNL`, `$CMEXEC`, `$DCLEXH`, `$CANEXH` | |
 | Event flags | `$ASCEFC`, `$DACEFC`, `$SETEF`, `$CLREF`, `$READEF`, `$WAITFR`, `$WFLOR`, `$WFLAND` | `$DLCEFC` |
 | Memory | `$CRETVA`, `$DELTVA`, `$EXPREG` | `$CNTREG`, `$SETPRT`, `$LKWSET`, `$ULWSET`, `$LCKPAG`, `$ULKPAG`, `$CRMPSC`, `$MGBLSC` |
 | Time | `$GETTIM`, `$SETIMR`, `$CANTIM` | |
@@ -651,11 +652,39 @@ can't reach them.
 | Other | `$GETSYI`, `$GETSYIW`, `$GETMSG` | |
 
 Arguments the implemented services take but ignore: `$CREPRC`'s
-privileges, quotas, UIC and status flags, `$ASSIGN`'s mailbox,
+quotas and status flags, `$ASSIGN`'s mailbox,
 `$CREMBX`'s protection, access mode and flags, the logical name
 services' attributes, `$ASCEFC`'s protection
-and permanence (every cluster is temporary), the access modes. Any process
-may call `$CMKRNL` and `$CMEXEC`. ponytail: until there are privileges.
+and permanence (every cluster is temporary), the access modes.
+
+### Privileges
+
+A process has a UIC, `PCB$L_UIC`, and three masks of privileges,
+VMS's bits (`$PRVDEF`): the current ones, `PCB$Q_PRIV`, which the
+checks look at; the permanent ones, which the current ones go back to
+when an image exits; and the authorized ones, which `$SETPRV` may enable
+without `SETPRV`. The swapper has every privilege and the UIC `[1,4]`,
+and `SYSTEM` inherits them: `$CREPRC` gives a process its creator's
+UIC, or another one for `DETACH`, its creator's privileges or those of
+its `prvadr` the creator has, and its creator's authorized ones. A
+service checks with `IFPRIV` and `IFNPRIV` from `lib.mlb`, and says
+`SS$_NOPRIV` without the privilege:
+
+| Privilege | What it takes it |
+| --- | --- |
+| `CMKRNL`, `CMEXEC` | `$CMKRNL`; `$CMEXEC`, with either. Executive mode can't read the PCB, so `EXE$CMODEXEC` asks the kernel with a `CHMK` of a code of its own |
+| `SETPRV` | `$SETPRV` enabling what isn't authorized: without, it enables what is and says `SS$_NOTALLPRIV` |
+| `GROUP`, `WORLD` | another process, in `EXE$NAMPID`, for `$DELPRC`, `$FORCEX`, `$GETJPI`, `$SUSPND`, `$RESUME`, `$WAKE`, `$SETPRI`, `$SCHDWK` and `$CANWAK`: none for one with the caller's UIC, `GROUP` for another in its group, `WORLD` for any. A wildcard `$GETJPI` skips the others. A name is looked for in the caller's group only, as names are a group's |
+| `DETACH` | `$CREPRC` of a process with another UIC |
+| `SYSNAM` | `$CRELNM` and `$DELLNM` in `LNM$SYSTEM_TABLE`, a `$CREMBX` logical name, and `$MOUNT` and `$DISMOU`, whose volumes every process sees |
+| `PRMMBX`, `TMPMBX` | `$CREMBX` of a permanent mailbox, or a temporary one; `$DELMBX` |
+| `LOG_IO`, `PHY_IO` | the disks' `IO$_READLBLK` and `IO$_WRITELBLK`, with either; `IO$_READPBLK` and `IO$_WRITEPBLK`, with `PHY_IO` |
+| `VOLPRO` | `$INIT_VOL`. ponytail: until volumes have owners |
+| `OPER` | `IO$_SETCHAR` on `BGA0:`, the network's interface |
+
+`SET PROCESS/PRIVILEGES` changes the permanent ones, and `SHOW
+PROCESS/PRIVILEGES` lists the authorized and current ones, by the names
+in `sysexe/lib/prvnam.mar`. Files are checked in PRD-0003's next step.
 
 ### Logical names
 
@@ -1076,11 +1105,13 @@ on the console with `PRINT` and `PRINTHEX` from `sysexe.mlb`, which call
 | `INIT` | `$INIT_VOL` with its two parameters, the device and the label |
 | `MOUNT` | `$MOUNT` with its parameters, the device and the label, if there is one |
 | `DISMOUNT` | `$DISMOU` with its parameter, the device |
+| `SET` | `$SETPRV`s each privilege of `SET PROCESS/PRIVILEGES`, `NO` before one to disable it, `ALL` for every one, permanently; `%DCL-W-IVKEYW` for a name it doesn't know |
+| `SHOW` | `SHOW PROCESS`: what `$GETJPI` says of the process, its UIC, and with `/PRIVILEGES` its authorized and current privileges; `SHOW SYSTEM`: a line per process |
 | `CREATE` | `$CREATE_DIR` with its parameter, for `CREATE/DIRECTORY` |
 | `STARTUP` | makes 4 pages with `$EXPREG`, checks and deletes them; creates `SLEEPER` at a higher priority, which runs at once, and `PING` and `PONG`; waits until `PONG` sets flag 66 of their cluster; deletes `SLEEPER`; creates `SVCTEST`, `HOG`, `TIMETEST`, `ASTTEST`, `MBXTEST`, `FSTEST1` and `FSTEST2` and `CHFTEST` |
 | `SLEEPER` | hibernates until it is deleted |
 | `PING`, `PONG` | take three turns through common event flags 64 and 65 of the cluster `PINGPONG`; `PONG` then sets flag 66, which `STARTUP` waits for |
-| `SVCTEST` | checks the statuses of the services the others don't use, and of errors: local event flags, the dispatcher's checks and a stub, `$CRETVA` and `$DELTVA`, `$CMKRNL` and `$CMEXEC`; what user mode may `PROBE`, and that services refuse it the executive's data; the console's channels; logical names in both tables, `$ASSIGN` through two of them, and the errors; `$SETPRI`, and `$SUSPND`, `$WAKE`, `$RESUME` and `$DELPRC` on a process of its own, and `$FORCEX` on another, which exits with `SS$_FORCEDEXIT` before its image runs; `$DCLEXH` and `$CANEXH`, and a `$FORCEX` of itself, whose `$EXIT` calls its exit handler, which says it is ok; then creates one whose image doesn't exist, which exits with `RMS$_FNF`, and `SNOOP` and `USURP` |
+| `SVCTEST` | checks the statuses of the services the others don't use, and of errors: local event flags, the dispatcher's checks and a stub, `$CRETVA` and `$DELTVA`, `$CMKRNL` and `$CMEXEC`, with privileges and without; a process in another UIC group, which takes `DETACH` and, to touch it, `WORLD`; what user mode may `PROBE`, and that services refuse it the executive's data; the console's channels; logical names in both tables, `$ASSIGN` through two of them, and the errors; `$SETPRI`, and `$SUSPND`, `$WAKE`, `$RESUME` and `$DELPRC` on a process of its own, and `$FORCEX` on another, which exits with `SS$_FORCEDEXIT` before its image runs; `$DCLEXH` and `$CANEXH`, and a `$FORCEX` of itself, whose `$EXIT` calls its exit handler, which says it is ok; then creates one whose image doesn't exist, which exits with `RMS$_FNF`, and `SNOOP` and `USURP` |
 | `SNOOP` | reads S0 from user mode, which no handler takes: exits with `SS$_ACCVIO`, its message written |
 | `USURP` | raises IPL from user mode, and exits the same way with `SS$_OPCDEC` |
 | `HOG` | associates a common event flag cluster, creates `NUDGE` at its own priority and loops reading flag 64 until `NUDGE` sets it, with no wait: only quantum end lets `NUDGE` run |
@@ -1098,7 +1129,6 @@ taking the clock's interrupts.
 ## Next
 
 - Priority boosts on wake and decay at quantum end.
-- Privileges, for `$CMKRNL` and `$CMEXEC`.
 - Writing the system disk, the disk's interrupt, `$QIO` on disk
   channels, logical names in file specifications (`SYS$SYSTEM:DCL.EXE`)
   and `SYS$DISK`.

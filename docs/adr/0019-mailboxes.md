@@ -99,8 +99,9 @@ logical name tables, the process's and the system's.
 - Only 99 mailboxes at once, and `$CREMBX` fails with `SS$_INSFMEM` past
   them.
 - ponytail: no `BUFQUO` quota on the process; a mailbox's `bufquo` is
-  only its own limit, and any process may make permanent mailboxes and
-  write to any mailbox: no `PRMMBX` privilege or protection mask.
+  only its own limit, and any process may write to any mailbox: no
+  protection mask. Permanent mailboxes take `PRMMBX`, temporary ones
+  `TMPMBX` (PRD-0003).
 - A reader that never reads holds the writer's messages in pool until the
   mailbox goes.
 - The termination message has 0 for the job, account, user name, CPU

@@ -177,6 +177,14 @@ MESSAGES:
         .ASCIC  "SYSTEM"
         .ASCIC  "DEVOFFLINE"
         .ASCIC  "device is not in configuration or not available"
+        .LONG   SS$_NOPRIV
+        .ASCIC  "SYSTEM"
+        .ASCIC  "NOPRIV"
+        .ASCIC  "insufficient privilege or object protection violation"
+        .LONG   SS$_NOTALLPRIV
+        .ASCIC  "SYSTEM"
+        .ASCIC  "NOTALLPRIV"
+        .ASCIC  "not all requested privileges authorized"
         .LONG   SS$_NONEXPR
         .ASCIC  "SYSTEM"
         .ASCIC  "NONEXPR"

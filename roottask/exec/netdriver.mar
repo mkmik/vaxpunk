@@ -31,6 +31,7 @@
         $PRDEF
         $IPLDEF
         $PCBDEF
+        $PRVDEF
         $UCBDEF
         $IRPDEF
         $RPBDEF
@@ -212,7 +213,8 @@ BUFFER: ADDL3   #1, R2, R0
 ;                  the protocol, 6 for TCP, and two bytes, the type and
 ;                  the address family, which are only TCP's
 ;   IO$_SETCHAR    sets the interface: p1 = 12 bytes, its address, mask
-;                  and gateway, each a longword in network order
+;                  and gateway, each a longword in network order; OPER,
+;                  else SS$_NOPRIV
 ;   IO$_SENSECHAR  writes those to the 16 bytes at p1, then the flags, 2
 ;                  if the link is up
 ; On a unit:
@@ -235,7 +237,7 @@ BUFFER: ADDL3   #1, R2, R0
 ;   IO$_SETMODE!IO$M_CTRLCAST or IO$M_CTRLYAST does nothing
 ; An address is a longword in network order: its first byte is the
 ; address's first number. R0 = SS$_NORMAL, SS$_DEVOFFLINE without the
-; TCP/IP component, SS$_ILLIOFUNC, SS$_BADPARAM, SS$_ACCVIO,
+; TCP/IP component, SS$_ILLIOFUNC, SS$_NOPRIV, SS$_BADPARAM, SS$_ACCVIO,
 ; SS$_IVBUFLEN, SS$_IVCHAN, SS$_INSFMEM. IPL$_SYNCH. Uses R0-R8.
 NET$FDT::
         MOVL    NET$GL_PORT, R0
@@ -436,6 +438,8 @@ OPEN:   MOVL    28(AP), R2
 ; SETCHAR, SENSECHAR: IO$_SETCHAR and IO$_SENSECHAR on BGA0:, IFCONFIG
 ; on the control connection.
 SETCHAR:
+        MOVL    #SS$_NOPRIV, R0
+        IFNPRIV OPER, 90$
         MOVL    28(AP), R2
         IFNORD  #12, (R2), 85$
         MOVL    #PORT$C_IFCONFIG, R8

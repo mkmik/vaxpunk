@@ -16,12 +16,13 @@
 ; sends a process's termination message so (process.mar).
 ; ponytail: a write is done at once, as VMS's with IO$M_NOW, and fails
 ; with SS$_MBFULL when there's no room, rather than waiting for a reader
-; or for room; no IO$_WRITEOF, attention ASTs or protection.
+; or for room; no IO$_WRITEOF, attention ASTs or protection mask.
 ;
         .LIBRARY "lib.mlb"
         .LIBRARY "starlet.mlb"
         $IPLDEF
         $PCBDEF
+        $PRVDEF
         $UCBDEF
         $IRPDEF
         $IODEF
@@ -60,7 +61,11 @@ MB$GL_UNIT::                            ; the last unit number given, 1-99 then 
 ; does, names a mailbox already, the channel is that one's instead.
 ; SS$_EXQUOTA for a maxmsg over 65535, SS$_IVLOGNAM for a lognam longer
 ; than 255, SS$_NOIOCHAN, or SS$_INSFMEM, also when all 99 units are
-; taken. promsk, acmode and flags are ignored.
+; taken. SS$_NOPRIV for a permanent mailbox without PRMMBX, a temporary
+; one without TMPMBX, or a lognam that names no mailbox yet without
+; SYSNAM. promsk, acmode and flags are ignored.
+; ponytail: lognam goes in the system table, so it takes SYSNAM; a
+; temporary mailbox's goes in LNM$JOB once there is one, as on VMS.
         .ENTRY  EXE$CREMBX, ^M<R2, R3, R4, R5, R6, R7, R8, R9>
         MOVL    8(AP), R0
         IFNOWRT #2, (R0), 85$
@@ -76,7 +81,11 @@ MB$GL_UNIT::                            ; the last unit number given, 1-99 then 
         CMPL    R7, #LNM$C_NAMLENGTH
         BGTRU   87$
 10$:    MOVL    SCH$GL_CURPCB, R4
-        DSBINT  #IPL$_SYNCH
+        BLBS    4(AP), 12$
+        IFNPRIV TMPMBX, 88$
+        BRB     14$
+12$:    IFNPRIV PRMMBX, 88$
+14$:    DSBINT  #IPL$_SYNCH
         TSTL    R7
         BEQL    20$
         PUSHR   #^M<R6, R7>
@@ -95,7 +104,11 @@ MB$GL_UNIT::                            ; the last unit number given, 1-99 then 
         BEQL    20$
         BSBW    IOC$ASSIGN              ; it names one already
         BRB     50$
-20$:    BSBW    NEWMBX
+20$:    TSTL    R7
+        BEQL    22$
+        MOVL    #SS$_NOPRIV, R0
+        IFNPRIV SYSNAM, 80$
+22$:    BSBW    NEWMBX
         BLBC    R0, 80$
         TSTL    R7
         BEQL    40$
@@ -128,6 +141,8 @@ MB$GL_UNIT::                            ; the last unit number given, 1-99 then 
 86$:    MOVL    #SS$_EXQUOTA, R0
         RET
 87$:    MOVL    #SS$_IVLOGNAM, R0
+        RET
+88$:    MOVL    #SS$_NOPRIV, R0
         RET
 
 ; NEWMBX: AP = $CREMBX's arguments, checked. Makes a mailbox with no
@@ -184,7 +199,8 @@ NEWMBX: MOVL    #99, R1
 ; $DELMBX chan: marks the mailbox chan is assigned to for deletion: it is
 ; temporary now, and goes when its last channel does, and the logical
 ; names that name it go at once. SS$_IVCHAN for a channel that isn't
-; assigned, SS$_DEVNOTMBX for one that isn't a mailbox's.
+; assigned, SS$_DEVNOTMBX for one that isn't a mailbox's, SS$_NOPRIV
+; without PRMMBX.
         .ENTRY  EXE$DELMBX, ^M<R2, R3, R4, R5, R6, R7>
         MOVL    SCH$GL_CURPCB, R4
         MOVZWL  4(AP), R0
@@ -195,6 +211,8 @@ NEWMBX: MOVL    #99, R1
         MOVL    PCB$AL_CCB(R4)[R0], R5
         BSBW    MAILBOX
         BLBC    R0, 85$
+        MOVL    #SS$_NOPRIV, R0
+        IFNPRIV PRMMBX, 90$
         DSBINT  #IPL$_SYNCH
         BICL2   #UCB$M_PRMMBX, UCB$L_MBSTS(R5)
         BSBW    UNNAME
@@ -204,7 +222,7 @@ NEWMBX: MOVL    #99, R1
 80$:    MOVL    #SS$_IVCHAN, R0
         RET
 85$:    MOVL    #SS$_DEVNOTMBX, R0
-        RET
+90$:    RET
 
 ; MB$FDT: a mailbox's FDT routine. R4 = the current PCB, R5 = the
 ; mailbox's UCB, AP = $QIO's arguments.
