@@ -14,7 +14,8 @@
 //! MOUNT and COPY on the data disk, DKB0:, made afresh in
 //! out/check-datadisk.img, not the one you keep, which SYSTARTUP_VMS.COM
 //! couldn't mount at boot, a CREATE/DIRECTORY two levels deep there and a
-//! COPY into it, SHOW DEVICES, a DISMOUNT of DKA0: that fails and one of
+//! COPY into it, an APPEND/LOG to the file copied there and one to the
+//! system disk that fails, SHOW DEVICES, a DISMOUNT of DKA0: that fails and one of
 //! DKB0: that doesn't, a DIRECTORY there that fails, a MOUNT without a
 //! label, a DIRECTORY of the new directory and a DELETE of the one above
 //! it, which has a file in it and stays, SHOW PROCESS
@@ -42,7 +43,8 @@
 //! of what it typed before included, and types.
 //! STARTUP's SLEEPER and SVCTEST's NAPPER say they hibernate before SLEEPER
 //! does. The CPU then idles, taking clock interrupts. Once this QEMU is
-//! gone, ods-image checks the data disk's volume and finds the files there.
+//! gone, ods-image checks the data disk's volume and finds the files there,
+//! WELCOME.TXT twice in the one APPEND added to.
 
 use std::fs;
 use std::io::Write;
@@ -115,6 +117,8 @@ const LINES: &[&str] = &[
     "SUB.DIR;1",
     "Directory DKB0:[SUB]",
     "DEEP.DIR;1",
+    "%APPEND-S-APPENDED, DKA0:[SYSMGR]WELCOME.TXT;1 appended to DKB0:[000000]DATA.TXT;1 (10 records)",
+    "%RMS-E-WLK, device currently write locked",
     "%SYSTEM-F-DEVACTIVE, device is active",
     "%RMS-E-DNR, device not ready, not mounted, or unavailable",
     "Directory DKB0:[SUB.DEEP]",
@@ -245,13 +249,13 @@ fn boot() {
             type_("X = 6 * 7\rWRITE SYS$OUTPUT \"X is \", X\rSHOW SYMBOL HOME\rHOME\r");
             type_("EDIT WELCOME.TXT\r\"index\"\r\"zzz\"\rEXIT\rQUIT\r");
             typed = 1;
-        } else if typed == 6 && step < STEPS.len() {
+        } else if typed == 7 && step < STEPS.len() {
             let (line, times, keys) = STEPS[step];
             if text.lines().filter(|l| l.contains(line)).count() >= times {
                 type_(keys);
                 step += 1;
             }
-        } else if typed == 6 && text.matches("*INTERRUPT*").count() == 9 {
+        } else if typed == 7 && text.matches("*INTERRUPT*").count() == 9 {
             // TCPIP$TELNET, by its PID in SHOW SYSTEM's list.
             let pid = text
                 .lines()
@@ -265,26 +269,26 @@ fn boot() {
                 .unwrap()[0];
             type_(&format!("STOP/IDENTIFICATION={pid}\rSTOP/ID={pid}\r"));
             type_("SHOW SYMBOL $STATUS\rSTOP/ID=XYZ\r");
-            typed = 7;
-        } else if typed == 7 && text.contains("%DCL-W-IVCHAR") {
+            typed = 8;
+        } else if typed == 8 && text.contains("%DCL-W-IVCHAR") {
             type_("SET PROCESS/PRIVILEGES=(NOCMKRNL,NOSYSNAM)\rSHOW PROCESS/PRIVILEGES\r");
             type_("SHOW LOGICAL\rDEFINE/SYSTEM/NOLOG QQQ RRR\rSET PROCESS/PRIV=XYZZY\r");
             type_("SET PROCESS/PRIVILEGES=ALL\rDEFINE/SYSTEM/NOLOG QQQ RRR\r");
             type_("SHOW LOGICAL/SYSTEM QQQ\r");
-            typed = 8;
-        } else if typed == 8 && text.contains("\"QQQ\" = \"RRR\" (LNM$SYSTEM_TABLE)") {
+            typed = 9;
+        } else if typed == 9 && text.contains("\"QQQ\" = \"RRR\" (LNM$SYSTEM_TABLE)") {
             // File protection, from PROTTEST's process of another UIC.
             type_("RUN PROTTEST\rSET PROTECTION=(W:R) DKB0:[000000]DATA.TXT\rRUN PROTTEST\r");
             type_("DIRECTORY/OWNER/PROTECTION DKB0:[000000]DATA.TXT\r");
-            typed = 9;
-        } else if typed == 9 && text.contains("(RWED,RWED,RE,R)") {
+            typed = 10;
+        } else if typed == 10 && text.contains("(RWED,RWED,RE,R)") {
             type_("SET FILE/OWNER_UIC=[200,1] DKB0:[000000]DATA.TXT\r");
             type_("SET PROTECTION=(W) DKB0:[000000]DATA.TXT\r");
             type_("DIRECTORY/OWNER/PROTECTION DKB0:[000000]DATA.TXT\rRUN PROTTEST\r");
-            typed = 10;
-        } else if typed == 10 && text.matches("PROTTEST: [200,1] read").count() == 2 {
-            type_("DISMOUNT DKB0:\rMOUNT/PROTECTION=(W) DKB0:\rRUN PROTTEST\r");
             typed = 11;
+        } else if typed == 11 && text.matches("PROTTEST: [200,1] read").count() == 2 {
+            type_("DISMOUNT DKB0:\rMOUNT/PROTECTION=(W) DKB0:\rRUN PROTTEST\r");
+            typed = 12;
         }
         // The rest once EDIT is done: the type-ahead buffer holds 255 characters.
         if typed == 1 && text.contains("String was not found") {
@@ -328,12 +332,17 @@ fn boot() {
             typed = 5;
         }
         if typed == 5 && text.contains("Directory DKB0:[SUB]") {
+            type_("APPEND/LOG SYS$SYSDEVICE:[SYSMGR]WELCOME.TXT DKB0:[000000]DATA.TXT\r");
+            type_("APPEND DKB0:[000000]DATA.TXT SYS$SYSDEVICE:[SYSMGR]WELCOME.TXT\r");
+            typed = 6;
+        }
+        if typed == 6 && text.contains("%RMS-E-WLK") {
             type_("DIR DKB0:[000000]\rSHOW DEVICES\rDISMOUNT DKA0:\rDISMOUNT DKB0:\r");
             type_(
                 "DIR DKB0:[000000]\rMOUNT DKB0:\rDIR DKB0:[SUB.DEEP]\rDELETE DKB0:[000000]SUB.DIR;1\r",
             );
             type_("SHOW PROCESS\rSHOW SYSTEM\rCONTINUE\rRUN CTRLC\r");
-            typed = 6;
+            typed = 7;
         }
         let done = text.matches("%RMS-E-PRV").count() == 2;
         if done && LINES.iter().all(|l| text.contains(l)) || text.contains("root task done") {
@@ -391,6 +400,8 @@ fn boot() {
     let mut data = Vec::new();
     img.copy_out(fid, &mut data, Conversion::RecordsToLines)
         .unwrap();
-    assert!(String::from_utf8_lossy(&data).contains("and the rest of what INITIALIZE made."));
+    let data = String::from_utf8_lossy(&data);
+    assert!(data.contains("and the rest of what INITIALIZE made."));
+    assert_eq!(data.matches("Welcome to vaxpunk").count(), 2, "{data}");
     assert!(img.lookup("[SUB.DEEP]DEEP.TXT").is_ok());
 }

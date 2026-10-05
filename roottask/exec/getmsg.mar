@@ -37,6 +37,10 @@ MESSAGES:
         .ASCIC  "RMS"
         .ASCIC  "WLK"
         .ASCIC  "device currently write locked"
+        .LONG   RMS$_NEF
+        .ASCIC  "RMS"
+        .ASCIC  "NEF"
+        .ASCIC  "not positioned to EOF on $PUT (sequential organization only)"
         .LONG   RMS$_NMF
         .ASCIC  "RMS"
         .ASCIC  "NMF"

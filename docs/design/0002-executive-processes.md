@@ -1029,12 +1029,12 @@ a directory in one of those. The MFD has no parent: `RMS$_DIR`.
 | --- | --- |
 | `$PARSE fab` | the expanded string, its parts and the directory's ID into the FAB's NAM block |
 | `$SEARCH fab` | the next file the NAM block's expanded string names: its resultant string, parts and file ID; `RMS$_FNF` if there is none, then `RMS$_NMF` |
-| `$OPEN fab` | opens one file, the highest version unless the specification gives one, for reading; `RMS$_WLK` for writing. Its IFI, record format, attributes, maximum record size and allocation into the FAB, its resultant string into the NAM block if there is one, its owner and protection into the protection XAB (`$XABPRODEF`) in `FAB$L_XAB`'s chain if there is one |
+| `$OPEN fab` | opens one file, the highest version unless the specification gives one, for reading, and with `FAB$M_PUT` in `FAB$B_FAC` for `$PUT` too: `RMS$_WLK` on a volume that can't be written, `DKA0:`, `RMS$_PRV` without write access or for the volume's own files and directories. Its IFI, record format, attributes, maximum record size and allocation into the FAB, its resultant string into the NAM block if there is one, its owner and protection into the protection XAB (`$XABPRODEF`) in `FAB$L_XAB`'s chain if there is one |
 | `$CREATE fab` | makes a new file, one version above the highest unless the specification gives one (`RMS$_FEX` if it is there), with the FAB's organization, record format and attributes, maximum record size and `FAB$L_ALQ` blocks, and opens it for `$PUT`; `RMS$_WLK` on `DKA0:`, `RMS$_FUL` if the volume is full |
-| `$CONNECT rab` | connects the RAB to the file its FAB opened, at its start |
+| `$CONNECT rab` | connects the RAB to the file its FAB opened, at its start, or at its end with `RAB$M_EOF` in `RAB$L_ROP` |
 | `$GET rab` | the next record into the RAB's user buffer: `RAB$W_RSZ`, `RAB$L_RBF`; `RMS$_RTB` if it didn't fit, `RMS$_EOF` past the end; VAR and FIX records only |
-| `$PUT rab` | appends the record at `RAB$L_RBF`, `RAB$W_RSZ` bytes, to a file `$CREATE` made: VAR records with their size first, FIX ones of the file's size (`RMS$_RSZ`), each on a word; a block at a time, extending the file by 8 blocks as it fills |
-| `$DISCONNECT rab`, `$CLOSE fab` | undo `$CONNECT` and `$OPEN`; `$CLOSE` writes a new file's last block and its end of file, and gives the file the protection and owner of its FAB's protection XAB, as VMS's does: a new protection takes control access, a new owner the system's. ponytail: VMS's `SET PROTECTION` asks the XQP with `IO$_MODIFY`, and needs no read access to the file |
+| `$PUT rab` | appends the record at `RAB$L_RBF`, `RAB$W_RSZ` bytes, to a file `$CREATE` made or `$OPEN` opened for it, at its end, `RMS$_NEF` if the stream is elsewhere: VAR records with their size first, FIX ones of the file's size (`RMS$_RSZ`), each on a word; a block at a time, extending the file by 8 blocks as it fills |
+| `$DISCONNECT rab`, `$CLOSE fab` | undo `$CONNECT` and `$OPEN`; `$CLOSE` writes a written file's last block and its end of file, and gives the file the protection and owner of its FAB's protection XAB, as VMS's does: a new protection takes control access, a new owner the system's. ponytail: VMS's `SET PROTECTION` asks the XQP with `IO$_MODIFY`, and needs no read access to the file |
 | `$ERASE fab` | deletes a file, the highest version unless the specification gives one, or, with `FAB$M_NAM` in `FAB$L_FOP`, the one the NAM block's resultant string names, and the next `$SEARCH` finds the one after it; `RMS$_PRV` for the volume's own files, 1 to 9, `RMS$_MKD` with `SS$_DIRNOTEMPTY` in `FAB$L_STV` for a directory with files in it |
 | `$CREATE_DIR devdirspec` | makes the directory `[dev:][dir.dir]` names, and those above it that aren't there, with `FIL$MKDIR`, as the directory walk finds each missing: `SS$_CREATED`, or `SS$_NORMAL` if they were all there. ponytail: VMS's `LIB$CREATE_DIR` is a library routine that asks the XQP with `$QIO`; here it is a service |
 | `$SETDDIR newdir, oldlen, olddir` | the old default directory into `olddir`, then `newdir`, `[dir.dir]` up to 63 characters, the new one, unchecked against the disk; `RMS$_DIR` if it isn't one |
@@ -1050,7 +1050,7 @@ An open file is an IFAB, 1,056 bytes of pool: the file's header, its
 volume, the block `$GET` reads in or `$PUT` fills, and where it is. The PCB holds up to 15, by IFI, in
 `PCB$A_IFAB`, a bit each in `PCB$L_FILES`; `$CONNECT` puts the IFI in
 `RAB$W_ISI` too. `RMS$RUNDOWN` closes a process's files at image exit
-and process deletion, writing those `$CREATE` made as `$CLOSE` does.
+and process deletion, writing those opened for `$PUT` as `$CLOSE` does.
 `NAM$L_WCC` counts the matches `$SEARCH` skips, and its top bit says it
 found one, so `RMS$_FNF` and `RMS$_NMF` stay apart when `$ERASE` takes a
 match away.
@@ -1060,8 +1060,7 @@ at a time, which keeps the file system's buffers theirs. They return
 VMS's `RMS$_` statuses (`$RMSDEF`) and put them in `FAB$L_STS` or
 `RAB$L_STS`. ponytail: VMS's RMS runs in executive mode; no ASTs,
 completion routines, logical names, wildcard directories, block I/O,
-file sharing or locking, and `$PUT` only appends to a file `$CREATE`
-made.
+file sharing or locking, and no `$UPDATE` or `$TRUNCATE`, so `$PUT` writes only at the end.
 
 ### Exceptions and condition handlers
 
@@ -1137,7 +1136,7 @@ on the console with `PRINT` and `PRINTHEX` from `sysexe.mlb`, which call
 | `DIRECTORY` | `$PARSE`s its parameter, with `*.*;*` for what it leaves out, and lists the files `$SEARCH` finds: the directory, the names four to a line, how many; with `/OWNER` and `/PROTECTION`, a line each, with what `$OPEN` puts in a protection XAB: `[g,m]` and `(RWED,RWED,RE,)` |
 | `TYPE` | `$OPEN`s the file its parameter names and writes each record `$GET` reads on the console, a line each |
 | `EDIT` | EDT: `$GET`s the file its parameter names into a buffer, a line a record, and at its `*` prompt, read with `IO$_READPROMPT`, types the lines a range names (numbers, `.`, `BEGIN`, `END`, `WHOLE`, `REST`, `"text"` searches), `INSERT`s lines typed up to a CTRL/Z before it, `DELETE`s or `REPLACE`s them; `CHANGE` goes to keypad mode, which paints a VT100 screen, reads a key at a time with `IO$M_NOECHO` and `IO$M_NOFILTR` and changes the buffer, until CTRL/Z; `EXIT` `$CREATE`s the next version and `$PUT`s the buffer to it, `QUIT` doesn't |
-| `COPY` | `$OPEN`s its first parameter, `$CREATE`s its second, with the first's attributes and its name and type for what the second leaves out, and copies each record with `$GET` and `$PUT`; with `/LOG`, `%COPY-S-COPIED, from copied to to (n records)` |
+| `COPY` | `$OPEN`s its first parameter, `$CREATE`s its second, with the first's attributes and its name and type for what the second leaves out, and copies each record with `$GET` and `$PUT`; with `/LOG`, `%COPY-S-COPIED, from copied to to (n records)`. `APPEND` runs it too, and it `$OPEN`s the second for `$PUT` instead, `%APPEND-S-APPENDED` |
 | `DELETE` | `$PARSE`s its parameter, which must give a version or `;*` (`%DELETE-E-DELVER`), and `$ERASE`s each file `$SEARCH` finds; with `/LOG`, `%DELETE-I-FILDEL, name deleted` for each |
 | `INIT` | `$INIT_VOL` with its two parameters, the device and the label, and `/OWNER_UIC` and `/PROTECTION`'s items, which `sysexe/lib/protect.mar` reads |
 | `MOUNT` | `$MOUNT` with its parameters, the device and the label, if there is one, and `/OWNER_UIC` and `/PROTECTION`'s items |

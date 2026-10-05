@@ -1,12 +1,13 @@
-        .TITLE  COPY    Copies a file
-        .IDENT  /V0.1/
+        .TITLE  COPY    Copies a file, or appends it to another
+        .IDENT  /V0.2/
 ;
-; DCL's COPY from to runs this. Opens
+; DCL's COPY from to and APPEND from to run this. Opens
 ; from with RMS, creates to with its organization, record attributes and
 ; size, what to leaves out of its name taken from from's name and type,
 ; and copies its records, a $GET and a $PUT each. The new file is the
-; next version unless to gives one. Returns RMS's status if it can't.
-; With /LOG, says what it copied where, as VMS's COPY does.
+; next version unless to gives one. APPEND opens to instead, for $PUT,
+; and connects at its end, where the records go. Returns RMS's status if it can't.
+; With /LOG, says what it copied where, as VMS's COPY and APPEND do.
 ; ponytail: one file, no wildcards; records up to RECSIZE.
 ;
         .LIBRARY "starlet.mlb"
@@ -34,8 +35,13 @@ SPEC:   .BLKB   255
 RECORDS:                                ; how many it copied
         .LONG   0
 MSG:    .BLKB   256                     ; /LOG's message, .ASCIC
+APPEND: .LONG   0                       ; 1 for APPEND
+APPE:   .ASCII  "APPE"                  ; its $VERB
 COPIED: .ASCIC  "%COPY-S-COPIED, "
 TO:     .ASCIC  " copied to "
+APPENDED:
+        .ASCIC  "%APPEND-S-APPENDED, "
+APTO:   .ASCIC  " appended to "
 OPEN:   .ASCIC  " ("
 CLOSE:  .ASCIC  " records)"
 INRES:  .BLKB   255
@@ -44,6 +50,11 @@ REC:    .BLKB   RECSIZE
 
         .PSECT  CODE, EXE, LONG
         .ENTRY  START, ^M<R2, R3, R4, R5>
+        GETVALUE "$VERB", DESC, DESC
+        CMPL    SPEC, APPE
+        BNEQ    5$
+        INCL    APPEND
+5$:     MOVL    #255, DESC
         GETVALUE "FROM", DESC, DESC
         MOVAB   SPEC, INFAB+FAB$L_FNA
         MOVB    DESC, INFAB+FAB$B_FNS
@@ -62,8 +73,13 @@ REC:    .BLKB   RECSIZE
         MOVW    INFAB+FAB$W_MRS, OUTFAB+FAB$W_MRS
         MOVB    INFAB+FAB$B_FSZ, OUTFAB+FAB$B_FSZ
         MOVL    INFAB+FAB$L_ALQ, OUTFAB+FAB$L_ALQ
+        BLBS    APPEND, 15$
         $CREATE FAB=OUTFAB
-        MOVL    R0, R2
+        BRB     17$
+15$:    MOVB    #FAB$M_PUT, OUTFAB+FAB$B_FAC
+        MOVL    #RAB$M_EOF, OUTRAB+RAB$L_ROP
+        $OPEN   FAB=OUTFAB
+17$:    MOVL    R0, R2
         BLBC    R0, 80$
         $CONNECT RAB=INRAB
         BLBC    R0, 70$
@@ -94,11 +110,15 @@ REC:    .BLKB   RECSIZE
 LOG:    PRESENT "LOG"
         BLBC    R0, 90$
         MOVAB   COPIED, R1
-        BSBB    ADDTEXT
+        BLBC    APPEND, 5$
+        MOVAB   APPENDED, R1
+5$:     BSBB    ADDTEXT
         MOVAB   INNAM, R1
         BSBB    ADDNAM
         MOVAB   TO, R1
-        BSBB    ADDTEXT
+        BLBC    APPEND, 7$
+        MOVAB   APTO, R1
+7$:     BSBB    ADDTEXT
         MOVAB   OUTNAM, R1
         BSBB    ADDNAM
         MOVAB   OPEN, R1
