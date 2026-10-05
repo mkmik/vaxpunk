@@ -96,6 +96,17 @@ IPL$_POWER = 31                         ; everything blocked
         BEQL    DEST
         .ENDM   IFNOWRT
 
+; IFPRIV, IFNPRIV: VMS's privilege checks: branch to DEST if the process
+; whose PCB is in PCB (R4) has (hasn't) the privilege PRIV, a $PRVDEF name
+; without PRV$V_, among its current ones. Use $PCBDEF and $PRVDEF.
+        .MACRO  IFPRIV  PRIV, DEST, PCB=R4
+        BBS     #PRV$V_'PRIV, PCB$Q_PRIV(PCB), DEST
+        .ENDM   IFPRIV
+
+        .MACRO  IFNPRIV PRIV, DEST, PCB=R4
+        BBC     #PRV$V_'PRIV, PCB$Q_PRIV(PCB), DEST
+        .ENDM   IFNPRIV
+
 ; $SCBDEF: system control block vectors the PAL delivers through, at the
 ; VAX's offsets. Each holds the handler's address, a longword.
         .MACRO  $SCBDEF
@@ -240,7 +251,11 @@ PCB$AL_CCB = 440                        ; channel n's device, at 4*n: its UCB
 PCB$AL_EXH = 568                        ; mode n's exit handlers, at 4*n: the first one's block, or 0
 PCB$L_TMBU = 584                        ; its termination mailbox's unit, MBnn, or 0
 PCB$L_FINALSTS = 588                    ; the status of its last $EXIT, or 0
-PCB$K_LENGTH = 592
+PCB$Q_PRIV = 592                        ; current privileges, $PRVDEF's bits: what the checks look at
+PCB$Q_AUTHPRIV = 600                    ; authorized: what $SETPRV may enable without SETPRV
+PCB$Q_PROCPRIV = 608                    ; permanent: what the current ones go back to when an image exits
+PCB$L_UIC = 616                         ; its UIC: the group in the high word, the member in the low
+PCB$K_LENGTH = 624
 PCB$V_WAKEPEN = 0                       ; a $WAKE came that $HIBER hasn't seen
 PCB$V_WALL = 1                          ; the wait is for all of EFWM
 PCB$V_SUSPEN = 2                        ; suspend when the wait ends

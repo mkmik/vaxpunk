@@ -21,7 +21,7 @@
         $JPIDEF
         $SYIDEF
 
-        .EXTERNAL EXE$NAMPID, EXE$SETEF, EXE$CLREF, EXE$GQ_BOOTTIME
+        .EXTERNAL EXE$NAMPID, EXE$PRCPRIV, EXE$SETEF, EXE$CLREF, EXE$GQ_BOOTTIME
         .EXTERNAL SCH$GL_CURPCB, SCH$GL_PCBVEC, SGN$GW_QUANTUM
 
 ; ITMENT code, size, at: a table's entry. size is 1, 2 or 4 for a byte, word
@@ -41,6 +41,12 @@ JPITAB: ITMENT  JPI$_PID, 4, PCB$L_PID  ; at an offset in the PCB
         ITMENT  JPI$_PRIB, 1, PCB$B_PRIB
         ITMENT  JPI$_OWNER, 4, PCB$L_OWNER
         ITMENT  JPI$_STS, 4, PCB$L_STS
+        ITMENT  JPI$_UIC, 4, PCB$L_UIC
+        ITMENT  JPI$_MEM, 2, PCB$L_UIC
+        ITMENT  JPI$_GRP, 2, PCB$L_UIC+2
+        ITMENT  JPI$_CURPRIV, 8, PCB$Q_PRIV
+        ITMENT  JPI$_PROCPRIV, 8, PCB$Q_PROCPRIV
+        ITMENT  JPI$_AUTHPRIV, 8, PCB$Q_AUTHPRIV
         .LONG   0
 SYITAB: ITMENT  SYI$_VERSION, 8, VERSION ; at an address
         ITMENT  SYI$_MAXPROCESSCNT, 4, MAXPRC
@@ -60,7 +66,8 @@ VALUE:  .LONG   0                       ; a byte or word item's, made a longword
 ; negative number, -1 to start. Clears the event flag, then sets it, and
 ; writes SS$_NORMAL in the IOSB's first word, if there is one.
 ; SS$_NONEXPR for a process that isn't there, SS$_NOMOREPROC past the
-; scan's last, SS$_BADPARAM for an item code it doesn't know.
+; scan's last, SS$_BADPARAM for an item code it doesn't know, SS$_NOPRIV
+; for a process EXE$PRCPRIV says it may not touch, which a scan skips.
         .ENTRY  EXE$GETJPI, ^M<R2, R3, R4, R5, R6, R7, R8, R9, R10, R11>
         BSBW    CHKIOSB
         BLBC    R0, 90$
@@ -77,6 +84,11 @@ VALUE:  .LONG   0                       ; a byte or word item's, made a longword
         INCL    R1
         TSTL    R5
         BEQL    10$
+        PUSHL   R1                      ; one it may not touch isn't listed
+        MOVL    R5, R1
+        BSBW    EXE$PRCPRIV
+        MOVL    (SP)+, R1
+        BLBC    R0, 10$
         MNEGL   R1, (R2)
         BRB     30$
 20$:    MOVL    12(AP), R3

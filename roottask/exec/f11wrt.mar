@@ -20,11 +20,13 @@
         $IPLDEF
         $SSDEF
         $VCBDEF
+        $PCBDEF
+        $PRVDEF
 
         .EXTERNAL F11$GL_VCB, F11$AB_DIRBLK, EXE$GQ_SYSTIME, MD$GL_BLOCKS
         .EXTERNAL FIL$READLBLK, FIL$WRITELBLK, FIL$READVBN, FIL$WRITEVBN
         .EXTERNAL FIL$READHDR, FIL$MAPVBN, FIL$EOF, FIL$SELECT, MD$CREATE
-        .EXTERNAL FIL$LOCK, FIL$UNLOCK
+        .EXTERNAL FIL$LOCK, FIL$UNLOCK, SCH$GL_CURPCB
         .EXTERNAL EXE$ALONONPAGED, EXE$DEANONPGDSIZ
 
 BLOCK = 512
@@ -1023,10 +1025,15 @@ RESHDR: MOVL    R10, R6
 ; DKB0:, the data disk, or MDA0:, the ramdisk, which is made afresh
 ; first, zeroed. The disk mustn't be mounted. SS$_WRITLCK for DKA0:,
 ; SS$_DEVMOUNT if a volume is mounted there, SS$_BADPARAM for a label too
-; long or empty, SS$_INSFMEM if there isn't the memory for the ramdisk.
-; ponytail: no items; any process may. DKB0:'s volume is 4096 blocks
-; whatever the disk's size, which one bitmap block maps.
+; long or empty, SS$_INSFMEM if there isn't the memory for the ramdisk,
+; SS$_NOPRIV without VOLPRO.
+; ponytail: no items. VOLPRO for every volume until volumes have owners,
+; whose own INITIALIZE needs none. DKB0:'s volume is 4096 blocks whatever
+; the disk's size, which one bitmap block maps.
         .ENTRY  EXE$INIT_VOL, ^M<R2, R3, R4, R5, R6, R7, R8, R9, R10, R11>
+        MOVL    SCH$GL_CURPCB, R1
+        MOVL    #SS$_NOPRIV, R0
+        IFNPRIV VOLPRO, 90$, R1
         MOVL    4(AP), R6               ; devnam
         IFNORD  #8, (R6), 85$
         MOVZWL  (R6), R7

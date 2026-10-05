@@ -49,6 +49,7 @@ SS$_WRITLCK = 604                       ; the device is write locked
 SS$_IVMODE = 852
 SS$_MBTOOSML = 412                      ; the message is longer than the mailbox takes
 SS$_OPCDEC = 1084
+SS$_NOTALLPRIV = 1665                   ; success: $SETPRV enabled only the privileges it may
 SS$_BUFFEROVF = 1537                    ; success: the output didn't all fit in the buffer
 SS$_CONTROLY = 1553                     ; CTRL/Y stopped the image
 SS$_CONTROLC = 1617                     ; CTRL/C, which no CTRL/C AST took, stopped the image
@@ -511,6 +512,12 @@ JPI$_PRIB = ^X309                       ; the base priority
 JPI$_PID = ^X319
 JPI$_PRCNAM = ^X31C                     ; the process's name
 JPI$_IMAGNAME = ^X207                   ; the image it runs, or ran last
+JPI$_UIC = ^X304                        ; its UIC, a longword
+JPI$_MEM = ^X307                        ; the UIC's member, and its group
+JPI$_GRP = ^X308
+JPI$_PROCPRIV = ^X204                   ; its privileges, quadwords: permanent,
+JPI$_CURPRIV = ^X400                    ; current,
+JPI$_AUTHPRIV = ^X412                   ; and authorized
         .ENDM   $JPIDEF
 
 ; $SYIDEF: $GETSYI's item codes, VMS's, those vaxpunk knows.
@@ -520,6 +527,64 @@ SYI$_MAXPROCESSCNT = 4105               ; how many processes there may be
 SYI$_QUANTUM = 4137                     ; ticks of 10 ms in a quantum
 SYI$_BOOTTIME = 4286                    ; the system time at boot, a quadword
         .ENDM   $SYIDEF
+
+; $PRVDEF: the privileges, VMS's bits in a quadword mask: PRV$V_name, and
+; PRV$M_name, the mask in the first longword, for those vaxpunk checks.
+        .MACRO  $PRVDEF
+PRV$V_CMKRNL = 0                        ; $CMKRNL
+PRV$V_CMEXEC = 1                        ; $CMEXEC
+PRV$V_SYSNAM = 2                        ; LNM$SYSTEM_TABLE's names, and volumes mounted for all
+PRV$V_GRPNAM = 3
+PRV$V_ALLSPOOL = 4
+PRV$V_DETACH = 5                        ; a process with another UIC
+PRV$V_DIAGNOSE = 6
+PRV$V_LOG_IO = 7                        ; a disk's blocks by LBN
+PRV$V_GROUP = 8                         ; other processes in its UIC group
+PRV$V_NOACNT = 9
+PRV$V_PRMCEB = 10
+PRV$V_PRMMBX = 11                       ; permanent mailboxes
+PRV$V_PSWAPM = 12
+PRV$V_ALTPRI = 13
+PRV$V_SETPRV = 14                       ; any privilege, not just the authorized ones
+PRV$V_TMPMBX = 15                       ; temporary mailboxes
+PRV$V_WORLD = 16                        ; any other process
+PRV$V_MOUNT = 17
+PRV$V_OPER = 18                         ; the operator's: the network's interface
+PRV$V_EXQUOTA = 19
+PRV$V_NETMBX = 20
+PRV$V_VOLPRO = 21                       ; INITIALIZE a volume
+PRV$V_PHY_IO = 22                       ; a disk's blocks, physical or logical
+PRV$V_BUGCHK = 23
+PRV$V_PRMGBL = 24
+PRV$V_SYSGBL = 25
+PRV$V_PFNMAP = 26
+PRV$V_SHMEM = 27
+PRV$V_SYSPRV = 28
+PRV$V_BYPASS = 29
+PRV$V_SYSLCK = 30
+PRV$V_SHARE = 31
+PRV$V_UPGRADE = 32
+PRV$V_DOWNGRADE = 33
+PRV$V_GRPPRV = 34
+PRV$V_READALL = 35
+PRV$V_IMPORT = 36
+PRV$V_AUDIT = 37
+PRV$V_SECURITY = 38
+PRV$K_NUMBER = 39                       ; how many there are
+PRV$M_CMKRNL = 1
+PRV$M_CMEXEC = 2
+PRV$M_SYSNAM = 4
+PRV$M_DETACH = ^X20
+PRV$M_LOG_IO = ^X80
+PRV$M_GROUP = ^X100
+PRV$M_PRMMBX = ^X800
+PRV$M_SETPRV = ^X4000
+PRV$M_TMPMBX = ^X8000
+PRV$M_WORLD = ^X10000
+PRV$M_OPER = ^X40000
+PRV$M_VOLPRO = ^X200000
+PRV$M_PHY_IO = ^X400000
+        .ENDM   $PRVDEF
 
 ; $PRTDEF: page protection codes, the VAX's: who may read (R) and write (W),
 ; from kernel (K) out to user (U) mode.
@@ -795,6 +860,15 @@ PRT$C_UR = 15
         .EXTERNAL SYS$EXPREG
         CALLS   #4, G^SYS$EXPREG
         .ENDM   $EXPREG_S
+
+        .MACRO  $SETPRV_S ENBFLG=#0, PRVADR=0, PRMFLG=#0, PRVPRV=0
+        $PUSHADR PRVPRV
+        PUSHL   PRMFLG
+        $PUSHADR PRVADR
+        PUSHL   ENBFLG
+        .EXTERNAL SYS$SETPRV
+        CALLS   #4, G^SYS$SETPRV
+        .ENDM   $SETPRV_S
 
         .MACRO  $CMKRNL_S ROUTIN, ARGLST=0
         $PUSHADR ARGLST

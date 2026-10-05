@@ -24,7 +24,11 @@
         .LIBRARY "lib.mlb"
         .LIBRARY "starlet.mlb"
         $SSDEF
+        $PCBDEF
+        $PRVDEF
 
+        .EXTERNAL SCH$GL_CURPCB
+CMEXECOK = 32767                        ; EXE$CMODEXEC's CHMK: may the process?
 
 ; SERVICE name, nargs[, EXH]: SYS$name, which calls EXE$name with at least
 ; nargs arguments. STUB name, nargs: the same, with an EXE$name that fails.
@@ -109,7 +113,7 @@ CODE = 0
         SERVICE GETJPIW, 7
         SERVICE DCLEXH, 1
         SERVICE CANEXH, 1
-        STUB    SETPRV, 4
+        SERVICE SETPRV, 4
         SERVICE CMKRNL, 2
         ESERVICE CMEXEC, 2
 ; Event flags
@@ -179,10 +183,11 @@ CODE = 0
         SERVICE DEVICE_SCAN, 5
 
 ; EXE$CMODKRNL: the CHMK handler. R0 = the service's code, AP = its
-; argument list, the PAL's frame on the kernel stack.
+; argument list, the PAL's frame on the kernel stack. Code CMEXECOK is
+; EXE$CMODEXEC's question, answered in R0.
 EXE$CMODKRNL::
         CMPL    R0, #CODE
-        BGEQU   80$
+        BGEQU   60$
         PUSHL   R0
         MOVZBL  EXE$AB_SSARG[R0], R1
         BSBW    ARGLIST
@@ -193,16 +198,27 @@ EXE$CMODKRNL::
         REI
 70$:    ADDL2   #4, SP
         REI
+60$:    CMPL    R0, #CMEXECOK           ; may it change mode to executive?
+        BNEQ    80$
+        MOVL    SCH$GL_CURPCB, R1
+        MOVL    #SS$_NORMAL, R0
+        IFPRIV  CMEXEC, 65$, R1
+        IFPRIV  CMKRNL, 65$, R1
+        MOVL    #SS$_NOPRIV, R0
+65$:    REI
 80$:    MOVL    #SS$_ILLSER, R0
         REI
 
         .PSECT  EXEC$VECTOR
 ; EXE$CMODEXEC: the CHME handler, in executive mode. R0 = the service's
 ; code, AP = its argument list. $CMEXEC is the one executive mode service,
-; code 0.
+; code 0, for a process with CMEXEC or CMKRNL, which the PCB says: this
+; mode can't read it, so a CHMK asks the kernel, SS$_NOPRIV without.
 EXE$CMODEXEC::
         TSTL    R0
         BNEQ    80$
+        CHMK    #CMEXECOK
+        BLBC    R0, 90$
         MOVL    #2, R1
         BSBB    ARGLIST
         BLBC    R0, 90$
@@ -212,7 +228,6 @@ EXE$CMODEXEC::
         REI
 
 ; $CMEXEC routin, arglst: calls routin in executive mode with arglst.
-; ponytail: any process may; CMEXEC privilege comes with privileges.
         .ENTRY  EXE$CMEXEC, ^M<>
         CALLG   @8(AP), @4(AP)
         RET

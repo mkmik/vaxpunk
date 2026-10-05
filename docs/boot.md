@@ -110,7 +110,10 @@ The executive is the VMS kernel, written in MACRO-32.
   files are, is `SYS$SYSDEVICE:[SYSMGR]`
 - lowers IPL to 0 and creates the console's process, SYSTEM, which runs
   `DCL.EXE`, with the logical names `SYS$INPUT`, `SYS$OUTPUT` and
-  `SYS$ERROR` standing for the console, `_OPA0:`, in its process table
+  `SYS$ERROR` standing for the console, `_OPA0:`, in its process table.
+  SYSTEM inherits the swapper's UIC, `[1,4]`, and its privileges, every
+  one, which `SCH$INIT` gave it, and passes them on to the processes it
+  creates
 - then becomes the swapper (process 1). The swapper cleans up deleted
   processes and sleeps the rest of the time.
 
@@ -195,7 +198,9 @@ interpreter. It is linked high in P1, which tells the executive it is one
   `SHOW LOGICAL` alone lists them. `SHOW PROCESS` and `SHOW SYSTEM` run
   `SHOW.EXE`, which asks `$GETJPI` about this process, and `$GETSYI` how
   long the system has been up, then `$GETJPI` with a wildcard for a line
-  per process: its PID, name, state, priority and image. `HELP` runs
+  per process: its PID, name, state, priority and image. `SET
+  PROCESS/PRIVILEGES` runs `SET.EXE`, which enables or disables them with
+  `$SETPRV`, and `SHOW PROCESS/PRIVILEGES` lists them. `HELP` runs
   `HELP.EXE`, which lists the commands from DCL's command tables, and
   `LOGOUT` deletes SYSTEM.
 - `INITIALIZE MDA0: label` runs `INIT.EXE`, whose `$INIT_VOL` makes the
@@ -280,7 +285,9 @@ executive feature:
   event flags. PONG then sets a third flag of theirs, which STARTUP waits
   for.
 - **SVCTEST** checks the status that each system service returns, and
-  reads the system disk's home block by its LBN with `$QIOW`. It starts a
+  reads the system disk's home block by its LBN with `$QIOW`. It takes
+  privileges away and back with `$SETPRV`, and makes OUTSIDER, a process
+  in another UIC group it may touch only with `WORLD`. It starts a
   second SLEEPER, NAPPER, and makes it exit with `$FORCEX` before its
   image runs (status `217C`). It ends by `$FORCEX`ing itself, so that
   its exit handler, declared with `$DCLEXH`, is what prints `SVCTEST: ok`.
@@ -352,7 +359,9 @@ into it, runs `SHOW DEVICES`, tries to dismount `DKA0:`, dismounts
 `[SUB.DEEP]`, fails to delete `SUB.DIR`, runs `SHOW PROCESS` and `SHOW SYSTEM`, then runs
 CTRLC and types CTRL/C, types CTRL/Y at the prompt, stops SPIN, with a
 CTRL/C, and SLEEPER with CTRL/Y and continues them, and EDIT while it
-reads, so that DCL reads the next commands, and looks for the
+reads, so that DCL reads the next commands, takes CMKRNL and SYSNAM away
+with `SET PROCESS/PRIVILEGES`, so that `SHOW LOGICAL` and `DEFINE/SYSTEM`
+say `%SYSTEM-F-NOPRIV`, gives them back, and looks for the
 success lines in `out/serial.log`. Once QEMU is gone, `ods-image` checks
 the data disk's volume and finds the files on it, `[SUB.DEEP]`'s too.
 

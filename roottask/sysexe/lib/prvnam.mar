@@ -1,0 +1,52 @@
+        .TITLE  PRVNAM  The privileges' names
+        .IDENT  /V0.1/
+;
+; SET PROCESS/PRIVILEGES and SHOW PROCESS/PRIVILEGES name the privileges
+; as VMS does. build.rs links this module into each image, as it does
+; lib/print.mar.
+;
+        .PSECT  PRVNAM_DATA, NOEXE, NOWRT, LONG
+; PRV_NAMES: each privilege's name, .ASCIC, by its $PRVDEF bit, then a 0.
+PRV_NAMES::
+        .ASCIC  "CMKRNL"
+        .ASCIC  "CMEXEC"
+        .ASCIC  "SYSNAM"
+        .ASCIC  "GRPNAM"
+        .ASCIC  "ALLSPOOL"
+        .ASCIC  "DETACH"
+        .ASCIC  "DIAGNOSE"
+        .ASCIC  "LOG_IO"
+        .ASCIC  "GROUP"
+        .ASCIC  "NOACNT"
+        .ASCIC  "PRMCEB"
+        .ASCIC  "PRMMBX"
+        .ASCIC  "PSWAPM"
+        .ASCIC  "ALTPRI"
+        .ASCIC  "SETPRV"
+        .ASCIC  "TMPMBX"
+        .ASCIC  "WORLD"
+        .ASCIC  "MOUNT"
+        .ASCIC  "OPER"
+        .ASCIC  "EXQUOTA"
+        .ASCIC  "NETMBX"
+        .ASCIC  "VOLPRO"
+        .ASCIC  "PHY_IO"
+        .ASCIC  "BUGCHK"
+        .ASCIC  "PRMGBL"
+        .ASCIC  "SYSGBL"
+        .ASCIC  "PFNMAP"
+        .ASCIC  "SHMEM"
+        .ASCIC  "SYSPRV"
+        .ASCIC  "BYPASS"
+        .ASCIC  "SYSLCK"
+        .ASCIC  "SHARE"
+        .ASCIC  "UPGRADE"
+        .ASCIC  "DOWNGRADE"
+        .ASCIC  "GRPPRV"
+        .ASCIC  "READALL"
+        .ASCIC  "IMPORT"
+        .ASCIC  "AUDIT"
+        .ASCIC  "SECURITY"
+        .BYTE   0
+
+        .END

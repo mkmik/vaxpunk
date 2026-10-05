@@ -3,7 +3,8 @@
 ;
 ; DCL's SHOW PROCESS and SHOW SYSTEM run this, as VMS's DCL runs SHOW.EXE
 ; for them; OPTION, the parameter, says which. SHOW PROCESS
-; shows this process, what $GETJPI says of it. SHOW SYSTEM shows the
+; shows this process, what $GETJPI says of it, and with /PRIVILEGES its
+; authorized and current privileges. SHOW SYSTEM shows the
 ; version and how long the system has been up, from $GETSYI, then a line
 ; for each process, from a wildcard $GETJPI: its PID, name, state,
 ; priority and image.
@@ -16,7 +17,7 @@
         $JPIDEF
         $SYIDEF
 
-        .EXTERNAL PUT_LINE
+        .EXTERNAL PUT_LINE, PRV_NAMES
 
 ; ADDTEXT "text": appends text to LINE. Uses R0-R2.
         .MACRO  ADDTEXT TEXT, ?L
@@ -53,6 +54,15 @@ JPIITEMS:                               ; what $GETJPIW returns of a process
         .WORD   39, JPI$_IMAGNAME
         .ADDRESS IMAGE
         .ADDRESS IMGLEN
+        .WORD   4, JPI$_UIC
+        .ADDRESS UIC
+        .LONG   0
+        .WORD   8, JPI$_CURPRIV
+        .ADDRESS CURPRIV
+        .LONG   0
+        .WORD   8, JPI$_AUTHPRIV
+        .ADDRESS AUTHPRIV
+        .LONG   0
         .LONG   0
 SYIITEMS:                               ; and $GETSYIW of the system
         .WORD   8, SYI$_VERSION
@@ -66,6 +76,11 @@ PID:    .LONG   0
 STATE:  .LONG   0
 PRI:    .LONG   0
 PRIB:   .LONG   0
+UIC:    .LONG   0
+CURPRIV:
+        .BLKQ   1
+AUTHPRIV:
+        .BLKQ   1
 NAMLEN: .WORD   0
 IMGLEN: .WORD   0
 NAME:   .BLKB   15
@@ -84,7 +99,7 @@ LINE:   .BLKB   256                     ; a line being made, .ASCIC
 CHAR:   .BLKB   1
 
         .PSECT  CODE, EXE, LONG
-        .ENTRY  START, ^M<R2, R3, R4, R5>
+        .ENTRY  START, ^M<R2, R3, R4, R5, R6, R7, R8, R9>
         GETVALUE "OPTION", DESC, DESC
         BLBC    R0, SYSTEM
         CMPB    WHAT, #^A/P/
@@ -113,7 +128,25 @@ CHAR:   .BLKB   1
         MOVL    PRIB, R1
         BSBW    ADDDEC
         BSBW    SAY
-        MOVL    #SS$_NORMAL, R0
+        ADDTEXT "UIC:                ["
+        MOVZWL  UIC+2, R1
+        BSBW    ADDOCT
+        ADDTEXT ","
+        MOVZWL  UIC, R1
+        BSBW    ADDOCT
+        ADDTEXT "]"
+        BSBW    SAY
+        PRESENT "PRIVILEGES"
+        BLBC    R0, 80$
+        PRINT   ""
+        PRINT   "Authorized privileges:"
+        MOVAQ   AUTHPRIV, R6
+        BSBW    PRIVS
+        PRINT   ""
+        PRINT   "Process privileges:"
+        MOVAQ   CURPRIV, R6
+        BSBW    PRIVS
+80$:    MOVL    #SS$_NORMAL, R0
 90$:    RET
 
 ; SHOW SYSTEM
@@ -183,6 +216,48 @@ SYSTEM: $GETSYIW_S ITMLST=SYIITEMS
         BRW     10$
 80$:    MOVL    #SS$_NORMAL, R0
 90$:    RET
+
+; PRIVS: R6 = a quadword of privileges. Writes their names, six to a
+; line. Uses R0-R3, R7-R9.
+PRIVS:  MOVAB   G^PRV_NAMES, R7
+        CLRL    R8                      ; the bit
+        CLRL    R9                      ; names on the line
+10$:    TSTB    (R7)
+        BEQL    40$
+        BBC     R8, (R6), 30$
+        MULL3   #13, R9, R3
+        INCL    R3
+        BSBW    PADTO
+        MOVZBL  (R7), R2
+        ADDL3   #1, R7, R1
+        BSBW    ADD
+        INCL    R9
+        CMPL    R9, #6
+        BLSS    30$
+        BSBW    SAY
+        CLRL    R9
+30$:    MOVZBL  (R7), R0
+        ADDL2   R0, R7
+        INCL    R7
+        INCL    R8
+        BRB     10$
+40$:    TSTL    R9
+        BEQL    50$
+        BSBW    SAY
+50$:    RSB
+
+; ADDOCT: appends R1 in octal to LINE. Uses R0-R3.
+ADDOCT: CLRL    R3                      ; digits, on the stack
+10$:    EXTZV   #0, #3, R1, R0
+        ADDL2   #^A/0/, R0
+        PUSHL   R0
+        INCL    R3
+        ASHL    #-3, R1, R1
+        BNEQ    10$
+30$:    MOVL    (SP)+, R0
+        BSBW    ADDCHAR
+        SOBGTR  R3, 30$
+        RSB
 
 ; ADDNAME: appends the process's name, NAME, to LINE. Uses R0-R2.
 ADDNAME:

@@ -33,6 +33,7 @@
         $PALDEF
         $IPLDEF
         $PCBDEF
+        $PRVDEF
         $STATEDEF
         $SSDEF
         $RMSDEF
@@ -220,10 +221,9 @@ DISKIO: BLBC    R3, 10$
 ; IO$_READPBLK, which read the blocks from LBN p3 into the p2 bytes at
 ; p1, and IO$_WRITELBLK and IO$_WRITEPBLK, which write those bytes there,
 ; checks the buffer and makes the IRP, which DK$STARTIO does at once.
-; R0 = SS$_NORMAL, SS$_ILLIOFUNC, SS$_ACCVIO, SS$_BADPARAM, or
-; IOC$ALLOCIRP's failure. IPL$_SYNCH. Uses R0-R3.
-; ponytail: any process may read or write any block of any disk, mounted
-; or not; VMS asks for LOG_IO or PHY_IO.
+; The logical functions take LOG_IO or PHY_IO, the physical ones PHY_IO,
+; as on VMS. R0 = SS$_NORMAL, SS$_ILLIOFUNC, SS$_NOPRIV, SS$_ACCVIO,
+; SS$_BADPARAM, or IOC$ALLOCIRP's failure. IPL$_SYNCH. Uses R0-R3.
 DK$FDT::
         BICL3   #^C63, 12(AP), R0       ; the function, without modifiers
         MOVL    28(AP), R2
@@ -231,15 +231,21 @@ DK$FDT::
         CMPL    R3, #65535
         BGTRU   87$
         CMPL    R0, #IO$_READLBLK
-        BEQL    10$
-        CMPL    R0, #IO$_READPBLK
-        BEQL    10$
+        BEQL    3$
         CMPL    R0, #IO$_WRITELBLK
-        BEQL    20$
+        BEQL    3$
+        CMPL    R0, #IO$_READPBLK
+        BEQL    5$
         CMPL    R0, #IO$_WRITEPBLK
-        BEQL    20$
+        BEQL    5$
         MOVL    #SS$_ILLIOFUNC, R0
         RSB
+3$:     IFPRIV  LOG_IO, 7$
+5$:     IFNPRIV PHY_IO, 86$
+7$:     CMPL    R0, #IO$_READLBLK
+        BEQL    10$
+        CMPL    R0, #IO$_READPBLK
+        BNEQ    20$
 10$:    IFNOWRT R3, (R2), 85$
         BRB     30$
 20$:    IFNORD  R3, (R2), 85$
@@ -249,6 +255,8 @@ DK$FDT::
         MOVL    36(AP), IRP$L_MEDIA(R3)
         BRB     DK$STARTIO
 85$:    MOVL    #SS$_ACCVIO, R0
+        RSB
+86$:    MOVL    #SS$_NOPRIV, R0
         RSB
 87$:    MOVL    #SS$_BADPARAM, R0
 90$:    RSB
@@ -397,9 +405,13 @@ FIL$MOUNT::
 
 ; $MOUNT itmlst: mounts the Files-11 volume on the disk the item list's
 ; MNT$_DEVNAM names, DKA0:, DKB0: or MDA0:, if its label is MNT$_VOLNAM's.
-; SS$_DEVMOUNT if one is mounted there already.
-; ponytail: no other items, flags or logical name; any process may.
+; SS$_DEVMOUNT if one is mounted there already. Every process sees it,
+; as VMS's MOUNT/SYSTEM, which takes SYSNAM: SS$_NOPRIV without.
+; ponytail: no other items, flags or logical name.
         .ENTRY  EXE$MOUNT, ^M<R2, R3, R4, R5, R6, R7, R8>
+        MOVL    SCH$GL_CURPCB, R1
+        MOVL    #SS$_NOPRIV, R0
+        IFNPRIV SYSNAM, 90$, R1
         CLRQ    R6                      ; the device name: its address, length
         CLRB    LABEL
         MOVL    4(AP), R8
@@ -450,9 +462,13 @@ FIL$MOUNT::
 ; DKB0: or MDA0:: the file system forgets it, and $MOUNT may mount it
 ; again, or $INIT_VOL write another there. SS$_DEVNOTMOUNT if none is
 ; mounted there, SS$_DEVACTIVE for the system disk, DKA0:, or while a
-; process has a file on the volume open.
-; ponytail: no flags; any process may.
+; process has a file on the volume open. SYSNAM, as $MOUNT, or
+; SS$_NOPRIV.
+; ponytail: no flags.
         .ENTRY  EXE$DISMOU, ^M<R2, R3, R4>
+        MOVL    SCH$GL_CURPCB, R1
+        MOVL    #SS$_NOPRIV, R0
+        IFNPRIV SYSNAM, 90$, R1
         MOVL    4(AP), R1
         BSBW    EXE$PROBER_DSC
         BLBC    R0, 90$

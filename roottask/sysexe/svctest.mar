@@ -15,7 +15,9 @@
         $DVSDEF
         $DCDEF
         $DEVDEF
-        .EXTERNAL SYS$DCLEXH, SYS$SETPRV, SYS$EXIT, EXE$GL_RPB
+        $PRVDEF
+        $JPIDEF
+        .EXTERNAL SYS$DCLEXH, SYS$DLCEFC, SYS$EXIT, EXE$GL_RPB
 
         .PSECT  DATA, NOEXE, WRT, LONG
 OTHER_NAME:
@@ -83,6 +85,24 @@ STATE:  .LONG   0
 PRI:    .LONG   0
 CHAN:   .LONG   0
 INADR:  .LONG   ^X60000000, ^X60001FFF  ; in P1
+CMPRIVS:                                ; privileges $SETPRV takes away and gives back
+        .LONG   PRV$M_CMKRNL!PRV$M_CMEXEC, 0
+DETACHPRIV:
+        .LONG   PRV$M_DETACH, 0
+WORLDPRIVS:
+        .LONG   PRV$M_WORLD!PRV$M_GROUP, 0
+OLDPRIV:
+        .BLKQ   1
+OUTSIDER_NAME:                          ; a process in group 200
+        .ASCID  "OUTSIDER"
+OUTSIDER_PID:
+        .LONG   0
+UIC_ITEMS:                              ; $GETJPIW's: the UIC
+        .WORD   4, JPI$_UIC
+        .ADDRESS UIC
+        .LONG   0
+        .LONG   0
+UIC:    .LONG   0
 LNM_SYSTEM:
         .ASCID  "LNM$SYSTEM"
 LNM_PROCESS:
@@ -190,9 +210,8 @@ FNFEND:
 ; The dispatcher: too few arguments, and a stub.
         CALLS   #0, G^SYS$DCLEXH
         EXPECT  #SS$_INSFARG, 12
-        CLRQ    -(SP)
-        CLRQ    -(SP)
-        CALLS   #4, G^SYS$SETPRV
+        CLRL    -(SP)
+        CALLS   #1, G^SYS$DLCEFC
         EXPECT  #SS$_ILLSER, 13
 
 ; Pages.
@@ -211,6 +230,51 @@ FNFEND:
         EXPECT  #42, 17
         $CMEXEC_S ROUTIN=EXEC_ANSWER
         EXPECT  #43, 28
+
+; Privileges: without CMKRNL and CMEXEC, which $SETPRV says it had, the
+; image may change mode to neither; then it has them back.
+        $SETPRV_S ENBFLG=#0, PRVADR=CMPRIVS, PRVPRV=OLDPRIV
+        EXPECT  #SS$_NORMAL, 79
+        BLBC    OLDPRIV, 82$
+        $CMKRNL_S ROUTIN=ANSWER
+        EXPECT  #SS$_NOPRIV, 80
+        $CMEXEC_S ROUTIN=EXEC_ANSWER
+        EXPECT  #SS$_NOPRIV, 81
+        $SETPRV_S ENBFLG=#1, PRVADR=CMPRIVS
+        EXPECT  #SS$_NORMAL, 82
+        $CMKRNL_S ROUTIN=ANSWER
+        EXPECT  #42, 83
+        BRB     83$
+82$:    BRW     90$
+83$:
+; A process in group 200, OUTSIDER, takes DETACH. Below this one's
+; priority, it doesn't run before it is deleted. Without WORLD and GROUP
+; this one may not touch it; with them, it may, by its PID: its name is
+; its group's.
+        $SETPRV_S ENBFLG=#0, PRVADR=DETACHPRIV
+        EXPECT  #SS$_NORMAL, 84
+        $CREPRC_S PIDADR=OUTSIDER_PID, IMAGE=SLEEPER_IMAGE, PRCNAM=OUTSIDER_NAME, BASPRI=#1, UIC=#^X00800001
+        EXPECT  #SS$_NOPRIV, 85
+        $SETPRV_S ENBFLG=#1, PRVADR=DETACHPRIV
+        EXPECT  #SS$_NORMAL, 86
+        $CREPRC_S PIDADR=OUTSIDER_PID, IMAGE=SLEEPER_IMAGE, PRCNAM=OUTSIDER_NAME, BASPRI=#1, UIC=#^X00800001
+        EXPECT  #SS$_NORMAL, 87
+        $SETPRV_S ENBFLG=#0, PRVADR=WORLDPRIVS
+        EXPECT  #SS$_NORMAL, 88
+        $SUSPND_S PIDADR=OUTSIDER_PID
+        EXPECT  #SS$_NOPRIV, 89
+        $GETJPIW_S PIDADR=OUTSIDER_PID, ITMLST=UIC_ITEMS
+        EXPECT  #SS$_NOPRIV, 90
+        $SETPRV_S ENBFLG=#1, PRVADR=WORLDPRIVS
+        EXPECT  #SS$_NORMAL, 91
+        $SUSPND_S PRCNAM=OUTSIDER_NAME
+        EXPECT  #SS$_NONEXPR, 92
+        $GETJPIW_S PIDADR=OUTSIDER_PID, ITMLST=UIC_ITEMS
+        EXPECT  #SS$_NORMAL, 93
+        CMPL    UIC, #^X00800001
+        BNEQ    82$
+        $DELPRC_S PIDADR=OUTSIDER_PID
+        EXPECT  #SS$_NORMAL, 94
 
 ; User mode may read and write its own data, read but not write the
 ; system service vector, and do neither to the executive's data. The

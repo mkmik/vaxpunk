@@ -24,6 +24,7 @@
         $IPLDEF
         $PALDEF
         $PCBDEF
+        $PRVDEF
         $PSLDEF
         $STATEDEF
         $HWPCBDEF
@@ -132,8 +133,10 @@ EXE$PROBER_DSC::
 
 ; EXE$NAMPID: R4 = the current PCB, R2 = a pidadr argument and R3 = a
 ; prcnam argument, each an address or 0. Finds the process they name: by
-; PID if pidadr points at one that isn't 0, else by name if there is
-; prcnam, else the current process. R1 = its PCB, R0 = SS$_NORMAL,
+; PID if pidadr points at one that isn't 0, else by name among those in
+; the current process's UIC group if there is prcnam, as names are a
+; group's, else the current process. R1 = its PCB, R0 = SS$_NORMAL,
+; SS$_NOPRIV if EXE$PRCPRIV says the current process may not touch it,
 ; SS$_NONEXPR, SS$_IVLOGNAM, or SS$_ACCVIO if the caller can't write
 ; pidadr or read prcnam. Its PID goes to pidadr. IPL$_SYNCH.
 EXE$NAMPID::
@@ -150,7 +153,7 @@ EXE$NAMPID::
         BEQL    80$
         CMPL    PCB$L_PID(R1), R0
         BNEQ    80$
-        BRB     70$
+        BRB     60$
 20$:    TSTL    R3
         BNEQ    30$
         MOVL    R4, R1
@@ -165,6 +168,8 @@ EXE$NAMPID::
         MOVL    #SCH$C_MAXPIX-1, R5
 40$:    MOVL    SCH$GL_PCBVEC[R5], R1
         BEQL    50$
+        CMPW    PCB$L_UIC+2(R1), PCB$L_UIC+2(R4)
+        BNEQ    50$
         MOVAB   PCB$T_LNAME(R1), R0
         PUSHL   R1
         BSBW    EXE$MATCHNAME
@@ -172,10 +177,11 @@ EXE$NAMPID::
         BLBS    R0, 60$
 50$:    SOBGTR  R5, 40$
         BRB     80$
-60$:    TSTL    R2
-        BEQL    70$
+60$:    BSBW    EXE$PRCPRIV
+        BLBC    R0, 75$
+        TSTL    R2
+        BEQL    75$
         MOVL    PCB$L_PID(R1), (R2)
-70$:    MOVL    #SS$_NORMAL, R0
 75$:    POPR    #^M<R5, R6, R7>
         RSB
 80$:    MOVL    #SS$_NONEXPR, R0
@@ -185,6 +191,21 @@ EXE$NAMPID::
 90$:    MOVL    #SS$_ACCVIO, R0
         BRB     75$
 
+; EXE$PRCPRIV: R4 = the current PCB, R1 = a PCB. R0 = SS$_NORMAL if the
+; current process may touch that process, as VMS's rules say: one with
+; its UIC, itself included, with GROUP one in its UIC group, with WORLD
+; any; else SS$_NOPRIV. Keeps every other register.
+EXE$PRCPRIV::
+        MOVL    #SS$_NORMAL, R0
+        CMPL    PCB$L_UIC(R1), PCB$L_UIC(R4)
+        BEQL    90$
+        IFPRIV  WORLD, 90$
+        CMPW    PCB$L_UIC+2(R1), PCB$L_UIC+2(R4)
+        BNEQ    80$
+        IFPRIV  GROUP, 90$
+80$:    MOVL    #SS$_NOPRIV, R0
+90$:    RSB
+
 ; $CREPRC pidadr, image, input, output, error, prvadr, quota, prcnam,
 ; baspri, uic, mbxunt, stsflg: makes a process that runs image, called
 ; prcnam, at priority baspri, and puts its PID in pidadr. input, output
@@ -192,8 +213,13 @@ EXE$NAMPID::
 ; logical names SYS$INPUT, SYS$OUTPUT and SYS$ERROR; SS$_BADPARAM for one
 ; that is empty or longer than 255. It starts in its creator's default
 ; directory. mbxunt, if it isn't 0, is the unit number of a mailbox, MBnn,
-; which gets the process's termination message when it is deleted. The
-; other arguments are ignored: there is no privilege, quota or UIC yet.
+; which gets the process's termination message when it is deleted. Its
+; UIC is uic, or its creator's for 0; another one than the creator's takes
+; DETACH, else SS$_NOPRIV. Its privileges, current and permanent, are those
+; in the quadword prvadr points at that its creator has, or its creator's
+; for 0; a creator with SETPRV gives any, and authorizes them too.
+; Otherwise it has its creator's authorized privileges. quota and stsflg
+; are ignored.
         .ENTRY  EXE$CREPRC, ^M<R2, R3, R4, R5, R6, R7, R8, R9, R10>
         MOVL    SCH$GL_CURPCB, R4
         MOVL    4(AP), R1
@@ -211,7 +237,15 @@ EXE$NAMPID::
 5$:     SUBL3   AP, R2, R0
         CMPL    R0, #24
         BLSSU   4$
-        MOVL    8(AP), R6               ; the image's descriptor
+        MOVL    24(AP), R1              ; prvadr
+        BEQL    6$
+        IFNORD  #8, (R1), 95$
+6$:     MOVL    40(AP), R0              ; uic: another one takes DETACH
+        BEQL    7$
+        CMPL    R0, PCB$L_UIC(R4)
+        BEQL    7$
+        IFNPRIV DETACH, 96$
+7$:     MOVL    8(AP), R6               ; the image's descriptor
         BEQL    85$
         MOVL    R6, R1
         BSBW    EXE$PROBER_DSC
@@ -251,6 +285,24 @@ EXE$NAMPID::
 20$:    BICL3   #^C31, 36(AP), R0
         MOVB    R0, PCB$B_PRI(R8)
         MOVB    R0, PCB$B_PRIB(R8)
+        MOVL    40(AP), PCB$L_UIC(R8)
+        BNEQ    21$
+        MOVL    PCB$L_UIC(R4), PCB$L_UIC(R8)
+21$:    MOVQ    PCB$Q_AUTHPRIV(R4), PCB$Q_AUTHPRIV(R8)
+        MOVQ    PCB$Q_PRIV(R4), R0
+        MOVL    24(AP), R2
+        BEQL    23$
+        MOVQ    (R2), R0                ; prvadr's,
+        IFPRIV  SETPRV, 22$
+        MCOML   PCB$Q_PRIV(R4), R5      ; those of them its creator has
+        BICL2   R5, R0
+        MCOML   PCB$Q_PRIV+4(R4), R5
+        BICL2   R5, R1
+        BRB     23$
+22$:    BISL2   R0, PCB$Q_AUTHPRIV(R8)  ; or all of them, authorized too
+        BISL2   R1, PCB$Q_AUTHPRIV+4(R8)
+23$:    MOVQ    R0, PCB$Q_PRIV(R8)
+        MOVQ    R0, PCB$Q_PROCPRIV(R8)
         MNEGW   SGN$GW_QUANTUM, PCB$W_QUANT(R8)
         MOVL    PCB$L_PID(R4), PCB$L_OWNER(R8)
         MOVZWL  44(AP), PCB$L_TMBU(R8)
@@ -287,11 +339,13 @@ EXE$NAMPID::
         DSBINT  #IPL$_SYNCH
         TSTB    PCB$T_LNAME(R8)
         BEQL    30$
-        PUSHL   R2
+        PUSHR   #^M<R2, R4>
         CLRL    R2
+        MOVL    R8, R4                  ; its name in its own group
         BSBW    EXE$NAMPID
-        MOVL    (SP)+, R2
-        BLBS    R0, 75$
+        POPR    #^M<R2, R4>
+        CMPL    R0, #SS$_NONEXPR
+        BNEQ    75$
 30$:    MOVL    #2, R5
 35$:    TSTL    SCH$GL_PCBVEC[R5]
         BEQL    40$
@@ -334,6 +388,8 @@ EXE$NAMPID::
 87$:    MOVL    #SS$_BADPARAM, R0
         RET
 95$:    MOVL    #SS$_ACCVIO, R0
+        RET
+96$:    MOVL    #SS$_NOPRIV, R0
         RET
 
 ; PPNAMES: R8 = a new PCB, AP = $CREPRC's arguments, checked. Makes its
@@ -691,8 +747,9 @@ EXHLIST:
 ; P0, its common event flag clusters, its user mode exit handlers, and its
 ; channels and files, all but the command interpreter's, PCB$L_CLICHANS
 ; and PCB$L_CLIFILES, whose I/O is cancelled first, while P0 is still
-; there. An image CTRL/Y stopped can't be continued any more, nor AST
-; routines that ran.
+; there, and the privileges it enabled: the current ones are the
+; permanent ones again. An image CTRL/Y stopped can't be continued any
+; more, nor AST routines that ran.
 ; Uses R0-R3.
 ; ponytail: what the command interpreter holds too, but its channels; it
 ; uses nothing else yet.
@@ -713,6 +770,7 @@ EXE$IMGRUNDOWN::
         ENBINT
         BSBW    SCH$DACEFC_ALL
         CLRL    PCB$AL_EXH+<4*PSL$C_USER>(R4)
+        MOVQ    PCB$Q_PROCPRIV(R4), PCB$Q_PRIV(R4)
         MCOML   PCB$L_CLICHANS(R4), R0
         BICL2   R0, PCB$L_CHANS(R4)
         MOVL    PCB$L_CLIFILES(R4), R0
@@ -1021,7 +1079,8 @@ SUSPEND:
 85$:    MOVL    #SS$_ACCVIO, R0
         BRB     90$
 
-; $SETPRN prcnam: renames the current process.
+; $SETPRN prcnam: renames the current process. SS$_DUPLNAM if another in
+; its UIC group has that name.
         .ENTRY  EXE$SETPRN, ^M<R2, R3, R4, R5, R6, R7>
         MOVL    SCH$GL_CURPCB, R4
         MOVL    4(AP), R3
@@ -1035,7 +1094,8 @@ SUSPEND:
         DSBINT  #IPL$_SYNCH
         CLRL    R2
         BSBW    EXE$NAMPID
-        BLBC    R0, 10$
+        CMPL    R0, #SS$_NONEXPR
+        BEQL    10$
         CMPL    R1, R4
         BNEQ    80$
 10$:    MOVAB   PCB$T_LNAME(R4), R0
@@ -1051,9 +1111,62 @@ SUSPEND:
 95$:    RET
 
 ; $CMKRNL routin, arglst: calls routin in kernel mode with arglst.
-; ponytail: any process may; CMKRNL privilege comes with privileges.
+; SS$_NOPRIV without CMKRNL.
         .ENTRY  EXE$CMKRNL, ^M<>
+        MOVL    SCH$GL_CURPCB, R0
+        IFNPRIV CMKRNL, 90$, R0
         CALLG   @8(AP), @4(AP)
+        RET
+90$:    MOVL    #SS$_NOPRIV, R0
+        RET
+
+; $SETPRV enbflg, prvadr, prmflg, prvprv: enables the privileges in the
+; quadword prvadr points at, for enbflg 1, or disables them, for 0: the
+; current ones, which go back to the permanent ones when the image exits,
+; and the permanent ones too for prmflg 1. Without SETPRV it enables only
+; those authorized, and says SS$_NOTALLPRIV if that is fewer. prvprv, if
+; given, gets the privileges there were: the permanent ones for prmflg 1,
+; else the current ones.
+        .ENTRY  EXE$SETPRV, ^M<R2, R3, R4, R5>
+        MOVL    SCH$GL_CURPCB, R4
+        CLRQ    R2                      ; the mask
+        MOVL    8(AP), R1
+        BEQL    5$
+        IFNORD  #8, (R1), 95$
+        MOVQ    (R1), R2
+5$:     MOVL    16(AP), R0
+        BEQL    10$
+        IFNOWRT #8, (R0), 95$
+        MOVAQ   PCB$Q_PRIV(R4), R1
+        BLBC    12(AP), 7$
+        MOVAQ   PCB$Q_PROCPRIV(R4), R1
+7$:     MOVQ    (R1), (R0)
+10$:    MOVL    #SS$_NORMAL, R5
+        BLBS    4(AP), 20$
+        BICL2   R2, PCB$Q_PRIV(R4)
+        BICL2   R3, PCB$Q_PRIV+4(R4)
+        BLBC    12(AP), 90$
+        BICL2   R2, PCB$Q_PROCPRIV(R4)
+        BICL2   R3, PCB$Q_PROCPRIV+4(R4)
+        BRB     90$
+20$:    IFPRIV  SETPRV, 30$
+        MCOML   PCB$Q_AUTHPRIV(R4), R0  ; those not authorized
+        MCOML   PCB$Q_AUTHPRIV+4(R4), R1
+        BITL    R0, R2
+        BNEQ    25$
+        BITL    R1, R3
+        BEQL    30$
+25$:    MOVL    #SS$_NOTALLPRIV, R5
+        BICL2   R0, R2
+        BICL2   R1, R3
+30$:    BISL2   R2, PCB$Q_PRIV(R4)
+        BISL2   R3, PCB$Q_PRIV+4(R4)
+        BLBC    12(AP), 90$
+        BISL2   R2, PCB$Q_PROCPRIV(R4)
+        BISL2   R3, PCB$Q_PROCPRIV+4(R4)
+90$:    MOVL    R5, R0
+        RET
+95$:    MOVL    #SS$_ACCVIO, R0
         RET
 
 ; $IMGACT image, cmdlin: runs image in the current process, as a command

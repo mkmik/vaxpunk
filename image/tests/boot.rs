@@ -30,7 +30,10 @@
 //! NOCONTROL=Y, CTRL/Y and CTRL/C at the prompt do nothing, and after SET
 //! CONTROL CTRL/Y interrupts again. STOP/IDENTIFICATION deletes
 //! TCPIP$TELNET, by the PID SHOW SYSTEM listed, and then fails, as does a
-//! PID that isn't hex. All a
+//! PID that isn't hex. SET PROCESS/PRIVILEGES takes CMKRNL and SYSNAM
+//! away, which SHOW PROCESS/PRIVILEGES shows, so SHOW LOGICAL, which needs
+//! $CMKRNL, and DEFINE/SYSTEM fail with NOPRIV, a privilege it doesn't
+//! know fails, and ALL gives them back. All a
 //! step at a time: each waits until a line has come so many times, the echo
 //! of what it typed before included, and types.
 //! STARTUP's SLEEPER and SVCTEST's NAPPER say they hibernate before SLEEPER
@@ -140,6 +143,12 @@ const LINES: &[&str] = &[
     "Y is on",
     "$STATUS == 268437736   Hex = 100008E8",
     "%DCL-W-IVCHAR, invalid numeric value - check for invalid digits",
+    "UIC:                [1,4]",
+    "Authorized privileges:\n CMKRNL       CMEXEC       SYSNAM       GRPNAM",
+    "Process privileges:\n CMEXEC       GRPNAM       ALLSPOOL     DETACH",
+    "%SYSTEM-F-NOPRIV, insufficient privilege or object protection violation",
+    " \\XYZZY\\",
+    "   \"QQQ\" = \"RRR\" (LNM$SYSTEM_TABLE)",
 ];
 
 /// What it must not: the lines of DCLTEST.COM's a failure skips or reaches,
@@ -249,6 +258,12 @@ fn boot() {
             type_(&format!("STOP/IDENTIFICATION={pid}\rSTOP/ID={pid}\r"));
             type_("SHOW SYMBOL $STATUS\rSTOP/ID=XYZ\r");
             typed = 7;
+        } else if typed == 7 && text.contains("%DCL-W-IVCHAR") {
+            type_("SET PROCESS/PRIVILEGES=(NOCMKRNL,NOSYSNAM)\rSHOW PROCESS/PRIVILEGES\r");
+            type_("SHOW LOGICAL\rDEFINE/SYSTEM/NOLOG QQQ RRR\rSET PROCESS/PRIV=XYZZY\r");
+            type_("SET PROCESS/PRIVILEGES=ALL\rDEFINE/SYSTEM/NOLOG QQQ RRR\r");
+            type_("SHOW LOGICAL/SYSTEM QQQ\r");
+            typed = 8;
         }
         // The rest once EDIT is done: the type-ahead buffer holds 255 characters.
         if typed == 1 && text.contains("String was not found") {
@@ -321,6 +336,11 @@ fn boot() {
     assert!(missing.is_empty(), "no {missing:?}");
     let present: Vec<_> = ABSENT.iter().filter(|l| text.contains(*l)).collect();
     assert!(present.is_empty(), "{present:?}");
+    assert_eq!(
+        text.matches("%SYSTEM-F-NOPRIV").count(),
+        2,
+        "SHOW LOGICAL and DEFINE/SYSTEM without CMKRNL and SYSNAM"
+    );
     assert_eq!(
         text.matches("*INTERRUPT*").count(),
         9,

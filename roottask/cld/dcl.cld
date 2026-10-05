@@ -56,6 +56,7 @@ define type SET_OPTIONS
 	keyword DEFAULT, syntax=SET_DEFAULT
 	keyword HOST, syntax=SET_HOST
 	keyword INTERFACE, syntax=SET_INTERFACE
+	keyword PROCESS, syntax=SET_PROCESS
 	keyword ROUTE, syntax=SET_ROUTE
 
 ! SET [NO]CONTROL[=Y]: CTRL/Y, and CTRL/C no image takes, on or off.
@@ -86,6 +87,13 @@ define syntax SET_INTERFACE
 	parameter P1, label=OPTION, value(required, type=SET_OPTIONS)
 	parameter P2, label=ADDRESS, prompt="Address", value(required)
 	parameter P3, label=MASK, prompt="Mask", value(required)
+
+! SET PROCESS/PRIVILEGES=(priv[,...]): SET.EXE.
+define syntax SET_PROCESS
+	image SET
+	parameter P1, label=OPTION, value(required, type=SET_OPTIONS)
+	qualifier PRIVILEGES, value(required, list)
+	disallow not PRIVILEGES
 
 ! SET ROUTE /DEFAULT /GATEWAY=address: the default route, the only one;
 ! /PERMANENT saves it instead.
@@ -142,9 +150,10 @@ define syntax SHOW_SYMBOL
 	disallow GLOBAL and LOCAL
 	disallow P2 and ALL
 
-! SHOW PROCESS and SHOW SYSTEM: SHOW.EXE.
+! SHOW PROCESS [/PRIVILEGES] and SHOW SYSTEM: SHOW.EXE.
 define syntax SHOW_IMAGE
 	image SHOW
+	qualifier PRIVILEGES
 
 define syntax SHOW_INTERFACE
 	image TCPIP

@@ -31,8 +31,10 @@
 ;   SHOW DEVICES [name]
 ;               lists the devices, those whose names start with name;
 ;               /MOUNTED those with a volume mounted
-;   SHOW PROCESS, SHOW SYSTEM
+;   SHOW PROCESS[/PRIVILEGES], SHOW SYSTEM
 ;               run SHOW.EXE
+;   SET PROCESS/PRIVILEGES=(priv[,...])
+;               runs SET.EXE
 ;   SET INTERFACE address mask, SHOW INTERFACE,
 ;   SET CONFIGURATION INTERFACE address mask,
 ;   SET ROUTE /DEFAULT /GATEWAY=address [/PERMANENT]
@@ -1187,6 +1189,7 @@ SHOW:   MOVAB   V_OPTION, R1            ; the keyword, all of it
 
 ; LIST: lists the logical names of the process's table, then the system's,
 ; those TABMASK has, as VMS's SHOW LOGICAL does, under each table's name.
+; It takes CMKRNL, for GETLNM: SS$_NOPRIV without.
 LIST:   CLRL    R6                      ; the table: 0 the process's, 1 the system's
 10$:    BBS     R6, TABMASK, 12$
         BRW     30$
@@ -1204,8 +1207,11 @@ LIST:   CLRL    R6                      ; the table: 0 the process's, 1 the syst
 20$:    MOVL    R6, LNMARGS+4
         MOVL    R7, LNMARGS+8
         $CMKRNL_S ROUTIN=GETLNM, ARGLST=LNMARGS
-        BLBC    R0, 30$
-        ADDTEXT "  "
+        BLBS    R0, 25$
+        CMPL    R0, #SS$_NOLOGNAM
+        BEQL    30$
+        BRW     DONE
+25$:    ADDTEXT "  "
         BSBW    PAIR
         BSBW    SAY
         INCL    R7

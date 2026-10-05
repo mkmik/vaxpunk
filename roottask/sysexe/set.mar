@@ -1,0 +1,120 @@
+        .TITLE  SET     Sets the process's privileges
+        .IDENT  /V0.1/
+;
+; DCL's SET PROCESS/PRIVILEGES=(priv[,...]) runs this, as VMS's DCL runs
+; SET.EXE. Each priv enables that privilege, NOpriv disables it, and ALL
+; and NOALL every one, with $SETPRV, permanently, so they stay when the
+; image exits. One the process isn't authorized for stays off, with
+; %SYSTEM-S-NOTALLPRIV; a name it doesn't know is %DCL-W-IVKEYW, and
+; ends the list there.
+;
+        .LIBRARY "starlet.mlb"
+        .LIBRARY "sysexe.mlb"
+        $SSDEF
+        $CLIMSGDEF
+
+        .EXTERNAL PRV_NAMES, LIB$SIGNAL, PUT_LINE
+
+INHIB = ^X10000000                      ; STS$M_INHIB_MSG
+
+        .PSECT  DATA, NOEXE, WRT, LONG
+DESC:   .LONG   31                      ; a value of PRIVILEGES
+        .ADDRESS NAME
+LEN:    .WORD   0
+NAME:   .BLKB   31
+ALLNAM: .ASCIC  "ALL"
+ALL:    .LONG   ^XFFFFFFFF, ^X7F        ; every privilege
+MASK:   .BLKQ   1                       ; $SETPRV's
+STATUS: .LONG   SS$_NORMAL              ; or SS$_NOTALLPRIV once one stays off
+LINE:   .BLKB   40                      ; " \name\", .ASCIC
+
+        .PSECT  CODE, EXE, LONG
+        .ENTRY  START, ^M<R2, R3, R4, R5, R6>
+10$:    GETVALUE "PRIVILEGES", DESC, LEN
+        BLBC    R0, 60$                 ; past the last
+        MOVAB   NAME, R5
+        MOVZWL  LEN, R6
+        MOVL    #1, R4                  ; enable
+        BSBW    LOOKUP
+        BLBS    R0, 40$
+        CMPL    R6, #2                  ; NOpriv: disable
+        BLEQ    80$
+        CMPW    (R5), #^A/NO/
+        BNEQ    80$
+        CLRL    R4
+        ADDL2   #2, R5
+        SUBL2   #2, R6
+        BSBW    LOOKUP
+        BLBC    R0, 80$
+40$:    $SETPRV_S ENBFLG=R4, PRVADR=MASK, PRMFLG=#1
+        BLBC    R0, 90$
+        CMPL    R0, #SS$_NOTALLPRIV
+        BNEQ    10$
+        MOVL    R0, STATUS
+        BRB     10$
+60$:    CMPL    STATUS, #SS$_NOTALLPRIV
+        BNEQ    70$
+        PUSHL   STATUS
+        CALLS   #1, G^LIB$SIGNAL
+70$:    MOVL    STATUS, R0
+        RET
+80$:    PRINT   "%DCL-W-IVKEYW, unrecognized keyword - check validity and spelling"
+        MOVAB   LINE+1, R1
+        MOVW    #^A/ \/, (R1)+
+        MOVZWL  LEN, R0
+        MOVC3   R0, NAME, (R1)
+        MOVB    #^A/\/, (R3)
+        MOVAB   LINE, R1
+        SUBL3   R1, R3, R0              ; up to the backslash
+        MOVB    R0, LINE
+        PUSHAB  LINE
+        CALLS   #1, G^PUT_LINE
+        MOVL    #<CLI$_IVKEYW!INHIB>, R0
+90$:    RET
+
+; LOOKUP: R5 = a privilege's name, R6 = its length. Puts its bit in MASK,
+; or every bit for ALL. R0 = 1, or 0 for a name it doesn't know. Uses
+; R0-R3.
+LOOKUP: CLRQ    MASK
+        MOVAB   ALLNAM, R1
+        BSBB    MATCH
+        BLBC    R0, 5$
+        MOVQ    ALL, MASK
+        RSB
+5$:     MOVAB   G^PRV_NAMES, R1
+        CLRL    R2                      ; its bit
+10$:    TSTB    (R1)
+        BEQL    80$
+        PUSHL   R1
+        BSBB    MATCH
+        MOVL    (SP)+, R1
+        BLBS    R0, 20$
+        MOVZBL  (R1), R0
+        ADDL2   R0, R1
+        INCL    R1
+        INCL    R2
+        BRB     10$
+20$:    BBSS    R2, MASK, 30$
+30$:    MOVL    #1, R0
+        RSB
+80$:    CLRL    R0
+        RSB
+
+; MATCH: R1 = a .ASCIC name, R5 = a value, R6 = its length. R0 = 1 if
+; they are the same, else 0. Uses R0, R1 and R3.
+MATCH:  MOVZBL  (R1)+, R0
+        CMPL    R0, R6
+        BNEQ    80$
+        CLRL    R3
+10$:    CMPL    R3, R6
+        BEQL    70$
+        CMPB    (R1)[R3], (R5)[R3]
+        BNEQ    80$
+        INCL    R3
+        BRB     10$
+70$:    MOVL    #1, R0
+        RSB
+80$:    CLRL    R0
+        RSB
+
+        .END    START
