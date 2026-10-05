@@ -1,8 +1,8 @@
 //! cargo test -p boot --test network: TCP/IP (docs/prd/0002-networking.md),
 //! in two parts, one after the other.
 //!
-//! One vaxpunk on QEMU's user network: SET INTERFACE and SHOW INTERFACE,
-//! then TCPTEST, which connects to a server here, through QEMU's guestfwd,
+//! One vaxpunk on QEMU's user network: SET INTERFACE, SET ROUTE, one
+//! without /DEFAULT that fails, and SHOW INTERFACE, then TCPTEST, which connects to a server here, through QEMU's guestfwd,
 //! and accepts a connection from a client here, through hostfwd, and
 //! SET HOST to itself, SHOW SYSTEM there, and LOGOUT.
 //!
@@ -10,8 +10,10 @@
 //! made here holding the configuration SET CONFIGURATION INTERFACE saves,
 //! which TCPIP.EXE applies at boot: B logs in to A with SET HOST, SHOW
 //! SYSTEM lists A's processes, and LOGOUT comes back to B. Then B saves
-//! another address, which SHOW INTERFACE doesn't show, since it is for the
-//! next boot, and which is on its data disk once it is down.
+//! another address, keeping the saved gateway, and another gateway with
+//! SET ROUTE /PERMANENT, keeping that address, which SHOW INTERFACE doesn't
+//! show, since they are for the next boot, and which are on its data disk
+//! once it is down.
 
 use std::fs;
 use std::io::{Read, Write};
@@ -160,7 +162,9 @@ fn network() {
             ("NETDEV", netdev),
         ],
     );
-    vax.command("SET INTERFACE 10.0.2.15 255.255.255.0 10.0.2.2");
+    vax.command("SET INTERFACE 10.0.2.15 255.255.255.0");
+    vax.command("SET ROUTE /DEFAULT /GATEWAY=10.0.2.2");
+    vax.command("SET ROUTE /GATEWAY=10.0.2.3");
     vax.command("SHOW INTERFACE");
     let client = thread::spawn(move || {
         for _ in 0..100 {
@@ -186,6 +190,7 @@ fn network() {
     assert_eq!(client.join().unwrap(), "ping from the host\r\n");
     for line in [
         " BGA0      10.0.2.15        255.255.255.0    10.0.2.2         up",
+        "illegal combination of command elements",
         "TCPTEST: connected to 10.0.2.100 port 7777",
         "hello from the host",
         "TCPTEST: accepted a connection from address 0202000A",
@@ -229,7 +234,8 @@ fn network() {
     b.command("SET HOST 10.0.0.1");
     b.command("SHOW SYSTEM");
     b.command("LOGOUT");
-    b.command("SET CONFIGURATION INTERFACE 10.0.0.3 255.255.255.0 10.0.0.1");
+    b.command("SET CONFIGURATION INTERFACE 10.0.0.3 255.255.255.0");
+    b.command("SET ROUTE /DEFAULT /GATEWAY=10.0.0.9 /PERMANENT");
     b.command("SHOW INTERFACE");
     let (a, b) = (a.stop(), b.stop());
     print!("{a}{b}");
@@ -250,6 +256,6 @@ fn network() {
         .unwrap();
     assert_eq!(
         String::from_utf8_lossy(&saved),
-        "INTERFACE 10.0.0.3 255.255.255.0 10.0.0.1\n"
+        "INTERFACE 10.0.0.3 255.255.255.0 10.0.0.9\n"
     );
 }
