@@ -30,3 +30,12 @@ fn general() {
     assert!(far(&lines("JSB", "G^EXE$OUTCHAR"), "EXE$OUTCHAR", "br"));
     assert!(far(&lines("JMP", "G^EXE$DELSELF"), "EXE$DELSELF", "br"));
 }
+
+/// `.ENTRY` keeps its mask in the frame, at 40, where `$UNWIND` reads which
+/// registers the frame saved.
+#[test]
+fn entry_mask() {
+    let code = lines(".ENTRY", "START, 12");
+    assert!(code.contains(&"mov x14, #12".to_string()));
+    assert!(code.contains(&"stp x28, x14, [sp, #32]".to_string()));
+}

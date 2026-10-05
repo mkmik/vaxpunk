@@ -131,12 +131,15 @@ impl Macro32 {
         // Bits 12 and up enable arithmetic traps, which ARM64 lacks.
         let saved: Vec<u8> = (0..12).filter(|r| mask & 1 << r != 0).collect();
         let size = frame_size(&saved);
+        // The mask of what it saved, for $UNWIND, which RETs from any frame.
+        let saved_mask = mask & 0xfff;
         let mut out = vec![
             format!("{name}::"),
             format!("\tsub sp, sp, #{size}"),
             "\tstp xzr, x12, [sp]".into(),
             "\tstp x29, x30, [sp, #16]".into(),
-            "\tstr x28, [sp, #32]".into(),
+            format!("\tmov x14, #{saved_mask}"),
+            "\tstp x28, x14, [sp, #32]".into(),
         ];
         out.extend(saves(&saved, "stp", "str"));
         out.extend([
@@ -150,8 +153,8 @@ impl Macro32 {
     }
 }
 
-/// The call frame: condition handler, AP, FP, LR, the caller's SP, then
-/// the saved registers, 16-byte aligned.
+/// The call frame: condition handler, AP, FP, LR, the caller's SP, the
+/// entry mask, then the saved registers, 16-byte aligned.
 fn frame_size(saved: &[u8]) -> usize {
     (48 + 8 * saved.len()).next_multiple_of(16)
 }

@@ -1,0 +1,187 @@
+        .TITLE  CHFTEST Checks condition handlers
+        .IDENT  /V0.1/
+;
+; LIB$SIGNAL's condition goes to the handler of the routine that
+; signaled it, at depth 0, which continues with its own R0. One that
+; resignals lets the next frame's have it, at depth 1. An access
+; violation goes to LIB$SIG_TO_RET, which returns from the routine that
+; took it with SS$_ACCVIO and its caller's registers as they were. A
+; reserved instruction's handler continues at another PC, with every
+; register as it was but R0, from the mechanism array. $UNWIND outside a
+; handler is SS$_NOSIGNAL. A warning no handler takes is written, and
+; the image goes on; LIB$STOP's condition ends it, through its exit
+; handler, which says it is ok. A failed EXPECT exits with 2 * N.
+;
+        .LIBRARY "starlet.mlb"
+        .LIBRARY "sysexe.mlb"
+        $SSDEF
+        $CHFDEF
+        $STSDEF
+
+        .EXTERNAL LIB$ESTABLISH, LIB$REVERT, LIB$SIGNAL, LIB$STOP, LIB$SIG_TO_RET
+
+        .PSECT  DATA, NOEXE, WRT, LONG
+SEEN:   .LONG   0                       ; the handlers that ran, a hex digit each
+DEPTH:  .LONG   0                       ; the depth CONTINUE saw last
+STATUS: .LONG   0                       ; $EXIT's, for EXH
+EXHBLK: .LONG   0                       ; EXH's exit handler block
+        .ADDRESS EXH
+        .LONG   1
+        .ADDRESS STATUS
+
+        .PSECT  CODE, EXE, LONG
+        .ENTRY  START, ^M<R2, R3, R4, R5, R6, R7, R8, R9, R10, R11>
+; Signaled here, and continued.
+        PUSHAB  CONTINUE
+        CALLS   #1, G^LIB$ESTABLISH
+        EXPECT  #0, 1
+        PUSHL   #SS$_NOSIGNAL
+        CALLS   #1, G^LIB$SIGNAL
+        EXPECT  #^X600D, 2
+        MOVL    DEPTH, R0
+        EXPECT  #0, 3
+
+; Resignaled by INNER's handler, then continued here.
+        CALLS   #0, INNER
+        EXPECT  #^X600D, 4
+        MOVL    SEEN, R0
+        EXPECT  #^X121, 5
+        MOVL    DEPTH, R0
+        EXPECT  #1, 6
+
+; An access violation, which PEEK's handler makes its status.
+        MOVL    #^X66666666, R6
+        CALLS   #0, PEEK
+        EXPECT  #SS$_ACCVIO, 7
+        MOVL    R6, R0
+        EXPECT  #^X66666666, 8
+
+; A reserved instruction, continued at RESUME.
+        PUSHAB  OPCODE
+        CALLS   #1, G^LIB$ESTABLISH
+        MOVAB   CONTINUE, R1
+        CMPL    R0, R1
+        BEQL    10$
+        MOVL    #18, R0
+        RET
+10$:    MOVL    #^X11111111, R1
+        MOVL    #^X22222222, R2
+        MOVL    #^X33333333, R3
+        MOVL    #^X44444444, R4
+        MOVL    #^X55555555, R5
+        MOVL    #^X66666666, R6
+        MOVL    #^X77777777, R7
+        MOVL    #^X88888888, R8
+        MOVL    #^X99999999, R9
+        MOVL    #^XAAAAAAAA, R10
+        MOVL    #^XBBBBBBBB, R11
+        BPT                             ; an undefined instruction
+        MOVL    #20, R0
+        RET
+RESUME: CMPL    R1, #^X11111111
+        BNEQ    20$
+        CMPL    R2, #^X22222222
+        BNEQ    20$
+        CMPL    R3, #^X33333333
+        BNEQ    20$
+        CMPL    R4, #^X44444444
+        BNEQ    20$
+        CMPL    R5, #^X55555555
+        BNEQ    20$
+        CMPL    R6, #^X66666666
+        BNEQ    20$
+        CMPL    R7, #^X77777777
+        BNEQ    20$
+        CMPL    R8, #^X88888888
+        BNEQ    20$
+        CMPL    R9, #^X99999999
+        BNEQ    20$
+        CMPL    R10, #^XAAAAAAAA
+        BNEQ    20$
+        CMPL    R11, #^XBBBBBBBB
+        BEQL    30$
+20$:    MOVL    #22, R0
+        RET
+30$:    EXPECT  #^X0DEC, 12
+
+; $UNWIND, with no condition signaled.
+        $UNWIND_S
+        EXPECT  #SS$_NOSIGNAL, 13
+
+; No handler: the warning is written, and LIB$STOP's condition ends the
+; image.
+        CALLS   #0, G^LIB$REVERT
+        PUSHL   #SS$_NOSIGNAL
+        CALLS   #1, G^LIB$SIGNAL
+        $DCLEXH_S DESBLK=EXHBLK
+        EXPECT  #SS$_NORMAL, 14
+        PUSHL   #SS$_NOSIGNAL
+        CALLS   #1, G^LIB$STOP
+        MOVL    #30, R0
+        RET
+
+; INNER: signals SS$_NOSIGNAL, which its handler, RESIGNAL, resignals.
+        .ENTRY  INNER, ^M<>
+        MOVAB   RESIGNAL, (FP)
+        PUSHL   #SS$_NOSIGNAL
+        CALLS   #1, G^LIB$SIGNAL
+        RET
+
+; PEEK: reads S0, with LIB$SIG_TO_RET as its handler. R0 = SS$_ACCVIO.
+        .ENTRY  PEEK, ^M<R6>
+        MOVAB   G^LIB$SIG_TO_RET, (FP)
+        CLRL    R6
+        MOVL    @#^X40010000, R0        ; EXEC.EXE's first page
+        MOVL    #40, R0
+        RET
+
+; CONTINUE sigargs, mchargs: a handler that continues SS$_NOSIGNAL, with
+; R0 = 600D, and keeps the depth in DEPTH. It resignals anything else.
+        .ENTRY  CONTINUE, ^M<>
+        MOVL    CHF$L_SIGARGLST(AP), R0
+        CMPL    CHF$L_SIG_NAME(R0), #SS$_NOSIGNAL
+        BNEQ    90$
+        ASHL    #4, SEEN, SEEN
+        BISL2   #1, SEEN
+        MOVL    CHF$L_MCHARGLST(AP), R1
+        MOVL    CHF$L_MCH_DEPTH(R1), DEPTH
+        MOVL    #^X600D, CHF$L_MCH_SAVR0(R1)
+        MOVL    #SS$_CONTINUE, R0
+        RET
+90$:    MOVL    #SS$_RESIGNAL, R0
+        RET
+
+; RESIGNAL sigargs, mchargs: a handler that resignals.
+        .ENTRY  RESIGNAL, ^M<>
+        ASHL    #4, SEEN, SEEN
+        BISL2   #2, SEEN
+        MOVL    #SS$_RESIGNAL, R0
+        RET
+
+; OPCODE sigargs, mchargs: a handler that continues SS$_OPCDEC at RESUME,
+; with R0 = DEC.
+        .ENTRY  OPCODE, ^M<R2>
+        MOVL    CHF$L_SIGARGLST(AP), R0
+        CMPL    CHF$L_SIG_NAME(R0), #SS$_OPCDEC
+        BNEQ    90$
+        MOVL    (R0), R1                ; the count: the PC is the one before last
+        MOVAB   RESUME, R2
+        MOVL    R2, -4(R0)[R1]
+        MOVL    CHF$L_MCHARGLST(AP), R1
+        MOVL    #^X0DEC, CHF$L_MCH_SAVR0(R1)
+        MOVL    #SS$_CONTINUE, R0
+        RET
+90$:    MOVL    #SS$_RESIGNAL, R0
+        RET
+
+; EXH: the exit handler. Says ok if LIB$STOP's condition, made severe,
+; is the status, with STS$M_INHIB_MSG: its message was written.
+        .ENTRY  EXH, ^M<>
+        CMPL    @4(AP), #<SS$_NOSIGNAL!STS$K_SEVERE!STS$M_INHIB_MSG>
+        BNEQ    90$
+        PRINT   "CHFTEST: ok"
+        RET
+90$:    PRINTHEX "CHFTEST: exited with ", @4(AP)
+        RET
+
+        .END    START

@@ -55,9 +55,13 @@ const LINES: &[&str] = &[
     "FSTEST: ok",
     "ASTTEST: ok",
     "MBXTEST: ok",
-    "process SNOOP exited with status 0000000C",
-    "process USURP exited with status 0000043C",
-    "%NONAME-F-NOMSG, Message number 0000000C",
+    "%SYSTEM-W-NOSIGNAL, no signal currently active",
+    "%SYSTEM-F-NOSIGNAL, no signal currently active",
+    "CHFTEST: ok",
+    "%SYSTEM-F-ACCVIO, access violation, reason mask=00, virtual address=40010000, PC=",
+    "%SYSTEM-F-OPCDEC, opcode reserved to DIGITAL fault at PC=",
+    "process SNOOP exited with status 1000000C",
+    "process USURP exited with status 1000043C",
     " \\FOO\\",
     "PING.EXE;1          PONG.EXE;1",
     "Total of 2 files.",
@@ -132,11 +136,15 @@ const LINES: &[&str] = &[
 ];
 
 /// What it must not: the lines of DCLTEST.COM's a failure skips or reaches,
-/// and FSTEST's when two processes in the file system got in each other's way.
+/// FSTEST's when two processes in the file system got in each other's way,
+/// and CHFTEST's when a check failed.
 const ABSENT: &[&str] = &[
     "DCLTEST: not here",
     "DCLTEST: failed",
     "FSTEST: a count changed",
+    "CHFTEST: exited",
+    // RUN SNOOP's ACCVIO is written once, not again by DCL.
+    "%NONAME-F-NOMSG, Message number 0000000C",
 ];
 
 /// Once the ramdisk is done: when a line has come so many times, type.

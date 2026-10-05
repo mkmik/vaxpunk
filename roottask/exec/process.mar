@@ -612,8 +612,6 @@ IMG$ACTIVATE::
 ; reported on the console, as a command interpreter would. Either way
 ; code is the process's final status, which its termination message has.
 ; Doesn't return.
-; ponytail: a fault in an outer mode ends the image here, so its exit
-; handlers don't run, which VMS's last chance handler does with $EXIT.
         .ENTRY  EXE$IMGEXIT, ^M<>
         MOVL    SCH$GL_CURPCB, R4
         MOVL    4(AP), PCB$L_FINALSTS(R4)
