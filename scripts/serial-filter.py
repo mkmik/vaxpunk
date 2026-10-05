@@ -8,13 +8,18 @@ and mode changes and turns each move to a new row into a newline, so the
 firmware's output reads as plain appended lines and leaves the terminal's
 scrollback alone. From the banner on, the console belongs to our code and
 passes through untouched.
+
+When the root task prints %PAL-I-POWEROFF on a halt, it ends QEMU with
+SIGTERM, by the PID in the file run-qemu.sh gives it (ADR-0008).
 """
 import os
 import re
+import signal
 import sys
 
 CSI = re.compile(rb"\x1b\[([0-9;=?]*)([@-~])")
 BANNER = b"vaxpunk shim:"
+POWEROFF = b"%PAL-I-POWEROFF"
 
 row = None
 pending = tail = b""
@@ -24,6 +29,11 @@ while chunk := os.read(0, 4096):
     if passthrough:
         sys.stdout.buffer.write(data)
         sys.stdout.buffer.flush()
+        if POWEROFF in tail + data:
+            with open(sys.argv[1]) as f:
+                os.kill(int(f.read()), signal.SIGTERM)
+            data = b""  # once
+        tail = (tail + data)[-len(POWEROFF) :]
         continue
     esc = data.rfind(b"\x1b")
     if esc != -1 and not CSI.match(data, esc) and len(data) - esc < 16:

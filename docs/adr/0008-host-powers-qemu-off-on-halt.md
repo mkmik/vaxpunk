@@ -2,7 +2,7 @@
 
 Oct 2, 2026 · @Marko Mikulicic
 
-Proposed. When the system halts, the root task prints a fixed line on the
+Accepted. When the system halts, the root task prints a fixed line on the
 console, `%PAL-I-POWEROFF`, and stops. `scripts/serial-filter.py`, which
 already reads every byte of the console, sees the line and ends QEMU with
 SIGTERM. This works the same under TCG and under HVF (`--hvf`), so
@@ -41,12 +41,13 @@ seL4, at EL1, could issue it, and seL4 has no system call to do that.
 1. **The guest asks, the host acts.** On a halt, after its last message,
    the root task prints `%PAL-I-POWEROFF` on its own line and returns, as
    it would without a power-off. `poweroff()` loses its `HLT`.
-2. **`run-qemu.sh` writes QEMU's PID** to `out/qemu.pid` (`-pidfile`), and
+2. **`run-qemu.sh` writes QEMU's PID** to a temporary file (`-pidfile`),
+   one per QEMU, since the network test runs two at once, and
    drops `-semihosting-config`.
 3. **`serial-filter.py` watches for the line.** It keeps scanning after the
    shim's banner, with the same carry-over it uses for a banner split
    across two reads. When it sees `%PAL-I-POWEROFF`, it sends SIGTERM to
-   the PID in `out/qemu.pid`. QEMU takes SIGTERM as a clean shutdown.
+   the PID in that file. QEMU takes SIGTERM as a clean shutdown.
 4. **`--hvf` stays optional.** Nothing changes in how TCG runs; the halt
    just takes the same path under both.
 

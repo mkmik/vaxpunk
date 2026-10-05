@@ -41,7 +41,8 @@ cargo run -p boot
 ```
 
 The first run builds seL4 (about 10 seconds), downloads Limine and boots QEMU.
-Quit QEMU with `Ctrl-A x`. EDK2 and Limine clear the console and move the
+Quit QEMU with `Ctrl-A x`, or `LOGOUT`, which halts the system and powers
+QEMU off. EDK2 and Limine clear the console and move the
 cursor around, so `scripts/serial-filter.py` turns their output into plain
 lines before it reaches your terminal. From the shim's banner on, output
 passes through untouched: terminal handling there is the guest's business.
@@ -338,6 +339,7 @@ It boots the same kernel, which is why `kernel/qemu.env` picks GICv3 (HVF
 does not emulate GICv2). This is best effort: the kernel is built for a
 Cortex-A57 while HVF offers only `-cpu host`, and seL4 warns that the
 counter runs at 24 MHz instead of the 62.5 MHz it was built for.
+`just boot` adds `--hvf` on a Mac.
 
 `cargo run -p boot -- --uart1` serves the second serial port on telnet
 `localhost:4444` (`--uart1=PORT` picks another port, for QEMUs in parallel
