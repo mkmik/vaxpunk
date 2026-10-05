@@ -7,8 +7,8 @@
 ; section; here a table in the executive holds the file system's and
 ; RMS's. A status it has no text for is VMS's %NONAME-F-NOMSG, Message
 ; number 0000000C, with the status's severity, and SS$_MSGNOTFND.
-; ponytail: one table, no message files or $PUTMSG; add them when an image
-; brings its own facility's messages.
+; ponytail: one table, no message files; add them when an image brings
+; its own facility's messages.
 ;
         .LIBRARY "lib.mlb"
         .LIBRARY "starlet.mlb"
@@ -181,6 +181,26 @@ MESSAGES:
         .ASCIC  "SYSTEM"
         .ASCIC  "NONEXPR"
         .ASCIC  "nonexistent process"
+        .LONG   SS$_ACCVIO
+        .ASCIC  "SYSTEM"
+        .ASCIC  "ACCVIO"
+        .ASCIC  "access violation, reason mask=!XB, virtual address=!XL, PC=!XL, PSL=!XL"
+        .LONG   SS$_OPCDEC
+        .ASCIC  "SYSTEM"
+        .ASCIC  "OPCDEC"
+        .ASCIC  "opcode reserved to DIGITAL fault at PC=!XL, PSL=!XL"
+        .LONG   SS$_NOSIGNAL
+        .ASCIC  "SYSTEM"
+        .ASCIC  "NOSIGNAL"
+        .ASCIC  "no signal currently active"
+        .LONG   SS$_UNWINDING
+        .ASCIC  "SYSTEM"
+        .ASCIC  "UNWINDING"
+        .ASCIC  "unwind already in progress"
+        .LONG   SS$_INSFRAME
+        .ASCIC  "SYSTEM"
+        .ASCIC  "INSFRAME"
+        .ASCIC  "insufficient call frames to unwind"
         .LONG   SS$_NOHANDLER
         .ASCIC  "SYSTEM"
         .ASCIC  "NOHANDLER"
@@ -210,11 +230,13 @@ MESSAGES:
         .PSECT  $CODE$
 
 ; $GETMSG msgid, msglen, bufadr, flags, outadr: writes the message of the
-; status msgid in the buffer bufadr describes, as much as fits, and its
-; length in the word at msglen, if there is one. flags says what it
+; status msgid, found by its facility and number, with its own severity,
+; in the buffer bufadr describes, as much as fits, and its length in the
+; word at msglen, if there is one. flags says what it
 ; holds: bit 0 the text, bit 1 the name, bit 2 the severity, bit 3 the
 ; facility, 0 all four. Writes 0 in the longword at outadr, if there is
-; one: no FAO arguments. SS$_MSGNOTFND for a status it has no text for,
+; one: no FAO arguments; a text may have FAO directives all the same,
+; which $PUTMSG fills in. SS$_MSGNOTFND for a status it has no text for,
 ; SS$_BUFFEROVF if the message didn't fit, SS$_ACCVIO.
         .ENTRY  EXE$GETMSG, ^M<R2, R3, R4, R5, R6, R7, R8, R9>
         MOVL    12(AP), R0              ; the buffer
@@ -235,11 +257,12 @@ MESSAGES:
         BNEQ    5$
         MOVL    #15, R9
 5$:     MOVL    4(AP), R4
-        BICL3   #^XF0000000, R4, R3     ; without its control bits
+        BICL3   #^XF0000007, R4, R3     ; without its control bits and severity
         MOVAB   MESSAGES, R5
 6$:     TSTL    (R5)
         BEQL    8$
-        CMPL    (R5)+, R3
+        BICL3   #7, (R5)+, R0
+        CMPL    R0, R3
         BEQL    10$
         MOVL    #3, R1                  ; past the three strings
 7$:     MOVZBL  (R5), R0

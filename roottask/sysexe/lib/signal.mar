@@ -1,0 +1,93 @@
+        .TITLE  SIGNAL  Condition handling routines, as VMS's LIB$
+        .IDENT  /V0.1/
+;
+; LIB$SIGNAL and LIB$STOP signal a condition, LIB$ESTABLISH and
+; LIB$REVERT set the caller's condition handler, and LIB$SIG_TO_RET is a
+; handler that makes a condition its establisher's status. The executive
+; looks for the handlers, in the vector (roottask/exec/sysunwind.mar,
+; ADR-0021). build.rs links this module into each image, as it does
+; lib/print.mar.
+;
+        .LIBRARY "lib.mlb"
+        .LIBRARY "starlet.mlb"
+        $CHFDEF
+        $PALDEF
+        $STSDEF
+
+        .EXTERNAL EXE$SIGNAL, EXE$CATCHALL
+
+        .PSECT  SIGNAL_CODE, EXE, LONG
+; LIB$ESTABLISH new_handler: makes new_handler, a routine's address, the
+; condition handler of the caller's frame. R0 = the one it had, or 0.
+        .ENTRY  LIB$ESTABLISH, ^M<>
+        MOVL    16(FP), R1              ; the caller's frame
+        MOVL    (R1), R0
+        MOVL    4(AP), (R1)
+        RET
+
+; LIB$REVERT: takes the caller's frame's condition handler away. R0 = it,
+; or 0.
+        .ENTRY  LIB$REVERT, ^M<>
+        MOVL    16(FP), R1
+        MOVL    (R1), R0
+        CLRL    (R1)
+        RET
+
+; LIB$SIG_TO_RET sigargs, mchargs: a condition handler that returns from
+; the routine that established it, with the condition as its status:
+; $UNWINDs to its caller with R0 = the condition.
+        .ENTRY  LIB$SIG_TO_RET, ^M<>
+        MOVL    CHF$L_SIGARGLST(AP), R0
+        MOVL    CHF$L_MCHARGLST(AP), R1
+        MOVL    CHF$L_SIG_NAME(R0), CHF$L_MCH_SAVR0(R1)
+        $UNWIND_S
+        RET
+
+; LIB$SIGNAL condition [,arguments...]: signals condition, as VMS's: the
+; signal array is the arguments, then the PC LIB$SIGNAL returns to and
+; the PSL, and EXE$SIGNAL looks for a handler from the caller's frame,
+; depth 0, out. Returns once one continues, with R0 and R1 from the
+; mechanism array, which has the caller's R0 and R1 at first. If none
+; takes it, EXE$CATCHALL writes its message, and exits if it is severe,
+; or returns.
+        .ENTRY  LIB$SIGNAL, ^M<R2, R3, R4, R5, R6>
+        CLRL    R2
+        BRB     SIGNAL
+
+; LIB$STOP condition [,arguments...]: signals condition as LIB$SIGNAL
+; does, made severe, and then, unless a handler unwinds, EXE$CATCHALL
+; writes its message and exits. Doesn't return.
+        .ENTRY  LIB$STOP, ^M<R2, R3, R4, R5, R6>
+        MOVL    #1, R2
+; SIGNAL: R2 = 1 for LIB$STOP, 0 for LIB$SIGNAL, whose frames are alike.
+SIGNAL: MOVQ    R0, R5                  ; the caller's R0 and R1
+        CALL_PAL #PAL$_RD_PS
+        PUSHL   R0                      ; the PSL
+        PUSHL   24(FP)                  ; the PC
+        MOVZBL  (AP), R3
+        MOVL    R3, R1
+        BRB     20$
+10$:    PUSHL   (AP)[R1]                ; the arguments, the last first
+        DECL    R1
+20$:    TSTL    R1
+        BNEQ    10$
+        ADDL3   #2, R3, -(SP)
+        MOVL    SP, R4                  ; the signal array
+        BLBC    R2, 30$
+        INSV    #STS$K_SEVERE, #0, #3, CHF$L_SIG_NAME(R4)
+30$:    MOVQ    R5, -(SP)               ; R0 and R1
+        CLRL    -(SP)                   ; the depth
+        PUSHL   16(FP)                  ; the caller's frame
+        PUSHL   #4
+        MOVL    SP, R3                  ; the mechanism array
+        PUSHL   R3
+        PUSHL   R4
+        CALLS   #2, G^EXE$SIGNAL
+        BLBS    R2, 40$
+        BLBS    R0, 50$
+40$:    PUSHL   R4
+        CALLS   #1, G^EXE$CATCHALL
+50$:    MOVQ    CHF$L_MCH_SAVR0(R3), R0
+        RET
+
+        .END

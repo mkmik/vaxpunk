@@ -17,16 +17,14 @@
 ;
 ; Services that aren't implemented yet are stubs that return
 ; SS$_ILLSER. An access violation or a reserved instruction in an outer
-; mode ends the process.
+; mode is a condition signaled there (roottask/exec/sysunwind.mar), whose
+; code is in the vector too: modules after this one add to EXEC$VECTOR,
+; before EXEC$VECTOREND.
 ;
         .LIBRARY "lib.mlb"
         .LIBRARY "starlet.mlb"
-        $IPLDEF
-        $PCBDEF
         $SSDEF
 
-        .EXTERNAL SCH$GL_CURPCB, EXE$IMGEXIT
-        .EXTERNAL EXE$OUTZSTRING, EXE$OUTCSTRING, EXE$OUTHEX, EXE$OUTCRLF
 
 ; SERVICE name, nargs[, EXH]: SYS$name, which calls EXE$name with at least
 ; nargs arguments. STUB name, nargs: the same, with an EXE$name that fails.
@@ -198,54 +196,6 @@ EXE$CMODKRNL::
 80$:    MOVL    #SS$_ILLSER, R0
         REI
 
-; EXE$ACVIOLAT: the access violation handler. Below the PAL's frame, the
-; VAX's parameters: a mask, bit 2 for a write, and the address. An outer
-; mode took it, since one in kernel mode stops the system: the process
-; exits with SS$_ACCVIO, as one without a condition handler does.
-EXE$ACVIOLAT::
-        DSBINT  #IPL$_SYNCH             ; the console, a line at a time
-        MOVAB   ACCVIO, R1
-        JSB     G^EXE$OUTZSTRING
-        MOVL    12(SP), R1              ; past the IPL: the address
-        JSB     G^EXE$OUTHEX
-        MOVAB   ATPC, R1
-        JSB     G^EXE$OUTZSTRING
-        MOVL    20(SP), R1              ; the frame's PC
-        JSB     G^EXE$OUTHEX
-        BSBB    PROCESS
-        ENBINT
-        PUSHL   #SS$_ACCVIO
-        CALLS   #1, G^EXE$IMGEXIT
-
-; EXE$OPCDEC: the reserved instruction handler: privileged instructions
-; and PAL calls, and undefined instructions, in an outer mode. The process
-; exits with SS$_OPCDEC.
-EXE$OPCDEC::
-        DSBINT  #IPL$_SYNCH
-        MOVAB   OPCDEC, R1
-        JSB     G^EXE$OUTZSTRING
-        MOVL    4(SP), R1               ; past the IPL: the frame's PC
-        JSB     G^EXE$OUTHEX
-        BSBB    PROCESS
-        ENBINT
-        PUSHL   #SS$_OPCDEC
-        CALLS   #1, G^EXE$IMGEXIT
-
-; PROCESS: writes ", process " and the current process's name, and CR LF.
-PROCESS:
-        MOVAB   INPROC, R1
-        JSB     G^EXE$OUTZSTRING
-        MOVL    SCH$GL_CURPCB, R1
-        MOVAB   PCB$T_LNAME(R1), R1
-        JSB     G^EXE$OUTCSTRING
-        JMP     G^EXE$OUTCRLF
-
-        .PSECT  EXEC$DATA, NOEXE, WRT, QUAD
-ACCVIO: .ASCIZ  "%SYSTEM-F-ACCVIO, access violation, virtual address "
-OPCDEC: .ASCIZ  "%SYSTEM-F-OPCDEC, reserved instruction at PC "
-ATPC:   .ASCIZ  ", PC "
-INPROC: .ASCIZ  ", process "
-
         .PSECT  EXEC$VECTOR
 ; EXE$CMODEXEC: the CHME handler, in executive mode. R0 = the service's
 ; code, AP = its argument list. $CMEXEC is the one executive mode service,
@@ -288,7 +238,9 @@ ARGLIST:
 
 ; EXE$USRSTART: where a process enters user mode, with R1 = its image's
 ; transfer address: calls the image, and exits with the status it returns.
+; A clear FP ends the frames a condition's handlers are looked for in.
 EXE$USRSTART::
+        CLRL    FP
         CALLS   #0, (R1)
         PUSHL   R0
         CALLS   #1, SYS$EXIT
@@ -296,7 +248,9 @@ EXE$USRSTART::
 ; EXE$ASTDISP: where an AST routine is called, in the AST's access mode,
 ; with R1 = the routine and R0 = its parameter: calls it with the
 ; parameter, then $ASTEXIT, which goes back to what the AST interrupted.
+; Its conditions aren't looked for in the frames it interrupted.
 EXE$ASTDISP::
+        CLRL    FP
         PUSHL   R0
         CALLS   #1, (R1)
         CALLS   #0, SYS$ASTEXIT
@@ -306,11 +260,14 @@ EXE$ASTDISP::
 ; the image that ran last: calls it with the status, and deletes the
 ; process if it returns.
 EXE$CLISTART::
+        CLRL    FP
         PUSHL   R0
         CALLS   #1, (R1)
         CLRQ    -(SP)
         CALLS   #2, SYS$DELPRC
-        .ALIGN  12
+
+; The vector ends at a page, past what later modules add to EXEC$VECTOR.
+        .PSECT  EXEC$VECTOREND, EXE, NOWRT, 12
 ; EXE$VECTOREND: past the vector's last page. Not a routine.
 EXE$VECTOREND::
 

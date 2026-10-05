@@ -49,11 +49,12 @@ its code.
 | `mbdriver.mar` | mailboxes: `$CREMBX`, `$DELMBX`, their driver, and `MB$SEND`, which writes the termination message |
 | `ttdriver.mar` | the console's terminal driver: writes, queued reads and their editing, the console receive interrupt and the type-ahead buffer, CTRL/C and CTRL/Y ASTs |
 | `getdvi.mar` | `$GETDVI`, `$GETDVIW`, `$DEVICE_SCAN`: what the devices are |
-| `syssrv.mar` | the system service vector, the `CHMK` and `CHME` dispatchers, `$CMEXEC`, where processes enter user and supervisor mode, the exception handlers and the stubs |
+| `syssrv.mar` | the system service vector, the `CHMK` and `CHME` dispatchers, `$CMEXEC`, where processes enter user and supervisor mode, and the stubs |
 | `f11.mar` | Files-11 ODS-2 volumes: the disks' VCBs, reading and writing their blocks, `FIL$MOUNT` and `$MOUNT`, headers, maps, directories, `FIL$OPENFILE` for the image activator |
 | `f11wrt.mar` | Files-11 writes: headers, blocks, directory entries, `FIL$INIT` and `$INIT_VOL` |
 | `mddriver.mar` | `MDA0:`, the ramdisk |
 | `rms.mar` | RMS: file specifications, `$PARSE`, `$SEARCH`, `$OPEN`, `$CREATE`, `$CONNECT`, `$GET`, `$PUT`, `$DISCONNECT`, `$CLOSE`, `$ERASE` |
+| `sysunwind.mar` | conditions: the exception handlers, `EXE$SIGNAL`, which calls the condition handlers, `$UNWIND`, the catch-all and `$PUTMSG` |
 
 `roottask/build.rs` links them, with `vtools/lib/consolio.mar`, into
 `EXEC.EXE`, in S0 at `0x40010000`. The structures are in `vtools/lib/lib.mlb` (`$PCBDEF`,
@@ -233,8 +234,8 @@ there is. The image activator puts its transfer address in
   while the list has one, `EXE$EXIT` takes it off and returns it to
   `SYS$EXIT`, in the vector, which writes the status where the block says,
   calls the handler with the block's argument list, and calls `$EXIT`
-  again. Image rundown forgets user mode's. ponytail: an exception ends
-  the image at `EXE$IMGEXIT`, past the handlers.
+  again. Image rundown forgets user mode's. A condition no handler takes
+  exits through them too (*Exceptions and condition handlers*).
 - **`$EXIT`**, the image's or an exception's, in a process with a command
   interpreter: `EXE$IMGRUNDOWN` gives back the image's timer queue
   entries, P0 pages, common event flag clusters and user mode exit
@@ -613,11 +614,14 @@ with `CALLG` on the caller's argument list, and `REI`s with its status in
 R0, back to the caller's mode. `$CMEXEC` does `CHME #0` instead, to
 `EXE$CMODEXEC` in executive mode.
 
-Programs run in user mode, so the `SYS$name` routines, `EXE$CMODEXEC` and
-`EXE$USRSTART` are in a psect of their own, `EXEC$VECTOR`, page aligned,
+Programs run in user mode, so the `SYS$name` routines, `EXE$CMODEXEC`,
+`EXE$USRSTART` and the condition handling code, which runs in the mode
+that signals, are in a psect of their own, `EXEC$VECTOR`, page aligned,
 between `EXE$VECTOR` and `EXE$VECTOREND`: the vector, which `EXEC$START`
 makes user readable and executable, as VMS's system service vector is.
-The rest of S0 is the kernel's.
+`$UNWIND` and `$PUTMSG` are there too, as `SYS$UNWIND` and
+`SYS$PUTMSG`, which run in the caller's mode, without `CHMK`. The rest
+of S0 is the kernel's.
 
 A service checks every address its caller passes before using it, with
 VMS's `IFNORD` and `IFNOWRT` macros, which `PROBE` the caller's mode, and
@@ -639,6 +643,7 @@ can't reach them.
 | I/O | `$ASSIGN`, `$DASSGN`, `$CANCEL`, `$QIO`, `$QIOW`, `$CREMBX`, `$DELMBX` | |
 | Logical names | `$CRELNM`, `$DELLNM`, `$TRNLNM` | |
 | Images | `$IMGACT` | |
+| Conditions, in the caller's mode | `$UNWIND`, `$PUTMSG` | |
 | RMS | `$PARSE`, `$SEARCH`, `$OPEN`, `$CREATE`, `$CONNECT`, `$GET`, `$PUT`, `$DISCONNECT`, `$CLOSE`, `$ERASE`, `$SETDDIR`, `$CREATE_DIR` | |
 | Volumes | `$MOUNT`, `$DISMOU`, `$INIT_VOL` | |
 | ASTs | `$DCLAST`, `$SETAST`, `$ASTEXIT` | |
@@ -991,24 +996,54 @@ completion routines, logical names, wildcard directories, block I/O,
 file sharing or locking, and `$PUT` only appends to a file `$CREATE`
 made.
 
-### Exceptions
+### Exceptions and condition handlers
+
+Conditions are signaled and handled as on VMS
+([ADR-0021](../adr/0021-condition-handlers-run-in-the-mode-that-signals.md)).
+A routine establishes a condition handler by writing its address at `0(FP)`, in
+its frame, which `.ENTRY` leaves 0 (`vtools/docs/macro32.md`), or with
+`LIB$ESTABLISH`. A condition is signaled by an exception in an outer
+mode, or by `LIB$SIGNAL` or `LIB$STOP`, which build the signal array, the
+condition and its arguments, then the PC and PSL, and the mechanism
+array, the frame, its depth, R0 and R1 (`$CHFDEF`).
 
 An access violation or a reserved instruction in an outer mode reaches
-the executive through the SCB (DESIGN-0001, *Exceptions*).
-`EXE$ACVIOLAT` and `EXE$OPCDEC` report it on the console and `$EXIT` with
-`SS$_ACCVIO` or `SS$_OPCDEC`, as VMS does for an image with no condition
-handler. That ends the process, or, under DCL, the image:
+the executive through the SCB (DESIGN-0001, *Exceptions*), in kernel
+mode. `EXE$ACVIOLAT` and `EXE$OPCDEC` copy the PAL's frame, the
+registers and the two arrays below the stack of the mode that took it,
+and `REI` to `EXE$SRCHANDLER` there. If that stack can't take them, the
+image exits with the condition.
+
+`EXE$SIGNAL`, in the vector, looks for a handler in the mode that
+signaled: from the frame that signaled, depth 0, out along the saved
+FPs, until one is 0, as `EXE$USRSTART`, `EXE$CLISTART` and
+`EXE$ASTDISP` leave it, or can't be read. It calls each handler with the
+two arrays. A handler returns `SS$_CONTINUE` to go on where the
+condition was signaled, with R0 and R1 from the mechanism array, or at
+the PC it wrote in the signal array; `SS$_RESIGNAL` to let the next one
+have it; or calls `$UNWIND`. `$UNWIND` asks for the frames from the one
+that signaled out to the handler's establisher, or as many as it says,
+to go once the handler returns: `EXE$SIGNAL` then loads the registers
+each of them saved, by the entry mask `.ENTRY` keeps at `40(FP)`, and
+returns from the last, to its caller or the PC `$UNWIND` was given.
+`LIB$SIG_TO_RET` is the handler that does it with the condition in R0.
+
+A condition no handler takes goes to `EXE$CATCHALL`, which writes its
+message with `$PUTMSG`, `$GETMSG`'s text with the FAO arguments filled
+in, on `SYS$OUTPUT`. A severe one then ends the image with `$EXIT`,
+through its exit handlers, with `STS$M_INHIB_MSG` set, so DCL doesn't
+write it again; any other goes on. That ends the process, or, under
+DCL, the image:
 
 ```
-%SYSTEM-F-ACCVIO, access violation, virtual address 40010000, PC 00010020, process SNOOP
-%EXEC-W-EXITED, process SNOOP exited with status 0000000C
+%SYSTEM-F-ACCVIO, access violation, reason mask=00, virtual address=40010000, PC=00010024, PSL=03C00000
+%EXEC-W-EXITED, process SNOOP exited with status 1000000C
 ```
 
-```
-$ RUN SNOOP
-%SYSTEM-F-ACCVIO, access violation, virtual address 40010000, PC 00010020, process SYSTEM
-%NONAME-F-NOMSG, Message number 0000000C
-```
+ponytail: no `SS$_UNWIND` calls to the handlers of the frames `$UNWIND`
+removes, no exception vectors, and a fault in a handler is looked for
+from there out again, through the frames already searched. A reserved
+PAL call's R7, in the signal's registers, is its function code.
 
 ## The system disk's programs
 
@@ -1041,12 +1076,12 @@ on the console with `PRINT` and `PRINTHEX` from `sysexe.mlb`, which call
 | `MOUNT` | `$MOUNT` with its parameters, the device and the label, if there is one |
 | `DISMOUNT` | `$DISMOU` with its parameter, the device |
 | `CREATE` | `$CREATE_DIR` with its parameter, for `CREATE/DIRECTORY` |
-| `STARTUP` | makes 4 pages with `$EXPREG`, checks and deletes them; creates `SLEEPER` at a higher priority, which runs at once, and `PING` and `PONG`; waits until `PONG` sets flag 66 of their cluster; deletes `SLEEPER`; creates `SVCTEST`, `HOG`, `TIMETEST` and `ASTTEST` |
+| `STARTUP` | makes 4 pages with `$EXPREG`, checks and deletes them; creates `SLEEPER` at a higher priority, which runs at once, and `PING` and `PONG`; waits until `PONG` sets flag 66 of their cluster; deletes `SLEEPER`; creates `SVCTEST`, `HOG`, `TIMETEST`, `ASTTEST`, `MBXTEST`, `FSTEST1` and `FSTEST2` and `CHFTEST` |
 | `SLEEPER` | hibernates until it is deleted |
 | `PING`, `PONG` | take three turns through common event flags 64 and 65 of the cluster `PINGPONG`; `PONG` then sets flag 66, which `STARTUP` waits for |
 | `SVCTEST` | checks the statuses of the services the others don't use, and of errors: local event flags, the dispatcher's checks and a stub, `$CRETVA` and `$DELTVA`, `$CMKRNL` and `$CMEXEC`; what user mode may `PROBE`, and that services refuse it the executive's data; the console's channels; logical names in both tables, `$ASSIGN` through two of them, and the errors; `$SETPRI`, and `$SUSPND`, `$WAKE`, `$RESUME` and `$DELPRC` on a process of its own, and `$FORCEX` on another, which exits with `SS$_FORCEDEXIT` before its image runs; `$DCLEXH` and `$CANEXH`, and a `$FORCEX` of itself, whose `$EXIT` calls its exit handler, which says it is ok; then creates one whose image doesn't exist, which exits with `RMS$_FNF`, and `SNOOP` and `USURP` |
-| `SNOOP` | reads S0 from user mode, and exits with `SS$_ACCVIO` |
-| `USURP` | raises IPL from user mode, and exits with `SS$_OPCDEC` |
+| `SNOOP` | reads S0 from user mode, which no handler takes: exits with `SS$_ACCVIO`, its message written |
+| `USURP` | raises IPL from user mode, and exits the same way with `SS$_OPCDEC` |
 | `HOG` | associates a common event flag cluster, creates `NUDGE` at its own priority and loops reading flag 64 until `NUDGE` sets it, with no wait: only quantum end lets `NUDGE` run |
 | `NUDGE` | sets `HOG`'s flag |
 | `TIMETEST` | checks that `$GETTIM` reads a time after 2026; waits for `$SETIMR`s, a delta and a time, 50 ms on, and that a cancelled one never sets its flag; hibernates through three repeating `$SCHDWK` wakeups, cancels them, and checks that the next wakeup is a new one's |
@@ -1054,6 +1089,7 @@ on the console with `PRINT` and `PRINTHEX` from `sysexe.mlb`, which call
 | `HELP` | describes DCL's verbs, from `DCL$TABLES`, which `build.rs` links into it as into DCL: with no topic, each verb and its parameters, then what DCL does without a verb; with one, each verb whose name starts with it, its parameters, the keywords a parameter may be and the qualifiers, then each syntax a qualifier or keyword leads to that has parameters or qualifiers of its own. ponytail: no text, which VMS's HELP reads from a help library |
 | `CLITEST` | parses commands with its own tables, `CLITEST.CLD`, and `CLI$DCL_PARSE`, and checks what `CLI$PRESENT` and `CLI$GET_VALUE` say of them: lists, concatenation, quoted strings, default values, negation, keywords and their values, a syntax switched to, abbreviations, each error, qualifiers given after a parameter's value, a `ROUTINE` `CLI$DISPATCH` calls, tables looked in first, and `LIB$GET_FOREIGN`'s line; run as a foreign command, or as a verb with an image, it writes the words after the verb |
 | `ASTTEST` | checks that `$DCLAST`'s AST is delivered as the service returns, or when `$SETAST` enables ASTs again; that one declared in an AST routine waits until it returns; that a `$SETIMR` AST's `$WAKE` ends a `$HIBER`; and that one delivered while it computes in user mode leaves every register as it was |
+| `CHFTEST` | checks condition handlers: a `LIB$SIGNAL` its handler continues with its own R0, at depth 0; one an inner routine's resignals, at depth 1; an access violation `LIB$SIG_TO_RET` makes its routine's status, its caller's registers as they were; a `BPT` its handler continues at another PC, its registers as they were; `$UNWIND` outside a handler; a warning no handler takes, written; and `LIB$STOP`, which exits through its exit handler, which says it is ok |
 
 When every process but the swapper waits, the CPU idles in `WTINT`,
 taking the clock's interrupts.
@@ -1061,8 +1097,7 @@ taking the clock's interrupts.
 ## Next
 
 - Priority boosts on wake and decay at quantum end.
-- Privileges, for `$CMKRNL` and `$CMEXEC`, and condition handlers in place
-  of exiting on an exception.
+- Privileges, for `$CMKRNL` and `$CMEXEC`.
 - DCL's `SET NOCONTROL`, and `STOP/IDENTIFICATION`.
 - Writing the system disk, the disk's interrupt, `$QIO` on disk
   channels, logical names in file specifications (`SYS$SYSTEM:DCL.EXE`)

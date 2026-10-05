@@ -4,6 +4,7 @@
 ; $SSDEF: system service status codes, as VMS numbers them.
         .MACRO  $SSDEF
 SS$_NORMAL = 1
+SS$_CONTINUE = 1                        ; a handler's: go on where the condition was signaled
 SS$_WASCLR = 1
 SS$_WASSET = 9
 SS$_ACCVIO = 12
@@ -28,6 +29,7 @@ SS$_IVADDR = 308                        ; a bad network address
 SS$_INCVOLLABEL = 268                   ; the volume's label isn't the one asked for
 SS$_INSFARG = 276
 SS$_INSFMEM = 292
+SS$_INSFRAME = 300                      ; $UNWIND: fewer frames than its depth
 SS$_IVCHAN = 316
 SS$_IVDEVNAM = 324                      ; no device name, or a bad one
 SS$_IVLOGNAM = 340
@@ -55,6 +57,9 @@ SS$_MSGNOTFND = 1569                    ; success: $GETMSG has no text for the s
 SS$_SUPERSEDE = 1585                    ; success: a name by that name was replaced
 SS$_NONEXPR = 2280
 SS$_NOHANDLER = 2296                    ; no such exit handler
+SS$_NOSIGNAL = 2304                     ; $UNWIND outside a condition handler
+SS$_RESIGNAL = 2328                     ; a handler's: let the next one have the condition
+SS$_UNWINDING = 2344                    ; $UNWIND twice for one condition
 SS$_NOMOREPROC = 2472                   ; a wildcard $GETJPI is past the last process
 SS$_NOSUCHDEV = 2312
 SS$_NOSUCHFILE = 2320
@@ -420,6 +425,36 @@ PSL$C_SUPER = 2
 PSL$C_USER = 3
         .ENDM   $PSLDEF
 
+; $CHFDEF: a condition handler's arguments, as VMS's: the signal array,
+; the condition, its arguments, then the PC and PSL where it was
+; signaled; and the mechanism array, the frame that established the
+; handler, its depth, 0 for the routine that signaled, and the R0 and R1
+; it goes on with.
+        .MACRO  $CHFDEF
+CHF$L_SIGARGLST = 4                     ; a handler's first argument
+CHF$L_MCHARGLST = 8                     ; its second
+CHF$L_SIG_ARGS = 0                      ; the signal array's count
+CHF$L_SIG_NAME = 4                      ; the condition
+CHF$L_SIG_ARG1 = 8
+CHF$L_MCH_ARGS = 0                      ; the mechanism array's count, 4
+CHF$L_MCH_FRAME = 4
+CHF$L_MCH_DEPTH = 8
+CHF$L_MCH_SAVR0 = 12
+CHF$L_MCH_SAVR1 = 16
+        .ENDM   $CHFDEF
+
+; $STSDEF: a condition value's fields.
+        .MACRO  $STSDEF
+STS$K_WARNING = 0
+STS$K_SUCCESS = 1
+STS$K_ERROR = 2
+STS$K_INFO = 3
+STS$K_SEVERE = 4
+STS$M_SEVERITY = 7
+STS$V_FAC_NO = 16                       ; the facility, 12 bits: 0 for the system's
+STS$M_INHIB_MSG = ^X10000000            ; the message was written already
+        .ENDM   $STSDEF
+
 ; $IODEF: I/O function codes for $QIO.
         .MACRO  $IODEF
 IO$_WRITEPBLK = 11
@@ -658,6 +693,19 @@ PRT$C_UR = 15
         .EXTERNAL SYS$GETSYIW
         CALLS   #7, G^SYS$GETSYIW
         .ENDM   $GETSYIW_S
+
+        .MACRO  $PUTMSG_S MSGVEC
+        $PUSHADR MSGVEC
+        .EXTERNAL SYS$PUTMSG
+        CALLS   #1, G^SYS$PUTMSG
+        .ENDM   $PUTMSG_S
+
+        .MACRO  $UNWIND_S DEPADR=0, NEWPC=0
+        $PUSHADR NEWPC
+        $PUSHADR DEPADR
+        .EXTERNAL SYS$UNWIND
+        CALLS   #2, G^SYS$UNWIND
+        .ENDM   $UNWIND_S
 
         .MACRO  $GETMSG_S MSGID, MSGLEN=0, BUFADR, FLAGS=#0, OUTADR=0
         $PUSHADR OUTADR

@@ -97,7 +97,7 @@ until vaxpunk's calling standard exists.
   | 8 | the caller's AP |
   | 16 | the caller's FP, then LR |
   | 32 | the caller's SP (x28) |
-  | 40 | unused |
+  | 40 | the entry mask's bits 11:0, which say what follows, for `$UNWIND` |
   | 48 | the registers in the entry mask, 8 bytes each |
 
   FP (x29) points at the frame, AP (x12) at the argument list, and SP (x28)

@@ -286,9 +286,11 @@ executive feature:
   its exit handler, declared with `$DCLEXH`, is what prints `SVCTEST: ok`.
   It also starts:
   - **SNOOP**, which reads kernel memory and should die with an access
-    violation (status `0C`)
+    violation: no condition handler takes it, so the executive prints
+    `%SYSTEM-F-ACCVIO` and the image exits with status `1000000C`, the
+    condition with the bit that says its message was printed
   - **USURP**, which runs a privileged instruction in user mode and should
-    die with a reserved-instruction error (status `43C`)
+    die the same way with a reserved-instruction error (status `1000043C`)
 - **HOG** spins without ever waiting. **NUDGE** can only run if the timer
   interrupt takes the CPU away from HOG, so it tests preemption.
 - **TIMETEST** checks reading the time, timers and scheduled wakeups.
@@ -310,6 +312,13 @@ executive feature:
   ([ADR-0020](adr/0020-file-system-lock-below-ipl-synch.md)), so the
   timer takes the CPU from one while it holds the lock, and the other
   waits for it. Each prints `FSTEST: ok` if every count was the first's.
+- **CHFTEST** checks condition handlers: a `LIB$SIGNAL` that its own
+  handler continues, one an inner routine's handler passes on to it, an
+  access violation that `LIB$SIG_TO_RET` turns into the status of the
+  routine that took it, and a `BPT` whose handler sends it on at another
+  PC with its registers as they were. With no handler, a warning is
+  printed and the program goes on; `LIB$STOP` prints its condition and
+  exits, through the exit handler that prints `CHFTEST: ok`.
 - STARTUP prints `STARTUP: done` and exits, and DCL prompts again while
   the others finish.
 

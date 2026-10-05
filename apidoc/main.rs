@@ -8,6 +8,10 @@
 //!   the comment block right above each `NAME::`
 //!   or `.ENTRY`, whose first line reads `NAME: what it does` or, for a system
 //!   service, `$NAME args: what it does`;
+//! - how the code reaches each of them, which is its linkage: `.ENTRY`, a
+//!   `JSB` or `BSBx`, the SCB slot `EXEC$START` stores it in, or else the
+//!   branches to it, the code that runs on into it and the routines that use
+//!   its address, and whether it comes back with `RSB`;
 //! - the system service vector, the SERVICE and STUB lines of syssrv.mar;
 //! - the macro libraries (vtools/lib/*.mlb, roottask/sysexe/*.mlb): the comment
 //!   block right above each `.MACRO`, and the `SYM = value ; meaning` lines of
@@ -36,6 +40,10 @@ const ENTRY: &str = r"(?i)^\s+\.ENTRY\s+([\w$]+)";
 const DIRECTIVE: &str = r"(?i)\.(LONG|WORD|BYTE|QUAD|BLK[BWLQ]|ASCI[CDZI]|ADDRESS)\b[^;]*";
 const CALL: &str = r"(?i)^(BSBB|BSBW|JSB|JMP|BRB|BRW|CALLS|CALLG)\s+(.*)";
 const SYMBOL: &str = r"\$?[A-Za-z][\w$]*";
+// An instruction the next one never follows, or a call that may not return:
+// a label after it is reached some other way.
+const NO_FALL: &str = r"(?i)^(RSB|RET|REI|HALT|BRB|BRW|JMP|CASE[BWL]|CALLS|CALLG)\b";
+const BRANCH: &str = r"(?i)^(BRB|BRW|JMP|B(EQL|NEQ|GTRU?|LEQU?|GEQU?|LSSU?|CC|CS|VC|VS|LB[CS]|B[SC][SC]?)|SOB(GTR|GEQ)|AOB(LSS|LEQ)|ACB[BWL])$";
 const PAL_DOC: &str = "docs/design/0001-pal-interface.md";
 
 #[derive(Clone, Copy, PartialEq)]
@@ -191,6 +199,17 @@ struct Routine {
     uses: BTreeSet<String>,
     returns: BTreeSet<String>,
     calls: Vec<usize>,
+    // How the code reaches it, for its linkage: the routine whose last
+    // instruction runs on into it, the SCB slot EXEC$START stores it in,
+    // whether a BSBx or JSB calls it, and the routines that branch to it or
+    // use its address.
+    falls_from: Option<String>,
+    scb: Option<String>,
+    called: bool,
+    comes_back: bool, // an RSB or RET ends it, or what it branches or runs on to
+
+    branched: Vec<usize>,
+    addressed: Vec<usize>,
 }
 
 struct Data {
@@ -281,6 +300,9 @@ fn parse_mar(
     };
     let (mut block, mut cur, mut in_code, mut in_macro) =
         (Vec::<String>::new(), None::<usize>, true, false);
+    // the routine whose instruction came last, and that instruction, if
+    // the next label follows it in the same psect
+    let mut last: Option<(String, String)> = None;
     for (i, line) in lines.iter().enumerate() {
         let no = i + 1;
         let s = line.trim();
@@ -314,6 +336,7 @@ fn parse_mar(
             };
         } else if up.starts_with(".PSECT") {
             in_code = !up.contains("NOEXE");
+            last = None;
         }
         let (label, entry) = match re!(ENTRY).captures(line) {
             Some(c) => (Some((c[1].to_string(), String::new(), String::new())), true),
@@ -359,6 +382,10 @@ fn parse_mar(
                     entry,
                     global: entry || sep == "::",
                     comment: block.clone(),
+                    falls_from: last
+                        .take()
+                        .filter(|(_, insn)| !re!(NO_FALL).is_match(insn))
+                        .map(|(owner, _)| owner),
                     ..Default::default()
                 });
             } else if let Some(c) = cur {
@@ -370,6 +397,7 @@ fn parse_mar(
             let insn = insn.trim();
             if !insn.is_empty() && !insn.contains('=') && !insn.starts_with('.') {
                 routines[c].body.push(insn.to_string());
+                last = Some((routines[c].name.clone(), insn.to_string()));
             }
         }
         block.clear();
@@ -586,7 +614,7 @@ const PAL_REFS: [(&str, &str); 8] = [
     ("The Alpha OpenVMS calls", "### The Alpha calls"),
 ];
 
-fn push_new(v: &mut Vec<String>, items: impl IntoIterator<Item = String>) {
+fn push_new<T: PartialEq>(v: &mut Vec<T>, items: impl IntoIterator<Item = T>) {
     for i in items {
         if !v.contains(&i) {
             v.push(i);
@@ -706,6 +734,64 @@ impl Api {
 
         let rs_global: Vec<bool> = routines.iter().map(|r| r.global).collect();
         let rs_module: Vec<usize> = routines.iter().map(|r| r.module).collect();
+        // Who reaches each routine, and how: a local only from its module.
+        let mut reach = vec![];
+        for (from, r) in routines.iter().enumerate() {
+            for insn in &r.body {
+                let (op, rest) = insn.split_once(char::is_whitespace).unwrap_or((insn, ""));
+                let ops: Vec<&str> = rest.split(',').map(str::trim).collect();
+                let target = |o: &str| {
+                    let name = re!(r"^[@#]|G\^").replace_all(o, "");
+                    by_name
+                        .get(&*name)
+                        .copied()
+                        .filter(|&t| t != from && (rs_global[t] || rs_module[t] == r.module))
+                };
+                let op = op.to_uppercase();
+                if ["BSBB", "BSBW", "JSB"].contains(&op.as_str()) {
+                    reach.extend(target(ops[0]).map(|t| (t, 'c', from, None)));
+                } else if re!(BRANCH).is_match(&op) {
+                    reach.extend(target(ops[ops.len() - 1]).map(|t| (t, 'b', from, None)));
+                } else if re!(r"^(MOVA|PUSHA)[BWLQ]$").is_match(&op) {
+                    let slot = ops.get(1).and_then(|o| o.strip_prefix("EXE$AL_SCB+"));
+                    reach.extend(target(ops[0]).map(|t| (t, 'a', from, slot.map(String::from))));
+                }
+            }
+        }
+        for (t, how, from, slot) in reach {
+            let r = &mut routines[t];
+            match (how, slot) {
+                ('c', _) => r.called = true,
+                ('b', _) => push_new(&mut r.branched, [from]),
+                (_, Some(slot)) => r.scb = Some(slot),
+                _ => push_new(&mut r.addressed, [from]),
+            }
+        }
+        let mut onward: Vec<Vec<usize>> = routines.iter().map(|r| r.branched.clone()).collect();
+        for (ri, r) in routines.iter_mut().enumerate() {
+            r.falls_from = r
+                .falls_from
+                .take()
+                .filter(|f| by_name.get(f).is_some_and(|&f| rs_module[f] == r.module));
+            r.comes_back = r.body.iter().any(|b| b == "RSB" || b == "RET");
+            if let Some(f) = &r.falls_from {
+                onward[by_name[f]].push(ri);
+            }
+        }
+        // onward[t] holds who branches to t: it comes back if t does
+        loop {
+            let back: Vec<usize> = (0..routines.len())
+                .filter(|&t| routines[t].comes_back)
+                .flat_map(|t| onward[t].clone())
+                .filter(|&f| !routines[f].comes_back)
+                .collect();
+            if back.is_empty() {
+                break;
+            }
+            for f in back {
+                routines[f].comes_back = true;
+            }
+        }
         for (ri, r) in routines.iter_mut().enumerate() {
             let (_, args, doc) = head(&blocks(&r.comment));
             let (doc, regs, ipl) = facts(doc);
@@ -844,6 +930,10 @@ impl Api {
         }
         for r in &self.routines {
             sym(r.name.clone(), format!("r-{}", r.name));
+            // a service that runs in its caller's mode, $UNWIND: SYS$name's own code
+            if let Some(svc) = r.name.strip_prefix("SYS$") {
+                sym(format!("${svc}"), format!("r-{}", r.name));
+            }
         }
         for d in &self.data {
             sym(d.name.clone(), format!("d-{}", d.name));
@@ -1088,30 +1178,61 @@ impl Page<'_> {
     fn routine_entry(&mut self, ri: usize) -> String {
         let api = self.api;
         let r = &api.routines[ri];
+        // How the code reaches it decides its linkage: a call, the SCB, or
+        // else branches, its address and the code before it. A global that
+        // comes back with RSB is a JSB routine, however it is reached.
+        let reached = !r.branched.is_empty() || !r.addressed.is_empty() || r.falls_from.is_some();
         let mut tag = if r.entry {
             "CALL"
-        } else if r.body.iter().any(|b| b == "REI") {
+        } else if r.scb.is_some() {
             "Handler"
-        } else {
+        } else if r.called || (r.global && r.comes_back) || !reached {
             "JSB"
+        } else {
+            "Label"
         }
         .to_string();
         let n = esc(&r.name);
-        let mut linkage = match tag.as_str() {
+        let linkage = match tag.as_str() {
             "CALL" => format!(
                 "<code>CALLS #n, G^{n}</code> or <code>CALLG</code>; arguments in the AP list"
             ),
-            "JSB" => format!(
+            "JSB" if r.global => format!(
                 "<code>JSB G^{n}</code>; arguments in registers, returns with <code>RSB</code>"
             ),
-            _ => "reached through the SCB; returns with <code>REI</code>".to_string(),
+            "JSB" => format!(
+                "<code>BSBW {n}</code>, from {} only",
+                esc(&api.mods[r.module].path)
+            ),
+            "Handler" => format!(
+                "reached through the SCB, <code>{}</code>; returns with <code>REI</code>",
+                self.link(r.scb.as_deref().unwrap())
+            ),
+            _ => {
+                let mut how = vec![];
+                let list = |rs: &[usize]| {
+                    let names: Vec<String> = rs.iter().map(|&r| self.routine_refs(&[r])).collect();
+                    names.join(", ")
+                };
+                if !r.branched.is_empty() {
+                    how.push(format!("branched to from {}", list(&r.branched)));
+                }
+                if let Some(f) = &r.falls_from {
+                    how.push(format!("run on into from {}", self.refs([f])));
+                }
+                if !r.addressed.is_empty() {
+                    how.push(format!("its address is used by {}", list(&r.addressed)));
+                }
+                let ends = if r.comes_back {
+                    ""
+                } else {
+                    " and doesn't return"
+                };
+                format!("not called{ends}: {}", how.join("; "))
+            }
         };
         if !r.global {
             tag += " local";
-            linkage = format!(
-                "<code>BSBW {n}</code>, from {} only",
-                esc(&api.mods[r.module].path)
-            );
         }
         let args = if !r.args.is_empty() && r.entry {
             format!("<code>{}</code>", self.link(&r.args))
@@ -1420,6 +1541,7 @@ impl Page<'_> {
             ["CALL", "`CALLS` or `CALLG`: arguments in the argument list at AP, status in R0, `RET`"],
             ["JSB", "`JSB` or `BSBW`: arguments and results in registers, `RSB`"],
             ["Handler", "an SCB vector: the PAL delivers an interrupt, an exception or `CHMx` to it; it ends with `REI`"],
+            ["Label", "not called: code branches or runs on to it, or uses its address, to `REI` or jump there; its linkage says which"],
             ["PAL", "a privileged VAX instruction, or `CALL_PAL`; vmacro compiles it into `svc #0`"],
             ["Macro", "a macro from a `.LIBRARY`; Definitions macros define symbols"],
         ]
