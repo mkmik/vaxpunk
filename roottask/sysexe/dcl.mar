@@ -55,6 +55,9 @@
 ;   CREATE/DIRECTORY spec
 ;               runs CREATE.EXE
 ;   CONTINUE    goes back to the image CTRL/Y stopped
+;   STOP [process-name]
+;               deletes the process; with no name, ends the image CTRL/Y
+;               stopped, without its exit handlers, and the procedures
 ;   HELP [verb] runs HELP.EXE, which lists the commands from DCL$TABLES
 ;   LOGOUT      ends the process
 ;   @file [p1 ... p8]
@@ -73,7 +76,9 @@
 ;               does command if the expression is true, odd
 ;   GOTO label  goes on from the procedure's line label: starts
 ;   EXIT [status]
-;               ends the procedure, with $STATUS or status
+;               ends the procedure, with $STATUS or status; outside
+;               one, the image CTRL/Y stopped exits with it, through its
+;               exit handlers
 ;   WRITE SYS$OUTPUT expression[,...]
 ;               writes the values on the console
 ;   SHOW SYMBOL name
@@ -248,6 +253,8 @@ V_SYMBOL:
 V_STATUS:
         .ASCID  "STATUS"
 V_LOG:  .ASCID  "LOG"
+V_PRCNAM:
+        .ASCID  "PROCESS_NAME"
 V_PROCQ:
         .ASCID  "PROCESS"
 V_SYSQ: .ASCID  "SYSTEM"
@@ -310,6 +317,8 @@ ROUTINES:
         .ADDRESS SETCOMMAND
         .ASCIC  "SHOW"
         .ADDRESS SHOW
+        .ASCIC  "STOP"
+        .ADDRESS STOP
         .ASCIC  "WRITE"
         .ADDRESS WRITE
         .BYTE   0
@@ -658,6 +667,26 @@ CONTINUE:
         RET
 10$:    BRW     OK
 
+; STOP [process-name]: deletes the process with $DELPRC. With no name,
+; ends the procedures running, and the image CTRL/Y stopped, if there is
+; one, with $EXIT from here, which runs it down without its exit handlers,
+; user mode's, and calls DCL afresh, with CTRL/Y enabled again, and
+; SS$_ABORT, reported already.
+STOP:   MOVAB   V_PRCNAM, R1
+        BSBW    GETVAL
+        TSTL    R8
+        BEQL    10$
+        MOVL    R8, TOKDSC
+        $DELPRC_S PRCNAM=TOKDSC
+        BRW     DONE
+10$:    BSBW    ENDPROCS
+        TSTL    CTRLYFP
+        BEQL    20$
+        CLRL    CTRLYFP
+        BSBW    CTRLYON
+        $EXIT_S #<SS$_ABORT!INHIB>
+20$:    MOVL    #<SS$_ABORT!INHIB>, R0
+        BRW     DONE
 
 ; RUN image: runs it with $IMGACT, which returns only if it can't.
 RUN:    MOVAB   V_FILE, R1
@@ -1612,7 +1641,9 @@ GOTO:   MOVAB   V_LABEL, R1
         BRW     OK
 
 ; EXIT [status]: ends the procedure running, if one is, with status, or
-; $STATUS.
+; $STATUS. Outside one, makes the image CTRL/Y stopped, if there is one,
+; exit with it, as VMS's does: $FORCEX's AST calls $EXIT, which calls its
+; exit handlers, as soon as CONTINUE lets it run.
 EXIT:   MOVAB   V_STATUS, R1
         BSBW    RESTVAL
         MOVL    LASTSTAT, R0
@@ -1627,7 +1658,12 @@ EXIT:   MOVAB   V_STATUS, R1
         PUSHL   R0
         BSBW    EXITPROC
         MOVL    (SP)+, R0
-20$:    BRW     DONE
+        BRB     30$
+20$:    TSTL    CTRLYFP
+        BEQL    30$
+        $FORCEX_S CODE=R0
+        BRW     CONTINUE
+30$:    BRW     DONE
 
 ; WRITE SYS$OUTPUT expression[,...]: writes the values, as strings, one
 ; after the other, on a line.

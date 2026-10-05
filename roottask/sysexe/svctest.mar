@@ -15,7 +15,7 @@
         $DVSDEF
         $DCDEF
         $DEVDEF
-        .EXTERNAL SYS$DCLEXH, SYS$EXIT, EXE$GL_RPB
+        .EXTERNAL SYS$DCLEXH, SYS$SETPRV, SYS$EXIT, EXE$GL_RPB
 
         .PSECT  DATA, NOEXE, WRT, LONG
 OTHER_NAME:
@@ -145,6 +145,16 @@ MSGDSC: .LONG   63                      ; $GETMSG's buffer
         .ADDRESS MSGBUF
 MSGBUF: .BLKB   63
 MSGLEN: .WORD   0
+EXHBLK: .LONG   0                       ; EXH's exit handler block: the link,
+        .ADDRESS EXH                    ; the handler,
+        .LONG   2                       ; its arguments: the status's address,
+        .ADDRESS EXHSTS
+        .LONG   42                      ; and 42
+EXHSTS: .LONG   0
+CANBLK: .LONG   0                       ; one $CANEXH takes off
+        .ADDRESS EXH
+        .LONG   1
+        .ADDRESS EXHSTS
 FNFMSG: .ASCII  "%RMS-E-FNF, file not found"
 FNFEND:
 
@@ -180,8 +190,9 @@ FNFEND:
 ; The dispatcher: too few arguments, and a stub.
         CALLS   #0, G^SYS$DCLEXH
         EXPECT  #SS$_INSFARG, 12
-        PUSHL   #0
-        CALLS   #1, G^SYS$DCLEXH
+        CLRQ    -(SP)
+        CLRQ    -(SP)
+        CALLS   #4, G^SYS$SETPRV
         EXPECT  #SS$_ILLSER, 13
 
 ; Pages.
@@ -412,11 +423,33 @@ FNFEND:
         EXPECT  #SS$_NORMAL, 34
         $CREPRC_S IMAGE=USURP_IMAGE, PRCNAM=USURP_NAME, BASPRI=#4
         EXPECT  #SS$_NORMAL, 35
-        PRINT   "SVCTEST: ok"
-        MOVL    #SS$_NORMAL, R0
+; Exit handlers: $CANEXH takes one off, and the image ends with
+; $FORCEX's AST, whose $EXIT calls the other, EXH, which says ok.
+        $DCLEXH_S DESBLK=0
+        EXPECT  #SS$_NOHANDLER, 73
+        $DCLEXH_S DESBLK=EXHBLK
+        EXPECT  #SS$_NORMAL, 74
+        $DCLEXH_S DESBLK=CANBLK
+        EXPECT  #SS$_NORMAL, 75
+        $CANEXH_S DESBLK=CANBLK
+        EXPECT  #SS$_NORMAL, 76
+        $CANEXH_S DESBLK=CANBLK
+        EXPECT  #SS$_NOHANDLER, 77
+        $FORCEX_S CODE=#SS$_NORMAL
+        MOVL    #<78 * 2>, R0           ; the AST didn't come
         RET
 90$:    MOVL    #SS$_ABORT, R0
         RET
+
+; EXH: SVCTEST's exit handler, with the status and 42: says ok if the
+; status is the one $FORCEX gave.
+        .ENTRY  EXH, ^M<>
+        CMPL    @4(AP), #SS$_NORMAL
+        BNEQ    10$
+        CMPL    8(AP), #42
+        BNEQ    10$
+        PRINT   "SVCTEST: ok"
+10$:    RET
 
 ; ANSWER: in kernel mode, where MFPR isn't a reserved instruction.
         .ENTRY  ANSWER, ^M<>

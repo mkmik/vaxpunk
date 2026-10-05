@@ -24,7 +24,9 @@
 //! first with a CTRL/C no AST takes, and SLEEPER with CTRL/Y, twice each, with a
 //! CONTINUE in between, and
 //! EDIT while it reads, whose read CTRL/Y ends, so that DCL reads SHOW
-//! DEFAULT and CONTINUE, and EDIT takes the empty line as RETURN, a
+//! DEFAULT and CONTINUE, and EDIT takes the empty line as RETURN. A
+//! CTRL/Y and STOP end EDIT, and $STATUS shows SS$_ABORT; STOP NOSUCH fails;
+//! and SLEEPER, stopped with CTRL/Y, exits with EXIT 3. All a
 //! step at a time: each waits until a line has come so many times, the echo
 //! of what it typed before included, and types.
 //! STARTUP's SLEEPER and SVCTEST's NAPPER say they hibernate before SLEEPER
@@ -122,6 +124,9 @@ const LINES: &[&str] = &[
     "X is 42",
     "  HOME == \"SET DEFAULT SYS$MANAGER:\"",
     "    2\t        Welcome to vaxpunk, an OpenVMS clone for arm64",
+    "$STATUS == 268435500   Hex = 1000002C",
+    "%SYSTEM-W-NONEXPR, nonexistent process",
+    "$STATUS == 3   Hex = 00000003",
 ];
 
 /// What it must not: the lines of DCLTEST.COM's a failure skips or reaches.
@@ -147,6 +152,18 @@ const STEPS: &[(&str, usize, &str)] = &[
     ),
     ("    1\t", 3, "\x19"),
     ("*INTERRUPT*", 6, "SHOW DEFAULT\rCONTINUE\r"),
+    (
+        "    2\t        Welcome to vaxpunk, an OpenVMS clone for arm64",
+        1,
+        "\x19",
+    ),
+    (
+        "*INTERRUPT*",
+        7,
+        "STOP\rSHOW SYMBOL $STATUS\rSTOP NOSUCH\rRUN SLEEPER\r",
+    ),
+    ("SLEEPER: hibernating", 4, "\x19"),
+    ("*INTERRUPT*", 8, "EXIT 3\rSHOW SYMBOL $STATUS\r"),
 ];
 
 #[test]

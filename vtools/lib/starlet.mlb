@@ -52,6 +52,7 @@ SS$_CREATED = 1561                      ; success: it wasn't there, and was made
 SS$_MSGNOTFND = 1569                    ; success: $GETMSG has no text for the status
 SS$_SUPERSEDE = 1585                    ; success: a name by that name was replaced
 SS$_NONEXPR = 2280
+SS$_NOHANDLER = 2296                    ; no such exit handler
 SS$_NOMOREPROC = 2472                   ; a wildcard $GETJPI is past the last process
 SS$_NOSUCHDEV = 2312
 SS$_NOSUCHFILE = 2320
@@ -512,6 +513,18 @@ PRT$C_UR = 15
         .EXTERNAL SYS$EXIT
         CALLS   #1, G^SYS$EXIT
         .ENDM   $EXIT_S
+
+        .MACRO  $DCLEXH_S DESBLK
+        $PUSHADR DESBLK
+        .EXTERNAL SYS$DCLEXH
+        CALLS   #1, G^SYS$DCLEXH
+        .ENDM   $DCLEXH_S
+
+        .MACRO  $CANEXH_S DESBLK=0
+        $PUSHADR DESBLK
+        .EXTERNAL SYS$CANEXH
+        CALLS   #1, G^SYS$CANEXH
+        .ENDM   $CANEXH_S
 
         .MACRO  $FORCEX_S PIDADR=0, PRCNAM=0, CODE=#0
         PUSHL   CODE

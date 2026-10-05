@@ -584,12 +584,31 @@ IMG$ACTIVATE::
 95$:    MOVL    #SS$_VASFULL, R0
         BRB     99$
 
-; $EXIT code: ends the image. In a process with a command interpreter, it
-; runs the image down and calls the command interpreter with code. In one
-; without, the image's end is the process's: it is deleted, and a failure
-; status is reported on the console, as a command interpreter would.
-; Doesn't return.
+; $EXIT code: ends the image, once the caller's mode has no exit handler
+; left. While it has one, takes it off its list and returns SS$_NORMAL
+; with R1 = its block, for SYS$EXIT to call it in that mode
+; (roottask/exec/syssrv.mar); one it can't read ends the list. Else
+; EXE$IMGEXIT.
         .ENTRY  EXE$EXIT, ^M<>
+        BSBW    EXHLIST
+        MOVL    (R0), R1
+        BEQL    10$
+        IFNORD  #16, (R1), 5$
+        MOVL    (R1), (R0)
+        MOVL    #SS$_NORMAL, R0
+        RET
+5$:     CLRL    (R0)
+10$:    CALLG   (AP), EXE$IMGEXIT
+
+; EXE$IMGEXIT: $EXIT without the exit handlers, called with code: ends
+; the image. In a process with a command interpreter, it runs the image
+; down and calls the command interpreter with code. In one without, the
+; image's end is the process's: it is deleted, and a failure status is
+; reported on the console, as a command interpreter would. Doesn't
+; return.
+; ponytail: a fault in an outer mode ends the image here, so its exit
+; handlers don't run, which VMS's last chance handler does with $EXIT.
+        .ENTRY  EXE$IMGEXIT, ^M<>
         MOVL    SCH$GL_CURPCB, R4
         TSTL    PCB$L_CLI(R4)
         BEQL    5$
@@ -611,12 +630,64 @@ IMG$ACTIVATE::
         ENBINT
 10$:    BRW     EXE$DELSELF
 
+; $DCLEXH desblk: declares an exit handler for the caller's mode, which its
+; $EXIT calls: puts desblk first on the mode's list. desblk is the
+; handler's link, which the executive keeps, its address, and its argument
+; list, the count, then where $EXIT writes its status, then the rest.
+; SS$_NOHANDLER for desblk 0, SS$_ACCVIO if the caller can't write it.
+        .ENTRY  EXE$DCLEXH, ^M<>
+        MOVL    4(AP), R1
+        BEQL    85$
+        IFNOWRT #16, (R1), 80$
+        BSBW    EXHLIST
+        MOVL    4(AP), R1
+        MOVL    (R0), (R1)
+        MOVL    R1, (R0)
+        MOVL    #SS$_NORMAL, R0
+        RET
+80$:    MOVL    #SS$_ACCVIO, R0
+        RET
+85$:    MOVL    #SS$_NOHANDLER, R0
+        RET
+
+; $CANEXH desblk: takes an exit handler $DCLEXH declared off the caller's
+; mode's list, or all of them for desblk 0. SS$_NOHANDLER if it isn't
+; there, or the list can't be read.
+        .ENTRY  EXE$CANEXH, ^M<R2>
+        BSBW    EXHLIST
+        MOVL    4(AP), R1
+        BNEQ    10$
+        CLRL    (R0)
+        BRB     30$
+10$:    MOVL    (R0), R2                ; R0 = the link to R2
+        BEQL    85$
+        IFNOWRT #4, (R2), 85$
+        CMPL    R2, R1
+        BEQL    20$
+        MOVL    R2, R0
+        BRB     10$
+20$:    MOVL    (R2), (R0)
+30$:    MOVL    #SS$_NORMAL, R0
+        RET
+85$:    MOVL    #SS$_NOHANDLER, R0
+        RET
+
+; EXHLIST: R0 = the address of the caller's mode's exit handler list, in
+; the current PCB. Uses R1.
+EXHLIST:
+        CALL_PAL #PAL$_RD_PS
+        EXTZV   #PSL$V_PRVMOD, #2, R0, R0
+        MOVL    SCH$GL_CURPCB, R1
+        MOVAL   PCB$AL_EXH(R1)[R0], R0
+        RSB
+
 ; EXE$IMGRUNDOWN: R4 = the current PCB. Gives back what the image that ran
 ; in it holds: its timer queue entries, its user mode ASTs, its pages in
-; P0, its common event flag clusters, and its channels and files, all but
-; the command interpreter's, PCB$L_CLICHANS and PCB$L_CLIFILES, whose I/O
-; is cancelled first, while P0 is still there. An image
-; CTRL/Y stopped can't be continued any more, nor AST routines that ran.
+; P0, its common event flag clusters, its user mode exit handlers, and its
+; channels and files, all but the command interpreter's, PCB$L_CLICHANS
+; and PCB$L_CLIFILES, whose I/O is cancelled first, while P0 is still
+; there. An image CTRL/Y stopped can't be continued any more, nor AST
+; routines that ran.
 ; Uses R0-R3.
 ; ponytail: what the command interpreter holds too, but its channels; it
 ; uses nothing else yet.
@@ -636,6 +707,7 @@ EXE$IMGRUNDOWN::
         BSBW    EXE$FLUSHAST
         ENBINT
         BSBW    SCH$DACEFC_ALL
+        CLRL    PCB$AL_EXH+<4*PSL$C_USER>(R4)
         MCOML   PCB$L_CLICHANS(R4), R0
         BICL2   R0, PCB$L_CHANS(R4)
         MOVL    PCB$L_CLIFILES(R4), R0

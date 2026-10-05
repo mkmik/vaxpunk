@@ -133,6 +133,10 @@ define syntax SHOW_IMAGE
 define syntax SHOW_INTERFACE
 	image TCPIP
 
+define verb STOP
+	cliroutine STOP
+	parameter P1, label=PROCESS_NAME
+
 define verb WRITE
 	cliroutine WRITE
 	parameter P1, label=LOGICAL_NAME, prompt="Log_name", value(required)

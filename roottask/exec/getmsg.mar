@@ -177,6 +177,14 @@ MESSAGES:
         .ASCIC  "SYSTEM"
         .ASCIC  "DEVOFFLINE"
         .ASCIC  "device is not in configuration or not available"
+        .LONG   SS$_NONEXPR
+        .ASCIC  "SYSTEM"
+        .ASCIC  "NONEXPR"
+        .ASCIC  "nonexistent process"
+        .LONG   SS$_NOHANDLER
+        .ASCIC  "SYSTEM"
+        .ASCIC  "NOHANDLER"
+        .ASCIC  "no condition handler found"
         .LONG   SS$_NOHOMEBLK
         .ASCIC  "SYSTEM"
         .ASCIC  "NOHOMEBLK"
