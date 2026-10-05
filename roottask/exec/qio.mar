@@ -42,24 +42,27 @@ IOC$AB_OPA0::                           ; the console's
         .ADDRESS IOC$AB_OPA0, IOC$AB_OPA0, TT$FDT
         .LONG   0
         .ASCII  /OPA0/
-        .LONG   0
+        .LONG   0, 0
 IOC$AB_DKA0::                           ; the system disk's
         .ADDRESS IOC$AB_DKA0, IOC$AB_DKA0, DK$FDT, F11$AB_DKA0
         .ASCII  /DKA0/
         .ADDRESS DK$STARTIO
+        .LONG   0
 IOC$AB_DKB0::                           ; the data disk's
         .ADDRESS IOC$AB_DKB0, IOC$AB_DKB0, DK$FDT, F11$AB_DKB0
         .ASCII  /DKB0/
         .ADDRESS DK$STARTIO
+        .LONG   0
 IOC$AB_MDA0::                           ; the ramdisk's
         .ADDRESS IOC$AB_MDA0, IOC$AB_MDA0, DK$FDT, F11$AB_MDA0
         .ASCII  /MDA0/
         .ADDRESS DK$STARTIO
+        .LONG   0
 IOC$AB_BGA0::                           ; the network's template device (netdriver.mar)
         .ADDRESS IOC$AB_BGA0, IOC$AB_BGA0, NET$FDT
         .LONG   0
         .ASCII  /BGA0/
-        .LONG   0
+        .LONG   0, 0
 IOC$A_UCBEND::                          ; past the last UCB
 
         .PSECT  $CODE$

@@ -335,6 +335,7 @@ NEWUNIT:
         MOVAB   NET$FDT, UCB$L_FDT(R2)
         CLRL    UCB$L_VCB(R2)
         CLRL    UCB$L_START(R2)
+        CLRL    UCB$L_ERRCNT(R2)
         CLRL    UCB$L_CONN(R2)
         MOVL    NET$GL_UNITS, UCB$L_LINK(R2)
         MOVL    R2, NET$GL_UNITS

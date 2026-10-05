@@ -24,12 +24,13 @@
 ; last block and its end of file. An image's files close when it exits,
 ; those its command interpreter opened when the process does.
 ;
-; ponytail: the services run in kernel mode at IPL$_SYNCH, which keeps
-; the file system's buffers to one caller; VMS's RMS runs in executive
-; mode, in the process's own P1. One stream per file; $OPEN only reads
-; and $PUT only appends to a file $CREATE made; no file sharing or
-; locking, search lists or concealed devices, ASTs or completion routines, and $SEARCH finds
-; its place again by counting the matches it skips.
+; ponytail: the services run in kernel mode holding the file system's
+; lock, FIL$LOCK, which keeps its buffers and RMS's to one process; VMS's
+; RMS runs in executive mode, in the process's own P1. One stream per
+; file; $OPEN only reads and $PUT only appends to a file $CREATE made; no
+; file sharing or locking, search lists or concealed devices, ASTs or
+; completion routines, and $SEARCH finds its place again by counting the
+; matches it skips.
 ;
         .LIBRARY "lib.mlb"
         .LIBRARY "starlet.mlb"
@@ -49,6 +50,7 @@
         .EXTERNAL FIL$READHDR, FIL$READVBN, FIL$SEARCHDIR, FIL$EOF, FIL$ISDIR
         .EXTERNAL FIL$SELECT, FIL$CREHDR, FIL$WRITEHDR, FIL$SETNAME, FIL$EXTEND
         .EXTERNAL FIL$ENTER, FIL$REMOVE, FIL$DELHDR, FIL$WRITEVBN, FIL$MKDIR
+        .EXTERNAL FIL$LOCK, FIL$UNLOCK
         .EXTERNAL F11$GW_FID, F11$GL_VCB, F11$AB_DIRBLK, LNM$TRNLOG, SCH$GL_PCBVEC
 
 BLOCK = 512
@@ -129,10 +131,13 @@ DOTDIR: .ASCII  ".DIR"
 ; directory made absolute (RESOLVE), checks it, finds
 ; its directory and reads the directory's header into RMS$AB_DIRHDR. R0 =
 ; RMS$_NORMAL, RMS$_SYN, RMS$_DEV, RMS$_DIR, RMS$_FNM, RMS$_VER, RMS$_DNF,
-; or the disk's error. The strings must be readable. IPL$_SYNCH. Uses R1.
+; or the disk's error. The strings must be readable. Holding FIL$LOCK;
+; at IPL$_SYNCH until MERGE has copied the parts XLATE found in logical
+; names' blocks, which another process may delete. Uses R1.
 RMS$PARSE::
         PUSHR   #^M<R2, R3, R4, R5, R6, R7, R8, R9, R10, R11>
         CLRL    WILD
+        DSBINT  #IPL$_SYNCH
         PUSHL   R4
         PUSHL   R3
         PUSHL   R2
@@ -155,10 +160,11 @@ RMS$PARSE::
         BLBC    R0, 10$
         BSBW    XLATE
 10$:    ADDL2   #12, SP
-        BLBC    R0, 90$
+        BLBC    R0, 20$
         BSBW    RESOLVE
-        BLBC    R0, 90$
+        BLBC    R0, 20$
         BSBW    MERGE
+20$:    ENBINT
         BLBC    R0, 90$
         BSBW    CHECK
         BLBC    R0, 90$
@@ -624,7 +630,7 @@ DIRWALK:
 ; expanded specification names, its highest version unless it gives one,
 ; makes its resultant specification and reads its header into the
 ; buffer. R0 = RMS$_NORMAL, RMS$_WLD, RMS$_FNF, or the disk's error.
-; IPL$_SYNCH. Uses R0-R9.
+; Holding FIL$LOCK. Uses R0-R9.
 RMS$FIND::
         TSTL    WILD
         BNEQ    80$
@@ -837,7 +843,7 @@ SYSDFLT:
         CMPL    R0, #RMS$_FAB
         BEQL    L
         MOVL    R0, FAB$L_STS(R10)
-L:      ENBINT
+L:      BSBW    FIL$UNLOCK
         RET
         .ENDM   FABDONE
 
@@ -846,7 +852,7 @@ L:      ENBINT
         CMPL    R0, #RMS$_RAB
         BEQL    L
         MOVL    R0, RAB$L_STS(R10)
-L:      ENBINT
+L:      BSBW    FIL$UNLOCK
         RET
         .ENDM   RABDONE
 
@@ -856,7 +862,7 @@ L:      ENBINT
 ; then finds the files it names. RMS$_DNF, when the directory doesn't
 ; exist, still gives the expanded string and its parts.
         .ENTRY  EXE$PARSE, ^M<R2, R3, R4, R5, R6, R7, R8, R9, R10, R11>
-        DSBINT  #IPL$_SYNCH
+        BSBW    FIL$LOCK
         BSBW    FABNAM
         BLBC    R0, 90$
         MOVL    #RMS$_NAM, R0
@@ -893,7 +899,7 @@ L:      ENBINT
 ; there are no more, and the next $SEARCH starts again. NAM$L_WCC counts
 ; the matches to skip, and WCC_FOUND says one was found.
         .ENTRY  EXE$SEARCH, ^M<R2, R3, R4, R5, R6, R7, R8, R9, R10, R11>
-        DSBINT  #IPL$_SYNCH
+        BSBW    FIL$LOCK
         BSBW    FABNAM
         BLBC    R0, 90$
         MOVL    #RMS$_NAM, R0
@@ -932,7 +938,7 @@ L:      ENBINT
 ; it has one, its resultant string and file ID. RMS$_WLK if the FAB asks
 ; to write: the volume is read only.
         .ENTRY  EXE$OPEN, ^M<R2, R3, R4, R5, R6, R7, R8, R9, R10, R11>
-        DSBINT  #IPL$_SYNCH
+        BSBW    FIL$LOCK
         BSBW    FABNAM
         BLBC    R0, 90$
         MOVL    #RMS$_WLK, R0
@@ -1024,8 +1030,8 @@ GETIFAB:
 
 ; CLOSEIFI: R8 = an IFI, R7 = its IFAB, R9 = the current PCB. Closes it:
 ; a file $CREATE made gets its last block and its header written. R0 =
-; RMS$_NORMAL, or RMS$_WER if they couldn't be. IPL$_SYNCH. Uses R0 and
-; R1.
+; RMS$_NORMAL, or RMS$_WER if they couldn't be. Holding FIL$LOCK. Uses R0
+; and R1.
 CLOSEIFI:
         PUSHL   #RMS$_NORMAL
         BBC     #IFB$V_WRITE, IFB$L_FLAGS(R7), 20$
@@ -1057,7 +1063,7 @@ CLOSEIFI:
 
 ; $CLOSE fab: closes the file $OPEN opened.
         .ENTRY  EXE$CLOSE, ^M<R2, R3, R4, R5, R6, R7, R8, R9, R10, R11>
-        DSBINT  #IPL$_SYNCH
+        BSBW    FIL$LOCK
         BSBW    FABNAM
         BLBC    R0, 90$
         MOVZWL  FAB$W_IFI(R10), R8
@@ -1082,7 +1088,7 @@ RABCHK: MOVL    4(AP), R10
 
 ; $CONNECT rab: connects the RAB to the file its FAB opened, at its start.
         .ENTRY  EXE$CONNECT, ^M<R2, R3, R4, R5, R6, R7, R8, R9, R10, R11>
-        DSBINT  #IPL$_SYNCH
+        BSBW    FIL$LOCK
         BSBB    RABCHK
         BLBC    R0, 90$
         MOVL    RAB$L_FAB(R10), R1
@@ -1099,7 +1105,7 @@ RABCHK: MOVL    4(AP), R10
 
 ; $DISCONNECT rab: disconnects the RAB from its file.
         .ENTRY  EXE$DISCONNECT, ^M<R2, R3, R4, R5, R6, R7, R8, R9, R10, R11>
-        DSBINT  #IPL$_SYNCH
+        BSBW    FIL$LOCK
         BSBW    RABCHK
         BLBC    R0, 90$
         MOVZWL  RAB$W_ISI(R10), R8
@@ -1115,7 +1121,7 @@ RABCHK: MOVL    4(AP), R10
 ; RMS$_RTB if it didn't all fit, RMS$_EOF past the last, RMS$_RFM for a
 ; file whose records are neither VAR nor FIX.
         .ENTRY  EXE$GET, ^M<R2, R3, R4, R5, R6, R7, R8, R9, R10, R11>
-        DSBINT  #IPL$_SYNCH
+        BSBW    FIL$LOCK
         BSBW    RABCHK
         BLBC    R0, 90$
         MOVZWL  RAB$W_ISI(R10), R8
@@ -1181,7 +1187,7 @@ RABCHK: MOVL    4(AP), R10
 ; there, RMS$_FUL if the volume is full, RMS$_CRE for another error from
 ; the file system, which goes in FAB$L_STV.
         .ENTRY  EXE$CREATE, ^M<R2, R3, R4, R5, R6, R7, R8, R9, R10, R11>
-        DSBINT  #IPL$_SYNCH
+        BSBW    FIL$LOCK
         BSBW    FABNAM
         BLBC    R0, 90$
         BSBW    PARSEFAB
@@ -1279,7 +1285,7 @@ CRENTER:
 ; error in FAB$L_STV: SS$_DIRNOTEMPTY for a directory with files in it.
 ; ponytail: an open file is deleted all the same.
         .ENTRY  EXE$ERASE, ^M<R2, R3, R4, R5, R6, R7, R8, R9, R10, R11>
-        DSBINT  #IPL$_SYNCH
+        BSBW    FIL$LOCK
         BSBW    FABNAM
         BLBC    R0, 90$
         CLRL    R9                      ; 1: by the NAM block
@@ -1352,7 +1358,7 @@ CRENTER:
 ; file's or a VAR one longer than its maximum, RMS$_RFM for another record
 ; format, RMS$_WER if the file system fails, with its error in RAB$L_STV.
         .ENTRY  EXE$PUT, ^M<R2, R3, R4, R5, R6, R7, R8, R9, R10, R11>
-        DSBINT  #IPL$_SYNCH
+        BSBW    FIL$LOCK
         BSBW    RABCHK
         BLBC    R0, 90$
         MOVZWL  RAB$W_ISI(R10), R8
@@ -1536,7 +1542,7 @@ GETBYTE:
         MOVZWL  (R1), R2
         MOVL    4(R1), R0
         MOVL    R2, R1
-        DSBINT  #IPL$_SYNCH
+        BSBW    FIL$LOCK
         MOVL    #1, CREDIR
         CLRQ    R2
         BSBW    SYSDFLT
@@ -1547,12 +1553,14 @@ GETBYTE:
         BEQL    80$
         MOVL    #SS$_CREATED, R0
 80$:    CLRL    CREDIR
-        ENBINT
+        BSBW    FIL$UNLOCK
 90$:    RET
 
 ; RMS$VOLIDLE: R1 = a VCB. R0 = SS$_NORMAL if no process has a file on
-; its volume open, else SS$_DEVACTIVE. IPL$_SYNCH. Uses R0 and R2-R4.
+; its volume open, else SS$_DEVACTIVE. Holding FIL$LOCK, which keeps
+; their files open or closed. Uses R0 and R2-R4.
 RMS$VOLIDLE::
+        DSBINT  #IPL$_SYNCH             ; their PCBs
         MOVL    #SCH$C_MAXPIX-1, R2
 10$:    MOVL    SCH$GL_PCBVEC[R2], R3
         BEQL    40$
@@ -1564,15 +1572,16 @@ RMS$VOLIDLE::
 30$:    AOBLEQ  #MAXIFI, R4, 20$
 40$:    SOBGTR  R2, 10$
         MOVL    #SS$_NORMAL, R0
-        RSB
+        BRB     90$
 80$:    MOVL    #SS$_DEVACTIVE, R0
+90$:    ENBINT
         RSB
 
 ; RMS$RUNDOWN: R4 = the current PCB, R0 = a mask of IFIs. Closes the
-; process's files but those. Uses R0-R3.
+; process's files but those, taking FIL$LOCK. Uses R0-R3.
 RMS$RUNDOWN::
         PUSHR   #^M<R7, R8, R9>
-        DSBINT  #IPL$_SYNCH
+        BSBW    FIL$LOCK
         MOVL    R0, R3
         MOVL    R4, R9
         MOVL    #1, R8
@@ -1581,7 +1590,7 @@ RMS$RUNDOWN::
         MOVL    PCB$A_IFAB(R4)[R8], R7
         BSBW    CLOSEIFI
 20$:    AOBLEQ  #MAXIFI, R8, 10$
-        ENBINT
+        BSBW    FIL$UNLOCK
         POPR    #^M<R7, R8, R9>
         RSB
 

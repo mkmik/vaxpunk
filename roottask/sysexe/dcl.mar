@@ -357,6 +357,9 @@ DVIITEMS:                               ; what $GETDVIW returns of it
         .WORD   4, DVI$_STS
         .ADDRESS V_STS
         .LONG   0
+        .WORD   4, DVI$_ERRCNT
+        .ADDRESS V_ERRCNT
+        .LONG   0
         .WORD   12, DVI$_VOLNAM
         .ADDRESS DEVLABEL+1
         .ADDRESS LABLEN
@@ -367,6 +370,8 @@ DVIITEMS:                               ; what $GETDVIW returns of it
 V_MNT:  .LONG   0                       ; 1 if a volume is mounted,
 V_SWL:  .LONG   0                       ; 1 if it is read only,
 V_STS:  .LONG   0                       ; UCB$M_ONLINE if the device is there,
+V_ERRCNT:                               ; the errors it reported,
+        .LONG   0
 DEVLABEL:                               ; the volume's label, after a byte,
         .BLKB   13
 LABLEN: .WORD   0                       ; its length,
@@ -951,15 +956,15 @@ SHOWDEF:
         MOVL    #SS$_NORMAL, R0
 20$:    BRW     DONE
 
-; SHOW DEVICES [name]: lists the disks, with their status and their
-; volumes' labels and free blocks, then the terminal, under VMS's
+; SHOW DEVICES [name]: lists the disks, with their status, error counts
+; and their volumes' labels and free blocks, then the terminal, under VMS's
 ; headings, or only the devices whose names start with name, with *
 ; and % wildcards: SHOW DEVICES DK. It finds them with $DEVICE_SCAN, a
 ; class at a time, and asks each about itself with $GETDVIW.
 ; SS$_NOSUCHDEV if none matches.
 ; With /MOUNTED, only the devices with a volume mounted.
-; ponytail: no error counts, transactions or mount counts, which nothing
-; keeps; no /FULL.
+; ponytail: no transactions or mount counts, which nothing keeps; no
+; /FULL.
 SHOWDEV:
         MOVAB   V_MOUNTED, R1
         BSBW    ISPRES
@@ -1029,7 +1034,7 @@ SCAN:   CLRQ    SCANCTX
 30$:    BSBW    ADDCSTR
         MOVL    #41, R3
         BSBW    PADTO
-        CLRL    R1                      ; the error count
+        MOVL    V_ERRCNT, R1
         MOVL    #5, R3
         BSBW    ADDDEC
         TSTL    V_MNT

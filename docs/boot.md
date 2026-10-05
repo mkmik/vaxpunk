@@ -222,8 +222,9 @@ interpreter. It is linked high in P1, which tells the executive it is one
   system forget the volume, unless a process has a file on it open, so
   it can be mounted again, or initialized afresh. The system disk can't
   be dismounted (`%SYSTEM-F-DEVACTIVE`).
-- `SHOW DEVICES` (`SHO DEV`) lists the disks, mounted or not, with their
-  volumes' labels and free blocks, then the console, `OPA0:`, as VMS
+- `SHOW DEVICES` (`SHO DEV`) lists the disks, mounted or not, with the
+  errors the disk's driver counted in its UCB, and their volumes' labels
+  and free blocks, then the console, `OPA0:`, as VMS
   does: it finds them with the `$DEVICE_SCAN` system service and asks
   `$GETDVIW` about each, which counts the free blocks in the volume's
   storage bitmap (`FIL$FREEBLOCKS`). `SHOW DEVICES DK` lists only the
@@ -303,6 +304,12 @@ executive feature:
   it reads the message MBXCHILD's deletion writes there, with its PID and
   its status, `RMS$_FNF`. A permanent mailbox outlives its channel until
   `$DELMBX`.
+- **FSTEST1** and **FSTEST2** each count the files in `SYS$SYSTEM:` 50
+  times with `$PARSE` and `$SEARCH`, at once. The file system runs
+  holding a lock of its own, `FIL$LOCK`, below `IPL$_SYNCH`
+  ([ADR-0020](adr/0020-file-system-lock-below-ipl-synch.md)), so the
+  timer takes the CPU from one while it holds the lock, and the other
+  waits for it. Each prints `FSTEST: ok` if every count was the first's.
 - STARTUP prints `STARTUP: done` and exits, and DCL prompts again while
   the others finish.
 

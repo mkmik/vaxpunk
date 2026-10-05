@@ -44,6 +44,7 @@ kept current, like a design document.
 | [ADR-0017](adr/0017-command-tables-from-cld-with-vcdu.md) | Commands are defined in CLD files that vcdu compiles at build time, and a parser library linked into each image reads them | Proposed |
 | [ADR-0018](adr/0018-set-command-and-foreign-commands.md) | SET COMMAND compiles CLD in DCL into tables DCL looks in first, and a foreign command's image gets its line as $LINE | Proposed |
 | [ADR-0019](adr/0019-mailboxes.md) | A mailbox is a unit of its own, MBnn, whose writes are done at once, and process deletion writes the termination message to it | Proposed |
+| [ADR-0020](adr/0020-file-system-lock-below-ipl-synch.md) | The file system runs below IPL$_SYNCH, holding a lock of its own, as the XQP does | Proposed |
 
 ### PRDs
 

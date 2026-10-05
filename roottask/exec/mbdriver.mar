@@ -153,6 +153,7 @@ NEWMBX: MOVL    #99, R1
         MOVAB   MB$FDT, UCB$L_FDT(R5)
         CLRL    UCB$L_VCB(R5)
         CLRL    UCB$L_START(R5)
+        CLRL    UCB$L_ERRCNT(R5)
         CLRL    UCB$L_REFC(R5)
         MOVAL   UCB$L_MSGQFL(R5), R0
         MOVL    R0, (R0)

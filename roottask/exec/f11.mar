@@ -14,18 +14,26 @@
 ; $DISMOU forgets it. The
 ; rest reads what VMS's XQP reads: a file's header by its number, its
 ; blocks through the header's map, and a directory's records, with
-; wildcards. f11wrt.mar writes them. RMS (rms.mar) and the image activator
-; call them at IPL$_SYNCH, which keeps their buffers, and F11$GL_VCB, the
-; volume they work on, to one caller at a time.
+; wildcards. f11wrt.mar writes them. RMS (rms.mar), the image activator
+; and the services here call them holding the file system's lock,
+; FIL$LOCK, as the XQP holds its volume's: it keeps their buffers,
+; F11$AB_IRP, and F11$GL_VCB, the volume they work on, to one process at a
+; time, at IPL$_ASTDEL, where the others still run. Only the driver runs at
+; IPL$_SYNCH.
 ; ponytail: no extension headers, so a file's map is what its one header
-; holds; DKA0:'s and DKB0:'s I/O waits for the device, at IPL$_SYNCH,
-; and the file system waits for none: its IRP is done when the driver
-; returns. A driver that queues it needs the XQP's wait for the I/O.
+; holds; one lock for every volume, where the XQP $ENQs one per volume and
+; one per file; DKA0:'s and DKB0:'s I/O waits for the device, at
+; IPL$_SYNCH, and the file system waits for none: its IRP is done when the
+; driver returns. A driver that queues it needs FIL$READLBLK to wait for
+; it, as the lock lets it.
 ;
         .LIBRARY "lib.mlb"
         .LIBRARY "starlet.mlb"
+        $PRDEF
         $PALDEF
         $IPLDEF
+        $PCBDEF
+        $STATEDEF
         $SSDEF
         $RMSDEF
         $VCBDEF
@@ -37,7 +45,7 @@
         .EXTERNAL EXE$OUTZSTRING, EXE$OUTCSTRING, EXE$OUTCRLF
         .EXTERNAL EXE$ALONONPAGED, EXE$DEANONPGDSIZ, RMS$PARSE, RMS$FIND, MD$IO
         .EXTERNAL IOC$ALLOCIRP, IOC$REQCOM, IOC$AB_DKA0, IOC$AB_DKB0, IOC$AB_MDA0
-        .EXTERNAL EXE$PROBER_DSC, RMS$VOLIDLE
+        .EXTERNAL EXE$PROBER_DSC, RMS$VOLIDLE, SCH$GL_CURPCB, SCH$WAIT, SCH$WAKEPCB
 
 BLOCK = 512
 MAXREAD = 127                           ; blocks a READLBLK reads, below 64 KB
@@ -98,6 +106,10 @@ F11$GW_FID::                            ; the file ID FIL$SEARCHDIR found
         .ALIGN  LONG
 F11$AB_IRP::                            ; the IRP FIL$READLBLK and FIL$WRITELBLK hand the driver, with no process
         .BLKB   IRP$K_LENGTH
+OWNER:  .LONG   0                       ; the PCB holding the file system's lock, or 0
+LOCKIPL:                                ; the IPL it had
+        .LONG   0
+LOCKWQ: .ADDRESS LOCKWQ, LOCKWQ         ; the processes waiting for it, SCH$C_MWAIT
 F11$T_FORMAT:
         .ASCII  "DECFILE11B"
 MOUNTED:
@@ -110,10 +122,52 @@ LABEL:  .BLKB   13                      ; the label $MOUNT asks for, .ASCIC
 
         .PSECT  $CODE$
 
-;
+; FIL$LOCK: takes the file system's lock, waiting while another process
+; holds it, and raises IPL to IPL$_ASTDEL, unless it is above, so no
+; kernel mode AST deletes the process while it holds it. FIL$UNLOCK gives
+; it back. Not twice. Keeps every register.
+FIL$LOCK::
+        PUSHR   #^M<R0, R1, R4>
+        MFPR    #PR$_IPL, R1
+        SETIPL  #IPL$_SYNCH
+        MOVL    SCH$GL_CURPCB, R4
+10$:    TSTL    OWNER
+        BEQL    20$
+        MOVL    #SCH$C_MWAIT, PCB$L_STATE(R4)
+        MOVAQ   LOCKWQ, R0
+        BSBW    SCH$WAIT
+        BRB     10$
+20$:    MOVL    R4, OWNER
+        MOVL    R1, LOCKIPL
+        CMPL    R1, #IPL$_ASTDEL
+        BGEQ    30$
+        MOVL    #IPL$_ASTDEL, R1
+30$:    MTPR    R1, #PR$_IPL
+        POPR    #^M<R0, R1, R4>
+        RSB
+
+; FIL$UNLOCK: gives back the lock FIL$LOCK took, ends the waits for it,
+; each waiter trying again, and puts back the IPL FIL$LOCK's caller had.
+; Keeps every register.
+FIL$UNLOCK::
+        PUSHR   #^M<R0, R1, R4>
+        MOVL    LOCKIPL, R1
+        SETIPL  #IPL$_SYNCH
+        CLRL    OWNER
+        MOVAQ   LOCKWQ, R0
+10$:    MOVL    (R0), R4
+        CMPL    R4, R0
+        BEQL    20$
+        BSBW    SCH$WAKEPCB
+        BRB     10$
+20$:    MTPR    R1, #PR$_IPL
+        POPR    #^M<R0, R1, R4>
+        RSB
+
 ; FIL$READLBLK: R0 = a buffer, R1 = a block count, R2 = an LBN. Reads the
 ; blocks from F11$GL_VCB's disk, with an IO$_READLBLK in F11$AB_IRP to its
-; driver. R0 = SS$_NORMAL, or the device's error. IPL$_SYNCH. Uses R1.
+; driver, at IPL$_SYNCH. R0 = SS$_NORMAL, or the device's error. Holding
+; FIL$LOCK. Uses R1.
 FIL$READLBLK::
         PUSHL   #IO$_READLBLK
         BRB     LBLK
@@ -121,7 +175,7 @@ FIL$READLBLK::
 ; FIL$WRITELBLK: R0 = a buffer, R1 = a block count, R2 = an LBN. Writes
 ; the blocks to F11$GL_VCB's disk, with an IO$_WRITELBLK in F11$AB_IRP to
 ; its driver. R0 = SS$_NORMAL, SS$_WRITLCK if the disk is read only, or
-; the device's error. IPL$_SYNCH. Uses R1.
+; the device's error. Holding FIL$LOCK. Uses R1.
 FIL$WRITELBLK::
         PUSHL   #IO$_WRITELBLK
 LBLK:   PUSHR   #^M<R2, R3, R4, R5>
@@ -134,7 +188,9 @@ LBLK:   PUSHR   #^M<R2, R3, R4, R5>
         MOVL    VCB$L_UCB(R5), R5
         MOVL    R5, IRP$L_UCB(R3)
         MOVL    UCB$L_START(R5), R0
+        DSBINT  #IPL$_SYNCH
         JSB     (R0)
+        ENBINT
         MOVZWL  F11$AB_IRP+IRP$L_IOST1, R0
         POPR    #^M<R2, R3, R4, R5>
         TSTL    (SP)+
@@ -200,8 +256,9 @@ DK$FDT::
 ; DK$STARTIO: the disks' start I/O routine. R3 = an IRP, R5 = the disk's
 ; UCB. Does the IRP's read or write of IRP$L_BCNT bytes at IRP$L_BUFADR,
 ; from or to LBN IRP$L_MEDIA, at once, and completes it (IOC$REQCOM) with
-; the status, and the count if it is a success. R0 = SS$_NORMAL.
-; IPL$_SYNCH. Uses R0-R3.
+; the status, and the count if it is a success; SS$_DRVERR, the device's
+; own failure, counts in UCB$L_ERRCNT. R0 = SS$_NORMAL. IPL$_SYNCH. Uses
+; R0-R3.
 DK$STARTIO::
         PUSHR   #^M<R3, R4>
         BICL3   #^C63, IRP$L_FUNC(R3), R4
@@ -219,7 +276,11 @@ DK$STARTIO::
         POPR    #^M<R3, R4>
         BLBC    R0, 20$
         INSV    IRP$L_BCNT(R3), #16, #16, R0
-20$:    CLRL    R1
+        BRB     30$
+20$:    CMPL    R0, #SS$_DRVERR
+        BNEQ    30$
+        INCL    UCB$L_ERRCNT(R5)
+30$:    CLRL    R1
         BRW     IOC$REQCOM
 
 ; FIL$SELECT: R1 = a device name, R2 = its length: DKA0, DKB0 or MDA0, with a
@@ -258,7 +319,8 @@ FIL$SELECT::
 ; header, which maps the others, and, if the disk can be written, finds
 ; the storage bitmap, and reports it on the console. R0 = SS$_NORMAL,
 ; SS$_NOHOMEBLK if there is no ODS-2 home block, SS$_INCVOLLABEL if the
-; label isn't R1's, or the disk's error. IPL$_SYNCH. Uses R0-R5.
+; label isn't R1's, or the disk's error. Holding FIL$LOCK, but at boot,
+; when no other process is there to want it. Uses R0-R5.
 FIL$MOUNT::
         MOVL    F11$GL_VCB, R5
         MOVL    R1, R4
@@ -313,6 +375,7 @@ FIL$MOUNT::
         BEQL    80$
         MOVL    R0, VCB$L_SBMAPLBN(R5)
 30$:    BISL2   #1@VCB$V_MOUNTED, VCB$L_STATUS(R5)
+        DSBINT  #IPL$_SYNCH             ; the console, a line at a time
         MOVAB   MOUNTED, R1
         JSB     G^EXE$OUTZSTRING
         MOVAB   VCB$T_VOLNAME(R5), R1
@@ -324,6 +387,7 @@ FIL$MOUNT::
         MOVAB   DEVNAM, R1
         JSB     G^EXE$OUTZSTRING
         JSB     G^EXE$OUTCRLF
+        ENBINT
         MOVL    #SS$_NORMAL, R0
         RSB
 80$:    MOVL    #SS$_NOHOMEBLK, R0
@@ -362,7 +426,7 @@ FIL$MOUNT::
 40$:    MOVL    #SS$_IVDEVNAM, R0
         TSTL    R7
         BEQL    90$
-        DSBINT  #IPL$_SYNCH
+        BSBW    FIL$LOCK
         MOVL    R6, R1
         MOVL    R7, R2
         BSBW    FIL$SELECT
@@ -375,7 +439,7 @@ FIL$MOUNT::
         BNEQ    50$
         CLRL    R1
 50$:    BSBW    FIL$MOUNT
-80$:    ENBINT
+80$:    BSBW    FIL$UNLOCK
         RET
 85$:    MOVL    #SS$_ACCVIO, R0
         RET
@@ -394,7 +458,7 @@ FIL$MOUNT::
         BLBC    R0, 90$
         MOVZWL  (R1), R2
         MOVL    4(R1), R1
-        DSBINT  #IPL$_SYNCH
+        BSBW    FIL$LOCK
         BSBW    FIL$SELECT
         BLBC    R0, 80$
         MOVL    F11$GL_VCB, R1
@@ -407,13 +471,13 @@ FIL$MOUNT::
         BSBW    RMS$VOLIDLE
         BLBC    R0, 80$
         BICL2   #1@VCB$V_MOUNTED, VCB$L_STATUS(R1)
-80$:    ENBINT
+80$:    BSBW    FIL$UNLOCK
 90$:    RET
 
 ; FIL$FREEBLOCKS: R0 = the free blocks on F11$GL_VCB's volume, which
 ; must be mounted: a cluster for each set bit of BITMAP.SYS's storage
 ; bitmap, the blocks past its SCB. R1 = SS$_NORMAL, or the disk's error
-; and R0 = 0. IPL$_SYNCH. Uses R0-R1.
+; and R0 = 0. Holding FIL$LOCK. Uses R0-R1.
 ; ponytail: counted each time, a bit at a time; VMS keeps the count in
 ; the VCB, up to date as files grow and shrink.
 FIL$FREEBLOCKS::
@@ -613,7 +677,7 @@ FIL$ISDIR::
 ; the next entry that matches, in the directory's order: R1 = its name,
 ; in F11$AB_DIRBLK, R2 = the name's length, R4 = its version, R5 = its
 ; file number, and its file ID in F11$GW_FID. R0 = SS$_NORMAL,
-; SS$_NOMOREFILES if there is none, or the disk's error. IPL$_SYNCH.
+; SS$_NOMOREFILES if there is none, or the disk's error. Holding FIL$LOCK.
 ; Keeps every other register.
 ; ponytail: the highest version is the first of a name's first record;
 ; a name whose versions spill into a second record matches twice.
@@ -737,7 +801,7 @@ FIL$MATCH::
 ; from it, page by page.
 FIL$OPENFILE::
         PUSHR   #^M<R4, R5, R6, R7, R8, R9, R10, R11>
-        DSBINT  #IPL$_SYNCH             ; the file system's buffers
+        BSBW    FIL$LOCK
         MOVL    R6, R0
         MOVL    R7, R1
         CLRQ    R2                      ; no default but SYS$SYSTEM
@@ -774,7 +838,7 @@ FIL$OPENFILE::
         MOVL    (SP)+, R0
         BRB     90$
 85$:    MOVL    #SS$_ENDOFFILE, R0
-90$:    ENBINT
+90$:    BSBW    FIL$UNLOCK
         POPR    #^M<R4, R5, R6, R7, R8, R9, R10, R11>
         RSB
 

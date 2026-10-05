@@ -8,7 +8,7 @@
 ; them, and an entry in a directory (ods/docs/directory.md); deleting it
 ; gives all three back. FIL$MKDIR makes a directory the same way. FIL$INIT, which $INIT_VOL calls, writes an empty
 ; volume, laid out as INITIALIZE does (ods/docs/initialize.md). RMS
-; (rms.mar) calls these at IPL$_SYNCH, as it calls f11.mar's.
+; (rms.mar) calls these holding FIL$LOCK, as it calls f11.mar's.
 ; ponytail: a cluster is a block, and the bitmaps are a block each, so a
 ; volume has at most 4096 blocks and 4096 files; the index file isn't
 ; extended, so a volume has the headers INITIALIZE made room for; map
@@ -24,6 +24,7 @@
         .EXTERNAL F11$GL_VCB, F11$AB_DIRBLK, EXE$GQ_SYSTIME, MD$GL_BLOCKS
         .EXTERNAL FIL$READLBLK, FIL$WRITELBLK, FIL$READVBN, FIL$WRITEVBN
         .EXTERNAL FIL$READHDR, FIL$MAPVBN, FIL$EOF, FIL$SELECT, MD$CREATE
+        .EXTERNAL FIL$LOCK, FIL$UNLOCK
         .EXTERNAL EXE$ALONONPAGED, EXE$DEANONPGDSIZ
 
 BLOCK = 512
@@ -141,7 +142,7 @@ CHECKSUM:
 
 ; FIL$WRITEHDR: R1 = a file header. Writes it, with its checksum, in its
 ; file's slot of F11$GL_VCB's index file. R0 = SS$_NORMAL or the disk's
-; error. IPL$_SYNCH. Keeps every other register.
+; error. Holding FIL$LOCK. Keeps every other register.
 FIL$WRITEHDR::
         PUSHR   #^M<R1, R2, R3>
         MOVL    #255, R2
@@ -260,7 +261,8 @@ FIL$SETNAME::
 ; index file bitmap, and makes an empty header for it in the buffer, with
 ; the next sequence number for its slot; FIL$WRITEHDR writes it. R0 =
 ; SS$_NORMAL, SS$_IDXFILEFULL if every header the index file has room for
-; is in use, or the disk's error. IPL$_SYNCH. Keeps every other register.
+; is in use, or the disk's error. Holding FIL$LOCK. Keeps every other
+; register.
 FIL$CREHDR::
         PUSHR   #^M<R1, R2, R3, R4, R5, R6>
         MOVL    R1, R6
@@ -401,7 +403,7 @@ ADDMAP: MOVZBL  FH2$B_MPOFFSET(R3), R4
 ; blocks more to the file, in as few runs as the storage bitmap has, and
 ; maps them; FIL$WRITEHDR writes the header. R0 = SS$_NORMAL,
 ; SS$_DEVICEFULL, SS$_HEADERFULL, or the disk's error, with the blocks
-; mapped until then still the file's. IPL$_SYNCH. Keeps every other
+; mapped until then still the file's. Holding FIL$LOCK. Keeps every other
 ; register.
 FIL$EXTEND::
         PUSHR   #^M<R1, R2, R4, R5, R6>
@@ -434,7 +436,7 @@ FIL$EXTEND::
 ; FIL$DELHDR: R1 = a file header. Deletes the file: gives its blocks back
 ; to the storage bitmap and its slot to the index file bitmap, and marks
 ; the header deleted, its sequence number kept for the slot's next file.
-; R0 = SS$_NORMAL or the disk's error. IPL$_SYNCH. Uses R1-R5.
+; R0 = SS$_NORMAL or the disk's error. Holding FIL$LOCK. Uses R1-R5.
 FIL$DELHDR::
         PUSHL   R6
         MOVL    R1, R6
@@ -483,7 +485,7 @@ FIL$DELHDR::
 ; has, R5 = a file ID's address. Enters the file in the directory: R4 =
 ; its version. R0 = SS$_NORMAL, SS$_DUPFILENAME if that version is there,
 ; SS$_BADFILEVER if it would be above 32767, SS$_INSFMEM, or the disk's
-; error. IPL$_SYNCH. Uses R0-R5.
+; error. Holding FIL$LOCK. Uses R0-R5.
 FIL$ENTER::
         CLRL    DU_MODE
         MOVL    R8, DU_VER
@@ -496,7 +498,7 @@ FIL$ENTER::
 ; FIL$REMOVE: R3 = a directory's header, R6 = a name, NAME.TYPE, R7 = its
 ; length, R8 = a version. Removes the file's entry from the directory: R5
 ; = its file number. R0 = SS$_NORMAL, SS$_NOSUCHFILE if there is no such
-; entry, SS$_INSFMEM, or the disk's error. IPL$_SYNCH. Uses R0-R5.
+; entry, SS$_INSFMEM, or the disk's error. Holding FIL$LOCK. Uses R0-R5.
 FIL$REMOVE::
         MOVL    #1, DU_MODE
         MOVL    R8, DU_VER
@@ -511,7 +513,7 @@ FIL$REMOVE::
 ; makes the MFD: a header marked a directory and contiguous, with VAR
 ; records in blocks, and a block holding only the end of block's -1. R1 =
 ; its header, R0 = SS$_NORMAL, or FIL$CREHDR's, FIL$EXTEND's or
-; FIL$ENTER's error, with nothing made. IPL$_SYNCH. Uses R0-R5.
+; FIL$ENTER's error, with nothing made. Holding FIL$LOCK. Uses R0-R5.
 FIL$MKDIR::
         PUSHR   #^M<R8, R9>
         MOVL    R3, R9                  ; the one it goes in
@@ -858,7 +860,7 @@ ENDBLK: BICL3   #^C<BLOCK-1>, DU_POS, R0
 ; F11$GL_VCB's disk: the home block, the bitmaps, and the reserved files'
 ; headers, as INITIALIZE does, and the reserved files in the MFD. The
 ; blocks past the bitmaps are free, whatever they hold. R0 = SS$_NORMAL,
-; or the disk's error. IPL$_SYNCH. Uses R0-R11.
+; or the disk's error. Holding FIL$LOCK. Uses R0-R11.
 ; ponytail: no backup home block or index file header: the home block's
 ; backup LBNs are the primary ones.
 FIL$INIT::
@@ -1040,7 +1042,7 @@ RESHDR: MOVL    R10, R6
         BEQL    90$
         CMPL    R9, #12
         BGTRU   90$
-        DSBINT  #IPL$_SYNCH
+        BSBW    FIL$LOCK
         MOVL    R6, R1
         MOVL    R7, R2
         BSBW    FIL$SELECT
@@ -1058,7 +1060,7 @@ RESHDR: MOVL    R10, R6
 50$:    MOVL    R8, R1
         MOVL    R9, R2
         BSBW    FIL$INIT
-80$:    ENBINT
+80$:    BSBW    FIL$UNLOCK
         RET
 85$:    MOVL    #SS$_ACCVIO, R0
 90$:    RET
