@@ -1,0 +1,170 @@
+        .TITLE  MBXTEST Checks mailboxes and termination messages
+        .IDENT  /V0.1/
+;
+; STARTUP starts it. It makes a mailbox with a logical name, writes to it
+; and reads back, and fills it; reads it on a second channel, from
+; $CREMBX by the same name, and a third, from $ASSIGN; starts MBXCHILD,
+; whose image isn't there, with the mailbox as its termination mailbox,
+; and reads the message its deletion sends. A permanent mailbox outlives
+; its channel until $DELMBX, and the temporary one goes with its last
+; channel, and its name with it. Each EXPECT checks a status or a value;
+; a failed one exits with 2 * N, which the executive reports.
+;
+        .LIBRARY "starlet.mlb"
+        .LIBRARY "sysexe.mlb"
+        $SSDEF
+        $RMSDEF
+        $IODEF
+        $DVIDEF
+        $DCDEF
+        $JPIDEF
+        $LNMDEF
+        $MSGDEF
+        $ACCDEF
+
+        .PSECT  DATA, NOEXE, WRT, LONG
+MBXNAME:
+        .ASCID  "MBXTEST_MBX"
+PRMNAME:
+        .ASCID  "MBXTEST_PRM"
+CONSOLE:
+        .ASCID  "OPA0:"
+CHILD_IMAGE:
+        .ASCID  "NOSUCH.EXE"
+CHILD_NAME:
+        .ASCID  "MBXCHILD"
+SYSTEM: .ASCID  "LNM$SYSTEM"
+HELLO:  .ASCII  "hello"
+CHAN:   .LONG   0
+CHAN2:  .LONG   0
+CHAN3:  .LONG   0
+UNIT:   .LONG   0
+CLASS:  .LONG   0
+MYPID:  .LONG   0
+PID:    .LONG   0
+IOSB:   .BLKQ   1
+BUF:    .BLKB   128
+DVI_ITEMS:                              ; the mailbox's unit and class
+        .WORD   4, DVI$_UNIT
+        .ADDRESS UNIT
+        .LONG   0
+        .WORD   4, DVI$_DEVCLASS
+        .ADDRESS CLASS
+        .LONG   0
+        .LONG   0
+JPI_ITEMS:                              ; my PID
+        .WORD   4, JPI$_PID
+        .ADDRESS MYPID
+        .LONG   0
+        .LONG   0
+TRN_ITEMS:
+        .WORD   128, LNM$_STRING
+        .ADDRESS BUF
+        .LONG   0
+        .LONG   0
+
+        .PSECT  CODE, EXE, LONG
+        .ENTRY  START, ^M<>
+        $GETJPIW_S ITMLST=JPI_ITEMS
+        EXPECT  #SS$_NORMAL, 1
+
+; A temporary mailbox, for messages of up to 100 bytes, which holds 200.
+        $CREMBX_S CHAN=CHAN, MAXMSG=#100, BUFQUO=#200, LOGNAM=MBXNAME
+        EXPECT  #SS$_NORMAL, 2
+        $GETDVIW_S CHAN=CHAN, ITMLST=DVI_ITEMS
+        EXPECT  #SS$_NORMAL, 3
+        MOVL    CLASS, R0
+        EXPECT  #DC$_MAILBOX, 4
+
+; A message written and read back: its size, and who wrote it.
+        $QIOW_S CHAN=CHAN, FUNC=#IO$_WRITEVBLK, IOSB=IOSB, P1=HELLO, P2=#5
+        EXPECT  #SS$_NORMAL, 5
+        MOVL    IOSB, R0
+        EXPECT  #<5@16>!SS$_NORMAL, 6
+        $QIOW_S CHAN=CHAN, FUNC=#IO$_READVBLK, IOSB=IOSB, P1=BUF, P2=#128
+        EXPECT  #SS$_NORMAL, 7
+        MOVL    IOSB, R0
+        EXPECT  #<5@16>!SS$_NORMAL, 8
+        MOVL    IOSB+4, R0
+        EXPECT  MYPID, 9
+        MOVL    BUF, R0
+        EXPECT  HELLO, 10
+
+; Empty, a read that won't wait ends at once. A message too long for the
+; mailbox, and one with no room left after two.
+        $QIOW_S CHAN=CHAN, FUNC=#IO$_READVBLK!IO$M_NOW, IOSB=IOSB, P1=BUF, P2=#128
+        EXPECT  #SS$_NORMAL, 11
+        MOVZWL  IOSB, R0
+        EXPECT  #SS$_ENDOFFILE, 12
+        $QIOW_S CHAN=CHAN, FUNC=#IO$_WRITEVBLK, P1=BUF, P2=#101
+        EXPECT  #SS$_MBTOOSML, 13
+        $QIOW_S CHAN=CHAN, FUNC=#IO$_WRITEVBLK, P1=BUF, P2=#100
+        EXPECT  #SS$_NORMAL, 14
+        $QIOW_S CHAN=CHAN, FUNC=#IO$_WRITEVBLK, P1=BUF, P2=#100
+        EXPECT  #SS$_NORMAL, 15
+        $QIOW_S CHAN=CHAN, FUNC=#IO$_WRITEVBLK, P1=BUF, P2=#1
+        EXPECT  #SS$_MBFULL, 16
+
+; The same mailbox by its name, from $CREMBX, which reads the first,
+; cut to fit, and from $ASSIGN, which reads the second.
+        $CREMBX_S CHAN=CHAN2, LOGNAM=MBXNAME
+        EXPECT  #SS$_NORMAL, 17
+        $QIOW_S CHAN=CHAN2, FUNC=#IO$_READVBLK, IOSB=IOSB, P1=BUF, P2=#10
+        EXPECT  #SS$_NORMAL, 18
+        MOVL    IOSB, R0
+        EXPECT  #<10@16>!SS$_BUFFEROVF, 19
+        $ASSIGN_S DEVNAM=MBXNAME, CHAN=CHAN3
+        EXPECT  #SS$_NORMAL, 20
+        $QIOW_S CHAN=CHAN3, FUNC=#IO$_READVBLK, IOSB=IOSB, P1=BUF, P2=#128
+        EXPECT  #SS$_NORMAL, 21
+        MOVL    IOSB, R0
+        EXPECT  #<100@16>!SS$_NORMAL, 22
+        $DASSGN_S CHAN=CHAN3
+        $DASSGN_S CHAN=CHAN2
+
+; A process whose image isn't there, with this mailbox for its
+; termination message: it exits with RMS$_FNF, and the message says so.
+        $CREPRC_S PIDADR=PID, IMAGE=CHILD_IMAGE, PRCNAM=CHILD_NAME, BASPRI=#4, MBXUNT=UNIT
+        EXPECT  #SS$_NORMAL, 23
+        $QIOW_S CHAN=CHAN, FUNC=#IO$_READVBLK, IOSB=IOSB, P1=BUF, P2=#128
+        EXPECT  #SS$_NORMAL, 24
+        MOVL    IOSB, R0
+        EXPECT  #<ACC$K_TERMLEN@16>!SS$_NORMAL, 25
+        MOVL    IOSB+4, R0              ; it wrote it
+        EXPECT  PID, 26
+        MOVZWL  BUF+ACC$W_MSGTYP, R0
+        EXPECT  #MSG$_DELPROC, 27
+        MOVL    BUF+ACC$L_FINALSTS, R0
+        EXPECT  #RMS$_FNF, 28
+        MOVL    BUF+ACC$L_PID, R0
+        EXPECT  PID, 29
+        MOVL    BUF+ACC$L_OWNER, R0
+        EXPECT  MYPID, 30
+
+; A permanent mailbox outlives its channel, until $DELMBX, which isn't
+; for a terminal.
+        $CREMBX_S PRMFLG=#1, CHAN=CHAN2, LOGNAM=PRMNAME
+        EXPECT  #SS$_NORMAL, 31
+        $DASSGN_S CHAN=CHAN2
+        $ASSIGN_S DEVNAM=PRMNAME, CHAN=CHAN2
+        EXPECT  #SS$_NORMAL, 32
+        $DELMBX_S CHAN=CHAN2
+        EXPECT  #SS$_NORMAL, 33
+        $DASSGN_S CHAN=CHAN2
+        $ASSIGN_S DEVNAM=PRMNAME, CHAN=CHAN2
+        EXPECT  #SS$_NOSUCHDEV, 34
+        $ASSIGN_S DEVNAM=CONSOLE, CHAN=CHAN2
+        $DELMBX_S CHAN=CHAN2
+        EXPECT  #SS$_DEVNOTMBX, 35
+        $DASSGN_S CHAN=CHAN2
+
+; The temporary one goes with its last channel, and its name.
+        $DASSGN_S CHAN=CHAN
+        EXPECT  #SS$_NORMAL, 36
+        $TRNLNM_S TABNAM=SYSTEM, LOGNAM=MBXNAME, ITMLST=TRN_ITEMS
+        EXPECT  #SS$_NOLOGNAM, 37
+        PRINT   "MBXTEST: ok"
+        MOVL    #SS$_NORMAL, R0
+        RET
+
+        .END    START

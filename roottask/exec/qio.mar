@@ -12,7 +12,8 @@
 ; for that.
 ; The drivers: the console's, ttdriver.mar, the disks', DK$FDT in
 ; f11.mar, whose start I/O routine, DK$STARTIO, the file system's own
-; reads and writes go through too, and the network's, netdriver.mar.
+; reads and writes go through too, the network's, netdriver.mar, and the
+; mailboxes', mbdriver.mar.
 ;
         .LIBRARY "lib.mlb"
         .LIBRARY "starlet.mlb"
@@ -30,7 +31,7 @@
         .EXTERNAL EXE$PROBER_DSC, EXE$CLREF, EXE$WAITFR
         .EXTERNAL EXE$ALONONPAGED, EXE$DEANONPGDSIZ
         .EXTERNAL LNM$TRNLOG, TT$FDT, DK$FDT, DK$STARTIO, TTY$Q_CTRLC, TTY$Q_CTRLY
-        .EXTERNAL NET$FDT, NET$CANCEL, NET$FINDUNIT, NET$ASSIGNED
+        .EXTERNAL NET$FDT, NET$CANCEL, NET$FINDUNIT, MB$CANCEL, MB$FINDUNIT
         .EXTERNAL F11$AB_DKA0, F11$AB_DKB0, F11$AB_MDA0
 
 MAXCHAN = 31                            ; channels 1-31, a bit each in PCB$L_CHANS
@@ -68,8 +69,8 @@ IOC$A_UCBEND::                          ; past the last UCB
 ; as a logical name, without its colon, in LNM$FILE_DEV, and what it
 ; translates to, up to LNM$C_MAXDEPTH times, until a name starts with an
 ; underscore, which is dropped, or doesn't translate. That must be a
-; device, OPA0, DKA0, DKB0, MDA0, BGA0 or a network unit, BGnn, with a
-; colon or without.
+; device, OPA0, DKA0, DKB0, MDA0, BGA0, a network unit, BGnn, or a
+; mailbox, MBnn, with a colon or without.
         .ENTRY  EXE$ASSIGN, ^M<R2, R3, R4, R5, R6, R7>
         MOVL    4(AP), R1
         BSBW    EXE$PROBER_DSC
@@ -95,21 +96,39 @@ IOC$A_UCBEND::                          ; past the last UCB
         BLSSU   15$
         BSBW    NET$FINDUNIT            ; a network unit, BGnn?
         TSTL    R5
+        BNEQ    18$
+        BSBW    MB$FINDUNIT             ; a mailbox, MBnn?
+        TSTL    R5
         BEQL    80$
 18$:    MOVL    SCH$GL_CURPCB, R4
-        MOVL    #1, R1
-20$:    BBCS    R1, PCB$L_CHANS(R4), 30$
-        AOBLEQ  #MAXCHAN, R1, 20$
-        MOVL    #SS$_NOIOCHAN, R0
-        BRB     80$
-30$:    MOVL    R5, PCB$AL_CCB(R4)[R1]
-        BSBW    NET$ASSIGNED
+        BSBW    IOC$ASSIGN
+        BLBC    R0, 80$
         MOVW    R1, @8(AP)
-        MOVL    #SS$_NORMAL, R0
 80$:    ENBINT
         RET
 85$:    MOVL    #SS$_ACCVIO, R0
 90$:    RET
+
+; IOC$ASSIGN: R4 = the current PCB, R5 = a device's UCB. Assigns the
+; device a free channel: R1 = its number, R0 = SS$_NORMAL, or
+; SS$_NOIOCHAN with none free. A cloned unit, a network unit or a
+; mailbox, not one of IOC$AB_UCB's, counts one more channel. IPL$_SYNCH.
+IOC$ASSIGN::
+        MOVL    #1, R1
+10$:    BBCS    R1, PCB$L_CHANS(R4), 20$
+        AOBLEQ  #MAXCHAN, R1, 10$
+        MOVL    #SS$_NOIOCHAN, R0
+        RSB
+20$:    MOVL    R5, PCB$AL_CCB(R4)[R1]
+        MOVAB   IOC$AB_UCB, R0
+        CMPL    R5, R0
+        BLSSU   30$
+        MOVAB   IOC$A_UCBEND, R0
+        CMPL    R5, R0
+        BLSSU   40$
+30$:    INCL    UCB$L_REFC(R5)
+40$:    MOVL    #SS$_NORMAL, R0
+        RSB
 
 ; IOC$TRNDEVNAM: R2 = a device name's length, R3 = its address.
 ; Translates it as $ASSIGN does: as a logical name, without its colon, in
@@ -345,8 +364,9 @@ IOC$CANCEL::
         MOVL    R0, R6
         MOVL    R1, R7
         BSBW    NET$CANCEL              ; the requests on the port
+        BSBW    MB$CANCEL               ; and on the mailboxes
         MOVAB   IOC$AB_UCB, R5
-10$:    BSBB    CANCELQ
+10$:    BSBB    IOC$CANCELQ
         ADDL2   #UCB$K_LENGTH, R5
         MOVAB   IOC$A_UCBEND, R0
         CMPL    R5, R0
@@ -354,23 +374,23 @@ IOC$CANCEL::
         PUSHL   R7
         CLRL    R7
         MOVAQ   G^TTY$Q_CTRLC, R5
-        BSBB    CANCELQ
+        BSBB    IOC$CANCELQ
         MOVAQ   G^TTY$Q_CTRLY, R5
-        BSBB    CANCELQ
+        BSBB    IOC$CANCELQ
         TSTL    (SP)+
         BNEQ    20$
         MOVAQ   PCB$Q_ASTQFL(R4), R5
-        BSBB    CANCELQ
+        BSBB    IOC$CANCELQ
         BSBW    SCH$ASTBITS
 20$:    SOFTINT #IPL$_IOPOST
         POPR    #^M<R5, R6, R7>
         RSB
 
-; CANCELQ: R5 = a queue of IRPs, or ACBs, R4 = a PCB, R6 = a mask of its
-; channels, R7 = a status, or 0. Takes the IRPs there for those channels
-; off it and completes them with that status, or frees them for 0. Uses
-; R0-R3.
-CANCELQ:
+; IOC$CANCELQ: R5 = a queue of IRPs, or ACBs, R4 = a PCB, R6 = a mask of
+; its channels, R7 = a status, or 0. Takes the IRPs there for those
+; channels off it and completes them with that status, or frees them for
+; 0. IPL$_SYNCH. Uses R0-R3.
+IOC$CANCELQ::
         MOVL    (R5), R3
 10$:    CMPL    R3, R5
         BEQL    90$

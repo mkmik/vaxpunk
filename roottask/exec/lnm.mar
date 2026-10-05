@@ -316,6 +316,27 @@ LNM$DELTBL::
 20$:    ENBINT
         RSB
 
+; LNM$DELEQV: R2 = a table's queue head, R6 = a string, R7 = its length.
+; Deletes every name in the table whose equivalence it is: a mailbox's,
+; which goes. IPL$_SYNCH. Uses R0, R1 and R3.
+LNM$DELEQV::
+        MOVL    (R2), R3
+10$:    CMPL    R3, R2
+        BEQL    90$
+        MOVL    R3, R1
+        MOVL    (R3), R3                ; the next, before this one goes
+        MOVZBL  LNMB$T_NAME(R1), R0
+        MOVAB   LNMB$T_NAME+1(R1)[R0], R0       ; its equivalence, .ASCIC
+        PUSHL   R1
+        BSBW    EXE$MATCHNAME
+        MOVL    (SP)+, R1
+        BLBC    R0, 10$
+        REMQUE  (R1), R0
+        MOVZWL  LNMB$W_SIZE(R0), R1
+        BSBW    EXE$DEANONPGDSIZ
+        BRB     10$
+90$:    RSB
+
 ; COPY: copies R0 bytes from R1 to R3, with R3 past them. Uses R0 and R1.
 COPY:   TSTL    R0
         BEQL    20$

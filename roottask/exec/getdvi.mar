@@ -5,6 +5,7 @@
 ; $GETDVI, as on VMS, with VMS's item codes (starlet.mlb's $DVIDEF and
 ; $DVSDEF). The devices are the disks, in f11.mar's order, each a VCB,
 ; then the console, OPA0:, the one terminal: DEVICE numbers them so.
+; A channel to a mailbox has its name, class and unit too.
 ; ponytail: a VCB stands for a disk, and 0 for the console, not their UCBs
 ; (qio.mar), which have no counts or device types yet. $GETDVI is done when it returns, and
 ; takes no AST.
@@ -24,7 +25,7 @@
         .EXTERNAL F11$GL_VCB, F11$AB_DKA0, F11$A_VCBEND, F11$AB_DIRBLK
         .EXTERNAL FIL$FREEBLOCKS, FIL$READLBLK, FIL$MATCH, MD$GL_BASE
         .EXTERNAL IOC$TRNDEVNAM, EXE$PROBER_DSC, EXE$SETEF, EXE$CLREF
-        .EXTERNAL SCH$GL_CURPCB
+        .EXTERNAL SCH$GL_CURPCB, MB$FDT
 
 MAXCHAN = 31                            ; as qio.mar's
 DISK = DEV$M_FOD!DEV$M_DIR!DEV$M_SHR!DEV$M_AVL!DEV$M_IDV!DEV$M_ODV!DEV$M_RND
@@ -117,7 +118,9 @@ ONLINE: TSTL    R5
 ; sets it, and writes SS$_NORMAL in the IOSB's first word, if there is
 ; one. SS$_NOSUCHDEV for a device that isn't there, SS$_IVCHAN for a
 ; channel that isn't assigned, SS$_BADPARAM for an item code it doesn't
-; know, or the disk's error for DVI$_FREEBLOCKS.
+; know, or the disk's error for DVI$_FREEBLOCKS. A mailbox, by its
+; channel, has DVI$_DEVNAM, DVI$_DEVCLASS and DVI$_UNIT, and 0 for any
+; other item.
 ; ponytail: done at once, no AST; the items $DVIDEF lists.
         .ENTRY  EXE$GETDVI, ^M<R2, R3, R4, R5, R6, R7, R8, R9, R10, R11>
         MOVL    20(AP), R0              ; the IOSB
@@ -134,6 +137,7 @@ ONLINE: TSTL    R5
         MOVZWL  (R1), R2
         MOVL    4(R1), R3
         BSBW    IOC$TRNDEVNAM
+        CLRL    R6                      ; not a mailbox
         MOVL    #SS$_NOSUCHDEV, R0
         CMPL    R2, #5                  ; DDCU, with a colon or without
         BNEQ    10$
@@ -159,7 +163,12 @@ ONLINE: TSTL    R5
         MOVL    SCH$GL_CURPCB, R1
         BBC     R0, PCB$L_CHANS(R1), 25$
         MOVL    PCB$AL_CCB(R1)[R0], R5  ; its UCB
-        MOVL    UCB$L_VCB(R5), R5
+        CLRL    R6
+        MOVAB   MB$FDT, R0
+        CMPL    UCB$L_FDT(R5), R0
+        BNEQ    22$
+        MOVL    R5, R6                  ; a mailbox's
+22$:    MOVL    UCB$L_VCB(R5), R5
         BRB     30$
 25$:    MOVL    #SS$_IVCHAN, R0
         BRB     80$
@@ -212,10 +221,14 @@ ONLINE: TSTL    R5
         CALLG   (AP), EXE$GETDVI
         RET
 
-; ITEM: R10 = an item code, R5 = the device's VCB, or 0. R1 = what to
-; return, R2 = its length. R0 = SS$_NORMAL, SS$_BADPARAM for a code it
-; doesn't know, or the disk's error. IPL$_SYNCH. Uses R0-R3.
-ITEM:   CMPL    R10, #DVI$_DEVNAM
+; ITEM: R10 = an item code, R5 = the device's VCB, or 0, R6 = a
+; mailbox's UCB, or 0. R1 = what to return, R2 = its length. R0 =
+; SS$_NORMAL, SS$_BADPARAM for a code it doesn't know, or the disk's
+; error. IPL$_SYNCH. Uses R0-R3.
+ITEM:   TSTL    R6
+        BEQL    5$
+        BRW     MBXITEM
+5$:     CMPL    R10, #DVI$_DEVNAM
         BNEQ    10$
         BSBW    DEVNAME
         BRW     STRING
@@ -288,6 +301,24 @@ ITEM:   CMPL    R10, #DVI$_DEVNAM
         BRW     LONG
 80$:    MOVL    #SS$_BADPARAM, R0
         RSB
+; MBXITEM: ITEM for a mailbox, R6: its name, _MBnn:, its class, its
+; unit, and 0 for other items.
+MBXITEM:
+        CMPL    R10, #DVI$_DEVNAM
+        BNEQ    10$
+        MOVB    #^A/_/, NAMBUF
+        MOVL    UCB$T_NAME(R6), NAMBUF+1
+        MOVB    #^A/:/, NAMBUF+5
+        MOVAB   NAMBUF, R1
+        MOVL    #6, R2
+        BRB     STRING
+10$:    MOVZWL  #DC$_MAILBOX, R0
+        CMPL    R10, #DVI$_DEVCLASS
+        BEQL    LONG
+        MOVL    UCB$L_UNIT(R6), R0
+        CMPL    R10, #DVI$_UNIT
+        BEQL    LONG
+        CLRL    R0
 ; LONG: R0 = a value. Returns it as an item, a longword.
 LONG:   MOVL    R0, VALUE
         MOVAB   VALUE, R1

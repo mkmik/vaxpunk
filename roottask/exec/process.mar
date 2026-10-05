@@ -33,6 +33,8 @@
         $VADEF
         $LNMDEF
         $ACBDEF
+        $ACCDEF
+        $MSGDEF
         $SSDEF
 
         .EXTERNAL SCH$GL_CURPCB, SCH$GL_SWPPCB, SCH$GL_PCBVEC, SCH$GL_SEQ
@@ -44,6 +46,7 @@
         .EXTERNAL FIL$OPENFILE, RMS$RUNDOWN
         .EXTERNAL EXE$OUTZSTRING, EXE$OUTCSTRING, EXE$OUTHEX, EXE$OUTCRLF
         .EXTERNAL LNM$CREATE, LNM$DELTBL, SCH$QAST, EXE$FLUSHAST, IOC$CANCEL, SYS$EXIT
+        .EXTERNAL MB$FINDNUM, MB$SEND, EXE$GQ_SYSTIME
 
 KSTACK = 16384                          ; a process's kernel stack
 BLOCK = 512                             ; an image's blocks
@@ -188,8 +191,9 @@ EXE$NAMPID::
 ; and error, if given, are the equivalence strings of its process-permanent
 ; logical names SYS$INPUT, SYS$OUTPUT and SYS$ERROR; SS$_BADPARAM for one
 ; that is empty or longer than 255. It starts in its creator's default
-; directory. The other arguments are ignored: there is no privilege, quota
-; or UIC yet.
+; directory. mbxunt, if it isn't 0, is the unit number of a mailbox, MBnn,
+; which gets the process's termination message when it is deleted. The
+; other arguments are ignored: there is no privilege, quota or UIC yet.
         .ENTRY  EXE$CREPRC, ^M<R2, R3, R4, R5, R6, R7, R8, R9, R10>
         MOVL    SCH$GL_CURPCB, R4
         MOVL    4(AP), R1
@@ -249,6 +253,7 @@ EXE$NAMPID::
         MOVB    R0, PCB$B_PRIB(R8)
         MNEGW   SGN$GW_QUANTUM, PCB$W_QUANT(R8)
         MOVL    PCB$L_PID(R4), PCB$L_OWNER(R8)
+        MOVZWL  44(AP), PCB$L_TMBU(R8)
         PUSHR   #^M<R3, R4>                     ; the creator's default directory
         MOVC3   #64, PCB$T_DEFDIR(R4), PCB$T_DEFDIR(R8)
         POPR    #^M<R3, R4>
@@ -604,12 +609,14 @@ IMG$ACTIVATE::
 ; the image. In a process with a command interpreter, it runs the image
 ; down and calls the command interpreter with code. In one without, the
 ; image's end is the process's: it is deleted, and a failure status is
-; reported on the console, as a command interpreter would. Doesn't
-; return.
+; reported on the console, as a command interpreter would. Either way
+; code is the process's final status, which its termination message has.
+; Doesn't return.
 ; ponytail: a fault in an outer mode ends the image here, so its exit
 ; handlers don't run, which VMS's last chance handler does with $EXIT.
         .ENTRY  EXE$IMGEXIT, ^M<>
         MOVL    SCH$GL_CURPCB, R4
+        MOVL    4(AP), PCB$L_FINALSTS(R4)
         TSTL    PCB$L_CLI(R4)
         BEQL    5$
         MOVL    4(AP), R8
@@ -727,8 +734,9 @@ DELP0:  MOVL    #VA$C_P0BASE, R0
 ; EXE$RUNDOWN: R4 = the current PCB. Gives back what its process holds:
 ; what EXE$IMGRUNDOWN does, then its other ASTs, its logical names, its
 ; pages in P1, its other channels and files, and its slot, unless
-; $DELPRC gave that to another process already. Runs in the process's own
-; context, since P0 and P1 are the current process's. Uses R0-R3.
+; $DELPRC gave that to another process already, and sends its termination
+; message. Runs in the process's own context, since P0 and P1 are the
+; current process's. Uses R0-R3.
 EXE$RUNDOWN::
         BSBW    EXE$IMGRUNDOWN
         DSBINT  #IPL$_SYNCH
@@ -749,6 +757,7 @@ EXE$RUNDOWN::
         CLRL    PCB$L_CHANS(R4)
         CLRL    R0
         BSBW    RMS$RUNDOWN
+        BSBB    TERMMSG
         DSBINT  #IPL$_SYNCH
         MOVZWL  PCB$L_PID(R4), R0
         CMPL    SCH$GL_PCBVEC[R0], R4
@@ -756,6 +765,38 @@ EXE$RUNDOWN::
         CLRL    SCH$GL_PCBVEC[R0]
 30$:    ENBINT
         RSB
+
+; TERMMSG: R4 = the current PCB, of a process that goes. Writes its
+; termination message, MSG$_DELPROC ($ACCDEF), to the mailbox whose unit
+; $CREPRC's mbxunt named, if that is still there and has room for it:
+; its final status, its PID, the time, and its creator's PID. Uses R0-R3.
+TERMMSG:
+        TSTL    PCB$L_TMBU(R4)
+        BEQL    90$
+        PUSHL   R5
+        SUBL2   #88, SP                 ; the message, ACC$K_TERMLEN bytes
+        MOVL    SP, R1
+        MOVL    #22, R0
+10$:    CLRL    (R1)+
+        SOBGTR  R0, 10$
+        MOVW    #MSG$_DELPROC, ACC$W_MSGTYP(SP)
+        MOVL    PCB$L_FINALSTS(R4), ACC$L_FINALSTS(SP)
+        MOVL    PCB$L_PID(R4), ACC$L_PID(SP)
+        MOVQ    G^EXE$GQ_SYSTIME, ACC$Q_TERMTIME(SP)
+        MOVL    PCB$L_OWNER(R4), ACC$L_OWNER(SP)
+        MOVL    SP, R1
+        MOVL    #ACC$K_TERMLEN, R2
+        MOVL    PCB$L_PID(R4), R3
+        MOVL    PCB$L_TMBU(R4), R0
+        DSBINT  #IPL$_SYNCH
+        BSBW    MB$FINDNUM
+        TSTL    R5
+        BEQL    20$                     ; gone
+        BSBW    MB$SEND
+20$:    ENBINT
+        ADDL2   #88, SP
+        MOVL    (SP)+, R5
+90$:    RSB
 
 ; EXE$DELSELF: R4 = the current PCB. Deletes the current process: runs it
 ; down, leaves it for the swapper, which deletes its context, kernel stack

@@ -15,6 +15,7 @@ SS$_ABORT = 44
 SS$_DEVMOUNT = 108                      ; the device is already mounted
 SS$_DEVNOTMOUNT = 124                   ; no volume is mounted on the device
 SS$_BADIMGHDR = 68
+SS$_DEVNOTMBX = 116                     ; the device isn't a mailbox
 SS$_DRVERR = 140
 SS$_DUPLNAM = 148
 SS$_ILLBLKNUM = 220
@@ -44,6 +45,7 @@ SS$_UNASEFC = 564
 SS$_VASFULL = 580
 SS$_WRITLCK = 604                       ; the device is write locked
 SS$_IVMODE = 852
+SS$_MBTOOSML = 412                      ; the message is longer than the mailbox takes
 SS$_OPCDEC = 1084
 SS$_BUFFEROVF = 1537                    ; success: the output didn't all fit in the buffer
 SS$_CONTROLY = 1553                     ; CTRL/Y stopped the image
@@ -64,6 +66,7 @@ SS$_DEVICEFULL = 2128                   ; no free blocks left
 SS$_DUPFILENAME = 2152                  ; that name and version is in the directory already
 SS$_ENDOFFILE = 2160
 SS$_HEADERFULL = 2248                   ; the file's map is full
+SS$_MBFULL = 2264                       ; the mailbox has no room for the message
 SS$_IDXFILEFULL = 2256                  ; no free file headers left
 SS$_NOHOMEBLK = 2272                    ; no Files-11 home block
 SS$_NOMOREFILES = 2352
@@ -258,6 +261,7 @@ DVS$_DEVCLASS = 1                       ; only devices of this class, a longword
         .MACRO  $DCDEF
 DC$_DISK = 1
 DC$_TERM = 66
+DC$_MAILBOX = 160
         .ENDM   $DCDEF
 
 ; $DEVDEF: device characteristics, DVI$_DEVCHAR's bits.
@@ -278,6 +282,35 @@ DEV$M_IDV = ^X4000000                   ; input
 DEV$M_ODV = ^X8000000                   ; output
 DEV$M_RND = ^X10000000                  ; random access
         .ENDM   $DEVDEF
+
+; $MSGDEF: the types of the messages the system writes to mailboxes.
+        .MACRO  $MSGDEF
+MSG$_DELPROC = 3                        ; a process was deleted: its termination message, $ACCDEF
+        .ENDM   $MSGDEF
+
+; $ACCDEF: a process's termination message, which the mailbox whose unit
+; $CREPRC's mbxunt named gets when the process is deleted. What vaxpunk
+; doesn't keep is 0: the job, account, user name, accounting counts and
+; login time.
+        .MACRO  $ACCDEF
+ACC$W_MSGTYP = 0                        ; MSG$_DELPROC
+ACC$L_FINALSTS = 4                      ; the status of its last $EXIT, or 0
+ACC$L_PID = 8
+ACC$L_JOBID = 12
+ACC$Q_TERMTIME = 16                     ; the system time it was deleted at
+ACC$T_ACCOUNT = 24                      ; 8 characters
+ACC$T_USERNAME = 32                     ; 12 characters
+ACC$L_CPUTIM = 44
+ACC$L_PAGEFLTS = 48
+ACC$L_PGFLPEAK = 52
+ACC$L_WSPEAK = 56
+ACC$L_BIOCNT = 60
+ACC$L_DIOCNT = 64
+ACC$L_VOLUMES = 68
+ACC$Q_LOGIN = 72
+ACC$L_OWNER = 80                        ; its creator's PID
+ACC$K_TERMLEN = 84                      ; the message's size
+        .ENDM   $ACCDEF
 
 ; $MNTDEF: $MOUNT's item codes.
         .MACRO  $MNTDEF
@@ -405,6 +438,8 @@ IO$V_NOECHO = 6                         ; a read doesn't echo
 IO$M_NOECHO = ^X40
 IO$V_NOFILTR = 9                        ; a read doesn't edit: DEL, CTRL/U are data
 IO$M_NOFILTR = ^X200
+IO$V_NOW = 6                            ; a mailbox's read doesn't wait for a message
+IO$M_NOW = ^X40
 IO$_SETCHAR = 26                        ; BGA0: sets the interface's address
 IO$_SENSECHAR = 27                      ; BGA0: senses it
 IO$_ACCESS = 50                         ; a network unit: connects, or accepts
@@ -735,6 +770,25 @@ PRT$C_UR = 15
         .EXTERNAL SYS$ASSIGN
         CALLS   #4, G^SYS$ASSIGN
         .ENDM   $ASSIGN_S
+
+        .MACRO  $CREMBX_S PRMFLG=#0, CHAN, MAXMSG=#0, BUFQUO=#0, PROMSK=#0, ACMODE=#0, LOGNAM=0, FLAGS=#0
+        PUSHL   FLAGS
+        $PUSHADR LOGNAM
+        PUSHL   ACMODE
+        PUSHL   PROMSK
+        PUSHL   BUFQUO
+        PUSHL   MAXMSG
+        $PUSHADR CHAN
+        PUSHL   PRMFLG
+        .EXTERNAL SYS$CREMBX
+        CALLS   #8, G^SYS$CREMBX
+        .ENDM   $CREMBX_S
+
+        .MACRO  $DELMBX_S CHAN
+        PUSHL   CHAN
+        .EXTERNAL SYS$DELMBX
+        CALLS   #1, G^SYS$DELMBX
+        .ENDM   $DELMBX_S
 
         .MACRO  $DASSGN_S CHAN
         PUSHL   CHAN

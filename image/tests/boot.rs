@@ -53,6 +53,7 @@ const LINES: &[&str] = &[
     "HOG: NUDGE ran",
     "TIMETEST: ok",
     "ASTTEST: ok",
+    "MBXTEST: ok",
     "process SNOOP exited with status 0000000C",
     "process USURP exited with status 0000043C",
     "%NONAME-F-NOMSG, Message number 0000000C",

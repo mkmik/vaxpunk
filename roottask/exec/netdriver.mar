@@ -746,14 +746,4 @@ NET$FINDUNIT::
         BRB     10$
 90$:    RSB
 
-; NET$ASSIGNED: R5 = the UCB a channel was just assigned to. A network
-; unit has one more channel. Keeps every register.
-NET$ASSIGNED::
-        PUSHL   R0
-        BSBW    NETUNIT
-        BLBC    R0, 10$
-        INCL    UCB$L_REFC(R5)
-10$:    MOVL    (SP)+, R0
-        RSB
-
         .END
