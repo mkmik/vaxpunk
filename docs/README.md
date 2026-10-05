@@ -43,6 +43,7 @@ kept current, like a design document.
 | [ADR-0016](adr/0016-tcpip-component-and-bga0.md) | The TCP/IP component is lwIP and a virtio-net driver of our own that the PAL starts, and BGA0: clones a unit per connection | Proposed |
 | [ADR-0017](adr/0017-command-tables-from-cld-with-vcdu.md) | Commands are defined in CLD files that vcdu compiles at build time, and a parser library linked into each image reads them | Proposed |
 | [ADR-0018](adr/0018-set-command-and-foreign-commands.md) | SET COMMAND compiles CLD in DCL into tables DCL looks in first, and a foreign command's image gets its line as $LINE | Proposed |
+| [ADR-0019](adr/0019-mailboxes.md) | A mailbox is a unit of its own, MBnn, whose writes are done at once, and process deletion writes the termination message to it | Proposed |
 
 ### PRDs
 

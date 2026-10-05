@@ -294,6 +294,13 @@ executive feature:
   again; a timer's, whose routine wakes it from `$HIBER`; a `$QIO`'s,
   once the I/O is done; and one that comes while it computes, after
   which its registers are as they were.
+- **MBXTEST** checks mailboxes: it makes one with a logical name, writes
+  to it and reads back, fills it, reads it on channels from a second
+  `$CREMBX` and from `$ASSIGN` by that name, and starts **MBXCHILD**, whose
+  image isn't there, with the mailbox's unit for its termination mailbox:
+  it reads the message MBXCHILD's deletion writes there, with its PID and
+  its status, `RMS$_FNF`. A permanent mailbox outlives its channel until
+  `$DELMBX`.
 - STARTUP prints `STARTUP: done` and exits, and DCL prompts again while
   the others finish.
 

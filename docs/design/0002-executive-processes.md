@@ -25,7 +25,9 @@ virtio disk, `DKB0:`, which the PAL writes, and
 when the PAL asks, on top of the kernel stack, and
 [ADR-0013](../adr/0013-qio-irps-and-drivers.md): `$QIO` queues an I/O
 request packet to the device's driver, and its completion is a kernel
-mode AST.
+mode AST, and
+[ADR-0019](../adr/0019-mailboxes.md): a mailbox is a unit of its own,
+`MBnn`, and process deletion writes the termination message to it.
 
 The executive borrows VMS's structure and names (PCB, `SCH$`, `MMG$`,
 `EXE$` routines, `SS$_` codes, the system service interfaces) but none of
@@ -44,6 +46,7 @@ its code.
 | `process.mar` | `$CREPRC`, process start, image activation, `$IMGACT`, `$EXIT`, image rundown, deletion, `$FORCEX`, `$HIBER`, `$WAKE`, `$SUSPND`, `$RESUME`, `$SETPRI`, `$SETPRN`, `$CMKRNL` |
 | `lnm.mar` | logical name tables, `$CRELNM`, `$DELLNM`, `$TRNLNM` |
 | `qio.mar` | the devices' UCBs, `$ASSIGN`, `$DASSGN`, `$CANCEL`, `$QIO`, `$QIOW`; IRPs, their completion and cancelling |
+| `mbdriver.mar` | mailboxes: `$CREMBX`, `$DELMBX`, their driver, and `MB$SEND`, which writes the termination message |
 | `ttdriver.mar` | the console's terminal driver: writes, queued reads and their editing, the console receive interrupt and the type-ahead buffer, CTRL/C and CTRL/Y ASTs |
 | `getdvi.mar` | `$GETDVI`, `$GETDVIW`, `$DEVICE_SCAN`: what the devices are |
 | `syssrv.mar` | the system service vector, the `CHMK` and `CHME` dispatchers, `$CMEXEC`, where processes enter user and supervisor mode, the exception handlers and the stubs |
@@ -129,7 +132,7 @@ The PFN list and the pool are synchronized at `IPL$_SYNCH`.
 
 ## Processes
 
-A process is a PCB (`$PCBDEF`, 440 bytes, from pool), a 16 KB kernel stack
+A process is a PCB (`$PCBDEF`, 592 bytes, from pool), a 16 KB kernel stack
 from pool, an image and stacks in its P0 and P1, and the threads the PAL
 makes for its HWPCB, which is inside the PCB: one for kernel mode and one
 for each outer mode it enters. `SCH$GL_PCBVEC` holds the PCBs by index; a PID is a
@@ -183,7 +186,10 @@ a command interpreter would:
 
 - **Itself** (`$EXIT` without a command interpreter, or `$DELPRC` naming
   itself): it runs itself down (timer queue entries, every page of its P0
-  and P1, common event flag clusters, logical names, channels, open files, slot), goes on the
+  and P1, common event flag clusters, logical names, channels, open files, slot),
+  writes its termination message to the mailbox `$CREPRC`'s `mbxunt`
+  named, if any: `MSG$_DELPROC`, the status of its last `$EXIT`, its PID,
+  the time and its creator's PID (`$ACCDEF`), goes on the
   swapper's queue, wakes it, and
   gives up the CPU for good. The swapper deletes its context with
   `DELCTX`, then frees its kernel stack and PCB, since a process can't free
@@ -629,7 +635,7 @@ can't reach them.
 | Event flags | `$ASCEFC`, `$DACEFC`, `$SETEF`, `$CLREF`, `$READEF`, `$WAITFR`, `$WFLOR`, `$WFLAND` | `$DLCEFC` |
 | Memory | `$CRETVA`, `$DELTVA`, `$EXPREG` | `$CNTREG`, `$SETPRT`, `$LKWSET`, `$ULWSET`, `$LCKPAG`, `$ULKPAG`, `$CRMPSC`, `$MGBLSC` |
 | Time | `$GETTIM`, `$SETIMR`, `$CANTIM` | |
-| I/O | `$ASSIGN`, `$DASSGN`, `$CANCEL`, `$QIO`, `$QIOW` | |
+| I/O | `$ASSIGN`, `$DASSGN`, `$CANCEL`, `$QIO`, `$QIOW`, `$CREMBX`, `$DELMBX` | |
 | Logical names | `$CRELNM`, `$DELLNM`, `$TRNLNM` | |
 | Images | `$IMGACT` | |
 | RMS | `$PARSE`, `$SEARCH`, `$OPEN`, `$CREATE`, `$CONNECT`, `$GET`, `$PUT`, `$DISCONNECT`, `$CLOSE`, `$ERASE`, `$SETDDIR`, `$CREATE_DIR` | |
@@ -638,7 +644,8 @@ can't reach them.
 | Other | `$GETSYI`, `$GETSYIW`, `$GETMSG` | |
 
 Arguments the implemented services take but ignore: `$CREPRC`'s
-privileges, quotas, UIC, mailbox and status flags, the logical name
+privileges, quotas, UIC and status flags, `$ASSIGN`'s mailbox,
+`$CREMBX`'s protection, access mode and flags, the logical name
 services' attributes, `$ASCEFC`'s protection
 and permanence (every cluster is temporary), the access modes. Any process
 may call `$CMKRNL` and `$CMEXEC`. ponytail: until there are privileges.
