@@ -233,8 +233,8 @@ interpreter. It is linked high in P1, which tells the executive it is one
   knows it: `DIR DKB0:` looks in `DKB0:[SYSMGR]`, the default directory
   on that disk, and prints `%RMS-E-DNF, directory not found`.
   When the swapper deletes what SYSTEM left, it prints `%EXEC-I-LOGOUT`
-  and halts, and the root task powers QEMU off with a semihosting
-  `SYS_EXIT`.
+  and halts. The root task prints `%PAL-I-POWEROFF`, and `run-qemu.sh`'s
+  console filter, `scripts/serial-filter.py`, sees it and stops QEMU.
 - CTRL/Y is an AST of DCL's: when DCL starts, and before each image it
   runs, it asks the console's driver for one with `IO$_SETMODE`
   ([ADR-0014](adr/0014-ctrlc-ctrly-asts.md)). CTRL/Y while an image runs

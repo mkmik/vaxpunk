@@ -32,7 +32,7 @@ kept current, like a design document.
 | [ADR-0005](adr/0005-access-modes-are-threads.md) | Each access mode of a process is a thread with an address space of its own | Accepted |
 | [ADR-0006](adr/0006-cli-in-p1-runs-images-in-its-process.md) | The command interpreter lives in P1 in supervisor mode and runs images in its own process | Accepted |
 | [ADR-0007](adr/0007-system-disk-files-11-and-rms.md) | The system disk is a Files-11 volume the PAL reads by LBN, with the file system and RMS in the executive | Accepted |
-| [ADR-0008](adr/0008-host-powers-qemu-off-on-halt.md) | On a halt the root task prints a line, and the host powers QEMU off | Proposed |
+| [ADR-0008](adr/0008-host-powers-qemu-off-on-halt.md) | On a halt the root task prints a line, and the host powers QEMU off | Accepted |
 | [ADR-0009](adr/0009-ramdisk-writable-files-11.md) | MDA0:, a ramdisk the executive drives, holds a Files-11 volume the file system writes | Proposed |
 | [ADR-0010](adr/0010-ctrly-calls-the-cli-on-top-of-the-image.md) | CTRL/Y calls the command interpreter on top of the stopped image, and $CONTINUE goes back to it | Superseded by ADR-0014 |
 | [ADR-0011](adr/0011-asts-on-the-kernel-stack.md) | The PAL requests AST delivery from bits in the HWPCB, and the executive calls AST routines on top of the kernel stack | Proposed |

@@ -59,8 +59,10 @@ fi
 # The network device, virtio-net, is a third virtio-mmio transport, after
 # the disks, which the TCP/IP component drives. On QEMU's user network the
 # guest is 10.0.2.15/24 and the host 10.0.2.2, its gateway.
-# Semihosting, from EL0 too, is how the root task powers QEMU off on a halt.
+# On a halt the root task prints %PAL-I-POWEROFF, and serial-filter.py ends
+# QEMU with SIGTERM, by the PID in a file of its own (ADR-0008).
 datadisk=${DATADISK:-$root/out/datadisk.img}
+pidfile=$(mktemp)
 [ -f "$datadisk" ] || dd if=/dev/zero of="$datadisk" bs=512 count=4096 2>/dev/null
 qemu-system-aarch64 -machine "virt,secure=off,gic-version=$QEMU_GIC,acpi=off" $cpu \
 	-smp 1 -m "$QEMU_MEM" -display none -bios "$EDK2_FW" \
@@ -72,4 +74,4 @@ qemu-system-aarch64 -machine "virt,secure=off,gic-version=$QEMU_GIC,acpi=off" $c
 	-netdev "${NETDEV:-user,id=net0}" -device "virtio-net-device,netdev=net0${MAC:+,mac=$MAC}" \
 	-chardev "stdio,id=con,mux=on,signal=off,logfile=${LOG:-$root/out/serial.log}" \
 	-serial chardev:con -serial "$uart1" -monitor chardev:con \
-	-semihosting-config enable=on,target=native,userspace=on $gdb | "$root/scripts/serial-filter.py"
+	-pidfile "$pidfile" $gdb | "$root/scripts/serial-filter.py" "$pidfile"
