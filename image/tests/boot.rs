@@ -322,7 +322,8 @@ fn boot() {
             typed = 4;
         }
         // Then the data disk.
-        if typed == 4 && text.contains("no files found") {
+        // Once step 3's last command has run: the type-ahead buffer is empty.
+        if typed == 4 && text.contains("\"ZOO\" = \"TWO\" (LNM$PROCESS_TABLE)") {
             type_("INIT/PROTECTION=(S:RWED,O:RWED,G:RWED,W:RWED) DKB0: DATA\rMOUNT DKB0: DATA\r");
             type_("COPY SYS$SYSDEVICE:[SYSMGR]WELCOME.TXT DKB0:[000000]DATA.TXT\r");
             type_("CREATE/DIRECTORY DKB0:[SUB.DEEP]\r");
