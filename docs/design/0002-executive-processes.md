@@ -287,9 +287,10 @@ an image runs it with `$IMGACT` and the parse:
 | `CREATE/DIRECTORY spec` | `CREATE.EXE`; without `/DIRECTORY`, `%CREATE-E-NOTDIR` |
 | `SHOW PROCESS`, `SHOW SYSTEM` | `SHOW.EXE`, whose `OPTION` says which |
 | `SET INTERFACE address mask`, `SET CONFIGURATION INTERFACE address mask`, `SET ROUTE /DEFAULT /GATEWAY=address [/PERMANENT]`, `SHOW INTERFACE` | `TCPIP.EXE`, which takes `OPTION`, `ADDRESS`, `MASK`, `GATEWAY` and `PERMANENT` from the parse |
+| `SET [NO]CONTROL[=Y]` | enables DCL's CTRL/Y AST again, or disables it with `IO$_SETMODE`, so that CTRL/Y, and CTRL/C no image has an AST for, do nothing, until `SET CONTROL`. ponytail: no `T`, there is no CTRL/T |
 | `SET HOST address` | `RTPAD.EXE`, whose `NODE` is the address |
 | `CONTINUE` | returns from the CTRL/Y AST, which goes back to the image |
-| `STOP [process-name]` | `$DELPRC`; with no name, ends the procedures, and the image CTRL/Y stopped with `$EXIT` from DCL, which skips its exit handlers, user mode's, with `SS$_ABORT` |
+| `STOP [process-name]`, `STOP/IDENTIFICATION=pid` | `$DELPRC`, by name or by the PID in hex; with no name, ends the procedures, and the image CTRL/Y stopped with `$EXIT` from DCL, which skips its exit handlers, user mode's, with `SS$_ABORT` |
 | `HELP [verb]` | `HELP.EXE`, which describes the verbs from `DCL$TABLES` (*The system disk's programs*) |
 | `LOGOUT` | `$DELPRC` |
 | `@file [p1 ... p8]` | reads `file.COM` with RMS and takes its `$` lines as commands |
@@ -1098,7 +1099,6 @@ taking the clock's interrupts.
 
 - Priority boosts on wake and decay at quantum end.
 - Privileges, for `$CMKRNL` and `$CMEXEC`.
-- DCL's `SET NOCONTROL`, and `STOP/IDENTIFICATION`.
 - Writing the system disk, the disk's interrupt, `$QIO` on disk
   channels, logical names in file specifications (`SYS$SYSTEM:DCL.EXE`)
   and `SYS$DISK`.

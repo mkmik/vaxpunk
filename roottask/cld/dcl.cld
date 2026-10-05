@@ -51,11 +51,17 @@ define verb SET
 
 define type SET_OPTIONS
 	keyword COMMAND, syntax=SET_COMMAND
+	keyword CONTROL, negatable, value(list, type=CONTROL_OPTIONS)
 	keyword CONFIGURATION, syntax=SET_CONFIGURATION
 	keyword DEFAULT, syntax=SET_DEFAULT
 	keyword HOST, syntax=SET_HOST
 	keyword INTERFACE, syntax=SET_INTERFACE
 	keyword ROUTE, syntax=SET_ROUTE
+
+! SET [NO]CONTROL[=Y]: CTRL/Y, and CTRL/C no image takes, on or off.
+! ponytail: no T, CTRL/T has no status line to show.
+define type CONTROL_OPTIONS
+	keyword Y
 
 ! SET COMMAND file: compiles file.CLD's verbs into the process's tables.
 define syntax SET_COMMAND
@@ -146,6 +152,7 @@ define syntax SHOW_INTERFACE
 define verb STOP
 	cliroutine STOP
 	parameter P1, label=PROCESS_NAME
+	qualifier IDENTIFICATION, value(required)
 
 define verb WRITE
 	cliroutine WRITE

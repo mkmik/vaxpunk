@@ -37,6 +37,8 @@
 ;   SET CONFIGURATION INTERFACE address mask,
 ;   SET ROUTE /DEFAULT /GATEWAY=address [/PERMANENT]
 ;               run TCPIP.EXE
+;   SET [NO]CONTROL[=Y]
+;               turns CTRL/Y, and CTRL/C no image takes, on or off
 ;   SET HOST address
 ;               runs RTPAD.EXE, a remote login to address
 ;   SET COMMAND file
@@ -56,7 +58,7 @@
 ;   CREATE/DIRECTORY spec
 ;               runs CREATE.EXE
 ;   CONTINUE    goes back to the image CTRL/Y stopped
-;   STOP [process-name]
+;   STOP [process-name], STOP/IDENTIFICATION=pid
 ;               deletes the process; with no name, ends the image CTRL/Y
 ;               stopped, without its exit handlers, and the procedures
 ;   HELP [verb] runs HELP.EXE, which lists the commands from DCL$TABLES
@@ -133,6 +135,7 @@
         $PCBDEF
         $LNMBDEF
         $SSDEF
+        $CLIMSGDEF
         $IODEF
         $LNMDEF
         $RMSDEF
@@ -256,6 +259,10 @@ V_STATUS:
 V_LOG:  .ASCID  "LOG"
 V_PRCNAM:
         .ASCID  "PROCESS_NAME"
+V_IDENT:
+        .ASCID  "IDENTIFICATION"
+V_CONTROL:
+        .ASCID  "OPTION.CONTROL"
 V_PROCQ:
         .ASCID  "PROCESS"
 V_SYSQ: .ASCID  "SYSTEM"
@@ -451,6 +458,10 @@ IMGRUN: .LONG   0                       ; 1 while an image runs, or is about to
 CTRLYFP:                                ; while CTRL/Y has it stopped, FP in the AST, else 0
         .LONG   0
 CTRLYHIT:                               ; 1: CTRL/Y came with no image
+        .LONG   0
+NOCTRLY:                                ; 1 after SET NOCONTROL: no CTRL/Y AST
+        .LONG   0
+STOPPID:                                ; STOP/IDENTIFICATION's PID
         .LONG   0
 LASTSTAT:                               ; $STATUS
         .LONG   SS$_NORMAL
@@ -673,12 +684,16 @@ CONTINUE:
         RET
 10$:    BRW     OK
 
-; STOP [process-name]: deletes the process with $DELPRC. With no name,
-; ends the procedures running, and the image CTRL/Y stopped, if there is
-; one, with $EXIT from here, which runs it down without its exit handlers,
-; user mode's, and calls DCL afresh, with CTRL/Y enabled again, and
-; SS$_ABORT, reported already.
-STOP:   MOVAB   V_PRCNAM, R1
+; STOP [process-name], STOP/IDENTIFICATION=pid: deletes the process with
+; $DELPRC, pid in hex. With neither, ends the procedures running, and
+; the image CTRL/Y stopped, if there is one, with $EXIT from here, which
+; runs it down without its exit handlers, user mode's, and calls DCL
+; afresh, with CTRL/Y enabled again, and SS$_ABORT, reported already.
+STOP:   MOVAB   V_IDENT, R1
+        BSBW    GETVAL
+        TSTL    R8
+        BNEQ    STOPID
+        MOVAB   V_PRCNAM, R1
         BSBW    GETVAL
         TSTL    R8
         BEQL    10$
@@ -693,6 +708,28 @@ STOP:   MOVAB   V_PRCNAM, R1
         $EXIT_S #<SS$_ABORT!INHIB>
 20$:    MOVL    #<SS$_ABORT!INHIB>, R0
         BRW     DONE
+
+; STOPID: TOKEN = a PID, R8 = its length: its hex digits, 8 at most.
+STOPID: CLRL    STOPPID
+        CMPL    R8, #8
+        BGTRU   30$
+        MOVAB   TOKEN, R1
+10$:    MOVZBL  (R1)+, R0
+        SUBL2   #^A/0/, R0
+        CMPL    R0, #9
+        BLEQU   20$
+        SUBL2   #<^A/A/-^A/0/-10>, R0
+        CMPL    R0, #10
+        BLSSU   30$
+        CMPL    R0, #15
+        BGTRU   30$
+20$:    ASHL    #4, STOPPID, STOPPID
+        BISL2   R0, STOPPID
+        SOBGTR  R8, 10$
+        $DELPRC_S PIDADR=STOPPID
+        BRW     DONE
+30$:    PRINT   "%DCL-W-IVCHAR, invalid numeric value - check for invalid digits"
+        BRW     WARN
 
 ; RUN image: runs it with $IMGACT, which returns only if it can't.
 RUN:    MOVAB   V_FILE, R1
@@ -840,11 +877,24 @@ DONE:   MOVL    R0, LASTSTAT
 OK:     MOVL    #SS$_NORMAL, LASTSTAT
         BRW     NEXT
 
+; SET [NO]CONTROL[=Y]: enables DCL's CTRL/Y AST, or disables it, so that
+; CTRL/Y, and CTRL/C no image has an AST for, do nothing.
+SET:    MOVAB   V_CONTROL, R1
+        BSBW    ISPRES
+        CMPL    R0, #CLI$_ABSENT
+        BEQL    SETDEF
+        CLRL    NOCTRLY
+        CMPL    R0, #CLI$_NEGATED
+        BNEQ    10$
+        MOVL    #1, NOCTRLY
+10$:    BSBW    CTRLYON
+        BRW     OK
+
 ; SET DEFAULT spec: $PARSEs spec, which must name no file, and makes the
 ; directory it expands to the default, with $SETDDIR, and its device the
 ; process's SYS$DISK. One that doesn't
 ; exist is still set, as VMS does, with a message.
-SET:    MOVAB   V_DIR, R1
+SETDEF: MOVAB   V_DIR, R1
         BSBW    GETVAL
         TSTL    R8
         BNEQ    5$
@@ -2585,9 +2635,14 @@ ADDOCT: MOVL    R1, R4
 ; AST may not have, and says an image runs. Uses R0 and R1.
 RUNNING:
         MOVL    #1, IMGRUN
-; CTRLYON: enables DCL's CTRL/Y AST on the console. Uses R0 and R1.
+; CTRLYON: enables DCL's CTRL/Y AST on the console, or disables it
+; after SET NOCONTROL. Uses R0 and R1.
 CTRLYON:
-        $QIOW_S CHAN=CHAN, FUNC=#IO$_SETMODE!IO$M_CTRLYAST, P1=CTRLY
+        MOVAB   CTRLY, R0
+        TSTL    NOCTRLY
+        BEQL    10$
+        CLRL    R0
+10$:    $QIOW_S CHAN=CHAN, FUNC=#IO$_SETMODE!IO$M_CTRLYAST, P1=(R0)
         RSB
 
 ; CTRLY: DCL's CTRL/Y AST, in supervisor mode, on top of what CTRL/Y

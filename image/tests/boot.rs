@@ -26,7 +26,11 @@
 //! EDIT while it reads, whose read CTRL/Y ends, so that DCL reads SHOW
 //! DEFAULT and CONTINUE, and EDIT takes the empty line as RETURN. A
 //! CTRL/Y and STOP end EDIT, and $STATUS shows SS$_ABORT; STOP NOSUCH fails;
-//! and SLEEPER, stopped with CTRL/Y, exits with EXIT 3. All a
+//! and SLEEPER, stopped with CTRL/Y, exits with EXIT 3. After SET
+//! NOCONTROL=Y, CTRL/Y and CTRL/C at the prompt do nothing, and after SET
+//! CONTROL CTRL/Y interrupts again. STOP/IDENTIFICATION deletes
+//! TCPIP$TELNET, by the PID SHOW SYSTEM listed, and then fails, as does a
+//! PID that isn't hex. All a
 //! step at a time: each waits until a line has come so many times, the echo
 //! of what it typed before included, and types.
 //! STARTUP's SLEEPER and SVCTEST's NAPPER say they hibernate before SLEEPER
@@ -133,6 +137,9 @@ const LINES: &[&str] = &[
     "$STATUS == 268435500   Hex = 1000002C",
     "%SYSTEM-W-NONEXPR, nonexistent process",
     "$STATUS == 3   Hex = 00000003",
+    "Y is on",
+    "$STATUS == 268437736   Hex = 100008E8",
+    "%DCL-W-IVCHAR, invalid numeric value - check for invalid digits",
 ];
 
 /// What it must not: the lines of DCLTEST.COM's a failure skips or reaches,
@@ -179,6 +186,17 @@ const STEPS: &[(&str, usize, &str)] = &[
     ),
     ("SLEEPER: hibernating", 4, "\x19"),
     ("*INTERRUPT*", 8, "EXIT 3\rSHOW SYMBOL $STATUS\r"),
+    (
+        "$STATUS == 3   Hex = 00000003",
+        1,
+        "SET NOCONTROL=Y\rWRITE SYS$OUTPUT \"Y is\", \" off\"\r",
+    ),
+    (
+        "Y is off",
+        1,
+        "\x19\x03SET CONTROL\rWRITE SYS$OUTPUT \"Y is\", \" on\"\r",
+    ),
+    ("Y is on", 1, "\x19"),
 ];
 
 #[test]
@@ -216,6 +234,21 @@ fn boot() {
                 type_(keys);
                 step += 1;
             }
+        } else if typed == 6 && text.matches("*INTERRUPT*").count() == 9 {
+            // TCPIP$TELNET, by its PID in SHOW SYSTEM's list.
+            let pid = text
+                .lines()
+                .map(|l| l.split_whitespace().collect::<Vec<_>>())
+                .find(|w| {
+                    w.len() > 1
+                        && w[1] == "TCPIP$TELNET"
+                        && w[0].len() == 8
+                        && w[0].chars().all(|c| c.is_ascii_hexdigit())
+                })
+                .unwrap()[0];
+            type_(&format!("STOP/IDENTIFICATION={pid}\rSTOP/ID={pid}\r"));
+            type_("SHOW SYMBOL $STATUS\rSTOP/ID=XYZ\r");
+            typed = 7;
         }
         // The rest once EDIT is done: the type-ahead buffer holds 255 characters.
         if typed == 1 && text.contains("String was not found") {
@@ -288,6 +321,11 @@ fn boot() {
     assert!(missing.is_empty(), "no {missing:?}");
     let present: Vec<_> = ABSENT.iter().filter(|l| text.contains(*l)).collect();
     assert!(present.is_empty(), "{present:?}");
+    assert_eq!(
+        text.matches("*INTERRUPT*").count(),
+        9,
+        "CTRL/Y or CTRL/C interrupted after SET NOCONTROL"
+    );
     assert!(
         !text.contains("SPIN: a register changed"),
         "SPIN's registers changed"
