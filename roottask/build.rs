@@ -4,7 +4,8 @@
 //! EXEC.EXE, linked from exec/*.mar, and an image for each sysexe/*.mar,
 //! linked with sysexe/lib/*.mar, its command table if there is a
 //! sysexe/NAME.cld, and against SYS.STB, the executive's symbols; DCL and
-//! HELP with DCL$TABLES, from cld/*.cld; in [SYSMGR], the files in sysmgr/,
+//! HELP with DCL$TABLES, from cld/*.cld, and DCL with sysexe/dcl/*.mar,
+//! its CDU; in [SYSMGR], the files in sysmgr/,
 //! as text.
 
 use std::env;
@@ -59,6 +60,9 @@ fn main() {
         }
         if name == "DCL" || name == "HELP" {
             modules.push(tables("DCL$TABLES", &sources("cld", &["cld"])));
+        }
+        if name == "DCL" {
+            modules.extend(sources("sysexe/dcl", &["mar"]).iter().map(compile));
         }
         modules.extend(libs.iter().cloned());
         modules.push(stb.clone());
@@ -194,7 +198,7 @@ fn disk(path: &Path, images: &[(String, Vec<u8>)]) {
         let size = Some(data.len() as u64);
         ok(vol.copy_in(&mut &data[..], &spec, Conversion::Binary, size, Some(image)));
     }
-    for source in sources("sysmgr", &["txt", "com"]) {
+    for source in sources("sysmgr", &["txt", "com", "cld"]) {
         let name = source.file_name().unwrap().to_str().unwrap().to_uppercase();
         let text = fs::read(&source).unwrap();
         let spec = format!("[SYSMGR]{name}");

@@ -90,8 +90,9 @@ system disk.
 2. **Table format.** The tables are bytes with no addresses in them:
    strings are `.ASCIC`, and blocks point to each other with word
    offsets from the table's start. They are documented in
-   `vtools/docs/command-tables.md`. ponytail: no `ROUTINE`, which
-   needs an address; it comes with `CLI$DISPATCH`.
+   `vtools/docs/command-tables.md`. A `ROUTINE`, which needs an
+   address, is a longword after the table's bytes, which the linker
+   fills, and which `CLI$DISPATCH` calls.
 3. **Every DCL verb is CLD.** `roottask/cld/*.cld` compile into one
    table, `DCL$TABLES`, linked into `DCL.EXE`.
    - DCL parses every command with it, after symbols and labels, so one
@@ -173,9 +174,9 @@ system disk.
   can't build the system.
 
 **Follow-ups:**
-- `PLACEMENT=LOCAL` and `POSITIONAL`, with `CLI$_LOCPRES` and
-  `CLI$_LOCNEG`.
-- `ROUTINE` and `CLI$DISPATCH`.
-- A native `SET COMMAND`.
-- `LIB$GET_FOREIGN` for foreign commands, `name := $image`.
+- Done: `PLACEMENT=LOCAL` and `POSITIONAL`, with `CLI$_LOCPRES` and
+  `CLI$_LOCNEG`; `ROUTINE` and `CLI$DISPATCH`, in the tables' version
+  2. A native `SET COMMAND`, and `LIB$GET_FOREIGN` for foreign
+  commands, `name := $image`, are
+  [ADR-0018](0018-set-command-and-foreign-commands.md).
 - Text for `HELP`, from a help library, as VMS's `HELPLIB.HLB`.

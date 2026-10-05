@@ -50,10 +50,17 @@ define verb SET
 	parameter P1, label=OPTION, prompt="What", value(required, type=SET_OPTIONS)
 
 define type SET_OPTIONS
+	keyword COMMAND, syntax=SET_COMMAND
 	keyword CONFIGURATION, syntax=SET_CONFIGURATION
 	keyword DEFAULT, syntax=SET_DEFAULT
 	keyword HOST, syntax=SET_HOST
 	keyword INTERFACE, syntax=SET_INTERFACE
+
+! SET COMMAND file: compiles file.CLD's verbs into the process's tables.
+define syntax SET_COMMAND
+	cliroutine SET_COMMAND
+	parameter P1, label=OPTION, value(required, type=SET_OPTIONS)
+	parameter P2, label=FILE, prompt="File", value(required, type=$infile)
 
 define syntax SET_DEFAULT
 	parameter P1, label=OPTION, value(required, type=SET_OPTIONS)

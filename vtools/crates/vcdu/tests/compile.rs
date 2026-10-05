@@ -39,7 +39,7 @@ fn layout() {
              keyword NAME, default
              keyword SIZE, value(required, type=$number)",
     );
-    assert_eq!(word(&t, 0), 1, "the version");
+    assert_eq!(word(&t, 0), 2, "the version");
     assert_eq!(word(&t, 2), 2, "COPY and DUPLICATE");
     assert_eq!(ascic(&t, word(&t, 4)), "COPY");
     assert_eq!(ascic(&t, word(&t, 8)), "DUPLICATE");
@@ -57,24 +57,27 @@ fn layout() {
     assert_eq!(t[at], 2);
     let (log, by) = (word(&t, at + 1), word(&t, at + 3));
     assert_eq!(word(&t, at + 5), 0, "no DISALLOW");
+    assert_eq!(word(&t, at + 7), 0, "no ROUTINE");
 
-    // An entity: flags, type, keywords, syntax, name, label, prompt, default.
+    // An entity: flags, type, keywords, syntax, placement, name, label,
+    // prompt, default.
     assert_eq!(
         t[p1],
         4 | 8 | 16 | 32,
         "VALUE, REQUIRED, LIST and so CONCAT"
     );
     assert_eq!(t[p1 + 1], 1, "$INFILE is a file");
-    assert_eq!(ascic(&t, p1 + 6), "P1");
-    assert_eq!(ascic(&t, p1 + 9), "FROM");
-    assert_eq!(ascic(&t, p1 + 14), "From");
+    assert_eq!(t[p1 + 6], 0, "PLACEMENT=GLOBAL");
+    assert_eq!(ascic(&t, p1 + 7), "P1");
+    assert_eq!(ascic(&t, p1 + 10), "FROM");
+    assert_eq!(ascic(&t, p1 + 15), "From");
     assert_eq!(t[log], 2, "a qualifier is negatable");
-    assert_eq!(ascic(&t, log + 6 + 4 + 4), "LOG", "the prompt is the label");
+    assert_eq!(ascic(&t, log + 7 + 4 + 4), "LOG", "the prompt is the label");
     assert_eq!(t[by + 1], 5, "a keyword type");
     let keywords = word(&t, by + 2);
     assert_eq!(t[keywords], 2);
     let name = word(&t, keywords + 1);
-    assert_eq!(ascic(&t, name + 6), "NAME");
+    assert_eq!(ascic(&t, name + 7), "NAME");
     assert_eq!(t[name], 1, "DEFAULT, and a keyword is not negatable");
     let size = word(&t, keywords + 3);
     assert_eq!((t[size], t[size + 1]), (4 | 8, 2), "VALUE REQUIRED $NUMBER");
@@ -116,6 +119,39 @@ fn syntax_inherits() {
 }
 
 #[test]
+fn placement_and_routine() {
+    let cld = "define verb PRINT
+             routine PRINT_FILES
+             parameter P1, value(list)
+             qualifier COPIES, placement=local, value(type=$number)
+             qualifier LOG, placement=positional
+         define verb TYPE
+             routine PRINT_FILES
+         define verb SHOW
+             routine SHOW_THEM";
+    let t = table(cld);
+    let print = word(&t, 6);
+    let at = print + 6 + 1 + 1 + 3;
+    let (copies, log) = (word(&t, at + 1), word(&t, at + 3));
+    assert_eq!(t[copies + 6], 1, "LOCAL");
+    assert_eq!(t[log + 6], 2, "POSITIONAL");
+    // The routines' longwords follow the table, aligned, one for each.
+    let vector = word(&t, at + 7);
+    assert_eq!(vector % 4, 0);
+    assert_eq!(vector, t.len(), "after the table's bytes");
+    let type_ = word(&t, 14);
+    assert_eq!(word(&t, type_ + 6 + 3 + 2), vector, "the same routine");
+    let show = word(&t, 10);
+    assert_eq!(word(&t, show + 6 + 3 + 2), vector + 4);
+    let source = vcdu::compile("T", &[("t.cld".into(), cld.into())]).unwrap();
+    let addresses: Vec<_> = source.lines().filter(|l| l.contains(".ADDRESS")).collect();
+    assert_eq!(
+        addresses,
+        ["\t.ADDRESS PRINT_FILES", "\t.ADDRESS SHOW_THEM"]
+    );
+}
+
+#[test]
 fn errors_name_the_line() {
     let e = errors("define verb A\n  image A\n  parameter P2");
     assert_eq!(e, ["%CDU-E-INVDEF, t.cld:3: A: parameter P2 must be P1"]);
@@ -130,10 +166,10 @@ fn errors_name_the_line() {
         e,
         ["%CDU-E-INVDEF, t.cld:3: A: required parameter P2 after an optional one"]
     );
-    let e = errors("define verb A\n  qualifier X, placement=local");
-    assert!(e[0].contains("not supported yet"), "{e:?}");
-    let e = errors("define verb A\n  routine A_ROUTINE");
-    assert!(e[0].contains("ROUTINE is not supported yet"), "{e:?}");
+    let e = errors("define verb A\n  qualifier X, placement=local, value(type=T)\ndefine type T");
+    assert!(e[0].contains("takes no keywords"), "{e:?}");
+    let e = errors("define verb A\n  image A\n  routine A_ROUTINE");
+    assert!(e[0].contains("only one of"), "{e:?}");
     let e = errors("define verb A\n  image \"A_VERY_LONG_IMAGE_NAME_THAT_GOES_ON_AND_ON\"");
     assert_eq!(
         e,

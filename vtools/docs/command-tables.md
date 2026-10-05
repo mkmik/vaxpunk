@@ -7,6 +7,10 @@ does what VMS's `SET COMMAND/OBJECT` does, as a cross tool
 the tables, and DCL parses every command with `DCL$TABLES`, which
 `roottask/build.rs` compiles from `roottask/cld/*.cld`. `HELP.EXE`
 (`roottask/sysexe/help.mar`) describes DCL's verbs from the same table.
+On vaxpunk, DCL's `SET COMMAND file` compiles a `.CLD` file into tables
+of the same format with `CDU$COMPILE` (`roottask/sysexe/dcl/cdu.mar`,
+[ADR-0018](../../docs/adr/0018-set-command-and-foreign-commands.md)),
+which reads the same language, but `ROUTINE`.
 
 ```
 vcdu [/OBJECT=file | -o file] [/MACRO | --macro] FILE.CLD...
@@ -45,6 +49,7 @@ Verb and syntax clauses:
 | Clause | Means |
 | --- | --- |
 | `IMAGE name` | the image the verb runs, `SYS$SYSTEM:name.EXE` |
+| `ROUTINE name` | the routine `CLI$DISPATCH` calls, in the image the table is linked into |
 | `CLIROUTINE name` | the command interpreter does the verb itself, with its code of that name |
 | `SYNONYM name` | another name for the verb |
 | `PARAMETER Pn [, clause]...` | a parameter: `P1`, then `P2`..., up to `P8`, required ones first |
@@ -60,6 +65,7 @@ Entity clauses, for parameters, qualifiers and keywords:
 | `PROMPT="text"` | a parameter's prompt, `_text: `; the label by default |
 | `DEFAULT` | present unless negated: `CLI$_DEFAULTED` |
 | `NEGATABLE`, `NONNEGATABLE` | `/NOname` allowed or not. Qualifiers are negatable, keywords not, unless they say otherwise |
+| `PLACEMENT=GLOBAL`, `LOCAL`, `POSITIONAL` | a qualifier's: the command's wherever it is given, the value's it is given after only, or the value's after one and the command's after the verb. A `LOCAL` or `POSITIONAL` one's value has no keywords |
 | `SYNTAX=name` | given (not negated), the command is parsed again with that syntax |
 | `VALUE [(clauses)]` | it takes a value: `REQUIRED`, `LIST`, `[NO]CONCATENATE` (by default as `LIST`), `DEFAULT="text"`, `TYPE=type` |
 
@@ -74,32 +80,36 @@ of VMS's built-in types:
 | `$QUOTED_STRING` | a string, its quotes, and `""` in it, kept |
 | `$DATETIME`, `$DELTATIME`, `$ACL`, `$EXPRESSION`, `$PARENTHESIZED_VALUE` | taken as a word, unchecked |
 
-A syntax takes from the command that switched to it whatever it lacks:
-the image or routine (if it has neither), the parameters and the
+A verb or a syntax has at most one of `IMAGE`, `ROUTINE` and
+`CLIROUTINE`. A syntax takes from the command that switched to it
+whatever it lacks: those (if it has none), the parameters and the
 qualifiers (if it has none, and doesn't say `NO`), and `DISALLOW`.
 
 vcdu reports an error with the file and line, as `%CDU-E-SYNTAX` or
 `%CDU-E-INVDEF`, and makes no table. Such errors include an undefined
 type or syntax, a name defined twice, parameters out of order, or a
 required parameter after an optional one. Clauses it doesn't implement
-are errors, not ignored: `ROUTINE`, `PLACEMENT=LOCAL` and `POSITIONAL`,
-`CLIFLAGS`, `OUTPUTS`, `PREFIX`, `IMPCAT`, a list of default values.
+are errors, not ignored: `CLIFLAGS`, `OUTPUTS`, `PREFIX`, `IMPCAT`, a
+list of default values.
 `BATCH` goes in the tables, but nothing runs in batch yet.
 
 ## The tables
 
-Bytes, with no addresses in them: the tables may be moved, or read from a
-file. A string is `.ASCIC`. An offset is a little-endian word from the
-table's first byte. The blocks are in the order the listing shows; only
-the header's place is fixed.
+Bytes, with no addresses in them but the routines' after them: the
+tables may be moved, or read from a file, if they have no `ROUTINE`. A
+string is `.ASCIC`. An offset is a little-endian word from the table's
+first byte. The blocks are in the order the listing shows; only the
+header's place is fixed. `CDU$COMPILE` writes them where they are
+defined, each after the blocks it refers to, and leaves room in the
+header for 64 verb names.
 
 The header:
 
 | Offset | Size | What |
 | --- | --- | --- |
-| 0 | word | the format's version, 1 |
+| 0 | word | the format's version, 2 |
 | 2 | word | n, how many verb names: verbs and synonyms |
-| 4 | 4n | for each, in alphabetical order, the offset of its name and of its command block |
+| 4 | 4n | for each, the offset of its name and of its command block: vcdu's in alphabetical order, as HELP lists them, `CDU$COMPILE`'s in the order they are defined |
 
 A command block, a verb's or a syntax's:
 
@@ -111,6 +121,7 @@ A command block, a verb's or a syntax's:
 | byte, words | how many parameters, then each one's entity; 255 and no words: inherited |
 | byte, words | the qualifiers, the same way |
 | word | its `DISALLOW` expression; 0 inherits, 1 is none |
+| word | its `ROUTINE`'s longword, or 0 |
 
 An entity, a parameter, qualifier or keyword:
 
@@ -120,7 +131,8 @@ An entity, a parameter, qualifier or keyword:
 | 1 | byte | the value's type: 0 a word, 1 a file, 2 `$NUMBER`, 3 `$REST_OF_LINE`, 4 `$QUOTED_STRING`, 5 keywords, 6 the other built-in types |
 | 2 | word | for type 5, the type's block |
 | 4 | word | its `SYNTAX=`'s command block, or 0 |
-| 6 | `.ASCIC` ×4 | its name, label, prompt and default value |
+| 6 | byte | its `PLACEMENT`: 0 `GLOBAL`, 1 `LOCAL`, 2 `POSITIONAL` |
+| 7 | `.ASCIC` ×4 | its name, label, prompt and default value |
 
 A type's block: a byte, how many keywords, then a word for each, its
 entity.
@@ -129,3 +141,7 @@ A `DISALLOW` expression, in prefix form: 1 and an `.ASCIC` path, an
 entity present; 2 and a path, negated; 3 and an expression, `NOT`; 4 or 5
 and two expressions, `AND` or `OR`; 6, a byte n and n expressions, `ANY2`.
 Several `DISALLOW` clauses are one, ORed.
+
+After the table's last byte, aligned to a longword, a longword for each
+`ROUTINE`, its address, which the linker fills: `.ADDRESS name` in the
+listing.

@@ -29,3 +29,11 @@ define verb SHOW
 define type WHAT
 	keyword USERS
 	keyword USAGE
+
+! PRINT: a ROUTINE, which CLI$DISPATCH calls, and qualifiers given after
+! a parameter's value.
+define verb PRINT
+	routine PRINT_THEM
+	parameter P1, label=FILES, value(required, list)
+	qualifier COPIES, placement=local, value(type=$number)
+	qualifier LOG, placement=positional

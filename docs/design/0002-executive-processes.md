@@ -275,6 +275,8 @@ an image runs it with `$IMGACT` and the parse:
 | `HELP [verb]` | `HELP.EXE`, which describes the verbs from `DCL$TABLES` (*The system disk's programs*) |
 | `LOGOUT` | `$DELPRC` |
 | `@file [p1 ... p8]` | reads `file.COM` with RMS and takes its `$` lines as commands |
+| `SET COMMAND file` | compiles `file.CLD`'s verbs into the process's tables, which DCL parses with first |
+| `name := $image`, then `name args` | runs `image`, a foreign command, which reads `args` with `LIB$GET_FOREIGN` |
 | `name = expression`, `name := string` | sets a symbol, `==` and `:==` a global one |
 | `IF`, `GOTO`, `EXIT`, `WRITE SYS$OUTPUT` | as in VMS's procedures |
 | `SHOW SYMBOL name`, `DELETE/SYMBOL name` | shows a symbol, the nearest, deletes a local one; `/LOCAL` or `/GLOBAL` says which; `/ALL` instead of a name shows or deletes all of those |
@@ -315,7 +317,9 @@ parses commands with them, and is linked into DCL and into every image:
     abbreviates only one.
   - Parameters are separated by blanks. Qualifiers, `/name`,
     `/NOname`, `/name=value` or `/name=(value,...)`, may come after the
-    verb or any parameter.
+    verb or any parameter. One with `PLACEMENT=LOCAL` is given after a
+    parameter's value, and is that value's; one with
+    `PLACEMENT=POSITIONAL` is too, or the command's after the verb.
   - A `LIST` parameter's values are separated by commas, and a
     concatenating one's by plus signs.
   - A word is taken in capitals. Text in quotes is kept as it is, `""`
@@ -340,10 +344,14 @@ parses commands with them, and is linked into DCL and into every image:
 - **The result block** holds no addresses. It is a word, its length (0
   for no command), a spare word, then an entry for `$VERB`, `$LINE`
   and each parameter, qualifier and keyword of the command, given or
-  not. An entry is:
+  not, then one for each qualifier given after a parameter's value. An
+  entry is:
   - a word, its length;
   - a byte, its state: absent, present, negated or defaulted;
-  - a byte, then a word, the cursor of `CLI$GET_VALUE`;
+  - a byte of flags: 1 for a parameter's;
+  - a word, the cursor of `CLI$GET_VALUE`;
+  - a word, a local qualifier's: where in the block the parameter
+    value it was given after is;
   - its path, `.ASCIC`: its label, after its parent's and a dot for a
     keyword (`MODE.SLOW`);
   - its values, each `.ASCIC` and a byte, the comma, plus or 0 that
@@ -352,10 +360,19 @@ parses commands with them, and is linked into DCL and into every image:
   A defaulted parameter, and an absent or defaulted entity with a
   default value, have that value.
 - **`CLI$PRESENT name`** answers from the block: `CLI$_PRESENT`,
-  `CLI$_DEFAULTED`, `CLI$_NEGATED` or `CLI$_ABSENT`.
+  `CLI$_DEFAULTED`, `CLI$_NEGATED` or `CLI$_ABSENT`; for a qualifier
+  given after the parameter value `CLI$GET_VALUE` returned last,
+  `CLI$_LOCPRES` or `CLI$_LOCNEG`.
 - **`CLI$GET_VALUE name, retdesc [,retlen]`** returns the next value
   each call, `CLI$_COMMA`, `CLI$_CONCAT` or `SS$_NORMAL` for the last,
-  then `CLI$_ABSENT`, and starts again.
+  then `CLI$_ABSENT`, and starts again. A qualifier given after the
+  parameter value it returned last has its values there.
+- **`CLI$DISPATCH [userarg]`** calls the `ROUTINE` of the verb or syntax
+  parsed last, with userarg, and returns its status, or `CLI$_INVROUT`.
+- **`LIB$GET_FOREIGN get_str [,prompt [,outlen [,force_prompt]]]`**, in
+  `lib/getforeign.mar`, returns `$LINE` past its first word, the verb:
+  a foreign command's arguments. With none, it reads a line with
+  `LIB$GET_INPUT` (`lib/getinput.mar`), in capitals, if given a prompt.
 - Both read the block of the last parse in the image or, if there was
   none, the one at `VA$C_CLI_RESULT`; with no command, every name is
   absent. A name the command doesn't have is `%CLI-F-SYNTAX, error
@@ -363,9 +380,11 @@ parses commands with them, and is linked into DCL and into every image:
   `CLI$_ENTNF`.
 
 DCL parses each command, after symbol substitution, labels and
-assignments, with `DCL$TABLES`. It passes a prompt routine at the
-console, which reads with `IO$_READPROMPT`, and none in procedures.
-Then:
+assignments, with `DCL$TABLES`, after the tables `SET COMMAND` made, the
+last first: `CLI$$DCL_PARSE` looks for the verb in each, and one of a
+name a table before has doesn't count ([ADR-0018](../adr/0018-set-command-and-foreign-commands.md)).
+It passes a prompt routine at the console, which reads with
+`IO$_READPROMPT`, and none in procedures. Then:
 
 - A verb or syntax with an `IMAGE` (`CLI$$IMAGE`) runs it, with
   `CLI$$RESULT` as `$IMGACT`'s `cmdlin`.
@@ -374,6 +393,13 @@ Then:
   - Each takes its values with `CLI$GET_VALUE`. `IF`, `EXIT` and
     `WRITE`'s expressions are a `$REST_OF_LINE`, which DCL's expression
     code reads.
+- `SET COMMAND file` reads `file.CLD` with RMS and compiles it with
+  `CDU$COMPILE`, `roottask/sysexe/dcl/cdu.mar`, into DCL's P1 data: 16
+  KB of tables, 8 files at most.
+- A verb that is a symbol whose value starts with `$`, `name :=
+  $image`, is a foreign command: DCL runs `image` with a block that
+  `CLI$$FOREIGN` made, `$VERB` and `$LINE` only, the command in
+  capitals outside quotes.
 - `DELETE/SYMBOL` is the `DELETE_SYMBOL` syntax of `DELETE`, and
   `DELETE/SYMBOL/ALL` its `DELETE_SYMBOL_ALL`, which has no
   parameters. `SHOW DEVICES`, `SHOW LOGICAL` and `SHOW SYMBOL` are
@@ -989,7 +1015,7 @@ on the console with `PRINT` and `PRINTHEX` from `sysexe.mlb`, which call
 | `TIMETEST` | checks that `$GETTIM` reads a time after 2026; waits for `$SETIMR`s, a delta and a time, 50 ms on, and that a cancelled one never sets its flag; hibernates through three repeating `$SCHDWK` wakeups, cancels them, and checks that the next wakeup is a new one's |
 | `CTRLC` | enables a CTRL/C AST, starts a console read and waits for it; the AST, once CTRL/C is typed, `$CANCEL`s the read, which ends with `SS$_ABORT` |
 | `HELP` | describes DCL's verbs, from `DCL$TABLES`, which `build.rs` links into it as into DCL: with no topic, each verb and its parameters, then what DCL does without a verb; with one, each verb whose name starts with it, its parameters, the keywords a parameter may be and the qualifiers, then each syntax a qualifier or keyword leads to that has parameters or qualifiers of its own. ponytail: no text, which VMS's HELP reads from a help library |
-| `CLITEST` | parses commands with its own tables, `CLITEST.CLD`, and `CLI$DCL_PARSE`, and checks what `CLI$PRESENT` and `CLI$GET_VALUE` say of them: lists, concatenation, quoted strings, default values, negation, keywords and their values, a syntax switched to, abbreviations, and each error |
+| `CLITEST` | parses commands with its own tables, `CLITEST.CLD`, and `CLI$DCL_PARSE`, and checks what `CLI$PRESENT` and `CLI$GET_VALUE` say of them: lists, concatenation, quoted strings, default values, negation, keywords and their values, a syntax switched to, abbreviations, each error, qualifiers given after a parameter's value, a `ROUTINE` `CLI$DISPATCH` calls, tables looked in first, and `LIB$GET_FOREIGN`'s line; run as a foreign command, or as a verb with an image, it writes the words after the verb |
 | `ASTTEST` | checks that `$DCLAST`'s AST is delivered as the service returns, or when `$SETAST` enables ASTs again; that one declared in an AST routine waits until it returns; that a `$SETIMR` AST's `$WAKE` ends a `$HIBER`; and that one delivered while it computes in user mode leaves every register as it was |
 
 When every process but the swapper waits, the CPU idles in `WTINT`,

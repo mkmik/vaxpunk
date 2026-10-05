@@ -38,6 +38,9 @@
 ;               run TCPIP.EXE
 ;   SET HOST address
 ;               runs RTPAD.EXE, a remote login to address
+;   SET COMMAND file
+;               adds the verbs file.CLD defines to the process's
+;               commands, compiled with CDU$COMPILE (dcl/cdu.mar)
 ;   EDIT spec   runs EDIT.EXE, with spec as its command line
 ;   COPY[/LOG] from to
 ;               runs COPY.EXE
@@ -62,6 +65,10 @@
 ;   name := string, name :== string
 ;               the same, with the rest of the line, in capitals but in
 ;               quotes
+;   name := $image
+;               makes name a foreign command: name args runs image,
+;               SYS$SYSTEM:image.EXE by default, which takes args with
+;               LIB$GET_FOREIGN
 ;   IF expression THEN command
 ;               does command if the expression is true, odd
 ;   GOTO label  goes on from the procedure's line label: starts
@@ -133,7 +140,7 @@
 
         .EXTERNAL PUT_LINE, SCH$GL_CURPCB, LNM$GQ_SYSTEM
         .EXTERNAL DCL$TABLES, CLI$$DCL_PARSE, CLI$$RESULT, CLI$$IMAGE, CLI$$ROUTINE
-        .EXTERNAL CLI$GET_VALUE, CLI$PRESENT
+        .EXTERNAL CLI$GET_VALUE, CLI$PRESENT, CLI$$FOREIGN, CDU$COMPILE
 
 LINESIZE = 255
 INHIB_MSG = 28                          ; STS$V_INHIB_MSG
@@ -141,6 +148,9 @@ INHIB = ^X10000000                      ; STS$M_INHIB_MSG
 CLIWARN = ^X10038000                    ; $STATUS after a warning of DCL's own
 MAXDEPTH = 8                            ; procedures inside one another
 PBUFSIZE = 16384
+CLDMAX = 16384                          ; a .CLD file SET COMMAND compiles
+PTABMAX = 16384                         ; the process's command tables
+MAXPTAB = 8                             ; how many, a SET COMMAND each
 NSYM = 64                               ; symbols
 NVAL = 16                               ; values an expression may hold at once
 GLOBAL = -1                             ; a global symbol's level
@@ -296,6 +306,8 @@ ROUTINES:
         .ADDRESS RUN
         .ASCIC  "SET"
         .ADDRESS SET
+        .ASCIC  "SET_COMMAND"
+        .ADDRESS SETCOMMAND
         .ASCIC  "SHOW"
         .ADDRESS SHOW
         .ASCIC  "WRITE"
@@ -371,6 +383,7 @@ FIRST:  .ASCIC  "@SYS$MANAGER:SYSTARTUP_VMS"     ; the first commands, until a 0
         .ASCIC  "@SYS$MANAGER:SYLOGIN"
         .BYTE   0
 DOTCOM: .ASCII  ".COM"
+DOTCLD: .ASCII  ".CLD"
 PNAME:  .ASCIC  "P1"                    ; a parameter's symbol, P1 to P8
 ; The operators: each name, .ASCIC, its level, 1 binding the least, and
 ; its OP_ code, until a 0.
@@ -435,11 +448,28 @@ PROCFAB:                                ; @'s
         $FAB    FNA=TOKEN, DNA=DOTCOM, DNS=4
 PROCRAB:
         $RAB    FAB=PROCFAB, USZ=LINESIZE
+CLDFAB:                                 ; SET COMMAND's
+        $FAB    FNA=TOKEN, DNA=DOTCLD, DNS=4
+CLDRAB:
+        $RAB    FAB=CLDFAB, USZ=LINESIZE
+CLDDSC: .LONG   0                       ; the .CLD file's text, in CLDBUF
+        .ADDRESS CLDBUF
+PTABDSC:                                ; the room left for tables, in PTABS
+        .LONG   0, 0
+PTABLEN:                                ; the tables CDU$COMPILE made there
+        .WORD   0
+PTABFREE:                               ; the room left
+        .ADDRESS PTABS
+PTABVEC:                                ; the process's tables, for CLI$$DCL_PARSE: how many,
+        .LONG   0
+        .BLKL   MAXPTAB                 ; then each one, the last SET COMMAND's first
 SYMTAB: .BLKB   NSYM*SYM$K_LENGTH       ; the symbols
 SYMEND:
 VSTACK: .BLKB   NVAL*VAL$K_LENGTH       ; the values an expression holds
 VSTACKEND:
 PBUF:   .BLKB   PBUFSIZE                ; the procedures' lines, each .ASCIC, the outer's first
+CLDBUF: .BLKB   CLDMAX                  ; the .CLD file, its lines each ending in LF
+PTABS:  .BLKB   PTABMAX                 ; the process's command tables
 PBUFEND:
 DEFFAB: $FAB    FNA=TOKEN, NAM=DEFNAM   ; SET and SHOW DEFAULT's $PARSE
 DEFNAM: $NAM    ESA=EXP, ESS=255
@@ -557,7 +587,11 @@ COMMAND:
         MOVC3   #VAL$K_LENGTH, SYM$R_VALUE(R1), (R9)
         BSBW    TOSTR
         MOVZBL  VAL$T_STR(R9), R11
-        MOVC3   R11, VAL$T_STR+1(R9), LINE2
+        BEQL    45$
+        CMPB    VAL$T_STR+1(R9), #^A/$/ ; name := $image, a foreign command
+        BNEQ    45$
+        BRW     FOREIGN
+45$:    MOVC3   R11, VAL$T_STR+1(R9), LINE2
         SUBL3   R6, R7, R0
         SUBL3   R11, #LINESIZE, R1
         CMPL    R0, R1
@@ -583,11 +617,12 @@ VERBS:  SUBL3   R8, R6, R0              ; the command
         TSTL    DEPTH
         BNEQ    10$
         MOVAB   PROMPTFOR, R1
-10$:    PUSHAB  DCLFAC
+10$:    PUSHAL  PTABVEC                 ; SET COMMAND's tables first
+        PUSHAB  DCLFAC
         PUSHL   R1
         PUSHAB  G^DCL$TABLES
         PUSHAQ  CMDDSC
-        CALLS   #4, G^CLI$$DCL_PARSE
+        CALLS   #5, G^CLI$$DCL_PARSE
         BLBS    R0, 20$
         BRW     DONE                    ; reported
 20$:    TSTB    G^CLI$$ROUTINE
@@ -630,10 +665,43 @@ RUN:    MOVAB   V_FILE, R1
         CLRL    R9                      ; no command line
         BRB     IMAGE
 
+; FOREIGN: R9 = the value, $image, of the symbol SYMNAM, the verb, R10 =
+; the command's first character, R7 = past its last. Runs image, with a
+; parse whose $LINE is the command, in capitals outside quotes, which
+; LIB$GET_FOREIGN takes the words after the verb from.
+FOREIGN:
+        MOVL    R10, R1
+        CLRL    R2                      ; 1 in quotes
+10$:    CMPL    R1, R7
+        BGEQU   30$
+        CMPB    (R1), #^A/"/
+        BNEQ    15$
+        XORL2   #1, R2
+15$:    TSTL    R2
+        BNEQ    20$
+        CMPB    (R1), #^A/a/
+        BLSSU   20$
+        CMPB    (R1), #^A/z/
+        BGTRU   20$
+        SUBB2   #^A/a/-^A/A/, (R1)
+20$:    INCL    R1
+        BRB     10$
+30$:    MOVL    R10, CMDDSC+4
+        SUBL3   R10, R7, CMDDSC
+        PUSHAB  SYMNAM
+        PUSHAQ  CMDDSC
+        CALLS   #2, G^CLI$$FOREIGN
+        MOVZBL  VAL$T_STR(R9), R8       ; the image, past the $
+        DECL    R8
+        MOVC3   R8, VAL$T_STR+2(R9), TOKEN
+        BRB     WITHPARSE
+
 ; IMGVERB: runs the parsed verb's image, with the parse as its command.
 IMGVERB:
         MOVZBL  G^CLI$$IMAGE, R8
         MOVC3   R8, G^CLI$$IMAGE+1, TOKEN
+; WITHPARSE: TOKEN = an image, R8 = its length: runs it with the parse.
+WITHPARSE:
         MOVAB   G^CLI$$RESULT, R0
         MOVZWL  (R0), RESDSC
         MOVL    R0, RESDSC+4
@@ -772,6 +840,72 @@ SET:    MOVAB   V_DIR, R1
         BSBW    SAY
         BRW     OK
 20$:    BRW     DONE
+
+; SET COMMAND file: compiles the command definitions in file, file.CLD
+; if it has no type, with CDU$COMPILE, into the process's tables in
+; PTABS, which DCL looks for a verb in before DCL$TABLES, the last first
+; (ADR-0018).
+SETCOMMAND:
+        MOVAB   V_FILE, R1
+        BSBW    GETVAL
+        TSTL    R8
+        BNEQ    5$
+        BRW     INSFPRM
+5$:     CMPL    PTABVEC, #MAXPTAB
+        BLSSU   7$
+        PRINT   "%CDU-E-TABOVF, command tables full"
+        BRW     WARN
+7$:     MOVB    R8, CLDFAB+FAB$B_FNS
+        $OPEN   FAB=CLDFAB
+        BLBC    R0, 80$
+        $CONNECT RAB=CLDRAB
+        BLBC    R0, 70$
+        MOVAB   CLDBUF, R11             ; where the next line goes
+10$:    MOVAB   CLDBUF+CLDMAX-LINESIZE-1, R0
+        CMPL    R11, R0
+        BLEQU   15$
+        MOVL    #RMS$_DME, R0           ; no room
+        BRB     70$
+15$:    MOVL    R11, CLDRAB+RAB$L_UBF
+        $GET    RAB=CLDRAB
+        BLBS    R0, 20$
+        CMPL    R0, #RMS$_RTB           ; too long: what fits
+        BEQL    20$
+        CMPL    R0, #RMS$_EOF
+        BNEQ    70$
+        BRB     30$
+20$:    MOVZWL  CLDRAB+RAB$W_RSZ, R0
+        ADDL2   R0, R11
+        MOVB    #10, (R11)+
+        BRB     10$
+30$:    $CLOSE  FAB=CLDFAB
+        MOVAB   CLDBUF, R0
+        SUBL3   R0, R11, CLDDSC
+        MOVAB   PTABS+PTABMAX, R0       ; the room left
+        SUBL3   PTABFREE, R0, PTABDSC
+        MOVL    PTABFREE, PTABDSC+4
+        PUSHAW  PTABLEN
+        PUSHAQ  PTABDSC
+        PUSHAQ  CLDDSC
+        CALLS   #3, G^CDU$COMPILE
+        BLBC    R0, 80$                 ; reported
+        MOVL    PTABVEC, R1             ; the last first
+40$:    TSTL    R1
+        BEQL    50$
+        MOVL    PTABVEC[R1], PTABVEC+4[R1]
+        DECL    R1
+        BRB     40$
+50$:    MOVL    PTABFREE, PTABVEC+4
+        INCL    PTABVEC
+        MOVZWL  PTABLEN, R0             ; the next ones after them, aligned
+        ADDL2   #3, R0
+        BICL2   #3, R0
+        ADDL2   R0, PTABFREE
+        BRW     OK
+70$:    PUSHL   R0
+        $CLOSE  FAB=CLDFAB
+        MOVL    (SP)+, R0
+80$:    BRW     DONE
 
 ; SHOW DEFAULT: shows the default device and directory, what $PARSE
 ; expands an empty specification to.

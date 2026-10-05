@@ -1,0 +1,45 @@
+        .TITLE  GETINPUT        Reads a line from SYS$INPUT, as LIB$GET_INPUT
+        .IDENT  /V0.1/
+;
+; build.rs links this module into each image, as it does lib/print.mar.
+;
+        .LIBRARY "starlet.mlb"
+        $IODEF
+
+        .PSECT  GETINPUT_DATA, NOEXE, WRT, LONG
+CHAN:   .LONG   0                       ; SYS$INPUT's, once assigned
+INPUT:  .ASCID  "SYS$INPUT"
+IOSB:   .BLKQ   1
+
+        .PSECT  GETINPUT_CODE, EXE, LONG
+; LIB$GET_INPUT get_str [,prompt [,outlen]]: reads a line from SYS$INPUT
+; into the string get_str describes, as much as fits, after writing the
+; string prompt describes, if given, and its length into the word outlen.
+; R0 = SS$_NORMAL, or $ASSIGN's or the read's error.
+; ponytail: get_str is a fixed-length string, not padded with blanks.
+        .ENTRY  LIB$GET_INPUT, ^M<R2, R3, R4, R5>
+        TSTL    CHAN
+        BNEQ    10$
+        $ASSIGN_S DEVNAM=INPUT, CHAN=CHAN
+        BLBC    R0, 90$
+10$:    MOVL    4(AP), R2
+        MOVZWL  (R2), R3
+        CLRQ    R4                      ; the prompt: none
+        CMPB    (AP), #2
+        BLSSU   20$
+        MOVL    8(AP), R0
+        BEQL    20$
+        MOVZWL  (R0), R5
+        MOVL    4(R0), R4
+20$:    $QIOW_S CHAN=CHAN, FUNC=#IO$_READPROMPT, IOSB=IOSB, P1=@4(R2), P2=R3, P5=R4, P6=R5
+        BLBC    R0, 90$
+        MOVZWL  IOSB, R0
+        BLBC    R0, 90$
+        CMPB    (AP), #3
+        BLSSU   90$
+        TSTL    12(AP)
+        BEQL    90$
+        MOVW    IOSB+2, @12(AP)
+90$:    RET
+
+        .END

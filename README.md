@@ -124,7 +124,9 @@ address` logs in to another vaxpunk, `COPY` and `DELETE` copy and delete
 files, `INITIALIZE`, `MOUNT` and `DISMOUNT` make, mount and dismount a
 volume on the data disk, `DKB0:`, or the ramdisk, `MDA0:`, the disks they
 can write ([ADR-0009](docs/adr/0009-ramdisk-writable-files-11.md)), where
-`CREATE/DIRECTORY [A.B]` makes directories, `HELP` lists
+`CREATE/DIRECTORY [A.B]` makes directories, `SET COMMAND file` adds the
+verbs a `.CLD` file defines (`SET COMMAND SYS$MANAGER:DCLTEST`, then
+`GREET world`), `name := $image` makes a foreign command, `HELP` lists
 the commands and `LOGOUT` ends the process:
 
 ```

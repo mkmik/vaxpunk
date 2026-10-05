@@ -102,6 +102,7 @@ CLI$_LOCNEG = ^X38230                   ; entity explicitly and locally negated
 CLI$_IVQUAL = ^X38240                   ; unrecognized qualifier
 CLI$_CONFLICT = ^X38258                 ; illegal combination of command elements
 CLI$_NOPAREN = ^X38288                  ; value improperly delimited
+CLI$_INVROUT = ^X38912                  ; invalid routine specified in command tables
 CLI$_INVTAB = ^X38922                   ; command tables have invalid format
 CLI$_ENTNF = ^X38932                    ; entity not found in command tables
 CLI$_PRESENT = ^X3FD19                  ; entity value is present

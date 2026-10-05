@@ -1,0 +1,5 @@
+! DCLTEST.CLD: GREET, a verb DCLTEST.COM adds with SET COMMAND. It runs
+! CLITEST, which writes the words after the verb.
+define verb GREET
+	image CLITEST
+	parameter P1, label=WHO, prompt="Who", value(required)
