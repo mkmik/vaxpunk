@@ -2,7 +2,8 @@
 //! console's DCL prompt once the executive has started, and waits until the
 //! processes have printed their last lines (roottask/sysexe/), DIRECTORY,
 //! TYPE and EDIT theirs from the system disk, DCLTEST.COM's and DCL's
-//! with symbols, those SYLOGIN.COM defined too, EDIT's EXIT that can't write
+//! with symbols, those SYLOGIN.COM defined too, CLITEST's words as a
+//! foreign command and as a verb SET COMMAND added, EDIT's EXIT that can't write
 //! there, and DIRECTORY its own from the ramdisk, MDA0:, made the default
 //! device, around a COPY/LOG to it from SYS$SYSDEVICE:, which prompts for
 //! its parameters, a DELETE/LOG, CLITEST's checks of the command parser, a
@@ -113,6 +114,8 @@ const LINES: &[&str] = &[
     "   \"ZZZ\" = \"YYY\" (LNM$SYSTEM_TABLE)",
     "*CANCEL*",
     "CTRLC: ok",
+    "CLITEST: foreign ONE \"Two\" 3",
+    "CLITEST: foreign world",
     "DCLTEST: ok, 3 and 4",
     "%RMS-E-FNF, file not found",
     "  $STATUS == 268534418   Hex = 10018292  Octal = 02000301222",

@@ -6,8 +6,12 @@
 ; them: lists, concatenation, quoted strings, default values,
 ; qualifiers and their negation, keywords and their values, a syntax
 ; switched to, verbs and keywords abbreviated, a parameter prompted for,
-; a blank line, and the errors, which the parser reports as %CLI-W-. A failed check exits with 2 * N, N its
-; number in this file.
+; a blank line, and the errors, which the parser reports as %CLI-W-;
+; qualifiers given after a parameter's value, a ROUTINE CLI$DISPATCH
+; calls, and LIB$GET_FOREIGN's command line, a parse's or a foreign
+; command's. A failed check exits with 2 * N, N its number in this file.
+; Run as a foreign command, CT := $CLITEST, it only writes the words
+; after CT.
 ;
         .LIBRARY "starlet.mlb"
         .LIBRARY "sysexe.mlb"
@@ -15,6 +19,8 @@
         $CLIMSGDEF
 
         .EXTERNAL CLI$DCL_PARSE, CLI$PRESENT, CLI$GET_VALUE, CLITEST_TABLES
+        .EXTERNAL CLI$DISPATCH, CLI$$FOREIGN, LIB$GET_FOREIGN, PUT_LINE
+        .EXTERNAL CLI$$DCL_PARSE
 
 INHIB = ^X10000000                      ; STS$M_INHIB_MSG
 CHECK = 0
@@ -108,6 +114,19 @@ ABVERB: .ASCID  "S X"
 IVVERB: .ASCID  "XYZZY"
 ABKEYW: .ASCID  "SHOW US"
 BLANK:  .ASCID  "   "
+PRINTS: .ASCID  "PRINT/LOG a/COPIES=2/NOLOG, B, C /LOG"
+NOTLOC: .ASCID  "PRINT/COPIES=2 A"
+FOREIGN:
+        .ASCID  "FOO  x Y"              ; a foreign command's line
+NOARGS: .ASCID  "FOO"
+FORCE:  .LONG   0                       ; LIB$GET_FOREIGN's force_prompt
+SE:     .ASCID  "SE X"
+FAC:    .ASCIC  "CLI"
+TABLES: .LONG   1                       ; the tables looked in first: these again
+        .ADDRESS CLITEST_TABLES
+SAID:   .ASCII  "CLITEST: foreign "     ; and the words, .ASCIC
+SAIDLEN = . - SAID
+SAYING: .BLKB   1+SAIDLEN+64
 PROMPT: .ASCIC  "_To: "                 ; what ANSWER must be asked
 ASKED:  .LONG   0                       ; how many times it was
 T_A:    .ASCIC  "A"
@@ -118,6 +137,11 @@ T_F:    .ASCIC  "F"
 T_ANS:  .ASCIC  "ANSWERED"
 T_1:    .ASCIC  "1"
 T_7:    .ASCIC  "7"
+T_2:    .ASCIC  "2"
+T_XY:   .ASCIC  "x Y"
+T_LIST: .ASCIC  "A,B+c"
+T_NONE: .ASCIC  ""
+T_FOO:  .ASCIC  "FOO"
 T_X1F:  .ASCIC  "%X1F"
 T_DFLT: .ASCIC  "DFLT"
 T_SEND: .ASCIC  "SEND"
@@ -128,6 +152,18 @@ T_HI:   .ASCIC  /"Hi ""there"""/
 
         .PSECT  CODE, EXE, LONG
         .ENTRY  START, ^M<R2, R3>
+; A foreign command's words: say them.
+        BSBW    FOREIGN1
+        MOVZWL  BUFLEN, R2
+        BEQL    5$
+        ADDB3   #SAIDLEN, R2, SAYING
+        MOVC3   #SAIDLEN, SAID, SAYING+1
+        MOVC3   BUFLEN, BUF, SAYING+1+SAIDLEN
+        PUSHAB  SAYING
+        CALLS   #1, G^PUT_LINE
+        MOVL    #SS$_NORMAL, R0
+        RET
+5$:
 ; A list with a comma and a plus; defaults.
         OKAY    LIST
         VALUE   "TO", T_A, CLI$_COMMA
@@ -199,8 +235,108 @@ T_HI:   .ASCIC  /"Hi ""there"""/
         FAILS   IVVERB, CLI$_IVVERB
         FAILS   ABKEYW, CLI$_ABKEYW
         IS      "LOG", CLI$_ABSENT      ; no command after a failure
+; Qualifiers given after a parameter's value are its: CLI$PRESENT and
+; CLI$GET_VALUE answer for the value CLI$GET_VALUE returned last.
+        OKAY    PRINTS
+        IS      "LOG", CLI$_PRESENT     ; after the verb
+        IS      "COPIES", CLI$_ABSENT
+        VALUE   "FILES", T_A, CLI$_COMMA
+        IS      "COPIES", CLI$_LOCPRES
+        VALUE   "COPIES", T_2, SS$_NORMAL
+        IS      "LOG", CLI$_LOCNEG
+        VALUE   "FILES", T_B, CLI$_COMMA
+        IS      "COPIES", CLI$_ABSENT
+        IS      "LOG", CLI$_PRESENT     ; the command's again
+        VALUE   "FILES", T_C, SS$_NORMAL
+        IS      "LOG", CLI$_LOCPRES
+        FAILS   NOTLOC, CLI$_IVQUAL     ; LOCAL, after the verb
+; CLI$DISPATCH calls the verb's ROUTINE with its argument.
+        OKAY    PRINTS
+        PUSHL   #42
+        CALLS   #1, G^CLI$DISPATCH
+        CHECK = CHECK + 1
+        EXPECT  #43, CHECK
+        OKAY    LIST
+        CALLS   #0, G^CLI$DISPATCH
+        CHECK = CHECK + 1
+        EXPECT  #CLI$_INVROUT, CHECK
+; Tables looked in first, as SET COMMAND's: a verb they have hides the
+; same one after, which makes SE no more ambiguous than it was.
+        PUSHAL  TABLES
+        PUSHAB  FAC
+        CLRL    -(SP)
+        PUSHAB  G^CLITEST_TABLES
+        PUSHAQ  SE
+        CALLS   #5, G^CLI$$DCL_PARSE
+        CHECK = CHECK + 1
+        EXPECT  #SS$_NORMAL, CHECK
+        VALUE   "$VERB", T_SEND, SS$_NORMAL
+        PUSHAL  TABLES
+        PUSHAB  FAC
+        CLRL    -(SP)
+        PUSHAB  G^CLITEST_TABLES
+        PUSHAQ  ABVERB
+        CALLS   #5, G^CLI$$DCL_PARSE
+        CHECK = CHECK + 1
+        EXPECT  #CLI$_ABVERB!INHIB, CHECK
+; LIB$GET_FOREIGN: the parse's line past the verb, as it was typed.
+        OKAY    LIST
+        BSBW    FOREIGN1
+        MOVAB   T_LIST, R1
+        BSBW    SAMEVAL
+        CHECK = CHECK + 1
+        EXPECT  #1, CHECK
+        BSBW    FOREIGN1                ; again
+        MOVAB   T_LIST, R1
+        BSBW    SAMEVAL
+        CHECK = CHECK + 1
+        EXPECT  #1, CHECK
+; A foreign command's, which DCL makes with CLI$$FOREIGN.
+        PUSHAB  T_FOO
+        PUSHAQ  FOREIGN
+        CALLS   #2, G^CLI$$FOREIGN
+        VALUE   "$VERB", T_FOO, SS$_NORMAL
+        BSBW    FOREIGN1
+        MOVAB   T_XY, R1
+        BSBW    SAMEVAL
+        CHECK = CHECK + 1
+        EXPECT  #1, CHECK
+; None, and no prompt: an empty line, and force_prompt set.
+        PUSHAB  T_FOO
+        PUSHAQ  NOARGS
+        CALLS   #2, G^CLI$$FOREIGN
+        MOVW    #99, BUFLEN
+        PUSHAL  FORCE
+        PUSHAW  BUFLEN
+        CLRL    -(SP)
+        PUSHAQ  BUFDSC
+        CALLS   #4, G^LIB$GET_FOREIGN
+        CHECK = CHECK + 1
+        EXPECT  #SS$_NORMAL, CHECK
+        MOVAB   T_NONE, R1
+        BSBW    SAMEVAL
+        CHECK = CHECK + 1
+        EXPECT  #1, CHECK
+        MOVL    FORCE, R0
+        CHECK = CHECK + 1
+        EXPECT  #1, CHECK
         PRINT   "CLITEST: ok"
         MOVL    #SS$_NORMAL, R0
+        RET
+
+; FOREIGN1: LIB$GET_FOREIGN into BUF, which must work.
+FOREIGN1:
+        PUSHAW  BUFLEN
+        CLRL    -(SP)
+        PUSHAQ  BUFDSC
+        CALLS   #3, G^LIB$GET_FOREIGN
+        CHECK = CHECK + 1
+        EXPECT  #SS$_NORMAL, CHECK
+        RSB
+
+; PRINT_THEM arg: PRINT's ROUTINE. R0 = arg + 1.
+        .ENTRY  PRINT_THEM, ^M<>
+        ADDL3   #1, 4(AP), R0
         RET
 
 ; ANSWER answer, prompt, anslen: CLI$DCL_PARSE's param_routine. Must be

@@ -1,15 +1,16 @@
 //! Runs CLITEST, the system disk's check of the command parser
 //! (roottask/sysexe/clitest.mar, with lib/cli.mar and its CLITEST.CLD
-//! compiled by vcdu), under vrun, so that the parser is checked where the
-//! system itself can't be built. A stub stands in for PUT_LINE, which
-//! writes with vrun's put, and SYS$EXIT.
+//! compiled by vcdu, and lib/getforeign.mar), under vrun, so that the
+//! parser is checked where the system itself can't be built. A stub stands
+//! in for PUT_LINE, which writes with vrun's put, SYS$EXIT, and
+//! LIB$GET_INPUT, which CLITEST doesn't call.
 
 use std::fs;
 use std::path::Path;
 use std::process::Command;
 
 const STUB: &str = "
-        .TITLE  STUB    PUT_LINE and SYS$EXIT, under vrun
+        .TITLE  STUB    PUT_LINE, SYS$EXIT and LIB$GET_INPUT, under vrun
         .LIBRARY \"vrun.mlb\"
         .PSECT  STUB_DATA, NOEXE, WRT, LONG
 NL:     .ASCII  <10>
@@ -25,6 +26,9 @@ NL:     .ASCII  <10>
         .ENTRY  SYS$EXIT, ^M<>
         MOVL    4(AP), R0
         svc     #1
+        .ENTRY  LIB$GET_INPUT, ^M<>
+        MOVL    #44, R0
+        RET
         .END
 ";
 
@@ -49,6 +53,7 @@ fn clitest() {
     let modules = [
         compile("CLITEST", &read("clitest.mar")),
         compile("CLI", &read("lib/cli.mar")),
+        compile("GETFOREIGN", &read("lib/getforeign.mar")),
         compile("TABLES", &tables),
         compile("STUB", STUB),
     ];

@@ -1,0 +1,103 @@
+        .TITLE  GETFOREIGN      The command line of a foreign command, as LIB$GET_FOREIGN
+        .IDENT  /V0.1/
+;
+; DCL runs the image a foreign command names, name := $image, with a
+; result block whose $LINE is the command (ADR-0017). LIB$GET_FOREIGN
+; takes it from there, past its first word, the verb. build.rs links this
+; module into each image, as it does lib/print.mar.
+;
+        .LIBRARY "starlet.mlb"
+        $SSDEF
+
+        .EXTERNAL LIB$GET_INPUT, CLI$GET_VALUE
+
+        .PSECT  GETFOREIGN_DATA, NOEXE, WRT, LONG
+LINNAM: .ASCID  "$LINE"
+LINDSC: .LONG   255                     ; its value
+        .ADDRESS LINE
+LINLEN: .WORD   0
+LINE:   .BLKB   255
+OUTLEN: .WORD   0                       ; the length, if outlen isn't given
+
+        .PSECT  GETFOREIGN_CODE, EXE, LONG
+; LIB$GET_FOREIGN get_str [,prompt [,outlen [,force_prompt]]]: copies the
+; command line that ran the image, past its verb, to the string get_str
+; describes, as much as fits, and its length to the word outlen. If there
+; is none, or the longword force_prompt is 1, it reads one with
+; LIB$GET_INPUT after the prompt, in capitals; with no prompt, there is
+; none. force_prompt is then 1. R0 = SS$_NORMAL, or LIB$GET_INPUT's error.
+        .ENTRY  LIB$GET_FOREIGN, ^M<R2, R3, R4, R5, R6>
+        MOVZBL  (AP), R6                ; the arguments given
+        MOVAW   OUTLEN, R5              ; outlen
+        CMPL    R6, #3
+        BLSSU   5$
+        TSTL    12(AP)
+        BEQL    5$
+        MOVL    12(AP), R5
+5$:     CMPL    R6, #4                  ; force_prompt
+        BLSSU   10$
+        MOVL    16(AP), R0
+        BEQL    10$
+        MOVL    (R0), R1
+        MOVL    #1, (R0)
+        BLBS    R1, PROMPT
+10$:    BSBB    GETLINE
+        BLBC    R0, PROMPT              ; no command line
+        BSBB    GETLINE                 ; CLI$_ABSENT: the next starts again
+        MOVAB   LINE, R1
+        MOVZWL  LINLEN, R2
+        ADDL2   R1, R2                  ; past it
+20$:    CMPL    R1, R2                  ; past the verb
+        BGEQU   30$
+        CMPB    (R1)+, #^A" "
+        BNEQ    20$
+30$:    CMPL    R1, R2                  ; and the blanks after it
+        BGEQU   PROMPT
+        CMPB    (R1), #^A" "
+        BNEQ    40$
+        INCL    R1
+        BRB     30$
+40$:    SUBL2   R1, R2
+        MOVL    4(AP), R0
+        MOVZWL  (R0), R3
+        CMPL    R2, R3
+        BLEQU   50$
+        MOVL    R3, R2
+50$:    MOVW    R2, (R5)
+        MOVC3   R2, (R1), @4(R0)
+        MOVL    #SS$_NORMAL, R0
+        RET
+; PROMPT: no command line, or one is wanted: LIB$GET_INPUT's, in capitals.
+PROMPT: CLRW    (R5)
+        CMPL    R6, #2
+        BLSSU   80$
+        TSTL    8(AP)
+        BEQL    80$
+        PUSHL   R5
+        PUSHL   8(AP)
+        PUSHL   4(AP)
+        CALLS   #3, G^LIB$GET_INPUT
+        BLBC    R0, 90$
+        MOVL    4(AP), R1
+        MOVL    4(R1), R1
+        MOVZWL  (R5), R2
+60$:    DECL    R2
+        BLSS    80$
+        CMPB    (R1)[R2], #^A"a"
+        BLSSU   60$
+        CMPB    (R1)[R2], #^A"z"
+        BGTRU   60$
+        SUBB2   #^A"a"-^A"A", (R1)[R2]
+        BRB     60$
+80$:    MOVL    #SS$_NORMAL, R0
+90$:    RET
+
+; GETLINE: CLI$GET_VALUE of $LINE into LINE. Uses R0, R1.
+GETLINE:
+        PUSHAW  LINLEN
+        PUSHAQ  LINDSC
+        PUSHAQ  LINNAM
+        CALLS   #3, G^CLI$GET_VALUE
+        RSB
+
+        .END

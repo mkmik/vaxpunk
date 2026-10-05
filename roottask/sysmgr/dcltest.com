@@ -1,6 +1,7 @@
 $ ! DCLTEST.COM: checks DCL's symbols and command procedures.
-$ ! @DCLTEST 3 "Two words" counts to 3, calls itself, and writes
-$ ! DCLTEST: ok. @DCLTEST FAIL stops at the TYPE that fails.
+$ ! @DCLTEST 3 "Two words" counts to 3, calls itself, runs CLITEST as a
+$ ! foreign command and as GREET, which SET COMMAND adds from DCLTEST.CLD,
+$ ! and writes DCLTEST: ok. @DCLTEST FAIL stops at the TYPE that fails.
 $ IF P1 .EQS. "INNER" THEN GOTO INNER
 $ IF P1 .EQS. "FAIL" THEN GOTO FAIL
 $ N = 0
@@ -17,6 +18,10 @@ $ T := 'P2'
 $ IF T .NES. "TWO WORDS" THEN GOTO BAD
 $ @SYS$MANAGER:DCLTEST INNER 'N'
 $ IF N .NE. 3 .OR. RESULT .NE. 4 THEN GOTO BAD ! the inner N is its own
+$ CT := $CLITEST
+$ CT one "Two" 3
+$ SET COMMAND SYS$MANAGER:DCLTEST
+$ GREET world
 $ WRITE SYS$OUTPUT "DCLTEST: ok, ", N, " and ", RESULT
 $ EXIT
 $ INNER:

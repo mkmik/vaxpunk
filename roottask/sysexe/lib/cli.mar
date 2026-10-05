@@ -10,7 +10,8 @@
 ; which parses with CLI$$DCL_PARSE.
 ;
 ; The parse: a verb, matched on its first 4 characters, a shorter one
-; unique; then, separated by blanks, parameters and qualifiers, /name,
+; unique, in the tables given, the first that has a verb of that name
+; hiding it in those after; then, separated by blanks, parameters and qualifiers, /name,
 ; /NOname, /name=value, /name=(value,...). A parameter's values are
 ; separated by commas, if it is a LIST, or by plus signs, if it
 ; concatenates. A value is a word, in capitals, or text in quotes, kept as
@@ -18,7 +19,10 @@
 ; of the line. A keyword or a qualifier with SYNTAX= starts the parse
 ; again with that syntax, unless it did once already, which takes the
 ; verb's parameters, qualifiers,
-; DISALLOW and image or routine where it has none of its own. A required
+; DISALLOW and image, CLIROUTINE or ROUTINE where it has none of its own.
+; A qualifier with PLACEMENT=LOCAL is given after a parameter's value, and
+; is that value's; one with PLACEMENT=POSITIONAL is too, or the command's
+; after the verb. A required
 ; parameter missing at the end is prompted for, if a prompt routine was
 ; given, else it is CLI$_INSFPRM. Then the defaults, and DISALLOW.
 ;
@@ -26,9 +30,12 @@
 ; $VERB, $LINE, then an entry for each of the command's parameters,
 ; qualifiers and the keywords their values may be, given or not, with its
 ; path, P2 or LOG or SELECT.SIZE (labels, if they have them), its state,
-; and its values, each .ASCIC and the separator that followed it.
-; ponytail: no PLACEMENT=LOCAL or POSITIONAL, no LIB$SIGNAL: an error is
-; written as DCL writes it and returned, with STS$M_INHIB_MSG.
+; and its values, each .ASCIC and the separator that followed it; then one
+; for each qualifier given after a parameter's value, which names it.
+; CLI$GET_VALUE remembers the parameter value it returned last, and
+; CLI$PRESENT and CLI$GET_VALUE answer for a qualifier given after it.
+; ponytail: no LIB$SIGNAL: an error is written as DCL writes it and
+; returned, with STS$M_INHIB_MSG.
 ;
         .LIBRARY "lib.mlb"
         .LIBRARY "starlet.mlb"
@@ -51,13 +58,15 @@ ENT$B_FLAGS = 0                         ; an entity: ENT_ flags
 ENT$B_TYPE = 1                          ; its value's TYP_
 ENT$W_KEYWORDS = 2                      ; its type's block, for TYP_KEYWORD
 ENT$W_SYNTAX = 4                        ; the syntax it switches to, or 0
-ENT$T_NAME = 6                          ; its name, then label, prompt and default value, .ASCIC
+ENT$B_PLACE = 6                         ; a qualifier's PLACE_
+ENT$T_NAME = 7                          ; its name, then label, prompt and default value, .ASCIC
 ENT_V_DEFAULT = 0
 ENT_V_NEGATABLE = 1
 ENT_V_VALUE = 2
 ENT_V_REQUIRED = 3
 ENT_V_LIST = 4
 ENT_V_CONCAT = 5
+PLACE_LOCAL = 1                         ; given after a parameter's value only
 TYP_NUMBER = 2
 TYP_REST = 3
 TYP_QUOTED = 4
@@ -70,16 +79,19 @@ OP_OR = 5
 OP_ANY2 = 6
 INHERIT = 255                           ; a syntax's count: its verb's
 MAXSYNTAX = 8                           ; syntaxes switched to in a parse
+MAXTAB = 9                              ; tables a parse looks for the verb in
 
 ; A slot: an entity of the command being parsed.
 SLT$L_ENT = 0                           ; its block in the tables
-SLT$L_PARENT = 4                        ; PARAM, QUAL, or the slot whose keyword it is
+SLT$L_PARENT = 4                        ; PARAM, QUAL, LOCAL, or the slot whose keyword it is
 SLT$B_STATE = 8                         ; ST_
 SLT$W_FIRST = 10                        ; its first value's index + 1, 0 for none
 SLT$W_LAST = 12                         ; its last's
+SLT$W_VALUE = 14                        ; LOCAL's: the parameter value's index + 1
 SLT$K_LENGTH = 16
 PARAM = -1
 QUAL = -2
+LOCAL = -3                              ; a qualifier given after a parameter's value
 ST_ABSENT = 0
 ST_PRESENT = 1
 ST_NEGATED = 2
@@ -89,15 +101,19 @@ VAL$L_ADDR = 0                          ; its text
 VAL$B_LEN = 4
 VAL$B_SEP = 5                           ; the separator after it: , + or 0
 VAL$W_NEXT = 6                          ; the next one's index + 1, 0 for none
-VAL$K_LENGTH = 8
+VAL$W_OFF = 8                           ; where it went in the result block
+VAL$K_LENGTH = 16
 
 ; The result block.
 RES$W_LENGTH = 0                        ; its bytes, 0 for no command
 RES$K_HEADER = 4
 RSE$W_LENGTH = 0                        ; an entry's bytes
 RSE$B_STATE = 2                         ; ST_
+RSE$B_FLAGS = 3                         ; RSE_M_
 RSE$W_CURSOR = 4                        ; the next value CLI$GET_VALUE returns, 0 the first
-RSE$T_PATH = 6                          ; .ASCIC, then the values: .ASCIC and a separator
+RSE$W_VALUE = 6                         ; a local qualifier's: its parameter value's offset
+RSE$T_PATH = 8                          ; .ASCIC, then the values: .ASCIC and a separator
+RSE_M_PARAM = 1                         ; a parameter's
 
 ; ERROR status: reports status with the word in TOKEN, and returns it.
         .MACRO  ERROR   STATUS
@@ -117,6 +133,8 @@ CLI$$IMAGE::                            ; the parsed command's image, .ASCIC, or
         .BLKB   64
 CLI$$ROUTINE::                          ; its CLIROUTINE, .ASCIC, or empty
         .BLKB   32
+RTNADR: .LONG   0                       ; its ROUTINE, or 0
+CURVAL: .LONG   0                       ; the offset of the parameter value CLI$GET_VALUE returned last
 RESBASE:                                ; the block CLI$ routines read, 0 for DCL's
         .LONG   0
 RESEND: .ADDRESS CLI$$RESULT+RESMAX     ; past CLI$$RESULT
@@ -143,6 +161,12 @@ VERBEND:                                ; past the verb in LINEBUF
 LINESTART:                              ; the command's first character
         .LONG   0
 PARAMN: .LONG   0                       ; the parameters given
+LASTVAL:                                ; the last parameter value's index + 1, 0 after the verb
+        .LONG   0
+NTABS:  .LONG   0                       ; the tables to look for the verb in,
+TABLIST:                                ; each one's address
+        .BLKL   MAXTAB
+TABIX:  .LONG   0                       ; FINDVERB's: the one it looks in
 NSLOTS: .LONG   0
 NVALS:  .LONG   0
 STRUSED:                                ; the bytes of STRBUF in use
@@ -231,6 +255,9 @@ MESSAGES:
         .LONG   CLI$_ENTNF
         .ASCIC  "ENTNF"
         .ASCIC  "specified entity not found in command tables"
+        .LONG   CLI$_INVROUT
+        .ASCIC  "INVROUT"
+        .ASCIC  "invalid routine specified in command tables - check .CLD file"
         .LONG   0
 
         .PSECT  CLI$CODE, EXE, LONG
@@ -247,8 +274,11 @@ MESSAGES:
         BSBW    PARSE
         RET
 
-; CLI$$DCL_PARSE line, table, param_routine, facility: CLI$DCL_PARSE for DCL,
-; which reports errors as facility, .ASCIC, DCL.
+; CLI$$DCL_PARSE line, table, param_routine, facility [,tables]:
+; CLI$DCL_PARSE for DCL, which reports errors as facility, .ASCIC, DCL.
+; tables, if given, is a longword count and as many tables' addresses,
+; which the verb is looked for in before table: the process's, from SET
+; COMMAND, the last first.
         .ENTRY  CLI$$DCL_PARSE, ^M<R2, R3, R4, R5, R6, R7, R8, R9, R10, R11>
         MOVL    16(AP), FACNAM
         BSBW    PARSE
@@ -262,9 +292,29 @@ PARSE:  MOVL    SP, SAVESP
         CMPB    (AP), #3
         BLSSU   5$
         MOVL    12(AP), PROMPTRTN
-5$:     CLRL    NSYNTAX
+5$:     CLRL    NTABS                   ; the tables: tables, then table
+        CMPB    (AP), #5
+        BLSSU   8$
+        MOVL    20(AP), R0
+        BEQL    8$
+        MOVL    (R0)+, R1
+        CMPL    R1, #MAXTAB
+        BLSSU   7$
+        MOVL    #MAXTAB-1, R1
+7$:     DECL    R1
+        BLSS    8$
+        MOVL    NTABS, R2
+        MOVL    (R0)+, TABLIST[R2]
+        INCL    NTABS
+        BRB     7$
+8$:     MOVL    NTABS, R2
+        MOVL    R11, TABLIST[R2]
+        INCL    NTABS
+        CLRL    NSYNTAX
         CLRB    CLI$$IMAGE
         CLRB    CLI$$ROUTINE
+        CLRL    RTNADR
+        CLRL    CURVAL
         MOVAB   EMPTY, PARAMS
         MOVAB   EMPTY, QUALS
         CLRL    DISALW
@@ -295,6 +345,7 @@ RESTART:
         CLRL    NVALS
         CLRL    STRUSED
         CLRL    PARAMN
+        CLRL    LASTVAL
         MOVL    PARAMS, R8              ; a slot for each parameter,
         MNEGL   #1, R10
         BSBW    ADDSLOTS
@@ -436,7 +487,16 @@ RESULT: MOVAB   CLI$$RESULT+RES$K_HEADER, R3
         MOVAB   SLOTS[R0], R9
         BSBW    BEGIN
         MOVB    SLT$B_STATE(R9), RSE$B_STATE(R4)
-        PUSHL   R9
+        CMPL    SLT$L_PARENT(R9), #PARAM
+        BNEQ    22$
+        MOVB    #RSE_M_PARAM, RSE$B_FLAGS(R4)
+22$:    MOVZWL  SLT$W_VALUE(R9), R0     ; local: where its value went
+        BEQL    24$
+        DECL    R0
+        ASHL    #4, R0, R0
+        MOVAB   VALS[R0], R0
+        MOVW    VAL$W_OFF(R0), RSE$W_VALUE(R4)
+24$:    PUSHL   R9
         MOVL    R8, R10
         BSBW    PATH
         MOVL    (SP)+, R9
@@ -445,8 +505,11 @@ RESULT: MOVAB   CLI$$RESULT+RES$K_HEADER, R3
 30$:    TSTL    R10
         BEQL    50$
         DECL    R10
-        ASHL    #3, R10, R10
+        ASHL    #4, R10, R10
         MOVAB   VALS[R10], R10
+        MOVAB   CLI$$RESULT, R0         ; where it goes, for a local qualifier
+        SUBL3   R0, R3, R0
+        MOVW    R0, VAL$W_OFF(R10)
         MOVL    VAL$L_ADDR(R10), R1
         MOVZBL  VAL$B_LEN(R10), R2
         BSBW    PUTSTR0
@@ -474,8 +537,8 @@ VERBV:  .ASCIC  "$VERB"
 LINEV:  .ASCIC  "$LINE"
 
 ; BEGIN: R3 = where the result block's next entry goes. Starts it, with
-; R4 at it, absent, its cursor 0, and an empty path, R5 at its length.
-; Uses R0.
+; R4 at it, present, no flags, its cursor 0, no parameter value, and an
+; empty path, R5 at its length. Uses R0.
 BEGIN:  MOVL    R3, R4
         CLRL    R0
         BSBW    PUTB                    ; its length, later
@@ -485,6 +548,8 @@ BEGIN:  MOVL    R3, R4
         CLRL    R0
         BSBW    PUTB
         BSBW    PUTB                    ; the cursor
+        BSBW    PUTB
+        BSBW    PUTB                    ; the value
         BSBW    PUTB
         MOVL    R3, R5
         BRW     PUTB                    ; the path's length
@@ -619,6 +684,7 @@ EVAL:   MOVZBL  (R1)+, R0
 ; QUIT: R0 = a status. Back to PARSE's caller with it, and no result.
 QUIT:   MOVL    SAVESP, SP
         CLRW    CLI$$RESULT+RES$W_LENGTH
+        CLRL    RTNADR
         RSB
 
 ; ADDSLOTS: R8 = a count byte and as many word offsets of entities, R10
@@ -658,8 +724,8 @@ KEYWORDS:
         BRB     10$
 40$:    RSB
 
-; ADDSLOT: R1 = an entity, R10 = its parent. Adds a slot for it. Uses
-; R0, R2.
+; ADDSLOT: R1 = an entity, R10 = its parent. Adds a slot for it, R0.
+; Uses R2.
 ADDSLOT:
         MOVL    NSLOTS, R2
         CMPL    R2, #NSLOT
@@ -725,6 +791,7 @@ PARAMETER:
         INCL    PARAMN
         MOVB    #ST_PRESENT, SLT$B_STATE(R9)
 20$:    BSBW    VALUE
+        MOVZWL  SLT$W_LAST(R9), LASTVAL ; a qualifier after it may be its
 30$:    CMPL    R6, R7
         BGEQU   90$
         MOVZBL  (R6), R0
@@ -760,11 +827,13 @@ PARAMETER:
 SETSEP: MOVZWL  SLT$W_LAST(R9), R1
         BEQL    10$
         DECL    R1
-        ASHL    #3, R1, R1
+        ASHL    #4, R1, R1
         MOVB    R0, VALS+VAL$B_SEP[R1]
 10$:    RSB
 
-; QUALIFIER: R6 = a /. Takes the qualifier and its value, with R6 past.
+; QUALIFIER: R6 = a /. Takes the qualifier and its value, with R6 past:
+; the command's, or, if it may be, the last parameter value's, in a slot
+; of its own.
 QUALIFIER:
         INCL    R6
         BSBW    SCANNAME
@@ -779,7 +848,22 @@ QUALIFIER:
         BNEQ    15$
         MOVL    #CLI$_IVQUAL, R0
 15$:    BRW     ERRTOK
-20$:    BRW     GIVE
+20$:    MOVL    SLT$L_ENT(R9), R1
+        MOVZBL  ENT$B_PLACE(R1), R0
+        BEQL    40$                     ; global
+        TSTL    LASTVAL
+        BNEQ    30$
+        CMPL    R0, #PLACE_LOCAL        ; positional, after the verb: global
+        BNEQ    40$
+        MOVL    #CLI$_IVQUAL, R0        ; local, but no value before it
+        BRB     15$
+30$:    PUSHL   R10
+        MNEGL   #3, R10
+        BSBW    ADDSLOT
+        MOVW    LASTVAL, SLT$W_VALUE(R0)
+        MOVL    R0, R9
+        MOVL    (SP)+, R10
+40$:    BRW     GIVE
 
 ; GIVE: R9 = the slot a qualifier or keyword in TOKEN names, R10 = 1 if
 ; it is negated. Gives it, and its value, if = or : follows, with R6 past.
@@ -787,7 +871,7 @@ GIVE:   MOVL    SLT$L_ENT(R9), R1
         TSTL    R10
         BNEQ    10$
         BSBW    SYNTAX
-10$:    CLRL    SLT$W_LAST(R9)          ; the last one given is the one
+10$:    CLRW    SLT$W_LAST(R9)          ; the last one given is the one
         CLRW    SLT$W_FIRST(R9)
         ADDL3   #ST_PRESENT, R10, R0
         MOVB    R0, SLT$B_STATE(R9)
@@ -952,7 +1036,7 @@ ADDVAL: MOVL    NVALS, R3
         BLSSU   10$
         ERROR0  CLI$_BUFOVF
 10$:    INCL    NVALS
-        ASHL    #3, R3, R0
+        ASHL    #4, R3, R0
         MOVAB   VALS[R0], R0
         MOVL    R1, VAL$L_ADDR(R0)
         CMPL    R2, #255
@@ -967,7 +1051,7 @@ ADDVAL: MOVL    NVALS, R3
         MOVW    R3, SLT$W_FIRST(R9)
         BRB     30$
 20$:    DECL    R0
-        ASHL    #3, R0, R0
+        ASHL    #4, R0, R0
         MOVAB   VALS[R0], R0
         MOVW    R3, VAL$W_NEXT(R0)
 30$:    MOVW    R3, SLT$W_LAST(R9)
@@ -1113,9 +1197,11 @@ SAME:   PUSHL   R2
         MOVL    (SP)+, R2
         RSB
 
-; FINDVERB: TOKEN = a verb. R1 = its command block, the verb whose name
-; it is, or whose first 4 characters its first ones are, a shorter one
-; abbreviating only one; else CLI$_IVVERB or CLI$_ABVERB.
+; FINDVERB: TOKEN = a verb. R1 = its command block and R11 = its table:
+; the verb whose name it is, in the first of the tables that has one, or
+; whose first 4 characters its first ones are, a shorter one abbreviating
+; only one; a verb that a table before has one of the same name of
+; doesn't count. Else CLI$_IVVERB or CLI$_ABVERB.
 FINDVERB:
         TSTL    TOKLEN
         BNEQ    5$
@@ -1123,22 +1209,29 @@ FINDVERB:
         SUBL3   R6, R7, SEGLEN
         MOVL    #CLI$_IVVERB, R0
         BRW     ERRSEG
-5$:     MOVZWL  2(R11), R8              ; the verbs
-        MOVAB   TAB$W_VERBS(R11), R10
-        CLRL    R9                      ; the first that matches
+5$:     CLRL    R9                      ; the first that matches
+        CLRL    R4                      ; and its table
         CLRL    R5                      ; how many
         MOVAB   TOKEN, R3
+        CLRL    TABIX
+6$:     MOVL    TABIX, R0               ; each table
+        CMPL    R0, NTABS
+        BGEQU   60$
+        MOVL    TABLIST[R0], R11
+        MOVZWL  2(R11), R8              ; its verbs
+        MOVAB   TAB$W_VERBS(R11), R10
 10$:    TSTL    R8
-        BEQL    60$
+        BEQL    55$
         MOVZWL  (R10), R1
         ADDL2   R11, R1                 ; its name
         MOVZBL  (R1)+, R0
         CMPL    R0, TOKLEN              ; all of it?
         BNEQ    20$
         MOVL    R0, R2
-        BSBB    SAME
+        BSBW    SAME
         BLBC    R0, 15$
         MOVL    R10, R9
+        MOVL    R11, R4
         BRB     80$
 15$:    MOVZBL  -1(R1), R0
 20$:    MOVL    TOKLEN, R2
@@ -1147,15 +1240,20 @@ FINDVERB:
         MOVL    #4, R2
 25$:    CMPL    R0, R2
         BLSSU   40$
-        BSBB    SAME
+        BSBW    SAME
         BLBC    R0, 40$
+        BSBB    HIDDEN
+        BLBS    R0, 40$
         TSTL    R9
         BNEQ    30$
         MOVL    R10, R9
+        MOVL    R11, R4
 30$:    INCL    R5
 40$:    ADDL2   #4, R10
         DECL    R8
         BRB     10$
+55$:    INCL    TABIX
+        BRB     6$
 60$:    TSTL    R5
         BNEQ    70$
         ERROR   CLI$_IVVERB
@@ -1164,32 +1262,49 @@ FINDVERB:
         CMPL    TOKLEN, #4
         BGEQU   80$
         ERROR   CLI$_ABVERB
-80$:    MOVZWL  2(R9), R1
+80$:    MOVL    R4, R11
+        MOVZWL  2(R9), R1
         ADDL2   R11, R1
         RSB
 
+; HIDDEN: R1 = a verb's name, past its length, in table TABIX. R0 = 1 if
+; a table before it has a verb of that name, else 0.
+HIDDEN: PUSHR   #^M<R1, R2, R3, R4, R5, R6, R7>
+        MOVZBL  -1(R1), R2
+        MOVL    R1, R3
+        CLRL    R4                      ; a table before it
+10$:    CMPL    R4, TABIX
+        BGEQU   80$
+        MOVL    TABLIST[R4], R5
+        MOVZWL  2(R5), R6
+        MOVAB   TAB$W_VERBS(R5), R7
+20$:    DECL    R6
+        BLSS    40$
+        MOVZWL  (R7), R1
+        ADDL2   R5, R1
+        ADDL2   #4, R7
+        CMPB    (R1)+, R2
+        BNEQ    20$
+        BSBW    SAME
+        BLBC    R0, 20$
+        BRB     90$
+40$:    INCL    R4
+        BRB     10$
+80$:    CLRL    R0
+90$:    POPR    #^M<R1, R2, R3, R4, R5, R6, R7>
+        RSB
+
 ; SETCMD: R1 = a verb's or a syntax's block. Makes it the command being
-; parsed: its parameters, qualifiers, DISALLOW, image and routine, those
-; it has; a syntax keeps the ones it doesn't. Uses R0-R5.
+; parsed: its parameters, qualifiers, DISALLOW, and its image, CLIROUTINE
+; and ROUTINE, those it has; a syntax keeps the ones it doesn't. Uses
+; R0-R5.
 SETCMD: MOVL    R1, CMD
-        MOVZBL  (R1)+, R0               ; past its name
-        ADDL2   R0, R1
-        MOVZBL  (R1), R2                ; the image and the routine
-        ADDL3   R2, R1, R4
-        INCL    R4
-        BISB3   (R1), (R4), R0
-        BEQL    10$
-        PUSHL   R4
-        INCL    R2
-        MOVC3   R2, (R1), CLI$$IMAGE
-        MOVL    (SP)+, R1
-        MOVZBL  (R1), R2
-        INCL    R2
-        MOVC3   R2, (R1), CLI$$ROUTINE ; R1 past it
-        BRB     20$
-10$:    MOVZBL  (R4)+, R0               ; past the routine
-        ADDL3   R0, R4, R1
-20$:    CMPB    (R1), #INHERIT          ; the parameters
+        BSBW    NEXTSTR                 ; past its name
+        MOVL    R1, R4                  ; its image
+        BSBW    NEXTSTR
+        MOVL    R1, R5                  ; its CLIROUTINE
+        BSBW    NEXTSTR
+        CMPB    (R1), #INHERIT          ; the parameters
         BEQL    30$
         MOVL    R1, PARAMS
         MOVZBL  (R1), R0
@@ -1203,16 +1318,40 @@ SETCMD: MOVL    R1, CMD
         ADDL2   R0, R1
         ADDL2   R0, R1
 40$:    INCL    R1
-        MOVZBL  (R1)+, R0               ; DISALLOW: 0 inherits, 1 is none
-        MOVZBL  (R1), R2
-        ASHL    #8, R2, R2
-        BISL2   R2, R0
-        BEQL    60$
+        BSBB    GETWORD                 ; DISALLOW: 0 inherits, 1 is none
+        TSTL    R0
+        BEQL    50$
         CLRL    DISALW
         CMPL    R0, #1
-        BEQL    60$
+        BEQL    50$
         ADDL3   R11, R0, DISALW
-60$:    RSB
+50$:    BSBB    GETWORD                 ; ROUTINE: its longword, or 0
+        TSTL    R0
+        BEQL    55$
+        ADDL2   R11, R0
+        MOVL    (R0), R0
+55$:    BISB3   (R4), (R5), R2          ; one of the three: all three
+        BNEQ    60$
+        TSTL    R0
+        BEQL    70$
+60$:    MOVL    R0, RTNADR
+        PUSHL   R5
+        MOVZBL  (R4), R2
+        INCL    R2
+        MOVC3   R2, (R4), CLI$$IMAGE
+        MOVL    (SP)+, R1
+        MOVZBL  (R1), R2
+        INCL    R2
+        MOVC3   R2, (R1), CLI$$ROUTINE
+70$:    RSB
+
+; GETWORD: R1 = a word in the tables. R0 = it, R1 past it. Uses R2.
+GETWORD:
+        MOVZBL  (R1)+, R0
+        MOVZBL  (R1)+, R2
+        ASHL    #8, R2, R2
+        BISL2   R2, R0
+        RSB
 
 ; NEXTSTR: R1 = a .ASCIC string. Moves R1 past it. Uses R0.
 NEXTSTR:
@@ -1434,31 +1573,73 @@ SYNTAXMSG:
         .ASCIC  "%CLI-F-SYNTAX, error parsing '"
 QUOTE:  .ASCII  "'"
 
+; LOCALE: R4 = an entry of the result block at R5. If a qualifier with
+; its path was given after the parameter value CLI$GET_VALUE returned
+; last, R4 = that one's entry and R0 = 1, else R0 = 0. Uses R1-R3.
+LOCALE: TSTL    CURVAL
+        BEQL    80$
+        MOVZWL  RES$W_LENGTH(R5), R0
+        ADDL2   R5, R0
+        PUSHL   R0                      ; past the block
+        MOVL    R4, R1
+10$:    MOVZWL  RSE$W_LENGTH(R1), R0
+        ADDL2   R0, R1
+        CMPL    R1, (SP)
+        BGEQU   70$
+        CMPW    RSE$W_VALUE(R1), CURVAL
+        BNEQ    10$
+        MOVZBL  RSE$T_PATH(R4), R2
+        CMPB    RSE$T_PATH(R1), R2
+        BNEQ    10$
+        PUSHL   R1
+        ADDL2   #RSE$T_PATH+1, R1
+        ADDL3   #RSE$T_PATH+1, R4, R3
+        BSBW    SAME
+        MOVL    (SP)+, R1
+        BLBC    R0, 10$
+        MOVL    R1, R4
+        TSTL    (SP)+
+        RSB
+70$:    TSTL    (SP)+
+80$:    CLRL    R0
+        RSB
+
 ; CLI$PRESENT name: R0 = CLI$_PRESENT if the command gave the entity
 ; name, its label's path, CLI$_DEFAULTED if it is present by default,
 ; CLI$_NEGATED if it was negated, CLI$_ABSENT if not given or if there
-; is no command. Exits the image with CLI$_ENTNF if the command has no
+; is no command. A qualifier given after the parameter value
+; CLI$GET_VALUE returned last is CLI$_LOCPRES, or CLI$_LOCNEG if
+; negated there. Exits the image with CLI$_ENTNF if the command has no
 ; such entity.
         .ENTRY  CLI$PRESENT, ^M<R2, R3, R4, R5>
         BSBW    NAME
         MOVL    #CLI$_ABSENT, R1
         BLBC    R0, 10$
-        MOVZBL  RSE$B_STATE(R4), R0
-        MOVL    STATES[R0], R1
+        BSBW    LOCALE
+        MOVZBL  RSE$B_STATE(R4), R1
+        BLBS    R0, 5$
+        MOVL    STATES[R1], R1
+        BRB     10$
+5$:     MOVL    LSTATES[R1], R1
 10$:    MOVL    R1, R0
         RET
 STATES: .LONG   CLI$_ABSENT, CLI$_PRESENT, CLI$_NEGATED, CLI$_DEFAULTED
+LSTATES:                                ; a local qualifier's
+        .LONG   CLI$_ABSENT, CLI$_LOCPRES, CLI$_LOCNEG, CLI$_DEFAULTED
 
 ; CLI$GET_VALUE name, retdesc [,retlen]: copies the entity name's next
 ; value to the string retdesc describes, as much as fits, and its length
 ; to the word retlen. R0 = CLI$_COMMA or CLI$_CONCAT if another follows
 ; it, after a comma or a plus, SS$_NORMAL if it was the last, then
 ; CLI$_ABSENT, and the next call starts again at the first. A negated
-; entity has no values; an absent one only its default. Exits the image
-; with CLI$_ENTNF if the command has no such entity.
+; entity has no values; an absent one only its default. A parameter's
+; value is the one qualifiers given after it answer for, until the next;
+; a qualifier given after it has its values there. Exits the image with
+; CLI$_ENTNF if the command has no such entity.
         .ENTRY  CLI$GET_VALUE, ^M<R2, R3, R4, R5, R6>
         BSBW    NAME
         BLBC    R0, 80$
+        BSBW    LOCALE
         MOVZWL  RSE$W_CURSOR(R4), R6
         BNEQ    10$
         MOVZBL  RSE$T_PATH(R4), R6      ; the first value
@@ -1469,7 +1650,9 @@ STATES: .LONG   CLI$_ABSENT, CLI$_PRESENT, CLI$_NEGATED, CLI$_DEFAULTED
         CLRW    RSE$W_CURSOR(R4)
         BRB     80$
 20$:    ADDL2   R4, R6
-        MOVZBL  (R6)+, R2               ; its length
+        BBC     #0, RSE$B_FLAGS(R4), 25$        ; RSE_M_PARAM
+        SUBL3   R5, R6, CURVAL
+25$:    MOVZBL  (R6)+, R2               ; its length
         MOVL    8(AP), R1
         MOVZWL  (R1), R0
         CMPL    R2, R0
@@ -1500,6 +1683,61 @@ STATES: .LONG   CLI$_ABSENT, CLI$_PRESENT, CLI$_NEGATED, CLI$_DEFAULTED
 50$:    MOVL    R1, R0
         RET
 80$:    MOVL    #CLI$_ABSENT, R0
+        RET
+
+; CLI$DISPATCH [userarg]: calls the ROUTINE of the verb, or syntax, that
+; the last parse in this image found, with userarg if given. R0 = its
+; status, or CLI$_INVROUT if it has none.
+        .ENTRY  CLI$DISPATCH, ^M<>
+        MOVL    RTNADR, R1
+        BNEQ    10$
+        MOVL    #CLI$_INVROUT, R0
+        RET
+10$:    TSTB    (AP)
+        BEQL    20$
+        PUSHL   4(AP)
+        CALLS   #1, (R1)
+        RET
+20$:    CALLS   #0, (R1)
+        RET
+
+; CLI$$FOREIGN line, verb: for DCL, makes this image's result block a
+; foreign command's, $VERB the first 4 characters of the .ASCIC verb and
+; $LINE the line, whose words LIB$GET_FOREIGN takes.
+        .ENTRY  CLI$$FOREIGN, ^M<R2, R3, R4, R5>
+        MOVAB   CLI$$RESULT, RESBASE
+        CLRB    CLI$$IMAGE
+        CLRB    CLI$$ROUTINE
+        CLRL    RTNADR
+        CLRL    CURVAL
+        MOVAB   CLI$$RESULT+RES$K_HEADER, R3
+        BSBW    BEGIN
+        MOVAB   VERBV, R1
+        BSBW    PUTCSTR
+        BSBW    ENDPATH
+        MOVL    8(AP), R1
+        MOVZBL  (R1)+, R2
+        CMPL    R2, #4
+        BLEQU   10$
+        MOVL    #4, R2
+10$:    BSBW    PUTVAL
+        BSBW    FINISH
+        BSBW    BEGIN
+        MOVAB   LINEV, R1
+        BSBW    PUTCSTR
+        BSBW    ENDPATH
+        MOVL    4(AP), R0
+        MOVZWL  (R0), R2
+        MOVL    4(R0), R1
+        CMPL    R2, #255                ; .ASCIC
+        BLEQU   20$
+        MOVL    #255, R2
+20$:    BSBW    PUTVAL
+        BSBW    FINISH
+        MOVAB   CLI$$RESULT, R0
+        SUBL3   R0, R3, R1
+        MOVW    R1, RES$W_LENGTH(R0)
+        MOVL    #SS$_NORMAL, R0
         RET
 
         .END

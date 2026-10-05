@@ -30,7 +30,7 @@ pub fn compile(name: &str, sources: &[(String, String)]) -> Result<String, Vec<S
 }
 
 /// The table format's version, its first word.
-pub const VERSION: u16 = 1;
+pub const VERSION: u16 = 2;
 
 // An entity's flags, ENT_ in the tables.
 const ENT_DEFAULT: u8 = 1;
@@ -66,6 +66,10 @@ const OP_AND: u8 = 4;
 const OP_OR: u8 = 5;
 const OP_ANY2: u8 = 6;
 
+/// An entity's placement, a qualifier's: where it may be given.
+const PLACE_LOCAL: u8 = 1;
+const PLACE_POSITIONAL: u8 = 2;
+
 /// "Inherit them": a syntax's parameter or qualifier count when it
 /// defines none and doesn't say NOPARAMETERS or NOQUALIFIERS.
 const INHERIT: u8 = 255;
@@ -80,6 +84,9 @@ struct Layout<'a> {
     types: HashMap<String, usize>,
     /// Places that want a syntax's or a type's offset, filled at the end.
     fixups: Vec<(usize, Ref)>,
+    /// The `ROUTINE`s, in the order of their longwords after the table,
+    /// and the words that want each one's offset.
+    routines: Vec<(String, Vec<usize>)>,
     errors: Vec<(Loc, String)>,
 }
 
@@ -91,13 +98,19 @@ struct Block {
     what: String,
 }
 
+/// The table: its blocks, then the routines' addresses, a longword each.
+struct Table {
+    blocks: Vec<Block>,
+    routines: Vec<String>,
+}
+
 enum Ref {
     Syntax(String, Loc),
     Type(String, Loc),
 }
 
 impl<'a> Layout<'a> {
-    fn build(defs: &'a Definitions) -> Result<Vec<Block>, Vec<(Loc, String)>> {
+    fn build(defs: &'a Definitions) -> Result<Table, Vec<(Loc, String)>> {
         let mut l = Layout {
             defs,
             bytes: Vec::new(),
@@ -105,6 +118,7 @@ impl<'a> Layout<'a> {
             syntaxes: HashMap::new(),
             types: HashMap::new(),
             fixups: Vec::new(),
+            routines: Vec::new(),
             errors: Vec::new(),
         };
         l.check_names();
@@ -164,7 +178,18 @@ impl<'a> Layout<'a> {
                 None => l.errors.push((loc, format!("{name}: no such {what}"))),
             }
         }
-        if l.bytes.len() > 0xFFFF {
+        // The routines' longwords, after the bytes, aligned.
+        while !l.bytes.len().is_multiple_of(4) {
+            l.byte(0);
+        }
+        let vector = l.bytes.len();
+        let routines = std::mem::take(&mut l.routines);
+        for (i, (_, words)) in routines.iter().enumerate() {
+            for at in words {
+                l.put_word(*at, vector + 4 * i);
+            }
+        }
+        if vector + 4 * routines.len() > 0xFFFF {
             l.errors
                 .push((Loc::default(), "the table is larger than 64 KB".into()));
         }
@@ -173,16 +198,17 @@ impl<'a> Layout<'a> {
             return Err(l.errors);
         }
         // Split the bytes at the marks, for the listing.
-        let mut out = Vec::new();
+        let mut blocks = Vec::new();
         for (i, (at, what)) in l.marks.iter().enumerate() {
             let end = l.marks.get(i + 1).map_or(l.bytes.len(), |m| m.0);
-            out.push(Block {
+            blocks.push(Block {
                 at: *at,
                 bytes: l.bytes[*at..end].to_vec(),
                 what: what.clone(),
             });
         }
-        Ok(out)
+        let routines = routines.into_iter().map(|(name, _)| name).collect();
+        Ok(Table { blocks, routines })
     }
 
     /// Names that must be unique: verbs and their synonyms, syntaxes,
@@ -232,9 +258,12 @@ impl<'a> Layout<'a> {
 
     /// A verb's or a syntax's block; returns where it starts.
     fn command(&mut self, c: &Command, what: &str) -> usize {
-        if c.routine.is_some() {
-            self.errors
-                .push((c.loc, format!("{}: ROUTINE is not supported yet", c.name)));
+        let doers = [&c.image, &c.routine, &c.cliroutine];
+        if doers.iter().filter(|d| d.is_some()).count() > 1 {
+            self.errors.push((
+                c.loc,
+                format!("{}: only one of IMAGE, ROUTINE and CLIROUTINE", c.name),
+            ));
         }
         if c.image.as_ref().is_some_and(|i| i.len() > 39) {
             self.errors.push((
@@ -323,6 +352,15 @@ impl<'a> Layout<'a> {
         } else {
             disallow
         });
+        // Its ROUTINE's longword, after the table, filled at the end.
+        if let Some(r) = &c.routine {
+            let word = self.bytes.len();
+            match self.routines.iter_mut().find(|(n, _)| n == r) {
+                Some((_, words)) => words.push(word),
+                None => self.routines.push((r.clone(), vec![word])),
+            }
+        }
+        self.word(0);
         at
     }
 
@@ -342,13 +380,15 @@ impl<'a> Layout<'a> {
     }
 
     fn entity(&mut self, e: &Entity, what: &str) -> usize {
-        if e.placement != Placement::Global {
+        let placement = match e.placement {
+            Placement::Global => 0,
+            Placement::Local => PLACE_LOCAL,
+            Placement::Positional => PLACE_POSITIONAL,
+        };
+        if placement != 0 && what != "qualifier" {
             self.errors.push((
                 e.loc,
-                format!(
-                    "{}: PLACEMENT=LOCAL and POSITIONAL are not supported yet",
-                    e.name
-                ),
+                format!("{}: only a qualifier has a PLACEMENT", e.name),
             ));
         }
         let value = e.value.clone();
@@ -378,6 +418,17 @@ impl<'a> Layout<'a> {
                 flags |= ENT_CONCAT;
             }
             if let Some(t) = &v.type_ {
+                // ponytail: a qualifier given after a value has values,
+                // but no keywords of its own.
+                if placement != 0 && !t.starts_with('$') {
+                    self.errors.push((
+                        e.loc,
+                        format!(
+                            "{}: PLACEMENT=LOCAL or POSITIONAL takes no keywords",
+                            e.name
+                        ),
+                    ));
+                }
                 code = match TYPES.iter().find(|(n, _)| n == t) {
                     Some((_, c)) => *c,
                     None if t.starts_with('$') => {
@@ -403,6 +454,7 @@ impl<'a> Layout<'a> {
                 .push((self.bytes.len(), Ref::Syntax(s.clone(), e.loc)));
         }
         self.word(0);
+        self.byte(placement);
         self.ascic(&e.name);
         let label = e.label.as_deref().unwrap_or(&e.name);
         self.ascic(label);
@@ -454,19 +506,25 @@ impl<'a> Layout<'a> {
 /// The table as MACRO-32: a read-only psect with the module's name a
 /// global label on its first byte, then the blocks, each a comment and its
 /// bytes.
-fn macro32(module: &str, ident: Option<&str>, blocks: &[Block]) -> String {
+fn macro32(module: &str, ident: Option<&str>, table: &Table) -> String {
     let mut s = format!("\t.TITLE\t{module}\tCommand tables, from vcdu\n");
     if let Some(ident) = ident {
         s += &format!("\t.IDENT\t/{ident}/\n");
     }
     s += "\t.PSECT\tCLI$TABLES, NOEXE, NOWRT, LONG\n";
     s += &format!("{module}::\n");
-    for Block { at, bytes, what } in blocks {
+    for Block { at, bytes, what } in &table.blocks {
         s += &format!("; {at}: {what}\n");
         for chunk in bytes.chunks(12) {
             let list: Vec<String> = chunk.iter().map(|b| b.to_string()).collect();
             s += &format!("\t.BYTE\t{}\n", list.join(", "));
         }
+    }
+    if !table.routines.is_empty() {
+        s += "; the routines\n";
+    }
+    for r in &table.routines {
+        s += &format!("\t.EXTERNAL {r}\n\t.ADDRESS {r}\n");
     }
     s += "\t.END\n";
     s
