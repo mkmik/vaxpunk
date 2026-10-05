@@ -53,6 +53,7 @@ kept current, like a design document.
 | --- | --- |
 | [PRD-0001](prd/0001-vtools.md) | ARM64 cross assembler, linker and QEMU runner for VMS object formats |
 | [PRD-0002](prd/0002-networking.md) | TCP/IP through a port to an lwIP component |
+| [PRD-0003](prd/0003-multi-user-vms.md) | Milestone 1: a multi-user VMS you log in to |
 
 ### Design documents
 
