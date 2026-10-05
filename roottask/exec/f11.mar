@@ -14,7 +14,9 @@
 ; $DISMOU forgets it. The
 ; rest reads what VMS's XQP reads: a file's header by its number, its
 ; blocks through the header's map, and a directory's records, with
-; wildcards. f11wrt.mar writes them. RMS (rms.mar), the image activator
+; wildcards. f11wrt.mar writes them. FIL$CHKPRO checks a process's
+; access to a file or a volume by its owner and protection, as the XQP
+; does. RMS (rms.mar), the image activator
 ; and the services here call them holding the file system's lock,
 ; FIL$LOCK, as the XQP holds its volume's: it keeps their buffers,
 ; F11$AB_IRP, and F11$GL_VCB, the volume they work on, to one process at a
@@ -42,6 +44,7 @@
         $UCBDEF
         $IRPDEF
         $IODEF
+        $ARMDEF
 
         .EXTERNAL EXE$OUTZSTRING, EXE$OUTCSTRING, EXE$OUTCRLF
         .EXTERNAL EXE$ALONONPAGED, EXE$DEANONPGDSIZ, RMS$PARSE, RMS$FIND, MD$IO
@@ -57,6 +60,8 @@ HM2$W_CLUSTER = 14
 HM2$W_IBMAPVBN = 22
 HM2$L_IBMAPLBN = 24
 HM2$W_IBMAPSIZE = 32
+HM2$L_VOLOWNER = 44
+HM2$W_PROTECT = 52
 HM2$T_VOLNAME = 472
 HM2$T_FORMAT = 496
 ; A file header.
@@ -66,6 +71,8 @@ FH2$B_FID_NMX = 13
 FH2$W_RECATTR = 20
 FH2$L_FILECHAR = 52
 FH2$B_MAP_INUSE = 58
+FH2$L_FILEOWNER = 60
+FH2$W_FILEPROT = 64
 FH2$W_CHECKSUM = 510
 FCH$V_DIRECTORY = 13
 ; Its record attributes, at FH2$W_RECATTR.
@@ -77,6 +84,7 @@ FAT$L_EFBLK = 8                         ; high word first
 FAT$W_FFBYTE = 12
 FAT$B_VFCSIZE = 15
 FAT$W_MAXREC = 16
+MAXSYSGROUP = 8                         ; UIC groups up to this one are the system's
 
         .PSECT  EXEC$DATA, NOEXE, WRT, QUAD
 F11$GL_VCB::                            ; the volume the routines here work on
@@ -86,17 +94,20 @@ F11$AB_DKA0::                           ; DKA0:'s VCB, the system disk's
         .ASCII  "DKA0:"
         .BLKB   VCB$L_UCB-VCB$T_DEVNAM-5
         .ADDRESS IOC$AB_DKA0
+        .LONG   0, 0                    ; OWNER, PROT
 F11$AB_DKB0::                           ; DKB0:'s, the data disk's
         .LONG   1@VCB$V_WRITE, 0, 0, 0
         .ASCII  "DKB0:"
         .BYTE   1                       ; VCB$B_UNIT
         .BLKB   VCB$L_UCB-VCB$T_DEVNAM-6
         .ADDRESS IOC$AB_DKB0
+        .LONG   0, 0                    ; OWNER, PROT
 F11$AB_MDA0::                           ; MDA0:'s, the ramdisk's
         .LONG   <1@VCB$V_WRITE>!<1@VCB$V_RAMDISK>, 0, 0, 0
         .ASCII  "MDA0:"
         .BLKB   VCB$L_UCB-VCB$T_DEVNAM-5
         .ADDRESS IOC$AB_MDA0
+        .LONG   0, 0                    ; OWNER, PROT
 F11$A_VCBEND::                          ; past the last VCB
 F11$AB_DIRBLK::                         ; the directory block FIL$SEARCHDIR reads
         .BLKB   BLOCK
@@ -120,6 +131,12 @@ DEVNAM: .BLKB   6                       ; the device's, .ASCIZ
 IMAGEDEF:                               ; where images are
         .ASCIC  "SYS$SYSTEM:"
 LABEL:  .BLKB   13                      ; the label $MOUNT asks for, .ASCIC
+        .ALIGN  LONG
+MNTSET: .LONG   0                       ; bit 0: $MOUNT has MNTOWNER, bit 1 MNTPROT
+MNTOWNER:                               ; the owner and protection it gives the volume
+        .LONG   0
+MNTPROT:
+        .WORD   0
 
         .PSECT  $CODE$
 
@@ -324,8 +341,9 @@ FIL$SELECT::
 
 ; FIL$MOUNT: R1 = the label the volume must have, .ASCIC, or 0 for any.
 ; Mounts F11$GL_VCB's volume: reads its home block and INDEXF.SYS's
-; header, which maps the others, and, if the disk can be written, finds
-; the storage bitmap, and reports it on the console. R0 = SS$_NORMAL,
+; header, which maps the others, and its owner and protection, and, if
+; the disk can be written, finds the storage bitmap, and reports it on
+; the console. R0 = SS$_NORMAL,
 ; SS$_NOHOMEBLK if there is no ODS-2 home block, SS$_INCVOLLABEL if the
 ; label isn't R1's, or the disk's error. Holding FIL$LOCK, but at boot,
 ; when no other process is there to want it. Uses R0-R5.
@@ -359,6 +377,8 @@ FIL$MOUNT::
         SOBGTR  R0, 22$
 25$:    MOVAB   VCB$AB_INDEXF(R5), R3
         MOVW    HM2$W_CLUSTER(R3), VCB$W_CLUSTER(R5)
+        MOVL    HM2$L_VOLOWNER(R3), VCB$L_OWNER(R5)
+        MOVW    HM2$W_PROTECT(R3), VCB$W_PROT(R5)
         MOVZWL  HM2$W_IBMAPVBN(R3), R0
         MOVZWL  HM2$W_IBMAPSIZE(R3), R1
         ADDL3   R0, R1, VCB$L_HDRVBN(R5)
@@ -405,15 +425,20 @@ FIL$MOUNT::
 
 ; $MOUNT itmlst: mounts the Files-11 volume on the disk the item list's
 ; MNT$_DEVNAM names, DKA0:, DKB0: or MDA0:, if its label is MNT$_VOLNAM's.
-; SS$_DEVMOUNT if one is mounted there already. Every process sees it,
-; as VMS's MOUNT/SYSTEM, which takes SYSNAM: SS$_NOPRIV without.
-; ponytail: no other items, flags or logical name.
+; MNT$_OWNER and MNT$_VPROT, a UIC and a protection mask, stand for the
+; volume's own while it is mounted, and take VOLPRO. SS$_DEVMOUNT if one
+; is mounted there already, SS$_BADPARAM for an item too short. Every
+; process sees it, as VMS's MOUNT/SYSTEM, which takes SYSNAM: SS$_NOPRIV
+; without.
+; ponytail: no other items, flags or logical name; VMS lets the volume's
+; owner give MNT$_OWNER and MNT$_VPROT without VOLPRO.
         .ENTRY  EXE$MOUNT, ^M<R2, R3, R4, R5, R6, R7, R8>
         MOVL    SCH$GL_CURPCB, R1
         MOVL    #SS$_NOPRIV, R0
         IFNPRIV SYSNAM, 90$, R1
         CLRQ    R6                      ; the device name: its address, length
         CLRB    LABEL
+        CLRL    MNTSET
         MOVL    4(AP), R8
 10$:    IFNORD  #4, (R8), 85$
         TSTL    (R8)
@@ -428,17 +453,36 @@ FIL$MOUNT::
         MOVL    R2, R7
         BRB     30$
 20$:    CMPW    2(R8), #MNT$_VOLNAM
-        BNEQ    30$
+        BNEQ    25$
         CMPL    R2, #12
         BGTRU   88$
         MOVB    R2, LABEL
         MOVC3   R2, (R1), LABEL+1
+        BRB     30$
+25$:    CMPW    2(R8), #MNT$_OWNER
+        BNEQ    27$
+        CMPL    R2, #4
+        BLSSU   89$
+        MOVL    (R1), MNTOWNER
+        BISL2   #1, MNTSET
+        BRB     30$
+27$:    CMPW    2(R8), #MNT$_VPROT
+        BNEQ    30$
+        CMPL    R2, #2
+        BLSSU   89$
+        MOVW    (R1), MNTPROT
+        BISL2   #2, MNTSET
 30$:    ADDL2   #12, R8
         BRB     10$
 40$:    MOVL    #SS$_IVDEVNAM, R0
         TSTL    R7
         BEQL    90$
-        BSBW    FIL$LOCK
+        TSTL    MNTSET
+        BEQL    45$
+        MOVL    SCH$GL_CURPCB, R1
+        MOVL    #SS$_NOPRIV, R0
+        IFNPRIV VOLPRO, 90$, R1
+45$:    BSBW    FIL$LOCK
         MOVL    R6, R1
         MOVL    R7, R2
         BSBW    FIL$SELECT
@@ -451,11 +495,19 @@ FIL$MOUNT::
         BNEQ    50$
         CLRL    R1
 50$:    BSBW    FIL$MOUNT
+        BLBC    R0, 80$
+        MOVL    F11$GL_VCB, R1
+        BBC     #0, MNTSET, 60$
+        MOVL    MNTOWNER, VCB$L_OWNER(R1)
+60$:    BBC     #1, MNTSET, 80$
+        MOVW    MNTPROT, VCB$W_PROT(R1)
 80$:    BSBW    FIL$UNLOCK
         RET
 85$:    MOVL    #SS$_ACCVIO, R0
         RET
 88$:    MOVL    #SS$_INCVOLLABEL, R0
+        RET
+89$:    MOVL    #SS$_BADPARAM, R0
 90$:    RET
 
 ; $DISMOU devnam, flags: dismounts the volume on the disk devnam names,
@@ -687,6 +739,75 @@ FIL$ISDIR::
         EXTZV   #FCH$V_DIRECTORY, #1, FH2$L_FILECHAR(R1), R0
         RSB
 
+; FIL$CHKPRO: R0 = the access wanted, $ARMDEF's bits, R1 = an owner's
+; UIC, R2 = a protection mask, a file header's or a volume's: 4 bits each
+; for the system, the owner, the group and the world, a set bit denying
+; read, write, execute or delete. R0 = SS$_NORMAL if the current process
+; may, by VMS's rules, else SS$_NOPRIV. It has what the world is allowed;
+; what the group is too if its UIC group is the owner's; what the owner
+; is, and control, if its UIC is the owner's; what the system is, and
+; control, if its UIC group is up to MAXSYSGROUP, or with SYSPRV, or with
+; GRPPRV in the owner's group. READALL reads anything, BYPASS does
+; anything. Keeps every other register.
+FIL$CHKPRO::
+        PUSHR   #^M<R1, R2, R3, R4, R5>
+        MOVL    SCH$GL_CURPCB, R4
+        IFPRIV  BYPASS, 80$
+        MOVL    R0, R5                  ; what it wants
+        MCOML   R2, R2                  ; a set bit allows
+        EXTZV   #12, #4, R2, R3         ; the world's
+        IFPRIV  SYSPRV, 10$
+        CMPW    PCB$L_UIC+2(R4), #MAXSYSGROUP
+        BLEQU   10$
+        IFNPRIV GRPPRV, 20$
+        EXTZV   #16, #16, R1, R0
+        CMPW    R0, PCB$L_UIC+2(R4)
+        BNEQ    20$
+10$:    EXTZV   #0, #4, R2, R0          ; the system's
+        BISL2   R0, R3
+        BISL2   #ARM$M_CONTROL!ARM$M_SYSTEM, R3
+20$:    CMPL    R1, PCB$L_UIC(R4)
+        BNEQ    30$
+        EXTZV   #4, #4, R2, R0          ; the owner's
+        BISL2   R0, R3
+        BISL2   #ARM$M_CONTROL, R3
+30$:    EXTZV   #16, #16, R1, R0
+        CMPW    R0, PCB$L_UIC+2(R4)
+        BNEQ    40$
+        EXTZV   #8, #4, R2, R0          ; the group's
+        BISL2   R0, R3
+40$:    IFNPRIV READALL, 50$
+        BISL2   #ARM$M_READ, R3
+50$:    BICL3   R3, R5, R0
+        BNEQ    90$
+80$:    MOVL    #SS$_NORMAL, R0
+        BRB     95$
+90$:    MOVL    #SS$_NOPRIV, R0
+95$:    POPR    #^M<R1, R2, R3, R4, R5>
+        RSB
+
+; FIL$CHKHDR: R0 = the access wanted, $ARMDEF's bits, R1 = a file header
+; on F11$GL_VCB's volume. FIL$CHKPRO with the volume's owner and
+; protection, for the access alone, then with the file's. R0 = SS$_NORMAL
+; or SS$_NOPRIV. Keeps every other register.
+FIL$CHKHDR::
+        PUSHR   #^M<R1, R2, R3>
+        MOVL    R0, R3
+        PUSHL   R1
+        MOVL    F11$GL_VCB, R2
+        MOVL    VCB$L_OWNER(R2), R1
+        MOVZWL  VCB$W_PROT(R2), R2
+        BICL2   #ARM$M_CONTROL!ARM$M_SYSTEM, R0
+        BSBW    FIL$CHKPRO
+        MOVL    (SP)+, R1
+        BLBC    R0, 90$
+        MOVL    R3, R0
+        MOVZWL  FH2$W_FILEPROT(R1), R2
+        MOVL    FH2$L_FILEOWNER(R1), R1
+        BSBW    FIL$CHKPRO
+90$:    POPR    #^M<R1, R2, R3>
+        RSB
+
 ; FIL$SEARCHDIR: R3 = a directory's header, R6 = a pattern, "NAME.TYPE"
 ; with * and % wildcards, R7 = its length, R8 = a version: -1 any, 0 the
 ; highest, else that one, R9 = how many matching entries to skip. Finds
@@ -811,8 +932,8 @@ FIL$MATCH::
 ; Reads the file, from SYS$SYSTEM: unless the specification says
 ; otherwise, from any mounted volume, into a block of pool: R1 = its address, R2 = the file's size
 ; in bytes, R3 = the block's size, for EXE$DEANONPGDSIZ. R0 = SS$_NORMAL,
-; an RMS error such as RMS$_FNF, SS$_INSFMEM, or the disk's error. Keeps
-; every other register.
+; an RMS error such as RMS$_FNF, RMS$_PRV if the process may not execute
+; it, SS$_INSFMEM, or the disk's error. Keeps every other register.
 ; ponytail: the whole file, read at once; VMS maps an image's sections
 ; from it, page by page.
 FIL$OPENFILE::
@@ -827,7 +948,13 @@ FIL$OPENFILE::
         MOVAB   F11$AB_FILHDR, R1
         BSBW    RMS$FIND
         BLBC    R0, 90$
+        MOVL    #ARM$M_EXECUTE, R0
         MOVAB   F11$AB_FILHDR, R1
+        BSBW    FIL$CHKHDR
+        BLBS    R0, 10$
+        MOVL    #RMS$_PRV, R0
+        BRB     90$
+10$:    MOVAB   F11$AB_FILHDR, R1
         BSBW    FIL$EOF
         MOVL    R0, R10                 ; the bytes
         ADDL3   #BLOCK-1, R10, R9

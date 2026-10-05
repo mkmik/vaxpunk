@@ -1,34 +1,68 @@
         .TITLE  MOUNT   Mounts a Files-11 volume
-        .IDENT  /V0.1/
+        .IDENT  /V0.2/
 ;
 ; DCL's MOUNT device [label] runs this: $MOUNT mounts the volume on the
 ; device if its label is that one, or whatever it is without one, as
 ; /OVERRIDE=IDENTIFICATION does on VMS, and the executive reports it on
-; the console. Returns $MOUNT's status.
-; ponytail: no qualifiers.
+; the console. /OWNER_UIC=uic and /PROTECTION=(code[,...]) stand for the
+; volume's own owner and protection while it is mounted, a protection's
+; categories given that access, the others all (lib/protect.mar).
+; Returns $MOUNT's status.
 ;
         .LIBRARY "starlet.mlb"
         .LIBRARY "sysexe.mlb"
         $MNTDEF
 
+        .EXTERNAL GET_PROT, GET_UIC
+
         .PSECT  DATA, NOEXE, WRT, LONG
 ITEMS:  .WORD   64, MNT$_DEVNAM         ; each a descriptor too, which GETVALUE fills
         .ADDRESS DEVBUF
         .LONG   0
-        .WORD   64, MNT$_VOLNAM
+        .BLKL   3*3+1                   ; the rest: those given
+LABEL:  .LONG   64                      ; a descriptor of the label
         .ADDRESS LABBUF
-        .LONG   0
-        .LONG   0
 DEVBUF: .BLKB   64
 LABBUF: .BLKB   64
+OWNER:  .LONG   0
+PROT:   .LONG   0
+OWNER_UIC:                              ; the qualifiers, for GET_UIC and GET_PROT
+        .ASCID  "OWNER_UIC"
+PROTECTION:
+        .ASCID  "PROTECTION"
 
         .PSECT  CODE, EXE, LONG
-        .ENTRY  START, ^M<>
+        .ENTRY  START, ^M<R2>
         GETVALUE "DEVICE", ITEMS, ITEMS
-        GETVALUE "LABEL", ITEMS+12, ITEMS+12
-        BLBS    R0, 10$
-        CLRL    ITEMS+12                ; no label: the list ends before it
-10$:    $MOUNT_S ITMLST=ITEMS
-        RET
+        MOVAB   ITEMS+12, R2
+        GETVALUE "LABEL", LABEL, LABEL
+        BLBC    R0, 10$                 ; no label
+        MOVW    LABEL, (R2)+
+        MOVW    #MNT$_VOLNAM, (R2)+
+        MOVAB   LABBUF, (R2)+
+        CLRL    (R2)+
+10$:    PRESENT "OWNER_UIC"
+        BLBC    R0, 20$
+        PUSHAL  OWNER
+        PUSHAQ  OWNER_UIC
+        CALLS   #2, G^GET_UIC
+        BLBC    R0, 90$
+        MOVW    #4, (R2)+
+        MOVW    #MNT$_OWNER, (R2)+
+        MOVAL   OWNER, (R2)+
+        CLRL    (R2)+
+20$:    PRESENT "PROTECTION"
+        BLBC    R0, 30$
+        PUSHAW  PROT
+        PUSHAQ  PROTECTION
+        CALLS   #2, G^GET_PROT
+        BLBC    R0, 90$
+        MOVW    #2, (R2)+
+        MOVW    #MNT$_VPROT, (R2)+
+        MOVAL   PROT, (R2)+
+        CLRL    (R2)+
+30$:    CLRL    (R2)
+        $MOUNT_S ITMLST=ITEMS
+90$:    RET
 
         .END    START

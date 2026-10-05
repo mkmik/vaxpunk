@@ -33,7 +33,11 @@
 //! PID that isn't hex. SET PROCESS/PRIVILEGES takes CMKRNL and SYSNAM
 //! away, which SHOW PROCESS/PRIVILEGES shows, so SHOW LOGICAL, which needs
 //! $CMKRNL, and DEFINE/SYSTEM fail with NOPRIV, a privilege it doesn't
-//! know fails, and ALL gives them back. All a
+//! know fails, and ALL gives them back. PROTTEST's [200,1] process can't
+//! read DKB0:[000000]DATA.TXT; after SET PROTECTION=(W:R) it can, and
+//! after SET FILE/OWNER_UIC=[200,1] and SET PROTECTION=(W) too, as the
+//! owner, which DIRECTORY/OWNER/PROTECTION shows each time, but it can't
+//! once DKB0: is mounted /PROTECTION=(W), whose world may do nothing. All a
 //! step at a time: each waits until a line has come so many times, the echo
 //! of what it typed before included, and types.
 //! STARTUP's SLEEPER and SVCTEST's NAPPER say they hibernate before SLEEPER
@@ -149,6 +153,10 @@ const LINES: &[&str] = &[
     "%SYSTEM-F-NOPRIV, insufficient privilege or object protection violation",
     " \\XYZZY\\",
     "   \"QQQ\" = \"RRR\" (LNM$SYSTEM_TABLE)",
+    "%RMS-E-PRV, insufficient privilege or file protection violation",
+    "PROTTEST: [200,1] read DATA.TXT, and may not give it away, delete it or make a file there",
+    "DATA.TXT;1          [1,4]               (RWED,RWED,RE,R)",
+    "DATA.TXT;1          [200,1]             (RWED,RWED,RE,)",
 ];
 
 /// What it must not: the lines of DCLTEST.COM's a failure skips or reaches,
@@ -264,6 +272,19 @@ fn boot() {
             type_("SET PROCESS/PRIVILEGES=ALL\rDEFINE/SYSTEM/NOLOG QQQ RRR\r");
             type_("SHOW LOGICAL/SYSTEM QQQ\r");
             typed = 8;
+        } else if typed == 8 && text.contains("\"QQQ\" = \"RRR\" (LNM$SYSTEM_TABLE)") {
+            // File protection, from PROTTEST's process of another UIC.
+            type_("RUN PROTTEST\rSET PROTECTION=(W:R) DKB0:[000000]DATA.TXT\rRUN PROTTEST\r");
+            type_("DIRECTORY/OWNER/PROTECTION DKB0:[000000]DATA.TXT\r");
+            typed = 9;
+        } else if typed == 9 && text.contains("(RWED,RWED,RE,R)") {
+            type_("SET FILE/OWNER_UIC=[200,1] DKB0:[000000]DATA.TXT\r");
+            type_("SET PROTECTION=(W) DKB0:[000000]DATA.TXT\r");
+            type_("DIRECTORY/OWNER/PROTECTION DKB0:[000000]DATA.TXT\rRUN PROTTEST\r");
+            typed = 10;
+        } else if typed == 10 && text.matches("PROTTEST: [200,1] read").count() == 2 {
+            type_("DISMOUNT DKB0:\rMOUNT/PROTECTION=(W) DKB0:\rRUN PROTTEST\r");
+            typed = 11;
         }
         // The rest once EDIT is done: the type-ahead buffer holds 255 characters.
         if typed == 1 && text.contains("String was not found") {
@@ -298,7 +319,7 @@ fn boot() {
         }
         // Then the data disk.
         if typed == 4 && text.contains("no files found") {
-            type_("INIT DKB0: DATA\rMOUNT DKB0: DATA\r");
+            type_("INIT/PROTECTION=(S:RWED,O:RWED,G:RWED,W:RWED) DKB0: DATA\rMOUNT DKB0: DATA\r");
             type_("COPY SYS$SYSDEVICE:[SYSMGR]WELCOME.TXT DKB0:[000000]DATA.TXT\r");
             type_("CREATE/DIRECTORY DKB0:[SUB.DEEP]\r");
             type_(
@@ -314,7 +335,8 @@ fn boot() {
             type_("SHOW PROCESS\rSHOW SYSTEM\rCONTINUE\rRUN CTRLC\r");
             typed = 6;
         }
-        if LINES.iter().all(|l| text.contains(l)) || text.contains("root task done") {
+        let done = text.matches("%RMS-E-PRV").count() == 2;
+        if done && LINES.iter().all(|l| text.contains(l)) || text.contains("root task done") {
             break;
         }
         sleep(Duration::from_secs(1));
@@ -340,6 +362,16 @@ fn boot() {
         text.matches("%SYSTEM-F-NOPRIV").count(),
         2,
         "SHOW LOGICAL and DEFINE/SYSTEM without CMKRNL and SYSNAM"
+    );
+    assert_eq!(
+        text.matches("%RMS-E-PRV").count(),
+        2,
+        "PROTTEST before SET PROTECTION=(W:R) and after MOUNT/PROTECTION=(W)"
+    );
+    assert_eq!(
+        text.matches("PROTTEST: [200,1] read").count(),
+        2,
+        "PROTTEST by the world's access and by the owner's"
     );
     assert_eq!(
         text.matches("*INTERRUPT*").count(),

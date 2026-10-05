@@ -78,6 +78,7 @@ of VMS's built-in types:
 | `$NUMBER` | an integer: digits, after `-`, or `%X`, `%O`, `%D` |
 | `$REST_OF_LINE` | the rest of the line, as it is |
 | `$QUOTED_STRING` | a string, its quotes, and `""` in it, kept |
+| `$UIC` | a word, whose comma between brackets, `[g,m]`, doesn't end it |
 | `$DATETIME`, `$DELTATIME`, `$ACL`, `$EXPRESSION`, `$PARENTHESIZED_VALUE` | taken as a word, unchecked |
 
 A verb or a syntax has at most one of `IMAGE`, `ROUTINE` and
@@ -128,7 +129,7 @@ An entity, a parameter, qualifier or keyword:
 | Offset | Size | What |
 | --- | --- | --- |
 | 0 | byte | flags: 1 `DEFAULT`, 2 negatable, 4 takes a value, 8 the value is required, 16 `LIST`, 32 concatenates, 64 `BATCH` |
-| 1 | byte | the value's type: 0 a word, 1 a file, 2 `$NUMBER`, 3 `$REST_OF_LINE`, 4 `$QUOTED_STRING`, 5 keywords, 6 the other built-in types |
+| 1 | byte | the value's type: 0 a word, 1 a file, 2 `$NUMBER`, 3 `$REST_OF_LINE`, 4 `$QUOTED_STRING`, 5 keywords, 6 the other built-in types, 7 `$UIC` |
 | 2 | word | for type 5, the type's block |
 | 4 | word | its `SYNTAX=`'s command block, or 0 |
 | 6 | byte | its `PLACEMENT`: 0 `GLOBAL`, 1 `LOCAL`, 2 `POSITIONAL` |

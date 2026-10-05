@@ -240,6 +240,8 @@ TYPES:  .ASCIC  "$FILE"
         .BYTE   6
         .ASCIC  "$PARENTHESIZED_VALUE"
         .BYTE   6
+        .ASCIC  "$UIC"
+        .BYTE   7
         .BYTE   0
 ; The messages: a status, its name and its text, .ASCIC, until a 0.
 MESSAGES:

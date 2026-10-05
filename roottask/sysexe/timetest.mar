@@ -3,7 +3,9 @@
 ;
 ; $GETTIM reads a time after 2026, from the RTC. $SETIMR sets a local
 ; event flag the process waits for, 50 ms on, as a delta, or at a time; a
-; cancelled timer never sets its flag. $SCHDWK wakes the process three
+; cancelled timer never sets its flag, 200 ms on, so that the other
+; processes STARTUP started, which may run before $CANTIM, can't make it
+; come first. $SCHDWK wakes the process three
 ; times, 20 ms apart, until $CANWAK. A failed EXPECT exits with 2 * N.
 ;
         .LIBRARY "starlet.mlb"
@@ -11,7 +13,9 @@
         $SSDEF
 
         .PSECT  DATA, NOEXE, WRT, LONG
-MS50:   .LONG   -500000, -1             ; deltas: 50 ms
+MS250:  .LONG   -2500000, -1            ; deltas: 250 ms
+MS200:  .LONG   -2000000, -1
+MS50:   .LONG   -500000, -1
 MS20:   .LONG   -200000, -1
 MS10:   .LONG   -100000, -1
 FUTURE: .LONG   0, 1                    ; a time, not a delta
@@ -38,11 +42,11 @@ STATE:  .LONG   0
         BLBC    R0, 90$
 
 ; A cancelled timer, due before one that isn't.
-        $SETIMR_S EFN=#6, DAYTIM=MS10, REQIDT=#1
+        $SETIMR_S EFN=#6, DAYTIM=MS200, REQIDT=#1
         EXPECT  #SS$_NORMAL, 5
         $CANTIM_S REQIDT=#1
         EXPECT  #SS$_NORMAL, 6
-        $SETIMR_S EFN=#7, DAYTIM=MS50
+        $SETIMR_S EFN=#7, DAYTIM=MS250
         EXPECT  #SS$_NORMAL, 7
         $WAITFR_S EFN=#7
         $READEF_S EFN=#6, STATE=STATE

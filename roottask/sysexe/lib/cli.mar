@@ -71,6 +71,7 @@ TYP_NUMBER = 2
 TYP_REST = 3
 TYP_QUOTED = 4
 TYP_KEYWORD = 5
+TYP_UIC = 7                             ; a word, [g,m] with its comma
 OP_NAME = 1                             ; DISALLOW's operators
 OP_NEG = 2
 OP_NOT = 3
@@ -966,7 +967,8 @@ VALUE:  MOVL    SLT$L_ENT(R9), R1
         RSB
 
 ; STRING: R9 = a slot, R0 = its type. Takes a word, or text in quotes,
-; into STRBUF, as a value. A word ends at a blank, / , + ( ) or the end.
+; into STRBUF, as a value. A word ends at a blank, / , + ( ) or the end,
+; and a $UIC's not at a comma between its brackets, [g,m].
 STRING: MOVL    STRUSED, R3
         MOVAB   STRBUF[R3], R3
         MOVL    R3, R4                  ; its first character
@@ -999,8 +1001,17 @@ STRING: MOVL    STRUSED, R3
         CMPB    R0, #^A"/"
         BEQL    60$
         CMPB    R0, #44
+        BNEQ    25$
+        CMPL    R8, #TYP_UIC
+        BNEQ    60$
+        CMPL    R3, R4
         BEQL    60$
-        CMPB    R0, #^A"+"
+        CMPB    (R4), #91               ; [
+        BNEQ    60$
+        CMPB    -1(R3), #93             ; ]
+        BEQL    60$
+        BRB     35$
+25$:    CMPB    R0, #^A"+"
         BEQL    60$
         CMPB    R0, #^A"("
         BEQL    60$

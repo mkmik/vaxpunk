@@ -1,12 +1,15 @@
         .TITLE  DIRECTORY Lists files
-        .IDENT  /V0.2/
+        .IDENT  /V0.3/
 ;
 ; DCL's DIRECTORY [spec] runs this. Lists the files spec names, as VMS's DIRECTORY
 ; does: the directory, then their names, four to a line, then how many.
 ; RMS's $PARSE expands spec, what it leaves out taken from *.*;*, and the
 ; directory from the default one; $SEARCH finds each file. * matches any
-; characters, % one.
-; ponytail: one directory, since RMS has no wildcard directories.
+; characters, % one. /OWNER and /PROTECTION list a file a line, with its
+; owner's UIC and its protection, which $OPEN puts in a protection XAB.
+; ponytail: one directory, since RMS has no wildcard directories. A file
+; the process may not read shows neither, where VMS's DIRECTORY asks the
+; XQP for them.
 ;
         .LIBRARY "starlet.mlb"
         .LIBRARY "sysexe.mlb"
@@ -14,6 +17,7 @@
         $RMSDEF
         $FABDEF
         $NAMDEF
+        $XABPRODEF
 
         .EXTERNAL PUT_LINE
 
@@ -46,10 +50,21 @@ EXP:    .BLKB   255
 RES:    .BLKB   255
 LINE:   .BLKB   256                     ; a line being made, .ASCIC
 FILES:  .LONG   0
+DETAIL: .LONG   0                       ; bit 0 /OWNER, bit 1 /PROTECTION
+FAB2:   $FAB    FNA=RES, XAB=XAB        ; $OPEN's, of the file $SEARCH found
+XAB:    $XABPRO
+LETTERS:                                ; the access a protection's bits deny
+        .ASCII  "RWED"
 
         .PSECT  CODE, EXE, LONG
         .ENTRY  START, ^M<R2, R3, R4, R5, R6>
-        GETVALUE "FILE", SPECDSC, SPECDSC
+        PRESENT "OWNER"
+        BLBC    R0, 2$
+        BISL2   #1, DETAIL
+2$:     PRESENT "PROTECTION"
+        BLBC    R0, 3$
+        BISL2   #2, DETAIL
+3$:     GETVALUE "FILE", SPECDSC, SPECDSC
         BLBS    R0, 5$
         CLRL    SPECDSC
 5$:     MOVB    SPECDSC, FAB+FAB$B_FNS
@@ -68,7 +83,11 @@ FILES:  .LONG   0
         BSBW    SAY
         PRINT   ""
 20$:    INCL    FILES
-        TSTB    LINE
+        TSTL    DETAIL
+        BEQL    25$
+        BSBW    DETAILS
+        BRW     10$
+25$:    TSTB    LINE
         BEQL    40$
 30$:    MOVZBL  #^A/ /, R0              ; to the next column
         BSBW    ADDCHAR
@@ -108,10 +127,70 @@ FILES:  .LONG   0
 80$:    MOVL    #SS$_NORMAL, R0
 90$:    RET
 
-; ADDDEC: appends R1 in decimal to LINE. Uses R0-R5.
-ADDDEC: CLRL    R4                      ; digits, on the stack
-10$:    DIVL3   #10, R1, R5
-        MULL3   #10, R5, R0
+; DETAILS: writes a line for the file $SEARCH found: its name, then its
+; owner and protection, as DETAIL asks, or, if the process may not read
+; it, VMS's words for that. Uses R0-R5.
+DETAILS:
+        MOVZBL  NAM+NAM$B_NAME, R2      ; NAME.TYPE;VERSION
+        ADDB2   NAM+NAM$B_TYPE, R2
+        ADDB2   NAM+NAM$B_VER, R2
+        MOVL    NAM+NAM$L_NAME, R1
+        BSBW    ADD
+        MOVL    #COLUMN, R3
+        MOVB    NAM+NAM$B_RSL, FAB2+FAB$B_FNS
+        $OPEN   FAB=FAB2
+        BLBS    R0, 10$
+        CMPL    R0, #RMS$_PRV
+        BNEQ    80$
+        BSBW    PADTO
+        ADDTEXT "No privilege for attempted operation"
+        BRB     80$
+10$:    $CLOSE  FAB=FAB2
+        MOVL    #COLUMN, R3
+        BLBC    DETAIL, 20$
+        BSBW    PADTO                   ; [group,member], in octal
+        ADDTEXT "["
+        MOVZWL  XAB+XAB$L_UIC+2, R1
+        BSBW    ADDOCT
+        ADDTEXT ","
+        MOVZWL  XAB+XAB$L_UIC, R1
+        BSBW    ADDOCT
+        ADDTEXT "]"
+        MOVL    #2*COLUMN, R3
+20$:    BBC     #1, DETAIL, 80$
+        BSBW    PADTO                   ; (RWED,RWED,RE,): what each may do
+        ADDTEXT "("
+        MOVZWL  XAB+XAB$W_PRO, R4
+        CLRL    R5                      ; the category
+30$:    CLRL    R3                      ; the bit
+35$:    BBS     R3, R4, 37$
+        MOVZBL  LETTERS[R3], R0
+        BSBW    ADDCHAR
+37$:    AOBLSS  #4, R3, 35$
+        ASHL    #-4, R4, R4
+        AOBLSS  #4, R5, 40$
+        ADDTEXT ")"
+80$:    BRW     SAY
+40$:    MOVZBL  #44, R0
+        BSBW    ADDCHAR
+        BRB     30$
+
+; PADTO: appends blanks to LINE until it is R3 characters long. Uses R0-R2.
+PADTO:  MOVZBL  LINE, R0
+        CMPL    R0, R3
+        BGEQU   10$
+        MOVZBL  #^A/ /, R0
+        BSBW    ADDCHAR
+        BRB     PADTO
+10$:    RSB
+
+; ADDDEC: appends R1 in decimal to LINE, ADDOCT in octal. Uses R0-R5.
+ADDDEC: MOVL    #10, R3
+        BRB     ADDNUM
+ADDOCT: MOVL    #8, R3
+ADDNUM: CLRL    R4                      ; digits, on the stack
+10$:    DIVL3   R3, R1, R5
+        MULL3   R3, R5, R0
         SUBL3   R0, R1, R0
         ADDL2   #^A/0/, R0
         PUSHL   R0

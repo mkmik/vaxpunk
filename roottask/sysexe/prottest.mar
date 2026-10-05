@@ -1,0 +1,104 @@
+        .TITLE  PROTTEST Checks file protection from another UIC
+        .IDENT  /V0.1/
+;
+; RUN PROTTEST at the console runs this, once the boot test has made
+; DKB0:[000000]DATA.TXT and set its protection. It makes PROTCHILD, a
+; process of UIC [200,1], outside the system's groups and the file's, with
+; no privileges, which runs this image too, and waits for its termination
+; message. PROTCHILD reads the file's first record; then it may not give
+; the file another owner, which takes the system's access, delete it or
+; make a file in [000000], whose world may only look in it, else it exits
+; with SS$_ABORT. PROTTEST says the file could be read,
+; or returns the status that stopped PROTCHILD: RMS$_PRV for a file, or a
+; volume, the world may not read.
+;
+        .LIBRARY "starlet.mlb"
+        .LIBRARY "sysexe.mlb"
+        $SSDEF
+        $RMSDEF
+        $IODEF
+        $DVIDEF
+        $JPIDEF
+        $ACCDEF
+        $FABDEF
+        $XABPRODEF
+
+OUTSIDER = ^X00800001                   ; [200,1]
+NEIGHBOUR = ^X00800002                  ; [200,2]
+
+        .PSECT  DATA, NOEXE, WRT, LONG
+CHILD_IMAGE:
+        .ASCID  "PROTTEST.EXE"
+CHILD_NAME:
+        .ASCID  "PROTCHILD"
+NOPRIVS:                                ; PROTCHILD's privileges: none
+        .LONG   0, 0
+CHAN:   .LONG   0
+UNIT:   .LONG   0
+UIC:    .LONG   0
+IOSB:   .BLKQ   1
+BUF:    .BLKB   ACC$K_TERMLEN
+RECORD: .BLKB   80
+DVI_ITEMS:                              ; the mailbox's unit
+        .WORD   4, DVI$_UNIT
+        .ADDRESS UNIT
+        .LONG   0
+        .LONG   0
+JPI_ITEMS:                              ; my UIC
+        .WORD   4, JPI$_UIC
+        .ADDRESS UIC
+        .LONG   0
+        .LONG   0
+DATA:   .ASCII  "DKB0:[000000]DATA.TXT"
+DATALEN = .-DATA
+NEW:    .ASCII  "DKB0:[000000]OUTSIDER.TXT"
+NEWLEN = .-NEW
+        .ALIGN  LONG
+FAB:    $FAB    FNA=DATA, FNS=DATALEN, XAB=XAB
+XAB:    $XABPRO
+RAB:    $RAB    FAB=FAB, UBF=RECORD, USZ=80
+NEWFAB: $FAB    FNA=NEW, FNS=NEWLEN
+
+        .PSECT  CODE, EXE, LONG
+        .ENTRY  START, ^M<>
+        $GETJPIW_S ITMLST=JPI_ITEMS
+        BLBC    R0, 90$
+        CMPL    UIC, #OUTSIDER
+        BEQL    CHILD
+        $CREMBX_S CHAN=CHAN, MAXMSG=#ACC$K_TERMLEN, BUFQUO=#ACC$K_TERMLEN
+        BLBC    R0, 90$
+        $GETDVIW_S CHAN=CHAN, ITMLST=DVI_ITEMS
+        BLBC    R0, 90$
+        $CREPRC_S IMAGE=CHILD_IMAGE, PRCNAM=CHILD_NAME, PRVADR=NOPRIVS, BASPRI=#4, UIC=#OUTSIDER, MBXUNT=UNIT
+        BLBC    R0, 90$
+        $QIOW_S CHAN=CHAN, FUNC=#IO$_READVBLK, IOSB=IOSB, P1=BUF, P2=#ACC$K_TERMLEN
+        BLBC    R0, 90$
+        MOVL    BUF+ACC$L_FINALSTS, R0
+        BLBC    R0, 90$
+        PRINT   "PROTTEST: [200,1] read DATA.TXT, and may not give it away, delete it or make a file there"
+90$:    RET
+
+; CHILD: PROTCHILD's: reads, then fails to give the file to [200,2], to
+; delete it and to make a file.
+CHILD:  $OPEN   FAB=FAB
+        BLBC    R0, 90$
+        $CONNECT RAB=RAB
+        BLBC    R0, 90$
+        $GET    RAB=RAB
+        BLBC    R0, 90$
+        MOVL    #NEIGHBOUR, XAB+XAB$L_UIC
+        $CLOSE  FAB=FAB
+        CMPL    R0, #RMS$_PRV
+        BNEQ    80$
+        $ERASE  FAB=FAB
+        CMPL    R0, #RMS$_PRV
+        BNEQ    80$
+        $CREATE FAB=NEWFAB
+        CMPL    R0, #RMS$_PRV
+        BNEQ    80$
+        MOVL    #SS$_NORMAL, R0
+        RET
+80$:    MOVL    #SS$_ABORT, R0
+90$:    RET
+
+        .END    START

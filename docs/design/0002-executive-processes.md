@@ -679,12 +679,17 @@ service checks with `IFPRIV` and `IFNPRIV` from `lib.mlb`, and says
 | `SYSNAM` | `$CRELNM` and `$DELLNM` in `LNM$SYSTEM_TABLE`, a `$CREMBX` logical name, and `$MOUNT` and `$DISMOU`, whose volumes every process sees |
 | `PRMMBX`, `TMPMBX` | `$CREMBX` of a permanent mailbox, or a temporary one; `$DELMBX` |
 | `LOG_IO`, `PHY_IO` | the disks' `IO$_READLBLK` and `IO$_WRITELBLK`, with either; `IO$_READPBLK` and `IO$_WRITEPBLK`, with `PHY_IO` |
-| `VOLPRO` | `$INIT_VOL`. ponytail: until volumes have owners |
+| `VOLPRO` | `$INIT_VOL` of a volume someone else owns, and `$MOUNT`'s `MNT$_OWNER` and `MNT$_VPROT`. ponytail: VMS lets a volume's owner give those too |
+| `SYSPRV` | a file's or a volume's system access, as if the process's UIC group were up to `MAXSYSGROUP`, 8 (*Files*) |
+| `GRPPRV` | the system access to the files and volumes of its UIC group |
+| `READALL` | reading any file |
+| `BYPASS` | any access to any file or volume |
 | `OPER` | `IO$_SETCHAR` on `BGA0:`, the network's interface |
 
 `SET PROCESS/PRIVILEGES` changes the permanent ones, and `SHOW
 PROCESS/PRIVILEGES` lists the authorized and current ones, by the names
-in `sysexe/lib/prvnam.mar`. Files are checked in PRD-0003's next step.
+in `sysexe/lib/prvnam.mar`. Files and volumes are checked by their
+owner and protection (*Files*).
 
 ### Logical names
 
@@ -914,7 +919,9 @@ does:
   On a disk it can write, it finds the storage bitmap, `BITMAP.SYS`'s
   second block. It reports the volume on the console:
   `%MOUNT-I-MOUNTED, RAM mounted on _MDA0:`. Without `MNT$_VOLNAM`, any
-  label will do.
+  label will do. The VCB keeps the volume's owner and protection, from
+  the home block, or `MNT$_OWNER`'s and `MNT$_VPROT`'s while it is
+  mounted.
 - **`$DISMOU devnam, flags`** clears the VCB's `VCB$V_MOUNTED`, so the
   volume can be mounted again, or another written there:
   `SS$_DEVNOTMOUNT` if none is, `SS$_DEVACTIVE` for `DKA0:`, or while
@@ -935,13 +942,21 @@ does:
   the name's record) or one. It can skip matches, which is how `$SEARCH`
   goes on from where it was.
 - **`FIL$OPENFILE`** finds an image and reads it whole into pool, for the
-  image activator, which frees it once the sections are copied.
+  image activator, which frees it once the sections are copied:
+  `RMS$_PRV` without execute access to it.
+- **`FIL$CHKPRO`** says whether the current process may read, write,
+  execute or delete what an owner's UIC and a protection mask guard,
+  or control it, by VMS's rules (below), and **`FIL$CHKHDR`** checks a
+  file header's, after its volume's.
 
 `f11wrt.mar` writes, as the XQP does, on a disk that can be written:
 
 - **`FIL$CREHDR`** takes the first free slot of the index file bitmap and
-  makes an empty header for it, with the slot's next sequence number;
-  **`FIL$WRITEHDR`** writes a header, with its checksum.
+  makes an empty header for it, with the slot's next sequence number,
+  owned by the current process's UIC, with VMS's default protection,
+  `(S:RWED,O:RWED,G:RE,W)`; **`FIL$WRITEHDR`** writes a header, with its
+  checksum. ponytail: no process default protection, nor a new version
+  given its predecessor's.
 - **`FIL$EXTEND`** gives a file more blocks, the first free runs of the
   storage bitmap (a set bit is a free block), a format 2 map pointer each,
   or added to the last one when they follow it. **`FIL$DELHDR`** gives a
@@ -954,13 +969,35 @@ does:
   directory extended if it grew.
 - **`FIL$MKDIR`** makes an empty directory, `NAME.DIR;1`, in another, as
   `INITIALIZE` makes the MFD: a header marked a directory and contiguous,
-  VAR records in blocks of 512, no delete access, and one block holding
-  only the end of block's -1, entered last.
-- **`FIL$INIT`**, for `$INIT_VOL devnam, volnam`, writes an empty volume
+  VAR records in blocks of 512, the one above's protection without delete
+  access, as VMS's `CREATE/DIRECTORY` does, and one block holding only
+  the end of block's -1, entered last.
+- **`FIL$INIT`**, for `$INIT_VOL devnam, volnam, itmlst`, writes an empty volume
   on `DKB0:`, 4,096 blocks, or the ramdisk, 1,024, as `INITIALIZE` lays one out (`ods/docs/initialize.md`):
   the boot block, the home block, the index file bitmap, 64 header
   slots, `BITMAP.SYS`'s SCB and bitmap and the MFD's first block, and the
-  nine reserved files, (1,1,0) to (9,9,0), in the MFD.
+  nine reserved files, (1,1,0) to (9,9,0), in the MFD. The volume and its
+  files are `INIT$_OWNER`'s, the caller's UIC by default, and the volume
+  has `INIT$_VOLPRO`'s protection, none denied by default; the MFD has
+  `(S:RWE,O:RWE,G:RE,W:RE)`, so that all may look in it. Another's volume
+  takes `VOLPRO` to write over, a blank disk none.
+
+Each file has an owner, a UIC, and a protection mask in its header
+(`FH2$L_FILEOWNER`, `FH2$W_FILEPROT`), and each volume in its home block:
+4 bits for each of four categories, system, owner, group and world, a
+set bit denying read, write, execute or delete. `FIL$CHKPRO` gives a
+process what the world may do; what the group may too if its UIC group
+is the owner's; what the owner may, and control, if its UIC is the
+owner's; and what the system may, and control, if its UIC group is up to
+8, or with `SYSPRV`, or with `GRPPRV` in the owner's group. `READALL`
+reads anything and `BYPASS` does anything. A volume's mask applies to
+every access to its files, as VMS's does. Without, RMS says `RMS$_PRV`:
+a lookup takes execute access to each directory it looks in, a wildcard
+read access; `$OPEN` read access to the file, `$CREATE` and
+`$CREATE_DIR` write access to the directory, `$ERASE` delete access to
+the file and write access to its directory, and the image activator
+execute access to the image. ponytail: no ACLs; a volume's bits mean
+what a file's do, where VMS's third is create.
 
 ponytail: a cluster is a block, each bitmap one block, the index file
 never extended, so a volume has at most 4,096 blocks and the 64 files
@@ -992,12 +1029,12 @@ a directory in one of those. The MFD has no parent: `RMS$_DIR`.
 | --- | --- |
 | `$PARSE fab` | the expanded string, its parts and the directory's ID into the FAB's NAM block |
 | `$SEARCH fab` | the next file the NAM block's expanded string names: its resultant string, parts and file ID; `RMS$_FNF` if there is none, then `RMS$_NMF` |
-| `$OPEN fab` | opens one file, the highest version unless the specification gives one, for reading; `RMS$_WLK` for writing. Its IFI, record format, attributes, maximum record size and allocation into the FAB, its resultant string into the NAM block if there is one |
+| `$OPEN fab` | opens one file, the highest version unless the specification gives one, for reading; `RMS$_WLK` for writing. Its IFI, record format, attributes, maximum record size and allocation into the FAB, its resultant string into the NAM block if there is one, its owner and protection into the protection XAB (`$XABPRODEF`) in `FAB$L_XAB`'s chain if there is one |
 | `$CREATE fab` | makes a new file, one version above the highest unless the specification gives one (`RMS$_FEX` if it is there), with the FAB's organization, record format and attributes, maximum record size and `FAB$L_ALQ` blocks, and opens it for `$PUT`; `RMS$_WLK` on `DKA0:`, `RMS$_FUL` if the volume is full |
 | `$CONNECT rab` | connects the RAB to the file its FAB opened, at its start |
 | `$GET rab` | the next record into the RAB's user buffer: `RAB$W_RSZ`, `RAB$L_RBF`; `RMS$_RTB` if it didn't fit, `RMS$_EOF` past the end; VAR and FIX records only |
 | `$PUT rab` | appends the record at `RAB$L_RBF`, `RAB$W_RSZ` bytes, to a file `$CREATE` made: VAR records with their size first, FIX ones of the file's size (`RMS$_RSZ`), each on a word; a block at a time, extending the file by 8 blocks as it fills |
-| `$DISCONNECT rab`, `$CLOSE fab` | undo `$CONNECT` and `$OPEN`; `$CLOSE` writes a new file's last block and its end of file |
+| `$DISCONNECT rab`, `$CLOSE fab` | undo `$CONNECT` and `$OPEN`; `$CLOSE` writes a new file's last block and its end of file, and gives the file the protection and owner of its FAB's protection XAB, as VMS's does: a new protection takes control access, a new owner the system's. ponytail: VMS's `SET PROTECTION` asks the XQP with `IO$_MODIFY`, and needs no read access to the file |
 | `$ERASE fab` | deletes a file, the highest version unless the specification gives one, or, with `FAB$M_NAM` in `FAB$L_FOP`, the one the NAM block's resultant string names, and the next `$SEARCH` finds the one after it; `RMS$_PRV` for the volume's own files, 1 to 9, `RMS$_MKD` with `SS$_DIRNOTEMPTY` in `FAB$L_STV` for a directory with files in it |
 | `$CREATE_DIR devdirspec` | makes the directory `[dev:][dir.dir]` names, and those above it that aren't there, with `FIL$MKDIR`, as the directory walk finds each missing: `SS$_CREATED`, or `SS$_NORMAL` if they were all there. ponytail: VMS's `LIB$CREATE_DIR` is a library routine that asks the XQP with `$QIO`; here it is a service |
 | `$SETDDIR newdir, oldlen, olddir` | the old default directory into `olddir`, then `newdir`, `[dir.dir]` up to 63 characters, the new one, unchecked against the disk; `RMS$_DIR` if it isn't one |
@@ -1097,15 +1134,15 @@ on the console with `PRINT` and `PRINTHEX` from `sysexe.mlb`, which call
 | Program | Does |
 | --- | --- |
 | `DCL` | the command interpreter (*The command interpreter*) |
-| `DIRECTORY` | `$PARSE`s its parameter, with `*.*;*` for what it leaves out, and lists the files `$SEARCH` finds: the directory, the names four to a line, how many |
+| `DIRECTORY` | `$PARSE`s its parameter, with `*.*;*` for what it leaves out, and lists the files `$SEARCH` finds: the directory, the names four to a line, how many; with `/OWNER` and `/PROTECTION`, a line each, with what `$OPEN` puts in a protection XAB: `[g,m]` and `(RWED,RWED,RE,)` |
 | `TYPE` | `$OPEN`s the file its parameter names and writes each record `$GET` reads on the console, a line each |
 | `EDIT` | EDT: `$GET`s the file its parameter names into a buffer, a line a record, and at its `*` prompt, read with `IO$_READPROMPT`, types the lines a range names (numbers, `.`, `BEGIN`, `END`, `WHOLE`, `REST`, `"text"` searches), `INSERT`s lines typed up to a CTRL/Z before it, `DELETE`s or `REPLACE`s them; `CHANGE` goes to keypad mode, which paints a VT100 screen, reads a key at a time with `IO$M_NOECHO` and `IO$M_NOFILTR` and changes the buffer, until CTRL/Z; `EXIT` `$CREATE`s the next version and `$PUT`s the buffer to it, `QUIT` doesn't |
 | `COPY` | `$OPEN`s its first parameter, `$CREATE`s its second, with the first's attributes and its name and type for what the second leaves out, and copies each record with `$GET` and `$PUT`; with `/LOG`, `%COPY-S-COPIED, from copied to to (n records)` |
 | `DELETE` | `$PARSE`s its parameter, which must give a version or `;*` (`%DELETE-E-DELVER`), and `$ERASE`s each file `$SEARCH` finds; with `/LOG`, `%DELETE-I-FILDEL, name deleted` for each |
-| `INIT` | `$INIT_VOL` with its two parameters, the device and the label |
-| `MOUNT` | `$MOUNT` with its parameters, the device and the label, if there is one |
+| `INIT` | `$INIT_VOL` with its two parameters, the device and the label, and `/OWNER_UIC` and `/PROTECTION`'s items, which `sysexe/lib/protect.mar` reads |
+| `MOUNT` | `$MOUNT` with its parameters, the device and the label, if there is one, and `/OWNER_UIC` and `/PROTECTION`'s items |
 | `DISMOUNT` | `$DISMOU` with its parameter, the device |
-| `SET` | `$SETPRV`s each privilege of `SET PROCESS/PRIVILEGES`, `NO` before one to disable it, `ALL` for every one, permanently; `%DCL-W-IVKEYW` for a name it doesn't know |
+| `SET` | `$SETPRV`s each privilege of `SET PROCESS/PRIVILEGES`, `NO` before one to disable it, `ALL` for every one, permanently; `%DCL-W-IVKEYW` for a name it doesn't know. `SET PROTECTION=(code[,...]) file` and `SET FILE/OWNER_UIC=uic file` `$OPEN` the file with a protection XAB, change it and `$CLOSE` it |
 | `SHOW` | `SHOW PROCESS`: what `$GETJPI` says of the process, its UIC, and with `/PRIVILEGES` its authorized and current privileges; `SHOW SYSTEM`: a line per process |
 | `CREATE` | `$CREATE_DIR` with its parameter, for `CREATE/DIRECTORY` |
 | `STARTUP` | makes 4 pages with `$EXPREG`, checks and deletes them; creates `SLEEPER` at a higher priority, which runs at once, and `PING` and `PONG`; waits until `PONG` sets flag 66 of their cluster; deletes `SLEEPER`; creates `SVCTEST`, `HOG`, `TIMETEST`, `ASTTEST`, `MBXTEST`, `FSTEST1` and `FSTEST2` and `CHFTEST` |
@@ -1116,7 +1153,8 @@ on the console with `PRINT` and `PRINTHEX` from `sysexe.mlb`, which call
 | `USURP` | raises IPL from user mode, and exits the same way with `SS$_OPCDEC` |
 | `HOG` | associates a common event flag cluster, creates `NUDGE` at its own priority and loops reading flag 64 until `NUDGE` sets it, with no wait: only quantum end lets `NUDGE` run |
 | `NUDGE` | sets `HOG`'s flag |
-| `TIMETEST` | checks that `$GETTIM` reads a time after 2026; waits for `$SETIMR`s, a delta and a time, 50 ms on, and that a cancelled one never sets its flag; hibernates through three repeating `$SCHDWK` wakeups, cancels them, and checks that the next wakeup is a new one's |
+| `TIMETEST` | checks that `$GETTIM` reads a time after 2026; waits for `$SETIMR`s, a delta and a time, 50 ms on, and that a cancelled one, due 200 ms on, never sets its flag; hibernates through three repeating `$SCHDWK` wakeups, cancels them, and checks that the next wakeup is a new one's |
+| `PROTTEST` | creates `PROTCHILD`, the same image as a process of UIC `[200,1]` with no privileges, and reads its termination message: it reads `DKB0:[000000]DATA.TXT`, then may not give it another owner, delete it or make a file in `[000000]`. `PROTTEST` says so, or returns the status that stopped it, `RMS$_PRV` |
 | `CTRLC` | enables a CTRL/C AST, starts a console read and waits for it; the AST, once CTRL/C is typed, `$CANCEL`s the read, which ends with `SS$_ABORT` |
 | `HELP` | describes DCL's verbs, from `DCL$TABLES`, which `build.rs` links into it as into DCL: with no topic, each verb and its parameters, then what DCL does without a verb; with one, each verb whose name starts with it, its parameters, the keywords a parameter may be and the qualifiers, then each syntax a qualifier or keyword leads to that has parameters or qualifiers of its own. ponytail: no text, which VMS's HELP reads from a help library |
 | `CLITEST` | parses commands with its own tables, `CLITEST.CLD`, and `CLI$DCL_PARSE`, and checks what `CLI$PRESENT` and `CLI$GET_VALUE` say of them: lists, concatenation, quoted strings, default values, negation, keywords and their values, a syntax switched to, abbreviations, each error, qualifiers given after a parameter's value, a `ROUTINE` `CLI$DISPATCH` calls, tables looked in first, and `LIB$GET_FOREIGN`'s line; run as a foreign command, or as a verb with an image, it writes the words after the verb |

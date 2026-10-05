@@ -55,6 +55,7 @@ const TYPES: &[(&str, u8)] = &[
     ("$ACL", 6),
     ("$EXPRESSION", 6),
     ("$PARENTHESIZED_VALUE", 6),
+    ("$UIC", 7),
 ];
 const TYPE_KEYWORD: u8 = 5;
 

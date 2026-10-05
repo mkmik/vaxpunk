@@ -1,0 +1,144 @@
+        .TITLE  PROTECT UICs and protection codes from a command
+        .IDENT  /V0.1/
+;
+; SET FILE/OWNER_UIC, SET PROTECTION, INITIALIZE and MOUNT take a UIC,
+; [g,m], its group and member in octal, and a protection code, as VMS
+; does: (S:RWED,O:RWED,G:RE,W), a category, SYSTEM, OWNER, GROUP or
+; WORLD, or its first letter, and what it may do after a colon or an
+; equals sign, nothing if there are no letters. C, a volume's create, is E. build.rs links this
+; module into each image, as it does lib/print.mar.
+;
+        .LIBRARY "starlet.mlb"
+        $SSDEF
+
+        .EXTERNAL CLI$GET_VALUE
+
+        .PSECT  PROTECT_DATA, NOEXE, WRT, LONG
+VALUE:  .LONG   0                       ; a value, its descriptor
+        .ADDRESS VALBUF
+VALBUF: .BLKB   64
+LETTERS:                                ; what a category may do, by its bit
+        .ASCII  "RWED"
+
+        .PSECT  PROTECT_CODE, EXE, LONG
+; GET_UIC name, uic: the UIC the command's entity name gives, into the
+; longword at uic. R0 = SS$_NORMAL, the CLI's error, or SS$_BADPARAM if
+; it isn't [g,m], each up to 177777.
+        .ENTRY  GET_UIC, ^M<R2, R3, R4, R5>
+        BSBW    GETVAL
+        BLBC    R0, 90$
+        MOVAB   VALBUF, R1
+        MOVZWL  VALUE, R2
+        BEQL    80$
+        CMPB    (R1)+, #91              ; [
+        BNEQ    80$
+        DECL    R2
+        BSBB    OCTAL                   ; the group
+        CMPB    R0, #44
+        BNEQ    80$
+        MOVL    R3, R4
+        BSBB    OCTAL                   ; the member
+        CMPB    R0, #93                 ; ]
+        BNEQ    80$
+        TSTL    R2
+        BNEQ    80$
+        INSV    R4, #16, #16, R3
+        MOVL    R3, @8(AP)
+        MOVL    #SS$_NORMAL, R0
+        RET
+80$:    MOVL    #SS$_BADPARAM, R0
+90$:    RET
+
+; OCTAL: R1 = a string, R2 = its length. Takes octal digits up to 177777
+; and the character after them: R3 = their value, R0 = the character, or
+; 0 if there is none, no digit, or too many. R1 and R2 past. Uses R5.
+OCTAL:  CLRL    R3
+        MOVL    R2, R5
+10$:    TSTL    R2
+        BEQL    80$
+        MOVZBL  (R1)+, R0
+        DECL    R2
+        SUBB2   #^A/0/, R0
+        CMPB    R0, #7
+        BGTRU   20$
+        ASHL    #3, R3, R3
+        ADDL2   R0, R3
+        CMPL    R3, #^XFFFF
+        BGTRU   80$
+        BRB     10$
+20$:    ADDB2   #^A/0/, R0
+        SUBL2   R2, R5                  ; a digit before it?
+        CMPL    R5, #2
+        BLSSU   80$
+        RSB
+80$:    CLRL    R0
+        RSB
+
+; GET_PROT name, mask: changes the protection mask, a word at mask, as the
+; command's entity name says, a code each of its values: their categories
+; get what they may do, the others stay. R0 = SS$_NORMAL, the CLI's error,
+; or SS$_BADPARAM for a code it doesn't know.
+        .ENTRY  GET_PROT, ^M<R2, R3, R4, R5>
+10$:    BSBW    GETVAL
+        BLBC    R0, 70$                 ; past the last
+        MOVAB   VALBUF, R1
+        MOVZWL  VALUE, R2
+        BEQL    80$
+        MOVZBL  (R1), R0                ; the category: its bits' shift
+        CLRL    R3
+        CMPB    R0, #^A/S/
+        BEQL    20$
+        MOVL    #4, R3
+        CMPB    R0, #^A/O/
+        BEQL    20$
+        MOVL    #8, R3
+        CMPB    R0, #^A/G/
+        BEQL    20$
+        MOVL    #12, R3
+        CMPB    R0, #^A/W/
+        BNEQ    80$
+20$:    MOVL    #^XF, R4                ; what it may not do: all, but
+        MOVL    R1, R5                  ; the letters after a colon
+25$:    TSTL    R2
+        BEQL    50$
+        DECL    R2
+        MOVZBL  (R5)+, R0
+        CMPB    R0, #^A/:/
+        BEQL    30$
+        CMPB    R0, #^A/=/
+        BNEQ    25$
+30$:    TSTL    R2
+        BEQL    50$
+        DECL    R2
+        MOVZBL  (R5)+, R0
+        CMPB    R0, #^A/C/
+        BNEQ    35$
+        MOVZBL  #^A/E/, R0
+35$:    CLRL    R1                      ; its bit
+37$:    CMPB    R0, LETTERS[R1]
+        BEQL    40$
+        AOBLSS  #4, R1, 37$
+        BRB     80$
+40$:    BBCC    R1, R4, 30$
+        BRB     30$
+50$:    ASHL    R3, #^XF, R0
+        BICW2   R0, @8(AP)
+        ASHL    R3, R4, R0
+        BISW2   R0, @8(AP)
+        BRB     10$
+70$:    MOVL    #SS$_NORMAL, R0
+        RET
+80$:    MOVL    #SS$_BADPARAM, R0
+        RET
+
+; GETVAL: AP = GET_UIC's or GET_PROT's arguments. The entity's next value
+; into VALBUF, its length in VALUE. R0 = CLI$GET_VALUE's status. Uses R0
+; and R1.
+GETVAL: MOVW    #64, VALUE
+        PUSHAW  VALUE
+        PUSHAQ  VALUE
+        PUSHL   4(AP)
+        CALLS   #3, G^CLI$GET_VALUE
+        RSB
+
+        .END
