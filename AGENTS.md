@@ -2,7 +2,8 @@
 
 ## Goal
 
-vaxpunk is an OpenVMS clone for arm64. Detailed scope comes from a PRD (pending).
+vaxpunk is an OpenVMS clone for arm64. The current milestone, and the ranked backlog of what's left, is
+[PRD-0003](docs/prd/0003-multi-user-vms.md).
 The toolchain sub-project (assembler, linker, runner) has its own PRD: [PRD-0001](docs/prd/0001-vtools.md).
 
 Inspiration: [FreeVMS](https://github.com/rroart/freevms), a free VMS clone for x86_64.
