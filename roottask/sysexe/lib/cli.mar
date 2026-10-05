@@ -12,7 +12,7 @@
 ; The parse: a verb, matched on its first 4 characters, a shorter one
 ; unique, in the tables given, the first that has a verb of that name
 ; hiding it in those after; then, separated by blanks, parameters and qualifiers, /name,
-; /NOname, /name=value, /name=(value,...). A parameter's values are
+; /NOname, /name=value, /name=(value,...), /NOname=value. A parameter's values are
 ; separated by commas, if it is a LIST, or by plus signs, if it
 ; concatenates. A value is a word, in capitals, or text in quotes, kept as
 ; it is, "" a quote; a keyword, with its own =value; a number; or the rest
@@ -881,10 +881,8 @@ GIVE:   MOVL    SLT$L_ENT(R9), R1
         BEQL    20$
         CMPB    (R6), #^A":"
         BNEQ    30$
-20$:    TSTL    R10
-        BNEQ    25$
-        BBS     #ENT_V_VALUE, ENT$B_FLAGS(R1), 27$
-25$:    ERROR   CLI$_NOVALU
+20$:    BBS     #ENT_V_VALUE, ENT$B_FLAGS(R1), 27$
+        ERROR   CLI$_NOVALU
 27$:    INCL    R6
         BRW     VALUES
 30$:    TSTL    R10

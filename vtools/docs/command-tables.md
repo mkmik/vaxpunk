@@ -64,7 +64,7 @@ Entity clauses, for parameters, qualifiers and keywords:
 | `LABEL=name` | the name `CLI$PRESENT` and `CLI$GET_VALUE` know it by; the entity's name by default |
 | `PROMPT="text"` | a parameter's prompt, `_text: `; the label by default |
 | `DEFAULT` | present unless negated: `CLI$_DEFAULTED` |
-| `NEGATABLE`, `NONNEGATABLE` | `/NOname` allowed or not. Qualifiers are negatable, keywords not, unless they say otherwise |
+| `NEGATABLE`, `NONNEGATABLE` | `/NOname` allowed or not, with a value if the entity takes one. Qualifiers are negatable, keywords not, unless they say otherwise |
 | `PLACEMENT=GLOBAL`, `LOCAL`, `POSITIONAL` | a qualifier's: the command's wherever it is given, the value's it is given after only, or the value's after one and the command's after the verb. A `LOCAL` or `POSITIONAL` one's value has no keywords |
 | `SYNTAX=name` | given (not negated), the command is parsed again with that syntax |
 | `VALUE [(clauses)]` | it takes a value: `REQUIRED`, `LIST`, `[NO]CONCATENATE` (by default as `LIST`), `DEFAULT="text"`, `TYPE=type` |
