@@ -55,6 +55,7 @@ define type SET_OPTIONS
 	keyword DEFAULT, syntax=SET_DEFAULT
 	keyword HOST, syntax=SET_HOST
 	keyword INTERFACE, syntax=SET_INTERFACE
+	keyword ROUTE, syntax=SET_ROUTE
 
 ! SET COMMAND file: compiles file.CLD's verbs into the process's tables.
 define syntax SET_COMMAND
@@ -72,13 +73,23 @@ define syntax SET_HOST
 	parameter P1, label=OPTION, value(required, type=SET_OPTIONS)
 	parameter P2, label=NODE, prompt="Node", value(required)
 
-! SET INTERFACE, SET CONFIGURATION INTERFACE, SHOW INTERFACE: TCPIP.EXE.
+! SET INTERFACE, SET CONFIGURATION INTERFACE, SET ROUTE, SHOW INTERFACE:
+! TCPIP.EXE.
 define syntax SET_INTERFACE
 	image TCPIP
 	parameter P1, label=OPTION, value(required, type=SET_OPTIONS)
 	parameter P2, label=ADDRESS, prompt="Address", value(required)
 	parameter P3, label=MASK, prompt="Mask", value(required)
-	parameter P4, label=GATEWAY, prompt="Gateway", value(required)
+
+! SET ROUTE /DEFAULT /GATEWAY=address: the default route, the only one;
+! /PERMANENT saves it instead.
+define syntax SET_ROUTE
+	image TCPIP
+	parameter P1, label=OPTION, value(required, type=SET_OPTIONS)
+	qualifier DEFAULT
+	qualifier GATEWAY, value(required)
+	qualifier PERMANENT
+	disallow not DEFAULT or not GATEWAY
 
 define syntax SET_CONFIGURATION
 	image TCPIP
@@ -86,7 +97,6 @@ define syntax SET_CONFIGURATION
 	parameter P2, label=COMPONENT, prompt="Component", value(required, type=CONFIGURATION_OPTIONS)
 	parameter P3, label=ADDRESS, prompt="Address", value(required)
 	parameter P4, label=MASK, prompt="Mask", value(required)
-	parameter P5, label=GATEWAY, prompt="Gateway", value(required)
 
 define type CONFIGURATION_OPTIONS
 	keyword INTERFACE

@@ -285,7 +285,7 @@ an image runs it with `$IMGACT` and the parse:
 | `DISMOUNT device` | `DISMOUNT.EXE` |
 | `CREATE/DIRECTORY spec` | `CREATE.EXE`; without `/DIRECTORY`, `%CREATE-E-NOTDIR` |
 | `SHOW PROCESS`, `SHOW SYSTEM` | `SHOW.EXE`, whose `OPTION` says which |
-| `SET INTERFACE address mask gateway`, `SET CONFIGURATION INTERFACE address mask gateway`, `SHOW INTERFACE` | `TCPIP.EXE`, which takes `OPTION`, `ADDRESS`, `MASK` and `GATEWAY` from the parse |
+| `SET INTERFACE address mask`, `SET CONFIGURATION INTERFACE address mask`, `SET ROUTE /DEFAULT /GATEWAY=address [/PERMANENT]`, `SHOW INTERFACE` | `TCPIP.EXE`, which takes `OPTION`, `ADDRESS`, `MASK`, `GATEWAY` and `PERMANENT` from the parse |
 | `SET HOST address` | `RTPAD.EXE`, whose `NODE` is the address |
 | `CONTINUE` | returns from the CTRL/Y AST, which goes back to the image |
 | `STOP [process-name]` | `$DELPRC`; with no name, ends the procedures, and the image CTRL/Y stopped with `$EXIT` from DCL, which skips its exit handlers, user mode's, with `SS$_ABORT` |

@@ -117,9 +117,10 @@ on the screen),
 `DEFINE name equivalence`, `DEASSIGN name` and `SHOW LOGICAL name` make,
 delete and translate logical names (`SHOW LOGICAL SYS$INPUT`, or `SHOW
 LOGICAL` alone to list them all), `SHOW PROCESS` and `SHOW SYSTEM` show
-the process and list them all, `SET INTERFACE address mask gateway` and
-`SHOW INTERFACE` set and show the network's (*Networking*), `SET
-CONFIGURATION INTERFACE` saves them for the next boot, `SET HOST
+the process and list them all, `SET INTERFACE address mask`, `SET ROUTE
+/DEFAULT /GATEWAY=address` and `SHOW INTERFACE` set and show the
+network's (*Networking*), `SET CONFIGURATION INTERFACE` and `SET ROUTE
+/PERMANENT` save them for the next boot, `SET HOST
 address` logs in to another vaxpunk, `COPY` and `DELETE` copy and delete
 files, `INITIALIZE`, `MOUNT` and `DISMOUNT` make, mount and dismount a
 volume on the data disk, `DKB0:`, or the ramdisk, `MDA0:`, the disks they
@@ -287,14 +288,16 @@ of shared pages and drives it as `BGA0:`
 with no address:
 
 ```
-$ SET INTERFACE 10.0.2.15 255.255.255.0 10.0.2.2
+$ SET INTERFACE 10.0.2.15 255.255.255.0
+$ SET ROUTE /DEFAULT /GATEWAY=10.0.2.2
 $ SHOW INTERFACE
 Interface  IP_Addr          Network mask     Gateway          Link
  BGA0      10.0.2.15        255.255.255.0    10.0.2.2         up
 ```
 
-`SET INTERFACE` changes the running system only. `SET CONFIGURATION
-INTERFACE address mask gateway` saves the settings on the data disk, once
+`SET INTERFACE` and `SET ROUTE` change the running system only. `SET
+CONFIGURATION INTERFACE address mask` and `SET ROUTE /DEFAULT
+/GATEWAY=address /PERMANENT` save the settings on the data disk, once
 `INITIALIZE DKB0:` has made a volume there, and each boot sets them from
 there, as TCP/IP Services split them. Every
 system with a network runs `TCPIP$TELNET`, which takes `SET HOST`

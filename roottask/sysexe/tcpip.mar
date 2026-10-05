@@ -1,26 +1,24 @@
         .TITLE  TCPIP   Sets and shows the network interface
-        .IDENT  /V0.1/
+        .IDENT  /V0.2/
 ;
-; DCL's SET INTERFACE address mask gateway, SHOW INTERFACE and SET
-; CONFIGURATION INTERFACE address mask gateway run this, in the spirit of
-; TCP/IP Services' TCPIP commands: OPTION, the parse's first parameter,
-; says which, and the command is INTERFACE and the ADDRESS, MASK and
-; GATEWAY parameters, as it is saved. An address is four numbers and dots. As
-; there, SET INTERFACE changes the running system and SET CONFIGURATION
-; INTERFACE the saved configuration, which the next boot applies:
-; SET INTERFACE sets the interface with IO$_SETCHAR on BGA0:, the
-; network's port driver (netdriver.mar); SET CONFIGURATION INTERFACE
-; saves INTERFACE and the addresses in a new version of TCPIP$CONFIG.DAT
-; on the data disk, the one that may be written. SHOW senses them with
-; IO$_SENSECHAR and writes them, and whether the link is up. With no
-; command line, as SYLOGIN.COM runs it at boot, it sets the interface
-; from the saved command, if there is one, and says so, and starts
-; TELNETD, the remote login server SET HOST talks to.
-; ponytail: one interface; a saved file only once INITIALIZE DKB0: has
-; made a volume there.
-; ponytail: the default gateway is part of the interface; TCP/IP
-; Services made it a route, SET ROUTE /DEFAULT /GATEWAY=address, and SET
-; CONFIGURATION ROUTE to save it.
+; DCL's SET INTERFACE address mask, SET ROUTE /DEFAULT /GATEWAY=address,
+; SHOW INTERFACE and SET CONFIGURATION INTERFACE address mask run this,
+; in the spirit of TCP/IP Services' TCPIP commands: OPTION, the parse's
+; first parameter, and $VERB say which, and ADDRESS, MASK and GATEWAY
+; give the addresses, four numbers and dots each. As there, SET
+; INTERFACE and SET ROUTE change the running system, and SET
+; CONFIGURATION INTERFACE and SET ROUTE /PERMANENT the saved
+; configuration, which the next boot applies: the first two sense the
+; settings with IO$_SENSECHAR on BGA0:, the network's port driver
+; (netdriver.mar), change theirs and set them with IO$_SETCHAR; the last
+; two read the saved ones, change theirs and write INTERFACE address mask
+; gateway in a new version of TCPIP$CONFIG.DAT on the data disk, the one
+; that may be written. SHOW senses them and writes them, and whether the
+; link is up. With no command line, as SYLOGIN.COM runs it at boot, it
+; sets the interface from the saved settings, if there are any, and says
+; so, and starts TELNETD, the remote login server SET HOST talks to.
+; ponytail: one interface and one route, the default; a saved file only
+; once INITIALIZE DKB0: has made a volume there.
 ;
         .LIBRARY "starlet.mlb"
         .LIBRARY "sysexe.mlb"
@@ -38,16 +36,17 @@ CHAN:   .LONG   0
 IOSB:   .BLKQ   1
 SETTINGS:                               ; address, mask, gateway, flags: 2 the link is up
         .BLKL   4
-CMD:    .BLKB   256                     ; the command, .ASCIC: the parse's, or the saved one
-OPTION: .LONG   16                      ; OPTION, the parameter: INTERFACE or CONFIGURATION
+CMD:    .BLKB   256                     ; the saved settings, .ASCIC
+OPTION: .LONG   16                      ; OPTION, the parameter: INTERFACE, ROUTE or CONFIGURATION
         .ADDRESS OPTBUF
 OPTBUF: .BLKB   16
 VERB:   .LONG   4                       ; $VERB: SET or SHOW
         .ADDRESS VERBBUF
 VERBBUF:
         .BLKB   4
-VALUE:  .LONG   0                       ; a parameter, after the command in CMD
-        .LONG   0
+VALUE:  .LONG   0                       ; an address the command gives
+        .ADDRESS VALBUF
+VALBUF: .BLKB   64
 FAB:    $FAB    FNA=CONFIG, FNS=CONFIGLEN
 RAB:    $RAB    FAB=FAB, UBF=CMD+1, USZ=255
 LINE:   .BLKB   256                     ; a line being written, .ASCIC
@@ -55,7 +54,6 @@ CONFIG: .ASCII  "DKB0:[000000]TCPIP$CONFIG.DAT"
 CONFIGLEN = . - CONFIG
 INTERFACE:
         .ASCIC  "INTERFACE"
-PARAMS: .ADDRESS P_ADDRESS, P_MASK, P_GATEWAY ; the parameters, in CMD's order
 P_ADDRESS:
         .ASCID  "ADDRESS"
 P_MASK: .ASCID  "MASK"
@@ -67,99 +65,132 @@ TELNETD_NAME:
         .ASCID  "TCPIP$TELNET"
 
         .PSECT  CODE, EXE, LONG
-        .ENTRY  START, ^M<R2, R3, R4, R5, R6>
+        .ENTRY  START, ^M<R2, R3, R4, R5, R6, R7>
         $ASSIGN_S DEVNAM=BGA0, CHAN=CHAN
         BLBC    R0, 90$
         GETVALUE "OPTION", OPTION, OPTION
         BLBS    R0, 5$
         BRW     BOOT                    ; no command
-5$:     CMPB    OPTBUF, #^A/C/          ; SET CONFIGURATION INTERFACE
-        BEQL    10$
-        GETVALUE "$VERB", VERB, VERB
+5$:     GETVALUE "$VERB", VERB, VERB
         CMPB    VERBBUF+1, #^A/H/       ; SHOW INTERFACE
-        BNEQ    7$
+        BNEQ    10$
         BRW     SHOW
-7$:     BSBW    COMMAND                 ; SET INTERFACE
-        BSBW    SET
-        RET
-10$:    BSBW    COMMAND
-        BSBW    PARSE
+10$:    CLRL    R7                      ; 1: the saved settings
+        CMPB    OPTBUF, #^A/C/          ; SET CONFIGURATION INTERFACE
+        BEQL    15$
+        CMPB    OPTBUF, #^A/R/          ; SET ROUTE /PERMANENT
+        BNEQ    20$
+        PRESENT "PERMANENT"
+        BLBC    R0, 20$
+15$:    INCL    R7
+        BSBW    LOAD
+        BRB     30$
+20$:    BSBW    SENSE
         BLBC    R0, 90$
+30$:    CMPB    OPTBUF, #^A/R/
+        BNEQ    40$
+        MOVAB   P_GATEWAY, R5           ; SET ROUTE: the gateway
+        MOVAB   SETTINGS+8, R6
+        BSBW    TAKE
+        BRB     50$
+40$:    MOVAB   P_ADDRESS, R5           ; the address and the mask
+        MOVAB   SETTINGS, R6
+        BSBW    TAKE
+        BLBC    R0, 90$
+        MOVAB   P_MASK, R5
+        MOVAB   SETTINGS+4, R6
+        BSBW    TAKE
+50$:    BLBC    R0, 90$
+        BLBC    R7, 60$
         BRW     SAVE
+60$:    BSBW    SETCHAR
 90$:    RET
 
-; COMMAND: CMD = INTERFACE address mask gateway, from the parse. Uses
-; R0-R5.
-COMMAND:
-        MOVZBL  INTERFACE, R0
-        MOVB    R0, CMD
-        MOVC3   R0, INTERFACE+1, CMD+1
-        MOVAB   PARAMS, R5
-10$:    MOVZBL  CMD, R0                 ; a blank, then the value
-        INCB    CMD
-        MOVB    #^A/ /, CMD+1[R0]
-        MOVAB   CMD+2[R0], VALUE+4
-        SUBL3   R0, #254, VALUE
+; TAKE: R5 = an entity's name, a descriptor, R6 = a longword. Puts the
+; address the command gives the entity there. R0 = SS$_NORMAL, or
+; SS$_IVADDR for one that isn't an address. Uses R0-R5.
+TAKE:   MOVW    #64, VALUE
         PUSHAW  VALUE
         PUSHAQ  VALUE
-        PUSHL   (R5)+
+        PUSHL   R5
         CALLS   #3, G^CLI$GET_VALUE
-        ADDB2   VALUE, CMD
-        MOVAB   PARAMS+12, R0
-        CMPL    R5, R0
-        BLSSU   10$
-        RSB
+        BLBC    R0, 90$
+        MOVAB   VALBUF, R0
+        MOVZWL  VALUE, R1
+        BSBW    ADDRESS
+        BLBC    R0, 90$
+        MOVL    R3, (R6)
+90$:    RSB
 
 ; BOOT: no command line: unless the interface has an address already,
-; the saved command, if there is one, from the data disk. Then the
+; the saved settings, if there are any, from the data disk. Then the
 ; remote login server, TELNETD, unless it runs already. Without a
 ; network, nothing.
 BOOT:   BSBW    SENSE
         BLBC    R0, 80$
         TSTL    SETTINGS
         BNEQ    50$
-        $OPEN   FAB=FAB
+        BSBW    LOAD
         BLBC    R0, 50$
+        BSBW    SETCHAR
+        BLBC    R0, 90$
+        BSBW    SENSE
+        BLBC    R0, 90$
+        MOVAB   SETMSG, R1
+        BSBW    SHOWLINE
+50$:    $CREPRC_S IMAGE=TELNETD, PRCNAM=TELNETD_NAME, BASPRI=#4
+80$:    MOVL    #SS$_NORMAL, R0
+90$:    RET
+
+; LOAD: puts the saved settings, INTERFACE address mask gateway in the
+; data disk's file, in SETTINGS, or zeros if there are none. R0 = RMS's
+; status if it can't read them, or PARSE's. Uses R0-R6.
+LOAD:   CLRQ    SETTINGS
+        CLRQ    SETTINGS+8
+        $OPEN   FAB=FAB
+        BLBC    R0, 90$
         $CONNECT RAB=RAB
         BLBC    R0, 40$
         $GET    RAB=RAB
         BLBC    R0, 40$
         MOVB    RAB+RAB$W_RSZ, CMD
-        BSBW    SET
-        BLBC    R0, 40$
-        BSBW    SENSE
-        BLBC    R0, 40$
-        MOVAB   SETMSG, R1
-        BSBW    SHOWLINE
-40$:    MOVL    R0, R2
+40$:    PUSHL   R0
         $CLOSE  FAB=FAB
-        BLBC    R2, 90$
-50$:    $CREPRC_S IMAGE=TELNETD, PRCNAM=TELNETD_NAME, BASPRI=#4
-80$:    MOVL    #SS$_NORMAL, R0
-        RET
-90$:    MOVL    R2, R0
-        RET
+        MOVL    (SP)+, R0
+        BLBC    R0, 90$
+        BSBW    PARSE
+90$:    RSB
 
-; SAVE: writes CMD in a new version of the saved command. R0 = RMS's
-; status if it can't.
-SAVE:   MOVB    #FAB$C_VAR, FAB+FAB$B_RFM
+; SAVE: writes INTERFACE and the settings' address, mask and gateway in a
+; new version of the saved file. R0 = RMS's status if it can't.
+SAVE:   MOVZBL  INTERFACE, R2
+        MOVB    R2, LINE
+        MOVC3   R2, INTERFACE+1, LINE+1
+        MOVAB   SETTINGS, R6
+10$:    MOVZBL  LINE, R0                ; a blank, then the address
+        MOVB    #^A/ /, LINE+1[R0]
+        INCB    LINE
+        MOVL    (R6)+, R3
+        BSBW    ADDTEXT
+        MOVAB   SETTINGS+12, R0
+        CMPL    R6, R0
+        BLSSU   10$
+        MOVB    #FAB$C_VAR, FAB+FAB$B_RFM
         MOVB    #FAB$M_CR, FAB+FAB$B_RAT
         $CREATE FAB=FAB
         BLBC    R0, 80$
         $CONNECT RAB=RAB
         BLBC    R0, 70$
-        MOVAB   CMD+1, RAB+RAB$L_RBF
-        MOVZBW  CMD, RAB+RAB$W_RSZ
+        MOVAB   LINE+1, RAB+RAB$L_RBF
+        MOVZBW  LINE, RAB+RAB$W_RSZ
         $PUT    RAB=RAB
 70$:    MOVL    R0, R2
         $CLOSE  FAB=FAB
         MOVL    R2, R0
 80$:    RET
 
-; SET: CMD = INTERFACE address mask gateway. Sets the interface so. R0 =
-; a status. Uses R0-R6.
-SET:    BSBB    PARSE
-        BLBC    R0, 90$
+; SETCHAR: sets the interface as SETTINGS says. R0 = a status.
+SETCHAR:
         $QIOW_S CHAN=CHAN, FUNC=#IO$_SETCHAR, IOSB=IOSB, P1=SETTINGS
         BLBC    R0, 90$
         MOVZWL  IOSB, R0

@@ -171,7 +171,7 @@ Rule that keeps this true: no seL4 or lwIP idiom appears above the port. If the 
 
 - [x] Confirm the template-device model (`TCPIP0` cloning one unit per connection) versus one unit per socket opened explicitly. Template, named `BGA0:`, cloning `BGnn` units ([ADR-0016](../adr/0016-tcpip-component-and-bga0.md)).
 - [x] Ring sizes, entry layout and data buffer pool size. Two rings of 32 messages of 32 bytes, 32 tags, 16 buffers of 4 KB ([DESIGN-0003](../design/0003-tcpip-port.md)).
-- [x] Name and syntax of the DCL configuration commands. `SET INTERFACE address mask gateway`, `SHOW INTERFACE`, and `SET CONFIGURATION INTERFACE` to save them.
+- [x] Name and syntax of the DCL configuration commands. `SET INTERFACE address mask`, `SET ROUTE /DEFAULT /GATEWAY=address`, `SHOW INTERFACE`, and `SET CONFIGURATION INTERFACE` and `SET ROUTE /PERMANENT` to save them.
 - [x] UDP in step 4 or later. Later: lwIP has it, the port has no messages for it yet.
 - [ ] Which application-layer protocols to use: Telnet or something VMS-flavoured for SET HOST; what to use for remote file access, mail and chat. SET HOST is line mode over TCP port 23, a step short of Telnet; the rest is open.
 

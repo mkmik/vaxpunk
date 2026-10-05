@@ -33,8 +33,9 @@
 ;               /MOUNTED those with a volume mounted
 ;   SHOW PROCESS, SHOW SYSTEM
 ;               run SHOW.EXE
-;   SET INTERFACE address mask gateway, SHOW INTERFACE,
-;   SET CONFIGURATION INTERFACE address mask gateway
+;   SET INTERFACE address mask, SHOW INTERFACE,
+;   SET CONFIGURATION INTERFACE address mask,
+;   SET ROUTE /DEFAULT /GATEWAY=address [/PERMANENT]
 ;               run TCPIP.EXE
 ;   SET HOST address
 ;               runs RTPAD.EXE, a remote login to address
