@@ -1,19 +1,27 @@
-        .TITLE  SET     Sets the process's privileges
-        .IDENT  /V0.1/
+        .TITLE  SET     Sets the process's privileges, a file's protection or owner
+        .IDENT  /V0.2/
 ;
-; DCL's SET PROCESS/PRIVILEGES=(priv[,...]) runs this, as VMS's DCL runs
-; SET.EXE. Each priv enables that privilege, NOpriv disables it, and ALL
-; and NOALL every one, with $SETPRV, permanently, so they stay when the
-; image exits. One the process isn't authorized for stays off, with
-; %SYSTEM-S-NOTALLPRIV; a name it doesn't know is %DCL-W-IVKEYW, and
-; ends the list there.
+; DCL runs this, as VMS's DCL runs SET.EXE, for
+; - SET PROCESS/PRIVILEGES=(priv[,...]). Each priv enables that
+;   privilege, NOpriv disables it, and ALL and NOALL every one, with
+;   $SETPRV, permanently, so they stay when the image exits. One the
+;   process isn't authorized for stays off, with %SYSTEM-S-NOTALLPRIV; a
+;   name it doesn't know is %DCL-W-IVKEYW, and ends the list there.
+; - SET PROTECTION=(code[,...]) file, which gives the file's categories
+;   the codes' access (lib/protect.mar), and SET FILE/OWNER_UIC=uic file,
+;   which gives it that owner. It $OPENs the file with a protection XAB,
+;   which gets its owner and protection, changes them in the XAB, and
+;   $CLOSE gives them to the file.
+; ponytail: one file, no wildcards, no /LOG.
 ;
         .LIBRARY "starlet.mlb"
         .LIBRARY "sysexe.mlb"
         $SSDEF
         $CLIMSGDEF
+        $FABDEF
+        $XABPRODEF
 
-        .EXTERNAL PRV_NAMES, LIB$SIGNAL, PUT_LINE
+        .EXTERNAL PRV_NAMES, LIB$SIGNAL, PUT_LINE, GET_PROT, GET_UIC
 
 INHIB = ^X10000000                      ; STS$M_INHIB_MSG
 
@@ -27,9 +35,23 @@ ALL:    .LONG   ^XFFFFFFFF, ^X7F        ; every privilege
 MASK:   .BLKQ   1                       ; $SETPRV's
 STATUS: .LONG   SS$_NORMAL              ; or SS$_NOTALLPRIV once one stays off
 LINE:   .BLKB   40                      ; " \name\", .ASCIC
+FAB:    $FAB    FNA=SPEC, XAB=XAB
+XAB:    $XABPRO
+SPECDSC:                                ; FILE, the parameter
+        .LONG   255
+        .ADDRESS SPEC
+SPEC:   .BLKB   255
+        .ALIGN  LONG
+PROTECTION:                             ; the entities GET_PROT and GET_UIC take
+        .ASCID  "OPTION.PROTECTION"
+OWNER_UIC:
+        .ASCID  "OWNER_UIC"
 
         .PSECT  CODE, EXE, LONG
         .ENTRY  START, ^M<R2, R3, R4, R5, R6>
+        PRESENT "OPTION.PROCESS"
+        BLBS    R0, 10$
+        BRW     FILE
 10$:    GETVALUE "PRIVILEGES", DESC, LEN
         BLBC    R0, 60$                 ; past the last
         MOVAB   NAME, R5
@@ -70,6 +92,32 @@ LINE:   .BLKB   40                      ; " \name\", .ASCIC
         PUSHAB  LINE
         CALLS   #1, G^PUT_LINE
         MOVL    #<CLI$_IVKEYW!INHIB>, R0
+90$:    RET
+
+; FILE: SET PROTECTION or SET FILE: opens the file, changes the owner or
+; protection $OPEN put in the XAB, and closes it. R0 = the first failure,
+; or $CLOSE's status.
+FILE:   GETVALUE "FILE", SPECDSC, SPECDSC
+        BLBC    R0, 90$
+        MOVB    SPECDSC, FAB+FAB$B_FNS
+        $OPEN   FAB=FAB
+        BLBC    R0, 90$
+        PRESENT "OPTION.PROTECTION"
+        BLBC    R0, 10$
+        PUSHAW  XAB+XAB$W_PRO
+        PUSHAQ  PROTECTION
+        CALLS   #2, G^GET_PROT
+        BRB     20$
+10$:    PUSHAL  XAB+XAB$L_UIC
+        PUSHAQ  OWNER_UIC
+        CALLS   #2, G^GET_UIC
+20$:    MOVL    R0, R2
+        BLBS    R0, 30$
+        CLRL    FAB+FAB$L_XAB           ; closed as it is
+30$:    $CLOSE  FAB=FAB
+        BLBC    R2, 80$
+        RET
+80$:    MOVL    R2, R0
 90$:    RET
 
 ; LOOKUP: R5 = a privilege's name, R6 = its length. Puts its bit in MASK,

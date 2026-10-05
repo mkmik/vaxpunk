@@ -24,7 +24,18 @@
 ; last block and its end of file. An image's files close when it exits,
 ; those its command interpreter opened when the process does.
 ;
-; ponytail: the services run in kernel mode holding the file system's
+; Each file and volume has an owner and a protection mask, which
+; FIL$CHKPRO checks as VMS's XQP does: a lookup takes execute access to
+; each directory it looks in, read for a wildcard; $OPEN takes read
+; access to the file, $CREATE write to its directory, $ERASE delete to
+; the file and write to its directory, else RMS$_PRV. A protection XAB
+; in the FAB's chain gets the file's owner and protection from $OPEN,
+; and gives them to it at $CLOSE, which takes control access, and the
+; system's for a new owner.
+;
+; ponytail: $CREATE takes no XAB; SET PROTECTION, which opens the file,
+; needs read access to it, where VMS's asks the XQP with IO$_MODIFY. The
+; services run in kernel mode holding the file system's
 ; lock, FIL$LOCK, which keeps its buffers and RMS's to one process; VMS's
 ; RMS runs in executive mode, in the process's own P1. One stream per
 ; file; $OPEN only reads and $PUT only appends to a file $CREATE made; no
@@ -45,12 +56,14 @@
         $NAMDEF
         $VCBDEF
         $STATEDEF
+        $ARMDEF
+        $XABPRODEF
 
         .EXTERNAL SCH$GL_CURPCB, EXE$ALONONPAGED, EXE$DEANONPGDSIZ, EXE$PROBER_DSC
         .EXTERNAL FIL$READHDR, FIL$READVBN, FIL$SEARCHDIR, FIL$EOF, FIL$ISDIR
         .EXTERNAL FIL$SELECT, FIL$CREHDR, FIL$WRITEHDR, FIL$SETNAME, FIL$EXTEND
         .EXTERNAL FIL$ENTER, FIL$REMOVE, FIL$DELHDR, FIL$WRITEVBN, FIL$MKDIR
-        .EXTERNAL FIL$LOCK, FIL$UNLOCK
+        .EXTERNAL FIL$LOCK, FIL$UNLOCK, FIL$CHKHDR
         .EXTERNAL F11$GW_FID, F11$GL_VCB, F11$AB_DIRBLK, LNM$TRNLOG, SCH$GL_PCBVEC
 
 BLOCK = 512
@@ -79,8 +92,12 @@ FAT$W_FFBYTE = 32
 FAT$B_VFCSIZE = 35
 FAT$W_MAXREC = 36
 FH2$W_FID = 8
+FH2$W_FID_SEQ = 10
 FH2$B_FID_NMX = 13
+FH2$L_FILEOWNER = 60
+FH2$W_FILEPROT = 64
 FH2$W_BACKLINK = 66
+MAXXAB = 16                             ; XABs in a chain, at most
 
         .PSECT  EXEC$DATA, NOEXE, WRT, QUAD
 ; A specification split into its five parts, device, directory, name,
@@ -117,6 +134,7 @@ SYSDISK:                                ; the process's default directory, .ASCI
         .ASCII  "SYS$DISK:"
         .BLKB   63
 HDRBUF: .BLKB   BLOCK                   ; the header of a file $ERASE deletes
+XABPRO: .LONG   0                       ; the FAB's protection XAB, or 0
 MFDNAME:
         .ASCII  "000000"
 DOTDIR: .ASCII  ".DIR"
@@ -546,8 +564,9 @@ CHARS:  CLRL    R4
 ; header into RMS$AB_DIRHDR and its file ID into DIRFID. With CREDIR set,
 ; makes each one that isn't there, counting them in CREDIR. R0 =
 ; RMS$_NORMAL, RMS$_DNF, RMS$_DIR if a name isn't a directory, RMS$_WLK
-; if one can't be made on the volume, or the file system's error. Uses
-; R0-R11.
+; if one can't be made on the volume, RMS$_PRV without execute access to
+; a directory it looks in, or write access to one it makes one in, or
+; the file system's error. Uses R0-R11.
 DIRWALK:
         MOVL    #MFD, R0
         MOVAB   RMS$AB_DIRHDR, R1
@@ -586,6 +605,10 @@ DIRWALK:
         MOVAB   DIRPAT, R6
         MOVL    #1, R8
         CLRL    R9
+        MOVL    #ARM$M_EXECUTE, R0
+        MOVAB   RMS$AB_DIRHDR, R1
+        BSBW    CHKACC
+        BLBC    R0, 99$
         MOVAB   RMS$AB_DIRHDR, R3
         PUSHL   R4
         BSBW    FIL$SEARCHDIR
@@ -597,6 +620,10 @@ DIRWALK:
         BEQL    90$
         MOVL    F11$GL_VCB, R0          ; not there: make it
         BBC     #VCB$V_WRITE, VCB$L_STATUS(R0), 97$
+        MOVL    #ARM$M_WRITE, R0
+        MOVAB   RMS$AB_DIRHDR, R1
+        BSBW    CHKACC
+        BLBC    R0, 99$
         PUSHL   R4
         BSBW    FIL$MKDIR
         BLBC    R0, 98$
@@ -629,7 +656,8 @@ DIRWALK:
 ; RMS$FIND: after RMS$PARSE, R1 = a buffer. Finds the one file the
 ; expanded specification names, its highest version unless it gives one,
 ; makes its resultant specification and reads its header into the
-; buffer. R0 = RMS$_NORMAL, RMS$_WLD, RMS$_FNF, or the disk's error.
+; buffer. R0 = RMS$_NORMAL, RMS$_WLD, RMS$_FNF, RMS$_PRV, or the disk's
+; error.
 ; Holding FIL$LOCK. Uses R0-R9.
 RMS$FIND::
         TSTL    WILD
@@ -650,9 +678,17 @@ RMS$FIND::
 
 ; SEARCH: after RMS$PARSE, R9 = how many matches to skip. Finds the next
 ; file the expanded specification names, and makes its resultant
-; specification. R5 = its file number, R0 = SS$_NORMAL, SS$_NOMOREFILES
-; or the disk's error. Uses R0-R8.
-SEARCH: MOVAB   RMS$AB_DIRHDR, R3
+; specification. R5 = its file number, R0 = SS$_NORMAL, SS$_NOMOREFILES,
+; RMS$_PRV without execute access to the directory, or read access for a
+; wildcard, or the disk's error. Uses R0-R8.
+SEARCH: MOVL    #ARM$M_EXECUTE, R0
+        TSTL    WILD
+        BEQL    5$
+        MOVL    #ARM$M_READ, R0
+5$:     MOVAB   RMS$AB_DIRHDR, R1
+        BSBW    CHKACC
+        BLBC    R0, 90$
+        MOVAB   RMS$AB_DIRHDR, R3
         MOVL    FIELDS+16, R6           ; NAME.TYPE
         ADDL3   FIELDS+20, FIELDS+28, R7
         MOVL    RMS$L_VERSION, R8
@@ -779,6 +815,38 @@ PUTRES: MOVZBL  NAM$B_RSS(R11), R4
         MOVW    DIRFID+4, NAM$W_DID+4(R11)
         MOVL    #RMS$_NORMAL, R0
 90$:    RSB
+
+; CHKACC: R0 = the access wanted, $ARMDEF's bits, R1 = a file header on
+; F11$GL_VCB's volume. R0 = RMS$_NORMAL, or RMS$_PRV if the current
+; process may not (FIL$CHKHDR). Keeps every other register.
+CHKACC: BSBW    FIL$CHKHDR
+        BLBC    R0, 10$
+        MOVL    #RMS$_NORMAL, R0
+        RSB
+10$:    MOVL    #RMS$_PRV, R0
+        RSB
+
+; FINDXAB: R10 = a FAB. Finds the protection XAB in its chain: XABPRO =
+; its address, or 0. R0 = RMS$_NORMAL, or SS$_ACCVIO if the caller can't
+; read the chain or write the XAB. Uses R0-R2.
+FINDXAB:
+        CLRL    XABPRO
+        MOVL    FAB$L_XAB(R10), R1
+        MOVL    #MAXXAB, R2
+10$:    TSTL    R1
+        BEQL    70$
+        IFNORD  #8, (R1), 80$
+        CMPB    XAB$B_COD(R1), #XAB$C_PRO
+        BEQL    20$
+        MOVL    XAB$L_NXT(R1), R1
+        SOBGTR  R2, 10$
+        BRB     70$
+20$:    IFNOWRT #XAB$C_PROLEN, (R1), 80$
+        MOVL    R1, XABPRO
+70$:    MOVL    #RMS$_NORMAL, R0
+        RSB
+80$:    MOVL    #SS$_ACCVIO, R0
+        RSB
 
 ; FABNAM: AP = a service's arguments, a FAB first. R10 = the FAB, R11 =
 ; its NAM block, or 0. R0 = RMS$_NORMAL; RMS$_FAB if the caller can't
@@ -934,12 +1002,15 @@ L:      BSBW    FIL$UNLOCK
 
 ; $OPEN fab: opens the file the FAB names, for reading: puts its IFI in
 ; the FAB, with its organization, record format and attributes, maximum
-; record size, allocation and VFC header size, and in its NAM block, if
-; it has one, its resultant string and file ID. RMS$_WLK if the FAB asks
-; to write: the volume is read only.
+; record size, allocation and VFC header size, in its NAM block, if it
+; has one, its resultant string and file ID, and in its protection XAB,
+; if it has one, its owner and protection. RMS$_WLK if the FAB asks to
+; write: the volume is read only. RMS$_PRV without read access to it.
         .ENTRY  EXE$OPEN, ^M<R2, R3, R4, R5, R6, R7, R8, R9, R10, R11>
         BSBW    FIL$LOCK
         BSBW    FABNAM
+        BLBC    R0, 90$
+        BSBW    FINDXAB
         BLBC    R0, 90$
         MOVL    #RMS$_WLK, R0
         BITB    #FAB$M_PUT!FAB$M_DEL!FAB$M_UPD!FAB$M_TRN, FAB$B_FAC(R10)
@@ -952,6 +1023,10 @@ L:      BSBW    FIL$UNLOCK
         MOVAB   IFB$AB_HDR(R7), R1
         BSBW    RMS$FIND
         POPR    #^M<R7, R8, R9>
+        BLBC    R0, 80$
+        MOVL    #ARM$M_READ, R0
+        MOVAB   IFB$AB_HDR(R7), R1
+        BSBW    CHKACC
         BLBC    R0, 80$
         TSTL    R11
         BEQL    30$
@@ -971,7 +1046,11 @@ L:      BSBW    FIL$UNLOCK
         ASHL    #16, R0, R0
         MOVW    IFB$AB_HDR+FAT$L_HIBLK+2(R7), R0
         MOVL    R0, FAB$L_ALQ(R10)
-        MOVL    #RMS$_NORMAL, R0
+        MOVL    XABPRO, R1
+        BEQL    40$
+        MOVW    IFB$AB_HDR+FH2$W_FILEPROT(R7), XAB$W_PRO(R1)
+        MOVL    IFB$AB_HDR+FH2$L_FILEOWNER(R7), XAB$L_UIC(R1)
+40$:    MOVL    #RMS$_NORMAL, R0
         BRB     90$
 80$:    PUSHL   R0
         MOVL    R7, R0
@@ -1061,17 +1140,75 @@ CLOSEIFI:
         MOVL    (SP)+, R0
         RSB
 
-; $CLOSE fab: closes the file $OPEN opened.
+; $CLOSE fab: closes the file $OPEN opened, which first gets the owner
+; and protection of the FAB's protection XAB, if it has one (SETPRO).
+; The file is closed even if that fails, with SETPRO's status.
         .ENTRY  EXE$CLOSE, ^M<R2, R3, R4, R5, R6, R7, R8, R9, R10, R11>
         BSBW    FIL$LOCK
         BSBW    FABNAM
         BLBC    R0, 90$
         MOVZWL  FAB$W_IFI(R10), R8
-        BSBB    GETIFAB
+        BSBW    GETIFAB
         BLBC    R0, 90$
-        BSBB    CLOSEIFI
+        BSBW    SETPRO
+        MOVL    R0, R6
+        BSBW    CLOSEIFI
         CLRW    FAB$W_IFI(R10)
+        BLBS    R6, 90$
+        MOVL    R6, R0
 90$:    FABDONE
+
+; SETPRO: R7 = an IFAB, R10 = its FAB. If the FAB has a protection XAB
+; whose protection, or owner, unless it is 0, isn't the file's, gives the
+; file those, in its header on the disk and in the IFAB's: a new
+; protection takes control access, a new owner the system's. R0 =
+; RMS$_NORMAL, RMS$_PRV, RMS$_WLK on a volume that can't be written,
+; SS$_ACCVIO if the caller can't read the XAB, or the file system's error.
+; Holding FIL$LOCK. Uses R0-R5.
+SETPRO: BSBW    FINDXAB
+        BLBC    R0, 90$
+        MOVL    XABPRO, R4
+        BEQL    80$
+        MOVL    IFB$L_VCB(R7), F11$GL_VCB
+        CLRL    R5                      ; the access it takes
+        CMPW    XAB$W_PRO(R4), IFB$AB_HDR+FH2$W_FILEPROT(R7)
+        BEQL    10$
+        BISL2   #ARM$M_CONTROL, R5
+10$:    MOVL    XAB$L_UIC(R4), R0
+        BNEQ    15$
+        MOVL    IFB$AB_HDR+FH2$L_FILEOWNER(R7), R0
+15$:    CMPL    R0, IFB$AB_HDR+FH2$L_FILEOWNER(R7)
+        BEQL    20$
+        BISL2   #ARM$M_SYSTEM, R5
+20$:    TSTL    R5
+        BEQL    80$
+        MOVL    F11$GL_VCB, R1
+        MOVL    #RMS$_WLK, R0
+        BBC     #VCB$V_WRITE, VCB$L_STATUS(R1), 90$
+        MOVZBL  IFB$AB_HDR+FH2$B_FID_NMX(R7), R0        ; the header as it is now
+        ASHL    #16, R0, R0
+        MOVW    IFB$AB_HDR+FH2$W_FID(R7), R0
+        MOVAB   HDRBUF, R1
+        BSBW    FIL$READHDR
+        BLBC    R0, 90$
+        MOVL    #RMS$_FNF, R0           ; deleted since it was opened
+        CMPW    HDRBUF+FH2$W_FID_SEQ, IFB$AB_HDR+FH2$W_FID_SEQ(R7)
+        BNEQ    90$
+        MOVL    R5, R0
+        MOVAB   HDRBUF, R1
+        BSBW    CHKACC
+        BLBC    R0, 90$
+        MOVW    XAB$W_PRO(R4), HDRBUF+FH2$W_FILEPROT
+        MOVW    XAB$W_PRO(R4), IFB$AB_HDR+FH2$W_FILEPROT(R7)
+        MOVL    XAB$L_UIC(R4), R0
+        BEQL    30$
+        MOVL    R0, HDRBUF+FH2$L_FILEOWNER
+        MOVL    R0, IFB$AB_HDR+FH2$L_FILEOWNER(R7)
+30$:    MOVAB   HDRBUF, R1
+        BSBW    FIL$WRITEHDR
+        BLBC    R0, 90$
+80$:    MOVL    #RMS$_NORMAL, R0
+90$:    RSB
 
 ; RABCHK: AP = a service's arguments, a RAB first. R10 = the RAB, R0 =
 ; RMS$_NORMAL, or RMS$_RAB if the caller can't write a RAB there.
@@ -1182,8 +1319,10 @@ RABCHK: MOVL    4(AP), R10
 ; header size and allocation, FAB$L_ALQ blocks, and opens it for $PUT:
 ; its IFI goes in the FAB, and in its NAM block, if it has one, its
 ; resultant string and file ID. Its version is one above the highest
-; there is, unless the specification gives one. RMS$_WLD for a wildcard,
-; RMS$_WLK on a volume that can't be written, RMS$_FEX if that version is
+; there is, unless the specification gives one. The file is the current
+; process's, with the default protection (f11wrt.mar). RMS$_WLD for a
+; wildcard, RMS$_WLK on a volume that can't be written, RMS$_PRV without
+; write access to the directory, RMS$_FEX if that version is
 ; there, RMS$_FUL if the volume is full, RMS$_CRE for another error from
 ; the file system, which goes in FAB$L_STV.
         .ENTRY  EXE$CREATE, ^M<R2, R3, R4, R5, R6, R7, R8, R9, R10, R11>
@@ -1198,6 +1337,10 @@ RABCHK: MOVL    4(AP), R10
         MOVL    F11$GL_VCB, R1
         MOVL    #RMS$_WLK, R0
         BBC     #VCB$V_WRITE, VCB$L_STATUS(R1), 90$
+        MOVL    #ARM$M_WRITE, R0
+        MOVAB   RMS$AB_DIRHDR, R1
+        BSBW    CHKACC
+        BLBC    R0, 90$
         BSBW    NEWIFAB
         BLBC    R0, 90$
         MOVAB   IFB$AB_HDR(R7), R1
@@ -1281,7 +1424,8 @@ CRENTER:
 ; string names, which $SEARCH found, and the NAM block's next $SEARCH
 ; finds the file after it. RMS$_WLD for a wildcard, RMS$_FNF if there is
 ; no such file, RMS$_WLK on a volume that can't be written, RMS$_PRV for
-; the volume's own files, RMS$_MKD if the file system fails, with its
+; the volume's own files, or without delete access to the file and write
+; access to its directory, RMS$_MKD if the file system fails, with its
 ; error in FAB$L_STV: SS$_DIRNOTEMPTY for a directory with files in it.
 ; ponytail: an open file is deleted all the same.
         .ENTRY  EXE$ERASE, ^M<R2, R3, R4, R5, R6, R7, R8, R9, R10, R11>
@@ -1317,7 +1461,15 @@ CRENTER:
         BNEQ    20$
         CMPW    HDRBUF+FH2$W_FID, #RESFILES
         BLEQU   90$
-20$:    MOVAB   HDRBUF, R1              ; a directory must be empty
+20$:    MOVL    #ARM$M_DELETE, R0
+        MOVAB   HDRBUF, R1
+        BSBW    CHKACC
+        BLBC    R0, 90$
+        MOVL    #ARM$M_WRITE, R0
+        MOVAB   RMS$AB_DIRHDR, R1
+        BSBW    CHKACC
+        BLBC    R0, 90$
+        MOVAB   HDRBUF, R1              ; a directory must be empty
         BSBW    FIL$ISDIR
         BLBC    R0, 25$
         MOVL    #1, R0
@@ -1530,11 +1682,13 @@ GETBYTE:
 ; directory, and each one above it that isn't there either: an empty
 ; NAME.DIR;1 in the one above it. SS$_CREATED if it made one, SS$_NORMAL
 ; if they were all there, SS$_ACCVIO if the caller can't read devdirspec,
-; RMS$_WLK on a volume that can't be written, or RMS$PARSE's or the file
-; system's error, with the ones above made.
+; RMS$_WLK on a volume that can't be written, RMS$_PRV without write
+; access to the one above, or RMS$PARSE's or the file system's error,
+; with the ones above made. Each is the current process's, with the one
+; above's protection, but delete (FIL$MKDIR).
 ; ponytail: a service; VMS's LIB$CREATE_DIR asks the XQP with $QIO
 ; IO$_CREATE, and there are no XQP functions on disk channels. No owner,
-; protection or version limit.
+; protection or version limit arguments.
         .ENTRY  EXE$CREATE_DIR, ^M<R2, R3, R4, R5, R6, R7, R8, R9, R10, R11>
         MOVL    4(AP), R1
         BSBW    EXE$PROBER_DSC

@@ -19,7 +19,8 @@ Limine then jumps to the shim.
 QEMU has a second disk, the system disk (`out/sysdisk.img`). It is a
 Files-11 ODS-2 volume, the file system VMS uses, which
 [roottask/build.rs](../roottask/build.rs) makes at build time: the VMS
-executable files in `[SYSEXE]` and a text file in `[SYSMGR]`. The firmware
+executable files in `[SYSEXE]` and a text file in `[SYSMGR]`, owned by
+SYSTEM's UIC, `[1,4]`, which every user may read and run. The firmware
 and Limine leave it alone; the root task reads it later.
 
 ## 2. The shim
@@ -200,11 +201,17 @@ interpreter. It is linked high in P1, which tells the executive it is one
   long the system has been up, then `$GETJPI` with a wildcard for a line
   per process: its PID, name, state, priority and image. `SET
   PROCESS/PRIVILEGES` runs `SET.EXE`, which enables or disables them with
-  `$SETPRV`, and `SHOW PROCESS/PRIVILEGES` lists them. `HELP` runs
+  `$SETPRV`, and `SHOW PROCESS/PRIVILEGES` lists them. `SET
+  PROTECTION=(W:R) file` and `SET FILE/OWNER_UIC=[200,1] file` run
+  `SET.EXE` too, which changes the protection and the owner in the
+  file's header, and `DIRECTORY/OWNER/PROTECTION` shows them. `HELP` runs
   `HELP.EXE`, which lists the commands from DCL's command tables, and
   `LOGOUT` deletes SYSTEM.
 - `INITIALIZE MDA0: label` runs `INIT.EXE`, whose `$INIT_VOL` makes the
-  ramdisk, `MDA0:`, 512 KB of memory, and writes an empty volume on it.
+  ramdisk, `MDA0:`, 512 KB of memory, and writes an empty volume on it,
+  SYSTEM's, `[1,4]`, unless `/OWNER_UIC` says otherwise. Each file made
+  there is its maker's, which may do anything with it; its group may read
+  and run it, the world nothing, unless `SET PROTECTION` says otherwise.
   `MOUNT MDA0: label` runs `MOUNT.EXE`, whose `$MOUNT` mounts it and prints
   `%MOUNT-I-MOUNTED, label mounted on _MDA0:`. Then `COPY` makes files
   there (`COPY WELCOME.TXT MDA0:[000000]`, from `[SYSMGR]`, the default), `DELETE` deletes them
@@ -329,6 +336,13 @@ executive feature:
 - STARTUP prints `STARTUP: done` and exits, and DCL prompts again while
   the others finish.
 
+`RUN PROTTEST` starts **PROTTEST**, which makes **PROTCHILD**, the same
+image in a process of UIC `[200,1]`, with no privileges, and waits until
+it ends. PROTCHILD reads `DKB0:[000000]DATA.TXT`, then tries to give it
+another owner, delete it and make a file next to it, which it may not:
+PROTTEST says so, or returns the status that stopped PROTCHILD,
+`%RMS-E-PRV` for a file whose world may not read it.
+
 `RUN SPIN` starts **SPIN**, which computes forever with a value in each
 register, and checks them, so CTRL/Y and `CONTINUE` can be tried on it.
 `RUN CTRLC` starts **CTRLC**, which asks for a CTRL/C AST and waits for a
@@ -351,7 +365,7 @@ deletes them, the first with `DELETE/LOG`, and lists again, runs
 **CLITEST**, which checks the command parser on commands of its own,
 a `DIR/BRIEFLY`, a qualifier `DIRECTORY` doesn't have, `HELP SHOW`, and
 a `DEFINE/SYSTEM` it looks up with `SHOW LOGICAL/SYSTEM`, then
-initializes and mounts `DKB0:`, made afresh, which `SYSTARTUP_VMS.COM`
+initializes, with `/PROTECTION`, and mounts `DKB0:`, made afresh, which `SYSTARTUP_VMS.COM`
 couldn't mount at boot, copies a file there and lists
 it, makes `[SUB.DEEP]` there with `CREATE/DIRECTORY` and copies a file
 into it, runs `SHOW DEVICES`, tries to dismount `DKA0:`, dismounts
@@ -361,7 +375,11 @@ CTRLC and types CTRL/C, types CTRL/Y at the prompt, stops SPIN, with a
 CTRL/C, and SLEEPER with CTRL/Y and continues them, and EDIT while it
 reads, so that DCL reads the next commands, takes CMKRNL and SYSNAM away
 with `SET PROCESS/PRIVILEGES`, so that `SHOW LOGICAL` and `DEFINE/SYSTEM`
-say `%SYSTEM-F-NOPRIV`, gives them back, and looks for the
+say `%SYSTEM-F-NOPRIV`, gives them back, runs PROTTEST, which can't read
+`DATA.TXT` on `DKB0:` until `SET PROTECTION=(W:R)`, then can as its
+owner after `SET FILE/OWNER_UIC=[200,1]` and `SET PROTECTION=(W)`, with
+`DIRECTORY/OWNER/PROTECTION` after each, and can't once `DKB0:` is
+mounted `/PROTECTION=(W)`, and looks for the
 success lines in `out/serial.log`. Once QEMU is gone, `ods-image` checks
 the data disk's volume and finds the files on it, `[SUB.DEEP]`'s too.
 

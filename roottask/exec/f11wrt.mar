@@ -8,8 +8,11 @@
 ; them, and an entry in a directory (ods/docs/directory.md); deleting it
 ; gives all three back. FIL$MKDIR makes a directory the same way. FIL$INIT, which $INIT_VOL calls, writes an empty
 ; volume, laid out as INITIALIZE does (ods/docs/initialize.md). RMS
-; (rms.mar) calls these holding FIL$LOCK, as it calls f11.mar's.
-; ponytail: a cluster is a block, and the bitmaps are a block each, so a
+; (rms.mar) calls these holding FIL$LOCK, as it calls f11.mar's. A new
+; file is its creator's, with VMS's default protection, FILEPROT; a new
+; directory takes its parent's, which no one may delete.
+; ponytail: no process default protection, SET PROTECTION/DEFAULT, nor a
+; new version given its predecessor's. A cluster is a block, and the bitmaps are a block each, so a
 ; volume has at most 4096 blocks and 4096 files; the index file isn't
 ; extended, so a volume has the headers INITIALIZE made room for; map
 ; pointers are format 2, and a directory is rewritten whole on each
@@ -22,6 +25,7 @@
         $VCBDEF
         $PCBDEF
         $PRVDEF
+        $INITDEF
 
         .EXTERNAL F11$GL_VCB, F11$AB_DIRBLK, EXE$GQ_SYSTIME, MD$GL_BLOCKS
         .EXTERNAL FIL$READLBLK, FIL$WRITELBLK, FIL$READVBN, FIL$WRITEVBN
@@ -76,8 +80,11 @@ HEADERS = 64
 HDRLBN = 3
 SCBLBN = HDRLBN+HEADERS
 MFDLBN = SCBLBN+2
-OWNER = ^X00010004                      ; [1,4]
 FILEPROT = ^XFA00                       ; S:RWED,O:RWED,G:RE,W:
+MFDPROT = ^XAA88                        ; S:RWE,O:RWE,G:RE,W:RE
+HM2$L_VOLOWNER = 44
+HM2$W_PROTECT = 52
+HM2$T_FORMAT = 496
 RECSIZE = 20                            ; a RESFILES row
 
         .PSECT  EXEC$DATA, NOEXE, WRT, QUAD
@@ -96,6 +103,10 @@ DU_OUT: .LONG   0, 0                    ; the directory being made: pool, its si
 DU_POS: .LONG   0                       ; the next byte of it
 LABEL:  .BLKB   12                      ; FIL$INIT's label, padded with blanks
 VOLSIZE:                                ; and the volume's size in blocks
+        .LONG   0
+VOLOWNER:                               ; its owner and protection
+        .LONG   0
+VOLPROT:
         .LONG   0
 ; The reserved files: name, record type and attributes, record size,
 ; characteristics, first LBN and blocks.
@@ -189,7 +200,8 @@ BITMAP: PUSHR   #^M<R1, R2>
 
 ; EMPTYHDR: R1 = a buffer, R2 = a file number, R3 = a sequence number.
 ; Makes an empty header there for the file: no blocks, no name, owned by
-; [1,4], in the MFD, made and revised now. Uses R0-R5.
+; the current process's UIC, with FILEPROT, in the MFD, made and revised
+; now. Uses R0-R5.
 EMPTYHDR:
         PUSHR   #^M<R1, R2, R3>
         MOVC5   #0, (R1), #0, #BLOCK, (R1)
@@ -203,7 +215,8 @@ EMPTYHDR:
         MOVW    R3, FH2$W_FID_SEQ(R1)
         ASHL    #-16, R2, R2
         MOVB    R2, FH2$B_FID_NMX(R1)
-        MOVL    #OWNER, FH2$L_FILEOWNER(R1)
+        MOVL    SCH$GL_CURPCB, R0
+        MOVL    PCB$L_UIC(R0), FH2$L_FILEOWNER(R1)
         MOVW    #FILEPROT, FH2$W_FILEPROT(R1)
         MOVW    #MFD, FH2$W_BACKLINK(R1)
         MOVW    #MFD, FH2$W_BACKLINK+2(R1)
@@ -513,7 +526,8 @@ FIL$REMOVE::
 ; FIL$MKDIR: R3 = a directory's header, R6 = a name, NAME.DIR, R7 = its
 ; length. Makes an empty directory, NAME.DIR;1, in it, as INITIALIZE
 ; makes the MFD: a header marked a directory and contiguous, with VAR
-; records in blocks, and a block holding only the end of block's -1. R1 =
+; records in blocks, and a block holding only the end of block's -1, the
+; one above's protection, but delete, as VMS's CREATE/DIRECTORY does. R1 =
 ; its header, R0 = SS$_NORMAL, or FIL$CREHDR's, FIL$EXTEND's or
 ; FIL$ENTER's error, with nothing made. Holding FIL$LOCK. Uses R0-R5.
 FIL$MKDIR::
@@ -528,7 +542,7 @@ FIL$MKDIR::
         MOVW    #BLOCK, FAT$W_RSIZE(R3)
         MOVW    #BLOCK, FAT$W_MAXREC(R3)
         MOVL    #FCH$M_CONTIG!FCH$M_DIRECTORY, FH2$L_FILECHAR(R3)
-        BISW2   #^X8888, FH2$W_FILEPROT(R3)     ; no one may delete it
+        BISW3   #^X8888, FH2$W_FILEPROT(R9), FH2$W_FILEPROT(R3)    ; no one may delete it
         MOVL    FH2$W_FID(R9), FH2$W_BACKLINK(R3)
         MOVW    FH2$W_FID+4(R9), FH2$W_BACKLINK+4(R3)
         MOVL    #1, R1
@@ -858,15 +872,18 @@ ENDBLK: BICL3   #^C<BLOCK-1>, DU_POS, R0
 20$:    RSB
 
 ; FIL$INIT: R1 = a label, R2 = its length, 1 to 12, R3 = the volume's
-; size in blocks, up to 4096. Writes an empty Files-11 ODS-2 volume on
-; F11$GL_VCB's disk: the home block, the bitmaps, and the reserved files'
-; headers, as INITIALIZE does, and the reserved files in the MFD. The
-; blocks past the bitmaps are free, whatever they hold. R0 = SS$_NORMAL,
-; or the disk's error. Holding FIL$LOCK. Uses R0-R11.
+; size in blocks, up to 4096, R4 = its owner, R5 = its protection.
+; Writes an empty Files-11 ODS-2 volume on F11$GL_VCB's disk: the home
+; block, the bitmaps, and the reserved files' headers, the owner's, as
+; INITIALIZE does, and the reserved files in the MFD, which all may look
+; in. The blocks past the bitmaps are free, whatever they hold. R0 =
+; SS$_NORMAL, or the disk's error. Holding FIL$LOCK. Uses R0-R11.
 ; ponytail: no backup home block or index file header: the home block's
 ; backup LBNs are the primary ones.
 FIL$INIT::
         MOVL    R3, VOLSIZE
+        MOVL    R4, VOLOWNER
+        MOVL    R5, VOLPROT
         PUSHR   #^M<R1, R2>
         MOVC5   #0, (R1), #^A/ /, #12, LABEL
         POPR    #^M<R1, R2>
@@ -968,7 +985,8 @@ FIL$INIT::
         MOVL    #HEADERS, 28(R1)        ; maximum files
         MOVW    #1, 32(R1)              ; index file bitmap blocks
         MOVW    #9, 34(R1)              ; reserved files
-        MOVL    #OWNER, 44(R1)          ; volume owner
+        MOVL    VOLOWNER, 44(R1)        ; volume owner
+        MOVW    VOLPROT, 52(R1)         ; volume protection
         MOVW    #FILEPROT, 54(R1)       ; default file protection
         MOVQ    EXE$GQ_SYSTIME, 60(R1)  ; made
         MOVB    #7, 68(R1)              ; window
@@ -992,13 +1010,15 @@ FIL$INIT::
 90$:    RSB
 
 ; RESHDR: R1 = a reserved file's empty header, R10 = its RESFILES row.
-; Gives it its name, version 1, record attributes and blocks, and writes
-; it. R0 = SS$_NORMAL or the disk's error. Uses R0-R7.
+; Gives it its name, version 1, record attributes and blocks, the
+; volume's owner, MFDPROT for the MFD, and writes it. R0 = SS$_NORMAL or
+; the disk's error. Uses R0-R7.
 RESHDR: MOVL    R10, R6
         MOVL    #10, R7
         MOVL    #1, R4
         BSBW    FIL$SETNAME
         MOVL    R1, R3
+        MOVL    VOLOWNER, FH2$L_FILEOWNER(R3)
         MOVB    10(R10), FAT$B_RTYPE(R3)
         MOVB    11(R10), FAT$B_RATTRIB(R3)
         MOVW    12(R10), FAT$W_RSIZE(R3)
@@ -1015,6 +1035,7 @@ RESHDR: MOVL    R10, R6
         BITW    #FCH$M_DIRECTORY, 14(R10)
         BEQL    20$
         MOVL    #1, R1                  ; but the MFD's is FIL$ENTER's
+        MOVW    #MFDPROT, FH2$W_FILEPROT(R3)
 20$:    ROTL    #16, R1, FAT$L_EFBLK(R3)
         MOVL    R3, R1
         BRW     FIL$WRITEHDR
@@ -1023,17 +1044,16 @@ RESHDR: MOVL    R10, R6
 ; $INIT_VOL devnam, volnam, itmlst: writes an empty Files-11 ODS-2
 ; volume labelled volnam, up to 12 characters, on the disk devnam names,
 ; DKB0:, the data disk, or MDA0:, the ramdisk, which is made afresh
-; first, zeroed. The disk mustn't be mounted. SS$_WRITLCK for DKA0:,
-; SS$_DEVMOUNT if a volume is mounted there, SS$_BADPARAM for a label too
-; long or empty, SS$_INSFMEM if there isn't the memory for the ramdisk,
-; SS$_NOPRIV without VOLPRO.
-; ponytail: no items. VOLPRO for every volume until volumes have owners,
-; whose own INITIALIZE needs none. DKB0:'s volume is 4096 blocks whatever
-; the disk's size, which one bitmap block maps.
+; first, zeroed. The disk mustn't be mounted. The item list may give
+; INIT$_OWNER, the volume's owner, the caller's UIC by default, and
+; INIT$_VOLPRO, its protection, 0 by default, which lets all use it.
+; SS$_WRITLCK for DKA0:, SS$_DEVMOUNT if a volume is mounted there,
+; SS$_BADPARAM for a label too long or empty, or an item too short,
+; SS$_INSFMEM if there isn't the memory for the ramdisk, SS$_NOPRIV for a
+; volume someone else owns, without VOLPRO.
+; ponytail: no other items. DKB0:'s volume is 4096 blocks whatever the
+; disk's size, which one bitmap block maps.
         .ENTRY  EXE$INIT_VOL, ^M<R2, R3, R4, R5, R6, R7, R8, R9, R10, R11>
-        MOVL    SCH$GL_CURPCB, R1
-        MOVL    #SS$_NOPRIV, R0
-        IFNPRIV VOLPRO, 90$, R1
         MOVL    4(AP), R6               ; devnam
         IFNORD  #8, (R6), 85$
         MOVZWL  (R6), R7
@@ -1050,7 +1070,14 @@ RESHDR: MOVL    R10, R6
         CMPL    R9, #12
         BGTRU   90$
         BSBW    FIL$LOCK
-        MOVL    R6, R1
+        MOVL    SCH$GL_CURPCB, R1
+        MOVL    PCB$L_UIC(R1), VOLOWNER
+        CLRL    VOLPROT
+        MOVL    12(AP), R10             ; itmlst
+        BEQL    45$
+        BSBW    INITITEMS
+        BLBC    R0, 80$
+45$:    MOVL    R6, R1
         MOVL    R7, R2
         BSBW    FIL$SELECT
         BLBC    R0, 80$
@@ -1059,6 +1086,9 @@ RESHDR: MOVL    R10, R6
         BBS     #VCB$V_MOUNTED, VCB$L_STATUS(R1), 80$
         MOVL    #SS$_WRITLCK, R0
         BBC     #VCB$V_WRITE, VCB$L_STATUS(R1), 80$
+        BSBW    OWNVOL
+        BLBC    R0, 80$
+        MOVL    F11$GL_VCB, R1
         MOVL    #DK$C_BLOCKS, R3
         BBC     #VCB$V_RAMDISK, VCB$L_STATUS(R1), 50$
         BSBW    MD$CREATE
@@ -1066,10 +1096,68 @@ RESHDR: MOVL    R10, R6
         MOVL    MD$GL_BLOCKS, R3
 50$:    MOVL    R8, R1
         MOVL    R9, R2
+        MOVL    VOLOWNER, R4
+        MOVL    VOLPROT, R5
         BSBW    FIL$INIT
 80$:    BSBW    FIL$UNLOCK
         RET
 85$:    MOVL    #SS$_ACCVIO, R0
 90$:    RET
+
+; INITITEMS: R10 = $INIT_VOL's item list. Takes INIT$_OWNER into VOLOWNER
+; and INIT$_VOLPRO into VOLPROT, and skips the others. R0 = SS$_NORMAL,
+; SS$_ACCVIO if the caller can't read it, or SS$_BADPARAM for an item
+; too short. Uses R0-R2 and R10.
+INITITEMS:
+10$:    IFNORD  #4, (R10), 85$
+        TSTL    (R10)
+        BEQL    70$
+        IFNORD  #12, (R10), 85$
+        MOVZWL  (R10), R2
+        MOVL    4(R10), R1
+        IFNORD  R2, (R1), 85$
+        CMPW    2(R10), #INIT$_OWNER
+        BNEQ    20$
+        CMPL    R2, #4
+        BLSSU   87$
+        MOVL    (R1), VOLOWNER
+        BRB     30$
+20$:    CMPW    2(R10), #INIT$_VOLPRO
+        BNEQ    30$
+        CMPL    R2, #2
+        BLSSU   87$
+        MOVZWL  (R1), VOLPROT
+30$:    ADDL2   #12, R10
+        BRB     10$
+70$:    MOVL    #SS$_NORMAL, R0
+        RSB
+85$:    MOVL    #SS$_ACCVIO, R0
+        RSB
+87$:    MOVL    #SS$_BADPARAM, R0
+        RSB
+
+; OWNVOL: F11$GL_VCB = a disk with no volume mounted. R0 = SS$_NORMAL if
+; the current process may write another volume there: with VOLPRO, or if
+; the volume there is its own, as its home block says, or if there is
+; none, else SS$_NOPRIV. Holding FIL$LOCK. Uses R0-R2.
+OWNVOL: MOVL    SCH$GL_CURPCB, R2
+        IFPRIV  VOLPRO, 70$, R2
+        MOVAB   BITBLK, R0
+        MOVL    #1, R1
+        PUSHL   R2
+        MOVL    #1, R2                  ; the home block
+        BSBW    FIL$READLBLK
+        MOVL    (SP)+, R2
+        BLBC    R0, 70$                 ; no disk yet: the ramdisk
+        CLRL    R1
+10$:    CMPB    BITBLK+HM2$T_FORMAT[R1], FORMAT[R1]
+        BNEQ    70$                     ; no volume
+        AOBLSS  #10, R1, 10$
+        CMPL    BITBLK+HM2$L_VOLOWNER, PCB$L_UIC(R2)
+        BEQL    70$
+        MOVL    #SS$_NOPRIV, R0
+        RSB
+70$:    MOVL    #SS$_NORMAL, R0
+        RSB
 
         .END

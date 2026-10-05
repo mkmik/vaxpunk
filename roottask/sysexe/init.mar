@@ -1,13 +1,18 @@
         .TITLE  INIT    Writes an empty Files-11 volume on a disk
-        .IDENT  /V0.1/
+        .IDENT  /V0.2/
 ;
 ; DCL's INITIALIZE device label runs this: $INIT_VOL writes an empty ODS-2 volume with that label, up to 12
 ; characters, on the device, which must be DKB0:, the data disk, or MDA0:,
-; the ramdisk, and not mounted; MOUNT then mounts it. Returns $INIT_VOL's status.
-; ponytail: no qualifiers.
+; the ramdisk, and not mounted; MOUNT then mounts it. /OWNER_UIC=uic
+; makes the volume that UIC's, not the process's, and
+; /PROTECTION=(code[,...]) gives its categories that access, where they
+; have all by default (lib/protect.mar). Returns $INIT_VOL's status.
 ;
         .LIBRARY "starlet.mlb"
         .LIBRARY "sysexe.mlb"
+        $INITDEF
+
+        .EXTERNAL GET_PROT, GET_UIC
 
         .PSECT  DATA, NOEXE, WRT, LONG
 DEVICE: .LONG   64                      ; descriptors of the parameters
@@ -16,12 +21,41 @@ LABEL:  .LONG   64
         .ADDRESS LABBUF
 DEVBUF: .BLKB   64
 LABBUF: .BLKB   64
+OWNER:  .LONG   0
+PROT:   .LONG   0
+ITEMS:  .BLKL   3*2+1                   ; $INIT_VOL's: those given
+OWNER_UIC:                              ; the qualifiers, for GET_UIC and GET_PROT
+        .ASCID  "OWNER_UIC"
+PROTECTION:
+        .ASCID  "PROTECTION"
 
         .PSECT  CODE, EXE, LONG
-        .ENTRY  START, ^M<>
+        .ENTRY  START, ^M<R2>
         GETVALUE "DEVICE", DEVICE, DEVICE
         GETVALUE "LABEL", LABEL, LABEL
-        $INIT_VOL_S DEVNAM=DEVICE, VOLNAM=LABEL
-        RET
+        MOVAB   ITEMS, R2
+        PRESENT "OWNER_UIC"
+        BLBC    R0, 10$
+        PUSHAL  OWNER
+        PUSHAQ  OWNER_UIC
+        CALLS   #2, G^GET_UIC
+        BLBC    R0, 90$
+        MOVW    #4, (R2)+
+        MOVW    #INIT$_OWNER, (R2)+
+        MOVAL   OWNER, (R2)+
+        CLRL    (R2)+
+10$:    PRESENT "PROTECTION"
+        BLBC    R0, 20$
+        PUSHAW  PROT
+        PUSHAQ  PROTECTION
+        CALLS   #2, G^GET_PROT
+        BLBC    R0, 90$
+        MOVW    #2, (R2)+
+        MOVW    #INIT$_VOLPRO, (R2)+
+        MOVAL   PROT, (R2)+
+        CLRL    (R2)+
+20$:    CLRL    (R2)
+        $INIT_VOL_S DEVNAM=DEVICE, VOLNAM=LABEL, ITMLST=ITEMS
+90$:    RET
 
         .END    START

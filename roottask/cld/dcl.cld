@@ -54,9 +54,11 @@ define type SET_OPTIONS
 	keyword CONTROL, negatable, value(list, type=CONTROL_OPTIONS)
 	keyword CONFIGURATION, syntax=SET_CONFIGURATION
 	keyword DEFAULT, syntax=SET_DEFAULT
+	keyword FILE, syntax=SET_FILE
 	keyword HOST, syntax=SET_HOST
 	keyword INTERFACE, syntax=SET_INTERFACE
 	keyword PROCESS, syntax=SET_PROCESS
+	keyword PROTECTION, value(list), syntax=SET_PROTECTION
 	keyword ROUTE, syntax=SET_ROUTE
 
 ! SET [NO]CONTROL[=Y]: CTRL/Y, and CTRL/C no image takes, on or off.
@@ -94,6 +96,21 @@ define syntax SET_PROCESS
 	parameter P1, label=OPTION, value(required, type=SET_OPTIONS)
 	qualifier PRIVILEGES, value(required, list)
 	disallow not PRIVILEGES
+
+! SET PROTECTION=(code[,...]) file: SET.EXE gives the file's categories
+! that access.
+define syntax SET_PROTECTION
+	image SET
+	parameter P1, label=OPTION, value(required, type=SET_OPTIONS)
+	parameter P2, label=FILE, prompt="File", value(required, type=$infile)
+
+! SET FILE/OWNER_UIC=uic file: SET.EXE gives the file that owner.
+define syntax SET_FILE
+	image SET
+	parameter P1, label=OPTION, value(required, type=SET_OPTIONS)
+	parameter P2, label=FILE, prompt="File", value(required, type=$infile)
+	qualifier OWNER_UIC, value(required, type=$uic)
+	disallow not OWNER_UIC
 
 ! SET ROUTE /DEFAULT /GATEWAY=address: the default route, the only one;
 ! /PERMANENT saves it instead.

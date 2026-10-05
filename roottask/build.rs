@@ -174,11 +174,13 @@ fn symbol_table(map: &str) -> (String, Vec<u8>) {
 /// The system disk: an ODS-2 volume labelled VAXPUNK with the images in
 /// [SYSEXE], fixed 512-byte records as VMS's are, and sysmgr/'s files in
 /// [SYSMGR], their lines variable-length records, with names in capitals.
+/// [1,4] owns them, and all may read and run them: (S:RWED,O:RWED,G:RE,W:RE).
 fn disk(path: &Path, images: &[(String, Vec<u8>)]) {
     use ods_image::{Conversion, Image, InitParams, RecordAttrs, rfm};
     let _ = fs::remove_file(path);
     let params = InitParams {
         label: b"VAXPUNK".to_vec(),
+        file_protection: 0xaa00,
         ..Default::default()
     };
     fn ok<T>(r: ods_image::Result<T>) -> T {

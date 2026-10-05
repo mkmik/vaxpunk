@@ -149,7 +149,7 @@ RMS$_VER = ^X186FC                      ; bad version
 RMS$_WLD = ^X18744                      ; wildcard where one may not be
 RMS$_DNR = ^X18272                      ; device not ready: not mounted
 RMS$_FEX = ^X18282                      ; file already exists
-RMS$_PRV = ^X1829A                      ; privilege violation: a reserved file
+RMS$_PRV = ^X1829A                      ; privilege or protection violation, or a reserved file
 RMS$_FUL = ^X18544                      ; device full
 RMS$_IOP = ^X18574                      ; operation the file wasn't opened for
 RMS$_RSZ = ^X186A4                      ; record size: a FIX record of another size
@@ -181,6 +181,7 @@ FAB$B_FNS = 52                          ; their lengths
 FAB$B_DNS = 53
 FAB$W_MRS = 54                          ; maximum record size
 FAB$B_FSZ = 63                          ; VFC header size
+FAB$L_XAB = 36                          ; the first XAB, or 0
 FAB$M_PUT = 1
 FAB$M_GET = 2
 FAB$M_DEL = 4
@@ -322,11 +323,47 @@ ACC$K_TERMLEN = 84                      ; the message's size
         .MACRO  $MNTDEF
 MNT$_DEVNAM = 1                         ; the device
 MNT$_VOLNAM = 2                         ; the volume's label
+MNT$_OWNER = 13                         ; the volume's owner, a UIC, for this mount
+MNT$_VPROT = 14                         ; and protection, a word
         .ENDM   $MNTDEF
 
-; $FAB, $RAB, $NAM: a FAB, RAB or name block, with the fields given and
-; the rest 0. Lengths are values (FNS=#5 is FNS=5 here), addresses labels.
-        .MACRO  $FAB    FNA=0, FNS=0, DNA=0, DNS=0, NAM=0, FAC=0
+; $INITDEF: $INIT_VOL's item codes, VMS's names; the codes are vaxpunk's.
+        .MACRO  $INITDEF
+INIT$_OWNER = 1                         ; the volume's owner, a UIC: the caller's by default
+INIT$_VOLPRO = 2                        ; its protection, a word: 0, all may, by default
+        .ENDM   $INITDEF
+
+; $ARMDEF: an access mask: what a process wants to do to a file or a
+; volume, which its protection, 4 bits a category, denies or not.
+        .MACRO  $ARMDEF
+ARM$M_READ = 1
+ARM$M_WRITE = 2
+ARM$M_EXECUTE = 4                       ; a file's; a directory's: look a name up in it
+ARM$M_DELETE = 8
+ARM$M_CONTROL = 16                      ; change the protection: the owner's and the system's
+ARM$M_SYSTEM = 32                       ; vaxpunk's: change the owner, the system's only
+        .ENDM   $ARMDEF
+
+; $XABPRODEF: the protection XAB, which $OPEN fills with the file's owner
+; and protection, and $CLOSE changes them to.
+        .MACRO  $XABPRODEF
+XAB$C_PRO = 19                          ; XAB$B_COD
+XAB$C_PROLEN = 16                       ; XAB$B_BLN
+XAB$B_COD = 0
+XAB$B_BLN = 1
+XAB$L_NXT = 4                           ; the next XAB, or 0
+XAB$W_PRO = 8                           ; the protection: 4 bits each for system, owner, group, world, a set bit denying
+XAB$L_UIC = 12                          ; the owner
+XAB$V_NOREAD = 0                        ; a category's bits
+XAB$V_NOWRITE = 1
+XAB$V_NOEXE = 2
+XAB$V_NODEL = 3
+        .ENDM   $XABPRODEF
+
+; $FAB, $RAB, $NAM, $XABPRO: a FAB, RAB, name block or protection XAB,
+; with the fields given and the rest 0. Lengths are values (FNS=#5 is
+; FNS=5 here), addresses labels.
+        .MACRO  $FAB    FNA=0, FNS=0, DNA=0, DNS=0, NAM=0, FAC=0, XAB=0
         .BYTE   3, 80                   ; BID, BLN
         .WORD   0                       ; IFI
         .LONG   0, 0, 0, 0              ; FOP, STS, STV, ALQ
@@ -334,7 +371,8 @@ MNT$_VOLNAM = 2                         ; the volume's label
         .BYTE   FAC, 0                  ; FAC, SHR
         .LONG   0                       ; CTX
         .BYTE   0, 0, 0, 0              ; RTV, ORG, RAT, RFM
-        .LONG   0, 0                    ; JNL, XAB
+        .LONG   0                       ; JNL
+        .ADDRESS XAB
         .ADDRESS NAM, FNA, DNA
         .BYTE   FNS, DNS
         .BLKB   26                      ; MRS to the end
@@ -355,6 +393,15 @@ MNT$_VOLNAM = 2                         ; the volume's label
         .ADDRESS FAB
         .LONG   0                       ; XAB
         .ENDM   $RAB
+
+        .MACRO  $XABPRO PRO=0, UIC=0
+        .BYTE   19, 16                  ; COD, BLN
+        .WORD   0
+        .LONG   0                       ; NXT
+        .WORD   PRO
+        .BYTE   0, 0                    ; MTACC, PROT_OPT
+        .LONG   UIC
+        .ENDM   $XABPRO
 
         .MACRO  $NAM    ESA=0, ESS=0, RSA=0, RSS=0
         .BYTE   2, 96                   ; BID, BLN
@@ -584,6 +631,8 @@ PRV$M_WORLD = ^X10000
 PRV$M_OPER = ^X40000
 PRV$M_VOLPRO = ^X200000
 PRV$M_PHY_IO = ^X400000
+PRV$M_SYSPRV = ^X10000000
+PRV$M_BYPASS = ^X20000000
         .ENDM   $PRVDEF
 
 ; $PRTDEF: page protection codes, the VAX's: who may read (R) and write (W),
