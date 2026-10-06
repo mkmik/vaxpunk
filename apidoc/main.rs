@@ -19,7 +19,8 @@
 //!   the $xxxDEF macros;
 //! - the PAL calls: the tables of DESIGN-0001 (docs/design/0001-pal-interface.md).
 //!
-//! Run it after changing any of them, and commit the page with the change:
+//! Run it to see the page locally; it isn't committed. CI runs it on every PR
+//! and publishes main's to GitHub Pages:
 //!
 //!     cargo run -p apidoc
 
