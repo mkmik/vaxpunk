@@ -15,8 +15,10 @@ sed -i.orig 's#https://zlib.net/zlib-$ZLIB_VERSION.tar.xz#https://github.com/mad
 
 docker build -t qemu-wasm-build - < "$src/Dockerfile"
 cflags="-O3 -Wno-error=unused-command-line-argument -matomics -mbulk-memory -DNDEBUG -DG_DISABLE_ASSERT -D_GNU_SOURCE -sASYNCIFY=1 -pthread -sPROXY_TO_PTHREAD=1 -sFORCE_FILESYSTEM -sALLOW_TABLE_GROWTH -sTOTAL_MEMORY=2300MB -sWASM_BIGINT -sMALLOC=mimalloc --js-library=/build/node_modules/xterm-pty/emscripten-pty.js -sEXPORT_ES6=1 -sASYNCIFY_IMPORTS=ffi_call_js"
-# configure fetches dtc, for the virt board, into the source tree.
-docker run --rm -v "$src":/qemu -v "$out":/out qemu-wasm-build sh -euxc "
+# configure fetches dtc, for the virt board, into the source tree: a copy, so
+# nothing the container's root writes is left in $src for us to delete.
+docker run --rm -v "$src":/src:ro -v "$out":/out qemu-wasm-build sh -euxc "
+	cp -R /src /qemu
 	emconfigure /qemu/configure --static --target-list=aarch64-softmmu --cpu=wasm32 --cross-prefix= \
 		--without-default-features --enable-system --with-coroutine=fiber \
 		--extra-cflags='$cflags' --extra-cxxflags='$cflags' \
