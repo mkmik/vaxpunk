@@ -52,7 +52,7 @@
 use std::fs;
 use std::io::Write;
 use std::path::Path;
-use std::process::{Command, Stdio};
+use std::process::{Child, Command, Stdio};
 use std::thread::sleep;
 use std::time::Duration;
 
@@ -224,6 +224,20 @@ const STEPS: &[(&str, usize, &str)] = &[
     ("Y is on", 1, "\x19"),
 ];
 
+/// The boot binary, killed with its QEMU when dropped, on a panic too.
+struct Qemu(Child);
+
+impl Drop for Qemu {
+    fn drop(&mut self) {
+        // boot became run-qemu.sh, QEMU's parent: this QEMU, not another on out/.
+        let _ = Command::new("pkill")
+            .arg("-P")
+            .arg(self.0.id().to_string())
+            .status();
+        let _ = self.0.wait();
+    }
+}
+
 #[test]
 fn boot() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
@@ -231,14 +245,16 @@ fn boot() {
     let _ = fs::remove_file(&log_path);
     let datadisk = root.join("out/check-datadisk.img");
     let _ = fs::remove_file(&datadisk);
-    let mut qemu = Command::new(env!("CARGO_BIN_EXE_boot"))
-        .env("DATADISK", &datadisk)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-        .unwrap();
-    let mut console = qemu.stdin.take().unwrap();
+    let mut qemu = Qemu(
+        Command::new(env!("CARGO_BIN_EXE_boot"))
+            .env("DATADISK", &datadisk)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap(),
+    );
+    let mut console = qemu.0.stdin.take().unwrap();
     let mut type_ = |s: &str| console.write_all(s.as_bytes()).unwrap();
     let log =
         || String::from_utf8_lossy(&fs::read(&log_path).unwrap_or_default()).replace('\r', "");
@@ -359,13 +375,8 @@ fn boot() {
         }
         sleep(Duration::from_secs(1));
     }
-    // boot became run-qemu.sh, QEMU's parent: this QEMU, not another on out/.
-    let _ = Command::new("pkill")
-        .arg("-P")
-        .arg(qemu.id().to_string())
-        .status();
     drop(console);
-    let _ = qemu.wait();
+    drop(qemu);
 
     let text = log();
     if let Some(start) = text.find("EXEC.EXE:") {
