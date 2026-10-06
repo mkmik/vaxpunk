@@ -51,13 +51,14 @@ enum {
 	PORT_SEND, /* len bytes in the buffer; response: len sent */
 	PORT_RECV, /* len: at most so many; response: len bytes, 0 if the peer closed */
 	PORT_CLOSE, /* ends the connection and its requests */
-	PORT_IFCONFIG, /* flags PORT_SET: addr, arg1 mask, arg2 gateway; response: those and
+	PORT_IFCONFIG, /* flags PORT_SET: addr, arg1 mask, arg2 gateway, or with PORT_DHCP
+			  those a DHCP server gives, once it has; response: those and
 			  flags PORT_LINKUP */
 	PORT_CANCEL, /* ends the connection's requests with PORT_ST_ABORTED */
 };
 
 enum { PORT_TCP = 6 };
-enum { PORT_SET = 1, PORT_LINKUP = 2 };
+enum { PORT_SET = 1, PORT_LINKUP = 2, PORT_DHCP = 4 };
 
 enum {
 	PORT_ST_OK, PORT_ST_BADPARAM, PORT_ST_NOMEM, PORT_ST_INUSE, PORT_ST_REFUSED,

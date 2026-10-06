@@ -103,7 +103,7 @@ only its own ring and index. A message is 32 bytes:
 | Offset | Field | |
 | --- | --- | --- |
 | 0 | type | `OPEN`, `BIND`, `LISTEN`, `ACCEPT`, `CONNECT`, `SEND`, `RECV`, `CLOSE`, `IFCONFIG`, `CANCEL` |
-| 1 | flags | `IFCONFIG`: 1, set (not only sense); in the response, 2, the link is up |
+| 1 | flags | `IFCONFIG`: 1, set (not only sense), and 4 with it, by DHCP; in the response, 2, the link is up |
 | 2 | tag | the executive's, echoed in the response |
 | 4 | connection | 0 is the control connection |
 | 8 | status | the response's: OK, BADPARAM, NOMEM, INUSE, REFUSED, RESET, TIMEOUT, ABORTED, UNREACH, CLOSED |
@@ -123,7 +123,7 @@ only its own ring and index. A message is 32 bytes:
 | `RECV` | data has come, at most length: length; or the peer has closed: CLOSED; or RESET |
 | `CLOSE` | at once; the connection's waiting commands end with ABORTED |
 | `CANCEL` | at once; the connection's waiting commands end with ABORTED |
-| `IFCONFIG` | at once, with the address, mask, gateway and link state, after setting them if flagged |
+| `IFCONFIG` | at once, with the address, mask, gateway and link state, after setting them if flagged; with DHCP, once the server has given them, or after 10 seconds with `TIMEOUT`, while lwIP goes on asking |
 
 Responses come in the order commands finish, not as they were sent. What
 comes on a connection before a `RECV` waits in lwIP, which holds back its
@@ -174,7 +174,7 @@ channels and closes the connection when the last goes.
 | On | Function | Does |
 | --- | --- | --- |
 | `BGA0:` | `IO$_SETMODE` | opens a TCP connection: p1 = the socket's characteristics, a word protocol (6), a byte type and a byte family, as TCP/IP Services' |
-| `BGA0:` | `IO$_SETCHAR` | sets the interface: p1 = its address, mask and gateway, 12 bytes |
+| `BGA0:` | `IO$_SETCHAR` | sets the interface: p1 = its address, mask and gateway, then flags, 4 to have a DHCP server give them instead: 16 bytes |
 | `BGA0:` | `IO$_SENSECHAR` | writes those to p1, then flags, 2 if the link is up: 16 bytes |
 | unit | `IO$_SETMODE!IO$M_BIND` | binds to address p3, port p4 |
 | unit | `IO$_SETMODE!IO$M_LISTEN` | listens, backlog p4 |
@@ -193,26 +193,31 @@ and 11, past the terminal's modifiers, because a unit is a terminal too.
 
 ## Programs
 
-- **`TCPIP.EXE`.** DCL's `SET INTERFACE address mask`, `SET ROUTE
-  /DEFAULT /GATEWAY=address`, `SHOW INTERFACE` and `SET CONFIGURATION
-  INTERFACE address mask` run it, which reads `OPTION`, `ADDRESS`,
-  `MASK`, `GATEWAY` and `PERMANENT` from the parse
-  ([ADR-0017](../adr/0017-command-tables-from-cld-with-vcdu.md)). As in
-  TCP/IP Services, `SET INTERFACE` and `SET ROUTE` change the running
-  system, and `SET CONFIGURATION INTERFACE` and `SET ROUTE /PERMANENT`
-  the saved configuration, which the next boot applies. The first two
-  sense the settings with `IO$_SENSECHAR`, change theirs and issue
-  `IO$_SETCHAR`, so the gateway is still the interface's to the port and
-  lwIP; the last two read the saved settings, change theirs and write
-  `INTERFACE address mask gateway` in a new version of
-  `DKB0:[000000]TCPIP$CONFIG.DAT`, the writable disk, where TCP/IP
-  Services kept `TCPIP$CONFIGURATION.DAT` and `TCPIP$ROUTE.DAT` in
-  `SYS$SYSTEM`; `SHOW INTERFACE` senses and prints. With no command, as `SYLOGIN.COM`
-  runs it with `RUN`, it applies the saved configuration, unless the interface has
-  an address already, prints `%TCPIP-I-SET`, and creates `TCPIP$TELNET`,
-  the remote login server, unless it is there already. Without a network
-  it does nothing. ponytail: one route, the default; a routing table
-  when there is a second interface.
+- **`TCPIP.EXE`.** DCL's `TCPIP` verb runs it, and it parses the rest of
+  the line, or with none each line after its `TCPIP>` prompt until
+  `EXIT`, with its own tables, `sysexe/tcpip.cld`, and calls the
+  command's `ROUTINE` with `CLI$DISPATCH`
+  ([ADR-0022](../adr/0022-tcpip-utility-and-dhcp.md)). The commands are
+  TCP/IP Services': `SET INTERFACE WE0` and `SET CONFIGURATION INTERFACE
+  WE0`, with `/HOST=address /NETWORK_MASK=mask` or `/DHCP`, `SET ROUTE
+  /DEFAULT /GATEWAY=address [/PERMANENT]`, `SHOW INTERFACE [WE0]`,
+  `START COMMUNICATION`, and `HELP`, which describes them from the
+  tables with `HELP$TOPIC`, DCL's `HELP`'s code (`sysexe/help/`). `SET INTERFACE` and `SET ROUTE` change the
+  running system, and `SET CONFIGURATION INTERFACE` and `SET ROUTE
+  /PERMANENT` the saved configuration, which the next boot applies. The
+  first two sense the settings with `IO$_SENSECHAR`, change theirs and
+  issue `IO$_SETCHAR`, so the gateway is still the interface's to the
+  port and lwIP; the last two read the saved settings, change theirs and
+  write `INTERFACE address mask gateway`, and `DHCP` if `/DHCP` said so,
+  in a new version of `DKB0:[000000]TCPIP$CONFIG.DAT`, the writable
+  disk, where TCP/IP Services kept `TCPIP$CONFIGURATION.DAT` and
+  `TCPIP$ROUTE.DAT` in `SYS$SYSTEM`; `SHOW INTERFACE` senses and prints.
+  `START COMMUNICATION`, which `SYLOGIN.COM` runs, applies the saved
+  configuration, unless the interface has an address already, prints
+  `%TCPIP-I-SET`, or the error, a DHCP server's timeout, and creates
+  `TCPIP$TELNET`, the remote login server, unless it is there already.
+  Without a network it does nothing. ponytail: one route, the default; a
+  routing table when there is a second interface.
 - **`TELNETD.EXE`**, process `TCPIP$TELNET`. Listens on TCP port 23; for
   each connection creates a process running `DCL.EXE` with the
   connection's unit, `_BGnn:`, as `SYS$INPUT`, `SYS$OUTPUT` and

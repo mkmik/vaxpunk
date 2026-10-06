@@ -211,9 +211,11 @@ BUFFER: ADDL3   #1, R2, R0
 ;                  p1 = its characteristics, as TCP/IP Services': a word,
 ;                  the protocol, 6 for TCP, and two bytes, the type and
 ;                  the address family, which are only TCP's
-;   IO$_SETCHAR    sets the interface: p1 = 12 bytes, its address, mask
-;                  and gateway, each a longword in network order; OPER,
-;                  else SS$_NOPRIV
+;   IO$_SETCHAR    sets the interface: p1 = 16 bytes, its address, mask
+;                  and gateway, each a longword in network order, and
+;                  flags, 4 to have a DHCP server give them instead, which
+;                  completes once one has, or SS$_TIMEOUT; OPER, else
+;                  SS$_NOPRIV
 ;   IO$_SENSECHAR  writes those to the 16 bytes at p1, then the flags, 2
 ;                  if the link is up
 ; On a unit:
@@ -440,13 +442,14 @@ SETCHAR:
         MOVL    #SS$_NOPRIV, R0
         IFNPRIV OPER, 90$
         MOVL    28(AP), R2
-        IFNORD  #12, (R2), 85$
+        IFNORD  #16, (R2), 85$
         MOVL    #PORT$C_IFCONFIG, R8
         CLRL    R1
         BSBW    NEWIRP
         BLBC    R0, 90$
         MOVL    28(AP), R2
-        MOVB    #PORT$M_SET, NIRP$A_MSG+PORTMSG$B_FLAGS(R3)
+        BICB3   #^C<PORT$M_DHCP>, 12(R2), R0
+        BISB3   #PORT$M_SET, R0, NIRP$A_MSG+PORTMSG$B_FLAGS(R3)
         MOVL    (R2), NIRP$A_MSG+PORTMSG$L_ADDR(R3)
         MOVL    4(R2), NIRP$A_MSG+PORTMSG$L_ARG1(R3)
         MOVL    8(R2), NIRP$A_MSG+PORTMSG$L_ARG2(R3)

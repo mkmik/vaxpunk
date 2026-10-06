@@ -52,14 +52,11 @@ define verb SET
 define type SET_OPTIONS
 	keyword COMMAND, syntax=SET_COMMAND
 	keyword CONTROL, negatable, value(list, type=CONTROL_OPTIONS)
-	keyword CONFIGURATION, syntax=SET_CONFIGURATION
 	keyword DEFAULT, syntax=SET_DEFAULT
 	keyword FILE, syntax=SET_FILE
 	keyword HOST, syntax=SET_HOST
-	keyword INTERFACE, syntax=SET_INTERFACE
 	keyword PROCESS, syntax=SET_PROCESS
 	keyword PROTECTION, value(list), syntax=SET_PROTECTION
-	keyword ROUTE, syntax=SET_ROUTE
 
 ! SET [NO]CONTROL[=Y]: CTRL/Y, and CTRL/C no image takes, on or off.
 ! ponytail: no T, CTRL/T has no status line to show.
@@ -81,14 +78,6 @@ define syntax SET_HOST
 	image RTPAD
 	parameter P1, label=OPTION, value(required, type=SET_OPTIONS)
 	parameter P2, label=NODE, prompt="Node", value(required)
-
-! SET INTERFACE, SET CONFIGURATION INTERFACE, SET ROUTE, SHOW INTERFACE:
-! TCPIP.EXE.
-define syntax SET_INTERFACE
-	image TCPIP
-	parameter P1, label=OPTION, value(required, type=SET_OPTIONS)
-	parameter P2, label=ADDRESS, prompt="Address", value(required)
-	parameter P3, label=MASK, prompt="Mask", value(required)
 
 ! SET PROCESS/PRIVILEGES=(priv[,...]): SET.EXE.
 define syntax SET_PROCESS
@@ -112,26 +101,6 @@ define syntax SET_FILE
 	qualifier OWNER_UIC, value(required, type=$uic)
 	disallow not OWNER_UIC
 
-! SET ROUTE /DEFAULT /GATEWAY=address: the default route, the only one;
-! /PERMANENT saves it instead.
-define syntax SET_ROUTE
-	image TCPIP
-	parameter P1, label=OPTION, value(required, type=SET_OPTIONS)
-	qualifier DEFAULT
-	qualifier GATEWAY, value(required)
-	qualifier PERMANENT
-	disallow not DEFAULT or not GATEWAY
-
-define syntax SET_CONFIGURATION
-	image TCPIP
-	parameter P1, label=OPTION, value(required, type=SET_OPTIONS)
-	parameter P2, label=COMPONENT, prompt="Component", value(required, type=CONFIGURATION_OPTIONS)
-	parameter P3, label=ADDRESS, prompt="Address", value(required)
-	parameter P4, label=MASK, prompt="Mask", value(required)
-
-define type CONFIGURATION_OPTIONS
-	keyword INTERFACE
-
 define verb SHOW
 	cliroutine SHOW
 	parameter P1, label=OPTION, prompt="What", value(required, type=SHOW_OPTIONS)
@@ -139,7 +108,6 @@ define verb SHOW
 define type SHOW_OPTIONS
 	keyword DEFAULT
 	keyword DEVICES, syntax=SHOW_DEVICES
-	keyword INTERFACE, syntax=SHOW_INTERFACE
 	keyword LOGICAL, syntax=SHOW_LOGICAL
 	keyword PROCESS, syntax=SHOW_IMAGE
 	keyword SYMBOL, syntax=SHOW_SYMBOL
@@ -172,13 +140,17 @@ define syntax SHOW_IMAGE
 	image SHOW
 	qualifier PRIVILEGES
 
-define syntax SHOW_INTERFACE
-	image TCPIP
-
 define verb STOP
 	cliroutine STOP
 	parameter P1, label=PROCESS_NAME
 	qualifier IDENTIFICATION, value(required)
+
+! TCPIP command: TCP/IP Services' management commands, which TCPIP.EXE
+! parses with its own tables, sysexe/tcpip.cld; with none, it prompts
+! TCPIP> for them.
+define verb TCPIP
+	image TCPIP
+	parameter P1, label=COMMAND, value(type=$rest_of_line)
 
 define verb WRITE
 	cliroutine WRITE

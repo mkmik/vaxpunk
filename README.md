@@ -118,10 +118,8 @@ on the screen),
 `DEFINE name equivalence`, `DEASSIGN name` and `SHOW LOGICAL name` make,
 delete and translate logical names (`SHOW LOGICAL SYS$INPUT`, or `SHOW
 LOGICAL` alone to list them all), `SHOW PROCESS` and `SHOW SYSTEM` show
-the process and list them all, `SET INTERFACE address mask`, `SET ROUTE
-/DEFAULT /GATEWAY=address` and `SHOW INTERFACE` set and show the
-network's (*Networking*), `SET CONFIGURATION INTERFACE` and `SET ROUTE
-/PERMANENT` save them for the next boot, `SET HOST
+the process and list them all, `TCPIP` sets and shows the network's
+(*Networking*), and saves them for the next boot, `SET HOST
 address` logs in to another vaxpunk, `COPY` and `DELETE` copy and delete
 files, `INITIALIZE`, `MOUNT` and `DISMOUNT` make, mount and dismount a
 volume on the data disk, `DKB0:`, or the ramdisk, `MDA0:`, the disks they
@@ -282,25 +280,31 @@ assembled with the same `CROSS_COMPILE` binutils.
 ## Networking
 
 QEMU has a virtio-net device on its user network, where the guest is
-`10.0.2.15/24`, the host `10.0.2.2`. The root task starts the TCP/IP
-component, lwIP, beside the executive, which talks to it through a port
-of shared pages and drives it as `BGA0:`
-([DESIGN-0003](docs/design/0003-tcpip-port.md)). The interface starts
-with no address:
+`10.0.2.15/24`, the host `10.0.2.2`, and a DHCP server gives the guest
+those. The root task starts the TCP/IP component, lwIP, beside the
+executive, which talks to it through a port of shared pages and drives
+it as `BGA0:` ([DESIGN-0003](docs/design/0003-tcpip-port.md)). The
+interface, `WE0`, starts with no address. TCP/IP Services' `TCPIP`
+utility sets it ([ADR-0022](docs/adr/0022-tcpip-utility-and-dhcp.md)),
+from DHCP or by hand:
 
 ```
-$ SET INTERFACE 10.0.2.15 255.255.255.0
-$ SET ROUTE /DEFAULT /GATEWAY=10.0.2.2
-$ SHOW INTERFACE
+$ TCPIP SET INTERFACE WE0 /DHCP
+$ TCPIP
+TCPIP> SET INTERFACE WE0 /HOST=10.0.2.15 /NETWORK_MASK=255.255.255.0
+TCPIP> SET ROUTE /DEFAULT /GATEWAY=10.0.2.2
+TCPIP> SHOW INTERFACE
 Interface  IP_Addr          Network mask     Gateway          Link
- BGA0      10.0.2.15        255.255.255.0    10.0.2.2         up
+ WE0       10.0.2.15        255.255.255.0    10.0.2.2         up
+TCPIP> EXIT
 ```
 
 `SET INTERFACE` and `SET ROUTE` change the running system only. `SET
-CONFIGURATION INTERFACE address mask` and `SET ROUTE /DEFAULT
-/GATEWAY=address /PERMANENT` save the settings on the data disk, once
-`INITIALIZE DKB0:` has made a volume there, and each boot sets them from
-there, as TCP/IP Services split them. Every
+CONFIGURATION INTERFACE WE0`, with `/DHCP` or `/HOST` and
+`/NETWORK_MASK`, and `SET ROUTE /DEFAULT /GATEWAY=address /PERMANENT`
+save the settings on the data disk, once `INITIALIZE DKB0:` has made a
+volume there, and each boot sets them from there with `TCPIP START
+COMMUNICATION`, as TCP/IP Services split them. Every
 system with a network runs `TCPIP$TELNET`, which takes `SET HOST`
 logins on TCP port 23: `SET HOST 10.0.2.15` logs in to the system
 itself.
