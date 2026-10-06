@@ -110,7 +110,7 @@ The executive calls the PAL with `svc #0`:
 
 | Register | In | Out |
 | --- | --- | --- |
-| x7 | function code | unchanged |
+| x7 | function code, in bits 15:0; `CHMx`'s code in 31:16 | unchanged |
 | x0 | a0, the first argument | v0, the result, if the call has one |
 | x1-x5 | a1-a5 | unchanged |
 | x6, x8-x30, `sp`, NZCV | not seen by the PAL | unchanged |
@@ -313,10 +313,14 @@ starts as `REI` from the frame at its KSP, with R0 the HWPCB the CPU left.
 - Interrupts go to kernel mode, with kernel as the previous mode, as the
   VAX's do.
 - **`CHMx`**, x the mode: `CHMK` 0, `CHME` 1, `CHMS` 2, `CHMU` 3. The code in
-  R0. The PAL delivers through the SCB's vector for x, at the same IPL, to
-  mode x, or to the current mode if that is an inner one, with the current
-  mode as the previous one. The handler writes the service's status, R0,
-  and R1 into the frame for `REI` to restore. Without a vector, or a stack in the HWPCB for
+  x7's bits 31:16, above the PAL call's, so that every other register, a
+  call's arguments among them, reaches the handler as it was
+  ([DESIGN-0004](0004-calling-standard.md)). The PAL delivers through the
+  SCB's vector for x, at the same IPL, to mode x, or to the current mode if
+  that is an inner one, with the current mode as the previous one, and
+  pushes the code below the frame, in 16 bytes, as the VAX's `CHMx` pushes
+  it. The handler pops it, and writes the service's status, R0, and R1 into
+  the frame for `REI` to restore. Any other PAL call has bits 31:16 clear. Without a vector, or a stack in the HWPCB for
   the mode, `CHMx` is a reserved instruction.
 - **`PROBER`, `PROBEW`** (a0 = an address, a1 = a length, a2 = a mode):
   v0 = 1 if the mode, or the previous mode if it is an outer one, may read
@@ -396,7 +400,7 @@ and gets:
 | `MTPR src, #PR$_RXCS`, `MFPR #PR$_RXCS, dst` | `MTPR_RXCS`, `MFPR_RXCS` |
 | `MFPR #PR$_RXDB, dst` | `MFPR_RXDB` |
 | `MTPR src, #PR$_DOORBELL` | `MTPR_DOORBELL` |
-| `CHMK #code`, `CHME`, `CHMS`, `CHMU` | `CHMK`, `CHME`, `CHMS`, `CHMU`, R0 = code; R0 isn't kept |
+| `CHMK #code`, `CHME`, `CHMS`, `CHMU` | `CHMK`, `CHME`, `CHMS`, `CHMU`, the code in x7's bits 31:16; R0 and R1 aren't kept |
 | `PROBER mode, len, base`, `PROBEW` | `PROBER`, `PROBEW`, a0 = base, a1 = len, a2 = mode; Z set if v0 is 0, no access |
 | `REI` | `REI` |
 | `HALT` | `HALT` |
@@ -436,10 +440,10 @@ unused.
 | 0x46 | `READLBLK` | vaxpunk | a0 = buffer, a1 = byte count, a2 = LBN, a3 = unit | v0 = status | reads a disk's blocks from the LBN into the buffer, which kernel mode must be able to write |
 | 0x47 | `WRITELBLK` | vaxpunk | a0 = buffer, a1 = byte count, a2 = LBN, a3 = unit | v0 = status | writes the buffer, which kernel mode must be able to read, to a disk's blocks from the LBN |
 | 0x48 | `MTPR_DOORBELL` | vaxpunk | a0 = port | | signals the port's component; never waits |
-| 0x82 | `CHME` | Alpha | a0 = code | | delivers through the SCB, to executive mode |
-| 0x83 | `CHMK` | Alpha | a0 = code | | delivers through the SCB, to kernel mode |
-| 0x84 | `CHMS` | Alpha | a0 = code | | delivers through the SCB, to supervisor mode |
-| 0x85 | `CHMU` | Alpha | a0 = code | | delivers through the SCB, in user mode |
+| 0x82 | `CHME` | Alpha | the code in x7's bits 31:16 | | delivers through the SCB, to executive mode |
+| 0x83 | `CHMK` | Alpha | the code in x7's bits 31:16 | | delivers through the SCB, to kernel mode |
+| 0x84 | `CHMS` | Alpha | the code in x7's bits 31:16 | | delivers through the SCB, to supervisor mode |
+| 0x85 | `CHMU` | Alpha | the code in x7's bits 31:16 | | delivers through the SCB, in user mode |
 | 0x8F | `PROBER` | Alpha | a0 = address, a1 = length, a2 = mode | v0 = 1 if readable | checks a mode's read access |
 | 0x90 | `PROBEW` | Alpha | a0 = address, a1 = length, a2 = mode | v0 = 1 if writable | checks a mode's write access |
 | 0x91 | `RD_PS` | Alpha | | v0 = PSL | the current and previous modes, IPL and the condition codes |

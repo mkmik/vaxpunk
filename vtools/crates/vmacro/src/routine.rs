@@ -46,8 +46,10 @@ pub struct Routine {
     /// indexed or offset by a variable), which takes them all.
     pub ap_args: Option<u32>,
     pub ap_list: bool,
-    /// Whether it calls: JSB, BSBx, CALLS or CALLG.
+    /// Whether it calls: JSB, BSBx, CALLS or CALLG; and whether it uses SP
+    /// or FP.
     pub calls_out: bool,
+    pub stacked: bool,
     /// Whether a JSB routine takes its caller's argument list, `INPUT=<AP>`,
     /// and whether a routine calls it by name, in the module or in another
     /// compiled with it, once solved.
@@ -79,6 +81,10 @@ pub struct Routine {
     /// Whether a JSB routine saves x30, once solved: if it calls, or code
     /// it shares with another routine does, whose RSB restores it.
     pub lr: bool,
+    /// Whether a CALL routine is frameless, once solved: it saves nothing,
+    /// homes nothing, calls nothing, leaves SP and FP alone and shares no
+    /// code (DESIGN-0004).
+    pub frameless: bool,
 }
 
 impl Routine {
@@ -143,6 +149,21 @@ impl Survey {
                 Kind::Jsb32 => r.preserve,
                 Kind::Exception => 0,
             };
+        }
+        let mut sharing = vec![false; self.routines.len()];
+        for i in 0..self.routines.len() {
+            for c in self.shared(i) {
+                (sharing[i], sharing[c]) = (true, true);
+            }
+        }
+        for (r, sharing) in self.routines.iter_mut().zip(sharing) {
+            r.frameless = r.kind == Kind::Call
+                && r.saved == 0
+                && r.home.is_none()
+                && !r.ap
+                && !r.calls_out
+                && !r.stacked
+                && !sharing;
         }
     }
 
@@ -440,6 +461,7 @@ pub struct Returns {
     pub saved: Regs,
     pub lr: bool,
     pub home: Option<u32>,
+    pub frameless: bool,
 }
 
 impl Routine {
@@ -449,6 +471,7 @@ impl Routine {
             saved: self.saved,
             lr: self.lr,
             home: self.home,
+            frameless: self.frameless,
         }
     }
 }

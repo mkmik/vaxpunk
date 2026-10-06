@@ -63,21 +63,26 @@ fn rei() {
     assert_eq!(lines("REI", ""), ["mov x7, #146", "svc #0"]);
 }
 
-/// `CHMK #3`: the code in R0, which brings the service's status back.
+/// `CHMK #3`: the code in x7's bits 31:16, above the PAL call's, so that
+/// x0-x6 reach the handler; R0 brings the service's status back.
 #[test]
 fn chmk() {
     assert_eq!(
         lines("CHMK", "#3"),
-        ["movz w14, #3", "mov w0, w14", "mov x7, #131", "svc #0",]
+        ["movz w7, #131", "movk w7, #3, lsl #16", "svc #0"]
+    );
+    assert_eq!(
+        lines("CHMK", "R2"),
+        ["mov x7, #131", "bfi x7, x19, #16, #16", "svc #0"]
     );
 }
 
-/// The other modes' CHMx are the same, with their own code.
+/// The other modes' CHMx are the same, with their own PAL call.
 #[test]
 fn chmx() {
-    assert!(lines("CHME", "#0").contains(&"mov x7, #130".to_string()));
-    assert!(lines("CHMS", "#0").contains(&"mov x7, #132".to_string()));
-    assert!(lines("CHMU", "#0").contains(&"mov x7, #133".to_string()));
+    assert!(lines("CHME", "#0").contains(&"movz w7, #130".to_string()));
+    assert!(lines("CHMS", "#0").contains(&"movz w7, #132".to_string()));
+    assert!(lines("CHMU", "#0").contains(&"movz w7, #133".to_string()));
 }
 
 /// `PROBEW #3, #8, (R1)`: base, length and mode in x0-x2; R0 and R1 come

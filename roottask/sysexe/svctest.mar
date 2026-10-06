@@ -17,7 +17,7 @@
         $DEVDEF
         $PRVDEF
         $JPIDEF
-        .EXTERNAL SYS$DCLEXH, SYS$DLCEFC, SYS$EXIT, EXE$GL_RPB
+        .EXTERNAL SYS$DCLEXH, SYS$DLCEFC, SYS$EXIT, EXE$GL_RPB, WIDEQIOW
 
         .PSECT  DATA, NOEXE, WRT, LONG
 OTHER_NAME:
@@ -278,7 +278,8 @@ FNFEND:
 
 ; User mode may read and write its own data, read but not write the
 ; system service vector, and do neither to the executive's data. The
-; executive won't for it either.
+; executive won't for it either, nor take an address above 4 GB, which
+; only a 64-bit caller can pass.
         PROBEW  #0, #4, STATE
         BEQL    90$
         PROBER  #0, #4, G^SYS$EXIT
@@ -293,6 +294,9 @@ FNFEND:
         EXPECT  #SS$_NORMAL, 30
         $QIOW_S CHAN=CHAN, FUNC=#IO$_WRITEVBLK, P1=G^EXE$GL_RPB, P2=#4
         EXPECT  #SS$_ACCVIO, 31
+        PUSHL   CHAN                    ; an address above 4 GB (svctest.m64)
+        CALLS   #1, WIDEQIOW
+        EXPECT  #SS$_ARG_GTR_32_BITS, 95
         $DASSGN_S CHAN=CHAN
         EXPECT  #SS$_NORMAL, 32
         $DASSGN_S CHAN=CHAN

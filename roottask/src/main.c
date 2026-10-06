@@ -1400,17 +1400,18 @@ static int exception(seL4_Word off, seL4_Word pc, const seL4_Word *param, unsign
 
 /*
  * CHMx, x the mode, CHMK's 0 to CHMU's 3: delivers through the SCB's vector
- * for x, at the same IPL, with the code in R0, in mode x or the current mode
- * if that is an inner one. Without a vector or a stack for that mode, it is a
- * reserved instruction.
+ * for x, at the same IPL, in mode x or the current mode if that is an inner
+ * one, with the code pushed below the frame, as the VAX's CHMx pushes it, so
+ * that every register reaches the handler. Without a vector or a stack for
+ * that mode, it is a reserved instruction.
  */
-static int chmx(int x)
+static int chmx(int x, seL4_Word code)
 {
 	seL4_Word pc = cur->mr[seL4_UnknownSyscall_FaultIP];
 	int to = x < cur->mode ? x : cur->mode;
 	read_regs();
 	regs.pc = pc + 4;
-	if (!vector(&regs, SCB_CHMK + 4 * x, ipl, to, cur->mode, 0, 0)) {
+	if (!vector(&regs, SCB_CHMK + 4 * x, ipl, to, cur->mode, &code, 1)) {
 		if (exception(SCB_OPCDEC, pc, 0, 0))
 			return 1;
 		print("%%PAL-F-NOVEC, no CHMx handler or stack for mode %u\n", to);
@@ -1478,12 +1479,16 @@ static int serve_one(seL4_MessageInfo_t msg)
 	seL4_Word *mr = cur->mr;
 	for (unsigned i = 0; i <= seL4_UnknownSyscall_FaultIP; i++)
 		mr[i] = seL4_GetMR(i);
-	seL4_Word pc = mr[seL4_UnknownSyscall_FaultIP], code = mr[seL4_UnknownSyscall_X7];
+	/* The function in x7's bits 15:0; CHMx's code in 31:16 (DESIGN-0004). */
+	seL4_Word pc = mr[seL4_UnknownSyscall_FaultIP], x7 = mr[seL4_UnknownSyscall_X7];
+	seL4_Word code = x7 >> 32 ? x7 : x7 & 0xffff;
 	seL4_Word a0 = mr[seL4_UnknownSyscall_X0], a1 = mr[seL4_UnknownSyscall_X1];
 	seL4_Word v0 = a0;
 	/* Privileged calls, 0x00-0x7F, are reserved instructions outside
 	 * kernel mode. */
 	if (code < 0x80 && cur->mode)
+		return exception(SCB_OPCDEC, pc, 0, 0);
+	if (x7 >> 16 && (code < CHME || code > CHMU))
 		return exception(SCB_OPCDEC, pc, 0, 0);
 	switch (code) {
 	case HALT:
@@ -1559,7 +1564,7 @@ static int serve_one(seL4_MessageInfo_t msg)
 	}
 	case CHME ... CHMU: {
 		static const int mode[] = { 1, 0, 2, 3 }; /* CHME, CHMK, CHMS, CHMU */
-		return chmx(mode[code - CHME]);
+		return chmx(mode[code - CHME], x7 >> 16);
 	}
 	case PROBER:
 	case PROBEW:

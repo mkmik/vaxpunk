@@ -608,12 +608,19 @@ quotas.
 ## System services
 
 A program calls `SYS$name` with `CALLS` or `CALLG`, or with the `$name_S`
-macros of `starlet.mlb`, which push the arguments. `SYS$name` is a routine
-in `syssrv.mar` that does `CHMK #code` and returns. The PAL delivers the
-`CHMK` to `EXE$CMODKRNL`, in kernel mode, which checks the code and the
-argument list (`SS$_ILLSER`, `SS$_INSFARG`, `SS$_ACCVIO`), calls `EXE$name`
-with `CALLG` on the caller's argument list, and `REI`s with its status in
-R0, back to the caller's mode. `$CMEXEC` does `CHME #0` instead, to
+macros of `starlet.mlb`, which push the arguments: by the calling standard
+([DESIGN-0004](0004-calling-standard.md)), in x0-x7 and on the stack, their
+count in x9. `SYS$name` is a frameless routine in `syssrv.mar` that moves
+x7 to x10 and does `CHMK #code`, which puts the code in x7, and returns.
+The PAL delivers the `CHMK` to `EXE$CMODKRNL`, in kernel mode, with every
+register as it was and the code below its frame. `EXE$CMODKRNL` checks the
+code and the count (`SS$_ILLSER`, `SS$_INSFARG`), copies the arguments past
+the eighth from the caller's stack, which its mode must be able to read
+(`SS$_ACCVIO`), checks that each is a sign-extended longword
+(`SS$_ARG_GTR_32_BITS`, as 64-bit VMS: no service here takes 64-bit
+addresses), calls `EXE$name` with them, and `REI`s with its status in R0,
+back to the caller's mode. A `CALLG` list the caller can't read faults in
+the caller, which loads it. `$CMEXEC` does `CHME #0` instead, to
 `EXE$CMODEXEC` in executive mode.
 
 Programs run in user mode, so the `SYS$name` routines, `EXE$CMODEXEC`,

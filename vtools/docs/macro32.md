@@ -190,7 +190,11 @@ bytes each, every longword sign-extended, and their count in x9.
 
   FP (x29) points at the frame, and SP (x18) starts at the frame, so
   locals made with `SUBL2 #n, SP` are at negative offsets from FP, as on
-  the VAX. Any other offset from FP at 0 or above is an error, as in
+  the VAX. A routine with nothing to keep, which saves no registers, homes
+  no arguments, calls nothing, leaves SP and FP alone and shares no code
+  with another, is frameless, as the calling standard lets it be: no
+  prologue, no descriptor, and `RET` is `ret`. A fault in it belongs to its
+  caller's frame. Any other offset from FP at 0 or above is an error, as in
   AMACRO. Mask bits 12 and up (integer and decimal overflow traps) are
   ignored.
 - **The argument list.** A routine that reads AP, or whose JSB routines
@@ -330,7 +334,7 @@ function codes are in
 | `MTPR src, #PR$_RXCS`, `MFPR #PR$_RXCS, dst` | `MTPR_RXCS`, `MFPR_RXCS`: the console receive status, a character waiting and its interrupt enable |
 | `MFPR #PR$_RXDB, dst` | `MFPR_RXDB`, the console character received |
 | `MTPR src, #PR$_DOORBELL` | `MTPR_DOORBELL`, rings port src's doorbell |
-| `CHMK #code`, `CHME`, `CHMS`, `CHMU` | `CHMK`, `CHME`, `CHMS`, `CHMU`: the code goes in R0, and R0 and R1 come back with what the service left in the frame |
+| `CHMK #code`, `CHME`, `CHMS`, `CHMU` | `CHMK`, `CHME`, `CHMS`, `CHMU`: the code goes in x7's bits 31:16, so the arguments in x0-x6 reach the handler, and R0 and R1 come back with what the service left in the frame |
 | `PROBER mode, len, base`, `PROBEW` | `PROBER`, `PROBEW`: base, len and mode in x0-x2, R0 and R1 kept; Z is set if the mode may not read (write) the first and last byte, as on the VAX |
 | `REI` | `REI`: resumes at the PC in the frame on the stack, with every register from it |
 | `HALT` | `HALT` |

@@ -63,6 +63,7 @@ SS$_RESIGNAL = 2328                     ; a handler's: let the next one have the
 SS$_UNWIND = 2336                       ; to a frame's handler: $UNWIND removes the frame
 SS$_UNWINDING = 2344                    ; $UNWIND twice for one condition
 SS$_SIGNAL64 = 9732                     ; a 64-bit signal array's second longword
+SS$_ARG_GTR_32_BITS = 9916              ; an argument isn't a sign-extended longword
 SS$_NOMOREPROC = 2472                   ; a wildcard $GETJPI is past the last process
 SS$_NOSUCHDEV = 2312
 SS$_NOSUCHFILE = 2320

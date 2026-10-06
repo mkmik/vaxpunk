@@ -205,6 +205,10 @@ MESSAGES:
         .ASCIC  "SYSTEM"
         .ASCIC  "NOSIGNAL"
         .ASCIC  "no signal currently active"
+        .LONG   SS$_ARG_GTR_32_BITS
+        .ASCIC  "SYSTEM"
+        .ASCIC  "ARG_GTR_32_BITS"
+        .ASCIC  "64-bit address passed where a 32-bit one is required"
         .LONG   SS$_UNWINDING
         .ASCIC  "SYSTEM"
         .ASCIC  "UNWINDING"

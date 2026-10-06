@@ -565,7 +565,9 @@ pub fn compile(
         Op::Rsb => {
             match exit {
                 crate::Exit::Jsb(saved, lr) => g.out.extend(crate::jsb_epilogue(saved, *lr)),
-                crate::Exit::Call(_) => return Err("RSB in a CALL routine".into()),
+                crate::Exit::Call(_) | crate::Exit::Frameless => {
+                    return Err("RSB in a CALL routine".into());
+                }
                 crate::Exit::None => {}
             }
             g.emit("ret");
@@ -629,10 +631,11 @@ pub fn compile(
             live(true)
         }
         Op::Ret => {
-            let crate::Exit::Call(frame) = exit else {
-                return Err("RET outside a CALL routine (.CALL_ENTRY or .ENTRY)".into());
-            };
-            g.out.extend(crate::epilogue(frame));
+            match exit {
+                crate::Exit::Call(frame) => g.out.extend(crate::epilogue(frame)),
+                crate::Exit::Frameless => g.emit("ret"),
+                _ => return Err("RET outside a CALL routine (.CALL_ENTRY or .ENTRY)".into()),
+            }
             Ok(None)
         }
         Op::Pushr | Op::Popr => {
@@ -1082,12 +1085,21 @@ pub fn compile(
             g.emit("svc #0");
             Ok(None)
         }
-        Op::Chm(code) => {
-            // The code goes in R0, as on Alpha, and the service's status
-            // comes back there: R0 isn't kept.
-            let v = g.read(&ops[0], size, Ext::Sext)?;
-            g.emit(format!("mov w0, {v}"));
-            g.emit(format!("mov x7, #{code}"));
+        Op::Chm(pal) => {
+            // The code goes in x7's bits 31:16, with the PAL call, so that
+            // the arguments in x0-x6 reach the handler (DESIGN-0004). The
+            // service's status comes back in R0, R1 too: neither is kept.
+            match &ops[0] {
+                Opnd::Imm(e) if g.constant(e).is_some() => {
+                    let n = g.constant(e).unwrap() & 0xffff;
+                    g.imm_into("x7", &(n << 16 | i64::from(pal)).to_string(), Size::L)?;
+                }
+                o => {
+                    let v = g.read(o, size, Ext::Any)?;
+                    g.emit(format!("mov x7, #{pal}"));
+                    g.emit(format!("bfi x7, {}, #16, #16", x(&v)));
+                }
+            }
             g.emit("svc #0");
             Ok(Some(test("w0", Size::L)))
         }

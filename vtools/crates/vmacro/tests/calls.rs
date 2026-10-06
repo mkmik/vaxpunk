@@ -105,3 +105,33 @@ fn push_sp() {
         );
     }
 }
+
+/// A CALL routine with nothing to keep is frameless (DESIGN-0004): no
+/// prologue, and `RET` is `ret`. One that uses FP, as a handler's
+/// establisher does, has a frame.
+#[test]
+fn frameless() {
+    let constant = |e: &str| e.parse().ok();
+    let compile = |lines: &[(&str, &str)]| {
+        let mut m = vmacro::Macro32::default();
+        loop {
+            let mut code = Vec::new();
+            for (mn, operands) in lines {
+                code.extend(m.statement(mn, operands, &constant).unwrap().unwrap());
+            }
+            if !m.again() {
+                return code
+                    .iter()
+                    .map(|l| l.trim().to_string())
+                    .collect::<Vec<_>>();
+            }
+        }
+    };
+    let leaf = compile(&[(".ENTRY", "LEAF, 0"), ("MOVL", "#1, R0"), ("RET", "")]);
+    assert_eq!(leaf, ["LEAF::", "movz x0, #1", "tst w0, w0", "ret"]);
+    let framed = compile(&[(".ENTRY", "OWN, 0"), ("CLRL", "(FP)"), ("RET", "")]);
+    assert!(
+        framed.iter().any(|l| l.starts_with("stp x29, x30")),
+        "{framed:?}"
+    );
+}

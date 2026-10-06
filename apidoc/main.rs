@@ -1599,8 +1599,8 @@ impl Page<'_> {
             "which is in <code>syssrv.mar</code>, or with the <code>$name_S</code> macros of ",
             r##"<a href="#lib-starlet">starlet.mlb</a>. Programs run in user mode, and <code>SYS$name</code> is "##,
             "in the vector, a page user mode may run. A service called with fewer arguments than it takes ",
-            "returns SS$_INSFARG, and one with an argument list or an address its caller's mode can't reach ",
-            "SS$_ACCVIO.</p>"
+            "returns SS$_INSFARG, one with an address its caller's mode can't reach SS$_ACCVIO, and one with ",
+            "an argument that isn't a sign-extended longword SS$_ARG_GTR_32_BITS.</p>"
         ));
         self.chapter("1", "ch-services", "System services", &intro, &body)
     }

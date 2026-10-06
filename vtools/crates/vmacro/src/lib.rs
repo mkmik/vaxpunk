@@ -74,6 +74,7 @@ pub(crate) enum Flags {
 pub(crate) enum Exit {
     None,
     Call(Frame),
+    Frameless,
     Jsb(Vec<u8>, bool),
 }
 
@@ -321,6 +322,7 @@ impl Macro32 {
             let mut g = operand::Gen::new(&ops, constant, &mut self.labels);
             let r = &self.survey.routines[cur];
             let exit = match r.kind {
+                Kind::Call if r.frameless => Exit::Frameless,
                 Kind::Call => Exit::Call(frame(&routine::list(r.saved), r.home)),
                 Kind::Jsb | Kind::Jsb32 => Exit::Jsb(routine::list(r.saved), r.lr),
                 Kind::Exception => Exit::None,
@@ -354,6 +356,8 @@ impl Macro32 {
                 let r = &mut self.survey.routines[cur];
                 r.direct |= written;
                 r.calls_out |= calls;
+                r.stacked |= ops.iter().any(names_stack)
+                    || matches!(op, Op::Pushl | Op::Pusha | Op::Pushr | Op::Popr | Op::Rei);
                 if op == insn::Op::Jsb {
                     match target(&ops[0]) {
                         Some(t) => r.calls.push((t.to_string(), linkage)),
@@ -686,6 +690,12 @@ impl Macro32 {
                 r.direct |= 1 << n;
             }
             r.calls_out |= matches!(mn, "BL" | "BLR");
+            r.stacked |= rest.split(|c: char| !c.is_ascii_alphanumeric()).any(|w| {
+                matches!(
+                    w.to_ascii_lowercase().as_str(),
+                    "sp" | "x18" | "w18" | "x29" | "w29" | "x30" | "w30" | "fp" | "lr"
+                )
+            });
         }
         self.ap_stale |= matches!(mn, "BL" | "BLR");
         self.falls = !matches!(mn, "B" | "BR" | "RET" | "ERET");
@@ -799,6 +809,7 @@ impl Macro32 {
             out.push(format!("{}::", names[0]));
         }
         match kind {
+            Kind::Call if r.frameless => {}
             Kind::Call => {
                 let fdsc = format!("FDSC$${i}");
                 let f = frame(&saved, r.home);
@@ -926,6 +937,28 @@ fn tail_call(
     )?;
     g.place_label(&past);
     Ok(f)
+}
+
+/// Whether an operand uses SP or FP.
+fn names_stack(o: &operand::Opnd) -> bool {
+    use operand::{Mode, Opnd};
+    let stack = |n: u8| n == 13 || n == 14;
+    match o {
+        Opnd::Reg(n) => stack(*n),
+        Opnd::Imm(_) => false,
+        Opnd::Mem(mode, index) => {
+            index.is_some_and(stack)
+                || match mode {
+                    Mode::Def(n)
+                    | Mode::Inc(n)
+                    | Mode::Dec(n)
+                    | Mode::IncDef(n)
+                    | Mode::Disp(_, n)
+                    | Mode::DispDef(_, n) => stack(*n),
+                    _ => false,
+                }
+        }
+    }
 }
 
 /// Whether an operand names AP.
