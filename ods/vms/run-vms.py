@@ -2,7 +2,8 @@
 """Boots OpenVMS Alpha V8.4-2L1 from its install CD in AXPbox, types DCL
 commands at its prompt, and shuts it down.
 
-usage: run-vms.py CMDFILE [LOG]      (run-vms.py --selftest checks the console filter)
+usage: run-vms.py [--system IMG] CMDFILE [LOG]
+       run-vms.py --selftest       (checks the console filter)
 
 CMDFILE (UTF-8, Latin-1 characters only): one line is typed per DCL prompt.
 After `CREATE file` (not /DIRECTORY) the following lines are typed as the
@@ -14,10 +15,16 @@ Flow: SRM `boot dka400` -> the date prompt -> menu option 8 (DCL) -> `$$$`
 flushes the disk files (never kill it harder). The console goes to LOG
 (default logs/<cmdfile>-<time>.log), the emulator's own output to LOG.emu.
 Disks (es40.cfg): DKA0=disk1.img DKA100=disk2.img DKA200=disk3.img.
+
+With --system IMG it boots an installed system instead: a clone of IMG
+(cp -c, copy on write) as DKA0, on a free console port so that it can run
+next to other emulators. It logs in as SYSTEM (password $VMS_PASSWORD,
+default "system"), types CMDFILE at the `$ ` prompt, then stops the
+emulator and deletes the clone: nothing is shut down or written back.
 Environment: AXPBOX (emulator binary), AXPBOX_CFG (config), AXPBOX_BOOT
 (SRM name of the CD).
 """
-import os, re, select, signal, socket, subprocess, sys, time
+import os, re, select, shutil, signal, socket, subprocess, sys, tempfile, time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 EMU = os.environ.get("AXPBOX", os.path.join(HERE, "axpbox", "build", "axpbox"))
@@ -26,6 +33,7 @@ CONFIG = os.environ.get("AXPBOX_CFG", "es40.cfg")
 BOOT = os.environ.get("AXPBOX_BOOT", "dka400")  # SRM name of the CD
 PROMPT = "$$$ "
 CMD_TIMEOUT = 3600                 # per DCL command, seconds
+ECHO_TIMEOUT = 60                  # for the echo of a line typed: AXPbox's console hangs
 CREATE_FILE = re.compile(r"\s*\$?\s*CREA(T|TE)?\b(?!.*/DIR)", re.I)
 MONTHS = "JAN FEB MAR APR MAY JUN JUL AUG SEP OCT NOV DEC".split()
 
@@ -33,8 +41,8 @@ MONTHS = "JAN FEB MAR APR MAY JUN JUL AUG SEP OCT NOV DEC".split()
 class Console:
     """Telnet console: strips telnet commands, NUL fill and CR; logs as UTF-8."""
 
-    def __init__(self, sock, log):
-        self.sock, self.log = sock, log
+    def __init__(self, sock, log, prompt=PROMPT):
+        self.sock, self.log, self.prompt = sock, log, prompt
         self.buf, self.mark, self.skip = "", 0, 0
 
     def clean(self, data):
@@ -88,25 +96,64 @@ class Console:
         return lambda: s in self.since()
 
     def at_prompt(self):
-        return self.since().endswith(PROMPT)
+        return self.since().endswith(self.prompt)
 
     def dcl(self, line):
         self.send(line + "\r")
         self.wait(self.at_prompt, CMD_TIMEOUT, repr(line))
 
 
-def run(cmds, logpath):
+SYSTEM_CFG = """sys0 = tsunami
+{
+  memory.bits = 29;
+  rom.srm = "rom/cl67srmrom.exe";
+  rom.decompressed = "rom/decompressed.rom";
+  rom.flash = "rom/flash.rom";
+  rom.dpr = "rom/dpr.rom";
+  cpu0 = ev68cb { speed = 800M; skip_memtest_hack = true; }
+  serial0 = serial { address = "127.0.0.1"; port = %d; }
+  pci0.7 = ali { vga_console = false; }
+  pci0.15 = ali_ide {}
+  pci0.19 = ali_usb {}
+  pci0.3 = sym53c810 { disk0.0 = file { file = "%s"; } }
+}
+"""
+
+
+def run(cmds, logpath, system=None):
+    port, config, boot, workdir = PORT, CONFIG, BOOT, None
+    if system:
+        # The clone sits next to IMG, on its file system, so cp -c can clone.
+        workdir = tempfile.mkdtemp(prefix="run-", dir=os.path.dirname(os.path.abspath(system)))
+        disk = os.path.join(workdir, "sys.img")
+        subprocess.run(["cp", "-c", system, disk], check=True)
+        # AXPbox ignores a failed bind(), so the port must be free.
+        with socket.socket() as probe:
+            probe.bind(("127.0.0.1", 0))
+            port = probe.getsockname()[1]
+        config = os.path.join(workdir, "system.cfg")
+        with open(config, "w") as f:
+            f.write(SYSTEM_CFG % (port, disk))
+        boot = "dka0"
+    try:
+        run_emulator(cmds, logpath, port, config, boot, system is not None)
+    finally:
+        if workdir:
+            shutil.rmtree(workdir)
+
+
+def run_emulator(cmds, logpath, port, config, boot, installed):
     with socket.socket() as probe:
-        if probe.connect_ex(("127.0.0.1", PORT)) == 0:
-            sys.exit(f"port {PORT} busy: another axpbox running? (pkill -INT -x axpbox)")
+        if probe.connect_ex(("127.0.0.1", port)) == 0:
+            sys.exit(f"port {port} busy: another axpbox running? (pkill -INT -x axpbox)")
     emu_log = open(logpath + ".emu", "wb")
-    emu = subprocess.Popen([EMU, "run", CONFIG], cwd=HERE, stdout=emu_log,
+    emu = subprocess.Popen([EMU, "run", config], cwd=HERE, stdout=emu_log,
                            stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL)
     t0 = time.time()
     try:
         for _ in range(300):
             try:
-                sock = socket.create_connection(("127.0.0.1", PORT))
+                sock = socket.create_connection(("127.0.0.1", port))
                 break
             except ConnectionRefusedError:
                 if emu.poll() is not None:
@@ -115,31 +162,45 @@ def run(cmds, logpath):
         else:
             raise RuntimeError("could not connect to the console port")
         with sock, open(logpath, "w", encoding="utf-8") as log:
-            c = Console(sock, log)
+            c = Console(sock, log, "$ " if installed else PROMPT)
             c.wait(c.seen("P00>>>"), 300, "SRM prompt")
             c.send("show device\r")
             c.wait(c.seen("P00>>>"), 60, "show device")
+            # The end of STARTUP on an installed system, the menu on the CD.
+            booted = "job terminated" if installed else "Enter CHOICE"
             # Booting from an IDE CD, about half the boots die loading images
             # (status 54, CTRLERR) and fall back to SRM; booting again works.
             # Not seen with SCSI; retry anyway.
             for attempt in range(1, 11):
-                c.send(f"boot {BOOT}\r")
+                c.send(f"boot {boot}\r")
                 c.wait(lambda: any(s in c.since() for s in
-                                   ("date and time", "Enter CHOICE", "P00>>>")),
+                                   ("date and time", booted, "P00>>>")),
                        1800, "VMS boot")
                 if "P00>>>" not in c.since():
                     break
                 print(f"boot attempt {attempt} fell back to SRM, retrying", flush=True)
             else:
-                raise RuntimeError("VMS did not boot from the CD")
+                raise RuntimeError(f"VMS did not boot from {boot}")
             if "date and time" in c.since():
                 t = time.localtime()
                 c.send(f"{t.tm_mday:02}-{MONTHS[t.tm_mon - 1]}-{t.tm_year} "
                        f"{t.tm_hour:02}:{t.tm_min:02}\r")
-                c.wait(c.seen("Enter CHOICE"), 1800, "install menu")
-            c.send("8\r")
-            c.wait(c.at_prompt, 600, "$$$ prompt")
-            print(f"$$$ prompt after {time.time() - t0:.0f}s", flush=True)
+                c.wait(c.seen(booted), 1800, "the end of the boot")
+            if installed:
+                # A Return typed while STARTUP's last lines print is lost.
+                for _ in range(24):
+                    c.send("\r")
+                    if c.poll(c.seen("Username:"), 5):
+                        break
+                else:
+                    raise TimeoutError("no Username: prompt")
+                c.send("SYSTEM\r")
+                c.wait(c.seen("Password:"), 60, "Password:")
+                c.send(os.environ.get("VMS_PASSWORD", "system") + "\r")
+            else:
+                c.send("8\r")
+            c.wait(c.at_prompt, 600, "DCL prompt")
+            print(f"DCL prompt after {time.time() - t0:.0f}s", flush=True)
             c.dcl("SET TERMINAL/EIGHTBIT/WIDTH=132")
 
             text = skip = False
@@ -153,10 +214,10 @@ def run(cmds, logpath):
                     continue
                 elif text:  # file content: wait for the echo of the line terminator
                     c.send(line + "\r")
-                    c.wait(c.seen("\n"), CMD_TIMEOUT, f"echo of {line!r}")
+                    c.wait(c.seen("\n"), ECHO_TIMEOUT, f"echo of {line!r}")
                 elif CREATE_FILE.match(line):
                     c.send(line + "\r")
-                    c.wait(c.seen("\n"), CMD_TIMEOUT, f"echo of {line!r}")
+                    c.wait(c.seen("\n"), ECHO_TIMEOUT, f"echo of {line!r}")
                     # A prompt right away means CREATE failed: skip its text block.
                     skip = c.poll(c.at_prompt, 3)
                     text = not skip
@@ -168,11 +229,14 @@ def run(cmds, logpath):
                 print("WARNING: command file ended inside a text block, sending Ctrl-Z")
                 c.send("\x1a")
                 c.wait(c.at_prompt, CMD_TIMEOUT, "prompt after Ctrl-Z")
-            print(f"commands done after {time.time() - t0:.0f}s, shutting down", flush=True)
-            c.send("LOGOUT\r")
-            c.wait(c.seen("Enter CHOICE"), 600, "menu after LOGOUT")
-            c.send("9\r")
-            c.wait(c.seen("P00>>>"), 600, "SRM prompt after shutdown")
+            if installed:  # the clone is thrown away: no shutdown
+                print(f"commands done after {time.time() - t0:.0f}s", flush=True)
+            else:
+                print(f"commands done after {time.time() - t0:.0f}s, shutting down", flush=True)
+                c.send("LOGOUT\r")
+                c.wait(c.seen("Enter CHOICE"), 600, "menu after LOGOUT")
+                c.send("9\r")
+                c.wait(c.seen("P00>>>"), 600, "SRM prompt after shutdown")
     finally:
         emu.send_signal(signal.SIGINT)  # graceful: flushes and closes the disk files
         try:
@@ -196,12 +260,17 @@ if __name__ == "__main__":
     if sys.argv[1:] == ["--selftest"]:
         selftest()
         sys.exit()
-    if len(sys.argv) not in (2, 3):
+    # A plain kill still stops the emulator and deletes the clone.
+    signal.signal(signal.SIGTERM, lambda *_: sys.exit("terminated"))
+    args, system = sys.argv[1:], None
+    if args[:1] == ["--system"] and len(args) > 1:
+        system, args = args[1], args[2:]
+    if len(args) not in (1, 2):
         sys.exit(__doc__)
-    with open(sys.argv[1], encoding="utf-8") as f:
+    with open(args[0], encoding="utf-8") as f:
         cmds = f.read().splitlines()
-    stem = os.path.splitext(os.path.basename(sys.argv[1]))[0]
-    log = sys.argv[2] if len(sys.argv) == 3 else os.path.join(
+    stem = os.path.splitext(os.path.basename(args[0]))[0]
+    log = args[1] if len(args) == 2 else os.path.join(
         HERE, "logs", f"{stem}-{time.strftime('%Y%m%d-%H%M%S')}.log")
     os.makedirs(os.path.dirname(os.path.abspath(log)), exist_ok=True)
-    run(cmds, log)
+    run(cmds, log, system)

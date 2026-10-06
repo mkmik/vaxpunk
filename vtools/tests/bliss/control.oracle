@@ -1,0 +1,8 @@
+
+    PRINT(IF .N EQL .N THEN 4);
+............................^
+%BLS64-I-TEXT, Null expression appears in value-required context
+at line number 52 in file SYS$SYSDEVICE:[ORACLE]CONTROL.B64;1
+BLISS status %X106F1263
+LINK status %X10000001
+RUN status %X00010001

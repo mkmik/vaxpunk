@@ -25,8 +25,10 @@ Each item below carries the key of its source.
 | UM | *BLISS-32 User Manual*, AA-H322E-TE, May 1987: `b32uman.pdf`, same places |
 | RN | *Release Notes for Alpha BLISS V1.11-007*, chapter 2, "Differences between BLISS-32 and Alpha BLISS": `[SYSHLP]BLSA64111-007.RELEASE_NOTES` in the kit `hp-axpvms-blissa64-v0111-7-1.pcsi` (Freeware V8.0) |
 | KIT | The compiler's own tables of reserved words, built-ins, lexical functions and switches, read as strings from the same kit |
+| CLD | `[SYSUPD]BLISS_AN.CLD` in the same kit: the DCL definition of the `BLISS` verb, with every qualifier, its keywords and defaults, and an edit history to 2003 |
 | ARCH | `rebuilding_starlet.txt`, next to the kits on the Freeware CD: how STARLET.L64 and LIB.L64 are built, and the `ARCH_DEFS` macros |
-| VSI | VSI's release notes for BLISS V1.15-148 on OpenVMS x86-64: how VSI retargeted the same dialect to another architecture |
+| VSI | VSI's release notes for BLISS V1.15-148 on OpenVMS x86-64, in the x86-64 cross-tools notes (<https://wasd.vsm.com.au/sys$common/syshlp/X86_XTOOLS-E0902-1_XGF4.RELEASE_NOTES>): how VSI retargeted the same dialect to another architecture |
+| CS | DESIGN-0004 and the OpenVMS calling standard it follows, for the 64-bit mechanism array |
 | probe | Not stated by any document; to be confirmed against BLISSA64 V1.11-7 in AXPbox once the oracle harness (PRD-0004 step 3) exists |
 | vaxpunk | A choice of ours, where BLISS-64 is tied to Alpha |
 
@@ -35,10 +37,16 @@ The kit stores the release notes as text in variable-length records (a
 (`04 82 3E 00`) every 15,876 bytes; dropping the headers and reading the
 records gives the text back.
 
-The Alpha BLISS kit carries no BLISS-64 manual. The release notes are the
-only DEC document of the dialect: DEC's manuals stayed the two above, and
-the notes say how the Alpha compilers differ from them. The online help is
-listed as missing in the notes' known bugs.
+The Alpha BLISS kit carries no BLISS-64 manual. Its files are the two
+compilers, the LRM and UM above (as PDF and PostScript, which is where
+the font names in the kit come from; the kit's `BLSLREF.PDF`, carved out
+with the PCSI chunk headers dropped, is byte for byte the 1987
+`blslref.pdf`, so the LRM was never revised for Alpha), the release notes, `BLISS_AN.CLD`,
+`BLI$CALLG.MAR`, two installation test programs and the library build
+procedure: no help library. The release notes are the only DEC document of
+the dialect: DEC's manuals stayed the two above, and the notes say how the
+Alpha compilers differ from them. The online help is listed as missing in
+the notes' known bugs.
 
 ## The compiler
 
@@ -114,6 +122,20 @@ The core of the dialect: a BLISS value, the fullword, is a quadword.
   `%BPVAL` = 64)
 - **Literals.** A number that doesn't fit a fullword is an informational
   "numeric literal overflow"; in BLISS-64 that is past 64 bits. (RN 2.24)
+- **`QUAD_LITERALS`.** BLISS-64EN has an `/ASSUME=[NO]QUAD_LITERALS`
+  option, on by default, and a `[NO]QUAD_LITERALS` module switch, added
+  in 1996. No document describes it. The likely reading is that with it
+  off, literals are 32-bit values, sign-extended, as BLISS-32 code
+  expects of `%X'FFFFFFFF'`; vbliss takes the default only until a probe
+  says what `NOQUAD_LITERALS` does. (CLD; KIT; probe)
+- **Arithmetic and comparisons** are the manual's at 64 bits: `+`, `-`,
+  `*`, `/`, `MOD` are signed 64-bit operations, `LSS` and the rest signed,
+  `LSSU` and the `U` forms unsigned, `LSSA` and the `A` forms address
+  comparisons, which are unsigned: `-1 LSSA 0` is 0. The `[NO]OVERFLOW`
+  switch turns overflow checking on and off; RN doesn't say which is the
+  default, and BLISSA64 wraps without it, so `NOOVERFLOW` is. vbliss
+  wraps and accepts the switch. (LRM 5.1; RN 2.26; oracle,
+  `tests/bliss/arith.b64`; vaxpunk)
 
 ### Signs
 
@@ -131,6 +153,17 @@ MACRO-32 routine arrives sign-extended, while the same status stored in an
 unsigned LONG and fetched comes back zero-extended, and the two compare
 unequal when bit 31 is set. vbliss sign-extends nothing on its own; the
 lint and `/CHECK=LONGWORD` are where this gets caught. (vaxpunk)
+
+**VMS's 32-bit structures.** A field of a `$xxxDEF` block is a `FIELD`
+item `[offset, position, size, extension]` used with `BLOCK[, BYTE]`, so
+its size and extension are in the definition, not in the dialect: a
+`PCB$L_STS` read through such a field is a 32-bit fetch in both
+dialects, and only its extension decides the upper half in BLISS-64.
+How DEC's `STARLET.R64` wrote the extension of `$L_` fields (0, or 1 for
+the ones holding statuses) is not documented; vdefs writes 0, as the LRM's
+BLISS-32 examples do, and a probe of `%FIELDEXPAND` on DEC's library
+settles it. `EXTENSION` beyond that (the `E` of a field reference
+`<P,S,E>`) is unchanged from the LRM. (LRM 11.2, 11.5, 11.10.3; probe; vaxpunk)
 
 ## Structures
 
@@ -323,6 +356,28 @@ KIT)
   condition value and are otherwise `SIGNAL` and `SIGNAL_STOP`. (RN
   2.33.3)
 - `RETURN_UNWIND` exists only on Tru64. (RN 2.33.2)
+- **What the built-ins call.** The compiler's table pairs `SIGNAL`,
+  `SIGNAL_STOP` and `SETUNWIND` with `LIB$SIGNAL`, `LIB$STOP` and
+  `SYS$UNWIND`, as BLISS-32 did. (KIT)
+- **`SIGNAL` takes a 32-bit condition.** The kit's messages include a
+  diagnostic that `SIGNAL` passes only the low 32 bits of the condition
+  value and that `SIGNALREF` should be used: a BLISS-64 condition value
+  with bits set above 31 gets a message, and the rest of the arguments are
+  passed as quadwords. (KIT; which compiler issues it and when, probe)
+- **The handler's parameters** on OpenVMS are the LRM's three: the signal
+  vector, the mechanism vector, and, for an `ENABLE`d handler, the enable
+  vector, each by reference. On Alpha the signal vector is still the
+  32-bit one (a longword count, then longwords), while the mechanism
+  vector is the 64-bit `$CHFDEF` one, with quadword saved registers and a
+  pointer to the 64-bit signal vector; a handler that set the routine's
+  value through `CHF$L_MCH_SAVR0` on the VAX writes the quadword field
+  instead. RN says nothing about this beyond Tru64's different
+  parameters: it is the operating system's calling standard, not the
+  dialect. (LRM 17.4.2; RN 2.33.1; CS)
+
+  vaxpunk: the signal and mechanism arrays are DESIGN-0004's: the 32-bit
+  signal array first, the 64-bit one through `CHF$PH_MCH_SIG64_ADDR`, the
+  value in `CHF$IH_MCH_RETVAL`. vdefs gives BLISS-64 these from `$CHFDEF`.
 - An `ENABLE`d handler is called through a jacket in the run-time library,
   `OTS$BLISS_STATIC_HANDLER` (and `OTS$BLISS_DYNAMIC_HANDLER` for
   `ESTABLISH`), which adds the enable vector to the arguments the system
@@ -342,46 +397,72 @@ functions, the linkage functions, common built-ins like `ROT`, the Alpha
 built-ins and the PAL built-ins below. (RN 2.3.1; KIT, where none of the
 VAX names appears)
 
-**PAL calls.** Each Alpha PAL call is a built-in named `PAL_` and the
-call: `PAL_MTPR_IPL`, `PAL_MFPR_PCBB`, `PAL_PROBER`, `PAL_CHMK`,
-`PAL_INSQHIL`, `PAL_REMQTIQ`, `PAL_SWPCTX`, `PAL_HALT`... (the full list
-is RN 2.9.2 and the kit's table). `CALL_PAL(code, args...)` makes any
-call, the code a compile-time constant. Inputs and outputs are the SRM's.
-(RN 2.9.2)
+The list below is the compiler's own table (KIT), grouped. The last
+column says when vbliss needs each: **now**, in PRD-0004; **later**, when
+some code uses it; **no**, it means nothing on ARM64 (rejected, or
+accepted as a no-op where the row says so).
+
+| Built-in | What it does | Source | vbliss |
+| --- | --- | --- | --- |
+| `ACTUALCOUNT()` | number of actuals, from x9 | LRM 13.6 | now |
+| `ACTUALPARAMETER(i)` | the i-th actual, from 1 | LRM 13.6 | now |
+| `NULLPARAMETER(i)` | the i-th actual is absent or 0 | LRM 13.6 | now |
+| `ARGPTR()` | a VAX-style copy of the argument list (*Linkage functions*) | RN 2.3.2 | now |
+| `RETURNADDRESS()` | the caller's return address | KIT | later |
+| `SIGNAL`, `SIGNAL_STOP`, `SETUNWIND` | condition handling | LRM 17 | now |
+| `SIGNALREF`, `SIGNALREF_STOP` | the same, the condition a 64-bit value by reference | RN 2.33.3 | later |
+| `ESTABLISH(rtn)`, `REVERT()` | set or clear the routine's handler at run time | RN 2.3.3 | now |
+| `MAX`, `MIN`, `MAXU`, `MINU`, `MAXA`, `MINA`, `ABS`, `SIGN` | common arithmetic | LRM 5.2 | now |
+| `%REF(e)` | the address of a temporary holding e, as an actual | LRM 5.2.2.3 | now |
+| `CH$PTR`, `CH$PLUS`, `CH$DIFF`, `CH$RCHAR`, `CH$WCHAR` and their `_A`/`A_` forms | character pointers | LRM 20 | now |
+| `CH$ALLOCATION`, `CH$SIZE` | buffer sizes, compile time | LRM 20 | now |
+| `CH$MOVE`, `CH$COPY`, `CH$FILL` | move, concatenate and pad, fill | LRM 20 | now |
+| `CH$EQL`, `CH$NEQ`, `CH$LSS`, `CH$LEQ`, `CH$GTR`, `CH$GEQ`, `CH$COMPARE` | string comparison with a fill character | LRM 20 | now |
+| `CH$FIND_CH`, `CH$FIND_NOT_CH`, `CH$FIND_SUB`, `CH$FAIL` | search | LRM 20 | now |
+| `CH$TRANSTABLE`, `CH$TRANSLATE` | translation | LRM 20 | later |
+| `ROT(v, n)` | rotate | RN 2.9.6 | now: `ror` |
+| `SLL`, `SRL`, `SRA` | shift one way by 0 to 63 | RN 2.9.5 | now |
+| `UMULH(a, b)` | high half of the unsigned product | RN 2.9.6 | later: `umulh` |
+| `CMPBGE`, `ZAP`, `ZAPNOT` | Alpha's byte-mask operations | RN 2.9.6 | later, a few instructions each |
+| `TRAPB()`, `DRAINT()` | wait for pending arithmetic traps | RN 2.9.6; KIT | no: no-ops |
+| `RPCC()` | the cycle counter | RN 2.9.6 | later: `CNTVCT_EL0` |
+| `WRITE_MBX(a, v)` | store-conditional to an I/O mailbox | RN 2.9.6 | no |
+| `BARRIER()` | memory barrier | RN 2.13 | now: `dmb ish` |
+| `ADD_`, `AND_`, `OR_ATOMIC_LONG`/`_QUAD(p, e [, retries] [; old])` | atomic update, 1 if done within the retries; `p` naturally aligned | RN 2.9.3 | now: `ldxr`/`stxr` |
+| `CMP_SWAP_LONG`, `CMP_SWAP_QUAD` | compare and swap | KIT; VSI | now |
+| `CMP_STORE_LONG`, `CMP_STORE_QUAD(a, cmp, v, dest)` | compare at a, store v at dest if equal | RN 2.9.6 | later |
+| `TESTBITSS`, `TESTBITSC`, `TESTBITCS`, `TESTBITCC` | test a bit and set or clear it, atomic against ASTs | RN 2.9.4 | now |
+| `TESTBITSSI`, `TESTBITCCI` | the same, interlocked | RN 2.9.4 | now |
+| `ADAWI(a, n)` | interlocked word add, returns faked VAX condition codes | RN 2.9.4 | later |
+| `CALL_PAL(code, ...)` | any PAL call, code a compile-time constant | RN 2.9.2 | now |
+| `PAL_INSQHIL`, `PAL_INSQTIL`, `PAL_REMQHIL`, `PAL_REMQTIL`, their `Q` (quadword) and `R` (resident) forms | interlocked queues | RN 2.9.2 | now, those the PAL has |
+| `PAL_INSQUEL`, `PAL_INSQUEQ`, `PAL_REMQUEL`, `PAL_REMQUEQ`, their `_D` forms | non-interlocked queues | RN 2.9.2 | now, those the PAL has |
+| `PAL_PROBER`, `PAL_PROBEW` | probe access for a mode | RN 2.9.2 | now |
+| `PAL_MTPR_x`, `PAL_MFPR_x` (`IPL`, `ASTEN`, `ASTSR`, `SIRR`, `SISR`, `PCBB`, `WHAMI`, `TBIA`, `TBIS`...) | processor registers | RN 2.9.2; KIT | now, those the PAL has |
+| `PAL_CHMK`, `PAL_CHME`, `PAL_CHMS`, `PAL_CHMU` | change mode | RN 2.9.2 | later |
+| `PAL_HALT`, `PAL_BPT`, `PAL_BUGCHK`, `PAL_GENTRAP` | halt, breakpoint, bugcheck, software trap | RN 2.9.2 | later |
+| `PAL_RD_PS`, `PAL_WR_PS_SW`, `PAL_SWASTEN`, `PAL_SWPCTX`, `PAL_RSCC`, `PAL_READ_UNQ`, `PAL_WRITE_UNQ`, `PAL_IMB`, `PAL_CFLUSH`, `PAL_DRAINA`, `PAL_LDQP`, `PAL_STQP` | the rest of OpenVMS's PAL | RN 2.9.2 | later, as the PAL has them |
+| `ADDx`, `SUBx`, `MULx`, `DIVx`, `CMPx`, `CVTxy`, `CVTRxy` (`F`, `D`, `G`, `S`, `T`, with `L`, `Q`, `I`) | floating point | RN 2.10.1 | no, until vasm has floating point |
+
+**PAL calls.** The `PAL_` prefix keeps them apart from the VAX built-ins
+of the same names; inputs and outputs are the Alpha SRM's. RN and the
+table differ at the edges: the table has `PAL_MFPR_ASN` where RN lists
+`MTPR_ASN`, and `PAL_MTPR_PERFMON` last, added late. (RN 2.9.2; KIT)
 
 vaxpunk: the PAL keeps Alpha's numbers (DESIGN-0001), so each `PAL_x`
 built-in whose call vaxpunk implements is that call, and `CALL_PAL`
-reaches vaxpunk's own (0x40 and up). One that the PAL doesn't implement
-is a compile error. The interlocked queue calls (`PAL_INSQHIL` and the
-rest) need the PAL calls first.
+reaches vaxpunk's own (0x40 and up). One the PAL doesn't implement is a
+compile error.
 
-**Atomics and barriers** (RN 2.9.3-2.9.6, 2.13):
-
-- `ADD_ATOMIC_LONG`/`_QUAD`, `AND_`, `OR_`: `(ptr, expr [, retries] [;
-  old])`, 1 if done within `retries` tries. `ptr` must be naturally
-  aligned.
-- `CMP_STORE_LONG`/`_QUAD(addr, comparand, value, dest)`, and
-  `CMP_SWAP_LONG`/`_QUAD` (KIT; VSI 1.5).
-- `TESTBITSS`, `TESTBITSC`, `TESTBITCS`, `TESTBITCC` (atomic against
-  ASTs), `TESTBITSSI`, `TESTBITCCI` (interlocked), `ADAWI` (returns VAX
-  condition codes, faked).
-- `BARRIER`: reads before reads, writes before writes, reads before
-  writes.
-
-vaxpunk: `ldxr`/`stxr` loops and `dmb`.
-
-**Other machine built-ins**: `ROT`, `SLL`, `SRL`, `SRA`, `UMULH`,
-`CMPBGE`, `ZAP`, `ZAPNOT`, `TRAPB`, `DRAINT`, `RPCC`, `WRITE_MBX`.
-vaxpunk: `ROT`, the shifts and `UMULH` map to single instructions;
-`CMPBGE`, `ZAP`, `ZAPNOT` are byte-mask operations, done in a few;
-`TRAPB` and `DRAINT` are no-ops; `RPCC` reads `CNTVCT_EL0`; `WRITE_MBX`
-has no user. (RN 2.9.6; KIT)
-
-**Floating point.** Built-ins for F, D, G, S and T arithmetic and
-conversion (`ADDT`, `CVTTQ`...), `%S` and `%T` literals, `%FFLOAT` to
+**Floating point** also brings `%S` and `%T` literals, `%FFLOAT` to
 `%TFLOAT` to pass and return floating values by value, and
-`ENVIRONMENT(NOFP)`. Not in vbliss until vasm has floating point
-instructions. (RN 2.10, 2.11; vaxpunk)
+`ENVIRONMENT(NOFP)`. (RN 2.10, 2.11)
+
+**Not built-ins.** The executables also hold GEM's intrinsics
+(`EXCH_ATOMIC_x`, `INC_ATOMIC_x`, `MAX_ATOMIC_x`, `ENTER_CRITICAL`, the
+`DE_` names...), the code generator's, shared with DEC's other GEM
+compilers; they aren't in BLISS's built-in list, and vbliss doesn't take
+them. (KIT)
 
 ## Lexical functions
 
@@ -401,12 +482,40 @@ BLISS-36 and `%RAD50_11` to BLISS-16: vbliss rejects them. (KIT; vaxpunk)
 
 ## Switches and qualifiers
 
-Module switches the kit knows, besides the manual's: `OVERFLOW`,
-`ALPHA_REGISTER_MAPPING`, `BLOCK_ALIGNMENT`, `DEFAULT_GRANULARITY`,
-`COUNT`, `LONG_DEFAULT`, `REF_LONG`, `SIGNED_LONG`, and a `CHECK_x` switch for
-each `/CHECK` option: `ADDRESS_TAKEN`, `ALIGNMENT`, `FIELD`, `LONGWORD`,
-`OPTIMIZE`, `PARAMETERS`, `REDECLARE`, `SHARE`, `SHORT_ADDRESS`.
-(RN 2.26; KIT)
+Module switches the 64-bit compiler knows, besides the manual's:
+`OVERFLOW`, `ALPHA_REGISTER_MAPPING`, `BLOCK_ALIGNMENT`,
+`DEFAULT_GRANULARITY`, `COUNT`, `LONG_DEFAULT`, `REF_LONG`,
+`SIGNED_LONG`, `QUAD_LITERALS`, each with its `NO` form, and a `CHECK_x`
+switch for each `/CHECK` option. The module head also takes `LANGUAGE`,
+`ADDRESSING_MODE`, `ENVIRONMENT`, `OTS_LINKAGE` and `VERSION` besides
+the manual's `IDENT`, `MAIN`, `OPTLEVEL` and the rest. A switch in the
+module head beats the qualifier; a `SWITCHES` declaration beats both.
+(RN 2.26, 2.8.5; KIT; UM 1.3.10)
+
+The `BLISS` verb, as `BLISS_AN.CLD` defines it (CLD):
+
+| Qualifier | Values, default first | Notes |
+| --- | --- | --- |
+| `/A32`, `/A64` | `/A32` | `/A64` runs BLISS-64EN |
+| `/ASSUME=` | `NOALIAS`, `NOLONG_DEFAULT`, `QUAD_LITERALS`, `NOREF_LONG`, `NOSIGNED_LONG`, `BLOCK_ALIGNMENT=FULLWORD` | the `_LONG` ones and `QUAD_LITERALS` 64-bit only; `NOALIAS` is BLISS-32's `SAFE` (RN 2.19.1) |
+| `/CHECK=` | `ALIGNMENT`, `FIELD`, `OPTIMIZE`, `SHARE` on; `ADDRESS_TAKEN`, `REDECLARE`, `PARAMETERS`, `LONGWORD`, `SHORT_ADDRESS` off; `ALL`, `NONE` | `LONGWORD` and `SHORT_ADDRESS` 64-bit only |
+| `/[NO]COUNT` | `COUNT` | argument count in CALL linkages (RN 2.8.5) |
+| `/[NO]INITIAL_PSECT` | on | `$INITIAL$` for `LOCAL` initial values, else `$PLIT$` (RN 2.19.10) |
+| `/NAMES=` | `UPPERCASE` | external names without `EXTERNAL_NAME` |
+| `/SYNTAX_LEVEL=` | 2 | reserved words (*The compiler*) |
+| `/LANGUAGE=` | | `COMMON`, `BLISS16`, `BLISS32`, `BLISS36`, `BLISS32M`, `BLISS32E`, `BLISS64E`: warn where the source leaves the subset |
+| `/INCLUDE=(dir,...)` | | directories for `REQUIRE` and `LIBRARY`; file types must then be written out (RN 2.19.14) |
+| `/LIBRARY[=file]` | | compile a library instead of an object; not with `/OBJECT` |
+| `/LIST[=file]`, `/SOURCE_LIST=`, `/[NO]MACHINE_CODE` | | *Listings* |
+| `/TERMINAL=[NO]ERRORS` | `ERRORS` | BLISS-32's `STATISTICS` is gone |
+| `/ERROR_LIMIT=n`, `/VARIANT=n` | 1 when given bare | `%VARIANT` |
+| `/OBJECT`, `/DEBUG`, `/TRACEBACK`, `/[NO]CODE`, `/DIAGNOSTICS`, `/ANALYSIS_DATA` | | as BLISS-32 |
+| `/CROSS_REFERENCE[=MULTIPLE]` | | in the CLD, though RN 2.19.15 lists it as dropped; probe |
+| `/OPTIMIZE[=LEVEL=n,TUNE=x]`, `/ARCHITECTURE=`, `/GRANULARITY=`, `/ENVIRONMENT=[NO]FP`, `/TIE`, `/ALPHA_REGISTER_MAPPING`, `/ANNOTATIONS` | | Alpha code generation: vbliss accepts and ignores them |
+
+Dropped from BLISS-32: `/DESIGN`, `/QUICK`, `/SOURCE_LIST=HEADER`, and
+`/MACHINE_CODE_LIST`'s keywords. An output qualifier after an input file
+puts the output next to it. (RN 2.19.15, 2.2.2)
 
 The checks worth having in vbliss, because they find the bugs 64-bit
 fullwords bring:
@@ -419,12 +528,71 @@ fullwords bring:
   (RN 2.19.7)
 - `ADDRESS_TAKEN`: see ALIAS above; the dot lint's base.
 
-Qualifiers that don't carry over: `/TIE`, `/GRANULARITY`, `/OPTIMIZE`
-levels and `/ENVIRONMENT`. BLISS-32's `/CROSS_REFERENCE`, `/DESIGN`,
-`/QUICK` aren't in Alpha BLISS either. `/MACHINE_CODE_LIST` is yes or no.
-`/INCLUDE=(dir,...)` adds directories for `REQUIRE` and `LIBRARY`, and
-then the file type must be written out. An output qualifier after an
-input file puts the output next to it. (RN 2.19.13-15, 2.2.2)
+## Libraries: REQUIRE and LIBRARY
+
+`REQUIRE 'file'` reads source text in place, as the LRM says. `LIBRARY
+'file'` loads a precompiled library: the declarations of a source
+compiled with `/LIBRARY`, which writes no object. A library declares
+names only; it holds no code or data, and only what it declares is
+visible. (LRM 16.5, 16.6; CLD)
+
+- **Per dialect.** A library is the compiler's internal tables, so it
+  belongs to one compiler: BLISS-64EN reads `.L64` (and `.L64E`, `.LIB`),
+  BLISS-32EN `.L32`. DEC's `STARLET.L64` was compiled from `STARLET.R64`
+  with `BLISS/A64/LIBRARY`, `STARLET.L32` from `STARLET.REQ` with `/A32`.
+  (RN 2.2.1, 5.1.1, chapter 4 item 3)
+- **Search.** File name defaults are the user manual's; `/INCLUDE`
+  adds directories. Where BLISSA64 looks for `LIBRARY 'SYS$LIBRARY:STARLET'`
+  and for a bare name is a probe. (RN 2.19.14; LRM 16.6.3)
+
+A library is not quite a `REQUIRE` done early. Only declarations are
+allowed in its source: no `OWN`, `GLOBAL` or routine bodies, no
+`GLOBAL LITERAL`, and `BIND` only to compile-time constants. Lexical
+functions are evaluated when the library is compiled, not where it is
+used, so `%VARIANT` or `%SWITCHES` inside it see the library's
+compilation; `SWITCHES` inside it don't reach the user; and the names a
+nested `LIBRARY` brought in are undeclared at the end, so they don't
+leak. (LRM 16.6.2, 16.6.3)
+
+vaxpunk: `.L64` is our own format (PRD-0004 *Non-goals*). Until compile
+times say otherwise, vbliss may implement `LIBRARY` by reading the
+matching `.R64` with the listing off, after checking the source holds
+only what a library may and applying the rules above: evaluate its
+lexical functions in a context of its own, keep its switches local, and
+drop the nested libraries' names.
+
+## Listings
+
+What an oracle comparing BLISSA64's listing with vbliss's needs to know.
+
+- **Turning it on.** `/LIST` writes a listing; `/SOURCE_LIST=` chooses
+  the source part: `SOURCE` (default on), `EXPAND_MACROS` (each macro
+  call followed by its expansion), `TRACE_MACROS` (each step of the
+  expansion), `REQUIRE` and `LIBRARY` (the text of require files, and
+  what libraries were read), `PAGE_SIZE=n`. The module switch forms are
+  `LIST(SOURCE)`, `LIST(EXPAND)`, `LIST(TRACE)`, `LIST(REQUIRE)`,
+  `LIST(LIBRARY)`, so a test can set them in the source. MACRO-32's
+  `/SHOW=EXPANSIONS` is not a BLISS qualifier; PRD-0004 means
+  `/SOURCE_LIST=EXPAND_MACROS`. (CLD; UM 1.3.7, 1.3.9)
+- **Machine code.** `/MACHINE_CODE` (yes or no, default yes with
+  `/LIST`) adds the generated code after each routine. On Alpha it is
+  GEM's: Alpha instructions, the routine's procedure descriptor
+  ("Register-Frame", "Stack-Frame" or "Null-Frame invocation
+  descriptor", entry, saved registers, frame size, handler) and the
+  linkage section. None of it compares with vbliss's ARM64 code; the
+  oracle drops it. (RN 2.19.15; KIT)
+- **What compares.** The source part, with expansions; compile-time
+  output (`%PRINT`, `%INFORM`, `%WARN`, `%ERROR`); and the diagnostics,
+  which appear after the line they're about with a severity and a
+  `%BLS32-W-UNAVOLACC` style message (RN 2.7; the 64-bit compiler's
+  facility name, `BLS64` in its strings, is a probe). Page headers (date, compiler version,
+  page numbers) and the summary at the end (statistics, the command line)
+  are dropped. BLISS-32's listing format (UM chapter 2) is the guide; how
+  far BLISSA64's differs from it is a probe. (UM 2.2; KIT; probe)
+
+vbliss: the source part with expansions in BLISSA64's layout, as closely
+as the probes show, so the oracle compares text; the machine code part is
+vbliss's own, the ARM64 each line became.
 
 ## BLISS-32 on vaxpunk
 
@@ -481,26 +649,202 @@ blocks, for one) can't be read by the 32-bit compilers. vdefs writes
 (PRD-0004 *Definitions*), and `STARLET.REQ` and `LIB.REQ` for `/A32`,
 from which DEC built `STARLET.L32` and `LIB.L32`. (ARCH; RN 5.1.1)
 
+The require files themselves (`STARLET.R64`, `LIB.R64`, `STARLET.REQ`,
+`LIB.REQ`, `ARCH_DEFS.REQ`, `CLIMAC.REQ`, `TPAMAC.REQ`) are not in the
+BLISS kit, which holds no file of that name: they are in `SYS$LIBRARY`
+of the OpenVMS Alpha system the oracle runs on, and the kit's install
+procedure only compiles them into `.L32` and `.L64`. Reading them there
+answers the questions about DEC's field definitions (probe 14) directly,
+as reference only: vdefs takes nothing from them. (KIT; RN 5.1.1)
+
 ## To probe
 
-What the oracle harness must settle before vbliss relies on it, each with
-a test program whose listing or output answers it:
+What the sources leave open, each as a program for the oracle harness
+(PRD-0004 step 3). `PRINT(x)` is the tiny print routine each side
+provides, printing its argument as a signed 64-bit decimal and in hex; a
+"listing" probe is answered by the `/LIST/SOURCE_LIST=EXPAND_MACROS`
+output, compiled `/A64` unless it says `/A32`. The fragments go inside a
+routine of a module.
 
-1. `%UPVAL`, `%BPADDR`, and `%ALLOCATION` and `%SIZE` of a scalar,
-   `VECTOR[3]`, `BLOCK[2]`, `BITVECTOR[9]`, `BLOCKVECTOR[2,3]`.
-2. A `PLIT`'s layout: the count's size and value, item sizes, padding
-   between `BYTE` items and the next fullword; `UPLIT` without the count.
-3. `%ASCID`: the descriptor's size and fields.
-4. Fetching -1 from `LONG`, `LONG SIGNED`, `WORD` and `BYTE SIGNED`
-   scalars and fields, printed as signed and unsigned 64-bit values.
-5. `ARGPTR()`'s list for 3 actuals, and whether the 4th slot is read
-   past the count.
-6. Which linkage register numbers BLISSA64 rejects as a register conflict.
-7. `INCR`/`DECR`/`INCRU` loops across 2^63 and 2^32; `^` by 63, 64 and
-   -64; `LSS`/`LSSU` on values with bit 63 or bit 31 set.
-8. The predeclared structures as the listing shows them under
-   `/SHOW=EXPANSIONS`, if it does.
-9. Whether BLISSA64 still miscompiles a structure formal first used in a
-   conditional (RN chapter 4).
-10. Under `/A32`: items 1 to 4, and what a BLISS-32 routine receives
-    from a BLISS-64 caller passing 2^32+5 and -1.
+1. **Sizes.** Are `%UPVAL` 8 and `%BPADDR` 64, and what does each
+   allocation take?
+
+   ```
+   OWN S, V: VECTOR[3], B: BLOCK[2], BV: BITVECTOR[9], BB: BLOCKVECTOR[2,3];
+   %PRINT(%UPVAL, ' ', %BPADDR, ' ', %ALLOCATION(S), ' ', %ALLOCATION(V), ' ',
+          %ALLOCATION(B), ' ', %ALLOCATION(BV), ' ', %ALLOCATION(BB))
+   ```
+
+   Listing. Expected, if the defaults are as *Structures* reads them:
+   `8 64 8 24 16 2 48`.
+
+2. **PLIT layout.** The count's size and value, item sizes, padding.
+
+   ```
+   BIND P = PLIT(1, BYTE(2), 3) : VECTOR[, BYTE];
+   INCR I FROM -8 TO 17 DO PRINT(.P[.I]);
+   ```
+
+   Output: the count, as bytes, ahead of the data, and whether `3` is
+   aligned after the byte. Again with `UPLIT` (no count) and under
+   `LONG_DEFAULT`.
+
+3. **`%ASCID`.** The descriptor's size and fields.
+
+   ```
+   BIND D = %ASCID 'HELLO' : VECTOR[, BYTE];
+   INCR I FROM 0 TO 15 DO PRINT(.D[.I]);
+   ```
+
+   Output: an 8-byte BLISS-32 descriptor (length word, type 14, class 1,
+   longword pointer) or a 64-bit one (`DSC64$`, with the -1 in the
+   longword at 4).
+
+4. **Extension.** What a fetch of -1 gives at each size.
+
+   ```
+   OWN L: LONG, LS: LONG SIGNED, W: WORD, BS: BYTE SIGNED;
+   L = -1; LS = -1; W = -1; BS = -1;
+   PRINT(.L); PRINT(.LS); PRINT(.W); PRINT(.BS); PRINT(.L<0,32,1>);
+   ```
+
+   Expected `4294967295 -1 65535 -1 -1`; the first is what vbliss's
+   lint has to warn about. **Answered** by `tests/bliss/data.b64`: as
+   expected, a LONG without SIGNED is zero-extended.
+
+5. **ARGPTR.** The list for 3 actuals.
+
+   ```
+   ROUTINE R(A, B, C) = (LOCAL P: REF VECTOR; P = ARGPTR();
+       INCR I FROM 0 TO 3 DO PRINT(.P[.I]); .P[0]);
+   R(10, -1, 1^40)
+   ```
+
+   Output: count 3 in a quadword, the values whole, and what lies past
+   the count.
+
+6. **Linkage registers.** Which numbers are a register conflict?
+
+   ```
+   LINKAGE L_n = JSB(REGISTER = n);
+   EXTERNAL ROUTINE X: L_n;
+   ```
+
+   One module per n from 0 to 31; the listing's diagnostics give the
+   set BLISSA64 rejects. Informational only: vbliss takes VAX R0-R11.
+
+7. **64-bit arithmetic edges.**
+
+   ```
+   PRINT(1^63); PRINT(1^64); PRINT(-1^-64);
+   PRINT(-1 LSS 0); PRINT(-1 LSSU 0); PRINT(-1 LSSA 0);
+   PRINT(%X'80000000' LSS 0);
+   LOCAL N; N = 0;
+   INCR I FROM %X'7FFFFFFFFFFFFFFE' TO %X'7FFFFFFFFFFFFFFF' DO
+       (PRINT(.I); IF (N = .N + 1) GTR 3 THEN EXITLOOP);
+   DECRU I FROM 1 TO 0 DO PRINT(.I);
+   ```
+
+   Output: whether `^` by 64 is 0 or undefined, the `A` comparisons'
+   signedness, and whether `INCR` ending at the largest value stops.
+   **In part** by `tests/bliss/arith.b64`: `1^63` is the sign bit and the
+   `A` forms are unsigned.
+
+8. **`QUAD_LITERALS`.** What `NOQUAD_LITERALS` changes.
+
+   ```
+   MODULE Q (MAIN = M, NOQUAD_LITERALS) = BEGIN
+   ... PRINT(%X'FFFFFFFF'); PRINT(-1); PRINT(%X'100000000');
+   ```
+
+   Output, and the listing for a diagnostic on the last literal.
+
+9. **Overflow.** Which is the default, `OVERFLOW` or `NOOVERFLOW`?
+
+   ```
+   LOCAL X; X = %X'7FFFFFFFFFFFFFFF'; PRINT(.X + 1);
+   ```
+
+   **Answered** by `tests/bliss/arith.b64`: it wraps, so `NOOVERFLOW`.
+
+   Output: a wrapped value, or a signal.
+
+10. **Predeclared structures.** The text of `VECTOR`, `BLOCK`,
+    `BITVECTOR`, `BLOCKVECTOR` and `BLOCK_BYTE`.
+
+    ```
+    OWN V: VECTOR[2]; %PRINT(%FIELDEXPAND(V)) ! and a TRACE_MACROS listing of .V[1]
+    ```
+
+    Listing, if it shows them; failing that, `%SIZE` of each with and
+    without a unit.
+
+11. **The structure-formal bug.** Does BLISSA64 still miscompile it?
+
+    ```
+    STRUCTURE BAD[I, P, S] = [%UPVAL] (IF .I THEN BAD ELSE BAD + 8)<P, S>;
+    OWN V: VECTOR[2] INITIAL(5, 7); BIND T = V: BAD;
+    PRINT(.T[0, 0, 64]); PRINT(.T[1, 0, 64]);
+    ```
+
+    Output against the expected `7 5`, written as in RN chapter 4. If
+    BLISSA64 is wrong, the oracle's expected output for such tests is
+    hand-written.
+
+12. **SIGNAL with a 64-bit condition.**
+
+    ```
+    SIGNAL(1^32 + 1); SIGNAL(1, 1^40);
+    ```
+
+    with a handler that prints `.SIG[0]`, `.SIG[1]`, `.SIG[2]` as
+    longwords and the 64-bit array through the mechanism array. Listing:
+    which statement gets the "lower 32 bits" diagnostic. Output: how
+    LIB$SIGNAL receives quadword arguments.
+
+13. **The mechanism array.** What a BLISS-64 handler sees.
+
+    ```
+    ROUTINE H(SIG: REF BLOCK[, BYTE], MCH: REF BLOCK[, BYTE], EN: REF VECTOR) =
+      (PRINT(.MCH[CHF$IS_MCH_ARGS]); PRINT(.MCH[CHF$IS_MCH_DEPTH]);
+       MCH[CHF$IH_MCH_SAVR0] = 42; SETUNWIND(); 0);
+    ```
+
+    (with `LIBRARY 'SYS$LIBRARY:STARLET'`) enabled in a routine that
+    signals; the routine's caller prints the
+    value it gets back (42 if the unwind returns the saved R0). Also
+    prints `.EN[0]` and the first enable actual to check the enable
+    vector.
+
+14. **STARLET's longword fields.** How DEC's `STARLET.L64` defines them.
+
+    ```
+    LIBRARY 'SYS$LIBRARY:STARLET';
+    %PRINT(%FIELDEXPAND(CHF$L_SIG_NAME), ' ', %FIELDEXPAND(PCB$L_STS))
+    ```
+
+    Listing: the extension DEC wrote for `$L_` fields, which vdefs
+    follows. Also shows where `LIBRARY` finds `STARLET`. Reading
+    `SYS$LIBRARY:STARLET.R64` on the oracle's disk answers the first
+    part without compiling.
+
+15. **Libraries.** That a library's lexical functions are fixed when it is
+    compiled.
+
+    ```
+    ! LV.R64:  LITERAL V = %VARIANT;
+    ! compiled BLISS/A64/LIBRARY/VARIANT=3 LV.R64, then:
+    LIBRARY 'LV'; PRINT(V);   ! compiled /VARIANT=5
+    ```
+
+    Expected `3`.
+
+16. **The listing itself.** One module with a macro, a `REQUIRE`, a
+    `%PRINT`, a warning and a routine, listed `/SOURCE_LIST=(EXPAND_MACROS,
+    REQUIRE)/MACHINE_CODE` and `/NOMACHINE_CODE`. Answers the layout
+    (line numbers, nesting columns, how expansions and require text are
+    marked, where diagnostics go, the message facility name) and whether
+    `/CROSS_REFERENCE` is accepted.
+
+17. **Under `/A32`:** items 1 to 5 again, and what a BLISS-32 routine
+    receives from a BLISS-64 caller passing `1^32 + 5` and `-1`.

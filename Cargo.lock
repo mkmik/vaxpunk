@@ -655,6 +655,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "vbliss"
+version = "0.1.0"
+dependencies = [
+ "vasm",
+ "vms-obj",
+]
+
+[[package]]
 name = "vcdu"
 version = "0.1.0"
 dependencies = [
@@ -705,6 +713,7 @@ name = "vrun"
 version = "0.1.0"
 dependencies = [
  "vasm",
+ "vbliss",
  "vcdu",
  "vlib",
  "vlink",

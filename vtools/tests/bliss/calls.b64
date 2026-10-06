@@ -1,0 +1,39 @@
+MODULE CALLS (MAIN = MAIN) =
+BEGIN
+! Routines: arguments in registers and on the stack, recursion, globals,
+! forward references and calls through a routine's address.
+REQUIRE 'PRINT';
+
+FORWARD ROUTINE
+    FACT;
+
+ROUTINE SUM10 (A, B, C, D, E, F, G, H, I, J) =
+    .A + .B * 2 + .C * 3 + .D * 4 + .E * 5 + .F * 6 + .G * 7 + .H * 8 + .I * 9 + .J * 10;
+
+ROUTINE TWICE (X) = .X * 2;
+
+ROUTINE APPLY (R, X) = (.R)(.X);
+
+GLOBAL ROUTINE FIB (N) =
+    IF .N LSS 2 THEN .N ELSE FIB(.N - 1) + FIB(.N - 2);
+
+ROUTINE NOTHING : NOVALUE =
+    PRINT(42);
+
+ROUTINE MAIN =
+    BEGIN
+    PRINT(SUM10(1, 2, 3, 4, 5, 6, 7, 8, 9, 10));
+    PRINT(SUM10(-1, -2, -3, -4, -5, -6, -7, -8, -9, -10));
+    PRINT(FACT(20));
+    PRINT(FIB(15));
+    PRINT(APPLY(TWICE, 21));
+    NOTHING();
+    PRINT(TWICE(TWICE(TWICE(1))));
+    1
+    END;
+
+ROUTINE FACT (N) =
+    IF .N LEQ 1 THEN 1 ELSE .N * FACT(.N - 1);
+
+END
+ELUDOM

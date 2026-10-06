@@ -13,7 +13,7 @@ mod macros;
 use std::path::PathBuf;
 
 pub use asm::Diagnostic;
-pub use cli::main;
+pub use cli::{date, main};
 use vms_obj::obj::Record;
 
 #[derive(Default)]

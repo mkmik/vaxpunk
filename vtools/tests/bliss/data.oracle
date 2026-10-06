@@ -1,0 +1,10 @@
+
+    PRINT(.V[1]<0, 8>);
+...............^
+%BLS64-W-TEXT, Two consecutive field selectors
+at line number 56 in file SYS$SYSDEVICE:[ORACLE]DATA.B64;1
+BLISS status %X106F1260
+%LINK-W-WRNERS, compilation warnings
+	in module DATA file SYS$SYSDEVICE:[ORACLE]DATA.OBJ;1
+LINK status %X10648268
+RUN status %X00010001

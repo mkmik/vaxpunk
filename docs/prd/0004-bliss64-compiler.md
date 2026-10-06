@@ -207,7 +207,7 @@ default linkage is the calling standard; `JSB` linkages name VAX registers,
 mapped as `vmacro` maps them.
 
 **Listing.** `/LIST` writes the source with macro expansions
-(`/SHOW=EXPANSIONS`), and with `/MACHINE_CODE`, the ARM64 each line became.
+(`/SOURCE_LIST=EXPAND_MACROS`), and with `/MACHINE_CODE`, the ARM64 each line became.
 The listing is how a compiled routine is debugged.
 
 ## The dot lint
@@ -254,7 +254,7 @@ Rules 1 to 4 come with the front end; 5 and 6 later. A line ending in
 ## Testing strategy
 
 **Oracle: listings.** For the front end, the reference compiler is exact.
-A test compiles a source with BLISSA64 `/LIST/SHOW=EXPANSIONS` and with
+A test compiles a source with BLISSA64 `/LIST/SOURCE_LIST=EXPAND_MACROS` and with
 `vbliss`, and compares macro expansions, compile-time values (`%PRINT`,
 `%NUMBER`, `%FIELDEXPAND`), field offsets and which constructs are
 diagnosed. Nothing there depends on the target.

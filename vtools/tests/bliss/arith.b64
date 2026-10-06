@@ -1,0 +1,56 @@
+MODULE ARITH (MAIN = MAIN) =
+BEGIN
+! Arithmetic, logic, shifts and comparisons on 64-bit values.
+REQUIRE 'PRINT';
+
+OWN
+    A : INITIAL(7),
+    B : INITIAL(-3),
+    BIG : INITIAL(%X'7FFFFFFFFFFFFFFF');
+
+ROUTINE MAIN =
+    BEGIN
+    PRINT(.A + .B);
+    PRINT(.A - .B);
+    PRINT(.A * .B);
+    PRINT(.A / .B);
+    PRINT(.A MOD .B);
+    PRINT(.B MOD .A);
+    PRINT(-.A / 2);
+    PRINT(.A AND 5);
+    PRINT(.A OR 8);
+    PRINT(.A XOR .B);
+    PRINT(.A EQV .B);
+    PRINT(NOT .A);
+    PRINT(-.B);
+    PRINT(.A ^ 3);
+    PRINT(.B ^ -1);
+    PRINT(.A ^ (.B + 1));
+    PRINT(.A ^ (.A + 50));
+    PRINT(1 ^ 63);
+    PRINT(.A EQL 7);
+    PRINT(.A NEQ 7);
+    PRINT(.B LSS .A);
+    PRINT(.B LSSU .A);
+    PRINT(.B GTRA .A);
+    PRINT(.B LEQ -3);
+    PRINT(.B GEQU 0);
+    PRINT(-1 LSS 0);
+    PRINT(-1 LSSU 0);
+    PRINT(-1 LSSA 0);
+    PRINT(%X'80000000' LSS 0);
+    PRINT(.A + .B * 2 ^ 2 - 1);
+    PRINT(NOT .A EQL 7 OR .B EQL -3);
+    PRINT(%C'A');
+    PRINT('AB');
+    PRINT(%O'777');
+    PRINT(%B'1010');
+    PRINT(%DECIMAL'-12');
+    ! Last: overflow traps if OVERFLOW is the default.
+    PRINT(.BIG + 1);
+    PRINT(.BIG * 2);
+    1
+    END;
+
+END
+ELUDOM
