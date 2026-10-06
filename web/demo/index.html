@@ -10,7 +10,7 @@
 <style>main{margin:4rem 0 0;padding:1rem;max-width:none}#terminal{height:calc(100vh - 8rem)}
 #status{font:.8rem var(--sans);color:var(--dim);margin-bottom:.5rem}</style></head>
 <body><header class="top"><a class="logo" href="../" aria-label="vaxpunk"><span>v</span><span>a</span><span>x</span><span>p</span><span>u</span><span>n</span><span>k</span></a>
-<div class="ttl">Demo<small>QEMU in WebAssembly · no network · the data disk lasts until you reload</small></div>
+<div class="ttl">Demo<small>QEMU in WebAssembly · a LAN of this browser's tabs · the data disk lasts until you reload</small></div>
 <button id="theme" type="button" title="Paper or terminal" style="margin-left:auto">VT220</button></header>
 <main><div id="status">Loading…</div><div id="terminal"></div></main>
 <script>const th=document.getElementById('theme');function setvt(on){document.documentElement.classList.toggle('vt',on);th.textContent=on?'PAPER':'VT220';localStorage.setItem('vt',on?'1':'')}
@@ -19,6 +19,7 @@ setvt(!!localStorage.getItem('vt'));th.addEventListener('click',()=>setvt(!docum
 import './vendor/xterm.js';
 import './vendor/xterm-pty.js';
 import initQemu from './qemu-system-aarch64.js';
+import {lan} from './lan.js';
 
 const status = document.getElementById('status');
 if (!self.crossOriginIsolated) {
@@ -31,7 +32,8 @@ const {master, slave} = openpty();
 xterm.loadAddon(master);
 
 // The machine of scripts/run-qemu.sh and kernel/qemu.env, which seL4's memory map is compiled
-// for, minus what a browser lacks: virtio-net has no backend, so the network sees no one.
+// for, on a LAN of the browser's other demo tabs (lan.js) in place of QEMU's user network.
+const net = lan();
 const Module = {
   pty: slave,
   mainScriptUrlOrBlob: new URL('qemu-system-aarch64.js', location.href).href,
@@ -44,7 +46,8 @@ const Module = {
     '-device', 'virtio-blk-device,drive=sysdisk',
     '-drive', 'if=none,id=datadisk,format=raw,file=/pack/datadisk.img',
     '-device', 'virtio-blk-device,drive=datadisk', '-global', 'virtio-mmio.force-legacy=false',
-    '-nic', 'none', '-device', 'virtio-net-device', '-serial', 'mon:stdio', '-serial', 'null',
+    '-netdev', 'socket,id=net0,connect=localhost:1', '-device', `virtio-net-device,netdev=net0,mac=${net.mac}`,
+    '-serial', 'mon:stdio', '-serial', 'null',
   ],
   preRun: [mod => {
     mod.addRunDependency('pack');
@@ -58,7 +61,7 @@ const Module = {
       const buf = await new Response(r.body.pipeThrough(new DecompressionStream('gzip'))).arrayBuffer();
       mod.FS.writeFile('/pack/' + f, new Uint8Array(buf));
     })).then(() => {
-      status.textContent = 'Booting: EDK2, Limine, seL4, then the VMS executive. Under WebAssembly this takes a while.';
+      status.textContent = `Booting: EDK2, Limine, seL4, then the VMS executive. Under WebAssembly this takes a while. This tab is ${net.ip}: from another tab, SET HOST ${net.ip}.`;
       mod.removeRunDependency('pack');
     }, e => { status.textContent = 'Loading failed: ' + e.message; });
   }],

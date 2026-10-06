@@ -11,7 +11,7 @@ rm -rf "$site"
 mkdir -p "$site/demo/vendor"
 cp "$root/web/index.html" "$root/apidoc/page.css" "$site/"
 cp -R "$root/docs/api" "$site/docs"
-cp "$root/web/demo/index.html" "$qemu"/qemu-system-aarch64.* "$images"/*.gz "$site/demo/"
+cp "$root/web/demo/index.html" "$root/web/demo/lan.js" "$qemu"/qemu-system-aarch64.* "$images"/*.gz "$site/demo/"
 
 npm=$(mktemp -d)
 npm i -s --no-audit --no-fund --prefix "$npm" xterm@5.3.0 xterm-pty@0.10.1 coi-serviceworker@0.1.7
