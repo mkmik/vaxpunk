@@ -608,12 +608,20 @@ quotas.
 ## System services
 
 A program calls `SYS$name` with `CALLS` or `CALLG`, or with the `$name_S`
-macros of `starlet.mlb`, which push the arguments. `SYS$name` is a routine
-in `syssrv.mar` that does `CHMK #code` and returns. The PAL delivers the
-`CHMK` to `EXE$CMODKRNL`, in kernel mode, which checks the code and the
-argument list (`SS$_ILLSER`, `SS$_INSFARG`, `SS$_ACCVIO`), calls `EXE$name`
-with `CALLG` on the caller's argument list, and `REI`s with its status in
-R0, back to the caller's mode. `$CMEXEC` does `CHME #0` instead, to
+macros of `starlet.mlb`, which push the arguments: by the calling standard
+([DESIGN-0004](0004-calling-standard.md)), in x0-x7 and on the stack, their
+count in x9. `SYS$name` is a frameless routine in `syssrv.mar` that moves
+x7 to x10 and does `CHMK #code`, which puts the code in x7, and returns;
+`SYS$EXIT` has a frame, since it calls the exit handlers.
+The PAL delivers the `CHMK` to `EXE$CMODKRNL`, in kernel mode, with every
+register as it was and the code below its frame. `EXE$CMODKRNL` checks the
+code and the count (`SS$_ILLSER`, `SS$_INSFARG`), copies the arguments past
+the eighth from the caller's stack, which its mode must be able to read
+(`SS$_ACCVIO`), checks that each is a sign-extended longword
+(`SS$_ARG_GTR_32_BITS`, as 64-bit VMS: no service here takes 64-bit
+addresses), calls `EXE$name` with them, and `REI`s with its status in R0,
+back to the caller's mode. A `CALLG` list the caller can't read faults in
+the caller, which loads it. `$CMEXEC` does `CHME #0` instead, to
 `EXE$CMODEXEC` in executive mode.
 
 Programs run in user mode, so the `SYS$name` routines, `EXE$CMODEXEC`,
@@ -1092,9 +1100,10 @@ condition was signaled, with R0 and R1 from the mechanism array, or at
 the PC it wrote in the signal array; `SS$_RESIGNAL` to let the next one
 have it; or calls `$UNWIND`. `$UNWIND` asks for the frames from the one
 that signaled out to the handler's establisher, or as many as it says,
-to go once the handler returns: `EXE$SIGNAL` then loads the registers
-each of them saved, by the entry mask `.ENTRY` keeps at `40(FP)`, and
-returns from the last, to its caller or the PC `$UNWIND` was given.
+to go once the handler returns: `EXE$SIGNAL` calls each one's handler
+with `SS$_UNWIND`, then loads the registers each of them saved, as the
+frame descriptor at its `24(FP)` says, and returns from the last, to its
+caller or the PC `$UNWIND` was given.
 `LIB$SIG_TO_RET` is the handler that does it with the condition in R0.
 
 A condition no handler takes goes to `EXE$CATCHALL`, which writes its
@@ -1105,14 +1114,12 @@ write it again; any other goes on. That ends the process, or, under
 DCL, the image:
 
 ```
-%SYSTEM-F-ACCVIO, access violation, reason mask=00, virtual address=40010000, PC=00010024, PSL=03C00000
+%SYSTEM-F-ACCVIO, access violation, reason mask=00, virtual address=40010000, PC=00010004, PSL=03C00000
 %EXEC-W-EXITED, process SNOOP exited with status 1000000C
 ```
 
-ponytail: no `SS$_UNWIND` calls to the handlers of the frames `$UNWIND`
-removes, no exception vectors, and a fault in a handler is looked for
-from there out again, through the frames already searched. A reserved
-PAL call's R7, in the signal's registers, is its function code.
+ponytail: no exception vectors, and a fault in a handler is looked for
+from there out again, through the frames already searched.
 
 ## The system disk's programs
 

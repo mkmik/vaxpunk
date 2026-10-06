@@ -3,12 +3,14 @@
 //! and the system disk, sysdisk.img, a Files-11 ODS-2 volume: in [SYSEXE],
 //! EXEC.EXE, linked from exec/*.mar, and an image for each sysexe/*.mar,
 //! linked with sysexe/lib/*.mar, its command table if there is a
-//! sysexe/NAME.cld, and against SYS.STB, the executive's symbols; DCL and
+//! sysexe/NAME.cld, its ARM64 if there is a sysexe/NAME.m64, which vasm
+//! assembles, and against SYS.STB, the executive's symbols; DCL and
 //! HELP with DCL$TABLES, from cld/*.cld, and DCL with sysexe/dcl/*.mar,
 //! its CDU, and HELP and TCPIP with sysexe/help/*.mar, which describes
 //! command tables; in [SYSMGR], the files in sysmgr/,
 //! as text.
 
+use std::collections::HashMap;
 use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -38,35 +40,47 @@ fn main() {
         .arg(out.join("roottask.elf"))
         .args(sources("src", &["c", "S"])));
 
-    let mut modules: Vec<_> = sources("exec", &["mar"]).iter().map(compile).collect();
-    modules.push(compile(Path::new(LIB).join("consolio.mar")));
+    let mut exec = sources("exec", &["mar"]);
+    exec.push(Path::new(LIB).join("consolio.mar"));
+    let modules = compile(&exec);
     // The executive goes in S0, the system space every process shares.
     let exec = link("EXEC", 0x4001_0000, Some("EXEC$START"), &modules);
     fs::write(out.join("exec.map"), &exec.map).unwrap();
     let stb = symbol_table(&exec.map);
-    let libs: Vec<_> = sources("sysexe/lib", &["mar"])
+    // The programs and the modules they share, compiled together, as the
+    // executive's modules are, so that their JSBs to each other know what
+    // the routines they call keep.
+    let sysexe: Vec<_> = ["sysexe", "sysexe/lib", "sysexe/dcl", "sysexe/help"]
         .iter()
-        .map(compile)
+        .flat_map(|d| sources(d, &["mar"]))
         .collect();
+    let compiled: HashMap<_, _> = sysexe.iter().cloned().zip(compile(&sysexe)).collect();
+    let module = |p: &PathBuf| compiled[p].clone();
+    let libs: Vec<_> = sources("sysexe/lib", &["mar"]).iter().map(module).collect();
     let mut files = vec![("EXEC.EXE".to_string(), exec.image.write())];
     // Each process has its own P0, so every image goes at the same address,
     // but DCL: linked in P1, at VA$C_CLI, it is a command interpreter, which
     // stays while the images it runs come and go in P0.
     for source in sources("sysexe", &["mar"]) {
         let name = source.file_stem().unwrap().to_str().unwrap().to_uppercase();
-        let mut modules = vec![compile(&source)];
+        let mut modules = vec![module(&source)];
         let cld = source.with_extension("cld");
         if cld.exists() {
             modules.push(tables(&name, &[cld]));
+        }
+        // Hand-written ARM64 the program calls, as BLISS-64 would build it.
+        let m64 = source.with_extension("m64");
+        if m64.exists() {
+            modules.push(assemble(&m64));
         }
         if name == "DCL" || name == "HELP" {
             modules.push(tables("DCL$TABLES", &sources("cld", &["cld"])));
         }
         if name == "DCL" {
-            modules.extend(sources("sysexe/dcl", &["mar"]).iter().map(compile));
+            modules.extend(sources("sysexe/dcl", &["mar"]).iter().map(module));
         }
         if name == "HELP" || name == "TCPIP" {
-            modules.extend(sources("sysexe/help", &["mar"]).iter().map(compile));
+            modules.extend(sources("sysexe/help", &["mar"]).iter().map(module));
         }
         modules.extend(libs.iter().cloned());
         modules.push(stb.clone());
@@ -84,29 +98,69 @@ fn main() {
 /// Where `.LIBRARY` finds lib.mlb and starlet.mlb.
 const LIB: &str = "../vtools/lib";
 
-/// Compiles a MACRO-32 source into an object module: (file name, bytes).
-fn compile(source: impl AsRef<Path>) -> (String, Vec<u8>) {
-    let source = source.as_ref();
-    let name = source.file_stem().unwrap().to_str().unwrap().to_uppercase();
+/// Assembles an ARM64 source with vasm into an object module: (file name,
+/// bytes).
+fn assemble(source: &Path) -> (String, Vec<u8>) {
     let opts = vasm::Options {
-        name,
+        name: source.file_stem().unwrap().to_str().unwrap().to_uppercase() + "_ARM",
         path: Some(source.into()),
         include: vec![LIB.into()],
         ..Default::default()
     };
     let text = fs::read_to_string(source).unwrap();
-    let object = vmacro::compile(&text, &opts).unwrap_or_else(|diags| {
+    let object = vasm::assemble(&text, &opts).unwrap_or_else(|diags| {
         let diags: Vec<_> = diags
             .iter()
             .map(|d| format!("{}:{}:{}: {}", d.file, d.line, d.col, d.msg))
             .collect();
-        panic!("vmacro failed:\n{}", diags.join("\n"))
+        panic!("vasm failed:\n{}", diags.join("\n"))
     });
-    for d in &object.warnings {
-        println!("cargo::warning={}:{}: {}", d.file, d.line, d.msg);
+    (
+        source.display().to_string(),
+        vms_obj::obj::write(&object.records),
+    )
+}
+
+/// Compiles MACRO-32 sources linked together into object modules: (file
+/// name, bytes) each.
+fn compile(sources: &[PathBuf]) -> Vec<(String, Vec<u8>)> {
+    let texts: Vec<_> = sources
+        .iter()
+        .map(|s| fs::read_to_string(s).unwrap())
+        .collect();
+    let opts: Vec<_> = sources
+        .iter()
+        .map(|s| vasm::Options {
+            name: s.file_stem().unwrap().to_str().unwrap().to_uppercase(),
+            path: Some(s.into()),
+            include: vec![LIB.into()],
+            ..Default::default()
+        })
+        .collect();
+    let modules: Vec<_> = texts.iter().map(String::as_str).zip(&opts).collect();
+    let objects = vmacro::compile_modules(&modules);
+    let mut failed = Vec::new();
+    let mut out = Vec::new();
+    for (source, object) in sources.iter().zip(objects) {
+        match object {
+            Ok(object) => {
+                for d in &object.warnings {
+                    println!("cargo::warning={}:{}: {}", d.file, d.line, d.msg);
+                }
+                let file = source.display().to_string();
+                out.push((file, vms_obj::obj::write(&object.records)));
+            }
+            Err(diags) => failed.extend(
+                diags
+                    .iter()
+                    .map(|d| format!("{}:{}:{}: {}", d.file, d.line, d.col, d.msg)),
+            ),
+        }
     }
-    let file = source.display().to_string();
-    (file, vms_obj::obj::write(&object.records))
+    if !failed.is_empty() {
+        panic!("vmacro failed:\n{}", failed.join("\n"));
+    }
+    out
 }
 
 /// Compiles `.CLD` files with vcdu into one command table, an object

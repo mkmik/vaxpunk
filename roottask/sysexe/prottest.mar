@@ -87,32 +87,6 @@ NEWFAB: $FAB    FNA=NEW, FNS=NEWLEN
         PRINT   "PROTTEST: [200,1] read DATA.TXT, and may not give it away, delete it or make a file there"
 90$:    RET
 
-; CREATED: makes GIVEN.TXT with GXAB's owner and protection, checks
-; that $OPEN gets them, and deletes it. R0 = SS$_NORMAL, SS$_ABORT if
-; they aren't, or RMS's error.
-CREATED:
-        MOVL    #OUTSIDER, GXAB+XAB$L_UIC
-        MOVW    #^XEA00, GXAB+XAB$W_PRO ; (S:RWED,O:RWED,G:RE,W:R)
-        $CREATE FAB=GFAB
-        BLBC    R0, 90$
-        $CLOSE  FAB=GFAB
-        CLRL    GXAB+XAB$L_UIC
-        CLRW    GXAB+XAB$W_PRO
-        $OPEN   FAB=GFAB
-        BLBC    R0, 90$
-        $CLOSE  FAB=GFAB
-        BLBC    R0, 90$
-        $ERASE  FAB=GFAB
-        BLBC    R0, 90$
-        CMPL    GXAB+XAB$L_UIC, #OUTSIDER
-        BNEQ    80$
-        CMPW    GXAB+XAB$W_PRO, #^XEA00
-        BNEQ    80$
-        MOVL    #SS$_NORMAL, R0
-        RSB
-80$:    MOVL    #SS$_ABORT, R0
-90$:    RSB
-
 ; CHILD: PROTCHILD's: reads, then fails to give the file to [200,2], to
 ; delete it and to make a file.
 CHILD:  $OPEN   FAB=FAB
@@ -135,5 +109,32 @@ CHILD:  $OPEN   FAB=FAB
         RET
 80$:    MOVL    #SS$_ABORT, R0
 90$:    RET
+
+; CREATED: makes GIVEN.TXT with GXAB's owner and protection, checks
+; that $OPEN gets them, and deletes it. R0 = SS$_NORMAL, SS$_ABORT if
+; they aren't, or RMS's error.
+CREATED:
+        .JSB_ENTRY
+        MOVL    #OUTSIDER, GXAB+XAB$L_UIC
+        MOVW    #^XEA00, GXAB+XAB$W_PRO ; (S:RWED,O:RWED,G:RE,W:R)
+        $CREATE FAB=GFAB
+        BLBC    R0, 90$
+        $CLOSE  FAB=GFAB
+        CLRL    GXAB+XAB$L_UIC
+        CLRW    GXAB+XAB$W_PRO
+        $OPEN   FAB=GFAB
+        BLBC    R0, 90$
+        $CLOSE  FAB=GFAB
+        BLBC    R0, 90$
+        $ERASE  FAB=GFAB
+        BLBC    R0, 90$
+        CMPL    GXAB+XAB$L_UIC, #OUTSIDER
+        BNEQ    80$
+        CMPW    GXAB+XAB$W_PRO, #^XEA00
+        BNEQ    80$
+        MOVL    #SS$_NORMAL, R0
+        RSB
+80$:    MOVL    #SS$_ABORT, R0
+90$:    RSB
 
         .END    START

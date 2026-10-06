@@ -3,12 +3,17 @@
 ;
 ; SPIN loops in user mode with no system service, so only an interrupt
 ; takes the CPU from it, and CTRL/Y must stop it there. Each register it
-; may use holds a value it checks each time round, so CONTINUE must give
-; every one back as it was; if one changed, SPIN says so and exits.
+; may use holds a value it checks each time round, all 64 bits of it, so
+; interrupts and CONTINUE must give every one back whole; if one changed,
+; SPIN says so and exits. The upper halves are set and checked with
+; AMACRO's built-ins, EVAX_OR and EVAX_SRL, which work on all 64 bits.
 ;
         .LIBRARY "starlet.mlb"
         .LIBRARY "sysexe.mlb"
         $SSDEF
+
+        .PSECT  DATA, NOEXE, WRT, QUAD
+HIGH:   .QUAD   0                       ; a register's upper half
 
         .PSECT  CODE, EXE, LONG
         .ENTRY  START, ^M<R2, R3, R4, R5, R6, R7, R8, R9, R10, R11>
@@ -25,7 +30,17 @@
         MOVL    #9, R9
         MOVL    #10, R10
         MOVL    #11, R11
-10$:    CMPL    R0, SP
+        .ENABLE QUADWORD                ; 64-bit literals
+        .IRP    N, <0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11>
+        EVAX_OR R'N, #<<256+N>@32>, R'N
+        .ENDR
+        .DISABLE QUADWORD
+10$:    .IRP    N, <0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11>
+        EVAX_SRL R'N, #32, HIGH
+        CMPL    HIGH, #256+N
+        BNEQ    90$
+        .ENDR
+        CMPL    R0, SP
         BNEQ    90$
         CMPL    R1, AP
         BNEQ    90$

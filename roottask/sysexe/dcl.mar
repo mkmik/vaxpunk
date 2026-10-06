@@ -270,6 +270,7 @@ DCL$PTABVEC::                           ; the process's tables, for CLI$$DCL_PAR
 ; DCL$NEXT: reads the next command, from the procedure running or from
 ; the console, and does it.
 DCL$NEXT::
+        .GLOBAL_LABEL                   ; CTRLY's too
         MOVL    DCL$SAVESP, SP
         BBCC    #0, CTRLYHIT, 5$
         BSBW    DCL$ENDPROCS
@@ -311,6 +312,7 @@ SUBLINE:
 ; DCL$COMMAND: R6 = a command's first character in DCL$LINE, R7 = past
 ; its last. Does it.
 DCL$COMMAND::
+        .GLOBAL_LABEL
         BSBW    DCL$SKIP
         CMPL    R6, R7
         BGEQU   5$
@@ -420,6 +422,7 @@ QUIT:   $DELPRC_S
 ; DCL$CONTINUE: returns from the CTRL/Y AST to the image it stopped,
 ; with CTRL/Y enabled again, or does nothing if there is none.
 DCL$CONTINUE::
+        .GLOBAL_LABEL
         TSTL    DCL$CTRLYFP
         BEQL    10$
         BSBW    CTRLYON
@@ -540,9 +543,11 @@ IMAGE:  CLRL    R0                      ; a type?
 
 ; DCL$INSFPRM: after a command without a parameter it needs.
 DCL$INSFPRM::
+        .GLOBAL_LABEL
         PRINT   "%DCL-W-INSFPRM, missing command parameters - supply all required parameters"
 ; DCL$WARN: after a warning DCL reported.
 DCL$WARN::
+        .GLOBAL_LABEL
         MOVL    #CLIWARN, R0
         BRW     DCL$DONE
 
@@ -572,6 +577,7 @@ ACTFAIL:
 ; reported. An error or a fatal error ends the procedures running. Then
 ; the next command.
 DCL$DONE::
+        .GLOBAL_LABEL
         MOVL    R0, DCL$LASTSTAT
         BLBS    R0, 20$
         BBS     #INHIB_MSG, R0, 10$
@@ -592,6 +598,7 @@ DCL$DONE::
 
 ; DCL$OK: after a command that worked.
 DCL$OK::
+        .GLOBAL_LABEL
         MOVL    #SS$_NORMAL, DCL$LASTSTAT
         BRW     DCL$NEXT
 
@@ -612,6 +619,7 @@ SET:    MOVAB   V_CONTROL, R1
 ; the command's parse to DCL$TOKEN: R8 = its length, 0 if it has none.
 ; Uses R0, R1.
 DCL$GETVAL::
+        .JSB_ENTRY  OUTPUT=<R8>
         PUSHAW  VALLEN
         PUSHAQ  VALDSC
         PUSHL   R1
@@ -624,6 +632,7 @@ DCL$GETVAL::
 ; DCL$ISPRES: R1 = an entity's name, .ASCID. R0 = CLI$PRESENT's status
 ; for it, odd if it is present or defaulted. Uses R0, R1.
 DCL$ISPRES::
+        .JSB_ENTRY
         PUSHL   R1
         CALLS   #1, G^CLI$PRESENT
         RSB
@@ -631,6 +640,7 @@ DCL$ISPRES::
 ; DCL$NAMEVAL: the same, copied to DCL$NAME, which DCL$NAMDSC describes.
 ; Uses R0-R5.
 DCL$NAMEVAL::
+        .JSB_ENTRY  OUTPUT=<R8>, SCRATCH=<R2, R3, R4, R5>
         BSBB    DCL$GETVAL
         MOVC3   R8, DCL$TOKEN, DCL$NAME
         MOVL    R8, DCL$NAMDSC
@@ -640,6 +650,7 @@ DCL$NAMEVAL::
 ; its value to DCL$LINE: R6 = DCL$LINE, R7 = past it, where IF, EXIT and
 ; WRITE read their expressions. Uses R0-R5, R8.
 DCL$RESTVAL::
+        .JSB_ENTRY  OUTPUT=<R6, R7>, SCRATCH=<R2, R3, R4, R5, R8>
         BSBB    DCL$GETVAL
         MOVC3   R8, DCL$TOKEN, DCL$LINE
         MOVAB   DCL$LINE, R6
@@ -650,6 +661,7 @@ DCL$RESTVAL::
 ; symbol name, to DCL$SYMNAM, as DCL$NAMESCAN makes it: R8 = its length.
 ; Uses R0, R1, R6, R7.
 DCL$VALNAME::
+        .JSB_ENTRY  OUTPUT=<R8>, SCRATCH=<R6, R7>
         BSBB    DCL$GETVAL
         MOVAB   DCL$TOKEN, R6
         ADDL3   R6, R8, R7
@@ -660,6 +672,7 @@ DCL$VALNAME::
 ; capitals, to DCL$TOKEN, with R6 past them. R8 = their count, 0 at the
 ; end of the line. Uses R0.
 DCL$WORD::
+        .JSB_ENTRY  OUTPUT=<R6, R8>
         CLRL    R8
 10$:    CMPL    R6, R7
         BGEQU   40$
@@ -683,41 +696,10 @@ DCL$WORD::
         BRB     20$
 40$:    RSB
 
-; REST: R6 = the next character of the line, R7 = past its last. Copies
-; the words left to DCL$TOKEN, in capitals, a blank between each two,
-; with R6 at the line's end: R8 = their length, R2 = how many. Uses R0.
-REST:   CLRL    R8
-        CLRL    R2
-10$:    CMPL    R6, R7                  ; past the blanks
-        BGEQU   50$
-        CMPB    (R6), #^A/ /
-        BNEQ    20$
-        INCL    R6
-        BRB     10$
-20$:    TSTL    R2
-        BEQL    25$
-        MOVB    #^A/ /, DCL$TOKEN[R8]
-        INCL    R8
-25$:    INCL    R2
-30$:    CMPL    R6, R7                  ; the word
-        BGEQU   50$
-        MOVZBL  (R6), R0
-        CMPB    R0, #^A/ /
-        BEQL    10$
-        CMPB    R0, #^A/a/
-        BLSSU   40$
-        CMPB    R0, #^A/z/
-        BGTRU   40$
-        SUBB2   #^A/a/-^A/A/, R0
-40$:    MOVB    R0, DCL$TOKEN[R8]
-        INCL    R8
-        INCL    R6
-        BRB     30$
-50$:    RSB
-
 ; DCL$VERB: R1 = a verb, .ASCIC. R0 = 1 if the R8 characters in
 ; DCL$TOKEN are its first ones, else 0. Uses R2.
 DCL$VERB::
+        .JSB_ENTRY  SCRATCH=<R2>
         CLRL    R0
         MOVZBL  (R1)+, R2
         CMPL    R8, R2
@@ -754,10 +736,12 @@ DCL$VERB::
 ; RUNNING: before $IMGACT. Enables CTRL/Y for the image, which CTRL/Y's
 ; AST may not have, and says an image runs. Uses R0 and R1.
 RUNNING:
+        .JSB_ENTRY
         MOVL    #1, IMGRUN
 ; CTRLYON: enables DCL's CTRL/Y AST on the console, or disables it
 ; after SET NOCONTROL. Uses R0 and R1.
 CTRLYON:
+        .JSB_ENTRY
         MOVAB   CTRLY, R0
         TSTL    NOCTRLY
         BEQL    10$

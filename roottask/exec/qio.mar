@@ -115,6 +115,7 @@ IOC$A_UCBEND::                          ; past the last UCB
 ; SS$_NOIOCHAN with none free. A cloned unit, a network unit or a
 ; mailbox, not one of IOC$AB_UCB's, counts one more channel. IPL$_SYNCH.
 IOC$ASSIGN::
+        .JSB_ENTRY
         MOVL    #1, R1
 10$:    BBCS    R1, PCB$L_CHANS(R4), 20$
         AOBLEQ  #PCB$C_MAXCHAN, R1, 10$
@@ -139,6 +140,7 @@ IOC$ASSIGN::
 ; block if it is an equivalence. IPL$_SYNCH, which keeps that. Uses R0,
 ; R1, R5-R7.
 IOC$TRNDEVNAM::
+        .JSB_ENTRY  OUTPUT=<R2, R3>, SCRATCH=<R5, R6, R7>
         MOVL    #LNM$C_MAXDEPTH, R5
 2$:     TSTL    R2
         BEQL    8$
@@ -212,7 +214,9 @@ IOC$TRNDEVNAM::
 ; astprm in the caller's mode. The console's driver (TT$FDT) writes p2
 ; bytes at p1, or reads a line into them, after the prompt in p5 and p6
 ; for IO$_READPROMPT; the disks' (DK$FDT) reads or writes them at LBN p3.
-        .ENTRY  EXE$QIO, ^M<R2, R3, R4, R5, R6, R7, R8>
+; The FDT routines read the arguments through AP, so it homes them all.
+EXE$QIO::
+        .CALL_ENTRY HOME_ARGS=TRUE, MAX_ARGS=12
         MOVL    SCH$GL_CURPCB, R4
         MOVZWL  8(AP), R0
         BEQL    75$
@@ -239,8 +243,9 @@ IOC$TRNDEVNAM::
 ; $QIOW efn, chan, func, iosb, astadr, astprm, p1, p2, p3, p4, p5, p6:
 ; $QIO, then waits for the event flag, and while iosb's status is still 0,
 ; which says the flag was set for something else, clears it and waits
-; again, as VMS's $SYNCH.
-        .ENTRY  EXE$QIOW, ^M<R2, R3, R4, R5>
+; again, as VMS's $SYNCH. It passes its argument list on, all 12.
+EXE$QIOW::
+        .CALL_ENTRY MAX_ARGS=12
         CALLG   (AP), G^EXE$QIO
         BLBC    R0, 90$
 10$:    PUSHL   4(AP)
@@ -266,6 +271,7 @@ IOC$TRNDEVNAM::
 ; request: R3 = it, R0 = SS$_NORMAL, or SS$_INSFMEM, or SS$_EXQUOTA if it
 ; would be 64 KB or more. Uses R1 and R2.
 IOC$ALLOCIRP::
+        .JSB_ENTRY  INPUT=<AP>, OUTPUT=<R3>, SCRATCH=<R2>
         ADDL2   #IRP$K_LENGTH, R1
         CMPL    R1, #^XFFF0
         BGTRU   80$
@@ -303,6 +309,7 @@ IOC$ALLOCIRP::
 ; with no process, which finds the status in the IRP. R0 = SS$_NORMAL, for
 ; an FDT routine to return. IPL$_SYNCH. Uses R1-R3.
 IOC$REQCOM::
+        .JSB_ENTRY  SCRATCH=<R2, R3>
         MOVL    R0, IRP$L_IOST1(R3)
         MOVL    R1, IRP$L_IOST2(R3)
         TSTL    IRP$L_PID(R3)
@@ -324,6 +331,7 @@ IOC$REQCOM::
 ; ponytail: the buffer and the IOSB aren't probed again; VMS's are, or
 ; locked.
 IOC$POST::
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5, R6>
         MOVL    R5, R6
         BBC     #IRP$V_BUFIO, IRP$L_STS(R6), 10$
         EXTZV   #16, #16, IRP$L_IOST1(R6), R0
@@ -361,6 +369,7 @@ IOC$POST::
 ; ponytail: VMS waits for rundown's to end, for drivers that can't stop
 ; at once.
 IOC$CANCEL::
+        .JSB_ENTRY  SCRATCH=<R2, R3>
         PUSHR   #^M<R5, R6, R7>
         MOVL    R0, R6
         MOVL    R1, R7
@@ -392,6 +401,7 @@ IOC$CANCEL::
 ; channels off it and completes them with that status, or frees them for
 ; 0. IPL$_SYNCH. Uses R0-R3.
 IOC$CANCELQ::
+        .JSB_ENTRY  SCRATCH=<R2, R3>
         MOVL    (R5), R3
 10$:    CMPL    R3, R5
         BEQL    90$

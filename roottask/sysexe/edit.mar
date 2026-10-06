@@ -270,7 +270,9 @@ HELP:   PRINT   "  range       types the lines range names"
 ; LOAD: reads the file the command line names into the buffer, a record a
 ; line, up to MAXLINES of them and TEXTSIZE bytes. A file that doesn't
 ; exist leaves it empty. R0 = SS$_NORMAL, or RMS's error. Uses R0-R5.
-LOAD:   GETVALUE "FILE", SPECDSC, SPECDSC
+LOAD:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5>
+        GETVALUE "FILE", SPECDSC, SPECDSC
         MOVB    SPECDSC, FAB+FAB$B_FNS
         $OPEN   FAB=FAB
         BLBS    R0, 10$
@@ -313,7 +315,9 @@ LOAD:   GETVALUE "FILE", SPECDSC, SPECDSC
 ; ADD: reads lines from the console, each after a tab, up to a CTRL/Z,
 ; and inserts them before the current line, while the buffer has room.
 ; The current line stays the one they went before. Uses R0-R5 and R10.
-ADD:    MOVL    CUR, R10
+ADD:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5, R10>
+        MOVL    CUR, R10
 10$:    CMPL    NLINES, #MAXLINES
         BGEQU   80$
         SUBL3   FREE, LIMIT, R0
@@ -343,7 +347,9 @@ ADD:    MOVL    CUR, R10
 
 ; REMOVE: R2 = a line, R3 = a line after it, 1 to NLINES+1. Deletes them,
 ; but [EOB], and the current line is then the one after. Uses R0-R5.
-REMOVE: MOVL    R2, CUR
+REMOVE:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5>
+        MOVL    R2, CUR
         CMPL    R3, NLINES
         BLEQU   10$
         MOVL    NLINES, R3
@@ -362,7 +368,9 @@ REMOVE: MOVL    R2, CUR
 ; else the one the command line names, and writes the buffer to it, a
 ; record a line. Types its name. R0 = RMS$_NORMAL or RMS's error. Uses
 ; R0-R5 and R10.
-SAVE:   MOVZBL  NAM+NAM$B_RSL, R0
+SAVE:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5, R10>
+        MOVZBL  NAM+NAM$B_RSL, R0
         BEQL    10$
         MOVAB   RES, OUTFAB+FAB$L_FNA   ; its name, without the version
         SUBL3   #RES, NAM+NAM$L_VER, R0
@@ -399,7 +407,9 @@ SAVE:   MOVZBL  NAM+NAM$B_RSL, R0
 
 ; SHOW: R1 = a line, 1 to NLINES+1. Types it after its number, or [EOB]
 ; past the last. Uses R0 and R1.
-SHOW:   CMPL    R1, NLINES
+SHOW:
+        .JSB_ENTRY
+        CMPL    R1, NLINES
         BLEQU   10$
         PRINT   "[EOB]"
         RSB
@@ -436,7 +446,9 @@ SHOW:   CMPL    R1, NLINES
 ; of the command. R0 = 1, R2 = its first line and R3 its last, 1 to
 ; NLINES+1, or R0 = 0 and R1 = an error message, .ASCIC. Uses R0-R5, R8
 ; and R9.
-RANGE:  BSBW    BLANKS
+RANGE:
+        .JSB_ENTRY  OUTPUT=<R2, R3, R6>, SCRATCH=<R4, R5, R8, R9>
+        BSBW    BLANKS
         MOVL    CUR, R2
         MOVL    CUR, R3
         CMPL    R6, R7
@@ -483,7 +495,9 @@ RANGE:  BSBW    BLANKS
 ; Reads a line: a number, ., BEGIN, END, "text" or -"text". R0 = 1 and
 ; R1 = the line, 1 to NLINES+1, or R0 = 0 and R1 = an error message,
 ; .ASCIC. Uses R0, R1, R6, R8.
-LINE:   PUSHR   #^M<R2, R3, R4, R5>
+LINE:
+        .JSB_ENTRY  SCRATCH=<R6, R8>
+        PUSHR   #^M<R2, R3, R4, R5>
         BSBW    BLANKS
         MOVAB   E_CMD, R1
         CLRL    R0
@@ -569,7 +583,9 @@ LINE:   PUSHR   #^M<R2, R3, R4, R5>
         RSB
 
 ; QUOTE: R6 = a character of the command. R0 = 1 if it is " or ', else 0.
-QUOTE:  MOVL    #1, R0
+QUOTE:
+        .JSB_ENTRY
+        MOVL    #1, R0
         CMPB    (R6), #^A/"/
         BEQL    10$
         CMPB    (R6), #^A/'/
@@ -580,7 +596,9 @@ QUOTE:  MOVL    #1, R0
 ; STRING: R6 = a quote in the command, R7 = past its last character. R4 =
 ; the text after it, R5 = its length, up to the same quote again or the
 ; end of the command, and R6 past them. Uses R0.
-STRING: MOVZBL  (R6)+, R0
+STRING:
+        .JSB_ENTRY  OUTPUT=<R4, R5, R6>
+        MOVZBL  (R6)+, R0
         MOVL    R6, R4
 10$:    CMPL    R6, R7
         BGEQU   20$
@@ -595,7 +613,9 @@ STRING: MOVZBL  (R6)+, R0
 ; MATCH: R1 = a line, R4 = text, R5 = its length, R0 = a column. R0 = 1
 ; if the line has the text in it from that column on, case ignored, and
 ; MCOL = where, else 0. Keeps every register but R0.
-MATCH:  PUSHR   #^M<R2, R3, R8, R9>
+MATCH:
+        .JSB_ENTRY
+        PUSHR   #^M<R2, R3, R8, R9>
         MOVL    LINES[R1], R2
         MOVZBL  (R2)+, R3
         SUBL2   R5, R3
@@ -625,7 +645,9 @@ MATCH:  PUSHR   #^M<R2, R3, R8, R9>
         RSB
 
 ; UPCASE: R0 = a character, in capitals.
-UPCASE: CMPB    R0, #^A/a/
+UPCASE:
+        .JSB_ENTRY
+        CMPB    R0, #^A/a/
         BLSSU   10$
         CMPB    R0, #^A/z/
         BGTRU   10$
@@ -634,7 +656,9 @@ UPCASE: CMPB    R0, #^A/a/
 
 ; BLANKS: R6 = the next character of the command, R7 = past its last.
 ; Moves R6 past blanks and tabs.
-BLANKS: CMPL    R6, R7
+BLANKS:
+        .JSB_ENTRY  SCRATCH=<R6>
+        CMPL    R6, R7
         BGEQU   10$
         CMPB    (R6), #^A/ /
         BEQL    5$
@@ -647,7 +671,9 @@ BLANKS: CMPL    R6, R7
 ; WORD: R6 = the next character of the command, R7 = past its last.
 ; Copies the letters there to TOKEN, in capitals, with R6 past them. R8 =
 ; their count, 0 if there is none. Uses R0.
-WORD:   CLRL    R8
+WORD:
+        .JSB_ENTRY  OUTPUT=<R6, R8>
+        CLRL    R8
 10$:    CMPL    R6, R7
         BGEQU   20$
         MOVZBL  (R6), R0
@@ -664,7 +690,9 @@ WORD:   CLRL    R8
 
 ; VERB: R1 = a verb, .ASCIC. R0 = 1 if the R8 characters in TOKEN are
 ; its first ones, else 0. Uses R1-R3.
-VERB:   CLRL    R0
+VERB:
+        .JSB_ENTRY  SCRATCH=<R2, R3>
+        CLRL    R0
         MOVZBL  (R1)+, R2
         CMPL    R8, R2
         BGTRU   90$
@@ -681,6 +709,7 @@ VERB:   CLRL    R0
 ; KEYWORD: R1 = a keyword, .ASCIC. R0 = 1 if the R8 characters in TOKEN
 ; are all of it, else 0. Uses R1-R3.
 KEYWORD:
+        .JSB_ENTRY  SCRATCH=<R2, R3>
         CLRL    R0
         CMPB    R8, (R1)
         BNEQ    10$
@@ -690,7 +719,9 @@ KEYWORD:
 ; SCREEN: keypad mode, from the current line until CTRL/Z, which leaves
 ; the cursor's line the current one, and the line being changed back in
 ; the arena, for line mode's commands. Uses R0-R7.
-SCREEN: CLRL    COL
+SCREEN:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5, R6, R7>
+        CLRL    COL
         CLRL    GOLD
         MOVL    #1, DIR
         MOVAB   S_ENTER, R1
@@ -738,7 +769,8 @@ SCREEN: CLRL    COL
 90$:    BSBW    COMMIT
         MOVAB   S_LEAVE, R1
         BSBW    PUTS
-        BRW     FLUSH
+        BSBW    FLUSH
+        RSB
 
 ; KEY code, routine: the routine keypad mode calls with R0 = code for it.
         .MACRO  KEY     CODE, ROUTINE
@@ -775,7 +807,9 @@ KEYS:   KEY     8, BOL                  ; BS
 ; GETKEY: R0 = the next key: a character, a K_ code for the escape
 ; sequence a cursor, keypad or function key sends, or 0 for another.
 ; Uses R0-R2.
-GETKEY: BSBW    READKEY
+GETKEY:
+        .JSB_ENTRY  SCRATCH=<R2>
+        BSBW    READKEY
         CMPL    R0, #ESC
         BNEQ    90$
         BSBW    READKEY
@@ -844,6 +878,7 @@ SS3:    .BYTE   ^A/A/, ^A/D/
 ; READKEY: R0 = the next character typed, without echo; a carriage
 ; return if it ended the read, and CTRL/Z if the read fails. Uses R0, R1.
 READKEY:
+        .JSB_ENTRY
         $QIOW_S CHAN=CHAN, FUNC=#IO$_READVBLK!IO$M_NOECHO!IO$M_NOFILTR, IOSB=IOSB, P1=KEY, P2=#1
         BLBC    R0, 80$
         MOVZBL  #13, R0
@@ -858,6 +893,7 @@ READKEY:
 ; off it, paints what PAINT says, and puts the cursor at its column.
 ; Uses R0-R6.
 SHOWSCR:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5, R6>
         SUBL3   TOP, CUR, R0
         CMPL    R0, #ROWS               ; unsigned: above the top too
         BLSSU   20$
@@ -903,7 +939,9 @@ SHOWSCR:
 ; DRAW: R1 = a line. Writes it, up to COLS characters, with a control
 ; character as a space, [EOB] past the last line and nothing past that.
 ; Uses R0-R4.
-DRAW:   CMPL    R1, NLINES
+DRAW:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4>
+        CMPL    R1, NLINES
         BLEQU   10$
         DECL    R1
         CMPL    R1, NLINES
@@ -928,7 +966,9 @@ DRAW:   CMPL    R1, NLINES
 
 ; MSG: R1 = a message, .ASCIC. Writes it on MSGROW, until the next key.
 ; Uses R0-R3.
-MSG:    PUSHL   R1
+MSG:
+        .JSB_ENTRY  SCRATCH=<R2, R3>
+        PUSHL   R1
         MOVL    #MSGROW, R1
         CLRL    R2
         BSBW    GOTO
@@ -941,7 +981,9 @@ MSG:    PUSHL   R1
 
 ; GOTO: R1 = a row, from 1, R2 = a column, from 0. Moves the cursor
 ; there. Uses R0-R2.
-GOTO:   PUSHL   R2
+GOTO:
+        .JSB_ENTRY  SCRATCH=<R2>
+        PUSHL   R2
         PUSHL   R1
         MOVZBL  #ESC, R0
         BSBB    PUTC
@@ -957,7 +999,9 @@ GOTO:   PUSHL   R2
         BRB     PUTC
 
 ; PUTNUM: R0 = a number, 0-99. Writes it in decimal. Uses R0-R2.
-PUTNUM: DIVL3   #10, R0, R2
+PUTNUM:
+        .JSB_ENTRY  SCRATCH=<R2>
+        DIVL3   #10, R0, R2
         MULL3   #10, R2, R1
         SUBL2   R1, R0
         PUSHL   R0
@@ -969,7 +1013,9 @@ PUTNUM: DIVL3   #10, R0, R2
         BRB     PUTC
 
 ; PUTS: R1 = text, .ASCIC. Writes it. Uses R0-R3.
-PUTS:   MOVL    R1, R3
+PUTS:
+        .JSB_ENTRY  SCRATCH=<R2, R3>
+        MOVL    R1, R3
         MOVZBL  (R3)+, R2
         BEQL    20$
 10$:    MOVZBL  (R3)+, R0
@@ -978,7 +1024,9 @@ PUTS:   MOVL    R1, R3
 20$:    RSB
 
 ; PUTC: R0 = a character. Writes it, in SBUF until FLUSH. Uses R1.
-PUTC:   MOVL    SLEN, R1
+PUTC:
+        .JSB_ENTRY
+        MOVL    SLEN, R1
         CMPL    R1, #SBUFSIZE
         BLSSU   10$
         PUSHL   R0
@@ -990,12 +1038,16 @@ PUTC:   MOVL    SLEN, R1
         RSB
 
 ; FLUSH: writes what is in SBUF on the console. Uses R0, R1.
-FLUSH:  $QIOW_S CHAN=CHAN, FUNC=#IO$_WRITEVBLK, P1=SBUF, P2=SLEN
+FLUSH:
+        .JSB_ENTRY
+        $QIOW_S CHAN=CHAN, FUNC=#IO$_WRITEVBLK, P1=SBUF, P2=SLEN
         CLRL    SLEN
         RSB
 
 ; LEN: R1 = a line, 1 to NLINES+1. R0 = its length, 0 for [EOB].
-LEN:    CLRL    R0
+LEN:
+        .JSB_ENTRY
+        CLRL    R0
         CMPL    R1, NLINES
         BGTRU   10$
         MOVL    LINES[R1], R0
@@ -1004,7 +1056,9 @@ LEN:    CLRL    R0
 
 ; CLAMP: R0 = the cursor's column, at most the end of the current line,
 ; R1 = that line's length.
-CLAMP:  MOVL    CUR, R1
+CLAMP:
+        .JSB_ENTRY
+        MOVL    CUR, R1
         BSBB    LEN
         MOVL    R0, R1
         MOVL    COL, R0
@@ -1014,17 +1068,23 @@ CLAMP:  MOVL    CUR, R1
 10$:    RSB
 
 ; The keys' routines. Each may use R0-R7.
-UP:     CMPL    CUR, #1
+UP:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5, R6, R7>
+        CMPL    CUR, #1
         BLEQU   10$
         DECL    CUR
 10$:    RSB
 
-DOWN:   CMPL    CUR, NLINES
+DOWN:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5, R6, R7>
+        CMPL    CUR, NLINES
         BGTRU   10$
         INCL    CUR
 10$:    RSB
 
-RIGHT:  BSBB    CLAMP
+RIGHT:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5, R6, R7>
+        BSBB    CLAMP
         CMPL    R0, R1
         BGEQU   10$
         ADDL3   #1, R0, COL
@@ -1035,7 +1095,9 @@ RIGHT:  BSBB    CLAMP
         CLRL    COL
 20$:    RSB
 
-LEFT:   BSBB    CLAMP
+LEFT:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5, R6, R7>
+        BSBB    CLAMP
         TSTL    R0
         BEQL    10$
         SUBL3   #1, R0, COL
@@ -1048,7 +1110,9 @@ LEFT:   BSBB    CLAMP
         MOVL    R0, COL
 20$:    RSB
 
-BOL:    BSBB    CLAMP                   ; the start of the line, or the one before
+BOL:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5, R6, R7>
+        BSBB    CLAMP                   ; the start of the line, or the one before
         TSTL    R0
         BNEQ    10$
         BSBB    UP
@@ -1056,13 +1120,16 @@ BOL:    BSBB    CLAMP                   ; the start of the line, or the one befo
         RSB
 
 LINEKEY:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5, R6, R7>
         TSTL    DIR                     ; the next line's start, or this one's
         BLSS    BOL
         BSBB    DOWN
         CLRL    COL
         RSB
 
-EOLKEY: TSTL    DIR                     ; this line's end, or the one after or before
+EOLKEY:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5, R6, R7>
+        TSTL    DIR                     ; this line's end, or the one after or before
         BGTR    10$
         BSBB    UP
         BRB     20$
@@ -1076,34 +1143,48 @@ EOLKEY: TSTL    DIR                     ; this line's end, or the one after or b
         RSB
 
 CHARKEY:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5, R6, R7>
         TSTL    DIR
         BLSS    LEFT
         BRB     RIGHT
 
 ADVANCE:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5, R6, R7>
         MOVL    #1, DIR
         RSB
 
-BACKUP: MNEGL   #1, DIR
+BACKUP:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5, R6, R7>
+        MNEGL   #1, DIR
         RSB
 
-TOPKEY: MOVL    #1, CUR
+TOPKEY:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5, R6, R7>
+        MOVL    #1, CUR
         CLRL    COL
         RSB
 
-BOTTOM: ADDL3   #1, NLINES, CUR
+BOTTOM:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5, R6, R7>
+        ADDL3   #1, NLINES, CUR
         CLRL    COL
         RSB
 
-SECT:   MOVL    DIR, R2
+SECT:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5, R6, R7>
+        MOVL    DIR, R2
         BRB     MOVESECT
-PREV:   MNEGL   #1, R2
+PREV:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5, R6, R7>
+        MNEGL   #1, R2
         BRB     MOVESECT
 NEXTSCR:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5, R6, R7>
         MOVL    #1, R2
 ; MOVESECT: R2 = 1 or -1. Moves SECTION lines that way, to the start of
 ; the line, the first or [EOB] at most.
 MOVESECT:
+        .GLOBAL_LABEL                   ; the other keys' too
         MULL3   #SECTION, R2, R0
         ADDL2   CUR, R0
         BGTR    10$
@@ -1117,15 +1198,19 @@ MOVESECT:
         RSB
 
 REFRESH:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5, R6, R7>
         MOVL    #2, PAINT
         RSB
 
 HELPKEY:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5, R6, R7>
         MOVAB   E_KEYS, R1
         BRW     MSG
 
 ; FIND: reads what to look for on MSGROW, and finds it as FINDNXT does.
-FIND:   BSBW    FLUSH
+FIND:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5, R6, R7>
+        BSBW    FLUSH
         $QIOW_S CHAN=CHAN, FUNC=#IO$_READPROMPT, IOSB=IOSB, P1=STR, P2=#LINESIZE, P5=#S_FIND, P6=#S_FINDLEN
         MOVL    #2, PAINT               ; the echo of RETURN scrolled the screen
         BLBC    R0, 10$
@@ -1138,6 +1223,7 @@ FIND:   BSBW    FLUSH
 ; FINDNXT: moves to the next place with what FIND looked for, case
 ; ignored, after the cursor in ADVANCE, on a line before it in BACKUP.
 FINDNXT:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5, R6, R7>
         MOVL    STRLEN, R5
         BNEQ    10$
         MOVAB   E_NOSTR, R1
@@ -1168,7 +1254,9 @@ FINDNXT:
         BRW     MSG
 
 ; INSCHR: R0 = a character. Puts it in at the cursor.
-INSCHR: MOVL    R0, R7
+INSCHR:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5, R6, R7>
+        MOVL    R0, R7
         BSBW    ROOM
         BLBC    R0, 90$
         BSBW    OPENLN
@@ -1189,7 +1277,9 @@ INSCHR: MOVL    R0, R7
 
 ; SPLIT: RETURN. Breaks the line at the cursor, which goes to the start
 ; of the new one; at [EOB], puts an empty line before it.
-SPLIT:  BSBW    ROOM
+SPLIT:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5, R6, R7>
+        BSBW    ROOM
         BLBC    R0, 90$
         CMPL    NLINES, #MAXLINES
         BGEQU   80$
@@ -1220,7 +1310,9 @@ SPLIT:  BSBW    ROOM
 
 ; RUBOUT: DEL. Deletes the character before the cursor, at the start of
 ; a line the end of the one before.
-RUBOUT: BSBW    ROOM
+RUBOUT:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5, R6, R7>
+        BSBW    ROOM
         BLBC    R0, 90$
         BSBW    CLAMP
         TSTL    R0
@@ -1241,7 +1333,9 @@ RUBOUT: BSBW    ROOM
 
 ; DELC: deletes the character at the cursor, at the end of a line the
 ; end itself.
-DELC:   BSBW    ROOM
+DELC:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5, R6, R7>
+        BSBW    ROOM
         BLBC    R0, 90$
         BSBW    CLAMP
         MOVL    R0, COL
@@ -1253,7 +1347,9 @@ DELC:   BSBW    ROOM
 90$:    RSB
 
 ; DELL: deletes from the cursor to the start of the next line.
-DELL:   BSBW    ROOM
+DELL:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5, R6, R7>
+        BSBW    ROOM
         BLBC    R0, 90$
         CMPL    CUR, NLINES
         BGTRU   90$
@@ -1267,7 +1363,9 @@ DELL:   BSBW    ROOM
 
 ; DELCHR: R0 = a column of OPEN, before its end. Deletes the character
 ; there.
-DELCHR: MOVZBL  OPEN, R1
+DELCHR:
+        .GLOBAL_LABEL                   ; the other keys' too
+        MOVZBL  OPEN, R1
         SUBL2   R0, R1
         DECL    R1                      ; the characters after it
         DECB    OPEN
@@ -1278,7 +1376,8 @@ DELCHR: MOVZBL  OPEN, R1
 
 ; JOIN: puts the next line at the end of the current one, if there is
 ; one and the two fit in a line.
-JOIN:   CMPL    CUR, NLINES
+JOIN:   .GLOBAL_LABEL                   ; DELC's and RUBOUT's too
+        CMPL    CUR, NLINES
         BGEQU   90$
         BSBW    OPENLN
         ADDL3   #1, CUR, R7
@@ -1299,7 +1398,9 @@ JOIN:   CMPL    CUR, NLINES
 
 ; ROOM: R0 = 1 if TEXT has RESERVE bytes for a change, compacted if it
 ; must be, else 0, and a message. Uses R0-R7.
-ROOM:   SUBL3   FREE, LIMIT, R0
+ROOM:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5, R6, R7>
+        SUBL3   FREE, LIMIT, R0
         CMPL    R0, #RESERVE
         BGEQU   10$
         BSBB    COMPACT
@@ -1317,6 +1418,7 @@ ROOM:   SUBL3   FREE, LIMIT, R0
 ; arena, one after another, and goes on in that one, without the copies
 ; changes left behind. Uses R0-R7.
 COMPACT:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5, R6, R7>
         MOVAB   TEXT, R6
         CMPL    BASE, R6
         BNEQ    10$
@@ -1342,7 +1444,9 @@ COMPACT:
 ; OPENLN: makes the current line the one being changed, in OPEN, after
 ; it puts the one that was back; at [EOB], a new empty line. R0 = 1, or
 ; 0 if there is no room for it. Uses R0-R5.
-OPENLN: CMPL    OPENED, CUR
+OPENLN:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5>
+        CMPL    OPENED, CUR
         BEQL    80$
         BSBB    COMMIT
         CMPL    CUR, NLINES
@@ -1369,7 +1473,9 @@ OPENLN: CMPL    OPENED, CUR
 
 ; COMMIT: puts the line being changed back in TEXT: where it was if it
 ; fits, else at FREE. Uses R0-R5.
-COMMIT: MOVL    OPENED, R5
+COMMIT:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5>
+        MOVL    OPENED, R5
         BEQL    90$
         CLRL    OPENED
         MOVZBL  OPEN, R0
@@ -1386,6 +1492,7 @@ COMMIT: MOVL    OPENED, R5
 ; INSLINE: R1 = a line, .ASCIC, R2 = where it goes, 1 to NLINES+1. Puts
 ; it there, and the lines from there on one further. Uses R0-R5.
 INSLINE:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5>
         PUSHR   #^M<R1, R2>
         SUBL3   R2, NLINES, R0
         INCL    R0
@@ -1404,6 +1511,7 @@ INSLINE:
 ; DELLINE: R2 = a line, 1 to NLINES. Takes it out, and the lines after
 ; it one back. Uses R0-R5.
 DELLINE:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5>
         PUSHL   R2
         SUBL3   R2, NLINES, R0
         MULL2   #4, R0

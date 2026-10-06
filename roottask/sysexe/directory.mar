@@ -131,6 +131,7 @@ LETTERS:                                ; the access a protection's bits deny
 ; owner and protection, as DETAIL asks, or, if the process may not read
 ; it, VMS's words for that. Uses R0-R5.
 DETAILS:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5>
         MOVZBL  NAM+NAM$B_NAME, R2      ; NAME.TYPE;VERSION
         ADDB2   NAM+NAM$B_TYPE, R2
         ADDB2   NAM+NAM$B_VER, R2
@@ -176,7 +177,9 @@ DETAILS:
         BRB     30$
 
 ; PADTO: appends blanks to LINE until it is R3 characters long. Uses R0-R2.
-PADTO:  MOVZBL  LINE, R0
+PADTO:
+        .JSB_ENTRY  SCRATCH=<R2>
+        MOVZBL  LINE, R0
         CMPL    R0, R3
         BGEQU   10$
         MOVZBL  #^A/ /, R0
@@ -185,10 +188,15 @@ PADTO:  MOVZBL  LINE, R0
 10$:    RSB
 
 ; ADDDEC: appends R1 in decimal to LINE, ADDOCT in octal. Uses R0-R5.
-ADDDEC: MOVL    #10, R3
+ADDDEC:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5>
+        MOVL    #10, R3
         BRB     ADDNUM
-ADDOCT: MOVL    #8, R3
-ADDNUM: CLRL    R4                      ; digits, on the stack
+ADDOCT:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5>
+        MOVL    #8, R3
+ADDNUM: .GLOBAL_LABEL                   ; ADDDEC's too
+        CLRL    R4                      ; digits, on the stack
 10$:    DIVL3   R3, R1, R5
         MULL3   R3, R5, R0
         SUBL3   R0, R1, R0
@@ -203,18 +211,23 @@ ADDNUM: CLRL    R4                      ; digits, on the stack
         RSB
 
 ; SAY: writes the line in LINE, and empties it. Uses R0 and R1.
-SAY:    PUSHAB  LINE
+SAY:
+        .JSB_ENTRY
+        PUSHAB  LINE
         CALLS   #1, G^PUT_LINE
         CLRB    LINE
         RSB
 
 ; ADDCHAR: appends the character in R0 to LINE. Uses R0-R2.
 ADDCHAR:
+        .JSB_ENTRY  SCRATCH=<R2>
         MOVB    R0, CHAR
         MOVAB   CHAR, R1
         MOVL    #1, R2
 ; ADD: appends the R2 bytes at R1 to LINE, as many as fit. Uses R0-R2.
-ADD:    MOVZBL  LINE, R0
+ADD:
+        .JSB_ENTRY  SCRATCH=<R2>
+        MOVZBL  LINE, R0
 10$:    TSTL    R2
         BEQL    20$
         CMPL    R0, #255

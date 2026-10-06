@@ -41,7 +41,9 @@ VALUE:  .LONG   0                       ; a value item's
 ; DEVICE: R4 = a device's number. R5 = its VCB, or 0 for the console.
 ; R0 = SS$_NORMAL, or SS$_NOMOREDEV past the last. Keeps every other
 ; register.
-DEVICE: CMPL    R4, #255            ; a caller's context, which may be anything
+DEVICE:
+        .JSB_ENTRY  OUTPUT=<R5>
+        CMPL    R4, #255            ; a caller's context, which may be anything
         BGTRU   80$
         MULL3   #VCB$K_LENGTH, R4, R5
         MOVAB   F11$AB_DKA0, R0
@@ -59,6 +61,7 @@ DEVICE: CMPL    R4, #255            ; a caller's context, which may be anything
 ; DEVNAME: R5 = a device's VCB, or 0. Makes its name, _DDCU:, in NAMBUF.
 ; R1 = NAMBUF, R2 = 6. Keeps every other register.
 DEVNAME:
+        .JSB_ENTRY  OUTPUT=<R2>
         MOVAB   OPA0, R1
         TSTL    R5
         BEQL    10$
@@ -74,6 +77,7 @@ DEVNAME:
 ; MNT if a volume is mounted, and SWL too if the disk can't be written,
 ; or a terminal's. Keeps every other register.
 DEVCHAR:
+        .JSB_ENTRY
         MOVL    #TERM, R0
         TSTL    R5
         BEQL    10$
@@ -88,7 +92,9 @@ DEVCHAR:
 ; there: the console, a disk with a volume mounted, the ramdisk once
 ; made, or a PAL disk whose first block reads; else 0. Holding FIL$LOCK.
 ; Uses R1-R2.
-ONLINE: TSTL    R5
+ONLINE:
+        .JSB_ENTRY  SCRATCH=<R2>
+        TSTL    R5
         BEQL    70$
         BBS     #VCB$V_MOUNTED, VCB$L_STATUS(R5), 70$
         BBC     #VCB$V_RAMDISK, VCB$L_STATUS(R5), 10$
@@ -229,7 +235,9 @@ ONLINE: TSTL    R5
 ; mailbox's UCB, or 0. R1 = what to return, R2 = its length. R0 =
 ; SS$_NORMAL, SS$_BADPARAM for a code it doesn't know, or the disk's
 ; error. Holding FIL$LOCK. Uses R0-R3.
-ITEM:   TSTL    R6
+ITEM:
+        .JSB_ENTRY  SCRATCH=<R2, R3>
+        TSTL    R6
         BEQL    5$
         BRW     MBXITEM
 5$:     CMPL    R10, #DVI$_DEVNAM
@@ -333,12 +341,14 @@ LONG:   MOVL    R0, VALUE
         MOVAB   VALUE, R1
         MOVL    #4, R2
 ; STRING: R1 and R2 = a string. Returns it as an item.
-STRING: MOVL    #SS$_NORMAL, R0
+STRING:
+        MOVL    #SS$_NORMAL, R0
         RSB
 
 ; MOUNTED: R5 = a device's VCB, or 0. R0 = 1 if a volume is mounted on
 ; it, else 0. Keeps every other register.
 MOUNTED:
+        .JSB_ENTRY
         CLRL    R0
         TSTL    R5
         BEQL    10$

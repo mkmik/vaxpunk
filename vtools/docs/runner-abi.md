@@ -2,8 +2,9 @@
 
 vrun runs an image in user mode (EL0) on a QEMU `virt` machine with no OS. A
 small boot stub at EL1 sets up memory, starts the image, and serves a few
-monitor calls. This is the contract between the two. All of it is provisional:
-the calling standard, once it exists, replaces the entry convention.
+monitor calls. This is the contract between the two. The image is entered as
+the calling standard ([DESIGN-0004](../../docs/design/0004-calling-standard.md))
+calls a routine.
 
 ## Machine
 
@@ -39,11 +40,14 @@ fails to load. Page 0 is unmapped, and so is everything below the stack down to
 | --- | --- |
 | `pc` | the image's first transfer address |
 | `x0` | address of the runner info block |
+| `x9` | 1, the argument count |
+| `x18` | `7FFF0000`, VAX SP, as `sp` |
 | `x30` | address of the return page |
 | `sp` | `7FFF0000`, 16-byte aligned |
 | everything else | 0, including FP/SIMD registers, `FPCR` and `FPSR` |
 
-`x18` is an ordinary register. Nothing reserves it.
+The image is called as a routine with one argument, the info block, by the
+calling standard (DESIGN-0004): `4(AP)` in a MACRO-32 main routine.
 
 ## Runner info block
 
@@ -119,6 +123,17 @@ same section:
 An address in the unmapped pages below the stack means the stack overflowed,
 and `-VRUN-I-STACKOVF` says so.
 
+Then a line for each frame of the calling standard's
+([DESIGN-0004](../../docs/design/0004-calling-standard.md)) on the image's
+FP chain, from the innermost out, named by its descriptor, with where it
+returns to. The walk stops at an FP of 0, at a frame whose descriptor
+doesn't name a routine, and at memory the image can't read:
+
+```
+-VRUN-I-FRAME, INNER's frame, which returns to MIDDLE+%X1C (image section 1 + %X80)
+-VRUN-I-FRAME, START's frame, which returns to PC=000000007FF01000
+```
+
 A hung image is stopped after `--timeout` seconds (default 30).
 
 ## Debugging
@@ -140,6 +155,7 @@ timeout, and quitting the debugger ends the run.
 
 Everything the image writes goes to vrun's standard output unchanged. The stub
 ends the run with one report, which vrun removes: `!vrun exit STATUS`,
-`!vrun fault ESR PC FAR`, or `!vrun stubfault ESR PC FAR` for a bug in the stub
+`!vrun fault ESR PC FAR`, then a return address and a routine name for each
+frame the stub found, or `!vrun stubfault ESR PC FAR` for a bug in the stub
 itself, with 16-digit hex values. The report may follow the image's output on
 the same line. An image must not write `!vrun ` itself.

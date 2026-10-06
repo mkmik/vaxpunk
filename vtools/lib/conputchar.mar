@@ -8,6 +8,7 @@
 
 ; CON$PUTCHAR: writes the character in R0. Keeps every register.
 CON$PUTCHAR::
+        .JSB_ENTRY
         PUSHR   #^M<R0, R1>
         MOVAB   (SP), R0                ; the saved R0: the character first
         MOVL    #1, R1

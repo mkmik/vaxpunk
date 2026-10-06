@@ -75,7 +75,8 @@ arguments x9 is just the count, as Alpha's and Itanium's R25 is.
 than by name (MACRO-32's AP, BLISS-64's `ACTUALPARAMETER`, a routine with
 optional arguments) saves x9 at entry and copies its arguments into a list
 of its own: AAPCS64 doesn't put the register arguments next to the stack
-ones, any more than x86-64 does. `CALLG` and `LIB$CALLG` go the other way.
+ones, any more than x86-64 does. `CALLG` goes the other way, and
+`LIB$CALLG` will.
 
 **Mechanisms** are VMS's: by value, by reference, by descriptor. An
 omitted argument is passed as 0.
@@ -98,15 +99,16 @@ is never above it when MACRO-32 calls out. Code that doesn't use the VAX
 stack leaves x18 alone; code that changes it restores it before
 returning. The system sets it to `sp` where a mode's code starts. The live
 part of the stack is everything at or above the lower of `sp` and x18;
-only the PAL writes below that, when it delivers an interrupt or an
-exception, and it goes below both.
+only the PAL, when it delivers an interrupt or an exception, and the
+executive, when it reflects an exception into the mode that took it
+(ADR-0021), write below that, and both go below both.
 
 ## Procedure values
 
 A procedure value is the routine's entry address. It must fit in 32 bits,
 sign-extended, since MACRO-32 stores code addresses in longwords: code
-above 2 GB is reached through a trampoline the linker places below, as on
-x86-64 VMS. There are no procedure descriptors as values and no linkage
+above 2 GB will be reached through a trampoline the linker places below,
+as on x86-64 VMS; nothing is linked there yet. There are no procedure descriptors as values and no linkage
 sections; ARM64 reaches code and data PC-relative. A bound procedure
 value points at a trampoline that loads x15 with the environment and
 branches to the routine.
@@ -122,10 +124,11 @@ its caller's frame.
 
 The prologue builds the frame in this order:
 
-1. `stp x29, x30, [sp, #-N]!`: the frame record, AAPCS64's, at the bottom
-   of the N bytes the frame takes, N a multiple of 16.
-2. `adr x16, FDSC` then `stp xzr, x16, [sp, #16]`: a clear handler and
-   the frame descriptor's address.
+1. `stp x29, x30, [sp, #-N]!`, or `sub sp, sp, #N` and `stp x29, x30,
+   [sp]` for an N past 504: the frame record, AAPCS64's, at the bottom of
+   the N bytes the frame takes, N a multiple of 16.
+2. `adrp` and `add` x16 to the frame descriptor, then
+   `stp xzr, x16, [sp, #16]`: a clear handler and its address.
 3. `mov x29, sp`: from here FP is the new frame.
 4. The kept registers it changes, where its descriptor says.
 
@@ -142,7 +145,8 @@ FP moves only at step 3, after `16(FP)` and `24(FP)` hold their values, so
 a fault in a prologue, a stack overflow at step 1, finds FP still at the
 caller's complete frame. Until FP moves, the saved registers still hold
 the caller's values, as Alpha's standard requires. The epilogue loads the
-saved registers, then `ldp x29, x30, [sp], #N` and `ret`.
+saved registers, then `mov sp, x29`, `ldp x29, x30, [sp], #N` (or `ldp`
+and `add sp, sp, #N`) and `ret`.
 
 FP is a chain: each frame's `0(FP)` is its caller's FP. An FP of 0 ends
 it; the system clears FP where a mode's code starts (`EXE$USRSTART`,
@@ -151,17 +155,19 @@ it; the system clears FP where a mode's code starts (`EXE$USRSTART`,
 ### The frame descriptor
 
 Each routine with a frame has a frame descriptor, `$FDSCDEF`, a 32-byte
-block in its image's `$LINK$` psect, read-only, readable in every mode
-that runs the routine:
+block, read-only, readable in every mode that runs the routine: vmacro
+puts it in an `EXE` psect named for the code's with `_FDSC` after, and
+`call.mlb`'s `$ROUTINE` in `$CODE$_FDSC`, since an executive routine in
+the vector runs in modes that can't read the executive's `$LINK$`:
 
 | Offset | Field | Holds |
 | --- | --- | --- |
-| 0 | `FDSC$L_FLAGS` | `FDSC$V_HANDLER` (bit 0): `FDSC$Q_HANDLER` is a static handler; `FDSC$V_BASE_FRAME` (1): the chain ends here; `FDSC$V_TARGET_INVO` (2): call the handler when this frame is the target of an unwind; `FDSC$V_EXCEPTION_FRAME` (3): a frame exception delivery built; `FDSC$V_AST_FRAME` (4): a frame AST delivery built |
+| 0 | `FDSC$L_FLAGS` | `FDSC$V_HANDLER` (bit 0): `FDSC$Q_HANDLER` is a static handler; `FDSC$V_BASE_FRAME` (1): the chain ends here; `FDSC$V_TARGET_INVO` (2): call the handler when this frame is the target of an unwind; `FDSC$V_EXCEPTION_FRAME` (3): a frame exception delivery built; `FDSC$V_AST_FRAME` (4): a frame AST delivery built. Bits 1-4 are reserved: nothing sets or reads them yet |
 | 4 | `FDSC$L_SAVED` | the kept registers saved: bit n for x18+n, n 0-10; bit 11+n for d8+n, n 0-7 |
 | 8 | `FDSC$L_RSA` | the save area's offset from FP: the saved registers in ascending order, x before d, 8 bytes each |
 | 12 | `FDSC$L_SIZE` | N: the caller's `sp` at the call is FP + N |
 | 16 | `FDSC$Q_HANDLER` | the static handler, if `FDSC$V_HANDLER` |
-| 24 | `FDSC$Q_NAME` | the routine's name, `.ASCIC`, or 0, for tracebacks |
+| 24 | `FDSC$Q_NAME` | the routine's name, `.ASCIC`, as its offset from the descriptor, so that a position-independent psect can hold it, or 0, for tracebacks |
 
 The flags are Alpha's procedure descriptor flags, kept as Itanium and
 x86-64 VMS kept them in their unwind information.
@@ -187,8 +193,9 @@ is set, else `16(FP)` if it isn't 0. The prologue clears `16(FP)`; a
 routine establishes a handler by writing it there (MACRO-32's
 `MOVAB handler, (FP)`, BLISS-64's `ENABLE`), or `LIB$ESTABLISH` does for
 its caller. A handler is called by this standard with two arguments, the
-signal and mechanism arrays, by reference. Each mode also has primary,
-secondary and last-chance vectors, searched before and after the frames.
+signal and mechanism arrays, by reference. 64-bit VMS's primary,
+secondary and last-chance vectors aren't here yet: the frames are
+searched, and a condition no handler takes goes to `EXE$CATCHALL`.
 
 **Signal arrays** come in two forms, as on 64-bit VMS: the 32-bit one, a
 longword count, the condition, its arguments, the PC and the PSL, the PC
@@ -204,32 +211,36 @@ registers:
 | 0 | `CHF$IS_MCH_ARGS` | quadwords after the first, 24 |
 | 4 | `CHF$IS_MCH_FLAGS` | bit 0: floating point registers saved |
 | 8 | `CHF$PH_MCH_FRAME` | the establisher's FP |
-| 16 | `CHF$IS_MCH_DEPTH` | the establisher's depth: 0 the frame that signaled, 1 its caller; −1, −2, −3 the secondary, primary and last-chance vectors |
+| 16 | `CHF$IS_MCH_DEPTH` | the establisher's depth: 0 the frame that signaled, 1 its caller, and so on out; −1, −2, −3 are for the vectors |
 | 20 | | reserved |
 | 24 | `CHF$PH_MCH_DADDR` | handler data, 0 |
 | 32 | `CHF$PH_MCH_ESF_ADDR` | the exception's frame, 0 for a software signal |
 | 40 | `CHF$PH_MCH_SIG_ADDR` | the 32-bit signal array |
 | 48 | `CHF$IH_MCH_RETVAL` | x0 |
 | 56 | `CHF$IH_MCH_RETVAL2` | x1 |
-| 64-184 | `CHF$IH_MCH_SAVX2`... `SAVX17` | x2-x17 at the signal |
+| 64-184 | `CHF$IH_MCH_SAVX2`... `SAVX17` | x2-x17 at an exception; 0 for a software signal |
 | 192 | `CHF$PH_MCH_SIG64_ADDR` | the 64-bit signal array |
 
 The kept registers are in the frames, as Alpha's mechanism array leaves
 R2-R15 "implicitly saved in the call stack". A handler may change only
-the return values, with `SYS$SET_RETURN_VALUE` or directly.
+the return values, by writing `CHF$IH_MCH_RETVAL` and `RETVAL2`;
+`SYS$SET_RETURN_VALUE` isn't here yet.
 
-**Unwinding.** `$UNWIND(depth, newpc)` removes frames when the handler
-returns, calling each removed frame's handler with `SS$_UNWIND` first,
-and the target's too if `FDSC$V_TARGET_INVO` is set. To remove a frame,
-the unwinder loads every register its descriptor says it saved from its
-save area, sets `sp` to FP + `FDSC$L_SIZE`, and FP and the return address
-from the record.
+**Unwinding.** `$UNWIND(depadr, newpc)`, depadr the address of a longword
+depth or 0 for the establisher's caller, removes frames when the handler
+returns, calling each removed frame's handler with `SS$_UNWIND` first;
+the target's, for `FDSC$V_TARGET_INVO`, isn't called yet. To remove a
+frame, the unwinder loads every x register its descriptor says it saved
+from its save area (nothing saves d8-d15 yet), sets `sp` to FP +
+`FDSC$L_SIZE`, and FP and the return address from the record.
 
 ## Descriptors and item lists
 
-Descriptors are VMS's, in two forms. A routine that takes one accepts
-both, and tells them apart by testing both fields of the 64-bit form,
-since a 32-bit descriptor of length 1 passes the second test alone:
+Descriptors are VMS's, in two forms. A routine that takes both tells them
+apart by testing both fields of the 64-bit form, as `$IS_DESC64` does,
+since a 32-bit descriptor of length 1 passes the MBO test alone, and one
+whose pointer is −1 the MBMO test; the executive's services take only the
+32-bit form so far:
 
 | Offset | 32-bit form | 64-bit form |
 | --- | --- | --- |
@@ -239,7 +250,8 @@ since a 32-bit descriptor of length 1 passes the second test alone:
 | 8 | | quadword `DSC64$Q_LENGTH` |
 | 16 | | quadword `DSC64$PQ_POINTER` |
 
-Item lists add `item_list_64a` and `item_list_64b`, recognised the same
+Item lists add `item_list_64a` and `item_list_64b` (`$ILEDEF`; no
+service takes them yet), recognised the same
 way: word MBO = 1, word item code, longword MBMO = −1, quadword buffer
 length, quadword buffer address, and in the `b` form a quadword return
 length address. Other structures that carry addresses identify their
@@ -261,16 +273,19 @@ A PAL call is an `svc` with the function code in x7, as seL4 requires.
 PAL pushes the code below the frame it delivers, as the VAX's `CHMx`
 pushed it, so x0-x6 and x9 reach the handler untouched.
 
-A program calls `SYS$name` like any routine. `SYS$name` is a frameless
-routine in the vector: for a service with eight or more arguments it moves
-x7 to x10, then changes mode. The dispatcher (`EXE$CMODKRNL`,
-`EXE$CMODEXEC`) pops the code; checks it, and x9's count against the
-service's least; puts x10 back in x7; probes and copies the arguments past
-the eighth from the caller's stack (`sp` in the frame) to its own; checks
-that each argument of a service not built for 64-bit addresses is a
-sign-extended longword, else returns `SS$_ARG_GTR_32_BITS`, as 64-bit VMS
-does; calls `EXE$name` by this standard; writes x0 and x1 into the frame;
-and `REI`s.
+A program calls `SYS$name` like any routine. A `SYS$name` that changes
+mode is a frameless routine in the vector: it moves x7, its eighth
+argument if it has one, to x10, then changes mode. `SYS$EXIT` has a frame,
+since it calls the exit handlers, and `SYS$UNWIND` and `SYS$PUTMSG` run
+in the caller's mode. The dispatcher (`EXE$CMODKRNL`, `EXE$CMODEXEC`)
+keeps the arguments, x10's for x7, and x9's count, at most 12, in
+registers `REI` restores from the frame; pops the code; checks it, and
+the count against the service's least; checks that each argument of a
+service not built for 64-bit addresses is a sign-extended longword, else
+returns `SS$_ARG_GTR_32_BITS`, as 64-bit VMS does; probes and copies the
+arguments past the eighth from the caller's stack (`sp` in the frame) to
+its own, checking them alike; puts them back in x0-x7 and x9; calls
+`EXE$name` by this standard; writes x0 and x1 into the frame; and `REI`s.
 
 ## JSB
 
@@ -297,12 +312,12 @@ Alpha's (`vtools/docs/amacro.md`).
 | --- | --- |
 | R0, R1 | x0, x1 |
 | R2-R11 | x19-x28 |
-| AP | the argument list at `32(FP)`; x12 if the routine writes AP |
+| AP | the argument list at `32(FP)`, in x12 where the routine reads it |
 | FP | x29 |
 | SP | x18 |
 
-`vmacro`'s temporaries are x2-x8, x10-x17 and x30, which MACRO-32 can't
-name. A VAX register always holds its longword sign-extended, as on
+`vmacro`'s temporaries are x2-x11, x13-x17 and x30, which MACRO-32 can't
+name; x12 holds AP where the routine reads it. A VAX register always holds its longword sign-extended, as on
 Alpha: a longword instruction that writes a register leaves bits 32-63
 equal to bit 31, and a byte or word write changes the low byte or word and
 sign-extends from bit 31.
@@ -310,17 +325,22 @@ sign-extends from bit 31.
 - **Declarations.** Every routine is declared: `.ENTRY` or `.CALL_ENTRY`
   for CALL routines, `.JSB_ENTRY` or `.JSB32_ENTRY` for JSB routines, with
   AMACRO's parameters (`max_args`, `home_args`, `quad_args`, `input`,
-  `output`, `scratch`, `preserve`, `label`). The target of every `CALLS`,
-  `CALLG`, `JSB` and `BSBx`, of a branch from another routine and of a
-  stored address is a declared entry or a `.GLOBAL_LABEL`. Code outside a
+  `output`, `scratch`, `preserve`; `label` is accepted and ignored), and
+  `.EXCEPTION_ENTRY` for code the PAL, `REI` or a jump enters, which has no
+  frame and saves nothing. The target of every `CALLS`, `CALLG`, `JSB` and
+  `BSBx` in the module is a declared entry, and that of a branch from
+  another routine a declared entry or a `.GLOBAL_LABEL`. Code outside a
   routine is an error.
 - **Preservation.** A CALL routine saves x18 and all 64 bits of the
   registers among R2-R11 that are in its mask or that it modifies, except
   `output` and `scratch`; a register its JSB routines in the same module
   declare `output` or `scratch` counts as modified; a `JSB` to a routine in
   another module counts as modifying all of R2-R11, unless a
-  `.CALL_LINKAGE` or `.USE_LINKAGE` says what it modifies. JSB routines
-  preserve as *JSB* says.
+  `.CALL_LINKAGE` or `.USE_LINKAGE` says what it modifies, or the modules
+  are compiled together, which gives each the others' declarations as
+  linkages. A CALL routine with nothing to save, no argument list to
+  home, no calls and no use of SP or FP is frameless (*Frames*). JSB
+  routines preserve as *JSB* says.
 - **Arguments.** `n(AP)` reads the argument list at `32(FP)`: a count
   longword and one longword per argument, or quadwords with `quad_args`.
   The prologue fills it, from x0-x7, the caller's stack and x9, when the
@@ -329,15 +349,18 @@ sign-extends from bit 31.
   as an address, indexes it or offsets it by a variable (AMACRO's homing
   triggers), or with `home_args=TRUE`. A JSB routine that reads AP reads
   its caller's list, which the caller must have filled; `vmacro` says so.
-  `home_args` and `quad_args` exclude each other.
-- **Calls.** `CALLS #n` loads the n longwords pushed, sign-extended, into
-  x0-x7 and the stack, pops them, sets x9 to n, sets `sp` to x18 rounded
-  down to 16, and calls. `CALLG` does the same from a list in memory.
+  `home_args` and `quad_args` exclude each other. Code that writes AP is an
+  error.
+- **Calls.** `CALLS #n` sets `sp` to x18 rounded down to 16, lower by the
+  arguments past the eighth, loads the n longwords pushed, sign-extended,
+  into x0-x7 and the stack, pops them, sets x9 to n, and calls. `CALLG`
+  does the same from a list in memory.
 - **`RET`** loads the saved registers and returns.
 - **Handlers.** `(FP)` and `0(FP)` as an operand mean the handler,
   `16(FP)`. Any other offset from FP at 0 or above is an error, as in
   AMACRO; negative offsets are the routine's locals.
-- **Frame descriptors**: each CALL routine's goes in `$LINK$`.
+- **Frame descriptors**: each CALL routine's goes in a psect of its own
+  next to the code's (*The frame descriptor*); a frameless one has none.
 - **64-bit.** DEC's pieces, under DEC's names: `quad_args`,
   `.ENABLE QUADWORD` and `/ENABLE=QUADWORD` for 64-bit address arithmetic,
   `$SETUP_CALL64`, `$PUSH_ARG64` and `$CALL64` with 8 register arguments,

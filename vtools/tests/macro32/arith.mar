@@ -205,6 +205,15 @@ OFF = 8
         BBS     R3, BITS, 70$
         CMPL    BITS, #^XAB5A121C
         EXPECT  EQL, 50
+; Registers hold their longwords sign-extended, as on Alpha, which only
+; ARM64 sees: R0 is x0, R2 x19.
+        MNEGL   #1, R0
+        cmn     x0, #1                  ; all 64 bits set
+        EXPECT  EQL, 51
+        ADDL3   #1, #^X7FFFFFFF, R2
+        asr     x16, x19, #31           ; FFFFFFFF.80000000
+        cmn     x16, #1
+        EXPECT  EQL, 52
         BLBC    #7, 70$
         BLBS    R1, 80$                 ; ^XABCD123F
 70$:    MOVL    #102, R0

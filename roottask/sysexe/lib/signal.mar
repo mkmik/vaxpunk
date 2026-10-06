@@ -11,7 +11,9 @@
         .LIBRARY "lib.mlb"
         .LIBRARY "starlet.mlb"
         $CHFDEF
+        $FRMDEF
         $PALDEF
+        $SSDEF
         $STSDEF
 
         .EXTERNAL EXE$SIGNAL, EXE$CATCHALL
@@ -20,74 +22,109 @@
 ; LIB$ESTABLISH new_handler: makes new_handler, a routine's address, the
 ; condition handler of the caller's frame. R0 = the one it had, or 0.
         .ENTRY  LIB$ESTABLISH, ^M<>
-        MOVL    16(FP), R1              ; the caller's frame
-        MOVL    (R1), R0
-        MOVL    4(AP), (R1)
+        MOVL    FP, R1
+        MOVL    FRM$Q_FP(R1), R1        ; the caller's frame
+        MOVL    FRM$Q_HANDLER(R1), R0
+        MOVL    4(AP), FRM$Q_HANDLER(R1)
         RET
 
 ; LIB$REVERT: takes the caller's frame's condition handler away. R0 = it,
 ; or 0.
         .ENTRY  LIB$REVERT, ^M<>
-        MOVL    16(FP), R1
-        MOVL    (R1), R0
-        CLRL    (R1)
+        MOVL    FP, R1
+        MOVL    FRM$Q_FP(R1), R1
+        MOVL    FRM$Q_HANDLER(R1), R0
+        CLRL    FRM$Q_HANDLER(R1)
         RET
 
 ; LIB$SIG_TO_RET sigargs, mchargs: a condition handler that returns from
 ; the routine that established it, with the condition as its status:
-; $UNWINDs to its caller with R0 = the condition.
+; $UNWINDs to its caller with R0 = the condition. The unwind calls it
+; again, with SS$_UNWIND, which it leaves alone.
         .ENTRY  LIB$SIG_TO_RET, ^M<>
         MOVL    CHF$L_SIGARGLST(AP), R0
+        MOVL    CHF$L_SIG_NAME(R0), R0
+        CMPL    R0, #SS$_UNWIND
+        BEQL    90$
         MOVL    CHF$L_MCHARGLST(AP), R1
-        MOVL    CHF$L_SIG_NAME(R0), CHF$L_MCH_SAVR0(R1)
+        EVAX_STQ R0, CHF$IH_MCH_RETVAL(R1)
         $UNWIND_S
-        RET
+90$:    RET
 
 ; LIB$SIGNAL condition [,arguments...]: signals condition, as VMS's: the
-; signal array is the arguments, then the PC LIB$SIGNAL returns to and
+; signal arrays are the arguments, then the PC LIB$SIGNAL returns to and
 ; the PSL, and EXE$SIGNAL looks for a handler from the caller's frame,
 ; depth 0, out. Returns once one continues, with R0 and R1 from the
-; mechanism array, which has the caller's R0 and R1 at first. If none
-; takes it, EXE$CATCHALL writes its message, and exits if it is severe,
-; or returns.
-        .ENTRY  LIB$SIGNAL, ^M<R2, R3, R4, R5, R6>
+; mechanism array, which has R0 and R1 as LIB$SIGNAL got them at first:
+; its first two arguments, by the calling standard. If none takes it,
+; EXE$CATCHALL writes its message, and exits if it is severe, or returns.
+LIB$SIGNAL::
+        .CALL_ENTRY MAX_ARGS=255
         CLRL    R2
         BRB     SIGNAL
 
 ; LIB$STOP condition [,arguments...]: signals condition as LIB$SIGNAL
 ; does, made severe, and then, unless a handler unwinds, EXE$CATCHALL
 ; writes its message and exits. Doesn't return.
-        .ENTRY  LIB$STOP, ^M<R2, R3, R4, R5, R6>
+LIB$STOP::
+        .CALL_ENTRY MAX_ARGS=255
         MOVL    #1, R2
 ; SIGNAL: R2 = 1 for LIB$STOP, 0 for LIB$SIGNAL, whose frames are alike.
-SIGNAL: MOVQ    R0, R5                  ; the caller's R0 and R1
+SIGNAL: .GLOBAL_LABEL                   ; LIB$SIGNAL's too
+        SUBL2   #CHF$S_MCH, SP          ; the mechanism array
+        MOVL    SP, R3
+        EVAX_STQ R0, CHF$IH_MCH_RETVAL(R3) ; R0 and R1 as they came
+        EVAX_STQ R1, CHF$IH_MCH_RETVAL2(R3)
+        MOVL    #CHF$S_MCH/8-1, CHF$IS_MCH_ARGS(R3)
+        CLRL    CHF$IS_MCH_FLAGS(R3)
+        MOVL    FP, R1
+        MOVQ    FRM$Q_FP(R1), CHF$PH_MCH_FRAME(R3) ; the caller's frame
+        CLRQ    CHF$IS_MCH_DEPTH(R3)
+        CLRQ    CHF$PH_MCH_DADDR(R3)
+        CLRQ    CHF$PH_MCH_ESF_ADDR(R3)
+        MOVAB   CHF$IH_MCH_SAVX2(R3), R4
+        MOVL    #16, R5
+5$:     CLRQ    (R4)+                   ; x2-x17: none to give
+        SOBGTR  R5, 5$
         CALL_PAL #PAL$_RD_PS
-        PUSHL   R0                      ; the PSL
-        PUSHL   24(FP)                  ; the PC
-        MOVZBL  (AP), R3
-        MOVL    R3, R1
-        BRB     20$
-10$:    PUSHL   (AP)[R1]                ; the arguments, the last first
-        DECL    R1
-20$:    TSTL    R1
-        BNEQ    10$
-        ADDL3   #2, R3, -(SP)
-        MOVL    SP, R4                  ; the signal array
+        MOVL    R0, R6                  ; the PSL
+        MOVZBL  (AP), R5                ; the condition and its arguments
+        CLRL    -(SP)                   ; the 64-bit signal array, quadwords
+        PUSHL   R6
+        PUSHL   FRM$Q_PC+4(R1)
+        PUSHL   FRM$Q_PC(R1)            ; the PC LIB$SIGNAL returns to
+        MOVL    R5, R4
+10$:    MOVL    (AP)[R4], R7            ; the arguments, the last first
+        ASHL    #-31, R7, R8
+        PUSHL   R8
+        PUSHL   R7
+        SOBGTR  R4, 10$
+        PUSHL   #SS$_SIGNAL64
+        ADDL3   #2, R5, -(SP)
+        MOVL    SP, R7
+        MOVL    R7, CHF$PH_MCH_SIG64_ADDR(R3)
+        CLRL    CHF$PH_MCH_SIG64_ADDR+4(R3)
+        PUSHL   R6                      ; the 32-bit one, longwords
+        PUSHL   FRM$Q_PC(R1)
+        MOVL    R5, R4
+20$:    PUSHL   (AP)[R4]
+        SOBGTR  R4, 20$
+        ADDL3   #2, R5, -(SP)
+        MOVL    SP, R4
+        MOVL    R4, CHF$PH_MCH_SIG_ADDR(R3)
+        CLRL    CHF$PH_MCH_SIG_ADDR+4(R3)
         BLBC    R2, 30$
         INSV    #STS$K_SEVERE, #0, #3, CHF$L_SIG_NAME(R4)
-30$:    MOVQ    R5, -(SP)               ; R0 and R1
-        CLRL    -(SP)                   ; the depth
-        PUSHL   16(FP)                  ; the caller's frame
-        PUSHL   #4
-        MOVL    SP, R3                  ; the mechanism array
-        PUSHL   R3
+        INSV    #STS$K_SEVERE, #0, #3, CHF64$Q_SIG_NAME(R7)
+30$:    PUSHL   R3
         PUSHL   R4
         CALLS   #2, G^EXE$SIGNAL
         BLBS    R2, 40$
         BLBS    R0, 50$
 40$:    PUSHL   R4
         CALLS   #1, G^EXE$CATCHALL
-50$:    MOVQ    CHF$L_MCH_SAVR0(R3), R0
+50$:    EVAX_LDQ R0, CHF$IH_MCH_RETVAL(R3)
+        EVAX_LDQ R1, CHF$IH_MCH_RETVAL2(R3)
         RET
 
         .END

@@ -1,0 +1,120 @@
+        .TITLE  JSB     JSB and RSB as bl and ret
+        .LIBRARY "vrun.mlb"
+
+; JSB is bl and RSB ret (DESIGN-0004): a JSB routine that calls keeps x30
+; with what it saves. What VAX code did with return addresses on the
+; stack still works: a tail call, a branch to the routine's own entry, a
+; long jump back to a saved SP, and a RET from a frame FP was loaded
+; with. A failed check returns 2 * N, an error status, so the exit code
+; says which.
+
+        .MACRO  EXPECT  VALUE, N, ?OK
+        CMPL    R0, VALUE
+        BEQL    OK
+        MOVL    #<N * 2>, R0
+        RET
+OK:
+        .ENDM   EXPECT
+
+        .PSECT  DATA, NOEXE, WRT, LONG
+SAVESP: .LONG   0                       ; SP in DEEP, where FAIL goes back to
+SAVEFP: .LONG   0                       ; OUTER's FP, which BACK returns from
+
+        .PSECT  CODE, EXE, LONG
+        .ENTRY  JSBTEST, ^M<R2>
+        MOVL    #3, R2
+        BSBW    TAIL                    ; R0 = 3 + 1 + 10
+        EXPECT  #14, 1
+        CMPL    R2, #3
+        BEQL    10$
+        MOVL    #4, R0
+        RET
+10$:    CLRL    R0
+        MOVL    #4, R1
+        BSBW    LOOP                    ; R0 = 4 + 3 + 2 + 1
+        EXPECT  #10, 3
+        BSBW    DEEP
+        EXPECT  #77, 4
+        CALLS   #0, OUTER
+        EXPECT  #55, 5
+        CMPL    R2, #3                  ; as OUTER saved it
+        BEQL    20$
+        MOVL    #12, R0
+        RET
+20$:    $PUT    "jsb ok"<10>
+        MOVL    #1, R0
+        RET
+
+; TAIL: R2 = n. R0 = n + 1 + 10, through INC, then TEN, which it goes to
+; with a branch: TEN's RSB returns to TAIL's caller. Keeps R2.
+TAIL:   .JSB_ENTRY
+        MOVL    R2, R0
+        BSBW    INC
+        MOVL    #99, R2
+        BRB     TEN
+
+; TEN: R0 = R0 + 10.
+TEN:    .JSB_ENTRY
+        ADDL2   #10, R0
+        RSB
+
+; INC: R0 = R0 + 1.
+INC:    .JSB_ENTRY
+        INCL    R0
+        RSB
+
+; LOOP: R0 = a sum, R1 = n. Adds n, ..., 1 to R0 with ADD, going back to
+; its entry after each.
+LOOP:   .JSB_ENTRY  SCRATCH=<R1>
+        TSTL    R1
+        BEQL    10$
+        BSBW    ADD
+        DECL    R1
+        BRB     LOOP
+10$:    RSB
+
+; ADD: R0 = R0 + R1.
+ADD:    .JSB_ENTRY
+        ADDL2   R1, R0
+        RSB
+
+; DEEP: R0 = 77, which FAIL, two calls in, says by going back to DEEP's
+; SP and returning from there.
+DEEP:   .JSB_ENTRY
+        MOVL    SP, SAVESP
+        BSBW    NEST
+        CLRL    R0
+        RSB
+BACKSP: .GLOBAL_LABEL                   ; where FAIL goes
+        MOVL    SAVESP, SP
+        RSB
+
+NEST:   .JSB_ENTRY
+        PUSHL   #1
+        BSBW    FAIL
+        TSTL    (SP)+
+        RSB
+FAIL:   .JSB_ENTRY
+        MOVL    #77, R0
+        BRW     BACKSP
+
+; OUTER: R0 = 55, which BACK returns from OUTER's frame with, restoring
+; what OUTER saved.
+        .ENTRY  OUTER, ^M<R2, R3, R4>
+        MOVL    #1, R2
+        MOVL    #1, R3
+        MOVL    #1, R4
+        MOVL    FP, SAVEFP
+        CALLS   #0, MIDDLE
+        CLRL    R0
+        RET
+        .ENTRY  MIDDLE, ^M<R2, R3>
+        CALLS   #0, BACK
+        CLRL    R0
+        RET
+        .ENTRY  BACK, ^M<>
+        MOVL    #55, R0
+        MOVL    SAVEFP, FP
+        RET
+
+        .END    JSBTEST

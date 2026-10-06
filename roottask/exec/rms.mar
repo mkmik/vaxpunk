@@ -157,6 +157,7 @@ DOTDIR: .ASCII  ".DIR"
 ; at IPL$_SYNCH until MERGE has copied the parts XLATE found in logical
 ; names' blocks, which another process may delete. Uses R1.
 RMS$PARSE::
+        .JSB_ENTRY
         PUSHR   #^M<R2, R3, R4, R5, R6, R7, R8, R9, R10, R11>
         CLRL    WILD
         DSBINT  #IPL$_SYNCH
@@ -198,7 +199,9 @@ RMS$PARSE::
 ; parts. Splits it: [dev:][[dir]][name][.type][;ver]. A part's punctuation
 ; is in it: the colon, the brackets, the dot, the semicolon. R0 =
 ; RMS$_NORMAL, RMS$_DIR or RMS$_SYN. Uses R1-R6.
-SPLIT:  CLRQ    (R2)
+SPLIT:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5, R6>
+        CLRQ    (R2)
         CLRQ    8(R2)
         CLRQ    16(R2)
         CLRQ    24(R2)
@@ -278,7 +281,9 @@ SPLIT:  CLRQ    (R2)
 ; table's, and its other parts fill in those the table leaves out.
 ; SYS$SYSTEM:DCL.EXE is DKA0:[SYSEXE]DCL.EXE. R0 = RMS$_NORMAL, or
 ; SPLIT's error. IPL$_SYNCH. Uses R0-R9.
-XLATE:  MOVL    R2, R8
+XLATE:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5, R6, R7, R8, R9>
+        MOVL    R2, R8
         MOVL    #LNM$C_MAXDEPTH, R9
 10$:    MOVL    (R8), R6                ; the device, without its colon
         SUBL3   #1, 4(R8), R7
@@ -312,6 +317,7 @@ XLATE:  MOVL    R2, R8
 ; default's if it has one, else to the system's. R0 = RMS$_NORMAL or
 ; RMS$_DIR. Uses R0-R9.
 RESOLVE:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5, R6, R7, R8, R9>
         MOVAQ   DEFT+8, R0
         MOVAQ   SYST+8, R1
         MOVAB   DEFDIR, R2
@@ -333,7 +339,9 @@ RESOLVE:
 ; those, writes the absolute one in the buffer and points the part at it.
 ; The MFD, [000000], has no parent. R0 = RMS$_NORMAL or RMS$_DIR. Uses
 ; R0-R9.
-RELDIR: MOVL    4(R0), R3               ; the part's length
+RELDIR:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5, R6, R7, R8, R9>
+        MOVL    4(R0), R3               ; the part's length
         CMPL    R3, #2
         BLSSU   70$                     ; none, or CHECK's to report
         MOVL    (R0), R4
@@ -414,7 +422,9 @@ RELDIR: MOVL    4(R0), R3               ; the part's length
 ; in capitals, and FIELDS from where each part went. An empty type is a
 ; dot, an empty version a semicolon. R0 = RMS$_NORMAL, or RMS$_SYN if it
 ; is longer than 255 characters. Uses R0-R6.
-MERGE:  MOVAB   RMS$T_EXP, R6           ; the next character
+MERGE:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5, R6>
+        MOVAB   RMS$T_EXP, R6           ; the next character
         CLRL    R5                      ; the part
 10$:    MOVAQ   SPECT[R5], R1
         TSTL    4(R1)
@@ -463,7 +473,9 @@ MERGE:  MOVAB   RMS$T_EXP, R6           ; the next character
 ; version, and the version is a number up to 32767, * or nothing. Sets
 ; WILD for a wildcard and RMS$L_VERSION. R0 = RMS$_NORMAL, RMS$_DEV,
 ; RMS$_DNR, RMS$_DIR, RMS$_FNM or RMS$_VER. Uses R0-R4.
-CHECK:  MOVL    FIELDS, R1              ; the device
+CHECK:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4>
+        MOVL    FIELDS, R1              ; the device
         MOVL    FIELDS+4, R2
         BSBW    FIL$SELECT
         BLBC    R0, 80$
@@ -528,7 +540,9 @@ CHECK:  MOVL    FIELDS, R1              ; the device
 ; CHARS: R1 = a string, R2 = its length, R3 = bit 0 set if it may have
 ; the wildcards * and %, bit 1 if dots. R0 = 1 if it is made of letters,
 ; digits, $, _, - and those, else 0. Sets WILD for a wildcard. Uses R4.
-CHARS:  CLRL    R4
+CHARS:
+        .JSB_ENTRY  SCRATCH=<R4>
+        CLRL    R4
 10$:    CMPL    R4, R2
         BGEQU   70$
         MOVZBL  (R1)[R4], R0
@@ -572,6 +586,7 @@ CHARS:  CLRL    R4
 ; a directory it looks in, or write access to one it makes one in, or
 ; the file system's error. Uses R0-R11.
 DIRWALK:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5, R6, R7, R8, R9, R10, R11>
         MOVL    #MFD, R0
         MOVAB   RMS$AB_DIRHDR, R1
         BSBW    FIL$READHDR
@@ -664,6 +679,7 @@ DIRWALK:
 ; error.
 ; Holding FIL$LOCK. Uses R0-R9.
 RMS$FIND::
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5, R6, R7, R8, R9>
         TSTL    WILD
         BNEQ    80$
         PUSHL   R1
@@ -685,7 +701,9 @@ RMS$FIND::
 ; specification. R5 = its file number, R0 = SS$_NORMAL, SS$_NOMOREFILES,
 ; RMS$_PRV without execute access to the directory, or read access for a
 ; wildcard, or the disk's error. Uses R0-R8.
-SEARCH: MOVL    #ARM$M_EXECUTE, R0
+SEARCH:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5, R6, R7, R8>
+        MOVL    #ARM$M_EXECUTE, R0
         TSTL    WILD
         BEQL    5$
         MOVL    #ARM$M_READ, R0
@@ -707,7 +725,9 @@ SEARCH: MOVL    #ARM$M_EXECUTE, R0
 ; MKRES: R1 = a name, NAME.TYPE, R2 = its length, R4 = a version. Makes
 ; the resultant specification in RES, with the expanded one's device and
 ; directory, and its parts in RESF. Uses R0-R6.
-MKRES:  MOVL    R1, RESNAME
+MKRES:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5, R6>
+        MOVL    R1, RESNAME
         MOVL    R2, RESNAME+4
         MOVL    R4, RESVER
         MOVAB   RES, R6
@@ -746,7 +766,9 @@ MKRES:  MOVL    R1, RESNAME
         RSB
 
 ; APPEND: copies the R2 bytes at R1 to R6, and R6 past them. Uses R0.
-APPEND: CLRL    R0
+APPEND:
+        .JSB_ENTRY  OUTPUT=<R6>
+        CLRL    R0
 10$:    CMPL    R0, R2
         BGEQU   20$
         MOVB    (R1)[R0], (R6)+
@@ -756,6 +778,7 @@ APPEND: CLRL    R0
 
 ; DECIMAL: writes R1 in decimal at R6, and R6 past it. Uses R0-R3.
 DECIMAL:
+        .JSB_ENTRY  OUTPUT=<R6>, SCRATCH=<R2, R3>
         CLRL    R2                      ; digits, on the stack
 10$:    DIVL3   #10, R1, R0
         MULL3   #10, R0, R3
@@ -775,7 +798,9 @@ DECIMAL:
 ; status if it is too small, R11 = the NAM block. Copies the
 ; specification to the area and points the NAM block's parts at it. R0 =
 ; RMS$_NORMAL, R5's status, or SS$_ACCVIO. Uses R0-R5.
-PUTSTR: CMPL    R1, R4
+PUTSTR:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5>
+        CMPL    R1, R4
         BLEQU   10$
         MOVL    R5, R0
         RSB
@@ -803,7 +828,9 @@ PUTSTR: CMPL    R1, R4
 ; PUTRES: R11 = a NAM block. Copies the resultant specification to its
 ; resultant string area, if it has one, and the file's and directory's
 ; IDs. R0 = RMS$_NORMAL, RMS$_RSS or SS$_ACCVIO. Uses R0-R5.
-PUTRES: MOVZBL  NAM$B_RSS(R11), R4
+PUTRES:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5>
+        MOVZBL  NAM$B_RSS(R11), R4
         BEQL    10$
         MOVAB   RES, R0
         MOVL    RESLEN, R1
@@ -823,7 +850,9 @@ PUTRES: MOVZBL  NAM$B_RSS(R11), R4
 ; CHKACC: R0 = the access wanted, $ARMDEF's bits, R1 = a file header on
 ; F11$GL_VCB's volume. R0 = RMS$_NORMAL, or RMS$_PRV if the current
 ; process may not (FIL$CHKHDR). Keeps every other register.
-CHKACC: BSBW    FIL$CHKHDR
+CHKACC:
+        .JSB_ENTRY
+        BSBW    FIL$CHKHDR
         BLBC    R0, 10$
         MOVL    #RMS$_NORMAL, R0
         RSB
@@ -834,6 +863,7 @@ CHKACC: BSBW    FIL$CHKHDR
 ; its address, or 0. R0 = RMS$_NORMAL, or SS$_ACCVIO if the caller can't
 ; read the chain or write the XAB. Uses R0-R2.
 FINDXAB:
+        .JSB_ENTRY  SCRATCH=<R2>
         CLRL    XABPRO
         MOVL    FAB$L_XAB(R10), R1
         MOVL    #MAXXAB, R2
@@ -855,7 +885,9 @@ FINDXAB:
 ; FABNAM: AP = a service's arguments, a FAB first. R10 = the FAB, R11 =
 ; its NAM block, or 0. R0 = RMS$_NORMAL; RMS$_FAB if the caller can't
 ; write a FAB there, RMS$_NAM if it can't a NAM block.
-FABNAM: MOVL    4(AP), R10
+FABNAM:
+        .JSB_ENTRY  SCRATCH=<R10, R11>
+        MOVL    4(AP), R10
         IFNOWRT #FAB$C_BLN, (R10), 80$
         CMPB    FAB$B_BID(R10), #FAB$C_BID
         BNEQ    80$
@@ -879,6 +911,7 @@ FABNAM: MOVL    4(AP), R10
 ; default one, if the caller can read them. R0 = RMS$PARSE's status or
 ; SS$_ACCVIO. Uses R0-R4.
 PARSEFAB:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4>
         MOVL    FAB$L_FNA(R10), R0
         MOVZBL  FAB$B_FNS(R10), R1
         BEQL    10$
@@ -888,13 +921,15 @@ PARSEFAB:
         BEQL    20$
         IFNORD  R3, (R2), 80$
 20$:    BSBW    SYSDFLT
-        BRW     RMS$PARSE
+        BSBW    RMS$PARSE
+        RSB
 80$:    MOVL    #SS$_ACCVIO, R0
         RSB
 
 ; SYSDFLT: R4 = SYSDEF, SYS$DISK: and the current process's default
 ; directory. Keeps every other register.
 SYSDFLT:
+        .JSB_ENTRY  OUTPUT=<R4>
         PUSHR   #^M<R0, R1, R2>
         MOVL    SCH$GL_CURPCB, R0
         MOVAB   PCB$T_DEFDIR(R0), R0
@@ -1088,6 +1123,7 @@ L:      BSBW    FIL$UNLOCK
 ; for it, on F11$GL_VCB's volume, at the file's start, which INSTALL gives
 ; it. R0 = RMS$_NORMAL or RMS$_DME. Uses R0-R3.
 NEWIFAB:
+        .JSB_ENTRY  OUTPUT=<R7, R8, R9>, SCRATCH=<R2, R3>
         MOVL    SCH$GL_CURPCB, R9       ; a free IFI
         MOVL    #1, R8
 10$:    TSTL    PCB$A_IFAB(R9)[R8]
@@ -1111,6 +1147,7 @@ NEWIFAB:
 ; INSTALL: R7 = an IFAB, R8 = its IFI, R9 = the current PCB, R10 = a FAB.
 ; Gives the process the open file, and the FAB its IFI. Uses R0.
 INSTALL:
+        .JSB_ENTRY
         MOVL    R7, PCB$A_IFAB(R9)[R8]
         ASHL    R8, #1, R0
         BISL2   R0, PCB$L_FILES(R9)
@@ -1120,6 +1157,7 @@ INSTALL:
 ; GETIFAB: R8 = an IFI. R7 = its IFAB, R9 = the current PCB, R0 =
 ; RMS$_NORMAL, or RMS$_IFI if the process has no such file open.
 GETIFAB:
+        .JSB_ENTRY  SCRATCH=<R7, R9>
         MOVL    SCH$GL_CURPCB, R9
         TSTL    R8
         BEQL    80$
@@ -1137,6 +1175,7 @@ GETIFAB:
 ; header written. R0 = RMS$_NORMAL, or RMS$_WER if they couldn't be.
 ; Holding FIL$LOCK. Uses R0 and R1.
 CLOSEIFI:
+        .JSB_ENTRY
         PUSHL   #RMS$_NORMAL
         BBC     #IFB$V_WRITE, IFB$L_FLAGS(R7), 20$
         PUSHR   #^M<R2, R3, R4, R5>
@@ -1163,7 +1202,9 @@ CLOSEIFI:
 ; FLUSH: R7 = an IFAB. Selects its volume and writes its last block, if
 ; $PUT left part of it in IFB$AB_BUF. R0 = SS$_NORMAL or the file
 ; system's error. Uses R0 and R1.
-FLUSH:  MOVL    IFB$L_VCB(R7), F11$GL_VCB
+FLUSH:
+        .JSB_ENTRY
+        MOVL    IFB$L_VCB(R7), F11$GL_VCB
         MOVL    #SS$_NORMAL, R0
         BBCC    #IFB$V_DIRTY, IFB$L_FLAGS(R7), 90$
         BICL3   #^C<BLOCK-1>, IFB$L_EOF(R7), R1
@@ -1197,7 +1238,9 @@ FLUSH:  MOVL    IFB$L_VCB(R7), F11$GL_VCB
 ; RMS$_NORMAL, RMS$_PRV, RMS$_WLK on a volume that can't be written,
 ; SS$_ACCVIO if the caller can't read the XAB, or the file system's error.
 ; Holding FIL$LOCK. Uses R0-R5.
-SETPRO: BSBW    FINDXAB
+SETPRO:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5>
+        BSBW    FINDXAB
         BLBC    R0, 90$
         MOVL    XABPRO, R4
         BEQL    80$
@@ -1244,7 +1287,9 @@ SETPRO: BSBW    FINDXAB
 
 ; RABCHK: AP = a service's arguments, a RAB first. R10 = the RAB, R0 =
 ; RMS$_NORMAL, or RMS$_RAB if the caller can't write a RAB there.
-RABCHK: MOVL    4(AP), R10
+RABCHK:
+        .JSB_ENTRY  SCRATCH=<R10>
+        MOVL    4(AP), R10
         IFNOWRT #RAB$C_BLN, (R10), 80$
         CMPB    RAB$B_BID(R10), #RAB$C_BID
         BNEQ    80$
@@ -1460,7 +1505,9 @@ RABCHK: MOVL    4(AP), R10
 ; version of the name in the directory RMS$PARSE found, if there is one,
 ; as VMS's XQP does, then the XAB's protection, and its owner unless it
 ; is 0. Holding FIL$LOCK. Uses R0-R5.
-CREPRO: PUSHR   #^M<R6, R7, R8, R9>
+CREPRO:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5>
+        PUSHR   #^M<R6, R7, R8, R9>
         MOVAB   RMS$AB_DIRHDR, R3
         MOVL    FIELDS+16, R6           ; NAME.TYPE
         ADDL3   FIELDS+20, FIELDS+28, R7
@@ -1487,6 +1534,7 @@ CREPRO: PUSHR   #^M<R6, R7, R8, R9>
 ; version, and puts the name in the header: R4 = the version. R0 =
 ; SS$_NORMAL or FIL$ENTER's error. Uses R0-R6.
 CRENTER:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5, R6>
         PUSHR   #^M<R7, R8>
         MOVAB   IFB$AB_HDR+FH2$W_FID(R7), R5
         MOVAB   RMS$AB_DIRHDR, R3
@@ -1677,6 +1725,7 @@ CRENTER:
 ; hold. Reads it there, if the file ends partway into it, else clears it,
 ; for PUTBYTE to fill. R1 = SS$_NORMAL or the disk's error. Uses R0-R5.
 LOADEND:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5>
         BICL3   #^C<BLOCK-1>, IFB$L_EOF(R7), R1
         BNEQ    10$
         MOVC5   #0, (R7), #0, #BLOCK, IFB$AB_BUF(R7)
@@ -1697,7 +1746,9 @@ LOADEND:
 
 ; ALIGN: R7 = an IFAB $PUT writes. Writes a byte if it is at an odd one,
 ; so the next record starts on a word. R1 = PUTBYTE's status. Uses R0.
-ALIGN:  MOVL    #RMS$_NORMAL, R1
+ALIGN:
+        .JSB_ENTRY
+        MOVL    #RMS$_NORMAL, R1
         BLBC    IFB$L_POS(R7), 10$
         CLRL    R0
         BSBB    PUTBYTE
@@ -1706,6 +1757,7 @@ ALIGN:  MOVL    #RMS$_NORMAL, R1
 ; PUTBYTE: R7 = an IFAB $PUT writes, R0 = a byte. Writes it at the file's
 ; end, a block at a time. R1 = RMS$_NORMAL, or the file system's error.
 PUTBYTE:
+        .JSB_ENTRY
         BICL3   #^C<BLOCK-1>, IFB$L_POS(R7), R1
         MOVB    R0, IFB$AB_BUF(R7)[R1]
         INCL    IFB$L_POS(R7)
@@ -1729,6 +1781,7 @@ PUTBYTE:
 ; blocks at least. R0 = SS$_NORMAL, or the file system's error. Keeps
 ; every other register.
 WRITEBLK:
+        .JSB_ENTRY
         PUSHR   #^M<R1, R2, R3>
         MOVAB   IFB$AB_HDR(R7), R3
         ROTL    #16, FAT$L_HIBLK(R3), R0
@@ -1752,6 +1805,7 @@ WRITEBLK:
 ; GETWORD: R7 = an IFAB. R0 = the next word of its file, low byte first,
 ; R1 = RMS$_NORMAL, RMS$_EOF or the disk's error.
 GETWORD:
+        .JSB_ENTRY  SCRATCH=<R2, R3>
         BSBB    GETBYTE
         BLBC    R1, 90$
         PUSHL   R0
@@ -1767,6 +1821,7 @@ GETWORD:
 ; a time, R1 = RMS$_NORMAL, RMS$_EOF past its end of file, or the disk's
 ; error.
 GETBYTE:
+        .JSB_ENTRY
         MOVL    #RMS$_EOF, R1
         CMPL    IFB$L_POS(R7), IFB$L_EOF(R7)
         BGEQU   90$
@@ -1831,6 +1886,7 @@ GETBYTE:
 ; its volume open, else SS$_DEVACTIVE. Holding FIL$LOCK, which keeps
 ; their files open or closed. Uses R0 and R2-R4.
 RMS$VOLIDLE::
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4>
         DSBINT  #IPL$_SYNCH             ; their PCBs
         MOVL    #SCH$C_MAXPIX-1, R2
 10$:    MOVL    SCH$GL_PCBVEC[R2], R3
@@ -1851,6 +1907,7 @@ RMS$VOLIDLE::
 ; RMS$RUNDOWN: R4 = the current PCB, R0 = a mask of IFIs. Closes the
 ; process's files but those, taking FIL$LOCK. Uses R0-R3.
 RMS$RUNDOWN::
+        .JSB_ENTRY  SCRATCH=<R2, R3>
         PUSHR   #^M<R7, R8, R9>
         BSBW    FIL$LOCK
         MOVL    R0, R3

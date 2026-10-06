@@ -1,0 +1,6 @@
+%VRUN-F-ACCVIO, access violation, virtual address=0000000000000008, PC=00000000000100A8
+-VRUN-I-PC, PC is INNER+%X1C (image section 1 + %XA8)
+-VRUN-I-FRAME, INNER's frame, which returns to MIDDLE+%X1C (image section 1 + %X80)
+-VRUN-I-FRAME, MIDDLE's frame, which returns to OUTER+%X28 (image section 1 + %X50)
+-VRUN-I-FRAME, OUTER's frame, which returns to START+%X1C (image section 1 + %X1C)
+-VRUN-I-FRAME, START's frame, which returns to PC=000000007FF01000

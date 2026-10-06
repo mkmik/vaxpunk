@@ -25,6 +25,7 @@ HEX:    .ASCII  "0123456789ABCDEF"
 ; DCL$PADTO: R3 = a column. Appends blanks to DCL$MSG up to it. Uses
 ; R0-R2.
 DCL$PADTO::
+        .JSB_ENTRY  SCRATCH=<R2>
         MOVZBL  DCL$MSG, R0
         CMPL    R0, R3
         BGEQ    10$
@@ -36,6 +37,7 @@ DCL$PADTO::
 ; DCL$ADDDEC: appends R1 in decimal to DCL$MSG, right-aligned in R3
 ; columns. Uses R0-R5.
 DCL$ADDDEC::
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5>
         CLRL    R4                      ; digits, on the stack
 10$:    DIVL3   #10, R1, R5
         MULL3   #10, R5, R0
@@ -60,6 +62,7 @@ DCL$ADDDEC::
 ; a status. Writes its message, %FACILITY-S-NAME, text, from
 ; $GETMSG. Uses R0-R5.
 DCL$STATUS::
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5>
         PUSHL   R0
         $GETMSG_S MSGID=R1, MSGLEN=GMLEN, BUFADR=GMDSC
         MOVL    (SP)+, R0
@@ -67,9 +70,11 @@ DCL$STATUS::
         MOVAB   GMBUF, R1
         MOVZWL  GMLEN, R2
         BSBW    DCL$ADD
+        BRB     DCL$SAY                 ; a tail call, not a fall-through
 ; DCL$SAY: writes the message in DCL$MSG, and empties it. Uses R0 and
 ; R1.
 DCL$SAY::
+        .JSB_ENTRY
         PUSHAB  DCL$MSG
         CALLS   #1, G^PUT_LINE
         CLRB    DCL$MSG
@@ -78,17 +83,20 @@ DCL$SAY::
 ; DCL$ADDNAME: appends the logical name in DCL$NAME to DCL$MSG. Uses
 ; R0-R2.
 DCL$ADDNAME::
+        .JSB_ENTRY  SCRATCH=<R2>
         MOVAB   DCL$NAME, R1
         MOVL    DCL$NAMDSC, R2
         BRB     DCL$ADD
 
 ; DCL$QUOTE: appends a double quote to DCL$MSG. Uses R0-R2.
 DCL$QUOTE::
+        .JSB_ENTRY  SCRATCH=<R2>
         MOVZBL  #34, R0
         BRB     ADDCHAR
 
 ; ADDCHAR: appends the character in R0 to DCL$MSG. Uses R0-R2.
 ADDCHAR:
+        .JSB_ENTRY  SCRATCH=<R2>
         MOVB    R0, CHAR
         MOVAB   CHAR, R1
         MOVL    #1, R2
@@ -96,10 +104,12 @@ ADDCHAR:
 
 ; DCL$ADDCSTR: appends the .ASCIC string at R1 to DCL$MSG. Uses R0-R2.
 DCL$ADDCSTR::
+        .JSB_ENTRY  SCRATCH=<R2>
         MOVZBL  (R1)+, R2
 ; DCL$ADD: appends the R2 bytes at R1 to DCL$MSG, as many as fit. Uses
 ; R0-R2.
 DCL$ADD::
+        .JSB_ENTRY  SCRATCH=<R2>
         MOVZBL  DCL$MSG, R0
 10$:    TSTL    R2
         BEQL    20$
@@ -114,6 +124,7 @@ DCL$ADD::
 
 ; DCL$ADDVAL: appends the string of the value R9 to DCL$MSG. Uses R0-R2.
 DCL$ADDVAL::
+        .JSB_ENTRY  SCRATCH=<R2>
         MOVZBL  VAL$T_STR(R9), R2
         MOVAB   VAL$T_STR+1(R9), R1
         BRW     DCL$ADD
@@ -121,11 +132,13 @@ DCL$ADDVAL::
 ; DCL$ADDSYM: appends the symbol name in DCL$SYMNAM to DCL$MSG. Uses
 ; R0-R2.
 DCL$ADDSYM::
+        .JSB_ENTRY  SCRATCH=<R2>
         MOVAB   DCL$SYMNAM, R1
         BRW     DCL$ADDCSTR
 
 ; DCL$ADDHEX: appends R1 to DCL$MSG, 8 hex digits. Uses R0-R5.
 DCL$ADDHEX::
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5>
         MOVL    R1, R4
         MOVL    #8, R5
 10$:    ROTL    #4, R4, R4
@@ -137,6 +150,7 @@ DCL$ADDHEX::
 
 ; DCL$ADDOCT: appends R1 to DCL$MSG, 11 octal digits. Uses R0-R5.
 DCL$ADDOCT::
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5>
         MOVL    R1, R4
         EXTZV   #30, #2, R4, R0
         ADDL2   #^A/0/, R0

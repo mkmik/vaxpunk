@@ -107,7 +107,9 @@ REC:    .BLKB   RECSIZE
 
 ; LOG: with /LOG, writes %COPY-S-COPIED, from copied to to (n records).
 ; Uses R0-R5.
-LOG:    PRESENT "LOG"
+LOG:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5>
+        PRESENT "LOG"
         BLBC    R0, 90$
         MOVAB   COPIED, R1
         BLBC    APPEND, 5$
@@ -148,12 +150,17 @@ LOG:    PRESENT "LOG"
 ; ADDNAM: R1 = a NAM block. Appends its resultant name to MSG. ADD:
 ; appends the R2 characters at R1, as many as fit. ADDTEXT: the .ASCIC
 ; string at R1. Use R0-R2.
-ADDNAM: MOVZBL  NAM$B_RSL(R1), R2
+ADDNAM:
+        .JSB_ENTRY  SCRATCH=<R2>
+        MOVZBL  NAM$B_RSL(R1), R2
         MOVL    NAM$L_RSA(R1), R1
         BRB     ADD
 ADDTEXT:
+        .JSB_ENTRY  SCRATCH=<R2>
         MOVZBL  (R1)+, R2
-ADD:    MOVZBL  MSG, R0
+ADD:
+        .JSB_ENTRY  SCRATCH=<R2>
+        MOVZBL  MSG, R0
 10$:    TSTL    R2
         BEQL    20$
         CMPL    R0, #255

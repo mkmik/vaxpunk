@@ -28,6 +28,7 @@
 ; R1 = the address of the cluster's flags, R2 = the flag's bit in them,
 ; R5 = the cluster number. R0 = SS$_NORMAL, SS$_ILLEFC or SS$_UNASEFC.
 SCH$GETEFC::
+        .JSB_ENTRY  SCRATCH=<R2, R5>
         CMPL    R3, #127
         BGTRU   80$
         EXTZV   #5, #2, R3, R5
@@ -56,6 +57,7 @@ SCH$GETEFC::
 ; the PCB's own process, if it waits on its local cluster, or those
 ; waiting on a common one. IPL$_SYNCH. Uses R0, R2, R3.
 SCH$POSTEF::
+        .JSB_ENTRY  SCRATCH=<R2, R3>
         CMPL    R5, #2
         BGEQU   10$
         CMPL    PCB$L_STATE(R4), #SCH$C_LEF
@@ -63,7 +65,8 @@ SCH$POSTEF::
         CMPL    PCB$L_WEFC(R4), R5
         BNEQ    90$
         MOVL    R4, R3
-        BRB     CHKWAKE
+        BSBB    CHKWAKE
+        RSB
 10$:    SUBL3   #CEB$L_EFC-CEB$L_WQFL, R1, R2   ; the wait queue
         MOVL    (R2), R3
 20$:    CMPL    R3, R2
@@ -77,6 +80,7 @@ SCH$POSTEF::
 ; CHKWAKE: R3 = a PCB waiting for flags of the cluster at R1. Wakes it if
 ; its wait is satisfied. IPL$_SYNCH. Uses R0.
 CHKWAKE:
+        .JSB_ENTRY
         BBS     #PCB$V_WALL, PCB$L_STS(R3), 10$
         BITL    PCB$L_EFWM(R3), (R1)    ; any of them
         BEQL    90$
@@ -94,6 +98,7 @@ CHKWAKE:
 ; number, R6 = a mask of flags in it, R2 = 1 to wait for all of them, 0
 ; for any. Returns once the wait is satisfied, R0 = SS$_NORMAL.
 SCH$EFWAIT::
+        .JSB_ENTRY
         DSBINT  #IPL$_SYNCH
 10$:    TSTL    R2
         BNEQ    20$
@@ -182,7 +187,8 @@ SCH$EFWAIT::
 ; this, and the RET: both entries save the same registers.
         .ENTRY  EXE$WFLAND, ^M<R2, R3, R4, R5, R6>
         MOVL    #1, R2
-WFL:    MOVL    SCH$GL_CURPCB, R4
+WFL:    .GLOBAL_LABEL
+        MOVL    SCH$GL_CURPCB, R4
         MOVL    4(AP), R3
         PUSHL   R2
         BSBW    SCH$GETEFC
@@ -267,7 +273,9 @@ WFL:    MOVL    SCH$GL_CURPCB, R4
 ; DACEFC: R4 = a PCB, R3 = a common event flag number. Dissociates the
 ; flag's cluster, if it has one, and deletes the cluster if no process has
 ; it any more. Uses R0-R2.
-DACEFC: DSBINT  #IPL$_SYNCH
+DACEFC:
+        .JSB_ENTRY  SCRATCH=<R2>
+        DSBINT  #IPL$_SYNCH
         EXTZV   #5, #2, R3, R0
         MOVAL   PCB$L_EFC2P-8(R4)[R0], R1       ; the PCB's pointer to it
         MOVL    (R1), R0
@@ -287,6 +295,7 @@ DACEFC: DSBINT  #IPL$_SYNCH
 ; SCH$DACEFC_ALL: R4 = a PCB. Dissociates both its common clusters, for
 ; process deletion. Uses R0-R3.
 SCH$DACEFC_ALL::
+        .JSB_ENTRY  SCRATCH=<R2, R3>
         MOVL    #64, R3
         BSBW    DACEFC
         MOVL    #96, R3

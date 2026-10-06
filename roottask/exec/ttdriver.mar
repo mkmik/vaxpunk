@@ -94,6 +94,7 @@ EXIT:   .ASCIZ  "*EXIT*"<13><10>
 ; R0 = SS$_NORMAL, SS$_ILLIOFUNC, SS$_ACCVIO, SS$_BADPARAM, or
 ; IOC$ALLOCIRP's failure. IPL$_SYNCH. Uses R0-R8.
 TT$FDT::
+        .JSB_ENTRY  INPUT=<AP>, SCRATCH=<R2, R3, R4, R5, R6, R7, R8>
         BICL3   #^C63, 12(AP), R0       ; the function, without modifiers
         CMPL    R0, #IO$_SETMODE
         BNEQ    5$
@@ -214,7 +215,9 @@ SETMODE:
 
 ; WRITE: writes the R3 bytes at R2 on the console. IPL$_SYNCH. Uses R0
 ; and R1.
-WRITE:  CLRL    R1
+WRITE:
+        .JSB_ENTRY
+        CLRL    R1
 10$:    CMPL    R1, R3
         BGEQU   20$
         MOVZBL  (R2)[R1], R0
@@ -229,6 +232,7 @@ WRITE:  CLRL    R1
 ; empty or the line ends. Then it is completed, and the next one goes on.
 ; IPL$_SYNCH. Uses R0-R8.
 STARTIO:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5, R6, R7, R8>
 10$:    MOVAB   G^IOC$AB_OPA0, R0
         MOVL    UCB$L_IOQFL(R0), R4     ; the read at the head
         CMPL    R4, R0
@@ -289,7 +293,9 @@ STARTIO:
 ; recall buffer is the console's, every reader's, not DCL's, and has no
 ; RECALL command; VMS ends a read with IO$M_NOFILTR at any control
 ; character in the terminator mask too.
-EDIT:   TSTL    TTY$GL_ESC
+EDIT:
+        .JSB_ENTRY  OUTPUT=<R5, R7>, SCRATCH=<R8>
+        TSTL    TTY$GL_ESC
         BEQL    10$
         BRW     60$
 10$:    CMPB    R0, #13
@@ -407,6 +413,7 @@ EDIT:   TSTL    TTY$GL_ESC
 ; GETCHAR: R0 = the next character in the type-ahead buffer, or -1 if it
 ; is empty, and the condition codes for it.
 GETCHAR:
+        .JSB_ENTRY
         DSBINT  #IPL$_CONSOLE           ; the ring, which the receive interrupt fills
         MNEGL   #1, R0
         CMPL    TTY$GL_GET, TTY$GL_PUT
@@ -422,23 +429,31 @@ GETCHAR:
 
 ; ECHO: echoes the character in R0, unless R6 has IO$M_NOECHO. Keeps
 ; every register.
-ECHO:   BBS     #IO$V_NOECHO, R6, 10$
+ECHO:
+        .JSB_ENTRY
+        BBS     #IO$V_NOECHO, R6, 10$
         JMP     G^EXE$OUTCHAR
 10$:    RSB
 
 ; RIGHT: moves the cursor, R5, right over the character the line, R2,
 ; has there, echoing it. Uses R0.
-RIGHT:  MOVZBL  (R2)[R5], R0
+RIGHT:
+        .JSB_ENTRY  OUTPUT=<R5>
+        MOVZBL  (R2)[R5], R0
         INCL    R5
         BRB     ECHO
 
 ; LEFT: moves the cursor, R5, left. Uses R0.
-LEFT:   DECL    R5
+LEFT:
+        .JSB_ENTRY  OUTPUT=<R5>
+        DECL    R5
         MOVZBL  #8, R0
         BRB     ECHO
 
 ; START: moves the cursor, R5, to the line's start. Uses R0.
-START:  TSTL    R5
+START:
+        .JSB_ENTRY  OUTPUT=<R5>
+        TSTL    R5
         BEQL    10$
         BSBB    LEFT
         BRB     START
@@ -447,13 +462,17 @@ START:  TSTL    R5
 ; TAIL: echoes the line, R2, from the cursor, R5, to its end, R1, then
 ; moves back to the cursor. TAILB does too, with a blank past the end,
 ; over the character erased there. Uses R0 and R8.
-TAIL:   BSBB    ECHOTAIL
+TAIL:
+        .JSB_ENTRY  SCRATCH=<R8>
+        BSBB    ECHOTAIL
         BRB     BACK
-TAILB:  BSBB    ECHOTAIL
+TAILB:  .GLOBAL_LABEL                   ; RUBOUT's tail too
+        BSBB    ECHOTAIL
         MOVZBL  #^A/ /, R0
         BSBB    ECHO
         INCL    R8
-BACK:   MOVZBL  #8, R0
+BACK:
+        MOVZBL  #8, R0
 10$:    CMPL    R8, R5
         BLEQU   20$
         BSBB    ECHO
@@ -461,6 +480,7 @@ BACK:   MOVZBL  #8, R0
         BRB     10$
 20$:    RSB
 ECHOTAIL:
+        .JSB_ENTRY  SCRATCH=<R8>
         MOVL    R5, R8
 10$:    CMPL    R8, R1
         BGEQU   20$
@@ -472,7 +492,9 @@ ECHOTAIL:
 
 ; RUBOUT: erases the character before the cursor, R5, from the line, R2,
 ; R1 long, and from the screen. Uses R0 and R8.
-RUBOUT: BSBB    LEFT
+RUBOUT:
+        .JSB_ENTRY  OUTPUT=<R5>, SCRATCH=<R8>
+        BSBB    LEFT
         MOVL    R5, R8
 10$:    ADDL3   #1, R8, R0
         CMPL    R0, R1
@@ -486,7 +508,9 @@ RUBOUT: BSBB    LEFT
 ; FETCH: puts in the line, R2, in place of the R1 characters there, the
 ; one read R7 lines back, or an empty one for 0, up to R3 characters, and
 ; leaves the cursor, R5, at its end. Uses R0 and R8.
-FETCH:  BSBB    START
+FETCH:
+        .JSB_ENTRY  OUTPUT=<R5>, SCRATCH=<R8>
+        BSBB    START
         PUSHL   R1                      ; the old line's length
         CLRL    R1
         TSTL    R7
@@ -518,7 +542,9 @@ FETCH:  BSBB    START
 
 ; SAVE: puts the R1 characters of the line, R2, up to 255, in the recall
 ; buffer, over its oldest line once it is full. Uses R0, R5 and R8.
-SAVE:   MOVL    TTY$GL_RECALL, R8
+SAVE:
+        .JSB_ENTRY  SCRATCH=<R5, R8>
+        MOVL    TTY$GL_RECALL, R8
         ASHL    #8, R8, R8
         MOVAB   TTY$AB_RECALL[R8], R8
         MOVZBL  #255, R0
@@ -543,6 +569,7 @@ SAVE:   MOVL    TTY$GL_RECALL, R8
 ; interrupt. The SCB must have TTY$RCVINT for it, and TTY$IOPOST for
 ; IPL$_IOPOST. Uses R0.
 TTY$INIT::
+        .JSB_ENTRY
         CLRL    TTY$GL_PUT
         CLRL    TTY$GL_GET
         MOVL    #RXCS$M_IE, R0
@@ -558,6 +585,7 @@ TTY$INIT::
 ; for a terminal's XOFF, rather than lose a line's end. ponytail: a CTRL/Y
 ; typed then waits too, until a read takes a character.
 TTY$RCVINT::
+        .EXCEPTION_ENTRY
         PUSHR   #^M<R0, R1>
 10$:    MFPR    #PR$_RXCS, R0
         BBC     #RXCS$V_DONE, R0, 30$
@@ -590,6 +618,7 @@ TTY$RCVINT::
 ; CTRL/C or CTRL/Y that came, then gives what is in the type-ahead buffer
 ; to the console's reads.
 TTY$IOPOST::
+        .EXCEPTION_ENTRY
         SETIPL  #IPL$_SYNCH
         PUSHR   #^M<R0, R1, R2, R3, R4, R5, R6, R7, R8>
         DSBINT  #IPL$_CONSOLE
@@ -622,6 +651,7 @@ TTY$IOPOST::
 ; process, which disables it, after ending that process's reads on the
 ; console with SS$_CONTROLY for CTRL/Y. IPL$_SYNCH. Uses R0-R5.
 DELIVER:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5>
 10$:    REMQUE  @(R8), R5
         BVS     90$                     ; none left
         MOVAQ   TTY$Q_CTRLY, R0
@@ -635,7 +665,9 @@ DELIVER:
 
 ; ABORT: R2 = a PID. Completes its reads on the console with SS$_CONTROLY.
 ; IPL$_SYNCH. Uses R0-R4.
-ABORT:  PUSHL   R5
+ABORT:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4>
+        PUSHL   R5
         MOVAB   G^IOC$AB_OPA0, R5
         MOVL    UCB$L_IOQFL(R5), R4
 10$:    CMPL    R4, R5

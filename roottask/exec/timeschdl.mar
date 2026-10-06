@@ -52,6 +52,7 @@ EXE$GQ_TQFL::                           ; the timer queue
 ; EXE$GQ_BOOTTIME, from the RTC's, which the PAL put in the RPB. IPL 31. Uses R0-R2.
 ; ponytail: EMUL is signed, so the RTC's seconds work until 2038.
 EXE$INITTIM::
+        .JSB_ENTRY  SCRATCH=<R2>
         MOVAQ   EXE$GQ_TQFL, R0
         MOVL    R0, (R0)
         MOVL    R0, 4(R0)
@@ -71,6 +72,7 @@ EXE$INITTIM::
 ; counts up from -SGN$GW_QUANTUM to 0. A tick before SCH$INIT, or while
 ; the CPU is idle in SCH$SCHED, has no process to charge.
 EXE$HWCLKINT::
+        .EXCEPTION_ENTRY
         PUSHR   #^M<R0>
         ADDL2   #TICK, EXE$GQ_SYSTIME
         BCC     10$
@@ -95,6 +97,7 @@ EXE$HWCLKINT::
 ; current process's quantum if it is up, and serves the timer queue
 ; entries that are due.
 EXE$SWTIMINT::
+        .EXCEPTION_ENTRY
         SETIPL  #IPL$_SYNCH
         PUSHR   #^M<R0, R1, R2, R3, R4, R5, R6>
         MOVL    SCH$GL_CURPCB, R4
@@ -130,6 +133,7 @@ EXE$SWTIMINT::
 ; with an AST becomes its ACB, and goes on the process's AST queue.
 ; IPL$_SYNCH. Uses R0-R5.
 TQEXPIRE:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5>
         MOVAL   TQE$L_PID(R6), R2
         CLRL    R3
         BSBW    EXE$NAMPID              ; R1 = its PCB
@@ -167,6 +171,7 @@ TQEXPIRE:
 ; queue after those due before it or at the same time. IPL$_SYNCH. Uses
 ; R0-R3.
 EXE$INSTIMQ::
+        .JSB_ENTRY  SCRATCH=<R2, R3>
         MOVQ    TQE$Q_TIME(R5), R0
         MOVAQ   EXE$GQ_TQFL, R3
         MOVL    (R3), R2
@@ -186,6 +191,7 @@ EXE$INSTIMQ::
 ; $SETIMR reqidt, or 0 for any. Removes the process's timer queue entries
 ; of those types and frees them. Uses R0-R3.
 EXE$RMVTIMQ::
+        .JSB_ENTRY  SCRATCH=<R2, R3>
         DSBINT  #IPL$_SYNCH
         PUSHR   #^M<R4, R5, R6>
         MOVAQ   EXE$GQ_TQFL, R6
@@ -217,6 +223,7 @@ EXE$RMVTIMQ::
 ; SETFIRST: sets EXE$GQ_1ST_TIME from the first timer queue entry, or to
 ; never. IPL$_SYNCH. Uses R0 and R1.
 SETFIRST:
+        .JSB_ENTRY
         DSBINT  #IPL$_HWCLK
         MOVL    EXE$GQ_TQFL, R0
         MOVAQ   EXE$GQ_TQFL, R1
@@ -232,6 +239,7 @@ SETFIRST:
 ; ALLOTQE: R5 = a new timer queue entry, zeroed, R0 = SS$_NORMAL or
 ; SS$_INSFMEM. Uses R1 and R2.
 ALLOTQE:
+        .JSB_ENTRY  OUTPUT=<R5>, SCRATCH=<R2>
         MOVL    #TQE$K_LENGTH, R1
         BSBW    EXE$ALONONPAGED
         BLBC    R0, 20$
@@ -246,6 +254,7 @@ ALLOTQE:
 ; ABSTIM: R2 = the address of a time. R0/R1 = when it is: itself, or now
 ; plus it if it is a delta.
 ABSTIM:
+        .JSB_ENTRY
         DSBINT  #IPL$_HWCLK
         MOVQ    EXE$GQ_SYSTIME, R0
         ENBINT

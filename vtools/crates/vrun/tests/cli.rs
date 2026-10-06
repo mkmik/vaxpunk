@@ -18,14 +18,15 @@ NL:     .ASCII  <10>
         .ENTRY  PUT_LINE, ^M<R2>
         MOVL    4(AP), R1
         MOVZBL  (R1)+, R2
-        $WRITE  x1, x2
+        $WRITE  x1, x19  ; R1, R2
         MOVAB   NL, R1
         MOVL    #1, R2
-        $WRITE  x1, x2
+        $WRITE  x1, x19  ; R1, R2
         RET
         .ENTRY  SYS$EXIT, ^M<>
         MOVL    4(AP), R0
-        svc     #1
+        svc     #1                      ; doesn't return
+        RET
         .ENTRY  LIB$GET_INPUT, ^M<>
         MOVL    #44, R0
         RET

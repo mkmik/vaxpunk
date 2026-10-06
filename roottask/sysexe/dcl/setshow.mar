@@ -33,6 +33,7 @@ V_DEVNAM:
 V_MOUNTED:
         .ASCID  "MOUNTED"
 MOUNTED:                                ; SHOW DEVICES/MOUNTED: 1 for mounted volumes only
+        .JSB32_ENTRY
         .LONG   0
 SCANCTX:                                ; $DEVICE_SCAN's context
         .BLKQ   1
@@ -119,6 +120,7 @@ DISKITEMS:                              ; $CRELNM's: the device in EXP
 ; its device the process's SYS$DISK. One that doesn't exist is still
 ; set, as VMS does, with a message.
 DCL$SETDEF::
+        .EXCEPTION_ENTRY
         MOVAB   V_DIR, R1
         BSBW    DCL$GETVAL
         TSTL    R8
@@ -156,6 +158,7 @@ DCL$SETDEF::
 ; tables in PTABS, which DCL looks for a verb in before DCL$TABLES, the
 ; last first (ADR-0018).
 DCL$SETCOMMAND::
+        .EXCEPTION_ENTRY
         MOVAB   DCL$V_FILE, R1
         BSBW    DCL$GETVAL
         TSTL    R8
@@ -220,6 +223,7 @@ DCL$SETCOMMAND::
 ; DCL$SHOWDEF, SHOW DEFAULT: shows the default device and directory,
 ; what $PARSE expands an empty specification to.
 DCL$SHOWDEF::
+        .EXCEPTION_ENTRY
         CLRB    DEFFAB+FAB$B_FNS
         $PARSE  FAB=DEFFAB
         CMPL    R0, #RMS$_DNF
@@ -240,6 +244,7 @@ DCL$SHOWDEF::
 ; devices with a volume mounted. ponytail: no transactions or mount
 ; counts, which nothing keeps; no /FULL.
 DCL$SHOWDEV::
+        .EXCEPTION_ENTRY
         MOVAB   V_MOUNTED, R1
         BSBW    DCL$ISPRES
         BICL3   #^C1, R0, MOUNTED
@@ -267,7 +272,9 @@ DCL$SHOWDEV::
 ; SCAN: lists the devices of DEVCLASS's class whose names match PATDSC's,
 ; under their headings, if there are any. R7 = how many there were, and
 ; as many more. Uses R0-R6.
-SCAN:   CLRQ    SCANCTX
+SCAN:
+        .JSB_ENTRY  OUTPUT=<R7>, SCRATCH=<R2, R3, R4, R5, R6>
+        CLRQ    SCANCTX
         CLRL    R6                      ; 1 once the headings are out
 10$:    $DEVICE_SCAN_S RETURN_DEVNAM=DEVDSC, RETLEN=DVINAM, SEARCH_DEVNAM=PATDSC, ITMLST=DVSITEMS, CONTXT=SCANCTX
         BLBC    R0, 90$
@@ -328,7 +335,9 @@ SCAN:   CLRQ    SCANCTX
 
 ; ADDDEF: appends the device and directory $PARSE left in DEFNAM to
 ; DCL$MSG. Uses R0-R2.
-ADDDEF: MOVL    DEFNAM+NAM$L_DEV, R1
+ADDDEF:
+        .JSB_ENTRY  SCRATCH=<R2>
+        MOVL    DEFNAM+NAM$L_DEV, R1
         MOVZBL  DEFNAM+NAM$B_DEV, R2
         ADDB2   DEFNAM+NAM$B_DIR, R2
         BRW     DCL$ADD

@@ -51,11 +51,11 @@ every process shares (*Memory*):
 Every page is a PFN of the executive's (*Memory*), and the PAL uses PFNs
 from 0 up for these. Nothing else is mapped. The boot context starts with:
 
-- **Registers.** PC is the transfer address. `sp` and x28 (VAX SP) point at
-  the stack top. R11 points at the RPB, as the VAX's VMB passed it.
-  Everything else is 0: AP is 0, as for a `CALLS` with no argument list,
-  and so is the return address. A `RET` from the transfer routine
-  therefore faults at 0.
+- **Registers.** PC is the transfer address. `sp` and x18 (VAX SP) point at
+  the stack top. R11 (x28) points at the RPB, as the VAX's VMB passed it.
+  Everything else is 0: x9, the argument count, as for a `CALLS #0`, and
+  the return address, x30. A `RET` from the transfer routine therefore
+  faults at 0.
 - **Processor state.** Kernel mode, the previous mode kernel too, IPL 31,
   as a VAX starts. No SCB, no software interrupts pending. The clock is already ticking: its interrupt
   waits for IPL to drop below 24.
@@ -110,14 +110,16 @@ The executive calls the PAL with `svc #0`:
 
 | Register | In | Out |
 | --- | --- | --- |
-| x7 | function code | unchanged |
+| x7 | function code, in bits 15:0; `CHMx`'s code in 31:16 | unchanged |
 | x0 | a0, the first argument | v0, the result, if the call has one |
 | x1-x5 | a1-a5 | unchanged |
-| x6, x8-x30, `sp`, NZCV | not seen by the PAL | unchanged |
+| x6 | passed, not used | unchanged |
+| x8-x29 | not seen by the PAL | unchanged |
+| x30, `sp`, NZCV | seen, NZCV in the SPSR that `RD_PS` returns | unchanged |
 
 Execution resumes after the `svc`, unless the PAL delivers an interrupt on
-the way (*Interrupts and exceptions*), or the call is `REI`, `CHMK` or
-`SWPCTX`.
+the way (*Interrupts and exceptions*), or the call is `REI`, a `CHMx` or
+`SWPCTX`; `HALT` doesn't resume, and `WTINT` waits for an interrupt.
 
 - **Registers.** Alpha passed a0-a5 in R16-R21 and v0 in R0. vaxpunk uses
   x0-x5 because seL4 passes the PAL only x0-x7. A call that leaves x0 alone
@@ -254,26 +256,24 @@ the event goes to:
 | --- | --- |
 | 0 | PC |
 | 8 | PSL |
-| 16 | R7 |
-| 24 | the interrupted VAX SP |
-| 32 | the interrupted ARM64 `sp` |
-| 40-80 | x13-x18, vmacro's scratch registers |
-| 88 | x30 |
+| 16-256 | x0-x30, 8 bytes each: R0 and R1 in x0 and x1, R2-R11 in x19-x28, AP in x12, the VAX SP in x18, FP in x29 |
+| 264 | the interrupted ARM64 `sp` |
 
-This is `$INTSTKDEF`. It holds what VAX code may have live that the code
-it interrupts doesn't save: vmacro keeps operands and R0 and R7 in x13-x18
-across a PAL call. An exception with parameters pushes them below the
-frame, and its handler pops them before `REI`. A handler saves the VAX
-registers it uses, as on the VAX, and returns with `REI`, which pops the
-frame, sets the modes, IPL and the condition codes from the PSL and resumes
-at the PC, with the SPs from the frame. As the VAX's, `REI` may not go to
-an inner mode than the current one, nor to a previous mode inner than the
-new one, nor to an outer mode above IPL 0; such a frame is a reserved
-instruction. Going out to another mode, it saves the current mode's SP,
-past the frame, in the HWPCB.
-
-An interrupt can come between any two instructions, so a handler keeps
-every register it uses, R0 included.
+This is `$INTSTKDEF`. It holds every register of the code the event
+stops, all 64 bits, as [ADR-0023](../adr/0023-calling-standard.md)
+requires: a handler's longword `PUSHR` would otherwise cut the upper
+halves off whatever 64-bit code it interrupted. An exception with
+parameters pushes them below the frame, and its handler pops them before
+`REI`. A handler may still save the VAX registers it uses, as on the VAX,
+and returns with `REI`, which pops the frame, sets the modes, IPL and the
+condition codes from the PSL, restores every register and the SPs from
+it, and resumes at the PC. A handler that hands back a register, as a
+`CHMx` handler hands back R0 and R1, writes it into the frame first. As
+the VAX's, `REI` may not go to an inner mode than the current one, nor to
+a previous mode inner than the new one, nor to an outer mode above IPL 0;
+such a frame is a reserved instruction. Going out to another mode, it
+saves the current mode's SP, past the frame, in the HWPCB. A new context
+starts as `REI` from the frame at its KSP, with R0 the HWPCB the CPU left.
 
 - **Software interrupts.** `MTPR #PR$_SIRR` requests level 1-15;
   `MFPR #PR$_SISR` shows which are pending. The PAL delivers the highest
@@ -315,10 +315,14 @@ every register it uses, R0 included.
 - Interrupts go to kernel mode, with kernel as the previous mode, as the
   VAX's do.
 - **`CHMx`**, x the mode: `CHMK` 0, `CHME` 1, `CHMS` 2, `CHMU` 3. The code in
-  R0. The PAL delivers through the SCB's vector for x, at the same IPL, to
-  mode x, or to the current mode if that is an inner one, with the current
-  mode as the previous one. The handler leaves the service's status in R0,
-  which `REI` doesn't change. Without a vector, or a stack in the HWPCB for
+  x7's bits 31:16, above the PAL call's, so that every other register, a
+  call's arguments among them, reaches the handler as it was
+  ([DESIGN-0004](0004-calling-standard.md)). The PAL delivers through the
+  SCB's vector for x, at the same IPL, to mode x, or to the current mode if
+  that is an inner one, with the current mode as the previous one, and
+  pushes the code below the frame, in 16 bytes, as the VAX's `CHMx` pushes
+  it. The handler pops it, and writes the service's status, R0, and R1 into
+  the frame for `REI` to restore. Any other PAL call has bits 31:16 clear. Without a vector, or a stack in the HWPCB for
   the mode, `CHMx` is a reserved instruction.
 - **`PROBER`, `PROBEW`** (a0 = an address, a1 = a length, a2 = a mode):
   v0 = 1 if the mode, or the previous mode if it is an outer one, may read
@@ -342,8 +346,8 @@ took it.
 ### Faults and HALT
 
 A fault or reserved instruction in kernel mode stops the executive, as
-`HALT` does, and the PAL prints it, naming the HWPCB of the process that
-took it:
+`HALT` does, and the PAL prints it, a page fault and an undefined
+instruction naming the HWPCB of the process that took it:
 
 | Event | The PAL prints |
 | --- | --- |
@@ -372,19 +376,17 @@ and gets:
 
 ```
         movz    w14, #8         ; the operand
-        mov     x15, x0         ; R0 and R7 aside
-        mov     x16, x7
+        mov     x15, x0         ; R0 aside
         mov     w0, w14         ; a0: the new IPL
         mov     x7, #15         ; MTPR_IPL
         svc     #0
-        mov     x17, x0         ; v0: the old IPL, unused by MTPR
-        mov     x7, x16
+        mov     x16, x0         ; v0: the old IPL, unused by MTPR
         mov     x0, x15
 ```
 
-- **Registers.** R0 and R7 are x0 and x7, so vmacro keeps them in scratch
-  registers around the call. Every other register, and the VAX's view of
-  R0 and R7, comes back unchanged.
+- **Registers.** R0 is x0, so vmacro keeps it in a scratch register around
+  the call; x7 isn't a VAX register. Every other register, and the VAX's
+  view of R0, comes back unchanged.
 - **Constants.** The processor register must be a constant, as in AMACRO.
   `$PRDEF` in `vtools/lib/lib.mlb` defines the VAX's `PR$_` names.
 
@@ -400,7 +402,7 @@ and gets:
 | `MTPR src, #PR$_RXCS`, `MFPR #PR$_RXCS, dst` | `MTPR_RXCS`, `MFPR_RXCS` |
 | `MFPR #PR$_RXDB, dst` | `MFPR_RXDB` |
 | `MTPR src, #PR$_DOORBELL` | `MTPR_DOORBELL` |
-| `CHMK #code`, `CHME`, `CHMS`, `CHMU` | `CHMK`, `CHME`, `CHMS`, `CHMU`, R0 = code; R0 isn't kept |
+| `CHMK #code`, `CHME`, `CHMS`, `CHMU` | `CHMK`, `CHME`, `CHMS`, `CHMU`, the code in x7's bits 31:16; R0 and R1 aren't kept |
 | `PROBER mode, len, base`, `PROBEW` | `PROBER`, `PROBEW`, a0 = base, a1 = len, a2 = mode; Z set if v0 is 0, no access |
 | `REI` | `REI` |
 | `HALT` | `HALT` |
@@ -440,10 +442,10 @@ unused.
 | 0x46 | `READLBLK` | vaxpunk | a0 = buffer, a1 = byte count, a2 = LBN, a3 = unit | v0 = status | reads a disk's blocks from the LBN into the buffer, which kernel mode must be able to write |
 | 0x47 | `WRITELBLK` | vaxpunk | a0 = buffer, a1 = byte count, a2 = LBN, a3 = unit | v0 = status | writes the buffer, which kernel mode must be able to read, to a disk's blocks from the LBN |
 | 0x48 | `MTPR_DOORBELL` | vaxpunk | a0 = port | | signals the port's component; never waits |
-| 0x82 | `CHME` | Alpha | a0 = code | | delivers through the SCB, to executive mode |
-| 0x83 | `CHMK` | Alpha | a0 = code | | delivers through the SCB, to kernel mode |
-| 0x84 | `CHMS` | Alpha | a0 = code | | delivers through the SCB, to supervisor mode |
-| 0x85 | `CHMU` | Alpha | a0 = code | | delivers through the SCB, in user mode |
+| 0x82 | `CHME` | Alpha | the code in x7's bits 31:16 | | delivers through the SCB, to executive mode |
+| 0x83 | `CHMK` | Alpha | the code in x7's bits 31:16 | | delivers through the SCB, to kernel mode |
+| 0x84 | `CHMS` | Alpha | the code in x7's bits 31:16 | | delivers through the SCB, to supervisor mode |
+| 0x85 | `CHMU` | Alpha | the code in x7's bits 31:16 | | delivers through the SCB, in user mode |
 | 0x8F | `PROBER` | Alpha | a0 = address, a1 = length, a2 = mode | v0 = 1 if readable | checks a mode's read access |
 | 0x90 | `PROBEW` | Alpha | a0 = address, a1 = length, a2 = mode | v0 = 1 if writable | checks a mode's write access |
 | 0x91 | `RD_PS` | Alpha | | v0 = PSL | the current and previous modes, IPL and the condition codes |

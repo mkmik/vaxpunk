@@ -82,16 +82,24 @@ pub fn reg(text: &str) -> Option<u8> {
     }
 }
 
-/// The ARM64 register that holds VAX register `n`: R0-R11 and AP in x0-x12,
-/// FP in x29, SP in x28.
+/// The ARM64 register that holds VAX register `n` (DESIGN-0004): R0 and R1
+/// in x0 and x1, R2-R11 in x19-x28, AAPCS64's saved registers, AP in x12, FP
+/// in x29 and SP in x18.
 pub fn arm(n: u8) -> Result<u8> {
     match n {
-        0..=12 => Ok(n),
+        0 | 1 | 12 => Ok(n),
+        2..=11 => Ok(n + 17),
         13 => Ok(29),
-        14 => Ok(28),
+        14 => Ok(SP),
         _ => Err("PC can't be used as a register".into()),
     }
 }
+
+/// The VAX stack pointer.
+pub const SP: u8 = 18;
+
+/// Where a frame keeps its condition handler: what `(FP)` means.
+const HANDLER: i64 = 16;
 
 /// Splits operands at commas outside `()`, `[]` and `<>`.
 pub fn split(text: &str) -> Vec<String> {
@@ -204,19 +212,26 @@ pub enum Place {
 }
 
 /// Scratch registers, free for any instruction to use, taken from the end.
-/// CALLS and CALLG pass the argument list in x13 once their operands are
-/// read, so it goes last.
-const POOL: [u8; 6] = [13, 18, 17, 16, 15, 14];
+/// CALLS and CALLG keep x8 and x13 for themselves, so they go last. x2-x7
+/// are left for PAL calls' arguments.
+const POOL: [u8; 9] = [13, 9, 8, 11, 10, 17, 16, 15, 14];
 
 /// Code for one VAX instruction.
 pub struct Gen<'a> {
     pub out: Vec<String>,
+    /// The VAX registers R0-R11 it writes, bit n for Rn.
+    pub written: u16,
     free: Vec<u8>,
     /// Registers that operand side effects change, so reading them as
     /// operands must take a copy first.
     side: Vec<u8>,
     constant: &'a dyn Fn(&str) -> Option<i64>,
     next: &'a mut u32,
+    /// `.ENABLE QUADWORD`: MOVAx writes a register's 64 bits.
+    pub quadword: bool,
+    /// `QUAD_ARGS=TRUE`: the argument list AP points to is of quadwords,
+    /// argument n at 8n, which `4n(AP)` still names.
+    pub quad_ap: bool,
 }
 
 pub type Result<T> = std::result::Result<T, String>;
@@ -240,10 +255,13 @@ impl<'a> Gen<'a> {
             .collect();
         Gen {
             out: Vec::new(),
+            written: 0,
             free: POOL.to_vec(),
             side,
             constant,
             next,
+            quadword: false,
+            quad_ap: false,
         }
     }
 
@@ -262,12 +280,12 @@ impl<'a> Gen<'a> {
     /// CONSTRAINED UNPREDICTABLE, which Apple's cores trap.
     pub fn push(&mut self, v: &str) -> Result<()> {
         let mut v = w(v);
-        if v == "w28" {
+        if v == format!("w{SP}") {
             let t = w(&self.tmp()?);
-            self.emit(format!("mov {t}, w28"));
+            self.emit(format!("mov {t}, w{SP}"));
             v = t;
         }
-        self.emit(format!("str {v}, [x28, #-4]!"));
+        self.emit(format!("str {v}, [x{SP}, #-4]!"));
         Ok(())
     }
 
@@ -294,8 +312,13 @@ impl<'a> Gen<'a> {
         Ok(format!("x{n}"))
     }
 
-    fn is_tmp(r: &str) -> bool {
-        r[1..].parse::<u8>().is_ok_and(|n| POOL.contains(&n))
+    /// Keeps scratch register x`n` out of this instruction's operands.
+    pub fn reserve(&mut self, n: u8) {
+        self.free.retain(|&r| r != n);
+    }
+
+    pub fn is_tmp(r: &str) -> bool {
+        r.starts_with(['x', 'w']) && r[1..].parse::<u8>().is_ok_and(|n| POOL.contains(&n))
     }
 
     /// A scratch register: `r` if it is one, else a new one.
@@ -321,7 +344,11 @@ impl<'a> Gen<'a> {
         let base = self.fold(&base, disp)?;
         let t = self.reuse(&base)?;
         let i = arm(*i)?;
-        match size.shift() {
+        let quad = self.quad_ap && matches!(mode, Mode::Def(12) | Mode::Disp(_, 12));
+        if quad && size < Size::L {
+            return Err("in a QUAD_ARGS routine, AP is indexed by longwords or quadwords".into());
+        }
+        match size.shift() + u8::from(quad) {
             0 => self.emit(format!("add {t}, {base}, w{i}, sxtw")),
             s => self.emit(format!("add {t}, {base}, w{i}, sxtw #{s}")),
         }
@@ -330,29 +357,40 @@ impl<'a> Gen<'a> {
 
     fn mode(&mut self, mode: &Mode, size: Size) -> Result<(String, i64)> {
         Ok(match mode {
+            Mode::Def(13) => ("x29".into(), HANDLER),
             Mode::Def(n) => (format!("x{}", arm(*n)?), 0),
             Mode::Inc(n) => {
+                self.wrote(*n);
                 let (r, t) = (arm(*n)?, self.tmp()?);
                 self.emit(format!("mov {t}, x{r}"));
                 self.emit(format!("add x{r}, x{r}, #{}", size.bytes()));
                 (t, 0)
             }
             Mode::Dec(n) => {
+                self.wrote(*n);
                 let r = arm(*n)?;
                 self.emit(format!("sub x{r}, x{r}, #{}", size.bytes()));
                 (format!("x{r}"), 0)
             }
             Mode::IncDef(n) => {
+                self.wrote(*n);
                 let (r, t) = (arm(*n)?, self.tmp()?);
                 self.emit(format!("ldr {}, [x{r}], #4", w(&t)));
                 (t, 0)
             }
             Mode::Disp(e, n) => self.disp(e, *n)?,
             Mode::DispDef(e, n) => {
+                // A quadword argument's pointer is 64 bits.
+                let quad = *n == 12 && self.quad_ap;
                 let (base, d) = self.disp(e, *n)?;
                 let t = self.reuse(&base)?;
-                let m = self.at(&base, d, Size::L)?;
-                self.emit(format!("ldr {}, {m}", w(&t)));
+                let (size, r) = if quad {
+                    (Size::Q, x(&t))
+                } else {
+                    (Size::L, w(&t))
+                };
+                let m = self.at(&base, d, size)?;
+                self.emit(format!("ldr {r}, {m}"));
                 (t, 0)
             }
             Mode::Abs(e) => {
@@ -370,15 +408,27 @@ impl<'a> Gen<'a> {
     }
 
     /// `d(Rn)`: a displacement known now stays one; any other is added in
-    /// a register, sign-extended from 32 bits.
+    /// a register, sign-extended from 32 bits. From FP, 0 is the condition
+    /// handler and the rest of the frame is the routine's own, as in AMACRO:
+    /// only its locals, below FP, are the source's.
     fn disp(&mut self, e: &str, n: u8) -> Result<(String, i64)> {
         let r = format!("x{}", arm(n)?);
+        let quad = n == 12 && self.quad_ap;
         if let Some(d) = self.constant(e) {
-            return Ok((r, d));
+            // Argument d / 4 at 8 * (d / 4), and the bytes in it.
+            let d = if quad { d + (d & !3) } else { d };
+            return match (n, d) {
+                (13, 0) => Ok((r, HANDLER)),
+                (13, 1..) => Err(format!(
+                    "{d}(FP): the frame is vaxpunk's (DESIGN-0004); (FP) is the condition handler"
+                )),
+                _ => Ok((r, d)),
+            };
         }
         let t = self.tmp()?;
         self.imm_into(&t, e, Size::L)?;
-        self.emit(format!("add {t}, {r}, {}, sxtw", w(&t)));
+        let scale = if quad { " #1" } else { "" };
+        self.emit(format!("add {t}, {r}, {}, sxtw{scale}", w(&t)));
         Ok((t, 0))
     }
 
@@ -487,6 +537,18 @@ impl<'a> Gen<'a> {
         Ok(())
     }
 
+    /// All 64 bits of VAX register `n`, as an x register: a copy if an
+    /// operand's side effect changes it later in the instruction.
+    pub fn whole(&mut self, n: u8) -> Result<String> {
+        let r = arm(n)?;
+        if !self.side.contains(&n) {
+            return Ok(format!("x{r}"));
+        }
+        let t = self.tmp()?;
+        self.emit(format!("mov {t}, x{r}"));
+        Ok(t)
+    }
+
     /// Reads an operand: evaluates it and loads its value.
     pub fn read(&mut self, op: &Opnd, size: Size, ext: Ext) -> Result<String> {
         let p = self.place(op, size)?;
@@ -512,12 +574,10 @@ impl<'a> Gen<'a> {
             Place::Reg(n) => {
                 let r = arm(*n)?;
                 if size == Size::Q {
-                    if *n >= 11 {
-                        return Err("a quadword needs two registers, up to R10 and R11".into());
-                    }
+                    let r1 = pair(*n)?;
                     let t = self.tmp()?;
                     self.emit(format!("mov {}, w{r}", w(&t)));
-                    self.emit(format!("bfi {t}, x{}, #32, #32", r + 1));
+                    self.emit(format!("bfi {t}, x{r1}, #32, #32"));
                     return Ok(t);
                 }
                 let sub = size != Size::L && ext != Ext::Any;
@@ -578,22 +638,29 @@ impl<'a> Gen<'a> {
         }
     }
 
-    /// Writes `v`, a register or `wzr`, to `p`.
+    /// Writes `v`, a register or `wzr`, to `p`. A register gets its new
+    /// longword sign-extended, as every VAX register holds it.
     pub fn store(&mut self, p: &Place, size: Size, v: &str) -> Result<()> {
         match p {
             Place::Reg(n) => {
                 let r = arm(*n)?;
+                self.wrote(*n);
+                if size == Size::Q {
+                    self.wrote(n + 1);
+                }
                 match size {
-                    Size::L if v != format!("w{r}") => self.emit(format!("mov w{r}, {}", w(v))),
-                    Size::L => {}
+                    Size::L if v.ends_with("zr") => self.emit(format!("mov x{r}, xzr")),
+                    Size::L => self.emit(format!("sxtw x{r}, {}", w(v))),
                     Size::Q => {
-                        if *n >= 11 {
-                            return Err("a quadword needs two registers, up to R10 and R11".into());
-                        }
-                        self.emit(format!("mov w{r}, {}", w(v)));
-                        self.emit(format!("lsr x{}, {}, #32", r + 1, x(v)));
+                        let r1 = pair(*n)?;
+                        let v = self.nonzero(x(v))?;
+                        self.emit(format!("sxtw x{r}, {}", w(&v)));
+                        self.emit(format!("asr x{r1}, {v}, #32"));
                     }
-                    _ => self.emit(format!("bfi w{r}, {}, #0, #{}", w(v), size.bits())),
+                    _ => {
+                        self.emit(format!("bfi w{r}, {}, #0, #{}", w(v), size.bits()));
+                        self.sext(r);
+                    }
                 }
             }
             Place::Imm(_) => return Err("can't write to an immediate".into()),
@@ -635,6 +702,28 @@ impl<'a> Gen<'a> {
         let t = if v.starts_with('x') { t } else { w(&t) };
         self.emit(format!("mov {t}, {v}"));
         Ok(t)
+    }
+}
+
+impl Gen<'_> {
+    /// Notes that the instruction writes VAX register `n`.
+    pub fn wrote(&mut self, n: u8) {
+        if n < 12 {
+            self.written |= 1 << n;
+        }
+    }
+
+    /// Sign-extends register x`r`'s longword.
+    pub fn sext(&mut self, r: u8) {
+        self.emit(format!("sxtw x{r}, w{r}"));
+    }
+}
+
+/// The register that holds the high longword of a quadword in Rn and Rn+1.
+fn pair(n: u8) -> Result<u8> {
+    match n {
+        0..=10 => arm(n + 1),
+        _ => Err("a quadword needs two registers, up to R10 and R11".into()),
     }
 }
 

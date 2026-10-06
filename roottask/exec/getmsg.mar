@@ -205,6 +205,10 @@ MESSAGES:
         .ASCIC  "SYSTEM"
         .ASCIC  "NOSIGNAL"
         .ASCIC  "no signal currently active"
+        .LONG   SS$_ARG_GTR_32_BITS
+        .ASCIC  "SYSTEM"
+        .ASCIC  "ARG_GTR_32_BITS"
+        .ASCIC  "64-bit address passed where a 32-bit one is required"
         .LONG   SS$_UNWINDING
         .ASCIC  "SYSTEM"
         .ASCIC  "UNWINDING"
@@ -334,11 +338,16 @@ MESSAGES:
 90$:    RET
 
 ; SEP: R3 = a character. Writes it, then makes R3 a dash. Uses R0 and R3.
-SEP:    MOVL    R3, R0
+SEP:
+        .JSB_ENTRY  OUTPUT=<R8, R9>, SCRATCH=<R3>
+        MOVL    R3, R0
         MOVZBL  #^A/-/, R3
 ; PUTCHR: R0 = a character. Writes it at R6[R8] if R8 is below R7, the
-; buffer's length, else sets bit 31 of R9: it overflowed. Uses R0.
-PUTCHR: CMPL    R8, R7
+; buffer's length, and advances R8, else sets bit 31 of R9: it overflowed.
+; Uses R0.
+PUTCHR:
+        .JSB_ENTRY  OUTPUT=<R8, R9>
+        CMPL    R8, R7
         BGEQU   10$
         MOVB    R0, (R6)[R8]
         INCL    R8
@@ -347,7 +356,9 @@ PUTCHR: CMPL    R8, R7
         RSB
 
 ; PUTC: R1 = a .ASCIC string. Writes it with PUTCHR. Uses R0-R2.
-PUTC:   MOVZBL  (R1)+, R2
+PUTC:
+        .JSB_ENTRY  OUTPUT=<R8, R9>, SCRATCH=<R2>
+        MOVZBL  (R1)+, R2
         BRB     20$
 10$:    MOVZBL  (R1)+, R0
         BSBB    PUTCHR

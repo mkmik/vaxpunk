@@ -94,6 +94,7 @@ PROMPT: CLRW    (R5)
 
 ; GETLINE: CLI$GET_VALUE of $LINE into LINE. Uses R0, R1.
 GETLINE:
+        .JSB_ENTRY
         PUSHAW  LINLEN
         PUSHAQ  LINDSC
         PUSHAQ  LINNAM

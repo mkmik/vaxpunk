@@ -327,19 +327,24 @@ DESIGN-0004 is the result. Against the sources:
 - **Taken as is.** Sign-extended longwords in registers; declared routines
   with automatic 64-bit preservation of what they modify, R0 and R1
   excepted, and `.JSB32_ENTRY` as the opt-out; `input`, `output`,
-  `scratch`, `preserve`, `max_args`, `home_args`, `quad_args`; `n(AP)`
-  mapped to where the arguments arrive, with homing on DEC's triggers;
-  the flagged idioms; JSB as a native call, with no return address on the
-  VAX stack; the 64-bit pieces, under DEC's names, mapped onto ARM64 as VSI
-  mapped them onto Itanium; sign extension of every 32-bit argument and
-  result; the argument count; the 64-bit mechanism array, descriptors and
-  item lists; sign-extension checks in the service dispatcher.
+  `scratch`, `preserve`, `max_args`, `home_args`, `quad_args`; DEC's
+  homing triggers; of the flagged idioms, positive FP offsets, reaching
+  into the caller's stack data, return-address games and `JSB @(SP)+`, as
+  errors; JSB as a native call, with no return address on the VAX stack;
+  the 64-bit pieces, under DEC's names, mapped onto ARM64 as VSI mapped
+  them onto Itanium: the call macros, `EVAX_CALLG_64`, `quad_args`,
+  quadword mode, `$IS_32BITS`, `$IS_DESC64`, `$PUSH64`, `$POP64` and the
+  built-ins; sign extension of every 32-bit argument and result; the
+  argument count; the 64-bit mechanism array, descriptors and item lists;
+  sign-extension checks in the service dispatcher.
 - **Changed for ARM64.** R2-R11 go to x19-x28, since AAPCS64's saved
   registers are those, as Itanium remapped to fit Intel's. Eight arguments
   in registers, so the call macros' threshold is 8, as on Itanium. VAX SP
   stays a register of its own, x18, rather than `sp`, because EL0 checks
-  `sp`'s alignment on every access. Arguments arriving in x0 and x1, which
-  are also R0 and R1, are copied at entry when the routine reads them. The
+  `sp`'s alignment on every access. A routine that reads AP always homes
+  its arguments, x0 and x1, which are also R0 and R1, among them, and
+  `n(AP)` reads the homed list at `32(FP)`: DEC's triggers only make it
+  home all `max_args` rather than up to the highest offset named. The
   frame keeps AAPCS64's record at `0(FP)`, so the descriptor's address
   goes at `24(FP)` and the handler at `16(FP)`. The 64-bit address space
   can't put S0 at `FFFFFFFF.80000000`: seL4 keeps the upper half, so
@@ -348,7 +353,10 @@ DESIGN-0004 is the result. Against the sources:
 - **Left out.** Alpha's linkage sections and procedure descriptors as
   procedure values (ARM64 is PC-relative); `.LINKAGE_PSECT`,
   `.DEFINE_PAL`, `EVAX_TRAPB`, `RPCC`, the FPCR built-ins and the
-  Itanium-only built-ins; `.CALL_LINKAGE` and its family, which Itanium
-  needed because its mapping put VAX registers on scratch registers, and
-  vaxpunk's doesn't (accepted and ignored, so ported sources compile);
-  Alpha's byte-manipulation built-ins until something needs them.
+  Itanium-only built-ins; Alpha's byte-manipulation built-ins until
+  something needs them. Not yet: the other flagged idioms (results in the
+  condition codes after a `JSB`, data in the code stream, `CASE` without
+  its table, merging `PUSHR` and `POPR` with the automatic saves), the
+  page macros' `quad=YES`, and `$RAB64`. `.CALL_LINKAGE` and its family stay, for another
+  reason than Itanium's: they say what a JSB routine in another module
+  modifies, which a caller that saves what it modifies needs to know.

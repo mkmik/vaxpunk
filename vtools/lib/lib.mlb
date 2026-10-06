@@ -123,20 +123,52 @@ SCB$L_PORT = ^X100                      ; port 0's completion, at IPL$_PORT
 SCB$K_LENGTH = ^X104
         .ENDM   $SCBDEF
 
+; $FDSCDEF: a frame descriptor (DESIGN-0004), which a frame's 24(FP)
+; points at: what the routine saves and where, the frame's size, a static
+; handler, and the routine's name, an .ASCIC string, as its offset from
+; the descriptor, or 0.
+        .MACRO  $FDSCDEF
+FDSC$L_FLAGS = 0
+FDSC$V_HANDLER = 0                      ; FDSC$Q_HANDLER is a static handler
+FDSC$V_BASE_FRAME = 1                   ; the chain ends here
+FDSC$V_TARGET_INVO = 2                  ; call the handler when the frame is an unwind's target
+FDSC$V_EXCEPTION_FRAME = 3              ; a frame exception delivery built
+FDSC$V_AST_FRAME = 4                    ; a frame AST delivery built
+FDSC$L_SAVED = 4                        ; bit n: x18+n, n 0-10; bit 11+n: d8+n
+FDSC$L_RSA = 8                          ; the saved registers' offset from FP, ascending
+FDSC$L_SIZE = 12                        ; the frame's size: the caller's sp is FP plus it
+FDSC$Q_HANDLER = 16
+FDSC$Q_NAME = 24
+FDSC$K_LENGTH = 32
+        .ENDM   $FDSCDEF
+
+; $FRMDEF: a frame (DESIGN-0004), at FP.
+        .MACRO  $FRMDEF
+FRM$Q_FP = 0                            ; the caller's FP, 0 past the last frame
+FRM$Q_PC = 8                            ; the return address
+FRM$Q_HANDLER = 16                      ; the condition handler, 0 if none
+FRM$Q_FDSC = 24                         ; the frame descriptor's address
+FRM$L_ARGS = 32                         ; MACRO-32's argument list, if it homes one
+FRM$K_LENGTH = 32                       ; the part every frame has
+        .ENDM   $FRMDEF
+
 ; $INTSTKDEF: the frame the PAL pushes on the stack of the mode it delivers
-; an interrupt or an exception in, and REI pops. Quadwords: the registers
-; the interrupted code may have live that VAX code doesn't save. An
+; an interrupt or an exception in, and REI pops. Quadwords: the PC, the PSL,
+; then every register of the code it stopped, all 64 bits, which REI
+; restores. A handler that hands back a register, as a change mode
+; handler hands back R0 and R1, writes it into the frame before REI. An
 ; exception with parameters pushes them below the frame, and its handler
 ; pops them before REI.
         .MACRO  $INTSTKDEF
 INTSTK$Q_PC = 0
 INTSTK$Q_PS = 8                         ; the PSL ($PSLDEF): modes, IPL, NZVC
-INTSTK$Q_R7 = 16
-INTSTK$Q_SP = 24                        ; the interrupted mode's VAX SP
-INTSTK$Q_X_SP = 32                      ; ARM64's sp
-INTSTK$Q_X13 = 40                       ; x13-x18, vmacro's scratch
-INTSTK$Q_X30 = 88                       ; the link register
-INTSTK$K_LENGTH = 96
+INTSTK$Q_X0 = 16                        ; x0-x30, 8 bytes each
+INTSTK$Q_R0 = INTSTK$Q_X0               ; R0
+INTSTK$Q_R1 = INTSTK$Q_X0+8             ; R1
+INTSTK$Q_R7 = INTSTK$Q_X0+56            ; R7
+INTSTK$Q_SP = INTSTK$Q_X0+144           ; the interrupted mode's VAX SP, x18
+INTSTK$Q_X_SP = 264                     ; ARM64's sp
+INTSTK$K_LENGTH = 272
         .ENDM   $INTSTKDEF
 
 ; $HWPCBDEF: the hardware PCB the PAL knows a process context by. Quadword

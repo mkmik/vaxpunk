@@ -40,6 +40,7 @@
 ; waits, so that it can deliver the AST. If the process is gone, frees the
 ; ACB. R0 = SS$_NORMAL or SS$_NONEXPR. IPL$_SYNCH. Uses R1-R3.
 SCH$QAST::
+        .JSB_ENTRY  SCRATCH=<R2, R3>
         MOVZWL  ACB$L_PID(R5), R1
         CMPL    R1, #SCH$C_MAXPIX
         BGEQU   80$
@@ -74,6 +75,7 @@ SCH$QAST::
 ; ACBs, and ASTEN from PCB$B_ASTEN less PCB$B_ASTACT, after its AST queue
 ; changes. IPL$_SYNCH. Uses R0-R2.
 SCH$ASTBITS::
+        .JSB_ENTRY  SCRATCH=<R2>
         PUSHL   R3
         CLRL    R1
         MOVAQ   PCB$Q_ASTQFL(R4), R2
@@ -95,6 +97,7 @@ SCH$ASTBITS::
 ; requests when an AST waits that the interrupted mode lets through.
 ; Delivers it, and those after it, in that mode.
 SCH$ASTDEL::
+        .EXCEPTION_ENTRY
         PUSHR   #^M<R0, R4>
         EXTZV   #PSL$V_CURMOD, #2, 8+INTSTK$Q_PS(SP), R0
         MOVL    SCH$GL_CURPCB, R4
@@ -110,6 +113,7 @@ SCH$ASTDEL::
 ; PCB$L_ASTSP, and REIs below them to EXE$ASTDISP in the AST's mode, on
 ; that mode's stack; $ASTEXIT comes back here. Keeps every register.
 EXE$ASTDEL::
+        .JSB_ENTRY
         PUSHR   #^M<R0, R1, R2, R3, R4, R5, R6, R7, R8, R9, R10, R11, AP, FP>
         DSBINT  #IPL$_SYNCH
 NEXT:   MOVL    PCB$L_HWPCB(R4), R1
@@ -164,6 +168,7 @@ NEXT:   MOVL    PCB$L_HWPCB(R4), R1
 ; is throwing away: image rundown, for user mode, and process rundown.
 ; IPL$_SYNCH. Uses R0-R3.
 EXE$FLUSHAST::
+        .JSB_ENTRY  SCRATCH=<R2, R3>
         PUSHL   R5
         MOVL    R0, R3
         MOVAQ   PCB$Q_ASTQFL(R4), R2
@@ -191,6 +196,7 @@ EXE$FLUSHAST::
 ; PRVMODE: R0 = the previous mode, the mode that called the service
 ; running.
 PRVMODE:
+        .JSB_ENTRY
         CALL_PAL #PAL$_RD_PS
         EXTZV   #PSL$V_PRVMOD, #2, R0, R0
         RSB
@@ -247,7 +253,7 @@ PRVMODE:
 ; next AST or returns to what the routine interrupted. EXE$ASTDISP calls it
 ; when the routine returns. With no AST routine running, it returns
 ; SS$_NORMAL and does nothing.
-        .ENTRY  EXE$ASTEXIT, ^M<>
+        .ENTRY  EXE$ASTEXIT, ^M<R3, R4>
         MOVL    SCH$GL_CURPCB, R4
         DSBINT  #IPL$_SYNCH
         MOVL    PCB$L_ASTSP(R4), R0

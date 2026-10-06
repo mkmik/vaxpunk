@@ -70,6 +70,7 @@ SWAPPER:
 ; SCH$INIT: makes the queues empty and the boot context the swapper, the
 ; current process. Uses R0-R2.
 SCH$INIT::
+        .JSB_ENTRY  SCRATCH=<R2>
         MOVAQ   SCH$AQ_COMH, R0
         MOVL    #QUEUES, R1
 10$:    MOVL    R0, (R0)
@@ -114,6 +115,7 @@ SCH$INIT::
 ; SCH$INSCOM: R4 = a PCB in no queue. Makes it computable: on the tail of
 ; the COM queue of its priority. IPL$_SYNCH. Keeps every register.
 SCH$INSCOM::
+        .JSB_ENTRY
         PUSHR   #^M<R0, R1>
         MOVL    #SCH$C_COM, PCB$L_STATE(R4)
         MOVZBL  PCB$B_PRI(R4), R0
@@ -126,6 +128,7 @@ SCH$INSCOM::
 ; SCH$REMCOM: R4 = a computable PCB. Takes it off its COM queue.
 ; IPL$_SYNCH. Keeps every register.
 SCH$REMCOM::
+        .JSB_ENTRY
         PUSHR   #^M<R0, R1>
         REMQUE  (R4), R1
         BNEQ    10$                     ; others left at its priority
@@ -138,6 +141,7 @@ SCH$REMCOM::
 ; reschedule if it should run before the current process. IPL$_SYNCH.
 ; Keeps every register.
 SCH$MAKECOM::
+        .JSB_ENTRY
         PUSHR   #^M<R0>
         BSBW    SCH$INSCOM
         MOVL    SCH$GL_CURPCB, R0
@@ -151,6 +155,7 @@ SCH$MAKECOM::
 ; or suspended if a $SUSPND came while it waited. IPL$_SYNCH. Keeps every
 ; register.
 SCH$WAKEPCB::
+        .JSB_ENTRY
         PUSHR   #^M<R0>
         REMQUE  (R4), R0
         BBCC    #PCB$V_SUSPEN, PCB$L_STS(R4), 10$
@@ -165,6 +170,7 @@ SCH$WAKEPCB::
 ; $HIBER takes, and ends its hibernation if it hibernates. IPL$_SYNCH.
 ; Keeps every register.
 SCH$WAKE::
+        .JSB_ENTRY
         BBSS    #PCB$V_WAKEPEN, PCB$L_STS(R1), 10$
 10$:    CMPL    PCB$L_STATE(R1), #SCH$C_HIB
         BNEQ    20$
@@ -181,6 +187,7 @@ SCH$WAKE::
 ; waiting, or an inner one; the caller must look again at what it waited
 ; for. IPL$_SYNCH. Keeps every register.
 SCH$WAIT::
+        .JSB_ENTRY
         INSQUE  (R4), @4(R0)
         BSBW    SCH$SCHED
         PUSHL   R0
@@ -196,6 +203,7 @@ SCH$WAIT::
 ; below the software timer interrupt's, which may make a process
 ; computable. IPL$_SYNCH. Keeps every register.
 SCH$SCHED::
+        .JSB_ENTRY
         PUSHR   #^M<R0, R1, R2, R3, R4>
 10$:    MOVL    #31, R1
 20$:    BBS     R1, SCH$GL_COMQS, 30$
@@ -222,6 +230,7 @@ SCH$SCHED::
 ; requests. Puts the current process back on its COM queue's tail and
 ; gives the CPU to the highest computable one.
 SCH$RESCHED::
+        .EXCEPTION_ENTRY
         SETIPL  #IPL$_SYNCH
         PUSHL   R4
         MOVL    SCH$GL_CURPCB, R4
@@ -237,6 +246,7 @@ SCH$RESCHED::
 ; register.
 ; ponytail: no priority decay toward the base, since nothing boosts yet.
 SCH$QEND::
+        .JSB_ENTRY
         MNEGW   SGN$GW_QUANTUM, PCB$W_QUANT(R4)
         CMPB    PCB$B_PRI(R4), #16
         BGEQU   20$

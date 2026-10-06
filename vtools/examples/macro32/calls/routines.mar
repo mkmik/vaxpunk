@@ -17,8 +17,9 @@ DIGITS: .BLKB   12
         MULL2   R2, R0
         RET
 
-; SUM(A, B, ...): the sum of its arguments, however many.
-        .ENTRY  SUM, ^M<R2>
+; SUM(A, B, ...): the sum of its arguments, however many. It walks them
+; as a list, so it homes them all, up to 255.
+SUM::   .CALL_ENTRY MAX_ARGS=255
         CLRL    R0
         MOVL    (AP), R1                ; the argument count
         BEQL    20$

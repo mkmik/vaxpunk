@@ -20,7 +20,7 @@
         .EXTERNAL DCL$ADDNAME, DCL$DONE, DCL$GETVAL, DCL$ISPRES, DCL$NAMDSC
         .EXTERNAL DCL$NAME, DCL$NAMEVAL, DCL$OK, DCL$PROCESS, DCL$QUOTE
         .EXTERNAL DCL$SAY, DCL$SHOWDEF, DCL$SHOWDEV, DCL$SHOWSYM, DCL$TOKEN
-        .EXTERNAL DCL$VERB, DCL$V_LOGNAM
+        .EXTERNAL DCL$VERB, DCL$V_LOGNAM, DCL$SAVESP
 
         .PSECT  DATA, NOEXE, WRT, LONG
 FILE_DEV:
@@ -84,6 +84,7 @@ V_DEVICES:
 ; equivalence: makes name a logical name in the table, the process's by
 ; default, telling if it replaced one, unless /NOLOG.
 DCL$DEFINE::
+        .EXCEPTION_ENTRY
         MOVL    #1, R1
         BSBW    LNMTAB
         MOVAB   DCL$V_LOGNAM, R1
@@ -107,6 +108,7 @@ DCL$DEFINE::
 ; DCL$DEASSIGN, DEASSIGN[/PROCESS|/SYSTEM|/TABLE=table] name: deletes
 ; the logical name from the table, the process's by default.
 DCL$DEASSIGN::
+        .EXCEPTION_ENTRY
         MOVL    #1, R1
         BSBW    LNMTAB
         MOVAB   DCL$V_LOGNAM, R1
@@ -121,6 +123,7 @@ DCL$DEASSIGN::
 ; DCL$SHOWDEV. SHOW PROCESS and SHOW SYSTEM are SHOW_IMAGE's,
 ; SHOW.EXE's.
 DCL$SHOW::
+        .EXCEPTION_ENTRY
         MOVAB   V_OPTION, R1            ; the keyword, all of it
         BSBW    DCL$GETVAL
         MOVAB   V_DEFAULT, R1
@@ -230,7 +233,9 @@ LIST:   CLRL    R6                      ; the table: 0 the process's, 1 the syst
 
 ; PAIR: appends "name" = "equivalence", of DCL$NAME and EQV, to DCL$MSG.
 ; Uses R0-R2.
-PAIR:   BSBW    DCL$QUOTE
+PAIR:
+        .JSB_ENTRY  SCRATCH=<R2>
+        BSBW    DCL$QUOTE
         BSBW    DCL$ADDNAME
         BSBW    DCL$QUOTE
         ADDTEXT " = "
@@ -244,7 +249,9 @@ PAIR:   BSBW    DCL$QUOTE
 ; TABMASK. Makes TABMASK and TABDSC those its /PROCESS, /SYSTEM or
 ; /TABLE=table say: SS$_NOLOGTAB, to DCL$DONE, for a table there isn't.
 ; Uses R0-R5, R8.
-LNMTAB: MOVL    R1, TABMASK
+LNMTAB:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5, R8>
+        MOVL    R1, TABMASK
         MOVAB   V_PROCQ, R1
         BSBB    DCL$ISPRES
         BLBC    R0, 10$
@@ -278,6 +285,7 @@ LNMTAB: MOVL    R1, TABMASK
 37$:    MOVZBL  1(R2)[R3], TABMASK
         BRB     50$
 40$:    MOVL    #SS$_NOLOGTAB, R0
+        MOVL    DCL$SAVESP, SP          ; back to DCL's stack
         BRW     DCL$DONE
 50$:    MOVL    TABMASK, R0
         MOVL    TABDSCS[R0], TABDSC

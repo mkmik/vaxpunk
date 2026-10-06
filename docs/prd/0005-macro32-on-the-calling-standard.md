@@ -188,12 +188,16 @@ three routines' names; `vrun --gdb` and LLDB's `bt` list the same frames.
   sign-extended after some longword operations; JSB calls into other
   modules make their callers save all of R2-R11. Whether boot time or
   `svctest` notices.
-- **Declarations by hand or by tool.** The 360 JSB routines' contracts are
-  in their comments; a script could draft the declarations for review, or
-  agents write them file by file.
-- **Linkage directives across modules.** Whether to write `.CALL_LINKAGE`
-  for the executive's JSB routines that other modules call, or let those
-  callers save all of R2-R11.
+- **Declarations by hand or by tool.** Settled in step 3: a script drafted
+  them from the contracts' "Uses Rn." and "Keeps every register.", a
+  routine without one became `.JSB32_ENTRY`, then `.JSB_ENTRY` with
+  `scratch` what it modifies and doesn't pop back; each routine that then
+  restored a register it writes was reviewed for an output the contract
+  left out.
+- **Linkage directives across modules.** Settled in step 3: neither. The
+  build compiles the executive's modules together, and the programs' and
+  their libraries' together (`vmacro::compile_modules`), and each module
+  gets the others' declarations as linkages.
 
 ## Work order
 

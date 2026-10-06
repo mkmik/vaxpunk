@@ -2,7 +2,7 @@
 //! `docs/macro32.md` lists them and what doesn't carry over.
 
 use crate::Flags;
-use crate::operand::{Ext, Gen, Mode, Opnd, Result, Size, arm, w, x};
+use crate::operand::{Ext, Gen, Mode, Opnd, Place, Result, SP, Size, arm, w, x};
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Alu {
@@ -40,6 +40,8 @@ pub enum Op {
     Rsb,
     Calls,
     Callg,
+    /// EVAX_CALLG_64: CALLG with a list of quadwords, a quadword count first.
+    Callg64,
     Ret,
     Pushr,
     Popr,
@@ -72,6 +74,140 @@ pub enum Op {
     CallPal,
     Insque,
     Remque,
+    /// EVAX_LDQ and EVAX_STQ: a register's 64 bits from or to an operand.
+    Ldq,
+    Stq,
+    /// The other `EVAX_` built-ins (docs/macro32.md).
+    Evax(Evax),
+}
+
+/// AMACRO's built-ins, each the ARM64 that does what the Alpha
+/// instruction did ([MCG] App. C): operands are quadwords, a register all
+/// 64 bits of it.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Evax {
+    /// EVAX_SEXTB, SEXTW, SEXTL: the source's low byte, word or longword,
+    /// sign-extended.
+    Sext,
+    /// EVAX_LDBU, LDWU: a byte or word from memory, zero-extended.
+    Ldu,
+    /// EVAX_STB, STW: a register's low byte or word to memory.
+    St,
+    /// EVAX_LDAQ: an operand's address, all 64 bits.
+    Lda,
+    /// EVAX_LDQU, STQU: the quadword at the address rounded down to 8.
+    Ldqu,
+    Stqu,
+    /// EVAX_LDLL, LDQL: a load that starts an exclusive access; EVAX_STLC,
+    /// STQC, the store that ends it, the register 1 if it did, else 0.
+    Ldl,
+    Stc,
+    /// Three operands, the third the result of an ARM64 instruction on the
+    /// first two: EVAX_ADDQ, SUBQ, MULQ, UMULH, AND, OR, XOR, BIC, ORNOT,
+    /// EQV, SLL, SRL, SRA.
+    Alu(&'static str),
+    /// EVAX_ZAP, ZAPNOT (`true`): the first operand with the bytes the
+    /// second's low 8 bits say cleared, or kept.
+    Zap(bool),
+    /// EVAX_CMPEQ, CMPLT, CMPLE, CMPULT, CMPULE: 1 if the condition holds.
+    Cmp(&'static str),
+    /// EVAX_BEQ, BLT, BNE: a branch on an operand's 64 bits.
+    Branch(&'static str),
+    /// EVAX_CMOVxx: the third operand becomes the second if the first
+    /// passes the test: EQ, NE, LT, LE, GT, GE against 0, LBC, LBS.
+    Cmov(&'static str),
+    /// EVAX_MB: a memory barrier.
+    Mb,
+    /// EVAX_MTPR_x src and EVAX_MFPR_x: a PAL call, R0 its result.
+    Mtpr(u32),
+    Mfpr(u32),
+    /// The rest of Alpha's: byte manipulation, TRAPB, RPCC, the FPCR, and
+    /// PAL calls vaxpunk lacks.
+    Unsupported,
+}
+
+/// An `EVAX_` built-in, if `mn` is one.
+fn evax(mn: &str) -> Option<(Op, Size)> {
+    use Size::*;
+    let name = mn.strip_prefix("EVAX_")?;
+    let e = |e| Op::Evax(e);
+    let alu = |i| (e(Evax::Alu(i)), Q);
+    Some(match name {
+        "LDQ" => (Op::Ldq, Q),
+        "STQ" => (Op::Stq, Q),
+        "SEXTB" => (e(Evax::Sext), B),
+        "SEXTW" => (e(Evax::Sext), W),
+        "SEXTL" => (e(Evax::Sext), L),
+        "LDBU" => (e(Evax::Ldu), B),
+        "LDWU" => (e(Evax::Ldu), W),
+        "STB" => (e(Evax::St), B),
+        "STW" => (e(Evax::St), W),
+        "LDAQ" => (e(Evax::Lda), Q),
+        "LDQU" => (e(Evax::Ldqu), Q),
+        "STQU" => (e(Evax::Stqu), Q),
+        "LDLL" => (e(Evax::Ldl), L),
+        "LDQL" => (e(Evax::Ldl), Q),
+        "STLC" => (e(Evax::Stc), L),
+        "STQC" => (e(Evax::Stc), Q),
+        "ADDQ" => alu("add"),
+        "SUBQ" => alu("sub"),
+        "MULQ" => alu("mul"),
+        "UMULH" => alu("umulh"),
+        "AND" => alu("and"),
+        "OR" => alu("orr"),
+        "XOR" => alu("eor"),
+        "BIC" => alu("bic"),
+        "ORNOT" => alu("orn"),
+        "EQV" => alu("eon"),
+        "SLL" => alu("lsl"),
+        "SRL" => alu("lsr"),
+        "SRA" => alu("asr"),
+        "ZAP" => (e(Evax::Zap(false)), Q),
+        "ZAPNOT" => (e(Evax::Zap(true)), Q),
+        "CMPEQ" => (e(Evax::Cmp("eq")), Q),
+        "CMPLT" => (e(Evax::Cmp("lt")), Q),
+        "CMPLE" => (e(Evax::Cmp("le")), Q),
+        "CMPULT" => (e(Evax::Cmp("lo")), Q),
+        "CMPULE" => (e(Evax::Cmp("ls")), Q),
+        "BEQ" => (e(Evax::Branch("eq")), Q),
+        "BLT" => (e(Evax::Branch("lt")), Q),
+        "BNE" => (e(Evax::Branch("ne")), Q),
+        "CMOVEQ" => (e(Evax::Cmov("eq")), Q),
+        "CMOVNE" => (e(Evax::Cmov("ne")), Q),
+        "CMOVLT" => (e(Evax::Cmov("lt")), Q),
+        "CMOVLE" => (e(Evax::Cmov("le")), Q),
+        "CMOVGT" => (e(Evax::Cmov("gt")), Q),
+        "CMOVGE" => (e(Evax::Cmov("ge")), Q),
+        "CMOVLBC" => (e(Evax::Cmov("lbc")), Q),
+        "CMOVLBS" => (e(Evax::Cmov("lbs")), Q),
+        "MB" => (e(Evax::Mb), Q),
+        _ => {
+            // The processor registers the PAL has (DESIGN-0001).
+            let calls: &[(&str, u32, u32)] = &[
+                ("IPL", MTPR_IPL, MFPR_IPL),
+                ("SCBB", MTPR_SCBB, MFPR_SCBB),
+                ("SIRR", MTPR_SIRR, 0),
+                ("SISR", 0, MFPR_SISR),
+                ("PCBB", 0, MFPR_PCBB),
+                ("TXDB", MTPR_TXDB, 0),
+                ("RXCS", MTPR_RXCS, MFPR_RXCS),
+                ("RXDB", 0, MFPR_RXDB),
+                ("DOORBELL", MTPR_DOORBELL, 0),
+            ];
+            let find = |pr: &str, to: bool| {
+                calls
+                    .iter()
+                    .find(|c| c.0 == pr)
+                    .map(|c| if to { c.1 } else { c.2 })
+                    .filter(|&code| code != 0)
+            };
+            match (name.strip_prefix("MTPR_"), name.strip_prefix("MFPR_")) {
+                (Some(pr), _) if find(pr, true).is_some() => (e(Evax::Mtpr(find(pr, true)?)), Q),
+                (_, Some(pr)) if find(pr, false).is_some() => (e(Evax::Mfpr(find(pr, false)?)), Q),
+                _ => (e(Evax::Unsupported), Q),
+            }
+        }
+    })
 }
 
 /// A VAX mnemonic's operation and operand size, if it is one vmacro knows.
@@ -139,6 +275,8 @@ pub fn kind(mn: &str) -> Option<(Op, Size)> {
         "REMQUE" => (Op::Remque, B),
         "BNEQ" | "BNEQU" | "BEQL" | "BEQLU" | "BGTR" | "BLEQ" | "BGEQ" | "BLSS" | "BGTRU"
         | "BLEQU" | "BVC" | "BVS" | "BCC" | "BCS" | "BGEQU" | "BLSSU" => (Op::Bcc, L),
+        "EVAX_CALLG_64" => (Op::Callg64, Q),
+        _ if mn.starts_with("EVAX_") => return evax(mn),
         _ => return sized(mn),
     };
     Some(fixed)
@@ -208,8 +346,81 @@ pub fn arity(op: Op) -> usize {
         Op::Bb(..) => 3,
         Op::Acb | Op::Emul | Op::Ediv | Op::Ext(_) | Op::Insv => 4,
         Op::Movc5 => 5,
+        Op::Evax(Evax::Mb | Evax::Mfpr(_) | Evax::Unsupported) => 0,
+        Op::Evax(Evax::Mtpr(_)) => 1,
+        Op::Evax(Evax::Alu(_) | Evax::Zap(_) | Evax::Cmp(_) | Evax::Cmov(_)) => 3,
         _ => 2,
     }
+}
+
+/// A call's `n` arguments, from the longwords pushed at VAX SP, where
+/// DESIGN-0004 puts them, sign-extended: the first eight in x0-x7, the
+/// rest on the stack, which `sp` points to, below VAX SP rounded down to
+/// 16. x13 is left alone.
+fn args(g: &mut Gen, n: usize) {
+    let stack = n.saturating_sub(8);
+    if stack == 0 {
+        g.emit(format!("and sp, x{SP}, #0xfffffffffffffff0"));
+    } else {
+        g.emit(format!("and x16, x{SP}, #0xfffffffffffffff0"));
+        g.emit(format!(
+            "sub sp, x16, #{}",
+            (8 * stack).next_multiple_of(16)
+        ));
+        g.emit(format!("add x16, x{SP}, #32"));
+        g.emit("mov x17, sp");
+        g.emit(format!("mov x15, #{stack}"));
+        let again = g.label();
+        g.place_label(&again);
+        g.emit("ldrsw x14, [x16], #4");
+        g.emit("str x14, [x17], #8");
+        g.emit("subs x15, x15, #1");
+        g.emit(format!("b.ne {again}"));
+    }
+    for i in (0..n.min(8)).step_by(2) {
+        if i + 1 < n {
+            g.emit(format!("ldpsw x{i}, x{}, [x{SP}, #{}]", i + 1, 4 * i));
+        } else {
+            g.emit(format!("ldrsw x{i}, [x{SP}, #{}]", 4 * i));
+        }
+    }
+}
+
+/// The same, for x9 arguments from the list at x8, longwords or with
+/// `quad` quadwords, known when it runs: those past the eighth copied,
+/// then a branch into the loads of x7 down to x0 that loads just the ones
+/// there are, so that it reads no further than the list. x13 is left alone.
+fn list_args(g: &mut Gen, quad: bool) {
+    let (n, load) = if quad { (8, "ldr") } else { (4, "ldrsw") };
+    let (regs, low, done) = (g.label(), g.label(), g.label());
+    g.emit(format!("and x16, x{SP}, #0xfffffffffffffff0"));
+    g.emit("subs x15, x9, #8");
+    g.emit(format!("b.ls {low}"));
+    g.emit("add x14, x15, #1");
+    g.emit("and x14, x14, #0xfffffffffffffffe");
+    g.emit("sub sp, x16, x14, lsl #3");
+    g.emit(format!("add x16, x8, #{}", 8 * n));
+    g.emit("mov x17, sp");
+    let again = g.label();
+    g.place_label(&again);
+    g.emit(format!("{load} x14, [x16], #{n}"));
+    g.emit("str x14, [x17], #8");
+    g.emit("subs x15, x15, #1");
+    g.emit(format!("b.ne {again}"));
+    g.emit(format!("b {regs}"));
+    g.place_label(&low);
+    g.emit("mov sp, x16");
+    g.place_label(&regs);
+    g.emit("mov x15, #8");
+    g.emit("cmp x9, x15");
+    g.emit("csel x15, x9, x15, lo");
+    g.emit(format!("adr x16, {done}"));
+    g.emit("sub x16, x16, x15, lsl #2");
+    g.emit("br x16");
+    for i in (0..8).rev() {
+        g.emit(format!("{load} x{i}, [x8, #{}]", n * i));
+    }
+    g.place_label(&done);
 }
 
 /// A result's flags for a branch: N and Z from its sign and zero, V and C
@@ -274,7 +485,7 @@ pub fn compile(
     size: Size,
     ops: &[Opnd],
     flags: &Flags,
-    saved: Option<&[u8]>,
+    exit: &crate::Exit,
 ) -> Result<Option<Flags>> {
     let live = |borrow| Ok(Some(Flags::Live { borrow }));
     match op {
@@ -282,8 +493,16 @@ pub fn compile(
             if let (Opnd::Imm(e), Opnd::Reg(n)) = (&ops[0], &ops[1])
                 && size == Size::L
             {
+                // Sign-extended, as a register holds a longword.
+                g.wrote(*n);
                 let r = arm(*n)?;
-                g.imm_into(&format!("x{r}"), e, size)?;
+                match g.constant(e) {
+                    Some(v) => g.imm_into(&format!("x{r}"), &(v as i32).to_string(), Size::Q)?,
+                    None => {
+                        g.imm_into(&format!("x{r}"), e, size)?;
+                        g.sext(r);
+                    }
+                }
                 return Ok(Some(test(&format!("w{r}"), size)));
             }
             let v = g.read(&ops[0], size, Ext::Any)?;
@@ -336,8 +555,14 @@ pub fn compile(
             if op == Op::Pusha {
                 g.push(&a)?;
             } else if let Opnd::Reg(n) = ops[1] {
-                // The whole address: the register may be a base later.
-                g.emit(format!("mov x{}, {a}", arm(n)?));
+                // Computed in longwords, as AMACRO does by default, or all
+                // 64 bits with .ENABLE QUADWORD.
+                g.wrote(n);
+                if g.quadword {
+                    g.emit(format!("mov x{}, {}", arm(n)?, x(&a)));
+                } else {
+                    g.emit(format!("sxtw x{}, {}", arm(n)?, w(&a)));
+                }
             } else {
                 let p = g.place(&ops[1], Size::L)?;
                 g.store(&p, Size::L, &a)?;
@@ -469,66 +694,97 @@ pub fn compile(
             Ok(None)
         }
         Op::Jsb => {
-            // As on the VAX, the return address goes on the stack.
-            let back = g.label();
-            let a = match &ops[0] {
-                Opnd::Mem(Mode::Rel(e), None) => format!("b {e}"),
-                o => format!("br {}", g.address(o, size)?),
+            // A native call, as AMACRO made it: the return address is in
+            // x30, not on the VAX stack.
+            let call = match &ops[0] {
+                Opnd::Mem(Mode::Rel(e), None) => format!("bl {e}"),
+                o => format!("blr {}", g.address(o, size)?),
             };
-            let t = g.tmp()?;
-            g.emit(format!("adr {t}, {back}"));
-            g.emit(format!("str {t}, [x28, #-8]!"));
-            g.emit(a);
-            g.place_label(&back);
+            g.emit(format!("and sp, x{SP}, #0xfffffffffffffff0"));
+            g.emit(call);
             live(true)
         }
         Op::Rsb => {
-            let t = g.tmp()?;
-            g.emit(format!("ldr {t}, [x28], #8"));
-            g.emit(format!("br {t}"));
+            match exit {
+                crate::Exit::Jsb(saved, lr) => g.out.extend(crate::jsb_epilogue(saved, *lr)),
+                crate::Exit::Call(_) | crate::Exit::Frameless => {
+                    return Err("RSB in a CALL routine".into());
+                }
+                crate::Exit::None => {}
+            }
+            g.emit("ret");
             Ok(None)
         }
-        Op::Calls | Op::Callg => {
+        Op::Calls | Op::Callg | Op::Callg64 => {
+            // x8 and x13 carry the list and the target past the operands.
+            g.reserve(8);
+            g.reserve(13);
             let calls = op == Op::Calls;
-            let (n, arg) = if calls {
-                let n = match &ops[0] {
-                    Opnd::Imm(e) => g.constant(e),
-                    _ => None,
-                };
-                (n, g.read(&ops[0], Size::L, Ext::Any)?)
-            } else {
-                (None, g.address(&ops[0], Size::B)?)
+            let n = match &ops[0] {
+                Opnd::Imm(e) if calls => g.constant(e).filter(|n| (0..=255).contains(n)),
+                _ => None,
+            };
+            // A QUAD_ARGS routine's own list is of quadwords.
+            let quad = op == Op::Callg64
+                || (g.quad_ap && matches!(ops[0], Opnd::Mem(Mode::Def(12), None)));
+            let (count, list) = match n {
+                Some(_) => (None, None),
+                None if calls => (Some(g.read(&ops[0], Size::L, Ext::Any)?), None),
+                None => (None, Some(g.address(&ops[0], Size::B)?)),
             };
             let call = match &ops[1] {
                 Opnd::Mem(Mode::Rel(e), None) => format!("bl {e}"),
-                o => format!("blr {}", g.address(o, Size::B)?),
-            };
-            if calls {
-                g.emit(format!("str {arg}, [x28, #-4]!"));
-                g.emit("mov x13, x28");
-            } else {
-                g.emit(format!("mov x13, {arg}"));
-            }
-            // The callee's frame goes below the argument list, 16-byte aligned.
-            g.emit("and sp, x28, #0xfffffffffffffff0");
-            g.emit(call);
-            if calls {
-                match n {
-                    Some(n) if (0..=255).contains(&n) => {
-                        g.emit(format!("add x28, x28, #{}", 4 * (n + 1)));
+                o => {
+                    let t = g.address(o, Size::B)?;
+                    if t != "x13" {
+                        g.emit(format!("mov x13, {t}"));
                     }
-                    _ => {
-                        let t = g.tmp()?;
-                        g.emit(format!("ldr {}, [x28], #4", w(&t)));
-                        g.emit(format!("add x28, x28, {t}, lsl #2"));
-                    }
+                    "blr x13".into()
                 }
+            };
+            match (n, count, list) {
+                (Some(n), ..) => {
+                    args(g, n as usize);
+                    if n > 0 {
+                        g.emit(format!("add x{SP}, x{SP}, #{}", 4 * n));
+                    }
+                    g.emit(format!("mov x9, #{n}"));
+                }
+                (None, Some(count), _) => {
+                    g.emit(format!("and x9, {}, #255", x(&count)));
+                    g.emit(format!("mov x8, x{SP}"));
+                    list_args(g, false);
+                    g.emit(format!("add x{SP}, x{SP}, x9, lsl #2"));
+                }
+                (None, None, Some(list)) => {
+                    // A list at 0, which a VAX callee that doesn't read AP
+                    // never noticed, passes no arguments.
+                    if list != "x8" {
+                        g.emit(format!("mov x8, {list}"));
+                    }
+                    let none = g.label();
+                    g.emit("mov x9, #0");
+                    g.emit(format!("cbz x8, {none}"));
+                    if quad {
+                        g.emit("ldr x9, [x8], #8");
+                    } else {
+                        g.emit("ldr w9, [x8], #4");
+                    }
+                    g.emit("and x9, x9, #255");
+                    g.place_label(&none);
+                    list_args(g, quad);
+                }
+                _ => unreachable!(),
             }
+            g.emit(call);
             live(true)
         }
         Op::Ret => {
-            let saved = saved.ok_or("RET outside a .ENTRY routine")?;
-            g.out.extend(crate::epilogue(saved));
+            match exit {
+                crate::Exit::Call(frame) => g.out.extend(crate::epilogue(frame)),
+                crate::Exit::Frameless => g.emit("ret"),
+                _ => return Err("RET outside a CALL routine (.CALL_ENTRY or .ENTRY)".into()),
+            }
             Ok(None)
         }
         Op::Pushr | Op::Popr => {
@@ -544,11 +800,12 @@ pub fn compile(
             }
             if op == Op::Pushr {
                 for r in regs.iter().rev() {
-                    g.emit(format!("str w{}, [x28, #-4]!", arm(*r)?));
+                    g.emit(format!("str w{}, [x{SP}, #-4]!", arm(*r)?));
                 }
             } else {
                 for r in &regs {
-                    g.emit(format!("ldr w{}, [x28], #4", arm(*r)?));
+                    g.wrote(*r);
+                    g.emit(format!("ldrsw x{}, [x{SP}], #4", arm(*r)?));
                 }
             }
             Ok(None)
@@ -722,6 +979,7 @@ pub fn compile(
             Ok(Some(test(&q, Size::L)))
         }
         Op::Movc3 => {
+            (0..6).for_each(|r| g.wrote(r));
             let len = g.read(&ops[0], Size::W, Ext::Zext)?;
             let len = copy(g, &x(&len))?;
             let src = g.address(&ops[1], size)?;
@@ -730,33 +988,34 @@ pub fn compile(
             let dst = copy(g, &dst)?;
             let (fwd, back, back_loop, done) = (g.label(), g.label(), g.label(), g.label());
             g.emit(format!("add x1, {src}, {len}"));
-            g.emit(format!("add x3, {dst}, {len}"));
+            g.emit(format!("add x20, {dst}, {len}"));
             g.emit(format!("mov x0, {len}"));
             g.emit(format!("cmp {dst}, {src}"));
             g.emit(format!("b.hi {back}"));
             g.place_label(&fwd);
             g.emit(format!("cbz x0, {done}"));
-            g.emit(format!("ldrb w5, [{src}], #1"));
-            g.emit(format!("strb w5, [{dst}], #1"));
+            g.emit(format!("ldrb w22, [{src}], #1"));
+            g.emit(format!("strb w22, [{dst}], #1"));
             g.emit("sub x0, x0, #1");
             g.emit(format!("b {fwd}"));
             // The destination overlaps the end of the source: copy backwards.
             g.place_label(&back);
-            g.emit("mov x2, x1");
-            g.emit("mov x4, x3");
+            g.emit("mov x19, x1");
+            g.emit("mov x21, x20");
             g.place_label(&back_loop);
             g.emit(format!("cbz x0, {done}"));
-            g.emit("ldrb w5, [x2, #-1]!");
-            g.emit("strb w5, [x4, #-1]!");
+            g.emit("ldrb w22, [x19, #-1]!");
+            g.emit("strb w22, [x21, #-1]!");
             g.emit("sub x0, x0, #1");
             g.emit(format!("b {back_loop}"));
             g.place_label(&done);
             for r in [2, 4, 5] {
-                g.emit(format!("mov w{r}, wzr"));
+                g.emit(format!("mov x{}, xzr", arm(r)?));
             }
             Ok(Some(test("wzr", Size::L)))
         }
         Op::Movc5 => {
+            (0..6).for_each(|r| g.wrote(r));
             let srclen = g.read(&ops[0], Size::W, Ext::Zext)?;
             let srclen = copy(g, &x(&srclen))?;
             let src = g.address(&ops[1], size)?;
@@ -770,24 +1029,24 @@ pub fn compile(
             let (copying, filling, done) = (g.label(), g.label(), g.label());
             // ponytail: copies forwards only; MOVC3 handles overlap.
             g.emit(format!("cmp {srclen}, {dstlen}"));
-            g.emit(format!("csel x2, {srclen}, {dstlen}, lo"));
-            g.emit(format!("sub x0, {srclen}, x2"));
-            g.emit(format!("add x1, {src}, x2"));
-            g.emit(format!("add x3, {dst}, {dstlen}"));
-            g.emit(format!("sub x4, {dstlen}, x2"));
+            g.emit(format!("csel x19, {srclen}, {dstlen}, lo"));
+            g.emit(format!("sub x0, {srclen}, x19"));
+            g.emit(format!("add x1, {src}, x19"));
+            g.emit(format!("add x20, {dst}, {dstlen}"));
+            g.emit(format!("sub x21, {dstlen}, x19"));
             g.place_label(&copying);
-            g.emit(format!("cbz x2, {filling}"));
-            g.emit(format!("ldrb w5, [{src}], #1"));
-            g.emit(format!("strb w5, [{dst}], #1"));
-            g.emit("sub x2, x2, #1");
+            g.emit(format!("cbz x19, {filling}"));
+            g.emit(format!("ldrb w22, [{src}], #1"));
+            g.emit(format!("strb w22, [{dst}], #1"));
+            g.emit("sub x19, x19, #1");
             g.emit(format!("b {copying}"));
             g.place_label(&filling);
-            g.emit(format!("cbz x4, {done}"));
+            g.emit(format!("cbz x21, {done}"));
             g.emit(format!("strb {fill}, [{dst}], #1"));
-            g.emit("sub x4, x4, #1");
+            g.emit("sub x21, x21, #1");
             g.emit(format!("b {filling}"));
             g.place_label(&done);
-            g.emit("mov w5, wzr");
+            g.emit("mov x22, xzr");
             g.emit(format!("cmp {srclen}, {dstlen}"));
             live(true)
         }
@@ -843,6 +1102,8 @@ pub fn compile(
                         return Err("the field must be in the register".into());
                     }
                     g.emit(format!("bfi w{}, {v}, #{p}, #{s}", arm(*n)?));
+                    g.sext(arm(*n)?);
+                    g.wrote(*n);
                 }
                 (Opnd::Reg(n), Err(p)) => {
                     // Rotate the field down to bit 0, insert, rotate back.
@@ -852,6 +1113,8 @@ pub fn compile(
                     let t = w(&g.tmp()?);
                     g.emit(format!("neg {t}, {p}"));
                     g.emit(format!("ror w{r}, w{r}, {t}"));
+                    g.sext(r);
+                    g.wrote(*n);
                 }
                 (base, pos) => {
                     // ponytail: reads and writes 8 bytes around the field,
@@ -904,6 +1167,10 @@ pub fn compile(
                         Some(true) => g.emit(format!("orr w{r}, w{r}, {mask}")),
                         Some(false) => g.emit(format!("bic w{r}, w{r}, {mask}")),
                         None => {}
+                    }
+                    if change.is_some() {
+                        g.sext(r);
+                        g.wrote(*n);
                     }
                     g.emit(branch(format!("{old}, #0")));
                 }
@@ -967,46 +1234,48 @@ pub fn compile(
             g.emit("svc #0");
             Ok(None)
         }
-        Op::Chm(code) => {
-            // The code goes in R0, as on Alpha, and the service's status
-            // comes back there: R0 isn't kept.
-            let v = g.read(&ops[0], size, Ext::Sext)?;
-            let r7 = g.tmp()?;
-            g.emit(format!("mov {r7}, x7"));
-            g.emit(format!("mov w0, {v}"));
-            g.emit(format!("mov x7, #{code}"));
+        Op::Chm(pal) => {
+            // The code goes in x7's bits 31:16, with the PAL call, so that
+            // the arguments in x0-x6 reach the handler (DESIGN-0004). The
+            // service's status comes back in R0, R1 too: neither is kept.
+            match &ops[0] {
+                Opnd::Imm(e) if g.constant(e).is_some() => {
+                    let n = g.constant(e).unwrap() & 0xffff;
+                    g.imm_into("x7", &(n << 16 | i64::from(pal)).to_string(), Size::L)?;
+                }
+                o => {
+                    let v = g.read(o, size, Ext::Any)?;
+                    g.emit(format!("mov x7, #{pal}"));
+                    g.emit(format!("bfi x7, {}, #16, #16", x(&v)));
+                }
+            }
             g.emit("svc #0");
-            g.emit(format!("mov x7, {r7}"));
             Ok(Some(test("w0", Size::L)))
         }
         Op::Probe(write) => {
             // PROBEx mode, len, base: a0 = base, a1 = len, a2 = mode, as
             // Alpha's PROBER and PROBEW take them; v0 = 1 if the mode may
             // read (write) the first and last byte. Each operand is copied
-            // first; once it is in its argument register, its scratch
-            // register keeps R1 or R2. Z is set if it may not, as on the VAX.
+            // first, since x0 and x1 are R0 and R1, which come back. Z is
+            // set if it may not, as on the VAX.
             let mode = g.read(&ops[0], Size::B, Ext::Zext)?;
             let mode = copy(g, &mode)?;
             let len = g.read(&ops[1], Size::W, Ext::Zext)?;
             let len = copy(g, &len)?;
             let base = g.address(&ops[2], Size::B)?;
             let base = copy(g, &base)?;
-            let (r0, r7) = (g.tmp()?, g.tmp()?);
+            let (r0, r1) = (g.tmp()?, g.tmp()?);
             let code = if write { PROBEW } else { PROBER };
             for line in [
                 format!("mov {r0}, x0"),
-                format!("mov {r7}, x7"),
+                format!("mov {r1}, x1"),
                 format!("mov x0, {base}"),
-                format!("mov {base}, x1"),
                 format!("mov x1, {len}"),
-                format!("mov {len}, x2"),
                 format!("mov x2, {mode}"),
                 format!("mov x7, #{code}"),
                 "svc #0".into(),
                 format!("mov {mode}, x0"),
-                format!("mov x2, {len}"),
-                format!("mov x1, {base}"),
-                format!("mov x7, {r7}"),
+                format!("mov x1, {r1}"),
                 format!("mov x0, {r0}"),
             ] {
                 g.emit(line);
@@ -1021,13 +1290,44 @@ pub fn compile(
             let code = code
                 .filter(|c| (0..=0xBF).contains(c))
                 .ok_or("CALL_PAL needs a function code from 0 to ^XBF, #n")?;
-            let r7 = g.tmp()?;
-            g.emit(format!("mov {r7}, x7"));
+            // Alpha's arguments a0-a5 are R0-R5, in x0-x5 for the PAL.
+            for r in 2..6 {
+                g.emit(format!("mov x{r}, x{}", arm(r)?));
+            }
             g.emit(format!("mov x7, #{code}"));
             g.emit("svc #0");
-            g.emit(format!("mov x7, {r7}"));
             Ok(Some(test("w0", Size::L)))
         }
+        Op::Ldq | Op::Stq => {
+            let Opnd::Reg(n) = ops[0] else {
+                return Err(format!("{mn}'s first operand is a register"));
+            };
+            let r = format!("x{}", arm(n)?);
+            if op == Op::Ldq {
+                g.wrote(n);
+            }
+            match (op, &ops[1]) {
+                (Op::Ldq, Opnd::Reg(m)) => g.emit(format!("mov {r}, x{}", arm(*m)?)),
+                (Op::Ldq, Opnd::Imm(e)) => literal(g, &r, e)?,
+                (Op::Ldq, o) => {
+                    let Place::Mem(base, disp) = g.place(o, size)? else {
+                        unreachable!("a register or an immediate");
+                    };
+                    let m = g.at(&base, disp, size)?;
+                    g.emit(format!("ldr {r}, {m}"));
+                }
+                (_, Opnd::Reg(m)) => {
+                    g.wrote(*m);
+                    g.emit(format!("mov x{}, {r}", arm(*m)?));
+                }
+                (_, o) => {
+                    let p = g.place(o, size)?;
+                    g.store(&p, size, &r)?;
+                }
+            }
+            Ok(None)
+        }
+        Op::Evax(e) => builtin(g, e, size, ops),
         Op::Insque => {
             // Links are longwords: the queue must be below 4 GB.
             let e = g.address(&ops[0], size)?;
@@ -1112,29 +1412,278 @@ fn ipr(g: &mut Gen, op: &Opnd) -> Result<(Option<u32>, Option<u32>)> {
 }
 
 /// A PAL call: `svc #0` with the function code in x7, the argument and the
-/// result in x0 (docs/design/0001-pal-interface.md). x0 and x7 are VAX R0
-/// and R7, so they wait in scratch registers. Returns the result's register.
+/// result in x0 (docs/design/0001-pal-interface.md). x0 is VAX R0, so it
+/// waits in a scratch register. Returns the result's register.
 fn pal(g: &mut Gen, code: u32, arg: Option<&str>) -> Result<String> {
-    let (r0, r7, v) = (g.tmp()?, g.tmp()?, g.tmp()?);
+    let (r0, v) = (g.tmp()?, g.tmp()?);
     g.emit(format!("mov {r0}, x0"));
-    g.emit(format!("mov {r7}, x7"));
     if let Some(a) = arg {
         g.emit(format!("mov w0, {}", w(a)));
     }
     g.emit(format!("mov x7, #{code}"));
     g.emit("svc #0");
     g.emit(format!("mov {v}, x0"));
-    g.emit(format!("mov x7, {r7}"));
     g.emit(format!("mov x0, {r0}"));
     Ok(v)
 }
 
+/// A built-in's code. The condition codes are unpredictable after one, as
+/// on Alpha, which has none.
+fn builtin(g: &mut Gen, e: Evax, size: Size, ops: &[Opnd]) -> Result<Option<Flags>> {
+    let reg = |op: &Opnd| match op {
+        Opnd::Reg(n) => Ok(*n),
+        _ => Err("a load or store built-in's first operand is a register".to_string()),
+    };
+    match e {
+        Evax::Sext => {
+            let t = g.tmp()?;
+            let (sx, ld) = match size {
+                Size::B => ("sxtb", "ldrsb"),
+                Size::W => ("sxth", "ldrsh"),
+                _ => ("sxtw", "ldrsw"),
+            };
+            match &ops[0] {
+                Opnd::Reg(n) => g.emit(format!("{sx} {t}, w{}", arm(*n)?)),
+                Opnd::Imm(c) => {
+                    literal(g, &t, c)?;
+                    g.emit(format!("{sx} {t}, {}", w(&t)));
+                }
+                o => {
+                    // A quadword operand, its low part at its address.
+                    let Place::Mem(base, disp) = g.place(o, Size::Q)? else {
+                        unreachable!("in memory");
+                    };
+                    let m = g.at(&base, disp, size)?;
+                    g.emit(format!("{ld} {t}, {m}"));
+                }
+            }
+            // A register gets all 64 bits, memory the size's.
+            match &ops[1] {
+                Opnd::Mem(..) => {
+                    let p = g.place(&ops[1], size)?;
+                    g.store(&p, size, &t)?;
+                }
+                o => q_write(g, o, &t)?,
+            }
+        }
+        Evax::Ldu | Evax::St => {
+            let n = reg(&ops[0])?;
+            let r = arm(n)?;
+            let v = g.whole(n)?;
+            let m = mem(g, &ops[1], size)?;
+            let sz = if size == Size::B { "b" } else { "h" };
+            if e == Evax::Ldu {
+                g.wrote(n);
+                g.emit(format!("ldr{sz} w{r}, {m}"));
+            } else {
+                g.emit(format!("str{sz} {}, {m}", w(&v)));
+            }
+        }
+        Evax::Lda => {
+            let n = reg(&ops[0])?;
+            let a = g.address(&ops[1], size)?;
+            g.wrote(n);
+            g.emit(format!("mov x{}, {a}", arm(n)?));
+        }
+        Evax::Ldqu | Evax::Stqu | Evax::Ldl | Evax::Stc => {
+            let n = reg(&ops[0])?;
+            let r = arm(n)?;
+            let old = g.whole(n)?;
+            let a = g.address(&ops[1], size)?;
+            let t = g.reuse(&a)?;
+            let v = if size == Size::L {
+                w(&old)
+            } else {
+                old.clone()
+            };
+            match e {
+                Evax::Ldqu => {
+                    g.emit(format!("and {t}, {a}, #0xfffffffffffffff8"));
+                    g.emit(format!("ldr x{r}, [{t}]"));
+                }
+                Evax::Stqu => {
+                    g.emit(format!("and {t}, {a}, #0xfffffffffffffff8"));
+                    g.emit(format!("str {old}, [{t}]"));
+                }
+                Evax::Ldl => {
+                    let v = if size == Size::L {
+                        format!("w{r}")
+                    } else {
+                        format!("x{r}")
+                    };
+                    g.emit(format!("ldxr {v}, [{a}]"));
+                    if size == Size::L {
+                        g.sext(r);
+                    }
+                }
+                _ => {
+                    let s = w(&g.tmp()?);
+                    g.emit(format!("stxr {s}, {v}, [{a}]"));
+                    g.emit(format!("cmp {s}, #0"));
+                    g.emit(format!("cset x{r}, eq"));
+                }
+            }
+            if matches!(e, Evax::Ldqu | Evax::Ldl | Evax::Stc) {
+                g.wrote(n);
+            }
+        }
+        Evax::Alu(i) => {
+            let a = q_read(g, &ops[0])?;
+            let b = q_read(g, &ops[1])?;
+            let t = g.tmp()?;
+            g.emit(format!("{i} {t}, {a}, {b}"));
+            q_write(g, &ops[2], &t)?;
+        }
+        Evax::Zap(keep) => {
+            let a = q_read(g, &ops[0])?;
+            let bytes = g.tmp()?;
+            match &ops[1] {
+                Opnd::Imm(c) if g.constant(c).is_some() => {
+                    let m = g.constant(c).unwrap();
+                    let v = (0..8)
+                        .filter(|i| m >> i & 1 != 0)
+                        .fold(0u64, |v, i| v | 0xff << (8 * i));
+                    g.imm_into(&bytes, &(v as i64).to_string(), Size::Q)?;
+                }
+                o => {
+                    let m = q_read(g, o)?;
+                    g.emit(format!("mov {bytes}, #0"));
+                    for i in 0..8 {
+                        let skip = g.label();
+                        g.emit(format!("tbz {m}, #{i}, {skip}"));
+                        g.emit(format!("orr {bytes}, {bytes}, #{:#x}", 0xffu64 << (8 * i)));
+                        g.place_label(&skip);
+                    }
+                }
+            }
+            let t = g.tmp()?;
+            let op = if keep { "and" } else { "bic" };
+            g.emit(format!("{op} {t}, {a}, {bytes}"));
+            q_write(g, &ops[2], &t)?;
+        }
+        Evax::Cmp(cond) => {
+            let a = q_read(g, &ops[0])?;
+            let b = q_read(g, &ops[1])?;
+            let t = g.tmp()?;
+            g.emit(format!("cmp {a}, {b}"));
+            g.emit(format!("cset {t}, {cond}"));
+            q_write(g, &ops[2], &t)?;
+        }
+        Evax::Branch(cond) => {
+            let v = q_read(g, &ops[0])?;
+            let to = target(&ops[1])?;
+            g.emit(match cond {
+                "eq" => format!("cbz {v}, {to}"),
+                "ne" => format!("cbnz {v}, {to}"),
+                _ => format!("tbnz {v}, #63, {to}"),
+            });
+            return Ok(None);
+        }
+        Evax::Cmov(cond) => {
+            let a = q_read(g, &ops[0])?;
+            let b = q_read(g, &ops[1])?;
+            let cond = match cond {
+                "lbc" | "lbs" => {
+                    g.emit(format!("tst {a}, #1"));
+                    if cond == "lbc" { "eq" } else { "ne" }
+                }
+                c => {
+                    g.emit(format!("cmp {a}, #0"));
+                    c
+                }
+            };
+            match &ops[2] {
+                Opnd::Reg(n) => {
+                    g.wrote(*n);
+                    let r = arm(*n)?;
+                    g.emit(format!("csel x{r}, {b}, x{r}, {cond}"));
+                }
+                Opnd::Imm(_) => return Err("a literal can't be written".into()),
+                o => {
+                    let m = mem(g, o, Size::Q)?;
+                    let t = g.tmp()?;
+                    g.emit(format!("ldr {t}, {m}"));
+                    g.emit(format!("csel {t}, {b}, {t}, {cond}"));
+                    g.emit(format!("str {t}, {m}"));
+                }
+            }
+        }
+        Evax::Mb => g.emit("dmb sy"),
+        Evax::Mtpr(code) | Evax::Mfpr(code) => {
+            if let Evax::Mtpr(_) = e {
+                let v = q_read(g, &ops[0])?;
+                if v != "x0" {
+                    g.emit(format!("mov x0, {v}"));
+                }
+            }
+            g.wrote(0);
+            g.emit(format!("mov x7, #{code}"));
+            g.emit("svc #0");
+        }
+        Evax::Unsupported => unreachable!("refused before"),
+    }
+    Ok(Some(Flags::Live { borrow: false }))
+}
+
+/// The memory operand `op` addresses, as `[base, #disp]` for an access of
+/// `size`.
+fn mem(g: &mut Gen, op: &Opnd, size: Size) -> Result<String> {
+    match g.place(op, size)? {
+        Place::Mem(base, disp) => g.at(&base, disp, size),
+        _ => Err("expected an operand in memory".into()),
+    }
+}
+
+/// A built-in's quadword source, in an x register: a register's 64 bits,
+/// a literal, or the quadword in memory.
+pub(crate) fn q_read(g: &mut Gen, op: &Opnd) -> Result<String> {
+    match op {
+        Opnd::Reg(n) => g.whole(*n),
+        Opnd::Imm(e) => {
+            let t = g.tmp()?;
+            literal(g, &t, e)?;
+            Ok(t)
+        }
+        o => {
+            let m = mem(g, o, Size::Q)?;
+            let t = g.tmp()?;
+            g.emit(format!("ldr {t}, {m}"));
+            Ok(t)
+        }
+    }
+}
+
+/// A literal into x register `t`: a longword, sign-extended, as AMACRO
+/// evaluates expressions, or all 64 bits in quadword mode.
+fn literal(g: &mut Gen, t: &str, e: &str) -> Result<()> {
+    if g.quadword {
+        return g.imm_into(t, e, Size::Q);
+    }
+    g.imm_into(t, e, Size::L)?;
+    g.emit(format!("sxtw {}, {}", x(t), w(t)));
+    Ok(())
+}
+
+/// Writes all 64 bits of `v` to a built-in's quadword destination.
+fn q_write(g: &mut Gen, op: &Opnd, v: &str) -> Result<()> {
+    match op {
+        Opnd::Reg(n) => {
+            g.wrote(*n);
+            g.emit(format!("mov x{}, {v}", arm(*n)?));
+            Ok(())
+        }
+        Opnd::Imm(_) => Err("a literal can't be written".into()),
+        o => {
+            let m = mem(g, o, Size::Q)?;
+            g.emit(format!("str {v}, {m}"));
+            Ok(())
+        }
+    }
+}
+
 /// `v` in a scratch register, as an x register, so that R0-R5 can change.
 fn copy(g: &mut Gen, v: &str) -> Result<String> {
-    if v[1..]
-        .parse::<u8>()
-        .is_ok_and(|n| n > 12 && n != 28 && n != 29)
-    {
+    if Gen::is_tmp(v) {
         return Ok(x(v));
     }
     let t = g.tmp()?;

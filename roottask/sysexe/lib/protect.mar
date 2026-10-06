@@ -52,7 +52,9 @@ LETTERS:                                ; what a category may do, by its bit
 ; OCTAL: R1 = a string, R2 = its length. Takes octal digits up to 177777
 ; and the character after them: R3 = their value, R0 = the character, or
 ; 0 if there is none, no digit, or too many. R1 and R2 past. Uses R5.
-OCTAL:  CLRL    R3
+OCTAL:
+        .JSB_ENTRY  OUTPUT=<R2, R3>, SCRATCH=<R5>
+        CLRL    R3
         MOVL    R2, R5
 10$:    TSTL    R2
         BEQL    80$
@@ -134,7 +136,9 @@ OCTAL:  CLRL    R3
 ; GETVAL: AP = GET_UIC's or GET_PROT's arguments. The entity's next value
 ; into VALBUF, its length in VALUE. R0 = CLI$GET_VALUE's status. Uses R0
 ; and R1.
-GETVAL: MOVW    #64, VALUE
+GETVAL:
+        .JSB_ENTRY
+        MOVW    #64, VALUE
         PUSHAW  VALUE
         PUSHAQ  VALUE
         PUSHL   4(AP)

@@ -670,6 +670,9 @@ impl Asm<'_> {
         let here = self.here();
         self.define(name, here, col, true)?;
         self.symbol(name).global |= global;
+        if let Some(d) = self.dialect.as_deref_mut() {
+            d.label(name, global);
+        }
         let psect = self.current();
         self.fresh.push((psect, name.to_string()));
         if !local {
@@ -1022,6 +1025,12 @@ impl Asm<'_> {
                 p.align = p.align.max(align);
                 let pad = p.size.next_multiple_of(1 << align) - p.size;
                 self.item(Item::Space, pad);
+            }
+            ".WARN" | ".ERROR" => {
+                // MACRO's warning or error: the text after the directive.
+                let msg = c.rest().trim().to_string();
+                c.at = c.line.len();
+                self.diagnose(lex::Error { col, msg }, name == ".WARN");
             }
             ".END" => {
                 if !c.at_end() {

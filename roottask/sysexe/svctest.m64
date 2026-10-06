@@ -1,0 +1,35 @@
+        .TITLE  SVCTEST_ARM ARM64 code SVCTEST calls, as BLISS-64 would build it
+        .IDENT  /V0.1/
+;
+; A 64-bit caller may pass an address above 4 GB, which MACRO-32 can't:
+; CALLS sign-extends each longword it passes.
+;
+        .LIBRARY "call.mlb"
+        .LIBRARY "starlet.mlb"
+        $IODEF
+        .EXTERNAL SYS$QIOW
+
+        .PSECT  $CODE$
+; WIDEQIOW chan: $QIOW on chan writing a byte at 1.00000000, an address
+; above 4 GB, with no event flag, IOSB or AST: by the calling standard,
+; p3-p6 0 on the stack. R0 = its status, which the service dispatcher
+; makes SS$_ARG_GTR_32_BITS: no service here takes 64-bit addresses.
+        $ROUTINE WIDEQIOW
+        mov     x1, x0                  ; chan
+        mov     x0, #0                  ; efn
+        mov     x2, #IO$_WRITEVBLK
+        mov     x3, #0                  ; iosb, astadr, astprm
+        mov     x4, #0
+        mov     x5, #0
+        movz    x6, #1, lsl #32         ; p1
+        mov     x7, #1                  ; p2
+        sub     sp, sp, #32             ; p3-p6
+        stp     xzr, xzr, [sp]
+        stp     xzr, xzr, [sp, #16]
+        adrp    x16, SYS$QIOW           ; in S0, past bl's reach
+        add     x16, x16, #:lo12:SYS$QIOW
+        mov     x9, #12
+        blr     x16
+        $RETURN
+
+        .END

@@ -1,0 +1,63 @@
+; call.mlb: the calling standard's frames for hand-written ARM64
+; (DESIGN-0004), as MACRO-64's $ROUTINE, $RETURN and $CALL were on Alpha.
+; Use it with .LIBRARY "call.mlb" and vasm -I vtools/lib. Expressions
+; avoid << and >>, so that vmacro can read it too.
+
+; $ROUTINE NAME, SAVED=n, LOCALS=bytes: starts a routine NAME:: with a
+; standard frame: the frame record, a clear condition handler at 16(FP),
+; its descriptor's address at 24(FP), then x19 up to x(18+n) saved from
+; 32(FP), and LOCALS bytes after them. The descriptor, in $CODE$_FDSC
+; next to vmacro's, says so and names the routine. $RETURN ends it.
+        .MACRO  $ROUTINE NAME, SAVED=0, LOCALS=0, ?FDSC, ?TEXT
+$$NSAVED = SAVED
+$$SIZE = ((32 + (8 * SAVED) + LOCALS + 15) / 16) * 16
+$$BITS = 0
+        .REPT   SAVED
+$$BITS = ($$BITS * 2) + 2
+        .ENDR
+        .SAVE_PSECT LOCAL_BLOCK
+        .PSECT  $CODE$_FDSC, PIC, SHR, EXE, NOWRT, QUAD
+        .ALIGN  QUAD
+FDSC:   .LONG   0, $$BITS, 32, $$SIZE
+        .QUAD   0
+        .QUAD   TEXT - FDSC
+TEXT:   .ASCIC  "NAME"
+        .RESTORE_PSECT
+        .ALIGN  LONG
+NAME::  stp     x29, x30, [sp, #-$$SIZE]!
+        adrp    x16, FDSC
+        add     x16, x16, #:lo12:FDSC
+        stp     xzr, x16, [sp, #16]
+        mov     x29, sp
+        $$SAVES stp, str
+        .ENDM   $ROUTINE
+
+; $RETURN: returns from the routine $ROUTINE started, as its descriptor
+; says: the saved registers back, then FP and the return address.
+        .MACRO  $RETURN
+        $$SAVES ldp, ldr
+        mov     sp, x29
+        ldp     x29, x30, [sp], #$$SIZE
+        ret
+        .ENDM   $RETURN
+
+; $CALL TARGET, NARGS=n: calls TARGET with the n arguments in x0-x7 and
+; on the stack, setting x9 to their count, as the standard says.
+        .MACRO  $CALL   TARGET, NARGS=0
+        mov     x9, #NARGS
+        bl      TARGET
+        .ENDM   $CALL
+
+; $$SAVES PAIR, ONE: stores or loads x19 up to x(18+$$NSAVED) at 32(FP).
+        .MACRO  $$SAVES PAIR, ONE
+        .IIF    GE $$NSAVED-2, PAIR x19, x20, [x29, #32]
+        .IIF    EQ $$NSAVED-1, ONE x19, [x29, #32]
+        .IIF    GE $$NSAVED-4, PAIR x21, x22, [x29, #48]
+        .IIF    EQ $$NSAVED-3, ONE x21, [x29, #48]
+        .IIF    GE $$NSAVED-6, PAIR x23, x24, [x29, #64]
+        .IIF    EQ $$NSAVED-5, ONE x23, [x29, #64]
+        .IIF    GE $$NSAVED-8, PAIR x25, x26, [x29, #80]
+        .IIF    EQ $$NSAVED-7, ONE x25, [x29, #80]
+        .IIF    GE $$NSAVED-10, PAIR x27, x28, [x29, #96]
+        .IIF    EQ $$NSAVED-9, ONE x27, [x29, #96]
+        .ENDM   $$SAVES
