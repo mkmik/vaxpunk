@@ -3,11 +3,14 @@ name: boot
 # Builds the OS with the cross toolchain and boots it in QEMU: cargo test -p
 # boot. The toolchain is a container image, .github/toolchain.Dockerfile,
 # kept on ghcr.io under the Dockerfile's hash and built only when that tag
-# is missing.
+# is missing. On main, or when run by hand, it then publishes the GitHub
+# Pages site, web/mksite.sh's: the landing page, the API reference and the
+# demo, the images just booted on QEMU compiled to WebAssembly.
 on:
   push:
     branches: [main]
   pull_request:
+  workflow_dispatch:
 
 jobs:
   toolchain:
@@ -44,8 +47,75 @@ jobs:
         with:
           submodules: true
       - run: cargo test --release -p boot
+      - if: github.event_name != 'pull_request'
+        name: Gzip the demo's firmware and disks
+        run: |
+          mkdir out/demo
+          gzip -9c out/esp.img >out/demo/esp.img.gz
+          gzip -9c out/sysdisk.img >out/demo/sysdisk.img.gz
+          for f in /usr/share/qemu/edk2-aarch64-code.fd /usr/share/qemu-efi-aarch64/QEMU_EFI.fd; do
+            if [ -f "$f" ]; then gzip -9c "$f" >out/demo/edk2-aarch64-code.fd.gz; break; fi
+          done
+          test -f out/demo/edk2-aarch64-code.fd.gz
+      - if: github.event_name != 'pull_request'
+        uses: actions/upload-artifact@v4
+        with:
+          name: demo-images
+          path: out/demo
       - if: always()
         uses: actions/upload-artifact@v4
         with:
           name: serial.log
           path: out/serial.log
+
+  # qemu-system-aarch64 for the browser takes the better part of an hour to
+  # build: it's cached under web/qemu-wasm.sh's hash, which pins its sources.
+  qemu-wasm:
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - id: cache
+        uses: actions/cache@v4
+        with:
+          path: qemu-wasm
+          key: qemu-wasm-${{ hashFiles('web/qemu-wasm.sh') }}
+      - if: steps.cache.outputs.cache-hit != 'true'
+        run: web/qemu-wasm.sh qemu-wasm
+      - uses: actions/upload-artifact@v4
+        with:
+          name: qemu-wasm
+          path: qemu-wasm
+
+  site:
+    needs: [boot, qemu-wasm]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: cargo run -p apidoc
+      - uses: actions/download-artifact@v4
+        with:
+          name: demo-images
+          path: demo-images
+      - uses: actions/download-artifact@v4
+        with:
+          name: qemu-wasm
+          path: qemu-wasm
+      - run: web/mksite.sh site qemu-wasm demo-images
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+
+  deploy:
+    needs: site
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    concurrency: pages
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

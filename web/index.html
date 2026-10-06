@@ -1,0 +1,20 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<!-- The site's landing page. The Pages workflow puts it at / next to page.css, the API reference's theme. -->
+<title>vaxpunk</title><link rel="stylesheet" href="page.css">
+<style>main{margin:4rem auto 0;max-width:44rem}.go{display:grid;gap:1rem;grid-template-columns:1fr 1fr;margin-top:2rem}
+.go a{display:block;padding:1rem 1.2rem;border:2px solid var(--rule);color:var(--ink);box-shadow:6px 6px 0 rgba(0,0,0,.25)}
+.go a:hover{background:var(--paper2);text-decoration:none}.go b{font:700 1.3rem var(--sans)}
+@media (max-width:600px){.go{grid-template-columns:1fr}}</style></head>
+<body><header class="top"><a class="logo" href="./" aria-label="vaxpunk"><span>v</span><span>a</span><span>x</span><span>p</span><span>u</span><span>n</span><span>k</span></a>
+<div class="ttl">An OpenVMS clone for arm64<small>on seL4</small></div>
+<button id="theme" type="button" title="Paper or terminal" style="margin-left:auto">VT220</button></header>
+<main><h2>vaxpunk</h2>
+<p>vaxpunk is an OpenVMS clone for arm64: a VMS executive, DCL and Files-11 on the seL4 microkernel.
+The sources are on <a href="https://github.com/mkmik/vaxpunk">GitHub</a>.</p>
+<div class="go"><a href="demo/"><b>Demo</b><br>Boot vaxpunk in your browser, on QEMU compiled to WebAssembly.</a>
+<a href="docs/"><b>API Reference</b><br>System services, executive routines, PAL calls, macro libraries and condition values.</a></div>
+</main>
+<script>const th=document.getElementById('theme');function setvt(on){document.documentElement.classList.toggle('vt',on);th.textContent=on?'PAPER':'VT220';localStorage.setItem('vt',on?'1':'')}
+setvt(!!localStorage.getItem('vt'));th.addEventListener('click',()=>setvt(!document.documentElement.classList.contains('vt')));</script>
+</body></html>
