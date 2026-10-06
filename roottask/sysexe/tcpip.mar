@@ -16,9 +16,9 @@
 ; has the TCP/IP component ask a DHCP server for the address, mask and
 ; gateway instead. SHOW INTERFACE senses them and writes them, and
 ; whether the link is up. START COMMUNICATION, which SYLOGIN.COM runs at
-; boot, sets the interface from the saved settings, if there are any, and
-; says so, and starts TELNETD, the remote login server SET HOST talks
-; to. PING sends ICMP echo requests with IO$_ACCESS on BGA0: and writes a
+; boot, sets the interface from the saved settings, or with DHCP if there
+; are none, and says so, and starts TELNETD, the remote login server SET
+; HOST talks to. PING sends ICMP echo requests with IO$_ACCESS on BGA0: and writes a
 ; line for each reply, as TCP/IP Services' does.
 ; ponytail: one interface and one route, the default; a saved file only
 ; once INITIALIZE DKB0: has made a volume there.
@@ -345,17 +345,18 @@ NUMBER: MOVW    #64, VALUE
 90$:    RSB
 
 ; START_COMMUNICATION: unless the interface has an address already, the
-; saved settings, if there are any, from the data disk; a failure to set
-; them is reported. Then the remote login server, TELNETD, unless it runs
-; already. Without a network, nothing.
+; saved settings from the data disk, or DHCP if there are none; a failure
+; to set them is reported. Then the remote login server, TELNETD, unless it
+; runs already. Without a network, nothing.
         .ENTRY  START_COMMUNICATION, ^M<R2, R3, R4, R5, R6, R7>
         BSBW    SENSE
         BLBC    R0, 80$
         TSTL    SETTINGS
         BNEQ    50$
         BSBW    LOAD
-        BLBC    R0, 50$
-        BSBW    SETCHAR
+        BLBS    R0, 20$
+        BISL2   #DHCP, SETTINGS+12      ; none saved: LOAD left zeros
+20$:    BSBW    SETCHAR
         BLBS    R0, 30$
         BSBW    REPORT                  ; a DHCP server that doesn't answer, say
         BRB     50$
