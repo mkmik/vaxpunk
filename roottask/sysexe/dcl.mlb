@@ -1,0 +1,55 @@
+; dcl.mlb: what DCL's modules, dcl.mar and dcl/*.mar, share: its sizes,
+; its values and symbols' layouts, its operators, and ADDTEXT.
+
+; $DCLDEF: DCL's constants.
+        .MACRO  $DCLDEF
+LINESIZE = 255
+INHIB_MSG = 28                          ; STS$V_INHIB_MSG
+INHIB = ^X10000000                      ; STS$M_INHIB_MSG
+CLIWARN = ^X10038000                    ; $STATUS after a warning of DCL's own
+MAXDEPTH = 8                            ; procedures inside one another
+PBUFSIZE = 16384
+CLDMAX = 16384                          ; a .CLD file SET COMMAND compiles
+PTABMAX = 16384                         ; the process's command tables
+MAXPTAB = 8                             ; how many, a SET COMMAND each
+NSYM = 64                               ; symbols
+NVAL = 16                               ; values an expression may hold at once
+GLOBAL = -1                             ; a global symbol's level
+ANY = -2                                ; SCOPE: neither /LOCAL nor /GLOBAL
+; A value: an integer or a string.
+VAL$L_TYPE = 0                          ; 0 an integer, 1 a string
+VAL$L_INT = 4                           ; the integer
+VAL$T_STR = 8                           ; the string, .ASCIC
+VAL$K_LENGTH = 264
+; A symbol.
+SYM$L_LEVEL = 0                         ; the procedure level it is local to, or GLOBAL
+SYM$T_NAME = 4                          ; its name, .ASCIC, empty in a free entry
+SYM$R_VALUE = 36                        ; its value
+SYM$K_LENGTH = SYM$R_VALUE+VAL$K_LENGTH
+; The operators, OPS's.
+OP_OR = 1
+OP_AND = 2
+OP_EQ = 3                               ; OP_EQ to OP_GE compare integers,
+OP_NE = 4
+OP_LT = 5
+OP_LE = 6
+OP_GT = 7
+OP_GE = 8
+OP_EQS = 9                              ; OP_EQS to OP_GES strings, in the same order
+OP_GES = 14
+OP_ADD = 15
+OP_SUB = 16
+OP_MUL = 17
+OP_DIV = 18
+        .ENDM   $DCLDEF
+
+; ADDTEXT "text": appends text to the message in DCL$MSG. Uses R0-R2.
+        .MACRO  ADDTEXT TEXT, ?L
+        .EXTERNAL DCL$ADDCSTR
+        .SAVE_PSECT LOCAL_BLOCK
+        .PSECT  $LITERAL$
+L:      .ASCIC  TEXT
+        .RESTORE_PSECT
+        MOVAB   L, R1
+        BSBW    DCL$ADDCSTR
+        .ENDM   ADDTEXT

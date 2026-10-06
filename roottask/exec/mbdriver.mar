@@ -33,7 +33,6 @@
         .EXTERNAL IOC$ALLOCIRP, IOC$REQCOM, IOC$ASSIGN, IOC$CANCELQ, IOC$TRNDEVNAM
         .EXTERNAL LNM$GQ_SYSTEM, LNM$CREATE, LNM$DELEQV
 
-MAXCHAN = 31                            ; as qio.mar's
 DEFMBXMXMSG = 256                       ; a mailbox's longest message, by default, as VMS's SYSGEN has it
 DEFMBXBUFQUO = 1056                     ; and the bytes it holds
 ; A message: a block of pool, the message after it.
@@ -205,7 +204,7 @@ NEWMBX: MOVL    #99, R1
         MOVL    SCH$GL_CURPCB, R4
         MOVZWL  4(AP), R0
         BEQL    80$
-        CMPL    R0, #MAXCHAN
+        CMPL    R0, #PCB$C_MAXCHAN
         BGTRU   80$
         BBC     R0, PCB$L_CHANS(R4), 80$
         MOVL    PCB$AL_CCB(R4)[R0], R5
@@ -384,7 +383,7 @@ MB$CANCEL::
         BNEQ    30$
         DECL    UCB$L_REFC(R5)
         BSBB    UNUSED
-30$:    AOBLEQ  #MAXCHAN, R8, 10$
+30$:    AOBLEQ  #PCB$C_MAXCHAN, R8, 10$
         POPR    #^M<R5, R8>
         RSB
 

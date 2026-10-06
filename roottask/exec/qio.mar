@@ -34,8 +34,6 @@
         .EXTERNAL NET$FDT, NET$CANCEL, NET$FINDUNIT, MB$CANCEL, MB$FINDUNIT
         .EXTERNAL F11$AB_DKA0, F11$AB_DKB0, F11$AB_MDA0
 
-MAXCHAN = 31                            ; channels 1-31, a bit each in PCB$L_CHANS
-
         .PSECT  EXEC$DATA, NOEXE, WRT, QUAD
 IOC$AB_UCB::                            ; the devices' UCBs, which $ASSIGN looks through
 IOC$AB_OPA0::                           ; the console's
@@ -119,7 +117,7 @@ IOC$A_UCBEND::                          ; past the last UCB
 IOC$ASSIGN::
         MOVL    #1, R1
 10$:    BBCS    R1, PCB$L_CHANS(R4), 20$
-        AOBLEQ  #MAXCHAN, R1, 10$
+        AOBLEQ  #PCB$C_MAXCHAN, R1, 10$
         MOVL    #SS$_NOIOCHAN, R0
         RSB
 20$:    MOVL    R5, PCB$AL_CCB(R4)[R1]
@@ -171,7 +169,7 @@ IOC$TRNDEVNAM::
         MOVL    SCH$GL_CURPCB, R4
         MOVZWL  4(AP), R5
         BEQL    80$
-        CMPL    R5, #MAXCHAN
+        CMPL    R5, #PCB$C_MAXCHAN
         BGTRU   80$
         BBC     R5, PCB$L_CHANS(R4), 80$
         DSBINT  #IPL$_SYNCH
@@ -192,7 +190,7 @@ IOC$TRNDEVNAM::
         MOVL    SCH$GL_CURPCB, R4
         MOVZWL  4(AP), R5
         BEQL    80$
-        CMPL    R5, #MAXCHAN
+        CMPL    R5, #PCB$C_MAXCHAN
         BGTRU   80$
         BBC     R5, PCB$L_CHANS(R4), 80$
         DSBINT  #IPL$_SYNCH
@@ -218,7 +216,7 @@ IOC$TRNDEVNAM::
         MOVL    SCH$GL_CURPCB, R4
         MOVZWL  8(AP), R0
         BEQL    75$
-        CMPL    R0, #MAXCHAN
+        CMPL    R0, #PCB$C_MAXCHAN
         BGTRU   75$
         BBC     R0, PCB$L_CHANS(R4), 75$
         MOVL    PCB$AL_CCB(R4)[R0], R5

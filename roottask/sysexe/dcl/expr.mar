@@ -1,0 +1,670 @@
+        .TITLE  EXPR    DCL's expressions and symbol substitution
+        .IDENT  /V0.1/
+;
+; DCL$SUBST, which takes a command's comment off and puts symbols' values
+; in it, and DCL$EXPR, which works out an expression into a value on
+; DCL$VSTACK; the errors either finds go back to DCL's stack.
+; One of DCL's modules: ../dcl.mar says how they fit.
+;
+        .LIBRARY "lib.mlb"
+        .LIBRARY "starlet.mlb"
+        .LIBRARY "../sysexe.mlb"
+        .LIBRARY "../dcl.mlb"
+        $DCLDEF
+
+        .EXTERNAL DCL$ADDCSTR, DCL$ADDSYM, DCL$GETSYM, DCL$LINE, DCL$LINE2
+        .EXTERNAL DCL$MSG, DCL$SAMESTR, DCL$SAVESP, DCL$SAY, DCL$SYMNAM
+        .EXTERNAL DCL$WARN
+
+        .PSECT  DATA, NOEXE, WRT, LONG
+S_NOT:  .ASCIC  "NOT"
+; The operators: each name, .ASCIC, its level, 1 binding the least, and
+; its OP_ code, until a 0.
+OPS:    .ASCIC  "OR"
+        .BYTE   1, OP_OR
+        .ASCIC  "AND"
+        .BYTE   2, OP_AND
+        .ASCIC  "EQ"
+        .BYTE   3, OP_EQ
+        .ASCIC  "NE"
+        .BYTE   3, OP_NE
+        .ASCIC  "LT"
+        .BYTE   3, OP_LT
+        .ASCIC  "LE"
+        .BYTE   3, OP_LE
+        .ASCIC  "GT"
+        .BYTE   3, OP_GT
+        .ASCIC  "GE"
+        .BYTE   3, OP_GE
+        .ASCIC  "EQS"
+        .BYTE   3, OP_EQS
+        .ASCIC  "NES"
+        .BYTE   3, OP_EQS+1
+        .ASCIC  "LTS"
+        .BYTE   3, OP_EQS+2
+        .ASCIC  "LES"
+        .BYTE   3, OP_EQS+3
+        .ASCIC  "GTS"
+        .BYTE   3, OP_EQS+4
+        .ASCIC  "GES"
+        .BYTE   3, OP_GES
+        .ASCIC  "+"
+        .BYTE   4, OP_ADD
+        .ASCIC  "-"
+        .BYTE   4, OP_SUB
+        .ASCIC  "*"
+        .BYTE   5, OP_MUL
+        .ASCIC  "/"
+        .BYTE   5, OP_DIV
+        .BYTE   0
+OPTXT:  .BLKB   6                       ; an operator OPSCAN read, .ASCIC
+DCL$VSTACK::                            ; the values an expression holds
+        .BLKB   NVAL*VAL$K_LENGTH
+VSTACKEND:
+
+        .PSECT  CODE, EXE, LONG
+; The errors in an expression or a symbol, which can come from deep in
+; DCL$EXPR: each reports itself, and goes back to DCL's own stack.
+
+; DCL$EXPSYN: an expression's syntax is wrong.
+DCL$EXPSYN::
+        MOVL    DCL$SAVESP, SP
+        CLRB    DCL$MSG
+        PRINT   "%DCL-W-EXPSYN, invalid expression syntax - check operators and operands"
+        BRW     DCL$WARN
+
+; DCL$UNDSYM: the symbol DCL$SYMNAM names isn't there.
+DCL$UNDSYM::
+        MOVL    DCL$SAVESP, SP
+        CLRB    DCL$MSG
+        PRINT   "%DCL-W-UNDSYM, undefined symbol - check validity and spelling"
+        ADDTEXT " \"
+        BSBW    DCL$ADDSYM
+        ADDTEXT "\"
+        BSBW    DCL$SAY
+        BRW     DCL$WARN
+
+; DCL$SYMOVF: DCL$SYMTAB is full.
+DCL$SYMOVF::
+        MOVL    DCL$SAVESP, SP
+        PRINT   "%DCL-W-SYMOVF, no room for symbol definitions - delete some symbols"
+        BRW     DCL$WARN
+
+; DCL$SUBST: R6 = a command's first character in DCL$LINE, R7 = past its
+; last. Copies it to DCL$LINE2 without its comment, from a ! outside
+; quotes, with tabs outside quotes as blanks and each 'name' outside
+; quotes, ''name' in them, as the symbol's value, nothing if there is
+; none; then back to DCL$LINE: R6 = DCL$LINE, R7 past its end. Uses
+; R0-R5, R8-R11.
+DCL$SUBST::
+        MOVAB   DCL$LINE2, R11          ; where the next character goes
+        CLRL    R10                     ; 1 in quotes
+10$:    CMPL    R6, R7
+        BLSSU   12$
+        BRW     80$
+12$:    MOVZBL  (R6)+, R0
+        CMPB    R0, #^A/"/
+        BNEQ    20$
+        XORL2   #1, R10
+        BRB     70$
+20$:    CMPB    R0, #39
+        BEQL    30$
+        TSTL    R10
+        BNEQ    70$
+        CMPB    R0, #^A/!/
+        BEQL    80$
+        CMPB    R0, #9
+        BNEQ    70$
+        MOVZBL  #^A/ /, R0
+        BRB     70$
+30$:    TSTL    R10                     ; in quotes, two of them
+        BEQL    40$
+        CMPL    R6, R7
+        BGEQU   70$
+        CMPB    (R6), #39
+        BNEQ    70$
+        INCL    R6
+40$:    BSBW    DCL$NAMESCAN
+        TSTL    R8
+        BNEQ    45$
+        MOVZBL  #39, R0                 ; no name: the ' as it is
+        BRB     70$
+45$:
+        CMPL    R6, R7                  ; the closing '
+        BGEQU   50$
+        CMPB    (R6), #39
+        BNEQ    50$
+        INCL    R6
+50$:    MOVAB   DCL$VSTACK, R9
+        BSBW    DCL$GETSYM
+        BLBC    R0, 10$
+        BSBW    DCL$TOSTR
+        MOVZBL  VAL$T_STR(R9), R0
+        MOVAB   VAL$T_STR+1(R9), R1
+        MOVAB   DCL$LINE2+LINESIZE, R2
+60$:    TSTL    R0
+        BEQL    10$
+        CMPL    R11, R2
+        BGEQU   10$
+        MOVB    (R1)+, (R11)+
+        DECL    R0
+        BRB     60$
+70$:    MOVAB   DCL$LINE2+LINESIZE, R1
+        CMPL    R11, R1
+        BGEQU   10$
+        MOVB    R0, (R11)+
+        BRW     10$
+80$:    MOVAB   DCL$LINE2, R0
+        SUBL3   R0, R11, R7
+        MOVC3   R7, DCL$LINE2, DCL$LINE
+        MOVAB   DCL$LINE, R6
+        ADDL2   R6, R7
+        RSB
+
+; DCL$SKIP: R6 = the next character of the line, R7 = past its last.
+; Moves R6 past blanks.
+DCL$SKIP::
+        CMPL    R6, R7
+        BGEQU   10$
+        CMPB    (R6), #^A/ /
+        BNEQ    10$
+        INCL    R6
+        BRB     DCL$SKIP
+10$:    RSB
+
+; DCL$NAMESCAN: R6 = the next character of the line, R7 = past its last.
+; Copies the letters, digits, $ and _ there to DCL$SYMNAM, in capitals,
+; the first 31, with R6 past them all. R8 = how many it kept. Uses R0.
+DCL$NAMESCAN::
+        CLRL    R8
+10$:    CMPL    R6, R7
+        BGEQU   90$
+        MOVZBL  (R6), R0
+        CMPB    R0, #^A/a/
+        BLSSU   20$
+        CMPB    R0, #^A/z/
+        BGTRU   20$
+        SUBB2   #^A/a/-^A/A/, R0
+20$:    CMPB    R0, #^A/A/
+        BLSSU   30$
+        CMPB    R0, #^A/Z/
+        BLEQU   50$
+30$:    CMPB    R0, #^A/0/
+        BLSSU   40$
+        CMPB    R0, #^A/9/
+        BLEQU   50$
+40$:    CMPB    R0, #^A/$/
+        BEQL    50$
+        CMPB    R0, #^A/_/
+        BNEQ    90$
+50$:    INCL    R6
+        CMPL    R8, #31
+        BGEQU   10$
+        INCL    R8
+        MOVB    R0, DCL$SYMNAM[R8]
+        BRB     10$
+90$:    MOVB    R8, DCL$SYMNAM
+        RSB
+
+; DCL$QWORD: R6 = the next character of the line, R7 = past its last, R9
+; = a value, a string. Appends the next word to it, in capitals but what
+; is in quotes, which go, and "" in them, which is one, with R6 past it.
+; R8 = 0 if there was none. Uses R0-R2.
+DCL$QWORD::
+        BSBW    DCL$SKIP
+        CLRL    R8
+        CLRL    R2                      ; 1 in quotes
+10$:    CMPL    R6, R7
+        BGEQU   90$
+        MOVZBL  (R6), R0
+        CMPB    R0, #^A/"/
+        BNEQ    20$
+        INCL    R6
+        MOVL    #1, R8
+        TSTL    R2
+        BEQL    15$
+        CMPL    R6, R7
+        BGEQU   15$
+        CMPB    (R6), #^A/"/
+        BNEQ    15$
+        INCL    R6
+        BRB     40$
+15$:    XORL2   #1, R2
+        BRB     10$
+20$:    TSTL    R2
+        BNEQ    30$
+        CMPB    R0, #^A/ /
+        BEQL    90$
+        CMPB    R0, #^A/a/
+        BLSSU   30$
+        CMPB    R0, #^A/z/
+        BGTRU   30$
+        SUBB2   #^A/a/-^A/A/, R0
+30$:    INCL    R6
+40$:    MOVL    #1, R8
+        MOVZBL  VAL$T_STR(R9), R1
+        CMPL    R1, #255
+        BGEQU   10$
+        INCL    R1
+        MOVB    R0, VAL$T_STR(R9)[R1]
+        MOVB    R1, VAL$T_STR(R9)
+        BRB     10$
+90$:    RSB
+
+; DCL$QREST: R6 = the next character of the line, R7 = past its last, R9
+; = a value. Makes it the string of the words left, as DCL$QWORD makes
+; them, a blank between each two. Uses R0-R2, R8.
+DCL$QREST::
+        MOVL    #1, VAL$L_TYPE(R9)
+        CLRB    VAL$T_STR(R9)
+        BSBW    DCL$QWORD
+10$:    TSTL    R8
+        BEQL    90$
+        MOVZBL  VAL$T_STR(R9), R1
+        CMPL    R1, #255
+        BGEQU   90$
+        INCL    R1
+        MOVB    #^A/ /, VAL$T_STR(R9)[R1]
+        MOVB    R1, VAL$T_STR(R9)
+        BSBW    DCL$QWORD
+        TSTL    R8
+        BNEQ    10$
+        DECB    VAL$T_STR(R9)           ; no word after the blank
+90$:    RSB
+
+; DCL$EXPR: R6 = the next character of the line, R7 = past its last, R9
+; = a value in DCL$VSTACK. Makes it the expression's, with R6 past it,
+; or goes to DCL$EXPSYN or DCL$UNDSYM. Uses R0-R5, R8, R10.
+DCL$EXPR::
+        MOVL    #1, R0
+; BINARY: R0 = an operator level. The same, for operands joined by
+; operators of that level, each an expression of the levels above. Past
+; the last level, an operand.
+BINARY: CMPL    R0, #5
+        BLEQ    10$
+        BRW     PRIMARY
+10$:    PUSHL   R0
+        INCL    R0
+        BSBW    BINARY
+20$:    MOVL    (SP), R0
+        BSBW    OPSCAN
+        TSTL    R1
+        BEQL    90$
+        PUSHL   R1
+        ADDL2   #VAL$K_LENGTH, R9       ; the right operand's value
+        MOVAB   VSTACKEND-VAL$K_LENGTH, R0
+        CMPL    R9, R0
+        BLEQU   30$
+        BRW     DCL$EXPSYN
+30$:    ADDL3   #1, 4(SP), R0
+        BSBW    BINARY
+        SUBL2   #VAL$K_LENGTH, R9
+        MOVL    (SP)+, R1
+        BSBW    APPLY
+        BRB     20$
+90$:    TSTL    (SP)+
+        RSB
+
+; OPSCAN: R0 = an operator level, R6 = the next character of the line,
+; R7 = past its last. R1 = the OP_ code of the operator there, with R6
+; past it, if it is one of that level, else 0. Uses R0-R5.
+OPSCAN: PUSHL   R6
+        MOVL    R0, R5
+        BSBW    DCL$SKIP
+        CMPL    R6, R7
+        BGEQU   80$
+        MOVZBL  (R6)+, R0
+        CMPB    R0, #^A/./
+        BEQL    10$
+        MOVB    #1, OPTXT
+        MOVB    R0, OPTXT+1
+        BRB     40$
+10$:    CLRL    R3                      ; .name.
+20$:    CMPL    R6, R7
+        BGEQU   80$
+        MOVZBL  (R6)+, R0
+        CMPB    R0, #^A/./
+        BEQL    30$
+        CMPL    R3, #4
+        BGEQU   80$
+        BICB2   #^X20, R0               ; in capitals
+        INCL    R3
+        MOVB    R0, OPTXT[R3]
+        BRB     20$
+30$:    MOVB    R3, OPTXT
+40$:    MOVAB   OPS, R4
+45$:    TSTB    (R4)
+        BEQL    80$
+        MOVL    R4, R1
+        MOVAB   OPTXT, R2
+        BSBW    DCL$SAMESTR
+        MOVZBL  (R4), R1
+        ADDL2   R1, R4
+        INCL    R4                      ; at its level
+        BLBC    R0, 50$
+        CMPB    (R4), R5
+        BNEQ    80$                     ; another level's
+        MOVZBL  1(R4), R1
+        TSTL    (SP)+
+        RSB
+50$:    ADDL2   #2, R4
+        BRB     45$
+80$:    MOVL    (SP)+, R6
+        CLRL    R1
+        RSB
+
+; PRIMARY: as DCL$EXPR, for an operand: "string", an integer, a symbol,
+; (expression), - operand or .NOT. operand.
+PRIMARY:
+        BSBW    DCL$SKIP
+        CMPL    R6, R7
+        BLSSU   5$
+        BRW     DCL$EXPSYN
+5$:     MOVZBL  (R6), R0
+        CMPB    R0, #^A/"/
+        BNEQ    20$
+        INCL    R6                      ; a string, "" in it a quote
+        MOVL    #1, VAL$L_TYPE(R9)
+        CLRL    R2
+10$:    CMPL    R6, R7
+        BLSSU   12$
+        BRW     DCL$EXPSYN
+12$:    MOVZBL  (R6)+, R0
+        CMPB    R0, #^A/"/
+        BNEQ    15$
+        CMPL    R6, R7
+        BGEQU   17$
+        CMPB    (R6), #^A/"/
+        BNEQ    17$
+        INCL    R6
+15$:    CMPL    R2, #255
+        BGEQU   10$
+        INCL    R2
+        MOVB    R0, VAL$T_STR(R9)[R2]
+        BRB     10$
+17$:    MOVB    R2, VAL$T_STR(R9)
+        RSB
+20$:    CMPB    R0, #^A/0/
+        BLSSU   30$
+        CMPB    R0, #^A/9/
+        BGTRU   30$
+        CLRL    VAL$L_TYPE(R9)          ; an integer
+        CLRL    R2
+25$:    CMPL    R6, R7
+        BGEQU   27$
+        MOVZBL  (R6), R0
+        SUBL2   #^A/0/, R0
+        CMPL    R0, #9
+        BGTRU   27$
+        MULL2   #10, R2
+        ADDL2   R0, R2
+        INCL    R6
+        BRB     25$
+27$:    MOVL    R2, VAL$L_INT(R9)
+        RSB
+30$:    CMPB    R0, #^A/(/
+        BNEQ    40$
+        INCL    R6
+        BSBW    DCL$EXPR
+        BSBW    DCL$SKIP
+        CMPL    R6, R7
+        BGEQU   35$
+        CMPB    (R6), #^A/)/
+        BNEQ    35$
+        INCL    R6
+        RSB
+35$:    BRW     DCL$EXPSYN
+40$:    CMPB    R0, #^A/-/
+        BNEQ    50$
+        INCL    R6
+        BSBW    PRIMARY
+        BSBW    DCL$TOINT
+        MNEGL   VAL$L_INT(R9), VAL$L_INT(R9)
+        RSB
+50$:    CMPB    R0, #^A/./
+        BNEQ    60$
+        INCL    R6                      ; .NOT.
+        BSBW    DCL$NAMESCAN
+        CMPL    R6, R7
+        BGEQU   35$
+        CMPB    (R6), #^A/./
+        BNEQ    35$
+        INCL    R6
+        MOVAB   DCL$SYMNAM, R1
+        MOVAB   S_NOT, R2
+        BSBW    DCL$SAMESTR
+        BLBC    R0, 35$
+        BSBW    PRIMARY
+        BSBW    DCL$TOINT
+        MCOML   VAL$L_INT(R9), VAL$L_INT(R9)
+        RSB
+60$:    BSBW    DCL$NAMESCAN
+        TSTL    R8
+        BEQL    35$
+        BSBW    DCL$GETSYM
+        BLBS    R0, 70$
+        BRW     DCL$UNDSYM
+70$:    RSB
+
+; APPLY: R1 = an OP_ code, R9 = a value, the left operand, and the right
+; one after it. Makes R9 the result. Uses R0-R5, R10.
+APPLY:  ADDL3   #VAL$K_LENGTH, R9, R10
+        CMPL    R1, #OP_ADD
+        BNEQ    10$
+        TSTL    VAL$L_TYPE(R9)
+        BEQL    10$
+        TSTL    VAL$L_TYPE(R10)
+        BEQL    10$
+        MOVZBL  VAL$T_STR(R9), R2       ; two strings: joined
+        MOVZBL  VAL$T_STR(R10), R3
+        ADDL3   R2, R3, R4
+        CMPL    R4, #255
+        BLEQU   5$
+        SUBL3   R2, #255, R3
+        MOVL    #255, R4
+5$:     MOVB    R4, VAL$T_STR(R9)
+        MOVAB   VAL$T_STR+1(R9)[R2], R1
+        MOVC3   R3, VAL$T_STR+1(R10), (R1)
+        RSB
+10$:    CMPL    R1, #OP_EQS
+        BLSSU   20$
+        CMPL    R1, #OP_GES
+        BGTRU   20$
+        PUSHL   R1                      ; compare strings
+        BSBW    DCL$TOSTR
+        PUSHL   R9
+        MOVL    R10, R9
+        BSBW    DCL$TOSTR
+        MOVL    (SP)+, R9
+        BSBW    STRCMP
+        MOVL    (SP)+, R1
+        SUBL2   #OP_EQS-OP_EQ, R1
+        BRB     40$
+20$:    PUSHL   R1                      ; integers
+        BSBW    DCL$TOINT
+        PUSHL   R9
+        MOVL    R10, R9
+        BSBW    DCL$TOINT
+        MOVL    (SP)+, R9
+        MOVL    (SP)+, R1
+        MOVL    VAL$L_INT(R10), R3
+        CMPL    R1, #OP_OR
+        BNEQ    21$
+        BISL2   R3, VAL$L_INT(R9)
+        RSB
+21$:    CMPL    R1, #OP_AND
+        BNEQ    22$
+        MCOML   R3, R3
+        BICL2   R3, VAL$L_INT(R9)
+        RSB
+22$:    CMPL    R1, #OP_ADD
+        BNEQ    23$
+        ADDL2   R3, VAL$L_INT(R9)
+        RSB
+23$:    CMPL    R1, #OP_SUB
+        BNEQ    24$
+        SUBL2   R3, VAL$L_INT(R9)
+        RSB
+24$:    CMPL    R1, #OP_MUL
+        BNEQ    25$
+        MULL2   R3, VAL$L_INT(R9)
+        RSB
+25$:    CMPL    R1, #OP_DIV
+        BNEQ    26$
+        DIVL2   R3, VAL$L_INT(R9)
+        RSB
+26$:    CLRL    R2                      ; R2 = the sign of left - right
+        CMPL    VAL$L_INT(R9), R3
+        BEQL    40$
+        MOVL    #1, R2
+        CMPL    VAL$L_INT(R9), R3
+        BGTR    40$
+        MNEGL   #1, R2
+; R1 = OP_EQ to OP_GE, R2 = the sign of left - right.
+40$:    CLRL    R0                      ; false
+        CMPL    R1, #OP_EQ
+        BNEQ    41$
+        TSTL    R2
+        BNEQ    49$
+        BRB     48$
+41$:    CMPL    R1, #OP_NE
+        BNEQ    42$
+        TSTL    R2
+        BEQL    49$
+        BRB     48$
+42$:    CMPL    R1, #OP_LT
+        BNEQ    43$
+        TSTL    R2
+        BGEQ    49$
+        BRB     48$
+43$:    CMPL    R1, #OP_LE
+        BNEQ    44$
+        TSTL    R2
+        BGTR    49$
+        BRB     48$
+44$:    CMPL    R1, #OP_GT
+        BNEQ    45$
+        TSTL    R2
+        BLEQ    49$
+        BRB     48$
+45$:    TSTL    R2                      ; OP_GE
+        BLSS    49$
+48$:    MOVL    #1, R0
+49$:    CLRL    VAL$L_TYPE(R9)
+        MOVL    R0, VAL$L_INT(R9)
+        RSB
+
+; STRCMP: R9 and R10 = two values, strings. R2 = -1, 0 or 1 as R9's is
+; before, the same as or after R10's. Uses R3-R5.
+STRCMP: MOVZBL  VAL$T_STR(R9), R3
+        MOVZBL  VAL$T_STR(R10), R4
+        CLRL    R5
+10$:    CMPL    R5, R3
+        BGEQU   30$
+        CMPL    R5, R4
+        BGEQU   40$
+        CMPB    VAL$T_STR+1(R9)[R5], VAL$T_STR+1(R10)[R5]
+        BLSSU   50$
+        CMPB    VAL$T_STR+1(R9)[R5], VAL$T_STR+1(R10)[R5]
+        BGTRU   40$
+        INCL    R5
+        BRB     10$
+30$:    CLRL    R2
+        CMPL    R5, R4
+        BGEQU   90$
+50$:    MNEGL   #1, R2
+        RSB
+40$:    MOVL    #1, R2
+90$:    RSB
+
+; DCL$TOINT: R9 = a value. Makes it an integer: a string's, with a sign,
+; or 1 if it starts with T or Y, else 0. Uses R0-R5.
+DCL$TOINT::
+        TSTL    VAL$L_TYPE(R9)
+        BNEQ    5$
+        RSB
+5$:     CLRL    VAL$L_TYPE(R9)
+        MOVAB   VAL$T_STR+1(R9), R1
+        MOVZBL  VAL$T_STR(R9), R2       ; the characters left
+        CLRL    R3                      ; the integer
+        CLRL    R4                      ; 1 if negative
+        CLRL    R5                      ; the digits
+10$:    TSTL    R2
+        BEQL    50$
+        CMPB    (R1), #^A/ /
+        BNEQ    15$
+        INCL    R1
+        DECL    R2
+        BRB     10$
+15$:    CMPB    (R1), #^A/-/
+        BNEQ    17$
+        INCL    R4
+        BRB     18$
+17$:    CMPB    (R1), #^A/+/
+        BNEQ    20$
+18$:    INCL    R1
+        DECL    R2
+20$:    TSTL    R2
+        BEQL    50$
+        MOVZBL  (R1)+, R0
+        SUBL2   #^A/0/, R0
+        CMPL    R0, #9
+        BGTRU   50$
+        MULL2   #10, R3
+        ADDL2   R0, R3
+        INCL    R5
+        DECL    R2
+        BRB     20$
+50$:    TSTL    R5
+        BNEQ    60$
+        CLRL    R3
+        TSTB    VAL$T_STR(R9)
+        BEQL    70$
+        MOVZBL  VAL$T_STR+1(R9), R0
+        BICB2   #^X20, R0
+        CMPB    R0, #^A/T/
+        BEQL    55$
+        CMPB    R0, #^A/Y/
+        BNEQ    70$
+55$:    MOVL    #1, R3
+        BRB     70$
+60$:    TSTL    R4
+        BEQL    70$
+        MNEGL   R3, R3
+70$:    MOVL    R3, VAL$L_INT(R9)
+        RSB
+
+; DCL$TOSTR: R9 = a value. Makes it a string: an integer's in decimal.
+; Uses R0-R4.
+DCL$TOSTR::
+        TSTL    VAL$L_TYPE(R9)
+        BEQL    5$
+        RSB
+5$:     MOVL    #1, VAL$L_TYPE(R9)
+        MOVL    VAL$L_INT(R9), R1
+        CLRL    R2                      ; digits, on the stack
+        CLRL    R3                      ; 1 if negative
+        TSTL    R1
+        BGEQ    10$
+        MNEGL   R1, R1
+        INCL    R3
+10$:    DIVL3   #10, R1, R4
+        MULL3   #10, R4, R0
+        SUBL3   R0, R1, R0
+        ADDL2   #^A/0/, R0
+        PUSHL   R0
+        INCL    R2
+        MOVL    R4, R1
+        TSTL    R1
+        BNEQ    10$
+        MOVAB   VAL$T_STR+1(R9), R1
+        TSTL    R3
+        BEQL    20$
+        MOVB    #^A/-/, (R1)+
+20$:    MOVL    (SP)+, R0
+        MOVB    R0, (R1)+
+        SOBGTR  R2, 20$
+        MOVAB   VAL$T_STR+1(R9), R0
+        SUBL3   R0, R1, R0
+        MOVB    R0, VAL$T_STR(R9)
+        RSB

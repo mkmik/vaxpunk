@@ -130,193 +130,86 @@
 ; functions, OPEN or READ; lines without $, an image's input on VMS, are
 ; skipped. .NOT. takes an operand, not a comparison.
 ;
+; This module reads the commands, parses them and does those that run
+; an image, CTRL/Y, CONTINUE and STOP. The rest are in dcl/: logical.mar
+; has the logical name commands, setshow.mar SET and SHOW DEFAULT, SHOW
+; DEVICES and SET COMMAND, proc.mar @ and the commands that steer a
+; procedure, symbol.mar the symbols and their commands, expr.mar symbol
+; substitution and expressions, message.mar the messages, and cdu.mar
+; the CLD compiler. What they share is global, named DCL$name, and
+; dcl.mlb has their constants.
+;
         .LIBRARY "lib.mlb"
         .LIBRARY "starlet.mlb"
         .LIBRARY "sysexe.mlb"
-        $IPLDEF
-        $PCBDEF
-        $LNMBDEF
+        .LIBRARY "dcl.mlb"
         $SSDEF
         $CLIMSGDEF
         $IODEF
-        $LNMDEF
-        $RMSDEF
-        $FABDEF
-        $RABDEF
-        $NAMDEF
-        $DVIDEF
-        $DVSDEF
-        $DCDEF
-        $UCBDEF
+        $DCLDEF
 
-        .EXTERNAL PUT_LINE, SCH$GL_CURPCB, LNM$GQ_SYSTEM
-        .EXTERNAL DCL$TABLES, CLI$$DCL_PARSE, CLI$$RESULT, CLI$$IMAGE, CLI$$ROUTINE
-        .EXTERNAL CLI$GET_VALUE, CLI$PRESENT, CLI$$FOREIGN, CDU$COMPILE
-
-LINESIZE = 255
-INHIB_MSG = 28                          ; STS$V_INHIB_MSG
-INHIB = ^X10000000                      ; STS$M_INHIB_MSG
-CLIWARN = ^X10038000                    ; $STATUS after a warning of DCL's own
-MAXDEPTH = 8                            ; procedures inside one another
-PBUFSIZE = 16384
-CLDMAX = 16384                          ; a .CLD file SET COMMAND compiles
-PTABMAX = 16384                         ; the process's command tables
-MAXPTAB = 8                             ; how many, a SET COMMAND each
-NSYM = 64                               ; symbols
-NVAL = 16                               ; values an expression may hold at once
-GLOBAL = -1                             ; a global symbol's level
-ANY = -2                                ; SCOPE: neither /LOCAL nor /GLOBAL
-; A value: an integer or a string.
-VAL$L_TYPE = 0                          ; 0 an integer, 1 a string
-VAL$L_INT = 4                           ; the integer
-VAL$T_STR = 8                           ; the string, .ASCIC
-VAL$K_LENGTH = 264
-; A symbol.
-SYM$L_LEVEL = 0                         ; the procedure level it is local to, or GLOBAL
-SYM$T_NAME = 4                          ; its name, .ASCIC, empty in a free entry
-SYM$R_VALUE = 36                        ; its value
-SYM$K_LENGTH = SYM$R_VALUE+VAL$K_LENGTH
-; The operators, OPS's.
-OP_OR = 1
-OP_AND = 2
-OP_EQ = 3                               ; OP_EQ to OP_GE compare integers,
-OP_NE = 4
-OP_LT = 5
-OP_LE = 6
-OP_GT = 7
-OP_GE = 8
-OP_EQS = 9                              ; OP_EQS to OP_GES strings, in the same order
-OP_GES = 14
-OP_ADD = 15
-OP_SUB = 16
-OP_MUL = 17
-OP_DIV = 18
-
-; ADDTEXT "text": appends text to the message in MSG. Uses R0-R2.
-        .MACRO  ADDTEXT TEXT, ?L
-        .SAVE_PSECT LOCAL_BLOCK
-        .PSECT  $LITERAL$
-L:      .ASCIC  TEXT
-        .RESTORE_PSECT
-        MOVAB   L, R1
-        BSBW    ADDCSTR
-        .ENDM   ADDTEXT
+        .EXTERNAL DCL$TABLES, CLI$$DCL_PARSE, CLI$$RESULT, CLI$$IMAGE
+        .EXTERNAL CLI$$ROUTINE, CLI$GET_VALUE, CLI$PRESENT, CLI$$FOREIGN
+        .EXTERNAL DCL$ADD, DCL$ADDCSTR, DCL$ASSIGN, DCL$DEASSIGN, DCL$DEFINE
+        .EXTERNAL DCL$DELSYM, DCL$DO, DCL$ENDPROCS, DCL$EXIT, DCL$EXITPROC
+        .EXTERNAL DCL$FINDSYM, DCL$GETPROC, DCL$GOTO, DCL$IF, DCL$NAMESCAN
+        .EXTERNAL DCL$SAMESTR, DCL$SAY, DCL$SETCOMMAND, DCL$SETDEF, DCL$SHOW
+        .EXTERNAL DCL$SKIP, DCL$STATUS, DCL$STRASSIGN, DCL$SUBST, DCL$SYMNAM
+        .EXTERNAL DCL$TOSTR, DCL$VSTACK, DCL$WRITE
 
         .PSECT  DATA, NOEXE, WRT, LONG
 CHAN:   .LONG   0                       ; SYS$INPUT's, once assigned
 INPUT:  .ASCID  "SYS$INPUT"
-PROCESS:
-        .ASCID  "LNM$PROCESS"
-FILE_DEV:
-        .ASCID  "LNM$FILE_DEV"
-NAMDSC: .LONG   0                       ; a logical name: its length
-        .ADDRESS NAME
-NAME:   .BLKB   LINESIZE
-CREITEMS:                               ; $CRELNM's: the equivalence, in TOKEN
-        .WORD   0, LNM$_STRING
-        .ADDRESS TOKEN
-        .LONG   0, 0
-TRNITEMS:                               ; $TRNLNM's: the equivalence and the table
-        .WORD   LINESIZE, LNM$_STRING
-        .ADDRESS EQV, EQVLEN
-        .WORD   31, LNM$_TABLE
-        .ADDRESS TABNAM, TABLEN
+DCL$NAMDSC::                            ; a logical name: its length
         .LONG   0
-EQV:    .BLKB   LINESIZE
-EQVLEN: .WORD   0
-TABNAM: .BLKB   31
-TABLEN: .WORD   0
-LNMARGS:                                ; GETLNM's: a table and an index
-        .LONG   2, 0, 0
-PROCTAB:
-        .ASCIC  "LNM$PROCESS_TABLE"
-SYSTAB: .ASCIC  "LNM$SYSTEM_TABLE"
+        .ADDRESS DCL$NAME
+DCL$NAME::                              ; and its text
+        .BLKB   LINESIZE
 PROMPT: .ASCII  "$ "
 IOSB:   .BLKQ   1
-LINE:   .BLKB   LINESIZE                ; the command line
-TOKEN:  .BLKB   LINESIZE+4              ; a word of it, in capitals, and room for .EXE
-TOKDSC: .LONG   0                       ; a descriptor of TOKEN: its length
-        .ADDRESS TOKEN
-MSG:    .BLKB   256                     ; a message being made, .ASCIC
+DCL$LINE::                              ; the command line
+        .BLKB   LINESIZE
+DCL$TOKEN::                             ; a word of it, in capitals, and room for .EXE
+        .BLKB   LINESIZE+4
+TOKDSC: .LONG   0                       ; a descriptor of DCL$TOKEN: its length
+        .ADDRESS DCL$TOKEN
+DCL$MSG::                               ; a message being made, .ASCIC
+        .BLKB   256
 CMDDSC: .LONG   0, 0                    ; a command, for CLI$$DCL_PARSE
 RESDSC: .LONG   0, 0                    ; its parse, for $IMGACT
 DCLFAC: .ASCIC  "DCL"                   ; the facility its errors are
-V_FILE: .ASCID  "FILE"                  ; the entities DCL's own verbs get
-V_LOGNAM:
+DCL$V_FILE::                            ; the entities DCL's own verbs get
+        .ASCID  "FILE"
+DCL$V_LOGNAM::                          ; the logical name
         .ASCID  "LOGICAL_NAME"
-V_EQUNAM:
-        .ASCID  "EQUIVALENCE_NAME"
-V_LABEL:
-        .ASCID  "LABEL"
-V_EXPR: .ASCID  "EXPRESSION"
-V_OPTION:
-        .ASCID  "OPTION"
-V_DIR:  .ASCID  "DIRECTORY"
-V_DEVNAM:
-        .ASCID  "DEVICE_NAME"
-V_SYMBOL:
-        .ASCID  "SYMBOL"
-V_STATUS:
-        .ASCID  "STATUS"
-V_LOG:  .ASCID  "LOG"
+DCL$V_EXPR::                            ; an expression
+        .ASCID  "EXPRESSION"
 V_PRCNAM:
         .ASCID  "PROCESS_NAME"
 V_IDENT:
         .ASCID  "IDENTIFICATION"
 V_CONTROL:
         .ASCID  "OPTION.CONTROL"
-V_PROCQ:
-        .ASCID  "PROCESS"
-V_SYSQ: .ASCID  "SYSTEM"
-V_TABLE:
-        .ASCID  "TABLE"
-V_MOUNTED:
-        .ASCID  "MOUNTED"
-V_ALL:  .ASCID  "ALL"
-V_GLOBAL:
-        .ASCID  "GLOBAL"
-V_LOCAL:
-        .ASCID  "LOCAL"
-TABMASK:                                ; LNMTAB's tables: 1 the process's, 2 the system's
-        .LONG   0
-TABNAMES:                               ; the tables' names, .ASCIC, and their TABMASK
-        .ASCIC  "LNM$PROCESS_TABLE"
-        .BYTE   1
-        .ASCIC  "LNM$SYSTEM_TABLE"
-        .BYTE   2
-        .ASCIC  "LNM$PROCESS"
-        .BYTE   1
-        .ASCIC  "LNM$SYSTEM"
-        .BYTE   2
-        .ASCIC  "LNM$FILE_DEV"
-        .BYTE   3
-        .BYTE   0
-TABDSCS:                                ; the names LNMTAB gives the services, by TABMASK
-        .ADDRESS PROCESS, PROCESS, SYSTEM, FILE_DEV
-SYSTEM: .ASCID  "LNM$SYSTEM"
-MOUNTED:                                ; SHOW DEVICES/MOUNTED: 1 for mounted volumes only
-        .LONG   0
-TABDSC: .LONG   0                       ; LNMTAB's table name, a descriptor's address
-VALDSC: .LONG   LINESIZE                ; GETVAL's: TOKEN
-        .ADDRESS TOKEN
+VALDSC: .LONG   LINESIZE                ; DCL$GETVAL's: DCL$TOKEN
+        .ADDRESS DCL$TOKEN
 VALLEN: .WORD   0
 ; The CLIROUTINEs of DCL$TABLES: each name, .ASCIC, and its code, until
 ; a 0.
 ROUTINES:
         .ASCIC  "CONTINUE"
-        .ADDRESS CONTINUE
+        .ADDRESS DCL$CONTINUE
         .ASCIC  "DEASSIGN"
-        .ADDRESS DEASSIGN
+        .ADDRESS DCL$DEASSIGN
         .ASCIC  "DEFINE"
-        .ADDRESS DEFINE
+        .ADDRESS DCL$DEFINE
         .ASCIC  "DELSYM"
-        .ADDRESS DELSYM
+        .ADDRESS DCL$DELSYM
         .ASCIC  "EXIT"
-        .ADDRESS EXIT
+        .ADDRESS DCL$EXIT
         .ASCIC  "GOTO"
-        .ADDRESS GOTO
+        .ADDRESS DCL$GOTO
         .ASCIC  "IF"
-        .ADDRESS IF
+        .ADDRESS DCL$IF
         .ASCIC  "LOGOUT"
         .ADDRESS LOGOUT
         .ASCIC  "RUN"
@@ -324,140 +217,26 @@ ROUTINES:
         .ASCIC  "SET"
         .ADDRESS SET
         .ASCIC  "SET_COMMAND"
-        .ADDRESS SETCOMMAND
+        .ADDRESS DCL$SETCOMMAND
         .ASCIC  "SHOW"
-        .ADDRESS SHOW
+        .ADDRESS DCL$SHOW
         .ASCIC  "STOP"
         .ADDRESS STOP
         .ASCIC  "WRITE"
-        .ADDRESS WRITE
+        .ADDRESS DCL$WRITE
         .BYTE   0
-CHAR:   .BLKB   1
-V_LOGICAL:
-        .ASCIC  "LOGICAL"
-V_DEFAULT:
-        .ASCIC  "DEFAULT"
-V_DEVICES:
-        .ASCIC  "DEVICES"
-SCANCTX:                                ; $DEVICE_SCAN's context
-        .BLKQ   1
-PATDSC: .LONG   0                       ; its search name, in TOKEN
-        .ADDRESS TOKEN
-DVSITEMS:                               ; its items: the class
-        .WORD   4, DVS$_DEVCLASS
-        .ADDRESS DEVCLASS
-        .LONG   0
-        .LONG   0
-DEVCLASS:
-        .LONG   0
-DEVDSC: .LONG   8                       ; the device's name it found, _DDCU:
-        .ADDRESS DEVNAME
-DVINAM: .LONG   0                       ; and its length, a descriptor of it
-        .ADDRESS DEVNAME
-DEVNAME:
-        .BLKB   8
-DVIITEMS:                               ; what $GETDVIW returns of it
-        .WORD   4, DVI$_MNT
-        .ADDRESS V_MNT
-        .LONG   0
-        .WORD   4, DVI$_SWL
-        .ADDRESS V_SWL
-        .LONG   0
-        .WORD   4, DVI$_STS
-        .ADDRESS V_STS
-        .LONG   0
-        .WORD   4, DVI$_ERRCNT
-        .ADDRESS V_ERRCNT
-        .LONG   0
-        .WORD   12, DVI$_VOLNAM
-        .ADDRESS DEVLABEL+1
-        .ADDRESS LABLEN
-        .WORD   4, DVI$_FREEBLOCKS
-        .ADDRESS DEVFREE
-        .LONG   0
-        .LONG   0
-V_MNT:  .LONG   0                       ; 1 if a volume is mounted,
-V_SWL:  .LONG   0                       ; 1 if it is read only,
-V_STS:  .LONG   0                       ; UCB$M_ONLINE if the device is there,
-V_ERRCNT:                               ; the errors it reported,
-        .LONG   0
-DEVLABEL:                               ; the volume's label, after a byte,
-        .BLKB   13
-LABLEN: .WORD   0                       ; its length,
-DEVFREE:                                ; and its free blocks
-        .LONG   0
-S_MOUNTED:
-        .ASCIC  "Mounted"
-S_WRTLCK:
-        .ASCIC  "Mounted wrtlck"
-S_ONLINE:
-        .ASCIC  "Online"
-S_OFFLINE:
-        .ASCIC  "Offline"
-V_THEN: .ASCIC  "THEN"
-V_OUTPUT:
-        .ASCIC  "SYS$OUTPUT"
-V_ERROR:
-        .ASCIC  "SYS$ERROR"
-S_NOT:  .ASCIC  "NOT"
-STATNAM:
-        .ASCIC  "$STATUS"
-SEVNAM: .ASCIC  "$SEVERITY"
 FIRST:  .ASCIC  "@SYS$MANAGER:SYSTARTUP_VMS"     ; the first commands, until a 0
         .ASCIC  "@SYS$MANAGER:SYLOGIN"
         .BYTE   0
-DOTCOM: .ASCII  ".COM"
-DOTCLD: .ASCII  ".CLD"
-PNAME:  .ASCIC  "P1"                    ; a parameter's symbol, P1 to P8
-; The operators: each name, .ASCIC, its level, 1 binding the least, and
-; its OP_ code, until a 0.
-OPS:    .ASCIC  "OR"
-        .BYTE   1, OP_OR
-        .ASCIC  "AND"
-        .BYTE   2, OP_AND
-        .ASCIC  "EQ"
-        .BYTE   3, OP_EQ
-        .ASCIC  "NE"
-        .BYTE   3, OP_NE
-        .ASCIC  "LT"
-        .BYTE   3, OP_LT
-        .ASCIC  "LE"
-        .BYTE   3, OP_LE
-        .ASCIC  "GT"
-        .BYTE   3, OP_GT
-        .ASCIC  "GE"
-        .BYTE   3, OP_GE
-        .ASCIC  "EQS"
-        .BYTE   3, OP_EQS
-        .ASCIC  "NES"
-        .BYTE   3, OP_EQS+1
-        .ASCIC  "LTS"
-        .BYTE   3, OP_EQS+2
-        .ASCIC  "LES"
-        .BYTE   3, OP_EQS+3
-        .ASCIC  "GTS"
-        .BYTE   3, OP_EQS+4
-        .ASCIC  "GES"
-        .BYTE   3, OP_GES
-        .ASCIC  "+"
-        .BYTE   4, OP_ADD
-        .ASCIC  "-"
-        .BYTE   4, OP_SUB
-        .ASCIC  "*"
-        .BYTE   5, OP_MUL
-        .ASCIC  "/"
-        .BYTE   5, OP_DIV
-        .BYTE   0
-OPTXT:  .BLKB   6                       ; an operator OPSCAN read, .ASCIC
-SYMNAM: .BLKB   32                      ; a symbol's name, .ASCIC
-TARGET: .BLKB   32                      ; the one an assignment or GOTO wants
-LINE2:  .BLKB   LINESIZE                ; a command being made
+DCL$LINE2::                             ; a command being made
+        .BLKB   LINESIZE
 DOTEXE: .ASCII  ".EXE"
         .ALIGN  LONG
-SAVESP: .LONG   0                       ; SP as DCL was called, where errors go back to
+DCL$SAVESP::                            ; SP as DCL was called, where errors go back to
+        .LONG   0
 FIRSTP: .ADDRESS FIRST                  ; the next of the first commands
 IMGRUN: .LONG   0                       ; 1 while an image runs, or is about to
-CTRLYFP:                                ; while CTRL/Y has it stopped, FP in the AST, else 0
+DCL$CTRLYFP::                           ; while CTRL/Y has it stopped, FP in the AST, else 0
         .LONG   0
 CTRLYHIT:                               ; 1: CTRL/Y came with no image
         .LONG   0
@@ -465,85 +244,50 @@ NOCTRLY:                                ; 1 after SET NOCONTROL: no CTRL/Y AST
         .LONG   0
 STOPPID:                                ; STOP/IDENTIFICATION's PID
         .LONG   0
-LASTSTAT:                               ; $STATUS
+DCL$LASTSTAT::                          ; $STATUS
         .LONG   SS$_NORMAL
-DEPTH:  .LONG   0                       ; the procedure running, 0 for none
-PSTART: .BLKL   MAXDEPTH+1              ; each one's first line in PBUF,
-PNEXT:  .BLKL   MAXDEPTH+1              ; the next one it reads,
-PEND:   .ADDRESS PBUF                   ; and past its last; level 0's is PBUF
-        .BLKL   MAXDEPTH
-PROCFAB:                                ; @'s
-        $FAB    FNA=TOKEN, DNA=DOTCOM, DNS=4
-PROCRAB:
-        $RAB    FAB=PROCFAB, USZ=LINESIZE
-CLDFAB:                                 ; SET COMMAND's
-        $FAB    FNA=TOKEN, DNA=DOTCLD, DNS=4
-CLDRAB:
-        $RAB    FAB=CLDFAB, USZ=LINESIZE
-CLDDSC: .LONG   0                       ; the .CLD file's text, in CLDBUF
-        .ADDRESS CLDBUF
-PTABDSC:                                ; the room left for tables, in PTABS
-        .LONG   0, 0
-PTABLEN:                                ; the tables CDU$COMPILE made there
-        .WORD   0
-PTABFREE:                               ; the room left
-        .ADDRESS PTABS
-PTABVEC:                                ; the process's tables, for CLI$$DCL_PARSE: how many,
+DCL$DEPTH::                             ; the procedure running, 0 for none
+        .LONG   0
+DCL$PTABVEC::                           ; the process's tables, for CLI$$DCL_PARSE: how many,
         .LONG   0
         .BLKL   MAXPTAB                 ; then each one, the last SET COMMAND's first
-SYMTAB: .BLKB   NSYM*SYM$K_LENGTH       ; the symbols
-SYMEND:
-VSTACK: .BLKB   NVAL*VAL$K_LENGTH       ; the values an expression holds
-VSTACKEND:
-PBUF:   .BLKB   PBUFSIZE                ; the procedures' lines, each .ASCIC, the outer's first
-CLDBUF: .BLKB   CLDMAX                  ; the .CLD file, its lines each ending in LF
-PTABS:  .BLKB   PTABMAX                 ; the process's command tables
-PBUFEND:
-DEFFAB: $FAB    FNA=TOKEN, NAM=DEFNAM   ; SET and SHOW DEFAULT's $PARSE
-DEFNAM: $NAM    ESA=EXP, ESS=255
-EXP:    .BLKB   255                     ; its expanded string
-DIRDSC: .LONG   0, 0                    ; a descriptor of the directory in it
-DISK:   .ASCID  "SYS$DISK"
-DISKITEMS:                              ; $CRELNM's: the device in EXP
-        .WORD   0, LNM$_STRING
-        .LONG   0, 0, 0
-GMDSC:  .LONG   255                     ; a descriptor of GMBUF
-        .ADDRESS GMBUF
-GMBUF:  .BLKB   255                     ; STATUS's message, from $GETMSG
-GMLEN:  .WORD   0                       ; its length
-HEX:    .ASCII  "0123456789ABCDEF"
 
         .PSECT  CODE, EXE, LONG
+; DCL status: the command interpreter's transfer address, which the
+; executive calls with SS$_NORMAL first and then with the status of each
+; image it runs. Reports the status if it is a failure, then reads and
+; does commands. Never returns.
         .ENTRY  DCL, ^M<R2, R3, R4, R5, R6, R7, R8, R9, R10, R11>
-        MOVL    SP, SAVESP
+        MOVL    SP, DCL$SAVESP
         CLRL    IMGRUN
         TSTL    CHAN
         BNEQ    10$
         $ASSIGN_S DEVNAM=INPUT, CHAN=CHAN
         BLBC    R0, QUIT
         BSBW    CTRLYON
-        BRB     NEXT
+        BRB     DCL$NEXT
 10$:    MOVL    4(AP), R0
-        BRW     DONE
+        BRW     DCL$DONE
 
-; NEXT: reads the next command, from the procedure running or from the
-; console, and does it.
-NEXT:   MOVL    SAVESP, SP
+; DCL$NEXT: reads the next command, from the procedure running or from
+; the console, and does it.
+DCL$NEXT::
+        MOVL    DCL$SAVESP, SP
         BBCC    #0, CTRLYHIT, 5$
-        BSBW    ENDPROCS
-5$:     TSTL    DEPTH
+        BSBW    DCL$ENDPROCS
+5$:     TSTL    DCL$DEPTH
         BEQL    PROMPT1
-        BSBW    GETPROC
+        BSBW    DCL$GETPROC
         BLBS    R0, 10$
-        BSBW    EXITPROC                ; past its end
-        BRB     NEXT
-10$:    MOVAB   LINE, R6
+        BSBW    DCL$EXITPROC            ; past its end
+        BRB     DCL$NEXT
+10$:    MOVAB   DCL$LINE, R6
         ADDL2   R6, R7
-        BSBW    SKIP
+        BSBW    DCL$SKIP
         CMPL    R6, R7
-        BGEQU   NEXT
+        BGEQU   DCL$NEXT
         CMPB    (R6), #^A/$/            ; a command, else data, skipped
-        BNEQ    NEXT
+        BNEQ    DCL$NEXT
         INCL    R6
         BRB     SUBLINE
 PROMPT1:
@@ -551,87 +295,87 @@ PROMPT1:
         MOVZBL  (R1)+, R7
         BEQL    20$
         ADDL3   R1, R7, FIRSTP
-        MOVC3   R7, (R1), LINE
+        MOVC3   R7, (R1), DCL$LINE
         BRB     GOTLINE
-20$:    $QIOW_S CHAN=CHAN, FUNC=#IO$_READPROMPT, IOSB=IOSB, P1=LINE, P2=#LINESIZE, P5=#PROMPT, P6=#2
+20$:    $QIOW_S CHAN=CHAN, FUNC=#IO$_READPROMPT, IOSB=IOSB, P1=DCL$LINE, P2=#LINESIZE, P5=#PROMPT, P6=#2
         BLBC    R0, QUIT
         CMPW    IOSB, #SS$_LINKDISCON   ; SET HOST's: the line is gone
         BEQL    QUIT
         CMPW    IOSB, #SS$_LINKABORT
         BEQL    QUIT
         MOVZWL  IOSB+2, R7
-; GOTLINE: R7 = the length of the command in LINE.
+; GOTLINE: R7 = the length of the command in DCL$LINE.
 GOTLINE:
-        MOVAB   LINE, R6
+        MOVAB   DCL$LINE, R6
         ADDL2   R6, R7                  ; past the line
 SUBLINE:
-        BSBW    SUBST
-; COMMAND: R6 = a command's first character in LINE, R7 = past its last.
-; Does it.
-COMMAND:
-        BSBW    SKIP
+        BSBW    DCL$SUBST
+; DCL$COMMAND: R6 = a command's first character in DCL$LINE, R7 = past
+; its last. Does it.
+DCL$COMMAND::
+        BSBW    DCL$SKIP
         CMPL    R6, R7
         BGEQU   5$
         CMPB    (R6), #^A/$/            ; IF's THEN $ command, or a $ typed
         BNEQ    10$
         INCL    R6
-        BSBW    SKIP
+        BSBW    DCL$SKIP
         CMPL    R6, R7
         BLSSU   10$
-5$:     BRW     NEXT
+5$:     BRW     DCL$NEXT
 10$:    CMPB    (R6), #^A/@/
         BNEQ    15$
-        BRW     DO
+        BRW     DCL$DO
 15$:    MOVL    R6, R10                 ; a label, or an assignment?
-        BSBW    NAMESCAN
+        BSBW    DCL$NAMESCAN
         TSTL    R8
         BEQL    40$
-        BSBW    SKIP
+        BSBW    DCL$SKIP
         CMPL    R6, R7
         BGEQU   40$
         CMPB    (R6), #^A/=/
         BNEQ    20$
-        BRW     ASSIGN
+        BRW     DCL$ASSIGN
 20$:    CMPB    (R6), #^A/:/
         BNEQ    40$
         INCL    R6
         CMPL    R6, R7
-        BGEQU   COMMAND
+        BGEQU   DCL$COMMAND
         CMPB    (R6), #^A/=/
-        BNEQ    COMMAND                 ; a label: the rest is the command
-        BRW     STRASSIGN
+        BNEQ    DCL$COMMAND             ; a label: the rest is the command
+        BRW     DCL$STRASSIGN
 40$:    MOVL    R10, R6
-        BSBW    WORD
+        BSBW    DCL$WORD
         TSTL    R8
         BEQL    5$
         CMPL    R8, #31                 ; a symbol for the verb?
         BGTRU   VERBS
-        MOVB    R8, SYMNAM
-        MOVC3   R8, TOKEN, SYMNAM+1
-        BSBW    FINDSYM
+        MOVB    R8, DCL$SYMNAM
+        MOVC3   R8, DCL$TOKEN, DCL$SYMNAM+1
+        BSBW    DCL$FINDSYM
         TSTL    R1
         BEQL    VERBS
-        MOVAB   VSTACK, R9              ; its value, then the rest, in LINE
+        MOVAB   DCL$VSTACK, R9          ; its value, then the rest, in DCL$LINE
         MOVC3   #VAL$K_LENGTH, SYM$R_VALUE(R1), (R9)
-        BSBW    TOSTR
+        BSBW    DCL$TOSTR
         MOVZBL  VAL$T_STR(R9), R11
         BEQL    45$
         CMPB    VAL$T_STR+1(R9), #^A/$/ ; name := $image, a foreign command
         BNEQ    45$
         BRW     FOREIGN
-45$:    MOVC3   R11, VAL$T_STR+1(R9), LINE2
+45$:    MOVC3   R11, VAL$T_STR+1(R9), DCL$LINE2
         SUBL3   R6, R7, R0
         SUBL3   R11, #LINESIZE, R1
         CMPL    R0, R1
         BLEQU   50$
         MOVL    R1, R0
 50$:    ADDL3   R0, R11, R7
-        MOVAB   LINE2[R11], R1
+        MOVAB   DCL$LINE2[R11], R1
         MOVC3   R0, (R6), (R1)
-        MOVC3   R7, LINE2, LINE
-        MOVAB   LINE, R6
+        MOVC3   R7, DCL$LINE2, DCL$LINE
+        MOVAB   DCL$LINE, R6
         ADDL2   R6, R7
-        BSBW    WORD
+        BSBW    DCL$WORD
         TSTL    R8
         BEQL    5$
 ; VERBS: R6 = past the verb, R8 = its length. Parses the command with
@@ -642,17 +386,17 @@ VERBS:  SUBL3   R8, R6, R0              ; the command
         MOVL    R0, CMDDSC+4
         SUBL3   R0, R7, CMDDSC
         CLRL    R1                      ; prompts only at the console
-        TSTL    DEPTH
+        TSTL    DCL$DEPTH
         BNEQ    10$
         MOVAB   PROMPTFOR, R1
-10$:    PUSHAL  PTABVEC                 ; SET COMMAND's tables first
+10$:    PUSHAL  DCL$PTABVEC             ; SET COMMAND's tables first
         PUSHAB  DCLFAC
         PUSHL   R1
         PUSHAB  G^DCL$TABLES
         PUSHAQ  CMDDSC
         CALLS   #5, G^CLI$$DCL_PARSE
         BLBS    R0, 20$
-        BRW     DONE                    ; reported
+        BRW     DCL$DONE                ; reported
 20$:    TSTB    G^CLI$$ROUTINE
         BNEQ    30$
         BRW     IMGVERB
@@ -661,7 +405,7 @@ VERBS:  SUBL3   R8, R6, R0              ; the command
         BEQL    60$
         MOVL    R10, R1
         MOVAB   G^CLI$$ROUTINE, R2
-        BSBW    SAMESTR
+        BSBW    DCL$SAMESTR
         MOVZBL  (R10), R1
         ADDL2   R1, R10
         INCL    R10
@@ -671,20 +415,20 @@ VERBS:  SUBL3   R8, R6, R0              ; the command
 50$:    MOVL    (R10), R0
         JMP     (R0)
 60$:    PRINT   "%DCL-W-INVROUT, invalid routine specified in command tables - check .CLD file"
-        BRW     WARN
+        BRW     DCL$WARN
 LOGOUT:                                 ; the process ends
 QUIT:   $DELPRC_S
 
-; CONTINUE: returns from the CTRL/Y AST to the image it stopped, with
-; CTRL/Y enabled again, or does nothing if there is none.
-CONTINUE:
-        TSTL    CTRLYFP
+; DCL$CONTINUE: returns from the CTRL/Y AST to the image it stopped,
+; with CTRL/Y enabled again, or does nothing if there is none.
+DCL$CONTINUE::
+        TSTL    DCL$CTRLYFP
         BEQL    10$
         BSBW    CTRLYON
-        MOVL    CTRLYFP, FP
-        CLRL    CTRLYFP
+        MOVL    DCL$CTRLYFP, FP
+        CLRL    DCL$CTRLYFP
         RET
-10$:    BRW     OK
+10$:    BRW     DCL$OK
 
 ; STOP [process-name], STOP/IDENTIFICATION=pid: deletes the process with
 ; $DELPRC, pid in hex. With neither, ends the procedures running, and
@@ -692,30 +436,30 @@ CONTINUE:
 ; runs it down without its exit handlers, user mode's, and calls DCL
 ; afresh, with CTRL/Y enabled again, and SS$_ABORT, reported already.
 STOP:   MOVAB   V_IDENT, R1
-        BSBW    GETVAL
+        BSBW    DCL$GETVAL
         TSTL    R8
         BNEQ    STOPID
         MOVAB   V_PRCNAM, R1
-        BSBW    GETVAL
+        BSBW    DCL$GETVAL
         TSTL    R8
         BEQL    10$
         MOVL    R8, TOKDSC
         $DELPRC_S PRCNAM=TOKDSC
-        BRW     DONE
-10$:    BSBW    ENDPROCS
-        TSTL    CTRLYFP
+        BRW     DCL$DONE
+10$:    BSBW    DCL$ENDPROCS
+        TSTL    DCL$CTRLYFP
         BEQL    20$
-        CLRL    CTRLYFP
+        CLRL    DCL$CTRLYFP
         BSBW    CTRLYON
         $EXIT_S #<SS$_ABORT!INHIB>
 20$:    MOVL    #<SS$_ABORT!INHIB>, R0
-        BRW     DONE
+        BRW     DCL$DONE
 
-; STOPID: TOKEN = a PID, R8 = its length: its hex digits, 8 at most.
+; STOPID: DCL$TOKEN = a PID, R8 = its length: its hex digits, 8 at most.
 STOPID: CLRL    STOPPID
         CMPL    R8, #8
         BGTRU   30$
-        MOVAB   TOKEN, R1
+        MOVAB   DCL$TOKEN, R1
 10$:    MOVZBL  (R1)+, R0
         SUBL2   #^A/0/, R0
         CMPL    R0, #9
@@ -729,20 +473,20 @@ STOPID: CLRL    STOPPID
         BISL2   R0, STOPPID
         SOBGTR  R8, 10$
         $DELPRC_S PIDADR=STOPPID
-        BRW     DONE
+        BRW     DCL$DONE
 30$:    PRINT   "%DCL-W-IVCHAR, invalid numeric value - check for invalid digits"
-        BRW     WARN
+        BRW     DCL$WARN
 
 ; RUN image: runs it with $IMGACT, which returns only if it can't.
-RUN:    MOVAB   V_FILE, R1
-        BSBW    GETVAL
+RUN:    MOVAB   DCL$V_FILE, R1
+        BSBW    DCL$GETVAL
         CLRL    R9                      ; no command line
         BRB     IMAGE
 
-; FOREIGN: R9 = the value, $image, of the symbol SYMNAM, the verb, R10 =
-; the command's first character, R7 = past its last. Runs image, with a
-; parse whose $LINE is the command, in capitals outside quotes, which
-; LIB$GET_FOREIGN takes the words after the verb from.
+; FOREIGN: R9 = the value, $image, of the symbol DCL$SYMNAM, the verb,
+; R10 = the command's first character, R7 = past its last. Runs image,
+; with a parse whose $LINE is the command, in capitals outside quotes,
+; which LIB$GET_FOREIGN takes the words after the verb from.
 FOREIGN:
         MOVL    R10, R1
         CLRL    R2                      ; 1 in quotes
@@ -762,31 +506,32 @@ FOREIGN:
         BRB     10$
 30$:    MOVL    R10, CMDDSC+4
         SUBL3   R10, R7, CMDDSC
-        PUSHAB  SYMNAM
+        PUSHAB  DCL$SYMNAM
         PUSHAQ  CMDDSC
         CALLS   #2, G^CLI$$FOREIGN
         MOVZBL  VAL$T_STR(R9), R8       ; the image, past the $
         DECL    R8
-        MOVC3   R8, VAL$T_STR+2(R9), TOKEN
+        MOVC3   R8, VAL$T_STR+2(R9), DCL$TOKEN
         BRB     WITHPARSE
 
 ; IMGVERB: runs the parsed verb's image, with the parse as its command.
 IMGVERB:
         MOVZBL  G^CLI$$IMAGE, R8
-        MOVC3   R8, G^CLI$$IMAGE+1, TOKEN
-; WITHPARSE: TOKEN = an image, R8 = its length: runs it with the parse.
+        MOVC3   R8, G^CLI$$IMAGE+1, DCL$TOKEN
+; WITHPARSE: DCL$TOKEN = an image, R8 = its length: runs it with the
+; parse.
 WITHPARSE:
         MOVAB   G^CLI$$RESULT, R0
         MOVZWL  (R0), RESDSC
         MOVL    R0, RESDSC+4
         MOVAB   RESDSC, R9
-; IMAGE: TOKEN = an image's name, R8 = its length, R9 = the parse's
+; IMAGE: DCL$TOKEN = an image's name, R8 = its length, R9 = the parse's
 ; descriptor, or 0. Runs it, IMAGE.EXE if it has no type.
 IMAGE:  CLRL    R0                      ; a type?
-15$:    CMPB    TOKEN[R0], #^A/./
+15$:    CMPB    DCL$TOKEN[R0], #^A/./
         BEQL    20$
         AOBLSS  R8, R0, 15$
-        MOVAB   TOKEN[R8], R0
+        MOVAB   DCL$TOKEN[R8], R0
         MOVL    DOTEXE, (R0)
         ADDL2   #4, R8
 20$:    MOVL    R8, TOKDSC
@@ -795,480 +540,81 @@ IMAGE:  CLRL    R0                      ; a type?
         MOVAB   TOKDSC, R1
         BRB     ACTFAIL
 
-INSFPRM:
+; DCL$INSFPRM: after a command without a parameter it needs.
+DCL$INSFPRM::
         PRINT   "%DCL-W-INSFPRM, missing command parameters - supply all required parameters"
-; WARN: after a warning DCL reported.
-WARN:   MOVL    #CLIWARN, R0
-        BRW     DONE
+; DCL$WARN: after a warning DCL reported.
+DCL$WARN::
+        MOVL    #CLIWARN, R0
+        BRW     DCL$DONE
 
 ; ACTFAIL: R0 = the status $IMGACT returned, R1 = the image's descriptor.
 ; Reports it, and prompts for the next command. The image CTRL/Y stopped,
 ; if there was one, is gone.
 ACTFAIL:
         CLRL    IMGRUN
-        CLRL    CTRLYFP
+        CLRL    DCL$CTRLYFP
         PUSHL   R0
         PUSHL   R1
         ADDTEXT "%DCL-W-ACTIMAGE, error activating image "
         MOVL    (SP)+, R0
         MOVZWL  (R0), R2
         MOVL    4(R0), R1
-        BSBW    ADD
-        BSBW    SAY
+        BSBW    DCL$ADD
+        BSBW    DCL$SAY
         MOVZBL  #^A/-/, R0
         MOVL    (SP)+, R1
         PUSHL   R1
-        BSBW    STATUS
+        BSBW    DCL$STATUS
         BISL3   #INHIB, (SP)+, R0
-        BRW     DONE
+        BRW     DCL$DONE
 
-; DEFINE[/PROCESS|/SYSTEM|/TABLE=table][/[NO]LOG] name equivalence:
-; makes name a logical name in the table, the process's by default,
-; telling if it replaced one, unless /NOLOG.
-DEFINE: MOVL    #1, R1
-        BSBW    LNMTAB
-        MOVAB   V_LOGNAM, R1
-        BSBW    NAMEVAL
-        MOVAB   V_EQUNAM, R1
-        BSBW    GETVAL
-        MOVW    R8, CREITEMS
-        $CRELNM_S TABNAM=@TABDSC, LOGNAM=NAMDSC, ITMLST=CREITEMS
-        CMPL    R0, #SS$_SUPERSEDE
-        BNEQ    DONE
-        MOVAB   V_LOG, R1
-        BSBW    ISPRES
-        BLBS    R0, 10$
-        BRW     OK
-10$:    ADDTEXT "%DCL-I-SUPERSEDE, previous value of "
-        BSBW    ADDNAME
-        ADDTEXT " has been superseded"
-        BSBW    SAY
-        BRW     OK
-
-; DEASSIGN[/PROCESS|/SYSTEM|/TABLE=table] name: deletes the logical
-; name from the table, the process's by default.
-DEASSIGN:
-        MOVL    #1, R1
-        BSBW    LNMTAB
-        MOVAB   V_LOGNAM, R1
-        BSBW    NAMEVAL
-        $DELLNM_S TABNAM=@TABDSC, LOGNAM=NAMDSC
-; DONE: R0 = a command's status, or an image's. Makes it $STATUS, and
-; reports it if it is a failure no one reported, which it then marks
+; DCL$DONE: R0 = a command's status, or an image's. Makes it $STATUS,
+; and reports it if it is a failure no one reported, which it then marks
 ; reported. An error or a fatal error ends the procedures running. Then
 ; the next command.
-DONE:   MOVL    R0, LASTSTAT
+DCL$DONE::
+        MOVL    R0, DCL$LASTSTAT
         BLBS    R0, 20$
         BBS     #INHIB_MSG, R0, 10$
         MOVL    R0, R1
         MOVZBL  #^A/%/, R0
-        BSBW    STATUS
-        BISL2   #INHIB, LASTSTAT
-10$:    TSTL    DEPTH
+        BSBW    DCL$STATUS
+        BISL2   #INHIB, DCL$LASTSTAT
+10$:    TSTL    DCL$DEPTH
         BEQL    20$
-        BICL3   #^C7, LASTSTAT, R0      ; the severity
+        BICL3   #^C7, DCL$LASTSTAT, R0  ; the severity
         CMPL    R0, #2                  ; STS$K_ERROR
         BEQL    15$
         CMPL    R0, #4                  ; STS$K_SEVERE
         BNEQ    20$
-15$:    BSBW    EXITPROC
+15$:    BSBW    DCL$EXITPROC
         BRB     10$
-20$:    BRW     NEXT
+20$:    BRW     DCL$NEXT
 
-; OK: after a command that worked.
-OK:     MOVL    #SS$_NORMAL, LASTSTAT
-        BRW     NEXT
+; DCL$OK: after a command that worked.
+DCL$OK::
+        MOVL    #SS$_NORMAL, DCL$LASTSTAT
+        BRW     DCL$NEXT
 
 ; SET [NO]CONTROL[=Y]: enables DCL's CTRL/Y AST, or disables it, so that
 ; CTRL/Y, and CTRL/C no image has an AST for, do nothing.
 SET:    MOVAB   V_CONTROL, R1
-        BSBW    ISPRES
+        BSBW    DCL$ISPRES
         CMPL    R0, #CLI$_ABSENT
-        BEQL    SETDEF
+        BEQL    DCL$SETDEF
         CLRL    NOCTRLY
         CMPL    R0, #CLI$_NEGATED
         BNEQ    10$
         MOVL    #1, NOCTRLY
 10$:    BSBW    CTRLYON
-        BRW     OK
+        BRW     DCL$OK
 
-; SET DEFAULT spec: $PARSEs spec, which must name no file, and makes the
-; directory it expands to the default, with $SETDDIR, and its device the
-; process's SYS$DISK. One that doesn't
-; exist is still set, as VMS does, with a message.
-SETDEF: MOVAB   V_DIR, R1
-        BSBW    GETVAL
-        TSTL    R8
-        BNEQ    5$
-        BRW     INSFPRM
-5$:
-        MOVB    R8, DEFFAB+FAB$B_FNS
-        $PARSE  FAB=DEFFAB
-        MOVL    R0, R6
-        CMPL    R0, #RMS$_DNF
-        BEQL    10$
-        BLBC    R0, 20$
-10$:    MOVL    #RMS$_SYN, R0
-        TSTB    DEFNAM+NAM$B_NAME
-        BNEQ    20$
-        MOVZBL  DEFNAM+NAM$B_DIR, DIRDSC
-        MOVL    DEFNAM+NAM$L_DIR, DIRDSC+4
-        $SETDDIR_S NEWDIR=DIRDSC
-        BLBC    R0, 20$
-        MOVZBW  DEFNAM+NAM$B_DEV, DISKITEMS
-        MOVL    DEFNAM+NAM$L_DEV, DISKITEMS+4
-        $CRELNM_S TABNAM=PROCESS, LOGNAM=DISK, ITMLST=DISKITEMS
-        BLBC    R0, 20$
-        CMPL    R6, #RMS$_DNF
-        BNEQ    20$
-        ADDTEXT "%DCL-I-INVDEF, "
-        BSBW    ADDDEF
-        ADDTEXT " does not exist"
-        BSBW    SAY
-        BRW     OK
-20$:    BRW     DONE
-
-; SET COMMAND file: compiles the command definitions in file, file.CLD
-; if it has no type, with CDU$COMPILE, into the process's tables in
-; PTABS, which DCL looks for a verb in before DCL$TABLES, the last first
-; (ADR-0018).
-SETCOMMAND:
-        MOVAB   V_FILE, R1
-        BSBW    GETVAL
-        TSTL    R8
-        BNEQ    5$
-        BRW     INSFPRM
-5$:     CMPL    PTABVEC, #MAXPTAB
-        BLSSU   7$
-        PRINT   "%CDU-E-TABOVF, command tables full"
-        BRW     WARN
-7$:     MOVB    R8, CLDFAB+FAB$B_FNS
-        $OPEN   FAB=CLDFAB
-        BLBC    R0, 80$
-        $CONNECT RAB=CLDRAB
-        BLBC    R0, 70$
-        MOVAB   CLDBUF, R11             ; where the next line goes
-10$:    MOVAB   CLDBUF+CLDMAX-LINESIZE-1, R0
-        CMPL    R11, R0
-        BLEQU   15$
-        MOVL    #RMS$_DME, R0           ; no room
-        BRB     70$
-15$:    MOVL    R11, CLDRAB+RAB$L_UBF
-        $GET    RAB=CLDRAB
-        BLBS    R0, 20$
-        CMPL    R0, #RMS$_RTB           ; too long: what fits
-        BEQL    20$
-        CMPL    R0, #RMS$_EOF
-        BNEQ    70$
-        BRB     30$
-20$:    MOVZWL  CLDRAB+RAB$W_RSZ, R0
-        ADDL2   R0, R11
-        MOVB    #10, (R11)+
-        BRB     10$
-30$:    $CLOSE  FAB=CLDFAB
-        MOVAB   CLDBUF, R0
-        SUBL3   R0, R11, CLDDSC
-        MOVAB   PTABS+PTABMAX, R0       ; the room left
-        SUBL3   PTABFREE, R0, PTABDSC
-        MOVL    PTABFREE, PTABDSC+4
-        PUSHAW  PTABLEN
-        PUSHAQ  PTABDSC
-        PUSHAQ  CLDDSC
-        CALLS   #3, G^CDU$COMPILE
-        BLBC    R0, 80$                 ; reported
-        MOVL    PTABVEC, R1             ; the last first
-40$:    TSTL    R1
-        BEQL    50$
-        MOVL    PTABVEC[R1], PTABVEC+4[R1]
-        DECL    R1
-        BRB     40$
-50$:    MOVL    PTABFREE, PTABVEC+4
-        INCL    PTABVEC
-        MOVZWL  PTABLEN, R0             ; the next ones after them, aligned
-        ADDL2   #3, R0
-        BICL2   #3, R0
-        ADDL2   R0, PTABFREE
-        BRW     OK
-70$:    PUSHL   R0
-        $CLOSE  FAB=CLDFAB
-        MOVL    (SP)+, R0
-80$:    BRW     DONE
-
-; SHOW DEFAULT: shows the default device and directory, what $PARSE
-; expands an empty specification to.
-SHOWDEF:
-        CLRB    DEFFAB+FAB$B_FNS
-        $PARSE  FAB=DEFFAB
-        CMPL    R0, #RMS$_DNF
-        BEQL    10$
-        BLBC    R0, 20$
-10$:    ADDTEXT "  "
-        BSBW    ADDDEF
-        BSBW    SAY
-        MOVL    #SS$_NORMAL, R0
-20$:    BRW     DONE
-
-; SHOW DEVICES [name]: lists the disks, with their status, error counts
-; and their volumes' labels and free blocks, then the terminal, under VMS's
-; headings, or only the devices whose names start with name, with *
-; and % wildcards: SHOW DEVICES DK. It finds them with $DEVICE_SCAN, a
-; class at a time, and asks each about itself with $GETDVIW.
-; SS$_NOSUCHDEV if none matches.
-; With /MOUNTED, only the devices with a volume mounted.
-; ponytail: no transactions or mount counts, which nothing keeps; no
-; /FULL.
-SHOWDEV:
-        MOVAB   V_MOUNTED, R1
-        BSBW    ISPRES
-        BICL3   #^C1, R0, MOUNTED
-        MOVAB   V_DEVNAM, R1
-        BSBW    GETVAL
-        TSTL    R8                      ; name*, without its colon
-        BEQL    5$
-        CMPB    TOKEN-1[R8], #^A/:/
-        BNEQ    3$
-        DECL    R8
-3$:     MOVB    #^A/*/, TOKEN[R8]
-        INCL    R8
-5$:     MOVL    R8, PATDSC
-        CLRL    R7                      ; the devices listed
-        MOVL    #DC$_DISK, DEVCLASS
-        BSBB    SCAN
-        MOVL    #DC$_TERM, DEVCLASS
-        BSBB    SCAN
-        MOVL    #SS$_NORMAL, R0
-        TSTL    R7
-        BNEQ    10$
-        MOVL    #SS$_NOSUCHDEV, R0
-10$:    BRW     DONE
-
-; SCAN: lists the devices of DEVCLASS's class whose names match PATDSC's,
-; under their headings, if there are any. R7 = how many there were, and
-; as many more. Uses R0-R6.
-SCAN:   CLRQ    SCANCTX
-        CLRL    R6                      ; 1 once the headings are out
-10$:    $DEVICE_SCAN_S RETURN_DEVNAM=DEVDSC, RETLEN=DVINAM, SEARCH_DEVNAM=PATDSC, ITMLST=DVSITEMS, CONTXT=SCANCTX
-        BLBC    R0, 90$
-        $GETDVIW_S DEVNAM=DVINAM, ITMLST=DVIITEMS
-        BLBC    R0, 10$
-        TSTL    MOUNTED
-        BEQL    12$
-        TSTL    V_MNT
-        BEQL    10$
-12$:    TSTL    R6
-        BNEQ    20$
-        INCL    R6
-        PRINT   ""
-        CMPL    DEVCLASS, #DC$_DISK
-        BNEQ    15$
-        PRINT   "Device                  Device           Error    Volume         Free"
-        PRINT   " Name                   Status           Count     Label        Blocks"
-        BRB     20$
-15$:    PRINT   "Device                  Device           Error"
-        PRINT   " Name                   Status           Count"
-20$:    INCL    R7
-        MOVAB   DEVNAME+1, R1           ; without its underscore
-        MOVZWL  DVINAM, R2
-        DECL    R2
-        BSBW    ADD
-        MOVL    #24, R3
-        BSBW    PADTO
-        MOVAB   S_OFFLINE, R1
-        BITL    #UCB$M_ONLINE, V_STS
-        BEQL    25$
-        MOVAB   S_ONLINE, R1
-25$:    TSTL    V_MNT
-        BEQL    30$
-        MOVAB   S_MOUNTED, R1
-        TSTL    V_SWL
-        BEQL    30$
-        MOVAB   S_WRTLCK, R1
-30$:    BSBW    ADDCSTR
-        MOVL    #41, R3
-        BSBW    PADTO
-        MOVL    V_ERRCNT, R1
-        MOVL    #5, R3
-        BSBW    ADDDEC
-        TSTL    V_MNT
-        BEQL    40$
-        ADDTEXT "  "
-        MOVAB   DEVLABEL+1, R1
-        MOVZWL  LABLEN, R2
-        BSBW    ADD
-        MOVL    #62, R3
-        BSBW    PADTO
-        MOVL    DEVFREE, R1
-        MOVL    #8, R3
-        BSBW    ADDDEC
-40$:    BSBW    SAY
-        BRW     10$
-90$:    RSB
-
-; PADTO: R3 = a column. Appends blanks to MSG up to it. Uses R0-R2.
-PADTO:  MOVZBL  MSG, R0
-        CMPL    R0, R3
-        BGEQ    10$
-        MOVZBL  #^A/ /, R0
-        BSBW    ADDCHAR
-        BRB     PADTO
-10$:    RSB
-
-; ADDDEC: appends R1 in decimal to MSG, right-aligned in R3 columns.
-; Uses R0-R5.
-ADDDEC: CLRL    R4                      ; digits, on the stack
-10$:    DIVL3   #10, R1, R5
-        MULL3   #10, R5, R0
-        SUBL3   R0, R1, R0
-        ADDL2   #^A/0/, R0
-        PUSHL   R0
-        INCL    R4
-        MOVL    R5, R1
-        BNEQ    10$
-20$:    CMPL    R3, R4
-        BLEQ    30$
-        MOVZBL  #^A/ /, R0
-        BSBW    ADDCHAR
-        DECL    R3
-        BRB     20$
-30$:    MOVL    (SP)+, R0
-        BSBW    ADDCHAR
-        SOBGTR  R4, 30$
-        RSB
-
-; ADDDEF: appends the device and directory $PARSE left in DEFNAM to MSG.
-; Uses R0-R2.
-ADDDEF: MOVL    DEFNAM+NAM$L_DEV, R1
-        MOVZBL  DEFNAM+NAM$B_DEV, R2
-        ADDB2   DEFNAM+NAM$B_DIR, R2
-        BRW     ADD
-
-; SHOW LOGICAL[/PROCESS|/SYSTEM|/TABLE=table] [name]: translates name in
-; the table, LNM$FILE_DEV by default, and shows the equivalence and the
-; table it is in. With no name, or *, lists the table's names.
-; SHOW DEFAULT: as SHOWDEF. SHOW DEVICES: as SHOWDEV. SHOW PROCESS and
-; SHOW SYSTEM are SHOW_IMAGE's, SHOW.EXE's.
-SHOW:   MOVAB   V_OPTION, R1            ; the keyword, all of it
-        BSBW    GETVAL
-        MOVAB   V_DEFAULT, R1
-        BSBW    VERB
-        BLBS    R0, SHOWDEF
-        MOVAB   V_DEVICES, R1
-        BSBW    VERB
-        BLBS    R0, SHOWDEV
-        MOVAB   V_LOGICAL, R1
-        BSBW    VERB
-        BLBS    R0, 10$
-        BRW     SHOWSYM                 ; SYMBOL
-10$:    MOVL    #3, R1
-        BSBW    LNMTAB
-        MOVAB   V_LOGNAM, R1
-        BSBW    NAMEVAL
-        TSTL    R8
-        BEQL    LIST
-        CMPL    R8, #1
-        BNEQ    15$
-        CMPB    NAME, #^A/*/
-        BEQL    LIST
-15$:    $TRNLNM_S TABNAM=@TABDSC, LOGNAM=NAMDSC, ITMLST=TRNITEMS
-        BLBS    R0, 20$
-        CMPL    R0, #SS$_NOLOGNAM
-        BNEQ    DONE
-        ADDTEXT "%SHOW-S-NOTRAN, no translation for logical name "
-        BSBW    ADDNAME
-        BSBW    SAY
-        BRW     OK
-20$:    ADDTEXT "   "
-        BSBW    PAIR
-        ADDTEXT " ("
-        MOVAB   TABNAM, R1
-        MOVZWL  TABLEN, R2
-        BSBW    ADD
-        ADDTEXT ")"
-        BSBW    SAY
-        BRW     OK
-
-; LIST: lists the logical names of the process's table, then the system's,
-; those TABMASK has, as VMS's SHOW LOGICAL does, under each table's name.
-; It takes CMKRNL, for GETLNM: SS$_NOPRIV without.
-LIST:   CLRL    R6                      ; the table: 0 the process's, 1 the system's
-10$:    BBS     R6, TABMASK, 12$
-        BRW     30$
-12$:    PRINT   ""
-        ADDTEXT "("
-        MOVAB   PROCTAB, R1
-        TSTL    R6
-        BEQL    15$
-        MOVAB   SYSTAB, R1
-15$:    BSBW    ADDCSTR
-        ADDTEXT ")"
-        BSBW    SAY
-        PRINT   ""
-        CLRL    R7                      ; the name's index
-20$:    MOVL    R6, LNMARGS+4
-        MOVL    R7, LNMARGS+8
-        $CMKRNL_S ROUTIN=GETLNM, ARGLST=LNMARGS
-        BLBS    R0, 25$
-        CMPL    R0, #SS$_NOLOGNAM
-        BEQL    30$
-        BRW     DONE
-25$:    ADDTEXT "  "
-        BSBW    PAIR
-        BSBW    SAY
-        INCL    R7
-        BRB     20$
-30$:    AOBLEQ  #1, R6, 10$
-        BRW     OK
-
-; GETLNM table, index: in kernel mode, copies the index'th logical name of
-; a table, 0 the process's and 1 the system's, to NAME and NAMDSC, and its
-; equivalence to EQV and EQVLEN. SS$_NOLOGNAM past the last. A name made
-; or deleted between calls may be missed or shown twice.
-; ponytail: walks the executive's tables itself, as DIRECTORY reads the
-; boot volume; VMS's DCL asks the executive's logical name routines.
-        .ENTRY  GETLNM, ^M<R2, R3, R4, R5>
-        MOVL    G^SCH$GL_CURPCB, R2
-        MOVAQ   PCB$Q_LNMHD(R2), R2
-        TSTL    4(AP)
-        BEQL    10$
-        MOVAQ   G^LNM$GQ_SYSTEM, R2
-10$:    MOVL    8(AP), R3
-        DSBINT  #IPL$_SYNCH             ; the tables
-        MOVL    R2, R1
-20$:    MOVL    (R1), R1
-        CMPL    R1, R2
-        BEQL    80$
-        SOBGEQ  R3, 20$
-        PUSHL   R1
-        MOVZBL  LNMB$T_NAME(R1), NAMDSC
-        MOVC3   NAMDSC, LNMB$T_NAME+1(R1), NAME
-        MOVL    (SP)+, R1
-        MOVZBL  LNMB$T_NAME(R1), R0
-        MOVAB   LNMB$T_NAME+1(R1)[R0], R1
-        MOVZBL  (R1)+, R0
-        MOVW    R0, EQVLEN
-        MOVC3   R0, (R1), EQV
-        MOVL    #SS$_NORMAL, R0
-        BRB     90$
-80$:    MOVL    #SS$_NOLOGNAM, R0
-90$:    ENBINT
-        RET
-
-; PAIR: appends "name" = "equivalence", of NAME and EQV, to MSG. Uses
-; R0-R2.
-PAIR:   BSBW    QUOTE
-        BSBW    ADDNAME
-        BSBW    QUOTE
-        ADDTEXT " = "
-        BSBW    QUOTE
-        MOVAB   EQV, R1
-        MOVZWL  EQVLEN, R2
-        BSBW    ADD
-        BRW     QUOTE
-
-; GETVAL: R1 = an entity's name, .ASCID. Copies its first value in the
-; command's parse to TOKEN: R8 = its length, 0 if it has none. Uses R0,
-; R1.
-GETVAL: PUSHAW  VALLEN
+; DCL$GETVAL: R1 = an entity's name, .ASCID. Copies its first value in
+; the command's parse to DCL$TOKEN: R8 = its length, 0 if it has none.
+; Uses R0, R1.
+DCL$GETVAL::
+        PUSHAW  VALLEN
         PUSHAQ  VALDSC
         PUSHL   R1
         CALLS   #3, G^CLI$GET_VALUE
@@ -1277,99 +623,46 @@ GETVAL: PUSHAW  VALLEN
         CLRL    R8
 10$:    RSB
 
-; ISPRES: R1 = an entity's name, .ASCID. R0 = CLI$PRESENT's status for
-; it, odd if it is present or defaulted. Uses R0, R1.
-ISPRES: PUSHL   R1
+; DCL$ISPRES: R1 = an entity's name, .ASCID. R0 = CLI$PRESENT's status
+; for it, odd if it is present or defaulted. Uses R0, R1.
+DCL$ISPRES::
+        PUSHL   R1
         CALLS   #1, G^CLI$PRESENT
         RSB
 
-; SCOPE: R10 = the level a symbol command's /LOCAL or /GLOBAL says: the
-; procedure running's, GLOBAL, or ANY for neither. Uses R0, R1.
-SCOPE:  MOVL    #GLOBAL, R10
-        MOVAB   V_GLOBAL, R1
-        BSBB    ISPRES
-        BLBS    R0, 10$
-        MOVL    DEPTH, R10
-        MOVAB   V_LOCAL, R1
-        BSBB    ISPRES
-        BLBS    R0, 10$
-        MOVL    #ANY, R10
-10$:    RSB
-
-; LNMTAB: R1 = the tables a logical name command uses by default, as
-; TABMASK. Makes TABMASK and TABDSC those its /PROCESS, /SYSTEM or
-; /TABLE=table say: SS$_NOLOGTAB, to DONE, for a table there isn't.
-; Uses R0-R5, R8.
-LNMTAB: MOVL    R1, TABMASK
-        MOVAB   V_PROCQ, R1
-        BSBB    ISPRES
-        BLBC    R0, 10$
-        MOVL    #1, TABMASK
-10$:    MOVAB   V_SYSQ, R1
-        BSBB    ISPRES
-        BLBC    R0, 20$
-        MOVL    #2, TABMASK
-20$:    MOVAB   V_TABLE, R1
-        BSBB    ISPRES
-        BLBC    R0, 50$
-        MOVAB   V_TABLE, R1
-        BSBW    GETVAL
-        MOVAB   TABNAMES, R2
-30$:    MOVZBL  (R2), R3
-        BEQL    40$
-        CMPL    R3, R8
-        BNEQ    35$
-        MOVAB   1(R2), R1               ; the same length: the same name?
-        MOVAB   TOKEN, R4
-        CLRL    R5
-32$:    CMPL    R5, R8
-        BGEQU   37$
-        CMPB    (R1)[R5], (R4)[R5]
-        BNEQ    35$
-        INCL    R5
-        BRB     32$
-35$:    ADDL2   R3, R2                  ; past the name and its mask
-        ADDL2   #2, R2
-        BRB     30$
-37$:    MOVZBL  1(R2)[R3], TABMASK
-        BRB     50$
-40$:    MOVL    #SS$_NOLOGTAB, R0
-        BRW     DONE
-50$:    MOVL    TABMASK, R0
-        MOVL    TABDSCS[R0], TABDSC
+; DCL$NAMEVAL: the same, copied to DCL$NAME, which DCL$NAMDSC describes.
+; Uses R0-R5.
+DCL$NAMEVAL::
+        BSBB    DCL$GETVAL
+        MOVC3   R8, DCL$TOKEN, DCL$NAME
+        MOVL    R8, DCL$NAMDSC
         RSB
 
-; NAMEVAL: the same, copied to NAME, which NAMDSC describes. Uses R0-R5.
-NAMEVAL:
-        BSBB    GETVAL
-        MOVC3   R8, TOKEN, NAME
-        MOVL    R8, NAMDSC
-        RSB
-
-; RESTVAL: R1 = an entity's name, .ASCID, a $REST_OF_LINE. Copies its
-; value to LINE: R6 = LINE, R7 = past it, where IF, EXIT and WRITE read
-; their expressions. Uses R0-R5, R8.
-RESTVAL:
-        BSBB    GETVAL
-        MOVC3   R8, TOKEN, LINE
-        MOVAB   LINE, R6
+; DCL$RESTVAL: R1 = an entity's name, .ASCID, a $REST_OF_LINE. Copies
+; its value to DCL$LINE: R6 = DCL$LINE, R7 = past it, where IF, EXIT and
+; WRITE read their expressions. Uses R0-R5, R8.
+DCL$RESTVAL::
+        BSBB    DCL$GETVAL
+        MOVC3   R8, DCL$TOKEN, DCL$LINE
+        MOVAB   DCL$LINE, R6
         ADDL3   R6, R8, R7
         RSB
 
-; VALNAME: R1 = an entity's name, .ASCID. Its first value, as a symbol
-; name, to SYMNAM, as NAMESCAN makes it: R8 = its length. Uses R0, R1,
-; R6, R7.
-VALNAME:
-        BSBB    GETVAL
-        MOVAB   TOKEN, R6
+; DCL$VALNAME: R1 = an entity's name, .ASCID. Its first value, as a
+; symbol name, to DCL$SYMNAM, as DCL$NAMESCAN makes it: R8 = its length.
+; Uses R0, R1, R6, R7.
+DCL$VALNAME::
+        BSBB    DCL$GETVAL
+        MOVAB   DCL$TOKEN, R6
         ADDL3   R6, R8, R7
-        BRW     NAMESCAN
+        BRW     DCL$NAMESCAN
 
-; WORD: R6 = the next character of the line, R7 = past its last. Skips
-; blanks, then copies the characters up to the next blank, in capitals, to
-; TOKEN, with R6 past them. R8 = their count, 0 at the end of the line.
-; Uses R0.
-WORD:   CLRL    R8
+; DCL$WORD: R6 = the next character of the line, R7 = past its last.
+; Skips blanks, then copies the characters up to the next blank, in
+; capitals, to DCL$TOKEN, with R6 past them. R8 = their count, 0 at the
+; end of the line. Uses R0.
+DCL$WORD::
+        CLRL    R8
 10$:    CMPL    R6, R7
         BGEQU   40$
         CMPB    (R6), #^A/ /
@@ -1386,15 +679,15 @@ WORD:   CLRL    R8
         CMPB    R0, #^A/z/
         BGTRU   30$
         SUBB2   #^A/a/-^A/A/, R0
-30$:    MOVB    R0, TOKEN[R8]
+30$:    MOVB    R0, DCL$TOKEN[R8]
         INCL    R8
         INCL    R6
         BRB     20$
 40$:    RSB
 
 ; REST: R6 = the next character of the line, R7 = past its last. Copies
-; the words left to TOKEN, in capitals, a blank between each two, with R6
-; at the line's end: R8 = their length, R2 = how many. Uses R0.
+; the words left to DCL$TOKEN, in capitals, a blank between each two,
+; with R6 at the line's end: R8 = their length, R2 = how many. Uses R0.
 REST:   CLRL    R8
         CLRL    R2
 10$:    CMPL    R6, R7                  ; past the blanks
@@ -1405,7 +698,7 @@ REST:   CLRL    R8
         BRB     10$
 20$:    TSTL    R2
         BEQL    25$
-        MOVB    #^A/ /, TOKEN[R8]
+        MOVB    #^A/ /, DCL$TOKEN[R8]
         INCL    R8
 25$:    INCL    R2
 30$:    CMPL    R6, R7                  ; the word
@@ -1418,1205 +711,28 @@ REST:   CLRL    R8
         CMPB    R0, #^A/z/
         BGTRU   40$
         SUBB2   #^A/a/-^A/A/, R0
-40$:    MOVB    R0, TOKEN[R8]
+40$:    MOVB    R0, DCL$TOKEN[R8]
         INCL    R8
         INCL    R6
         BRB     30$
 50$:    RSB
 
-; VERB: R1 = a verb, .ASCIC. R0 = 1 if the R8 characters in TOKEN are
-; its first ones, else 0. Uses R2.
-VERB:   CLRL    R0
+; DCL$VERB: R1 = a verb, .ASCIC. R0 = 1 if the R8 characters in
+; DCL$TOKEN are its first ones, else 0. Uses R2.
+DCL$VERB::
+        CLRL    R0
         MOVZBL  (R1)+, R2
         CMPL    R8, R2
         BGTRU   90$
         CLRL    R2
 10$:    CMPL    R2, R8
         BGEQU   80$
-        CMPB    TOKEN[R2], (R1)[R2]
+        CMPB    DCL$TOKEN[R2], (R1)[R2]
         BNEQ    90$
         INCL    R2
         BRB     10$
 80$:    MOVL    #1, R0
 90$:    RSB
-
-; STATUS: R0 = % for a message, - for one that follows another, R1 = a
-; status. Writes its message, %FACILITY-S-NAME, text, from $GETMSG.
-; Uses R0-R5.
-STATUS: PUSHL   R0
-        $GETMSG_S MSGID=R1, MSGLEN=GMLEN, BUFADR=GMDSC
-        MOVL    (SP)+, R0
-        MOVB    R0, GMBUF               ; % or -
-        MOVAB   GMBUF, R1
-        MOVZWL  GMLEN, R2
-        BSBW    ADD
-; SAY: writes the message in MSG, and empties it. Uses R0 and R1.
-SAY:    PUSHAB  MSG
-        CALLS   #1, G^PUT_LINE
-        CLRB    MSG
-        RSB
-
-; ADDNAME: appends the logical name in NAME to MSG. Uses R0-R2.
-ADDNAME:
-        MOVAB   NAME, R1
-        MOVL    NAMDSC, R2
-        BRB     ADD
-
-; QUOTE: appends a double quote to MSG. Uses R0-R2.
-QUOTE:  MOVZBL  #34, R0
-        BRB     ADDCHAR
-
-; ADDCHAR: appends the character in R0 to MSG. Uses R0-R2.
-ADDCHAR:
-        MOVB    R0, CHAR
-        MOVAB   CHAR, R1
-        MOVL    #1, R2
-        BRB     ADD
-
-; ADDCSTR: appends the .ASCIC string at R1 to MSG. Uses R0-R2.
-ADDCSTR:
-        MOVZBL  (R1)+, R2
-; ADD: appends the R2 bytes at R1 to MSG, as many as fit. Uses R0-R2.
-ADD:    MOVZBL  MSG, R0
-10$:    TSTL    R2
-        BEQL    20$
-        CMPL    R0, #255
-        BGEQU   20$
-        INCL    R0
-        MOVB    (R1)+, MSG[R0]
-        DECL    R2
-        BRB     10$
-20$:    MOVB    R0, MSG
-        RSB
-
-; DO, @file [p1 ... p8]: reads the procedure file names, file.COM if it
-; has no type, into PBUF after the one running, and runs it, one level
-; deeper, with its parameters local symbols P1 to P8, "" those not given.
-DO:     INCL    R6
-        BSBW    WORD
-        TSTL    R8
-        BNEQ    5$
-        BRW     INSFPRM
-5$:     CMPL    DEPTH, #MAXDEPTH
-        BLSS    7$
-        PRINT   "%DCL-W-STKOVF, command procedures nested too deeply"
-        BRW     WARN
-7$:     MOVB    R8, PROCFAB+FAB$B_FNS
-        $OPEN   FAB=PROCFAB
-        BLBC    R0, 80$
-        $CONNECT RAB=PROCRAB
-        BLBC    R0, 70$
-        MOVL    DEPTH, R0
-        MOVL    PEND[R0], R10           ; its first line
-        MOVL    R10, R11                ; where the next goes
-10$:    MOVAB   PBUFEND-LINESIZE-1, R0
-        CMPL    R11, R0
-        BLEQU   15$
-        MOVL    #RMS$_DME, R0           ; no room
-        BRB     70$
-15$:    MOVAB   1(R11), PROCRAB+RAB$L_UBF
-        $GET    RAB=PROCRAB
-        BLBS    R0, 20$
-        CMPL    R0, #RMS$_RTB           ; too long: what fits
-        BEQL    20$
-        CMPL    R0, #RMS$_EOF
-        BNEQ    70$
-        BRB     30$
-20$:    MOVZWL  PROCRAB+RAB$W_RSZ, R0
-        MOVB    R0, (R11)
-        ADDL2   R0, R11
-        INCL    R11
-        BRB     10$
-30$:    $CLOSE  FAB=PROCFAB
-        INCL    DEPTH
-        MOVL    DEPTH, R10
-        MOVL    PEND-4[R10], PSTART[R10]
-        MOVL    PSTART[R10], PNEXT[R10]
-        MOVL    R11, PEND[R10]
-        MOVAB   VSTACK, R9
-        MOVB    #^A/1/, PNAME+2
-40$:    MOVL    #1, VAL$L_TYPE(R9)
-        CLRB    VAL$T_STR(R9)
-        BSBW    QWORD
-        MOVC3   #3, PNAME, SYMNAM
-        BSBW    SETSYM
-        INCB    PNAME+2
-        CMPB    PNAME+2, #^A/8/
-        BLEQU   40$
-        BSBW    SKIP
-        CMPL    R6, R7
-        BLSSU   50$
-        BRW     NEXT
-50$:    PRINT   "%DCL-W-MAXPARM, too many parameters - reenter command with fewer parameters"
-        BSBW    EXITPROC
-        BRW     WARN
-70$:    PUSHL   R0
-        $CLOSE  FAB=PROCFAB
-        MOVL    (SP)+, R0
-80$:    BRW     DONE
-
-; GETPROC: copies the next line of the procedure running to LINE. R7 =
-; its length, R0 = 1, or 0 past its last line. Uses R0-R5.
-GETPROC:
-        MOVL    DEPTH, R1
-        MOVL    PNEXT[R1], R2
-        CMPL    R2, PEND[R1]
-        BLSSU   10$
-        CLRL    R0
-        RSB
-10$:    MOVZBL  (R2)+, R7
-        ADDL3   R2, R7, PNEXT[R1]
-        MOVC3   R7, (R2), LINE
-        MOVL    #1, R0
-        RSB
-
-; EXITPROC: ends the procedure running, with its local symbols. Uses R0
-; and R1.
-EXITPROC:
-        MOVAB   SYMTAB, R1
-10$:    CMPL    SYM$L_LEVEL(R1), DEPTH
-        BNEQ    20$
-        CLRB    SYM$T_NAME(R1)
-20$:    ADDL2   #SYM$K_LENGTH, R1
-        MOVAB   SYMEND, R0
-        CMPL    R1, R0
-        BLSSU   10$
-        DECL    DEPTH
-        RSB
-
-; ENDPROCS: ends every procedure running. Uses R0 and R1.
-ENDPROCS:
-        TSTL    DEPTH
-        BEQL    10$
-        BSBB    EXITPROC
-        BRB     ENDPROCS
-10$:    RSB
-
-; ASSIGN, name = expression, name == expression: R6 = the =, SYMNAM =
-; the name. Makes it a local symbol, or a global one, with the value.
-ASSIGN: INCL    R6
-        MOVL    DEPTH, R10
-        CMPL    R6, R7
-        BGEQU   10$
-        CMPB    (R6), #^A/=/
-        BNEQ    10$
-        INCL    R6
-        MOVL    #GLOBAL, R10
-10$:    PUSHL   R10
-        MOVC3   #32, SYMNAM, TARGET
-        MOVAB   VSTACK, R9
-        BSBW    EXPR
-        BSBW    SKIP
-        CMPL    R6, R7
-        BGEQU   SETTARGET
-        BRW     EXPSYN
-
-; STRASSIGN, name := string, name :== string: R6 = the =, SYMNAM = the
-; name. The same, with the rest of the line, as QREST makes it.
-STRASSIGN:
-        INCL    R6
-        MOVL    DEPTH, R10
-        CMPL    R6, R7
-        BGEQU   10$
-        CMPB    (R6), #^A/=/
-        BNEQ    10$
-        INCL    R6
-        MOVL    #GLOBAL, R10
-10$:    PUSHL   R10
-        MOVC3   #32, SYMNAM, TARGET
-        MOVAB   VSTACK, R9
-        BSBW    QREST
-; SETTARGET: (SP) = a level. Sets the symbol TARGET names there to VSTACK's
-; first value.
-SETTARGET:
-        MOVC3   #32, TARGET, SYMNAM
-        MOVL    (SP)+, R10
-        MOVAB   VSTACK, R9
-        BSBW    SETSYM
-        BRW     OK
-
-; IF expression THEN command: does command if the expression is true.
-IF:     MOVAB   V_EXPR, R1
-        BSBW    RESTVAL
-        MOVAB   VSTACK, R9
-        BSBW    EXPR
-        BSBW    TOINT
-        PUSHL   VAL$L_INT(R9)
-        BSBW    WORD
-        CMPL    R8, #4
-        BNEQ    10$
-        MOVAB   V_THEN, R1
-        BSBW    VERB
-        BLBS    R0, 20$
-10$:    PRINT   "%DCL-W-NOTHEN, IF command contains no THEN keyword"
-        BRW     WARN
-20$:    BLBS    (SP)+, 30$
-        BRW     NEXT
-30$:    BRW     COMMAND
-
-; GOTO label: goes on from the line of the procedure running that starts
-; with label:. Does nothing at the console.
-GOTO:   MOVAB   V_LABEL, R1
-        BSBW    VALNAME
-        MOVL    DEPTH, R11
-        TSTL    R11
-        BNEQ    7$
-        BRW     OK
-7$:     MOVC3   #32, SYMNAM, TARGET
-        MOVL    PSTART[R11], R10        ; a line
-10$:    CMPL    R10, PEND[R11]
-        BLSSU   20$
-        PRINT   "%DCL-W-USGOTO, target of GOTO not found - check spelling and presence of label"
-        BRW     WARN
-20$:    MOVZBL  (R10), R7
-        MOVAB   1(R10), R6
-        ADDL2   R6, R7
-        BSBW    SKIP
-        CMPL    R6, R7
-        BGEQU   40$
-        CMPB    (R6), #^A/$/
-        BNEQ    40$
-        INCL    R6
-        BSBW    SKIP
-        BSBW    NAMESCAN
-        TSTL    R8
-        BEQL    40$
-        BSBW    SKIP
-        CMPL    R6, R7
-        BGEQU   40$
-        CMPB    (R6), #^A/:/
-        BNEQ    40$
-        ADDL3   #1, R6, R0              ; not :=
-        CMPL    R0, R7
-        BGEQU   30$
-        CMPB    1(R6), #^A/=/
-        BEQL    40$
-30$:    MOVAB   SYMNAM, R1
-        MOVAB   TARGET, R2
-        BSBW    SAMESTR
-        BLBS    R0, 50$
-40$:    MOVZBL  (R10), R0
-        ADDL2   R0, R10
-        INCL    R10
-        BRB     10$
-50$:    MOVL    R10, PNEXT[R11]
-        BRW     OK
-
-; EXIT [status]: ends the procedure running, if one is, with status, or
-; $STATUS. Outside one, makes the image CTRL/Y stopped, if there is one,
-; exit with it, as VMS's does: $FORCEX's AST calls $EXIT, which calls its
-; exit handlers, as soon as CONTINUE lets it run.
-EXIT:   MOVAB   V_STATUS, R1
-        BSBW    RESTVAL
-        MOVL    LASTSTAT, R0
-        CMPL    R6, R7
-        BGEQU   10$
-        MOVAB   VSTACK, R9
-        BSBW    EXPR
-        BSBW    TOINT
-        MOVL    VAL$L_INT(R9), R0
-10$:    TSTL    DEPTH
-        BEQL    20$
-        PUSHL   R0
-        BSBW    EXITPROC
-        MOVL    (SP)+, R0
-        BRB     30$
-20$:    TSTL    CTRLYFP
-        BEQL    30$
-        $FORCEX_S CODE=R0
-        BRW     CONTINUE
-30$:    BRW     DONE
-
-; WRITE SYS$OUTPUT expression[,...]: writes the values, as strings, one
-; after the other, on a line.
-WRITE:  MOVAB   V_LOGNAM, R1
-        BSBW    GETVAL
-        CMPB    R8, V_OUTPUT
-        BNEQ    7$
-        MOVAB   V_OUTPUT, R1
-        BSBW    VERB
-        BLBS    R0, 10$
-7$:     CMPB    R8, V_ERROR
-        BNEQ    8$
-        MOVAB   V_ERROR, R1
-        BSBW    VERB
-        BLBS    R0, 10$
-8$:     PRINT   "%DCL-W-UNDFIL, file has not been opened by DCL - check logical name"
-        BRW     WARN
-10$:    MOVAB   V_EXPR, R1
-        BSBW    RESTVAL
-15$:    MOVAB   VSTACK, R9
-        BSBW    EXPR
-        BSBW    TOSTR
-        MOVZBL  VAL$T_STR(R9), R2
-        MOVAB   VAL$T_STR+1(R9), R1
-        BSBW    ADD
-        BSBW    SKIP
-        CMPL    R6, R7
-        BGEQU   20$
-        CMPB    (R6), #44
-        BEQL    17$
-        BRW     EXPSYN
-17$:    INCL    R6
-        BRB     15$
-20$:    BSBW    SAY
-        BRW     OK
-
-; SHOWSYM, SHOW SYMBOL[/LOCAL|/GLOBAL] name: shows its value, as VMS
-; does: name = "string", or name = integer, in hex and octal too; == for
-; a global symbol. The nearest, or the local one of the procedure running
-; or the global one. With /ALL instead of a name, every local symbol of
-; the procedure running, or every global one.
-SHOWSYM:
-        MOVAB   V_ALL, R1
-        BSBW    ISPRES
-        BLBC    R0, 2$
-        BRW     SHOWALL
-2$:     MOVAB   V_SYMBOL, R1
-        BSBW    VALNAME
-        TSTL    R8
-        BNEQ    5$
-        BRW     INSFPRM
-5$:     BSBW    SCOPE
-        CMPL    R10, #ANY
-        BEQL    20$
-        BSBW    FINDAT
-        TSTL    R1
-        BNEQ    10$
-        CMPL    R10, #GLOBAL            ; $STATUS and $SEVERITY are global
-        BNEQ    7$
-        MOVAB   STATNAM, R1
-        MOVAB   SYMNAM, R2
-        BSBW    SAMESTR
-        BLBS    R0, 20$
-        MOVAB   SEVNAM, R1
-        MOVAB   SYMNAM, R2
-        BSBW    SAMESTR
-        BLBS    R0, 20$
-7$:     BRW     UNDSYM
-10$:    BSBB    VALUEOF
-        BSBB    SHOW1
-        BRW     OK
-20$:    BSBW    FINDSYM
-        MOVL    #1, R11                 ; 1 if global: $STATUS and $SEVERITY are
-        TSTL    R1
-        BEQL    27$
-        CMPL    SYM$L_LEVEL(R1), #GLOBAL
-        BEQL    27$
-        CLRL    R11
-27$:    MOVAB   VSTACK, R9
-        BSBW    GETSYM
-        BLBS    R0, 30$
-        BRW     UNDSYM
-30$:    BSBB    SHOW1
-        BRW     OK
-
-; SHOWALL: SHOW SYMBOL/ALL: shows each symbol of the scope SCOPE says, the
-; procedure running's local ones if it says none.
-SHOWALL:
-        BSBW    SCOPE
-        CMPL    R10, #ANY
-        BNEQ    5$
-        MOVL    DEPTH, R10
-5$:     MOVAB   SYMTAB, R8
-10$:    TSTB    SYM$T_NAME(R8)
-        BEQL    20$
-        CMPL    SYM$L_LEVEL(R8), R10
-        BNEQ    20$
-        PUSHL   R10
-        MOVC3   #32, SYM$T_NAME(R8), SYMNAM
-        MOVL    R8, R1
-        BSBB    VALUEOF
-        BSBB    SHOW1
-        MOVL    (SP)+, R10
-20$:    ADDL2   #SYM$K_LENGTH, R8
-        MOVAB   SYMEND, R0
-        CMPL    R8, R0
-        BLSSU   10$
-        BRW     OK
-
-; VALUEOF: R1 = a symbol. Copies its value to VSTACK, R9 at it: R11 = 1
-; if it is global. Uses R0-R5.
-VALUEOF:
-        CLRL    R11
-        CMPL    SYM$L_LEVEL(R1), #GLOBAL
-        BNEQ    10$
-        INCL    R11
-10$:    MOVAB   VSTACK, R9
-        MOVC3   #VAL$K_LENGTH, SYM$R_VALUE(R1), (R9)
-        RSB
-
-; SHOW1: SYMNAM = a symbol's name, R9 = its value, R11 = 1 if it is
-; global. Writes it as SHOW SYMBOL does. Uses R0-R5, R10.
-SHOW1:  ADDTEXT "  "
-        BSBW    ADDSYM
-        ADDTEXT " ="
-        TSTL    R11
-        BEQL    12$
-        ADDTEXT "="
-12$:    ADDTEXT " "
-        TSTL    VAL$L_TYPE(R9)
-        BEQL    20$
-        BSBW    QUOTE
-        BSBW    ADDVAL
-        BSBW    QUOTE
-        BRB     30$
-20$:    MOVL    VAL$L_INT(R9), R10
-        BSBW    TOSTR
-        BSBW    ADDVAL
-        ADDTEXT "   Hex = "
-        MOVL    R10, R1
-        BSBW    ADDHEX
-        ADDTEXT "  Octal = "
-        MOVL    R10, R1
-        BSBW    ADDOCT
-30$:    BRW     SAY
-
-; DELSYM, DELETE/SYMBOL[/LOCAL|/GLOBAL] name: deletes the local symbol
-; name of the procedure running, or the console's, or the global one.
-; DELETE/SYMBOL/ALL deletes every one of them.
-DELSYM: BSBW    SCOPE
-        CMPL    R10, #ANY
-        BNEQ    5$
-        MOVL    DEPTH, R10
-5$:     MOVAB   V_ALL, R1
-        BSBW    ISPRES
-        BLBC    R0, 20$
-        MOVAB   SYMTAB, R1              ; /ALL
-10$:    CMPL    SYM$L_LEVEL(R1), R10
-        BNEQ    15$
-        CLRB    SYM$T_NAME(R1)
-15$:    ADDL2   #SYM$K_LENGTH, R1
-        MOVAB   SYMEND, R0
-        CMPL    R1, R0
-        BLSSU   10$
-        BRW     OK
-20$:    PUSHL   R10
-        MOVAB   V_SYMBOL, R1
-        BSBW    VALNAME
-        MOVL    (SP)+, R10
-        BSBW    FINDAT
-        TSTL    R1
-        BNEQ    30$
-        BRW     UNDSYM
-30$:    CLRB    SYM$T_NAME(R1)
-        BRW     OK
-
-; The errors in an expression or a symbol, which can come from deep in
-; EXPR: each reports itself, and goes back to DCL's own stack.
-EXPSYN: MOVL    SAVESP, SP
-        CLRB    MSG
-        PRINT   "%DCL-W-EXPSYN, invalid expression syntax - check operators and operands"
-        BRW     WARN
-UNDSYM: MOVL    SAVESP, SP
-        CLRB    MSG
-        PRINT   "%DCL-W-UNDSYM, undefined symbol - check validity and spelling"
-        ADDTEXT " \"
-        BSBW    ADDSYM
-        ADDTEXT "\"
-        BSBW    SAY
-        BRW     WARN
-SYMOVF: MOVL    SAVESP, SP
-        PRINT   "%DCL-W-SYMOVF, no room for symbol definitions - delete some symbols"
-        BRW     WARN
-
-; SUBST: R6 = a command's first character in LINE, R7 = past its last.
-; Copies it to LINE2 without its comment, from a ! outside quotes, with
-; tabs outside quotes as blanks and each 'name' outside quotes, ''name'
-; in them, as the symbol's value, nothing if there is none; then back to
-; LINE: R6 = LINE, R7 past its end. Uses R0-R5, R8-R11.
-SUBST:  MOVAB   LINE2, R11              ; where the next character goes
-        CLRL    R10                     ; 1 in quotes
-10$:    CMPL    R6, R7
-        BLSSU   12$
-        BRW     80$
-12$:    MOVZBL  (R6)+, R0
-        CMPB    R0, #^A/"/
-        BNEQ    20$
-        XORL2   #1, R10
-        BRB     70$
-20$:    CMPB    R0, #39
-        BEQL    30$
-        TSTL    R10
-        BNEQ    70$
-        CMPB    R0, #^A/!/
-        BEQL    80$
-        CMPB    R0, #9
-        BNEQ    70$
-        MOVZBL  #^A/ /, R0
-        BRB     70$
-30$:    TSTL    R10                     ; in quotes, two of them
-        BEQL    40$
-        CMPL    R6, R7
-        BGEQU   70$
-        CMPB    (R6), #39
-        BNEQ    70$
-        INCL    R6
-40$:    BSBW    NAMESCAN
-        TSTL    R8
-        BNEQ    45$
-        MOVZBL  #39, R0                 ; no name: the ' as it is
-        BRB     70$
-45$:
-        CMPL    R6, R7                  ; the closing '
-        BGEQU   50$
-        CMPB    (R6), #39
-        BNEQ    50$
-        INCL    R6
-50$:    MOVAB   VSTACK, R9
-        BSBW    GETSYM
-        BLBC    R0, 10$
-        BSBW    TOSTR
-        MOVZBL  VAL$T_STR(R9), R0
-        MOVAB   VAL$T_STR+1(R9), R1
-        MOVAB   LINE2+LINESIZE, R2
-60$:    TSTL    R0
-        BEQL    10$
-        CMPL    R11, R2
-        BGEQU   10$
-        MOVB    (R1)+, (R11)+
-        DECL    R0
-        BRB     60$
-70$:    MOVAB   LINE2+LINESIZE, R1
-        CMPL    R11, R1
-        BGEQU   10$
-        MOVB    R0, (R11)+
-        BRW     10$
-80$:    MOVAB   LINE2, R0
-        SUBL3   R0, R11, R7
-        MOVC3   R7, LINE2, LINE
-        MOVAB   LINE, R6
-        ADDL2   R6, R7
-        RSB
-
-; SKIP: R6 = the next character of the line, R7 = past its last. Moves R6
-; past blanks.
-SKIP:   CMPL    R6, R7
-        BGEQU   10$
-        CMPB    (R6), #^A/ /
-        BNEQ    10$
-        INCL    R6
-        BRB     SKIP
-10$:    RSB
-
-; NAMESCAN: R6 = the next character of the line, R7 = past its last.
-; Copies the letters, digits, $ and _ there to SYMNAM, in capitals, the
-; first 31, with R6 past them all. R8 = how many it kept. Uses R0.
-NAMESCAN:
-        CLRL    R8
-10$:    CMPL    R6, R7
-        BGEQU   90$
-        MOVZBL  (R6), R0
-        CMPB    R0, #^A/a/
-        BLSSU   20$
-        CMPB    R0, #^A/z/
-        BGTRU   20$
-        SUBB2   #^A/a/-^A/A/, R0
-20$:    CMPB    R0, #^A/A/
-        BLSSU   30$
-        CMPB    R0, #^A/Z/
-        BLEQU   50$
-30$:    CMPB    R0, #^A/0/
-        BLSSU   40$
-        CMPB    R0, #^A/9/
-        BLEQU   50$
-40$:    CMPB    R0, #^A/$/
-        BEQL    50$
-        CMPB    R0, #^A/_/
-        BNEQ    90$
-50$:    INCL    R6
-        CMPL    R8, #31
-        BGEQU   10$
-        INCL    R8
-        MOVB    R0, SYMNAM[R8]
-        BRB     10$
-90$:    MOVB    R8, SYMNAM
-        RSB
-
-; QWORD: R6 = the next character of the line, R7 = past its last, R9 = a
-; value, a string. Appends the next word to it, in capitals but what is in
-; quotes, which go, and "" in them, which is one, with R6 past it. R8 = 0
-; if there was none. Uses R0-R2.
-QWORD:  BSBW    SKIP
-        CLRL    R8
-        CLRL    R2                      ; 1 in quotes
-10$:    CMPL    R6, R7
-        BGEQU   90$
-        MOVZBL  (R6), R0
-        CMPB    R0, #^A/"/
-        BNEQ    20$
-        INCL    R6
-        MOVL    #1, R8
-        TSTL    R2
-        BEQL    15$
-        CMPL    R6, R7
-        BGEQU   15$
-        CMPB    (R6), #^A/"/
-        BNEQ    15$
-        INCL    R6
-        BRB     40$
-15$:    XORL2   #1, R2
-        BRB     10$
-20$:    TSTL    R2
-        BNEQ    30$
-        CMPB    R0, #^A/ /
-        BEQL    90$
-        CMPB    R0, #^A/a/
-        BLSSU   30$
-        CMPB    R0, #^A/z/
-        BGTRU   30$
-        SUBB2   #^A/a/-^A/A/, R0
-30$:    INCL    R6
-40$:    MOVL    #1, R8
-        MOVZBL  VAL$T_STR(R9), R1
-        CMPL    R1, #255
-        BGEQU   10$
-        INCL    R1
-        MOVB    R0, VAL$T_STR(R9)[R1]
-        MOVB    R1, VAL$T_STR(R9)
-        BRB     10$
-90$:    RSB
-
-; QREST: R6 = the next character of the line, R7 = past its last, R9 = a
-; value. Makes it the string of the words left, as QWORD makes them, a
-; blank between each two. Uses R0-R2, R8.
-QREST:  MOVL    #1, VAL$L_TYPE(R9)
-        CLRB    VAL$T_STR(R9)
-        BSBW    QWORD
-10$:    TSTL    R8
-        BEQL    90$
-        MOVZBL  VAL$T_STR(R9), R1
-        CMPL    R1, #255
-        BGEQU   90$
-        INCL    R1
-        MOVB    #^A/ /, VAL$T_STR(R9)[R1]
-        MOVB    R1, VAL$T_STR(R9)
-        BSBW    QWORD
-        TSTL    R8
-        BNEQ    10$
-        DECB    VAL$T_STR(R9)           ; no word after the blank
-90$:    RSB
-
-; SAMESTR: R1 and R2 = two .ASCIC strings. R0 = 1 if they are the same,
-; else 0. Uses R3.
-SAMESTR:
-        CLRL    R0
-        MOVZBL  (R1), R3
-        CMPB    R3, (R2)
-        BNEQ    90$
-10$:    TSTL    R3
-        BEQL    80$
-        CMPB    (R1)[R3], (R2)[R3]
-        BNEQ    90$
-        DECL    R3
-        BRB     10$
-80$:    MOVL    #1, R0
-90$:    RSB
-
-; FINDAT: R10 = a level. R1 = the symbol SYMNAM names at that level, or
-; 0. Uses R0-R5.
-FINDAT: MOVAB   SYMTAB, R5
-10$:    CMPL    SYM$L_LEVEL(R5), R10
-        BNEQ    20$
-        MOVAB   SYM$T_NAME(R5), R1
-        MOVAB   SYMNAM, R2
-        BSBW    SAMESTR
-        BLBS    R0, 80$
-20$:    ADDL2   #SYM$K_LENGTH, R5
-        MOVAB   SYMEND, R0
-        CMPL    R5, R0
-        BLSSU   10$
-        CLRL    R1
-        RSB
-80$:    MOVL    R5, R1
-        RSB
-
-; FINDSYM: R1 = the symbol SYMNAM names, local to the procedure running
-; or to those it is in, the nearest, else global; 0 if there is none.
-; Uses R0-R5.
-FINDSYM:
-        PUSHL   R10
-        MOVL    DEPTH, R10
-10$:    BSBB    FINDAT
-        TSTL    R1
-        BNEQ    20$
-        DECL    R10
-        CMPL    R10, #GLOBAL
-        BGEQ    10$
-20$:    MOVL    (SP)+, R10
-        RSB
-
-; GETSYM: R9 = a value. Makes it the symbol SYMNAM names, $STATUS and
-; $SEVERITY too: R0 = 1, or 0 if there is no such symbol. Uses R0-R5.
-GETSYM: MOVAB   STATNAM, R1
-        MOVAB   SYMNAM, R2
-        BSBW    SAMESTR
-        BLBC    R0, 10$
-        MOVL    LASTSTAT, R0
-        BRB     20$
-10$:    MOVAB   SEVNAM, R1
-        MOVAB   SYMNAM, R2
-        BSBW    SAMESTR
-        BLBC    R0, 30$
-        BICL3   #^C7, LASTSTAT, R0
-20$:    CLRL    VAL$L_TYPE(R9)
-        MOVL    R0, VAL$L_INT(R9)
-        MOVL    #1, R0
-        RSB
-30$:    BSBB    FINDSYM
-        TSTL    R1
-        BEQL    80$
-        MOVC3   #VAL$K_LENGTH, SYM$R_VALUE(R1), (R9)
-        MOVL    #1, R0
-        RSB
-80$:    CLRL    R0
-        RSB
-
-; SETSYM: R9 = a value, R10 = a level. Gives the symbol SYMNAM names at
-; that level the value, making it if there is none. Uses R0-R5.
-SETSYM: BSBB    FINDAT
-        TSTL    R1
-        BNEQ    30$
-        MOVAB   SYMTAB, R1              ; a free entry
-10$:    TSTB    SYM$T_NAME(R1)
-        BEQL    20$
-        ADDL2   #SYM$K_LENGTH, R1
-        MOVAB   SYMEND, R0
-        CMPL    R1, R0
-        BLSSU   10$
-        BRW     SYMOVF
-20$:    MOVL    R10, SYM$L_LEVEL(R1)
-        PUSHL   R1
-        MOVC3   #32, SYMNAM, SYM$T_NAME(R1)
-        MOVL    (SP)+, R1
-30$:    MOVC3   #VAL$K_LENGTH, (R9), SYM$R_VALUE(R1)
-        RSB
-
-; EXPR: R6 = the next character of the line, R7 = past its last, R9 = a
-; value in VSTACK. Makes it the expression's, with R6 past it, or goes to
-; EXPSYN or UNDSYM. Uses R0-R5, R8, R10.
-EXPR:   MOVL    #1, R0
-; BINARY: R0 = an operator level. The same, for operands joined by
-; operators of that level, each an expression of the levels above. Past
-; the last level, an operand.
-BINARY: CMPL    R0, #5
-        BLEQ    10$
-        BRW     PRIMARY
-10$:    PUSHL   R0
-        INCL    R0
-        BSBW    BINARY
-20$:    MOVL    (SP), R0
-        BSBW    OPSCAN
-        TSTL    R1
-        BEQL    90$
-        PUSHL   R1
-        ADDL2   #VAL$K_LENGTH, R9       ; the right operand's value
-        MOVAB   VSTACKEND-VAL$K_LENGTH, R0
-        CMPL    R9, R0
-        BLEQU   30$
-        BRW     EXPSYN
-30$:    ADDL3   #1, 4(SP), R0
-        BSBW    BINARY
-        SUBL2   #VAL$K_LENGTH, R9
-        MOVL    (SP)+, R1
-        BSBW    APPLY
-        BRB     20$
-90$:    TSTL    (SP)+
-        RSB
-
-; OPSCAN: R0 = an operator level, R6 = the next character of the line,
-; R7 = past its last. R1 = the OP_ code of the operator there, with R6
-; past it, if it is one of that level, else 0. Uses R0-R5.
-OPSCAN: PUSHL   R6
-        MOVL    R0, R5
-        BSBW    SKIP
-        CMPL    R6, R7
-        BGEQU   80$
-        MOVZBL  (R6)+, R0
-        CMPB    R0, #^A/./
-        BEQL    10$
-        MOVB    #1, OPTXT
-        MOVB    R0, OPTXT+1
-        BRB     40$
-10$:    CLRL    R3                      ; .name.
-20$:    CMPL    R6, R7
-        BGEQU   80$
-        MOVZBL  (R6)+, R0
-        CMPB    R0, #^A/./
-        BEQL    30$
-        CMPL    R3, #4
-        BGEQU   80$
-        BICB2   #^X20, R0               ; in capitals
-        INCL    R3
-        MOVB    R0, OPTXT[R3]
-        BRB     20$
-30$:    MOVB    R3, OPTXT
-40$:    MOVAB   OPS, R4
-45$:    TSTB    (R4)
-        BEQL    80$
-        MOVL    R4, R1
-        MOVAB   OPTXT, R2
-        BSBW    SAMESTR
-        MOVZBL  (R4), R1
-        ADDL2   R1, R4
-        INCL    R4                      ; at its level
-        BLBC    R0, 50$
-        CMPB    (R4), R5
-        BNEQ    80$                     ; another level's
-        MOVZBL  1(R4), R1
-        TSTL    (SP)+
-        RSB
-50$:    ADDL2   #2, R4
-        BRB     45$
-80$:    MOVL    (SP)+, R6
-        CLRL    R1
-        RSB
-
-; PRIMARY: as EXPR, for an operand: "string", an integer, a symbol,
-; (expression), - operand or .NOT. operand.
-PRIMARY:
-        BSBW    SKIP
-        CMPL    R6, R7
-        BLSSU   5$
-        BRW     EXPSYN
-5$:     MOVZBL  (R6), R0
-        CMPB    R0, #^A/"/
-        BNEQ    20$
-        INCL    R6                      ; a string, "" in it a quote
-        MOVL    #1, VAL$L_TYPE(R9)
-        CLRL    R2
-10$:    CMPL    R6, R7
-        BLSSU   12$
-        BRW     EXPSYN
-12$:    MOVZBL  (R6)+, R0
-        CMPB    R0, #^A/"/
-        BNEQ    15$
-        CMPL    R6, R7
-        BGEQU   17$
-        CMPB    (R6), #^A/"/
-        BNEQ    17$
-        INCL    R6
-15$:    CMPL    R2, #255
-        BGEQU   10$
-        INCL    R2
-        MOVB    R0, VAL$T_STR(R9)[R2]
-        BRB     10$
-17$:    MOVB    R2, VAL$T_STR(R9)
-        RSB
-20$:    CMPB    R0, #^A/0/
-        BLSSU   30$
-        CMPB    R0, #^A/9/
-        BGTRU   30$
-        CLRL    VAL$L_TYPE(R9)          ; an integer
-        CLRL    R2
-25$:    CMPL    R6, R7
-        BGEQU   27$
-        MOVZBL  (R6), R0
-        SUBL2   #^A/0/, R0
-        CMPL    R0, #9
-        BGTRU   27$
-        MULL2   #10, R2
-        ADDL2   R0, R2
-        INCL    R6
-        BRB     25$
-27$:    MOVL    R2, VAL$L_INT(R9)
-        RSB
-30$:    CMPB    R0, #^A/(/
-        BNEQ    40$
-        INCL    R6
-        BSBW    EXPR
-        BSBW    SKIP
-        CMPL    R6, R7
-        BGEQU   35$
-        CMPB    (R6), #^A/)/
-        BNEQ    35$
-        INCL    R6
-        RSB
-35$:    BRW     EXPSYN
-40$:    CMPB    R0, #^A/-/
-        BNEQ    50$
-        INCL    R6
-        BSBW    PRIMARY
-        BSBW    TOINT
-        MNEGL   VAL$L_INT(R9), VAL$L_INT(R9)
-        RSB
-50$:    CMPB    R0, #^A/./
-        BNEQ    60$
-        INCL    R6                      ; .NOT.
-        BSBW    NAMESCAN
-        CMPL    R6, R7
-        BGEQU   35$
-        CMPB    (R6), #^A/./
-        BNEQ    35$
-        INCL    R6
-        MOVAB   SYMNAM, R1
-        MOVAB   S_NOT, R2
-        BSBW    SAMESTR
-        BLBC    R0, 35$
-        BSBW    PRIMARY
-        BSBW    TOINT
-        MCOML   VAL$L_INT(R9), VAL$L_INT(R9)
-        RSB
-60$:    BSBW    NAMESCAN
-        TSTL    R8
-        BEQL    35$
-        BSBW    GETSYM
-        BLBS    R0, 70$
-        BRW     UNDSYM
-70$:    RSB
-
-; APPLY: R1 = an OP_ code, R9 = a value, the left operand, and the right
-; one after it. Makes R9 the result. Uses R0-R5, R10.
-APPLY:  ADDL3   #VAL$K_LENGTH, R9, R10
-        CMPL    R1, #OP_ADD
-        BNEQ    10$
-        TSTL    VAL$L_TYPE(R9)
-        BEQL    10$
-        TSTL    VAL$L_TYPE(R10)
-        BEQL    10$
-        MOVZBL  VAL$T_STR(R9), R2       ; two strings: joined
-        MOVZBL  VAL$T_STR(R10), R3
-        ADDL3   R2, R3, R4
-        CMPL    R4, #255
-        BLEQU   5$
-        SUBL3   R2, #255, R3
-        MOVL    #255, R4
-5$:     MOVB    R4, VAL$T_STR(R9)
-        MOVAB   VAL$T_STR+1(R9)[R2], R1
-        MOVC3   R3, VAL$T_STR+1(R10), (R1)
-        RSB
-10$:    CMPL    R1, #OP_EQS
-        BLSSU   20$
-        CMPL    R1, #OP_GES
-        BGTRU   20$
-        PUSHL   R1                      ; compare strings
-        BSBW    TOSTR
-        PUSHL   R9
-        MOVL    R10, R9
-        BSBW    TOSTR
-        MOVL    (SP)+, R9
-        BSBW    STRCMP
-        MOVL    (SP)+, R1
-        SUBL2   #OP_EQS-OP_EQ, R1
-        BRB     40$
-20$:    PUSHL   R1                      ; integers
-        BSBW    TOINT
-        PUSHL   R9
-        MOVL    R10, R9
-        BSBW    TOINT
-        MOVL    (SP)+, R9
-        MOVL    (SP)+, R1
-        MOVL    VAL$L_INT(R10), R3
-        CMPL    R1, #OP_OR
-        BNEQ    21$
-        BISL2   R3, VAL$L_INT(R9)
-        RSB
-21$:    CMPL    R1, #OP_AND
-        BNEQ    22$
-        MCOML   R3, R3
-        BICL2   R3, VAL$L_INT(R9)
-        RSB
-22$:    CMPL    R1, #OP_ADD
-        BNEQ    23$
-        ADDL2   R3, VAL$L_INT(R9)
-        RSB
-23$:    CMPL    R1, #OP_SUB
-        BNEQ    24$
-        SUBL2   R3, VAL$L_INT(R9)
-        RSB
-24$:    CMPL    R1, #OP_MUL
-        BNEQ    25$
-        MULL2   R3, VAL$L_INT(R9)
-        RSB
-25$:    CMPL    R1, #OP_DIV
-        BNEQ    26$
-        DIVL2   R3, VAL$L_INT(R9)
-        RSB
-26$:    CLRL    R2                      ; R2 = the sign of left - right
-        CMPL    VAL$L_INT(R9), R3
-        BEQL    40$
-        MOVL    #1, R2
-        CMPL    VAL$L_INT(R9), R3
-        BGTR    40$
-        MNEGL   #1, R2
-; R1 = OP_EQ to OP_GE, R2 = the sign of left - right.
-40$:    CLRL    R0                      ; false
-        CMPL    R1, #OP_EQ
-        BNEQ    41$
-        TSTL    R2
-        BNEQ    49$
-        BRB     48$
-41$:    CMPL    R1, #OP_NE
-        BNEQ    42$
-        TSTL    R2
-        BEQL    49$
-        BRB     48$
-42$:    CMPL    R1, #OP_LT
-        BNEQ    43$
-        TSTL    R2
-        BGEQ    49$
-        BRB     48$
-43$:    CMPL    R1, #OP_LE
-        BNEQ    44$
-        TSTL    R2
-        BGTR    49$
-        BRB     48$
-44$:    CMPL    R1, #OP_GT
-        BNEQ    45$
-        TSTL    R2
-        BLEQ    49$
-        BRB     48$
-45$:    TSTL    R2                      ; OP_GE
-        BLSS    49$
-48$:    MOVL    #1, R0
-49$:    CLRL    VAL$L_TYPE(R9)
-        MOVL    R0, VAL$L_INT(R9)
-        RSB
-
-; STRCMP: R9 and R10 = two values, strings. R2 = -1, 0 or 1 as R9's is
-; before, the same as or after R10's. Uses R3-R5.
-STRCMP: MOVZBL  VAL$T_STR(R9), R3
-        MOVZBL  VAL$T_STR(R10), R4
-        CLRL    R5
-10$:    CMPL    R5, R3
-        BGEQU   30$
-        CMPL    R5, R4
-        BGEQU   40$
-        CMPB    VAL$T_STR+1(R9)[R5], VAL$T_STR+1(R10)[R5]
-        BLSSU   50$
-        CMPB    VAL$T_STR+1(R9)[R5], VAL$T_STR+1(R10)[R5]
-        BGTRU   40$
-        INCL    R5
-        BRB     10$
-30$:    CLRL    R2
-        CMPL    R5, R4
-        BGEQU   90$
-50$:    MNEGL   #1, R2
-        RSB
-40$:    MOVL    #1, R2
-90$:    RSB
-
-; TOINT: R9 = a value. Makes it an integer: a string's, with a sign, or 1
-; if it starts with T or Y, else 0. Uses R0-R5.
-TOINT:  TSTL    VAL$L_TYPE(R9)
-        BNEQ    5$
-        RSB
-5$:     CLRL    VAL$L_TYPE(R9)
-        MOVAB   VAL$T_STR+1(R9), R1
-        MOVZBL  VAL$T_STR(R9), R2       ; the characters left
-        CLRL    R3                      ; the integer
-        CLRL    R4                      ; 1 if negative
-        CLRL    R5                      ; the digits
-10$:    TSTL    R2
-        BEQL    50$
-        CMPB    (R1), #^A/ /
-        BNEQ    15$
-        INCL    R1
-        DECL    R2
-        BRB     10$
-15$:    CMPB    (R1), #^A/-/
-        BNEQ    17$
-        INCL    R4
-        BRB     18$
-17$:    CMPB    (R1), #^A/+/
-        BNEQ    20$
-18$:    INCL    R1
-        DECL    R2
-20$:    TSTL    R2
-        BEQL    50$
-        MOVZBL  (R1)+, R0
-        SUBL2   #^A/0/, R0
-        CMPL    R0, #9
-        BGTRU   50$
-        MULL2   #10, R3
-        ADDL2   R0, R3
-        INCL    R5
-        DECL    R2
-        BRB     20$
-50$:    TSTL    R5
-        BNEQ    60$
-        CLRL    R3
-        TSTB    VAL$T_STR(R9)
-        BEQL    70$
-        MOVZBL  VAL$T_STR+1(R9), R0
-        BICB2   #^X20, R0
-        CMPB    R0, #^A/T/
-        BEQL    55$
-        CMPB    R0, #^A/Y/
-        BNEQ    70$
-55$:    MOVL    #1, R3
-        BRB     70$
-60$:    TSTL    R4
-        BEQL    70$
-        MNEGL   R3, R3
-70$:    MOVL    R3, VAL$L_INT(R9)
-        RSB
-
-; TOSTR: R9 = a value. Makes it a string: an integer's in decimal. Uses
-; R0-R4.
-TOSTR:  TSTL    VAL$L_TYPE(R9)
-        BEQL    5$
-        RSB
-5$:     MOVL    #1, VAL$L_TYPE(R9)
-        MOVL    VAL$L_INT(R9), R1
-        CLRL    R2                      ; digits, on the stack
-        CLRL    R3                      ; 1 if negative
-        TSTL    R1
-        BGEQ    10$
-        MNEGL   R1, R1
-        INCL    R3
-10$:    DIVL3   #10, R1, R4
-        MULL3   #10, R4, R0
-        SUBL3   R0, R1, R0
-        ADDL2   #^A/0/, R0
-        PUSHL   R0
-        INCL    R2
-        MOVL    R4, R1
-        TSTL    R1
-        BNEQ    10$
-        MOVAB   VAL$T_STR+1(R9), R1
-        TSTL    R3
-        BEQL    20$
-        MOVB    #^A/-/, (R1)+
-20$:    MOVL    (SP)+, R0
-        MOVB    R0, (R1)+
-        SOBGTR  R2, 20$
-        MOVAB   VAL$T_STR+1(R9), R0
-        SUBL3   R0, R1, R0
-        MOVB    R0, VAL$T_STR(R9)
-        RSB
-
-; ADDVAL: appends the string of the value R9 to MSG. Uses R0-R2.
-ADDVAL: MOVZBL  VAL$T_STR(R9), R2
-        MOVAB   VAL$T_STR+1(R9), R1
-        BRW     ADD
-
-; ADDSYM: appends the symbol name in SYMNAM to MSG. Uses R0-R2.
-ADDSYM: MOVAB   SYMNAM, R1
-        BRW     ADDCSTR
-
-; ADDHEX: appends R1 to MSG, 8 hex digits. Uses R0-R5.
-ADDHEX: MOVL    R1, R4
-        MOVL    #8, R5
-10$:    ROTL    #4, R4, R4
-        EXTZV   #0, #4, R4, R0
-        MOVZBL  HEX[R0], R0
-        BSBW    ADDCHAR
-        SOBGTR  R5, 10$
-        RSB
-
-; ADDOCT: appends R1 to MSG, 11 octal digits. Uses R0-R5.
-ADDOCT: MOVL    R1, R4
-        EXTZV   #30, #2, R4, R0
-        ADDL2   #^A/0/, R0
-        BSBW    ADDCHAR
-        MOVL    #27, R5
-10$:    EXTZV   R5, #3, R4, R0
-        ADDL2   #^A/0/, R0
-        BSBW    ADDCHAR
-        SUBL2   #3, R5
-        BGEQ    10$
-        RSB
 
 ; PROMPTFOR answer, prompt, anslen: CLI$$DCL_PARSE's prompt routine, as
 ; LIB$GET_INPUT: reads a line from SYS$INPUT after the prompt, into the
@@ -2663,9 +779,9 @@ CTRLYON:
         MOVL    #1, CTRLYHIT
         BSBW    CTRLYON
         RET
-10$:    MOVL    FP, CTRLYFP
-        MOVL    SP, SAVESP
-        BSBW    ENDPROCS
-        BRW     NEXT
+10$:    MOVL    FP, DCL$CTRLYFP
+        MOVL    SP, DCL$SAVESP
+        BSBW    DCL$ENDPROCS
+        BRW     DCL$NEXT
 
         .END    DCL

@@ -1,0 +1,244 @@
+        .TITLE  PROC    DCL's command procedures
+        .IDENT  /V0.1/
+;
+; @, which runs a command procedure, the procedure levels in PBUF, and
+; the commands that steer one: IF, GOTO and EXIT.
+; One of DCL's modules: ../dcl.mar says how they fit.
+;
+        .LIBRARY "lib.mlb"
+        .LIBRARY "starlet.mlb"
+        .LIBRARY "../sysexe.mlb"
+        .LIBRARY "../dcl.mlb"
+        $RMSDEF
+        $FABDEF
+        $RABDEF
+        $DCLDEF
+
+        .EXTERNAL DCL$COMMAND, DCL$CONTINUE, DCL$CTRLYFP, DCL$DEPTH, DCL$DONE
+        .EXTERNAL DCL$EXPR, DCL$INSFPRM, DCL$LASTSTAT, DCL$LINE, DCL$NAMESCAN
+        .EXTERNAL DCL$NEXT, DCL$OK, DCL$QWORD, DCL$RESTVAL, DCL$SAMESTR
+        .EXTERNAL DCL$SETSYM, DCL$SKIP, DCL$SYMEND, DCL$SYMNAM, DCL$SYMTAB
+        .EXTERNAL DCL$TARGET, DCL$TOINT, DCL$TOKEN, DCL$VALNAME, DCL$VERB
+        .EXTERNAL DCL$VSTACK, DCL$V_EXPR, DCL$WARN, DCL$WORD
+
+        .PSECT  DATA, NOEXE, WRT, LONG
+V_LABEL:
+        .ASCID  "LABEL"
+V_STATUS:
+        .ASCID  "STATUS"
+V_THEN: .ASCIC  "THEN"
+DOTCOM: .ASCII  ".COM"
+PNAME:  .ASCIC  "P1"                    ; a parameter's symbol, P1 to P8
+PSTART: .BLKL   MAXDEPTH+1              ; each one's first line in PBUF,
+PNEXT:  .BLKL   MAXDEPTH+1              ; the next one it reads,
+PEND:   .ADDRESS PBUF                   ; and past its last; level 0's is PBUF
+        .BLKL   MAXDEPTH
+PROCFAB:                                ; @'s
+        $FAB    FNA=DCL$TOKEN, DNA=DOTCOM, DNS=4
+PROCRAB:
+        $RAB    FAB=PROCFAB, USZ=LINESIZE
+PBUF:   .BLKB   PBUFSIZE                ; the procedures' lines, each .ASCIC, the outer's first
+PBUFEND:
+
+        .PSECT  CODE, EXE, LONG
+; DCL$DO, @file [p1 ... p8]: reads the procedure file names,
+; file.COM if it has no type, into PBUF after the one running, and runs
+; it, one level deeper, with its parameters local symbols P1 to P8, ""
+; those not given.
+DCL$DO::
+        INCL    R6
+        BSBW    DCL$WORD
+        TSTL    R8
+        BNEQ    5$
+        BRW     DCL$INSFPRM
+5$:     CMPL    DCL$DEPTH, #MAXDEPTH
+        BLSS    7$
+        PRINT   "%DCL-W-STKOVF, command procedures nested too deeply"
+        BRW     DCL$WARN
+7$:     MOVB    R8, PROCFAB+FAB$B_FNS
+        $OPEN   FAB=PROCFAB
+        BLBC    R0, 80$
+        $CONNECT RAB=PROCRAB
+        BLBC    R0, 70$
+        MOVL    DCL$DEPTH, R0
+        MOVL    PEND[R0], R10           ; its first line
+        MOVL    R10, R11                ; where the next goes
+10$:    MOVAB   PBUFEND-LINESIZE-1, R0
+        CMPL    R11, R0
+        BLEQU   15$
+        MOVL    #RMS$_DME, R0           ; no room
+        BRB     70$
+15$:    MOVAB   1(R11), PROCRAB+RAB$L_UBF
+        $GET    RAB=PROCRAB
+        BLBS    R0, 20$
+        CMPL    R0, #RMS$_RTB           ; too long: what fits
+        BEQL    20$
+        CMPL    R0, #RMS$_EOF
+        BNEQ    70$
+        BRB     30$
+20$:    MOVZWL  PROCRAB+RAB$W_RSZ, R0
+        MOVB    R0, (R11)
+        ADDL2   R0, R11
+        INCL    R11
+        BRB     10$
+30$:    $CLOSE  FAB=PROCFAB
+        INCL    DCL$DEPTH
+        MOVL    DCL$DEPTH, R10
+        MOVL    PEND-4[R10], PSTART[R10]
+        MOVL    PSTART[R10], PNEXT[R10]
+        MOVL    R11, PEND[R10]
+        MOVAB   DCL$VSTACK, R9
+        MOVB    #^A/1/, PNAME+2
+40$:    MOVL    #1, VAL$L_TYPE(R9)
+        CLRB    VAL$T_STR(R9)
+        BSBW    DCL$QWORD
+        MOVC3   #3, PNAME, DCL$SYMNAM
+        BSBW    DCL$SETSYM
+        INCB    PNAME+2
+        CMPB    PNAME+2, #^A/8/
+        BLEQU   40$
+        BSBW    DCL$SKIP
+        CMPL    R6, R7
+        BLSSU   50$
+        BRW     DCL$NEXT
+50$:    PRINT   "%DCL-W-MAXPARM, too many parameters - reenter command with fewer parameters"
+        BSBW    DCL$EXITPROC
+        BRW     DCL$WARN
+70$:    PUSHL   R0
+        $CLOSE  FAB=PROCFAB
+        MOVL    (SP)+, R0
+80$:    BRW     DCL$DONE
+
+; DCL$GETPROC: copies the next line of the procedure running to
+; DCL$LINE. R7 = its length, R0 = 1, or 0 past its last line. Uses
+; R0-R5.
+DCL$GETPROC::
+        MOVL    DCL$DEPTH, R1
+        MOVL    PNEXT[R1], R2
+        CMPL    R2, PEND[R1]
+        BLSSU   10$
+        CLRL    R0
+        RSB
+10$:    MOVZBL  (R2)+, R7
+        ADDL3   R2, R7, PNEXT[R1]
+        MOVC3   R7, (R2), DCL$LINE
+        MOVL    #1, R0
+        RSB
+
+; DCL$EXITPROC: ends the procedure running, with its local symbols. Uses
+; R0 and R1.
+DCL$EXITPROC::
+        MOVAB   DCL$SYMTAB, R1
+10$:    CMPL    SYM$L_LEVEL(R1), DCL$DEPTH
+        BNEQ    20$
+        CLRB    SYM$T_NAME(R1)
+20$:    ADDL2   #SYM$K_LENGTH, R1
+        MOVAB   DCL$SYMEND, R0
+        CMPL    R1, R0
+        BLSSU   10$
+        DECL    DCL$DEPTH
+        RSB
+
+; DCL$ENDPROCS: ends every procedure running. Uses R0 and R1.
+DCL$ENDPROCS::
+        TSTL    DCL$DEPTH
+        BEQL    10$
+        BSBB    DCL$EXITPROC
+        BRB     DCL$ENDPROCS
+10$:    RSB
+
+; DCL$IF, IF expression THEN command: does command if the expression is
+; true.
+DCL$IF::
+        MOVAB   DCL$V_EXPR, R1
+        BSBW    DCL$RESTVAL
+        MOVAB   DCL$VSTACK, R9
+        BSBW    DCL$EXPR
+        BSBW    DCL$TOINT
+        PUSHL   VAL$L_INT(R9)
+        BSBW    DCL$WORD
+        CMPL    R8, #4
+        BNEQ    10$
+        MOVAB   V_THEN, R1
+        BSBW    DCL$VERB
+        BLBS    R0, 20$
+10$:    PRINT   "%DCL-W-NOTHEN, IF command contains no THEN keyword"
+        BRW     DCL$WARN
+20$:    BLBS    (SP)+, 30$
+        BRW     DCL$NEXT
+30$:    BRW     DCL$COMMAND
+
+; DCL$GOTO, GOTO label: goes on from the line of the procedure running
+; that starts with label:. Does nothing at the console.
+DCL$GOTO::
+        MOVAB   V_LABEL, R1
+        BSBW    DCL$VALNAME
+        MOVL    DCL$DEPTH, R11
+        TSTL    R11
+        BNEQ    7$
+        BRW     DCL$OK
+7$:     MOVC3   #32, DCL$SYMNAM, DCL$TARGET
+        MOVL    PSTART[R11], R10        ; a line
+10$:    CMPL    R10, PEND[R11]
+        BLSSU   20$
+        PRINT   "%DCL-W-USGOTO, target of GOTO not found - check spelling and presence of label"
+        BRW     DCL$WARN
+20$:    MOVZBL  (R10), R7
+        MOVAB   1(R10), R6
+        ADDL2   R6, R7
+        BSBW    DCL$SKIP
+        CMPL    R6, R7
+        BGEQU   40$
+        CMPB    (R6), #^A/$/
+        BNEQ    40$
+        INCL    R6
+        BSBW    DCL$SKIP
+        BSBW    DCL$NAMESCAN
+        TSTL    R8
+        BEQL    40$
+        BSBW    DCL$SKIP
+        CMPL    R6, R7
+        BGEQU   40$
+        CMPB    (R6), #^A/:/
+        BNEQ    40$
+        ADDL3   #1, R6, R0              ; not :=
+        CMPL    R0, R7
+        BGEQU   30$
+        CMPB    1(R6), #^A/=/
+        BEQL    40$
+30$:    MOVAB   DCL$SYMNAM, R1
+        MOVAB   DCL$TARGET, R2
+        BSBW    DCL$SAMESTR
+        BLBS    R0, 50$
+40$:    MOVZBL  (R10), R0
+        ADDL2   R0, R10
+        INCL    R10
+        BRB     10$
+50$:    MOVL    R10, PNEXT[R11]
+        BRW     DCL$OK
+
+; DCL$EXIT, EXIT [status]: ends the procedure running, if one is, with
+; status, or $STATUS. Outside one, makes the image CTRL/Y stopped, if
+; there is one, exit with it, as VMS's does: $FORCEX's AST calls $EXIT,
+; which calls its exit handlers, as soon as CONTINUE lets it run.
+DCL$EXIT::
+        MOVAB   V_STATUS, R1
+        BSBW    DCL$RESTVAL
+        MOVL    DCL$LASTSTAT, R0
+        CMPL    R6, R7
+        BGEQU   10$
+        MOVAB   DCL$VSTACK, R9
+        BSBW    DCL$EXPR
+        BSBW    DCL$TOINT
+        MOVL    VAL$L_INT(R9), R0
+10$:    TSTL    DCL$DEPTH
+        BEQL    20$
+        PUSHL   R0
+        BSBW    DCL$EXITPROC
+        MOVL    (SP)+, R0
+        BRB     30$
+20$:    TSTL    DCL$CTRLYFP
+        BEQL    30$
+        $FORCEX_S CODE=R0
+        BRW     DCL$CONTINUE
+30$:    BRW     DCL$DONE

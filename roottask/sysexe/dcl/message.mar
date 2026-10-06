@@ -1,0 +1,150 @@
+        .TITLE  MESSAGE DCL's messages
+        .IDENT  /V0.1/
+;
+; The routines that make a message in DCL$MSG, a piece at a time, and
+; write it, and DCL$STATUS, which makes one of a status.
+; One of DCL's modules: ../dcl.mar says how they fit.
+;
+        .LIBRARY "lib.mlb"
+        .LIBRARY "starlet.mlb"
+        .LIBRARY "../sysexe.mlb"
+        .LIBRARY "../dcl.mlb"
+        $DCLDEF
+
+        .EXTERNAL PUT_LINE, DCL$MSG, DCL$NAMDSC, DCL$NAME, DCL$SYMNAM
+
+        .PSECT  DATA, NOEXE, WRT, LONG
+CHAR:   .BLKB   1
+GMDSC:  .LONG   255                     ; a descriptor of GMBUF
+        .ADDRESS GMBUF
+GMBUF:  .BLKB   255                     ; DCL$STATUS's message, from $GETMSG
+GMLEN:  .WORD   0                       ; its length
+HEX:    .ASCII  "0123456789ABCDEF"
+
+        .PSECT  CODE, EXE, LONG
+; DCL$PADTO: R3 = a column. Appends blanks to DCL$MSG up to it. Uses
+; R0-R2.
+DCL$PADTO::
+        MOVZBL  DCL$MSG, R0
+        CMPL    R0, R3
+        BGEQ    10$
+        MOVZBL  #^A/ /, R0
+        BSBW    ADDCHAR
+        BRB     DCL$PADTO
+10$:    RSB
+
+; DCL$ADDDEC: appends R1 in decimal to DCL$MSG, right-aligned in R3
+; columns. Uses R0-R5.
+DCL$ADDDEC::
+        CLRL    R4                      ; digits, on the stack
+10$:    DIVL3   #10, R1, R5
+        MULL3   #10, R5, R0
+        SUBL3   R0, R1, R0
+        ADDL2   #^A/0/, R0
+        PUSHL   R0
+        INCL    R4
+        MOVL    R5, R1
+        BNEQ    10$
+20$:    CMPL    R3, R4
+        BLEQ    30$
+        MOVZBL  #^A/ /, R0
+        BSBW    ADDCHAR
+        DECL    R3
+        BRB     20$
+30$:    MOVL    (SP)+, R0
+        BSBW    ADDCHAR
+        SOBGTR  R4, 30$
+        RSB
+
+; DCL$STATUS: R0 = % for a message, - for one that follows another, R1 =
+; a status. Writes its message, %FACILITY-S-NAME, text, from
+; $GETMSG. Uses R0-R5.
+DCL$STATUS::
+        PUSHL   R0
+        $GETMSG_S MSGID=R1, MSGLEN=GMLEN, BUFADR=GMDSC
+        MOVL    (SP)+, R0
+        MOVB    R0, GMBUF               ; % or -
+        MOVAB   GMBUF, R1
+        MOVZWL  GMLEN, R2
+        BSBW    DCL$ADD
+; DCL$SAY: writes the message in DCL$MSG, and empties it. Uses R0 and
+; R1.
+DCL$SAY::
+        PUSHAB  DCL$MSG
+        CALLS   #1, G^PUT_LINE
+        CLRB    DCL$MSG
+        RSB
+
+; DCL$ADDNAME: appends the logical name in DCL$NAME to DCL$MSG. Uses
+; R0-R2.
+DCL$ADDNAME::
+        MOVAB   DCL$NAME, R1
+        MOVL    DCL$NAMDSC, R2
+        BRB     DCL$ADD
+
+; DCL$QUOTE: appends a double quote to DCL$MSG. Uses R0-R2.
+DCL$QUOTE::
+        MOVZBL  #34, R0
+        BRB     ADDCHAR
+
+; ADDCHAR: appends the character in R0 to DCL$MSG. Uses R0-R2.
+ADDCHAR:
+        MOVB    R0, CHAR
+        MOVAB   CHAR, R1
+        MOVL    #1, R2
+        BRB     DCL$ADD
+
+; DCL$ADDCSTR: appends the .ASCIC string at R1 to DCL$MSG. Uses R0-R2.
+DCL$ADDCSTR::
+        MOVZBL  (R1)+, R2
+; DCL$ADD: appends the R2 bytes at R1 to DCL$MSG, as many as fit. Uses
+; R0-R2.
+DCL$ADD::
+        MOVZBL  DCL$MSG, R0
+10$:    TSTL    R2
+        BEQL    20$
+        CMPL    R0, #255
+        BGEQU   20$
+        INCL    R0
+        MOVB    (R1)+, DCL$MSG[R0]
+        DECL    R2
+        BRB     10$
+20$:    MOVB    R0, DCL$MSG
+        RSB
+
+; DCL$ADDVAL: appends the string of the value R9 to DCL$MSG. Uses R0-R2.
+DCL$ADDVAL::
+        MOVZBL  VAL$T_STR(R9), R2
+        MOVAB   VAL$T_STR+1(R9), R1
+        BRW     DCL$ADD
+
+; DCL$ADDSYM: appends the symbol name in DCL$SYMNAM to DCL$MSG. Uses
+; R0-R2.
+DCL$ADDSYM::
+        MOVAB   DCL$SYMNAM, R1
+        BRW     DCL$ADDCSTR
+
+; DCL$ADDHEX: appends R1 to DCL$MSG, 8 hex digits. Uses R0-R5.
+DCL$ADDHEX::
+        MOVL    R1, R4
+        MOVL    #8, R5
+10$:    ROTL    #4, R4, R4
+        EXTZV   #0, #4, R4, R0
+        MOVZBL  HEX[R0], R0
+        BSBW    ADDCHAR
+        SOBGTR  R5, 10$
+        RSB
+
+; DCL$ADDOCT: appends R1 to DCL$MSG, 11 octal digits. Uses R0-R5.
+DCL$ADDOCT::
+        MOVL    R1, R4
+        EXTZV   #30, #2, R4, R0
+        ADDL2   #^A/0/, R0
+        BSBW    ADDCHAR
+        MOVL    #27, R5
+10$:    EXTZV   R5, #3, R4, R0
+        ADDL2   #^A/0/, R0
+        BSBW    ADDCHAR
+        SUBL2   #3, R5
+        BGEQ    10$
+        RSB

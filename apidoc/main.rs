@@ -4,7 +4,8 @@
 //! design documents, so keeping it current means keeping these current:
 //! - the executive's routines and data (roottask/exec/*.mar, consolio.mar), and
 //!   the global ones of the libraries the system disk's images link
-//!   (roottask/sysexe/lib/*.mar) and of DCL's own (roottask/sysexe/dcl/*.mar):
+//!   (roottask/sysexe/lib/*.mar) and of DCL's own (roottask/sysexe/dcl.mar,
+//!   roottask/sysexe/dcl/*.mar):
 //!   the comment block right above each `NAME::`
 //!   or `.ENTRY`, whose first line reads `NAME: what it does` or, for a system
 //!   service, `$NAME args: what it does`;
@@ -663,6 +664,7 @@ impl Api {
         // The images' libraries, and DCL's: their global routines and data
         // only, since their local names may be the executive's too.
         let mut libs = glob(&root.join("roottask/sysexe/lib"), "mar");
+        libs.push(root.join("roottask/sysexe/dcl.mar"));
         libs.extend(glob(&root.join("roottask/sysexe/dcl"), "mar"));
         for p in libs {
             let (mut rs, mut ds) = (vec![], vec![]);
@@ -1629,7 +1631,8 @@ impl Page<'_> {
             "<code>build.rs</code> links into every image on the system disk, and into DCL: ",
             "console output, and the command parser and the <code>CLI$</code> routines ",
             r#"(<a href="../adr/0017-command-tables-from-cld-with-vcdu.md">ADR-0017</a>); "#,
-            "and of <code>roottask/sysexe/dcl</code>, which only DCL links: the CLD compiler ",
+            "and of <code>roottask/sysexe/dcl.mar</code> and <code>dcl/</code>, DCL's own modules, ",
+            "whose shared names are <code>DCL$</code>, and the CLD compiler ",
             r#"SET COMMAND uses (<a href="../adr/0018-set-command-and-foreign-commands.md">ADR-0018</a>). "#,
             "Only their global names are here.</p>"
         );
