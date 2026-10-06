@@ -1479,16 +1479,17 @@ static int serve_one(seL4_MessageInfo_t msg)
 	seL4_Word *mr = cur->mr;
 	for (unsigned i = 0; i <= seL4_UnknownSyscall_FaultIP; i++)
 		mr[i] = seL4_GetMR(i);
-	/* The function in x7's bits 15:0; CHMx's code in 31:16 (DESIGN-0004). */
+	/* The function in x7's bits 15:0; CHMx's code in 31:16 (DESIGN-0004).
+	 * Any other call with bits above 15 is reserved, by its full value. */
 	seL4_Word pc = mr[seL4_UnknownSyscall_FaultIP], x7 = mr[seL4_UnknownSyscall_X7];
-	seL4_Word code = x7 >> 32 ? x7 : x7 & 0xffff;
+	seL4_Word code = x7 & 0xffff;
+	if (x7 >> 32 || (x7 >> 16 && (code < CHME || code > CHMU)))
+		code = x7;
 	seL4_Word a0 = mr[seL4_UnknownSyscall_X0], a1 = mr[seL4_UnknownSyscall_X1];
 	seL4_Word v0 = a0;
 	/* Privileged calls, 0x00-0x7F, are reserved instructions outside
 	 * kernel mode. */
 	if (code < 0x80 && cur->mode)
-		return exception(SCB_OPCDEC, pc, 0, 0);
-	if (x7 >> 16 && (code < CHME || code > CHMU))
 		return exception(SCB_OPCDEC, pc, 0, 0);
 	switch (code) {
 	case HALT:

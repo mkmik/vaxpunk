@@ -297,7 +297,9 @@ executive feature:
   event flags. PONG then sets a third flag of theirs, which STARTUP waits
   for.
 - **SVCTEST** checks the status that each system service returns, and
-  reads the system disk's home block by its LBN with `$QIOW`. It takes
+  reads the system disk's home block by its LBN with `$QIOW`. A `$QIOW`
+  from ARM64 with a buffer above 4 GB gets `SS$_ARG_GTR_32_BITS` from the
+  service dispatcher. It takes
   privileges away and back with `$SETPRV`, and makes OUTSIDER, a process
   in another UIC group it may touch only with `WORLD`. It starts a
   second SLEEPER, NAPPER, and makes it exit with `$FORCEX` before its

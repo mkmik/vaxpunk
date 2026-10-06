@@ -1117,6 +1117,11 @@ impl Macro32 {
         if r.home_args == Some(true) && r.quad_args {
             return Err("HOME_ARGS and QUAD_ARGS exclude each other".into());
         }
+        if kind == Kind::Call && r.preserve & 3 != 0 {
+            return Err(
+                "a CALL routine returns R0 and R1: only a JSB routine can PRESERVE them".into(),
+            );
+        }
         let i = self.next;
         self.next += 1;
         let mut out = Vec::new();

@@ -53,9 +53,9 @@ from 0 up for these. Nothing else is mapped. The boot context starts with:
 
 - **Registers.** PC is the transfer address. `sp` and x18 (VAX SP) point at
   the stack top. R11 (x28) points at the RPB, as the VAX's VMB passed it.
-  Everything else is 0: AP is 0, as for a `CALLS` with no argument list,
-  and so is the return address. A `RET` from the transfer routine
-  therefore faults at 0.
+  Everything else is 0: x9, the argument count, as for a `CALLS #0`, and
+  the return address, x30. A `RET` from the transfer routine therefore
+  faults at 0.
 - **Processor state.** Kernel mode, the previous mode kernel too, IPL 31,
   as a VAX starts. No SCB, no software interrupts pending. The clock is already ticking: its interrupt
   waits for IPL to drop below 24.
@@ -113,11 +113,13 @@ The executive calls the PAL with `svc #0`:
 | x7 | function code, in bits 15:0; `CHMx`'s code in 31:16 | unchanged |
 | x0 | a0, the first argument | v0, the result, if the call has one |
 | x1-x5 | a1-a5 | unchanged |
-| x6, x8-x30, `sp`, NZCV | not seen by the PAL | unchanged |
+| x6 | passed, not used | unchanged |
+| x8-x29 | not seen by the PAL | unchanged |
+| x30, `sp`, NZCV | seen, NZCV in the SPSR that `RD_PS` returns | unchanged |
 
 Execution resumes after the `svc`, unless the PAL delivers an interrupt on
-the way (*Interrupts and exceptions*), or the call is `REI`, `CHMK` or
-`SWPCTX`.
+the way (*Interrupts and exceptions*), or the call is `REI`, a `CHMx` or
+`SWPCTX`; `HALT` doesn't resume, and `WTINT` waits for an interrupt.
 
 - **Registers.** Alpha passed a0-a5 in R16-R21 and v0 in R0. vaxpunk uses
   x0-x5 because seL4 passes the PAL only x0-x7. A call that leaves x0 alone
@@ -344,8 +346,8 @@ took it.
 ### Faults and HALT
 
 A fault or reserved instruction in kernel mode stops the executive, as
-`HALT` does, and the PAL prints it, naming the HWPCB of the process that
-took it:
+`HALT` does, and the PAL prints it, a page fault and an undefined
+instruction naming the HWPCB of the process that took it:
 
 | Event | The PAL prints |
 | --- | --- |

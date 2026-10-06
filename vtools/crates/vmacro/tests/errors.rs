@@ -88,6 +88,7 @@ D:      .CALL_ENTRY BOGUS=1
 E:      .JSB_ENTRY  SCRATCH=<AP>
 F:      .CALL_ENTRY
         RSB
+G:      .CALL_ENTRY PRESERVE=<R0>
         .END    START
 ";
     assert_eq!(
@@ -102,6 +103,7 @@ F:      .CALL_ENTRY
             "11:9: unknown parameter BOGUS",
             "12:9: AP can only be an INPUT, not SCRATCH",
             "14:9: RSB in a CALL routine",
+            "15:9: a CALL routine returns R0 and R1: only a JSB routine can PRESERVE them",
         ]
     );
 }

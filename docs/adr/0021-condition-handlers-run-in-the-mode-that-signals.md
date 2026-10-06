@@ -57,8 +57,9 @@ to `0(FP)`, and gave each frame a descriptor at `24(FP)`.
    `EXE$SIGNAL` walks the saved FPs out from the signaling frame. It
    stops at an FP of 0, which `EXE$USRSTART`, `EXE$CLISTART` and
    `EXE$ASTDISP` set, or at a frame the mode can't read. It calls each
-   handler it finds. `EXE$SRCHANDLER` continues an exception with a
-   user-mode `REI` from the copied frame, at the signal array's PC.
+   handler it finds. `EXE$SRCHANDLER` continues an exception with an
+   `REI`, in the mode that took it, from the copied frame, at the 32-bit
+   signal array's PC, with R0 and R1 from the mechanism array.
    `LIB$SIGNAL` continues by returning.
 5. **`$UNWIND` runs in the caller's mode**, as `SYS$UNWIND` in the vector,
    without `CHMK`. It finds `EXE$SIGNAL`'s frame by the return address of
@@ -72,9 +73,12 @@ to `0(FP)`, and gave each frame a descriptor at `24(FP)`.
    from the signal array. If the condition is severe, it calls `$EXIT`
    with `STS$M_INHIB_MSG` set. The exit therefore runs the image's exit
    handlers, and DCL does not write the message a second time.
-7. **The vector is two psects.** Modules after `syssrv.mar` add code to
-   `EXEC$VECTOR`. `EXEC$VECTOREND`, a psect of its own, marks the end of
-   the vector, so it stays past whatever they add.
+7. **The vector is three psects.** Modules after `syssrv.mar` add code to
+   `EXEC$VECTOR`, and the frame descriptors of its routines, which outer
+   modes must read, go in `EXEC$VECTOR_FDSC`. `EXEC$VECTOREND`, a psect
+   of its own, marks the end of the vector, so it stays past whatever they
+   add; the descriptors stay inside because `syssrv.mar` makes
+   `EXEC$VECTOR_FDSC` before `EXEC$VECTOREND`.
 
 ## Alternatives considered
 
@@ -82,19 +86,18 @@ to `0(FP)`, and gave each frame a descriptor at `24(FP)`.
 | --- | --- |
 | Search for handlers in kernel mode and call them with `CHMx` or an AST | A handler must run in the mode of the code it handles, with that mode's stack and registers, and `$UNWIND` must return into that code. Driving that from kernel mode needs a mode change per handler. |
 | Unwind by patching each frame's return address so that its own `RET` runs, as VAX `$UNWIND` does | It only works for frames that reach their `RET`. A frame that took an exception never does, and vmacro's `RET` is a sequence of instructions inlined in each routine, so there is no single place to jump to. |
-| Describe frames in unwind tables built by vlink | That is the Alpha and Itanium approach and is more complete, but a mask in the frame costs one instruction per call and needs no linker changes. |
+| Describe frames in unwind tables built by vlink | That is the Alpha and Itanium approach and is more complete, but a frame descriptor's address in the frame costs an `adrp`, an `add` and a store per call, and needs no linker changes. |
 | `LIB$SIGNAL` removes its own frame, as VMS's does, so that a signal looks like an exception | Starting the search at its caller's frame gives handlers the same depths, and unwinding skips `LIB$SIGNAL`'s frame anyway. |
 | Keep the console report in the executive and only add `LIB$SIGNAL` | Programs, and the C that the sockets library will bring, could still not catch faults, and exceptions would still skip exit handlers. |
 
 ## Consequences
 
 **What gets harder.**
-- Every `.ENTRY` has one more instruction.
-- An exception needs 208 bytes of the faulting mode's stack. If the stack
+- Every CALL routine with a frame spends three instructions on it: `adrp`
+  and `add` for its descriptor's address, and a store with the clear
+  handler. Frameless ones spend none.
+- An exception needs 560 bytes of the faulting mode's stack. If the stack
   overflowed, there is no room, and the image exits as it used to.
-- For a reserved PAL call, the signal's R7 is the PAL's function code,
-  because vmacro keeps the real R7 in a scratch register. That register
-  comes back only if the handler continues at the same PC.
 - The vector holds more code that outer modes run, so it must use
   nothing in S0 outside the vector, and must keep no writable data.
 

@@ -2,7 +2,7 @@
 
 Oct 6, 2026 · @Marko Mikulicic
 
-Proposed. Every call, in any language, follows AAPCS64 with what 64-bit
+Accepted. Every call, in any language, follows AAPCS64 with what 64-bit
 VMS adds where AAPCS64 leaves room: argument information in x9, 32-bit
 values sign-extended across calls, x15 for a bound procedure's
 environment, x18 as the VAX stack pointer, frames that describe
@@ -11,8 +11,9 @@ handler at `16(FP)`, and VMS's 64-bit signal and mechanism arrays.
 Interrupts and exceptions preserve every register in full. MACRO-32 is
 compiled onto it the way DEC's MACRO-32 compiler (AMACRO) compiled it
 onto Alpha's standard: routines declared, registers kept as sign-extended
-longwords and preserved in full, `n(AP)` read from where the arguments
-arrive, JSB a native call, and DEC's 64-bit extensions under DEC's names.
+longwords and preserved in full, `n(AP)` read from an argument list the
+prologue homes at `32(FP)` when the routine uses AP, JSB a native call,
+and DEC's 64-bit extensions under DEC's names.
 The standard is [DESIGN-0004](../design/0004-calling-standard.md); what
 DEC did is in `vtools/docs/amacro.md`.
 
@@ -71,9 +72,10 @@ whatever 64-bit code it interrupted.
    descriptors as values, no linkage sections.
 6. **Frames describe themselves.** A prologue pushes the frame record,
    writes a clear handler at `16(FP)` and the frame descriptor's address at
-   `24(FP)`, then sets FP. The descriptor, read-only in `$LINK$`, holds
-   Alpha's procedure descriptor flags, the saved registers and their
-   place, the frame's size, a static handler and the routine's name.
+   `24(FP)`, then sets FP. The descriptor, read-only and readable wherever
+   the routine runs, holds Alpha's procedure descriptor flags, the saved
+   registers and their place, the frame's size, a static handler and the
+   routine's name.
    Frameless routines and JSB routines run on their caller's frame. Frames
    from other compilers get an unwind table keyed by PC, tried first.
 7. **Condition handling is 64-bit VMS's**: 32-bit and 64-bit signal

@@ -16,7 +16,8 @@ the source name with `.obj`.
 
 ```
 vmacro hello.mar && vmacro -o consolio.obj vtools/lib/consolio.mar
-vlink hello.obj consolio.obj && vrun hello.exe
+vmacro -o conputchar.obj vtools/lib/conputchar.mar
+vlink hello.obj consolio.obj conputchar.obj && vrun hello.exe
 ```
 
 `vtools/examples/macro32` has examples to try, with the commands in a
@@ -113,7 +114,8 @@ GETBYTE::
 
 Their parameters are AMACRO's: `OUTPUT=<R2,...>`, registers the routine
 changes for its caller; `SCRATCH=<...>`, those it changes and its caller
-doesn't care about; `PRESERVE=<...>`, those it always keeps, R0 and R1 too;
+doesn't care about; `PRESERVE=<...>`, those it always keeps, R0 and R1 too
+in a JSB routine;
 `INPUT=<...>`, documentation, but `INPUT=<AP>`: a JSB routine that reads
 its caller's argument list (*Calls*). `.CALL_ENTRY` also takes `MAX_ARGS=n`,
 `HOME_ARGS=TRUE|FALSE`, `QUAD_ARGS=TRUE|FALSE` and `LABEL=name`. A label
@@ -163,9 +165,10 @@ A routine may go to another routine's code, as VAX code does:
 
 A JSB routine that goes to its own entry goes on past its prologue, with
 what it saved as it was. Anything else is an error that says what each
-side restores, and so is code that runs on into a routine that saves
-registers, or into any routine after it called: its x30 is no longer its
-caller's. So is a `JSB` to a local label, and a `JSB`, `CALLS` or `CALLG`
+side restores. Code may run on into the next routine only from a JSB or
+exception routine that saves nothing and has called nothing, whose x30 is
+still its caller's, into one that saves nothing; anything else is an
+error. So is a `JSB` to a local label, and a `JSB`, `CALLS` or `CALLG`
 to a label in the module that isn't a routine's.
 
 ## Calls
@@ -175,9 +178,9 @@ to a label in the module that isn't a routine's.
 the first eight arguments in x0-x7, the rest on the stack from `sp` up, 8
 bytes each, every longword sign-extended, and their count in x9.
 
-- `CALLS #n, routine` loads the n longwords the caller pushed, pops them,
-  sets `sp` to x18 rounded down to 16, below the arguments past the
-  eighth, and `bl`s the routine. `CALLS Rn, routine`, with a count known
+- `CALLS #n, routine` sets `sp` to x18 rounded down to 16, lower by the
+  arguments past the eighth, loads the n longwords the caller pushed,
+  pops them, sets x9 and `bl`s the routine. `CALLS Rn, routine`, with a count known
   only when it runs, does the same in a loop.
 - `CALLG arglist, routine` loads them from the list, as many as its count
   says. A list at address 0 passes none: a VAX routine that doesn't read
@@ -271,9 +274,13 @@ What doesn't carry over:
 
 - A conditional branch must follow the instruction that set the codes, as
   written in the source; codes set on another path to a label aren't known.
-- V and C are exact only for longword `ADD`, `SUB`, `INC`, `DEC`, `CMP` and
-  `MNEG`. Other
-  instructions clear them rather than leave them as the VAX would.
+- V and C are exact only for longword `ADD`, `SUB`, `INC`, `DEC` and
+  `MNEG`, and C for `CMP`, whose V is ARM64's: set on a signed overflow,
+  where the VAX clears it. Other instructions clear them rather than leave
+  them as the VAX would.
+- The signed branches (`BLSS`, `BGEQ`, `BGTR`, `BLEQ`) test N xor V, as
+  ARM64's do, so after an arithmetic instruction that overflows they go
+  the other way from the VAX's, which test N.
 - No arithmetic traps: overflow and divide by zero don't fault. A divide by
   zero gives 0.
 
@@ -346,7 +353,8 @@ function codes are in
 | `CALL_PAL #code` | any PAL call, as on Alpha: arguments in R0-R5, which go to x0-x5, the result in R0 |
 
 `CALL_PAL` is for the calls the VAX has no instruction for, `SWPCTX`,
-`WTINT`, `WRPTE`, `DELCTX` and `READLBLK`, whose codes `$PALDEF` names.
+`WTINT`, `WRPTE`, `DELCTX`, `READLBLK`, `WRITELBLK` and `RD_PS`, whose
+codes `$PALDEF` names.
 The code must be a constant.
 
 The processor register must be a constant, as in AMACRO. `$PRDEF` in
@@ -466,7 +474,8 @@ A psect for code needs `EXE`: with vasm's defaults a psect such as `.PSECT
 CODE` is data, and running it faults. `$CODE$` has the right attributes.
 
 An operand vmacro can't evaluate yet, such as `#label` or a displacement
-defined further down, comes from a longword in `$LINK$`, which the loader
+defined further down, comes from a longword in `$LINK$`, or a quadword for a
+built-in's literal in quadword mode, which the loader
 fixes up if the image moves. A constant known at that point is built into the
 instructions.
 

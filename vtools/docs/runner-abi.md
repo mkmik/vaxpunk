@@ -2,8 +2,9 @@
 
 vrun runs an image in user mode (EL0) on a QEMU `virt` machine with no OS. A
 small boot stub at EL1 sets up memory, starts the image, and serves a few
-monitor calls. This is the contract between the two. All of it is provisional:
-the calling standard, once it exists, replaces the entry convention.
+monitor calls. This is the contract between the two. The image is entered as
+the calling standard ([DESIGN-0004](../../docs/design/0004-calling-standard.md))
+calls a routine.
 
 ## Machine
 
