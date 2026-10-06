@@ -143,7 +143,7 @@ interpreter. It is linked high in P1, which tells the executive it is one
   network, that sets the interface's address, mask and gateway as `TCPIP
   SET CONFIGURATION INTERFACE` and `SET ROUTE /PERMANENT` last saved them
   on the data disk, or asks a DHCP server for them if the saved settings
-  say `DHCP`, waiting up to 10 seconds for its answer, and prints
+  say `DHCP` or nothing is saved, waiting up to 10 seconds for its answer, and prints
   `%TCPIP-I-SET, WE0: ...`, and creates the process `TCPIP$TELNET`, which runs `TELNETD.EXE` and waits
   on TCP port 23 for `SET HOST` from another vaxpunk. Then DCL reads a line with the `$` prompt: `$QIOW`
   hands the read to the console's driver, which writes the prompt and

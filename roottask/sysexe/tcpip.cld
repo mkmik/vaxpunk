@@ -73,7 +73,7 @@ define verb SHOW
 define type SHOW_OPTIONS
 	keyword INTERFACE
 
-! START COMMUNICATION: the saved configuration, and the remote login
+! START COMMUNICATION: the saved configuration, or DHCP, and the remote login
 ! server, as SYLOGIN.COM does at boot.
 define verb START
 	routine START_COMMUNICATION

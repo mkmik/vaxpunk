@@ -218,7 +218,7 @@ and 11, past the terminal's modifiers, because a unit is a terminal too.
   disk, where TCP/IP Services kept `TCPIP$CONFIGURATION.DAT` and
   `TCPIP$ROUTE.DAT` in `SYS$SYSTEM`; `SHOW INTERFACE` senses and prints.
   `START COMMUNICATION`, which `SYLOGIN.COM` runs, applies the saved
-  configuration, unless the interface has an address already, prints
+  configuration, or DHCP if none is saved, unless the interface has an address already, prints
   `%TCPIP-I-SET`, or the error, a DHCP server's timeout, and creates
   `TCPIP$TELNET`, the remote login server, unless it is there already.
   Without a network it does nothing. ponytail: one route, the default; a
