@@ -30,7 +30,7 @@ border:2px solid var(--rule);max-height:70vh;overflow:auto;display:none;box-shad
 #hits li.sel a,#hits li a:hover{background:var(--paper2);text-decoration:none}
 #hits b{font-family:var(--mono)}#hits .k{float:right;font:.7rem var(--sans);text-transform:uppercase;color:var(--dim)}
 #hits .s{display:block;font-size:.8rem;color:var(--dim);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-#theme{font:700 .75rem var(--sans);padding:.4rem .6rem;border:2px solid var(--rule);background:var(--paper);
+.top button{font:700 .75rem var(--sans);padding:.4rem .6rem;border:2px solid var(--rule);background:var(--paper);
 color:var(--ink);cursor:pointer}
 #toc{position:fixed;top:4rem;bottom:0;left:0;width:17rem;overflow:auto;padding:1rem .8rem 3rem 1rem;
 border-right:1px solid var(--hair);background:var(--paper2);font:.85rem/1.4 var(--sans)}

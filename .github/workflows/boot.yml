@@ -49,14 +49,7 @@ jobs:
       - run: cargo test --release -p boot
       - if: github.event_name != 'pull_request'
         name: Gzip the demo's firmware and disks
-        run: |
-          mkdir out/demo
-          gzip -9c out/esp.img >out/demo/esp.img.gz
-          gzip -9c out/sysdisk.img >out/demo/sysdisk.img.gz
-          for f in /usr/share/qemu/edk2-aarch64-code.fd /usr/share/qemu-efi-aarch64/QEMU_EFI.fd; do
-            if [ -f "$f" ]; then gzip -9c "$f" >out/demo/edk2-aarch64-code.fd.gz; break; fi
-          done
-          test -f out/demo/edk2-aarch64-code.fd.gz
+        run: web/demo-images.sh out/demo
       - if: github.event_name != 'pull_request'
         uses: actions/upload-artifact@v4
         with:
@@ -93,6 +86,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - run: cargo run -p apidoc
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: web/tailgate/go.mod
+          cache-dependency-path: web/tailgate/go.sum
       - uses: actions/download-artifact@v4
         with:
           name: demo-images
