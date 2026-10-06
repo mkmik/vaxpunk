@@ -31,10 +31,11 @@
 ; access to the file, $CREATE write to its directory, $ERASE delete to
 ; the file and write to its directory, else RMS$_PRV. A protection XAB
 ; in the FAB's chain gets the file's owner and protection from $OPEN,
-; and gives them to it at $CLOSE, which takes control access, and the
-; system's for a new owner.
+; gives them to a new file at $CREATE, and to the file at $CLOSE, which
+; takes control access, and the system's for a new owner. Without one, a
+; new version has the protection of the highest there was.
 ;
-; ponytail: $CREATE takes no XAB; SET PROTECTION, which opens the file,
+; ponytail: SET PROTECTION, which opens the file,
 ; needs read access to it, where VMS's asks the XQP with IO$_MODIFY. The
 ; services run in kernel mode holding the file system's
 ; lock, FIL$LOCK, which keeps its buffers and RMS's to one process; VMS's
@@ -64,7 +65,7 @@
         .EXTERNAL FIL$READHDR, FIL$READVBN, FIL$SEARCHDIR, FIL$EOF, FIL$ISDIR
         .EXTERNAL FIL$SELECT, FIL$CREHDR, FIL$WRITEHDR, FIL$SETNAME, FIL$EXTEND
         .EXTERNAL FIL$ENTER, FIL$REMOVE, FIL$DELHDR, FIL$WRITEVBN, FIL$MKDIR
-        .EXTERNAL FIL$LOCK, FIL$UNLOCK, FIL$CHKHDR
+        .EXTERNAL FIL$LOCK, FIL$UNLOCK, FIL$CHKHDR, FIL$CHKPRO
         .EXTERNAL F11$GW_FID, F11$GL_VCB, F11$AB_DIRBLK, LNM$TRNLOG, SCH$GL_PCBVEC
 
 BLOCK = 512
@@ -136,7 +137,7 @@ SYSDEF: .BYTE   0                       ; the system's default: SYS$DISK: and
 SYSDISK:                                ; the process's default directory, .ASCIC
         .ASCII  "SYS$DISK:"
         .BLKB   63
-HDRBUF: .BLKB   BLOCK                   ; the header of a file $ERASE deletes
+HDRBUF: .BLKB   BLOCK                   ; the header of a file $ERASE deletes, $CLOSE changes, or $CREATE follows
 XABPRO: .LONG   0                       ; the FAB's protection XAB, or 0
 MFDNAME:
         .ASCII  "000000"
@@ -1355,9 +1356,13 @@ RABCHK: MOVL    4(AP), R10
 ; its IFI goes in the FAB, and in its NAM block, if it has one, its
 ; resultant string and file ID. Its version is one above the highest
 ; there is, unless the specification gives one. The file is the current
-; process's, with the default protection (f11wrt.mar). RMS$_WLD for a
-; wildcard, RMS$_WLK on a volume that can't be written, RMS$_PRV without
-; write access to the directory, RMS$_FEX if that version is
+; process's, with the protection of the highest version there is, or the
+; default (f11wrt.mar), unless the FAB's protection XAB gives one, and an
+; owner, not 0, which takes the system's access if it isn't the
+; process's UIC (CREPRO). RMS$_WLD for a wildcard, RMS$_WLK on a volume
+; that can't be written, RMS$_PRV without write access to the directory
+; or the system's for the owner, SS$_ACCVIO if the caller can't read the
+; XAB chain or write the XAB, RMS$_FEX if that version is
 ; there, RMS$_FUL if the volume is full, RMS$_CRE for another error from
 ; the file system, which goes in FAB$L_STV.
         .ENTRY  EXE$CREATE, ^M<R2, R3, R4, R5, R6, R7, R8, R9, R10, R11>
@@ -1376,11 +1381,26 @@ RABCHK: MOVL    4(AP), R10
         MOVAB   RMS$AB_DIRHDR, R1
         BSBW    CHKACC
         BLBC    R0, 90$
-        BSBW    NEWIFAB
+        BSBW    FINDXAB                 ; another owner takes the system's access
+        BLBC    R0, 90$
+        MOVL    XABPRO, R1
+        BEQL    5$
+        MOVL    XAB$L_UIC(R1), R1
+        BEQL    5$
+        MOVL    SCH$GL_CURPCB, R0
+        CMPL    R1, PCB$L_UIC(R0)
+        BEQL    5$
+        MOVL    #ARM$M_SYSTEM, R0
+        BSBW    FIL$CHKPRO
+        BLBS    R0, 5$
+        MOVL    #RMS$_PRV, R0
+        BRB     90$
+5$:     BSBW    NEWIFAB
         BLBC    R0, 90$
         MOVAB   IFB$AB_HDR(R7), R1
         BSBW    FIL$CREHDR
         BLBC    R0, 70$
+        BSBW    CREPRO
         BISB3   FAB$B_ORG(R10), FAB$B_RFM(R10), IFB$AB_HDR+FAT$B_RTYPE(R7)
         MOVB    FAB$B_RAT(R10), IFB$AB_HDR+FAT$B_RATTRIB(R7)
         MOVW    FAB$W_MRS(R10), IFB$AB_HDR+FAT$W_MAXREC(R7)
@@ -1434,6 +1454,33 @@ RABCHK: MOVL    4(AP), R10
         BSBW    EXE$DEANONPGDSIZ
         MOVL    (SP)+, R0
 90$:    FABDONE
+
+; CREPRO: R7 = an IFAB with a new file's header, XABPRO = the FAB's
+; protection XAB, or 0. Gives the header the protection of the highest
+; version of the name in the directory RMS$PARSE found, if there is one,
+; as VMS's XQP does, then the XAB's protection, and its owner unless it
+; is 0. Holding FIL$LOCK. Uses R0-R5.
+CREPRO: PUSHR   #^M<R6, R7, R8, R9>
+        MOVAB   RMS$AB_DIRHDR, R3
+        MOVL    FIELDS+16, R6           ; NAME.TYPE
+        ADDL3   FIELDS+20, FIELDS+28, R7
+        CLRQ    R8                      ; its highest version, none skipped
+        BSBW    FIL$SEARCHDIR
+        MOVL    4(SP), R7
+        BLBC    R0, 20$                 ; none: the default
+        MOVL    R5, R0
+        MOVAB   HDRBUF, R1
+        BSBW    FIL$READHDR
+        BLBC    R0, 20$
+        MOVW    HDRBUF+FH2$W_FILEPROT, IFB$AB_HDR+FH2$W_FILEPROT(R7)
+20$:    MOVL    XABPRO, R1
+        BEQL    90$
+        MOVW    XAB$W_PRO(R1), IFB$AB_HDR+FH2$W_FILEPROT(R7)
+        MOVL    XAB$L_UIC(R1), R0
+        BEQL    90$
+        MOVL    R0, IFB$AB_HDR+FH2$L_FILEOWNER(R7)
+90$:    POPR    #^M<R6, R7, R8, R9>
+        RSB
 
 ; CRENTER: R7 = an IFAB with a new file's header. Enters the file in the
 ; directory RMS$PARSE found, with the expanded specification's name and

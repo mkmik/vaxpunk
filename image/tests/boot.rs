@@ -38,7 +38,10 @@
 //! read DKB0:[000000]DATA.TXT; after SET PROTECTION=(W:R) it can, and
 //! after SET FILE/OWNER_UIC=[200,1] and SET PROTECTION=(W) too, as the
 //! owner, which DIRECTORY/OWNER/PROTECTION shows each time, but it can't
-//! once DKB0: is mounted /PROTECTION=(W), whose world may do nothing. All a
+//! once DKB0: is mounted /PROTECTION=(W), whose world may do nothing;
+//! PROTTEST's own $CREATE gives a file an owner and protection with a
+//! protection XAB. A COPY of a new version of a file SET PROTECTION=(W:RE)
+//! has that protection too. All a
 //! step at a time: each waits until a line has come so many times, the echo
 //! of what it typed before included, and types.
 //! STARTUP's SLEEPER and SVCTEST's NAPPER say they hibernate before SLEEPER
@@ -161,6 +164,7 @@ const LINES: &[&str] = &[
     "PROTTEST: [200,1] read DATA.TXT, and may not give it away, delete it or make a file there",
     "DATA.TXT;1          [1,4]               (RWED,RWED,RE,R)",
     "DATA.TXT;1          [200,1]             (RWED,RWED,RE,)",
+    "NEW.TXT;2           (RWED,RWED,RE,RE)",
 ];
 
 /// What it must not: the lines of DCLTEST.COM's a failure skips or reaches,
@@ -289,6 +293,13 @@ fn boot() {
         } else if typed == 11 && text.matches("PROTTEST: [200,1] read").count() == 2 {
             type_("DISMOUNT DKB0:\rMOUNT/PROTECTION=(W) DKB0:\rRUN PROTTEST\r");
             typed = 12;
+        } else if typed == 12 && text.matches("%RMS-E-PRV").count() == 2 {
+            // A new version has its predecessor's protection.
+            type_("COPY SYS$SYSDEVICE:[SYSMGR]WELCOME.TXT DKB0:[000000]NEW.TXT\r");
+            type_("SET PROTECTION=(W:RE) DKB0:[000000]NEW.TXT\r");
+            type_("COPY SYS$SYSDEVICE:[SYSMGR]WELCOME.TXT DKB0:[000000]NEW.TXT\r");
+            type_("DIRECTORY/PROTECTION DKB0:[000000]NEW.TXT;2\r");
+            typed = 13;
         }
         // The rest once EDIT is done: the type-ahead buffer holds 255 characters.
         if typed == 1 && text.contains("String was not found") {

@@ -955,8 +955,9 @@ does:
   makes an empty header for it, with the slot's next sequence number,
   owned by the current process's UIC, with VMS's default protection,
   `(S:RWED,O:RWED,G:RE,W)`; **`FIL$WRITEHDR`** writes a header, with its
-  checksum. ponytail: no process default protection, nor a new version
-  given its predecessor's.
+  checksum. `$CREATE` gives a new version its predecessor's protection
+  instead, and a protection XAB's owner and protection win over both.
+  ponytail: no process default protection.
 - **`FIL$EXTEND`** gives a file more blocks, the first free runs of the
   storage bitmap (a set bit is a free block), a format 2 map pointer each,
   or added to the last one when they follow it. **`FIL$DELHDR`** gives a
@@ -1030,7 +1031,7 @@ a directory in one of those. The MFD has no parent: `RMS$_DIR`.
 | `$PARSE fab` | the expanded string, its parts and the directory's ID into the FAB's NAM block |
 | `$SEARCH fab` | the next file the NAM block's expanded string names: its resultant string, parts and file ID; `RMS$_FNF` if there is none, then `RMS$_NMF` |
 | `$OPEN fab` | opens one file, the highest version unless the specification gives one, for reading, and with `FAB$M_PUT` in `FAB$B_FAC` for `$PUT` too: `RMS$_WLK` on a volume that can't be written, `DKA0:`, `RMS$_PRV` without write access or for the volume's own files and directories. Its IFI, record format, attributes, maximum record size and allocation into the FAB, its resultant string into the NAM block if there is one, its owner and protection into the protection XAB (`$XABPRODEF`) in `FAB$L_XAB`'s chain if there is one |
-| `$CREATE fab` | makes a new file, one version above the highest unless the specification gives one (`RMS$_FEX` if it is there), with the FAB's organization, record format and attributes, maximum record size and `FAB$L_ALQ` blocks, and opens it for `$PUT`; `RMS$_WLK` on `DKA0:`, `RMS$_FUL` if the volume is full |
+| `$CREATE fab` | makes a new file, one version above the highest unless the specification gives one (`RMS$_FEX` if it is there), with the FAB's organization, record format and attributes, maximum record size and `FAB$L_ALQ` blocks, and opens it for `$PUT`; `RMS$_WLK` on `DKA0:`, `RMS$_FUL` if the volume is full. It has the protection of the highest version there was, as VMS's does, else the default, unless a protection XAB gives one, and an owner, which takes the system's access if it isn't the caller's UIC |
 | `$CONNECT rab` | connects the RAB to the file its FAB opened, at its start, or at its end with `RAB$M_EOF` in `RAB$L_ROP` |
 | `$GET rab` | the next record into the RAB's user buffer: `RAB$W_RSZ`, `RAB$L_RBF`; `RMS$_RTB` if it didn't fit, `RMS$_EOF` past the end; VAR and FIX records only |
 | `$PUT rab` | appends the record at `RAB$L_RBF`, `RAB$W_RSZ` bytes, to a file `$CREATE` made or `$OPEN` opened for it, at its end, `RMS$_NEF` if the stream is elsewhere: VAR records with their size first, FIX ones of the file's size (`RMS$_RSZ`), each on a word; a block at a time, extending the file by 8 blocks as it fills |

@@ -11,8 +11,8 @@
 ; (rms.mar) calls these holding FIL$LOCK, as it calls f11.mar's. A new
 ; file is its creator's, with VMS's default protection, FILEPROT; a new
 ; directory takes its parent's, which no one may delete.
-; ponytail: no process default protection, SET PROTECTION/DEFAULT, nor a
-; new version given its predecessor's. A cluster is a block, and the bitmaps are a block each, so a
+; RMS's $CREATE gives a new version its predecessor's instead.
+; ponytail: no process default protection, SET PROTECTION/DEFAULT. A cluster is a block, and the bitmaps are a block each, so a
 ; volume has at most 4096 blocks and 4096 files; the index file isn't
 ; extended, so a volume has the headers INITIALIZE made room for; map
 ; pointers are format 2, and a directory is rewritten whole on each
