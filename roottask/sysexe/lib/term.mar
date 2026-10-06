@@ -1,0 +1,59 @@
+        .TITLE  TERM    The terminal SET and SHOW TERMINAL work on
+        .IDENT  /V0.1/
+;
+; SET TERMINAL and SHOW TERMINAL work on the terminal their DEVICE_NAME
+; names, or else on SYS$INPUT's, as VMS's do on SYS$COMMAND's. They read
+; its characteristics with IO$_SENSEMODE, as VMS's do, in a buffer laid
+; out as ttdriver.mar's TTY$AB_CHAR.
+; ponytail: SYS$INPUT, as vaxpunk has no SYS$COMMAND; the console is the
+; one terminal, so a SET HOST session's network unit is no such device.
+;
+        .LIBRARY "starlet.mlb"
+        $SSDEF
+        $IODEF
+        $DCDEF
+        $DVIDEF
+
+        .EXTERNAL CLI$GET_VALUE
+
+        .PSECT  TERM_DATA, NOEXE, WRT, LONG
+INPUT:  .ASCID  "SYS$INPUT"
+DEVICE: .ASCID  "DEVICE_NAME"
+NAMDSC: .LONG   64                      ; DEVICE_NAME, the parameter
+        .ADDRESS NAME
+NAME:   .BLKB   64
+CLASS:  .LONG   0
+ITEMS:  .WORD   4, DVI$_DEVCLASS        ; what $GETDVIW returns of the device
+        .ADDRESS CLASS
+        .LONG   0
+        .LONG   0
+IOSB:   .BLKQ   1
+
+        .PSECT  TERM_CODE, EXE, LONG
+; TERM_SENSE chan, char: assigns a channel to the terminal DEVICE_NAME
+; names, or to SYS$INPUT's, writes it to the word at chan, and reads the
+; terminal's characteristics into char, 12 bytes. R0 = SS$_NORMAL,
+; SS$_IVDEVNAM if the device isn't a terminal, or a system service's or
+; IO$_SENSEMODE's failure.
+        .ENTRY  TERM_SENSE, ^M<R2>
+        MOVAQ   NAMDSC, R2
+        PUSHAW  NAMDSC
+        PUSHAQ  NAMDSC
+        PUSHAQ  DEVICE
+        CALLS   #3, G^CLI$GET_VALUE
+        BLBS    R0, 10$
+        MOVAQ   INPUT, R2
+10$:    $GETDVIW_S DEVNAM=(R2), ITMLST=ITEMS
+        BLBC    R0, 90$
+        MOVL    #SS$_IVDEVNAM, R0
+        CMPL    CLASS, #DC$_TERM
+        BNEQ    90$
+        $ASSIGN_S DEVNAM=(R2), CHAN=@4(AP)
+        BLBC    R0, 90$
+        MOVZWL  @4(AP), R0
+        $QIOW_S CHAN=R0, FUNC=#IO$_SENSEMODE, IOSB=IOSB, P1=@8(AP), P2=#12
+        BLBC    R0, 90$
+        MOVZWL  IOSB, R0
+90$:    RET
+
+        .END

@@ -188,7 +188,7 @@ until the hardware or size changes; leave it.
 | --- | --- | --- |
 | 1 | Privileges done (step 1), files' and volumes' protection (step 2); left: mailboxes with no protection mask (ADR-0019, `mbdriver.mar`); a `$CREMBX` logical name takes `SYSNAM` until `LNM$JOB` (`mbdriver.mar`) | *Privileges, UICs and protection* |
 | 2 | No username or password: `TELNETD` logs in as `SYSTEM` (`telnetd.mar`, DESIGN-0003); the link address picks the command interpreter (ADR-0006); `SYS$DISK` and `SYSTARTUP_VMS.COM` set up by DCL, not `LOGINOUT` and `STARTUP` (DESIGN-0002) | *Login* |
-| 3 | One terminal: the line, the ASTs and the recall buffer live in `ttdriver.mar`, not the UCB; no characteristics for `IO$_SETMODE`/`IO$_SENSEMODE` (ADR-0014, `ttdriver.mar`); EDIT still writes on the console in a remote login (DESIGN-0003) | *Terminals* |
+| 3 | One terminal: the line, the ASTs, the recall buffer and the characteristics live in `ttdriver.mar`, not the UCB, so `SET TERMINAL` and `SHOW TERMINAL` work on the console only, and of the characteristics only `NOECHO` changes what the driver does (`ttdriver.mar`, `lib/term.mar`); EDIT still writes on the console in a remote login (DESIGN-0003) | *Terminals* |
 | 4 | No quotas: `BIOLM`, `DIOLM`, `BYTLM` (ADR-0013), `BUFQUO` (ADR-0019), ASTs (DESIGN-0002 *ASTs*); `$GETJPI` has no CPU times, quotas or counts (`getjpi.mar`, `show.mar`) | *Quotas* |
 | 5 | One file system lock for every volume, no per-file lock, no priority boost (ADR-0020, `f11.mar`, DESIGN-0002 *Files*); no file sharing or locking, `$ERASE` deletes an open file (ADR-0009, `rms.mar`) | *Lock manager* |
 | 6 | DCL procedures: no `ON`, block `IF`, lexical functions, `OPEN` or `READ`; lines without `$` skipped (`dcl.mar`) | *Command language* |
@@ -224,7 +224,7 @@ until the hardware or size changes; leave it.
 | 26 | One message table, no message files, `$PUTMSG` or `LIB$SIGNAL` (`getmsg.mar`, `cli.mar`, `dcl.mar`, DESIGN-0002) | Message files when a utility brings its own facility; `$PUTMSG` with condition handling |
 | 27 | `HELP` has no text (`help.mar`) | A help library, `HELPLIB.HLB` |
 | 28 | Mailbox writes never wait, no `IO$_WRITEOF` or attention ASTs (`mbdriver.mar`) | When a program needs them; the job controller may |
-| 29 | Terminal editing: insert mode only, recall buffer the console's and no `RECALL` (`ttdriver.mar`, DESIGN-0002); `SET HOST` is line mode with no Telnet options (`rtpad.mar`); EDIT assumes 24 by 80 and lacks several commands (`edit.mar`) | The per-terminal UCB (tier 1) makes the recall buffer DCL's; character mode `SET HOST` with the terminal's characteristics |
+| 29 | Terminal editing: insert mode only, recall buffer the console's and no `RECALL` (`ttdriver.mar`, DESIGN-0002); `SET HOST` is line mode with no Telnet options (`rtpad.mar`); EDIT lacks several commands (`edit.mar`) | The per-terminal UCB (tier 1) makes the recall buffer DCL's; character mode `SET HOST` with the terminal's characteristics |
 | 30 | `$EXPREG` grows P0 only (`memory.mar`); image rundown frees every P0 page, mapped or not (`process.mar`) | When a program grows P1 or the walk shows in a profile |
 | 31 | The scheduler has no priority boosts or decay (`sched.mar`, DESIGN-0002) | Boosts on I/O completion and wakes, with decay; worth it once interactive users share the CPU with batch jobs |
 | 32 | The CLI: parse limits of 128 entities, 1 KB of values, a 512-byte line; the parse copied to a fixed address; the first `SET COMMAND` error ends the compile; at most 8 `SET COMMAND` files; a qualifier the syntax lacks is an error, not ignored; an entity present by default doesn't count; `$IMGACT` calls the image (ADR-0017, ADR-0018, `cli.mar`, `cdu.mar`, `process.mar`, DESIGN-0002) | When a command or a CLD file runs into one |
@@ -300,8 +300,8 @@ Each step ends in something `cargo test -p boot` checks.
    `/OWNER` and `/PROTECTION` on `INITIALIZE` and `MOUNT`. *Visible:* a
    process with another UIC can't read a `(W)` file.
 3. **Terminals per UCB.** The console's state moves into its UCB;
-   `IO$_SETMODE`/`SENSEMODE` characteristics; `SET TERMINAL`, `SHOW
-   TERMINAL`; `TELNETD` makes `TNAnn:` units. *Visible:* EDIT's keypad mode
+   `IO$_SETMODE`/`SENSEMODE` characteristics, `SET TERMINAL`, `SHOW
+   TERMINAL` (done for the console); `TELNETD` makes `TNAnn:` units. *Visible:* EDIT's keypad mode
    works in a `SET HOST` session.
 4. **UAF and LOGINOUT.** `SYSUAF.DAT`, `AUTHORIZE`, `LOGINOUT`, `SET
    PASSWORD`; `STARTUP` runs `SYSTARTUP_VMS.COM`; the console and `TELNETD`

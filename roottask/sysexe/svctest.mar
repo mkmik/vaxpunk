@@ -57,8 +57,13 @@ CHAR_ITEMS:                             ; the characteristics
         .ADDRESS DEVCHAR
         .LONG   0
         .LONG   0
-BAD_ITEMS:                              ; DVI$_DEVTYPE, which it doesn't know
-        .WORD   4, 6
+BAD_ITEMS:                              ; DVI$_PID, which it doesn't know
+        .WORD   4, 14
+        .ADDRESS DEVCHAR
+        .LONG   0
+        .LONG   0
+TYPE_ITEMS:                             ; the console's type
+        .WORD   4, DVI$_DEVTYPE
         .ADDRESS DEVCHAR
         .LONG   0
         .LONG   0
@@ -361,8 +366,8 @@ FNFEND:
         EXPECT  #RMS$_NORMAL, 53
 
 ; Devices: $GETDVIW about the console by its name and by a channel, and
-; about the system disk, mounted read only; an item it doesn't know, and
-; a device that isn't there. $DEVICE_SCAN finds the disks whose names
+; its type, and about the system disk, mounted read only; an item it
+; doesn't know, and a device that isn't there. $DEVICE_SCAN finds the disks whose names
 ; end in A0, DKA0: and MDA0:, and no more.
         $GETDVIW_S DEVNAM=CONSOLE, ITMLST=DVI_ITEMS, IOSB=DVI_IOSB
         EXPECT  #SS$_NORMAL, 55
@@ -379,6 +384,10 @@ FNFEND:
         $GETDVIW_S CHAN=CHAN, ITMLST=DVI_ITEMS
         EXPECT  #SS$_NORMAL, 56
         CMPL    CLASS, #DC$_TERM
+        BNEQ    90$
+        $GETDVIW_S CHAN=CHAN, ITMLST=TYPE_ITEMS
+        EXPECT  #SS$_NORMAL, 56
+        CMPL    DEVCHAR, #DT$_VT100
         BNEQ    90$
         $DASSGN_S CHAN=CHAN
         $GETDVIW_S DEVNAM=DKA0, ITMLST=CHAR_ITEMS

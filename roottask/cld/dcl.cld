@@ -57,6 +57,7 @@ define type SET_OPTIONS
 	keyword HOST, syntax=SET_HOST
 	keyword PROCESS, syntax=SET_PROCESS
 	keyword PROTECTION, value(list), syntax=SET_PROTECTION
+	keyword TERMINAL, syntax=SET_TERMINAL
 
 ! SET [NO]CONTROL[=Y]: CTRL/Y, and CTRL/C no image takes, on or off.
 ! ponytail: no T, CTRL/T has no status line to show.
@@ -101,6 +102,24 @@ define syntax SET_FILE
 	qualifier OWNER_UIC, value(required, type=$uic)
 	disallow not OWNER_UIC
 
+! SET TERMINAL [device]: SET.EXE sets the terminal's characteristics.
+! ponytail: the ones the console keeps that a program may care about;
+! no /INQUIRE, /DEVICE_TYPE, /SPEED or /PERMANENT.
+define syntax SET_TERMINAL
+	image SET
+	parameter P1, label=OPTION, value(required, type=SET_OPTIONS)
+	parameter P2, label=DEVICE_NAME
+	qualifier WIDTH, nonnegatable, value(required, type=$number)
+	qualifier PAGE, nonnegatable, value(required, type=$number)
+	qualifier BROADCAST
+	qualifier ECHO
+	qualifier EIGHTBIT
+	qualifier ESCAPE
+	qualifier LOWERCASE
+	qualifier PASTHRU
+	qualifier TAB
+	qualifier WRAP
+
 define verb SHOW
 	cliroutine SHOW
 	parameter P1, label=OPTION, prompt="What", value(required, type=SHOW_OPTIONS)
@@ -112,6 +131,7 @@ define type SHOW_OPTIONS
 	keyword PROCESS, syntax=SHOW_IMAGE
 	keyword SYMBOL, syntax=SHOW_SYMBOL
 	keyword SYSTEM, syntax=SHOW_IMAGE
+	keyword TERMINAL, syntax=SHOW_TERMINAL
 
 define syntax SHOW_DEVICES
 	parameter P1, label=OPTION, value(required, type=SHOW_OPTIONS)
@@ -139,6 +159,12 @@ define syntax SHOW_SYMBOL
 define syntax SHOW_IMAGE
 	image SHOW
 	qualifier PRIVILEGES
+
+! SHOW TERMINAL [device]: SHOW.EXE.
+define syntax SHOW_TERMINAL
+	image SHOW
+	parameter P1, label=OPTION, value(required, type=SHOW_OPTIONS)
+	parameter P2, label=DEVICE_NAME
 
 define verb STOP
 	cliroutine STOP

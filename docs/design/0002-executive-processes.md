@@ -849,8 +849,10 @@ ponytail: the console's line being read is kept in `ttdriver.mar`, not
 its UCB, since there is one terminal; output waits for the console at
 `IPL$_SYNCH`, and a write in the middle of a line being read doesn't
 redisplay it. The recall buffer is the console's, shared by every
-reader, where VMS has DCL's own, with `RECALL`. No quotas, and
-`IO$_SETMODE` sets no terminal characteristics.
+reader, where VMS has DCL's own, with `RECALL`. No quotas. The
+terminal's characteristics, which `IO$_SETMODE` sets and
+`IO$_SENSEMODE` and `$GETDVI` return, are `ttdriver.mar`'s too,
+`TTY$AB_CHAR`; of them only `NOECHO` changes what the driver does.
 
 ### Devices
 

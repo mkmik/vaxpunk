@@ -13,14 +13,18 @@
 ; or a key at a time with IO$M_NOFILTR. A read that ends is completed,
 ; and the next one writes its prompt and goes on from there. What is
 ; typed while no read is queued waits in the buffer.
-; IO$_SETMODE enables a CTRL/C or CTRL/Y AST, once. CTRL/C and CTRL/Y
+; IO$_SETMODE sets the terminal's characteristics, in TTY$AB_CHAR, and
+; IO$_SENSEMODE returns them; with IO$M_CTRLCAST or IO$M_CTRLYAST,
+; IO$_SETMODE enables a CTRL/C or CTRL/Y AST instead, once. CTRL/C and CTRL/Y
 ; empty the buffer instead, and deliver the ASTs enabled for them; CTRL/Y
 ; ends the reads of the processes it goes to with SS$_CONTROLY, so that
 ; DCL, whose AST it is, prompts on top of the image (ADR-0014). CTRL/C
 ; that no AST is enabled for is CTRL/Y.
-; ponytail: one terminal, so the line being read and the ASTs are kept
-; here, not in its UCB; output is written a buffer at a time at
-; IPL$_SYNCH, waiting for the console, so lines don't mix.
+; ponytail: one terminal, so the line being read, the ASTs and the
+; characteristics are kept here, not in its UCB; output is written a
+; buffer at a time at IPL$_SYNCH, waiting for the console, so lines don't
+; mix. Of the characteristics only NOECHO changes what the driver does;
+; the others, the width and page too, are kept for the programs that ask.
 ;
         .LIBRARY "lib.mlb"
         .LIBRARY "starlet.mlb"
@@ -30,6 +34,9 @@
         $IRPDEF
         $IODEF
         $SSDEF
+        $DCDEF
+        $TTDEF
+        $TT2DEF
 
         .EXTERNAL SCH$QAST, EXE$DEANONPGDSIZ
         .EXTERNAL EXE$OUTCHAR, EXE$OUTCRLF, EXE$OUTZSTRING
@@ -44,6 +51,12 @@ CTRLZ = 26
 RECALL = 16                             ; lines in the recall buffer, a power of 2
 
         .PSECT  EXEC$DATA, NOEXE, WRT, QUAD
+TTY$AB_CHAR::                           ; the console's characteristics, as IO$_SENSEMODE gives them:
+        .BYTE   DC$_TERM, DT$_VT100     ; its class and type,
+        .WORD   80                      ; its width,
+        .LONG   <24@TT$V_PAGE>!TT$M_TTSYNC!TT$M_LOWER!TT$M_MECHTAB!TT$M_WRAP!TT$M_SCOPE!TT$M_EIGHTBIT
+        .LONG   TT2$M_EDITING!TT2$M_INSERT!TT2$M_ANSICRT!TT2$M_AVO!TT2$M_EDIT!TT2$M_DECCRT
+TTY$K_CHAR = 12                         ; TT$ bits and page, then TT2$ bits
 TTY$GL_PUT::                            ; where the next character received goes in the ring
         .LONG   0
 TTY$GL_GET::                            ; where a read takes the next from
@@ -91,14 +104,20 @@ EXIT:   .ASCIZ  "*EXIT*"<13><10>
 ; IO$M_CTRLYAST enables an AST for CTRL/C or CTRL/Y, in place of the one
 ; the channel had: p1 is its routine, or 0 to disable it, p2 its
 ; parameter and p3 its mode, or the caller's if that is an outer one.
+; Without them it sets the characteristics from the p2 bytes at p1, 8 or
+; 12, as TTY$AB_CHAR has them, its class aside, and IO$_SENSEMODE writes
+; them there.
 ; R0 = SS$_NORMAL, SS$_ILLIOFUNC, SS$_ACCVIO, SS$_BADPARAM, or
 ; IOC$ALLOCIRP's failure. IPL$_SYNCH. Uses R0-R8.
 TT$FDT::
         .JSB_ENTRY  INPUT=<AP>, SCRATCH=<R2, R3, R4, R5, R6, R7, R8>
         BICL3   #^C63, 12(AP), R0       ; the function, without modifiers
         CMPL    R0, #IO$_SETMODE
-        BNEQ    5$
+        BNEQ    3$
         BRW     SETMODE
+3$:     CMPL    R0, #IO$_SENSEMODE
+        BNEQ    5$
+        BRW     TTSENSE
 5$:     MOVL    28(AP), R2
         MOVL    32(AP), R3
         CMPL    R3, #65535
@@ -162,14 +181,13 @@ TT$FDT::
 ; SETMODE: TT$FDT's IO$_SETMODE. Takes the channel's AST off the queue,
 ; CTRL/C's or CTRL/Y's, and puts the one p1 names at its tail, in an IRP,
 ; the request's, which is completed with a second.
-; ponytail: no terminal characteristics to set or sense.
+; Without either modifier it sets the characteristics, TTSET.
 SETMODE:
         MOVAQ   TTY$Q_CTRLC, R8
         BBS     #IO$V_CTRLCAST, 12(AP), 10$
         MOVAQ   TTY$Q_CTRLY, R8
         BBS     #IO$V_CTRLYAST, 12(AP), 10$
-        MOVL    #SS$_ILLIOFUNC, R0
-        RSB
+        BRW     TTSET
 10$:    CLRL    R1                      ; the AST's, then the request's
         BSBW    IOC$ALLOCIRP
         BLBC    R0, 90$
@@ -213,6 +231,59 @@ SETMODE:
         BRW     IOC$REQCOM
 90$:    RSB
 
+; TTSET: TT$FDT's IO$_SETMODE of the characteristics: copies the p2
+; bytes at p1, past the class, to TTY$AB_CHAR, and completes the request.
+TTSET:
+        BSBB    TTBUF
+        BLBC    R0, 90$
+        MOVL    #1, R1                  ; past the class
+10$:    MOVB    (R2)[R1], TTY$AB_CHAR[R1]
+        AOBLSS  R3, R1, 10$
+        BRB     TTDONE
+90$:    RSB
+
+; TTSENSE: TT$FDT's IO$_SENSEMODE: copies TTY$AB_CHAR to the p2 bytes
+; at p1, and completes the request.
+TTSENSE:
+        BSBB    TTBUF
+        BLBC    R0, 90$
+        MOVL    #SS$_ACCVIO, R0
+        IFNOWRT R3, (R2), 90$
+        CLRL    R1
+10$:    MOVB    TTY$AB_CHAR[R1], (R2)[R1]
+        AOBLSS  R3, R1, 10$
+        BRB     TTDONE
+90$:    RSB
+
+; TTDONE: completes TTSET's or TTSENSE's request with SS$_NORMAL, in
+; an IRP of its own.
+TTDONE:
+        CLRL    R1
+        BSBW    IOC$ALLOCIRP
+        BLBC    R0, 90$
+        MOVL    #SS$_NORMAL, R0
+        CLRL    R1
+        BRW     IOC$REQCOM
+90$:    RSB
+
+; TTBUF: R2 = p1, R3 = p2, as a characteristics buffer: up to
+; TTY$K_CHAR bytes of it. R0 = SS$_NORMAL, SS$_BADPARAM if it is shorter
+; than 8, or SS$_ACCVIO if the caller can't read it.
+TTBUF:
+        .JSB_ENTRY  OUTPUT=<R2, R3>
+        MOVL    28(AP), R2
+        MOVL    32(AP), R3
+        MOVL    #SS$_BADPARAM, R0
+        CMPL    R3, #8
+        BLSSU   90$
+        CMPL    R3, #TTY$K_CHAR
+        BLEQU   10$
+        MOVL    #TTY$K_CHAR, R3
+10$:    MOVL    #SS$_ACCVIO, R0
+        IFNORD  R3, (R2), 90$
+        MOVL    #SS$_NORMAL, R0
+90$:    RSB
+
 ; WRITE: writes the R3 bytes at R2 on the console. IPL$_SYNCH. Uses R0
 ; and R1.
 WRITE:
@@ -252,7 +323,9 @@ STARTIO:
         ADDL2   R4, R2
         MOVL    IRP$L_BCNT(R4), R3
         MOVL    IRP$L_FUNC(R4), R6
-        CLRL    R0
+        BBC     #TT$V_NOECHO, TTY$AB_CHAR+4, 25$
+        BISL2   #IO$M_NOECHO, R6        ; SET TERMINAL/NOECHO: every read
+25$:    CLRL    R0
         CMPL    R1, R3
         BGEQU   40$                     ; full
         BSBW    GETCHAR
