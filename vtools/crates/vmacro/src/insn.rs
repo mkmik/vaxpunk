@@ -2,7 +2,7 @@
 //! `docs/macro32.md` lists them and what doesn't carry over.
 
 use crate::Flags;
-use crate::operand::{Ext, Gen, Mode, Opnd, Place, Result, Size, arm, w, x};
+use crate::operand::{Ext, Gen, Mode, Opnd, Place, Result, SP, Size, arm, w, x};
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Alu {
@@ -287,8 +287,15 @@ pub fn compile(
             if let (Opnd::Imm(e), Opnd::Reg(n)) = (&ops[0], &ops[1])
                 && size == Size::L
             {
+                // Sign-extended, as a register holds a longword.
                 let r = arm(*n)?;
-                g.imm_into(&format!("x{r}"), e, size)?;
+                match g.constant(e) {
+                    Some(v) => g.imm_into(&format!("x{r}"), &(v as i32).to_string(), Size::Q)?,
+                    None => {
+                        g.imm_into(&format!("x{r}"), e, size)?;
+                        g.sext(r);
+                    }
+                }
                 return Ok(Some(test(&format!("w{r}"), size)));
             }
             let v = g.read(&ops[0], size, Ext::Any)?;
@@ -341,8 +348,8 @@ pub fn compile(
             if op == Op::Pusha {
                 g.push(&a)?;
             } else if let Opnd::Reg(n) = ops[1] {
-                // The whole address: the register may be a base later.
-                g.emit(format!("mov x{}, {a}", arm(n)?));
+                // Computed in longwords, as AMACRO does by default.
+                g.emit(format!("sxtw x{}, {}", arm(n)?, w(&a)));
             } else {
                 let p = g.place(&ops[1], Size::L)?;
                 g.store(&p, Size::L, &a)?;
@@ -482,14 +489,14 @@ pub fn compile(
             };
             let t = g.tmp()?;
             g.emit(format!("adr {t}, {back}"));
-            g.emit(format!("str {t}, [x28, #-8]!"));
+            g.emit(format!("str {t}, [x{SP}, #-8]!"));
             g.emit(a);
             g.place_label(&back);
             live(true)
         }
         Op::Rsb => {
             let t = g.tmp()?;
-            g.emit(format!("ldr {t}, [x28], #8"));
+            g.emit(format!("ldr {t}, [x{SP}], #8"));
             g.emit(format!("br {t}"));
             Ok(None)
         }
@@ -509,23 +516,23 @@ pub fn compile(
                 o => format!("blr {}", g.address(o, Size::B)?),
             };
             if calls {
-                g.emit(format!("str {arg}, [x28, #-4]!"));
-                g.emit("mov x13, x28");
+                g.emit(format!("str {arg}, [x{SP}, #-4]!"));
+                g.emit(format!("mov x13, x{SP}"));
             } else {
                 g.emit(format!("mov x13, {arg}"));
             }
             // The callee's frame goes below the argument list, 16-byte aligned.
-            g.emit("and sp, x28, #0xfffffffffffffff0");
+            g.emit(format!("and sp, x{SP}, #0xfffffffffffffff0"));
             g.emit(call);
             if calls {
                 match n {
                     Some(n) if (0..=255).contains(&n) => {
-                        g.emit(format!("add x28, x28, #{}", 4 * (n + 1)));
+                        g.emit(format!("add x{SP}, x{SP}, #{}", 4 * (n + 1)));
                     }
                     _ => {
                         let t = g.tmp()?;
-                        g.emit(format!("ldr {}, [x28], #4", w(&t)));
-                        g.emit(format!("add x28, x28, {t}, lsl #2"));
+                        g.emit(format!("ldr {}, [x{SP}], #4", w(&t)));
+                        g.emit(format!("add x{SP}, x{SP}, {t}, lsl #2"));
                     }
                 }
             }
@@ -549,11 +556,11 @@ pub fn compile(
             }
             if op == Op::Pushr {
                 for r in regs.iter().rev() {
-                    g.emit(format!("str w{}, [x28, #-4]!", arm(*r)?));
+                    g.emit(format!("str w{}, [x{SP}, #-4]!", arm(*r)?));
                 }
             } else {
                 for r in &regs {
-                    g.emit(format!("ldr w{}, [x28], #4", arm(*r)?));
+                    g.emit(format!("ldrsw x{}, [x{SP}], #4", arm(*r)?));
                 }
             }
             Ok(None)
@@ -735,29 +742,29 @@ pub fn compile(
             let dst = copy(g, &dst)?;
             let (fwd, back, back_loop, done) = (g.label(), g.label(), g.label(), g.label());
             g.emit(format!("add x1, {src}, {len}"));
-            g.emit(format!("add x3, {dst}, {len}"));
+            g.emit(format!("add x20, {dst}, {len}"));
             g.emit(format!("mov x0, {len}"));
             g.emit(format!("cmp {dst}, {src}"));
             g.emit(format!("b.hi {back}"));
             g.place_label(&fwd);
             g.emit(format!("cbz x0, {done}"));
-            g.emit(format!("ldrb w5, [{src}], #1"));
-            g.emit(format!("strb w5, [{dst}], #1"));
+            g.emit(format!("ldrb w22, [{src}], #1"));
+            g.emit(format!("strb w22, [{dst}], #1"));
             g.emit("sub x0, x0, #1");
             g.emit(format!("b {fwd}"));
             // The destination overlaps the end of the source: copy backwards.
             g.place_label(&back);
-            g.emit("mov x2, x1");
-            g.emit("mov x4, x3");
+            g.emit("mov x19, x1");
+            g.emit("mov x21, x20");
             g.place_label(&back_loop);
             g.emit(format!("cbz x0, {done}"));
-            g.emit("ldrb w5, [x2, #-1]!");
-            g.emit("strb w5, [x4, #-1]!");
+            g.emit("ldrb w22, [x19, #-1]!");
+            g.emit("strb w22, [x21, #-1]!");
             g.emit("sub x0, x0, #1");
             g.emit(format!("b {back_loop}"));
             g.place_label(&done);
             for r in [2, 4, 5] {
-                g.emit(format!("mov w{r}, wzr"));
+                g.emit(format!("mov x{}, xzr", arm(r)?));
             }
             Ok(Some(test("wzr", Size::L)))
         }
@@ -775,24 +782,24 @@ pub fn compile(
             let (copying, filling, done) = (g.label(), g.label(), g.label());
             // ponytail: copies forwards only; MOVC3 handles overlap.
             g.emit(format!("cmp {srclen}, {dstlen}"));
-            g.emit(format!("csel x2, {srclen}, {dstlen}, lo"));
-            g.emit(format!("sub x0, {srclen}, x2"));
-            g.emit(format!("add x1, {src}, x2"));
-            g.emit(format!("add x3, {dst}, {dstlen}"));
-            g.emit(format!("sub x4, {dstlen}, x2"));
+            g.emit(format!("csel x19, {srclen}, {dstlen}, lo"));
+            g.emit(format!("sub x0, {srclen}, x19"));
+            g.emit(format!("add x1, {src}, x19"));
+            g.emit(format!("add x20, {dst}, {dstlen}"));
+            g.emit(format!("sub x21, {dstlen}, x19"));
             g.place_label(&copying);
-            g.emit(format!("cbz x2, {filling}"));
-            g.emit(format!("ldrb w5, [{src}], #1"));
-            g.emit(format!("strb w5, [{dst}], #1"));
-            g.emit("sub x2, x2, #1");
+            g.emit(format!("cbz x19, {filling}"));
+            g.emit(format!("ldrb w22, [{src}], #1"));
+            g.emit(format!("strb w22, [{dst}], #1"));
+            g.emit("sub x19, x19, #1");
             g.emit(format!("b {copying}"));
             g.place_label(&filling);
-            g.emit(format!("cbz x4, {done}"));
+            g.emit(format!("cbz x21, {done}"));
             g.emit(format!("strb {fill}, [{dst}], #1"));
-            g.emit("sub x4, x4, #1");
+            g.emit("sub x21, x21, #1");
             g.emit(format!("b {filling}"));
             g.place_label(&done);
-            g.emit("mov w5, wzr");
+            g.emit("mov x22, xzr");
             g.emit(format!("cmp {srclen}, {dstlen}"));
             live(true)
         }
@@ -848,6 +855,7 @@ pub fn compile(
                         return Err("the field must be in the register".into());
                     }
                     g.emit(format!("bfi w{}, {v}, #{p}, #{s}", arm(*n)?));
+                    g.sext(arm(*n)?);
                 }
                 (Opnd::Reg(n), Err(p)) => {
                     // Rotate the field down to bit 0, insert, rotate back.
@@ -857,6 +865,7 @@ pub fn compile(
                     let t = w(&g.tmp()?);
                     g.emit(format!("neg {t}, {p}"));
                     g.emit(format!("ror w{r}, w{r}, {t}"));
+                    g.sext(r);
                 }
                 (base, pos) => {
                     // ponytail: reads and writes 8 bytes around the field,
@@ -909,6 +918,9 @@ pub fn compile(
                         Some(true) => g.emit(format!("orr w{r}, w{r}, {mask}")),
                         Some(false) => g.emit(format!("bic w{r}, w{r}, {mask}")),
                         None => {}
+                    }
+                    if change.is_some() {
+                        g.sext(r);
                     }
                     g.emit(branch(format!("{old}, #0")));
                 }
@@ -976,42 +988,35 @@ pub fn compile(
             // The code goes in R0, as on Alpha, and the service's status
             // comes back there: R0 isn't kept.
             let v = g.read(&ops[0], size, Ext::Sext)?;
-            let r7 = g.tmp()?;
-            g.emit(format!("mov {r7}, x7"));
             g.emit(format!("mov w0, {v}"));
             g.emit(format!("mov x7, #{code}"));
             g.emit("svc #0");
-            g.emit(format!("mov x7, {r7}"));
             Ok(Some(test("w0", Size::L)))
         }
         Op::Probe(write) => {
             // PROBEx mode, len, base: a0 = base, a1 = len, a2 = mode, as
             // Alpha's PROBER and PROBEW take them; v0 = 1 if the mode may
             // read (write) the first and last byte. Each operand is copied
-            // first; once it is in its argument register, its scratch
-            // register keeps R1 or R2. Z is set if it may not, as on the VAX.
+            // first, since x0 and x1 are R0 and R1, which come back. Z is
+            // set if it may not, as on the VAX.
             let mode = g.read(&ops[0], Size::B, Ext::Zext)?;
             let mode = copy(g, &mode)?;
             let len = g.read(&ops[1], Size::W, Ext::Zext)?;
             let len = copy(g, &len)?;
             let base = g.address(&ops[2], Size::B)?;
             let base = copy(g, &base)?;
-            let (r0, r7) = (g.tmp()?, g.tmp()?);
+            let (r0, r1) = (g.tmp()?, g.tmp()?);
             let code = if write { PROBEW } else { PROBER };
             for line in [
                 format!("mov {r0}, x0"),
-                format!("mov {r7}, x7"),
+                format!("mov {r1}, x1"),
                 format!("mov x0, {base}"),
-                format!("mov {base}, x1"),
                 format!("mov x1, {len}"),
-                format!("mov {len}, x2"),
                 format!("mov x2, {mode}"),
                 format!("mov x7, #{code}"),
                 "svc #0".into(),
                 format!("mov {mode}, x0"),
-                format!("mov x2, {len}"),
-                format!("mov x1, {base}"),
-                format!("mov x7, {r7}"),
+                format!("mov x1, {r1}"),
                 format!("mov x0, {r0}"),
             ] {
                 g.emit(line);
@@ -1026,11 +1031,12 @@ pub fn compile(
             let code = code
                 .filter(|c| (0..=0xBF).contains(c))
                 .ok_or("CALL_PAL needs a function code from 0 to ^XBF, #n")?;
-            let r7 = g.tmp()?;
-            g.emit(format!("mov {r7}, x7"));
+            // Alpha's arguments a0-a5 are R0-R5, in x0-x5 for the PAL.
+            for r in 2..6 {
+                g.emit(format!("mov x{r}, x{}", arm(r)?));
+            }
             g.emit(format!("mov x7, #{code}"));
             g.emit("svc #0");
-            g.emit(format!("mov x7, {r7}"));
             Ok(Some(test("w0", Size::L)))
         }
         Op::Ldq | Op::Stq => {
@@ -1140,29 +1146,24 @@ fn ipr(g: &mut Gen, op: &Opnd) -> Result<(Option<u32>, Option<u32>)> {
 }
 
 /// A PAL call: `svc #0` with the function code in x7, the argument and the
-/// result in x0 (docs/design/0001-pal-interface.md). x0 and x7 are VAX R0
-/// and R7, so they wait in scratch registers. Returns the result's register.
+/// result in x0 (docs/design/0001-pal-interface.md). x0 is VAX R0, so it
+/// waits in a scratch register. Returns the result's register.
 fn pal(g: &mut Gen, code: u32, arg: Option<&str>) -> Result<String> {
-    let (r0, r7, v) = (g.tmp()?, g.tmp()?, g.tmp()?);
+    let (r0, v) = (g.tmp()?, g.tmp()?);
     g.emit(format!("mov {r0}, x0"));
-    g.emit(format!("mov {r7}, x7"));
     if let Some(a) = arg {
         g.emit(format!("mov w0, {}", w(a)));
     }
     g.emit(format!("mov x7, #{code}"));
     g.emit("svc #0");
     g.emit(format!("mov {v}, x0"));
-    g.emit(format!("mov x7, {r7}"));
     g.emit(format!("mov x0, {r0}"));
     Ok(v)
 }
 
 /// `v` in a scratch register, as an x register, so that R0-R5 can change.
 fn copy(g: &mut Gen, v: &str) -> Result<String> {
-    if v[1..]
-        .parse::<u8>()
-        .is_ok_and(|n| n > 12 && n != 28 && n != 29)
-    {
+    if Gen::is_tmp(v) {
         return Ok(x(v));
     }
     let t = g.tmp()?;

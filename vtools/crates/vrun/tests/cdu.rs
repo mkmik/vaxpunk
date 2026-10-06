@@ -29,7 +29,7 @@ TABLE:  .BLKB   65535
         BLBC    R0, 10$
         MOVAB   TABLE, R1
         MOVZWL  TABLEN, R2
-        $WRITE  x1, x2
+        $WRITE  x1, x19  ; R1, R2
         MOVL    #1, R0
 10$:    RET
         .END    START
@@ -45,10 +45,10 @@ NL:     .ASCII  <10>
         .ENTRY  PUT_LINE, ^M<R2>
         MOVL    4(AP), R1
         MOVZBL  (R1)+, R2
-        $WRITE  x1, x2
+        $WRITE  x1, x19  ; R1, R2
         MOVAB   NL, R1
         MOVL    #1, R2
-        $WRITE  x1, x2
+        $WRITE  x1, x19  ; R1, R2
         RET
         .END
 ";

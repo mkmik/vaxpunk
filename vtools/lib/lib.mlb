@@ -137,7 +137,7 @@ INTSTK$Q_X0 = 16                        ; x0-x30, 8 bytes each
 INTSTK$Q_R0 = INTSTK$Q_X0               ; R0
 INTSTK$Q_R1 = INTSTK$Q_X0+8             ; R1
 INTSTK$Q_R7 = INTSTK$Q_X0+56            ; R7
-INTSTK$Q_SP = INTSTK$Q_X0+224           ; the interrupted mode's VAX SP, x28
+INTSTK$Q_SP = INTSTK$Q_X0+144           ; the interrupted mode's VAX SP, x18
 INTSTK$Q_X_SP = 264                     ; ARM64's sp
 INTSTK$K_LENGTH = 272
         .ENDM   $INTSTKDEF

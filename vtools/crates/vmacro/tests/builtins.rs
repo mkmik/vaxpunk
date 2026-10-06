@@ -12,7 +12,7 @@ fn lines(mn: &str, operands: &str) -> Vec<String> {
 /// All 64 bits of a register, to and from memory and another register.
 #[test]
 fn ldq_stq() {
-    assert_eq!(lines("EVAX_STQ", "R0, 16(SP)"), ["str x0, [x28, #16]"]);
-    assert_eq!(lines("EVAX_LDQ", "R1, 8(R2)"), ["ldr x1, [x2, #8]"]);
-    assert_eq!(lines("EVAX_LDQ", "R3, R4"), ["mov x3, x4"]);
+    assert_eq!(lines("EVAX_STQ", "R0, 16(SP)"), ["str x0, [x18, #16]"]);
+    assert_eq!(lines("EVAX_LDQ", "R1, 8(R2)"), ["ldr x1, [x19, #8]"]);
+    assert_eq!(lines("EVAX_LDQ", "R3, R4"), ["mov x20, x21"]);
 }

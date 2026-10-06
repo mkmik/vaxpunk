@@ -6,7 +6,8 @@
 ; may use holds a value it checks each time round, all 64 bits of it, so
 ; interrupts and CONTINUE must give every one back whole; if one changed,
 ; SPIN says so and exits. The upper halves are set and checked in ARM64,
-; which MACRO-32 has no instruction for, and live in x0-x11 (R0-R11).
+; which MACRO-32 has no instruction for: R0 and R1 are x0 and x1, R2-R11
+; x19-x28.
 ;
         .LIBRARY "starlet.mlb"
         .LIBRARY "sysexe.mlb"
@@ -27,10 +28,10 @@
         MOVL    #9, R9
         MOVL    #10, R10
         MOVL    #11, R11
-        .IRP    N, <0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11>
+        .IRP    N, <0, 1, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28>
         movk    x'N, #256+N, lsl #32
         .ENDR
-10$:    .IRP    N, <0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11>
+10$:    .IRP    N, <0, 1, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28>
         lsr     x16, x'N, #32
         cmp     w16, #256+N
         b.ne    90$

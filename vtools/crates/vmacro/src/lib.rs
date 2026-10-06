@@ -139,13 +139,13 @@ impl Macro32 {
             "\tstp xzr, x12, [sp]".into(),
             "\tstp x29, x30, [sp, #16]".into(),
             format!("\tmov x14, #{saved_mask}"),
-            "\tstp x28, x14, [sp, #32]".into(),
+            "\tstp x18, x14, [sp, #32]".into(),
         ];
         out.extend(saves(&saved, "stp", "str"));
         out.extend([
             "\tmov x29, sp".into(),
             "\tmov x12, x13".into(),
-            "\tmov x28, sp".into(),
+            "\tmov x18, sp".into(),
         ]);
         self.saved = Some(saved);
         self.flags = Flags::Live { borrow: true };
@@ -161,12 +161,13 @@ fn frame_size(saved: &[u8]) -> usize {
 
 /// Stores or loads the saved registers, in pairs, from offset 48.
 fn saves(saved: &[u8], pair: &str, one: &str) -> Vec<String> {
+    let arm = |r: &u8| operand::arm(*r).unwrap();
     saved
         .chunks(2)
         .enumerate()
         .map(|(i, regs)| match regs {
-            [a, b] => format!("\t{pair} x{a}, x{b}, [sp, #{}]", 48 + 16 * i),
-            [a] => format!("\t{one} x{a}, [sp, #{}]", 48 + 16 * i),
+            [a, b] => format!("\t{pair} x{}, x{}, [sp, #{}]", arm(a), arm(b), 48 + 16 * i),
+            [a] => format!("\t{one} x{}, [sp, #{}]", arm(a), 48 + 16 * i),
             _ => unreachable!(),
         })
         .collect()
@@ -177,7 +178,7 @@ pub(crate) fn epilogue(saved: &[u8]) -> Vec<String> {
     let mut out = vec!["\tmov sp, x29".to_string()];
     out.extend(saves(saved, "ldp", "ldr"));
     out.extend([
-        "\tldr x28, [sp, #32]".into(),
+        "\tldr x18, [sp, #32]".into(),
         "\tldp x29, x30, [sp, #16]".into(),
         "\tldr x12, [sp, #8]".into(),
         format!("\tadd sp, sp, #{}", frame_size(saved)),

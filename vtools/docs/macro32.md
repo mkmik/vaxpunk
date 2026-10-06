@@ -56,27 +56,33 @@ Differences from vasm:
 
 | VAX | ARM64 |
 | --- | --- |
-| R0-R11 | x0-x11 |
+| R0, R1 | x0, x1 |
+| R2-R11 | x19-x28 |
 | AP (R12) | x12 |
 | FP (R13) | x29 |
-| SP (R14) | x28 |
+| SP (R14) | x18 |
 | PC (R15) | no register; only in addressing modes as the VAX encodes them |
 
-Longword values live in the low 32 bits (`w` registers, zero-extended). An
-address MOVA puts in a register keeps all 64 bits; anything else that holds an
-address holds 32. So a MACRO-32 image must lie below 4 GB, below 2 GB if it
-has `.ADDRESS` or `.LONG` of addresses; `vrun --base` must keep it there. Byte
-and word writes to a register change only its low byte or word, as on the VAX.
-A quadword in registers is a pair: Rn low, Rn+1 high.
+The map is the calling standard's
+([DESIGN-0004](../../docs/design/0004-calling-standard.md)): R2-R11 are in
+AAPCS64's saved registers, and SP in x18, its platform register.
 
-x13-x18 are scratch registers for the translation; x13 also passes the
-argument list pointer in a call. MACRO-32 code must not use them.
+A register holds its longword sign-extended, as on Alpha: a longword
+instruction that writes one leaves bits 63:32 equal to bit 31, and a byte or
+word write changes only the low byte or word, as on the VAX, then
+sign-extends from bit 31. `MOVAx` computes the address in longwords, so a
+MACRO-32 image must lie below 2 GB; `vrun --base` must keep it there. A
+quadword in registers is a pair: Rn low, Rn+1 high.
+
+x2-x17 are the translation's: x8-x11 and x13-x17 are scratch registers, x13
+also passes the argument list pointer in a call, and x2-x7 carry PAL call
+arguments. MACRO-32 code must not use them.
 
 ### The stack
 
-VAX SP is x28, not ARM64's `sp`: VAX pushes longwords, and `sp` must stay
+VAX SP is x18, not ARM64's `sp`: VAX pushes longwords, and `sp` must stay
 16-byte aligned at EL0 (vrun sets `SCTLR_EL1.SA0`, as seL4 and Linux do). Both
-point into the same stack: before each call vmacro sets `sp` to x28 rounded
+point into the same stack: before each call vmacro sets `sp` to x18 rounded
 down to 16 bytes, so the callee's frame goes below what the caller pushed.
 
 ## Calls
@@ -96,11 +102,11 @@ until vaxpunk's calling standard exists.
   | 0 | condition handler, 0 (`MOVAB handler, (FP)` sets it) |
   | 8 | the caller's AP |
   | 16 | the caller's FP, then LR |
-  | 32 | the caller's SP (x28) |
+  | 32 | the caller's SP (x18) |
   | 40 | the entry mask's bits 11:0, which say what follows, for `$UNWIND` |
   | 48 | the registers in the entry mask, 8 bytes each |
 
-  FP (x29) points at the frame, AP (x12) at the argument list, and SP (x28)
+  FP (x29) points at the frame, AP (x12) at the argument list, and SP (x18)
   starts at the frame, so locals made with `SUBL2 #n, SP` are at negative
   offsets from FP, as on the VAX. Mask bits 12 and up (integer and decimal
   overflow traps) are ignored.
@@ -208,7 +214,7 @@ Limits:
 The executive's privileged instructions are calls to the PAL below it, as
 AMACRO made them `CALL_PAL`s on Alpha. vmacro compiles each into `svc #0`
 with the PAL function code in x7, the argument in x0 and the result back in
-x0, keeping R0 and R7 in scratch registers around it. The interface and its
+x0, keeping R0 in a scratch register around it. The interface and its
 function codes are in
 [DESIGN-0001](../../docs/design/0001-pal-interface.md).
 
@@ -223,10 +229,10 @@ function codes are in
 | `MFPR #PR$_RXDB, dst` | `MFPR_RXDB`, the console character received |
 | `MTPR src, #PR$_DOORBELL` | `MTPR_DOORBELL`, rings port src's doorbell |
 | `CHMK #code`, `CHME`, `CHMS`, `CHMU` | `CHMK`, `CHME`, `CHMS`, `CHMU`: the code goes in R0, and R0 and R1 come back with what the service left in the frame |
-| `PROBER mode, len, base`, `PROBEW` | `PROBER`, `PROBEW`: base, len and mode in R0-R2, which come back, as R7 does; Z is set if the mode may not read (write) the first and last byte, as on the VAX |
+| `PROBER mode, len, base`, `PROBEW` | `PROBER`, `PROBEW`: base, len and mode in x0-x2, R0 and R1 kept; Z is set if the mode may not read (write) the first and last byte, as on the VAX |
 | `REI` | `REI`: resumes at the PC in the frame on the stack, with every register from it |
 | `HALT` | `HALT` |
-| `CALL_PAL #code` | any PAL call, as on Alpha: arguments in R0-R5, the result in R0, R7 kept |
+| `CALL_PAL #code` | any PAL call, as on Alpha: arguments in R0-R5, which go to x0-x5, the result in R0 |
 
 `CALL_PAL` is for the calls the VAX has no instruction for, `SWPCTX`,
 `WTINT`, `WRPTE`, `DELCTX` and `READLBLK`, whose codes `$PALDEF` names.

@@ -37,17 +37,17 @@ fn general() {
 fn entry_mask() {
     let code = lines(".ENTRY", "START, 12");
     assert!(code.contains(&"mov x14, #12".to_string()));
-    assert!(code.contains(&"stp x28, x14, [sp, #32]".to_string()));
+    assert!(code.contains(&"stp x18, x14, [sp, #32]".to_string()));
 }
 
 /// `PUSHAL (SP)` and `PUSHL SP` push SP through a scratch register: a
-/// writeback store of x28 through x28 traps on Apple's cores.
+/// writeback store of x18 through x18 traps on Apple's cores.
 #[test]
 fn push_sp() {
     for (mn, op) in [("PUSHAL", "(SP)"), ("PUSHL", "SP")] {
         let code = lines(mn, op);
         assert!(
-            !code.iter().any(|l| l.starts_with("str w28")),
+            !code.iter().any(|l| l.starts_with("str w18")),
             "{mn} {op}: {code:?}"
         );
     }

@@ -82,16 +82,21 @@ pub fn reg(text: &str) -> Option<u8> {
     }
 }
 
-/// The ARM64 register that holds VAX register `n`: R0-R11 and AP in x0-x12,
-/// FP in x29, SP in x28.
+/// The ARM64 register that holds VAX register `n` (DESIGN-0004): R0 and R1
+/// in x0 and x1, R2-R11 in x19-x28, AAPCS64's saved registers, AP in x12, FP
+/// in x29 and SP in x18.
 pub fn arm(n: u8) -> Result<u8> {
     match n {
-        0..=12 => Ok(n),
+        0 | 1 | 12 => Ok(n),
+        2..=11 => Ok(n + 17),
         13 => Ok(29),
-        14 => Ok(28),
+        14 => Ok(SP),
         _ => Err("PC can't be used as a register".into()),
     }
 }
+
+/// The VAX stack pointer.
+pub const SP: u8 = 18;
 
 /// Splits operands at commas outside `()`, `[]` and `<>`.
 pub fn split(text: &str) -> Vec<String> {
@@ -205,8 +210,8 @@ pub enum Place {
 
 /// Scratch registers, free for any instruction to use, taken from the end.
 /// CALLS and CALLG pass the argument list in x13 once their operands are
-/// read, so it goes last.
-const POOL: [u8; 6] = [13, 18, 17, 16, 15, 14];
+/// read, so it goes last. x2-x7 are left for PAL calls' arguments.
+const POOL: [u8; 9] = [13, 9, 8, 11, 10, 17, 16, 15, 14];
 
 /// Code for one VAX instruction.
 pub struct Gen<'a> {
@@ -262,12 +267,12 @@ impl<'a> Gen<'a> {
     /// CONSTRAINED UNPREDICTABLE, which Apple's cores trap.
     pub fn push(&mut self, v: &str) -> Result<()> {
         let mut v = w(v);
-        if v == "w28" {
+        if v == format!("w{SP}") {
             let t = w(&self.tmp()?);
-            self.emit(format!("mov {t}, w28"));
+            self.emit(format!("mov {t}, w{SP}"));
             v = t;
         }
-        self.emit(format!("str {v}, [x28, #-4]!"));
+        self.emit(format!("str {v}, [x{SP}, #-4]!"));
         Ok(())
     }
 
@@ -294,8 +299,8 @@ impl<'a> Gen<'a> {
         Ok(format!("x{n}"))
     }
 
-    fn is_tmp(r: &str) -> bool {
-        r[1..].parse::<u8>().is_ok_and(|n| POOL.contains(&n))
+    pub fn is_tmp(r: &str) -> bool {
+        r.starts_with(['x', 'w']) && r[1..].parse::<u8>().is_ok_and(|n| POOL.contains(&n))
     }
 
     /// A scratch register: `r` if it is one, else a new one.
@@ -512,12 +517,10 @@ impl<'a> Gen<'a> {
             Place::Reg(n) => {
                 let r = arm(*n)?;
                 if size == Size::Q {
-                    if *n >= 11 {
-                        return Err("a quadword needs two registers, up to R10 and R11".into());
-                    }
+                    let r1 = pair(*n)?;
                     let t = self.tmp()?;
                     self.emit(format!("mov {}, w{r}", w(&t)));
-                    self.emit(format!("bfi {t}, x{}, #32, #32", r + 1));
+                    self.emit(format!("bfi {t}, x{r1}, #32, #32"));
                     return Ok(t);
                 }
                 let sub = size != Size::L && ext != Ext::Any;
@@ -578,22 +581,25 @@ impl<'a> Gen<'a> {
         }
     }
 
-    /// Writes `v`, a register or `wzr`, to `p`.
+    /// Writes `v`, a register or `wzr`, to `p`. A register gets its new
+    /// longword sign-extended, as every VAX register holds it.
     pub fn store(&mut self, p: &Place, size: Size, v: &str) -> Result<()> {
         match p {
             Place::Reg(n) => {
                 let r = arm(*n)?;
                 match size {
-                    Size::L if v != format!("w{r}") => self.emit(format!("mov w{r}, {}", w(v))),
-                    Size::L => {}
+                    Size::L if v.ends_with("zr") => self.emit(format!("mov x{r}, xzr")),
+                    Size::L => self.emit(format!("sxtw x{r}, {}", w(v))),
                     Size::Q => {
-                        if *n >= 11 {
-                            return Err("a quadword needs two registers, up to R10 and R11".into());
-                        }
-                        self.emit(format!("mov w{r}, {}", w(v)));
-                        self.emit(format!("lsr x{}, {}, #32", r + 1, x(v)));
+                        let r1 = pair(*n)?;
+                        let v = self.nonzero(x(v))?;
+                        self.emit(format!("sxtw x{r}, {}", w(&v)));
+                        self.emit(format!("asr x{r1}, {v}, #32"));
                     }
-                    _ => self.emit(format!("bfi w{r}, {}, #0, #{}", w(v), size.bits())),
+                    _ => {
+                        self.emit(format!("bfi w{r}, {}, #0, #{}", w(v), size.bits()));
+                        self.sext(r);
+                    }
                 }
             }
             Place::Imm(_) => return Err("can't write to an immediate".into()),
@@ -635,6 +641,21 @@ impl<'a> Gen<'a> {
         let t = if v.starts_with('x') { t } else { w(&t) };
         self.emit(format!("mov {t}, {v}"));
         Ok(t)
+    }
+}
+
+impl Gen<'_> {
+    /// Sign-extends register x`r`'s longword.
+    pub fn sext(&mut self, r: u8) {
+        self.emit(format!("sxtw x{r}, w{r}"));
+    }
+}
+
+/// The register that holds the high longword of a quadword in Rn and Rn+1.
+fn pair(n: u8) -> Result<u8> {
+    match n {
+        0..=10 => arm(n + 1),
+        _ => Err("a quadword needs two registers, up to R10 and R11".into()),
     }
 }
 

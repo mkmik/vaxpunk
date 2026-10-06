@@ -1171,8 +1171,8 @@ static int vector(seL4_UserContext *r, seL4_Word off, seL4_Word new_ipl, int to,
 	for (int i = 0; i < 31; i++)
 		frame[F_X0 + i] = *xreg(r, i);
 	frame[F_X_SP] = r->sp;
-	/* Below both stacks: vmacro moves sp first, then x28, and back. */
-	seL4_Word sp = r->x28 < r->sp ? r->x28 : r->sp, below = sp;
+	/* Below both stacks: vmacro moves sp first, then x18, the VAX SP, and back. */
+	seL4_Word sp = r->x18 < r->sp ? r->x18 : r->sp, below = sp;
 	uint64_t *outer = 0;
 	if (to < cur->mode) {
 		uint64_t *inner = hwpcb_sp(to);
@@ -1191,7 +1191,7 @@ static int vector(seL4_UserContext *r, seL4_Word off, seL4_Word new_ipl, int to,
 		*q[i] = i < n ? param[i] : frame[i - n];
 	if (outer)
 		*outer = below;
-	r->x28 = r->sp = sp;
+	r->x18 = r->sp = sp;
 	r->pc = handler;
 	cur->mode = to;
 	cur->prvmode = prv;
@@ -1252,7 +1252,7 @@ static int rei(seL4_UserContext *r)
 {
 	seL4_Word f[F_LENGTH];
 	for (unsigned i = 0; i < F_LENGTH; i++) {
-		uint64_t *q = quad(r->x28 + 8 * i);
+		uint64_t *q = quad(r->x18 + 8 * i);
 		if (!q)
 			return 0;
 		f[i] = *q;
@@ -1264,7 +1264,7 @@ static int rei(seL4_UserContext *r)
 		uint64_t *sp = hwpcb_sp(cur->mode);
 		if (!sp)
 			return 0;
-		*sp = r->x28 + sizeof f;
+		*sp = r->x18 + sizeof f;
 		mode_thread(cur, m);
 	}
 	cur->mode = m;
@@ -1365,7 +1365,7 @@ static int swpctx(seL4_Word hwpcb)
 		return ret(from->hwpcb);
 	}
 	to->started = 1;
-	regs = (seL4_UserContext){ .x28 = *ksp };
+	regs = (seL4_UserContext){ .x18 = *ksp };
 	regs_mode = 0;
 	if (!rei(&regs)) {
 		print("%%PAL-F-SWPCTX, no REI frame at KSP 0x%lx\n", (seL4_Word)*ksp);
@@ -1428,7 +1428,7 @@ static int do_rei(void)
 	if (!rei(&regs)) {
 		if (exception(SCB_OPCDEC, cur->mr[seL4_UnknownSyscall_FaultIP], 0, 0))
 			return 1;
-		print("%%PAL-F-REI, bad frame at SP 0x%lx, PC 0x%lx\n", (seL4_Word)regs.x28,
+		print("%%PAL-F-REI, bad frame at SP 0x%lx, PC 0x%lx\n", (seL4_Word)regs.x18,
 		      (seL4_Word)regs.pc);
 		return 0;
 	}
@@ -1712,8 +1712,8 @@ static void start_exec(void)
 
 	cur = new_ctx(RPB_VA + RPB_HWPCB);
 	cur->started = 1;
-	regs = (seL4_UserContext){ .pc = entry, .sp = EXEC_STACK_TOP, .x28 = EXEC_STACK_TOP,
-				   .x11 = RPB_VA };
+	regs = (seL4_UserContext){ .pc = entry, .sp = EXEC_STACK_TOP, .x18 = EXEC_STACK_TOP,
+				   .x28 = RPB_VA }; /* R11 */
 	write_regs(1);
 	print("EXEC.EXE: started at 0x%lx, %lu of %u pages in use\n", entry, boot_pfn, PFN_COUNT);
 }

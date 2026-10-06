@@ -51,8 +51,8 @@ every process shares (*Memory*):
 Every page is a PFN of the executive's (*Memory*), and the PAL uses PFNs
 from 0 up for these. Nothing else is mapped. The boot context starts with:
 
-- **Registers.** PC is the transfer address. `sp` and x28 (VAX SP) point at
-  the stack top. R11 points at the RPB, as the VAX's VMB passed it.
+- **Registers.** PC is the transfer address. `sp` and x18 (VAX SP) point at
+  the stack top. R11 (x28) points at the RPB, as the VAX's VMB passed it.
   Everything else is 0: AP is 0, as for a `CALLS` with no argument list,
   and so is the return address. A `RET` from the transfer routine
   therefore faults at 0.
@@ -254,7 +254,7 @@ the event goes to:
 | --- | --- |
 | 0 | PC |
 | 8 | PSL |
-| 16-256 | x0-x30, 8 bytes each: R0-R11 and AP in x0-x12, the VAX SP in x28, FP in x29 |
+| 16-256 | x0-x30, 8 bytes each: R0 and R1 in x0 and x1, R2-R11 in x19-x28, AP in x12, the VAX SP in x18, FP in x29 |
 | 264 | the interrupted ARM64 `sp` |
 
 This is `$INTSTKDEF`. It holds every register of the code the event
@@ -370,19 +370,17 @@ and gets:
 
 ```
         movz    w14, #8         ; the operand
-        mov     x15, x0         ; R0 and R7 aside
-        mov     x16, x7
+        mov     x15, x0         ; R0 aside
         mov     w0, w14         ; a0: the new IPL
         mov     x7, #15         ; MTPR_IPL
         svc     #0
-        mov     x17, x0         ; v0: the old IPL, unused by MTPR
-        mov     x7, x16
+        mov     x16, x0         ; v0: the old IPL, unused by MTPR
         mov     x0, x15
 ```
 
-- **Registers.** R0 and R7 are x0 and x7, so vmacro keeps them in scratch
-  registers around the call. Every other register, and the VAX's view of
-  R0 and R7, comes back unchanged.
+- **Registers.** R0 is x0, so vmacro keeps it in a scratch register around
+  the call; x7 isn't a VAX register. Every other register, and the VAX's
+  view of R0, comes back unchanged.
 - **Constants.** The processor register must be a constant, as in AMACRO.
   `$PRDEF` in `vtools/lib/lib.mlb` defines the VAX's `PR$_` names.
 
