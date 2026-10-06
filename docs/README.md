@@ -47,6 +47,7 @@ kept current, like a design document.
 | [ADR-0020](adr/0020-file-system-lock-below-ipl-synch.md) | The file system runs below IPL$_SYNCH, holding a lock of its own, as the XQP does | Proposed |
 | [ADR-0021](adr/0021-condition-handlers-run-in-the-mode-that-signals.md) | Condition handlers are found along the FP chain and run in the mode that signaled, from code in the vector | Proposed |
 | [ADR-0022](adr/0022-tcpip-utility-and-dhcp.md) | The network is set with TCP/IP Services' TCPIP utility, which parses its own commands, and lwIP's DHCP client can give the interface its address | Proposed |
+| [ADR-0023](adr/0023-calling-standard.md) | The vaxpunk calling standard is AAPCS64 with VMS's argument count, sign extension and self-describing frames, and MACRO-32 is compiled onto it as AMACRO compiled it onto Alpha's | Proposed |
 
 ### PRDs
 
@@ -55,6 +56,8 @@ kept current, like a design document.
 | [PRD-0001](prd/0001-vtools.md) | ARM64 cross assembler, linker and QEMU runner for VMS object formats |
 | [PRD-0002](prd/0002-networking.md) | TCP/IP through a port to an lwIP component |
 | [PRD-0003](prd/0003-multi-user-vms.md) | Milestone 1: a multi-user VMS you log in to |
+| [PRD-0004](prd/0004-bliss64-compiler.md) | A BLISS-64 compiler for ARM64, bootstrapped in Rust and then written in BLISS-64 |
+| [PRD-0005](prd/0005-macro32-on-the-calling-standard.md) | MACRO-32 on the vaxpunk calling standard, as AMACRO put it on Alpha's |
 
 ### Design documents
 
@@ -63,6 +66,7 @@ kept current, like a design document.
 | [DESIGN-0001](design/0001-pal-interface.md) | PAL interface |
 | [DESIGN-0002](design/0002-executive-processes.md) | Processes, memory and system services in the executive |
 | [DESIGN-0003](design/0003-tcpip-port.md) | TCP/IP through the port |
+| [DESIGN-0004](design/0004-calling-standard.md) | The vaxpunk calling standard |
 
 ## Adding a document
 
