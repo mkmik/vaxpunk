@@ -498,3 +498,161 @@ PORT$C_ST_ABORTED = 7
 PORT$C_ST_UNREACH = 8
 PORT$C_ST_CLOSED = 9
         .ENDM   $PORTDEF
+
+; $IFBDEF: an IFAB, the block of pool RMS keeps an open file in, by its
+; IFI: the file's attributes, its header, and its organization's state,
+; with buffers after the fixed part.
+        .MACRO  $IFBDEF
+IFB$L_POS = 0                           ; sequential: the next byte; relative: the next record number
+IFB$L_EOF = 4                           ; sequential: the bytes in the file; relative: the VBN after the last bucket
+IFB$L_BLOCK = 8                         ; the VBN in the buffer, or 0
+IFB$L_VCB = 12                          ; the file's volume
+IFB$L_FLAGS = 16                        ; IFB$V_
+IFB$L_SIZE = 20                         ; the IFAB's size, to give it back
+IFB$L_BUF = 24                          ; its buffer: a block, or a bucket
+IFB$L_CUR = 28                          ; the current record: sequential, its offset, -1 for none; relative, its number, 0 for none
+IFB$L_CURDAT = 32                       ; sequential: its data's offset
+IFB$L_CURSZ = 36                        ; sequential: its data's size
+IFB$B_ORG = 40                          ; organization, FAB$C_SEQ, REL or IDX
+IFB$B_RFM = 41                          ; record format, FAB$C_
+IFB$B_RAT = 42                          ; record attributes
+IFB$B_FSZ = 43                          ; VFC header size
+IFB$W_MRS = 44                          ; record size, or the largest
+IFB$B_BKS = 46                          ; bucket size, blocks
+IFB$B_FAC = 47                          ; the access $OPEN or $CREATE gave, FAB$M_
+IFB$L_MRN = 48                          ; relative: the highest record number
+IFB$L_DVBN = 52                         ; relative: the first bucket's VBN
+IFB$L_CELLS = 56                        ; relative: cells in a bucket
+IFB$L_CELLSZ = 60                       ; relative: a cell's size
+IFB$L_IDX = 64                          ; indexed: its state, past the buffers
+IFB$L_RAB = 68                          ; the RAB connected, or 0
+IFB$L_BUFSZ = 72                        ; the buffer's size, to give it back
+IFB$AB_HDR = 80                         ; the file's header
+IFB$K_LENGTH = 592                      ; the fixed part
+IFB$V_WRITE = 0                         ; it may be written: $CREATE made it or $OPEN opened it for that
+IFB$V_DIRTY = 1                         ; the buffer holds what the file hasn't yet
+IFB$V_HDR = 2                           ; the header changed: its end of file
+IFB$V_BIO = 3                           ; block I/O only
+IFB$V_BRO = 4                           ; block and record I/O
+IFB$V_PLG = 5                           ; relative: the prologue's end of file changed
+IFB$V_FOUND = 6                         ; the last record service was a $FIND: a sequential $GET reads the record it found
+        .ENDM   $IFBDEF
+
+; $PLGDEF, $KEYDEF, $AREADEF, $BKTDEF, $IRCDEF, $DLCDEF: relative and
+; prologue 3 indexed files on the disk (ods/docs/relative.md, indexed.md).
+        .MACRO  $PLGDEF
+PLG$B_AVBN = 102                        ; first area descriptor's VBN
+PLG$B_AMAX = 103                        ; areas
+PLG$W_DVBN = 104                        ; relative: first bucket
+PLG$L_MRN = 108                         ; relative: highest record number
+PLG$L_EOF = 112                         ; relative: the VBN after the last bucket
+PLG$W_VER_NO = 116                      ; prologue version
+PLG$C_VER_REL = 1                       ; a relative file's
+PLG$C_VER_3 = 3                         ; an indexed file's
+PLG$W_CHECKSUM = 510                    ; the 16-bit sum of the block's first 255 words
+        .ENDM   $PLGDEF
+
+        .MACRO  $KEYDEF
+KEY$L_IDXFL = 0                         ; the next key descriptor's VBN, 0 for none
+KEY$W_NOFF = 4                          ; and offset
+KEY$B_IANUM = 6                         ; area of the index above level 1
+KEY$B_LANUM = 7                         ; area of the level 1 index
+KEY$B_DANUM = 8                         ; area of the data
+KEY$B_ROOTLEV = 9                       ; root bucket's level
+KEY$B_IDXBKTSZ = 10                     ; index bucket size
+KEY$B_DATBKTSZ = 11                     ; data bucket size
+KEY$L_ROOTVBN = 12                      ; root bucket
+KEY$B_FLAGS = 16                        ; KEY$V_
+KEY$B_DATATYPE = 17                     ; KEY$C_
+KEY$B_SEGMENTS = 18
+KEY$B_NULLCHAR = 19                     ; null value, with NULKEYS
+KEY$B_KEYSZ = 20                        ; the key's size
+KEY$B_KEYREF = 21                       ; key of reference
+KEY$W_MINRECSZ = 22                     ; shortest record holding the key
+KEY$W_IDXFILL = 24                      ; index fill, bytes
+KEY$W_DATFILL = 26                      ; data fill, bytes
+KEY$W_POSITION = 28                     ; segment positions, 8 words
+KEY$B_SIZE = 44                         ; segment sizes, 8 bytes
+KEY$T_KEYNAM = 52                       ; name, 32 bytes, space padded
+KEY$L_LDVBN = 84                        ; first data bucket
+KEY$B_TYPE = 88                         ; segment types, 8 bytes
+KEY$K_BLN = 102                         ; a key descriptor's size
+KEY$V_DUPKEYS = 0                       ; duplicates
+KEY$M_DUPKEYS = 1
+KEY$V_CHGKEYS = 1                       ; $UPDATE may change it
+KEY$M_CHGKEYS = 2
+KEY$V_NULKEYS = 2                       ; a null key isn't indexed
+KEY$M_NULKEYS = 4
+KEY$V_IDX_COMPR = 3                     ; index compression
+KEY$M_IDX_COMPR = 8
+KEY$V_INITIDX = 4                       ; no index yet
+KEY$M_INITIDX = 16
+KEY$V_KEY_COMPR = 6                     ; key compression in data and SIDR buckets
+KEY$M_KEY_COMPR = 64
+KEY$V_REC_COMPR = 7                     ; data record compression
+KEY$M_REC_COMPR = 128
+KEY$C_STRING = 0
+KEY$C_SGNWORD = 1
+KEY$C_UNSGNWORD = 2
+KEY$C_SGNLONG = 3
+KEY$C_UNSGNLONG = 4
+KEY$C_PACKED = 5
+KEY$C_SGNQUAD = 6
+KEY$C_UNSGNQUAD = 7
+KEY$C_COLLATED = 8
+KEY$C_DESCENDING = 32                   ; added to one of those
+        .ENDM   $KEYDEF
+
+        .MACRO  $AREADEF
+AREA$B_AREAID = 2                       ; its number
+AREA$B_ARBKTSZ = 3                      ; bucket size
+AREA$W_VOLUME = 4
+AREA$B_ALN = 6                          ; placement
+AREA$B_AOP = 7                          ; allocation options
+AREA$L_AVAIL = 8                        ; first reclaimed bucket, 0 for none
+AREA$L_CVBN = 12                        ; current extent's first VBN
+AREA$L_CNBLK = 16                       ; and blocks
+AREA$L_USED = 20                        ; blocks of it used
+AREA$L_NXTVBN = 24                      ; next VBN to use
+AREA$L_NXT = 28                         ; next extent, 0 for none
+AREA$L_NXBLK = 32                       ; its blocks
+AREA$W_DEQ = 36                         ; default extension
+AREA$L_LOC = 40                         ; placement location
+AREA$W_RFI = 44                         ; related file, 3 words
+AREA$L_TOTAL_ALLOC = 50                 ; blocks the area has
+AREA$K_BLN = 64                         ; an area descriptor's size
+        .ENDM   $AREADEF
+
+        .MACRO  $BKTDEF
+BKT$B_CHECKCHAR = 0                     ; as the bucket's last byte
+BKT$B_INDEXNO = 1                       ; key of reference
+BKT$W_ADRSAMPLE = 2                     ; low word of its VBN
+BKT$W_FREESPACE = 4                     ; first free byte
+BKT$W_NXTRECID = 6                      ; next record ID
+BKT$L_NXTBKT = 8                        ; next bucket of the level
+BKT$B_LEVEL = 12                        ; 0 for data and SIDR buckets
+BKT$B_BKTCB = 13                        ; BKT$V_
+BKT$K_OVERHDSZ = 14                     ; the header's size
+BKT$V_LASTBKT = 0                       ; the last of its level
+BKT$V_ROOTBKT = 1                       ; the root
+BKT$V_PTR_SZ = 3                        ; index pointers' size less 2, 2 bits
+BKT$K_ENDOVHD = 4                       ; an index bucket's end: VBN free space word, 0, check character
+        .ENDM   $BKTDEF
+
+        .MACRO  $IRCDEF
+IRC$B_CONTROL = 0                       ; IRC$V_
+IRC$W_ID = 1                            ; record ID
+IRC$W_RRV_ID = 3                        ; its RFA's ID
+IRC$L_RRV_VBN = 5                       ; and VBN
+IRC$K_HDRSZ = 9                         ; a data record's header, with a 4-byte pointer
+IRC$V_PTRSZ = 0                         ; the pointer's size less 2, 2 bits
+IRC$V_DELETED = 2
+IRC$V_RRV = 3                           ; a record reference vector
+IRC$V_NOPTRSZ = 4                       ; no pointer: a deleted SIDR pointer
+IRC$V_FIRST = 7                         ; a SIDR's first pointer
+        .ENDM   $IRCDEF
+
+        .MACRO  $DLCDEF
+DLC$V_DELETED = 2                       ; a relative cell's record was deleted
+DLC$V_REC = 3                           ; it has a record
+        .ENDM   $DLCDEF

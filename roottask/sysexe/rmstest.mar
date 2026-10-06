@@ -1,0 +1,539 @@
+        .TITLE  RMSTEST RMS's services on files of every organization
+        .IDENT  /V0.1/
+;
+; RUN RMSTEST makes files of each organization and record format in the
+; default directory, works them with RMS's services and prints what each
+; returns and every record it reads, a line each. The same source builds
+; on OpenVMS, with MACRO/MIGRATION and LINK, and its output there is
+; roottask/sysexe/rmstest.out, which the boot test compares vaxpunk's
+; with. So it uses only VMS's own: STARLET's macros and LIB$PUT_OUTPUT.
+;
+; A line is the service, its status in hex, and what it gave: an RFA as
+; VBN,ID, a record as its size and its bytes, printable as they are and
+; the others as \xNN.
+;
+        .LIBRARY "starlet.mlb"
+        $RMSDEF
+        $FABDEF
+        $RABDEF
+        $XABFHCDEF
+        .EXTERNAL LIB$PUT_OUTPUT
+
+; SAY name: adds the string T_name to the line.
+        .MACRO  SAY     NAME
+        PUSHR   #^X7                    ; R0-R2
+        MOVAB   T_'NAME, R2
+        MOVZBL  (R2)+, R1
+        BSBW    ADDSTR
+        POPR    #^X7
+        .ENDM   SAY
+
+        .PSECT  DATA, NOEXE, WRT, LONG
+LINE:   .BLKB   256                     ; the line being made
+LINELEN:
+        .LONG   0
+LINEDSC:
+        .LONG   0
+        .ADDRESS LINE
+HEX:    .ASCII  "0123456789ABCDEF"
+; What SAY adds.
+T_DONE:  .ASCIC  "RMSTEST done"
+T_SEQ:   .ASCIC  "SEQ "
+T_CREATE:
+        .ASCIC  "CREATE"
+T_CONNECT:
+        .ASCIC  "CONNECT"
+T_CLOSE: .ASCIC  "CLOSE"
+T_OPEN:  .ASCIC  "OPEN"
+T_REWIND:
+        .ASCIC  "REWIND"
+T_FIND:  .ASCIC  "FIND"
+T_UPDATE:
+        .ASCIC  "UPDATE"
+T_TRUNCATE:
+        .ASCIC  "TRUNCATE"
+T_BLOCKIO:
+        .ASCIC  "BLOCK I/O"
+T_SPACE: .ASCIC  "SPACE"
+T_WRITE: .ASCIC  "WRITE"
+T_READ:  .ASCIC  "READ"
+T_SP:    .ASCIC  " "
+T_PUT:   .ASCIC  "PUT"
+T_GET:   .ASCIC  "GET"
+T_ATTRRFM:
+        .ASCIC  "ATTR RFM "
+T_RAT:   .ASCIC  " RAT "
+T_MRS:   .ASCIC  " MRS "
+T_FSZ:   .ASCIC  " FSZ "
+T_EBK:   .ASCIC  " EBK "
+T_FFB:   .ASCIC  " FFB "
+T_LRL:   .ASCIC  " LRL "
+T_COMMA: .ASCIC  ","
+T_BSX:   .ASCIC  "\x"
+REC:    .BLKB   512                     ; records read
+RHB:    .BLKB   8                       ; and their VFC control part
+SAVRFA: .BLKW   3
+BLK:    .BLKB   1024                    ; blocks read
+
+        .ALIGN  LONG
+FAB:    $FAB    XAB=FHC
+RAB:    $RAB    FAB=FAB, UBF=REC, USZ=512, RHB=RHB
+FHC:    $XABFHC
+
+; The sequential files: name, record format, attributes, size, VFC
+; header size, each test a .ASCIC name, then the bytes.
+        .MACRO  SEQFILE NAME, RFM, RAT, MRS, FSZ
+        .ASCIC  "NAME"
+        .BYTE   FAB$C_'RFM, RAT, FSZ, 0
+        .WORD   MRS
+        .ENDM   SEQFILE
+SEQS:   SEQFILE VAR.SEQ, VAR, FAB$M_CR, 0, 0
+        SEQFILE VARBLK.SEQ, VAR, FAB$M_CR!FAB$M_BLK, 0, 0
+        SEQFILE FIX.SEQ, FIX, 0, 21, 0
+        SEQFILE FIXBLK.SEQ, FIX, FAB$M_BLK, 21, 0
+        SEQFILE VFC.SEQ, VFC, FAB$M_PRN, 0, 2
+        SEQFILE STM.SEQ, STM, FAB$M_CR, 0, 0
+        SEQFILE STMLF.SEQ, STMLF, FAB$M_CR, 0, 0
+        SEQFILE STMCR.SEQ, STMCR, FAB$M_CR, 0, 0
+        .BYTE   0
+
+; The records each sequential file gets, .ASCIC; FIX files' are 21
+; bytes, the others' as they are.
+RECS:   .ASCIC  "the first record    1"
+        .ASCIC  ""
+        .ASCIC  "three"
+        .ASCIC  "a fourth one, longer than the others, that has more to it"
+        .ASCIC  "5"
+        .BYTE   255
+FIXRECS:
+        .ASCIC  "the first record    1"
+        .ASCIC  "the second record   2"
+        .ASCIC  "the third record    3"
+        .ASCIC  "the fourth record   4"
+        .ASCIC  "the fifth record    5"
+        .BYTE   255
+NEWREC: .ASCIC  "a new one"
+NEWFIX: .ASCIC  "the new record      6"
+VFCHDR: .BYTE   1, ^X8D                 ; a VFC record's control part
+UDFNAME:
+        .ASCIC  "UDF.SEQ"
+
+        .PSECT  CODE, EXE, LONG
+        .ENTRY  RMSTEST, ^M<R2, R3, R4, R5, R6, R7, R8, R9, R10, R11>
+        MOVAB   SEQS, R11
+10$:    TSTB    (R11)
+        BEQL    20$
+        BSBW    SEQTEST
+        MOVZBL  (R11), R0
+        ADDL2   R0, R11
+        ADDL2   #7, R11
+        BRB     10$
+20$:    BSBW    BLKTEST
+        SAY     DONE
+        BSBW    OUT
+        MOVL    #RMS$_NORMAL, R0
+        RET
+
+; SEQTEST: R11 = a sequential file's test. Makes the file, puts its
+; records, reads them back by every way RMS has, updates, truncates and
+; puts in the middle with RAB$M_TPT, reading the file again after each.
+SEQTEST:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5, R6, R7, R8, R9, R10>
+        SAY     SEQ
+        MOVZBL  (R11), R1
+        MOVAB   1(R11), R2
+        BSBW    ADDSTR
+        BSBW    OUT
+        MOVZBL  (R11), R0
+        MOVAB   1(R11)[R0], R10         ; its format
+        MOVAB   1(R11), FAB+FAB$L_FNA
+        MOVB    (R11), FAB+FAB$B_FNS
+        MOVB    #FAB$C_SEQ, FAB+FAB$B_ORG
+        MOVB    (R10), FAB+FAB$B_RFM
+        MOVB    1(R10), FAB+FAB$B_RAT
+        MOVB    2(R10), FAB+FAB$B_FSZ
+        MOVW    4(R10), FAB+FAB$W_MRS
+        MOVB    #FAB$M_PUT!FAB$M_GET!FAB$M_UPD!FAB$M_TRN, FAB+FAB$B_FAC
+        $CREATE FAB=FAB
+        SAY     CREATE
+        BSBW    STS
+        BLBS    R0, 5$
+        RSB
+5$:     $CONNECT RAB=RAB
+        SAY     CONNECT
+        BSBW    STS
+        MOVAB   RECS, R9                ; put each
+        CMPB    (R10), #FAB$C_FIX
+        BNEQ    10$
+        MOVAB   FIXRECS, R9
+10$:    CMPB    (R9), #255
+        BEQL    20$
+        MOVZBL  (R9), R1
+        MOVAB   1(R9), R2
+        BSBW    PUT
+        MOVZBL  (R9), R0
+        ADDL2   R0, R9
+        INCL    R9
+        BRB     10$
+20$:    $CLOSE  FAB=FAB
+        SAY     CLOSE
+        BSBW    STS
+        CLRW    FAB+FAB$W_MRS           ; $OPEN gives the file's
+        CLRB    FAB+FAB$B_RFM
+        $OPEN   FAB=FAB
+        SAY     OPEN
+        BSBW    STS
+        BSBW    ATTRS
+        $CONNECT RAB=RAB
+        SAY     CONNECT
+        BSBW    STS
+        BSBW    READALL
+        $REWIND RAB=RAB                 ; two $FINDs, a $GET, by RFA
+        SAY     REWIND
+        BSBW    STS
+        $FIND   RAB=RAB
+        SAY     FIND
+        BSBW    STSRFA
+        BSBW    OUT
+        MOVL    RAB+RAB$W_RFA, SAVRFA
+        MOVW    RAB+RAB$W_RFA+4, SAVRFA+4
+        $FIND   RAB=RAB
+        SAY     FIND
+        BSBW    STSRFA
+        BSBW    OUT
+        BSBW    GET
+        $UPDATE RAB=RAB                 ; the third, at its size
+        SAY     UPDATE
+        BSBW    STS
+        MOVW    #2, RAB+RAB$W_RSZ       ; and at another
+        $UPDATE RAB=RAB
+        SAY     UPDATE
+        BSBW    STS
+        MOVB    #RAB$C_RFA, RAB+RAB$B_RAC
+        MOVL    SAVRFA, RAB+RAB$W_RFA
+        MOVW    SAVRFA+4, RAB+RAB$W_RFA+4
+        BSBW    GET
+        MOVB    #RAB$C_SEQ, RAB+RAB$B_RAC
+        BSBW    GET                     ; the second, then cut there
+        $TRUNCATE RAB=RAB
+        SAY     TRUNCATE
+        BSBW    STS
+        MOVAB   NEWREC, R9
+        CMPB    (R10), #FAB$C_FIX
+        BNEQ    30$
+        MOVAB   NEWFIX, R9
+30$:    MOVZBL  (R9), R1
+        MOVAB   1(R9), R2
+        BSBW    PUT
+        $REWIND RAB=RAB
+        BSBW    READALL
+        $REWIND RAB=RAB                 ; one, then a $PUT in the middle
+        BSBW    GET
+        MOVZBL  (R9), R1
+        MOVAB   1(R9), R2
+        BSBW    PUT
+        BISL2   #RAB$M_TPT, RAB+RAB$L_ROP
+        MOVZBL  (R9), R1
+        MOVAB   1(R9), R2
+        BSBW    PUT
+        BICL2   #RAB$M_TPT, RAB+RAB$L_ROP
+        $REWIND RAB=RAB
+        BSBW    READALL
+        $CLOSE  FAB=FAB
+        SAY     CLOSE
+        BSBW    STS
+        $OPEN   FAB=FAB
+        BSBW    ATTRS
+        $CLOSE  FAB=FAB
+        RSB
+
+; BLKTEST: block I/O on VAR.SEQ and a UDF file it makes with $WRITE.
+BLKTEST:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5, R6>
+        SAY     BLOCKIO
+        BSBW    OUT
+        MOVAB   SEQS+1, FAB+FAB$L_FNA
+        MOVB    SEQS, FAB+FAB$B_FNS
+        MOVB    #FAB$M_BIO!FAB$M_GET, FAB+FAB$B_FAC
+        $OPEN   FAB=FAB
+        SAY     OPEN
+        BSBW    STS
+        $CONNECT RAB=RAB
+        BSBW    BREAD
+        MNEGL   #1, RAB+RAB$L_BKT
+        $SPACE  RAB=RAB
+        SAY     SPACE
+        BSBW    STS
+        CLRL    RAB+RAB$L_BKT
+        BSBW    BREAD
+        $CLOSE  FAB=FAB
+        MOVAB   UDFNAME+1, FAB+FAB$L_FNA
+        MOVB    UDFNAME, FAB+FAB$B_FNS
+        MOVB    #FAB$C_UDF, FAB+FAB$B_RFM
+        CLRB    FAB+FAB$B_RAT
+        CLRW    FAB+FAB$W_MRS
+        MOVB    #FAB$M_BIO!FAB$M_PUT!FAB$M_GET, FAB+FAB$B_FAC
+        $CREATE FAB=FAB
+        SAY     CREATE
+        BSBW    STS
+        $CONNECT RAB=RAB
+        MOVC5   #0, BLK, #^A/u/, #600, BLK
+        MOVAB   BLK, RAB+RAB$L_RBF
+        MOVW    #600, RAB+RAB$W_RSZ
+        CLRL    RAB+RAB$L_BKT
+        $WRITE  RAB=RAB
+        SAY     WRITE
+        BSBW    STSRFA
+        BSBW    OUT
+        $CLOSE  FAB=FAB
+        MOVB    #FAB$M_GET, FAB+FAB$B_FAC
+        $OPEN   FAB=FAB
+        BSBW    ATTRS
+        $CONNECT RAB=RAB
+        BSBW    GET
+        $CLOSE  FAB=FAB
+        MOVB    #FAB$M_BIO!FAB$M_GET, FAB+FAB$B_FAC
+        $OPEN   FAB=FAB
+        $CONNECT RAB=RAB
+        MOVL    #2, RAB+RAB$L_BKT
+        BSBW    BREAD
+        CLRL    RAB+RAB$L_BKT
+        BSBW    BREAD
+        $CLOSE  FAB=FAB
+        RSB
+
+; BREAD: $READ into BLK, 1024 bytes: prints its status, RSZ, RFA and the
+; first 16 bytes it read.
+BREAD:
+        .JSB_ENTRY  SCRATCH=<R2>
+        MOVAB   BLK, RAB+RAB$L_UBF
+        MOVW    #1024, RAB+RAB$W_USZ
+        $READ   RAB=RAB
+        SAY     READ
+        BSBW    STSRFA
+        BLBC    R0, 90$
+        MOVZWL  RAB+RAB$W_RSZ, R1
+        BSBW    ADDDEC
+        SAY     SP
+        MOVL    #16, R1
+        MOVAB   BLK, R2
+        BSBW    ADDREC
+90$:    BSBW    OUT
+        MOVAB   REC, RAB+RAB$L_UBF
+        MOVW    #512, RAB+RAB$W_USZ
+        RSB
+
+; PUT: R2 = a record, R1 = its size. $PUTs it, with VFCHDR as a VFC
+; record's control part, and prints its status and RFA.
+PUT:
+        .JSB_ENTRY
+        MOVL    R2, RAB+RAB$L_RBF
+        MOVW    R1, RAB+RAB$W_RSZ
+        MOVAB   VFCHDR, RAB+RAB$L_RHB
+        $PUT    RAB=RAB
+        MOVAB   RHB, RAB+RAB$L_RHB
+        SAY     PUT
+        BSBW    STSRFA
+        BSBW    OUT
+        RSB
+
+; READALL: $GETs until one fails, printing each.
+READALL:
+        .JSB_ENTRY
+10$:    BSBW    GET
+        BLBS    R0, 10$
+        RSB
+
+; GET: $GET, and prints its status, the RFA, and the record, a VFC
+; one's control part first, in hex.
+GET:
+        .JSB_ENTRY  SCRATCH=<R2>
+        CLRW    RHB
+        $GET    RAB=RAB
+        SAY     GET
+        BSBW    STSRFA
+        BLBC    R0, 90$
+        CMPB    FAB+FAB$B_RFM, #FAB$C_VFC
+        BNEQ    10$
+        PUSHL   R0
+        MOVZWL  RHB, R1
+        MOVL    #4, R2
+        BSBW    ADDHEX
+        SAY     SP
+        MOVL    (SP)+, R0
+10$:    PUSHL   R0
+        MOVZWL  RAB+RAB$W_RSZ, R1
+        BSBW    ADDDEC
+        SAY     SP
+        MOVZWL  RAB+RAB$W_RSZ, R1
+        MOVL    RAB+RAB$L_RBF, R2
+        BSBW    ADDREC
+        MOVL    (SP)+, R0
+90$:    PUSHL   R0
+        BSBW    OUT
+        MOVL    (SP)+, R0
+        RSB
+
+; ATTRS: prints the FAB's and XABFHC's attributes after $OPEN.
+ATTRS:
+        .JSB_ENTRY  SCRATCH=<R2>
+        SAY     ATTRRFM
+        MOVZBL  FAB+FAB$B_RFM, R1
+        BSBW    ADDDEC
+        SAY     RAT
+        MOVZBL  FAB+FAB$B_RAT, R1
+        BSBW    ADDDEC
+        SAY     MRS
+        MOVZWL  FAB+FAB$W_MRS, R1
+        BSBW    ADDDEC
+        SAY     FSZ
+        MOVZBL  FAB+FAB$B_FSZ, R1
+        BSBW    ADDDEC
+        SAY     EBK
+        MOVL    FHC+XAB$L_EBK, R1
+        BSBW    ADDDEC
+        SAY     FFB
+        MOVZWL  FHC+XAB$W_FFB, R1
+        BSBW    ADDDEC
+        SAY     LRL
+        MOVZWL  FHC+XAB$W_LRL, R1
+        BSBW    ADDDEC
+        BSBW    OUT
+        RSB
+
+; STS: R0 = a status. Prints it after what the line has, and keeps it.
+; STSRFA: the same, and the RAB's RFA.
+STS:
+        .JSB_ENTRY
+        PUSHL   R0
+        BSBW    ADDSTS
+        BSBW    OUT
+        MOVL    (SP)+, R0
+        RSB
+
+STSRFA:
+        .JSB_ENTRY  SCRATCH=<R2>
+        PUSHL   R0
+        BSBW    ADDSTS
+        SAY     SP
+        MOVL    RAB+RAB$L_RFA0, R1
+        BSBW    ADDDEC
+        SAY     COMMA
+        MOVZWL  RAB+RAB$W_RFA4, R1
+        BSBW    ADDDEC
+        SAY     SP
+        MOVL    (SP)+, R0
+        RSB
+
+; ADDSTS: R0 = a status: adds a space and it in 8 hex digits. Uses R0-R2.
+ADDSTS:
+        .JSB_ENTRY  SCRATCH=<R2>
+        PUSHL   R0
+        SAY     SP
+        MOVL    (SP)+, R1
+        MOVL    #8, R2
+        BSBW    ADDHEX
+        RSB
+
+; ADDSTR: R2 = a string, R1 = its size. Adds it to the line. Uses R0.
+ADDSTR:
+        .JSB_ENTRY
+        PUSHL   R3
+        CLRL    R0
+10$:    CMPL    R0, R1
+        BGEQU   90$
+        MOVL    LINELEN, R3
+        CMPL    R3, #255
+        BGEQU   90$
+        MOVB    (R2)[R0], LINE[R3]
+        INCL    LINELEN
+        INCL    R0
+        BRB     10$
+90$:    MOVL    (SP)+, R3
+        RSB
+
+; ADDREC: R2 = a record, R1 = its size. Adds it, a printable byte as it
+; is, a backslash and the others as \xNN. Uses R0-R2.
+ADDREC:
+        .JSB_ENTRY  SCRATCH=<R2>
+        PUSHR   #^M<R3, R4>
+        MOVL    R1, R4
+10$:    TSTL    R4
+        BEQL    90$
+        MOVZBL  (R2)+, R3
+        CMPB    R3, #32
+        BLSSU   20$
+        CMPB    R3, #126
+        BGTRU   20$
+        CMPB    R3, #92
+        BEQL    20$
+        MOVL    LINELEN, R1
+        CMPL    R1, #255
+        BGEQU   90$
+        MOVB    R3, LINE[R1]
+        INCL    LINELEN
+        BRB     30$
+20$:    PUSHL   R2
+        SAY     BSX
+        MOVL    R3, R1
+        MOVL    #2, R2
+        BSBW    ADDHEX
+        MOVL    (SP)+, R2
+30$:    DECL    R4
+        BRB     10$
+90$:    POPR    #^M<R3, R4>
+        RSB
+
+; ADDHEX: R1 = a value, R2 = how many hex digits. Adds them. Uses R0-R2.
+ADDHEX:
+        .JSB_ENTRY  SCRATCH=<R2>
+        PUSHL   R3
+        MULL3   #4, R2, R0              ; the digits to the top
+        SUBL3   R0, #32, R0
+        ASHL    R0, R1, R1
+10$:    ROTL    #4, R1, R1
+        EXTZV   #0, #4, R1, R0
+        MOVL    LINELEN, R3
+        CMPL    R3, #255
+        BGEQU   20$
+        MOVB    HEX[R0], LINE[R3]
+        INCL    LINELEN
+20$:    SOBGTR  R2, 10$
+        MOVL    (SP)+, R3
+        RSB
+
+; ADDDEC: R1 = a value, unsigned. Adds it in decimal. Uses R0-R2.
+ADDDEC:
+        .JSB_ENTRY  SCRATCH=<R2>
+        PUSHL   R3
+        CLRL    R2                      ; digits, on the stack
+10$:    DIVL3   #10, R1, R0
+        MULL3   #10, R0, R3
+        SUBL3   R3, R1, R3
+        PUSHL   R3
+        INCL    R2
+        MOVL    R0, R1
+        BNEQ    10$
+20$:    MOVL    (SP)+, R0
+        ADDL2   #^A/0/, R0
+        MOVL    LINELEN, R3
+        CMPL    R3, #255
+        BGEQU   30$
+        MOVB    R0, LINE[R3]
+        INCL    LINELEN
+30$:    SOBGTR  R2, 20$
+        MOVL    (SP)+, R3
+        RSB
+
+; OUT: writes the line, and starts another. Keeps every register.
+OUT:
+        .JSB_ENTRY
+        PUSHR   #^M<R0, R1>
+        MOVL    LINELEN, LINEDSC
+        PUSHAB  LINEDSC
+        CALLS   #1, G^LIB$PUT_OUTPUT
+        CLRL    LINELEN
+        POPR    #^M<R0, R1>
+        RSB
+
+        .END    RMSTEST

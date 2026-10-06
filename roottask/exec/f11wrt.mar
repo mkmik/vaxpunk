@@ -13,9 +13,8 @@
 ; directory takes its parent's, which no one may delete.
 ; RMS's $CREATE gives a new version its predecessor's instead.
 ; ponytail: no process default protection, SET PROTECTION/DEFAULT. A cluster is a block, and the bitmaps are a block each, so a
-; volume has at most 4096 blocks and 4096 files; the index file isn't
-; extended, so a volume has the headers INITIALIZE made room for; map
-; pointers are format 2, and a directory is rewritten whole on each
+; volume has at most 4096 blocks and 4096 files; the index file grows
+; IDXEXT headers at a time, as its bitmap allows; map pointers are format 2, and a directory is rewritten whole on each
 ; change, so a version is entered in the first record with its name.
 ;
         .LIBRARY "lib.mlb"
@@ -38,6 +37,7 @@ BITS = BLOCK*8                          ; in a bitmap block
 MFD = 4
 MAXVER = 32767
 MAXRUN = 16384                          ; blocks a format 2 pointer maps
+IDXEXT = 16                             ; headers the index file grows by
 DK$C_BLOCKS = BITS                      ; DKB0:'s volume: what one bitmap block maps
 ; A file header (ods/docs/file-header.md).
 FH2$B_IDOFFSET = 0
@@ -71,6 +71,7 @@ FAT$B_RATTRIB = FH2$W_RECATTR+1
 FAT$W_RSIZE = FH2$W_RECATTR+2
 FAT$L_HIBLK = FH2$W_RECATTR+4           ; high word first
 FAT$L_EFBLK = FH2$W_RECATTR+8           ; high word first
+FH2$L_HIGHWATER = 76                    ; VBN + 1 of the highest block written
 FAT$W_FFBYTE = FH2$W_RECATTR+12
 FAT$W_MAXREC = FH2$W_RECATTR+16
 ; What INITIALIZE writes: the boot block at LBN 0, the home block at 1,
@@ -90,6 +91,7 @@ RECSIZE = 20                            ; a RESFILES row
         .PSECT  EXEC$DATA, NOEXE, WRT, QUAD
 BITBLK: .BLKB   BLOCK                   ; a bitmap block, or the home block
 NEWHDR: .BLKB   BLOCK                   ; a header FIL$INIT makes
+ZEROS:  .BLKB   BLOCK                   ; an index file block not yet used
 RECBUF: .BLKB   BLOCK                   ; a directory record being made
 DU_MODE:                                ; DIRUPD's: 0 enter, 1 remove
         .LONG   0
@@ -294,7 +296,7 @@ FIL$CREHDR::
         .JSB_ENTRY
         PUSHR   #^M<R1, R2, R3, R4, R5, R6>
         MOVL    R1, R6
-        CLRL    R0
+5$:     CLRL    R0
         BSBB    BITMAP
         BLBC    R0, 90$
         CLRL    R4                      ; the bit for file R4 + 1
@@ -306,7 +308,11 @@ FIL$CREHDR::
         MOVAB   VCB$AB_INDEXF(R5), R1
         BSBW    FIL$MAPVBN
         TSTL    R1
-        BEQL    80$
+        BNEQ    25$
+        BSBW    EXTINDEX                ; not yet: it grows, and the
+        BLBC    R0, 90$                 ; storage bitmap took BITBLK
+        BRB     5$
+25$:
         ADDL3   VCB$L_HDRVBN(R5), R4, R0        ; what was in it
         MOVL    #1, R1
         MOVL    R6, R2
@@ -328,6 +334,38 @@ FIL$CREHDR::
         BRB     90$
 80$:    MOVL    #SS$_IDXFILEFULL, R0
 90$:    POPR    #^M<R1, R2, R3, R4, R5, R6>
+        RSB
+
+; EXTINDEX: R5 = a VCB. Extends its index file by IDXEXT blocks, zeros,
+; headers no file has yet, and its end of file past them, and writes its
+; header. R0 = SS$_NORMAL, or FIL$EXTEND's or the disk's error. Holding
+; FIL$LOCK. Keeps every other register.
+EXTINDEX:
+        .JSB_ENTRY
+        PUSHR   #^M<R1, R2, R3, R4>
+        MOVAB   VCB$AB_INDEXF(R5), R3
+        BSBW    GETHIBLK
+        MOVL    R0, R4                  ; the blocks it has
+        MOVL    #IDXEXT, R1
+        BSBW    FIL$EXTEND
+        BLBC    R0, 90$
+10$:    INCL    R4
+        BSBW    GETHIBLK
+        CMPL    R4, R0
+        BGTRU   20$
+        MOVL    R4, R0
+        MOVL    #1, R1
+        MOVAB   ZEROS, R2
+        BSBW    FIL$WRITEVBN
+        BLBC    R0, 90$
+        BRB     10$
+20$:    ADDL3   #1, R0, R1              ; the end of file: past the last block
+        ROTL    #16, R1, FAT$L_EFBLK(R3)
+        CLRW    FAT$W_FFBYTE(R3)
+        MOVL    R1, FH2$L_HIGHWATER(R3)
+        MOVL    R3, R1
+        BSBW    FIL$WRITEHDR
+90$:    POPR    #^M<R1, R2, R3, R4>
         RSB
 
 ; ALLOCBLK: R1 = a block count. Takes the first run of free blocks from

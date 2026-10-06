@@ -1,0 +1,27 @@
+        .TITLE  RMSREL  RMS: relative files
+        .IDENT  /V0.1/
+;
+; Relative files: not yet. Each routine says RMS$_ORG.
+;
+        .LIBRARY "starlet.mlb"
+        $RMSDEF
+
+        .PSECT  $CODE$
+
+; REL$OPEN, REL$CREATE, REL$CONNECT, REL$GET, REL$FIND, REL$PUT,
+; REL$UPDATE, REL$DELETE, REL$REWIND, REL$FLUSH: R0 = RMS$_ORG.
+REL$OPEN::
+REL$CREATE::
+REL$CONNECT::
+REL$GET::
+REL$FIND::
+REL$PUT::
+REL$UPDATE::
+REL$DELETE::
+REL$REWIND::
+REL$FLUSH::
+        .JSB_ENTRY
+        MOVL    #RMS$_ORG, R0
+        RSB
+
+        .END

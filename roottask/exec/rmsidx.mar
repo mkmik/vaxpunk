@@ -1,0 +1,31 @@
+        .TITLE  RMSIDX  RMS: indexed files
+        .IDENT  /V0.1/
+;
+; Indexed files: not yet. Each routine says RMS$_ORG.
+;
+        .LIBRARY "starlet.mlb"
+        $RMSDEF
+
+        .PSECT  $CODE$
+
+; IDX$OPEN, IDX$CREATE, IDX$CONNECT, IDX$GET, IDX$FIND, IDX$PUT,
+; IDX$UPDATE, IDX$DELETE, IDX$REWIND, IDX$FLUSH, IDX$XABSUM, IDX$XABKEY,
+; IDX$XABALL: R0 = RMS$_ORG.
+IDX$OPEN::
+IDX$CREATE::
+IDX$CONNECT::
+IDX$GET::
+IDX$FIND::
+IDX$PUT::
+IDX$UPDATE::
+IDX$DELETE::
+IDX$REWIND::
+IDX$FLUSH::
+IDX$XABSUM::
+IDX$XABKEY::
+IDX$XABALL::
+        .JSB_ENTRY
+        MOVL    #RMS$_ORG, R0
+        RSB
+
+        .END

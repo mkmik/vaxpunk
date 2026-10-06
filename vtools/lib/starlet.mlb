@@ -125,99 +125,542 @@ CLI$_LOCPRES = ^X3FD31                  ; entity value is locally present
 CLI$_COMMA = ^X3FD39                    ; value terminated by a comma
         .ENDM   $CLIMSGDEF
 
-; $RMSDEF: RMS status codes, as VMS numbers them.
+; $RMSDEF: RMS's condition values, VMS's, with their messages.
         .MACRO  $RMSDEF
-RMS$_NORMAL = ^X10001
-RMS$_EOF = ^X1827A                      ; end of file
+RMS$_SUC = ^X10001                      ; normal successful completion
+RMS$_NORMAL = ^X10001                   ; normal successful completion
+RMS$_STALL = ^X18001                    ; synchronize with operation completion
+RMS$_PENDING = ^X18009                  ; asynchronous operation not yet completed
+RMS$_OK_DUP = ^X18011                   ; record had duplicate key
+RMS$_OK_IDX = ^X18019                   ; index update error occurred
+RMS$_OK_RLK = ^X18021                   ; record locked but read anyway
+RMS$_OK_RRL = ^X18029                   ; record locked against read but read anyway
+RMS$_KFF = ^X18031                      ; known file found
+RMS$_OK_ALK = ^X18039                   ; record is already locked
+RMS$_OK_DEL = ^X18041                   ; deleted record successfully accessed
+RMS$_OK_RNF = ^X18049                   ; nonexistent record successfully accessed
+RMS$_OK_LIM = ^X18051                   ; retrieved record exceeds specified key value
+RMS$_OK_NOP = ^X18059                   ; XAB not filled in for block I/O
+RMS$_OK_WAT = ^X18061                   ; record locked after wait
+RMS$_CRE_STM = ^X18069                  ; file was created in stream format
+RMS$_OK_RULK = ^X18071                  ; record relocked in recovery unit
+RMS$_SYNCH = ^X18079                    ; synchronous completion
+RMS$_OK_ACT = ^X18081                   ; operation successfully completed on active file or stream
+RMS$_OK_NOCURTID = ^X18089              ; no default TID is defined
+RMS$_CONTROLC = ^X10651                 ; operation completed under CTRL/C
+RMS$_CONTROLO = ^X10609                 ; output completed under CTRL/O
+RMS$_CONTROLY = ^X10611                 ; operation completed under CTRL/Y
+RMS$_CREATED = ^X10619                  ; file or section did not exist; has been created
+RMS$_SUPERSEDE = ^X10631                ; logical name superseded
+RMS$_OVRDSKQUOTA = ^X10669              ; disk usage exceeds disk quota
+RMS$_FILEPURGED = ^X10679               ; oldest file version purged
+RMS$_BOF = ^X18198                      ; beginning of file detected
+RMS$_RNL = ^X181A0                      ; record not locked
+RMS$_RTB = ^X181A8                      ; !UL byte record too large for user's buffer
+RMS$_TMO = ^X181B0                      ; timeout period expired
+RMS$_TNS = ^X181B8                      ; terminator not seen
+RMS$_BES = ^X181C0                      ; bad escape sequence
+RMS$_PES = ^X181C8                      ; partial escape sequence
+RMS$_ACT = ^X1825A                      ; file activity precludes operation
+RMS$_DEL = ^X18262                      ; RFA-accessed record was deleted
+RMS$_INCOMPSHR = ^X1826A                ; incompatible file sharing requested
+RMS$_DNR = ^X18272                      ; device not ready, not mounted, or unavailable
+RMS$_EOF = ^X1827A                      ; end of file detected
+RMS$_FEX = ^X18282                      ; file already exists, not superseded
+RMS$_FLK = ^X1828A                      ; file currently locked by another user
 RMS$_FNF = ^X18292                      ; file not found
-RMS$_WLK = ^X182BA                      ; device write locked: the volume is read-only
-RMS$_NMF = ^X182CA                      ; no more files
-RMS$_RTB = ^X181A8                      ; record too big for the user's buffer
+RMS$_PRV = ^X1829A                      ; insufficient privilege or file protection violation
+RMS$_REX = ^X182A2                      ; record already exists
+RMS$_RLK = ^X182AA                      ; target record currently locked by another stream
+RMS$_RNF = ^X182B2                      ; record not found
+RMS$_WLK = ^X182BA                      ; device currently write locked
+RMS$_EXP = ^X182C2                      ; file expiration date not yet reached
+RMS$_NMF = ^X182CA                      ; no more files found
+RMS$_SUP = ^X182D2                      ; network operation not supported; DAP code = !XL
+RMS$_RSA = ^X182DA                      ; record stream currently active
+RMS$_CRC = ^X182E2                      ; network DAP level CRC check failed
+RMS$_WCC = ^X182EA                      ; invalid wild card context (WCC) value
+RMS$_IDR = ^X182F2                      ; invalid directory rename operation
+RMS$_LWC = ^X182FA                      ; lock wait canceled
+RMS$_UNUSED1 = ^X18302                  ; unused error message 1
+RMS$_NOVALPRS = ^X1830A                 ; $SEARCH operation not preceded by valid $PARSE
+RMS$_KEY_MISMATCH = ^X18312             ; record found, but key doesn't match
+RMS$_RUH = ^X1831A                      ; error encountered by RMS transaction event handler, PID = !XL
+RMS$_JND = ^X18322                      ; journaling disabled on this file
+RMS$_BADPHASE = ^X1832A                 ; recovery unit phase invalid for this operation
+RMS$_TOWDR = ^X18332                    ; timed out waiting for detached RU recovery to complete
+RMS$_NEXDR = ^X1833A                    ; non-existent detached RU recovery process
+RMS$_INVDRMSG = ^X18342                 ; invalid detached RU recovery mailbox message
+RMS$_RU_ACTIVE = ^X1834A                ; operation prohibited while recovery unit active
+RMS$_UNKRUFAC = ^X18352                 ; file has active/incomplete non-RMS recovery units
+RMS$_LIMBO = ^X1835A                    ; recovery unit is in limbo
+RMS$_IVATRACE = ^X18362                 ; invalid RMS attributes ACE encountered
+RMS$_OPNOTSUP = ^X1836A                 ; operation not supported by RMS Extension
+RMS$_EXTNOTFOU = ^X18372                ; RMS Extension not found
+RMS$_EXT_ERR = ^X1837A                  ; error in RMS Extension; reason code %X!XL
+RMS$_SEMANTICS = ^X18382                ; inconsistent usage of RMS Semantics
+RMS$_LSCAN = ^X1838A                    ; internal KLT/KLE status - do left scan to replenish data level VBN downpointers
+RMS$_ROOTSRCH = ^X18392                 ; internal KLT/KLE status - restart search at root
+RMS$_IDXSEARCH = ^X1839A                ; key search encountered index structure inconsistency - convert file
+RMS$_NETBTS = ^X183A2                   ; network buffer too small for !UL byte record
+RMS$_NXR = ^X183AA                      ; nonexistent record
+RMS$_EOFASY_SYNCH = ^X183B2             ; internal status - EOF on ASY $READ that completed synchronously
+RMS$_ELOOP = ^X183BA                    ; more than SYMLOOP_MAX symbolic links were encountered during resolution of the file_name
+RMS$_ACC = ^X1C002                      ; ACP file access failed
+RMS$_CRE = ^X1C00A                      ; ACP file create failed
+RMS$_DAC = ^X1C012                      ; ACP file deaccess failed during $CLOSE
+RMS$_ENT = ^X1C01A                      ; ACP enter function failed
+RMS$_EXT = ^X1C022                      ; ACP file extend failed
+RMS$_FND = ^X1C02A                      ; ACP file or directory lookup failed
+RMS$_MKD = ^X1C032                      ; ACP could not mark file for deletion
+RMS$_DPE = ^X1C03A                      ; device positioning error
+RMS$_SPL = ^X1C042                      ; spool or submit of command file failed on $CLOSE
 RMS$_DNF = ^X1C04A                      ; directory not found
-RMS$_DEV = ^X184C4                      ; bad device
-RMS$_DIR = ^X184CC                      ; bad directory
+RMS$_RUF = ^X1C052                      ; recovery unit facility request failed
+RMS$_WRTJNL_AIJ = ^X1C05A               ; error writing to after image journal file
+RMS$_WRTJNL_BIJ = ^X1C062               ; error writing to before image journal file
+RMS$_WRTJNL_ATJ = ^X1C06A               ; error writing to audit trail journal file
+RMS$_WRTJNL_RUJ = ^X1C072               ; error writing to recovery unit journal file
+RMS$_RRF = ^X1C07A                      ; recovery unit recovery failed
+RMS$_DDTM_ERR = ^X1C082                 ; error returned by DECdtm transaction manager 
+RMS$_DTFCDDREC = ^X183EC                ; error accessing CDD record; reason code %X!XL
+RMS$_AID = ^X183F4                      ; invalid area ID = !UL
+RMS$_ALN = ^X183FC                      ; alignment options error for area id = !UL
+RMS$_ALQ = ^X18404                      ; invalid allocation quantity (negative, or 0 on $EXTEND)
+RMS$_ANI = ^X1840C                      ; not ANSI "D" format
+RMS$_AOP = ^X18414                      ; allocation options error for area id = !UL
+RMS$_BKS = ^X1841C                      ; bucket size too large (FAB)
+RMS$_BKZ = ^X18424                      ; inconsistent bucket size for area id = !UL
+RMS$_BLN = ^X1842C                      ; invalid block length for control block (RAB/FAB)
+RMS$_BUG = ^X18434                      ; fatal RMS condition (!XL), process deleted
+RMS$_BUG_DDI = ^X1843C                  ; invalid default directory
+RMS$_BUG_DAP = ^X18444                  ; Data Access Protocol error detected; DAP code = !XL
+RMS$_BUG_RU_ACTIVE = ^X1844C            ; active recovery units on $CLOSE during RMS rundown
+RMS$_BUG_RURECERR = ^X18454             ; error during detached RU recovery
+RMS$_BUG_FLUSH_JNL_FAILED = ^X1845C     ; flush of journal failed
+RMS$_BUG_RU_ABORT_FAIL = ^X18464        ; recovery unit abort failed
+RMS$_BUG_RU_COMMIT_FAIL = ^X1846C       ; recovery unit commit failed
+RMS$_BUG_XX6 = ^X18474                  ; reserved bug code
+RMS$_BUG_XX7 = ^X1847C                  ; reserved bug code
+RMS$_BUG_XX8 = ^X18484                  ; reserved bug code
+RMS$_BUSY = ^X1848C                     ; user structure (FAB/RAB) still in use
+RMS$_CCR = ^X18494                      ; cannot connect RAB
+RMS$_CHG = ^X1849C                      ; invalid key change in $UPDATE (CHG not set)
+RMS$_CHK = ^X184A4                      ; bucket format check failed for VBN = !UL
+RMS$_COD = ^X184AC                      ; invalid or unsupported type field in XAB at !XL
+RMS$_CUR = ^X184B4                      ; no current record (operation not preceded by $GET/$FIND)
+RMS$_DAN = ^X184BC                      ; invalid data area number for key = !UL
+RMS$_DEV = ^X184C4                      ; error in device name or inappropriate device type for operation
+RMS$_DIR = ^X184CC                      ; error in directory name
 RMS$_DME = ^X184D4                      ; dynamic memory exhausted
-RMS$_ESA = ^X184FC                      ; no expanded string area
+RMS$_DNA = ^X184DC                      ; invalid default file name string address
+RMS$_DTP = ^X184E4                      ; invalid key data type for key = !UL
+RMS$_DUP = ^X184EC                      ; duplicate key detected (DUP not set)
+RMS$_DVI = ^X184F4                      ; invalid device ID value in NAM block
+RMS$_ESA = ^X184FC                      ; invalid expanded string address
 RMS$_ESS = ^X18504                      ; expanded string area too small
-RMS$_FAB = ^X1850C                      ; not a FAB
-RMS$_FNM = ^X1852C                      ; bad file name
-RMS$_IFI = ^X18564                      ; bad internal file index
-RMS$_ISI = ^X18584                      ; bad internal stream index
-RMS$_NAM = ^X185DC                      ; not a NAM block
-RMS$_RAB = ^X1863C                      ; not a RAB
-RMS$_RFM = ^X18664                      ; record format RMS can't read
-RMS$_RSS = ^X18694                      ; resultant string area too small
-RMS$_SYN = ^X186D4                      ; file specification syntax
-RMS$_VER = ^X186FC                      ; bad version
-RMS$_WLD = ^X18744                      ; wildcard where one may not be
-RMS$_DNR = ^X18272                      ; device not ready: not mounted
-RMS$_FEX = ^X18282                      ; file already exists
-RMS$_PRV = ^X1829A                      ; privilege or protection violation, or a reserved file
-RMS$_FUL = ^X18544                      ; device full
-RMS$_IOP = ^X18574                      ; operation the file wasn't opened for
-RMS$_NEF = ^X185E4                      ; $PUT not at the end of the file
-RMS$_RSZ = ^X186A4                      ; record size: a FIX record of another size
-RMS$_CRE = ^X1C00A                      ; the file system couldn't create the file
-RMS$_ENT = ^X1C01A                      ; or enter it in its directory
-RMS$_MKD = ^X1C032                      ; or delete it
-RMS$_WER = ^X1C114                      ; or write it
+RMS$_FAB = ^X1850C                      ; invalid FAB or FAB not accessible
+RMS$_FAC = ^X18514                      ; record operation not permitted by specified file access (FAC)
+RMS$_FLG = ^X1851C                      ; invalid key definition flags for key = !UL
+RMS$_FNA = ^X18524                      ; invalid file name string address
+RMS$_FNM = ^X1852C                      ; error in file name
+RMS$_FSZ = ^X18534                      ; invalid fixed control header size
+RMS$_FOP = ^X1853C                      ; invalid file options
+RMS$_FUL = ^X18544                      ; device full (insufficient space for allocation)
+RMS$_IAL = ^X1854C                      ; invalid argument list
+RMS$_IAN = ^X18554                      ; invalid index area number for key = !UL
+RMS$_IDX = ^X1855C                      ; index not initialized
+RMS$_IFI = ^X18564                      ; invalid internal file identifier (IFI) value
+RMS$_IMX = ^X1856C                      ; invalid duplicate XAB or non-dense XAB at !XL
+RMS$_IOP = ^X18574                      ; operation invalid for file organization or device
+RMS$_IRC = ^X1857C                      ; illegal record encountered; VBN or record number = !UL
+RMS$_ISI = ^X18584                      ; invalid internal stream identifier (ISI) value
+RMS$_KBF = ^X1858C                      ; invalid key buffer
+RMS$_KEY = ^X18594                      ; invalid record number key or key value
+RMS$_KRF = ^X1859C                      ; invalid key-of-reference
+RMS$_KSZ = ^X185A4                      ; invalid key size for $GET/$FIND
+RMS$_LAN = ^X185AC                      ; invalid lowest-level-index area number for key = !UL
+RMS$_RUNDOWN = ^X185B4                  ; operation invalid during RMS rundown
+RMS$_LNE = ^X185BC                      ; logical name translation error
+RMS$_DTFCVT = ^X185C4                   ; error converting data in record; reason code %X!XL
+RMS$_MRN = ^X185CC                      ; invalid maximum record number or record number exceeds MRN
+RMS$_MRS = ^X185D4                      ; invalid maximum record size
+RMS$_NAM = ^X185DC                      ; invalid NAM block or NAM block not accessible
+RMS$_NEF = ^X185E4                      ; not positioned to EOF on $PUT (sequential organization only)
+RMS$_DTFQUASYN = ^X185EC                ; syntax error in foreign file specification; reason code %X!XL
+RMS$_NOD = ^X185F4                      ; error in node name
+RMS$_NPK = ^X185FC                      ; no primary key defined for indexed file
+RMS$_ORD = ^X18604                      ; XABs not in correct order at !XL
+RMS$_ORG = ^X1860C                      ; invalid file organization value
+RMS$_PBF = ^X18614                      ; invalid prompt buffer
+RMS$_PLG = ^X1861C                      ; error detected in file's prolog (reconstruct file)
+RMS$_POS = ^X18624                      ; invalid key position (greater than MRS) for key = !UL
+RMS$_DTFQUAVAL = ^X1862C                ; invalid file name qualifier value specified; reason code %X!XL
+RMS$_QUO = ^X18634                      ; error in quoted string
+RMS$_RAB = ^X1863C                      ; invalid RAB or RAB not accessible
+RMS$_RAC = ^X18644                      ; invalid record access mode
+RMS$_RAT = ^X1864C                      ; invalid record attributes
+RMS$_RBF = ^X18654                      ; invalid record buffer
+RMS$_RFA = ^X1865C                      ; invalid record's file address (RFA)
+RMS$_RFM = ^X18664                      ; invalid record format
+RMS$_RHB = ^X1866C                      ; invalid record header buffer
+RMS$_RLF = ^X18674                      ; invalid related NAM block
+RMS$_ROP = ^X1867C                      ; invalid record options
+RMS$_RRV = ^X18684                      ; invalid RRV record encountered
+RMS$_RVU = ^X1868C                      ; error updating RRV's, some paths to data may be lost
+RMS$_RSS = ^X18694                      ; invalid resultant string size
+RMS$_RST = ^X1869C                      ; invalid resultant string address
+RMS$_RSZ = ^X186A4                      ; invalid record size
+RMS$_SEQ = ^X186AC                      ; primary key out of sequence (SEQ access)
+RMS$_SHR = ^X186B4                      ; invalid file sharing (SHR) options
+RMS$_SIZ = ^X186BC                      ; invalid key size for key = !UL
+RMS$_SQO = ^X186C4                      ; operation not sequential (SQO set)
+RMS$_DTFSESEST = ^X186CC                ; error establishing SNA session; reason code %X!XL
+RMS$_SYN = ^X186D4                      ; file specification syntax error
+RMS$_TRE = ^X186DC                      ; error in index tree
+RMS$_TYP = ^X186E4                      ; error in file type
+RMS$_UBF = ^X186EC                      ; invalid user buffer
+RMS$_USZ = ^X186F4                      ; invalid user buffer size
+RMS$_VER = ^X186FC                      ; error in version number
+RMS$_XNF = ^X18704                      ; required XAB not found
+RMS$_XAB = ^X1870C                      ; invalid XAB or XAB not accessible at !XL
+RMS$_ESL = ^X18714                      ; invalid expanded string length
+RMS$_DTFSESTER = ^X1871C                ; SNA session terminated unexpectedly; reason code %X!XL
+RMS$_ENV = ^X18724                      ; support for RMS service call or feature not present
+RMS$_PLV = ^X1872C                      ; unsupported prolog version
+RMS$_MBC = ^X18734                      ; invalid multi-block count
+RMS$_RSL = ^X1873C                      ; invalid resultant string length
+RMS$_WLD = ^X18744                      ; invalid wildcard operation
+RMS$_NET = ^X1874C                      ; network operation failed at remote node; DAP code = !XL
+RMS$_IBF = ^X18754                      ; illegal bucket format in VBN = !UL
+RMS$_REF = ^X1875C                      ; invalid key-of-reference = !UL
+RMS$_IFL = ^X18764                      ; index bucket fill size larger than bucket size for key = !UL
+RMS$_DFL = ^X1876C                      ; data bucket fill size larger than bucket size for key = !UL
+RMS$_KNM = ^X18774                      ; key name buffer not accessible for key = !UL
+RMS$_IBK = ^X1877C                      ; LAN bucket size not equal to IAN bucket size for key = !UL
+RMS$_KSI = ^X18784                      ; index bucket will not hold two keys for key-of-reference = !UL
+RMS$_LEX = ^X1878C                      ; invalid $EXTEND for area !UL containing an unused extent
+RMS$_SEG = ^X18794                      ; overlapping segments or segmented key must be string for key = !UL
+RMS$_SNE = ^X1879C                      ; file sharing not enabled
+RMS$_SPE = ^X187A4                      ; file sharing pagecount exceeded
+RMS$_UPI = ^X187AC                      ; UPI not set when sharing and BIO or BRO set
+RMS$_ACS = ^X187B4                      ; error in access control string
+RMS$_STR = ^X187BC                      ; user structure (FAB/RAB) became invalid during operation
+RMS$_FTM = ^X187C4                      ; network file transfer mode precludes operation (SQO set)
+RMS$_GBC = ^X187CC                      ; invalid global buffer count
+RMS$_DEADLOCK = ^X187D4                 ; deadlock detected
+RMS$_EXENQLM = ^X187DC                  ; exceeded enqueue quota
+RMS$_JOP = ^X187E4                      ; journaling options not supported on device
+RMS$_RUM = ^X187EC                      ; recovery-unit handler called from incorrect access mode
+RMS$_JNS = ^X187F4                      ; operation not supported by RMS journaling
+RMS$_NRU = ^X187FC                      ; operation prohibited outside recovery-unit
+RMS$_IFF = ^X18804                      ; invalid file attributes for requested file access
+RMS$_DTFTRATBL = ^X1880C                ; error loading translation table; reason code %X!XL
+RMS$_DTFUNSTYP = ^X18814                ; unsupported data type in record; reason code %X!XL
+RMS$_DTFVERMIS = ^X1881C                ; incompatible version of control file; reason code %X!XL
+RMS$_DTFACC = ^X18822                   ; error accessing file; reason code %X!XL
+RMS$_BOGUSCOL = ^X1882C                 ; invalid or inaccessible collate table
+RMS$_ERRREADCOL = ^X18834               ; error encountered while reading collate table
+RMS$_ERRWRITECOL = ^X1883C              ; error encountered while writing collate table
+RMS$_SNS = ^X18844                      ; statistics monitoring not supported for non-disk devices
+RMS$_NOEXTEND = ^X1884C                 ; previous $EXTEND operation failed - further $EXTENDs prohibited
+RMS$_DTFCRE = ^X18852                   ; error creating file; reason code %X!XL
+RMS$_DELJNS = ^X1885C                   ; deleting a file marked for journaling not yet supported (unmark file for journaling first)
+RMS$_NOTSAMEJNL = ^X18864               ; files in a recovery unit must use same RMS journal
+RMS$_SNPPF = ^X1886C                    ; statistics monitoring not supported for process permanent files
+RMS$_NAML = ^X18874                     ; invalid NAML block or NAML block not accessible
+RMS$_NAMLESS = ^X1887C                  ; NAML expanded string area too small
+RMS$_NAMLRSS = ^X18884                  ; NAML resultant string area too small
+RMS$_NAMLFSSIZ = ^X1888C                ; NAML file system string area too small
+RMS$_NAMLFSINV = ^X18894                ; NAML file system string address invalid
+RMS$_BADGBH = ^X1889C                   ; Bad GBH
+RMS$_BADGBD = ^X188A4                   ; Bad GBD
+RMS$_FOPEXTMBZ = ^X188AC                ; reserved fields asociated with FAB$V_EXTEND_FOP must be zero
+RMS$_INVOP_SSIO = ^X188B4               ; invalid operation for SSIO access
+RMS$_IVSF = ^X188BC                     ; invalid special file format
+RMS$_ATR = ^X1C0CC                      ; file attributes read error
+RMS$_ATW = ^X1C0D4                      ; file attributes write error
+RMS$_CCF = ^X1C0DC                      ; cannot close file
+RMS$_CDA = ^X1C0E4                      ; cannot deliver AST
+RMS$_CHN = ^X1C0EC                      ; assign channel system service request failed
+RMS$_RER = ^X1C0F4                      ; file read error
+RMS$_RMV = ^X1C0FC                      ; ACP remove function failed
+RMS$_RPL = ^X1C104                      ; error detected while reading prolog
+RMS$_SYS = ^X1C10C                      ; QIO system service request failed
+RMS$_WER = ^X1C114                      ; file write error
+RMS$_WPL = ^X1C11C                      ; error detected while writing prolog
+RMS$_IFA = ^X1C124                      ; illegal file attributes detected (file header corrupted)
+RMS$_WBE = ^X1C12C                      ; error on write behind
+RMS$_ENQ = ^X1C134                      ; ENQ system service request failed
+RMS$_NETFAIL = ^X1C13C                  ; network operation failed at remote node
+RMS$_SUPPORT = ^X1C144                  ; network operation not supported
+RMS$_CRMP = ^X1C14C                     ; CRMPSC system service failed to map global buffers
+RMS$_DTFCFGFIL = ^X1C154                ; error accessing configuration file
+RMS$_REENT = ^X1C15C                    ; file could not be renamed and recovery failed; file has been lost
+RMS$_ACC_RUJ = ^X1C164                  ; recovery unit journal can not be accessed
+RMS$_TMR = ^X1C16C                      ; SETIMR system service request failed
+RMS$_ACC_AIJ = ^X1C174                  ; after image journal can not be accessed
+RMS$_ACC_BIJ = ^X1C17C                  ; before image journal can not be accessed
+RMS$_ACC_ATJ = ^X1C184                  ; audit trail journal can not be accessed
+RMS$_DTFDEFFIL = ^X1C18C                ; error accessing file definition file
+RMS$_DTFREGFIL = ^X1C194                ; error accessing registration file
+RMS$_JNLNOTAUTH = ^X1C19C               ; RMS Journaling not authorized; operation not performed
+RMS$_CRBUFOBJ = ^X1C1A4                 ; CREATE_BUFOBJ system service failed to create buffer object
+RMS$_RSESTK_ALLOC = ^X1C1AC             ; allocation of KP RSE stack failed
         .ENDM   $RMSDEF
 
-; $FABDEF: the file access block, for RMS's sequential files.
+; $FABDEF: the file access block (VMS's layout).
         .MACRO  $FABDEF
 FAB$C_BID = 3
 FAB$C_BLN = 80
+FAB$K_BLN = 80
 FAB$B_BID = 0
 FAB$B_BLN = 1
 FAB$W_IFI = 2                           ; internal file index, from $OPEN or $CREATE
-FAB$L_FOP = 4                           ; file processing options: FAB$M_NAM
+FAB$L_FOP = 4                           ; file processing options: FAB$M_
 FAB$L_STS = 8                           ; the status of the last operation
-FAB$L_STV = 12
+FAB$L_STV = 12                          ; its secondary status
 FAB$L_ALQ = 16                          ; blocks allocated
-FAB$B_FAC = 22                          ; access wanted: FAB$M_
-FAB$B_ORG = 29                          ; organization: FAB$C_SEQ
-FAB$B_RAT = 30                          ; record attributes: FAB$M_CR
-FAB$B_RFM = 31                          ; record format: FAB$C_
+FAB$W_DEQ = 20                          ; default extension, blocks
+FAB$B_FAC = 22                          ; access wanted: FAB$M_PUT to FAB$M_BRO
+FAB$B_SHR = 23                          ; access others may have: FAB$M_SHRPUT to FAB$M_NQL
+FAB$L_CTX = 24                          ; the caller's
+FAB$B_RTV = 28                          ; retrieval window size
+FAB$B_ORG = 29                          ; organization: FAB$C_SEQ, REL or IDX
+FAB$B_RAT = 30                          ; record attributes: FAB$M_FTN to FAB$M_BLK
+FAB$B_RFM = 31                          ; record format: FAB$C_UDF to FAB$C_STMCR
+FAB$B_JOURNAL = 32
+FAB$L_XAB = 36                          ; the first XAB, or 0
 FAB$L_NAM = 40                          ; a NAM block, or 0
 FAB$L_FNA = 44                          ; the file specification
 FAB$L_DNA = 48                          ; the default one
 FAB$B_FNS = 52                          ; their lengths
 FAB$B_DNS = 53
-FAB$W_MRS = 54                          ; maximum record size
+FAB$W_MRS = 54                          ; maximum record size, 0 for any
+FAB$L_MRN = 56                          ; maximum record number of a relative file
+FAB$W_BLS = 60                          ; block size, magnetic tape
+FAB$B_BKS = 62                          ; bucket size, blocks
 FAB$B_FSZ = 63                          ; VFC header size
-FAB$L_XAB = 36                          ; the first XAB, or 0
+FAB$L_DEV = 64                          ; device characteristics, from $OPEN
+FAB$L_SDC = 68                          ; spooling device's
+FAB$W_GBC = 72                          ; global buffer count
+; FAB$L_FOP
+FAB$V_MXV = 1                           ; $CREATE: a version above the highest
+FAB$M_MXV = ^X2
+FAB$V_SUP = 2                           ; $CREATE: supersede a version that exists
+FAB$M_SUP = ^X4
+FAB$V_TMP = 3                           ; temporary: no directory entry
+FAB$M_TMP = ^X8
+FAB$V_TMD = 4                           ; temporary, deleted when closed
+FAB$M_TMD = ^X10
+FAB$V_DFW = 5                           ; deferred write
+FAB$M_DFW = ^X20
+FAB$V_SQO = 6                           ; sequential access only
+FAB$M_SQO = ^X40
+FAB$V_RWO = 7                           ; rewind on open
+FAB$M_RWO = ^X80
+FAB$V_POS = 8
+FAB$M_POS = ^X100
+FAB$V_WCK = 9                           ; write check
+FAB$M_WCK = ^X200
+FAB$V_NEF = 10                          ; don't position to end of file
+FAB$M_NEF = ^X400
+FAB$V_RWC = 11                          ; rewind on close
+FAB$M_RWC = ^X800
+FAB$V_DMO = 12
+FAB$M_DMO = ^X1000
+FAB$V_SPL = 13                          ; spool when closed
+FAB$M_SPL = ^X2000
+FAB$V_SCF = 14                          ; submit as a batch job when closed
+FAB$M_SCF = ^X4000
+FAB$V_DLT = 15                          ; delete when closed
+FAB$M_DLT = ^X8000
+FAB$V_NFS = 16                          ; non-file-structured
+FAB$M_NFS = ^X10000
+FAB$V_UFO = 17                          ; user file open: no RMS
+FAB$M_UFO = ^X20000
+FAB$V_PPF = 18
+FAB$M_PPF = ^X40000
+FAB$V_INP = 19
+FAB$M_INP = ^X80000
+FAB$V_CTG = 20                          ; contiguous
+FAB$M_CTG = ^X100000
+FAB$V_CBT = 21                          ; contiguous best try
+FAB$M_CBT = ^X200000
+FAB$V_RCK = 23                          ; read check
+FAB$M_RCK = ^X800000
+FAB$V_NAM = 24                          ; the file the NAM block names, by its resultant string
+FAB$M_NAM = ^X1000000
+FAB$V_CIF = 25                          ; $CREATE: open the file if it exists
+FAB$M_CIF = ^X2000000
+FAB$V_ESC = 27
+FAB$M_ESC = ^X8000000
+FAB$V_TEF = 28                          ; truncate at end of file when closed
+FAB$M_TEF = ^X10000000
+FAB$V_OFP = 29                          ; output file parse
+FAB$M_OFP = ^X20000000
+FAB$V_KFO = 30
+FAB$M_KFO = ^X40000000
+; FAB$B_FAC
+FAB$V_PUT = 0
 FAB$M_PUT = 1
+FAB$V_GET = 1
 FAB$M_GET = 2
+FAB$V_DEL = 2
 FAB$M_DEL = 4
+FAB$V_UPD = 3
 FAB$M_UPD = 8
+FAB$V_TRN = 4                           ; $TRUNCATE
 FAB$M_TRN = 16
+FAB$V_BIO = 5                           ; block I/O only
+FAB$M_BIO = 32
+FAB$V_BRO = 6                           ; block and record I/O
+FAB$M_BRO = 64
+FAB$V_EXE = 7
+FAB$M_EXE = 128
+; FAB$B_SHR
+FAB$V_SHRPUT = 0
+FAB$M_SHRPUT = 1
+FAB$V_SHRGET = 1
+FAB$M_SHRGET = 2
+FAB$V_SHRDEL = 2
+FAB$M_SHRDEL = 4
+FAB$V_SHRUPD = 3
+FAB$M_SHRUPD = 8
+FAB$V_MSE = 4                           ; several streams
+FAB$M_MSE = 16
+FAB$V_NIL = 5                           ; no sharing
+FAB$M_NIL = 32
+FAB$V_UPI = 6                           ; user provided interlock
+FAB$M_UPI = 64
+; FAB$B_ORG
+FAB$V_ORG = 4
+FAB$S_ORG = 4
 FAB$C_SEQ = 0
+FAB$C_REL = 16
+FAB$C_IDX = 32
+FAB$C_HSH = 48
+; FAB$B_RAT
+FAB$V_FTN = 0                           ; FORTRAN carriage control
+FAB$M_FTN = 1
+FAB$V_CR = 1                            ; carriage return carriage control
 FAB$M_CR = 2
-FAB$M_BLK = 8                           ; records don't span blocks
-FAB$M_NAM = ^X1000000                   ; $ERASE the file the NAM block's resultant string names
-FAB$C_UDF = 0
+FAB$V_PRN = 2                           ; print carriage control, in the VFC header
+FAB$M_PRN = 4
+FAB$V_BLK = 3                           ; records don't span blocks
+FAB$M_BLK = 8
+FAB$V_MSB = 4                           ; VAR sizes most significant byte first
+FAB$M_MSB = 16
+; FAB$B_RFM
+FAB$C_UDF = 0                           ; undefined: block I/O only
 FAB$C_FIX = 1
 FAB$C_VAR = 2
-FAB$C_VFC = 3
+FAB$C_VFC = 3                           ; VAR with a fixed control header
+FAB$C_STM = 4                           ; stream: CR LF ends a record
+FAB$C_STMLF = 5
+FAB$C_STMCR = 6
+FAB$C_MAXRFM = 6
         .ENDM   $FABDEF
 
-; $RABDEF: the record access block.
+; $RABDEF: the record access block (VMS's layout).
         .MACRO  $RABDEF
 RAB$C_BID = 1
 RAB$C_BLN = 68
+RAB$K_BLN = 68
 RAB$B_BID = 0
 RAB$B_BLN = 1
 RAB$W_ISI = 2                           ; internal stream index, from $CONNECT
-RAB$L_ROP = 4                           ; record processing options: RAB$M_EOF
-RAB$M_EOF = ^X100                       ; $CONNECT at the end of the file
+RAB$L_ROP = 4                           ; record processing options: RAB$M_
 RAB$L_STS = 8
 RAB$L_STV = 12
+RAB$W_RFA = 16                          ; the record's file address, 6 bytes
+RAB$L_RFA0 = 16                         ; its VBN, or a relative record number
+RAB$W_RFA4 = 20                         ; its ID, or a sequential record's offset in the block
+RAB$L_CTX = 24                          ; the caller's
+RAB$B_RAC = 30                          ; record access: RAB$C_SEQ, KEY or RFA
+RAB$B_TMO = 31                          ; timeout, seconds
 RAB$W_USZ = 32                          ; the user's buffer: its size
 RAB$W_RSZ = 34                          ; the record's size
-RAB$L_UBF = 36                          ; and address
+RAB$L_UBF = 36                          ; the user's buffer
 RAB$L_RBF = 40                          ; where $GET put the record, what $PUT writes
-RAB$L_BKT = 56                          ; the VBN $READ or $WRITE starts at, 0 for the next
+RAB$L_RHB = 44                          ; a VFC record's fixed control header
+RAB$L_KBF = 48                          ; the key, or relative record number
+RAB$L_PBF = 48                          ; the prompt, for terminals
+RAB$B_KSZ = 52                          ; the key's size
+RAB$B_PSZ = 52
+RAB$B_KRF = 53                          ; key of reference
+RAB$B_MBF = 54                          ; multibuffer count
+RAB$B_MBC = 55                          ; multiblock count
+RAB$L_BKT = 56                          ; bucket or VBN, for $READ, $WRITE, $SPACE; a relative file's record number
 RAB$L_FAB = 60                          ; the FAB $CONNECT connects to
+RAB$L_XAB = 64
+; RAB$L_ROP
+RAB$V_ASY = 0                           ; asynchronous
+RAB$M_ASY = ^X1
+RAB$V_TPT = 1                           ; $PUT truncates the file after the record
+RAB$M_TPT = ^X2
+RAB$V_REA = 2                           ; lock for read
+RAB$M_REA = ^X4
+RAB$V_RRL = 3                           ; read regardless of lock
+RAB$M_RRL = ^X8
+RAB$V_UIF = 4                           ; $PUT of a record that exists updates it
+RAB$M_UIF = ^X10
+RAB$V_MAS = 5                           ; mass insert
+RAB$M_MAS = ^X20
+RAB$V_FDL = 6                           ; fast delete
+RAB$M_FDL = ^X40
+RAB$V_REV = 7                           ; reverse search
+RAB$M_REV = ^X80
+RAB$V_EOF = 8                           ; $CONNECT at the end of the file
+RAB$M_EOF = ^X100
+RAB$V_RAH = 9                           ; read ahead
+RAB$M_RAH = ^X200
+RAB$V_WBH = 10                          ; write behind
+RAB$M_WBH = ^X400
+RAB$V_BIO = 11                          ; block I/O on a FAB$M_BRO file
+RAB$M_BIO = ^X800
+RAB$V_CDK = 12
+RAB$M_CDK = ^X1000
+RAB$V_LOA = 13                          ; load buckets to their fill quantity
+RAB$M_LOA = ^X2000
+RAB$V_LIM = 14
+RAB$M_LIM = ^X4000
+RAB$V_LOC = 16                          ; locate mode: RBF may point into RMS's buffer
+RAB$M_LOC = ^X10000
+RAB$V_WAT = 17                          ; wait for a locked record
+RAB$M_WAT = ^X20000
+RAB$V_ULK = 18                          ; manual unlocking
+RAB$M_ULK = ^X40000
+RAB$V_RLK = 19                          ; lock for write, others may read
+RAB$M_RLK = ^X80000
+RAB$V_NLK = 20                          ; no lock
+RAB$M_NLK = ^X100000
+RAB$V_KGE = 21                          ; key greater than or equal
+RAB$M_KGE = ^X200000
+RAB$V_EQNXT = 21
+RAB$M_EQNXT = ^X200000
+RAB$V_KGT = 22                          ; key greater than
+RAB$M_KGT = ^X400000
+RAB$V_NXT = 22
+RAB$M_NXT = ^X400000
+RAB$V_NXR = 23                          ; nonexistent record
+RAB$M_NXR = ^X800000
+RAB$V_RNE = 24                          ; terminals: no echo
+RAB$M_RNE = ^X1000000
+RAB$V_TMO = 25                          ; timeout
+RAB$M_TMO = ^X2000000
+RAB$V_CVT = 26                          ; convert to upper case
+RAB$M_CVT = ^X4000000
+RAB$V_RNF = 27                          ; no filter
+RAB$M_RNF = ^X8000000
+RAB$V_PMT = 30                          ; prompt
+RAB$M_PMT = ^X40000000
+RAB$V_CCO = 31                          ; cancel CTRL/O
+RAB$M_CCO = ^X80000000
+; RAB$B_RAC
+RAB$C_SEQ = 0                           ; sequential
+RAB$C_KEY = 1                           ; by key, or relative record number
+RAB$C_RFA = 2                           ; by record's file address
         .ENDM   $RABDEF
 
 ; $NAMDEF: the name block, which $PARSE, $SEARCH and $OPEN fill.
@@ -253,12 +696,8 @@ NAM$M_WILDCARD = ^X100                  ; the specification has a wildcard
         .MACRO  $DVIDEF
 DVI$_DEVCHAR = 2                        ; the DEV$ bits, a longword
 DVI$_DEVCLASS = 4                       ; DC$_DISK or DC$_TERM
-DVI$_DEVTYPE = 6                        ; a terminal's DT$ type
-DVI$_DEVBUFSIZ = 8                      ; a terminal's width, a disk's block size
-DVI$_DEVDEPEND = 10                     ; a terminal's TT$ bits, its page in the top byte
 DVI$_UNIT = 12
 DVI$_ERRCNT = 20
-DVI$_DEVDEPEND2 = 28                    ; a terminal's TT2$ bits
 DVI$_DEVNAM = 32                        ; the device's name, _DDCU:
 DVI$_VOLNAM = 34                        ; the mounted volume's label
 DVI$_FREEBLOCKS = 42                    ; its free blocks
@@ -280,82 +719,7 @@ DVS$_DEVCLASS = 1                       ; only devices of this class, a longword
 DC$_DISK = 1
 DC$_TERM = 66
 DC$_MAILBOX = 160
-DT$_VT100 = 96                          ; a terminal's type: a VT100
         .ENDM   $DCDEF
-
-; $TTDEF: a terminal's characteristics, the second longword of what
-; IO$_SETMODE and IO$_SENSEMODE take and give, and DVI$_DEVDEPEND: the
-; page length in the top byte.
-        .MACRO  $TTDEF
-TT$V_PASSALL = 0                        ; no editing and no control keys
-TT$V_NOECHO = 1                         ; reads don't echo
-TT$V_NOTYPEAHD = 2
-TT$V_ESCAPE = 3                         ; reads end at an escape sequence
-TT$V_HOSTSYNC = 4
-TT$V_TTSYNC = 5
-TT$V_LOWER = 7                          ; it has lowercase
-TT$V_MECHTAB = 8                        ; it has tab stops
-TT$V_WRAP = 9                           ; it wraps at its width
-TT$V_SCOPE = 12                         ; a screen, not paper
-TT$V_REMOTE = 13
-TT$V_EIGHTBIT = 15
-TT$V_NOBRDCST = 17                      ; no broadcast messages
-TT$V_READSYNC = 18
-TT$V_MECHFORM = 19
-TT$V_HALFDUP = 20
-TT$V_MODEM = 21
-TT$V_PAGE = 24                          ; the page length, a byte
-TT$M_NOECHO = ^X2
-TT$M_ESCAPE = ^X8
-TT$M_TTSYNC = ^X20
-TT$M_LOWER = ^X80
-TT$M_MECHTAB = ^X100
-TT$M_WRAP = ^X200
-TT$M_SCOPE = ^X1000
-TT$M_EIGHTBIT = ^X8000
-TT$M_NOBRDCST = ^X20000
-        .ENDM   $TTDEF
-
-; $TT2DEF: a terminal's extended characteristics, the third longword of
-; IO$_SETMODE's and IO$_SENSEMODE's buffer, and DVI$_DEVDEPEND2.
-        .MACRO  $TT2DEF
-TT2$V_LOCALECHO = 0
-TT2$V_AUTOBAUD = 1
-TT2$V_HANGUP = 2
-TT2$V_BRDCSTMBX = 4
-TT2$V_DMA = 6
-TT2$V_ALTYPEAHD = 7
-TT2$V_SETSPEED = 8
-TT2$V_DECCRT4 = 10
-TT2$V_COMMSYNC = 11
-TT2$V_EDITING = 12                      ; line editing
-TT2$V_INSERT = 13                       ; in insert mode, not overstrike
-TT2$V_FALLBACK = 14
-TT2$V_DIALUP = 15
-TT2$V_SECURE = 16
-TT2$V_DISCONNECT = 17
-TT2$V_PASTHRU = 18                      ; reads pass every character but CTRL/C and CTRL/Y
-TT2$V_SYSPWD = 19
-TT2$V_SIXEL = 20
-TT2$V_DRCS = 21                         ; soft characters
-TT2$V_PRINTER = 22
-TT2$V_APP_KEYPAD = 23                   ; the keypad in application mode
-TT2$V_ANSICRT = 24
-TT2$V_REGIS = 25
-TT2$V_BLOCK = 26
-TT2$V_AVO = 27                          ; advanced video
-TT2$V_EDIT = 28                         ; edit mode
-TT2$V_DECCRT = 29
-TT2$V_DECCRT2 = 30
-TT2$V_DECCRT3 = 31
-TT2$M_EDITING = ^X1000
-TT2$M_INSERT = ^X2000
-TT2$M_PASTHRU = ^X40000
-TT2$M_ANSICRT = ^X1000000
-TT2$M_AVO = ^X8000000
-TT2$M_EDIT = ^X10000000
-TT2$M_DECCRT = ^X20000000
-        .ENDM   $TT2DEF
 
 ; $DEVDEF: device characteristics, DVI$_DEVCHAR's bits.
         .MACRO  $DEVDEF
@@ -430,14 +794,174 @@ ARM$M_CONTROL = 16                      ; change the protection: the owner's and
 ARM$M_SYSTEM = 32                       ; vaxpunk's: change the owner, the system's only
         .ENDM   $ARMDEF
 
+; $XABDEF: the fields every XAB starts with.
+        .MACRO  $XABDEF
+XAB$B_COD = 0                           ; its type: XAB$C_KEY, ALL, SUM, FHC, DAT, RDT, PRO
+XAB$B_BLN = 1                           ; its size
+XAB$L_NXT = 4                           ; the next XAB, or 0
+        .ENDM   $XABDEF
+
+; $XABKEYDEF: the key definition XAB: a key of an indexed file, which
+; $CREATE takes and $OPEN and $DISPLAY fill.
+        .MACRO  $XABKEYDEF
+        $XABDEF
+XAB$C_KEY = 21
+XAB$C_KEYLEN = 100
+XAB$K_KEYLEN = 100
+XAB$C_KEYLEN_V2 = 64
+XAB$B_IAN = 8                           ; area of the index above level 1
+XAB$B_LAN = 9                           ; area of the level 1 index
+XAB$B_DAN = 10                          ; area of the data
+XAB$B_LVL = 11                          ; root level
+XAB$B_IBS = 12                          ; index bucket size
+XAB$B_DBS = 13                          ; data bucket size
+XAB$L_RVB = 14                          ; root VBN
+XAB$B_FLG = 18                          ; XAB$M_ flags
+XAB$B_DTP = 19                          ; data type: XAB$C_STG to XAB$C_DBN8
+XAB$B_NSG = 20                          ; segments
+XAB$B_NUL = 21                          ; null value
+XAB$B_TKS = 22                          ; total key size
+XAB$B_REF = 23                          ; key of reference
+XAB$W_MRL = 24                          ; minimum record length
+XAB$W_IFL = 26                          ; index fill, bytes
+XAB$W_DFL = 28                          ; data fill, bytes
+XAB$W_POS = 30                          ; segment positions, 8 words
+XAB$W_POS0 = 30
+XAB$B_SIZ = 46                          ; segment sizes, 8 bytes
+XAB$B_SIZ0 = 46
+XAB$L_KNM = 56                          ; the key's name, 32 bytes, or 0
+XAB$L_DVB = 60                          ; first data bucket's VBN
+XAB$B_TYP = 64                          ; segment types, 8 bytes
+XAB$B_TYP0 = 64
+XAB$B_PROLOG = 72                       ; prologue level: XAB$C_PRG3
+XAB$C_PRG1 = 1
+XAB$C_PRG2 = 2
+XAB$C_PRG3 = 3
+XAB$V_DUP = 0                           ; duplicates allowed
+XAB$M_DUP = ^X1
+XAB$V_CHG = 1                           ; $UPDATE may change it
+XAB$M_CHG = ^X2
+XAB$V_NUL = 2                           ; a null key isn't indexed
+XAB$M_NUL = ^X4
+XAB$V_IDX_NCMPR = 3                     ; no index compression
+XAB$M_IDX_NCMPR = ^X8
+XAB$V_KEY_NCMPR = 6                     ; no key compression
+XAB$M_KEY_NCMPR = ^X40
+XAB$V_DAT_NCMPR = 7                     ; no data record compression
+XAB$M_DAT_NCMPR = ^X80
+XAB$C_STG = 0                           ; string
+XAB$C_IN2 = 1                           ; signed word
+XAB$C_BN2 = 2                           ; unsigned word
+XAB$C_IN4 = 3
+XAB$C_BN4 = 4
+XAB$C_PAC = 5                           ; packed decimal
+XAB$C_IN8 = 6
+XAB$C_BN8 = 7
+XAB$C_COL = 8                           ; collated string
+XAB$C_DSTG = 32                         ; descending: 32 more
+XAB$C_DIN2 = 33
+XAB$C_DBN2 = 34
+XAB$C_DIN4 = 35
+XAB$C_DBN4 = 36
+XAB$C_DPAC = 37
+XAB$C_DIN8 = 38
+XAB$C_DBN8 = 39
+XAB$C_DCOL = 40
+        .ENDM   $XABKEYDEF
+
+; $XABALLDEF: the allocation XAB: an area of an indexed file.
+        .MACRO  $XABALLDEF
+        $XABDEF
+XAB$C_ALL = 20
+XAB$C_ALLLEN = 32
+XAB$K_ALLLEN = 32
+XAB$B_AOP = 8                           ; allocation options
+XAB$B_ALN = 9                           ; alignment: XAB$C_ANY to XAB$C_RFI
+XAB$W_VOL = 10                          ; relative volume
+XAB$L_LOC = 12                          ; location
+XAB$L_ALQ = 16                          ; blocks
+XAB$W_DEQ = 20                          ; default extension
+XAB$B_BKZ = 22                          ; bucket size
+XAB$B_AID = 23                          ; area number
+XAB$W_RFI = 24                          ; related file, 3 words
+XAB$V_HRD = 0                           ; hard: fail if the placement can't be had
+XAB$M_HRD = ^X1
+XAB$V_ONC = 1                           ; on cylinder
+XAB$M_ONC = ^X2
+XAB$V_CBT = 5                           ; contiguous best try
+XAB$M_CBT = ^X20
+XAB$V_CTG = 7                           ; contiguous
+XAB$M_CTG = ^X80
+XAB$C_ANY = 0
+XAB$C_CYL = 1
+XAB$C_LBN = 2
+XAB$C_VBN = 3
+XAB$C_RFI = 4
+        .ENDM   $XABALLDEF
+
+; $XABSUMDEF: the summary XAB: an indexed file's areas and keys.
+        .MACRO  $XABSUMDEF
+        $XABDEF
+XAB$C_SUM = 22
+XAB$C_SUMLEN = 12
+XAB$K_SUMLEN = 12
+XAB$B_NOA = 8                           ; areas
+XAB$B_NOK = 9                           ; keys
+XAB$W_PVN = 10                          ; prologue version
+        .ENDM   $XABSUMDEF
+
+; $XABFHCDEF: the file header characteristics XAB, which $OPEN and
+; $DISPLAY fill from the header's record attributes.
+        .MACRO  $XABFHCDEF
+        $XABDEF
+XAB$C_FHC = 29
+XAB$C_FHCLEN = 44
+XAB$K_FHCLEN = 44
+XAB$B_RFO = 8                           ; organization and record format, as FAT$B_RTYPE
+XAB$B_ATR = 9                           ; record attributes
+XAB$W_LRL = 10                          ; longest record
+XAB$L_HBK = 12                          ; highest block allocated
+XAB$L_EBK = 16                          ; end of file block
+XAB$W_FFB = 20                          ; first free byte in it
+XAB$B_BKZ = 22                          ; bucket size
+XAB$B_HSZ = 23                          ; VFC header size
+XAB$W_MRZ = 24                          ; maximum record size
+XAB$W_DXQ = 26                          ; default extension
+XAB$W_GBC = 28                          ; global buffer count
+XAB$W_VERLIMIT = 38                     ; version limit
+XAB$L_SBN = 40                          ; starting LBN, if contiguous
+        .ENDM   $XABFHCDEF
+
+; $XABDATDEF: the date and time XAB.
+        .MACRO  $XABDATDEF
+        $XABDEF
+XAB$C_DAT = 18
+XAB$C_DATLEN = 44
+XAB$K_DATLEN = 44
+XAB$C_DATLEN_V2 = 36
+XAB$W_RVN = 8                           ; revision number
+XAB$Q_RDT = 12                          ; revised
+XAB$Q_CDT = 20                          ; created
+XAB$Q_EDT = 28                          ; expires
+XAB$Q_BDT = 36                          ; backed up
+        .ENDM   $XABDATDEF
+
+; $XABRDTDEF: the revision date and time XAB, which $CLOSE writes back.
+        .MACRO  $XABRDTDEF
+        $XABDEF
+XAB$C_RDT = 30
+XAB$C_RDTLEN = 20
+XAB$K_RDTLEN = 20
+XAB$W_RVN = 8                           ; revision number
+XAB$Q_RDT = 12                          ; revised
+        .ENDM   $XABRDTDEF
+
 ; $XABPRODEF: the protection XAB, which $OPEN fills with the file's owner
 ; and protection, and $CLOSE changes them to.
         .MACRO  $XABPRODEF
+        $XABDEF
 XAB$C_PRO = 19                          ; XAB$B_COD
 XAB$C_PROLEN = 16                       ; XAB$B_BLN
-XAB$B_COD = 0
-XAB$B_BLN = 1
-XAB$L_NXT = 4                           ; the next XAB, or 0
 XAB$W_PRO = 8                           ; the protection: 4 bits each for system, owner, group, world, a set bit denying
 XAB$L_UIC = 12                          ; the owner
 XAB$V_NOREAD = 0                        ; a category's bits
@@ -446,65 +970,165 @@ XAB$V_NOEXE = 2
 XAB$V_NODEL = 3
         .ENDM   $XABPRODEF
 
-; $XABFHCDEF: the file header characteristics XAB, which $OPEN fills.
-        .MACRO  $XABFHCDEF
-XAB$C_FHC = 29                          ; XAB$B_COD
-XAB$C_FHCLEN = 44                       ; XAB$B_BLN
-XAB$W_LRL = 10                          ; the longest record
-XAB$L_HBK = 12                          ; the blocks allocated
-XAB$L_EBK = 16                          ; the end of file: its block
-XAB$W_FFB = 20                          ; and the first free byte in it
-        .ENDM   $XABFHCDEF
+; $$BITS sym, prefix, list: sym = the prefix'item bits of the list's items
+; added, 0 for an empty list. The $FAB, $RAB and $XABKEY keyword lists use it.
+        .MACRO  $$BITS  SYM, PREFIX, LIST
+SYM = 0
+        .IF NB  <LIST>
+        .IRP    $$I, <LIST>
+SYM = SYM ! PREFIX'$$I
+        .ENDR
+        .ENDC
+        .ENDM   $$BITS
 
-; $FAB, $RAB, $NAM, $XABPRO, $XABFHC: a FAB, RAB, name block, protection
-; XAB or file header characteristics XAB, with the fields given and the
-; rest 0. Lengths are values (FNS=#5 is FNS=5 here), addresses labels.
-        .MACRO  $FAB    FNA=0, FNS=0, DNA=0, DNS=0, NAM=0, FAC=0, XAB=0
-        .BYTE   3, 80                   ; BID, BLN
+; $FAB, $RAB, $XABKEY, $XABALL, $XABSUM, $XABFHC, $XABDAT, $XABRDT,
+; $XABPRO, $NAM: the blocks, with the fields given and the rest VMS's
+; defaults, as VMS's macros make them: addresses are labels, sizes values
+; (FNS=5), and options keywords, alone or a list in angle brackets
+; (FAC=<GET,PUT>, ORG=IDX, RFM=FIX, RAT=CR, ROP=<KGE,LOC>,
+; FLG=<DUP,CHG>). FAB's SHR takes PUT, GET, DEL, UPD, MSE and NIL.
+        .MACRO  $FAB    FNA=0, FNS=0, DNA=0, DNS=0, NAM=0, FAC, XAB=0, ORG=SEQ, RFM=VAR, RAT, MRS=0, FOP, SHR, ALQ=0, DEQ=0, BKS=0, FSZ=0, MRN=0, CTX=0, RTV=0, GBC=0
+        $FABDEF
+        $$BITS  $$FAC, FAB$M_, <FAC>
+        $$BITS  $$FOP, FAB$M_, <FOP>
+        $$BITS  $$RAT, FAB$M_, <RAT>
+$$SHR = 0
+        .IF NB  <SHR>
+        .IRP    $$I, <SHR>
+        .IF IDN <$$I>, <MSE>
+$$SHR = $$SHR ! FAB$M_MSE
+        .IFF
+        .IF IDN <$$I>, <NIL>
+$$SHR = $$SHR ! FAB$M_NIL
+        .IFF
+$$SHR = $$SHR ! FAB$M_SHR'$$I
+        .ENDC
+        .ENDC
+        .ENDR
+        .ENDC
+        .BYTE   FAB$C_BID, FAB$C_BLN
         .WORD   0                       ; IFI
-        .LONG   0, 0, 0, 0              ; FOP, STS, STV, ALQ
-        .WORD   0                       ; DEQ
-        .BYTE   FAC, 0                  ; FAC, SHR
-        .LONG   0                       ; CTX
-        .BYTE   0, 0, 0, 0              ; RTV, ORG, RAT, RFM
-        .LONG   0                       ; JNL
+        .LONG   $$FOP, 0, 0, ALQ        ; FOP, STS, STV, ALQ
+        .WORD   DEQ
+        .BYTE   $$FAC, $$SHR
+        .LONG   CTX
+        .BYTE   RTV, FAB$C_'ORG, $$RAT, FAB$C_'RFM
+        .BYTE   0, 0                    ; JOURNAL, RU_FACILITY
+        .WORD   0                       ; FOPEXT
         .ADDRESS XAB
         .ADDRESS NAM, FNA, DNA
         .BYTE   FNS, DNS
-        .BLKB   26                      ; MRS to the end
+        .WORD   MRS
+        .LONG   MRN
+        .WORD   0                       ; BLS
+        .BYTE   BKS, FSZ
+        .LONG   0, 0                    ; DEV, SDC
+        .WORD   GBC
+        .BYTE   0, 0                    ; ACMODES, RCF
+        .WORD   0, 0                    ; GBC_INITIAL, and a word
         .ENDM   $FAB
 
-        .MACRO  $RAB    FAB=0, UBF=0, USZ=0
-        .BYTE   1, 68                   ; BID, BLN
+        .MACRO  $RAB    FAB=0, UBF=0, USZ=0, RBF=0, RSZ=0, RAC=SEQ, ROP, KBF=0, KSZ=0, KRF=0, RHB=0, BKT=0, XAB=0, MBF=0, MBC=0, CTX=0, TMO=0
+        $RABDEF
+        $$BITS  $$ROP, RAB$M_, <ROP>
+        .BYTE   RAB$C_BID, RAB$C_BLN
         .WORD   0                       ; ISI
-        .LONG   0, 0, 0                 ; ROP, STS, STV
+        .LONG   $$ROP, 0, 0             ; ROP, STS, STV
         .WORD   0, 0, 0, 0              ; RFA, and a word
-        .LONG   0                       ; CTX
-        .BYTE   0, 0, 0, 0              ; two bytes, RAC, TMO
-        .WORD   USZ, 0                  ; USZ, RSZ
-        .ADDRESS UBF
-        .LONG   0, 0, 0                 ; RBF, RHB, KBF
-        .BYTE   0, 0, 0, 0              ; KSZ, KRF, MBF, MBC
-        .LONG   0                       ; BKT
-        .ADDRESS FAB
-        .LONG   0                       ; XAB
+        .LONG   CTX
+        .WORD   0                       ; ROP_2
+        .BYTE   RAB$C_'RAC, TMO
+        .WORD   USZ, RSZ
+        .ADDRESS UBF, RBF, RHB, KBF
+        .BYTE   KSZ, KRF, MBF, MBC
+        .LONG   BKT
+        .ADDRESS FAB, XAB
         .ENDM   $RAB
 
-        .MACRO  $XABPRO PRO=0, UIC=0
+        .MACRO  $XABKEY REF=0, POS=0, SIZ=0, DTP=STG, FLG, PROLOG=0, IAN=0, LAN=0, DAN=0, IFL=0, DFL=0, NUL=0, KNM=0, NXT=0
+        $XABKEYDEF
+        $$BITS  $$FLG, XAB$M_, <FLG>
+        .BYTE   XAB$C_KEY, XAB$C_KEYLEN
+        .WORD   0
+        .ADDRESS NXT
+        .BYTE   IAN, LAN, DAN, 0        ; IAN, LAN, DAN, LVL
+        .BYTE   0, 0                    ; IBS, DBS
+        .LONG   0                       ; RVB
+        .BYTE   $$FLG, XAB$C_'DTP
+$$N = 0
+        .IRP    $$I, <POS>
+$$N = $$N + 1
+        .ENDR
+        .BYTE   $$N, NUL, 0, REF        ; NSG, NUL, TKS, REF
+        .WORD   0, IFL, DFL             ; MRL, IFL, DFL
+        .IRP    $$I, <POS>
+        .WORD   $$I
+        .ENDR
+        .BLKW   8 - $$N
+        .IRP    $$I, <SIZ>
+        .BYTE   $$I
+        .ENDR
+        .BLKB   8 - $$N
+        .WORD   0                       ; to KNM
+        .ADDRESS KNM
+        .LONG   0                       ; DVB
+        .BLKB   8                       ; TYP
+        .BYTE   PROLOG
+        .BLKB   27                      ; to the end
+        .ENDM   $XABKEY
+
+        .MACRO  $XABALL AID=0, ALN=ANY, AOP, ALQ=0, BKZ=0, DEQ=0, LOC=0, VOL=0, NXT=0
+        $XABALLDEF
+        $$BITS  $$AOP, XAB$M_, <AOP>
+        .BYTE   XAB$C_ALL, XAB$C_ALLLEN
+        .WORD   0
+        .ADDRESS NXT
+        .BYTE   $$AOP, XAB$C_'ALN
+        .WORD   VOL
+        .LONG   LOC, ALQ
+        .WORD   DEQ
+        .BYTE   BKZ, AID
+        .WORD   0, 0, 0                 ; RFI
+        .WORD   0
+        .ENDM   $XABALL
+
+        .MACRO  $XABSUM NXT=0
+        .BYTE   22, 12                  ; XAB$C_SUM, XAB$C_SUMLEN
+        .WORD   0
+        .ADDRESS NXT
+        .BYTE   0, 0                    ; NOA, NOK
+        .WORD   0                       ; PVN
+        .ENDM   $XABSUM
+
+        .MACRO  $XABFHC NXT=0
+        .BYTE   29, 44                  ; XAB$C_FHC, XAB$C_FHCLEN
+        .WORD   0
+        .ADDRESS NXT
+        .BLKB   36
+        .ENDM   $XABFHC
+
+        .MACRO  $XABDAT NXT=0
+        .BYTE   18, 44                  ; XAB$C_DAT, XAB$C_DATLEN
+        .WORD   0
+        .ADDRESS NXT
+        .BLKB   36
+        .ENDM   $XABDAT
+
+        .MACRO  $XABRDT NXT=0
+        .BYTE   30, 20                  ; XAB$C_RDT, XAB$C_RDTLEN
+        .WORD   0
+        .ADDRESS NXT
+        .BLKB   12
+        .ENDM   $XABRDT
+
+        .MACRO  $XABPRO PRO=0, UIC=0, NXT=0
         .BYTE   19, 16                  ; COD, BLN
         .WORD   0
-        .LONG   0                       ; NXT
+        .ADDRESS NXT
         .WORD   PRO
         .BYTE   0, 0                    ; MTACC, PROT_OPT
         .LONG   UIC
         .ENDM   $XABPRO
-
-        .MACRO  $XABFHC NXT=0
-        .BYTE   29, 44                  ; COD, BLN
-        .WORD   0
-        .ADDRESS NXT
-        .BLKB   36                      ; RFO to the end
-        .ENDM   $XABFHC
 
         .MACRO  $NAM    ESA=0, ESS=0, RSA=0, RSS=0
         .BYTE   2, 96                   ; BID, BLN
@@ -515,38 +1139,43 @@ XAB$W_FFB = 20                          ; and the first free byte in it
         .BLKB   80                      ; RLF to the end
         .ENDM   $NAM
 
-; $OPEN, $CREATE, $CLOSE, $ERASE, $PARSE, $SEARCH FAB=fab and $CONNECT,
-; $DISCONNECT, $GET, $PUT, $READ, $WRITE RAB=rab: the RMS services, which take the
-; block's address.
+; The RMS services, which take the block's address: $OPEN, $CREATE,
+; $CLOSE, $ERASE, $PARSE, $SEARCH, $DISPLAY FAB=fab, and $CONNECT,
+; $DISCONNECT, $GET, $PUT, $FIND, $UPDATE, $DELETE, $TRUNCATE, $REWIND,
+; $FLUSH, $READ, $WRITE, $SPACE, $FREE, $RELEASE, $WAIT RAB=rab.
         .MACRO  $RMSCALL NAME, BLOCK
         PUSHAB  BLOCK
         .EXTERNAL SYS$'NAME
         CALLS   #1, G^SYS$'NAME
         .ENDM   $RMSCALL
 
-        .MACRO  $OPEN   FAB
+        .MACRO  $OPEN    FAB
         $RMSCALL OPEN, FAB
         .ENDM   $OPEN
 
-        .MACRO  $CREATE FAB
+        .MACRO  $CREATE  FAB
         $RMSCALL CREATE, FAB
         .ENDM   $CREATE
 
-        .MACRO  $CLOSE  FAB
+        .MACRO  $CLOSE   FAB
         $RMSCALL CLOSE, FAB
         .ENDM   $CLOSE
 
-        .MACRO  $ERASE  FAB
+        .MACRO  $ERASE   FAB
         $RMSCALL ERASE, FAB
         .ENDM   $ERASE
 
-        .MACRO  $PARSE  FAB
+        .MACRO  $PARSE   FAB
         $RMSCALL PARSE, FAB
         .ENDM   $PARSE
 
-        .MACRO  $SEARCH FAB
+        .MACRO  $SEARCH  FAB
         $RMSCALL SEARCH, FAB
         .ENDM   $SEARCH
+
+        .MACRO  $DISPLAY FAB
+        $RMSCALL DISPLAY, FAB
+        .ENDM   $DISPLAY
 
         .MACRO  $CONNECT RAB
         $RMSCALL CONNECT, RAB
@@ -556,21 +1185,61 @@ XAB$W_FFB = 20                          ; and the first free byte in it
         $RMSCALL DISCONNECT, RAB
         .ENDM   $DISCONNECT
 
-        .MACRO  $GET    RAB
+        .MACRO  $GET     RAB
         $RMSCALL GET, RAB
         .ENDM   $GET
 
-        .MACRO  $PUT    RAB
+        .MACRO  $PUT     RAB
         $RMSCALL PUT, RAB
         .ENDM   $PUT
 
-        .MACRO  $READ   RAB
+        .MACRO  $FIND    RAB
+        $RMSCALL FIND, RAB
+        .ENDM   $FIND
+
+        .MACRO  $UPDATE  RAB
+        $RMSCALL UPDATE, RAB
+        .ENDM   $UPDATE
+
+        .MACRO  $DELETE  RAB
+        $RMSCALL DELETE, RAB
+        .ENDM   $DELETE
+
+        .MACRO  $TRUNCATE RAB
+        $RMSCALL TRUNCATE, RAB
+        .ENDM   $TRUNCATE
+
+        .MACRO  $REWIND  RAB
+        $RMSCALL REWIND, RAB
+        .ENDM   $REWIND
+
+        .MACRO  $FLUSH   RAB
+        $RMSCALL FLUSH, RAB
+        .ENDM   $FLUSH
+
+        .MACRO  $READ    RAB
         $RMSCALL READ, RAB
         .ENDM   $READ
 
-        .MACRO  $WRITE  RAB
+        .MACRO  $WRITE   RAB
         $RMSCALL WRITE, RAB
         .ENDM   $WRITE
+
+        .MACRO  $SPACE   RAB
+        $RMSCALL SPACE, RAB
+        .ENDM   $SPACE
+
+        .MACRO  $FREE    RAB
+        $RMSCALL FREE, RAB
+        .ENDM   $FREE
+
+        .MACRO  $RELEASE RAB
+        $RMSCALL RELEASE, RAB
+        .ENDM   $RELEASE
+
+        .MACRO  $WAIT    RAB
+        $RMSCALL WAIT, RAB
+        .ENDM   $WAIT
 
 ; $PSLDEF: the processor status longword's fields and the access modes,
 ; from kernel, the innermost, out to user.
@@ -686,7 +1355,7 @@ IO$_READPBLK = 12
 IO$_READLBLK = 33
 IO$_READVBLK = 49
 IO$_READPROMPT = 55                     ; writes the prompt in p5 and p6 first
-IO$_SETMODE = 35                        ; a terminal: sets its characteristics, or enables a CTRL/C or CTRL/Y AST
+IO$_SETMODE = 35                        ; a terminal: enables a CTRL/C or CTRL/Y AST
 IO$V_CTRLYAST = 7                       ; SETMODE: the AST is CTRL/Y's
 IO$M_CTRLYAST = ^X80
 IO$V_CTRLCAST = 8                       ; SETMODE: the AST is CTRL/C's
@@ -701,7 +1370,7 @@ IO$_SETCHAR = 26                        ; BGA0: sets the interface's address
 IO$_SENSECHAR = 27                      ; BGA0: senses it
 IO$_ACCESS = 50                         ; a network unit: connects, or accepts
 IO$_DEACCESS = 52                       ; a network unit: closes
-IO$_SENSEMODE = 39                      ; a terminal: its characteristics; a network unit: its number and channels
+IO$_SENSEMODE = 39                      ; a network unit: its number and channels
 IO$V_BIND = 10                          ; a network unit's SETMODE: binds a local address
 IO$M_BIND = ^X400
 IO$V_LISTEN = 11                        ; a network unit's SETMODE: listens
