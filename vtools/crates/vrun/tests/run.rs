@@ -237,3 +237,97 @@ fn hung_image_times_out() {
     assert_eq!(out.status.code(), Some(1));
     assert!(stderr(&out).contains("%VRUN-F-TIMEOUT"), "{}", stderr(&out));
 }
+
+/// Copies IN.TXT to OUT.TXT in --files' directory, five bytes at a time,
+/// then checks the errors: a name outside it, a missing file, a bad channel.
+const COPY: &str = r#"
+        .TITLE  COPY    Copies a host file through the file monitor calls
+        .LIBRARY "vrun.mlb"
+
+        .MACRO  CHECK   STATUS, ?OK             ; exits with x0 unless STATUS
+        cmp     x0, #STATUS
+        b.eq    OK
+        svc     #1
+OK:
+        .ENDM   CHECK
+
+        .PSECT  $CODE$
+START::
+        adr     x19, in
+        $FOPEN  x19, #6
+        CHECK   1
+        mov     x20, x1
+        adr     x19, out
+        $FOPEN  x19, #7, #1
+        CHECK   1
+        mov     x21, x1
+        adrp    x19, buffer
+        add     x19, x19, #:lo12:buffer
+copy:   $FREAD  x20, x19, #5
+        cmp     x0, #^X870              ; SS$_ENDOFFILE
+        b.eq    done
+        CHECK   1
+        mov     x22, x1
+        $FWRITE x21, x19, x22
+        CHECK   1
+        b       copy
+done:   $FCLOSE x20
+        CHECK   1
+        $FCLOSE x21
+        CHECK   1
+        adr     x19, up
+        $FOPEN  x19, #9
+        CHECK   ^X24                    ; SS$_NOPRIV
+        adr     x19, missing
+        $FOPEN  x19, #7
+        CHECK   ^X910                   ; SS$_NOSUCHFILE
+        $FREAD  x20, x19, #1            ; closed
+        CHECK   ^X13C                   ; SS$_IVCHAN
+        $EXIT
+
+        .PSECT  $LITERAL$
+in:     .ASCII  "IN.TXT"
+out:    .ASCII  "OUT.TXT"
+up:     .ASCII  "../IN.TXT"
+missing: .ASCII "MISSING"
+
+        .PSECT  $BSS$
+buffer: .BLKB   5
+
+        .END    START
+"#;
+
+#[test]
+fn copies_a_host_file() {
+    let lib = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../lib");
+    let opts = vasm::Options {
+        name: "COPY".into(),
+        include: vec![lib],
+        ..Default::default()
+    };
+    let records = vasm::assemble(COPY, &opts)
+        .unwrap_or_else(|d| panic!("{:?}", d.iter().map(|d| &d.msg).collect::<Vec<_>>()))
+        .records;
+    let objects = [("copy.mar".to_string(), vms_obj::obj::write(&records))];
+    let link = vlink::Options {
+        base: BASE,
+        name: "COPY".into(),
+        transfer: None,
+        link_time: 0,
+        relocatable: false,
+    };
+    let image = vlink::link(&objects, &link).unwrap().image;
+
+    let dir = std::path::Path::new(env!("CARGO_TARGET_TMPDIR")).join("files");
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let text: Vec<u8> = (0..=255).cycle().take(1000).collect();
+    std::fs::write(dir.join("IN.TXT"), &text).unwrap();
+    let out = vrun_with(&image, &["--files", dir.to_str().unwrap()], &[]);
+    assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
+    assert_eq!(std::fs::read(dir.join("OUT.TXT")).unwrap(), text);
+
+    // Without --files, the image may open nothing.
+    let out = vrun(&image, &[]);
+    assert_eq!(out.status.code(), Some(0x24), "{}", stderr(&out));
+}

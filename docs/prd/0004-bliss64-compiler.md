@@ -302,11 +302,11 @@ module from the system disk, and its OBJ must equal the one the host made.
   BLISS-64 manual; the kit's release notes (chapter 2, differences from
   BLISS-32) and the compiler's own tables are the sources, and what they
   leave open is listed there for the oracle to probe.
-- **`vrun` file I/O.** Monitor calls the stub forwards to the host over a
-  channel `vrun` serves, or input files preloaded into guest memory and
-  output read back from a shared memory file. The first needs a host
-  channel QEMU offers under HVF; the second needs every file named up
-  front, which `REQUIRE` makes hard.
+- **`vrun` file I/O.** Settled: the stub forwards the calls to `vrun` over
+  the console UART, which QEMU offers under TCG and HVF alike, so no file
+  has to be named up front (`vtools/docs/runner-abi.md`). It costs a QEMU
+  exit per byte under HVF; a faster channel can come if compile times show
+  it matters.
 - **Precompiled libraries.** `LIBRARY` is how BLISS avoids reparsing
   STARLET. Whether `.L64` is a serialized symbol table or a cached
   expansion, and whether it's needed at all before compile times hurt.

@@ -36,3 +36,39 @@ AFTER:
         .MACRO  $DUMP
         svc     #3
         .ENDM   $DUMP
+
+; $FOPEN ADDRESS, LENGTH, MODE=#0: opens the host file named by LENGTH bytes
+; at ADDRESS, in the directory vrun --files gives, to read (#0) or to write
+; (#1, created or emptied). R0 (x0) is the status, x1 the channel. Uses x0-x2,
+; so LENGTH can't be x0 and MODE neither x0 nor x1.
+        .MACRO  $FOPEN  ADDRESS, LENGTH, MODE=#0
+        mov     x0, ADDRESS
+        mov     x1, LENGTH
+        mov     x2, MODE
+        svc     #4
+        .ENDM   $FOPEN
+
+; $FREAD CHANNEL, ADDRESS, LENGTH: reads at most LENGTH bytes from CHANNEL
+; into ADDRESS. x0 is the status, SS$_ENDOFFILE at the end, x1 the count.
+; Uses x0-x2, in that order, as $FOPEN.
+        .MACRO  $FREAD  CHANNEL, ADDRESS, LENGTH
+        mov     x0, CHANNEL
+        mov     x1, ADDRESS
+        mov     x2, LENGTH
+        svc     #5
+        .ENDM   $FREAD
+
+; $FWRITE CHANNEL, ADDRESS, LENGTH: writes LENGTH bytes from ADDRESS to
+; CHANNEL. x0 is the status. Uses x0-x2, as $FREAD.
+        .MACRO  $FWRITE CHANNEL, ADDRESS, LENGTH
+        mov     x0, CHANNEL
+        mov     x1, ADDRESS
+        mov     x2, LENGTH
+        svc     #6
+        .ENDM   $FWRITE
+
+; $FCLOSE CHANNEL: closes CHANNEL. x0 is the status.
+        .MACRO  $FCLOSE CHANNEL
+        mov     x0, CHANNEL
+        svc     #7
+        .ENDM   $FCLOSE

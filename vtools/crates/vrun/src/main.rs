@@ -5,7 +5,7 @@ mod layout;
 mod plan;
 
 use std::io::{BufRead, BufReader, Read, Write};
-use std::path::PathBuf;
+use std::path::{Component, Path, PathBuf};
 use std::process::{Command, ExitCode, Stdio};
 use std::time::{Duration, Instant};
 use std::{env, fs, io, process, thread};
@@ -14,14 +14,21 @@ use vms_obj::exe::{Image, Section};
 
 use crate::layout::LOAD_BASE;
 
-const USAGE: &str = "usage: vrun [--hvf] [--gdb] [--map FILE] [--base ADDRESS] [--timeout SECONDS] \
-                     [--verbose] IMAGE [ARGUMENTS...]";
+const USAGE: &str = "usage: vrun [--hvf] [--gdb] [--map FILE] [--base ADDRESS] [--files DIR] \
+                     [--timeout SECONDS] [--verbose] IMAGE [ARGUMENTS...]";
 const STUB: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/stub.bin"));
 
 /// VMS condition values for image faults.
 const SS_ACCVIO: u32 = 0x0c;
 const SS_ABORT: u32 = 0x2c;
 const SS_OPCDEC: u32 = 0x43c;
+/// And for the file monitor calls.
+const SS_NORMAL: u64 = 1;
+const SS_BADPARAM: u64 = 0x14;
+const SS_NOPRIV: u64 = 0x24;
+const SS_IVCHAN: u64 = 0x13c;
+const SS_ENDOFFILE: u64 = 0x870;
+const SS_NOSUCHFILE: u64 = 0x910;
 
 struct Options {
     hvf: bool,
@@ -30,6 +37,8 @@ struct Options {
     map: Option<PathBuf>,
     /// Where to move a relocatable image to, instead of its link address.
     base: Option<u64>,
+    /// The directory the image's files are in, if it may open any.
+    files: Option<PathBuf>,
     timeout: Option<Duration>,
     verbose: bool,
     image: PathBuf,
@@ -136,12 +145,14 @@ fn run() -> Result<u8, String> {
     }
 
     let mut child = qemu
-        .stdin(Stdio::null())
+        .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .spawn()
         .map_err(|e| format!("QEMU, cannot start qemu-system-aarch64: {e}"))?;
     let console = child.stdout.take().unwrap();
-    let relay = thread::spawn(move || relay(console, io::stdout()));
+    let replies = child.stdin.take().unwrap();
+    let files = Files::new(opt.files.clone());
+    let relay = thread::spawn(move || relay(console, io::stdout(), replies, files));
 
     let deadline = opt.timeout.filter(|_| !opt.gdb).map(|t| Instant::now() + t);
     loop {
@@ -199,6 +210,7 @@ fn options(mut args: impl Iterator<Item = String>) -> Result<Options, String> {
         gdb: false,
         map: None,
         base: None,
+        files: None,
         timeout: Some(Duration::from_secs(30)),
         verbose: false,
         image: PathBuf::new(),
@@ -211,6 +223,7 @@ fn options(mut args: impl Iterator<Item = String>) -> Result<Options, String> {
             "--gdb" => opt.gdb = true,
             "--verbose" => opt.verbose = true,
             "--map" => opt.map = Some(args.next().ok_or_else(usage)?.into()),
+            "--files" => opt.files = Some(args.next().ok_or_else(usage)?.into()),
             "--base" => opt.base = Some(args.next().and_then(|a| number(&a)).ok_or_else(usage)?),
             "--timeout" => {
                 let secs: u64 = args.next().and_then(|s| s.parse().ok()).ok_or_else(usage)?;
@@ -268,7 +281,13 @@ fn relocate(image: &mut Image, symbols: &mut [(u64, String)], base: u64) -> Resu
 /// Copies the guest console to `output` and returns the stub's "!vrun"
 /// report, which it leaves out. The report may follow the image's output on
 /// the same line; everything before it is relayed exactly. Binary-safe.
-fn relay(console: impl Read, mut output: impl Write) -> Option<Outcome> {
+/// Serves the stub's file requests on the way, answering on `replies`.
+fn relay(
+    console: impl Read,
+    mut output: impl Write,
+    mut replies: impl Write,
+    mut files: Files,
+) -> Option<Outcome> {
     const MARK: &[u8] = b"!vrun ";
     let mut console = BufReader::new(console);
     let mut line = Vec::new();
@@ -282,9 +301,138 @@ fn relay(console: impl Read, mut output: impl Write) -> Option<Outcome> {
         let mark = line.windows(MARK.len()).position(|w| w == MARK);
         let text = &line[..mark.unwrap_or(line.len())];
         let _ = output.write_all(text).and_then(|()| output.flush());
-        if let Some(at) = mark {
-            outcome = parse_report(&line[at + MARK.len()..]);
+        let Some(at) = mark else { continue };
+        let report = &line[at + MARK.len()..];
+        match files.serve(report, &mut console) {
+            Some(reply) => {
+                let _ = replies.write_all(&reply).and_then(|()| replies.flush());
+            }
+            None => outcome = parse_report(report),
         }
+    }
+}
+
+/// The host files an image opens with the file monitor calls, all in one
+/// directory. Channel n is `open[n - 1]`.
+struct Files {
+    dir: Option<PathBuf>,
+    open: Vec<Option<fs::File>>,
+}
+
+impl Files {
+    fn new(dir: Option<PathBuf>) -> Self {
+        Self {
+            dir,
+            open: Vec::new(),
+        }
+    }
+
+    /// The reply to a file request: the status, a value and, for read, the
+    /// data. Reads what open and write send after the request from
+    /// `console`. None if `request` isn't a file request.
+    fn serve(&mut self, request: &[u8], console: &mut impl Read) -> Option<Vec<u8>> {
+        let request = std::str::from_utf8(request).ok()?;
+        let mut words = request.split_ascii_whitespace();
+        let kind = words.next()?;
+        let mut next = || u64::from_str_radix(words.next()?, 16).ok();
+        let (a, b) = (next()?, next()?);
+        let mut bytes = |n: u64| {
+            let mut buf = vec![0; n as usize];
+            console.read_exact(&mut buf).ok().map(|()| buf)
+        };
+        let (status, value, data) = match kind {
+            "open" => {
+                let (status, channel) = self.open(&bytes(b)?, a);
+                (status, channel, Vec::new())
+            }
+            "read" => {
+                let mut data = Vec::new();
+                match self.file(a).map(|f| (&*f).take(b).read_to_end(&mut data)) {
+                    Ok(Ok(0)) if b > 0 => (SS_ENDOFFILE, 0, data),
+                    Ok(Ok(n)) => (SS_NORMAL, n as u64, data),
+                    Ok(Err(e)) => (io_status(&e), 0, Vec::new()),
+                    Err(status) => (status, 0, Vec::new()),
+                }
+            }
+            "write" => {
+                let data = bytes(b)?;
+                let status = match self.file(a) {
+                    Ok(f) => f
+                        .write_all(&data)
+                        .map_or_else(|e| io_status(&e), |()| SS_NORMAL),
+                    Err(status) => status,
+                };
+                (status, 0, Vec::new())
+            }
+            "close" => {
+                let status = match self.file(a) {
+                    Ok(_) => {
+                        self.open[a as usize - 1] = None;
+                        SS_NORMAL
+                    }
+                    Err(status) => status,
+                };
+                (status, 0, Vec::new())
+            }
+            _ => return None,
+        };
+        let mut reply = Vec::new();
+        reply.extend(status.to_le_bytes());
+        reply.extend(value.to_le_bytes());
+        reply.extend(data);
+        Some(reply)
+    }
+
+    /// Opens `name` in the directory, to read (mode 0) or to write (1),
+    /// and returns the status and the channel. The name must be relative and
+    /// stay in the directory.
+    fn open(&mut self, name: &[u8], mode: u64) -> (u64, u64) {
+        let Some(dir) = &self.dir else {
+            return (SS_NOPRIV, 0);
+        };
+        let Ok(name) = std::str::from_utf8(name) else {
+            return (SS_BADPARAM, 0);
+        };
+        let name = Path::new(name);
+        if name.as_os_str().is_empty()
+            || !name.components().all(|c| matches!(c, Component::Normal(_)))
+        {
+            return (SS_NOPRIV, 0);
+        }
+        let file = match mode {
+            0 => fs::File::open(dir.join(name)),
+            1 => fs::File::create(dir.join(name)),
+            _ => return (SS_BADPARAM, 0),
+        };
+        match file {
+            Ok(f) => {
+                let free = self.open.iter().position(Option::is_none);
+                let n = free.unwrap_or(self.open.len());
+                if n == self.open.len() {
+                    self.open.push(None);
+                }
+                self.open[n] = Some(f);
+                (SS_NORMAL, n as u64 + 1)
+            }
+            Err(e) => (io_status(&e), 0),
+        }
+    }
+
+    fn file(&mut self, channel: u64) -> Result<&mut fs::File, u64> {
+        let n = channel.checked_sub(1).ok_or(SS_IVCHAN)?;
+        self.open
+            .get_mut(n as usize)
+            .and_then(Option::as_mut)
+            .ok_or(SS_IVCHAN)
+    }
+}
+
+/// The VMS status for a host I/O error.
+fn io_status(e: &io::Error) -> u64 {
+    match e.kind() {
+        io::ErrorKind::NotFound => SS_NOSUCHFILE,
+        io::ErrorKind::PermissionDenied => SS_NOPRIV,
+        _ => u64::from(SS_ABORT),
     }
 }
 
@@ -435,7 +583,9 @@ mod tests {
     fn reports() {
         let mut output = Vec::new();
         let console = b"hello\nno newline!vrun exit 000000000000002c\n";
-        assert_eq!(relay(&console[..], &mut output), Some(Outcome::Exit(0x2c)));
+        let none = Files::new(None);
+        let got = relay(&console[..], &mut output, io::sink(), none);
+        assert_eq!(got, Some(Outcome::Exit(0x2c)));
         assert_eq!(output, b"hello\nno newline");
         let fault = parse_report(b"fault 0000000092000006 0000000000010000 0000000000000008\n");
         assert_eq!(
