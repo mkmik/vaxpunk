@@ -148,7 +148,8 @@ FRM$Q_FP = 0                            ; the caller's FP, 0 past the last frame
 FRM$Q_PC = 8                            ; the return address
 FRM$Q_HANDLER = 16                      ; the condition handler, 0 if none
 FRM$Q_FDSC = 24                         ; the frame descriptor's address
-FRM$Q_AP = 32                           ; the caller's AP
+FRM$L_ARGS = 32                         ; MACRO-32's argument list, if it homes one
+FRM$K_LENGTH = 32                       ; the part every frame has
         .ENDM   $FRMDEF
 
 ; $INTSTKDEF: the frame the PAL pushes on the stack of the mode it delivers

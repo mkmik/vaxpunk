@@ -21,7 +21,7 @@ fn lines(mn: &str, operands: &str) -> Vec<String> {
 #[test]
 fn near() {
     assert!(lines("CALLS", "#0, START").contains(&"bl START".to_string()));
-    assert!(lines("JSB", "PUT").contains(&"b PUT".to_string()));
+    assert!(lines("JSB", "PUT").contains(&"bl PUT".to_string()));
 }
 
 /// Whether `code` takes the address of `sym` with `adrp`, ±4 GB, and then
@@ -34,13 +34,13 @@ fn far(code: &[String], sym: &str, op: &str) -> bool {
 
 #[test]
 fn general() {
-    assert!(far(&lines("CALLS", "#1, G^SYS$EXIT"), "SYS$EXIT", "blr"));
-    assert!(far(&lines("JSB", "G^EXE$OUTCHAR"), "EXE$OUTCHAR", "br"));
+    assert!(far(&lines("CALLS", "#0, G^SYS$EXIT"), "SYS$EXIT", "blr"));
+    assert!(far(&lines("JSB", "G^EXE$OUTCHAR"), "EXE$OUTCHAR", "blr"));
     assert!(far(&lines("JMP", "G^EXE$DELSELF"), "EXE$DELSELF", "br"));
 }
 
 /// `.ENTRY` builds DESIGN-0004's frame and its descriptor, which says what
-/// it saves: x18, and here R2 and R3 (x19 and x20), at 40 in 64 bytes.
+/// it saves: x18, and here R2 and R3 (x19 and x20), at 32 in 64 bytes.
 #[test]
 fn entry_frame() {
     let mut m = vmacro::Macro32::default();
@@ -53,12 +53,12 @@ fn entry_frame() {
         .unwrap();
     let code: Vec<String> = code.iter().map(|l| l.trim().to_string()).collect();
     for line in [
-        "FDSC$$0:\t.LONG 0, 7, 40, 64",
+        "FDSC$$0:\t.LONG 0, 7, 32, 64",
         "stp x29, x30, [sp, #-64]!",
         "stp xzr, x16, [sp, #16]",
         "mov x29, sp",
-        "stp x18, x19, [x29, #40]",
-        "str x20, [x29, #56]",
+        "stp x18, x19, [x29, #32]",
+        "str x20, [x29, #48]",
     ] {
         assert!(code.contains(&line.to_string()), "{line}: {code:?}");
     }

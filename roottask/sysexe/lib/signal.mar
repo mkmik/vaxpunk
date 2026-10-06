@@ -55,23 +55,25 @@
 ; signal arrays are the arguments, then the PC LIB$SIGNAL returns to and
 ; the PSL, and EXE$SIGNAL looks for a handler from the caller's frame,
 ; depth 0, out. Returns once one continues, with R0 and R1 from the
-; mechanism array, which has the caller's R0 and R1 at first. If none
-; takes it, EXE$CATCHALL writes its message, and exits if it is severe,
-; or returns.
-        .ENTRY  LIB$SIGNAL, ^M<R2, R3, R4, R5, R6, R7, R8>
+; mechanism array, which has R0 and R1 as LIB$SIGNAL got them at first:
+; its first two arguments, by the calling standard. If none takes it,
+; EXE$CATCHALL writes its message, and exits if it is severe, or returns.
+LIB$SIGNAL::
+        .CALL_ENTRY MAX_ARGS=255
         CLRL    R2
         BRB     SIGNAL
 
 ; LIB$STOP condition [,arguments...]: signals condition as LIB$SIGNAL
 ; does, made severe, and then, unless a handler unwinds, EXE$CATCHALL
 ; writes its message and exits. Doesn't return.
-        .ENTRY  LIB$STOP, ^M<R2, R3, R4, R5, R6, R7, R8>
+LIB$STOP::
+        .CALL_ENTRY MAX_ARGS=255
         MOVL    #1, R2
 ; SIGNAL: R2 = 1 for LIB$STOP, 0 for LIB$SIGNAL, whose frames are alike.
 SIGNAL: .GLOBAL_LABEL                   ; LIB$SIGNAL's too
         SUBL2   #CHF$S_MCH, SP          ; the mechanism array
         MOVL    SP, R3
-        EVAX_STQ R0, CHF$IH_MCH_RETVAL(R3) ; the caller's R0 and R1
+        EVAX_STQ R0, CHF$IH_MCH_RETVAL(R3) ; R0 and R1 as they came
         EVAX_STQ R1, CHF$IH_MCH_RETVAL2(R3)
         MOVL    #CHF$S_MCH/8-1, CHF$IS_MCH_ARGS(R3)
         CLRL    CHF$IS_MCH_FLAGS(R3)

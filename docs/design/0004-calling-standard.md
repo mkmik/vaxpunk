@@ -299,7 +299,7 @@ Alpha's (`vtools/docs/amacro.md`).
 | --- | --- |
 | R0, R1 | x0, x1 |
 | R2-R11 | x19-x28 |
-| AP | the argument list at `32(FP)`; x12 if the routine writes AP |
+| AP | the argument list at `32(FP)`, in x12 where the routine reads it |
 | FP | x29 |
 | SP | x18 |
 
@@ -332,7 +332,8 @@ sign-extends from bit 31.
   as an address, indexes it or offsets it by a variable (AMACRO's homing
   triggers), or with `home_args=TRUE`. A JSB routine that reads AP reads
   its caller's list, which the caller must have filled; `vmacro` says so.
-  `home_args` and `quad_args` exclude each other.
+  `home_args` and `quad_args` exclude each other. Code that writes AP is an
+  error.
 - **Calls.** `CALLS #n` loads the n longwords pushed, sign-extended, into
   x0-x7 and the stack, pops them, sets x9 to n, sets `sp` to x18 rounded
   down to 16, and calls. `CALLG` does the same from a list in memory.

@@ -588,7 +588,7 @@ IMG$ACTIVATE::
         BGTRU   30$
         MOVL    R11, PCB$L_FREP0VA(R4)
         BRB     35$
-30$:    TSTL    (SP)                    ; a command interpreter
+30$:    TSTL    8(SP)                   ; a command interpreter? R5's copy
         BEQL    95$
         CMPL    R9, #VA$C_CLI
         BLSSU   95$

@@ -70,6 +70,7 @@ DCL$STATUS::
         MOVAB   GMBUF, R1
         MOVZWL  GMLEN, R2
         BSBW    DCL$ADD
+        BRB     DCL$SAY                 ; a tail call, not a fall-through
 ; DCL$SAY: writes the message in DCL$MSG, and empties it. Uses R0 and
 ; R1.
 DCL$SAY::

@@ -212,8 +212,8 @@ pub enum Place {
 }
 
 /// Scratch registers, free for any instruction to use, taken from the end.
-/// CALLS and CALLG pass the argument list in x13 once their operands are
-/// read, so it goes last. x2-x7 are left for PAL calls' arguments.
+/// CALLS and CALLG keep x8 and x13 for themselves, so they go last. x2-x7
+/// are left for PAL calls' arguments.
 const POOL: [u8; 9] = [13, 9, 8, 11, 10, 17, 16, 15, 14];
 
 /// Code for one VAX instruction.
@@ -303,6 +303,11 @@ impl<'a> Gen<'a> {
             .pop()
             .ok_or("too many operands in memory for vmacro")?;
         Ok(format!("x{n}"))
+    }
+
+    /// Keeps scratch register x`n` out of this instruction's operands.
+    pub fn reserve(&mut self, n: u8) {
+        self.free.retain(|&r| r != n);
     }
 
     pub fn is_tmp(r: &str) -> bool {

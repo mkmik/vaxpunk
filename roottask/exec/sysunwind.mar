@@ -62,8 +62,7 @@ IMG_X18 = 0                             ; x18-x28: VAX SP, then R2-R11
 IMG_FP = 88
 IMG_SP = 96
 IMG_PC = 104
-IMG_AP = 112
-IMG_LENGTH = 128
+IMG_LENGTH = 112
 
         .PSECT  $CODE$
 
@@ -198,7 +197,7 @@ EXE$SRCHANDLER::
         EXTZV   #PSL$V_CURMOD, #2, R0, R8 ; the mode the frames are in
 SEARCH: TSTL    R2
         BEQL    NONE
-        IFNORD  #FRM$Q_AP, (R2), NONE, MODE=R8
+        IFNORD  #FRM$K_LENGTH, (R2), NONE, MODE=R8
         BSBW    FHANDLER
         TSTL    R1
         BEQL    OUTWARD
@@ -226,8 +225,8 @@ NONE:   MOVL    #SS$_RESIGNAL, R0
 ; says, as its RET would, having removed every frame from this one out to
 ; it, each one's handler called first with SS$_UNWIND, the frames' first:
 ; x18 and R2-R11 as each of them saved them, the outermost's last, so as
-; they were in its caller; R0 and R1 from mchargs; AP, FP and SP from the
-; frame. Goes on at UNW_PC, or else where the frame returns to.
+; they were in its caller; R0 and R1 from mchargs; FP and SP from the
+; frame, and AP from FP. Goes on at UNW_PC, or else where the frame returns to.
 UNWIND: SUBL2   #IMG_LENGTH, SP
         MOVL    SP, R9                  ; what it goes on with
         PUSHL   #SS$_UNWIND             ; the handlers' signal array,
@@ -261,7 +260,6 @@ UNWIND: SUBL2   #IMG_LENGTH, SP
         ADDL3   FDSC$L_SIZE(R4), R2, IMG_SP(R9)
         CLRL    IMG_SP+4(R9)
         MOVQ    FRM$Q_FP(R2), IMG_FP(R9)
-        MOVQ    FRM$Q_AP(R2), IMG_AP(R9)
         MOVQ    FRM$Q_PC(R2), IMG_PC(R9)
         MOVL    UNW_PC(FP), R0
         BEQL    60$
@@ -277,8 +275,8 @@ UNWIND: SUBL2   #IMG_LENGTH, SP
         ldp     x24, x25, [x16, #IMG_X18+48]
         ldp     x26, x27, [x16, #IMG_X18+64]
         ldr     x28, [x16, #IMG_X18+80]
-        ldr     x12, [x16, #IMG_AP]
         ldr     x29, [x16, #IMG_FP]
+        add     x12, x29, #32           ; AP, its argument list
         ldr     x17, [x16, #IMG_SP]
         mov     sp, x17
         ldr     x17, [x16, #IMG_PC]
@@ -310,7 +308,7 @@ FHANDLER:
         EXTZV   #PSL$V_CURMOD, #2, R0, R4
         MOVAB   HANDLER, R1
         MOVL    FP, R2
-10$:    IFNORD  #FRM$Q_AP, (R2), 80$, MODE=R4
+10$:    IFNORD  #FRM$K_LENGTH, (R2), 80$, MODE=R4
         CMPL    FRM$Q_PC(R2), R1
         BEQL    20$                     ; R2 is the handler's frame
         MOVL    FRM$Q_FP(R2), R0
@@ -334,7 +332,7 @@ FHANDLER:
         BRB     45$
 40$:    MOVL    FRM$Q_FP(R0), R0
         BEQL    86$
-        IFNORD  #FRM$Q_AP, (R0), 86$, MODE=R4
+        IFNORD  #FRM$K_LENGTH, (R0), 86$, MODE=R4
 45$:    SOBGTR  R3, 40$
         MOVL    R0, UNW_LAST(R2)
         CLRL    UNW_PC(R2)

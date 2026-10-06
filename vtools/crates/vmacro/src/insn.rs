@@ -217,6 +217,75 @@ pub fn arity(op: Op) -> usize {
     }
 }
 
+/// A call's `n` arguments, from the longwords pushed at VAX SP, where
+/// DESIGN-0004 puts them, sign-extended: the first eight in x0-x7, the
+/// rest on the stack, which `sp` points to, below VAX SP rounded down to
+/// 16. x13 is left alone.
+fn args(g: &mut Gen, n: usize) {
+    let stack = n.saturating_sub(8);
+    if stack == 0 {
+        g.emit(format!("and sp, x{SP}, #0xfffffffffffffff0"));
+    } else {
+        g.emit(format!("and x16, x{SP}, #0xfffffffffffffff0"));
+        g.emit(format!(
+            "sub sp, x16, #{}",
+            (8 * stack).next_multiple_of(16)
+        ));
+        g.emit(format!("add x16, x{SP}, #32"));
+        g.emit("mov x17, sp");
+        g.emit(format!("mov x15, #{stack}"));
+        let again = g.label();
+        g.place_label(&again);
+        g.emit("ldrsw x14, [x16], #4");
+        g.emit("str x14, [x17], #8");
+        g.emit("subs x15, x15, #1");
+        g.emit(format!("b.ne {again}"));
+    }
+    for i in (0..n.min(8)).step_by(2) {
+        if i + 1 < n {
+            g.emit(format!("ldpsw x{i}, x{}, [x{SP}, #{}]", i + 1, 4 * i));
+        } else {
+            g.emit(format!("ldrsw x{i}, [x{SP}, #{}]", 4 * i));
+        }
+    }
+}
+
+/// The same, for x9 arguments from the list at x8, known when it runs:
+/// those past the eighth copied, then a branch into the loads of x7 down
+/// to x0 that loads just the ones there are, so that it reads no further
+/// than the list. x13 is left alone.
+fn list_args(g: &mut Gen) {
+    let (regs, low, done) = (g.label(), g.label(), g.label());
+    g.emit(format!("and x16, x{SP}, #0xfffffffffffffff0"));
+    g.emit("subs x15, x9, #8");
+    g.emit(format!("b.ls {low}"));
+    g.emit("add x14, x15, #1");
+    g.emit("and x14, x14, #0xfffffffffffffffe");
+    g.emit("sub sp, x16, x14, lsl #3");
+    g.emit("add x16, x8, #32");
+    g.emit("mov x17, sp");
+    let again = g.label();
+    g.place_label(&again);
+    g.emit("ldrsw x14, [x16], #4");
+    g.emit("str x14, [x17], #8");
+    g.emit("subs x15, x15, #1");
+    g.emit(format!("b.ne {again}"));
+    g.emit(format!("b {regs}"));
+    g.place_label(&low);
+    g.emit("mov sp, x16");
+    g.place_label(&regs);
+    g.emit("mov x15, #8");
+    g.emit("cmp x9, x15");
+    g.emit("csel x15, x9, x15, lo");
+    g.emit(format!("adr x16, {done}"));
+    g.emit("sub x16, x16, x15, lsl #2");
+    g.emit("br x16");
+    for i in (0..8).rev() {
+        g.emit(format!("ldrsw x{i}, [x8, #{}]", 4 * i));
+    }
+    g.place_label(&done);
+}
+
 /// A result's flags for a branch: N and Z from its sign and zero, V and C
 /// clear.
 fn test(v: &str, size: Size) -> Flags {
@@ -483,73 +552,87 @@ pub fn compile(
             Ok(None)
         }
         Op::Jsb => {
-            // As on the VAX, the return address goes on the stack.
-            let back = g.label();
-            let a = match &ops[0] {
-                Opnd::Mem(Mode::Rel(e), None) => format!("b {e}"),
-                o => format!("br {}", g.address(o, size)?),
+            // A native call, as AMACRO made it: the return address is in
+            // x30, not on the VAX stack.
+            let call = match &ops[0] {
+                Opnd::Mem(Mode::Rel(e), None) => format!("bl {e}"),
+                o => format!("blr {}", g.address(o, size)?),
             };
-            let t = g.tmp()?;
-            g.emit(format!("adr {t}, {back}"));
-            g.emit(format!("str {t}, [x{SP}, #-8]!"));
-            g.emit(a);
-            g.place_label(&back);
+            g.emit(format!("and sp, x{SP}, #0xfffffffffffffff0"));
+            g.emit(call);
             live(true)
         }
         Op::Rsb => {
             match exit {
-                crate::Exit::Jsb(saved) => g.out.extend(crate::jsb_epilogue(saved)),
+                crate::Exit::Jsb(saved, lr) => g.out.extend(crate::jsb_epilogue(saved, *lr)),
                 crate::Exit::Call(_) => return Err("RSB in a CALL routine".into()),
                 crate::Exit::None => {}
             }
-            let t = g.tmp()?;
-            g.emit(format!("ldr {t}, [x{SP}], #8"));
-            g.emit(format!("br {t}"));
+            g.emit("ret");
             Ok(None)
         }
         Op::Calls | Op::Callg => {
+            // x8 and x13 carry the list and the target past the operands.
+            g.reserve(8);
+            g.reserve(13);
             let calls = op == Op::Calls;
-            let (n, arg) = if calls {
-                let n = match &ops[0] {
-                    Opnd::Imm(e) => g.constant(e),
-                    _ => None,
-                };
-                (n, g.read(&ops[0], Size::L, Ext::Any)?)
-            } else {
-                (None, g.address(&ops[0], Size::B)?)
+            let n = match &ops[0] {
+                Opnd::Imm(e) if calls => g.constant(e).filter(|n| (0..=255).contains(n)),
+                _ => None,
+            };
+            let (count, list) = match n {
+                Some(_) => (None, None),
+                None if calls => (Some(g.read(&ops[0], Size::L, Ext::Any)?), None),
+                None => (None, Some(g.address(&ops[0], Size::B)?)),
             };
             let call = match &ops[1] {
                 Opnd::Mem(Mode::Rel(e), None) => format!("bl {e}"),
-                o => format!("blr {}", g.address(o, Size::B)?),
-            };
-            if calls {
-                g.emit(format!("str {arg}, [x{SP}, #-4]!"));
-                g.emit(format!("mov x13, x{SP}"));
-            } else {
-                g.emit(format!("mov x13, {arg}"));
-            }
-            // The callee's frame goes below the argument list, 16-byte aligned.
-            g.emit(format!("and sp, x{SP}, #0xfffffffffffffff0"));
-            g.emit(call);
-            if calls {
-                match n {
-                    Some(n) if (0..=255).contains(&n) => {
-                        g.emit(format!("add x{SP}, x{SP}, #{}", 4 * (n + 1)));
+                o => {
+                    let t = g.address(o, Size::B)?;
+                    if t != "x13" {
+                        g.emit(format!("mov x13, {t}"));
                     }
-                    _ => {
-                        let t = g.tmp()?;
-                        g.emit(format!("ldr {}, [x{SP}], #4", w(&t)));
-                        g.emit(format!("add x{SP}, x{SP}, {t}, lsl #2"));
-                    }
+                    "blr x13".into()
                 }
+            };
+            match (n, count, list) {
+                (Some(n), ..) => {
+                    args(g, n as usize);
+                    if n > 0 {
+                        g.emit(format!("add x{SP}, x{SP}, #{}", 4 * n));
+                    }
+                    g.emit(format!("mov x9, #{n}"));
+                }
+                (None, Some(count), _) => {
+                    g.emit(format!("and x9, {}, #255", x(&count)));
+                    g.emit(format!("mov x8, x{SP}"));
+                    list_args(g);
+                    g.emit(format!("add x{SP}, x{SP}, x9, lsl #2"));
+                }
+                (None, None, Some(list)) => {
+                    // A list at 0, which a VAX callee that doesn't read AP
+                    // never noticed, passes no arguments.
+                    if list != "x8" {
+                        g.emit(format!("mov x8, {list}"));
+                    }
+                    let none = g.label();
+                    g.emit("mov x9, #0");
+                    g.emit(format!("cbz x8, {none}"));
+                    g.emit("ldr w9, [x8], #4");
+                    g.emit("and x9, x9, #255");
+                    g.place_label(&none);
+                    list_args(g);
+                }
+                _ => unreachable!(),
             }
+            g.emit(call);
             live(true)
         }
         Op::Ret => {
-            let crate::Exit::Call(saved) = exit else {
+            let crate::Exit::Call(frame) = exit else {
                 return Err("RET outside a CALL routine (.CALL_ENTRY or .ENTRY)".into());
             };
-            g.out.extend(crate::epilogue(saved));
+            g.out.extend(crate::epilogue(frame));
             Ok(None)
         }
         Op::Pushr | Op::Popr => {

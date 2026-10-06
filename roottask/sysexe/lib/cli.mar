@@ -1547,6 +1547,7 @@ REPORT:
         MOVZBL  (R5)+, R2
         MOVL    R5, R1
         BSBW    ADD
+        BRB     SAY                     ; a tail call, not a fall-through
 ; SAY: writes the message in MSG. Uses R0, R1.
 SAY:
         .JSB_ENTRY

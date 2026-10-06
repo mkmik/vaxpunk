@@ -57,7 +57,7 @@ Differences from vasm:
 | --- | --- |
 | R0, R1 | x0, x1 |
 | R2-R11 | x19-x28 |
-| AP (R12) | x12 |
+| AP (R12) | the argument list at `32(FP)`, in x12 where the routine reads it |
 | FP (R13) | x29 |
 | SP (R14) | x18 |
 | PC (R15) | no register; only in addressing modes as the VAX encodes them |
@@ -73,9 +73,10 @@ sign-extends from bit 31. `MOVAx` computes the address in longwords, so a
 MACRO-32 image must lie below 2 GB; `vrun --base` must keep it there. A
 quadword in registers is a pair: Rn low, Rn+1 high.
 
-x2-x17 are the translation's: x8-x11 and x13-x17 are scratch registers, x13
-also passes the argument list pointer in a call, and x2-x7 carry PAL call
-arguments. MACRO-32 code must not use them.
+x2-x17 and x30 are the translation's: x0-x7 carry a call's arguments and x9
+their count, x8-x11 and x13-x17 are scratch registers, x8 and x13 also
+carry `CALLG`'s list and target, x2-x7 carry PAL call arguments, and x30 the
+return address of `JSB`, as of any call. MACRO-32 code must not use them.
 
 ### The stack
 
@@ -108,7 +109,8 @@ GETBYTE::
 Their parameters are AMACRO's: `OUTPUT=<R2,...>`, registers the routine
 changes for its caller; `SCRATCH=<...>`, those it changes and its caller
 doesn't care about; `PRESERVE=<...>`, those it always keeps, R0 and R1 too;
-`INPUT=<...>`, documentation. `.CALL_ENTRY` also takes `MAX_ARGS=n`,
+`INPUT=<...>`, documentation, but `INPUT=<AP>`: a JSB routine that reads
+its caller's argument list (*Calls*). `.CALL_ENTRY` also takes `MAX_ARGS=n`,
 `HOME_ARGS=TRUE|FALSE`, `QUAD_ARGS=TRUE|FALSE` and `LABEL=name`. A label
 another routine branches to says so with `.GLOBAL_LABEL` after it.
 
@@ -124,9 +126,10 @@ keeps only longwords, which would cut a 64-bit caller's values in half.
 - A `.CALL_ENTRY` or `.ENTRY` routine saves those and the registers in its
   mask, in its frame. One it writes that the mask leaves out is a warning.
 - A `.JSB_ENTRY` routine saves them in a save area it makes below both
-  stacks at entry: the caller's `sp` and VAX SP, then the registers. VAX SP
-  and `sp` start below it, and `RSB` restores the registers and both stacks
-  from it, so VAX SP must be back where the entry left it.
+  stacks at entry: the caller's `sp` and VAX SP, then the registers, then
+  x30 if it calls. VAX SP and `sp` start below it, and `RSB` restores the
+  registers and both stacks from it, so VAX SP must be back where the entry
+  left it.
 - A `.JSB32_ENTRY` routine saves only `PRESERVE`.
 
 What a JSB routine modifies, for its callers: its `OUTPUT` and `SCRATCH`;
@@ -142,29 +145,38 @@ others' routines, from their declarations.
 
 A routine may go to another routine's code, as VAX code does:
 
-- to a JSB routine's entry, a tail call, if it saves nothing itself;
+- from a JSB routine to a JSB routine's entry, a tail call: it restores
+  what it saved, x30 too, then goes there;
 - to a `.GLOBAL_LABEL` in another routine, if the two return alike: both
-  CALL routines or both JSB routines, saving the same registers;
+  CALL routines or both JSB routines, saving the same registers. vmacro
+  makes routines that share code home the same arguments, read AP alike
+  and keep x30 alike;
 - from or to an `.EXCEPTION_ENTRY` routine, which saves nothing and never
   returns;
 - after it loads SP from somewhere other than SP, a long jump, or to a
   label where code does, which leaves the routines on the stack.
 
-Anything else, or code that runs on into a routine that saves registers,
-is an error that says what each side restores. So is a `JSB` to a local
-label, and a `JSB`, `CALLS` or `CALLG` to a label in the module that isn't
-a routine's.
+A JSB routine that goes to its own entry goes on past its prologue, with
+what it saved as it was. Anything else is an error that says what each
+side restores, and so is code that runs on into a routine that saves
+registers, or into any routine after it called: its x30 is no longer its
+caller's. So is a `JSB` to a local label, and a `JSB`, `CALLS` or `CALLG`
+to a label in the module that isn't a routine's.
 
 ## Calls
 
-`CALLS` and `CALLG` keep the VAX calling standard's shape: an argument list of
-longwords, a count first, that AP points to in the called routine. Provisional
-until vaxpunk's calling standard exists.
+`CALLS` and `CALLG` call as the calling standard says
+([DESIGN-0004](../../docs/design/0004-calling-standard.md), *Arguments*):
+the first eight arguments in x0-x7, the rest on the stack from `sp` up, 8
+bytes each, every longword sign-extended, and their count in x9.
 
-- `CALLS #n, routine` pushes the count on the stack above the arguments the
-  caller pushed, points x13 at it, aligns `sp` and `bl`s the routine. On
-  return it pops the list. `CALLG arglist, routine` passes `arglist` in x13 and
-  pops nothing.
+- `CALLS #n, routine` loads the n longwords the caller pushed, pops them,
+  sets `sp` to x18 rounded down to 16, below the arguments past the
+  eighth, and `bl`s the routine. `CALLS Rn, routine`, with a count known
+  only when it runs, does the same in a loop.
+- `CALLG arglist, routine` loads them from the list, as many as its count
+  says. A list at address 0 passes none: a VAX routine that doesn't read
+  AP never noticed it.
 - A CALL routine builds the calling standard's frame on `sp`
   ([DESIGN-0004](../../docs/design/0004-calling-standard.md), *Frames*):
 
@@ -173,28 +185,44 @@ until vaxpunk's calling standard exists.
   | 0 | the caller's FP, then LR: AAPCS64's frame record |
   | 16 | the condition handler, 0: `(FP)` and `0(FP)` mean it, so `MOVAB handler, (FP)` sets it |
   | 24 | the frame descriptor's address |
-  | 32 | the caller's AP |
-  | 40 | the registers it saves, 8 bytes each: x18, the caller's SP, then those among R2-R11 |
+  | 32 | the argument list it homes, if any: the count, then a longword for each argument |
+  | after it | the registers it saves, 8 bytes each: x18, the caller's SP, then those among R2-R11 |
 
-  FP (x29) points at the frame, AP (x12) at the argument list, and SP (x18)
-  starts at the frame, so locals made with `SUBL2 #n, SP` are at negative
-  offsets from FP, as on the VAX. Any other offset from FP at 0 or above is
-  an error, as in AMACRO. Mask bits 12 and up (integer and decimal
-  overflow traps) are ignored.
+  FP (x29) points at the frame, and SP (x18) starts at the frame, so
+  locals made with `SUBL2 #n, SP` are at negative offsets from FP, as on
+  the VAX. Any other offset from FP at 0 or above is an error, as in
+  AMACRO. Mask bits 12 and up (integer and decimal overflow traps) are
+  ignored.
+- **The argument list.** A routine that reads AP, or whose JSB routines
+  in the module do, homes its arguments in its prologue, as AMACRO did: up
+  to the highest it names at a fixed offset, `n(AP)` or `@n(AP)`; up to
+  `MAX_ARGS`, 8 if not given, when it uses AP as a list (its address,
+  indexed, offset by a variable or unaligned, or `CALLG (AP)`), or with
+  `HOME_ARGS=TRUE`. The count is the caller's, but at most that. AP is x12,
+  FP + 32, in a routine that reads it, and AP in a JSB routine is its
+  caller's list; vmacro doesn't take code that writes AP.
+- A JSB routine that reads AP, which no routine in the module calls, as a
+  driver's FDT routine called through a table, is a warning: its callers
+  must home what it reads, with `HOME_ARGS=TRUE` and enough `MAX_ARGS`.
+  `INPUT=<AP>` says it means to.
 - The descriptor, `$FDSCDEF`, says which registers the frame saves, where,
   its size and the routine's name. vmacro puts it in a psect of its own,
   the code's name with `_FDSC` after it, so that whoever may run the code
   may read it. vrun names a fault's frames from it, and `$UNWIND` restores
   what each frame saved by it.
-- `RET` restores what the routine saved and returns.
+- `RET` restores what the routine saved and returns. After code loads FP
+  from elsewhere, `RET` returns from that frame, as its descriptor says,
+  as a VAX `RET` reads the frame's mask.
 
-A routine called from outside MACRO-32 gets no argument list: vrun enters the
-transfer address with x13, and so AP, 0. Return a status in R0; vrun exits
+vrun enters the transfer address as a call with one argument, the info
+block: `4(AP)` in a MACRO-32 routine. Return a status in R0; vrun exits
 with it.
 
-`JSB` and `BSBx` push an 8-byte return address on the stack and jump; `RSB`
-pops it and jumps to it. Code that pops or changes the return address as a
-longword won't work.
+`JSB` and `BSBx` set `sp` as a call does and are `bl`, and `RSB` is `ret`:
+the return address is in x30, not on the VAX stack, as AMACRO made them
+native calls. vmacro follows the VAX stack through each routine, and code
+that pops, reads or pushes a return address there, or reads past what the
+routine pushed, is an error, as is `JSB @(SP)+`.
 
 ## Console output
 

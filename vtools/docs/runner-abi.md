@@ -39,11 +39,14 @@ fails to load. Page 0 is unmapped, and so is everything below the stack down to
 | --- | --- |
 | `pc` | the image's first transfer address |
 | `x0` | address of the runner info block |
+| `x9` | 1, the argument count |
+| `x18` | `7FFF0000`, VAX SP, as `sp` |
 | `x30` | address of the return page |
 | `sp` | `7FFF0000`, 16-byte aligned |
 | everything else | 0, including FP/SIMD registers, `FPCR` and `FPSR` |
 
-`x18` is an ordinary register. Nothing reserves it.
+The image is called as a routine with one argument, the info block, by the
+calling standard (DESIGN-0004): `4(AP)` in a MACRO-32 main routine.
 
 ## Runner info block
 

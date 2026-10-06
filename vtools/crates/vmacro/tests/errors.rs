@@ -100,7 +100,7 @@ F:      .CALL_ENTRY
             "9:9: .JSB_ENTRY follows the label that names the routine",
             "10:9: HOME_ARGS and QUAD_ARGS exclude each other",
             "11:9: unknown parameter BOGUS",
-            "12:9: AP isn't one of R0-R11",
+            "12:9: AP can only be an INPUT, not SCRATCH",
             "14:9: RSB in a CALL routine",
         ]
     );
@@ -125,9 +125,10 @@ fn unmasked() {
     );
 }
 
-/// A branch into another routine, or out to another module, ends in that
-/// routine's RET or RSB: it must restore what this one saves, and its
-/// target be declared. ELSEWHERE's linkage says it keeps every register.
+/// A branch into another routine ends in that routine's RET or RSB: it
+/// must restore what this one saves, and its target be declared. One out to
+/// another module is a tail call. ELSEWHERE's linkage says it keeps every
+/// register.
 #[test]
 fn shared_code() {
     let source = "\
@@ -159,7 +160,6 @@ INSIDE: RSB
         [
             "17:9: a branch to SHARED, in another routine, which doesn't restore the registers this routine saves (R2 R3; it restores none)",
             "18:9: INSIDE is in another routine: declare it with .GLOBAL_LABEL",
-            "19:9: a branch to ELSEWHERE, in another module, which doesn't restore the registers this routine saves (R2 R3; it restores none)",
         ]
     );
 }
@@ -187,10 +187,11 @@ C:      .JSB_ENTRY
     );
 }
 
-/// A branch to another JSB routine's entry is a tail call: its prologue
-/// saves what it must, so the routine that goes there only needs nothing
-/// of its own to restore. .EXCEPTION_ENTRY code has nothing to restore, and
-/// a label where code reloads SP is a long jump: both go anywhere.
+/// A branch to another JSB routine's entry is a tail call: a JSB routine
+/// restores what it saved, then goes there, and the entry's prologue saves
+/// what it must. A CALL routine can't: the routine would return from its
+/// frame. .EXCEPTION_ENTRY code has nothing to restore, and a label where
+/// code reloads SP is a long jump: both go anywhere.
 #[test]
 fn tail_calls() {
     let source = "\
@@ -218,13 +219,61 @@ INSIDE: .GLOBAL_LABEL
         RET
 BACK:   MOVL    SAVED, SP
         RET
+        .ENTRY  G, ^M<R2>
+        BRB     C
 SAVED:  .LONG   0
         .END    START
 ";
     assert_eq!(
         errors(source),
         [
-            "10:9: a branch to C, in another routine, which doesn't restore the registers this routine saves (R3; it restores R4)"
+            "26:9: a branch to C, in another routine, which doesn't restore the registers this routine saves (R2; it restores R4)"
+        ]
+    );
+}
+
+/// JSB is `bl`: the return address is in x30, so code that pops, reads or
+/// pushes one on the VAX stack, or reads past what its routine pushed, is
+/// an error. vmacro follows the stack through branches; what a CALL pops
+/// the routine pushed, and code that reloads SP is left alone.
+#[test]
+fn return_address() {
+    let source = "\
+        .ENTRY  START, ^M<>
+        JSB     A
+        RET
+A:      .JSB_ENTRY
+        MOVL    (SP)+, R0
+        JMP     (R0)
+B:      .JSB_ENTRY
+        PUSHAB  A
+        RSB
+C:      .JSB_ENTRY
+        PUSHL   R1
+        BEQL    10$
+        MOVL    4(SP), R0
+        TSTL    (SP)+
+        RSB
+10$:    MOVL    (SP)+, R1
+        TSTL    (SP)+
+        RSB
+D:      .JSB_ENTRY
+        PUSHL   #1
+        CALLS   #1, START
+        JSB     @(SP)+
+        MOVL    SAVED, SP
+        RSB
+SAVED:  .LONG   0
+        .END    START
+";
+    assert_eq!(
+        errors(source),
+        [
+            "5:9: (SP)+ reaches past what this routine pushed (it pushed nothing): the VAX stack has no return address or frame (DESIGN-0004)",
+            "9:9: RSB with 4 bytes pushed: the return address is in x30, not on the VAX stack (DESIGN-0004)",
+            "13:9: 4(SP) reaches past what this routine pushed (it pushed 4 bytes): the VAX stack has no return address or frame (DESIGN-0004)",
+            "17:9: (SP)+ reaches past what this routine pushed (it pushed nothing): the VAX stack has no return address or frame (DESIGN-0004)",
+            "22:9: JSB @(SP)+, a co-routine call, needs the return address on the VAX stack, where vaxpunk doesn't put it",
         ]
     );
 }

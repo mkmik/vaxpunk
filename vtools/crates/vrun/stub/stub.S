@@ -77,7 +77,9 @@ _start:
 	msr	sctlr_el1, x0
 	isb
 
-	// Enter the image at EL0, interrupts masked, every other register zero.
+	// Enter the image at EL0, interrupts masked, as a call with one
+	// argument, the info block (x9 = 1), VAX SP at the stack pointer, and
+	// every other register zero.
 	ldp	x0, x1, [x9, #8]	// entry point, stack pointer
 	msr	elr_el1, x0
 	msr	sp_el0, x1
@@ -89,9 +91,11 @@ _start:
 	movi	v\n\().2d, #0
 	.endr
 	ldp	x0, x30, [x9, #24]	// info block, return page
-	.irp	n, 1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29
+	mov	x18, x1
+	.irp	n, 1,2,3,4,5,6,7,8,10,11,12,13,14,15,16,17,19,20,21,22,23,24,25,26,27,28,29
 	mov	x\n, xzr
 	.endr
+	mov	x9, #1
 	eret
 
 // Synchronous exception from the image: a monitor call or a fault.

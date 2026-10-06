@@ -50,14 +50,17 @@ CMEXECOK = 32767                        ; EXE$CMODEXEC's CHMK: may the process?
         .MACRO  ESERVICE NAME, NARGS
         .SAVE_PSECT
         .PSECT  EXEC$VECTOR
-        .ENTRY  SYS$'NAME, ^M<>
+SYS$'NAME::
+        .CALL_ENTRY HOME_ARGS=TRUE, MAX_ARGS=12
         CHME    #0
         RET
         .RESTORE_PSECT
         .ENDM   ESERVICE
 
-; VECTOR name, nargs[, EXH]: SYS$name and its entries in the tables. With
-; EXH, $EXIT's: SYS$EXIT calls the caller's mode's exit handlers in that
+; VECTOR name, nargs[, EXH]: SYS$name and its entries in the tables.
+; SYS$name homes its arguments, up to 12, the most a service takes, where
+; the dispatcher finds them through AP: at 32(FP), its FP being SYS$name's.
+; With EXH, $EXIT's: SYS$EXIT calls the caller's mode's exit handlers in that
 ; mode. EXE$EXIT returns SS$_NORMAL with R1 = the next one's block, which
 ; it took off the list: SYS$EXIT writes the status where the block says,
 ; calls the handler with the block's argument list, and calls EXE$EXIT
@@ -69,7 +72,8 @@ CMEXECOK = 32767                        ; EXE$CMODEXEC's CHMK: may the process?
         .PSECT  EXEC$SSARG, NOEXE, NOWRT, BYTE
         .BYTE   NARGS
         .PSECT  EXEC$VECTOR
-        .ENTRY  SYS$'NAME, ^M<>
+SYS$'NAME::
+        .CALL_ENTRY HOME_ARGS=TRUE, MAX_ARGS=12
         .IF     BLANK <EXH>
         CHMK    #CODE
         RET
@@ -184,7 +188,7 @@ CODE = 0
         SERVICE DEVICE_SCAN, 5
 
 ; EXE$CMODKRNL: the CHMK handler. R0 = the service's code, AP = its
-; argument list, the PAL's frame on the kernel stack. Code CMEXECOK is
+; argument list, which SYS$name homed, the PAL's frame on the kernel stack. Code CMEXECOK is
 ; EXE$CMODEXEC's question, answered in R0. R0 and R1 go back to the
 ; caller in the frame, which REI restores every register from.
 EXE$CMODKRNL::

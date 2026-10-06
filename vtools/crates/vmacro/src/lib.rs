@@ -14,7 +14,9 @@ mod insn;
 mod operand;
 mod routine;
 
-use routine::{KEPT, Kind, Params, Regs, Routine, Survey};
+use std::collections::HashMap;
+
+use routine::{KEPT, Kind, Params, Regs, Returns, Routine, Survey};
 use vasm::{Diagnostic, Dialect, Object, Options};
 
 const TOOL: &str = concat!("vmacro ", env!("CARGO_PKG_VERSION"));
@@ -68,11 +70,11 @@ pub(crate) enum Flags {
 }
 
 /// How the routine an instruction is in returns: what `RET` and `RSB`
-/// restore.
+/// restore, and for a JSB routine whether it saved x30.
 pub(crate) enum Exit {
     None,
-    Call(Vec<u8>),
-    Jsb(Vec<u8>),
+    Call(Frame),
+    Jsb(Vec<u8>, bool),
 }
 
 /// The MACRO-32 dialect: its state between statements.
@@ -92,16 +94,27 @@ pub struct Macro32 {
     pending: Vec<String>,
     /// `.USE_LINKAGE`'s, for the next JSB.
     linkage: Option<Regs>,
-    /// Registers the current routine was warned about writing.
+    /// Whether x12 may no longer be AP, past a call or a label.
+    ap_stale: bool,
+    /// Registers the current routine was warned about writing, and whether
+    /// about reading AP.
     warned: Regs,
+    warned_ap: bool,
     /// Whether the last instruction may go on to the next.
     falls: bool,
     /// Whether the current routine loaded SP from elsewhere: its frame,
-    /// and what it saved, are no longer on the stack.
+    /// and what it saved, are no longer on the stack. And whether it
+    /// loaded FP: its RET returns from that frame, as its descriptor says.
     switched: bool,
+    fp_switched: bool,
     /// The psect code goes in, and those `.SAVE_PSECT` saved.
     psect: String,
     saved_psects: Vec<String>,
+    /// The bytes the current routine has pushed on the VAX stack, if vmacro
+    /// can tell, and at its labels: those it has gone past, and those
+    /// branched to ahead.
+    depth: Option<i64>,
+    depths: HashMap<String, (Option<i64>, bool)>,
 }
 
 impl Default for Macro32 {
@@ -116,11 +129,16 @@ impl Default for Macro32 {
             cur: None,
             pending: Vec::new(),
             linkage: None,
+            ap_stale: true,
             warned: 0,
+            warned_ap: false,
             falls: false,
             switched: false,
+            fp_switched: false,
             psect: "$CODE$".into(),
             saved_psects: Vec::new(),
+            depth: None,
+            depths: HashMap::new(),
         }
     }
 }
@@ -183,8 +201,27 @@ impl Dialect for Macro32 {
     }
 
     fn label(&mut self, name: &str, global: bool) {
-        // Local labels, and the descriptors vmacro makes.
-        if name.contains('@') || name.starts_with("FDSC$$") {
+        // The labels vmacro makes.
+        if name.starts_with("FDSC$$") || name.starts_with("BODY$$") {
+            return;
+        }
+        self.ap_stale = true;
+        // vasm starts a local label block at each other label.
+        let key = name.split('@').next().unwrap_or(name);
+        if !name.contains('@') {
+            self.depths.retain(|k, _| !k.ends_with('$'));
+        }
+        if !self.survey.entries.contains_key(name) {
+            let ahead = self.depths.get(key).map(|&(d, _)| d);
+            self.depth = match (self.falls, ahead) {
+                (false, Some(d)) => d,
+                (false, None) => None,
+                (true, Some(d)) if d != self.depth => None,
+                (true, _) => self.depth,
+            };
+            self.depths.insert(key.to_string(), (self.depth, true));
+        }
+        if name.contains('@') {
             return;
         }
         if !self.compiling {
@@ -237,29 +274,86 @@ impl Macro32 {
                 .iter()
                 .map(|t| operand::parse(t))
                 .collect::<Result<Vec<_>, _>>()?;
-            let mut warnings = self.check(op, &ops)?;
+            let tail = self.check(op, &ops)?;
+            let mut warnings = Vec::new();
+            let stacked = self.stack(op, size, &ops, constant);
+            let ap = ap_use(op, size, &ops, constant);
+            if self.compiling {
+                stacked?;
+                let (args, list) = ap?;
+                // The caller homes the list, which vmacro sees in the module.
+                let r = &self.survey.routines[cur];
+                let jsb = matches!(r.kind, Kind::Jsb | Kind::Jsb32);
+                if (args.is_some() || list)
+                    && jsb
+                    && !r.called_here
+                    && !r.takes_ap
+                    && !self.warned_ap
+                {
+                    self.warned_ap = true;
+                    warnings.push("a JSB routine that reads AP reads its caller's argument list, which its callers must home (HOME_ARGS=TRUE): say so with INPUT=<AP>".into());
+                }
+            } else if let Ok((args, list)) = ap {
+                let r = &mut self.survey.routines[cur];
+                r.ap_args = r.ap_args.max(args);
+                r.ap_list |= list;
+            }
+            if writes_last(op) && ops.last() == Some(&operand::Opnd::Reg(13)) {
+                self.fp_switched = true;
+            }
             if switches(op, &ops) {
                 self.switched = true;
                 if !self.compiling {
                     self.survey.longjumps.extend(labels.iter().cloned());
                 }
             }
+            // A JSB routine that branches to its own entry goes on past its
+            // prologue, with what it saved as it was.
+            let r = &self.survey.routines[cur];
+            let mut ops = ops;
+            if matches!(r.kind, Kind::Jsb | Kind::Jsb32)
+                && let Some(t) = branch_target(op, &ops).and_then(target)
+                && self.survey.entries.get(t) == Some(&cur)
+            {
+                *ops.last_mut().unwrap() =
+                    operand::Opnd::Mem(operand::Mode::Rel(format!("BODY$${cur}")), None);
+            }
             let mut g = operand::Gen::new(&ops, constant, &mut self.labels);
             let r = &self.survey.routines[cur];
             let exit = match r.kind {
-                Kind::Call => Exit::Call(routine::list(r.saved)),
-                Kind::Jsb | Kind::Jsb32 => Exit::Jsb(routine::list(r.saved)),
+                Kind::Call => Exit::Call(frame(&routine::list(r.saved), r.home)),
+                Kind::Jsb | Kind::Jsb32 => Exit::Jsb(routine::list(r.saved), r.lr),
                 Kind::Exception => Exit::None,
             };
-            let flags = insn::compile(&mut g, mn, op, size, &ops, &self.flags, &exit)?;
+            let reads_ap = r.ap;
+            let flags = match (&exit, tail) {
+                (Exit::Jsb(saved, lr), true) => {
+                    tail_call(&mut g, mn, op, size, &ops, &self.flags, &exit, saved, *lr)?
+                }
+                (Exit::Call(_), _) if op == Op::Ret && self.fp_switched => {
+                    any_epilogue(&mut g);
+                    None
+                }
+                _ => insn::compile(&mut g, mn, op, size, &ops, &self.flags, &exit)?,
+            };
             let written = g.written;
             let mut lines = g.out;
+            // AP is x12 where the routine reads it, which a call changes:
+            // it is set again before AP is read after a call or a label,
+            // so that what follows a call is still where it returns to.
+            let calls = matches!(op, Op::Jsb | Op::Calls | Op::Callg);
+            if reads_ap && self.ap_stale && ops.iter().any(names_ap) {
+                lines.insert(0, "\tadd x12, x29, #32".into());
+                self.ap_stale = false;
+            }
+            self.ap_stale |= calls;
             if self.compiling {
                 warnings.extend(self.unmasked(cur, written));
             } else {
                 let linkage = self.linkage;
                 let r = &mut self.survey.routines[cur];
                 r.direct |= written;
+                r.calls_out |= calls;
                 if op == insn::Op::Jsb {
                     match target(&ops[0]) {
                         Some(t) => r.calls.push((t.to_string(), linkage)),
@@ -293,13 +387,17 @@ impl Macro32 {
     }
 
     /// The second pass's checks of the routines an instruction calls and
-    /// the labels it branches to: errors, and warnings it returns.
-    fn check(&self, op: insn::Op, ops: &[operand::Opnd]) -> Result<Vec<String>, String> {
+    /// the labels it branches to: errors, and whether it is a tail call,
+    /// a branch to a JSB routine's entry, which needs this one's epilogue.
+    fn check(&self, op: insn::Op, ops: &[operand::Opnd]) -> Result<bool, String> {
         use insn::Op;
         if !self.compiling {
-            return Ok(Vec::new());
+            return Ok(false);
         }
         let s = &self.survey;
+        if op == Op::Jsb && ops[0] == operand::Opnd::Mem(operand::Mode::IncDef(14), None) {
+            return Err("JSB @(SP)+, a co-routine call, needs the return address on the VAX stack, where vaxpunk doesn't put it".into());
+        }
         if op == Op::Jsb
             && let operand::Opnd::Mem(operand::Mode::Rel(e), None) = &ops[0]
             && e.trim().starts_with(|c: char| c.is_ascii_digit())
@@ -329,14 +427,14 @@ impl Macro32 {
             ));
         }
         let Some(t) = branched.and_then(target) else {
-            return Ok(Vec::new());
+            return Ok(false);
         };
         let here = self.cur.map(|c| &s.routines[c]);
         if self.switched || s.noreturn.contains(t) || s.longjumps.contains(t) {
-            return Ok(Vec::new());
+            return Ok(false);
         }
         let (there, name) = match s.labels.get(t) {
-            Some(r) if *r == self.cur => return Ok(Vec::new()),
+            Some(r) if *r == self.cur => return Ok(false),
             Some(r) => {
                 if !s.entries.contains_key(t) && !s.globals.contains(t) {
                     return Err(format!(
@@ -355,42 +453,210 @@ impl Macro32 {
         if here.is_some_and(|r| r.kind == Kind::Exception)
             || there.is_some_and(|r| r.kind == Kind::Exception)
         {
-            return Ok(Vec::new());
+            return Ok(false);
         }
-        // A JSB routine's entry builds its own save area: going there is a
-        // tail call, for a routine with nothing of its own to restore. Code
-        // in the middle of another routine ends in that routine's RET or
-        // RSB, which must restore what this one saves. A label in another
-        // module that isn't known is a JSB routine's that saves nothing.
-        let exit = |r: Option<&Routine>| r.map_or((false, 0), |r| (r.kind == Kind::Call, r.saved));
+        // A JSB routine's entry builds its own save area: going there from
+        // a JSB routine is a tail call, which restores what this one saved
+        // first; a CALL routine's frame would stay. Code in the middle of
+        // another routine ends in that routine's RET or RSB, which must
+        // restore what this one saves, from the same frame. A label in
+        // another module that isn't known is a JSB routine's that saves
+        // nothing.
+        let exit = |r: Option<&Routine>| r.map_or(Returns::default(), Routine::returns);
         let (entry, theirs) = match there {
             Some(r) => (s.entries.contains_key(t), exit(Some(r))),
             None => s
                 .foreign
                 .get(t)
-                .map_or((true, (false, 0)), |&(e, call, saved)| (e, (call, saved))),
+                .copied()
+                .unwrap_or((true, Returns::default())),
         };
+        let mine = exit(here);
+        let jsb = here.is_some_and(|r| r.kind != Kind::Call);
+        let plain = mine == Returns::default();
+        let tail = entry && !theirs.call && jsb && !plain;
         let ok = if entry {
-            exit(here) == (false, 0) && !theirs.0
+            !theirs.call && (jsb || plain)
         } else {
-            exit(here) == theirs
+            mine == theirs
         };
         if !ok {
-            let saves = |s: Regs| match s {
-                0 => "none".to_string(),
-                s => routine::list(s)
-                    .iter()
-                    .map(|n| format!("R{n}"))
-                    .collect::<Vec<_>>()
-                    .join(" "),
+            let saves = |r: Returns| {
+                let regs = match r.saved {
+                    0 => "none".to_string(),
+                    s => routine::list(s)
+                        .iter()
+                        .map(|n| format!("R{n}"))
+                        .collect::<Vec<_>>()
+                        .join(" "),
+                };
+                match r.lr {
+                    true => format!("{regs} and x30"),
+                    false => regs,
+                }
             };
+            if (mine.call, mine.saved, mine.lr) == (theirs.call, theirs.saved, theirs.lr) {
+                let homes = |h: Option<u32>| h.map_or("none".into(), |n| n.to_string());
+                return Err(format!(
+                    "a branch to {name} which has another argument list in its frame (this routine homes {} arguments; it homes {})",
+                    homes(mine.home),
+                    homes(theirs.home)
+                ));
+            }
             return Err(format!(
                 "a branch to {name} which doesn't restore the registers this routine saves ({}; it restores {})",
-                saves(exit(here).1),
-                saves(theirs.1)
+                saves(mine),
+                saves(theirs)
             ));
         }
-        Ok(Vec::new())
+        Ok(tail)
+    }
+
+    /// Follows the VAX stack through an instruction: the bytes the routine
+    /// has pushed, and those at the labels it branches to. Reading or
+    /// popping more than it pushed reaches what the VAX had there, the
+    /// return address or the frame, which vaxpunk keeps elsewhere
+    /// (DESIGN-0004): an error in a CALL or JSB routine.
+    fn stack(
+        &mut self,
+        op: insn::Op,
+        size: operand::Size,
+        ops: &[operand::Opnd],
+        constant: &dyn Fn(&str) -> Option<i64>,
+    ) -> Result<(), String> {
+        use insn::{Alu, Op};
+        use operand::{Mode, Opnd};
+        let checked = self
+            .cur
+            .is_some_and(|c| self.survey.routines[c].kind != Kind::Exception);
+        let mut err = None;
+        let mut past = |d: i64, what: &str| {
+            if checked && err.is_none() {
+                let theirs = if d == 0 {
+                    "it pushed nothing".to_string()
+                } else {
+                    format!("it pushed {d} bytes")
+                };
+                err = Some(format!(
+                    "{what} reaches past what this routine pushed ({theirs}): the VAX stack has no return address or frame (DESIGN-0004)"
+                ));
+            }
+        };
+        let mut depth = self.depth;
+        let sp = Some(&Opnd::Reg(14));
+        let writes_sp = writes_last(op) && ops.last() == sp;
+        if let (Op::Mova, Some(Opnd::Mem(Mode::Disp(e, 14), None)), true) =
+            (op, ops.first(), writes_sp)
+        {
+            // MOVAx n(SP), SP pops n bytes.
+            depth = match (depth, constant(e)) {
+                (Some(d), Some(n)) if n <= d => Some(d - n),
+                (Some(d), Some(_)) => {
+                    past(d, "MOVA to SP");
+                    None
+                }
+                _ => None,
+            };
+        } else {
+            for (i, o) in ops.iter().enumerate() {
+                let (Opnd::Mem(mode, index), Some(d)) = (o, depth) else {
+                    continue;
+                };
+                let bytes = match (op, i) {
+                    _ if address(op, i) => 0,
+                    (Op::Movz(s) | Op::Cvt(s), 0) => s.bytes(),
+                    _ => size.bytes(),
+                };
+                match mode {
+                    Mode::Dec(14) => depth = Some(d + bytes),
+                    Mode::Inc(14) if bytes > d => past(d, "(SP)+"),
+                    Mode::Inc(14) => depth = Some(d - bytes),
+                    Mode::IncDef(14) if 4 > d => past(d, "@(SP)+"),
+                    Mode::IncDef(14) => depth = Some(d - 4),
+                    Mode::Def(14) if index.is_none() && bytes > d => past(d, "(SP)"),
+                    Mode::Disp(e, 14) | Mode::DispDef(e, 14) if index.is_none() => {
+                        let bytes = if matches!(mode, Mode::DispDef(..)) {
+                            4
+                        } else {
+                            bytes
+                        };
+                        if let Some(n) = constant(e)
+                            && n >= 0
+                            && n + bytes > d
+                        {
+                            past(d, &format!("{n}(SP)"));
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            let mask = |o: &Opnd| match o {
+                Opnd::Imm(e) => constant(e).map(|m| 4 * i64::from((m & 0x3fff).count_ones())),
+                _ => None,
+            };
+            depth = match (op, depth) {
+                (_, None) => None,
+                (Op::Pushl | Op::Pusha, Some(d)) => Some(d + 4),
+                (Op::Pushr, Some(d)) => mask(&ops[0]).map(|n| d + n),
+                (Op::Popr | Op::Calls, Some(d)) => {
+                    let n = match op {
+                        Op::Popr => mask(&ops[0]),
+                        _ => match &ops[0] {
+                            Opnd::Imm(e) => constant(e).map(|n| 4 * n),
+                            _ => None,
+                        },
+                    };
+                    match n {
+                        Some(n) if n > d => {
+                            past(d, if op == Op::Popr { "POPR" } else { "CALLS" });
+                            None
+                        }
+                        Some(n) => Some(d - n),
+                        None => None,
+                    }
+                }
+                (Op::Arith(alu @ (Alu::Add | Alu::Sub), false), Some(d)) if writes_sp => {
+                    match (&ops[0], alu) {
+                        (Opnd::Imm(e), Alu::Sub) => constant(e).map(|n| d + n),
+                        (Opnd::Imm(e), _) => match constant(e) {
+                            Some(n) if n > d => {
+                                past(d, "ADD to SP");
+                                None
+                            }
+                            n => n.map(|n| d - n),
+                        },
+                        _ => None,
+                    }
+                }
+                (Op::Rsb, Some(d)) if d != 0 => {
+                    if checked && err.is_none() {
+                        err = Some(format!(
+                            "RSB with {d} bytes pushed: the return address is in x30, not on the VAX stack (DESIGN-0004)"
+                        ));
+                    }
+                    None
+                }
+                _ if writes_sp => None,
+                (_, d) => d,
+            };
+        }
+        self.depth = depth;
+        // A branch back with another depth than the label had is a loop
+        // that pushes or pops: unknown past it.
+        if let Some(Opnd::Mem(Mode::Rel(e), None)) = branch_target(op, ops) {
+            let key = e.trim().to_string();
+            match self.depths.get(&key) {
+                Some(&(at, true)) if at != depth => self.depth = None,
+                Some(&(at, false)) if at != depth => {
+                    self.depths.insert(key, (None, false));
+                }
+                Some(_) => {}
+                None => {
+                    self.depths.insert(key, (depth, false));
+                }
+            }
+        }
+        err.map_or(Ok(()), Err)
     }
 
     /// Warnings for registers a `.ENTRY` routine writes but its mask
@@ -414,11 +680,14 @@ impl Macro32 {
         let Some(cur) = self.cur else {
             return Some(Err(OUTSIDE.into()));
         };
-        if !self.compiling
-            && let Some(n) = native_writes(mn, rest)
-        {
-            self.survey.routines[cur].direct |= 1 << n;
+        if !self.compiling {
+            let r = &mut self.survey.routines[cur];
+            if let Some(n) = native_writes(mn, rest) {
+                r.direct |= 1 << n;
+            }
+            r.calls_out |= matches!(mn, "BL" | "BLR");
         }
+        self.ap_stale |= matches!(mn, "BL" | "BLR");
         self.falls = !matches!(mn, "B" | "BR" | "RET" | "ERET");
         None
     }
@@ -468,8 +737,14 @@ impl Macro32 {
             Kind::Exception => &["INPUT", "OUTPUT", "SCRATCH", "PRESERVE", "STACK_BASE"],
         };
         p.check(known)?;
-        p.number("MAX_ARGS")?;
+        let max_args = match p.number("MAX_ARGS")? {
+            Some(n @ 0..=255) => Some(n as u32),
+            Some(_) => return Err("MAX_ARGS is 0 to 255".into()),
+            None => None,
+        };
         let r = Routine {
+            max_args,
+            takes_ap: p.regs("INPUT")? & 1 << 12 != 0,
             kind,
             mask,
             output: p.regs("OUTPUT")?,
@@ -489,10 +764,12 @@ impl Macro32 {
             && self.falls
             && let Some(prev) = self.cur
         {
-            // Into its prologue, and out through its RET or RSB.
+            // Into its prologue, and out through its RET or RSB, which
+            // returns to x30: still the caller's if the code before called
+            // nothing.
             let plain = |r: &Routine| r.kind != Kind::Call && r.saved == 0;
             let s = &self.survey.routines;
-            if !plain(&s[prev]) || !plain(&s[i]) {
+            if !plain(&s[prev]) || s[prev].lr || !plain(&s[i]) {
                 out.push(format!(
                     "\t.ERROR {} comes right after code that goes on into it: end that with a branch",
                     names[0]
@@ -509,22 +786,38 @@ impl Macro32 {
         }
         self.cur = Some(i);
         self.warned = 0;
+        self.warned_ap = false;
         self.switched = false;
+        self.fp_switched = false;
         self.flags = Flags::Live { borrow: true };
-        let saved = routine::list(self.survey.routines[i].saved);
+        self.depth = Some(0);
+        self.depths.clear();
+        let r = &self.survey.routines[i];
+        let saved = routine::list(r.saved);
+        let reads_ap = r.ap;
         if word == ".ENTRY" {
             out.push(format!("{}::", names[0]));
         }
-        // ponytail: a debugging aid while declarations are reviewed.
         match kind {
             Kind::Call => {
                 let fdsc = format!("FDSC$${i}");
-                out.extend(descriptor(&fdsc, &names[0], &saved, &self.psect));
-                out.extend(call_prologue(&saved, &fdsc));
+                let f = frame(&saved, r.home);
+                out.extend(descriptor(&fdsc, &names[0], &saved, &f, &self.psect));
+                self.labels += 2;
+                out.extend(call_prologue(&f, &fdsc, 90000 + self.labels - 1));
             }
-            Kind::Jsb | Kind::Jsb32 => out.extend(jsb_prologue(&saved)),
+            Kind::Jsb | Kind::Jsb32 => {
+                out.extend(jsb_prologue(&saved, r.lr));
+                out.push(format!("BODY$${i}:"));
+            }
             Kind::Exception => {}
         }
+        // AP is the list at 32(FP): the caller's, in a routine without a
+        // frame.
+        if reads_ap {
+            out.push("\tadd x12, x29, #32".into());
+        }
+        self.ap_stale = !reads_ap;
         Ok(out)
     }
 
@@ -594,6 +887,151 @@ fn switches(op: insn::Op, ops: &[operand::Opnd]) -> bool {
     }
 }
 
+/// A branch to a JSB routine's entry from one with a save area: its
+/// epilogue, then the branch, out of line if it is conditional.
+#[allow(clippy::too_many_arguments)]
+fn tail_call(
+    g: &mut operand::Gen,
+    mn: &str,
+    op: insn::Op,
+    size: operand::Size,
+    ops: &[operand::Opnd],
+    flags: &Flags,
+    exit: &Exit,
+    saved: &[u8],
+    lr: bool,
+) -> Result<Option<Flags>, String> {
+    use operand::{Mode, Opnd};
+    let epilogue = jsb_epilogue(saved, lr);
+    if matches!(op, insn::Op::Br | insn::Op::Jmp) {
+        g.out.extend(epilogue);
+        return insn::compile(g, mn, op, size, ops, flags, exit);
+    }
+    let (out, past) = (g.label(), g.label());
+    let mut inner = ops.to_vec();
+    let target = inner.pop().unwrap();
+    inner.push(Opnd::Mem(Mode::Rel(out.clone()), None));
+    let f = insn::compile(g, mn, op, size, &inner, flags, exit)?;
+    g.emit(format!("b {past}"));
+    g.place_label(&out);
+    g.out.extend(epilogue);
+    insn::compile(
+        g,
+        "JMP",
+        insn::Op::Jmp,
+        operand::Size::B,
+        &[target],
+        flags,
+        exit,
+    )?;
+    g.place_label(&past);
+    Ok(f)
+}
+
+/// Whether an operand names AP.
+fn names_ap(o: &operand::Opnd) -> bool {
+    use operand::{Mode, Opnd};
+    match o {
+        Opnd::Reg(n) => *n == 12,
+        Opnd::Imm(_) => false,
+        Opnd::Mem(mode, index) => {
+            *index == Some(12)
+                || matches!(
+                    mode,
+                    Mode::Def(12)
+                        | Mode::Inc(12)
+                        | Mode::Dec(12)
+                        | Mode::IncDef(12)
+                        | Mode::Disp(_, 12)
+                        | Mode::DispDef(_, 12)
+                )
+        }
+    }
+}
+
+/// Whether an instruction's operand `i` is an address, not a value it
+/// reads or writes there.
+fn address(op: insn::Op, i: usize) -> bool {
+    use insn::Op;
+    matches!(
+        (op, i),
+        (Op::Mova | Op::Pusha | Op::Jmp | Op::Jsb, 0)
+            | (Op::Calls | Op::Callg, _)
+            | (Op::Movc3, 1 | 2)
+            | (Op::Movc5, 1 | 4)
+            | (Op::Insque | Op::Remque, _)
+    )
+}
+
+/// Whether an instruction writes its last operand.
+fn writes_last(op: insn::Op) -> bool {
+    use insn::Op;
+    matches!(
+        op,
+        Op::Mov
+            | Op::Clr
+            | Op::Mcom
+            | Op::Mneg
+            | Op::Movz(_)
+            | Op::Cvt(_)
+            | Op::Mova
+            | Op::Arith(..)
+            | Op::Inc
+            | Op::Dec
+            | Op::Ash
+            | Op::Rot
+            | Op::Emul
+            | Op::Ediv
+            | Op::Ext(_)
+            | Op::Mfpr
+            | Op::Ldq
+    )
+}
+
+/// How an instruction reads the argument list through AP: the arguments
+/// its fixed offsets reach, if any, and whether it uses AP as a list, as
+/// an address, indexed, or offset by a variable or unaligned (AMACRO's
+/// homing triggers). An error if it writes AP.
+fn ap_use(
+    op: insn::Op,
+    size: operand::Size,
+    ops: &[operand::Opnd],
+    constant: &dyn Fn(&str) -> Option<i64>,
+) -> Result<(Option<u32>, bool), String> {
+    use insn::Op;
+    use operand::{Mode, Opnd};
+    const WRITTEN: &str =
+        "AP is the argument list at 32(FP) (DESIGN-0004): vmacro doesn't take code that writes it";
+    let reach = |n: i64, bytes: i64| (n >= 0 && n % 4 == 0).then(|| ((n + bytes - 1) / 4) as u32);
+    let (mut args, mut list) = (None, false);
+    for (i, o) in ops.iter().enumerate() {
+        let address = address(op, i);
+        let bytes = match (op, i) {
+            (Op::Movz(s) | Op::Cvt(s), 0) => s.bytes(),
+            _ => size.bytes(),
+        }
+        .max(4);
+        let reached = match o {
+            Opnd::Reg(12) if i + 1 == ops.len() && writes_last(op) => return Err(WRITTEN.into()),
+            Opnd::Mem(Mode::Inc(12) | Mode::Dec(12) | Mode::IncDef(12), _) => {
+                return Err(WRITTEN.into());
+            }
+            Opnd::Mem(Mode::DispDef(e, 12), _) => constant(e).and_then(|n| reach(n, 4)),
+            Opnd::Mem(Mode::Def(12), None) if !address => reach(0, bytes),
+            Opnd::Mem(Mode::Disp(e, 12), None) if !address => {
+                constant(e).and_then(|n| reach(n, bytes))
+            }
+            Opnd::Reg(12) | Opnd::Mem(Mode::Def(12) | Mode::Disp(_, 12), _) => None,
+            _ => continue,
+        };
+        match reached {
+            Some(a) => args = args.max(Some(a)),
+            None => list = true,
+        }
+    }
+    Ok((args, list))
+}
+
 /// The destination of a branch or jump.
 fn branch_target(op: insn::Op, ops: &[operand::Opnd]) -> Option<&operand::Opnd> {
     use insn::Op;
@@ -620,36 +1058,97 @@ fn native_writes(mn: &str, rest: &str) -> Option<u8> {
     (19..=28).contains(&n).then(|| n - 17)
 }
 
-/// Where a CALL routine's frame (DESIGN-0004) keeps the registers it saves:
-/// past the frame record at 0, the handler at 16, the descriptor's address
-/// at 24, and the caller's AP at 32.
-// ponytail: the caller's AP has 32 until the argument list moves there.
-const RSA: usize = 40;
+/// A CALL routine's frame (DESIGN-0004): past the frame record at 0, the
+/// handler at 16 and the descriptor's address at 24, the argument list it
+/// homes at 32, if any, then the registers it saves, x18 first, at `rsa`.
+pub(crate) struct Frame {
+    regs: Vec<u8>,
+    home: Option<u32>,
+    rsa: usize,
+    size: usize,
+}
 
-/// A CALL routine's frame: the ARM64 registers it saves, x18 first, and
-/// its size.
-fn frame(saved: &[u8]) -> (Vec<u8>, usize) {
+impl Frame {
+    /// Stores or loads the registers it saves, through x17 if the save
+    /// area is past where `stp` reaches from FP.
+    fn saves(&self, pair: &str, one: &str) -> Vec<String> {
+        if self.rsa + 8 * self.regs.len() <= 512 {
+            return saves(&self.regs, "x29", self.rsa, pair, one);
+        }
+        let mut out = vec![format!("\tadd x17, x29, #{}", self.rsa)];
+        out.extend(saves(&self.regs, "x17", 0, pair, one));
+        out
+    }
+}
+
+fn frame(saved: &[u8], home: Option<u32>) -> Frame {
     let mut regs = vec![operand::SP];
-    regs.extend(saved.iter().map(|r| operand::arm(*r).unwrap()));
-    let size = (RSA + 8 * regs.len()).next_multiple_of(16);
-    (regs, size)
+    regs.extend(arms(saved));
+    let rsa = 32 + home.map_or(0, |n| (4 + 4 * n as usize).next_multiple_of(8));
+    let size = (rsa + 8 * regs.len()).next_multiple_of(16);
+    Frame {
+        regs,
+        home,
+        rsa,
+        size,
+    }
 }
 
 /// A CALL routine's prologue (docs/macro32.md), with its descriptor at
 /// `fdsc`: the frame record, a clear handler and the descriptor's address,
-/// then FP, then the registers.
-fn call_prologue(saved: &[u8], fdsc: &str) -> Vec<String> {
-    let (regs, size) = frame(saved);
-    let mut out = vec![
-        format!("\tstp x29, x30, [sp, #-{size}]!"),
+/// then FP, the argument list and the registers. The list is the count,
+/// from x9, at most what it has room for, then the arguments: the first
+/// eight from x0-x7, the rest from the caller's stack, as many as there
+/// are. Local labels from `label` on.
+fn call_prologue(f: &Frame, fdsc: &str, label: u32) -> Vec<String> {
+    let size = f.size;
+    let mut out = if size <= 504 {
+        vec![format!("\tstp x29, x30, [sp, #-{size}]!")]
+    } else {
+        vec![
+            format!("\tsub sp, sp, #{size}"),
+            "\tstp x29, x30, [sp]".into(),
+        ]
+    };
+    out.extend([
         format!("\tadrp x16, {fdsc}"),
         format!("\tadd x16, x16, #:lo12:{fdsc}"),
         "\tstp xzr, x16, [sp, #16]".into(),
         "\tmov x29, sp".into(),
-        "\tstr x12, [x29, #32]".into(),
-    ];
-    out.extend(saves(&regs, "x29", RSA, "stp", "str"));
-    out.extend(["\tmov x12, x13".into(), "\tmov x18, x29".into()]);
+    ]);
+    if let Some(n) = f.home {
+        out.extend([
+            "\tand x16, x9, #255".into(),
+            format!("\tmov x17, #{n}"),
+            "\tcmp x16, x17".into(),
+            "\tcsel x16, x16, x17, ls".into(),
+            "\tstr w16, [x29, #32]".into(),
+        ]);
+        let n = n as usize;
+        for i in (0..n.min(8)).step_by(2) {
+            out.push(if i + 1 < n {
+                format!("\tstp w{i}, w{}, [x29, #{}]", i + 1, 36 + 4 * i)
+            } else {
+                format!("\tstr w{i}, [x29, #{}]", 36 + 4 * i)
+            });
+        }
+        if n > 8 {
+            let (again, done) = (format!("{label}$"), format!("{}$", label + 1));
+            out.extend([
+                "\tsubs x16, x16, #8".into(),
+                format!("\tb.ls {done}"),
+                format!("\tadd x13, x29, #{size}"),
+                "\tadd x17, x29, #68".into(),
+                format!("{again}:\tldr x14, [x13], #8"),
+                "\tstr w14, [x17], #4".into(),
+                "\tsubs x16, x16, #1".into(),
+                format!("\tb.ne {again}"),
+                format!("{done}:"),
+            ]);
+        }
+    }
+    out.extend(f.saves("stp", "str"));
+    out.push("\tmov x18, x29".into());
     out
 }
 
@@ -657,14 +1156,13 @@ fn call_prologue(saved: &[u8], fdsc: &str) -> Vec<String> {
 /// of its own next to the code's, so that whoever may run the routine may
 /// read it: the registers it saves, where, the frame's size, no static
 /// handler, and its name, as an offset from the descriptor.
-fn descriptor(label: &str, name: &str, saved: &[u8], psect: &str) -> Vec<String> {
-    let (_, size) = frame(saved);
+fn descriptor(label: &str, name: &str, saved: &[u8], f: &Frame, psect: &str) -> Vec<String> {
     let bits: u32 = 1 | saved.iter().map(|r| 1 << (r - 1)).sum::<u32>();
     vec![
         "\t.SAVE_PSECT LOCAL_BLOCK".into(),
         format!("\t.PSECT {psect}_FDSC, PIC, SHR, EXE, NOWRT, QUAD"),
         "\t.ALIGN QUAD".into(),
-        format!("{label}:\t.LONG 0, {bits}, {RSA}, {size}"),
+        format!("{label}:\t.LONG 0, {bits}, {}, {}", f.rsa, f.size),
         "\t.QUAD 0".into(),
         format!("\t.QUAD {label}N-{label}"),
         format!("{label}N:\t.ASCIC \"{name}\""),
@@ -684,17 +1182,41 @@ fn saves(regs: &[u8], base: &str, at: usize, pair: &str, one: &str) -> Vec<Strin
         .collect()
 }
 
-/// `RET` from a CALL routine that saves `saved`.
-pub(crate) fn epilogue(saved: &[u8]) -> Vec<String> {
-    let (regs, size) = frame(saved);
-    let mut out = vec!["\tldr x12, [x29, #32]".to_string()];
-    out.extend(saves(&regs, "x29", RSA, "ldp", "ldr"));
-    out.extend([
-        "\tmov sp, x29".into(),
-        format!("\tldp x29, x30, [sp], #{size}"),
-        "\tret".into(),
-    ]);
+/// `RET` from a CALL routine with frame `f`.
+pub(crate) fn epilogue(f: &Frame) -> Vec<String> {
+    let mut out = f.saves("ldp", "ldr");
+    out.push("\tmov sp, x29".into());
+    if f.size <= 504 {
+        out.push(format!("\tldp x29, x30, [sp], #{}", f.size));
+    } else {
+        out.extend([
+            "\tldp x29, x30, [sp]".into(),
+            format!("\tadd sp, sp, #{}", f.size),
+        ]);
+    }
+    out.push("\tret".into());
     out
+}
+
+/// `RET` from whatever frame FP is at, as its descriptor says, as a VAX
+/// RET reads the frame's register mask: what it saved, x18-x28 by the
+/// bits from bit 0, from its save area, then FP and the return address.
+fn any_epilogue(g: &mut operand::Gen) {
+    g.emit("ldr x16, [x29, #24]");
+    g.emit("ldr w15, [x16, #4]");
+    g.emit("ldr w17, [x16, #8]");
+    g.emit("add x17, x29, x17");
+    for n in 0..11 {
+        let skip = g.label();
+        g.emit(format!("tbz w15, #{n}, {skip}"));
+        g.emit(format!("ldr x{}, [x17], #8", 18 + n));
+        g.place_label(&skip);
+    }
+    g.emit("ldr w17, [x16, #12]");
+    g.emit("mov sp, x29");
+    g.emit("ldp x29, x30, [sp]");
+    g.emit("add sp, sp, x17");
+    g.emit("ret");
 }
 
 /// The ARM64 registers that hold VAX registers `saved`.
@@ -702,34 +1224,48 @@ fn arms(saved: &[u8]) -> Vec<u8> {
     saved.iter().map(|r| operand::arm(*r).unwrap()).collect()
 }
 
+/// What a JSB routine saves: the registers, and x30 if it calls.
+fn jsb_saves(saved: &[u8], lr: bool) -> Vec<u8> {
+    let mut regs = arms(saved);
+    if lr {
+        regs.push(30);
+    }
+    regs
+}
+
 /// A JSB routine's prologue, if it saves anything: the registers, all 64
-/// bits, below both stacks, with the caller's `sp` and VAX SP, then both
-/// stacks below them, so that what it pushes doesn't overwrite them.
-fn jsb_prologue(saved: &[u8]) -> Vec<String> {
-    if saved.is_empty() {
+/// bits, and x30 if it calls, below both stacks, with the caller's `sp`
+/// and VAX SP, then both stacks below them, so that what it pushes doesn't
+/// overwrite them.
+fn jsb_prologue(saved: &[u8], lr: bool) -> Vec<String> {
+    let regs = jsb_saves(saved, lr);
+    if regs.is_empty() {
         return Vec::new();
     }
-    let size = (16 + 8 * saved.len()).next_multiple_of(16);
+    let size = (16 + 8 * regs.len()).next_multiple_of(16);
     let mut out = vec![
         "\tmov x16, sp".to_string(),
         "\tcmp x16, x18".into(),
         "\tcsel x17, x16, x18, lo".into(),
         "\tand x17, x17, #0xfffffffffffffff0".into(),
         format!("\tsub x17, x17, #{size}"),
+        // sp first: the PAL delivers an interrupt below both stacks.
+        "\tmov sp, x17".into(),
         "\tstp x16, x18, [x17]".into(),
     ];
-    out.extend(saves(&arms(saved), "x17", 16, "stp", "str"));
-    out.extend(["\tmov x18, x17".into(), "\tmov sp, x17".into()]);
+    out.extend(saves(&regs, "x17", 16, "stp", "str"));
+    out.push("\tmov x18, x17".into());
     out
 }
 
-/// `RSB` from a JSB routine that saves `saved`, with VAX SP back where the
-/// prologue left it: the registers, then both stacks.
-pub(crate) fn jsb_epilogue(saved: &[u8]) -> Vec<String> {
-    if saved.is_empty() {
+/// `RSB` from a JSB routine that saves `saved`, and x30 if `lr`, with VAX
+/// SP back where the prologue left it: the registers, then both stacks.
+pub(crate) fn jsb_epilogue(saved: &[u8], lr: bool) -> Vec<String> {
+    let regs = jsb_saves(saved, lr);
+    if regs.is_empty() {
         return Vec::new();
     }
-    let mut out = saves(&arms(saved), "x18", 16, "ldp", "ldr");
+    let mut out = saves(&regs, "x18", 16, "ldp", "ldr");
     out.extend([
         "\tldp x16, x17, [x18]".into(),
         "\tmov sp, x16".into(),

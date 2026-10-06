@@ -214,7 +214,9 @@ IOC$TRNDEVNAM::
 ; astprm in the caller's mode. The console's driver (TT$FDT) writes p2
 ; bytes at p1, or reads a line into them, after the prompt in p5 and p6
 ; for IO$_READPROMPT; the disks' (DK$FDT) reads or writes them at LBN p3.
-        .ENTRY  EXE$QIO, ^M<R2, R3, R4, R5, R6, R7, R8>
+; The FDT routines read the arguments through AP, so it homes them all.
+EXE$QIO::
+        .CALL_ENTRY HOME_ARGS=TRUE, MAX_ARGS=12
         MOVL    SCH$GL_CURPCB, R4
         MOVZWL  8(AP), R0
         BEQL    75$
@@ -241,8 +243,9 @@ IOC$TRNDEVNAM::
 ; $QIOW efn, chan, func, iosb, astadr, astprm, p1, p2, p3, p4, p5, p6:
 ; $QIO, then waits for the event flag, and while iosb's status is still 0,
 ; which says the flag was set for something else, clears it and waits
-; again, as VMS's $SYNCH.
-        .ENTRY  EXE$QIOW, ^M<R2, R3, R4, R5>
+; again, as VMS's $SYNCH. It passes its argument list on, all 12.
+EXE$QIOW::
+        .CALL_ENTRY MAX_ARGS=12
         CALLG   (AP), G^EXE$QIO
         BLBC    R0, 90$
 10$:    PUSHL   4(AP)
@@ -268,7 +271,7 @@ IOC$TRNDEVNAM::
 ; request: R3 = it, R0 = SS$_NORMAL, or SS$_INSFMEM, or SS$_EXQUOTA if it
 ; would be 64 KB or more. Uses R1 and R2.
 IOC$ALLOCIRP::
-        .JSB_ENTRY  OUTPUT=<R3>, SCRATCH=<R2>
+        .JSB_ENTRY  INPUT=<AP>, OUTPUT=<R3>, SCRATCH=<R2>
         ADDL2   #IRP$K_LENGTH, R1
         CMPL    R1, #^XFFF0
         BGTRU   80$

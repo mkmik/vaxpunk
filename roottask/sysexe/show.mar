@@ -302,6 +302,7 @@ ADD2:
         MOVZBL  #^A/0/, R0
         BSBB    ADDCHAR
         MOVL    (SP)+, R1
+        BRB     ADDDEC                  ; a tail call, not a fall-through
 ; ADDDEC: appends R1 in decimal to LINE. Uses R0-R3, R5.
 ADDDEC:
         .JSB_ENTRY  SCRATCH=<R2, R3, R5>

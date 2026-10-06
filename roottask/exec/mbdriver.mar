@@ -238,7 +238,7 @@ NEWMBX:
 ; R0 = SS$_NORMAL, SS$_ILLIOFUNC, SS$_ACCVIO, SS$_MBTOOSML, SS$_MBFULL, or
 ; IOC$ALLOCIRP's failure. IPL$_SYNCH. Uses R0-R8.
 MB$FDT::
-        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5, R6, R7, R8>
+        .JSB_ENTRY  INPUT=<AP>, SCRATCH=<R2, R3, R4, R5, R6, R7, R8>
         BICL3   #^C63, 12(AP), R0       ; the function, without modifiers
         CMPL    R0, #IO$_WRITEVBLK
         BEQL    MBWRITE

@@ -2,13 +2,16 @@
 
 use vasm::Dialect;
 
-/// What `mn operands` compiles to in a JSB routine, on vmacro's second pass.
+/// What `mn operands` compiles to in exception code, on vmacro's second
+/// pass: code whose stack vmacro doesn't follow.
 fn lines(mn: &str, operands: &str) -> Vec<String> {
     let mut m = vmacro::Macro32::default();
     let constant = |e: &str| e.parse().ok();
     for _ in 0..2 {
         m.label("T", false);
-        m.statement(".JSB32_ENTRY", "", &constant).unwrap().unwrap();
+        m.statement(".EXCEPTION_ENTRY", "", &constant)
+            .unwrap()
+            .unwrap();
         let out = m.statement(mn, operands, &constant).unwrap().unwrap();
         if !m.again() {
             return out.iter().map(|l| l.trim().to_string()).collect();
