@@ -119,6 +119,17 @@ same section:
 An address in the unmapped pages below the stack means the stack overflowed,
 and `-VRUN-I-STACKOVF` says so.
 
+Then a line for each frame of the calling standard's
+([DESIGN-0004](../../docs/design/0004-calling-standard.md)) on the image's
+FP chain, from the innermost out, named by its descriptor, with where it
+returns to. The walk stops at an FP of 0, at a frame whose descriptor
+doesn't name a routine, and at memory the image can't read:
+
+```
+-VRUN-I-FRAME, INNER's frame, which returns to MIDDLE+%X1C (image section 1 + %X80)
+-VRUN-I-FRAME, START's frame, which returns to PC=000000007FF01000
+```
+
 A hung image is stopped after `--timeout` seconds (default 30).
 
 ## Debugging
@@ -140,6 +151,7 @@ timeout, and quitting the debugger ends the run.
 
 Everything the image writes goes to vrun's standard output unchanged. The stub
 ends the run with one report, which vrun removes: `!vrun exit STATUS`,
-`!vrun fault ESR PC FAR`, or `!vrun stubfault ESR PC FAR` for a bug in the stub
+`!vrun fault ESR PC FAR`, then a return address and a routine name for each
+frame the stub found, or `!vrun stubfault ESR PC FAR` for a bug in the stub
 itself, with 16-digit hex values. The report may follow the image's output on
 the same line. An image must not write `!vrun ` itself.

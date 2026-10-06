@@ -98,6 +98,9 @@ pub fn arm(n: u8) -> Result<u8> {
 /// The VAX stack pointer.
 pub const SP: u8 = 18;
 
+/// Where a frame keeps its condition handler: what `(FP)` means.
+const HANDLER: i64 = 16;
+
 /// Splits operands at commas outside `()`, `[]` and `<>`.
 pub fn split(text: &str) -> Vec<String> {
     let (mut out, mut cur, mut depth) = (Vec::new(), String::new(), 0i32);
@@ -338,6 +341,7 @@ impl<'a> Gen<'a> {
 
     fn mode(&mut self, mode: &Mode, size: Size) -> Result<(String, i64)> {
         Ok(match mode {
+            Mode::Def(13) => ("x29".into(), HANDLER),
             Mode::Def(n) => (format!("x{}", arm(*n)?), 0),
             Mode::Inc(n) => {
                 self.wrote(*n);
@@ -381,11 +385,19 @@ impl<'a> Gen<'a> {
     }
 
     /// `d(Rn)`: a displacement known now stays one; any other is added in
-    /// a register, sign-extended from 32 bits.
+    /// a register, sign-extended from 32 bits. From FP, 0 is the condition
+    /// handler and the rest of the frame is the routine's own, as in AMACRO:
+    /// only its locals, below FP, are the source's.
     fn disp(&mut self, e: &str, n: u8) -> Result<(String, i64)> {
         let r = format!("x{}", arm(n)?);
         if let Some(d) = self.constant(e) {
-            return Ok((r, d));
+            return match (n, d) {
+                (13, 0) => Ok((r, HANDLER)),
+                (13, 1..) => Err(format!(
+                    "{d}(FP): the frame is vaxpunk's (DESIGN-0004); (FP) is the condition handler"
+                )),
+                _ => Ok((r, d)),
+            };
         }
         let t = self.tmp()?;
         self.imm_into(&t, e, Size::L)?;

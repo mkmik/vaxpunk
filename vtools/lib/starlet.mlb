@@ -60,7 +60,9 @@ SS$_NONEXPR = 2280
 SS$_NOHANDLER = 2296                    ; no such exit handler
 SS$_NOSIGNAL = 2304                     ; $UNWIND outside a condition handler
 SS$_RESIGNAL = 2328                     ; a handler's: let the next one have the condition
+SS$_UNWIND = 2336                       ; to a frame's handler: $UNWIND removes the frame
 SS$_UNWINDING = 2344                    ; $UNWIND twice for one condition
+SS$_SIGNAL64 = 9732                     ; a 64-bit signal array's second longword
 SS$_NOMOREPROC = 2472                   ; a wildcard $GETJPI is past the last process
 SS$_NOSUCHDEV = 2312
 SS$_NOSUCHFILE = 2320
@@ -476,22 +478,41 @@ PSL$C_SUPER = 2
 PSL$C_USER = 3
         .ENDM   $PSLDEF
 
-; $CHFDEF: a condition handler's arguments, as VMS's: the signal array,
+; $CHFDEF: a condition handler's arguments, as 64-bit VMS's
+; (DESIGN-0004, *Condition handling*). The 32-bit signal array: a count,
 ; the condition, its arguments, then the PC and PSL where it was
-; signaled; and the mechanism array, the frame that established the
-; handler, its depth, 0 for the routine that signaled, and the R0 and R1
-; it goes on with.
+; signaled, longwords. The 64-bit one: a count, SS$_SIGNAL64, then the
+; same as quadwords. The mechanism array: the frame that established the
+; handler, its depth, 0 for the routine that signaled, the R0 and R1 it
+; goes on with, x2-x17 when it was signaled, and both signal arrays. The
+; CHF$L_MCH_ names are the low longwords of the quadwords, as VMS kept
+; them for 32-bit code.
         .MACRO  $CHFDEF
 CHF$L_SIGARGLST = 4                     ; a handler's first argument
 CHF$L_MCHARGLST = 8                     ; its second
 CHF$L_SIG_ARGS = 0                      ; the signal array's count
 CHF$L_SIG_NAME = 4                      ; the condition
 CHF$L_SIG_ARG1 = 8
-CHF$L_MCH_ARGS = 0                      ; the mechanism array's count, 4
-CHF$L_MCH_FRAME = 4
-CHF$L_MCH_DEPTH = 8
-CHF$L_MCH_SAVR0 = 12
-CHF$L_MCH_SAVR1 = 16
+CHF64$L_SIG_ARGS = 0                    ; the 64-bit one's count
+CHF64$L_SIGNAL64 = 4                    ; SS$_SIGNAL64
+CHF64$Q_SIG_NAME = 8                    ; the condition
+CHF64$Q_SIG_ARG1 = 16
+CHF$IS_MCH_ARGS = 0                     ; the quadwords after the first, 24
+CHF$IS_MCH_FLAGS = 4
+CHF$PH_MCH_FRAME = 8                    ; the establisher's FP
+CHF$IS_MCH_DEPTH = 16                   ; 0 the frame that signaled, 1 its caller
+CHF$PH_MCH_DADDR = 24                   ; handler data, 0
+CHF$PH_MCH_ESF_ADDR = 32                ; the exception's frame, 0 for a signal
+CHF$PH_MCH_SIG_ADDR = 40                ; the 32-bit signal array
+CHF$IH_MCH_RETVAL = 48                  ; R0
+CHF$IH_MCH_RETVAL2 = 56                 ; R1
+CHF$IH_MCH_SAVX2 = 64                   ; x2-x17, 8 bytes each
+CHF$PH_MCH_SIG64_ADDR = 192             ; the 64-bit signal array
+CHF$S_MCH = 200
+CHF$L_MCH_FRAME = CHF$PH_MCH_FRAME
+CHF$L_MCH_DEPTH = CHF$IS_MCH_DEPTH
+CHF$L_MCH_SAVR0 = CHF$IH_MCH_RETVAL
+CHF$L_MCH_SAVR1 = CHF$IH_MCH_RETVAL2
         .ENDM   $CHFDEF
 
 ; $STSDEF: a condition value's fields.

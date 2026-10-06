@@ -40,8 +40,19 @@ struct Options {
 #[derive(Debug, PartialEq)]
 enum Outcome {
     Exit(u64),
-    Fault { esr: u64, pc: u64, far: u64 },
-    StubFault { esr: u64, pc: u64, far: u64 },
+    /// A fault, with the frames the stub found: each routine's name and
+    /// the address it returns to.
+    Fault {
+        esr: u64,
+        pc: u64,
+        far: u64,
+        frames: Vec<(String, u64)>,
+    },
+    StubFault {
+        esr: u64,
+        pc: u64,
+        far: u64,
+    },
 }
 
 fn main() -> ExitCode {
@@ -160,9 +171,18 @@ fn run() -> Result<u8, String> {
             }
             Ok(host_code(status))
         }
-        Some(Outcome::Fault { esr, pc, far }) => {
+        Some(Outcome::Fault {
+            esr,
+            pc,
+            far,
+            frames,
+        }) => {
             let (msg, status) = fault(esr, pc, far, &image, &symbols);
             eprintln!("{msg}");
+            for (name, pc) in frames {
+                let to = place(pc, &image, &symbols).unwrap_or(format!("PC={pc:016X}"));
+                eprintln!("-VRUN-I-FRAME, {name}'s frame, which returns to {to}");
+            }
             Ok(host_code(status))
         }
         Some(Outcome::StubFault { esr, pc, far }) => Err(format!(
@@ -272,15 +292,24 @@ fn parse_report(report: &[u8]) -> Option<Outcome> {
     let report = std::str::from_utf8(report).ok()?;
     let mut words = report.split_ascii_whitespace();
     let kind = words.next()?;
-    let mut hex = words.map(|w| u64::from_str_radix(w, 16).ok());
-    let mut next = || hex.next().flatten();
+    let hex = |w: Option<&str>| u64::from_str_radix(w?, 16).ok();
+    let mut next = || hex(words.next());
     match kind {
         "exit" => Some(Outcome::Exit(next()?)),
-        "fault" => Some(Outcome::Fault {
-            esr: next()?,
-            pc: next()?,
-            far: next()?,
-        }),
+        "fault" => {
+            let (esr, pc, far) = (next()?, next()?, next()?);
+            // Then each frame's return address and routine name.
+            let mut frames = Vec::new();
+            while let Some(pc) = words.next() {
+                frames.push((words.next()?.to_string(), hex(Some(pc))?));
+            }
+            Some(Outcome::Fault {
+                esr,
+                pc,
+                far,
+                frames,
+            })
+        }
         "stubfault" => Some(Outcome::StubFault {
             esr: next()?,
             pc: next()?,
@@ -414,9 +443,17 @@ mod tests {
             Some(Outcome::Fault {
                 esr: 0x9200_0006,
                 pc: 0x10000,
-                far: 8
+                far: 8,
+                frames: Vec::new(),
             })
         );
+        let traced = parse_report(
+            b"fault 0000000092000006 0000000000010000 0000000000000008 0000000000010040 INNER\n",
+        );
+        let Some(Outcome::Fault { frames, .. }) = traced else {
+            panic!("{traced:?}")
+        };
+        assert_eq!(frames, [("INNER".to_string(), 0x10040)]);
         assert_eq!(parse_report(b"exit zz\n"), None);
     }
 

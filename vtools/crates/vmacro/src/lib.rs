@@ -99,6 +99,9 @@ pub struct Macro32 {
     /// Whether the current routine loaded SP from elsewhere: its frame,
     /// and what it saved, are no longer on the stack.
     switched: bool,
+    /// The psect code goes in, and those `.SAVE_PSECT` saved.
+    psect: String,
+    saved_psects: Vec<String>,
 }
 
 impl Default for Macro32 {
@@ -116,6 +119,8 @@ impl Default for Macro32 {
             warned: 0,
             falls: false,
             switched: false,
+            psect: "$CODE$".into(),
+            saved_psects: Vec::new(),
         }
     }
 }
@@ -148,7 +153,22 @@ impl Dialect for Macro32 {
             ".EXTRN" => one(format!(".EXTERNAL {rest}")),
             ".SIGNED_BYTE" => one(format!(".BYTE {rest}")),
             ".SIGNED_WORD" => one(format!(".WORD {rest}")),
-            ".PSECT" => psect(rest).map(|line| Ok(vec![line])),
+            ".PSECT" => {
+                if let Some(name) = operand::split(rest).first() {
+                    self.psect = name.to_ascii_uppercase();
+                }
+                psect(rest).map(|line| Ok(vec![line]))
+            }
+            ".SAVE_PSECT" => {
+                self.saved_psects.push(self.psect.clone());
+                None
+            }
+            ".RESTORE_PSECT" => {
+                if let Some(p) = self.saved_psects.pop() {
+                    self.psect = p;
+                }
+                None
+            }
             ".ERROR" => Some(Err(format!("%MACRO-E-GENERR, {}", rest.trim()))),
             // Listing control, and what only matters on a VAX.
             ".SBTTL" | ".SUBTITLE" | ".PAGE" | ".LIST" | ".NLIST" | ".SHOW" | ".NOSHOW"
@@ -163,7 +183,8 @@ impl Dialect for Macro32 {
     }
 
     fn label(&mut self, name: &str, global: bool) {
-        if name.contains('@') {
+        // Local labels, and the descriptors vmacro makes.
+        if name.contains('@') || name.starts_with("FDSC$$") {
             return;
         }
         if !self.compiling {
@@ -496,7 +517,11 @@ impl Macro32 {
         }
         // ponytail: a debugging aid while declarations are reviewed.
         match kind {
-            Kind::Call => out.extend(call_prologue(&saved)),
+            Kind::Call => {
+                let fdsc = format!("FDSC$${i}");
+                out.extend(descriptor(&fdsc, &names[0], &saved, &self.psect));
+                out.extend(call_prologue(&saved, &fdsc));
+            }
             Kind::Jsb | Kind::Jsb32 => out.extend(jsb_prologue(&saved)),
             Kind::Exception => {}
         }
@@ -595,47 +620,65 @@ fn native_writes(mn: &str, rest: &str) -> Option<u8> {
     (19..=28).contains(&n).then(|| n - 17)
 }
 
-/// A CALL routine's prologue: the frame (docs/macro32.md), saving `saved`.
-fn call_prologue(saved: &[u8]) -> Vec<String> {
-    let size = frame_size(saved);
-    // What it saved, for $UNWIND, which RETs from any frame.
-    let mask: u32 = saved.iter().map(|r| 1 << r).sum();
+/// Where a CALL routine's frame (DESIGN-0004) keeps the registers it saves:
+/// past the frame record at 0, the handler at 16, the descriptor's address
+/// at 24, and the caller's AP at 32.
+// ponytail: the caller's AP has 32 until the argument list moves there.
+const RSA: usize = 40;
+
+/// A CALL routine's frame: the ARM64 registers it saves, x18 first, and
+/// its size.
+fn frame(saved: &[u8]) -> (Vec<u8>, usize) {
+    let mut regs = vec![operand::SP];
+    regs.extend(saved.iter().map(|r| operand::arm(*r).unwrap()));
+    let size = (RSA + 8 * regs.len()).next_multiple_of(16);
+    (regs, size)
+}
+
+/// A CALL routine's prologue (docs/macro32.md), with its descriptor at
+/// `fdsc`: the frame record, a clear handler and the descriptor's address,
+/// then FP, then the registers.
+fn call_prologue(saved: &[u8], fdsc: &str) -> Vec<String> {
+    let (regs, size) = frame(saved);
     let mut out = vec![
-        format!("\tsub sp, sp, #{size}"),
-        "\tstp xzr, x12, [sp]".into(),
-        "\tstp x29, x30, [sp, #16]".into(),
-        format!("\tmov x14, #{mask}"),
-        "\tstp x18, x14, [sp, #32]".into(),
-    ];
-    out.extend(saves(saved, "sp", 48, "stp", "str"));
-    out.extend([
+        format!("\tstp x29, x30, [sp, #-{size}]!"),
+        format!("\tadrp x16, {fdsc}"),
+        format!("\tadd x16, x16, #:lo12:{fdsc}"),
+        "\tstp xzr, x16, [sp, #16]".into(),
         "\tmov x29, sp".into(),
-        "\tmov x12, x13".into(),
-        "\tmov x18, sp".into(),
-    ]);
+        "\tstr x12, [x29, #32]".into(),
+    ];
+    out.extend(saves(&regs, "x29", RSA, "stp", "str"));
+    out.extend(["\tmov x12, x13".into(), "\tmov x18, x29".into()]);
     out
 }
 
-/// The call frame: condition handler, AP, FP, LR, the caller's SP, the
-/// mask of what it saves, then the saved registers, 16-byte aligned.
-fn frame_size(saved: &[u8]) -> usize {
-    (48 + 8 * saved.len()).next_multiple_of(16)
+/// A CALL routine's frame descriptor, `$FDSCDEF`, named `label`, in a psect
+/// of its own next to the code's, so that whoever may run the routine may
+/// read it: the registers it saves, where, the frame's size, no static
+/// handler, and its name, as an offset from the descriptor.
+fn descriptor(label: &str, name: &str, saved: &[u8], psect: &str) -> Vec<String> {
+    let (_, size) = frame(saved);
+    let bits: u32 = 1 | saved.iter().map(|r| 1 << (r - 1)).sum::<u32>();
+    vec![
+        "\t.SAVE_PSECT LOCAL_BLOCK".into(),
+        format!("\t.PSECT {psect}_FDSC, PIC, SHR, EXE, NOWRT, QUAD"),
+        "\t.ALIGN QUAD".into(),
+        format!("{label}:\t.LONG 0, {bits}, {RSA}, {size}"),
+        "\t.QUAD 0".into(),
+        format!("\t.QUAD {label}N-{label}"),
+        format!("{label}N:\t.ASCIC \"{name}\""),
+        "\t.RESTORE_PSECT".into(),
+    ]
 }
 
-/// Stores or loads the saved registers, in pairs, from `base` + `at`.
-fn saves(saved: &[u8], base: &str, at: usize, pair: &str, one: &str) -> Vec<String> {
-    let arm = |r: &u8| operand::arm(*r).unwrap();
-    saved
-        .chunks(2)
+/// Stores or loads ARM64 registers `regs`, in pairs, from `base` + `at`.
+fn saves(regs: &[u8], base: &str, at: usize, pair: &str, one: &str) -> Vec<String> {
+    regs.chunks(2)
         .enumerate()
-        .map(|(i, regs)| match regs {
-            [a, b] => format!(
-                "\t{pair} x{}, x{}, [{base}, #{}]",
-                arm(a),
-                arm(b),
-                at + 16 * i
-            ),
-            [a] => format!("\t{one} x{}, [{base}, #{}]", arm(a), at + 16 * i),
+        .map(|(i, r)| match r {
+            [a, b] => format!("\t{pair} x{a}, x{b}, [{base}, #{}]", at + 16 * i),
+            [a] => format!("\t{one} x{a}, [{base}, #{}]", at + 16 * i),
             _ => unreachable!(),
         })
         .collect()
@@ -643,16 +686,20 @@ fn saves(saved: &[u8], base: &str, at: usize, pair: &str, one: &str) -> Vec<Stri
 
 /// `RET` from a CALL routine that saves `saved`.
 pub(crate) fn epilogue(saved: &[u8]) -> Vec<String> {
-    let mut out = vec!["\tmov sp, x29".to_string()];
-    out.extend(saves(saved, "sp", 48, "ldp", "ldr"));
+    let (regs, size) = frame(saved);
+    let mut out = vec!["\tldr x12, [x29, #32]".to_string()];
+    out.extend(saves(&regs, "x29", RSA, "ldp", "ldr"));
     out.extend([
-        "\tldr x18, [sp, #32]".into(),
-        "\tldp x29, x30, [sp, #16]".into(),
-        "\tldr x12, [sp, #8]".into(),
-        format!("\tadd sp, sp, #{}", frame_size(saved)),
+        "\tmov sp, x29".into(),
+        format!("\tldp x29, x30, [sp], #{size}"),
         "\tret".into(),
     ]);
     out
+}
+
+/// The ARM64 registers that hold VAX registers `saved`.
+fn arms(saved: &[u8]) -> Vec<u8> {
+    saved.iter().map(|r| operand::arm(*r).unwrap()).collect()
 }
 
 /// A JSB routine's prologue, if it saves anything: the registers, all 64
@@ -671,7 +718,7 @@ fn jsb_prologue(saved: &[u8]) -> Vec<String> {
         format!("\tsub x17, x17, #{size}"),
         "\tstp x16, x18, [x17]".into(),
     ];
-    out.extend(saves(saved, "x17", 16, "stp", "str"));
+    out.extend(saves(&arms(saved), "x17", 16, "stp", "str"));
     out.extend(["\tmov x18, x17".into(), "\tmov sp, x17".into()]);
     out
 }
@@ -682,7 +729,7 @@ pub(crate) fn jsb_epilogue(saved: &[u8]) -> Vec<String> {
     if saved.is_empty() {
         return Vec::new();
     }
-    let mut out = saves(saved, "x18", 16, "ldp", "ldr");
+    let mut out = saves(&arms(saved), "x18", 16, "ldp", "ldr");
     out.extend([
         "\tldp x16, x17, [x18]".into(),
         "\tmov sp, x16".into(),

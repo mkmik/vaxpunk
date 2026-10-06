@@ -39,10 +39,10 @@ fn general() {
     assert!(far(&lines("JMP", "G^EXE$DELSELF"), "EXE$DELSELF", "br"));
 }
 
-/// `.ENTRY` keeps its mask in the frame, at 40, where `$UNWIND` reads which
-/// registers the frame saved.
+/// `.ENTRY` builds DESIGN-0004's frame and its descriptor, which says what
+/// it saves: x18, and here R2 and R3 (x19 and x20), at 40 in 64 bytes.
 #[test]
-fn entry_mask() {
+fn entry_frame() {
     let mut m = vmacro::Macro32::default();
     let constant = |e: &str| e.parse().ok();
     m.statement(".ENTRY", "START, 12", &constant);
@@ -52,8 +52,45 @@ fn entry_mask() {
         .unwrap()
         .unwrap();
     let code: Vec<String> = code.iter().map(|l| l.trim().to_string()).collect();
-    assert!(code.contains(&"mov x14, #12".to_string()));
-    assert!(code.contains(&"stp x18, x14, [sp, #32]".to_string()));
+    for line in [
+        "FDSC$$0:\t.LONG 0, 7, 40, 64",
+        "stp x29, x30, [sp, #-64]!",
+        "stp xzr, x16, [sp, #16]",
+        "mov x29, sp",
+        "stp x18, x19, [x29, #40]",
+        "str x20, [x29, #56]",
+    ] {
+        assert!(code.contains(&line.to_string()), "{line}: {code:?}");
+    }
+}
+
+/// `(FP)` is the condition handler, at 16 in the frame; the rest of the
+/// frame isn't the source's.
+#[test]
+fn handler() {
+    let mut m = vmacro::Macro32::default();
+    let constant = |e: &str| e.parse().ok();
+    for _ in 0..2 {
+        m.statement(".ENTRY", "START, 0", &constant);
+        let code = m.statement("MOVL", "R1, (FP)", &constant).unwrap().unwrap();
+        let bad = m.statement("MOVL", "R1, 8(FP)", &constant).unwrap();
+        let local = m
+            .statement("MOVL", "R1, -4(FP)", &constant)
+            .unwrap()
+            .unwrap();
+        if !m.again() {
+            assert!(
+                code.iter().any(|l| l.trim() == "str w1, [x29, #16]"),
+                "{code:?}"
+            );
+            assert!(bad.is_err());
+            assert!(
+                local.iter().any(|l| l.trim() == "str w1, [x29, #-4]"),
+                "{local:?}"
+            );
+            return;
+        }
+    }
 }
 
 /// `PUSHAL (SP)` and `PUSHL SP` push SP through a scratch register: a

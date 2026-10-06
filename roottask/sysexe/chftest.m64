@@ -1,0 +1,27 @@
+        .TITLE  CHFTEST_ARM ARM64 routines CHFTEST calls, as BLISS-64 would build them
+        .IDENT  /V0.1/
+;
+; Routines with the calling standard's frames (vtools/lib/call.mlb,
+; DESIGN-0004), which condition handling must find its way through.
+;
+        .LIBRARY "call.mlb"
+        .EXTERNAL SIGNALER
+
+        .PSECT  $CODE$
+; ARMFAULT: reads S0, which faults in its own frame, which has no handler.
+        $ROUTINE ARMFAULT
+        movz    x1, #0x4001, lsl #16    ; EXEC.EXE's first page
+        ldr     x0, [x1]
+        $RETURN
+
+; ARMSAVE: gives x19-x28, its caller's R2-R11, values of its own, which
+; its frame saves first, then calls SIGNALER, which signals.
+        $ROUTINE ARMSAVE, SAVED=10
+        .IRP    N, <19, 20, 21, 22, 23, 24, 25, 26, 27, 28>
+        movz    x'N, #0x5A00+N
+        movk    x'N, #N, lsl #48
+        .ENDR
+        $CALL   SIGNALER
+        $RETURN
+
+        .END

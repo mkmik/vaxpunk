@@ -151,8 +151,10 @@ it; the system clears FP where a mode's code starts (`EXE$USRSTART`,
 ### The frame descriptor
 
 Each routine with a frame has a frame descriptor, `$FDSCDEF`, a 32-byte
-block in its image's `$LINK$` psect, read-only, readable in every mode
-that runs the routine:
+block, read-only, readable in every mode that runs the routine: vmacro
+and `call.mlb` put it in an `EXE` psect next to the code's, named for it
+with `_FDSC` after, since an executive routine in the vector runs in
+modes that can't read the executive's `$LINK$`:
 
 | Offset | Field | Holds |
 | --- | --- | --- |
@@ -161,7 +163,7 @@ that runs the routine:
 | 8 | `FDSC$L_RSA` | the save area's offset from FP: the saved registers in ascending order, x before d, 8 bytes each |
 | 12 | `FDSC$L_SIZE` | N: the caller's `sp` at the call is FP + N |
 | 16 | `FDSC$Q_HANDLER` | the static handler, if `FDSC$V_HANDLER` |
-| 24 | `FDSC$Q_NAME` | the routine's name, `.ASCIC`, or 0, for tracebacks |
+| 24 | `FDSC$Q_NAME` | the routine's name, `.ASCIC`, as its offset from the descriptor, so that a position-independent psect can hold it, or 0, for tracebacks |
 
 The flags are Alpha's procedure descriptor flags, kept as Itanium and
 x86-64 VMS kept them in their unwind information.

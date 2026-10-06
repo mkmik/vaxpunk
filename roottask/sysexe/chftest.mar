@@ -7,8 +7,11 @@
 ; violation goes to LIB$SIG_TO_RET, which returns from the routine that
 ; took it with SS$_ACCVIO and its caller's registers as they were. A
 ; reserved instruction's handler continues at another PC, with every
-; register as it was but R0, from the mechanism array. $UNWIND outside a
-; handler is SS$_NOSIGNAL. A warning no handler takes is written, and
+; register as it was but R0, from the mechanism array, and finds the
+; 64-bit signal array there too. A frame $UNWIND removes has its handler
+; called with SS$_UNWIND. Frames of ARM64 routines (chftest.m64): a fault
+; in one goes to its caller's handler, and an unwind through one gives
+; back the registers it saved. $UNWIND outside a handler is SS$_NOSIGNAL. A warning no handler takes is written, and
 ; the image goes on; LIB$STOP's condition ends it, through its exit
 ; handler, which says it is ok. A failed EXPECT exits with 2 * N.
 ;
@@ -19,10 +22,12 @@
         $STSDEF
 
         .EXTERNAL LIB$ESTABLISH, LIB$REVERT, LIB$SIGNAL, LIB$STOP, LIB$SIG_TO_RET
+        .EXTERNAL ARMFAULT, ARMSAVE
 
         .PSECT  DATA, NOEXE, WRT, LONG
 SEEN:   .LONG   0                       ; the handlers that ran, a hex digit each
 DEPTH:  .LONG   0                       ; the depth CONTINUE saw last
+UNWOUND:.LONG   0                       ; 1 once MARKER saw SS$_UNWIND
 STATUS: .LONG   0                       ; $EXIT's, for EXH
 EXHBLK: .LONG   0                       ; EXH's exit handler block
         .ADDRESS EXH
@@ -55,6 +60,30 @@ EXHBLK: .LONG   0                       ; EXH's exit handler block
         EXPECT  #SS$_ACCVIO, 7
         MOVL    R6, R0
         EXPECT  #^X66666666, 8
+
+; The same, a frame further in, whose handler sees SS$_UNWIND.
+        CALLS   #0, OUTER
+        EXPECT  #SS$_ACCVIO, 9
+        MOVL    UNWOUND, R0
+        EXPECT  #1, 10
+
+; A fault in an ARM64 routine, which goes to its caller's handler, and an
+; unwind through one, which gives back the R2-R11 it saved.
+        CALLS   #0, CATCHER
+        EXPECT  #SS$_ACCVIO, 11
+        .IRP    N, <2, 3, 4, 5, 6, 7, 8, 9, 10, 11>
+        MOVL    #^X1000+N, R'N
+        .ENDR
+        CALLS   #0, WRAP
+        EXPECT  #SS$_NOSIGNAL, 15
+        .IRP    N, <2, 3, 4, 5, 6, 7, 8, 9, 10, 11>
+        CMPL    R'N, #^X1000+N
+        BNEQ    35$
+        .ENDR
+        BRB     36$
+35$:    MOVL    #32, R0
+        RET
+36$:
 
 ; A reserved instruction, continued at RESUME.
         PUSHAB  OPCODE
@@ -135,6 +164,54 @@ RESUME: CMPL    R1, #^X11111111
         MOVL    #40, R0
         RET
 
+; OUTER: calls MIDDLE, with LIB$SIG_TO_RET as its handler. R0 =
+; SS$_ACCVIO.
+        .ENTRY  OUTER, ^M<>
+        MOVAB   G^LIB$SIG_TO_RET, (FP)
+        CALLS   #0, MIDDLE
+        MOVL    #42, R0
+        RET
+
+; MIDDLE: reads S0, with MARKER as its handler, which the unwind out to
+; OUTER's caller calls.
+        .ENTRY  MIDDLE, ^M<>
+        MOVAB   MARKER, (FP)
+        MOVL    @#^X40010000, R0
+        MOVL    #44, R0
+        RET
+
+; CATCHER: calls ARMFAULT, with LIB$SIG_TO_RET as its handler. R0 =
+; SS$_ACCVIO.
+        .ENTRY  CATCHER, ^M<>
+        MOVAB   G^LIB$SIG_TO_RET, (FP)
+        CALLS   #0, ARMFAULT
+        MOVL    #46, R0
+        RET
+
+; WRAP: calls ARMSAVE, with LIB$SIG_TO_RET as its handler. R0 =
+; SS$_NOSIGNAL, SIGNALER's.
+        .ENTRY  WRAP, ^M<>
+        MOVAB   G^LIB$SIG_TO_RET, (FP)
+        CALLS   #0, ARMSAVE
+        MOVL    #48, R0
+        RET
+
+; SIGNALER: signals SS$_NOSIGNAL, for ARMSAVE.
+        .ENTRY  SIGNALER, ^M<>
+        PUSHL   #SS$_NOSIGNAL
+        CALLS   #1, G^LIB$SIGNAL
+        RET
+
+; MARKER sigargs, mchargs: notes SS$_UNWIND in UNWOUND, and resignals the
+; rest.
+        .ENTRY  MARKER, ^M<>
+        MOVL    CHF$L_SIGARGLST(AP), R0
+        CMPL    CHF$L_SIG_NAME(R0), #SS$_UNWIND
+        BNEQ    90$
+        MOVL    #1, UNWOUND
+90$:    MOVL    #SS$_RESIGNAL, R0
+        RET
+
 ; CONTINUE sigargs, mchargs: a handler that continues SS$_NOSIGNAL, with
 ; R0 = 600D, and keeps the depth in DEPTH. It resignals anything else.
         .ENTRY  CONTINUE, ^M<>
@@ -144,8 +221,9 @@ RESUME: CMPL    R1, #^X11111111
         ASHL    #4, SEEN, SEEN
         BISL2   #1, SEEN
         MOVL    CHF$L_MCHARGLST(AP), R1
-        MOVL    CHF$L_MCH_DEPTH(R1), DEPTH
-        MOVL    #^X600D, CHF$L_MCH_SAVR0(R1)
+        MOVL    CHF$IS_MCH_DEPTH(R1), DEPTH
+        MOVL    #^X600D, R0
+        EVAX_STQ R0, CHF$IH_MCH_RETVAL(R1)
         MOVL    #SS$_CONTINUE, R0
         RET
 90$:    MOVL    #SS$_RESIGNAL, R0
@@ -159,16 +237,23 @@ RESUME: CMPL    R1, #^X11111111
         RET
 
 ; OPCODE sigargs, mchargs: a handler that continues SS$_OPCDEC at RESUME,
-; with R0 = DEC.
+; with R0 = DEC, if the 64-bit signal array has it too.
         .ENTRY  OPCODE, ^M<R2>
         MOVL    CHF$L_SIGARGLST(AP), R0
         CMPL    CHF$L_SIG_NAME(R0), #SS$_OPCDEC
+        BNEQ    90$
+        MOVL    CHF$L_MCHARGLST(AP), R1
+        MOVL    CHF$PH_MCH_SIG64_ADDR(R1), R2
+        CMPL    CHF64$L_SIGNAL64(R2), #SS$_SIGNAL64
+        BNEQ    90$
+        CMPL    CHF64$Q_SIG_NAME(R2), #SS$_OPCDEC
         BNEQ    90$
         MOVL    (R0), R1                ; the count: the PC is the one before last
         MOVAB   RESUME, R2
         MOVL    R2, -4(R0)[R1]
         MOVL    CHF$L_MCHARGLST(AP), R1
-        MOVL    #^X0DEC, CHF$L_MCH_SAVR0(R1)
+        MOVL    #^X0DEC, R2
+        EVAX_STQ R2, CHF$IH_MCH_RETVAL(R1)
         MOVL    #SS$_CONTINUE, R0
         RET
 90$:    MOVL    #SS$_RESIGNAL, R0

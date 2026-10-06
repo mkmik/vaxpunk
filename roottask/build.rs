@@ -3,7 +3,8 @@
 //! and the system disk, sysdisk.img, a Files-11 ODS-2 volume: in [SYSEXE],
 //! EXEC.EXE, linked from exec/*.mar, and an image for each sysexe/*.mar,
 //! linked with sysexe/lib/*.mar, its command table if there is a
-//! sysexe/NAME.cld, and against SYS.STB, the executive's symbols; DCL and
+//! sysexe/NAME.cld, its ARM64 if there is a sysexe/NAME.m64, which vasm
+//! assembles, and against SYS.STB, the executive's symbols; DCL and
 //! HELP with DCL$TABLES, from cld/*.cld, and DCL with sysexe/dcl/*.mar,
 //! its CDU, and HELP and TCPIP with sysexe/help/*.mar, which describes
 //! command tables; in [SYSMGR], the files in sysmgr/,
@@ -67,6 +68,11 @@ fn main() {
         if cld.exists() {
             modules.push(tables(&name, &[cld]));
         }
+        // Hand-written ARM64 the program calls, as BLISS-64 would build it.
+        let m64 = source.with_extension("m64");
+        if m64.exists() {
+            modules.push(assemble(&m64));
+        }
         if name == "DCL" || name == "HELP" {
             modules.push(tables("DCL$TABLES", &sources("cld", &["cld"])));
         }
@@ -91,6 +97,29 @@ fn main() {
 
 /// Where `.LIBRARY` finds lib.mlb and starlet.mlb.
 const LIB: &str = "../vtools/lib";
+
+/// Assembles an ARM64 source with vasm into an object module: (file name,
+/// bytes).
+fn assemble(source: &Path) -> (String, Vec<u8>) {
+    let opts = vasm::Options {
+        name: source.file_stem().unwrap().to_str().unwrap().to_uppercase() + "_ARM",
+        path: Some(source.into()),
+        include: vec![LIB.into()],
+        ..Default::default()
+    };
+    let text = fs::read_to_string(source).unwrap();
+    let object = vasm::assemble(&text, &opts).unwrap_or_else(|diags| {
+        let diags: Vec<_> = diags
+            .iter()
+            .map(|d| format!("{}:{}:{}: {}", d.file, d.line, d.col, d.msg))
+            .collect();
+        panic!("vasm failed:\n{}", diags.join("\n"))
+    });
+    (
+        source.display().to_string(),
+        vms_obj::obj::write(&object.records),
+    )
+}
 
 /// Compiles MACRO-32 sources linked together into object modules: (file
 /// name, bytes) each.

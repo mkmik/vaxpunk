@@ -16,6 +16,7 @@
 //	+32	image x30: the return page
 
 	.equ	SVC_PC, BOOT + 0x40	// address of the SVC being served, or 0
+	.equ	WALK, BOOT + 0x48	// where a fault while walking frames goes, or 0
 
 	// Attribute 0 Device-nGnRE, attribute 1 Normal write-back.
 	.equ	MAIR, 0xff04
@@ -195,7 +196,13 @@ el0_fault:
 	adr	x20, msg_fault
 	b	report
 el1_sync:
-	// During a monitor call, a fault is the image's: it passed a bad pointer.
+	// While walking the image's frames, a fault ends the walk.
+	ldr	x0, =WALK
+	ldr	x1, [x0]
+	cbz	x1, 1f
+	msr	elr_el1, x1
+	eret
+1:	// During a monitor call, a fault is the image's: it passed a bad pointer.
 	ldr	x0, =SVC_PC
 	ldr	x19, [x0]
 	adr	x20, msg_fault
@@ -214,8 +221,71 @@ report:
 	bl	space
 	mrs	x0, far_el1
 	bl	puthex
-	bl	newline
+	adr	x0, msg_fault
+	cmp	x20, x0
+	b.ne	9f
+	bl	frames
+9:	bl	newline
 	b	poweroff
+
+// The image's frames, from its FP out (DESIGN-0004): for each whose
+// descriptor names its routine, a space, the address it returns to and the
+// name. A frame without one, which code that doesn't follow the standard
+// may have, or a fault while reading them, ends the walk.
+frames:
+	mov	x19, x30
+	ldr	x21, [sp, #16 * 14 + 8]	// the image's FP, from the exception frame
+	mov	x22, #32		// at most 32 frames
+	adr	x0, 9f
+	ldr	x1, =WALK
+	str	x0, [x1]
+1:	cbz	x21, 9f
+	tst	x21, #15
+	b.ne	9f
+	ldtr	x23, [x21, #8]		// the return address
+	ldtr	x24, [x21, #24]		// the descriptor
+	ldtr	x25, [x21]		// the caller's FP
+	cbz	x24, 9f
+	tst	x24, #7
+	b.ne	9f
+	ldtr	x26, [x24, #24]		// its name, as an offset from it
+	cbz	x26, 9f
+	cmp	x26, #4096
+	b.hs	9f
+	add	x26, x24, x26
+	ldtrb	w27, [x26]		// the name's length, 1 to 31
+	sub	w0, w27, #1
+	cmp	w0, #31
+	b.hs	9f
+	mov	x28, #1
+2:	add	x3, x26, x28		// and its characters, printable
+	ldtrb	w0, [x3]
+	cmp	w0, #0x21
+	b.lo	9f
+	cmp	w0, #0x7e
+	b.hi	9f
+	add	x28, x28, #1
+	cmp	x28, x27
+	b.ls	2b
+	bl	space
+	mov	x0, x23
+	bl	puthex
+	bl	space
+	mov	x28, #1
+3:	add	x3, x26, x28
+	ldtrb	w0, [x3]
+	bl	putc
+	add	x28, x28, #1
+	cmp	x28, x27
+	b.ls	3b
+	cmp	x25, x21		// the next one is further out
+	b.ls	9f
+	mov	x21, x25
+	subs	x22, x22, #1
+	b.ne	1b
+9:	ldr	x1, =WALK
+	str	xzr, [x1]
+	ret	x19
 
 // Console. The helpers use only x0-x7.
 

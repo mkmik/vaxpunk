@@ -165,21 +165,27 @@ until vaxpunk's calling standard exists.
   caller pushed, points x13 at it, aligns `sp` and `bl`s the routine. On
   return it pops the list. `CALLG arglist, routine` passes `arglist` in x13 and
   pops nothing.
-- A CALL routine builds a frame on `sp`:
+- A CALL routine builds the calling standard's frame on `sp`
+  ([DESIGN-0004](../../docs/design/0004-calling-standard.md), *Frames*):
 
   | Offset | Holds |
   | --- | --- |
-  | 0 | condition handler, 0 (`MOVAB handler, (FP)` sets it) |
-  | 8 | the caller's AP |
-  | 16 | the caller's FP, then LR |
-  | 32 | the caller's SP (x18) |
-  | 40 | the mask of the registers it saves, R0-R11, for `$UNWIND` |
-  | 48 | the registers it saves, 8 bytes each |
+  | 0 | the caller's FP, then LR: AAPCS64's frame record |
+  | 16 | the condition handler, 0: `(FP)` and `0(FP)` mean it, so `MOVAB handler, (FP)` sets it |
+  | 24 | the frame descriptor's address |
+  | 32 | the caller's AP |
+  | 40 | the registers it saves, 8 bytes each: x18, the caller's SP, then those among R2-R11 |
 
   FP (x29) points at the frame, AP (x12) at the argument list, and SP (x18)
   starts at the frame, so locals made with `SUBL2 #n, SP` are at negative
-  offsets from FP, as on the VAX. Mask bits 12 and up (integer and decimal
+  offsets from FP, as on the VAX. Any other offset from FP at 0 or above is
+  an error, as in AMACRO. Mask bits 12 and up (integer and decimal
   overflow traps) are ignored.
+- The descriptor, `$FDSCDEF`, says which registers the frame saves, where,
+  its size and the routine's name. vmacro puts it in a psect of its own,
+  the code's name with `_FDSC` after it, so that whoever may run the code
+  may read it. vrun names a fault's frames from it, and `$UNWIND` restores
+  what each frame saved by it.
 - `RET` restores what the routine saved and returns.
 
 A routine called from outside MACRO-32 gets no argument list: vrun enters the

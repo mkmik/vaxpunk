@@ -1,0 +1,27 @@
+        .TITLE  TRACE   Faults three calls deep, for vrun's traceback
+        .LIBRARY "call.mlb"
+
+; Routines with the calling standard's frames (call.mlb): INNER, which
+; START calls through OUTER and MIDDLE, reads page 0, and vrun names each
+; frame from its descriptor.
+
+        .PSECT  $CODE$
+        $ROUTINE START
+        $CALL   OUTER
+        $RETURN
+
+        $ROUTINE OUTER, SAVED=3
+        mov     x19, #19
+        $CALL   MIDDLE
+        $RETURN
+
+        $ROUTINE MIDDLE, LOCALS=16
+        $CALL   INNER
+        $RETURN
+
+        $ROUTINE INNER, SAVED=1
+        mov     x1, #8
+        ldr     x0, [x1]                ; page 0 is never mapped
+        $RETURN
+
+        .END    START
