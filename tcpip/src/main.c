@@ -22,8 +22,12 @@
 #include "lwip/dhcp.h"
 #include "lwip/init.h"
 #include "lwip/etharp.h"
+#include "lwip/icmp.h"
+#include "lwip/inet_chksum.h"
 #include "lwip/netif.h"
 #include "lwip/pbuf.h"
+#include "lwip/prot/ip4.h"
+#include "lwip/raw.h"
 #include "lwip/tcp.h"
 #include "lwip/timeouts.h"
 #include "netif/ethernet.h"
@@ -288,6 +292,8 @@ static int net_init(void)
 #define NCONN 32
 #define BACKLOG 4
 #define DHCP_WAIT (10000 / TCPIP_TICK_MS) /* ticks an IFCONFIG waits for DHCP's address */
+#define PING_WAIT (1000 / TCPIP_TICK_MS) /* ticks a PING waits for its reply */
+#define PING_DATA 56 /* bytes after an echo request's header, as ping's */
 static struct conn {
 	int used, connected, closed; /* closed: the peer sent FIN */
 	uint32_t err;		     /* a PORT_ST_ the connection failed with */
@@ -305,7 +311,8 @@ static uint8_t *buffer(unsigned tag)
 }
 
 /* The commands waiting for something: an ACCEPT, CONNECT, SEND or RECV,
- * or an IFCONFIG for DHCP's address, by tag, since a tag is in one command at a time. */
+ * an IFCONFIG for DHCP's address or a PING for its reply, by tag, since a
+ * tag is in one command at a time. */
 static struct port_msg pend[PORT_TAGS];
 static int answered;
 
@@ -440,6 +447,60 @@ static void conn_free(uint32_t id)
 	c->used = 0;
 }
 
+/*
+ * PING: an echo request whose identifier is the command's tag and whose
+ * sequence number is the next of ping_seq, kept in its port field, so that
+ * a late reply to the tag's last PING isn't taken for this one's. The
+ * replies come here before lwIP's ICMP; the others go on to it.
+ */
+static struct raw_pcb *icmp_pcb;
+static uint16_t ping_seq;
+
+static void ping(struct port_msg *m)
+{
+	ip4_addr_t ip;
+	ip4_addr_set_u32(&ip, m->addr);
+	struct pbuf *p = pbuf_alloc(PBUF_IP, sizeof(struct icmp_echo_hdr) + PING_DATA, PBUF_RAM);
+	if (!p) {
+		respond(m, PORT_ST_NOMEM);
+		return;
+	}
+	struct icmp_echo_hdr *e = p->payload;
+	memset(e, 0, p->len);
+	ICMPH_TYPE_SET(e, ICMP_ECHO);
+	e->id = lwip_htons(m->tag);
+	m->port = ++ping_seq;
+	e->seqno = lwip_htons(m->port);
+	e->chksum = inet_chksum(e, p->len);
+	err_t err = raw_sendto(icmp_pcb, p, &ip);
+	pbuf_free(p);
+	if (err != ERR_OK) {
+		respond(m, st(err));
+		return;
+	}
+	m->len = ticks; /* when it went */
+	wait_for(m);
+}
+
+static u8_t on_icmp(void *arg, struct raw_pcb *pcb, struct pbuf *p, const ip_addr_t *addr)
+{
+	(void)arg, (void)pcb;
+	struct ip_hdr *iph = p->payload;
+	struct icmp_echo_hdr e;
+	if (pbuf_copy_partial(p, &e, sizeof e, IPH_HL_BYTES(iph)) != sizeof e ||
+	    ICMPH_TYPE(&e) != ICMP_ER || lwip_ntohs(e.id) >= PORT_TAGS)
+		return 0;
+	struct port_msg *m = &pend[lwip_ntohs(e.id)];
+	if (m->type != PORT_PING || m->port != lwip_ntohs(e.seqno) ||
+	    m->addr != ip4_addr_get_u32(ip_2_ip4(addr)))
+		return 0;
+	m->arg1 = (ticks - m->len) * TCPIP_TICK_MS;
+	m->arg2 = IPH_TTL(iph);
+	respond(m, PORT_ST_OK);
+	pbuf_free(p);
+	return 1;
+}
+
 /* Answers an IFCONFIG with the interface's address, mask and gateway. */
 static void ifconfig(struct port_msg *m, uint32_t status)
 {
@@ -459,6 +520,11 @@ static void try_finish(struct port_msg *m)
 			ifconfig(m, PORT_ST_OK);
 		else if ((int32_t)(ticks - m->len) >= 0)
 			ifconfig(m, PORT_ST_TIMEOUT);
+		return;
+	}
+	if (m->type == PORT_PING) {
+		if ((int32_t)(ticks - m->len) >= PING_WAIT)
+			respond(m, PORT_ST_TIMEOUT);
 		return;
 	}
 	struct conn *c = conn_of(m->conn);
@@ -552,6 +618,9 @@ static void command(struct port_msg *m)
 		ifconfig(m, PORT_ST_OK);
 		return;
 	}
+	case PORT_PING:
+		ping(m);
+		return;
 	}
 	if (!c) {
 		respond(m, PORT_ST_BADPARAM);
@@ -619,6 +688,8 @@ int main(uint64_t paddr, uint64_t offset)
 		tcpip_print("tcpip: the virtio-net device won't start\n");
 		tcpip_halt();
 	}
+	icmp_pcb = raw_new(IP_PROTO_ICMP);
+	raw_recv(icmp_pcb, on_icmp, 0); /* lwIP has a raw PCB to spare at start */
 	port->version = PORT_VERSION;
 	for (;;) {
 		seL4_Word badge;

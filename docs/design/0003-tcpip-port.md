@@ -28,7 +28,8 @@ register, an interrupt and a field of the RPB.
 
 `tcpip/` builds `tcpip.elf`, freestanding C: lwIP 2.2.1 (the `tcpip/lwip`
 submodule) with its raw API and no OS (`NO_SYS`), configured by
-`include/lwipopts.h` for IPv4, ARP, ICMP, TCP and UDP, a virtio-net driver
+`include/lwipopts.h` for IPv4, ARP, ICMP, TCP and UDP, and a raw ICMP
+PCB for `PING`, a virtio-net driver
 and the adapter between lwIP and the port (`src/main.c`). `include/` also
 holds the few libc headers lwIP includes, and `src/libc.c` their
 functions.
@@ -102,7 +103,7 @@ only its own ring and index. A message is 32 bytes:
 
 | Offset | Field | |
 | --- | --- | --- |
-| 0 | type | `OPEN`, `BIND`, `LISTEN`, `ACCEPT`, `CONNECT`, `SEND`, `RECV`, `CLOSE`, `IFCONFIG`, `CANCEL` |
+| 0 | type | `OPEN`, `BIND`, `LISTEN`, `ACCEPT`, `CONNECT`, `SEND`, `RECV`, `CLOSE`, `IFCONFIG`, `CANCEL`, `PING` |
 | 1 | flags | `IFCONFIG`: 1, set (not only sense), and 4 with it, by DHCP; in the response, 2, the link is up |
 | 2 | tag | the executive's, echoed in the response |
 | 4 | connection | 0 is the control connection |
@@ -111,7 +112,7 @@ only its own ring and index. A message is 32 bytes:
 | 16 | address | an IPv4 address, network order |
 | 20 | port | a TCP port |
 | 22 | protocol | `OPEN`'s: 6, TCP |
-| 24, 28 | arg1, arg2 | `LISTEN`: the backlog; `ACCEPT`'s response: the new connection; `IFCONFIG`: the mask and the gateway |
+| 24, 28 | arg1, arg2 | `LISTEN`: the backlog; `ACCEPT`'s response: the new connection; `IFCONFIG`: the mask and the gateway; `PING`'s response: the round trip in ms and the reply's TTL |
 
 | Command | Response when |
 | --- | --- |
@@ -124,6 +125,7 @@ only its own ring and index. A message is 32 bytes:
 | `CLOSE` | at once; the connection's waiting commands end with ABORTED |
 | `CANCEL` | at once; the connection's waiting commands end with ABORTED |
 | `IFCONFIG` | at once, with the address, mask, gateway and link state, after setting them if flagged; with DHCP, once the server has given them, or after 10 seconds with `TIMEOUT`, while lwIP goes on asking |
+| `PING` | the echo reply from the address has come: arg1, arg2; or after a second, TIMEOUT. The request's identifier is the tag, its sequence number one of the component's, so a late reply to the tag's last `PING` isn't taken |
 
 Responses come in the order commands finish, not as they were sent. What
 comes on a connection before a `RECV` waits in lwIP, which holds back its
@@ -176,6 +178,7 @@ channels and closes the connection when the last goes.
 | `BGA0:` | `IO$_SETMODE` | opens a TCP connection: p1 = the socket's characteristics, a word protocol (6), a byte type and a byte family, as TCP/IP Services' |
 | `BGA0:` | `IO$_SETCHAR` | sets the interface: p1 = its address, mask and gateway, then flags, 4 to have a DHCP server give them instead: 16 bytes |
 | `BGA0:` | `IO$_SENSECHAR` | writes those to p1, then flags, 2 if the link is up: 16 bytes |
+| `BGA0:` | `IO$_ACCESS` | pings address p3: the IOSB's count is the round trip in ms, its second longword the reply's TTL; `SS$_TIMEOUT` after a second |
 | unit | `IO$_SETMODE!IO$M_BIND` | binds to address p3, port p4 |
 | unit | `IO$_SETMODE!IO$M_LISTEN` | listens, backlog p4 |
 | unit | `IO$_ACCESS` | connects to address p3, port p4 |
@@ -201,7 +204,9 @@ and 11, past the terminal's modifiers, because a unit is a terminal too.
   TCP/IP Services': `SET INTERFACE WE0` and `SET CONFIGURATION INTERFACE
   WE0`, with `/HOST=address /NETWORK_MASK=mask` or `/DHCP`, `SET ROUTE
   /DEFAULT /GATEWAY=address [/PERMANENT]`, `SHOW INTERFACE [WE0]`,
-  `START COMMUNICATION`, and `HELP`, which describes them from the
+  `START COMMUNICATION`, `PING address [/NUMBER_PACKETS=n]`, which sends
+  an `IO$_ACCESS` on `BGA0:` each second and prints each reply, until
+  CTRL/C or n of them and then how many came back, and `HELP`, which describes them from the
   tables with `HELP$TOPIC`, DCL's `HELP`'s code (`sysexe/help/`). `SET INTERFACE` and `SET ROUTE` change the
   running system, and `SET CONFIGURATION INTERFACE` and `SET ROUTE
   /PERMANENT` the saved configuration, which the next boot applies. The

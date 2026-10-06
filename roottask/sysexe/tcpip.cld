@@ -12,6 +12,13 @@ define verb HELP
 	routine HELP
 	parameter P1, label=TOPIC, value(type=$rest_of_line)
 
+! PING host [/NUMBER_PACKETS=n]: an ICMP echo request to the host, an
+! address, each second, until CTRL/C, or n of them.
+define verb PING
+	routine PING
+	parameter P1, label=HOST, prompt="Host", value(required)
+	qualifier NUMBER_PACKETS, nonnegatable, value(required)
+
 define verb SET
 	parameter P1, label=OPTION, prompt="What", value(required, type=SET_OPTIONS)
 

@@ -55,6 +55,8 @@ enum {
 			  those a DHCP server gives, once it has; response: those and
 			  flags PORT_LINKUP */
 	PORT_CANCEL, /* ends the connection's requests with PORT_ST_ABORTED */
+	PORT_PING, /* addr: an ICMP echo request there; response: arg1 the round trip in ms,
+		      arg2 the reply's TTL, or PORT_ST_TIMEOUT after a second without one */
 };
 
 enum { PORT_TCP = 6 };

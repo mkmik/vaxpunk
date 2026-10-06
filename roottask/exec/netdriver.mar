@@ -15,7 +15,7 @@
 ; to a unit of its own, a UCB cloned from it that holds the connection's
 ; number on the port, until the channel is deassigned, which closes it.
 ; On the template, IO$_SETCHAR and IO$_SENSECHAR set and sense the
-; interface's address, mask and gateway.
+; interface's address, mask and gateway, and IO$_ACCESS pings.
 ;
 ; A command takes a tag, a credit, which its response gives back. A send
 ; or a receive needs a tag with a buffer, the first PORT$K_BUFFERS, for
@@ -183,7 +183,13 @@ COMPLETE:
 48$:    ASHL    #16, R0, R0
         BISL2   R0, R7
         BRB     80$
-50$:    CMPB    PORTMSG$B_TYPE(R6), #PORT$C_IFCONFIG
+50$:    CMPB    PORTMSG$B_TYPE(R6), #PORT$C_PING
+        BNEQ    60$
+        MOVL    PORTMSG$L_ARG2(R6), R1  ; the TTL
+        ASHL    #16, PORTMSG$L_ARG1(R6), R0     ; the round trip
+        BISL2   R0, R7
+        BRB     80$
+60$:    CMPB    PORTMSG$B_TYPE(R6), #PORT$C_IFCONFIG
         BNEQ    80$
         BBC     #IRP$V_BUFIO, IRP$L_STS(R3), 80$
         MOVL    PORTMSG$L_ADDR(R6), NIRP$A_DATA(R3)     ; a sense: the settings
@@ -218,6 +224,10 @@ BUFFER: ADDL3   #1, R2, R0
 ;                  SS$_NOPRIV
 ;   IO$_SENSECHAR  writes those to the 16 bytes at p1, then the flags, 2
 ;                  if the link is up
+;   IO$_ACCESS     sends an ICMP echo request to the address p3, and
+;                  completes with its reply: the IOSB's count is the
+;                  round trip in ms, its second longword the reply's TTL;
+;                  SS$_TIMEOUT after a second without one
 ; On a unit:
 ;   IO$_SETMODE!IO$M_BIND    binds it to the local address p3, port p4
 ;   IO$_SETMODE!IO$M_LISTEN  listens, p4 connections waiting at most
@@ -259,8 +269,11 @@ NET$FDT::
         BNEQ    40$
         BRW     SETCHAR
 40$:    CMPL    R6, #IO$_SENSECHAR
-        BNEQ    ILLFUNC
+        BNEQ    50$
         BRW     SENSECHAR
+50$:    CMPL    R6, #IO$_ACCESS
+        BNEQ    ILLFUNC
+        BRW     PING
 ILLFUNC:
         MOVL    #SS$_ILLIOFUNC, R0
         RSB
@@ -467,6 +480,15 @@ SENSECHAR:
         MOVL    #IRP$M_BUFIO, IRP$L_STS(R3)
         BRW     QUEUE
 85$:    MOVL    #SS$_ACCVIO, R0
+90$:    RSB
+
+; PING: IO$_ACCESS on BGA0:, an echo request to the address p3.
+PING:   MOVL    #PORT$C_PING, R8
+        CLRL    R1
+        BSBW    NEWIRP
+        BLBC    R0, 90$
+        MOVL    36(AP), NIRP$A_MSG+PORTMSG$L_ADDR(R3)
+        BRW     QUEUE
 90$:    RSB
 
 ; ADDRESS: R8 = PORT$C_BIND or PORT$C_CONNECT, with the address p3, port p4.

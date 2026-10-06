@@ -1,5 +1,5 @@
         .TITLE  TCPIP   TCP/IP Services' management commands
-        .IDENT  /V0.3/
+        .IDENT  /V0.4/
 ;
 ; DCL's TCPIP verb runs this. It parses the rest of the line, or with
 ; none each line it reads after TCPIP> until EXIT or CTRL/Z, with its
@@ -18,7 +18,8 @@
 ; whether the link is up. START COMMUNICATION, which SYLOGIN.COM runs at
 ; boot, sets the interface from the saved settings, if there are any, and
 ; says so, and starts TELNETD, the remote login server SET HOST talks
-; to.
+; to. PING sends ICMP echo requests with IO$_ACCESS on BGA0: and writes a
+; line for each reply, as TCP/IP Services' does.
 ; ponytail: one interface and one route, the default; a saved file only
 ; once INITIALIZE DKB0: has made a volume there.
 ;
@@ -35,6 +36,16 @@
         .EXTERNAL LIB$GET_FOREIGN, LIB$GET_INPUT, LIB$SIGNAL, TCPIP_TABLES, HELP$TOPIC
 
 DHCP = 4                                ; SETTINGS' flags: ask a DHCP server (PORT$M_DHCP)
+
+; APPEND "text": appends text to LINE. Uses R0-R5.
+        .MACRO  APPEND  TEXT, ?L
+        .SAVE_PSECT LOCAL_BLOCK
+        .PSECT  $LITERAL$
+L:      .ASCIC  TEXT
+        .RESTORE_PSECT
+        MOVAB   L, R1
+        BSBW    ADDSTR
+        .ENDM   APPEND
 
         .PSECT  DATA, NOEXE, WRT, LONG
 BGA0:   .ASCID  "BGA0:"
@@ -74,6 +85,9 @@ TELNETD:
         .ASCID  "TELNETD.EXE"
 TELNETD_NAME:
         .ASCID  "TCPIP$TELNET"
+TARGET: .LONG   0                       ; PING's host
+COUNT:  .LONG   0                       ; PING's /NUMBER_PACKETS, 0 until CTRL/C
+SECOND: .LONG   -10000000, -1           ; between two of PING's requests
 
         .PSECT  CODE, EXE, LONG
 ; START: the command after TCPIP, or, with none, each one read after
@@ -234,6 +248,102 @@ TAKE:   MOVW    #64, VALUE
         MOVL    R3, (R6)
 90$:    RSB
 
+; PING: PING host [/NUMBER_PACKETS=n]: an echo request to the host, an
+; address, each second, and a line for each reply, until CTRL/C, or n of
+; them and how many came back.
+; ponytail: no round trips' minimum, average and maximum.
+        .ENTRY  PING, ^M<R2, R3, R4, R5, R6, R7, R8, R9>
+        MOVAB   P_HOST, R5
+        MOVAB   TARGET, R6
+        BSBW    TAKE
+        BLBC    R0, 90$
+        CLRL    COUNT
+        PRESENT "NUMBER_PACKETS"
+        BLBC    R0, 10$
+        BSBW    NUMBER
+        BLBC    R0, 90$
+10$:    CLRB    LINE
+        APPEND  "PING "
+        MOVL    TARGET, R3
+        BSBW    ADDTEXT
+        APPEND  " ("
+        MOVL    TARGET, R3
+        BSBW    ADDTEXT
+        APPEND  "): 56 data bytes"
+        BSBW    SAY
+        CLRQ    R8                      ; R8 sent, R9 answered
+20$:    $QIOW_S CHAN=CHAN, FUNC=#IO$_ACCESS, IOSB=IOSB, P3=TARGET
+        BLBC    R0, 90$
+        INCL    R8
+        MOVZWL  IOSB, R0
+        BLBS    R0, 30$
+        CMPL    R0, #SS$_TIMEOUT        ; no reply: no line
+        BEQL    40$
+        RET
+30$:    INCL    R9
+        APPEND  "64 bytes from "
+        MOVL    TARGET, R3
+        BSBW    ADDTEXT
+        APPEND  ": icmp_seq="
+        SUBL3   #1, R8, R1
+        BSBW    ADDDEC
+        APPEND  " ttl="
+        MOVL    IOSB+4, R1
+        BSBW    ADDDEC
+        APPEND  " time="
+        MOVZWL  IOSB+2, R1
+        BSBW    ADDDEC
+        APPEND  " ms"
+        BSBW    SAY
+40$:    CMPL    R8, COUNT
+        BEQL    50$
+        $SETIMR_S EFN=#1, DAYTIM=SECOND
+        $WAITFR_S EFN=#1
+        BRW     20$
+50$:    APPEND  "----"
+        MOVL    TARGET, R3
+        BSBW    ADDTEXT
+        APPEND  " PING Statistics----"
+        BSBW    SAY
+        MOVL    R8, R1
+        BSBW    ADDDEC
+        APPEND  " packets transmitted, "
+        MOVL    R9, R1
+        BSBW    ADDDEC
+        APPEND  " packets received, "
+        SUBL3   R9, R8, R1
+        MULL2   #100, R1
+        DIVL2   R8, R1
+        BSBW    ADDDEC
+        APPEND  "% packet loss"
+        BSBW    SAY
+        MOVL    #SS$_NORMAL, R0
+90$:    RET
+
+; NUMBER: the command's /NUMBER_PACKETS, in decimal, into COUNT. R0 =
+; SS$_NORMAL, or SS$_BADPARAM for one that isn't a number above 0. Uses
+; R0-R2.
+NUMBER: MOVW    #64, VALUE
+        GETVALUE "NUMBER_PACKETS", VALUE, VALUE
+        BLBC    R0, 90$
+        CLRL    COUNT
+        MOVZWL  VALUE, R2
+        BEQL    80$
+        MOVAB   VALBUF, R1
+10$:    SUBB3   #^A/0/, (R1)+, R0
+        CMPB    R0, #9
+        BGTRU   80$
+        MOVZBL  R0, R0
+        MULL2   #10, COUNT
+        ADDL2   R0, COUNT
+        SOBGTR  R2, 10$
+        TSTL    COUNT
+        BEQL    80$
+        MOVL    #SS$_NORMAL, R0
+        RSB
+80$:    MOVL    #SS$_BADPARAM, R0
+90$:    RSB
+
 ; START_COMMUNICATION: unless the interface has an address already, the
 ; saved settings, if there are any, from the data disk; a failure to set
 ; them is reported. Then the remote login server, TELNETD, unless it runs
@@ -381,12 +491,8 @@ SHOWLINE:
         MOVAB   DOWN, R1
         BBC     #1, (R6), 40$
         MOVAB   UP, R1
-40$:    MOVZBL  (R1)+, R2
-        MOVZBL  LINE, R0
-        ADDB2   R2, LINE
-        MOVC3   R2, (R1), LINE+1[R0]
-        PUSHAB  LINE
-        CALLS   #1, G^PUT_LINE
+40$:    BSBW    ADDSTR
+        BSBW    SAY
         MOVL    (SP)+, R0
         RSB
 SHOWMSG:
@@ -398,39 +504,49 @@ DOWN:   .ASCIC  "down"
 ; ADDTEXT: R3 = an address. Appends it to LINE, four numbers and dots.
 ; Uses R0-R3.
 ADDTEXT:
-        CLRL    R2                      ; the byte
-10$:    EXTZV   #0, #8, R3, R0
-        ASHL    #-8, R3, R3
-        BICL2   #^XFF000000, R3
-        MOVL    #100, R1                ; its digits, without leading zeros
-        TSTL    R0
-        BNEQ    15$
-        MOVL    #1, R1
-15$:    CMPL    R0, R1
-        BGEQU   20$
-        DIVL2   #10, R1
-        BRB     15$
-20$:    PUSHL   R2
-25$:    DIVL3   R1, R0, R2
-        MULL3   R2, R1, -(SP)
-        SUBL2   (SP)+, R0
-        ADDB2   #^A/0/, R2
-        PUSHL   R0
-        MOVZBL  LINE, R0
-        MOVB    R2, LINE+1[R0]
-        INCB    LINE
-        MOVL    (SP)+, R0
-        DIVL2   #10, R1
-        BNEQ    25$
-        MOVL    (SP)+, R2
-        INCL    R2
-        CMPL    R2, #4
-        BGEQU   90$
+        PUSHL   R3
+        PUSHL   #4                      ; the numbers left
+10$:    MOVZBL  4(SP), R1
+        BSBB    ADDDEC
+        ROTL    #-8, 4(SP), 4(SP)
+        DECL    (SP)
+        BEQL    90$
         MOVZBL  LINE, R0
         MOVB    #^A/./, LINE+1[R0]
         INCB    LINE
         BRB     10$
-90$:    RSB
+90$:    ADDL2   #8, SP
+        RSB
+
+; ADDDEC: appends R1 in decimal to LINE. Uses R0-R3.
+ADDDEC: CLRL    R3                      ; digits, on the stack
+10$:    DIVL3   #10, R1, R2
+        MULL3   #10, R2, R0
+        SUBL3   R0, R1, R0
+        ADDL2   #^A/0/, R0
+        PUSHL   R0
+        INCL    R3
+        MOVL    R2, R1
+        BNEQ    10$
+20$:    MOVZBL  LINE, R0
+        MOVL    (SP)+, R1
+        MOVB    R1, LINE+1[R0]
+        INCB    LINE
+        SOBGTR  R3, 20$
+        RSB
+
+; ADDSTR: R1 = a string, .ASCIC. Appends it to LINE. Uses R0-R5.
+ADDSTR: MOVZBL  (R1)+, R2
+        MOVZBL  LINE, R0
+        ADDB2   R2, LINE
+        MOVC3   R2, (R1), LINE+1[R0]
+        RSB
+
+; SAY: writes LINE, and empties it. Uses R0-R1.
+SAY:    PUSHAB  LINE
+        CALLS   #1, G^PUT_LINE
+        CLRB    LINE
+        RSB
 
 ; WORD: R2 = n. R0 = the address of CMD's nth word, from 1, R1 = its
 ; length, 0 if there are fewer. Keeps every other register.
