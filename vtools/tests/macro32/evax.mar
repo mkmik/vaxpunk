@@ -1,0 +1,290 @@
+        .TITLE  EVAX    AMACRO's 64-bit pieces: built-ins, call macros, QUAD_ARGS
+        .LIBRARY "vrun.mlb"
+        .LIBRARY "starlet.mlb"
+        $DSCDEF
+
+; Each built-in against what DEC's MACRO compiler guide says it does
+; (App. C), the guide's MOVAL wrap example in longword and quadword mode,
+; its $SETUP_CALL64 example and one with 9 arguments, EVAX_CALLG_64 and
+; QUAD_ARGS, $IS_32BITS and $IS_DESC64 on both forms, and $PUSH64 and
+; $POP64. CHECK compares all 64 bits; a failed one returns 2 * N, an error
+; status, so the exit code says which.
+
+        .MACRO  CHECK   VALUE, EXPECT, N, ?OK
+        EVAX_CMPEQ VALUE, EXPECT, R1
+        BLBS    R1, OK
+        MOVL    #<N * 2>, R0
+        RET
+OK:
+        .ENDM   CHECK
+
+        .PSECT  DATA, NOEXE, WRT, QUAD
+ONES:   .QUAD   -1
+WIDE:   .QUAD   ^X0000000180000000      ; bit 31 set, and above it
+NEG80:  .QUAD   ^XFFFFFFFFFFFFFF80
+NEG8000:.QUAD   ^XFFFFFFFFFFFF8000
+NEGL:   .QUAD   ^XFFFFFFFF80000000
+BIG:    .QUAD   ^X0000000080000000
+TALL:   .QUAD   ^X0000001000000000
+BYTES:  .QUAD   ^X1122334455667788
+HIGHB:  .QUAD   ^X1122334400000000
+LOWB:   .QUAD   ^X0000000055667788
+SHL40:  .QUAD   ^X0000010000000000
+TOP:    .QUAD   ^X8000000000000000
+NEG8:   .QUAD   -8
+WRAPL:  .QUAD   ^XFFFFFFFF80000003      ; MOVAL (R1)[R0], R2, longwords
+WRAPQ:  .QUAD   ^X0000000080000003      ; and quadwords
+SUM3:   .QUAD   ^X0000000100000010
+NINTH:  .QUAD   ^X0000000900000000
+POPPED: .QUAD   ^X0000000123456789
+BIT33:  .QUAD   ^X0000000200000000
+PARTS:  .QUAD   ^X000123456789ABCD
+TABLE:  .QUAD   0, ^X0000000100000003   ; 8(R0): the guide's third argument
+ARGS9:  .QUAD   9, 1, 2, 3, 4, 5, 6, 7, 8, ^X0000000900000000
+LOCK:   .QUAD   41
+LOCKL:  .LONG   -2
+BYTE:   .BYTE   ^XF0, ^XF0, 0, 0
+SPOT:   .QUAD   0
+FLAG:   .QUAD   0
+OLD:    .ASCID  "32-bit"
+NEW:    .WORD   1                       ; a 64-bit descriptor: MBO,
+        .BYTE   DSC$K_DTYPE_T, DSC$K_CLASS_S
+        .LONG   -1                      ; MBMO,
+        .QUAD   6                       ; its length and address
+        .QUAD   0
+
+        .PSECT  CODE, EXE, LONG
+        .ENTRY  EVAX, ^M<R2, R3, R4, R5, R6, R7>
+; Sign extension and loads.
+        MOVL    #^X180, R2
+        EVAX_SEXTB R2, R3
+        CHECK   R3, NEG80, 1
+        MOVL    #^X18000, R2
+        EVAX_SEXTW R2, R3
+        CHECK   R3, NEG8000, 2
+        EVAX_LDQ R2, WIDE
+        EVAX_SEXTL R2, R3
+        CHECK   R3, NEGL, 3
+        EVAX_LDBU R3, BYTE
+        CHECK   R3, #^XF0, 4
+        EVAX_LDWU R3, BYTE
+        CHECK   R3, #^XF0F0, 5
+        EVAX_LDAQ R3, WIDE
+        MOVAQ   WIDE, R4
+        CHECK   R3, R4, 6
+        EVAX_LDQU R3, WIDE+3
+        CHECK   R3, WIDE, 7
+; Stores.
+        EVAX_LDQ R2, ONES
+        EVAX_STB R2, SPOT
+        CHECK   SPOT, #^XFF, 8
+        EVAX_STW R2, SPOT
+        CHECK   SPOT, #^XFFFF, 9
+        EVAX_STQU R2, SPOT+5
+        CHECK   SPOT, ONES, 10
+; Locked: an exclusive load and the store that ends it.
+        EVAX_LDQL R3, LOCK
+        EVAX_ADDQ R3, #1, R3
+        EVAX_STQC R3, LOCK
+        CHECK   R3, #1, 11
+        CHECK   LOCK, #42, 12
+        EVAX_LDLL R3, LOCKL
+        CHECK   R3, #-2, 13
+        EVAX_STLC R3, LOCKL
+        CHECK   R3, #1, 14
+; Arithmetic: 64 bits, no wrap at 32.
+        MOVL    #^X7FFFFFFF, R2
+        EVAX_ADDQ R2, #1, R3
+        CHECK   R3, BIG, 15
+        EVAX_SUBQ #0, #1, R3
+        CHECK   R3, ONES, 16
+        EVAX_MULQ BIG, #32, R3
+        CHECK   R3, TALL, 17
+        EVAX_UMULH ONES, #2, R3
+        CHECK   R3, #1, 18
+; Logic and shifts.
+        EVAX_AND BYTES, LOWB, R3
+        CHECK   R3, LOWB, 19
+        EVAX_OR HIGHB, LOWB, R3
+        CHECK   R3, BYTES, 20
+        EVAX_XOR BYTES, LOWB, R3
+        CHECK   R3, HIGHB, 21
+        EVAX_BIC BYTES, LOWB, R3
+        CHECK   R3, HIGHB, 22
+        EVAX_ORNOT #0, ONES, R3
+        CHECK   R3, #0, 23
+        EVAX_EQV BYTES, BYTES, R3
+        CHECK   R3, ONES, 24
+        EVAX_SLL #1, #40, R3
+        CHECK   R3, SHL40, 25
+        EVAX_SRL TOP, #60, R3
+        CHECK   R3, #8, 26
+        EVAX_SRA TOP, #60, R3
+        CHECK   R3, NEG8, 27
+        EVAX_ZAP BYTES, #^X0F, R3
+        CHECK   R3, HIGHB, 28
+        MOVL    #^X0F, R4
+        EVAX_ZAPNOT BYTES, R4, R3
+        CHECK   R3, LOWB, 29
+; Compares, branches and conditional moves.
+        EVAX_CMPLT ONES, #1, R3
+        CHECK   R3, #1, 30
+        EVAX_CMPULT ONES, #1, R3
+        CHECK   R3, #0, 31
+        EVAX_CMPLE #1, #1, R3
+        CHECK   R3, #1, 32
+        EVAX_CMPULE ONES, #1, R3
+        CHECK   R3, #0, 33
+        EVAX_LDQ R2, TALL               ; its low longword is 0
+        EVAX_BEQ R2, 90$
+        EVAX_BNE R2, 10$
+        BRB     90$
+10$:    EVAX_BLT ONES, 20$
+90$:    MOVL    #68, R0
+        RET
+20$:    MOVL    #5, R3
+        EVAX_CMOVEQ #0, #7, R3
+        CHECK   R3, #7, 35
+        EVAX_CMOVNE #0, #9, R3
+        CHECK   R3, #7, 36
+        EVAX_CMOVLT ONES, #1, FLAG
+        CHECK   FLAG, #1, 37
+        EVAX_CMOVGE ONES, #2, FLAG
+        CHECK   FLAG, #1, 38
+        EVAX_CMOVLBS #3, #4, R3
+        CHECK   R3, #4, 39
+        EVAX_CMOVLBC #3, #5, R3
+        CHECK   R3, #4, 40
+        EVAX_CMOVGT #1, #6, R3
+        CHECK   R3, #6, 41
+        EVAX_CMOVLE #1, #7, R3
+        CHECK   R3, #6, 42
+        EVAX_MB
+; The guide's wrap: (R1)[R0] with R1 = 7FFFFFFF and R0 = 1.
+        MOVL    #^X7FFFFFFF, R3
+        MOVL    #1, R4
+        MOVAL   (R3)[R4], R2
+        CHECK   R2, WRAPL, 43
+        .ENABLE QUADWORD
+        MOVAL   (R3)[R4], R2
+        .DISABLE QUADWORD
+        CHECK   R2, WRAPQ, 44
+; The guide's $SETUP_CALL64 example, then one with 9 arguments.
+        MOVAQ   TABLE, R0
+        MOVL    #5, R5
+        $SETUP_CALL64 3
+        $PUSH_ARG64 8(R0)               ; argument 3
+        $PUSH_ARG64 R5                  ; argument 2
+        $PUSH_ARG64 #8                  ; argument 1
+        $CALL64 THREE
+        CHECK   R0, SUM3, 45
+        $SETUP_CALL64 9
+        $PUSH_ARG64 NINTH
+        .IRP    N, <8, 7, 6, 5, 4, 3, 2, 1>
+        $PUSH_ARG64 #N
+        .ENDR
+        $CALL64 LAST9
+        CHECK   R0, NINTH, 46
+        MOVAQ   ARGS9, R2
+        EVAX_CALLG_64 (R2), LAST9
+        CHECK   R0, NINTH, 47
+; Sign extension and descriptor tests.
+        MOVL    #-5, R2
+        $IS_32BITS R2, 50$, 90$
+50$:    EVAX_LDQ R2, BIG
+        $IS_32BITS R2, 90$
+        MOVAB   OLD, R3
+        $IS_DESC64 R3, 90$
+        MOVAB   NEW, R3
+        $IS_DESC64 R3, 60$
+        BRW     90$
+60$:    EVAX_LDAQ R3, NEW
+        $IS_DESC64 R3, 70$, SIZE=QUAD
+        BRW     90$
+; Literals are longwords, sign-extended, but in quadword mode.
+70$:    EVAX_LDQ R2, #^XFFFFFFFF
+        CHECK   R2, ONES, 49
+        EVAX_LDQ R2, #<1@33>
+        CHECK   R2, #0, 50
+        .ENABLE QUADWORD
+        EVAX_LDQ R2, #<1@33>
+        .DISABLE QUADWORD
+        CHECK   R2, BIT33, 51
+; A test with only its second label, a descriptor and an argument through
+; AP, a QUAD_ARGS list passed on, and part of a quadword argument.
+        EVAX_LDQ R2, BIG
+        $IS_32BITS R2, , 80$
+        BRW     90$
+80$:    PUSHAB  NEW
+        CALLS   #1, DESC64
+        CHECK   R0, #1, 52
+        PUSHAB  OLD
+        CALLS   #1, DESC64
+        CHECK   R0, #0, 53
+        PUSHL   #-7
+        CALLS   #1, FORWARD
+        CHECK   R0, #-7, 54
+        $SETUP_CALL64 9
+        $PUSH_ARG64 NINTH
+        .IRP    N, <8, 7, 6, 5, 4, 3, 2, 1>
+        $PUSH_ARG64 #N
+        .ENDR
+        $CALL64 PASSON
+        CHECK   R0, NINTH, 55
+        $SETUP_CALL64 1
+        $PUSH_ARG64 PARTS
+        $CALL64 MIDWORD
+        CHECK   R0, #^X6789, 56
+; All 64 bits on the stack and back.
+        EVAX_LDQ R2, POPPED
+        $PUSH64 R2
+        CLRL    R2
+        $POP64  R2
+        CHECK   R2, POPPED, 48
+        $PUT    "evax ok"<10>
+        MOVL    #1, R0
+        RET
+
+; THREE a, b, c: R0 = their sum, all 64 bits of each (QUAD_ARGS).
+THREE:  .CALL_ENTRY QUAD_ARGS=TRUE
+        EVAX_LDQ R0, 4(AP)
+        EVAX_ADDQ R0, 8(AP), R0
+        EVAX_ADDQ R0, 12(AP), R0
+        RET
+
+; DESC64 desc: R0 = 1 if desc is a 64-bit descriptor, else 0.
+DESC64: .CALL_ENTRY
+        $IS_DESC64 4(AP), 10$
+        CLRL    R0
+        RET
+10$:    MOVL    #1, R0
+        RET
+
+; FORWARD a: R0 = a, through ONE64, which gets it as a quadword.
+FORWARD:.CALL_ENTRY QUAD_ARGS=TRUE
+        $SETUP_CALL64 1
+        $PUSH_ARG64 4(AP)
+        $CALL64 ONE64
+        RET
+
+; ONE64 a: R0 = a, all 64 bits.
+ONE64:  .CALL_ENTRY QUAD_ARGS=TRUE
+        EVAX_LDQ R0, 4(AP)
+        RET
+
+; PASSON args...: LAST9 with its own quadword list.
+PASSON: .CALL_ENTRY QUAD_ARGS=TRUE, MAX_ARGS=9
+        CALLG   (AP), LAST9
+        RET
+
+; MIDWORD a: R0 = bits 16-31 of a, 6(AP) as on the VAX.
+MIDWORD:.CALL_ENTRY QUAD_ARGS=TRUE
+        MOVZWL  6(AP), R0
+        RET
+
+; LAST9 a, ..., i: R0 = i, all 64 bits of it, from the stack.
+LAST9:  .CALL_ENTRY QUAD_ARGS=TRUE
+        EVAX_LDQ R0, 36(AP)
+        RET
+
+        .END    EVAX

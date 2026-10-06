@@ -28,6 +28,7 @@
         .LIBRARY "starlet.mlb"
         $SSDEF
         $INTSTKDEF
+        .DISABLE FLAGGING               ; the calling standard's registers, by name
         $PCBDEF
         $PRVDEF
 

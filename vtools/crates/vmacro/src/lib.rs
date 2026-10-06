@@ -97,6 +97,16 @@ pub struct Macro32 {
     linkage: Option<Regs>,
     /// Whether x12 may no longer be AP, past a call or a label.
     ap_stale: bool,
+    /// `.ENABLE QUADWORD`: address arithmetic in 64 bits; and the command
+    /// line's `/ENABLE=QUADWORD`, which each pass starts with.
+    quadword: bool,
+    quad_default: bool,
+    /// `.DISABLE FLAGGING`: no porting message for raw ARM64; and whether
+    /// the routine had one.
+    flagging: bool,
+    warned_raw: bool,
+    /// `$SETUP_CALL64`'s count, and how many `$PUSH_ARG64` have pushed.
+    call64: Option<(usize, usize)>,
     /// Registers the current routine was warned about writing, and whether
     /// about reading AP.
     warned: Regs,
@@ -131,6 +141,11 @@ impl Default for Macro32 {
             pending: Vec::new(),
             linkage: None,
             ap_stale: true,
+            quadword: false,
+            quad_default: false,
+            flagging: true,
+            warned_raw: false,
+            call64: None,
             warned: 0,
             warned_ap: false,
             falls: false,
@@ -190,9 +205,21 @@ impl Dialect for Macro32 {
             }
             ".ERROR" => Some(Err(format!("%MACRO-E-GENERR, {}", rest.trim()))),
             // Listing control, and what only matters on a VAX.
+            ".ENABLE" | ".ENABL" | ".DISABLE" | ".DSABL" => {
+                let on = word.starts_with(".EN");
+                for a in operand::split(rest) {
+                    match a.trim().to_ascii_uppercase().as_str() {
+                        "QUADWORD" => self.quadword = on,
+                        "FLAGGING" => self.flagging = on,
+                        _ => {}
+                    }
+                }
+                Some(Ok(Vec::new()))
+            }
+            "$SETUP_CALL64" | "$PUSH_ARG64" | "$CALL64" | "$IS_32BITS" | "$IS_DESC64"
+            | "$PUSH64" | "$POP64" => Some(self.macro64(word, rest, constant)),
             ".SBTTL" | ".SUBTITLE" | ".PAGE" | ".LIST" | ".NLIST" | ".SHOW" | ".NOSHOW"
-            | ".ENABLE" | ".ENABL" | ".DISABLE" | ".DSABL" | ".DEFAULT" | ".CROSS" | ".NOCROSS"
-            | ".PRINT" | ".PRESERVE" => Some(Ok(Vec::new())),
+            | ".DEFAULT" | ".CROSS" | ".NOCROSS" | ".PRINT" | ".PRESERVE" => Some(Ok(Vec::new())),
             _ if word.starts_with('.') => None,
             _ => match self.instruction(word, rest, &labels, constant) {
                 Some(r) => Some(r),
@@ -242,9 +269,19 @@ impl Dialect for Macro32 {
         *self = Macro32 {
             compiling: true,
             survey: std::mem::take(&mut self.survey),
+            quadword: self.quad_default,
+            quad_default: self.quad_default,
             ..Macro32::default()
         };
         true
+    }
+
+    fn enable(&mut self, what: &str) -> bool {
+        let quad = what.eq_ignore_ascii_case("QUADWORD");
+        if quad {
+            (self.quadword, self.quad_default) = (true, true);
+        }
+        quad
     }
 }
 
@@ -258,6 +295,11 @@ impl Macro32 {
     ) -> Option<Result<Vec<String>, String>> {
         let (op, size) = insn::kind(mn)?;
         use insn::Op;
+        if op == Op::Evax(insn::Evax::Unsupported) {
+            return Some(Err(format!(
+                "{mn} isn't a built-in here: byte manipulation, TRAPB, RPCC, the FPCR and PAL calls vaxpunk lacks have no ARM64 meaning (docs/macro32.md)"
+            )));
+        }
         self.falls = !matches!(
             op,
             Op::Br | Op::Jmp | Op::Rsb | Op::Ret | Op::Rei | Op::Halt
@@ -277,6 +319,31 @@ impl Macro32 {
                 .collect::<Result<Vec<_>, _>>()?;
             let tail = self.check(op, &ops)?;
             let mut warnings = Vec::new();
+            let moves_sp = matches!(
+                op,
+                Op::Pushl
+                    | Op::Pusha
+                    | Op::Pushr
+                    | Op::Popr
+                    | Op::Calls
+                    | Op::Callg
+                    | Op::Callg64
+                    | Op::Jsb
+                    | Op::Ret
+                    | Op::Rsb
+                    | Op::Rei
+            ) || ops.iter().enumerate().any(|(i, o)| {
+                matches!(
+                    o,
+                    operand::Opnd::Mem(
+                        operand::Mode::Inc(14) | operand::Mode::Dec(14) | operand::Mode::IncDef(14),
+                        _
+                    )
+                ) || (*o == operand::Opnd::Reg(14) && writes(op, i, ops.len()))
+            });
+            if self.call64.is_some() && moves_sp {
+                return Err(BETWEEN.into());
+            }
             let stacked = self.stack(op, size, &ops, constant);
             let ap = ap_use(op, size, &ops, constant);
             if self.compiling {
@@ -299,7 +366,8 @@ impl Macro32 {
                 r.ap_args = r.ap_args.max(args);
                 r.ap_list |= list;
             }
-            if writes_last(op) && ops.last() == Some(&operand::Opnd::Reg(13)) {
+            if (0..ops.len()).any(|i| writes(op, i, ops.len()) && ops[i] == operand::Opnd::Reg(13))
+            {
                 self.fp_switched = true;
             }
             if switches(op, &ops) {
@@ -319,11 +387,14 @@ impl Macro32 {
                 *ops.last_mut().unwrap() =
                     operand::Opnd::Mem(operand::Mode::Rel(format!("BODY$${cur}")), None);
             }
+            let quad_ap = self.survey.routines[cur].quad_args;
             let mut g = operand::Gen::new(&ops, constant, &mut self.labels);
+            g.quadword = self.quadword;
+            g.quad_ap = quad_ap;
             let r = &self.survey.routines[cur];
             let exit = match r.kind {
                 Kind::Call if r.frameless => Exit::Frameless,
-                Kind::Call => Exit::Call(frame(&routine::list(r.saved), r.home)),
+                Kind::Call => Exit::Call(frame(&routine::list(r.saved), r.home, r.quad_args)),
                 Kind::Jsb | Kind::Jsb32 => Exit::Jsb(routine::list(r.saved), r.lr),
                 Kind::Exception => Exit::None,
             };
@@ -343,7 +414,7 @@ impl Macro32 {
             // AP is x12 where the routine reads it, which a call changes:
             // it is set again before AP is read after a call or a label,
             // so that what follows a call is still where it returns to.
-            let calls = matches!(op, Op::Jsb | Op::Calls | Op::Callg);
+            let calls = matches!(op, Op::Jsb | Op::Calls | Op::Callg | Op::Callg64);
             if reads_ap && self.ap_stale && ops.iter().any(names_ap) {
                 lines.insert(0, "\tadd x12, x29, #32".into());
                 self.ap_stale = false;
@@ -413,7 +484,7 @@ impl Macro32 {
         }
         let called = match op {
             Op::Jsb => ops.first(),
-            Op::Calls | Op::Callg => ops.get(1),
+            Op::Calls | Op::Callg | Op::Callg64 => ops.get(1),
             _ => None,
         };
         let branched = branch_target(op, ops);
@@ -516,6 +587,265 @@ impl Macro32 {
         Ok(tail)
     }
 
+    /// The 64-bit macros AMACRO's library had, which vmacro does itself
+    /// since they put arguments where MACRO-32 can't name them ([MCG] App.
+    /// D, E): `$SETUP_CALL64 n`, `$PUSH_ARG64 op` for each, the last first,
+    /// and `$CALL64 target`; `$IS_32BITS q, leq, gtr`; `$IS_DESC64 desc,
+    /// target[, SIZE=LONG|QUAD]`; `$PUSH64 reg` and `$POP64 reg`.
+    fn macro64(
+        &mut self,
+        word: &str,
+        rest: &str,
+        constant: &dyn Fn(&str) -> Option<i64>,
+    ) -> Result<Vec<String>, String> {
+        use operand::{Mode, Opnd};
+        let Some(cur) = self.cur else {
+            return Err(OUTSIDE.into());
+        };
+        let p = Params::parse(rest);
+        // The positional arguments, empty ones too: `$IS_32BITS q, , gtr`.
+        let texts: Vec<String> = operand::split(rest)
+            .into_iter()
+            .filter(|a| !a.contains('='))
+            .collect();
+        let label = |i: usize| texts.get(i).map(String::as_str).filter(|t| !t.is_empty());
+        // The operand, then the labels branched to.
+        let ops = match (word, texts.first()) {
+            ("$SETUP_CALL64", _) | (_, None) => Vec::new(),
+            (_, Some(t)) => vec![operand::parse(t)?],
+        };
+        let labels: Vec<Opnd> = match word {
+            "$IS_32BITS" => vec![label(1), label(2)],
+            "$IS_DESC64" => vec![label(1)],
+            _ => Vec::new(),
+        }
+        .into_iter()
+        .flatten()
+        .map(|l| Opnd::Mem(Mode::Rel(l.to_string()), None))
+        .collect();
+        if self.call64.is_some() && matches!(word, "$PUSH64" | "$POP64") {
+            return Err(BETWEEN.into());
+        }
+        // What instruction() does for an instruction's operands: AP, the
+        // VAX stack, the branches and the routine called.
+        let ap = ap_use(insn::Op::Tst, operand::Size::Q, &ops, constant);
+        let mut lines = Vec::new();
+        if word != "$PUSH64" && word != "$POP64" {
+            let stacked = self.stack(insn::Op::Tst, operand::Size::Q, &ops, constant);
+            for l in &labels {
+                self.stack(
+                    insn::Op::Br,
+                    operand::Size::L,
+                    std::slice::from_ref(l),
+                    constant,
+                )?;
+            }
+            if self.compiling {
+                stacked?;
+            }
+        }
+        if self.compiling {
+            ap?;
+            for l in &labels {
+                if self.check(insn::Op::Br, std::slice::from_ref(l))? {
+                    return Err(format!(
+                        "{word} to another JSB routine: a tail call is a BRB or BRW"
+                    ));
+                }
+            }
+            if word == "$CALL64"
+                && let Some(t) = ops.first()
+            {
+                self.check(insn::Op::Callg, &[Opnd::Imm("0".into()), t.clone()])?;
+            }
+            if self.survey.routines[cur].ap && self.ap_stale && ops.iter().any(names_ap) {
+                lines.push("\tadd x12, x29, #32".to_string());
+                self.ap_stale = false;
+            }
+        } else {
+            let r = &mut self.survey.routines[cur];
+            if let Ok((args, list)) = ap {
+                r.ap_args = r.ap_args.max(args);
+                r.ap_list |= list;
+            }
+            r.branches
+                .extend(labels.iter().filter_map(target).map(str::to_string));
+        }
+        let quad_ap = self.survey.routines[cur].quad_args;
+        let call64 = self.call64;
+        let mut depth = self.depth;
+        let mut g = operand::Gen::new(&ops, constant, &mut self.labels);
+        g.quadword = self.quadword;
+        g.quad_ap = quad_ap;
+        let area = |n: usize| (8 * n).next_multiple_of(16);
+        let (mut calls, mut falls) = (false, true);
+        let mut next = call64;
+        match word {
+            "$SETUP_CALL64" => {
+                p.check(&["INLINE"])?;
+                if call64.is_some() {
+                    return Err("$SETUP_CALL64 before the last one's $CALL64".into());
+                }
+                let n = texts
+                    .first()
+                    .and_then(|t| constant(t.trim()))
+                    .filter(|n| (0..=255).contains(n))
+                    .ok_or("$SETUP_CALL64 takes the argument count, 0 to 255")?
+                    as usize;
+                // Below both stacks, sp first: a slot for each argument.
+                for line in [
+                    "mov x16, sp".to_string(),
+                    "cmp x16, x18".into(),
+                    "csel x16, x16, x18, lo".into(),
+                    "and x16, x16, #0xfffffffffffffff0".into(),
+                    format!("sub sp, x16, #{}", area(n)),
+                ] {
+                    g.emit(line);
+                }
+                next = Some((n, 0));
+            }
+            "$PUSH_ARG64" => {
+                let Some((n, pushed)) = call64 else {
+                    return Err("$PUSH_ARG64 without $SETUP_CALL64".into());
+                };
+                if pushed == n || ops.len() != 1 {
+                    return Err(format!(
+                        "$PUSH_ARG64 pushes one of the {n} arguments $SETUP_CALL64 said"
+                    ));
+                }
+                let v = insn::q_read(&mut g, &ops[0])?;
+                g.emit(format!("str {v}, [sp, #{}]", 8 * (n - pushed - 1)));
+                next = Some((n, pushed + 1));
+            }
+            "$CALL64" => {
+                let Some((n, pushed)) = call64 else {
+                    return Err("$CALL64 without $SETUP_CALL64".into());
+                };
+                self.call64 = None;
+                if pushed != n {
+                    return Err(format!(
+                        "$CALL64 after {pushed} $PUSH_ARG64 of the {n} $SETUP_CALL64 said"
+                    ));
+                }
+                let call = match ops.first() {
+                    Some(Opnd::Mem(Mode::Rel(e), None)) => format!("bl {e}"),
+                    Some(o) => {
+                        let t = g.address(o, operand::Size::B)?;
+                        g.emit(format!("mov x13, {t}"));
+                        "blr x13".into()
+                    }
+                    None => return Err("$CALL64 takes the routine to call".into()),
+                };
+                for i in (0..n.min(8)).step_by(2) {
+                    g.emit(if i + 1 < n {
+                        format!("ldp x{i}, x{}, [sp, #{}]", i + 1, 8 * i)
+                    } else {
+                        format!("ldr x{i}, [sp, #{}]", 8 * i)
+                    });
+                }
+                // The rest are at sp, as the calling standard has them.
+                let past = if n > 8 { 64 } else { area(n) };
+                if past > 0 {
+                    g.emit(format!("add sp, sp, #{past}"));
+                }
+                g.emit(format!("mov x9, #{n}"));
+                g.emit(call);
+                if n > 8 {
+                    g.emit(format!("add sp, sp, #{}", area(n) - 64));
+                }
+                next = None;
+                calls = true;
+            }
+            "$IS_32BITS" => {
+                p.check(&["TEMP_REG"])?;
+                let v = insn::q_read(&mut g, ops.first().ok_or("$IS_32BITS takes a quadword")?)?;
+                g.emit(format!("cmp {v}, {}, sxtw", operand::w(&v)));
+                if let Some(l) = label(1) {
+                    g.emit(format!("b.eq {l}"));
+                }
+                if let Some(l) = label(2) {
+                    g.emit(format!("b.ne {l}"));
+                    falls = label(1).is_none();
+                }
+            }
+            "$IS_DESC64" => {
+                p.check(&["SIZE"])?;
+                let (Some(desc), Some(to)) = (ops.first(), label(1)) else {
+                    return Err("$IS_DESC64 takes a descriptor's address and a label".into());
+                };
+                let a = match p
+                    .keyed
+                    .iter()
+                    .find(|(k, _)| k == "SIZE")
+                    .map(|(_, v)| v.to_ascii_uppercase())
+                {
+                    Some(s) if s == "QUAD" => insn::q_read(&mut g, desc)?,
+                    None => {
+                        let v = g.read(desc, operand::Size::L, operand::Ext::Sext)?;
+                        operand::x(&v)
+                    }
+                    Some(s) if s == "LONG" => {
+                        let v = g.read(desc, operand::Size::L, operand::Ext::Sext)?;
+                        operand::x(&v)
+                    }
+                    Some(s) => return Err(format!("SIZE is LONG or QUAD, not {s}")),
+                };
+                // MBO, 1, where a 32-bit one has its length, and MBMO, -1,
+                // where it has its address: both, since a 32-bit one may
+                // pass either alone.
+                let (t, skip) = (operand::w(&g.tmp()?), g.label());
+                g.emit(format!("ldrh {t}, [{a}]"));
+                g.emit(format!("cmp {t}, #1"));
+                g.emit(format!("b.ne {skip}"));
+                g.emit(format!("ldr {t}, [{a}, #4]"));
+                g.emit(format!("cmn {t}, #1"));
+                g.emit(format!("b.eq {to}"));
+                g.place_label(&skip);
+            }
+            _ => {
+                let Some(&Opnd::Reg(n)) = ops.first().filter(|_| ops.len() == 1) else {
+                    return Err(format!("{word} takes a register"));
+                };
+                if n > 11 {
+                    return Err(format!("{word} takes one of R0-R11"));
+                }
+                let r = operand::arm(n)?;
+                if word == "$PUSH64" {
+                    g.emit(format!("str x{r}, [x18, #-8]!"));
+                    depth = depth.map(|d| d + 8);
+                } else {
+                    g.wrote(n);
+                    g.emit(format!("ldr x{r}, [x18], #8"));
+                    let jsb_or_call = self.survey.routines[cur].kind != Kind::Exception;
+                    match depth {
+                        Some(d) if d < 8 && jsb_or_call && self.compiling => {
+                            return Err(format!(
+                                "$POP64 reaches past what this routine pushed ({d} bytes): the VAX stack has no return address or frame (DESIGN-0004)"
+                            ));
+                        }
+                        d => depth = d.map(|d| d - 8),
+                    }
+                }
+            }
+        }
+        lines.extend(g.out);
+        let written = g.written;
+        self.call64 = next;
+        self.depth = depth;
+        self.falls = falls;
+        self.flags = Flags::Live { borrow: false };
+        if calls {
+            self.ap_stale = true;
+        }
+        if !self.compiling {
+            let r = &mut self.survey.routines[cur];
+            r.direct |= written;
+            r.calls_out |= calls;
+            r.stacked |= matches!(word, "$SETUP_CALL64" | "$CALL64" | "$PUSH64" | "$POP64");
+        }
+        Ok(lines)
+    }
+
     /// Follows the VAX stack through an instruction: the bytes the routine
     /// has pushed, and those at the labels it branches to. Reading or
     /// popping more than it pushed reaches what the VAX had there, the
@@ -548,7 +878,7 @@ impl Macro32 {
         };
         let mut depth = self.depth;
         let sp = Some(&Opnd::Reg(14));
-        let writes_sp = writes_last(op) && ops.last() == sp;
+        let writes_sp = (0..ops.len()).any(|i| writes(op, i, ops.len()) && Some(&ops[i]) == sp);
         if let (Op::Mova, Some(Opnd::Mem(Mode::Disp(e, 14), None)), true) =
             (op, ops.first(), writes_sp)
         {
@@ -699,6 +1029,26 @@ impl Macro32 {
         }
         self.ap_stale |= matches!(mn, "BL" | "BLR");
         self.falls = !matches!(mn, "B" | "BR" | "RET" | "ERET");
+        // x2-x17 and x30 are the translation's, x18-x29 VAX SP, R2-R11 and
+        // FP: a built-in says what is meant in MACRO-32 terms.
+        let raw = rest.split(|c: char| !c.is_ascii_alphanumeric()).find(|w| {
+            w.strip_prefix(['x', 'w', 'X', 'W'])
+                .and_then(|n| n.parse::<u8>().ok())
+                .is_some_and(|n| (2..=30).contains(&n))
+        });
+        if self.compiling
+            && self.flagging
+            && !self.warned_raw
+            && let Some(r) = raw
+        {
+            self.warned_raw = true;
+            return Some(Ok(vec![
+                format!("\t{mn} {rest}"),
+                format!(
+                    "\t.WARN ARM64 code naming {r}, which vmacro uses itself or keeps a VAX register in: a built-in says it in MACRO-32 (.DISABLE FLAGGING if meant)"
+                ),
+            ]));
+        }
         None
     }
 
@@ -797,6 +1147,7 @@ impl Macro32 {
         self.cur = Some(i);
         self.warned = 0;
         self.warned_ap = false;
+        self.warned_raw = false;
         self.switched = false;
         self.fp_switched = false;
         self.flags = Flags::Live { borrow: true };
@@ -812,7 +1163,7 @@ impl Macro32 {
             Kind::Call if r.frameless => {}
             Kind::Call => {
                 let fdsc = format!("FDSC$${i}");
-                let f = frame(&saved, r.home);
+                let f = frame(&saved, r.home, r.quad_args);
                 out.extend(descriptor(&fdsc, &names[0], &saved, &f, &self.psect));
                 self.labels += 2;
                 out.extend(call_prologue(&f, &fdsc, 90000 + self.labels - 1));
@@ -866,6 +1217,8 @@ impl Macro32 {
         Ok(Vec::new())
     }
 }
+
+const BETWEEN: &str = "between $SETUP_CALL64 and $CALL64 nothing may push, pop, call or return: the arguments wait below VAX SP";
 
 const OUTSIDE: &str =
     "code outside a routine: declare it with .CALL_ENTRY, .JSB_ENTRY or .EXCEPTION_ENTRY";
@@ -989,11 +1342,22 @@ fn address(op: insn::Op, i: usize) -> bool {
     matches!(
         (op, i),
         (Op::Mova | Op::Pusha | Op::Jmp | Op::Jsb, 0)
-            | (Op::Calls | Op::Callg, _)
+            | (Op::Calls | Op::Callg | Op::Callg64, _)
+            | (Op::Evax(insn::Evax::Lda), 1)
             | (Op::Movc3, 1 | 2)
             | (Op::Movc5, 1 | 4)
             | (Op::Insque | Op::Remque, _)
     )
+}
+
+/// Whether an instruction writes its operand `i` of `n`, as a whole.
+fn writes(op: insn::Op, i: usize, n: usize) -> bool {
+    use insn::{Evax, Op};
+    let first = matches!(
+        op,
+        Op::Ldq | Op::Evax(Evax::Ldu | Evax::Lda | Evax::Ldqu | Evax::Ldl | Evax::Stc)
+    );
+    (writes_last(op) && i + 1 == n) || (first && i == 0)
 }
 
 /// Whether an instruction writes its last operand.
@@ -1017,7 +1381,17 @@ fn writes_last(op: insn::Op) -> bool {
             | Op::Ediv
             | Op::Ext(_)
             | Op::Mfpr
-            | Op::Ldq
+            | Op::Stq
+            | Op::Evax(
+                insn::Evax::Sext
+                    | insn::Evax::Alu(_)
+                    | insn::Evax::Zap(_)
+                    | insn::Evax::Cmp(_)
+                    | insn::Evax::Cmov(_)
+                    | insn::Evax::St
+                    | insn::Evax::Stqu
+                    | insn::Evax::Stc
+            )
     )
 }
 
@@ -1045,7 +1419,7 @@ fn ap_use(
         }
         .max(4);
         let reached = match o {
-            Opnd::Reg(12) if i + 1 == ops.len() && writes_last(op) => return Err(WRITTEN.into()),
+            Opnd::Reg(12) if writes(op, i, ops.len()) => return Err(WRITTEN.into()),
             Opnd::Mem(Mode::Inc(12) | Mode::Dec(12) | Mode::IncDef(12), _) => {
                 return Err(WRITTEN.into());
             }
@@ -1070,9 +1444,14 @@ fn branch_target(op: insn::Op, ops: &[operand::Opnd]) -> Option<&operand::Opnd> 
     use insn::Op;
     match op {
         Op::Jmp => ops.first(),
-        Op::Bcc | Op::Br | Op::Blb(_) | Op::Bb(..) | Op::Aob(_) | Op::Sob(_) | Op::Acb => {
-            ops.last()
-        }
+        Op::Bcc
+        | Op::Br
+        | Op::Blb(_)
+        | Op::Bb(..)
+        | Op::Aob(_)
+        | Op::Sob(_)
+        | Op::Acb
+        | Op::Evax(insn::Evax::Branch(_)) => ops.last(),
         _ => None,
     }
 }
@@ -1097,6 +1476,8 @@ fn native_writes(mn: &str, rest: &str) -> Option<u8> {
 pub(crate) struct Frame {
     regs: Vec<u8>,
     home: Option<u32>,
+    /// QUAD_ARGS=TRUE: the list is of quadwords, the count too.
+    quad: bool,
     rsa: usize,
     size: usize,
 }
@@ -1114,14 +1495,16 @@ impl Frame {
     }
 }
 
-fn frame(saved: &[u8], home: Option<u32>) -> Frame {
+fn frame(saved: &[u8], home: Option<u32>, quad: bool) -> Frame {
     let mut regs = vec![operand::SP];
     regs.extend(arms(saved));
-    let rsa = 32 + home.map_or(0, |n| (4 + 4 * n as usize).next_multiple_of(8));
+    let slot = if quad { 8 } else { 4 };
+    let rsa = 32 + home.map_or(0, |n| (slot + slot * n as usize).next_multiple_of(8));
     let size = (rsa + 8 * regs.len()).next_multiple_of(16);
     Frame {
         regs,
         home,
+        quad,
         rsa,
         size,
     }
@@ -1132,7 +1515,8 @@ fn frame(saved: &[u8], home: Option<u32>) -> Frame {
 /// then FP, the argument list and the registers. The list is the count,
 /// from x9, at most what it has room for, then the arguments: the first
 /// eight from x0-x7, the rest from the caller's stack, as many as there
-/// are. Local labels from `label` on.
+/// are; longwords, or quadwords with QUAD_ARGS. Local labels from `label`
+/// on.
 fn call_prologue(f: &Frame, fdsc: &str, label: u32) -> Vec<String> {
     let size = f.size;
     let mut out = if size <= 504 {
@@ -1150,19 +1534,21 @@ fn call_prologue(f: &Frame, fdsc: &str, label: u32) -> Vec<String> {
         "\tmov x29, sp".into(),
     ]);
     if let Some(n) = f.home {
+        let (slot, r) = if f.quad { (8, 'x') } else { (4, 'w') };
         out.extend([
             "\tand x16, x9, #255".into(),
             format!("\tmov x17, #{n}"),
             "\tcmp x16, x17".into(),
             "\tcsel x16, x16, x17, ls".into(),
-            "\tstr w16, [x29, #32]".into(),
+            format!("\tstr {r}16, [x29, #32]"),
         ]);
         let n = n as usize;
+        let at = |i: usize| 32 + slot * (i + 1);
         for i in (0..n.min(8)).step_by(2) {
             out.push(if i + 1 < n {
-                format!("\tstp w{i}, w{}, [x29, #{}]", i + 1, 36 + 4 * i)
+                format!("\tstp {r}{i}, {r}{}, [x29, #{}]", i + 1, at(i))
             } else {
-                format!("\tstr w{i}, [x29, #{}]", 36 + 4 * i)
+                format!("\tstr {r}{i}, [x29, #{}]", at(i))
             });
         }
         if n > 8 {
@@ -1171,9 +1557,9 @@ fn call_prologue(f: &Frame, fdsc: &str, label: u32) -> Vec<String> {
                 "\tsubs x16, x16, #8".into(),
                 format!("\tb.ls {done}"),
                 format!("\tadd x13, x29, #{size}"),
-                "\tadd x17, x29, #68".into(),
+                format!("\tadd x17, x29, #{}", at(8)),
                 format!("{again}:\tldr x14, [x13], #8"),
-                "\tstr w14, [x17], #4".into(),
+                format!("\tstr {r}14, [x17], #{slot}"),
                 "\tsubs x16, x16, #1".into(),
                 format!("\tb.ne {again}"),
                 format!("{done}:"),

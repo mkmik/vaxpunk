@@ -461,6 +461,7 @@ pub struct Returns {
     pub saved: Regs,
     pub lr: bool,
     pub home: Option<u32>,
+    pub quad: bool,
     pub frameless: bool,
 }
 
@@ -471,6 +472,7 @@ impl Routine {
             saved: self.saved,
             lr: self.lr,
             home: self.home,
+            quad: self.quad_args,
             frameless: self.frameless,
         }
     }

@@ -227,6 +227,11 @@ pub struct Gen<'a> {
     side: Vec<u8>,
     constant: &'a dyn Fn(&str) -> Option<i64>,
     next: &'a mut u32,
+    /// `.ENABLE QUADWORD`: MOVAx writes a register's 64 bits.
+    pub quadword: bool,
+    /// `QUAD_ARGS=TRUE`: the argument list AP points to is of quadwords,
+    /// argument n at 8n, which `4n(AP)` still names.
+    pub quad_ap: bool,
 }
 
 pub type Result<T> = std::result::Result<T, String>;
@@ -255,6 +260,8 @@ impl<'a> Gen<'a> {
             side,
             constant,
             next,
+            quadword: false,
+            quad_ap: false,
         }
     }
 
@@ -337,7 +344,11 @@ impl<'a> Gen<'a> {
         let base = self.fold(&base, disp)?;
         let t = self.reuse(&base)?;
         let i = arm(*i)?;
-        match size.shift() {
+        let quad = self.quad_ap && matches!(mode, Mode::Def(12) | Mode::Disp(_, 12));
+        if quad && size < Size::L {
+            return Err("in a QUAD_ARGS routine, AP is indexed by longwords or quadwords".into());
+        }
+        match size.shift() + u8::from(quad) {
             0 => self.emit(format!("add {t}, {base}, w{i}, sxtw")),
             s => self.emit(format!("add {t}, {base}, w{i}, sxtw #{s}")),
         }
@@ -369,10 +380,17 @@ impl<'a> Gen<'a> {
             }
             Mode::Disp(e, n) => self.disp(e, *n)?,
             Mode::DispDef(e, n) => {
+                // A quadword argument's pointer is 64 bits.
+                let quad = *n == 12 && self.quad_ap;
                 let (base, d) = self.disp(e, *n)?;
                 let t = self.reuse(&base)?;
-                let m = self.at(&base, d, Size::L)?;
-                self.emit(format!("ldr {}, {m}", w(&t)));
+                let (size, r) = if quad {
+                    (Size::Q, x(&t))
+                } else {
+                    (Size::L, w(&t))
+                };
+                let m = self.at(&base, d, size)?;
+                self.emit(format!("ldr {r}, {m}"));
                 (t, 0)
             }
             Mode::Abs(e) => {
@@ -395,7 +413,10 @@ impl<'a> Gen<'a> {
     /// only its locals, below FP, are the source's.
     fn disp(&mut self, e: &str, n: u8) -> Result<(String, i64)> {
         let r = format!("x{}", arm(n)?);
+        let quad = n == 12 && self.quad_ap;
         if let Some(d) = self.constant(e) {
+            // Argument d / 4 at 8 * (d / 4), and the bytes in it.
+            let d = if quad { d + (d & !3) } else { d };
             return match (n, d) {
                 (13, 0) => Ok((r, HANDLER)),
                 (13, 1..) => Err(format!(
@@ -406,7 +427,8 @@ impl<'a> Gen<'a> {
         }
         let t = self.tmp()?;
         self.imm_into(&t, e, Size::L)?;
-        self.emit(format!("add {t}, {r}, {}, sxtw", w(&t)));
+        let scale = if quad { " #1" } else { "" };
+        self.emit(format!("add {t}, {r}, {}, sxtw{scale}", w(&t)));
         Ok((t, 0))
     }
 
@@ -513,6 +535,18 @@ impl<'a> Gen<'a> {
             }
         }
         Ok(())
+    }
+
+    /// All 64 bits of VAX register `n`, as an x register: a copy if an
+    /// operand's side effect changes it later in the instruction.
+    pub fn whole(&mut self, n: u8) -> Result<String> {
+        let r = arm(n)?;
+        if !self.side.contains(&n) {
+            return Ok(format!("x{r}"));
+        }
+        let t = self.tmp()?;
+        self.emit(format!("mov {t}, x{r}"));
+        Ok(t)
     }
 
     /// Reads an operand: evaluates it and loads its value.

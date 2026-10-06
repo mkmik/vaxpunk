@@ -278,6 +278,63 @@ SAVED:  .LONG   0
     );
 }
 
+/// $SETUP_CALL64, $PUSH_ARG64 and $CALL64 must agree on the count, and
+/// raw ARM64 naming the registers vmacro uses is a porting message, but
+/// after .DISABLE FLAGGING.
+#[test]
+fn call64() {
+    let source = "\
+        .ENTRY  START, ^M<>
+        $SETUP_CALL64 2
+        $PUSH_ARG64 #1
+        $CALL64 START
+        $PUSH_ARG64 #1
+        RET
+        .END    START
+";
+    assert_eq!(
+        errors(source),
+        [
+            "4:9: $CALL64 after 1 $PUSH_ARG64 of the 2 $SETUP_CALL64 said",
+            "5:9: $PUSH_ARG64 without $SETUP_CALL64",
+        ]
+    );
+    let source = "\
+        .ENTRY  START, ^M<>
+        $SETUP_CALL64 1
+        PUSHL   #1
+        $PUSH_ARG64 #1
+        $CALL64 START
+        EVAX_LDQ AP, (R2)
+        RET
+        .END    START
+";
+    assert_eq!(
+        errors(source),
+        [
+            "3:9: between $SETUP_CALL64 and $CALL64 nothing may push, pop, call or return: the arguments wait below VAX SP",
+            "6:9: AP is the argument list at 32(FP) (DESIGN-0004): vmacro doesn't take code that writes it",
+        ]
+    );
+    let source = "\
+        .ENTRY  START, ^M<>
+        mov     x9, #1
+        mov     x9, #2
+        RET
+        .ENTRY  QUIET, ^M<>
+        .DISABLE FLAGGING
+        mov     x16, x17
+        RET
+        .END    START
+";
+    assert_eq!(
+        warnings(source),
+        [
+            "2: ARM64 code naming x9, which vmacro uses itself or keeps a VAX register in: a built-in says it in MACRO-32 (.DISABLE FLAGGING if meant)"
+        ]
+    );
+}
+
 /// Modules compiled together know each other's routines: a JSB to one in
 /// another module modifies what its declaration says, and a branch into
 /// another module is checked as one in the same module.

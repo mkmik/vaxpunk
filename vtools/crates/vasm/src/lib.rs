@@ -61,6 +61,11 @@ pub trait Dialect {
     fn again(&mut self) -> bool {
         false
     }
+
+    /// The command line's `/ENABLE=what`: whether the dialect has it.
+    fn enable(&mut self, _what: &str) -> bool {
+        false
+    }
 }
 
 /// Assembles `source` into object records, or returns every error found,

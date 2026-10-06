@@ -268,6 +268,7 @@ UNWIND: SUBL2   #IMG_LENGTH, SP
 60$:    EVAX_LDQ R0, CHF$IH_MCH_RETVAL(R7)
         EVAX_LDQ R1, CHF$IH_MCH_RETVAL2(R7)
         MOVL    R9, R2
+        .DISABLE FLAGGING               ; the frame's registers, by name
         mov     x16, x19                ; R2: what it goes on with
         ldp     x18, x19, [x16, #IMG_X18]
         ldp     x20, x21, [x16, #IMG_X18+16]
@@ -281,6 +282,7 @@ UNWIND: SUBL2   #IMG_LENGTH, SP
         mov     sp, x17
         ldr     x17, [x16, #IMG_PC]
         br      x17
+        .ENABLE FLAGGING
 
 ; FHANDLER: R2 = a frame, R8 = its mode. R1 = its condition handler: its
 ; descriptor's static one, else the one at its (FP), or 0. Uses R0.

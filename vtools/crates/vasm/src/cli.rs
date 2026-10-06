@@ -23,12 +23,20 @@ pub fn main(name: &str, dialect: Option<&mut dyn Dialect>) -> ExitCode {
     }
 }
 
-fn run(name: &str, dialect: Option<&mut dyn Dialect>) -> Result<bool, String> {
+fn run(name: &str, mut dialect: Option<&mut dyn Dialect>) -> Result<bool, String> {
     let usage = || {
         format!(
             "USAGE, usage: {name} [/OBJECT=file | -o file] [/INCLUDE=dir | -I dir]... \
-             [/NOWARNINGS=NOTPIC | --nowarnings NOTPIC] SOURCE"
+             [/NOWARNINGS=NOTPIC | --nowarnings NOTPIC] [/ENABLE=what | --enable what] SOURCE"
         )
+    };
+    // What the dialect may enable, as vmacro's QUADWORD.
+    let mut enable = |what: &str| {
+        dialect
+            .as_deref_mut()
+            .is_some_and(|d| d.enable(what))
+            .then_some(())
+            .ok_or_else(usage)
     };
     let (mut source, mut output, mut include) = (None, None, Vec::new());
     // The only warning so far is NOTPIC.
@@ -49,6 +57,10 @@ fn run(name: &str, dialect: Option<&mut dyn Dialect>) -> Result<bool, String> {
                 return Err(usage());
             }
             warnings = false;
+        } else if let Some(what) = qualifier("/ENABLE=") {
+            enable(&what.to_string_lossy())?;
+        } else if arg == "--enable" {
+            enable(&args.next().ok_or_else(usage)?)?;
         } else if arg == "-o" {
             output = Some(args.next().ok_or_else(usage)?.into());
         } else if arg == "-I" {
