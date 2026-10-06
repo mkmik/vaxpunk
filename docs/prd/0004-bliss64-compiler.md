@@ -44,7 +44,7 @@ Decisions this PRD rests on:
 
 | Decision | Choice |
 | --- | --- |
-| Dialect | BLISS-64 only; `%BPVAL` is 64, a fullword is a quadword |
+| Dialects | BLISS-64 (`/A64`, the default; `%BPVAL` is 64, a fullword is a quadword) and BLISS-32 (`/A32`, as BLISS-32EN on Alpha) so existing 32-bit code recompiles; the compiler itself is BLISS-64 |
 | Spec | DEC's BLISS Language Reference Manual (1987), plus a BLISS-64 delta we write from DEC's Alpha documentation and the reference compiler |
 | Reference compiler | BLISSA64 V1.11-7 on OpenVMS Alpha in AXPbox: an oracle for listings and behaviour, never for machine code |
 | Calling standard | The vaxpunk calling standard ([ADR-0023](../adr/0023-calling-standard.md)): AAPCS64 plus an argument count in a register |
@@ -53,10 +53,9 @@ Decisions this PRD rests on:
 
 ## Non-goals
 
-- **No BLISS-16, BLISS-32 or BLISS-36.** BLISS-32 sources compile only
-  after porting to BLISS-64, as on Alpha: a `VECTOR` without an allocation
-  unit is now 8 bytes an element, and code that assumed 32-bit fullwords
-  changes.
+- **No BLISS-16 or BLISS-36.** BLISS-32 is in, as BLISS-32EN was on
+  Alpha: VAX BLISS-32 code that uses the VAX's built-ins, `AP` or `FP`
+  still needs the edits Alpha needed.
 - **No LLVM** and no other compiler framework. The same rule as
   [PRD-0001](0001-vtools.md): LLVM tools may only be test oracles.
 - **No optimizations** beyond what keeps the code from being silly:
@@ -117,14 +116,16 @@ the definitions.
 ## Language
 
 The language is the BLISS Language Reference Manual (AA-H275E-TK, May
-1987), common BLISS and its BLISS-32 parts, as BLISS-64 changes them. The
+1987), common BLISS and its BLISS-32 parts, as Alpha's BLISS-64 and
+BLISS-32 change them. The
 1987 manual predates Alpha, so the first deliverable is
 `vtools/docs/bliss64.md`: the BLISS-64 differences, each with where it was
 learned (DEC's Alpha BLISS documentation, the kit's release notes, or a
 probe of the reference compiler). Among them: 64-bit fullwords and
 `%BPVAL`, `%UPVAL` and the allocation units, quadword fields, the Alpha
-linkages and built-ins, and how BLISS-64 treats longword data in 32-bit
-VMS structures.
+linkages and built-ins, how BLISS-64 treats longword data in 32-bit
+VMS structures, the `LONG_DEFAULT`, `REF_LONG` and `SIGNED_LONG` switches
+for moving BLISS-32 code to BLISS-64, and what `/A32` does.
 
 What the compiler must accept, by the end of this PRD:
 
@@ -148,16 +149,18 @@ What the compiler must accept, by the end of this PRD:
 - `LINKAGE`: `CALL` and `JSB` with `REGISTER`, `GLOBAL`, `PRESERVE`,
   `NOPRESERVE` and `NOTUSED`, so BLISS-64 calls MACRO-32 routines with
   their register contracts unchanged and MACRO-32 calls BLISS-64.
-- `BUILTIN`, with the built-ins vaxpunk needs (the interlocked queue
-  operations, `PROBER`/`PROBEW`, `MTPR`/`MFPR` as PAL calls, `CALLG`,
-  `ACTUALCOUNT`, `ACTUALPARAMETER`, `ARGPTR`), each listed in
-  `bliss64.md`.
-- `ENABLE` and `SIGNAL`, `SIGNAL_STOP`, `SETUNWIND`, with handlers found
+- `BUILTIN`, with the built-ins vaxpunk needs, under BLISS-64's names:
+  the PAL calls as `PAL_x` (`PAL_MTPR_IPL`, `PAL_PROBER`, `PAL_INSQHIL`)
+  and `CALL_PAL`, the atomics, `ACTUALCOUNT`, `ACTUALPARAMETER`,
+  `ARGPTR`, each listed in `bliss64.md`. BLISS-64 has no VAX built-ins:
+  no `CALLG`, which is `LIB$CALLG`.
+- `ENABLE`, `ESTABLISH`, `REVERT` and `SIGNAL`, `SIGNAL_STOP`, `SETUNWIND`, with handlers found
   along the frame chain as for MACRO-32
   ([ADR-0021](../adr/0021-condition-handlers-run-in-the-mode-that-signals.md)).
 
 Names are case-insensitive and folded to upper case, as in `vasm`. Sources
-are `.B64`, require files `.R64`, libraries `.L64`.
+are `.B64`, require files `.R64`, libraries `.L64`; under `/A32`, `.B32`,
+`.R32`, `.L32`; `.BLI`, `.REQ` and `.LIB` under both.
 
 ## Definitions
 
@@ -165,11 +168,11 @@ BLISS-64 code needs the same structures as MACRO-32 code: `$PCBDEF`,
 `$UCBDEF`, `$SSDEF`, and the rest. Two hand-kept copies would drift, and
 every drift is a silent wrong-offset bug. `vdefs` reads the `$xxxDEF`
 macros in `lib.mlb` and `starlet.mlb` and writes `LIB.R64` and
-`STARLET.R64`, with each symbol's size from its name, as VMS names encode
+`STARLET.R64`, and `LIB.REQ` and `STARLET.REQ` for `/A32`, with each symbol's size from its name, as VMS names encode
 it: `PCB$L_SQFL` is a longword at offset 0, `$V_` and `$S_` pairs are bit
 fields, `$K_` and `$C_` are constants, `$M_` masks. A field the naming
 rule can't type is an error that names it, fixed in `lib.mlb`. The build
-regenerates the `.R64` files and CI fails when they are stale. The same
+regenerates the `.R64` and `.REQ` files and CI fails when they are stale. The same
 tool can write C headers later.
 
 ## Code generation
@@ -271,7 +274,8 @@ harness retries.
 
 **Parse corpus.** The VAX/VMS V4.3 BLISS-32 sources, run through the
 parser locally and never committed, find what the parser doesn't accept.
-They are BLISS-32, so only parsing is checked.
+Compiled with `/A32`, they also show which VAX built-ins real code leans
+on (`bliss64.md`, *BLISS-32 on vaxpunk*).
 
 **The lint, measured.** False positives: lint warnings on the V4.3 corpus,
 which DEC shipped and is mostly right. Recall: delete dots at random from
@@ -294,10 +298,10 @@ module from the system disk, and its OBJ must equal the one the host made.
 
 ## Open questions
 
-- **BLISS-64 documentation.** Which DEC documents describe BLISS-64
-  (the Alpha BLISS user manual, release notes in the kit or in
-  `SYS$HELP`), and where to get them. Without them the delta comes from
-  probing the reference compiler alone.
+- **BLISS-64 documentation.** Answered in `bliss64.md`: there is no
+  BLISS-64 manual; the kit's release notes (chapter 2, differences from
+  BLISS-32) and the compiler's own tables are the sources, and what they
+  leave open is listed there for the oracle to probe.
 - **`vrun` file I/O.** Monitor calls the stub forwards to the host over a
   channel `vrun` serves, or input files preloaded into guest memory and
   output read back from a shared memory file. The first needs a host
@@ -351,22 +355,26 @@ Each step ends with something you can run or look at.
    field of `$PCBDEF` at the same offset MACRO-32 does.
 8. **Linkages and conditions.** `LINKAGE`, `BUILTIN`, `ENABLE`, `SIGNAL`.
    *Visible:* the interop tests under `vrun`.
-9. **The lint.** Rules 1 to 4, with their numbers on the corpus and the
+9. **BLISS-32.** `/A32`, and `LONG_DEFAULT`, `REF_LONG` and
+   `SIGNED_LONG` under `/A64`. *Visible:* the behaviour tests pass under
+   `/A32` against BLISSA64's `BLISS/A32`, and a BLISS-32 module calls a
+   BLISS-64 one and MACRO-32 under `vrun`.
+10. **The lint.** Rules 1 to 4, with their numbers on the corpus and the
    mutation test. *Visible:* the report, and CI failing on a missing dot.
-10. **Pilot.** One part of PRD-0003 written in BLISS-64, in the boot image.
+11. **Pilot.** One part of PRD-0003 written in BLISS-64, in the boot image.
     *Visible:* the system boots and its test passes. Stage 0 is now the
     system's BLISS-64 compiler.
-11. **File I/O in `vrun`.** *Visible:* a test image under `vrun` reads a
+12. **File I/O in `vrun`.** *Visible:* a test image under `vrun` reads a
     host file and writes another.
-12. **Stage 1.** `vbliss` ported to BLISS-64 and built by stage 0.
+13. **Stage 1.** `vbliss` ported to BLISS-64 and built by stage 0.
     *Visible:* every test passes through stage 1 with output identical to
     stage 0's.
-13. **The `vasm` port.** VASM in BLISS-64, built by stage 1. *Visible:*
+14. **The `vasm` port.** VASM in BLISS-64, built by stage 1. *Visible:*
     its OBJ equals the Rust `vasm`'s on the whole test suite, and
     `BLISS.EXE` writes OBJ modules without the host's `vasm`.
-14. **Self-hosting.** Stages 2 and 3, the bootstrap job in CI, the build
+15. **Self-hosting.** Stages 2 and 3, the bootstrap job in CI, the build
     switched to `vbliss --stage1`, stage 0 frozen. *Visible:*
     `just bliss-bootstrap` ends with stages 2 and 3 identical.
-15. **On vaxpunk.** The I/O module's RMS implementation, `BLISS.EXE` and
+16. **On vaxpunk.** The I/O module's RMS implementation, `BLISS.EXE` and
     `VASM.EXE` on the system disk. *Visible:* `$ BLISS HELLO` at the DCL
     prompt writes `HELLO.OBJ`, equal to the host's.
