@@ -3,9 +3,9 @@ name: boot
 # Builds the OS with the cross toolchain and boots it in QEMU: cargo test -p
 # boot. The toolchain is a container image, .github/toolchain.Dockerfile,
 # kept on ghcr.io under the Dockerfile's hash and built only when that tag
-# is missing. On main, or when run by hand, it then publishes the GitHub
-# Pages site, web/mksite.sh's: the landing page, the API reference and the
-# demo, the images just booted on QEMU compiled to WebAssembly.
+# is missing. On main, or when run by hand, it then builds the GitHub Pages
+# site, web/mksite.sh's: the landing page, the API reference and the demo,
+# the images just booted on QEMU compiled to WebAssembly. Main publishes it.
 on:
   push:
     branches: [main]
@@ -106,7 +106,10 @@ jobs:
         with:
           path: site
 
+  # Only main deploys: the github-pages environment rejects other branches,
+  # where running this by hand builds QEMU and the site as a check.
   deploy:
+    if: github.ref == 'refs/heads/main'
     needs: site
     runs-on: ubuntu-latest
     permissions:
