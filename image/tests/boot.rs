@@ -252,7 +252,12 @@ fn boot() {
             type_("@DCLTEST 3 \"Two words\"\r@DCLTEST FAIL\rSHOW SYMBOL $STATUS\r");
             type_("X = 6 * 7\rWRITE SYS$OUTPUT \"X is \", X\rSHOW SYMBOL HOME\rHOME\r");
             type_("EDIT WELCOME.TXT\r\"index\"\r\"zzz\"\rEXIT\rQUIT\r");
-            typed = 1;
+            // More than the type-ahead buffer's 255: the console holds back the rest.
+            type_("DEFINE FOO SYS$INPUT\rSHOW LOGICAL FOO\rSHOW LOGICAL\rDEASSIGN FOO\r");
+            type_("SHOW LOGICAL FOO\rSHOW DEFAULT\rSET DEFAULT [SYSEXE]\rSHOW DEFAULT\rDIR D*\r");
+            type_("SET DEFAULT [NOSUCH]\rSHOW DEFAULT\rSET DEFAULT [-]\rSHOW DEFAULT\r");
+            type_("DIR [.SYSMGR]W*\rSET DEFAULT [-]\r");
+            typed = 2;
         } else if typed == 7 && step < STEPS.len() {
             let (line, times, keys) = STEPS[step];
             if text.lines().filter(|l| l.contains(line)).count() >= times {
@@ -300,14 +305,6 @@ fn boot() {
             type_("COPY SYS$SYSDEVICE:[SYSMGR]WELCOME.TXT DKB0:[000000]NEW.TXT\r");
             type_("DIRECTORY/PROTECTION DKB0:[000000]NEW.TXT;2\r");
             typed = 13;
-        }
-        // The rest once EDIT is done: the type-ahead buffer holds 255 characters.
-        if typed == 1 && text.contains("String was not found") {
-            type_("DEFINE FOO SYS$INPUT\rSHOW LOGICAL FOO\rSHOW LOGICAL\rDEASSIGN FOO\r");
-            type_("SHOW LOGICAL FOO\rSHOW DEFAULT\rSET DEFAULT [SYSEXE]\rSHOW DEFAULT\rDIR D*\r");
-            type_("SET DEFAULT [NOSUCH]\rSHOW DEFAULT\rSET DEFAULT [-]\rSHOW DEFAULT\r");
-            type_("DIR [.SYSMGR]W*\rSET DEFAULT [-]\r");
-            typed = 2;
         }
         // Then, once SET DEFAULT [-] has failed in [000000], the ramdisk.
         if typed == 2 && text.contains("error in directory name") {

@@ -796,8 +796,10 @@ The console's driver, `ttdriver.mar`, `TT$FDT`:
   CTRL/Z, or none if the buffer filled, and the next read starts.
 - **Receiving.** `TTY$RCVINT`, the console receive interrupt
   (DESIGN-0001), puts each character in `TTY$AB_RING`, the 256-byte
-  type-ahead buffer, or drops it if the buffer is full, and requests the
-  `IPL$_IOPOST` software interrupt. `TTY$IOPOST` gives the buffer's
+  type-ahead buffer, and requests the `IPL$_IOPOST` software interrupt.
+  When the buffer is full it leaves the rest in the UART and disables
+  its interrupt until `GETCHAR` takes a character, so the host waits, as
+  for a terminal's XOFF, and no line loses its end. `TTY$IOPOST` gives the buffer's
   characters to the read at the head, at `IPL$_SYNCH`. CTRL/C and CTRL/Y
   empty the buffer instead, and `TTY$IOPOST` delivers their ASTs.
 - **CTRL/C and CTRL/Y ASTs.** `IO$_SETMODE` with `IO$M_CTRLCAST` or

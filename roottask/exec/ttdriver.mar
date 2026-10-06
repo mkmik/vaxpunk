@@ -415,6 +415,7 @@ GETCHAR:
         INCL    TTY$GL_GET
         BICL2   #^C<TYPEAHEAD-1>, TTY$GL_GET
         MOVZBL  TTY$AB_RING[R0], R0
+        MTPR    #RXCS$M_IE, #PR$_RXCS   ; room again, if the ring was full
 10$:    ENBINT
         TSTL    R0
         RSB
@@ -549,14 +550,21 @@ TTY$INIT::
         RSB
 
 ; TTY$RCVINT: the console receive interrupt, at IPL$_CONSOLE. Puts each
-; character the console received in the type-ahead buffer, or drops it if
-; the buffer is full, and requests the IPL$_IOPOST software interrupt,
-; which gives them to the reads. CTRL/C and CTRL/Y empty the buffer, for
-; TTY$IOPOST to deliver their ASTs.
+; character the console received in the type-ahead buffer, and requests
+; the IPL$_IOPOST software interrupt, which gives them to the reads. CTRL/C
+; and CTRL/Y empty the buffer, for TTY$IOPOST to deliver their ASTs. When
+; the buffer is full it leaves the rest in the console and disables this
+; interrupt, which GETCHAR enables again: the host waits to send more, as
+; for a terminal's XOFF, rather than lose a line's end. ponytail: a CTRL/Y
+; typed then waits too, until a read takes a character.
 TTY$RCVINT::
         PUSHR   #^M<R0, R1>
 10$:    MFPR    #PR$_RXCS, R0
         BBC     #RXCS$V_DONE, R0, 30$
+        ADDL3   #1, TTY$GL_PUT, R1
+        BICL2   #^C<TYPEAHEAD-1>, R1
+        CMPL    R1, TTY$GL_GET
+        BEQL    25$                     ; full
         MFPR    #PR$_RXDB, R0
         CMPB    R0, #CTRLY
         BNEQ    15$
@@ -568,15 +576,12 @@ TTY$RCVINT::
         MOVL    TTY$GL_PUT, TTY$GL_GET
         MOVL    #1, TTY$GL_CTRLC
         BRB     10$
-20$:    ADDL3   #1, TTY$GL_PUT, R1
-        BICL2   #^C<TYPEAHEAD-1>, R1
-        CMPL    R1, TTY$GL_GET
-        BEQL    10$                     ; full
-        PUSHL   R1
+20$:    PUSHL   R1
         MOVL    TTY$GL_PUT, R1
         MOVB    R0, TTY$AB_RING[R1]
         MOVL    (SP)+, TTY$GL_PUT
         BRB     10$
+25$:    MTPR    #0, #PR$_RXCS
 30$:    SOFTINT #IPL$_IOPOST
         POPR    #^M<R0, R1>
         REI
