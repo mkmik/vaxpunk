@@ -257,6 +257,20 @@ impl<'a> Gen<'a> {
         self.out.push(format!("\t{line}"));
     }
 
+    /// Pushes the longword in `v` on the VAX stack. SP itself goes through
+    /// a scratch register: a writeback store of its own base is
+    /// CONSTRAINED UNPREDICTABLE, which Apple's cores trap.
+    pub fn push(&mut self, v: &str) -> Result<()> {
+        let mut v = w(v);
+        if v == "w28" {
+            let t = w(&self.tmp()?);
+            self.emit(format!("mov {t}, w28"));
+            v = t;
+        }
+        self.emit(format!("str {v}, [x28, #-4]!"));
+        Ok(())
+    }
+
     /// A new local label, unique in the module.
     pub fn label(&mut self) -> String {
         *self.next += 1;

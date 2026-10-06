@@ -450,6 +450,7 @@ PORT$C_RECV = 7                         ; at most LEN bytes into the buffer; 0 i
 PORT$C_CLOSE = 8
 PORT$C_IFCONFIG = 9                     ; FLAGS SET: ADDR, ARG1 mask, ARG2 gateway, or DHCP's; response: those
 PORT$C_CANCEL = 10                      ; ends the connection's commands
+PORT$C_PING = 11                        ; ADDR: an ICMP echo; response: ARG1 the round trip in ms, ARG2 the TTL
 PORT$C_TCP = 6
 PORT$M_SET = 1                          ; IFCONFIG: set, not only sense
 PORT$M_LINKUP = 2                       ; IFCONFIG's response: the link is up

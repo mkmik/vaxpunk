@@ -4,7 +4,8 @@
 //! One vaxpunk on QEMU's user network, whose data disk, made here, says
 //! DHCP, which START COMMUNICATION asks QEMU's DHCP server at boot for
 //! the address, mask and gateway: then TCPIP's SET INTERFACE, SET ROUTE,
-//! one without /DEFAULT that fails, and at the TCPIP> prompt SHOW
+//! one without /DEFAULT that fails, PING to QEMU's gateway and to
+//! an address nobody has, and at the TCPIP> prompt SHOW
 //! INTERFACE, HELP, an interface there is not, and EXIT; then TCPTEST, which
 //! connects to a server here, through QEMU's guestfwd, and accepts a
 //! connection from a client here, through hostfwd, and SET HOST to
@@ -13,7 +14,8 @@
 //! Two vaxpunks on one QEMU socket network, A and B, each with a data disk
 //! made here holding the configuration SET CONFIGURATION INTERFACE saves,
 //! which START COMMUNICATION applies at boot: B logs in to A with SET
-//! HOST, SHOW SYSTEM lists A's processes, and LOGOUT comes back to B.
+//! HOST, SHOW SYSTEM lists A's processes, and LOGOUT comes back to B,
+//! which pings A.
 //! Then B saves another address, keeping the saved gateway, another
 //! gateway with SET ROUTE /PERMANENT, keeping that address, and DHCP,
 //! keeping both, which SHOW INTERFACE doesn't show, since they are for
@@ -178,6 +180,8 @@ fn network() {
     vax.command("TCPIP SET INTERFACE WE0 /HOST=10.0.2.15 /NETWORK_MASK=255.255.255.0");
     vax.command("TCPIP SET ROUTE /DEFAULT /GATEWAY=10.0.2.2");
     vax.command("TCPIP SET ROUTE /GATEWAY=10.0.2.3");
+    vax.command("TCPIP PING 10.0.2.2 /NUMBER_PACKETS=2");
+    vax.command("TCPIP PING 10.0.2.99 /NUMBER_PACKETS=1");
     vax.reply("TCPIP", "TCPIP> ");
     vax.reply("SHOW INTERFACE", "TCPIP> ");
     vax.reply("HELP", "TCPIP> ");
@@ -213,6 +217,10 @@ fn network() {
         "  SET INTERFACE interface\n    /DHCP\n    /HOST=value",
         "%SYSTEM-W-NOSUCHDEV",
         "illegal combination of command elements",
+        "PING 10.0.2.2 (10.0.2.2): 56 data bytes",
+        "64 bytes from 10.0.2.2: icmp_seq=1 ttl=",
+        "----10.0.2.2 PING Statistics----\n2 packets transmitted, 2 packets received, 0% packet loss",
+        "1 packets transmitted, 0 packets received, 100% packet loss",
         "TCPTEST: connected to 10.0.2.100 port 7777",
         "hello from the host",
         "TCPTEST: accepted a connection from address 0202000A",
@@ -256,6 +264,7 @@ fn network() {
     b.command("SET HOST 10.0.0.1");
     b.command("SHOW SYSTEM");
     b.command("LOGOUT");
+    b.command("TCPIP PING /NUMBER_PACKETS=2 10.0.0.1");
     b.command("TCPIP SET CONFIGURATION INTERFACE WE0 /HOST=10.0.0.3 /NETWORK_MASK=255.255.255.0");
     b.command("TCPIP SET ROUTE /DEFAULT /GATEWAY=10.0.0.9 /PERMANENT");
     b.command("TCPIP SET CONFIGURATION INTERFACE WE0 /DHCP");
@@ -268,6 +277,8 @@ fn network() {
         "TCPIP$TELNET    LEF     4 TELNETD.EXE",
         "_BG02:          CUR     4 SHOW.EXE",
         "%REM-S-END, control returned to the local node",
+        "64 bytes from 10.0.0.1: icmp_seq=1 ttl=255 time=",
+        "2 packets transmitted, 2 packets received, 0% packet loss",
         " WE0       10.0.0.2         255.255.255.0    10.0.0.1         up",
     ] {
         assert!(b.contains(line), "no {line:?}");

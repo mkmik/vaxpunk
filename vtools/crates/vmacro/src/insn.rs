@@ -334,7 +334,7 @@ pub fn compile(
         Op::Mova | Op::Pusha => {
             let a = g.address(&ops[0], size)?;
             if op == Op::Pusha {
-                g.emit(format!("str {}, [x28, #-4]!", w(&a)));
+                g.push(&a)?;
             } else if let Opnd::Reg(n) = ops[1] {
                 // The whole address: the register may be a base later.
                 g.emit(format!("mov x{}, {a}", arm(n)?));
@@ -346,7 +346,7 @@ pub fn compile(
         }
         Op::Pushl => {
             let v = g.read(&ops[0], size, Ext::Any)?;
-            g.emit(format!("str {v}, [x28, #-4]!"));
+            g.push(&v)?;
             Ok(Some(test(&v, size)))
         }
         Op::Arith(alu, three) => {

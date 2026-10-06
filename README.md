@@ -296,8 +296,16 @@ TCPIP> SET ROUTE /DEFAULT /GATEWAY=10.0.2.2
 TCPIP> SHOW INTERFACE
 Interface  IP_Addr          Network mask     Gateway          Link
  WE0       10.0.2.15        255.255.255.0    10.0.2.2         up
+TCPIP> PING 10.0.2.2 /NUMBER_PACKETS=2
+PING 10.0.2.2 (10.0.2.2): 56 data bytes
+64 bytes from 10.0.2.2: icmp_seq=0 ttl=255 time=0 ms
+64 bytes from 10.0.2.2: icmp_seq=1 ttl=255 time=0 ms
+----10.0.2.2 PING Statistics----
+2 packets transmitted, 2 packets received, 0% packet loss
 TCPIP> EXIT
 ```
+
+`PING` without `/NUMBER_PACKETS` goes on until CTRL/C.
 
 `SET INTERFACE` and `SET ROUTE` change the running system only. `SET
 CONFIGURATION INTERFACE WE0`, with `/DHCP` or `/HOST` and

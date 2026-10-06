@@ -269,7 +269,8 @@ interpreter. It is linked high in P1, which tells the executive it is one
   address, mask and gateway with `$QIOW` on `BGA0:`, the network's port
   driver. `SET CONFIGURATION INTERFACE WE0` and `SET ROUTE /DEFAULT
   /GATEWAY=address /PERMANENT` save them on the data disk for the next
-  boot instead.
+  boot instead. `PING address` sends an ICMP echo request each second
+  with `IO$_ACCESS` on `BGA0:` and prints each reply.
   `SET HOST address` runs `RTPAD.EXE`, which connects to port 23 there:
   the other side's `TELNETD` creates a process named after the
   connection's unit, `_BG02:`, running DCL with the connection as its
