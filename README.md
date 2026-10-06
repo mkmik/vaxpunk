@@ -197,7 +197,7 @@ name's `DEFINE`, `SHOW LOGICAL` and `DEASSIGN`, `SHOW LOGICAL` alone, and
 `SET DEFAULT` and `SHOW DEFAULT`, a round trip through the ramdisk with
 a keypad-mode `EDIT` on it, a
 `COPY` to the data disk, made afresh, which `ods` then checks on the host,
-`SHOW PROCESS` and `SHOW SYSTEM`,
+`SHOW PROCESS` and `SHOW SYSTEM`, `SET TERMINAL` and `SHOW TERMINAL`,
 stops `SPIN` and `SLEEPER` with CTRL/Y and continues them, prints the
 executive's part and fails unless the processes ran to the end.
 

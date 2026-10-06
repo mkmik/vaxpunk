@@ -42,9 +42,10 @@
 ; DEL L, comma DEL C, 0 LINE, 2 EOL, 3 CHAR, 4 ADVANCE, 5 BACKUP, GOLD 4
 ; BOTTOM, GOLD 5 TOP, 8 SECT, and PREV and NEXT SCREEN a section back and
 ; on.
-; ponytail: a VT100's 24 by 80 screen, whatever the terminal's size;
-; lines of at most LINESIZE characters, MAXLINES of them, shown up to
-; COLS with a tab as a space; no SUBSTITUTE, MOVE, COPY or WRITE in line
+; Keypad mode's screen is the terminal's page by its width, as SET
+; TERMINAL sets them, read with IO$_SENSEMODE.
+; ponytail: lines of at most LINESIZE characters, MAXLINES of them,
+; shown up to COLS with a tab as a space; no SUBSTITUTE, MOVE, COPY or WRITE in line
 ; mode, no WORD, PAGE, SELECT, CUT or UNDELETE in keypad mode, and a
 ; backward FIND finds the first match on a line, not the last. At most
 ; TEXTSIZE bytes; only keypad mode takes back the room of lines deleted
@@ -65,9 +66,6 @@
 LINESIZE = 255
 MAXLINES = 2000
 TEXTSIZE = 65536
-ROWS = 22                               ; keypad mode's text rows; messages on MSGROW
-MSGROW = 24
-COLS = 80
 SECTION = 16                            ; the lines SECT moves
 RESERVE = 1024                          ; the room a change may take in TEXT
 SBUFSIZE = 4096
@@ -133,10 +131,10 @@ E_KEYS: .ASCIC  "PF1 GOLD PF3 FINDNXT G-PF3 FIND PF4 DEL L , DEL C 4/5 ADV/BACK 
 S_ENTER:
         .ASCIC  <ESC>"="<ESC>"[2J"     ; keypad application mode, a clear screen
 S_LEAVE:
-        .ASCIC  <ESC>">"<ESC>"[24;1H"<ESC>"[K"
+        .ASCIC  <ESC>">"                ; keypad numeric mode
 S_EOL:  .ASCIC  <ESC>"[K"
 S_EOB:  .ASCIC  "[EOB]"
-S_FIND: .ASCII  <ESC>"[24;1H"<ESC>"[KSearch for: "
+S_FIND: .ASCII  "Search for: "
 S_FINDLEN = .-S_FIND
 EMPTY:  .BYTE   0                       ; an empty line, .ASCIC
 KEY:    .BLKB   1                       ; a key read in keypad mode
@@ -152,6 +150,10 @@ DIR:    .LONG   1                       ; 1 after ADVANCE, -1 after BACKUP
 GOLD:   .LONG   0                       ; 1: PF1 came before this key
 PAINT:  .LONG   0                       ; what to paint: bit 0 the current line, 1 the screen
 MSGON:  .LONG   0                       ; 1: a message is on MSGROW
+ROWS:   .LONG   22                      ; keypad mode's text rows,
+MSGROW: .LONG   24                      ; the row its messages go on, the last,
+COLS:   .LONG   80                      ; and its columns
+TTCHAR: .BLKB   8                       ; the terminal's characteristics
 MCOL:   .LONG   0                       ; the column MATCH found the text at
 SLEN:   .LONG   0                       ; the bytes in SBUF
 SBUF:   .BLKB   SBUFSIZE                ; what keypad mode writes, until FLUSH
@@ -724,7 +726,16 @@ SCREEN:
         CLRL    COL
         CLRL    GOLD
         MOVL    #1, DIR
-        MOVAB   S_ENTER, R1
+        $QIOW_S CHAN=CHAN, FUNC=#IO$_SENSEMODE, IOSB=IOSB, P1=TTCHAR, P2=#8
+        BLBC    R0, 5$
+        BLBC    IOSB, 5$
+        MOVZWL  TTCHAR+2, COLS          ; its width,
+        MOVZBL  TTCHAR+7, R0            ; and its page, if there is room
+        CMPL    R0, #3
+        BLSSU   5$
+        MOVL    R0, MSGROW
+        SUBL3   #2, R0, ROWS
+5$:     MOVAB   S_ENTER, R1
         BSBW    PUTS
         MOVL    #2, PAINT
 10$:    BSBW    SHOWSCR
@@ -733,11 +744,7 @@ SCREEN:
         BEQL    15$
         CLRL    MSGON
         PUSHL   R0
-        MOVL    #MSGROW, R1
-        CLRL    R2
-        BSBW    GOTO
-        MOVAB   S_EOL, R1
-        BSBW    PUTS
+        BSBW    CLRMSG
         MOVL    (SP)+, R0
 15$:    CMPL    R0, #26                 ; CTRL/Z
         BEQL    90$
@@ -769,6 +776,7 @@ SCREEN:
 90$:    BSBW    COMMIT
         MOVAB   S_LEAVE, R1
         BSBW    PUTS
+        BSBW    CLRMSG
         BSBW    FLUSH
         RSB
 
@@ -895,9 +903,10 @@ READKEY:
 SHOWSCR:
         .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5, R6>
         SUBL3   TOP, CUR, R0
-        CMPL    R0, #ROWS               ; unsigned: above the top too
+        CMPL    R0, ROWS                ; unsigned: above the top too
         BLSSU   20$
-        SUBL3   #ROWS/2, CUR, R0
+        DIVL3   #2, ROWS, R0
+        SUBL3   R0, CUR, R0
         BGTR    10$
         MOVL    #1, R0
 10$:    MOVL    R0, TOP
@@ -907,14 +916,14 @@ SHOWSCR:
 30$:    MOVL    R6, R1
         CLRL    R2
         BSBW    GOTO
-        CMPL    R6, #ROWS
+        CMPL    R6, ROWS
         BGTRU   35$
         ADDL3   TOP, R6, R1
         DECL    R1
         BSBW    DRAW
 35$:    MOVAB   S_EOL, R1
         BSBW    PUTS
-        AOBLSS  #MSGROW, R6, 30$
+        AOBLSS  MSGROW, R6, 30$
         BRB     50$
 40$:    BLBC    PAINT, 50$
         SUBL3   TOP, CUR, R1
@@ -927,9 +936,10 @@ SHOWSCR:
         BSBW    PUTS
 50$:    CLRL    PAINT
         BSBW    CLAMP
-        CMPL    R0, #COLS-1
+        SUBL3   #1, COLS, R1
+        CMPL    R0, R1
         BLEQU   60$
-        MOVL    #COLS-1, R0
+        MOVL    R1, R0
 60$:    MOVL    R0, R2
         SUBL3   TOP, CUR, R1
         INCL    R1
@@ -951,9 +961,9 @@ DRAW:
 10$:    MOVL    LINES[R1], R3
         MOVZBL  (R3)+, R4
         BEQL    90$
-        CMPL    R4, #COLS
+        CMPL    R4, COLS
         BLEQU   20$
-        MOVL    #COLS, R4
+        MOVL    COLS, R4
 20$:    MOVZBL  (R3)+, R0
         CMPL    R0, #^A/ /
         BLSSU   25$
@@ -969,7 +979,7 @@ DRAW:
 MSG:
         .JSB_ENTRY  SCRATCH=<R2, R3>
         PUSHL   R1
-        MOVL    #MSGROW, R1
+        MOVL    MSGROW, R1
         CLRL    R2
         BSBW    GOTO
         MOVL    (SP)+, R1
@@ -978,6 +988,16 @@ MSG:
         BSBW    PUTS
         MOVL    #1, MSGON
         RSB
+
+; CLRMSG: moves the cursor to the start of MSGROW, and clears it. Uses
+; R0-R3.
+CLRMSG:
+        .JSB_ENTRY  SCRATCH=<R2, R3>
+        MOVL    MSGROW, R1
+        CLRL    R2
+        BSBB    GOTO
+        MOVAB   S_EOL, R1
+        BRW     PUTS
 
 ; GOTO: R1 = a row, from 1, R2 = a column, from 0. Moves the cursor
 ; there. Uses R0-R2.
@@ -998,7 +1018,7 @@ GOTO:
         MOVZBL  #^A/H/, R0
         BRB     PUTC
 
-; PUTNUM: R0 = a number, 0-99. Writes it in decimal. Uses R0-R2.
+; PUTNUM: R0 = a number. Writes it in decimal. Uses R0-R2.
 PUTNUM:
         .JSB_ENTRY  SCRATCH=<R2>
         DIVL3   #10, R0, R2
@@ -1007,8 +1027,8 @@ PUTNUM:
         PUSHL   R0
         TSTL    R2
         BEQL    10$
-        ADDL3   #^A/0/, R2, R0
-        BSBB    PUTC
+        MOVL    R2, R0                  ; the digits before the last
+        BSBB    PUTNUM
 10$:    ADDL3   #^A/0/, (SP)+, R0
         BRB     PUTC
 
@@ -1210,6 +1230,7 @@ HELPKEY:
 ; FIND: reads what to look for on MSGROW, and finds it as FINDNXT does.
 FIND:
         .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5, R6, R7>
+        BSBW    CLRMSG
         BSBW    FLUSH
         $QIOW_S CHAN=CHAN, FUNC=#IO$_READPROMPT, IOSB=IOSB, P1=STR, P2=#LINESIZE, P5=#S_FIND, P6=#S_FINDLEN
         MOVL    #2, PAINT               ; the echo of RETURN scrolled the screen

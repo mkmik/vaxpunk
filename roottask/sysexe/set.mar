@@ -1,5 +1,5 @@
-        .TITLE  SET     Sets the process's privileges, a file's protection or owner
-        .IDENT  /V0.2/
+        .TITLE  SET     Sets the process's privileges, a file's protection or owner, the terminal
+        .IDENT  /V0.3/
 ;
 ; DCL runs this, as VMS's DCL runs SET.EXE, for
 ; - SET PROCESS/PRIVILEGES=(priv[,...]). Each priv enables that
@@ -12,6 +12,10 @@
 ;   which gives it that owner. It $OPENs the file with a protection XAB,
 ;   which gets its owner and protection, changes them in the XAB, and
 ;   $CLOSE gives them to the file.
+; - SET TERMINAL [device], which reads the terminal's characteristics
+;   (lib/term.mar), changes those its qualifiers name, /WIDTH=n from 1 to
+;   511, /PAGE=n up to 255, and /[NO]BROADCAST, ECHO, EIGHTBIT, ESCAPE,
+;   LOWERCASE, PASTHRU, TAB and WRAP, and sets them with IO$_SETMODE.
 ; ponytail: one file, no wildcards, no /LOG.
 ;
         .LIBRARY "starlet.mlb"
@@ -20,8 +24,41 @@
         $CLIMSGDEF
         $FABDEF
         $XABPRODEF
+        $IODEF
+        $TTDEF
+        $TT2DEF
 
-        .EXTERNAL PRV_NAMES, LIB$SIGNAL, PUT_LINE, GET_PROT, GET_UIC
+        .EXTERNAL PRV_NAMES, LIB$SIGNAL, PUT_LINE, GET_PROT, GET_UIC, TERM_SENSE
+
+; TTBIT "name", bit, base, ON=BBSS, OFF=BBCC: sets the bit at base for
+; the qualifier /name, and clears it for /NOname; ON=BBCC, OFF=BBSS the
+; other way round, for a bit that says NO. Uses R0-R1.
+        .MACRO  TTBIT   NAME, BIT, BASE, ON=BBSS, OFF=BBCC, ?L1, ?L2
+        PRESENT NAME
+        BLBS    R0, L1
+        CMPL    R0, #CLI$_NEGATED
+        BNEQ    L2
+        OFF     #BIT, BASE, L2
+        BRB     L2
+L1:     ON      #BIT, BASE, L2
+L2:
+        .ENDM   TTBIT
+
+; TTNUM "name", min, max: R1 = the qualifier /name's value, a decimal
+; number from min to max, or a RET with SS$_BADPARAM if it isn't one, or
+; with GETVALUE's failure. Uses R0-R5.
+        .MACRO  TTNUM   NAME, MIN, MAX, ?L1, ?L2
+        MOVW    #16, NUMDSC
+        GETVALUE NAME, NUMDSC, NUMDSC
+        BLBS    R0, L1
+        RET
+L1:     MOVL    #MIN, R2
+        MOVL    #MAX, R3
+        BSBW    DECIMAL
+        BLBS    R0, L2
+        RET
+L2:
+        .ENDM   TTNUM
 
 INHIB = ^X10000000                      ; STS$M_INHIB_MSG
 
@@ -46,10 +83,19 @@ PROTECTION:                             ; the entities GET_PROT and GET_UIC take
         .ASCID  "OPTION.PROTECTION"
 OWNER_UIC:
         .ASCID  "OWNER_UIC"
+NUMDSC: .LONG   16                      ; /WIDTH's or /PAGE's value
+        .ADDRESS NUMBUF
+NUMBUF: .BLKB   16
+CHAN:   .LONG   0                       ; the terminal's
+CHAR:   .BLKB   12                      ; its characteristics (lib/term.mar)
+IOSB:   .BLKQ   1
 
         .PSECT  CODE, EXE, LONG
         .ENTRY  START, ^M<R2, R3, R4, R5, R6>
-        PRESENT "OPTION.PROCESS"
+        PRESENT "OPTION.TERMINAL"
+        BLBC    R0, 5$
+        BRW     SETTERM
+5$:     PRESENT "OPTION.PROCESS"
         BLBS    R0, 10$
         BRW     FILE
 10$:    GETVALUE "PRIVILEGES", DESC, LEN
@@ -119,6 +165,60 @@ FILE:   GETVALUE "FILE", SPECDSC, SPECDSC
         RET
 80$:    MOVL    R2, R0
 90$:    RET
+
+; SETTERM: SET TERMINAL: changes the characteristics the qualifiers
+; name, and sets them. R0 = the first failure, or SS$_NORMAL.
+SETTERM:
+        PUSHAB  CHAR
+        PUSHAW  CHAN
+        CALLS   #2, G^TERM_SENSE
+        BLBS    R0, 5$
+        RET
+5$:     PRESENT "WIDTH"
+        BLBC    R0, 10$
+        TTNUM   "WIDTH", 1, 511
+        MOVW    R1, CHAR+2
+10$:    PRESENT "PAGE"
+        BLBC    R0, 20$
+        TTNUM   "PAGE", 0, 255
+        MOVB    R1, CHAR+7
+20$:    TTBIT   "BROADCAST", TT$V_NOBRDCST, CHAR+4, ON=BBCC, OFF=BBSS
+        TTBIT   "ECHO", TT$V_NOECHO, CHAR+4, ON=BBCC, OFF=BBSS
+        TTBIT   "EIGHTBIT", TT$V_EIGHTBIT, CHAR+4
+        TTBIT   "ESCAPE", TT$V_ESCAPE, CHAR+4
+        TTBIT   "LOWERCASE", TT$V_LOWER, CHAR+4
+        TTBIT   "TAB", TT$V_MECHTAB, CHAR+4
+        TTBIT   "WRAP", TT$V_WRAP, CHAR+4
+        TTBIT   "PASTHRU", TT2$V_PASTHRU, CHAR+8
+        $QIOW_S CHAN=CHAN, FUNC=#IO$_SETMODE, IOSB=IOSB, P1=CHAR, P2=#12
+        BLBC    R0, 90$
+        MOVZWL  IOSB, R0
+90$:    RET
+
+; DECIMAL: NUMDSC = a decimal number, R2 = the least it may be, R3 = the
+; most. R1 = it, R0 = SS$_NORMAL, or SS$_BADPARAM if it isn't one of
+; those. Uses R0-R5.
+DECIMAL:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5>
+        CLRL    R1
+        MOVZWL  NUMDSC, R4
+        BEQL    80$
+        MOVAB   NUMBUF, R0
+10$:    MOVZBL  (R0)+, R5
+        SUBL2   #^A/0/, R5
+        CMPL    R5, #9
+        BGTRU   80$
+        MULL2   #10, R1
+        ADDL2   R5, R1
+        CMPL    R1, R3
+        BGTRU   80$
+        SOBGTR  R4, 10$
+        CMPL    R1, R2
+        BLSSU   80$
+        MOVL    #SS$_NORMAL, R0
+        RSB
+80$:    MOVL    #SS$_BADPARAM, R0
+        RSB
 
 ; LOOKUP: R5 = a privilege's name, R6 = its length. Puts its bit in MASK,
 ; or every bit for ALL. R0 = 1, or 0 for a name it doesn't know. Uses

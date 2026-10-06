@@ -389,6 +389,41 @@ const PROTECTION: Phase = Phase {
     ],
 };
 
+/// SET TERMINAL changes the console's width, page, BROADCAST and PASTHRU,
+/// which SHOW TERMINAL shows, refuses a width of 600, and after /NOECHO
+/// the command typed next isn't echoed; then it puts them back.
+const TERMINAL: Phase = Phase {
+    name: "terminal",
+    secs: 20,
+    steps: &[
+        (
+            "NEW.TXT;2           (RWED,RWED,RE,RE)",
+            1,
+            concat!(
+                "SET TERMINAL/WIDTH=132/PAGE=48/NOBROADCAST/PASTHRU\rSHOW TERMINAL\r",
+                "SET TERMINAL/WIDTH=600\rSET TERMINAL/NOECHO\r",
+                "WRITE SYS$OUTPUT \"QUIET\", \"LY\"\r",
+            ),
+        ),
+        (
+            "QUIETLY",
+            1,
+            "SET TERMINAL/ECHO/WIDTH=80/PAGE=24/BROADCAST/NOPASTHRU OPA0:\rSHOW TERMINAL\r",
+        ),
+    ],
+    lines: &[
+        "Terminal: _OPA0:      Device_Type: VT100         Owner: SYSTEM",
+        "   Input:    9600     LFfill:  0      Width: 132      Parity: None",
+        "   Output:   9600     CRfill:  0      Page:   48",
+        "   No Broadcast       No Readsync        No Form            Fulldup",
+        "   No Dialup          No Secure server   No Disconnect      Pasthru",
+        "%SYSTEM-F-BADPARAM, bad parameter value",
+        "   Input:    9600     LFfill:  0      Width:  80      Parity: None",
+        "   Interactive        Echo               Type_ahead         No Escape",
+        "   Broadcast          No Readsync        No Form            Fulldup",
+    ],
+};
+
 /// The processes STARTUP and SNOOP ran, which print as they go, done long
 /// before: STARTUP's SLEEPER and SVCTEST's NAPPER say they hibernate
 /// before SLEEPER does, and the CPU then idles, taking clock interrupts.
@@ -425,6 +460,7 @@ const PHASES: &[Phase] = &[
     STOP_ID,
     PRIVILEGES,
     PROTECTION,
+    TERMINAL,
     STARTUP,
 ];
 
@@ -436,6 +472,8 @@ const ABSENT: &[&str] = &[
     "DCLTEST: failed",
     "FSTEST: a count changed",
     "CHFTEST: exited",
+    // SET TERMINAL/NOECHO's: the command after it isn't echoed.
+    "SYS$OUTPUT \"QUIET\"",
     // RUN SNOOP's ACCVIO is written once, not again by DCL.
     "%NONAME-F-NOMSG, Message number 0000000C",
 ];

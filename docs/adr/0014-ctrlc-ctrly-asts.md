@@ -115,8 +115,9 @@ calls `$EXIT`.
 - A `$FORCEX` for an image CTRL/Y stopped waits until `CONTINUE`, and one
   for a process with no image is dropped at the next image's activation,
   with the other user mode ASTs.
-- ponytail: no terminal characteristics in `IO$_SETMODE`, nor
-  `IO$_SENSEMODE`; one AST per channel and key.
+- ponytail: one AST per channel and key. Without `IO$M_CTRLCAST` or
+  `IO$M_CTRLYAST`, `IO$_SETMODE` sets the terminal's characteristics,
+  which `IO$_SENSEMODE` returns.
 
 **What stays easy.**
 - The image doesn't know: every register is as it was after `CONTINUE`,
@@ -125,5 +126,4 @@ calls `$EXIT`.
   ends a read from there.
 
 **Follow-ups:** DCL's `STOP` and `SET NOCONTROL`; `$DCLEXH` exit handlers,
-which `$FORCEX` runs on VMS; `IO$_SENSEMODE` and terminal characteristics;
-mailboxes for `$FORCEX`'s process termination messages.
+which `$FORCEX` runs on VMS; mailboxes for `$FORCEX`'s process termination messages.

@@ -8,16 +8,28 @@
 ; version and how long the system has been up, from $GETSYI, then a line
 ; for each process, from a wildcard $GETJPI: its PID, name, state,
 ; priority and image.
+; SHOW TERMINAL shows the terminal's characteristics (lib/term.mar), under
+; VMS's headings and names, four to a line.
 ; ponytail: no date, node, CPU time, I/O or page counts: $ASCTIM and
-; the counters don't exist yet.
+; the counters don't exist yet. The console has no speed, parity or fill,
+; so SHOW TERMINAL shows a VT100's on a 9600 baud line; and it has no
+; TT3$ characteristics, so no DEC_CRT5, Ansi_Color or VMS Style Input.
 ;
         .LIBRARY "starlet.mlb"
         .LIBRARY "sysexe.mlb"
         $SSDEF
         $JPIDEF
         $SYIDEF
+        $DVIDEF
+        $DCDEF
+        $TTDEF
+        $TT2DEF
 
-        .EXTERNAL PUT_LINE, PRV_NAMES
+        .EXTERNAL PUT_LINE, PRV_NAMES, TERM_SENSE
+
+TT2 = 1                                 ; CHARS: a TT2$ bit, not a TT$ one,
+NOT = 2                                 ; on when it is clear,
+ALT = 4                                 ; with a name for off, not No and the name
 
 ; ADDTEXT "text": appends text to LINE. Uses R0-R2.
         .MACRO  ADDTEXT TEXT, ?L
@@ -97,12 +109,125 @@ MAXSTATE = 14
 HEX:    .ASCII  "0123456789ABCDEF"
 LINE:   .BLKB   256                     ; a line being made, .ASCIC
 CHAR:   .BLKB   1
+TTCHAN: .LONG   0                       ; the terminal's
+TTCHAR: .BLKB   12                      ; its characteristics
+DVIITEMS:                               ; what $GETDVIW returns of it
+        .WORD   64, DVI$_DEVNAM
+        .ADDRESS TTNAME
+        .ADDRESS TTNAMLEN
+        .LONG   0
+TTNAMLEN:
+        .WORD   0
+TTNAME: .BLKB   64
+; The characteristics SHOW TERMINAL shows, in VMS's order: each a bit,
+; its flags, TT2, NOT and ALT, and its name, .ASCIC, then for ALT the
+; name for off; a 255 ends them.
+CHARS:  .BYTE   TT$V_PASSALL, NOT!ALT
+        .ASCIC  "Interactive"
+        .ASCIC  "Passall"
+        .BYTE   TT$V_NOECHO, NOT
+        .ASCIC  "Echo"
+        .BYTE   TT$V_NOTYPEAHD, NOT
+        .ASCIC  "Type_ahead"
+        .BYTE   TT$V_ESCAPE, 0
+        .ASCIC  "Escape"
+        .BYTE   TT$V_HOSTSYNC, 0
+        .ASCIC  "Hostsync"
+        .BYTE   TT$V_TTSYNC, 0
+        .ASCIC  "TTsync"
+        .BYTE   TT$V_LOWER, 0
+        .ASCIC  "Lowercase"
+        .BYTE   TT$V_MECHTAB, 0
+        .ASCIC  "Tab"
+        .BYTE   TT$V_WRAP, 0
+        .ASCIC  "Wrap"
+        .BYTE   TT$V_SCOPE, 0
+        .ASCIC  "Scope"
+        .BYTE   TT$V_REMOTE, 0
+        .ASCIC  "Remote"
+        .BYTE   TT$V_EIGHTBIT, 0
+        .ASCIC  "Eightbit"
+        .BYTE   TT$V_NOBRDCST, NOT
+        .ASCIC  "Broadcast"
+        .BYTE   TT$V_READSYNC, 0
+        .ASCIC  "Readsync"
+        .BYTE   TT$V_MECHFORM, 0
+        .ASCIC  "Form"
+        .BYTE   TT$V_HALFDUP, NOT!ALT
+        .ASCIC  "Fulldup"
+        .ASCIC  "Halfdup"
+        .BYTE   TT$V_MODEM, 0
+        .ASCIC  "Modem"
+        .BYTE   TT2$V_LOCALECHO, TT2
+        .ASCIC  "Local_echo"
+        .BYTE   TT2$V_AUTOBAUD, TT2
+        .ASCIC  "Autobaud"
+        .BYTE   TT2$V_HANGUP, TT2
+        .ASCIC  "Hangup"
+        .BYTE   TT2$V_BRDCSTMBX, TT2
+        .ASCIC  "Brdcstmbx"
+        .BYTE   TT2$V_DMA, TT2
+        .ASCIC  "DMA"
+        .BYTE   TT2$V_ALTYPEAHD, TT2
+        .ASCIC  "Altypeahd"
+        .BYTE   TT2$V_SETSPEED, TT2
+        .ASCIC  "Set_speed"
+        .BYTE   TT2$V_COMMSYNC, TT2
+        .ASCIC  "Commsync"
+        .BYTE   TT2$V_EDITING, TT2
+        .ASCIC  "Line Editing"
+        .BYTE   TT2$V_INSERT, TT2!ALT
+        .ASCIC  "Insert editing"
+        .ASCIC  "Overstrike editing"
+        .BYTE   TT2$V_FALLBACK, TT2
+        .ASCIC  "Fallback"
+        .BYTE   TT2$V_DIALUP, TT2
+        .ASCIC  "Dialup"
+        .BYTE   TT2$V_SECURE, TT2
+        .ASCIC  "Secure server"
+        .BYTE   TT2$V_DISCONNECT, TT2
+        .ASCIC  "Disconnect"
+        .BYTE   TT2$V_PASTHRU, TT2
+        .ASCIC  "Pasthru"
+        .BYTE   TT2$V_SYSPWD, TT2
+        .ASCIC  "Syspassword"
+        .BYTE   TT2$V_SIXEL, TT2
+        .ASCIC  "SIXEL Graphics"
+        .BYTE   TT2$V_DRCS, TT2
+        .ASCIC  "Soft Characters"
+        .BYTE   TT2$V_PRINTER, TT2
+        .ASCIC  "Printer Port"
+        .BYTE   TT2$V_APP_KEYPAD, TT2!NOT!ALT
+        .ASCIC  "Numeric Keypad"
+        .ASCIC  "Application keypad"
+        .BYTE   TT2$V_ANSICRT, TT2
+        .ASCIC  "ANSI_CRT"
+        .BYTE   TT2$V_REGIS, TT2
+        .ASCIC  "Regis"
+        .BYTE   TT2$V_BLOCK, TT2
+        .ASCIC  "Block_mode"
+        .BYTE   TT2$V_AVO, TT2
+        .ASCIC  "Advanced_video"
+        .BYTE   TT2$V_EDIT, TT2
+        .ASCIC  "Edit_mode"
+        .BYTE   TT2$V_DECCRT, TT2
+        .ASCIC  "DEC_CRT"
+        .BYTE   TT2$V_DECCRT2, TT2
+        .ASCIC  "DEC_CRT2"
+        .BYTE   TT2$V_DECCRT3, TT2
+        .ASCIC  "DEC_CRT3"
+        .BYTE   TT2$V_DECCRT4, TT2
+        .ASCIC  "DEC_CRT4"
+        .BYTE   255
 
         .PSECT  CODE, EXE, LONG
         .ENTRY  START, ^M<R2, R3, R4, R5, R6, R7, R8, R9>
         GETVALUE "OPTION", DESC, DESC
         BLBC    R0, SYSTEM
-        CMPB    WHAT, #^A/P/
+        CMPB    WHAT, #^A/T/
+        BNEQ    5$
+        BRW     SHOWTERM
+5$:     CMPB    WHAT, #^A/P/
         BNEQ    SYSTEM
 
 ; SHOW PROCESS
@@ -216,6 +341,115 @@ SYSTEM: $GETSYIW_S ITMLST=SYIITEMS
         BRW     10$
 80$:    MOVL    #SS$_NORMAL, R0
 90$:    RET
+
+; SHOW TERMINAL
+SHOWTERM:
+        PUSHAB  TTCHAR
+        PUSHAW  TTCHAN
+        CALLS   #2, G^TERM_SENSE
+        BLBC    R0, 5$
+        $GETDVIW_S CHAN=TTCHAN, ITMLST=DVIITEMS
+        BLBC    R0, 5$
+        $GETJPIW_S ITMLST=JPIITEMS
+        BLBS    R0, 10$
+5$:     RET
+10$:    ADDTEXT "Terminal: "
+        MOVAB   TTNAME, R1
+        MOVZWL  TTNAMLEN, R2
+        BSBW    ADD
+        MOVL    #22, R3
+        BSBW    PADTO
+        ADDTEXT "Device_Type: "
+        CMPB    TTCHAR+1, #DT$_VT100
+        BNEQ    15$
+        ADDTEXT "VT100"
+        BRB     20$
+15$:    ADDTEXT "Unknown"
+20$:    MOVL    #49, R3
+        BSBW    PADTO
+        ADDTEXT "Owner: "
+        BSBW    ADDNAME
+        BSBW    SAY
+        PRINT   ""
+        ADDTEXT "   Input:    9600     LFfill:  0      Width: "
+        MOVZWL  TTCHAR+2, R1
+        BSBW    ADD3
+        MOVL    #54, R3
+        BSBW    PADTO
+        ADDTEXT "Parity: None"
+        BSBW    SAY
+        ADDTEXT "   Output:   9600     CRfill:  0      Page:  "
+        MOVZBL  TTCHAR+7, R1
+        BSBW    ADD3
+        BSBW    SAY
+        PRINT   ""
+        PRINT   "Terminal Characteristics:"
+        MOVAB   CHARS, R6
+        CLRL    R7                      ; on the line
+30$:    MOVZBL  (R6)+, R8               ; the bit
+        CMPL    R8, #255
+        BEQL    70$
+        MOVZBL  (R6)+, R9               ; its flags
+        MULL3   #19, R7, R3
+        ADDL2   #3, R3
+        BSBW    PADTO
+        MOVL    TTCHAR+4, R0
+        BBC     #0, R9, 35$             ; TT2
+        MOVL    TTCHAR+8, R0
+35$:    EXTZV   R8, #1, R0, R0
+        BBC     #1, R9, 40$             ; NOT
+        XORL2   #1, R0
+40$:    BBS     #2, R9, 50$             ; ALT
+        BLBS    R0, 45$
+        ADDTEXT "No "
+45$:    BSBW    ADDCIC
+        BRB     60$
+50$:    BLBS    R0, 55$
+        BSBW    SKIPCIC                 ; off: the second name
+        BSBW    ADDCIC
+        BRB     60$
+55$:    BSBW    ADDCIC
+        BSBW    SKIPCIC
+60$:    AOBLSS  #4, R7, 30$
+        BSBW    SAY
+        CLRL    R7
+        BRB     30$
+70$:    TSTL    R7
+        BEQL    80$
+        BSBW    SAY
+80$:    MOVL    #SS$_NORMAL, R0
+        RET
+
+; ADDCIC: appends the .ASCIC string at R6 to LINE, and moves R6 past it.
+; SKIPCIC moves R6 past it only. Uses R0-R2.
+ADDCIC:
+        .JSB_ENTRY  OUTPUT=<R6>, SCRATCH=<R2>
+        MOVZBL  (R6), R2
+        ADDL3   #1, R6, R1
+        BSBW    ADD
+        BRB     SKIPCIC                 ; a tail call
+SKIPCIC:
+        .JSB_ENTRY  OUTPUT=<R6>
+        MOVZBL  (R6), R0
+        ADDL2   R0, R6
+        INCL    R6
+        RSB
+
+; ADD3: appends R1, below 1000, in decimal to LINE, right aligned in 3
+; characters. Uses R0-R3, R5.
+ADD3:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R5>
+        PUSHL   R1
+        CMPL    R1, #100
+        BGEQU   10$
+        MOVZBL  #^A/ /, R0
+        BSBW    ADDCHAR
+        CMPL    (SP), #10
+        BGEQU   10$
+        MOVZBL  #^A/ /, R0
+        BSBW    ADDCHAR
+10$:    MOVL    (SP)+, R1
+        BRW     ADDDEC
 
 ; PRIVS: R6 = a quadword of privileges. Writes their names, six to a
 ; line. Uses R0-R3, R7-R9.

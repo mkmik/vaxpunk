@@ -252,8 +252,12 @@ NAM$M_WILDCARD = ^X100                  ; the specification has a wildcard
         .MACRO  $DVIDEF
 DVI$_DEVCHAR = 2                        ; the DEV$ bits, a longword
 DVI$_DEVCLASS = 4                       ; DC$_DISK or DC$_TERM
+DVI$_DEVTYPE = 6                        ; a terminal's DT$ type
+DVI$_DEVBUFSIZ = 8                      ; a terminal's width, a disk's block size
+DVI$_DEVDEPEND = 10                     ; a terminal's TT$ bits, its page in the top byte
 DVI$_UNIT = 12
 DVI$_ERRCNT = 20
+DVI$_DEVDEPEND2 = 28                    ; a terminal's TT2$ bits
 DVI$_DEVNAM = 32                        ; the device's name, _DDCU:
 DVI$_VOLNAM = 34                        ; the mounted volume's label
 DVI$_FREEBLOCKS = 42                    ; its free blocks
@@ -275,7 +279,82 @@ DVS$_DEVCLASS = 1                       ; only devices of this class, a longword
 DC$_DISK = 1
 DC$_TERM = 66
 DC$_MAILBOX = 160
+DT$_VT100 = 96                          ; a terminal's type: a VT100
         .ENDM   $DCDEF
+
+; $TTDEF: a terminal's characteristics, the second longword of what
+; IO$_SETMODE and IO$_SENSEMODE take and give, and DVI$_DEVDEPEND: the
+; page length in the top byte.
+        .MACRO  $TTDEF
+TT$V_PASSALL = 0                        ; no editing and no control keys
+TT$V_NOECHO = 1                         ; reads don't echo
+TT$V_NOTYPEAHD = 2
+TT$V_ESCAPE = 3                         ; reads end at an escape sequence
+TT$V_HOSTSYNC = 4
+TT$V_TTSYNC = 5
+TT$V_LOWER = 7                          ; it has lowercase
+TT$V_MECHTAB = 8                        ; it has tab stops
+TT$V_WRAP = 9                           ; it wraps at its width
+TT$V_SCOPE = 12                         ; a screen, not paper
+TT$V_REMOTE = 13
+TT$V_EIGHTBIT = 15
+TT$V_NOBRDCST = 17                      ; no broadcast messages
+TT$V_READSYNC = 18
+TT$V_MECHFORM = 19
+TT$V_HALFDUP = 20
+TT$V_MODEM = 21
+TT$V_PAGE = 24                          ; the page length, a byte
+TT$M_NOECHO = ^X2
+TT$M_ESCAPE = ^X8
+TT$M_TTSYNC = ^X20
+TT$M_LOWER = ^X80
+TT$M_MECHTAB = ^X100
+TT$M_WRAP = ^X200
+TT$M_SCOPE = ^X1000
+TT$M_EIGHTBIT = ^X8000
+TT$M_NOBRDCST = ^X20000
+        .ENDM   $TTDEF
+
+; $TT2DEF: a terminal's extended characteristics, the third longword of
+; IO$_SETMODE's and IO$_SENSEMODE's buffer, and DVI$_DEVDEPEND2.
+        .MACRO  $TT2DEF
+TT2$V_LOCALECHO = 0
+TT2$V_AUTOBAUD = 1
+TT2$V_HANGUP = 2
+TT2$V_BRDCSTMBX = 4
+TT2$V_DMA = 6
+TT2$V_ALTYPEAHD = 7
+TT2$V_SETSPEED = 8
+TT2$V_DECCRT4 = 10
+TT2$V_COMMSYNC = 11
+TT2$V_EDITING = 12                      ; line editing
+TT2$V_INSERT = 13                       ; in insert mode, not overstrike
+TT2$V_FALLBACK = 14
+TT2$V_DIALUP = 15
+TT2$V_SECURE = 16
+TT2$V_DISCONNECT = 17
+TT2$V_PASTHRU = 18                      ; reads pass every character but CTRL/C and CTRL/Y
+TT2$V_SYSPWD = 19
+TT2$V_SIXEL = 20
+TT2$V_DRCS = 21                         ; soft characters
+TT2$V_PRINTER = 22
+TT2$V_APP_KEYPAD = 23                   ; the keypad in application mode
+TT2$V_ANSICRT = 24
+TT2$V_REGIS = 25
+TT2$V_BLOCK = 26
+TT2$V_AVO = 27                          ; advanced video
+TT2$V_EDIT = 28                         ; edit mode
+TT2$V_DECCRT = 29
+TT2$V_DECCRT2 = 30
+TT2$V_DECCRT3 = 31
+TT2$M_EDITING = ^X1000
+TT2$M_INSERT = ^X2000
+TT2$M_PASTHRU = ^X40000
+TT2$M_ANSICRT = ^X1000000
+TT2$M_AVO = ^X8000000
+TT2$M_EDIT = ^X10000000
+TT2$M_DECCRT = ^X20000000
+        .ENDM   $TT2DEF
 
 ; $DEVDEF: device characteristics, DVI$_DEVCHAR's bits.
         .MACRO  $DEVDEF
@@ -581,7 +660,7 @@ IO$_READPBLK = 12
 IO$_READLBLK = 33
 IO$_READVBLK = 49
 IO$_READPROMPT = 55                     ; writes the prompt in p5 and p6 first
-IO$_SETMODE = 35                        ; a terminal: enables a CTRL/C or CTRL/Y AST
+IO$_SETMODE = 35                        ; a terminal: sets its characteristics, or enables a CTRL/C or CTRL/Y AST
 IO$V_CTRLYAST = 7                       ; SETMODE: the AST is CTRL/Y's
 IO$M_CTRLYAST = ^X80
 IO$V_CTRLCAST = 8                       ; SETMODE: the AST is CTRL/C's
@@ -596,7 +675,7 @@ IO$_SETCHAR = 26                        ; BGA0: sets the interface's address
 IO$_SENSECHAR = 27                      ; BGA0: senses it
 IO$_ACCESS = 50                         ; a network unit: connects, or accepts
 IO$_DEACCESS = 52                       ; a network unit: closes
-IO$_SENSEMODE = 39                      ; a network unit: its number and channels
+IO$_SENSEMODE = 39                      ; a terminal: its characteristics; a network unit: its number and channels
 IO$V_BIND = 10                          ; a network unit's SETMODE: binds a local address
 IO$M_BIND = ^X400
 IO$V_LISTEN = 11                        ; a network unit's SETMODE: listens

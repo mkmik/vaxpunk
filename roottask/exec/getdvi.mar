@@ -26,7 +26,7 @@
         .EXTERNAL FIL$FREEBLOCKS, FIL$READLBLK, FIL$MATCH, MD$GL_BASE
         .EXTERNAL FIL$LOCK, FIL$UNLOCK
         .EXTERNAL IOC$TRNDEVNAM, EXE$PROBER_DSC, EXE$SETEF, EXE$CLREF
-        .EXTERNAL SCH$GL_CURPCB, MB$FDT
+        .EXTERNAL SCH$GL_CURPCB, MB$FDT, TTY$AB_CHAR
 
 DISK = DEV$M_FOD!DEV$M_DIR!DEV$M_SHR!DEV$M_AVL!DEV$M_IDV!DEV$M_ODV!DEV$M_RND
 TERM = DEV$M_REC!DEV$M_CCL!DEV$M_TRM!DEV$M_AVL!DEV$M_IDV!DEV$M_ODV
@@ -124,7 +124,9 @@ ONLINE:
 ; sets it, and writes SS$_NORMAL in the IOSB's first word, if there is
 ; one. SS$_NOSUCHDEV for a device that isn't there, SS$_IVCHAN for a
 ; channel that isn't assigned, SS$_BADPARAM for an item code it doesn't
-; know, or the disk's error for DVI$_FREEBLOCKS. A mailbox, by its
+; know, or the disk's error for DVI$_FREEBLOCKS. The console's
+; DVI$_DEVTYPE, DVI$_DEVBUFSIZ, DVI$_DEVDEPEND and DVI$_DEVDEPEND2 are
+; its characteristics, as IO$_SENSEMODE gives them. A mailbox, by its
 ; channel, has DVI$_DEVNAM, DVI$_DEVCLASS and DVI$_UNIT, and 0 for any
 ; other item.
 ; ponytail: done at once, no AST; the items $DVIDEF lists.
@@ -313,9 +315,35 @@ ITEM:
         EXTZV   #DEV$V_SWL, #1, R0, R0
         BRW     LONG
 56$:    CMPL    R10, #DVI$_STS
-        BNEQ    80$
+        BNEQ    60$
         BSBW    ONLINE
         BRW     LONG
+60$:    CMPL    R10, #DVI$_DEVBUFSIZ
+        BNEQ    64$
+        MOVZWL  #512, R0                ; a disk's block
+        TSTL    R5
+        BNEQ    62$
+        MOVZWL  TTY$AB_CHAR+2, R0       ; the console's width
+62$:    BRW     LONG
+64$:    CLRL    R0                      ; a disk's are 0
+        CMPL    R10, #DVI$_DEVTYPE
+        BNEQ    66$
+        TSTL    R5
+        BNEQ    62$
+        MOVZBL  TTY$AB_CHAR+1, R0
+        BRB     62$
+66$:    CMPL    R10, #DVI$_DEVDEPEND
+        BNEQ    68$
+        TSTL    R5
+        BNEQ    62$
+        MOVL    TTY$AB_CHAR+4, R0
+        BRB     62$
+68$:    CMPL    R10, #DVI$_DEVDEPEND2
+        BNEQ    80$
+        TSTL    R5
+        BNEQ    62$
+        MOVL    TTY$AB_CHAR+8, R0
+        BRB     62$
 80$:    MOVL    #SS$_BADPARAM, R0
         RSB
 ; MBXITEM: ITEM for a mailbox, R6: its name, _MBnn:, its class, its
