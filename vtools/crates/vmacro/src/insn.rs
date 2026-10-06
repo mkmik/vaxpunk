@@ -55,6 +55,9 @@ pub enum Op {
     Ediv,
     Movc3,
     Movc5,
+    Cmpc3,
+    Cmpc5,
+    Locc(bool),
     /// EXTV (signed) and EXTZV.
     Ext(bool),
     Insv,
@@ -247,6 +250,10 @@ pub fn kind(mn: &str) -> Option<(Op, Size)> {
         "EDIV" => (Op::Ediv, L),
         "MOVC3" => (Op::Movc3, B),
         "MOVC5" => (Op::Movc5, B),
+        "CMPC3" => (Op::Cmpc3, B),
+        "CMPC5" => (Op::Cmpc5, B),
+        "LOCC" => (Op::Locc(true), B),
+        "SKPC" => (Op::Locc(false), B),
         "EXTV" => (Op::Ext(true), L),
         "EXTZV" => (Op::Ext(false), L),
         "INSV" => (Op::Insv, L),
@@ -343,9 +350,10 @@ pub fn arity(op: Op) -> usize {
         Op::Probe(_) => 3,
         Op::Jmp | Op::Jsb | Op::Pushr | Op::Popr => 1,
         Op::Arith(_, true) | Op::Case | Op::Ash | Op::Rot | Op::Movc3 | Op::Aob(_) => 3,
+        Op::Cmpc3 | Op::Locc(_) => 3,
         Op::Bb(..) => 3,
         Op::Acb | Op::Emul | Op::Ediv | Op::Ext(_) | Op::Insv => 4,
-        Op::Movc5 => 5,
+        Op::Movc5 | Op::Cmpc5 => 5,
         Op::Evax(Evax::Mb | Evax::Mfpr(_) | Evax::Unsupported) => 0,
         Op::Evax(Evax::Mtpr(_)) => 1,
         Op::Evax(Evax::Alu(_) | Evax::Zap(_) | Evax::Cmp(_) | Evax::Cmov(_)) => 3,
@@ -1054,6 +1062,92 @@ pub fn compile(
             g.emit("mov x22, xzr");
             g.emit(format!("cmp {srclen}, {dstlen}"));
             live(true)
+        }
+        Op::Cmpc3 | Op::Cmpc5 => {
+            // R0 = the bytes left of the first string at the first that
+            // differs, R1 = its address, R2 and R3 the same in the second;
+            // the condition codes compare those bytes, signed and unsigned.
+            // CMPC5's shorter string goes on as its fill byte.
+            (0..4).for_each(|r| g.wrote(r));
+            let five = op == Op::Cmpc5;
+            let len1 = g.read(&ops[0], Size::W, Ext::Zext)?;
+            let len1 = copy(g, &x(&len1))?;
+            let src1 = g.address(&ops[1], size)?;
+            let src1 = copy(g, &src1)?;
+            let (fill, len2, src2) = if five {
+                let fill = g.read(&ops[2], Size::B, Ext::Zext)?;
+                let fill = copy(g, &x(&fill))?;
+                let len2 = g.read(&ops[3], Size::W, Ext::Zext)?;
+                let len2 = copy(g, &x(&len2))?;
+                let src2 = g.address(&ops[4], size)?;
+                (Some(fill), len2, copy(g, &src2)?)
+            } else {
+                (None, len1.clone(), g.address(&ops[2], size)?)
+            };
+            let src2 = copy(g, &src2)?;
+            g.emit(format!("mov x1, {src1}"));
+            g.emit(format!("mov x20, {src2}"));
+            g.emit(format!("mov x0, {len1}"));
+            g.emit(format!("mov x19, {len2}"));
+            let (b1, b2) = (w(&g.tmp()?), w(&g.tmp()?));
+            let (again, next, skip, done) = (g.label(), g.label(), g.label(), g.label());
+            g.place_label(&again);
+            // Both ended: equal.
+            g.emit(format!("orr {}, x0, x19", x(&b1)));
+            g.emit(format!("cmp {}, #0", x(&b1)));
+            g.emit(format!("b.eq {done}"));
+            g.emit(format!("ldrb {b1}, [x1]"));
+            g.emit(format!("ldrb {b2}, [x20]"));
+            if let Some(fill) = &fill {
+                g.emit("cmp x0, #0");
+                g.emit(format!("csel {b1}, {b1}, {}, ne", w(fill)));
+                g.emit("cmp x19, #0");
+                g.emit(format!("csel {b2}, {b2}, {}, ne", w(fill)));
+            }
+            g.emit(format!("lsl {b1}, {b1}, #24"));
+            g.emit(format!("lsl {b2}, {b2}, #24"));
+            g.emit(format!("cmp {b1}, {b2}"));
+            g.emit(format!("b.ne {done}"));
+            g.emit(format!("cbz x0, {next}"));
+            g.emit("add x1, x1, #1");
+            g.emit("sub x0, x0, #1");
+            g.place_label(&next);
+            g.emit(format!("cbz x19, {skip}"));
+            g.emit("add x20, x20, #1");
+            g.emit("sub x19, x19, #1");
+            g.place_label(&skip);
+            g.emit(format!("b {again}"));
+            g.place_label(&done);
+            if !five {
+                g.emit("mov x19, x0");
+            }
+            live(true)
+        }
+        Op::Locc(find) => {
+            // R0 = the bytes left at the first that is (LOCC) or isn't
+            // (SKPC) the character, 0 if there is none, R1 = its address;
+            // Z is set when R0 is 0.
+            (0..2).for_each(|r| g.wrote(r));
+            let ch = g.read(&ops[0], Size::B, Ext::Zext)?;
+            let ch = copy(g, &x(&ch))?;
+            let len = g.read(&ops[1], Size::W, Ext::Zext)?;
+            let len = copy(g, &x(&len))?;
+            let src = g.address(&ops[2], size)?;
+            let src = copy(g, &src)?;
+            g.emit(format!("mov x1, {src}"));
+            g.emit(format!("mov x0, {len}"));
+            let (again, done) = (g.label(), g.label());
+            g.place_label(&again);
+            g.emit(format!("cbz x0, {done}"));
+            let b = w(&g.tmp()?);
+            g.emit(format!("ldrb {b}, [x1]"));
+            g.emit(format!("cmp {b}, {}", w(&ch)));
+            g.emit(format!("b.{} {done}", if find { "eq" } else { "ne" }));
+            g.emit("add x1, x1, #1");
+            g.emit("sub x0, x0, #1");
+            g.emit(format!("b {again}"));
+            g.place_label(&done);
+            Ok(Some(test("w0", Size::L)))
         }
         Op::Ext(signed) => {
             let s = field_size(g, &ops[1])?;

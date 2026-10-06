@@ -1,0 +1,79 @@
+        .TITLE  STRINGS CMPC3, CMPC5, LOCC and SKPC
+        .LIBRARY "vrun.mlb"
+
+; Each EXPECT checks the condition codes; a failed one returns 2 * N, an
+; error status, so the exit code says which.
+
+        .MACRO  EXPECT  COND, N, ?OK
+        B'COND  OK
+        MOVL    #<N * 2>, R0
+        RET
+OK:
+        .ENDM   EXPECT
+
+        .PSECT  DATA, NOEXE, WRT, LONG
+ABC:    .ASCII  "ABCDEF"
+ABX:    .ASCII  "ABCxEF"
+HIGH:   .BYTE   ^XF0, 1
+LOW:    .BYTE   ^X10, 1
+SPACES: .ASCII  "   X  "
+
+        .PSECT  CODE, EXE, LONG
+        .ENTRY  STRINGS, ^M<R2, R3, R4, R5, R6>
+        MOVL    #^X55, R4               ; not touched
+        CMPC3   #6, ABC, ABC
+        EXPECT  EQL, 1
+        TSTL    R0
+        EXPECT  EQL, 2
+        CMPC3   #6, ABC, ABX            ; D < x
+        EXPECT  LSSU, 3
+        CMPL    R0, #3                  ; at the D, 3 bytes left
+        EXPECT  EQL, 4
+        MOVAB   ABC+3, R5
+        CMPL    R1, R5
+        EXPECT  EQL, 5
+        MOVAB   ABX+3, R5
+        CMPL    R3, R5
+        EXPECT  EQL, 6
+        CMPL    R2, #3
+        EXPECT  EQL, 7
+        CMPC3   #2, HIGH, LOW           ; F0 > 10 unsigned, < signed
+        EXPECT  GTRU, 8
+        CMPC3   #2, HIGH, LOW
+        EXPECT  LSS, 9
+        CMPL    R4, #^X55
+        EXPECT  EQL, 10
+; CMPC5: the shorter string goes on as the fill.
+        CMPC5   #3, SPACES, #^A/ /, #2, SPACES
+        EXPECT  EQL, 11
+        CMPC5   #4, SPACES, #^A/ /, #2, SPACES  ; X > the fill
+        EXPECT  GTRU, 12
+        CMPL    R0, #1
+        EXPECT  EQL, 13
+        CMPC5   #0, SPACES, #^A/A/, #3, ABC     ; A A A against A B C
+        EXPECT  LSSU, 14
+        CMPL    R2, #2
+        EXPECT  EQL, 15
+; LOCC and SKPC
+        LOCC    #^A/X/, #6, SPACES
+        EXPECT  NEQ, 16
+        CMPL    R0, #3
+        EXPECT  EQL, 17
+        MOVAB   SPACES+3, R5
+        CMPL    R1, R5
+        EXPECT  EQL, 18
+        LOCC    #^A/Q/, #6, SPACES
+        EXPECT  EQL, 19
+        MOVAB   SPACES+6, R5
+        CMPL    R1, R5
+        EXPECT  EQL, 20
+        SKPC    #^A/ /, #6, SPACES
+        CMPL    R0, #3
+        EXPECT  EQL, 21
+        SKPC    #^A/ /, #2, SPACES
+        EXPECT  EQL, 22
+        $PUT    "strings ok"<10>
+        MOVL    #1, R0
+        RET
+
+        .END    STRINGS
