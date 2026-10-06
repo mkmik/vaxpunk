@@ -170,6 +170,26 @@ enum Cmd {
         #[arg(long)]
         json: bool,
     },
+    /// Print a file's records along a key, a line each: printable ASCII as
+    /// it is, a backslash and every other byte as \xNN.
+    Records {
+        image: String,
+        spec: String,
+        /// Key of reference; 0, the primary key, for relative and
+        /// sequential files.
+        #[arg(long, default_value_t = 0)]
+        key: usize,
+    },
+    /// Check a relative or indexed file's structure.
+    CheckFile {
+        image: String,
+        spec: String,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Build an indexed file as an FDL file says from a text file, a record
+    /// per line (FIX records padded with spaces), and copy it in.
+    Load { image: String, fdl: String, host: String, spec: String },
     /// Copy a directory tree out, with a manifest of VMS attributes.
     Export { image: String, dirspec: String, hostdir: String },
     /// Copy a host tree in, restoring attributes from its manifest.
@@ -324,6 +344,29 @@ fn run(cmd: Cmd) -> Result<bool, Error> {
         }
         Cmd::Dump { image, spec, fid, lbn, json } => dump(&image, spec.as_deref(), fid.as_deref(), lbn, json)?,
         Cmd::Verify { image, repair_bitmap, json } => return verify(&image, repair_bitmap, json),
+        Cmd::Records { image, spec, key } => {
+            let mut img = ro(&image)?;
+            let fid = img.lookup(&spec)?;
+            let mut out = BufWriter::new(io::stdout().lock());
+            for r in img.read_records(fid, key)? {
+                writeln!(out, "{}", escape(&r))?;
+            }
+            out.flush()?;
+        }
+        Cmd::CheckFile { image, spec, json } => return check_file(&image, &spec, json),
+        Cmd::Load { image, fdl, host, spec } => {
+            let text = std::fs::read_to_string(&fdl).map_err(|e| Error::from(e).at(&fdl))?;
+            let f = ods_image::rms::fdl::parse(&text).map_err(|e| Error::from(e).at(&fdl))?;
+            if f.org != 2 {
+                return Err(Error::usage("the FDL file doesn't describe an indexed file").at(&fdl));
+            }
+            let data = std::fs::read(&host).map_err(|e| Error::from(e).at(&host))?;
+            let recs = ods_image::rms::lines_to_records(&f.spec, &data).map_err(|e| e.at(&host))?;
+            let mut img = rw(&image)?;
+            let (_, name) = img.load_indexed(&f.spec, &recs, &spec)?;
+            img.flush()?;
+            eprintln!("{host} -> {name} ({} records, {} keys)", recs.len(), f.spec.keys.len());
+        }
         Cmd::Export { image, dirspec, hostdir } => {
             let mut img = ro(&image)?;
             let m = img.export(&dirspec, Path::new(&hostdir))?;
@@ -690,6 +733,54 @@ fn verify(image: &str, repair: bool, json: bool) -> Result<bool, Error> {
         if repair {
             println!("bitmaps rewritten, {} clusters changed", r.repaired);
         }
+    }
+    Ok(r.is_sound())
+}
+
+/// A record as a line: printable ASCII as it is, a backslash and every
+/// other byte as \xNN, as fixtures/rms/make/dump.py prints them.
+fn escape(rec: &[u8]) -> String {
+    let mut s = String::with_capacity(rec.len());
+    for &b in rec {
+        if (0x20..0x7f).contains(&b) && b != b'\\' {
+            s.push(b as char);
+        } else {
+            s += &format!("\\x{b:02X}");
+        }
+    }
+    s
+}
+
+fn check_file(image: &str, spec: &str, json: bool) -> Result<bool, Error> {
+    let mut img = ro(image)?;
+    let fid = img.lookup(spec)?;
+    let r = img.check_file(fid)?;
+    let sev = |s: Severity| match s {
+        Severity::Error => "error",
+        Severity::Leak => "leak",
+        Severity::Warning => "warning",
+    };
+    let (errors, warnings) = (r.count(Severity::Error), r.count(Severity::Warning));
+    if json {
+        let f: Vec<Value> = r
+            .findings
+            .iter()
+            .map(|f| json!({"severity": sev(f.severity), "what": f.what, "key": f.key, "vbn": f.vbn}))
+            .collect();
+        let keys: Vec<Value> = r.keys.iter().map(|k| json!({"levels": k.levels, "entries": k.entries})).collect();
+        pretty(&json!({"records": r.records, "errors": errors, "warnings": warnings, "keys": keys, "findings": f}));
+    } else {
+        for f in &r.findings {
+            let key = f.key.map(|x| format!(" key {x}")).unwrap_or_default();
+            let vbn = f.vbn.map(|x| format!(" VBN {x}")).unwrap_or_default();
+            println!("{}:{key}{vbn}: {}", sev(f.severity), f.what);
+        }
+        for (n, k) in r.keys.iter().enumerate() {
+            let what = if n == 0 { "data" } else { "SIDR" };
+            let buckets = k.levels.first().copied().unwrap_or(0);
+            println!("key {n}: {} index levels, {buckets} {what} buckets", k.levels.len().saturating_sub(1));
+        }
+        println!("{spec}: {} records: {errors} errors, {warnings} warnings", r.records);
     }
     Ok(r.is_sound())
 }

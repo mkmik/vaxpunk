@@ -37,7 +37,8 @@ after the last are unused. A cell is
 
 so a `FIX` cell is `MRS + 1` bytes and a `VAR` one `MRS + 3`; record *n* is
 in bucket `(n-1) / cells`, cell `(n-1) % cells`. A `VFC` record's size
-counts its fixed control part, `FAB$B_FSZ` bytes, which comes first.
+counts its fixed control part, `FAB$B_FSZ` bytes, which comes first; we
+take a `VFC` cell to be `FSZ + MRS + 3` bytes, which no fixture shows.
 
 A cell is empty when its control byte is 0: never written, or past the end
 of file. `REC` says it has a record. `$DELETE` sets `DELETED` and leaves the

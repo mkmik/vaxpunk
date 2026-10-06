@@ -12,7 +12,9 @@ reads the formats text uses (`src/records.rs`):
 | STMLF, STMCR, STM | bytes; records end at LF, CR, or CR LF |
 
 UDF files, and relative and indexed files, have no records a text reader
-can use.
+can use. Relative and indexed files are RMS's own: their layouts are in
+[relative.md](relative.md) and [indexed.md](indexed.md), and `ods records`
+reads them along any key (`ods_core::rms`).
 
 ## Copy modes
 

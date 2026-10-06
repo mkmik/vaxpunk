@@ -15,7 +15,7 @@ macOS and Linux today.
 
 | Crate | What |
 | --- | --- |
-| `crates/ods-core` | Structure layouts, mount, directories, allocation, INITIALIZE, verifier. `#![no_std]` with `alloc`, no dependencies, no `unsafe`; it builds for `aarch64-unknown-none` |
+| `crates/ods-core` | Structure layouts, mount, directories, allocation, INITIALIZE, verifier; RMS relative and indexed files read along any key, checked, and loaded from records, and FDL (`src/rms/`). `#![no_std]` with `alloc`, no dependencies, no `unsafe`; it builds for `aarch64-unknown-none` |
 | `crates/ods-image` | The core over image files, with advisory locking; VMS and Unix path forms; byte streams; VAR, VFC, FIX and stream records; text conversion; tree export and import with an attribute manifest; errors printed as VMS status codes |
 | `crates/ods-cli` | `ods`, a thin command layer over ods-image |
 | `crates/ods-fuse` | `ods-fuse`, a read-only FUSE mount over ods-image, with the mapping proposed in [docs/fuse.md](docs/fuse.md) |
@@ -43,9 +43,16 @@ $ods dump disk.img '[000000]PIC.JPG'                     # or --fid 12,1, or --l
 $ods verify disk.img                                     # exit status 2 on errors
 $ods export disk.img '[SRC]' ./src-tree                  # with ods-manifest.json
 $ods import disk.img ./src-tree '[COPY]'
+$ods load disk.img parts.fdl parts.txt '[SRC]PARTS.IDX'   # an indexed file, a record per line
+$ods records disk.img '[SRC]PARTS.IDX' --key 1            # along key 1; relative and sequential too
+$ods check-file disk.img '[SRC]PARTS.IDX'                 # exit status 2 on errors
 ```
 
-`info`, `dir`, `dump` and `verify` take `--json`. Wildcards: `*`, `%`, `?`
+`info`, `dir`, `dump`, `verify` and `check-file` take `--json`. `records`
+prints a record a line, printable ASCII as it is and a backslash and every
+other byte as `\xNN`; `load` takes the FDL attributes `ods_core::rms::fdl`
+lists, pads `FIX` records with spaces, and fills buckets as `CONVERT` does
+([docs/indexed.md](docs/indexed.md)). Wildcards: `*`, `%`, `?`
 and `[...]`.
 
 ```sh
@@ -82,9 +89,19 @@ into each checkout's `fixtures/`.
   step (`crates/ods-core/tests/model.rs`; failing seeds go in `SEEDS`).
 - **Power loss**: the same sequences cut after every possible write; every
   state must mount and verify with at most leaked space.
+- **RMS files**: relative and indexed files OpenVMS made, in
+  `fixtures/rms` (committed; `make/` has how), must read along every key
+  exactly as OpenVMS dumped them and check clean; copies with a check byte,
+  chain, key order, SIDR pointer or checksum damaged must be reported; files
+  the loader makes (SYSUAF's keys, every compression over several index
+  levels, FIX records in three areas, the fixtures' own records) must read
+  back by every key and check clean, with the same records in each data and
+  SIDR bucket as `CONVERT` put there (`crates/ods-core/tests/rms.rs`).
 - **Fuzzing**: `fuzz/` (nightly and cargo-fuzz): `cargo fuzz run mount`
   mounts and walks arbitrary images, `cargo fuzz run structures` parses a
-  block as every structure and a file specification.
+  block as every structure and a file specification, `cargo fuzz run rms`
+  reads and checks arbitrary bytes as a relative or indexed file and loads
+  what input that parses as FDL describes.
 
 ## Status
 

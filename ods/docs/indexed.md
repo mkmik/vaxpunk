@@ -10,20 +10,26 @@ use. Every integer is little endian; a VBN counts blocks of the file from 1.
 
 The file header says what the file is (`file-header.md`): `FAT$B_RTYPE` is
 `0x20` (indexed) plus the record format, `FIX` 1 or `VAR` 2;
-`FAT$B_BKTSIZE` is area 0's bucket size; `FAT$W_MAXREC` the longest record,
-0 for any; the end of file is the end of the allocation (`EFBLK` =
-`HIBLK` + 1, `FFBYTE` 0).
+`FAT$B_BKTSIZE` is the largest bucket size of its areas (`idxf.idx`, with
+areas of 2, 3 and 1 blocks, says 3); `FAT$W_MAXREC` the longest record, 0
+for any, and `FAT$W_RSIZE` the record size of a `FIX` file, 0 for `VAR`;
+the end of file is the end of the allocation (`EFBLK` = `HIBLK` + 1,
+`FFBYTE` 0).
 
 ## The prologue
 
 VBN 1 holds key descriptor 0 at offset 0 and the fixed prologue after it;
 more key descriptors follow, chained, then the area descriptors, at
-`PLG$B_AVBN`, each 64 bytes, as many in a block as fit. Every prologue
-block ends in a checksum word, the 16-bit sum of the block's first 255
-words. `CONVERT` gives each alternate key descriptor a block of its own
-when there are few; `CREATE/FDL` packs them 102 bytes apart (`SYSUAF.DAT`
-has keys 1, 2 and 3 at offsets 0, 102 and 204 of VBN 2), and a reader
-follows the chain whatever the packing.
+`PLG$B_AVBN`, each 64 bytes. Every prologue block ends in a checksum word,
+the 16-bit sum of the block's first 255 words. `CONVERT` and `CREATE/FDL`
+both pack the alternate key descriptors 102 bytes apart from offset 0 of
+VBN 2, five to a block (`idxf.idx` has keys 1 and 2 at offsets 0 and 102,
+`SYSUAF.DAT` keys 1, 2 and 3 at 0, 102 and 204), the areas starting in the
+block after; a reader follows the chain whatever the packing. Area *n* is
+at offset 64 × (*n* mod 8) of block `AVBN` + *n* / 8, eight to a block, the
+checksum falling in the eighth's unused tail; no fixture has more than
+three areas, so the eight is RMS's arithmetic as we assume it, not
+something seen.
 
 ### Fixed prologue (`PLG$`, in VBN 1)
 
@@ -199,10 +205,14 @@ segments:
 | | the bytes |
 | 1 | how many more times the last of them repeats |
 
-A run of one byte becomes its first byte and a count: RMS does it for runs
-of 6 or more, and for 5 trailing blanks; a reader takes any. A count is at
-most 255, so a longer run takes another segment. The last segment's count
-is often 0.
+A run of one byte becomes its first byte and a count; a reader takes any.
+In the fixtures RMS leaves what is left of a record whole when it is 8
+bytes or fewer (`idxb.idx`'s ` yyyyyyy`), and otherwise compresses runs of
+6 or more and a run of 5 at the end (`comp.idx`'s 5 trailing blanks, but
+not its `yyyyy` in the middle); our loader does the same. A count is at
+most 255, so a longer run goes on in another segment, whose literal is one
+more of the byte. The last segment's count is often 0; a record that is
+all key has no segments.
 So `ccc:K00002:ab    cd          ef` with its key at 4 is the key `01 05 32`
 then `0E 00 "ccc::ab    cd " 09 02 00 "ef" 00`. The size word counts the
 key and the segments.
@@ -221,10 +231,42 @@ key order, after the 14-byte header:
 Each pointer is a control byte (`PTRSZ` in bits 0-1, `DELETED` bit 2,
 `NOPTRSZ` bit 4, and bit 7 on the first pointer of a SIDR), a record ID
 (2) and a VBN (`PTRSZ` + 2): the record's RFA. Without duplicates a SIDR
-has one. RMS writes the smallest pointer that holds the VBN; `CONVERT`
+has one. `CONVERT` writes the pointers in primary key order. A SIDR too big
+for a bucket goes on in the next with the same key: our loader's choice,
+no fixture has one. RMS writes the smallest pointer that holds the VBN; `CONVERT`
 always 4 bytes. `$DELETE`, or an `$UPDATE` that changes the key, marks the
 pointer: the first keeps its bytes with `DELETED` set, another shrinks to
 its control byte alone, `0x14`, `DELETED` and `NOPTRSZ`.
+
+## Loading
+
+`CONVERT` writes the records in primary key order and starts a new data
+bucket unless the current one's `FREESPACE` is below the data fill
+quantity and the record, sized as it would be first in a bucket (its key
+compressed against nothing), ends before the bucket's last two bytes. The
+same rule fills SIDR buckets, a SIDR at a time, and reproduces every data
+and SIDR bucket of the fixtures. Index buckets fill otherwise: `idxb.idx`
+has 40 entries in each level 1 bucket at an index fill of 256 bytes,
+which no rule over its byte counts we tried explains; our loader fills an
+index bucket while its keys and pointers are below the fill quantity, at
+least two entries a bucket. The index key of each bucket is the highest
+key in it, and the last of each level is all ones; for a signed integer or
+descending key we write the highest of its order instead (`7F` on top of
+`FF`s, or zeros for a descending one), unchecked against RMS.
+
+`CONVERT` takes blocks for buckets as it goes, a cluster at a time, so a
+level 1 index bucket sits after the first data bucket (`idx1.idx`: data
+at VBN 4, root at 5, data again from 6), and an area's extents interleave
+with others'. Ours gives each area one extent after the prologue, its
+buckets in the order they were made, data before index.
+
+`ANALYZE/RMS_FILE/FDL` gives fill quantities as percentages; `CONVERT`
+took `DATA_FILL 256` as bytes (`idxb.idx`'s 512-byte buckets have a fill of
+256, reported as 50). Where an FDL file doesn't say, keys and data records
+get compression or not by the key: the string keys of 8, 9 and 32 bytes in
+the fixtures got it, `idx1.idx`'s 5-byte key 1 and the integer keys didn't;
+our FDL reader draws the line at 6 bytes. `LEVEL1_INDEX_AREA` is
+`INDEX_AREA` unless given.
 
 ## What a writer must keep
 

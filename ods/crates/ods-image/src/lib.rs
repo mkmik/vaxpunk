@@ -11,6 +11,7 @@ mod device;
 mod error;
 pub mod path;
 pub mod records;
+pub mod rms;
 pub mod time;
 mod tree;
 

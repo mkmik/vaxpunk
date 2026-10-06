@@ -16,6 +16,7 @@ mod init;
 pub mod layout;
 pub mod name;
 mod ops;
+pub mod rms;
 mod verify;
 mod volume;
 
