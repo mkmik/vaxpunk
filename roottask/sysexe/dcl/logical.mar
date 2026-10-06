@@ -1,0 +1,284 @@
+        .TITLE  LOGICAL DCL's logical name commands
+        .IDENT  /V0.1/
+;
+; DEFINE, DEASSIGN and SHOW LOGICAL, and SHOW's other keywords' way to
+; their routines.
+; One of DCL's modules: ../dcl.mar says how they fit.
+;
+        .LIBRARY "lib.mlb"
+        .LIBRARY "starlet.mlb"
+        .LIBRARY "../sysexe.mlb"
+        .LIBRARY "../dcl.mlb"
+        $IPLDEF
+        $PCBDEF
+        $LNMBDEF
+        $SSDEF
+        $LNMDEF
+        $DCLDEF
+
+        .EXTERNAL SCH$GL_CURPCB, LNM$GQ_SYSTEM, DCL$ADD, DCL$ADDCSTR
+        .EXTERNAL DCL$ADDNAME, DCL$DONE, DCL$GETVAL, DCL$ISPRES, DCL$NAMDSC
+        .EXTERNAL DCL$NAME, DCL$NAMEVAL, DCL$OK, DCL$PROCESS, DCL$QUOTE
+        .EXTERNAL DCL$SAY, DCL$SHOWDEF, DCL$SHOWDEV, DCL$SHOWSYM, DCL$TOKEN
+        .EXTERNAL DCL$VERB, DCL$V_LOGNAM
+
+        .PSECT  DATA, NOEXE, WRT, LONG
+FILE_DEV:
+        .ASCID  "LNM$FILE_DEV"
+CREITEMS:                               ; $CRELNM's: the equivalence, in DCL$TOKEN
+        .WORD   0, LNM$_STRING
+        .ADDRESS DCL$TOKEN
+        .LONG   0, 0
+TRNITEMS:                               ; $TRNLNM's: the equivalence and the table
+        .WORD   LINESIZE, LNM$_STRING
+        .ADDRESS EQV, EQVLEN
+        .WORD   31, LNM$_TABLE
+        .ADDRESS TABNAM, TABLEN
+        .LONG   0
+EQV:    .BLKB   LINESIZE
+EQVLEN: .WORD   0
+TABNAM: .BLKB   31
+TABLEN: .WORD   0
+LNMARGS:                                ; GETLNM's: a table and an index
+        .LONG   2, 0, 0
+PROCTAB:
+        .ASCIC  "LNM$PROCESS_TABLE"
+SYSTAB: .ASCIC  "LNM$SYSTEM_TABLE"
+V_EQUNAM:
+        .ASCID  "EQUIVALENCE_NAME"
+V_OPTION:
+        .ASCID  "OPTION"
+V_LOG:  .ASCID  "LOG"
+V_PROCQ:
+        .ASCID  "PROCESS"
+V_SYSQ: .ASCID  "SYSTEM"
+V_TABLE:
+        .ASCID  "TABLE"
+TABMASK:                                ; LNMTAB's tables: 1 the process's, 2 the system's
+        .LONG   0
+TABNAMES:                               ; the tables' names, .ASCIC, and their TABMASK
+        .ASCIC  "LNM$PROCESS_TABLE"
+        .BYTE   1
+        .ASCIC  "LNM$SYSTEM_TABLE"
+        .BYTE   2
+        .ASCIC  "LNM$PROCESS"
+        .BYTE   1
+        .ASCIC  "LNM$SYSTEM"
+        .BYTE   2
+        .ASCIC  "LNM$FILE_DEV"
+        .BYTE   3
+        .BYTE   0
+TABDSCS:                                ; the names LNMTAB gives the services, by TABMASK
+        .ADDRESS DCL$PROCESS, DCL$PROCESS, SYSTEM, FILE_DEV
+SYSTEM: .ASCID  "LNM$SYSTEM"
+TABDSC: .LONG   0                       ; LNMTAB's table name, a descriptor's address
+V_LOGICAL:
+        .ASCIC  "LOGICAL"
+V_DEFAULT:
+        .ASCIC  "DEFAULT"
+V_DEVICES:
+        .ASCIC  "DEVICES"
+
+        .PSECT  CODE, EXE, LONG
+; DCL$DEFINE, DEFINE[/PROCESS|/SYSTEM|/TABLE=table][/[NO]LOG] name
+; equivalence: makes name a logical name in the table, the process's by
+; default, telling if it replaced one, unless /NOLOG.
+DCL$DEFINE::
+        MOVL    #1, R1
+        BSBW    LNMTAB
+        MOVAB   DCL$V_LOGNAM, R1
+        BSBW    DCL$NAMEVAL
+        MOVAB   V_EQUNAM, R1
+        BSBW    DCL$GETVAL
+        MOVW    R8, CREITEMS
+        $CRELNM_S TABNAM=@TABDSC, LOGNAM=DCL$NAMDSC, ITMLST=CREITEMS
+        CMPL    R0, #SS$_SUPERSEDE
+        BNEQ    DCL$DONE
+        MOVAB   V_LOG, R1
+        BSBW    DCL$ISPRES
+        BLBS    R0, 10$
+        BRW     DCL$OK
+10$:    ADDTEXT "%DCL-I-SUPERSEDE, previous value of "
+        BSBW    DCL$ADDNAME
+        ADDTEXT " has been superseded"
+        BSBW    DCL$SAY
+        BRW     DCL$OK
+
+; DCL$DEASSIGN, DEASSIGN[/PROCESS|/SYSTEM|/TABLE=table] name: deletes
+; the logical name from the table, the process's by default.
+DCL$DEASSIGN::
+        MOVL    #1, R1
+        BSBW    LNMTAB
+        MOVAB   DCL$V_LOGNAM, R1
+        BSBW    DCL$NAMEVAL
+        $DELLNM_S TABNAM=@TABDSC, LOGNAM=DCL$NAMDSC
+        BRW     DCL$DONE
+
+; DCL$SHOW, SHOW LOGICAL[/PROCESS|/SYSTEM|/TABLE=table] [name]:
+; translates name in the table, LNM$FILE_DEV by default, and shows the
+; equivalence and the table it is in. With no name, or *, lists the
+; table's names. SHOW DEFAULT: as DCL$SHOWDEF. SHOW DEVICES: as
+; DCL$SHOWDEV. SHOW PROCESS and SHOW SYSTEM are SHOW_IMAGE's,
+; SHOW.EXE's.
+DCL$SHOW::
+        MOVAB   V_OPTION, R1            ; the keyword, all of it
+        BSBW    DCL$GETVAL
+        MOVAB   V_DEFAULT, R1
+        BSBW    DCL$VERB
+        BLBS    R0, DCL$SHOWDEF
+        MOVAB   V_DEVICES, R1
+        BSBW    DCL$VERB
+        BLBS    R0, DCL$SHOWDEV
+        MOVAB   V_LOGICAL, R1
+        BSBW    DCL$VERB
+        BLBS    R0, 10$
+        BRW     DCL$SHOWSYM             ; SYMBOL
+10$:    MOVL    #3, R1
+        BSBW    LNMTAB
+        MOVAB   DCL$V_LOGNAM, R1
+        BSBW    DCL$NAMEVAL
+        TSTL    R8
+        BEQL    LIST
+        CMPL    R8, #1
+        BNEQ    15$
+        CMPB    DCL$NAME, #^A/*/
+        BEQL    LIST
+15$:    $TRNLNM_S TABNAM=@TABDSC, LOGNAM=DCL$NAMDSC, ITMLST=TRNITEMS
+        BLBS    R0, 20$
+        CMPL    R0, #SS$_NOLOGNAM
+        BNEQ    DCL$DONE
+        ADDTEXT "%SHOW-S-NOTRAN, no translation for logical name "
+        BSBW    DCL$ADDNAME
+        BSBW    DCL$SAY
+        BRW     DCL$OK
+20$:    ADDTEXT "   "
+        BSBW    PAIR
+        ADDTEXT " ("
+        MOVAB   TABNAM, R1
+        MOVZWL  TABLEN, R2
+        BSBW    DCL$ADD
+        ADDTEXT ")"
+        BSBW    DCL$SAY
+        BRW     DCL$OK
+
+; LIST: lists the logical names of the process's table, then the system's,
+; those TABMASK has, as VMS's SHOW LOGICAL does, under each table's name.
+; It takes CMKRNL, for GETLNM: SS$_NOPRIV without.
+LIST:   CLRL    R6                      ; the table: 0 the process's, 1 the system's
+10$:    BBS     R6, TABMASK, 12$
+        BRW     30$
+12$:    PRINT   ""
+        ADDTEXT "("
+        MOVAB   PROCTAB, R1
+        TSTL    R6
+        BEQL    15$
+        MOVAB   SYSTAB, R1
+15$:    BSBW    DCL$ADDCSTR
+        ADDTEXT ")"
+        BSBW    DCL$SAY
+        PRINT   ""
+        CLRL    R7                      ; the name's index
+20$:    MOVL    R6, LNMARGS+4
+        MOVL    R7, LNMARGS+8
+        $CMKRNL_S ROUTIN=GETLNM, ARGLST=LNMARGS
+        BLBS    R0, 25$
+        CMPL    R0, #SS$_NOLOGNAM
+        BEQL    30$
+        BRW     DCL$DONE
+25$:    ADDTEXT "  "
+        BSBW    PAIR
+        BSBW    DCL$SAY
+        INCL    R7
+        BRB     20$
+30$:    AOBLEQ  #1, R6, 10$
+        BRW     DCL$OK
+
+; GETLNM table, index: in kernel mode, copies the index'th logical name
+; of a table, 0 the process's and 1 the system's, to DCL$NAME and
+; DCL$NAMDSC, and its equivalence to EQV and EQVLEN. SS$_NOLOGNAM past
+; the last. A name made or deleted between calls may be missed or shown
+; twice. ponytail: walks the executive's tables itself, as DIRECTORY
+; reads the boot volume; VMS's DCL asks the executive's logical name
+; routines.
+        .ENTRY  GETLNM, ^M<R2, R3, R4, R5>
+        MOVL    G^SCH$GL_CURPCB, R2
+        MOVAQ   PCB$Q_LNMHD(R2), R2
+        TSTL    4(AP)
+        BEQL    10$
+        MOVAQ   G^LNM$GQ_SYSTEM, R2
+10$:    MOVL    8(AP), R3
+        DSBINT  #IPL$_SYNCH             ; the tables
+        MOVL    R2, R1
+20$:    MOVL    (R1), R1
+        CMPL    R1, R2
+        BEQL    80$
+        SOBGEQ  R3, 20$
+        PUSHL   R1
+        MOVZBL  LNMB$T_NAME(R1), DCL$NAMDSC
+        MOVC3   DCL$NAMDSC, LNMB$T_NAME+1(R1), DCL$NAME
+        MOVL    (SP)+, R1
+        MOVZBL  LNMB$T_NAME(R1), R0
+        MOVAB   LNMB$T_NAME+1(R1)[R0], R1
+        MOVZBL  (R1)+, R0
+        MOVW    R0, EQVLEN
+        MOVC3   R0, (R1), EQV
+        MOVL    #SS$_NORMAL, R0
+        BRB     90$
+80$:    MOVL    #SS$_NOLOGNAM, R0
+90$:    ENBINT
+        RET
+
+; PAIR: appends "name" = "equivalence", of DCL$NAME and EQV, to DCL$MSG.
+; Uses R0-R2.
+PAIR:   BSBW    DCL$QUOTE
+        BSBW    DCL$ADDNAME
+        BSBW    DCL$QUOTE
+        ADDTEXT " = "
+        BSBW    DCL$QUOTE
+        MOVAB   EQV, R1
+        MOVZWL  EQVLEN, R2
+        BSBW    DCL$ADD
+        BRW     DCL$QUOTE
+
+; LNMTAB: R1 = the tables a logical name command uses by default, as
+; TABMASK. Makes TABMASK and TABDSC those its /PROCESS, /SYSTEM or
+; /TABLE=table say: SS$_NOLOGTAB, to DCL$DONE, for a table there isn't.
+; Uses R0-R5, R8.
+LNMTAB: MOVL    R1, TABMASK
+        MOVAB   V_PROCQ, R1
+        BSBB    DCL$ISPRES
+        BLBC    R0, 10$
+        MOVL    #1, TABMASK
+10$:    MOVAB   V_SYSQ, R1
+        BSBB    DCL$ISPRES
+        BLBC    R0, 20$
+        MOVL    #2, TABMASK
+20$:    MOVAB   V_TABLE, R1
+        BSBB    DCL$ISPRES
+        BLBC    R0, 50$
+        MOVAB   V_TABLE, R1
+        BSBW    DCL$GETVAL
+        MOVAB   TABNAMES, R2
+30$:    MOVZBL  (R2), R3
+        BEQL    40$
+        CMPL    R3, R8
+        BNEQ    35$
+        MOVAB   1(R2), R1               ; the same length: the same name?
+        MOVAB   DCL$TOKEN, R4
+        CLRL    R5
+32$:    CMPL    R5, R8
+        BGEQU   37$
+        CMPB    (R1)[R5], (R4)[R5]
+        BNEQ    35$
+        INCL    R5
+        BRB     32$
+35$:    ADDL2   R3, R2                  ; past the name and its mask
+        ADDL2   #2, R2
+        BRB     30$
+37$:    MOVZBL  1(R2)[R3], TABMASK
+        BRB     50$
+40$:    MOVL    #SS$_NOLOGTAB, R0
+        BRW     DCL$DONE
+50$:    MOVL    TABMASK, R0
+        MOVL    TABDSCS[R0], TABDSC
+        RSB

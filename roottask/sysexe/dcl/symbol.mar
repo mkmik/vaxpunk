@@ -1,0 +1,377 @@
+        .TITLE  SYMBOL  DCL's symbols
+        .IDENT  /V0.1/
+;
+; The symbol table, DCL$SYMTAB, and the commands that set, show and delete
+; symbols, and WRITE.
+; One of DCL's modules: ../dcl.mar says how they fit.
+;
+        .LIBRARY "lib.mlb"
+        .LIBRARY "starlet.mlb"
+        .LIBRARY "../sysexe.mlb"
+        .LIBRARY "../dcl.mlb"
+        $DCLDEF
+
+        .EXTERNAL DCL$ADD, DCL$ADDCSTR, DCL$ADDHEX, DCL$ADDOCT, DCL$ADDSYM
+        .EXTERNAL DCL$ADDVAL, DCL$DEPTH, DCL$EXPR, DCL$EXPSYN, DCL$GETVAL
+        .EXTERNAL DCL$INSFPRM, DCL$ISPRES, DCL$LASTSTAT, DCL$OK, DCL$QREST
+        .EXTERNAL DCL$QUOTE, DCL$RESTVAL, DCL$SAY, DCL$SKIP, DCL$SYMOVF
+        .EXTERNAL DCL$TOSTR, DCL$UNDSYM, DCL$VALNAME, DCL$VERB, DCL$VSTACK
+        .EXTERNAL DCL$V_EXPR, DCL$V_LOGNAM, DCL$WARN
+
+        .PSECT  DATA, NOEXE, WRT, LONG
+V_SYMBOL:
+        .ASCID  "SYMBOL"
+V_ALL:  .ASCID  "ALL"
+V_GLOBAL:
+        .ASCID  "GLOBAL"
+V_LOCAL:
+        .ASCID  "LOCAL"
+V_OUTPUT:
+        .ASCIC  "SYS$OUTPUT"
+V_ERROR:
+        .ASCIC  "SYS$ERROR"
+STATNAM:
+        .ASCIC  "$STATUS"
+SEVNAM: .ASCIC  "$SEVERITY"
+DCL$SYMNAM::                            ; a symbol's name, .ASCIC
+        .BLKB   32
+DCL$TARGET::                            ; the one an assignment or GOTO wants
+        .BLKB   32
+DCL$SYMTAB::                            ; the symbols
+        .BLKB   NSYM*SYM$K_LENGTH
+DCL$SYMEND::                            ; past them
+
+        .PSECT  CODE, EXE, LONG
+; SCOPE: R10 = the level a symbol command's /LOCAL or /GLOBAL says: the
+; procedure running's, GLOBAL, or ANY for neither. Uses R0, R1.
+SCOPE:  MOVL    #GLOBAL, R10
+        MOVAB   V_GLOBAL, R1
+        BSBB    DCL$ISPRES
+        BLBS    R0, 10$
+        MOVL    DCL$DEPTH, R10
+        MOVAB   V_LOCAL, R1
+        BSBB    DCL$ISPRES
+        BLBS    R0, 10$
+        MOVL    #ANY, R10
+10$:    RSB
+
+; DCL$ASSIGN, name = expression, name == expression: R6 = the =,
+; DCL$SYMNAM = the name. Makes it a local symbol, or a global one, with
+; the value.
+DCL$ASSIGN::
+        INCL    R6
+        MOVL    DCL$DEPTH, R10
+        CMPL    R6, R7
+        BGEQU   10$
+        CMPB    (R6), #^A/=/
+        BNEQ    10$
+        INCL    R6
+        MOVL    #GLOBAL, R10
+10$:    PUSHL   R10
+        MOVC3   #32, DCL$SYMNAM, DCL$TARGET
+        MOVAB   DCL$VSTACK, R9
+        BSBW    DCL$EXPR
+        BSBW    DCL$SKIP
+        CMPL    R6, R7
+        BGEQU   SETTARGET
+        BRW     DCL$EXPSYN
+
+; DCL$STRASSIGN, name := string, name :== string: R6 = the =, DCL$SYMNAM
+; = the name. The same, with the rest of the line, as DCL$QREST makes
+; it.
+DCL$STRASSIGN::
+        INCL    R6
+        MOVL    DCL$DEPTH, R10
+        CMPL    R6, R7
+        BGEQU   10$
+        CMPB    (R6), #^A/=/
+        BNEQ    10$
+        INCL    R6
+        MOVL    #GLOBAL, R10
+10$:    PUSHL   R10
+        MOVC3   #32, DCL$SYMNAM, DCL$TARGET
+        MOVAB   DCL$VSTACK, R9
+        BSBW    DCL$QREST
+; SETTARGET: (SP) = a level. Sets the symbol DCL$TARGET names there to
+; DCL$VSTACK's first value.
+SETTARGET:
+        MOVC3   #32, DCL$TARGET, DCL$SYMNAM
+        MOVL    (SP)+, R10
+        MOVAB   DCL$VSTACK, R9
+        BSBW    DCL$SETSYM
+        BRW     DCL$OK
+
+; DCL$WRITE, WRITE SYS$OUTPUT expression[,...]: writes the values, as
+; strings, one after the other, on a line.
+DCL$WRITE::
+        MOVAB   DCL$V_LOGNAM, R1
+        BSBW    DCL$GETVAL
+        CMPB    R8, V_OUTPUT
+        BNEQ    7$
+        MOVAB   V_OUTPUT, R1
+        BSBW    DCL$VERB
+        BLBS    R0, 10$
+7$:     CMPB    R8, V_ERROR
+        BNEQ    8$
+        MOVAB   V_ERROR, R1
+        BSBW    DCL$VERB
+        BLBS    R0, 10$
+8$:     PRINT   "%DCL-W-UNDFIL, file has not been opened by DCL - check logical name"
+        BRW     DCL$WARN
+10$:    MOVAB   DCL$V_EXPR, R1
+        BSBW    DCL$RESTVAL
+15$:    MOVAB   DCL$VSTACK, R9
+        BSBW    DCL$EXPR
+        BSBW    DCL$TOSTR
+        MOVZBL  VAL$T_STR(R9), R2
+        MOVAB   VAL$T_STR+1(R9), R1
+        BSBW    DCL$ADD
+        BSBW    DCL$SKIP
+        CMPL    R6, R7
+        BGEQU   20$
+        CMPB    (R6), #44
+        BEQL    17$
+        BRW     DCL$EXPSYN
+17$:    INCL    R6
+        BRB     15$
+20$:    BSBW    DCL$SAY
+        BRW     DCL$OK
+
+; DCL$SHOWSYM, SHOW SYMBOL[/LOCAL|/GLOBAL] name: shows its value, as VMS
+; does: name = "string", or name = integer, in hex and octal too; == for
+; a global symbol. The nearest, or the local one of the procedure
+; running or the global one. With /ALL instead of a name, every local
+; symbol of the procedure running, or every global one.
+DCL$SHOWSYM::
+        MOVAB   V_ALL, R1
+        BSBW    DCL$ISPRES
+        BLBC    R0, 2$
+        BRW     SHOWALL
+2$:     MOVAB   V_SYMBOL, R1
+        BSBW    DCL$VALNAME
+        TSTL    R8
+        BNEQ    5$
+        BRW     DCL$INSFPRM
+5$:     BSBW    SCOPE
+        CMPL    R10, #ANY
+        BEQL    20$
+        BSBW    FINDAT
+        TSTL    R1
+        BNEQ    10$
+        CMPL    R10, #GLOBAL            ; $STATUS and $SEVERITY are global
+        BNEQ    7$
+        MOVAB   STATNAM, R1
+        MOVAB   DCL$SYMNAM, R2
+        BSBW    DCL$SAMESTR
+        BLBS    R0, 20$
+        MOVAB   SEVNAM, R1
+        MOVAB   DCL$SYMNAM, R2
+        BSBW    DCL$SAMESTR
+        BLBS    R0, 20$
+7$:     BRW     DCL$UNDSYM
+10$:    BSBB    VALUEOF
+        BSBB    SHOW1
+        BRW     DCL$OK
+20$:    BSBW    DCL$FINDSYM
+        MOVL    #1, R11                 ; 1 if global: $STATUS and $SEVERITY are
+        TSTL    R1
+        BEQL    27$
+        CMPL    SYM$L_LEVEL(R1), #GLOBAL
+        BEQL    27$
+        CLRL    R11
+27$:    MOVAB   DCL$VSTACK, R9
+        BSBW    DCL$GETSYM
+        BLBS    R0, 30$
+        BRW     DCL$UNDSYM
+30$:    BSBB    SHOW1
+        BRW     DCL$OK
+
+; SHOWALL: SHOW SYMBOL/ALL: shows each symbol of the scope SCOPE says, the
+; procedure running's local ones if it says none.
+SHOWALL:
+        BSBW    SCOPE
+        CMPL    R10, #ANY
+        BNEQ    5$
+        MOVL    DCL$DEPTH, R10
+5$:     MOVAB   DCL$SYMTAB, R8
+10$:    TSTB    SYM$T_NAME(R8)
+        BEQL    20$
+        CMPL    SYM$L_LEVEL(R8), R10
+        BNEQ    20$
+        PUSHL   R10
+        MOVC3   #32, SYM$T_NAME(R8), DCL$SYMNAM
+        MOVL    R8, R1
+        BSBB    VALUEOF
+        BSBB    SHOW1
+        MOVL    (SP)+, R10
+20$:    ADDL2   #SYM$K_LENGTH, R8
+        MOVAB   DCL$SYMEND, R0
+        CMPL    R8, R0
+        BLSSU   10$
+        BRW     DCL$OK
+
+; VALUEOF: R1 = a symbol. Copies its value to DCL$VSTACK, R9 at it: R11
+; = 1 if it is global. Uses R0-R5.
+VALUEOF:
+        CLRL    R11
+        CMPL    SYM$L_LEVEL(R1), #GLOBAL
+        BNEQ    10$
+        INCL    R11
+10$:    MOVAB   DCL$VSTACK, R9
+        MOVC3   #VAL$K_LENGTH, SYM$R_VALUE(R1), (R9)
+        RSB
+
+; SHOW1: DCL$SYMNAM = a symbol's name, R9 = its value, R11 = 1 if it is
+; global. Writes it as SHOW SYMBOL does. Uses R0-R5, R10.
+SHOW1:  ADDTEXT "  "
+        BSBW    DCL$ADDSYM
+        ADDTEXT " ="
+        TSTL    R11
+        BEQL    12$
+        ADDTEXT "="
+12$:    ADDTEXT " "
+        TSTL    VAL$L_TYPE(R9)
+        BEQL    20$
+        BSBW    DCL$QUOTE
+        BSBW    DCL$ADDVAL
+        BSBW    DCL$QUOTE
+        BRB     30$
+20$:    MOVL    VAL$L_INT(R9), R10
+        BSBW    DCL$TOSTR
+        BSBW    DCL$ADDVAL
+        ADDTEXT "   Hex = "
+        MOVL    R10, R1
+        BSBW    DCL$ADDHEX
+        ADDTEXT "  Octal = "
+        MOVL    R10, R1
+        BSBW    DCL$ADDOCT
+30$:    BRW     DCL$SAY
+
+; DCL$DELSYM, DELETE/SYMBOL[/LOCAL|/GLOBAL] name: deletes the local
+; symbol name of the procedure running, or the console's, or the global
+; one. DELETE/SYMBOL/ALL deletes every one of them.
+DCL$DELSYM::
+        BSBW    SCOPE
+        CMPL    R10, #ANY
+        BNEQ    5$
+        MOVL    DCL$DEPTH, R10
+5$:     MOVAB   V_ALL, R1
+        BSBW    DCL$ISPRES
+        BLBC    R0, 20$
+        MOVAB   DCL$SYMTAB, R1          ; /ALL
+10$:    CMPL    SYM$L_LEVEL(R1), R10
+        BNEQ    15$
+        CLRB    SYM$T_NAME(R1)
+15$:    ADDL2   #SYM$K_LENGTH, R1
+        MOVAB   DCL$SYMEND, R0
+        CMPL    R1, R0
+        BLSSU   10$
+        BRW     DCL$OK
+20$:    PUSHL   R10
+        MOVAB   V_SYMBOL, R1
+        BSBW    DCL$VALNAME
+        MOVL    (SP)+, R10
+        BSBW    FINDAT
+        TSTL    R1
+        BNEQ    30$
+        BRW     DCL$UNDSYM
+30$:    CLRB    SYM$T_NAME(R1)
+        BRW     DCL$OK
+
+; DCL$SAMESTR: R1 and R2 = two .ASCIC strings. R0 = 1 if they are the
+; same, else 0. Uses R3.
+DCL$SAMESTR::
+        CLRL    R0
+        MOVZBL  (R1), R3
+        CMPB    R3, (R2)
+        BNEQ    90$
+10$:    TSTL    R3
+        BEQL    80$
+        CMPB    (R1)[R3], (R2)[R3]
+        BNEQ    90$
+        DECL    R3
+        BRB     10$
+80$:    MOVL    #1, R0
+90$:    RSB
+
+; FINDAT: R10 = a level. R1 = the symbol DCL$SYMNAM names at that level,
+; or 0. Uses R0-R5.
+FINDAT: MOVAB   DCL$SYMTAB, R5
+10$:    CMPL    SYM$L_LEVEL(R5), R10
+        BNEQ    20$
+        MOVAB   SYM$T_NAME(R5), R1
+        MOVAB   DCL$SYMNAM, R2
+        BSBW    DCL$SAMESTR
+        BLBS    R0, 80$
+20$:    ADDL2   #SYM$K_LENGTH, R5
+        MOVAB   DCL$SYMEND, R0
+        CMPL    R5, R0
+        BLSSU   10$
+        CLRL    R1
+        RSB
+80$:    MOVL    R5, R1
+        RSB
+
+; DCL$FINDSYM: R1 = the symbol DCL$SYMNAM names, local to the procedure
+; running or to those it is in, the nearest, else global; 0 if there is
+; none. Uses R0-R5.
+DCL$FINDSYM::
+        PUSHL   R10
+        MOVL    DCL$DEPTH, R10
+10$:    BSBB    FINDAT
+        TSTL    R1
+        BNEQ    20$
+        DECL    R10
+        CMPL    R10, #GLOBAL
+        BGEQ    10$
+20$:    MOVL    (SP)+, R10
+        RSB
+
+; DCL$GETSYM: R9 = a value. Makes it the symbol DCL$SYMNAM names,
+; $STATUS and $SEVERITY too: R0 = 1, or 0 if there is no such symbol.
+; Uses R0-R5.
+DCL$GETSYM::
+        MOVAB   STATNAM, R1
+        MOVAB   DCL$SYMNAM, R2
+        BSBW    DCL$SAMESTR
+        BLBC    R0, 10$
+        MOVL    DCL$LASTSTAT, R0
+        BRB     20$
+10$:    MOVAB   SEVNAM, R1
+        MOVAB   DCL$SYMNAM, R2
+        BSBW    DCL$SAMESTR
+        BLBC    R0, 30$
+        BICL3   #^C7, DCL$LASTSTAT, R0
+20$:    CLRL    VAL$L_TYPE(R9)
+        MOVL    R0, VAL$L_INT(R9)
+        MOVL    #1, R0
+        RSB
+30$:    BSBB    DCL$FINDSYM
+        TSTL    R1
+        BEQL    80$
+        MOVC3   #VAL$K_LENGTH, SYM$R_VALUE(R1), (R9)
+        MOVL    #1, R0
+        RSB
+80$:    CLRL    R0
+        RSB
+
+; DCL$SETSYM: R9 = a value, R10 = a level. Gives the symbol DCL$SYMNAM
+; names at that level the value, making it if there is none. Uses R0-R5.
+DCL$SETSYM::
+        BSBB    FINDAT
+        TSTL    R1
+        BNEQ    30$
+        MOVAB   DCL$SYMTAB, R1          ; a free entry
+10$:    TSTB    SYM$T_NAME(R1)
+        BEQL    20$
+        ADDL2   #SYM$K_LENGTH, R1
+        MOVAB   DCL$SYMEND, R0
+        CMPL    R1, R0
+        BLSSU   10$
+        BRW     DCL$SYMOVF
+20$:    MOVL    R10, SYM$L_LEVEL(R1)
+        PUSHL   R1
+        MOVC3   #32, DCL$SYMNAM, SYM$T_NAME(R1)
+        MOVL    (SP)+, R1
+30$:    MOVC3   #VAL$K_LENGTH, (R9), SYM$R_VALUE(R1)
+        RSB

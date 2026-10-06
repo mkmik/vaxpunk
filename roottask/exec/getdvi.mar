@@ -28,7 +28,6 @@
         .EXTERNAL IOC$TRNDEVNAM, EXE$PROBER_DSC, EXE$SETEF, EXE$CLREF
         .EXTERNAL SCH$GL_CURPCB, MB$FDT
 
-MAXCHAN = 31                            ; as qio.mar's
 DISK = DEV$M_FOD!DEV$M_DIR!DEV$M_SHR!DEV$M_AVL!DEV$M_IDV!DEV$M_ODV!DEV$M_RND
 TERM = DEV$M_REC!DEV$M_CCL!DEV$M_TRM!DEV$M_AVL!DEV$M_IDV!DEV$M_ODV
 
@@ -160,7 +159,7 @@ ONLINE: TSTL    R5
         BRB     80$
 20$:    MOVZWL  8(AP), R0               ; else the channel's
         BEQL    25$
-        CMPL    R0, #MAXCHAN
+        CMPL    R0, #PCB$C_MAXCHAN
         BGTRU   25$
         MOVL    SCH$GL_CURPCB, R1
         BBC     R0, PCB$L_CHANS(R1), 25$

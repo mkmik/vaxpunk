@@ -256,6 +256,7 @@ PCB$Q_AUTHPRIV = 600                    ; authorized: what $SETPRV may enable wi
 PCB$Q_PROCPRIV = 608                    ; permanent: what the current ones go back to when an image exits
 PCB$L_UIC = 616                         ; its UIC: the group in the high word, the member in the low
 PCB$K_LENGTH = 624
+PCB$C_MAXCHAN = 31                      ; channels 1-31, a bit each in PCB$L_CHANS
 PCB$V_WAKEPEN = 0                       ; a $WAKE came that $HIBER hasn't seen
 PCB$V_WALL = 1                          ; the wait is for all of EFWM
 PCB$V_SUSPEN = 2                        ; suspend when the wait ends

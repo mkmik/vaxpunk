@@ -1,0 +1,334 @@
+        .TITLE  SETSHOW DCL's SET and SHOW of the default and devices
+        .IDENT  /V0.1/
+;
+; SET DEFAULT, SHOW DEFAULT, SHOW DEVICES and SET COMMAND.
+; One of DCL's modules: ../dcl.mar says how they fit.
+;
+        .LIBRARY "lib.mlb"
+        .LIBRARY "starlet.mlb"
+        .LIBRARY "../sysexe.mlb"
+        .LIBRARY "../dcl.mlb"
+        $SSDEF
+        $LNMDEF
+        $RMSDEF
+        $FABDEF
+        $RABDEF
+        $NAMDEF
+        $DVIDEF
+        $DVSDEF
+        $DCDEF
+        $UCBDEF
+        $DCLDEF
+
+        .EXTERNAL CDU$COMPILE, DCL$ADD, DCL$ADDCSTR, DCL$ADDDEC, DCL$DONE
+        .EXTERNAL DCL$GETVAL, DCL$INSFPRM, DCL$ISPRES, DCL$OK, DCL$PADTO
+        .EXTERNAL DCL$PTABVEC, DCL$SAY, DCL$TOKEN, DCL$V_FILE, DCL$WARN
+
+        .PSECT  DATA, NOEXE, WRT, LONG
+DCL$PROCESS::                           ; the process's logical name table
+        .ASCID  "LNM$PROCESS"
+V_DIR:  .ASCID  "DIRECTORY"
+V_DEVNAM:
+        .ASCID  "DEVICE_NAME"
+V_MOUNTED:
+        .ASCID  "MOUNTED"
+MOUNTED:                                ; SHOW DEVICES/MOUNTED: 1 for mounted volumes only
+        .LONG   0
+SCANCTX:                                ; $DEVICE_SCAN's context
+        .BLKQ   1
+PATDSC: .LONG   0                       ; its search name, in DCL$TOKEN
+        .ADDRESS DCL$TOKEN
+DVSITEMS:                               ; its items: the class
+        .WORD   4, DVS$_DEVCLASS
+        .ADDRESS DEVCLASS
+        .LONG   0
+        .LONG   0
+DEVCLASS:
+        .LONG   0
+DEVDSC: .LONG   8                       ; the device's name it found, _DDCU:
+        .ADDRESS DEVNAME
+DVINAM: .LONG   0                       ; and its length, a descriptor of it
+        .ADDRESS DEVNAME
+DEVNAME:
+        .BLKB   8
+DVIITEMS:                               ; what $GETDVIW returns of it
+        .WORD   4, DVI$_MNT
+        .ADDRESS V_MNT
+        .LONG   0
+        .WORD   4, DVI$_SWL
+        .ADDRESS V_SWL
+        .LONG   0
+        .WORD   4, DVI$_STS
+        .ADDRESS V_STS
+        .LONG   0
+        .WORD   4, DVI$_ERRCNT
+        .ADDRESS V_ERRCNT
+        .LONG   0
+        .WORD   12, DVI$_VOLNAM
+        .ADDRESS DEVLABEL+1
+        .ADDRESS LABLEN
+        .WORD   4, DVI$_FREEBLOCKS
+        .ADDRESS DEVFREE
+        .LONG   0
+        .LONG   0
+V_MNT:  .LONG   0                       ; 1 if a volume is mounted,
+V_SWL:  .LONG   0                       ; 1 if it is read only,
+V_STS:  .LONG   0                       ; UCB$M_ONLINE if the device is there,
+V_ERRCNT:                               ; the errors it reported,
+        .LONG   0
+DEVLABEL:                               ; the volume's label, after a byte,
+        .BLKB   13
+LABLEN: .WORD   0                       ; its length,
+DEVFREE:                                ; and its free blocks
+        .LONG   0
+S_MOUNTED:
+        .ASCIC  "Mounted"
+S_WRTLCK:
+        .ASCIC  "Mounted wrtlck"
+S_ONLINE:
+        .ASCIC  "Online"
+S_OFFLINE:
+        .ASCIC  "Offline"
+DOTCLD: .ASCII  ".CLD"
+CLDFAB:                                 ; SET COMMAND's
+        $FAB    FNA=DCL$TOKEN, DNA=DOTCLD, DNS=4
+CLDRAB:
+        $RAB    FAB=CLDFAB, USZ=LINESIZE
+CLDDSC: .LONG   0                       ; the .CLD file's text, in CLDBUF
+        .ADDRESS CLDBUF
+PTABDSC:                                ; the room left for tables, in PTABS
+        .LONG   0, 0
+PTABLEN:                                ; the tables CDU$COMPILE made there
+        .WORD   0
+PTABFREE:                               ; the room left
+        .ADDRESS PTABS
+CLDBUF: .BLKB   CLDMAX                  ; the .CLD file, its lines each ending in LF
+PTABS:  .BLKB   PTABMAX                 ; the process's command tables
+DEFFAB: $FAB    FNA=DCL$TOKEN, NAM=DEFNAM ; SET and SHOW DEFAULT's $PARSE
+DEFNAM: $NAM    ESA=EXP, ESS=255
+EXP:    .BLKB   255                     ; its expanded string
+DIRDSC: .LONG   0, 0                    ; a descriptor of the directory in it
+DISK:   .ASCID  "SYS$DISK"
+DISKITEMS:                              ; $CRELNM's: the device in EXP
+        .WORD   0, LNM$_STRING
+        .LONG   0, 0, 0
+
+        .PSECT  CODE, EXE, LONG
+; DCL$SETDEF, SET DEFAULT spec: $PARSEs spec, which must name no file,
+; and makes the directory it expands to the default, with $SETDDIR, and
+; its device the process's SYS$DISK. One that doesn't exist is still
+; set, as VMS does, with a message.
+DCL$SETDEF::
+        MOVAB   V_DIR, R1
+        BSBW    DCL$GETVAL
+        TSTL    R8
+        BNEQ    5$
+        BRW     DCL$INSFPRM
+5$:
+        MOVB    R8, DEFFAB+FAB$B_FNS
+        $PARSE  FAB=DEFFAB
+        MOVL    R0, R6
+        CMPL    R0, #RMS$_DNF
+        BEQL    10$
+        BLBC    R0, 20$
+10$:    MOVL    #RMS$_SYN, R0
+        TSTB    DEFNAM+NAM$B_NAME
+        BNEQ    20$
+        MOVZBL  DEFNAM+NAM$B_DIR, DIRDSC
+        MOVL    DEFNAM+NAM$L_DIR, DIRDSC+4
+        $SETDDIR_S NEWDIR=DIRDSC
+        BLBC    R0, 20$
+        MOVZBW  DEFNAM+NAM$B_DEV, DISKITEMS
+        MOVL    DEFNAM+NAM$L_DEV, DISKITEMS+4
+        $CRELNM_S TABNAM=DCL$PROCESS, LOGNAM=DISK, ITMLST=DISKITEMS
+        BLBC    R0, 20$
+        CMPL    R6, #RMS$_DNF
+        BNEQ    20$
+        ADDTEXT "%DCL-I-INVDEF, "
+        BSBW    ADDDEF
+        ADDTEXT " does not exist"
+        BSBW    DCL$SAY
+        BRW     DCL$OK
+20$:    BRW     DCL$DONE
+
+; DCL$SETCOMMAND, SET COMMAND file: compiles the command definitions in
+; file, file.CLD if it has no type, with CDU$COMPILE, into the process's
+; tables in PTABS, which DCL looks for a verb in before DCL$TABLES, the
+; last first (ADR-0018).
+DCL$SETCOMMAND::
+        MOVAB   DCL$V_FILE, R1
+        BSBW    DCL$GETVAL
+        TSTL    R8
+        BNEQ    5$
+        BRW     DCL$INSFPRM
+5$:     CMPL    DCL$PTABVEC, #MAXPTAB
+        BLSSU   7$
+        PRINT   "%CDU-E-TABOVF, command tables full"
+        BRW     DCL$WARN
+7$:     MOVB    R8, CLDFAB+FAB$B_FNS
+        $OPEN   FAB=CLDFAB
+        BLBC    R0, 80$
+        $CONNECT RAB=CLDRAB
+        BLBC    R0, 70$
+        MOVAB   CLDBUF, R11             ; where the next line goes
+10$:    MOVAB   CLDBUF+CLDMAX-LINESIZE-1, R0
+        CMPL    R11, R0
+        BLEQU   15$
+        MOVL    #RMS$_DME, R0           ; no room
+        BRB     70$
+15$:    MOVL    R11, CLDRAB+RAB$L_UBF
+        $GET    RAB=CLDRAB
+        BLBS    R0, 20$
+        CMPL    R0, #RMS$_RTB           ; too long: what fits
+        BEQL    20$
+        CMPL    R0, #RMS$_EOF
+        BNEQ    70$
+        BRB     30$
+20$:    MOVZWL  CLDRAB+RAB$W_RSZ, R0
+        ADDL2   R0, R11
+        MOVB    #10, (R11)+
+        BRB     10$
+30$:    $CLOSE  FAB=CLDFAB
+        MOVAB   CLDBUF, R0
+        SUBL3   R0, R11, CLDDSC
+        MOVAB   PTABS+PTABMAX, R0       ; the room left
+        SUBL3   PTABFREE, R0, PTABDSC
+        MOVL    PTABFREE, PTABDSC+4
+        PUSHAW  PTABLEN
+        PUSHAQ  PTABDSC
+        PUSHAQ  CLDDSC
+        CALLS   #3, G^CDU$COMPILE
+        BLBC    R0, 80$                 ; reported
+        MOVL    DCL$PTABVEC, R1         ; the last first
+40$:    TSTL    R1
+        BEQL    50$
+        MOVL    DCL$PTABVEC[R1], DCL$PTABVEC+4[R1]
+        DECL    R1
+        BRB     40$
+50$:    MOVL    PTABFREE, DCL$PTABVEC+4
+        INCL    DCL$PTABVEC
+        MOVZWL  PTABLEN, R0             ; the next ones after them, aligned
+        ADDL2   #3, R0
+        BICL2   #3, R0
+        ADDL2   R0, PTABFREE
+        BRW     DCL$OK
+70$:    PUSHL   R0
+        $CLOSE  FAB=CLDFAB
+        MOVL    (SP)+, R0
+80$:    BRW     DCL$DONE
+
+; DCL$SHOWDEF, SHOW DEFAULT: shows the default device and directory,
+; what $PARSE expands an empty specification to.
+DCL$SHOWDEF::
+        CLRB    DEFFAB+FAB$B_FNS
+        $PARSE  FAB=DEFFAB
+        CMPL    R0, #RMS$_DNF
+        BEQL    10$
+        BLBC    R0, 20$
+10$:    ADDTEXT "  "
+        BSBW    ADDDEF
+        BSBW    DCL$SAY
+        MOVL    #SS$_NORMAL, R0
+20$:    BRW     DCL$DONE
+
+; DCL$SHOWDEV, SHOW DEVICES [name]: lists the disks, with their status,
+; error counts and their volumes' labels and free blocks, then the
+; terminal, under VMS's headings, or only the devices whose names start
+; with name, with * and % wildcards: SHOW DEVICES DK. It finds them with
+; $DEVICE_SCAN, a class at a time, and asks each about itself with
+; $GETDVIW. SS$_NOSUCHDEV if none matches. With /MOUNTED, only the
+; devices with a volume mounted. ponytail: no transactions or mount
+; counts, which nothing keeps; no /FULL.
+DCL$SHOWDEV::
+        MOVAB   V_MOUNTED, R1
+        BSBW    DCL$ISPRES
+        BICL3   #^C1, R0, MOUNTED
+        MOVAB   V_DEVNAM, R1
+        BSBW    DCL$GETVAL
+        TSTL    R8                      ; name*, without its colon
+        BEQL    5$
+        CMPB    DCL$TOKEN-1[R8], #^A/:/
+        BNEQ    3$
+        DECL    R8
+3$:     MOVB    #^A/*/, DCL$TOKEN[R8]
+        INCL    R8
+5$:     MOVL    R8, PATDSC
+        CLRL    R7                      ; the devices listed
+        MOVL    #DC$_DISK, DEVCLASS
+        BSBB    SCAN
+        MOVL    #DC$_TERM, DEVCLASS
+        BSBB    SCAN
+        MOVL    #SS$_NORMAL, R0
+        TSTL    R7
+        BNEQ    10$
+        MOVL    #SS$_NOSUCHDEV, R0
+10$:    BRW     DCL$DONE
+
+; SCAN: lists the devices of DEVCLASS's class whose names match PATDSC's,
+; under their headings, if there are any. R7 = how many there were, and
+; as many more. Uses R0-R6.
+SCAN:   CLRQ    SCANCTX
+        CLRL    R6                      ; 1 once the headings are out
+10$:    $DEVICE_SCAN_S RETURN_DEVNAM=DEVDSC, RETLEN=DVINAM, SEARCH_DEVNAM=PATDSC, ITMLST=DVSITEMS, CONTXT=SCANCTX
+        BLBC    R0, 90$
+        $GETDVIW_S DEVNAM=DVINAM, ITMLST=DVIITEMS
+        BLBC    R0, 10$
+        TSTL    MOUNTED
+        BEQL    12$
+        TSTL    V_MNT
+        BEQL    10$
+12$:    TSTL    R6
+        BNEQ    20$
+        INCL    R6
+        PRINT   ""
+        CMPL    DEVCLASS, #DC$_DISK
+        BNEQ    15$
+        PRINT   "Device                  Device           Error    Volume         Free"
+        PRINT   " Name                   Status           Count     Label        Blocks"
+        BRB     20$
+15$:    PRINT   "Device                  Device           Error"
+        PRINT   " Name                   Status           Count"
+20$:    INCL    R7
+        MOVAB   DEVNAME+1, R1           ; without its underscore
+        MOVZWL  DVINAM, R2
+        DECL    R2
+        BSBW    DCL$ADD
+        MOVL    #24, R3
+        BSBW    DCL$PADTO
+        MOVAB   S_OFFLINE, R1
+        BITL    #UCB$M_ONLINE, V_STS
+        BEQL    25$
+        MOVAB   S_ONLINE, R1
+25$:    TSTL    V_MNT
+        BEQL    30$
+        MOVAB   S_MOUNTED, R1
+        TSTL    V_SWL
+        BEQL    30$
+        MOVAB   S_WRTLCK, R1
+30$:    BSBW    DCL$ADDCSTR
+        MOVL    #41, R3
+        BSBW    DCL$PADTO
+        MOVL    V_ERRCNT, R1
+        MOVL    #5, R3
+        BSBW    DCL$ADDDEC
+        TSTL    V_MNT
+        BEQL    40$
+        ADDTEXT "  "
+        MOVAB   DEVLABEL+1, R1
+        MOVZWL  LABLEN, R2
+        BSBW    DCL$ADD
+        MOVL    #62, R3
+        BSBW    DCL$PADTO
+        MOVL    DEVFREE, R1
+        MOVL    #8, R3
+        BSBW    DCL$ADDDEC
+40$:    BSBW    DCL$SAY
+        BRW     10$
+90$:    RSB
+
+; ADDDEF: appends the device and directory $PARSE left in DEFNAM to
+; DCL$MSG. Uses R0-R2.
+ADDDEF: MOVL    DEFNAM+NAM$L_DEV, R1
+        MOVZBL  DEFNAM+NAM$B_DEV, R2
+        ADDB2   DEFNAM+NAM$B_DIR, R2
+        BRW     DCL$ADD

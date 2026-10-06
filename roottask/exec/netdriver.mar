@@ -42,7 +42,6 @@
         .EXTERNAL EXE$GL_RPB, EXE$ALONONPAGED, EXE$DEANONPGDSIZ
         .EXTERNAL IOC$AB_BGA0, IOC$ALLOCIRP, IOC$REQCOM
 
-MAXCHAN = 31                            ; as qio.mar's
 ; An IRP of this driver's holds the command after the packet, and a
 ; send's or receive's data after that.
 NIRP$A_MSG = IRP$K_LENGTH               ; the command, PORTMSG$K_LENGTH bytes
@@ -492,7 +491,7 @@ LISTEN: CLRL    R1
 ; unit at once; the response gives it its connection.
 ACCEPT: MOVL    40(AP), R0
         BEQL    80$
-        CMPL    R0, #MAXCHAN
+        CMPL    R0, #PCB$C_MAXCHAN
         BGTRU   80$
         BBC     R0, PCB$L_CHANS(R4), 80$
         MOVAB   G^IOC$AB_BGA0, R1
@@ -721,7 +720,7 @@ NET$CANCEL::
         MOVL    R5, R0
         MOVL    #UCB$K_NETLENGTH, R1
         BSBW    EXE$DEANONPGDSIZ
-70$:    AOBLEQ  #MAXCHAN, R8, 50$
+70$:    AOBLEQ  #PCB$C_MAXCHAN, R8, 50$
 90$:    POPR    #^M<R4, R5, R6, R7, R8>
         RSB
 
