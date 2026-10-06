@@ -148,7 +148,9 @@ MB$GL_UNIT::                            ; the last unit number given, 1-99 then 
 ; channel yet, permanent for prmflg = 1, with the next unit number no
 ; mailbox has. R5 = its UCB, R0 = SS$_NORMAL, or SS$_INSFMEM, also with
 ; all 99 taken. IPL$_SYNCH. Uses R1 and R2.
-NEWMBX: MOVL    #99, R1
+NEWMBX:
+        .JSB_ENTRY  OUTPUT=<R5>, SCRATCH=<R2>
+        MOVL    #99, R1
 10$:    AOBLEQ  #99, MB$GL_UNIT, 20$
         MOVL    #1, MB$GL_UNIT
 20$:    MOVL    MB$GL_UNIT, R0
@@ -236,6 +238,7 @@ NEWMBX: MOVL    #99, R1
 ; R0 = SS$_NORMAL, SS$_ILLIOFUNC, SS$_ACCVIO, SS$_MBTOOSML, SS$_MBFULL, or
 ; IOC$ALLOCIRP's failure. IPL$_SYNCH. Uses R0-R8.
 MB$FDT::
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5, R6, R7, R8>
         BICL3   #^C63, 12(AP), R0       ; the function, without modifiers
         CMPL    R0, #IO$_WRITEVBLK
         BEQL    MBWRITE
@@ -308,6 +311,7 @@ MBREAD: MOVL    28(AP), R6
 ; longer than the mailbox takes, SS$_MBFULL if the mailbox has no room
 ; for it, or SS$_INSFMEM. IPL$_SYNCH. Keeps every other register.
 MB$SEND::
+        .JSB_ENTRY
         MOVL    #SS$_MBTOOSML, R0
         CMPL    R2, UCB$L_MAXMSG(R5)
         BGTRU   90$
@@ -335,6 +339,7 @@ MB$SEND::
 ; reads waiting there, in turn, while there are both, and completes them.
 ; IPL$_SYNCH. Uses R0-R4.
 HANDOUT:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4>
 10$:    MOVL    UCB$L_IOQFL(R5), R3     ; the read
         CMPL    R3, R5
         BEQL    90$
@@ -372,6 +377,7 @@ HANDOUT:
 ; going: a mailbox whose last channel goes is deleted, unless it is
 ; permanent. IPL$_SYNCH. Uses R0-R3.
 MB$CANCEL::
+        .JSB_ENTRY  SCRATCH=<R2, R3>
         PUSHR   #^M<R5, R8>
         MOVL    #1, R8
 10$:    BBC     R8, R6, 30$
@@ -390,7 +396,9 @@ MB$CANCEL::
 ; UNUSED: R5 = a mailbox's UCB. Deletes the mailbox if it is temporary
 ; and no channel is assigned to it: its messages, the logical names that
 ; name it, and its UCB. IPL$_SYNCH. Uses R0-R3.
-UNUSED: TSTL    UCB$L_REFC(R5)
+UNUSED:
+        .JSB_ENTRY  SCRATCH=<R2, R3>
+        TSTL    UCB$L_REFC(R5)
         BNEQ    90$
         BBS     #UCB$V_PRMMBX, UCB$L_MBSTS(R5), 90$
         PUSHR   #^M<R6, R7>
@@ -415,7 +423,9 @@ UNUSED: TSTL    UCB$L_REFC(R5)
 
 ; UNNAME: R5 = a mailbox's UCB. Deletes the logical names in the system
 ; table that name it, _MBnn:. IPL$_SYNCH. Uses R0-R3, R6 and R7.
-UNNAME: SUBL2   #8, SP
+UNNAME:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R6, R7>
+        SUBL2   #8, SP
         MOVB    #^A/_/, (SP)
         MOVL    UCB$T_NAME(R5), 1(SP)
         MOVB    #^A/:/, 5(SP)
@@ -429,6 +439,7 @@ UNNAME: SUBL2   #8, SP
 ; MAILBOX: R5 = a UCB. R0 = 1 if it is a mailbox's, else 0. Keeps every
 ; other register.
 MAILBOX:
+        .JSB_ENTRY
         CLRL    R0
         PUSHL   R1
         MOVAB   MB$FDT, R1
@@ -441,6 +452,7 @@ MAILBOX:
 ; MB$FINDUNIT: R3 = a device name's four characters, DDCU. R5 = the
 ; mailbox by that name, or 0. Keeps every other register.
 MB$FINDUNIT::
+        .JSB_ENTRY  OUTPUT=<R5>
         MOVL    MB$GL_UNITS, R5
 10$:    TSTL    R5
         BEQL    90$
@@ -453,6 +465,7 @@ MB$FINDUNIT::
 ; MB$FINDNUM: R0 = a unit number. R5 = the mailbox with it, MBnn, or 0.
 ; Keeps every other register.
 MB$FINDNUM::
+        .JSB_ENTRY  OUTPUT=<R5>
         MOVL    MB$GL_UNITS, R5
 10$:    TSTL    R5
         BEQL    90$

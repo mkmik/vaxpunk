@@ -319,8 +319,9 @@ sign-extends from bit 31.
   `output` and `scratch`; a register its JSB routines in the same module
   declare `output` or `scratch` counts as modified; a `JSB` to a routine in
   another module counts as modifying all of R2-R11, unless a
-  `.CALL_LINKAGE` or `.USE_LINKAGE` says what it modifies. JSB routines
-  preserve as *JSB* says.
+  `.CALL_LINKAGE` or `.USE_LINKAGE` says what it modifies, or the modules
+  are compiled together, which gives each the others' declarations as
+  linkages. JSB routines preserve as *JSB* says.
 - **Arguments.** `n(AP)` reads the argument list at `32(FP)`: a count
   longword and one longword per argument, or quadwords with `quad_args`.
   The prologue fills it, from x0-x7, the caller's stack and x9, when the

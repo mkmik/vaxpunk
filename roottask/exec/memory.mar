@@ -52,6 +52,7 @@ MMG$AL_FREEPFN:
 ; MMG$INIT: puts the PFNs the boot left free on the free list and makes
 ; the pool. Uses R0-R5.
 MMG$INIT::
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5>
         MOVL    EXE$GL_RPB, R5
         MOVL    RPB$L_PFNCNT(R5), R2
         CMPL    R2, #MMG$C_MAXPFN
@@ -78,6 +79,7 @@ MMG$INIT::
 ; MMG$ALLOCPFN: R0 = a free PFN, or 0 if there is none: PFN 0 is the
 ; boot's. IPL$_SYNCH.
 MMG$ALLOCPFN::
+        .JSB_ENTRY
         MOVL    MMG$GL_FREECNT, R0
         BEQL    10$
         DECL    R0
@@ -87,6 +89,7 @@ MMG$ALLOCPFN::
 
 ; MMG$DEALLOCPFN: R0 = a PFN to free. IPL$_SYNCH. Keeps every register.
 MMG$DEALLOCPFN::
+        .JSB_ENTRY
         PUSHL   R1
         MOVL    MMG$GL_FREECNT, R1
         MOVL    R0, MMG$AL_FREEPFN[R1]
@@ -99,6 +102,7 @@ MMG$DEALLOCPFN::
 ; that protection, replacing any there. R0 = SS$_NORMAL, or SS$_INSFMEM
 ; when the PFNs run out, with the pages made so far left. Uses R0-R2.
 MMG$CREPAG::
+        .JSB_ENTRY  SCRATCH=<R2>
         PUSHR   #^M<R3, R4, R5, R6>
         DSBINT  #IPL$_SYNCH
         MOVL    R0, R3
@@ -135,6 +139,7 @@ MMG$CREPAG::
 
 ; FREEOLD: R0 = a PTE WRPTE replaced. Frees its PFN if it had one.
 FREEOLD:
+        .JSB_ENTRY
         BBC     #PTE$V_VALID, R0, 10$
         BICL2   #^C<PTE$M_PFN>, R0
         BSBW    MMG$DEALLOCPFN
@@ -143,6 +148,7 @@ FREEOLD:
 ; MMG$DELPAG: R0 = a page's address, R1 = a page count. Deletes those
 ; pages and frees their PFNs. Uses R0-R1.
 MMG$DELPAG::
+        .JSB_ENTRY
         PUSHR   #^M<R2, R3>
         DSBINT  #IPL$_SYNCH
         MOVL    R0, R2
@@ -162,6 +168,7 @@ MMG$DELPAG::
 ; new valid bit, protection and execute bit. Changes the protection of
 ; pages that exist. Uses R0-R2.
 MMG$SETPRT::
+        .JSB_ENTRY  SCRATCH=<R2>
         PUSHR   #^M<R3, R4>
         DSBINT  #IPL$_SYNCH
         MOVL    R0, R3
@@ -185,6 +192,7 @@ MMG$SETPRT::
 ; pool, 16-byte aligned, first fit: R2 = its address, R1 = the size it
 ; got, R0 = SS$_NORMAL or SS$_INSFMEM. The block isn't zeroed.
 EXE$ALONONPAGED::
+        .JSB_ENTRY  SCRATCH=<R2>
         PUSHR   #^M<R3, R4>
         DSBINT  #IPL$_SYNCH
         ADDL2   #15, R1
@@ -214,6 +222,7 @@ EXE$ALONONPAGED::
 ; EXE$DEANONPGDSIZ: R0 = a pool block, R1 = its size. Frees it, merging
 ; it with free neighbours. Keeps every register.
 EXE$DEANONPGDSIZ::
+        .JSB_ENTRY
         PUSHR   #^M<R0, R1, R2, R3, R4>
         DSBINT  #IPL$_SYNCH
         ADDL2   #15, R1
@@ -253,7 +262,9 @@ EXE$DEANONPGDSIZ::
 ; SS$_ACCVIO if the caller can't read inadr or write retadr, or
 ; SS$_PAGOWNVIO if the range isn't all in P0, or all in P1 below the
 ; command interpreter's and the mode stacks' VA$C_CLI. Uses R1.
-INADR:  MOVL    8(AP), R1
+INADR:
+        .JSB_ENTRY  OUTPUT=<R2, R3>
+        MOVL    8(AP), R1
         BEQL    10$
         IFNOWRT #8, (R1), 80$
 10$:    MOVL    4(AP), R1
@@ -284,7 +295,9 @@ INADR:  MOVL    8(AP), R1
 
 ; RETADR: R0 = a first page, R1 = a page count, R2 = the address of a
 ; retadr argument, 0 if none. Stores the range's first and last bytes.
-RETADR: TSTL    R2
+RETADR:
+        .JSB_ENTRY
+        TSTL    R2
         BEQL    10$
         MOVL    R0, (R2)
         ASHL    #MMG$C_VPCTX, R1, R1

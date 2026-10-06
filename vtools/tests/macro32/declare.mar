@@ -1,0 +1,90 @@
+        .TITLE  DECLARE Routines keep the registers their declarations say
+        .LIBRARY "vrun.mlb"
+
+; A routine keeps all 64 bits of each register it modifies, as AMACRO's
+; did, unless its declaration says otherwise. Only ARM64 sees the upper
+; halves: FILL gives R2-R11 (x19-x28) patterns there, and KEPT and LOST
+; check them. A failed check returns 2 * N, an error status, so the exit
+; code says which.
+
+        .MACRO  FILL
+        .IRP    N, <19, 20, 21, 22, 23, 24, 25, 26, 27, 28>
+        movk    x'N, #256+N, lsl #32
+        .ENDR
+        .ENDM   FILL
+
+        .MACRO  KEPT    R, N, ?OK
+        lsr     x16, x'R, #32
+        cmp     w16, #256+R
+        b.eq    OK
+        MOVL    #<N * 2>, R0
+        RET
+OK:
+        .ENDM   KEPT
+
+        .MACRO  LOST    R, N, ?OK
+        lsr     x16, x'R, #32
+        cmp     w16, #256+R
+        b.ne    OK
+        MOVL    #<N * 2>, R0
+        RET
+OK:
+        .ENDM   LOST
+
+        .PSECT  CODE, EXE, LONG
+        .ENTRY  DECLARE, ^M<R2, R3, R4, R5, R6, R7, R8, R9, R10, R11>
+        FILL
+        JSB     WRITES                  ; R2 kept, R3 scratch, R4 output
+        KEPT    19, 1
+        LOST    20, 2
+        LOST    21, 3
+        CMPL    R4, #4
+        BEQL    10$
+        MOVL    #8, R0
+        RET
+10$:    FILL
+        JSB     BARRIER                 ; .JSB32_ENTRY: R5 lost, R6 kept
+        LOST    22, 5
+        KEPT    23, 6
+        FILL
+        CALLS   #0, CALLER              ; keeps all, R5 too, through BARRIER
+        .IRP    N, <19, 20, 21, 22, 23, 24, 25, 26, 27, 28>
+        KEPT    N, 7
+        .ENDR
+        FILL
+        JSB     PUSHES                  ; PUSHR keeps only the low halves
+        KEPT    25, 8
+        $PUT    "declare ok"<10>
+        MOVL    #1, R0
+        RET
+
+; WRITES: writes R2-R4, of which R3 is scratch and R4 the output.
+WRITES: .JSB_ENTRY  OUTPUT=<R4>, SCRATCH=<R3>
+        MOVL    #2, R2
+        MOVL    #3, R3
+        MOVL    #4, R4
+        RSB
+
+; BARRIER: keeps only what PRESERVE says.
+BARRIER:
+        .JSB32_ENTRY PRESERVE=<R6>
+        MOVL    #5, R5
+        MOVL    #6, R6
+        RSB
+
+; CALLER: a CALL routine saves what its JSB routines modify, as well as
+; what it writes itself, whatever its declaration doesn't mention.
+CALLER: .CALL_ENTRY
+        MOVL    #7, R7
+        JSB     BARRIER
+        RET
+
+; PUSHES: saves R8 with PUSHR, which cuts it to a longword; the routine
+; keeps it whole anyway, since it modifies it.
+PUSHES: .JSB_ENTRY
+        PUSHR   #^M<R8>
+        MOVL    #8, R8
+        POPR    #^M<R8>
+        RSB
+
+        .END    DECLARE

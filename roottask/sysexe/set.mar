@@ -123,7 +123,9 @@ FILE:   GETVALUE "FILE", SPECDSC, SPECDSC
 ; LOOKUP: R5 = a privilege's name, R6 = its length. Puts its bit in MASK,
 ; or every bit for ALL. R0 = 1, or 0 for a name it doesn't know. Uses
 ; R0-R3.
-LOOKUP: CLRQ    MASK
+LOOKUP:
+        .JSB_ENTRY  SCRATCH=<R2, R3>
+        CLRQ    MASK
         MOVAB   ALLNAM, R1
         BSBB    MATCH
         BLBC    R0, 5$
@@ -150,7 +152,9 @@ LOOKUP: CLRQ    MASK
 
 ; MATCH: R1 = a .ASCIC name, R5 = a value, R6 = its length. R0 = 1 if
 ; they are the same, else 0. Uses R0, R1 and R3.
-MATCH:  MOVZBL  (R1)+, R0
+MATCH:
+        .JSB_ENTRY  SCRATCH=<R3>
+        MOVZBL  (R1)+, R0
         CMPL    R0, R6
         BNEQ    80$
         CLRL    R3

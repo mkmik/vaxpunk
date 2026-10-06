@@ -216,6 +216,8 @@ const POOL: [u8; 9] = [13, 9, 8, 11, 10, 17, 16, 15, 14];
 /// Code for one VAX instruction.
 pub struct Gen<'a> {
     pub out: Vec<String>,
+    /// The VAX registers R0-R11 it writes, bit n for Rn.
+    pub written: u16,
     free: Vec<u8>,
     /// Registers that operand side effects change, so reading them as
     /// operands must take a copy first.
@@ -245,6 +247,7 @@ impl<'a> Gen<'a> {
             .collect();
         Gen {
             out: Vec::new(),
+            written: 0,
             free: POOL.to_vec(),
             side,
             constant,
@@ -337,17 +340,20 @@ impl<'a> Gen<'a> {
         Ok(match mode {
             Mode::Def(n) => (format!("x{}", arm(*n)?), 0),
             Mode::Inc(n) => {
+                self.wrote(*n);
                 let (r, t) = (arm(*n)?, self.tmp()?);
                 self.emit(format!("mov {t}, x{r}"));
                 self.emit(format!("add x{r}, x{r}, #{}", size.bytes()));
                 (t, 0)
             }
             Mode::Dec(n) => {
+                self.wrote(*n);
                 let r = arm(*n)?;
                 self.emit(format!("sub x{r}, x{r}, #{}", size.bytes()));
                 (format!("x{r}"), 0)
             }
             Mode::IncDef(n) => {
+                self.wrote(*n);
                 let (r, t) = (arm(*n)?, self.tmp()?);
                 self.emit(format!("ldr {}, [x{r}], #4", w(&t)));
                 (t, 0)
@@ -587,6 +593,10 @@ impl<'a> Gen<'a> {
         match p {
             Place::Reg(n) => {
                 let r = arm(*n)?;
+                self.wrote(*n);
+                if size == Size::Q {
+                    self.wrote(n + 1);
+                }
                 match size {
                     Size::L if v.ends_with("zr") => self.emit(format!("mov x{r}, xzr")),
                     Size::L => self.emit(format!("sxtw x{r}, {}", w(v))),
@@ -645,6 +655,13 @@ impl<'a> Gen<'a> {
 }
 
 impl Gen<'_> {
+    /// Notes that the instruction writes VAX register `n`.
+    pub fn wrote(&mut self, n: u8) {
+        if n < 12 {
+            self.written |= 1 << n;
+        }
+    }
+
     /// Sign-extends register x`r`'s longword.
     pub fn sext(&mut self, r: u8) {
         self.emit(format!("sxtw x{r}, w{r}"));

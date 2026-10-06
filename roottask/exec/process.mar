@@ -91,6 +91,7 @@ STDNAMES:                               ; for $CREPRC's input, output and error
 ; EXE$MATCHNAME: compares the .ASCIC string at R0 with the R7 bytes at R6.
 ; R0 = 1 if they are the same, else 0. Uses R1.
 EXE$MATCHNAME::
+        .JSB_ENTRY
         CMPB    (R0)+, R7
         BNEQ    20$
         CLRL    R1
@@ -107,6 +108,7 @@ EXE$MATCHNAME::
 
 ; COPYNAME: copies R7 bytes from R1 to R0. Uses R5.
 COPYNAME:
+        .JSB_ENTRY  SCRATCH=<R5>
         CLRL    R5
         BRB     20$
 10$:    MOVB    (R1)[R5], (R0)[R5]
@@ -119,6 +121,7 @@ COPYNAME:
 ; R0 = SS$_NORMAL if the previous mode may read it and its string, else
 ; SS$_ACCVIO. Keeps every other register.
 EXE$PROBER_DSC::
+        .JSB_ENTRY
         IFNORD  #8, (R1), 90$
         PUSHL   R2
         MOVZWL  (R1), R0
@@ -140,6 +143,7 @@ EXE$PROBER_DSC::
 ; SS$_NONEXPR, SS$_IVLOGNAM, or SS$_ACCVIO if the caller can't write
 ; pidadr or read prcnam. Its PID goes to pidadr. IPL$_SYNCH.
 EXE$NAMPID::
+        .JSB_ENTRY
         PUSHR   #^M<R5, R6, R7>
         TSTL    R2
         BEQL    20$
@@ -196,6 +200,7 @@ EXE$NAMPID::
 ; its UIC, itself included, with GROUP one in its UIC group, with WORLD
 ; any; else SS$_NOPRIV. Keeps every other register.
 EXE$PRCPRIV::
+        .JSB_ENTRY
         MOVL    #SS$_NORMAL, R0
         CMPL    PCB$L_UIC(R1), PCB$L_UIC(R4)
         BEQL    90$
@@ -397,6 +402,7 @@ EXE$PRCPRIV::
 ; SYS$OUTPUT and SYS$ERROR, those of input, output and error it was given.
 ; R0 = SS$_NORMAL or SS$_INSFMEM. Uses R1, R2, R5-R7, R9 and R10.
 PPNAMES:
+        .JSB_ENTRY  SCRATCH=<R2, R5, R6, R7, R9, R10>
         PUSHR   #^M<R3, R8>
         MOVAQ   PCB$Q_LNMHD(R8), R5
         MOVL    R5, (R5)
@@ -425,6 +431,7 @@ PPNAMES:
 ; and activates its image. Calls a command interpreter in supervisor mode,
 ; at EXE$CLIENTRY, and any other image in user mode, at EXE$USRENTRY.
 EXE$PROCSTRT::
+        .EXCEPTION_ENTRY
         MOVL    SCH$GL_CURPCB, R4
         MOVL    #VA$C_STACKS, PCB$L_FREP1VA(R4)
         MOVL    #VA$C_STACKS, R0
@@ -460,6 +467,7 @@ EXE$PROCSTRT::
 ; Calls the image in user mode, at EXE$USRSTART, on an empty user stack
 ; below VA$C_CLI_RESULT, which holds its command's parse. Doesn't return.
 EXE$USRENTRY::
+        .EXCEPTION_ENTRY
         MOVAB   EXE$USRSTART, R2
         MOVL    #<PSL$C_USER@PSL$V_CURMOD>!<PSL$C_USER@PSL$V_PRVMOD>, R3
         MOVL    #VA$C_CLI_RESULT, R5    ; below the command's parse
@@ -470,6 +478,7 @@ EXE$USRENTRY::
 ; interpreter with it, in supervisor mode, at EXE$CLISTART, on an empty
 ; supervisor stack. Doesn't return.
 EXE$CLIENTRY::
+        .EXCEPTION_ENTRY
         ADDL3   #KSTACK, PCB$L_KSTACK(R4), SP   ; an empty kernel stack
 CLICALL:
         MOVL    PCB$L_CLI(R4), R1
@@ -480,12 +489,14 @@ CLICALL:
 ; REIOUT: R2 = a PC, R3 = a PSL with an outer mode, R5 = that mode's stack
 ; pointer. Empties the kernel stack and REIs there, with R0 and R1 as they
 ; are.
-REIOUT: ADDL3   #KSTACK, PCB$L_KSTACK(R4), SP
+REIOUT: .GLOBAL_LABEL
+        ADDL3   #KSTACK, PCB$L_KSTACK(R4), SP
 
 ; EXE$REISP: R2 = a PC, R3 = a PSL, R5 = the stack pointer of its mode.
 ; REIs there on the kernel stack as it is, 16-byte aligned, with R0 and R1
 ; as they are, leaving what is above it there. Doesn't return.
 EXE$REISP::
+        .EXCEPTION_ENTRY
         SUBL2   #INTSTK$K_LENGTH, SP
         MOVL    #INTSTK$K_LENGTH/8, R6
         MOVL    SP, R7
@@ -503,6 +514,7 @@ EXE$REISP::
 ; R3 = that EISD, or 0 past the last, and R10 = the next one's offset.
 ; Uses R0.
 NEXTISD:
+        .JSB_ENTRY  OUTPUT=<R3, R10>
 10$:    CMPL    R10, EIHD$L_SIZE(R8)
         BGEQU   30$
         ADDL3   R8, R10, R3
@@ -530,6 +542,7 @@ NEXTISD:
 ; RMS$_FNF, SS$_BADIMGHDR, SS$_VASFULL or SS$_INSFMEM.
 ; ponytail: images run where they are linked; the EIAF moves them.
 IMG$ACTIVATE::
+        .JSB_ENTRY
         PUSHR   #^M<R2, R3, R4, R5, R6, R7, R8, R9, R10, R11>
         PUSHL   R5
         MOVZBL  PCB$T_IMAGE(R4), R7
@@ -662,6 +675,7 @@ IMG$ACTIVATE::
         RET
 5$:     CLRL    (R0)
 10$:    CALLG   (AP), EXE$IMGEXIT
+        HALT                            ; EXE$IMGEXIT doesn't return
 
 ; EXE$IMGEXIT: $EXIT without the exit handlers, called with code: ends
 ; the image. In a process with a command interpreter, it runs the image
@@ -670,7 +684,7 @@ IMG$ACTIVATE::
 ; reported on the console, as a command interpreter would. Either way
 ; code is the process's final status, which its termination message has.
 ; Doesn't return.
-        .ENTRY  EXE$IMGEXIT, ^M<>
+        .ENTRY  EXE$IMGEXIT, ^M<R4, R8>
         MOVL    SCH$GL_CURPCB, R4
         MOVL    4(AP), PCB$L_FINALSTS(R4)
         TSTL    PCB$L_CLI(R4)
@@ -738,6 +752,7 @@ IMG$ACTIVATE::
 ; EXHLIST: R0 = the address of the caller's mode's exit handler list, in
 ; the current PCB. Uses R1.
 EXHLIST:
+        .JSB_ENTRY
         CALL_PAL #PAL$_RD_PS
         EXTZV   #PSL$V_PRVMOD, #2, R0, R0
         MOVL    SCH$GL_CURPCB, R1
@@ -756,6 +771,7 @@ EXHLIST:
 ; ponytail: what the command interpreter holds too, but its channels; it
 ; uses nothing else yet.
 EXE$IMGRUNDOWN::
+        .JSB_ENTRY  SCRATCH=<R2, R3>
         DSBINT  #IPL$_SYNCH
         BICL3   PCB$L_CLICHANS(R4), PCB$L_CHANS(R4), R0
         CLRL    R1
@@ -781,7 +797,9 @@ EXE$IMGRUNDOWN::
 ; DELP0: R4 = the current PCB. Deletes the pages of its P0. Uses R0-R3.
 ; ponytail: every page from P0's start to its end, mapped or not; a list
 ; of the pages a process has if that gets slow.
-DELP0:  MOVL    #VA$C_P0BASE, R0
+DELP0:
+        .JSB_ENTRY  SCRATCH=<R2, R3>
+        MOVL    #VA$C_P0BASE, R0
         SUBL3   R0, PCB$L_FREP0VA(R4), R1
         BLEQ    10$
         ASHL    #-MMG$C_VPCTX, R1, R1
@@ -796,6 +814,7 @@ DELP0:  MOVL    #VA$C_P0BASE, R0
 ; message. Runs in the process's own context, since P0 and P1 are the
 ; current process's. Uses R0-R3.
 EXE$RUNDOWN::
+        .JSB_ENTRY  SCRATCH=<R2, R3>
         BSBW    EXE$IMGRUNDOWN
         DSBINT  #IPL$_SYNCH
         MOVL    PCB$L_CHANS(R4), R0
@@ -829,6 +848,7 @@ EXE$RUNDOWN::
 ; $CREPRC's mbxunt named, if that is still there and has room for it:
 ; its final status, its PID, the time, and its creator's PID. Uses R0-R3.
 TERMMSG:
+        .JSB_ENTRY  SCRATCH=<R2, R3>
         TSTL    PCB$L_TMBU(R4)
         BEQL    90$
         PUSHL   R5
@@ -860,6 +880,7 @@ TERMMSG:
 ; down, leaves it for the swapper, which deletes its context, kernel stack
 ; and PCB, and gives up the CPU for good.
 EXE$DELSELF::
+        .EXCEPTION_ENTRY
         BSBW    EXE$RUNDOWN
         SETIPL  #IPL$_SYNCH
         CLRL    PCB$L_STATE(R4)
@@ -872,6 +893,7 @@ EXE$DELSELF::
 ; EXE$DELETEPCB: R4 = the PCB of a deleted process that isn't running.
 ; Deletes its context, kernel stack and PCB. Uses R0 and R1.
 EXE$DELETEPCB::
+        .JSB_ENTRY
         MOVL    PCB$L_HWPCB(R4), R0
         CALL_PAL #PAL$_DELCTX
         MOVL    PCB$L_KSTACK(R4), R0
@@ -927,6 +949,7 @@ EXE$DELETEPCB::
 ; DELKAST: $DELPRC's kernel mode AST. R4 = the current PCB, R5 = the ACB:
 ; frees it and deletes the process.
 DELKAST:
+        .JSB32_ENTRY                    ; doesn't return
         MOVL    R5, R0
         MOVZWL  ACB$W_SIZE(R5), R1
         BSBW    EXE$DEANONPGDSIZ
@@ -1026,6 +1049,7 @@ DELKAST:
         BRB     90$
 
 SUSPEND:
+        .JSB_ENTRY
         MOVL    #SCH$C_SUSP, PCB$L_STATE(R4)
         INSQUE  (R4), @SCH$GQ_SUSPWQ+4
         RSB

@@ -57,7 +57,9 @@ UNITNAME:
 
 ; LOGIN: creates the process for the connection on CHAN, and waits until
 ; it has assigned a channel to the connection's unit, or 5 seconds.
-LOGIN:  $QIOW_S CHAN=CHAN, FUNC=#IO$_SENSEMODE, IOSB=IOSB
+LOGIN:
+        .JSB_ENTRY  SCRATCH=<R2>
+        $QIOW_S CHAN=CHAN, FUNC=#IO$_SENSEMODE, IOSB=IOSB
         BSBW    STATUS
         BLBC    R0, 90$
         MOVZWL  IOSB+2, R0              ; nn
@@ -77,7 +79,9 @@ LOGIN:  $QIOW_S CHAN=CHAN, FUNC=#IO$_SENSEMODE, IOSB=IOSB
 90$:    RSB
 
 ; STATUS: R0 = $QIOW's status. R0 = the IOSB's, if that was a success.
-STATUS: BLBC    R0, 90$
+STATUS:
+        .JSB_ENTRY
+        BLBC    R0, 90$
         MOVZWL  IOSB, R0
 90$:    RSB
 

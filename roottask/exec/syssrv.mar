@@ -188,6 +188,7 @@ CODE = 0
 ; EXE$CMODEXEC's question, answered in R0. R0 and R1 go back to the
 ; caller in the frame, which REI restores every register from.
 EXE$CMODKRNL::
+        .EXCEPTION_ENTRY
         CMPL    R0, #CODE
         BGEQU   60$
         PUSHL   R0
@@ -219,6 +220,7 @@ EXE$CMODKRNL::
 ; code 0, for a process with CMEXEC or CMKRNL, which the PCB says: this
 ; mode can't read it, so a CHMK asks the kernel, SS$_NOPRIV without.
 EXE$CMODEXEC::
+        .EXCEPTION_ENTRY
         TSTL    R0
         BNEQ    80$
         CHMK    #CMEXECOK
@@ -243,6 +245,7 @@ EXE$CMODEXEC::
 ; all of it, SS$_INSFARG if it is too short. Uses R1. In the vector, for
 ; EXE$CMODEXEC, since executive mode may not run S0's other code.
 ARGLIST:
+        .JSB_ENTRY
         IFNORD  #4, (AP), 80$
         CMPB    (AP), R1
         BLSSU   85$
@@ -261,6 +264,7 @@ ARGLIST:
 ; transfer address: calls the image, and exits with the status it returns.
 ; A clear FP ends the frames a condition's handlers are looked for in.
 EXE$USRSTART::
+        .EXCEPTION_ENTRY
         CLRL    FP
         CALLS   #0, (R1)
         PUSHL   R0
@@ -271,6 +275,7 @@ EXE$USRSTART::
 ; parameter, then $ASTEXIT, which goes back to what the AST interrupted.
 ; Its conditions aren't looked for in the frames it interrupted.
 EXE$ASTDISP::
+        .EXCEPTION_ENTRY
         CLRL    FP
         PUSHL   R0
         CALLS   #1, (R1)
@@ -281,6 +286,7 @@ EXE$ASTDISP::
 ; the image that ran last: calls it with the status, and deletes the
 ; process if it returns.
 EXE$CLISTART::
+        .EXCEPTION_ENTRY
         CLRL    FP
         PUSHL   R0
         CALLS   #1, (R1)

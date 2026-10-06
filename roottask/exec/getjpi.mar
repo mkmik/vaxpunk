@@ -120,30 +120,13 @@ VALUE:  .LONG   0                       ; a byte or word item's, made a longword
         BRW     RETITEMS
 90$:    RET
 
-; $GETSYIW efn, csidadr, nodename, itmlst, iosb, astadr, astprm: as
-; $GETSYI.
-        .ENTRY  EXE$GETSYIW, ^M<>
-        CALLG   (AP), EXE$GETSYI
-        RET
-
-; CHKIOSB: AP = a $GETJPI or $GETSYI argument list. Checks the IOSB can be
-; written and clears the event flag. R0 = SS$_NORMAL, SS$_ACCVIO or
-; $CLREF's error. Uses R0-R1.
-CHKIOSB:
-        MOVL    20(AP), R0
-        BEQL    10$
-        IFNOWRT #8, (R0), 80$
-10$:    PUSHL   4(AP)
-        CALLS   #1, G^EXE$CLREF
-        RSB
-80$:    MOVL    #SS$_ACCVIO, R0
-        RSB
-
 ; RETITEMS: AP = a $GETJPI or $GETSYI argument list, R6 = its table,
 ; R5 = the PCB, or 0 for addresses. Fills in the item list's buffers,
 ; each with as much of its value as fits, then lowers IPL, writes the
-; IOSB, sets the event flag and returns from the service. IPL$_SYNCH. Not a routine.
+; IOSB, sets the event flag and returns from the service. IPL$_SYNCH. Not a
+; routine: $GETJPI's and $GETSYI's code, which save the same registers.
 RETITEMS:
+        .GLOBAL_LABEL
         MOVL    16(AP), R8
 10$:    IFNORD  #4, (R8), 84$
         TSTL    (R8)
@@ -202,5 +185,25 @@ RETITEMS:
 84$:    MOVL    #SS$_ACCVIO, R0
 90$:    ENBINT
         RET
+
+; $GETSYIW efn, csidadr, nodename, itmlst, iosb, astadr, astprm: as
+; $GETSYI.
+        .ENTRY  EXE$GETSYIW, ^M<>
+        CALLG   (AP), EXE$GETSYI
+        RET
+
+; CHKIOSB: AP = a $GETJPI or $GETSYI argument list. Checks the IOSB can be
+; written and clears the event flag. R0 = SS$_NORMAL, SS$_ACCVIO or
+; $CLREF's error. Uses R0-R1.
+CHKIOSB:
+        .JSB_ENTRY
+        MOVL    20(AP), R0
+        BEQL    10$
+        IFNOWRT #8, (R0), 80$
+10$:    PUSHL   4(AP)
+        CALLS   #1, G^EXE$CLREF
+        RSB
+80$:    MOVL    #SS$_ACCVIO, R0
+        RSB
 
         .END

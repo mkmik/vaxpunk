@@ -46,6 +46,7 @@ PBUFEND:
 ; it, one level deeper, with its parameters local symbols P1 to P8, ""
 ; those not given.
 DCL$DO::
+        .EXCEPTION_ENTRY
         INCL    R6
         BSBW    DCL$WORD
         TSTL    R8
@@ -113,6 +114,7 @@ DCL$DO::
 ; DCL$LINE. R7 = its length, R0 = 1, or 0 past its last line. Uses
 ; R0-R5.
 DCL$GETPROC::
+        .JSB_ENTRY  OUTPUT=<R7>, SCRATCH=<R2, R3, R4, R5>
         MOVL    DCL$DEPTH, R1
         MOVL    PNEXT[R1], R2
         CMPL    R2, PEND[R1]
@@ -128,6 +130,7 @@ DCL$GETPROC::
 ; DCL$EXITPROC: ends the procedure running, with its local symbols. Uses
 ; R0 and R1.
 DCL$EXITPROC::
+        .JSB_ENTRY
         MOVAB   DCL$SYMTAB, R1
 10$:    CMPL    SYM$L_LEVEL(R1), DCL$DEPTH
         BNEQ    20$
@@ -141,6 +144,7 @@ DCL$EXITPROC::
 
 ; DCL$ENDPROCS: ends every procedure running. Uses R0 and R1.
 DCL$ENDPROCS::
+        .JSB_ENTRY
         TSTL    DCL$DEPTH
         BEQL    10$
         BSBB    DCL$EXITPROC
@@ -150,6 +154,7 @@ DCL$ENDPROCS::
 ; DCL$IF, IF expression THEN command: does command if the expression is
 ; true.
 DCL$IF::
+        .EXCEPTION_ENTRY
         MOVAB   DCL$V_EXPR, R1
         BSBW    DCL$RESTVAL
         MOVAB   DCL$VSTACK, R9
@@ -171,6 +176,7 @@ DCL$IF::
 ; DCL$GOTO, GOTO label: goes on from the line of the procedure running
 ; that starts with label:. Does nothing at the console.
 DCL$GOTO::
+        .EXCEPTION_ENTRY
         MOVAB   V_LABEL, R1
         BSBW    DCL$VALNAME
         MOVL    DCL$DEPTH, R11
@@ -222,6 +228,7 @@ DCL$GOTO::
 ; there is one, exit with it, as VMS's does: $FORCEX's AST calls $EXIT,
 ; which calls its exit handlers, as soon as CONTINUE lets it run.
 DCL$EXIT::
+        .EXCEPTION_ENTRY
         MOVAB   V_STATUS, R1
         BSBW    DCL$RESTVAL
         MOVL    DCL$LASTSTAT, R0

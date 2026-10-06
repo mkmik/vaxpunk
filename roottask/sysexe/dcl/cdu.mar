@@ -311,6 +311,7 @@ ATLINE: .ASCIC  ", line "
 ; COMPILE: CDU$COMPILE's work, with its argument list. R11 = the tables
 ; throughout.
 COMPILE:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5, R6, R7, R8, R9, R10, R11>
         MOVL    SP, SAVESP
         MOVL    4(AP), R0               ; the text
         MOVL    4(R0), TXT
@@ -392,10 +393,69 @@ FIXUP:  CLRL    R6                      ; a reference
         MOVL    #SS$_NORMAL, R0
         RSB
 
+; ERROR: R0 = a CDU$_ status, R1 = an .ASCIC argument. Writes
+; %CDU-E-NAME, its text, the argument and the line of the token, and
+; returns from CDU$COMPILE with the status, from any routine COMPILE
+; calls: COMPILE's code, which SAVESP takes the stack back to.
+ERROR:  MOVL    SAVESP, SP
+        PUSHL   R0
+        PUSHL   R1
+        CLRB    MSG
+        MOVAB   PREFIX, R1
+        BSBW    ADDC
+        MOVAB   MESSAGES, R5
+10$:    TSTL    (R5)
+        BEQL    30$
+        CMPL    (R5)+, 4(SP)
+        BEQL    20$
+        MOVZBL  (R5), R0                ; past the name and the text
+        ADDL2   R0, R5
+        INCL    R5
+        MOVZBL  (R5), R0
+        ADDL2   R0, R5
+        INCL    R5
+        BRB     10$
+20$:    MOVL    R5, R1                  ; NAME, text
+        BSBW    ADDC
+        MOVAB   COMMA, R1
+        BSBW    ADDC
+        MOVZBL  (R5), R0
+        ADDL3   R0, R5, R1
+        INCL    R1
+        BSBW    ADDC
+30$:    MOVL    (SP)+, R1               ; the argument
+        BSBW    ADDC
+        MOVAB   ATLINE, R1
+        BSBW    ADDC
+        MOVL    TOKLINE, R1             ; the line, in decimal
+        CLRL    R2
+40$:    DIVL3   #10, R1, R3
+        MULL3   #10, R3, R4
+        SUBL3   R4, R1, R4
+        ADDL2   #^A"0", R4
+        PUSHL   R4
+        INCL    R2
+        MOVL    R3, R1
+        BNEQ    40$
+50$:    MOVL    (SP)+, R4
+        MOVZBL  MSG, R0
+        CMPL    R0, #255
+        BGEQU   55$
+        INCB    MSG
+        MOVB    R4, MSG+1[R0]
+55$:    SOBGTR  R2, 50$
+        PUSHAB  MSG
+        CALLS   #1, G^PUT_LINE
+        BISL3   #INHIB, (SP)+, R0
+        RSB
+COMMA:  .ASCIC  ", "
+PREFIX: .ASCIC  "%CDU-E-"
+
 ; COMMAND: after DEFINE VERB or SYNTAX, ISSYN says which: takes its name
 ; and its clauses, writes its entities, its DISALLOW and its block, and
 ; adds it to the header or the syntaxes.
 COMMAND:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5, R6, R7, R8, R9, R10>
         BSBW    NAME
         MOVL    TOKLINE, CMDLN
         MOVAB   TOKEN, R1
@@ -504,7 +564,8 @@ PARAM:  BSBW    NAME
 40$:    FAIL    CDU$_INVREQPARM, E_NAME
 
 ; QUAL: a qualifier, whose name its command has no other of.
-QUAL:   BSBW    NAME
+QUAL:
+        BSBW    NAME
         CLRL    R6
 10$:    CMPL    R6, NQUAL
         BGEQU   20$
@@ -606,6 +667,7 @@ ENDCMD: CLRL    R8                      ; the DISALLOW's offset
 ; NOPARAMETERS or NOQUALIFIERS. Writes the count and the offsets; for a
 ; syntax with none, unless R0, INHERIT. Uses R0-R2, R6, R7.
 PUTLIST:
+        .JSB_ENTRY  SCRATCH=<R2, R6, R7>
         TSTL    R6
         BNEQ    10$
         TSTL    ISSYN
@@ -627,6 +689,7 @@ PUTLIST:
 ; offset. Adds it to the header, unless a verb has that name already.
 ; Uses R0-R5.
 ADDVERB:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5>
         MOVL    R1, R3
         CLRL    R4
 10$:    CMPL    R4, NVERB
@@ -655,7 +718,9 @@ ADDVERB:
 
 ; TYPE: after DEFINE TYPE: its name and keywords; writes their entities,
 ; then its block, and adds it to the types.
-TYPE:   BSBW    NAME
+TYPE:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5, R6, R7, R8, R9>
+        BSBW    NAME
         MOVAB   TOKEN, R1
         MOVAB   CMDNAME, R3
         BSBW    COPYC
@@ -696,7 +761,9 @@ TYPE:   BSBW    NAME
 ; ADDDEF: R0 = D_SYNTAX or D_TYPE, R1 = its name, R2 = its block's
 ; offset. Adds it, unless one of that kind has its name already. Uses
 ; R0-R5.
-ADDDEF: PUSHR   #^M<R0, R1, R2>
+ADDDEF:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5>
+        PUSHR   #^M<R0, R1, R2>
         BSBW    FINDDEF
         TSTL    R2
         BEQL    10$
@@ -718,6 +785,7 @@ ADDDEF: PUSHR   #^M<R0, R1, R2>
 ; FINDDEF: R0 = D_SYNTAX or D_TYPE, R1 = a name. R2 = the definition of
 ; that kind with that name, or 0. Uses R0-R5.
 FINDDEF:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5>
         MOVL    R1, R3
         MOVL    R0, R4
         CLRL    R5
@@ -741,7 +809,9 @@ FINDDEF:
 ; = which. Takes its clauses, each after a comma, up to a word that
 ; starts a command's clause or KEYWORD, and writes it: R0 = its offset.
 ; E_FLAGS has its flags.
-ENTITY: MOVAB   TOKEN, R1
+ENTITY:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5, R6, R7, R8, R9>
+        MOVAB   TOKEN, R1
         MOVAB   E_NAME, R3
         BSBW    COPYC
         MOVL    TOKLINE, E_LINE
@@ -818,7 +888,9 @@ ECLAUSE:
 130$:   BRW     ECLAUSE
 
 ; VALUE: after VALUE: its clauses, if it has any, in parentheses.
-VALUE:  BISL2   #ENT_VALUE, E_FLAGS
+VALUE:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5, R6, R7, R8, R9>
+        BISL2   #ENT_VALUE, E_FLAGS
         BSBW    LEX
         IFPUNCT C_LPAREN, 10$
         RSB
@@ -859,7 +931,8 @@ VALUE:  BISL2   #ENT_VALUE, E_FLAGS
 ; PUTENT: writes the entity: flags, type, its keywords and its syntax,
 ; filled at the end, placement, name, label, prompt and default value.
 ; R0 = its offset.
-PUTENT: MOVL    E_FLAGS, R6
+PUTENT: .GLOBAL_LABEL                   ; ENTITY's tail
+        MOVL    E_FLAGS, R6
         CMPL    E_NEG, #1               ; negatable: a qualifier, unless not
         BEQL    10$
         TSTL    E_NEG
@@ -942,7 +1015,9 @@ PUTENT: MOVL    E_FLAGS, R6
 
 ; ADDFIX: R0 = D_SYNTAX or D_TYPE, R1 = its name: the word at OUTP is to
 ; be its offset, filled at the end. Uses R0-R5.
-ADDFIX: MOVL    NFIX, R2
+ADDFIX:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5>
+        MOVL    NFIX, R2
         CMPL    R2, #MAXFIX
         BLSSU   10$
         FAIL    CDU$_TABOVF
@@ -958,7 +1033,9 @@ ADDFIX: MOVL    NFIX, R2
 
 ; EXPR: a DISALLOW expression, into EXPRBUF in prefix form: OR binds
 ; least, then AND, then NOT.
-EXPR:   PUSHL   EXPRLEN                 ; where it starts
+EXPR:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5, R6, R7>
+        PUSHL   EXPRLEN                 ; where it starts
         BSBB    ANDEXPR
 10$:    BSBW    LEX
         IFWORD  "OR", 20$
@@ -971,6 +1048,7 @@ EXPR:   PUSHL   EXPRLEN                 ; where it starts
         BSBB    ANDEXPR
         BRB     10$
 ANDEXPR:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5, R6, R7>
         PUSHL   EXPRLEN
         BSBB    UNARY
 10$:    BSBW    LEX
@@ -984,7 +1062,9 @@ ANDEXPR:
         BSBB    UNARY
         BRB     10$
 ; UNARY: ( expression ), NOT, NEG name, ANY2 (expression, ...) or a name.
-UNARY:  BSBW    LEX
+UNARY:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5, R6, R7>
+        BSBW    LEX
         IFPUNCT C_LPAREN, 10$
         BSBW    NAME
         IFWORD  "NOT", 20$
@@ -1036,7 +1116,9 @@ CLOSE:  BSBW    LEX
 10$:    BRW     TAKE
 
 ; EXPRB: appends the byte in R0 to EXPRBUF. Uses R3.
-EXPRB:  MOVL    EXPRLEN, R3
+EXPRB:
+        .JSB_ENTRY  SCRATCH=<R3>
+        MOVL    EXPRLEN, R3
         CMPL    R3, #EXPRMAX
         BLSSU   10$
         FAIL    CDU$_TABOVF
@@ -1046,7 +1128,9 @@ EXPRB:  MOVL    EXPRLEN, R3
 
 ; INSERT: R0 = an operator, R1 = where its first operand starts in
 ; EXPRBUF: puts it in front. Uses R0-R3.
-INSERT: PUSHL   R0
+INSERT:
+        .JSB_ENTRY  SCRATCH=<R2, R3>
+        PUSHL   R0
         CLRL    R0
         BSBB    EXPRB                   ; one more byte
         MOVL    EXPRLEN, R2
@@ -1061,7 +1145,9 @@ INSERT: PUSHL   R0
         RSB
 
 ; NAME: takes a word, a name, into TOKEN.
-NAME:   BSBW    LEX
+NAME:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5>
+        BSBW    LEX
         CMPL    TOKTYP, #T_WORD
         BEQL    10$
         FAIL    CDU$_INVITEM, TOKEN
@@ -1069,6 +1155,7 @@ NAME:   BSBW    LEX
 
 ; NAMEORSTR: takes a word or a string into TOKEN.
 NAMEORSTR:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5>
         BSBW    LEX
         CMPL    TOKTYP, #T_WORD
         BEQL    10$
@@ -1078,14 +1165,18 @@ NAMEORSTR:
 10$:    BRW     TAKE
 
 ; EQUALS: [=] word or string, into TOKEN.
-EQUALS: BSBW    LEX
+EQUALS:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5>
+        BSBW    LEX
         IFPUNCT C_EQUALS, 10$
         BRB     NAMEORSTR
 10$:    BSBW    TAKE
         BRB     NAMEORSTR
 
 ; UPCASE: TOKEN, in capitals. Uses R0, R1.
-UPCASE: MOVZBL  TOKEN, R1
+UPCASE:
+        .JSB_ENTRY
+        MOVZBL  TOKEN, R1
 10$:    DECL    R1
         BLSS    20$
         MOVZBL  TOKEN+1[R1], R0
@@ -1098,7 +1189,9 @@ UPCASE: MOVZBL  TOKEN, R1
 20$:    RSB
 
 ; ISWORD: R1 = an .ASCIC word. R0 = 1 if the token is it. Uses R0-R3.
-ISWORD: CLRL    R0
+ISWORD:
+        .JSB_ENTRY  SCRATCH=<R2, R3>
+        CLRL    R0
         CMPL    TOKTYP, #T_WORD
         BNEQ    10$
         MOVAB   TOKEN, R3
@@ -1107,7 +1200,9 @@ ISWORD: CLRL    R0
 
 ; INLIST: R1 = .ASCIC words, then a 0. R0 = 1 if the token is one of
 ; them. Uses R0-R3.
-INLIST: CLRL    R0
+INLIST:
+        .JSB_ENTRY  SCRATCH=<R2, R3>
+        CLRL    R0
         CMPL    TOKTYP, #T_WORD
         BNEQ    20$
 10$:    TSTB    (R1)
@@ -1122,22 +1217,30 @@ INLIST: CLRL    R0
 20$:    RSB
 
 ; MARK: remembers where the text is, for BACK.
-MARK:   MOVL    TXT, MARKTXT
+MARK:
+        .JSB_ENTRY
+        MOVL    TXT, MARKTXT
         MOVL    LINE, MARKLN
         RSB
-BACK:   MOVL    MARKTXT, TXT
+BACK:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5>
+        MOVL    MARKTXT, TXT
         MOVL    MARKLN, LINE
         BRW     LEX
 
 ; TAKE: moves past the token LEX read.
-TAKE:   MOVL    TOKEND, TXT
+TAKE:
+        .JSB_ENTRY
+        MOVL    TOKEND, TXT
         MOVL    TOKENDLN, LINE
         RSB
 
 ; LEX: reads the next token, from TXT, without moving past it: TOKTYP,
 ; TOKEN, TOKLINE, and where it ends. Skips blanks, line ends and
 ; comments, from ! to the line's end. Uses R0-R5.
-LEX:    MOVL    TXT, R1
+LEX:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5>
+        MOVL    TXT, R1
         MOVL    LINE, R4
         MOVL    TXTEND, R2
 10$:    CMPL    R1, R2
@@ -1242,6 +1345,7 @@ PUNCTS: .ASCII  "(),="
 ; NAMECHAR: R0 = a character. R0 = 1 if a name may have it: a letter, a
 ; digit, $, _ or a dot.
 NAMECHAR:
+        .JSB_ENTRY
         CMPB    R0, #^A"a"
         BLSSU   10$
         CMPB    R0, #^A"z"
@@ -1267,18 +1371,24 @@ NAMECHAR:
 
 ; PUTB: writes the byte in R0 to the tables. PUTW: the word. PUTC: the
 ; .ASCIC string at R1. CDU$_TABOVF past the buffer. Use R0-R2.
-PUTW:   BSBB    PUTB
+PUTW:
+        .JSB_ENTRY  SCRATCH=<R2>
+        BSBB    PUTB
         ROTL    #24, R0, R0
         BSBB    PUTB
         ROTL    #8, R0, R0
         RSB
-PUTC:   MOVZBL  (R1), R2
+PUTC:
+        .JSB_ENTRY  SCRATCH=<R2>
+        MOVZBL  (R1), R2
         INCL    R2
 10$:    MOVZBL  (R1)+, R0
         BSBB    PUTB
         SOBGTR  R2, 10$
         RSB
-PUTB:   CMPL    OUTP, OUTEND
+PUTB:
+        .JSB_ENTRY  SCRATCH=<R2>
+        CMPL    OUTP, OUTEND
         BLSSU   10$
         FAIL    CDU$_TABOVF
 10$:    MOVB    R0, @OUTP
@@ -1286,14 +1396,18 @@ PUTB:   CMPL    OUTP, OUTEND
         RSB
 
 ; COPYC: copies the .ASCIC string at R1 to R3. Uses R0-R5.
-COPYC:  MOVZBL  (R1), R0
+COPYC:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5>
+        MOVZBL  (R1), R0
         INCL    R0
         MOVC3   R0, (R1), (R3)
         RSB
 
 ; SAMEC: R0 = 1 if the .ASCIC strings at R1 and R3 are the same, else 0.
 ; Uses R2.
-SAMEC:  MOVZBL  (R1), R2
+SAMEC:
+        .JSB_ENTRY  SCRATCH=<R2>
+        MOVZBL  (R1), R2
         CMPB    R2, (R3)
         BNEQ    20$
 10$:    TSTL    R2
@@ -1307,66 +1421,11 @@ SAMEC:  MOVZBL  (R1), R2
 30$:    MOVL    #1, R0
         RSB
 
-; ERROR: R0 = a CDU$_ status, R1 = an .ASCIC argument. Writes
-; %CDU-E-NAME, its text, the argument and the line of the token, and
-; returns from CDU$COMPILE with the status.
-ERROR:  MOVL    SAVESP, SP
-        PUSHL   R0
-        PUSHL   R1
-        CLRB    MSG
-        MOVAB   PREFIX, R1
-        BSBW    ADDC
-        MOVAB   MESSAGES, R5
-10$:    TSTL    (R5)
-        BEQL    30$
-        CMPL    (R5)+, 4(SP)
-        BEQL    20$
-        MOVZBL  (R5), R0                ; past the name and the text
-        ADDL2   R0, R5
-        INCL    R5
-        MOVZBL  (R5), R0
-        ADDL2   R0, R5
-        INCL    R5
-        BRB     10$
-20$:    MOVL    R5, R1                  ; NAME, text
-        BSBW    ADDC
-        MOVAB   COMMA, R1
-        BSBW    ADDC
-        MOVZBL  (R5), R0
-        ADDL3   R0, R5, R1
-        INCL    R1
-        BSBW    ADDC
-30$:    MOVL    (SP)+, R1               ; the argument
-        BSBW    ADDC
-        MOVAB   ATLINE, R1
-        BSBW    ADDC
-        MOVL    TOKLINE, R1             ; the line, in decimal
-        CLRL    R2
-40$:    DIVL3   #10, R1, R3
-        MULL3   #10, R3, R4
-        SUBL3   R4, R1, R4
-        ADDL2   #^A"0", R4
-        PUSHL   R4
-        INCL    R2
-        MOVL    R3, R1
-        BNEQ    40$
-50$:    MOVL    (SP)+, R4
-        MOVZBL  MSG, R0
-        CMPL    R0, #255
-        BGEQU   55$
-        INCB    MSG
-        MOVB    R4, MSG+1[R0]
-55$:    SOBGTR  R2, 50$
-        PUSHAB  MSG
-        CALLS   #1, G^PUT_LINE
-        BISL3   #INHIB, (SP)+, R0
-        RSB
-COMMA:  .ASCIC  ", "
-PREFIX: .ASCIC  "%CDU-E-"
-
 ; ADDC: appends the .ASCIC string at R1 to MSG, as much as fits. Uses
 ; R0-R3.
-ADDC:   MOVZBL  (R1)+, R2
+ADDC:
+        .JSB_ENTRY  SCRATCH=<R2, R3>
+        MOVZBL  (R1)+, R2
         MOVZBL  MSG, R0
 10$:    TSTL    R2
         BEQL    20$

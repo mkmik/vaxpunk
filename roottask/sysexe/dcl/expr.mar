@@ -68,6 +68,7 @@ VSTACKEND:
 
 ; DCL$EXPSYN: an expression's syntax is wrong.
 DCL$EXPSYN::
+        .EXCEPTION_ENTRY
         MOVL    DCL$SAVESP, SP
         CLRB    DCL$MSG
         PRINT   "%DCL-W-EXPSYN, invalid expression syntax - check operators and operands"
@@ -75,6 +76,7 @@ DCL$EXPSYN::
 
 ; DCL$UNDSYM: the symbol DCL$SYMNAM names isn't there.
 DCL$UNDSYM::
+        .EXCEPTION_ENTRY
         MOVL    DCL$SAVESP, SP
         CLRB    DCL$MSG
         PRINT   "%DCL-W-UNDSYM, undefined symbol - check validity and spelling"
@@ -86,6 +88,7 @@ DCL$UNDSYM::
 
 ; DCL$SYMOVF: DCL$SYMTAB is full.
 DCL$SYMOVF::
+        .EXCEPTION_ENTRY
         MOVL    DCL$SAVESP, SP
         PRINT   "%DCL-W-SYMOVF, no room for symbol definitions - delete some symbols"
         BRW     DCL$WARN
@@ -97,6 +100,7 @@ DCL$SYMOVF::
 ; none; then back to DCL$LINE: R6 = DCL$LINE, R7 past its end. Uses
 ; R0-R5, R8-R11.
 DCL$SUBST::
+        .JSB_ENTRY  OUTPUT=<R6, R7>, SCRATCH=<R2, R3, R4, R5, R8, R9, R10, R11>
         MOVAB   DCL$LINE2, R11          ; where the next character goes
         CLRL    R10                     ; 1 in quotes
 10$:    CMPL    R6, R7
@@ -164,6 +168,7 @@ DCL$SUBST::
 ; DCL$SKIP: R6 = the next character of the line, R7 = past its last.
 ; Moves R6 past blanks.
 DCL$SKIP::
+        .JSB_ENTRY  SCRATCH=<R6>
         CMPL    R6, R7
         BGEQU   10$
         CMPB    (R6), #^A/ /
@@ -176,6 +181,7 @@ DCL$SKIP::
 ; Copies the letters, digits, $ and _ there to DCL$SYMNAM, in capitals,
 ; the first 31, with R6 past them all. R8 = how many it kept. Uses R0.
 DCL$NAMESCAN::
+        .JSB_ENTRY  OUTPUT=<R6, R8>
         CLRL    R8
 10$:    CMPL    R6, R7
         BGEQU   90$
@@ -211,6 +217,7 @@ DCL$NAMESCAN::
 ; is in quotes, which go, and "" in them, which is one, with R6 past it.
 ; R8 = 0 if there was none. Uses R0-R2.
 DCL$QWORD::
+        .JSB_ENTRY  OUTPUT=<R6, R8>, SCRATCH=<R2>
         BSBW    DCL$SKIP
         CLRL    R8
         CLRL    R2                      ; 1 in quotes
@@ -255,6 +262,7 @@ DCL$QWORD::
 ; = a value. Makes it the string of the words left, as DCL$QWORD makes
 ; them, a blank between each two. Uses R0-R2, R8.
 DCL$QREST::
+        .JSB_ENTRY  OUTPUT=<R6>, SCRATCH=<R2, R8>
         MOVL    #1, VAL$L_TYPE(R9)
         CLRB    VAL$T_STR(R9)
         BSBW    DCL$QWORD
@@ -276,11 +284,14 @@ DCL$QREST::
 ; = a value in DCL$VSTACK. Makes it the expression's, with R6 past it,
 ; or goes to DCL$EXPSYN or DCL$UNDSYM. Uses R0-R5, R8, R10.
 DCL$EXPR::
+        .JSB_ENTRY  OUTPUT=<R6>, SCRATCH=<R2, R3, R4, R5, R8, R10>
         MOVL    #1, R0
 ; BINARY: R0 = an operator level. The same, for operands joined by
 ; operators of that level, each an expression of the levels above. Past
 ; the last level, an operand.
-BINARY: CMPL    R0, #5
+BINARY:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5, R6, R8, R9, R10>
+        CMPL    R0, #5
         BLEQ    10$
         BRW     PRIMARY
 10$:    PUSHL   R0
@@ -308,7 +319,9 @@ BINARY: CMPL    R0, #5
 ; OPSCAN: R0 = an operator level, R6 = the next character of the line,
 ; R7 = past its last. R1 = the OP_ code of the operator there, with R6
 ; past it, if it is one of that level, else 0. Uses R0-R5.
-OPSCAN: PUSHL   R6
+OPSCAN:
+        .JSB_ENTRY  OUTPUT=<R6>, SCRATCH=<R2, R3, R4, R5>
+        PUSHL   R6
         MOVL    R0, R5
         BSBW    DCL$SKIP
         CMPL    R6, R7
@@ -356,6 +369,7 @@ OPSCAN: PUSHL   R6
 ; PRIMARY: as DCL$EXPR, for an operand: "string", an integer, a symbol,
 ; (expression), - operand or .NOT. operand.
 PRIMARY:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5, R6, R8, R10>
         BSBW    DCL$SKIP
         CMPL    R6, R7
         BLSSU   5$
@@ -448,7 +462,9 @@ PRIMARY:
 
 ; APPLY: R1 = an OP_ code, R9 = a value, the left operand, and the right
 ; one after it. Makes R9 the result. Uses R0-R5, R10.
-APPLY:  ADDL3   #VAL$K_LENGTH, R9, R10
+APPLY:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5, R10>
+        ADDL3   #VAL$K_LENGTH, R9, R10
         CMPL    R1, #OP_ADD
         BNEQ    10$
         TSTL    VAL$L_TYPE(R9)
@@ -556,7 +572,9 @@ APPLY:  ADDL3   #VAL$K_LENGTH, R9, R10
 
 ; STRCMP: R9 and R10 = two values, strings. R2 = -1, 0 or 1 as R9's is
 ; before, the same as or after R10's. Uses R3-R5.
-STRCMP: MOVZBL  VAL$T_STR(R9), R3
+STRCMP:
+        .JSB_ENTRY  OUTPUT=<R2>, SCRATCH=<R3, R4, R5>
+        MOVZBL  VAL$T_STR(R9), R3
         MOVZBL  VAL$T_STR(R10), R4
         CLRL    R5
 10$:    CMPL    R5, R3
@@ -580,6 +598,7 @@ STRCMP: MOVZBL  VAL$T_STR(R9), R3
 ; DCL$TOINT: R9 = a value. Makes it an integer: a string's, with a sign,
 ; or 1 if it starts with T or Y, else 0. Uses R0-R5.
 DCL$TOINT::
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5>
         TSTL    VAL$L_TYPE(R9)
         BNEQ    5$
         RSB
@@ -637,6 +656,7 @@ DCL$TOINT::
 ; DCL$TOSTR: R9 = a value. Makes it a string: an integer's in decimal.
 ; Uses R0-R4.
 DCL$TOSTR::
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4>
         TSTL    VAL$L_TYPE(R9)
         BEQL    5$
         RSB

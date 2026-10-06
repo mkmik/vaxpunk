@@ -145,6 +145,7 @@ MNTPROT:
 ; kernel mode AST deletes the process while it holds it. FIL$UNLOCK gives
 ; it back. Not twice. Keeps every register.
 FIL$LOCK::
+        .JSB_ENTRY
         PUSHR   #^M<R0, R1, R4>
         MFPR    #PR$_IPL, R1
         SETIPL  #IPL$_SYNCH
@@ -168,6 +169,7 @@ FIL$LOCK::
 ; each waiter trying again, and puts back the IPL FIL$LOCK's caller had.
 ; Keeps every register.
 FIL$UNLOCK::
+        .JSB_ENTRY
         PUSHR   #^M<R0, R1, R4>
         MOVL    LOCKIPL, R1
         SETIPL  #IPL$_SYNCH
@@ -187,6 +189,7 @@ FIL$UNLOCK::
 ; driver, at IPL$_SYNCH. R0 = SS$_NORMAL, or the device's error. Holding
 ; FIL$LOCK. Uses R1.
 FIL$READLBLK::
+        .JSB_ENTRY
         PUSHL   #IO$_READLBLK
         BRB     LBLK
 
@@ -195,8 +198,10 @@ FIL$READLBLK::
 ; its driver. R0 = SS$_NORMAL, SS$_WRITLCK if the disk is read only, or
 ; the device's error. Holding FIL$LOCK. Uses R1.
 FIL$WRITELBLK::
+        .JSB_ENTRY
         PUSHL   #IO$_WRITELBLK
-LBLK:   PUSHR   #^M<R2, R3, R4, R5>
+LBLK:   .GLOBAL_LABEL                   ; FIL$READLBLK's too
+        PUSHR   #^M<R2, R3, R4, R5>
         MOVAB   F11$AB_IRP, R3
         MOVL    16(SP), IRP$L_FUNC(R3)
         MOVL    R0, IRP$L_BUFADR(R3)
@@ -218,7 +223,9 @@ LBLK:   PUSHR   #^M<R2, R3, R4, R5>
 ; the blocks there into the buffer, 1 to write it there, R4 = the disk's
 ; VCB. R0 = SS$_NORMAL, SS$_WRITLCK if the disk is read only, or the
 ; device's error. Uses R1, R3 and R4.
-DISKIO: BLBC    R3, 10$
+DISKIO:
+        .JSB_ENTRY  SCRATCH=<R3, R4>
+        BLBC    R3, 10$
         BBC     #VCB$V_WRITE, VCB$L_STATUS(R4), 30$
 10$:    BBS     #VCB$V_RAMDISK, VCB$L_STATUS(R4), 20$
         MOVZBL  VCB$B_UNIT(R4), R4
@@ -229,7 +236,8 @@ DISKIO: BLBC    R3, 10$
 15$:    MOVL    R4, R3
         CALL_PAL #PAL$_WRITELBLK
         RSB
-20$:    BRW     MD$IO
+20$:    BSBW    MD$IO
+        RSB
 30$:    MOVL    #SS$_WRITLCK, R0
         RSB
 
@@ -242,6 +250,7 @@ DISKIO: BLBC    R3, 10$
 ; as on VMS. R0 = SS$_NORMAL, SS$_ILLIOFUNC, SS$_NOPRIV, SS$_ACCVIO,
 ; SS$_BADPARAM, or IOC$ALLOCIRP's failure. IPL$_SYNCH. Uses R0-R3.
 DK$FDT::
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4>
         BICL3   #^C63, 12(AP), R0       ; the function, without modifiers
         MOVL    28(AP), R2
         MOVL    32(AP), R3
@@ -285,6 +294,7 @@ DK$FDT::
 ; own failure, counts in UCB$L_ERRCNT. R0 = SS$_NORMAL. IPL$_SYNCH. Uses
 ; R0-R3.
 DK$STARTIO::
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4>
         PUSHR   #^M<R3, R4>
         BICL3   #^C63, IRP$L_FUNC(R3), R4
         MOVL    IRP$L_BUFADR(R3), R0
@@ -313,6 +323,7 @@ DK$STARTIO::
 ; F11$GL_VCB. R0 = SS$_NORMAL, or SS$_NOSUCHDEV and F11$GL_VCB as it was.
 ; Uses R1-R3.
 FIL$SELECT::
+        .JSB_ENTRY  SCRATCH=<R2, R3>
         TSTL    R2
         BEQL    80$
         CMPB    (R1), #^A/_/
@@ -348,6 +359,7 @@ FIL$SELECT::
 ; label isn't R1's, or the disk's error. Holding FIL$LOCK, but at boot,
 ; when no other process is there to want it. Uses R0-R5.
 FIL$MOUNT::
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5>
         MOVL    F11$GL_VCB, R5
         MOVL    R1, R4
         MOVAB   VCB$AB_INDEXF(R5), R3   ; the home block, for now
@@ -549,6 +561,7 @@ FIL$MOUNT::
 ; ponytail: counted each time, a bit at a time; VMS keeps the count in
 ; the VCB, up to date as files grow and shrink.
 FIL$FREEBLOCKS::
+        .JSB_ENTRY
         PUSHR   #^M<R2, R3, R4, R5, R6, R7>
         MOVL    #BITMAP, R0
         MOVAB   F11$AB_FILHDR, R1
@@ -587,6 +600,7 @@ FIL$FREEBLOCKS::
 ; map gives it, R1 = the blocks from there to its extent's end; both 0 if
 ; the map ends first. Keeps every other register.
 FIL$MAPVBN::
+        .JSB_ENTRY
         PUSHR   #^M<R2, R3, R4, R5, R6>
         MOVZBL  FH2$B_MPOFFSET(R1), R2
         MOVAW   (R1)[R2], R2            ; the map
@@ -637,6 +651,7 @@ FIL$MAPVBN::
 ; SS$_ENDOFFILE if the map ends first, or the disk's error. Keeps every
 ; other register.
 FIL$READVBN::
+        .JSB_ENTRY
         PUSHR   #^M<R1, R2, R4, R5, R6, R7, R8, R9>
         CLRL    R9
         BRB     VBLK
@@ -646,9 +661,11 @@ FIL$READVBN::
 ; SS$_NORMAL, SS$_ENDOFFILE if the map ends first, or the disk's error.
 ; Keeps every other register.
 FIL$WRITEVBN::
+        .JSB_ENTRY
         PUSHR   #^M<R1, R2, R4, R5, R6, R7, R8, R9>
         MOVL    #1, R9
-VBLK:   MOVL    R0, R6                  ; the next VBN
+VBLK:   .GLOBAL_LABEL                   ; FIL$READVBN's too
+        MOVL    R0, R6                  ; the next VBN
         MOVL    R1, R7                  ; the blocks left
         MOVL    R2, R8                  ; where they are
 10$:    TSTL    R7
@@ -688,6 +705,7 @@ VBLK:   MOVL    R0, R6                  ; the next VBN
 ; another file, SS$_BADCHKSUM if it holds no header, or the disk's error.
 ; Keeps every other register.
 FIL$READHDR::
+        .JSB_ENTRY
         PUSHR   #^M<R1, R2, R3, R4, R5>
         MOVL    R1, R4
         MOVL    R0, R5
@@ -722,6 +740,7 @@ FIL$READHDR::
 ; FIL$EOF: R1 = a file header. R0 = the bytes in the file, up to its end
 ; of file. Uses R1.
 FIL$EOF::
+        .JSB_ENTRY
         MOVZWL  FH2$W_RECATTR+FAT$L_EFBLK(R1), R0       ; high word first
         ASHL    #16, R0, R0
         MOVW    FH2$W_RECATTR+FAT$L_EFBLK+2(R1), R0
@@ -736,6 +755,7 @@ FIL$EOF::
 ; FIL$ISDIR: R1 = a file header. R0 = 1 if the file is a directory, else
 ; 0. Keeps every other register.
 FIL$ISDIR::
+        .JSB_ENTRY
         EXTZV   #FCH$V_DIRECTORY, #1, FH2$L_FILECHAR(R1), R0
         RSB
 
@@ -750,6 +770,7 @@ FIL$ISDIR::
 ; GRPPRV in the owner's group. READALL reads anything, BYPASS does
 ; anything. Keeps every other register.
 FIL$CHKPRO::
+        .JSB_ENTRY
         PUSHR   #^M<R1, R2, R3, R4, R5>
         MOVL    SCH$GL_CURPCB, R4
         IFPRIV  BYPASS, 80$
@@ -791,6 +812,7 @@ FIL$CHKPRO::
 ; protection, for the access alone, then with the file's. R0 = SS$_NORMAL
 ; or SS$_NOPRIV. Keeps every other register.
 FIL$CHKHDR::
+        .JSB_ENTRY
         PUSHR   #^M<R1, R2, R3>
         MOVL    R0, R3
         PUSHL   R1
@@ -819,6 +841,7 @@ FIL$CHKHDR::
 ; ponytail: the highest version is the first of a name's first record;
 ; a name whose versions spill into a second record matches twice.
 FIL$SEARCHDIR::
+        .JSB_ENTRY  OUTPUT=<R2, R4, R5>
         PUSHR   #^M<R3, R6, R7, R8, R9, R10, R11>
         MOVL    #1, R10                 ; the VBN
 10$:    MOVL    R3, R1                  ; the blocks in use, EOF's partly
@@ -887,6 +910,7 @@ FIL$SEARCHDIR::
 ; length. R0 = 1 if the name matches it, else 0: * matches any
 ; characters, % any one. Keeps every other register.
 FIL$MATCH::
+        .JSB_ENTRY
         PUSHR   #^M<R3, R4, R5, R8>
         CLRL    R3                      ; in the name
         CLRL    R4                      ; in the pattern
@@ -937,6 +961,7 @@ FIL$MATCH::
 ; ponytail: the whole file, read at once; VMS maps an image's sections
 ; from it, page by page.
 FIL$OPENFILE::
+        .JSB_ENTRY  OUTPUT=<R2, R3>
         PUSHR   #^M<R4, R5, R6, R7, R8, R9, R10, R11>
         BSBW    FIL$LOCK
         MOVL    R6, R0

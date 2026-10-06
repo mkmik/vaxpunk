@@ -25,7 +25,8 @@ NL:     .ASCII  <10>
         RET
         .ENTRY  SYS$EXIT, ^M<>
         MOVL    4(AP), R0
-        svc     #1
+        svc     #1                      ; doesn't return
+        RET
         .ENTRY  LIB$GET_INPUT, ^M<>
         MOVL    #44, R0
         RET

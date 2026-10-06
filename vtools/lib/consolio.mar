@@ -12,19 +12,23 @@
 ;       JSB     G^EXE$OUTZSTRING
 
         .EXTRN  CON$PUTCHAR
+        .CALL_LINKAGE CON$PUTCHAR               ; keeps every register
         .PSECT  $CODE$
 
 ; EXE$OUTCHAR: writes the character in R0. Keeps every register.
 EXE$OUTCHAR::
+        .JSB_ENTRY
         JMP     G^CON$PUTCHAR
 
 ; EXE$OUTBLANK: writes a space. R0 = 32.
 EXE$OUTBLANK::
+        .JSB_ENTRY
         MOVZBL  #^A/ /, R0
         BRB     EXE$OUTCHAR
 
 ; EXE$OUTCRLF: writes CR and LF. R0 = 10.
 EXE$OUTCRLF::
+        .JSB_ENTRY
         MOVZBL  #13, R0
         BSBB    EXE$OUTCHAR
         MOVZBL  #10, R0
@@ -32,13 +36,16 @@ EXE$OUTCRLF::
 
 ; EXE$OUTBYTE: writes R1's low byte as 2 hex digits. Uses R0 and R2.
 EXE$OUTBYTE::
+        .JSB_ENTRY  SCRATCH=<R2>
         MOVL    #4, R2
         BRB     HEX
 
 ; EXE$OUTHEX: writes the longword in R1 as 8 hex digits. Uses R0 and R2.
 EXE$OUTHEX::
+        .JSB_ENTRY  SCRATCH=<R2>
         MOVL    #28, R2
-HEX:    EXTZV   R2, #4, R1, R0          ; digits from the top
+HEX:    .GLOBAL_LABEL                   ; EXE$OUTBYTE's too
+        EXTZV   R2, #4, R1, R0          ; digits from the top
         CMPL    R0, #10
         BLSS    10$
         ADDL2   #^A/A/-^A/0/-10, R0
@@ -50,6 +57,7 @@ HEX:    EXTZV   R2, #4, R1, R0          ; digits from the top
 ; EXE$OUTCSTRING: writes the counted string (.ASCIC) R1 points to, up to a
 ; NUL if it has one. R1 ends past the last byte read. Uses R0 and R2.
 EXE$OUTCSTRING::
+        .JSB_ENTRY  OUTPUT=<R1>, SCRATCH=<R2>
         MOVZBL  (R1)+, R2
         BNEQ    STRING
         RSB                             ; VMS writes one byte of an empty one
@@ -58,8 +66,10 @@ EXE$OUTCSTRING::
 ; to 255 characters. R1 ends past the NUL, at the next string if they are
 ; back to back. Uses R0 and R2.
 EXE$OUTZSTRING::
+        .JSB_ENTRY  OUTPUT=<R1>, SCRATCH=<R2>
         MOVZBL  #255, R2
-STRING: MOVZBL  (R1)+, R0
+STRING: .GLOBAL_LABEL                   ; EXE$OUTCSTRING's too
+        MOVZBL  (R1)+, R0
         BEQL    20$
         BSBB    EXE$OUTCHAR
         SOBGTR  R2, STRING

@@ -3,11 +3,19 @@
 
 use vasm::Dialect;
 
+/// What `mn operands` compiles to in a JSB routine, on vmacro's second pass.
 fn lines(mn: &str, operands: &str) -> Vec<String> {
     let mut m = vmacro::Macro32::default();
     let constant = |e: &str| e.parse().ok();
-    let out = m.statement(mn, operands, &constant).unwrap().unwrap();
-    out.iter().map(|l| l.trim().to_string()).collect()
+    for _ in 0..2 {
+        m.label("T", false);
+        m.statement(".JSB32_ENTRY", "", &constant).unwrap().unwrap();
+        let out = m.statement(mn, operands, &constant).unwrap().unwrap();
+        if !m.again() {
+            return out.iter().map(|l| l.trim().to_string()).collect();
+        }
+    }
+    unreachable!()
 }
 
 #[test]
@@ -35,7 +43,15 @@ fn general() {
 /// registers the frame saved.
 #[test]
 fn entry_mask() {
-    let code = lines(".ENTRY", "START, 12");
+    let mut m = vmacro::Macro32::default();
+    let constant = |e: &str| e.parse().ok();
+    m.statement(".ENTRY", "START, 12", &constant);
+    assert!(m.again());
+    let code = m
+        .statement(".ENTRY", "START, 12", &constant)
+        .unwrap()
+        .unwrap();
+    let code: Vec<String> = code.iter().map(|l| l.trim().to_string()).collect();
     assert!(code.contains(&"mov x14, #12".to_string()));
     assert!(code.contains(&"stp x18, x14, [sp, #32]".to_string()));
 }

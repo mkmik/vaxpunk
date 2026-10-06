@@ -84,15 +84,21 @@ TBUF:   .BLKB   BUFSIZE+2               ; a line typed, and its CR LF
 
 ; NREAD, TREAD: read the connection, with event flag 1, and the
 ; terminal, with 2, each into its buffer.
-NREAD:  CLRQ    NIOSB
+NREAD:
+        .JSB_ENTRY
+        CLRQ    NIOSB
         $QIO_S  EFN=#1, CHAN=NCHAN, FUNC=#IO$_READVBLK, IOSB=NIOSB, P1=NBUF, P2=#BUFSIZE
         RSB
-TREAD:  CLRQ    TIOSB
+TREAD:
+        .JSB_ENTRY
+        CLRQ    TIOSB
         $QIO_S  EFN=#2, CHAN=TCHAN, FUNC=#IO$_READVBLK, IOSB=TIOSB, P1=TBUF, P2=#BUFSIZE
         RSB
 
 ; STATUS: R0 = $QIOW's status. R0 = the IOSB's, if that was a success.
-STATUS: BLBC    R0, 90$
+STATUS:
+        .JSB_ENTRY
+        BLBC    R0, 90$
         MOVZWL  IOSB, R0
 90$:    RSB
 

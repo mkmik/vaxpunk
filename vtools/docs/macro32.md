@@ -25,8 +25,7 @@ Status: integer instructions, the calling standard's `CALLS`, `CALLG` and
 `RET`, `JSB` and `RSB`, `CASE`, bit fields, `MOVC3` and `MOVC5`, `INSQUE` and
 `REMQUE`, the privileged `MTPR`, `MFPR`, `HALT`, `CHMx`, `PROBEx` and `REI`, and Alpha's
 `CALL_PAL`. Not yet: floating point, packed decimal, the interlocked queue
-instructions, the other string and privileged instructions, `.CALL_ENTRY`,
-listings.
+instructions, the other string and privileged instructions, listings.
 
 ## How it works
 
@@ -85,6 +84,77 @@ VAX SP is x18, not ARM64's `sp`: VAX pushes longwords, and `sp` must stay
 point into the same stack: before each call vmacro sets `sp` to x18 rounded
 down to 16 bytes, so the callee's frame goes below what the caller pushed.
 
+## Routines
+
+Every routine is declared, as AMACRO requires
+([amacro.md](amacro.md)): vmacro compiles only code in a declared routine,
+which runs from its declaration to the next one. A label names the routine,
+on the declaration's line or just before it:
+
+```
+; GETBYTE: R6 = a pointer. R0 = the byte there, R6 past it. Uses R2.
+GETBYTE::
+        .JSB_ENTRY  OUTPUT=<R6>, SCRATCH=<R2>
+```
+
+| Declaration | A routine |
+| --- | --- |
+| `.ENTRY name, mask` | called with `CALLS` or `CALLG`; defines `name` |
+| `name: .CALL_ENTRY` | the same, without a mask |
+| `name: .JSB_ENTRY` | called with `JSB` or `BSBx`; keeps every register it modifies but its outputs |
+| `name: .JSB32_ENTRY` | the same, keeping none it isn't told to: for routines only MACRO-32 calls |
+| `name: .EXCEPTION_ENTRY` | entered by the PAL, by `REI` or by a jump, never returning: interrupt and exception handlers, the code `REI` starts, error exits. Saves nothing |
+
+Their parameters are AMACRO's: `OUTPUT=<R2,...>`, registers the routine
+changes for its caller; `SCRATCH=<...>`, those it changes and its caller
+doesn't care about; `PRESERVE=<...>`, those it always keeps, R0 and R1 too;
+`INPUT=<...>`, documentation. `.CALL_ENTRY` also takes `MAX_ARGS=n`,
+`HOME_ARGS=TRUE|FALSE`, `QUAD_ARGS=TRUE|FALSE` and `LABEL=name`. A label
+another routine branches to says so with `.GLOBAL_LABEL` after it.
+
+### What a routine keeps
+
+vmacro reads the module twice. The first pass surveys each routine: the
+registers among R2-R11 it writes, and the JSB routines it calls. The second
+compiles it, saving at entry and restoring on return all 64 bits of each
+register the routine modifies, itself or through the JSB routines it calls,
+but its `OUTPUT` and `SCRATCH`, as AMACRO did: a VAX routine's `PUSHR`
+keeps only longwords, which would cut a 64-bit caller's values in half.
+
+- A `.CALL_ENTRY` or `.ENTRY` routine saves those and the registers in its
+  mask, in its frame. One it writes that the mask leaves out is a warning.
+- A `.JSB_ENTRY` routine saves them in a save area it makes below both
+  stacks at entry: the caller's `sp` and VAX SP, then the registers. VAX SP
+  and `sp` start below it, and `RSB` restores the registers and both stacks
+  from it, so VAX SP must be back where the entry left it.
+- A `.JSB32_ENTRY` routine saves only `PRESERVE`.
+
+What a JSB routine modifies, for its callers: its `OUTPUT` and `SCRATCH`;
+for a `.JSB32_ENTRY` one, everything it modifies. A JSB routine in another
+module modifies all of R2-R11, unless `.CALL_LINKAGE name, ...` says what
+it does, or `.DEFINE_LINKAGE name, ...` and `.USE_LINKAGE linkage_name=name`
+before the `JSB`; `.USE_LINKAGE` with registers says it for a `JSB`
+through an address. `vmacro::compile_modules`, which roottask's build
+uses, compiles modules linked together and gives each the linkages of the
+others' routines, from their declarations.
+
+### Shared code
+
+A routine may go to another routine's code, as VAX code does:
+
+- to a JSB routine's entry, a tail call, if it saves nothing itself;
+- to a `.GLOBAL_LABEL` in another routine, if the two return alike: both
+  CALL routines or both JSB routines, saving the same registers;
+- from or to an `.EXCEPTION_ENTRY` routine, which saves nothing and never
+  returns;
+- after it loads SP from somewhere other than SP, a long jump, or to a
+  label where code does, which leaves the routines on the stack.
+
+Anything else, or code that runs on into a routine that saves registers,
+is an error that says what each side restores. So is a `JSB` to a local
+label, and a `JSB`, `CALLS` or `CALLG` to a label in the module that isn't
+a routine's.
+
 ## Calls
 
 `CALLS` and `CALLG` keep the VAX calling standard's shape: an argument list of
@@ -95,7 +165,7 @@ until vaxpunk's calling standard exists.
   caller pushed, points x13 at it, aligns `sp` and `bl`s the routine. On
   return it pops the list. `CALLG arglist, routine` passes `arglist` in x13 and
   pops nothing.
-- `.ENTRY name, ^M<R2,...>` defines a global `name` and builds a frame on `sp`:
+- A CALL routine builds a frame on `sp`:
 
   | Offset | Holds |
   | --- | --- |
@@ -103,24 +173,22 @@ until vaxpunk's calling standard exists.
   | 8 | the caller's AP |
   | 16 | the caller's FP, then LR |
   | 32 | the caller's SP (x18) |
-  | 40 | the entry mask's bits 11:0, which say what follows, for `$UNWIND` |
-  | 48 | the registers in the entry mask, 8 bytes each |
+  | 40 | the mask of the registers it saves, R0-R11, for `$UNWIND` |
+  | 48 | the registers it saves, 8 bytes each |
 
   FP (x29) points at the frame, AP (x12) at the argument list, and SP (x18)
   starts at the frame, so locals made with `SUBL2 #n, SP` are at negative
   offsets from FP, as on the VAX. Mask bits 12 and up (integer and decimal
   overflow traps) are ignored.
-- `RET` restores what `.ENTRY` saved and returns. It belongs to the last
-  `.ENTRY` before it in the source.
+- `RET` restores what the routine saved and returns.
 
 A routine called from outside MACRO-32 gets no argument list: vrun enters the
 transfer address with x13, and so AP, 0. Return a status in R0; vrun exits
 with it.
 
 `JSB` and `BSBx` push an 8-byte return address on the stack and jump; `RSB`
-pops it and jumps to it, so a JSB routine needs no declaration
-(`.JSB_ENTRY` is accepted and ignored). Code that pops or changes the return
-address as a longword won't work.
+pops it and jumps to it. Code that pops or changes the return address as a
+longword won't work.
 
 ## Console output
 
@@ -267,14 +335,16 @@ macros, conditionals...), with these changes:
 
 | Directive | In vmacro |
 | --- | --- |
-| `.ENTRY name, mask` | a routine: see *Calls* |
+| `.ENTRY name, mask`, `.CALL_ENTRY`, `.JSB_ENTRY`, `.JSB32_ENTRY`, `.EXCEPTION_ENTRY`, `.GLOBAL_LABEL` | routines: see *Routines* |
+| `.CALL_LINKAGE`, `.DEFINE_LINKAGE`, `.USE_LINKAGE` | what JSB routines elsewhere modify: see *What a routine keeps* |
+| `.WARN text` | a warning |
 | `.ADDRESS` | a longword address, as on the VAX (vasm's is a quadword) |
 | `.BLKA` | longwords |
 | `.EXTRN` | `.EXTERNAL` |
 | `.SIGNED_BYTE`, `.SIGNED_WORD` | `.BYTE`, `.WORD` |
 | `.PSECT name, EXE, ...` | also `NOWRT`: ARM64 code can't be writable. `USR` and `LIB` are dropped |
 | `.ERROR text` | an error |
-| `.JSB_ENTRY`, listing directives (`.SBTTL`, `.PAGE`, `.LIST`, `.SHOW`, `.ENABLE`, `.DISABLE`, `.DEFAULT`, `.PRINT`, `.WARN`...) | ignored |
+| listing directives (`.SBTTL`, `.PAGE`, `.LIST`, `.SHOW`, `.ENABLE`, `.DISABLE`, `.DEFAULT`, `.PRINT`...) | ignored |
 
 A psect for code needs `EXE`: with vasm's defaults a psect such as `.PSECT
 CODE` is data, and running it faults. `$CODE$` has the right attributes.

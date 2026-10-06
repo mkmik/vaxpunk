@@ -279,7 +279,7 @@ pub fn compile(
     size: Size,
     ops: &[Opnd],
     flags: &Flags,
-    saved: Option<&[u8]>,
+    exit: &crate::Exit,
 ) -> Result<Option<Flags>> {
     let live = |borrow| Ok(Some(Flags::Live { borrow }));
     match op {
@@ -288,6 +288,7 @@ pub fn compile(
                 && size == Size::L
             {
                 // Sign-extended, as a register holds a longword.
+                g.wrote(*n);
                 let r = arm(*n)?;
                 match g.constant(e) {
                     Some(v) => g.imm_into(&format!("x{r}"), &(v as i32).to_string(), Size::Q)?,
@@ -349,6 +350,7 @@ pub fn compile(
                 g.push(&a)?;
             } else if let Opnd::Reg(n) = ops[1] {
                 // Computed in longwords, as AMACRO does by default.
+                g.wrote(n);
                 g.emit(format!("sxtw x{}, {}", arm(n)?, w(&a)));
             } else {
                 let p = g.place(&ops[1], Size::L)?;
@@ -495,6 +497,11 @@ pub fn compile(
             live(true)
         }
         Op::Rsb => {
+            match exit {
+                crate::Exit::Jsb(saved) => g.out.extend(crate::jsb_epilogue(saved)),
+                crate::Exit::Call(_) => return Err("RSB in a CALL routine".into()),
+                crate::Exit::None => {}
+            }
             let t = g.tmp()?;
             g.emit(format!("ldr {t}, [x{SP}], #8"));
             g.emit(format!("br {t}"));
@@ -539,7 +546,9 @@ pub fn compile(
             live(true)
         }
         Op::Ret => {
-            let saved = saved.ok_or("RET outside a .ENTRY routine")?;
+            let crate::Exit::Call(saved) = exit else {
+                return Err("RET outside a CALL routine (.CALL_ENTRY or .ENTRY)".into());
+            };
             g.out.extend(crate::epilogue(saved));
             Ok(None)
         }
@@ -560,6 +569,7 @@ pub fn compile(
                 }
             } else {
                 for r in &regs {
+                    g.wrote(*r);
                     g.emit(format!("ldrsw x{}, [x{SP}], #4", arm(*r)?));
                 }
             }
@@ -734,6 +744,7 @@ pub fn compile(
             Ok(Some(test(&q, Size::L)))
         }
         Op::Movc3 => {
+            (0..6).for_each(|r| g.wrote(r));
             let len = g.read(&ops[0], Size::W, Ext::Zext)?;
             let len = copy(g, &x(&len))?;
             let src = g.address(&ops[1], size)?;
@@ -769,6 +780,7 @@ pub fn compile(
             Ok(Some(test("wzr", Size::L)))
         }
         Op::Movc5 => {
+            (0..6).for_each(|r| g.wrote(r));
             let srclen = g.read(&ops[0], Size::W, Ext::Zext)?;
             let srclen = copy(g, &x(&srclen))?;
             let src = g.address(&ops[1], size)?;
@@ -856,6 +868,7 @@ pub fn compile(
                     }
                     g.emit(format!("bfi w{}, {v}, #{p}, #{s}", arm(*n)?));
                     g.sext(arm(*n)?);
+                    g.wrote(*n);
                 }
                 (Opnd::Reg(n), Err(p)) => {
                     // Rotate the field down to bit 0, insert, rotate back.
@@ -866,6 +879,7 @@ pub fn compile(
                     g.emit(format!("neg {t}, {p}"));
                     g.emit(format!("ror w{r}, w{r}, {t}"));
                     g.sext(r);
+                    g.wrote(*n);
                 }
                 (base, pos) => {
                     // ponytail: reads and writes 8 bytes around the field,
@@ -921,6 +935,7 @@ pub fn compile(
                     }
                     if change.is_some() {
                         g.sext(r);
+                        g.wrote(*n);
                     }
                     g.emit(branch(format!("{old}, #0")));
                 }
@@ -1044,6 +1059,9 @@ pub fn compile(
                 return Err(format!("{mn}'s first operand is a register"));
             };
             let r = format!("x{}", arm(n)?);
+            if op == Op::Ldq {
+                g.wrote(n);
+            }
             match (op, &ops[1]) {
                 (Op::Ldq, Opnd::Reg(m)) => g.emit(format!("mov {r}, x{}", arm(*m)?)),
                 (Op::Ldq, Opnd::Imm(e)) => g.imm_into(&r, e, size)?,
@@ -1054,7 +1072,10 @@ pub fn compile(
                     let m = g.at(&base, disp, size)?;
                     g.emit(format!("ldr {r}, {m}"));
                 }
-                (_, Opnd::Reg(m)) => g.emit(format!("mov x{}, {r}", arm(*m)?)),
+                (_, Opnd::Reg(m)) => {
+                    g.wrote(*m);
+                    g.emit(format!("mov x{}, {r}", arm(*m)?));
+                }
                 (_, o) => {
                     let p = g.place(o, size)?;
                     g.store(&p, size, &r)?;

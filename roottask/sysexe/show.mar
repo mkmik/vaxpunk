@@ -219,7 +219,9 @@ SYSTEM: $GETSYIW_S ITMLST=SYIITEMS
 
 ; PRIVS: R6 = a quadword of privileges. Writes their names, six to a
 ; line. Uses R0-R3, R7-R9.
-PRIVS:  MOVAB   G^PRV_NAMES, R7
+PRIVS:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R7, R8, R9>
+        MOVAB   G^PRV_NAMES, R7
         CLRL    R8                      ; the bit
         CLRL    R9                      ; names on the line
 10$:    TSTB    (R7)
@@ -247,7 +249,9 @@ PRIVS:  MOVAB   G^PRV_NAMES, R7
 50$:    RSB
 
 ; ADDOCT: appends R1 in octal to LINE. Uses R0-R3.
-ADDOCT: CLRL    R3                      ; digits, on the stack
+ADDOCT:
+        .JSB_ENTRY  SCRATCH=<R2, R3>
+        CLRL    R3                      ; digits, on the stack
 10$:    EXTZV   #0, #3, R1, R0
         ADDL2   #^A/0/, R0
         PUSHL   R0
@@ -261,12 +265,15 @@ ADDOCT: CLRL    R3                      ; digits, on the stack
 
 ; ADDNAME: appends the process's name, NAME, to LINE. Uses R0-R2.
 ADDNAME:
+        .JSB_ENTRY  SCRATCH=<R2>
         MOVAB   NAME, R1
         MOVZWL  NAMLEN, R2
         BRB     ADD
 
 ; PADTO: appends blanks to LINE until it is R3 characters long. Uses R0-R2.
-PADTO:  MOVZBL  LINE, R0
+PADTO:
+        .JSB_ENTRY  SCRATCH=<R2>
+        MOVZBL  LINE, R0
         CMPL    R0, R3
         BGEQU   10$
         MOVZBL  #^A/ /, R0
@@ -275,7 +282,9 @@ PADTO:  MOVZBL  LINE, R0
 10$:    RSB
 
 ; ADDHEX: appends R1 in 8 hex digits to LINE. Uses R0-R5.
-ADDHEX: MOVL    R1, R4
+ADDHEX:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5>
+        MOVL    R1, R4
         MOVL    #8, R5
 10$:    ROTL    #4, R4, R4
         EXTZV   #0, #4, R4, R0
@@ -285,14 +294,18 @@ ADDHEX: MOVL    R1, R4
         RSB
 
 ; ADD2: appends R1, below 100, in 2 decimal digits to LINE. Uses R0-R5.
-ADD2:   CMPL    R1, #10
+ADD2:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5>
+        CMPL    R1, #10
         BGEQU   ADDDEC
         PUSHL   R1
         MOVZBL  #^A/0/, R0
         BSBB    ADDCHAR
         MOVL    (SP)+, R1
 ; ADDDEC: appends R1 in decimal to LINE. Uses R0-R3, R5.
-ADDDEC: CLRL    R3                      ; digits, on the stack
+ADDDEC:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R5>
+        CLRL    R3                      ; digits, on the stack
 10$:    DIVL3   #10, R1, R5
         MULL3   #10, R5, R0
         SUBL3   R0, R1, R0
@@ -307,18 +320,23 @@ ADDDEC: CLRL    R3                      ; digits, on the stack
         RSB
 
 ; SAY: writes the line in LINE, and empties it. Uses R0 and R1.
-SAY:    PUSHAB  LINE
+SAY:
+        .JSB_ENTRY
+        PUSHAB  LINE
         CALLS   #1, G^PUT_LINE
         CLRB    LINE
         RSB
 
 ; ADDCHAR: appends the character in R0 to LINE. Uses R0-R2.
 ADDCHAR:
+        .JSB_ENTRY  SCRATCH=<R2>
         MOVB    R0, CHAR
         MOVAB   CHAR, R1
         MOVL    #1, R2
 ; ADD: appends the R2 bytes at R1 to LINE, as many as fit. Uses R0-R2.
-ADD:    MOVZBL  LINE, R0
+ADD:
+        .JSB_ENTRY  SCRATCH=<R2>
+        MOVZBL  LINE, R0
 10$:    TSTL    R2
         BEQL    20$
         CMPL    R0, #255

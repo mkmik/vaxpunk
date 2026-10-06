@@ -122,7 +122,9 @@ SECOND: .LONG   -10000000, -1           ; between two of PING's requests
 
 ; DO: parses the command in LINBUF, LINLEN long, and calls its routine.
 ; R0 = its status, or the parse's.
-DO:     PUSHL   LINDSC
+DO:
+        .JSB_ENTRY
+        PUSHL   LINDSC
         MOVW    LINLEN, LINDSC
         PUSHAB  G^TCPIP_TABLES
         PUSHAQ  LINDSC
@@ -134,7 +136,9 @@ DO:     PUSHL   LINDSC
 
 ; REPORT: R0 = an error. Writes its message, as a warning, so that
 ; LIB$SIGNAL returns even for a severe one. Uses R0-R1.
-REPORT: BICL2   #7, R0                  ; STS$M_SEVERITY: STS$K_WARNING
+REPORT:
+        .JSB_ENTRY
+        BICL2   #7, R0                  ; STS$M_SEVERITY: STS$K_WARNING
         PUSHL   R0
         CALLS   #1, G^LIB$SIGNAL
         RSB
@@ -186,23 +190,30 @@ REPORT: BICL2   #7, R0                  ; STS$M_SEVERITY: STS$K_WARNING
         PRESENT "PERMANENT"
         BLBC    R0, 10$
         BSBW    LOAD
-        BSBB    20$
+        BSBB    GATEWAY
         BLBC    R0, 90$
         BSBW    SAVE
         RET
 10$:    BSBW    SENSE
         BLBC    R0, 90$
-        BSBB    20$
+        BSBB    GATEWAY
         BLBC    R0, 90$
         BSBW    SETCHAR
 90$:    RET
-20$:    MOVAB   P_GATEWAY, R5
+
+; GATEWAY: /GATEWAY into SETTINGS. R0 = SS$_NORMAL, or SS$_IVADDR. Uses
+; R0-R6.
+GATEWAY:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5, R6>
+        MOVAB   P_GATEWAY, R5
         MOVAB   SETTINGS+8, R6
         BRW     TAKE
 
 ; CHKIF: R0 = SS$_NORMAL if the command's INTERFACE is WE0, or not
 ; given, else SS$_NOSUCHDEV. Uses R0-R1.
-CHKIF:  GETVALUE "INTERFACE", IFNAME, IFLEN
+CHKIF:
+        .JSB_ENTRY
+        GETVALUE "INTERFACE", IFNAME, IFLEN
         BLBC    R0, 80$
         CMPW    IFLEN, #3
         BNEQ    70$
@@ -217,7 +228,9 @@ CHKIF:  GETVALUE "INTERFACE", IFNAME, IFLEN
 
 ; TAKEIF: /DHCP, or /HOST and /NETWORK_MASK, into SETTINGS. R0 =
 ; SS$_NORMAL, or SS$_IVADDR. Uses R0-R6.
-TAKEIF: PRESENT "DHCP"
+TAKEIF:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5, R6>
+        PRESENT "DHCP"
         BLBC    R0, 10$
         BISL2   #DHCP, SETTINGS+12
         MOVL    #SS$_NORMAL, R0
@@ -235,7 +248,9 @@ TAKEIF: PRESENT "DHCP"
 ; TAKE: R5 = an entity's name, a descriptor, R6 = a longword. Puts the
 ; address the command gives the entity there. R0 = SS$_NORMAL, or
 ; SS$_IVADDR for one that isn't an address. Uses R0-R5.
-TAKE:   MOVW    #64, VALUE
+TAKE:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5>
+        MOVW    #64, VALUE
         PUSHAW  VALUE
         PUSHAQ  VALUE
         PUSHL   R5
@@ -323,7 +338,9 @@ TAKE:   MOVW    #64, VALUE
 ; NUMBER: the command's /NUMBER_PACKETS, in decimal, into COUNT. R0 =
 ; SS$_NORMAL, or SS$_BADPARAM for one that isn't a number above 0. Uses
 ; R0-R2.
-NUMBER: MOVW    #64, VALUE
+NUMBER:
+        .JSB_ENTRY  SCRATCH=<R2>
+        MOVW    #64, VALUE
         GETVALUE "NUMBER_PACKETS", VALUE, VALUE
         BLBC    R0, 90$
         CLRL    COUNT
@@ -371,7 +388,9 @@ NUMBER: MOVW    #64, VALUE
 ; LOAD: puts the saved settings, INTERFACE address mask gateway [DHCP]
 ; in the data disk's file, in SETTINGS, or zeros if there are none. R0 = RMS's
 ; status if it can't read them, or PARSE's. Uses R0-R6.
-LOAD:   CLRQ    SETTINGS
+LOAD:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5, R6>
+        CLRQ    SETTINGS
         CLRQ    SETTINGS+8
         $OPEN   FAB=FAB
         BLBC    R0, 90$
@@ -390,7 +409,9 @@ LOAD:   CLRQ    SETTINGS
 ; SAVE: writes INTERFACE and the settings' address, mask and gateway, and
 ; DHCP if they say so, in a new version of the saved file. R0 = RMS's
 ; status if it can't. Uses R0-R6.
-SAVE:   MOVZBL  INTERFACE, R2
+SAVE:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5, R6>
+        MOVZBL  INTERFACE, R2
         MOVB    R2, LINE
         MOVC3   R2, INTERFACE+1, LINE+1
         MOVAB   SETTINGS, R6
@@ -425,6 +446,7 @@ SAVE:   MOVZBL  INTERFACE, R2
 
 ; SETCHAR: sets the interface as SETTINGS says. R0 = a status.
 SETCHAR:
+        .JSB_ENTRY
         $QIOW_S CHAN=CHAN, FUNC=#IO$_SETCHAR, IOSB=IOSB, P1=SETTINGS
         BLBC    R0, 90$
         MOVZWL  IOSB, R0
@@ -433,7 +455,9 @@ SETCHAR:
 ; PARSE: CMD = INTERFACE address mask gateway [DHCP]. Puts the three in
 ; SETTINGS, and DHCP in its flags. R0 = SS$_NORMAL, or SS$_IVADDR for one
 ; that isn't an address or isn't there. Uses R0-R6.
-PARSE:  MOVL    #2, R2
+PARSE:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5, R6>
+        MOVL    #2, R2
         MOVAB   SETTINGS, R6
 10$:    BSBW    WORD
         BSBW    ADDRESS
@@ -463,7 +487,9 @@ PARSE:  MOVL    #2, R2
 90$:    RET
 
 ; SENSE: senses the settings. R0 = a status.
-SENSE:  $QIOW_S CHAN=CHAN, FUNC=#IO$_SENSECHAR, IOSB=IOSB, P1=SETTINGS
+SENSE:
+        .JSB_ENTRY
+        $QIOW_S CHAN=CHAN, FUNC=#IO$_SENSECHAR, IOSB=IOSB, P1=SETTINGS
         BLBC    R0, 90$
         MOVZWL  IOSB, R0
 90$:    RSB
@@ -471,6 +497,7 @@ SENSE:  $QIOW_S CHAN=CHAN, FUNC=#IO$_SENSECHAR, IOSB=IOSB, P1=SETTINGS
 ; SHOWLINE: R1 = a heading, .ASCIC. Writes it, then the settings, each in
 ; 17 columns, and the link's state. Keeps R0.
 SHOWLINE:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5, R6>
         PUSHL   R0
         MOVB    (R1)+, LINE
         MOVZBL  LINE, R2
@@ -505,6 +532,7 @@ DOWN:   .ASCIC  "down"
 ; ADDTEXT: R3 = an address. Appends it to LINE, four numbers and dots.
 ; Uses R0-R3.
 ADDTEXT:
+        .JSB_ENTRY  SCRATCH=<R2, R3>
         PUSHL   R3
         PUSHL   #4                      ; the numbers left
 10$:    MOVZBL  4(SP), R1
@@ -520,7 +548,9 @@ ADDTEXT:
         RSB
 
 ; ADDDEC: appends R1 in decimal to LINE. Uses R0-R3.
-ADDDEC: CLRL    R3                      ; digits, on the stack
+ADDDEC:
+        .JSB_ENTRY  SCRATCH=<R2, R3>
+        CLRL    R3                      ; digits, on the stack
 10$:    DIVL3   #10, R1, R2
         MULL3   #10, R2, R0
         SUBL3   R0, R1, R0
@@ -537,21 +567,27 @@ ADDDEC: CLRL    R3                      ; digits, on the stack
         RSB
 
 ; ADDSTR: R1 = a string, .ASCIC. Appends it to LINE. Uses R0-R5.
-ADDSTR: MOVZBL  (R1)+, R2
+ADDSTR:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5>
+        MOVZBL  (R1)+, R2
         MOVZBL  LINE, R0
         ADDB2   R2, LINE
         MOVC3   R2, (R1), LINE+1[R0]
         RSB
 
 ; SAY: writes LINE, and empties it. Uses R0-R1.
-SAY:    PUSHAB  LINE
+SAY:
+        .JSB_ENTRY
+        PUSHAB  LINE
         CALLS   #1, G^PUT_LINE
         CLRB    LINE
         RSB
 
 ; WORD: R2 = n. R0 = the address of CMD's nth word, from 1, R1 = its
 ; length, 0 if there are fewer. Keeps every other register.
-WORD:   PUSHR   #^M<R2, R3, R4>
+WORD:
+        .JSB_ENTRY
+        PUSHR   #^M<R2, R3, R4>
         MOVAB   CMD+1, R0
         MOVZBL  CMD, R3
         ADDL2   R0, R3                  ; past the last character
@@ -579,6 +615,7 @@ WORD:   PUSHR   #^M<R2, R3, R4>
 ; ADDRESS: R0 and R1 = a word. R3 = the address it is (INET_ADDR), and
 ; R0 = SS$_NORMAL, or SS$_IVADDR. Keeps R2.
 ADDRESS:
+        .JSB_ENTRY  OUTPUT=<R3>
         CLRL    -(SP)
         PUSHAL  (SP)
         PUSHL   R0

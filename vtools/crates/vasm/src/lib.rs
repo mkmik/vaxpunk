@@ -51,6 +51,16 @@ pub trait Dialect {
         rest: &str,
         constant: &dyn Fn(&str) -> Option<i64>,
     ) -> Option<Result<Vec<String>, String>>;
+
+    /// A label defined at the current location, `global` for `NAME::`. A
+    /// local label's name has an `@`.
+    fn label(&mut self, _name: &str, _global: bool) {}
+
+    /// Called after each pass over the source: whether to assemble it
+    /// again, once the dialect learned from this pass what it needs to.
+    fn again(&mut self) -> bool {
+        false
+    }
 }
 
 /// Assembles `source` into object records, or returns every error found,
@@ -68,7 +78,18 @@ pub fn assemble_with(
     tool: &str,
     dialect: Option<&mut dyn Dialect>,
 ) -> Result<Object, Vec<Diagnostic>> {
-    let module = asm::assemble(source, opts.path.as_deref(), &opts.include, dialect)?;
+    let mut dialect = dialect;
+    let module = loop {
+        let module = asm::assemble(
+            source,
+            opts.path.as_deref(),
+            &opts.include,
+            dialect.as_mut().map(|d| &mut **d as &mut dyn Dialect),
+        );
+        if !dialect.as_mut().is_some_and(|d| d.again()) {
+            break module?;
+        }
+    };
     Ok(Object {
         records: emit::records(&module, &opts.name, opts.date, tool),
         warnings: module.warnings,

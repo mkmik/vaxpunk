@@ -286,7 +286,9 @@ MESSAGES:
         RET
 
 ; PARSE: CLI$DCL_PARSE's work, with its argument list.
-PARSE:  MOVL    SP, SAVESP
+PARSE:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5, R6, R7, R8, R10, R11>
+        MOVL    SP, SAVESP
         MOVAB   CLI$$RESULT, RESBASE    ; ours, even if this one fails
         MOVL    8(AP), R11              ; the tables
         CLRL    PROMPTRTN
@@ -537,10 +539,50 @@ RESULT: MOVAB   CLI$$RESULT+RES$K_HEADER, R3
 VERBV:  .ASCIC  "$VERB"
 LINEV:  .ASCIC  "$LINE"
 
+; QUIT: R0 = a status. Back to PARSE's caller with it, and no result.
+QUIT:   MOVL    SAVESP, SP
+        CLRW    CLI$$RESULT+RES$W_LENGTH
+        CLRL    RTNADR
+        RSB
+
+; ERRTOK: R0 = a CLI$_ status: reports it with the word in TOKEN, and
+; returns from PARSE with it. ERRNONE: without a word. ERRSEG: with the
+; SEGLEN characters at SEGADR.
+ERRTOK: MOVL    SAVESP, SP
+        MOVAB   TOKEN, SEGADR
+        MOVL    TOKLEN, SEGLEN
+        BRB     ERRSAY
+ERRNONE:
+        MOVL    SAVESP, SP
+        CLRL    SEGLEN
+        BRB     ERRSAY
+ERRSEG: MOVL    SAVESP, SP
+ERRSAY: PUSHL   R0
+        MOVL    R0, R1
+        MOVZBL  #^A"%", R0
+        BSBW    REPORT
+        TSTL    SEGLEN
+        BEQL    20$
+        MOVB    #2, MSG                 ; \segment\
+        MOVB    #^A" ", MSG+1
+        MOVB    #^A"\", MSG+2
+        MOVL    SEGADR, R1
+        MOVL    SEGLEN, R2
+        BSBW    ADD
+        MOVAB   BACKSL, R1
+        MOVL    #1, R2
+        BSBW    ADD
+        BSBW    SAY
+20$:    BISL3   #INHIB, (SP)+, R0
+        BRW     QUIT
+BACKSL: .ASCII  "\"
+
 ; BEGIN: R3 = where the result block's next entry goes. Starts it, with
 ; R4 at it, present, no flags, its cursor 0, no parameter value, and an
 ; empty path, R5 at its length. Uses R0.
-BEGIN:  MOVL    R3, R4
+BEGIN:
+        .JSB_ENTRY  OUTPUT=<R3, R4, R5>
+        MOVL    R3, R4
         CLRL    R0
         BSBW    PUTB                    ; its length, later
         BSBW    PUTB
@@ -558,13 +600,16 @@ BEGIN:  MOVL    R3, R4
 ; ENDPATH: R5 = the path's length byte, R3 past the path: sets it.
 ; Uses R0.
 ENDPATH:
+        .JSB_ENTRY
         SUBL3   R5, R3, R0
         DECL    R0
         MOVB    R0, (R5)
         RSB
 
 ; FINISH: R4 = an entry, R3 past it: sets its length. Uses R0.
-FINISH: SUBL3   R4, R3, R0
+FINISH:
+        .JSB_ENTRY
+        SUBL3   R4, R3, R0
         MOVB    R0, RSE$W_LENGTH(R4)
         ROTL    #24, R0, R0
         MOVB    R0, RSE$W_LENGTH+1(R4)
@@ -572,10 +617,13 @@ FINISH: SUBL3   R4, R3, R0
 
 ; PUTVAL: R1, R2 = a value's text: appends it, .ASCIC, and a 0 separator.
 ; PUTSTR0: the same, without the separator. Uses R0-R2.
-PUTVAL: BSBB    PUTSTR0
+PUTVAL:
+        .JSB_ENTRY  OUTPUT=<R3>, SCRATCH=<R2>
+        BSBB    PUTSTR0
         CLRL    R0
         BRB     PUTB
 PUTSTR0:
+        .JSB_ENTRY  OUTPUT=<R3>, SCRATCH=<R2>
         CMPL    R2, #255
         BLEQU   10$
         ERROR0  CLI$_BUFOVF
@@ -587,15 +635,19 @@ PUTSTR0:
 ; characters at R1. PUTB: the byte in R0. To R3, which moves past them;
 ; past the block's end it is CLI$_BUFOVF. Use R0-R2.
 PUTCSTR:
+        .JSB_ENTRY  OUTPUT=<R3>, SCRATCH=<R2>
         MOVZBL  (R1)+, R2
-PUTSTR: TSTL    R2
+PUTSTR: .GLOBAL_LABEL                   ; PUTSTR0's too
+        TSTL    R2
         BEQL    20$
         MOVZBL  (R1)+, R0
         BSBB    PUTB
         DECL    R2
         BRB     PUTSTR
 20$:    RSB
-PUTB:   CMPL    R3, RESEND
+PUTB:
+        .JSB_ENTRY  OUTPUT=<R3>
+        CMPL    R3, RESEND
         BLSSU   10$
         ERROR0  CLI$_BUFOVF
 10$:    MOVB    R0, (R3)+
@@ -603,7 +655,9 @@ PUTB:   CMPL    R3, RESEND
 
 ; PATH: R10 = a slot's index. Appends its path to R3: its parent's, a
 ; dot and its label, or its label. Uses R0-R2, R9, R10.
-PATH:   ASHL    #4, R10, R0
+PATH:
+        .JSB_ENTRY  OUTPUT=<R3>, SCRATCH=<R2, R9, R10>
+        ASHL    #4, R10, R0
         MOVAB   SLOTS[R0], R9
         MOVL    SLT$L_PARENT(R9), R10
         BLSS    10$
@@ -621,7 +675,9 @@ PATH:   ASHL    #4, R10, R0
 ; A name is true if it is present, NEG name if it is negated, in the
 ; result block. Uses R0-R5.
 ; ponytail: an entity present by default doesn't count.
-EVAL:   MOVZBL  (R1)+, R0
+EVAL:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5>
+        MOVZBL  (R1)+, R0
         CMPL    R0, #OP_NAME
         BEQL    10$
         CMPL    R0, #OP_NEG
@@ -682,18 +738,14 @@ EVAL:   MOVZBL  (R1)+, R0
         MOVL    #1, R0
 70$:    RSB
 
-; QUIT: R0 = a status. Back to PARSE's caller with it, and no result.
-QUIT:   MOVL    SAVESP, SP
-        CLRW    CLI$$RESULT+RES$W_LENGTH
-        CLRL    RTNADR
-        RSB
-
 ; ADDSLOTS: R8 = a count byte and as many word offsets of entities, R10
 ; their parent. Adds a slot for each. Uses R0-R3, R8, R9.
 ADDSLOTS:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R8, R9>
         MOVZBL  (R8)+, R9
 ; ADDN: the same, R9 = the count, R8 past it.
 ADDN:
+        .JSB_ENTRY  SCRATCH=<R2, R8, R9>
 10$:    TSTL    R9
         BEQL    20$
         MOVZBL  (R8)+, R1
@@ -710,6 +762,7 @@ ADDN:
 ; parent that slot, after the parameters' and qualifiers', which are then
 ; slots 0 to n-1 in order. Uses R0-R5, R8-R10.
 KEYWORDS:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5, R8, R9, R10>
         CLRL    R10                     ; a slot's index
 10$:    CMPL    R10, NSLOTS
         BGEQU   40$
@@ -728,6 +781,7 @@ KEYWORDS:
 ; ADDSLOT: R1 = an entity, R10 = its parent. Adds a slot for it, R0.
 ; Uses R2.
 ADDSLOT:
+        .JSB_ENTRY  SCRATCH=<R2>
         MOVL    NSLOTS, R2
         CMPL    R2, #NSLOT
         BLSSU   10$
@@ -742,7 +796,9 @@ ADDSLOT:
         RSB
 
 ; GETW: R1 = an entity. R0 = its type's block. Uses R0, R5.
-GETW:   MOVZBL  ENT$W_KEYWORDS(R1), R0
+GETW:
+        .JSB_ENTRY  SCRATCH=<R5>
+        MOVZBL  ENT$W_KEYWORDS(R1), R0
         MOVZBL  ENT$W_KEYWORDS+1(R1), R5
         ASHL    #8, R5, R5
         BISL2   R5, R0
@@ -752,7 +808,9 @@ GETW:   MOVZBL  ENT$W_KEYWORDS(R1), R0
 ; SYNTAX: R1 = an entity, being given. If it has a SYNTAX= this parse
 ; hasn't switched to yet, parses again with that one: a SYNTAX= back to
 ; one before stays in the one after. Uses R0, R5.
-SYNTAX: MOVZBL  ENT$W_SYNTAX(R1), R0
+SYNTAX:
+        .JSB_ENTRY  SCRATCH=<R5>
+        MOVZBL  ENT$W_SYNTAX(R1), R0
         MOVZBL  ENT$W_SYNTAX+1(R1), R5
         ASHL    #8, R5, R5
         BISL2   R5, R0
@@ -779,6 +837,7 @@ SYNTAX: MOVZBL  ENT$W_SYNTAX(R1), R0
 ; PARAMETER: R6 = a parameter's first character. Takes it, its values and
 ; the qualifiers among them, with R6 past.
 PARAMETER:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5, R6, R8, R10>
         MOVL    PARAMS, R0
         MOVZBL  (R0), R1
         CMPL    PARAMN, R1
@@ -825,7 +884,9 @@ PARAMETER:
 
 ; SETSEP: R9 = a slot, R0 = a separator: makes it what follows its last
 ; value. Uses R1.
-SETSEP: MOVZWL  SLT$W_LAST(R9), R1
+SETSEP:
+        .JSB_ENTRY
+        MOVZWL  SLT$W_LAST(R9), R1
         BEQL    10$
         DECL    R1
         ASHL    #4, R1, R1
@@ -836,6 +897,7 @@ SETSEP: MOVZWL  SLT$W_LAST(R9), R1
 ; the command's, or, if it may be, the last parameter value's, in a slot
 ; of its own.
 QUALIFIER:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5, R6, R8, R9, R10>
         INCL    R6
         BSBW    SCANNAME
         TSTL    TOKLEN
@@ -868,7 +930,9 @@ QUALIFIER:
 
 ; GIVE: R9 = the slot a qualifier or keyword in TOKEN names, R10 = 1 if
 ; it is negated. Gives it, and its value, if = or : follows, with R6 past.
-GIVE:   MOVL    SLT$L_ENT(R9), R1
+GIVE:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5, R6, R8, R9, R10>
+        MOVL    SLT$L_ENT(R9), R1
         TSTL    R10
         BNEQ    10$
         BSBW    SYNTAX
@@ -899,7 +963,8 @@ VALUES: CMPL    R6, R7
         ERROR0  CLI$_VALREQ
 5$:     CMPB    (R6), #^A"("
         BEQL    10$
-        BRW     VALUE
+        BSBW    VALUE
+        RSB
 10$:    INCL    R6
 20$:    BSBW    SKIP
         BSBW    VALUE
@@ -923,7 +988,9 @@ VALUES: CMPL    R6, R7
 
 ; VALUE: R9 = a slot. Takes one value for it, as its type says, with R6
 ; past. Keeps R9.
-VALUE:  MOVL    SLT$L_ENT(R9), R1
+VALUE:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5, R6, R8>
+        MOVL    SLT$L_ENT(R9), R1
         MOVZBL  ENT$B_TYPE(R1), R0
         CMPL    R0, #TYP_REST
         BNEQ    20$
@@ -937,7 +1004,8 @@ VALUE:  MOVL    SLT$L_ENT(R9), R1
         BRB     10$
 15$:    SUBL3   R1, R6, R2
         MOVL    R7, R6
-        BRW     ADDVAL
+        BSBW    ADDVAL
+        RSB
 20$:    CMPL    R0, #TYP_KEYWORD
         BNEQ    STRING
         BSBW    SCANNAME                ; a keyword
@@ -969,7 +1037,8 @@ VALUE:  MOVL    SLT$L_ENT(R9), R1
 ; STRING: R9 = a slot, R0 = its type. Takes a word, or text in quotes,
 ; into STRBUF, as a value. A word ends at a blank, / , + ( ) or the end,
 ; and a $UIC's not at a comma between its brackets, [g,m].
-STRING: MOVL    STRUSED, R3
+STRING:
+        MOVL    STRUSED, R3
         MOVAB   STRBUF[R3], R3
         MOVL    R3, R4                  ; its first character
         CLRL    R5                      ; 1 in quotes
@@ -1036,11 +1105,16 @@ STRING: MOVL    STRUSED, R3
         SUBL3   R0, R3, STRUSED
         MOVL    R4, R1
         CMPL    R8, #TYP_NUMBER
-        BNEQ    ADDVAL
+        BNEQ    67$
         BSBB    NUMBER
+67$:    BSBB    ADDVAL
+        RSB
+
 ; ADDVAL: R9 = a slot, R1, R2 = a value's text. Adds the value to it.
 ; Uses R0-R3.
-ADDVAL: MOVL    NVALS, R3
+ADDVAL:
+        .JSB_ENTRY  SCRATCH=<R2, R3>
+        MOVL    NVALS, R3
         CMPL    R3, #NVAL
         BLSSU   10$
         ERROR0  CLI$_BUFOVF
@@ -1068,7 +1142,9 @@ ADDVAL: MOVL    NVALS, R3
 
 ; NUMBER: R1, R2 = a value. Checks that it is an integer: digits, after a
 ; - or %X for hex ones, %O octal, %D decimal. Uses R0, R3-R5.
-NUMBER: MOVL    R1, R5
+NUMBER:
+        .JSB_ENTRY  SCRATCH=<R3, R4, R5>
+        MOVL    R1, R5
         ADDL3   R1, R2, R4              ; past its end
         MOVL    #9, R3                  ; the highest digit
         CMPB    (R5), #^A"-"
@@ -1107,7 +1183,9 @@ NUMBER: MOVL    R1, R5
 ; parent's slot, QUAL for qualifiers, MFOUR = 1 to compare the first 4
 ; characters only. R1 = R9 = its slot, R10 = 1 if NOname, R0 = 1;
 ; or R0 = CLI$_IVKEYW, CLI$_ABKEYW or CLI$_NOTNEG. Uses R0-R5.
-MATCH:  CLRL    R10
+MATCH:
+        .JSB_ENTRY  OUTPUT=<R9, R10>, SCRATCH=<R2, R3, R4, R5>
+        CLRL    R10
         MOVAB   TOKEN, R3
         MOVL    TOKLEN, R4
         BSBB    FIND
@@ -1136,7 +1214,9 @@ MATCH:  CLRL    R10
 ; FIND: R3, R4 = a name. R9 = the slot of MPARENT's whose name it is, or
 ; abbreviates, R0 = 1; or R0 = CLI$_IVKEYW, or CLI$_ABKEYW if it
 ; abbreviates more than one. Uses R0-R5, R8.
-FIND:   PUSHL   R8
+FIND:
+        .JSB_ENTRY  OUTPUT=<R9>, SCRATCH=<R2, R3, R4, R5, R8>
+        PUSHL   R8
         CLRL    R9                      ; the first that matches
         CLRL    R8                      ; how many
         CLRL    R2                      ; the slot's index
@@ -1194,7 +1274,9 @@ FIND:   PUSHL   R8
 
 ; SAME: R1, R3 = two strings, R2 = a length. R0 = 1 if their first R2
 ; characters are the same, else 0. Keeps R1-R5.
-SAME:   PUSHL   R2
+SAME:
+        .JSB_ENTRY
+        PUSHL   R2
 10$:    DECL    R2
         BLSS    20$
         CMPB    (R1)[R2], (R3)[R2]
@@ -1212,6 +1294,7 @@ SAME:   PUSHL   R2
 ; only one; a verb that a table before has one of the same name of
 ; doesn't count. Else CLI$_IVVERB or CLI$_ABVERB.
 FINDVERB:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5, R6, R7, R8, R9, R10, R11>
         TSTL    TOKLEN
         BNEQ    5$
         MOVL    R6, SEGADR              ; not a name: what is there
@@ -1278,7 +1361,9 @@ FINDVERB:
 
 ; HIDDEN: R1 = a verb's name, past its length, in table TABIX. R0 = 1 if
 ; a table before it has a verb of that name, else 0.
-HIDDEN: PUSHR   #^M<R1, R2, R3, R4, R5, R6, R7>
+HIDDEN:
+        .JSB_ENTRY
+        PUSHR   #^M<R1, R2, R3, R4, R5, R6, R7>
         MOVZBL  -1(R1), R2
         MOVL    R1, R3
         CLRL    R4                      ; a table before it
@@ -1307,7 +1392,9 @@ HIDDEN: PUSHR   #^M<R1, R2, R3, R4, R5, R6, R7>
 ; parsed: its parameters, qualifiers, DISALLOW, and its image, CLIROUTINE
 ; and ROUTINE, those it has; a syntax keeps the ones it doesn't. Uses
 ; R0-R5.
-SETCMD: MOVL    R1, CMD
+SETCMD:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5>
+        MOVL    R1, CMD
         BSBW    NEXTSTR                 ; past its name
         MOVL    R1, R4                  ; its image
         BSBW    NEXTSTR
@@ -1356,6 +1443,7 @@ SETCMD: MOVL    R1, CMD
 
 ; GETWORD: R1 = a word in the tables. R0 = it, R1 past it. Uses R2.
 GETWORD:
+        .JSB_ENTRY  SCRATCH=<R2>
         MOVZBL  (R1)+, R0
         MOVZBL  (R1)+, R2
         ASHL    #8, R2, R2
@@ -1364,12 +1452,15 @@ GETWORD:
 
 ; NEXTSTR: R1 = a .ASCIC string. Moves R1 past it. Uses R0.
 NEXTSTR:
+        .JSB_ENTRY
         MOVZBL  (R1)+, R0
         ADDL2   R0, R1
         RSB
 
 ; SKIP: moves R6 past blanks, up to R7.
-SKIP:   CMPL    R6, R7
+SKIP:
+        .JSB_ENTRY  SCRATCH=<R6>
+        CMPL    R6, R7
         BGEQU   10$
         CMPB    (R6), #^A" "
         BNEQ    10$
@@ -1381,6 +1472,7 @@ SKIP:   CMPL    R6, R7
 ; capitals, with R6 past them all: TOKLEN = how many it kept, at most 255.
 ; Uses R0, R1.
 SCANNAME:
+        .JSB_ENTRY  OUTPUT=<R6>
         CLRL    R1
 10$:    CMPL    R6, R7
         BGEQU   90$
@@ -1411,38 +1503,11 @@ SCANNAME:
 90$:    MOVL    R1, TOKLEN
         RSB
 
-; ERRTOK: R0 = a CLI$_ status: reports it with the word in TOKEN, and
-; returns from PARSE with it. ERRNONE: without a word. ERRSEG: with the
-; SEGLEN characters at SEGADR.
-ERRTOK: MOVAB   TOKEN, SEGADR
-        MOVL    TOKLEN, SEGLEN
-        BRB     ERRSEG
-ERRNONE:
-        CLRL    SEGLEN
-ERRSEG: MOVL    SAVESP, SP
-        PUSHL   R0
-        MOVL    R0, R1
-        MOVZBL  #^A"%", R0
-        BSBW    REPORT
-        TSTL    SEGLEN
-        BEQL    10$
-        MOVB    #2, MSG                 ; \segment\
-        MOVB    #^A" ", MSG+1
-        MOVB    #^A"\", MSG+2
-        MOVL    SEGADR, R1
-        MOVL    SEGLEN, R2
-        BSBW    ADD
-        MOVAB   BACKSL, R1
-        MOVL    #1, R2
-        BSBW    ADD
-        BSBW    SAY
-10$:    BISL3   #INHIB, (SP)+, R0
-        BRW     QUIT
-BACKSL: .ASCII  "\"
-
 ; REPORT: R0 = % or -, R1 = a CLI$_ status. Writes %FACILITY-S-NAME, text,
 ; from MESSAGES. Uses R0-R5.
-REPORT: MOVB    #1, MSG
+REPORT:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5>
+        MOVB    #1, MSG
         MOVB    R0, MSG+1
         MOVL    R1, R4
         MOVL    FACNAM, R1
@@ -1483,14 +1548,18 @@ REPORT: MOVB    #1, MSG
         MOVL    R5, R1
         BSBW    ADD
 ; SAY: writes the message in MSG. Uses R0, R1.
-SAY:    PUSHAB  MSG
+SAY:
+        .JSB_ENTRY
+        PUSHAB  MSG
         CALLS   #1, G^PUT_LINE
         RSB
 DASH:   .ASCII  "-"
 COMMA:  .ASCII  ", "
 
 ; ADD: appends the R2 characters at R1 to MSG, as many as fit. Uses R0-R2.
-ADD:    MOVZBL  MSG, R0
+ADD:
+        .JSB_ENTRY  SCRATCH=<R2>
+        MOVZBL  MSG, R0
 10$:    TSTL    R2
         BEQL    20$
         CMPL    R0, #255
@@ -1504,9 +1573,13 @@ ADD:    MOVZBL  MSG, R0
 
 ; FINDC: R1 = a path, .ASCIC, in capitals. R4 = the entry of the result
 ; block with that path, or 0; R5 = the block. Uses R0-R5.
-FINDC:  MOVZBL  (R1)+, R2
+FINDC:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5>
+        MOVZBL  (R1)+, R2
 ; FINDN: the same, for the R2 characters at R1.
-FINDN:  MOVL    RESBASE, R5
+FINDN:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5>
+        MOVL    RESBASE, R5
         BNEQ    10$
         MOVL    #VA$C_CLI_RESULT, R5
 10$:    MOVZWL  RES$W_LENGTH(R5), R0
@@ -1532,7 +1605,9 @@ FINDN:  MOVL    RESBASE, R5
 ; NAME: 4(AP) = a name's descriptor. Puts it in TOKEN, in capitals, and
 ; finds its entry: R4, or 0, R5 = the block, R0 = 1 if the block has a
 ; command at all. Uses R0-R5.
-NAME:   MOVL    4(AP), R0
+NAME:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5>
+        MOVL    4(AP), R0
         MOVZWL  (R0), R2
         MOVL    4(R0), R1
         CMPL    R2, #255
@@ -1585,7 +1660,9 @@ QUOTE:  .ASCII  "'"
 ; LOCALE: R4 = an entry of the result block at R5. If a qualifier with
 ; its path was given after the parameter value CLI$GET_VALUE returned
 ; last, R4 = that one's entry and R0 = 1, else R0 = 0. Uses R1-R3.
-LOCALE: TSTL    CURVAL
+LOCALE:
+        .JSB_ENTRY  OUTPUT=<R4>, SCRATCH=<R2, R3>
+        TSTL    CURVAL
         BEQL    80$
         MOVZWL  RES$W_LENGTH(R5), R0
         ADDL2   R5, R0

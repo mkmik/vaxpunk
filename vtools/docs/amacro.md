@@ -348,7 +348,7 @@ DESIGN-0004 is the result. Against the sources:
 - **Left out.** Alpha's linkage sections and procedure descriptors as
   procedure values (ARM64 is PC-relative); `.LINKAGE_PSECT`,
   `.DEFINE_PAL`, `EVAX_TRAPB`, `RPCC`, the FPCR built-ins and the
-  Itanium-only built-ins; `.CALL_LINKAGE` and its family, which Itanium
-  needed because its mapping put VAX registers on scratch registers, and
-  vaxpunk's doesn't (accepted and ignored, so ported sources compile);
-  Alpha's byte-manipulation built-ins until something needs them.
+  Itanium-only built-ins; Alpha's byte-manipulation built-ins until
+  something needs them. `.CALL_LINKAGE` and its family stay, for another
+  reason than Itanium's: they say what a JSB routine in another module
+  modifies, which a caller that saves what it modifies needs to know.

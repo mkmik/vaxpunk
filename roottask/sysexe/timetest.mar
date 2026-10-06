@@ -93,6 +93,7 @@ STATE:  .LONG   0
 
 ; ELAPSED: R0 = 1 if 50 ms or more have gone by since T0, else 0. Uses R1.
 ELAPSED:
+        .JSB_ENTRY
         $GETTIM_S TIMADR=T1
         MOVQ    T1, R0
         SUBL2   T0, R0

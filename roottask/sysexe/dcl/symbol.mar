@@ -44,7 +44,9 @@ DCL$SYMEND::                            ; past them
         .PSECT  CODE, EXE, LONG
 ; SCOPE: R10 = the level a symbol command's /LOCAL or /GLOBAL says: the
 ; procedure running's, GLOBAL, or ANY for neither. Uses R0, R1.
-SCOPE:  MOVL    #GLOBAL, R10
+SCOPE:
+        .JSB_ENTRY  OUTPUT=<R10>
+        MOVL    #GLOBAL, R10
         MOVAB   V_GLOBAL, R1
         BSBB    DCL$ISPRES
         BLBS    R0, 10$
@@ -59,6 +61,7 @@ SCOPE:  MOVL    #GLOBAL, R10
 ; DCL$SYMNAM = the name. Makes it a local symbol, or a global one, with
 ; the value.
 DCL$ASSIGN::
+        .EXCEPTION_ENTRY
         INCL    R6
         MOVL    DCL$DEPTH, R10
         CMPL    R6, R7
@@ -80,6 +83,7 @@ DCL$ASSIGN::
 ; = the name. The same, with the rest of the line, as DCL$QREST makes
 ; it.
 DCL$STRASSIGN::
+        .EXCEPTION_ENTRY
         INCL    R6
         MOVL    DCL$DEPTH, R10
         CMPL    R6, R7
@@ -95,6 +99,7 @@ DCL$STRASSIGN::
 ; SETTARGET: (SP) = a level. Sets the symbol DCL$TARGET names there to
 ; DCL$VSTACK's first value.
 SETTARGET:
+        .GLOBAL_LABEL                   ; DCL$ASSIGN's too
         MOVC3   #32, DCL$TARGET, DCL$SYMNAM
         MOVL    (SP)+, R10
         MOVAB   DCL$VSTACK, R9
@@ -104,6 +109,7 @@ SETTARGET:
 ; DCL$WRITE, WRITE SYS$OUTPUT expression[,...]: writes the values, as
 ; strings, one after the other, on a line.
 DCL$WRITE::
+        .EXCEPTION_ENTRY
         MOVAB   DCL$V_LOGNAM, R1
         BSBW    DCL$GETVAL
         CMPB    R8, V_OUTPUT
@@ -143,6 +149,7 @@ DCL$WRITE::
 ; running or the global one. With /ALL instead of a name, every local
 ; symbol of the procedure running, or every global one.
 DCL$SHOWSYM::
+        .EXCEPTION_ENTRY
         MOVAB   V_ALL, R1
         BSBW    DCL$ISPRES
         BLBC    R0, 2$
@@ -213,6 +220,7 @@ SHOWALL:
 ; VALUEOF: R1 = a symbol. Copies its value to DCL$VSTACK, R9 at it: R11
 ; = 1 if it is global. Uses R0-R5.
 VALUEOF:
+        .JSB_ENTRY  OUTPUT=<R9, R11>, SCRATCH=<R2, R3, R4, R5>
         CLRL    R11
         CMPL    SYM$L_LEVEL(R1), #GLOBAL
         BNEQ    10$
@@ -223,7 +231,9 @@ VALUEOF:
 
 ; SHOW1: DCL$SYMNAM = a symbol's name, R9 = its value, R11 = 1 if it is
 ; global. Writes it as SHOW SYMBOL does. Uses R0-R5, R10.
-SHOW1:  ADDTEXT "  "
+SHOW1:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5, R10>
+        ADDTEXT "  "
         BSBW    DCL$ADDSYM
         ADDTEXT " ="
         TSTL    R11
@@ -251,6 +261,7 @@ SHOW1:  ADDTEXT "  "
 ; symbol name of the procedure running, or the console's, or the global
 ; one. DELETE/SYMBOL/ALL deletes every one of them.
 DCL$DELSYM::
+        .EXCEPTION_ENTRY
         BSBW    SCOPE
         CMPL    R10, #ANY
         BNEQ    5$
@@ -281,6 +292,7 @@ DCL$DELSYM::
 ; DCL$SAMESTR: R1 and R2 = two .ASCIC strings. R0 = 1 if they are the
 ; same, else 0. Uses R3.
 DCL$SAMESTR::
+        .JSB_ENTRY  SCRATCH=<R3>
         CLRL    R0
         MOVZBL  (R1), R3
         CMPB    R3, (R2)
@@ -296,7 +308,9 @@ DCL$SAMESTR::
 
 ; FINDAT: R10 = a level. R1 = the symbol DCL$SYMNAM names at that level,
 ; or 0. Uses R0-R5.
-FINDAT: MOVAB   DCL$SYMTAB, R5
+FINDAT:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5>
+        MOVAB   DCL$SYMTAB, R5
 10$:    CMPL    SYM$L_LEVEL(R5), R10
         BNEQ    20$
         MOVAB   SYM$T_NAME(R5), R1
@@ -316,6 +330,7 @@ FINDAT: MOVAB   DCL$SYMTAB, R5
 ; running or to those it is in, the nearest, else global; 0 if there is
 ; none. Uses R0-R5.
 DCL$FINDSYM::
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5>
         PUSHL   R10
         MOVL    DCL$DEPTH, R10
 10$:    BSBB    FINDAT
@@ -331,6 +346,7 @@ DCL$FINDSYM::
 ; $STATUS and $SEVERITY too: R0 = 1, or 0 if there is no such symbol.
 ; Uses R0-R5.
 DCL$GETSYM::
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5>
         MOVAB   STATNAM, R1
         MOVAB   DCL$SYMNAM, R2
         BSBW    DCL$SAMESTR
@@ -358,6 +374,7 @@ DCL$GETSYM::
 ; DCL$SETSYM: R9 = a value, R10 = a level. Gives the symbol DCL$SYMNAM
 ; names at that level the value, making it if there is none. Uses R0-R5.
 DCL$SETSYM::
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5>
         BSBB    FINDAT
         TSTL    R1
         BNEQ    30$

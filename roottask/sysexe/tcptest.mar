@@ -89,7 +89,9 @@ LISTEN: $ASSIGN_S DEVNAM=BGA0, CHAN=LCHAN
 
 ; READ: receives what comes into BUF, LEN bytes, and writes it, without
 ; its line end. R0 = the status.
-READ:   $QIOW_S CHAN=CHAN, FUNC=#IO$_READVBLK, IOSB=IOSB, P1=BUF, P2=#255
+READ:
+        .JSB_ENTRY
+        $QIOW_S CHAN=CHAN, FUNC=#IO$_READVBLK, IOSB=IOSB, P1=BUF, P2=#255
         BSBW    STATUS
         BLBC    R0, 90$
         MOVZWL  IOSB+2, R1
@@ -109,7 +111,9 @@ READ:   $QIOW_S CHAN=CHAN, FUNC=#IO$_READVBLK, IOSB=IOSB, P1=BUF, P2=#255
 90$:    RSB
 
 ; STATUS: R0 = $QIOW's status. R0 = the IOSB's, if that was a success.
-STATUS: BLBC    R0, 90$
+STATUS:
+        .JSB_ENTRY
+        BLBC    R0, 90$
         MOVZWL  IOSB, R0
 90$:    RSB
 

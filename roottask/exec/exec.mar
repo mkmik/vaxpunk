@@ -66,7 +66,10 @@ SYSLNM: .ASCIC  "SYS$SYSDEVICE"         ; the system disk
         .BYTE   0
 
         .PSECT  $CODE$
-        .ENTRY  EXEC$START, ^M<>
+; EXEC$START: where the PAL starts the executive, with R11 = the RPB.
+; Doesn't return: it becomes the swapper.
+EXEC$START::
+        .EXCEPTION_ENTRY
         MOVL    R11, EXE$GL_RPB
         MOVAB   EXE$OPCDEC, EXE$AL_SCB+SCB$L_OPCDEC
         MOVAB   EXE$ACVIOLAT, EXE$AL_SCB+SCB$L_ACCVIO
@@ -148,6 +151,7 @@ SWAPPER:
 ; CON$PUTCHAR: writes the character in R0 on the console, for consolio's
 ; EXE$OUT* routines. Keeps every register.
 CON$PUTCHAR::
+        .JSB_ENTRY
         MTPR    R0, #PR$_TXDB
         RSB
 

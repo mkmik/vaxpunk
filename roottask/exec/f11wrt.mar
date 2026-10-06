@@ -146,6 +146,7 @@ FORMAT: .ASCII  "DECFILE11B  "
 ; CHECKSUM: R1 = a block, R2 = a word count. R0 = the sum of its first R2
 ; words, a word. Uses R3.
 CHECKSUM:
+        .JSB_ENTRY  SCRATCH=<R3>
         CLRL    R0
         CLRL    R3
 10$:    ADDW2   (R1)[R3], R0
@@ -157,6 +158,7 @@ CHECKSUM:
 ; file's slot of F11$GL_VCB's index file. R0 = SS$_NORMAL or the disk's
 ; error. Holding FIL$LOCK. Keeps every other register.
 FIL$WRITEHDR::
+        .JSB_ENTRY
         PUSHR   #^M<R1, R2, R3>
         MOVL    #255, R2
         BSBB    CHECKSUM
@@ -170,7 +172,9 @@ FIL$WRITEHDR::
 
 ; HDRVBN: R1 = a file header. R0 = its slot's VBN in the index file, R3 =
 ; the index file's header.
-HDRVBN: MOVZBL  FH2$B_FID_NMX(R1), R0
+HDRVBN:
+        .JSB_ENTRY  SCRATCH=<R3>
+        MOVZBL  FH2$B_FID_NMX(R1), R0
         ASHL    #16, R0, R0
         MOVW    FH2$W_FID(R1), R0
         MOVL    F11$GL_VCB, R3
@@ -182,7 +186,9 @@ HDRVBN: MOVZBL  FH2$B_FID_NMX(R1), R0
 ; BITMAP: R0 = 0 to read the index file bitmap's block into BITBLK, 1 to
 ; write it from there, 2 and 3 the same for the storage bitmap's. R0 =
 ; SS$_NORMAL or the disk's error. Keeps every other register.
-BITMAP: PUSHR   #^M<R1, R2>
+BITMAP:
+        .JSB_ENTRY
+        PUSHR   #^M<R1, R2>
         MOVL    F11$GL_VCB, R2
         BBS     #1, R0, 10$
         MOVL    VCB$L_IBMAPLBN(R2), R2
@@ -203,6 +209,7 @@ BITMAP: PUSHR   #^M<R1, R2>
 ; the current process's UIC, with FILEPROT, in the MFD, made and revised
 ; now. Uses R0-R5.
 EMPTYHDR:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5>
         PUSHR   #^M<R1, R2, R3>
         MOVC5   #0, (R1), #0, #BLOCK, (R1)
         POPR    #^M<R1, R2, R3>
@@ -230,6 +237,7 @@ EMPTYHDR:
 ; length, R4 = a version. Puts NAME.TYPE;VERSION in the header's ident
 ; area, padded with blanks. Keeps every register.
 FIL$SETNAME::
+        .JSB_ENTRY
         PUSHR   #^M<R0, R2, R3, R5, R6, R7, R8>
         MOVAB   IDOFFSET*2(R1), R8
         CLRL    R2                      ; the characters written
@@ -237,11 +245,11 @@ FIL$SETNAME::
 10$:    CMPL    R3, R7
         BGEQU   20$
         MOVZBL  (R6)[R3], R0
-        BSBB    40$
+        BSBB    PUTNAME
         INCL    R3
         BRB     10$
 20$:    MOVZBL  #59, R0                 ; a semicolon, then the version
-        BSBB    40$
+        BSBB    PUTNAME
         CLRL    R5                      ; its digits, on the stack
         MOVL    R4, R6
 25$:    DIVL3   #10, R6, R7
@@ -253,18 +261,22 @@ FIL$SETNAME::
         MOVL    R7, R6
         BNEQ    25$
 30$:    MOVL    (SP)+, R0
-        BSBB    40$
+        BSBB    PUTNAME
         SOBGTR  R5, 30$
 35$:    CMPL    R2, #86                 ; the rest blank
         BGEQU   38$
         MOVZBL  #^A/ /, R0
-        BSBB    40$
+        BSBB    PUTNAME
         BRB     35$
 38$:    POPR    #^M<R0, R2, R3, R5, R6, R7, R8>
         RSB
-; The R2th character of the name is R0: the first 20 in FI2$T_FILENAME,
-; the rest in FI2$T_FILENAMEXT.
-40$:    CMPL    R2, #20
+
+; PUTNAME: R8 = a header's ident area, R0 = the R2th character of the
+; name, which goes in FI2$T_FILENAME, the first 20, or FI2$T_FILENAMEXT.
+; R2 = the next one's.
+PUTNAME:
+        .JSB_ENTRY  OUTPUT=<R2>
+        CMPL    R2, #20
         BGEQU   45$
         MOVB    R0, FI2$T_FILENAME(R8)[R2]
         BRB     48$
@@ -279,6 +291,7 @@ FIL$SETNAME::
 ; is in use, or the disk's error. Holding FIL$LOCK. Keeps every other
 ; register.
 FIL$CREHDR::
+        .JSB_ENTRY
         PUSHR   #^M<R1, R2, R3, R4, R5, R6>
         MOVL    R1, R6
         CLRL    R0
@@ -322,6 +335,7 @@ FIL$CREHDR::
 ; length. R0 = SS$_NORMAL, SS$_DEVICEFULL if no block is free, or the
 ; disk's error. Uses R3.
 ALLOCBLK:
+        .JSB_ENTRY  OUTPUT=<R2>, SCRATCH=<R3>
         PUSHL   R4
         MOVL    #2, R0
         BSBW    BITMAP
@@ -349,6 +363,7 @@ ALLOCBLK:
 ; FREEBLK: R1 = a block count, R2 = an LBN. Gives the blocks back to the
 ; storage bitmap. R0 = SS$_NORMAL or the disk's error. Uses R1-R2.
 FREEBLK:
+        .JSB_ENTRY  SCRATCH=<R2>
         MOVL    #2, R0
         BSBW    BITMAP
         BLBC    R0, 90$
@@ -364,9 +379,11 @@ FREEBLK:
 ; GETHIBLK: R3 = a file header. R0 = the blocks allocated to it. And
 ; PUTHIBLK, R0 = the blocks to set it to. Keep every other register.
 GETHIBLK:
+        .JSB_ENTRY
         ROTL    #16, FAT$L_HIBLK(R3), R0
         RSB
 PUTHIBLK:
+        .JSB_ENTRY
         ROTL    #16, R0, FAT$L_HIBLK(R3)
         RSB
 
@@ -374,7 +391,9 @@ PUTHIBLK:
 ; blocks past the file's last, merging them into its last pointer if they
 ; follow it; if they don't, the file is no longer contiguous. R0 =
 ; SS$_NORMAL, or SS$_HEADERFULL if its map is full. Uses R4-R5.
-ADDMAP: MOVZBL  FH2$B_MPOFFSET(R3), R4
+ADDMAP:
+        .JSB_ENTRY  SCRATCH=<R4, R5>
+        MOVZBL  FH2$B_MPOFFSET(R3), R4
         MOVZBL  FH2$B_MAP_INUSE(R3), R5
         CMPL    R5, #3
         BLSSU   20$
@@ -421,6 +440,7 @@ ADDMAP: MOVZBL  FH2$B_MPOFFSET(R3), R4
 ; mapped until then still the file's. Holding FIL$LOCK. Keeps every other
 ; register.
 FIL$EXTEND::
+        .JSB_ENTRY
         PUSHR   #^M<R1, R2, R4, R5, R6>
         MOVL    R1, R6                  ; the blocks left
 10$:    TSTL    R6
@@ -453,6 +473,7 @@ FIL$EXTEND::
 ; the header deleted, its sequence number kept for the slot's next file.
 ; R0 = SS$_NORMAL or the disk's error. Holding FIL$LOCK. Uses R1-R5.
 FIL$DELHDR::
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5>
         PUSHL   R6
         MOVL    R1, R6
         MOVL    #1, R4                  ; the next VBN
@@ -502,6 +523,7 @@ FIL$DELHDR::
 ; SS$_BADFILEVER if it would be above 32767, SS$_INSFMEM, or the disk's
 ; error. Holding FIL$LOCK. Uses R0-R5.
 FIL$ENTER::
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5>
         CLRL    DU_MODE
         MOVL    R8, DU_VER
         MOVL    (R5), DU_FID
@@ -515,6 +537,7 @@ FIL$ENTER::
 ; = its file number. R0 = SS$_NORMAL, SS$_NOSUCHFILE if there is no such
 ; entry, SS$_INSFMEM, or the disk's error. Holding FIL$LOCK. Uses R0-R5.
 FIL$REMOVE::
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5>
         MOVL    #1, DU_MODE
         MOVL    R8, DU_VER
         BSBB    DIRUPD
@@ -531,6 +554,7 @@ FIL$REMOVE::
 ; its header, R0 = SS$_NORMAL, or FIL$CREHDR's, FIL$EXTEND's or
 ; FIL$ENTER's error, with nothing made. Holding FIL$LOCK. Uses R0-R5.
 FIL$MKDIR::
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5>
         PUSHR   #^M<R8, R9>
         MOVL    R3, R9                  ; the one it goes in
         MOVAB   NEWHDR, R1
@@ -583,7 +607,9 @@ FIL$MKDIR::
 ; blocks again, and writes them back, extending the directory if it grew,
 ; and its header, with its new end of file. R0 = SS$_NORMAL, or the
 ; error, and the directory as it was. Uses R0-R5.
-DIRUPD: PUSHR   #^M<R6, R7, R8, R9, R10, R11>
+DIRUPD:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5>
+        PUSHR   #^M<R6, R7, R8, R9, R10, R11>
         MOVL    R6, DU_NAME
         MOVL    R7, DU_NAME+4
         CLRL    DU_DONE
@@ -666,7 +692,9 @@ DIRUPD: PUSHR   #^M<R6, R7, R8, R9, R10, R11>
 ; ONEREC: R8 = a directory record, and DIRUPD's. Copies it, entering the
 ; new record before it, or the entry in it, or removing the entry from it.
 ; R0 = SS$_NORMAL, or the error. Uses R0-R6.
-ONEREC: TSTL    DU_DONE
+ONEREC:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5, R6>
+        TSTL    DU_DONE
         BNEQ    50$
         MOVAB   6(R8), R1
         MOVZBL  5(R8), R2
@@ -705,6 +733,7 @@ ONEREC: TSTL    DU_DONE
 ; before DU_NAME, is it, or sorts after it: byte by byte, a shorter name
 ; first. Uses R3-R4.
 COMPARE:
+        .JSB_ENTRY  SCRATCH=<R3, R4>
         CLRL    R3
         MOVL    DU_NAME, R4
 10$:    CMPL    R3, R2
@@ -727,7 +756,9 @@ COMPARE:
 ; NEWREC: makes a record for DU_NAME in RECBUF, with an entry for DU_FID,
 ; version DU_VER, 1 if that is 0: R1 = RECBUF, R2 = its length. Uses
 ; R0-R6.
-NEWREC: MOVAB   RECBUF, R3
+NEWREC:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5, R6>
+        MOVAB   RECBUF, R3
         MOVW    #MAXVER, 2(R3)          ; the version limit
         CLRB    4(R3)                   ; the flags
         MOVB    DU_NAME+4, 5(R3)
@@ -748,6 +779,7 @@ NEWREC: MOVAB   RECBUF, R3
 ; PUTENTRY: R6 = where an entry goes. Writes DU_VER's and DU_FID's
 ; there, R6 past it.
 PUTENTRY:
+        .JSB_ENTRY  SCRATCH=<R6>
         MOVW    DU_VER, (R6)+
         MOVL    DU_FID, (R6)+
         MOVW    DU_FID+4, (R6)+
@@ -755,7 +787,9 @@ PUTENTRY:
 
 ; RECEND: R3 = a record being made, R6 = past it. Sets its size: R1 =
 ; it, R2 = its length.
-RECEND: SUBL3   R3, R6, R2
+RECEND:
+        .JSB_ENTRY  SCRATCH=<R2>
+        SUBL3   R3, R6, R2
         SUBW3   #2, R2, (R3)
         MOVL    R3, R1
         RSB
@@ -764,6 +798,7 @@ RECEND: SUBL3   R3, R6, R2
 ; flags and name to RECBUF: R3 = RECBUF, R6 = past what was copied there,
 ; R4 = the record's first entry, R5 = past its last. Uses R0-R6.
 RECHEAD:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5, R6>
         MOVZBL  5(R8), R2
         INCL    R2
         BICL2   #1, R2
@@ -784,6 +819,7 @@ RECHEAD:
 ; that is 0; versions go from highest to lowest. R1 = RECBUF, R2 = its
 ; length, R0 = SS$_NORMAL, SS$_DUPFILENAME or SS$_BADFILEVER. Uses R0-R6.
 ADDENTRY:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5, R6>
         BSBB    RECHEAD
         TSTL    DU_VER
         BNEQ    10$
@@ -817,6 +853,7 @@ ADDENTRY:
 ; length, 0 if no entry is left. R0 = 1, or 0 if the record has no such
 ; entry. Uses R0-R6.
 DELENTRY:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5, R6>
         BSBB    RECHEAD
         PUSHL   R6                      ; past the head
         CLRL    R0
@@ -841,7 +878,9 @@ DELENTRY:
 ; directory being made, in the next block if it doesn't fit in this one.
 ; R0 = SS$_NORMAL, or SS$_BADIRECTORY if it doesn't fit in a block. Uses
 ; R0-R5.
-EMIT:   CMPL    R2, #BLOCK
+EMIT:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5>
+        CMPL    R2, #BLOCK
         BGTRU   80$
         BICL3   #^C<BLOCK-1>, DU_POS, R0
         ADDL2   R2, R0
@@ -861,7 +900,9 @@ EMIT:   CMPL    R2, #BLOCK
 ; ENDBLK: ends the block being made, with a record size of all ones if
 ; there is room for it, and starts the next. The first block always has
 ; one. Uses R0-R1.
-ENDBLK: BICL3   #^C<BLOCK-1>, DU_POS, R0
+ENDBLK:
+        .JSB_ENTRY
+        BICL3   #^C<BLOCK-1>, DU_POS, R0
         BNEQ    10$
         TSTL    DU_POS
         BNEQ    20$
@@ -881,6 +922,7 @@ ENDBLK: BICL3   #^C<BLOCK-1>, DU_POS, R0
 ; ponytail: no backup home block or index file header: the home block's
 ; backup LBNs are the primary ones.
 FIL$INIT::
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5, R6, R7, R8, R9, R10, R11>
         MOVL    R3, VOLSIZE
         MOVL    R4, VOLOWNER
         MOVL    R5, VOLPROT
@@ -1013,7 +1055,9 @@ FIL$INIT::
 ; Gives it its name, version 1, record attributes and blocks, the
 ; volume's owner, MFDPROT for the MFD, and writes it. R0 = SS$_NORMAL or
 ; the disk's error. Uses R0-R7.
-RESHDR: MOVL    R10, R6
+RESHDR:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5, R6, R7>
+        MOVL    R10, R6
         MOVL    #10, R7
         MOVL    #1, R4
         BSBW    FIL$SETNAME
@@ -1038,7 +1082,7 @@ RESHDR: MOVL    R10, R6
         MOVW    #MFDPROT, FH2$W_FILEPROT(R3)
 20$:    ROTL    #16, R1, FAT$L_EFBLK(R3)
         MOVL    R3, R1
-        BRW     FIL$WRITEHDR
+        BSBW    FIL$WRITEHDR
 90$:    RSB
 
 ; $INIT_VOL devnam, volnam, itmlst: writes an empty Files-11 ODS-2
@@ -1109,6 +1153,7 @@ RESHDR: MOVL    R10, R6
 ; SS$_ACCVIO if the caller can't read it, or SS$_BADPARAM for an item
 ; too short. Uses R0-R2 and R10.
 INITITEMS:
+        .JSB_ENTRY  SCRATCH=<R2, R10>
 10$:    IFNORD  #4, (R10), 85$
         TSTL    (R10)
         BEQL    70$
@@ -1140,7 +1185,9 @@ INITITEMS:
 ; the current process may write another volume there: with VOLPRO, or if
 ; the volume there is its own, as its home block says, or if there is
 ; none, else SS$_NOPRIV. Holding FIL$LOCK. Uses R0-R2.
-OWNVOL: MOVL    SCH$GL_CURPCB, R2
+OWNVOL:
+        .JSB_ENTRY  SCRATCH=<R2>
+        MOVL    SCH$GL_CURPCB, R2
         IFPRIV  VOLPRO, 70$, R2
         MOVAB   BITBLK, R0
         MOVL    #1, R1
