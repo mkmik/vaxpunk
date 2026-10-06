@@ -2,7 +2,10 @@
         .IDENT  /V0.1/
 ;
 ; RUN PROTTEST at the console runs this, once the boot test has made
-; DKB0:[000000]DATA.TXT and set its protection. It makes PROTCHILD, a
+; DKB0:[000000]DATA.TXT and set its protection. It first makes
+; DKB0:[000000]GIVEN.TXT with a protection XAB, [200,1]'s and (W:R),
+; which $OPEN must say it has, and deletes it, else it returns SS$_ABORT.
+; Then it makes PROTCHILD, a
 ; process of UIC [200,1], outside the system's groups and the file's, with
 ; no privileges, which runs this image too, and waits for its termination
 ; message. PROTCHILD reads the file's first record; then it may not give
@@ -53,7 +56,11 @@ DATA:   .ASCII  "DKB0:[000000]DATA.TXT"
 DATALEN = .-DATA
 NEW:    .ASCII  "DKB0:[000000]OUTSIDER.TXT"
 NEWLEN = .-NEW
+GIVEN:  .ASCII  "DKB0:[000000]GIVEN.TXT"
+GIVENLEN = .-GIVEN
         .ALIGN  LONG
+GFAB:   $FAB    FNA=GIVEN, FNS=GIVENLEN, XAB=GXAB
+GXAB:   $XABPRO
 FAB:    $FAB    FNA=DATA, FNS=DATALEN, XAB=XAB
 XAB:    $XABPRO
 RAB:    $RAB    FAB=FAB, UBF=RECORD, USZ=80
@@ -65,6 +72,8 @@ NEWFAB: $FAB    FNA=NEW, FNS=NEWLEN
         BLBC    R0, 90$
         CMPL    UIC, #OUTSIDER
         BEQL    CHILD
+        BSBW    CREATED
+        BLBC    R0, 90$
         $CREMBX_S CHAN=CHAN, MAXMSG=#ACC$K_TERMLEN, BUFQUO=#ACC$K_TERMLEN
         BLBC    R0, 90$
         $GETDVIW_S CHAN=CHAN, ITMLST=DVI_ITEMS
@@ -77,6 +86,32 @@ NEWFAB: $FAB    FNA=NEW, FNS=NEWLEN
         BLBC    R0, 90$
         PRINT   "PROTTEST: [200,1] read DATA.TXT, and may not give it away, delete it or make a file there"
 90$:    RET
+
+; CREATED: makes GIVEN.TXT with GXAB's owner and protection, checks
+; that $OPEN gets them, and deletes it. R0 = SS$_NORMAL, SS$_ABORT if
+; they aren't, or RMS's error.
+CREATED:
+        MOVL    #OUTSIDER, GXAB+XAB$L_UIC
+        MOVW    #^XEA00, GXAB+XAB$W_PRO ; (S:RWED,O:RWED,G:RE,W:R)
+        $CREATE FAB=GFAB
+        BLBC    R0, 90$
+        $CLOSE  FAB=GFAB
+        CLRL    GXAB+XAB$L_UIC
+        CLRW    GXAB+XAB$W_PRO
+        $OPEN   FAB=GFAB
+        BLBC    R0, 90$
+        $CLOSE  FAB=GFAB
+        BLBC    R0, 90$
+        $ERASE  FAB=GFAB
+        BLBC    R0, 90$
+        CMPL    GXAB+XAB$L_UIC, #OUTSIDER
+        BNEQ    80$
+        CMPW    GXAB+XAB$W_PRO, #^XEA00
+        BNEQ    80$
+        MOVL    #SS$_NORMAL, R0
+        RSB
+80$:    MOVL    #SS$_ABORT, R0
+90$:    RSB
 
 ; CHILD: PROTCHILD's: reads, then fails to give the file to [200,2], to
 ; delete it and to make a file.
