@@ -1,6 +1,7 @@
 #!/bin/sh
 # Boot out/esp.img: EDK2 -> Limine -> shim -> seL4 -> root task.
-# Usage: run-qemu.sh [--gdb] [--hvf] [--uart1[=PORT]]. Quit with Ctrl-A x.
+# Usage: run-qemu.sh [--gdb] [--hvf] [--uart1[=PORT]] | --firmware. Quit with Ctrl-A x.
+#   --firmware  print the EDK2 firmware image's path and exit
 #   --gdb    wait for a debugger on localhost:1234 (-s -S)
 #   --hvf    use Hypervisor.framework instead of TCG (best effort, macOS only)
 #   --uart1  serve the second UART on telnet localhost:PORT (default 4444)
@@ -16,13 +17,15 @@ root=$(cd "$(dirname "$0")/.." && pwd)
 cpu="-cpu $QEMU_CPU"
 gdb=""
 uart1=null
+firmware=""
 for arg; do
 	case $arg in
 	--gdb) gdb="-s -S" ;;
 	--hvf) cpu="-accel hvf -cpu host" ;;
+	--firmware) firmware=1 ;;
 	--uart1) uart1=telnet:localhost:4444,server,nowait ;;
 	--uart1=*) uart1=telnet:localhost:${arg#--uart1=},server,nowait ;;
-	*) echo "usage: $0 [--gdb] [--hvf] [--uart1[=PORT]]" >&2; exit 2 ;;
+	*) echo "usage: $0 [--gdb] [--hvf] [--uart1[=PORT]] | --firmware" >&2; exit 2 ;;
 	esac
 done
 
@@ -37,6 +40,7 @@ if [ -z "${EDK2_FW:-}" ]; then
 	echo "run-qemu: EDK2 firmware not found, set EDK2_FW" >&2
 	exit 1
 fi
+if [ "$firmware" ]; then echo "$EDK2_FW"; exit; fi
 
 # The machine options must match the DTB seL4 dumped at configure time
 # (seL4/src/plat/qemu-arm-virt/config.cmake). acpi=off makes EDK2 hand the DTB

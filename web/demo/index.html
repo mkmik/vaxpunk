@@ -8,10 +8,12 @@
 <script src="coi-serviceworker.js"></script>
 <link rel="stylesheet" href="../page.css"><link rel="stylesheet" href="vendor/xterm.css">
 <style>main{margin:4rem 0 0;padding:1rem;max-width:none}#terminal{height:calc(100vh - 8rem)}
-#status{font:.8rem var(--sans);color:var(--dim);margin-bottom:.5rem}</style></head>
+#status{font:.8rem var(--sans);color:var(--dim);margin-bottom:.5rem}#net{margin-left:auto}.top button+button{margin-left:-.8rem}</style></head>
 <body><header class="top"><a class="logo" href="../" aria-label="vaxpunk"><span>v</span><span>a</span><span>x</span><span>p</span><span>u</span><span>n</span><span>k</span></a>
 <div class="ttl">Demo<small>QEMU in WebAssembly · a LAN of this browser's tabs · the data disk lasts until you reload</small></div>
-<button id="theme" type="button" title="Paper or terminal" style="margin-left:auto">VT220</button></header>
+<button id="net" type="button">🐈 NETWORK</button>
+<button id="power" type="button" title="Power cycle: boot again, with fresh disks">⏻ RESTART</button>
+<button id="theme" type="button" title="Paper or terminal">VT220</button></header>
 <main><div id="status">Loading…</div><div id="terminal"></div></main>
 <script>const th=document.getElementById('theme');function setvt(on){document.documentElement.classList.toggle('vt',on);th.textContent=on?'PAPER':'VT220';localStorage.setItem('vt',on?'1':'')}
 setvt(!!localStorage.getItem('vt'));th.addEventListener('click',()=>setvt(!document.documentElement.classList.contains('vt')));</script>
@@ -61,11 +63,38 @@ const Module = {
       const buf = await new Response(r.body.pipeThrough(new DecompressionStream('gzip'))).arrayBuffer();
       mod.FS.writeFile('/pack/' + f, new Uint8Array(buf));
     })).then(() => {
-      status.textContent = `Booting: EDK2, Limine, seL4, then the VMS executive. Under WebAssembly this takes a while. This tab is ${net.ip}: from another tab, SET HOST ${net.ip}.`;
+      status.textContent = `Booting: EDK2, Limine, seL4, then the VMS executive. Under WebAssembly this takes a while. This tab is ${net.ip}: from another tab, SET HOST ${net.ip}. NETWORK connects its gateway, 10.0.2.2, to a tailcat server: TELNET 10.0.2.2 port reaches that port on it, other addresses go through it if it is an exit node.`;
       mod.removeRunDependency('pack');
     }, e => { status.textContent = 'Loading failed: ' + e.message; });
   }],
 };
+// NETWORK connects the gateway to the tailcat address in the URL's #tc=, which the browser keeps
+// to itself, so a reload connects again; any time, without the system noticing. RESTART reloads.
+const netb = document.getElementById('net');
+function connect() {
+  const tc = new URLSearchParams(location.hash.slice(1)).get('tc');
+  netb.textContent = tc ? '🐈 CONNECTING' : '🐈 NETWORK';
+  netb.title = tc ? 'Tailcat server ' + tc : 'Connect the gateway, 10.0.2.2, to a tailcat server';
+  net.connect(tc, (ok, text) => {
+    if (new URLSearchParams(location.hash.slice(1)).get('tc') !== tc) return;
+    netb.textContent = ok ? '🐈 CONNECTED' : '🐈 FAILED';
+    netb.title = (ok ? `Tailcat server ${tc}, round trip ${text}` : `Tailcat server ${tc}: ${text}`) + '. Click to disconnect.';
+  });
+}
+netb.addEventListener('click', () => {
+  if (location.hash) {
+    if (!confirm('Disconnect from the tailcat server?')) return;
+    history.pushState(null, '', location.pathname + location.search);
+    connect();
+    return;
+  }
+  const tc = prompt('Tailcat address of a server: "tailcat serve 23" serves port 23, "tailcat serve exit-node" everything it can reach.')?.trim();
+  if (tc) location.hash = 'tc=' + encodeURIComponent(tc);
+});
+addEventListener('hashchange', connect);
+document.getElementById('power').addEventListener('click', () => location.reload());
+connect();
+
 status.textContent = 'Loading QEMU and the disk images…';
 await initQemu(Module);
 // xterm-pty's poll blocks while the pty has no input; QEMU's main loop must not (as in qemu-wasm's examples).

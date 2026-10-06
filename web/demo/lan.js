@@ -2,20 +2,29 @@
 // turns into a WebSocket on the page; WebSocket is replaced here by a wire that cuts QEMU's stream,
 // each frame after its length in 4 bytes, big-endian, into Ethernet frames and passes them to the
 // browser's other tabs on a BroadcastChannel. The wire answers its own system's DHCP: the
-// interface gets 10.0.2.N/24, N from the MAC, and no gateway, as there is nothing to route to.
+// interface gets 10.0.2.N/24, N from the MAC, and the gateway 10.0.2.2. Once connected to a tailcat
+// address, the gateway is tailgate (tailgate/main.go), which reaches that tailcat server; until then
+// nothing is. The system's settings never change: connecting only puts something at 10.0.2.2.
 
-// lan() returns the MAC and address of this tab's system and puts the wire in place.
+// lan() puts the wire in place and returns this tab's system's MAC and address, and connect(tc,
+// status), which puts tailgate at 10.0.2.2, connected to the tailcat address tc, in place of the
+// one before, if any; or takes it down if tc is empty. status(ok, text) is tailgate's.
 export function lan() {
   // ponytail: random host number, two tabs out of 239 can get the same one; reload one of them.
   const host = 16 + Math.floor(Math.random() * 239);
   const mac = [0x52, 0x54, 0x00, rnd(), rnd(), host];
   const ip = [10, 0, 2, host];
   const bc = new BroadcastChannel('vaxpunk-lan');
+  let gate = null, toSystem = () => {};
 
+  // Only QEMU's socket, to localhost:1; tailgate's own WebSockets, to DERP relays, are real ones.
+  const RealWebSocket = globalThis.WebSocket;
   globalThis.WebSocket = class {
     CONNECTING = 0; OPEN = 1; CLOSING = 2; CLOSED = 3; readyState = 1;
     #buf = new Uint8Array(0);
-    constructor() {
+    constructor(url, protocols) {
+      if (new URL(url).host !== 'localhost:1') return new RealWebSocket(url, protocols);
+      toSystem = f => this.#deliver(f);
       setTimeout(() => this.onopen?.());
       bc.onmessage = e => {
         const f = new Uint8Array(e.data);
@@ -32,8 +41,10 @@ export function lan() {
         const f = b.slice(4, 4 + n);
         b = b.subarray(4 + n);
         const reply = dhcp(f, mac, ip);
-        if (reply) queueMicrotask(() => this.#deliver(reply));
-        else bc.postMessage(f.buffer);
+        if (reply) { queueMicrotask(() => this.#deliver(reply)); continue; }
+        // The gateway gets broadcasts, for ARP, and frames for its MAC.
+        if (gate && (f[0] & 1 || GATE_MAC.every((b, i) => f[i] === b))) gate.input(f);
+        bc.postMessage(f.buffer);
       }
       this.#buf = b.slice();
     }
@@ -45,7 +56,39 @@ export function lan() {
       this.onmessage?.({data: m.buffer});
     }
   };
-  return {mac: mac.map(b => b.toString(16).padStart(2, '0')).join(':'), ip: ip.join('.')};
+  let latest = 0;
+  async function connect(tc, status) {
+    const n = ++latest;
+    gate?.close();
+    gate = null;
+    if (!tc) return;
+    try {
+      const g = await tailgate(tc, f => toSystem(f), status);
+      if (n === latest) gate = g; else g.close();
+    } catch (e) { status(false, e.message); }
+  }
+  return {mac: mac.map(b => b.toString(16).padStart(2, '0')).join(':'), ip: ip.join('.'), connect};
+}
+
+const GATE_MAC = [0x52, 0x54, 0, 0, 0, 2];
+
+// tailgate starts a gateway to the tailcat address tc, sending its frames to output, after loading
+// tailgate.wasm the first time. It returns tailgate's {input(frame), close()}.
+async function tailgate(tc, output, status) {
+  await (loading ??= load());
+  const mac = GATE_MAC.map(b => b.toString(16).padStart(2, '0')).join(':');
+  return globalThis.tailgate({addr: tc, mac, output, status});
+}
+
+let loading;
+async function load() {
+  await import('./wasm_exec.js');
+  const go = new Go();
+  const r = await fetch('tailgate.wasm.gz');
+  if (!r.ok) throw new Error(`tailgate.wasm.gz: ${r.status}`);
+  const buf = await new Response(r.body.pipeThrough(new DecompressionStream('gzip'))).arrayBuffer();
+  const {instance} = await WebAssembly.instantiate(buf, go.importObject);
+  go.run(instance);
 }
 
 function rnd() { return Math.floor(Math.random() * 256); }
@@ -60,9 +103,10 @@ function dhcp(f, mac, ip) {
     if (f[o] === 53) type = f[o + 2];
   if (type !== 1 && type !== 3) return null;
   const server = [10, 0, 2, 2];
-  const opts = [53, 1, type === 1 ? 2 : 5, 54, 4, ...server, 51, 4, 0, 1, 0x51, 0x80, 1, 4, 255, 255, 255, 0, 255];
+  const opts = [53, 1, type === 1 ? 2 : 5, 54, 4, ...server, 51, 4, 0, 1, 0x51, 0x80, 1, 4, 255, 255, 255, 0,
+    3, 4, ...server, 255];
   const r = new Uint8Array(14 + 20 + 8 + 240 + opts.length);
-  r.set(mac, 0); r.set([0x52, 0x54, 0, 0, 0, 2, 8, 0], 6);
+  r.set(mac, 0); r.set([...GATE_MAC, 8, 0], 6);
   // IP to 255.255.255.255, then UDP from 67 to 68 without a checksum.
   const ipLen = r.length - 14, d = new DataView(r.buffer);
   r.set([0x45, 0, ipLen >> 8, ipLen & 255, 0, 0, 0, 0, 64, 17, 0, 0, ...server, 255, 255, 255, 255], 14);

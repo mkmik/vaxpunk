@@ -9,9 +9,15 @@ root=$(cd "$(dirname "$0")/.." && pwd)
 site=$1 qemu=$2 images=$3
 rm -rf "$site"
 mkdir -p "$site/demo/vendor"
+site=$(cd "$site" && pwd)
 cp "$root/web/index.html" "$root/apidoc/page.css" "$site/"
 cp -R "$root/docs/api" "$site/docs"
 cp "$root/web/demo/index.html" "$root/web/demo/lan.js" "$qemu"/qemu-system-aarch64.* "$images"/*.gz "$site/demo/"
+
+# tailgate, the demo's gateway, with only the Tailscale features tailcat's own wasm build keeps.
+(cd "$root/web/tailgate" && GOOS=js GOARCH=wasm go build -tags "$(go run tags.go)" -ldflags='-s -w' -o "$site/demo/tailgate.wasm" .)
+gzip -9 "$site/demo/tailgate.wasm"
+cp "$(go env GOROOT)/lib/wasm/wasm_exec.js" "$site/demo/"
 
 npm=$(mktemp -d)
 npm i -s --no-audit --no-fund --prefix "$npm" xterm@5.3.0 xterm-pty@0.10.1 coi-serviceworker@0.1.7
