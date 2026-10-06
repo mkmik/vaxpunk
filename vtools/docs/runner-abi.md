@@ -85,10 +85,37 @@ listed.
 | `SVC #1` exit | `x0` status | ends the run |
 | `SVC #2` put | `x0` address, `x1` length | writes the bytes to the console |
 | `SVC #3` dump | | prints `x0`-`x30`, `sp` and the `pc` of the `SVC` |
+| `SVC #4` open | `x0` name address, `x1` name length, `x2` mode: 0 read, 1 write | `x0` status, `x1` channel |
+| `SVC #5` read | `x0` channel, `x1` address, `x2` length | `x0` status, `x1` bytes read |
+| `SVC #6` write | `x0` channel, `x1` address, `x2` length | `x0` status |
+| `SVC #7` close | `x0` channel | `x0` status |
 
-The stub reads `put` data with unprivileged loads. A bad address is the
-image's access violation, reported at the `SVC`. Any other `SVC` number is a
-fault. `BRK` is left to debuggers.
+The stub reads and writes the image's memory with unprivileged loads and
+stores. A bad address is the image's access violation, reported at the `SVC`.
+Any other `SVC` number is a fault. `BRK` is left to debuggers.
+
+### Files
+
+`vrun --files DIR` lets the image open host files in `DIR`. A name is a
+relative path that stays in `DIR`, such as `IN.TXT` or `SRC/MAIN.B64`. Mode
+0 opens an existing file to read; mode 1 creates a file to write, or empties
+it. Channels are small positive numbers; closing one frees it for the next
+open. A read returns at most `x2` bytes, fewer only at the end of the file.
+`vtools/lib/vrun.mlb` has a macro for each call: `$FOPEN`, `$FREAD`,
+`$FWRITE` and `$FCLOSE`.
+
+| Status | When |
+| --- | --- |
+| `SS$_NORMAL`, %X00000001 | it worked |
+| `SS$_ENDOFFILE`, %X00000870 | a read at the end of the file |
+| `SS$_NOSUCHFILE`, %X00000910 | open: no such file |
+| `SS$_NOPRIV`, %X00000024 | open without `--files`, or a name outside `DIR`; or the host refused |
+| `SS$_IVCHAN`, %X0000013C | a channel that isn't open |
+| `SS$_BADPARAM`, %X00000014 | a name that isn't UTF-8, or a mode other than 0 or 1 |
+| `SS$_ABORT`, %X0000002C | any other host error |
+
+Files go through the console UART, a byte at a time, so they work the same
+under TCG and HVF. That costs about one QEMU exit per byte under HVF.
 
 The return page holds a single `SVC #1`, so returning from the entry point
 exits with `x0` as the status.
@@ -159,3 +186,9 @@ ends the run with one report, which vrun removes: `!vrun exit STATUS`,
 frame the stub found, or `!vrun stubfault ESR PC FAR` for a bug in the stub
 itself, with 16-digit hex values. The report may follow the image's output on
 the same line. An image must not write `!vrun ` itself.
+
+The file calls are requests on the same line protocol, which vrun removes and
+answers on the UART's input: `!vrun open MODE LENGTH` and then the name,
+`!vrun read CHANNEL LENGTH`, `!vrun write CHANNEL LENGTH` and then the data,
+and `!vrun close CHANNEL 0`. The reply is the status and a value, 8 bytes
+each, little-endian, then, for read, as many bytes as the value says.

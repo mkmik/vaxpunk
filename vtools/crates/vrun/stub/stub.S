@@ -31,6 +31,10 @@
 	.equ	SVC_EXIT, 1
 	.equ	SVC_PUT, 2
 	.equ	SVC_DUMP, 3
+	.equ	SVC_OPEN, 4
+	.equ	SVC_READ, 5
+	.equ	SVC_WRITE, 6
+	.equ	SVC_CLOSE, 7
 	.equ	FRAME, 32 * 8		// x0-x30 and SP_EL0
 
 	// Saves or restores x0-x29 in the frame at sp.
@@ -62,6 +66,9 @@ _start:
 	mov	x0, #(3 << 20)		// CPACR_EL1.FPEN: FP and SIMD don't trap
 	msr	cpacr_el1, x0
 	msr	cntkctl_el1, xzr	// no counters or timers at EL0
+	ldr	x1, =UART
+	mov	w0, #0x301		// UARTCR: UART, transmit and receive on
+	str	w0, [x1, #0x30]
 	ldr	x0, =MAIR
 	msr	mair_el1, x0
 	ldr	x0, =TCR
@@ -119,6 +126,14 @@ el0_sync:
 	b.eq	svc_put
 	cmp	x0, #SVC_DUMP
 	b.eq	svc_dump
+	cmp	x0, #SVC_OPEN
+	b.eq	svc_open
+	cmp	x0, #SVC_READ
+	b.eq	svc_read
+	cmp	x0, #SVC_WRITE
+	b.eq	svc_write
+	cmp	x0, #SVC_CLOSE
+	b.eq	svc_close
 	mov	x19, x1			// no such service: report the SVC
 	adr	x20, msg_fault
 	b	report
@@ -146,16 +161,119 @@ poweroff:
 1:	wfi
 	b	1b
 
-// SVC #2: write x1 bytes from x0 to the console. The bytes are read with
-// unprivileged loads, so the image's own permissions apply.
+// SVC #2: write x1 bytes from x0 to the console.
 svc_put:
-	ldp	x19, x20, [sp]
-1:	cbz	x20, svc_return
-	ldtrb	w0, [x19]
-	bl	putc
-	add	x19, x19, #1
-	sub	x20, x20, #1
+	ldp	x0, x1, [sp]
+	bl	send
+	b	svc_return
+
+// Files. Each call is a request line to vrun, "!vrun KIND A B", followed by
+// B raw bytes for open and write; vrun replies on the UART with the status
+// and a value, 8 bytes each, little-endian, then the data for read. The
+// status and value are the image's x0 and x1. An image's buffer is checked
+// before a request goes out, so a bad one faults before vrun sees half of it.
+
+// SVC #4: open the file named by x1 bytes at x0, to read (x2 = 0) or to
+// write (x2 = 1). x1 is the channel.
+svc_open:
+	ldp	x0, x1, [sp]
+	bl	probe
+	adr	x0, msg_open
+	ldr	x1, [sp, #16]
+	ldr	x2, [sp, #8]
+	bl	request
+	ldp	x0, x1, [sp]
+	bl	send
+	b	reply
+
+// SVC #5: read at most x2 bytes from channel x0 into x1. x1 is the count.
+svc_read:
+	ldr	x25, [sp, #8]
+	adr	x0, msg_read
+	ldr	x1, [sp]
+	ldr	x2, [sp, #16]
+	bl	request
+	bl	getq
+	str	x0, [sp]
+	bl	getq
+	str	x0, [sp, #8]
+	mov	x26, x0
+1:	cbz	x26, svc_return
+	bl	getc
+	sttrb	w0, [x25]
+	add	x25, x25, #1
+	sub	x26, x26, #1
 	b	1b
+
+// SVC #6: write x2 bytes from x1 to channel x0.
+svc_write:
+	ldp	x0, x1, [sp, #8]
+	bl	probe
+	adr	x0, msg_write
+	ldr	x1, [sp]
+	ldr	x2, [sp, #16]
+	bl	request
+	ldp	x0, x1, [sp, #8]
+	bl	send
+	b	reply
+
+// SVC #7: close channel x0.
+svc_close:
+	adr	x0, msg_close
+	ldr	x1, [sp]
+	mov	x2, #0
+	bl	request
+
+// vrun's reply: the image's x0 and x1.
+reply:
+	bl	getq
+	str	x0, [sp]
+	bl	getq
+	str	x0, [sp, #8]
+	b	svc_return
+
+// Writes the string at x0, then x1 and x2 in hex, and a newline.
+request:
+	mov	x22, x30
+	mov	x23, x1
+	mov	x24, x2
+	bl	puts
+	mov	x0, x23
+	bl	puthex
+	bl	space
+	mov	x0, x24
+	bl	puthex
+	mov	x30, x22
+	b	newline
+
+// Reads a byte of each page of x1 bytes at x0 with an unprivileged load, so
+// the image's own permissions apply.
+probe:
+	adds	x1, x0, x1
+	b.cs	2f			// wraps: fault on the last address
+	cmp	x0, x1
+	b.hs	3f
+1:	ldtrb	w2, [x0]
+	orr	x0, x0, #0xfff
+	add	x0, x0, #1
+	cmp	x0, x1
+	b.lo	1b
+3:	ret
+2:	mov	x0, #-1
+	ldtrb	w2, [x0]
+
+// Writes x1 bytes from x0 to the console, read with unprivileged loads.
+send:
+	mov	x27, x30
+	mov	x25, x0
+	mov	x26, x1
+1:	cbz	x26, 2f
+	ldtrb	w0, [x25]
+	bl	putc
+	add	x25, x25, #1
+	sub	x26, x26, #1
+	b	1b
+2:	ret	x27
 
 // SVC #3: print the image's registers.
 svc_dump:
@@ -309,6 +427,28 @@ putc:
 	strb	w0, [x1]
 	ret
 
+// Reads a byte into x0.
+getc:
+	ldr	x1, =UART
+1:	ldr	w2, [x1, #0x18]		// UARTFR
+	tbnz	w2, #4, 1b		// receive FIFO empty
+	ldrb	w0, [x1]
+	ret
+
+// Reads 8 bytes, little-endian, into x0.
+getq:
+	mov	x5, x30
+	mov	x6, #0
+	mov	x3, #0
+1:	bl	getc
+	lsl	x0, x0, x3
+	orr	x6, x6, x0
+	add	x3, x3, #8
+	cmp	x3, #64
+	b.lo	1b
+	mov	x0, x6
+	ret	x5
+
 // Writes the NUL-terminated string at x0.
 puts:
 	mov	x4, x0
@@ -338,6 +478,10 @@ puthex:
 msg_exit:	.asciz	"!vrun exit "
 msg_fault:	.asciz	"!vrun fault "
 msg_stubfault:	.asciz	"!vrun stubfault "
+msg_open:	.asciz	"!vrun open "
+msg_read:	.asciz	"!vrun read "
+msg_write:	.asciz	"!vrun write "
+msg_close:	.asciz	"!vrun close "
 msg_sp:		.asciz	"sp "
 msg_pc:		.asciz	"pc  "
 	.ltorg
