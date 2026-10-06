@@ -1,27 +1,650 @@
         .TITLE  RMSREL  RMS: relative files
         .IDENT  /V0.1/
 ;
-; Relative files: not yet. Each routine says RMS$_ORG.
+; A relative file is a prologue block and buckets of cells, cell n
+; holding record number n, from 1 (ods/docs/relative.md): a control byte,
+; DLC$V_REC if it has a record and DLC$V_DELETED if that was deleted, a
+; VAR or VFC record's size, and the record, in a cell big enough for
+; FAB$W_MRS bytes. The prologue keeps the first bucket's VBN, the highest
+; record number FAB$L_MRN allows, and the end of file, the VBN after the
+; last bucket written.
 ;
+; The IFAB holds one bucket. $GET and $FIND go along the cells from the
+; next record number, skipping those without a record, or by the record
+; number RAB$L_KBF points at, or by RFA, whose VBN part is the record
+; number; the number comes back in RAB$L_BKT. $PUT writes a cell, the
+; next or RAB$L_KBF's, RMS$_REX if it has a record unless RAB$M_UIF;
+; $UPDATE rewrites the current record's cell and $DELETE marks it.
+;
+; RMS$READBKT and RMS$WRITEBKT read and write buckets for the indexed
+; files too.
+;
+        .LIBRARY "lib.mlb"
         .LIBRARY "starlet.mlb"
+        $SSDEF
         $RMSDEF
+        $FABDEF
+        $RABDEF
+        $IFBDEF
+        $PLGDEF
+        $DLCDEF
+
+        .EXTERNAL FIL$READVBN, FIL$WRITEVBN, FIL$EXTEND, FIL$WRITEHDR, RMS$ALLOCBUF
+
+BLOCK = 512
+NOMRN = ^X7FFFFFFF                      ; the prologue's MRN without a limit
+FAT$L_HIBLK = 20+4                      ; in the header: high word first
+FAT$L_EFBLK = 20+8                      ; high word first
+FAT$W_FFBYTE = 20+12
+FAT$B_BKTSIZE = 20+14
+
+        .PSECT  EXEC$DATA, NOEXE, WRT, QUAD
+PLG:    .BLKB   BLOCK                   ; a prologue being read or written
 
         .PSECT  $CODE$
 
-; REL$OPEN, REL$CREATE, REL$CONNECT, REL$GET, REL$FIND, REL$PUT,
-; REL$UPDATE, REL$DELETE, REL$REWIND, REL$FLUSH: R0 = RMS$_ORG.
-REL$OPEN::
+; REL$CREATE: R7 = an IFAB with a new relative file's header and
+; attributes, R10 = its FAB. Gives it a bucket size, FAB$B_BKS or the
+; fewest blocks a cell fits in, writes its prologue, with FAB$L_MRN, and
+; opens it (REL$OPEN). R0 = RMS$_NORMAL, RMS$_MRS without a record size,
+; RMS$_MRN for a negative MRN, RMS$_BKS for a bucket over 32 blocks, or
+; the file system's error. Uses R0-R6.
 REL$CREATE::
-REL$CONNECT::
-REL$GET::
-REL$FIND::
-REL$PUT::
-REL$UPDATE::
-REL$DELETE::
-REL$REWIND::
-REL$FLUSH::
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5, R6>
+        MOVL    #RMS$_MRS, R0
+        TSTW    IFB$W_MRS(R7)
+        BEQL    90$
+        MOVL    #RMS$_MRN, R0
+        MOVL    FAB$L_MRN(R10), R6
+        BLSS    90$
+        BNEQ    5$
+        MOVL    #NOMRN, R6
+5$:     BSBW    CELLSIZE
+        MOVZBL  IFB$B_BKS(R7), R1
+        BNEQ    10$
+        ADDL3   #BLOCK-1, R0, R1        ; the fewest blocks a cell fits in
+        DIVL2   #BLOCK, R1
+        MOVB    R1, IFB$B_BKS(R7)
+        MOVB    R1, IFB$AB_HDR+FAT$B_BKTSIZE(R7)
+10$:    MOVL    #RMS$_BKS, R0
+        CMPL    R1, #32
+        BGTRU   90$
+        PUSHR   #^M<R1, R2, R3, R4, R5>
+        MOVC5   #0, (R7), #0, #BLOCK, PLG
+        POPR    #^M<R1, R2, R3, R4, R5>
+        MOVW    #2, PLG+PLG$W_DVBN
+        MOVL    R6, PLG+PLG$L_MRN
+        MOVL    #2, PLG+PLG$L_EOF
+        MOVW    #PLG$C_VER_REL, PLG+PLG$W_VER_NO
+        MOVL    #1, R1                  ; VBN 1
+        BSBW    WRPLG
+        BLBC    R0, 90$
+        BSBW    REL$OPEN
+        BISL2   #1@IFB$V_HDR, IFB$L_FLAGS(R7)
+90$:    RSB
+
+; REL$OPEN: R7 = an IFAB with a relative file's header and attributes.
+; Reads its prologue: its first bucket, MRN and end of file; works out
+; its cells; and gives it a bucket's buffer. The stream is at the first
+; record. R0 = RMS$_NORMAL, RMS$_PLV if it isn't a relative file's
+; prologue, RMS$_BKS for a bucket over 32 blocks or too small for a
+; cell, RMS$_DME, or the disk's error. Uses R0-R5.
+REL$OPEN::
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5>
+        MOVL    #1, R0
+        MOVL    #1, R1
+        MOVAB   PLG, R2
+        MOVAB   IFB$AB_HDR(R7), R3
+        BSBW    FIL$READVBN
+        BLBC    R0, 90$
+        MOVL    #RMS$_PLV, R0
+        CMPW    PLG+PLG$W_VER_NO, #PLG$C_VER_REL
+        BNEQ    90$
+        MOVZWL  PLG+PLG$W_DVBN, IFB$L_DVBN(R7)
+        MOVL    PLG+PLG$L_MRN, IFB$L_MRN(R7)
+        MOVL    PLG+PLG$L_EOF, IFB$L_EOF(R7)
+        TSTB    IFB$B_BKS(R7)
+        BNEQ    10$
+        MOVB    #1, IFB$B_BKS(R7)
+10$:    MOVL    #RMS$_BKS, R0
+        CMPB    IFB$B_BKS(R7), #32
+        BGTRU   90$
+        BSBW    CELLSIZE
+        MOVL    R0, IFB$L_CELLSZ(R7)
+        MOVZBL  IFB$B_BKS(R7), R1
+        MULL2   #BLOCK, R1
+        DIVL3   R0, R1, IFB$L_CELLS(R7)
+        MOVL    #RMS$_BKS, R0
+        TSTL    IFB$L_CELLS(R7)
+        BEQL    90$
+        BSBW    RMS$ALLOCBUF
+        BLBC    R0, 90$
+        MOVL    #1, IFB$L_POS(R7)
+        CLRL    IFB$L_CUR(R7)
+        CLRL    IFB$L_BLOCK(R7)
+        MOVL    #RMS$_NORMAL, R0
+90$:    RSB
+
+; CELLSIZE: R7 = an IFAB. R0 = a cell's size: the control byte, the
+; record, and a VAR or VFC record's size and control part. Uses R1.
+CELLSIZE:
         .JSB_ENTRY
-        MOVL    #RMS$_ORG, R0
+        MOVZWL  IFB$W_MRS(R7), R0
+        INCL    R0
+        CMPB    IFB$B_RFM(R7), #FAB$C_FIX
+        BEQL    10$
+        ADDL2   #2, R0
+        CMPB    IFB$B_RFM(R7), #FAB$C_VFC
+        BNEQ    10$
+        MOVZBL  IFB$B_FSZ(R7), R1
+        ADDL2   R1, R0
+10$:    RSB
+
+; REL$CONNECT, REL$REWIND: R7 = an IFAB. The stream goes to the first
+; record. Uses R0.
+REL$CONNECT::
+REL$REWIND::
+        .JSB_ENTRY
+        MOVL    #1, IFB$L_POS(R7)
+        CLRL    IFB$L_CUR(R7)
+        BICL2   #1@IFB$V_FOUND, IFB$L_FLAGS(R7)
+        MOVL    #RMS$_NORMAL, R0
+        RSB
+
+; REL$GET: R7 = an IFAB, R10 = a RAB. Reads a record into the RAB's
+; user buffer, as much as fits (RMS$_RTB if not all, its size in
+; RAB$L_STV), a VFC one's control part to RAB$L_RHB: by RAB$B_RAC the
+; next, the one whose number RAB$L_KBF points at, or the one at RAB$W_RFA.
+; It becomes the current record, its number goes in RAB$L_BKT and its
+; RFA in RAB$W_RFA, and the stream goes on after it. R0 = RMS$_NORMAL,
+; RMS$_RTB, RMS$_EOF, RMS$_RNF if that one has none, RMS$_KEY or RMS$_KSZ
+; for a bad number, RMS$_RAC, SS$_ACCVIO, or the disk's error. REL$FIND
+; finds it without reading it, and a $GET by RAB$C_SEQ right after reads
+; it. Uses R0-R6.
+REL$FIND::
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5, R6>
+        BICL2   #1@IFB$V_FOUND, IFB$L_FLAGS(R7)
+        BSBW    LOCATE
+        BLBC    R0, 90$
+        BISL2   #1@IFB$V_FOUND, IFB$L_FLAGS(R7)
+90$:    RSB
+
+REL$GET::
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5, R6>
+        MOVL    RAB$L_UBF(R10), R6
+        MOVZWL  RAB$W_USZ(R10), R5
+        BEQL    5$
+        IFNOWRT R5, (R6), 85$
+5$:     BSBW    LOCATE
+        BLBC    R0, 90$
+        BSBW    CELL                    ; R3 = the cell
+        MOVAB   1(R3), R3
+        MOVZWL  IFB$W_MRS(R7), R4       ; FIX: the record's size
+        CMPB    IFB$B_RFM(R7), #FAB$C_FIX
+        BEQL    20$
+        MOVZWL  (R3)+, R4               ; VAR and VFC: its size first
+        CMPB    IFB$B_RFM(R7), #FAB$C_VFC
+        BNEQ    20$
+        MOVZBL  IFB$B_FSZ(R7), R2       ; and the control part
+        SUBL2   R2, R4
+        MOVL    RAB$L_RHB(R10), R1
+        BEQL    15$
+        TSTL    R2
+        BEQL    15$
+        IFNOWRT R2, (R1), 85$
+        PUSHR   #^M<R2, R3, R4, R5>
+        MOVC3   R2, (R3), (R1)
+        POPR    #^M<R2, R3, R4, R5>
+15$:    ADDL2   R2, R3
+20$:    MOVL    #RMS$_NORMAL, R0
+        CMPL    R4, R5                  ; as much as fits
+        BLEQU   30$
+        MOVL    R4, RAB$L_STV(R10)
+        MOVL    R5, R4
+        MOVL    #RMS$_RTB, R0
+30$:    PUSHR   #^M<R0, R4>
+        MOVC3   R4, (R3), (R6)
+        POPR    #^M<R0, R4>
+        MOVL    R6, RAB$L_RBF(R10)
+        MOVW    R4, RAB$W_RSZ(R10)
+        RSB
+85$:    MOVL    #SS$_ACCVIO, R0
+90$:    RSB
+
+; LOCATE: R7 = an IFAB, R10 = a RAB. Finds the record $GET or $FIND
+; wants, by RAB$B_RAC, with its bucket in the buffer: it becomes the
+; current record, its number goes in RAB$L_BKT and RAB$L_RFA0, and the
+; stream goes on after it. R0 = RMS$_NORMAL, RMS$_EOF, RMS$_RNF,
+; RMS$_KEY, RMS$_KSZ, RMS$_RFA, RMS$_RAC, or the disk's error. Uses R0-R4.
+LOCATE:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4>
+        CLRL    RAB$L_BKT(R10)
+        CMPB    RAB$B_RAC(R10), #RAB$C_SEQ
+        BNEQ    30$
+        CLRL    RAB$L_RFA0(R10)
+        CLRW    RAB$W_RFA4(R10)
+        BBCC    #IFB$V_FOUND, IFB$L_FLAGS(R7), 10$
+        MOVL    IFB$L_CUR(R7), R4       ; the one $FIND found
+        BNEQ    50$
+10$:    CLRL    IFB$L_CUR(R7)
+        MOVL    IFB$L_POS(R7), R4       ; the next with a record
+20$:    BSBW    LOADCELL
+        BLBC    R0, 90$
+        BLBS    R1, 60$
+        INCL    R4
+        BRB     20$
+30$:    BICL2   #1@IFB$V_FOUND, IFB$L_FLAGS(R7)
+        CLRL    IFB$L_CUR(R7)
+        CMPB    RAB$B_RAC(R10), #RAB$C_KEY
+        BNEQ    40$
+        CLRL    RAB$L_RFA0(R10)
+        CLRW    RAB$W_RFA4(R10)
+        BSBW    KEYNUM                  ; by its number
+        BLBC    R0, 90$
+        BRB     50$
+40$:    MOVL    #RMS$_RAC, R0
+        CMPB    RAB$B_RAC(R10), #RAB$C_RFA
+        BNEQ    90$
+        MOVL    RAB$L_RFA0(R10), R4     ; by RFA: its number
+        MOVL    #RMS$_RFA, R0
+        BLEQ    90$
+50$:    BSBW    LOADCELL
+        BLBC    R0, 80$
+        MOVL    #RMS$_RNF, R0
+        BLBC    R1, 90$
+60$:    MOVL    R4, IFB$L_CUR(R7)
+        ADDL3   #1, R4, IFB$L_POS(R7)
+        CMPB    RAB$B_RAC(R10), #RAB$C_SEQ
+        BNEQ    70$
+        MOVL    R4, RAB$L_BKT(R10)
+70$:    MOVL    R4, RAB$L_RFA0(R10)
+        MOVL    #RMS$_NORMAL, R0
+        RSB
+80$:    CMPL    R0, #RMS$_EOF           ; past the end: none there
+        BNEQ    90$
+        MOVL    #RMS$_RNF, R0
+90$:    RSB
+
+; KEYNUM: R10 = a RAB. R4 = the record number RAB$L_KBF points at,
+; RAB$B_KSZ bytes, 4 or 0. R0 = RMS$_NORMAL, RMS$_KSZ, RMS$_KEY for 0,
+; RMS$_MRN for one past FAB$L_MRN, or SS$_ACCVIO. Uses R4.
+KEYNUM:
+        .JSB_ENTRY  OUTPUT=<R4>
+        MOVL    #RMS$_KSZ, R0
+        MOVZBL  RAB$B_KSZ(R10), R4
+        BEQL    10$
+        CMPL    R4, #4
+        BNEQ    90$
+10$:    MOVL    RAB$L_KBF(R10), R4
+        IFNORD  #4, (R4), 85$
+        MOVL    (R4), R4
+        MOVL    #RMS$_KEY, R0
+        TSTL    R4
+        BLEQ    90$
+        MOVL    #RMS$_MRN, R0
+        CMPL    R4, IFB$L_MRN(R7)
+        BGTRU   90$
+        MOVL    #RMS$_NORMAL, R0
+        RSB
+85$:    MOVL    #SS$_ACCVIO, R0
+90$:    RSB
+
+; LOADCELL: R7 = an IFAB, R4 = a record number. Loads its bucket: R1 =
+; 1 if its cell has a record, not deleted, else 0. R0 = RMS$_NORMAL,
+; RMS$_EOF if its bucket is past the end of file, or the disk's error.
+; Uses R0-R3.
+LOADCELL:
+        .JSB_ENTRY  SCRATCH=<R2, R3>
+        BSBW    BUCKET
+        MOVL    #RMS$_EOF, R0
+        CMPL    R1, IFB$L_EOF(R7)
+        BGEQU   90$
+        BSBW    LOADBKT
+        BLBC    R0, 90$
+        BSBW    CELL
+        BICB3   #^C<<1@DLC$V_REC>!<1@DLC$V_DELETED>>, (R3), R1
+        CMPB    R1, #1@DLC$V_REC
+        BEQL    10$
+        CLRL    R1
+        RSB
+10$:    MOVL    #1, R1
+90$:    RSB
+
+; BUCKET: R7 = an IFAB, R4 = a record number. R1 = its bucket's VBN, R2 =
+; its cell's offset in it. Uses R0-R2.
+BUCKET:
+        .JSB_ENTRY  SCRATCH=<R2>
+        SUBL3   #1, R4, R0
+        DIVL3   IFB$L_CELLS(R7), R0, R1         ; the bucket, from 0
+        MULL3   IFB$L_CELLS(R7), R1, R2
+        SUBL3   R2, R0, R2
+        MULL2   IFB$L_CELLSZ(R7), R2
+        MOVZBL  IFB$B_BKS(R7), R0
+        MULL2   R0, R1
+        ADDL2   IFB$L_DVBN(R7), R1
+        RSB
+
+; CELL: R7 = an IFAB, R4 = a record number whose bucket is loaded. R3 =
+; its cell. Uses R0-R3.
+CELL:
+        .JSB_ENTRY  OUTPUT=<R3>, SCRATCH=<R2>
+        BSBW    BUCKET
+        ADDL3   IFB$L_BUF(R7), R2, R3
+        RSB
+
+; LOADBKT: R7 = an IFAB, R1 = a bucket's VBN. Puts it in the buffer,
+; first writing back the one there if it changed: zeros if it is past the
+; end of file. R0 = RMS$_NORMAL or the disk's error. Keeps every other
+; register.
+LOADBKT:
+        .JSB_ENTRY
+        MOVL    #RMS$_NORMAL, R0
+        CMPL    R1, IFB$L_BLOCK(R7)
+        BEQL    90$
+        PUSHR   #^M<R1, R2, R3, R4, R5>
+        BSBW    WRBUF
+        BLBC    R0, 80$
+        CLRL    IFB$L_BLOCK(R7)
+        MOVL    (SP), R0
+        CMPL    R0, IFB$L_EOF(R7)
+        BLSSU   10$
+        MOVC5   #0, (R7), #0, IFB$L_BUFSZ(R7), @IFB$L_BUF(R7)
+        BRB     20$
+10$:    MOVZBL  IFB$B_BKS(R7), R1
+        MOVL    IFB$L_BUF(R7), R2
+        BSBW    RMS$READBKT
+        BLBC    R0, 80$
+20$:    MOVL    (SP), IFB$L_BLOCK(R7)
+        MOVL    #RMS$_NORMAL, R0
+80$:    POPR    #^M<R1, R2, R3, R4, R5>
+90$:    RSB
+
+; WRBUF: R7 = an IFAB. Writes the bucket in its buffer if it changed. R0
+; = RMS$_NORMAL or the file system's error. Keeps every other register.
+WRBUF:
+        .JSB_ENTRY
+        MOVL    #RMS$_NORMAL, R0
+        BBCC    #IFB$V_DIRTY, IFB$L_FLAGS(R7), 90$
+        PUSHR   #^M<R1, R2>
+        MOVL    IFB$L_BLOCK(R7), R0
+        MOVZBL  IFB$B_BKS(R7), R1
+        MOVL    IFB$L_BUF(R7), R2
+        BSBW    RMS$WRITEBKT
+        POPR    #^M<R1, R2>
+90$:    RSB
+
+; REL$PUT: R7 = an IFAB, R10 = a RAB. Writes the record RAB$L_RBF points
+; at, RAB$W_RSZ bytes, a VFC one's control part from RAB$L_RHB or zeros,
+; in the cell RAB$B_RAC says: the next, or RAB$L_KBF's; its number goes
+; in RAB$L_BKT and RAB$L_RFA0, the stream goes on after the next one,
+; and the end of file past its bucket. R0 = RMS$_NORMAL, RMS$_FAC without
+; FAB$M_PUT, RMS$_REX if the cell has a record, unless RAB$M_UIF, which
+; rewrites it, RMS$_RSZ for a FIX record of another size or a longer one
+; than the file's, RMS$_KEY, RMS$_KSZ, RMS$_RAC, SS$_ACCVIO, or RMS$_WER
+; with the file system's error in RAB$L_STV. Uses R0-R6.
+REL$PUT::
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5, R6>
+        MOVL    #RMS$_FAC, R0
+        BBC     #FAB$V_PUT, IFB$B_FAC(R7), 90$
+        BICL2   #1@IFB$V_FOUND, IFB$L_FLAGS(R7)
+        CLRL    IFB$L_CUR(R7)
+        CLRL    RAB$L_RFA0(R10)
+        CLRW    RAB$W_RFA4(R10)
+        BSBW    RECARG
+        BLBC    R0, 90$
+        CMPB    RAB$B_RAC(R10), #RAB$C_SEQ
+        BNEQ    10$
+        MOVL    IFB$L_POS(R7), R4       ; the next
+        MOVL    #RMS$_MRN, R0
+        CMPL    R4, IFB$L_MRN(R7)
+        BGTRU   90$
+        BRB     20$
+10$:    MOVL    #RMS$_RAC, R0
+        CMPB    RAB$B_RAC(R10), #RAB$C_KEY
+        BNEQ    90$
+        BSBW    KEYNUM
+        BLBC    R0, 90$
+20$:    BSBW    BUCKET
+        BSBW    LOADBKT
+        BLBC    R0, 88$
+        BSBW    CELL
+        BITB    #1@DLC$V_REC, (R3)      ; a record there already?
+        BEQL    30$
+        BITB    #1@DLC$V_DELETED, (R3)
+        BNEQ    30$
+        MOVL    #RMS$_REX, R0
+        BBC     #RAB$V_UIF, RAB$L_ROP(R10), 90$
+30$:    BSBW    PUTCELL
+        BSBW    BUCKET                  ; the end of file past its bucket
+        MOVZBL  IFB$B_BKS(R7), R0
+        ADDL2   R0, R1
+        CMPL    R1, IFB$L_EOF(R7)
+        BLEQU   40$
+        MOVL    R1, IFB$L_EOF(R7)
+        BISL2   #<1@IFB$V_PLG>!<1@IFB$V_HDR>, IFB$L_FLAGS(R7)
+40$:    CMPB    RAB$B_RAC(R10), #RAB$C_SEQ      ; by number, the stream stays
+        BNEQ    50$
+        ADDL3   #1, R4, IFB$L_POS(R7)
+50$:    MOVL    R4, RAB$L_BKT(R10)
+        MOVL    R4, RAB$L_RFA0(R10)
+        CLRW    RAB$W_RFA4(R10)
+        MOVL    #RMS$_NORMAL, R0
+        RSB
+88$:    MOVL    R0, RAB$L_STV(R10)
+        MOVL    #RMS$_WER, R0
+90$:    RSB
+
+; RECARG: R7 = an IFAB, R10 = a RAB. Checks the record $PUT or $UPDATE
+; writes: R6 = RAB$L_RBF, R5 = RAB$W_RSZ. R0 = RMS$_NORMAL, RMS$_RSZ
+; for a FIX record of another size than the file's or a longer one, or
+; SS$_ACCVIO. Uses R5 and R6.
+RECARG:
+        .JSB_ENTRY  OUTPUT=<R5, R6>
+        MOVL    RAB$L_RBF(R10), R6
+        MOVZWL  RAB$W_RSZ(R10), R5
+        BEQL    10$
+        IFNORD  R5, (R6), 85$
+10$:    MOVL    #RMS$_RSZ, R0
+        CMPW    R5, IFB$W_MRS(R7)
+        BGTRU   90$
+        CMPB    IFB$B_RFM(R7), #FAB$C_FIX
+        BNEQ    20$
+        CMPW    R5, IFB$W_MRS(R7)
+        BNEQ    90$
+20$:    CMPB    IFB$B_RFM(R7), #FAB$C_VFC
+        BNEQ    80$
+        MOVZBL  IFB$B_FSZ(R7), R0       ; the control part comes from RHB
+        BEQL    80$
+        MOVL    RAB$L_RHB(R10), R1
+        BEQL    80$
+        IFNORD  R0, (R1), 85$
+80$:    MOVL    #RMS$_NORMAL, R0
+        RSB
+85$:    MOVL    #SS$_ACCVIO, R0
+90$:    RSB
+
+; PUTCELL: R7 = an IFAB, R10 = a RAB, R4 = a record number whose bucket
+; is loaded, R6 = a record, R5 = its size. Writes it in its cell, with
+; DLC$V_REC, its size and a VFC one's control part, and the rest of the
+; cell as it was. Uses R0-R3.
+PUTCELL:
+        .JSB_ENTRY  SCRATCH=<R2, R3>
+        BSBW    CELL
+        MOVB    #1@DLC$V_REC, (R3)+
+        CMPB    IFB$B_RFM(R7), #FAB$C_FIX
+        BEQL    30$
+        MOVZBL  IFB$B_FSZ(R7), R2
+        CMPB    IFB$B_RFM(R7), #FAB$C_VFC
+        BEQL    10$
+        CLRL    R2
+10$:    ADDL3   R5, R2, R0              ; the size, the control part's too
+        MOVW    R0, (R3)+
+        TSTL    R2
+        BEQL    30$
+        MOVL    RAB$L_RHB(R10), R1
+        BNEQ    20$
+        PUSHR   #^M<R2, R3, R4, R5>     ; none: zeros
+        MOVC5   #0, (R3), #0, R2, (R3)
+        POPR    #^M<R2, R3, R4, R5>
+        BRB     25$
+20$:    PUSHR   #^M<R2, R3, R4, R5>
+        MOVC3   R2, (R1), (R3)
+        POPR    #^M<R2, R3, R4, R5>
+25$:    ADDL2   R2, R3
+30$:    PUSHR   #^M<R4, R5>
+        MOVC3   R5, (R6), (R3)
+        POPR    #^M<R4, R5>
+        BISL2   #1@IFB$V_DIRTY, IFB$L_FLAGS(R7)
+        RSB
+
+; REL$UPDATE: R7 = an IFAB, R10 = a RAB. Rewrites the current record's
+; cell with the record RAB$L_RBF points at, of any size up to the file's.
+; R0 = RMS$_NORMAL, RMS$_FAC without FAB$M_UPD, RMS$_CUR without a
+; current record, RMS$_RSZ, SS$_ACCVIO, or RMS$_WER. Uses R0-R6.
+REL$UPDATE::
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5, R6>
+        MOVL    #RMS$_FAC, R0
+        BBC     #FAB$V_UPD, IFB$B_FAC(R7), 90$
+        BICL2   #1@IFB$V_FOUND, IFB$L_FLAGS(R7)
+        BSBW    RECARG
+        BLBC    R0, 90$
+        MOVL    #RMS$_CUR, R0
+        MOVL    IFB$L_CUR(R7), R4
+        BEQL    90$
+        BSBW    BUCKET
+        BSBW    LOADBKT
+        BLBC    R0, 88$
+        BSBW    PUTCELL
+        MOVL    #RMS$_NORMAL, R0
+        RSB
+88$:    MOVL    R0, RAB$L_STV(R10)
+        MOVL    #RMS$_WER, R0
+90$:    RSB
+
+; REL$DELETE: R7 = an IFAB, R10 = a RAB. Deletes the current record: its
+; cell gets DLC$V_DELETED, and there is no current record. R0 =
+; RMS$_NORMAL, RMS$_FAC without FAB$M_DEL, RMS$_CUR, or RMS$_WER. Uses
+; R0-R4.
+REL$DELETE::
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4>
+        MOVL    #RMS$_FAC, R0
+        BBC     #FAB$V_DEL, IFB$B_FAC(R7), 90$
+        BICL2   #1@IFB$V_FOUND, IFB$L_FLAGS(R7)
+        MOVL    #RMS$_CUR, R0
+        MOVL    IFB$L_CUR(R7), R4
+        BEQL    90$
+        BSBW    BUCKET
+        BSBW    LOADBKT
+        BLBC    R0, 88$
+        BSBW    CELL
+        BISB2   #1@DLC$V_DELETED, (R3)
+        BISL2   #1@IFB$V_DIRTY, IFB$L_FLAGS(R7)
+        CLRL    IFB$L_CUR(R7)
+        MOVL    #RMS$_NORMAL, R0
+        RSB
+88$:    MOVL    R0, RAB$L_STV(R10)
+        MOVL    #RMS$_WER, R0
+90$:    RSB
+
+; REL$FLUSH: R7 = an IFAB. Writes the bucket it holds if it changed, the
+; prologue's end of file if it did, and the header, whose end of file is
+; past its last block, as VMS's. R0 = RMS$_NORMAL
+; or the file system's error. Uses R0-R5.
+REL$FLUSH::
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5>
+        BSBW    WRBUF
+        BLBC    R0, 90$
+        BBCC    #IFB$V_PLG, IFB$L_FLAGS(R7), 10$
+        MOVL    #1, R0
+        MOVL    #1, R1
+        MOVAB   PLG, R2
+        MOVAB   IFB$AB_HDR(R7), R3
+        BSBW    FIL$READVBN
+        BLBC    R0, 90$
+        MOVL    IFB$L_EOF(R7), PLG+PLG$L_EOF
+        MOVL    #1, R1
+        BSBW    WRPLG
+        BLBC    R0, 90$
+10$:    BBCC    #IFB$V_HDR, IFB$L_FLAGS(R7), 80$
+        ROTL    #16, IFB$AB_HDR+FAT$L_HIBLK(R7), R0     ; the header's: the allocation's
+        INCL    R0
+        ROTL    #16, R0, IFB$AB_HDR+FAT$L_EFBLK(R7)
+        CLRW    IFB$AB_HDR+FAT$W_FFBYTE(R7)
+        MOVAB   IFB$AB_HDR(R7), R1
+        BSBW    FIL$WRITEHDR
+        BLBC    R0, 90$
+80$:    MOVL    #RMS$_NORMAL, R0
+90$:    RSB
+
+; WRPLG: R7 = an IFAB, R1 = a VBN. Writes PLG there, with its checksum
+; (RMS$CHECKSUM). R0 = RMS$_NORMAL or the file system's error. Uses
+; R0-R2.
+WRPLG:
+        .JSB_ENTRY  SCRATCH=<R2>
+        MOVAB   PLG, R2
+        BSBW    RMS$CHECKSUM
+        MOVL    R1, R0
+        MOVL    #1, R1
+        BSBW    RMS$WRITEBKT
+        RSB
+
+; RMS$CHECKSUM: R2 = a prologue block. Puts its checksum in its last
+; word: the 16-bit sum of the 255 before it. Keeps every register.
+RMS$CHECKSUM::
+        .JSB_ENTRY
+        PUSHR   #^M<R0, R1>
+        CLRL    R0
+        CLRL    R1
+10$:    ADDW2   (R2)[R1], R0
+        AOBLSS  #255, R1, 10$
+        MOVW    R0, PLG$W_CHECKSUM(R2)
+        POPR    #^M<R0, R1>
+        RSB
+
+; RMS$READBKT: R7 = an IFAB, R0 = a VBN, R1 = a block count, R2 = a
+; buffer. Reads the file's blocks there. R0 = RMS$_NORMAL or the disk's
+; error. Keeps every other register.
+RMS$READBKT::
+        .JSB_ENTRY
+        PUSHL   R3
+        MOVAB   IFB$AB_HDR(R7), R3
+        BSBW    FIL$READVBN
+        MOVL    (SP)+, R3
+        BLBC    R0, 90$
+        MOVL    #RMS$_NORMAL, R0
+90$:    RSB
+
+; RMS$WRITEBKT: R7 = an IFAB, R0 = a VBN, R1 = a block count, R2 = a
+; buffer. Writes it to the file's blocks there, extending the file first
+; if it hasn't that many, by its default extension, at least 8 blocks, or
+; what it needs. R0 = RMS$_NORMAL or the file system's error. Keeps every
+; other register.
+RMS$WRITEBKT::
+        .JSB_ENTRY
+        PUSHR   #^M<R0, R1, R2, R3, R4>
+        MOVAB   IFB$AB_HDR(R7), R3
+        ADDL3   R0, R1, R4              ; the last VBN it needs
+        DECL    R4
+        ROTL    #16, FAT$L_HIBLK(R3), R0
+        SUBL3   R0, R4, R1
+        BLEQ    20$
+        MOVZWL  IFB$AB_HDR+20+18(R7), R0        ; FAT$W_DEFEXT
+        CMPL    R0, #8
+        BGEQU   5$
+        MOVL    #8, R0
+5$:     CMPL    R1, R0
+        BGEQU   7$
+        MOVL    R0, R1
+7$:     BSBW    FIL$EXTEND
+        BISL2   #1@IFB$V_HDR, IFB$L_FLAGS(R7)
+        BLBC    R0, 80$
+20$:    MOVQ    (SP), R0
+        MOVL    8(SP), R2
+        BSBW    FIL$WRITEVBN
+        BLBC    R0, 80$
+        MOVL    #RMS$_NORMAL, R0
+80$:    MOVL    R0, (SP)
+        POPR    #^M<R0, R1, R2, R3, R4>
         RSB
 
         .END

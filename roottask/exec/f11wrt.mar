@@ -338,7 +338,7 @@ FIL$CREHDR::
 
 ; EXTINDEX: R5 = a VCB. Extends its index file by IDXEXT blocks, zeros,
 ; headers no file has yet, and its end of file past them, and writes its
-; header. R0 = SS$_NORMAL, or FIL$EXTEND's or the disk's error. Holding
+; header and the header's backup. R0 = SS$_NORMAL, or FIL$EXTEND's or the disk's error. Holding
 ; FIL$LOCK. Keeps every other register.
 EXTINDEX:
         .JSB_ENTRY
@@ -365,6 +365,13 @@ EXTINDEX:
         MOVL    R1, FH2$L_HIGHWATER(R3)
         MOVL    R3, R1
         BSBW    FIL$WRITEHDR
+        BLBC    R0, 90$
+        MOVZWL  VCB$W_CLUSTER(R5), R0   ; and its backup, at VBN 3v+1
+        MULL2   #3, R0
+        INCL    R0
+        MOVL    #1, R1
+        MOVL    R3, R2
+        BSBW    FIL$WRITEVBN
 90$:    POPR    #^M<R1, R2, R3, R4>
         RSB
 
