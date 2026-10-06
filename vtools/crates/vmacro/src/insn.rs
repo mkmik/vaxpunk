@@ -2,7 +2,7 @@
 //! `docs/macro32.md` lists them and what doesn't carry over.
 
 use crate::Flags;
-use crate::operand::{Ext, Gen, Mode, Opnd, Result, Size, arm, w, x};
+use crate::operand::{Ext, Gen, Mode, Opnd, Place, Result, Size, arm, w, x};
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Alu {
@@ -72,6 +72,9 @@ pub enum Op {
     CallPal,
     Insque,
     Remque,
+    /// EVAX_LDQ and EVAX_STQ: a register's 64 bits from or to an operand.
+    Ldq,
+    Stq,
 }
 
 /// A VAX mnemonic's operation and operand size, if it is one vmacro knows.
@@ -137,6 +140,8 @@ pub fn kind(mn: &str) -> Option<(Op, Size)> {
         "CALL_PAL" => (Op::CallPal, L),
         "INSQUE" => (Op::Insque, B),
         "REMQUE" => (Op::Remque, B),
+        "EVAX_LDQ" => (Op::Ldq, Q),
+        "EVAX_STQ" => (Op::Stq, Q),
         "BNEQ" | "BNEQU" | "BEQL" | "BEQLU" | "BGTR" | "BLEQ" | "BGEQ" | "BLSS" | "BGTRU"
         | "BLEQU" | "BVC" | "BVS" | "BCC" | "BCS" | "BGEQU" | "BLSSU" => (Op::Bcc, L),
         _ => return sized(mn),
@@ -1027,6 +1032,29 @@ pub fn compile(
             g.emit("svc #0");
             g.emit(format!("mov x7, {r7}"));
             Ok(Some(test("w0", Size::L)))
+        }
+        Op::Ldq | Op::Stq => {
+            let Opnd::Reg(n) = ops[0] else {
+                return Err(format!("{mn}'s first operand is a register"));
+            };
+            let r = format!("x{}", arm(n)?);
+            match (op, &ops[1]) {
+                (Op::Ldq, Opnd::Reg(m)) => g.emit(format!("mov {r}, x{}", arm(*m)?)),
+                (Op::Ldq, Opnd::Imm(e)) => g.imm_into(&r, e, size)?,
+                (Op::Ldq, o) => {
+                    let Place::Mem(base, disp) = g.place(o, size)? else {
+                        unreachable!("a register or an immediate");
+                    };
+                    let m = g.at(&base, disp, size)?;
+                    g.emit(format!("ldr {r}, {m}"));
+                }
+                (_, Opnd::Reg(m)) => g.emit(format!("mov x{}, {r}", arm(*m)?)),
+                (_, o) => {
+                    let p = g.place(o, size)?;
+                    g.store(&p, size, &r)?;
+                }
+            }
+            Ok(None)
         }
         Op::Insque => {
             // Links are longwords: the queue must be below 4 GB.

@@ -171,6 +171,7 @@ What doesn't carry over:
 | Field and string | `EXTV`, `EXTZV`, `INSV`, `MOVC3`, `MOVC5` |
 | Queue | `INSQUE`, `REMQUE` |
 | Privileged | `MTPR`, `MFPR`, `HALT`, `CHMK`, `CHME`, `CHMS`, `CHMU`, `PROBER`, `PROBEW`, `REI`, `CALL_PAL`: PAL calls, see *Privileged instructions* |
+| 64-bit | `EVAX_LDQ Rn, src`, `EVAX_STQ Rn, dst`: all 64 bits of Rn, as AMACRO's built-ins |
 | Other | `NOP`, `BPT` (`brk`) |
 
 `x` is B, W, L, or Q where the VAX has it. Every addressing mode works:
@@ -221,9 +222,9 @@ function codes are in
 | `MTPR src, #PR$_RXCS`, `MFPR #PR$_RXCS, dst` | `MTPR_RXCS`, `MFPR_RXCS`: the console receive status, a character waiting and its interrupt enable |
 | `MFPR #PR$_RXDB, dst` | `MFPR_RXDB`, the console character received |
 | `MTPR src, #PR$_DOORBELL` | `MTPR_DOORBELL`, rings port src's doorbell |
-| `CHMK #code`, `CHME`, `CHMS`, `CHMU` | `CHMK`, `CHME`, `CHMS`, `CHMU`: the code goes in R0, and R0 comes back with what the service left there |
+| `CHMK #code`, `CHME`, `CHMS`, `CHMU` | `CHMK`, `CHME`, `CHMS`, `CHMU`: the code goes in R0, and R0 and R1 come back with what the service left in the frame |
 | `PROBER mode, len, base`, `PROBEW` | `PROBER`, `PROBEW`: base, len and mode in R0-R2, which come back, as R7 does; Z is set if the mode may not read (write) the first and last byte, as on the VAX |
-| `REI` | `REI`: resumes at the PC in the frame on the stack, with R7 from it too |
+| `REI` | `REI`: resumes at the PC in the frame on the stack, with every register from it |
 | `HALT` | `HALT` |
 | `CALL_PAL #code` | any PAL call, as on Alpha: arguments in R0-R5, the result in R0, R7 kept |
 

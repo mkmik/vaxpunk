@@ -254,26 +254,24 @@ the event goes to:
 | --- | --- |
 | 0 | PC |
 | 8 | PSL |
-| 16 | R7 |
-| 24 | the interrupted VAX SP |
-| 32 | the interrupted ARM64 `sp` |
-| 40-80 | x13-x18, vmacro's scratch registers |
-| 88 | x30 |
+| 16-256 | x0-x30, 8 bytes each: R0-R11 and AP in x0-x12, the VAX SP in x28, FP in x29 |
+| 264 | the interrupted ARM64 `sp` |
 
-This is `$INTSTKDEF`. It holds what VAX code may have live that the code
-it interrupts doesn't save: vmacro keeps operands and R0 and R7 in x13-x18
-across a PAL call. An exception with parameters pushes them below the
-frame, and its handler pops them before `REI`. A handler saves the VAX
-registers it uses, as on the VAX, and returns with `REI`, which pops the
-frame, sets the modes, IPL and the condition codes from the PSL and resumes
-at the PC, with the SPs from the frame. As the VAX's, `REI` may not go to
-an inner mode than the current one, nor to a previous mode inner than the
-new one, nor to an outer mode above IPL 0; such a frame is a reserved
-instruction. Going out to another mode, it saves the current mode's SP,
-past the frame, in the HWPCB.
-
-An interrupt can come between any two instructions, so a handler keeps
-every register it uses, R0 included.
+This is `$INTSTKDEF`. It holds every register of the code the event
+stops, all 64 bits, as [ADR-0023](../adr/0023-calling-standard.md)
+requires: a handler's longword `PUSHR` would otherwise cut the upper
+halves off whatever 64-bit code it interrupted. An exception with
+parameters pushes them below the frame, and its handler pops them before
+`REI`. A handler may still save the VAX registers it uses, as on the VAX,
+and returns with `REI`, which pops the frame, sets the modes, IPL and the
+condition codes from the PSL, restores every register and the SPs from
+it, and resumes at the PC. A handler that hands back a register, as a
+`CHMx` handler hands back R0 and R1, writes it into the frame first. As
+the VAX's, `REI` may not go to an inner mode than the current one, nor to
+a previous mode inner than the new one, nor to an outer mode above IPL 0;
+such a frame is a reserved instruction. Going out to another mode, it
+saves the current mode's SP, past the frame, in the HWPCB. A new context
+starts as `REI` from the frame at its KSP, with R0 the HWPCB the CPU left.
 
 - **Software interrupts.** `MTPR #PR$_SIRR` requests level 1-15;
   `MFPR #PR$_SISR` shows which are pending. The PAL delivers the highest
@@ -317,8 +315,8 @@ every register it uses, R0 included.
 - **`CHMx`**, x the mode: `CHMK` 0, `CHME` 1, `CHMS` 2, `CHMU` 3. The code in
   R0. The PAL delivers through the SCB's vector for x, at the same IPL, to
   mode x, or to the current mode if that is an inner one, with the current
-  mode as the previous one. The handler leaves the service's status in R0,
-  which `REI` doesn't change. Without a vector, or a stack in the HWPCB for
+  mode as the previous one. The handler writes the service's status, R0,
+  and R1 into the frame for `REI` to restore. Without a vector, or a stack in the HWPCB for
   the mode, `CHMx` is a reserved instruction.
 - **`PROBER`, `PROBEW`** (a0 = an address, a1 = a length, a2 = a mode):
   v0 = 1 if the mode, or the previous mode if it is an outer one, may read

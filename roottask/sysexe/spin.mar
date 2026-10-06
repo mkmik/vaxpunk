@@ -3,8 +3,10 @@
 ;
 ; SPIN loops in user mode with no system service, so only an interrupt
 ; takes the CPU from it, and CTRL/Y must stop it there. Each register it
-; may use holds a value it checks each time round, so CONTINUE must give
-; every one back as it was; if one changed, SPIN says so and exits.
+; may use holds a value it checks each time round, all 64 bits of it, so
+; interrupts and CONTINUE must give every one back whole; if one changed,
+; SPIN says so and exits. The upper halves are set and checked in ARM64,
+; which MACRO-32 has no instruction for, and live in x0-x11 (R0-R11).
 ;
         .LIBRARY "starlet.mlb"
         .LIBRARY "sysexe.mlb"
@@ -25,7 +27,15 @@
         MOVL    #9, R9
         MOVL    #10, R10
         MOVL    #11, R11
-10$:    CMPL    R0, SP
+        .IRP    N, <0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11>
+        movk    x'N, #256+N, lsl #32
+        .ENDR
+10$:    .IRP    N, <0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11>
+        lsr     x16, x'N, #32
+        cmp     w16, #256+N
+        b.ne    90$
+        .ENDR
+        CMPL    R0, SP
         BNEQ    90$
         CMPL    R1, AP
         BNEQ    90$

@@ -1116,8 +1116,21 @@ static seL4_CPtr tcpip_tick, doorbell;
 static int halted;
 
 /* The frame on the stack an interrupt or exception pushes and REI pops
- * ($INTSTKDEF), in quadwords. */
-enum { F_PC, F_PS, F_R7, F_SP, F_X_SP, F_X13, F_X30 = F_X13 + 6, F_LENGTH };
+ * ($INTSTKDEF), in quadwords: every register of the code it stops. */
+enum { F_PC, F_PS, F_X0, F_X_SP = F_X0 + 31, F_LENGTH };
+
+/* Where seL4 keeps xn, n 0-30, in the registers it reads and writes. */
+#define X(n) __builtin_offsetof(seL4_UserContext, x##n)
+static const unsigned short xoff[31] = { X(0),	X(1),  X(2),  X(3),  X(4),  X(5),  X(6),  X(7),
+					 X(8),	X(9),  X(10), X(11), X(12), X(13), X(14), X(15),
+					 X(16), X(17), X(18), X(19), X(20), X(21), X(22), X(23),
+					 X(24), X(25), X(26), X(27), X(28), X(29), X(30) };
+#undef X
+
+static seL4_Word *xreg(seL4_UserContext *r, int n)
+{
+	return (seL4_Word *)((char *)r + xoff[n]);
+}
 
 /* The PSL: the current and previous modes in bits 25:24 and 23:22, IPL in
  * 20:16, and the condition codes, NZVC in 3:0, from ARM64's NZCV in 31:28. */
@@ -1154,8 +1167,10 @@ static int vector(seL4_UserContext *r, seL4_Word off, seL4_Word new_ipl, int to,
 	seL4_Word handler = v ? *v >> (scbb + off) % 8 * 8 & 0xffffffff : 0;
 	if (!handler)
 		return 0;
-	seL4_Word frame[F_LENGTH] = { r->pc, psl(r->spsr), r->x7, r->x28, r->sp, r->x13, r->x14,
-				      r->x15, r->x16, r->x17, r->x18, r->x30 };
+	seL4_Word frame[F_LENGTH] = { r->pc, psl(r->spsr) };
+	for (int i = 0; i < 31; i++)
+		frame[F_X0 + i] = *xreg(r, i);
+	frame[F_X_SP] = r->sp;
 	/* Below both stacks: vmacro moves sp first, then x28, and back. */
 	seL4_Word sp = r->x28 < r->sp ? r->x28 : r->sp, below = sp;
 	uint64_t *outer = 0;
@@ -1256,12 +1271,9 @@ static int rei(seL4_UserContext *r)
 	cur->prvmode = prv;
 	r->pc = f[F_PC];
 	r->spsr = spsr(f[F_PS]);
-	r->x7 = f[F_R7];
-	r->x28 = f[F_SP];
+	for (int i = 0; i < 31; i++)
+		*xreg(r, i) = f[F_X0 + i];
 	r->sp = f[F_X_SP];
-	r->x13 = f[F_X13], r->x14 = f[F_X13 + 1], r->x15 = f[F_X13 + 2];
-	r->x16 = f[F_X13 + 3], r->x17 = f[F_X13 + 4], r->x18 = f[F_X13 + 5];
-	r->x30 = f[F_X30];
 	ipl = f[F_PS] >> 16 & 31;
 	return 1;
 }
@@ -1353,12 +1365,13 @@ static int swpctx(seL4_Word hwpcb)
 		return ret(from->hwpcb);
 	}
 	to->started = 1;
-	regs = (seL4_UserContext){ .x28 = *ksp, .x0 = from->hwpcb };
+	regs = (seL4_UserContext){ .x28 = *ksp };
 	regs_mode = 0;
 	if (!rei(&regs)) {
 		print("%%PAL-F-SWPCTX, no REI frame at KSP 0x%lx\n", (seL4_Word)*ksp);
 		return 0;
 	}
+	regs.x0 = from->hwpcb;
 	if (!deliver(&regs))
 		return 0;
 	write_regs(1);

@@ -124,19 +124,22 @@ SCB$K_LENGTH = ^X104
         .ENDM   $SCBDEF
 
 ; $INTSTKDEF: the frame the PAL pushes on the stack of the mode it delivers
-; an interrupt or an exception in, and REI pops. Quadwords: the registers
-; the interrupted code may have live that VAX code doesn't save. An
+; an interrupt or an exception in, and REI pops. Quadwords: the PC, the PSL,
+; then every register of the code it stopped, all 64 bits, which REI
+; restores. A handler that hands back a register, as a change mode
+; handler hands back R0 and R1, writes it into the frame before REI. An
 ; exception with parameters pushes them below the frame, and its handler
 ; pops them before REI.
         .MACRO  $INTSTKDEF
 INTSTK$Q_PC = 0
 INTSTK$Q_PS = 8                         ; the PSL ($PSLDEF): modes, IPL, NZVC
-INTSTK$Q_R7 = 16
-INTSTK$Q_SP = 24                        ; the interrupted mode's VAX SP
-INTSTK$Q_X_SP = 32                      ; ARM64's sp
-INTSTK$Q_X13 = 40                       ; x13-x18, vmacro's scratch
-INTSTK$Q_X30 = 88                       ; the link register
-INTSTK$K_LENGTH = 96
+INTSTK$Q_X0 = 16                        ; x0-x30, 8 bytes each
+INTSTK$Q_R0 = INTSTK$Q_X0               ; R0
+INTSTK$Q_R1 = INTSTK$Q_X0+8             ; R1
+INTSTK$Q_R7 = INTSTK$Q_X0+56            ; R7
+INTSTK$Q_SP = INTSTK$Q_X0+224           ; the interrupted mode's VAX SP, x28
+INTSTK$Q_X_SP = 264                     ; ARM64's sp
+INTSTK$K_LENGTH = 272
         .ENDM   $INTSTKDEF
 
 ; $HWPCBDEF: the hardware PCB the PAL knows a process context by. Quadword

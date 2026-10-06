@@ -150,6 +150,8 @@ EXE$SRCHANDLER::
         MOVL    SIG-ARGS-4(SP)[R0], FRAME+INTSTK$Q_PC-ARGS(SP)
         MOVQ    MECH+CHF$L_MCH_SAVR0-ARGS(SP), R0
         MOVAB   FRAME-ARGS(SP), SP
+        EVAX_STQ R0, INTSTK$Q_R0(SP)
+        EVAX_STQ R1, INTSTK$Q_R1(SP)
         REI
 
 ; EXE$SIGNAL sigargs, mchargs: looks for a handler for the condition

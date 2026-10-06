@@ -495,6 +495,8 @@ EXE$REISP::
         MOVL    R3, INTSTK$Q_PS(SP)
         MOVL    R5, INTSTK$Q_SP(SP)
         MOVL    R5, INTSTK$Q_X_SP(SP)
+        EVAX_STQ R0, INTSTK$Q_R0(SP)
+        EVAX_STQ R1, INTSTK$Q_R1(SP)
         REI
 
 ; NEXTISD: R8 = an image file, R10 = the offset of an EISD in its header.

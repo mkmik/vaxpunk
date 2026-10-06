@@ -24,6 +24,7 @@
         .LIBRARY "lib.mlb"
         .LIBRARY "starlet.mlb"
         $SSDEF
+        $INTSTKDEF
         $PCBDEF
         $PRVDEF
 
@@ -184,7 +185,8 @@ CODE = 0
 
 ; EXE$CMODKRNL: the CHMK handler. R0 = the service's code, AP = its
 ; argument list, the PAL's frame on the kernel stack. Code CMEXECOK is
-; EXE$CMODEXEC's question, answered in R0.
+; EXE$CMODEXEC's question, answered in R0. R0 and R1 go back to the
+; caller in the frame, which REI restores every register from.
 EXE$CMODKRNL::
         CMPL    R0, #CODE
         BGEQU   60$
@@ -195,18 +197,20 @@ EXE$CMODKRNL::
         MOVL    (SP)+, R0
         MOVL    EXE$AL_SSTAB[R0], R1
         CALLG   (AP), (R1)
-        REI
+        BRB     90$
 70$:    ADDL2   #4, SP
-        REI
+        BRB     90$
 60$:    CMPL    R0, #CMEXECOK           ; may it change mode to executive?
         BNEQ    80$
         MOVL    SCH$GL_CURPCB, R1
         MOVL    #SS$_NORMAL, R0
-        IFPRIV  CMEXEC, 65$, R1
-        IFPRIV  CMKRNL, 65$, R1
+        IFPRIV  CMEXEC, 90$, R1
+        IFPRIV  CMKRNL, 90$, R1
         MOVL    #SS$_NOPRIV, R0
-65$:    REI
+        BRB     90$
 80$:    MOVL    #SS$_ILLSER, R0
+90$:    EVAX_STQ R0, INTSTK$Q_R0(SP)
+        EVAX_STQ R1, INTSTK$Q_R1(SP)
         REI
 
         .PSECT  EXEC$VECTOR
@@ -223,8 +227,10 @@ EXE$CMODEXEC::
         BSBB    ARGLIST
         BLBC    R0, 90$
         CALLG   (AP), EXE$CMEXEC
-90$:    REI
+        BRB     90$
 80$:    MOVL    #SS$_ILLSER, R0
+90$:    EVAX_STQ R0, INTSTK$Q_R0(SP)
+        EVAX_STQ R1, INTSTK$Q_R1(SP)
         REI
 
 ; $CMEXEC routin, arglst: calls routin in executive mode with arglst.
