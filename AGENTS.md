@@ -26,7 +26,7 @@ silly analogies.
 
 ## API reference
 
-The [API reference](https://mkmik.github.io/vaxpunk/) documents every internal API: system services, executive
+The [API reference](https://mkmik.github.io/vaxpunk/docs/) documents every internal API: system services, executive
 routines and data, PAL calls, macro libraries and condition values. `cargo run -p apidoc` ([apidoc/](apidoc/))
 generates it from the sources into docs/api/index.html, so maintaining it means maintaining what it reads:
 

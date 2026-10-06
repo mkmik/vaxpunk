@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<!-- vaxpunk on QEMU compiled to WebAssembly (github.com/ktock/qemu-wasm). The Pages workflow
+     puts it at /demo/ with that QEMU, xterm.js, xterm-pty, coi-serviceworker and the images, gzipped. -->
+<title>vaxpunk demo</title>
+<!-- QEMU's threads need SharedArrayBuffer, so cross-origin isolation, whose headers Pages can't
+     send: coi-serviceworker adds them, reloading the page once. -->
+<script src="coi-serviceworker.js"></script>
+<link rel="stylesheet" href="../page.css"><link rel="stylesheet" href="vendor/xterm.css">
+<style>main{margin:4rem 0 0;padding:1rem;max-width:none}#terminal{height:calc(100vh - 8rem)}
+#status{font:.8rem var(--sans);color:var(--dim);margin-bottom:.5rem}</style></head>
+<body><header class="top"><a class="logo" href="../" aria-label="vaxpunk"><span>v</span><span>a</span><span>x</span><span>p</span><span>u</span><span>n</span><span>k</span></a>
+<div class="ttl">Demo<small>QEMU in WebAssembly · no network · the data disk lasts until you reload</small></div>
+<button id="theme" type="button" title="Paper or terminal" style="margin-left:auto">VT220</button></header>
+<main><div id="status">Loading…</div><div id="terminal"></div></main>
+<script>const th=document.getElementById('theme');function setvt(on){document.documentElement.classList.toggle('vt',on);th.textContent=on?'PAPER':'VT220';localStorage.setItem('vt',on?'1':'')}
+setvt(!!localStorage.getItem('vt'));th.addEventListener('click',()=>setvt(!document.documentElement.classList.contains('vt')));</script>
+<script type="module">
+import './vendor/xterm.js';
+import './vendor/xterm-pty.js';
+import initQemu from './qemu-system-aarch64.js';
+
+const status = document.getElementById('status');
+if (!self.crossOriginIsolated) {
+  status.textContent = 'Waiting for cross-origin isolation (coi-serviceworker)…';
+  throw new Error('not cross-origin isolated yet');
+}
+const xterm = new Terminal({theme: {background: '#0c0904', foreground: '#ffb000'}});
+xterm.open(document.getElementById('terminal'));
+const {master, slave} = openpty();
+xterm.loadAddon(master);
+
+// The machine of scripts/run-qemu.sh and kernel/qemu.env, which seL4's memory map is compiled
+// for, minus what a browser lacks: virtio-net has no backend, so the network sees no one.
+const Module = {
+  pty: slave,
+  mainScriptUrlOrBlob: new URL('qemu-system-aarch64.js', location.href).href,
+  arguments: [
+    '-machine', 'virt,secure=off,gic-version=3,acpi=off', '-cpu', 'cortex-a57',
+    '-accel', 'tcg,tb-size=500', '-smp', '1', '-m', '1024', '-display', 'none',
+    '-bios', '/pack/edk2-aarch64-code.fd', '-boot', 'menu=on,splash-time=0',
+    '-drive', 'if=virtio,format=raw,readonly=on,file=/pack/esp.img',
+    '-drive', 'if=none,id=sysdisk,format=raw,readonly=on,file=/pack/sysdisk.img',
+    '-device', 'virtio-blk-device,drive=sysdisk',
+    '-drive', 'if=none,id=datadisk,format=raw,file=/pack/datadisk.img',
+    '-device', 'virtio-blk-device,drive=datadisk', '-global', 'virtio-mmio.force-legacy=false',
+    '-nic', 'none', '-device', 'virtio-net-device', '-serial', 'mon:stdio', '-serial', 'null',
+  ],
+  preRun: [mod => {
+    mod.addRunDependency('pack');
+    mod.FS.mkdir('/pack');
+    // The data disk, DKB0:, starts as 2 MB of zeros, like run-qemu.sh's.
+    mod.FS.writeFile('/pack/datadisk.img', new Uint8Array(2 << 20));
+    const files = ['edk2-aarch64-code.fd', 'esp.img', 'sysdisk.img'];
+    Promise.all(files.map(async f => {
+      const r = await fetch(f + '.gz');
+      if (!r.ok) throw new Error(`${f}.gz: ${r.status}`);
+      const buf = await new Response(r.body.pipeThrough(new DecompressionStream('gzip'))).arrayBuffer();
+      mod.FS.writeFile('/pack/' + f, new Uint8Array(buf));
+    })).then(() => {
+      status.textContent = 'Booting: EDK2, Limine, seL4, then the VMS executive. Under WebAssembly this takes a while.';
+      mod.removeRunDependency('pack');
+    }, e => { status.textContent = 'Loading failed: ' + e.message; });
+  }],
+};
+status.textContent = 'Loading QEMU and the disk images…';
+await initQemu(Module);
+// xterm-pty's poll blocks while the pty has no input; QEMU's main loop must not (as in qemu-wasm's examples).
+const poll = Module.TTY.stream_ops.poll;
+Module.TTY.stream_ops.poll = (stream, timeout) =>
+  slave.readable ? poll.call(stream, timeout) : (slave.writable ? 4 : 0);
+</script>
+</body></html>
