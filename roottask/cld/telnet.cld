@@ -1,0 +1,9 @@
+! TELNET address [port], or TELNET address /PORT=n: RTPAD.EXE, a remote
+! login, as SET HOST, or a connection to whatever listens on the port, a
+! line at a time. TCP/IP Services' syntax.
+! ponytail: no TELNET> prompt, CTRL/] or other qualifiers; CTRL/Z hangs up.
+define verb TELNET
+	image RTPAD
+	parameter P1, label=NODE, prompt="Host", value(required)
+	parameter P2
+	qualifier PORT, value(required)

@@ -1,12 +1,15 @@
-        .TITLE  RTPAD   SET HOST: a remote login
+        .TITLE  RTPAD   SET HOST and TELNET: a remote login
         .IDENT  /V0.1/
 ;
 ; DCL's SET HOST address runs this, NODE the address, as VMS's DCL ran
-; RTPAD.EXE. It connects to TCP port 23 there, where
-; another vaxpunk's TELNETD gives it a DCL of its own, and passes lines
-; both ways: what comes on the connection it writes on the terminal, and
-; each line read on the terminal, edited there, it sends with a CR LF.
-; When the other end closes, at its LOGOUT, it says so and returns.
+; RTPAD.EXE, and so does TELNET address [port] or TELNET address /PORT=n,
+; as TCP/IP Services' TELNET takes them. It connects to TCP port 23
+; there, where another vaxpunk's TELNETD gives it a DCL of its own, or to
+; the port, whatever listens there, and passes lines both ways: what comes
+; on the connection it writes on the terminal, and each line read on the
+; terminal, edited there, it sends with a CR LF.
+; When the other end closes, at its LOGOUT, or CTRL/Z is typed here, it
+; says so and returns.
 ; ponytail: line at a time, the local terminal's editing and echo, no
 ; Telnet option negotiation; good for DCL, not for EDIT's keypad mode.
 ;
@@ -32,6 +35,11 @@ NODE:   .LONG   64                      ; NODE, the parameter: its address, in t
         .ADDRESS NODEBUF
 NODEBUF:
         .BLKB   64
+PORT:   .LONG   23                      ; the other end's port
+PVAL:   .LONG   8                       ; the verb, then the port, in text
+        .ADDRESS PVALBUF
+PVALBUF:
+        .BLKB   8
 NIOSB:  .BLKQ   1                       ; the connection's read's
 TIOSB:  .BLKQ   1                       ; the terminal's
 IOSB:   .BLKQ   1                       ; a write's
@@ -46,12 +54,27 @@ TBUF:   .BLKB   BUFSIZE+2               ; a line typed, and its CR LF
         MOVZWL  NODE, -(SP)
         CALLS   #3, G^INET_ADDR
         BLBC    R0, 90$
-        $ASSIGN_S DEVNAM=BGA0, CHAN=NCHAN
+        GETVALUE "$VERB", PVAL, PVAL   ; SET HOST has no port
+        CMPB    PVALBUF, #^A/T/
+        BNEQ    5$
+        PRESENT "PORT"                  ; TELNET host /PORT=n
+        BLBC    R0, 3$
+        MOVW    #8, PVAL
+        GETVALUE "PORT", PVAL, PVAL
+        BRB     4$
+3$:     PRESENT "P2"                    ; TELNET host port
+        BLBC    R0, 5$
+        MOVW    #8, PVAL
+        GETVALUE "P2", PVAL, PVAL
+4$:     BLBC    R0, 90$
+        BSBW    GETPORT
+        BLBC    R0, 90$
+5$:     $ASSIGN_S DEVNAM=BGA0, CHAN=NCHAN
         BLBC    R0, 90$
         $QIOW_S CHAN=NCHAN, FUNC=#IO$_SETMODE, IOSB=IOSB, P1=SOCKCHAR
         BSBW    STATUS
         BLBC    R0, 90$
-        $QIOW_S CHAN=NCHAN, FUNC=#IO$_ACCESS, IOSB=IOSB, P3=ADDR, P4=#23
+        $QIOW_S CHAN=NCHAN, FUNC=#IO$_ACCESS, IOSB=IOSB, P3=ADDR, P4=PORT
         BSBW    STATUS
         BLBC    R0, 90$
         $ASSIGN_S DEVNAM=INPUT, CHAN=TCHAN
@@ -70,6 +93,8 @@ TBUF:   .BLKB   BUFSIZE+2               ; a line typed, and its CR LF
         BEQL    10$
         MOVZWL  TIOSB, R0
         BLBC    R0, 80$
+        CMPB    TIOSB+4, #26            ; CTRL/Z: done here
+        BEQL    70$
         MOVZWL  TIOSB+2, R0
         MOVB    #13, TBUF[R0]
         MOVB    #10, TBUF+1[R0]
@@ -77,6 +102,8 @@ TBUF:   .BLKB   BUFSIZE+2               ; a line typed, and its CR LF
         $QIOW_S CHAN=NCHAN, FUNC=#IO$_WRITEVBLK, IOSB=IOSB, P1=TBUF, P2=R0
         BSBW    TREAD
         BRB     10$
+70$:    $CANCEL_S CHAN=NCHAN
+        $QIOW_S CHAN=NCHAN, FUNC=#IO$_DEACCESS, IOSB=IOSB
 80$:    $CANCEL_S CHAN=TCHAN
         PRINT   "%REM-S-END, control returned to the local node"
         MOVL    #SS$_NORMAL, R0
@@ -94,6 +121,30 @@ TREAD:
         CLRQ    TIOSB
         $QIO_S  EFN=#2, CHAN=TCHAN, FUNC=#IO$_READVBLK, IOSB=TIOSB, P1=TBUF, P2=#BUFSIZE
         RSB
+
+; GETPORT: the port in PVAL, in decimal, into PORT. R0 = SS$_NORMAL,
+; or SS$_BADPARAM for one that isn't a number from 1 to 65535. Uses R0-R2.
+GETPORT:
+        .JSB_ENTRY  SCRATCH=<R2>
+        CLRL    PORT
+        MOVZWL  PVAL, R2
+        BEQL    80$
+        MOVAB   PVALBUF, R1
+10$:    SUBB3   #^A/0/, (R1)+, R0
+        CMPB    R0, #9
+        BGTRU   80$
+        MOVZBL  R0, R0
+        MULL2   #10, PORT
+        ADDL2   R0, PORT
+        SOBGTR  R2, 10$
+        DECL    PORT
+        CMPL    PORT, #65534
+        BGTRU   80$
+        INCL    PORT
+        MOVL    #SS$_NORMAL, R0
+        RSB
+80$:    MOVL    #SS$_BADPARAM, R0
+90$:    RSB
 
 ; STATUS: R0 = $QIOW's status. R0 = the IOSB's, if that was a success.
 STATUS:

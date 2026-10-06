@@ -271,12 +271,14 @@ interpreter. It is linked high in P1, which tells the executive it is one
   /GATEWAY=address /PERMANENT` save them on the data disk for the next
   boot instead. `PING address` sends an ICMP echo request each second
   with `IO$_ACCESS` on `BGA0:` and prints each reply.
-  `SET HOST address` runs `RTPAD.EXE`, which connects to port 23 there:
+  `SET HOST address` runs `RTPAD.EXE`, and so does `TELNET address`,
+  which connects to port 23 there:
   the other side's `TELNETD` creates a process named after the
   connection's unit, `_BG02:`, running DCL with the connection as its
   input and output, and RTPAD passes lines both ways until `LOGOUT` there
-  prints `%REM-S-END` here. `RUN TCPTEST` connects to a server on the
-  host and accepts a connection from it.
+  prints `%REM-S-END` here, or CTRL/Z is typed. `TELNET address port`,
+  or `/PORT=port`, connects to that port instead. `RUN TCPTEST` connects
+  to a server on the host and accepts a connection from it.
 
 The system disk is read only, the ramdisk is gone when the system stops,
 and there's no login yet.

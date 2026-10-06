@@ -315,8 +315,10 @@ save the settings on the data disk, once `INITIALIZE DKB0:` has made a
 volume there, and each boot sets them from there with `TCPIP START
 COMMUNICATION`, as TCP/IP Services split them. Every
 system with a network runs `TCPIP$TELNET`, which takes `SET HOST`
-logins on TCP port 23: `SET HOST 10.0.2.15` logs in to the system
-itself.
+and `TELNET` logins on TCP port 23: `SET HOST 10.0.2.15` logs in to the
+system itself. `TELNET address port`, or `/PORT=port`, as TCP/IP
+Services takes it, talks to any other port a line at a time, a poor
+man's netcat; CTRL/Z hangs up.
 
 `run-qemu.sh` reads `NETDEV`, QEMU's `-netdev` for the network, and
 `MAC`, `LOG` and `DATADISK`, so that a second vaxpunk can share a network

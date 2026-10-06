@@ -9,12 +9,13 @@
 //! INTERFACE, HELP, an interface there is not, and EXIT; then TCPTEST, which
 //! connects to a server here, through QEMU's guestfwd, and accepts a
 //! connection from a client here, through hostfwd, and SET HOST to
-//! itself, SHOW SYSTEM there, and LOGOUT.
+//! itself, SHOW SYSTEM there, and LOGOUT; then TELNET to a port here,
+//! through guestfwd, a line each way, and with /PORT to one there cannot be.
 //!
 //! Two vaxpunks on one QEMU socket network, A and B, each with a data disk
 //! made here holding the configuration SET CONFIGURATION INTERFACE saves,
-//! which START COMMUNICATION applies at boot: B logs in to A with SET
-//! HOST, SHOW SYSTEM lists A's processes, and LOGOUT comes back to B,
+//! which START COMMUNICATION applies at boot: B logs in to A with
+//! TELNET, SHOW SYSTEM lists A's processes, and LOGOUT comes back to B,
 //! which pings A.
 //! Then B saves another address, keeping the saved gateway, another
 //! gateway with SET ROUTE /PERMANENT, keeping that address, and DHCP,
@@ -160,6 +161,18 @@ fn network() {
         c.write_all(b"hello from the host\r\n").unwrap();
         String::from_utf8_lossy(&buf[..n]).into_owned()
     });
+    // Greets, echoes a line back and closes: for TELNET address port.
+    let echo = TcpListener::bind("127.0.0.1:0").unwrap();
+    let echo_port = echo.local_addr().unwrap().port();
+    let echoer = thread::spawn(move || {
+        let (mut c, _) = echo.accept().unwrap();
+        c.write_all(b"hello from port 7779\r\n").unwrap();
+        let mut buf = [0; 100];
+        let n = c.read(&mut buf).unwrap();
+        c.write_all(b"echo: ").unwrap();
+        c.write_all(&buf[..n]).unwrap();
+        String::from_utf8_lossy(&buf[..n]).into_owned()
+    });
     let fwd = free_port();
     data_disk(
         &out.join("net-data.img"),
@@ -167,6 +180,7 @@ fn network() {
     );
     let netdev = format!(
         "user,id=net0,guestfwd=tcp:10.0.2.100:7777-tcp:127.0.0.1:{server_port},\
+         guestfwd=tcp:10.0.2.100:7779-tcp:127.0.0.1:{echo_port},\
          hostfwd=tcp:127.0.0.1:{fwd}-:7778"
     );
     let mut vax = Vax::boot(
@@ -206,10 +220,18 @@ fn network() {
     vax.command("SET HOST 10.0.2.15");
     vax.command("SHOW SYSTEM");
     vax.command("LOGOUT");
+    vax.reply("TELNET 10.0.2.100 7779", "hello from port 7779");
+    vax.reply("netcat", "echo: netcat");
+    // The host closing doesn't reach the guest through guestfwd: CTRL/Z.
+    let at = vax.text().len();
+    vax.console.write_all(b"\x1a").unwrap();
+    vax.wait_for("$ ", at, 60);
+    vax.command("TELNET 10.0.2.100 /PORT=70000");
     let text = vax.stop();
     print!("{text}");
     assert_eq!(host.join().unwrap(), "hello from vaxpunk\r\n");
     assert_eq!(client.join().unwrap(), "ping from the host\r\n");
+    assert_eq!(echoer.join().unwrap(), "netcat\r\n");
     for line in [
         "%TCPIP-I-SET, WE0: 10.0.2.15        255.255.255.0    10.0.2.2",
         " WE0       10.0.2.15        255.255.255.0    10.0.2.2         up",
@@ -228,6 +250,8 @@ fn network() {
         "TCPTEST: ok",
         "TCPIP$TELNET    LEF     4 TELNETD.EXE",
         "_BG02:          CUR     4 SHOW.EXE",
+        "echo: netcat",
+        "%SYSTEM-F-BADPARAM",
         "%REM-S-END, control returned to the local node",
     ] {
         assert!(text.contains(line), "no {line:?}");
@@ -261,7 +285,7 @@ fn network() {
             ("MAC", "52:54:00:00:00:0b".into()),
         ],
     );
-    b.command("SET HOST 10.0.0.1");
+    b.command("TELNET 10.0.0.1");
     b.command("SHOW SYSTEM");
     b.command("LOGOUT");
     b.command("TCPIP PING /NUMBER_PACKETS=2 10.0.0.1");
