@@ -1,19 +1,23 @@
 //! cargo test -p boot --test network: TCP/IP (docs/prd/0002-networking.md),
 //! in two parts, one after the other.
 //!
-//! One vaxpunk on QEMU's user network: SET INTERFACE, SET ROUTE, one
-//! without /DEFAULT that fails, and SHOW INTERFACE, then TCPTEST, which connects to a server here, through QEMU's guestfwd,
-//! and accepts a connection from a client here, through hostfwd, and
-//! SET HOST to itself, SHOW SYSTEM there, and LOGOUT.
+//! One vaxpunk on QEMU's user network, whose data disk, made here, says
+//! DHCP, which START COMMUNICATION asks QEMU's DHCP server at boot for
+//! the address, mask and gateway: then TCPIP's SET INTERFACE, SET ROUTE,
+//! one without /DEFAULT that fails, and at the TCPIP> prompt SHOW
+//! INTERFACE, HELP, an interface there is not, and EXIT; then TCPTEST, which
+//! connects to a server here, through QEMU's guestfwd, and accepts a
+//! connection from a client here, through hostfwd, and SET HOST to
+//! itself, SHOW SYSTEM there, and LOGOUT.
 //!
 //! Two vaxpunks on one QEMU socket network, A and B, each with a data disk
 //! made here holding the configuration SET CONFIGURATION INTERFACE saves,
-//! which TCPIP.EXE applies at boot: B logs in to A with SET HOST, SHOW
-//! SYSTEM lists A's processes, and LOGOUT comes back to B. Then B saves
-//! another address, keeping the saved gateway, and another gateway with
-//! SET ROUTE /PERMANENT, keeping that address, which SHOW INTERFACE doesn't
-//! show, since they are for the next boot, and which are on its data disk
-//! once it is down.
+//! which START COMMUNICATION applies at boot: B logs in to A with SET
+//! HOST, SHOW SYSTEM lists A's processes, and LOGOUT comes back to B.
+//! Then B saves another address, keeping the saved gateway, another
+//! gateway with SET ROUTE /PERMANENT, keeping that address, and DHCP,
+//! keeping both, which SHOW INTERFACE doesn't show, since they are for
+//! the next boot, and which are on its data disk once it is down.
 
 use std::fs;
 use std::io::{Read, Write};
@@ -71,9 +75,14 @@ impl Vax {
         );
     }
 
-    /// Types a command at the prompt, again until it is echoed (keys typed
-    /// while DCL starts can be lost), and waits for the next prompt.
+    /// Types a command at DCL's prompt and waits for the next one.
     fn command(&mut self, line: &str) -> usize {
+        self.reply(line, "$ ")
+    }
+
+    /// Types a line, again until it is echoed (keys typed while DCL starts
+    /// can be lost), and waits for `prompt`.
+    fn reply(&mut self, line: &str, prompt: &str) -> usize {
         let from = self.text().len();
         for _ in 0..5 {
             self.console
@@ -85,7 +94,7 @@ impl Vax {
             }
         }
         let echo = from + self.text()[from..].find(line).expect("no echo");
-        self.wait_for("$ ", echo + line.len(), 60)
+        self.wait_for(prompt, echo + line.len(), 60)
     }
 
     fn stop(mut self) -> String {
@@ -112,6 +121,7 @@ fn free_port() -> u16 {
 /// A data disk with TCPIP$CONFIG.DAT holding command, as SET
 /// CONFIGURATION INTERFACE saves it.
 fn data_disk(path: &Path, command: &str) {
+    fs::create_dir_all(path.parent().unwrap()).unwrap();
     let _ = fs::remove_file(path);
     let params = InitParams {
         label: b"DATA".to_vec(),
@@ -149,7 +159,10 @@ fn network() {
         String::from_utf8_lossy(&buf[..n]).into_owned()
     });
     let fwd = free_port();
-    let _ = fs::remove_file(path("net-data.img"));
+    data_disk(
+        &out.join("net-data.img"),
+        "INTERFACE 0.0.0.0 0.0.0.0 0.0.0.0 DHCP",
+    );
     let netdev = format!(
         "user,id=net0,guestfwd=tcp:10.0.2.100:7777-tcp:127.0.0.1:{server_port},\
          hostfwd=tcp:127.0.0.1:{fwd}-:7778"
@@ -162,10 +175,15 @@ fn network() {
             ("NETDEV", netdev),
         ],
     );
-    vax.command("SET INTERFACE 10.0.2.15 255.255.255.0");
-    vax.command("SET ROUTE /DEFAULT /GATEWAY=10.0.2.2");
-    vax.command("SET ROUTE /GATEWAY=10.0.2.3");
-    vax.command("SHOW INTERFACE");
+    vax.command("TCPIP SET INTERFACE WE0 /HOST=10.0.2.15 /NETWORK_MASK=255.255.255.0");
+    vax.command("TCPIP SET ROUTE /DEFAULT /GATEWAY=10.0.2.2");
+    vax.command("TCPIP SET ROUTE /GATEWAY=10.0.2.3");
+    vax.reply("TCPIP", "TCPIP> ");
+    vax.reply("SHOW INTERFACE", "TCPIP> ");
+    vax.reply("HELP", "TCPIP> ");
+    vax.reply("HELP SET", "TCPIP> ");
+    vax.reply("SHOW INTERFACE XE0", "TCPIP> ");
+    vax.command("EXIT");
     let client = thread::spawn(move || {
         for _ in 0..100 {
             if let Ok(mut k) = TcpStream::connect(("127.0.0.1", fwd)) {
@@ -189,7 +207,11 @@ fn network() {
     assert_eq!(host.join().unwrap(), "hello from vaxpunk\r\n");
     assert_eq!(client.join().unwrap(), "ping from the host\r\n");
     for line in [
-        " BGA0      10.0.2.15        255.255.255.0    10.0.2.2         up",
+        "%TCPIP-I-SET, WE0: 10.0.2.15        255.255.255.0    10.0.2.2",
+        " WE0       10.0.2.15        255.255.255.0    10.0.2.2         up",
+        "  HELP command describes a command",
+        "  SET INTERFACE interface\n    /DHCP\n    /HOST=value",
+        "%SYSTEM-W-NOSUCHDEV",
         "illegal combination of command elements",
         "TCPTEST: connected to 10.0.2.100 port 7777",
         "hello from the host",
@@ -234,18 +256,19 @@ fn network() {
     b.command("SET HOST 10.0.0.1");
     b.command("SHOW SYSTEM");
     b.command("LOGOUT");
-    b.command("SET CONFIGURATION INTERFACE 10.0.0.3 255.255.255.0");
-    b.command("SET ROUTE /DEFAULT /GATEWAY=10.0.0.9 /PERMANENT");
-    b.command("SHOW INTERFACE");
+    b.command("TCPIP SET CONFIGURATION INTERFACE WE0 /HOST=10.0.0.3 /NETWORK_MASK=255.255.255.0");
+    b.command("TCPIP SET ROUTE /DEFAULT /GATEWAY=10.0.0.9 /PERMANENT");
+    b.command("TCPIP SET CONFIGURATION INTERFACE WE0 /DHCP");
+    b.command("TCPIP SHOW INTERFACE");
     let (a, b) = (a.stop(), b.stop());
     print!("{a}{b}");
-    assert!(a.contains("%TCPIP-I-SET, BGA0: 10.0.0.1         255.255.255.0    10.0.0.1"));
+    assert!(a.contains("%TCPIP-I-SET, WE0: 10.0.0.1         255.255.255.0    10.0.0.1"));
     for line in [
-        "%TCPIP-I-SET, BGA0: 10.0.0.2         255.255.255.0    10.0.0.1",
+        "%TCPIP-I-SET, WE0: 10.0.0.2         255.255.255.0    10.0.0.1",
         "TCPIP$TELNET    LEF     4 TELNETD.EXE",
         "_BG02:          CUR     4 SHOW.EXE",
         "%REM-S-END, control returned to the local node",
-        " BGA0      10.0.0.2         255.255.255.0    10.0.0.1         up",
+        " WE0       10.0.0.2         255.255.255.0    10.0.0.1         up",
     ] {
         assert!(b.contains(line), "no {line:?}");
     }
@@ -256,6 +279,6 @@ fn network() {
         .unwrap();
     assert_eq!(
         String::from_utf8_lossy(&saved),
-        "INTERFACE 10.0.0.3 255.255.255.0 10.0.0.9\n"
+        "INTERFACE 10.0.0.3 255.255.255.0 10.0.0.9 DHCP\n"
     );
 }

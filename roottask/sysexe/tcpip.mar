@@ -1,22 +1,24 @@
-        .TITLE  TCPIP   Sets and shows the network interface
-        .IDENT  /V0.2/
+        .TITLE  TCPIP   TCP/IP Services' management commands
+        .IDENT  /V0.3/
 ;
-; DCL's SET INTERFACE address mask, SET ROUTE /DEFAULT /GATEWAY=address,
-; SHOW INTERFACE and SET CONFIGURATION INTERFACE address mask run this,
-; in the spirit of TCP/IP Services' TCPIP commands: OPTION, the parse's
-; first parameter, and $VERB say which, and ADDRESS, MASK and GATEWAY
-; give the addresses, four numbers and dots each. As there, SET
-; INTERFACE and SET ROUTE change the running system, and SET
-; CONFIGURATION INTERFACE and SET ROUTE /PERMANENT the saved
-; configuration, which the next boot applies: the first two sense the
-; settings with IO$_SENSECHAR on BGA0:, the network's port driver
-; (netdriver.mar), change theirs and set them with IO$_SETCHAR; the last
-; two read the saved ones, change theirs and write INTERFACE address mask
-; gateway in a new version of TCPIP$CONFIG.DAT on the data disk, the one
-; that may be written. SHOW senses them and writes them, and whether the
-; link is up. With no command line, as SYLOGIN.COM runs it at boot, it
-; sets the interface from the saved settings, if there are any, and says
-; so, and starts TELNETD, the remote login server SET HOST talks to.
+; DCL's TCPIP verb runs this. It parses the rest of the line, or with
+; none each line it reads after TCPIP> until EXIT or CTRL/Z, with its
+; own tables, TCPIP.CLD, as TCP/IP Services' TCPIP does, and
+; CLI$DISPATCH calls the command's routine. WE0 is the one interface.
+; As there, SET INTERFACE and SET ROUTE change the running system, and
+; SET CONFIGURATION INTERFACE and SET ROUTE /PERMANENT the saved
+; configuration, which START COMMUNICATION applies at boot: the first two
+; sense the settings with IO$_SENSECHAR on BGA0:, the network's port
+; driver (netdriver.mar), change theirs and set them with IO$_SETCHAR;
+; the last two read the saved ones, change theirs and write INTERFACE
+; address mask gateway, and DHCP if /DHCP said so, in a new version of
+; TCPIP$CONFIG.DAT on the data disk, the one that may be written. /DHCP
+; has the TCP/IP component ask a DHCP server for the address, mask and
+; gateway instead. SHOW INTERFACE senses them and writes them, and
+; whether the link is up. START COMMUNICATION, which SYLOGIN.COM runs at
+; boot, sets the interface from the saved settings, if there are any, and
+; says so, and starts TELNETD, the remote login server SET HOST talks
+; to.
 ; ponytail: one interface and one route, the default; a saved file only
 ; once INITIALIZE DKB0: has made a volume there.
 ;
@@ -27,23 +29,30 @@
         $FABDEF
         $RABDEF
         $IODEF
+        $CLIMSGDEF
 
-        .EXTERNAL PUT_LINE, INET_ADDR, CLI$GET_VALUE
+        .EXTERNAL PUT_LINE, INET_ADDR, CLI$GET_VALUE, CLI$DCL_PARSE, CLI$DISPATCH
+        .EXTERNAL LIB$GET_FOREIGN, LIB$GET_INPUT, LIB$SIGNAL, TCPIP_TABLES, HELP$TOPIC
+
+DHCP = 4                                ; SETTINGS' flags: ask a DHCP server (PORT$M_DHCP)
 
         .PSECT  DATA, NOEXE, WRT, LONG
 BGA0:   .ASCID  "BGA0:"
 CHAN:   .LONG   0
 IOSB:   .BLKQ   1
-SETTINGS:                               ; address, mask, gateway, flags: 2 the link is up
+SETTINGS:                               ; address, mask, gateway, flags: 2 the link is up, 4 DHCP
         .BLKL   4
 CMD:    .BLKB   256                     ; the saved settings, .ASCIC
-OPTION: .LONG   16                      ; OPTION, the parameter: INTERFACE, ROUTE or CONFIGURATION
-        .ADDRESS OPTBUF
-OPTBUF: .BLKB   16
-VERB:   .LONG   4                       ; $VERB: SET or SHOW
-        .ADDRESS VERBBUF
-VERBBUF:
-        .BLKB   4
+LINDSC: .LONG   255                     ; a command, after TCPIP or TCPIP>
+        .ADDRESS LINBUF
+LINLEN: .WORD   0
+LINBUF: .BLKB   255
+PROMPT: .ASCID  "TCPIP> "
+DONE:   .LONG   0                       ; 1 once EXIT
+IFNAME: .LONG   16                      ; INTERFACE, the parameter
+        .ADDRESS IFBUF
+IFBUF:  .BLKB   16
+IFLEN:  .WORD   0
 VALUE:  .LONG   0                       ; an address the command gives
         .ADDRESS VALBUF
 VALBUF: .BLKB   64
@@ -54,9 +63,11 @@ CONFIG: .ASCII  "DKB0:[000000]TCPIP$CONFIG.DAT"
 CONFIGLEN = . - CONFIG
 INTERFACE:
         .ASCIC  "INTERFACE"
-P_ADDRESS:
-        .ASCID  "ADDRESS"
-P_MASK: .ASCID  "MASK"
+DHCPWORD:
+        .ASCIC  "DHCP"
+WE0:    .ASCII  "WE0"
+P_HOST: .ASCID  "HOST"
+P_MASK: .ASCID  "NETWORK_MASK"
 P_GATEWAY:
         .ASCID  "GATEWAY"
 TELNETD:
@@ -65,46 +76,147 @@ TELNETD_NAME:
         .ASCID  "TCPIP$TELNET"
 
         .PSECT  CODE, EXE, LONG
+; START: the command after TCPIP, or, with none, each one read after
+; TCPIP> until EXIT or the end of the input. R0 = the command's status,
+; or, after TCPIP>, SS$_NORMAL: the errors are reported there.
         .ENTRY  START, ^M<R2, R3, R4, R5, R6, R7>
         $ASSIGN_S DEVNAM=BGA0, CHAN=CHAN
         BLBC    R0, 90$
-        GETVALUE "OPTION", OPTION, OPTION
-        BLBS    R0, 5$
-        BRW     BOOT                    ; no command
-5$:     GETVALUE "$VERB", VERB, VERB
-        CMPB    VERBBUF+1, #^A/H/       ; SHOW INTERFACE
-        BNEQ    10$
-        BRW     SHOW
-10$:    CLRL    R7                      ; 1: the saved settings
-        CMPB    OPTBUF, #^A/C/          ; SET CONFIGURATION INTERFACE
-        BEQL    15$
-        CMPB    OPTBUF, #^A/R/          ; SET ROUTE /PERMANENT
-        BNEQ    20$
-        PRESENT "PERMANENT"
-        BLBC    R0, 20$
-15$:    INCL    R7
-        BSBW    LOAD
-        BRB     30$
-20$:    BSBW    SENSE
+        PUSHAW  LINLEN
+        CLRL    -(SP)                   ; no prompt: none
+        PUSHAQ  LINDSC
+        CALLS   #3, G^LIB$GET_FOREIGN
         BLBC    R0, 90$
-30$:    CMPB    OPTBUF, #^A/R/
-        BNEQ    40$
-        MOVAB   P_GATEWAY, R5           ; SET ROUTE: the gateway
+        TSTW    LINLEN
+        BEQL    10$
+        BSBW    DO
+        RET
+10$:    PUSHAW  LINLEN
+        PUSHAQ  PROMPT
+        PUSHAQ  LINDSC
+        CALLS   #3, G^LIB$GET_INPUT
+        BLBC    R0, 80$                 ; CTRL/Z
+        BSBW    DO
+        BLBS    R0, 20$
+        CMPL    R0, #CLI$_NOCOMD        ; a blank line
+        BEQL    20$
+        BBS     #28, R0, 20$            ; STS$V_INHIB_MSG: reported
+        BSBW    REPORT
+20$:    BLBC    DONE, 10$
+80$:    MOVL    #SS$_NORMAL, R0
+90$:    RET
+
+; DO: parses the command in LINBUF, LINLEN long, and calls its routine.
+; R0 = its status, or the parse's.
+DO:     PUSHL   LINDSC
+        MOVW    LINLEN, LINDSC
+        PUSHAB  G^TCPIP_TABLES
+        PUSHAQ  LINDSC
+        CALLS   #2, G^CLI$DCL_PARSE
+        MOVL    (SP)+, LINDSC
+        BLBC    R0, 90$
+        CALLS   #0, G^CLI$DISPATCH
+90$:    RSB
+
+; REPORT: R0 = an error. Writes its message, as a warning, so that
+; LIB$SIGNAL returns even for a severe one. Uses R0-R1.
+REPORT: BICL2   #7, R0                  ; STS$M_SEVERITY: STS$K_WARNING
+        PUSHL   R0
+        CALLS   #1, G^LIB$SIGNAL
+        RSB
+
+; EXIT: the end of the commands after TCPIP>.
+        .ENTRY  EXIT, ^M<>
+        MOVL    #1, DONE
+        MOVL    #SS$_NORMAL, R0
+        RET
+
+; HELP: HELP [command]: describes the commands, from TCPIP_TABLES
+; (help/describe.mar).
+        .ENTRY  HELP, ^M<>
+        PUSHAB  G^TCPIP_TABLES
+        CALLS   #1, G^HELP$TOPIC
+        BLBC    R1, 90$
+        PRINT   ""
+        PRINT   "  HELP command describes a command, its parameters and qualifiers."
+        MOVL    #SS$_NORMAL, R0
+90$:    RET
+
+; SET_INTERFACE: SET INTERFACE WE0 /HOST=address /NETWORK_MASK=mask, or
+; /DHCP, on the running system.
+        .ENTRY  SET_INTERFACE, ^M<R2, R3, R4, R5, R6, R7>
+        BSBW    CHKIF
+        BLBC    R0, 90$
+        BSBW    SENSE
+        BLBC    R0, 90$
+        BSBW    TAKEIF
+        BLBC    R0, 90$
+        BSBW    SETCHAR
+90$:    RET
+
+; SET_CONFIGURATION: SET CONFIGURATION INTERFACE WE0 /HOST=address
+; /NETWORK_MASK=mask, or /DHCP, in the saved settings, keeping their
+; gateway.
+        .ENTRY  SET_CONFIGURATION, ^M<R2, R3, R4, R5, R6, R7>
+        BSBW    CHKIF
+        BLBC    R0, 90$
+        BSBW    LOAD
+        BSBW    TAKEIF
+        BLBC    R0, 90$
+        BSBW    SAVE
+90$:    RET
+
+; SET_ROUTE: SET ROUTE /DEFAULT /GATEWAY=address, on the running system,
+; which stops DHCP there, or with /PERMANENT in the saved settings.
+        .ENTRY  SET_ROUTE, ^M<R2, R3, R4, R5, R6, R7>
+        PRESENT "PERMANENT"
+        BLBC    R0, 10$
+        BSBW    LOAD
+        BSBB    20$
+        BLBC    R0, 90$
+        BSBW    SAVE
+        RET
+10$:    BSBW    SENSE
+        BLBC    R0, 90$
+        BSBB    20$
+        BLBC    R0, 90$
+        BSBW    SETCHAR
+90$:    RET
+20$:    MOVAB   P_GATEWAY, R5
         MOVAB   SETTINGS+8, R6
-        BSBW    TAKE
-        BRB     50$
-40$:    MOVAB   P_ADDRESS, R5           ; the address and the mask
+        BRW     TAKE
+
+; CHKIF: R0 = SS$_NORMAL if the command's INTERFACE is WE0, or not
+; given, else SS$_NOSUCHDEV. Uses R0-R1.
+CHKIF:  GETVALUE "INTERFACE", IFNAME, IFLEN
+        BLBC    R0, 80$
+        CMPW    IFLEN, #3
+        BNEQ    70$
+        CMPW    IFBUF, WE0
+        BNEQ    70$
+        CMPB    IFBUF+2, WE0+2
+        BEQL    80$
+70$:    MOVL    #SS$_NOSUCHDEV, R0
+        RSB
+80$:    MOVL    #SS$_NORMAL, R0
+        RSB
+
+; TAKEIF: /DHCP, or /HOST and /NETWORK_MASK, into SETTINGS. R0 =
+; SS$_NORMAL, or SS$_IVADDR. Uses R0-R6.
+TAKEIF: PRESENT "DHCP"
+        BLBC    R0, 10$
+        BISL2   #DHCP, SETTINGS+12
+        MOVL    #SS$_NORMAL, R0
+        RSB
+10$:    BICL2   #DHCP, SETTINGS+12
+        MOVAB   P_HOST, R5
         MOVAB   SETTINGS, R6
         BSBW    TAKE
         BLBC    R0, 90$
         MOVAB   P_MASK, R5
         MOVAB   SETTINGS+4, R6
         BSBW    TAKE
-50$:    BLBC    R0, 90$
-        BLBC    R7, 60$
-        BRW     SAVE
-60$:    BSBW    SETCHAR
-90$:    RET
+90$:    RSB
 
 ; TAKE: R5 = an entity's name, a descriptor, R6 = a longword. Puts the
 ; address the command gives the entity there. R0 = SS$_NORMAL, or
@@ -122,19 +234,22 @@ TAKE:   MOVW    #64, VALUE
         MOVL    R3, (R6)
 90$:    RSB
 
-; BOOT: no command line: unless the interface has an address already,
-; the saved settings, if there are any, from the data disk. Then the
-; remote login server, TELNETD, unless it runs already. Without a
-; network, nothing.
-BOOT:   BSBW    SENSE
+; START_COMMUNICATION: unless the interface has an address already, the
+; saved settings, if there are any, from the data disk; a failure to set
+; them is reported. Then the remote login server, TELNETD, unless it runs
+; already. Without a network, nothing.
+        .ENTRY  START_COMMUNICATION, ^M<R2, R3, R4, R5, R6, R7>
+        BSBW    SENSE
         BLBC    R0, 80$
         TSTL    SETTINGS
         BNEQ    50$
         BSBW    LOAD
         BLBC    R0, 50$
         BSBW    SETCHAR
-        BLBC    R0, 90$
-        BSBW    SENSE
+        BLBS    R0, 30$
+        BSBW    REPORT                  ; a DHCP server that doesn't answer, say
+        BRB     50$
+30$:    BSBW    SENSE
         BLBC    R0, 90$
         MOVAB   SETMSG, R1
         BSBW    SHOWLINE
@@ -142,8 +257,8 @@ BOOT:   BSBW    SENSE
 80$:    MOVL    #SS$_NORMAL, R0
 90$:    RET
 
-; LOAD: puts the saved settings, INTERFACE address mask gateway in the
-; data disk's file, in SETTINGS, or zeros if there are none. R0 = RMS's
+; LOAD: puts the saved settings, INTERFACE address mask gateway [DHCP]
+; in the data disk's file, in SETTINGS, or zeros if there are none. R0 = RMS's
 ; status if it can't read them, or PARSE's. Uses R0-R6.
 LOAD:   CLRQ    SETTINGS
         CLRQ    SETTINGS+8
@@ -161,8 +276,9 @@ LOAD:   CLRQ    SETTINGS
         BSBW    PARSE
 90$:    RSB
 
-; SAVE: writes INTERFACE and the settings' address, mask and gateway in a
-; new version of the saved file. R0 = RMS's status if it can't.
+; SAVE: writes INTERFACE and the settings' address, mask and gateway, and
+; DHCP if they say so, in a new version of the saved file. R0 = RMS's
+; status if it can't. Uses R0-R6.
 SAVE:   MOVZBL  INTERFACE, R2
         MOVB    R2, LINE
         MOVC3   R2, INTERFACE+1, LINE+1
@@ -175,7 +291,14 @@ SAVE:   MOVZBL  INTERFACE, R2
         MOVAB   SETTINGS+12, R0
         CMPL    R6, R0
         BLSSU   10$
-        MOVB    #FAB$C_VAR, FAB+FAB$B_RFM
+        BBC     #2, (R6), 20$           ; DHCP
+        MOVZBL  LINE, R0
+        MOVB    #^A/ /, LINE+1[R0]
+        MOVZBL  DHCPWORD, R2
+        ADDB3   #1, R2, R1
+        ADDB2   R1, LINE
+        MOVC3   R2, DHCPWORD+1, LINE+2[R0]
+20$:    MOVB    #FAB$C_VAR, FAB+FAB$B_RFM
         MOVB    #FAB$M_CR, FAB+FAB$B_RAT
         $CREATE FAB=FAB
         BLBC    R0, 80$
@@ -187,7 +310,7 @@ SAVE:   MOVZBL  INTERFACE, R2
 70$:    MOVL    R0, R2
         $CLOSE  FAB=FAB
         MOVL    R2, R0
-80$:    RET
+80$:    RSB
 
 ; SETCHAR: sets the interface as SETTINGS says. R0 = a status.
 SETCHAR:
@@ -196,9 +319,9 @@ SETCHAR:
         MOVZWL  IOSB, R0
 90$:    RSB
 
-; PARSE: CMD = INTERFACE address mask gateway. Puts the three in
-; SETTINGS. R0 = SS$_NORMAL, or SS$_IVADDR for one that isn't an address
-; or isn't there. Uses R0-R6.
+; PARSE: CMD = INTERFACE address mask gateway [DHCP]. Puts the three in
+; SETTINGS, and DHCP in its flags. R0 = SS$_NORMAL, or SS$_IVADDR for one
+; that isn't an address or isn't there. Uses R0-R6.
 PARSE:  MOVL    #2, R2
         MOVAB   SETTINGS, R6
 10$:    BSBW    WORD
@@ -206,11 +329,21 @@ PARSE:  MOVL    #2, R2
         BLBC    R0, 90$
         MOVL    R3, (R6)+
         AOBLEQ  #4, R2, 10$
+        BSBW    WORD                    ; R2 = 5
+        CMPB    R1, DHCPWORD
+        BNEQ    80$
+        CMPL    (R0), DHCPWORD+1
+        BNEQ    80$
+        BISL2   #DHCP, (R6)
+80$:    MOVL    #SS$_NORMAL, R0
 90$:    RSB
 
-; SHOW: writes the interface's address, mask and gateway, and the link's
-; state.
-SHOW:   BSBW    SENSE
+; SHOW_INTERFACE: SHOW INTERFACE [WE0]: writes the interface's address,
+; mask and gateway, and the link's state.
+        .ENTRY  SHOW_INTERFACE, ^M<R2, R3, R4, R5, R6, R7>
+        BSBW    CHKIF
+        BLBC    R0, 90$
+        BSBW    SENSE
         BLBC    R0, 90$
         PRINT   "Interface  IP_Addr          Network mask     Gateway          Link"
         MOVAB   SHOWMSG, R1
@@ -257,8 +390,8 @@ SHOWLINE:
         MOVL    (SP)+, R0
         RSB
 SHOWMSG:
-        .ASCIC  " BGA0      "
-SETMSG: .ASCIC  "%TCPIP-I-SET, BGA0: "
+        .ASCIC  " WE0       "
+SETMSG: .ASCIC  "%TCPIP-I-SET, WE0: "
 UP:     .ASCIC  "up"
 DOWN:   .ASCIC  "down"
 

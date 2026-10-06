@@ -22,14 +22,14 @@ Decisions this PRD rests on:
 | lwIP as the bootstrap stack | C, small, very widely deployed, already used in the seL4 driver framework |
 | Not gVisor netstack | Needs the Go runtime |
 | Not smoltcp or Netstack3 for now | Considered; no advantage worth leaving the existing seL4 integration |
-| Static config only | IP, mask and default gateway set from VMS; no DHCP |
+| Config owned by VMS | IP, mask and default gateway set from VMS, or by lwIP's DHCP client when VMS asks for it ([ADR-0022](../adr/0022-tcpip-utility-and-dhcp.md)) |
 | QIO is the native interface | Sockets is only a userland library for ported applications |
 | seL4 is scaffolding | End goal is fully native and self-hosted, in MACRO/BLISS |
 
 ## Non-goals
 
 - Writing or tuning a TCP state machine, congestion control or a NIC driver.
-- DHCP, DNS resolver service, IPv6 configuration UI (lwIP may support them; not exposed yet).
+- DNS resolver service, IPv6 configuration UI (lwIP may support them; not exposed yet).
 - Emulating any real DEC hardware or reproducing MSCP/CI packet formats. Only the vocabulary and structure are borrowed.
 - Performance work. The target protocols are low-bandwidth.
 
@@ -136,7 +136,7 @@ The protocol is versioned from day one (a version word in the shared frames), so
 
 ## Configuration path
 
-Network settings are static and owned by VMS. The component starts with no address and waits to be told.
+Network settings are owned by VMS. The component starts with no address and waits to be told.
 
 1. A DCL command (name to decide, in the spirit of TCP/IP Services' `SET INTERFACE`) sets IP address, mask and default gateway, and stores them in a system configuration file.
 2. The command issues a privileged set-config QIO on the network device.
@@ -144,7 +144,7 @@ Network settings are static and owned by VMS. The component starts with no addre
 4. The component applies it to lwIP and replies; the QIO completes.
 5. At boot, a startup procedure replays the stored settings the same way.
 
-No DHCP. Sense-config returns the current settings and link state for a `SHOW`-style command.
+VMS may tell it to ask a DHCP server instead ([ADR-0022](../adr/0022-tcpip-utility-and-dhcp.md)). Sense-config returns the current settings and link state for a `SHOW`-style command.
 
 ## Replace-later path
 
@@ -171,7 +171,7 @@ Rule that keeps this true: no seL4 or lwIP idiom appears above the port. If the 
 
 - [x] Confirm the template-device model (`TCPIP0` cloning one unit per connection) versus one unit per socket opened explicitly. Template, named `BGA0:`, cloning `BGnn` units ([ADR-0016](../adr/0016-tcpip-component-and-bga0.md)).
 - [x] Ring sizes, entry layout and data buffer pool size. Two rings of 32 messages of 32 bytes, 32 tags, 16 buffers of 4 KB ([DESIGN-0003](../design/0003-tcpip-port.md)).
-- [x] Name and syntax of the DCL configuration commands. `SET INTERFACE address mask`, `SET ROUTE /DEFAULT /GATEWAY=address`, `SHOW INTERFACE`, and `SET CONFIGURATION INTERFACE` and `SET ROUTE /PERMANENT` to save them.
+- [x] Name and syntax of the DCL configuration commands. TCP/IP Services' own, in the `TCPIP` utility: `TCPIP SET INTERFACE WE0 /HOST=address /NETWORK_MASK=mask` or `/DHCP`, `SET ROUTE /DEFAULT /GATEWAY=address`, `SHOW INTERFACE`, and `SET CONFIGURATION INTERFACE` and `SET ROUTE /PERMANENT` to save them ([ADR-0022](../adr/0022-tcpip-utility-and-dhcp.md)).
 - [x] UDP in step 4 or later. Later: lwIP has it, the port has no messages for it yet.
 - [ ] Which application-layer protocols to use: Telnet or something VMS-flavoured for SET HOST; what to use for remote file access, mail and chat. SET HOST is line mode over TCP port 23, a step short of Telnet; the rest is open.
 

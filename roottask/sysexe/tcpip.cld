@@ -1,0 +1,76 @@
+! TCPIP.CLD: TCP/IP Services' management commands, which TCPIP.EXE parses
+! with CLI$DCL_PARSE, after DCL's TCPIP verb or at its TCPIP> prompt, and
+! which build.rs links into TCPIP.EXE as TCPIP_TABLES. WE0 is the one
+! interface.
+module TCPIP_TABLES
+
+define verb EXIT
+	routine EXIT
+
+! HELP [command]: describes the commands, from these tables.
+define verb HELP
+	routine HELP
+	parameter P1, label=TOPIC, value(type=$rest_of_line)
+
+define verb SET
+	parameter P1, label=OPTION, prompt="What", value(required, type=SET_OPTIONS)
+
+define type SET_OPTIONS
+	keyword CONFIGURATION, syntax=SET_CONFIGURATION
+	keyword INTERFACE, syntax=SET_INTERFACE
+	keyword ROUTE, syntax=SET_ROUTE
+
+! SET INTERFACE WE0 /HOST=address /NETWORK_MASK=mask, or /DHCP: the
+! running system.
+define syntax SET_INTERFACE
+	routine SET_INTERFACE
+	parameter P1, label=OPTION, value(required, type=SET_OPTIONS)
+	parameter P2, label=INTERFACE, prompt="Interface", value(required)
+	qualifier DHCP, nonnegatable
+	qualifier HOST, nonnegatable, value(required)
+	qualifier NETWORK_MASK, nonnegatable, value(required)
+	disallow DHCP and (HOST or NETWORK_MASK)
+	disallow not DHCP and not (HOST and NETWORK_MASK)
+
+! SET CONFIGURATION INTERFACE WE0 /HOST=address /NETWORK_MASK=mask, or
+! /DHCP: the saved configuration, which START COMMUNICATION applies.
+define syntax SET_CONFIGURATION
+	routine SET_CONFIGURATION
+	parameter P1, label=OPTION, value(required, type=SET_OPTIONS)
+	parameter P2, label=COMPONENT, prompt="Component", value(required, type=CONFIGURATION_OPTIONS)
+	parameter P3, label=INTERFACE, prompt="Interface", value(required)
+	qualifier DHCP, nonnegatable
+	qualifier HOST, nonnegatable, value(required)
+	qualifier NETWORK_MASK, nonnegatable, value(required)
+	disallow DHCP and (HOST or NETWORK_MASK)
+	disallow not DHCP and not (HOST and NETWORK_MASK)
+
+define type CONFIGURATION_OPTIONS
+	keyword INTERFACE
+
+! SET ROUTE /DEFAULT /GATEWAY=address: the default route, the only one;
+! /PERMANENT saves it instead.
+define syntax SET_ROUTE
+	routine SET_ROUTE
+	parameter P1, label=OPTION, value(required, type=SET_OPTIONS)
+	qualifier DEFAULT, nonnegatable
+	qualifier GATEWAY, nonnegatable, value(required)
+	qualifier PERMANENT, nonnegatable
+	disallow not DEFAULT or not GATEWAY
+
+define verb SHOW
+	routine SHOW_INTERFACE
+	parameter P1, label=OPTION, prompt="What", value(required, type=SHOW_OPTIONS)
+	parameter P2, label=INTERFACE
+
+define type SHOW_OPTIONS
+	keyword INTERFACE
+
+! START COMMUNICATION: the saved configuration, and the remote login
+! server, as SYLOGIN.COM does at boot.
+define verb START
+	routine START_COMMUNICATION
+	parameter P1, label=OPTION, prompt="What", value(required, type=START_OPTIONS)
+
+define type START_OPTIONS
+	keyword COMMUNICATION

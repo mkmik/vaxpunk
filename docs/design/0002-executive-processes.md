@@ -287,7 +287,7 @@ an image runs it with `$IMGACT` and the parse:
 | `CREATE/DIRECTORY spec` | `CREATE.EXE`; without `/DIRECTORY`, `%CREATE-E-NOTDIR` |
 | `SHOW PROCESS[/PRIVILEGES]`, `SHOW SYSTEM` | `SHOW.EXE`, whose `OPTION` says which |
 | `SET PROCESS/PRIVILEGES=(priv[,...])` | `SET.EXE` |
-| `SET INTERFACE address mask`, `SET CONFIGURATION INTERFACE address mask`, `SET ROUTE /DEFAULT /GATEWAY=address [/PERMANENT]`, `SHOW INTERFACE` | `TCPIP.EXE`, which takes `OPTION`, `ADDRESS`, `MASK`, `GATEWAY` and `PERMANENT` from the parse |
+| `TCPIP [command]` | `TCPIP.EXE`, which parses `command`, or each one after its `TCPIP>` prompt, with its own tables, `sysexe/tcpip.cld` ([ADR-0022](../adr/0022-tcpip-utility-and-dhcp.md)) |
 | `SET [NO]CONTROL[=Y]` | enables DCL's CTRL/Y AST again, or disables it with `IO$_SETMODE`, so that CTRL/Y, and CTRL/C no image has an AST for, do nothing, until `SET CONTROL`. ponytail: no `T`, there is no CTRL/T |
 | `SET HOST address` | `RTPAD.EXE`, whose `NODE` is the address |
 | `CONTINUE` | returns from the CTRL/Y AST, which goes back to the image |

@@ -46,6 +46,7 @@ kept current, like a design document.
 | [ADR-0019](adr/0019-mailboxes.md) | A mailbox is a unit of its own, MBnn, whose writes are done at once, and process deletion writes the termination message to it | Proposed |
 | [ADR-0020](adr/0020-file-system-lock-below-ipl-synch.md) | The file system runs below IPL$_SYNCH, holding a lock of its own, as the XQP does | Proposed |
 | [ADR-0021](adr/0021-condition-handlers-run-in-the-mode-that-signals.md) | Condition handlers are found along the FP chain and run in the mode that signaled, from code in the vector | Proposed |
+| [ADR-0022](adr/0022-tcpip-utility-and-dhcp.md) | The network is set with TCP/IP Services' TCPIP utility, which parses its own commands, and lwIP's DHCP client can give the interface its address | Proposed |
 
 ### PRDs
 

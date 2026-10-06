@@ -35,10 +35,8 @@
 ;               run SHOW.EXE
 ;   SET PROCESS/PRIVILEGES=(priv[,...])
 ;               runs SET.EXE
-;   SET INTERFACE address mask, SHOW INTERFACE,
-;   SET CONFIGURATION INTERFACE address mask,
-;   SET ROUTE /DEFAULT /GATEWAY=address [/PERMANENT]
-;               run TCPIP.EXE
+;   TCPIP [command]
+;               runs TCPIP.EXE, which parses command with its own tables
 ;   SET [NO]CONTROL[=Y]
 ;               turns CTRL/Y, and CTRL/C no image takes, on or off
 ;   SET HOST address

@@ -19,6 +19,7 @@
 #include <sel4/sel4.h>
 
 #include "component.h"
+#include "lwip/dhcp.h"
 #include "lwip/init.h"
 #include "lwip/etharp.h"
 #include "lwip/netif.h"
@@ -286,6 +287,7 @@ static int net_init(void)
  */
 #define NCONN 32
 #define BACKLOG 4
+#define DHCP_WAIT (10000 / TCPIP_TICK_MS) /* ticks an IFCONFIG waits for DHCP's address */
 static struct conn {
 	int used, connected, closed; /* closed: the peer sent FIN */
 	uint32_t err;		     /* a PORT_ST_ the connection failed with */
@@ -303,7 +305,7 @@ static uint8_t *buffer(unsigned tag)
 }
 
 /* The commands waiting for something: an ACCEPT, CONNECT, SEND or RECV,
- * by tag, since a tag is in one command at a time. */
+ * or an IFCONFIG for DHCP's address, by tag, since a tag is in one command at a time. */
 static struct port_msg pend[PORT_TAGS];
 static int answered;
 
@@ -438,9 +440,27 @@ static void conn_free(uint32_t id)
 	c->used = 0;
 }
 
+/* Answers an IFCONFIG with the interface's address, mask and gateway. */
+static void ifconfig(struct port_msg *m, uint32_t status)
+{
+	m->addr = ip4_addr_get_u32(netif_ip4_addr(&netif));
+	m->arg1 = ip4_addr_get_u32(netif_ip4_netmask(&netif));
+	m->arg2 = ip4_addr_get_u32(netif_ip4_gw(&netif));
+	m->flags = netif_is_link_up(&netif) ? PORT_LINKUP : 0;
+	respond(m, status);
+}
+
 /* Answers a waiting command if it can be: m is pend[tag]. */
 static void try_finish(struct port_msg *m)
 {
+	if (m->type == PORT_IFCONFIG) {
+		/* len: the tick DHCP has until; it goes on after */
+		if (dhcp_supplied_address(&netif))
+			ifconfig(m, PORT_ST_OK);
+		else if ((int32_t)(ticks - m->len) >= 0)
+			ifconfig(m, PORT_ST_TIMEOUT);
+		return;
+	}
 	struct conn *c = conn_of(m->conn);
 	if (!c) {
 		respond(m, PORT_ST_BADPARAM);
@@ -513,17 +533,23 @@ static void command(struct port_msg *m)
 	}
 	case PORT_IFCONFIG: {
 		if (m->flags & PORT_SET) {
+			dhcp_release_and_stop(&netif);
+			netif_set_up(&netif);
+			if (m->flags & PORT_DHCP) {
+				if (dhcp_start(&netif) != ERR_OK) {
+					respond(m, PORT_ST_NOMEM);
+					return;
+				}
+				m->len = ticks + DHCP_WAIT;
+				wait_for(m);
+				return;
+			}
 			ip4_addr_t mask, gw;
 			ip4_addr_set_u32(&mask, m->arg1);
 			ip4_addr_set_u32(&gw, m->arg2);
 			netif_set_addr(&netif, &ip, &mask, &gw);
-			netif_set_up(&netif);
 		}
-		m->addr = ip4_addr_get_u32(netif_ip4_addr(&netif));
-		m->arg1 = ip4_addr_get_u32(netif_ip4_netmask(&netif));
-		m->arg2 = ip4_addr_get_u32(netif_ip4_gw(&netif));
-		m->flags = netif_is_link_up(&netif) ? PORT_LINKUP : 0;
-		respond(m, PORT_ST_OK);
+		ifconfig(m, PORT_ST_OK);
 		return;
 	}
 	}

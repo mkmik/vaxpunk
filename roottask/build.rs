@@ -5,7 +5,8 @@
 //! linked with sysexe/lib/*.mar, its command table if there is a
 //! sysexe/NAME.cld, and against SYS.STB, the executive's symbols; DCL and
 //! HELP with DCL$TABLES, from cld/*.cld, and DCL with sysexe/dcl/*.mar,
-//! its CDU; in [SYSMGR], the files in sysmgr/,
+//! its CDU, and HELP and TCPIP with sysexe/help/*.mar, which describes
+//! command tables; in [SYSMGR], the files in sysmgr/,
 //! as text.
 
 use std::env;
@@ -63,6 +64,9 @@ fn main() {
         }
         if name == "DCL" {
             modules.extend(sources("sysexe/dcl", &["mar"]).iter().map(compile));
+        }
+        if name == "HELP" || name == "TCPIP" {
+            modules.extend(sources("sysexe/help", &["mar"]).iter().map(compile));
         }
         modules.extend(libs.iter().cloned());
         modules.push(stb.clone());

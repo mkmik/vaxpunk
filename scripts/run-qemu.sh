@@ -58,7 +58,8 @@ fi
 # ESP stays on PCI, for EDK2.
 # The network device, virtio-net, is a third virtio-mmio transport, after
 # the disks, which the TCP/IP component drives. On QEMU's user network the
-# guest is 10.0.2.15/24 and the host 10.0.2.2, its gateway.
+# guest is 10.0.2.15/24 and the host 10.0.2.2, its gateway, which QEMU's
+# DHCP server gives.
 # On a halt the root task prints %PAL-I-POWEROFF, and serial-filter.py ends
 # QEMU with SIGTERM, by the PID in a file of its own (ADR-0008).
 datadisk=${DATADISK:-$root/out/datadisk.img}

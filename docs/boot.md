@@ -139,10 +139,12 @@ interpreter. It is linked high in P1, which tells the executive it is one
   is `@SYS$MANAGER:SYLOGIN`, which
   runs `DKA0:[SYSMGR]SYLOGIN.COM`, as VMS runs it
   at each login: it defines the global symbol `HOME`, a command that goes
-  back to `[SYSMGR]`, and runs `TCPIP.EXE`. With a network, that sets
-  the interface's address, mask and gateway as `SET CONFIGURATION
-  INTERFACE` and `SET ROUTE /PERMANENT` last saved them on the data disk, and prints `%TCPIP-I-SET, BGA0: ...`, and
-  creates the process `TCPIP$TELNET`, which runs `TELNETD.EXE` and waits
+  back to `[SYSMGR]`, and runs `TCPIP START COMMUNICATION`. With a
+  network, that sets the interface's address, mask and gateway as `TCPIP
+  SET CONFIGURATION INTERFACE` and `SET ROUTE /PERMANENT` last saved them
+  on the data disk, or asks a DHCP server for them if the saved settings
+  say `DHCP`, waiting up to 10 seconds for its answer, and prints
+  `%TCPIP-I-SET, WE0: ...`, and creates the process `TCPIP$TELNET`, which runs `TELNETD.EXE` and waits
   on TCP port 23 for `SET HOST` from another vaxpunk. Then DCL reads a line with the `$` prompt: `$QIOW`
   hands the read to the console's driver, which writes the prompt and
   holds the request until a line is typed, and DCL waits for its event
@@ -260,12 +262,14 @@ interpreter. It is linked high in P1, which tells the executive it is one
   CTRL/C AST of its own: then the console prints `*CANCEL*` and that AST
   comes instead.
 
-- `SET INTERFACE address mask`, `SET ROUTE /DEFAULT /GATEWAY=address`
-  and `SHOW INTERFACE` run `TCPIP.EXE`, which senses and sets the
-  interface's address, mask and gateway with `$QIOW` on `BGA0:`, the
-  network's port driver. `SET CONFIGURATION INTERFACE address mask` and
-  `SET ROUTE /DEFAULT /GATEWAY=address /PERMANENT` save them on the data
-  disk for the next boot instead.
+- `TCPIP` runs `TCPIP.EXE`, which parses TCP/IP Services' commands with
+  its own tables, or prompts `TCPIP>` for them. `SET INTERFACE WE0
+  /HOST=address /NETWORK_MASK=mask`, or `/DHCP`, `SET ROUTE /DEFAULT
+  /GATEWAY=address` and `SHOW INTERFACE` sense and set the interface's
+  address, mask and gateway with `$QIOW` on `BGA0:`, the network's port
+  driver. `SET CONFIGURATION INTERFACE WE0` and `SET ROUTE /DEFAULT
+  /GATEWAY=address /PERMANENT` save them on the data disk for the next
+  boot instead.
   `SET HOST address` runs `RTPAD.EXE`, which connects to port 23 there:
   the other side's `TELNETD` creates a process named after the
   connection's unit, `_BG02:`, running DCL with the connection as its

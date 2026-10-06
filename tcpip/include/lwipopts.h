@@ -1,5 +1,5 @@
 /* lwIP's configuration: the raw API, no OS (NO_SYS), IPv4 over Ethernet
- * with TCP, UDP, ARP and ICMP, statically configured. */
+ * with TCP, UDP, ARP and ICMP, configured by the executive or by DHCP. */
 #ifndef LWIPOPTS_H
 #define LWIPOPTS_H
 
@@ -15,7 +15,10 @@
 #define LWIP_ICMP 1
 #define LWIP_TCP 1
 #define LWIP_UDP 1
-#define LWIP_DHCP 0
+#define LWIP_DHCP 1
+/* ponytail: no ARP probe of the offered address, which takes seconds; turn
+ * it on where another host may hold it. */
+#define LWIP_DHCP_DOES_ACD_CHECK 0
 #define LWIP_DNS 0
 #define LWIP_IGMP 0
 #define LWIP_STATS 0
