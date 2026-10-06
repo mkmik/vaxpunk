@@ -52,6 +52,18 @@ fn macro32() {
     );
 }
 
+/// Known vmacro bugs, PRD-0003 items 16 and 17: each program here moves to
+/// tests/macro32 with its fix. `cargo test -- --ignored` runs them.
+#[test]
+#[ignore = "fails until PRD-0003 items 16 and 17 are fixed"]
+fn macro32_bugs() {
+    all(
+        &[("tests/macro32-bugs", "tests/macro32-bugs")],
+        vmacro::compile,
+        true,
+    );
+}
+
 /// Runs the programs in each (sources, expected files) directory pair.
 fn all(dirs: &[(&str, &str)], tool: Tool, macro32: bool) {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");

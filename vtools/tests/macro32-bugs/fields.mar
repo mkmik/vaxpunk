@@ -1,0 +1,37 @@
+        .TITLE  FIELDS  Bit fields in the last bytes of the image (PRD-0003 item 16)
+        .LIBRARY "vrun.mlb"
+
+; EXTZV and INSV on a field in the last longword before an unmapped page
+; must not touch the page after it. A failed check returns 2 * N.
+
+        .MACRO  EXPECT  COND, N, ?OK
+        B'COND  OK
+        MOVL    #<N * 2>, R0
+        RET
+OK:
+        .ENDM   EXPECT
+
+        .PSECT  ZZTAIL, NOEXE, WRT, PAGE
+        .BLKB   4092
+TAIL:   .LONG   ^XABCD1234
+
+        .PSECT  CODE, EXE, LONG
+        .ENTRY  FIELDS, ^M<R2, R3>
+        EXTZV   #8, #8, TAIL, R2
+        CMPL    R2, #^X12
+        EXPECT  EQL, 1
+        MOVL    #16, R3
+        EXTZV   R3, #8, TAIL, R2
+        CMPL    R2, #^XCD
+        EXPECT  EQL, 2
+        INSV    #^X5A, #8, #8, TAIL
+        CMPL    TAIL, #^XABCD5A34
+        EXPECT  EQL, 3
+        INSV    #^X77, R3, #8, TAIL
+        CMPL    TAIL, #^XAB775A34
+        EXPECT  EQL, 4
+        $PUT    "fields ok"<10>
+        MOVL    #1, R0
+        RET
+
+        .END    FIELDS

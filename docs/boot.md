@@ -386,7 +386,10 @@ owner after `SET FILE/OWNER_UIC=[200,1]` and `SET PROTECTION=(W)`, with
 `DIRECTORY/OWNER/PROTECTION` after each, and can't once `DKB0:` is
 mounted `/PROTECTION=(W)`, and looks for the
 success lines in `out/serial.log`. Once QEMU is gone, `ods-image` checks
-the data disk's volume and finds the files on it, `[SUB.DEEP]`'s too.
+the data disk's volume and finds the files on it, `[SUB.DEEP]`'s too. The test runs in
+named phases, `boot`, `system disk`, `ramdisk` and so on, each with its own
+deadline, and one that runs out fails with the phase it stalled at, what it
+was waiting for and the last line the console printed.
 
 `cargo test -p boot --test network` boots one system on QEMU's user
 network, sets and shows the interface, runs TCPTEST against a server and
