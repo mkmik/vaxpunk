@@ -57,7 +57,8 @@ Decisions this PRD rests on:
 - Access control lists, security auditing, `SET AUDIT`. UIC protection only.
 - Shareable images and installed images, `INSTALL`. They come after
   Milestone 1 (*Backlog*, tier 3).
-- RMS indexed and relative files.
+- RMS relative files, and indexed files beyond what `SYSUAF.DAT` needs:
+  [PRD-0008](0008-rms-record-and-indexed-files.md).
 - DECnet, mail and remote file access ([PRD-0002](0002-networking.md)
   keeps those).
 - Running VAX or Alpha binaries.
@@ -83,8 +84,12 @@ Decisions this PRD rests on:
   `MODIFY`, `REMOVE`, `SHOW` and `LIST`, and `/PASSWORD`, `/UIC`,
   `/PRIVILEGES`, `/DEFPRIVILEGES`, `/DEVICE`, `/DIRECTORY`, and quotas.
   `SET PASSWORD` changes one's own.
-- The build makes a UAF with `SYSTEM` and `DEFAULT` records; the password
-  for `SYSTEM` is `MANAGER`, and the README says to change it.
+- `SYSUAF.DAT` is an indexed file, as on OpenVMS Alpha V8.4: `$UAFDEF`
+  records keyed by username and by UIC, read and written through RMS
+  ([PRD-0008](0008-rms-record-and-indexed-files.md)).
+- The build makes a UAF with `SYSTEM` and `DEFAULT` records, written on the
+  host by `ods`; the password for `SYSTEM` is `MANAGER`, and the README
+  says to change it.
 
 ### Terminals
 
@@ -271,9 +276,10 @@ says what replaces it; this PRD doesn't schedule them.
   we can reimplement in MACRO-32 without a big-number library (SHA-256
   with a salt and many rounds), or a real KDF? It must fit `UAF$Q_PWD`'s
   8 bytes, or the record grows past `$UAFDEF`'s.
-- [ ] Is `SYSUAF.DAT` an indexed file, as on VMS, which RMS doesn't do, or
-  a sequential file of fixed records that `AUTHORIZE` rewrites? Leaning
-  fixed records, with RMS indexed files left for later.
+- [x] Is `SYSUAF.DAT` an indexed file, as on VMS, which RMS doesn't do, or
+  a sequential file of fixed records that `AUTHORIZE` rewrites? Indexed,
+  as on OpenVMS Alpha V8.4 (VAX/VMS V1.0's was 184-byte fixed records).
+  Step 4 waits for PRD-0008's indexed files.
 - [ ] Do access control lists come in Milestone 1 after all? Nothing in
   ordinary use needs them; `SYSPRV` and groups cover the cases above.
 - [ ] Is the lock manager in the executive, as on VMS, or a process? In the
@@ -299,8 +305,9 @@ Each step ends in something `cargo test -p boot` checks.
    works in a `SET HOST` session.
 4. **UAF and LOGINOUT.** `SYSUAF.DAT`, `AUTHORIZE`, `LOGINOUT`, `SET
    PASSWORD`; `STARTUP` runs `SYSTARTUP_VMS.COM`; the console and `TELNETD`
-   start `LOGINOUT`. *Visible:* `Username:` at boot; a user made with
-   `AUTHORIZE` logs in over `SET HOST` with their UIC and privileges.
+   start `LOGINOUT`. Needs PRD-0008's steps 1 to 6, indexed files.
+   *Visible:* `Username:` at boot; a user made with `AUTHORIZE` logs in
+   over `SET HOST` with their UIC and privileges.
 5. **Quotas and accounting.** Quotas charged and checked; CPU time and I/O
    counts kept; `$ASCTIM`, `$BINTIM`, `SHOW TIME`. *Visible:* `SHOW
    PROCESS/QUOTAS/ACCOUNTING`; a process that queues reads past `BIOLM`
