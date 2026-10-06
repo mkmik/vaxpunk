@@ -82,6 +82,10 @@ NEW:    .WORD   1                       ; a 64-bit descriptor: MBO,
         CHECK   SPOT, #^XFFFF, 9
         EVAX_STQU R2, SPOT+5
         CHECK   SPOT, ONES, 10
+        MOVAQ   SPOT, R2                ; the register, before its increment
+        MOVL    R2, R3
+        EVAX_STQ R2, (R2)+
+        CHECK   SPOT, R3, 58
 ; Locked: an exclusive load and the store that ends it.
         EVAX_LDQL R3, LOCK
         EVAX_ADDQ R3, #1, R3
@@ -211,7 +215,7 @@ NEW:    .WORD   1                       ; a 64-bit descriptor: MBO,
         .DISABLE QUADWORD
         CHECK   R2, BIT33, 51
 ; A test with only its second label, a descriptor and an argument through
-; AP, a QUAD_ARGS list passed on, and part of a quadword argument.
+; AP, a QUAD_ARGS list passed on (as (AP) and 0(AP)), and part of a quadword argument.
         EVAX_LDQ R2, BIG
         $IS_32BITS R2, , 80$
         BRW     90$
@@ -231,6 +235,13 @@ NEW:    .WORD   1                       ; a 64-bit descriptor: MBO,
         .ENDR
         $CALL64 PASSON
         CHECK   R0, NINTH, 55
+        $SETUP_CALL64 9
+        $PUSH_ARG64 NINTH
+        .IRP    N, <8, 7, 6, 5, 4, 3, 2, 1>
+        $PUSH_ARG64 #N
+        .ENDR
+        $CALL64 PASSON0
+        CHECK   R0, NINTH, 57
         $SETUP_CALL64 1
         $PUSH_ARG64 PARTS
         $CALL64 MIDWORD
@@ -275,6 +286,11 @@ ONE64:  .CALL_ENTRY QUAD_ARGS=TRUE
 ; PASSON args...: LAST9 with its own quadword list.
 PASSON: .CALL_ENTRY QUAD_ARGS=TRUE, MAX_ARGS=9
         CALLG   (AP), LAST9
+        RET
+
+; PASSON0 args...: PASSON, through 0(AP).
+PASSON0:.CALL_ENTRY QUAD_ARGS=TRUE, MAX_ARGS=9
+        CALLG   0(AP), LAST9
         RET
 
 ; MIDWORD a: R0 = bits 16-31 of a, 6(AP) as on the VAX.
