@@ -41,6 +41,8 @@
 ;               turns CTRL/Y, and CTRL/C no image takes, on or off
 ;   SET HOST address
 ;               runs RTPAD.EXE, a remote login to address
+;   TELNET address [port], TELNET address /PORT=n
+;               the same, or a line at a time to the port
 ;   SET COMMAND file
 ;               adds the verbs file.CLD defines to the process's
 ;               commands, compiled with CDU$COMPILE (dcl/cdu.mar)
