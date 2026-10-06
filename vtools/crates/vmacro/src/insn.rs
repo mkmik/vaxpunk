@@ -726,7 +726,12 @@ pub fn compile(
             };
             // A QUAD_ARGS routine's own list is of quadwords.
             let quad = op == Op::Callg64
-                || (g.quad_ap && matches!(ops[0], Opnd::Mem(Mode::Def(12), None)));
+                || (g.quad_ap
+                    && match &ops[0] {
+                        Opnd::Mem(Mode::Def(12), None) => true,
+                        Opnd::Mem(Mode::Disp(d, 12), None) => g.constant(d) == Some(0),
+                        _ => false,
+                    });
             let (count, list) = match n {
                 Some(_) => (None, None),
                 None if calls => (Some(g.read(&ops[0], Size::L, Ext::Any)?), None),
@@ -1321,8 +1326,9 @@ pub fn compile(
                     g.emit(format!("mov x{}, {r}", arm(*m)?));
                 }
                 (_, o) => {
+                    let v = g.whole(n)?;
                     let p = g.place(o, size)?;
-                    g.store(&p, size, &r)?;
+                    g.store(&p, size, &v)?;
                 }
             }
             Ok(None)
