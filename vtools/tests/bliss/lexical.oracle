@@ -1,0 +1,20 @@
+
+%PRINT('declared ', %DECLARED(L5), ' ', %DECLARED(NOPE), ' ', %DECLARED(BUMP))
+............................................................................^
+%BLS64-W-TEXT, Illegal parameter in call to lexical function %DECLARED
+at line number 38 in file SYS$SYSDEVICE:[ORACLE]LEXICAL.B64;1
+
+%INFORM('an inform')
+........^
+%BLS64-I-TEXT, %INFORM:	an inform
+at line number 53 in file SYS$SYSDEVICE:[ORACLE]LEXICAL.B64;1
+
+%WARN('a warning')
+......^
+%BLS64-W-TEXT, %WARN:	a warning
+at line number 54 in file SYS$SYSDEVICE:[ORACLE]LEXICAL.B64;1
+BLISS status %X106F1260
+%LINK-W-WRNERS, compilation warnings
+	in module LEXICAL file SYS$SYSDEVICE:[ORACLE]LEXICAL.OBJ;1
+LINK status %X10648268
+RUN status %X00010001

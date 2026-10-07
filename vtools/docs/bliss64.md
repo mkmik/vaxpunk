@@ -467,7 +467,12 @@ them. (KIT)
 ## Lexical functions
 
 New: `%HOST`, `%TARGET`, `%MODULE`, `%ROUTINE`, `%IDENT`, `%BLISS32E`,
-`%BLISS64E`, `%BLISS32V`. (RN 2.12) The kit's table has these too,
+`%BLISS64E`, `%BLISS32V`. (RN 2.12) Under `/A64`, `%BLISS(BLISS64E)` is 1
+and `%BLISS(BLISS32)`, `%BLISS(BLISS32E)` and `%BLISS(BLISS64)` are 0;
+`%BLISS64E(...)` expands to its actuals and `%BLISS16`, `%BLISS32`,
+`%BLISS36` and `%BLISS32E` to nothing, while `%BLISS64` is no name at
+all. `%BPVAL`, `%BPUNIT`, `%BPADDR` and `%UPVAL` are literal names, 64,
+8, 64 and 8, which `%STRING` gives as their names. (probe) The kit's table has these too,
 which the manual (LRM chapters 15 and 16) mostly has: `%QUOTE`, `%UNQUOTE`,
 `%EXPAND`, `%REMAINING`, `%COUNT`, `%LENGTH`, `%NUMBER`, `%STRING`,
 `%CHAR`, `%CHARCOUNT`, `%EXPLODE`, `%REMOVE`, `%NAME`, `%QUOTENAME`,
@@ -845,6 +850,11 @@ routine of a module.
     (line numbers, nesting columns, how expansions and require text are
     marked, where diagnostics go, the message facility name) and whether
     `/CROSS_REFERENCE` is accepted.
+    **Answered** for the source part by `tests/bliss/macros.b64` and
+    `lexical.b64`; `vtools/docs/vbliss.md` (*The listing*) has the layout.
+    The facility is `BLS64`; a source line wider than about 132
+    characters doesn't survive the oracle's typing it in, so test sources
+    keep to 120.
 
 17. **Under `/A32`:** items 1 to 5 again, and what a BLISS-32 routine
     receives from a BLISS-64 caller passing `1^32 + 5` and `-1`.

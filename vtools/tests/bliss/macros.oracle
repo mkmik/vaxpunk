@@ -1,0 +1,10 @@
+
+    PRINT(ADD3(1, 2));
+..................^
+%BLS64-W-TEXT, Missing operand following "+".  A literal zero has been inserted
+at line number 62 in file SYS$SYSDEVICE:[ORACLE]MACROS.B64;1
+BLISS status %X106F1260
+%LINK-W-WRNERS, compilation warnings
+	in module MACROS file SYS$SYSDEVICE:[ORACLE]MACROS.OBJ;1
+LINK status %X10648268
+RUN status %X00010001
