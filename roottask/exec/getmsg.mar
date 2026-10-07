@@ -4,8 +4,8 @@
 ; A program asks for a status's message, %FACILITY-S-NAME, text, with
 ; $GETMSG, as on VMS, so DCL writes %RMS-E-FNF, file not found. VMS finds
 ; a facility's messages in its message file or the image's message
-; section; here a table in the executive holds the file system's and
-; RMS's. A status it has no text for is VMS's %NONAME-F-NOMSG, Message
+; section; here a table in the executive holds the file system's, RMS's
+; and the few of TCP/IP Services' that the system's programs return. A status it has no text for is VMS's %NONAME-F-NOMSG, Message
 ; number 0000000C, with the status's severity, and SS$_MSGNOTFND.
 ; ponytail: one table, no message files; add them when an image brings
 ; its own facility's messages.
@@ -1293,6 +1293,16 @@ MESSAGES:
         .ASCIC  "SYSTEM"
         .ASCIC  "NOLOGTAB"
         .ASCIC  "no logical name table matched the specified name"
+; TCP/IP Services' (facility 0x764), whose hosts database TCPIP and
+; HOST_ADDR (sysexe/lib/inet.mar) read.
+        .LONG   ^X07648358
+        .ASCIC  "TCPIP"
+        .ASCIC  "HOSTERROR"
+        .ASCIC  "cannot process host request"
+        .LONG   ^X076486A0
+        .ASCIC  "TCPIP"
+        .ASCIC  "NORECORD"
+        .ASCIC  "information not found"
         .LONG   0
 
         .PSECT  $CODE$

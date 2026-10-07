@@ -3,8 +3,31 @@
 ;
 ; build.rs links this module into each image, as it does lib/print.mar.
 ;
+; HOST_ADDR looks a name up in the hosts database, TCP/IP Services'
+; TCPIP$HOST.DAT, which TCPIP's SET HOST writes (ADR-0025): an indexed
+; file of 271-byte records, a type, 0 for a host's name and 1 for an
+; alias, the address in dotted text, and the name, both padded with
+; blanks; key 0 is the name, key 1 the address.
+; ponytail: reads every record, as it must to match names in any case;
+; the file on the ramdisk, not where a TCPIP$HOST logical name says.
+;
         .LIBRARY "starlet.mlb"
         $SSDEF
+        $RMSDEF
+        $FABDEF
+        $RABDEF
+
+HOST_REC = 271                          ; a record: type, address, name
+HOST_ADDRLEN = 15
+HOST_NAME = 16                          ; where the name starts
+TCPIP$_NORECORD = ^X076486A0            ; information not found
+
+        .PSECT  INET_DATA, NOEXE, WRT, LONG
+HFAB:   $FAB    FNA=HOSTS, FNS=HOSTSLEN, FAC=GET, SHR=<GET,PUT,UPD,DEL>
+HRAB:   $RAB    FAB=HFAB, UBF=HREC, USZ=HOST_REC
+HREC:   .BLKB   HOST_REC
+HOSTS:  .ASCII  "MDA0:[000000]TCPIP$HOST.DAT" ; the hosts database
+HOSTSLEN = . - HOSTS
 
         .PSECT  INET_CODE, EXE, LONG
 ; INET_ADDR len, adr, result: the address in the len characters at adr,
@@ -48,5 +71,73 @@
         RET
 80$:    MOVL    #SS$_IVADDR, R0
         RET
+
+; HOST_ADDR len, adr, result: the address of the host whose name, or an
+; alias's, in any case, is the len characters at adr, or that they are,
+; a.b.c.d, in the longword at result, as INET_ADDR writes it. R0 =
+; SS$_NORMAL, TCPIP$_NORECORD if the hosts database hasn't the name, or
+; RMS's error if it can't be read.
+        .ENTRY  HOST_ADDR, ^M<R2, R3, R4, R5, R6>
+        PUSHL   12(AP)
+        PUSHL   8(AP)
+        PUSHL   4(AP)
+        CALLS   #3, G^INET_ADDR
+        BLBS    R0, 90$
+        MOVL    4(AP), R6
+        BEQL    85$
+        CMPL    R6, #HOST_REC-HOST_NAME
+        BGTRU   85$
+        $OPEN   FAB=HFAB
+        BLBC    R0, 90$
+        $CONNECT RAB=HRAB
+        BLBC    R0, 70$
+10$:    $GET    RAB=HRAB
+        BLBC    R0, 60$
+        CMPW    HRAB+RAB$W_RSZ, #HOST_REC
+        BNEQ    10$
+        MOVAB   HREC+HOST_NAME, R2
+        MOVL    8(AP), R3
+        MOVL    R6, R4
+20$:    MOVZBL  (R2)+, R0               ; a character each, in capitals
+        BSBB    UPCASE
+        MOVL    R0, R5
+        MOVZBL  (R3)+, R0
+        BSBB    UPCASE
+        CMPB    R0, R5
+        BNEQ    10$
+        SOBGTR  R4, 20$
+        CMPL    R6, #HOST_REC-HOST_NAME
+        BEQL    30$
+        CMPB    (R2), #^A/ /            ; and no more of the name
+        BNEQ    10$
+30$:    MOVAB   HREC+1, R2              ; the address, to a blank
+        CLRL    R4
+40$:    CMPB    (R2)[R4], #^A/ /
+        BEQL    50$
+        AOBLSS  #HOST_ADDRLEN, R4, 40$
+50$:    PUSHL   12(AP)
+        PUSHL   R2
+        PUSHL   R4
+        CALLS   #3, G^INET_ADDR
+        BRB     70$
+60$:    CMPL    R0, #RMS$_EOF
+        BNEQ    70$
+        MOVL    #TCPIP$_NORECORD, R0
+70$:    PUSHL   R0
+        $CLOSE  FAB=HFAB
+        MOVL    (SP)+, R0
+        RET
+85$:    MOVL    #TCPIP$_NORECORD, R0
+90$:    RET
+
+; UPCASE: R0 = a character. Makes it a capital, if it is a small letter.
+UPCASE:
+        .JSB_ENTRY
+        CMPB    R0, #^A/a/
+        BLSSU   10$
+        CMPB    R0, #^A/z/
+        BGTRU   10$
+        SUBB2   #^A/a/-^A/A/, R0
+10$:    RSB
 
         .END

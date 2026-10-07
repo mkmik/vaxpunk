@@ -2,7 +2,8 @@
 
 Oct 6, 2026 · @Marko Mikulicic
 
-Proposed. `SET INTERFACE`, `SET ROUTE`, `SET CONFIGURATION INTERFACE`
+Proposed; point 4's file moved to the ramdisk with
+[ADR-0025](0025-hosts-database.md). `SET INTERFACE`, `SET ROUTE`, `SET CONFIGURATION INTERFACE`
 and `SHOW INTERFACE` leave DCL's tables for `TCPIP.CLD`, which
 `TCPIP.EXE` parses with `CLI$DCL_PARSE`, as TCP/IP Services' `TCPIP`
 does: `$ TCPIP SET INTERFACE WE0 /HOST=address /NETWORK_MASK=mask`, or

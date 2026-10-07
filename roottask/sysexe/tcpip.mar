@@ -1,5 +1,5 @@
         .TITLE  TCPIP   TCP/IP Services' management commands
-        .IDENT  /V0.4/
+        .IDENT  /V0.5/
 ;
 ; DCL's TCPIP verb runs this. It parses the rest of the line, or with
 ; none each line it reads after TCPIP> until EXIT or CTRL/Z, with its
@@ -15,7 +15,9 @@
 ; SIOCADDRT on the default route;
 ; the last two read the saved ones, change theirs and write INTERFACE
 ; address mask gateway, and DHCP if /DHCP said so, in a new version of
-; TCPIP$CONFIG.DAT on the data disk, the one that may be written. /DHCP
+; MDA0:[000000]TCPIP$CONFIG.DAT, on the ramdisk that SYSTARTUP_VMS.COM
+; makes afresh at each boot, so the saved configuration is what its
+; commands save (ADR-0025). /DHCP
 ; has the TCP/IP component ask a DHCP server for the address, mask and
 ; gateway instead. SHOW INTERFACE senses them and writes them, and
 ; whether the link is up. START COMMUNICATION, which SYLOGIN.COM runs at
@@ -23,8 +25,14 @@
 ; are none, and says so, and starts TELNETD, the remote login server SET
 ; HOST talks to. PING sends ICMP echo requests on a raw ICMP socket, one
 ; each second, and writes a line for each reply, as TCP/IP Services' does.
-; ponytail: one interface and one route, the default; a saved file only
-; once INITIALIZE DKB0: has made a volume there.
+; SET HOST, SET NOHOST and SHOW HOST keep the hosts database,
+; MDA0:[000000]TCPIP$HOST.DAT, TCP/IP Services' indexed file of names and
+; addresses, which HOST_ADDR (lib/inet.mar) looks names up in for PING,
+; TELNET and COPY (ADR-0025); the first of them to find none makes it,
+; with LOCALHOST, as TCP/IP Services' CREATE HOST does. The ramdisk is
+; made afresh at each boot, so the hosts are those SYSTARTUP_VMS.COM sets.
+; ponytail: one interface and one route, the default; the hosts read at
+; once up to TABSIZE bytes of them.
 ;
         .LIBRARY "starlet.mlb"
         .LIBRARY "sysexe.mlb"
@@ -32,6 +40,7 @@
         $RMSDEF
         $FABDEF
         $RABDEF
+        $XABKEYDEF
         $IODEF
         $CLIMSGDEF
         $JPIDEF
@@ -41,11 +50,18 @@
         $ORTENTRYDEF
         $SIOCDEF
 
-        .EXTERNAL PUT_LINE, INET_ADDR, CLI$GET_VALUE, CLI$DCL_PARSE, CLI$DISPATCH
+        .EXTERNAL PUT_LINE, INET_ADDR, HOST_ADDR, CLI$GET_VALUE, CLI$DCL_PARSE, CLI$DISPATCH
         .EXTERNAL LIB$GET_FOREIGN, LIB$GET_INPUT, LIB$SIGNAL, TCPIP_TABLES, HELP$TOPIC
 
 DHCP = 4                                ; SETTINGS' flags: ask a DHCP server
 ECHOLEN = 64                            ; an echo request: its header and 56 data bytes
+HOST_REC = 271                          ; a hosts database record: 0 a host, 1 an alias,
+HOST_ADDRLEN = 15                       ; then the address, padded with blanks,
+HOST_NAME = 16                          ; and from here the name, padded too
+TABSIZE = 16384                         ; the hosts read at once, at most
+INHIB = ^X10000000                      ; STS$M_INHIB_MSG: reported already
+TCPIP$_HOSTERROR = ^X0764835A           ; cannot process host request
+TCPIP$_NORECORD = ^X076486A0            ; information not found
 
 ; APPEND "text": appends text to LINE. Uses R0-R5.
         .MACRO  APPEND  TEXT, ?L
@@ -130,7 +146,7 @@ VALBUF: .BLKB   64
 FAB:    $FAB    FNA=CONFIG, FNS=CONFIGLEN
 RAB:    $RAB    FAB=FAB, UBF=CMD+1, USZ=255
 LINE:   .BLKB   256                     ; a line being written, .ASCIC
-CONFIG: .ASCII  "DKB0:[000000]TCPIP$CONFIG.DAT"
+CONFIG: .ASCII  "MDA0:[000000]TCPIP$CONFIG.DAT"
 CONFIGLEN = . - CONFIG
 INTERFACE:
         .ASCIC  "INTERFACE"
@@ -146,6 +162,7 @@ TELNETD:
 TELNETD_NAME:
         .ASCID  "TCPIP$TELNET"
 TARGET: .LONG   0                       ; PING's host
+PNAME:  .BLKB   65                      ; as it was given, .ASCIC
 COUNT:  .LONG   0                       ; PING's /NUMBER_PACKETS, 0 until CTRL/C
 SECOND: .LONG   -10000000, -1           ; between two of PING's requests
 PCHAN:  .LONG   0                       ; PING's socket
@@ -165,6 +182,35 @@ MS:     .LONG   0                       ; its round trip,
 NBYTES: .LONG   0                       ; and its ICMP bytes
 PKT:    .BLKB   ECHOLEN                 ; an echo request
 REPLY:  .BLKB   256                     ; what came: an IP header and ICMP
+; The hosts database: key 0 the name, key 1 the address, as TCP/IP
+; Services makes it.
+DBFAB:  $FAB    FNA=DBSPEC, FNS=DBSPECLEN, FAC=<GET,PUT,DEL>, ORG=IDX, RAT=CR, MRS=HOST_REC, XAB=KEY0
+DBRAB:  $RAB    FAB=DBFAB, UBF=REC, USZ=HOST_REC, RBF=REC, RSZ=HOST_REC
+KEY0:   $XABKEY REF=0, POS=HOST_NAME, SIZ=HOST_REC-HOST_NAME, FLG=<DUP,IDX_NCMPR>, NXT=KEY1
+KEY1:   $XABKEY REF=1, POS=1, SIZ=HOST_ADDRLEN, FLG=<DUP,IDX_NCMPR,KEY_NCMPR>
+DBSPEC: .ASCII  "MDA0:[000000]TCPIP$HOST.DAT"
+DBSPECLEN = . - DBSPEC
+REC:    .BLKB   HOST_REC                ; a record
+OLD:    .BLKB   HOST_REC                ; the host SET NOHOST takes out
+NAME:   .LONG   255                     ; NAME, the parameter
+        .ADDRESS NAMEBUF
+NAMEBUF:
+        .BLKB   255
+NAMELEN:
+        .WORD   0
+FILTER: .BLKB   16                      ; SHOW HOST's address, .ASCIC, or none
+FOUND:  .LONG   0                       ; the hosts SET NOHOST found
+ANSWER: .LONG   8                       ; to Remove?
+        .ADDRESS ANSBUF
+ANSBUF: .BLKB   8
+ANSLEN: .WORD   0
+REMOVE: .ASCID  "Remove? [N]: "
+LOCALHOST:
+        .ASCIC  "LOCALHOST"
+LOCALALIAS:
+        .ASCIC  "localhost"
+TABEND: .LONG   0                       ; past TABLE's last host
+TABLE:  .BLKB   TABSIZE                 ; the hosts: each a type, then address and name, .ASCIC
 
         .PSECT  CODE, EXE, LONG
 ; START: the command after TCPIP, or, with none, each one read after
@@ -342,16 +388,23 @@ TAKE:
 90$:    RSB
 
 ; PING: PING host [/NUMBER_PACKETS=n]: an echo request to the host, an
-; address, each second, on a raw ICMP socket, which needs SYSPRV or
+; address or a name in the hosts database, each second, on a raw ICMP socket, which needs SYSPRV or
 ; BYPASS, and a line for each reply, until CTRL/C, or n of them and how
 ; many came back. A request's identifier is the PID, its sequence number
 ; its count from 0, and its data starts with when it went, so a reply
 ; says its round trip; other ICMP messages are passed over.
 ; ponytail: no round trips' minimum, average and maximum.
         .ENTRY  PING, ^M<R2, R3, R4, R5, R6, R7, R8, R9>
-        MOVAB   P_HOST, R5
-        MOVAB   TARGET, R6
-        BSBW    TAKE
+        MOVW    #64, VALUE
+        GETVALUE "HOST", VALUE, VALUE
+        BLBC    R0, 95$
+        MOVZWL  VALUE, R0
+        MOVB    R0, PNAME
+        MOVC3   R0, VALBUF, PNAME+1
+        PUSHAL  TARGET
+        PUSHAB  VALBUF
+        MOVZWL  VALUE, -(SP)
+        CALLS   #3, G^HOST_ADDR
         BLBC    R0, 95$
         CLRL    COUNT
         PRESENT "NUMBER_PACKETS"
@@ -370,8 +423,8 @@ TAKE:
 18$:    MOVL    TARGET, TSIN+SIN$L_ADDR
         CLRB    LINE
         APPEND  "PING "
-        MOVL    TARGET, R3
-        BSBW    ADDTEXT
+        MOVAB   PNAME, R1
+        BSBW    ADDSTR
         APPEND  " ("
         MOVL    TARGET, R3
         BSBW    ADDTEXT
@@ -424,8 +477,8 @@ TAKE:
         BRW     20$
 60$:    $CANTIM_S
         APPEND  "----"
-        MOVL    TARGET, R3
-        BSBW    ADDTEXT
+        MOVAB   PNAME, R1
+        BSBW    ADDSTR
         APPEND  " PING Statistics----"
         BSBW    SAY
         MOVL    R8, R1
@@ -542,7 +595,7 @@ NUMBER:
 90$:    RSB
 
 ; START_COMMUNICATION: unless the interface has an address already, the
-; saved settings from the data disk, or DHCP if there are none; a failure
+; saved settings from the ramdisk, or DHCP if there are none; a failure
 ; to set them is reported. Then the remote login server, TELNETD, unless it
 ; runs already. Without a network, nothing.
         .ENTRY  START_COMMUNICATION, ^M<R2, R3, R4, R5, R6, R7>
@@ -566,7 +619,7 @@ NUMBER:
 90$:    RET
 
 ; LOAD: puts the saved settings, INTERFACE address mask gateway [DHCP]
-; in the data disk's file, in SETTINGS, or zeros if there are none. R0 = RMS's
+; in the ramdisk's file, in SETTINGS, or zeros if there are none. R0 = RMS's
 ; status if it can't read them, or PARSE's. Uses R0-R6.
 LOAD:
         .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5, R6>
@@ -672,6 +725,457 @@ PARSE:
         BSBW    SHOWLINE
         MOVL    #SS$_NORMAL, R0
 90$:    RET
+
+; SET_HOST: SET HOST host /ADDRESS=address [/ALIAS=(alias,...)]: puts the
+; host's record in the hosts database, then one for each alias. Another
+; host with the name stays.
+; ponytail: no %TCPIP-I-DUPHOSTNAME for one that has it already.
+        .ENTRY  SET_HOST, ^M<R2, R3, R4, R5, R6, R7>
+        GETVALUE "NAME", NAME, NAMELEN
+        BLBC    R0, 95$
+        MOVW    #64, VALUE
+        GETVALUE "ADDRESS", VALUE, VALUE
+        BLBC    R0, 95$
+        MOVAB   VALBUF, R0
+        MOVZWL  VALUE, R1
+        BSBW    ADDRESS
+        BLBC    R0, 95$
+        MOVL    R3, R7
+        BSBW    OPENDB
+        BLBC    R0, 90$
+        CLRB    LINE
+        MOVL    R7, R3
+        BSBW    ADDTEXT
+        CLRL    R1                      ; the host
+10$:    MOVAB   NAMEBUF, R3
+        MOVZWL  NAMELEN, R4
+        BSBW    PUTREC
+        BLBC    R0, 80$
+        GETVALUE "ALIAS", NAME, NAMELEN
+        MOVL    #1, R1                  ; and its aliases
+        BLBS    R0, 10$
+        MOVL    #SS$_NORMAL, R0
+80$:    BSBW    CLOSEDB
+90$:    BLBS    R0, 95$
+        BSBW    HOSTERR
+95$:    RET
+
+; SET_NOHOST: SET NOHOST host [/NOCONFIRM]: takes each host with the
+; name, in any case, out of the hosts database, and its aliases, the
+; names at its address; with /CONFIRM, the default, writes it, as SHOW
+; HOST does, and asks Remove? first: Y removes it, N or nothing keeps it.
+; ponytail: an alias's name isn't found, where TCP/IP Services says it is
+; an alias; another host's names at the address go too.
+        .ENTRY  SET_NOHOST, ^M<R2, R3, R4, R5, R6>
+        GETVALUE "NAME", NAME, NAMELEN
+        BLBC    R0, 95$
+        CLRL    FOUND
+        BSBW    OPENDB
+        BLBC    R0, 90$
+        BSBW    LOADDB
+        BLBC    R0, 80$
+        MOVAB   TABLE, R6
+10$:    CMPL    R6, TABEND
+        BGEQU   70$
+        TSTB    (R6)
+        BNEQ    60$
+        MOVL    R6, R0
+        BSBW    FIELDS
+        BSBW    MATCHNAME
+        BLBC    R0, 60$
+        INCL    FOUND
+        PRESENT "CONFIRM"
+        BLBC    R0, 40$
+        BSBW    HEADER
+        BSBW    HOSTLINE
+20$:    PUSHAW  ANSLEN
+        PUSHAQ  REMOVE
+        PUSHAQ  ANSWER
+        CALLS   #3, G^LIB$GET_INPUT
+        BLBC    R0, 60$                 ; CTRL/Z: keep it
+        TSTW    ANSLEN
+        BEQL    60$
+        BICB3   #^X20, ANSBUF, R0       ; in capitals
+        CMPB    R0, #^A/N/
+        BEQL    60$
+        CMPB    R0, #^A/Y/
+        BNEQ    20$
+40$:    BSBW    DELHOST
+        BLBC    R0, 80$
+60$:    MOVL    R6, R0
+        BSBW    FIELDS
+        MOVL    R0, R6
+        BRB     10$
+70$:    MOVL    #SS$_NORMAL, R0
+        TSTL    FOUND
+        BNEQ    80$
+        MOVL    #RMS$_RNF, R0
+80$:    BSBW    CLOSEDB
+90$:    BLBS    R0, 95$
+        BSBW    HOSTERR
+95$:    RET
+
+; SHOW_HOST: SHOW HOST [host] [/ADDRESS=address] [/LOCAL]: the hosts in
+; the hosts database, in their names' order, or those at the address of
+; the host, a name, an alias or an address, or at /ADDRESS, as TCP/IP
+; Services' LOCAL database: each host's address, its name and its
+; aliases. The hosts database is all /LOCAL asks for, and all there is.
+        .ENTRY  SHOW_HOST, ^M<R2, R3, R4, R5, R6>
+        BSBW    OPENDB
+        BLBC    R0, 90$
+        BSBW    LOADDB
+        BSBW    CLOSEDB
+        BLBC    R0, 90$
+        CLRB    FILTER
+        GETVALUE "NAME", NAME, NAMELEN
+        BLBC    R0, 10$
+        PUSHAL  TARGET
+        PUSHAB  NAMEBUF
+        MOVZWL  NAMELEN, -(SP)
+        CALLS   #3, G^HOST_ADDR
+        BLBC    R0, 90$
+        MOVL    TARGET, R3
+        BRB     15$
+10$:    MOVW    #64, VALUE
+        GETVALUE "ADDRESS", VALUE, VALUE
+        BLBC    R0, 20$                 ; neither: every host
+        MOVAB   VALBUF, R0
+        MOVZWL  VALUE, R1
+        BSBW    ADDRESS
+        BLBC    R0, 95$
+15$:    CLRB    LINE
+        BSBW    ADDTEXT
+        MOVC3   #16, LINE, FILTER
+20$:    MOVAB   TABLE, R6
+        BSBW    NEXTHOST
+        TSTL    R6
+        BNEQ    30$
+        MOVL    #RMS$_RNF, R0
+        BRB     90$
+30$:    BSBW    HEADER
+40$:    BSBW    HOSTLINE
+        MOVL    R6, R0
+        BSBW    FIELDS
+        MOVL    R0, R6
+        BSBW    NEXTHOST
+        TSTL    R6
+        BNEQ    40$
+        MOVL    #SS$_NORMAL, R0
+        RET
+90$:    CMPL    R0, #TCPIP$_NORECORD    ; HOST_ADDR's
+        BNEQ    92$
+        MOVL    #RMS$_RNF, R0
+92$:    BSBW    HOSTERR
+95$:    RET
+
+; HOSTERR: R0 = why a hosts command failed, RMS's status. Signals
+; %TCPIP-E-HOSTERROR with it, after -TCPIP-W-NORECORD if it is RMS$_RNF,
+; as TCP/IP Services does. R0 = TCPIP$_HOSTERROR, reported. Uses R0-R1.
+HOSTERR:
+        .JSB_ENTRY
+        PUSHL   R0
+        CMPL    R0, #RMS$_RNF
+        BNEQ    10$
+        CLRL    -(SP)
+        PUSHL   #TCPIP$_NORECORD
+        CLRL    -(SP)
+        PUSHL   #TCPIP$_HOSTERROR
+        CALLS   #5, G^LIB$SIGNAL
+        BRB     20$
+10$:    CLRL    -(SP)
+        PUSHL   #TCPIP$_HOSTERROR
+        CALLS   #3, G^LIB$SIGNAL
+20$:    MOVL    #TCPIP$_HOSTERROR!INHIB, R0
+        RSB
+
+; OPENDB: opens the hosts database and connects DBRAB, making it first,
+; with LOCALHOST, alias localhost, at 127.0.0.1, if there is none. R0 =
+; RMS's status. Uses R0-R5.
+OPENDB:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5>
+        $OPEN   FAB=DBFAB
+        BLBS    R0, 50$
+        CMPL    R0, #RMS$_FNF
+        BNEQ    90$
+        $CREATE FAB=DBFAB
+        BLBC    R0, 90$
+        $CONNECT RAB=DBRAB
+        BLBC    R0, 80$
+        CLRB    LINE
+        APPEND  "127.0.0.1"
+        CLRL    R1
+        MOVAB   LOCALHOST+1, R3
+        MOVZBL  LOCALHOST, R4
+        BSBW    PUTREC
+        BLBC    R0, 80$
+        MOVL    #1, R1
+        MOVAB   LOCALALIAS+1, R3
+        MOVZBL  LOCALALIAS, R4
+        BSBW    PUTREC
+        BLBC    R0, 80$
+        RSB
+50$:    $CONNECT RAB=DBRAB
+        BLBS    R0, 90$
+80$:    BSBW    CLOSEDB
+90$:    RSB
+
+; CLOSEDB: closes the hosts database. Keeps R0.
+CLOSEDB:
+        .JSB_ENTRY  SCRATCH=<R1>
+        PUSHL   R0
+        $CLOSE  FAB=DBFAB
+        MOVL    (SP)+, R0
+        RSB
+
+; PUTREC: R1 = a type, 0 a host or 1 an alias, R3 and R4 = its name and
+; its length, LINE = its address, .ASCIC. Puts the record in the hosts
+; database. R0 = RMS's status. Uses R0-R5.
+PUTREC:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5>
+        MOVAB   LINE, R2
+        BSBW    MAKEREC
+        MOVB    #RAB$C_KEY, DBRAB+RAB$B_RAC
+        $PUT    RAB=DBRAB
+        RSB
+
+; MAKEREC: R1 = a type, R2 = an address, .ASCIC, R3 and R4 = a name and
+; its length. Makes REC the record. Uses R0-R5.
+MAKEREC:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5>
+        PUSHR   #^M<R1, R2, R3, R4>
+        MOVC5   #0, (SP), #^A/ /, #HOST_REC, REC
+        POPR    #^M<R1, R2, R3, R4>
+        MOVB    R1, REC
+        PUSHR   #^M<R3, R4>
+        MOVZBL  (R2)+, R0
+        MOVC3   R0, (R2), REC+1
+        POPR    #^M<R3, R4>
+        MOVC3   R4, (R3), REC+HOST_NAME
+        RSB
+
+; LOADDB: reads the open hosts database, in its names' order, into
+; TABLE: each record's type, then its address and its name without their
+; blanks, each .ASCIC, and TABEND past the last. R0 = SS$_NORMAL, or
+; RMS's error. Uses R0-R6.
+LOADDB:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5, R6>
+        MOVAB   TABLE, R6
+        MOVB    #RAB$C_SEQ, DBRAB+RAB$B_RAC
+        $REWIND RAB=DBRAB
+        BLBC    R0, 80$
+10$:    $GET    RAB=DBRAB
+        BLBC    R0, 80$
+        CMPW    DBRAB+RAB$W_RSZ, #HOST_REC
+        BNEQ    10$
+        MOVAB   TABLE+TABSIZE-HOST_REC-2, R0
+        CMPL    R6, R0                  ; no room for another
+        BGTRU   85$
+        MOVB    REC, (R6)+
+        MOVAB   REC+1, R1
+        MOVL    #HOST_ADDRLEN, R2
+        BSBB    TRIMCOPY
+        MOVAB   REC+HOST_NAME, R1
+        MOVL    #HOST_REC-HOST_NAME, R2
+        BSBB    TRIMCOPY
+        BRB     10$
+80$:    CMPL    R0, #RMS$_EOF
+        BNEQ    90$
+85$:    MOVL    #SS$_NORMAL, R0
+90$:    MOVL    R6, TABEND
+        RSB
+
+; TRIMCOPY: R1 and R2 = a text and its length, R6 = where to. Writes it
+; there without the blanks at its end, .ASCIC, and R6 past it. Uses
+; R0-R5.
+TRIMCOPY:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5>, OUTPUT=<R6>
+10$:    TSTL    R2
+        BEQL    20$
+        CMPB    -1(R1)[R2], #^A/ /
+        BNEQ    20$
+        DECL    R2
+        BRB     10$
+20$:    MOVB    R2, (R6)+
+        MOVC3   R2, (R1), (R6)
+        MOVL    R3, R6
+        RSB
+
+; FIELDS: R0 = a host in TABLE. R1 = its name, .ASCIC, and R0 the next.
+FIELDS:
+        .JSB_ENTRY  OUTPUT=<R0, R1>
+        MOVZBL  1(R0), R1
+        MOVAB   2(R0)[R1], R1
+        MOVZBL  (R1), R0
+        MOVAB   1(R1)[R0], R0
+        RSB
+
+; NEXTHOST: R6 = a place in TABLE. R6 = the host there or the first
+; after it, not an alias, at FILTER's address if it has one, or 0 if none
+; is. Uses R0-R5.
+NEXTHOST:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5>, OUTPUT=<R6>
+10$:    CMPL    R6, TABEND
+        BGEQU   80$
+        TSTB    (R6)
+        BNEQ    20$
+        TSTB    FILTER
+        BEQL    90$
+        MOVAB   FILTER, R1
+        MOVL    R6, R2
+        BSBW    SAMEADDR
+        BLBS    R0, 90$
+20$:    MOVL    R6, R0
+        BSBW    FIELDS
+        MOVL    R0, R6
+        BRB     10$
+80$:    CLRL    R6
+90$:    RSB
+
+; SAMEADDR: R1 = an address, .ASCIC, R2 = a host in TABLE. R0 = 1 if it
+; is the host's, else 0. Uses R0-R3.
+SAMEADDR:
+        .JSB_ENTRY  SCRATCH=<R2, R3>
+        MOVZBL  (R1), R0
+        INCL    R0
+        CMPC3   R0, (R1), 1(R2)
+        BNEQ    80$
+        MOVL    #1, R0
+        RSB
+80$:    CLRL    R0
+        RSB
+
+; MATCHNAME: R1 = a name, .ASCIC. R0 = 1 if it is NAME, in any case,
+; else 0. Uses R0-R4.
+MATCHNAME:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4>
+        MOVZBL  (R1)+, R2
+        CMPW    R2, NAMELEN
+        BNEQ    80$
+        MOVAB   NAMEBUF, R3
+        TSTL    R2
+        BEQL    70$
+10$:    MOVZBL  (R1)+, R0
+        BSBB    UPCASE
+        MOVL    R0, R4
+        MOVZBL  (R3)+, R0
+        BSBB    UPCASE
+        CMPB    R0, R4
+        BNEQ    80$
+        SOBGTR  R2, 10$
+70$:    MOVL    #1, R0
+        RSB
+80$:    CLRL    R0
+        RSB
+
+; UPCASE: R0 = a character. Makes it a capital, if it is a small letter.
+UPCASE:
+        .JSB_ENTRY
+        CMPB    R0, #^A/a/
+        BLSSU   10$
+        CMPB    R0, #^A/z/
+        BGTRU   10$
+        SUBB2   #^A/a/-^A/A/, R0
+10$:    RSB
+
+; HEADER: writes the head of SHOW HOST's list, TCP/IP Services', blanks
+; and all. Uses R0-R1.
+HEADER:
+        .JSB_ENTRY
+        PRINT   "       "
+        PRINT   "     LOCAL database"
+        PRINT   "  "
+        PRINT   "Host address    Host name"
+        PRINT   " "
+        RSB
+
+; HOSTLINE: R6 = a host in TABLE. Writes its line: its address, in 16
+; columns, its name, and a comma and each alias's, the names at its
+; address. Uses R0-R5.
+HOSTLINE:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5>
+        PUSHL   R7
+        CLRB    LINE
+        MOVAB   1(R6), R1
+        BSBW    ADDSTR
+10$:    CMPB    LINE, #16
+        BGEQU   20$
+        MOVZBL  LINE, R0
+        MOVB    #^A/ /, LINE+1[R0]
+        INCB    LINE
+        BRB     10$
+20$:    MOVL    R6, R0
+        BSBW    FIELDS
+        BSBB    ADDNAME
+        MOVAB   TABLE, R7
+30$:    CMPL    R7, TABEND
+        BGEQU   80$
+        TSTB    (R7)
+        BEQL    40$
+        MOVAB   1(R6), R1
+        MOVL    R7, R2
+        BSBW    SAMEADDR
+        BLBC    R0, 40$
+        CMPB    LINE, #253              ; no room for ", "
+        BGEQU   80$
+        APPEND  ", "
+        MOVL    R7, R0
+        BSBW    FIELDS
+        BSBB    ADDNAME
+40$:    MOVL    R7, R0
+        BSBW    FIELDS
+        MOVL    R0, R7
+        BRB     30$
+80$:    BSBW    SAY
+        MOVL    (SP)+, R7
+        RSB
+
+; ADDNAME: R1 = a name, .ASCIC. Appends it to LINE, as much as fits.
+; Uses R0-R5.
+ADDNAME:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5>
+        MOVZBL  (R1)+, R2
+        MOVZBL  LINE, R0
+        SUBL3   R0, #255, R3
+        CMPL    R2, R3
+        BLEQ    10$
+        MOVL    R3, R2
+10$:    ADDB2   R2, LINE
+        MOVC3   R2, (R1), LINE+1[R0]
+        RSB
+
+; DELHOST: R6 = a host in TABLE. Takes its record out of the open hosts
+; database, and its aliases', the records of names at its address. R0 =
+; SS$_NORMAL, or RMS's error. Uses R0-R5.
+DELHOST:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5>
+        MOVL    R6, R0
+        BSBW    FIELDS
+        MOVZBL  (R1)+, R4
+        MOVL    R1, R3
+        CLRL    R1
+        MOVAB   1(R6), R2
+        BSBW    MAKEREC
+        MOVC3   #HOST_REC, REC, OLD
+10$:    MOVB    #RAB$C_SEQ, DBRAB+RAB$B_RAC
+        $REWIND RAB=DBRAB               ; from the first again, after each
+        BLBC    R0, 90$
+20$:    $GET    RAB=DBRAB
+        BLBC    R0, 80$
+        CMPW    DBRAB+RAB$W_RSZ, #HOST_REC
+        BNEQ    20$
+        CMPC3   #HOST_ADDRLEN, REC+1, OLD+1
+        BNEQ    20$
+        TSTB    REC                     ; an alias there
+        BNEQ    30$
+        CMPC3   #HOST_REC, REC, OLD     ; the host
+        BNEQ    20$
+30$:    $DELETE RAB=DBRAB
+        BLBS    R0, 10$
+        RSB
+80$:    CMPL    R0, #RMS$_EOF
+        BNEQ    90$
+        MOVL    #SS$_NORMAL, R0
+90$:    RSB
 
 ; SENSE: senses the settings, into SETTINGS, and whether the link is up,
 ; 2 in its flags. R0 = a status.

@@ -142,7 +142,13 @@ interpreter. It is linked high in P1, which tells the executive it is one
   which a program assigns a channel to for a socket, as TCP/IP Services'
   `TCPIP$STARTUP.COM` defines it. Then `INITIALIZE MDA0: RAM` makes the
   ramdisk, empty, and `MOUNT MDA0: RAM` mounts it and prints
-  `%MOUNT-I-MOUNTED, RAM mounted on _MDA0:`. Then its `MOUNT DKB0:`
+  `%MOUNT-I-MOUNTED, RAM mounted on _MDA0:`. It holds TCP/IP's two
+  files: the hosts database, `TCPIP$HOST.DAT`, which the first `TCPIP
+  SET HOST` or `SHOW HOST` makes, and the saved network configuration,
+  `TCPIP$CONFIG.DAT`. So the only hosts a boot knows, and its fixed
+  address if it has one, are what `TCPIP SET HOST`, `SET CONFIGURATION
+  INTERFACE` and `SET ROUTE /PERMANENT` lines in this procedure save
+  ([ADR-0025](adr/0025-hosts-database.md)). Then its `MOUNT DKB0:`
   mounts the data disk, whatever its label, if an `INITIALIZE DKB0:`
   wrote a volume there, at this boot or an earlier one, and prints
   `%MOUNT-I-MOUNTED, label mounted on _DKB0:`. On a blank disk it prints
@@ -153,8 +159,8 @@ interpreter. It is linked high in P1, which tells the executive it is one
   back to `[SYSMGR]`, and runs `TCPIP START COMMUNICATION`. With a
   network, that opens a UDP socket on `TCPIP$DEVICE:` and, with ioctls on
   it, sets the interface's address, mask and gateway as `TCPIP
-  SET CONFIGURATION INTERFACE` and `SET ROUTE /PERMANENT` last saved them
-  on the data disk, or asks a DHCP server for them if the saved settings
+  SET CONFIGURATION INTERFACE` and `SET ROUTE /PERMANENT` saved them
+  on the ramdisk, or asks a DHCP server for them if the saved settings
   say `DHCP` or nothing is saved, waiting up to 10 seconds for its answer, and prints
   `%TCPIP-I-SET, WE0: ...`, and creates the process `TCPIP$TELNET`, which runs `TELNETD.EXE` and waits
   on TCP port 23 for `SET HOST` from another vaxpunk. Then DCL reads a line with the `$` prompt: `$QIOW`
@@ -282,8 +288,10 @@ interpreter. It is linked high in P1, which tells the executive it is one
   `SIOCGIFADDR`, `SIOCADDRT` and the rest), `$QIOW` with `IO$_SETMODE`
   and `IO$_SENSEMODE` on a UDP socket on `TCPIP$DEVICE:`, the network's
   port driver. `SET CONFIGURATION INTERFACE WE0` and `SET ROUTE /DEFAULT
-  /GATEWAY=address /PERMANENT` save them on the data disk for the next
-  boot instead. `PING address` sends an ICMP echo request each second
+  /GATEWAY=address /PERMANENT` save them on the ramdisk for `START
+  COMMUNICATION` instead. `SET HOST name /ADDRESS=address`, `SET NOHOST`
+  and `SHOW HOST` keep the hosts database there, and `PING`, `TELNET`,
+  `SET HOST` and `COPY/HTTP` find a name in it with `HOST_ADDR`. `PING host` sends an ICMP echo request each second
   on a raw ICMP socket and prints each reply.
   `SET HOST address` runs `RTPAD.EXE`, and so does `TELNET address`,
   which connects to port 23 there:
@@ -415,5 +423,6 @@ was waiting for and the last line the console printed.
 network, sets and shows the interface, runs TCPTEST against a server and
 a client of its own and with a UDP datagram both ways, and logs in to the
 system itself with `SET HOST`.
-Then it boots two, on one QEMU socket network, each with a data disk it
-made holding saved settings, and logs in from one to the other.
+Then it boots two, on one QEMU socket network, saves an address on each
+and applies it with `TCPIP START COMMUNICATION`, and logs in from one to
+the other.
