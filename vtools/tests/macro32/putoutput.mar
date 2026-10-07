@@ -1,0 +1,17 @@
+        .TITLE  PUTOUTPUT  LIB$PUT_OUTPUT from vtools/lib
+        .IDENT  /V1.0/
+        .EXTRN  LIB$PUT_OUTPUT
+
+        .PSECT  DATA, NOEXE, LONG
+HELLO:  .ASCID  "Hello"
+EMPTY:  .ASCID  ""
+
+        .PSECT  CODE, EXE, SHR, LONG
+        .ENTRY  PUTOUTPUT, ^M<>
+        PUSHAQ  HELLO
+        CALLS   #1, G^LIB$PUT_OUTPUT
+        PUSHAQ  EMPTY
+        CALLS   #1, G^LIB$PUT_OUTPUT
+        RET
+
+        .END    PUTOUTPUT

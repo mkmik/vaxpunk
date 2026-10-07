@@ -1,0 +1,49 @@
+! PRINT: prints a value as a signed decimal and as 16 hex digits, on a line
+! of its own, through LIB$PUT_OUTPUT. The behaviour tests print with it,
+! here under vrun and on OpenVMS for the oracle.
+
+EXTERNAL ROUTINE
+    LIB$PUT_OUTPUT;
+
+ROUTINE PRINT (V) : NOVALUE =
+    BEGIN
+    LOCAL
+        BUF : VECTOR[48, BYTE],
+        DESC : VECTOR[2, LONG],
+        X,
+        I;
+    I = 48;
+    X = .V;
+    INCR K FROM 1 TO 16 DO
+        BEGIN
+        LOCAL D;
+        D = .X AND 15;
+        I = .I - 1;
+        BUF[.I] = (IF .D LSS 10 THEN %C'0' + .D ELSE %C'A' + .D - 10);
+        X = .X ^ -4 AND %X'0FFFFFFFFFFFFFFF'
+        END;
+    I = .I - 1;
+    BUF[.I] = %C' ';
+    ! Digits from the remainders, negative for a negative value, so that
+    ! the most negative one prints too.
+    X = .V;
+    DO
+        BEGIN
+        LOCAL D;
+        D = .X - (.X / 10) * 10;
+        IF .D LSS 0 THEN D = -.D;
+        I = .I - 1;
+        BUF[.I] = %C'0' + .D;
+        X = .X / 10
+        END
+    UNTIL .X EQL 0;
+    IF .V LSS 0
+    THEN
+        BEGIN
+        I = .I - 1;
+        BUF[.I] = %C'-'
+        END;
+    DESC[0] = 48 - .I + %X'010E0000';
+    DESC[1] = BUF[.I];
+    LIB$PUT_OUTPUT(DESC)
+    END;

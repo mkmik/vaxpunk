@@ -1,0 +1,128 @@
+                                Source Listing                   DD-MMM-YYYY HH:MM:SS  BLISS-64E V1.11-007-48G4L         Page 1
+                                                                 DD-MMM-YYYY HH:MM:SS  SYS$SYSDEVICE:[ORACLE]DATA.B64;1
+
+    0	      1 MODULE DATA (MAIN = MAIN) =
+    0	      2 BEGIN
+    1	      3 ! OWN, GLOBAL and LOCAL data of each size and extension, and fields.
+    1	      4 REQUIRE 'PRINT';
+ R  1	      5 ! PRINT: prints a value as a signed decimal and as 16 hex digits, on a line
+ R  1	      6 ! of its own, through LIB$PUT_OUTPUT. The behaviour tests print with it,
+ R  1	      7 ! here under vrun and on OpenVMS for the oracle.
+ R  1	      8 
+ R  1	      9 EXTERNAL ROUTINE
+ R  1	     10     LIB$PUT_OUTPUT;
+ R  1	     11 
+ R  1	     12 ROUTINE PRINT (V) : NOVALUE =
+ R  1	     13     BEGIN
+ R  2	     14     LOCAL
+ R  2	     15         BUF : VECTOR[48, BYTE],
+ R  2	     16         DESC : VECTOR[2, LONG],
+ R  2	     17         X,
+ R  2	     18         I;
+ R  2	     19     I = 48;
+ R  2	     20     X = .V;
+ R  2	     21     INCR K FROM 1 TO 16 DO
+ R  2	     22         BEGIN
+ R  3	     23         LOCAL D;
+ R  3	     24         D = .X AND 15;
+ R  3	     25         I = .I - 1;
+ R  3	     26         BUF[.I] = (IF .D LSS 10 THEN %C'0' + .D ELSE %C'A' + .D - 10);
+ R  3	     27         X = .X ^ -4 AND %X'0FFFFFFFFFFFFFFF'
+ R  3	     28         END;
+ R  2	     29     I = .I - 1;
+ R  2	     30     BUF[.I] = %C' ';
+ R  2	     31     ! Digits from the remainders, negative for a negative value, so that
+ R  2	     32     ! the most negative one prints too.
+ R  2	     33     X = .V;
+ R  2	     34     DO
+ R  2	     35         BEGIN
+ R  3	     36         LOCAL D;
+ R  3	     37         D = .X - (.X / 10) * 10;
+ R  3	     38         IF .D LSS 0 THEN D = -.D;
+ R  3	     39         I = .I - 1;
+ R  3	     40         BUF[.I] = %C'0' + .D;
+ R  3	     41         X = .X / 10
+ R  3	     42         END
+ R  3	     43     UNTIL .X EQL 0;
+ R  2	     44     IF .V LSS 0
+ R  2	     45     THEN
+ R  2	     46         BEGIN
+ R  3	     47         I = .I - 1;
+ R  3	     48         BUF[.I] = %C'-'
+ R  3	     49         END;
+ R  2	     50     DESC[0] = 48 - .I + %X'010E0000';
+ R  2	     51     DESC[1] = BUF[.I];
+ R  2	     52     LIB$PUT_OUTPUT(DESC)
+ R  2	     53     END;
+    1	     54 
+    1	     55 OWN
+    1	     56     L : LONG,
+    1	     57     LS : LONG SIGNED,
+
+DATA                            Source Listing                   DD-MMM-YYYY HH:MM:SS  BLISS-64E V1.11-007-48G4L         Page 2
+                                                                 DD-MMM-YYYY HH:MM:SS  SYS$SYSDEVICE:[ORACLE]DATA.B64;1
+
+    1	     58     W : WORD,
+    1	     59     WS : WORD SIGNED,
+    1	     60     BU : BYTE,
+    1	     61     BS : BYTE SIGNED,
+    1	     62     Q,
+    1	     63     I : LONG INITIAL(-5),
+    1	     64     V : VECTOR[4, WORD, SIGNED];
+    1	     65 
+    1	     66 GLOBAL
+    1	     67     G : INITIAL(%X'123456789ABCDEF0');
+    1	     68 
+    1	     69 ROUTINE MAIN =
+    1	     70     BEGIN
+    2	     71     LOCAL
+    2	     72         X,
+    2	     73         Y : BYTE;
+    2	     74     L = -1;
+    2	     75     LS = -1;
+    2	     76     W = -1;
+    2	     77     WS = -1;
+    2	     78     BU = -1;
+    2	     79     BS = -1;
+    2	     80     PRINT(.L);
+    2	     81     PRINT(.LS);
+    2	     82     PRINT(.W);
+    2	     83     PRINT(.WS);
+    2	     84     PRINT(.BU);
+    2	     85     PRINT(.BS);
+    2	     86     PRINT(.L<0, 32, 1>);
+    2	     87     PRINT(.I);
+    2	     88     PRINT(.G<8, 16>);
+    2	     89     PRINT(.G<60, 4, 1>);
+    2	     90     PRINT(.G<4, 8, 1>);
+    2	     91     Q = 0;
+    2	     92     Q<4, 8> = %X'FF';
+    2	     93     PRINT(.Q);
+    2	     94     Q<62, 2> = 1;
+    2	     95     PRINT(.Q);
+    2	     96     X = 300;
+    2	     97     Y = .X;
+    2	     98     PRINT(.Y);
+    2	     99     X<0, 8> = 1;
+    2	    100     PRINT(.X);
+    2	    101     PRINT((X = 5) + 1);
+    2	    102     PRINT(.X);
+    2	    103     INCR K FROM 0 TO 3 DO V[.K] = -.K;
+    2	    104     INCR K FROM 0 TO 3 DO PRINT(.V[.K]);
+    2	    105     PRINT(.V[1]<0, 8>);
+		...............1        
+%BLS64-W-TEXT, (1) Two consecutive field selectors
+
+    2	    106     1
+    2	    107     END;
+    1	    108 
+    1	    109 END
+    1	    110 ELUDOM
+
+
+                                Source Listing                   DD-MMM-YYYY HH:MM:SS  BLISS-64E V1.11-007-48G4L         Page 3
+                                Source Listing                   DD-MMM-YYYY HH:MM:SS  SYS$SYSDEVICE:[ORACLE]DATA.B64;1
+
+COMMAND LINE:
+
+BLISS/A64/LIST/SOURCE_LIST=(EXPAND_MACROS,REQUIRE)/NOMACHINE_CODE DATA.B64

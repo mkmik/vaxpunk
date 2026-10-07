@@ -1,0 +1,24 @@
+                                Source Listing                   DD-MMM-YYYY HH:MM:SS  BLISS-64E V1.11-007-48G4L         Page 1
+                                                                 DD-MMM-YYYY HH:MM:SS  SYS$SYSDEVICE:[ORACLE]HELLO.B64;1
+
+    0	      1 MODULE HELLO (MAIN = HELLO) =
+    0	      2 BEGIN
+    1	      3 EXTERNAL ROUTINE
+    1	      4     LIB$PUT_OUTPUT;
+    1	      5 
+    1	      6 ROUTINE HELLO =
+    1	      7     BEGIN
+    2	      8     LIB$PUT_OUTPUT(%ASCID 'Hello, world!');
+    2	      9     1
+    2	     10     END;
+    1	     11 
+    1	     12 END
+    1	     13 ELUDOM
+
+
+                                Source Listing                   DD-MMM-YYYY HH:MM:SS  BLISS-64E V1.11-007-48G4L         Page 2
+                                Source Listing                   DD-MMM-YYYY HH:MM:SS  SYS$SYSDEVICE:[ORACLE]HELLO.B64;1
+
+COMMAND LINE:
+
+BLISS/A64/LIST/SOURCE_LIST=(EXPAND_MACROS,REQUIRE)/NOMACHINE_CODE HELLO.B64

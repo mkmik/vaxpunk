@@ -1,0 +1,10 @@
+[package]
+name = "vbliss"
+description = "BLISS-64 compiler for ARM64, writing vaxpunk object modules"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+vasm = { path = "../vasm" }
+vms-obj = { path = "../vms-obj" }

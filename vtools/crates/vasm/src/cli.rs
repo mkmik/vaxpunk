@@ -123,7 +123,7 @@ fn run(name: &str, mut dialect: Option<&mut dyn Dialect>) -> Result<bool, String
 
 /// Now, or `SOURCE_DATE_EPOCH` for reproducible output, as `dd-mmm-yyyy hh:mm`
 /// in UTC.
-fn date() -> [u8; 17] {
+pub fn date() -> [u8; 17] {
     let secs = env::var("SOURCE_DATE_EPOCH")
         .ok()
         .and_then(|s| s.parse::<i64>().ok())

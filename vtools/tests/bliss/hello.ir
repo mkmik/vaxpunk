@@ -1,0 +1,10 @@
+module HELLO
+main $HELLO
+external $LIB$PUT_OUTPUT
+data $P.0 in $PLIT$ align 8 { 4 17694733, 4 $P.1 }
+data $P.1 in $PLIT$ align 1 { "Hello, world!" }
+routine $HELLO {
+@0
+    %0 =l call $LIB$PUT_OUTPUT($P.0)
+    ret 1
+}

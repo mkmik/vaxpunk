@@ -1,0 +1,61 @@
+MODULE DATA (MAIN = MAIN) =
+BEGIN
+! OWN, GLOBAL and LOCAL data of each size and extension, and fields.
+REQUIRE 'PRINT';
+
+OWN
+    L : LONG,
+    LS : LONG SIGNED,
+    W : WORD,
+    WS : WORD SIGNED,
+    BU : BYTE,
+    BS : BYTE SIGNED,
+    Q,
+    I : LONG INITIAL(-5),
+    V : VECTOR[4, WORD, SIGNED];
+
+GLOBAL
+    G : INITIAL(%X'123456789ABCDEF0');
+
+ROUTINE MAIN =
+    BEGIN
+    LOCAL
+        X,
+        Y : BYTE;
+    L = -1;
+    LS = -1;
+    W = -1;
+    WS = -1;
+    BU = -1;
+    BS = -1;
+    PRINT(.L);
+    PRINT(.LS);
+    PRINT(.W);
+    PRINT(.WS);
+    PRINT(.BU);
+    PRINT(.BS);
+    PRINT(.L<0, 32, 1>);
+    PRINT(.I);
+    PRINT(.G<8, 16>);
+    PRINT(.G<60, 4, 1>);
+    PRINT(.G<4, 8, 1>);
+    Q = 0;
+    Q<4, 8> = %X'FF';
+    PRINT(.Q);
+    Q<62, 2> = 1;
+    PRINT(.Q);
+    X = 300;
+    Y = .X;
+    PRINT(.Y);
+    X<0, 8> = 1;
+    PRINT(.X);
+    PRINT((X = 5) + 1);
+    PRINT(.X);
+    INCR K FROM 0 TO 3 DO V[.K] = -.K;
+    INCR K FROM 0 TO 3 DO PRINT(.V[.K]);
+    PRINT(.V[1]<0, 8>);
+    1
+    END;
+
+END
+ELUDOM

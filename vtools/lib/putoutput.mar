@@ -1,0 +1,26 @@
+        .TITLE  PUTOUTPUT  LIB$PUT_OUTPUT for programs that run under vrun
+        .IDENT  /V1.0/
+; VMS's LIB$PUT_OUTPUT writes a record to SYS$OUTPUT; under vrun a record
+; is a line on the console. Test programs in any language print with it,
+; so that the same source prints the same lines on OpenVMS.
+
+        .EXTRN  CON$PUTCHAR
+        .CALL_LINKAGE CON$PUTCHAR               ; keeps every register
+        .PSECT  $CODE$
+
+; LIB$PUT_OUTPUT msg: writes the string the descriptor msg points to, then
+; a line feed. R0 = SS$_NORMAL.
+        .ENTRY  LIB$PUT_OUTPUT, ^M<R2>
+        MOVL    4(AP), R1
+        MOVZWL  (R1), R2                        ; DSC$W_LENGTH
+        MOVL    4(R1), R1                       ; DSC$A_POINTER
+        BRB     20$
+10$:    MOVZBL  (R1)+, R0
+        JSB     G^CON$PUTCHAR
+20$:    SOBGEQ  R2, 10$
+        MOVZBL  #10, R0
+        JSB     G^CON$PUTCHAR
+        MOVL    #1, R0                          ; SS$_NORMAL
+        RET
+
+        .END

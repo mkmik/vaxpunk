@@ -1,6 +1,7 @@
 //! Assembles, links and runs every program in tests/run and examples/vasm
 //! under vrun, and compiles, links and runs every MACRO-32 program in
-//! tests/macro32 and examples/macro32, and checks each against its expected
+//! tests/macro32 and examples/macro32, and every BLISS-64 program in
+//! tests/bliss, and checks each against its expected
 //! files, next to it in tests/ and in tests/examples/vasm and
 //! tests/examples/macro32 for the examples: NAME.stdout (exact output,
 //! default empty), NAME.status (exit code, default 0) and NAME.stderr (a
@@ -52,6 +53,13 @@ fn macro32() {
     );
 }
 
+/// BLISS-64 programs, mixed with MACRO-32 modules where they are several,
+/// whose expected output is the BLISS oracle's (ods/vms/bliss-oracle.py).
+#[test]
+fn bliss() {
+    all(&[("tests/bliss", "tests/bliss")], vmacro::compile, true);
+}
+
 /// Known vmacro bugs, PRD-0003 items 16 and 17: each program here moves to
 /// tests/macro32 with its fix. `cargo test -- --ignored` runs them.
 #[test]
@@ -74,7 +82,7 @@ fn all(dirs: &[(&str, &str)], tool: Tool, macro32: bool) {
             fs::read_dir(&src)
                 .unwrap()
                 .map(|e| e.unwrap().path())
-                .filter(|p| p.is_dir() || p.extension().is_some_and(|e| e == "mar"))
+                .filter(|p| p.is_dir() || is_source(p))
                 .map(move |p| {
                     let name = p.file_stem().unwrap().to_string_lossy().into_owned();
                     (src.clone(), exp.clone(), name)
@@ -151,7 +159,8 @@ fn run(dir: &Path, expected: &Path, name: &str, tool: Tool, macro32: bool) -> Re
             objects.push(("LIB.OLB".into(), library(&program.join("lib"), tool)?));
         }
     } else {
-        objects.push(assemble(&dir.join(format!("{name}.mar")), tool)?);
+        let source = ["mar", "b64"].map(|e| dir.join(format!("{name}.{e}")));
+        objects.push(assemble(source.iter().find(|p| p.exists()).unwrap(), tool)?);
     }
     if macro32 {
         let lib = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../lib");
@@ -257,19 +266,30 @@ fn library(dir: &Path, tool: Tool) -> Result<Vec<u8>, String> {
     Ok(bytes)
 }
 
-/// The .mar files in `dir`, in name order.
+/// A source file: .mar for vasm or vmacro, .b64 for vbliss.
+fn is_source(p: &Path) -> bool {
+    p.extension().is_some_and(|e| e == "mar" || e == "b64")
+}
+
+/// The source files in `dir`, in name order.
 fn sources(dir: &Path) -> Vec<PathBuf> {
     let mut s: Vec<PathBuf> = fs::read_dir(dir)
         .unwrap()
         .map(|e| e.unwrap().path())
-        .filter(|p| p.extension().is_some_and(|e| e == "mar"))
+        .filter(|p| is_source(p))
         .collect();
     s.sort();
     s
 }
 
-/// Assembles or compiles `source`; returns its file name and the object.
+/// Assembles or compiles `source`, with vbliss if it is BLISS; returns its
+/// file name and the object.
 fn assemble(source: &Path, tool: Tool) -> Result<(String, Vec<u8>), String> {
+    let tool = if source.extension().is_some_and(|e| e == "b64") {
+        vbliss::compile
+    } else {
+        tool
+    };
     let text = fs::read_to_string(source).unwrap();
     let module = source.file_stem().unwrap().to_string_lossy().to_uppercase();
     let records = tool(&text, &options(&module, source))
