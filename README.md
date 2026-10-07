@@ -325,6 +325,17 @@ system itself. `TELNET address port`, or `/PORT=port`, as TCP/IP
 Services takes it, talks to any other port a line at a time, a poor
 man's netcat; CTRL/Z hangs up.
 
+`COPY/HTTP` is a poor man's curl, with VMS's remote file syntax, the
+server a node and the path in quotes: `COPY/HTTP 10.0.2.2::"/index.html"
+[]`, or a whole URL after a node that is only a name, `COPY/HTTP
+URL::"http://10.0.2.2:8080/pub/notes.txt" DKB0:[000000]`. The page goes,
+byte for byte, binary or not, into a new STREAM_LF file, as VMS's
+ports of curl and wget write one, named after the path's last part
+where the output doesn't say (`NOTES.TXT`, `INDEX.HTML` for a path
+ending in `/`); 404 is `%RMS-E-FNF`, 401 and 403 `%RMS-E-PRV`, another
+error `%RMS-F-NETFAIL`. Addresses only, since there is no DNS yet, and
+plain HTTP: an `https` URL is `%RMS-F-SUPPORT`.
+
 `run-qemu.sh` reads `NETDEV`, QEMU's `-netdev` for the network, and
 `MAC`, `LOG` and `DATADISK`, so that a second vaxpunk can share a network
 with the first, out of the same `out/`. Two on a socket network:
