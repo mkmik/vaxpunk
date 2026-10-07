@@ -13,13 +13,15 @@ fn ir() {
         if path.extension().is_none_or(|e| e != "ir") {
             continue;
         }
-        let source = fs::read_to_string(path.with_extension("b64")).unwrap();
-        let out = vbliss::translate(&source, &dir).unwrap();
+        let source = path.with_extension("b64");
+        let text = fs::read_to_string(&source).unwrap();
+        let out = vbliss::translate(&source, &text, &vbliss::Options::default());
         assert_eq!(
-            out.ir,
-            fs::read_to_string(&path).unwrap(),
-            "{}",
-            path.display()
+            out.ir.as_deref(),
+            Some(fs::read_to_string(&path).unwrap().as_str()),
+            "{}: {:?}",
+            path.display(),
+            out.error()
         );
         checked += 1;
     }

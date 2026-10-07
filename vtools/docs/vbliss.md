@@ -7,12 +7,16 @@ that will compile BLISS.EXE, the compiler in BLISS-64. `docs/bliss64.md`
 describes the dialect.
 
 ```
-vbliss [/OBJECT=file | -o file] [--ir] [--asm] SOURCE
+vbliss [/OBJECT=file | -o file] [/LIST[=file]] [/VARIANT=n] [--ir] [--asm] SOURCE
 ```
 
 The object file defaults to the source name with `.obj`. `--ir` prints the
-IR instead, `--asm` the vasm source. `REQUIRE 'NAME'` reads `NAME`, or
-`NAME.R64` or `NAME.REQ`, in either case, from the source's directory.
+IR instead, `--asm` the vasm source. `/LIST` writes the listing, by default
+to the source name with `.lis`; `/VARIANT` sets `%VARIANT`, 1 if no value
+is given. `REQUIRE 'NAME'` reads `NAME`, or `NAME.R64` or `NAME.REQ`, in
+either case, from the source's directory. Diagnostics go to stderr as
+BLISS writes them on a terminal: the line, a marker under the place, the
+message and where.
 
 ```
 vbliss hello.b64
@@ -29,21 +33,62 @@ field references `<p, s, e>`; `IF`, `CASE`, `SELECT` and `SELECTONE` with
 their `U` and `A` forms, `INCR` and `DECR` likewise, `WHILE`, `UNTIL`, `DO`,
 `LEAVE`, `EXITLOOP`, `RETURN`; calls by the calling standard, through a
 routine's name or any address; `%ASCID`, `%ASCII`, `%C`, `%X`, `%O`, `%B`,
-`%DECIMAL`. Ahead of their steps: `VECTOR[n, unit, ext]` and plain
-`REQUIRE`. Not yet: macros and lexical functions, the other structures,
-`BIND`, `PLIT`, linkages, built-ins, conditions, listings.
+`%DECIMAL`. Step 5: `MACRO` and `KEYWORDMACRO` with simple, conditional
+and iterative macros, `COMPILETIME`, `REQUIRE` and `%REQUIRE`, the
+lexical conditionals and the lexical functions but `%SIZE` and
+`%FIELDEXPAND` (step 6), and the listing. Ahead of its step:
+`VECTOR[n, unit, ext]`. Not yet: the other structures, `BIND`, `PLIT`,
+linkages, built-ins, conditions.
 
 ## How it works
 
-Four passes, each a module of the crate, which BLISS.EXE will repeat:
+Five passes, each a module of the crate, which BLISS.EXE will repeat:
 
-1. `lex.rs` reads lexemes: names in upper case, numbers with their radix
-   applied, quoted strings, special characters; comments go.
-2. `parse.rs` parses declarations and expressions, and resolves each name
+1. `lex.rs` reads lexemes: names in upper case, decimal numbers, quoted
+   strings, special characters and `%`; comments go.
+2. `lexical.rs`, the lexical processor, expands macro calls, lexical
+   functions and lexical conditionals, puts `%X'1F'` and the like
+   together, and reads require files, as LRM chapters 15 and 16 describe.
+3. `parse.rs` parses declarations and expressions, and resolves each name
    when it is used, since BLISS declares everything first. A literal
-   becomes its value; a `REQUIRE` splices in the file's lexemes.
-3. `irgen.rs` turns each routine into the IR and the data into items.
-4. `arm64.rs` turns the IR into vasm source, which vasm assembles.
+   becomes its value.
+4. `irgen.rs` turns each routine into the IR and the data into items.
+5. `arm64.rs` turns the IR into vasm source, which vasm assembles.
+
+The parser pulls one lexeme at a time from the lexical processor, as BLISS
+reads a module, so a macro is known from the lexeme after its
+declaration. Lexemes come from a stack of streams: the source file at the
+bottom, require files, and each expansion on top until it has been read. A
+macro body is kept as lexemes and formals (macro-quote level, with the
+quote functions done); a call's actuals are read expanded (name-quote
+level), put into a copy of the body, and the copy is read again. Only
+macro names are bound there: the parser binds the rest. A lexical
+function's expression parameter is parsed by the parser on its own
+lexemes. `%REMAINING`, `%LENGTH` and `%COUNT` belong to the copy they are
+read from, and an iterative macro's copies are a stream each, so
+`%EXITITERATION` leaves its separator behind.
+
+## The listing
+
+`listing.rs` writes the source part of the listing as BLISSA64 does with
+`/SOURCE_LIST=(EXPAND_MACROS,REQUIRE)`, so the listings of `tests/bliss`
+compare with the oracle's line for line once page headers and the closing
+summary are dropped (the `listing` test):
+
+- A source line is listed when the parser asks for a lexeme on a later
+  line, with the block depth at that moment, so a block's last line still
+  shows its depth; a block closes in the listing once the lexeme after it
+  has been read. `BEGIN` blocks and parenthesized ones both count.
+- The flag column holds `R` for a require file's lines, and `P` or `L`
+  for lines read inside a macro call's or a lexical function's actuals.
+  Lines are cut at 116 characters.
+- After a line come its diagnostics, with a marker line under it, then
+  what happened while it was the last line read: `%PRINT`'s text and each
+  expansion, `[NAME]=` and the lexemes it gave once read, `null` if
+  there were none to read. An expansion is indented by the macro calls in
+  progress when it began, and wraps by column 84.
+- Diagnostics mark the lexeme they are about, or, if a macro body gave it,
+  the last one read from the source.
 
 A name is its address: `.X` fetches X's own field, its allocation unit and
 extension, or a fullword at the address another expression gives. A field

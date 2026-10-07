@@ -1,0 +1,103 @@
+MODULE MACROS (MAIN = MAIN) =
+BEGIN
+! Macros: simple, keyword, conditional (recursive) and iterative, with
+! %REMAINING, %LENGTH, %COUNT, the quote functions and nested definitions.
+REQUIRE 'PRINT';
+
+MACRO
+    SQUARE (X) = ((X) * (X)) %,
+    TWO = 2 %,
+    ADD3 (A, B, C) = (A + B + C) %,
+    FIRST (A) = A %,
+    SECOND (A, B) = B %;
+
+KEYWORDMACRO
+    RANGE (LO = 1, HI = 10, STEP) = ((HI) - (LO) + 0 STEP) %,
+    KW (A = 1, B) = A B %;
+
+MACRO
+    ! Conditional: the sum of its parameters, recursively.
+    SUM (A) [] = (A + SUM(%REMAINING) + 0) %,
+    ! Iterative, with a fixed formal.
+    SCALED (K) [V] = (K) * (V) %,
+    ! The number of parameters, and the iteration count.
+    NPARAMS [] = %LENGTH %,
+    COUNTS [A] = %COUNT %,
+    DEPTH (A) [] = %IF %NULL(%REMAINING) %THEN %COUNT %ELSE DEPTH(%REMAINING) %FI %,
+    IT [A] = A %,
+    ! %EXITITERATION skips the rest of one copy, keeping its separator.
+    SKIP2 [A] = %IF A EQL 2 %THEN %EXITITERATION %FI A %,
+    ! After OF, the copies are case lines between SET and TES.
+    ARMS [V] = [V]: V * 10 %;
+
+LITERAL
+    MARK = 4;
+
+MACRO
+    BOTH = MARK + %UNQUOTE MARK %;
+
+! A macro that defines a macro.
+MACRO
+    DEFINE (NAME, VALUE) = MACRO NAME = VALUE %QUOTE % %;
+
+DEFINE(SEVEN, 7);
+
+MACRO
+    ! %EXITMACRO ends the expansion early.
+    EARLY (X) = X %IF X GTR 5 %THEN %EXITMACRO %FI + 100 %,
+    ! Parameters in brackets and angle brackets too.
+    PAIR (A, B) = (A) * 10 + (B) %,
+    ! %EXPAND expands PAIR as EXPANDED is defined.
+    EXPANDED = %EXPAND PAIR(1, 2) %,
+    WRAP (A) = A %;
+
+ROUTINE MAIN =
+    BEGIN
+    LOCAL
+        V;
+    V = 3;
+    PRINT(SQUARE(.V + 1));
+    PRINT(TWO + TWO);
+    PRINT(ADD3(1, 2, 3));
+    PRINT(ADD3(1, 2));
+    PRINT(FIRST(5, 6, 7));
+    PRINT(SECOND((1, 2), 3));
+    PRINT(RANGE());
+    PRINT(RANGE(HI = 20));
+    PRINT(RANGE(STEP = + 1000, LO = 5));
+    PRINT(KW(B = + 5));
+    PRINT(KW());
+    PRINT(SUM(1, 2, 3, 4));
+    PRINT(1 + SUM() 0);
+    PRINT(0 + SCALED(2, 1, 2, 3));
+    PRINT(1 * SCALED(3, 4, 5));
+    PRINT(NPARAMS(A, B, C, D));
+    PRINT(1 + NPARAMS() 0);
+    PRINT(0 + COUNTS(X, Y, Z));
+    PRINT(DEPTH(A, B, C, D));
+    V = 1;
+    V = .V + IT(1, 2, 3);
+    PRINT(.V);
+    PRINT(0 + SKIP2(1, 2, 3));
+    PRINT(CASE 2 FROM 1 TO 3 OF ARMS(1, 2, 3));
+    BEGIN
+    LITERAL
+        MARK = 5;
+    PRINT(BOTH)
+    END;
+    PRINT(MARK + PAIR(MARK, %QUOTE MARK));
+    PRINT(SEVEN);
+    PRINT(EARLY(3));
+    PRINT(EARLY(9));
+    PRINT(PAIR[1, 2]);
+    PRINT(PAIR<3, 4>);
+    PRINT(PAIR(5,
+               6));
+    PRINT(EXPANDED);
+    PRINT(SQUARE(TWO));
+    PRINT(WRAP(1 + 2 + 3 + 4 + 5 + 6 + 7 + 8 + 9 + 10 + 11 + 12 + 13 + 14 + 15 + 16 + 17 + 18 + 19 + 20));
+    1
+    END;
+
+END
+ELUDOM

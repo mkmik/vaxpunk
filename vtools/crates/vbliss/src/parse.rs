@@ -2,8 +2,11 @@
 //! are declared, since BLISS declares everything before it is used.
 
 use std::collections::HashMap;
+use std::rc::Rc;
 
 use crate::lex::{Lexeme, Tok};
+use crate::lexical::{Item, Lx, Macro, MacroKind};
+use crate::listing::{Diag, NOPOS};
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Storage {
@@ -33,6 +36,9 @@ pub enum Kind {
         novalue: bool,
     },
     Literal(i64),
+    /// A COMPILETIME name and its value now.
+    Compiletime(i64),
+    Macro(Rc<Macro>),
     Label,
 }
 
@@ -164,37 +170,131 @@ pub struct Module {
     pub statics: Vec<Static>,
 }
 
-pub type Error = (u32, String);
-type R<T> = Result<T, Error>;
+/// A fatal error: the file, line and column (from 0) it is at.
+#[derive(Debug)]
+pub struct Error {
+    pub file: String,
+    pub line: u32,
+    pub col: u32,
+    pub msg: String,
+}
+
+pub type R<T> = Result<T, Error>;
 
 /// Reads a require file by the name REQUIRE gives.
 pub type Loader<'a> = &'a dyn Fn(&str) -> Result<String, String>;
 
-struct Parser<'a> {
-    load: Loader<'a>,
+/// What the front end makes of a source: the module or the error that
+/// stopped it, the diagnostics, the listing and what %MESSAGE wrote.
+pub struct Front {
+    pub module: R<Module>,
+    pub diags: Vec<(String, Diag)>,
+    pub listing: String,
+    pub messages: Vec<String>,
+}
+
+/// How to compile: `/VARIANT`.
+#[derive(Clone, Default)]
+pub struct Options {
+    pub variant: i64,
+}
+
+pub struct Parser<'a> {
+    pub(crate) load: Loader<'a>,
+    /// The lexemes the parser has read, and the next one's index: read
+    /// one at a time from the lexical processor, as BLISS reads them.
     toks: Vec<Lexeme>,
     pos: usize,
+    pub(crate) lx: Lx,
+    /// Nonzero while parsing a lexical function's parameter, whose lexemes
+    /// are all in `toks`.
+    sub: u32,
+    /// An error of the lexical processor, reported in place of the parse
+    /// error it causes.
+    stash: Option<Error>,
+    /// The block depth, for the listing.
+    pub(crate) depth: u32,
+    pub(crate) diags: Vec<Diag>,
     scopes: Vec<HashMap<String, usize>>,
-    m: Module,
+    pub(crate) m: Module,
     /// Frame slots of the routine being parsed.
     slots: Vec<u32>,
     /// Names the assembly already uses.
     asm_names: HashMap<String, u32>,
 }
 
-/// Parses a module.
-pub fn parse(toks: Vec<Lexeme>, load: Loader) -> R<Module> {
+/// Parses the module in `text`, from file `name`.
+pub fn parse(name: &str, text: &str, load: Loader, opts: &Options) -> Front {
+    let lx = match Lx::new(name, text) {
+        Ok(lx) => lx,
+        Err(e) => {
+            return Front {
+                module: Err(e),
+                diags: Vec::new(),
+                listing: String::new(),
+                messages: Vec::new(),
+            };
+        }
+    };
     let mut p = Parser {
         load,
-        toks,
+        toks: Vec::new(),
         pos: 0,
+        lx,
+        sub: 0,
+        stash: None,
+        depth: 0,
+        diags: Vec::new(),
         scopes: vec![HashMap::new()],
         m: Module::default(),
         slots: Vec::new(),
         asm_names: HashMap::new(),
     };
-    p.module()?;
-    Ok(p.m)
+    p.lx.variant = opts.variant;
+    p.predeclare();
+    let mut module = p.module();
+    if let (Ok(_), Some(d)) = (&module, p.diags.iter().find(|d| d.sev == 'E')) {
+        module = Err(Error {
+            file: p.lx.files[d.file as usize].name.clone(),
+            line: d.line,
+            col: d.col,
+            msg: d.msg.clone(),
+        });
+    }
+    let mut diags = p.diags.clone();
+    if let Err(e) = &module
+        && !diags.iter().any(|d| d.sev == 'E')
+    {
+        let file =
+            p.lx.files
+                .iter()
+                .position(|f| f.name == e.file)
+                .unwrap_or(0);
+        diags.push(Diag {
+            sev: 'E',
+            file: file as u16,
+            line: e.line,
+            col: e.col,
+            msg: e.msg.clone(),
+        });
+    }
+    let header = format!(
+        "{:<32}Source Listing{:>52}\n{:<32}Source Listing{:>52}\n\n",
+        p.m.name,
+        crate::TOOL,
+        p.m.ident.clone().unwrap_or_default(),
+        name
+    );
+    let listing = crate::listing::render(&header, &p.lx.entries, &diags);
+    Front {
+        diags: diags
+            .into_iter()
+            .map(|d| (p.lx.files[d.file as usize].name.clone(), d))
+            .collect(),
+        listing,
+        messages: std::mem::take(&mut p.lx.messages),
+        module: module.map(|()| p.m),
+    }
 }
 
 fn is_name(t: &Tok, n: &str) -> bool {
@@ -202,19 +302,77 @@ fn is_name(t: &Tok, n: &str) -> bool {
 }
 
 impl Parser<'_> {
-    fn peek(&self) -> &Tok {
+    /// Reads lexemes until the one `n` ahead of the next is in `toks`.
+    fn fill(&mut self, n: usize) {
+        while self.toks.len() <= self.pos + n {
+            let l = if self.sub > 0 || self.stash.is_some() {
+                None
+            } else {
+                match self.lexeme() {
+                    Ok(l) => Some(l),
+                    Err(e) => {
+                        self.stash = Some(e);
+                        None
+                    }
+                }
+            };
+            let l = l.unwrap_or_else(|| Lexeme {
+                tok: Tok::Eof,
+                ..self.toks.last().cloned().unwrap_or(Lexeme {
+                    tok: Tok::Eof,
+                    file: 0,
+                    line: 0,
+                    col: 0,
+                })
+            });
+            self.toks.push(l);
+        }
+    }
+
+    /// The next lexeme for the parser, from the lexical processor.
+    fn lexeme(&mut self) -> R<Lexeme> {
+        self.scan().map(|(l, _)| l)
+    }
+
+    fn peek(&mut self) -> &Tok {
+        self.fill(0);
         &self.toks[self.pos].tok
     }
 
-    fn peek2(&self) -> &Tok {
-        &self.toks[(self.pos + 1).min(self.toks.len() - 1)].tok
+    fn peek2(&mut self) -> &Tok {
+        self.fill(1);
+        &self.toks[self.pos + 1].tok
     }
 
-    fn line(&self) -> u32 {
-        self.toks[self.pos].line
+    /// The next lexeme's place, or if it has none (a macro body gave it),
+    /// the place of the last one read that has.
+    fn here(&mut self) -> Lexeme {
+        self.fill(0);
+        let l = &self.toks[self.pos];
+        if l.col != NOPOS {
+            return l.clone();
+        }
+        self.last()
+    }
+
+    /// The last lexeme read that has a place.
+    fn last(&self) -> Lexeme {
+        self.toks[..self.pos.min(self.toks.len())]
+            .iter()
+            .rev()
+            .find(|l| l.col != NOPOS)
+            .or(self.toks.first())
+            .cloned()
+            .unwrap_or(Lexeme {
+                tok: Tok::Eof,
+                file: 0,
+                line: 0,
+                col: 0,
+            })
     }
 
     fn next(&mut self) -> Tok {
+        self.fill(0);
         let t = self.toks[self.pos].tok.clone();
         if t != Tok::Eof {
             self.pos += 1;
@@ -222,15 +380,45 @@ impl Parser<'_> {
         t
     }
 
-    fn err<T>(&self, msg: impl Into<String>) -> R<T> {
-        Err((self.line(), msg.into()))
+    /// An error at `at`.
+    pub(crate) fn error_at(&self, at: &Lexeme, msg: impl Into<String>) -> Error {
+        Error {
+            file: self.lx.files[at.file as usize].name.clone(),
+            line: at.line,
+            col: if at.col == NOPOS { 0 } else { at.col },
+            msg: msg.into(),
+        }
     }
 
-    fn at(&self, n: &str) -> bool {
+    /// An error at the next lexeme, unless the lexical processor had one.
+    pub(crate) fn error(&mut self, msg: impl Into<String>) -> Error {
+        if let Some(e) = self.stash.take() {
+            return e;
+        }
+        let at = self.here();
+        self.error_at(&at, msg)
+    }
+
+    fn err<T>(&mut self, msg: impl Into<String>) -> R<T> {
+        Err(self.error(msg))
+    }
+
+    /// Reports a diagnostic that doesn't stop the compilation.
+    pub(crate) fn diag(&mut self, sev: char, at: &Lexeme, msg: String) {
+        self.diags.push(Diag {
+            sev,
+            file: at.file,
+            line: at.line,
+            col: if at.col == NOPOS { 0 } else { at.col },
+            msg,
+        });
+    }
+
+    fn at(&mut self, n: &str) -> bool {
         is_name(self.peek(), n)
     }
 
-    fn at_punct(&self, c: char) -> bool {
+    fn at_punct(&mut self, c: char) -> bool {
         *self.peek() == Tok::Punct(c)
     }
 
@@ -254,7 +442,8 @@ impl Parser<'_> {
         if self.eat(n) {
             Ok(())
         } else {
-            self.err(format!("expected {n}, found {}", self.describe()))
+            let found = self.describe();
+            self.err(format!("expected {n}, found {found}"))
         }
     }
 
@@ -262,31 +451,145 @@ impl Parser<'_> {
         if self.eat_punct(c) {
             Ok(())
         } else {
-            self.err(format!("expected {c}, found {}", self.describe()))
+            let found = self.describe();
+            self.err(format!("expected {c}, found {found}"))
         }
     }
 
-    fn describe(&self) -> String {
+    fn describe(&mut self) -> String {
         match self.peek() {
-            Tok::Name(n) => n.clone(),
+            Tok::Name(n) | Tok::Bound(n, _) => n.clone(),
             Tok::Num(n) => n.to_string(),
             Tok::Str(s) => format!("'{}'", String::from_utf8_lossy(s)),
             Tok::Punct(c) => c.to_string(),
+            Tok::Percent => "%".into(),
             Tok::Eof => "the end of the file".into(),
         }
     }
 
+    /// Parses `toks` with `f`, which must read them all: a lexical
+    /// function's parameter.
+    pub(crate) fn subparse<T>(
+        &mut self,
+        mut toks: Vec<Lexeme>,
+        f: impl FnOnce(&mut Self) -> R<T>,
+    ) -> R<T> {
+        let end = Lexeme {
+            tok: Tok::Eof,
+            ..toks.last().cloned().unwrap_or_else(|| self.last())
+        };
+        toks.push(end);
+        let toks = std::mem::replace(&mut self.toks, toks);
+        let pos = std::mem::replace(&mut self.pos, 0);
+        self.sub += 1;
+        let mut r = f(self);
+        if r.is_ok() && *self.peek() != Tok::Eof {
+            let found = self.describe();
+            r = self.err(format!(
+                "unexpected {found} in a lexical function's parameter"
+            ));
+        }
+        self.sub -= 1;
+        self.toks = toks;
+        self.pos = pos;
+        r
+    }
+
+    /// Declares the names every module starts with: the predeclared
+    /// literals and the dialect macros.
+    fn predeclare(&mut self) {
+        for (name, v) in [
+            ("%BPVAL", 64),
+            ("%BPUNIT", 8),
+            ("%BPADDR", 64),
+            ("%UPVAL", 8),
+        ] {
+            self.scopes[0].insert(name.into(), self.m.syms.len());
+            self.m.syms.push(Sym {
+                name: name.into(),
+                asm: name.into(),
+                kind: Kind::Literal(v),
+            });
+        }
+        let at = Lexeme {
+            tok: Tok::Name("%REMAINING".into()),
+            file: 0,
+            line: 0,
+            col: NOPOS,
+        };
+        for (name, on) in [
+            ("%BLISS16", false),
+            ("%BLISS32", false),
+            ("%BLISS36", false),
+            ("%BLISS32E", false),
+            ("%BLISS64E", true),
+        ] {
+            let m = Macro {
+                name: name.into(),
+                kind: MacroKind::Conditional,
+                formals: Vec::new(),
+                fixed: 0,
+                defaults: Vec::new(),
+                body: if on {
+                    vec![Item::Lex(at.clone())]
+                } else {
+                    Vec::new()
+                },
+            };
+            self.scopes[0].insert(name.into(), self.m.syms.len());
+            self.m.syms.push(Sym {
+                name: name.into(),
+                asm: name.into(),
+                kind: Kind::Macro(Rc::new(m)),
+            });
+        }
+    }
+
+    /// Whether a %SWITCHES switch is on.
+    pub(crate) fn switch_on(&self, name: &str) -> bool {
+        // ponytail: the defaults only, until SWITCHES declarations matter.
+        matches!(
+            name,
+            "ERRS" | "OPTIMIZE" | "SAFE" | "NOZIP" | "CODE" | "NODEBUG" | "NOUNAMES"
+        )
+    }
+
+    /// Whether `e` is a link-time constant: an address of static data or a
+    /// routine, plus or minus a constant.
+    pub(crate) fn ltce(&self, e: &Expr) -> bool {
+        match e {
+            Expr::Num(_) => true,
+            Expr::Name(id) => matches!(
+                self.m.syms[*id].kind,
+                Kind::Routine { .. }
+                    | Kind::Data {
+                        storage: Storage::Own | Storage::Global | Storage::External,
+                        ..
+                    }
+            ),
+            Expr::Bin(BOp::Add, a, b) => {
+                (self.ltce(a) && fold(b).is_some()) || (fold(a).is_some() && self.ltce(b))
+            }
+            Expr::Bin(BOp::Sub, a, b) => self.ltce(a) && fold(b).is_some(),
+            Expr::Block(es, true) if es.len() == 1 => self.ltce(&es[0]),
+            e => fold(e).is_some(),
+        }
+    }
+
     fn name(&mut self) -> R<String> {
-        match self.next() {
-            Tok::Name(n) if !RESERVED.contains(&n.as_str()) => Ok(n),
+        match self.peek().clone() {
+            Tok::Name(n) | Tok::Bound(n, _) if !RESERVED.contains(&n.as_str()) => {
+                self.pos += 1;
+                Ok(n)
+            }
             _ => {
-                self.pos -= 1;
-                self.err(format!("expected a name, found {}", self.describe()))
+                let found = self.describe();
+                self.err(format!("expected a name, found {found}"))
             }
         }
     }
 
-    fn lookup(&self, name: &str) -> Option<usize> {
+    pub(crate) fn lookup(&self, name: &str) -> Option<usize> {
         self.scopes.iter().rev().find_map(|s| s.get(name).copied())
     }
 
@@ -361,6 +664,8 @@ impl Parser<'_> {
         if !paren {
             self.expect("BEGIN")?;
         }
+        // The module's block stays open in the listing to ELUDOM.
+        self.depth += 1;
         self.declarations()?;
         if paren {
             self.expect_punct(')')?;
@@ -431,19 +736,84 @@ impl Parser<'_> {
     }
 
     /// `REQUIRE 'file';`: the file's lexemes take the declaration's place.
-    // ponytail: messages about a require file's text give the line in it
-    // without its name, until the listing (step 5) tracks files.
     fn require(&mut self) -> R<()> {
         let Tok::Str(name) = self.next() else {
             return self.err("expected a file name after REQUIRE");
         };
         self.expect_punct(';')?;
-        let name = String::from_utf8_lossy(&name).into_owned();
-        let text = (self.load)(&name).map_err(|e| (self.line(), e))?;
-        let mut toks = crate::lex::lex(&text)?;
-        toks.pop(); // its Eof
-        self.toks.splice(self.pos..self.pos, toks);
-        Ok(())
+        self.require_file(&String::from_utf8_lossy(&name))
+    }
+
+    /// MACRO or KEYWORDMACRO definitions, after the word.
+    fn macros(&mut self, keyword: bool) -> R<()> {
+        loop {
+            let name = self.name()?;
+            let (mut formals, mut defaults) = (Vec::new(), Vec::new());
+            let mut kind = if keyword {
+                MacroKind::Keyword
+            } else {
+                MacroKind::Simple
+            };
+            if self.eat_punct('(') {
+                loop {
+                    formals.push(self.name()?);
+                    if keyword {
+                        if self.eat_punct('=') {
+                            // The default, kept as a macro body is.
+                            let ends = [Tok::Punct(','), Tok::Punct(')')];
+                            let (body, end) = self.macro_body(&[], &ends)?;
+                            defaults.push(
+                                body.into_iter()
+                                    .filter_map(|i| match i {
+                                        Item::Lex(l) => Some(l),
+                                        Item::Formal(_) => None,
+                                    })
+                                    .collect(),
+                            );
+                            if end == Tok::Punct(')') {
+                                break;
+                            }
+                            continue;
+                        }
+                        defaults.push(Vec::new());
+                    }
+                    if !self.eat_punct(',') {
+                        self.expect_punct(')')?;
+                        break;
+                    }
+                }
+            } else if keyword {
+                return self.err(format!("expected ( after keyword macro name {name}"));
+            }
+            let fixed = formals.len();
+            if !keyword && self.eat_punct('[') {
+                kind = MacroKind::Conditional;
+                if !self.eat_punct(']') {
+                    kind = MacroKind::Iterative;
+                    loop {
+                        formals.push(self.name()?);
+                        if !self.eat_punct(',') {
+                            break;
+                        }
+                    }
+                    self.expect_punct(']')?;
+                }
+            }
+            self.expect_punct('=')?;
+            let (body, _) = self.macro_body(&formals, &[])?;
+            let m = Macro {
+                name: name.clone(),
+                kind,
+                formals,
+                fixed,
+                defaults,
+                body,
+            };
+            self.declare(name, Kind::Macro(Rc::new(m)))?;
+            if !self.eat_punct(',') {
+                return Ok(());
+            }
+        }
     }
 
     /// One declaration, if one is next.
@@ -494,6 +864,22 @@ impl Parser<'_> {
                 self.pos += 1;
                 self.literals(false)?;
             }
+            "MACRO" | "KEYWORDMACRO" => {
+                self.pos += 1;
+                self.macros(word == "KEYWORDMACRO")?;
+            }
+            "COMPILETIME" => {
+                self.pos += 1;
+                loop {
+                    let name = self.name()?;
+                    self.expect_punct('=')?;
+                    let v = self.ctce()?;
+                    self.declare(name, Kind::Compiletime(v))?;
+                    if !self.eat_punct(',') {
+                        break;
+                    }
+                }
+            }
             "LABEL" => {
                 self.pos += 1;
                 loop {
@@ -504,8 +890,8 @@ impl Parser<'_> {
                     }
                 }
             }
-            "REGISTER" | "BIND" | "MACRO" | "KEYWORDMACRO" | "LINKAGE" | "STRUCTURE" | "FIELD"
-            | "PSECT" | "SWITCHES" | "LIBRARY" | "BUILTIN" | "UNDECLARE" | "ENABLE" => {
+            "REGISTER" | "BIND" | "LINKAGE" | "STRUCTURE" | "FIELD" | "PSECT" | "SWITCHES"
+            | "LIBRARY" | "BUILTIN" | "UNDECLARE" | "ENABLE" => {
                 return self.err(format!("{word} declarations are not supported yet"));
             }
             _ => return Ok(false),
@@ -551,10 +937,8 @@ impl Parser<'_> {
                     self.pos += 1;
                 }
                 if !self.at_punct(',') && !self.at_punct(';') {
-                    return self.err(format!(
-                        "attribute {} is not supported yet",
-                        self.describe()
-                    ));
+                    let found = self.describe();
+                    return self.err(format!("attribute {found} is not supported yet"));
                 }
             }
             let bytes = match vector {
@@ -755,10 +1139,64 @@ impl Parser<'_> {
     pub fn expr(&mut self) -> R<Expr> {
         let left = self.binary(0)?;
         if self.eat_punct('=') {
-            let right = self.expr()?;
+            let right = self.value()?;
             return Ok(Expr::Assign(Box::new(left), Box::new(right)));
         }
         Ok(left)
+    }
+
+    /// An expression whose value is used: an IF without ELSE gets the
+    /// informational BLISSA64 gives.
+    fn value(&mut self) -> R<Expr> {
+        let e = self.expr()?;
+        if matches!(e, Expr::If(_, _, None)) {
+            let at = self.last();
+            self.diag(
+                'I',
+                &at,
+                "Null expression appears in value-required context".into(),
+            );
+        }
+        Ok(e)
+    }
+
+    /// Whether the next lexeme can start an operand.
+    fn operand_next(&mut self) -> bool {
+        match self.peek() {
+            Tok::Num(_) | Tok::Str(_) | Tok::Bound(..) => true,
+            Tok::Punct(c) => "(.+-".contains(*c),
+            Tok::Name(n) => {
+                !RESERVED.contains(&n.as_str())
+                    || [
+                        "BEGIN",
+                        "IF",
+                        "WHILE",
+                        "UNTIL",
+                        "DO",
+                        "INCR",
+                        "INCRA",
+                        "INCRU",
+                        "DECR",
+                        "DECRA",
+                        "DECRU",
+                        "CASE",
+                        "SELECT",
+                        "SELECTA",
+                        "SELECTU",
+                        "SELECTONE",
+                        "SELECTONEA",
+                        "SELECTONEU",
+                        "LEAVE",
+                        "EXITLOOP",
+                        "RETURN",
+                        "NOT",
+                        "PLIT",
+                        "UPLIT",
+                    ]
+                    .contains(&n.as_str())
+            }
+            Tok::Percent | Tok::Eof => false,
+        }
     }
 
     /// Binary operators of `level` and tighter: EQV and XOR, OR, AND, NOT,
@@ -776,13 +1214,31 @@ impl Parser<'_> {
         let mut left = self.binary(level + 1)?;
         while let Some(op) = self.operator(level) {
             self.pos += 1;
-            let right = self.binary(level + 1)?;
+            let right = if self.operand_next() {
+                self.binary(level + 1)?
+            } else {
+                let op = self.toks[self.pos - 1].tok.clone();
+                let at = self.here();
+                let op = match op {
+                    Tok::Punct(c) => c.to_string(),
+                    Tok::Name(n) => n,
+                    _ => String::new(),
+                };
+                self.diag(
+                    'W',
+                    &at,
+                    format!(
+                        "Missing operand following \"{op}\".  A literal zero has been inserted"
+                    ),
+                );
+                Expr::Num(0)
+            };
             left = Expr::Bin(op, Box::new(left), Box::new(right));
         }
         Ok(left)
     }
 
-    fn operator(&self, level: u8) -> Option<BOp> {
+    fn operator(&mut self, level: u8) -> Option<BOp> {
         let t = self.peek();
         let op = match t {
             Tok::Punct('+') => BOp::Add,
@@ -845,7 +1301,7 @@ impl Parser<'_> {
                 let mut args = Vec::new();
                 if !self.eat_punct(')') {
                     loop {
-                        args.push(self.expr()?);
+                        args.push(self.value()?);
                         if !self.eat_punct(',') {
                             break;
                         }
@@ -853,7 +1309,12 @@ impl Parser<'_> {
                     self.expect_punct(')')?;
                 }
                 e = Expr::Call(Box::new(e), args);
-            } else if self.eat_punct('<') {
+            } else if self.at_punct('<') {
+                if matches!(e, Expr::Index(..)) {
+                    let at = self.here();
+                    self.diag('W', &at, "Two consecutive field selectors".into());
+                }
+                self.pos += 1;
                 let pos = self.expr()?;
                 self.expect_punct(',')?;
                 let size = self.expr()?;
@@ -889,12 +1350,13 @@ impl Parser<'_> {
     }
 
     fn primary(&mut self) -> R<Expr> {
-        let line = self.line();
+        let at = self.here();
         match self.next() {
             Tok::Num(n) => Ok(Expr::Num(n)),
             Tok::Str(s) => string_value(&s)
                 .map(Expr::Num)
-                .ok_or((line, "string too long for a value".into())),
+                .ok_or_else(|| self.error_at(&at, "string too long for a value")),
+            Tok::Bound(n, id) => self.named(&n, id),
             Tok::Punct('(') => self.block(')'),
             Tok::Name(n) => match n.as_str() {
                 "BEGIN" => self.block('E'),
@@ -960,37 +1422,33 @@ impl Parser<'_> {
                     Tok::Str(s) => Ok(Expr::Ascid(s)),
                     _ => self.err("expected a string after %ASCID"),
                 },
-                "%ASCII" => match self.next() {
-                    Tok::Str(s) => string_value(&s)
-                        .map(Expr::Num)
-                        .ok_or((line, "string too long for a value".into())),
-                    _ => self.err("expected a string after %ASCII"),
-                },
                 _ if RESERVED.contains(&n.as_str()) => {
-                    Err((line, format!("{n} can't start an expression")))
+                    Err(self.error_at(&at, format!("{n} can't start an expression")))
                 }
-                _ if n.starts_with('%') => Err((line, format!("{n} is not supported yet"))),
-                _ => {
-                    let id = self
-                        .lookup(&n)
-                        .ok_or((line, format!("{n} is not declared")))?;
-                    match self.m.syms[id].kind.clone() {
-                        Kind::Literal(v) => Ok(Expr::Num(v)),
-                        Kind::Label if self.eat_punct(':') => {
-                            Ok(Expr::Labeled(id, Box::new(self.expr()?)))
-                        }
-                        Kind::Label => Err((line, format!("label {n} used as a value"))),
-                        _ => Ok(Expr::Name(id)),
+                _ => match self.lookup(&n) {
+                    Some(id) => self.named(&n, id),
+                    None if n.starts_with('%') => {
+                        Err(self.error_at(&at, format!("{n} is not supported yet")))
                     }
-                }
+                    None => Err(self.error_at(&at, format!("Undeclared name:  {n}"))),
+                },
             },
-            _ => Err((
-                line,
-                format!("expected an expression, found {}", {
-                    self.pos -= 1;
-                    self.describe()
-                }),
-            )),
+            _ => {
+                self.pos -= 1;
+                let found = self.describe();
+                self.err(format!("expected an expression, found {found}"))
+            }
+        }
+    }
+
+    /// A use of name `n`, declared as `id`.
+    fn named(&mut self, n: &str, id: usize) -> R<Expr> {
+        match self.m.syms[id].kind.clone() {
+            Kind::Literal(v) | Kind::Compiletime(v) => Ok(Expr::Num(v)),
+            Kind::Label if self.eat_punct(':') => Ok(Expr::Labeled(id, Box::new(self.expr()?))),
+            Kind::Label => self.err(format!("label {n} used as a value")),
+            Kind::Macro(_) => self.err(format!("macro {n} used as a value")),
+            _ => Ok(Expr::Name(id)),
         }
     }
 
@@ -1011,10 +1469,11 @@ impl Parser<'_> {
     /// separated by semicolons, up to END (`close` 'E') or `)`.
     fn block(&mut self, close: char) -> R<Expr> {
         self.scopes.push(HashMap::new());
+        self.depth += 1;
         self.declarations()?;
         let mut exprs = Vec::new();
         let mut value = false;
-        let at_close = |p: &Self| {
+        let at_close = |p: &mut Self| {
             if close == 'E' {
                 p.at("END")
             } else {
@@ -1034,6 +1493,10 @@ impl Parser<'_> {
         } else {
             self.expect_punct(')')?;
         }
+        // BLISSA64 closes the block in the listing once it has read the
+        // lexeme after it.
+        self.peek();
+        self.depth -= 1;
         self.scopes.pop();
         Ok(Expr::Block(exprs, value))
     }
@@ -1162,10 +1625,10 @@ impl Parser<'_> {
     }
 
     /// A compile-time constant expression.
-    fn ctce(&mut self) -> R<i64> {
-        let line = self.line();
+    pub(crate) fn ctce(&mut self) -> R<i64> {
+        let at = self.here();
         let e = self.expr()?;
-        fold(&e).ok_or((line, "expected a compile-time constant".into()))
+        fold(&e).ok_or_else(|| self.error_at(&at, "expected a compile-time constant"))
     }
 }
 
@@ -1242,12 +1705,13 @@ pub fn shift(a: i64, n: i64) -> i64 {
 }
 
 /// Words that can't name anything.
-const RESERVED: &[&str] = &[
+pub const RESERVED: &[&str] = &[
     "ALWAYS",
     "AND",
     "BEGIN",
     "BY",
     "CASE",
+    "COMPILETIME",
     "DECR",
     "DECRA",
     "DECRU",
@@ -1285,6 +1749,8 @@ const RESERVED: &[&str] = &[
     "LSS",
     "LSSA",
     "LSSU",
+    "MACRO",
+    "KEYWORDMACRO",
     "MOD",
     "MODULE",
     "NEQ",

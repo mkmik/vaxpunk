@@ -1,0 +1,73 @@
+MODULE LEXICAL (MAIN = MAIN, IDENT = 'V1.0') =
+BEGIN
+! Lexical functions: strings, names, tests, conditionals and compile-time
+! names, printed into the listing with %PRINT and at run time with PRINT.
+REQUIRE 'PRINT';
+
+COMPILETIME
+    CT = 0,
+    LIMIT = 3;
+
+LITERAL
+    L5 = 5,
+    NEG = -16;
+
+MACRO
+    BUMP = %ASSIGN(CT, CT + 1) %,
+    STR (X) = %STRING(X) %,
+    CAT (A, B) = %NAME(A, B) %;
+
+OWN
+    ALPHA_BETA : INITIAL(77);
+
+%PRINT('strings: ', %STRING('ABC', 23, %B'-111', , PHI))
+%PRINT(%EXACTSTRING(8, %C'*', 'ABC', 23))
+%PRINT(%EXACTSTRING(2, %C'*', 'ABCDEF'))
+%PRINT(%CHAR(72, 105))
+%PRINT('count ', %NUMBER(%CHARCOUNT('A''C', 23)), ' ', %CHARCOUNT(%ASCIC 'AB'))
+%PRINT(%STRING(%EXPLODE('XYZ')))
+%PRINT('null ', %NULL(), ' ', %NULL(,,), ' ', %NULL(,A))
+%PRINT('identical ', %IDENTICAL(A + B, A+B), ' ', %IDENTICAL(%O'77', 63), ' ',
+    %IDENTICAL(alpha, ALPHA), ' ', %IDENTICAL('A', 'a'), ' ', %IDENTICAL(32, '32'))
+%PRINT('isstring ', %ISSTRING('A', 'B'), ' ', %ISSTRING('A', 1), ' ', %ISSTRING(%STRING(1)))
+%PRINT('ctce ', %CTCE(L5), ' ', %CTCE(L5 + 1, 2), ' ', %CTCE(ALPHA_BETA))
+%PRINT('ltce ', %LTCE(ALPHA_BETA), ' ', %LTCE(L5), ' ', %LTCE(ALPHA_BETA + 8))
+%PRINT('nbits ', %NBITSU(7, 2), ' ', %NBITS(7, 2), ' ', %NBITS(-8), ' ', %NBITSU(255),
+    ' ', %NBITS(0), ' ', %NBITSU(-1), ' ', %NBITS(-1), ' ', %NBITSU(0))
+%PRINT('number ', %NUMBER('-180'), ' ', %NUMBER(%O'100'), ' ', %NUMBER(NEG), ' ', %NUMBER(L5))
+%PRINT('declared ', %DECLARED(L5), ' ', %DECLARED(NOPE), ' ', %DECLARED(BUMP))
+%PRINT('bliss ', %BLISS(BLISS32), %BLISS(BLISS64E), %BLISS(BLISS32E), ' variant ', %VARIANT)
+%PRINT('remove ', %STRING(%REMOVE((A))), %STRING(%REMOVE([B])), %STRING(%REMOVE(<C>)))
+%PRINT('values ', %NUMBER(%BPVAL), ' ', %NUMBER(%UPVAL), ' ', %NUMBER(%BPUNIT), ' ',
+    %NUMBER(%BPADDR), ' names ', %BPVAL, ' ', %UPVAL)
+%PRINT('module ', %STRING(%MODULE))
+BUMP
+BUMP
+%PRINT('ct ', %NUMBER(CT))
+%IF CT EQL 2 %THEN %PRINT('ct is two') %ELSE %PRINT('ct is not two') %FI
+%IF %BLISS(BLISS64E) %THEN %PRINT('64') %FI
+%IF 0 %THEN %ERROR('skipped') %FI
+%BLISS32(%PRINT('in BLISS-32'))
+%BLISS64E(%PRINT('in BLISS-64'))
+%PRINT(STR(HELLO), ' ', %STRING(%QUOTE STR), ' ', %STRING(%QUOTENAME('ST', 'R')))
+%INFORM('an inform')
+%WARN('a warning')
+
+ROUTINE MAIN =
+    BEGIN
+    PRINT(%CHARCOUNT('HELLO', 12));
+    PRINT(.CAT(ALPHA, _BETA));
+    PRINT(%NUMBER(CT));
+    PRINT(CT);
+    PRINT(%ASCII 'AB');
+    PRINT(%C %ASCII 'Q');
+    PRINT(%O %STRING(23));
+    PRINT(%X %STRING('F', 'F'));
+    PRINT(%NBITSU(LIMIT * 100));
+    PRINT(%IF %SWITCHES(NOZIP) %THEN 1 %ELSE 2 %FI);
+    PRINT(%IF %SWITCHES(ZIP) %THEN 1 %ELSE 2 %FI);
+    1
+    END;
+
+END
+ELUDOM

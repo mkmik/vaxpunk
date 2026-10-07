@@ -1,43 +1,54 @@
 //! The lexer: source text into lexemes (LRM chapter 2). Names are folded
-//! to upper case; numbers with a radix (`%X'1F'`), characters (`%C'A'`)
-//! and quoted strings are read here; comments (`! ...` and `%( ... )%`)
-//! are dropped.
+//! to upper case, decimal numbers and quoted strings read, comments
+//! (`! ...` and `%( ... )%`) dropped. What a `%` name does, a radix
+//! (`%X'1F'`) or a lexical function, is the lexical processor's.
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum Tok {
     /// A name or a reserved word, upper case; `%NAME` keeps its `%`.
     Name(String),
+    /// A name bound to a declaration ahead of its use, by `%UNQUOTE`.
+    Bound(String, usize),
     Num(i64),
     /// A quoted string, `''` read as one quote.
     Str(Vec<u8>),
     /// A special character: `+ - * / . = , ; : ( ) [ ] < > ^`.
     Punct(char),
+    /// `%` alone, which ends a macro body.
+    Percent,
     Eof,
 }
 
+/// A lexeme and where it is: the file's number, the line in it and the
+/// column, from 0.
 #[derive(Clone, Debug)]
 pub struct Lexeme {
     pub tok: Tok,
+    pub file: u16,
     pub line: u32,
+    pub col: u32,
 }
 
-/// Splits `source` into lexemes, ending with `Eof`.
-pub fn lex(source: &str) -> Result<Vec<Lexeme>, (u32, String)> {
+/// Splits `source`, file number `file`, into lexemes, ending with `Eof`.
+pub fn lex(source: &str, file: u16) -> Result<Vec<Lexeme>, (u32, String)> {
     let s = source.as_bytes();
-    let (mut i, mut line, mut out) = (0, 1u32, Vec::new());
+    let (mut i, mut line, mut bol, mut out) = (0, 1u32, 0, Vec::new());
     while i < s.len() {
         let c = s[i];
-        let start_line = line;
+        let (start_line, col) = (line, (i - bol) as u32);
         let mut push = |tok| {
             out.push(Lexeme {
                 tok,
+                file,
                 line: start_line,
+                col,
             })
         };
         match c {
             b'\n' => {
                 line += 1;
                 i += 1;
+                bol = i;
             }
             b' ' | b'\t' | b'\r' | b'\x0c' | b'\x0b' => i += 1,
             b'!' => {
@@ -51,7 +62,10 @@ pub fn lex(source: &str) -> Result<Vec<Lexeme>, (u32, String)> {
                     match s.get(i) {
                         None => return Err((start_line, "unterminated %( comment".into())),
                         Some(b')') if s.get(i + 1) == Some(&b'%') => break i += 2,
-                        Some(b'\n') => line += 1,
+                        Some(b'\n') => {
+                            line += 1;
+                            bol = i + 1;
+                        }
                         _ => {}
                     }
                     i += 1;
@@ -72,6 +86,13 @@ pub fn lex(source: &str) -> Result<Vec<Lexeme>, (u32, String)> {
                     number(text, 10).ok_or((line, format!("bad number {text}")))?,
                 ));
             }
+            b'%' if !s
+                .get(i + 1)
+                .is_some_and(|c| c.is_ascii_alphabetic() || *c == b'$' || *c == b'_') =>
+            {
+                push(Tok::Percent);
+                i += 1;
+            }
             b'%' | b'$' | b'_' | b'A'..=b'Z' | b'a'..=b'z' => {
                 let start = i;
                 i += 1;
@@ -79,37 +100,7 @@ pub fn lex(source: &str) -> Result<Vec<Lexeme>, (u32, String)> {
                 {
                     i += 1;
                 }
-                let name = source[start..i].to_ascii_uppercase();
-                let radix = match name.as_str() {
-                    "%B" => Some(2),
-                    "%O" => Some(8),
-                    "%X" => Some(16),
-                    "%DECIMAL" => Some(10),
-                    _ => None,
-                };
-                if let Some(radix) = radix.filter(|_| s.get(i) == Some(&b'\'')) {
-                    let (text, next) = quoted(s, i).ok_or((line, "unterminated number".into()))?;
-                    let text = String::from_utf8_lossy(&text).trim().to_string();
-                    let (neg, digits) = match text.strip_prefix('-') {
-                        Some(d) => (true, d),
-                        None => (false, text.strip_prefix('+').unwrap_or(&text)),
-                    };
-                    let n = number(digits.trim(), radix)
-                        .ok_or((line, format!("bad number {name}'{text}'")))?;
-                    push(Tok::Num(if neg { n.wrapping_neg() } else { n }));
-                    i = next;
-                } else if name == "%C" && s.get(i) == Some(&b'\'') {
-                    let (text, next) = quoted(s, i).ok_or((line, "unterminated %C".into()))?;
-                    if text.len() != 1 {
-                        return Err((line, "%C takes one character".into()));
-                    }
-                    push(Tok::Num(text[0].into()));
-                    i = next;
-                } else if name == "%" {
-                    return Err((line, "% alone".into()));
-                } else {
-                    push(Tok::Name(name));
-                }
+                push(Tok::Name(source[start..i].to_ascii_uppercase()));
             }
             b'+' | b'-' | b'*' | b'/' | b'.' | b'=' | b',' | b';' | b':' | b'(' | b')' | b'['
             | b']' | b'<' | b'>' | b'^' => {
@@ -121,7 +112,9 @@ pub fn lex(source: &str) -> Result<Vec<Lexeme>, (u32, String)> {
     }
     out.push(Lexeme {
         tok: Tok::Eof,
+        file,
         line,
+        col: (i - bol) as u32,
     });
     Ok(out)
 }
@@ -147,7 +140,7 @@ fn quoted(s: &[u8], mut i: usize) -> Option<(Vec<u8>, usize)> {
 }
 
 /// A number in `radix`, wrapping at 64 bits as the fullword does.
-fn number(text: &str, radix: u32) -> Option<i64> {
+pub fn number(text: &str, radix: u32) -> Option<i64> {
     if text.is_empty() {
         return None;
     }
@@ -165,14 +158,14 @@ mod tests {
     use super::*;
 
     fn toks(s: &str) -> Vec<Tok> {
-        lex(s).unwrap().into_iter().map(|l| l.tok).collect()
+        lex(s, 0).unwrap().into_iter().map(|l| l.tok).collect()
     }
 
     #[test]
     fn lexemes() {
         use Tok::*;
         assert_eq!(
-            toks("Own x: long; ! comment\n%( more\n )% .x = %X'1F' + %c'A' - 'it''s'"),
+            toks("Own x: long; ! comment\n%( more\n )% .x = %X'1F' - 'it''s' %;"),
             vec![
                 Name("OWN".into()),
                 Name("X".into()),
@@ -182,18 +175,16 @@ mod tests {
                 Punct('.'),
                 Name("X".into()),
                 Punct('='),
-                Num(31),
-                Punct('+'),
-                Num(65),
+                Name("%X".into()),
+                Str(b"1F".to_vec()),
                 Punct('-'),
                 Str(b"it's".to_vec()),
+                Percent,
+                Punct(';'),
                 Eof
             ]
         );
-        assert_eq!(
-            toks("%O'-17' %ASCID"),
-            vec![Num(-15), Name("%ASCID".into()), Eof]
-        );
-        assert_eq!(lex("A\n\nB").unwrap()[1].line, 3);
+        let l = lex("A\n\n  B", 0).unwrap();
+        assert_eq!((l[1].line, l[1].col), (3, 2));
     }
 }

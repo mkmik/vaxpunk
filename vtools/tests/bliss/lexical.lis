@@ -1,0 +1,185 @@
+                                Source Listing                   DD-MMM-YYYY HH:MM:SS  BLISS-64E V1.11-007-48G4L         Page 1
+                                                                 DD-MMM-YYYY HH:MM:SS  SYS$SYSDEVICE:[ORACLE]LEXICAL.B64;1
+
+    0	      1 MODULE LEXICAL (MAIN = MAIN, IDENT = 'V1.0') =
+    0	      2 BEGIN
+    1	      3 ! Lexical functions: strings, names, tests, conditionals and compile-time
+    1	      4 ! names, printed into the listing with %PRINT and at run time with PRINT.
+    1	      5 REQUIRE 'PRINT';
+ R  1	      6 ! PRINT: prints a value as a signed decimal and as 16 hex digits, on a line
+ R  1	      7 ! of its own, through LIB$PUT_OUTPUT. The behaviour tests print with it,
+ R  1	      8 ! here under vrun and on OpenVMS for the oracle.
+ R  1	      9 
+ R  1	     10 EXTERNAL ROUTINE
+ R  1	     11     LIB$PUT_OUTPUT;
+ R  1	     12 
+ R  1	     13 ROUTINE PRINT (V) : NOVALUE =
+ R  1	     14     BEGIN
+ R  2	     15     LOCAL
+ R  2	     16         BUF : VECTOR[48, BYTE],
+ R  2	     17         DESC : VECTOR[2, LONG],
+ R  2	     18         X,
+ R  2	     19         I;
+ R  2	     20     I = 48;
+ R  2	     21     X = .V;
+ R  2	     22     INCR K FROM 1 TO 16 DO
+ R  2	     23         BEGIN
+ R  3	     24         LOCAL D;
+ R  3	     25         D = .X AND 15;
+ R  3	     26         I = .I - 1;
+ R  3	     27         BUF[.I] = (IF .D LSS 10 THEN %C'0' + .D ELSE %C'A' + .D - 10);
+ R  3	     28         X = .X ^ -4 AND %X'0FFFFFFFFFFFFFFF'
+ R  3	     29         END;
+ R  2	     30     I = .I - 1;
+ R  2	     31     BUF[.I] = %C' ';
+ R  2	     32     ! Digits from the remainders, negative for a negative value, so that
+ R  2	     33     ! the most negative one prints too.
+ R  2	     34     X = .V;
+ R  2	     35     DO
+ R  2	     36         BEGIN
+ R  3	     37         LOCAL D;
+ R  3	     38         D = .X - (.X / 10) * 10;
+ R  3	     39         IF .D LSS 0 THEN D = -.D;
+ R  3	     40         I = .I - 1;
+ R  3	     41         BUF[.I] = %C'0' + .D;
+ R  3	     42         X = .X / 10
+ R  3	     43         END
+ R  3	     44     UNTIL .X EQL 0;
+ R  2	     45     IF .V LSS 0
+ R  2	     46     THEN
+ R  2	     47         BEGIN
+ R  3	     48         I = .I - 1;
+ R  3	     49         BUF[.I] = %C'-'
+ R  3	     50         END;
+ R  2	     51     DESC[0] = 48 - .I + %X'010E0000';
+ R  2	     52     DESC[1] = BUF[.I];
+ R  2	     53     LIB$PUT_OUTPUT(DESC)
+ R  2	     54     END;
+    1	     55 
+    1	     56 COMPILETIME
+    1	     57     CT = 0,
+
+LEXICAL                         Source Listing                   DD-MMM-YYYY HH:MM:SS  BLISS-64E V1.11-007-48G4L         Page 2
+V1.0                                                             DD-MMM-YYYY HH:MM:SS  SYS$SYSDEVICE:[ORACLE]LEXICAL.B64;1
+
+    1	     58     LIMIT = 3;
+    1	     59 
+    1	     60 LITERAL
+    1	     61     L5 = 5,
+    1	     62     NEG = -16;
+    1	     63 
+    1	     64 MACRO
+    1	     65     BUMP = %ASSIGN(CT, CT + 1) %,
+    1	     66     STR (X) = %STRING(X) %,
+    1	     67     CAT (A, B) = %NAME(A, B) %;
+    1	     68 
+    1	     69 OWN
+    1	     70     ALPHA_BETA : INITIAL(77);
+    1	     71 
+    1	     72 %PRINT('strings: ', %STRING('ABC', 23, %B'-111', , PHI))
+
+LEXICAL                         Source Listing                   DD-MMM-YYYY HH:MM:SS  BLISS-64E V1.11-007-48G4L         Page 3
+V1.0                                                             DD-MMM-YYYY HH:MM:SS  SYS$SYSDEVICE:[ORACLE]LEXICAL.B64;1
+
+		; %PRINT:	strings: ABC23-7PHI
+    1	     73 %PRINT(%EXACTSTRING(8, %C'*', 'ABC', 23))
+		; %PRINT:	ABC23***
+    1	     74 %PRINT(%EXACTSTRING(2, %C'*', 'ABCDEF'))
+		; %PRINT:	AB
+    1	     75 %PRINT(%CHAR(72, 105))
+		; %PRINT:	Hi
+    1	     76 %PRINT('count ', %NUMBER(%CHARCOUNT('A''C', 23)), ' ', %CHARCOUNT(%ASCIC 'AB'))
+		; %PRINT:	count 5 3
+    1	     77 %PRINT(%STRING(%EXPLODE('XYZ')))
+		; %PRINT:	XYZ
+    1	     78 %PRINT('null ', %NULL(), ' ', %NULL(,,), ' ', %NULL(,A))
+		; %PRINT:	null 1 1 0
+    1	     79 %PRINT('identical ', %IDENTICAL(A + B, A+B), ' ', %IDENTICAL(%O'77', 63), ' ',
+L   1	     80     %IDENTICAL(alpha, ALPHA), ' ', %IDENTICAL('A', 'a'), ' ', %IDENTICAL(32, '32'))
+		; %PRINT:	identical 1 1 1 0 0
+    1	     81 %PRINT('isstring ', %ISSTRING('A', 'B'), ' ', %ISSTRING('A', 1), ' ', %ISSTRING(%STRING(1)))
+		; %PRINT:	isstring 1 0 1
+    1	     82 %PRINT('ctce ', %CTCE(L5), ' ', %CTCE(L5 + 1, 2), ' ', %CTCE(ALPHA_BETA))
+		; %PRINT:	ctce 1 1 0
+    1	     83 %PRINT('ltce ', %LTCE(ALPHA_BETA), ' ', %LTCE(L5), ' ', %LTCE(ALPHA_BETA + 8))
+		; %PRINT:	ltce 1 1 1
+    1	     84 %PRINT('nbits ', %NBITSU(7, 2), ' ', %NBITS(7, 2), ' ', %NBITS(-8), ' ', %NBITSU(255),
+L   1	     85     ' ', %NBITS(0), ' ', %NBITSU(-1), ' ', %NBITS(-1), ' ', %NBITSU(0))
+		; %PRINT:	nbits 3 4 4 8 1 64 1 1
+    1	     86 %PRINT('number ', %NUMBER('-180'), ' ', %NUMBER(%O'100'), ' ', %NUMBER(NEG), ' ', %NUMBER(L5))
+		; %PRINT:	number -180 64 -16 5
+    1	     87 %PRINT('declared ', %DECLARED(L5), ' ', %DECLARED(NOPE), ' ', %DECLARED(BUMP))
+		............................................................................1  
+%BLS64-W-TEXT, (1) Illegal parameter in call to lexical function %DECLARED
+
+		;;    [BUMP]= 
+		; %PRINT:	declared 1 0 0
+    1	     88 %PRINT('bliss ', %BLISS(BLISS32), %BLISS(BLISS64E), %BLISS(BLISS32E), ' variant ', %VARIANT)
+		; %PRINT:	bliss 010 variant 0
+    1	     89 %PRINT('remove ', %STRING(%REMOVE((A))), %STRING(%REMOVE([B])), %STRING(%REMOVE(<C>)))
+		; %PRINT:	remove ABC
+    1	     90 %PRINT('values ', %NUMBER(%BPVAL), ' ', %NUMBER(%UPVAL), ' ', %NUMBER(%BPUNIT), ' ',
+L   1	     91     %NUMBER(%BPADDR), ' names ', %BPVAL, ' ', %UPVAL)
+		; %PRINT:	values 64 8 8 64 names %BPVAL %UPVAL
+    1	     92 %PRINT('module ', %STRING(%MODULE))
+		; %PRINT:	module LEXICAL
+    1	     93 BUMP
+		;;    [BUMP]= 
+    1	     94 BUMP
+		;;    [BUMP]= 
+    1	     95 %PRINT('ct ', %NUMBER(CT))
+		; %PRINT:	ct 3
+    1	     96 %IF CT EQL 2 %THEN %PRINT('ct is two') %ELSE %PRINT('ct is not two') %FI
+		; %PRINT:	ct is not two
+    1	     97 %IF %BLISS(BLISS64E) %THEN %PRINT('64') %FI
+		; %PRINT:	64
+    1	     98 %IF 0 %THEN %ERROR('skipped') %FI
+    1	     99 %BLISS32(%PRINT('in BLISS-32'))
+		; %PRINT:	in BLISS-32
+		;;    [%BLISS32]= null
+    1	    100 %BLISS64E(%PRINT('in BLISS-64'))
+
+LEXICAL                         Source Listing                   DD-MMM-YYYY HH:MM:SS  BLISS-64E V1.11-007-48G4L         Page 4
+V1.0                                                             DD-MMM-YYYY HH:MM:SS  SYS$SYSDEVICE:[ORACLE]LEXICAL.B64;1
+
+		; %PRINT:	in BLISS-64
+		;;    [%BLISS64E]= null
+    1	    101 %PRINT(STR(HELLO), ' ', %STRING(%QUOTE STR), ' ', %STRING(%QUOTENAME('ST', 'R')))
+		;;    [STR]=  'HELLO'
+		; %PRINT:	HELLO STR STR
+    1	    102 %INFORM('an inform')
+		........1            
+%BLS64-I-TEXT, (1) %INFORM:	an inform
+
+    1	    103 %WARN('a warning')
+		......1            
+%BLS64-W-TEXT, (1) %WARN:	a warning
+
+    1	    104 
+    1	    105 ROUTINE MAIN =
+    1	    106     BEGIN
+    2	    107     PRINT(%CHARCOUNT('HELLO', 12));
+    2	    108     PRINT(.CAT(ALPHA, _BETA));
+		;;    [CAT]=  ALPHA_BETA
+    2	    109     PRINT(%NUMBER(CT));
+    2	    110     PRINT(CT);
+    2	    111     PRINT(%ASCII 'AB');
+    2	    112     PRINT(%C %ASCII 'Q');
+    2	    113     PRINT(%O %STRING(23));
+    2	    114     PRINT(%X %STRING('F', 'F'));
+    2	    115     PRINT(%NBITSU(LIMIT * 100));
+    2	    116     PRINT(%IF %SWITCHES(NOZIP) %THEN 1 %ELSE 2 %FI);
+    2	    117     PRINT(%IF %SWITCHES(ZIP) %THEN 1 %ELSE 2 %FI);
+    2	    118     1
+    2	    119     END;
+    1	    120 
+    1	    121 END
+    1	    122 ELUDOM
+
+
+                                Source Listing                   DD-MMM-YYYY HH:MM:SS  BLISS-64E V1.11-007-48G4L         Page 5
+                                Source Listing                   DD-MMM-YYYY HH:MM:SS  SYS$SYSDEVICE:[ORACLE]LEXICAL.B64;1
+
+COMMAND LINE:
+
+BLISS/A64/LIST/SOURCE_LIST=(EXPAND_MACROS,REQUIRE)/NOMACHINE_CODE LEXICAL.B64
