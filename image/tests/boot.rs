@@ -5,7 +5,9 @@
 //! within its deadline; one that runs out says which phase stalled, on
 //! what, and the log's last line. DCL reads what was typed ahead a line at
 //! a time. Once this QEMU is gone, ods-image checks the data disk's volume
-//! and finds the files there, WELCOME.TXT twice in the one APPEND added to.
+//! and finds the files there, WELCOME.TXT twice in the one APPEND added to,
+//! and the files BACKUP restored as they were, from a save set whose
+//! blocks' CRCs are right.
 
 use std::fs;
 use std::io::Write;
@@ -424,6 +426,44 @@ const TERMINAL: Phase = Phase {
     ],
 };
 
+/// BACKUP saves DKB0:[000000]'s text files in a save set, lists it, and
+/// restores them into [RESTORED], each with its version, owner and
+/// protection: DATA.TXT is [200,1]'s now, with (W).
+const BACKUP: Phase = Phase {
+    name: "backup",
+    secs: 20,
+    steps: &[
+        (
+            "   Broadcast          No Readsync        No Form            Fulldup",
+            1,
+            concat!(
+                "BACKUP/LOG DKB0:[000000]*.TXT DKB0:[000000]TXT.BCK/SAVE_SET\r",
+                "BACKUP/LIST DKB0:[000000]TXT.BCK/SAVE_SET\r",
+            ),
+        ),
+        (
+            "End of save set",
+            1,
+            concat!(
+                "CREATE/DIRECTORY DKB0:[RESTORED]\r",
+                "BACKUP/LOG DKB0:[000000]TXT.BCK/SAVE_SET DKB0:[RESTORED]\r",
+                "DIRECTORY/OWNER/PROTECTION DKB0:[RESTORED]\r",
+            ),
+        ),
+    ],
+    lines: &[
+        "%BACKUP-S-COPIED, copied DKB0:[000000]DATA.TXT;1",
+        "%BACKUP-S-COPIED, copied DKB0:[000000]NEW.TXT;2",
+        "Command:           BACKUP/LOG DKB0:[000000]*.TXT DKB0:[000000]TXT.BCK/SAVE_SET",
+        "[000000]NEW.TXT;1",
+        "Total of 3 files",
+        "%BACKUP-S-CREATED, created DKB0:[RESTORED]NEW.TXT;1",
+        "Directory DKB0:[RESTORED]",
+        "DATA.TXT;1          [200,1]             (RWED,RWED,RE,)",
+        "NEW.TXT;2           [1,4]               (RWED,RWED,RE,RE)",
+    ],
+};
+
 /// The processes STARTUP and SNOOP ran, which print as they go, done long
 /// before: STARTUP's SLEEPER and SVCTEST's NAPPER say they hibernate
 /// before SLEEPER does, and the CPU then idles, taking clock interrupts.
@@ -461,6 +501,7 @@ const PHASES: &[Phase] = &[
     PRIVILEGES,
     PROTECTION,
     TERMINAL,
+    BACKUP,
     STARTUP,
 ];
 
@@ -619,4 +660,57 @@ fn boot() {
     assert!(data.contains("and the rest of what INITIALIZE made."));
     assert_eq!(data.matches("Welcome to vaxpunk",).count(), 2, "{data}");
     assert!(img.lookup("[SUB.DEEP]DEEP.TXT").is_ok());
+    for name in ["DATA.TXT;1", "NEW.TXT;1", "NEW.TXT;2"] {
+        let saved = img.lookup(&format!("[000000]{name}")).unwrap();
+        let restored = img.lookup(&format!("[RESTORED]{name}")).unwrap();
+        let (saved, restored) = (bytes(&mut img, saved), bytes(&mut img, restored));
+        assert_eq!(saved, restored, "[RESTORED]{name}");
+    }
+    let fid = img.lookup("[000000]TXT.BCK").unwrap();
+    save_set(&bytes(&mut img, fid));
+}
+
+/// A file's bytes, up to its end of file.
+fn bytes(img: &mut Image, fid: ods_image::Fid) -> Vec<u8> {
+    let mut data = Vec::new();
+    img.copy_out(fid, &mut data, Conversion::Binary).unwrap();
+    data
+}
+
+/// Checks a save set's blocks as VMS's BACKUP does: each numbered, its
+/// header's CRC-16 and the block's CRC-32 right, with both 0 for them.
+fn save_set(data: &[u8]) {
+    fn crc(bytes: &[u8], mut crc: u32, poly: u32) -> u32 {
+        for b in bytes {
+            crc ^= *b as u32;
+            for _ in 0..8 {
+                crc = if crc & 1 == 1 {
+                    (crc >> 1) ^ poly
+                } else {
+                    crc >> 1
+                };
+            }
+        }
+        crc
+    }
+    assert!(
+        !data.is_empty() && data.len().is_multiple_of(32256),
+        "{} bytes",
+        data.len()
+    );
+    for (n, block) in data.chunks(32256).enumerate() {
+        let mut b = block.to_vec();
+        let number = u32::from_le_bytes(b[8..12].try_into().unwrap());
+        let block_crc = u32::from_le_bytes(b[36..40].try_into().unwrap());
+        let header_crc = u16::from_le_bytes([b[254], b[255]]) as u32;
+        b[36..40].fill(0);
+        b[254..256].fill(0);
+        assert_eq!(number as usize, n + 1);
+        assert_eq!(
+            header_crc,
+            crc(&b[..256], 0, 0xA001),
+            "block {number}'s header CRC"
+        );
+        assert_eq!(block_crc, !crc(&b, !0, 0xEDB88320), "block {number}'s CRC");
+    }
 }

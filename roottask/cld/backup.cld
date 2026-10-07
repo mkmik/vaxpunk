@@ -1,0 +1,10 @@
+! BACKUP input output: BACKUP.EXE saves the files input names in a save
+! set, output/SAVE_SET, or restores those of a save set, input/SAVE_SET,
+! into the directory output names, or with /LIST lists it.
+define verb BACKUP
+	image BACKUP
+	parameter P1, label=INPUT, prompt="From", value(required, type=$infile)
+	parameter P2, label=OUTPUT, prompt="To", value(type=$outfile)
+	qualifier SAVE_SET, placement=local
+	qualifier LIST
+	qualifier LOG

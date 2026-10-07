@@ -1,0 +1,984 @@
+        .TITLE  BACKUP  Saves files in a save set, restores and lists them
+        .IDENT  /V0.1/
+;
+; DCL's BACKUP input output runs this. With /SAVE_SET after output, it
+; writes the files input names, what input leaves out taken from *.*;*,
+; into a new save set in VMS's format, which VMS's BACKUP reads: a file
+; of FIX records of 32256 bytes, each a block with a header, then
+; records, each with its own header: a summary of the save set first,
+; then for each file a FILE record of its name, IDs, allocation, owner,
+; protection and record attributes, and VBN records of its blocks, as
+; $READ reads them. With /SAVE_SET after input, it reads a save set and
+; makes each of its files in the directory output names, with the name,
+; type, version, record attributes, owner and protection it had, and
+; writes its blocks with $WRITE. /LIST lists the save set as it is read;
+; with no output, that is all it does. /LOG says what it saved or made.
+; A block's header holds a CRC-16 of the header and a CRC-32 of the
+; block, which reading checks, as VMS's BACKUP does.
+; ponytail: no file to file copy, /IMAGE, [...], /SELECT or /SINCE; the
+; files of one directory, but not its directories, restored into one; no
+; dates, for which RMS has no XAB yet; no XOR blocks, as with VMS's
+; /GROUP_SIZE=0, so a bad block can't be recovered; the summary has no
+; user name, node or system version; a restored file's longest record is
+; 0, since $WRITE doesn't count records. The first error ends it.
+;
+        .LIBRARY "starlet.mlb"
+        .LIBRARY "sysexe.mlb"
+        $SSDEF
+        $RMSDEF
+        $FABDEF
+        $RABDEF
+        $NAMDEF
+        $XABPRODEF
+        $XABFHCDEF
+        $JPIDEF
+
+        .EXTERNAL PUT_LINE, SYS$GETTIM
+
+BLKSIZE = 32256                         ; a save set's blocks, at most
+BLOCK = 512                             ; a file's
+; A block's header, VMS's $BBHDEF.
+BBH$W_SIZE = 0                          ; the header's size, 256
+BBH$W_OPSYS = 2
+BBH$W_SUBSYS = 4
+BBH$W_APPLIC = 6                        ; 1 for data, 2 for XOR
+BBH$L_NUMBER = 8                        ; the block's number, from 1
+BBH$W_STRUCLEV = 32
+BBH$W_VOLNUM = 34
+BBH$L_CRC = 36                          ; the block's CRC-32, complemented
+BBH$L_BLOCKSIZE = 40
+BBH$L_FLAGS = 44                        ; bit 0: no block CRC
+BBH$T_SSNAME = 48                       ; the save set's name, .ASCIC, 32 bytes
+BBH$W_FID = 80                          ; the file the block starts in: its ID,
+BBH$W_DID = 86                          ; its directory's,
+BBH$T_FILENAME = 92                     ; its name, .ASCIC, 128 bytes,
+BBH$B_RTYPE = 220                       ; its record attributes,
+BBH$B_RATTRIB = 221
+BBH$W_RSIZE = 222
+BBH$B_BKTSIZE = 224
+BBH$B_VFCSIZE = 225
+BBH$W_MAXREC = 226
+BBH$L_FILESIZE = 228                    ; and allocation
+BBH$K_FILE = 152                        ; those, from BBH$W_FID on
+BBH$W_CHECKSUM = 254                    ; the header's CRC-16
+BBH$K_LENGTH = 256
+; A record's header, $BRHDEF.
+BRH$W_RSIZE = 0                         ; the record's size, after its header
+BRH$W_RTYPE = 2
+BRH$L_FLAGS = 4
+BRH$V_DIRECTORY = 1                     ; the record is a directory's
+BRH$L_ADDRESS = 8                       ; a VBN record's first VBN
+BRH$K_LENGTH = 16
+BRH$K_SUMMARY = 1                       ; record types
+BRH$K_FILE = 3
+BRH$K_VBN = 4
+; The attributes in a SUMMARY or FILE record, after its structure level:
+; each a word size, a word type and the value, $BSADEF.
+BSA$K_SSNAME = 1
+BSA$K_COMMAND = 2
+BSA$K_USERNAME = 4
+BSA$K_USERUIC = 5
+BSA$K_DATE = 6
+BSA$K_OPSYS = 7
+BSA$K_BACKVER = 12
+BSA$K_BLOCKSIZE = 13
+BSA$K_FILENAME = 42
+BSA$K_STRUCLEV = 43
+BSA$K_FID = 44
+BSA$K_BACKLINK = 45
+BSA$K_FILESIZE = 46                     ; the blocks allocated
+BSA$K_UIC = 47
+BSA$K_FPRO = 48
+BSA$K_RECATTR = 52                      ; the header's 32 bytes of them
+; Those record attributes, a file header's (ods/docs/file-header.md).
+FAT$B_RTYPE = 0                         ; organization and record format
+FAT$B_RATTRIB = 1
+FAT$W_RSIZE = 2                         ; the longest record
+FAT$L_HIBLK = 4                         ; high word first
+FAT$L_EFBLK = 8                         ; high word first
+FAT$W_FFBYTE = 12
+FAT$B_BKTSIZE = 14
+FAT$B_VFCSIZE = 15
+FAT$W_MAXREC = 16
+FAT$K_LENGTH = 32
+FILEMAX = 400                           ; a FILE record's bytes, at most
+CRC16 = ^XA001                          ; the polynomials, reflected
+CRC32 = ^XEDB88320
+SIZEEND = 61                            ; the column /LIST's sizes end at
+INHIB = ^X10000000                      ; STS$M_INHIB_MSG
+
+; ADDTEXT "text": appends text to LINE. Uses R0-R2.
+        .MACRO  ADDTEXT TEXT, ?L
+        .SAVE_PSECT LOCAL_BLOCK
+        .PSECT  $LITERAL$
+L:      .ASCIC  TEXT
+        .RESTORE_PSECT
+        MOVAB   L, R1
+        MOVZBL  (R1)+, R2
+        BSBW    ADD
+        .ENDM   ADDTEXT
+
+; SHOW type, "label": with /LIST, writes label and the text of the
+; summary's attribute type, if it has one. R6 = the summary. Uses R0-R4.
+        .MACRO  SHOW    TYPE, LABEL, ?L
+        MOVL    #TYPE, R0
+        BSBW    FINDATTR
+        BLBC    R0, L
+        PUSHR   #^M<R1, R2>
+        ADDTEXT LABEL
+        POPR    #^M<R1, R2>
+        BSBW    ADD
+        BSBW    SAY
+L:
+        .ENDM   SHOW
+
+        .PSECT  DATA, NOEXE, WRT, LONG
+INDSC:  .LONG   255                     ; INPUT, the parameter
+        .ADDRESS INSPEC
+INSPEC: .BLKB   255
+OUTDSC: .LONG   255                     ; OUTPUT, or 0 if there is none
+        .ADDRESS OUTSPEC
+OUTSPEC:
+        .BLKB   255
+CMDDSC: .LONG   255                     ; $LINE, the command
+        .ADDRESS CMD
+CMD:    .BLKB   255
+DEFSPEC:                                ; what input leaves out
+        .ASCII  "*.*;*"
+DEFLEN = .-DEFSPEC
+DOTDIR: .ASCII  ".DIR"
+BACKVER:
+        .ASCII  "V1.0"
+        .ALIGN  LONG
+SSFAB:  $FAB    NAM=SSNAM               ; the save set
+SSNAM:  $NAM    RSA=SSRES, RSS=255
+SSRES:  .BLKB   255
+        .ALIGN  LONG
+SSRAB:  $RAB    FAB=SSFAB, UBF=BUF, USZ=BLKSIZE
+INFAB:  $FAB    FNA=INSPEC, DNA=DEFSPEC, DNS=DEFLEN, NAM=INNAM
+INNAM:  $NAM    ESA=INEXP, ESS=255, RSA=INRES, RSS=255
+INEXP:  .BLKB   255
+INRES:  .BLKB   255
+        .ALIGN  LONG
+FFAB:   $FAB    NAM=FNAM, XAB=FHC       ; a file saved or restored
+FNAM:   $NAM    RSA=FRES, RSS=255
+FRES:   .BLKB   255
+        .ALIGN  LONG
+FHC:    $XABFHC NXT=PRO
+PRO:    $XABPRO
+FRAB:   $RAB    FAB=FFAB
+JPIITEMS:                               ; the summary's UIC
+        .WORD   4, JPI$_UIC
+        .ADDRESS UIC
+        .LONG   0
+        .LONG   0
+UIC:    .LONG   0
+DATE:   .QUAD   0                       ; the summary's
+LEVEL:  .WORD   ^X0101                  ; the save set's structure level
+LEVEL2: .WORD   ^X0201                  ; a file's, ODS-2's
+OPSYS:  .WORD   ^X0400                  ; VMS
+SIZEATR:                                ; the summary's block size
+        .LONG   BLKSIZE
+FAT:    .BLKB   FAT$K_LENGTH            ; a file's record attributes
+CURFILE:                                ; the file saved, as a block's header has it
+        .BLKB   BBH$K_FILE
+FNAME:  .BLKB   256                     ; and name, .ASCIC
+FSIZE:  .LONG   0                       ; and allocation
+LOG:    .LONG   0                       ; bit 0: /LOG
+LIST:   .LONG   0                       ; bit 0: /LIST
+SIZE:   .LONG   0                       ; the block's size
+POS:    .LONG   0                       ; the next record's offset in it
+NUMBER: .LONG   0                       ; its number
+VBN:    .LONG   0                       ; the next VBN record's
+OPEN:   .LONG   0                       ; bit 0: FFAB has a file restored open
+REMAIN: .LONG   0                       ; the bytes it has yet to get
+HDRCRC: .LONG   0                       ; the CRCs a block read has
+BLKCRC: .LONG   0
+FILES:  .LONG   0                       ; listed, and their blocks
+BLOCKS: .LONG   0
+LINE:   .BLKB   256                     ; a line being made, .ASCIC
+CHAR:   .BLKB   1
+        .ALIGN  LONG
+BUF:    .BLKB   BLKSIZE                 ; a block of the save set
+
+        .PSECT  CODE, EXE, LONG
+        .ENTRY  START, ^M<R2, R3, R4, R5, R6, R7, R8>
+        PRESENT "LOG"
+        MOVL    R0, LOG
+        PRESENT "LIST"
+        MOVL    R0, LIST
+        GETVALUE "$LINE", CMDDSC, CMDDSC
+        GETVALUE "INPUT", INDSC, INDSC
+        PRESENT "SAVE_SET"
+        MOVL    R0, R6                  ; the input is a save set
+        GETVALUE "OUTPUT", OUTDSC, OUTDSC
+        BLBS    R0, 10$
+        CLRL    OUTDSC                  ; none: a listing
+        BLBC    LIST, 80$
+        BRB     20$
+10$:    PRESENT "SAVE_SET"
+        BLBC    R0, 20$
+        BLBS    R6, 80$                 ; two save sets
+        BSBW    SAVE
+        RET
+20$:    BLBC    R6, 80$                 ; none
+        BSBW    READSET
+        RET
+80$:    MOVL    #SS$_BADPARAM, R0
+        RET
+
+; SAVE: writes the files input names into the save set output names,
+; but directories and the save set. R0 = the status. Uses R0-R8.
+SAVE:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5, R6, R7, R8>
+        PUSHAQ  DATE
+        CALLS   #1, G^SYS$GETTIM
+        $GETJPIW_S ITMLST=JPIITEMS
+        MOVAB   OUTSPEC, SSFAB+FAB$L_FNA
+        MOVB    OUTDSC, SSFAB+FAB$B_FNS
+        MOVB    #FAB$C_FIX, SSFAB+FAB$B_RFM
+        MOVW    #BLKSIZE, SSFAB+FAB$W_MRS
+        $CREATE FAB=SSFAB
+        BLBC    R0, 90$
+        $CONNECT RAB=SSRAB
+        BLBC    R0, 70$
+        MOVL    #BLKSIZE, SIZE
+        BSBW    NEWBLOCK
+        BSBW    SUMMARY
+        MOVB    INDSC, INFAB+FAB$B_FNS
+        $PARSE  FAB=INFAB
+        BLBC    R0, 70$
+10$:    $SEARCH FAB=INFAB
+        BLBC    R0, 50$
+        CMPB    INNAM+NAM$B_TYPE, #4
+        BNEQ    20$
+        MOVL    INNAM+NAM$L_TYPE, R1
+        CMPL    (R1), DOTDIR
+        BEQL    10$
+20$:    CMPL    INNAM+NAM$W_FID, SSNAM+NAM$W_FID
+        BNEQ    30$
+        CMPW    INNAM+NAM$W_FID+4, SSNAM+NAM$W_FID+4
+        BEQL    10$
+30$:    BSBW    SAVEFILE
+        BLBS    R0, 10$
+        BRB     70$
+50$:    CMPL    R0, #RMS$_NMF
+        BEQL    60$
+        CMPL    R0, #RMS$_FNF
+        BNEQ    70$
+        ADDTEXT "%BACKUP-W-NOFILES, no files selected from "
+        MOVL    INNAM+NAM$L_ESA, R1
+        MOVZBL  INNAM+NAM$B_ESL, R2
+        BSBW    ADD
+        BSBW    SAY
+60$:    BSBW    PUTBLOCK
+70$:    MOVL    R0, R2
+        $CLOSE  FAB=SSFAB
+        BLBC    R2, 80$                 ; the first error is the one
+        MOVL    R0, R2
+80$:    MOVL    R2, R0
+90$:    RSB
+
+; SUMMARY: writes the save set's summary record. Uses R0-R5 and R8.
+SUMMARY:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5, R8>
+        MOVL    #BRH$K_SUMMARY, R0
+        BSBW    BEGINREC
+        MOVAB   LEVEL, R1
+        MOVL    #2, R2
+        BSBW    ADDDATA
+        MOVL    SSNAM+NAM$L_NAME, R1    ; NAME.TYPE
+        MOVZBL  SSNAM+NAM$B_NAME, R2
+        ADDB2   SSNAM+NAM$B_TYPE, R2
+        MOVL    #BSA$K_SSNAME, R0
+        BSBW    ATTR
+        MOVAB   CMD, R1
+        MOVZWL  CMDDSC, R2
+        MOVL    #BSA$K_COMMAND, R0
+        BSBW    ATTR
+        MOVAB   UIC, R1
+        MOVL    #4, R2
+        MOVL    #BSA$K_USERUIC, R0
+        BSBW    ATTR
+        MOVAB   DATE, R1
+        MOVL    #8, R2
+        MOVL    #BSA$K_DATE, R0
+        BSBW    ATTR
+        MOVAB   OPSYS, R1
+        MOVL    #2, R2
+        MOVL    #BSA$K_OPSYS, R0
+        BSBW    ATTR
+        MOVAB   BACKVER, R1
+        MOVL    #4, R2
+        MOVL    #BSA$K_BACKVER, R0
+        BSBW    ATTR
+        MOVAB   SIZEATR, R1
+        MOVL    #4, R2
+        MOVL    #BSA$K_BLOCKSIZE, R0
+        BSBW    ATTR
+        BRW     ENDREC
+
+; SAVEFILE: writes the file $SEARCH found into the save set: a FILE
+; record, then VBN records of its blocks, as many as fit in each block of
+; the save set. R0 = the status. Uses R0-R8.
+SAVEFILE:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5, R6, R7, R8>
+        MOVAB   INRES, FFAB+FAB$L_FNA
+        MOVB    INNAM+NAM$B_RSL, FFAB+FAB$B_FNS
+        $OPEN   FAB=FFAB
+        BLBC    R0, 90$
+        $CONNECT RAB=FRAB
+        BLBC    R0, 80$
+        MOVL    #FILEMAX, R0
+        BSBW    ROOM
+        BLBC    R0, 80$
+        MOVL    #BRH$K_FILE, R0
+        BSBW    BEGINREC
+        MOVAB   LEVEL, R1
+        MOVL    #2, R2
+        BSBW    ADDDATA
+        MOVL    INNAM+NAM$L_DIR, R1     ; [DIR]NAME.TYPE;VERSION
+        MOVZBL  INNAM+NAM$B_DIR, R2
+        ADDB2   INNAM+NAM$B_NAME, R2
+        ADDB2   INNAM+NAM$B_TYPE, R2
+        ADDB2   INNAM+NAM$B_VER, R2
+        MOVL    #BSA$K_FILENAME, R0
+        BSBW    ATTR
+        MOVAB   LEVEL2, R1
+        MOVL    #2, R2
+        MOVL    #BSA$K_STRUCLEV, R0
+        BSBW    ATTR
+        MOVAB   INNAM+NAM$W_FID, R1
+        MOVL    #6, R2
+        MOVL    #BSA$K_FID, R0
+        BSBW    ATTR
+        MOVAB   INNAM+NAM$W_DID, R1
+        MOVL    #6, R2
+        MOVL    #BSA$K_BACKLINK, R0
+        BSBW    ATTR
+        MOVAB   FHC+XAB$L_HBK, R1
+        MOVL    #4, R2
+        MOVL    #BSA$K_FILESIZE, R0
+        BSBW    ATTR
+        MOVAB   PRO+XAB$L_UIC, R1
+        MOVL    #4, R2
+        MOVL    #BSA$K_UIC, R0
+        BSBW    ATTR
+        MOVAB   PRO+XAB$W_PRO, R1
+        MOVL    #2, R2
+        MOVL    #BSA$K_FPRO, R0
+        BSBW    ATTR
+        MOVC5   #0, FAT, #0, #FAT$K_LENGTH, FAT
+        BISB3   FFAB+FAB$B_ORG, FFAB+FAB$B_RFM, FAT+FAT$B_RTYPE
+        MOVB    FFAB+FAB$B_RAT, FAT+FAT$B_RATTRIB
+        MOVW    FHC+XAB$W_LRL, FAT+FAT$W_RSIZE
+        ROTL    #16, FHC+XAB$L_HBK, FAT+FAT$L_HIBLK
+        ROTL    #16, FHC+XAB$L_EBK, FAT+FAT$L_EFBLK
+        MOVW    FHC+XAB$W_FFB, FAT+FAT$W_FFBYTE
+        MOVB    FFAB+FAB$B_FSZ, FAT+FAT$B_VFCSIZE
+        MOVW    FFAB+FAB$W_MRS, FAT+FAT$W_MAXREC
+        BSBW    SETCUR
+        MOVAB   FAT, R1
+        MOVL    #FAT$K_LENGTH, R2
+        MOVL    #BSA$K_RECATTR, R0
+        BSBW    ATTR
+        BSBW    ENDREC
+        MOVL    #1, VBN
+10$:    SUBL3   POS, SIZE, R0           ; the whole blocks that fit
+        SUBL2   #BRH$K_LENGTH, R0
+        BICL2   #BLOCK-1, R0
+        CMPL    R0, #BLOCK
+        BGEQ    20$
+        BSBW    PUTBLOCK
+        BLBC    R0, 80$
+        BRB     10$
+20$:    MOVW    R0, FRAB+RAB$W_USZ
+        MOVAB   BUF+BRH$K_LENGTH, R1
+        ADDL3   POS, R1, FRAB+RAB$L_UBF
+        $READ   RAB=FRAB
+        BLBS    R0, 30$
+        CMPL    R0, #RMS$_EOF
+        BNEQ    80$
+        BRB     40$
+30$:    MOVL    #BRH$K_VBN, R0
+        BSBW    BEGINREC
+        MOVL    VBN, BRH$L_ADDRESS(R8)
+        MOVZWL  FRAB+RAB$W_RSZ, R0      ; in whole blocks, the rest 0
+        ADDL2   #BLOCK-1, R0
+        BICL2   #BLOCK-1, R0
+        ADDL2   R0, POS
+        ASHL    #-9, R0, R0
+        ADDL2   R0, VBN
+        BSBW    ENDREC
+        BRB     10$
+40$:    BLBC    LOG, 50$
+        ADDTEXT "%BACKUP-S-COPIED, copied "
+        BSBW    ADDFRES
+        BSBW    SAY
+50$:    MOVL    #SS$_NORMAL, R0
+80$:    MOVL    R0, R2
+        $CLOSE  FAB=FFAB
+        BLBC    R2, 85$
+        MOVL    R0, R2
+85$:    MOVL    R2, R0
+90$:    RSB
+
+; SETCUR: puts the file SAVEFILE saves in CURFILE, for the header of each
+; block its VBN records start, as VMS's BACKUP finds them. Uses R0-R5.
+SETCUR:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5>
+        MOVC5   #0, CURFILE, #0, #BBH$K_FILE, CURFILE
+        MOVL    INNAM+NAM$W_FID, CURFILE+BBH$W_FID-BBH$W_FID
+        MOVW    INNAM+NAM$W_FID+4, CURFILE+BBH$W_FID-BBH$W_FID+4
+        MOVL    INNAM+NAM$W_DID, CURFILE+BBH$W_DID-BBH$W_FID
+        MOVW    INNAM+NAM$W_DID+4, CURFILE+BBH$W_DID-BBH$W_FID+4
+        MOVZBL  INNAM+NAM$B_DIR, R0     ; [DIR]NAME.TYPE;VERSION, what fits
+        ADDB2   INNAM+NAM$B_NAME, R0
+        ADDB2   INNAM+NAM$B_TYPE, R0
+        ADDB2   INNAM+NAM$B_VER, R0
+        CMPL    R0, #127
+        BLEQU   10$
+        MOVL    #127, R0
+10$:    MOVB    R0, CURFILE+BBH$T_FILENAME-BBH$W_FID
+        MOVL    INNAM+NAM$L_DIR, R1
+        MOVC3   R0, (R1), CURFILE+BBH$T_FILENAME-BBH$W_FID+1
+        MOVW    FAT+FAT$B_RTYPE, CURFILE+BBH$B_RTYPE-BBH$W_FID  ; and RATTRIB
+        MOVW    FAT+FAT$W_RSIZE, CURFILE+BBH$W_RSIZE-BBH$W_FID
+        MOVW    FAT+FAT$B_BKTSIZE, CURFILE+BBH$B_BKTSIZE-BBH$W_FID      ; and VFCSIZE
+        MOVW    FAT+FAT$W_MAXREC, CURFILE+BBH$W_MAXREC-BBH$W_FID
+        MOVL    FHC+XAB$L_HBK, CURFILE+BBH$L_FILESIZE-BBH$W_FID
+        RSB
+
+; ROOM: R0 = the bytes a record needs. Writes the block, and starts the
+; next, unless they fit in it. R0 = the status. Uses R0-R5.
+ROOM:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5>
+        ADDL2   POS, R0
+        CMPL    R0, SIZE
+        BGTR    PUTBLOCK
+        MOVL    #SS$_NORMAL, R0
+        RSB
+
+; PUTBLOCK: ends the block with a null record over the rest of it, puts
+; its CRCs in its header, writes it to the save set, and starts the next.
+; R0 = $PUT's status. Uses R0-R5.
+PUTBLOCK:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5>
+        SUBL3   POS, SIZE, R0
+        SUBL2   #BRH$K_LENGTH, R0
+        BLSS    10$
+        MOVAB   BUF, R1
+        ADDL2   POS, R1
+        MOVW    R0, BRH$W_RSIZE(R1)
+10$:    MNEGL   #1, R0                  ; the block's CRC-32, with none in it
+        MOVAB   BUF, R1
+        MOVL    SIZE, R2
+        MOVL    #CRC32, R4
+        BSBW    GETCRC
+        MCOML   R0, R0
+        PUSHL   R0
+        CLRL    R0                      ; the header's CRC-16, likewise
+        MOVAB   BUF, R1
+        MOVL    #BBH$K_LENGTH, R2
+        MOVL    #CRC16, R4
+        BSBW    GETCRC
+        MOVW    R0, BUF+BBH$W_CHECKSUM
+        MOVL    (SP)+, BUF+BBH$L_CRC
+        MOVAB   BUF, SSRAB+RAB$L_RBF
+        MOVW    SIZE, SSRAB+RAB$W_RSZ
+        $PUT    RAB=SSRAB
+        BLBC    R0, 90$
+        BSBB    NEWBLOCK
+        MOVL    #SS$_NORMAL, R0
+90$:    RSB
+
+; NEWBLOCK: starts the next block: its header, then nothing. Uses R0-R5.
+NEWBLOCK:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5>
+        MOVC5   #0, BUF, #0, #BLKSIZE, BUF
+        INCL    NUMBER
+        MOVW    #BBH$K_LENGTH, BUF+BBH$W_SIZE
+        MOVW    OPSYS, BUF+BBH$W_OPSYS
+        MOVW    #1, BUF+BBH$W_SUBSYS
+        MOVW    #1, BUF+BBH$W_APPLIC
+        MOVL    NUMBER, BUF+BBH$L_NUMBER
+        MOVW    LEVEL, BUF+BBH$W_STRUCLEV
+        MOVW    #1, BUF+BBH$W_VOLNUM
+        MOVL    SIZE, BUF+BBH$L_BLOCKSIZE
+        MOVZBL  SSNAM+NAM$B_NAME, R0    ; NAME.TYPE, what fits
+        ADDB2   SSNAM+NAM$B_TYPE, R0
+        CMPL    R0, #31
+        BLEQU   10$
+        MOVL    #31, R0
+10$:    MOVB    R0, BUF+BBH$T_SSNAME
+        MOVL    SSNAM+NAM$L_NAME, R1
+        MOVC3   R0, (R1), BUF+BBH$T_SSNAME+1
+        MOVC3   #BBH$K_FILE, CURFILE, BUF+BBH$W_FID
+        MOVL    #BBH$K_LENGTH, POS
+        RSB
+
+; BEGINREC: R0 = a record type. Starts a record of it: R8 = its header.
+; Uses R0.
+BEGINREC:
+        .JSB_ENTRY  OUTPUT=<R8>
+        MOVAB   BUF, R8
+        ADDL2   POS, R8
+        MOVW    R0, BRH$W_RTYPE(R8)
+        ADDL2   #BRH$K_LENGTH, POS
+        RSB
+
+; ENDREC: R8 = the header BEGINREC made. Ends its record, which has what
+; has been put in the block since, and zeros to a multiple of 16 bytes,
+; as VMS's BACKUP pads them. Uses R0.
+ENDREC:
+        .JSB_ENTRY
+        ADDL2   #15, POS
+        BICL2   #15, POS
+        MOVAB   BUF, R0
+        ADDL2   POS, R0
+        SUBL2   R8, R0
+        SUBW3   #BRH$K_LENGTH, R0, BRH$W_RSIZE(R8)
+        RSB
+
+; ATTR: R0 = an attribute's type, R1 = the address of its value, R2 = its
+; size. Puts it in the record. ADDDATA: puts the R2 bytes at R1 in it.
+; Use R0-R5.
+ATTR:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5>
+        MOVAB   BUF, R3
+        ADDL2   POS, R3
+        MOVW    R2, (R3)+
+        MOVW    R0, (R3)
+        ADDL2   #4, POS
+ADDDATA:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5>
+        MOVAB   BUF, R3
+        ADDL2   POS, R3
+        ADDL2   R2, POS
+        MOVC3   R2, (R1), (R3)
+        RSB
+
+; GETCRC: R0 = a CRC so far, R1 = the address of R2 bytes, at least one, R4
+; = a polynomial, reflected, CRC16 or CRC32. R0 = the CRC with the bytes,
+; as VAX's CRC instruction makes it. Uses R0-R3.
+GETCRC:
+        .JSB_ENTRY  SCRATCH=<R2, R3>
+10$:    MOVZBL  (R1)+, R3
+        XORL2   R3, R0
+        MOVL    #8, R3
+20$:    BLBS    R0, 30$
+        EXTZV   #1, #31, R0, R0
+        BRB     40$
+30$:    EXTZV   #1, #31, R0, R0
+        XORL2   R4, R0
+40$:    SOBGTR  R3, 20$
+        SOBGTR  R2, 10$
+        RSB
+
+; READSET: reads the save set input names: lists it with /LIST, and
+; restores its files into the directory output names, if there is one.
+; R0 = the status. Uses R0-R8.
+READSET:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5, R6, R7, R8>
+        MOVAB   INSPEC, SSFAB+FAB$L_FNA
+        MOVB    INDSC, SSFAB+FAB$B_FNS
+        $OPEN   FAB=SSFAB
+        BLBC    R0, 95$
+        $CONNECT RAB=SSRAB
+        BLBC    R0, 80$
+        BLBC    LIST, 10$
+        PRINT   "Listing of save set(s)"
+        PRINT   ""
+10$:    $GET    RAB=SSRAB
+        BLBS    R0, 20$
+        CMPL    R0, #RMS$_EOF
+        BNEQ    80$
+        BRB     60$
+20$:    CMPW    BUF+BBH$W_APPLIC, #1    ; not an XOR block
+        BNEQ    10$
+        MOVZWL  SSRAB+RAB$W_RSZ, SIZE
+        BSBW    CHECKBLK
+        BLBC    R0, 80$
+        MOVL    #BBH$K_LENGTH, POS
+30$:    ADDL3   #BRH$K_LENGTH, POS, R0  ; the next record
+        CMPL    R0, SIZE
+        BGTRU   10$
+        MOVAB   BUF, R6
+        ADDL2   POS, R6
+        MOVZWL  BRH$W_RSIZE(R6), R7
+        ADDL3   R0, R7, POS
+        CMPL    POS, SIZE
+        BGTRU   10$
+        MOVZWL  BRH$W_RTYPE(R6), R0
+        CMPL    R0, #BRH$K_SUMMARY
+        BNEQ    40$
+        BSBW    SUMMARYOUT
+        BRB     30$
+40$:    CMPL    R0, #BRH$K_FILE
+        BNEQ    50$
+        BSBW    FILEIN
+        BLBC    R0, 80$
+        BRB     30$
+50$:    CMPL    R0, #BRH$K_VBN
+        BNEQ    30$
+        BSBW    DATAIN
+        BLBC    R0, 80$
+        BRB     30$
+60$:    BLBC    LIST, 70$
+        PRINT   ""
+        ADDTEXT "Total of "
+        MOVL    FILES, R1
+        BSBW    ADDDEC
+        ADDTEXT " file"
+        CMPL    FILES, #1
+        BEQL    62$
+        ADDTEXT "s"
+62$:    ADDTEXT ", "
+        MOVL    BLOCKS, R1
+        BSBW    ADDDEC
+        ADDTEXT " block"
+        CMPL    BLOCKS, #1
+        BEQL    64$
+        ADDTEXT "s"
+64$:    BSBW    SAY
+        PRINT   "End of save set"
+70$:    MOVL    #SS$_NORMAL, R0
+80$:    MOVL    R0, R2
+        BSBW    ENDFILE
+        BLBC    R2, 85$
+        MOVL    R0, R2
+85$:    $CLOSE  FAB=SSFAB
+        MOVL    R2, R0
+95$:    RSB
+
+; CHECKBLK: checks the block read, SIZE bytes: its header's size and its
+; block size, and its CRCs. R0 = SS$_NORMAL, or an error, written.
+; Uses R0-R5.
+CHECKBLK:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5>
+        CMPW    BUF+BBH$W_SIZE, #BBH$K_LENGTH
+        BNEQ    70$
+        CMPL    BUF+BBH$L_BLOCKSIZE, SIZE
+        BNEQ    70$
+        MOVZWL  BUF+BBH$W_CHECKSUM, HDRCRC
+        MOVL    BUF+BBH$L_CRC, BLKCRC
+        CLRW    BUF+BBH$W_CHECKSUM
+        CLRL    BUF+BBH$L_CRC
+        CLRL    R0
+        MOVAB   BUF, R1
+        MOVL    #BBH$K_LENGTH, R2
+        MOVL    #CRC16, R4
+        BSBW    GETCRC
+        CMPL    R0, HDRCRC
+        BNEQ    75$
+        BLBS    BUF+BBH$L_FLAGS, 10$    ; none for the block
+        MNEGL   #1, R0
+        MOVAB   BUF, R1
+        MOVL    SIZE, R2
+        MOVL    #CRC32, R4
+        BSBW    GETCRC
+        MCOML   R0, R0
+        CMPL    R0, BLKCRC
+        BNEQ    77$
+10$:    MOVL    #SS$_NORMAL, R0
+        RSB
+70$:    PRINT   "%BACKUP-F-NOTSAVESET, input is not a valid BACKUP save set"
+        BRB     80$
+75$:    PRINT   "%BACKUP-E-HDRCRC, software header CRC error"
+        BRB     80$
+77$:    PRINT   "%BACKUP-E-BLOCKCRC, software block CRC error"
+80$:    MOVL    #SS$_ABORT!INHIB, R0
+        RSB
+
+; SUMMARYOUT: R6 = the summary record. Lists it, with /LIST. Uses R0-R5.
+SUMMARYOUT:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5>
+        BLBC    LIST, 90$
+        SHOW    BSA$K_SSNAME,   "Save set:          "
+        SHOW    BSA$K_USERNAME, "Written by:        "
+        MOVL    #BSA$K_USERUIC, R0
+        BSBW    FINDATTR
+        BLBC    R0, 10$
+        MOVL    (R1), R5
+        ADDTEXT "UIC:               ["
+        BSBW    ADDUIC
+        BSBW    SAY
+10$:    SHOW    BSA$K_COMMAND,  "Command:           "
+        SHOW    BSA$K_BACKVER,  "BACKUP version:    "
+        MOVL    #BSA$K_BLOCKSIZE, R0
+        BSBW    FINDATTR
+        BLBC    R0, 20$
+        MOVL    (R1), R1
+        PUSHL   R1
+        ADDTEXT "Block size:        "
+        MOVL    (SP)+, R1
+        BSBW    ADDDEC
+        BSBW    SAY
+20$:    PRINT   ""
+90$:    RSB
+
+; ADDUIC: R5 = a UIC. Appends it as BACKUP/LIST shows it, [ggg,mmm] in
+; octal, six digits each, the [ before it already there. Uses R0-R5.
+ADDUIC:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5>
+        PUSHL   R5
+        EXTZV   #16, #16, R5, R1
+        MOVL    #8, R3
+        MOVL    #6, R5
+        BSBW    ADDNUM
+        ADDTEXT ","
+        MOVL    (SP)+, R1
+        MOVZWL  R1, R1
+        MOVL    #8, R3
+        MOVL    #6, R5
+        BSBW    ADDNUM
+        ADDTEXT "]"
+        RSB
+
+; FINDATTR: R6 = a SUMMARY or FILE record, R0 = an attribute's type. R0 =
+; 1 if the record has it, R1 = its value's address, R2 = its size, else
+; 0. Uses R0-R4.
+FINDATTR:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4>
+        MOVZWL  BRH$W_RSIZE(R6), R4     ; the record's end
+        MOVAB   BRH$K_LENGTH(R6), R1
+        ADDL2   R1, R4
+        ADDL2   #2, R1                  ; past its structure level
+10$:    ADDL3   #4, R1, R3              ; the value
+        CMPL    R3, R4
+        BGTRU   80$
+        MOVZWL  (R1), R2
+        CMPW    2(R1), R0
+        BEQL    20$
+        ADDL3   R2, R3, R1
+        BRB     10$
+20$:    ADDL3   R2, R3, R1
+        CMPL    R1, R4
+        BGTRU   80$
+        MOVL    R3, R1
+        MOVL    #1, R0
+        RSB
+80$:    CLRL    R0
+        RSB
+
+; FILEIN: R6 = a FILE record. Lists the file, with /LIST, and if there
+; is an output directory makes it there, but a directory, for DATAIN to
+; write. R0 = the status. Uses R0-R5.
+FILEIN:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5>
+        BSBW    ENDFILE
+        BLBC    R0, 90$
+        MOVC5   #0, FAT, #0, #FAT$K_LENGTH, FAT
+        CLRL    FSIZE
+        CLRQ    PRO+XAB$W_PRO           ; and XAB$L_UIC
+        CLRB    FNAME
+        MOVL    #BSA$K_FILENAME, R0
+        BSBW    FINDATTR
+        BLBC    R0, 10$
+        CMPL    R2, #255
+        BLEQU   5$
+        MOVL    #255, R2
+5$:     MOVB    R2, FNAME
+        MOVC3   R2, (R1), FNAME+1
+10$:    MOVL    #BSA$K_RECATTR, R0
+        BSBW    FINDATTR
+        BLBC    R0, 20$
+        CMPL    R2, #FAT$K_LENGTH
+        BLEQU   15$
+        MOVL    #FAT$K_LENGTH, R2
+15$:    MOVC3   R2, (R1), FAT
+20$:    MOVL    #BSA$K_FILESIZE, R0
+        BSBW    FINDATTR
+        BLBC    R0, 25$
+        MOVL    (R1), FSIZE
+25$:    MOVL    #BSA$K_UIC, R0
+        BSBW    FINDATTR
+        BLBC    R0, 30$
+        MOVL    (R1), PRO+XAB$L_UIC
+30$:    MOVL    #BSA$K_FPRO, R0
+        BSBW    FINDATTR
+        BLBC    R0, 35$
+        MOVW    (R1), PRO+XAB$W_PRO
+35$:    BLBC    LIST, 40$
+        BSBW    LISTFILE
+40$:    TSTW    OUTDSC
+        BEQL    80$
+        BBS     #BRH$V_DIRECTORY, BRH$L_FLAGS(R6), 80$
+        BSBW    MAKEFILE
+        RSB
+80$:    MOVL    #SS$_NORMAL, R0
+90$:    RSB
+
+; LISTFILE: writes the file's line, its name and allocation, and counts
+; them. Uses R0-R5.
+LISTFILE:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5>
+        MOVAB   FNAME+1, R1
+        MOVZBL  FNAME, R2
+        BSBW    ADD
+        MOVL    FSIZE, R1               ; the size, right-aligned
+        MOVL    #SIZEEND, R3
+10$:    DECL    R3
+        DIVL2   #10, R1
+        TSTL    R1
+        BNEQ    10$
+        BSBW    PADTO
+        MOVL    FSIZE, R1
+        BSBW    ADDDEC
+        BSBW    SAY
+        INCL    FILES
+        ADDL2   FSIZE, BLOCKS
+        RSB
+
+; MAKEFILE: makes the file FILEIN found in the output directory, with its
+; name, type and version, record attributes, allocation, owner and
+; protection, for DATAIN to write its bytes, up to its end of file. R0 =
+; the status. Uses R0-R5.
+MAKEFILE:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5>
+        MOVZBL  FNAME, R2               ; NAME.TYPE;VERSION: after the ]
+        MOVAB   FNAME+1, R1
+10$:    TSTL    R2
+        BEQL    20$
+        DECL    R2
+        CMPB    (R1)+, #^A/]/
+        BNEQ    10$
+        MOVL    R1, FFAB+FAB$L_FNA
+        MOVB    R2, FFAB+FAB$B_FNS
+        BRB     30$
+20$:    MOVAB   FNAME+1, FFAB+FAB$L_FNA
+        MOVB    FNAME, FFAB+FAB$B_FNS
+30$:    MOVAB   OUTSPEC, FFAB+FAB$L_DNA
+        MOVB    OUTDSC, FFAB+FAB$B_DNS
+        BICB3   #^XF0, FAT+FAT$B_RTYPE, FFAB+FAB$B_RFM
+        BICB3   #^X0F, FAT+FAT$B_RTYPE, FFAB+FAB$B_ORG
+        MOVB    FAT+FAT$B_RATTRIB, FFAB+FAB$B_RAT
+        MOVW    FAT+FAT$W_MAXREC, FFAB+FAB$W_MRS
+        MOVB    FAT+FAT$B_VFCSIZE, FFAB+FAB$B_FSZ
+        ROTL    #16, FAT+FAT$L_HIBLK, FFAB+FAB$L_ALQ
+        ROTL    #16, FAT+FAT$L_EFBLK, R0
+        BEQL    40$
+        DECL    R0
+        MULL2   #BLOCK, R0
+        MOVZWL  FAT+FAT$W_FFBYTE, R1
+        ADDL2   R1, R0
+40$:    MOVL    R0, REMAIN
+        $CREATE FAB=FFAB
+        BLBC    R0, 90$
+        $CONNECT RAB=FRAB
+        BLBS    R0, 50$
+        MOVL    R0, R2
+        $CLOSE  FAB=FFAB
+        MOVL    R2, R0
+        RSB
+50$:    MOVL    #1, OPEN
+        BLBC    LOG, 60$
+        ADDTEXT "%BACKUP-S-CREATED, created "
+        BSBW    ADDFRES
+        BSBW    SAY
+60$:    MOVL    #SS$_NORMAL, R0
+90$:    RSB
+
+; DATAIN: R6 = a VBN record, R7 = its size. Writes to the file being
+; restored, if there is one, what of it the file has yet to get. R0 = the
+; status. Uses R0-R5.
+DATAIN:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5>
+        BLBC    OPEN, 80$
+        MOVL    R7, R0
+        CMPL    R0, REMAIN
+        BLEQU   10$
+        MOVL    REMAIN, R0
+10$:    TSTL    R0
+        BEQL    80$
+        SUBL2   R0, REMAIN
+        MOVW    R0, FRAB+RAB$W_RSZ
+        MOVAB   BRH$K_LENGTH(R6), FRAB+RAB$L_RBF
+        MOVL    BRH$L_ADDRESS(R6), FRAB+RAB$L_BKT
+        $WRITE  RAB=FRAB
+        RSB
+80$:    MOVL    #SS$_NORMAL, R0
+        RSB
+
+; ENDFILE: closes the file being restored, if there is one. R0 = the
+; status. Uses R0 and R1.
+ENDFILE:
+        .JSB_ENTRY
+        MOVL    #SS$_NORMAL, R0
+        BLBC    OPEN, 90$
+        CLRL    OPEN
+        $CLOSE  FAB=FFAB
+90$:    RSB
+
+; ADDFRES: appends FFAB's file's resultant name to LINE. Uses R0-R2.
+ADDFRES:
+        .JSB_ENTRY  SCRATCH=<R2>
+        MOVAB   FRES, R1
+        MOVZBL  FNAM+NAM$B_RSL, R2
+        BRB     ADD
+
+; PADTO: appends blanks to LINE until it is R3 characters long. Uses R0-R2.
+PADTO:
+        .JSB_ENTRY  SCRATCH=<R2>
+        MOVZBL  LINE, R0
+        CMPL    R0, R3
+        BGEQU   10$
+        MOVZBL  #^A/ /, R0
+        BSBW    ADDCHAR
+        BRB     PADTO
+10$:    RSB
+
+; ADDDEC: appends R1 in decimal to LINE. ADDNUM: R1 in radix R3, at
+; least R5 digits. Use R0-R5.
+ADDDEC:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5>
+        MOVL    #10, R3
+        MOVL    #1, R5
+ADDNUM:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5>
+        CLRL    R4                      ; digits, on the stack
+10$:    DIVL3   R3, R1, R2
+        MULL3   R3, R2, R0
+        SUBL3   R0, R1, R0
+        ADDL2   #^A/0/, R0
+        PUSHL   R0
+        INCL    R4
+        MOVL    R2, R1
+        BNEQ    10$
+        CMPL    R4, R5
+        BLSS    10$
+30$:    MOVL    (SP)+, R0
+        BSBB    ADDCHAR
+        SOBGTR  R4, 30$
+        RSB
+
+; SAY: writes the line in LINE, and empties it. Uses R0 and R1.
+SAY:
+        .JSB_ENTRY
+        PUSHAB  LINE
+        CALLS   #1, G^PUT_LINE
+        CLRB    LINE
+        RSB
+
+; ADDCHAR: appends the character in R0 to LINE. Uses R0-R2.
+ADDCHAR:
+        .JSB_ENTRY  SCRATCH=<R2>
+        MOVB    R0, CHAR
+        MOVAB   CHAR, R1
+        MOVL    #1, R2
+; ADD: appends the R2 bytes at R1 to LINE, as many as fit. Uses R0-R2.
+ADD:
+        .JSB_ENTRY  SCRATCH=<R2>
+        MOVZBL  LINE, R0
+10$:    TSTL    R2
+        BEQL    20$
+        CMPL    R0, #255
+        BGEQU   20$
+        INCL    R0
+        MOVB    (R1)+, LINE[R0]
+        DECL    R2
+        BRB     10$
+20$:    MOVB    R0, LINE
+        RSB
+
+        .END    START

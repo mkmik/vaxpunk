@@ -49,6 +49,8 @@
 ;   EDIT spec   runs EDIT.EXE, with spec as its command line
 ;   COPY[/LOG] from to
 ;               runs COPY.EXE
+;   BACKUP[/LOG] input output/SAVE_SET, BACKUP[/LOG][/LIST] input/SAVE_SET [output]
+;               runs BACKUP.EXE: saves files in a save set, or restores or lists them
 ;   DELETE[/LOG] spec
 ;               runs DELETE.EXE
 ;   INITIALIZE device label
