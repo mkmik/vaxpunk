@@ -4,6 +4,9 @@ $ ! TCPIP$DEVICE names the network's template device, which a program
 $ ! assigns a channel to for a socket, as TCP/IP Services' TCPIP$STARTUP
 $ ! defines it.
 $ DEFINE/SYSTEM/NOLOG TCPIP$DEVICE _BGA0:
+$ ! It makes the ramdisk, empty at each boot, and mounts it.
+$ INITIALIZE MDA0: RAM
+$ MOUNT MDA0: RAM
 $ ! It mounts the data disk, if an INITIALIZE DKB0: made a volume there;
 $ ! on a blank one, MOUNT fails with NOHOMEBLK, and the procedure ends.
 $ MOUNT DKB0:

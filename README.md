@@ -101,7 +101,7 @@ Device                  Device           Error    Volume         Free
  Name                   Status           Count     Label        Blocks
 DKA0:                   Mounted wrtlck       0  VAXPUNK           3560
 DKB0:                   Mounted              0  DATA              4025
-MDA0:                   Offline              0
+MDA0:                   Mounted              0  RAM                954
 
 Device                  Device           Error
  Name                   Status           Count
@@ -127,8 +127,8 @@ the process and list them all, `TCPIP` sets and shows the network's
 address` logs in to another vaxpunk, `COPY` and `DELETE` copy and delete
 files, `BACKUP` saves them in a save set VMS's BACKUP reads, and lists and
 restores one, `INITIALIZE`, `MOUNT` and `DISMOUNT` make, mount and dismount a
-volume on the data disk, `DKB0:`, or the ramdisk, `MDA0:`, the disks they
-can write ([ADR-0009](docs/adr/0009-ramdisk-writable-files-11.md)), where
+volume on the data disk, `DKB0:`, or the ramdisk, `MDA0:`, which
+`SYSTARTUP_VMS.COM` makes and mounts at boot, the disks they can write ([ADR-0009](docs/adr/0009-ramdisk-writable-files-11.md)), where
 `CREATE/DIRECTORY [A.B]` makes directories, `SET COMMAND file` adds the
 verbs a `.CLD` file defines (`SET COMMAND SYS$MANAGER:DCLTEST`, then
 `GREET world`), `name := $image` makes a foreign command, `HELP` lists
@@ -146,9 +146,6 @@ SLEEPER.EXE;1       SNOOP.EXE;1         STARTUP.EXE;1       SVCTEST.EXE;1
 TIMETEST.EXE;1      TYPE.EXE;1          USURP.EXE;1
 
 Total of 19 files.
-$ INITIALIZE MDA0: RAM
-$ MOUNT MDA0: RAM
-%MOUNT-I-MOUNTED, RAM mounted on _MDA0:
 $ COPY [SYSMGR]WELCOME.TXT MDA0:[000000]
 $ DIR MDA0:[000000]WELCOME.TXT;*
 
