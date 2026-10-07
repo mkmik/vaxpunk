@@ -983,7 +983,7 @@ impl Parser<'_> {
                     let v = self.ctce_param(p)?;
                     bits = bits.max(if name == "%NBITSU" {
                         if v < 0 {
-                            64
+                            8 * i64::from(self.m.dialect.fullword())
                         } else {
                             (64 - v.leading_zeros() as i64).max(1)
                         }
@@ -1101,8 +1101,13 @@ impl Parser<'_> {
             }
             "%BLISS" => {
                 let ps = self.params(&name, at)?;
+                let ours: &[&str] = if self.m.dialect.a32 {
+                    &["BLISS32", "BLISS32E"]
+                } else {
+                    &["BLISS64E"]
+                };
                 flag(matches!(&ps[..], [p] if matches!(&p[..],
-                    [Lexeme { tok: Tok::Name(n), .. }] if n == "BLISS64E")))
+                    [Lexeme { tok: Tok::Name(n), .. }] if ours.contains(&n.as_str()))))
             }
             "%SWITCHES" => {
                 let mut all = true;

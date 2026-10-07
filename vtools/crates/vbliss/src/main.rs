@@ -1,7 +1,10 @@
 //! vbliss: compiles one BLISS-64 source file into an object module.
 //!
-//!     vbliss [/OBJECT=file | -o file] [/LIST[=file]] [/VARIANT=n]
-//!            [/INCLUDE=(dir,...) | -I dir] [--ir] [--asm] SOURCE.B64
+//!     vbliss [/A64 | /A32] [/ASSUME=(LONG_DEFAULT, REF_LONG, SIGNED_LONG)]
+//!            [/OBJECT=file | -o file] [/LIST[=file]] [/VARIANT=n]
+//!            [/INCLUDE=(dir,...) | -I dir] [--ir] [--asm] SOURCE
+//!
+//! A .B32 source is BLISS-32 as with /A32.
 //!
 //! --ir and --asm print the IR or the assembly instead of writing an object.
 //! Diagnostics go to stderr as BLISS writes them to the terminal.
@@ -42,11 +45,9 @@ fn run() -> Result<(), String> {
             output = Some(PathBuf::from(v.ok_or_else(usage)?));
         } else if let Some(v) = qualifier(&arg, "/LIST") {
             list = Some(v.map(PathBuf::from));
-        } else if let Some(v) = qualifier(&arg, "/VARIANT") {
-            opts.variant = match v {
-                Some(n) => n.parse().map_err(|_| usage())?,
-                None => 1,
-            };
+        } else if arg.starts_with('/')
+            && opts.qualifier(&arg).map_err(|e| format!("BADVALUE, {e}"))?
+        {
         } else if let Some(v) = qualifier(&arg, "/INCLUDE") {
             opts.include.extend(
                 v.ok_or_else(usage)?

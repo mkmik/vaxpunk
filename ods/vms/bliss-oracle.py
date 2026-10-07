@@ -6,6 +6,7 @@ usage: bliss-oracle.py [--log LOG] FILE...
 
 Each FILE.B64 is compiled with
     BLISS/A64/LIST/SOURCE_LIST=(EXPAND_MACROS,REQUIRE)/NOMACHINE_CODE
+and each FILE.B32 the same with /A32 in place of /A64,
 plus the qualifiers on its first line if it starts with `! BLISS:` (as
 `! BLISS: /A32/VARIANT=3`), linked and run. Other files (.R64, .REQ...) are
 only copied in, for REQUIRE. Next to each program it writes:
@@ -30,6 +31,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 DISK = os.environ.get("BLISS_ORACLE_DISK", os.path.expanduser(
     "~/Library/Caches/vaxpunk/bliss-oracle/golden-sys.img"))
 BLISS = "BLISS/A64/LIST/SOURCE_LIST=(EXPAND_MACROS,REQUIRE)/NOMACHINE_CODE"
+PROGRAMS = (".B64", ".B32")
 MARK = "@@ORACLE"
 
 
@@ -48,13 +50,14 @@ def script(files):
         cmds += [f"CREATE {os.path.basename(path)}", *lines, "@@CTRLZ"]
     for path in files:
         name, ext = os.path.splitext(os.path.basename(path))
-        if ext.upper() != ".B64":
+        if ext.upper() not in PROGRAMS:
             continue
         with open(path, encoding="latin-1") as f:
             first = f.readline()
         extra = first.split(":", 1)[1].strip() if first.upper().startswith("! BLISS:") else ""
+        bliss = BLISS.replace("/A64", "/A32") if ext.upper() == ".B32" else BLISS
         cmds += [mark("BEGIN LOG", name),
-                 f"{BLISS}{extra} {name}.B64",
+                 f"{bliss}{extra} {name}{ext.upper()}",
                  f'WRITE SYS$OUTPUT "BLISS status ", $STATUS',
                  f"LINK {name}",
                  f'WRITE SYS$OUTPUT "LINK status ", $STATUS',
@@ -106,7 +109,7 @@ def main(files, log=None):
     for path in files:
         name, ext = os.path.splitext(path)
         key = os.path.basename(name).upper()
-        if ext.upper() != ".B64":
+        if ext.upper() not in PROGRAMS:
             continue
         if ("OUT", key) not in found:
             sys.exit(f"{path}: no output in the console log")

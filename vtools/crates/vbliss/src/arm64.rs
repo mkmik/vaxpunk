@@ -521,22 +521,21 @@ impl<'a> Routine<'a> {
     fn home(&mut self, at: u32) {
         let end = self.f.blocks.len() as u32;
         let (again, done) = (self.label(end + 1), self.label(end + 2));
+        // Longwords, or quadwords.
+        let (n, r) = if self.f.long_args { (4, "w") } else { (8, "x") };
         self.line("and     x10, x9, #255");
-        self.line(format!("str     x10, [x29, #{at}]"));
+        self.line(format!("str     {r}10, [x29, #{at}]"));
         for i in (0..8).step_by(2) {
-            self.line(format!(
-                "stp     x{i}, x{}, [x29, #{}]",
-                i + 1,
-                at + 8 + 8 * i
-            ));
+            let off = at + n * (1 + i);
+            self.line(format!("stp     {r}{i}, {r}{}, [x29, #{off}]", i + 1));
         }
         self.line("subs    x10, x10, #8");
         self.line(format!("b.le    {done}"));
         self.frame_address("x11", self.size.into());
-        self.frame_address("x12", i64::from(at) + 72);
+        self.frame_address("x12", i64::from(at + 9 * n));
         self.out.push_str(&format!("{again}:\n"));
         self.line("ldr     x13, [x11], #8");
-        self.line("str     x13, [x12], #8");
+        self.line(format!("str     {r}13, [x12], #{n}"));
         self.line("subs    x10, x10, #1");
         self.line(format!("b.ne    {again}"));
         self.out.push_str(&format!("{done}:\n"));
@@ -673,7 +672,8 @@ impl<'a> Routine<'a> {
             Ins::ArgCount(d) => {
                 let at = self.args.unwrap();
                 let rd = self.dst(*d);
-                self.line(format!("ldr     {rd}, [x29, #{at}]"));
+                let ld = if self.f.long_args { "ldrsw" } else { "ldr  " };
+                self.line(format!("{ld}   {rd}, [x29, #{at}]"));
                 self.done(*d);
             }
             Ins::ArgPtr(d) => {
@@ -685,14 +685,19 @@ impl<'a> Routine<'a> {
             Ins::ArgN(d, i) => {
                 let at = i64::from(self.args.unwrap());
                 let rd = self.dst(*d);
+                let (n, ld, sh) = if self.f.long_args {
+                    (4, "ldrsw", 2)
+                } else {
+                    (8, "ldr  ", 3)
+                };
                 match i {
                     V::C(i) if (0..=255).contains(i) => {
-                        self.line(format!("ldr     {rd}, [x29, #{}]", at + 8 * i));
+                        self.line(format!("{ld}   {rd}, [x29, #{}]", at + n * i));
                     }
                     i => {
                         let i = self.src(i, "x10");
                         self.frame_address("x16", at);
-                        self.line(format!("ldr     {rd}, [x16, {i}, lsl #3]"));
+                        self.line(format!("{ld}   {rd}, [x16, {i}, lsl #{sh}]"));
                     }
                 }
                 self.done(*d);

@@ -1,0 +1,30 @@
+MODULE MIXED (MAIN = MAIN) =
+BEGIN
+! BLISS-32 calling BLISS-64 and MACRO-32 (PRD-0004 step 9): values cross
+! sign-extended, and BLISS-32 sees the low 32 bits of a BLISS-64 result.
+REQUIRE '[-]PRINT32';
+
+LINKAGE
+    JSB_R2_R3 = JSB(REGISTER = 2, REGISTER = 3);
+
+EXTERNAL ROUTINE
+    WIDE,
+    LOW,
+    MSUM : JSB_R2_R3,
+    MTRIPLE;
+
+GLOBAL ROUTINE NARROW (X) =
+    .X + 1;
+
+ROUTINE MAIN =
+    BEGIN
+    PRINT(WIDE(-1));
+    PRINT(WIDE(%X'7FFFFFFF'));
+    PRINT(LOW(5));
+    PRINT(MSUM(4, 5));
+    PRINT(MTRIPLE(-7));
+    1
+    END;
+
+END
+ELUDOM

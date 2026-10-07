@@ -159,7 +159,7 @@ fn run(dir: &Path, expected: &Path, name: &str, tool: Tool, macro32: bool) -> Re
             objects.push(("LIB.OLB".into(), library(&program.join("lib"), tool)?));
         }
     } else {
-        let source = ["mar", "b64"].map(|e| dir.join(format!("{name}.{e}")));
+        let source = ["mar", "b64", "b32"].map(|e| dir.join(format!("{name}.{e}")));
         objects.push(assemble(source.iter().find(|p| p.exists()).unwrap(), tool)?);
     }
     if macro32 {
@@ -271,7 +271,8 @@ fn library(dir: &Path, tool: Tool) -> Result<Vec<u8>, String> {
 
 /// A source file: .mar for vasm or vmacro, .b64 for vbliss.
 fn is_source(p: &Path) -> bool {
-    p.extension().is_some_and(|e| e == "mar" || e == "b64")
+    p.extension()
+        .is_some_and(|e| e == "mar" || e == "b64" || e == "b32")
 }
 
 /// The source files in `dir`, in name order.
@@ -288,14 +289,20 @@ fn sources(dir: &Path) -> Vec<PathBuf> {
 /// Assembles or compiles `source`, with vbliss if it is BLISS; returns its
 /// file name and the object.
 fn assemble(source: &Path, tool: Tool) -> Result<(String, Vec<u8>), String> {
-    let tool = if source.extension().is_some_and(|e| e == "b64") {
-        vbliss::compile
-    } else {
-        tool
-    };
     let text = fs::read_to_string(source).unwrap();
     let module = source.file_stem().unwrap().to_string_lossy().to_uppercase();
-    let records = tool(&text, &options(&module, source))
+    let opts = options(&module, source);
+    let result = if source.extension().is_some_and(|e| e == "b64" || e == "b32") {
+        // With the qualifiers its first line gives the oracle.
+        let bliss = vbliss::Options {
+            include: opts.include.clone(),
+            ..vbliss::Options::from_source(&text)
+        };
+        vbliss::compile_with(&text, &opts, &bliss).0
+    } else {
+        tool(&text, &opts)
+    };
+    let records = result
         .map_err(|d| {
             let msgs: Vec<String> = d
                 .iter()

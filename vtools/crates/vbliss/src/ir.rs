@@ -120,6 +120,9 @@ pub struct Func {
     /// Frame slots: their sizes in bytes.
     pub slots: Vec<u32>,
     pub temps: u32,
+    /// Whether its argument list (argcount, argn, argptr) has longwords,
+    /// for BLISS-32 and LONG_DEFAULT, rather than quadwords.
+    pub long_args: bool,
     /// Block 0 is the entry.
     pub blocks: Vec<Block>,
 }

@@ -1,0 +1,36 @@
+! BLISS: /ASSUME=LONG_DEFAULT
+MODULE LONGDEF (MAIN = MAIN) =
+BEGIN
+! BLISS-64's switches for BLISS-32 code: /ASSUME=LONG_DEFAULT makes LONG
+! the default unit of scalars, structures and PLITs.
+REQUIRE 'PRINT';
+
+OWN
+    S,
+    V : VECTOR[3],
+    BL : BLOCK[2],
+    I : INITIAL(-1);
+
+BIND
+    P = PLIT(1, BYTE(2), 3) : VECTOR[, BYTE];
+
+%PRINT('sizes ', %ALLOCATION(S), ' ', %ALLOCATION(V), ' ', %ALLOCATION(BL), ' ', %SIZE(VECTOR[2]),
+    ' ', %SIZE(REF VECTOR), ' ', %NUMBER(%UPVAL))
+
+ROUTINE MAIN =
+    BEGIN
+    S = -1;
+    PRINT(.S);
+    PRINT(.I);
+    V[1] = -2;
+    PRINT(.V[1]);
+    PRINT(.(V + 4));
+    BL[1, 0, 32, 1] = -3;
+    PRINT(.BL[1, 0, 32, 1]);
+    INCR J FROM 0 TO 8 DO
+        PRINT(.P[.J]);
+    1
+    END;
+
+END
+ELUDOM

@@ -17,7 +17,7 @@ fn ir() {
         let text = fs::read_to_string(&source).unwrap();
         let opts = vbliss::Options {
             include: vec![dir.join("../../lib")],
-            ..vbliss::Options::default()
+            ..vbliss::Options::from_source(&text)
         };
         let out = vbliss::translate(&source, &text, &opts);
         assert_eq!(
