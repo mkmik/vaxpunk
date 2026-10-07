@@ -25,30 +25,494 @@ NOMSG:  .ASCIC  "NONAME"                ; a status with no text's facility and n
 ; The messages $GETMSG knows: a status, without its control bits, its
 ; facility, its name and its text, VMS's, each .ASCIC, until a status of 0.
 MESSAGES:
+        .LONG   RMS$_NORMAL
+        .ASCIC  "RMS"
+        .ASCIC  "NORMAL"
+        .ASCIC  "normal successful completion"
+        .LONG   RMS$_STALL
+        .ASCIC  "RMS"
+        .ASCIC  "STALL"
+        .ASCIC  "synchronize with operation completion"
+        .LONG   RMS$_PENDING
+        .ASCIC  "RMS"
+        .ASCIC  "PENDING"
+        .ASCIC  "asynchronous operation not yet completed"
+        .LONG   RMS$_OK_DUP
+        .ASCIC  "RMS"
+        .ASCIC  "OK_DUP"
+        .ASCIC  "record had duplicate key"
+        .LONG   RMS$_OK_IDX
+        .ASCIC  "RMS"
+        .ASCIC  "OK_IDX"
+        .ASCIC  "index update error occurred"
+        .LONG   RMS$_OK_RLK
+        .ASCIC  "RMS"
+        .ASCIC  "OK_RLK"
+        .ASCIC  "record locked but read anyway"
+        .LONG   RMS$_OK_RRL
+        .ASCIC  "RMS"
+        .ASCIC  "OK_RRL"
+        .ASCIC  "record locked against read but read anyway"
+        .LONG   RMS$_KFF
+        .ASCIC  "RMS"
+        .ASCIC  "KFF"
+        .ASCIC  "known file found"
+        .LONG   RMS$_OK_ALK
+        .ASCIC  "RMS"
+        .ASCIC  "OK_ALK"
+        .ASCIC  "record is already locked"
+        .LONG   RMS$_OK_DEL
+        .ASCIC  "RMS"
+        .ASCIC  "OK_DEL"
+        .ASCIC  "deleted record successfully accessed"
+        .LONG   RMS$_OK_RNF
+        .ASCIC  "RMS"
+        .ASCIC  "OK_RNF"
+        .ASCIC  "nonexistent record successfully accessed"
+        .LONG   RMS$_OK_LIM
+        .ASCIC  "RMS"
+        .ASCIC  "OK_LIM"
+        .ASCIC  "retrieved record exceeds specified key value"
+        .LONG   RMS$_OK_NOP
+        .ASCIC  "RMS"
+        .ASCIC  "OK_NOP"
+        .ASCIC  "XAB not filled in for block I/O"
+        .LONG   RMS$_OK_WAT
+        .ASCIC  "RMS"
+        .ASCIC  "OK_WAT"
+        .ASCIC  "record locked after wait"
+        .LONG   RMS$_CRE_STM
+        .ASCIC  "RMS"
+        .ASCIC  "CRE_STM"
+        .ASCIC  "file was created in stream format"
+        .LONG   RMS$_OK_RULK
+        .ASCIC  "RMS"
+        .ASCIC  "OK_RULK"
+        .ASCIC  "record relocked in recovery unit"
+        .LONG   RMS$_SYNCH
+        .ASCIC  "RMS"
+        .ASCIC  "SYNCH"
+        .ASCIC  "synchronous completion"
+        .LONG   RMS$_OK_ACT
+        .ASCIC  "RMS"
+        .ASCIC  "OK_ACT"
+        .ASCIC  "operation successfully completed on active file or stream"
+        .LONG   RMS$_OK_NOCURTID
+        .ASCIC  "RMS"
+        .ASCIC  "OK_NOCURTID"
+        .ASCIC  "no default TID is defined"
+        .LONG   RMS$_CONTROLC
+        .ASCIC  "RMS"
+        .ASCIC  "CONTROLC"
+        .ASCIC  "operation completed under CTRL/C"
+        .LONG   RMS$_CONTROLO
+        .ASCIC  "RMS"
+        .ASCIC  "CONTROLO"
+        .ASCIC  "output completed under CTRL/O"
+        .LONG   RMS$_CONTROLY
+        .ASCIC  "RMS"
+        .ASCIC  "CONTROLY"
+        .ASCIC  "operation completed under CTRL/Y"
+        .LONG   RMS$_CREATED
+        .ASCIC  "RMS"
+        .ASCIC  "CREATED"
+        .ASCIC  "file or section did not exist; has been created"
+        .LONG   RMS$_SUPERSEDE
+        .ASCIC  "RMS"
+        .ASCIC  "SUPERSEDE"
+        .ASCIC  "logical name superseded"
+        .LONG   RMS$_OVRDSKQUOTA
+        .ASCIC  "RMS"
+        .ASCIC  "OVRDSKQUOTA"
+        .ASCIC  "disk usage exceeds disk quota"
+        .LONG   RMS$_FILEPURGED
+        .ASCIC  "RMS"
+        .ASCIC  "FILEPURGED"
+        .ASCIC  "oldest file version purged"
+        .LONG   RMS$_BOF
+        .ASCIC  "RMS"
+        .ASCIC  "BOF"
+        .ASCIC  "beginning of file detected"
+        .LONG   RMS$_RNL
+        .ASCIC  "RMS"
+        .ASCIC  "RNL"
+        .ASCIC  "record not locked"
+        .LONG   RMS$_RTB
+        .ASCIC  "RMS"
+        .ASCIC  "RTB"
+        .ASCIC  "!UL byte record too large for user's buffer"
+        .LONG   RMS$_TMO
+        .ASCIC  "RMS"
+        .ASCIC  "TMO"
+        .ASCIC  "timeout period expired"
+        .LONG   RMS$_TNS
+        .ASCIC  "RMS"
+        .ASCIC  "TNS"
+        .ASCIC  "terminator not seen"
+        .LONG   RMS$_BES
+        .ASCIC  "RMS"
+        .ASCIC  "BES"
+        .ASCIC  "bad escape sequence"
+        .LONG   RMS$_PES
+        .ASCIC  "RMS"
+        .ASCIC  "PES"
+        .ASCIC  "partial escape sequence"
+        .LONG   RMS$_ACT
+        .ASCIC  "RMS"
+        .ASCIC  "ACT"
+        .ASCIC  "file activity precludes operation"
+        .LONG   RMS$_DEL
+        .ASCIC  "RMS"
+        .ASCIC  "DEL"
+        .ASCIC  "RFA-accessed record was deleted"
+        .LONG   RMS$_INCOMPSHR
+        .ASCIC  "RMS"
+        .ASCIC  "INCOMPSHR"
+        .ASCIC  "incompatible file sharing requested"
+        .LONG   RMS$_DNR
+        .ASCIC  "RMS"
+        .ASCIC  "DNR"
+        .ASCIC  "device not ready, not mounted, or unavailable"
         .LONG   RMS$_EOF
         .ASCIC  "RMS"
         .ASCIC  "EOF"
         .ASCIC  "end of file detected"
+        .LONG   RMS$_FEX
+        .ASCIC  "RMS"
+        .ASCIC  "FEX"
+        .ASCIC  "file already exists, not superseded"
+        .LONG   RMS$_FLK
+        .ASCIC  "RMS"
+        .ASCIC  "FLK"
+        .ASCIC  "file currently locked by another user"
         .LONG   RMS$_FNF
         .ASCIC  "RMS"
         .ASCIC  "FNF"
         .ASCIC  "file not found"
+        .LONG   RMS$_PRV
+        .ASCIC  "RMS"
+        .ASCIC  "PRV"
+        .ASCIC  "insufficient privilege or file protection violation"
+        .LONG   RMS$_REX
+        .ASCIC  "RMS"
+        .ASCIC  "REX"
+        .ASCIC  "record already exists"
+        .LONG   RMS$_RLK
+        .ASCIC  "RMS"
+        .ASCIC  "RLK"
+        .ASCIC  "target record currently locked by another stream"
+        .LONG   RMS$_RNF
+        .ASCIC  "RMS"
+        .ASCIC  "RNF"
+        .ASCIC  "record not found"
         .LONG   RMS$_WLK
         .ASCIC  "RMS"
         .ASCIC  "WLK"
         .ASCIC  "device currently write locked"
-        .LONG   RMS$_NEF
+        .LONG   RMS$_EXP
         .ASCIC  "RMS"
-        .ASCIC  "NEF"
-        .ASCIC  "not positioned to EOF on $PUT (sequential organization only)"
+        .ASCIC  "EXP"
+        .ASCIC  "file expiration date not yet reached"
         .LONG   RMS$_NMF
         .ASCIC  "RMS"
         .ASCIC  "NMF"
         .ASCIC  "no more files found"
+        .LONG   RMS$_SUP
+        .ASCIC  "RMS"
+        .ASCIC  "SUP"
+        .ASCIC  "network operation not supported; DAP code = !XL"
+        .LONG   RMS$_RSA
+        .ASCIC  "RMS"
+        .ASCIC  "RSA"
+        .ASCIC  "record stream currently active"
+        .LONG   RMS$_CRC
+        .ASCIC  "RMS"
+        .ASCIC  "CRC"
+        .ASCIC  "network DAP level CRC check failed"
+        .LONG   RMS$_WCC
+        .ASCIC  "RMS"
+        .ASCIC  "WCC"
+        .ASCIC  "invalid wild card context (WCC) value"
+        .LONG   RMS$_IDR
+        .ASCIC  "RMS"
+        .ASCIC  "IDR"
+        .ASCIC  "invalid directory rename operation"
+        .LONG   RMS$_LWC
+        .ASCIC  "RMS"
+        .ASCIC  "LWC"
+        .ASCIC  "lock wait canceled"
+        .LONG   RMS$_UNUSED1
+        .ASCIC  "RMS"
+        .ASCIC  "UNUSED1"
+        .ASCIC  "unused error message 1"
+        .LONG   RMS$_NOVALPRS
+        .ASCIC  "RMS"
+        .ASCIC  "NOVALPRS"
+        .ASCIC  "$SEARCH operation not preceded by valid $PARSE"
+        .LONG   RMS$_KEY_MISMATCH
+        .ASCIC  "RMS"
+        .ASCIC  "KEY_MISMATCH"
+        .ASCIC  "record found, but key doesn't match"
+        .LONG   RMS$_RUH
+        .ASCIC  "RMS"
+        .ASCIC  "RUH"
+        .ASCIC  "error encountered by RMS transaction event handler, PID = !XL"
+        .LONG   RMS$_JND
+        .ASCIC  "RMS"
+        .ASCIC  "JND"
+        .ASCIC  "journaling disabled on this file"
+        .LONG   RMS$_BADPHASE
+        .ASCIC  "RMS"
+        .ASCIC  "BADPHASE"
+        .ASCIC  "recovery unit phase invalid for this operation"
+        .LONG   RMS$_TOWDR
+        .ASCIC  "RMS"
+        .ASCIC  "TOWDR"
+        .ASCIC  "timed out waiting for detached RU recovery to complete"
+        .LONG   RMS$_NEXDR
+        .ASCIC  "RMS"
+        .ASCIC  "NEXDR"
+        .ASCIC  "non-existent detached RU recovery process"
+        .LONG   RMS$_INVDRMSG
+        .ASCIC  "RMS"
+        .ASCIC  "INVDRMSG"
+        .ASCIC  "invalid detached RU recovery mailbox message"
+        .LONG   RMS$_RU_ACTIVE
+        .ASCIC  "RMS"
+        .ASCIC  "RU_ACTIVE"
+        .ASCIC  "operation prohibited while recovery unit active"
+        .LONG   RMS$_UNKRUFAC
+        .ASCIC  "RMS"
+        .ASCIC  "UNKRUFAC"
+        .ASCIC  "file has active/incomplete non-RMS recovery units"
+        .LONG   RMS$_LIMBO
+        .ASCIC  "RMS"
+        .ASCIC  "LIMBO"
+        .ASCIC  "recovery unit is in limbo"
+        .LONG   RMS$_IVATRACE
+        .ASCIC  "RMS"
+        .ASCIC  "IVATRACE"
+        .ASCIC  "invalid RMS attributes ACE encountered"
+        .LONG   RMS$_OPNOTSUP
+        .ASCIC  "RMS"
+        .ASCIC  "OPNOTSUP"
+        .ASCIC  "operation not supported by RMS Extension"
+        .LONG   RMS$_EXTNOTFOU
+        .ASCIC  "RMS"
+        .ASCIC  "EXTNOTFOU"
+        .ASCIC  "RMS Extension not found"
+        .LONG   RMS$_EXT_ERR
+        .ASCIC  "RMS"
+        .ASCIC  "EXT_ERR"
+        .ASCIC  "error in RMS Extension; reason code %X!XL"
+        .LONG   RMS$_SEMANTICS
+        .ASCIC  "RMS"
+        .ASCIC  "SEMANTICS"
+        .ASCIC  "inconsistent usage of RMS Semantics"
+        .LONG   RMS$_LSCAN
+        .ASCIC  "RMS"
+        .ASCIC  "LSCAN"
+        .ASCIC  "internal KLT/KLE status - do left scan to replenish data level VBN downpointers"
+        .LONG   RMS$_ROOTSRCH
+        .ASCIC  "RMS"
+        .ASCIC  "ROOTSRCH"
+        .ASCIC  "internal KLT/KLE status - restart search at root"
+        .LONG   RMS$_IDXSEARCH
+        .ASCIC  "RMS"
+        .ASCIC  "IDXSEARCH"
+        .ASCIC  "key search encountered index structure inconsistency - convert file"
+        .LONG   RMS$_NETBTS
+        .ASCIC  "RMS"
+        .ASCIC  "NETBTS"
+        .ASCIC  "network buffer too small for !UL byte record"
+        .LONG   RMS$_NXR
+        .ASCIC  "RMS"
+        .ASCIC  "NXR"
+        .ASCIC  "nonexistent record"
+        .LONG   RMS$_EOFASY_SYNCH
+        .ASCIC  "RMS"
+        .ASCIC  "EOFASY_SYNCH"
+        .ASCIC  "internal status - EOF on ASY $READ that completed synchronously"
+        .LONG   RMS$_ELOOP
+        .ASCIC  "RMS"
+        .ASCIC  "ELOOP"
+        .ASCIC  "more than SYMLOOP_MAX symbolic links were encountered during resolution of the file_name"
+        .LONG   RMS$_ACC
+        .ASCIC  "RMS"
+        .ASCIC  "ACC"
+        .ASCIC  "ACP file access failed"
+        .LONG   RMS$_CRE
+        .ASCIC  "RMS"
+        .ASCIC  "CRE"
+        .ASCIC  "ACP file create failed"
+        .LONG   RMS$_DAC
+        .ASCIC  "RMS"
+        .ASCIC  "DAC"
+        .ASCIC  "ACP file deaccess failed during $CLOSE"
+        .LONG   RMS$_ENT
+        .ASCIC  "RMS"
+        .ASCIC  "ENT"
+        .ASCIC  "ACP enter function failed"
+        .LONG   RMS$_EXT
+        .ASCIC  "RMS"
+        .ASCIC  "EXT"
+        .ASCIC  "ACP file extend failed"
+        .LONG   RMS$_FND
+        .ASCIC  "RMS"
+        .ASCIC  "FND"
+        .ASCIC  "ACP file or directory lookup failed"
+        .LONG   RMS$_MKD
+        .ASCIC  "RMS"
+        .ASCIC  "MKD"
+        .ASCIC  "ACP could not mark file for deletion"
+        .LONG   RMS$_DPE
+        .ASCIC  "RMS"
+        .ASCIC  "DPE"
+        .ASCIC  "device positioning error"
+        .LONG   RMS$_SPL
+        .ASCIC  "RMS"
+        .ASCIC  "SPL"
+        .ASCIC  "spool or submit of command file failed on $CLOSE"
         .LONG   RMS$_DNF
         .ASCIC  "RMS"
         .ASCIC  "DNF"
         .ASCIC  "directory not found"
+        .LONG   RMS$_RUF
+        .ASCIC  "RMS"
+        .ASCIC  "RUF"
+        .ASCIC  "recovery unit facility request failed"
+        .LONG   RMS$_WRTJNL_AIJ
+        .ASCIC  "RMS"
+        .ASCIC  "WRTJNL_AIJ"
+        .ASCIC  "error writing to after image journal file"
+        .LONG   RMS$_WRTJNL_BIJ
+        .ASCIC  "RMS"
+        .ASCIC  "WRTJNL_BIJ"
+        .ASCIC  "error writing to before image journal file"
+        .LONG   RMS$_WRTJNL_ATJ
+        .ASCIC  "RMS"
+        .ASCIC  "WRTJNL_ATJ"
+        .ASCIC  "error writing to audit trail journal file"
+        .LONG   RMS$_WRTJNL_RUJ
+        .ASCIC  "RMS"
+        .ASCIC  "WRTJNL_RUJ"
+        .ASCIC  "error writing to recovery unit journal file"
+        .LONG   RMS$_RRF
+        .ASCIC  "RMS"
+        .ASCIC  "RRF"
+        .ASCIC  "recovery unit recovery failed"
+        .LONG   RMS$_DDTM_ERR
+        .ASCIC  "RMS"
+        .ASCIC  "DDTM_ERR"
+        .ASCIC  "error returned by DECdtm transaction manager "
+        .LONG   RMS$_DTFCDDREC
+        .ASCIC  "RMS"
+        .ASCIC  "DTFCDDREC"
+        .ASCIC  "error accessing CDD record; reason code %X!XL"
+        .LONG   RMS$_AID
+        .ASCIC  "RMS"
+        .ASCIC  "AID"
+        .ASCIC  "invalid area ID = !UL"
+        .LONG   RMS$_ALN
+        .ASCIC  "RMS"
+        .ASCIC  "ALN"
+        .ASCIC  "alignment options error for area id = !UL"
+        .LONG   RMS$_ALQ
+        .ASCIC  "RMS"
+        .ASCIC  "ALQ"
+        .ASCIC  "invalid allocation quantity (negative, or 0 on $EXTEND)"
+        .LONG   RMS$_ANI
+        .ASCIC  "RMS"
+        .ASCIC  "ANI"
+        .ASCIC  "not ANSI ""D"" format"
+        .LONG   RMS$_AOP
+        .ASCIC  "RMS"
+        .ASCIC  "AOP"
+        .ASCIC  "allocation options error for area id = !UL"
+        .LONG   RMS$_BKS
+        .ASCIC  "RMS"
+        .ASCIC  "BKS"
+        .ASCIC  "bucket size too large (FAB)"
+        .LONG   RMS$_BKZ
+        .ASCIC  "RMS"
+        .ASCIC  "BKZ"
+        .ASCIC  "inconsistent bucket size for area id = !UL"
+        .LONG   RMS$_BLN
+        .ASCIC  "RMS"
+        .ASCIC  "BLN"
+        .ASCIC  "invalid block length for control block (RAB/FAB)"
+        .LONG   RMS$_BUG
+        .ASCIC  "RMS"
+        .ASCIC  "BUG"
+        .ASCIC  "fatal RMS condition (!XL), process deleted"
+        .LONG   RMS$_BUG_DDI
+        .ASCIC  "RMS"
+        .ASCIC  "BUG_DDI"
+        .ASCIC  "invalid default directory"
+        .LONG   RMS$_BUG_DAP
+        .ASCIC  "RMS"
+        .ASCIC  "BUG_DAP"
+        .ASCIC  "Data Access Protocol error detected; DAP code = !XL"
+        .LONG   RMS$_BUG_RU_ACTIVE
+        .ASCIC  "RMS"
+        .ASCIC  "BUG_RU_ACTIVE"
+        .ASCIC  "active recovery units on $CLOSE during RMS rundown"
+        .LONG   RMS$_BUG_RURECERR
+        .ASCIC  "RMS"
+        .ASCIC  "BUG_RURECERR"
+        .ASCIC  "error during detached RU recovery"
+        .LONG   RMS$_BUG_FLUSH_JNL_FAILED
+        .ASCIC  "RMS"
+        .ASCIC  "BUG_FLUSH_JNL_F"
+        .ASCIC  "flush of journal failed"
+        .LONG   RMS$_BUG_RU_ABORT_FAIL
+        .ASCIC  "RMS"
+        .ASCIC  "BUG_RU_ABORT_FA"
+        .ASCIC  "recovery unit abort failed"
+        .LONG   RMS$_BUG_RU_COMMIT_FAIL
+        .ASCIC  "RMS"
+        .ASCIC  "BUG_RU_COMMIT_F"
+        .ASCIC  "recovery unit commit failed"
+        .LONG   RMS$_BUG_XX6
+        .ASCIC  "RMS"
+        .ASCIC  "BUG_XX6"
+        .ASCIC  "reserved bug code"
+        .LONG   RMS$_BUG_XX7
+        .ASCIC  "RMS"
+        .ASCIC  "BUG_XX7"
+        .ASCIC  "reserved bug code"
+        .LONG   RMS$_BUG_XX8
+        .ASCIC  "RMS"
+        .ASCIC  "BUG_XX8"
+        .ASCIC  "reserved bug code"
+        .LONG   RMS$_BUSY
+        .ASCIC  "RMS"
+        .ASCIC  "BUSY"
+        .ASCIC  "user structure (FAB/RAB) still in use"
+        .LONG   RMS$_CCR
+        .ASCIC  "RMS"
+        .ASCIC  "CCR"
+        .ASCIC  "cannot connect RAB"
+        .LONG   RMS$_CHG
+        .ASCIC  "RMS"
+        .ASCIC  "CHG"
+        .ASCIC  "invalid key change in $UPDATE (CHG not set)"
+        .LONG   RMS$_CHK
+        .ASCIC  "RMS"
+        .ASCIC  "CHK"
+        .ASCIC  "bucket format check failed for VBN = !UL"
+        .LONG   RMS$_COD
+        .ASCIC  "RMS"
+        .ASCIC  "COD"
+        .ASCIC  "invalid or unsupported type field in XAB at !XL"
+        .LONG   RMS$_CUR
+        .ASCIC  "RMS"
+        .ASCIC  "CUR"
+        .ASCIC  "no current record (operation not preceded by $GET/$FIND)"
+        .LONG   RMS$_DAN
+        .ASCIC  "RMS"
+        .ASCIC  "DAN"
+        .ASCIC  "invalid data area number for key = !UL"
         .LONG   RMS$_DEV
         .ASCIC  "RMS"
         .ASCIC  "DEV"
@@ -61,58 +525,622 @@ MESSAGES:
         .ASCIC  "RMS"
         .ASCIC  "DME"
         .ASCIC  "dynamic memory exhausted"
+        .LONG   RMS$_DNA
+        .ASCIC  "RMS"
+        .ASCIC  "DNA"
+        .ASCIC  "invalid default file name string address"
+        .LONG   RMS$_DTP
+        .ASCIC  "RMS"
+        .ASCIC  "DTP"
+        .ASCIC  "invalid key data type for key = !UL"
+        .LONG   RMS$_DUP
+        .ASCIC  "RMS"
+        .ASCIC  "DUP"
+        .ASCIC  "duplicate key detected (DUP not set)"
+        .LONG   RMS$_DVI
+        .ASCIC  "RMS"
+        .ASCIC  "DVI"
+        .ASCIC  "invalid device ID value in NAM block"
+        .LONG   RMS$_ESA
+        .ASCIC  "RMS"
+        .ASCIC  "ESA"
+        .ASCIC  "invalid expanded string address"
+        .LONG   RMS$_ESS
+        .ASCIC  "RMS"
+        .ASCIC  "ESS"
+        .ASCIC  "expanded string area too small"
+        .LONG   RMS$_FAB
+        .ASCIC  "RMS"
+        .ASCIC  "FAB"
+        .ASCIC  "invalid FAB or FAB not accessible"
+        .LONG   RMS$_FAC
+        .ASCIC  "RMS"
+        .ASCIC  "FAC"
+        .ASCIC  "record operation not permitted by specified file access (FAC)"
+        .LONG   RMS$_FLG
+        .ASCIC  "RMS"
+        .ASCIC  "FLG"
+        .ASCIC  "invalid key definition flags for key = !UL"
+        .LONG   RMS$_FNA
+        .ASCIC  "RMS"
+        .ASCIC  "FNA"
+        .ASCIC  "invalid file name string address"
         .LONG   RMS$_FNM
         .ASCIC  "RMS"
         .ASCIC  "FNM"
         .ASCIC  "error in file name"
-        .LONG   RMS$_RFM
+        .LONG   RMS$_FSZ
         .ASCIC  "RMS"
-        .ASCIC  "RFM"
-        .ASCIC  "invalid record format"
-        .LONG   RMS$_SYN
+        .ASCIC  "FSZ"
+        .ASCIC  "invalid fixed control header size"
+        .LONG   RMS$_FOP
         .ASCIC  "RMS"
-        .ASCIC  "SYN"
-        .ASCIC  "file specification syntax error"
-        .LONG   RMS$_VER
-        .ASCIC  "RMS"
-        .ASCIC  "VER"
-        .ASCIC  "error in version number"
-        .LONG   RMS$_WLD
-        .ASCIC  "RMS"
-        .ASCIC  "WLD"
-        .ASCIC  "invalid wildcard operation"
-        .LONG   RMS$_DNR
-        .ASCIC  "RMS"
-        .ASCIC  "DNR"
-        .ASCIC  "device not ready, not mounted, or unavailable"
-        .LONG   RMS$_FEX
-        .ASCIC  "RMS"
-        .ASCIC  "FEX"
-        .ASCIC  "file already exists, not superseded"
-        .LONG   RMS$_PRV
-        .ASCIC  "RMS"
-        .ASCIC  "PRV"
-        .ASCIC  "insufficient privilege or file protection violation"
+        .ASCIC  "FOP"
+        .ASCIC  "invalid file options"
         .LONG   RMS$_FUL
         .ASCIC  "RMS"
         .ASCIC  "FUL"
         .ASCIC  "device full (insufficient space for allocation)"
-        .LONG   RMS$_CRE
+        .LONG   RMS$_IAL
         .ASCIC  "RMS"
-        .ASCIC  "CRE"
-        .ASCIC  "ACP file create failed"
-        .LONG   RMS$_ENT
+        .ASCIC  "IAL"
+        .ASCIC  "invalid argument list"
+        .LONG   RMS$_IAN
         .ASCIC  "RMS"
-        .ASCIC  "ENT"
-        .ASCIC  "ACP enter function failed"
-        .LONG   RMS$_MKD
+        .ASCIC  "IAN"
+        .ASCIC  "invalid index area number for key = !UL"
+        .LONG   RMS$_IDX
         .ASCIC  "RMS"
-        .ASCIC  "MKD"
-        .ASCIC  "ACP could not mark file for deletion"
+        .ASCIC  "IDX"
+        .ASCIC  "index not initialized"
+        .LONG   RMS$_IFI
+        .ASCIC  "RMS"
+        .ASCIC  "IFI"
+        .ASCIC  "invalid internal file identifier (IFI) value"
+        .LONG   RMS$_IMX
+        .ASCIC  "RMS"
+        .ASCIC  "IMX"
+        .ASCIC  "invalid duplicate XAB or non-dense XAB at !XL"
+        .LONG   RMS$_IOP
+        .ASCIC  "RMS"
+        .ASCIC  "IOP"
+        .ASCIC  "operation invalid for file organization or device"
+        .LONG   RMS$_IRC
+        .ASCIC  "RMS"
+        .ASCIC  "IRC"
+        .ASCIC  "illegal record encountered; VBN or record number = !UL"
+        .LONG   RMS$_ISI
+        .ASCIC  "RMS"
+        .ASCIC  "ISI"
+        .ASCIC  "invalid internal stream identifier (ISI) value"
+        .LONG   RMS$_KBF
+        .ASCIC  "RMS"
+        .ASCIC  "KBF"
+        .ASCIC  "invalid key buffer"
+        .LONG   RMS$_KEY
+        .ASCIC  "RMS"
+        .ASCIC  "KEY"
+        .ASCIC  "invalid record number key or key value"
+        .LONG   RMS$_KRF
+        .ASCIC  "RMS"
+        .ASCIC  "KRF"
+        .ASCIC  "invalid key-of-reference"
+        .LONG   RMS$_KSZ
+        .ASCIC  "RMS"
+        .ASCIC  "KSZ"
+        .ASCIC  "invalid key size for $GET/$FIND"
+        .LONG   RMS$_LAN
+        .ASCIC  "RMS"
+        .ASCIC  "LAN"
+        .ASCIC  "invalid lowest-level-index area number for key = !UL"
+        .LONG   RMS$_RUNDOWN
+        .ASCIC  "RMS"
+        .ASCIC  "RUNDOWN"
+        .ASCIC  "operation invalid during RMS rundown"
+        .LONG   RMS$_LNE
+        .ASCIC  "RMS"
+        .ASCIC  "LNE"
+        .ASCIC  "logical name translation error"
+        .LONG   RMS$_DTFCVT
+        .ASCIC  "RMS"
+        .ASCIC  "DTFCVT"
+        .ASCIC  "error converting data in record; reason code %X!XL"
+        .LONG   RMS$_MRN
+        .ASCIC  "RMS"
+        .ASCIC  "MRN"
+        .ASCIC  "invalid maximum record number or record number exceeds MRN"
+        .LONG   RMS$_MRS
+        .ASCIC  "RMS"
+        .ASCIC  "MRS"
+        .ASCIC  "invalid maximum record size"
+        .LONG   RMS$_NAM
+        .ASCIC  "RMS"
+        .ASCIC  "NAM"
+        .ASCIC  "invalid NAM block or NAM block not accessible"
+        .LONG   RMS$_NEF
+        .ASCIC  "RMS"
+        .ASCIC  "NEF"
+        .ASCIC  "not positioned to EOF on $PUT (sequential organization only)"
+        .LONG   RMS$_DTFQUASYN
+        .ASCIC  "RMS"
+        .ASCIC  "DTFQUASYN"
+        .ASCIC  "syntax error in foreign file specification; reason code %X!XL"
+        .LONG   RMS$_NOD
+        .ASCIC  "RMS"
+        .ASCIC  "NOD"
+        .ASCIC  "error in node name"
+        .LONG   RMS$_NPK
+        .ASCIC  "RMS"
+        .ASCIC  "NPK"
+        .ASCIC  "no primary key defined for indexed file"
+        .LONG   RMS$_ORD
+        .ASCIC  "RMS"
+        .ASCIC  "ORD"
+        .ASCIC  "XABs not in correct order at !XL"
+        .LONG   RMS$_ORG
+        .ASCIC  "RMS"
+        .ASCIC  "ORG"
+        .ASCIC  "invalid file organization value"
+        .LONG   RMS$_PBF
+        .ASCIC  "RMS"
+        .ASCIC  "PBF"
+        .ASCIC  "invalid prompt buffer"
+        .LONG   RMS$_PLG
+        .ASCIC  "RMS"
+        .ASCIC  "PLG"
+        .ASCIC  "error detected in file's prolog (reconstruct file)"
+        .LONG   RMS$_POS
+        .ASCIC  "RMS"
+        .ASCIC  "POS"
+        .ASCIC  "invalid key position (greater than MRS) for key = !UL"
+        .LONG   RMS$_DTFQUAVAL
+        .ASCIC  "RMS"
+        .ASCIC  "DTFQUAVAL"
+        .ASCIC  "invalid file name qualifier value specified; reason code %X!XL"
+        .LONG   RMS$_QUO
+        .ASCIC  "RMS"
+        .ASCIC  "QUO"
+        .ASCIC  "error in quoted string"
+        .LONG   RMS$_RAB
+        .ASCIC  "RMS"
+        .ASCIC  "RAB"
+        .ASCIC  "invalid RAB or RAB not accessible"
+        .LONG   RMS$_RAC
+        .ASCIC  "RMS"
+        .ASCIC  "RAC"
+        .ASCIC  "invalid record access mode"
+        .LONG   RMS$_RAT
+        .ASCIC  "RMS"
+        .ASCIC  "RAT"
+        .ASCIC  "invalid record attributes"
+        .LONG   RMS$_RBF
+        .ASCIC  "RMS"
+        .ASCIC  "RBF"
+        .ASCIC  "invalid record buffer"
+        .LONG   RMS$_RFA
+        .ASCIC  "RMS"
+        .ASCIC  "RFA"
+        .ASCIC  "invalid record's file address (RFA)"
+        .LONG   RMS$_RFM
+        .ASCIC  "RMS"
+        .ASCIC  "RFM"
+        .ASCIC  "invalid record format"
+        .LONG   RMS$_RHB
+        .ASCIC  "RMS"
+        .ASCIC  "RHB"
+        .ASCIC  "invalid record header buffer"
+        .LONG   RMS$_RLF
+        .ASCIC  "RMS"
+        .ASCIC  "RLF"
+        .ASCIC  "invalid related NAM block"
+        .LONG   RMS$_ROP
+        .ASCIC  "RMS"
+        .ASCIC  "ROP"
+        .ASCIC  "invalid record options"
+        .LONG   RMS$_RRV
+        .ASCIC  "RMS"
+        .ASCIC  "RRV"
+        .ASCIC  "invalid RRV record encountered"
+        .LONG   RMS$_RVU
+        .ASCIC  "RMS"
+        .ASCIC  "RVU"
+        .ASCIC  "error updating RRV's, some paths to data may be lost"
+        .LONG   RMS$_RSS
+        .ASCIC  "RMS"
+        .ASCIC  "RSS"
+        .ASCIC  "invalid resultant string size"
+        .LONG   RMS$_RST
+        .ASCIC  "RMS"
+        .ASCIC  "RST"
+        .ASCIC  "invalid resultant string address"
+        .LONG   RMS$_RSZ
+        .ASCIC  "RMS"
+        .ASCIC  "RSZ"
+        .ASCIC  "invalid record size"
+        .LONG   RMS$_SEQ
+        .ASCIC  "RMS"
+        .ASCIC  "SEQ"
+        .ASCIC  "primary key out of sequence (SEQ access)"
+        .LONG   RMS$_SHR
+        .ASCIC  "RMS"
+        .ASCIC  "SHR"
+        .ASCIC  "invalid file sharing (SHR) options"
+        .LONG   RMS$_SIZ
+        .ASCIC  "RMS"
+        .ASCIC  "SIZ"
+        .ASCIC  "invalid key size for key = !UL"
+        .LONG   RMS$_SQO
+        .ASCIC  "RMS"
+        .ASCIC  "SQO"
+        .ASCIC  "operation not sequential (SQO set)"
+        .LONG   RMS$_DTFSESEST
+        .ASCIC  "RMS"
+        .ASCIC  "DTFSESEST"
+        .ASCIC  "error establishing SNA session; reason code %X!XL"
+        .LONG   RMS$_SYN
+        .ASCIC  "RMS"
+        .ASCIC  "SYN"
+        .ASCIC  "file specification syntax error"
+        .LONG   RMS$_TRE
+        .ASCIC  "RMS"
+        .ASCIC  "TRE"
+        .ASCIC  "error in index tree"
+        .LONG   RMS$_TYP
+        .ASCIC  "RMS"
+        .ASCIC  "TYP"
+        .ASCIC  "error in file type"
+        .LONG   RMS$_UBF
+        .ASCIC  "RMS"
+        .ASCIC  "UBF"
+        .ASCIC  "invalid user buffer"
+        .LONG   RMS$_USZ
+        .ASCIC  "RMS"
+        .ASCIC  "USZ"
+        .ASCIC  "invalid user buffer size"
+        .LONG   RMS$_VER
+        .ASCIC  "RMS"
+        .ASCIC  "VER"
+        .ASCIC  "error in version number"
+        .LONG   RMS$_XNF
+        .ASCIC  "RMS"
+        .ASCIC  "XNF"
+        .ASCIC  "required XAB not found"
+        .LONG   RMS$_XAB
+        .ASCIC  "RMS"
+        .ASCIC  "XAB"
+        .ASCIC  "invalid XAB or XAB not accessible at !XL"
+        .LONG   RMS$_ESL
+        .ASCIC  "RMS"
+        .ASCIC  "ESL"
+        .ASCIC  "invalid expanded string length"
+        .LONG   RMS$_DTFSESTER
+        .ASCIC  "RMS"
+        .ASCIC  "DTFSESTER"
+        .ASCIC  "SNA session terminated unexpectedly; reason code %X!XL"
+        .LONG   RMS$_ENV
+        .ASCIC  "RMS"
+        .ASCIC  "ENV"
+        .ASCIC  "support for RMS service call or feature not present"
+        .LONG   RMS$_PLV
+        .ASCIC  "RMS"
+        .ASCIC  "PLV"
+        .ASCIC  "unsupported prolog version"
+        .LONG   RMS$_MBC
+        .ASCIC  "RMS"
+        .ASCIC  "MBC"
+        .ASCIC  "invalid multi-block count"
+        .LONG   RMS$_RSL
+        .ASCIC  "RMS"
+        .ASCIC  "RSL"
+        .ASCIC  "invalid resultant string length"
+        .LONG   RMS$_WLD
+        .ASCIC  "RMS"
+        .ASCIC  "WLD"
+        .ASCIC  "invalid wildcard operation"
+        .LONG   RMS$_NET
+        .ASCIC  "RMS"
+        .ASCIC  "NET"
+        .ASCIC  "network operation failed at remote node; DAP code = !XL"
+        .LONG   RMS$_IBF
+        .ASCIC  "RMS"
+        .ASCIC  "IBF"
+        .ASCIC  "illegal bucket format in VBN = !UL"
+        .LONG   RMS$_REF
+        .ASCIC  "RMS"
+        .ASCIC  "REF"
+        .ASCIC  "invalid key-of-reference = !UL"
+        .LONG   RMS$_IFL
+        .ASCIC  "RMS"
+        .ASCIC  "IFL"
+        .ASCIC  "index bucket fill size larger than bucket size for key = !UL"
+        .LONG   RMS$_DFL
+        .ASCIC  "RMS"
+        .ASCIC  "DFL"
+        .ASCIC  "data bucket fill size larger than bucket size for key = !UL"
+        .LONG   RMS$_KNM
+        .ASCIC  "RMS"
+        .ASCIC  "KNM"
+        .ASCIC  "key name buffer not accessible for key = !UL"
+        .LONG   RMS$_IBK
+        .ASCIC  "RMS"
+        .ASCIC  "IBK"
+        .ASCIC  "LAN bucket size not equal to IAN bucket size for key = !UL"
+        .LONG   RMS$_KSI
+        .ASCIC  "RMS"
+        .ASCIC  "KSI"
+        .ASCIC  "index bucket will not hold two keys for key-of-reference = !UL"
+        .LONG   RMS$_LEX
+        .ASCIC  "RMS"
+        .ASCIC  "LEX"
+        .ASCIC  "invalid $EXTEND for area !UL containing an unused extent"
+        .LONG   RMS$_SEG
+        .ASCIC  "RMS"
+        .ASCIC  "SEG"
+        .ASCIC  "overlapping segments or segmented key must be string for key = !UL"
+        .LONG   RMS$_SNE
+        .ASCIC  "RMS"
+        .ASCIC  "SNE"
+        .ASCIC  "file sharing not enabled"
+        .LONG   RMS$_SPE
+        .ASCIC  "RMS"
+        .ASCIC  "SPE"
+        .ASCIC  "file sharing pagecount exceeded"
+        .LONG   RMS$_UPI
+        .ASCIC  "RMS"
+        .ASCIC  "UPI"
+        .ASCIC  "UPI not set when sharing and BIO or BRO set"
+        .LONG   RMS$_ACS
+        .ASCIC  "RMS"
+        .ASCIC  "ACS"
+        .ASCIC  "error in access control string"
+        .LONG   RMS$_STR
+        .ASCIC  "RMS"
+        .ASCIC  "STR"
+        .ASCIC  "user structure (FAB/RAB) became invalid during operation"
+        .LONG   RMS$_FTM
+        .ASCIC  "RMS"
+        .ASCIC  "FTM"
+        .ASCIC  "network file transfer mode precludes operation (SQO set)"
+        .LONG   RMS$_GBC
+        .ASCIC  "RMS"
+        .ASCIC  "GBC"
+        .ASCIC  "invalid global buffer count"
+        .LONG   RMS$_DEADLOCK
+        .ASCIC  "RMS"
+        .ASCIC  "DEADLOCK"
+        .ASCIC  "deadlock detected"
+        .LONG   RMS$_EXENQLM
+        .ASCIC  "RMS"
+        .ASCIC  "EXENQLM"
+        .ASCIC  "exceeded enqueue quota"
+        .LONG   RMS$_JOP
+        .ASCIC  "RMS"
+        .ASCIC  "JOP"
+        .ASCIC  "journaling options not supported on device"
+        .LONG   RMS$_RUM
+        .ASCIC  "RMS"
+        .ASCIC  "RUM"
+        .ASCIC  "recovery-unit handler called from incorrect access mode"
+        .LONG   RMS$_JNS
+        .ASCIC  "RMS"
+        .ASCIC  "JNS"
+        .ASCIC  "operation not supported by RMS journaling"
+        .LONG   RMS$_NRU
+        .ASCIC  "RMS"
+        .ASCIC  "NRU"
+        .ASCIC  "operation prohibited outside recovery-unit"
+        .LONG   RMS$_IFF
+        .ASCIC  "RMS"
+        .ASCIC  "IFF"
+        .ASCIC  "invalid file attributes for requested file access"
+        .LONG   RMS$_DTFTRATBL
+        .ASCIC  "RMS"
+        .ASCIC  "DTFTRATBL"
+        .ASCIC  "error loading translation table; reason code %X!XL"
+        .LONG   RMS$_DTFUNSTYP
+        .ASCIC  "RMS"
+        .ASCIC  "DTFUNSTYP"
+        .ASCIC  "unsupported data type in record; reason code %X!XL"
+        .LONG   RMS$_DTFVERMIS
+        .ASCIC  "RMS"
+        .ASCIC  "DTFVERMIS"
+        .ASCIC  "incompatible version of control file; reason code %X!XL"
+        .LONG   RMS$_DTFACC
+        .ASCIC  "RMS"
+        .ASCIC  "DTFACC"
+        .ASCIC  "error accessing file; reason code %X!XL"
+        .LONG   RMS$_BOGUSCOL
+        .ASCIC  "RMS"
+        .ASCIC  "BOGUSCOL"
+        .ASCIC  "invalid or inaccessible collate table"
+        .LONG   RMS$_ERRREADCOL
+        .ASCIC  "RMS"
+        .ASCIC  "ERRREADCOL"
+        .ASCIC  "error encountered while reading collate table"
+        .LONG   RMS$_ERRWRITECOL
+        .ASCIC  "RMS"
+        .ASCIC  "ERRWRITECOL"
+        .ASCIC  "error encountered while writing collate table"
+        .LONG   RMS$_SNS
+        .ASCIC  "RMS"
+        .ASCIC  "SNS"
+        .ASCIC  "statistics monitoring not supported for non-disk devices"
+        .LONG   RMS$_NOEXTEND
+        .ASCIC  "RMS"
+        .ASCIC  "NOEXTEND"
+        .ASCIC  "previous $EXTEND operation failed - further $EXTENDs prohibited"
+        .LONG   RMS$_DTFCRE
+        .ASCIC  "RMS"
+        .ASCIC  "DTFCRE"
+        .ASCIC  "error creating file; reason code %X!XL"
+        .LONG   RMS$_DELJNS
+        .ASCIC  "RMS"
+        .ASCIC  "DELJNS"
+        .ASCIC  "deleting a file marked for journaling not yet supported (unmark file for journaling first)"
+        .LONG   RMS$_NOTSAMEJNL
+        .ASCIC  "RMS"
+        .ASCIC  "NOTSAMEJNL"
+        .ASCIC  "files in a recovery unit must use same RMS journal"
+        .LONG   RMS$_SNPPF
+        .ASCIC  "RMS"
+        .ASCIC  "SNPPF"
+        .ASCIC  "statistics monitoring not supported for process permanent files"
+        .LONG   RMS$_NAML
+        .ASCIC  "RMS"
+        .ASCIC  "NAML"
+        .ASCIC  "invalid NAML block or NAML block not accessible"
+        .LONG   RMS$_NAMLESS
+        .ASCIC  "RMS"
+        .ASCIC  "NAMLESS"
+        .ASCIC  "NAML expanded string area too small"
+        .LONG   RMS$_NAMLRSS
+        .ASCIC  "RMS"
+        .ASCIC  "NAMLRSS"
+        .ASCIC  "NAML resultant string area too small"
+        .LONG   RMS$_NAMLFSSIZ
+        .ASCIC  "RMS"
+        .ASCIC  "NAMLFSSIZ"
+        .ASCIC  "NAML file system string area too small"
+        .LONG   RMS$_NAMLFSINV
+        .ASCIC  "RMS"
+        .ASCIC  "NAMLFSINV"
+        .ASCIC  "NAML file system string address invalid"
+        .LONG   RMS$_BADGBH
+        .ASCIC  "RMS"
+        .ASCIC  "BADGBH"
+        .ASCIC  "Bad GBH"
+        .LONG   RMS$_BADGBD
+        .ASCIC  "RMS"
+        .ASCIC  "BADGBD"
+        .ASCIC  "Bad GBD"
+        .LONG   RMS$_FOPEXTMBZ
+        .ASCIC  "RMS"
+        .ASCIC  "FOPEXTMBZ"
+        .ASCIC  "reserved fields asociated with FAB$V_EXTEND_FOP must be zero"
+        .LONG   RMS$_INVOP_SSIO
+        .ASCIC  "RMS"
+        .ASCIC  "INVOP_SSIO"
+        .ASCIC  "invalid operation for SSIO access"
+        .LONG   RMS$_IVSF
+        .ASCIC  "RMS"
+        .ASCIC  "IVSF"
+        .ASCIC  "invalid special file format"
+        .LONG   RMS$_ATR
+        .ASCIC  "RMS"
+        .ASCIC  "ATR"
+        .ASCIC  "file attributes read error"
+        .LONG   RMS$_ATW
+        .ASCIC  "RMS"
+        .ASCIC  "ATW"
+        .ASCIC  "file attributes write error"
+        .LONG   RMS$_CCF
+        .ASCIC  "RMS"
+        .ASCIC  "CCF"
+        .ASCIC  "cannot close file"
+        .LONG   RMS$_CDA
+        .ASCIC  "RMS"
+        .ASCIC  "CDA"
+        .ASCIC  "cannot deliver AST"
+        .LONG   RMS$_CHN
+        .ASCIC  "RMS"
+        .ASCIC  "CHN"
+        .ASCIC  "assign channel system service request failed"
+        .LONG   RMS$_RER
+        .ASCIC  "RMS"
+        .ASCIC  "RER"
+        .ASCIC  "file read error"
+        .LONG   RMS$_RMV
+        .ASCIC  "RMS"
+        .ASCIC  "RMV"
+        .ASCIC  "ACP remove function failed"
+        .LONG   RMS$_RPL
+        .ASCIC  "RMS"
+        .ASCIC  "RPL"
+        .ASCIC  "error detected while reading prolog"
+        .LONG   RMS$_SYS
+        .ASCIC  "RMS"
+        .ASCIC  "SYS"
+        .ASCIC  "QIO system service request failed"
         .LONG   RMS$_WER
         .ASCIC  "RMS"
         .ASCIC  "WER"
         .ASCIC  "file write error"
+        .LONG   RMS$_WPL
+        .ASCIC  "RMS"
+        .ASCIC  "WPL"
+        .ASCIC  "error detected while writing prolog"
+        .LONG   RMS$_IFA
+        .ASCIC  "RMS"
+        .ASCIC  "IFA"
+        .ASCIC  "illegal file attributes detected (file header corrupted)"
+        .LONG   RMS$_WBE
+        .ASCIC  "RMS"
+        .ASCIC  "WBE"
+        .ASCIC  "error on write behind"
+        .LONG   RMS$_ENQ
+        .ASCIC  "RMS"
+        .ASCIC  "ENQ"
+        .ASCIC  "ENQ system service request failed"
+        .LONG   RMS$_NETFAIL
+        .ASCIC  "RMS"
+        .ASCIC  "NETFAIL"
+        .ASCIC  "network operation failed at remote node"
+        .LONG   RMS$_SUPPORT
+        .ASCIC  "RMS"
+        .ASCIC  "SUPPORT"
+        .ASCIC  "network operation not supported"
+        .LONG   RMS$_CRMP
+        .ASCIC  "RMS"
+        .ASCIC  "CRMP"
+        .ASCIC  "CRMPSC system service failed to map global buffers"
+        .LONG   RMS$_DTFCFGFIL
+        .ASCIC  "RMS"
+        .ASCIC  "DTFCFGFIL"
+        .ASCIC  "error accessing configuration file"
+        .LONG   RMS$_REENT
+        .ASCIC  "RMS"
+        .ASCIC  "REENT"
+        .ASCIC  "file could not be renamed and recovery failed; file has been lost"
+        .LONG   RMS$_ACC_RUJ
+        .ASCIC  "RMS"
+        .ASCIC  "ACC_RUJ"
+        .ASCIC  "recovery unit journal can not be accessed"
+        .LONG   RMS$_TMR
+        .ASCIC  "RMS"
+        .ASCIC  "TMR"
+        .ASCIC  "SETIMR system service request failed"
+        .LONG   RMS$_ACC_AIJ
+        .ASCIC  "RMS"
+        .ASCIC  "ACC_AIJ"
+        .ASCIC  "after image journal can not be accessed"
+        .LONG   RMS$_ACC_BIJ
+        .ASCIC  "RMS"
+        .ASCIC  "ACC_BIJ"
+        .ASCIC  "before image journal can not be accessed"
+        .LONG   RMS$_ACC_ATJ
+        .ASCIC  "RMS"
+        .ASCIC  "ACC_ATJ"
+        .ASCIC  "audit trail journal can not be accessed"
+        .LONG   RMS$_DTFDEFFIL
+        .ASCIC  "RMS"
+        .ASCIC  "DTFDEFFIL"
+        .ASCIC  "error accessing file definition file"
+        .LONG   RMS$_DTFREGFIL
+        .ASCIC  "RMS"
+        .ASCIC  "DTFREGFIL"
+        .ASCIC  "error accessing registration file"
+        .LONG   RMS$_JNLNOTAUTH
+        .ASCIC  "RMS"
+        .ASCIC  "JNLNOTAUTH"
+        .ASCIC  "RMS Journaling not authorized; operation not performed"
+        .LONG   RMS$_CRBUFOBJ
+        .ASCIC  "RMS"
+        .ASCIC  "CRBUFOBJ"
+        .ASCIC  "CREATE_BUFOBJ system service failed to create buffer object"
+        .LONG   RMS$_RSESTK_ALLOC
+        .ASCIC  "RMS"
+        .ASCIC  "RSESTK_ALLOC"
+        .ASCIC  "allocation of KP RSE stack failed"
         .LONG   SS$_BADPARAM
         .ASCIC  "SYSTEM"
         .ASCIC  "BADPARAM"

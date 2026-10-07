@@ -146,6 +146,12 @@ enum Cmd {
         /// VFC control area size.
         #[arg(long)]
         vfc: Option<u8>,
+        /// File organization: SEQ REL IDX.
+        #[arg(long)]
+        org: Option<String>,
+        /// Bucket size, blocks.
+        #[arg(long)]
+        bks: Option<u8>,
         /// A directory's default version limit (0: none).
         #[arg(long)]
         version_limit: Option<u16>,
@@ -324,7 +330,7 @@ fn run(cmd: Cmd) -> Result<bool, Error> {
             img.flush()?;
             println!("created {spec} {fid}");
         }
-        Cmd::SetAttr { image, spec, protection, owner, rfm, rat, mrs, lrl, vfc, version_limit } => {
+        Cmd::SetAttr { image, spec, protection, owner, rfm, rat, mrs, lrl, vfc, org, bks, version_limit } => {
             let mut img = rw(&image)?;
             let fid = img.lookup(&spec)?;
             let mut a = img.attributes(fid)?;
@@ -336,6 +342,18 @@ fn run(cmd: Cmd) -> Result<bool, Error> {
                 a.owner = attrs::parse_uic(&o).ok_or_else(|| Error::usage(format!("bad UIC {o:?}")))?;
             }
             apply_record(&mut a.record, rfm.as_deref(), rat.as_deref(), mrs, lrl, vfc)?;
+            if let Some(o) = org {
+                let v = match o.to_ascii_uppercase().as_str() {
+                    "SEQ" => 0x00,
+                    "REL" => 0x10,
+                    "IDX" => 0x20,
+                    _ => return Err(Error::usage(format!("bad organization {o:?}"))),
+                };
+                a.record.rtype = a.record.rtype & 0x0f | v;
+            }
+            if let Some(b) = bks {
+                a.record.bktsize = b;
+            }
             if let Some(v) = version_limit {
                 a.record.versions = v;
             }

@@ -656,3 +656,63 @@ IRC$V_FIRST = 7                         ; a SIDR's first pointer
 DLC$V_DELETED = 2                       ; a relative cell's record was deleted
 DLC$V_REC = 3                           ; it has a record
         .ENDM   $DLCDEF
+
+; $IDXDEF: an indexed file's state, in its IFAB's buffer: its keys and
+; areas, the stream's place, the keys being worked on, and walks, each a
+; place in a bucket. rmsidx.mar and rmsidxw.mar's.
+        .MACRO  $IDXDEF
+; A walk: a bucket, an entry in it, what the entry is, and the keys
+; before it and of it, expanded.
+W$L_BUF = 0                             ; the bucket's room
+W$L_VBN = 4                             ; the bucket
+W$L_SIZE = 8                            ; its bytes
+W$L_OFF = 12                            ; the entry's offset
+W$L_FREE = 16                           ; where the entries end
+W$L_INDEX = 20                          ; the entry's number from 0
+W$L_CTL = 24                            ; its control byte
+W$L_ID = 28                             ; its ID
+W$L_RRVID = 32                          ; a record's RFA, an RRV's new place, an index entry's pointer: ID
+W$L_RRVVBN = 36                         ; and VBN
+W$L_BODY = 40                           ; a record's or SIDR's body, after its size
+W$L_BLEN = 44                           ; the body's bytes
+W$L_LEN = 48                            ; the entry's bytes
+W$L_KLEN = 52                           ; the bytes of its key in the body, before the rest
+W$L_PTR = 56                            ; a SIDR's pointer
+W$L_PEND = 60                           ; and where its pointers end
+W$T_PREV = 64                           ; the key before the entry
+W$T_CUR = 320                           ; the entry's key
+W$K_LENGTH = 576
+X$L_NKEYS = 0                           ; keys
+X$L_NAREAS = 4                          ; areas
+X$L_KEYS = 8                            ; their descriptors, KEY$K_BLN each
+X$L_KLOC = 12                           ; where each is: VBN and offset, a longword each
+X$L_AREAS = 16                          ; area descriptors, AREA$K_BLN each
+X$L_AVBN = 20                           ; the first area descriptor's VBN
+X$L_BKS = 24                            ; the largest bucket, blocks
+X$L_BUF0 = 28                           ; a bucket's room each: a descent's and walk 0's,
+X$L_BUF1 = 32                           ; walk 1's: a record by RFA, a split's new bucket,
+X$L_BUF2 = 36                           ; walk 2's: an RRV's bucket
+X$L_WORK = 40                           ; a record being made
+X$L_LEVEL = 44                          ; a descent's level
+X$B_KRF = 48                            ; the stream's key of reference
+X$B_STATE = 49                          ; X$C_: where the stream is
+X$W_CURID = 50                          ; the current record's RFA: ID,
+X$L_CURVBN = 52                         ; and VBN, 0 if there is none
+X$L_CTXVBN = 56                         ; the stream's record's RFA: VBN,
+X$W_CTXID = 60                          ; and ID
+X$W_FLAGS = 62                          ; X$V_
+X$T_CTXKEY = 64                         ; and its key along X$B_KRF
+X$T_KEY = 320                           ; a key looked for or made
+X$T_KEY2 = 576                          ; another
+X$L_PATH = 832                          ; a descent's buckets and entries, a quadword a level
+X$T_LASTPUT = 1088                      ; the key of the last $PUT by RAB$C_SEQ
+X$K_WALK0 = 1344                        ; the walks
+X$K_WALK1 = 1344+W$K_LENGTH
+X$K_WALK2 = 1344+<2*W$K_LENGTH>
+X$K_LENGTH = 1344+<3*W$K_LENGTH>
+X$C_BOF = 0                             ; before the first record
+X$C_AFTER = 1                           ; after the stream's record
+X$C_AT = 2                              ; at it: a $FIND found it
+X$C_EOF = 3                             ; past the last
+X$V_LASTPUT = 0                         ; X$T_LASTPUT holds a key
+        .ENDM   $IDXDEF

@@ -39,6 +39,7 @@ $ods rename disk.img '[SRC]PHOTO.JPG;1' '[000000]PIC.JPG'
 $ods delete disk.img '[SRC]README.MD;*'                  # a version is required
 $ods purge disk.img '[...]*.*' --keep 2
 $ods set-attr disk.img '[000000]PIC.JPG' --protection S:RWED,O:RWED,G:R,W:
+$ods set-attr disk.img '[000000]F.IDX' --org IDX --rfm VAR --mrs 80 --bks 2     # record attributes too
 $ods dump disk.img '[000000]PIC.JPG'                     # or --fid 12,1, or --lbn 1
 $ods verify disk.img                                     # exit status 2 on errors
 $ods export disk.img '[SRC]' ./src-tree                  # with ods-manifest.json

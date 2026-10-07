@@ -17,19 +17,19 @@ CHAN:   .LONG   0                       ; SYS$OUTPUT's, once assigned
 OUTPUT: .ASCID  "SYS$OUTPUT"
 OPA0:   .ASCID  "OPA0:"
 HEX:    .ASCII  "0123456789ABCDEF"
-LINE:   .BLKB   272
+LINE:   .BLKB   1028
 
         .PSECT  PRINT_CODE, EXE, LONG
-; LIB$PUT_OUTPUT string: writes the string, by descriptor, its first 270
+; LIB$PUT_OUTPUT string: writes the string, by descriptor, its first 1024
 ; characters, and CR LF, as VMS's run-time library does. R0 = $QIOW's
 ; status.
         .ENTRY  LIB$PUT_OUTPUT, ^M<R2, R3>
         MOVL    4(AP), R1
         MOVZWL  (R1), R2
         MOVL    4(R1), R1
-        CMPL    R2, #270
+        CMPL    R2, #1024
         BLEQU   10$
-        MOVL    #270, R2
+        MOVL    #1024, R2
 10$:    CLRL    R3
 20$:    CMPL    R3, R2
         BGEQU   30$

@@ -302,6 +302,7 @@ LOADCELL:
         BSBW    LOADBKT
         BLBC    R0, 90$
         BSBW    CELL
+        MOVL    #RMS$_NORMAL, R0
         BICB3   #^C<<1@DLC$V_REC>!<1@DLC$V_DELETED>>, (R3), R1
         CMPB    R1, #1@DLC$V_REC
         BEQL    10$

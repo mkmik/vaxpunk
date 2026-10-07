@@ -1,0 +1,160 @@
+        .TITLE  RMSDUMP Prints a file's records along a key
+        .IDENT  /V0.1/
+;
+; RMSDUMP file [key], a foreign command (RMSDUMP :== $RMSDUMP), reads the
+; file's records in order, along key number key of an indexed file, 0 by
+; default, and prints each on a line of its own, as ods/fixtures/rms's
+; dumps hold them: a printable byte as it is, a backslash and the others
+; as \xNN. Then a line RMSDUMP: n records, and the status that ended
+; them. The same source builds on OpenVMS.
+;
+        .LIBRARY "starlet.mlb"
+        $RMSDEF
+        $FABDEF
+        $RABDEF
+        .EXTERNAL LIB$PUT_OUTPUT, LIB$GET_FOREIGN
+
+        .PSECT  DATA, NOEXE, WRT, LONG
+CMD:    .BLKB   256                     ; the command line
+CMDDSC: .LONG   256
+        .ADDRESS CMD
+CMDLEN: .WORD   0
+LINE:   .BLKB   1024                    ; a line being made
+LINEDSC:
+        .LONG   0
+        .ADDRESS LINE
+HEX:    .ASCII  "0123456789ABCDEF"
+REC:    .BLKB   4096
+COUNT:  .LONG   0
+TAIL:   .ASCII  "RMSDUMP: "
+TAILLEN = .-TAIL
+TAIL2:  .ASCII  " records, "
+TAIL2LEN = .-TAIL2
+        .ALIGN  LONG
+FAB:    $FAB    FAC=GET
+RAB:    $RAB    FAB=FAB, UBF=REC, USZ=4096
+
+        .PSECT  CODE, EXE, LONG
+        .ENTRY  RMSDUMP, ^M<R2, R3, R4, R5, R6, R7>
+        PUSHAW  CMDLEN
+        CLRL    -(SP)
+        PUSHAQ  CMDDSC
+        CALLS   #3, G^LIB$GET_FOREIGN
+        BLBC    R0, 90$
+        MOVZWL  CMDLEN, R2              ; the file, up to a space
+        MOVAB   CMD, R3
+        CLRL    R4
+10$:    CMPL    R4, R2
+        BGEQU   20$
+        CMPB    (R3)[R4], #^A/ /
+        BEQL    20$
+        INCL    R4
+        BRB     10$
+20$:    MOVL    R3, FAB+FAB$L_FNA
+        MOVB    R4, FAB+FAB$B_FNS
+        CLRL    R5                      ; the key, after it
+30$:    INCL    R4
+        CMPL    R4, R2
+        BGEQU   40$
+        MOVZBL  (R3)[R4], R0
+        SUBL2   #^A/0/, R0
+        BLSS    30$
+        CMPL    R0, #9
+        BGTRU   30$
+        MULL2   #10, R5
+        ADDL2   R0, R5
+        BRB     30$
+40$:    MOVB    R5, RAB+RAB$B_KRF
+        $OPEN   FAB=FAB
+        BLBC    R0, 90$
+        $CONNECT RAB=RAB
+        BLBC    R0, 80$
+50$:    $GET    RAB=RAB
+        BLBC    R0, 70$
+        INCL    COUNT
+        MOVZWL  RAB+RAB$W_RSZ, R6
+        MOVL    RAB+RAB$L_RBF, R7
+        CLRL    R2                      ; the line's bytes
+60$:    TSTL    R6
+        BEQL    65$
+        MOVZBL  (R7)+, R1
+        DECL    R6
+        BSBW    ADDBYTE
+        BRB     60$
+65$:    BSBW    OUT
+        BRB     50$
+70$:    MOVL    R0, R6                  ; how it ended
+        $CLOSE  FAB=FAB
+        MOVC3   #TAILLEN, TAIL, LINE
+        MOVL    #TAILLEN, R2
+        MOVL    COUNT, R1
+        BSBW    ADDDEC
+        PUSHL   R2
+        MOVC3   #TAIL2LEN, TAIL2, LINE[R2]
+        ADDL3   #TAIL2LEN, (SP)+, R2
+        MOVL    #8, R4
+75$:    ROTL    #4, R6, R6
+        EXTZV   #0, #4, R6, R0
+        MOVB    HEX[R0], LINE[R2]
+        INCL    R2
+        SOBGTR  R4, 75$
+        BSBW    OUT
+        MOVL    #RMS$_NORMAL, R0
+        RET
+80$:    PUSHL   R0
+        $CLOSE  FAB=FAB
+        MOVL    (SP)+, R0
+90$:    RET
+
+; ADDBYTE: R1 = a byte, R2 = the line's bytes so far. Adds it, a
+; printable one as it is, a backslash and the others as \xNN. Uses R0-R2.
+ADDBYTE:
+        .JSB_ENTRY  OUTPUT=<R2>
+        CMPL    R2, #1020
+        BGEQU   90$
+        CMPB    R1, #32
+        BLSSU   10$
+        CMPB    R1, #126
+        BGTRU   10$
+        CMPB    R1, #92
+        BEQL    10$
+        MOVB    R1, LINE[R2]
+        INCL    R2
+        RSB
+10$:    MOVB    #^A/\/, LINE[R2]
+        MOVB    #^A/x/, LINE+1[R2]
+        EXTZV   #4, #4, R1, R0
+        MOVB    HEX[R0], LINE+2[R2]
+        EXTZV   #0, #4, R1, R0
+        MOVB    HEX[R0], LINE+3[R2]
+        ADDL2   #4, R2
+90$:    RSB
+
+; ADDDEC: R1 = a value, R2 = the line's bytes so far. Adds it in decimal.
+; Uses R0-R3.
+ADDDEC:
+        .JSB_ENTRY  OUTPUT=<R2>, SCRATCH=<R3>
+        CLRL    R3                      ; digits, on the stack
+10$:    DIVL3   #10, R1, R0
+        MULL3   #10, R0, -(SP)
+        SUBL3   (SP)+, R1, -(SP)
+        INCL    R3
+        MOVL    R0, R1
+        BNEQ    10$
+20$:    ADDL3   #^A/0/, (SP)+, R0
+        MOVB    R0, LINE[R2]
+        INCL    R2
+        SOBGTR  R3, 20$
+        RSB
+
+; OUT: R2 = the line's bytes. Writes it. Keeps every register.
+OUT:
+        .JSB_ENTRY
+        PUSHR   #^M<R0, R1>
+        MOVL    R2, LINEDSC
+        PUSHAQ  LINEDSC
+        CALLS   #1, G^LIB$PUT_OUTPUT
+        POPR    #^M<R0, R1>
+        RSB
+
+        .END    RMSDUMP

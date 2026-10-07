@@ -975,8 +975,8 @@ XAB$V_NODEL = 3
         .MACRO  $$BITS  SYM, PREFIX, LIST
 SYM = 0
         .IF NB  <LIST>
-        .IRP    $$I, <LIST>
-SYM = SYM ! PREFIX'$$I
+        .IRP    ITEM, <LIST>
+SYM = SYM ! PREFIX''ITEM
         .ENDR
         .ENDC
         .ENDM   $$BITS
@@ -994,14 +994,14 @@ SYM = SYM ! PREFIX'$$I
         $$BITS  $$RAT, FAB$M_, <RAT>
 $$SHR = 0
         .IF NB  <SHR>
-        .IRP    $$I, <SHR>
-        .IF IDN <$$I>, <MSE>
+        .IRP    ITEM, <SHR>
+        .IF IDN <ITEM>, <MSE>
 $$SHR = $$SHR ! FAB$M_MSE
         .IFF
-        .IF IDN <$$I>, <NIL>
+        .IF IDN <ITEM>, <NIL>
 $$SHR = $$SHR ! FAB$M_NIL
         .IFF
-$$SHR = $$SHR ! FAB$M_SHR'$$I
+$$SHR = $$SHR ! FAB$M_SHR'ITEM
         .ENDC
         .ENDC
         .ENDR
@@ -1056,17 +1056,17 @@ $$SHR = $$SHR ! FAB$M_SHR'$$I
         .LONG   0                       ; RVB
         .BYTE   $$FLG, XAB$C_'DTP
 $$N = 0
-        .IRP    $$I, <POS>
+        .IRP    ITEM, <POS>
 $$N = $$N + 1
         .ENDR
         .BYTE   $$N, NUL, 0, REF        ; NSG, NUL, TKS, REF
         .WORD   0, IFL, DFL             ; MRL, IFL, DFL
-        .IRP    $$I, <POS>
-        .WORD   $$I
+        .IRP    ITEM, <POS>
+        .WORD   ITEM
         .ENDR
         .BLKW   8 - $$N
-        .IRP    $$I, <SIZ>
-        .BYTE   $$I
+        .IRP    ITEM, <SIZ>
+        .BYTE   ITEM
         .ENDR
         .BLKB   8 - $$N
         .WORD   0                       ; to KNM

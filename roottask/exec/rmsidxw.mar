@@ -1,0 +1,31 @@
+        .TITLE  RMSIDXW RMS: writing indexed files
+        .IDENT  /V0.1/
+;
+; Not yet: IDX$CREATE says RMS$_ORG, $PUT, $UPDATE and $DELETE RMS$_IOP.
+;
+        .LIBRARY "starlet.mlb"
+        $RMSDEF
+
+        .PSECT  $CODE$
+
+; IDX$CREATE: R0 = RMS$_ORG.
+IDX$CREATE::
+        .JSB_ENTRY
+        MOVL    #RMS$_ORG, R0
+        RSB
+
+; IDX$PUT, IDX$UPDATE, IDX$DELETE: R0 = RMS$_IOP.
+IDX$PUT::
+IDX$UPDATE::
+IDX$DELETE::
+        .JSB_ENTRY
+        MOVL    #RMS$_IOP, R0
+        RSB
+
+; IDX$FLUSH: R0 = RMS$_NORMAL.
+IDX$FLUSH::
+        .JSB_ENTRY
+        MOVL    #RMS$_NORMAL, R0
+        RSB
+
+        .END

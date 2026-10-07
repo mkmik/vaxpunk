@@ -1103,7 +1103,9 @@ L:      BSBW    FIL$UNLOCK
         BSBW    PUTRES
         BLBC    R0, 80$
 30$:    BSBW    ATTRS
+        PUSHR   #^M<R8, R9>
         BSBW    ORGOPEN
+        POPR    #^M<R8, R9>
         BLBC    R0, 80$
         BSBW    RMS$XABOUT
         BLBC    R0, 80$
@@ -1681,7 +1683,9 @@ FLUSH:
         BSBW    PUTRES
 30$:    BISL2   #<1@IFB$V_WRITE>!<1@IFB$V_HDR>, IFB$L_FLAGS(R7)
         BSBW    ATTRS
+        PUSHR   #^M<R8, R9>
         BSBW    ORGCREATE
+        POPR    #^M<R8, R9>
         BLBC    R0, 50$
         BSBW    RMS$XABOUT
         BLBC    R0, 50$
