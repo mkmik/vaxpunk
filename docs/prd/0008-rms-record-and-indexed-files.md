@@ -230,6 +230,13 @@ instead, `RAB$V_NLK` and `RAB$V_RRL` to read past it, `RAB$V_ULK` with
 
 Each step ends in something you can run or look at.
 
+Steps 1 to 7 are done, and of step 8 `DIRECTORY/FULL`, `TYPE` and `COPY`
+of relative and indexed files: what is left of it, DCL's `OPEN`, `READ`
+and `WRITE`, comes with PRD-0003's step 8, and step 9 with its step 7.
+`image/tests/rms.rs` checks each against the fixtures and a model, and
+the reports `ANALYZE/RMS_FILE` and `DIRECTORY/FULL` write matched the
+oracle's on every fixture.
+
 1. **Layouts.** `ods/docs/indexed.md` and `ods/docs/relative.md`: the
    prologue, area and key descriptors, buckets, records, RRVs and SIDRs,
    from the manuals and `ANALYZE/RMS_FILE/INTERACTIVE` on the oracle; the
