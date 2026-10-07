@@ -22,13 +22,11 @@
 #include "lwip/dhcp.h"
 #include "lwip/init.h"
 #include "lwip/etharp.h"
-#include "lwip/icmp.h"
-#include "lwip/inet_chksum.h"
 #include "lwip/netif.h"
 #include "lwip/pbuf.h"
-#include "lwip/prot/ip4.h"
 #include "lwip/raw.h"
 #include "lwip/tcp.h"
+#include "lwip/udp.h"
 #include "lwip/timeouts.h"
 #include "netif/ethernet.h"
 #include "port.h"
@@ -285,20 +283,30 @@ static int net_init(void)
 }
 
 /*
- * The port's connections, by number, from 1: a TCP PCB each, what it
- * received and the executive hasn't read, and for one that listens the
- * connections accepted that no ACCEPT has taken yet.
+ * The port's connections, by number, from 1: the executive's sockets. A
+ * TCP one has its PCB, what it received and the executive hasn't read,
+ * and, if it listens, the connections accepted that no ACCEPT has taken
+ * yet; a UDP or raw ICMP one its PCB and the datagrams that came, each
+ * with its sender, which a RECV takes one at a time.
  */
 #define NCONN 32
 #define BACKLOG 4
+#define NDGRAM 8 /* datagrams a socket holds; more are dropped, as UDP may */
 #define DHCP_WAIT (10000 / TCPIP_TICK_MS) /* ticks an IFCONFIG waits for DHCP's address */
-#define PING_WAIT (1000 / TCPIP_TICK_MS) /* ticks a PING waits for its reply */
-#define PING_DATA 56 /* bytes after an echo request's header, as ping's */
+struct dgram {
+	struct pbuf *p;
+	uint32_t addr;
+	uint16_t port;
+};
 static struct conn {
-	int used, connected, closed; /* closed: the peer sent FIN */
-	uint32_t err;		     /* a PORT_ST_ the connection failed with */
+	int used, proto, connected, closed; /* closed: the peer sent FIN */
+	uint32_t err;			    /* a PORT_ST_ the connection failed with */
 	struct tcp_pcb *pcb;
+	struct udp_pcb *udp;
+	struct raw_pcb *raw;
 	struct pbuf *rx;
+	struct dgram dg[NDGRAM];
+	unsigned dg_get, dg_put;
 	int listening, nbacklog;
 	uint32_t backlog[BACKLOG];
 } conns[NCONN];
@@ -311,8 +319,8 @@ static uint8_t *buffer(unsigned tag)
 }
 
 /* The commands waiting for something: an ACCEPT, CONNECT, SEND or RECV,
- * an IFCONFIG for DHCP's address or a PING for its reply, by tag, since a
- * tag is in one command at a time. */
+ * or an IFCONFIG for DHCP's address, by tag, since a tag is in one command
+ * at a time. */
 static struct port_msg pend[PORT_TAGS];
 static int answered;
 
@@ -344,8 +352,9 @@ static uint32_t st(err_t err)
 	case ERR_BUF:
 		return PORT_ST_NOMEM;
 	case ERR_USE:
-	case ERR_ISCONN:
 		return PORT_ST_INUSE;
+	case ERR_ISCONN:
+		return PORT_ST_ISCONN;
 	case ERR_RST:
 		return PORT_ST_RESET;
 	case ERR_TIMEOUT:
@@ -355,6 +364,8 @@ static uint32_t st(err_t err)
 		return PORT_ST_UNREACH;
 	case ERR_CLSD:
 		return PORT_ST_CLOSED;
+	case ERR_CONN:
+		return PORT_ST_NOLINKS;
 	default:
 		return PORT_ST_BADPARAM;
 	}
@@ -392,18 +403,79 @@ static err_t on_connected(void *arg, struct tcp_pcb *pcb, err_t err)
 	return ERR_OK;
 }
 
-/* A free connection for pcb, with the callbacks set, or 0. */
-static uint32_t conn_new(struct tcp_pcb *pcb)
+/* Keeps a datagram that came for c, p from addr, port, or drops it. */
+static void queue_dgram(struct conn *c, struct pbuf *p, const ip_addr_t *addr, u16_t from)
+{
+	if (c->dg_put - c->dg_get == NDGRAM) {
+		pbuf_free(p);
+		return;
+	}
+	c->dg[c->dg_put++ % NDGRAM] = (struct dgram){ p, ip4_addr_get_u32(ip_2_ip4(addr)), from };
+}
+
+static void on_udp(void *arg, struct udp_pcb *pcb, struct pbuf *p, const ip_addr_t *addr,
+		   u16_t from)
+{
+	(void)pcb;
+	queue_dgram(&conns[(uintptr_t)arg], p, addr, from);
+}
+
+/* A raw socket gets a copy of each ICMP message, its IP header first, as
+ * BSD's do; lwIP's ICMP still answers an echo request. */
+static u8_t on_raw(void *arg, struct raw_pcb *pcb, struct pbuf *p, const ip_addr_t *addr)
+{
+	(void)pcb;
+	struct pbuf *q = pbuf_clone(PBUF_RAW, PBUF_RAM, p);
+	if (q)
+		queue_dgram(&conns[(uintptr_t)arg], q, addr, 0);
+	return 0;
+}
+
+/* A free connection, or 0. */
+static uint32_t conn_alloc(int proto)
 {
 	for (uint32_t id = 1; id < NCONN; id++)
 		if (!conns[id].used) {
-			conns[id] = (struct conn){ .used = 1, .pcb = pcb };
-			tcp_arg(pcb, (void *)(uintptr_t)id);
-			tcp_recv(pcb, on_recv);
-			tcp_err(pcb, on_err);
+			conns[id] = (struct conn){ .used = 1, .proto = proto };
 			return id;
 		}
 	return 0;
+}
+
+/* A connection for a TCP pcb, with the callbacks set, or 0. */
+static uint32_t conn_new(struct tcp_pcb *pcb)
+{
+	uint32_t id = conn_alloc(PORT_TCP);
+	if (id) {
+		conns[id].pcb = pcb;
+		tcp_arg(pcb, (void *)(uintptr_t)id);
+		tcp_recv(pcb, on_recv);
+		tcp_err(pcb, on_err);
+	}
+	return id;
+}
+
+/* A socket of proto, with its PCB, or 0. */
+static uint32_t sock_new(int proto)
+{
+	if (proto == PORT_TCP) {
+		struct tcp_pcb *pcb = tcp_new();
+		uint32_t id = pcb ? conn_new(pcb) : 0;
+		if (pcb && !id)
+			tcp_abort(pcb);
+		return id;
+	}
+	uint32_t id = conn_alloc(proto);
+	if (!id)
+		return 0;
+	void *arg = (void *)(uintptr_t)id;
+	if (proto == PORT_UDP && (conns[id].udp = udp_new()))
+		udp_recv(conns[id].udp, on_udp, arg);
+	else if (proto == PORT_ICMP && (conns[id].raw = raw_new(IP_PROTO_ICMP)))
+		raw_recv(conns[id].raw, on_raw, arg);
+	else
+		conns[id].used = 0, id = 0;
+	return id;
 }
 
 static err_t on_accept(void *arg, struct tcp_pcb *pcb, err_t err)
@@ -442,63 +514,62 @@ static void conn_free(uint32_t id)
 		if (tcp_close(c->pcb) != ERR_OK)
 			tcp_abort(c->pcb);
 	}
+	if (c->udp)
+		udp_remove(c->udp);
+	if (c->raw)
+		raw_remove(c->raw);
 	if (c->rx)
 		pbuf_free(c->rx);
+	while (c->dg_get != c->dg_put)
+		pbuf_free(c->dg[c->dg_get++ % NDGRAM].p);
 	c->used = 0;
 }
 
-/*
- * PING: an echo request whose identifier is the command's tag and whose
- * sequence number is the next of ping_seq, kept in its port field, so that
- * a late reply to the tag's last PING isn't taken for this one's. The
- * replies come here before lwIP's ICMP; the others go on to it.
- */
-static struct raw_pcb *icmp_pcb;
-static uint16_t ping_seq;
-
-static void ping(struct port_msg *m)
+/* SETMODE's binding and listening, and OPEN's after it makes the socket. */
+static uint32_t setmode(struct conn *c, struct port_msg *m)
 {
 	ip4_addr_t ip;
 	ip4_addr_set_u32(&ip, m->addr);
-	struct pbuf *p = pbuf_alloc(PBUF_IP, sizeof(struct icmp_echo_hdr) + PING_DATA, PBUF_RAM);
-	if (!p) {
-		respond(m, PORT_ST_NOMEM);
-		return;
+	if (m->flags & PORT_BIND) {
+		err_t err = c->pcb && !c->listening ? tcp_bind(c->pcb, &ip, m->port)
+			    : c->udp		    ? udp_bind(c->udp, &ip, m->port)
+			    : c->raw		    ? raw_bind(c->raw, &ip)
+						    : ERR_VAL;
+		if (err != ERR_OK)
+			return st(err);
 	}
-	struct icmp_echo_hdr *e = p->payload;
-	memset(e, 0, p->len);
-	ICMPH_TYPE_SET(e, ICMP_ECHO);
-	e->id = lwip_htons(m->tag);
-	m->port = ++ping_seq;
-	e->seqno = lwip_htons(m->port);
-	e->chksum = inet_chksum(e, p->len);
-	err_t err = raw_sendto(icmp_pcb, p, &ip);
-	pbuf_free(p);
-	if (err != ERR_OK) {
-		respond(m, st(err));
-		return;
+	if (m->flags & PORT_LISTEN) {
+		struct tcp_pcb *l = c->pcb && !c->listening
+					    ? tcp_listen_with_backlog(c->pcb, m->arg1 ? m->arg1 : 1)
+					    : 0;
+		if (!l)
+			return c->proto == PORT_TCP ? PORT_ST_NOMEM : PORT_ST_BADPARAM;
+		c->pcb = l, c->listening = 1;
+		tcp_accept(l, on_accept);
 	}
-	m->len = ticks; /* when it went */
-	wait_for(m);
+	return PORT_ST_OK;
 }
 
-static u8_t on_icmp(void *arg, struct raw_pcb *pcb, struct pbuf *p, const ip_addr_t *addr)
+/* A datagram socket's SEND, done at once: to addr, port with PORT_TO, else
+ * to the peer CONNECT gave it. */
+static uint32_t send_dgram(struct conn *c, struct port_msg *m)
 {
-	(void)arg, (void)pcb;
-	struct ip_hdr *iph = p->payload;
-	struct icmp_echo_hdr e;
-	if (pbuf_copy_partial(p, &e, sizeof e, IPH_HL_BYTES(iph)) != sizeof e ||
-	    ICMPH_TYPE(&e) != ICMP_ER || lwip_ntohs(e.id) >= PORT_TAGS)
-		return 0;
-	struct port_msg *m = &pend[lwip_ntohs(e.id)];
-	if (m->type != PORT_PING || m->port != lwip_ntohs(e.seqno) ||
-	    m->addr != ip4_addr_get_u32(ip_2_ip4(addr)))
-		return 0;
-	m->arg1 = (ticks - m->len) * TCPIP_TICK_MS;
-	m->arg2 = IPH_TTL(iph);
-	respond(m, PORT_ST_OK);
+	ip4_addr_t ip;
+	ip4_addr_set_u32(&ip, m->addr);
+	if (m->flags & PORT_TO ? c->connected : !c->connected)
+		return c->connected ? PORT_ST_ISCONN : PORT_ST_NOLINKS;
+	if (m->flags & PORT_TO && c->udp && !m->port)
+		return PORT_ST_IVADDR;
+	struct pbuf *p = pbuf_alloc(c->udp ? PBUF_TRANSPORT : PBUF_IP, m->len, PBUF_RAM);
+	if (!p)
+		return PORT_ST_NOMEM;
+	pbuf_take(p, buffer(m->tag), m->len);
+	err_t err = c->udp ? (m->flags & PORT_TO ? udp_sendto(c->udp, p, &ip, m->port)
+						 : udp_send(c->udp, p))
+		    : m->flags & PORT_TO ? raw_sendto(c->raw, p, &ip)
+					 : raw_send(c->raw, p);
 	pbuf_free(p);
-	return 1;
+	return st(err);
 }
 
 /* Answers an IFCONFIG with the interface's address, mask and gateway. */
@@ -511,6 +582,24 @@ static void ifconfig(struct port_msg *m, uint32_t status)
 	respond(m, status);
 }
 
+/* Answers a GETNAME with the socket's local name and its peer's. */
+static void getname(struct conn *c, struct port_msg *m)
+{
+	struct ip_pcb *ipcb = c->pcb ? (struct ip_pcb *)c->pcb
+			      : c->udp ? (struct ip_pcb *)c->udp
+				       : (struct ip_pcb *)c->raw;
+	m->addr = m->port = m->arg1 = m->arg2 = 0;
+	if (ipcb) {
+		m->addr = ip4_addr_get_u32(ip_2_ip4(&ipcb->local_ip));
+		m->arg1 = ip4_addr_get_u32(ip_2_ip4(&ipcb->remote_ip));
+	}
+	if (c->pcb) /* a listening one's is a tcp_pcb_listen, with no peer */
+		m->port = c->pcb->local_port, m->arg2 = c->listening ? 0 : c->pcb->remote_port;
+	else if (c->udp)
+		m->port = c->udp->local_port, m->arg2 = c->udp->remote_port;
+	respond(m, PORT_ST_OK);
+}
+
 /* Answers a waiting command if it can be: m is pend[tag]. */
 static void try_finish(struct port_msg *m)
 {
@@ -520,11 +609,6 @@ static void try_finish(struct port_msg *m)
 			ifconfig(m, PORT_ST_OK);
 		else if ((int32_t)(ticks - m->len) >= 0)
 			ifconfig(m, PORT_ST_TIMEOUT);
-		return;
-	}
-	if (m->type == PORT_PING) {
-		if ((int32_t)(ticks - m->len) >= PING_WAIT)
-			respond(m, PORT_ST_TIMEOUT);
 		return;
 	}
 	struct conn *c = conn_of(m->conn);
@@ -566,7 +650,15 @@ static void try_finish(struct port_msg *m)
 		return;
 	}
 	case PORT_RECV:
-		if (c->rx) {
+		if (c->proto != PORT_TCP) {
+			if (c->dg_get == c->dg_put)
+				return;
+			struct dgram *d = &c->dg[c->dg_get++ % NDGRAM];
+			m->len = pbuf_copy_partial(d->p, buffer(m->tag), m->len, 0);
+			m->addr = d->addr, m->port = d->port;
+			pbuf_free(d->p);
+			respond(m, PORT_ST_OK);
+		} else if (c->rx) {
 			uint32_t n = pbuf_copy_partial(c->rx, buffer(m->tag), m->len, 0);
 			c->rx = pbuf_free_header(c->rx, n);
 			if (c->pcb)
@@ -589,63 +681,65 @@ static void command(struct port_msg *m)
 	ip4_addr_set_u32(&ip, m->addr);
 	switch (m->type) {
 	case PORT_OPEN: {
-		struct tcp_pcb *pcb = m->proto == PORT_TCP ? tcp_new() : 0;
-		uint32_t id = pcb ? conn_new(pcb) : 0;
-		if (pcb && !id)
-			tcp_abort(pcb);
+		uint32_t id = sock_new(m->proto);
+		uint32_t status = id ? setmode(&conns[id], m) : PORT_ST_NOMEM;
+		if (id && status != PORT_ST_OK)
+			conn_free(id), id = 0;
 		m->conn = id;
-		respond(m, m->proto != PORT_TCP ? PORT_ST_BADPARAM : id ? PORT_ST_OK : PORT_ST_NOMEM);
+		respond(m, status);
 		return;
 	}
 	case PORT_IFCONFIG: {
-		if (m->flags & PORT_SET) {
+		if (m->flags & (PORT_ADDR | PORT_MASK | PORT_GW | PORT_DHCP)) {
 			dhcp_release_and_stop(&netif);
 			netif_set_up(&netif);
-			if (m->flags & PORT_DHCP) {
-				if (dhcp_start(&netif) != ERR_OK) {
-					respond(m, PORT_ST_NOMEM);
-					return;
-				}
-				m->len = ticks + DHCP_WAIT;
-				wait_for(m);
+		}
+		if (m->flags & PORT_DHCP) {
+			if (dhcp_start(&netif) != ERR_OK) {
+				respond(m, PORT_ST_NOMEM);
 				return;
 			}
-			ip4_addr_t mask, gw;
-			ip4_addr_set_u32(&mask, m->arg1);
-			ip4_addr_set_u32(&gw, m->arg2);
-			netif_set_addr(&netif, &ip, &mask, &gw);
+			m->len = ticks + DHCP_WAIT;
+			wait_for(m);
+			return;
 		}
+		ip4_addr_t mask, gw;
+		ip4_addr_set_u32(&mask, m->arg1);
+		ip4_addr_set_u32(&gw, m->arg2);
+		if (m->flags & PORT_ADDR)
+			netif_set_ipaddr(&netif, &ip);
+		if (m->flags & PORT_MASK)
+			netif_set_netmask(&netif, &mask);
+		if (m->flags & PORT_GW)
+			netif_set_gw(&netif, &gw);
 		ifconfig(m, PORT_ST_OK);
 		return;
 	}
-	case PORT_PING:
-		ping(m);
-		return;
 	}
 	if (!c) {
 		respond(m, PORT_ST_BADPARAM);
 		return;
 	}
 	switch (m->type) {
-	case PORT_BIND:
-		respond(m, c->pcb && !c->listening ? st(tcp_bind(c->pcb, &ip, m->port))
-						   : PORT_ST_BADPARAM);
+	case PORT_SETMODE:
+		respond(m, setmode(c, m));
 		return;
-	case PORT_LISTEN: {
-		struct tcp_pcb *l = c->pcb && !c->listening
-					    ? tcp_listen_with_backlog(c->pcb, m->arg1 ? m->arg1 : 1)
-					    : 0;
-		if (!l) {
-			respond(m, PORT_ST_NOMEM);
+	case PORT_CONNECT:
+		if (c->listening || c->connected) {
+			respond(m, c->connected ? PORT_ST_ISCONN : PORT_ST_BADPARAM);
 			return;
 		}
-		c->pcb = l, c->listening = 1;
-		tcp_accept(l, on_accept);
-		respond(m, PORT_ST_OK);
-		return;
-	}
-	case PORT_CONNECT:
-		if (!c->pcb || c->listening || c->connected) {
+		if (c->udp && !m->port) {
+			respond(m, PORT_ST_IVADDR);
+			return;
+		}
+		if (c->udp || c->raw) {
+			err_t err = c->udp ? udp_connect(c->udp, &ip, m->port) : raw_connect(c->raw, &ip);
+			c->connected = err == ERR_OK;
+			respond(m, st(err));
+			return;
+		}
+		if (!c->pcb) {
 			respond(m, PORT_ST_BADPARAM);
 			return;
 		}
@@ -656,16 +750,46 @@ static void command(struct port_msg *m)
 		}
 		wait_for(m);
 		return;
-	case PORT_ACCEPT:
 	case PORT_SEND:
-	case PORT_RECV:
-		if (c->listening != (m->type == PORT_ACCEPT) ||
-		    (m->type != PORT_ACCEPT && (m->tag >= PORT_BUFFERS || m->len > PORT_BUFSIZE))) {
+		if (m->tag >= PORT_BUFFERS || m->len > PORT_BUFSIZE) {
 			respond(m, PORT_ST_BADPARAM);
+			return;
+		}
+		if (c->proto != PORT_TCP) {
+			respond(m, send_dgram(c, m));
+			return;
+		}
+		if (!c->connected && !c->closed && !c->err) {
+			respond(m, PORT_ST_NOLINKS);
 			return;
 		}
 		m->arg2 = 0;
 		wait_for(m);
+		return;
+	case PORT_ACCEPT:
+	case PORT_RECV:
+		if (c->listening != (m->type == PORT_ACCEPT) ||
+		    (m->type == PORT_RECV && (m->tag >= PORT_BUFFERS || m->len > PORT_BUFSIZE))) {
+			respond(m, PORT_ST_BADPARAM);
+			return;
+		}
+		if (m->type == PORT_RECV && c->proto == PORT_TCP && !c->connected && !c->closed &&
+		    !c->err) {
+			respond(m, PORT_ST_NOLINKS);
+			return;
+		}
+		wait_for(m);
+		return;
+	case PORT_GETNAME:
+		getname(c, m);
+		return;
+	case PORT_SHUTDOWN:
+		if (m->arg1 != 1 && c->rx)
+			pbuf_free(c->rx), c->rx = 0;
+		respond(m, c->pcb && !c->listening && m->arg1 <= 2
+				   ? st(tcp_shutdown(c->pcb, m->arg1 != 1, m->arg1 != 0))
+			   : m->arg1 <= 2 ? PORT_ST_OK
+					  : PORT_ST_BADPARAM);
 		return;
 	case PORT_CANCEL:
 		cancel(m->conn, PORT_ST_ABORTED);
@@ -688,8 +812,6 @@ int main(uint64_t paddr, uint64_t offset)
 		tcpip_print("tcpip: the virtio-net device won't start\n");
 		tcpip_halt();
 	}
-	icmp_pcb = raw_new(IP_PROTO_ICMP);
-	raw_recv(icmp_pcb, on_icmp, 0); /* lwIP has a raw PCB to spare at start */
 	port->version = PORT_VERSION;
 	for (;;) {
 		seL4_Word badge;

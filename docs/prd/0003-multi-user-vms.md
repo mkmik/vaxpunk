@@ -230,7 +230,7 @@ until the hardware or size changes; leave it.
 | 32 | The CLI: parse limits of 128 entities, 1 KB of values, a 512-byte line; the parse copied to a fixed address; the first `SET COMMAND` error ends the compile; at most 8 `SET COMMAND` files; a qualifier the syntax lacks is an error, not ignored; an entity present by default doesn't count; `$IMGACT` calls the image (ADR-0017, ADR-0018, `cli.mar`, `cdu.mar`, `process.mar`, DESIGN-0002) | When a command or a CLD file runs into one |
 | 33 | `$GETDVI` and `$GETJPI` are done at once with no AST (`getdvi.mar`, `getjpi.mar`) | Fine on one node; the `W` and non-`W` forms behave the same |
 | 34 | AST routines get their parameter only, not R0, R1, PC and PSL (DESIGN-0002) | When a program reads them |
-| 35 | One route and one interface; UDP has no port messages (`tcpip.mar`, DESIGN-0003, PRD-0002) | PRD-0002's work order |
+| 35 | One route and one interface; no buffer lists, socket options, read and write flags or `IO$M_NOW` on sockets (`tcpip.mar`, `netdriver.mar`, DESIGN-0003, ADR-0024) | PRD-0002's work order; the sockets library will want options and flags |
 | 36 | `LIB$GET_INPUT`'s fixed-length string isn't blank padded (`getinput.mar`); `MDA0:` has a fixed size (`mddriver.mar`) | When a caller notices; `INITIALIZE/SIZE` once DCL passes qualifiers to it |
 
 ### Tier 4: scaffolding

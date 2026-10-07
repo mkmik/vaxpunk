@@ -48,6 +48,7 @@ kept current, like a design document.
 | [ADR-0021](adr/0021-condition-handlers-run-in-the-mode-that-signals.md) | Condition handlers are found along the FP chain and run in the mode that signaled, from code in the vector | Proposed |
 | [ADR-0022](adr/0022-tcpip-utility-and-dhcp.md) | The network is set with TCP/IP Services' TCPIP utility, which parses its own commands, and lwIP's DHCP client can give the interface its address | Proposed |
 | [ADR-0023](adr/0023-calling-standard.md) | The vaxpunk calling standard is AAPCS64 with VMS's argument count, sign extension and self-describing frames, and MACRO-32 is compiled onto it as AMACRO compiled it onto Alpha's | Accepted |
+| [ADR-0024](adr/0024-sockets-have-tcpip-services-qio-interface.md) | Sockets have TCP/IP Services' $QIO interface, with UDP and raw ICMP, and the interface is set with its ioctls | Proposed |
 
 ### PRDs
 

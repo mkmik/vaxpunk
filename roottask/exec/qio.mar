@@ -298,6 +298,7 @@ IOC$ALLOCIRP::
         MOVL    28(AP), IRP$L_BUFADR(R3)
         MOVL    32(AP), IRP$L_BCNT(R3)
         CLRL    IRP$L_PROMPT(R3)
+        CLRL    IRP$L_POST(R3)
         MOVL    #SS$_NORMAL, R0
         RSB
 80$:    MOVL    #SS$_EXQUOTA, R0
@@ -324,16 +325,23 @@ IOC$REQCOM::
         RSB
 
 ; IOC$POST: a done IRP's kernel mode AST, in its process. R4 = the PCB, R5
-; = the IRP. Copies a buffered read's data to the caller's buffer, writes
-; the IOSB and sets the event flag, then queues the IRP as an ACB for the
-; caller's AST, in the caller's mode, or frees it if there is none.
-; IPL$_SYNCH. Uses R0-R3, R5 and R6.
+; = the IRP. Calls its driver's post routine, IRP$L_POST, if it has one,
+; which writes what else the request returns where the caller asked, then
+; copies a buffered read's data to the caller's buffer, writes the IOSB
+; and sets the event flag, then queues the IRP as an ACB for the caller's
+; AST, in the caller's mode, or frees it if there is none. IPL$_SYNCH.
+; Uses R0-R3, R5 and R6.
 ; ponytail: the buffer and the IOSB aren't probed again; VMS's are, or
 ; locked.
 IOC$POST::
         .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5, R6>
         MOVL    R5, R6
-        BBC     #IRP$V_BUFIO, IRP$L_STS(R6), 10$
+        MOVL    IRP$L_POST(R6), R0
+        BEQL    5$
+        PUSHL   R4
+        JSB     (R0)
+        MOVL    (SP)+, R4
+5$:     BBC     #IRP$V_BUFIO, IRP$L_STS(R6), 10$
         EXTZV   #16, #16, IRP$L_IOST1(R6), R0
         ADDL3   #IRP$K_LENGTH, IRP$L_PROMPT(R6), R1
         ADDL2   R6, R1

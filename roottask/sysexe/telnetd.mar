@@ -1,28 +1,37 @@
         .TITLE  TELNETD The remote login server
-        .IDENT  /V0.1/
+        .IDENT  /V0.2/
 ;
 ; SET HOST's other end. TCPIP.EXE starts it at boot, as the process
-; TCPIP$TELNET. It listens on TCP port 23 and, for each connection it
-; accepts, creates a process that runs DCL with the connection's network
-; unit, _BGnn:, as its SYS$INPUT, SYS$OUTPUT and SYS$ERROR, named so, as
-; VMS names a process on a terminal before anyone logs in. DCL reads the
-; commands that come and writes on the connection; LOGOUT, or the line
-; going, deletes the process, and its unit's last channel closes the
-; connection. The server keeps its channel until DCL has assigned its own.
+; TCPIP$TELNET. It listens on TCP port 23, a socket on TCPIP$DEVICE:, and,
+; for each connection it accepts, creates a process that runs DCL with
+; the connection's network unit, _BGnn:, as its SYS$INPUT, SYS$OUTPUT and
+; SYS$ERROR, named so, as VMS names a process on a terminal before anyone
+; logs in. DCL reads the commands that come and writes on the connection;
+; LOGOUT, or the line going, deletes the process, and its unit's last
+; channel closes the connection. The server keeps its channel until DCL
+; has assigned its own, which $GETDVI's DVI$_REFCNT shows.
 ; ponytail: no username or password: a remote login is SYSTEM's, as the
-; console's is.
+; console's is; and the connection is DCL's terminal itself, where TCP/IP
+; Services' TELNET server gives it a TNA pseudo-terminal.
 ;
         .LIBRARY "starlet.mlb"
         .LIBRARY "sysexe.mlb"
         $SSDEF
         $IODEF
+        $DVIDEF
+        $INETSYMDEF
+        $SOCKADDRINDEF
 
         .PSECT  DATA, NOEXE, WRT, LONG
-BGA0:   .ASCID  "BGA0:"
+DEVICE: .ASCID  "TCPIP$DEVICE:"
 DCL:    .ASCID  "DCL.EXE"
-SOCKCHAR:                               ; a TCP socket: protocol, type, family
-        .WORD   6
-        .BYTE   1, 2
+TCP:    .WORD   TCPIP$C_TCP             ; a TCP socket: protocol, type, family
+        .BYTE   TCPIP$C_STREAM, TCPIP$C_AF_INET
+NAME:   .WORD   SIN$K_LENGTH, TCPIP$C_SOCK_NAME ; port 23, any address
+        .ADDRESS .+4
+        .WORD   TCPIP$C_AF_INET
+        .BYTE   0, 23, 0, 0, 0, 0
+        .BLKB   8
 LCHAN:  .LONG   0                       ; the listening channel
 CHAN:   .LONG   0                       ; a connection's
 IOSB:   .BLKQ   1
@@ -30,24 +39,27 @@ MS50:   .LONG   -500000, -1             ; 50 ms
 UNIT:   .LONG   6                       ; the unit's name, _BGnn:
         .ADDRESS UNITNAME
 UNITNAME:
-        .ASCII  "_BG00:"
+        .BLKB   6
+REFCNT: .LONG   0                       ; the unit's channels
+NAMEITEM:                               ; $GETDVI's items: the name
+        .WORD   6, DVI$_DEVNAM
+        .ADDRESS UNITNAME, 0
+        .LONG   0
+REFITEM:                                ; the channels
+        .WORD   4, DVI$_REFCNT
+        .ADDRESS REFCNT, 0
+        .LONG   0
 
         .PSECT  CODE, EXE, LONG
         .ENTRY  START, ^M<R2>
-        $ASSIGN_S DEVNAM=BGA0, CHAN=LCHAN
+        $ASSIGN_S DEVNAM=DEVICE, CHAN=LCHAN
         BLBC    R0, 90$
-        $QIOW_S CHAN=LCHAN, FUNC=#IO$_SETMODE, IOSB=IOSB, P1=SOCKCHAR
+        $QIOW_S CHAN=LCHAN, FUNC=#IO$_SETMODE, IOSB=IOSB, P1=TCP, P3=#NAME, P4=#4
         BSBW    STATUS
         BLBC    R0, 90$
-        $QIOW_S CHAN=LCHAN, FUNC=#IO$_SETMODE!IO$M_BIND, IOSB=IOSB, P3=#0, P4=#23
-        BSBW    STATUS
+10$:    $ASSIGN_S DEVNAM=DEVICE, CHAN=CHAN
         BLBC    R0, 90$
-        $QIOW_S CHAN=LCHAN, FUNC=#IO$_SETMODE!IO$M_LISTEN, IOSB=IOSB, P4=#4
-        BSBW    STATUS
-        BLBC    R0, 90$
-10$:    $ASSIGN_S DEVNAM=BGA0, CHAN=CHAN
-        BLBC    R0, 90$
-        $QIOW_S CHAN=LCHAN, FUNC=#IO$_ACCESS!IO$M_ACCEPT, IOSB=IOSB, P4=CHAN
+        $QIOW_S CHAN=LCHAN, FUNC=#IO$_ACCESS!IO$M_ACCEPT, IOSB=IOSB, P4=#CHAN
         BSBW    STATUS
         BLBC    R0, 80$
         BSBW    LOGIN
@@ -59,21 +71,15 @@ UNITNAME:
 ; it has assigned a channel to the connection's unit, or 5 seconds.
 LOGIN:
         .JSB_ENTRY  SCRATCH=<R2>
-        $QIOW_S CHAN=CHAN, FUNC=#IO$_SENSEMODE, IOSB=IOSB
-        BSBW    STATUS
+        $GETDVIW_S CHAN=CHAN, ITMLST=NAMEITEM
         BLBC    R0, 90$
-        MOVZWL  IOSB+2, R0              ; nn
-        CLRL    R1
-        EDIV    #10, R0, R1, R0
-        ADDB3   #^A/0/, R1, UNITNAME+3
-        ADDB3   #^A/0/, R0, UNITNAME+4
         $CREPRC_S IMAGE=DCL, INPUT=UNIT, OUTPUT=UNIT, ERROR=UNIT, PRCNAM=UNIT, BASPRI=#4
         BLBC    R0, 90$
         MOVL    #100, R2
 10$:    $SETIMR_S EFN=#1, DAYTIM=MS50
         $WAITFR_S EFN=#1
-        $QIOW_S CHAN=CHAN, FUNC=#IO$_SENSEMODE, IOSB=IOSB
-        CMPL    IOSB+4, #2              ; its channel and ours
+        $GETDVIW_S CHAN=CHAN, ITMLST=REFITEM
+        CMPL    REFCNT, #2              ; its channel and ours
         BGEQ    90$
         SOBGTR  R2, 10$
 90$:    RSB

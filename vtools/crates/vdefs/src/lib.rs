@@ -161,9 +161,10 @@ pub fn generate(source: &str, text: &str, dialect: Dialect) -> Result<String, St
                 }
                 None => {}
             }
+            // A name without a $, as $SIOCDEF's BSD ones, is a literal.
             let letters = match name.split_once('$') {
                 Some((_, rest)) => rest.split_once('_').map_or("", |(l, _)| l),
-                None => return Err(format!("{name} in {}: no $ in the name", def.name)),
+                None => "",
             };
             let comment = if comment.is_empty() {
                 String::new()

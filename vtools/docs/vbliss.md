@@ -199,6 +199,7 @@ comes from the letters between its `$` and `_`, as VMS names encode it:
 | `IH`, `PH`, `PQ` | a 64-bit field, marked signed as DEC's are |
 | `T`, `AB`, `AW`, `AL`, `AQ` | a field of size 0: its address |
 | `K`, `C`, `M`, `S`, `V`, none | a `LITERAL` |
+| no `$` at all, as `$SIOCDEF`'s BSD names | a `LITERAL` |
 
 Under BLISS-32 a 64-bit field has size 0, as in DEC's `STARLET.REQ`. A
 `$V_` name is the bit number, not DEC's field macro: the macro libraries

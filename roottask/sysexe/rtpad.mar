@@ -4,8 +4,9 @@
 ; DCL's SET HOST address runs this, NODE the address, as VMS's DCL ran
 ; RTPAD.EXE, and so does TELNET address [port] or TELNET address /PORT=n,
 ; as TCP/IP Services' TELNET takes them. It connects to TCP port 23
-; there, where another vaxpunk's TELNETD gives it a DCL of its own, or to
-; the port, whatever listens there, and passes lines both ways: what comes
+; there, a socket on TCPIP$DEVICE:, where another vaxpunk's TELNETD gives it
+; a DCL of its own, or to the port, whatever listens there, and passes lines
+; both ways: what comes
 ; on the connection it writes on the terminal, and each line read on the
 ; terminal, edited there, it sends with a CR LF.
 ; When the other end closes, at its LOGOUT, or CTRL/Z is typed here, it
@@ -17,17 +18,22 @@
         .LIBRARY "sysexe.mlb"
         $SSDEF
         $IODEF
+        $INETSYMDEF
+        $SOCKADDRINDEF
 
         .EXTERNAL INET_ADDR
 
 BUFSIZE = 1024
 
         .PSECT  DATA, NOEXE, WRT, LONG
-BGA0:   .ASCID  "BGA0:"
+DEVICE: .ASCID  "TCPIP$DEVICE:"
 INPUT:  .ASCID  "SYS$INPUT"
-SOCKCHAR:                               ; a TCP socket: protocol, type, family
-        .WORD   6
-        .BYTE   1, 2
+TCP:    .WORD   TCPIP$C_TCP             ; a TCP socket: protocol, type, family
+        .BYTE   TCPIP$C_STREAM, TCPIP$C_AF_INET
+PEER:   .WORD   SIN$K_LENGTH, TCPIP$C_SOCK_NAME ; the other end's name
+        .ADDRESS SIN
+SIN:    .WORD   TCPIP$C_AF_INET
+        .BLKB   14                      ; its port, in network order, and address
 NCHAN:  .LONG   0                       ; the connection's channel
 TCHAN:  .LONG   0                       ; the terminal's
 ADDR:   .LONG   0                       ; the other end's address
@@ -69,12 +75,16 @@ TBUF:   .BLKB   BUFSIZE+2               ; a line typed, and its CR LF
 4$:     BLBC    R0, 90$
         BSBW    GETPORT
         BLBC    R0, 90$
-5$:     $ASSIGN_S DEVNAM=BGA0, CHAN=NCHAN
+5$:     MOVL    ADDR, SIN+SIN$L_ADDR
+        ROTL    #-8, PORT, R0           ; the port, high byte first
+        MOVB    R0, SIN+SIN$W_PORT
+        MOVB    PORT, SIN+SIN$W_PORT+1
+        $ASSIGN_S DEVNAM=DEVICE, CHAN=NCHAN
         BLBC    R0, 90$
-        $QIOW_S CHAN=NCHAN, FUNC=#IO$_SETMODE, IOSB=IOSB, P1=SOCKCHAR
+        $QIOW_S CHAN=NCHAN, FUNC=#IO$_SETMODE, IOSB=IOSB, P1=TCP
         BSBW    STATUS
         BLBC    R0, 90$
-        $QIOW_S CHAN=NCHAN, FUNC=#IO$_ACCESS, IOSB=IOSB, P3=ADDR, P4=PORT
+        $QIOW_S CHAN=NCHAN, FUNC=#IO$_ACCESS, IOSB=IOSB, P3=#PEER
         BSBW    STATUS
         BLBC    R0, 90$
         $ASSIGN_S DEVNAM=INPUT, CHAN=TCHAN

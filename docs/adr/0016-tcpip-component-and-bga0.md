@@ -3,7 +3,8 @@
 Oct 3, 2026 · @Marko Mikulicic
 
 Proposed; point 5 is replaced by
-[ADR-0022](0022-tcpip-utility-and-dhcp.md). The TCP/IP component of [PRD-0002](../prd/0002-networking.md)
+[ADR-0022](0022-tcpip-utility-and-dhcp.md), and point 3's device
+interface by [ADR-0024](0024-sockets-have-tcpip-services-qio-interface.md). The TCP/IP component of [PRD-0002](../prd/0002-networking.md)
 is one freestanding ELF, `tcpip/`: lwIP's raw API, a small virtio-net
 driver and the port adapter. The root task embeds it and starts it as a
 thread in an address space of its own, as it starts the executive, not

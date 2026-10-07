@@ -7,13 +7,14 @@ the two share, the executive's port driver, `BGA0:`, and the programs on
 top of it. It implements [PRD-0002](../prd/0002-networking.md), with the
 choices [ADR-0016](../adr/0016-tcpip-component-and-bga0.md) makes, and adds
 to the PAL interface of [DESIGN-0001](0001-pal-interface.md): a doorbell
-register, an interrupt and a field of the RPB.
+register, an interrupt and a field of the RPB. Programs see TCP/IP
+Services' $QIO interface ([ADR-0024](../adr/0024-sockets-have-tcpip-services-qio-interface.md)).
 
 ```
  executive                       │ port (17 shared pages)      │ TCP/IP component
                                  │                             │
- TCPTEST, TELNETD, RTPAD, DCL    │                             │
-   │ $QIO on BGA0: or a BGnn:    │                             │
+ TCPTEST, TELNETD, RTPAD, TCPIP  │                             │
+   │ $QIO on TCPIP$DEVICE:       │                             │
    ▼                             │                             │
  NET$FDT ── command, tag ────────┼─> command ring ────────────>┼─> command()
    │  MTPR #0, #PR$_DOORBELL ──> PAL ── seL4_Signal ──────────>┼─> wakes
@@ -28,8 +29,8 @@ register, an interrupt and a field of the RPB.
 
 `tcpip/` builds `tcpip.elf`, freestanding C: lwIP 2.2.1 (the `tcpip/lwip`
 submodule) with its raw API and no OS (`NO_SYS`), configured by
-`include/lwipopts.h` for IPv4, ARP, ICMP, TCP and UDP, and a raw ICMP
-PCB for `PING`, a virtio-net driver
+`include/lwipopts.h` for IPv4, ARP, ICMP, TCP, UDP and raw ICMP sockets,
+a virtio-net driver
 and the adapter between lwIP and the port (`src/main.c`). `include/` also
 holds the few libc headers lwIP includes, and `src/libc.c` their
 functions.
@@ -103,33 +104,37 @@ only its own ring and index. A message is 32 bytes:
 
 | Offset | Field | |
 | --- | --- | --- |
-| 0 | type | `OPEN`, `BIND`, `LISTEN`, `ACCEPT`, `CONNECT`, `SEND`, `RECV`, `CLOSE`, `IFCONFIG`, `CANCEL`, `PING` |
-| 1 | flags | `IFCONFIG`: 1, set (not only sense), and 4 with it, by DHCP; in the response, 2, the link is up |
+| 0 | type | `OPEN`, `SETMODE`, `ACCEPT`, `CONNECT`, `SEND`, `RECV`, `CLOSE`, `IFCONFIG`, `CANCEL`, `GETNAME`, `SHUTDOWN` |
+| 1 | flags | `OPEN`, `SETMODE`: 1 bind, 2 listen; `SEND`: 1 to the address and port; `IFCONFIG`: 1 set the address, 2 the mask, 4 the gateway, 8 have DHCP set them; in its response, 16, the link is up |
 | 2 | tag | the executive's, echoed in the response |
-| 4 | connection | 0 is the control connection |
-| 8 | status | the response's: OK, BADPARAM, NOMEM, INUSE, REFUSED, RESET, TIMEOUT, ABORTED, UNREACH, CLOSED |
+| 4 | connection | the socket; 0 for none |
+| 8 | status | the response's: OK, BADPARAM, NOMEM, INUSE, REFUSED, RESET, TIMEOUT, ABORTED, UNREACH, CLOSED, NOLINKS, ISCONN, IVADDR |
 | 12 | length | bytes in the tag's buffer |
 | 16 | address | an IPv4 address, network order |
-| 20 | port | a TCP port |
-| 22 | protocol | `OPEN`'s: 6, TCP |
-| 24, 28 | arg1, arg2 | `LISTEN`: the backlog; `ACCEPT`'s response: the new connection; `IFCONFIG`: the mask and the gateway; `PING`'s response: the round trip in ms and the reply's TTL |
+| 20 | port | a TCP or UDP port |
+| 22 | protocol | `OPEN`'s: 6 TCP, 17 UDP, 1 a raw ICMP socket |
+| 24, 28 | arg1, arg2 | `OPEN`, `SETMODE`: arg1 the backlog; `ACCEPT`'s response: arg1 the new connection; `IFCONFIG`: the mask and the gateway; `GETNAME`'s response: the peer's address and port; `SHUTDOWN`: arg1 0 receives, 1 sends, 2 both |
 
 | Command | Response when |
 | --- | --- |
-| `OPEN` | at once: the new connection, or NOMEM |
-| `BIND`, `LISTEN` | at once |
-| `ACCEPT` | a connection has come on the listening one: arg1 is its connection, address and port the peer's |
-| `CONNECT` | the handshake is done, or REFUSED, TIMEOUT |
-| `SEND` | lwIP has taken all of the buffer: length |
-| `RECV` | data has come, at most length: length; or the peer has closed: CLOSED; or RESET |
-| `CLOSE` | at once; the connection's waiting commands end with ABORTED |
-| `CANCEL` | at once; the connection's waiting commands end with ABORTED |
-| `IFCONFIG` | at once, with the address, mask, gateway and link state, after setting them if flagged; with DHCP, once the server has given them, or after 10 seconds with `TIMEOUT`, while lwIP goes on asking |
-| `PING` | the echo reply from the address has come: arg1, arg2; or after a second, TIMEOUT. The request's identifier is the tag, its sequence number one of the component's, so a late reply to the tag's last `PING` isn't taken |
+| `OPEN` | at once: the new socket, bound and listening if flagged, or NOMEM, or what the bind failed with |
+| `SETMODE` | at once: bound, listening |
+| `ACCEPT` | a connection has come on the listening socket: arg1 is its connection, address and port the peer's |
+| `CONNECT` | TCP: the handshake is done, or REFUSED, TIMEOUT; UDP, raw: at once, its peer set; ISCONN if it had one |
+| `SEND` | TCP: lwIP has taken all of the buffer: length; UDP, raw: at once, one datagram sent, to the address and port if flagged, else to the peer; NOLINKS with neither, ISCONN with both |
+| `RECV` | TCP: data has come, at most length: length; or the peer has closed: CLOSED; or RESET. UDP, raw: a datagram has come: as much of it as fits, the rest lost, its sender in address and port; a raw ICMP socket's has its IP header first |
+| `CLOSE` | at once; the socket's waiting commands end with ABORTED |
+| `CANCEL` | at once; the socket's waiting commands end with ABORTED |
+| `IFCONFIG` | at once, with the address, mask, gateway and link state, after setting those flagged; with DHCP, once the server has given them, or after 10 seconds with `TIMEOUT`, while lwIP goes on asking |
+| `GETNAME` | at once: the local address and port, and the peer's |
+| `SHUTDOWN` | at once |
 
 Responses come in the order commands finish, not as they were sent. What
-comes on a connection before a `RECV` waits in lwIP, which holds back its
-window until the executive takes it.
+comes on a TCP connection before a `RECV` waits in lwIP, which holds
+back its window until the executive takes it; a UDP or raw socket keeps
+8 datagrams, and drops more, as UDP may. A raw ICMP socket gets a copy
+of each ICMP message, as BSD's do; lwIP's ICMP still answers echo
+requests.
 
 **Credits.** A command takes a tag, which its response gives back. There
 are 32 tags, as many as a ring holds, so neither ring can overflow, and
@@ -144,18 +149,24 @@ the executive never sends more than the component can hold. A `SEND` or
   `NET$INTERRUPT` at SCB `^X100` and `NET$FORK` at software interrupt
   level 6, `IPL$_NETPOST`.
 - `NET$FDT` makes an IRP for each `$QIO`, with the command after the
-  packet and a send's data after that, copied from the caller's buffer at
-  once. It sends the command if a tag is free, or queues the IRP on
+  packet, then where its socket names and ioctl results go, read from
+  the caller's item lists, and a send's data last, copied from the
+  caller's buffer at once. It sends the command if a tag is free, or queues the IRP on
   `BGA0:`'s UCB until one is: `SENDCMD` writes the command, copies a
   send's data to the tag's buffer, and rings the doorbell.
 - `NET$INTERRUPT` requests `IPL$_NETPOST`; `NET$FORK`, at `IPL$_SYNCH`,
   completes each response's IRP with `IOC$REQCOM`, a receive's data copied
   into the IRP, where `IOC$POST` takes it to the caller's buffer, then
   sends what waited for a tag.
+- **Results.** What a request returns besides its IOSB, a socket name
+  or an ioctl's result, `NET$POST` writes from the response the IRP
+  keeps: `IOC$POST` calls the IRP's post routine, `IRP$L_POST`, in the
+  caller's process, before it writes the IOSB.
 - **Statuses.** OK is `SS$_NORMAL`, BADPARAM `SS$_BADPARAM`, NOMEM
   `SS$_INSFMEM`, INUSE `SS$_DUPLNAM`, REFUSED `SS$_REJECT`, RESET
   `SS$_LINKABORT`, TIMEOUT `SS$_TIMEOUT`, ABORTED `SS$_ABORT`, UNREACH
-  `SS$_UNREACHABLE`, CLOSED `SS$_LINKDISCON`. Without the component,
+  `SS$_UNREACHABLE`, CLOSED `SS$_LINKDISCON`, NOLINKS `SS$_NOLINKS`,
+  ISCONN `SS$_FILALRACC`, IVADDR `SS$_IVADDR`. Without the component,
   `SS$_DEVOFFLINE`.
 - **Cancel.** `IOC$CANCEL` calls `NET$CANCEL`. For `$CANCEL` the channel's
   requests on the port end with `SS$_ABORT` at once, and a `CANCEL` goes
@@ -166,33 +177,45 @@ the executive never sends more than the component can hold. A `SEND` or
 
 ### Devices
 
-`BGA0:` is a template device, as TCP/IP Services' `BG0:` was. A channel
-assigned to it opens a connection with `IO$_SETMODE` and goes to a unit
-of its own, a UCB cloned from `BGA0:`'s, named `BGnn` (01-99), holding
-the connection's number. `$ASSIGN` finds a unit by its name too, so a
-process can take another's connection by name; the unit counts its
-channels and closes the connection when the last goes.
+`BGA0:` is a template device, as TCP/IP Services' `BG0:` was, and the
+system logical name `TCPIP$DEVICE`, which `SYSTARTUP_VMS.COM` defines,
+names it. A channel assigned to it makes a socket with `IO$_SETMODE` and
+goes to a unit of its own, a UCB cloned from `BGA0:`'s, named `BGnn`
+(01-99), holding the socket's connection number and protocol. `$ASSIGN`
+finds a unit by its name too, so a process can take another's
+connection by name; the unit counts its channels, which `$GETDVI`'s
+`DVI$_REFCNT` gives, and closes the connection when the last goes.
+
+The functions are TCP/IP Services', with its symbols (`$INETSYMDEF`,
+`$SOCKADDRINDEF`, `$IFREQDEF`, `$ORTENTRYDEF`, `$SIOCDEF` in
+`starlet.mlb`). `IO$_SETCHAR` is `IO$_SETMODE` and `IO$_SENSECHAR` is
+`IO$_SENSEMODE`. A socket name is an `item_list_2`, a word length, a word
+`TCPIP$C_SOCK_NAME` and an address, to give one, or an `item_list_3`,
+with the address of a longword for the length written too, to get one,
+of a `SOCKADDRIN`: a word family, `TCPIP$C_AF_INET`, a word port and a
+longword address, both in network order, and 8 zeros; with `IO$M_EXTEND`
+one written is BSD 4.4's, a byte length and a byte family. An ioctl list
+is an `item_list_2` of type `TCPIP$C_IOCTL` of `ioctl_comm`s, each a
+longword request and the address of its argument.
 
 | On | Function | Does |
 | --- | --- | --- |
-| `BGA0:` | `IO$_SETMODE` | opens a TCP connection: p1 = the socket's characteristics, a word protocol (6), a byte type and a byte family, as TCP/IP Services' |
-| `BGA0:` | `IO$_SETCHAR` | sets the interface: p1 = its address, mask and gateway, then flags, 4 to have a DHCP server give them instead: 16 bytes |
-| `BGA0:` | `IO$_SENSECHAR` | writes those to p1, then flags, 2 if the link is up: 16 bytes |
-| `BGA0:` | `IO$_ACCESS` | pings address p3: the IOSB's count is the round trip in ms, its second longword the reply's TTL; `SS$_TIMEOUT` after a second |
-| unit | `IO$_SETMODE!IO$M_BIND` | binds to address p3, port p4 |
-| unit | `IO$_SETMODE!IO$M_LISTEN` | listens, backlog p4 |
-| unit | `IO$_ACCESS` | connects to address p3, port p4 |
-| unit | `IO$_ACCESS!IO$M_ACCEPT` | accepts a connection on channel p4, assigned to `BGA0:`; the IOSB has the peer's port in its count and its address in the second longword |
-| unit | `IO$_WRITEVBLK` | sends p2 bytes at p1, at most 4096 (`SS$_IVBUFLEN`) |
-| unit | `IO$_READVBLK` | receives up to p2 bytes at p1, those that came; `SS$_LINKDISCON` once the peer has closed |
-| unit | `IO$_DEACCESS` | closes the connection |
-| unit | `IO$_SENSEMODE` | the IOSB's count is nn, the second longword the channels assigned |
-| unit | `IO$_READPROMPT` | as a terminal: sends p5/p6, then receives a line, without its CR LF, with a carriage return as its terminator |
-| unit | `IO$_SETMODE!IO$M_CTRLCAST`, `IO$M_CTRLYAST` | does nothing |
+| `BGA0:` | `IO$_SETMODE` | makes a socket: p1 = its characteristics, a word protocol, a byte type and a byte family: `TCPIP$C_TCP` and `TCPIP$C_STREAM`, `TCPIP$C_UDP` and `TCPIP$C_DGRAM`, or `TCPIP$C_ICMP` and `TCPIP$C_RAW`, which needs SYSPRV or BYPASS; then p3 and p4 as on a unit |
+| unit | `IO$_SETMODE` | binds to the name p3; a port below 1024 needs SYSPRV or BYPASS; listens, backlog p4; or the ioctls of p5, which need OPER: `SIOCSIFADDR`, `SIOCSIFNETMASK`, `SIOCSIFDHCP` (vaxpunk's) on `WE0`, `SIOCADDRT`, `SIOCDELRT` of the default route |
+| unit | `IO$_SENSEMODE` | the local name to p3 and the peer's to p4; or the ioctls of p6: `SIOCGIFADDR`, `SIOCGIFNETMASK`, `SIOCGIFFLAGS` (`IFR$M_IFF_RUNNING` if the link is up) on `WE0`, `SIOCGETRT` of the default route, 4 at most |
+| unit | `IO$_ACCESS` | connects to the name p3; a datagram socket's peer |
+| unit | `IO$_ACCESS!IO$M_ACCEPT` | accepts a connection on a listening socket into the channel in the word at p4, assigned to `TCPIP$DEVICE:`; the peer's name to p3 |
+| unit | `IO$_WRITEVBLK` | sends p2 bytes at p1, at most 4096 (`SS$_IVBUFLEN`, a datagram's `SS$_TOOMUCHDATA`); a datagram to the name p3 |
+| unit | `IO$_READVBLK` | receives up to p2 bytes at p1, those that came, or one datagram, its sender's name to p3; `SS$_LINKDISCON` once the peer has closed |
+| unit | `IO$_DEACCESS` | closes the socket; with `IO$M_SHUTDOWN`, p4 `TCPIP$C_DSC_RCV`, `_SND` or `_ALL` |
+| unit | `IO$_READPROMPT` | vaxpunk's, as a terminal: sends p5/p6, then receives a line, without its CR LF, with a carriage return as its terminator |
+| unit | `IO$_SETMODE!IO$M_CTRLCAST`, `IO$M_CTRLYAST`, `IO$M_READATTN`, `IO$M_WRTATTN`, `IO$M_OUTBAND` | does nothing; the ASTs never come |
 
-An address in p3 is a longword in network order: its first byte is the
-first number. `IO$M_BIND`, `IO$M_LISTEN` and `IO$M_ACCEPT` are bits 10
-and 11, past the terminal's modifiers, because a unit is a terminal too.
+ponytail: no buffer lists (p5, p6 of a write or read), socket options
+(`SS$_BADPARAM`), read and write flags, `IO$M_NOW`, out-of-band
+data, IPv6, or the UNIX error code in a failed read's IOSB; p3 and p4,
+or the ioctls, in one request, not both; a unit is cloned at
+`IO$_SETMODE`, not at `$ASSIGN`.
 
 ## Programs
 
@@ -204,15 +227,19 @@ and 11, past the terminal's modifiers, because a unit is a terminal too.
   TCP/IP Services': `SET INTERFACE WE0` and `SET CONFIGURATION INTERFACE
   WE0`, with `/HOST=address /NETWORK_MASK=mask` or `/DHCP`, `SET ROUTE
   /DEFAULT /GATEWAY=address [/PERMANENT]`, `SHOW INTERFACE [WE0]`,
-  `START COMMUNICATION`, `PING address [/NUMBER_PACKETS=n]`, which sends
-  an `IO$_ACCESS` on `BGA0:` each second and prints each reply, until
-  CTRL/C or n of them and then how many came back, and `HELP`, which describes them from the
+  `START COMMUNICATION`, `PING address [/NUMBER_PACKETS=n]`, which
+  writes an ICMP echo request on a raw ICMP socket each second, its
+  identifier the PID, its sequence number the count, its data when it
+  went, and prints each reply that matches with its TTL and round trip,
+  until CTRL/C or n of them and then how many came back, and `HELP`, which describes them from the
   tables with `HELP$TOPIC`, DCL's `HELP`'s code (`sysexe/help/`). `SET INTERFACE` and `SET ROUTE` change the
   running system, and `SET CONFIGURATION INTERFACE` and `SET ROUTE
   /PERMANENT` the saved configuration, which the next boot applies. The
-  first two sense the settings with `IO$_SENSECHAR`, change theirs and
-  issue `IO$_SETCHAR`, so the gateway is still the interface's to the
-  port and lwIP; the last two read the saved settings, change theirs and
+  first two sense the settings with ioctls on a UDP socket,
+  `IO$_SENSEMODE` with `SIOCGIFADDR`, `SIOCGIFNETMASK`, `SIOCGIFFLAGS` and
+  `SIOCGETRT`, change theirs and set them all with `IO$_SETMODE`,
+  `SIOCSIFADDR`, `SIOCSIFNETMASK` and `SIOCADDRT`, or `SIOCSIFDHCP`; the
+  last two read the saved settings, change theirs and
   write `INTERFACE address mask gateway`, and `DHCP` if `/DHCP` said so,
   in a new version of `DKB0:[000000]TCPIP$CONFIG.DAT`, the writable
   disk, where TCP/IP Services kept `TCPIP$CONFIGURATION.DAT` and
@@ -225,21 +252,24 @@ and 11, past the terminal's modifiers, because a unit is a terminal too.
   routing table when there is a second interface.
 - **`TELNETD.EXE`**, process `TCPIP$TELNET`. Listens on TCP port 23; for
   each connection creates a process running `DCL.EXE` with the
-  connection's unit, `_BGnn:`, as `SYS$INPUT`, `SYS$OUTPUT` and
-  `SYS$ERROR`, named so, and keeps its own channel until the new DCL has
-  assigned one. DCL quits when a read ends with `SS$_LINKDISCON` or
+  connection's unit, `_BGnn:`, which `$GETDVI`'s `DVI$_DEVNAM` gives, as
+  `SYS$INPUT`, `SYS$OUTPUT` and `SYS$ERROR`, named so, and keeps its own
+  channel until the new DCL has assigned one, `DVI$_REFCNT` 2. DCL quits when a read ends with `SS$_LINKDISCON` or
   `SS$_LINKABORT`; its last channel going closes the connection.
 - **`RTPAD.EXE`**, DCL's `SET HOST address`. Connects to port 23 there,
   then waits for either of two reads, the connection's and the terminal's,
   with `$WFLOR`: what comes on the connection it writes on the terminal,
   each line typed it sends with CR LF. When the other end closes it prints
   `%REM-S-END`. Line at a time, edited locally; no Telnet options.
-- **`TCPTEST.EXE`** tries both directions against the host
-  (`image/tests/network.rs`).
+- **`COPY.EXE`**, `COPY/HTTP`: connects a TCP socket to the server and
+  sends an HTTP/1.0 GET; the body goes into a STREAM_LF file.
+- **`TCPTEST.EXE`** tries TCP both directions against the host, and UDP:
+  a datagram from the host back to its sender, named, then on the socket
+  connected to it (`image/tests/network.rs`).
 - Programs print through `SYS$OUTPUT` (`lib/print.mar`), falling back to
   `OPA0:` for a process without one, so a remote session's output goes to
   its connection.
 
 ponytail: `BGA0:` and its units aren't among the devices `$DEVICE_SCAN`
-and `$GETDVI` see; a remote login has no username or password, and EDIT
-still writes on the console.
+sees, and `$GETDVI` sees a unit by its channel only; a remote login has
+no username or password, and EDIT still writes on the console.

@@ -1189,6 +1189,30 @@ MESSAGES:
         .ASCIC  "SYSTEM"
         .ASCIC  "REJECT"
         .ASCIC  "network connect rejected"
+        .LONG   SS$_DUPLNAM
+        .ASCIC  "SYSTEM"
+        .ASCIC  "DUPLNAM"
+        .ASCIC  "duplicate name"
+        .LONG   SS$_ILLCNTRFUNC
+        .ASCIC  "SYSTEM"
+        .ASCIC  "ILLCNTRFUNC"
+        .ASCIC  "illegal ACP control function"
+        .LONG   SS$_FILALRACC
+        .ASCIC  "SYSTEM"
+        .ASCIC  "FILALRACC"
+        .ASCIC  "file already accessed on channel"
+        .LONG   SS$_NOLINKS
+        .ASCIC  "SYSTEM"
+        .ASCIC  "NOLINKS"
+        .ASCIC  "no logical links available"
+        .LONG   SS$_TOOMUCHDATA
+        .ASCIC  "SYSTEM"
+        .ASCIC  "TOOMUCHDATA"
+        .ASCIC  "too much optional or interrupt message data"
+        .LONG   SS$_PROTOCOL
+        .ASCIC  "SYSTEM"
+        .ASCIC  "PROTOCOL"
+        .ASCIC  "network protocol error"
         .LONG   SS$_LINKDISCON
         .ASCIC  "SYSTEM"
         .ASCIC  "LINKDISCON"
