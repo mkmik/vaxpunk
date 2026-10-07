@@ -488,6 +488,7 @@ dependencies = [
  "ods-image",
  "tcpip",
  "vasm",
+ "vbliss",
  "vcdu",
  "vlink",
  "vmacro",

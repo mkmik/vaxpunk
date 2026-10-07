@@ -3,15 +3,15 @@
 ;
 ; DCL's SHOW PROCESS and SHOW SYSTEM run this, as VMS's DCL runs SHOW.EXE
 ; for them; OPTION, the parameter, says which. SHOW PROCESS
-; shows this process, what $GETJPI says of it, and with /PRIVILEGES its
-; authorized and current privileges. SHOW SYSTEM shows the
-; version and how long the system has been up, from $GETSYI, then a line
-; for each process, from a wildcard $GETJPI: its PID, name, state,
-; priority and image.
+; shows the date, $ASCTIM's, and this process, what $GETJPI says of it,
+; and with /PRIVILEGES its authorized and current privileges. SHOW SYSTEM
+; shows the version, the date and how long the system has been up, from
+; $GETSYI, then a line for each process, from a wildcard $GETJPI: its PID,
+; name, state, priority and image.
 ; SHOW TERMINAL shows the terminal's characteristics (lib/term.mar), under
 ; VMS's headings and names, four to a line.
-; ponytail: no date, node, CPU time, I/O or page counts: $ASCTIM and
-; the counters don't exist yet. The console has no speed, parity or fill,
+; ponytail: no node, CPU time, I/O or page counts: the counters don't
+; exist yet. The console has no speed, parity or fill,
 ; so SHOW TERMINAL shows a VT100's on a 9600 baud line; and it has no
 ; TT3$ characteristics, so no DEC_CRT5, Ansi_Color or VMS Style Input.
 ;
@@ -102,6 +102,12 @@ VERSION:
 BOOTTIME:
         .BLKQ   1
 NOW:    .BLKQ   1
+DATEDSC:
+        .LONG   23                      ; $ASCTIM's buffer
+        .ADDRESS DATE
+DATE:   .BLKB   23
+DATELEN:
+        .WORD   0
 ; The scheduling states' names, VMS's, by SCH$C_ value, 5 characters each.
 STATES: .ASCII  "     COLPGMWAITCEF  PFW  LEF  LEFO HIB  "
         .ASCII  "HIBO SUSP SUSPOFPG  COM  COMO CUR  "
@@ -234,6 +240,8 @@ CHARS:  .BYTE   TT$V_PASSALL, NOT!ALT
         $GETJPIW_S ITMLST=JPIITEMS
         BLBC    R0, 90$
         PRINT   ""
+        BSBW    ADDDATE
+        BSBW    SAY
         ADDTEXT "Process ID:         "
         MOVL    PID, R1
         BSBW    ADDHEX
@@ -287,6 +295,8 @@ SYSTEM: $GETSYIW_S ITMLST=SYIITEMS
         MOVAB   VERSION, R1
         MOVL    #8, R2
         BSBW    ADD
+        ADDTEXT "  "
+        BSBW    ADDDATE
         ADDTEXT "  Uptime  "
         DIVL3   #86400, R4, R1          ; days
         MULL3   #86400, R1, R0
@@ -560,6 +570,15 @@ SAY:
         PUSHAB  LINE
         CALLS   #1, G^PUT_LINE
         CLRB    LINE
+        RSB
+
+; ADDDATE: appends the date and time to LINE. Uses R0-R2.
+ADDDATE:
+        .JSB_ENTRY  SCRATCH=<R2>
+        $ASCTIM_S TIMLEN=DATELEN, TIMBUF=DATEDSC
+        MOVAB   DATE, R1
+        MOVZWL  DATELEN, R2
+        BSBW    ADD
         RSB
 
 ; ADDCHAR: appends the character in R0 to LINE. Uses R0-R2.

@@ -59,7 +59,11 @@ parameters, and the atomic and PAL built-ins. Step 10: the dot lint, and
 on the way `PSECT` declarations (each storage class's psect and its
 attributes), `SWITCHES`, `EXTERNAL LITERAL`, `GLOBAL LITERAL`,
 `UNDECLARE`, and undeclared names taken as external with a warning, as
-BLISSA64 takes them.
+BLISSA64 takes them. Step 11, the pilot: `$NUMTIM` is BLISS-64,
+`roottask/exec/numtim.b64`, which roottask's `build.rs` compiles into the
+executive and fails on any message or lint warning; SVCTEST checks it at
+boot, and `tests/bliss/asctime.b64` runs it under vrun, with a BLISS-64
+`$ASCTIM` on it (`lib/asctim.b64`), against VMS's own.
 
 ## How it works
 
@@ -296,7 +300,8 @@ a value (`4 $P.1`), a string, or `z N` zero bytes.
 
 Routines follow the calling standard (`docs/design/0004-calling-standard.md`):
 arguments in x0-x7 and on the stack, x9 set to their count, the result in
-x0. Every routine has a frame and a frame descriptor in `$CODE$_FDSC`, laid
+x0. Every routine has a frame and a frame descriptor in its code psect's
+name with `_FDSC` after, `$CODE$_FDSC` unless a `PSECT` says otherwise, laid
 out as `call.mlb`'s `$ROUTINE` lays them out: the frame record, the handler
 at 16(FP), the descriptor's address at 24(FP), the registers it keeps from
 32(FP), then the IR's slots and the spills.

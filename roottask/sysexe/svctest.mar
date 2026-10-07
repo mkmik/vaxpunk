@@ -182,6 +182,9 @@ CANBLK: .LONG   0                       ; one $CANEXH takes off
         .ADDRESS EXHSTS
 FNFMSG: .ASCII  "%RMS-E-FNF, file not found"
 FNFEND:
+Y2K:    .LONG   ^X13161CC0, ^X009E37DD  ; 1-JAN-2000 12:34:56.78
+DELTA:  .LONG   ^XA459A2E0, ^XFFFFFF25  ; 1 02:03:04.05, a delta time
+NUMBUF: .BLKW   7                       ; $NUMTIM's
 
         .PSECT  CODE, EXE, LONG
         .ENTRY  START, ^M<R2>
@@ -454,6 +457,39 @@ FNFEND:
         $GETMSG_S MSGID=#RMS$_FNF, MSGLEN=MSGLEN, BUFADR=SHORT
         EXPECT  #SS$_BUFFEROVF, 72
         CMPW    MSGLEN, #4
+        BNEQ    80$
+; $ASCTIM and $NUMTIM, of fixed times; $NUMTIM is BLISS-64.
+        $ASCTIM_S TIMLEN=MSGLEN, TIMBUF=MSGDSC, TIMADR=Y2K
+        EXPECT  #SS$_NORMAL, 96
+        CMPW    MSGLEN, #23
+        BNEQ    80$
+        CMPL    MSGBUF, #^A/ 1-J/
+        BNEQ    80$
+        CMPL    MSGBUF+4, #^A/AN-2/
+        BNEQ    80$
+        CMPL    MSGBUF+8, #^A/000 /
+        BNEQ    80$
+        CMPL    MSGBUF+12, #^A/12:3/
+        BNEQ    80$
+        CMPL    MSGBUF+19, #^A/6.78/
+        BNEQ    80$
+        $ASCTIM_S TIMLEN=MSGLEN, TIMBUF=MSGDSC, TIMADR=DELTA
+        EXPECT  #SS$_NORMAL, 97
+        CMPW    MSGLEN, #16             ; "   1 02:03:04.05"
+        BNEQ    80$
+        CMPL    MSGBUF, #^A/   1/
+        BNEQ    80$
+        CMPL    MSGBUF+12, #^A/4.05/
+        BNEQ    80$
+        $ASCTIM_S TIMLEN=MSGLEN, TIMBUF=SHORT, TIMADR=Y2K
+        EXPECT  #SS$_BUFFEROVF, 98
+        CMPW    MSGLEN, #4
+        BNEQ    80$
+        $NUMTIM_S TIMBUF=NUMBUF, TIMADR=Y2K
+        EXPECT  #SS$_NORMAL, 99
+        CMPW    NUMBUF, #2000
+        BNEQ    80$
+        CMPW    NUMBUF+12, #78          ; the hundredths
         BNEQ    80$
         BRB     81$
 80$:    BRW     90$

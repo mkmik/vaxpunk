@@ -1967,6 +1967,15 @@ PRT$C_UR = 15
         CALLS   #1, G^SYS$GETTIM
         .ENDM   $GETTIM_S
 
+; $NUMTIM_S TIMBUF, TIMADR: the time at TIMADR, or the system time, as 7
+; words at TIMBUF: year, month, day, hour, minute, second, hundredths.
+        .MACRO  $NUMTIM_S TIMBUF, TIMADR=0
+        $PUSHADR TIMADR
+        $PUSHADR TIMBUF
+        .EXTERNAL SYS$NUMTIM
+        CALLS   #2, G^SYS$NUMTIM
+        .ENDM   $NUMTIM_S
+
         .MACRO  $SETIMR_S EFN=#0, DAYTIM, ASTADR=0, REQIDT=#0
         PUSHL   REQIDT
         $PUSHADR ASTADR

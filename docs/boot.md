@@ -88,7 +88,10 @@ the role PALcode played on an Alpha: it's the "hardware" layer underneath VMS
 
 ## 5. The executive, EXEC.EXE
 
-The executive is the VMS kernel, written in MACRO-32.
+The executive is the VMS kernel, written in MACRO-32, with one module in
+BLISS-64: `$NUMTIM`
+([roottask/exec/numtim.b64](../roottask/exec/numtim.b64)), which `vbliss`
+compiles.
 `EXEC$START` ([roottask/exec/exec.mar](../roottask/exec/exec.mar)):
 
 - fills in the system control block (handlers for traps, mode changes and
@@ -202,8 +205,8 @@ interpreter. It is linked high in P1, which tells the executive it is one
   `DEASSIGN` and `SHOW LOGICAL` make, delete
   and translate logical names (`$CRELNM`, `$DELLNM`, `$TRNLNM`), and
   `SHOW LOGICAL` alone lists them. `SHOW PROCESS` and `SHOW SYSTEM` run
-  `SHOW.EXE`, which asks `$GETJPI` about this process, and `$GETSYI` how
-  long the system has been up, then `$GETJPI` with a wildcard for a line
+  `SHOW.EXE`, which prints the date with `$ASCTIM`, asks `$GETJPI` about
+  this process, and `$GETSYI` how long the system has been up, then `$GETJPI` with a wildcard for a line
   per process: its PID, name, state, priority and image. `SET
   PROCESS/PRIVILEGES` runs `SET.EXE`, which enables or disables them with
   `$SETPRV`, and `SHOW PROCESS/PRIVILEGES` lists them. `SET
@@ -304,7 +307,8 @@ executive feature:
 - **SVCTEST** checks the status that each system service returns, and
   reads the system disk's home block by its LBN with `$QIOW`. A `$QIOW`
   from ARM64 with a buffer above 4 GB gets `SS$_ARG_GTR_32_BITS` from the
-  service dispatcher. It takes
+  service dispatcher. It turns fixed times into text with `$ASCTIM` and
+  into numbers with `$NUMTIM`, and checks the result. It takes
   privileges away and back with `$SETPRV`, and makes OUTSIDER, a process
   in another UIC group it may touch only with `WORLD`. It starts a
   second SLEEPER, NAPPER, and makes it exit with `$FORCEX` before its

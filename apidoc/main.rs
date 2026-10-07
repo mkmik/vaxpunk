@@ -2,7 +2,8 @@
 //!
 //! Nothing in the page is written by hand: it is all read from the code and the
 //! design documents, so keeping it current means keeping these current:
-//! - the executive's routines and data (roottask/exec/*.mar, consolio.mar), and
+//! - the executive's routines and data (roottask/exec/*.mar, consolio.mar,
+//!   and the `GLOBAL ROUTINE`s of roottask/exec/*.b64, BLISS-64), and
 //!   the global ones of the libraries the system disk's images link
 //!   (roottask/sysexe/lib/*.mar) and of DCL's own (roottask/sysexe/dcl.mar,
 //!   roottask/sysexe/dcl/*.mar), and of the RMS utilities' (roottask/sysexe/rms/*.mar):
@@ -433,6 +434,43 @@ fn parse_mar(
     m
 }
 
+/// A BLISS-64 module: its `%TITLE`, the comment block after `MODULE` and
+/// the one right above each `GLOBAL ROUTINE`, which is called.
+fn parse_b64(root: &Path, path: &Path, mi: usize, routines: &mut Vec<Routine>) -> Module {
+    let text = read(path);
+    let mut m = Module {
+        path: rel(root, path),
+        stem: stem(path),
+        ..Default::default()
+    };
+    let mut block = Vec::<String>::new();
+    for (i, line) in text.lines().enumerate() {
+        let s = line.trim();
+        if s.starts_with('!') {
+            block.push(comment(line));
+            continue;
+        }
+        if let Some(t) = re!(r"^%TITLE\s+'([^']*)'").captures(s) {
+            m.title = t[1].to_string();
+        } else if let Some(g) = re!(r"(?i)^GLOBAL\s+ROUTINE\s+([\w$]+)").captures(s) {
+            m.routines.push(routines.len());
+            routines.push(Routine {
+                name: g[1].to_string(),
+                line: i + 1,
+                module: mi,
+                entry: true,
+                global: true,
+                comment: block.clone(),
+                ..Default::default()
+            });
+        } else if m.intro.is_empty() && !block.is_empty() && m.routines.is_empty() {
+            m.intro = blocks(&block);
+        }
+        block.clear();
+    }
+    m
+}
+
 fn parse_sstab(path: &Path) -> Vec<Service> {
     let (mut services, mut group, mut prev, mut code) = (vec![], String::new(), String::new(), 0);
     for line in read(path).lines() {
@@ -688,6 +726,10 @@ impl Api {
             .enumerate()
             .map(|(i, p)| parse_mar(root, p, i, &mut routines, &mut data))
             .collect();
+        for p in glob(&root.join("roottask/exec"), "b64") {
+            let m = parse_b64(root, &p, mods.len(), &mut routines);
+            mods.push(m);
+        }
         // The images' libraries, and DCL's: their global routines and data
         // only, since their local names may be the executive's too.
         let mut libs = glob(&root.join("roottask/sysexe/lib"), "mar");
