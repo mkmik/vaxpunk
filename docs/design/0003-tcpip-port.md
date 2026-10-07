@@ -234,16 +234,17 @@ or the ioctls, in one request, not both; a unit is cloned at
   until CTRL/C or n of them and then how many came back, and `HELP`, which describes them from the
   tables with `HELP$TOPIC`, DCL's `HELP`'s code (`sysexe/help/`). `SET INTERFACE` and `SET ROUTE` change the
   running system, and `SET CONFIGURATION INTERFACE` and `SET ROUTE
-  /PERMANENT` the saved configuration, which the next boot applies. The
+  /PERMANENT` the saved configuration, which `START COMMUNICATION` applies. The
   first two sense the settings with ioctls on a UDP socket,
   `IO$_SENSEMODE` with `SIOCGIFADDR`, `SIOCGIFNETMASK`, `SIOCGIFFLAGS` and
   `SIOCGETRT`, change theirs and set them all with `IO$_SETMODE`,
   `SIOCSIFADDR`, `SIOCSIFNETMASK` and `SIOCADDRT`, or `SIOCSIFDHCP`; the
   last two read the saved settings, change theirs and
   write `INTERFACE address mask gateway`, and `DHCP` if `/DHCP` said so,
-  in a new version of `DKB0:[000000]TCPIP$CONFIG.DAT`, the writable
-  disk, where TCP/IP Services kept `TCPIP$CONFIGURATION.DAT` and
-  `TCPIP$ROUTE.DAT` in `SYS$SYSTEM`; `SHOW INTERFACE` senses and prints.
+  in a new version of `MDA0:[000000]TCPIP$CONFIG.DAT`, on the ramdisk
+  that `SYSTARTUP_VMS.COM` makes at each boot (ADR-0025; TCP/IP
+  Services kept `TCPIP$CONFIGURATION.DAT` and `TCPIP$ROUTE.DAT` in
+  `SYS$SYSTEM`); `SHOW INTERFACE` senses and prints.
   `START COMMUNICATION`, which `SYLOGIN.COM` runs, applies the saved
   configuration, or DHCP if none is saved, unless the interface has an address already, prints
   `%TCPIP-I-SET`, or the error, a DHCP server's timeout, and creates

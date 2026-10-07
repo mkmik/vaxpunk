@@ -4,9 +4,18 @@ $ ! TCPIP$DEVICE names the network's template device, which a program
 $ ! assigns a channel to for a socket, as TCP/IP Services' TCPIP$STARTUP
 $ ! defines it.
 $ DEFINE/SYSTEM/NOLOG TCPIP$DEVICE _BGA0:
-$ ! It makes the ramdisk, empty at each boot, and mounts it.
+$ ! It makes the ramdisk, MDA0:, afresh at each boot, and mounts it. It
+$ ! holds TCP/IP Services' files: the hosts database, TCPIP$HOST.DAT,
+$ ! which the first hosts command makes, with LOCALHOST, and the saved
+$ ! network configuration, TCPIP$CONFIG.DAT, which SYLOGIN.COM's START
+$ ! COMMUNICATION applies, or DHCP without one. Hosts and a fixed address
+$ ! for this boot go after the MOUNT, before the data disk's, as
+$ !   TCPIP SET HOST "name" /ADDRESS=a.b.c.d /ALIAS="other"
+$ !   TCPIP SET CONFIGURATION INTERFACE WE0 /HOST=a.b.c.d /NETWORK_MASK=m.m.m.m
+$ !   TCPIP SET ROUTE /DEFAULT /GATEWAY=g.g.g.g /PERMANENT
 $ INITIALIZE MDA0: RAM
 $ MOUNT MDA0: RAM
-$ ! It mounts the data disk, if an INITIALIZE DKB0: made a volume there;
+$ ! Last, it mounts the data disk, which nothing at boot needs, if an
+$ ! INITIALIZE DKB0: made a volume there;
 $ ! on a blank one, MOUNT fails with NOHOMEBLK, and the procedure ends.
 $ MOUNT DKB0:

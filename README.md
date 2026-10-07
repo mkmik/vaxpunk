@@ -123,8 +123,8 @@ on the screen),
 delete and translate logical names (`SHOW LOGICAL SYS$INPUT`, or `SHOW
 LOGICAL` alone to list them all), `SHOW PROCESS` and `SHOW SYSTEM` show
 the process and list them all, `TCPIP` sets and shows the network's
-(*Networking*), and saves them for the next boot, `SET HOST
-address` logs in to another vaxpunk, `COPY` and `DELETE` copy and delete
+settings and the hosts it knows by name (*Networking*), `SET HOST
+host` logs in to another vaxpunk, `COPY` and `DELETE` copy and delete
 files, `BACKUP` saves them in a save set VMS's BACKUP reads, and lists and
 restores one, `INITIALIZE`, `MOUNT` and `DISMOUNT` make, mount and dismount a
 volume on the data disk, `DKB0:`, or the ramdisk, `MDA0:`, which
@@ -316,9 +316,15 @@ TCPIP> EXIT
 `SET INTERFACE` and `SET ROUTE` change the running system only. `SET
 CONFIGURATION INTERFACE WE0`, with `/DHCP` or `/HOST` and
 `/NETWORK_MASK`, and `SET ROUTE /DEFAULT /GATEWAY=address /PERMANENT`
-save the settings on the data disk, once `INITIALIZE DKB0:` has made a
-volume there, and each boot sets them from there with `TCPIP START
-COMMUNICATION`, as TCP/IP Services split them. Every
+save the settings, as TCP/IP Services split them, and `TCPIP START
+COMMUNICATION` sets them at boot. They are saved on the ramdisk, `MDA0:`,
+which `SYSTARTUP_VMS.COM` makes afresh at every boot, so a fixed address
+is a pair of those commands in that procedure; without them the
+interface asks DHCP. `SET HOST name /ADDRESS=address [/ALIAS=(...)]`,
+`SET NOHOST name` and `SHOW HOST [name]` keep TCP/IP Services' hosts
+database, `TCPIP$HOST.DAT`, there too, and every command that takes a
+host takes a name or an alias from it
+([ADR-0025](docs/adr/0025-hosts-database.md)). Every
 system with a network runs `TCPIP$TELNET`, which takes `SET HOST`
 and `TELNET` logins on TCP port 23: `SET HOST 10.0.2.15` logs in to the
 system itself. `TELNET address port`, or `/PORT=port`, as TCP/IP
@@ -333,8 +339,8 @@ byte for byte, binary or not, into a new STREAM_LF file, as VMS's
 ports of curl and wget write one, named after the path's last part
 where the output doesn't say (`NOTES.TXT`, `INDEX.HTML` for a path
 ending in `/`); 404 is `%RMS-E-FNF`, 401 and 403 `%RMS-E-PRV`, another
-error `%RMS-F-NETFAIL`. Addresses only, since there is no DNS yet, and
-plain HTTP: an `https` URL is `%RMS-F-SUPPORT`.
+error `%RMS-F-NETFAIL`. Names come from the hosts database only, since
+there is no DNS yet, and plain HTTP: an `https` URL is `%RMS-F-SUPPORT`.
 
 `run-qemu.sh` reads `NETDEV`, QEMU's `-netdev` for the network, and
 `MAC`, `LOG` and `DATADISK`, so that a second vaxpunk can share a network

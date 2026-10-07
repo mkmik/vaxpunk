@@ -371,41 +371,62 @@ FHANDLER:
         CALLS   #1, SYS$EXIT
 90$:    RET
 
-; $PUTMSG msgvec: writes the message msgvec has, a count, then a
-; condition and its FAO arguments, on SYS$OUTPUT, or OPA0: for a process
-; without one: $GETMSG's, with each !XB, !XW and !XL in it the next
-; argument in hex, 2, 4 or 8 digits. A system condition's arguments
-; follow it, as many as its message has, past the count if need be: an
-; exception's PC and PSL, which EXE$CATCHALL's count leaves out, as on
-; VMS. Another facility's follow their count, and are 0 past the last. R0 = $QIOW's status, or $ASSIGN's error. Runs in
-; the caller's mode.
-; ponytail: one message, no action routine or facility name, the FAO
-; directives the executive's messages use, on SYS$OUTPUT, not SYS$ERROR.
+; $PUTMSG msgvec: writes the messages msgvec has, a count of longwords,
+; then each message's condition and its FAO arguments, on SYS$OUTPUT, or
+; OPA0: for a process without one: the first with its % and the others
+; with a -, each on a line, $GETMSG's text with each !XB, !XW and !XL in
+; it the next argument in hex, 2, 4 or 8 digits. A system condition's
+; arguments follow it, as many as its message has, past the count if need
+; be: an exception's PC and PSL, which EXE$CATCHALL's count leaves out, as
+; on VMS. Another facility's follow their count, and are 0 past the last;
+; one that ends msgvec has none. R0 = $QIOW's status, or $ASSIGN's
+; error. Runs in the caller's mode.
+; ponytail: no action routine or facility name, the FAO directives the
+; executive's messages use, on SYS$OUTPUT, not SYS$ERROR.
         .ENTRY  SYS$PUTMSG, ^M<R2, R3, R4, R5, R6, R7, R8, R9, R10, R11>
         MOVL    4(AP), R2
-        SUBL2   #512, SP
+        SUBL2   #768, SP
         MOVL    SP, R3                  ; the text, 256 bytes
-        MOVAB   256(SP), R4             ; the line, 256 bytes
+        MOVAB   256(SP), R4             ; the lines, 512 bytes
+        MOVZWL  (R2)+, -(SP)            ; 12(R5): the longwords left
+        ADDL2   #2, R2                  ; R2: the next condition
+        CLRL    -(SP)                   ; 8(R5): the text's length
         PUSHL   R3
-        PUSHL   #256                    ; the text's descriptor
+        PUSHL   #256                    ; (R5): the text's descriptor
         MOVL    SP, R5
-        CLRL    -(SP)                   ; its length
-        MOVL    SP, R6
-        $GETMSG_S MSGID=CHF$L_SIG_NAME(R2), MSGLEN=(R6), BUFADR=(R5)
-        MOVZWL  (R6), R7
-        MOVAB   CHF$L_SIG_ARG1(R2), R10
+        CLRL    -(SP)                   ; (R6): the next condition, 0 if past the arguments taken
+        MOVAL   (SP), R6
+        CLRL    R8                      ; the lines' length
+1$:     TSTL    12(R5)
+        BGTR    2$
+        BRW     50$
+2$:     $GETMSG_S MSGID=(R2), MSGLEN=8(R5), BUFADR=(R5)
+        MOVZWL  8(R5), R7
+        MOVAB   4(R2), R10
+        CLRL    (R6)
         MOVL    #255, R9                ; the arguments left: as many as it has
-        BITL    #^XFFF0000, CHF$L_SIG_NAME(R2) ; the facility
+        BITL    #^XFFF0000, (R2)        ; the facility
         BEQL    5$
-        SUBL3   #2, (R2), R9
-        CMPL    (R10), R9
-        BGEQU   4$
+        CLRL    R9
+        CMPL    12(R5), #2
+        BLSS    4$                      ; no count
         MOVL    (R10), R9
-4$:     ADDL2   #4, R10
-5$:     CLRL    R8                      ; the line's length
-        CLRL    R11                     ; where in the text
+        SUBL3   #2, 12(R5), R0
+        CMPL    R9, R0
+        BLEQU   4$
+        MOVL    R0, R9
+4$:     MOVAL   4(R10)[R9], (R6)
+        ADDL2   #4, R10
+5$:     CLRL    R11                     ; where in the text
+        TSTL    R8
+        BEQL    10$
+        MOVB    #^A/-/, (R3)            ; not the first
+        MOVL    #13, R0
+        BSBW    PUT
+        MOVL    #10, R0
+        BSBW    PUT
 10$:    CMPL    R11, R7
-        BGEQU   50$
+        BGEQU   45$
         MOVZBL  (R3)[R11], R0
         INCL    R11
         CMPB    R0, #^A/!/
@@ -416,37 +437,46 @@ FHANDLER:
         CMPB    (R3)[R11], #^A/X/
         BNEQ    40$
         MOVZBL  1(R3)[R11], R1
-        MOVL    #2, R5                  ; the digits
+        PUSHL   #2                      ; the digits
         CMPB    R1, #^A/B/
         BEQL    20$
-        MOVL    #4, R5
+        MOVL    #4, (SP)
         CMPB    R1, #^A/W/
         BEQL    20$
-        MOVL    #8, R5
+        MOVL    #8, (SP)
         CMPB    R1, #^A/L/
-        BNEQ    40$
+        BEQL    20$
+        ADDL2   #4, SP
+        BRB     40$
 20$:    ADDL2   #2, R11
         CLRL    R1
         TSTL    R9
         BEQL    25$
         DECL    R9
         MOVL    (R10)+, R1
-25$:    SUBL3   R5, #8, R0
+25$:    SUBL3   (SP), #8, R0
         ASHL    #2, R0, R0
         ROTL    R0, R1, R1              ; its first digit at the top
 30$:    ROTL    #4, R1, R1
         EXTZV   #0, #4, R1, R0
         MOVZBL  HEX[R0], R0
         BSBB    PUT
-        SOBGTR  R5, 30$
+        SOBGTR  (SP), 30$
+        ADDL2   #4, SP
         BRB     10$
 40$:    BSBB    PUT
         BRB     10$
+45$:    MOVL    (R6), R0                ; the next condition
+        BNEQ    47$
+        MOVL    R10, R0
+47$:    SUBL3   R2, R0, R1
+        ASHL    #-2, R1, R1
+        SUBL2   R1, 12(R5)
+        MOVL    R0, R2
+        BRW     1$
 50$:    MOVB    #13, (R4)[R8]
         MOVB    #10, 1(R4)[R8]
         ADDL2   #2, R8
-        CLRL    -(SP)                   ; the channel
-        MOVL    SP, R6
         $ASSIGN_S DEVNAM=OUTPUT, CHAN=(R6)
         BLBS    R0, 60$
         $ASSIGN_S DEVNAM=OPA0, CHAN=(R6)
@@ -457,11 +487,11 @@ FHANDLER:
         MOVL    (SP)+, R0
 90$:    RET
 
-; PUT: R0 = a character, R4 = the line, R8 = its length. Appends the
+; PUT: R0 = a character, R4 = the lines, R8 = their length. Appends the
 ; character, if there is room for it and CR LF.
 PUT:
         .JSB_ENTRY  SCRATCH=<R8>
-        CMPL    R8, #254
+        CMPL    R8, #510
         BGEQU   10$
         MOVB    R0, (R4)[R8]
         INCL    R8

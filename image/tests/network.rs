@@ -1,29 +1,34 @@
 //! cargo test -p boot --test network: TCP/IP (docs/prd/0002-networking.md),
 //! in two parts, one after the other.
 //!
-//! One vaxpunk on QEMU's user network, whose data disk, made here, says
-//! DHCP, which START COMMUNICATION asks QEMU's DHCP server at boot for
-//! the address, mask and gateway: then TCPIP's SET INTERFACE, SET ROUTE,
+//! One vaxpunk on QEMU's user network, with nothing saved on its ramdisk,
+//! so START COMMUNICATION asks QEMU's DHCP server at boot for the address,
+//! mask and gateway: then TCPIP's SET INTERFACE, SET ROUTE,
 //! one without /DEFAULT that fails, PING to QEMU's gateway and to
 //! an address nobody has, and at the TCPIP> prompt SHOW
-//! INTERFACE, HELP, an interface there is not, and EXIT; then TCPTEST, which
+//! INTERFACE, HELP, an interface there is not, and EXIT; then the hosts
+//! database: SHOW HOST, which makes it with LOCALHOST, SET HOST with
+//! aliases, SHOW HOST of them all, of an alias and of a name it hasn't,
+//! SET NOHOST, confirmed, and PING by an alias; then TCPTEST, which
 //! connects to a server here, through QEMU's guestfwd, accepts a
 //! connection from a client here, through hostfwd, and sends a datagram
 //! from here back twice, to its sender and connected to it; and SET HOST to
-//! itself, SHOW SYSTEM there, and LOGOUT; then TELNET to a port here,
+//! itself, SHOW SYSTEM there, and LOGOUT; then TELNET, by name, to a port here,
 //! through guestfwd, a line each way, and with /PORT to one there cannot be;
 //! then COPY/HTTP from web servers here, through guestfwd, to the data
-//! disk: by URL, by node and path, one that says 404, and an https URL.
+//! disk: by URL, by node and path, one that says 404, by URL with a
+//! host's name, and an https URL.
 //!
-//! Two vaxpunks on one QEMU socket network, A and B, each with a data disk
-//! made here holding the configuration SET CONFIGURATION INTERFACE saves,
-//! which START COMMUNICATION applies at boot: B logs in to A with
-//! TELNET, SHOW SYSTEM lists A's processes, and LOGOUT comes back to B,
-//! which pings A.
+//! Two vaxpunks on one QEMU socket network, A and B, where no DHCP server
+//! answers at boot: each saves its address and gateway with SET
+//! CONFIGURATION INTERFACE and SET ROUTE /PERMANENT, on its ramdisk, as
+//! SYSTARTUP_VMS.COM would, and START COMMUNICATION applies them. B logs
+//! in to A with TELNET, SHOW SYSTEM lists A's processes, and LOGOUT comes
+//! back to B, which pings A.
 //! Then B saves another address, keeping the saved gateway, another
 //! gateway with SET ROUTE /PERMANENT, keeping that address, and DHCP,
 //! keeping both, which SHOW INTERFACE doesn't show, since they are for
-//! the next boot, and which are on its data disk once it is down.
+//! the next START COMMUNICATION, and which TYPE shows in the saved file.
 
 use std::fs;
 use std::io::{Read, Write};
@@ -150,9 +155,8 @@ fn free_port() -> u16 {
         .port()
 }
 
-/// A data disk with TCPIP$CONFIG.DAT holding command, as SET
-/// CONFIGURATION INTERFACE saves it.
-fn data_disk(path: &Path, command: &str) {
+/// A data disk with an empty volume, DATA, for COPY's files.
+fn data_disk(path: &Path) {
     fs::create_dir_all(path.parent().unwrap()).unwrap();
     let _ = fs::remove_file(path);
     let params = InitParams {
@@ -160,15 +164,6 @@ fn data_disk(path: &Path, command: &str) {
         ..Default::default()
     };
     let mut vol = Image::create(path, 4096, &params).unwrap();
-    let text = format!("{command}\n");
-    vol.copy_in(
-        &mut text.as_bytes(),
-        "[000000]TCPIP$CONFIG.DAT",
-        Conversion::LinesToRecords,
-        Some(text.len() as u64),
-        None,
-    )
-    .unwrap();
     vol.flush().unwrap();
 }
 
@@ -221,10 +216,7 @@ fn network() {
     let (blob_port, blob_server) = web_server("200 OK", blob.clone());
     let fwd = free_port();
     let ufwd = free_port();
-    data_disk(
-        &out.join("net-data.img"),
-        "INTERFACE 0.0.0.0 0.0.0.0 0.0.0.0 DHCP",
-    );
+    data_disk(&out.join("net-data.img"));
     let netdev = format!(
         "user,id=net0,guestfwd=tcp:10.0.2.100:7777-tcp:127.0.0.1:{server_port},\
          guestfwd=tcp:10.0.2.100:7779-tcp:127.0.0.1:{echo_port},\
@@ -253,6 +245,17 @@ fn network() {
     vax.reply("HELP SET", "TCPIP> ");
     vax.reply("SHOW INTERFACE XE0", "TCPIP> ");
     vax.command("EXIT");
+    vax.command("TCPIP SHOW HOST LOCALHOST");
+    vax.command(r#"TCPIP SET HOST GATEWAY /ADDRESS=10.0.2.2 /ALIAS=(GW,"qemu")"#);
+    vax.command(r#"TCPIP SET HOST "web.example" /ADDRESS=10.0.2.100"#);
+    vax.command(r#"TCPIP SET HOST "gone" /ADDRESS=10.0.2.50 /ALIAS="gone2""#);
+    vax.command("TCPIP SHOW HOST");
+    vax.command("TCPIP SHOW HOST QEMU");
+    vax.command("TCPIP SHOW HOST NOPE");
+    vax.reply("TCPIP SET NOHOST GONE", "Remove? [N]: ");
+    vax.command("Y");
+    vax.command("TCPIP SHOW HOST /ADDRESS=10.0.2.50");
+    vax.command("TCPIP PING GW /NUMBER_PACKETS=1");
     let client = thread::spawn(move || {
         for _ in 0..100 {
             if let Ok(mut k) = TcpStream::connect(("127.0.0.1", fwd)) {
@@ -289,7 +292,7 @@ fn network() {
     vax.command("SET HOST 10.0.2.15");
     vax.command("SHOW SYSTEM");
     vax.command("LOGOUT");
-    vax.reply("TELNET 10.0.2.100 7779", "hello from port 7779");
+    vax.reply("TELNET WEB.EXAMPLE 7779", "hello from port 7779");
     vax.reply("netcat", "echo: netcat");
     // The host closing doesn't reach the guest through guestfwd: CTRL/Z.
     let at = vax.text().len();
@@ -301,7 +304,7 @@ fn network() {
     vax.command("DIRECTORY/FULL DKB0:[000000]READ_ME.TXT");
     vax.command(r#"COPY/HTTP/LOG 10.0.2.100::"/" DKB0:[000000]"#);
     vax.command(r#"COPY/HTTP URL::"http://10.0.2.100:7781/nope" DKB0:[000000]"#);
-    vax.command(r#"COPY/HTTP/LOG URL::"http://10.0.2.100:7782/kit/blob.bin" DKB0:[000000]"#);
+    vax.command(r#"COPY/HTTP/LOG URL::"http://web.example:7782/kit/blob.bin" DKB0:[000000]"#);
     vax.command(r#"COPY/HTTP URL::"https://10.0.2.100/x" DKB0:[000000]"#);
     let text = vax.stop();
     print!("{text}");
@@ -339,6 +342,18 @@ fn network() {
         "64 bytes from 10.0.2.2: icmp_seq=1 ttl=",
         "----10.0.2.2 PING Statistics----\n2 packets transmitted, 2 packets received, 0% packet loss",
         "1 packets transmitted, 0 packets received, 100% packet loss",
+        "\n     LOCAL database\n  \nHost address    Host name\n \n127.0.0.1       LOCALHOST, localhost\n",
+        "Host address    Host name\n \n10.0.2.2        GATEWAY, GW, qemu\n\
+         127.0.0.1       LOCALHOST, localhost\n\
+         10.0.2.50       gone, gone2\n\
+         10.0.2.100      web.example\n",
+        "Host address    Host name\n \n10.0.2.2        GATEWAY, GW, qemu\n$ ",
+        "%TCPIP-E-HOSTERROR, cannot process host request\n\
+         -TCPIP-W-NORECORD, information not found\n\
+         -RMS-E-RNF, record not found\n$ TCPIP SET NOHOST",
+        "10.0.2.50       gone, gone2\nRemove? [N]: Y\n$ ",
+        "ADDRESS=10.0.2.50\n%TCPIP-E-HOSTERROR, cannot process host request\n",
+        "PING GW (10.0.2.2): 56 data bytes",
         "TCPTEST: connected to 10.0.2.100 port 7777",
         "hello from the host",
         "TCPTEST: accepted a connection from address 0202000A",
@@ -380,15 +395,10 @@ fn network() {
 
     // Two vaxpunks.
     let port = free_port();
-    data_disk(
-        &out.join("a-data.img"),
-        "INTERFACE 10.0.0.1 255.255.255.0 10.0.0.1",
-    );
-    data_disk(
-        &out.join("b-data.img"),
-        "INTERFACE 10.0.0.2 255.255.255.0 10.0.0.1",
-    );
-    let a = Vax::boot(
+    // Blank: run-qemu.sh makes them, and SYSTARTUP_VMS.COM leaves them be.
+    let _ = fs::remove_file(out.join("a-data.img"));
+    let _ = fs::remove_file(out.join("b-data.img"));
+    let mut a = Vax::boot(
         &run_qemu,
         &[
             ("LOG", path("a.log")),
@@ -406,6 +416,13 @@ fn network() {
             ("MAC", "52:54:00:00:00:0b".into()),
         ],
     );
+    for (vax, host) in [(&mut a, "10.0.0.1"), (&mut b, "10.0.0.2")] {
+        vax.command(&format!(
+            "TCPIP SET CONFIGURATION INTERFACE WE0 /HOST={host} /NETWORK_MASK=255.255.255.0"
+        ));
+        vax.command("TCPIP SET ROUTE /DEFAULT /GATEWAY=10.0.0.1 /PERMANENT");
+        vax.command("TCPIP START COMMUNICATION");
+    }
     b.command("TELNET 10.0.0.1");
     b.command("SHOW SYSTEM");
     b.command("LOGOUT");
@@ -414,6 +431,7 @@ fn network() {
     b.command("TCPIP SET ROUTE /DEFAULT /GATEWAY=10.0.0.9 /PERMANENT");
     b.command("TCPIP SET CONFIGURATION INTERFACE WE0 /DHCP");
     b.command("TCPIP SHOW INTERFACE");
+    b.command("TYPE MDA0:[000000]TCPIP$CONFIG.DAT");
     let (a, b) = (a.stop(), b.stop());
     print!("{a}{b}");
     assert!(a.contains("%TCPIP-I-SET, WE0: 10.0.0.1         255.255.255.0    10.0.0.1"));
@@ -424,17 +442,9 @@ fn network() {
         "64 bytes from 10.0.0.1: icmp_seq=1 ttl=255 time=",
         "2 packets transmitted, 2 packets received, 0% packet loss",
         " WE0       10.0.0.2         255.255.255.0    10.0.0.1         up",
+        "TCPIP$CONFIG.DAT\nINTERFACE 10.0.0.3 255.255.255.0 10.0.0.9 DHCP\n",
     ] {
         assert!(b.contains(line), "no {line:?}");
     }
     assert!(remote_login(&b), "no remote DCL's SHOW SYSTEM");
-    let mut img = Image::open(out.join("b-data.img"), Mode::ReadOnly).unwrap();
-    let fid = img.lookup("[000000]TCPIP$CONFIG.DAT").unwrap();
-    let mut saved = Vec::new();
-    img.copy_out(fid, &mut saved, Conversion::RecordsToLines)
-        .unwrap();
-    assert_eq!(
-        String::from_utf8_lossy(&saved),
-        "INTERFACE 10.0.0.3 255.255.255.0 10.0.0.9 DHCP\n"
-    );
 }

@@ -13,7 +13,8 @@ define verb HELP
 	parameter P1, label=TOPIC, value(type=$rest_of_line)
 
 ! PING host [/NUMBER_PACKETS=n]: an ICMP echo request to the host, an
-! address, each second, until CTRL/C, or n of them.
+! address or a name in the hosts database, each second, until CTRL/C, or
+! n of them.
 define verb PING
 	routine PING
 	parameter P1, label=HOST, prompt="Host", value(required)
@@ -24,8 +25,29 @@ define verb SET
 
 define type SET_OPTIONS
 	keyword CONFIGURATION, syntax=SET_CONFIGURATION
+	keyword HOST, syntax=SET_HOST
 	keyword INTERFACE, syntax=SET_INTERFACE
+	keyword NOHOST, syntax=SET_NOHOST
 	keyword ROUTE, syntax=SET_ROUTE
+
+! SET HOST host /ADDRESS=address [/ALIAS=(alias,...)]: adds the host to
+! the hosts database, TCPIP$HOST.DAT.
+define syntax SET_HOST
+	routine SET_HOST
+	parameter P1, label=OPTION, value(required, type=SET_OPTIONS)
+	parameter P2, label=NAME, prompt="Host", value(required)
+	qualifier ADDRESS, nonnegatable, value(required)
+	qualifier ALIAS, nonnegatable, value(required, list)
+	disallow not ADDRESS
+
+! SET NOHOST host [/NOCONFIRM]: takes the host, and its aliases, out of
+! the hosts database, each that has the name, after asking unless
+! /NOCONFIRM.
+define syntax SET_NOHOST
+	routine SET_NOHOST
+	parameter P1, label=OPTION, value(required, type=SET_OPTIONS)
+	parameter P2, label=NAME, prompt="Host", value(required)
+	qualifier CONFIRM, default
 
 ! SET INTERFACE WE0 /HOST=address /NETWORK_MASK=mask, or /DHCP: the
 ! running system.
@@ -66,12 +88,26 @@ define syntax SET_ROUTE
 	disallow not DEFAULT or not GATEWAY
 
 define verb SHOW
-	routine SHOW_INTERFACE
 	parameter P1, label=OPTION, prompt="What", value(required, type=SHOW_OPTIONS)
-	parameter P2, label=INTERFACE
 
 define type SHOW_OPTIONS
-	keyword INTERFACE
+	keyword HOST, syntax=SHOW_HOST
+	keyword INTERFACE, syntax=SHOW_INTERFACE
+
+! SHOW HOST [host] [/ADDRESS=address] [/LOCAL]: the hosts in the hosts
+! database, or the one with that name, alias or address.
+define syntax SHOW_HOST
+	routine SHOW_HOST
+	parameter P1, label=OPTION, value(required, type=SHOW_OPTIONS)
+	parameter P2, label=NAME
+	qualifier ADDRESS, nonnegatable, value(required)
+	qualifier LOCAL, nonnegatable
+	disallow NAME and ADDRESS
+
+define syntax SHOW_INTERFACE
+	routine SHOW_INTERFACE
+	parameter P1, label=OPTION, value(required, type=SHOW_OPTIONS)
+	parameter P2, label=INTERFACE
 
 ! START COMMUNICATION: the saved configuration, or DHCP, and the remote login
 ! server, as SYLOGIN.COM does at boot.
