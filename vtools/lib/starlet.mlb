@@ -216,6 +216,7 @@ RAB$W_USZ = 32                          ; the user's buffer: its size
 RAB$W_RSZ = 34                          ; the record's size
 RAB$L_UBF = 36                          ; and address
 RAB$L_RBF = 40                          ; where $GET put the record, what $PUT writes
+RAB$L_BKT = 56                          ; the VBN $READ or $WRITE starts at, 0 for the next
 RAB$L_FAB = 60                          ; the FAB $CONNECT connects to
         .ENDM   $RABDEF
 
@@ -445,9 +446,19 @@ XAB$V_NOEXE = 2
 XAB$V_NODEL = 3
         .ENDM   $XABPRODEF
 
-; $FAB, $RAB, $NAM, $XABPRO: a FAB, RAB, name block or protection XAB,
-; with the fields given and the rest 0. Lengths are values (FNS=#5 is
-; FNS=5 here), addresses labels.
+; $XABFHCDEF: the file header characteristics XAB, which $OPEN fills.
+        .MACRO  $XABFHCDEF
+XAB$C_FHC = 29                          ; XAB$B_COD
+XAB$C_FHCLEN = 44                       ; XAB$B_BLN
+XAB$W_LRL = 10                          ; the longest record
+XAB$L_HBK = 12                          ; the blocks allocated
+XAB$L_EBK = 16                          ; the end of file: its block
+XAB$W_FFB = 20                          ; and the first free byte in it
+        .ENDM   $XABFHCDEF
+
+; $FAB, $RAB, $NAM, $XABPRO, $XABFHC: a FAB, RAB, name block, protection
+; XAB or file header characteristics XAB, with the fields given and the
+; rest 0. Lengths are values (FNS=#5 is FNS=5 here), addresses labels.
         .MACRO  $FAB    FNA=0, FNS=0, DNA=0, DNS=0, NAM=0, FAC=0, XAB=0
         .BYTE   3, 80                   ; BID, BLN
         .WORD   0                       ; IFI
@@ -488,6 +499,13 @@ XAB$V_NODEL = 3
         .LONG   UIC
         .ENDM   $XABPRO
 
+        .MACRO  $XABFHC NXT=0
+        .BYTE   29, 44                  ; COD, BLN
+        .WORD   0
+        .ADDRESS NXT
+        .BLKB   36                      ; RFO to the end
+        .ENDM   $XABFHC
+
         .MACRO  $NAM    ESA=0, ESS=0, RSA=0, RSS=0
         .BYTE   2, 96                   ; BID, BLN
         .BYTE   RSS, 0                  ; RSS, RSL
@@ -498,7 +516,7 @@ XAB$V_NODEL = 3
         .ENDM   $NAM
 
 ; $OPEN, $CREATE, $CLOSE, $ERASE, $PARSE, $SEARCH FAB=fab and $CONNECT,
-; $DISCONNECT, $GET, $PUT RAB=rab: the RMS services, which take the
+; $DISCONNECT, $GET, $PUT, $READ, $WRITE RAB=rab: the RMS services, which take the
 ; block's address.
         .MACRO  $RMSCALL NAME, BLOCK
         PUSHAB  BLOCK
@@ -545,6 +563,14 @@ XAB$V_NODEL = 3
         .MACRO  $PUT    RAB
         $RMSCALL PUT, RAB
         .ENDM   $PUT
+
+        .MACRO  $READ   RAB
+        $RMSCALL READ, RAB
+        .ENDM   $READ
+
+        .MACRO  $WRITE  RAB
+        $RMSCALL WRITE, RAB
+        .ENDM   $WRITE
 
 ; $PSLDEF: the processor status longword's fields and the access modes,
 ; from kernel, the innermost, out to user.

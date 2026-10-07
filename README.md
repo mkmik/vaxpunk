@@ -121,7 +121,8 @@ LOGICAL` alone to list them all), `SHOW PROCESS` and `SHOW SYSTEM` show
 the process and list them all, `TCPIP` sets and shows the network's
 (*Networking*), and saves them for the next boot, `SET HOST
 address` logs in to another vaxpunk, `COPY` and `DELETE` copy and delete
-files, `INITIALIZE`, `MOUNT` and `DISMOUNT` make, mount and dismount a
+files, `BACKUP` saves them in a save set VMS's BACKUP reads, and lists and
+restores one, `INITIALIZE`, `MOUNT` and `DISMOUNT` make, mount and dismount a
 volume on the data disk, `DKB0:`, or the ramdisk, `MDA0:`, the disks they
 can write ([ADR-0009](docs/adr/0009-ramdisk-writable-files-11.md)), where
 `CREATE/DIRECTORY [A.B]` makes directories, `SET COMMAND file` adds the

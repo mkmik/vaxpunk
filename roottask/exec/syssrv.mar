@@ -184,6 +184,8 @@ CODE = 0
         SERVICE SETDDIR, 3
         SERVICE CREATE, 1
         SERVICE PUT, 1
+        SERVICE READ, 1
+        SERVICE WRITE, 1
         SERVICE ERASE, 1
         SERVICE CREATE_DIR, 1
 ; Volumes
