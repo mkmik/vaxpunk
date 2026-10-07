@@ -1,0 +1,228 @@
+                                Source Listing                   DD-MMM-YYYY HH:MM:SS  BLISS-64E V1.11-007-48G4L         Page 1
+                                                                 DD-MMM-YYYY HH:MM:SS  SYS$SYSDEVICE:[ORACLE]STRUCTS.B64;1
+
+    0	      1 MODULE STRUCTS (MAIN = MAIN) =
+    0	      2 BEGIN
+    1	      3 ! Structures: the predeclared ones, REF, user STRUCTURE declarations,
+    1	      4 ! FIELD sets, general structure references, BIND, MAP and PRESET.
+    1	      5 REQUIRE 'PRINT';
+ R  1	      6 ! PRINT: prints a value as a signed decimal and as 16 hex digits, on a line
+ R  1	      7 ! of its own, through LIB$PUT_OUTPUT. The behaviour tests print with it,
+ R  1	      8 ! here under vrun and on OpenVMS for the oracle.
+ R  1	      9 
+ R  1	     10 EXTERNAL ROUTINE
+ R  1	     11     LIB$PUT_OUTPUT;
+ R  1	     12 
+ R  1	     13 ROUTINE PRINT (V) : NOVALUE =
+ R  1	     14     BEGIN
+ R  2	     15     LOCAL
+ R  2	     16         BUF : VECTOR[48, BYTE],
+ R  2	     17         DESC : VECTOR[2, LONG],
+ R  2	     18         X,
+ R  2	     19         I;
+ R  2	     20     I = 48;
+ R  2	     21     X = .V;
+ R  2	     22     INCR K FROM 1 TO 16 DO
+ R  2	     23         BEGIN
+ R  3	     24         LOCAL D;
+ R  3	     25         D = .X AND 15;
+ R  3	     26         I = .I - 1;
+ R  3	     27         BUF[.I] = (IF .D LSS 10 THEN %C'0' + .D ELSE %C'A' + .D - 10);
+ R  3	     28         X = .X ^ -4 AND %X'0FFFFFFFFFFFFFFF'
+ R  3	     29         END;
+ R  2	     30     I = .I - 1;
+ R  2	     31     BUF[.I] = %C' ';
+ R  2	     32     ! Digits from the remainders, negative for a negative value, so that
+ R  2	     33     ! the most negative one prints too.
+ R  2	     34     X = .V;
+ R  2	     35     DO
+ R  2	     36         BEGIN
+ R  3	     37         LOCAL D;
+ R  3	     38         D = .X - (.X / 10) * 10;
+ R  3	     39         IF .D LSS 0 THEN D = -.D;
+ R  3	     40         I = .I - 1;
+ R  3	     41         BUF[.I] = %C'0' + .D;
+ R  3	     42         X = .X / 10
+ R  3	     43         END
+ R  3	     44     UNTIL .X EQL 0;
+ R  2	     45     IF .V LSS 0
+ R  2	     46     THEN
+ R  2	     47         BEGIN
+ R  3	     48         I = .I - 1;
+ R  3	     49         BUF[.I] = %C'-'
+ R  3	     50         END;
+ R  2	     51     DESC[0] = 48 - .I + %X'010E0000';
+ R  2	     52     DESC[1] = BUF[.I];
+ R  2	     53     LIB$PUT_OUTPUT(DESC)
+ R  2	     54     END;
+    1	     55 
+    1	     56 FIELD
+    1	     57     DCB_FIELDS =
+
+STRUCTS                         Source Listing                   DD-MMM-YYYY HH:MM:SS  BLISS-64E V1.11-007-48G4L         Page 2
+                                                                 DD-MMM-YYYY HH:MM:SS  SYS$SYSDEVICE:[ORACLE]STRUCTS.B64;1
+
+    1	     58         SET
+    1	     59         DCB_A = [0, 0, 32, 0],
+    1	     60         DCB_B = [4, 0, 8, 0],
+    1	     61         DCB_C = [4, 8, 5, 0],
+    1	     62         DCB_D = [4, 13, 19, 1],
+    1	     63         DCB_E = [8, 0, 64, 0]
+    1	     64         TES,
+    1	     65     LONE = [2, 0, 16, 1];
+    1	     66 
+    1	     67 LITERAL
+    1	     68     DCB_SIZE = 16;
+    1	     69 
+    1	     70 STRUCTURE
+    1	     71     ARRAY [I, J; M, N] = [M * N * %UPVAL] (ARRAY + (I * N + J) * %UPVAL),
+    1	     72     BACKWARD [I; N, UNIT = 8] = [N * UNIT] (BACKWARD + (N - 1 - I) * UNIT)<0, 8 * UNIT>,
+    1	     73     ! The structure's name in a conditional (RN chapter 4, item 2).
+    1	     74     SWAP [I] = [16] (IF I THEN SWAP ELSE SWAP + 8)<0, 64>;
+    1	     75 
+    1	     76 OWN
+    1	     77     V : VECTOR[5],
+    1	     78     VB : VECTOR[8, BYTE],
+    1	     79     VW : VECTOR[4, WORD, SIGNED],
+    1	     80     VL : VECTOR[3, LONG],
+    1	     81     BV : BITVECTOR[20],
+    1	     82     B : BLOCK[DCB_SIZE, BYTE] FIELD(DCB_FIELDS),
+    1	     83     BB : BLOCK_BYTE[8],
+    1	     84     BQ : BLOCK[2],
+    1	     85     BVEC : BLOCKVECTOR[3, 2],
+    1	     86     A : ARRAY[3, 4],
+    1	     87     SW : SWAP INITIAL(5, 7),
+    1	     88     BACK : BACKWARD[4],
+    1	     89     P : REF VECTOR,
+    1	     90     PB : REF BLOCK[, BYTE],
+    1	     91     INIT : VECTOR[3] INITIAL(10, 20, 30),
+    1	     92     PRE : BLOCK[DCB_SIZE, BYTE] FIELD(DCB_FIELDS) PRESET([DCB_A] = 7, [DCB_C] = 31, [DCB_D] = -2,
+    1	     93         [DCB_E] = INIT);
+    1	     94 
+    1	     95 BIND
+    1	     96     THIRD = V[2],
+    1	     97     BW = B : BLOCK[, WORD],
+    1	     98     TWO = INIT[1] : LONG;
+    1	     99 
+    1	    100 %PRINT('size ', %SIZE(VECTOR[10, WORD]), ' ', %SIZE(REF VECTOR), ' ', %SIZE(BLOCK[3, BYTE]), ' ',
+L   1	    101     %SIZE(BLOCKVECTOR[2, 3, BYTE]), ' ', %SIZE(BITVECTOR[20]), ' ', %SIZE(ARRAY[2, 5]))
+
+STRUCTS                         Source Listing                   DD-MMM-YYYY HH:MM:SS  BLISS-64E V1.11-007-48G4L         Page 3
+                                                                 DD-MMM-YYYY HH:MM:SS  SYS$SYSDEVICE:[ORACLE]STRUCTS.B64;1
+
+		; %PRINT:	size 20 8 3 6 3 80
+    1	    102 %PRINT('allocation ', %ALLOCATION(V), ' ', %ALLOCATION(BV), ' ', %ALLOCATION(B), ' ', %ALLOCATION(BVEC))
+		; %PRINT:	allocation 40 3 16 48
+    1	    103 %PRINT('fields ', %FIELDEXPAND(DCB_D), ' and ', %FIELDEXPAND(DCB_D, 1))
+		; %PRINT:	fields 413191 and 13
+    1	    104 
+    1	    105 ROUTINE SUM (X : REF VECTOR, N) =
+    1	    106     BEGIN
+    2	    107     LOCAL
+    2	    108         S;
+    2	    109     S = 0;
+    2	    110     INCR I FROM 0 TO .N - 1 DO
+    2	    111         S = .S + .X[.I];
+    2	    112     .S
+    2	    113     END;
+    1	    114 
+    1	    115 ROUTINE FIELDS (X : REF BLOCK[, BYTE] FIELD(DCB_FIELDS)) : NOVALUE =
+    1	    116     BEGIN
+    2	    117     PRINT(.X[DCB_A]);
+    2	    118     PRINT(.X[DCB_B]);
+    2	    119     PRINT(.X[DCB_C]);
+    2	    120     PRINT(.X[DCB_D]);
+    2	    121     PRINT(.X[LONE])
+		.............1      
+%BLS64-W-TEXT, (1) Field name LONE invalid in structure reference to data segment X
+
+    2	    122     END;
+    1	    123 
+    1	    124 ROUTINE LOCALS =
+    1	    125     BEGIN
+    2	    126     LOCAL
+    2	    127         L : VECTOR[3] INITIAL(1, 2, 3),
+    2	    128         LB : BLOCK[2] PRESET([1, 0, 64, 0] = 99);
+    2	    129     BIND
+    2	    130         LAST = L[.L[0] + 1];
+    2	    131     PRINT(.LB[0, 0, 64, 0]);
+    2	    132     PRINT(.LB[1, 0, 64, 0]);
+    2	    133     .LAST + .L[1]
+    2	    134     END;
+    1	    135 
+    1	    136 ROUTINE MAIN =
+    1	    137     BEGIN
+    2	    138     INCR I FROM 0 TO 4 DO
+    2	    139         V[.I] = .I * 100;
+    2	    140     PRINT(SUM(V, 5));
+    2	    141     PRINT(.THIRD);
+    2	    142     INCR I FROM 0 TO 7 DO
+    2	    143         VB[.I] = .I + 250;
+    2	    144     PRINT(.VB[7]);
+    2	    145     PRINT(.V[1]);
+    2	    146     VW[0] = -3;
+    2	    147     VW[1] = 70000;
+    2	    148     PRINT(.VW[0]);
+    2	    149     PRINT(.VW[1]);
+    2	    150     VL[2] = -1;
+    2	    151     PRINT(.VL[2]);
+    2	    152     BV[3] = 1;
+
+STRUCTS                         Source Listing                   DD-MMM-YYYY HH:MM:SS  BLISS-64E V1.11-007-48G4L         Page 4
+                                                                 DD-MMM-YYYY HH:MM:SS  SYS$SYSDEVICE:[ORACLE]STRUCTS.B64;1
+
+    2	    153     BV[17] = 1;
+    2	    154     BV[17] = 1;
+    2	    155     PRINT(.BV[3] + .BV[4] * 2 + .BV[17] * 4);
+    2	    156     PRINT(.(BV + 2));
+		..........1           
+%BLS64-W-TEXT, (1) Reference outside of data segment BV, possible optimizations lost
+
+    2	    157     B[DCB_A] = %X'12345678';
+    2	    158     B[DCB_B] = 300;
+    2	    159     B[DCB_C] = 9;
+    2	    160     B[DCB_D] = -5;
+    2	    161     FIELDS(B);
+    2	    162     PRINT(.BW[2, 0, 16, 0]);
+    2	    163     BB[1, 4, 4, 0] = 15;
+    2	    164     PRINT(.BB[0, 0, 16, 0]);
+    2	    165     BQ[1, 0, 64, 0] = 5;
+    2	    166     PRINT(.BQ[1, 0, 64, 0] + .(BQ + 8));
+    2	    167     BVEC[2, 1, 0, 8, 0] = 77;
+    2	    168     PRINT(.(BVEC + 40)<0, 8>);
+    2	    169     A[1, 2] = 12;
+    2	    170     A[2, 3] = 23;
+    2	    171     PRINT(.A[1, 2] + .A[2, 3]);
+    2	    172     PRINT(.(A + 48));
+    2	    173     BACK[0] = 1;
+    2	    174     BACK[3] = 4;
+    2	    175     PRINT(.(BACK + 24));
+    2	    176     PRINT(.(BACK + 0));
+    2	    177     P = V;
+    2	    178     PRINT(.P[4]);
+    2	    179     P[4] = 444;
+    2	    180     PRINT(.V[4]);
+    2	    181     PB = B;
+    2	    182     PRINT(.PB[4, 0, 8, 0]);
+    2	    183     PRINT(VECTOR[V, 3] - V);
+    2	    184     PRINT(.VECTOR[V, 3] - .V[3]);
+    2	    185     PRINT(.BLOCK[INIT, 1, 0, 32, 0; 3]);
+    2	    186     PRINT(.TWO);
+    2	    187     FIELDS(PRE);
+    2	    188     PRINT(.PRE[DCB_E] - INIT);
+    2	    189     PRINT(LOCALS());
+    2	    190     PRINT(.SW[0]);
+    2	    191     PRINT(.SW[1]);
+    2	    192     1
+    2	    193     END;
+    1	    194 
+    1	    195 END
+    1	    196 ELUDOM
+
+
+                                Source Listing                   DD-MMM-YYYY HH:MM:SS  BLISS-64E V1.11-007-48G4L         Page 5
+                                Source Listing                   DD-MMM-YYYY HH:MM:SS  SYS$SYSDEVICE:[ORACLE]STRUCTS.B64;1
+
+COMMAND LINE:
+
+BLISS/A64/LIST/SOURCE_LIST=(EXPAND_MACROS,REQUIRE)/NOMACHINE_CODE STRUCTS.B64

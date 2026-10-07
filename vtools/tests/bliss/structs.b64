@@ -1,0 +1,147 @@
+MODULE STRUCTS (MAIN = MAIN) =
+BEGIN
+! Structures: the predeclared ones, REF, user STRUCTURE declarations,
+! FIELD sets, general structure references, BIND, MAP and PRESET.
+REQUIRE 'PRINT';
+
+FIELD
+    DCB_FIELDS =
+        SET
+        DCB_A = [0, 0, 32, 0],
+        DCB_B = [4, 0, 8, 0],
+        DCB_C = [4, 8, 5, 0],
+        DCB_D = [4, 13, 19, 1],
+        DCB_E = [8, 0, 64, 0]
+        TES,
+    LONE = [2, 0, 16, 1];
+
+LITERAL
+    DCB_SIZE = 16;
+
+STRUCTURE
+    ARRAY [I, J; M, N] = [M * N * %UPVAL] (ARRAY + (I * N + J) * %UPVAL),
+    BACKWARD [I; N, UNIT = 8] = [N * UNIT] (BACKWARD + (N - 1 - I) * UNIT)<0, 8 * UNIT>,
+    ! The structure's name in a conditional (RN chapter 4, item 2).
+    SWAP [I] = [16] (IF I THEN SWAP ELSE SWAP + 8)<0, 64>;
+
+OWN
+    V : VECTOR[5],
+    VB : VECTOR[8, BYTE],
+    VW : VECTOR[4, WORD, SIGNED],
+    VL : VECTOR[3, LONG],
+    BV : BITVECTOR[20],
+    B : BLOCK[DCB_SIZE, BYTE] FIELD(DCB_FIELDS),
+    BB : BLOCK_BYTE[8],
+    BQ : BLOCK[2],
+    BVEC : BLOCKVECTOR[3, 2],
+    A : ARRAY[3, 4],
+    SW : SWAP INITIAL(5, 7),
+    BACK : BACKWARD[4],
+    P : REF VECTOR,
+    PB : REF BLOCK[, BYTE],
+    INIT : VECTOR[3] INITIAL(10, 20, 30),
+    PRE : BLOCK[DCB_SIZE, BYTE] FIELD(DCB_FIELDS) PRESET([DCB_A] = 7, [DCB_C] = 31, [DCB_D] = -2,
+        [DCB_E] = INIT);
+
+BIND
+    THIRD = V[2],
+    BW = B : BLOCK[, WORD],
+    TWO = INIT[1] : LONG;
+
+%PRINT('size ', %SIZE(VECTOR[10, WORD]), ' ', %SIZE(REF VECTOR), ' ', %SIZE(BLOCK[3, BYTE]), ' ',
+    %SIZE(BLOCKVECTOR[2, 3, BYTE]), ' ', %SIZE(BITVECTOR[20]), ' ', %SIZE(ARRAY[2, 5]))
+%PRINT('allocation ', %ALLOCATION(V), ' ', %ALLOCATION(BV), ' ', %ALLOCATION(B), ' ', %ALLOCATION(BVEC))
+%PRINT('fields ', %FIELDEXPAND(DCB_D), ' and ', %FIELDEXPAND(DCB_D, 1))
+
+ROUTINE SUM (X : REF VECTOR, N) =
+    BEGIN
+    LOCAL
+        S;
+    S = 0;
+    INCR I FROM 0 TO .N - 1 DO
+        S = .S + .X[.I];
+    .S
+    END;
+
+ROUTINE FIELDS (X : REF BLOCK[, BYTE] FIELD(DCB_FIELDS)) : NOVALUE =
+    BEGIN
+    PRINT(.X[DCB_A]);
+    PRINT(.X[DCB_B]);
+    PRINT(.X[DCB_C]);
+    PRINT(.X[DCB_D]);
+    PRINT(.X[LONE])
+    END;
+
+ROUTINE LOCALS =
+    BEGIN
+    LOCAL
+        L : VECTOR[3] INITIAL(1, 2, 3),
+        LB : BLOCK[2] PRESET([1, 0, 64, 0] = 99);
+    BIND
+        LAST = L[.L[0] + 1];
+    PRINT(.LB[0, 0, 64, 0]);
+    PRINT(.LB[1, 0, 64, 0]);
+    .LAST + .L[1]
+    END;
+
+ROUTINE MAIN =
+    BEGIN
+    INCR I FROM 0 TO 4 DO
+        V[.I] = .I * 100;
+    PRINT(SUM(V, 5));
+    PRINT(.THIRD);
+    INCR I FROM 0 TO 7 DO
+        VB[.I] = .I + 250;
+    PRINT(.VB[7]);
+    PRINT(.V[1]);
+    VW[0] = -3;
+    VW[1] = 70000;
+    PRINT(.VW[0]);
+    PRINT(.VW[1]);
+    VL[2] = -1;
+    PRINT(.VL[2]);
+    BV[3] = 1;
+    BV[17] = 1;
+    BV[17] = 1;
+    PRINT(.BV[3] + .BV[4] * 2 + .BV[17] * 4);
+    PRINT(.(BV + 2));
+    B[DCB_A] = %X'12345678';
+    B[DCB_B] = 300;
+    B[DCB_C] = 9;
+    B[DCB_D] = -5;
+    FIELDS(B);
+    PRINT(.BW[2, 0, 16, 0]);
+    BB[1, 4, 4, 0] = 15;
+    PRINT(.BB[0, 0, 16, 0]);
+    BQ[1, 0, 64, 0] = 5;
+    PRINT(.BQ[1, 0, 64, 0] + .(BQ + 8));
+    BVEC[2, 1, 0, 8, 0] = 77;
+    PRINT(.(BVEC + 40)<0, 8>);
+    A[1, 2] = 12;
+    A[2, 3] = 23;
+    PRINT(.A[1, 2] + .A[2, 3]);
+    PRINT(.(A + 48));
+    BACK[0] = 1;
+    BACK[3] = 4;
+    PRINT(.(BACK + 24));
+    PRINT(.(BACK + 0));
+    P = V;
+    PRINT(.P[4]);
+    P[4] = 444;
+    PRINT(.V[4]);
+    PB = B;
+    PRINT(.PB[4, 0, 8, 0]);
+    PRINT(VECTOR[V, 3] - V);
+    PRINT(.VECTOR[V, 3] - .V[3]);
+    PRINT(.BLOCK[INIT, 1, 0, 32, 0; 3]);
+    PRINT(.TWO);
+    FIELDS(PRE);
+    PRINT(.PRE[DCB_E] - INIT);
+    PRINT(LOCALS());
+    PRINT(.SW[0]);
+    PRINT(.SW[1]);
+    1
+    END;
+
+END
+ELUDOM

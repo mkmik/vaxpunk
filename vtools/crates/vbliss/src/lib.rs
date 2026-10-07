@@ -7,6 +7,7 @@
 //! into vasm source, which vasm assembles. `listing` writes the listing.
 
 mod arm64;
+mod data;
 mod ir;
 mod irgen;
 mod lex;
@@ -54,9 +55,10 @@ impl Output {
 /// Compiles BLISS-64 `source`, read from `path`, to its IR and vasm
 /// assembly. REQUIRE files are looked for in `path`'s directory.
 pub fn translate(path: &Path, source: &str, opts: &Options) -> Output {
-    let dir = path.parent().unwrap_or(Path::new("."));
+    let mut dirs = vec![path.parent().unwrap_or(Path::new(".")).to_path_buf()];
+    dirs.extend(opts.include.iter().cloned());
     let name = path.display().to_string();
-    let front = parse::parse(&name, source, &|n| require(dir, n), opts);
+    let front = parse::parse(&name, source, &|n| require(&dirs, n), opts);
     let mut diags: Vec<Diag> = front
         .diags
         .into_iter()
@@ -96,7 +98,11 @@ pub fn translate(path: &Path, source: &str, opts: &Options) -> Output {
 /// Compiles BLISS-64 `source` into object records, as `vmacro::compile`
 /// does MACRO-32; errors come back as the assembler's diagnostics.
 pub fn compile(source: &str, opts: &vasm::Options) -> Result<Object, Vec<Diagnostic>> {
-    let (obj, out) = compile_with(source, opts, &Options::default());
+    let bliss = Options {
+        include: opts.include.clone(),
+        ..Options::default()
+    };
+    let (obj, out) = compile_with(source, opts, &bliss);
     match out.error() {
         Some(d) => Err(vec![Diagnostic {
             file: d.file.clone(),
@@ -127,16 +133,33 @@ pub fn compile_with(
     (obj, out)
 }
 
-/// A require file's text: `name` in `dir`, as given, or with `.R64` or
-/// `.REQ` after it if it has no type, in upper or lower case.
-fn require(dir: &Path, name: &str) -> Result<String, String> {
-    let mut names = vec![name.to_string()];
-    if !name.contains('.') {
-        names.extend([".R64", ".REQ"].map(|t| format!("{name}{t}")));
+/// A require or library file's text: `name` in one of `dirs`, as given,
+/// or with `.R64` or `.REQ` after it if it has no type, in upper or lower
+/// case. A device or directory before the name (`SYS$LIBRARY:STARLET`)
+/// stands for the directories searched; a library's `.L64` is its source.
+fn require(dirs: &[std::path::PathBuf], name: &str) -> Result<String, String> {
+    // ponytail: [-] is the parent directory; any other directory is dropped.
+    let (up, name) = match name.strip_prefix("[-]") {
+        Some(rest) => ("../", rest),
+        None => ("", name),
+    };
+    let base = name.rsplit([':', ']', '>']).next().unwrap_or(name);
+    let base = &format!("{up}{base}");
+    let base = base
+        .strip_suffix(".L64")
+        .or_else(|| base.strip_suffix(".l64"))
+        .unwrap_or(base);
+    let mut names = vec![base.to_string()];
+    if !base.rsplit('/').next().unwrap_or(base).contains('.') {
+        names.extend([".R64", ".REQ"].map(|t| format!("{base}{t}")));
     }
-    names
-        .iter()
-        .flat_map(|n| [n.clone(), n.to_ascii_lowercase(), n.to_ascii_uppercase()])
-        .find_map(|n| fs::read_to_string(dir.join(n)).ok())
-        .ok_or_else(|| format!("can't find require file {name} in {}", dir.display()))
+    dirs.iter()
+        .flat_map(|d| {
+            names
+                .iter()
+                .flat_map(|n| [n.clone(), n.to_ascii_lowercase(), n.to_ascii_uppercase()])
+                .map(move |n| d.join(n))
+        })
+        .find_map(|p| fs::read_to_string(p).ok())
+        .ok_or_else(|| format!("can't find require file {name}"))
 }

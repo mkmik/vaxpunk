@@ -3,6 +3,7 @@
 
 use std::collections::{BTreeSet, HashMap};
 
+use crate::data::Init;
 use crate::ir::{self, Block, Func, Ins, Item, Op, Term, Un, V};
 use crate::parse::{self, BOp, CaseLabel, Expr, Kind, Rel, SelectLabel, Storage};
 
@@ -29,6 +30,8 @@ struct Gen<'a> {
     labels: HashMap<usize, (u32, u32)>,
     data: Vec<ir::Data>,
     externals: BTreeSet<String>,
+    /// What structure references' temporaries hold.
+    lets: HashMap<u32, V>,
 }
 
 /// Generates the IR of a parsed module.
@@ -41,6 +44,7 @@ pub fn generate(m: &parse::Module) -> R<ir::Module> {
         labels: HashMap::new(),
         data: Vec::new(),
         externals: BTreeSet::new(),
+        lets: HashMap::new(),
     };
     for s in &m.statics {
         g.statics(s)?;
@@ -136,19 +140,23 @@ impl Gen<'_> {
     }
 
     fn statics(&mut self, s: &parse::Static) -> R<()> {
-        let sym = &self.m.syms[s.sym];
+        let m = self.m;
+        let sym = &m.syms[s.sym];
         let Kind::Data { storage, bytes, .. } = sym.kind else {
             unreachable!()
         };
         let mut items = Vec::new();
         let mut used = 0u32;
-        for (e, size) in &s.init {
-            let v = match e {
-                Expr::Name(id) => self.address(*id),
-                e => V::C(parse::fold(e).ok_or(format!("INITIAL of {} isn't constant", sym.name))?),
-            };
-            items.push(Item::Val(v, *size));
-            used += u32::from(*size);
+        for i in &s.init {
+            items.push(match i {
+                Init::Val(e, size) => Item::Val(
+                    self.constant(e)
+                        .map_err(|e| format!("INITIAL of {}: {e}", sym.name))?,
+                    *size,
+                ),
+                Init::Bytes(b) => Item::Bytes(b.clone()),
+            });
+            used += i.len();
         }
         if used < bytes {
             items.push(Item::Zero(bytes - used));
@@ -164,10 +172,55 @@ impl Gen<'_> {
         Ok(())
     }
 
+    /// The value of a link-time constant: static data's initial values and
+    /// PLIT items.
+    fn constant(&mut self, e: &Expr) -> R<V> {
+        if let Some(c) = parse::fold(e) {
+            return Ok(V::C(c));
+        }
+        let v = match e {
+            Expr::Name(_) | Expr::Plit(..) | Expr::Ascid(_) => self.value(e)?,
+            Expr::Block(es, true) if es.len() == 1 => self.constant(&es[0])?,
+            Expr::Field(b, p, _, _) => {
+                let b = self.constant(b)?;
+                let p = parse::fold(p).ok_or("a field's position isn't constant")?;
+                offset(&b, p / 8).ok_or("not a link-time constant")?
+            }
+            Expr::Bin(BOp::Add, a, b) => match (parse::fold(a), parse::fold(b)) {
+                (_, Some(k)) => {
+                    let a = self.constant(a)?;
+                    offset(&a, k).ok_or("not a link-time constant")?
+                }
+                (Some(k), _) => {
+                    let b = self.constant(b)?;
+                    offset(&b, k).ok_or("not a link-time constant")?
+                }
+                _ => return Err("not a link-time constant".into()),
+            },
+            Expr::Bin(BOp::Sub, a, b) => {
+                let k = parse::fold(b).ok_or("not a link-time constant")?;
+                let a = self.constant(a)?;
+                offset(&a, k.wrapping_neg()).ok_or("not a link-time constant")?
+            }
+            _ => return Err("not a link-time constant".into()),
+        };
+        match v {
+            V::T(_) => Err("not a link-time constant".into()),
+            v => Ok(v),
+        }
+    }
+
     /// The address a data or routine name stands for.
-    fn address(&mut self, id: usize) -> V {
+    fn address(&mut self, id: usize) -> R<V> {
         let sym = &self.m.syms[id];
-        match sym.kind {
+        Ok(match sym.kind {
+            Kind::Data {
+                storage: Storage::Bind(i),
+                ..
+            } => {
+                let m = self.m;
+                return self.value(&m.binds[i as usize]);
+            }
             Kind::Data {
                 storage: Storage::Local(slot),
                 ..
@@ -181,7 +234,7 @@ impl Gen<'_> {
                 V::Sym(sym.asm.clone(), 0)
             }
             _ => V::Sym(sym.asm.clone(), 0),
-        }
+        })
     }
 
     fn routine(&mut self, r: &parse::Routine) -> R<Func> {
@@ -202,7 +255,7 @@ impl Gen<'_> {
         for (i, &formal) in r.formals.iter().enumerate() {
             let t = self.temp();
             self.emit(Ins::Arg(t, i as u32));
-            let addr = self.address(formal);
+            let addr = self.address(formal)?;
             self.emit(Ins::Store(V::T(t), addr, 8));
         }
         let v = self.value(&r.body)?;
@@ -219,15 +272,30 @@ impl Gen<'_> {
         }
         Ok(match e {
             Expr::Num(n) => V::C(*n),
-            Expr::Name(id) => self.address(*id),
+            Expr::Name(id) => self.address(*id)?,
             Expr::Ascid(text) => self.ascid(text),
+            Expr::Plit(counted, items) => self.plit(*counted, items)?,
+            Expr::Temp(t) => self.lets[t].clone(),
+            Expr::Let(t, a, body) => {
+                let v = self.value(a)?;
+                let v = self.fix(v);
+                self.lets.insert(*t, v);
+                self.value(body)?
+            }
             Expr::Fetch(a) => {
                 let p = self.place(a)?;
                 self.load(p)
             }
-            Expr::Field(..) | Expr::Index(..) => {
-                // A field reference as a value is its address.
-                self.place(e)?.addr
+            Expr::Field(..) => {
+                // A field reference as a value is the address of its byte.
+                let p = self.place(e)?;
+                match p.pos {
+                    V::C(pos) => self.add(p.addr, pos / 8),
+                    pos => {
+                        let byte = self.bin(Op::Shr, pos, V::C(3));
+                        self.bin(Op::Add, p.addr, byte)
+                    }
+                }
             }
             Expr::Neg(a) => {
                 let a = self.value(a)?;
@@ -243,7 +311,12 @@ impl Gen<'_> {
             }
             Expr::Bin(op, a, b) => {
                 let (a, b) = (self.value(a)?, self.value(b)?);
-                self.binary(*op, a, b)
+                match (op, &a, &b) {
+                    (BOp::Add, _, V::C(k)) if offset(&a, *k).is_some() => self.add(a, *k),
+                    (BOp::Add, V::C(k), _) if offset(&b, *k).is_some() => self.add(b, *k),
+                    (BOp::Sub, _, V::C(k)) if offset(&a, *k).is_some() => self.add(a, -*k),
+                    _ => self.binary(*op, a, b),
+                }
             }
             Expr::Assign(l, r) => {
                 let v = self.value(r)?;
@@ -254,7 +327,7 @@ impl Gen<'_> {
             Expr::Call(target, args) => {
                 let t = match **target {
                     Expr::Name(id) => match self.m.syms[id].kind {
-                        Kind::Routine { .. } => self.address(id),
+                        Kind::Routine { .. } => self.address(id)?,
                         _ => return Err(format!("{} is not a routine", self.m.syms[id].name)),
                     },
                     ref t => self.value(t)?,
@@ -341,7 +414,7 @@ impl Gen<'_> {
                     (true, true) => (0, 0),
                 };
                 let start = opt(self, from, lo)?;
-                let i = self.address(*var);
+                let i = self.address(*var)?;
                 self.emit(Ins::Store(start, i.clone(), 8));
                 let end = opt(self, to, hi)?;
                 let end = self.fix(end);
@@ -475,7 +548,7 @@ impl Gen<'_> {
     fn place(&mut self, e: &Expr) -> R<Place> {
         Ok(match e {
             Expr::Name(id) => {
-                let addr = self.address(*id);
+                let addr = self.address(*id)?;
                 match self.m.syms[*id].kind {
                     Kind::Data { size, signed, .. } => Place {
                         addr,
@@ -486,44 +559,29 @@ impl Gen<'_> {
                     _ => full(addr),
                 }
             }
-            Expr::Index(base, index) => {
-                let Expr::Name(id) = **base else {
-                    unreachable!()
-                };
-                let Kind::Data {
-                    vector: Some((unit, signed)),
-                    ..
-                } = self.m.syms[id].kind
-                else {
-                    unreachable!()
-                };
-                let base = self.address(id);
-                let addr = match self.value(index)? {
-                    V::C(i) => self.add(base, i * i64::from(unit)),
-                    i => {
-                        let i = self.bin(Op::Mul, i, V::C(unit.into()));
-                        self.bin(Op::Add, base, i)
-                    }
-                };
-                Place {
-                    addr,
-                    pos: V::C(0),
-                    size: V::C(i64::from(unit) * 8),
-                    signed,
-                }
+            Expr::Let(t, a, body) => {
+                let v = self.value(a)?;
+                let v = self.fix(v);
+                self.lets.insert(*t, v);
+                self.place(body)?
             }
+            Expr::Block(es, true) if es.len() == 1 => self.place(&es[0])?,
             Expr::Field(base, pos, size, ext) => {
                 let addr = match **base {
-                    Expr::Name(id) => self.address(id),
+                    Expr::Name(id) => self.address(id)?,
                     ref b => self.value(b)?,
                 };
                 let pos = self.value(pos)?;
                 let size = self.value(size)?;
+                let signed = match parse::fold(ext) {
+                    Some(x) => x & 1 != 0,
+                    None => return Err("a field's sign extension isn't constant".into()),
+                };
                 Place {
                     addr,
                     pos,
                     size,
-                    signed: *ext,
+                    signed,
                 }
             }
             e => {
@@ -552,12 +610,20 @@ impl Gen<'_> {
             let addr = self.add(p.addr.clone(), pos / 8);
             return Ok((addr, width, V::C(bit)));
         }
-        // ponytail: a variable field reads a quadword from its byte, which
-        // can run past the data at the end of a page.
+        // A variable field reads the fewest bytes its size allows from its
+        // byte: one for a bit.
+        // ponytail: a field of variable size reads a quadword, which can
+        // run past the data at the end of a page.
+        let width = match p.size {
+            V::C(0..=1) => 1,
+            V::C(2..=9) => 2,
+            V::C(10..=25) => 4,
+            _ => 8,
+        };
         let byte = self.bin(Op::Shr, p.pos.clone(), V::C(3));
         let addr = self.bin(Op::Add, p.addr.clone(), byte);
         let bit = self.bin(Op::And, p.pos.clone(), V::C(7));
-        Ok((addr, 8, bit))
+        Ok((addr, width, bit))
     }
 
     fn load(&mut self, p: Place) -> V {
@@ -594,6 +660,36 @@ impl Gen<'_> {
         let n = self.temp();
         self.emit(Ins::Insert(n, V::T(d), v, bit, p.size));
         self.emit(Ins::Store(V::T(n), addr, width));
+    }
+
+    /// A PLIT: its items in $PLIT$, after their count in fullwords if it
+    /// is counted; its value is the first item's address.
+    fn plit(&mut self, counted: bool, items: &[Init]) -> R<V> {
+        let n = self.data.len();
+        let name = format!("P.{n}");
+        self.data.push(ir::Data {
+            psect: "$PLIT$".into(),
+            name: name.clone(),
+            global: false,
+            align: 3,
+            items: Vec::new(),
+        });
+        let mut out = Vec::new();
+        let bytes: u32 = items.iter().map(Init::len).sum();
+        if counted {
+            out.push(Item::Val(V::C(bytes.div_ceil(8).into()), 8));
+        }
+        for i in items {
+            out.push(match i {
+                Init::Val(e, size) => Item::Val(self.constant(e)?, *size),
+                Init::Bytes(b) => Item::Bytes(b.clone()),
+            });
+        }
+        if !bytes.is_multiple_of(8) {
+            out.push(Item::Zero(8 - bytes % 8));
+        }
+        self.data[n].items = out;
+        Ok(V::Sym(name, if counted { 8 } else { 0 }))
     }
 
     /// `%ASCID`: a static descriptor and its text in $PLIT$.

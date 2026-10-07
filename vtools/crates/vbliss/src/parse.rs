@@ -4,6 +4,7 @@
 use std::collections::HashMap;
 use std::rc::Rc;
 
+use crate::data::{Init, StructAttr, Structure};
 use crate::lex::{Lexeme, Tok};
 use crate::lexical::{Item, Lx, Macro, MacroKind};
 use crate::listing::{Diag, NOPOS};
@@ -15,6 +16,8 @@ pub enum Storage {
     External,
     /// In the routine's frame slot n.
     Local(u32),
+    /// BIND: the address is the module's bind expression n.
+    Bind(u32),
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -26,8 +29,8 @@ pub enum Kind {
         bytes: u32,
         size: u8,
         signed: bool,
-        /// `VECTOR[n, unit, ext]`: the unit in bytes, and signed.
-        vector: Option<(u8, bool)>,
+        /// Its structure attribute, if it has one.
+        structure: Option<Rc<StructAttr>>,
     },
     /// A routine; `defined` once its body is seen, `global` if exported.
     Routine {
@@ -40,6 +43,13 @@ pub enum Kind {
     Compiletime(i64),
     Macro(Rc<Macro>),
     Label,
+    Structure(Rc<Structure>),
+    /// A structure's formal, while its body is parsed.
+    StructFormal,
+    /// A FIELD name: the access actuals it stands for.
+    Field(Vec<i64>),
+    /// A FIELD set: its field names.
+    FieldSet(Vec<usize>),
 }
 
 #[derive(Clone, Debug)]
@@ -98,10 +108,15 @@ pub enum Expr {
     /// `%ASCID 'text'`: the address of a descriptor of the text.
     Ascid(Vec<u8>),
     Fetch(Box<Expr>),
-    /// `base<pos, size, ext>`; ext is a constant.
-    Field(Box<Expr>, Box<Expr>, Box<Expr>, bool),
-    /// `vector[index]`, on a VECTOR's name.
-    Index(Box<Expr>, Box<Expr>),
+    /// `base<pos, size, ext>`.
+    Field(Box<Expr>, Box<Expr>, Box<Expr>, Box<Expr>),
+    /// The value of temporary n, set by a `Let`.
+    Temp(u32),
+    /// Temporary n set to a value for an expression: a structure
+    /// reference's access actual, evaluated once.
+    Let(u32, Box<Expr>, Box<Expr>),
+    /// `PLIT` (counted) or `UPLIT`: the address of its items.
+    Plit(bool, Vec<Init>),
     Neg(Box<Expr>),
     Not(Box<Expr>),
     Bin(BOp, Box<Expr>, Box<Expr>),
@@ -153,11 +168,10 @@ pub struct Routine {
     pub slots: Vec<u32>,
 }
 
-/// Static data: an OWN or GLOBAL, and its INITIAL values, each with its
-/// size in bytes.
+/// Static data: an OWN or GLOBAL, and what it starts as.
 pub struct Static {
     pub sym: usize,
-    pub init: Vec<(Expr, u8)>,
+    pub init: Vec<Init>,
 }
 
 #[derive(Default)]
@@ -168,6 +182,8 @@ pub struct Module {
     pub syms: Vec<Sym>,
     pub routines: Vec<Routine>,
     pub statics: Vec<Static>,
+    /// The addresses BIND names stand for.
+    pub binds: Vec<Expr>,
 }
 
 /// A fatal error: the file, line and column (from 0) it is at.
@@ -193,18 +209,21 @@ pub struct Front {
     pub messages: Vec<String>,
 }
 
-/// How to compile: `/VARIANT`.
+/// How to compile: `/VARIANT` and `/INCLUDE`.
 #[derive(Clone, Default)]
 pub struct Options {
     pub variant: i64,
+    /// Where REQUIRE and LIBRARY look for files after the source's own
+    /// directory.
+    pub include: Vec<std::path::PathBuf>,
 }
 
 pub struct Parser<'a> {
     pub(crate) load: Loader<'a>,
     /// The lexemes the parser has read, and the next one's index: read
     /// one at a time from the lexical processor, as BLISS reads them.
-    toks: Vec<Lexeme>,
-    pos: usize,
+    pub(crate) toks: Vec<Lexeme>,
+    pub(crate) pos: usize,
     pub(crate) lx: Lx,
     /// Nonzero while parsing a lexical function's parameter, whose lexemes
     /// are all in `toks`.
@@ -215,12 +234,19 @@ pub struct Parser<'a> {
     /// The block depth, for the listing.
     pub(crate) depth: u32,
     pub(crate) diags: Vec<Diag>,
-    scopes: Vec<HashMap<String, usize>>,
+    pub(crate) scopes: Vec<HashMap<String, usize>>,
     pub(crate) m: Module,
     /// Frame slots of the routine being parsed.
     slots: Vec<u32>,
     /// Names the assembly already uses.
     asm_names: HashMap<String, u32>,
+    /// Temporaries for structure references' actuals.
+    pub(crate) lets: u32,
+    /// What the block being parsed does first: run-time BINDs and LOCAL
+    /// initial values.
+    pub(crate) inits: Vec<Expr>,
+    /// Routines being parsed: nonzero where a frame exists.
+    routines: u32,
 }
 
 /// Parses the module in `text`, from file `name`.
@@ -249,10 +275,13 @@ pub fn parse(name: &str, text: &str, load: Loader, opts: &Options) -> Front {
         m: Module::default(),
         slots: Vec::new(),
         asm_names: HashMap::new(),
+        lets: 0,
+        inits: Vec::new(),
+        routines: 0,
     };
     p.lx.variant = opts.variant;
     p.predeclare();
-    let mut module = p.module();
+    let mut module = p.predeclare_structures().and_then(|()| p.module());
     if let (Ok(_), Some(d)) = (&module, p.diags.iter().find(|d| d.sev == 'E')) {
         module = Err(Error {
             file: p.lx.files[d.file as usize].name.clone(),
@@ -303,7 +332,7 @@ fn is_name(t: &Tok, n: &str) -> bool {
 
 impl Parser<'_> {
     /// Reads lexemes until the one `n` ahead of the next is in `toks`.
-    fn fill(&mut self, n: usize) {
+    pub(crate) fn fill(&mut self, n: usize) {
         while self.toks.len() <= self.pos + n {
             let l = if self.sub > 0 || self.stash.is_some() {
                 None
@@ -330,23 +359,23 @@ impl Parser<'_> {
     }
 
     /// The next lexeme for the parser, from the lexical processor.
-    fn lexeme(&mut self) -> R<Lexeme> {
+    pub(crate) fn lexeme(&mut self) -> R<Lexeme> {
         self.scan().map(|(l, _)| l)
     }
 
-    fn peek(&mut self) -> &Tok {
+    pub(crate) fn peek(&mut self) -> &Tok {
         self.fill(0);
         &self.toks[self.pos].tok
     }
 
-    fn peek2(&mut self) -> &Tok {
+    pub(crate) fn peek2(&mut self) -> &Tok {
         self.fill(1);
         &self.toks[self.pos + 1].tok
     }
 
     /// The next lexeme's place, or if it has none (a macro body gave it),
     /// the place of the last one read that has.
-    fn here(&mut self) -> Lexeme {
+    pub(crate) fn here(&mut self) -> Lexeme {
         self.fill(0);
         let l = &self.toks[self.pos];
         if l.col != NOPOS {
@@ -356,7 +385,7 @@ impl Parser<'_> {
     }
 
     /// The last lexeme read that has a place.
-    fn last(&self) -> Lexeme {
+    pub(crate) fn last(&self) -> Lexeme {
         self.toks[..self.pos.min(self.toks.len())]
             .iter()
             .rev()
@@ -371,7 +400,7 @@ impl Parser<'_> {
             })
     }
 
-    fn next(&mut self) -> Tok {
+    pub(crate) fn next(&mut self) -> Tok {
         self.fill(0);
         let t = self.toks[self.pos].tok.clone();
         if t != Tok::Eof {
@@ -399,7 +428,7 @@ impl Parser<'_> {
         self.error_at(&at, msg)
     }
 
-    fn err<T>(&mut self, msg: impl Into<String>) -> R<T> {
+    pub(crate) fn err<T>(&mut self, msg: impl Into<String>) -> R<T> {
         Err(self.error(msg))
     }
 
@@ -414,15 +443,15 @@ impl Parser<'_> {
         });
     }
 
-    fn at(&mut self, n: &str) -> bool {
+    pub(crate) fn at(&mut self, n: &str) -> bool {
         is_name(self.peek(), n)
     }
 
-    fn at_punct(&mut self, c: char) -> bool {
+    pub(crate) fn at_punct(&mut self, c: char) -> bool {
         *self.peek() == Tok::Punct(c)
     }
 
-    fn eat(&mut self, n: &str) -> bool {
+    pub(crate) fn eat(&mut self, n: &str) -> bool {
         let yes = self.at(n);
         if yes {
             self.pos += 1;
@@ -430,7 +459,7 @@ impl Parser<'_> {
         yes
     }
 
-    fn eat_punct(&mut self, c: char) -> bool {
+    pub(crate) fn eat_punct(&mut self, c: char) -> bool {
         let yes = self.at_punct(c);
         if yes {
             self.pos += 1;
@@ -438,7 +467,7 @@ impl Parser<'_> {
         yes
     }
 
-    fn expect(&mut self, n: &str) -> R<()> {
+    pub(crate) fn expect(&mut self, n: &str) -> R<()> {
         if self.eat(n) {
             Ok(())
         } else {
@@ -447,7 +476,7 @@ impl Parser<'_> {
         }
     }
 
-    fn expect_punct(&mut self, c: char) -> R<()> {
+    pub(crate) fn expect_punct(&mut self, c: char) -> R<()> {
         if self.eat_punct(c) {
             Ok(())
         } else {
@@ -456,7 +485,7 @@ impl Parser<'_> {
         }
     }
 
-    fn describe(&mut self) -> String {
+    pub(crate) fn describe(&mut self) -> String {
         match self.peek() {
             Tok::Name(n) | Tok::Bound(n, _) => n.clone(),
             Tok::Num(n) => n.to_string(),
@@ -495,9 +524,14 @@ impl Parser<'_> {
         r
     }
 
+    /// Whether a routine's frame is open, for data a block computes.
+    pub(crate) fn slots_open(&self) -> bool {
+        self.routines > 0
+    }
+
     /// Declares the names every module starts with: the predeclared
     /// literals and the dialect macros.
-    fn predeclare(&mut self) {
+    pub(crate) fn predeclare(&mut self) {
         for (name, v) in [
             ("%BPVAL", 64),
             ("%BPUNIT", 8),
@@ -559,24 +593,30 @@ impl Parser<'_> {
     pub(crate) fn ltce(&self, e: &Expr) -> bool {
         match e {
             Expr::Num(_) => true,
-            Expr::Name(id) => matches!(
-                self.m.syms[*id].kind,
+            Expr::Name(id) => match self.m.syms[*id].kind {
                 Kind::Routine { .. }
-                    | Kind::Data {
-                        storage: Storage::Own | Storage::Global | Storage::External,
-                        ..
-                    }
-            ),
+                | Kind::Data {
+                    storage: Storage::Own | Storage::Global | Storage::External,
+                    ..
+                } => true,
+                Kind::Data {
+                    storage: Storage::Bind(i),
+                    ..
+                } => self.ltce(&self.m.binds[i as usize]),
+                _ => false,
+            },
             Expr::Bin(BOp::Add, a, b) => {
                 (self.ltce(a) && fold(b).is_some()) || (fold(a).is_some() && self.ltce(b))
             }
             Expr::Bin(BOp::Sub, a, b) => self.ltce(a) && fold(b).is_some(),
             Expr::Block(es, true) if es.len() == 1 => self.ltce(&es[0]),
+            Expr::Field(b, p, _, _) => self.ltce(b) && fold(p).is_some_and(|p| p % 8 == 0),
+            Expr::Plit(..) | Expr::Ascid(_) => true,
             e => fold(e).is_some(),
         }
     }
 
-    fn name(&mut self) -> R<String> {
+    pub(crate) fn name(&mut self) -> R<String> {
         match self.peek().clone() {
             Tok::Name(n) | Tok::Bound(n, _) if !RESERVED.contains(&n.as_str()) => {
                 self.pos += 1;
@@ -595,7 +635,7 @@ impl Parser<'_> {
 
     /// Declares `name` in the innermost scope; a forward routine
     /// declaration is completed rather than redeclared.
-    fn declare(&mut self, name: String, kind: Kind) -> R<usize> {
+    pub(crate) fn declare(&mut self, name: String, kind: Kind) -> R<usize> {
         if let Some(&id) = self.scopes.last().unwrap().get(&name) {
             let forward = matches!(self.m.syms[id].kind, Kind::Routine { external: true, .. })
                 && matches!(
@@ -640,14 +680,14 @@ impl Parser<'_> {
         Ok(id)
     }
 
-    fn slot(&mut self, bytes: u32) -> u32 {
+    pub(crate) fn slot(&mut self, bytes: u32) -> u32 {
         self.slots.push(bytes);
         self.slots.len() as u32 - 1
     }
 
     // Modules and declarations.
 
-    fn module(&mut self) -> R<()> {
+    pub(crate) fn module(&mut self) -> R<()> {
         self.expect("MODULE")?;
         self.m.name = self.name()?;
         if self.eat_punct('(') {
@@ -689,7 +729,7 @@ impl Parser<'_> {
     }
 
     /// A module switch: MAIN and IDENT matter; the rest is accepted.
-    fn switch(&mut self) -> R<()> {
+    pub(crate) fn switch(&mut self) -> R<()> {
         let name = self.name().or_else(|_| match self.next() {
             Tok::Name(n) => Ok(n),
             _ => self.err("expected a module switch"),
@@ -723,7 +763,9 @@ impl Parser<'_> {
     }
 
     /// Declarations, each ending with a semicolon, as long as there are.
-    fn declarations(&mut self) -> R<()> {
+    pub(crate) fn declarations(&mut self) -> R<()> {
+        // ponytail: module-level declarations can't need code (run-time
+        // BINDs, LOCALs), so only blocks collect `inits`.
         loop {
             if self.eat("REQUIRE") {
                 self.require()?;
@@ -736,7 +778,7 @@ impl Parser<'_> {
     }
 
     /// `REQUIRE 'file';`: the file's lexemes take the declaration's place.
-    fn require(&mut self) -> R<()> {
+    pub(crate) fn require(&mut self) -> R<()> {
         let Tok::Str(name) = self.next() else {
             return self.err("expected a file name after REQUIRE");
         };
@@ -745,7 +787,7 @@ impl Parser<'_> {
     }
 
     /// MACRO or KEYWORDMACRO definitions, after the word.
-    fn macros(&mut self, keyword: bool) -> R<()> {
+    pub(crate) fn macros(&mut self, keyword: bool) -> R<()> {
         loop {
             let name = self.name()?;
             let (mut formals, mut defaults) = (Vec::new(), Vec::new());
@@ -817,7 +859,7 @@ impl Parser<'_> {
     }
 
     /// One declaration, if one is next.
-    fn declaration(&mut self) -> R<bool> {
+    pub(crate) fn declaration(&mut self) -> R<bool> {
         let Tok::Name(word) = self.peek().clone() else {
             return Ok(false);
         };
@@ -840,6 +882,9 @@ impl Parser<'_> {
                         return self.err("EXTERNAL LITERAL is not supported yet");
                     }
                     return self.literals(global).map(|_| true);
+                }
+                Tok::Name(n) if n == "BIND" && global => {
+                    return self.err("GLOBAL BIND is not supported yet");
                 }
                 _ if forward => return self.err("expected ROUTINE after FORWARD"),
                 _ => {}
@@ -868,6 +913,23 @@ impl Parser<'_> {
                 self.pos += 1;
                 self.macros(word == "KEYWORDMACRO")?;
             }
+            "STRUCTURE" => {
+                self.pos += 1;
+                self.structures()?;
+            }
+            "FIELD" => {
+                self.pos += 1;
+                self.fields()?;
+            }
+            "BIND" => {
+                self.pos += 1;
+                let routine = self.eat("ROUTINE");
+                self.binds(routine)?;
+            }
+            "MAP" => {
+                self.pos += 1;
+                self.maps()?;
+            }
             "COMPILETIME" => {
                 self.pos += 1;
                 loop {
@@ -890,8 +952,20 @@ impl Parser<'_> {
                     }
                 }
             }
-            "REGISTER" | "BIND" | "LINKAGE" | "STRUCTURE" | "FIELD" | "PSECT" | "SWITCHES"
-            | "LIBRARY" | "BUILTIN" | "UNDECLARE" | "ENABLE" => {
+            "LIBRARY" => {
+                self.pos += 1;
+                let Tok::Str(name) = self.next() else {
+                    return self.err("expected a file name after LIBRARY");
+                };
+                if !self.at_punct(';') {
+                    let found = self.describe();
+                    return self.err(format!("expected ;, found {found}"));
+                }
+                // The library's source, read as a require file the listing
+                // doesn't show (docs/bliss64.md, *Libraries*).
+                self.library_file(&String::from_utf8_lossy(&name))?;
+            }
+            "REGISTER" | "LINKAGE" | "PSECT" | "SWITCHES" | "BUILTIN" | "UNDECLARE" | "ENABLE" => {
                 return self.err(format!("{word} declarations are not supported yet"));
             }
             _ => return Ok(false),
@@ -899,129 +973,7 @@ impl Parser<'_> {
         Ok(true)
     }
 
-    fn data(&mut self, storage: Storage) -> R<()> {
-        loop {
-            let name = self.name()?;
-            let (mut size, mut signed, mut init) = (8u8, false, Vec::new());
-            let mut vector = None;
-            if self.eat_punct(':') {
-                while let Tok::Name(attr) = self.peek().clone() {
-                    match attr.as_str() {
-                        "BYTE" | "WORD" | "LONG" | "QUAD" => size = unit(&attr),
-                        "SIGNED" => signed = true,
-                        "UNSIGNED" => signed = false,
-                        "VOLATILE" | "ALIAS" => {}
-                        "VECTOR" => {
-                            self.pos += 1;
-                            vector = Some(self.vector()?);
-                            continue;
-                        }
-                        "ALIGN" => {
-                            self.pos += 1;
-                            self.expect_punct('(')?;
-                            self.ctce()?;
-                            self.expect_punct(')')?;
-                            continue;
-                        }
-                        "INITIAL" => {
-                            if matches!(storage, Storage::Local(_) | Storage::External) {
-                                return self
-                                    .err("INITIAL on a LOCAL or EXTERNAL is not supported yet");
-                            }
-                            self.pos += 1;
-                            init = self.initial(size)?;
-                            continue;
-                        }
-                        _ => break,
-                    }
-                    self.pos += 1;
-                }
-                if !self.at_punct(',') && !self.at_punct(';') {
-                    let found = self.describe();
-                    return self.err(format!("attribute {found} is not supported yet"));
-                }
-            }
-            let bytes = match vector {
-                Some((n, unit, _)) => n * u32::from(unit),
-                None => size.into(),
-            };
-            let storage = match storage {
-                Storage::Local(_) => Storage::Local(self.slot(bytes)),
-                s => s,
-            };
-            let id = self.declare(
-                name,
-                Kind::Data {
-                    storage,
-                    bytes,
-                    size,
-                    signed,
-                    vector: vector.map(|(_, unit, ext)| (unit, ext)),
-                },
-            )?;
-            if matches!(storage, Storage::Own | Storage::Global) {
-                self.m.statics.push(Static { sym: id, init });
-            }
-            if !self.eat_punct(',') {
-                return Ok(());
-            }
-        }
-    }
-
-    /// `VECTOR[n, unit, ext]`, after VECTOR: n, and the unit in bytes,
-    /// default QUAD, and SIGNED or UNSIGNED, default UNSIGNED.
-    // ponytail: VECTOR alone, until step 6's STRUCTURE declarations
-    // predeclare it like the others.
-    fn vector(&mut self) -> R<(u32, u8, bool)> {
-        self.expect_punct('[')?;
-        let n = self.ctce()?;
-        let (mut unit, mut signed) = (8, false);
-        while self.eat_punct(',') {
-            match self.next() {
-                Tok::Name(u) if matches!(u.as_str(), "BYTE" | "WORD" | "LONG" | "QUAD") => {
-                    unit = self::unit(&u)
-                }
-                Tok::Name(u) if u == "SIGNED" => signed = true,
-                Tok::Name(u) if u == "UNSIGNED" => signed = false,
-                _ => return self.err("expected a unit or an extension in VECTOR[]"),
-            }
-        }
-        self.expect_punct(']')?;
-        if !(0..=1 << 24).contains(&n) {
-            return self.err(format!("VECTOR[{n}] too large"));
-        }
-        Ok((n as u32, unit, signed))
-    }
-
-    /// INITIAL(values): each of the unit of the data, or of its own.
-    fn initial(&mut self, size: u8) -> R<Vec<(Expr, u8)>> {
-        self.expect_punct('(')?;
-        let mut items = Vec::new();
-        loop {
-            let size = match self.peek() {
-                Tok::Name(n) if matches!(n.as_str(), "BYTE" | "WORD" | "LONG" | "QUAD") => {
-                    let s = unit(&n.clone());
-                    self.pos += 1;
-                    self.expect_punct('(')?;
-                    let e = self.expr()?;
-                    self.expect_punct(')')?;
-                    items.push((e, s));
-                    None
-                }
-                _ => Some(size),
-            };
-            if let Some(size) = size {
-                items.push((self.expr()?, size));
-            }
-            if !self.eat_punct(',') {
-                break;
-            }
-        }
-        self.expect_punct(')')?;
-        Ok(items)
-    }
-
-    fn literals(&mut self, global: bool) -> R<()> {
+    pub(crate) fn literals(&mut self, global: bool) -> R<()> {
         if global {
             return self.err("GLOBAL LITERAL is not supported yet");
         }
@@ -1044,7 +996,7 @@ impl Parser<'_> {
     }
 
     /// EXTERNAL ROUTINE and FORWARD ROUTINE: names with attributes.
-    fn routine_names(&mut self) -> R<()> {
+    pub(crate) fn routine_names(&mut self) -> R<()> {
         loop {
             let name = self.name()?;
             let novalue = self.routine_attributes()?;
@@ -1063,7 +1015,7 @@ impl Parser<'_> {
     }
 
     /// `: NOVALUE` and the like; returns whether NOVALUE.
-    fn routine_attributes(&mut self) -> R<bool> {
+    pub(crate) fn routine_attributes(&mut self) -> R<bool> {
         let mut novalue = false;
         if self.eat_punct(':') {
             loop {
@@ -1077,15 +1029,18 @@ impl Parser<'_> {
         Ok(novalue)
     }
 
-    fn routine(&mut self, global: bool) -> R<()> {
+    pub(crate) fn routine(&mut self, global: bool) -> R<()> {
         let name = self.name()?;
         let mut names = Vec::new();
         if self.eat_punct('(') {
             loop {
-                names.push(self.name()?);
-                if self.eat_punct(':') {
-                    return self.err("formal attributes are not supported yet");
-                }
+                let n = self.name()?;
+                let a = if self.eat_punct(':') {
+                    self.attributes()?
+                } else {
+                    crate::data::Attrs::default()
+                };
+                names.push((n, a));
                 if !self.eat_punct(',') {
                     break;
                 }
@@ -1109,20 +1064,23 @@ impl Parser<'_> {
         let outer = std::mem::take(&mut self.slots);
         self.scopes.push(HashMap::new());
         let mut formals = Vec::new();
-        for n in names {
-            let slot = self.slot(8);
-            formals.push(self.declare(
-                n,
-                Kind::Data {
-                    storage: Storage::Local(slot),
-                    bytes: 8,
-                    size: 8,
-                    signed: false,
-                    vector: None,
-                },
-            )?);
+        for (n, mut a) in names {
+            let kind = self.data_kind(Storage::Local(0), &mut a)?;
+            if let Kind::Data {
+                storage: Storage::Local(slot),
+                ..
+            } = kind
+            {
+                // The argument is stored whole.
+                let s = &mut self.slots[slot as usize];
+                *s = (*s).max(8);
+            }
+            formals.push(self.declare(n, kind)?);
         }
-        let body = self.expr()?;
+        self.routines += 1;
+        let body = self.expr();
+        self.routines -= 1;
+        let body = body?;
         self.scopes.pop();
         let slots = std::mem::replace(&mut self.slots, outer);
         self.m.routines.push(Routine {
@@ -1147,7 +1105,7 @@ impl Parser<'_> {
 
     /// An expression whose value is used: an IF without ELSE gets the
     /// informational BLISSA64 gives.
-    fn value(&mut self) -> R<Expr> {
+    pub(crate) fn value(&mut self) -> R<Expr> {
         let e = self.expr()?;
         if matches!(e, Expr::If(_, _, None)) {
             let at = self.last();
@@ -1160,8 +1118,38 @@ impl Parser<'_> {
         Ok(e)
     }
 
+    /// Warns, as BLISSA64 does, of a fetch or store at a constant place
+    /// that isn't all inside its data segment.
+    pub(crate) fn check_inside(&mut self, place: &Expr, at: &Lexeme) {
+        let (addr, pos, size) = match place {
+            Expr::Field(b, p, s, _) => match (fold(p), fold(s)) {
+                (Some(p), Some(s)) => (&**b, p, s),
+                _ => return,
+            },
+            Expr::Name(_) => return,
+            e => (e, 0, 64),
+        };
+        let Some((id, off)) = crate::data::base_offset(addr) else {
+            return;
+        };
+        let Kind::Data { storage, bytes, .. } = self.m.syms[id].kind else {
+            return;
+        };
+        if !matches!(storage, Storage::Own | Storage::Global | Storage::Local(_)) {
+            return;
+        }
+        let first = off * 8 + pos;
+        if first < 0 || first + size > i64::from(bytes) * 8 {
+            let msg = format!(
+                "Reference outside of data segment {}, possible optimizations lost",
+                self.m.syms[id].name
+            );
+            self.diag('W', at, msg);
+        }
+    }
+
     /// Whether the next lexeme can start an operand.
-    fn operand_next(&mut self) -> bool {
+    pub(crate) fn operand_next(&mut self) -> bool {
         match self.peek() {
             Tok::Num(_) | Tok::Str(_) | Tok::Bound(..) => true,
             Tok::Punct(c) => "(.+-".contains(*c),
@@ -1201,7 +1189,7 @@ impl Parser<'_> {
 
     /// Binary operators of `level` and tighter: EQV and XOR, OR, AND, NOT,
     /// the relations, + and -, * / MOD, ^.
-    fn binary(&mut self, level: u8) -> R<Expr> {
+    pub(crate) fn binary(&mut self, level: u8) -> R<Expr> {
         if level == 3 {
             if self.eat("NOT") {
                 return Ok(Expr::Not(Box::new(self.binary(3)?)));
@@ -1238,7 +1226,7 @@ impl Parser<'_> {
         Ok(left)
     }
 
-    fn operator(&mut self, level: u8) -> Option<BOp> {
+    pub(crate) fn operator(&mut self, level: u8) -> Option<BOp> {
         let t = self.peek();
         let op = match t {
             Tok::Punct('+') => BOp::Add,
@@ -1285,9 +1273,13 @@ impl Parser<'_> {
     }
 
     /// Fetch and the signs, then a primary with its calls and fields.
-    fn unary(&mut self) -> R<Expr> {
-        if self.eat_punct('.') {
-            return Ok(Expr::Fetch(Box::new(self.unary()?)));
+    pub(crate) fn unary(&mut self) -> R<Expr> {
+        if self.at_punct('.') {
+            let at = self.here();
+            self.pos += 1;
+            let e = self.unary()?;
+            self.check_inside(&e, &at);
+            return Ok(Expr::Fetch(Box::new(e)));
         }
         if self.eat_punct('-') {
             return Ok(Expr::Neg(Box::new(self.unary()?)));
@@ -1310,7 +1302,7 @@ impl Parser<'_> {
                 }
                 e = Expr::Call(Box::new(e), args);
             } else if self.at_punct('<') {
-                if matches!(e, Expr::Index(..)) {
+                if matches!(e, Expr::Field(..) | Expr::Let(..)) {
                     let at = self.here();
                     self.diag('W', &at, "Two consecutive field selectors".into());
                 }
@@ -1319,37 +1311,41 @@ impl Parser<'_> {
                 self.expect_punct(',')?;
                 let size = self.expr()?;
                 let ext = if self.eat_punct(',') {
-                    self.ctce()? != 0
+                    self.expr()?
                 } else {
-                    false
+                    Expr::Num(0)
                 };
                 self.expect_punct('>')?;
-                e = Expr::Field(Box::new(e), Box::new(pos), Box::new(size), ext);
+                e = Expr::Field(Box::new(e), Box::new(pos), Box::new(size), Box::new(ext));
             } else if self.at_punct('[') {
-                let vector = match e {
-                    Expr::Name(id) => matches!(
-                        self.m.syms[id].kind,
+                let attr = match e {
+                    Expr::Name(id) => match &self.m.syms[id].kind {
                         Kind::Data {
-                            vector: Some(_),
-                            ..
-                        }
-                    ),
-                    _ => false,
+                            structure: Some(a), ..
+                        } => Some((id, a.clone())),
+                        _ => None,
+                    },
+                    _ => None,
                 };
-                if !vector {
-                    return self.err("structure references are only supported on VECTOR names yet");
-                }
+                let Some((id, a)) = attr else {
+                    return self.err("a structure reference needs a name with a structure");
+                };
                 self.pos += 1;
-                let index = self.expr()?;
+                let access = self.access_actuals_of(Some((id, &a.fields)))?;
                 self.expect_punct(']')?;
-                e = Expr::Index(Box::new(e), Box::new(index));
+                let seg = if a.refr {
+                    Expr::Fetch(Box::new(Expr::Name(id)))
+                } else {
+                    Expr::Name(id)
+                };
+                e = self.instantiate(&a.st, seg, access, &a.alloc);
             } else {
                 return Ok(e);
             }
         }
     }
 
-    fn primary(&mut self) -> R<Expr> {
+    pub(crate) fn primary(&mut self) -> R<Expr> {
         let at = self.here();
         match self.next() {
             Tok::Num(n) => Ok(Expr::Num(n)),
@@ -1418,6 +1414,7 @@ impl Parser<'_> {
                 }
                 "EXITLOOP" => Ok(Expr::Exitloop(self.optional_value()?)),
                 "RETURN" => Ok(Expr::Return(self.optional_value()?)),
+                "PLIT" | "UPLIT" => self.plit(n == "PLIT"),
                 "%ASCID" => match self.next() {
                     Tok::Str(s) => Ok(Expr::Ascid(s)),
                     _ => self.err("expected a string after %ASCID"),
@@ -1442,18 +1439,22 @@ impl Parser<'_> {
     }
 
     /// A use of name `n`, declared as `id`.
-    fn named(&mut self, n: &str, id: usize) -> R<Expr> {
+    pub(crate) fn named(&mut self, n: &str, id: usize) -> R<Expr> {
         match self.m.syms[id].kind.clone() {
             Kind::Literal(v) | Kind::Compiletime(v) => Ok(Expr::Num(v)),
             Kind::Label if self.eat_punct(':') => Ok(Expr::Labeled(id, Box::new(self.expr()?))),
             Kind::Label => self.err(format!("label {n} used as a value")),
             Kind::Macro(_) => self.err(format!("macro {n} used as a value")),
+            Kind::Structure(st) if self.eat_punct('[') => self.general_ref(st),
+            Kind::Structure(_) | Kind::Field(_) | Kind::FieldSet(_) => {
+                self.err(format!("{n} used as a value"))
+            }
             _ => Ok(Expr::Name(id)),
         }
     }
 
     /// An expression, unless the next lexeme ends one.
-    fn optional_value(&mut self) -> R<Option<Box<Expr>>> {
+    pub(crate) fn optional_value(&mut self) -> R<Option<Box<Expr>>> {
         let ends = matches!(self.peek(), Tok::Punct(';' | ')' | ',') | Tok::Eof)
             || ["END", "ELSE", "TES", "THEN", "DO", "WHILE", "UNTIL"]
                 .iter()
@@ -1467,11 +1468,13 @@ impl Parser<'_> {
 
     /// A block, after its BEGIN or `(`: declarations, then expressions
     /// separated by semicolons, up to END (`close` 'E') or `)`.
-    fn block(&mut self, close: char) -> R<Expr> {
+    pub(crate) fn block(&mut self, close: char) -> R<Expr> {
         self.scopes.push(HashMap::new());
         self.depth += 1;
-        self.declarations()?;
-        let mut exprs = Vec::new();
+        let outer = std::mem::take(&mut self.inits);
+        let r = self.declarations();
+        let mut exprs = std::mem::replace(&mut self.inits, outer);
+        r?;
         let mut value = false;
         let at_close = |p: &mut Self| {
             if close == 'E' {
@@ -1501,7 +1504,7 @@ impl Parser<'_> {
         Ok(Expr::Block(exprs, value))
     }
 
-    fn incr(&mut self, word: &str) -> R<Expr> {
+    pub(crate) fn incr(&mut self, word: &str) -> R<Expr> {
         let name = self.name()?;
         self.scopes.push(HashMap::new());
         let slot = self.slot(8);
@@ -1512,7 +1515,7 @@ impl Parser<'_> {
                 bytes: 8,
                 size: 8,
                 signed: false,
-                vector: None,
+                structure: None,
             },
         )?;
         let part = |p: &mut Self, w: &str| -> R<Option<Box<Expr>>> {
@@ -1539,7 +1542,7 @@ impl Parser<'_> {
         })
     }
 
-    fn case(&mut self) -> R<Expr> {
+    pub(crate) fn case(&mut self) -> R<Expr> {
         let sel = self.expr()?;
         self.expect("FROM")?;
         let lo = self.ctce()?;
@@ -1583,7 +1586,7 @@ impl Parser<'_> {
         })
     }
 
-    fn select(&mut self, word: &str) -> R<Expr> {
+    pub(crate) fn select(&mut self, word: &str) -> R<Expr> {
         let sel = self.expr()?;
         self.expect("OF")?;
         self.expect("SET")?;
@@ -1629,16 +1632,6 @@ impl Parser<'_> {
         let at = self.here();
         let e = self.expr()?;
         fold(&e).ok_or_else(|| self.error_at(&at, "expected a compile-time constant"))
-    }
-}
-
-/// The size in bytes of an allocation unit.
-fn unit(name: &str) -> u8 {
-    match name {
-        "BYTE" => 1,
-        "WORD" => 2,
-        "LONG" => 4,
-        _ => 8,
     }
 }
 
@@ -1706,6 +1699,16 @@ pub fn shift(a: i64, n: i64) -> i64 {
 
 /// Words that can't name anything.
 pub const RESERVED: &[&str] = &[
+    "BIND",
+    "FIELD",
+    "MAP",
+    "PLIT",
+    "PRESET",
+    "INITIAL",
+    "REF",
+    "REP",
+    "STRUCTURE",
+    "UPLIT",
     "ALWAYS",
     "AND",
     "BEGIN",

@@ -35,10 +35,13 @@ their `U` and `A` forms, `INCR` and `DECR` likewise, `WHILE`, `UNTIL`, `DO`,
 routine's name or any address; `%ASCID`, `%ASCII`, `%C`, `%X`, `%O`, `%B`,
 `%DECIMAL`. Step 5: `MACRO` and `KEYWORDMACRO` with simple, conditional
 and iterative macros, `COMPILETIME`, `REQUIRE` and `%REQUIRE`, the
-lexical conditionals and the lexical functions but `%SIZE` and
-`%FIELDEXPAND` (step 6), and the listing. Ahead of its step:
-`VECTOR[n, unit, ext]`. Not yet: the other structures, `BIND`, `PLIT`,
-linkages, built-ins, conditions.
+lexical conditionals and the lexical functions, and the listing. Step 6:
+`STRUCTURE`, the predeclared `VECTOR`, `BITVECTOR`, `BLOCK`,
+`BLOCKVECTOR` and `BLOCK_BYTE`, `REF`, `FIELD` and field sets, ordinary
+and general structure references, `BIND`, `BIND ROUTINE`, `MAP`, `PLIT`
+and `UPLIT`, `INITIAL` and `PRESET` on static and `LOCAL` data, and
+structure attributes on formals. Not yet: `GLOBAL BIND`, default
+structure references, `PSECT`, linkages, built-ins, conditions.
 
 ## How it works
 
@@ -67,6 +70,22 @@ function's expression parameter is parsed by the parser on its own
 lexemes. `%REMAINING`, `%LENGTH` and `%COUNT` belong to the copy they are
 read from, and an iterative macro's copies are a stream each, so
 `%EXITITERATION` leaves its separator behind.
+
+## Structures
+
+A structure's size and body are parsed once, when it is declared, with
+its formals as names of their own (`data.rs`); the predeclared ones are
+declared the same way from BLISS-64 text at the start of each module. A
+structure reference is a copy of the body with the formals replaced: the
+segment's address (fetched for `REF`), the allocation actuals, which are
+constants, and the access actuals, each evaluated once into an IR
+temporary unless it is a constant or a name. What remains is an ordinary
+expression, usually a field reference, which `irgen` reads and writes
+with the smallest load that holds the field. `PLIT` items and `INITIAL`
+values are packed with no alignment, a `PLIT`'s count is its bytes in
+fullwords rounded up, and a string fills out its last unit with zeros,
+as BLISSA64 lays them out. A run-time `BIND` and a `LOCAL`'s `INITIAL` or
+`PRESET` are assignments at the start of their block.
 
 ## The listing
 
