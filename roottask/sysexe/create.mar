@@ -1,34 +1,104 @@
-        .TITLE  CREATE  Makes directories
-        .IDENT  /V0.1/
+        .TITLE  CREATE  Makes directories and files
+        .IDENT  /V0.2/
 ;
 ; DCL's CREATE/DIRECTORY spec runs this: $CREATE_DIR makes the
 ; directory, [dev:][dir.dir...], and those above it that aren't there.
 ; Returns its status: SS$_CREATED, or SS$_NORMAL if the directory was
-; there already.
-; ponytail: one directory; CREATE without /DIRECTORY, which makes a file
-; on VMS, is %CREATE-E-NOTDIR and SS$_BADPARAM.
+; there already. CREATE/FDL=fdl [file] makes the empty file the FDL file
+; describes (FDL$PARSE in rms/fdl.mar), named file, with the FDL's FILE
+; NAME for what it leaves out, as VMS's CREATE/FDL does; RMS$_NORMAL, or
+; %FDL-F-CREATE and FDL$_CREATE if the FDL file had statements it didn't
+; take or RMS can't make the file.
+; ponytail: one directory; CREATE without /DIRECTORY or /FDL, which makes
+; a file on VMS, is %CREATE-E-NOTDIR and SS$_BADPARAM.
 ;
         .LIBRARY "starlet.mlb"
         .LIBRARY "sysexe.mlb"
         $SSDEF
+        $RMSDEF
+        $FABDEF
+
+        .EXTERNAL FDL$PARSE, FDL$T_NAME, FDL$GB_NAMELEN
+        .EXTERNAL LIN$TEXT, LIN$STR, LIN$PUT, LIN$STATUS
 
 INHIB = ^X10000000                      ; STS$M_INHIB_MSG: reported already
+FDL$_CREATE = ^X00B4806C                ; error creating !AS
+FDL$_OPENFDL = ^X00B4807C
+FDL$_WARNING = ^X00B48058               ; parsed with warnings
 
         .PSECT  DATA, NOEXE, WRT, LONG
 SPEC:   .LONG   255                     ; FILE, the parameter
         .ADDRESS SPECBUF
 SPECBUF:
         .BLKB   255
+FDLSPEC:
+        .LONG   255                     ; /FDL's value
+        .ADDRESS FDLBUF
+FDLBUF: .BLKB   255
+FAB:    .LONG   0                       ; FDL$PARSE's FAB and RAB
+RAB:    .LONG   0
+M_CREATE:
+        .ASCIC  "%FDL-F-CREATE, error creating "
+M_WARNING:
+        .ASCIC  "-FDL-W-WARNING, parsed with warnings"
 
         .PSECT  CODE, EXE, LONG
-        .ENTRY  START, ^M<>
+        .ENTRY  START, ^M<R2, R3>
+        PRESENT "FDL"
+        BLBS    R0, 20$
         PRESENT "DIRECTORY"
         BLBS    R0, 10$
-        PRINT   "%CREATE-E-NOTDIR, only CREATE/DIRECTORY makes anything yet"
+        PRINT   "%CREATE-E-NOTDIR, only CREATE/DIRECTORY and CREATE/FDL make anything yet"
         MOVL    #SS$_BADPARAM!INHIB, R0
         RET
 10$:    GETVALUE "FILE", SPEC, SPEC
         $CREATE_DIR_S DEVDIRSPEC=SPEC
         RET
+20$:    GETVALUE "FDL", FDLSPEC, FDLSPEC
+        GETVALUE "FILE", SPEC, SPEC
+        BLBS    R0, 25$
+        CLRL    SPEC                    ; none: the FDL's NAME
+25$:    PUSHAL  RAB
+        PUSHAL  FAB
+        PUSHAQ  FDLSPEC
+        CALLS   #3, G^FDL$PARSE
+        CMPL    R0, #SS$_NORMAL
+        BEQL    30$
+        BICL3   #INHIB, R0, R2
+        CMPL    R2, #FDL$_OPENFDL       ; reported
+        BEQL    90$
+        MOVL    R0, R2                  ; parsed with warnings
+        BRB     80$
+30$:    MOVL    FAB, R3
+        MOVZWL  SPEC, R0
+        MOVB    R0, FAB$B_FNS(R3)
+        MOVAB   SPECBUF, FAB$L_FNA(R3)
+        MOVAB   FDL$T_NAME, FAB$L_DNA(R3)
+        MOVB    FDL$GB_NAMELEN, FAB$B_DNS(R3)
+        $CREATE FAB=(R3)
+        MOVL    R0, R2
+        BLBC    R0, 80$
+        $CLOSE  FAB=(R3)
+        RET
+80$:    PUSHL   R2                      ; %FDL-F-CREATE, and why
+        MOVAB   M_CREATE, R1
+        BSBW    LIN$TEXT
+        MOVAB   SPECBUF, R1
+        MOVZWL  SPEC, R2
+        BNEQ    85$
+        MOVAB   FDL$T_NAME, R1
+        MOVZBL  FDL$GB_NAMELEN, R2
+85$:    BSBW    LIN$STR
+        BSBW    LIN$PUT
+        MOVL    (SP)+, R0
+        CMPL    R0, #FDL$_WARNING
+        BEQL    87$
+        BSBW    LIN$STATUS
+        BRB     88$
+87$:    MOVAB   M_WARNING, R1
+        BSBW    LIN$TEXT
+        BSBW    LIN$PUT
+88$:    MOVL    #FDL$_CREATE!INHIB, R0
+90$:    RET
 
         .END    START

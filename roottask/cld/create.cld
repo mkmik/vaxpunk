@@ -1,6 +1,13 @@
-! CREATE/DIRECTORY spec: CREATE.EXE makes a directory. ponytail: CREATE
-! without /DIRECTORY, which makes a file on VMS, is CREATE.EXE's error.
+! CREATE/DIRECTORY spec: CREATE.EXE makes a directory. CREATE/FDL=fdl
+! [file]: it makes the file the FDL file describes, named file or as the
+! FDL's FILE NAME says. ponytail: CREATE without either, which makes a
+! text file on VMS, is CREATE.EXE's error.
 define verb CREATE
 	image CREATE
 	parameter P1, label=FILE, prompt="File", value(required, type=$file)
 	qualifier DIRECTORY
+	qualifier FDL, value(required, type=$infile), syntax=CREATE_FDL
+
+! CREATE/FDL: the file is optional.
+define syntax CREATE_FDL
+	parameter P1, label=FILE, value(type=$outfile)

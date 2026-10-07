@@ -63,10 +63,12 @@ EXTMIN = 8                              ; blocks an area grows by, at least
         .PSECT  $CODE$
 
 ; WRW: R7 = an IFAB, R8 = a walk. Writes its bucket, with its free space
-; offset and both check characters one up. R0 = RMS$_NORMAL or the file
+; offset and both check characters one up; the file's end of file moves
+; past its last block when it closes. R0 = RMS$_NORMAL or the file
 ; system's error. Keeps every other register.
 WRW:
         .JSB_ENTRY
+        BISL2   #<1@IFB$V_HDR>!<1@IFB$V_DATA>, IFB$L_FLAGS(R7)
         PUSHR   #^M<R1, R2>
         MOVL    W$L_BUF(R8), R2
         INCB    BKT$B_CHECKCHAR(R2)
@@ -2190,17 +2192,19 @@ IDX$DELETE::
 90$:    RSB
 
 ; IDX$FLUSH: R7 = an IFAB. Every bucket is written when it changes;
-; writes the header, if the file grew, with its end of file past its
-; last block. R0 = RMS$_NORMAL or the disk's error. Uses R0 and R1.
+; writes the header if it changed, with its end of file past its last
+; block once a bucket was written; a new file's stays 0, as VMS's. R0 =
+; RMS$_NORMAL or the disk's error. Uses R0 and R1.
 IDX$FLUSH::
         .JSB_ENTRY
         MOVL    #RMS$_NORMAL, R0
         BBCC    #IFB$V_HDR, IFB$L_FLAGS(R7), 90$
+        BBCC    #IFB$V_DATA, IFB$L_FLAGS(R7), 10$
         ROTL    #16, IFB$AB_HDR+FAT$L_HIBLK(R7), R0
         INCL    R0
         ROTL    #16, R0, IFB$AB_HDR+FAT$L_EFBLK(R7)
         CLRW    IFB$AB_HDR+FAT$W_FFBYTE(R7)
-        MOVAB   IFB$AB_HDR(R7), R1
+10$:    MOVAB   IFB$AB_HDR(R7), R1
         BSBW    FIL$WRITEHDR
 90$:    RSB
 
@@ -2264,14 +2268,24 @@ IDX$CREATE::
         ADDL2   R8, R0
         DECL    R0
         MOVL    R0, R9                  ; R9 = its blocks
-        ROTL    #16, IFB$AB_HDR+FAT$L_HIBLK(R7), R0     ; allocated?
-        SUBL3   R0, R9, R1
+        CLRL    R0                      ; area 0's extent: them, or its
+        BSBW    AREAXAB                 ; XABALL's allocation if more
+        MOVL    R9, R0
+        TSTL    R1
+        BEQL    33$
+        CMPL    XAB$L_ALQ(R1), R0
+        BLEQU   33$
+        MOVL    XAB$L_ALQ(R1), R0
+33$:    ROTL    #16, IFB$AB_HDR+FAT$L_HIBLK(R7), R1     ; allocated?
+        SUBL3   R1, R0, R1
         BLEQ    35$
         MOVAB   IFB$AB_HDR(R7), R3
         BSBW    FIL$EXTEND
         BLBS    R0, 35$
         BRW     88$
 35$:    BISL2   #1@IFB$V_HDR, IFB$L_FLAGS(R7)
+        CLRL    IFB$AB_HDR+FAT$L_EFBLK(R7)
+        CLRW    IFB$AB_HDR+FAT$W_FFBYTE(R7)
         MOVL    #1, R11                 ; R11 = the VBN being made
         CLRL    R6                      ; R6 = the key in it
 40$:    MOVC5   #0, (R7), #0, #BLOCK, IDX$AB_PLG
@@ -2469,9 +2483,20 @@ MKKEY:
         BGEQU   87$
         BITB    #^C<KEY$C_DESCENDING!7>, XAB$B_DTP(R4)
         BNEQ    87$
-        TSTB    R2                      ; strings may be compressed, unless
-        BNEQ    30$                     ; they may change
-        BBS     #XAB$V_CHG, XAB$B_FLG(R4), 30$
+        TSTB    R2                      ; strings may be compressed, a key
+        BNEQ    30$                     ; and its index if it has 6 bytes
+        PUSHR   #^M<R1, R2>             ; at least, as VMS's
+        MOVZBL  XAB$B_NSG(R4), R5
+        BNEQ    17$
+        INCL    R5
+17$:    CLRL    R2
+18$:    MOVZBL  XAB$B_SIZ-1(R4)[R5], R1
+        ADDL2   R1, R2
+        SOBGTR  R5, 18$
+        MOVL    R2, R5
+        POPR    #^M<R1, R2>
+        CMPL    R5, #6
+        BLSSU   24$
         BBS     #XAB$V_KEY_NCMPR, XAB$B_FLG(R4), 22$
         BISB2   #KEY$M_KEY_COMPR, R0
 22$:    BBS     #XAB$V_IDX_NCMPR, XAB$B_FLG(R4), 24$
@@ -2561,8 +2586,9 @@ MKKEY:
 
 ; MKAREA: R10 = a FAB, R0 = an area, R1 = the prologue's blocks, R3 = its
 ; descriptor's room. Makes it from its XABALL, or the FAB: area 0 holds
-; the prologue and the rest of the file's blocks, the others none yet. R0
-; = RMS$_NORMAL or AREAXAB's error. Uses R0-R3.
+; the prologue and the rest of the file's blocks; another has an extent
+; of its XABALL's allocation, which the file grows by, or none yet. R0 =
+; RMS$_NORMAL, AREAXAB's error or the file system's. Uses R0-R3.
 MKAREA:
         .JSB_ENTRY  SCRATCH=<R2, R3>
         PUSHR   #^M<R4, R5>
@@ -2581,13 +2607,29 @@ MKAREA:
         MOVL    XAB$L_LOC(R1), AREA$L_LOC(R3)
         MOVW    XAB$W_DEQ(R1), AREA$W_DEQ(R3)
 10$:    TSTL    R5                      ; area 0: the file so far
-        BNEQ    80$
+        BNEQ    50$
         MOVL    #1, AREA$L_CVBN(R3)
         ROTL    #16, IFB$AB_HDR+FAT$L_HIBLK(R7), R0
         MOVL    R0, AREA$L_CNBLK(R3)
         MOVL    R0, AREA$L_TOTAL_ALLOC(R3)
         MOVL    R4, AREA$L_USED(R3)
         ADDL3   #1, R4, AREA$L_NXTVBN(R3)
+        BRB     80$
+50$:    TSTL    R1                      ; another: an extent of its
+        BEQL    80$                     ; XABALL's allocation after the
+        MOVL    XAB$L_ALQ(R1), R1       ; file's end, if it has one
+        BEQL    80$
+        ROTL    #16, IFB$AB_HDR+FAT$L_HIBLK(R7), R0
+        INCL    R0
+        MOVL    R0, AREA$L_CVBN(R3)
+        MOVL    R0, AREA$L_NXTVBN(R3)
+        MOVL    R1, AREA$L_CNBLK(R3)
+        MOVL    R1, AREA$L_TOTAL_ALLOC(R3)
+        PUSHL   R3
+        MOVAB   IFB$AB_HDR(R7), R3
+        BSBW    FIL$EXTEND
+        MOVL    (SP)+, R3
+        BLBC    R0, 90$
 80$:    MOVL    #RMS$_NORMAL, R0
 90$:    POPR    #^M<R4, R5>
         RSB

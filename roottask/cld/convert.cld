@@ -1,0 +1,20 @@
+! CONVERT input[,...] output: CONVERT.EXE copies the input files' records
+! into the output file, made as /FDL's file says or as the first input
+! is. ponytail: VMS's /EXIT, /FIXED_CONTROL, /PROLOG, /READ_CHECK,
+! /SECONDARY, /SHARE, /WORK_FILES and /WRITE_CHECK aren't here.
+define verb CONVERT
+	image CONVERT
+	parameter P1, label=INPUT, prompt="Input file(s)", value(required, list, type=$infile)
+	parameter P2, label=OUTPUT, prompt="Output file", value(required, type=$outfile)
+	qualifier APPEND
+	qualifier CREATE, default
+	qualifier EXCEPTIONS_FILE, value(type=$outfile)
+	qualifier FAST_LOAD, default
+	qualifier FDL, value(required, type=$infile)
+	qualifier KEY, value(required, type=$number)
+	qualifier MERGE
+	qualifier PAD, value
+	qualifier SORT, default
+	qualifier STATISTICS
+	qualifier TRUNCATE
+	disallow APPEND and MERGE

@@ -1,0 +1,157 @@
+        .TITLE  LINE    Lines of output for the RMS utilities
+        .IDENT  /V0.1/
+;
+; CREATE/FDL, CONVERT and ANALYZE/RMS_FILE build their lines here, a piece
+; at a time, then write each on SYS$OUTPUT, or on the file LIN$GL_RAB
+; connects to if there is one. build.rs links the modules of sysexe/rms
+; into those images only.
+;
+        .LIBRARY "starlet.mlb"
+        $RMSDEF
+        $RABDEF
+
+        .EXTERNAL LIB$PUT_OUTPUT
+
+LINESZ = 256
+
+        .PSECT  LIN_DATA, NOEXE, WRT, LONG
+LIN$GW_LEN::                            ; the line's bytes so far
+        .WORD   0
+LIN$T_LINE::                            ; the line
+        .BLKB   LINESZ
+        .ALIGN  LONG
+LIN$GL_RAB::                            ; a RAB to write the lines with, or 0
+        .LONG   0
+LINEDSC:
+        .LONG   0
+        .ADDRESS LIN$T_LINE
+MSG:    .BLKB   256                     ; a message's text
+MSGDSC: .LONG   256
+        .ADDRESS MSG
+MSGLEN: .WORD   0
+
+        .PSECT  LIN_CODE, EXE, LONG
+
+; LIN$STR: R1 = bytes, R2 = how many. Adds them to the line, as many as
+; fit. Keeps every register.
+LIN$STR::
+        .JSB_ENTRY
+        PUSHR   #^M<R0, R1, R2, R3>
+        MOVZWL  LIN$GW_LEN, R3
+10$:    TSTL    R2
+        BEQL    20$
+        CMPL    R3, #LINESZ
+        BGEQU   20$
+        MOVB    (R1)+, LIN$T_LINE[R3]
+        INCL    R3
+        DECL    R2
+        BRB     10$
+20$:    MOVW    R3, LIN$GW_LEN
+        POPR    #^M<R0, R1, R2, R3>
+        RSB
+
+; LIN$TEXT: R1 = an .ASCIC string. Adds it to the line. Keeps every
+; register.
+LIN$TEXT::
+        .JSB_ENTRY
+        PUSHR   #^M<R1, R2>
+        MOVZBL  (R1)+, R2
+        BSBW    LIN$STR
+        POPR    #^M<R1, R2>
+        RSB
+
+; LIN$CHAR: R1 = a character. Adds it to the line. Keeps every register.
+LIN$CHAR::
+        .JSB_ENTRY
+        PUSHR   #^M<R1, R2>
+        PUSHL   R1
+        MOVL    SP, R1
+        MOVL    #1, R2
+        BSBW    LIN$STR
+        TSTL    (SP)+
+        POPR    #^M<R1, R2>
+        RSB
+
+; LIN$DEC: R1 = a value, 0 to 2^31-1, R2 = a width. Adds it in decimal, with
+; spaces before it to make it R2 characters if it is shorter. Keeps every
+; register.
+LIN$DEC::
+        .JSB_ENTRY
+        PUSHR   #^M<R0, R1, R2, R3, R4>
+        CLRL    R3                      ; the digits, on the stack
+10$:    DIVL3   #10, R1, R4
+        MULL3   #10, R4, R0
+        SUBL3   R0, R1, -(SP)
+        INCL    R3
+        MOVL    R4, R1
+        BNEQ    10$
+        SUBL2   R3, R2                  ; the spaces
+20$:    TSTL    R2
+        BLEQ    30$
+        MOVL    #^A/ /, R1
+        BSBW    LIN$CHAR
+        DECL    R2
+        BRB     20$
+30$:    ADDL3   #^A/0/, (SP)+, R1
+        BSBW    LIN$CHAR
+        SOBGTR  R3, 30$
+        POPR    #^M<R0, R1, R2, R3, R4>
+        RSB
+
+; LIN$HEX: R1 = a value, R2 = how many hex digits of it, the low ones.
+; Adds them. Keeps every register.
+LIN$HEX::
+        .JSB_ENTRY
+        PUSHR   #^M<R0, R1, R2, R3>
+        MOVL    R1, R3
+        MULL3   #4, R2, R0              ; the top digit first
+        SUBL3   R0, #32, R0
+        ROTL    R0, R3, R3
+10$:    ROTL    #4, R3, R3
+        EXTZV   #0, #4, R3, R1
+        ADDL2   #^A/0/, R1
+        CMPL    R1, #^A/9/
+        BLEQ    20$
+        ADDL2   #^A/A/-^A/9/-1, R1
+20$:    BSBW    LIN$CHAR
+        SOBGTR  R2, 10$
+        POPR    #^M<R0, R1, R2, R3>
+        RSB
+
+; LIN$PUT: writes the line and starts another: on LIN$GL_RAB's file if
+; there is one, else on SYS$OUTPUT. R0 = the write's status. Keeps every
+; other register.
+LIN$PUT::
+        .JSB_ENTRY
+        PUSHR   #^M<R1, R2, R3, R4, R5>
+        MOVZWL  LIN$GW_LEN, LINEDSC
+        CLRW    LIN$GW_LEN
+        MOVL    LIN$GL_RAB, R1
+        BEQL    10$
+        MOVAB   LIN$T_LINE, RAB$L_RBF(R1)
+        MOVW    LINEDSC, RAB$W_RSZ(R1)
+        $PUT    RAB=(R1)
+        BRB     90$
+10$:    PUSHAQ  LINEDSC
+        CALLS   #1, G^LIB$PUT_OUTPUT
+90$:    POPR    #^M<R1, R2, R3, R4, R5>
+        RSB
+
+; LIN$STATUS: R0 = a status. Writes its message as one that follows
+; another, -FAC-S-NAME, text, on a line of its own. Keeps every
+; register.
+LIN$STATUS::
+        .JSB_ENTRY
+        PUSHR   #^M<R0, R1, R2, R3, R4, R5>
+        $GETMSG_S MSGID=R0, MSGLEN=MSGLEN, BUFADR=MSGDSC
+        MOVZWL  MSGLEN, R2
+        MOVAB   MSG, R1
+        CMPB    (R1), #^A/%/
+        BNEQ    10$
+        MOVB    #^A/-/, (R1)
+10$:    BSBW    LIN$STR
+        BSBW    LIN$PUT
+        POPR    #^M<R0, R1, R2, R3, R4, R5>
+        RSB
+
+        .END

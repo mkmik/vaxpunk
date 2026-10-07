@@ -63,6 +63,8 @@ SYSLNM: .ASCIC  "SYS$SYSDEVICE"         ; the system disk
         .ASCIC  "SYS$SYSDEVICE:[SYSEXE]"
         .ASCIC  "SYS$MANAGER"           ; the system manager's files
         .ASCIC  "SYS$SYSDEVICE:[SYSMGR]"
+        .ASCIC  "SYS$SCRATCH"           ; work files, CONVERT's: the default
+        .ASCIC  "SYS$DISK:[]"           ; directory, until LOGINOUT sets it
         .BYTE   0
 
         .PSECT  $CODE$

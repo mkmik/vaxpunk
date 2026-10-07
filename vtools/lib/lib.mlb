@@ -536,6 +536,7 @@ IFB$V_BIO = 3                           ; block I/O only
 IFB$V_BRO = 4                           ; block and record I/O
 IFB$V_PLG = 5                           ; relative: the prologue's end of file changed
 IFB$V_FOUND = 6                         ; the last record service was a $FIND: a sequential $GET reads the record it found
+IFB$V_DATA = 7                          ; indexed: a bucket was written, the end of file goes past the last block
         .ENDM   $IFBDEF
 
 ; $PLGDEF, $KEYDEF, $AREADEF, $BKTDEF, $IRCDEF, $DLCDEF: relative and

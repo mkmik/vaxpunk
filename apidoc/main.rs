@@ -5,7 +5,7 @@
 //! - the executive's routines and data (roottask/exec/*.mar, consolio.mar), and
 //!   the global ones of the libraries the system disk's images link
 //!   (roottask/sysexe/lib/*.mar) and of DCL's own (roottask/sysexe/dcl.mar,
-//!   roottask/sysexe/dcl/*.mar):
+//!   roottask/sysexe/dcl/*.mar), and of the RMS utilities' (roottask/sysexe/rms/*.mar):
 //!   the comment block right above each `NAME::`
 //!   or `.ENTRY`, whose first line reads `NAME: what it does` or, for a system
 //!   service, `$NAME args: what it does`;
@@ -693,6 +693,7 @@ impl Api {
         let mut libs = glob(&root.join("roottask/sysexe/lib"), "mar");
         libs.push(root.join("roottask/sysexe/dcl.mar"));
         libs.extend(glob(&root.join("roottask/sysexe/dcl"), "mar"));
+        libs.extend(glob(&root.join("roottask/sysexe/rms"), "mar"));
         for p in libs {
             let (mut rs, mut ds) = (vec![], vec![]);
             let mut m = parse_mar(root, &p, mods.len(), &mut rs, &mut ds);

@@ -262,10 +262,12 @@ buckets in the order they were made, data before index.
 
 `ANALYZE/RMS_FILE/FDL` gives fill quantities as percentages; `CONVERT`
 took `DATA_FILL 256` as bytes (`idxb.idx`'s 512-byte buckets have a fill of
-256, reported as 50). Where an FDL file doesn't say, keys and data records
-get compression or not by the key: the string keys of 8, 9 and 32 bytes in
-the fixtures got it, `idx1.idx`'s 5-byte key 1 and the integer keys didn't;
-our FDL reader draws the line at 6 bytes. `LEVEL1_INDEX_AREA` is
+256, reported as 50). RMS compresses a string key and its index only if
+the key has 6 bytes or more, whatever the FDL file or the `XABKEY` asks:
+`CREATE/FDL` of string keys of 4, 5, 6 and 7 bytes on the oracle gave
+compression to the 6- and 7-byte ones only, and `idx1.idx`'s 5-byte key 1
+none; data record compression doesn't depend on it. A new file's end of
+file is 0 until a bucket is written, then past its last block. `LEVEL1_INDEX_AREA` is
 `INDEX_AREA` unless given.
 
 ## What a writer must keep
