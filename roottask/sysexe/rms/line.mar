@@ -72,6 +72,20 @@ LIN$CHAR::
         POPR    #^M<R1, R2>
         RSB
 
+; LIN$PAD: R1 = a column. Adds spaces to the line up to it, if it is
+; shorter. Keeps every register.
+LIN$PAD::
+        .JSB_ENTRY
+        PUSHR   #^M<R1, R2>
+        MOVL    R1, R2
+10$:    CMPW    LIN$GW_LEN, R2
+        BGEQU   90$
+        MOVL    #^A/ /, R1
+        BSBW    LIN$CHAR
+        BRB     10$
+90$:    POPR    #^M<R1, R2>
+        RSB
+
 ; LIN$DEC: R1 = a value, 0 to 2^31-1, R2 = a width. Adds it in decimal, with
 ; spaces before it to make it R2 characters if it is shorter. Keeps every
 ; register.

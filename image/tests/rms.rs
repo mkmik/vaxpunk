@@ -3,9 +3,12 @@
 //! disk made here holds ods/fixtures/rms's files, each with the record
 //! attributes its FDL file gives; vaxpunk boots with it as DKB0:, and
 //! RMSDUMP prints each file's records along each of its keys, which must
-//! be what OpenVMS printed, the fixture's dump of that key. Then RMSRAND
-//! runs a long script of random operations on an indexed file, each of
-//! whose results a model here knows, and `ods` checks the file after.
+//! be what OpenVMS printed, the fixture's dump of that key. CONVERT/FDL
+//! makes those files again from the inputs and FDL files OpenVMS made them
+//! from, with the same records, and ANALYZE/RMS_FILE finds them sound.
+//! Then RMSRAND runs a long script of random operations on an indexed
+//! file, each of whose results a model here knows, and `ods` checks the
+//! file after.
 
 use std::collections::BTreeMap;
 use std::fs;
@@ -167,6 +170,92 @@ fn fixtures() {
                     want.lines().count()
                 ));
             }
+        }
+    }
+    assert!(failed.is_empty(), "{}", failed.join("\n"));
+}
+
+/// make.com's conversions: output, FDL, input, qualifiers, keys. Not
+/// REL.REL's, which DCL's READ/DELETE and WRITE/UPDATE change after.
+const CONVERSIONS: &[(&str, &str, &str, &str, usize)] = &[
+    ("IDX1.IDX", "IDX1.FDL", "DATA.TXT", "", 2),
+    ("IDXC.IDX", "IDXC.FDL", "DATA.TXT", "", 2),
+    ("IDXF.IDX", "IDXF.FDL", "FIXD.TXT", "/PAD", 3),
+    ("COMP.IDX", "COMP.FDL", "COMP.TXT", "", 1),
+    ("RELF.REL", "RELF.FDL", "FIXD.TXT", "/PAD", 1),
+];
+
+#[test]
+fn convert() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
+    let fixtures = root.join("ods/fixtures/rms");
+    let disk = root.join("out/convert-datadisk.img");
+    let _ = fs::remove_file(&disk);
+    let params = InitParams {
+        label: b"DATA".to_vec(),
+        max_files: 64,
+        ..Default::default()
+    };
+    let mut vol = Image::create(&disk, 4096, &params).unwrap();
+    for (_, fdl, input, _, _) in CONVERSIONS {
+        for file in [fdl, input] {
+            let spec = format!("[000000]{file}");
+            if vol.lookup(&spec).is_ok() {
+                continue;
+            }
+            let data = fs::read(fixtures.join("make").join(file.to_lowercase())).unwrap();
+            vol.copy_in(
+                &mut &data[..],
+                &spec,
+                Conversion::LinesToRecords,
+                Some(data.len() as u64),
+                None,
+            )
+            .unwrap();
+        }
+    }
+    vol.flush().unwrap();
+    drop(vol);
+    let mut failed = Vec::new();
+    {
+        let mut vax = Vax::boot(&disk, &root.join("out/convert.log"));
+        vax.command("SET DEFAULT DKB0:[000000]", "\n$ ");
+        vax.command("RMSDUMP :== $RMSDUMP", "\n$ ");
+        for (out, fdl, input, quals, keys) in CONVERSIONS {
+            let said = vax.command(&format!("CONVERT/FDL={fdl}{quals} {input} {out}"), "\n$ ");
+            if said.contains("-F-") {
+                failed.push(format!("CONVERT {out}: {said}"));
+            }
+            let stem = out.split('.').next().unwrap().to_lowercase();
+            for key in 0..*keys {
+                let got = vax.command(&format!("RMSDUMP {out} {key}"), "\n$ ");
+                let got: Vec<_> = got
+                    .lines()
+                    .skip(1)
+                    .take_while(|l| !l.starts_with("RMSDUMP: "))
+                    .collect();
+                let want =
+                    fs::read_to_string(fixtures.join(format!("{stem}_key{key}.dump"))).unwrap();
+                if got != want.lines().collect::<Vec<_>>() {
+                    failed.push(format!(
+                        "{out} key {key}: {} records of {}",
+                        got.len(),
+                        want.lines().count()
+                    ));
+                }
+            }
+            let report = vax.command(&format!("ANALYZE/RMS_FILE {out}"), "\n$ ");
+            if !report.contains("The analysis uncovered NO errors.") {
+                failed.push(format!("ANALYZE/RMS_FILE {out}: {report}"));
+            }
+        }
+    }
+    let mut vol = Image::open(&disk, Mode::ReadOnly).unwrap();
+    for (out, ..) in CONVERSIONS {
+        let fid = vol.lookup(&format!("[000000]{out}")).unwrap();
+        let report = vol.check_file(fid).unwrap();
+        if !report.is_sound() {
+            failed.push(format!("{out}: {:?}", report.findings));
         }
     }
     assert!(failed.is_empty(), "{}", failed.join("\n"));

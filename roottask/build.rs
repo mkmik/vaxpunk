@@ -248,7 +248,7 @@ fn disk(path: &Path, images: &[(String, Vec<u8>)]) {
     fn ok<T>(r: ods_image::Result<T>) -> T {
         r.unwrap_or_else(|e| panic!("the system disk: {e}"))
     }
-    let mut vol = ok(Image::create(path, 4096, &params));
+    let mut vol = ok(Image::create(path, 8192, &params));
     ok(vol.mkdir("[SYSEXE]"));
     ok(vol.mkdir("[SYSMGR]"));
     let image = RecordAttrs {

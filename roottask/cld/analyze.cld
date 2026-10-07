@@ -1,0 +1,15 @@
+! ANALYZE/RMS_FILE file[,...]: ANALYZRMS.EXE reports on each file's RMS
+! structure, as VMS's ANALYZE/RMS_FILE does: /CHECK, the default,
+! /STATISTICS and /SUMMARY report, /FDL writes an FDL file. ponytail:
+! ANALYZE's other kinds, /OBJECT, /IMAGE, /DISK_STRUCTURE and the like,
+! and /INTERACTIVE, aren't here.
+define verb ANALYZE
+	image ANALYZRMS
+	parameter P1, label=FILE, prompt="File(s)", value(required, list, type=$infile)
+	qualifier RMS_FILE
+	qualifier CHECK
+	qualifier FDL
+	qualifier STATISTICS
+	qualifier SUMMARY
+	qualifier OUTPUT, value(type=$outfile)
+	disallow any2 (CHECK, FDL, STATISTICS, SUMMARY)

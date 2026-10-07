@@ -59,8 +59,12 @@
 ;               runs MOUNT.EXE
 ;   DISMOUNT device
 ;               runs DISMOUNT.EXE
-;   CREATE/DIRECTORY spec
+;   CREATE/DIRECTORY spec, CREATE/FDL=fdl [spec]
 ;               runs CREATE.EXE
+;   CONVERT input[,...] output
+;               runs CONVERT.EXE
+;   ANALYZE/RMS_FILE file[,...]
+;               runs ANALYZRMS.EXE
 ;   CONTINUE    goes back to the image CTRL/Y stopped
 ;   STOP [process-name], STOP/IDENTIFICATION=pid
 ;               deletes the process; with no name, ends the image CTRL/Y

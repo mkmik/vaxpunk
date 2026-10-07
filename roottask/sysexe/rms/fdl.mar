@@ -92,6 +92,7 @@ AREAS:  .BLKB   MAXAREAS*XAB$C_ALLLEN   ; the XABALLs
 KNAMES: .BLKB   MAXKEYS*32              ; the keys' names
 DFILL:  .BLKB   MAXKEYS                 ; their fills, percent, or 0
 IFILL:  .BLKB   MAXKEYS
+LSET:   .BLKB   MAXKEYS                 ; 1: LEVEL1_INDEX_AREA given
 NKEYS:  .LONG   0                       ; keys and areas defined
 NAREAS: .LONG   0
 FDL$GB_NAMELEN::                        ; FILE's NAME, if it has one
@@ -330,7 +331,7 @@ INIT:
         MOVB    #FAB$M_CR, FDL$AB_FAB+FAB$B_RAT
         MOVC5   #0, (SP), #0, #MAXKEYS*XAB$C_KEYLEN, KEYS
         MOVC5   #0, (SP), #0, #MAXAREAS*XAB$C_ALLLEN, AREAS
-        MOVC5   #0, (SP), #0, #MAXKEYS*2, DFILL
+        MOVC5   #0, (SP), #0, #MAXKEYS*3, DFILL
         MOVC5   #0, (SP), #0, #MAXKEYS*32, KNAMES
         CLRL    R0
 10$:    MULL3   #XAB$C_KEYLEN, R0, R1
@@ -381,6 +382,10 @@ FINISH:
         SOBGTR  R2, 35$
         INCL    R2
 37$:    MOVB    R2, XAB$B_NSG(R1)
+        TSTB    LSET[R0]                ; the level 1 index's area: the
+        BNEQ    38$                     ; index's unless given
+        MOVB    XAB$B_IAN(R1), XAB$B_LAN(R1)
+38$:
         MOVZBL  XAB$B_DAN(R1), R4       ; fills: percent of a bucket
         MOVZBL  DFILL[R0], R5
         BSBW    FILL
@@ -644,6 +649,8 @@ SETNUM:
 32$:    MOVB    R1, XAB$B_IAN(R3)
         RSB
 33$:    MOVB    R1, XAB$B_LAN(R3)
+        MOVL    NUM, R0
+        MOVB    #1, LSET[R0]
         RSB
 34$:    MOVL    NUM, R0
         MOVB    R1, DFILL[R0]

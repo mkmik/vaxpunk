@@ -57,7 +57,7 @@ the role PALcode played on an Alpha: it's the "hardware" layer underneath VMS
   receive interrupt when there are some.
 - `disk_init` finds the disks, virtio block devices: unit 0, the system
   disk, and unit 1, the data disk, `out/datadisk.img`, and prints
-  `disk 0: virtio-blk, 4096 blocks` and `disk 1: ...` for them. From then
+  `disk 0: virtio-blk, 8192 blocks` and `disk 1: ...` for them. From then
   on the PAL can read the disks' blocks, by number, for itself and for the
   executive, and write the data disk's for the executive. It also
   notes the network device, virtio-net, if QEMU has one.
