@@ -107,8 +107,9 @@ The executive is the VMS kernel, written in MACRO-32.
 - defines the system's logical names for it, in `LNM$SYSTEM_TABLE`:
   `SYS$SYSDEVICE` is `DKA0:`, `SYS$DISK`, the default device, is
   `SYS$SYSDEVICE:`, `SYS$SYSTEM`, where the images are, is
-  `SYS$SYSDEVICE:[SYSEXE]`, and `SYS$MANAGER`, where the system manager's
-  files are, is `SYS$SYSDEVICE:[SYSMGR]`
+  `SYS$SYSDEVICE:[SYSEXE]`, `SYS$MANAGER`, where the system manager's
+  files are, is `SYS$SYSDEVICE:[SYSMGR]`, and `SYS$SCRATCH`, where
+  `CONVERT` puts its work file, is `SYS$DISK:[]`, the default directory
 - lowers IPL to 0 and creates the console's process, SYSTEM, which runs
   `DCL.EXE`, with the logical names `SYS$INPUT`, `SYS$OUTPUT` and
   `SYS$ERROR` standing for the console, `_OPA0:`, in its process table.
