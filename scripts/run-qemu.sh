@@ -59,7 +59,10 @@ if [ "$firmware" ]; then echo "$EDK2_FW"; exit; fi
 # out/datadisk.img, which may be written: 2 MB of zeros the first time,
 # until INITIALIZE DKB0: writes a volume on it, then kept from boot to
 # boot. They are unit 0 and 1 in the order of their -device options. The
-# ESP stays on PCI, for EDK2.
+# ESP stays on PCI, for EDK2. Its bootindex makes it the one device EDK2
+# connects: given a boot order it leaves the others alone, rather than
+# binding its own network stack to virtio-net, whose timer callbacks now
+# and then fault on a NULL pointer while Limine loads (DpcDxe, VirtioNetDxe).
 # The network device, virtio-net, is a third virtio-mmio transport, after
 # the disks, which the TCP/IP component drives. On QEMU's user network the
 # guest is 10.0.2.15/24 and the host 10.0.2.2, its gateway, which QEMU's
@@ -71,7 +74,8 @@ pidfile=$(mktemp)
 [ -f "$datadisk" ] || dd if=/dev/zero of="$datadisk" bs=512 count=4096 2>/dev/null
 qemu-system-aarch64 -machine "virt,secure=off,gic-version=$QEMU_GIC,acpi=off" $cpu \
 	-smp 1 -m "$QEMU_MEM" -display none -bios "$EDK2_FW" \
-	-boot menu=on,splash-time=0 -drive "if=virtio,format=raw,readonly=on,file=$root/out/esp.img" \
+	-boot menu=on,splash-time=0 -drive "if=none,id=esp,format=raw,readonly=on,file=$root/out/esp.img" \
+	-device virtio-blk-pci,drive=esp,bootindex=0 \
 	-drive "if=none,id=sysdisk,format=raw,readonly=on,file=$root/out/sysdisk.img" \
 	-device virtio-blk-device,drive=sysdisk \
 	-drive "if=none,id=datadisk,format=raw,file=$datadisk" \

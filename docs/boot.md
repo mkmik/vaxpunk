@@ -12,7 +12,9 @@ commands.
 ## 1. Firmware, then Limine
 
 QEMU's firmware finds the boot disk (`out/esp.img`) and starts Limine, a
-bootloader. As [image/limine.conf](../image/limine.conf) says, Limine loads
+bootloader. QEMU tells the firmware to boot from that disk alone, so the
+firmware leaves the other devices, the other disks and the network, to the
+OS. As [image/limine.conf](../image/limine.conf) says, Limine loads
 three files into memory: the shim, the seL4 kernel and the root task.
 Limine then jumps to the shim.
 
