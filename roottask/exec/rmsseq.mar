@@ -101,7 +101,7 @@ SEQ$REWIND::
 SEQ$FIND::
         .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5, R6>
         BICL2   #1@IFB$V_FOUND, IFB$L_FLAGS(R7) ; a $FIND goes on past one
-        BSBW    LOCATE
+        BSBW    SEQLOCATE
         BLBC    R0, 90$
         BISL2   #1@IFB$V_FOUND, IFB$L_FLAGS(R7)
 90$:    RSB
@@ -112,7 +112,7 @@ SEQ$GET::
         MOVZWL  RAB$W_USZ(R10), R5
         BEQL    5$
         IFNOWRT R5, (R6), 85$
-5$:     BSBW    LOCATE
+5$:     BSBW    SEQLOCATE
         BLBC    R0, 90$
         PUSHL   IFB$L_POS(R7)           ; past the record, where it goes on
         CMPB    IFB$B_RFM(R7), #FAB$C_VFC       ; the control part
@@ -156,12 +156,12 @@ SEQ$GET::
         MOVL    R1, R0
 90$:    RSB
 
-; LOCATE: R7 = an IFAB, R10 = a RAB. Finds the record $GET or $FIND
+; SEQLOCATE: R7 = an IFAB, R10 = a RAB. Finds the record $GET or $FIND
 ; wants (NEXT): with RAB$C_SEQ, the next, or the one $FIND found just
 ; before; with RAB$C_RFA, the one at the RFA. It becomes the current one,
 ; and its RFA goes in the RAB, 0 if there is none. R0 = NEXT's status,
 ; RMS$_RFA or RMS$_RAC. Uses R0-R3.
-LOCATE:
+SEQLOCATE:
         .JSB_ENTRY  SCRATCH=<R2, R3>
         CMPB    RAB$B_RAC(R10), #RAB$C_SEQ
         BNEQ    10$

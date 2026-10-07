@@ -51,7 +51,8 @@ MAXBKS = 32                             ; the largest bucket RMS takes, blocks
 MAXLEV = 32                             ; index levels a descent keeps
 
         .PSECT  EXEC$DATA, NOEXE, WRT, QUAD
-PLGBLK: .BLKB   BLOCK                   ; a prologue block being read
+IDX$AB_PLG::                             ; a prologue block being read
+        .BLKB   BLOCK
 
         .PSECT  $CODE$
 
@@ -65,13 +66,13 @@ PLGBLK: .BLKB   BLOCK                   ; a prologue block being read
 IDX$OPEN::
         .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5, R6, R8, R9, R11>
         MOVL    #1, R0
-        BSBW    RDPLG
+        BSBW    IDX$RDPLG
         BLBC    R0, 90$
         MOVL    #RMS$_PLV, R0
-        CMPW    PLGBLK+PLG$W_VER_NO, #PLG$C_VER_3
+        CMPW    IDX$AB_PLG+PLG$W_VER_NO, #PLG$C_VER_3
         BNEQ    90$
-        MOVZBL  PLGBLK+PLG$B_AMAX, R5   ; areas
-        MOVZBL  PLGBLK+PLG$B_AVBN, R6
+        MOVZBL  IDX$AB_PLG+PLG$B_AMAX, R5   ; areas
+        MOVZBL  IDX$AB_PLG+PLG$B_AVBN, R6
         MOVL    #1, R3                  ; the keys, and the largest bucket
         CLRL    R4                      ; keys
         MOVL    #1, R8
@@ -83,10 +84,10 @@ IDX$OPEN::
         BGTRU   90$
         PUSHL   R2
         MOVL    R8, R0
-        BSBW    RDPLG
+        BSBW    IDX$RDPLG
         MOVL    (SP)+, R2
         BLBC    R0, 90$
-        MOVAB   PLGBLK(R2), R1
+        MOVAB   IDX$AB_PLG(R2), R1
         MOVL    #RMS$_DTP, R0
         BICB3   #KEY$C_DESCENDING, KEY$B_DATATYPE(R1), R9
         CMPB    R9, #KEY$C_PACKED
@@ -111,11 +112,11 @@ IDX$OPEN::
         BGEQU   30$
         DIVL3   #8, R2, R0
         ADDL2   R6, R0
-        BSBW    RDPLG
+        BSBW    IDX$RDPLG
         BLBC    R0, 90$
         BICL3   #^C7, R2, R0
         MULL2   #AREA$K_BLN, R0
-        MOVZBL  PLGBLK+AREA$B_ARBKTSZ(R0), R0
+        MOVZBL  IDX$AB_PLG+AREA$B_ARBKTSZ(R0), R0
         CMPL    R0, R3
         BLEQU   25$
         MOVL    R0, R3
@@ -127,8 +128,14 @@ IDX$OPEN::
         MULL3   #KEY$K_BLN+8, R4, R1    ; the buffer: state, keys, areas, buckets
         MULL3   #AREA$K_BLN, R5, R0
         ADDL2   R0, R1
-        MULL3   #BLOCK*4, R3, R0
+        MULL3   #BLOCK*4, R3, R0        ; three buckets and WORK2,
         ADDL2   R0, R1
+        MOVZWL  IFB$W_MRS(R7), R0       ; and WORK, a bucket or a record
+        MULL3   #BLOCK, R3, R2
+        CMPL    R0, R2
+        BGEQU   32$
+        MOVL    R2, R0
+32$:    ADDL2   R0, R1
         ADDL2   #X$K_LENGTH, R1
         PUSHR   #^M<R3, R4, R5>
         BSBW    RMS$ALLOCBUF
@@ -163,7 +170,14 @@ IDX$OPEN::
         ADDL2   R1, R0
         MOVL    R0, X$L_BUF2(R11)
         ADDL2   R1, R0
+        MOVL    R0, X$L_WORK2(R11)
+        ADDL2   R1, R0
         MOVL    R0, X$L_WORK(R11)
+        MOVZWL  IFB$W_MRS(R7), R2
+        CMPL    R2, R1
+        BGEQU   35$
+        MOVL    R1, R2
+35$:    MOVL    R2, X$L_WORKSZ(R11)
         BSBW    RDKEYS
         BLBC    R0, 90$
         BSBW    RDAREAS
@@ -174,12 +188,12 @@ IDX$OPEN::
         MOVL    #RMS$_NORMAL, R0
 90$:    RSB
 
-; RDPLG: R7 = an IFAB, R0 = a VBN. Reads that prologue block into PLGBLK.
+; IDX$RDPLG: R7 = an IFAB, R0 = a VBN. Reads that prologue block into IDX$AB_PLG.
 ; R0 = RMS$_NORMAL or the disk's error. Uses R0-R3.
-RDPLG:
+IDX$RDPLG::
         .JSB_ENTRY  SCRATCH=<R2, R3>
         MOVL    #1, R1
-        MOVAB   PLGBLK, R2
+        MOVAB   IDX$AB_PLG, R2
         BSBW    RMS$READBKT
         RSB
 
@@ -198,11 +212,11 @@ RDKEYS:
         MOVL    R2, (R5)+
         PUSHR   #^M<R2, R3>
         MOVL    R6, R0
-        BSBW    RDPLG
+        BSBW    IDX$RDPLG
         POPR    #^M<R2, R3>
         BLBC    R0, 90$
         PUSHR   #^M<R2, R3, R4, R5>
-        MOVC3   #KEY$K_BLN, PLGBLK(R2), (R4)
+        MOVC3   #KEY$K_BLN, IDX$AB_PLG(R2), (R4)
         POPR    #^M<R2, R3, R4, R5>
         MOVL    KEY$L_IDXFL(R4), R6
         MOVZWL  KEY$W_NOFF(R4), R2
@@ -224,13 +238,13 @@ RDAREAS:
         DIVL3   #8, R3, R0
         ADDL2   X$L_AVBN(R11), R0
         PUSHL   R3
-        BSBW    RDPLG
+        BSBW    IDX$RDPLG
         MOVL    (SP)+, R3
         BLBC    R0, 90$
         BICL3   #^C7, R3, R0
         MULL2   #AREA$K_BLN, R0
         PUSHR   #^M<R3, R4>
-        MOVC3   #AREA$K_BLN, PLGBLK(R0), (R4)
+        MOVC3   #AREA$K_BLN, IDX$AB_PLG(R0), (R4)
         POPR    #^M<R3, R4>
         ADDL2   #AREA$K_BLN, R4
         INCL    R3
@@ -803,11 +817,10 @@ LOCATE:
         RSB
 10$:    BSBW    KEYARG                  ; by key
         BLBC    R0, 90$
-        MOVB    RAB$B_KRF(R10), X$B_KRF(R11)
         CLRL    R5                      ; greater or equal,
         BBC     #RAB$V_KGT, RAB$L_ROP(R10), 15$
         MOVL    #1, R5                  ; or greater
-15$:    BSBW    FINDKEY
+15$:    BSBW    IDX$FINDKEY
         BLBC    R0, 80$
         BITL    #RAB$M_KGE!RAB$M_KGT, RAB$L_ROP(R10)
         BNEQ    60$
@@ -815,7 +828,7 @@ LOCATE:
         TSTB    KEY$B_KEYREF(R9)        ; or the SIDR's in walk 0
         BEQL    17$
         MOVAB   X$K_WALK0+W$T_CUR(R11), R1
-17$:    BSBW    MATCHKEY
+17$:    BSBW    IDX$MATCHKEY
         TSTL    R0
         BEQL    60$
         MOVL    #RMS$_RNF, R0
@@ -838,7 +851,7 @@ LOCATE:
         .WORD   59$-45$                 ; X$C_EOF
 50$:    BSBW    FIRST
         BRB     57$
-55$:    BSBW    NEXT
+55$:    BSBW    IDX$NEXT
 57$:    BLBC    R0, 80$
         BRB     60$
 58$:    BSBW    FETCHCTX
@@ -846,19 +859,23 @@ LOCATE:
         BRB     70$
 59$:    MOVL    #RMS$_EOF, R0
         RSB
-60$:    BSBW    SETCTX                  ; the stream's record and key
+60$:    CMPB    RAB$B_RAC(R10), #RAB$C_KEY      ; by key: the stream's key now
+        BNEQ    65$
+        MOVB    RAB$B_KRF(R10), X$B_KRF(R11)
+65$:    BSBW    SETCTX                  ; the stream's record and key
 70$:    MOVL    X$L_CTXVBN(R11), X$L_CURVBN(R11)
         MOVW    X$W_CTXID(R11), X$W_CURID(R11)
         MOVL    X$L_CTXVBN(R11), RAB$L_RFA0(R10)
         MOVW    X$W_CTXID(R11), RAB$W_RFA4(R10)
         MOVL    #RMS$_NORMAL, R0
         RSB
-80$:    CMPL    R0, #RMS$_EOF           ; past the last: there it stays
-        BNEQ    90$
-        MOVB    #X$C_EOF, X$B_STATE(R11)
+80$:    CMPL    R0, #RMS$_EOF           ; past the last: there it stays,
+        BNEQ    90$                     ; but a key not found moves nothing
         CMPB    RAB$B_RAC(R10), #RAB$C_KEY
-        BNEQ    90$
-        MOVL    #RMS$_RNF, R0           ; a key: none
+        BEQL    85$
+        MOVB    #X$C_EOF, X$B_STATE(R11)
+        RSB
+85$:    MOVL    #RMS$_RNF, R0
 90$:    RSB
 
 ; KEYARG: R10 = a RAB, R11 = an indexed file's state. Copies the key
@@ -894,9 +911,9 @@ KEYARG:
 80$:    MOVL    #RMS$_KBF, R0
 90$:    RSB
 
-; MATCHKEY: R9 = a key descriptor, R6 = a size, R1 = a key. R0 = 0 if its
+; IDX$MATCHKEY: R9 = a key descriptor, R6 = a size, R1 = a key. R0 = 0 if its
 ; first R6 bytes are X$T_KEY's, else not. Keeps every other register.
-MATCHKEY:
+IDX$MATCHKEY::
         .JSB_ENTRY
         PUSHR   #^M<R2, R3>
         MOVAB   X$T_KEY(R11), R2
@@ -905,14 +922,14 @@ MATCHKEY:
         POPR    #^M<R2, R3>
         RSB
 
-; FINDKEY: R7 = an IFAB, R11 = its state, R9 = a key's descriptor,
+; IDX$FINDKEY: R7 = an IFAB, R11 = its state, R9 = a key's descriptor,
 ; X$T_KEY = a value, R6 = how many of its bytes, R5 = 1 for the first
 ; greater, 0 greater or equal. Finds the first record along the key with
 ; such a key: R8 = the walk at it, walk 0's, or walk 1's along an
 ; alternate key, with walk 0 at the SIDR, whose key W$T_CUR is then the
 ; record's. R0 = RMS$_NORMAL, RMS$_EOF if there is none, or a bucket's
 ; error. Uses R0-R4, R8.
-FINDKEY:
+IDX$FINDKEY::
         .JSB_ENTRY  OUTPUT=<R8>, SCRATCH=<R2, R3, R4>
         BSBW    IDX$DESCEND
         CMPL    R0, #RMS$_RNF           ; no index yet: no records
@@ -923,7 +940,7 @@ FINDKEY:
         MOVZBL  KEY$B_DATBKTSZ(R9), R1
         BSBW    IDX$LOADW
         BLBC    R0, 90$
-10$:    BSBW    SCAN                    ; the next record or SIDR
+10$:    BSBW    IDX$SCAN                    ; the next record or SIDR
         BLBC    R0, 90$
         MOVAB   W$T_CUR(R8), R1         ; is it at the key?
         MOVAB   X$T_KEY(R11), R2
@@ -949,12 +966,12 @@ FINDKEY:
 80$:    MOVL    #RMS$_NORMAL, R0
 90$:    RSB
 
-; SCAN: R11 = an indexed file's state, R9 = a key's descriptor, R8 = a
+; IDX$SCAN: R11 = an indexed file's state, R9 = a key's descriptor, R8 = a
 ; walk in one of its level 0 buckets. From its entry on, finds the next
 ; record or SIDR, along the buckets' chain: R0 = RMS$_NORMAL with the
 ; walk at it, parsed (IDX$ENTRY), RMS$_EOF past the last, or a bucket's
 ; error. Uses R0-R4.
-SCAN:
+IDX$SCAN::
         .JSB_ENTRY  SCRATCH=<R2, R3, R4>
 10$:    BSBW    IDX$ENTRY
         CMPL    R0, #1
@@ -977,11 +994,11 @@ SCAN:
 85$:    MOVL    #RMS$_NORMAL, R0
 90$:    RSB
 
-; PTRNEXT: R8 = a walk at a SIDR. Takes its next pointer that isn't
+; IDX$PTRNEXT: R8 = a walk at a SIDR. Takes its next pointer that isn't
 ; deleted, from W$L_PTR: its RFA in W$L_RRVVBN and W$L_RRVID, and
 ; W$L_PTR past it. R0 = 1, 0 if there is none left, or RMS$_IRC. Uses
 ; R0-R4.
-PTRNEXT:
+IDX$PTRNEXT::
         .JSB_ENTRY  SCRATCH=<R2, R3, R4>
 10$:    CLRL    R0
         MOVL    W$L_PTR(R8), R2
@@ -1014,7 +1031,7 @@ PTRNEXT:
 ; left, R8 still walk 0, or a bucket's error. Uses R0-R4, R8.
 SIDRREC:
         .JSB_ENTRY  OUTPUT=<R8>, SCRATCH=<R2, R3, R4>
-        BSBW    PTRNEXT
+        BSBW    IDX$PTRNEXT
         CMPL    R0, #1
         BEQL    10$
         TSTL    R0
@@ -1023,14 +1040,14 @@ SIDRREC:
         RSB
 10$:    MOVL    W$L_RRVVBN(R8), R0
         MOVL    W$L_RRVID(R8), R1
-        BSBW    FETCH
+        BSBW    IDX$FETCH
 90$:    RSB
 
-; FETCH: R11 = an indexed file's state, R0 = a VBN and R1 = an ID, a
+; IDX$FETCH: R11 = an indexed file's state, R0 = a VBN and R1 = an ID, a
 ; record's RFA. Finds it in walk 1, there or where its RRV says: R8 =
 ; walk 1, at it, parsed, along key 0. R0 = RMS$_NORMAL, RMS$_RNF if it
 ; is gone, or a bucket's error. Keeps R9. Uses R0-R4, R8.
-FETCH:
+IDX$FETCH::
         .JSB_ENTRY  OUTPUT=<R8>, SCRATCH=<R2, R3, R4>
         PUSHR   #^M<R5, R9>
         MOVL    #2, R5                  ; buckets, an RRV's and its record's
@@ -1072,12 +1089,12 @@ FETCH:
         RSB
 
 ; FETCHCTX: R11 = an indexed file's state. Fetches the stream's record,
-; X$L_CTXVBN and X$W_CTXID, into walk 1 (FETCH). Uses R0-R4, R8.
+; X$L_CTXVBN and X$W_CTXID, into walk 1 (IDX$FETCH). Uses R0-R4, R8.
 FETCHCTX:
         .JSB_ENTRY  OUTPUT=<R8>, SCRATCH=<R2, R3, R4>
         MOVL    X$L_CTXVBN(R11), R0
         MOVZWL  X$W_CTXID(R11), R1
-        BSBW    FETCH
+        BSBW    IDX$FETCH
         RSB
 
 ; SETCTX: R11 = an indexed file's state, R8 = the walk at a record, and
@@ -1146,7 +1163,7 @@ FIRST:
         MOVZBL  KEY$B_DATBKTSZ(R9), R1
         BSBW    IDX$LOADW
         BLBC    R0, 90$
-10$:    BSBW    SCAN
+10$:    BSBW    IDX$SCAN
         BLBC    R0, 90$
         TSTB    KEY$B_KEYREF(R9)
         BEQL    90$
@@ -1159,13 +1176,13 @@ FIRST:
 85$:    MOVL    #RMS$_EOF, R0
 90$:    RSB
 
-; NEXT: R7 = an IFAB, R11 = its state. Finds the record after the
+; IDX$NEXT: R7 = an IFAB, R11 = its state. Finds the record after the
 ; stream's, X$T_CTXKEY and X$L_CTXVBN/X$W_CTXID, along its key: the first
 ; with a greater key, or with duplicates, the one after it among those
 ; with its key. R8 = the walk at it, and walk 0 at its SIDR along an
 ; alternate key. R0 = RMS$_NORMAL, RMS$_EOF if there is none, or a
 ; bucket's error. Uses R0-R6, R8, R9.
-NEXT:
+IDX$NEXT::
         .JSB_ENTRY  OUTPUT=<R8>, SCRATCH=<R2, R3, R4, R5, R6, R9>
         MOVZBL  X$B_KRF(R11), R0
         BSBW    IDX$KEYDESC
@@ -1180,10 +1197,10 @@ NEXT:
         MOVZBL  KEY$B_DATBKTSZ(R9), R1
         BSBW    IDX$LOADW
         BLBC    R0, 90$
-10$:    BSBW    SCAN                    ; each with a key not past it
+10$:    BSBW    IDX$SCAN                    ; each with a key not past it
         BLBC    R0, 90$
         MOVAB   W$T_CUR(R8), R1
-        BSBW    MATCHKEY
+        BSBW    IDX$MATCHKEY
         TSTL    R0
         BLSS    40$                     ; before it
         BGTR    60$                     ; past it: that one
@@ -1194,9 +1211,9 @@ NEXT:
         CMPW    W$L_RRVID(R8), X$W_CTXID(R11)
         BNEQ    40$
         BSBW    IDX$NEXTW               ; then the next
-        BSBW    SCAN
+        BSBW    IDX$SCAN
         BRB     90$
-20$:    BSBW    PTRNEXT                 ; a SIDR: is it among its pointers?
+20$:    BSBW    IDX$PTRNEXT                 ; a SIDR: is it among its pointers?
         CMPL    R0, #1
         BEQL    25$
         TSTL    R0
@@ -1212,12 +1229,12 @@ NEXT:
         BNEQ    90$
         MOVAB   X$K_WALK0(R11), R8
         BSBW    IDX$NEXTW
-        BSBW    SCAN
+        BSBW    IDX$SCAN
         BLBC    R0, 90$
         BRB     30$
 40$:    BSBW    IDX$NEXTW
         BRB     10$
-50$:    BSBW    FINDKEY
+50$:    BSBW    IDX$FINDKEY
         BRB     90$
 60$:    TSTB    KEY$B_KEYREF(R9)        ; a greater key's first record
         BEQL    70$

@@ -77,7 +77,7 @@ REL$CREATE::
         MOVL    #2, PLG+PLG$L_EOF
         MOVW    #PLG$C_VER_REL, PLG+PLG$W_VER_NO
         MOVL    #1, R1                  ; VBN 1
-        BSBW    WRPLG
+        BSBW    RELWRPLG
         BLBC    R0, 90$
         BSBW    REL$OPEN
         BISL2   #1@IFB$V_HDR, IFB$L_FLAGS(R7)
@@ -164,7 +164,7 @@ REL$REWIND::
 REL$FIND::
         .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5, R6>
         BICL2   #1@IFB$V_FOUND, IFB$L_FLAGS(R7)
-        BSBW    LOCATE
+        BSBW    RELLOCATE
         BLBC    R0, 90$
         BISL2   #1@IFB$V_FOUND, IFB$L_FLAGS(R7)
 90$:    RSB
@@ -175,7 +175,7 @@ REL$GET::
         MOVZWL  RAB$W_USZ(R10), R5
         BEQL    5$
         IFNOWRT R5, (R6), 85$
-5$:     BSBW    LOCATE
+5$:     BSBW    RELLOCATE
         BLBC    R0, 90$
         BSBW    CELL                    ; R3 = the cell
         MOVAB   1(R3), R3
@@ -211,12 +211,12 @@ REL$GET::
 85$:    MOVL    #SS$_ACCVIO, R0
 90$:    RSB
 
-; LOCATE: R7 = an IFAB, R10 = a RAB. Finds the record $GET or $FIND
+; RELLOCATE: R7 = an IFAB, R10 = a RAB. Finds the record $GET or $FIND
 ; wants, by RAB$B_RAC, with its bucket in the buffer: it becomes the
 ; current record, its number goes in RAB$L_BKT and RAB$L_RFA0, and the
 ; stream goes on after it. R0 = RMS$_NORMAL, RMS$_EOF, RMS$_RNF,
 ; RMS$_KEY, RMS$_KSZ, RMS$_RFA, RMS$_RAC, or the disk's error. Uses R0-R4.
-LOCATE:
+RELLOCATE:
         .JSB_ENTRY  SCRATCH=<R2, R3, R4>
         CLRL    RAB$L_BKT(R10)
         CMPB    RAB$B_RAC(R10), #RAB$C_SEQ
@@ -391,7 +391,7 @@ REL$PUT::
         CLRL    IFB$L_CUR(R7)
         CLRL    RAB$L_RFA0(R10)
         CLRW    RAB$W_RFA4(R10)
-        BSBW    RECARG
+        BSBW    RELRECARG
         BLBC    R0, 90$
         CMPB    RAB$B_RAC(R10), #RAB$C_SEQ
         BNEQ    10$
@@ -435,11 +435,11 @@ REL$PUT::
         MOVL    #RMS$_WER, R0
 90$:    RSB
 
-; RECARG: R7 = an IFAB, R10 = a RAB. Checks the record $PUT or $UPDATE
+; RELRECARG: R7 = an IFAB, R10 = a RAB. Checks the record $PUT or $UPDATE
 ; writes: R6 = RAB$L_RBF, R5 = RAB$W_RSZ. R0 = RMS$_NORMAL, RMS$_RSZ
 ; for a FIX record of another size than the file's or a longer one, or
 ; SS$_ACCVIO. Uses R5 and R6.
-RECARG:
+RELRECARG:
         .JSB_ENTRY  OUTPUT=<R5, R6>
         MOVL    RAB$L_RBF(R10), R6
         MOVZWL  RAB$W_RSZ(R10), R5
@@ -507,7 +507,7 @@ REL$UPDATE::
         MOVL    #RMS$_FAC, R0
         BBC     #FAB$V_UPD, IFB$B_FAC(R7), 90$
         BICL2   #1@IFB$V_FOUND, IFB$L_FLAGS(R7)
-        BSBW    RECARG
+        BSBW    RELRECARG
         BLBC    R0, 90$
         MOVL    #RMS$_CUR, R0
         MOVL    IFB$L_CUR(R7), R4
@@ -564,7 +564,7 @@ REL$FLUSH::
         BLBC    R0, 90$
         MOVL    IFB$L_EOF(R7), PLG+PLG$L_EOF
         MOVL    #1, R1
-        BSBW    WRPLG
+        BSBW    RELWRPLG
         BLBC    R0, 90$
 10$:    BBCC    #IFB$V_HDR, IFB$L_FLAGS(R7), 80$
         ROTL    #16, IFB$AB_HDR+FAT$L_HIBLK(R7), R0     ; the header's: the allocation's
@@ -577,10 +577,10 @@ REL$FLUSH::
 80$:    MOVL    #RMS$_NORMAL, R0
 90$:    RSB
 
-; WRPLG: R7 = an IFAB, R1 = a VBN. Writes PLG there, with its checksum
+; RELWRPLG: R7 = an IFAB, R1 = a VBN. Writes PLG there, with its checksum
 ; (RMS$CHECKSUM). R0 = RMS$_NORMAL or the file system's error. Uses
 ; R0-R2.
-WRPLG:
+RELWRPLG:
         .JSB_ENTRY  SCRATCH=<R2>
         MOVAB   PLG, R2
         BSBW    RMS$CHECKSUM
