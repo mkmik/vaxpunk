@@ -22,6 +22,7 @@ LITERAL
     SS$_ILLBLKNUM = 220,
     SS$_DEVACTIVE = 708,  ! the device is in use: the system disk, or one with files open
     SS$_ILLEFC = 236,
+    SS$_ILLCNTRFUNC = 228,  ! an ioctl the socket doesn't have
     SS$_ILLIOFUNC = 244,
     SS$_ILLPAGCNT = 252,
     SS$_ILLSER = 260,
@@ -41,6 +42,10 @@ LITERAL
     SS$_PAGOWNVIO = 492,
     SS$_TIMEOUT = 556,
     SS$_REJECT = 660,  ! the peer refused the connection
+    SS$_FILALRACC = 164,  ! a datagram socket's peer is set already
+    SS$_NOLINKS = 636,  ! the socket isn't connected, or a datagram has nowhere to go
+    SS$_TOOMUCHDATA = 668,  ! a datagram longer than the socket sends
+    SS$_PROTOCOL = 8308,  ! a protocol or address family the network doesn't have
     SS$_INSFBUFDP = 828,  ! no buffer for the request
     SS$_IVBUFLEN = 844,  ! a buffer too long for the device
     SS$_UNASEFC = 564,
@@ -690,6 +695,7 @@ LITERAL
     DVI$_UNIT = 12,
     DVI$_ERRCNT = 20,
     DVI$_DEVDEPEND2 = 28,  ! a terminal's TT2$ bits
+    DVI$_REFCNT = 30,  ! the channels assigned to it
     DVI$_DEVNAM = 32,  ! the device's name, _DDCU:
     DVI$_VOLNAM = 34,  ! the mounted volume's label
     DVI$_FREEBLOCKS = 42,  ! its free blocks
@@ -1116,17 +1122,106 @@ LITERAL
     IO$M_NOFILTR = 512,
     IO$V_NOW = 6,  ! a mailbox's read doesn't wait for a message
     IO$M_NOW = 64,
-    IO$_SETCHAR = 26,  ! BGA0: sets the interface's address
-    IO$_SENSECHAR = 27,  ! BGA0: senses it
-    IO$_ACCESS = 50,  ! a network unit: connects, or accepts
-    IO$_DEACCESS = 52,  ! a network unit: closes
-    IO$_SENSEMODE = 39,  ! a terminal: its characteristics; a network unit: its number and channels
-    IO$V_BIND = 10,  ! a network unit's SETMODE: binds a local address
-    IO$M_BIND = 1024,
-    IO$V_LISTEN = 11,  ! a network unit's SETMODE: listens
-    IO$M_LISTEN = 2048,
-    IO$V_ACCEPT = 10,  ! a network unit's ACCESS: accepts a connection
-    IO$M_ACCEPT = 1024;
+    IO$_SETCHAR = 26,  ! a socket: as IO$_SETMODE, which is the same function there
+    IO$_SENSECHAR = 27,  ! a socket: as IO$_SENSEMODE
+    IO$_ACCESS = 50,  ! a socket: connects, or accepts; a datagram socket's peer
+    IO$_DEACCESS = 52,  ! a socket: closes it
+    IO$_SENSEMODE = 39,  ! a terminal: its characteristics; a socket: its names, ioctls
+    IO$V_ACCEPT = 7,  ! a socket's ACCESS: accepts a connection
+    IO$M_ACCEPT = 128,
+    IO$V_SHUTDOWN = 7,  ! a socket's DEACCESS: shuts down a direction, p4
+    IO$M_SHUTDOWN = 128,
+    IO$V_READATTN = 7,  ! a socket's SETMODE: an AST when data comes
+    IO$M_READATTN = 128,
+    IO$V_WRTATTN = 8,  ! a socket's SETMODE: an AST when it can be written
+    IO$M_WRTATTN = 256,
+    IO$V_INTERRUPT = 6,  ! a socket's read or write: out-of-band data
+    IO$M_INTERRUPT = 64,
+    IO$V_OUTBAND = 10,  ! a socket's SETMODE: an AST for out-of-band data
+    IO$M_OUTBAND = 1024,
+    IO$V_EXTEND = 15,  ! a socket name written is BSD 4.4's
+    IO$M_EXTEND = 32768;
+
+! $INETSYMDEF
+LITERAL
+    TCPIP$C_ICMP = 1,  ! protocols: a raw socket's
+    TCPIP$C_TCP = 6,
+    TCPIP$C_UDP = 17,
+    TCPIP$C_RAW_IP = 255,
+    TCPIP$C_STREAM = 1,  ! socket types
+    TCPIP$C_DGRAM = 2,
+    TCPIP$C_RAW = 3,
+    TCPIP$C_AF_UNSPEC = 0,  ! address families
+    TCPIP$C_AF_INET = 2,
+    TCPIP$C_INADDR_ANY = 0,
+    TCPIP$C_INADDR_BROADCAST = -1,
+    TCPIP$C_IPOPT = 0,  ! item list types
+    TCPIP$C_SOCKOPT = 1,
+    TCPIP$C_IOCTL = 2,
+    TCPIP$C_DATA = 3,
+    TCPIP$C_SOCK_NAME = 4,
+    TCPIP$C_TCPOPT = 6,
+    TCPIP$C_REUSEADDR = 4,  ! socket options
+    TCPIP$C_KEEPALIVE = 8,
+    TCPIP$C_BROADCAST = 32,
+    TCPIP$C_LINGER = 128,
+    TCPIP$C_MSG_OOB = 1,  ! a read's or a write's p4 flags
+    TCPIP$C_MSG_PEEK = 2,
+    TCPIP$C_MSG_DONTROUTE = 4,
+    TCPIP$C_MSG_NBIO = 64,
+    TCPIP$C_DSC_RCV = 0,  ! IO$_DEACCESS!IO$M_SHUTDOWN's p4
+    TCPIP$C_DSC_SND = 1,
+    TCPIP$C_DSC_ALL = 2;
+
+! $SOCKADDRINDEF
+LITERAL
+    SIN$K_LENGTH = 16,
+    SIN44$K_LENGTH = 16;
+MACRO
+    SIN$W_FAMILY = 0, 0, 16, 0 %,  ! BSD 4.3's: TCPIP$C_AF_INET
+    SIN$W_PORT = 2, 0, 16, 0 %,  ! in network order
+    SIN$L_ADDR = 4, 0, 32, 0 %,  ! in network order
+    SIN$T_ZERO = 8, 0, 0, 0 %,
+    SIN44$B_LEN = 0, 0, 8, 0 %,  ! BSD 4.4's, IO$M_EXTEND's: 16
+    SIN44$B_FAMILY = 1, 0, 8, 0 %;
+
+! $IFREQDEF
+LITERAL
+    IFR$K_LENGTH = 32,
+    IFR$M_IFF_UP = 1,
+    IFR$M_IFF_BROADCAST = 2,
+    IFR$M_IFF_RUNNING = 64;  ! the link is up
+MACRO
+    IFR$T_NAME = 0, 0, 0, 0 %,  ! the interface's name, WE0, zero filled
+    IFR$T_ADDR = 16, 0, 0, 0 %,  ! an address, a SOCKADDRIN
+    IFR$W_FLAGS = 16, 0, 16, 0 %;  ! IFR$M_IFF_
+
+! $ORTENTRYDEF
+LITERAL
+    ORT$K_LENGTH = 48,
+    ORT$M_RTF_UP = 1,
+    ORT$M_RTF_GATEWAY = 2,
+    ORT$M_RTF_HOST = 4;
+MACRO
+    ORT$L_HASH = 0, 0, 32, 0 %,
+    ORT$T_DST = 4, 0, 0, 0 %,  ! the destination, a SOCKADDRIN
+    ORT$L_DST_SIN_ADDR = 8, 0, 32, 0 %,
+    ORT$T_GATEWAY = 20, 0, 0, 0 %,  ! the gateway, a SOCKADDRIN
+    ORT$L_GATEWAY_SIN_ADDR = 24, 0, 32, 0 %,
+    ORT$W_FLAGS = 36, 0, 16, 0 %;  ! ORT$M_RTF_
+
+! $SIOCDEF
+LITERAL
+    SIOCADDRT = -2144308726,  ! adds a route, an ORTENTRY
+    SIOCDELRT = -2144308725,  ! deletes one
+    SIOCGETRT = -1070566869,  ! the route to ORT$T_DST
+    SIOCSIFADDR = -2145359604,  ! sets an interface's address, an IFREQ
+    SIOCGIFADDR = -1071617779,
+    SIOCSIFFLAGS = -2145359600,
+    SIOCGIFFLAGS = -1071617775,
+    SIOCGIFNETMASK = -1071617771,
+    SIOCSIFNETMASK = -2145359594,
+    SIOCSIFDHCP = -2145359489;  ! vaxpunk's, not VMS's: a DHCP server sets the interface
 
 ! $LNMDEF
 LITERAL

@@ -13,7 +13,7 @@
 ; ponytail: one file, no wildcards; records up to RECSIZE.
 ;
 ; COPY/HTTP fetches from from a web server instead, with an HTTP/1.0
-; GET: from is node::"/path", the node the server's address, or
+; GET on a TCP socket on TCPIP$DEVICE:: from is node::"/path", the node the server's address, or
 ; node::"http://address[:port]/path", where the node, URL by custom, is
 ; only a name. The body goes, byte for byte, by block I/O, into a new
 ; STREAM_LF file, as VMS's C ports of curl and wget write one, binary or
@@ -33,6 +33,8 @@
         $FABDEF
         $RABDEF
         $NAMDEF
+        $INETSYMDEF
+        $SOCKADDRINDEF
 
         .EXTERNAL PUT_LINE, INET_ADDR
 
@@ -68,10 +70,13 @@ INRES:  .BLKB   255
 OUTRES: .BLKB   255
 REC:    .BLKB   RECSIZE
 ; COPY/HTTP's.
-BGA0:   .ASCID  "BGA0:"
-SOCKCHAR:                               ; a TCP socket: protocol, type, family
-        .WORD   6
-        .BYTE   1, 2
+DEVICE: .ASCID  "TCPIP$DEVICE:"
+TCP:    .WORD   TCPIP$C_TCP             ; a TCP socket: protocol, type, family
+        .BYTE   TCPIP$C_STREAM, TCPIP$C_AF_INET
+SERVER: .WORD   SIN$K_LENGTH, TCPIP$C_SOCK_NAME ; the server's name
+        .ADDRESS SIN
+SIN:    .WORD   TCPIP$C_AF_INET
+        .BLKB   14                      ; its port, in network order, and address
 NCHAN:  .LONG   0                       ; the connection's channel
 ADDR:   .LONG   0                       ; the server's address
 PORT:   .LONG   0                       ; and port
@@ -254,13 +259,17 @@ HTTP:   MOVZWL  DESC, R2
 58$:    ADDL3   R9, R4, R1
         SUBL3   R4, R3, R2
         BSBW    DEFNAME
-        $ASSIGN_S DEVNAM=BGA0, CHAN=NCHAN
+        MOVL    ADDR, SIN+SIN$L_ADDR
+        ROTL    #-8, PORT, R0           ; the port, high byte first
+        MOVB    R0, SIN+SIN$W_PORT
+        MOVB    PORT, SIN+SIN$W_PORT+1
+        $ASSIGN_S DEVNAM=DEVICE, CHAN=NCHAN
         BLBS    R0, 60$
         RET
-60$:    $QIOW_S CHAN=NCHAN, FUNC=#IO$_SETMODE, IOSB=IOSB, P1=SOCKCHAR
+60$:    $QIOW_S CHAN=NCHAN, FUNC=#IO$_SETMODE, IOSB=IOSB, P1=TCP
         BSBW    STATUS
         BLBC    R0, 62$
-        $QIOW_S CHAN=NCHAN, FUNC=#IO$_ACCESS, IOSB=IOSB, P3=ADDR, P4=PORT
+        $QIOW_S CHAN=NCHAN, FUNC=#IO$_ACCESS, IOSB=IOSB, P3=#SERVER
         BSBW    STATUS
         BLBS    R0, 64$
 62$:    BRW     HANGUP

@@ -1,5 +1,5 @@
         .TITLE  NETDRIVER BGA0:, TCP/IP through the port
-        .IDENT  /V0.1/
+        .IDENT  /V0.2/
 ;
 ; The network's port driver (docs/design/0003-tcpip-port.md). TCP/IP is a
 ; component below the executive, the TCP/IP component, which shares the
@@ -10,21 +10,31 @@
 ; the IPL$_NETPOST fork, where NET$FORK completes the requests the
 ; responses are for.
 ;
-; BGA0: is a template device, as TCP/IP Services' BG0: was: IO$_SETMODE
-; on a channel assigned to it opens a TCP connection, and the channel goes
-; to a unit of its own, a UCB cloned from it that holds the connection's
-; number on the port, until the channel is deassigned, which closes it.
-; On the template, IO$_SETCHAR and IO$_SENSECHAR set and sense the
-; interface's address, mask and gateway, and IO$_ACCESS pings.
+; Programs see TCP/IP Services' $QIO interface (the VSI TCP/IP Services
+; Sockets API and System Services Programming manual, chapters 5 and 6),
+; with its symbols, starlet.mlb's $INETSYMDEF and the rest of
+; TCPIP$INETDEF. BGA0: is a template device, as TCP/IP Services' BG0:
+; was, which the system logical name TCPIP$DEVICE names: IO$_SETMODE with
+; a socket's characteristics on a channel assigned to it makes a TCP,
+; UDP or raw ICMP socket, and the channel goes to a unit of its own, a
+; UCB cloned from it that holds the socket's connection number on the
+; port, until the channel is deassigned, which closes it. Socket names
+; come in item_list_2s and go out through item_list_3s, of SOCKADDRINs;
+; the interface and its route are set and sensed with ioctls on a socket.
 ;
 ; A command takes a tag, a credit, which its response gives back. A send
 ; or a receive needs a tag with a buffer, the first PORT$K_BUFFERS, for
 ; its data; a request waits on BGA0:'s queue until a tag is free. A send's
 ; data is copied into its IRP at once, and from there to the buffer; a
 ; receive's data from the buffer into its IRP, which IOC$POST copies to
-; the caller's buffer, as a buffered read.
-; ponytail: one port, 0; BGA0: isn't one of the devices $DEVICE_SCAN
-; and $GETDVI see.
+; the caller's buffer, as a buffered read. What else a request returns,
+; a socket name or an ioctl's result, NET$POST writes, in the caller's
+; process, from the response the IRP keeps.
+; ponytail: one port, 0; a unit is cloned at IO$_SETMODE, not at $ASSIGN
+; as TCP/IP Services' are; BGA0: isn't one of the devices $DEVICE_SCAN
+; sees. No buffer lists (p5, p6 of a write or read), socket options (taken,
+; and ignored), read and write flags, IO$M_NOW, out-of-band data or
+; attention ASTs (IO$M_READATTN, IO$M_WRTATTN: taken, never delivered).
 ;
         .LIBRARY "lib.mlb"
         .LIBRARY "starlet.mlb"
@@ -38,17 +48,30 @@
         $PORTDEF
         $IODEF
         $SSDEF
+        $INETSYMDEF
+        $IFREQDEF
+        $ORTENTRYDEF
+        $SIOCDEF
 
         .EXTERNAL EXE$GL_RPB, EXE$ALONONPAGED, EXE$DEANONPGDSIZ
         .EXTERNAL IOC$AB_BGA0, IOC$ALLOCIRP, IOC$REQCOM
 
-; An IRP of this driver's holds the command after the packet, and a
-; send's or receive's data after that.
-NIRP$A_MSG = IRP$K_LENGTH               ; the command, PORTMSG$K_LENGTH bytes
-NIRP$A_DATA = IRP$K_LENGTH+PORTMSG$K_LENGTH
+; An IRP of this driver's holds, after the packet, the command, then where
+; to write a socket name, the local one or a datagram's sender or a new
+; connection's peer, then the peer's, each its buffer, the buffer's length
+; and the address of the longword for the length written, or 0s, then the
+; ioctls IO$_SENSEMODE asks for, each its request and its argument's
+; address, and last a send's or receive's data.
+NIRP$A_MSG = IRP$K_LENGTH               ; the command, then its response, PORTMSG$K_LENGTH bytes
+NIRP$L_NAME = IRP$K_LENGTH+32
+NIRP$L_PEER = IRP$K_LENGTH+44
+NIRP$A_IOCTL = IRP$K_LENGTH+56
+IOCTLS = 4                              ; ioctls a sense takes at most
+NIRP$K_EXT = 56+<IOCTLS*8>              ; the bytes of those, past IRP$K_LENGTH
+NIRP$A_DATA = IRP$K_LENGTH+NIRP$K_EXT
 NIRP$V_LINE = 2                         ; IRP$L_STS: a READPROMPT's receive, a line
 ORPHAN = 1                              ; NET$AL_TAG: busy, its IRP gone
-CTRLZ = 26
+WE0 = ^A/WE0/                           ; the interface's name, zero filled
 
         .PSECT  EXEC$DATA, NOEXE, WRT, QUAD
 NET$GL_PORT::                           ; port 0's pages, from the RPB, or 0 without a network
@@ -62,6 +85,7 @@ NET$GL_UNIT::                           ; the last unit's number, 1-99 then agai
 ; The SS$_ status for each PORT$C_ST_.
 STATUS: .LONG   SS$_NORMAL, SS$_BADPARAM, SS$_INSFMEM, SS$_DUPLNAM, SS$_REJECT
         .LONG   SS$_LINKABORT, SS$_TIMEOUT, SS$_ABORT, SS$_UNREACHABLE, SS$_LINKDISCON
+        .LONG   SS$_NOLINKS, SS$_FILALRACC, SS$_IVADDR
 
         .PSECT  $CODE$
 
@@ -133,12 +157,17 @@ ORPHANED:
 90$:    RSB
 
 ; COMPLETE: R3 = an IRP, R6 = its response, in the buffer of tag R2.
-; Completes it, with the SS$_ status for the response's, and what the
-; command gives back. IPL$_SYNCH. Uses R0-R5, R7.
+; Keeps the response in the IRP, for NET$POST, and completes it, with
+; the SS$_ status for the response's, and what the command gives back.
+; IPL$_SYNCH. Uses R0-R5, R7.
 COMPLETE:
         .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5, R7>
+        MOVQ    (R6), NIRP$A_MSG(R3)
+        MOVQ    8(R6), NIRP$A_MSG+8(R3)
+        MOVQ    16(R6), NIRP$A_MSG+16(R3)
+        MOVQ    24(R6), NIRP$A_MSG+24(R3)
         MOVL    PORTMSG$L_STATUS(R6), R0
-        CMPL    R0, #PORT$C_ST_CLOSED
+        CMPL    R0, #PORT$C_ST_IVADDR
         BLEQU   5$
         MOVL    #PORT$C_ST_BADPARAM, R0
 5$:     MOVL    STATUS[R0], R7
@@ -153,11 +182,7 @@ COMPLETE:
         BLBC    R7, 80$
         MOVL    IRP$L_BUFADR(R3), R0    ; the new channel's unit
         MOVL    PORTMSG$L_ARG1(R6), UCB$L_CONN(R0)
-        MOVZWL  PORTMSG$W_PORT(R6), R0  ; and the peer, in the IOSB
-        ASHL    #16, R0, R0
-        BISL2   R0, R7
-        MOVL    PORTMSG$L_ADDR(R6), R1
-        BRB     80$
+        BRW     80$
 20$:    CMPB    PORTMSG$B_TYPE(R6), #PORT$C_CLOSE
         BNEQ    30$
         CLRL    UCB$L_CONN(R5)
@@ -166,7 +191,7 @@ COMPLETE:
         BNEQ    40$
         BRB     70$
 40$:    CMPB    PORTMSG$B_TYPE(R6), #PORT$C_RECV
-        BNEQ    50$
+        BNEQ    80$
         PUSHR   #^M<R1, R3>
         BSBW    BUFFER
         MOVC3   PORTMSG$L_LEN(R6), (R0), NIRP$A_DATA(R3)
@@ -188,21 +213,6 @@ COMPLETE:
 48$:    ASHL    #16, R0, R0
         BISL2   R0, R7
         BRB     80$
-50$:    CMPB    PORTMSG$B_TYPE(R6), #PORT$C_PING
-        BNEQ    60$
-        MOVL    PORTMSG$L_ARG2(R6), R1  ; the TTL
-        ASHL    #16, PORTMSG$L_ARG1(R6), R0     ; the round trip
-        BISL2   R0, R7
-        BRB     80$
-60$:    CMPB    PORTMSG$B_TYPE(R6), #PORT$C_IFCONFIG
-        BNEQ    80$
-        BBC     #IRP$V_BUFIO, IRP$L_STS(R3), 80$
-        MOVL    PORTMSG$L_ADDR(R6), NIRP$A_DATA(R3)     ; a sense: the settings
-        MOVL    PORTMSG$L_ARG1(R6), NIRP$A_DATA+4(R3)
-        MOVL    PORTMSG$L_ARG2(R6), NIRP$A_DATA+8(R3)
-        MOVZBL  PORTMSG$B_FLAGS(R6), NIRP$A_DATA+12(R3)
-        BISL2   #<16@16>, R7
-        BRB     80$
 70$:    ASHL    #16, PORTMSG$L_LEN(R6), R0      ; a byte count
         BISL2   R0, R7
 80$:    MOVL    R7, R0
@@ -217,46 +227,140 @@ BUFFER:
         ADDL2   NET$GL_PORT, R0
         RSB
 
+; NET$POST: IOC$POST's call for a done IRP of this driver's, R6, in its
+; process. If it succeeded, writes the socket names and the ioctls'
+; results it asked for, from its response: the name's address and port
+; in the response's ADDR and PORT, the peer's in ARG1 and ARG2, each a
+; SOCKADDRIN, BSD 4.4's with IO$M_EXTEND, and its length; the interface's
+; address, mask, gateway and link in an IFCONFIG's. Uses R0-R5.
+NET$POST::
+        .JSB_ENTRY  INPUT=<R6>, SCRATCH=<R2, R3, R4, R5>
+        BLBC    IRP$L_IOST1(R6), 90$
+        MOVL    NIRP$A_MSG+PORTMSG$L_ADDR(R6), R0
+        MOVZWL  NIRP$A_MSG+PORTMSG$W_PORT(R6), R1
+        MOVAL   NIRP$L_NAME(R6), R2
+        BSBB    WRITENAME
+        MOVL    NIRP$A_MSG+PORTMSG$L_ARG1(R6), R0
+        MOVL    NIRP$A_MSG+PORTMSG$L_ARG2(R6), R1
+        MOVAL   NIRP$L_PEER(R6), R2
+        BSBB    WRITENAME
+        MOVAB   NIRP$A_IOCTL(R6), R5
+        MOVL    #IOCTLS, R4
+10$:    MOVL    (R5)+, R0               ; the request
+        BEQL    90$
+        MOVL    (R5)+, R3               ; its argument
+        MOVL    NIRP$A_MSG+PORTMSG$L_ADDR(R6), R1
+        CMPL    R0, #SIOCGIFADDR
+        BEQL    20$
+        MOVL    NIRP$A_MSG+PORTMSG$L_ARG1(R6), R1
+        CMPL    R0, #SIOCGIFNETMASK
+        BEQL    20$
+        CMPL    R0, #SIOCGIFFLAGS
+        BEQL    30$
+        MOVL    NIRP$A_MSG+PORTMSG$L_ARG2(R6), R1     ; SIOCGETRT: the default route
+        CLRW    ORT$W_FLAGS(R3)
+        TSTL    R1
+        BEQL    15$
+        MOVW    #ORT$M_RTF_UP!ORT$M_RTF_GATEWAY, ORT$W_FLAGS(R3)
+15$:    ADDL2   #ORT$T_GATEWAY, R3
+        BSBB    PUTSIN
+        BRB     40$
+20$:    ADDL2   #IFR$T_ADDR, R3
+        BSBB    PUTSIN
+        BRB     40$
+30$:    MOVW    #IFR$M_IFF_UP!IFR$M_IFF_BROADCAST, IFR$W_FLAGS(R3)
+        BITB    #PORT$M_LINKUP, NIRP$A_MSG+PORTMSG$B_FLAGS(R6)
+        BEQL    40$
+        BISW2   #IFR$M_IFF_RUNNING, IFR$W_FLAGS(R3)
+40$:    SOBGTR  R4, 10$
+90$:    RSB
+
+; PUTSIN: R3 = a SOCKADDRIN, R1 = an address. Writes it there, with port
+; 0. Keeps every other register.
+PUTSIN:
+        .JSB_ENTRY
+        MOVW    #TCPIP$C_AF_INET, (R3)
+        CLRW    2(R3)
+        MOVL    R1, 4(R3)
+        CLRQ    8(R3)
+        RSB
+
+; WRITENAME: R6 = an IRP, R0 = an address, R1 = a port, R2 = where a name
+; goes: a buffer, its length and the address of the length written, or a
+; buffer of 0 for none. Writes a SOCKADDRIN, as much as fits. Uses R0-R5.
+WRITENAME:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5>
+        TSTL    (R2)
+        BEQL    90$
+        CLRQ    -(SP)                   ; the name, on the stack
+        CLRQ    -(SP)
+        BBS     #IO$V_EXTEND, IRP$L_FUNC(R6), 10$
+        MOVW    #TCPIP$C_AF_INET, (SP)
+        BRB     20$
+10$:    MOVB    #16, (SP)               ; BSD 4.4's: its length, then its family
+        MOVB    #TCPIP$C_AF_INET, 1(SP)
+20$:    ROTL    #-8, R1, R3             ; the port, in network order
+        MOVB    R3, 2(SP)
+        MOVB    R1, 3(SP)
+        MOVL    R0, 4(SP)
+        MOVL    4(R2), R3
+        CMPL    R3, #16
+        BLEQU   30$
+        MOVL    #16, R3
+30$:    MOVL    8(R2), R4
+        BEQL    40$
+        MOVL    R3, (R4)
+40$:    MOVC3   R3, (SP), @(R2)
+        ADDL2   #16, SP
+90$:    RSB
+
 ; NET$FDT: BGA0:'s FDT routine, and its units'. R4 = the current PCB, R5 =
-; the channel's UCB, AP = $QIO's arguments.
+; the channel's UCB, AP = $QIO's arguments. IO$_SETCHAR is IO$_SETMODE,
+; IO$_SENSECHAR is IO$_SENSEMODE, as TCP/IP Services has them.
 ; On BGA0: itself:
-;   IO$_SETMODE    opens a connection: the channel goes to a new unit.
-;                  p1 = its characteristics, as TCP/IP Services': a word,
-;                  the protocol, 6 for TCP, and two bytes, the type and
-;                  the address family, which are only TCP's
-;   IO$_SETCHAR    sets the interface: p1 = 16 bytes, its address, mask
-;                  and gateway, each a longword in network order, and
-;                  flags, 4 to have a DHCP server give them instead, which
-;                  completes once one has, or SS$_TIMEOUT; OPER, else
-;                  SS$_NOPRIV
-;   IO$_SENSECHAR  writes those to the 16 bytes at p1, then the flags, 2
-;                  if the link is up
-;   IO$_ACCESS     sends an ICMP echo request to the address p3, and
-;                  completes with its reply: the IOSB's count is the
-;                  round trip in ms, its second longword the reply's TTL;
-;                  SS$_TIMEOUT after a second without one
-; On a unit:
-;   IO$_SETMODE!IO$M_BIND    binds it to the local address p3, port p4
-;   IO$_SETMODE!IO$M_LISTEN  listens, p4 connections waiting at most
-;   IO$_ACCESS     connects to the address p3, port p4
-;   IO$_ACCESS!IO$M_ACCEPT   accepts a connection on channel p4, which
-;                  must be assigned to BGA0:, and goes to a new unit;
-;                  the IOSB has the peer's port and address
-;   IO$_WRITEVBLK  sends the p2 bytes at p1, 4096 at most
-;   IO$_READVBLK   receives up to p2 bytes into p1, those that came;
-;                  SS$_LINKDISCON once the peer has closed
-;   IO$_DEACCESS   closes the connection
-;   IO$_SENSEMODE  the IOSB has the unit's number, nn in its name, _BGnn:,
-;                  and the channels assigned to it
-; and as a terminal, for a process whose SYS$INPUT it is:
+;   IO$_SETMODE    makes a socket: p1 = its characteristics, a word
+;                  protocol, a byte type and a byte family: TCPIP$C_TCP
+;                  and TCPIP$C_STREAM, TCPIP$C_UDP and TCPIP$C_DGRAM, or
+;                  TCPIP$C_ICMP and TCPIP$C_RAW, which needs SYSPRV or
+;                  BYPASS (protocol 0 is the type's); the family
+;                  TCPIP$C_AF_INET or 0. The channel goes to a new unit.
+;                  Then p3 and p4 as on a unit, in one request
+; On a unit, a socket:
+;   IO$_SETMODE    binds it to the local name p3, an item_list_2; a port
+;                  below 1024 needs SYSPRV or BYPASS; listens, p4
+;                  connections waiting at most, if p4 isn't 0; or sets
+;                  ioctls, p5 an item_list_2 of TCPIP$C_IOCTL, which need
+;                  OPER: SIOCSIFADDR, SIOCSIFNETMASK and SIOCSIFDHCP on
+;                  WE0, SIOCADDRT and SIOCDELRT of the default route
+;   IO$_SENSEMODE  writes its local name to p3 and its peer's to p4, each
+;                  an item_list_3; or the ioctls of p6, as p5's:
+;                  SIOCGIFADDR, SIOCGIFNETMASK and SIOCGIFFLAGS of WE0,
+;                  SIOCGETRT of the default route; IOCTLS at most
+;   IO$_ACCESS     connects to the name p3, an item_list_2: for a
+;                  datagram socket, sets the peer its writes go to and its
+;                  reads come from
+;   IO$_ACCESS!IO$M_ACCEPT   accepts a connection on a listening socket:
+;                  p4 = the address of a word, a channel assigned to
+;                  TCPIP$DEVICE:, which goes to the new connection's
+;                  unit; p3, an item_list_3, gets the peer's name
+;   IO$_WRITEVBLK  sends the p2 bytes at p1, 4096 at most; a datagram to
+;                  the name p3, an item_list_2, if there is one
+;   IO$_READVBLK   receives up to p2 bytes into p1, those that came, or
+;                  one datagram, the rest of it lost, its sender's name
+;                  to p3, an item_list_3; SS$_LINKDISCON once the peer
+;                  has closed
+;   IO$_DEACCESS   closes it; with IO$M_SHUTDOWN shuts down receiving,
+;                  sending or both, p4 TCPIP$C_DSC_RCV, _SND or _ALL
+; and as a terminal, for a process whose SYS$INPUT it is (vaxpunk's own:
+; TCP/IP Services gives a remote login a TNA pseudo-terminal):
 ;   IO$_READPROMPT sends the p6 bytes at p5, then receives a line into
 ;                  p1, at most p2 bytes, as IO$_READVBLK, without its
 ;                  CR LF; the IOSB has a carriage return as its terminator
 ;   IO$_SETMODE!IO$M_CTRLCAST or IO$M_CTRLYAST does nothing
-; An address is a longword in network order: its first byte is the
-; address's first number. R0 = SS$_NORMAL, SS$_DEVOFFLINE without the
-; TCP/IP component, SS$_ILLIOFUNC, SS$_NOPRIV, SS$_BADPARAM, SS$_ACCVIO,
-; SS$_IVBUFLEN, SS$_IVCHAN, SS$_INSFMEM. IPL$_SYNCH. Uses R0-R8.
+; R0 = SS$_NORMAL, SS$_DEVOFFLINE without the TCP/IP component,
+; SS$_ILLIOFUNC, SS$_NOPRIV, SS$_BADPARAM (no socket yet, say),
+; SS$_PROTOCOL, SS$_ACCVIO, SS$_IVBUFLEN, SS$_TOOMUCHDATA, SS$_IVCHAN,
+; SS$_NOSUCHDEV, SS$_ILLCNTRFUNC, SS$_INSFMEM. IPL$_SYNCH. Uses R0-R8.
 NET$FDT::
         .JSB_ENTRY  INPUT=<AP>, SCRATCH=<R2, R3, R4, R5, R6, R7, R8>
         MOVL    NET$GL_PORT, R0
@@ -267,37 +371,24 @@ NET$FDT::
         RSB
 20$:    BICL3   #^C63, 12(AP), R6       ; the function
         MOVL    12(AP), R7              ; and its modifiers
-        MOVAB   G^IOC$AB_BGA0, R0
+        CMPL    R6, #IO$_SETCHAR
+        BNEQ    22$
+        MOVL    #IO$_SETMODE, R6
+22$:    CMPL    R6, #IO$_SENSECHAR
+        BNEQ    24$
+        MOVL    #IO$_SENSEMODE, R6
+24$:    MOVAB   G^IOC$AB_BGA0, R0
         CMPL    R5, R0
         BNEQ    UNIT
-        CMPL    R6, #IO$_SETMODE
-        BNEQ    30$
+        CMPL    R6, #IO$_SETMODE        ; no socket yet: only making one
+        BNEQ    BADPARAM
+        TSTL    28(AP)
+        BEQL    BADPARAM
         BRW     OPEN
-30$:    CMPL    R6, #IO$_SETCHAR
-        BNEQ    40$
-        BRW     SETCHAR
-40$:    CMPL    R6, #IO$_SENSECHAR
-        BNEQ    50$
-        BRW     SENSECHAR
-50$:    CMPL    R6, #IO$_ACCESS
-        BNEQ    ILLFUNC
-        BRW     PING
-ILLFUNC:
-        MOVL    #SS$_ILLIOFUNC, R0
-        RSB
 
 UNIT:   CMPL    R6, #IO$_SETMODE
         BNEQ    15$
-        BBC     #IO$V_BIND, R7, 10$
-        MOVL    #PORT$C_BIND, R8
-        BRW     ADDRESS
-10$:    BBC     #IO$V_LISTEN, R7, 12$
-        MOVL    #PORT$C_LISTEN, R8
-        BRW     LISTEN
-12$:    BITL    #IO$M_CTRLCAST!IO$M_CTRLYAST, R7
-        BEQL    BADPARAM
-        CLRL    R1                      ; a terminal's CTRL/C or CTRL/Y AST: none come
-        BRW     NOW
+        BRW     SOCKMODE
 15$:    CMPL    R6, #IO$_SENSEMODE
         BNEQ    18$
         BRW     SENSEMODE
@@ -307,8 +398,7 @@ UNIT:   CMPL    R6, #IO$_SETMODE
 20$:    CMPL    R6, #IO$_ACCESS
         BNEQ    30$
         BBS     #IO$V_ACCEPT, R7, 25$
-        MOVL    #PORT$C_CONNECT, R8
-        BRW     ADDRESS
+        BRW     CONNECT
 25$:    BRW     ACCEPT
 30$:    CMPL    R6, #IO$_WRITEVBLK
         BNEQ    40$
@@ -318,14 +408,23 @@ UNIT:   CMPL    R6, #IO$_SETMODE
         BRW     RECV
 50$:    CMPL    R6, #IO$_DEACCESS
         BNEQ    ILLFUNC
-        MOVL    #PORT$C_CLOSE, R8
-        CLRL    R1
-        BSBW    NEWIRP
-        BLBC    R0, 90$
-        BRW     QUEUE
-90$:    RSB
+        BRW     DEACCESS
+ILLFUNC:
+        MOVL    #SS$_ILLIOFUNC, R0
+        RSB
 BADPARAM:
         MOVL    #SS$_BADPARAM, R0
+        RSB
+ACCVIO: MOVL    #SS$_ACCVIO, R0
+        RSB
+
+; FREE: R3 = an IRP not sent, R0 = a failure. Frees the IRP, and returns
+; the failure, for the FDT routine.
+FREE:   PUSHL   R0
+        MOVL    R3, R0
+        MOVZWL  IRP$W_SIZE(R0), R1
+        BSBW    EXE$DEANONPGDSIZ
+        MOVL    (SP)+, R0
         RSB
 
 ; NOW: R1 = the IOSB's second longword. Completes the request at once,
@@ -339,17 +438,399 @@ NOW:    PUSHL   R1
         BRW     IOC$REQCOM
 90$:    RSB
 
-; SENSEMODE: IO$_SENSEMODE on a unit: its number and its channels.
-SENSEMODE:
-        MOVL    UCB$L_UNIT(R5), R0
-        ASHL    #16, R0, R7
-        BISL2   #SS$_NORMAL, R7
+; OPEN: IO$_SETMODE on BGA0:, a new socket. The channel goes to a new
+; unit, which the response gives its connection.
+OPEN:   MOVL    28(AP), R2
+        IFNORD  #4, (R2), ACCVIO
+        MOVZWL  (R2), R6                ; the protocol
+        MOVZBL  2(R2), R7               ; the type
+        MOVZBL  3(R2), R0               ; the family
+        BEQL    5$
+        CMPL    R0, #TCPIP$C_AF_INET
+        BNEQ    PROTOCOL
+5$:     TSTL    R6                      ; 0: the type's
+        BNEQ    10$
+        MOVL    #TCPIP$C_TCP, R6
+        CMPL    R7, #TCPIP$C_STREAM
+        BEQL    10$
+        MOVL    #TCPIP$C_UDP, R6
+10$:    CMPL    R6, #TCPIP$C_TCP
+        BNEQ    12$
+        CMPL    R7, #TCPIP$C_STREAM
+        BEQL    20$
+12$:    CMPL    R6, #TCPIP$C_UDP
+        BNEQ    14$
+        CMPL    R7, #TCPIP$C_DGRAM
+        BEQL    20$
+14$:    CMPL    R6, #TCPIP$C_ICMP
+        BNEQ    PROTOCOL
+        CMPL    R7, #TCPIP$C_RAW
+        BNEQ    PROTOCOL
+        IFPRIV  SYSPRV, 20$
+        IFPRIV  BYPASS, 20$
+        MOVL    #SS$_NOPRIV, R0
+        RSB
+20$:    MOVL    #PORT$C_OPEN, R8
         CLRL    R1
-        BSBW    IOC$ALLOCIRP
+        BSBW    NEWIRP
         BLBC    R0, 90$
-        MOVL    R7, R0
-        MOVL    UCB$L_REFC(R5), R1
+        MOVW    R6, NIRP$A_MSG+PORTMSG$W_PROTO(R3)
+        MOVL    R7, NIRP$A_MSG+PORTMSG$L_ARG2(R3)
+        BSBW    BINDLISTEN
+        BLBC    R0, FREE
+        MOVZWL  8(AP), R0
+        PUSHL   R3
+        BSBW    NEWUNIT
+        MOVL    (SP)+, R3
+        BLBC    R0, FREE
+        MOVL    R2, IRP$L_UCB(R3)
+        MOVL    R6, UCB$L_PROTO(R2)
+        BRW     QUEUE
+90$:    RSB
+PROTOCOL:
+        MOVL    #SS$_PROTOCOL, R0
+        RSB
+
+; SOCKMODE: IO$_SETMODE on a unit: a terminal's or an attention AST, which
+; never comes; a name and a backlog; or ioctls.
+; ponytail: p3 and p4, or p5, not both in one request.
+SOCKMODE:
+        BITL    #IO$M_READATTN!IO$M_WRTATTN!IO$M_OUTBAND, R7
+        BEQL    5$
+        CLRL    R1                      ; CTRL/C's and CTRL/Y's are the same bits
+        BRW     NOW
+5$:     TSTL    28(AP)                  ; it has a socket already
+        BEQL    7$
+        BRW     BADPARAM
+7$:     TSTL    44(AP)
+        BEQL    10$
+        BISL3   36(AP), 40(AP), R0
+        BEQL    8$
+        BRW     BADPARAM
+8$:     BRW     SETIOCTL
+10$:    MOVL    #PORT$C_SETMODE, R8
+        CLRL    R1
+        BSBW    NEWIRP
+        BLBC    R0, 90$
+        BSBW    BINDLISTEN
+        BLBS    R0, 20$
+        BRW     FREE
+20$:    TSTB    NIRP$A_MSG+PORTMSG$B_FLAGS(R3)
+        BNEQ    30$
+        MOVL    #SS$_NORMAL, R0         ; nothing asked
+        CLRL    R1
         BRW     IOC$REQCOM
+30$:    BRW     QUEUE
+90$:    RSB
+
+; SETIOCTL: IO$_SETMODE's ioctls, p5: one IFCONFIG with what they set.
+; Socket options are taken, and do nothing.
+SETIOCTL:
+        MOVL    #SS$_NOPRIV, R0
+        IFNPRIV OPER, 99$
+        MOVL    44(AP), R2
+        IFNORD  #8, (R2), 97$
+        CMPW    2(R2), #TCPIP$C_SOCKOPT
+        BNEQ    3$
+        CLRL    R1
+        BRW     NOW
+3$:     CMPW    2(R2), #TCPIP$C_IOCTL
+        BNEQ    96$
+        MOVL    #PORT$C_IFCONFIG, R8
+        CLRL    R1
+        BSBW    NEWIRP
+        BLBC    R0, 99$
+        MOVL    44(AP), R2
+        MOVZWL  (R2), R6
+        MOVL    4(R2), R2               ; the ioctl_comms
+        IFNORD  R6, (R2), 85$
+        ASHL    #-3, R6, R6             ; how many
+        BEQL    80$
+10$:    MOVL    (R2)+, R0               ; the request
+        MOVL    (R2)+, R7               ; its argument
+        CMPL    R0, #SIOCADDRT
+        BEQL    40$
+        CMPL    R0, #SIOCDELRT
+        BEQL    40$
+        PUSHL   R0
+        BSBW    IFREQ
+        MOVL    R0, R1
+        MOVL    (SP)+, R0
+        BLBC    R1, 88$
+        CMPL    R0, #SIOCSIFADDR
+        BNEQ    20$
+        MOVL    IFR$T_ADDR+4(R7), NIRP$A_MSG+PORTMSG$L_ADDR(R3)
+        BISB2   #PORT$M_ADDR, NIRP$A_MSG+PORTMSG$B_FLAGS(R3)
+        BRB     50$
+20$:    CMPL    R0, #SIOCSIFNETMASK
+        BNEQ    30$
+        MOVL    IFR$T_ADDR+4(R7), NIRP$A_MSG+PORTMSG$L_ARG1(R3)
+        BISB2   #PORT$M_MASK, NIRP$A_MSG+PORTMSG$B_FLAGS(R3)
+        BRB     50$
+30$:    CMPL    R0, #SIOCSIFDHCP
+        BNEQ    86$
+        BISB2   #PORT$M_DHCP, NIRP$A_MSG+PORTMSG$B_FLAGS(R3)
+        BRB     50$
+40$:    PUSHL   R0                      ; the default route, the one there is
+        BSBW    ROUTE
+        MOVL    R0, R1
+        MOVL    (SP)+, R0
+        BLBC    R1, 88$
+        CLRL    NIRP$A_MSG+PORTMSG$L_ARG2(R3)
+        CMPL    R0, #SIOCDELRT
+        BEQL    45$
+        MOVL    ORT$L_GATEWAY_SIN_ADDR(R7), NIRP$A_MSG+PORTMSG$L_ARG2(R3)
+45$:    BISB2   #PORT$M_GW, NIRP$A_MSG+PORTMSG$B_FLAGS(R3)
+50$:    SOBGTR  R6, 10$
+        BRW     QUEUE
+80$:    MOVL    #SS$_BADPARAM, R0
+        BRW     FREE
+85$:    MOVL    #SS$_ACCVIO, R0
+        BRW     FREE
+86$:    MOVL    #SS$_ILLCNTRFUNC, R0
+        BRW     FREE
+88$:    MOVL    R1, R0
+        BRW     FREE
+96$:    MOVL    #SS$_BADPARAM, R0
+        RSB
+97$:    MOVL    #SS$_ACCVIO, R0
+99$:    RSB
+
+; SENSEMODE: IO$_SENSEMODE on a unit: the local name p3 and the peer's
+; p4, a GETNAME; or ioctls, p6, an IFCONFIG that sets nothing.
+; ponytail: p3 and p4, or p6, not both in one request; no socket options.
+SENSEMODE:
+        TSTL    48(AP)
+        BEQL    20$
+        BISL3   36(AP), 40(AP), R0
+        BEQL    10$
+        BRW     BADPARAM
+10$:    BRW     GETIOCTL
+20$:    BISL3   36(AP), 40(AP), R0
+        BNEQ    30$
+        CLRL    R1                      ; nothing asked
+        BRW     NOW
+30$:    MOVL    #PORT$C_GETNAME, R8
+        CLRL    R1
+        BSBW    NEWIRP
+        BLBC    R0, 90$
+        MOVL    36(AP), R0
+        BEQL    40$
+        MOVAL   NIRP$L_NAME(R3), R2
+        BSBW    OUTNAME
+        BLBC    R0, 80$
+40$:    MOVL    40(AP), R0
+        BEQL    50$
+        MOVAL   NIRP$L_PEER(R3), R2
+        BSBW    OUTNAME
+        BLBC    R0, 80$
+50$:    BRW     QUEUE
+80$:    BRW     FREE
+90$:    RSB
+
+; GETIOCTL: IO$_SENSEMODE's ioctls, p6, kept in the IRP for NET$POST.
+GETIOCTL:
+        MOVL    48(AP), R2
+        IFNORD  #8, (R2), 97$
+        CMPW    2(R2), #TCPIP$C_IOCTL
+        BNEQ    96$
+        MOVL    #PORT$C_IFCONFIG, R8
+        CLRL    R1
+        BSBW    NEWIRP
+        BLBC    R0, 99$
+        MOVL    48(AP), R2
+        MOVZWL  (R2), R6
+        MOVL    4(R2), R2               ; the ioctl_comms
+        IFNORD  R6, (R2), 85$
+        ASHL    #-3, R6, R6             ; how many
+        BEQL    80$
+        CMPL    R6, #IOCTLS
+        BGTRU   80$
+        MOVAB   NIRP$A_IOCTL(R3), R8
+10$:    MOVL    (R2)+, R0               ; the request
+        MOVL    (R2)+, R7               ; its argument
+        CMPL    R0, #SIOCGETRT
+        BNEQ    20$
+        IFNOWRT #ORT$K_LENGTH, (R7), 85$
+        PUSHL   R0
+        BSBW    ROUTE
+        MOVL    R0, R1
+        MOVL    (SP)+, R0
+        BLBC    R1, 88$
+        BRB     50$
+20$:    CMPL    R0, #SIOCGIFADDR
+        BEQL    30$
+        CMPL    R0, #SIOCGIFNETMASK
+        BEQL    30$
+        CMPL    R0, #SIOCGIFFLAGS
+        BNEQ    86$
+30$:    IFNOWRT #IFR$K_LENGTH, (R7), 85$
+        PUSHL   R0
+        BSBW    IFREQ
+        MOVL    R0, R1
+        MOVL    (SP)+, R0
+        BLBC    R1, 88$
+50$:    MOVL    R0, (R8)+
+        MOVL    R7, (R8)+
+        SOBGTR  R6, 10$
+        BRW     QUEUE
+80$:    MOVL    #SS$_BADPARAM, R0
+        BRW     FREE
+85$:    MOVL    #SS$_ACCVIO, R0
+        BRW     FREE
+86$:    MOVL    #SS$_ILLCNTRFUNC, R0
+        BRW     FREE
+88$:    MOVL    R1, R0
+        BRW     FREE
+96$:    MOVL    #SS$_BADPARAM, R0
+        RSB
+97$:    MOVL    #SS$_ACCVIO, R0
+99$:    RSB
+
+; CONNECT: IO$_ACCESS, to the name p3.
+CONNECT:
+        TSTL    36(AP)
+        BNEQ    5$
+        BRW     BADPARAM
+5$:     MOVL    #PORT$C_CONNECT, R8
+        CLRL    R1
+        BSBW    NEWIRP
+        BLBC    R0, 90$
+        MOVL    36(AP), R0
+        BSBW    INNAME
+        BLBC    R0, 80$
+        TSTL    R2
+        BNEQ    10$
+        CMPL    UCB$L_PROTO(R5), #TCPIP$C_ICMP
+        BEQL    10$
+        MOVL    #SS$_IVADDR, R0         ; port 0
+        BRB     80$
+10$:    MOVL    R1, NIRP$A_MSG+PORTMSG$L_ADDR(R3)
+        MOVW    R2, NIRP$A_MSG+PORTMSG$W_PORT(R3)
+        BRW     QUEUE
+80$:    BRW     FREE
+90$:    RSB
+
+; ACCEPT: IO$_ACCESS!IO$M_ACCEPT, the new channel in the word at p4, which
+; goes to a new unit at once; the response gives it its connection, and
+; the peer's name goes to p3.
+ACCEPT: MOVL    40(AP), R0
+        BNEQ    5$
+        BRW     BADPARAM
+5$:     IFNORD  #2, (R0), 85$
+        MOVZWL  (R0), R6                ; the channel
+        BEQL    80$
+        CMPL    R6, #PCB$C_MAXCHAN
+        BGTRU   80$
+        BBC     R6, PCB$L_CHANS(R4), 80$
+        MOVAB   G^IOC$AB_BGA0, R1
+        CMPL    PCB$AL_CCB(R4)[R6], R1
+        BNEQ    80$
+        MOVL    #PORT$C_ACCEPT, R8
+        CLRL    R1
+        BSBW    NEWIRP
+        BLBC    R0, 90$
+        MOVL    36(AP), R0
+        BEQL    10$
+        MOVAL   NIRP$L_NAME(R3), R2
+        BSBW    OUTNAME
+        BLBC    R0, 70$
+10$:    MOVL    R6, R0
+        PUSHL   R3
+        BSBW    NEWUNIT
+        MOVL    (SP)+, R3
+        BLBC    R0, 70$
+        MOVL    #TCPIP$C_TCP, UCB$L_PROTO(R2)
+        MOVL    R2, IRP$L_BUFADR(R3)    ; the new unit
+        BRW     QUEUE
+70$:    BRW     FREE
+80$:    MOVL    #SS$_IVCHAN, R0
+        RSB
+85$:    MOVL    #SS$_ACCVIO, R0
+90$:    RSB
+
+; SEND: IO$_WRITEVBLK, p2 bytes at p1, which go into the IRP at once; a
+; datagram socket's to the name p3.
+SEND:   MOVL    28(AP), R2
+        BNEQ    5$
+        BRW     BADPARAM                ; a buffer list, p5
+5$:     MOVL    32(AP), R6
+        CMPL    R6, #PORT$K_BUFSIZE
+        BLEQU   10$
+        MOVL    #SS$_IVBUFLEN, R0
+        CMPL    UCB$L_PROTO(R5), #TCPIP$C_TCP
+        BEQL    8$
+        MOVL    #SS$_TOOMUCHDATA, R0    ; a datagram goes in one piece
+8$:     RSB
+10$:    IFNORD  R6, (R2), 85$
+        MOVL    #PORT$C_SEND, R8
+        MOVL    R6, R1
+        BSBW    NEWIRP
+        BLBC    R0, 90$
+        MOVL    R6, NIRP$A_MSG+PORTMSG$L_LEN(R3)
+        MOVL    36(AP), R0
+        BEQL    20$
+        CMPL    UCB$L_PROTO(R5), #TCPIP$C_TCP
+        BEQL    20$
+        BSBW    INNAME
+        BLBC    R0, 80$
+        MOVL    R1, NIRP$A_MSG+PORTMSG$L_ADDR(R3)
+        MOVW    R2, NIRP$A_MSG+PORTMSG$W_PORT(R3)
+        BISB2   #PORT$M_TO, NIRP$A_MSG+PORTMSG$B_FLAGS(R3)
+20$:    PUSHR   #^M<R3, R4, R5>
+        MOVC3   R6, @28(AP), NIRP$A_DATA(R3)
+        POPR    #^M<R3, R4, R5>
+        BRW     QUEUE
+80$:    BRW     FREE
+85$:    MOVL    #SS$_ACCVIO, R0
+90$:    RSB
+
+; RECV: IO$_READVBLK, at most p2 bytes into p1, 4096 if p2 is more, a
+; buffered read; a datagram's sender's name to p3. RECV1: the same, with
+; R7 = more IRP$L_STS bits.
+RECV:   CLRL    R7
+RECV1:  MOVL    28(AP), R2
+        BNEQ    5$
+        BRW     BADPARAM                ; a buffer list, p6
+5$:     MOVL    32(AP), R6
+        IFNOWRT R6, (R2), 85$
+        CMPL    R6, #PORT$K_BUFSIZE
+        BLEQU   10$
+        MOVL    #PORT$K_BUFSIZE, R6
+10$:    MOVL    #PORT$C_RECV, R8
+        MOVL    R6, R1
+        BSBW    NEWIRP
+        BLBC    R0, 90$
+        MOVL    R6, NIRP$A_MSG+PORTMSG$L_LEN(R3)
+        MOVL    R6, IRP$L_BCNT(R3)
+        BISL3   #IRP$M_BUFIO, R7, IRP$L_STS(R3)
+        BBS     #NIRP$V_LINE, R7, 20$   ; a READPROMPT's p3 is no name
+        MOVL    36(AP), R0
+        BEQL    20$
+        CMPL    UCB$L_PROTO(R5), #TCPIP$C_TCP
+        BEQL    20$
+        MOVAL   NIRP$L_NAME(R3), R2
+        BSBW    OUTNAME
+        BLBC    R0, 80$
+20$:    BRW     QUEUE
+80$:    BRW     FREE
+85$:    MOVL    #SS$_ACCVIO, R0
+90$:    RSB
+
+; DEACCESS: IO$_DEACCESS, a CLOSE, or with IO$M_SHUTDOWN a SHUTDOWN of the
+; direction p4.
+DEACCESS:
+        MOVL    #PORT$C_CLOSE, R8
+        BBC     #IO$V_SHUTDOWN, R7, 10$
+        CMPL    40(AP), #TCPIP$C_DSC_ALL
+        BLEQU   5$
+        BRW     BADPARAM
+5$:     MOVL    #PORT$C_SHUTDOWN, R8
+10$:    CLRL    R1
+        BSBW    NEWIRP
+        BLBC    R0, 90$
+        MOVL    40(AP), NIRP$A_MSG+PORTMSG$L_ARG1(R3)
+        BRW     QUEUE
 90$:    RSB
 
 ; PROMPT: IO$_READPROMPT on a unit: a send of the prompt, for the driver
@@ -378,174 +859,133 @@ PROMPT: MOVL    48(AP), R6
 85$:    MOVL    #SS$_ACCVIO, R0
 90$:    RSB
 
-; OPEN: IO$_SETMODE on BGA0:. The channel goes to a new unit, which the
-; response gives its connection.
-OPEN:   MOVL    28(AP), R2
-        IFNORD  #4, (R2), 85$
-        CMPW    (R2), #PORT$C_TCP
-        BEQL    5$
-        BRW     BADPARAM
-85$:    MOVL    #SS$_ACCVIO, R0
-        RSB
-5$:
-        MOVZWL  8(AP), R0
-        BSBB    NEWUNIT
+; BINDLISTEN: R3 = an OPEN's or SETMODE's IRP, AP = $QIO's arguments.
+; Puts the local name p3 in its command, to bind, and the backlog p4, to
+; listen. R0 = SS$_NORMAL, INNAME's failure, or SS$_NOPRIV for a port
+; below 1024 without SYSPRV or BYPASS. Uses R0-R2.
+BINDLISTEN:
+        .JSB_ENTRY  SCRATCH=<R2>
+        MOVL    36(AP), R0
+        BEQL    20$
+        BSBW    INNAME
         BLBC    R0, 90$
-        MOVL    R2, R5
-        MOVL    #PORT$C_OPEN, R8
-        CLRL    R1
-        BSBW    NEWIRP
-        BLBS    R0, 10$
-        MOVZWL  8(AP), R1               ; no IRP: back to BGA0:
-        MOVAB   G^IOC$AB_BGA0, PCB$AL_CCB(R4)[R1]
-        PUSHL   R0
-        MOVL    R5, R0
-        MOVL    #UCB$K_NETLENGTH, R1
-        BSBW    EXE$DEANONPGDSIZ
-        MOVL    (SP)+, R0
-        RSB
-10$:    MOVW    #PORT$C_TCP, NIRP$A_MSG+PORTMSG$W_PROTO(R3)
-        BRW     QUEUE
-90$:    RSB
-
-; SETCHAR, SENSECHAR: IO$_SETCHAR and IO$_SENSECHAR on BGA0:, IFCONFIG
-; on the control connection.
-SETCHAR:
+        TSTL    R2
+        BEQL    10$
+        CMPL    R2, #1024
+        BGEQU   10$
+        IFPRIV  SYSPRV, 10$
+        IFPRIV  BYPASS, 10$
         MOVL    #SS$_NOPRIV, R0
-        IFNPRIV OPER, 90$
-        MOVL    28(AP), R2
-        IFNORD  #16, (R2), 85$
-        MOVL    #PORT$C_IFCONFIG, R8
-        CLRL    R1
-        BSBW    NEWIRP
-        BLBC    R0, 90$
-        MOVL    28(AP), R2
-        BICB3   #^C<PORT$M_DHCP>, 12(R2), R0
-        BISB3   #PORT$M_SET, R0, NIRP$A_MSG+PORTMSG$B_FLAGS(R3)
-        MOVL    (R2), NIRP$A_MSG+PORTMSG$L_ADDR(R3)
-        MOVL    4(R2), NIRP$A_MSG+PORTMSG$L_ARG1(R3)
-        MOVL    8(R2), NIRP$A_MSG+PORTMSG$L_ARG2(R3)
-        BRW     QUEUE
-85$:    MOVL    #SS$_ACCVIO, R0
-90$:    RSB
-SENSECHAR:
-        MOVL    28(AP), R2
-        IFNOWRT #16, (R2), 85$
-        MOVL    #PORT$C_IFCONFIG, R8
-        MOVL    #16, R1
-        BSBW    NEWIRP
-        BLBC    R0, 90$
-        MOVL    #16, IRP$L_BCNT(R3)
-        MOVL    #IRP$M_BUFIO, IRP$L_STS(R3)
-        BRW     QUEUE
-85$:    MOVL    #SS$_ACCVIO, R0
-90$:    RSB
-
-; PING: IO$_ACCESS on BGA0:, an echo request to the address p3.
-PING:   MOVL    #PORT$C_PING, R8
-        CLRL    R1
-        BSBW    NEWIRP
-        BLBC    R0, 90$
-        MOVL    36(AP), NIRP$A_MSG+PORTMSG$L_ADDR(R3)
-        BRW     QUEUE
-90$:    RSB
-
-; ADDRESS: R8 = PORT$C_BIND or PORT$C_CONNECT, with the address p3, port p4.
-ADDRESS:
-        CMPL    40(AP), #65535
-        BGTRU   80$
-        CLRL    R1
-        BSBW    NEWIRP
-        BLBC    R0, 90$
-        MOVL    36(AP), NIRP$A_MSG+PORTMSG$L_ADDR(R3)
-        MOVW    40(AP), NIRP$A_MSG+PORTMSG$W_PORT(R3)
-        BRW     QUEUE
-80$:    MOVL    #SS$_BADPARAM, R0
-90$:    RSB
-
-; LISTEN: IO$_SETMODE!IO$M_LISTEN, backlog p4.
-LISTEN: CLRL    R1
-        BSBW    NEWIRP
-        BLBC    R0, 90$
-        MOVL    40(AP), NIRP$A_MSG+PORTMSG$L_ARG1(R3)
-        BRW     QUEUE
-90$:    RSB
-
-; ACCEPT: IO$_ACCESS!IO$M_ACCEPT, the new channel p4, which goes to a new
-; unit at once; the response gives it its connection.
-ACCEPT: MOVL    40(AP), R0
+        RSB
+10$:    MOVL    R1, NIRP$A_MSG+PORTMSG$L_ADDR(R3)
+        MOVW    R2, NIRP$A_MSG+PORTMSG$W_PORT(R3)
+        BISB2   #PORT$M_BIND, NIRP$A_MSG+PORTMSG$B_FLAGS(R3)
+20$:    MOVZBL  40(AP), R0
         BEQL    80$
-        CMPL    R0, #PCB$C_MAXCHAN
-        BGTRU   80$
-        BBC     R0, PCB$L_CHANS(R4), 80$
-        MOVAB   G^IOC$AB_BGA0, R1
-        CMPL    PCB$AL_CCB(R4)[R0], R1
-        BNEQ    80$
-        BSBW    NEWUNIT
-        BLBC    R0, 90$
-        PUSHL   R2
-        MOVL    #PORT$C_ACCEPT, R8
-        CLRL    R1
-        BSBW    NEWIRP
-        MOVL    (SP)+, R2
-        BLBC    R0, 90$
-        MOVL    R2, IRP$L_BUFADR(R3)    ; the new unit
-        BRW     QUEUE
-80$:    MOVL    #SS$_IVCHAN, R0
+        MOVL    R0, NIRP$A_MSG+PORTMSG$L_ARG1(R3)
+        BISB2   #PORT$M_LISTEN, NIRP$A_MSG+PORTMSG$B_FLAGS(R3)
+80$:    MOVL    #SS$_NORMAL, R0
 90$:    RSB
 
-; SEND: IO$_WRITEVBLK, p2 bytes at p1, which go into the IRP at once.
-SEND:   MOVL    28(AP), R2
-        MOVL    32(AP), R6
-        CMPL    R6, #PORT$K_BUFSIZE
-        BGTRU   80$
-        IFNORD  R6, (R2), 85$
-        MOVL    #PORT$C_SEND, R8
-        MOVL    R6, R1
-        BSBW    NEWIRP
-        BLBC    R0, 90$
-        MOVL    R6, NIRP$A_MSG+PORTMSG$L_LEN(R3)
-        PUSHR   #^M<R3, R4, R5>
-        MOVC3   R6, @28(AP), NIRP$A_DATA(R3)
-        POPR    #^M<R3, R4, R5>
-        BRW     QUEUE
-80$:    MOVL    #SS$_IVBUFLEN, R0
+; IFREQ: R7 = an ioctl's IFREQ. R0 = SS$_NORMAL if it can be read and
+; names WE0, else SS$_ACCVIO or SS$_NOSUCHDEV. Keeps every other register.
+IFREQ:
+        .JSB_ENTRY
+        MOVL    #SS$_ACCVIO, R0
+        IFNORD  #IFR$K_LENGTH, (R7), 90$
+        MOVL    #SS$_NOSUCHDEV, R0
+        CMPL    IFR$T_NAME(R7), #WE0
+        BNEQ    90$
+        MOVL    #SS$_NORMAL, R0
+90$:    RSB
+
+; ROUTE: R7 = an ioctl's ORTENTRY. R0 = SS$_NORMAL if it can be read and
+; is the default route's, to 0.0.0.0, else SS$_ACCVIO or SS$_BADPARAM.
+; Keeps every other register.
+; ponytail: one route, the default; a routing table with a second
+; interface.
+ROUTE:
+        .JSB_ENTRY
+        MOVL    #SS$_ACCVIO, R0
+        IFNORD  #ORT$K_LENGTH, (R7), 90$
+        MOVL    #SS$_BADPARAM, R0
+        TSTL    ORT$L_DST_SIN_ADDR(R7)
+        BNEQ    90$
+        MOVL    #SS$_NORMAL, R0
+90$:    RSB
+
+; INNAME: R0 = an item_list_2 of a socket name, a SOCKADDRIN, BSD 4.3's
+; or 4.4's. R1 = its address, R2 = its port, R0 = SS$_NORMAL, or
+; SS$_ACCVIO, SS$_BADPARAM for another item, SS$_IVBUFLEN for one too
+; short, SS$_PROTOCOL for another family. Keeps every other register.
+INNAME:
+        .JSB_ENTRY  OUTPUT=<R1, R2>
+        IFNORD  #8, (R0), 85$
+        CMPW    2(R0), #TCPIP$C_SOCK_NAME
+        BNEQ    80$
+        CMPW    (R0), #8                ; its family, port and address
+        BLSSU   83$
+        MOVL    4(R0), R2
+        IFNORD  #8, (R2), 85$
+        CMPW    (R2), #TCPIP$C_AF_INET
+        BEQL    10$
+        CMPB    1(R2), #TCPIP$C_AF_INET ; BSD 4.4's, after its length
+        BNEQ    84$
+10$:    MOVL    4(R2), R1
+        MOVZBL  2(R2), R0               ; the port, high byte first
+        ASHL    #8, R0, R0
+        MOVZBL  3(R2), R2
+        BISL2   R0, R2
+        MOVL    #SS$_NORMAL, R0
+        RSB
+80$:    MOVL    #SS$_BADPARAM, R0
+        RSB
+83$:    MOVL    #SS$_IVBUFLEN, R0
+        RSB
+84$:    MOVL    #SS$_PROTOCOL, R0
         RSB
 85$:    MOVL    #SS$_ACCVIO, R0
-90$:    RSB
+        RSB
 
-; RECV: IO$_READVBLK, at most p2 bytes into p1, 4096 if p2 is more, a
-; buffered read. RECV1: the same, with R7 = more IRP$L_STS bits.
-RECV:   CLRL    R7
-RECV1:  MOVL    28(AP), R2
-        MOVL    32(AP), R6
-        IFNOWRT R6, (R2), 85$
-        CMPL    R6, #PORT$K_BUFSIZE
-        BLEQU   10$
-        MOVL    #PORT$K_BUFSIZE, R6
-10$:    MOVL    #PORT$C_RECV, R8
-        MOVL    R6, R1
-        BSBW    NEWIRP
-        BLBC    R0, 90$
-        MOVL    R6, NIRP$A_MSG+PORTMSG$L_LEN(R3)
-        MOVL    R6, IRP$L_BCNT(R3)
-        BISL3   #IRP$M_BUFIO, R7, IRP$L_STS(R3)
-        BRW     QUEUE
+; OUTNAME: R0 = an item_list_3 for a socket name, R2 = where an IRP keeps
+; one. Keeps its buffer, the buffer's length and the address of the length
+; written there. R0 = SS$_NORMAL, or SS$_ACCVIO, SS$_BADPARAM for
+; another item. Keeps every other register.
+OUTNAME:
+        .JSB_ENTRY
+        PUSHL   R1
+        IFNORD  #12, (R0), 85$
+        CMPW    2(R0), #TCPIP$C_SOCK_NAME
+        BNEQ    80$
+        MOVZWL  (R0), R1
+        IFNOWRT R1, @4(R0), 85$
+        MOVL    4(R0), (R2)
+        MOVL    R1, 4(R2)
+        MOVL    8(R0), 8(R2)
+        BEQL    10$
+        IFNOWRT #4, @8(R0), 85$
+10$:    MOVL    #SS$_NORMAL, R0
+        BRB     90$
+80$:    MOVL    #SS$_BADPARAM, R0
+        BRB     90$
 85$:    MOVL    #SS$_ACCVIO, R0
-90$:    RSB
+90$:    MOVL    (SP)+, R1
+        RSB
 
 ; NEWIRP: R1 = the bytes of data past the command, R8 = a PORT$C_, and
 ; what NET$FDT has. Makes the request's IRP, with the command, of that
-; type and otherwise 0: R3 = it, R0 = SS$_NORMAL, or IOC$ALLOCIRP's
-; failure. Uses R1 and R2.
+; type and otherwise 0, and nowhere to write a name or an ioctl's result
+; yet, which NET$POST writes: R3 = it, R0 = SS$_NORMAL, or
+; IOC$ALLOCIRP's failure. Uses R1 and R2.
 NEWIRP:
         .JSB_ENTRY  OUTPUT=<R3>, SCRATCH=<R2>
-        ADDL2   #PORTMSG$K_LENGTH, R1
+        ADDL2   #NIRP$K_EXT, R1
         BSBW    IOC$ALLOCIRP
         BLBC    R0, 90$
-        MOVL    #PORTMSG$K_LENGTH, IRP$L_PROMPT(R3)
+        MOVL    #NIRP$K_EXT, IRP$L_PROMPT(R3)
+        MOVAB   NET$POST, IRP$L_POST(R3)
         MOVAB   NIRP$A_MSG(R3), R1
-        MOVL    #PORTMSG$K_LENGTH/4, R2
+        MOVL    #NIRP$K_EXT/4, R2
 10$:    CLRL    (R1)+
         SOBGTR  R2, 10$
         MOVB    R8, NIRP$A_MSG+PORTMSG$B_TYPE(R3)
@@ -570,6 +1010,7 @@ NEWUNIT:
         CLRL    UCB$L_START(R2)
         CLRL    UCB$L_ERRCNT(R2)
         CLRL    UCB$L_CONN(R2)
+        CLRL    UCB$L_PROTO(R2)
         MOVL    NET$GL_UNITS, UCB$L_LINK(R2)
         MOVL    R2, NET$GL_UNITS
         MOVL    #1, UCB$L_REFC(R2)
@@ -677,7 +1118,7 @@ INTERNAL:
         .JSB_ENTRY  SCRATCH=<R2, R3>
         PUSHR   #^M<R4, R5>
         PUSHR   #^M<R0, R1>
-        MOVL    #IRP$K_LENGTH+PORTMSG$K_LENGTH, R1
+        MOVL    #IRP$K_LENGTH+NIRP$K_EXT, R1
         BSBW    EXE$ALONONPAGED
         BLBS    R0, 10$
         POPR    #^M<R0, R1>
@@ -686,6 +1127,7 @@ INTERNAL:
         MOVW    R1, IRP$W_SIZE(R3)
         MOVB    #DYN$C_IRP, IRP$B_TYPE(R3)
         CLRL    IRP$L_PID(R3)
+        CLRL    IRP$L_POST(R3)
         MOVAB   G^IOC$AB_BGA0, IRP$L_UCB(R3)
         MOVAB   NIRP$A_MSG(R3), R1
         MOVL    #PORTMSG$K_LENGTH/4, R2
@@ -737,7 +1179,8 @@ NET$CANCEL::
         MOVL    #PORT$C_CANCEL, R1
         BSBW    INTERNAL
         MOVL    (SP)+, R3
-30$:    MOVL    R7, R0
+30$:    CLRL    IRP$L_POST(R3)          ; it got nothing
+        MOVL    R7, R0
         CLRL    R1
         BSBW    IOC$REQCOM
 40$:    AOBLSS  #PORT$K_TAGS, R8, 10$

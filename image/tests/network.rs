@@ -7,8 +7,9 @@
 //! one without /DEFAULT that fails, PING to QEMU's gateway and to
 //! an address nobody has, and at the TCPIP> prompt SHOW
 //! INTERFACE, HELP, an interface there is not, and EXIT; then TCPTEST, which
-//! connects to a server here, through QEMU's guestfwd, and accepts a
-//! connection from a client here, through hostfwd, and SET HOST to
+//! connects to a server here, through QEMU's guestfwd, accepts a
+//! connection from a client here, through hostfwd, and sends a datagram
+//! from here back twice, to its sender and connected to it; and SET HOST to
 //! itself, SHOW SYSTEM there, and LOGOUT; then TELNET to a port here,
 //! through guestfwd, a line each way, and with /PORT to one there cannot be;
 //! then COPY/HTTP from web servers here, through guestfwd, to the data
@@ -26,7 +27,7 @@
 
 use std::fs;
 use std::io::{Read, Write};
-use std::net::{TcpListener, TcpStream};
+use std::net::{TcpListener, TcpStream, UdpSocket};
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, Command, Stdio};
 use std::thread::{self, sleep};
@@ -171,6 +172,14 @@ fn data_disk(path: &Path, command: &str) {
     vol.flush().unwrap();
 }
 
+/// Whether SHOW SYSTEM, in a remote login, lists itself in a process named
+/// for its connection's unit, _BGnn:, whose number depends on the sockets
+/// before it.
+fn remote_login(text: &str) -> bool {
+    text.lines()
+        .any(|l| l.contains(" _BG") && l.contains(":          CUR     4 SHOW.EXE"))
+}
+
 #[test]
 fn network() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
@@ -211,6 +220,7 @@ fn network() {
     let blob: Vec<u8> = (0..40000u32).map(|i| (i * 7 % 256) as u8).collect();
     let (blob_port, blob_server) = web_server("200 OK", blob.clone());
     let fwd = free_port();
+    let ufwd = free_port();
     data_disk(
         &out.join("net-data.img"),
         "INTERFACE 0.0.0.0 0.0.0.0 0.0.0.0 DHCP",
@@ -222,7 +232,7 @@ fn network() {
          guestfwd=tcp:10.0.2.100:80-tcp:127.0.0.1:{index_port},\
          guestfwd=tcp:10.0.2.100:7781-tcp:127.0.0.1:{missing_port},\
          guestfwd=tcp:10.0.2.100:7782-tcp:127.0.0.1:{blob_port},\
-         hostfwd=tcp:127.0.0.1:{fwd}-:7778"
+         hostfwd=tcp:127.0.0.1:{fwd}-:7778,hostfwd=udp:127.0.0.1:{ufwd}-:7780"
     );
     let mut vax = Vax::boot(
         &boot,
@@ -257,6 +267,24 @@ fn network() {
         }
         String::new()
     });
+    // Until TCPTEST's socket is there, the datagram is lost: again and again.
+    let datagrams = thread::spawn(move || {
+        let u = UdpSocket::bind("127.0.0.1:0").unwrap();
+        u.set_read_timeout(Some(Duration::from_millis(500)))
+            .unwrap();
+        let mut buf = [0; 100];
+        for _ in 0..100 {
+            u.send_to(b"datagram from the host\r\n", ("127.0.0.1", ufwd))
+                .unwrap();
+            if let Ok(n) = u.recv(&mut buf) {
+                let first = String::from_utf8_lossy(&buf[..n]).into_owned();
+                u.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
+                let n = u.recv(&mut buf).unwrap_or(0);
+                return (first, String::from_utf8_lossy(&buf[..n]).into_owned());
+            }
+        }
+        (String::new(), String::new())
+    });
     vax.command("RUN TCPTEST");
     vax.command("SET HOST 10.0.2.15");
     vax.command("SHOW SYSTEM");
@@ -279,6 +307,8 @@ fn network() {
     print!("{text}");
     assert_eq!(host.join().unwrap(), "hello from vaxpunk\r\n");
     assert_eq!(client.join().unwrap(), "ping from the host\r\n");
+    let echo = "datagram from the host\r\n".to_string();
+    assert_eq!(datagrams.join().unwrap(), (echo.clone(), echo));
     assert_eq!(echoer.join().unwrap(), "netcat\r\n");
     assert_eq!(
         readme.join().unwrap(),
@@ -313,9 +343,11 @@ fn network() {
         "hello from the host",
         "TCPTEST: accepted a connection from address 0202000A",
         "ping from the host",
+        "TCPTEST: UDP on port 7780",
+        "TCPTEST: a datagram from address 0202000A",
+        "datagram from the host",
         "TCPTEST: ok",
         "TCPIP$TELNET    LEF     4 TELNETD.EXE",
-        "_BG02:          CUR     4 SHOW.EXE",
         "echo: netcat",
         "%SYSTEM-F-BADPARAM",
         "%REM-S-END, control returned to the local node",
@@ -331,6 +363,7 @@ fn network() {
     ] {
         assert!(text.contains(line), "no {line:?}");
     }
+    assert!(remote_login(&text), "no remote DCL's SHOW SYSTEM");
     let mut img = Image::open(out.join("net-data.img"), Mode::ReadOnly).unwrap();
     let fid = img.lookup("[000000]READ_ME.TXT").unwrap();
     let mut fetched = Vec::new();
@@ -387,7 +420,6 @@ fn network() {
     for line in [
         "%TCPIP-I-SET, WE0: 10.0.0.2         255.255.255.0    10.0.0.1",
         "TCPIP$TELNET    LEF     4 TELNETD.EXE",
-        "_BG02:          CUR     4 SHOW.EXE",
         "%REM-S-END, control returned to the local node",
         "64 bytes from 10.0.0.1: icmp_seq=1 ttl=255 time=",
         "2 packets transmitted, 2 packets received, 0% packet loss",
@@ -395,6 +427,7 @@ fn network() {
     ] {
         assert!(b.contains(line), "no {line:?}");
     }
+    assert!(remote_login(&b), "no remote DCL's SHOW SYSTEM");
     let mut img = Image::open(out.join("b-data.img"), Mode::ReadOnly).unwrap();
     let fid = img.lookup("[000000]TCPIP$CONFIG.DAT").unwrap();
     let mut saved = Vec::new();

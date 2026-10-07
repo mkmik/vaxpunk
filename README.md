@@ -288,7 +288,10 @@ QEMU has a virtio-net device on its user network, where the guest is
 `10.0.2.15/24`, the host `10.0.2.2`, and a DHCP server gives the guest
 those. The root task starts the TCP/IP component, lwIP, beside the
 executive, which talks to it through a port of shared pages and drives
-it as `BGA0:` ([DESIGN-0003](docs/design/0003-tcpip-port.md)). At boot
+it as `BGA0:` ([DESIGN-0003](docs/design/0003-tcpip-port.md)). Programs
+make TCP, UDP and raw ICMP sockets on it as TCP/IP Services' do, with
+`$QIO` on `TCPIP$DEVICE:`, item lists and ioctls
+([ADR-0024](docs/adr/0024-sockets-have-tcpip-services-qio-interface.md)). At boot
 `TCPIP START COMMUNICATION` sets the interface, `WE0`, from the saved
 settings, or from DHCP if none are saved. TCP/IP Services' `TCPIP`
 utility changes it ([ADR-0022](docs/adr/0022-tcpip-utility-and-dhcp.md)),

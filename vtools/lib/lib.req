@@ -304,7 +304,7 @@ MACRO
 ! $UCBDEF
 LITERAL
     UCB$K_LENGTH = 28,
-    UCB$K_NETLENGTH = 44,  ! a network unit, which BGA0: clones
+    UCB$K_NETLENGTH = 48,  ! a network unit, which BGA0: clones
     UCB$K_MBLENGTH = 60,  ! a mailbox
     UCB$V_PRMMBX = 0,  ! UCB$L_MBSTS: permanent, until $DELMBX
     UCB$M_PRMMBX = 1,
@@ -323,6 +323,7 @@ MACRO
     UCB$L_LINK = 32, 0, 32, 0 %,  ! a cloned unit's, a network unit's or a mailbox's: the next of its kind
     UCB$L_REFC = 36, 0, 32, 0 %,  ! the channels assigned to it
     UCB$L_UNIT = 40, 0, 32, 0 %,  ! its number, nn in its name, BGnn or MBnn
+    UCB$L_PROTO = 44, 0, 32, 0 %,  ! a network unit's socket's protocol, TCPIP$C_
     UCB$L_MSGQFL = 44, 0, 32, 0 %,  ! a mailbox's messages, oldest first
     UCB$L_MSGQBL = 48, 0, 32, 0 %,
     UCB$L_MAXMSG = 52, 0, 32, 0 %,  ! the longest message it takes
@@ -330,7 +331,7 @@ MACRO
 
 ! $IRPDEF
 LITERAL
-    IRP$K_LENGTH = 76,
+    IRP$K_LENGTH = 80,
     IRP$V_BUFIO = 0,  ! a read whose data IOC$POST copies to the caller's buffer
     IRP$M_BUFIO = 1,
     IRP$V_STARTED = 1,  ! the terminal has written its prompt
@@ -357,32 +358,40 @@ MACRO
     IRP$L_BUFADR = 60, 0, 32, 0 %,  ! the caller's buffer, p1
     IRP$L_BCNT = 64, 0, 32, 0 %,  ! its size, p2
     IRP$L_PROMPT = 68, 0, 32, 0 %,  ! a read's prompt's size: it is past IRP$K_LENGTH, and the data past it
-    IRP$L_MEDIA = 72, 0, 32, 0 %;  ! a disk's LBN, p3
+    IRP$L_MEDIA = 72, 0, 32, 0 %,  ! a disk's LBN, p3
+    IRP$L_POST = 76, 0, 32, 0 %;  ! a routine IOC$POST JSBs, R6 the IRP, in its process, or 0
 
 ! $PORTDEF
 LITERAL
-    PORT$K_VERSION = 1,  ! PORT$L_VERSION once the component is ready
+    PORT$K_VERSION = 2,  ! PORT$L_VERSION once the component is ready
     PORT$K_PAGES = 17,
     PORT$K_RING = 32,  ! messages in a ring
     PORT$K_TAGS = 32,  ! tags, a command's each: the credits
     PORT$K_BUFFERS = 16,  ! the tags that have a buffer
     PORT$K_BUFSIZE = 4096,
     PORTMSG$K_LENGTH = 32,
-    PORT$C_OPEN = 1,  ! PROTO: TCP; response: CONN
-    PORT$C_BIND = 2,  ! ADDR, PORT: the local address
-    PORT$C_LISTEN = 3,  ! ARG1: the backlog
-    PORT$C_ACCEPT = 4,  ! response: ARG1 the new connection, ADDR and PORT the peer's
-    PORT$C_CONNECT = 5,  ! ADDR, PORT: the peer's
-    PORT$C_SEND = 6,  ! LEN bytes from the buffer
-    PORT$C_RECV = 7,  ! at most LEN bytes into the buffer; 0 if the peer closed
-    PORT$C_CLOSE = 8,
-    PORT$C_IFCONFIG = 9,  ! FLAGS SET: ADDR, ARG1 mask, ARG2 gateway, or DHCP's; response: those
-    PORT$C_CANCEL = 10,  ! ends the connection's commands
-    PORT$C_PING = 11,  ! ADDR: an ICMP echo; response: ARG1 the round trip in ms, ARG2 the TTL
+    PORT$C_OPEN = 1,  ! PROTO: TCP, UDP or ICMP, ARG2 its socket type; then as SETMODE; response: CONN
+    PORT$C_SETMODE = 2,  ! FLAGS BIND: ADDR, PORT the local address; LISTEN: ARG1 the backlog
+    PORT$C_ACCEPT = 3,  ! response: ARG1 the new connection, ADDR and PORT the peer's
+    PORT$C_CONNECT = 4,  ! ADDR, PORT: the peer's
+    PORT$C_SEND = 5,  ! LEN bytes from the buffer, a datagram to ADDR, PORT with FLAGS TO
+    PORT$C_RECV = 6,  ! at most LEN bytes into the buffer, 0 if the peer closed; a datagram's sender
+    PORT$C_CLOSE = 7,
+    PORT$C_IFCONFIG = 8,  ! sets those FLAGS has: ADDR, ARG1 the mask, ARG2 the gateway, or DHCP's; response: all
+    PORT$C_CANCEL = 9,  ! ends the connection's commands
+    PORT$C_GETNAME = 10,  ! response: ADDR and PORT the local name, ARG1 and ARG2 the peer's
+    PORT$C_SHUTDOWN = 11,  ! ARG1: 0 no more receives, 1 no more sends, 2 neither
+    PORT$C_ICMP = 1,  ! PROTO, a raw socket's
     PORT$C_TCP = 6,
-    PORT$M_SET = 1,  ! IFCONFIG: set, not only sense
-    PORT$M_LINKUP = 2,  ! IFCONFIG's response: the link is up
-    PORT$M_DHCP = 4,  ! IFCONFIG with SET: ask a DHCP server, and answer once it has
+    PORT$C_UDP = 17,
+    PORT$M_BIND = 1,  ! OPEN, SETMODE: bind
+    PORT$M_LISTEN = 2,  ! OPEN, SETMODE: listen
+    PORT$M_TO = 1,  ! SEND: to ADDR, PORT
+    PORT$M_ADDR = 1,  ! IFCONFIG: set the address
+    PORT$M_MASK = 2,  ! the mask
+    PORT$M_GW = 4,  ! the gateway
+    PORT$M_DHCP = 8,  ! ask a DHCP server, and answer once it has
+    PORT$M_LINKUP = 16,  ! IFCONFIG's response: the link is up
     PORT$C_ST_OK = 0,  ! the statuses, which the driver maps to SS$_
     PORT$C_ST_BADPARAM = 1,
     PORT$C_ST_NOMEM = 2,
@@ -392,7 +401,10 @@ LITERAL
     PORT$C_ST_TIMEOUT = 6,
     PORT$C_ST_ABORTED = 7,
     PORT$C_ST_UNREACH = 8,
-    PORT$C_ST_CLOSED = 9;
+    PORT$C_ST_CLOSED = 9,
+    PORT$C_ST_NOLINKS = 10,
+    PORT$C_ST_ISCONN = 11,
+    PORT$C_ST_IVADDR = 12;
 MACRO
     PORT$L_VERSION = 0, 0, 32, 0 %,
     PORT$L_CMDPUT = 4, 0, 32, 0 %,  ! commands written, by the executive
@@ -408,7 +420,7 @@ MACRO
     PORTMSG$L_STATUS = 8, 0, 32, 0 %,  ! a response's PORT$C_ST_
     PORTMSG$L_LEN = 12, 0, 32, 0 %,  ! bytes in the tag's buffer
     PORTMSG$L_ADDR = 16, 0, 32, 0 %,  ! an IPv4 address, network order
-    PORTMSG$W_PORT = 20, 0, 16, 0 %,  ! a TCP port
+    PORTMSG$W_PORT = 20, 0, 16, 0 %,  ! a TCP or UDP port
     PORTMSG$W_PROTO = 22, 0, 16, 0 %,
     PORTMSG$L_ARG1 = 24, 0, 32, 0 %,
     PORTMSG$L_ARG2 = 28, 0, 32, 0 %;

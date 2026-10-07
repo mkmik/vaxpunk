@@ -8,8 +8,11 @@
 ; As there, SET INTERFACE and SET ROUTE change the running system, and
 ; SET CONFIGURATION INTERFACE and SET ROUTE /PERMANENT the saved
 ; configuration, which START COMMUNICATION applies at boot: the first two
-; sense the settings with IO$_SENSECHAR on BGA0:, the network's port
-; driver (netdriver.mar), change theirs and set them with IO$_SETCHAR;
+; sense the settings with ioctls on a UDP socket, IO$_SENSEMODE on
+; TCPIP$DEVICE:, the network's port driver (netdriver.mar), change theirs
+; and set them with IO$_SETMODE's ioctls, as TCP/IP Services' sockets
+; have them: SIOCGIFADDR, SIOCSIFADDR and the rest on WE0, SIOCGETRT and
+; SIOCADDRT on the default route;
 ; the last two read the saved ones, change theirs and write INTERFACE
 ; address mask gateway, and DHCP if /DHCP said so, in a new version of
 ; TCPIP$CONFIG.DAT on the data disk, the one that may be written. /DHCP
@@ -18,8 +21,8 @@
 ; whether the link is up. START COMMUNICATION, which SYLOGIN.COM runs at
 ; boot, sets the interface from the saved settings, or with DHCP if there
 ; are none, and says so, and starts TELNETD, the remote login server SET
-; HOST talks to. PING sends ICMP echo requests with IO$_ACCESS on BGA0: and writes a
-; line for each reply, as TCP/IP Services' does.
+; HOST talks to. PING sends ICMP echo requests on a raw ICMP socket, one
+; each second, and writes a line for each reply, as TCP/IP Services' does.
 ; ponytail: one interface and one route, the default; a saved file only
 ; once INITIALIZE DKB0: has made a volume there.
 ;
@@ -31,11 +34,18 @@
         $RABDEF
         $IODEF
         $CLIMSGDEF
+        $JPIDEF
+        $INETSYMDEF
+        $SOCKADDRINDEF
+        $IFREQDEF
+        $ORTENTRYDEF
+        $SIOCDEF
 
         .EXTERNAL PUT_LINE, INET_ADDR, CLI$GET_VALUE, CLI$DCL_PARSE, CLI$DISPATCH
         .EXTERNAL LIB$GET_FOREIGN, LIB$GET_INPUT, LIB$SIGNAL, TCPIP_TABLES, HELP$TOPIC
 
-DHCP = 4                                ; SETTINGS' flags: ask a DHCP server (PORT$M_DHCP)
+DHCP = 4                                ; SETTINGS' flags: ask a DHCP server
+ECHOLEN = 64                            ; an echo request: its header and 56 data bytes
 
 ; APPEND "text": appends text to LINE. Uses R0-R5.
         .MACRO  APPEND  TEXT, ?L
@@ -48,9 +58,59 @@ L:      .ASCIC  TEXT
         .ENDM   APPEND
 
         .PSECT  DATA, NOEXE, WRT, LONG
-BGA0:   .ASCID  "BGA0:"
-CHAN:   .LONG   0
+DEVICE: .ASCID  "TCPIP$DEVICE:"
+CHAN:   .LONG   0                       ; a UDP socket, for the ioctls
 IOSB:   .BLKQ   1
+UDP:    .WORD   TCPIP$C_UDP             ; a socket: protocol, type, family
+        .BYTE   TCPIP$C_DGRAM, TCPIP$C_AF_INET
+ICMP:   .WORD   TCPIP$C_ICMP            ; PING's, a raw one
+        .BYTE   TCPIP$C_RAW, TCPIP$C_AF_INET
+; The ioctls' arguments: WE0's address, mask and flags, and the default
+; route, each with its SOCKADDRINs' family.
+IFADDR: .ASCII  "WE0"
+        .BLKB   13
+        .WORD   TCPIP$C_AF_INET
+        .BLKB   14
+IFMASK: .ASCII  "WE0"
+        .BLKB   13
+        .WORD   TCPIP$C_AF_INET
+        .BLKB   14
+IFFLAGS:
+        .ASCII  "WE0"
+        .BLKB   29
+ROUTE:  .LONG   0
+        .WORD   TCPIP$C_AF_INET         ; to 0.0.0.0
+        .BLKB   14
+        .WORD   TCPIP$C_AF_INET         ; through the gateway
+        .BLKB   14
+        .WORD   ORT$M_RTF_UP!ORT$M_RTF_GATEWAY
+        .BLKB   10
+; The ioctl lists, each an item_list_2 of ioctl_comms: sensing all of
+; them, setting all of them, and having a DHCP server set them.
+SENSEIOC:
+        .WORD   32, TCPIP$C_IOCTL
+        .ADDRESS .+4
+        .LONG   SIOCGIFADDR
+        .ADDRESS IFADDR
+        .LONG   SIOCGIFNETMASK
+        .ADDRESS IFMASK
+        .LONG   SIOCGIFFLAGS
+        .ADDRESS IFFLAGS
+        .LONG   SIOCGETRT
+        .ADDRESS ROUTE
+SETIOC: .WORD   24, TCPIP$C_IOCTL
+        .ADDRESS .+4
+        .LONG   SIOCSIFADDR
+        .ADDRESS IFADDR
+        .LONG   SIOCSIFNETMASK
+        .ADDRESS IFMASK
+        .LONG   SIOCADDRT
+        .ADDRESS ROUTE
+DHCPIOC:
+        .WORD   8, TCPIP$C_IOCTL
+        .ADDRESS .+4
+        .LONG   SIOCSIFDHCP
+        .ADDRESS IFADDR
 SETTINGS:                               ; address, mask, gateway, flags: 2 the link is up, 4 DHCP
         .BLKL   4
 CMD:    .BLKB   256                     ; the saved settings, .ASCIC
@@ -88,14 +148,32 @@ TELNETD_NAME:
 TARGET: .LONG   0                       ; PING's host
 COUNT:  .LONG   0                       ; PING's /NUMBER_PACKETS, 0 until CTRL/C
 SECOND: .LONG   -10000000, -1           ; between two of PING's requests
+PCHAN:  .LONG   0                       ; PING's socket
+RIOSB:  .BLKQ   1                       ; its read's
+TNAME:  .WORD   SIN$K_LENGTH, TCPIP$C_SOCK_NAME ; the host's name
+        .ADDRESS TSIN
+TSIN:   .WORD   TCPIP$C_AF_INET
+        .BLKB   14
+PIDITEM:                                ; $GETJPI's item: the PID
+        .WORD   4, JPI$_PID
+        .ADDRESS PID, 0
+        .LONG   0
+PID:    .LONG   0                       ; the requests' identifier
+NOW:    .BLKQ   1
+TTL:    .LONG   0                       ; a reply's TTL,
+MS:     .LONG   0                       ; its round trip,
+NBYTES: .LONG   0                       ; and its ICMP bytes
+PKT:    .BLKB   ECHOLEN                 ; an echo request
+REPLY:  .BLKB   256                     ; what came: an IP header and ICMP
 
         .PSECT  CODE, EXE, LONG
 ; START: the command after TCPIP, or, with none, each one read after
 ; TCPIP> until EXIT or the end of the input. R0 = the command's status,
 ; or, after TCPIP>, SS$_NORMAL: the errors are reported there.
         .ENTRY  START, ^M<R2, R3, R4, R5, R6, R7>
-        $ASSIGN_S DEVNAM=BGA0, CHAN=CHAN
+        $ASSIGN_S DEVNAM=DEVICE, CHAN=CHAN
         BLBC    R0, 90$
+        $QIOW_S CHAN=CHAN, FUNC=#IO$_SETMODE, IOSB=IOSB, P1=UDP
         PUSHAW  LINLEN
         CLRL    -(SP)                   ; no prompt: none
         PUSHAQ  LINDSC
@@ -264,20 +342,33 @@ TAKE:
 90$:    RSB
 
 ; PING: PING host [/NUMBER_PACKETS=n]: an echo request to the host, an
-; address, each second, and a line for each reply, until CTRL/C, or n of
-; them and how many came back.
+; address, each second, on a raw ICMP socket, which needs SYSPRV or
+; BYPASS, and a line for each reply, until CTRL/C, or n of them and how
+; many came back. A request's identifier is the PID, its sequence number
+; its count from 0, and its data starts with when it went, so a reply
+; says its round trip; other ICMP messages are passed over.
 ; ponytail: no round trips' minimum, average and maximum.
         .ENTRY  PING, ^M<R2, R3, R4, R5, R6, R7, R8, R9>
         MOVAB   P_HOST, R5
         MOVAB   TARGET, R6
         BSBW    TAKE
-        BLBC    R0, 90$
+        BLBC    R0, 95$
         CLRL    COUNT
         PRESENT "NUMBER_PACKETS"
         BLBC    R0, 10$
         BSBW    NUMBER
-        BLBC    R0, 90$
-10$:    CLRB    LINE
+        BLBC    R0, 95$
+10$:    $GETJPIW_S ITMLST=PIDITEM
+        BLBC    R0, 95$
+        $ASSIGN_S DEVNAM=DEVICE, CHAN=PCHAN
+        BLBC    R0, 95$
+        $QIOW_S CHAN=PCHAN, FUNC=#IO$_SETMODE, IOSB=IOSB, P1=ICMP
+        BLBC    R0, 15$
+        MOVZWL  IOSB, R0
+15$:    BLBS    R0, 18$
+        BRW     90$
+18$:    MOVL    TARGET, TSIN+SIN$L_ADDR
+        CLRB    LINE
         APPEND  "PING "
         MOVL    TARGET, R3
         BSBW    ADDTEXT
@@ -287,35 +378,52 @@ TAKE:
         APPEND  "): 56 data bytes"
         BSBW    SAY
         CLRQ    R8                      ; R8 sent, R9 answered
-20$:    $QIOW_S CHAN=CHAN, FUNC=#IO$_ACCESS, IOSB=IOSB, P3=TARGET
-        BLBC    R0, 90$
-        INCL    R8
+20$:    BSBW    ECHO
+        $SETIMR_S EFN=#2, DAYTIM=SECOND
+        $QIOW_S CHAN=PCHAN, FUNC=#IO$_WRITEVBLK, IOSB=IOSB, P1=PKT, P2=#ECHOLEN, P3=#TNAME
+        BLBC    R0, 25$
         MOVZWL  IOSB, R0
-        BLBS    R0, 30$
-        CMPL    R0, #SS$_TIMEOUT        ; no reply: no line
+25$:    BLBS    R0, 28$
+        BRW     90$
+28$:    INCL    R8
+30$:    CLRQ    RIOSB                   ; the reply, or the second's end
+        $QIO_S  EFN=#1, CHAN=PCHAN, FUNC=#IO$_READVBLK, IOSB=RIOSB, P1=REPLY, P2=#256
+        BLBS    R0, 32$
+        BRW     90$
+32$:    $WFLOR_S EFN=#1, MASK=#6        ; flag 1 or 2
+        TSTW    RIOSB
         BEQL    40$
-        RET
-30$:    INCL    R9
-        APPEND  "64 bytes from "
+        MOVZWL  RIOSB, R0
+        BLBS    R0, 34$
+        BRW     90$
+34$:    BSBW    MATCH
+        BLBC    R0, 30$                 ; not our reply
+        INCL    R9
+        MOVL    NBYTES, R1
+        BSBW    ADDDEC
+        APPEND  " bytes from "
         MOVL    TARGET, R3
         BSBW    ADDTEXT
         APPEND  ": icmp_seq="
         SUBL3   #1, R8, R1
         BSBW    ADDDEC
         APPEND  " ttl="
-        MOVL    IOSB+4, R1
+        MOVL    TTL, R1
         BSBW    ADDDEC
         APPEND  " time="
-        MOVZWL  IOSB+2, R1
+        MOVL    MS, R1
         BSBW    ADDDEC
         APPEND  " ms"
         BSBW    SAY
-40$:    CMPL    R8, COUNT
-        BEQL    50$
-        $SETIMR_S EFN=#1, DAYTIM=SECOND
+        BRB     50$
+40$:    $CANCEL_S CHAN=PCHAN            ; no reply: no line
         $WAITFR_S EFN=#1
+50$:    CMPL    R8, COUNT
+        BEQL    60$
+        $WAITFR_S EFN=#2                ; the rest of the second
         BRW     20$
-50$:    APPEND  "----"
+60$:    $CANTIM_S
+        APPEND  "----"
         MOVL    TARGET, R3
         BSBW    ADDTEXT
         APPEND  " PING Statistics----"
@@ -333,7 +441,79 @@ TAKE:
         APPEND  "% packet loss"
         BSBW    SAY
         MOVL    #SS$_NORMAL, R0
-90$:    RET
+90$:    PUSHL   R0
+        $DASSGN_S CHAN=PCHAN
+        MOVL    (SP)+, R0
+95$:    RET
+
+; ECHO: R8 = a count. Makes PKT an echo request, its sequence number the
+; count, its identifier the PID, its data when it goes, then zeros, with
+; its checksum. Uses R0-R4.
+ECHO:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4>
+        MOVAB   PKT, R0
+        MOVL    #ECHOLEN/4, R1
+10$:    CLRL    (R0)+
+        SOBGTR  R1, 10$
+        MOVB    #8, PKT                 ; ICMP's echo request
+        MOVW    PID, PKT+4
+        ROTL    #-8, R8, R0             ; the sequence number, high byte first
+        MOVB    R0, PKT+6
+        MOVB    R8, PKT+7
+        $GETTIM_S TIMADR=PKT+8
+        CLRL    R2                      ; the sum of its words, high byte first
+        MOVAB   PKT, R3
+        MOVL    #ECHOLEN/2, R4
+20$:    MOVZBL  (R3)+, R0
+        ASHL    #8, R0, R0
+        MOVZBL  (R3)+, R1
+        BISL2   R1, R0
+        ADDL2   R0, R2
+        SOBGTR  R4, 20$
+30$:    EXTZV   #16, #16, R2, R0        ; with the carries added back
+        BEQL    40$
+        MOVZWL  R2, R2
+        ADDL2   R0, R2
+        BRB     30$
+40$:    MCOML   R2, R2
+        ROTL    #-8, R2, R0
+        MOVB    R0, PKT+2
+        MOVB    R2, PKT+3
+        RSB
+
+; MATCH: R8 = the requests sent. R0 = 1 if REPLY, RIOSB's bytes, is the
+; echo reply to the last, and TTL, MS and NBYTES its TTL, round trip and
+; ICMP bytes, else 0. Uses R0-R4.
+MATCH:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4>
+        MOVZBL  REPLY, R4               ; the IP header's length
+        BICL2   #^C15, R4
+        ASHL    #2, R4, R4
+        MOVZWL  RIOSB+2, R3
+        SUBL2   R4, R3                  ; the ICMP message's
+        CMPL    R3, #16
+        BLSS    80$
+        MOVAB   REPLY[R4], R2
+        TSTB    (R2)                    ; an echo reply
+        BNEQ    80$
+        CMPW    4(R2), PID
+        BNEQ    80$
+        SUBL3   #1, R8, R0
+        ROTL    #-8, R0, R1
+        CMPB    6(R2), R1
+        BNEQ    80$
+        CMPB    7(R2), R0
+        BNEQ    80$
+        MOVL    R3, NBYTES
+        MOVZBL  REPLY+8, TTL
+        $GETTIM_S TIMADR=NOW
+        SUBL3   8(R2), NOW, R0          ; in 100 ns
+        CLRL    R1
+        EDIV    #10000, R0, MS, R0
+        MOVL    #1, R0
+        RSB
+80$:    CLRL    R0
+        RSB
 
 ; NUMBER: the command's /NUMBER_PACKETS, in decimal, into COUNT. R0 =
 ; SS$_NORMAL, or SS$_BADPARAM for one that isn't a number above 0. Uses
@@ -444,11 +624,18 @@ SAVE:
         MOVL    R2, R0
 80$:    RSB
 
-; SETCHAR: sets the interface as SETTINGS says. R0 = a status.
+; SETCHAR: sets the interface as SETTINGS says: its address, mask and
+; default route, or with DHCP whatever a DHCP server gives. R0 = a status.
 SETCHAR:
         .JSB_ENTRY
-        $QIOW_S CHAN=CHAN, FUNC=#IO$_SETCHAR, IOSB=IOSB, P1=SETTINGS
-        BLBC    R0, 90$
+        BBC     #2, SETTINGS+12, 10$    ; DHCP
+        $QIOW_S CHAN=CHAN, FUNC=#IO$_SETMODE, IOSB=IOSB, P5=#DHCPIOC
+        BRB     80$
+10$:    MOVL    SETTINGS, IFADDR+IFR$T_ADDR+SIN$L_ADDR
+        MOVL    SETTINGS+4, IFMASK+IFR$T_ADDR+SIN$L_ADDR
+        MOVL    SETTINGS+8, ROUTE+ORT$L_GATEWAY_SIN_ADDR
+        $QIOW_S CHAN=CHAN, FUNC=#IO$_SETMODE, IOSB=IOSB, P5=#SETIOC
+80$:    BLBC    R0, 90$
         MOVZWL  IOSB, R0
 90$:    RSB
 
@@ -486,12 +673,21 @@ PARSE:
         MOVL    #SS$_NORMAL, R0
 90$:    RET
 
-; SENSE: senses the settings. R0 = a status.
+; SENSE: senses the settings, into SETTINGS, and whether the link is up,
+; 2 in its flags. R0 = a status.
 SENSE:
         .JSB_ENTRY
-        $QIOW_S CHAN=CHAN, FUNC=#IO$_SENSECHAR, IOSB=IOSB, P1=SETTINGS
+        $QIOW_S CHAN=CHAN, FUNC=#IO$_SENSEMODE, IOSB=IOSB, P6=#SENSEIOC
         BLBC    R0, 90$
         MOVZWL  IOSB, R0
+        BLBC    R0, 90$
+        MOVL    IFADDR+IFR$T_ADDR+SIN$L_ADDR, SETTINGS
+        MOVL    IFMASK+IFR$T_ADDR+SIN$L_ADDR, SETTINGS+4
+        MOVL    ROUTE+ORT$L_GATEWAY_SIN_ADDR, SETTINGS+8
+        CLRL    SETTINGS+12
+        BITW    #IFR$M_IFF_RUNNING, IFFLAGS+IFR$W_FLAGS
+        BEQL    90$
+        MOVL    #2, SETTINGS+12
 90$:    RSB
 
 ; SHOWLINE: R1 = a heading, .ASCIC. Writes it, then the settings, each in

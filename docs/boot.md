@@ -137,7 +137,10 @@ interpreter. It is linked high in P1, which tells the executive it is one
 - DCL opens a channel to `SYS$INPUT`, which `$ASSIGN` translates to the
   console, `OPA0:`. Its first command is `@SYS$MANAGER:SYSTARTUP_VMS`,
   which runs the command procedure `DKA0:[SYSMGR]SYSTARTUP_VMS.COM`, the
-  site's own startup, as VMS runs it once at boot: its `MOUNT DKB0:`
+  site's own startup, as VMS runs it once at boot. It defines the system
+  logical name `TCPIP$DEVICE` as `_BGA0:`, the network's template device,
+  which a program assigns a channel to for a socket, as TCP/IP Services'
+  `TCPIP$STARTUP.COM` defines it. Then its `MOUNT DKB0:`
   mounts the data disk, whatever its label, if an `INITIALIZE DKB0:`
   wrote a volume there, at this boot or an earlier one, and prints
   `%MOUNT-I-MOUNTED, label mounted on _DKB0:`. On a blank disk it prints
@@ -146,7 +149,8 @@ interpreter. It is linked high in P1, which tells the executive it is one
   runs `DKA0:[SYSMGR]SYLOGIN.COM`, as VMS runs it
   at each login: it defines the global symbol `HOME`, a command that goes
   back to `[SYSMGR]`, and runs `TCPIP START COMMUNICATION`. With a
-  network, that sets the interface's address, mask and gateway as `TCPIP
+  network, that opens a UDP socket on `TCPIP$DEVICE:` and, with ioctls on
+  it, sets the interface's address, mask and gateway as `TCPIP
   SET CONFIGURATION INTERFACE` and `SET ROUTE /PERMANENT` last saved them
   on the data disk, or asks a DHCP server for them if the saved settings
   say `DHCP` or nothing is saved, waiting up to 10 seconds for its answer, and prints
@@ -272,15 +276,17 @@ interpreter. It is linked high in P1, which tells the executive it is one
   its own tables, or prompts `TCPIP>` for them. `SET INTERFACE WE0
   /HOST=address /NETWORK_MASK=mask`, or `/DHCP`, `SET ROUTE /DEFAULT
   /GATEWAY=address` and `SHOW INTERFACE` sense and set the interface's
-  address, mask and gateway with `$QIOW` on `BGA0:`, the network's port
-  driver. `SET CONFIGURATION INTERFACE WE0` and `SET ROUTE /DEFAULT
+  address, mask and gateway with TCP/IP Services' ioctls (`SIOCSIFADDR`,
+  `SIOCGIFADDR`, `SIOCADDRT` and the rest), `$QIOW` with `IO$_SETMODE`
+  and `IO$_SENSEMODE` on a UDP socket on `TCPIP$DEVICE:`, the network's
+  port driver. `SET CONFIGURATION INTERFACE WE0` and `SET ROUTE /DEFAULT
   /GATEWAY=address /PERMANENT` save them on the data disk for the next
   boot instead. `PING address` sends an ICMP echo request each second
-  with `IO$_ACCESS` on `BGA0:` and prints each reply.
+  on a raw ICMP socket and prints each reply.
   `SET HOST address` runs `RTPAD.EXE`, and so does `TELNET address`,
   which connects to port 23 there:
   the other side's `TELNETD` creates a process named after the
-  connection's unit, `_BG02:`, running DCL with the connection as its
+  connection's unit, `_BG03:` say, running DCL with the connection as its
   input and output, and RTPAD passes lines both ways until `LOGOUT` there
   prints `%REM-S-END` here, or CTRL/Z is typed. `TELNET address port`,
   or `/PORT=port`, connects to that port instead. `RUN TCPTEST` connects
@@ -404,6 +410,7 @@ was waiting for and the last line the console printed.
 
 `cargo test -p boot --test network` boots one system on QEMU's user
 network, sets and shows the interface, runs TCPTEST against a server and
-a client of its own, and logs in to the system itself with `SET HOST`.
+a client of its own and with a UDP datagram both ways, and logs in to the
+system itself with `SET HOST`.
 Then it boots two, on one QEMU socket network, each with a data disk it
 made holding saved settings, and logs in from one to the other.
