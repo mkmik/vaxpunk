@@ -71,6 +71,32 @@ lexemes. `%REMAINING`, `%LENGTH` and `%COUNT` belong to the copy they are
 read from, and an iterative macro's copies are a stream each, so
 `%EXITITERATION` leaves its separator behind.
 
+## Definitions
+
+`vtools/lib/lib.r64` and `starlet.r64`, and `lib.req` and `starlet.req`
+for BLISS-32, are what `vdefs` (`vtools/crates/vdefs`, `just defs`)
+makes of the `$xxxDEF` macros in `lib.mlb` and `starlet.mlb`, so BLISS
+and MACRO-32 code read one definition of each structure. A symbol's kind
+comes from the letters between its `$` and `_`, as VMS names encode it:
+
+| Letters | Becomes |
+| --- | --- |
+| `B`, `W`, `L`, `Q` | a field macro, `PCB$L_STS = 20, 0, 32, 0 %`: offset, position, size, extension, for a `BLOCK[, BYTE]` reference |
+| `A`, `IS`, `PS` | a 32-bit field, sign-extended |
+| `IH`, `PH`, `PQ` | a 64-bit field |
+| `T`, `AB`, `AW`, `AL`, `AQ` | a field of size 0: its address |
+| `K`, `C`, `M`, `S`, `V`, none | a `LITERAL` |
+
+Under BLISS-32 a 64-bit field has size 0, as in DEC's `STARLET.REQ`. A
+`$V_` name is the bit number, not DEC's field macro: the macro libraries
+don't say which field the bit is in, so BLISS code writes
+`.PCB[PCB$L_STS]<PCB$V_WALL, 1>`. Letters the rule doesn't know stop
+vdefs with the symbol's name, to be fixed in the macro library. vdefs's
+test fails when the files are stale. `LIBRARY 'SYS$LIBRARY:LIB'` reads
+`lib.r64` from the include path (`-I vtools/lib`), and the vrun tests pass
+that path; `tests/bliss/defs` reads a PCB that MACRO-32 filled through
+`$PCBDEF`.
+
 ## Structures
 
 A structure's size and body are parsed once, when it is declared, with
