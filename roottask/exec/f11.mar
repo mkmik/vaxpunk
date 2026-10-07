@@ -94,20 +94,20 @@ F11$AB_DKA0::                           ; DKA0:'s VCB, the system disk's
         .ASCII  "DKA0:"
         .BLKB   VCB$L_UCB-VCB$T_DEVNAM-5
         .ADDRESS IOC$AB_DKA0
-        .LONG   0, 0                    ; OWNER, PROT
+        .LONG   0, 0, 0                 ; OWNER, PROT, SBMAPBLKS
 F11$AB_DKB0::                           ; DKB0:'s, the data disk's
         .LONG   1@VCB$V_WRITE, 0, 0, 0
         .ASCII  "DKB0:"
         .BYTE   1                       ; VCB$B_UNIT
         .BLKB   VCB$L_UCB-VCB$T_DEVNAM-6
         .ADDRESS IOC$AB_DKB0
-        .LONG   0, 0                    ; OWNER, PROT
+        .LONG   0, 0, 0                 ; OWNER, PROT, SBMAPBLKS
 F11$AB_MDA0::                           ; MDA0:'s, the ramdisk's
         .LONG   <1@VCB$V_WRITE>!<1@VCB$V_RAMDISK>, 0, 0, 0
         .ASCII  "MDA0:"
         .BLKB   VCB$L_UCB-VCB$T_DEVNAM-5
         .ADDRESS IOC$AB_MDA0
-        .LONG   0, 0                    ; OWNER, PROT
+        .LONG   0, 0, 0                 ; OWNER, PROT, SBMAPBLKS
 F11$A_VCBEND::                          ; past the last VCB
 F11$AB_DIRBLK::                         ; the directory block FIL$SEARCHDIR reads
         .BLKB   BLOCK
@@ -414,6 +414,12 @@ FIL$MOUNT::
         TSTL    R1
         BEQL    80$
         MOVL    R0, VCB$L_SBMAPLBN(R5)
+        MOVAB   F11$AB_FILHDR, R1       ; and its blocks
+        BSBW    FIL$EOF
+        ADDL2   #BLOCK-1, R0
+        DIVL2   #BLOCK, R0
+        DECL    R0
+        MOVL    R0, VCB$L_SBMAPBLKS(R5)
 30$:    BISL2   #1@VCB$V_MOUNTED, VCB$L_STATUS(R5)
         DSBINT  #IPL$_SYNCH             ; the console, a line at a time
         MOVAB   MOUNTED, R1

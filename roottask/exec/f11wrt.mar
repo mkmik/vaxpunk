@@ -90,6 +90,7 @@ RECSIZE = 20                            ; a RESFILES row
 
         .PSECT  EXEC$DATA, NOEXE, WRT, QUAD
 BITBLK: .BLKB   BLOCK                   ; a bitmap block, or the home block
+SBNUM:  .LONG   0                       ; the storage bitmap's block in it
 NEWHDR: .BLKB   BLOCK                   ; a header FIL$INIT makes
 ZEROS:  .BLKB   BLOCK                   ; an index file block not yet used
 RECBUF: .BLKB   BLOCK                   ; a directory record being made
@@ -186,8 +187,8 @@ HDRVBN:
         RSB
 
 ; BITMAP: R0 = 0 to read the index file bitmap's block into BITBLK, 1 to
-; write it from there, 2 and 3 the same for the storage bitmap's. R0 =
-; SS$_NORMAL or the disk's error. Keeps every other register.
+; write it from there, 2 and 3 the same for the storage bitmap's block
+; SBNUM. R0 = SS$_NORMAL or the disk's error. Keeps every other register.
 BITMAP:
         .JSB_ENTRY
         PUSHR   #^M<R1, R2>
@@ -195,7 +196,7 @@ BITMAP:
         BBS     #1, R0, 10$
         MOVL    VCB$L_IBMAPLBN(R2), R2
         BRB     20$
-10$:    MOVL    VCB$L_SBMAPLBN(R2), R2
+10$:    ADDL3   SBNUM, VCB$L_SBMAPLBN(R2), R2
 20$:    MOVL    #1, R1
         BLBS    R0, 30$
         MOVAB   BITBLK, R0
@@ -375,51 +376,93 @@ EXTINDEX:
 90$:    POPR    #^M<R1, R2, R3, R4>
         RSB
 
-; ALLOCBLK: R1 = a block count. Takes the first run of free blocks from
-; the storage bitmap, as many as R1 at most: R2 = its first LBN, R1 = its
-; length. R0 = SS$_NORMAL, SS$_DEVICEFULL if no block is free, or the
-; disk's error. Uses R3.
+; ALLOCBLK: R1 = a block count. Takes the first run of free clusters from
+; the storage bitmap, a set bit each, enough for R1 blocks at most, and
+; no more than a map pointer maps: R2 = its first LBN, R1 = its blocks,
+; whole clusters. R0 = SS$_NORMAL, SS$_DEVICEFULL if none is free, or
+; the disk's error. Uses R3.
 ALLOCBLK:
         .JSB_ENTRY  OUTPUT=<R2>, SCRATCH=<R3>
-        PUSHL   R4
+        PUSHR   #^M<R4, R5, R6>
+        MOVL    F11$GL_VCB, R6
+        MOVZWL  VCB$W_CLUSTER(R6), R5   ; R5 = the cluster
+        ADDL3   R5, R1, R4              ; R4 = the clusters wanted
+        DECL    R4
+        DIVL2   R5, R4
+        DIVL3   R5, #MAXRUN, R0
+        CMPL    R4, R0
+        BLEQU   3$
+        MOVL    R0, R4
+3$:     CLRL    SBNUM                   ; each bitmap block
+5$:     MOVL    #SS$_DEVICEFULL, R0
+        CMPL    SBNUM, VCB$L_SBMAPBLKS(R6)
+        BGEQU   90$
         MOVL    #2, R0
         BSBW    BITMAP
         BLBC    R0, 90$
-        CLRL    R2                      ; a set bit is a free block
+        CLRL    R2                      ; a set bit is a free cluster
 10$:    BBS     R2, BITBLK, 20$
         AOBLSS  #BITS, R2, 10$
-        MOVL    #SS$_DEVICEFULL, R0
-        BRB     90$
+        INCL    SBNUM
+        BRB     5$
 20$:    MOVL    R2, R3
-        CLRL    R4                      ; the run
+        CLRL    R1                      ; the run
 30$:    BBCC    R3, BITBLK, 40$
-        INCL    R4
+        INCL    R1
         INCL    R3
-        CMPL    R4, R1
+        CMPL    R1, R4
         BGEQU   40$
         CMPL    R3, #BITS
         BLSSU   30$
-40$:    MOVL    R4, R1
-        MOVL    #3, R0
+40$:    MOVL    #3, R0
         BSBW    BITMAP
-90$:    MOVL    (SP)+, R4
+        MULL3   #BITS, SBNUM, R3        ; in blocks
+        ADDL2   R3, R2
+        MULL2   R5, R2
+        MULL2   R5, R1
+90$:    POPR    #^M<R4, R5, R6>
         RSB
 
-; FREEBLK: R1 = a block count, R2 = an LBN. Gives the blocks back to the
-; storage bitmap. R0 = SS$_NORMAL or the disk's error. Uses R1-R2.
+; FREEBLK: R1 = a block count, R2 = an LBN, whole clusters. Gives them
+; back to the storage bitmap. R0 = SS$_NORMAL or the disk's error. Uses
+; R1-R2.
 FREEBLK:
         .JSB_ENTRY  SCRATCH=<R2>
+        PUSHR   #^M<R3, R4>
+        MOVL    #SS$_NORMAL, R0
+        MOVL    F11$GL_VCB, R3
+        MOVZWL  VCB$W_CLUSTER(R3), R3
+        DIVL2   R3, R2                  ; R2 = the first cluster,
+        ADDL2   R3, R1                  ; R1 = how many
+        DECL    R1
+        DIVL2   R3, R1
+        MNEGL   #1, SBNUM               ; none read yet
+10$:    TSTL    R1
+        BEQL    80$
+        DIVL3   #BITS, R2, R3           ; its block: read if another
+        CMPL    R3, SBNUM
+        BEQL    20$
+        TSTL    SBNUM
+        BLSS    15$
+        MOVL    #3, R0
+        BSBW    BITMAP
+        BLBC    R0, 90$
+15$:    MOVL    R3, SBNUM
         MOVL    #2, R0
         BSBW    BITMAP
         BLBC    R0, 90$
-        TSTL    R1
-        BEQL    20$
-10$:    BBSS    R2, BITBLK, 15$
-15$:    INCL    R2
-        SOBGTR  R1, 10$
-20$:    MOVL    #3, R0
+20$:    MULL3   #BITS, SBNUM, R4
+        SUBL3   R4, R2, R4
+        BBSS    R4, BITBLK, 30$
+30$:    INCL    R2
+        DECL    R1
+        BRB     10$
+80$:    TSTL    SBNUM
+        BLSS    90$
+        MOVL    #3, R0
         BSBW    BITMAP
-90$:    RSB
+90$:    POPR    #^M<R3, R4>
+        RSB
 
 ; GETHIBLK: R3 = a file header. R0 = the blocks allocated to it. And
 ; PUTHIBLK, R0 = the blocks to set it to. Keep every other register.
@@ -489,7 +532,7 @@ FIL$EXTEND::
         PUSHR   #^M<R1, R2, R4, R5, R6>
         MOVL    R1, R6                  ; the blocks left
 10$:    TSTL    R6
-        BEQL    40$
+        BLEQ    40$
         MOVL    R6, R1
         CMPL    R1, #MAXRUN
         BLEQU   20$
@@ -978,6 +1021,7 @@ FIL$INIT::
         MOVL    F11$GL_VCB, R11
         MOVL    #HDRLBN-1, VCB$L_IBMAPLBN(R11)
         MOVL    #SCBLBN+1, VCB$L_SBMAPLBN(R11)
+        MOVL    #1, VCB$L_SBMAPBLKS(R11)
         MOVL    #HDRLBN+1, VCB$L_HDRVBN(R11)    ; VBNs: boot, home, bitmap
 ; The index file bitmap: file 1, for now.
         MOVC5   #0, BITBLK, #0, #BLOCK, BITBLK
@@ -991,6 +1035,7 @@ FIL$INIT::
         MOVL    #MFDLBN+1, R2
 10$:    BBSS    R2, BITBLK, 15$
 15$:    AOBLSS  VOLSIZE, R2, 10$
+        CLRL    SBNUM
         MOVL    #3, R0
         BSBW    BITMAP
         BLBS    R0, 20$
