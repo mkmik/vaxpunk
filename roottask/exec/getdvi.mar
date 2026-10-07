@@ -365,14 +365,12 @@ MBXITEM:
         MOVAB   NAMBUF, R1
         MOVL    #6, R2
         BRB     STRING
-10$:    CMPL    R10, #DVI$_DEVCLASS
-        BNEQ    20$
-        CLRL    R0
+10$:    MOVZWL  #DC$_MAILBOX, R0
         MOVAB   MB$FDT, R1
-        CMPL    UCB$L_FDT(R6), R1
-        BNEQ    LONG
-        MOVZWL  #DC$_MAILBOX, R0
-        BRB     LONG
+        CMPL    UCB$L_FDT(R6), R1       ; a network unit's class is 0
+        BNEQ    20$
+        CMPL    R10, #DVI$_DEVCLASS
+        BEQL    LONG
 20$:    MOVL    UCB$L_UNIT(R6), R0
         CMPL    R10, #DVI$_UNIT
         BEQL    LONG

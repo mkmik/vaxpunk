@@ -370,7 +370,7 @@ LITERAL
     PORT$K_BUFFERS = 16,  ! the tags that have a buffer
     PORT$K_BUFSIZE = 4096,
     PORTMSG$K_LENGTH = 32,
-    PORT$C_OPEN = 1,  ! PROTO: TCP, UDP or ICMP, ARG2 its socket type; then as SETMODE; response: CONN
+    PORT$C_OPEN = 1,  ! PROTO: TCP, UDP or ICMP; then as SETMODE; response: CONN
     PORT$C_SETMODE = 2,  ! FLAGS BIND: ADDR, PORT the local address; LISTEN: ARG1 the backlog
     PORT$C_ACCEPT = 3,  ! response: ARG1 the new connection, ADDR and PORT the peer's
     PORT$C_CONNECT = 4,  ! ADDR, PORT: the peer's

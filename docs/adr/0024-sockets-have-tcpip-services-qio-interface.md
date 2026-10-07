@@ -86,7 +86,7 @@ address and a port, which only `OPEN`, `BIND` and `CONNECT` used.
    DHCP client process; here it is vaxpunk's own, `SIOCSIFDHCP`, in
    `$SIOCDEF`'s encoding.
 5. **The port carries what the interface needs**, version 2: `OPEN`
-   with the type and an optional bind and listen, `SETMODE`, `GETNAME`,
+   with an optional bind and listen, `SETMODE`, `GETNAME`,
    `SHUTDOWN`, `IFCONFIG` setting each field on its own, `SEND` with a
    destination and `RECV` with a sender; `PING` goes.
 6. **What a request returns besides its IOSB**, a socket name or an
@@ -125,7 +125,7 @@ address and a port, which only `OPEN`, `BIND` and `CONNECT` used.
 - The driver reads and writes item lists, and an IRP now carries where
   its results go; IOC$POST has a post routine call for that.
 - Still missing, each marked in the code: buffer lists (p5, p6 of a
-  write or read), socket options (taken, ignored), read and write flags
+  write or read), socket options (`SS$_BADPARAM`), read and write flags
   such as `TCPIP$C_MSG_PEEK`, `IO$M_NOW`, out-of-band data, attention
   ASTs, IPv6, a routing table beyond the default route, a unit cloned
   at `$ASSIGN`, the UNIX error code in a failed read's or write's IOSB,

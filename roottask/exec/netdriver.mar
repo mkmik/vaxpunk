@@ -32,8 +32,8 @@
 ; process, from the response the IRP keeps.
 ; ponytail: one port, 0; a unit is cloned at IO$_SETMODE, not at $ASSIGN
 ; as TCP/IP Services' are; BGA0: isn't one of the devices $DEVICE_SCAN
-; sees. No buffer lists (p5, p6 of a write or read), socket options (taken,
-; and ignored), read and write flags, IO$M_NOW, out-of-band data or
+; sees. No buffer lists (p5, p6 of a write or read), socket options
+; (SS$_BADPARAM), read and write flags, IO$M_NOW, out-of-band data or
 ; attention ASTs (IO$M_READATTN, IO$M_WRTATTN: taken, never delivered).
 ;
         .LIBRARY "lib.mlb"
@@ -322,7 +322,7 @@ WRITENAME:
 ;                  protocol, a byte type and a byte family: TCPIP$C_TCP
 ;                  and TCPIP$C_STREAM, TCPIP$C_UDP and TCPIP$C_DGRAM, or
 ;                  TCPIP$C_ICMP and TCPIP$C_RAW, which needs SYSPRV or
-;                  BYPASS (protocol 0 is the type's); the family
+;                  BYPASS; the family
 ;                  TCPIP$C_AF_INET or 0. The channel goes to a new unit.
 ;                  Then p3 and p4 as on a unit, in one request
 ; On a unit, a socket:
@@ -448,13 +448,7 @@ OPEN:   MOVL    28(AP), R2
         BEQL    5$
         CMPL    R0, #TCPIP$C_AF_INET
         BNEQ    PROTOCOL
-5$:     TSTL    R6                      ; 0: the type's
-        BNEQ    10$
-        MOVL    #TCPIP$C_TCP, R6
-        CMPL    R7, #TCPIP$C_STREAM
-        BEQL    10$
-        MOVL    #TCPIP$C_UDP, R6
-10$:    CMPL    R6, #TCPIP$C_TCP
+5$:     CMPL    R6, #TCPIP$C_TCP
         BNEQ    12$
         CMPL    R7, #TCPIP$C_STREAM
         BEQL    20$
@@ -475,7 +469,6 @@ OPEN:   MOVL    28(AP), R2
         BSBW    NEWIRP
         BLBC    R0, 90$
         MOVW    R6, NIRP$A_MSG+PORTMSG$W_PROTO(R3)
-        MOVL    R7, NIRP$A_MSG+PORTMSG$L_ARG2(R3)
         BSBW    BINDLISTEN
         BLBC    R0, FREE
         MOVZWL  8(AP), R0
@@ -524,38 +517,19 @@ SOCKMODE:
 90$:    RSB
 
 ; SETIOCTL: IO$_SETMODE's ioctls, p5: one IFCONFIG with what they set.
-; Socket options are taken, and do nothing.
 SETIOCTL:
         MOVL    #SS$_NOPRIV, R0
         IFNPRIV OPER, 99$
         MOVL    44(AP), R2
-        IFNORD  #8, (R2), 97$
-        CMPW    2(R2), #TCPIP$C_SOCKOPT
-        BNEQ    3$
-        CLRL    R1
-        BRW     NOW
-3$:     CMPW    2(R2), #TCPIP$C_IOCTL
-        BNEQ    96$
-        MOVL    #PORT$C_IFCONFIG, R8
-        CLRL    R1
-        BSBW    NEWIRP
+        BSBW    IOCLIST
         BLBC    R0, 99$
-        MOVL    44(AP), R2
-        MOVZWL  (R2), R6
-        MOVL    4(R2), R2               ; the ioctl_comms
-        IFNORD  R6, (R2), 85$
-        ASHL    #-3, R6, R6             ; how many
-        BEQL    80$
 10$:    MOVL    (R2)+, R0               ; the request
         MOVL    (R2)+, R7               ; its argument
         CMPL    R0, #SIOCADDRT
         BEQL    40$
         CMPL    R0, #SIOCDELRT
         BEQL    40$
-        PUSHL   R0
         BSBW    IFREQ
-        MOVL    R0, R1
-        MOVL    (SP)+, R0
         BLBC    R1, 88$
         CMPL    R0, #SIOCSIFADDR
         BNEQ    20$
@@ -571,10 +545,7 @@ SETIOCTL:
         BNEQ    86$
         BISB2   #PORT$M_DHCP, NIRP$A_MSG+PORTMSG$B_FLAGS(R3)
         BRB     50$
-40$:    PUSHL   R0                      ; the default route, the one there is
-        BSBW    ROUTE
-        MOVL    R0, R1
-        MOVL    (SP)+, R0
+40$:    BSBW    ROUTE                   ; the default route, the one there is
         BLBC    R1, 88$
         CLRL    NIRP$A_MSG+PORTMSG$L_ARG2(R3)
         CMPL    R0, #SIOCDELRT
@@ -583,22 +554,16 @@ SETIOCTL:
 45$:    BISB2   #PORT$M_GW, NIRP$A_MSG+PORTMSG$B_FLAGS(R3)
 50$:    SOBGTR  R6, 10$
         BRW     QUEUE
-80$:    MOVL    #SS$_BADPARAM, R0
-        BRW     FREE
-85$:    MOVL    #SS$_ACCVIO, R0
-        BRW     FREE
 86$:    MOVL    #SS$_ILLCNTRFUNC, R0
         BRW     FREE
 88$:    MOVL    R1, R0
         BRW     FREE
-96$:    MOVL    #SS$_BADPARAM, R0
-        RSB
-97$:    MOVL    #SS$_ACCVIO, R0
 99$:    RSB
 
 ; SENSEMODE: IO$_SENSEMODE on a unit: the local name p3 and the peer's
 ; p4, a GETNAME; or ioctls, p6, an IFCONFIG that sets nothing.
-; ponytail: p3 and p4, or p6, not both in one request; no socket options.
+; ponytail: p3 and p4, or p6, not both in one request; no socket options,
+; here or in IO$_SETMODE's p5: SS$_BADPARAM.
 SENSEMODE:
         TSTL    48(AP)
         BEQL    20$
@@ -631,19 +596,8 @@ SENSEMODE:
 ; GETIOCTL: IO$_SENSEMODE's ioctls, p6, kept in the IRP for NET$POST.
 GETIOCTL:
         MOVL    48(AP), R2
-        IFNORD  #8, (R2), 97$
-        CMPW    2(R2), #TCPIP$C_IOCTL
-        BNEQ    96$
-        MOVL    #PORT$C_IFCONFIG, R8
-        CLRL    R1
-        BSBW    NEWIRP
+        BSBW    IOCLIST
         BLBC    R0, 99$
-        MOVL    48(AP), R2
-        MOVZWL  (R2), R6
-        MOVL    4(R2), R2               ; the ioctl_comms
-        IFNORD  R6, (R2), 85$
-        ASHL    #-3, R6, R6             ; how many
-        BEQL    80$
         CMPL    R6, #IOCTLS
         BGTRU   80$
         MOVAB   NIRP$A_IOCTL(R3), R8
@@ -652,10 +606,7 @@ GETIOCTL:
         CMPL    R0, #SIOCGETRT
         BNEQ    20$
         IFNOWRT #ORT$K_LENGTH, (R7), 85$
-        PUSHL   R0
         BSBW    ROUTE
-        MOVL    R0, R1
-        MOVL    (SP)+, R0
         BLBC    R1, 88$
         BRB     50$
 20$:    CMPL    R0, #SIOCGIFADDR
@@ -665,10 +616,7 @@ GETIOCTL:
         CMPL    R0, #SIOCGIFFLAGS
         BNEQ    86$
 30$:    IFNOWRT #IFR$K_LENGTH, (R7), 85$
-        PUSHL   R0
         BSBW    IFREQ
-        MOVL    R0, R1
-        MOVL    (SP)+, R0
         BLBC    R1, 88$
 50$:    MOVL    R0, (R8)+
         MOVL    R7, (R8)+
@@ -682,9 +630,6 @@ GETIOCTL:
         BRW     FREE
 88$:    MOVL    R1, R0
         BRW     FREE
-96$:    MOVL    #SS$_BADPARAM, R0
-        RSB
-97$:    MOVL    #SS$_ACCVIO, R0
 99$:    RSB
 
 ; CONNECT: IO$_ACCESS, to the name p3.
@@ -887,31 +832,57 @@ BINDLISTEN:
 80$:    MOVL    #SS$_NORMAL, R0
 90$:    RSB
 
-; IFREQ: R7 = an ioctl's IFREQ. R0 = SS$_NORMAL if it can be read and
+; IOCLIST: R2 = an ioctl list, IO$_SETMODE's p5 or IO$_SENSEMODE's p6, an
+; item_list_2 of TCPIP$C_IOCTL, and what NET$FDT has. Makes an IFCONFIG's
+; IRP for it: R3 = it, R2 = the ioctl_comms, R6 = how many, at least 1,
+; R0 = SS$_NORMAL, or SS$_ACCVIO, SS$_BADPARAM for another list, or
+; NEWIRP's failure. Uses R1 and R8.
+IOCLIST:
+        .JSB_ENTRY  OUTPUT=<R2, R3, R6>, SCRATCH=<R8>
+        IFNORD  #8, (R2), 85$
+        CMPW    2(R2), #TCPIP$C_IOCTL
+        BNEQ    80$
+        MOVZWL  (R2), R6
+        MOVL    4(R2), R2
+        IFNORD  R6, (R2), 85$
+        ASHL    #-3, R6, R6
+        BEQL    80$
+        PUSHL   R2
+        MOVL    #PORT$C_IFCONFIG, R8
+        CLRL    R1
+        BSBW    NEWIRP
+        MOVL    (SP)+, R2
+        RSB
+80$:    MOVL    #SS$_BADPARAM, R0
+        RSB
+85$:    MOVL    #SS$_ACCVIO, R0
+        RSB
+
+; IFREQ: R7 = an ioctl's IFREQ. R1 = SS$_NORMAL if it can be read and
 ; names WE0, else SS$_ACCVIO or SS$_NOSUCHDEV. Keeps every other register.
 IFREQ:
-        .JSB_ENTRY
-        MOVL    #SS$_ACCVIO, R0
+        .JSB_ENTRY  OUTPUT=<R1>
+        MOVL    #SS$_ACCVIO, R1
         IFNORD  #IFR$K_LENGTH, (R7), 90$
-        MOVL    #SS$_NOSUCHDEV, R0
+        MOVL    #SS$_NOSUCHDEV, R1
         CMPL    IFR$T_NAME(R7), #WE0
         BNEQ    90$
-        MOVL    #SS$_NORMAL, R0
+        MOVL    #SS$_NORMAL, R1
 90$:    RSB
 
-; ROUTE: R7 = an ioctl's ORTENTRY. R0 = SS$_NORMAL if it can be read and
+; ROUTE: R7 = an ioctl's ORTENTRY. R1 = SS$_NORMAL if it can be read and
 ; is the default route's, to 0.0.0.0, else SS$_ACCVIO or SS$_BADPARAM.
 ; Keeps every other register.
 ; ponytail: one route, the default; a routing table with a second
 ; interface.
 ROUTE:
-        .JSB_ENTRY
-        MOVL    #SS$_ACCVIO, R0
+        .JSB_ENTRY  OUTPUT=<R1>
+        MOVL    #SS$_ACCVIO, R1
         IFNORD  #ORT$K_LENGTH, (R7), 90$
-        MOVL    #SS$_BADPARAM, R0
+        MOVL    #SS$_BADPARAM, R1
         TSTL    ORT$L_DST_SIN_ADDR(R7)
         BNEQ    90$
-        MOVL    #SS$_NORMAL, R0
+        MOVL    #SS$_NORMAL, R1
 90$:    RSB
 
 ; INNAME: R0 = an item_list_2 of a socket name, a SOCKADDRIN, BSD 4.3's

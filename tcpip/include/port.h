@@ -43,8 +43,8 @@ struct port_hdr {
 };
 
 enum {
-	PORT_OPEN = 1, /* proto: PORT_TCP, PORT_UDP or PORT_ICMP, a raw socket; arg2 its type,
-			  1 stream, 2 datagram, 3 raw; then as SETMODE; response: conn */
+	PORT_OPEN = 1, /* proto: PORT_TCP, PORT_UDP or PORT_ICMP, a raw socket; then as
+			  SETMODE; response: conn */
 	PORT_SETMODE, /* flags PORT_BIND: addr, port the local address, 0 for any;
 			 PORT_LISTEN: arg1 the backlog */
 	PORT_ACCEPT, /* response: arg1 the new conn, addr and port the peer's */

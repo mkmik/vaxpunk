@@ -455,19 +455,17 @@ static uint32_t conn_new(struct tcp_pcb *pcb)
 	return id;
 }
 
-/* A socket of proto and type, with its PCB, or 0. */
-static uint32_t sock_new(int proto, uint32_t type)
+/* A socket of proto, with its PCB, or 0. */
+static uint32_t sock_new(int proto)
 {
-	if (proto == PORT_TCP && type == 1) {
+	if (proto == PORT_TCP) {
 		struct tcp_pcb *pcb = tcp_new();
 		uint32_t id = pcb ? conn_new(pcb) : 0;
 		if (pcb && !id)
 			tcp_abort(pcb);
 		return id;
 	}
-	uint32_t id = (proto == PORT_UDP && type == 2) || (proto == PORT_ICMP && type == 3)
-			      ? conn_alloc(proto)
-			      : 0;
+	uint32_t id = conn_alloc(proto);
 	if (!id)
 		return 0;
 	void *arg = (void *)(uintptr_t)id;
@@ -683,7 +681,7 @@ static void command(struct port_msg *m)
 	ip4_addr_set_u32(&ip, m->addr);
 	switch (m->type) {
 	case PORT_OPEN: {
-		uint32_t id = sock_new(m->proto, m->arg2);
+		uint32_t id = sock_new(m->proto);
 		uint32_t status = id ? setmode(&conns[id], m) : PORT_ST_NOMEM;
 		if (id && status != PORT_ST_OK)
 			conn_free(id), id = 0;

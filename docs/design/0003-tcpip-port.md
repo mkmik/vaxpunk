@@ -113,7 +113,7 @@ only its own ring and index. A message is 32 bytes:
 | 16 | address | an IPv4 address, network order |
 | 20 | port | a TCP or UDP port |
 | 22 | protocol | `OPEN`'s: 6 TCP, 17 UDP, 1 a raw ICMP socket |
-| 24, 28 | arg1, arg2 | `OPEN`: arg2 the socket type, 1 stream, 2 datagram, 3 raw; `OPEN`, `SETMODE`: arg1 the backlog; `ACCEPT`'s response: arg1 the new connection; `IFCONFIG`: the mask and the gateway; `GETNAME`'s response: the peer's address and port; `SHUTDOWN`: arg1 0 receives, 1 sends, 2 both |
+| 24, 28 | arg1, arg2 | `OPEN`, `SETMODE`: arg1 the backlog; `ACCEPT`'s response: arg1 the new connection; `IFCONFIG`: the mask and the gateway; `GETNAME`'s response: the peer's address and port; `SHUTDOWN`: arg1 0 receives, 1 sends, 2 both |
 
 | Command | Response when |
 | --- | --- |
@@ -212,7 +212,7 @@ longword request and the address of its argument.
 | unit | `IO$_SETMODE!IO$M_CTRLCAST`, `IO$M_CTRLYAST`, `IO$M_READATTN`, `IO$M_WRTATTN`, `IO$M_OUTBAND` | does nothing; the ASTs never come |
 
 ponytail: no buffer lists (p5, p6 of a write or read), socket options
-(taken, and ignored), read and write flags, `IO$M_NOW`, out-of-band
+(`SS$_BADPARAM`), read and write flags, `IO$M_NOW`, out-of-band
 data, IPv6, or the UNIX error code in a failed read's IOSB; p3 and p4,
 or the ioctls, in one request, not both; a unit is cloned at
 `IO$_SETMODE`, not at `$ASSIGN`.
