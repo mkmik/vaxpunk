@@ -1,0 +1,29 @@
+MODULE DEFS (MAIN = MAIN) =
+BEGIN
+! A PCB filled by MACRO-32 through $PCBDEF and read here through LIB.R64,
+! which vdefs makes from the same macro (PRD-0004 step 7).
+REQUIRE '[-]PRINT';
+LIBRARY 'SYS$LIBRARY:LIB';
+
+EXTERNAL ROUTINE
+    FILL : NOVALUE;
+
+OWN
+    PCB : BLOCK[PCB$K_LENGTH, BYTE];
+
+ROUTINE MAIN =
+    BEGIN
+    FILL(PCB);
+    PRINT(.PCB[PCB$W_SIZE]);
+    PRINT(.PCB[PCB$B_TYPE] EQL DYN$C_PCB);
+    PRINT(.PCB[PCB$B_PRI]);
+    PRINT(.PCB[PCB$L_PID]);
+    PRINT(.PCB[PCB$L_STS]<PCB$V_WALL, 1>);
+    PRINT(.PCB[PCB$Q_PRIV]);
+    PRINT(.PCB[PCB$L_UIC]);
+    PRINT(.(PCB[PCB$T_LNAME] + 1)<0, 8>);
+    1
+    END;
+
+END
+ELUDOM

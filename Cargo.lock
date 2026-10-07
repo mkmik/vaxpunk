@@ -672,6 +672,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "vdefs"
+version = "0.1.0"
+
+[[package]]
 name = "vdump"
 version = "0.1.0"
 dependencies = [

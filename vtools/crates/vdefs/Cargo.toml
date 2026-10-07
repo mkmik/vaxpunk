@@ -1,0 +1,6 @@
+[package]
+name = "vdefs"
+description = "BLISS require files from the $xxxDEF macros of vaxpunk's macro libraries"
+version.workspace = true
+edition.workspace = true
+license.workspace = true

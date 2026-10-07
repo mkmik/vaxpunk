@@ -1,0 +1,20 @@
+        .TITLE  FILL    Fills a PCB's fields as MACRO-32 places them
+        .LIBRARY "lib.mlb"
+        $PCBDEF
+
+        .PSECT  $CODE$
+; FILL pcb: stores a known value in some of the PCB's fields, through
+; $PCBDEF's offsets, for the BLISS-64 side to read through LIB.R64's.
+        .ENTRY  FILL, ^M<R2>
+        MOVL    4(AP), R2
+        MOVW    #PCB$K_LENGTH, PCB$W_SIZE(R2)
+        MOVB    #DYN$C_PCB, PCB$B_TYPE(R2)
+        MOVB    #4, PCB$B_PRI(R2)
+        MOVL    #^X10021, PCB$L_PID(R2)
+        MOVL    #<1@PCB$V_WALL>, PCB$L_STS(R2)
+        MOVL    #-1, PCB$Q_PRIV(R2)
+        MOVL    #5, PCB$Q_PRIV+4(R2)
+        MOVL    #^X00230001, PCB$L_UIC(R2)
+        MOVB    #3, PCB$T_LNAME(R2)
+        MOVB    #^A"K", PCB$T_LNAME+1(R2)
+        RET
