@@ -4,7 +4,9 @@
 //!
 //! For lib.mlb and starlet.mlb in DIR (default vtools/lib), writes
 //! lib.r64 and starlet.r64 for BLISS-64 and lib.req and starlet.req for
-//! BLISS-32 next to them. vdefs's test fails when they are stale.
+//! BLISS-32 next to them, and services.txt, the system services'
+//! argument mechanisms, for vbliss's dot lint. vdefs's test fails when
+//! they are stale.
 
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -37,6 +39,13 @@ fn main() -> ExitCode {
                 return ExitCode::FAILURE;
             }
         }
+    }
+    let starlet = dir.join("starlet.mlb");
+    let text = fs::read_to_string(&starlet).unwrap_or_default();
+    let path = dir.join("services.txt");
+    if let Err(e) = fs::write(&path, vdefs::services("starlet.mlb", &text)) {
+        eprintln!("%VDEFS-F-WRITEERR, {}: {e}", path.display());
+        return ExitCode::FAILURE;
     }
     ExitCode::SUCCESS
 }

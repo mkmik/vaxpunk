@@ -87,7 +87,10 @@ fn run() -> Result<(), String> {
         eprintln!("{m}");
     }
     for d in &out.diags {
-        report(d);
+        report(d, "BLS64");
+    }
+    for d in &out.lints {
+        report(d, "VBLISS");
     }
     if let Some(list) = list {
         let path = list.unwrap_or_else(|| source.with_extension("lis"));
@@ -117,7 +120,7 @@ fn run() -> Result<(), String> {
 
 /// A diagnostic as BLISS writes it on the terminal: the line, a marker
 /// under the place, the message and where.
-fn report(d: &vbliss::Diag) {
+fn report(d: &vbliss::Diag, facility: &str) {
     let line = fs::read_to_string(Path::new(&d.file)).ok().and_then(|t| {
         t.lines()
             .nth((d.line as usize).wrapping_sub(1))
@@ -128,6 +131,11 @@ fn report(d: &vbliss::Diag) {
         eprintln!("{line}");
         eprintln!("{}^", ".".repeat(d.col as usize));
     }
-    eprintln!("%BLS64-{}-TEXT, {}", d.sev, d.msg);
+    let ident = if facility == "VBLISS" {
+        "DOTLINT"
+    } else {
+        "TEXT"
+    };
+    eprintln!("%{facility}-{}-{ident}, {}", d.sev, d.msg);
     eprintln!("at line number {} in file {}", d.line, d.file);
 }

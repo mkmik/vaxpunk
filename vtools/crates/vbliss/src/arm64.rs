@@ -42,7 +42,11 @@ pub fn module(m: &Module) -> String {
         }
     }
     for p in psects {
-        let attrs = if p == "$PLIT$" { ", NOWRT" } else { "" };
+        let attrs = match m.psects.iter().find(|(n, _)| n == p) {
+            Some((_, a)) => format!(", {a}"),
+            None if p == "$PLIT$" => ", NOWRT".into(),
+            None => String::new(),
+        };
         let _ = writeln!(o, "\n        .PSECT  {p}{attrs}");
         for d in m.data.iter().filter(|d| d.psect == p) {
             if d.align > 0 {
@@ -54,11 +58,25 @@ pub fn module(m: &Module) -> String {
             }
         }
     }
-    let mut fdscs = String::new();
-    if !m.funcs.is_empty() {
-        let _ = writeln!(o, "\n        .PSECT  $CODE$");
+    for (g, v) in &m.globals {
+        let _ = writeln!(o, "{g} == {v}");
     }
+    let mut fdscs = String::new();
+    let mut code = "";
     for f in &m.funcs {
+        let p = if f.psect.is_empty() {
+            "$CODE$"
+        } else {
+            &f.psect
+        };
+        if p != code {
+            let attrs = match m.psects.iter().find(|(n, _)| n == p) {
+                Some((_, a)) => format!(", {a}"),
+                None => String::new(),
+            };
+            let _ = writeln!(o, "\n        .PSECT  {p}{attrs}");
+            code = p;
+        }
         Routine::new(f).emit(o, &mut fdscs);
     }
     if !fdscs.is_empty() {

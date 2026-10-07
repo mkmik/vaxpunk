@@ -120,6 +120,8 @@ pub struct Func {
     /// Frame slots: their sizes in bytes.
     pub slots: Vec<u32>,
     pub temps: u32,
+    /// The psect its code goes in.
+    pub psect: String,
     /// Whether its argument list (argcount, argn, argptr) has longwords,
     /// for BLISS-32 and LONG_DEFAULT, rather than quadwords.
     pub long_args: bool,
@@ -246,7 +248,12 @@ impl fmt::Display for Ins {
 impl fmt::Display for Func {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         let g = if self.global { "global " } else { "" };
-        writeln!(f, "{g}routine ${} {{", self.name)?;
+        let p = if self.psect == "$CODE$" || self.psect.is_empty() {
+            String::new()
+        } else {
+            format!(" in {}", self.psect)
+        };
+        writeln!(f, "{g}routine ${}{p} {{", self.name)?;
         for (i, size) in self.slots.iter().enumerate() {
             writeln!(f, "    &{i} = slot {size}")?;
         }
@@ -326,6 +333,10 @@ pub struct Module {
     pub externals: Vec<String>,
     pub data: Vec<Data>,
     pub funcs: Vec<Func>,
+    /// Psects' attributes, as `.PSECT` takes them, for those not BLISS's
+    /// own; and global literals, `name == value`.
+    pub psects: Vec<(String, String)>,
+    pub globals: Vec<(String, i64)>,
 }
 
 impl fmt::Display for Module {
@@ -336,6 +347,12 @@ impl fmt::Display for Module {
         }
         for e in &self.externals {
             writeln!(f, "external ${e}")?;
+        }
+        for (p, attrs) in &self.psects {
+            writeln!(f, "psect {p} ({attrs})")?;
+        }
+        for (g, v) in &self.globals {
+            writeln!(f, "global ${g} = {v}")?;
         }
         for d in &self.data {
             write!(f, "{d}")?;

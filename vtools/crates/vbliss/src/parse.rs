@@ -55,6 +55,8 @@ pub enum Kind {
     FieldSet(Vec<usize>),
     /// A built-in its BUILTIN declaration names.
     Builtin,
+    /// An EXTERNAL LITERAL: a value the linker gives, its symbol's.
+    ExternalLiteral,
 }
 
 #[derive(Clone, Debug)]
@@ -179,12 +181,35 @@ pub struct Routine {
     pub body: Expr,
     /// The sizes of its frame slots.
     pub slots: Vec<u32>,
+    /// The psect its code goes in.
+    pub psect: String,
 }
 
-/// Static data: an OWN or GLOBAL, and what it starts as.
+/// Static data: an OWN or GLOBAL, what it starts as, and its psect.
 pub struct Static {
     pub sym: usize,
     pub init: Vec<Init>,
+    pub psect: String,
+}
+
+/// The psects the storage classes go in, as PSECT declarations set them.
+#[derive(Clone, Debug)]
+pub struct Psects {
+    pub own: String,
+    pub global: String,
+    pub plit: String,
+    pub code: String,
+}
+
+impl Default for Psects {
+    fn default() -> Self {
+        Psects {
+            own: "$OWN$".into(),
+            global: "$GLOBAL$".into(),
+            plit: "$PLIT$".into(),
+            code: "$CODE$".into(),
+        }
+    }
 }
 
 #[derive(Default)]
@@ -200,6 +225,12 @@ pub struct Module {
     /// Whether a routine ENABLEs a handler, which the jacket calls.
     pub jacket: bool,
     pub dialect: Dialect,
+    /// The psects PSECT declarations name, and their attributes in vasm's
+    /// words; and where the storage classes go now.
+    pub psect_attrs: Vec<(String, String)>,
+    pub psects: Psects,
+    /// GLOBAL LITERALs: names and values.
+    pub global_literals: Vec<(String, i64)>,
 }
 
 /// A fatal error: the file, line and column (from 0) it is at.
@@ -221,6 +252,8 @@ pub type Loader<'a> = &'a dyn Fn(&str) -> Result<String, String>;
 pub struct Front {
     pub module: R<Module>,
     pub diags: Vec<(String, Diag)>,
+    /// The dot lint's warnings.
+    pub lints: Vec<(String, Diag)>,
     pub listing: String,
     pub messages: Vec<String>,
 }
@@ -356,6 +389,13 @@ pub struct Parser<'a> {
     routines: u32,
     /// Data declared VOLATILE.
     pub(crate) volatile: Vec<usize>,
+    /// The dot lint's warnings, and how deep in an address it is.
+    pub(crate) lints: Vec<Diag>,
+    /// Names used without a declaration.
+    pub(crate) undeclared: Vec<usize>,
+    pub(crate) address_context: u32,
+    /// The system services' and library routines' mechanisms, once read.
+    pub(crate) services: Option<HashMap<String, Vec<crate::lint::Mechanism>>>,
 }
 
 /// Parses the module in `text`, from file `name`.
@@ -366,6 +406,7 @@ pub fn parse(name: &str, text: &str, load: Loader, opts: &Options) -> Front {
             return Front {
                 module: Err(e),
                 diags: Vec::new(),
+                lints: Vec::new(),
                 listing: String::new(),
                 messages: Vec::new(),
             };
@@ -388,6 +429,10 @@ pub fn parse(name: &str, text: &str, load: Loader, opts: &Options) -> Front {
         inits: Vec::new(),
         routines: 0,
         volatile: Vec::new(),
+        lints: Vec::new(),
+        undeclared: Vec::new(),
+        address_context: 0,
+        services: None,
     };
     p.lx.variant = opts.variant;
     p.m.dialect = opts.dialect;
@@ -429,6 +474,10 @@ pub fn parse(name: &str, text: &str, load: Loader, opts: &Options) -> Front {
     let listing = crate::listing::render(&header, &p.lx.entries, &diags);
     Front {
         diags: diags
+            .into_iter()
+            .map(|d| (p.lx.files[d.file as usize].name.clone(), d))
+            .collect(),
+        lints: std::mem::take(&mut p.lints)
             .into_iter()
             .map(|d| (p.lx.files[d.file as usize].name.clone(), d))
             .collect(),
@@ -995,7 +1044,7 @@ impl Parser<'_> {
                 Tok::Name(n) if n == "LITERAL" => {
                     self.pos += 2;
                     if external {
-                        return self.err("EXTERNAL LITERAL is not supported yet");
+                        return self.external_literals().map(|_| true);
                     }
                     return self.literals(global).map(|_| true);
                 }
@@ -1072,6 +1121,33 @@ impl Parser<'_> {
                 self.pos += 1;
                 self.linkages()?;
             }
+            "PSECT" => {
+                self.pos += 1;
+                self.psect_declaration()?;
+            }
+            "SWITCHES" => {
+                self.pos += 1;
+                loop {
+                    self.switch()?;
+                    if !self.eat_punct(',') {
+                        break;
+                    }
+                }
+            }
+            "UNDECLARE" => {
+                self.pos += 1;
+                loop {
+                    let name = self.name()?;
+                    for scope in self.scopes.iter_mut().rev() {
+                        if scope.remove(&name).is_some() {
+                            break;
+                        }
+                    }
+                    if !self.eat_punct(',') {
+                        break;
+                    }
+                }
+            }
             "BUILTIN" => {
                 self.pos += 1;
                 self.builtins()?;
@@ -1093,7 +1169,7 @@ impl Parser<'_> {
                 // doesn't show (docs/bliss64.md, *Libraries*).
                 self.library_file(&String::from_utf8_lossy(&name))?;
             }
-            "REGISTER" | "PSECT" | "SWITCHES" | "UNDECLARE" => {
+            "REGISTER" => {
                 return self.err(format!("{word} declarations are not supported yet"));
             }
             _ => return Ok(false),
@@ -1102,13 +1178,13 @@ impl Parser<'_> {
     }
 
     pub(crate) fn literals(&mut self, global: bool) -> R<()> {
-        if global {
-            return self.err("GLOBAL LITERAL is not supported yet");
-        }
         loop {
             let name = self.name()?;
             self.expect_punct('=')?;
             let v = self.ctce()?;
+            if global {
+                self.m.global_literals.push((name.clone(), v));
+            }
             if self.eat_punct(':') {
                 while matches!(self.peek(), Tok::Name(n) if matches!(n.as_str(),
                     "BYTE" | "WORD" | "LONG" | "QUAD" | "SIGNED" | "UNSIGNED"))
@@ -1117,6 +1193,91 @@ impl Parser<'_> {
                 }
             }
             self.declare(name, Kind::Literal(v))?;
+            if !self.eat_punct(',') {
+                return Ok(());
+            }
+        }
+    }
+
+    /// EXTERNAL LITERAL names, after the words: values the linker gives.
+    pub(crate) fn external_literals(&mut self) -> R<()> {
+        loop {
+            let name = self.name()?;
+            if self.eat_punct(':') {
+                self.attributes()?;
+            }
+            self.declare(name, Kind::ExternalLiteral)?;
+            if !self.eat_punct(',') {
+                return Ok(());
+            }
+        }
+    }
+
+    /// `PSECT class = name (attributes), ...`, after the word.
+    pub(crate) fn psect_declaration(&mut self) -> R<()> {
+        loop {
+            let class = self.name().or_else(|_| match self.next() {
+                Tok::Name(n) => Ok(n),
+                _ => self.err("expected OWN, GLOBAL, PLIT or CODE"),
+            })?;
+            self.expect_punct('=')?;
+            let name = self.name()?;
+            let mut attrs = Vec::new();
+            if self.eat_punct('(') {
+                loop {
+                    let a = match self.next() {
+                        Tok::Name(a) => a,
+                        _ => return self.err("expected a psect attribute"),
+                    };
+                    let word = match a.as_str() {
+                        "WRITE" => "WRT",
+                        "NOWRITE" => "NOWRT",
+                        "EXECUTE" => "EXE",
+                        "NOEXECUTE" => "NOEXE",
+                        "READ" => "RD",
+                        "NOREAD" => "NORD",
+                        "SHARE" => "SHR",
+                        "NOSHARE" => "NOSHR",
+                        "PIC" => "PIC",
+                        "NOPIC" => "NOPIC",
+                        "LOCAL" => "LCL",
+                        "GLOBAL" => "GBL",
+                        "OVERLAY" => "OVR",
+                        "CONCATENATE" => "CON",
+                        "VECTOR" => "VEC",
+                        _ => "",
+                    };
+                    if !word.is_empty() {
+                        attrs.push(word.to_string());
+                    }
+                    if a == "ALIGN" || a == "ADDRESSING_MODE" {
+                        self.expect_punct('(')?;
+                        if a == "ALIGN" {
+                            attrs.push(self.ctce()?.to_string());
+                        } else {
+                            self.name()?;
+                        }
+                        self.expect_punct(')')?;
+                    }
+                    if !self.eat_punct(',') {
+                        break;
+                    }
+                }
+                self.expect_punct(')')?;
+            }
+            if !attrs.is_empty() {
+                self.m.psect_attrs.retain(|(n, _)| *n != name);
+                self.m.psect_attrs.push((name.clone(), attrs.join(", ")));
+            }
+            let p = &mut self.m.psects;
+            match class.as_str() {
+                "OWN" => p.own = name,
+                "GLOBAL" => p.global = name,
+                "PLIT" => p.plit = name,
+                "CODE" => p.code = name,
+                "NODEFAULT" => {}
+                _ => return self.err(format!("{class} is not a storage class for PSECT")),
+            }
             if !self.eat_punct(',') {
                 return Ok(());
             }
@@ -1239,11 +1400,13 @@ impl Parser<'_> {
         let body = body?;
         self.scopes.pop();
         let slots = std::mem::replace(&mut self.slots, outer);
+        let psect = self.m.psects.code.clone();
         self.m.routines.push(Routine {
             sym,
             formals,
             body,
             slots,
+            psect,
         });
         Ok(())
     }
@@ -1388,6 +1551,7 @@ impl Parser<'_> {
         }
         let mut left = self.binary(level + 1)?;
         while let Some(op) = self.operator(level) {
+            let op_at = self.here();
             self.pos += 1;
             let right = if self.operand_next() {
                 self.binary(level + 1)?
@@ -1408,6 +1572,7 @@ impl Parser<'_> {
                 );
                 Expr::Num(0)
             };
+            self.lint_operands(op, &left, &right, &op_at);
             left = Expr::Bin(op, Box::new(left), Box::new(right));
         }
         Ok(left)
@@ -1464,8 +1629,17 @@ impl Parser<'_> {
         if self.at_punct('.') {
             let at = self.here();
             self.pos += 1;
-            let e = self.unary()?;
+            let start = match self.peek().clone() {
+                Tok::Name(n) => self.lookup(&n),
+                Tok::Bound(_, id) => Some(id),
+                _ => None,
+            };
+            self.address_context += 1;
+            let e = self.unary();
+            self.address_context -= 1;
+            let e = e?;
             self.check_inside(&e, &at);
+            self.lint_fetch(&e, start, &at);
             return Ok(Expr::Fetch(Box::new(e)));
         }
         if self.eat_punct('-') {
@@ -1487,6 +1661,8 @@ impl Parser<'_> {
                     }
                     self.expect_punct(')')?;
                 }
+                let at = self.last();
+                self.lint_call(&e, &args, &at);
                 e = Expr::Call(Box::new(e), args);
             } else if self.at_punct('<') {
                 if matches!(e, Expr::Field(..) | Expr::Let(..)) {
@@ -1545,6 +1721,7 @@ impl Parser<'_> {
                 "BEGIN" => self.block('E'),
                 "IF" => {
                     let c = self.expr()?;
+                    self.lint_test(&c, &at);
                     if let Some(always) = self.constant_test(&c) {
                         let msg = format!("Test expression is always {always}");
                         self.diag('I', &at, msg);
@@ -1560,6 +1737,7 @@ impl Parser<'_> {
                 }
                 "WHILE" | "UNTIL" => {
                     let cond = self.expr()?;
+                    self.lint_test(&cond, &at);
                     self.expect("DO")?;
                     let body = self.expr()?;
                     Ok(Expr::Loop {
@@ -1577,7 +1755,9 @@ impl Parser<'_> {
                         self.expect("WHILE")?;
                         false
                     };
+                    let cond_at = self.here();
                     let cond = self.expr()?;
+                    self.lint_test(&cond, &cond_at);
                     Ok(Expr::Loop {
                         until,
                         post: true,
@@ -1619,7 +1799,37 @@ impl Parser<'_> {
                     None if n.starts_with('%') => {
                         Err(self.error_at(&at, format!("{n} is not supported yet")))
                     }
-                    None => Err(self.error_at(&at, format!("Undeclared name:  {n}"))),
+                    None => {
+                        // As BLISSA64 does: a warning, and an external name,
+                        // a routine if it is called.
+                        self.diag('W', &at, format!("Undeclared name:  {n}"));
+                        let kind = if self.at_punct('(') {
+                            Kind::Routine {
+                                global: false,
+                                external: true,
+                                novalue: false,
+                                linkage: None,
+                            }
+                        } else {
+                            Kind::Data {
+                                storage: Storage::External,
+                                bytes: 0,
+                                size: self.m.dialect.fullword(),
+                                signed: false,
+                                structure: None,
+                            }
+                        };
+                        let id = self.m.syms.len();
+                        self.m.syms.push(Sym {
+                            name: n.clone(),
+                            asm: n.clone(),
+                            kind,
+                        });
+                        self.scopes[0].insert(n.clone(), id);
+                        // Nothing is known of it: the lint leaves it alone.
+                        self.undeclared.push(id);
+                        Ok(Expr::Name(id))
+                    }
                 },
             },
             _ => {

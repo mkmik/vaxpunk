@@ -20,4 +20,10 @@ fn require_files_are_current() {
             );
         }
     }
+    let text = fs::read_to_string(dir.join("starlet.mlb")).unwrap();
+    let have = fs::read_to_string(dir.join("services.txt")).unwrap_or_default();
+    assert!(
+        have == vdefs::services("starlet.mlb", &text),
+        "vtools/lib/services.txt is stale: run `cargo run -p vdefs`"
+    );
 }
