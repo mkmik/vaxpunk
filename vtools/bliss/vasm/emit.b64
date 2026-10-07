@@ -1,0 +1,448 @@
+MODULE EMIT (IDENT = 'V1.0') =
+%TITLE 'VASM: object records'
+BEGIN
+!
+! emit.rs, and what vms_obj::obj::write does with its records: the
+! module header, the global symbol directory, the text and relocation
+! commands and the end of module, written to the object file a record at
+! a time. docs/object-format.md describes them.
+!
+REQUIRE 'VASM';
+
+EXTERNAL ROUTINE
+    UTIL_ROUTINES;
+
+EXTERNAL
+    ASM_PSECTS : VECTOR,
+    ASM_NPSECTS,
+    ASM_ORDER,
+    ASM_TITLE,
+    ASM_IDENT,
+    ASM_IDENTLEN,
+    ASM_TRANSFER,
+    ASM_TRANSFER_OFF;
+
+LITERAL
+    MAX_RECORD = 8192,
+    ROOM = MAX_RECORD - 64,             ! payload room in one record
+    MAX_IMM = 4096,                     ! the largest STO_IMM
+    ! Record types and the module header's subtypes.
+    EMH = 8,
+    EEOM = 9,
+    EGSD = 10,
+    ETIR = 11,
+    MHD = 0,
+    LNM = 1,
+    ! GSD subrecords, and their symbols' flags.
+    GSD_PSC = 0,
+    GSD_SYM = 1,
+    SYM_WEAK = 1,
+    SYM_DEF = 2,
+    SYM_REL = 8,
+    SYM_QUAD_VAL = 128,
+    ! TIR commands.
+    STA_GBL = 0,
+    STA_QW = 2,
+    STA_PQ = 3,
+    STO_B = 50,
+    STO_W = 51,
+    STO_LW = 52,
+    STO_QW = 53,
+    STO_OFF = 59,
+    STO_IMM = 61,
+    STO_A64_JUMP26 = 80,
+    STO_A64_LDST8_LO12 = 86,
+    STO_A64_MOVW_G0 = 91,
+    OPR_ADD = 101,
+    CTL_SETRB = 150,
+    CTL_AUGRB = 151;
+
+OWN
+    REC : VECTOR[MAX_RECORD + 64, BYTE],
+    REC_LEN,                            ! 0 if no record is open
+    REC_TYPE,
+    USED,                               ! the payload so far, as emit.rs's split counts it
+    CHAN,
+    STATUS;
+
+ROUTINE PUT (V, N) : NOVALUE =
+    BEGIN
+    LOCAL
+        X;
+    X = .V;
+    INCR I FROM 0 TO .N - 1 DO
+        BEGIN
+        REC[.REC_LEN] = .X AND 255;
+        REC_LEN = .REC_LEN + 1;
+        X = SRL(.X, 8)
+        END
+    END;
+
+ROUTINE PUT_BYTES (A, N) : NOVALUE =
+    BEGIN
+    CH$MOVE(.N, .A, REC[.REC_LEN]);
+    REC_LEN = .REC_LEN + .N
+    END;
+
+! A counted string: a length byte, then the text.
+ROUTINE PUT_COUNTED (A, N) : NOVALUE =
+    BEGIN
+    PUT(.N, 1);
+    PUT_BYTES(.A, .N)
+    END;
+
+! Fills in the type and size at the start of a record, subrecord or
+! command that started at start and ends here.
+ROUTINE HEADER (START, KIND) : NOVALUE =
+    BEGIN
+    REC[.START] = .KIND AND 255;
+    REC[.START + 1] = SRL(.KIND, 8);
+    REC[.START + 2] = (.REC_LEN - .START) AND 255;
+    REC[.START + 3] = SRL(.REC_LEN - .START, 8)
+    END;
+
+ROUTINE FLUSH : NOVALUE =
+    BEGIN
+    IF .REC_LEN EQL 0 THEN RETURN;
+    HEADER(0, .REC_TYPE);
+    IF .STATUS THEN STATUS = FIO$WRITE(.CHAN, REC, .REC_LEN);
+    REC_LEN = 0
+    END;
+
+ROUTINE START (KIND) : NOVALUE =
+    BEGIN
+    FLUSH();
+    REC_TYPE = .KIND;
+    REC_LEN = 4
+    END;
+
+! Room for an item of size bytes in a record of kind's, the next if this
+! one is full, as emit.rs's split groups them.
+ROUTINE ITEM (KIND, SIZE) : NOVALUE =
+    BEGIN
+    IF .USED + .SIZE GTR ROOM
+    THEN
+        BEGIN
+        START(.KIND);
+        IF .KIND EQL EGSD THEN PUT(0, 4);   ! EGSD$L_ALIGNLW
+        USED = 0
+        END;
+    USED = .USED + .SIZE
+    END;
+
+! ----- the global symbol directory -----
+
+! A subrecord's size, its header included, on a quadword boundary.
+ROUTINE GSD_SIZE (BODY) =
+    (4 + .BODY + 7) AND NOT 7;
+
+ROUTINE GSD_END (START, KIND) : NOVALUE =
+    BEGIN
+    WHILE ((.REC_LEN - .START) AND 7) NEQ 0 DO
+        PUT(0, 1);
+    HEADER(.START, .KIND)
+    END;
+
+ROUTINE PSC (ALIGN, FLAGS, ALLOC, NAME, LEN) : NOVALUE =
+    BEGIN
+    LOCAL
+        S;
+    ITEM(EGSD, GSD_SIZE(9 + .LEN));
+    S = .REC_LEN;
+    PUT(0, 4);
+    PUT(.ALIGN, 1);
+    PUT(0, 1);                          ! temp
+    PUT(.FLAGS, 2);
+    PUT(.ALLOC, 4);
+    PUT_COUNTED(.NAME, .LEN);
+    GSD_END(.S, GSD_PSC)
+    END;
+
+ROUTINE SYMBOLS : NOVALUE =
+    BEGIN
+    LOCAL
+        N : REF VECTOR,
+        ABS;
+    ABS = -1;
+    N = .ASM_ORDER;
+    WHILE .N NEQ 0 DO
+        BEGIN
+        LOCAL
+            WEAK,
+            FLAGS,
+            VALUE,
+            PSINDX,
+            S;
+        WEAK = (IF (.N[N_FLAGS] AND F_WEAK) NEQ 0 THEN SYM_WEAK ELSE 0);
+        FLAGS = -1;
+        IF (.N[N_FLAGS] AND F_EXTERNAL) NEQ 0
+        THEN
+            BEGIN
+            ITEM(EGSD, GSD_SIZE(5 + .N[N_LEN]));
+            S = .REC_LEN;
+            PUT(0, 4);
+            PUT(0, 1);                  ! datyp
+            PUT(0, 1);                  ! temp
+            PUT(.WEAK, 2);
+            PUT_COUNTED(NTEXT(.N), .N[N_LEN]);
+            GSD_END(.S, GSD_SYM)
+            END
+        ELSE IF (.N[N_FLAGS] AND (F_GLOBAL OR F_WEAK)) NEQ 0
+        THEN
+            SELECTONE .N[N_VALUE + V_KIND] OF
+                SET
+                [VK_PSECT]:
+                    BEGIN
+                    ! A label is an address, unless its psect is absolute.
+                    LOCAL
+                        P : REF VECTOR;
+                    PSINDX = .N[N_VALUE + V_A];
+                    P = .ASM_PSECTS[.PSINDX];
+                    FLAGS = SYM_DEF OR .WEAK
+                        OR (IF (.P[PS_FLAGS] AND PSC_REL) NEQ 0 THEN SYM_REL ELSE 0);
+                    VALUE = .N[N_VALUE + V_OFF]
+                    END;
+                [VK_ABS]:
+                    BEGIN
+                    ! Constants belong to the absolute psect.
+                    IF .ABS LSS 0
+                    THEN
+                        BEGIN
+                        PSC(0, PSC_SHR, 0, T('$ABS$'));
+                        ABS = .ASM_NPSECTS
+                        END;
+                    PSINDX = .ABS;
+                    FLAGS = SYM_DEF OR .WEAK;
+                    VALUE = .N[N_VALUE + V_OFF]
+                    END;
+                TES;
+        IF .FLAGS GEQ 0
+        THEN
+            BEGIN
+            IF .VALUE LSS -%X'80000000' OR .VALUE GTR %X'7FFFFFFF' THEN FLAGS = .FLAGS OR SYM_QUAD_VAL;
+            ITEM(EGSD, GSD_SIZE(29 + .N[N_LEN]));
+            S = .REC_LEN;
+            PUT(0, 4);
+            PUT(0, 1);                  ! datyp
+            PUT(0, 1);                  ! temp
+            PUT(.FLAGS, 2);
+            PUT(.VALUE, 8);
+            PUT(0, 8);                  ! code_address
+            PUT(0, 4);                  ! ca_psindx
+            PUT(.PSINDX, 4);
+            PUT_COUNTED(NTEXT(.N), .N[N_LEN]);
+            GSD_END(.S, GSD_SYM)
+            END;
+        N = .N[N_ORDER]
+        END
+    END;
+
+! ----- text and relocations -----
+
+! A command with args bytes of arguments: starts it, returns where.
+ROUTINE COMMAND (ARGS) =
+    BEGIN
+    LOCAL
+        S;
+    ITEM(ETIR, 4 + .ARGS);
+    S = .REC_LEN;
+    PUT(0, 4);
+    .S
+    END;
+
+! Pushes a value on the linker's stack.
+ROUTINE PUSH (V : REF VECTOR) : NOVALUE =
+    BEGIN
+    LOCAL
+        S;
+    CASE .V[V_KIND] FROM VK_ABS TO VK_EXT OF
+        SET
+        [VK_ABS]:
+            BEGIN
+            S = COMMAND(8);
+            PUT(.V[V_OFF], 8);
+            HEADER(.S, STA_QW)
+            END;
+        [VK_PSECT]:
+            BEGIN
+            S = COMMAND(12);
+            PUT(.V[V_A], 4);
+            PUT(.V[V_OFF], 8);
+            HEADER(.S, STA_PQ)
+            END;
+        [VK_EXT]:
+            BEGIN
+            LOCAL
+                N : REF VECTOR;
+            N = .V[V_A];
+            S = COMMAND(1 + .N[N_LEN]);
+            PUT_COUNTED(NTEXT(.N), .N[N_LEN]);
+            HEADER(.S, STA_GBL);
+            IF .V[V_OFF] NEQ 0
+            THEN
+                BEGIN
+                S = COMMAND(8);
+                PUT(.V[V_OFF], 8);
+                HEADER(.S, STA_QW);
+                S = COMMAND(0);
+                HEADER(.S, OPR_ADD)
+                END
+            END;
+        TES
+    END;
+
+! The command that stores an instruction with a fixup of kind fix.
+ROUTINE STORE (FIX) =
+    BEGIN
+    IF .FIX GEQ FIX_MOVW THEN RETURN STO_A64_MOVW_G0 + MIN((.FIX - FIX_MOVW) XOR 1, 6);
+    IF .FIX GEQ FIX_LDST THEN RETURN STO_A64_LDST8_LO12 + MIN(.FIX - FIX_LDST, 4);
+    STO_A64_JUMP26 + .FIX - FIX_JUMP26
+    END;
+
+ROUTINE TEXT : NOVALUE =
+    INCR I FROM 0 TO .ASM_NPSECTS - 1 DO
+        BEGIN
+        LOCAL
+            P : REF VECTOR,
+            K : REF VECTOR,
+            LOC,
+            S;
+        P = .ASM_PSECTS[.I];
+        K = .P[PS_FIRST];
+        IF .K NEQ 0
+        THEN
+            BEGIN
+            S = COMMAND(12);
+            PUT(.I, 4);
+            PUT(0, 8);
+            HEADER(.S, STA_PQ);
+            S = COMMAND(0);
+            HEADER(.S, CTL_SETRB);
+            LOC = 0;
+            WHILE .K NEQ 0 DO
+                BEGIN
+                LOCAL
+                    GAP;
+                ! Skip gaps; the linker zero-fills them.
+                GAP = .K[CH_OFFSET] - .LOC;
+                WHILE .GAP GTR 0 DO
+                    BEGIN
+                    LOCAL
+                        STEP;
+                    STEP = MIN(.GAP, %X'7FFFFFFF');
+                    S = COMMAND(4);
+                    PUT(.STEP, 4);
+                    HEADER(.S, CTL_AUGRB);
+                    GAP = .GAP - .STEP
+                    END;
+                LOC = .K[CH_OFFSET];
+                CASE .K[CH_KIND] FROM CK_BYTES TO CK_DATA OF
+                    SET
+                    [CK_BYTES]:
+                        BEGIN
+                        LOCAL
+                            AT;
+                        AT = 0;
+                        WHILE .AT LSS .K[CH_LEN] DO
+                            BEGIN
+                            LOCAL
+                                N;
+                            N = MIN(.K[CH_LEN] - .AT, MAX_IMM);
+                            S = COMMAND(4 + .N);
+                            PUT(.N, 4);
+                            PUT_BYTES(.K[CH_ADDR] + .AT, .N);
+                            HEADER(.S, STO_IMM);
+                            AT = .AT + .N
+                            END;
+                        LOC = .LOC + .K[CH_LEN]
+                        END;
+                    [CK_INSN]:
+                        BEGIN
+                        PUSH(K[CH_VALUE]);
+                        S = COMMAND(4);
+                        PUT(.K[CH_WORD], 4);
+                        HEADER(.S, STORE(.K[CH_FIX]));
+                        LOC = .LOC + 4
+                        END;
+                    [CK_DATA]:
+                        BEGIN
+                        LOCAL
+                            SIZE;
+                        SIZE = .K[CH_SIZE];
+                        PUSH(K[CH_VALUE]);
+                        S = COMMAND(0);
+                        HEADER(.S,
+                            (SELECTONE .SIZE OF
+                                SET
+                                [1]: STO_B;
+                                [2]: STO_W;
+                                [4]: STO_LW;
+                                [OTHERWISE]:
+                                    IF .K[CH_VALUE + V_KIND] EQL VK_PSECT THEN STO_OFF ELSE STO_QW;
+                                TES));
+                        LOC = .LOC + .SIZE
+                        END;
+                    TES;
+                K = .K[CH_NEXT]
+                END
+            END
+        END;
+
+! EMIT_RECORDS channel, name, length, date, tool, length: writes the
+! module ASM_ASSEMBLE made to the channel; name is its name if the source
+! had no .TITLE, date when it was made, dd-mmm-yyyy hh:mm, and tool the
+! translator, which go in its header. Returns the I/O module's status.
+GLOBAL ROUTINE EMIT_RECORDS (CHANNEL, NAME, NLEN, DATE, TOOL, TLEN) =
+    BEGIN
+    CHAN = .CHANNEL;
+    STATUS = SS$_NORMAL;
+    REC_LEN = 0;
+    START(EMH);
+    PUT(MHD, 2);
+    PUT(2, 1);                          ! strlvl
+    PUT(0, 1);                          ! temp
+    PUT(183, 4);                        ! arch1: ARM64
+    PUT(0, 4);                          ! arch2
+    PUT(MAX_RECORD, 4);                 ! recsiz
+    IF .ASM_TITLE NEQ 0
+    THEN
+        PUT_COUNTED(NTEXT(.ASM_TITLE), .VECTOR[.ASM_TITLE, N_LEN])
+    ELSE
+        PUT_COUNTED(.NAME, .NLEN);
+    PUT_COUNTED(.ASM_IDENT, .ASM_IDENTLEN);
+    PUT_BYTES(.DATE, 17);
+    START(EMH);
+    PUT(LNM, 2);
+    PUT_BYTES(.TOOL, .TLEN);
+    FLUSH();
+    USED = ROOM;
+    INCR I FROM 0 TO .ASM_NPSECTS - 1 DO
+        BEGIN
+        LOCAL
+            P : REF VECTOR,
+            N : REF VECTOR;
+        P = .ASM_PSECTS[.I];
+        N = .P[PS_NAME];
+        PSC(.P[PS_ALIGN], .P[PS_FLAGS], .P[PS_SIZE], NTEXT(.N), .N[N_LEN])
+        END;
+    SYMBOLS();
+    FLUSH();
+    USED = ROOM;
+    TEXT();
+    START(EEOM);
+    PUT(0, 4);                          ! total_lps
+    PUT(0, 2);                          ! comcod
+    IF .ASM_TRANSFER GEQ 0
+    THEN
+        BEGIN
+        PUT(0, 1);                      ! tfrflg
+        PUT(0, 1);                      ! temp
+        PUT(.ASM_TRANSFER, 4);
+        PUT(.ASM_TRANSFER_OFF, 8)
+        END;
+    FLUSH();
+    .STATUS
+    END;
+
+END
+ELUDOM

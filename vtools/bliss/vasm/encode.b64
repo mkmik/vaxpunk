@@ -1,0 +1,2209 @@
+MODULE ENCODE (IDENT = 'V1.0') =
+%TITLE 'VASM: ARM64 instructions'
+BEGIN
+!
+! encode.rs: operands in standard (GNU/LLVM) syntax, encoded by
+! instruction class, the same words as vasm's, which tests/encode.rs
+! checks against GNU as. The instruction being encoded, its operands and
+! where it goes are this module's state while ENC_ENCODE runs, as
+! encode.rs's Args.
+!
+REQUIRE 'VASM';
+
+EXTERNAL ROUTINE
+    UTIL_ROUTINES,
+    LEX_ROUTINES,
+    EXPR_ROUTINES;
+
+FORWARD ROUTINE
+    SIMPLE;
+
+OWN
+    MN : REF VECTOR,                    ! the mnemonic, a name in upper case
+    MNCOL,
+    OPS : REF VECTOR,                   ! the operands, O_ records
+    NOPS,
+    HERE,                               ! where the instruction goes, a value
+    OUT : REF VECTOR;                   ! the result: word, fixup, value
+
+LITERAL
+    MAX_OPS = 64,
+    ! OUT
+    W_WORD = 0,
+    W_FIX = 1,                          ! a FIX_ code, or 0
+    W_VALUE = 2;                        ! what the fixup refers to, a value
+
+! ----- operands -----
+
+! The register a name is, RK_ kind * 32 + number, or -1.
+ROUTINE REG (N : REF VECTOR) =
+    BEGIN
+    LOCAL
+        P,
+        LEN,
+        KIND,
+        R;
+    P = NTEXT(.N);
+    LEN = .N[N_LEN];
+    IF NAME_EQL(.N, T('SP')) THEN RETURN RK_SP * 32 + 31;
+    IF NAME_EQL(.N, T('WSP')) THEN RETURN RK_WSP * 32 + 31;
+    IF NAME_EQL(.N, T('XZR')) THEN RETURN RK_X * 32 + 31;
+    IF NAME_EQL(.N, T('WZR')) THEN RETURN RK_W * 32 + 31;
+    IF NAME_EQL(.N, T('LR')) THEN RETURN RK_X * 32 + 30;
+    IF NAME_EQL(.N, T('FP')) THEN RETURN RK_X * 32 + 29;
+    IF .LEN LSS 2 OR .LEN GTR 3 THEN RETURN -1;
+    KIND =
+        (SELECTONE GETB(.P) OF
+            SET
+            [%C'X']: RK_X;
+            [%C'W']: RK_W;
+            [%C'B']: RK_B;
+            [%C'H']: RK_H;
+            [%C'S']: RK_S;
+            [%C'D']: RK_D;
+            [%C'Q']: RK_Q;
+            [OTHERWISE]: 0;
+            TES);
+    IF .KIND EQL 0 THEN RETURN -1;
+    ! A number below 32, written without leading zeros.
+    R = 0;
+    INCR I FROM 1 TO .LEN - 1 DO
+        BEGIN
+        IF NOT IS_DIGIT(GETB(.P + .I)) THEN RETURN -1;
+        R = .R * 10 + GETB(.P + .I) - %C'0'
+        END;
+    IF .LEN EQL 3 AND GETB(.P + 1) EQL %C'0' THEN RETURN -1;
+    IF .R GEQ 32 THEN RETURN -1;
+    IF .R EQL 31 AND (.KIND EQL RK_X OR .KIND EQL RK_W) THEN RETURN -1;
+    .KIND * 32 + .R
+    END;
+
+ROUTINE SF (R) =
+    (RKIND(.R) EQL RK_X OR RKIND(.R) EQL RK_SP);
+
+ROUTINE IS_SP (R) =
+    (RKIND(.R) EQL RK_SP OR RKIND(.R) EQL RK_WSP);
+
+! A condition's code, 0 to 15, from its K_ code, or -1.
+ROUTINE COND_CODE (KW) =
+    SELECTONE .KW OF
+        SET
+        [K_EQ]: 0;
+        [K_NE]: 1;
+        [K_HS, K_CS]: 2;
+        [K_LO, K_CC]: 3;
+        [K_MI]: 4;
+        [K_PL]: 5;
+        [K_VS]: 6;
+        [K_VC]: 7;
+        [K_HI]: 8;
+        [K_LS]: 9;
+        [K_GE]: 10;
+        [K_LT]: 11;
+        [K_GT]: 12;
+        [K_LE]: 13;
+        [K_AL]: 14;
+        [K_NV]: 15;
+        [OTHERWISE]: -1;
+        TES;
+
+ROUTINE NEW_OP (KIND, COL) =
+    BEGIN
+    LOCAL
+        O : REF VECTOR;
+    O = MEM_ALLOC(O_SIZE * 8);
+    O[O_KIND] = .KIND;
+    O[O_COL] = .COL;
+    .O
+    END;
+
+! :lo12: and friends: the MOD_ code, or 0 after an error.
+ROUTINE MODIFIER (C : REF VECTOR) =
+    BEGIN
+    LOCAL
+        COL,
+        N : REF VECTOR;
+    COL = CCOL(C);
+    TRY(LEX_EXPECT(.C, %C':'));
+    N = LEX_NAME(.C);
+    TRY(LEX_EXPECT(.C, %C':'));
+    IF .N NEQ 0
+    THEN
+        SELECTONE .N[N_KW] OF
+            SET
+            [K_LO12]: RETURN MOD_LO12;
+            [K_ABS_G0]: RETURN MOD_ABSG + 1;
+            [K_ABS_G0_NC]: RETURN MOD_ABSG;
+            [K_ABS_G1]: RETURN MOD_ABSG + 3;
+            [K_ABS_G1_NC]: RETURN MOD_ABSG + 2;
+            [K_ABS_G2]: RETURN MOD_ABSG + 5;
+            [K_ABS_G2_NC]: RETURN MOD_ABSG + 4;
+            [K_ABS_G3]: RETURN MOD_ABSG + 6;
+            TES;
+    MSG_BEGIN();
+    MSG_TEXT(T('unknown relocation operator :'));
+    IF .N NEQ 0
+    THEN
+        INCR I FROM 0 TO .N[N_LEN] - 1 DO
+            BEGIN
+            LOCAL
+                CH;
+            CH = GETB(NTEXT(.N) + .I);
+            IF .CH GEQ %C'A' AND .CH LEQ %C'Z' THEN CH = .CH + 32;
+            MSG_CHAR(.CH)
+            END;
+    MSG_CHAR(%C':');
+    FAIL(.COL)
+    END;
+
+! An operand that isn't a memory operand, into O, an O_ record.
+ROUTINE SIMPLE (C : REF VECTOR, BLOCK, O : REF VECTOR) =
+    BEGIN
+    LOCAL
+        HASH,
+        E;
+    HASH = LEX_EAT(.C, %C'#');
+    IF LEX_PEEK(.C) EQL %C':'
+    THEN
+        BEGIN
+        LOCAL
+            M;
+        M = MODIFIER(.C);
+        IF .M EQL 0 THEN RETURN FALSE;
+        E = EXPR_PARSE(.C, .BLOCK);
+        IF .E EQL 0 THEN RETURN FALSE;
+        O[O_KIND] = OK_MOD;
+        O[O_MOD] = .M;
+        O[O_EXPR] = .E;
+        RETURN TRUE
+        END;
+    IF NOT .HASH
+    THEN
+        BEGIN
+        LOCAL
+            SAVE,
+            N : REF VECTOR;
+        SAVE = .C[C_AT];
+        N = LEX_NAME(.C);
+        IF .N NEQ 0
+        THEN
+            BEGIN
+            LOCAL
+                R,
+                KW;
+            R = REG(.N);
+            IF .R GEQ 0
+            THEN
+                BEGIN
+                O[O_KIND] = OK_REG;
+                O[O_REG] = .R;
+                RETURN TRUE
+                END;
+            KW = .N[N_KW];
+            IF .KW GEQ K_LSL AND .KW LEQ K_ROR
+            THEN
+                BEGIN
+                LEX_EAT(.C, %C'#');
+                E = EXPR_PARSE(.C, .BLOCK);
+                IF .E EQL 0 THEN RETURN FALSE;
+                O[O_KIND] = OK_SHIFT;
+                O[O_TYPE] = .KW - K_LSL;
+                O[O_EXPR] = .E;
+                RETURN TRUE
+                END;
+            IF .KW GEQ K_UXTB AND .KW LEQ K_SXTX
+            THEN
+                BEGIN
+                LOCAL
+                    CH;
+                O[O_KIND] = OK_EXTEND;
+                O[O_TYPE] = .KW - K_UXTB;
+                O[O_EXPR] = 0;
+                CH = LEX_PEEK(.C);
+                IF .CH EQL %C'#' OR IS_DIGIT(.CH)
+                THEN
+                    BEGIN
+                    LEX_EAT(.C, %C'#');
+                    E = EXPR_PARSE(.C, .BLOCK);
+                    IF .E EQL 0 THEN RETURN FALSE;
+                    O[O_EXPR] = .E
+                    END;
+                RETURN TRUE
+                END
+            END;
+        C[C_AT] = .SAVE
+        END;
+    E = EXPR_PARSE(.C, .BLOCK);
+    IF .E EQL 0 THEN RETURN FALSE;
+    O[O_KIND] = OK_IMM;
+    O[O_EXPR] = .E;
+    TRUE
+    END;
+
+! A memory operand, after its [, into O.
+ROUTINE MEMORY (C : REF VECTOR, BLOCK, O : REF VECTOR) =
+    BEGIN
+    LOCAL
+        COL,
+        N,
+        BASE;
+    LEX_SKIP_WS(.C);
+    COL = CCOL(C);
+    N = LEX_NAME(.C);
+    BASE = (IF .N NEQ 0 THEN REG(.N) ELSE -1);
+    IF .BASE LSS 0 OR NOT (RKIND(.BASE) EQL RK_X OR RKIND(.BASE) EQL RK_SP)
+        OR .BASE EQL RK_X * 32 + 31
+    THEN
+        RETURN FAIL_TEXT(.COL, T('expected a 64-bit base register or SP'));
+    O[O_KIND] = OK_MEM;
+    O[O_REG] = .BASE;
+    O[O_INDEX] = IX_NONE;
+    IF LEX_EAT(.C, %C',')
+    THEN
+        BEGIN
+        LOCAL
+            I : VECTOR[O_SIZE];
+        LEX_SKIP_WS(.C);
+        COL = CCOL(C);
+        TRY(SIMPLE(.C, .BLOCK, I));
+        SELECTONE .I[O_KIND] OF
+            SET
+            [OK_IMM]:
+                BEGIN
+                O[O_INDEX] = IX_IMM;
+                O[O_IEXPR] = .I[O_EXPR]
+                END;
+            [OK_MOD]:
+                BEGIN
+                O[O_INDEX] = IX_MOD;
+                O[O_IMOD] = .I[O_MOD];
+                O[O_IEXPR] = .I[O_EXPR]
+                END;
+            [OK_REG]:
+                BEGIN
+                LOCAL
+                    R;
+                R = .I[O_REG];
+                IF RKIND(.R) NEQ RK_X AND RKIND(.R) NEQ RK_W
+                THEN
+                    RETURN FAIL_TEXT(.COL, T('expected an offset or an index register'));
+                O[O_INDEX] = IX_REG;
+                O[O_IREG] = .R;
+                O[O_AMOUNT] = 0;
+                IF LEX_EAT(.C, %C',')
+                THEN
+                    BEGIN
+                    LOCAL
+                        X : VECTOR[O_SIZE];
+                    TRY(SIMPLE(.C, .BLOCK, X));
+                    IF .X[O_KIND] EQL OK_SHIFT AND .X[O_TYPE] EQL 0
+                    THEN
+                        BEGIN
+                        O[O_OPTION] = 3;
+                        O[O_AMOUNT] = .X[O_EXPR]
+                        END
+                    ELSE IF .X[O_KIND] EQL OK_EXTEND AND
+                        (.X[O_TYPE] EQL 2 OR .X[O_TYPE] EQL 3 OR .X[O_TYPE] EQL 6 OR
+                         .X[O_TYPE] EQL 7)
+                    THEN
+                        BEGIN
+                        O[O_OPTION] = .X[O_TYPE];
+                        O[O_AMOUNT] = .X[O_EXPR]
+                        END
+                    ELSE
+                        RETURN FAIL_TEXT(.COL, T('expected LSL, UXTW, SXTW or SXTX'))
+                    END
+                ELSE
+                    O[O_OPTION] = (IF RKIND(.R) EQL RK_W THEN 2 ELSE 3)
+                END;
+            [OTHERWISE]:
+                RETURN FAIL_TEXT(.COL, T('expected an offset or an index register'));
+            TES
+        END;
+    TRY(LEX_EXPECT(.C, %C']'));
+    O[O_WBACK] = LEX_EAT(.C, %C'!');
+    TRUE
+    END;
+
+! ENC_OPERANDS cursor, block, ops, count: parses an instruction's operands
+! into a vector of O_ records; stores it and how many.
+GLOBAL ROUTINE ENC_OPERANDS (C : REF VECTOR, BLOCK, RESULT, COUNT) =
+    BEGIN
+    LOCAL
+        LIST : VECTOR[MAX_OPS],
+        N,
+        V : REF VECTOR;
+    N = 0;
+    IF NOT LEX_AT_END(.C)
+    THEN
+        WHILE 1 DO
+            BEGIN
+            LOCAL
+                O : REF VECTOR;
+            LEX_SKIP_WS(.C);
+            IF .N EQL MAX_OPS THEN RETURN FAIL_TEXT(CCOL(C), T('too many operands'));
+            O = NEW_OP(0, CCOL(C));
+            IF LEX_EAT(.C, %C'[')
+            THEN
+                TRY(MEMORY(.C, .BLOCK, .O))
+            ELSE
+                TRY(SIMPLE(.C, .BLOCK, .O));
+            LIST[.N] = .O;
+            N = .N + 1;
+            IF NOT LEX_EAT(.C, %C',') THEN EXITLOOP
+            END;
+    IF NOT LEX_AT_END(.C)
+    THEN
+        RETURN FAIL_TEXT(CCOL(C), T('unexpected text after the operands'));
+    V = MEM_ALLOC(.N * 8 + 8);
+    CH$MOVE(.N * 8, LIST, .V);
+    .RESULT = .V;
+    .COUNT = .N;
+    TRUE
+    END;
+
+! ----- checks -----
+
+ROUTINE MSG_LOWER (N : REF VECTOR) : NOVALUE =
+    INCR I FROM 0 TO .N[N_LEN] - 1 DO
+        BEGIN
+        LOCAL
+            CH;
+        CH = GETB(NTEXT(.N) + .I);
+        IF .CH GEQ %C'A' AND .CH LEQ %C'Z' THEN CH = .CH + 32;
+        MSG_CHAR(.CH)
+        END;
+
+! The operand at i, or 0.
+ROUTINE OP (I) =
+    IF .I LSS .NOPS THEN .OPS[.I] ELSE 0;
+
+ROUTINE KIND (I) =
+    BEGIN
+    LOCAL
+        O : REF VECTOR;
+    O = OP(.I);
+    IF .O EQL 0 THEN 0 ELSE .O[O_KIND]
+    END;
+
+ROUTINE COL (I) =
+    BEGIN
+    LOCAL
+        O : REF VECTOR;
+    O = OP(.I);
+    IF .O EQL 0 THEN .MNCOL ELSE .O[O_COL]
+    END;
+
+ROUTINE COUNT (LO, HI) =
+    BEGIN
+    IF .NOPS GEQ .LO AND .NOPS LEQ .HI THEN RETURN TRUE;
+    MSG_BEGIN();
+    MSG_NAME(.MN);
+    MSG_TEXT(T(' takes '));
+    MSG_DEC(.LO);
+    IF .LO NEQ .HI
+    THEN
+        BEGIN
+        MSG_TEXT(T(' to '));
+        MSG_DEC(.HI)
+        END;
+    MSG_TEXT(T(' operands'));
+    FAIL(.MNCOL)
+    END;
+
+! UFIELD v, bits, col, what, length, result: v, if it fits in bits bits.
+ROUTINE UFIELD (V, BITS, COL, WHAT, WLEN, RESULT) =
+    BEGIN
+    IF .V LSS 0 OR .V GEQ SLL(1, .BITS)
+    THEN
+        BEGIN
+        MSG_BEGIN();
+        MSG_TEXT(.WHAT, .WLEN);
+        MSG_CHAR(%C' ');
+        MSG_DEC(.V);
+        MSG_TEXT(T(' out of range 0 to '));
+        MSG_DEC(SLL(1, .BITS) - 1);
+        RETURN FAIL(.COL)
+        END;
+    .RESULT = .V;
+    TRUE
+    END;
+
+! SFIELD v, bits, col, what, length, result: v in two's complement in bits
+! bits, if it fits.
+ROUTINE SFIELD (V, BITS, COL, WHAT, WLEN, RESULT) =
+    BEGIN
+    LOCAL
+        LIM;
+    LIM = SLL(1, .BITS - 1);
+    IF .V LSS -.LIM OR .V GEQ .LIM
+    THEN
+        BEGIN
+        MSG_BEGIN();
+        MSG_TEXT(.WHAT, .WLEN);
+        MSG_CHAR(%C' ');
+        MSG_DEC(.V);
+        MSG_TEXT(T(' out of range '));
+        MSG_DEC(-.LIM);
+        MSG_TEXT(T(' to '));
+        MSG_DEC(.LIM - 1);
+        RETURN FAIL(.COL)
+        END;
+    .RESULT = .V AND (SLL(1, .BITS) - 1);
+    TRUE
+    END;
+
+! A displacement in instructions, for branches.
+ROUTINE DISP (V, BITS, COL, RESULT) =
+    BEGIN
+    LOCAL
+        RANGE;
+    IF .V MOD 4 NEQ 0 THEN RETURN FAIL_TEXT(.COL, T('branch target is not 4-byte aligned'));
+    RANGE = SLL(1, .BITS + 1);
+    IF .V LSS -.RANGE OR .V GEQ .RANGE
+    THEN
+        BEGIN
+        MSG_BEGIN();
+        MSG_TEXT(T('branch target out of range ('));
+        MSG_CHAR(%X'C2');               ! the plus-minus sign in UTF-8
+        MSG_CHAR(%X'B1');
+        MSG_DEC(.RANGE / 1024);
+        MSG_TEXT(T(' KB)'));
+        RETURN FAIL(.COL)
+        END;
+    .RESULT = (.V / 4) AND (SLL(1, .BITS) - 1);
+    TRUE
+    END;
+
+ROUTINE ADR_FIELD (V) =
+    SLL(.V AND 3, 29) OR SLL(SRL(.V AND %X'FFFFFFFF', 2) AND %X'7FFFF', 5);
+
+ROUTINE EVAL (E, COL, V) =
+    EXPR_EVAL(.E, .HERE, .V, .COL);
+
+! ABS expr, col, result: the expression's value, which must be a constant.
+ROUTINE ABS_ (E, COL, RESULT) =
+    BEGIN
+    LOCAL
+        V : VECTOR[V_SIZE];
+    TRY(EVAL(.E, .COL, V));
+    IF .V[V_KIND] NEQ VK_ABS
+    THEN
+        RETURN FAIL_TEXT(.COL, T('expected a constant, not an address'));
+    .RESULT = .V[V_OFF];
+    TRUE
+    END;
+
+ROUTINE GETREG (I, RESULT) =
+    BEGIN
+    LOCAL
+        O : REF VECTOR;
+    O = OP(.I);
+    IF .O NEQ 0
+    THEN
+        IF .O[O_KIND] EQL OK_REG
+        THEN
+            BEGIN
+            .RESULT = .O[O_REG];
+            RETURN TRUE
+            END;
+    FAIL_TEXT(COL(.I), T('expected a register'))
+    END;
+
+! GP i, sp, result: a general register; sp says whether SP (and not ZR) is
+! allowed.
+ROUTINE GP (I, SP, RESULT) =
+    BEGIN
+    LOCAL
+        R,
+        OK;
+    TRY(GETREG(.I, R));
+    OK =
+        (SELECTONE RKIND(.R) OF
+            SET
+            [RK_X, RK_W]: NOT (.SP AND RNUM(.R) EQL 31);
+            [RK_SP, RK_WSP]: .SP;
+            [OTHERWISE]: FALSE;
+            TES);
+    IF NOT .OK
+    THEN
+        IF .SP
+        THEN
+            RETURN FAIL_TEXT(COL(.I), T('expected a general register or SP'))
+        ELSE
+            RETURN FAIL_TEXT(COL(.I), T('expected a general register or ZR'));
+    .RESULT = .R;
+    TRUE
+    END;
+
+! SAME_SIZE result, i, r...: the size of registers r, at operands i, which
+! must all have the size of the first; up to four, the rest -1.
+ROUTINE SAME_SIZE (RESULT, I0, R0, I1, R1, I2, R2, I3, R3) =
+    BEGIN
+    LOCAL
+        S;
+    S = SF(.R0);
+    IF .I1 GEQ 0 THEN IF SF(.R1) NEQ .S THEN RETURN FAIL_TEXT(COL(.I1), T('register sizes don''t match'));
+    IF .I2 GEQ 0 THEN IF SF(.R2) NEQ .S THEN RETURN FAIL_TEXT(COL(.I2), T('register sizes don''t match'));
+    IF .I3 GEQ 0 THEN IF SF(.R3) NEQ .S THEN RETURN FAIL_TEXT(COL(.I3), T('register sizes don''t match'));
+    .RESULT = .S;
+    TRUE
+    END;
+
+ROUTINE IS_REG (I) =
+    KIND(.I) EQL OK_REG;
+
+ROUTINE IMMAT (I, RESULT) =
+    BEGIN
+    IF KIND(.I) EQL OK_IMM
+    THEN
+        BEGIN
+        LOCAL
+            O : REF VECTOR;
+        O = OP(.I);
+        RETURN ABS_(.O[O_EXPR], COL(.I), .RESULT)
+        END;
+    FAIL_TEXT(COL(.I), T('expected an immediate'))
+    END;
+
+ROUTINE EXPR (I, RESULT) =
+    BEGIN
+    IF KIND(.I) EQL OK_IMM
+    THEN
+        BEGIN
+        LOCAL
+            O : REF VECTOR;
+        O = OP(.I);
+        .RESULT = .O[O_EXPR];
+        RETURN TRUE
+        END;
+    FAIL_TEXT(COL(.I), T('expected an address or label'))
+    END;
+
+! A bare name at i, such as a condition or a barrier option, or 0.
+ROUTINE NAME (I) =
+    BEGIN
+    LOCAL
+        O : REF VECTOR,
+        E : REF VECTOR;
+    IF KIND(.I) NEQ OK_IMM THEN RETURN 0;
+    O = OP(.I);
+    E = .O[O_EXPR];
+    IF .E[E_KIND] NEQ EK_SYM THEN RETURN 0;
+    .E[E_X]
+    END;
+
+ROUTINE COND (I, RESULT) =
+    BEGIN
+    LOCAL
+        N : REF VECTOR;
+    N = NAME(.I);
+    IF .N NEQ 0
+    THEN
+        BEGIN
+        LOCAL
+            C;
+        C = COND_CODE(.N[N_KW]);
+        IF .C GEQ 0
+        THEN
+            BEGIN
+            .RESULT = .C;
+            RETURN TRUE
+            END
+        END;
+    FAIL_TEXT(COL(.I), T('expected a condition such as EQ or NE'))
+    END;
+
+! SHIFT i, sf, ror, type, amount: an optional shift operand at i.
+ROUTINE SHIFT (I, S, ROR, TYPE, AMOUNT) =
+    BEGIN
+    LOCAL
+        O : REF VECTOR;
+    O = OP(.I);
+    IF .O EQL 0
+    THEN
+        BEGIN
+        .TYPE = 0;
+        .AMOUNT = 0;
+        RETURN TRUE
+        END;
+    IF .O[O_KIND] EQL OK_SHIFT AND (.ROR OR .O[O_TYPE] NEQ 3)
+    THEN
+        BEGIN
+        LOCAL
+            V;
+        TRY(ABS_(.O[O_EXPR], COL(.I), V));
+        TRY(UFIELD(.V, 5 + .S, COL(.I), T('shift amount'), .AMOUNT));
+        .TYPE = .O[O_TYPE];
+        RETURN TRUE
+        END;
+    FAIL_TEXT(COL(.I), T('expected a shift'))
+    END;
+
+! ----- results -----
+
+ROUTINE FIXED (WORD) =
+    BEGIN
+    OUT[W_WORD] = .WORD AND %X'FFFFFFFF';
+    OUT[W_FIX] = 0;
+    TRUE
+    END;
+
+ROUTINE FIXUP (WORD, FIX, V : REF VECTOR) =
+    BEGIN
+    OUT[W_WORD] = .WORD AND %X'FFFFFFFF';
+    OUT[W_FIX] = .FIX;
+    VCOPY(OUT[W_VALUE], .V);
+    TRUE
+    END;
+
+! TARGET expr, col, fix, disp, value: a branch or address target: true
+! with the displacement from this instruction in disp if it's in the same
+! psect, otherwise 2 with the value; false after an error.
+ROUTINE TARGET (E, COL, FIX, D, V : REF VECTOR) =
+    BEGIN
+    LOCAL
+        H : REF VECTOR;
+    H = .HERE;
+    TRY(EVAL(.E, .COL, .V));
+    IF .V[V_KIND] EQL VK_PSECT AND .H[V_KIND] EQL VK_PSECT AND .V[V_A] EQL .H[V_A]
+        AND .FIX NEQ FIX_ADRP
+    THEN
+        BEGIN
+        .D = .V[V_OFF] - .H[V_OFF];
+        RETURN TRUE
+        END;
+    2
+    END;
+
+! A branch: direct if the target is in this psect, otherwise a fixup.
+ROUTINE BRANCH (BASE, I, FIX, BITS, E, SHIFT) =
+    BEGIN
+    LOCAL
+        D,
+        V : VECTOR[V_SIZE],
+        T_;
+    T_ = TARGET(.E, COL(.I), .FIX, D, V);
+    IF .T_ EQL 2 THEN RETURN FIXUP(.BASE, .FIX, V);
+    TRY(.T_);
+    TRY(DISP(.D, .BITS, COL(.I), D));
+    FIXED(.BASE OR SLL(.D, .SHIFT))
+    END;
+
+! BITMASK value, sf: the N:immr:imms encoding of a logical immediate, or -1
+! if it has none.
+ROUTINE BITMASK (VALUE, S) =
+    BEGIN
+    LOCAL
+        V,
+        SIZE,
+        MASK,
+        ELEM,
+        ONES,
+        RUN,
+        R,
+        IMMR,
+        IMMS;
+    V = (IF .S EQL 1 THEN .VALUE ELSE (.VALUE AND %X'FFFFFFFF') OR SLL(.VALUE, 32));
+    IF .V EQL 0 OR .V EQL -1 THEN RETURN -1;
+    SIZE = 64;
+    WHILE .SIZE GTR 2 DO
+        BEGIN
+        LOCAL
+            HALF,
+            M;
+        HALF = .SIZE / 2;
+        M = SLL(1, .HALF) - 1;
+        IF (.V AND .M) NEQ (SRL(.V, .HALF) AND .M) THEN EXITLOOP;
+        SIZE = .HALF
+        END;
+    MASK = (IF .SIZE EQL 64 THEN -1 ELSE SLL(1, .SIZE) - 1);
+    ELEM = .V AND .MASK;
+    ONES = 0;
+    INCR I FROM 0 TO 63 DO
+        IF (SRL(.ELEM, .I) AND 1) NEQ 0 THEN ONES = .ONES + 1;
+    RUN = SLL(1, .ONES) - 1;
+    R = -1;
+    INCR K FROM 0 TO .SIZE - 1 DO
+        BEGIN
+        LOCAL
+            X;
+        X = (IF .K EQL 0 THEN .ELEM ELSE (SRL(.ELEM, .K) OR SLL(.ELEM, .SIZE - .K)) AND .MASK);
+        IF .X EQL .RUN
+        THEN
+            BEGIN
+            R = .K;
+            EXITLOOP
+            END
+        END;
+    IF .R LSS 0 THEN RETURN -1;
+    IMMR = (.SIZE - .R) MOD .SIZE;
+    IMMS = ((NOT (SLL(.SIZE, 1) - 1)) AND %X'3F') OR (.ONES - 1);
+    SLL((IF .SIZE EQL 64 THEN 1 ELSE 0), 12) OR SLL(.IMMR, 6) OR .IMMS
+    END;
+
+ROUTINE BITFIELD (S, OPC, IMMR, IMMS, RN, RD) =
+    %X'13000000' OR SLL(.S, 31) OR SLL(.OPC, 29) OR SLL(.S, 22) OR SLL(.IMMR, 16)
+        OR SLL(.IMMS, 10) OR SLL(.RN, 5) OR .RD;
+
+ROUTINE CONDSEL (S, OP_, OP2, RM, C, RN, RD) =
+    %X'1A800000' OR SLL(.S, 31) OR SLL(.OP_, 30) OR SLL(.RM, 16) OR SLL(.C, 12)
+        OR SLL(.OP2, 10) OR SLL(.RN, 5) OR .RD;
+
+! ADD, SUB and their S forms; implied operands are ZR (CMP, CMN).
+ROUTINE ADDSUB (OP_, S, IMPLIED) =
+    BEGIN
+    LOCAL
+        RD,
+        N,
+        RN,
+        SZ,
+        BASE,
+        SP;
+    IF .IMPLIED EQL 1
+    THEN
+        N = 0
+    ELSE
+        BEGIN
+        TRY(GP(0, .S EQL 0, RD));
+        N = 1
+        END;
+    TRY(GP(.N, TRUE, RN));
+    IF .IMPLIED EQL 1 THEN RD = (IF SF(.RN) THEN RK_X ELSE RK_W) * 32 + 31;
+    TRY(SAME_SIZE(SZ, 0, .RD, .N, .RN, -1, 0, -1, 0));
+    BASE = SLL(.SZ, 31) OR SLL(.OP_, 30) OR SLL(.S, 29) OR SLL(RNUM(.RN), 5) OR RNUM(.RD);
+    SP = IS_SP(.RD) OR IS_SP(.RN);
+    SELECTONE KIND(.N + 1) OF
+        SET
+        [OK_REG]:
+            BEGIN
+            LOCAL
+                RM;
+            TRY(GP(.N + 1, FALSE, RM));
+            IF KIND(.N + 2) EQL OK_EXTEND OR .SP
+            THEN
+                BEGIN
+                ! Extended register: needed for SP, or when an extend is given.
+                LOCAL
+                    O : REF VECTOR,
+                    OPTION,
+                    AMOUNT_E,
+                    AMOUNT;
+                O = OP(.N + 2);
+                SELECTONE KIND(.N + 2) OF
+                    SET
+                    [OK_EXTEND]:
+                        BEGIN
+                        OPTION = .O[O_TYPE];
+                        AMOUNT_E = .O[O_EXPR]
+                        END;
+                    [OK_SHIFT]:
+                        BEGIN
+                        IF .O[O_TYPE] NEQ 0
+                        THEN
+                            RETURN FAIL_TEXT(COL(.N + 2), T('expected an extend such as UXTW'));
+                        OPTION = 2 + .SZ;
+                        AMOUNT_E = .O[O_EXPR]
+                        END;
+                    [0]:
+                        BEGIN
+                        OPTION = 2 + .SZ;
+                        AMOUNT_E = 0
+                        END;
+                    [OTHERWISE]:
+                        RETURN FAIL_TEXT(COL(.N + 2), T('expected an extend such as UXTW'));
+                    TES;
+                AMOUNT = 0;
+                IF .AMOUNT_E NEQ 0
+                THEN
+                    BEGIN
+                    LOCAL
+                        A;
+                    TRY(ABS_(.AMOUNT_E, COL(.N + 2), A));
+                    TRY(UFIELD(.A, 3, COL(.N + 2), T('extend amount'), AMOUNT))
+                    END;
+                IF .AMOUNT GTR 4
+                THEN
+                    RETURN FAIL_TEXT(COL(.N + 2), T('extend amount must be 0 to 4'));
+                IF (RKIND(.RM) EQL RK_X) NEQ ((.OPTION AND 3) EQL 3)
+                THEN
+                    RETURN FAIL_TEXT(COL(.N + 1), T('register size doesn''t match the extend'));
+                RETURN FIXED(%X'0B200000' OR .BASE OR SLL(RNUM(.RM), 16) OR SLL(.OPTION, 13)
+                    OR SLL(.AMOUNT, 10))
+                END;
+            BEGIN
+            LOCAL
+                X,
+                TYPE,
+                AMOUNT;
+            TRY(SAME_SIZE(X, 0, .RD, .N + 1, .RM, -1, 0, -1, 0));
+            TRY(SHIFT(.N + 2, .SZ, FALSE, TYPE, AMOUNT));
+            RETURN FIXED(%X'0B000000' OR .BASE OR SLL(.TYPE, 22) OR SLL(RNUM(.RM), 16)
+                OR SLL(.AMOUNT, 10))
+            END
+            END;
+        [OK_MOD]:
+            BEGIN
+            LOCAL
+                O : REF VECTOR;
+            O = OP(.N + 1);
+            IF .O[O_MOD] EQL MOD_LO12
+            THEN
+                BEGIN
+                LOCAL
+                    V : VECTOR[V_SIZE];
+                IF .OP_ NEQ 0 OR .S NEQ 0
+                THEN
+                    RETURN FAIL_TEXT(COL(.N + 1), T(':lo12: only works with ADD'));
+                TRY(EVAL(.O[O_EXPR], COL(.N + 1), V));
+                IF .V[V_KIND] EQL VK_ABS
+                THEN
+                    RETURN FIXED(%X'11000000' OR .BASE OR SLL(.V[V_OFF] AND %X'FFF', 10));
+                RETURN FIXUP(%X'11000000' OR .BASE, FIX_ADDLO12, V)
+                END
+            END;
+        TES;
+    BEGIN
+    LOCAL
+        IMM,
+        SH,
+        O : REF VECTOR,
+        OPX;
+    TRY(IMMAT(.N + 1, IMM));
+    SH = 0;
+    O = OP(.N + 2);
+    IF .O NEQ 0
+    THEN
+        BEGIN
+        LOCAL
+            A;
+        IF .O[O_KIND] NEQ OK_SHIFT OR .O[O_TYPE] NEQ 0
+        THEN
+            RETURN FAIL_TEXT(COL(.N + 2), T('expected LSL #0 or LSL #12'));
+        TRY(ABS_(.O[O_EXPR], COL(.N + 2), A));
+        IF .A NEQ 0 AND .A NEQ 12
+        THEN
+            RETURN FAIL_TEXT(COL(.N + 2), T('expected LSL #0 or LSL #12'));
+        SH = .A EQL 12
+        END;
+    ! A negative immediate is the opposite operation.
+    OPX = .OP_;
+    IF .IMM LSS 0
+    THEN
+        BEGIN
+        IMM = -.IMM;
+        OPX = .OPX XOR 1
+        END;
+    IF .SH EQL 0 AND .IMM GEQ %X'1000' AND (.IMM AND %X'FFF') EQL 0
+    THEN
+        BEGIN
+        IMM = .IMM / %X'1000';
+        SH = 1
+        END;
+    TRY(UFIELD(.IMM, 12, COL(.N + 1), T('immediate'), IMM));
+    FIXED(%X'11000000' OR (.BASE AND NOT SLL(1, 30)) OR SLL(.OPX, 30) OR SLL(.SH, 22)
+        OR SLL(.IMM, 10))
+    END
+    END;
+
+! AND, ORR, EOR, ANDS and the inverted forms; TST has an implied ZR.
+ROUTINE LOGICAL (OPC, INVERT, IMPLIED) =
+    BEGIN
+    LOCAL
+        RD,
+        N,
+        RN,
+        SZ,
+        BASE,
+        V,
+        BITS;
+    IF .IMPLIED EQL 1
+    THEN
+        N = 0
+    ELSE
+        BEGIN
+        TRY(GP(0, .OPC NEQ 3 AND NOT IS_REG(2), RD));
+        N = 1
+        END;
+    TRY(GP(.N, FALSE, RN));
+    IF .IMPLIED EQL 1 THEN RD = (IF SF(.RN) THEN RK_X ELSE RK_W) * 32 + 31;
+    TRY(SAME_SIZE(SZ, 0, .RD, .N, .RN, -1, 0, -1, 0));
+    BASE = SLL(.SZ, 31) OR SLL(.OPC, 29) OR SLL(RNUM(.RN), 5) OR RNUM(.RD);
+    IF IS_REG(.N + 1)
+    THEN
+        BEGIN
+        LOCAL
+            RM,
+            X,
+            TYPE,
+            AMOUNT;
+        TRY(GP(.N + 1, FALSE, RM));
+        TRY(SAME_SIZE(X, 0, .RD, .N + 1, .RM, -1, 0, -1, 0));
+        TRY(SHIFT(.N + 2, .SZ, TRUE, TYPE, AMOUNT));
+        RETURN FIXED(%X'0A000000' OR .BASE OR SLL(.TYPE, 22) OR SLL(.INVERT, 21)
+            OR SLL(RNUM(.RM), 16) OR SLL(.AMOUNT, 10))
+        END;
+    TRY(COUNT(.N + 2, .N + 2));
+    TRY(IMMAT(.N + 1, V));
+    IF .INVERT EQL 1 THEN V = NOT .V;
+    BITS = BITMASK(.V, .SZ);
+    IF .BITS GEQ 0 AND (.SZ EQL 1 OR (.BITS AND %X'1000') EQL 0)
+    THEN
+        RETURN FIXED(%X'12000000' OR .BASE OR SLL(.BITS, 10));
+    MSG_BEGIN();
+    MSG_HEX(.V);
+    MSG_TEXT(T(' is not a valid logical immediate'));
+    FAIL(COL(.N + 1))
+    END;
+
+! MOV with an immediate: MOVZ, MOVN or ORR, as GNU as picks; false if
+! none can.
+ROUTINE MOV_IMM (RD, VALUE) =
+    BEGIN
+    LOCAL
+        S,
+        V,
+        CHUNKS,
+        MASK,
+        SP,
+        WORD,
+        H;
+    S = SF(.RD);
+    V = (IF .S EQL 1 THEN .VALUE ELSE .VALUE AND %X'FFFFFFFF');
+    CHUNKS = (IF .S EQL 1 THEN 4 ELSE 2);
+    MASK = (IF .S EQL 1 THEN -1 ELSE %X'FFFFFFFF');
+    ! MOVZ and MOVN can't write SP: register 31 is the zero register there.
+    SP = IS_SP(.RD);
+    WORD = -1;
+    IF NOT .SP
+    THEN
+        BEGIN
+        INCR K FROM 0 TO .CHUNKS - 1 DO
+            IF (.V AND NOT SLL(%X'FFFF', 16 * .K) AND .MASK) EQL 0
+            THEN
+                BEGIN
+                WORD = %X'52800000' OR SLL(.K, 21) OR SLL(SRL(.V, 16 * .K) AND %X'FFFF', 5);
+                EXITLOOP
+                END;
+        IF .WORD LSS 0
+        THEN
+            INCR K FROM 0 TO .CHUNKS - 1 DO
+                IF (NOT .V AND .MASK AND NOT SLL(%X'FFFF', 16 * .K) AND .MASK) EQL 0
+                THEN
+                    BEGIN
+                    WORD = %X'12800000' OR SLL(.K, 21) OR SLL(SRL(NOT .V, 16 * .K) AND %X'FFFF', 5);
+                    EXITLOOP
+                    END
+        END;
+    IF .WORD LSS 0
+    THEN
+        BEGIN
+        LOCAL
+            B;
+        B = BITMASK(.V, .S);
+        IF .B LSS 0 THEN RETURN FALSE;
+        WORD = %X'320003E0' OR SLL(.B, 10)
+        END;
+    FIXED(.WORD OR SLL(.S, 31) OR RNUM(.RD))
+    END;
+
+! [Xn] with no offset, for exclusive and ordered accesses: its register.
+ROUTINE BARE_BASE (I, RESULT) =
+    BEGIN
+    LOCAL
+        O : REF VECTOR;
+    O = OP(.I);
+    IF .O NEQ 0
+    THEN
+        IF .O[O_KIND] EQL OK_MEM AND NOT .O[O_WBACK]
+        THEN
+            BEGIN
+            LOCAL
+                OK;
+            OK = .O[O_INDEX] EQL IX_NONE;
+            IF .O[O_INDEX] EQL IX_IMM
+            THEN
+                BEGIN
+                LOCAL
+                    E : REF VECTOR;
+                E = .O[O_IEXPR];
+                OK = .E[E_KIND] EQL EK_NUM AND .E[E_X] EQL 0
+                END;
+            IF .OK
+            THEN
+                BEGIN
+                .RESULT = RNUM(.O[O_REG]);
+                RETURN TRUE
+                END
+            END;
+    FAIL_TEXT(COL(.I), T('expected [Xn]'))
+    END;
+
+! The system register at operand i: o0:op1:CRn:CRm:op2 in 16 bits.
+ROUTINE SYSREG (I, RESULT) =
+    BEGIN
+    MACRO
+        PACK(OP0, OP1, CRN, CRM, OP2) =
+            (SLL((OP0) - 2, 14) OR SLL(OP1, 11) OR SLL(CRN, 7) OR SLL(CRM, 3) OR (OP2)) %,
+        SYS(S, OP0, OP1, CRN, CRM, OP2) =
+            IF NAME_EQL(.N, T(S))
+            THEN
+                BEGIN
+                .RESULT = PACK(OP0, OP1, CRN, CRM, OP2);
+                RETURN TRUE
+                END %;
+    LOCAL
+        N : REF VECTOR,
+        P,
+        LEN,
+        PARTS : VECTOR[5],
+        STARTS : VECTOR[6];
+    N = NAME(.I);
+    IF .N EQL 0 THEN RETURN FAIL_TEXT(COL(.I), T('expected a system register'));
+    SYS('NZCV', 3, 3, 4, 2, 0);
+    SYS('DAIF', 3, 3, 4, 2, 1);
+    SYS('FPCR', 3, 3, 4, 4, 0);
+    SYS('FPSR', 3, 3, 4, 4, 1);
+    SYS('CTR_EL0', 3, 3, 0, 0, 1);
+    SYS('DCZID_EL0', 3, 3, 0, 0, 7);
+    SYS('TPIDR_EL0', 3, 3, 13, 0, 2);
+    SYS('TPIDRRO_EL0', 3, 3, 13, 0, 3);
+    SYS('CNTFRQ_EL0', 3, 3, 14, 0, 0);
+    SYS('CNTPCT_EL0', 3, 3, 14, 0, 1);
+    SYS('CNTVCT_EL0', 3, 3, 14, 0, 2);
+    SYS('MIDR_EL1', 3, 0, 0, 0, 0);
+    SYS('MPIDR_EL1', 3, 0, 0, 0, 5);
+    SYS('ID_AA64MMFR0_EL1', 3, 0, 0, 7, 0);
+    SYS('SCTLR_EL1', 3, 0, 1, 0, 0);
+    SYS('CPACR_EL1', 3, 0, 1, 0, 2);
+    SYS('TTBR0_EL1', 3, 0, 2, 0, 0);
+    SYS('TTBR1_EL1', 3, 0, 2, 0, 1);
+    SYS('TCR_EL1', 3, 0, 2, 0, 2);
+    SYS('SPSR_EL1', 3, 0, 4, 0, 0);
+    SYS('ELR_EL1', 3, 0, 4, 0, 1);
+    SYS('SP_EL0', 3, 0, 4, 1, 0);
+    SYS('SPSEL', 3, 0, 4, 2, 0);
+    SYS('CURRENTEL', 3, 0, 4, 2, 2);
+    SYS('ESR_EL1', 3, 0, 5, 2, 0);
+    SYS('FAR_EL1', 3, 0, 6, 0, 0);
+    SYS('MAIR_EL1', 3, 0, 10, 2, 0);
+    SYS('VBAR_EL1', 3, 0, 12, 0, 0);
+    SYS('TPIDR_EL1', 3, 0, 13, 0, 4);
+    SYS('CNTKCTL_EL1', 3, 0, 14, 1, 0);
+    SYS('CNTV_CTL_EL0', 3, 3, 14, 3, 1);
+    ! The generic form, S<op0>_<op1>_C<n>_C<m>_<op2>: five decimal numbers
+    ! after the S, the C, the C, at most 3, 7, 15, 15 and 7.
+    P = NTEXT(.N);
+    LEN = .N[N_LEN];
+    IF .LEN GTR 1 AND GETB(.P) EQL %C'S'
+    THEN
+        BEGIN
+        LOCAL
+            K,
+            OK;
+        K = 0;
+        STARTS[0] = 1;
+        INCR J FROM 1 TO .LEN - 1 DO
+            IF GETB(.P + .J) EQL %C'_'
+            THEN
+                BEGIN
+                K = .K + 1;
+                IF .K GEQ 5 THEN EXITLOOP;
+                STARTS[.K] = .J + 1
+                END;
+        OK = .K EQL 4;
+        IF .OK
+        THEN
+            BEGIN
+            STARTS[5] = .LEN + 1;
+            INCR J FROM 0 TO 4 DO
+                BEGIN
+                LOCAL
+                    A,
+                    B,
+                    V,
+                    MAXV;
+                A = .STARTS[.J];
+                B = .STARTS[.J + 1] - 1;
+                IF .J EQL 2 OR .J EQL 3
+                THEN
+                    BEGIN
+                    IF .A GEQ .B THEN OK = FALSE ELSE IF GETB(.P + .A) NEQ %C'C' THEN OK = FALSE;
+                    A = .A + 1
+                    END;
+                MAXV = (CASE .J FROM 0 TO 4 OF SET [0]: 3; [1]: 7; [2, 3]: 15; [4]: 7; TES);
+                IF .A GEQ .B THEN OK = FALSE;
+                V = 0;
+                INCR X FROM .A TO .B - 1 DO
+                    BEGIN
+                    IF NOT IS_DIGIT(GETB(.P + .X)) THEN OK = FALSE;
+                    IF .V LEQ 99 THEN V = .V * 10 + GETB(.P + .X) - %C'0'
+                    END;
+                IF .V GTR .MAXV THEN OK = FALSE;
+                PARTS[.J] = .V
+                END;
+            IF .OK AND .PARTS[0] GEQ 2
+            THEN
+                BEGIN
+                .RESULT = PACK(.PARTS[0], .PARTS[1], .PARTS[2], .PARTS[3], .PARTS[4]);
+                RETURN TRUE
+                END
+            END
+        END;
+    MSG_BEGIN();
+    MSG_TEXT(T('unknown system register '));
+    MSG_LOWER(.N);
+    FAIL(COL(.I))
+    END;
+
+! The size, V bit and opc of a load or store, and log2 of the access size,
+! from the mnemonic as if it were scaled.
+ROUTINE LDST_SPEC (RT, RESULT : REF VECTOR) =
+    BEGIN
+    LOCAL
+        KW,
+        LOAD,
+        K,
+        S;
+    KW =
+        (SELECTONE .MN[N_KW] OF
+            SET
+            [K_LDUR]: K_LDR;
+            [K_STUR]: K_STR;
+            [K_LDURB]: K_LDRB;
+            [K_STURB]: K_STRB;
+            [K_LDURH]: K_LDRH;
+            [K_STURH]: K_STRH;
+            [K_LDURSB]: K_LDRSB;
+            [K_LDURSH]: K_LDRSH;
+            [K_LDURSW]: K_LDRSW;
+            [OTHERWISE]: .MN[N_KW];
+            TES);
+    LOAD = (SELECTONE .KW OF SET [K_STR, K_STRB, K_STRH]: 0; [OTHERWISE]: 1; TES);
+    K = RKIND(.RT);
+    S = -1;
+    SELECTONE .KW OF
+        SET
+        [K_LDR, K_STR]:
+            SELECTONE .K OF
+                SET
+                [RK_X]: (S = 3; RESULT[1] = 0; RESULT[2] = .LOAD);
+                [RK_W]: (S = 2; RESULT[1] = 0; RESULT[2] = .LOAD);
+                [RK_B]: (S = 0; RESULT[1] = 1; RESULT[2] = .LOAD);
+                [RK_H]: (S = 1; RESULT[1] = 1; RESULT[2] = .LOAD);
+                [RK_S]: (S = 2; RESULT[1] = 1; RESULT[2] = .LOAD);
+                [RK_D]: (S = 3; RESULT[1] = 1; RESULT[2] = .LOAD);
+                [RK_Q]: (S = 0; RESULT[1] = 1; RESULT[2] = 2 OR .LOAD);
+                TES;
+        [K_LDRB, K_STRB]:
+            IF .K EQL RK_W THEN (S = 0; RESULT[1] = 0; RESULT[2] = .LOAD);
+        [K_LDRH, K_STRH]:
+            IF .K EQL RK_W THEN (S = 1; RESULT[1] = 0; RESULT[2] = .LOAD);
+        [K_LDRSB]:
+            SELECTONE .K OF
+                SET
+                [RK_W]: (S = 0; RESULT[1] = 0; RESULT[2] = 3);
+                [RK_X]: (S = 0; RESULT[1] = 0; RESULT[2] = 2);
+                TES;
+        [K_LDRSH]:
+            SELECTONE .K OF
+                SET
+                [RK_W]: (S = 1; RESULT[1] = 0; RESULT[2] = 3);
+                [RK_X]: (S = 1; RESULT[1] = 0; RESULT[2] = 2);
+                TES;
+        [K_LDRSW]:
+            IF .K EQL RK_X THEN (S = 2; RESULT[1] = 0; RESULT[2] = 2);
+        TES;
+    IF .S LSS 0
+    THEN
+        BEGIN
+        MSG_BEGIN();
+        MSG_LOWER(.MN);
+        MSG_TEXT(T(' can''t use this register'));
+        RETURN FAIL(COL(0))
+        END;
+    RESULT[0] = .S;
+    RESULT[3] = (IF .K EQL RK_Q THEN 4 ELSE .S);
+    TRUE
+    END;
+
+ROUTINE LOAD_STORE =
+    BEGIN
+    LOCAL
+        RT,
+        SPEC : VECTOR[4],
+        SCALE,
+        UNSCALED,
+        HEAD,
+        M : REF VECTOR,
+        RN;
+    TRY(COUNT(2, 3));
+    TRY(GETREG(0, RT));
+    IF IS_SP(.RT) THEN RETURN FAIL_TEXT(COL(0), T('SP can''t be loaded or stored'));
+    TRY(LDST_SPEC(.RT, SPEC));
+    SCALE = .SPEC[3];
+    UNSCALED =
+        (SELECTONE .MN[N_KW] OF
+            SET
+            [K_LDUR, K_STUR, K_LDURB, K_STURB, K_LDURH, K_STURH, K_LDURSB, K_LDURSH, K_LDURSW]: TRUE;
+            [OTHERWISE]: FALSE;
+            TES);
+    HEAD = SLL(.SPEC[0], 30) OR SLL(.SPEC[1], 26) OR SLL(.SPEC[2], 22) OR RNUM(.RT);
+    IF KIND(1) NEQ OK_MEM
+    THEN
+        BEGIN
+        ! LDR (literal): a PC-relative address.
+        LOCAL
+            LIT,
+            E;
+        LIT = 0;
+        IF .MN[N_KW] EQL K_LDR
+        THEN
+            LIT =
+                (SELECTONE RKIND(.RT) OF
+                    SET
+                    [RK_W]: %X'18000000';
+                    [RK_X]: %X'58000000';
+                    [RK_S]: %X'1C000000';
+                    [RK_D]: %X'5C000000';
+                    [RK_Q]: %X'9C000000';
+                    [OTHERWISE]: 0;
+                    TES);
+        IF .MN[N_KW] EQL K_LDRSW AND RKIND(.RT) EQL RK_X THEN LIT = %X'98000000';
+        IF .LIT EQL 0
+        THEN
+            RETURN FAIL_TEXT(COL(1), T('expected a memory operand like [x1, #8]'));
+        TRY(EXPR(1, E));
+        RETURN BRANCH(.LIT OR RNUM(.RT), 1, FIX_BRANCH19, 19, .E, 5)
+        END;
+    M = OP(1);
+    RN = SLL(RNUM(.M[O_REG]), 5);
+    IF .NOPS GTR 2
+    THEN
+        BEGIN
+        ! Post-index: [Xn], #imm
+        LOCAL
+            V;
+        IF .M[O_WBACK] OR .M[O_INDEX] NEQ IX_NONE OR .UNSCALED
+        THEN
+            RETURN FAIL_TEXT(COL(2), T('post-index needs [Xn], #imm'));
+        TRY(IMMAT(2, V));
+        TRY(SFIELD(.V, 9, COL(2), T('offset'), V));
+        RETURN FIXED(%X'38000400' OR .HEAD OR SLL(.V, 12) OR .RN)
+        END;
+    SELECTONE .M[O_INDEX] OF
+        SET
+        [IX_NONE, IX_IMM]:
+            BEGIN
+            LOCAL
+                OFF,
+                IMM;
+            OFF = 0;
+            IF .M[O_INDEX] EQL IX_IMM THEN TRY(ABS_(.M[O_IEXPR], COL(1), OFF));
+            IF .M[O_WBACK]
+            THEN
+                BEGIN
+                TRY(SFIELD(.OFF, 9, COL(1), T('offset'), IMM));
+                RETURN FIXED(%X'38000C00' OR .HEAD OR SLL(.IMM, 12) OR .RN)
+                END;
+            IF NOT .UNSCALED AND .OFF GEQ 0 AND (.OFF AND (SLL(1, .SCALE) - 1)) EQL 0
+                AND SRL(.OFF, .SCALE) LSS %X'1000'
+            THEN
+                RETURN FIXED(%X'39000000' OR .HEAD OR SLL(SRL(.OFF, .SCALE), 10) OR .RN);
+            TRY(SFIELD(.OFF, 9, COL(1), T('offset'), IMM));
+            RETURN FIXED(%X'38000000' OR .HEAD OR SLL(.IMM, 12) OR .RN)
+            END;
+        [IX_MOD]:
+            IF .M[O_IMOD] EQL MOD_LO12 AND NOT .UNSCALED AND NOT .M[O_WBACK]
+            THEN
+                BEGIN
+                LOCAL
+                    V : VECTOR[V_SIZE];
+                TRY(EVAL(.M[O_IEXPR], COL(1), V));
+                IF .V[V_KIND] EQL VK_ABS
+                THEN
+                    BEGIN
+                    LOCAL
+                        OFF;
+                    OFF = .V[V_OFF] AND %X'FFF';
+                    IF (.OFF AND (SLL(1, .SCALE) - 1)) NEQ 0
+                    THEN
+                        RETURN FAIL_TEXT(COL(1), T('offset is not aligned to the access size'));
+                    RETURN FIXED(%X'39000000' OR .HEAD OR SLL(SRL(.OFF, .SCALE), 10) OR .RN)
+                    END;
+                RETURN FIXUP(%X'39000000' OR .HEAD OR .RN, FIX_LDST + .SCALE, V)
+                END;
+        [IX_REG]:
+            IF NOT .UNSCALED AND NOT .M[O_WBACK]
+            THEN
+                BEGIN
+                LOCAL
+                    S,
+                    RM,
+                    OPTION;
+                S = 0;
+                IF .M[O_AMOUNT] NEQ 0
+                THEN
+                    BEGIN
+                    LOCAL
+                        A;
+                    TRY(ABS_(.M[O_AMOUNT], COL(1), A));
+                    IF .A EQL 0
+                    THEN
+                        S = (IF .SCALE EQL 0 THEN 1 ELSE 0)
+                    ELSE IF .A EQL .SCALE
+                    THEN
+                        S = 1
+                    ELSE
+                        BEGIN
+                        MSG_BEGIN();
+                        MSG_TEXT(T('shift must be 0 or '));
+                        MSG_DEC(.SCALE);
+                        RETURN FAIL(COL(1))
+                        END
+                    END;
+                RM = .M[O_IREG];
+                OPTION = .M[O_OPTION];
+                IF (RKIND(.RM) EQL RK_X) NEQ ((.OPTION AND 1) EQL 1)
+                THEN
+                    RETURN FAIL_TEXT(COL(1), T('index register size doesn''t match the extend'));
+                RETURN FIXED(%X'38200800' OR .HEAD OR SLL(RNUM(.RM), 16) OR SLL(.OPTION, 13)
+                    OR SLL(.S, 12) OR .RN)
+                END;
+        TES;
+    FAIL_TEXT(COL(1), T('this addressing mode doesn''t fit the instruction'))
+    END;
+
+ROUTINE PAIR =
+    BEGIN
+    LOCAL
+        RT,
+        RT2,
+        K,
+        OPC,
+        V,
+        SCALE,
+        L,
+        M : REF VECTOR,
+        MODE,
+        OFF,
+        IMM7;
+    TRY(COUNT(3, 4));
+    TRY(GETREG(0, RT));
+    TRY(GETREG(1, RT2));
+    K = RKIND(.RT);
+    IF .K NEQ RKIND(.RT2) OR .K EQL RK_SP OR .K EQL RK_WSP OR .K EQL RK_B OR .K EQL RK_H
+    THEN
+        RETURN FAIL_TEXT(COL(1), T('registers must be the same kind: X, W, S, D or Q'));
+    IF .MN[N_KW] EQL K_LDPSW
+    THEN
+        BEGIN
+        IF .K NEQ RK_X THEN RETURN FAIL_TEXT(COL(0), T('LDPSW loads X registers'));
+        OPC = 1;
+        V = 0;
+        SCALE = 2
+        END
+    ELSE
+        SELECTONE .K OF
+            SET
+            [RK_W]: (OPC = 0; V = 0; SCALE = 2);
+            [RK_X]: (OPC = 2; V = 0; SCALE = 3);
+            [RK_S]: (OPC = 0; V = 1; SCALE = 2);
+            [RK_D]: (OPC = 1; V = 1; SCALE = 3);
+            [OTHERWISE]: (OPC = 2; V = 1; SCALE = 4);
+            TES;
+    L = .MN[N_KW] NEQ K_STP;
+    IF KIND(2) NEQ OK_MEM
+    THEN
+        RETURN FAIL_TEXT(COL(2), T('expected a memory operand like [sp, #16]'));
+    M = OP(2);
+    MODE = -1;
+    IF .NOPS GTR 3
+    THEN
+        BEGIN
+        IF .M[O_INDEX] EQL IX_NONE AND NOT .M[O_WBACK]
+        THEN
+            BEGIN
+            MODE = 1;
+            TRY(IMMAT(3, OFF))
+            END
+        END
+    ELSE IF .M[O_INDEX] EQL IX_NONE
+    THEN
+        BEGIN
+        MODE = (IF .M[O_WBACK] THEN 3 ELSE 2);
+        OFF = 0
+        END
+    ELSE IF .M[O_INDEX] EQL IX_IMM
+    THEN
+        BEGIN
+        MODE = (IF .M[O_WBACK] THEN 3 ELSE 2);
+        TRY(ABS_(.M[O_IEXPR], COL(2), OFF))
+        END;
+    IF .MODE LSS 0
+    THEN
+        RETURN FAIL_TEXT(COL(2), T('expected [Xn, #imm], [Xn, #imm]! or [Xn], #imm'));
+    IF (.OFF AND (SLL(1, .SCALE) - 1)) NEQ 0
+    THEN
+        RETURN FAIL_TEXT(COL(2), T('offset is not aligned to the register size'));
+    TRY(SFIELD(SRA(.OFF, .SCALE), 7, COL(2), T('offset'), IMM7));
+    FIXED(%X'28000000' OR SLL(.OPC, 30) OR SLL(.V, 26) OR SLL(.MODE, 23) OR SLL(.L, 22)
+        OR SLL(.IMM7, 15) OR SLL(RNUM(.RT2), 10) OR SLL(RNUM(.M[O_REG]), 5) OR RNUM(.RT))
+    END;
+
+! ----- instructions -----
+
+ROUTINE INSN =
+    BEGIN
+    LOCAL
+        KW;
+    KW = .MN[N_KW];
+    SELECTONE .KW OF
+        SET
+        [K_ADD, K_ADDS, K_SUB, K_SUBS]:
+            BEGIN
+            TRY(COUNT(3, 4));
+            RETURN ADDSUB(.KW EQL K_SUB OR .KW EQL K_SUBS, .KW EQL K_ADDS OR .KW EQL K_SUBS, 0)
+            END;
+        [K_CMP, K_CMN]:
+            BEGIN
+            TRY(COUNT(2, 3));
+            RETURN ADDSUB(.KW EQL K_CMP, 1, 1)
+            END;
+        [K_NEG, K_NEGS]:
+            BEGIN
+            LOCAL
+                RD,
+                RM,
+                S,
+                TYPE,
+                AMOUNT;
+            TRY(COUNT(2, 3));
+            TRY(GP(0, FALSE, RD));
+            TRY(GP(1, FALSE, RM));
+            TRY(SAME_SIZE(S, 0, .RD, 1, .RM, -1, 0, -1, 0));
+            TRY(SHIFT(2, .S, FALSE, TYPE, AMOUNT));
+            RETURN FIXED(%X'4B000000' OR SLL(.S, 31) OR SLL(.KW EQL K_NEGS, 29) OR SLL(.TYPE, 22)
+                OR SLL(RNUM(.RM), 16) OR SLL(.AMOUNT, 10) OR SLL(31, 5) OR RNUM(.RD))
+            END;
+        [K_AND, K_ORR, K_EOR, K_ANDS, K_BIC, K_ORN, K_EON, K_BICS]:
+            BEGIN
+            LOCAL
+                OPC,
+                INVERT;
+            TRY(COUNT(3, 4));
+            OPC =
+                (SELECTONE .KW OF
+                    SET
+                    [K_AND, K_BIC]: 0;
+                    [K_ORR, K_ORN]: 1;
+                    [K_EOR, K_EON]: 2;
+                    [OTHERWISE]: 3;
+                    TES);
+            INVERT = (SELECTONE .KW OF SET [K_BIC, K_ORN, K_EON, K_BICS]: 1; [OTHERWISE]: 0; TES);
+            RETURN LOGICAL(.OPC, .INVERT, 0)
+            END;
+        [K_TST]:
+            BEGIN
+            TRY(COUNT(2, 3));
+            RETURN LOGICAL(3, 0, 1)
+            END;
+        [K_MOV]:
+            BEGIN
+            LOCAL
+                RD,
+                V;
+            TRY(COUNT(2, 2));
+            TRY(GP(0, TRUE, RD));
+            IF IS_REG(1)
+            THEN
+                BEGIN
+                LOCAL
+                    RM,
+                    S;
+                TRY(GP(1, TRUE, RM));
+                TRY(SAME_SIZE(S, 0, .RD, 1, .RM, -1, 0, -1, 0));
+                IF IS_SP(.RD) OR IS_SP(.RM)
+                THEN
+                    RETURN FIXED(%X'11000000' OR SLL(.S, 31) OR SLL(RNUM(.RM), 5) OR RNUM(.RD));
+                RETURN FIXED(%X'2A0003E0' OR SLL(.S, 31) OR SLL(RNUM(.RM), 16) OR RNUM(.RD))
+                END;
+            TRY(IMMAT(1, V));
+            IF MOV_IMM(.RD, .V) THEN RETURN TRUE;
+            MSG_BEGIN();
+            MSG_HEX(.V);
+            MSG_TEXT(T(' can''t be loaded with one MOV; use MOVZ and MOVK'));
+            RETURN FAIL(COL(1))
+            END;
+        [K_MVN]:
+            BEGIN
+            LOCAL
+                RD,
+                RM,
+                S,
+                TYPE,
+                AMOUNT;
+            TRY(COUNT(2, 3));
+            TRY(GP(0, FALSE, RD));
+            TRY(GP(1, FALSE, RM));
+            TRY(SAME_SIZE(S, 0, .RD, 1, .RM, -1, 0, -1, 0));
+            TRY(SHIFT(2, .S, TRUE, TYPE, AMOUNT));
+            RETURN FIXED(%X'2A2003E0' OR SLL(.S, 31) OR SLL(.TYPE, 22) OR SLL(RNUM(.RM), 16)
+                OR SLL(.AMOUNT, 10) OR RNUM(.RD))
+            END;
+        [K_MOVZ, K_MOVN, K_MOVK]:
+            BEGIN
+            LOCAL
+                RD,
+                S,
+                OPC,
+                BASE,
+                O : REF VECTOR,
+                IMM,
+                HW;
+            TRY(COUNT(2, 3));
+            TRY(GP(0, FALSE, RD));
+            S = SF(.RD);
+            OPC = (SELECTONE .KW OF SET [K_MOVN]: 0; [K_MOVZ]: 2; [OTHERWISE]: 3; TES);
+            BASE = %X'12800000' OR SLL(.S, 31) OR SLL(.OPC, 29) OR RNUM(.RD);
+            O = OP(1);
+            IF .O NEQ 0
+            THEN
+                IF .O[O_KIND] EQL OK_MOD AND .O[O_MOD] GEQ MOD_ABSG
+                THEN
+                    BEGIN
+                    LOCAL
+                        G,
+                        CHECK,
+                        V : VECTOR[V_SIZE];
+                    G = (.O[O_MOD] - MOD_ABSG) / 2;
+                    CHECK = (.O[O_MOD] - MOD_ABSG) AND 1;
+                    TRY(COUNT(2, 2));
+                    IF .S EQL 0 AND .G GTR 1
+                    THEN
+                        RETURN FAIL_TEXT(COL(1), T('a 32-bit register only has chunks 0 and 1'));
+                    TRY(EVAL(.O[O_EXPR], COL(1), V));
+                    IF .V[V_KIND] EQL VK_ABS
+                    THEN
+                        BEGIN
+                        LOCAL
+                            N;
+                        N = .V[V_OFF];
+                        IF .CHECK AND SRL(.N, 16 * (.G + 1)) NEQ 0
+                        THEN
+                            BEGIN
+                            MSG_BEGIN();
+                            MSG_HEX(.N);
+                            MSG_TEXT(T(' doesn''t fit in '));
+                            MSG_DEC(16 * (.G + 1));
+                            MSG_TEXT(T(' bits'));
+                            RETURN FAIL(COL(1))
+                            END;
+                        RETURN FIXED(.BASE OR SLL(.G, 21) OR SLL(SRL(.N, 16 * .G) AND %X'FFFF', 5))
+                        END;
+                    RETURN FIXUP(.BASE OR SLL(.G, 21), FIX_MOVW + 2 * .G + .CHECK, V)
+                    END;
+            TRY(IMMAT(1, IMM));
+            TRY(UFIELD(.IMM, 16, COL(1), T('immediate'), IMM));
+            HW = 0;
+            O = OP(2);
+            IF .O NEQ 0
+            THEN
+                BEGIN
+                LOCAL
+                    SH;
+                IF .O[O_KIND] NEQ OK_SHIFT OR .O[O_TYPE] NEQ 0
+                THEN
+                    RETURN FAIL_TEXT(COL(2), T('expected LSL #n'));
+                TRY(ABS_(.O[O_EXPR], COL(2), SH));
+                IF .SH MOD 16 NEQ 0 OR .SH LSS 0 OR .SH GEQ SLL(32, .S)
+                THEN
+                    RETURN FAIL_TEXT(COL(2), T('shift must be 0, 16, 32 or 48 (0 or 16 for W)'));
+                HW = .SH / 16
+                END;
+            RETURN FIXED(.BASE OR SLL(.HW, 21) OR SLL(.IMM, 5))
+            END;
+        [K_ADR, K_ADRP]:
+            BEGIN
+            LOCAL
+                RD,
+                BASE,
+                FIX,
+                E,
+                D,
+                V : VECTOR[V_SIZE],
+                T_;
+            TRY(COUNT(2, 2));
+            TRY(GP(0, FALSE, RD));
+            IF RKIND(.RD) NEQ RK_X THEN RETURN FAIL_TEXT(COL(0), T('expected a 64-bit register'));
+            IF .KW EQL K_ADR
+            THEN
+                (BASE = %X'10000000'; FIX = FIX_ADR)
+            ELSE
+                (BASE = %X'90000000'; FIX = FIX_ADRP);
+            TRY(EXPR(1, E));
+            T_ = TARGET(.E, COL(1), .FIX, D, V);
+            IF .T_ EQL 2 THEN RETURN FIXUP(.BASE OR RNUM(.RD), .FIX, V);
+            TRY(.T_);
+            TRY(SFIELD(.D, 21, COL(1), T('ADR offset'), T_));
+            RETURN FIXED(.BASE OR ADR_FIELD(.D) OR RNUM(.RD))
+            END;
+        [K_LSL, K_LSR, K_ASR, K_ROR]:
+            BEGIN
+            LOCAL
+                RD,
+                RN,
+                S,
+                SIZE,
+                N,
+                OPC,
+                IMMR,
+                IMMS;
+            TRY(COUNT(3, 3));
+            TRY(GP(0, FALSE, RD));
+            TRY(GP(1, FALSE, RN));
+            IF IS_REG(2)
+            THEN
+                BEGIN
+                LOCAL
+                    RM;
+                TRY(GP(2, FALSE, RM));
+                TRY(SAME_SIZE(S, 0, .RD, 1, .RN, 2, .RM, -1, 0));
+                RETURN FIXED(%X'1AC02000' OR SLL(.S, 31) OR SLL(RNUM(.RM), 16) OR SLL(.KW - K_LSL, 10)
+                    OR SLL(RNUM(.RN), 5) OR RNUM(.RD))
+                END;
+            TRY(SAME_SIZE(S, 0, .RD, 1, .RN, -1, 0, -1, 0));
+            SIZE = SLL(32, .S);
+            TRY(IMMAT(2, N));
+            TRY(UFIELD(.N, 5 + .S, COL(2), T('shift'), N));
+            SELECTONE .KW OF
+                SET
+                [K_LSL]: (OPC = 2; IMMR = (.SIZE - .N) MOD .SIZE; IMMS = .SIZE - 1 - .N);
+                [K_LSR]: (OPC = 2; IMMR = .N; IMMS = .SIZE - 1);
+                [K_ASR]: (OPC = 0; IMMR = .N; IMMS = .SIZE - 1);
+                [K_ROR]:
+                    RETURN FIXED(%X'13800000' OR SLL(.S, 31) OR SLL(.S, 22) OR SLL(RNUM(.RN), 16)
+                        OR SLL(.N, 10) OR SLL(RNUM(.RN), 5) OR RNUM(.RD));
+                TES;
+            RETURN FIXED(BITFIELD(.S, .OPC, .IMMR, .IMMS, RNUM(.RN), RNUM(.RD)))
+            END;
+        [K_UBFM, K_SBFM, K_BFM, K_UBFX, K_SBFX, K_UBFIZ, K_SBFIZ, K_BFI, K_BFXIL]:
+            BEGIN
+            LOCAL
+                RD,
+                RN,
+                S,
+                SIZE,
+                X,
+                Y,
+                OPC,
+                IMMR,
+                IMMS,
+                FITS;
+            TRY(COUNT(4, 4));
+            TRY(GP(0, FALSE, RD));
+            TRY(GP(1, FALSE, RN));
+            TRY(SAME_SIZE(S, 0, .RD, 1, .RN, -1, 0, -1, 0));
+            SIZE = SLL(32, .S);
+            TRY(IMMAT(2, X));
+            TRY(IMMAT(3, Y));
+            OPC =
+                (SELECTONE .KW OF
+                    SET
+                    [K_SBFM, K_SBFX, K_SBFIZ]: 0;
+                    [K_BFM, K_BFI, K_BFXIL]: 1;
+                    [OTHERWISE]: 2;
+                    TES);
+            FITS = .X GEQ 0 AND .Y GTR 0 AND .X + .Y LEQ .SIZE;
+            SELECTONE .KW OF
+                SET
+                [K_UBFM, K_SBFM, K_BFM]: (IMMR = .X; IMMS = .Y);
+                [K_UBFX, K_SBFX, K_BFXIL]:
+                    IF .FITS
+                    THEN
+                        (IMMR = .X; IMMS = .X + .Y - 1)
+                    ELSE
+                        RETURN FAIL_TEXT(COL(3), T('bit field doesn''t fit in the register'));
+                [K_UBFIZ, K_SBFIZ, K_BFI]:
+                    IF .FITS
+                    THEN
+                        (IMMR = (.SIZE - .X) MOD .SIZE; IMMS = .Y - 1)
+                    ELSE
+                        RETURN FAIL_TEXT(COL(3), T('bit field doesn''t fit in the register'));
+                TES;
+            TRY(UFIELD(.IMMR, 5 + .S, COL(2), T('bit position'), IMMR));
+            TRY(UFIELD(.IMMS, 5 + .S, COL(3), T('bit position'), IMMS));
+            RETURN FIXED(BITFIELD(.S, .OPC, .IMMR, .IMMS, RNUM(.RN), RNUM(.RD)))
+            END;
+        [K_SXTB, K_SXTH, K_SXTW, K_UXTB, K_UXTH]:
+            BEGIN
+            LOCAL
+                RD,
+                RN,
+                OK,
+                IMMS;
+            TRY(COUNT(2, 2));
+            TRY(GP(0, FALSE, RD));
+            TRY(GP(1, FALSE, RN));
+            IF RKIND(.RN) NEQ RK_W
+            THEN
+                RETURN FAIL_TEXT(COL(1), T('expected a 32-bit source register'));
+            OK =
+                (SELECTONE .KW OF
+                    SET
+                    [K_SXTW]: RKIND(.RD) EQL RK_X;
+                    [K_UXTB, K_UXTH]: RKIND(.RD) EQL RK_W;
+                    [OTHERWISE]: TRUE;
+                    TES);
+            IF NOT .OK THEN RETURN FAIL_TEXT(COL(0), T('wrong destination register size'));
+            IMMS = (SELECTONE .KW OF SET [K_SXTB, K_UXTB]: 7; [K_SXTH, K_UXTH]: 15; [OTHERWISE]: 31; TES);
+            RETURN FIXED(BITFIELD(SF(.RD), (IF .KW EQL K_UXTB OR .KW EQL K_UXTH THEN 2 ELSE 0), 0,
+                .IMMS, RNUM(.RN), RNUM(.RD)))
+            END;
+        [K_EXTR]:
+            BEGIN
+            LOCAL
+                RD,
+                RN,
+                RM,
+                S,
+                LSB;
+            TRY(COUNT(4, 4));
+            TRY(GP(0, FALSE, RD));
+            TRY(GP(1, FALSE, RN));
+            TRY(GP(2, FALSE, RM));
+            TRY(SAME_SIZE(S, 0, .RD, 1, .RN, 2, .RM, -1, 0));
+            TRY(IMMAT(3, LSB));
+            TRY(UFIELD(.LSB, 5 + .S, COL(3), T('bit position'), LSB));
+            RETURN FIXED(%X'13800000' OR SLL(.S, 31) OR SLL(.S, 22) OR SLL(RNUM(.RM), 16)
+                OR SLL(.LSB, 10) OR SLL(RNUM(.RN), 5) OR RNUM(.RD))
+            END;
+        [K_UDIV, K_SDIV, K_LSLV, K_LSRV, K_ASRV, K_RORV]:
+            BEGIN
+            LOCAL
+                RD,
+                RN,
+                RM,
+                S,
+                OPCODE;
+            TRY(COUNT(3, 3));
+            TRY(GP(0, FALSE, RD));
+            TRY(GP(1, FALSE, RN));
+            TRY(GP(2, FALSE, RM));
+            TRY(SAME_SIZE(S, 0, .RD, 1, .RN, 2, .RM, -1, 0));
+            OPCODE =
+                (SELECTONE .KW OF
+                    SET
+                    [K_UDIV]: 2;
+                    [K_SDIV]: 3;
+                    [K_LSLV]: 8;
+                    [K_LSRV]: 9;
+                    [K_ASRV]: 10;
+                    [OTHERWISE]: 11;
+                    TES);
+            RETURN FIXED(%X'1AC00000' OR SLL(.S, 31) OR SLL(RNUM(.RM), 16) OR SLL(.OPCODE, 10)
+                OR SLL(RNUM(.RN), 5) OR RNUM(.RD))
+            END;
+        [K_MADD, K_MSUB, K_MUL, K_MNEG]:
+            BEGIN
+            LOCAL
+                THREE,
+                RD,
+                RN,
+                RM,
+                RA,
+                S;
+            THREE = .KW EQL K_MUL OR .KW EQL K_MNEG;
+            IF .THREE THEN TRY(COUNT(3, 3)) ELSE TRY(COUNT(4, 4));
+            TRY(GP(0, FALSE, RD));
+            TRY(GP(1, FALSE, RN));
+            TRY(GP(2, FALSE, RM));
+            IF .THREE THEN RA = RKIND(.RD) * 32 + 31 ELSE TRY(GP(3, FALSE, RA));
+            TRY(SAME_SIZE(S, 0, .RD, 1, .RN, 2, .RM, 3, .RA));
+            RETURN FIXED(%X'1B000000' OR SLL(.S, 31) OR SLL(RNUM(.RM), 16)
+                OR SLL(.KW EQL K_MSUB OR .KW EQL K_MNEG, 15) OR SLL(RNUM(.RA), 10)
+                OR SLL(RNUM(.RN), 5) OR RNUM(.RD))
+            END;
+        [K_SMADDL, K_UMADDL, K_SMSUBL, K_UMSUBL, K_SMULL, K_UMULL]:
+            BEGIN
+            LOCAL
+                THREE,
+                RD,
+                RN,
+                RM,
+                RA;
+            THREE = .KW EQL K_SMULL OR .KW EQL K_UMULL;
+            IF .THREE THEN TRY(COUNT(3, 3)) ELSE TRY(COUNT(4, 4));
+            TRY(GP(0, FALSE, RD));
+            TRY(GP(1, FALSE, RN));
+            TRY(GP(2, FALSE, RM));
+            IF .THREE THEN RA = RK_X * 32 + 31 ELSE TRY(GP(3, FALSE, RA));
+            IF RKIND(.RD) NEQ RK_X OR RKIND(.RN) NEQ RK_W OR RKIND(.RM) NEQ RK_W
+                OR RKIND(.RA) NEQ RK_X
+            THEN
+                BEGIN
+                MSG_BEGIN();
+                MSG_NAME(.MN);
+                MSG_TEXT(T(' takes Xd, Wn, Wm'));
+                IF NOT .THREE THEN MSG_TEXT(T(', Xa'));
+                RETURN FAIL(.MNCOL)
+                END;
+            RETURN FIXED(%X'9B200000'
+                OR SLL(.KW EQL K_UMADDL OR .KW EQL K_UMSUBL OR .KW EQL K_UMULL, 23)
+                OR SLL(RNUM(.RM), 16) OR SLL(.KW EQL K_SMSUBL OR .KW EQL K_UMSUBL, 15)
+                OR SLL(RNUM(.RA), 10) OR SLL(RNUM(.RN), 5) OR RNUM(.RD))
+            END;
+        [K_SMULH, K_UMULH]:
+            BEGIN
+            LOCAL
+                RD,
+                RN,
+                RM,
+                S;
+            TRY(COUNT(3, 3));
+            TRY(GP(0, FALSE, RD));
+            TRY(GP(1, FALSE, RN));
+            TRY(GP(2, FALSE, RM));
+            TRY(SAME_SIZE(S, 0, .RD, 1, .RN, 2, .RM, -1, 0));
+            IF .S NEQ 1 THEN RETURN FAIL_TEXT(COL(0), T('expected 64-bit registers'));
+            RETURN FIXED(%X'9B407C00' OR SLL(.KW EQL K_UMULH, 23) OR SLL(RNUM(.RM), 16)
+                OR SLL(RNUM(.RN), 5) OR RNUM(.RD))
+            END;
+        [K_CSEL, K_CSINC, K_CSINV, K_CSNEG]:
+            BEGIN
+            LOCAL
+                RD,
+                RN,
+                RM,
+                S,
+                C;
+            TRY(COUNT(4, 4));
+            TRY(GP(0, FALSE, RD));
+            TRY(GP(1, FALSE, RN));
+            TRY(GP(2, FALSE, RM));
+            TRY(SAME_SIZE(S, 0, .RD, 1, .RN, 2, .RM, -1, 0));
+            TRY(COND(3, C));
+            RETURN FIXED(CONDSEL(.S, .KW EQL K_CSINV OR .KW EQL K_CSNEG,
+                .KW EQL K_CSINC OR .KW EQL K_CSNEG, RNUM(.RM), .C, RNUM(.RN), RNUM(.RD)))
+            END;
+        [K_CSET, K_CSETM]:
+            BEGIN
+            LOCAL
+                RD,
+                C,
+                OPX;
+            TRY(COUNT(2, 2));
+            TRY(GP(0, FALSE, RD));
+            TRY(COND(1, C));
+            IF .C GEQ 14 THEN RETURN FAIL_TEXT(COL(1), T('AL and NV can''t be inverted'));
+            ! CSINC or CSINV from the zero register, on the opposite condition.
+            OPX = .KW EQL K_CSETM;
+            RETURN FIXED(CONDSEL(SF(.RD), .OPX, 1 - .OPX, 31, .C XOR 1, 31, RNUM(.RD)))
+            END;
+        [K_CINC, K_CINV, K_CNEG]:
+            BEGIN
+            LOCAL
+                RD,
+                RN,
+                S,
+                C;
+            TRY(COUNT(3, 3));
+            TRY(GP(0, FALSE, RD));
+            TRY(GP(1, FALSE, RN));
+            TRY(SAME_SIZE(S, 0, .RD, 1, .RN, -1, 0, -1, 0));
+            TRY(COND(2, C));
+            IF .C GEQ 14 THEN RETURN FAIL_TEXT(COL(2), T('AL and NV can''t be inverted'));
+            RETURN FIXED(CONDSEL(.S, .KW NEQ K_CINC, .KW NEQ K_CINV, RNUM(.RN), .C XOR 1,
+                RNUM(.RN), RNUM(.RD)))
+            END;
+        [K_RBIT, K_REV16, K_REV32, K_REV, K_CLZ, K_CLS]:
+            BEGIN
+            LOCAL
+                RD,
+                RN,
+                S,
+                OPCODE;
+            TRY(COUNT(2, 2));
+            TRY(GP(0, FALSE, RD));
+            TRY(GP(1, FALSE, RN));
+            TRY(SAME_SIZE(S, 0, .RD, 1, .RN, -1, 0, -1, 0));
+            OPCODE =
+                (SELECTONE .KW OF
+                    SET
+                    [K_RBIT]: 0;
+                    [K_REV16]: 1;
+                    [K_REV32]: (IF .S EQL 1 THEN 2 ELSE -1);
+                    [K_REV]: (IF .S EQL 0 THEN 2 ELSE 3);
+                    [K_CLZ]: 4;
+                    [K_CLS]: 5;
+                    TES);
+            IF .OPCODE LSS 0 THEN RETURN FAIL_TEXT(COL(0), T('REV32 needs 64-bit registers'));
+            RETURN FIXED(%X'5AC00000' OR SLL(.S, 31) OR SLL(.OPCODE, 10) OR SLL(RNUM(.RN), 5)
+                OR RNUM(.RD))
+            END;
+        [K_B, K_BL]:
+            BEGIN
+            LOCAL
+                E;
+            TRY(COUNT(1, 1));
+            TRY(EXPR(0, E));
+            RETURN BRANCH((IF .KW EQL K_B THEN %X'14000000' ELSE %X'94000000'), 0, FIX_JUMP26,
+                26, .E, 0)
+            END;
+        [K_C_EQ TO K_C_CC]:
+            BEGIN
+            LOCAL
+                C,
+                E;
+            TRY(COUNT(1, 1));
+            C = (IF .KW EQL K_C_CS THEN 2 ELSE IF .KW EQL K_C_CC THEN 3 ELSE .KW - K_C_EQ);
+            TRY(EXPR(0, E));
+            RETURN BRANCH(%X'54000000' OR .C, 0, FIX_BRANCH19, 19, .E, 5)
+            END;
+        [K_CBZ, K_CBNZ]:
+            BEGIN
+            LOCAL
+                RT,
+                E;
+            TRY(COUNT(2, 2));
+            TRY(GP(0, FALSE, RT));
+            TRY(EXPR(1, E));
+            RETURN BRANCH(%X'34000000' OR SLL(SF(.RT), 31) OR SLL(.KW EQL K_CBNZ, 24) OR RNUM(.RT),
+                1, FIX_BRANCH19, 19, .E, 5)
+            END;
+        [K_TBZ, K_TBNZ]:
+            BEGIN
+            LOCAL
+                RT,
+                BIT,
+                E;
+            TRY(COUNT(3, 3));
+            TRY(GP(0, FALSE, RT));
+            TRY(IMMAT(1, BIT));
+            TRY(UFIELD(.BIT, 5 + SF(.RT), COL(1), T('bit number'), BIT));
+            TRY(EXPR(2, E));
+            RETURN BRANCH(%X'36000000' OR SLL(SRL(.BIT, 5), 31) OR SLL(.KW EQL K_TBNZ, 24)
+                OR SLL(.BIT AND 31, 19) OR RNUM(.RT), 2, FIX_BRANCH14, 14, .E, 5)
+            END;
+        [K_BR, K_BLR, K_RET]:
+            BEGIN
+            LOCAL
+                RN;
+            IF .KW EQL K_RET AND .NOPS EQL 0
+            THEN
+                RN = 30
+            ELSE
+                BEGIN
+                LOCAL
+                    R;
+                TRY(COUNT(1, 1));
+                TRY(GP(0, FALSE, R));
+                IF RKIND(.R) NEQ RK_X
+                THEN
+                    RETURN FAIL_TEXT(COL(0), T('expected a 64-bit register'));
+                RN = RNUM(.R)
+                END;
+            RETURN FIXED((SELECTONE .KW OF
+                    SET
+                    [K_BR]: %X'D61F0000';
+                    [K_BLR]: %X'D63F0000';
+                    [OTHERWISE]: %X'D65F0000';
+                    TES) OR SLL(.RN, 5))
+            END;
+        [K_ERET]:
+            BEGIN
+            TRY(COUNT(0, 0));
+            RETURN FIXED(%X'D69F03E0')
+            END;
+        [K_SVC, K_HVC, K_SMC, K_BRK, K_HLT, K_UDF]:
+            BEGIN
+            LOCAL
+                IMM,
+                BASE;
+            TRY(COUNT(1, 1));
+            TRY(IMMAT(0, IMM));
+            TRY(UFIELD(.IMM, 16, COL(0), T('immediate'), IMM));
+            BASE =
+                (SELECTONE .KW OF
+                    SET
+                    [K_SVC]: %X'D4000001';
+                    [K_HVC]: %X'D4000002';
+                    [K_SMC]: %X'D4000003';
+                    [K_BRK]: %X'D4200000';
+                    [K_HLT]: %X'D4400000';
+                    [OTHERWISE]: 0;
+                    TES);
+            RETURN FIXED(.BASE OR (IF .KW EQL K_UDF THEN .IMM ELSE SLL(.IMM, 5)))
+            END;
+        [K_NOP, K_YIELD, K_WFE, K_WFI, K_SEV, K_SEVL, K_HINT]:
+            BEGIN
+            LOCAL
+                N;
+            IF .KW EQL K_HINT
+            THEN
+                BEGIN
+                TRY(COUNT(1, 1));
+                TRY(IMMAT(0, N));
+                TRY(UFIELD(.N, 7, COL(0), T('hint'), N))
+                END
+            ELSE
+                BEGIN
+                TRY(COUNT(0, 0));
+                N = .KW - K_NOP
+                END;
+            RETURN FIXED(%X'D503201F' OR SLL(.N, 5))
+            END;
+        [K_DMB, K_DSB, K_ISB]:
+            BEGIN
+            LOCAL
+                CRM;
+            IF .KW EQL K_ISB AND .NOPS EQL 0
+            THEN
+                CRM = 15
+            ELSE
+                BEGIN
+                LOCAL
+                    N : REF VECTOR;
+                TRY(COUNT(1, 1));
+                N = NAME(0);
+                CRM = -1;
+                IF .N NEQ 0
+                THEN
+                    CRM =
+                        (SELECTONE .N[N_KW] OF
+                            SET
+                            [K_SY]: 15;
+                            [K_ST]: 14;
+                            [K_LD]: 13;
+                            [K_ISH]: 11;
+                            [K_ISHST]: 10;
+                            [K_ISHLD]: 9;
+                            [K_NSH]: 7;
+                            [K_NSHST]: 6;
+                            [K_NSHLD]: 5;
+                            [K_OSH]: 3;
+                            [K_OSHST]: 2;
+                            [K_OSHLD]: 1;
+                            [OTHERWISE]: -1;
+                            TES);
+                IF .CRM LSS 0
+                THEN
+                    BEGIN
+                    TRY(IMMAT(0, CRM));
+                    TRY(UFIELD(.CRM, 4, COL(0), T('barrier option'), CRM))
+                    END
+                END;
+            RETURN FIXED(%X'D503301F' OR SLL(.CRM, 8)
+                OR SLL((SELECTONE .KW OF SET [K_DSB]: 4; [K_DMB]: 5; [OTHERWISE]: 6; TES), 5))
+            END;
+        [K_MRS]:
+            BEGIN
+            LOCAL
+                RT,
+                SR;
+            TRY(COUNT(2, 2));
+            TRY(GP(0, FALSE, RT));
+            TRY(SYSREG(1, SR));
+            RETURN FIXED(%X'D5300000' OR SLL(.SR AND %X'7FFF', 5) OR RNUM(.RT))
+            END;
+        [K_MSR]:
+            BEGIN
+            LOCAL
+                N : REF VECTOR,
+                SR,
+                RT;
+            TRY(COUNT(2, 2));
+            N = NAME(0);
+            IF .N NEQ 0
+            THEN
+                IF .N[N_KW] EQL K_SPSEL OR .N[N_KW] EQL K_DAIFSET OR .N[N_KW] EQL K_DAIFCLR
+                THEN
+                    BEGIN
+                    LOCAL
+                        IMM,
+                        OP1,
+                        OP2;
+                    SELECTONE .N[N_KW] OF
+                        SET
+                        [K_SPSEL]: (OP1 = 0; OP2 = 5);
+                        [K_DAIFSET]: (OP1 = 3; OP2 = 6);
+                        [K_DAIFCLR]: (OP1 = 3; OP2 = 7);
+                        TES;
+                    TRY(IMMAT(1, IMM));
+                    TRY(UFIELD(.IMM, 4, COL(1), T('immediate'), IMM));
+                    RETURN FIXED(%X'D500401F' OR SLL(.OP1, 16) OR SLL(.IMM, 8) OR SLL(.OP2, 5))
+                    END;
+            TRY(SYSREG(0, SR));
+            TRY(GP(1, FALSE, RT));
+            RETURN FIXED(%X'D5100000' OR SLL(.SR AND %X'7FFF', 5) OR RNUM(.RT))
+            END;
+        [K_LDR, K_STR, K_LDRB, K_STRB, K_LDRH, K_STRH, K_LDRSB, K_LDRSH, K_LDRSW, K_LDUR, K_STUR,
+         K_LDURB, K_STURB, K_LDURH, K_STURH, K_LDURSB, K_LDURSH, K_LDURSW]:
+            RETURN LOAD_STORE();
+        [K_LDP, K_STP, K_LDPSW]:
+            RETURN PAIR();
+        [K_LDXR, K_LDAXR, K_LDAR, K_STLR]:
+            BEGIN
+            LOCAL
+                RT,
+                RN;
+            TRY(COUNT(2, 2));
+            TRY(GP(0, FALSE, RT));
+            TRY(BARE_BASE(1, RN));
+            RETURN FIXED((SELECTONE .KW OF
+                    SET
+                    [K_LDXR]: %X'885F7C00';
+                    [K_LDAXR]: %X'885FFC00';
+                    [K_LDAR]: %X'88DFFC00';
+                    [OTHERWISE]: %X'889FFC00';
+                    TES) OR SLL(SF(.RT), 30) OR SLL(.RN, 5) OR RNUM(.RT))
+            END;
+        [K_STXR, K_STLXR]:
+            BEGIN
+            LOCAL
+                RS,
+                RT,
+                RN;
+            TRY(COUNT(3, 3));
+            TRY(GP(0, FALSE, RS));
+            TRY(GP(1, FALSE, RT));
+            IF RKIND(.RS) NEQ RK_W
+            THEN
+                RETURN FAIL_TEXT(COL(0), T('the status register must be 32-bit'));
+            TRY(BARE_BASE(2, RN));
+            RETURN FIXED((IF .KW EQL K_STXR THEN %X'88007C00' ELSE %X'8800FC00')
+                OR SLL(SF(.RT), 30) OR SLL(RNUM(.RS), 16) OR SLL(.RN, 5) OR RNUM(.RT))
+            END;
+        TES;
+    IF .MN[N_LEN] GEQ 2 AND CH$EQL(2, NTEXT(.MN), 2, UPLIT BYTE ('B.'))
+    THEN
+        BEGIN
+        MSG_BEGIN();
+        MSG_TEXT(T('unknown condition in '));
+        MSG_NAME(.MN);
+        RETURN FAIL(.MNCOL)
+        END;
+    MSG_BEGIN();
+    MSG_TEXT(T('unknown instruction '));
+    MSG_LOWER(.MN);
+    FAIL(.MNCOL)
+    END;
+
+! ENC_ENCODE mnemonic, ops, count, here, col, out: encodes an instruction,
+! its mnemonic a name in upper case at col, its operands from
+! ENC_OPERANDS, at here, a value. Stores at out the word, then the FIX_
+! code of the fixup (0 if none; then the fixup's field is zero) and the
+! value it refers to.
+GLOBAL ROUTINE ENC_ENCODE (M, O, N, H, C, RESULT) =
+    BEGIN
+    MN = .M;
+    OPS = .O;
+    NOPS = .N;
+    HERE = .H;
+    MNCOL = .C;
+    OUT = .RESULT;
+    INSN()
+    END;
+
+END
+ELUDOM

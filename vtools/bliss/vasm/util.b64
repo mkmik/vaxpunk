@@ -1,0 +1,304 @@
+MODULE UTIL (IDENT = 'V1.0') =
+%TITLE 'VASM: memory, names and messages'
+BEGIN
+!
+! What every part of VASM uses: memory from FIO$ALLOC, names (one record
+! per distinct string, found through a hash table, which also says which
+! keyword a name is), and the error message the routine that failed
+! leaves for its caller.
+!
+REQUIRE 'VASM';
+
+LITERAL
+    BUCKETS = 16384,                    ! a power of two
+    MSG_MAX = 1024;
+
+GLOBAL
+    ERR_COL,                            ! the last error: its column,
+    ERR_MSG,                            ! its message's address
+    ERR_LEN;                            ! and length
+
+OWN
+    TABLE : VECTOR[BUCKETS],
+    MSG : VECTOR[MSG_MAX, BYTE],
+    MSG_LEN;
+
+BIND
+    KWTAB = UPLIT BYTE (0, KWSTR(KEYWORDS), 0) : VECTOR[, BYTE];
+
+FORWARD ROUTINE
+    NAME_INTERN;
+
+! MEM_ALLOC size: size bytes of zeroed memory. Stops VASM if there is
+! no more.
+GLOBAL ROUTINE MEM_ALLOC (SIZE) =
+    BEGIN
+    LOCAL
+        P;
+    P = FIO$ALLOC(.SIZE);
+    IF .P EQL 0
+    THEN
+        BEGIN
+        FIO$PUT_LINE(T('%VASM-F-NOMEM, out of memory'));
+        FIO$EXIT(%X'2C')                ! SS$_ABORT
+        END;
+    .P
+    END;
+
+! MEM_COPY text, length: a copy of the text in memory of its own.
+GLOBAL ROUTINE MEM_COPY (TEXT, LEN) =
+    BEGIN
+    LOCAL
+        P;
+    P = MEM_ALLOC(.LEN + 1);
+    CH$MOVE(.LEN, .TEXT, .P);
+    .P
+    END;
+
+! NAME_INIT: makes each keyword's name, with its code.
+GLOBAL ROUTINE NAME_INIT : NOVALUE =
+    BEGIN
+    LOCAL
+        I,
+        CODE;
+    I = 1;
+    CODE = 1;
+    WHILE .KWTAB[.I] NEQ 0 DO
+        BEGIN
+        LOCAL
+            N : REF VECTOR;
+        N = NAME_INTERN(KWTAB[.I + 1], .KWTAB[.I]);
+        N[N_KW] = .CODE;
+        CODE = .CODE + 1;
+        I = .I + .KWTAB[.I] + 1
+        END
+    END;
+
+ROUTINE HASH (TEXT, LEN) =
+    BEGIN
+    LOCAL
+        H;
+    H = %X'811C9DC5';
+    INCR I FROM 0 TO .LEN - 1 DO
+        H = ((.H XOR GETB(.TEXT + .I)) * 16777619) AND %X'FFFFFFFF';
+    .H AND (BUCKETS - 1)
+    END;
+
+! NAME_EQL name, text, length: whether the name is that text.
+GLOBAL ROUTINE NAME_EQL (N : REF VECTOR, TEXT, LEN) =
+    .N[N_LEN] EQL .LEN AND CH$EQL(.LEN, NTEXT(.N), .LEN, .TEXT);
+
+! NAME_FIND text, length: the name of that text, or 0 if there is none.
+GLOBAL ROUTINE NAME_FIND (TEXT, LEN) =
+    BEGIN
+    LOCAL
+        N : REF VECTOR;
+    N = .TABLE[HASH(.TEXT, .LEN)];
+    WHILE .N NEQ 0 DO
+        BEGIN
+        IF NAME_EQL(.N, .TEXT, .LEN) THEN RETURN .N;
+        N = .N[N_NEXT]
+        END;
+    0
+    END;
+
+! NAME_INTERN text, length: the name of that text, made if it is new.
+GLOBAL ROUTINE NAME_INTERN (TEXT, LEN) =
+    BEGIN
+    LOCAL
+        H,
+        N : REF VECTOR;
+    H = HASH(.TEXT, .LEN);
+    N = .TABLE[.H];
+    WHILE .N NEQ 0 DO
+        BEGIN
+        IF NAME_EQL(.N, .TEXT, .LEN) THEN RETURN .N;
+        N = .N[N_NEXT]
+        END;
+    N = MEM_ALLOC(N_SIZE * 8 + .LEN + 1);
+    N[N_LEN] = .LEN;
+    CH$MOVE(.LEN, .TEXT, NTEXT(.N));
+    N[N_NEXT] = .TABLE[.H];
+    TABLE[.H] = .N;
+    .N
+    END;
+
+ROUTINE UPPER (C) =
+    IF .C GEQ %C'a' AND .C LEQ %C'z' THEN .C - 32 ELSE .C;
+
+! UPCASE_EQL a, length, b, length: whether the texts are equal, ignoring
+! the case of ASCII letters.
+GLOBAL ROUTINE UPCASE_EQL (A, ALEN, B, BLEN) =
+    BEGIN
+    IF .ALEN NEQ .BLEN THEN RETURN FALSE;
+    INCR I FROM 0 TO .ALEN - 1 DO
+        IF UPPER(GETB(.A + .I)) NEQ UPPER(GETB(.B + .I)) THEN RETURN FALSE;
+    TRUE
+    END;
+
+! MSG_BEGIN, then MSG_TEXT and the others, build a message.
+GLOBAL ROUTINE MSG_BEGIN : NOVALUE =
+    MSG_LEN = 0;
+
+GLOBAL ROUTINE MSG_TEXT (TEXT, LEN) : NOVALUE =
+    BEGIN
+    LOCAL
+        N;
+    N = MIN(.LEN, MSG_MAX - .MSG_LEN);
+    CH$MOVE(.N, .TEXT, MSG[.MSG_LEN]);
+    MSG_LEN = .MSG_LEN + .N
+    END;
+
+GLOBAL ROUTINE MSG_CHAR (C) : NOVALUE =
+    BEGIN
+    LOCAL
+        B : VECTOR[1, BYTE];
+    B[0] = .C;
+    MSG_TEXT(B, 1)
+    END;
+
+! MSG_DEC n: n in signed decimal.
+GLOBAL ROUTINE MSG_DEC (V) : NOVALUE =
+    BEGIN
+    LOCAL
+        BUF : VECTOR[24, BYTE],
+        I,
+        X;
+    I = 24;
+    X = .V;
+    ! Digits from the remainders, negative for a negative value, so that
+    ! the most negative one prints too.
+    DO
+        BEGIN
+        LOCAL
+            D;
+        D = .X - (.X / 10) * 10;
+        IF .D LSS 0 THEN D = -.D;
+        I = .I - 1;
+        BUF[.I] = %C'0' + .D;
+        X = .X / 10
+        END
+    UNTIL .X EQL 0;
+    IF .V LSS 0
+    THEN
+        BEGIN
+        I = .I - 1;
+        BUF[.I] = %C'-'
+        END;
+    MSG_TEXT(BUF[.I], 24 - .I)
+    END;
+
+! MSG_HEX n: n as an unsigned hexadecimal number after 0x, as Rust's {:#x}.
+GLOBAL ROUTINE MSG_HEX (V) : NOVALUE =
+    BEGIN
+    LOCAL
+        BUF : VECTOR[16, BYTE],
+        I,
+        X;
+    I = 16;
+    X = .V;
+    DO
+        BEGIN
+        LOCAL
+            D;
+        D = .X AND 15;
+        I = .I - 1;
+        BUF[.I] = (IF .D LSS 10 THEN %C'0' + .D ELSE %C'a' + .D - 10);
+        X = SRL(.X, 4)
+        END
+    UNTIL .X EQL 0;
+    MSG_TEXT(T('0x'));
+    MSG_TEXT(BUF[.I], 16 - .I)
+    END;
+
+! MSG_NAME name: the name's text.
+GLOBAL ROUTINE MSG_NAME (N : REF VECTOR) : NOVALUE =
+    MSG_TEXT(NTEXT(.N), .N[N_LEN]);
+
+! MSG_SAVE length: a copy of the message; stores its length.
+GLOBAL ROUTINE MSG_SAVE (LEN) =
+    BEGIN
+    .LEN = .MSG_LEN;
+    MEM_COPY(MSG, .MSG_LEN)
+    END;
+
+! FAIL col: makes the message the error, at col. Returns false, for the
+! caller to return.
+GLOBAL ROUTINE FAIL (COL) =
+    BEGIN
+    ERR_COL = .COL;
+    ERR_MSG = MSG_SAVE(ERR_LEN);
+    FALSE
+    END;
+
+! FAIL_TEXT col, text, length: an error with that message.
+GLOBAL ROUTINE FAIL_TEXT (COL, TEXT, LEN) =
+    BEGIN
+    ERR_COL = .COL;
+    ERR_MSG = MEM_COPY(.TEXT, .LEN);
+    ERR_LEN = .LEN;
+    FALSE
+    END;
+
+! OUT_LINE text, length: a line on the terminal.
+GLOBAL ROUTINE OUT_LINE (TEXT, LEN) : NOVALUE =
+    FIO$PUT_LINE(.TEXT, .LEN);
+
+
+! FILE_READ name, length, text, textlen: reads the whole host file named
+! by length bytes at name; stores where its text is and how long it is.
+! Returns the I/O module's status.
+GLOBAL ROUTINE FILE_READ (NAME, LEN, TEXT, TEXTLEN) =
+    BEGIN
+    LITERAL
+        PIECE = 65536;
+    LOCAL
+        CHAN,
+        STATUS,
+        FIRST : REF VECTOR,
+        LAST : REF VECTOR,
+        TOTAL,
+        P,
+        BUF;
+    STATUS = FIO$OPEN(.NAME, .LEN, FIO$K_READ, CHAN);
+    IF NOT .STATUS THEN RETURN .STATUS;
+    ! Pieces in a list, each its next piece, its length and its bytes.
+    FIRST = 0;
+    LAST = 0;
+    TOTAL = 0;
+    WHILE 1 DO
+        BEGIN
+        LOCAL
+            PC : REF VECTOR,
+            N;
+        PC = MEM_ALLOC(16 + PIECE);
+        STATUS = FIO$READ(.CHAN, PC[2], PIECE, N);
+        IF .STATUS EQL SS$_ENDOFFILE THEN EXITLOOP;
+        IF NOT .STATUS
+        THEN
+            BEGIN
+            FIO$CLOSE(.CHAN);
+            RETURN .STATUS
+            END;
+        PC[1] = .N;
+        TOTAL = .TOTAL + .N;
+        IF .LAST EQL 0 THEN FIRST = .PC ELSE LAST[0] = .PC;
+        LAST = .PC;
+        IF .N LSS PIECE THEN EXITLOOP
+        END;
+    FIO$CLOSE(.CHAN);
+    BUF = MEM_ALLOC(.TOTAL + 1);
+    P = 0;
+    WHILE .FIRST NEQ 0 DO
+        BEGIN
+        CH$MOVE(.FIRST[1], FIRST[2], .BUF + .P);
+        P = .P + .FIRST[1];
+        FIRST = .FIRST[0]
+        END;
+    .TEXT = .BUF;
+    .TEXTLEN = .TOTAL;
+    SS$_NORMAL
+    END;
+
+END
+ELUDOM

@@ -1,0 +1,336 @@
+! VASM.R64: what VASM's modules share: the layout of its records, its
+! keywords, and each module's global routines, for the others to declare
+! EXTERNAL. VASM is vasm (vtools/crates/vasm) in BLISS-64, and makes the
+! same object modules byte for byte; each module says which Rust file it
+! follows. Records are vectors of quadwords, named by LITERAL indexes, and
+! live in memory FIO$ALLOC gives, which is never freed.
+
+LITERAL
+    TRUE = 1,
+    FALSE = 0;
+
+BUILTIN
+    SLL,
+    SRL,
+    SRA;
+
+! A byte at an address, and storing one.
+MACRO
+    GETB(A) = .(A)<0, 8, 0> %,
+    PUTB(A, V) = (A)<0, 8, 0> = (V) %,
+    ! Returns 0 from the routine unless E succeeds (its low bit is set).
+    TRY(E) = (IF NOT (E) THEN RETURN FALSE) %,
+    ! A string literal as its address and length.
+    T(S) = UPLIT BYTE (S), %CHARCOUNT(S) %;
+
+! A name (NAME_INTERN): a string, and what the assembler knows of it as a
+! symbol, a macro and a keyword. The text follows the record.
+LITERAL
+    N_NEXT = 0,                         ! the next name in its hash chain
+    N_LEN = 1,
+    N_KW = 2,                           ! the keyword's K_ code, or 0
+    N_MACRO = 3,                        ! a macro of this name
+    N_ORDER = 4,                        ! the next symbol in order of appearance
+    N_SYMBOL = 5,                       ! true once it is a symbol
+    N_FLAGS = 6,                        ! F_ flags
+    N_VALUE = 7,                        ! its value, 3 quadwords: V_KIND...
+    N_SIZE = 10;
+
+MACRO
+    NTEXT(N) = ((N) + N_SIZE * 8) %;
+
+LITERAL
+    F_GLOBAL = 1,
+    F_WEAK = 2,
+    F_EXTERNAL = 4,
+    F_LABEL = 8;                        ! defined by a label, so it can't be redefined
+
+! A value (expr.rs's Value): absolute, or relative to a psect of this
+! module or to an external symbol. V_A is the psect number or the name.
+LITERAL
+    V_KIND = 0,
+    V_A = 1,
+    V_OFF = 2,
+    V_SIZE = 3,
+    VK_NONE = 0,
+    VK_ABS = 1,
+    VK_PSECT = 2,
+    VK_EXT = 3;
+
+MACRO
+    VCOPY(DST, SRC) = CH$MOVE(V_SIZE * 8, (SRC), (DST)) %;
+
+! An expression node (expr.rs's Expr).
+LITERAL
+    E_KIND = 0,
+    E_X = 1,                            ! the number, the name, or the operator
+    E_L = 2,
+    E_R = 3,
+    E_SIZE = 4,
+    EK_NUM = 1,
+    EK_SYM = 2,
+    EK_HERE = 3,
+    EK_NEG = 4,
+    EK_NOT = 5,
+    EK_BIN = 6,
+    OP_MUL = 1,
+    OP_DIV = 2,
+    OP_REM = 3,
+    OP_ADD = 4,
+    OP_SUB = 5,
+    OP_SHL = 6,
+    OP_SHR = 7,
+    OP_AND = 8,
+    OP_XOR = 9,
+    OP_OR = 10;
+
+! A cursor in a line (lex.rs's Cursor).
+LITERAL
+    C_LINE = 0,                         ! the line's address
+    C_LEN = 1,
+    C_AT = 2,                           ! the offset of the next character
+    C_SIZE = 3;
+
+MACRO
+    CREST(C) = (.C[C_LINE] + .C[C_AT]) %,
+    CLEFT(C) = (.C[C_LEN] - .C[C_AT]) %,
+    CCOL(C) = (.C[C_AT] + 1) %;
+
+! A source line and where it came from (macros.rs's Line and Loc): the
+! file, its line number, and the macro call or repeat block that made it.
+LITERAL
+    L_TEXT = 0,
+    L_LEN = 1,
+    L_FILE = 2,                         ! a name: the file's path
+    L_NUM = 3,
+    L_VIA = 4,                          ! a VIA record, or 0
+    L_SIZE = 5,
+    VIA_WHAT = 0,                       ! "macro NAME" or the repeat directive
+    VIA_WHATLEN = 1,
+    VIA_LINE = 2,                       ! the line of the call
+    VIA_SIZE = 3;
+
+! A macro: its formal arguments and its body, a vector of lines.
+LITERAL
+    M_NAME = 0,
+    M_NPARAMS = 1,
+    M_PARAMS = 2,                       ! P_SIZE quadwords each
+    M_BODY = 3,
+    M_COUNT = 4,
+    M_NAMES = 5,                        ! the formals' names, a vector
+    M_SIZE = 6,
+    P_NAME = 0,                         ! a name, in upper case
+    P_DEFAULT = 1,                      ! the default's address and length, or 0
+    P_DEFLEN = 2,
+    P_CREATED = 3,                      ! ?NAME: a created local label
+    P_SIZE = 4;
+
+! A psect, and its contents: chunks in offset order (asm.rs's Psect, Chunk).
+LITERAL
+    PS_NAME = 0,
+    PS_FLAGS = 1,
+    PS_ALIGN = 2,                       ! a power of two
+    PS_SIZE = 3,
+    PS_FIRST = 4,
+    PS_LAST = 5,
+    PS_RECSIZE = 6,
+    CH_NEXT = 0,
+    CH_OFFSET = 1,
+    CH_KIND = 2,
+    CH_ADDR = 3,                        ! bytes: where they are
+    CH_LEN = 4,
+    CH_FIX = 3,                         ! an instruction: the fixup, FIX_
+    CH_WORD = 4,
+    CH_SIZE = 3,                        ! data: 1 to 8 bytes
+    CH_VALUE = 5,                       ! the value the linker stores, 3 quadwords
+    CH_CAP = 5,                         ! bytes: how many fit where they are
+    CH_RECSIZE = 8,
+    CK_BYTES = 1,
+    CK_INSN = 2,
+    CK_DATA = 3;
+
+! The psect attributes (vms_obj::obj::psc).
+LITERAL
+    PSC_PIC = 1,
+    PSC_LIB = 2,
+    PSC_OVR = 4,
+    PSC_REL = 8,
+    PSC_GBL = 16,
+    PSC_SHR = 32,
+    PSC_EXE = 64,
+    PSC_RD = 128,
+    PSC_WRT = 256,
+    PSC_VEC = 512,
+    PSC_NOMOD = 1024;
+
+! An error or warning, at a line (asm.rs's Diagnostic).
+LITERAL
+    D_NEXT = 0,
+    D_SEQ = 1,                          ! the line's number in the order lines are read
+    D_COL = 2,
+    D_MSG = 3,
+    D_MSGLEN = 4,
+    D_WARN = 5,
+    D_LINE = 6,                         ! an L_ record
+    D_SIZE = 7;
+
+! How the linker patches an instruction (encode.rs's Fix): FIX_LDST plus
+! log2 of the access size, FIX_MOVW plus 2 * the chunk plus 1 if checked.
+LITERAL
+    FIX_JUMP26 = 1,
+    FIX_BRANCH19 = 2,
+    FIX_BRANCH14 = 3,
+    FIX_ADR = 4,
+    FIX_ADRP = 5,
+    FIX_ADDLO12 = 6,
+    FIX_LDST = 16,
+    FIX_MOVW = 32;
+
+! An operand (encode.rs's Operand). A register is RK_ kind * 32 + number.
+LITERAL
+    O_KIND = 0,
+    O_COL = 1,
+    O_REG = 2,                          ! OK_REG; OK_MEM's base
+    O_EXPR = 3,                         ! OK_IMM, OK_MOD, OK_SHIFT, OK_EXTEND (0 if none)
+    O_MOD = 4,                          ! OK_MOD: MOD_ code
+    O_TYPE = 4,                         ! OK_SHIFT, OK_EXTEND: which
+    O_INDEX = 5,                        ! OK_MEM: IX_ kind
+    O_IEXPR = 6,                        ! IX_IMM, IX_MOD
+    O_IMOD = 7,
+    O_IREG = 8,                         ! IX_REG: register, extend option, amount (0 if none)
+    O_OPTION = 9,
+    O_AMOUNT = 10,
+    O_WBACK = 11,
+    O_SIZE = 12,
+    OK_REG = 1,
+    OK_IMM = 2,
+    OK_MOD = 3,
+    OK_SHIFT = 4,
+    OK_EXTEND = 5,
+    OK_MEM = 6,
+    IX_NONE = 0,
+    IX_IMM = 1,
+    IX_MOD = 2,
+    IX_REG = 3,
+    ! A modifier: :lo12:, or a MOVZ chunk with 2 * chunk + 1 if checked.
+    MOD_LO12 = 1,
+    MOD_ABSG = 16,
+    RK_X = 1,
+    RK_W = 2,
+    RK_SP = 3,
+    RK_WSP = 4,
+    RK_B = 5,
+    RK_H = 6,
+    RK_S = 7,
+    RK_D = 8,
+    RK_Q = 9;
+
+MACRO
+    RKIND(R) = ((R) / 32) %,
+    RNUM(R) = ((R) AND 31) %;
+
+! The keywords: directives, mnemonics, and the names operands and
+! conditions use, each a K_ code a name's N_KW holds once NAME_INIT runs.
+MACRO
+    KEYWORDS =
+        K_DOT, '.',
+        K_IF, '.IF', K_ENDC, '.ENDC', K_IF_FALSE, '.IF_FALSE', K_IFF, '.IFF', K_ELSE, '.ELSE',
+        K_IF_TRUE, '.IF_TRUE', K_IFT, '.IFT', K_IF_TRUE_FALSE, '.IF_TRUE_FALSE', K_IFTF, '.IFTF',
+        K_MACRO, '.MACRO', K_IRP, '.IRP', K_IRPC, '.IRPC', K_REPEAT, '.REPEAT', K_REPT, '.REPT',
+        K_ENDM, '.ENDM', K_ENDR, '.ENDR', K_MEXIT, '.MEXIT', K_NARG, '.NARG', K_IIF, '.IIF',
+        K_LIBRARY, '.LIBRARY', K_TITLE, '.TITLE', K_IDENT, '.IDENT', K_PSECT, '.PSECT',
+        K_SAVE_PSECT, '.SAVE_PSECT', K_RESTORE_PSECT, '.RESTORE_PSECT', K_GLOBAL, '.GLOBAL',
+        K_GLOBL, '.GLOBL', K_EXTERNAL, '.EXTERNAL', K_EXTERN, '.EXTERN', K_WEAK, '.WEAK',
+        K_DBYTE, '.BYTE', K_DWORD, '.WORD', K_DLONG, '.LONG', K_DQUAD, '.QUAD',
+        K_ADDRESS, '.ADDRESS', K_ASCII, '.ASCII', K_ASCIZ, '.ASCIZ', K_ASCIC, '.ASCIC',
+        K_ASCID, '.ASCID', K_ASCID64, '.ASCID64', K_BLKB, '.BLKB', K_BLKW, '.BLKW',
+        K_BLKL, '.BLKL', K_BLKQ, '.BLKQ', K_ALIGN, '.ALIGN', K_WARN, '.WARN', K_ERROR, '.ERROR',
+        K_END, '.END',
+        ! .IF conditions
+        K_EQ, 'EQ', K_EQUAL, 'EQUAL', K_NE, 'NE', K_NOT_EQUAL, 'NOT_EQUAL', K_GT, 'GT',
+        K_GREATER, 'GREATER', K_LT, 'LT', K_LESS_THAN, 'LESS_THAN', K_GE, 'GE',
+        K_GREATER_EQUAL, 'GREATER_EQUAL', K_LE, 'LE', K_LESS_EQUAL, 'LESS_EQUAL', K_DF, 'DF',
+        K_DEFINED, 'DEFINED', K_NDF, 'NDF', K_NOT_DEFINED, 'NOT_DEFINED', K_B, 'B',
+        K_BLANK, 'BLANK', K_NB, 'NB', K_NOT_BLANK, 'NOT_BLANK', K_IDN, 'IDN',
+        K_IDENTICAL, 'IDENTICAL', K_DIF, 'DIF', K_DIFFERENT, 'DIFFERENT',
+        ! psect attributes and alignments
+        K_LOCAL_BLOCK, 'LOCAL_BLOCK', K_PIC, 'PIC', K_NOPIC, 'NOPIC', K_OVR, 'OVR', K_CON, 'CON',
+        K_REL, 'REL', K_ABS, 'ABS', K_GBL, 'GBL', K_LCL, 'LCL', K_SHR, 'SHR', K_NOSHR, 'NOSHR',
+        K_EXE, 'EXE', K_NOEXE, 'NOEXE', K_RD, 'RD', K_NORD, 'NORD', K_WRT, 'WRT',
+        K_NOWRT, 'NOWRT', K_VEC, 'VEC', K_NOVEC, 'NOVEC', K_NOMOD, 'NOMOD', K_MIX, 'MIX',
+        K_NOMIX, 'NOMIX', K_BYTE, 'BYTE', K_WORD, 'WORD', K_LONG, 'LONG', K_QUAD, 'QUAD',
+        K_OCTA, 'OCTA', K_PAGE, 'PAGE',
+        ! operands
+        K_LSL, 'LSL', K_LSR, 'LSR', K_ASR, 'ASR', K_ROR, 'ROR',
+        K_UXTB, 'UXTB', K_UXTH, 'UXTH', K_UXTW, 'UXTW', K_UXTX, 'UXTX',
+        K_SXTB, 'SXTB', K_SXTH, 'SXTH', K_SXTW, 'SXTW', K_SXTX, 'SXTX',
+        K_LO12, 'LO12', K_ABS_G0, 'ABS_G0', K_ABS_G0_NC, 'ABS_G0_NC', K_ABS_G1, 'ABS_G1',
+        K_ABS_G1_NC, 'ABS_G1_NC', K_ABS_G2, 'ABS_G2', K_ABS_G2_NC, 'ABS_G2_NC',
+        K_ABS_G3, 'ABS_G3',
+        ! condition codes, in encoding order, then the other names of two
+        K_C_EQ, 'B.EQ', K_C_NE, 'B.NE', K_C_HS, 'B.HS', K_C_LO, 'B.LO', K_C_MI, 'B.MI',
+        K_C_PL, 'B.PL', K_C_VS, 'B.VS', K_C_VC, 'B.VC', K_C_HI, 'B.HI', K_C_LS, 'B.LS',
+        K_C_GE, 'B.GE', K_C_LT, 'B.LT', K_C_GT, 'B.GT', K_C_LE, 'B.LE', K_C_AL, 'B.AL',
+        K_C_NV, 'B.NV', K_C_CS, 'B.CS', K_C_CC, 'B.CC',
+        K_HS, 'HS', K_LO, 'LO', K_MI, 'MI', K_PL, 'PL', K_VS, 'VS', K_VC, 'VC', K_HI, 'HI',
+        K_LS, 'LS', K_AL, 'AL', K_NV, 'NV', K_CS, 'CS', K_CC, 'CC',
+        ! barrier options, system registers and PSTATE fields
+        K_SY, 'SY', K_ST, 'ST', K_LD, 'LD', K_ISH, 'ISH', K_ISHST, 'ISHST', K_ISHLD, 'ISHLD',
+        K_NSH, 'NSH', K_NSHST, 'NSHST', K_NSHLD, 'NSHLD', K_OSH, 'OSH', K_OSHST, 'OSHST',
+        K_OSHLD, 'OSHLD',
+        K_SPSEL, 'SPSEL', K_DAIFSET, 'DAIFSET', K_DAIFCLR, 'DAIFCLR',
+        ! mnemonics
+        K_ADD, 'ADD', K_ADDS, 'ADDS', K_SUB, 'SUB', K_SUBS, 'SUBS', K_CMP, 'CMP', K_CMN, 'CMN',
+        K_NEG, 'NEG', K_NEGS, 'NEGS', K_AND, 'AND', K_ORR, 'ORR', K_EOR, 'EOR', K_ANDS, 'ANDS',
+        K_BIC, 'BIC', K_ORN, 'ORN', K_EON, 'EON', K_BICS, 'BICS', K_TST, 'TST', K_MOV, 'MOV',
+        K_MVN, 'MVN', K_MOVZ, 'MOVZ', K_MOVN, 'MOVN', K_MOVK, 'MOVK', K_ADR, 'ADR',
+        K_ADRP, 'ADRP', K_UBFM, 'UBFM', K_SBFM, 'SBFM', K_BFM, 'BFM', K_UBFX, 'UBFX',
+        K_SBFX, 'SBFX', K_UBFIZ, 'UBFIZ', K_SBFIZ, 'SBFIZ', K_BFI, 'BFI', K_BFXIL, 'BFXIL',
+        K_EXTR, 'EXTR', K_UDIV, 'UDIV', K_SDIV, 'SDIV', K_LSLV, 'LSLV', K_LSRV, 'LSRV',
+        K_ASRV, 'ASRV', K_RORV, 'RORV', K_MADD, 'MADD', K_MSUB, 'MSUB', K_MUL, 'MUL',
+        K_MNEG, 'MNEG', K_SMADDL, 'SMADDL', K_UMADDL, 'UMADDL', K_SMSUBL, 'SMSUBL',
+        K_UMSUBL, 'UMSUBL', K_SMULL, 'SMULL', K_UMULL, 'UMULL', K_SMULH, 'SMULH',
+        K_UMULH, 'UMULH', K_CSEL, 'CSEL', K_CSINC, 'CSINC', K_CSINV, 'CSINV', K_CSNEG, 'CSNEG',
+        K_CSET, 'CSET', K_CSETM, 'CSETM', K_CINC, 'CINC', K_CINV, 'CINV', K_CNEG, 'CNEG',
+        K_RBIT, 'RBIT', K_REV16, 'REV16', K_REV32, 'REV32', K_REV, 'REV', K_CLZ, 'CLZ',
+        K_CLS, 'CLS', K_BL, 'BL', K_CBZ, 'CBZ', K_CBNZ, 'CBNZ', K_TBZ, 'TBZ', K_TBNZ, 'TBNZ',
+        K_BR, 'BR', K_BLR, 'BLR', K_RET, 'RET', K_ERET, 'ERET', K_SVC, 'SVC', K_HVC, 'HVC',
+        K_SMC, 'SMC', K_BRK, 'BRK', K_HLT, 'HLT', K_UDF, 'UDF', K_NOP, 'NOP', K_YIELD, 'YIELD',
+        K_WFE, 'WFE', K_WFI, 'WFI', K_SEV, 'SEV', K_SEVL, 'SEVL', K_HINT, 'HINT', K_DMB, 'DMB',
+        K_DSB, 'DSB', K_ISB, 'ISB', K_MRS, 'MRS', K_MSR, 'MSR',
+        K_LDR, 'LDR', K_STR, 'STR', K_LDRB, 'LDRB', K_STRB, 'STRB', K_LDRH, 'LDRH',
+        K_STRH, 'STRH', K_LDRSB, 'LDRSB', K_LDRSH, 'LDRSH', K_LDRSW, 'LDRSW', K_LDUR, 'LDUR',
+        K_STUR, 'STUR', K_LDURB, 'LDURB', K_STURB, 'STURB', K_LDURH, 'LDURH', K_STURH, 'STURH',
+        K_LDURSB, 'LDURSB', K_LDURSH, 'LDURSH', K_LDURSW, 'LDURSW', K_LDP, 'LDP', K_STP, 'STP',
+        K_LDPSW, 'LDPSW', K_LDXR, 'LDXR', K_LDAXR, 'LDAXR', K_LDAR, 'LDAR', K_STLR, 'STLR',
+        K_STXR, 'STXR', K_STLXR, 'STLXR',
+        ! standard psects
+        K_CODE, '$CODE$', K_DATA, '$DATA$', K_LINK, '$LINK$', K_LITERAL, '$LITERAL$',
+        K_READONLY, '$READONLY$', K_BSS, '$BSS$', K_ABSPS, '$ABS$' %,
+    KWLIT[ID, S] = ID = %COUNT + 1 %,
+    KWSTR[ID, S] = %CHAR(%CHARCOUNT(S)), S %;
+
+LITERAL
+    KWLIT(KEYWORDS);
+
+! Each module's global routines.
+MACRO
+    UTIL_ROUTINES =
+        MEM_ALLOC, MEM_COPY, NAME_INIT, NAME_INTERN, NAME_FIND, NAME_EQL, UPCASE_EQL,
+        MSG_BEGIN, MSG_TEXT, MSG_DEC, MSG_HEX, MSG_CHAR, MSG_NAME, MSG_SAVE, FAIL, FAIL_TEXT,
+        OUT_LINE, FILE_READ %,
+    LEX_ROUTINES =
+        LEX_INIT, LEX_SKIP_WS, LEX_PEEK, LEX_AT_END, LEX_EAT, LEX_EXPECT, LEX_NAME,
+        LEX_STRIP_COMMENT, IS_SPACE, IS_DIGIT, IS_ALNUM, IS_NAME_START, IS_NAME_CHAR %,
+    EXPR_ROUTINES =
+        EXPR_PARSE, EXPR_EVAL, EXPR_LOCAL_NAME, EXPR_DISPLAY %,
+    MACROS_ROUTINES =
+        MAC_LINES, MAC_PARAMS, MAC_BIND, MAC_SUBSTITUTE, MAC_ARG, MAC_SPLIT, MAC_UNBRACKET %,
+    ENCODE_ROUTINES =
+        ENC_OPERANDS, ENC_ENCODE %,
+    ASM_ROUTINES =
+        ASM_ASSEMBLE, ASM_LOOKUP %,
+    EMIT_ROUTINES =
+        EMIT_RECORDS %;
+
+REQUIRE 'FIO';

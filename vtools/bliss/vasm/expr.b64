@@ -1,0 +1,423 @@
+MODULE EXPR (IDENT = 'V1.0') =
+%TITLE 'VASM: expressions'
+BEGIN
+!
+! expr.rs: C operators and precedence, VMS radix prefixes, symbols, local
+! labels (10$) and the location counter (.). An expression is a tree of
+! E_ nodes; a value is V_SIZE quadwords. VASM has no MACRO-32 dialect, so
+! no MACRO-32 expressions.
+!
+REQUIRE 'VASM';
+
+EXTERNAL ROUTINE
+    UTIL_ROUTINES,
+    LEX_ROUTINES,
+    ASM_ROUTINES;
+
+FORWARD ROUTINE
+    EXPR_PARSE,
+    EXPR_EVAL;
+
+! The binary operators by precedence, lowest first: each level's tokens,
+! as a length, the characters and the operator, ending with 0.
+BIND
+    LEVEL0 = UPLIT (1, '|', OP_OR, 0) : VECTOR,
+    LEVEL1 = UPLIT (1, '^', OP_XOR, 0) : VECTOR,
+    LEVEL2 = UPLIT (1, '&', OP_AND, 0) : VECTOR,
+    LEVEL3 = UPLIT (2, '<<', OP_SHL, 2, '>>', OP_SHR, 0) : VECTOR,
+    LEVEL4 = UPLIT (1, '+', OP_ADD, 1, '-', OP_SUB, 0) : VECTOR,
+    LEVEL5 = UPLIT (1, '*', OP_MUL, 1, '/', OP_DIV, 1, '%', OP_REM, 0) : VECTOR,
+    LEVELS = UPLIT (LEVEL0, LEVEL1, LEVEL2, LEVEL3, LEVEL4, LEVEL5) : VECTOR;
+
+ROUTINE NODE (KIND, X, L, R) =
+    BEGIN
+    LOCAL
+        E : REF VECTOR;
+    E = MEM_ALLOC(E_SIZE * 8);
+    E[E_KIND] = .KIND;
+    E[E_X] = .X;
+    E[E_L] = .L;
+    E[E_R] = .R;
+    .E
+    END;
+
+! EXPR_LOCAL_NAME digits, length, block: the internal name of local label
+! digits$ in block. Labels from 30000$ up are the ones macros create; each
+! is unique in the module, so they belong to no block.
+GLOBAL ROUTINE EXPR_LOCAL_NAME (TEXT, LEN, BLOCK) =
+    BEGIN
+    LOCAL
+        N,
+        CREATED,
+        SPACE : VECTOR[64, BYTE],
+        BUF,
+        P;
+    ! Whether the text is a 32-bit decimal number from 30000 up.
+    N = 0;
+    CREATED = .LEN GTR 0;
+    INCR I FROM 0 TO .LEN - 1 DO
+        BEGIN
+        IF NOT IS_DIGIT(GETB(.TEXT + .I)) THEN CREATED = FALSE;
+        IF .N LEQ %X'FFFFFFFF' THEN N = .N * 10 + GETB(.TEXT + .I) - %C'0'
+        END;
+    IF .N LSS 30000 OR .N GTR %X'FFFFFFFF' THEN CREATED = FALSE;
+    BUF = (IF .LEN LEQ 40 THEN SPACE ELSE MEM_ALLOC(.LEN + 24));
+    CH$MOVE(.LEN, .TEXT, .BUF);
+    PUTB(.BUF + .LEN, %C'$');
+    PUTB(.BUF + .LEN + 1, %C'@');
+    P = .LEN + 2;
+    IF NOT .CREATED
+    THEN
+        BEGIN
+        LOCAL
+            D : VECTOR[12, BYTE],
+            I,
+            X;
+        I = 12;
+        X = .BLOCK;
+        DO
+            BEGIN
+            I = .I - 1;
+            D[.I] = %C'0' + .X MOD 10;
+            X = .X / 10
+            END
+        UNTIL .X EQL 0;
+        CH$MOVE(12 - .I, D[.I], .BUF + .P);
+        P = .P + 12 - .I
+        END;
+    NAME_INTERN(.BUF, .P)
+    END;
+
+! EXPR_DISPLAY name: the length of the name as written: a local label
+! without its block.
+GLOBAL ROUTINE EXPR_DISPLAY (N : REF VECTOR) =
+    BEGIN
+    INCR I FROM 0 TO .N[N_LEN] - 1 DO
+        IF GETB(NTEXT(.N) + .I) EQL %C'@' THEN RETURN .I;
+    .N[N_LEN]
+    END;
+
+! Whether the rest of the line starts with the text.
+ROUTINE STARTS (C : REF VECTOR, TEXT, LEN) =
+    .LEN LEQ CLEFT(C) AND CH$EQL(.LEN, CREST(C), .LEN, .TEXT);
+
+ROUTINE DIGIT (CH) =
+    BEGIN
+    IF .CH GEQ %C'0' AND .CH LEQ %C'9' THEN RETURN .CH - %C'0';
+    IF .CH GEQ %C'A' AND .CH LEQ %C'Z' THEN RETURN .CH - %C'A' + 10;
+    IF .CH GEQ %C'a' AND .CH LEQ %C'z' THEN RETURN .CH - %C'a' + 10;
+    99
+    END;
+
+! A number in radix: the text's value, or false if it isn't a u64.
+ROUTINE NUMBER (TEXT, LEN, RADIX, VALUE) =
+    BEGIN
+    LOCAL
+        N,
+        MAX,
+        LAST;
+    IF .LEN EQL 0 THEN RETURN FALSE;
+    ! N * RADIX + D fits in 64 bits unless N is above MAX, or is MAX and D
+    ! above LAST: (2**64 - 1) / RADIX and its remainder.
+    SELECTONE .RADIX OF
+        SET
+        [2]: (MAX = %X'7FFFFFFFFFFFFFFF'; LAST = 1);
+        [8]: (MAX = %X'1FFFFFFFFFFFFFFF'; LAST = 7);
+        [10]: (MAX = 1844674407370955161; LAST = 5);
+        [16]: (MAX = %X'0FFFFFFFFFFFFFFF'; LAST = 15);
+        TES;
+    N = 0;
+    INCR I FROM 0 TO .LEN - 1 DO
+        BEGIN
+        LOCAL
+            D;
+        D = DIGIT(GETB(.TEXT + .I));
+        IF .D GEQ .RADIX THEN RETURN FALSE;
+        IF .N GTRU .MAX OR (.N EQL .MAX AND .D GTR .LAST) THEN RETURN FALSE;
+        N = .N * .RADIX + .D
+        END;
+    .VALUE = .N;
+    TRUE
+    END;
+
+ROUTINE UNARY (C : REF VECTOR, BLOCK) =
+    BEGIN
+    LOCAL
+        COL,
+        REST,
+        LEFT,
+        N : REF VECTOR;
+    IF LEX_EAT(.C, %C'-')
+    THEN
+        BEGIN
+        LOCAL
+            E;
+        E = UNARY(.C, .BLOCK);
+        IF .E EQL 0 THEN RETURN 0;
+        RETURN NODE(EK_NEG, 0, .E, 0)
+        END;
+    IF LEX_EAT(.C, %C'~')
+    THEN
+        BEGIN
+        LOCAL
+            E;
+        E = UNARY(.C, .BLOCK);
+        IF .E EQL 0 THEN RETURN 0;
+        RETURN NODE(EK_NOT, 0, .E, 0)
+        END;
+    IF LEX_EAT(.C, %C'+') THEN RETURN UNARY(.C, .BLOCK);
+    IF LEX_EAT(.C, %C'(')
+    THEN
+        BEGIN
+        LOCAL
+            E;
+        E = EXPR_PARSE(.C, .BLOCK);
+        IF .E EQL 0 THEN RETURN 0;
+        IF NOT LEX_EXPECT(.C, %C')') THEN RETURN 0;
+        RETURN .E
+        END;
+    COL = CCOL(C);
+    REST = CREST(C);
+    LEFT = CLEFT(C);
+    IF .LEFT GTR 0 AND GETB(.REST) EQL %C''''
+    THEN
+        BEGIN
+        IF .LEFT GTR 1
+        THEN
+            BEGIN
+            IF .LEFT GTR 2 AND GETB(.REST + 2) EQL %C''''
+            THEN
+                BEGIN
+                C[C_AT] = .C[C_AT] + 3;
+                RETURN NODE(EK_NUM, GETB(.REST + 1), 0, 0)
+                END;
+            FAIL_TEXT(.COL, T('expected a character constant like ''A'''));
+            RETURN 0
+            END
+        END;
+    IF .LEFT GTR 0 AND (IS_DIGIT(GETB(.REST)) OR GETB(.REST) EQL %C'^')
+    THEN
+        BEGIN
+        LOCAL
+            RADIX,
+            SKIP,
+            DIGITS,
+            LEN,
+            V;
+        RADIX = 10;
+        SKIP = 0;
+        IF .LEFT GEQ 2
+        THEN
+            BEGIN
+            LOCAL
+                A,
+                B;
+            A = GETB(.REST);
+            B = GETB(.REST + 1);
+            IF .B GEQ %C'a' AND .B LEQ %C'z' THEN B = .B - 32;
+            IF .A EQL %C'0' OR .A EQL %C'^'
+            THEN
+                SELECTONE .B OF
+                    SET
+                    [%C'X']: (RADIX = 16; SKIP = 2);
+                    [%C'B']: (RADIX = 2; SKIP = 2);
+                    [%C'O']: (RADIX = 8; SKIP = 2);
+                    [%C'D']: IF .A EQL %C'^' THEN (RADIX = 10; SKIP = 2);
+                    TES
+            END;
+        DIGITS = .REST + .SKIP;
+        LEN = 0;
+        WHILE .SKIP + .LEN LSS .LEFT AND IS_ALNUM(GETB(.DIGITS + .LEN)) DO
+            LEN = .LEN + 1;
+        ! A decimal number followed by $ is a local label.
+        IF .SKIP EQL 0 AND .LEN LSS .LEFT
+        THEN
+            IF GETB(.DIGITS + .LEN) EQL %C'$'
+            THEN
+                BEGIN
+                C[C_AT] = .C[C_AT] + .LEN + 1;
+                RETURN NODE(EK_SYM, EXPR_LOCAL_NAME(.DIGITS, .LEN, .BLOCK), 0, 0)
+                END;
+        IF NOT NUMBER(.DIGITS, .LEN, .RADIX, V)
+        THEN
+            BEGIN
+            MSG_BEGIN();
+            MSG_TEXT(T('bad number '''));
+            MSG_TEXT(.REST, .SKIP + .LEN);
+            MSG_CHAR(%C'''');
+            FAIL(.COL);
+            RETURN 0
+            END;
+        C[C_AT] = .C[C_AT] + .SKIP + .LEN;
+        RETURN NODE(EK_NUM, .V, 0, 0)
+        END;
+    N = LEX_NAME(.C);
+    IF .N EQL 0
+    THEN
+        BEGIN
+        FAIL_TEXT(.COL, T('expected an expression'));
+        RETURN 0
+        END;
+    IF .N[N_KW] EQL K_DOT THEN RETURN NODE(EK_HERE, 0, 0, 0);
+    NODE(EK_SYM, .N, 0, 0)
+    END;
+
+ROUTINE BINARY (C : REF VECTOR, BLOCK, LEVEL) =
+    BEGIN
+    LOCAL
+        LEFT;
+    IF .LEVEL EQL 6 THEN RETURN UNARY(.C, .BLOCK);
+    LEFT = BINARY(.C, .BLOCK, .LEVEL + 1);
+    IF .LEFT EQL 0 THEN RETURN 0;
+    WHILE 1 DO
+        BEGIN
+        LOCAL
+            TOKENS : REF VECTOR,
+            I,
+            OP;
+        LEX_SKIP_WS(.C);
+        TOKENS = .LEVELS[.LEVEL];
+        I = 0;
+        OP = 0;
+        WHILE .TOKENS[.I] NEQ 0 DO
+            BEGIN
+            IF STARTS(.C, TOKENS[.I + 1], .TOKENS[.I])
+            THEN
+                BEGIN
+                C[C_AT] = .C[C_AT] + .TOKENS[.I];
+                OP = .TOKENS[.I + 2];
+                EXITLOOP
+                END;
+            I = .I + 3
+            END;
+        IF .OP EQL 0 THEN RETURN .LEFT;
+        BEGIN
+        LOCAL
+            RIGHT;
+        RIGHT = BINARY(.C, .BLOCK, .LEVEL + 1);
+        IF .RIGHT EQL 0 THEN RETURN 0;
+        LEFT = NODE(EK_BIN, .OP, .LEFT, .RIGHT)
+        END
+        END;
+    0
+    END;
+
+! EXPR_PARSE cursor, block: an expression, or 0 after an error; block
+! numbers the local label block.
+GLOBAL ROUTINE EXPR_PARSE (C, BLOCK) =
+    BINARY(.C, .BLOCK, 0);
+
+ROUTINE NOT_ABS (COL) =
+    FAIL_TEXT(.COL, T('the linker can only add or subtract a constant to an address'));
+
+! EXPR_EVAL expr, here, value, col: evaluates the expression into value,
+! with here the location counter. Relocatable values support adding and
+! subtracting constants; two addresses in the same psect subtract to a
+! constant. An error is at col.
+GLOBAL ROUTINE EXPR_EVAL (E : REF VECTOR, HERE : REF VECTOR, V : REF VECTOR, COL) =
+    BEGIN
+    LOCAL
+        L : VECTOR[V_SIZE],
+        R : VECTOR[V_SIZE],
+        A,
+        B;
+    CASE .E[E_KIND] FROM EK_NUM TO EK_BIN OF
+        SET
+        [EK_NUM]:
+            BEGIN
+            V[V_KIND] = VK_ABS;
+            V[V_A] = 0;
+            V[V_OFF] = .E[E_X];
+            RETURN TRUE
+            END;
+        [EK_SYM]:
+            BEGIN
+            IF ASM_LOOKUP(.E[E_X], .V) THEN RETURN TRUE;
+            MSG_BEGIN();
+            MSG_TEXT(T('undefined symbol '));
+            MSG_TEXT(NTEXT(.E[E_X]), EXPR_DISPLAY(.E[E_X]));
+            RETURN FAIL(.COL)
+            END;
+        [EK_HERE]:
+            BEGIN
+            VCOPY(.V, .HERE);
+            RETURN TRUE
+            END;
+        [EK_NEG, EK_NOT]:
+            BEGIN
+            TRY(EXPR_EVAL(.E[E_L], .HERE, L, .COL));
+            IF .L[V_KIND] NEQ VK_ABS THEN RETURN NOT_ABS(.COL);
+            V[V_KIND] = VK_ABS;
+            V[V_A] = 0;
+            V[V_OFF] = (IF .E[E_KIND] EQL EK_NEG THEN -.L[V_OFF] ELSE NOT .L[V_OFF]);
+            RETURN TRUE
+            END;
+        [EK_BIN]:
+            0;
+        TES;
+    TRY(EXPR_EVAL(.E[E_L], .HERE, L, .COL));
+    TRY(EXPR_EVAL(.E[E_R], .HERE, R, .COL));
+    IF .E[E_X] EQL OP_ADD
+    THEN
+        BEGIN
+        IF .L[V_KIND] NEQ VK_ABS AND .R[V_KIND] EQL VK_ABS
+        THEN
+            BEGIN
+            VCOPY(.V, L);
+            V[V_OFF] = .L[V_OFF] + .R[V_OFF];
+            RETURN TRUE
+            END;
+        IF .L[V_KIND] EQL VK_ABS AND .R[V_KIND] NEQ VK_ABS
+        THEN
+            BEGIN
+            VCOPY(.V, R);
+            V[V_OFF] = .R[V_OFF] + .L[V_OFF];
+            RETURN TRUE
+            END
+        END;
+    IF .E[E_X] EQL OP_SUB
+    THEN
+        BEGIN
+        IF .L[V_KIND] NEQ VK_ABS AND .R[V_KIND] EQL VK_ABS
+        THEN
+            BEGIN
+            VCOPY(.V, L);
+            V[V_OFF] = .L[V_OFF] - .R[V_OFF];
+            RETURN TRUE
+            END;
+        IF .L[V_KIND] NEQ VK_ABS AND .L[V_KIND] EQL .R[V_KIND] AND .L[V_A] EQL .R[V_A]
+        THEN
+            BEGIN
+            V[V_KIND] = VK_ABS;
+            V[V_A] = 0;
+            V[V_OFF] = .L[V_OFF] - .R[V_OFF];
+            RETURN TRUE
+            END
+        END;
+    IF .L[V_KIND] NEQ VK_ABS OR .R[V_KIND] NEQ VK_ABS THEN RETURN NOT_ABS(.COL);
+    A = .L[V_OFF];
+    B = .R[V_OFF];
+    V[V_KIND] = VK_ABS;
+    V[V_A] = 0;
+    V[V_OFF] =
+        (CASE .E[E_X] FROM OP_MUL TO OP_OR OF
+            SET
+            [OP_MUL]: .A * .B;
+            [OP_DIV, OP_REM]:
+                BEGIN
+                IF .B EQL 0 THEN RETURN FAIL_TEXT(.COL, T('division by zero'));
+                IF .E[E_X] EQL OP_DIV THEN .A / .B ELSE .A MOD .B
+                END;
+            [OP_ADD]: .A + .B;
+            [OP_SUB]: .A - .B;
+            [OP_SHL]: SLL(.A, .B);
+            [OP_SHR]: SRL(.A, .B);
+            [OP_AND]: .A AND .B;
+            [OP_XOR]: .A XOR .B;
+            [OP_OR]: .A OR .B;
+            TES);
+    TRUE
+    END;
+
+END
+ELUDOM

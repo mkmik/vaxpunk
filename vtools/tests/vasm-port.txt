@@ -1,0 +1,443 @@
+; vrun's vasm_port test: each case, between lines of ---, is a source that
+; VASM.EXE and the Rust vasm must assemble to the same object module, or
+; fail with the same messages. Most are one error each, from asm.rs,
+; encode.rs, expr.rs and macros.rs; the rest use the features those
+; errors guard. lib/bad.mlb is a library with an instruction in it.
+---
+.IF EQ 0
+---
+.PSECT BIG
+.BLKQ 0x20000000
+.BLKQ 0x20000000
+.BYTE 1
+---
+.MACRO M
+.IF EQ 0
+.ENDM
+M
+---
+L: nop
+L: nop
+---
+.EXTERNAL X
+X = 1
+---
+.PSECT A
+L:
+.BLKB L
+---
+.IF
+.ENDC
+---
+.IF DF
+.ENDC
+---
+.IF FOO 1
+.ENDC
+---
+.ENDC
+---
+.IFF
+---
+123
+---
+.LIBRARY "bad.mlb"
+---
+.ENDM
+---
+.ENDR
+---
+.MEXIT
+---
+.NARG X
+---
+10$:: nop
+---
+.MACRO
+---
+.MACRO M
+.ENDM N
+---
+.MACRO M
+nop
+---
+.MACRO M
+M
+.ENDM
+M
+---
+.REPEAT -1
+.ENDR
+---
+.IRP X, <1>
+---
+.LIBRARY "nowhere.mlb"
+---
+.PSECT ABCDEFGHIJKLMNOPQRSTUVWXYZ012345
+---
+.PSECT $CODE$
+.PSECT $CODE$, WRT
+---
+.PSECT X, EXE, WRT
+---
+.TITLE
+---
+.TITLE ABCDEFGHIJKLMNOPQRSTUVWXYZ012345
+---
+.IDENT /ABCDEFGHIJKLMNOPQRSTUVWXYZ012345/
+---
+.PSECT
+---
+.RESTORE_PSECT
+---
+X: nop
+.EXTERNAL X
+---
+.BLKB -1
+---
+.ALIGN 17
+---
+.WARN hello there
+.ERROR oops
+---
+.FOO
+---
+.PSECT X, FOO
+---
+.ASCII <300>
+---
+.ASCII /abc
+---
+.END 5
+---
+.BLKB 1 2
+---
+.BYTE 1
+nop
+---
+.BYTE 300
+.WORD -32769
+.LONG 0x100000000
+---
+b 10$
+---
+add x0, x1, (1
+---
+.QUAD 1/0
+.QUAD 1%0
+---
+.QUAD L*2
+L:
+---
+.QUAD 0xZZ
+---
+.QUAD 'AB'
+---
+.QUAD +
+---
+.QUAD ^Q1
+---
+.QUAD 99999999999999999999
+.QUAD 18446744073709551615
+.QUAD 0xFFFFFFFFFFFFFFFF0
+---
+.MACRO M 1A
+.ENDM
+---
+.MACRO M A, A
+.ENDM
+---
+.MACRO M A
+.ENDM
+M 1, 2
+---
+frob x0
+---
+b.xx L
+L:
+---
+add x0
+---
+add x0, x1, #1, lsl #3
+---
+add wsp, x1, #1
+---
+add x0, w1, x2
+---
+movz x0, x1
+---
+movz x0, #0x10000
+---
+add x0, x1, x2, lsl #64
+---
+mov x0, #0x12345
+---
+and x0, x1, #0x1234
+---
+L: b L+2
+---
+L: nop
+.BLKB 2000000
+b.eq L
+---
+add x0, x1, #:foo:L
+---
+ldr x0, [w1]
+---
+ldr x0, [x1, lsl]
+---
+ldr x0, [x1, x2, asr #3]
+---
+add x0, x1 x2
+---
+L: add x0, x1, #L
+---
+b #
+---
+csel x0, x1, x2, xx
+---
+add x0, x1, x2, ror #3
+---
+cset x0, al
+---
+cinc x0, x1, nv
+---
+rev32 w0, w1
+---
+umulh w0, w1, w2
+---
+smull x0, x1, w2
+---
+movz w0, #:abs_g2:1
+---
+movz x0, #:abs_g0:0x12345
+---
+movz x0, #1, lsl #8
+---
+movz x0, #1, asr #8
+---
+adr w0, L
+L:
+---
+ubfx x0, x1, #60, #8
+---
+sxtb x0, x1
+---
+uxtb x0, w1
+---
+ldr sp, [x1]
+---
+ldrb x0, [x1]
+---
+str x0, L
+L:
+---
+ldr x0, [x1, #8], #8
+---
+ldr x0, [x1, #:lo12:3]
+---
+ldr x0, [x1, x2, lsl #2]
+---
+ldr x0, [x1, w2, uxtx]
+---
+ldur x0, [x1, x2]
+---
+ldp x0, w1, [sp]
+---
+ldpsw w0, w1, [sp]
+---
+ldp x0, x1, x2
+---
+ldp x0, x1, [sp, #8]!, #8
+---
+ldp x0, x1, [sp, #4]
+---
+ldxr x0, [x1, #8]
+---
+stxr x0, x1, [x2]
+---
+mrs x0, foo_bar
+---
+mrs x0, #1
+---
+mrs x0, s3_0_c1_c0_0
+msr s2_7_c15_c15_7, x1
+msr daifset, #2
+mrs x1, currentel
+---
+sub x0, x1, #:lo12:L
+L:
+---
+add x0, sp, x1, ror #2
+---
+add x0, x1, w2, uxtw #5
+---
+add x0, x1, x2, uxtw
+---
+add x0, x1, #1, lsl #4
+---
+adr x0, L
+.BLKB 2000000
+L:
+---
+.MACRO PAIR A, B=7, ?L
+L: .QUAD A, B
+.ENDM
+PAIR 1
+PAIR B=2, A=3
+PAIR <4>, <5>
+PAIR ,
+---
+.MACRO CAT X, Y
+X'Y'_SUFFIX = 1
+.QUAD X'Y'_SUFFIX
+.ENDM
+CAT AB, CD
+---
+.MACRO COUNT A, B, C
+.NARG N
+.QUAD N
+.IIF EQ N-1, .QUAD 111
+.IF B <B>
+.QUAD 222
+.IFF
+.QUAD 333
+.ENDC
+.ENDM
+COUNT 1
+COUNT 1, 2
+COUNT 1, , 3
+---
+.MACRO STOP
+.QUAD 1
+.MEXIT
+.QUAD 2
+.ENDM
+STOP
+STOP
+---
+.IRP R, <x0, x1, x2>
+mov R, #1
+.ENDR
+.IRPC C, <abc>
+.BYTE ^A'C
+.ENDR
+---
+.IRPC C, <abc>
+.BYTE 'C'
+.ENDR
+.REPEAT 3
+.WORD 7
+.ENDR
+.REPEAT 0
+.WORD 8
+.ENDR
+---
+.IF IDN <abc>, <ABC>
+.QUAD 1
+.ENDC
+.IF DIF a, b
+.QUAD 2
+.ENDC
+.IF NB x
+.QUAD 3
+.IF_TRUE_FALSE
+.QUAD 4
+.ENDC
+.IF NDF NOPE
+.QUAD 5
+.ELSE
+.QUAD 6
+.ENDC
+---
+X == 5
+Y = X << 2 | 1
+.WEAK W
+.GLOBAL G, H
+G: .QUAD Y, W, H
+.QUAD ^B101, ^O17, ^D99, 0b11, 0o7, 0X1F, 'A'
+.QUAD -1 >> 60, ~0, 7 % 3, 7 / 2, 3 ^ 5 & 6
+.QUAD . - G, G + 8 - 4
+---
+.PSECT A, PIC, SHR, NOWRT, EXE, QUAD
+S:: ret
+.PSECT B, NOPIC, OVR, GBL, VEC, LONG
+.LONG 1
+.PSECT C, ABS, NORD, NOEXE, 4
+.BYTE 1
+.PSECT D, MIX, NOMIX, LCL, CON, NOSHR, REL, RD, NOVEC, NOMOD, PAGE
+.BYTE 2
+.END S
+---
+.PSECT $LITERAL$
+.ASCID /hello/
+.ASCID64 "wide"
+.ASCIC <65>"B"/C/
+.ASCIZ "z"
+.ASCII ""
+.PSECT $DATA$
+.SAVE_PSECT LOCAL_BLOCK
+.PSECT $BSS$
+10$: .BLKQ 2
+.RESTORE_PSECT
+.ADDRESS 10$
+.ALIGN QUAD
+.BLKW
+.ALIGN 4
+.BLKL 3
+---
+.MACRO LOOP
+30000$: nop
+b 30000$
+.ENDM
+.MACRO M2 ?X, ?Y
+X: b Y
+Y: nop
+.ENDM
+M2
+M2
+M2 FOO
+---
+.EXTERNAL E1
+.EXTERN E2
+movz x0, #:abs_g3:E1
+movk x0, #:abs_g2_nc:E1
+movk x0, #:abs_g1_nc:E1+4
+movk x0, #:abs_g0_nc:E2
+movz x1, #:abs_g0:E2
+movz x1, #:abs_g1:E2
+movz x1, #:abs_g2:E2
+adrp x2, E1
+add x2, x2, #:lo12:E1
+ldr x3, [x2, #:lo12:E1]
+ldrb w3, [x2, #:lo12:E1]
+ldrh w3, [x2, #:lo12:E1]
+ldr w3, [x2, #:lo12:E1]
+ldr q3, [x2, #:lo12:E1]
+bl E1
+b.ne E2
+cbz x0, E1
+tbz x0, #3, E2
+adr x0, E1
+ldr x0, E2
+.QUAD E1 + 3, E1 - E1
+.LONG E2
+.WORD E2
+.BYTE E2
+---
+.MACRO NEST N
+.IF GT N
+.QUAD N
+NEST N-1
+.ENDC
+.ENDM
+NEST 5
+---
+.LIBRARY "vrun.mlb"
+$EXIT
+$PUT "hi"<10>
+---
+mov x0, sp ; comment
+mov sp, x1 // gnu comment
+.ASCII "a;b//c" ; quoted
+.ASCII 'x;y'

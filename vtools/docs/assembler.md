@@ -253,3 +253,35 @@ absolute global symbols go into `$ABS$`, and labels in `ABS` psects are
 constants too. Each psect's contents
 follow as TIR commands. Uninitialized space (`.BLKx`, `.ALIGN` padding) is
 skipped with `CTL_AUGRB`, and the linker fills it with zeros.
+
+## VASM: vasm in BLISS-64
+
+`vtools/bliss/vasm/` is vasm written in BLISS-64
+([PRD-0004](../../docs/prd/0004-bliss64-compiler.md) step 13), one module for
+each file of the Rust crate it follows: `lex`, `expr`, `macros`, `encode`,
+`asm`, `emit` (with what `vms-obj` does to write records) and `vasm`, the
+command line, plus `util` for memory, names and messages. `vasm.r64` lays out
+the records they share. VASM takes vasm's command line, prints the same
+messages and writes the same object modules, byte for byte, with vasm's name
+in the header; the creation time is the system's. It has no dialect, so
+`/ENABLE` is refused.
+
+It reaches the system only through the I/O module, `vtools/bliss/fio.mar`
+under vrun (`fio.r64` declares its routines): files in the directory
+`vrun --files` gives, memory (64 MB, never freed), the terminal, the command
+line, and the time, which under vrun is VMS's time 0. On vaxpunk an RMS module
+will take its place. Built and run by hand:
+
+```
+cd vtools/bliss/vasm
+for m in util lex expr macros encode asm emit vasm; do vbliss -I .. -o $m.obj $m.b64; done
+vasm -o fio.obj ../fio.mar
+vlink -o vasm.exe util.obj lex.obj expr.obj macros.obj encode.obj asm.obj emit.obj vasm.obj fio.obj
+vrun --files DIR vasm.exe -I lib -o hello.obj hello.mar
+```
+
+vrun's `vasm_port` test builds it that way and runs it on vasm's test programs
+and examples, the forms `tests/encode.rs` checks against GNU `as`, the assembly
+vbliss makes of the BLISS-64 tests and of VASM itself, and the error cases in
+`vtools/tests/vasm-port.txt`; each object module and each message must be the
+Rust vasm's.
