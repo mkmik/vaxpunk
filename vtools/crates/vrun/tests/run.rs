@@ -331,3 +331,84 @@ fn copies_a_host_file() {
     let out = vrun(&image, &[]);
     assert_eq!(out.status.code(), Some(0x24), "{}", stderr(&out));
 }
+
+/// Copies the file its first argument names to the one its second names,
+/// through the I/O module BLISS.EXE and VASM.EXE use under vrun.
+const BLISS_COPY: &str = r#"
+MODULE BCOPY (MAIN = BCOPY) =
+BEGIN
+REQUIRE 'FIO';
+
+ROUTINE BCOPY (INFO) =
+    BEGIN
+    LOCAL ARGS, LEN, SPLIT, IN, OUT, COUNT, STATUS, BUFFER : VECTOR [5, BYTE];
+    ! The argument string's static descriptor, in the runner info block.
+    LEN = .(.INFO + 16)<0, 16>;
+    ARGS = .(.INFO + 20)<0, 32>;
+    SPLIT = 0;
+    WHILE .SPLIT LSS .LEN AND .(.ARGS + .SPLIT)<0, 8> NEQ %C' ' DO
+        SPLIT = .SPLIT + 1;
+    STATUS = FIO$OPEN(.ARGS, .SPLIT, FIO$K_READ, IN);
+    IF NOT .STATUS THEN RETURN .STATUS;
+    STATUS = FIO$OPEN(.ARGS + .SPLIT + 1, .LEN - .SPLIT - 1, FIO$K_WRITE, OUT);
+    IF NOT .STATUS THEN RETURN .STATUS;
+    WHILE (STATUS = FIO$READ(.IN, BUFFER, 5, COUNT)) DO
+        BEGIN
+        STATUS = FIO$WRITE(.OUT, BUFFER, .COUNT);
+        IF NOT .STATUS THEN RETURN .STATUS;
+        END;
+    IF .STATUS NEQ %X'870' THEN RETURN .STATUS;     ! SS$_ENDOFFILE
+    FIO$CLOSE(.IN);
+    FIO$CLOSE(.OUT)
+    END;
+
+END
+ELUDOM
+"#;
+
+#[test]
+fn bliss_copies_a_host_file() {
+    let bliss = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../bliss");
+    let opts = |name: &str| vasm::Options {
+        name: name.into(),
+        include: vec![bliss.clone()],
+        ..Default::default()
+    };
+    let flags = vbliss::Options {
+        include: vec![bliss.clone()],
+        ..vbliss::Options::from_source(BLISS_COPY)
+    };
+    let fio = std::fs::read_to_string(bliss.join("fio.mar")).unwrap();
+    let objects = [
+        vbliss::compile_with(BLISS_COPY, &opts("BCOPY"), &flags).0,
+        vasm::assemble(&fio, &opts("FIO")),
+    ]
+    .map(|r| {
+        let records = r
+            .unwrap_or_else(|d| panic!("{:?}", d.iter().map(|d| &d.msg).collect::<Vec<_>>()))
+            .records;
+        (String::new(), vms_obj::obj::write(&records))
+    });
+    let link = vlink::Options {
+        base: BASE,
+        name: "BCOPY".into(),
+        transfer: None,
+        link_time: 0,
+        relocatable: false,
+    };
+    let image = vlink::link(&objects, &link).unwrap().image;
+
+    let dir = std::path::Path::new(env!("CARGO_TARGET_TMPDIR")).join("bliss-files");
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let text: Vec<u8> = (0..=255).cycle().take(1000).collect();
+    std::fs::write(dir.join("IN.TXT"), &text).unwrap();
+    let files = ["--files", dir.to_str().unwrap()];
+    let out = vrun_with(&image, &files, &["IN.TXT", "OUT.TXT"]);
+    assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
+    assert_eq!(std::fs::read(dir.join("OUT.TXT")).unwrap(), text);
+
+    // A missing file's status comes back as the exit status, cut to a byte.
+    let out = vrun_with(&image, &files, &["MISSING", "OUT.TXT"]);
+    assert_eq!(out.status.code(), Some(0x910 & 0xff), "{}", stderr(&out));
+}

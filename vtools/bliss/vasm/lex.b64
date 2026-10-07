@@ -1,0 +1,142 @@
+MODULE LEX (IDENT = 'V1.0') =
+%TITLE 'VASM: scanning one source line'
+BEGIN
+!
+! lex.rs: a cursor in a line, and the characters names are made of.
+! Columns count from 1, in bytes, as in vasm.
+! ponytail: characters are bytes, so a non-ASCII character in .IRPC's list,
+! a character constant or a string's delimiter isn't vasm's one character;
+! decode UTF-8 if sources need them.
+!
+REQUIRE 'VASM';
+
+EXTERNAL ROUTINE
+    UTIL_ROUTINES;
+
+OWN
+    UPBUF : VECTOR[256, BYTE];          ! a name in upper case, if it fits
+
+GLOBAL ROUTINE IS_SPACE (C) =
+    .C EQL %C' ' OR (.C GEQ 9 AND .C LEQ 13);
+
+GLOBAL ROUTINE IS_DIGIT (C) =
+    .C GEQ %C'0' AND .C LEQ %C'9';
+
+GLOBAL ROUTINE IS_ALNUM (C) =
+    (.C GEQ %C'0' AND .C LEQ %C'9') OR (.C GEQ %C'A' AND .C LEQ %C'Z')
+        OR (.C GEQ %C'a' AND .C LEQ %C'z');
+
+! IS_NAME_START c, IS_NAME_CHAR c: letters, digits, $, _ and . make names,
+! which don't start with a digit.
+GLOBAL ROUTINE IS_NAME_START (C) =
+    (.C GEQ %C'A' AND .C LEQ %C'Z') OR (.C GEQ %C'a' AND .C LEQ %C'z')
+        OR .C EQL %C'$' OR .C EQL %C'_' OR .C EQL %C'.';
+
+GLOBAL ROUTINE IS_NAME_CHAR (C) =
+    IS_ALNUM(.C) OR .C EQL %C'$' OR .C EQL %C'_' OR .C EQL %C'.';
+
+! LEX_INIT cursor, text, length: a cursor at the start of the text.
+GLOBAL ROUTINE LEX_INIT (C : REF VECTOR, TEXT, LEN) : NOVALUE =
+    BEGIN
+    C[C_LINE] = .TEXT;
+    C[C_LEN] = .LEN;
+    C[C_AT] = 0
+    END;
+
+GLOBAL ROUTINE LEX_SKIP_WS (C : REF VECTOR) : NOVALUE =
+    WHILE .C[C_AT] LSS .C[C_LEN] AND IS_SPACE(GETB(.C[C_LINE] + .C[C_AT])) DO
+        C[C_AT] = .C[C_AT] + 1;
+
+! LEX_PEEK cursor: the next character after blanks, without consuming it;
+! -1 at the end.
+GLOBAL ROUTINE LEX_PEEK (C : REF VECTOR) =
+    BEGIN
+    LEX_SKIP_WS(.C);
+    IF .C[C_AT] LSS .C[C_LEN] THEN GETB(.C[C_LINE] + .C[C_AT]) ELSE -1
+    END;
+
+! LEX_AT_END cursor: whether only blanks remain.
+GLOBAL ROUTINE LEX_AT_END (C) =
+    LEX_PEEK(.C) EQL -1;
+
+! LEX_EAT cursor, c: consumes c if it comes next.
+GLOBAL ROUTINE LEX_EAT (C : REF VECTOR, CH) =
+    BEGIN
+    IF LEX_PEEK(.C) EQL .CH
+    THEN
+        BEGIN
+        C[C_AT] = .C[C_AT] + 1;
+        TRUE
+        END
+    ELSE
+        FALSE
+    END;
+
+GLOBAL ROUTINE LEX_EXPECT (C : REF VECTOR, CH) =
+    BEGIN
+    IF LEX_EAT(.C, .CH) THEN RETURN TRUE;
+    MSG_BEGIN();
+    MSG_TEXT(T('expected '''));
+    MSG_CHAR(.CH);
+    MSG_CHAR(%C'''');
+    FAIL(CCOL(C))
+    END;
+
+! LEX_NAME cursor: a name, in upper case as VMS names are
+! case-insensitive; 0 if none comes next.
+GLOBAL ROUTINE LEX_NAME (C : REF VECTOR) =
+    BEGIN
+    LOCAL
+        P,
+        LEN,
+        BUF;
+    LEX_SKIP_WS(.C);
+    P = CREST(C);
+    LEN = 0;
+    WHILE .LEN LSS CLEFT(C) AND IS_NAME_CHAR(GETB(.P + .LEN)) DO
+        LEN = .LEN + 1;
+    IF .LEN EQL 0 OR IS_DIGIT(GETB(.P)) THEN RETURN 0;
+    C[C_AT] = .C[C_AT] + .LEN;
+    BUF = (IF .LEN LEQ 256 THEN UPBUF ELSE MEM_ALLOC(.LEN));
+    INCR I FROM 0 TO .LEN - 1 DO
+        BEGIN
+        LOCAL
+            CH;
+        CH = GETB(.P + .I);
+        IF .CH GEQ %C'a' AND .CH LEQ %C'z' THEN CH = .CH - 32;
+        PUTB(.BUF + .I, .CH)
+        END;
+    NAME_INTERN(.BUF, .LEN)
+    END;
+
+! LEX_STRIP_COMMENT text, length: the length without a comment, ; (MACRO)
+! or // (GNU), outside of quotes. A MACRO-style /.../ string can't
+! contain either.
+GLOBAL ROUTINE LEX_STRIP_COMMENT (TEXT, LEN) =
+    BEGIN
+    LOCAL
+        QUOTE;
+    QUOTE = 0;
+    INCR I FROM 0 TO .LEN - 1 DO
+        BEGIN
+        LOCAL
+            CH;
+        CH = GETB(.TEXT + .I);
+        IF .QUOTE NEQ 0
+        THEN
+            (IF .CH EQL .QUOTE THEN QUOTE = 0)
+        ELSE IF .CH EQL %C'"' OR .CH EQL %C''''
+        THEN
+            QUOTE = .CH
+        ELSE IF .CH EQL %C';'
+        THEN
+            RETURN .I
+        ELSE IF .CH EQL %C'/' AND .I + 1 LSS .LEN
+        THEN
+            IF GETB(.TEXT + .I + 1) EQL %C'/' THEN RETURN .I
+        END;
+    .LEN
+    END;
+
+END
+ELUDOM

@@ -1,0 +1,104 @@
+        .TITLE  FIO     The I/O module of BLISS.EXE and VASM.EXE under vrun
+        .IDENT  /V1.1/
+; What the compilers need from the system, under vrun (vtools/docs/
+; runner-abi.md): host files through vrun's file monitor calls, memory,
+; the terminal, the command line, the time and exit. On vaxpunk an RMS
+; module with the same routines takes its place (PRD-0004). fio.r64
+; declares them for BLISS. Each keeps every register but x0 and x1.
+
+HEAP_SIZE = 64 * 1024 * 1024
+INFO = ^X7FF00000                       ; the runner info block
+
+        .PSECT  $CODE$
+
+; FIO$OPEN name, length, mode, channel: opens the host file named by length
+; bytes at name, in the directory vrun --files gives, to read (mode 0) or to
+; write (mode 1, created or emptied). Stores the channel at channel.
+; Returns a condition value.
+FIO$OPEN::
+        svc     #4
+        str     x1, [x3]
+        ret
+
+; FIO$READ channel, buffer, length, count: reads at most length bytes into
+; buffer and stores how many at count. SS$_ENDOFFILE at the end.
+FIO$READ::
+        svc     #5
+        str     x1, [x3]
+        ret
+
+; FIO$WRITE channel, buffer, length: writes length bytes from buffer.
+FIO$WRITE::
+        svc     #6
+        ret
+
+; FIO$CLOSE channel: closes channel.
+FIO$CLOSE::
+        svc     #7
+        ret
+
+; FIO$ALLOC size: the address of size bytes of zeroed memory, 16-byte
+; aligned, or 0 if there is no more. Memory is never freed.
+FIO$ALLOC::
+        adrp    x1, next
+        add     x1, x1, #:lo12:next
+        add     x0, x0, #15
+        and     x0, x0, #~15
+        ldr     x16, [x1]               ; the next free byte
+        add     x0, x16, x0
+        adrp    x17, heap_end
+        add     x17, x17, #:lo12:heap_end
+        cmp     x0, x17
+        b.hi    10$
+        str     x0, [x1]
+        mov     x0, x16
+        ret
+10$:    mov     x0, #0
+        ret
+
+; FIO$PUT_LINE text, length: writes length bytes from text to the terminal,
+; then a line feed.
+FIO$PUT_LINE::
+        svc     #2
+        adr     x0, newline
+        mov     x1, #1
+        svc     #2
+        ret
+
+; FIO$ARGS address, length: stores the command line's address and length,
+; from the runner info block's argument descriptor.
+FIO$ARGS::
+        mov     x16, #INFO
+        ldrh    w17, [x16, #16]         ; DSC$W_LENGTH
+        str     x17, [x1]
+        ldr     w17, [x16, #20]         ; DSC$A_POINTER
+        str     x17, [x0]
+        ret
+
+; FIO$DATE buffer: the time as dd-mmm-yyyy hh:mm, 17 bytes at buffer.
+; vrun has no clock: it is VMS's time 0, as SYS$GETTIM gives under vrun.
+FIO$DATE::
+        adr     x1, epoch
+        mov     x16, #17
+10$:    ldrb    w17, [x1], #1
+        strb    w17, [x0], #1
+        subs    x16, x16, #1
+        b.ne    10$
+        ret
+
+; FIO$EXIT status: ends the program with status, a condition value.
+FIO$EXIT::
+        svc     #1
+
+newline:
+        .ASCII  <10>
+epoch:  .ASCII  "17-NOV-1858 00:00"
+
+        .PSECT  $DATA$
+next:   .ADDRESS heap                   ; the heap's next free byte
+
+        .PSECT  $BSS$, NOPIC, CON, REL, LCL, NOSHR, NOEXE, RD, WRT, NOMOD, PAGE
+heap:   .BLKB   HEAP_SIZE
+heap_end:
+
+        .END

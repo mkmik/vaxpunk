@@ -1,0 +1,504 @@
+MODULE MACROS (IDENT = 'V1.0') =
+%TITLE 'VASM: macros and source lines'
+BEGIN
+!
+! macros.rs: macros in the MACRO tradition, a body of text lines whose
+! formal arguments are replaced by the call's arguments, and the lines the
+! assembler reads, from files, macro expansions and repeat blocks. A list
+! of strings is a vector of address and length pairs.
+!
+REQUIRE 'VASM';
+
+EXTERNAL ROUTINE
+    UTIL_ROUTINES,
+    LEX_ROUTINES;
+
+FORWARD ROUTINE
+    MAC_UNBRACKET;
+
+! MAC_LINES file, text, length, count: the text's lines, a vector of L_
+! records, from file; stores how many. A line ends at a line feed, or a
+! carriage return and a line feed; the last line feed is optional.
+GLOBAL ROUTINE MAC_LINES (FILE, TEXT, LEN, COUNT) =
+    BEGIN
+    LOCAL
+        N,
+        LINES : REF VECTOR,
+        START;
+    N = 0;
+    INCR I FROM 0 TO .LEN - 1 DO
+        IF GETB(.TEXT + .I) EQL 10 THEN N = .N + 1;
+    IF .LEN GTR 0 THEN IF GETB(.TEXT + .LEN - 1) NEQ 10 THEN N = .N + 1;
+    LINES = MEM_ALLOC(.N * 8 + 8);
+    N = 0;
+    START = 0;
+    WHILE .START LSS .LEN DO
+        BEGIN
+        LOCAL
+            END_,
+            L : REF VECTOR;
+        END_ = .START;
+        WHILE .END_ LSS .LEN AND GETB(.TEXT + .END_) NEQ 10 DO
+            END_ = .END_ + 1;
+        L = MEM_ALLOC(L_SIZE * 8);
+        L[L_TEXT] = .TEXT + .START;
+        L[L_LEN] = .END_ - .START;
+        IF .END_ LSS .LEN AND .END_ GTR .START
+        THEN
+            IF GETB(.TEXT + .END_ - 1) EQL 13 THEN L[L_LEN] = .L[L_LEN] - 1;
+        L[L_FILE] = .FILE;
+        L[L_NUM] = .N + 1;
+        LINES[.N] = .L;
+        N = .N + 1;
+        START = .END_ + 1
+        END;
+    .COUNT = .N;
+    .LINES
+    END;
+
+! The text without blanks around it: stores the new address and length.
+ROUTINE TRIM (TEXT, LEN, OUT : REF VECTOR) : NOVALUE =
+    BEGIN
+    LOCAL
+        A,
+        B;
+    A = 0;
+    B = .LEN;
+    WHILE .A LSS .B AND IS_SPACE(GETB(.TEXT + .A)) DO
+        A = .A + 1;
+    WHILE .B GTR .A AND IS_SPACE(GETB(.TEXT + .B - 1)) DO
+        B = .B - 1;
+    OUT[0] = .TEXT + .A;
+    OUT[1] = .B - .A
+    END;
+
+! MAC_UNBRACKET text, length, out: <text> without its brackets, if they
+! enclose all of it; stores the address and length at out.
+GLOBAL ROUTINE MAC_UNBRACKET (TEXT, LEN, OUT : REF VECTOR) : NOVALUE =
+    BEGIN
+    LOCAL
+        DEPTH;
+    OUT[0] = .TEXT;
+    OUT[1] = .LEN;
+    IF .LEN LSS 2 THEN RETURN;
+    IF GETB(.TEXT) NEQ %C'<' OR GETB(.TEXT + .LEN - 1) NEQ %C'>' THEN RETURN;
+    ! <a> <b> starts and ends with brackets but isn't one group.
+    DEPTH = 0;
+    INCR I FROM 1 TO .LEN - 2 DO
+        BEGIN
+        LOCAL
+            CH;
+        CH = GETB(.TEXT + .I);
+        IF .CH EQL %C'<'
+        THEN
+            DEPTH = .DEPTH + 1
+        ELSE IF .CH EQL %C'>'
+        THEN
+            BEGIN
+            IF .DEPTH EQL 0 THEN RETURN;
+            DEPTH = .DEPTH - 1
+            END
+        END;
+    OUT[0] = .TEXT + 1;
+    OUT[1] = .LEN - 2
+    END;
+
+! MAC_ARG cursor, out: one argument, up to a comma outside <>, [], () and
+! quotes, trimmed. An argument that is all inside <...> loses the
+! brackets, as in MACRO. Stores its address and length at out.
+GLOBAL ROUTINE MAC_ARG (C : REF VECTOR, OUT : REF VECTOR) : NOVALUE =
+    BEGIN
+    LOCAL
+        REST,
+        LEFT,
+        DEPTH,
+        QUOTE,
+        END_,
+        TRIMMED : VECTOR[2];
+    LEX_SKIP_WS(.C);
+    REST = CREST(C);
+    LEFT = CLEFT(C);
+    DEPTH = 0;
+    QUOTE = FALSE;
+    END_ = .LEFT;
+    INCR I FROM 0 TO .LEFT - 1 DO
+        BEGIN
+        LOCAL
+            CH;
+        CH = GETB(.REST + .I);
+        IF .CH EQL %C'"'
+        THEN
+            QUOTE = NOT .QUOTE
+        ELSE IF NOT .QUOTE
+        THEN
+            BEGIN
+            IF .CH EQL %C'<' OR .CH EQL %C'[' OR .CH EQL %C'('
+            THEN
+                DEPTH = .DEPTH + 1
+            ELSE IF .CH EQL %C'>' OR .CH EQL %C']' OR .CH EQL %C')'
+            THEN
+                DEPTH = .DEPTH - 1
+            ELSE IF .CH EQL %C',' AND .DEPTH LEQ 0
+            THEN
+                BEGIN
+                END_ = .I;
+                EXITLOOP
+                END
+            END
+        END;
+    C[C_AT] = .C[C_AT] + .END_;
+    TRIM(.REST, .END_, TRIMMED);
+    MAC_UNBRACKET(.TRIMMED[0], .TRIMMED[1], .OUT)
+    END;
+
+! MAC_SPLIT text, length, count: the arguments separated by commas, a list
+! of strings; stores how many.
+GLOBAL ROUTINE MAC_SPLIT (TEXT, LEN, COUNT) =
+    BEGIN
+    LOCAL
+        C : VECTOR[C_SIZE],
+        N,
+        MOST,
+        LIST : REF VECTOR;
+    ! At most one more argument than there are commas.
+    MOST = 1;
+    INCR I FROM 0 TO .LEN - 1 DO
+        IF GETB(.TEXT + .I) EQL %C',' THEN MOST = .MOST + 1;
+    LIST = MEM_ALLOC(.MOST * 16);
+    LEX_INIT(C, .TEXT, .LEN);
+    MAC_ARG(C, LIST[0]);
+    N = 1;
+    WHILE LEX_EAT(C, %C',') DO
+        BEGIN
+        MAC_ARG(C, LIST[2 * .N]);
+        N = .N + 1
+        END;
+    .COUNT = .N;
+    .LIST
+    END;
+
+! The position of the first = in the text, or -1.
+ROUTINE EQUALS (TEXT, LEN) =
+    BEGIN
+    INCR I FROM 0 TO .LEN - 1 DO
+        IF GETB(.TEXT + .I) EQL %C'=' THEN RETURN .I;
+    -1
+    END;
+
+! Whether the text is a name: letters, digits, $, _ and ., not starting
+! with a digit.
+ROUTINE IS_NAME (TEXT, LEN) =
+    BEGIN
+    IF .LEN EQL 0 THEN RETURN FALSE;
+    IF NOT IS_NAME_START(GETB(.TEXT)) THEN RETURN FALSE;
+    INCR I FROM 0 TO .LEN - 1 DO
+        IF NOT IS_NAME_CHAR(GETB(.TEXT + .I)) THEN RETURN FALSE;
+    TRUE
+    END;
+
+! The name of the text in upper case.
+ROUTINE UPNAME (TEXT, LEN) =
+    BEGIN
+    LOCAL
+        BUF;
+    BUF = MEM_COPY(.TEXT, .LEN);
+    INCR I FROM 0 TO .LEN - 1 DO
+        BEGIN
+        LOCAL
+            CH;
+        CH = GETB(.BUF + .I);
+        IF .CH GEQ %C'a' AND .CH LEQ %C'z' THEN PUTB(.BUF + .I, .CH - 32)
+        END;
+    NAME_INTERN(.BUF, .LEN)
+    END;
+
+! MAC_PARAMS text, length, macro, col: the formal arguments after .MACRO
+! NAME, A, B=default, ?LABEL, into the macro's M_PARAMS and M_NPARAMS.
+GLOBAL ROUTINE MAC_PARAMS (TEXT, LEN, M : REF VECTOR, COL) =
+    BEGIN
+    LOCAL
+        T_ : VECTOR[2],
+        RAW : REF VECTOR,
+        N,
+        PARAMS : REF VECTOR;
+    M[M_NPARAMS] = 0;
+    TRIM(.TEXT, .LEN, T_);
+    IF .T_[1] EQL 0 THEN RETURN TRUE;
+    RAW = MAC_SPLIT(.TEXT, .LEN, N);
+    PARAMS = MEM_ALLOC(.N * P_SIZE * 8);
+    M[M_PARAMS] = .PARAMS;
+    INCR I FROM 0 TO .N - 1 DO
+        BEGIN
+        LOCAL
+            P : REF VECTOR,
+            A,
+            ALEN,
+            CREATED,
+            EQ,
+            NAME : VECTOR[2],
+            UP : REF VECTOR;
+        A = .RAW[2 * .I];
+        ALEN = .RAW[2 * .I + 1];
+        CREATED = FALSE;
+        IF .ALEN GTR 0
+        THEN
+            IF GETB(.A) EQL %C'?'
+            THEN
+                BEGIN
+                LOCAL
+                    R : VECTOR[2];
+                TRIM(.A + 1, .ALEN - 1, R);
+                A = .R[0];
+                ALEN = .R[1];
+                CREATED = TRUE
+                END;
+        P = PARAMS[.I * P_SIZE];
+        EQ = EQUALS(.A, .ALEN);
+        IF .EQ GEQ 0
+        THEN
+            BEGIN
+            LOCAL
+                D : VECTOR[2];
+            TRIM(.A, .EQ, NAME);
+            TRIM(.A + .EQ + 1, .ALEN - .EQ - 1, D);
+            MAC_UNBRACKET(.D[0], .D[1], P[P_DEFAULT])
+            END
+        ELSE
+            BEGIN
+            NAME[0] = .A;
+            NAME[1] = .ALEN
+            END;
+        IF NOT IS_NAME(.NAME[0], .NAME[1])
+        THEN
+            BEGIN
+            MSG_BEGIN();
+            MSG_TEXT(T('bad formal argument '''));
+            MSG_TEXT(.RAW[2 * .I], .RAW[2 * .I + 1]);
+            MSG_CHAR(%C'''');
+            RETURN FAIL(.COL)
+            END;
+        UP = UPNAME(.NAME[0], .NAME[1]);
+        INCR J FROM 0 TO .I - 1 DO
+            IF .PARAMS[.J * P_SIZE + P_NAME] EQL .UP
+            THEN
+                BEGIN
+                MSG_BEGIN();
+                MSG_TEXT(T('formal argument '));
+                MSG_NAME(.UP);
+                MSG_TEXT(T(' appears twice'));
+                RETURN FAIL(.COL)
+                END;
+        P[P_NAME] = .UP;
+        P[P_CREATED] = .CREATED;
+        M[M_NPARAMS] = .I + 1
+        END;
+    TRUE
+    END;
+
+! MAC_BIND macro, args, count, next, values, narg, col: binds a call's
+! arguments, a list of strings, to the formals: keyword (NAME=value) or
+! positional, then defaults and created labels, numbered from the label
+! at next. Returns the values, a list of strings in the formals' order,
+! and stores how many positional arguments the call gave at narg.
+GLOBAL ROUTINE MAC_BIND (M : REF VECTOR, ARGS : REF VECTOR, COUNT, NEXT, NARG, COL) =
+    BEGIN
+    LOCAL
+        NP,
+        PARAMS : REF VECTOR,
+        GIVEN : REF VECTOR,             ! a value per formal, or 0
+        VALUES : REF VECTOR,
+        POSITIONAL;
+    NP = .M[M_NPARAMS];
+    PARAMS = .M[M_PARAMS];
+    GIVEN = MEM_ALLOC(.NP * 16 + 16);
+    VALUES = MEM_ALLOC(.NP * 16 + 16);
+    POSITIONAL = 0;
+    INCR I FROM 0 TO .COUNT - 1 DO
+        BEGIN
+        LOCAL
+            A,
+            ALEN,
+            EQ,
+            DONE;
+        A = .ARGS[2 * .I];
+        ALEN = .ARGS[2 * .I + 1];
+        DONE = FALSE;
+        EQ = EQUALS(.A, .ALEN);
+        IF .EQ GEQ 0
+        THEN
+            BEGIN
+            LOCAL
+                KEY : VECTOR[2];
+            TRIM(.A, .EQ, KEY);
+            INCR J FROM 0 TO .NP - 1 DO
+                BEGIN
+                LOCAL
+                    PN : REF VECTOR;
+                PN = .PARAMS[.J * P_SIZE + P_NAME];
+                IF UPCASE_EQL(.KEY[0], .KEY[1], NTEXT(.PN), .PN[N_LEN])
+                THEN
+                    BEGIN
+                    LOCAL
+                        V : VECTOR[2];
+                    TRIM(.A + .EQ + 1, .ALEN - .EQ - 1, V);
+                    MAC_UNBRACKET(.V[0], .V[1], GIVEN[2 * .J]);
+                    DONE = TRUE;
+                    EXITLOOP
+                    END
+                END
+            END;
+        IF NOT .DONE
+        THEN
+            BEGIN
+            IF .POSITIONAL GEQ .NP
+            THEN
+                BEGIN
+                MSG_BEGIN();
+                MSG_TEXT(T('too many arguments for macro '));
+                MSG_NAME(.M[M_NAME]);
+                RETURN FAIL(.COL)
+                END;
+            IF .ALEN GTR 0
+            THEN
+                BEGIN
+                GIVEN[2 * .POSITIONAL] = .A;
+                GIVEN[2 * .POSITIONAL + 1] = .ALEN
+                END;
+            POSITIONAL = .POSITIONAL + 1
+            END
+        END;
+    INCR J FROM 0 TO .NP - 1 DO
+        BEGIN
+        LOCAL
+            P : REF VECTOR;
+        P = PARAMS[.J * P_SIZE];
+        IF .GIVEN[2 * .J] NEQ 0
+        THEN
+            BEGIN
+            VALUES[2 * .J] = .GIVEN[2 * .J];
+            VALUES[2 * .J + 1] = .GIVEN[2 * .J + 1]
+            END
+        ELSE IF .P[P_CREATED]
+        THEN
+            BEGIN
+            ! The next created local label, 30000$ and up.
+            LOCAL
+                D : VECTOR[24, BYTE],
+                I,
+                X;
+            I = 23;
+            D[23] = %C'$';
+            X = ..NEXT;
+            .NEXT = ..NEXT + 1;
+            DO
+                BEGIN
+                I = .I - 1;
+                D[.I] = %C'0' + .X MOD 10;
+                X = .X / 10
+                END
+            UNTIL .X EQL 0;
+            VALUES[2 * .J] = MEM_COPY(D[.I], 24 - .I);
+            VALUES[2 * .J + 1] = 24 - .I
+            END
+        ELSE IF .P[P_DEFAULT] NEQ 0
+        THEN
+            BEGIN
+            VALUES[2 * .J] = .P[P_DEFAULT];
+            VALUES[2 * .J + 1] = .P[P_DEFLEN]
+            END
+        ELSE
+            BEGIN
+            VALUES[2 * .J] = UPLIT BYTE (0);
+            VALUES[2 * .J + 1] = 0
+            END
+        END;
+    .NARG = .POSITIONAL;
+    .VALUES
+    END;
+
+! The value of the word, if it is one of the names, or -1.
+ROUTINE FIND (WORD, WLEN, N, NAMES : REF VECTOR) =
+    BEGIN
+    INCR I FROM 0 TO .N - 1 DO
+        BEGIN
+        LOCAL
+            PN : REF VECTOR;
+        PN = .NAMES[.I];
+        IF UPCASE_EQL(.WORD, .WLEN, NTEXT(.PN), .PN[N_LEN]) THEN RETURN .I
+        END;
+    -1
+    END;
+
+OWN
+    SCRATCH : VECTOR[65536, BYTE];
+
+! MAC_SUBSTITUTE text, length, count, names, values, outlen: the text with
+! each of the names, which are in upper case, replaced by its value from
+! the list of strings; stores the new length.
+GLOBAL ROUTINE MAC_SUBSTITUTE (TEXT, LEN, N, NAMES, VALUES : REF VECTOR, OUTLEN) =
+    BEGIN
+    LOCAL
+        I,
+        O,
+        LONGEST,
+        OUT;
+    ! Each word becomes at most the longest value.
+    LONGEST = 0;
+    INCR K FROM 0 TO .N - 1 DO
+        LONGEST = MAX(.LONGEST, .VALUES[2 * .K + 1]);
+    OUT = (IF .LEN * (.LONGEST + 1) LEQ 65536 THEN SCRATCH ELSE MEM_ALLOC(.LEN * (.LONGEST + 1)));
+    I = 0;
+    O = 0;
+    WHILE .I LSS .LEN DO
+        BEGIN
+        LOCAL
+            START,
+            CH;
+        START = .I;
+        CH = GETB(.TEXT + .I);
+        IF IS_NAME_START(.CH)
+        THEN
+            BEGIN
+            LOCAL
+                K;
+            WHILE .I LSS .LEN AND IS_NAME_CHAR(GETB(.TEXT + .I)) DO
+                I = .I + 1;
+            K = FIND(.TEXT + .START, .I - .START, .N, .NAMES);
+            IF .K GEQ 0
+            THEN
+                BEGIN
+                ! An apostrophe next to a formal name concatenates, and
+                ! disappears.
+                IF .O GTR 0 THEN IF GETB(.OUT + .O - 1) EQL %C'''' THEN O = .O - 1;
+                CH$MOVE(.VALUES[2 * .K + 1], .VALUES[2 * .K], .OUT + .O);
+                O = .O + .VALUES[2 * .K + 1];
+                IF .I LSS .LEN THEN IF GETB(.TEXT + .I) EQL %C'''' THEN I = .I + 1
+                END
+            ELSE
+                BEGIN
+                CH$MOVE(.I - .START, .TEXT + .START, .OUT + .O);
+                O = .O + .I - .START
+                END
+            END
+        ELSE IF IS_DIGIT(.CH)
+        THEN
+            BEGIN
+            ! Numbers and local labels are never formal names.
+            WHILE .I LSS .LEN AND IS_NAME_CHAR(GETB(.TEXT + .I)) DO
+                I = .I + 1;
+            CH$MOVE(.I - .START, .TEXT + .START, .OUT + .O);
+            O = .O + .I - .START
+            END
+        ELSE
+            BEGIN
+            PUTB(.OUT + .O, .CH);
+            O = .O + 1;
+            I = .I + 1
+            END
+        END;
+    .OUTLEN = .O;
+    MEM_COPY(.OUT, .O)
+    END;
+
+END
+ELUDOM

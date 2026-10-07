@@ -1,0 +1,18 @@
+! FIO.R64: the I/O module's routines (fio.mar), for BLISS.EXE and VASM.EXE.
+
+LITERAL
+    FIO$K_READ = 0,                     ! FIO$OPEN's modes
+    FIO$K_WRITE = 1,
+    SS$_NORMAL = 1,                     ! the statuses the routines return
+    SS$_ENDOFFILE = %X'870';
+
+EXTERNAL ROUTINE
+    FIO$OPEN,                           ! (name, length, mode, channel)
+    FIO$READ,                           ! (channel, buffer, length, count)
+    FIO$WRITE,                          ! (channel, buffer, length)
+    FIO$CLOSE,                          ! (channel)
+    FIO$ALLOC,                          ! (size): zeroed memory, or 0
+    FIO$PUT_LINE : NOVALUE,             ! (text, length): a line on the terminal
+    FIO$ARGS : NOVALUE,                 ! (address, length): the command line
+    FIO$DATE : NOVALUE,                 ! (buffer): the time, dd-mmm-yyyy hh:mm
+    FIO$EXIT : NOVALUE;                 ! (status): ends the program

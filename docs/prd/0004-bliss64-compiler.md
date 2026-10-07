@@ -366,12 +366,16 @@ Each step ends with something you can run or look at.
     system's BLISS-64 compiler.
 12. **File I/O in `vrun`.** *Visible:* a test image under `vrun` reads a
     host file and writes another.
-13. **Stage 1.** `vbliss` ported to BLISS-64 and built by stage 0.
-    *Visible:* every test passes through stage 1 with output identical to
-    stage 0's.
-14. **The `vasm` port.** VASM in BLISS-64, built by stage 1. *Visible:*
-    its OBJ equals the Rust `vasm`'s on the whole test suite, and
-    `BLISS.EXE` writes OBJ modules without the host's `vasm`.
+13. **The `vasm` port.** VASM in BLISS-64, built by stage 0, and the
+    I/O module's `vrun` implementation. It comes before stage 1 because
+    an integration test of `BLISS.EXE` needs an assembler that runs where
+    it does, and because it is a large BLISS-64 program that stage 0 must
+    compile first. *Visible:* `VASM.EXE` under `vrun` writes OBJ equal to
+    the Rust `vasm`'s on the whole test suite.
+14. **Stage 1.** `vbliss` ported to BLISS-64, built by stage 0, with VASM
+    linked in. *Visible:* every test passes through stage 1 with output
+    identical to stage 0's, and `BLISS.EXE` writes OBJ modules without
+    the host's `vasm`.
 15. **Self-hosting.** Stages 2 and 3, the bootstrap job in CI, the build
     switched to `vbliss --stage1`, stage 0 frozen. *Visible:*
     `just bliss-bootstrap` ends with stages 2 and 3 identical.

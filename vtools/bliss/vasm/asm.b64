@@ -1,0 +1,1939 @@
+MODULE ASM (IDENT = 'V1.0') =
+%TITLE 'VASM: the two passes'
+BEGIN
+!
+! asm.rs: two passes over the source. Pass 1 reads lines, from the file
+! and from macro expansions, repeat blocks and macro libraries, parses
+! them and lays out the psects. Pass 2 evaluates operands, encodes
+! instructions and collects each psect's contents and relocations, which
+! EMIT turns into records. What it made is in the ASM_ globals.
+!
+REQUIRE 'VASM';
+
+EXTERNAL ROUTINE
+    UTIL_ROUTINES,
+    LEX_ROUTINES,
+    EXPR_ROUTINES,
+    MACROS_ROUTINES,
+    ENCODE_ROUTINES;
+
+EXTERNAL
+    ERR_COL,
+    ERR_MSG,
+    ERR_LEN;
+
+FORWARD ROUTINE
+    STATEMENT,
+    OPEN;
+
+LITERAL
+    MAX_PSECTS = 4096,
+    MAX_DEPTH = 100,                    ! limits that stop runaway macros
+    MAX_REPEAT = 65536,
+    MAX_CONDS = 4096,
+    MAX_SAVED = 4096,
+    ! A frame: where lines come from, the source, a macro expansion, a
+    ! repeat block or a macro library.
+    FR_LINES = 0,
+    FR_COUNT = 1,
+    FR_POS = 2,
+    FR_CONDS = 3,                       ! conditionals open when it started
+    FR_NARG = 4,                        ! a macro's positional arguments, or -1
+    FR_LIBRARY = 5,                     ! a library, which may only define macros
+    FR_SIZE = 6,
+    ! A statement, for pass 2.
+    ST_NEXT = 0,
+    ST_LINE = 1,
+    ST_SEQ = 2,
+    ST_PSECT = 3,
+    ST_OFFSET = 4,
+    ST_KIND = 5,
+    ST_A = 6,
+    ST_B = 7,
+    ST_C = 8,
+    ST_D = 9,
+    ST_HERE = 10,                       ! an assignment's location counter
+    ST_SIZE = 13,
+    SK_INSN = 1,                        ! A mnemonic, B column, C operands, D count
+    SK_DATA = 2,                        ! A size, B expressions and columns, C count
+    SK_BYTES = 3,                       ! A address, B length
+    SK_ASCID = 4,                       ! A address, B length, C wide
+    SK_SPACE = 5,
+    SK_ASSIGN = 6,                      ! A name, B expression, C column
+    ! An open .IF: its condition, whether the enclosing code is being
+    ! assembled, and which part we are in.
+    PART_TRUE = 0,
+    PART_FALSE = 1,
+    PART_BOTH = 2;
+
+GLOBAL
+    ASM_PSECTS : VECTOR[MAX_PSECTS],
+    ASM_NPSECTS,
+    ASM_ORDER,                          ! the first symbol, in order of appearance
+    ASM_TITLE,                          ! .TITLE's name, or 0
+    ASM_IDENT,                          ! .IDENT's text, or 0
+    ASM_IDENTLEN,
+    ASM_TRANSFER,                       ! the transfer address's psect, or -1
+    ASM_TRANSFER_OFF,
+    ASM_DIAGS;                          ! errors and warnings, D_ records
+
+OWN
+    LAST_SYMBOL : REF VECTOR,
+    STMTS : REF VECTOR,
+    LAST_STMT : REF VECTOR,
+    CUR,                                ! the current psect, or -1
+    LBLOCK,                             ! the local label block,
+    NBLOCKS,                            ! and how many there have been
+    TRANSFER_E,                         ! .END's expression, line and column
+    TRANSFER_LINE,
+    TRANSFER_COL,
+    ENDED,
+    SRC : REF VECTOR,                   ! the line being assembled,
+    SEQ,                                ! its number in the order lines are read
+    FRAMES : VECTOR[MAX_DEPTH + 1],
+    NFRAMES,
+    CONDS : VECTOR[MAX_CONDS * 3],      ! value, outer and part of each
+    NCONDS,
+    NEXT_LABEL,                         ! the next created local label
+    SAVED : VECTOR[MAX_SAVED * 2],      ! .SAVE_PSECT: psect, block or -1
+    NSAVED,
+    INCLUDE : REF VECTOR,               ! where else .LIBRARY looks: names
+    NINCLUDE,
+    ERRORS;                             ! how many errors
+
+BIND
+    NO_LINE = UPLIT (UPLIT BYTE (0), 0, 0, 0, 0) : VECTOR;
+
+! ----- diagnostics -----
+
+! An error or warning, from ERR_COL and ERR_MSG, at the current line, in
+! the order of its line, then its column.
+ROUTINE DIAGNOSE (WARNING) : NOVALUE =
+    BEGIN
+    LOCAL
+        D : REF VECTOR,
+        P : REF VECTOR,
+        PREV : REF VECTOR;
+    D = MEM_ALLOC(D_SIZE * 8);
+    D[D_SEQ] = .SEQ;
+    D[D_COL] = .ERR_COL;
+    D[D_MSG] = .ERR_MSG;
+    D[D_MSGLEN] = .ERR_LEN;
+    D[D_WARN] = .WARNING;
+    D[D_LINE] = (IF .SRC EQL 0 THEN NO_LINE ELSE .SRC);
+    IF NOT .WARNING THEN ERRORS = .ERRORS + 1;
+    PREV = 0;
+    P = .ASM_DIAGS;
+    WHILE .P NEQ 0 DO
+        BEGIN
+        IF .P[D_SEQ] GTR .SEQ OR (.P[D_SEQ] EQL .SEQ AND .P[D_COL] GTR .ERR_COL) THEN EXITLOOP;
+        PREV = .P;
+        P = .P[D_NEXT]
+        END;
+    D[D_NEXT] = .P;
+    IF .PREV EQL 0 THEN ASM_DIAGS = .D ELSE PREV[D_NEXT] = .D
+    END;
+
+ROUTINE ERROR : NOVALUE =
+    DIAGNOSE(FALSE);
+
+! Warns that PIC psect psect holds what, at col.
+ROUTINE NOTPIC (PS, WHAT, WLEN, COL) : NOVALUE =
+    BEGIN
+    LOCAL
+        P : REF VECTOR;
+    P = .ASM_PSECTS[.PS];
+    IF (.P[PS_FLAGS] AND PSC_PIC) NEQ 0
+    THEN
+        BEGIN
+        MSG_BEGIN();
+        MSG_TEXT(T('%VASM-W-NOTPIC, '));
+        MSG_TEXT(.WHAT, .WLEN);
+        MSG_TEXT(T(' in PIC psect '));
+        MSG_NAME(.P[PS_NAME]);
+        ERR_COL = .COL;
+        ERR_MSG = MSG_SAVE(ERR_LEN);
+        DIAGNOSE(TRUE)
+        END
+    END;
+
+! ----- symbols -----
+
+! A name as a symbol, entered in the order of appearance if it is new.
+ROUTINE SYMBOL (N : REF VECTOR) =
+    BEGIN
+    IF NOT .N[N_SYMBOL]
+    THEN
+        BEGIN
+        N[N_SYMBOL] = TRUE;
+        IF .LAST_SYMBOL EQL 0 THEN ASM_ORDER = .N ELSE LAST_SYMBOL[N_ORDER] = .N;
+        LAST_SYMBOL = .N
+        END;
+    .N
+    END;
+
+! ASM_LOOKUP name, value: the symbol's value as an expression sees it; an
+! external, global or weak symbol without one is external. False if it
+! has none.
+GLOBAL ROUTINE ASM_LOOKUP (N : REF VECTOR, V : REF VECTOR) =
+    BEGIN
+    IF NOT .N[N_SYMBOL] THEN RETURN FALSE;
+    IF .N[N_VALUE + V_KIND] NEQ VK_NONE
+    THEN
+        BEGIN
+        VCOPY(.V, N[N_VALUE]);
+        RETURN TRUE
+        END;
+    IF (.N[N_FLAGS] AND (F_EXTERNAL OR F_GLOBAL OR F_WEAK)) NEQ 0
+    THEN
+        BEGIN
+        V[V_KIND] = VK_EXT;
+        V[V_A] = .N;
+        V[V_OFF] = 0;
+        RETURN TRUE
+        END;
+    FALSE
+    END;
+
+! Whether the value is an address in one of this module's psects, which the
+! linker relocates. An external symbol might be a constant.
+ROUTINE IS_ADDRESS (V : REF VECTOR) =
+    BEGIN
+    LOCAL
+        P : REF VECTOR;
+    IF .V[V_KIND] NEQ VK_PSECT THEN RETURN FALSE;
+    P = .ASM_PSECTS[.V[V_A]];
+    (.P[PS_FLAGS] AND PSC_REL) NEQ 0
+    END;
+
+ROUTINE EVAL (E, COL, HERE, V) =
+    EXPR_EVAL(.E, .HERE, .V, .COL);
+
+! The location counter, without opening a psect.
+ROUTINE LOC (V : REF VECTOR) : NOVALUE =
+    BEGIN
+    IF .CUR GEQ 0
+    THEN
+        BEGIN
+        LOCAL
+            P : REF VECTOR;
+        P = .ASM_PSECTS[.CUR];
+        V[V_KIND] = VK_PSECT;
+        V[V_A] = .CUR;
+        V[V_OFF] = .P[PS_SIZE]
+        END
+    ELSE
+        BEGIN
+        V[V_KIND] = VK_ABS;
+        V[V_A] = 0;
+        V[V_OFF] = 0
+        END
+    END;
+
+! A constant, which must be known in pass 1.
+ROUTINE CONSTANT (C : REF VECTOR, WHAT, WLEN, RESULT) =
+    BEGIN
+    LOCAL
+        COL,
+        E,
+        HERE : VECTOR[V_SIZE],
+        V : VECTOR[V_SIZE];
+    LEX_SKIP_WS(.C);
+    COL = CCOL(C);
+    E = EXPR_PARSE(.C, .LBLOCK);
+    IF .E EQL 0 THEN RETURN FALSE;
+    LOC(HERE);
+    TRY(EVAL(.E, .COL, HERE, V));
+    IF .V[V_KIND] NEQ VK_ABS
+    THEN
+        BEGIN
+        MSG_BEGIN();
+        MSG_TEXT(.WHAT, .WLEN);
+        MSG_TEXT(T(' must be a constant'));
+        RETURN FAIL(.COL)
+        END;
+    .RESULT = .V[V_OFF];
+    TRUE
+    END;
+
+! The current psect, $CODE$ if none was chosen.
+ROUTINE CURRENT =
+    BEGIN
+    IF .CUR LSS 0 THEN OPEN(NAME_INTERN(T('$CODE$')), -1, 0, 1);
+    .CUR
+    END;
+
+ROUTINE HERE (V : REF VECTOR) : NOVALUE =
+    BEGIN
+    LOCAL
+        P : REF VECTOR;
+    V[V_A] = CURRENT();
+    P = .ASM_PSECTS[.V[V_A]];
+    V[V_KIND] = VK_PSECT;
+    V[V_OFF] = .P[PS_SIZE]
+    END;
+
+ROUTINE NEW_BLOCK : NOVALUE =
+    BEGIN
+    NBLOCKS = .NBLOCKS + 1;
+    LBLOCK = .NBLOCKS
+    END;
+
+ROUTINE DEFINE (N : REF VECTOR, V, COL, ISLABEL) =
+    BEGIN
+    SYMBOL(.N);
+    IF .N[N_VALUE + V_KIND] NEQ VK_NONE AND ((.N[N_FLAGS] AND F_LABEL) NEQ 0 OR .ISLABEL)
+    THEN
+        BEGIN
+        MSG_BEGIN();
+        MSG_TEXT(NTEXT(.N), EXPR_DISPLAY(.N));
+        MSG_TEXT(T(' is already defined'));
+        RETURN FAIL(.COL)
+        END;
+    IF (.N[N_FLAGS] AND F_EXTERNAL) NEQ 0
+    THEN
+        BEGIN
+        MSG_BEGIN();
+        MSG_TEXT(NTEXT(.N), EXPR_DISPLAY(.N));
+        MSG_TEXT(T(' is declared external'));
+        RETURN FAIL(.COL)
+        END;
+    VCOPY(N[N_VALUE], .V);
+    N[N_FLAGS] = (.N[N_FLAGS] AND NOT F_LABEL) OR (IF .ISLABEL THEN F_LABEL ELSE 0);
+    TRUE
+    END;
+
+! A statement for pass 2, for the current line.
+ROUTINE NEW_STMT (KIND, PS, OFFSET) =
+    BEGIN
+    LOCAL
+        S : REF VECTOR;
+    S = MEM_ALLOC(ST_SIZE * 8);
+    S[ST_LINE] = .SRC;
+    S[ST_SEQ] = .SEQ;
+    S[ST_PSECT] = .PS;
+    S[ST_OFFSET] = .OFFSET;
+    S[ST_KIND] = .KIND;
+    IF .LAST_STMT EQL 0 THEN STMTS = .S ELSE LAST_STMT[ST_NEXT] = .S;
+    LAST_STMT = .S;
+    .S
+    END;
+
+! An item of size bytes at the location counter.
+ROUTINE ITEM (KIND, SIZE) =
+    BEGIN
+    LOCAL
+        PS,
+        P : REF VECTOR,
+        S;
+    PS = CURRENT();
+    P = .ASM_PSECTS[.PS];
+    S = NEW_STMT(.KIND, .PS, .P[PS_SIZE]);
+    P[PS_SIZE] = .P[PS_SIZE] + .SIZE;
+    .S
+    END;
+
+! ----- lines -----
+
+ROUTINE NEXT_LINE =
+    BEGIN
+    WHILE .NFRAMES GTR 0 DO
+        BEGIN
+        LOCAL
+            F : REF VECTOR;
+        F = .FRAMES[.NFRAMES - 1];
+        IF .F[FR_POS] LSS .F[FR_COUNT]
+        THEN
+            BEGIN
+            LOCAL
+                LINES : REF VECTOR;
+            LINES = .F[FR_LINES];
+            F[FR_POS] = .F[FR_POS] + 1;
+            SEQ = .SEQ + 1;
+            RETURN .LINES[.F[FR_POS] - 1]
+            END;
+        NFRAMES = .NFRAMES - 1;
+        IF .NCONDS GTR .F[FR_CONDS]
+        THEN
+            BEGIN
+            NCONDS = .F[FR_CONDS];
+            FAIL_TEXT(1, T('missing .ENDC before the end of the block'));
+            ERROR()
+            END
+        END;
+    0
+    END;
+
+ROUTINE PUSH (LINES, COUNT, NARG, COL) =
+    BEGIN
+    LOCAL
+        F : REF VECTOR;
+    IF .NFRAMES GEQ MAX_DEPTH
+    THEN
+        RETURN FAIL_TEXT(.COL, T('macros and repeat blocks nested more than 100 deep'));
+    F = MEM_ALLOC(FR_SIZE * 8);
+    F[FR_LINES] = .LINES;
+    F[FR_COUNT] = .COUNT;
+    F[FR_CONDS] = .NCONDS;
+    F[FR_NARG] = .NARG;
+    FRAMES[.NFRAMES] = .F;
+    NFRAMES = .NFRAMES + 1;
+    TRUE
+    END;
+
+ROUTINE TOP =
+    IF .NFRAMES GTR 0 THEN .FRAMES[.NFRAMES - 1] ELSE 0;
+
+ROUTINE IN_LIBRARY =
+    BEGIN
+    LOCAL
+        F : REF VECTOR;
+    F = TOP();
+    IF .F EQL 0 THEN FALSE ELSE .F[FR_LIBRARY]
+    END;
+
+! A local label's number, digits followed by $: stores the digits' address
+! and length, after which the cursor is.
+ROUTINE LOCAL_LABEL (C : REF VECTOR, OUT : REF VECTOR) =
+    BEGIN
+    LOCAL
+        P,
+        N;
+    P = CREST(C);
+    N = 0;
+    WHILE .N LSS CLEFT(C) AND IS_DIGIT(GETB(.P + .N)) DO
+        N = .N + 1;
+    IF .N GTR 0 AND .N LSS CLEFT(C)
+    THEN
+        IF GETB(.P + .N) EQL %C'$'
+        THEN
+            BEGIN
+            C[C_AT] = .C[C_AT] + .N + 1;
+            OUT[0] = .P;
+            OUT[1] = .N;
+            RETURN TRUE
+            END;
+    FALSE
+    END;
+
+! A line's first word after its labels, in upper case, or 0; stores where
+! the rest of the line is and how long.
+ROUTINE FIRST_WORD (TEXT, LEN, REST : REF VECTOR) =
+    BEGIN
+    LOCAL
+        C : VECTOR[C_SIZE],
+        W;
+    LEX_INIT(C, .TEXT, LEX_STRIP_COMMENT(.TEXT, .LEN));
+    WHILE 1 DO
+        BEGIN
+        LOCAL
+            SAVE,
+            D : VECTOR[2],
+            ISLABEL;
+        SAVE = .C[C_AT];
+        LEX_SKIP_WS(C);
+        ISLABEL = LOCAL_LABEL(C, D);
+        IF NOT .ISLABEL THEN ISLABEL = LEX_NAME(C) NEQ 0;
+        IF .ISLABEL AND CLEFT(C) GTR 0 AND GETB(CREST(C)) EQL %C':'
+        THEN
+            BEGIN
+            C[C_AT] = .C[C_AT] + 1;
+            IF CLEFT(C) GTR 0 THEN IF GETB(CREST(C)) EQL %C':' THEN C[C_AT] = .C[C_AT] + 1
+            END
+        ELSE
+            BEGIN
+            C[C_AT] = .SAVE;
+            EXITLOOP
+            END
+        END;
+    W = LEX_NAME(C);
+    REST[0] = CREST(C);
+    REST[1] = CLEFT(C);
+    .W
+    END;
+
+ROUTINE END_ (C : REF VECTOR) =
+    BEGIN
+    IF LEX_AT_END(.C) THEN RETURN TRUE;
+    FAIL_TEXT(CCOL(C), T('unexpected text'))
+    END;
+
+! ----- conditionals -----
+
+ROUTINE ACTIVE =
+    BEGIN
+    LOCAL
+        I;
+    IF .NCONDS EQL 0 THEN RETURN TRUE;
+    I = (.NCONDS - 1) * 3;
+    IF NOT .CONDS[.I + 1] THEN RETURN FALSE;
+    CASE .CONDS[.I + 2] FROM PART_TRUE TO PART_BOTH OF
+        SET
+        [PART_TRUE]: .CONDS[.I];
+        [PART_FALSE]: NOT .CONDS[.I];
+        [PART_BOTH]: TRUE;
+        TES
+    END;
+
+! The text without blanks around it: stores the new address and length.
+ROUTINE TRIM (TEXT, LEN, OUT : REF VECTOR) : NOVALUE =
+    BEGIN
+    LOCAL
+        A,
+        B;
+    A = 0;
+    B = .LEN;
+    WHILE .A LSS .B AND IS_SPACE(GETB(.TEXT + .A)) DO
+        A = .A + 1;
+    WHILE .B GTR .A AND IS_SPACE(GETB(.TEXT + .B - 1)) DO
+        B = .B - 1;
+    OUT[0] = .TEXT + .A;
+    OUT[1] = .B - .A
+    END;
+
+! A condition and its arguments, as in .IF and .IIF: stores whether it holds.
+ROUTINE CONDITION (C : REF VECTOR, RESULT) =
+    BEGIN
+    LOCAL
+        COL,
+        K : REF VECTOR,
+        KW,
+        N;
+    LEX_SKIP_WS(.C);
+    COL = CCOL(C);
+    K = LEX_NAME(.C);
+    IF .K EQL 0 THEN RETURN FAIL_TEXT(.COL, T('expected a condition such as EQ, DF or B'));
+    LEX_EAT(.C, %C',');
+    KW = .K[N_KW];
+    SELECTONE .KW OF
+        SET
+        [K_EQ, K_EQUAL, K_NE, K_NOT_EQUAL, K_GT, K_GREATER, K_LT, K_LESS_THAN, K_GE,
+         K_GREATER_EQUAL, K_LE, K_LESS_EQUAL]:
+            BEGIN
+            TRY(CONSTANT(.C, T('the value'), N));
+            .RESULT =
+                (SELECTONE .KW OF
+                    SET
+                    [K_EQ, K_EQUAL]: .N EQL 0;
+                    [K_NE, K_NOT_EQUAL]: .N NEQ 0;
+                    [K_GT, K_GREATER]: .N GTR 0;
+                    [K_LT, K_LESS_THAN]: .N LSS 0;
+                    [K_GE, K_GREATER_EQUAL]: .N GEQ 0;
+                    [K_LE, K_LESS_EQUAL]: .N LEQ 0;
+                    TES);
+            RETURN TRUE
+            END;
+        [K_DF, K_DEFINED, K_NDF, K_NOT_DEFINED]:
+            BEGIN
+            LOCAL
+                NCOL,
+                S : REF VECTOR,
+                DEFINED;
+            LEX_SKIP_WS(.C);
+            NCOL = CCOL(C);
+            S = LEX_NAME(.C);
+            IF .S EQL 0 THEN RETURN FAIL_TEXT(.NCOL, T('expected a symbol name'));
+            DEFINED = .S[N_SYMBOL] AND .S[N_VALUE + V_KIND] NEQ VK_NONE;
+            .RESULT = .DEFINED EQL (.KW EQL K_DF OR .KW EQL K_DEFINED);
+            RETURN TRUE
+            END;
+        [K_B, K_BLANK, K_NB, K_NOT_BLANK]:
+            BEGIN
+            LOCAL
+                A : VECTOR[2];
+            MAC_ARG(.C, A);
+            TRIM(.A[0], .A[1], A);
+            .RESULT = (.A[1] EQL 0) EQL (.KW EQL K_B OR .KW EQL K_BLANK);
+            RETURN TRUE
+            END;
+        [K_IDN, K_IDENTICAL, K_DIF, K_DIFFERENT]:
+            BEGIN
+            LOCAL
+                A : VECTOR[2],
+                B : VECTOR[2];
+            MAC_ARG(.C, A);
+            TRY(LEX_EXPECT(.C, %C','));
+            MAC_ARG(.C, B);
+            TRIM(.A[0], .A[1], A);
+            TRIM(.B[0], .B[1], B);
+            .RESULT = UPCASE_EQL(.A[0], .A[1], .B[0], .B[1])
+                EQL (.KW EQL K_IDN OR .KW EQL K_IDENTICAL);
+            RETURN TRUE
+            END;
+        TES;
+    MSG_BEGIN();
+    MSG_TEXT(T('unknown condition '));
+    MSG_NAME(.K);
+    FAIL(.COL)
+    END;
+
+! .IF and friends: stores whether word was one of them.
+ROUTINE CONDITIONAL (W : REF VECTOR, C : REF VECTOR, COL, HANDLED) =
+    BEGIN
+    LOCAL
+        PART;
+    .HANDLED = TRUE;
+    SELECTONE .W[N_KW] OF
+        SET
+        [K_IF]:
+            BEGIN
+            LOCAL
+                OUTER,
+                VALUE;
+            OUTER = ACTIVE();
+            VALUE = FALSE;
+            IF .OUTER
+            THEN
+                BEGIN
+                TRY(CONDITION(.C, VALUE));
+                TRY(END_(.C))
+                END;
+            IF .NCONDS GEQ MAX_CONDS
+            THEN
+                RETURN FAIL_TEXT(.COL, T('conditionals nested too deep'));
+            CONDS[.NCONDS * 3] = .VALUE;
+            CONDS[.NCONDS * 3 + 1] = .OUTER;
+            CONDS[.NCONDS * 3 + 2] = PART_TRUE;
+            NCONDS = .NCONDS + 1;
+            RETURN TRUE
+            END;
+        [K_ENDC]:
+            BEGIN
+            LOCAL
+                F : REF VECTOR,
+                FLOOR;
+            F = TOP();
+            FLOOR = (IF .F EQL 0 THEN 0 ELSE .F[FR_CONDS]);
+            IF .NCONDS LEQ .FLOOR THEN RETURN FAIL_TEXT(.COL, T('.ENDC without .IF'));
+            NCONDS = .NCONDS - 1;
+            RETURN TRUE
+            END;
+        [K_IF_FALSE, K_IFF, K_ELSE]: PART = PART_FALSE;
+        [K_IF_TRUE, K_IFT]: PART = PART_TRUE;
+        [K_IF_TRUE_FALSE, K_IFTF]: PART = PART_BOTH;
+        [OTHERWISE]:
+            BEGIN
+            .HANDLED = FALSE;
+            RETURN TRUE
+            END;
+        TES;
+    IF .NCONDS EQL 0
+    THEN
+        BEGIN
+        MSG_BEGIN();
+        MSG_NAME(.W);
+        MSG_TEXT(T(' outside .IF'));
+        RETURN FAIL(.COL)
+        END;
+    CONDS[(.NCONDS - 1) * 3 + 2] = .PART;
+    TRUE
+    END;
+
+! ----- macros -----
+
+! The lines up to the close that matches, from the current frame: stores
+! the lines' vector and how many, and the rest of close's line. Opens and
+! close are K_ codes, opens a vector ending with 0.
+ROUTINE COLLECT (OPENS : REF VECTOR, CLOSE, WHAT, WLEN, COL, BODY, COUNT, REST) =
+    BEGIN
+    LOCAL
+        F : REF VECTOR,
+        LINES : REF VECTOR,
+        START,
+        DEPTH;
+    F = TOP();
+    LINES = .F[FR_LINES];
+    START = .F[FR_POS];
+    DEPTH = 0;
+    WHILE .F[FR_POS] LSS .F[FR_COUNT] DO
+        BEGIN
+        LOCAL
+            L : REF VECTOR,
+            W : REF VECTOR,
+            KW,
+            OPEN_;
+        L = .LINES[.F[FR_POS]];
+        F[FR_POS] = .F[FR_POS] + 1;
+        SEQ = .SEQ + 1;
+        W = FIRST_WORD(.L[L_TEXT], .L[L_LEN], .REST);
+        KW = (IF .W EQL 0 THEN 0 ELSE .W[N_KW]);
+        OPEN_ = FALSE;
+        IF .KW NEQ 0
+        THEN
+            INCR I FROM 0 TO 3 DO
+                BEGIN
+                IF .OPENS[.I] EQL 0 THEN EXITLOOP;
+                IF .OPENS[.I] EQL .KW THEN OPEN_ = TRUE
+                END;
+        IF .OPEN_
+        THEN
+            DEPTH = .DEPTH + 1
+        ELSE IF .KW EQL .CLOSE AND .KW NEQ 0
+        THEN
+            BEGIN
+            IF .DEPTH EQL 0
+            THEN
+                BEGIN
+                .BODY = LINES[.START];
+                .COUNT = .F[FR_POS] - 1 - .START;
+                RETURN TRUE
+                END;
+            DEPTH = .DEPTH - 1
+            END
+        END;
+    MSG_BEGIN();
+    MSG_TEXT(T('missing '));
+    MSG_TEXT((IF .CLOSE EQL K_ENDM THEN UPLIT BYTE ('.ENDM') ELSE UPLIT BYTE ('.ENDR')), 5);
+    MSG_TEXT(T(' for '));
+    MSG_TEXT(.WHAT, .WLEN);
+    FAIL(.COL)
+    END;
+
+! The body's lines with the names replaced by the values, made by via.
+ROUTINE EXPAND (BODY : REF VECTOR, COUNT, N, NAMES, VALUES, VIA, OUT : REF VECTOR) : NOVALUE =
+    INCR I FROM 0 TO .COUNT - 1 DO
+        BEGIN
+        LOCAL
+            L : REF VECTOR,
+            B : REF VECTOR;
+        B = .BODY[.I];
+        L = MEM_ALLOC(L_SIZE * 8);
+        L[L_FILE] = .B[L_FILE];
+        L[L_NUM] = .B[L_NUM];
+        L[L_VIA] = .VIA;
+        IF .N EQL 0
+        THEN
+            BEGIN
+            L[L_TEXT] = .B[L_TEXT];
+            L[L_LEN] = .B[L_LEN]
+            END
+        ELSE
+            L[L_TEXT] = MAC_SUBSTITUTE(.B[L_TEXT], .B[L_LEN], .N, .NAMES, .VALUES, L[L_LEN]);
+        OUT[.I] = .L
+        END;
+
+ROUTINE NEW_VIA (WHAT, WLEN) =
+    BEGIN
+    LOCAL
+        V : REF VECTOR;
+    V = MEM_ALLOC(VIA_SIZE * 8);
+    V[VIA_WHAT] = .WHAT;
+    V[VIA_WHATLEN] = .WLEN;
+    V[VIA_LINE] = .SRC;
+    .V
+    END;
+
+ROUTINE DEFINE_MACRO (C : REF VECTOR, COL) =
+    BEGIN
+    LOCAL
+        NCOL,
+        N : REF VECTOR,
+        M : REF VECTOR,
+        WHAT,
+        WLEN,
+        REST : VECTOR[2],
+        NAMES : REF VECTOR;
+    LEX_SKIP_WS(.C);
+    NCOL = CCOL(C);
+    N = LEX_NAME(.C);
+    IF .N EQL 0 THEN RETURN FAIL_TEXT(.NCOL, T('expected a macro name'));
+    LEX_EAT(.C, %C',');
+    M = MEM_ALLOC(M_SIZE * 8);
+    M[M_NAME] = .N;
+    TRY(MAC_PARAMS(CREST(C), CLEFT(C), .M, .NCOL));
+    MSG_BEGIN();
+    MSG_TEXT(T('macro '));
+    MSG_NAME(.N);
+    WHAT = MSG_SAVE(WLEN);
+    TRY(COLLECT(UPLIT (K_MACRO, 0), K_ENDM, .WHAT, .WLEN, .COL, M[M_BODY], M[M_COUNT], REST));
+    TRIM(.REST[0], .REST[1], REST);
+    IF .REST[1] NEQ 0 AND NOT UPCASE_EQL(.REST[0], .REST[1], NTEXT(.N), .N[N_LEN])
+    THEN
+        BEGIN
+        MSG_BEGIN();
+        MSG_TEXT(T('macro '));
+        MSG_NAME(.N);
+        MSG_TEXT(T(' ends with .ENDM '));
+        MSG_TEXT(.REST[0], .REST[1]);
+        RETURN FAIL(.COL)
+        END;
+    ! The source's own definition wins over a library's.
+    IF IN_LIBRARY() AND .N[N_MACRO] NEQ 0 THEN RETURN TRUE;
+    ! The formals' names, for MAC_SUBSTITUTE.
+    NAMES = MEM_ALLOC(.M[M_NPARAMS] * 8 + 8);
+    INCR I FROM 0 TO .M[M_NPARAMS] - 1 DO
+        NAMES[.I] = .VECTOR[.M[M_PARAMS], .I * P_SIZE + P_NAME];
+    M[M_NAMES] = .NAMES;
+    N[N_MACRO] = .M;
+    TRUE
+    END;
+
+ROUTINE INVOKE (M : REF VECTOR, ARGS, ALEN, COL) =
+    BEGIN
+    LOCAL
+        T_ : VECTOR[2],
+        LIST,
+        N,
+        NARG,
+        VALUES,
+        WHAT,
+        WLEN,
+        LINES;
+    TRIM(.ARGS, .ALEN, T_);
+    IF .T_[1] EQL 0
+    THEN
+        (LIST = 0; N = 0)
+    ELSE
+        LIST = MAC_SPLIT(.ARGS, .ALEN, N);
+    VALUES = MAC_BIND(.M, .LIST, .N, NEXT_LABEL, NARG, .COL);
+    IF .VALUES EQL 0 THEN RETURN FALSE;
+    MSG_BEGIN();
+    MSG_TEXT(T('macro '));
+    MSG_NAME(.M[M_NAME]);
+    WHAT = MSG_SAVE(WLEN);
+    LINES = MEM_ALLOC(.M[M_COUNT] * 8 + 8);
+    EXPAND(.M[M_BODY], .M[M_COUNT], .M[M_NPARAMS], .M[M_NAMES], .VALUES, NEW_VIA(.WHAT, .WLEN),
+        .LINES);
+    PUSH(.LINES, .M[M_COUNT], .NARG, .COL)
+    END;
+
+! .REPEAT n, .IRP sym, <a, b> and .IRPC sym, <chars>.
+ROUTINE REPEAT (W : REF VECTOR, C : REF VECTOR, COL) =
+    BEGIN
+    LOCAL
+        KW,
+        COPIES,
+        SYM,
+        VALUES : REF VECTOR,
+        BODY : REF VECTOR,
+        COUNT,
+        REST : VECTOR[2],
+        VIA,
+        LINES;
+    KW = .W[N_KW];
+    IF .KW EQL K_REPEAT OR .KW EQL K_REPT
+    THEN
+        BEGIN
+        TRY(CONSTANT(.C, T('the count'), COPIES));
+        IF .COPIES LSS 0 OR .COPIES GTR MAX_REPEAT
+        THEN
+            RETURN FAIL_TEXT(.COL, T('the count must be 0 to 65536'));
+        TRY(END_(.C));
+        SYM = 0
+        END
+    ELSE
+        BEGIN
+        LOCAL
+            SCOL,
+            LIST : VECTOR[2];
+        LEX_SKIP_WS(.C);
+        SCOL = CCOL(C);
+        SYM = LEX_NAME(.C);
+        IF .SYM EQL 0 THEN RETURN FAIL_TEXT(.SCOL, T('expected a symbol name'));
+        TRY(LEX_EXPECT(.C, %C','));
+        MAC_ARG(.C, LIST);
+        TRY(END_(.C));
+        IF .KW EQL K_IRP
+        THEN
+            VALUES = MAC_SPLIT(.LIST[0], .LIST[1], COPIES)
+        ELSE
+            BEGIN
+            COPIES = .LIST[1];
+            VALUES = MEM_ALLOC(.COPIES * 16 + 16);
+            INCR I FROM 0 TO .COPIES - 1 DO
+                BEGIN
+                VALUES[2 * .I] = .LIST[0] + .I;
+                VALUES[2 * .I + 1] = 1
+                END
+            END
+        END;
+    TRY(COLLECT(UPLIT (K_IRP, K_IRPC, K_REPEAT, K_REPT), K_ENDR, NTEXT(.W), .W[N_LEN], .COL, BODY,
+        COUNT, REST));
+    VIA = NEW_VIA(NTEXT(.W), .W[N_LEN]);
+    LINES = MEM_ALLOC(.COPIES * .COUNT * 8 + 8);
+    INCR I FROM 0 TO .COPIES - 1 DO
+        IF .SYM EQL 0
+        THEN
+            EXPAND(.BODY, .COUNT, 0, 0, 0, .VIA, .LINES + .I * .COUNT * 8)
+        ELSE
+            EXPAND(.BODY, .COUNT, 1, SYM, VALUES[2 * .I], .VIA, .LINES + .I * .COUNT * 8);
+    PUSH(.LINES, .COPIES * .COUNT, -1, .COL)
+    END;
+
+! MACRO-style strings: text between a delimiter of choice (/text/,
+! "text") and <expr> for one byte, in any sequence. Stores the bytes'
+! address and length.
+ROUTINE STRINGS (C : REF VECTOR, OUT : REF VECTOR) =
+    BEGIN
+    LOCAL
+        BUF,
+        N,
+        D;
+    BUF = MEM_ALLOC(CLEFT(C) + 1);
+    N = 0;
+    WHILE (D = LEX_PEEK(.C)) NEQ -1 DO
+        BEGIN
+        LOCAL
+            COL;
+        COL = CCOL(C);
+        C[C_AT] = .C[C_AT] + 1;
+        IF .D EQL %C'<'
+        THEN
+            BEGIN
+            LOCAL
+                E,
+                HERE : VECTOR[V_SIZE],
+                V : VECTOR[V_SIZE];
+            E = EXPR_PARSE(.C, .LBLOCK);
+            IF .E EQL 0 THEN RETURN FALSE;
+            TRY(LEX_EXPECT(.C, %C'>'));
+            LOC(HERE);
+            TRY(EVAL(.E, .COL, HERE, V));
+            IF .V[V_KIND] NEQ VK_ABS OR .V[V_OFF] LSS -128 OR .V[V_OFF] GTR 255
+            THEN
+                RETURN FAIL_TEXT(.COL, T('expected a byte value'));
+            PUTB(.BUF + .N, .V[V_OFF]);
+            N = .N + 1
+            END
+        ELSE
+            BEGIN
+            LOCAL
+                P,
+                LEN;
+            P = CREST(C);
+            LEN = 0;
+            WHILE .LEN LSS CLEFT(C) AND GETB(.P + .LEN) NEQ .D DO
+                LEN = .LEN + 1;
+            IF .LEN EQL CLEFT(C)
+            THEN
+                BEGIN
+                MSG_BEGIN();
+                MSG_TEXT(T('missing closing '));
+                MSG_CHAR(.D);
+                RETURN FAIL(.COL)
+                END;
+            CH$MOVE(.LEN, .P, .BUF + .N);
+            N = .N + .LEN;
+            C[C_AT] = .C[C_AT] + .LEN + 1
+            END
+        END;
+    OUT[0] = .BUF;
+    OUT[1] = .N;
+    TRUE
+    END;
+
+! The directory of a path, and a path in it, as Rust's Path::parent and
+! Path::join make them.
+ROUTINE JOIN (DIR, DLEN, NAME, NLEN, OUT : REF VECTOR) : NOVALUE =
+    BEGIN
+    LOCAL
+        P,
+        N;
+    IF .DLEN EQL 0 OR (.NLEN GTR 0 AND GETB(.NAME) EQL %C'/')
+    THEN
+        BEGIN
+        OUT[0] = .NAME;
+        OUT[1] = .NLEN;
+        RETURN
+        END;
+    P = MEM_ALLOC(.DLEN + .NLEN + 2);
+    CH$MOVE(.DLEN, .DIR, .P);
+    N = .DLEN;
+    IF GETB(.DIR + .DLEN - 1) NEQ %C'/'
+    THEN
+        BEGIN
+        PUTB(.P + .N, %C'/');
+        N = .N + 1
+        END;
+    CH$MOVE(.NLEN, .NAME, .P + .N);
+    OUT[0] = .P;
+    OUT[1] = .N + .NLEN
+    END;
+
+! .LIBRARY "file": macro definitions from a file, found next to the
+! current one or in an include directory.
+ROUTINE LIBRARY (C : REF VECTOR, COL) =
+    BEGIN
+    LOCAL
+        SPEC : VECTOR[2],
+        FILE : REF VECTOR,
+        DLEN,
+        TEXT,
+        LEN,
+        LINES,
+        COUNT;
+    TRY(STRINGS(.C, SPEC));
+    TRY(END_(.C));
+    FILE = .SRC[L_FILE];
+    ! The current file's directory: up to its last /.
+    DLEN = 0;
+    IF .FILE NEQ 0
+    THEN
+        INCR I FROM 0 TO .FILE[N_LEN] - 1 DO
+            IF GETB(NTEXT(.FILE) + .I) EQL %C'/' THEN DLEN = (IF .I EQL 0 THEN 1 ELSE .I);
+    INCR I FROM -1 TO .NINCLUDE - 1 DO
+        BEGIN
+        LOCAL
+            PATH : VECTOR[2];
+        IF .I LSS 0
+        THEN
+            JOIN(NTEXT(.FILE), .DLEN, .SPEC[0], .SPEC[1], PATH)
+        ELSE
+            BEGIN
+            LOCAL
+                D : REF VECTOR;
+            D = .INCLUDE[.I];
+            JOIN(NTEXT(.D), .D[N_LEN], .SPEC[0], .SPEC[1], PATH)
+            END;
+        IF FILE_READ(.PATH[0], .PATH[1], TEXT, LEN)
+        THEN
+            BEGIN
+            LINES = MAC_LINES(NAME_INTERN(.PATH[0], .PATH[1]), .TEXT, .LEN, COUNT);
+            TRY(PUSH(.LINES, .COUNT, -1, .COL));
+            VECTOR[TOP(), FR_LIBRARY] = TRUE;
+            RETURN TRUE
+            END
+        END;
+    MSG_BEGIN();
+    MSG_TEXT(T('macro library '));
+    MSG_TEXT(.SPEC[0], .SPEC[1]);
+    MSG_TEXT(T(' not found'));
+    FAIL(.COL)
+    END;
+
+! ----- directives -----
+
+! Switches to psect name, creating it with flags and align, or its
+! defaults if flags is -1.
+ROUTINE OPEN (N : REF VECTOR, FLAGS, ALIGN, COL) =
+    BEGIN
+    LOCAL
+        P : REF VECTOR;
+    IF .N[N_LEN] GTR 31 THEN RETURN FAIL_TEXT(.COL, T('psect names are at most 31 characters'));
+    NEW_BLOCK();
+    INCR I FROM 0 TO .ASM_NPSECTS - 1 DO
+        BEGIN
+        P = .ASM_PSECTS[.I];
+        IF .P[PS_NAME] EQL .N
+        THEN
+            BEGIN
+            IF .FLAGS GEQ 0 AND (.FLAGS NEQ .P[PS_FLAGS] OR .ALIGN NEQ .P[PS_ALIGN])
+            THEN
+                BEGIN
+                MSG_BEGIN();
+                MSG_TEXT(T('psect '));
+                MSG_NAME(.N);
+                MSG_TEXT(T(' was declared with other attributes'));
+                RETURN FAIL(.COL)
+                END;
+            CUR = .I;
+            RETURN TRUE
+            END
+        END;
+    IF .FLAGS LSS 0
+    THEN
+        BEGIN
+        FLAGS =
+            (SELECTONE .N[N_KW] OF
+                SET
+                [K_CODE]: PSC_PIC OR PSC_REL OR PSC_SHR OR PSC_EXE;
+                [K_DATA]: PSC_REL OR PSC_RD OR PSC_WRT;
+                [K_LINK]: PSC_REL OR PSC_RD;
+                [K_LITERAL, K_READONLY]: PSC_PIC OR PSC_REL OR PSC_SHR OR PSC_RD;
+                [K_BSS]: PSC_REL OR PSC_RD OR PSC_WRT OR PSC_NOMOD;
+                [K_ABSPS]: PSC_SHR;
+                [OTHERWISE]: PSC_REL OR PSC_RD OR PSC_WRT;
+                TES);
+        ALIGN = 3
+        END;
+    IF (.FLAGS AND PSC_EXE) NEQ 0 AND (.FLAGS AND PSC_WRT) NEQ 0
+    THEN
+        RETURN FAIL_TEXT(.COL, T('a psect can''t be both EXE and WRT'));
+    IF .ASM_NPSECTS EQL MAX_PSECTS THEN RETURN FAIL_TEXT(.COL, T('too many psects'));
+    P = MEM_ALLOC(PS_RECSIZE * 8);
+    P[PS_NAME] = .N;
+    P[PS_FLAGS] = .FLAGS;
+    P[PS_ALIGN] = .ALIGN;
+    ASM_PSECTS[.ASM_NPSECTS] = .P;
+    CUR = .ASM_NPSECTS;
+    ASM_NPSECTS = .ASM_NPSECTS + 1;
+    TRUE
+    END;
+
+ROUTINE ALIGNMENT (N : REF VECTOR) =
+    SELECTONE .N[N_KW] OF
+        SET
+        [K_BYTE]: 0;
+        [K_WORD]: 1;
+        [K_LONG]: 2;
+        [K_QUAD]: 3;
+        [K_OCTA]: 4;
+        [K_PAGE]: 16;
+        [OTHERWISE]: -1;
+        TES;
+
+! PSECT attributes after the name: keywords and an alignment.
+ROUTINE ATTRIBUTES (C : REF VECTOR, FLAGS, ALIGN) =
+    BEGIN
+    .FLAGS = PSC_REL OR PSC_RD OR PSC_WRT;
+    .ALIGN = 3;
+    WHILE 1 DO
+        BEGIN
+        LOCAL
+            COL,
+            SAVE,
+            W : REF VECTOR;
+        LEX_SKIP_WS(.C);
+        COL = CCOL(C);
+        SAVE = .C[C_AT];
+        W = LEX_NAME(.C);
+        IF .W NEQ 0
+        THEN
+            BEGIN
+            IF ALIGNMENT(.W) GEQ 0
+            THEN
+                .ALIGN = ALIGNMENT(.W)
+            ELSE
+                BEGIN
+                LOCAL
+                    ON,
+                    OFF;
+                ON = 0;
+                OFF = 0;
+                SELECTONE .W[N_KW] OF
+                    SET
+                    [K_PIC]: ON = PSC_PIC;
+                    [K_NOPIC]: OFF = PSC_PIC;
+                    [K_OVR]: ON = PSC_OVR;
+                    [K_CON]: OFF = PSC_OVR;
+                    [K_REL]: ON = PSC_REL;
+                    [K_ABS]: OFF = PSC_REL;
+                    [K_GBL]: ON = PSC_GBL;
+                    [K_LCL]: OFF = PSC_GBL;
+                    [K_SHR]: ON = PSC_SHR;
+                    [K_NOSHR]: OFF = PSC_SHR;
+                    [K_EXE]: ON = PSC_EXE;
+                    [K_NOEXE]: OFF = PSC_EXE;
+                    [K_RD]: ON = PSC_RD;
+                    [K_NORD]: OFF = PSC_RD;
+                    [K_WRT]: ON = PSC_WRT;
+                    [K_NOWRT]: OFF = PSC_WRT;
+                    [K_VEC]: ON = PSC_VEC;
+                    [K_NOVEC]: OFF = PSC_VEC;
+                    [K_NOMOD]: ON = PSC_NOMOD;
+                    [K_MIX, K_NOMIX]: 0;
+                    [OTHERWISE]:
+                        BEGIN
+                        MSG_BEGIN();
+                        MSG_TEXT(T('unknown psect attribute '));
+                        MSG_NAME(.W);
+                        RETURN FAIL(.COL)
+                        END;
+                    TES;
+                .FLAGS = (..FLAGS OR .ON) AND NOT .OFF
+                END
+            END
+        ELSE
+            BEGIN
+            LOCAL
+                N;
+            C[C_AT] = .SAVE;
+            TRY(CONSTANT(.C, T('the alignment'), N));
+            IF .N LSS 0 OR .N GTR 16
+            THEN
+                RETURN FAIL_TEXT(.COL, T('the alignment must be 0 to 16, a power of two'));
+            .ALIGN = .N
+            END;
+        IF NOT LEX_EAT(.C, %C',') THEN RETURN TRUE
+        END;
+    TRUE
+    END;
+
+ROUTINE DATA (C : REF VECTOR, SIZE) =
+    BEGIN
+    LOCAL
+        MOST,
+        EXPRS : REF VECTOR,
+        N,
+        S : REF VECTOR;
+    ! At most one more expression than there are commas.
+    MOST = 1;
+    INCR I FROM 0 TO CLEFT(C) - 1 DO
+        IF GETB(CREST(C) + .I) EQL %C',' THEN MOST = .MOST + 1;
+    EXPRS = MEM_ALLOC(.MOST * 16);
+    N = 0;
+    WHILE 1 DO
+        BEGIN
+        LOCAL
+            COL,
+            E;
+        LEX_SKIP_WS(.C);
+        COL = CCOL(C);
+        E = EXPR_PARSE(.C, .LBLOCK);
+        IF .E EQL 0 THEN RETURN FALSE;
+        EXPRS[2 * .N] = .E;
+        EXPRS[2 * .N + 1] = .COL;
+        N = .N + 1;
+        IF NOT LEX_EAT(.C, %C',') THEN EXITLOOP
+        END;
+    S = ITEM(SK_DATA, .N * .SIZE);
+    S[ST_A] = .SIZE;
+    S[ST_B] = .EXPRS;
+    S[ST_C] = .N;
+    TRUE
+    END;
+
+ROUTINE DIRECTIVE (W : REF VECTOR, C : REF VECTOR, COL) =
+    BEGIN
+    LOCAL
+        KW;
+    KW = .W[N_KW];
+    SELECTONE .KW OF
+        SET
+        [K_TITLE]:
+            BEGIN
+            LOCAL
+                N : REF VECTOR;
+            N = LEX_NAME(.C);
+            IF .N EQL 0 THEN RETURN FAIL_TEXT(CCOL(C), T('expected a module name'));
+            IF .N[N_LEN] GTR 31
+            THEN
+                RETURN FAIL_TEXT(.COL, T('module names are at most 31 characters'));
+            ASM_TITLE = .N;
+            C[C_AT] = .C[C_LEN]         ! the rest is the title text
+            END;
+        [K_IDENT]:
+            BEGIN
+            LOCAL
+                S : VECTOR[2];
+            TRY(STRINGS(.C, S));
+            IF .S[1] GTR 31 THEN RETURN FAIL_TEXT(.COL, T('idents are at most 31 characters'));
+            ASM_IDENT = .S[0];
+            ASM_IDENTLEN = .S[1]
+            END;
+        [K_PSECT]:
+            BEGIN
+            LOCAL
+                N,
+                FLAGS,
+                ALIGN;
+            N = LEX_NAME(.C);
+            IF .N EQL 0 THEN RETURN FAIL_TEXT(CCOL(C), T('expected a psect name'));
+            FLAGS = -1;
+            ALIGN = 0;
+            IF LEX_EAT(.C, %C',') THEN TRY(ATTRIBUTES(.C, FLAGS, ALIGN));
+            TRY(OPEN(.N, .FLAGS, .ALIGN, .COL))
+            END;
+        [K_SAVE_PSECT]:
+            BEGIN
+            LOCAL
+                N : REF VECTOR;
+            N = LEX_NAME(.C);
+            IF .NSAVED EQL MAX_SAVED THEN RETURN FAIL_TEXT(.COL, T('too many .SAVE_PSECTs'));
+            SAVED[2 * .NSAVED] = .CUR;
+            SAVED[2 * .NSAVED + 1] = -1;
+            IF .N NEQ 0 THEN IF .N[N_KW] EQL K_LOCAL_BLOCK THEN SAVED[2 * .NSAVED + 1] = .LBLOCK;
+            NSAVED = .NSAVED + 1
+            END;
+        [K_RESTORE_PSECT]:
+            BEGIN
+            IF .NSAVED EQL 0 THEN RETURN FAIL_TEXT(.COL, T('.RESTORE_PSECT without .SAVE_PSECT'));
+            NSAVED = .NSAVED - 1;
+            CUR = .SAVED[2 * .NSAVED];
+            IF .SAVED[2 * .NSAVED + 1] GEQ 0 THEN LBLOCK = .SAVED[2 * .NSAVED + 1] ELSE NEW_BLOCK()
+            END;
+        [K_GLOBAL, K_GLOBL, K_EXTERNAL, K_EXTERN, K_WEAK]:
+            WHILE 1 DO
+                BEGIN
+                LOCAL
+                    NCOL,
+                    S : REF VECTOR;
+                LEX_SKIP_WS(.C);
+                NCOL = CCOL(C);
+                S = LEX_NAME(.C);
+                IF .S EQL 0 THEN RETURN FAIL_TEXT(.NCOL, T('expected a symbol name'));
+                SYMBOL(.S);
+                SELECTONE .KW OF
+                    SET
+                    [K_WEAK]: S[N_FLAGS] = .S[N_FLAGS] OR F_WEAK;
+                    [K_GLOBAL, K_GLOBL]: S[N_FLAGS] = .S[N_FLAGS] OR F_GLOBAL;
+                    [OTHERWISE]:
+                        BEGIN
+                        IF .S[N_VALUE + V_KIND] NEQ VK_NONE
+                        THEN
+                            BEGIN
+                            MSG_BEGIN();
+                            MSG_NAME(.S);
+                            MSG_TEXT(T(' is defined here, so it can''t be external'));
+                            RETURN FAIL(.NCOL)
+                            END;
+                        S[N_FLAGS] = .S[N_FLAGS] OR F_EXTERNAL
+                        END;
+                    TES;
+                IF NOT LEX_EAT(.C, %C',') THEN EXITLOOP
+                END;
+        [K_DBYTE]: TRY(DATA(.C, 1));
+        [K_DWORD]: TRY(DATA(.C, 2));
+        [K_DLONG]: TRY(DATA(.C, 4));
+        [K_DQUAD, K_ADDRESS]: TRY(DATA(.C, 8));
+        [K_ASCII, K_ASCIZ, K_ASCIC, K_ASCID, K_ASCID64]:
+            BEGIN
+            LOCAL
+                SCOL,
+                S : VECTOR[2],
+                ST : REF VECTOR;
+            LEX_SKIP_WS(.C);
+            SCOL = CCOL(C);
+            TRY(STRINGS(.C, S));
+            SELECTONE .KW OF
+                SET
+                [K_ASCIZ]:
+                    BEGIN
+                    ! STRINGS left room for one more byte, which is zero.
+                    S[1] = .S[1] + 1
+                    END;
+                [K_ASCIC]:
+                    BEGIN
+                    LOCAL
+                        P;
+                    IF .S[1] GTR 255
+                    THEN
+                        RETURN FAIL_TEXT(.COL, T('.ASCIC strings are at most 255 bytes'));
+                    P = MEM_ALLOC(.S[1] + 1);
+                    PUTB(.P, .S[1]);
+                    CH$MOVE(.S[1], .S[0], .P + 1);
+                    S[0] = .P;
+                    S[1] = .S[1] + 1
+                    END;
+                [K_ASCID]:
+                    IF .S[1] GTR 65535
+                    THEN
+                        RETURN FAIL_TEXT(.COL, T('.ASCID strings are at most 65535 bytes'));
+                TES;
+            IF .KW EQL K_ASCID OR .KW EQL K_ASCID64
+            THEN
+                BEGIN
+                ! The descriptor holds the text's address.
+                LOCAL
+                    PS,
+                    P : REF VECTOR;
+                PS = CURRENT();
+                P = .ASM_PSECTS[.PS];
+                IF (.P[PS_FLAGS] AND PSC_REL) NEQ 0
+                THEN
+                    NOTPIC(.PS, T('descriptor pointer needing a fixup'), .SCOL);
+                ST = ITEM(SK_ASCID, (IF .KW EQL K_ASCID64 THEN 24 ELSE 8) + .S[1]);
+                ST[ST_C] = .KW EQL K_ASCID64
+                END
+            ELSE
+                ST = ITEM(SK_BYTES, .S[1]);
+            ST[ST_A] = .S[0];
+            ST[ST_B] = .S[1]
+            END;
+        [K_BLKB, K_BLKW, K_BLKL, K_BLKQ]:
+            BEGIN
+            LOCAL
+                UNIT,
+                N;
+            UNIT = (SELECTONE .KW OF SET [K_BLKB]: 1; [K_BLKW]: 2; [K_BLKL]: 4; [K_BLKQ]: 8; TES);
+            IF LEX_AT_END(.C) THEN N = 1 ELSE TRY(CONSTANT(.C, T('the count'), N));
+            IF .N LSS 0 THEN RETURN FAIL_TEXT(.COL, T('the count is negative'));
+            ITEM(SK_SPACE, .N * .UNIT)
+            END;
+        [K_ALIGN]:
+            BEGIN
+            LOCAL
+                ACOL,
+                SAVE,
+                N : REF VECTOR,
+                ALIGN,
+                PS,
+                P : REF VECTOR,
+                PAD;
+            LEX_SKIP_WS(.C);
+            ACOL = CCOL(C);
+            SAVE = .C[C_AT];
+            N = LEX_NAME(.C);
+            ALIGN = (IF .N NEQ 0 THEN ALIGNMENT(.N) ELSE -1);
+            IF .ALIGN LSS 0
+            THEN
+                BEGIN
+                C[C_AT] = .SAVE;
+                TRY(CONSTANT(.C, T('the alignment'), ALIGN));
+                IF .ALIGN LSS 0 OR .ALIGN GTR 16
+                THEN
+                    RETURN FAIL_TEXT(.ACOL, T('the alignment must be 0 to 16, a power of two'))
+                END;
+            PS = CURRENT();
+            P = .ASM_PSECTS[.PS];
+            P[PS_ALIGN] = MAX(.P[PS_ALIGN], .ALIGN);
+            PAD = ((.P[PS_SIZE] + SLL(1, .ALIGN) - 1) AND NOT (SLL(1, .ALIGN) - 1)) - .P[PS_SIZE];
+            ITEM(SK_SPACE, .PAD)
+            END;
+        [K_WARN, K_ERROR]:
+            BEGIN
+            ! MACRO's warning or error: the text after the directive.
+            LOCAL
+                R : VECTOR[2];
+            TRIM(CREST(C), CLEFT(C), R);
+            C[C_AT] = .C[C_LEN];
+            FAIL_TEXT(.COL, .R[0], .R[1]);
+            DIAGNOSE(.KW EQL K_WARN)
+            END;
+        [K_END]:
+            BEGIN
+            IF NOT LEX_AT_END(.C)
+            THEN
+                BEGIN
+                LEX_SKIP_WS(.C);
+                TRANSFER_COL = CCOL(C);
+                TRANSFER_E = EXPR_PARSE(.C, .LBLOCK);
+                IF .TRANSFER_E EQL 0 THEN RETURN FALSE;
+                TRANSFER_LINE = .SRC
+                END;
+            ENDED = TRUE
+            END;
+        [OTHERWISE]:
+            BEGIN
+            MSG_BEGIN();
+            MSG_TEXT(T('unknown directive '));
+            MSG_NAME(.W);
+            RETURN FAIL(.COL)
+            END;
+        TES;
+    END_(.C)
+    END;
+
+! ----- statements -----
+
+ROUTINE DEF_LABEL (N : REF VECTOR, GLOBAL_, COL) =
+    BEGIN
+    LOCAL
+        LOCAL_,
+        V : VECTOR[V_SIZE];
+    LOCAL_ = EXPR_DISPLAY(.N) LSS .N[N_LEN];
+    IF .GLOBAL_ AND .LOCAL_ THEN RETURN FAIL_TEXT(.COL, T('a local label can''t be global'));
+    HERE(V);
+    TRY(DEFINE(.N, V, .COL, TRUE));
+    IF .GLOBAL_ THEN N[N_FLAGS] = .N[N_FLAGS] OR F_GLOBAL;
+    IF NOT .LOCAL_ THEN NEW_BLOCK();
+    TRUE
+    END;
+
+! NAME = value: assigned now, and again in pass 2, so an assignment can be
+! redefined and each use sees the value current at that point.
+ROUTINE ASSIGN (N : REF VECTOR, E, GLOBAL_, COL) =
+    BEGIN
+    LOCAL
+        HERE : VECTOR[V_SIZE],
+        V : VECTOR[V_SIZE],
+        S : REF VECTOR;
+    LOC(HERE);
+    TRY(EVAL(.E, .COL, HERE, V));
+    TRY(DEFINE(.N, V, .COL, FALSE));
+    IF .GLOBAL_ THEN N[N_FLAGS] = .N[N_FLAGS] OR F_GLOBAL;
+    S = NEW_STMT(SK_ASSIGN, 0, 0);
+    S[ST_A] = .N;
+    S[ST_B] = .E;
+    S[ST_C] = .COL;
+    VCOPY(S[ST_HERE], HERE);
+    TRUE
+    END;
+
+ROUTINE STATEMENT (C : REF VECTOR) =
+    BEGIN
+    LOCAL
+        COL,
+        W : REF VECTOR,
+        KW;
+    ! Labels: NAME: local to the module, NAME:: global, 10$: a local label.
+    WHILE 1 DO
+        BEGIN
+        LOCAL
+            SAVE,
+            LCOL,
+            D : VECTOR[2],
+            N;
+        SAVE = .C[C_AT];
+        LEX_SKIP_WS(.C);
+        LCOL = CCOL(C);
+        IF LOCAL_LABEL(.C, D) THEN N = EXPR_LOCAL_NAME(.D[0], .D[1], .LBLOCK) ELSE N = LEX_NAME(.C);
+        IF .N NEQ 0 AND CLEFT(C) GTR 0 AND GETB(CREST(C)) EQL %C':'
+        THEN
+            BEGIN
+            LOCAL
+                GLOBAL_;
+            C[C_AT] = .C[C_AT] + 1;
+            GLOBAL_ = FALSE;
+            IF CLEFT(C) GTR 0
+            THEN
+                IF GETB(CREST(C)) EQL %C':'
+                THEN
+                    BEGIN
+                    GLOBAL_ = TRUE;
+                    C[C_AT] = .C[C_AT] + 1
+                    END;
+            TRY(DEF_LABEL(.N, .GLOBAL_, .LCOL))
+            END
+        ELSE
+            BEGIN
+            C[C_AT] = .SAVE;
+            EXITLOOP
+            END
+        END;
+    IF LEX_AT_END(.C) THEN RETURN TRUE;
+    COL = CCOL(C);
+    W = LEX_NAME(.C);
+    IF .W EQL 0 THEN RETURN FAIL_TEXT(.COL, T('expected a label, directive or instruction'));
+    KW = .W[N_KW];
+    IF IN_LIBRARY() AND .KW NEQ K_MACRO
+    THEN
+        RETURN FAIL_TEXT(.COL, T('a macro library can only define macros'));
+    IF LEX_EAT(.C, %C'=')
+    THEN
+        BEGIN
+        ! NAME = value, or NAME == value to make it global.
+        LOCAL
+            GLOBAL_,
+            VCOL,
+            E;
+        GLOBAL_ = LEX_EAT(.C, %C'=');
+        LEX_SKIP_WS(.C);
+        VCOL = CCOL(C);
+        E = EXPR_PARSE(.C, .LBLOCK);
+        IF .E EQL 0 THEN RETURN FALSE;
+        TRY(END_(.C));
+        RETURN ASSIGN(.W, .E, .GLOBAL_, .VCOL)
+        END;
+    SELECTONE .KW OF
+        SET
+        [K_MACRO]: RETURN DEFINE_MACRO(.C, .COL);
+        [K_IRP, K_IRPC, K_REPEAT, K_REPT]: RETURN REPEAT(.W, .C, .COL);
+        [K_ENDM, K_ENDR]:
+            BEGIN
+            MSG_BEGIN();
+            MSG_NAME(.W);
+            MSG_TEXT(T(' without a block to end'));
+            RETURN FAIL(.COL)
+            END;
+        [K_MEXIT]:
+            BEGIN
+            TRY(END_(.C));
+            DECR I FROM .NFRAMES - 1 TO 0 DO
+                BEGIN
+                LOCAL
+                    F : REF VECTOR;
+                F = .FRAMES[.I];
+                IF .F[FR_NARG] GEQ 0
+                THEN
+                    BEGIN
+                    NCONDS = .F[FR_CONDS];
+                    NFRAMES = .I;
+                    RETURN TRUE
+                    END
+                END;
+            RETURN FAIL_TEXT(.COL, T('.MEXIT outside a macro'))
+            END;
+        [K_NARG]:
+            BEGIN
+            LOCAL
+                N,
+                NCOL,
+                S,
+                E : REF VECTOR;
+            N = -1;
+            DECR I FROM .NFRAMES - 1 TO 0 DO
+                BEGIN
+                LOCAL
+                    F : REF VECTOR;
+                F = .FRAMES[.I];
+                IF .F[FR_NARG] GEQ 0
+                THEN
+                    BEGIN
+                    N = .F[FR_NARG];
+                    EXITLOOP
+                    END
+                END;
+            IF .N LSS 0 THEN RETURN FAIL_TEXT(.COL, T('.NARG outside a macro'));
+            LEX_SKIP_WS(.C);
+            NCOL = CCOL(C);
+            S = LEX_NAME(.C);
+            IF .S EQL 0 THEN RETURN FAIL_TEXT(.NCOL, T('expected a symbol name'));
+            TRY(END_(.C));
+            E = MEM_ALLOC(E_SIZE * 8);
+            E[E_KIND] = EK_NUM;
+            E[E_X] = .N;
+            RETURN ASSIGN(.S, .E, FALSE, .NCOL)
+            END;
+        [K_IIF]:
+            BEGIN
+            LOCAL
+                YES;
+            TRY(CONDITION(.C, YES));
+            TRY(LEX_EXPECT(.C, %C','));
+            IF .YES THEN RETURN STATEMENT(.C) ELSE RETURN TRUE
+            END;
+        [K_LIBRARY]: RETURN LIBRARY(.C, .COL);
+        TES;
+    IF .W[N_MACRO] NEQ 0 THEN RETURN INVOKE(.W[N_MACRO], CREST(C), CLEFT(C), .COL);
+    IF GETB(NTEXT(.W)) EQL %C'.' THEN RETURN DIRECTIVE(.W, .C, .COL);
+    BEGIN
+    LOCAL
+        OPS,
+        N,
+        PS,
+        P : REF VECTOR,
+        S : REF VECTOR;
+    TRY(ENC_OPERANDS(.C, .LBLOCK, OPS, N));
+    PS = CURRENT();
+    P = .ASM_PSECTS[.PS];
+    IF (.P[PS_SIZE] AND 3) NEQ 0
+    THEN
+        RETURN FAIL_TEXT(.COL, T('instruction at an address that isn''t 4-byte aligned; use .ALIGN LONG'));
+    S = ITEM(SK_INSN, 4);
+    S[ST_A] = .W;
+    S[ST_B] = .COL;
+    S[ST_C] = .OPS;
+    S[ST_D] = .N
+    END;
+    TRUE
+    END;
+
+! One line: conditionals first, as they apply even while skipping.
+ROUTINE PROCESS (L : REF VECTOR) =
+    BEGIN
+    LOCAL
+        LEN,
+        C : VECTOR[C_SIZE],
+        COL,
+        W;
+    LEN = LEX_STRIP_COMMENT(.L[L_TEXT], .L[L_LEN]);
+    LEX_INIT(C, .L[L_TEXT], .LEN);
+    LEX_SKIP_WS(C);
+    COL = CCOL(C);
+    W = LEX_NAME(C);
+    IF .W NEQ 0
+    THEN
+        BEGIN
+        LOCAL
+            HANDLED;
+        TRY(CONDITIONAL(.W, C, .COL, HANDLED));
+        IF .HANDLED THEN RETURN TRUE
+        END;
+    IF NOT ACTIVE() THEN RETURN TRUE;
+    LEX_INIT(C, .L[L_TEXT], .LEN);
+    STATEMENT(C)
+    END;
+
+! ----- pass 2 -----
+
+! Bytes at offset in psect, joined to the bytes just before if there are.
+ROUTINE BYTES (PS, OFFSET, ADDR, LEN) : NOVALUE =
+    BEGIN
+    LOCAL
+        P : REF VECTOR,
+        K : REF VECTOR;
+    P = .ASM_PSECTS[.PS];
+    K = .P[PS_LAST];
+    IF .K NEQ 0
+    THEN
+        IF .K[CH_KIND] EQL CK_BYTES AND .K[CH_OFFSET] + .K[CH_LEN] EQL .OFFSET
+        THEN
+            BEGIN
+            IF .K[CH_LEN] + .LEN GTR .K[CH_CAP]
+            THEN
+                BEGIN
+                LOCAL
+                    CAP,
+                    B;
+                CAP = MAX(2 * .K[CH_CAP], .K[CH_LEN] + .LEN);
+                B = MEM_ALLOC(.CAP);
+                CH$MOVE(.K[CH_LEN], .K[CH_ADDR], .B);
+                K[CH_ADDR] = .B;
+                K[CH_CAP] = .CAP
+                END;
+            CH$MOVE(.LEN, .ADDR, .K[CH_ADDR] + .K[CH_LEN]);
+            K[CH_LEN] = .K[CH_LEN] + .LEN;
+            RETURN
+            END;
+    K = MEM_ALLOC(CH_RECSIZE * 8);
+    K[CH_OFFSET] = .OFFSET;
+    K[CH_KIND] = CK_BYTES;
+    K[CH_CAP] = MAX(.LEN, 64);
+    K[CH_ADDR] = MEM_ALLOC(.K[CH_CAP]);
+    K[CH_LEN] = .LEN;
+    CH$MOVE(.LEN, .ADDR, .K[CH_ADDR]);
+    IF .P[PS_LAST] EQL 0 THEN P[PS_FIRST] = .K ELSE VECTOR[.P[PS_LAST], CH_NEXT] = .K;
+    P[PS_LAST] = .K
+    END;
+
+! A chunk the linker stores: an instruction with a fixup, or data.
+ROUTINE CHUNK (PS, OFFSET, KIND, A, B, V) : NOVALUE =
+    BEGIN
+    LOCAL
+        P : REF VECTOR,
+        K : REF VECTOR;
+    P = .ASM_PSECTS[.PS];
+    K = MEM_ALLOC(CH_RECSIZE * 8);
+    K[CH_OFFSET] = .OFFSET;
+    K[CH_KIND] = .KIND;
+    K[CH_FIX] = .A;                     ! CH_SIZE for data
+    K[CH_WORD] = .B;
+    VCOPY(K[CH_VALUE], .V);
+    IF .P[PS_LAST] EQL 0 THEN P[PS_FIRST] = .K ELSE VECTOR[.P[PS_LAST], CH_NEXT] = .K;
+    P[PS_LAST] = .K
+    END;
+
+ROUTINE ENCODE (S : REF VECTOR) =
+    BEGIN
+    LOCAL
+        HERE : VECTOR[V_SIZE];
+    HERE[V_KIND] = VK_PSECT;
+    HERE[V_A] = .S[ST_PSECT];
+    HERE[V_OFF] = .S[ST_OFFSET];
+    CASE .S[ST_KIND] FROM SK_INSN TO SK_ASSIGN OF
+        SET
+        [SK_INSN]:
+            BEGIN
+            LOCAL
+                OUT : VECTOR[5],
+                FIX;
+            TRY(ENC_ENCODE(.S[ST_A], .S[ST_C], .S[ST_D], HERE, .S[ST_B], OUT));
+            FIX = .OUT[1];
+            IF .FIX EQL 0
+            THEN
+                BYTES(.S[ST_PSECT], .S[ST_OFFSET], OUT[0], 4)
+            ELSE
+                BEGIN
+                ! Bits 16 and up of an address change when it moves.
+                IF .FIX GEQ FIX_MOVW + 2 AND IS_ADDRESS(OUT[2])
+                THEN
+                    BEGIN
+                    LOCAL
+                        COL;
+                    COL = .S[ST_B];
+                    IF .S[ST_D] GTR 1 THEN COL = .VECTOR[.VECTOR[.S[ST_C], 1], O_COL];
+                    NOTPIC(.S[ST_PSECT], T('absolute address bits'), .COL)
+                    END;
+                CHUNK(.S[ST_PSECT], .S[ST_OFFSET], CK_INSN, .FIX, .OUT[0], OUT[2])
+                END
+            END;
+        [SK_DATA]:
+            BEGIN
+            LOCAL
+                SIZE,
+                EXPRS : REF VECTOR;
+            SIZE = .S[ST_A];
+            EXPRS = .S[ST_B];
+            INCR I FROM 0 TO .S[ST_C] - 1 DO
+                BEGIN
+                LOCAL
+                    COL,
+                    AT : VECTOR[V_SIZE],
+                    V : VECTOR[V_SIZE];
+                COL = .EXPRS[2 * .I + 1];
+                AT[V_KIND] = VK_PSECT;
+                AT[V_A] = .S[ST_PSECT];
+                AT[V_OFF] = .S[ST_OFFSET] + .I * .SIZE;
+                TRY(EVAL(.EXPRS[2 * .I], .COL, AT, V));
+                IF .V[V_KIND] EQL VK_ABS
+                THEN
+                    BEGIN
+                    LOCAL
+                        N,
+                        BITS;
+                    N = .V[V_OFF];
+                    BITS = 8 * .SIZE;
+                    IF .BITS LSS 64
+                    THEN
+                        IF .N LSS -SLL(1, .BITS - 1) OR .N GEQ SLL(1, .BITS)
+                        THEN
+                            BEGIN
+                            MSG_BEGIN();
+                            MSG_DEC(.N);
+                            MSG_TEXT(T(' doesn''t fit in '));
+                            MSG_DEC(.SIZE);
+                            MSG_TEXT(T(' bytes'));
+                            RETURN FAIL(.COL)
+                            END;
+                    BYTES(.S[ST_PSECT], .AT[V_OFF], V[V_OFF], .SIZE)
+                    END
+                ELSE
+                    BEGIN
+                    IF .SIZE GEQ 4 AND IS_ADDRESS(V)
+                    THEN
+                        NOTPIC(.S[ST_PSECT], T('address needing a fixup'), .COL);
+                    CHUNK(.S[ST_PSECT], .AT[V_OFF], CK_DATA, .SIZE, 0, V)
+                    END
+                END
+            END;
+        [SK_BYTES]:
+            BYTES(.S[ST_PSECT], .S[ST_OFFSET], .S[ST_A], .S[ST_B]);
+        [SK_ASCID]:
+            BEGIN
+            ! DSC$W_LENGTH, DSC$B_DTYPE (text), DSC$B_CLASS (static), then
+            ! DSC$A_POINTER, the 32-bit address of the text. The 64-bit form
+            ! starts like a 32-bit descriptor that can't be: DSC64$W_MBO (1),
+            ! the type and class, DSC64$L_MBMO (-1). Then DSC64$Q_LENGTH and
+            ! DSC64$PQ_POINTER.
+            LOCAL
+                DSC : VECTOR[16, BYTE],
+                DLEN,
+                SIZE,
+                POINTER,
+                TEXT_AT,
+                V : VECTOR[V_SIZE];
+            IF .S[ST_C]
+            THEN
+                BEGIN
+                DSC[0] = 1;
+                DSC[1] = 0;
+                DSC[2] = 14;
+                DSC[3] = 1;
+                (DSC[4])<0, 32> = %X'FFFFFFFF';
+                (DSC[8])<0, 64> = .S[ST_B];
+                DLEN = 16;
+                SIZE = 8
+                END
+            ELSE
+                BEGIN
+                (DSC[0])<0, 16> = .S[ST_B];
+                DSC[2] = 14;
+                DSC[3] = 1;
+                DLEN = 4;
+                SIZE = 4
+                END;
+            BYTES(.S[ST_PSECT], .S[ST_OFFSET], DSC, .DLEN);
+            POINTER = .S[ST_OFFSET] + .DLEN;
+            TEXT_AT = .POINTER + .SIZE;
+            V[V_KIND] = VK_PSECT;
+            V[V_A] = .S[ST_PSECT];
+            V[V_OFF] = .TEXT_AT;
+            CHUNK(.S[ST_PSECT], .POINTER, CK_DATA, .SIZE, 0, V);
+            BYTES(.S[ST_PSECT], .TEXT_AT, .S[ST_A], .S[ST_B])
+            END;
+        [SK_SPACE]:
+            0;
+        [SK_ASSIGN]:
+            BEGIN
+            LOCAL
+                N : REF VECTOR,
+                V : VECTOR[V_SIZE];
+            TRY(EVAL(.S[ST_B], .S[ST_C], S[ST_HERE], V));
+            N = .S[ST_A];
+            VCOPY(N[N_VALUE], V)
+            END;
+        TES;
+    TRUE
+    END;
+
+ROUTINE PASS2 : NOVALUE =
+    BEGIN
+    LOCAL
+        END_SEQ,
+        S : REF VECTOR;
+    END_SEQ = .SEQ;
+    S = .STMTS;
+    WHILE .S NEQ 0 DO
+        BEGIN
+        SRC = .S[ST_LINE];
+        SEQ = .S[ST_SEQ];
+        IF NOT ENCODE(.S) THEN ERROR();
+        S = .S[ST_NEXT]
+        END;
+    ASM_TRANSFER = -1;
+    IF .TRANSFER_E NEQ 0
+    THEN
+        BEGIN
+        LOCAL
+            ZERO : VECTOR[V_SIZE],
+            V : VECTOR[V_SIZE];
+        ! .END is the last line read.
+        SRC = .TRANSFER_LINE;
+        SEQ = .END_SEQ;
+        ZERO[V_KIND] = VK_ABS;
+        ZERO[V_A] = 0;
+        ZERO[V_OFF] = 0;
+        IF NOT EVAL(.TRANSFER_E, .TRANSFER_COL, ZERO, V)
+        THEN
+            ERROR()
+        ELSE IF .V[V_KIND] EQL VK_PSECT
+        THEN
+            BEGIN
+            ASM_TRANSFER = .V[V_A];
+            ASM_TRANSFER_OFF = .V[V_OFF]
+            END
+        ELSE
+            BEGIN
+            FAIL_TEXT(.TRANSFER_COL, T('the transfer address must be a label in this module'));
+            ERROR()
+            END
+        END
+    END;
+
+! ASM_ASSEMBLE text, length, file, include, count: assembles the text, read
+! from file, a name; .LIBRARY files are looked up next to it, then in the
+! include directories, a vector of names. Returns true unless there were
+! errors; ASM_DIAGS has them, with the warnings.
+GLOBAL ROUTINE ASM_ASSEMBLE (TEXT, LEN, FILE, INCL, NINCL) =
+    BEGIN
+    LOCAL
+        LINES,
+        COUNT;
+    CUR = -1;
+    NEXT_LABEL = 30000;
+    INCLUDE = .INCL;
+    NINCLUDE = .NINCL;
+    LINES = MAC_LINES(.FILE, .TEXT, .LEN, COUNT);
+    PUSH(.LINES, .COUNT, -1, 1);
+    WHILE 1 DO
+        BEGIN
+        LOCAL
+            L;
+        L = NEXT_LINE();
+        IF .L EQL 0 THEN EXITLOOP;
+        SRC = .L;
+        IF NOT PROCESS(.L) THEN ERROR();
+        IF .ENDED THEN EXITLOOP
+        END;
+    IF .NCONDS GTR 0
+    THEN
+        BEGIN
+        FAIL_TEXT(1, T('missing .ENDC'));
+        ERROR()
+        END;
+    ! A global or weak symbol this module doesn't define is a reference.
+    BEGIN
+    LOCAL
+        N : REF VECTOR;
+    N = .ASM_ORDER;
+    WHILE .N NEQ 0 DO
+        BEGIN
+        IF .N[N_VALUE + V_KIND] EQL VK_NONE AND (.N[N_FLAGS] AND (F_GLOBAL OR F_WEAK)) NEQ 0
+        THEN
+            N[N_FLAGS] = .N[N_FLAGS] OR F_EXTERNAL;
+        N = .N[N_ORDER]
+        END
+    END;
+    INCR I FROM 0 TO .ASM_NPSECTS - 1 DO
+        BEGIN
+        LOCAL
+            P : REF VECTOR;
+        P = .ASM_PSECTS[.I];
+        IF .P[PS_SIZE] GTRU %X'FFFFFFFF'
+        THEN
+            BEGIN
+            MSG_BEGIN();
+            MSG_TEXT(T('psect '));
+            MSG_NAME(.P[PS_NAME]);
+            MSG_TEXT(T(' is larger than 4 GB'));
+            FAIL(1);
+            ERROR()
+            END
+        END;
+    PASS2();
+    .ERRORS EQL 0
+    END;
+
+END
+ELUDOM

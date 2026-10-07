@@ -1,0 +1,340 @@
+MODULE VASM (MAIN = VASM, IDENT = 'V1.0') =
+%TITLE 'VASM: the command'
+BEGIN
+!
+! cli.rs: one source file into an object module.
+!
+!     VASM [/OBJECT=file | -o file] [/INCLUDE=dir | -I dir]...
+!          [/NOWARNINGS=NOTPIC | --nowarnings NOTPIC] SOURCE
+!
+! Under vrun, the files are in the directory vrun --files gives.
+!
+REQUIRE 'VASM';
+
+EXTERNAL ROUTINE
+    UTIL_ROUTINES,
+    ASM_ROUTINES,
+    EMIT_ROUTINES;
+
+EXTERNAL
+    ASM_DIAGS;
+
+LITERAL
+    MAX_INCLUDE = 64,
+    FAILURE = %X'10000002';             ! an error, its message already given
+
+OWN
+    LINE,                               ! a line being written,
+    LINE_LEN,                           ! its length
+    LINE_CAP;                           ! and how much fits
+
+! The tool that made the object module, in its header: vasm's, as VASM's
+! object modules are vasm's.
+BIND
+    TOOL = UPLIT BYTE ('vasm 0.1.0');
+
+LITERAL
+    TOOL_LEN = 10;
+
+ROUTINE ADD (TEXT, LEN) : NOVALUE =
+    BEGIN
+    IF .LINE_LEN + .LEN GTR .LINE_CAP
+    THEN
+        BEGIN
+        LOCAL
+            P;
+        LINE_CAP = MAX(2 * .LINE_CAP, .LINE_LEN + .LEN, 256);
+        P = MEM_ALLOC(.LINE_CAP);
+        CH$MOVE(.LINE_LEN, .LINE, .P);
+        LINE = .P
+        END;
+    CH$MOVE(.LEN, .TEXT, .LINE + .LINE_LEN);
+    LINE_LEN = .LINE_LEN + .LEN
+    END;
+
+ROUTINE ADD_DEC (V) : NOVALUE =
+    BEGIN
+    LOCAL
+        BUF : VECTOR[24, BYTE],
+        I,
+        X;
+    I = 24;
+    X = .V;
+    DO
+        BEGIN
+        I = .I - 1;
+        BUF[.I] = %C'0' + .X MOD 10;
+        X = .X / 10
+        END
+    UNTIL .X EQL 0;
+    ADD(BUF[.I], 24 - .I)
+    END;
+
+ROUTINE ADD_NAME (N : REF VECTOR) : NOVALUE =
+    IF .N NEQ 0 THEN ADD(NTEXT(.N), .N[N_LEN]);
+
+ROUTINE PUT_LINE : NOVALUE =
+    BEGIN
+    OUT_LINE(.LINE, .LINE_LEN);
+    LINE_LEN = 0
+    END;
+
+ROUTINE FATAL (TEXT, LEN) : NOVALUE =
+    BEGIN
+    LINE_LEN = 0;
+    ADD(T('%VASM-F-'));
+    ADD(.TEXT, .LEN);
+    PUT_LINE();
+    FIO$EXIT(FAILURE)
+    END;
+
+ROUTINE USAGE : NOVALUE =
+    FATAL(T('USAGE, usage: vasm [/OBJECT=file | -o file] [/INCLUDE=dir | -I dir]... [/NOWARNINGS=NOTPIC | --nowarnings NOTPIC] [/ENABLE=what | --enable what] SOURCE'));
+
+! A file error: what, the file, and the status.
+ROUTINE FILE_ERROR (WHAT, WLEN, NAME, NLEN, STATUS) : NOVALUE =
+    BEGIN
+    LINE_LEN = 0;
+    ADD(T('%VASM-F-'));
+    ADD(.WHAT, .WLEN);
+    ADD(T(', '));
+    ADD(.NAME, .NLEN);
+    ADD(T(': status %X'));
+    INCR K FROM 0 TO 7 DO
+        BEGIN
+        LOCAL
+            D;
+        D = SRL(.STATUS, 28 - 4 * .K) AND 15;
+        ADD(CH$PTR(UPLIT BYTE ('0123456789ABCDEF'), .D), 1)
+        END;
+    PUT_LINE();
+    FIO$EXIT(FAILURE)
+    END;
+
+! A diagnostic: where, the line, a mark under the column, and the macro
+! calls and repeat blocks it is inside of, innermost first.
+ROUTINE PRINT (D : REF VECTOR) : NOVALUE =
+    BEGIN
+    LOCAL
+        L : REF VECTOR,
+        VIA : REF VECTOR;
+    L = .D[D_LINE];
+    LINE_LEN = 0;
+    ADD_NAME(.L[L_FILE]);
+    ADD(T(':'));
+    ADD_DEC(.L[L_NUM]);
+    ADD(T(':'));
+    ADD_DEC(.D[D_COL]);
+    IF .D[D_WARN] THEN ADD(T(': warning: ')) ELSE ADD(T(': error: '));
+    ADD(.D[D_MSG], .D[D_MSGLEN]);
+    PUT_LINE();
+    ADD(T('    '));
+    ADD(.L[L_TEXT], .L[L_LEN]);
+    PUT_LINE();
+    ADD(T('    '));
+    INCR I FROM 0 TO MIN(.D[D_COL] - 1, .L[L_LEN]) - 1 DO
+        ADD((IF GETB(.L[L_TEXT] + .I) EQL 9 THEN UPLIT BYTE (9) ELSE UPLIT BYTE (' ')), 1);
+    ADD(T('^'));
+    PUT_LINE();
+    VIA = .L[L_VIA];
+    WHILE .VIA NEQ 0 DO
+        BEGIN
+        LOCAL
+            AT : REF VECTOR;
+        AT = .VIA[VIA_LINE];
+        ADD(T('  in '));
+        ADD(.VIA[VIA_WHAT], .VIA[VIA_WHATLEN]);
+        ADD(T(', at '));
+        ADD_NAME(.AT[L_FILE]);
+        ADD(T(':'));
+        ADD_DEC(.AT[L_NUM]);
+        PUT_LINE();
+        VIA = .AT[L_VIA]
+        END
+    END;
+
+! Whether the argument starts with the qualifier, in any case; stores the
+! value after it.
+ROUTINE QUALIFIER (A : REF VECTOR, Q, QLEN, VALUE : REF VECTOR) =
+    BEGIN
+    IF .A[1] LSS .QLEN THEN RETURN FALSE;
+    IF NOT UPCASE_EQL(.A[0], .QLEN, .Q, .QLEN) THEN RETURN FALSE;
+    VALUE[0] = .A[0] + .QLEN;
+    VALUE[1] = .A[1] - .QLEN;
+    TRUE
+    END;
+
+ROUTINE IS (A : REF VECTOR, TEXT, LEN) =
+    .A[1] EQL .LEN AND CH$EQL(.LEN, .A[0], .LEN, .TEXT);
+
+ROUTINE VASM =
+    BEGIN
+    LOCAL
+        CMD,
+        CMDLEN,
+        ARGS : REF VECTOR,
+        NARGS,
+        I,
+        SOURCE : VECTOR[2],
+        OUTPUT : VECTOR[2],
+        INCLUDE : VECTOR[MAX_INCLUDE],
+        NINCLUDE,
+        WARNINGS,
+        TEXT,
+        LEN,
+        STATUS,
+        STEM : VECTOR[2],
+        DATE : VECTOR[17, BYTE],
+        OK,
+        CHAN;
+    NAME_INIT();
+    ! The arguments, which vrun joins with single blanks.
+    FIO$ARGS(CMD, CMDLEN);
+    ARGS = MEM_ALLOC(.CMDLEN * 8 + 16);
+    NARGS = 0;
+    I = 0;
+    WHILE .I LSS .CMDLEN DO
+        BEGIN
+        LOCAL
+            START;
+        WHILE .I LSS .CMDLEN AND GETB(.CMD + .I) EQL %C' ' DO
+            I = .I + 1;
+        START = .I;
+        WHILE .I LSS .CMDLEN AND GETB(.CMD + .I) NEQ %C' ' DO
+            I = .I + 1;
+        IF .I GTR .START
+        THEN
+            BEGIN
+            ARGS[2 * .NARGS] = .CMD + .START;
+            ARGS[2 * .NARGS + 1] = .I - .START;
+            NARGS = .NARGS + 1
+            END
+        END;
+    SOURCE[0] = 0;
+    OUTPUT[0] = 0;
+    NINCLUDE = 0;
+    WARNINGS = TRUE;
+    I = 0;
+    WHILE .I LSS .NARGS DO
+        BEGIN
+        LOCAL
+            A : REF VECTOR,
+            V : VECTOR[2];
+        A = ARGS[2 * .I];
+        I = .I + 1;
+        IF QUALIFIER(.A, T('/OBJECT='), V)
+        THEN
+            (OUTPUT[0] = .V[0]; OUTPUT[1] = .V[1])
+        ELSE IF QUALIFIER(.A, T('/INCLUDE='), V)
+        THEN
+            BEGIN
+            IF .NINCLUDE EQL MAX_INCLUDE THEN USAGE();
+            INCLUDE[.NINCLUDE] = NAME_INTERN(.V[0], .V[1]);
+            NINCLUDE = .NINCLUDE + 1
+            END
+        ELSE IF QUALIFIER(.A, T('/NOWARNINGS='), V)
+        THEN
+            BEGIN
+            IF NOT UPCASE_EQL(.V[0], .V[1], T('NOTPIC')) THEN USAGE();
+            WARNINGS = FALSE
+            END
+        ELSE IF QUALIFIER(.A, T('/ENABLE='), V) OR IS(.A, T('--enable'))
+        THEN
+            ! vasm has no dialect to enable anything in.
+            USAGE()
+        ELSE IF IS(.A, T('-o'))
+        THEN
+            BEGIN
+            IF .I EQL .NARGS THEN USAGE();
+            OUTPUT[0] = .ARGS[2 * .I];
+            OUTPUT[1] = .ARGS[2 * .I + 1];
+            I = .I + 1
+            END
+        ELSE IF IS(.A, T('-I'))
+        THEN
+            BEGIN
+            IF .I EQL .NARGS OR .NINCLUDE EQL MAX_INCLUDE THEN USAGE();
+            INCLUDE[.NINCLUDE] = NAME_INTERN(.ARGS[2 * .I], .ARGS[2 * .I + 1]);
+            NINCLUDE = .NINCLUDE + 1;
+            I = .I + 1
+            END
+        ELSE IF IS(.A, T('--nowarnings'))
+        THEN
+            BEGIN
+            IF .I EQL .NARGS THEN USAGE();
+            IF NOT UPCASE_EQL(.ARGS[2 * .I], .ARGS[2 * .I + 1], T('NOTPIC')) THEN USAGE();
+            WARNINGS = FALSE;
+            I = .I + 1
+            END
+        ELSE IF .SOURCE[0] EQL 0 AND GETB(.A[0]) NEQ %C'-'
+        THEN
+            (SOURCE[0] = .A[0]; SOURCE[1] = .A[1])
+        ELSE
+            USAGE()
+        END;
+    IF .SOURCE[0] EQL 0 THEN USAGE();
+    STATUS = FILE_READ(.SOURCE[0], .SOURCE[1], TEXT, LEN);
+    IF NOT .STATUS THEN FILE_ERROR(T('OPENIN'), .SOURCE[0], .SOURCE[1], .STATUS);
+    ! The file's stem: its name without the directory or the last
+    ! extension, in upper case and at most 31 characters, names the module
+    ! if it has no .TITLE.
+    BEGIN
+    LOCAL
+        A,
+        B,
+        P;
+    A = 0;
+    INCR J FROM 0 TO .SOURCE[1] - 1 DO
+        IF GETB(.SOURCE[0] + .J) EQL %C'/' THEN A = .J + 1;
+    B = .SOURCE[1];
+    DECR J FROM .SOURCE[1] - 1 TO .A + 1 DO
+        IF GETB(.SOURCE[0] + .J) EQL %C'.'
+        THEN
+            BEGIN
+            B = .J;
+            EXITLOOP
+            END;
+    ! With no extension, the object file is the source's name with .obj.
+    IF .OUTPUT[0] EQL 0
+    THEN
+        BEGIN
+        OUTPUT[0] = MEM_ALLOC(.B + 4);
+        CH$MOVE(.B, .SOURCE[0], .OUTPUT[0]);
+        CH$MOVE(4, UPLIT BYTE ('.obj'), .OUTPUT[0] + .B);
+        OUTPUT[1] = .B + 4
+        END;
+    P = MEM_COPY(.SOURCE[0] + .A, MIN(.B - .A, 31));
+    INCR J FROM 0 TO MIN(.B - .A, 31) - 1 DO
+        BEGIN
+        LOCAL
+            CH;
+        CH = GETB(.P + .J);
+        IF .CH GEQ %C'a' AND .CH LEQ %C'z' THEN PUTB(.P + .J, .CH - 32)
+        END;
+    STEM[0] = .P;
+    STEM[1] = MIN(.B - .A, 31)
+    END;
+    FIO$DATE(DATE);
+    OK = ASM_ASSEMBLE(.TEXT, .LEN, NAME_INTERN(.SOURCE[0], .SOURCE[1]), INCLUDE, .NINCLUDE);
+    BEGIN
+    LOCAL
+        D : REF VECTOR;
+    D = .ASM_DIAGS;
+    WHILE .D NEQ 0 DO
+        BEGIN
+        IF .WARNINGS OR NOT .D[D_WARN] THEN PRINT(.D);
+        D = .D[D_NEXT]
+        END
+    END;
+    IF NOT .OK THEN RETURN FAILURE;
+    STATUS = FIO$OPEN(.OUTPUT[0], .OUTPUT[1], FIO$K_WRITE, CHAN);
+    IF NOT .STATUS THEN FILE_ERROR(T('WRITEERR'), .OUTPUT[0], .OUTPUT[1], .STATUS);
+    STATUS = EMIT_RECORDS(.CHAN, .STEM[0], .STEM[1], DATE, TOOL, TOOL_LEN);
+    IF NOT .STATUS THEN FILE_ERROR(T('WRITEERR'), .OUTPUT[0], .OUTPUT[1], .STATUS);
+    STATUS = FIO$CLOSE(.CHAN);
+    IF NOT .STATUS THEN FILE_ERROR(T('WRITEERR'), .OUTPUT[0], .OUTPUT[1], .STATUS);
+    SS$_NORMAL
+    END;
+
+END
+ELUDOM
