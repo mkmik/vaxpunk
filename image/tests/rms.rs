@@ -77,7 +77,9 @@ impl Vax {
     /// command's echo to `done`.
     fn command(&mut self, line: &str, done: &str) -> String {
         let from = self.text().len();
-        self.console.write_all(format!("{line}\r").as_bytes()).unwrap();
+        self.console
+            .write_all(format!("{line}\r").as_bytes())
+            .unwrap();
         let echo = self.wait_for(line, from, 20);
         let end = self.wait_for(done, echo, 120);
         self.text()[echo..end].to_string()
@@ -138,8 +140,15 @@ fn fixtures() {
         for key in 0..*keys {
             let out = vax.command(&format!("RMSDUMP {} {key}", file.to_uppercase()), "\n$ ");
             let want = fs::read_to_string(fixtures.join(format!("{stem}_key{key}.dump"))).unwrap();
-            let got: Vec<_> = out.lines().skip(1).take_while(|l| !l.starts_with("RMSDUMP: ")).collect();
-            let tail = out.lines().find(|l| l.starts_with("RMSDUMP: ")).unwrap_or("no tail");
+            let got: Vec<_> = out
+                .lines()
+                .skip(1)
+                .take_while(|l| !l.starts_with("RMSDUMP: "))
+                .collect();
+            let tail = out
+                .lines()
+                .find(|l| l.starts_with("RMSDUMP: "))
+                .unwrap_or("no tail");
             if got != want.lines().collect::<Vec<_>>() || !tail.ends_with("0001827A") {
                 let first = got.iter().zip(want.lines()).position(|(g, w)| *g != w);
                 failed.push(format!(
