@@ -968,7 +968,11 @@ impl Parser<'_> {
             "%CTCE" | "%LTCE" => {
                 let mut all = true;
                 for p in self.params(&name, at)? {
-                    let e = self.subparse(p, |p| p.expr())?;
+                    // Often addresses: the lint leaves them alone.
+                    self.address_context += 1;
+                    let e = self.subparse(p, |p| p.expr());
+                    self.address_context -= 1;
+                    let e = e?;
                     all &= if name == "%CTCE" {
                         crate::parse::fold(&e).is_some()
                     } else {

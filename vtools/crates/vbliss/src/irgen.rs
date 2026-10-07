@@ -69,6 +69,8 @@ pub fn generate(m: &parse::Module) -> R<ir::Module> {
         externals: g.externals.into_iter().collect(),
         data: g.data,
         funcs,
+        psects: m.psect_attrs.clone(),
+        globals: m.global_literals.clone(),
     })
 }
 
@@ -172,7 +174,7 @@ impl Gen<'_> {
         }
         let global = storage == Storage::Global;
         self.data.push(ir::Data {
-            psect: if global { "$GLOBAL$" } else { "$OWN$" }.into(),
+            psect: s.psect.clone(),
             name: sym.asm.clone(),
             global,
             align: 3,
@@ -238,6 +240,7 @@ impl Gen<'_> {
                 storage: Storage::External,
                 ..
             }
+            | Kind::ExternalLiteral
             | Kind::Routine { external: true, .. } => {
                 self.externals.insert(sym.asm.clone());
                 V::Sym(sym.asm.clone(), 0)
@@ -259,6 +262,7 @@ impl Gen<'_> {
             global,
             slots: r.slots.clone(),
             long_args: self.m.dialect.unit() == 4,
+            psect: r.psect.clone(),
             ..Func::default()
         };
         self.cur = self.block();
@@ -1041,7 +1045,7 @@ impl Gen<'_> {
         let n = self.data.len();
         let name = format!("P.{n}");
         self.data.push(ir::Data {
-            psect: "$PLIT$".into(),
+            psect: self.m.psects.plit.clone(),
             name: name.clone(),
             global: false,
             align: 3,
@@ -1073,7 +1077,7 @@ impl Gen<'_> {
         let (desc, body) = (format!("P.{n}"), format!("P.{}", n + 1));
         let head = text.len() as i64 | 14 << 16 | 1 << 24;
         self.data.push(ir::Data {
-            psect: "$PLIT$".into(),
+            psect: self.m.psects.plit.clone(),
             name: desc.clone(),
             global: false,
             align: 3,
@@ -1083,7 +1087,7 @@ impl Gen<'_> {
             ],
         });
         self.data.push(ir::Data {
-            psect: "$PLIT$".into(),
+            psect: self.m.psects.plit.clone(),
             name: body,
             global: false,
             align: 0,
@@ -1213,6 +1217,7 @@ fn jacket() -> Func {
         slots: Vec::new(),
         temps: 9,
         long_args: false,
+        psect: "$CODE$".into(),
         blocks: vec![Block {
             ins,
             term: Term::Ret(V::T(8)),

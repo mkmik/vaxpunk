@@ -54,8 +54,12 @@ structure attributes on formals. Step 8: `LINKAGE` with `CALL` and
 `ENABLE`, `SIGNAL`, `SIGNAL_STOP`, `SETUNWIND`, `ESTABLISH` and
 `REVERT`, and the `CH$` functions but `CH$TRANSTABLE` and
 `CH$TRANSLATE`, whose loops irgen writes out in IR. Not yet: `GLOBAL
-BIND`, default structure references, `PSECT`, `GLOBAL` registers and
-output parameters, and the atomic and PAL built-ins.
+BIND`, default structure references, `GLOBAL` registers and output
+parameters, and the atomic and PAL built-ins. Step 10: the dot lint, and
+on the way `PSECT` declarations (each storage class's psect and its
+attributes), `SWITCHES`, `EXTERNAL LITERAL`, `GLOBAL LITERAL`,
+`UNDECLARE`, and undeclared names taken as external with a warning, as
+BLISSA64 takes them.
 
 ## How it works
 
@@ -135,6 +139,43 @@ structure variable a signed longword; `SIGNED_LONG` is both, with scalars
 signed and `VECTOR`'s default extension signed. They are module switches
 and `/ASSUME` keywords. `tests/bliss/mixed` calls BLISS-64 and MACRO-32
 from BLISS-32.
+
+## The dot lint
+
+A data name is its address and `.X` its value, so a missing or extra dot
+compiles silently (PRD-0004 *The dot lint*). vbliss warns, as
+`%VBLISS-W-DOTLINT`, of:
+
+1. a test of a scalar's address: `IF NOT STATUS THEN`;
+2. arithmetic or a comparison on a scalar's address, outside address
+   arithmetic (a fetch's operand, a `BIND`'s value, `PLIT` and `INITIAL`
+   items, `%CTCE` and `%LTCE`): `COUNT + 1`, `X GTR 5`;
+3. a fetch from a `LITERAL` or a routine's name: `.LIT`;
+4. a system service or library routine's argument passed the wrong way
+   for its mechanism: a scalar's address where it takes a value, a
+   constant other than 0 where it takes an address. The mechanisms are
+   `vtools/lib/services.txt`, which vdefs writes from the `$name_S` macros
+   of `starlet.mlb` (`PUSHL` by value, `$PUSHADR` by reference), and a few
+   library routines it knows.
+
+A scalar is data without a structure; names used without a declaration
+(which vbliss, as BLISSA64, takes as external with a warning) aren't. A
+line with `! LINT: ADDRESS` on it is left alone. Lint warnings are not
+BLISS's diagnostics: they stay out of the listing, so the listings still
+compare with the oracle's.
+
+**Measured** (the `lint` and `corpus` tests):
+
+- Recall: deleting each of the 287 dots in `tests/bliss` that leaves a
+  program that still compiles, the lint notices 108, 37%; the test fails
+  below 35%. The rest are mostly dots dropped from arguments,
+  `PRINT(X)`, which are rule 6's.
+- False positives: none in the test programs, which the test requires,
+  and none in the VAX/VMS V4.3 BLISS-32 sources, 1,127,266 lines in 1,260
+  modules, over the part vbliss parses: 16 modules compile to the end;
+  the others stop where DEC's generated libraries (`RTLSTARLE`, `RMS`,
+  the `LIB$:` definitions) are missing from the sources, or at `GLOBAL`
+  registers, the `TESTBIT` built-ins and `CALLG`.
 
 ## Definitions
 

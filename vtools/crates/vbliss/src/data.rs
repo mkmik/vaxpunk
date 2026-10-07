@@ -621,7 +621,19 @@ impl Parser<'_> {
                 init = truncate(init, bytes);
             }
             match storage {
-                Storage::Own | Storage::Global => self.m.statics.push(Static { sym: id, init }),
+                Storage::Own | Storage::Global => {
+                    let p = &self.m.psects;
+                    let psect = if storage == Storage::Own {
+                        p.own.clone()
+                    } else {
+                        p.global.clone()
+                    };
+                    self.m.statics.push(Static {
+                        sym: id,
+                        init,
+                        psect,
+                    })
+                }
                 Storage::Local(_) if !init.is_empty() => {
                     // Assignments at the block's start, the rest zeros.
                     let mut off = 0;
@@ -731,13 +743,19 @@ impl Parser<'_> {
     pub(crate) fn init_list(&mut self, unit: u8) -> R<Vec<Init>> {
         self.expect_punct('(')?;
         let mut out = Vec::new();
-        loop {
-            self.init_item(unit, &mut out)?;
-            if !self.eat_punct(',') {
-                break;
+        // Link-time constants: addresses, as the lint sees them.
+        self.address_context += 1;
+        let r = (|| {
+            loop {
+                self.init_item(unit, &mut out)?;
+                if !self.eat_punct(',') {
+                    break;
+                }
             }
-        }
-        self.expect_punct(')')?;
+            self.expect_punct(')')
+        })();
+        self.address_context -= 1;
+        r?;
         Ok(out)
     }
 
@@ -928,7 +946,11 @@ impl Parser<'_> {
         loop {
             let name = self.name()?;
             self.expect_punct('=')?;
-            let e = self.expr()?;
+            // An address: the lint leaves its arithmetic alone.
+            self.address_context += 1;
+            let e = self.expr();
+            self.address_context -= 1;
+            let e = e?;
             if routine {
                 self.routine_attributes()?;
                 let Expr::Name(id) = e else {

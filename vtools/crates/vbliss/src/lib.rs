@@ -14,6 +14,7 @@ mod irgen;
 mod lex;
 mod lexical;
 mod linkage;
+mod lint;
 mod listing;
 mod parse;
 
@@ -43,6 +44,9 @@ pub struct Output {
     pub ir: Option<String>,
     pub asm: Option<String>,
     pub diags: Vec<Diag>,
+    /// The dot lint's warnings (PRD-0004 *The dot lint*), which aren't
+    /// BLISS's diagnostics and stay out of the listing.
+    pub lints: Vec<Diag>,
     pub listing: String,
     pub messages: Vec<String>,
 }
@@ -85,6 +89,17 @@ pub fn translate(path: &Path, source: &str, opts: &Options) -> Output {
             msg: d.msg,
         })
         .collect();
+    let lints = front
+        .lints
+        .into_iter()
+        .map(|(file, d)| Diag {
+            sev: d.sev,
+            file,
+            line: d.line,
+            col: d.col,
+            msg: d.msg,
+        })
+        .collect();
     let (mut ir, mut asm) = (None, None);
     if let Ok(module) = front.module {
         match irgen::generate(&module) {
@@ -105,6 +120,7 @@ pub fn translate(path: &Path, source: &str, opts: &Options) -> Output {
         ir,
         asm,
         diags,
+        lints,
         listing: front.listing,
         messages: front.messages,
     }
