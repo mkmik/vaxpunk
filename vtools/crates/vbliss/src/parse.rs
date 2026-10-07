@@ -199,6 +199,7 @@ pub struct Module {
     pub binds: Vec<Expr>,
     /// Whether a routine ENABLEs a handler, which the jacket calls.
     pub jacket: bool,
+    pub dialect: Dialect,
 }
 
 /// A fatal error: the file, line and column (from 0) it is at.
@@ -224,9 +225,100 @@ pub struct Front {
     pub messages: Vec<String>,
 }
 
-/// How to compile: `/VARIANT` and `/INCLUDE`.
-#[derive(Clone, Default)]
+impl Options {
+    /// Applies a qualifier, `/A32`, `/A64`, `/ASSUME=(...)` or
+    /// `/VARIANT[=n]`; false if it isn't one of them.
+    pub fn qualifier(&mut self, q: &str) -> Result<bool, String> {
+        let (name, value) = match q.split_once('=') {
+            Some((n, v)) => (n, Some(v)),
+            None => (q, None),
+        };
+        match name.to_ascii_uppercase().as_str() {
+            "/A32" => self.dialect.a32 = true,
+            "/A64" => self.dialect.a32 = false,
+            "/VARIANT" => {
+                self.variant = match value {
+                    Some(n) => n.parse().map_err(|_| format!("bad /VARIANT value {n}"))?,
+                    None => 1,
+                }
+            }
+            "/ASSUME" => {
+                for a in value.unwrap_or("").trim_matches(['(', ')']).split(',') {
+                    let a = a.trim().to_ascii_uppercase();
+                    let on = !a.starts_with("NO");
+                    match a.trim_start_matches("NO") {
+                        "LONG_DEFAULT" => self.dialect.long_default = on,
+                        "REF_LONG" => self.dialect.ref_long = on,
+                        "SIGNED_LONG" => self.dialect.signed_long = on,
+                        _ => {}
+                    }
+                }
+            }
+            _ => return Ok(false),
+        }
+        Ok(true)
+    }
+
+    /// The qualifiers on a test source's first line, `! BLISS: /A32` and
+    /// the like, which the oracle compiles it with too.
+    pub fn from_source(text: &str) -> Options {
+        let mut opts = Options::default();
+        if let Some(rest) = text.lines().next().and_then(|l| {
+            l.get(..8)
+                .filter(|p| p.eq_ignore_ascii_case("! BLISS:"))
+                .map(|_| &l[8..])
+        }) {
+            for q in rest.split('/').filter(|q| !q.trim().is_empty()) {
+                let _ = opts.qualifier(&format!("/{}", q.trim()));
+            }
+        }
+        opts
+    }
+}
+
+/// The dialect: BLISS-32 (`/A32`), and BLISS-64's switches for moving
+/// BLISS-32 code (`docs/bliss64.md`, *Values and sizes*).
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct Dialect {
+    pub a32: bool,
+    pub long_default: bool,
+    pub ref_long: bool,
+    pub signed_long: bool,
+}
+
+impl Dialect {
+    /// The default allocation unit in bytes: of a scalar, a structure's
+    /// element, a PLIT item, a PLIT's count.
+    pub fn unit(&self) -> u8 {
+        if self.a32 || self.long_default || self.signed_long {
+            4
+        } else {
+            8
+        }
+    }
+
+    /// The fullword in bytes.
+    pub fn fullword(&self) -> u8 {
+        if self.a32 { 4 } else { 8 }
+    }
+}
+
+thread_local! {
+    /// Whether values are 32 bits, for the constant arithmetic: one
+    /// compilation per thread at a time.
+    static WIDE32: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// A value as the dialect's fullword holds it: sign-extended from 32 bits
+/// under BLISS-32.
+pub fn wrap(v: i64) -> i64 {
+    if WIDE32.get() { v as i32 as i64 } else { v }
+}
+
+/// How to compile: `/VARIANT`, `/INCLUDE` and the dialect.
+#[derive(Clone, Debug, Default)]
 pub struct Options {
+    pub dialect: Dialect,
     pub variant: i64,
     /// Where REQUIRE and LIBRARY look for files after the source's own
     /// directory.
@@ -298,8 +390,10 @@ pub fn parse(name: &str, text: &str, load: Loader, opts: &Options) -> Front {
         volatile: Vec::new(),
     };
     p.lx.variant = opts.variant;
+    p.m.dialect = opts.dialect;
+    WIDE32.set(opts.dialect.a32);
     p.predeclare();
-    let mut module = p.predeclare_structures().and_then(|()| p.module());
+    let mut module = p.module();
     if let (Ok(_), Some(d)) = (&module, p.diags.iter().find(|d| d.sev == 'E')) {
         module = Err(Error {
             file: p.lx.files[d.file as usize].name.clone(),
@@ -550,11 +644,12 @@ impl Parser<'_> {
     /// Declares the names every module starts with: the predeclared
     /// literals and the dialect macros.
     pub(crate) fn predeclare(&mut self) {
+        let bits = 8 * i64::from(self.m.dialect.fullword());
         for (name, v) in [
-            ("%BPVAL", 64),
+            ("%BPVAL", bits),
             ("%BPUNIT", 8),
-            ("%BPADDR", 64),
-            ("%UPVAL", 8),
+            ("%BPADDR", bits),
+            ("%UPVAL", bits / 8),
         ] {
             self.scopes[0].insert(name.into(), self.m.syms.len());
             self.m.syms.push(Sym {
@@ -569,12 +664,13 @@ impl Parser<'_> {
             line: 0,
             col: NOPOS,
         };
+        let a32 = self.m.dialect.a32;
         for (name, on) in [
             ("%BLISS16", false),
-            ("%BLISS32", false),
+            ("%BLISS32", a32),
             ("%BLISS36", false),
-            ("%BLISS32E", false),
-            ("%BLISS64E", true),
+            ("%BLISS32E", a32),
+            ("%BLISS64E", !a32),
         ] {
             let m = Macro {
                 name: name.into(),
@@ -718,6 +814,8 @@ impl Parser<'_> {
             self.expect_punct(')')?;
         }
         self.expect_punct('=')?;
+        // The switches set, the structures they change are declared.
+        self.predeclare_structures()?;
         let paren = self.eat_punct('(');
         if !paren {
             self.expect("BEGIN")?;
@@ -1185,7 +1283,7 @@ impl Parser<'_> {
                 _ => return,
             },
             Expr::Name(_) => return,
-            e => (e, 0, 64),
+            e => (e, 0, 8 * i64::from(self.m.dialect.fullword())),
         };
         let Some((id, off)) = crate::data::base_offset(addr) else {
             return;
@@ -1203,6 +1301,37 @@ impl Parser<'_> {
                 self.m.syms[id].name
             );
             self.diag('W', at, msg);
+        }
+    }
+
+    /// Whether a test is decided by its operand's extension, as BLISSA64
+    /// sees it: an unsigned field narrower than a fullword compared
+    /// signed with 0.
+    fn constant_test(&self, c: &Expr) -> Option<&'static str> {
+        let Expr::Bin(BOp::Rel(rel, false), a, b) = c else {
+            return None;
+        };
+        if fold(b) != Some(0) {
+            return None;
+        }
+        let Expr::Fetch(x) = &**a else {
+            return None;
+        };
+        let unsigned_narrow = match &**x {
+            Expr::Name(id) => matches!(
+                self.m.syms[*id].kind,
+                Kind::Data { size, signed: false, .. } if size < self.m.dialect.fullword()
+            ),
+            Expr::Field(_, _, s, e) => {
+                fold(e) == Some(0)
+                    && fold(s).is_some_and(|s| s < 8 * i64::from(self.m.dialect.fullword()))
+            }
+            _ => false,
+        };
+        match rel {
+            Rel::Lss if unsigned_narrow => Some("false"),
+            Rel::Geq if unsigned_narrow => Some("true"),
+            _ => None,
         }
     }
 
@@ -1416,6 +1545,10 @@ impl Parser<'_> {
                 "BEGIN" => self.block('E'),
                 "IF" => {
                     let c = self.expr()?;
+                    if let Some(always) = self.constant_test(&c) {
+                        let msg = format!("Test expression is always {always}");
+                        self.diag('I', &at, msg);
+                    }
                     self.expect("THEN")?;
                     let t = self.expr()?;
                     let e = if self.eat("ELSE") {
@@ -1704,14 +1837,14 @@ fn string_value(s: &[u8]) -> Option<i64> {
 /// The value of a constant expression, as the fullword arithmetic gives
 /// it, or None.
 pub fn fold(e: &Expr) -> Option<i64> {
-    Some(match e {
+    Some(wrap(match e {
         Expr::Num(n) => *n,
         Expr::Neg(a) => fold(a)?.wrapping_neg(),
         Expr::Not(a) => !fold(a)?,
         Expr::Block(es, true) if es.len() == 1 => fold(&es[0])?,
         Expr::Bin(op, a, b) => binop(*op, fold(a)?, fold(b)?)?,
         _ => return None,
-    })
+    }))
 }
 
 /// A binary operation on constants; None for a division by zero.

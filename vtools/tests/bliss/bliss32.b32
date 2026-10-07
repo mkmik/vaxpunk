@@ -1,0 +1,85 @@
+MODULE BLISS32 (MAIN = MAIN) =
+BEGIN
+! BLISS-32 under /A32: 32-bit values, kept sign-extended, LONG the
+! default unit, the predeclared structures' units, PLITs, the shifts and
+! the argument list.
+REQUIRE 'PRINT32';
+
+BUILTIN
+    ACTUALCOUNT,
+    ARGPTR,
+    ROT,
+    SLL,
+    SRL,
+    SRA;
+
+OWN
+    S,
+    B : BYTE,
+    W : WORD SIGNED,
+    V : VECTOR[3],
+    VB : VECTOR[4, BYTE],
+    BL : BLOCK[2] INITIAL(%X'11223344', %X'55667788');
+
+BIND
+    P = PLIT(1, BYTE(2), 3) : VECTOR[, BYTE];
+
+%PRINT('sizes ', %BPVAL, ' ', %NUMBER(%BPVAL), ' ', %NUMBER(%UPVAL), ' ', %NUMBER(%BPADDR), ' ',
+    %ALLOCATION(S), ' ', %ALLOCATION(V), ' ', %ALLOCATION(BL), ' ', %SIZE(BLOCKVECTOR[2, 3]))
+%PRINT('bliss ', %BLISS(BLISS32), %BLISS(BLISS32E), %BLISS(BLISS64E), %BLISS32(1), %BLISS32E(2),
+    %BLISS64E(3))
+%PRINT('nbits ', %NBITSU(-1), ' ', %NBITS(-1))
+
+ROUTINE LIST =
+    BEGIN
+    LOCAL
+        A : REF VECTOR;
+    A = ARGPTR();
+    .A[0] * 100 + .A[ACTUALCOUNT()]
+    END;
+
+ROUTINE MAIN =
+    BEGIN
+    LOCAL
+        X,
+        Y;
+    PRINT(%X'FFFFFFFF');
+    X = %X'7FFFFFFF';
+    PRINT(.X + 1);
+    PRINT(.X * 2);
+    PRINT(-%X'80000000');
+    Y = -7;
+    PRINT(.Y / 2);
+    PRINT(.Y MOD 3);
+    PRINT(1 ^ 31);
+    PRINT(-1 ^ -4);
+    PRINT(.X LSSU %X'80000000');
+    PRINT(-1 GTRU 1);
+    PRINT(-1 LSS 0);
+    PRINT(SLL(1, 31));
+    PRINT(SRL(-1, 28));
+    PRINT(SRA(%X'80000000', 4));
+    PRINT(ROT(%X'80000001', 4));
+    S = -1;
+    PRINT(.S);
+    B = -1;
+    PRINT(.B);
+    W = -1;
+    PRINT(.W);
+    V[2] = %X'DEADBEEF';
+    PRINT(.V[2]);
+    PRINT(.(V + 8));
+    VB[1] = 300;
+    PRINT(.VB[1]);
+    PRINT(.BL[1, 0, 32, 0]);
+    PRINT(.BL[0, 8, 8, 0]);
+    PRINT(.BL[0, 0, 32, 1]);
+    INCR I FROM -4 TO 8 DO
+        PRINT(.P[.I]);
+    PRINT(LIST(5, 6, 7));
+    PRINT(LIST(1, 2, 3, 4, 5, 6, 7, 8, 9, 10));
+    1
+    END;
+
+END
+ELUDOM

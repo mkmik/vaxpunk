@@ -114,8 +114,12 @@ The core of the dialect: a BLISS value, the fullword, is a quadword.
   longwords. **`REF_LONG`** makes every `REF` structure variable a signed
   longword. **`SIGNED_LONG`** is both, with scalars and `VECTOR` elements
   LONG SIGNED. They exist to move BLISS-32 code to BLISS-64 with the
-  fewest changes, and vbliss has all three, as module switches and as
-  `/ASSUME`. (RN 2.19.1.2-4; vaxpunk)
+  fewest changes. BLISSA64 takes them only as `/ASSUME` keywords: as a
+  module switch, `LONG_DEFAULT` is a syntax error in the module head, and
+  neither `SWITCHES LONG_DEFAULT` nor `ASSUME(LONG_DEFAULT)` changes
+  anything. Under `LONG_DEFAULT` a scalar is 4 bytes, a `VECTOR[3]` 12 and
+  a `REF VECTOR` 8; under `SIGNED_LONG` the `REF` is 4 too. vbliss has the
+  three as `/ASSUME` keywords. (RN 2.19.1.2-4; probe)
 - **Shifts.** `^` is defined for counts -63 to 63. `SLL`, `SRL`, `SRA`
   shift in one direction by 0 to `%BPVAL`-1. (RN 2.17, 2.9.5)
 - **Field size** in `<P,S,E>` goes to `%BPVAL`, 64. (LRM 11.10.3, with
@@ -618,10 +622,15 @@ this file except those that come from 64-bit values. On Alpha it was how
 existing BLISS code moved over: unchanged where it kept to common BLISS,
 edited where it used the VAX. (RN 2.1, 2.3)
 
-- **Values are 32 bits.** vbliss computes them in 32-bit registers, the
-  IR's `w` class, and keeps them sign-extended in 64-bit ones, as vmacro
-  keeps a longword, so they cross calls as DESIGN-0004 *Values* wants.
-  (vaxpunk)
+- **Values are 32 bits.** vbliss keeps them sign-extended in 64-bit
+  registers, as vmacro keeps a longword, so they cross calls as
+  DESIGN-0004 *Values* wants, and sign-extends again from bit 31 after
+  each operation that can carry past it (`vtools/docs/vbliss.md`,
+  *BLISS-32*). `tests/bliss/bliss32.b32` agrees with BLISSA64's
+  `BLISS/A32`: wrapping at 32 bits, `%BPVAL` 32, the PLIT count a
+  longword counting longwords, `ARGPTR`'s list of longwords, `%BLISS(BLISS32)`
+  and `%BLISS(BLISS32E)` both 1. The compiler calls itself `BLISS-32E` in
+  its listing header. (vaxpunk; probe)
 - **Addresses are 32 bits** and stored in longwords, so an image with
   BLISS-32 code must lie below 2 GB, as one with MACRO-32 code must.
   (vaxpunk; `vtools/docs/macro32.md`)

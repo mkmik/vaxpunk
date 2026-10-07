@@ -258,6 +258,7 @@ impl Gen<'_> {
             name: sym.asm.clone(),
             global,
             slots: r.slots.clone(),
+            long_args: self.m.dialect.unit() == 4,
             ..Func::default()
         };
         self.cur = self.block();
@@ -273,8 +274,10 @@ impl Gen<'_> {
                 Some(l) => self.emit(Ins::RegArg(t, l.params[i])),
                 None => self.emit(Ins::Arg(t, i as u32)),
             }
+            // A BLISS-32 routine sees the low 32 bits of what it is passed.
+            let v = self.narrow(V::T(t));
             let addr = self.address(formal)?;
-            self.emit(Ins::Store(V::T(t), addr, 8));
+            self.emit(Ins::Store(v, addr, 8));
         }
         let v = self.value(&r.body)?;
         self.end(Term::Ret(if novalue { V::C(0) } else { v }));
@@ -311,7 +314,12 @@ impl Gen<'_> {
             Expr::Jacket => V::Sym(JACKET.into(), 0),
             Expr::Op(op, a, b) => {
                 let (a, b) = (self.value(a)?, self.value(b)?);
-                self.bin(*op, a, b)
+                // ROT's count came as 64 - k, for 64 bits.
+                let b = match (op, self.m.dialect.a32) {
+                    (Op::Ror, true) => self.bin(Op::Sub, b, V::C(32)),
+                    _ => b,
+                };
+                self.op(*op, a, b)
             }
             Expr::Special(s, args) => {
                 let mut vals = Vec::new();
@@ -377,7 +385,7 @@ impl Gen<'_> {
                 let a = self.value(a)?;
                 let d = self.temp();
                 self.emit(Ins::Un(Un::Neg, d, a));
-                V::T(d)
+                self.narrow(V::T(d))
             }
             Expr::Not(a) => {
                 let a = self.value(a)?;
@@ -423,7 +431,7 @@ impl Gen<'_> {
                     }
                     let d = self.temp();
                     self.emit(Ins::Jsb(Some(d), t, vals, l.nopreserve.clone()));
-                    return Ok(V::T(d));
+                    return Ok(self.narrow(V::T(d)));
                 }
                 let mut vals = Vec::new();
                 for a in args {
@@ -434,7 +442,7 @@ impl Gen<'_> {
                 }
                 let d = self.temp();
                 self.emit(Ins::Call(Some(d), t, vals));
-                V::T(d)
+                self.narrow(V::T(d))
             }
             Expr::Block(es, has_value) => {
                 let mut v = V::C(0);
@@ -533,7 +541,7 @@ impl Gen<'_> {
                 self.loops.pop();
                 let t = self.temp();
                 self.emit(Ins::Load(t, i.clone(), 8, false));
-                let n = self.bin(if *down { Op::Sub } else { Op::Add }, V::T(t), step);
+                let n = self.op(if *down { Op::Sub } else { Op::Add }, V::T(t), step);
                 self.emit(Ins::Store(n, i, 8));
                 self.jump(head);
                 self.start(done);
@@ -791,6 +799,17 @@ impl Gen<'_> {
         V::T(r)
     }
 
+    /// The fullword at addr: under BLISS-32 a longword, sign-extended.
+    fn full(&self, addr: V) -> Place {
+        let a32 = self.m.dialect.a32;
+        Place {
+            addr,
+            pos: V::C(0),
+            size: V::C(if a32 { 32 } else { 64 }),
+            signed: a32,
+        }
+    }
+
     /// A temporary holding v, so that a later store can't change it.
     fn fix(&mut self, v: V) -> V {
         match v {
@@ -830,7 +849,57 @@ impl Gen<'_> {
                 _ => Op::Ash,
             },
         };
-        self.bin(op, a, b)
+        self.op(op, a, b)
+    }
+
+    /// `a op b` as the dialect's fullword holds it: under BLISS-32 a
+    /// longword, kept sign-extended as vmacro keeps one; shifts and
+    /// rotations of its low 32 bits.
+    fn op(&mut self, op: Op, a: V, b: V) -> V {
+        if !self.m.dialect.a32 {
+            return self.bin(op, a, b);
+        }
+        match op {
+            Op::Add | Op::Sub | Op::Mul | Op::Div | Op::Shl | Op::Ash => {
+                let v = self.bin(op, a, b);
+                self.narrow(v)
+            }
+            Op::Shr => {
+                let z = self.zext(a);
+                let v = self.bin(Op::Shr, z, b);
+                self.narrow(v)
+            }
+            Op::Ror => {
+                // Right by k within 32 bits: the low word doubled, shifted.
+                let z = self.zext(a);
+                let hi = self.bin(Op::Shl, z.clone(), V::C(32));
+                let both = self.bin(Op::Or, hi, z);
+                let k = self.bin(Op::And, b, V::C(31));
+                let v = self.bin(Op::Ror, both, k);
+                self.narrow(v)
+            }
+            _ => self.bin(op, a, b),
+        }
+    }
+
+    /// v sign-extended from 32 bits, under BLISS-32.
+    fn narrow(&mut self, v: V) -> V {
+        if !self.m.dialect.a32 {
+            return v;
+        }
+        if let V::C(c) = v {
+            return V::C(parse::wrap(c));
+        }
+        let d = self.temp();
+        self.emit(Ins::Ext(d, v, V::C(0), V::C(32), true));
+        V::T(d)
+    }
+
+    /// v's low 32 bits, zero-extended.
+    fn zext(&mut self, v: V) -> V {
+        let d = self.temp();
+        self.emit(Ins::Ext(d, v, V::C(0), V::C(32), false));
+        V::T(d)
     }
 
     /// Branches to t if the low bit of e is set, else to f.
@@ -856,7 +925,7 @@ impl Gen<'_> {
                         size: V::C(i64::from(size) * 8),
                         signed,
                     },
-                    _ => full(addr),
+                    _ => self.full(addr),
                 }
             }
             Expr::Let(t, a, body) => {
@@ -886,7 +955,7 @@ impl Gen<'_> {
             }
             e => {
                 let addr = self.value(e)?;
-                full(addr)
+                self.full(addr)
             }
         })
     }
@@ -926,9 +995,13 @@ impl Gen<'_> {
         Ok((addr, width, bit))
     }
 
-    fn load(&mut self, p: Place) -> V {
+    fn load(&mut self, mut p: Place) -> V {
         if p.size == V::C(0) {
             return V::C(0);
+        }
+        // A BLISS-32 fullword is kept sign-extended.
+        if self.m.dialect.a32 && p.size == V::C(32) {
+            p.signed = true;
         }
         let Ok((addr, width, bit)) = self.span(&p) else {
             return V::C(0);
@@ -976,8 +1049,9 @@ impl Gen<'_> {
         });
         let mut out = Vec::new();
         let bytes: u32 = items.iter().map(Init::len).sum();
+        let (word, count) = (self.m.dialect.fullword(), self.m.dialect.unit());
         if counted {
-            out.push(Item::Val(V::C(bytes.div_ceil(8).into()), 8));
+            out.push(Item::Val(V::C(bytes.div_ceil(word.into()).into()), count));
         }
         for i in items {
             out.push(match i {
@@ -985,11 +1059,12 @@ impl Gen<'_> {
                 Init::Bytes(b) => Item::Bytes(b.clone()),
             });
         }
-        if !bytes.is_multiple_of(8) {
-            out.push(Item::Zero(8 - bytes % 8));
+        let word = u32::from(word);
+        if !bytes.is_multiple_of(word) {
+            out.push(Item::Zero(word - bytes % word));
         }
         self.data[n].items = out;
-        Ok(V::Sym(name, if counted { 8 } else { 0 }))
+        Ok(V::Sym(name, if counted { count.into() } else { 0 }))
     }
 
     /// `%ASCID`: a static descriptor and its text in $PLIT$.
@@ -1137,19 +1212,11 @@ fn jacket() -> Func {
         global: false,
         slots: Vec::new(),
         temps: 9,
+        long_args: false,
         blocks: vec![Block {
             ins,
             term: Term::Ret(V::T(8)),
         }],
-    }
-}
-
-fn full(addr: V) -> Place {
-    Place {
-        addr,
-        pos: V::C(0),
-        size: V::C(64),
-        signed: false,
     }
 }
 

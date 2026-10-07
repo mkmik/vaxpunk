@@ -14,16 +14,19 @@ use std::rc::Rc;
 use crate::lex::Tok;
 use crate::parse::{BOp, Expr, Kind, Parser, R, SelectLabel, Static, Storage, Sym, fold};
 
-/// The predeclared structures, BLISS-64's (`docs/bliss64.md`).
-const PREDECLARED: &str = "
-STRUCTURE
-    VECTOR[I; N, UNIT = 8, EXT = 0] = [N * UNIT] (VECTOR + I * UNIT)<0, 8 * UNIT, EXT>,
+/// The predeclared structures (`docs/bliss64.md`), with the dialect's
+/// default unit and VECTOR's default extension.
+fn predeclared(unit: u8, ext: u8) -> String {
+    format!(
+        "STRUCTURE
+    VECTOR[I; N, UNIT = {unit}, EXT = {ext}] = [N * UNIT] (VECTOR + I * UNIT)<0, 8 * UNIT, EXT>,
     BITVECTOR[I; N] = [(N + 7) / 8] BITVECTOR<I, 1>,
-    BLOCK[O, P, S, E; BS, UNIT = 8] = [BS * UNIT] (BLOCK + O * UNIT)<P, S, E>,
-    BLOCKVECTOR[I, O, P, S, E; N, BS, UNIT = 8] =
+    BLOCK[O, P, S, E; BS, UNIT = {unit}] = [BS * UNIT] (BLOCK + O * UNIT)<P, S, E>,
+    BLOCKVECTOR[I, O, P, S, E; N, BS, UNIT = {unit}] =
         [N * BS * UNIT] (BLOCKVECTOR + (I * BS + O) * UNIT)<P, S, E>,
-    BLOCK_BYTE[O, P, S, E; BS] = [BS] (BLOCK_BYTE + O)<P, S, E>;
-";
+    BLOCK_BYTE[O, P, S, E; BS] = [BS] (BLOCK_BYTE + O)<P, S, E>;"
+    )
+}
 
 /// A structure declaration.
 #[derive(Debug)]
@@ -232,7 +235,9 @@ impl Parser<'_> {
     pub(crate) fn predeclare_structures(&mut self) -> R<()> {
         let saved = std::mem::take(&mut self.toks);
         let pos = std::mem::replace(&mut self.pos, 0);
-        let mut toks = crate::lex::lex(PREDECLARED, 0).expect("the predeclared structures lex");
+        let d = self.m.dialect;
+        let text = predeclared(d.unit(), u8::from(d.signed_long));
+        let mut toks = crate::lex::lex(&text, 0).expect("the predeclared structures lex");
         for t in &mut toks {
             t.col = crate::listing::NOPOS;
         }
@@ -409,7 +414,12 @@ impl Parser<'_> {
     /// How many bytes data with structure attribute `a` takes, if known.
     pub(crate) fn struct_bytes(&self, a: &StructAttr) -> Option<i64> {
         if a.refr {
-            return Some(8);
+            let d = self.m.dialect;
+            return Some(if d.ref_long || d.signed_long {
+                4
+            } else {
+                d.fullword().into()
+            });
         }
         let map: HashMap<usize, Expr> =
             a.st.formals
@@ -500,8 +510,8 @@ impl Parser<'_> {
                 "INITIAL" => {
                     self.pos += 1;
                     let unit = match a.structure {
-                        Some(_) => 8,
-                        None => a.unit.unwrap_or(8),
+                        Some(_) => self.m.dialect.unit(),
+                        None => a.unit.unwrap_or(self.m.dialect.unit()),
                     };
                     a.initial = Some(self.init_list(unit)?);
                 }
@@ -538,9 +548,16 @@ impl Parser<'_> {
     /// default field.
     pub(crate) fn data_kind(&mut self, storage: Storage, a: &mut Attrs) -> R<Kind> {
         let structure = a.structure.take().map(Rc::new);
+        let d = self.m.dialect;
         let (size, signed) = match &structure {
-            Some(_) => (8, false),
-            None => (a.unit.unwrap_or(8), a.signed.unwrap_or(false)),
+            // REF_LONG: a REF is a signed longword.
+            Some(s) if s.refr && (d.ref_long || d.signed_long) => (4, true),
+            Some(_) => (d.fullword(), d.a32),
+            None => (
+                a.unit.unwrap_or(d.unit()),
+                a.signed
+                    .unwrap_or(d.signed_long || (d.a32 && a.unit.is_none_or(|u| u == 4))),
+            ),
         };
         let bytes = match &structure {
             Some(s) => match (self.struct_bytes(s), storage) {
@@ -771,7 +788,7 @@ impl Parser<'_> {
 
     /// `PLIT` or `UPLIT`, after the word.
     pub(crate) fn plit(&mut self, counted: bool) -> R<Expr> {
-        let mut unit = 8;
+        let mut unit = self.m.dialect.unit();
         loop {
             if let Some(u) = self.unit_word() {
                 unit = u;
@@ -974,10 +991,14 @@ impl Parser<'_> {
             };
             self.expect_punct(':')?;
             let mut a = self.attributes()?;
-            let structure = a.structure.take().map(Rc::new);
-            let (size, signed) = match &structure {
-                Some(_) => (8, false),
-                None => (a.unit.unwrap_or(8), a.signed.unwrap_or(false)),
+            let Kind::Data {
+                size,
+                signed,
+                structure,
+                ..
+            } = self.data_kind(Storage::External, &mut a)?
+            else {
+                unreachable!()
             };
             let asm = self.m.syms[id].asm.clone();
             let new = self.m.syms.len();

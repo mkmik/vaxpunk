@@ -7,8 +7,14 @@ that will compile BLISS.EXE, the compiler in BLISS-64. `docs/bliss64.md`
 describes the dialect.
 
 ```
-vbliss [/OBJECT=file | -o file] [/LIST[=file]] [/VARIANT=n] [--ir] [--asm] SOURCE
+vbliss [/A64 | /A32] [/ASSUME=(LONG_DEFAULT, REF_LONG, SIGNED_LONG)]
+       [/OBJECT=file | -o file] [/LIST[=file]] [/VARIANT=n]
+       [/INCLUDE=(dir,...) | -I dir] [--ir] [--asm] SOURCE
 ```
+
+A `.B32` source is BLISS-32, as `/A32` makes any source; `/A64` is the
+default. Require files are looked for as `.R64`, then `.REQ`, or under
+BLISS-32 `.R32`, then `.REQ`.
 
 The object file defaults to the source name with `.obj`. `--ir` prints the
 IR instead, `--asm` the vasm source. `/LIST` writes the listing, by default
@@ -108,6 +114,27 @@ ways and handles conditions raised on each side.
 A routine that reads its argument list (`ACTUALCOUNT`, `ACTUALPARAMETER`,
 `ARGPTR`) gets a copy in its frame: the count from x9, then the arguments
 from x0-x7 and the caller's stack, a fullword each.
+
+## BLISS-32
+
+Under `/A32` a value is a longword, kept sign-extended in its 64-bit
+register as vmacro keeps one: constants are folded at 32 bits, each add,
+subtract, multiply, divide and left shift is sign-extended from bit 31
+again, a fullword fetch is a sign-extended longword, and so are a
+routine's arguments and the results of its calls, of which a BLISS-32
+routine sees the low 32 bits. Unsigned comparisons need nothing more:
+sign extension keeps the unsigned order of 32-bit values. `SRL` and `ROT`
+work on the low 32 bits. LONG is the default unit of scalars, of the
+predeclared structures and of `PLIT` items, a `PLIT`'s count is a
+longword, `ARGPTR`'s list has longwords, `%BPVAL` and `%BPADDR` are 32
+and `%UPVAL` 4, and `%BLISS32` and `%BLISS32E` are on.
+
+Under `/A64`, `LONG_DEFAULT` makes LONG the default unit and longwords
+of the `PLIT` count and `ARGPTR`'s list; `REF_LONG` makes a `REF`
+structure variable a signed longword; `SIGNED_LONG` is both, with scalars
+signed and `VECTOR`'s default extension signed. They are module switches
+and `/ASSUME` keywords. `tests/bliss/mixed` calls BLISS-64 and MACRO-32
+from BLISS-32.
 
 ## Definitions
 

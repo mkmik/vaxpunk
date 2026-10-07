@@ -1,0 +1,163 @@
+                                Source Listing                   DD-MMM-YYYY HH:MM:SS  BLISS-32E V1.11-007-48G4L         Page 1
+                                                                 DD-MMM-YYYY HH:MM:SS  SYS$SYSDEVICE:[ORACLE]BLISS32.B32;1
+
+    0	      1 MODULE BLISS32 (MAIN = MAIN) =
+    0	      2 BEGIN
+    1	      3 ! BLISS-32 under /A32: 32-bit values, kept sign-extended, LONG the
+    1	      4 ! default unit, the predeclared structures' units, PLITs, the shifts and
+    1	      5 ! the argument list.
+    1	      6 REQUIRE 'PRINT32';
+ R  1	      7 ! PRINT for BLISS-32 programs: prints a value as a signed decimal and as 8
+ R  1	      8 ! hex digits, on a line of its own, through LIB$PUT_OUTPUT, under vrun and
+ R  1	      9 ! on OpenVMS for the oracle.
+ R  1	     10 
+ R  1	     11 EXTERNAL ROUTINE
+ R  1	     12     LIB$PUT_OUTPUT;
+ R  1	     13 
+ R  1	     14 ROUTINE PRINT (V) : NOVALUE =
+ R  1	     15     BEGIN
+ R  2	     16     LOCAL
+ R  2	     17         BUF : VECTOR[32, BYTE],
+ R  2	     18         DESC : VECTOR[2],
+ R  2	     19         X,
+ R  2	     20         I;
+ R  2	     21     I = 32;
+ R  2	     22     X = .V;
+ R  2	     23     INCR K FROM 1 TO 8 DO
+ R  2	     24         BEGIN
+ R  3	     25         LOCAL D;
+ R  3	     26         D = .X AND 15;
+ R  3	     27         I = .I - 1;
+ R  3	     28         BUF[.I] = (IF .D LSS 10 THEN %C'0' + .D ELSE %C'A' + .D - 10);
+ R  3	     29         X = .X ^ -4 AND %X'0FFFFFFF'
+ R  3	     30         END;
+ R  2	     31     I = .I - 1;
+ R  2	     32     BUF[.I] = %C' ';
+ R  2	     33     X = .V;
+ R  2	     34     DO
+ R  2	     35         BEGIN
+ R  3	     36         LOCAL D;
+ R  3	     37         D = .X - (.X / 10) * 10;
+ R  3	     38         IF .D LSS 0 THEN D = -.D;
+ R  3	     39         I = .I - 1;
+ R  3	     40         BUF[.I] = %C'0' + .D;
+ R  3	     41         X = .X / 10
+ R  3	     42         END
+ R  3	     43     UNTIL .X EQL 0;
+ R  2	     44     IF .V LSS 0
+ R  2	     45     THEN
+ R  2	     46         BEGIN
+ R  3	     47         I = .I - 1;
+ R  3	     48         BUF[.I] = %C'-'
+ R  3	     49         END;
+ R  2	     50     DESC[0] = 32 - .I + %X'010E0000';
+ R  2	     51     DESC[1] = BUF[.I];
+ R  2	     52     LIB$PUT_OUTPUT(DESC)
+ R  2	     53     END;
+    1	     54 
+    1	     55 BUILTIN
+    1	     56     ACTUALCOUNT,
+    1	     57     ARGPTR,
+
+BLISS32                         Source Listing                   DD-MMM-YYYY HH:MM:SS  BLISS-32E V1.11-007-48G4L         Page 2
+                                                                 DD-MMM-YYYY HH:MM:SS  SYS$SYSDEVICE:[ORACLE]BLISS32.B32;1
+
+    1	     58     ROT,
+    1	     59     SLL,
+    1	     60     SRL,
+    1	     61     SRA;
+    1	     62 
+    1	     63 OWN
+    1	     64     S,
+    1	     65     B : BYTE,
+    1	     66     W : WORD SIGNED,
+    1	     67     V : VECTOR[3],
+    1	     68     VB : VECTOR[4, BYTE],
+    1	     69     BL : BLOCK[2] INITIAL(%X'11223344', %X'55667788');
+    1	     70 
+    1	     71 BIND
+    1	     72     P = PLIT(1, BYTE(2), 3) : VECTOR[, BYTE];
+    1	     73 
+    1	     74 %PRINT('sizes ', %BPVAL, ' ', %NUMBER(%BPVAL), ' ', %NUMBER(%UPVAL), ' ', %NUMBER(%BPADDR), ' ',
+L   1	     75     %ALLOCATION(S), ' ', %ALLOCATION(V), ' ', %ALLOCATION(BL), ' ', %SIZE(BLOCKVECTOR[2, 3]))
+
+BLISS32                         Source Listing                   DD-MMM-YYYY HH:MM:SS  BLISS-32E V1.11-007-48G4L         Page 3
+                                                                 DD-MMM-YYYY HH:MM:SS  SYS$SYSDEVICE:[ORACLE]BLISS32.B32;1
+
+		; %PRINT:	sizes %BPVAL 32 4 32 4 12 8 24
+    1	     76 %PRINT('bliss ', %BLISS(BLISS32), %BLISS(BLISS32E), %BLISS(BLISS64E), %BLISS32(1), %BLISS32E(2),
+		;;	  [%REMAINING]=  1
+		;;    [%BLISS32]=  1
+		;;	  [%REMAINING]=  2
+		;;    [%BLISS32E]=  2
+L   1	     77     %BLISS64E(3))
+		;;    [%BLISS64E]= 
+		; %PRINT:	bliss 11012
+    1	     78 %PRINT('nbits ', %NBITSU(-1), ' ', %NBITS(-1))
+		; %PRINT:	nbits 32 1
+    1	     79 
+    1	     80 ROUTINE LIST =
+    1	     81     BEGIN
+    2	     82     LOCAL
+    2	     83         A : REF VECTOR;
+    2	     84     A = ARGPTR();
+    2	     85     .A[0] * 100 + .A[ACTUALCOUNT()]
+    2	     86     END;
+    1	     87 
+    1	     88 ROUTINE MAIN =
+    1	     89     BEGIN
+    2	     90     LOCAL
+    2	     91         X,
+    2	     92         Y;
+    2	     93     PRINT(%X'FFFFFFFF');
+    2	     94     X = %X'7FFFFFFF';
+    2	     95     PRINT(.X + 1);
+    2	     96     PRINT(.X * 2);
+    2	     97     PRINT(-%X'80000000');
+    2	     98     Y = -7;
+    2	     99     PRINT(.Y / 2);
+    2	    100     PRINT(.Y MOD 3);
+    2	    101     PRINT(1 ^ 31);
+    2	    102     PRINT(-1 ^ -4);
+    2	    103     PRINT(.X LSSU %X'80000000');
+    2	    104     PRINT(-1 GTRU 1);
+    2	    105     PRINT(-1 LSS 0);
+    2	    106     PRINT(SLL(1, 31));
+    2	    107     PRINT(SRL(-1, 28));
+    2	    108     PRINT(SRA(%X'80000000', 4));
+    2	    109     PRINT(ROT(%X'80000001', 4));
+    2	    110     S = -1;
+    2	    111     PRINT(.S);
+    2	    112     B = -1;
+    2	    113     PRINT(.B);
+    2	    114     W = -1;
+    2	    115     PRINT(.W);
+    2	    116     V[2] = %X'DEADBEEF';
+    2	    117     PRINT(.V[2]);
+    2	    118     PRINT(.(V + 8));
+    2	    119     VB[1] = 300;
+    2	    120     PRINT(.VB[1]);
+    2	    121     PRINT(.BL[1, 0, 32, 0]);
+    2	    122     PRINT(.BL[0, 8, 8, 0]);
+    2	    123     PRINT(.BL[0, 0, 32, 1]);
+    2	    124     INCR I FROM -4 TO 8 DO
+
+BLISS32                         Source Listing                   DD-MMM-YYYY HH:MM:SS  BLISS-32E V1.11-007-48G4L         Page 4
+                                                                 DD-MMM-YYYY HH:MM:SS  SYS$SYSDEVICE:[ORACLE]BLISS32.B32;1
+
+    2	    125         PRINT(.P[.I]);
+    2	    126     PRINT(LIST(5, 6, 7));
+    2	    127     PRINT(LIST(1, 2, 3, 4, 5, 6, 7, 8, 9, 10));
+    2	    128     1
+    2	    129     END;
+    1	    130 
+    1	    131 END
+    1	    132 ELUDOM
+
+
+                                Source Listing                   DD-MMM-YYYY HH:MM:SS  BLISS-32E V1.11-007-48G4L         Page 5
+                                Source Listing                   DD-MMM-YYYY HH:MM:SS  SYS$SYSDEVICE:[ORACLE]BLISS32.B32;1
+
+COMMAND LINE:
+
+BLISS/A32/LIST/SOURCE_LIST=(EXPAND_MACROS,REQUIRE)/NOMACHINE_CODE BLISS32.B32

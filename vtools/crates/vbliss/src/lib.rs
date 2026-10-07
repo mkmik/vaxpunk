@@ -22,7 +22,7 @@ use std::path::Path;
 
 use vasm::{Diagnostic, Object};
 
-pub use parse::Options;
+pub use parse::{Dialect, Options};
 
 const TOOL: &str = concat!("vbliss ", env!("CARGO_PKG_VERSION"));
 
@@ -60,7 +60,20 @@ pub fn translate(path: &Path, source: &str, opts: &Options) -> Output {
     let mut dirs = vec![path.parent().unwrap_or(Path::new(".")).to_path_buf()];
     dirs.extend(opts.include.iter().cloned());
     let name = path.display().to_string();
-    let front = parse::parse(&name, source, &|n| require(&dirs, n), opts);
+    // A .B32 source is BLISS-32, as /A32 says.
+    let mut opts = opts.clone();
+    if path
+        .extension()
+        .is_some_and(|e| e.eq_ignore_ascii_case("b32"))
+    {
+        opts.dialect.a32 = true;
+    }
+    let types: &[&str] = if opts.dialect.a32 {
+        &[".R32", ".REQ"]
+    } else {
+        &[".R64", ".REQ"]
+    };
+    let front = parse::parse(&name, source, &|n| require(&dirs, n, types), &opts);
     let mut diags: Vec<Diag> = front
         .diags
         .into_iter()
@@ -136,10 +149,11 @@ pub fn compile_with(
 }
 
 /// A require or library file's text: `name` in one of `dirs`, as given,
-/// or with `.R64` or `.REQ` after it if it has no type, in upper or lower
-/// case. A device or directory before the name (`SYS$LIBRARY:STARLET`)
-/// stands for the directories searched; a library's `.L64` is its source.
-fn require(dirs: &[std::path::PathBuf], name: &str) -> Result<String, String> {
+/// or with one of `types` after it if it has no type (`.R64` or `.R32`,
+/// then `.REQ`), in upper or lower case. A device or directory before the
+/// name (`SYS$LIBRARY:STARLET`) stands for the directories searched; a
+/// library's `.L64` or `.L32` is its source.
+fn require(dirs: &[std::path::PathBuf], name: &str, types: &[&str]) -> Result<String, String> {
     // ponytail: [-] is the parent directory; any other directory is dropped.
     let (up, name) = match name.strip_prefix("[-]") {
         Some(rest) => ("../", rest),
@@ -147,13 +161,13 @@ fn require(dirs: &[std::path::PathBuf], name: &str) -> Result<String, String> {
     };
     let base = name.rsplit([':', ']', '>']).next().unwrap_or(name);
     let base = &format!("{up}{base}");
-    let base = base
-        .strip_suffix(".L64")
-        .or_else(|| base.strip_suffix(".l64"))
+    let base = [".L64", ".l64", ".L32", ".l32"]
+        .iter()
+        .find_map(|t| base.strip_suffix(t))
         .unwrap_or(base);
     let mut names = vec![base.to_string()];
     if !base.rsplit('/').next().unwrap_or(base).contains('.') {
-        names.extend([".R64", ".REQ"].map(|t| format!("{base}{t}")));
+        names.extend(types.iter().map(|t| format!("{base}{t}")));
     }
     dirs.iter()
         .flat_map(|d| {

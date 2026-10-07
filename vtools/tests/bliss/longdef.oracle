@@ -1,0 +1,13 @@
+
+        IF .D LSS 0 THEN D = -.D;
+........^
+%BLS64-I-TEXT, Test expression is always false
+at line number 34 in file SYS$SYSDEVICE:[ORACLE]PRINT.R64;1
+
+    IF .V LSS 0
+....^
+%BLS64-I-TEXT, Test expression is always false
+at line number 40 in file SYS$SYSDEVICE:[ORACLE]PRINT.R64;1
+BLISS status %X106F1263
+LINK status %X10000001
+RUN status %X00010001

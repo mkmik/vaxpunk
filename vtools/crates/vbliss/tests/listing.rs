@@ -43,11 +43,15 @@ fn listings() {
         if path.extension().is_none_or(|e| e != "lis") {
             continue;
         }
-        let source = path.with_extension("b64");
+        let source = ["b64", "b32"]
+            .map(|e| path.with_extension(e))
+            .into_iter()
+            .find(|p| p.exists())
+            .unwrap();
         let text = fs::read_to_string(&source).unwrap();
         let opts = vbliss::Options {
             include: vec![dir.join("../../lib")],
-            ..vbliss::Options::default()
+            ..vbliss::Options::from_source(&text)
         };
         let out = vbliss::translate(&source, &text, &opts);
         let (ours, theirs) = (

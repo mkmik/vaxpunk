@@ -1,0 +1,16 @@
+        .TITLE  MAC     The MACRO-32 side of the BLISS-32 interop test
+        .PSECT  $CODE$
+
+; MSUM: a JSB routine: R0 = R2 + 10 * R3. Keeps R2 and R3.
+MSUM::
+        .JSB_ENTRY
+        MULL3   #10, R3, R0
+        ADDL2   R2, R0
+        RSB
+
+; MTRIPLE n: R0 = 3 * n.
+        .ENTRY  MTRIPLE, ^M<>
+        MULL3   #3, 4(AP), R0
+        RET
+
+        .END

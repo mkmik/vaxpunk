@@ -1,0 +1,16 @@
+MODULE WIDE =
+BEGIN
+! The BLISS-64 side: 64-bit values to and from BLISS-32.
+EXTERNAL ROUTINE
+    NARROW;
+
+! The argument as it came, plus 2^32: BLISS-32 sees only the low half.
+GLOBAL ROUTINE WIDE (X) =
+    .X + 1 ^ 32;
+
+! What BLISS-32 makes of an argument with bits above 31.
+GLOBAL ROUTINE LOW (X) =
+    NARROW(.X + 1 ^ 40);
+
+END
+ELUDOM
