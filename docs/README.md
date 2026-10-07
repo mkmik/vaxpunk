@@ -7,6 +7,7 @@ Project-wide documents, one numbered series per kind:
 | `adr/` | Architecture decision record (ADR) | One decision: why it was needed, what was chosen, what was not, and what follows from it |
 | `prd/` | Product requirements document (PRD) | What a project or sub-project must deliver, what it won't, and the order of work |
 | `design/` | Design document | How something that spans components works: an interface, a protocol, a subsystem |
+| `research/` | Research report | How real VMS did something, with sources and what is still unverified: input for an ADR, not a decision |
 
 A format, ABI or on-disk structure that belongs to one component is
 documented next to its code, in that component's `docs/` (`vtools/docs/`,
@@ -71,6 +72,14 @@ kept current, like a design document.
 | [DESIGN-0002](design/0002-executive-processes.md) | Processes, memory and system services in the executive |
 | [DESIGN-0003](design/0003-tcpip-port.md) | TCP/IP through the port |
 | [DESIGN-0004](design/0004-calling-standard.md) | The vaxpunk calling standard |
+
+### Research reports
+
+Named by topic, not numbered, and not kept current: they record what was found when.
+
+| Report | Title |
+| --- | --- |
+| [openvms-dns](research/openvms-dns.md) | How OpenVMS TCP/IP Services resolves host names (October 2026) |
 
 ## Adding a document
 
