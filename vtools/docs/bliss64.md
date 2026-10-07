@@ -386,8 +386,10 @@ KIT)
 
   vaxpunk: `ENABLE` writes the handler at `16(FP)` (DESIGN-0004
   *Condition handling*). The enable vector needs the same kind of jacket,
-  which vbliss's run-time support supplies; `ESTABLISH` is a store to
-  `16(FP)` and `REVERT` clears it.
+  which vbliss makes in each module that needs it (`vtools/docs/vbliss.md`,
+  *Linkages and conditions*); `ESTABLISH` is a store to `16(FP)` and
+  `REVERT` clears it. `tests/bliss/conditions.b64` continues, resignals and
+  unwinds as OpenVMS does: the same depths, the same `SS$_UNWIND` calls.
 
 ## Built-ins
 
@@ -396,6 +398,16 @@ The VAX's machine built-ins are gone: no `MOVC3`, `INSQUE`, `MTPR`,
 functions, the linkage functions, common built-ins like `ROT`, the Alpha
 built-ins and the PAL built-ins below. (RN 2.3.1; KIT, where none of the
 VAX names appears)
+
+**Which need `BUILTIN`.** BLISSA64 takes `MAX`, `MIN`, `ABS`, `SIGN`,
+`SIGNAL`, `SIGNAL_STOP`, `SETUNWIND` and the `CH$` functions as
+predeclared, but `ACTUALCOUNT`, `ACTUALPARAMETER`, `NULLPARAMETER`,
+`ARGPTR`, `ROT`, `SLL`, `SRL`, `SRA`, `ESTABLISH` and `REVERT` only once
+a `BUILTIN` declaration names them: without one they are undeclared names
+it calls as external routines. vbliss requires the declaration for the
+same ones. An `ENABLE` actual that isn't `VOLATILE` gets a warning, as the
+LRM's restriction says. (probe, `tests/bliss/builtins.b64` and
+`conditions.b64`)
 
 The list below is the compiler's own table (KIT), grouped. The last
 column says when vbliss needs each: **now**, in PRD-0004; **later**, when

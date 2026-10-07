@@ -15,7 +15,11 @@ fn ir() {
         }
         let source = path.with_extension("b64");
         let text = fs::read_to_string(&source).unwrap();
-        let out = vbliss::translate(&source, &text, &vbliss::Options::default());
+        let opts = vbliss::Options {
+            include: vec![dir.join("../../lib")],
+            ..vbliss::Options::default()
+        };
+        let out = vbliss::translate(&source, &text, &opts);
         assert_eq!(
             out.ir.as_deref(),
             Some(fs::read_to_string(&path).unwrap().as_str()),

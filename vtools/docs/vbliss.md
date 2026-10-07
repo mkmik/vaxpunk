@@ -40,8 +40,16 @@ lexical conditionals and the lexical functions, and the listing. Step 6:
 `BLOCKVECTOR` and `BLOCK_BYTE`, `REF`, `FIELD` and field sets, ordinary
 and general structure references, `BIND`, `BIND ROUTINE`, `MAP`, `PLIT`
 and `UPLIT`, `INITIAL` and `PRESET` on static and `LOCAL` data, and
-structure attributes on formals. Not yet: `GLOBAL BIND`, default
-structure references, `PSECT`, linkages, built-ins, conditions.
+structure attributes on formals. Step 8: `LINKAGE` with `CALL` and
+`JSB` and register parameters, `NOPRESERVE`, `PRESERVE` and `NOTUSED`;
+`BUILTIN`; the built-ins `ACTUALCOUNT`, `ACTUALPARAMETER`,
+`NULLPARAMETER`, `ARGPTR`, `MAX`, `MIN`, `MAXU`, `MINU`, `MAXA`, `MINA`,
+`ABS`, `SIGN`, `%REF`, `ROT`, `SLL`, `SRL`, `SRA` and `BARRIER`; and
+`ENABLE`, `SIGNAL`, `SIGNAL_STOP`, `SETUNWIND`, `ESTABLISH` and
+`REVERT`, and the `CH$` functions but `CH$TRANSTABLE` and
+`CH$TRANSLATE`, whose loops irgen writes out in IR. Not yet: `GLOBAL
+BIND`, default structure references, `PSECT`, `GLOBAL` registers and
+output parameters, and the atomic and PAL built-ins.
 
 ## How it works
 
@@ -71,6 +79,36 @@ lexemes. `%REMAINING`, `%LENGTH` and `%COUNT` belong to the copy they are
 read from, and an iterative macro's copies are a stream each, so
 `%EXITITERATION` leaves its separator behind.
 
+## Linkages and conditions
+
+A `JSB` linkage names VAX registers, R0-R11, which are x0, x1 and
+x19-x28 as vmacro has them, so a BLISS-64 linkage states a MACRO-32
+routine's register contract as MACRO-32 states it. A JSB call passes its
+arguments and its result through the stack, so that none is lost to a
+register a temporary also lives in, and keeps x18 and the registers the
+callee may change around the call; it sets x18 to `sp`, so that the
+callee's pushes go below the caller's frame. A BLISS JSB routine has a
+frame like any other, and reads its register parameters from its save
+area, where its prologue put them; it keeps R2-R11, as `.JSB_ENTRY` does.
+
+`ENABLE handler(actuals)` builds the enable vector in the routine's
+frame, the handler's address first, the count, then the actuals'
+addresses, clears the `LOCAL` actuals, and stores the vector's address at
+32(FP) (the save area moves to 40, as the frame descriptor says) and the
+module's jacket, `BLI$HANDLER`, at 16(FP). Called with the signal and
+mechanism arrays, the jacket finds the establisher's frame in the
+mechanism array and calls the handler with the vector, past its first
+fullword, as the third argument. `ESTABLISH` stores a handler at 16(FP)
+directly, and `REVERT` clears it. `SIGNAL` and `SIGNAL_STOP` call
+`LIB$SIGNAL` and `LIB$STOP`, and `SETUNWIND` `SYS$UNWIND(0, 0)`. Under
+vrun those come from `vtools/lib/signal.mar`, the executive's condition
+handling without access modes; `tests/bliss/interop` calls MACRO-32 both
+ways and handles conditions raised on each side.
+
+A routine that reads its argument list (`ACTUALCOUNT`, `ACTUALPARAMETER`,
+`ARGPTR`) gets a copy in its frame: the count from x9, then the arguments
+from x0-x7 and the caller's stack, a fullword each.
+
 ## Definitions
 
 `vtools/lib/lib.r64` and `starlet.r64`, and `lib.req` and `starlet.req`
@@ -83,7 +121,7 @@ comes from the letters between its `$` and `_`, as VMS names encode it:
 | --- | --- |
 | `B`, `W`, `L`, `Q` | a field macro, `PCB$L_STS = 20, 0, 32, 0 %`: offset, position, size, extension, for a `BLOCK[, BYTE]` reference |
 | `A`, `IS`, `PS` | a 32-bit field, sign-extended |
-| `IH`, `PH`, `PQ` | a 64-bit field |
+| `IH`, `PH`, `PQ` | a 64-bit field, marked signed as DEC's are |
 | `T`, `AB`, `AW`, `AL`, `AQ` | a field of size 0: its address |
 | `K`, `C`, `M`, `S`, `V`, none | a `LITERAL` |
 
@@ -175,7 +213,12 @@ global routine $FIB {
 | `exts`, `extu value, pos, size` | a bit field of a value |
 | `ins base, value, pos, size` | base with a bit field replaced |
 | `arg n` | the routine's argument n |
+| `regarg rN` | a JSB routine's parameter, in VAX register N |
+| `argcount`, `argn i`, `argptr` | the argument list the prologue copied: the count, argument i from 1, its address |
 | `call target(args)` | by the calling standard |
+| `jsb target(v rN, ...) nopreserve rN` | by a JSB linkage |
+| `sethandler v`, `setenable v` | the handler at 16(FP), the enable vector's address at 32(FP) |
+| `barrier` | a memory barrier |
 | `jmp @n`, `jlbs v, @t, @f`, `ret v` | ends a block |
 
 Data prints as `data $NAME in PSECT align A { items }`, each item a size and

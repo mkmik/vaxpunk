@@ -1,0 +1,147 @@
+                                Source Listing                   DD-MMM-YYYY HH:MM:SS  BLISS-64E V1.11-007-48G4L         Page 1
+                                                                 DD-MMM-YYYY HH:MM:SS  SYS$SYSDEVICE:[ORACLE]BUILTINS.B64;1
+
+    0	      1 MODULE BUILTINS (MAIN = MAIN) =
+    0	      2 BEGIN
+    1	      3 ! Built-ins: the linkage functions, MAX and MIN and their U and A forms,
+    1	      4 ! ABS and SIGN, the shifts and ROT, and %REF.
+    1	      5 REQUIRE 'PRINT';
+ R  1	      6 ! PRINT: prints a value as a signed decimal and as 16 hex digits, on a line
+ R  1	      7 ! of its own, through LIB$PUT_OUTPUT. The behaviour tests print with it,
+ R  1	      8 ! here under vrun and on OpenVMS for the oracle.
+ R  1	      9 
+ R  1	     10 EXTERNAL ROUTINE
+ R  1	     11     LIB$PUT_OUTPUT;
+ R  1	     12 
+ R  1	     13 ROUTINE PRINT (V) : NOVALUE =
+ R  1	     14     BEGIN
+ R  2	     15     LOCAL
+ R  2	     16         BUF : VECTOR[48, BYTE],
+ R  2	     17         DESC : VECTOR[2, LONG],
+ R  2	     18         X,
+ R  2	     19         I;
+ R  2	     20     I = 48;
+ R  2	     21     X = .V;
+ R  2	     22     INCR K FROM 1 TO 16 DO
+ R  2	     23         BEGIN
+ R  3	     24         LOCAL D;
+ R  3	     25         D = .X AND 15;
+ R  3	     26         I = .I - 1;
+ R  3	     27         BUF[.I] = (IF .D LSS 10 THEN %C'0' + .D ELSE %C'A' + .D - 10);
+ R  3	     28         X = .X ^ -4 AND %X'0FFFFFFFFFFFFFFF'
+ R  3	     29         END;
+ R  2	     30     I = .I - 1;
+ R  2	     31     BUF[.I] = %C' ';
+ R  2	     32     ! Digits from the remainders, negative for a negative value, so that
+ R  2	     33     ! the most negative one prints too.
+ R  2	     34     X = .V;
+ R  2	     35     DO
+ R  2	     36         BEGIN
+ R  3	     37         LOCAL D;
+ R  3	     38         D = .X - (.X / 10) * 10;
+ R  3	     39         IF .D LSS 0 THEN D = -.D;
+ R  3	     40         I = .I - 1;
+ R  3	     41         BUF[.I] = %C'0' + .D;
+ R  3	     42         X = .X / 10
+ R  3	     43         END
+ R  3	     44     UNTIL .X EQL 0;
+ R  2	     45     IF .V LSS 0
+ R  2	     46     THEN
+ R  2	     47         BEGIN
+ R  3	     48         I = .I - 1;
+ R  3	     49         BUF[.I] = %C'-'
+ R  3	     50         END;
+ R  2	     51     DESC[0] = 48 - .I + %X'010E0000';
+ R  2	     52     DESC[1] = BUF[.I];
+ R  2	     53     LIB$PUT_OUTPUT(DESC)
+ R  2	     54     END;
+    1	     55 
+    1	     56 BUILTIN
+    1	     57     ACTUALCOUNT,
+
+BUILTINS                        Source Listing                   DD-MMM-YYYY HH:MM:SS  BLISS-64E V1.11-007-48G4L         Page 2
+                                                                 DD-MMM-YYYY HH:MM:SS  SYS$SYSDEVICE:[ORACLE]BUILTINS.B64;1
+
+    1	     58     ACTUALPARAMETER,
+    1	     59     NULLPARAMETER,
+    1	     60     ARGPTR,
+    1	     61     ROT,
+    1	     62     SLL,
+    1	     63     SRL,
+    1	     64     SRA;
+    1	     65 
+    1	     66 ROUTINE COUNT =
+    1	     67     ACTUALCOUNT();
+    1	     68 
+    1	     69 ROUTINE SUM =
+    1	     70     BEGIN
+    2	     71     LOCAL
+    2	     72         S;
+    2	     73     S = 0;
+    2	     74     INCR I FROM 1 TO ACTUALCOUNT() DO
+    2	     75         S = .S + ACTUALPARAMETER(.I) * .I;
+    2	     76     .S
+    2	     77     END;
+    1	     78 
+    1	     79 ROUTINE NTH (N) =
+    1	     80     ACTUALPARAMETER(.N + 1);
+    1	     81 
+    1	     82 ROUTINE NULLS (A, B, C) =
+    1	     83     NULLPARAMETER(1) + NULLPARAMETER(2) * 2 + NULLPARAMETER(3) * 4;
+    1	     84 
+    1	     85 ROUTINE LIST =
+    1	     86     BEGIN
+    2	     87     LOCAL
+    2	     88         P : REF VECTOR;
+    2	     89     P = ARGPTR();
+    2	     90     .P[0] * 100 + .P[.P[0]]
+    2	     91     END;
+    1	     92 
+    1	     93 ROUTINE DEREF (P) =
+    1	     94     ..P;
+    1	     95 
+    1	     96 ROUTINE MAIN =
+    1	     97     BEGIN
+    2	     98     LOCAL
+    2	     99         X;
+    2	    100     PRINT(COUNT());
+    2	    101     PRINT(COUNT(1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11));
+    2	    102     PRINT(SUM(1, 2, 3, 4, 5, 6, 7, 8, 9, 10));
+    2	    103     PRINT(NTH(9, 0, 10, 20, 30, 40, 50, 60, 70, 80, 90, 100));
+    2	    104     PRINT(NULLS(1, 0));
+    2	    105     PRINT(NULLS(0, 2, 3));
+    2	    106     PRINT(LIST(5, 6, 7));
+    2	    107     PRINT(LIST(1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12));
+    2	    108     X = 5;
+    2	    109     PRINT(MAX(3, .X, -7));
+    2	    110     PRINT(MIN(3, .X, -7));
+    2	    111     PRINT(MAXU(3, -1));
+    2	    112     PRINT(MINU(3, -1));
+    2	    113     PRINT(MAXA(3, -1));
+    2	    114     PRINT(MINA(3, -1));
+
+BUILTINS                        Source Listing                   DD-MMM-YYYY HH:MM:SS  BLISS-64E V1.11-007-48G4L         Page 3
+                                                                 DD-MMM-YYYY HH:MM:SS  SYS$SYSDEVICE:[ORACLE]BUILTINS.B64;1
+
+    2	    115     PRINT(ABS(-.X));
+    2	    116     PRINT(ABS(.X));
+    2	    117     PRINT(SIGN(-.X) * 100 + SIGN(0) * 10 + SIGN(.X));
+    2	    118     PRINT(SLL(-1, 60));
+    2	    119     PRINT(SRL(-1, 60));
+    2	    120     PRINT(SRA(-16, 2));
+    2	    121     PRINT(ROT(%X'8000000000000001', 4));
+    2	    122     PRINT(ROT(%X'1234', 60));
+    2	    123     PRINT(DEREF(%REF(.X + 1)));
+    2	    124     1
+    2	    125     END;
+    1	    126 
+    1	    127 END
+    1	    128 ELUDOM
+
+
+                                Source Listing                   DD-MMM-YYYY HH:MM:SS  BLISS-64E V1.11-007-48G4L         Page 4
+                                Source Listing                   DD-MMM-YYYY HH:MM:SS  SYS$SYSDEVICE:[ORACLE]BUILTINS.B64;1
+
+COMMAND LINE:
+
+BLISS/A64/LIST/SOURCE_LIST=(EXPAND_MACROS,REQUIRE)/NOMACHINE_CODE BUILTINS.B64

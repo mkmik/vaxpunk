@@ -1,0 +1,79 @@
+MODULE BUILTINS (MAIN = MAIN) =
+BEGIN
+! Built-ins: the linkage functions, MAX and MIN and their U and A forms,
+! ABS and SIGN, the shifts and ROT, and %REF.
+REQUIRE 'PRINT';
+
+BUILTIN
+    ACTUALCOUNT,
+    ACTUALPARAMETER,
+    NULLPARAMETER,
+    ARGPTR,
+    ROT,
+    SLL,
+    SRL,
+    SRA;
+
+ROUTINE COUNT =
+    ACTUALCOUNT();
+
+ROUTINE SUM =
+    BEGIN
+    LOCAL
+        S;
+    S = 0;
+    INCR I FROM 1 TO ACTUALCOUNT() DO
+        S = .S + ACTUALPARAMETER(.I) * .I;
+    .S
+    END;
+
+ROUTINE NTH (N) =
+    ACTUALPARAMETER(.N + 1);
+
+ROUTINE NULLS (A, B, C) =
+    NULLPARAMETER(1) + NULLPARAMETER(2) * 2 + NULLPARAMETER(3) * 4;
+
+ROUTINE LIST =
+    BEGIN
+    LOCAL
+        P : REF VECTOR;
+    P = ARGPTR();
+    .P[0] * 100 + .P[.P[0]]
+    END;
+
+ROUTINE DEREF (P) =
+    ..P;
+
+ROUTINE MAIN =
+    BEGIN
+    LOCAL
+        X;
+    PRINT(COUNT());
+    PRINT(COUNT(1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11));
+    PRINT(SUM(1, 2, 3, 4, 5, 6, 7, 8, 9, 10));
+    PRINT(NTH(9, 0, 10, 20, 30, 40, 50, 60, 70, 80, 90, 100));
+    PRINT(NULLS(1, 0));
+    PRINT(NULLS(0, 2, 3));
+    PRINT(LIST(5, 6, 7));
+    PRINT(LIST(1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12));
+    X = 5;
+    PRINT(MAX(3, .X, -7));
+    PRINT(MIN(3, .X, -7));
+    PRINT(MAXU(3, -1));
+    PRINT(MINU(3, -1));
+    PRINT(MAXA(3, -1));
+    PRINT(MINA(3, -1));
+    PRINT(ABS(-.X));
+    PRINT(ABS(.X));
+    PRINT(SIGN(-.X) * 100 + SIGN(0) * 10 + SIGN(.X));
+    PRINT(SLL(-1, 60));
+    PRINT(SRL(-1, 60));
+    PRINT(SRA(-16, 2));
+    PRINT(ROT(%X'8000000000000001', 4));
+    PRINT(ROT(%X'1234', 60));
+    PRINT(DEREF(%REF(.X + 1)));
+    1
+    END;
+
+END
+ELUDOM

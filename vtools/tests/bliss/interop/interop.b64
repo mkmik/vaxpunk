@@ -1,0 +1,77 @@
+MODULE INTEROP (MAIN = MAIN) =
+BEGIN
+! BLISS-64 and MACRO-32 call each other with CALL and JSB linkages, and
+! handle each other's conditions (PRD-0004 step 8).
+REQUIRE '[-]PRINT';
+LIBRARY 'SYS$LIBRARY:STARLET';
+
+LINKAGE
+    JSB_R2_R3 = JSB(REGISTER = 2, REGISTER = 3),
+    JSB_R4_R5 = JSB(REGISTER = 4, REGISTER = 5) : NOPRESERVE(4, 5),
+    JSB_R4 = JSB(REGISTER = 4);
+
+EXTERNAL ROUTINE
+    MSUM : JSB_R2_R3,
+    MSCRATCH : JSB_R4_R5,
+    MTRIPLE,
+    MCALLB,
+    MSIG,
+    MCATCH;
+
+LITERAL
+    COND = %X'08018003';
+
+GLOBAL ROUTINE BADD (A, B) =
+    .A + .B;
+
+GLOBAL ROUTINE BTWICE (X) : JSB_R4 =
+    .X * 2;
+
+GLOBAL ROUTINE BSIGNAL =
+    BEGIN
+    SIGNAL(COND);
+    PRINT(999);
+    0
+    END;
+
+ROUTINE TAKE (SIG : REF VECTOR[, LONG], MCH : REF BLOCK[, BYTE], EN : REF VECTOR) =
+    BEGIN
+    IF .SIG[1] NEQ COND THEN RETURN SS$_RESIGNAL;
+    PRINT(.SIG[2]);
+    MCH[CHF$IH_MCH_SAVR0] = .SIG[2] + ..EN[1];
+    SS$_CONTINUE
+    END;
+
+ROUTINE CAUGHT =
+    BEGIN
+    LOCAL
+        BASE : VOLATILE;
+    ENABLE
+        TAKE(BASE);
+    BASE = 1000;
+    MSIG(COND)
+    END;
+
+ROUTINE MAIN =
+    BEGIN
+    LOCAL
+        A,
+        B,
+        C;
+    ! Values live across the JSB calls, in the registers they use.
+    A = 11;
+    B = 22;
+    C = 33;
+    PRINT(MSUM(4, 5));
+    PRINT(MSCRATCH(6, 7));
+    PRINT(.A + .B + .C);
+    PRINT(MSUM(.A, MSUM(.B, .C)));
+    PRINT(MTRIPLE(14));
+    PRINT(MCALLB(3, 4));
+    PRINT(CAUGHT());
+    PRINT(MCATCH());
+    1
+    END;
+
+END
+ELUDOM

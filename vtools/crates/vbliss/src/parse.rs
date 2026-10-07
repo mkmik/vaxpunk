@@ -7,6 +7,7 @@ use std::rc::Rc;
 use crate::data::{Init, StructAttr, Structure};
 use crate::lex::{Lexeme, Tok};
 use crate::lexical::{Item, Lx, Macro, MacroKind};
+use crate::linkage::Linkage;
 use crate::listing::{Diag, NOPOS};
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -37,7 +38,9 @@ pub enum Kind {
         global: bool,
         external: bool,
         novalue: bool,
+        linkage: Option<Rc<Linkage>>,
     },
+    Linkage(Rc<Linkage>),
     Literal(i64),
     /// A COMPILETIME name and its value now.
     Compiletime(i64),
@@ -50,6 +53,8 @@ pub enum Kind {
     Field(Vec<i64>),
     /// A FIELD set: its field names.
     FieldSet(Vec<usize>),
+    /// A built-in its BUILTIN declaration names.
+    Builtin,
 }
 
 #[derive(Clone, Debug)]
@@ -115,8 +120,16 @@ pub enum Expr {
     /// Temporary n set to a value for an expression: a structure
     /// reference's access actual, evaluated once.
     Let(u32, Box<Expr>, Box<Expr>),
-    /// `PLIT` (counted) or `UPLIT`: the address of its items.
-    Plit(bool, Vec<Init>),
+    /// `PLIT` (counted) or `UPLIT`, numbered: the address of its items,
+    /// allocated once however often a BIND name or a structure's copy
+    /// repeats it.
+    Plit(u32, bool, Vec<Init>),
+    /// A built-in that is an IR instruction of its own.
+    Special(crate::builtin::Special, Vec<Expr>),
+    /// An IR operation the operators don't have: SLL, ROT and the like.
+    Op(crate::ir::Op, Box<Expr>, Box<Expr>),
+    /// The address of the module's ENABLE handler jacket.
+    Jacket,
     Neg(Box<Expr>),
     Not(Box<Expr>),
     Bin(BOp, Box<Expr>, Box<Expr>),
@@ -184,6 +197,8 @@ pub struct Module {
     pub statics: Vec<Static>,
     /// The addresses BIND names stand for.
     pub binds: Vec<Expr>,
+    /// Whether a routine ENABLEs a handler, which the jacket calls.
+    pub jacket: bool,
 }
 
 /// A fatal error: the file, line and column (from 0) it is at.
@@ -247,6 +262,8 @@ pub struct Parser<'a> {
     pub(crate) inits: Vec<Expr>,
     /// Routines being parsed: nonzero where a frame exists.
     routines: u32,
+    /// Data declared VOLATILE.
+    pub(crate) volatile: Vec<usize>,
 }
 
 /// Parses the module in `text`, from file `name`.
@@ -278,6 +295,7 @@ pub fn parse(name: &str, text: &str, load: Loader, opts: &Options) -> Front {
         lets: 0,
         inits: Vec::new(),
         routines: 0,
+        volatile: Vec::new(),
     };
     p.lx.variant = opts.variant;
     p.predeclare();
@@ -952,6 +970,18 @@ impl Parser<'_> {
                     }
                 }
             }
+            "LINKAGE" => {
+                self.pos += 1;
+                self.linkages()?;
+            }
+            "BUILTIN" => {
+                self.pos += 1;
+                self.builtins()?;
+            }
+            "ENABLE" => {
+                self.pos += 1;
+                self.enable()?;
+            }
             "LIBRARY" => {
                 self.pos += 1;
                 let Tok::Str(name) = self.next() else {
@@ -965,7 +995,7 @@ impl Parser<'_> {
                 // doesn't show (docs/bliss64.md, *Libraries*).
                 self.library_file(&String::from_utf8_lossy(&name))?;
             }
-            "REGISTER" | "LINKAGE" | "PSECT" | "SWITCHES" | "BUILTIN" | "UNDECLARE" | "ENABLE" => {
+            "REGISTER" | "PSECT" | "SWITCHES" | "UNDECLARE" => {
                 return self.err(format!("{word} declarations are not supported yet"));
             }
             _ => return Ok(false),
@@ -999,13 +1029,14 @@ impl Parser<'_> {
     pub(crate) fn routine_names(&mut self) -> R<()> {
         loop {
             let name = self.name()?;
-            let novalue = self.routine_attributes()?;
+            let (novalue, linkage) = self.routine_attributes()?;
             self.declare(
                 name,
                 Kind::Routine {
                     global: false,
                     external: true,
                     novalue,
+                    linkage,
                 },
             )?;
             if !self.eat_punct(',') {
@@ -1014,19 +1045,26 @@ impl Parser<'_> {
         }
     }
 
-    /// `: NOVALUE` and the like; returns whether NOVALUE.
-    pub(crate) fn routine_attributes(&mut self) -> R<bool> {
-        let mut novalue = false;
+    /// `: NOVALUE`, a linkage name and the like; returns whether NOVALUE
+    /// and the linkage.
+    pub(crate) fn routine_attributes(&mut self) -> R<(bool, Option<Rc<Linkage>>)> {
+        let (mut novalue, mut linkage) = (false, None);
         if self.eat_punct(':') {
             loop {
                 if self.eat("NOVALUE") {
                     novalue = true;
-                } else if !(self.eat("WEAK") || self.eat("VARIABLE")) {
+                } else if self.eat("WEAK") || self.eat("VARIABLE") {
+                } else if let Tok::Name(n) = self.peek().clone()
+                    && let Some(Kind::Linkage(l)) = self.lookup(&n).map(|id| &self.m.syms[id].kind)
+                {
+                    linkage = Some(l.clone());
+                    self.pos += 1;
+                } else {
                     break;
                 }
             }
         }
-        Ok(novalue)
+        Ok((novalue, linkage))
     }
 
     pub(crate) fn routine(&mut self, global: bool) -> R<()> {
@@ -1047,13 +1085,33 @@ impl Parser<'_> {
             }
             self.expect_punct(')')?;
         }
-        let novalue = self.routine_attributes()?;
+        let (novalue, mut linkage) = self.routine_attributes()?;
+        if linkage.is_none()
+            && let Some(Kind::Routine { linkage: l, .. }) = self
+                .scopes
+                .last()
+                .unwrap()
+                .get(&name)
+                .map(|&id| &self.m.syms[id].kind)
+        {
+            // A FORWARD declaration's.
+            linkage = l.clone();
+        }
+        if let Some(l) = &linkage
+            && l.jsb
+            && names.len() > l.params.len()
+        {
+            return self.err(format!(
+                "{name} has more formals than its JSB linkage has registers"
+            ));
+        }
         let sym = self.declare(
             name,
             Kind::Routine {
                 global,
                 external: false,
                 novalue,
+                linkage,
             },
         )?;
         if let Some(Kind::Routine { global: g, .. }) = self.m.syms.get_mut(sym).map(|s| &mut s.kind)
@@ -1424,6 +1482,7 @@ impl Parser<'_> {
                 }
                 _ => match self.lookup(&n) {
                     Some(id) => self.named(&n, id),
+                    None if self.is_builtin(&n) => self.builtin(&n),
                     None if n.starts_with('%') => {
                         Err(self.error_at(&at, format!("{n} is not supported yet")))
                     }
@@ -1446,6 +1505,7 @@ impl Parser<'_> {
             Kind::Label => self.err(format!("label {n} used as a value")),
             Kind::Macro(_) => self.err(format!("macro {n} used as a value")),
             Kind::Structure(st) if self.eat_punct('[') => self.general_ref(st),
+            Kind::Builtin => self.builtin(n),
             Kind::Structure(_) | Kind::Field(_) | Kind::FieldSet(_) => {
                 self.err(format!("{n} used as a value"))
             }
@@ -1699,6 +1759,9 @@ pub fn shift(a: i64, n: i64) -> i64 {
 
 /// Words that can't name anything.
 pub const RESERVED: &[&str] = &[
+    "LINKAGE",
+    "ENABLE",
+    "BUILTIN",
     "BIND",
     "FIELD",
     "MAP",

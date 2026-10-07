@@ -181,6 +181,8 @@ impl Parser<'_> {
         self.lx.push_file(name, &text, true)?;
         let f = self.lx.files.last_mut().unwrap();
         f.listed = f.lines.len() as u32;
+        // BLISSA64 numbers the library as one line.
+        self.lx.listed += 1;
         Ok(())
     }
 

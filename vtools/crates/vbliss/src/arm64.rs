@@ -127,6 +127,16 @@ fn operands(ins: &Ins) -> (Option<u32>, Vec<&V>) {
         Ins::Insert(d, b, v, p, s) => (Some(*d), vec![b, v, p, s]),
         Ins::Arg(d, _) => (Some(*d), vec![]),
         Ins::Call(d, t, args) => (*d, std::iter::once(t).chain(args).collect()),
+        Ins::Jsb(d, t, args, _) => (
+            *d,
+            std::iter::once(t)
+                .chain(args.iter().map(|(a, _)| a))
+                .collect(),
+        ),
+        Ins::RegArg(d, _) | Ins::ArgCount(d) | Ins::ArgPtr(d) => (Some(*d), vec![]),
+        Ins::ArgN(d, i) => (Some(*d), vec![i]),
+        Ins::SetHandler(v) | Ins::SetEnable(v) => (None, vec![v]),
+        Ins::Barrier => (None, vec![]),
     }
 }
 
@@ -279,6 +289,11 @@ struct Routine<'a> {
     f: &'a Func,
     loc: Vec<Option<Loc>>,
     saved: u8,
+    /// The save area's offset from FP: 32, or 40 past the enable vector's
+    /// address.
+    rsa: u32,
+    /// Where the prologue copies the argument list, if the routine reads it.
+    args: Option<u32>,
     /// Each slot's offset from FP.
     slots: Vec<u32>,
     size: u32,
@@ -287,8 +302,29 @@ struct Routine<'a> {
 
 impl<'a> Routine<'a> {
     fn new(f: &'a Func) -> Self {
-        let (mut loc, saved, spills) = allocate(f);
-        let mut off = 32 + 8 * u32::from(saved);
+        let (mut loc, mut saved, spills) = allocate(f);
+        let all = || f.blocks.iter().flat_map(|b| &b.ins);
+        // A JSB routine's register parameters are read from the save area,
+        // where the prologue put them.
+        for ins in all() {
+            if let Ins::RegArg(_, r) = ins
+                && *r >= 2
+            {
+                saved = saved.max(*r - 1);
+            }
+        }
+        let enable = all().any(|i| matches!(i, Ins::SetEnable(_)));
+        let rsa = if enable { 40 } else { 32 };
+        let mut off = rsa + 8 * u32::from(saved);
+        let args = all()
+            .any(|i| matches!(i, Ins::ArgCount(_) | Ins::ArgN(..) | Ins::ArgPtr(_)))
+            .then(|| {
+                // ponytail: room for the most arguments, 255, in every
+                // routine that reads its list.
+                let at = off;
+                off += 8 * 256;
+                at
+            });
         let mut slots = Vec::new();
         for s in &f.slots {
             slots.push(off);
@@ -304,6 +340,8 @@ impl<'a> Routine<'a> {
             f,
             loc,
             saved,
+            rsa,
+            args,
             slots,
             size: off.next_multiple_of(16),
             out: String::new(),
@@ -424,6 +462,9 @@ impl<'a> Routine<'a> {
         self.line("stp     xzr, x16, [sp, #16]");
         self.line("mov     x29, sp");
         self.saves("stp", "str");
+        if let Some(at) = self.args {
+            self.home(at);
+        }
         for (b, block) in f.blocks.iter().enumerate() {
             if b > 0 {
                 let l = self.label(b as u32);
@@ -451,7 +492,7 @@ impl<'a> Routine<'a> {
         let bits: u32 = (1..=u32::from(self.saved)).map(|i| 1 << i).sum();
         let _ = writeln!(fdscs, "        .ALIGN  QUAD");
         let _ = writeln!(fdscs, "{name}.FDSC:");
-        let _ = writeln!(fdscs, "        .LONG   0, {bits}, 32, {n}");
+        let _ = writeln!(fdscs, "        .LONG   0, {bits}, {}, {n}", self.rsa);
         let _ = writeln!(fdscs, "        .QUAD   0, {name}.NAME - {name}.FDSC");
         let _ = writeln!(fdscs, "{name}.NAME:");
         let _ = writeln!(fdscs, "        .ASCIC  \"{name}\"");
@@ -475,11 +516,38 @@ impl<'a> Routine<'a> {
         }
     }
 
-    /// Saves or restores x19 up to the last register used, from 32(FP).
+    /// Copies the argument list to `at` from FP: the count from x9, x0-x7,
+    /// and those past them from the caller's stack.
+    fn home(&mut self, at: u32) {
+        let end = self.f.blocks.len() as u32;
+        let (again, done) = (self.label(end + 1), self.label(end + 2));
+        self.line("and     x10, x9, #255");
+        self.line(format!("str     x10, [x29, #{at}]"));
+        for i in (0..8).step_by(2) {
+            self.line(format!(
+                "stp     x{i}, x{}, [x29, #{}]",
+                i + 1,
+                at + 8 + 8 * i
+            ));
+        }
+        self.line("subs    x10, x10, #8");
+        self.line(format!("b.le    {done}"));
+        self.frame_address("x11", self.size.into());
+        self.frame_address("x12", i64::from(at) + 72);
+        self.out.push_str(&format!("{again}:\n"));
+        self.line("ldr     x13, [x11], #8");
+        self.line("str     x13, [x12], #8");
+        self.line("subs    x10, x10, #1");
+        self.line(format!("b.ne    {again}"));
+        self.out.push_str(&format!("{done}:\n"));
+    }
+
+    /// Saves or restores x19 up to the last register used, in the save
+    /// area.
     fn saves(&mut self, pair: &str, one: &str) {
         let mut r = 19u8;
         while r < 19 + self.saved {
-            let off = 32 + 8 * u32::from(r - 19);
+            let off = self.rsa + 8 * u32::from(r - 19);
             if r + 1 < 19 + self.saved {
                 self.line(format!("{pair}     x{r}, x{}, [x29, #{off}]", r + 1));
                 r += 2;
@@ -583,6 +651,53 @@ impl<'a> Routine<'a> {
                 }
                 self.done(*d);
             }
+            Ins::Jsb(d, target, args, nopreserve) => self.jsb(*d, target, args, nopreserve),
+            Ins::RegArg(d, r) => {
+                let rd = self.dst(*d);
+                if *r < 2 {
+                    self.line(format!("mov     {rd}, x{r}"));
+                } else {
+                    let off = self.rsa + 8 * u32::from(r - 2);
+                    self.line(format!("ldr     {rd}, [x29, #{off}]"));
+                }
+                self.done(*d);
+            }
+            Ins::SetHandler(v) => {
+                let r = self.src(v, "x10");
+                self.line(format!("str     {r}, [x29, #16]"));
+            }
+            Ins::SetEnable(v) => {
+                let r = self.src(v, "x10");
+                self.line(format!("str     {r}, [x29, #32]"));
+            }
+            Ins::ArgCount(d) => {
+                let at = self.args.unwrap();
+                let rd = self.dst(*d);
+                self.line(format!("ldr     {rd}, [x29, #{at}]"));
+                self.done(*d);
+            }
+            Ins::ArgPtr(d) => {
+                let at = self.args.unwrap();
+                let rd = self.dst(*d);
+                self.frame_address(&rd, at.into());
+                self.done(*d);
+            }
+            Ins::ArgN(d, i) => {
+                let at = i64::from(self.args.unwrap());
+                let rd = self.dst(*d);
+                match i {
+                    V::C(i) if (0..=255).contains(i) => {
+                        self.line(format!("ldr     {rd}, [x29, #{}]", at + 8 * i));
+                    }
+                    i => {
+                        let i = self.src(i, "x10");
+                        self.frame_address("x16", at);
+                        self.line(format!("ldr     {rd}, [x16, {i}, lsl #3]"));
+                    }
+                }
+                self.done(*d);
+            }
+            Ins::Barrier => self.line("dmb     ish"),
             Ins::Call(d, target, args) => {
                 let stack = (args.len().saturating_sub(8) as u32 * 8).next_multiple_of(16);
                 if stack > 0 {
@@ -612,6 +727,57 @@ impl<'a> Routine<'a> {
                     self.done(*d);
                 }
             }
+        }
+    }
+
+    /// A JSB linkage's call: the arguments and the result go through the
+    /// stack, so that no register they share with a temporary is lost, and
+    /// the registers the callee may change are kept around it, with x18,
+    /// which is set to `sp` so that the callee's pushes go below this frame.
+    fn jsb(&mut self, d: Option<u32>, target: &V, args: &[(V, u8)], nopreserve: &[u8]) {
+        let arm = |r: u8| if r < 2 { r } else { r + 17 };
+        let mut save: Vec<u8> = args
+            .iter()
+            .map(|(_, r)| *r)
+            .chain(nopreserve.iter().copied())
+            .filter(|&r| r >= 2)
+            .map(arm)
+            .collect();
+        save.push(18);
+        save.sort_unstable();
+        save.dedup();
+        let (ns, na) = (save.len(), args.len());
+        let area = (8 * (ns + na + 1) as u32).next_multiple_of(16);
+        self.sub_sp(area);
+        for (i, r) in save.iter().enumerate() {
+            self.line(format!("str     x{r}, [sp, #{}]", 8 * i));
+        }
+        for (j, (v, _)) in args.iter().enumerate() {
+            let r = self.src(v, "x10");
+            self.line(format!("str     {r}, [sp, #{}]", 8 * (ns + j)));
+        }
+        if !matches!(target, V::Sym(_, 0)) {
+            self.load_into(target, "x17");
+        }
+        for (j, (_, r)) in args.iter().enumerate() {
+            self.line(format!("ldr     x{}, [sp, #{}]", arm(*r), 8 * (ns + j)));
+        }
+        self.line("mov     x18, sp");
+        match target {
+            V::Sym(s, 0) => self.line(format!("bl      {s}")),
+            _ => self.line("blr     x17"),
+        }
+        self.line(format!("str     x0, [sp, #{}]", 8 * (ns + na)));
+        for (i, r) in save.iter().enumerate() {
+            self.line(format!("ldr     x{r}, [sp, #{}]", 8 * i));
+        }
+        if let Some(d) = d {
+            let r = self.dst(d);
+            self.line(format!("ldr     {r}, [sp, #{}]", 8 * (ns + na)));
+            self.add_sp(area);
+            self.done(d);
+        } else {
+            self.add_sp(area);
         }
     }
 
@@ -676,6 +842,7 @@ impl<'a> Routine<'a> {
                 Op::Shl => self.line(three("lsl")),
                 Op::Shr => self.line(three("lsr")),
                 Op::Sar => self.line(three("asr")),
+                Op::Ror => self.line(three("ror")),
                 Op::Ash => {
                     self.line(format!("neg     x12, {b}"));
                     self.line(format!("lsl     x13, {a}, {b}"));

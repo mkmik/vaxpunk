@@ -3,6 +3,7 @@
 
 use std::collections::{BTreeSet, HashMap};
 
+use crate::builtin::Special;
 use crate::data::Init;
 use crate::ir::{self, Block, Func, Ins, Item, Op, Term, Un, V};
 use crate::parse::{self, BOp, CaseLabel, Expr, Kind, Rel, SelectLabel, Storage};
@@ -32,6 +33,9 @@ struct Gen<'a> {
     externals: BTreeSet<String>,
     /// What structure references' temporaries hold.
     lets: HashMap<u32, V>,
+    /// The PLITs allocated, by number, and the %ASCID descriptors, by text.
+    plits: HashMap<u32, V>,
+    ascids: HashMap<Vec<u8>, V>,
 }
 
 /// Generates the IR of a parsed module.
@@ -45,6 +49,8 @@ pub fn generate(m: &parse::Module) -> R<ir::Module> {
         data: Vec::new(),
         externals: BTreeSet::new(),
         lets: HashMap::new(),
+        plits: HashMap::new(),
+        ascids: HashMap::new(),
     };
     for s in &m.statics {
         g.statics(s)?;
@@ -52,6 +58,9 @@ pub fn generate(m: &parse::Module) -> R<ir::Module> {
     let mut funcs = Vec::new();
     for r in &m.routines {
         funcs.push(g.routine(r)?);
+    }
+    if m.jacket {
+        funcs.push(jacket());
     }
     Ok(ir::Module {
         name: m.name.clone(),
@@ -252,9 +261,18 @@ impl Gen<'_> {
             ..Func::default()
         };
         self.cur = self.block();
+        let jsb = match &sym.kind {
+            Kind::Routine {
+                linkage: Some(l), ..
+            } if l.jsb => Some(l.clone()),
+            _ => None,
+        };
         for (i, &formal) in r.formals.iter().enumerate() {
             let t = self.temp();
-            self.emit(Ins::Arg(t, i as u32));
+            match &jsb {
+                Some(l) => self.emit(Ins::RegArg(t, l.params[i])),
+                None => self.emit(Ins::Arg(t, i as u32)),
+            }
             let addr = self.address(formal)?;
             self.emit(Ins::Store(V::T(t), addr, 8));
         }
@@ -273,9 +291,67 @@ impl Gen<'_> {
         Ok(match e {
             Expr::Num(n) => V::C(*n),
             Expr::Name(id) => self.address(*id)?,
-            Expr::Ascid(text) => self.ascid(text),
-            Expr::Plit(counted, items) => self.plit(*counted, items)?,
+            Expr::Ascid(text) => match self.ascids.get(text) {
+                Some(v) => v.clone(),
+                None => {
+                    let v = self.ascid(text);
+                    self.ascids.insert(text.clone(), v.clone());
+                    v
+                }
+            },
+            Expr::Plit(n, counted, items) => match self.plits.get(n) {
+                Some(v) => v.clone(),
+                None => {
+                    let v = self.plit(*counted, items)?;
+                    self.plits.insert(*n, v.clone());
+                    v
+                }
+            },
             Expr::Temp(t) => self.lets[t].clone(),
+            Expr::Jacket => V::Sym(JACKET.into(), 0),
+            Expr::Op(op, a, b) => {
+                let (a, b) = (self.value(a)?, self.value(b)?);
+                self.bin(*op, a, b)
+            }
+            Expr::Special(s, args) => {
+                let mut vals = Vec::new();
+                for a in args {
+                    vals.push(self.value(a)?);
+                }
+                match s {
+                    Special::ArgCount => {
+                        let d = self.temp();
+                        self.emit(Ins::ArgCount(d));
+                        V::T(d)
+                    }
+                    Special::ArgN => {
+                        let d = self.temp();
+                        self.emit(Ins::ArgN(d, vals.remove(0)));
+                        V::T(d)
+                    }
+                    Special::ArgPtr => {
+                        let d = self.temp();
+                        self.emit(Ins::ArgPtr(d));
+                        V::T(d)
+                    }
+                    Special::SetHandler => {
+                        self.emit(Ins::SetHandler(vals.remove(0)));
+                        V::C(0)
+                    }
+                    Special::SetEnable => {
+                        self.emit(Ins::SetEnable(vals.remove(0)));
+                        V::C(0)
+                    }
+                    Special::Barrier => {
+                        self.emit(Ins::Barrier);
+                        V::C(0)
+                    }
+                    _ => {
+                        let vals: Vec<V> = vals.into_iter().map(|v| self.fix(v)).collect();
+                        self.chars(*s, &vals)
+                    }
+                }
+            }
             Expr::Let(t, a, body) => {
                 let v = self.value(a)?;
                 let v = self.fix(v);
@@ -325,13 +401,30 @@ impl Gen<'_> {
                 v
             }
             Expr::Call(target, args) => {
+                let mut linkage = None;
                 let t = match **target {
-                    Expr::Name(id) => match self.m.syms[id].kind {
-                        Kind::Routine { .. } => self.address(id)?,
+                    Expr::Name(id) => match &self.m.syms[id].kind {
+                        Kind::Routine { linkage: l, .. } => {
+                            linkage = l.clone().filter(|l| l.jsb);
+                            self.address(id)?
+                        }
                         _ => return Err(format!("{} is not a routine", self.m.syms[id].name)),
                     },
                     ref t => self.value(t)?,
                 };
+                if let Some(l) = linkage {
+                    if args.len() > l.params.len() {
+                        return Err("more actuals than the JSB linkage has registers".into());
+                    }
+                    let mut vals = Vec::new();
+                    for (a, r) in args.iter().zip(&l.params) {
+                        let v = self.value(a)?;
+                        vals.push((self.fix(v), *r));
+                    }
+                    let d = self.temp();
+                    self.emit(Ins::Jsb(Some(d), t, vals, l.nopreserve.clone()));
+                    return Ok(V::T(d));
+                }
                 let mut vals = Vec::new();
                 for a in args {
                     vals.push(self.value(a)?);
@@ -489,6 +582,213 @@ impl Gen<'_> {
                 V::C(0)
             }
         })
+    }
+
+    /// A loop over i from 0 while i < n (unsigned): `body` makes the
+    /// block it gets go on to the next i, or leave for `out`.
+    fn count_loop(&mut self, n: V, out: u32, body: &mut dyn FnMut(&mut Self, V)) {
+        let i = self.temp();
+        self.copy(i, V::C(0));
+        let (head, b) = (self.block(), self.block());
+        self.jump(head);
+        self.start(head);
+        let c = self.bin(Op::Cltu, V::T(i), n);
+        self.end(Term::Jlbs(c, b, out));
+        self.start(b);
+        body(self, V::T(i));
+        let next = self.bin(Op::Add, V::T(i), V::C(1));
+        self.copy(i, next);
+        self.jump(head);
+    }
+
+    /// The CH$ functions that loop over characters, inline.
+    fn chars(&mut self, s: Special, a: &[V]) -> V {
+        let r = self.temp();
+        let out = self.block();
+        match s {
+            Special::ChMove | Special::ChFill => {
+                let (n, src, dst) = match s {
+                    Special::ChMove => (a[0].clone(), Some(a[1].clone()), a[2].clone()),
+                    _ => (a[1].clone(), None, a[2].clone()),
+                };
+                let fill = a[0].clone();
+                self.count_loop(n.clone(), out, &mut |g, i| {
+                    let c = match &src {
+                        Some(src) => {
+                            let p = g.bin(Op::Add, src.clone(), i.clone());
+                            let t = g.temp();
+                            g.emit(Ins::Load(t, p, 1, false));
+                            V::T(t)
+                        }
+                        None => fill.clone(),
+                    };
+                    let p = g.bin(Op::Add, dst.clone(), i);
+                    g.emit(Ins::Store(c, p, 1));
+                });
+                self.start(out);
+                let end = self.bin(Op::Add, dst, n);
+                self.copy(r, end);
+            }
+            Special::ChCopy => {
+                // Sources while the destination has room, then the fill.
+                let k = a.len();
+                let (fill, dn, dp) = (a[k - 3].clone(), a[k - 2].clone(), a[k - 1].clone());
+                let at = self.temp();
+                self.copy(at, V::C(0));
+                for pair in a[..k - 3].chunks(2) {
+                    let room = self.bin(Op::Sub, dn.clone(), V::T(at));
+                    let shorter = self.bin(Op::Cltu, pair[0].clone(), room.clone());
+                    let n = self.temp();
+                    let (yes, no, next) = (self.block(), self.block(), self.block());
+                    self.end(Term::Jlbs(shorter, yes, no));
+                    self.start(yes);
+                    self.copy(n, pair[0].clone());
+                    self.jump(next);
+                    self.start(no);
+                    self.copy(n, room);
+                    self.jump(next);
+                    self.start(next);
+                    let done = self.block();
+                    let src = pair[1].clone();
+                    let base = self.bin(Op::Add, dp.clone(), V::T(at));
+                    self.count_loop(V::T(n), done, &mut |g, i| {
+                        let p = g.bin(Op::Add, src.clone(), i.clone());
+                        let t = g.temp();
+                        g.emit(Ins::Load(t, p, 1, false));
+                        let q = g.bin(Op::Add, base.clone(), i);
+                        g.emit(Ins::Store(V::T(t), q, 1));
+                    });
+                    self.start(done);
+                    let moved = self.bin(Op::Add, V::T(at), V::T(n));
+                    self.copy(at, moved);
+                }
+                let rest = self.bin(Op::Sub, dn.clone(), V::T(at));
+                let base = self.bin(Op::Add, dp.clone(), V::T(at));
+                self.count_loop(rest, out, &mut |g, i| {
+                    let q = g.bin(Op::Add, base.clone(), i);
+                    g.emit(Ins::Store(fill.clone(), q, 1));
+                });
+                self.start(out);
+                let end = self.bin(Op::Add, dp, dn);
+                self.copy(r, end);
+            }
+            Special::ChCompare => {
+                // Over the longer length, the shorter filled.
+                let (n1, p1, n2, p2, fill) = (
+                    a[0].clone(),
+                    a[1].clone(),
+                    a[2].clone(),
+                    a[3].clone(),
+                    a[4].clone(),
+                );
+                let fill = self.bin(Op::And, fill, V::C(255));
+                let longer = self.temp();
+                let more = self.bin(Op::Cgtu, n1.clone(), n2.clone());
+                let (yes, no, go) = (self.block(), self.block(), self.block());
+                self.end(Term::Jlbs(more, yes, no));
+                self.start(yes);
+                self.copy(longer, n1.clone());
+                self.jump(go);
+                self.start(no);
+                self.copy(longer, n2.clone());
+                self.jump(go);
+                self.start(go);
+                self.copy(r, V::C(0));
+                self.count_loop(V::T(longer), out, &mut |g, i| {
+                    let char_at = |g: &mut Self, n: &V, p: &V| {
+                        let c = g.temp();
+                        let inside = g.bin(Op::Cltu, i.clone(), n.clone());
+                        let (y, f, j) = (g.block(), g.block(), g.block());
+                        g.end(Term::Jlbs(inside, y, f));
+                        g.start(y);
+                        let q = g.bin(Op::Add, p.clone(), i.clone());
+                        let t = g.temp();
+                        g.emit(Ins::Load(t, q, 1, false));
+                        g.copy(c, V::T(t));
+                        g.jump(j);
+                        g.start(f);
+                        g.copy(c, fill.clone());
+                        g.jump(j);
+                        g.start(j);
+                        V::T(c)
+                    };
+                    let c1 = char_at(g, &n1, &p1);
+                    let c2 = char_at(g, &n2, &p2);
+                    let lt = g.bin(Op::Clt, c1.clone(), c2.clone());
+                    let gt = g.bin(Op::Cgt, c1, c2);
+                    let d = g.bin(Op::Sub, gt, lt);
+                    g.copy(r, d);
+                    let same = g.bin(Op::Ceq, V::T(r), V::C(0));
+                    let cont = g.block();
+                    g.end(Term::Jlbs(same, cont, out));
+                    g.start(cont);
+                });
+                self.start(out);
+            }
+            Special::ChFind | Special::ChFindNot => {
+                let (n, p, ch) = (a[0].clone(), a[1].clone(), a[2].clone());
+                let ch = self.bin(Op::And, ch, V::C(255));
+                self.copy(r, V::C(0));
+                self.count_loop(n, out, &mut |g, i| {
+                    let q = g.bin(Op::Add, p.clone(), i);
+                    let t = g.temp();
+                    g.emit(Ins::Load(t, q.clone(), 1, false));
+                    let hit = g.bin(
+                        if s == Special::ChFind {
+                            Op::Ceq
+                        } else {
+                            Op::Cne
+                        },
+                        V::T(t),
+                        ch.clone(),
+                    );
+                    let (found, cont) = (g.block(), g.block());
+                    g.end(Term::Jlbs(hit, found, cont));
+                    g.start(found);
+                    g.copy(r, q);
+                    g.jump(out);
+                    g.start(cont);
+                });
+                self.start(out);
+            }
+            Special::ChFindSub => {
+                // Each place the pattern fits, compared a character at a time.
+                let (cn, cp, pn, pp) = (a[0].clone(), a[1].clone(), a[2].clone(), a[3].clone());
+                self.copy(r, V::C(0));
+                let fits = self.bin(Op::Cgeu, cn.clone(), pn.clone());
+                let (search, places) = (self.block(), self.temp());
+                self.end(Term::Jlbs(fits, search, out));
+                self.start(search);
+                let span = self.bin(Op::Sub, cn, pn.clone());
+                let span = self.bin(Op::Add, span, V::C(1));
+                self.copy(places, span);
+                self.count_loop(V::T(places), out, &mut |g, i| {
+                    let at = g.bin(Op::Add, cp.clone(), i);
+                    let (miss, all) = (g.block(), g.block());
+                    let at2 = at.clone();
+                    let pp2 = pp.clone();
+                    g.count_loop(pn.clone(), all, &mut |g, j| {
+                        let x = g.bin(Op::Add, at2.clone(), j.clone());
+                        let tx = g.temp();
+                        g.emit(Ins::Load(tx, x, 1, false));
+                        let y = g.bin(Op::Add, pp2.clone(), j);
+                        let ty = g.temp();
+                        g.emit(Ins::Load(ty, y, 1, false));
+                        let same = g.bin(Op::Ceq, V::T(tx), V::T(ty));
+                        let cont = g.block();
+                        g.end(Term::Jlbs(same, cont, miss));
+                        g.start(cont);
+                    });
+                    g.start(all);
+                    g.copy(r, at);
+                    g.jump(out);
+                    g.start(miss);
+                });
+                self.start(out);
+            }
+            _ => unreachable!(),
+        }
+        V::T(r)
     }
 
     /// A temporary holding v, so that a later store can't change it.
@@ -810,6 +1110,37 @@ impl Gen<'_> {
         self.jump(out);
         self.start(out);
         Ok(V::T(r))
+    }
+}
+
+/// The ENABLE handler jacket's name.
+const JACKET: &str = "BLI$HANDLER";
+
+/// The handler jacket ENABLE makes the handler (`builtin.rs`): called with
+/// the signal and mechanism arrays, it finds the establisher's enable
+/// vector at 32(FP) of the frame the mechanism array has, and calls the
+/// handler at its start with the vector's rest as the third argument.
+fn jacket() -> Func {
+    let ins = vec![
+        Ins::Arg(0, 0),
+        Ins::Arg(1, 1),
+        Ins::Bin(Op::Add, 2, V::T(1), V::C(8)), // CHF$PH_MCH_FRAME
+        Ins::Load(3, V::T(2), 8, false),
+        Ins::Bin(Op::Add, 4, V::T(3), V::C(32)),
+        Ins::Load(5, V::T(4), 8, false), // the enable vector
+        Ins::Load(6, V::T(5), 8, false), // the handler
+        Ins::Bin(Op::Add, 7, V::T(5), V::C(8)),
+        Ins::Call(Some(8), V::T(6), vec![V::T(0), V::T(1), V::T(7)]),
+    ];
+    Func {
+        name: JACKET.into(),
+        global: false,
+        slots: Vec::new(),
+        temps: 9,
+        blocks: vec![Block {
+            ins,
+            term: Term::Ret(V::T(8)),
+        }],
     }
 }
 

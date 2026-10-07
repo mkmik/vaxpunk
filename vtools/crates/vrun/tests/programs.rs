@@ -189,7 +189,10 @@ fn run(dir: &Path, expected: &Path, name: &str, tool: Tool, macro32: bool) -> Re
     vlink::check_fixups(image, &link(far, true)?.image)
         .map_err(|e| format!("linked at {far:#x}: {e}"))?;
 
-    let exe = Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("{name}.exe"));
+    // Named for its directory too: the tests run at once, and tests/run
+    // and tests/bliss both have a `data`.
+    let tag = dir.file_name().unwrap().to_string_lossy();
+    let exe = Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("{tag}-{name}.exe"));
     let bytes = image.write();
     assert_eq!(Image::parse(&bytes).unwrap().write(), bytes, "round trip");
     fs::write(&exe, bytes).unwrap();

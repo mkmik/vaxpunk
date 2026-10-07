@@ -10,8 +10,8 @@
 //! letters, as `SS$_NORMAL`) becomes a LITERAL. A letter the rule doesn't
 //! know is an error that names the symbol, to be fixed in the library.
 //!
-//! DEC's STARLET.R64 has the same field macros, with `$A_` and `$IS_`
-//! fields signed, but makes `$V_` names field macros too, since its
+//! DEC's STARLET.R64 has the same field macros, with `$A_`, `$IS_` and
+//! `$IH_` fields signed, but makes `$V_` names field macros too, since its
 //! sources know which field a bit is in; the macro libraries give only the
 //! bit number, so here they are literals: `.PCB[PCB$L_STS]<PCB$V_WALL, 1>`.
 
@@ -37,7 +37,8 @@ fn kind(letters: &str, dialect: Dialect) -> Option<Option<(u32, bool)>> {
         "L" => Some((32, false)),
         // Addresses and signed integers sign-extend, as in DEC's STARLET.
         "A" | "IS" | "PS" => Some((32, true)),
-        "Q" | "IH" | "PH" | "PQ" => Some((quad, false)),
+        "Q" => Some((quad, false)),
+        "IH" | "PH" | "PQ" => Some((quad, true)),
         // Text, and arrays: their address, no size.
         "T" | "AB" | "AW" | "AL" | "AQ" => Some((0, false)),
         _ => return None,

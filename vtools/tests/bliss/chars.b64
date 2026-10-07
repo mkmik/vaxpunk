@@ -1,0 +1,84 @@
+MODULE CHARS (MAIN = MAIN) =
+BEGIN
+! The character functions: pointers, reading and writing a character,
+! moving, filling and copying, comparing and searching.
+REQUIRE 'PRINT';
+
+OWN
+    X : VECTOR[CH$ALLOCATION(20)],
+    ALPHA : VECTOR[CH$ALLOCATION(10)],
+    P;
+
+BIND
+    S = UPLIT('ABCD'),
+    Q = UPLIT('ABCDEFGH'),
+    P_ALPHA = CH$PTR(UPLIT('ALPHA')),
+    P_BETA = CH$PTR(UPLIT('BETA')),
+    P_BEAR = CH$PTR(UPLIT('BEAR')),
+    P_BE = CH$PTR(UPLIT('BE')),
+    LINE = UPLIT('   SOME WORDS  ');
+
+! Prints n characters at pointer p as a number, a character a digit.
+ROUTINE CHARS (N, PTR) : NOVALUE =
+    BEGIN
+    LOCAL
+        V;
+    V = 0;
+    INCR I FROM 0 TO .N - 1 DO
+        V = .V * 256 + CH$RCHAR(CH$PLUS(.PTR, .I));
+    PRINT(.V)
+    END;
+
+ROUTINE MAIN =
+    BEGIN
+    LOCAL
+        CP,
+        LE,
+        RE;
+    PRINT(CH$ALLOCATION(20));
+    PRINT(CH$SIZE());
+    CP = CH$PTR(S);
+    PRINT(CH$RCHAR(.CP));
+    PRINT(CH$A_RCHAR(CP));
+    PRINT(CH$RCHAR_A(CP));
+    PRINT(CH$RCHAR(.CP));
+    PRINT(CH$DIFF(.CP, CH$PTR(S)));
+    P = CH$PTR(X);
+    INCR I FROM 1 TO 4 DO
+        BEGIN
+        P = CH$MOVE(.I, CH$PTR(S), .P);
+        P = CH$FILL(%C'-', 5 - .I, .P);
+        END;
+    PRINT(CH$DIFF(.P, CH$PTR(X)));
+    CHARS(8, CH$PTR(X));
+    CHARS(8, CH$PTR(X, 8));
+    CHARS(4, CH$PTR(X, 16));
+    PRINT(CH$DIFF(CH$COPY(3, CH$PTR(Q, 5), 5, CH$PTR(Q), %C' ', 10, CH$PTR(ALPHA)), CH$PTR(ALPHA)));
+    CHARS(5, CH$PTR(ALPHA));
+    CHARS(5, CH$PTR(ALPHA, 5));
+    CP = CH$PTR(ALPHA);
+    CH$WCHAR(%C'P', .CP);
+    INCR I FROM 1 TO 4 DO
+        CH$A_WCHAR(%C'Q', CP);
+    CH$WCHAR_A(%C'R', CP);
+    CHARS(6, CH$PTR(ALPHA));
+    PRINT(CH$LSS(5, P_ALPHA, 4, P_BETA));
+    PRINT(CH$GTR(4, P_BETA, 4, P_BEAR));
+    PRINT(CH$GTR(4, P_BEAR, 2, P_BE));
+    PRINT(CH$GTR(4, P_BEAR, 2, P_BE, 127));
+    PRINT(CH$COMPARE(5, P_ALPHA, 4, P_BETA));
+    PRINT(CH$COMPARE(2, P_BEAR, 2, P_BE));
+    PRINT(CH$EQL(2, P_BEAR, 2, P_BE) + CH$NEQ(2, P_BEAR, 2, P_BE) * 2);
+    PRINT(CH$LEQ(4, P_BETA, 4, P_BEAR) + CH$GEQ(4, P_BETA, 4, P_BEAR) * 2);
+    LE = CH$FIND_NOT_CH(15, CH$PTR(LINE), %C' ');
+    RE = CH$FIND_CH(15 - CH$DIFF(.LE, CH$PTR(LINE)), .LE, %C' ');
+    PRINT(CH$DIFF(.LE, CH$PTR(LINE)));
+    PRINT(CH$DIFF(.RE, .LE));
+    PRINT(CH$FAIL(CH$FIND_CH(4, CH$PTR(S), %C'Z')));
+    PRINT(CH$DIFF(CH$FIND_SUB(15, CH$PTR(LINE), 3, CH$PTR(UPLIT('ORD'))), CH$PTR(LINE)));
+    PRINT(CH$FAIL(CH$FIND_SUB(15, CH$PTR(LINE), 3, CH$PTR(UPLIT('ORE')))));
+    1
+    END;
+
+END
+ELUDOM
