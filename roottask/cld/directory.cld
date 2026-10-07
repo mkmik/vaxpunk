@@ -1,6 +1,7 @@
-! DIRECTORY [spec] [/OWNER] [/PROTECTION]: DIRECTORY.EXE lists files.
+! DIRECTORY [spec] [/OWNER] [/PROTECTION] [/FULL]: DIRECTORY.EXE lists files.
 define verb DIRECTORY
 	image DIRECTORY
 	parameter P1, label=FILE, value(type=$infile)
 	qualifier OWNER
 	qualifier PROTECTION
+	qualifier FULL

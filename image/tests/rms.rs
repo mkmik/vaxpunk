@@ -5,7 +5,8 @@
 //! RMSDUMP prints each file's records along each of its keys, which must
 //! be what OpenVMS printed, the fixture's dump of that key. CONVERT/FDL
 //! makes those files again from the inputs and FDL files OpenVMS made them
-//! from, with the same records, and ANALYZE/RMS_FILE finds them sound.
+//! from, with the same records, and ANALYZE/RMS_FILE finds them sound;
+//! COPY copies one, and DIRECTORY/FULL describes it.
 //! Then RMSRAND runs a long script of random operations on an indexed
 //! file, each of whose results a model here knows, and `ods` checks the
 //! file after.
@@ -249,9 +250,25 @@ fn convert() {
                 failed.push(format!("ANALYZE/RMS_FILE {out}: {report}"));
             }
         }
+        // COPY copies an indexed file block by block, records and keys.
+        vax.command("COPY IDXF.IDX COPY.IDX", "\n$ ");
+        let got = vax.command("RMSDUMP COPY.IDX 1", "\n$ ");
+        let got: Vec<_> = got
+            .lines()
+            .skip(1)
+            .take_while(|l| !l.starts_with("RMSDUMP: "))
+            .collect();
+        let want = fs::read_to_string(fixtures.join("idxf_key1.dump")).unwrap();
+        if got != want.lines().collect::<Vec<_>>() {
+            failed.push(format!("COPY.IDX key 1: {} records", got.len()));
+        }
+        let full = vax.command("DIRECTORY/FULL COPY.IDX", "\n$ ");
+        if !full.contains("File organization:  Indexed, Prolog: 3, Using 3 keys") {
+            failed.push(format!("DIRECTORY/FULL: {full}"));
+        }
     }
     let mut vol = Image::open(&disk, Mode::ReadOnly).unwrap();
-    for (out, ..) in CONVERSIONS {
+    for out in CONVERSIONS.iter().map(|c| c.0).chain(["COPY.IDX"]) {
         let fid = vol.lookup(&format!("[000000]{out}")).unwrap();
         let report = vol.check_file(fid).unwrap();
         if !report.is_sound() {

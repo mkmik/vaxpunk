@@ -7,7 +7,9 @@
 ; and copies its records, a $GET and a $PUT each. The new file is the
 ; next version unless to gives one. APPEND opens to instead, for $PUT,
 ; and connects at its end, where the records go. Returns RMS's status if it can't.
-; With /LOG, says what it copied where, as VMS's COPY and APPEND do.
+; With /LOG, says what it copied where, as VMS's COPY and APPEND do. A
+; relative or indexed file COPY copies a block at a time, as VMS's does,
+; its structure and all, into a file made with the same attributes.
 ; ponytail: one file, no wildcards; records up to RECSIZE.
 ;
         .LIBRARY "starlet.mlb"
@@ -44,6 +46,9 @@ APPENDED:
 APTO:   .ASCIC  " appended to "
 OPEN:   .ASCIC  " ("
 CLOSE:  .ASCIC  " records)"
+BLOCKS: .ASCIC  " blocks)"
+BLOCKMODE:
+        .LONG   0                       ; 1: blocks, not records"
 INRES:  .BLKB   255
 OUTRES: .BLKB   255
 REC:    .BLKB   RECSIZE
@@ -73,7 +78,14 @@ REC:    .BLKB   RECSIZE
         MOVW    INFAB+FAB$W_MRS, OUTFAB+FAB$W_MRS
         MOVB    INFAB+FAB$B_FSZ, OUTFAB+FAB$B_FSZ
         MOVL    INFAB+FAB$L_ALQ, OUTFAB+FAB$L_ALQ
+        MOVB    INFAB+FAB$B_BKS, OUTFAB+FAB$B_BKS
+        MOVW    INFAB+FAB$W_DEQ, OUTFAB+FAB$W_DEQ
         BLBS    APPEND, 15$
+        TSTB    INFAB+FAB$B_ORG         ; relative or indexed: by blocks
+        BEQL    12$
+        BSBW    BLOCKCOPY
+        BRW     70$
+12$:
         $CREATE FAB=OUTFAB
         BRB     17$
 15$:    MOVB    #FAB$M_PUT, OUTFAB+FAB$B_FAC
@@ -105,7 +117,48 @@ REC:    .BLKB   RECSIZE
         MOVL    R2, R0
         RET
 
-; LOG: with /LOG, writes %COPY-S-COPIED, from copied to to (n records).
+; BLOCKCOPY: INFAB = a relative or indexed file, open, and OUTFAB set up
+; like it. Opens it again for block I/O, makes OUTFAB's file for block I/O
+; and copies every block to it, RECSIZE bytes at a time, and logs it.
+; R0 = RMS$_NORMAL or RMS's error. Uses R0-R5.
+BLOCKCOPY:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5>
+        $CLOSE  FAB=INFAB               ; again, by its resultant name
+        MOVAB   INRES, INFAB+FAB$L_FNA
+        MOVB    INNAM+NAM$B_RSL, INFAB+FAB$B_FNS
+        MOVB    #FAB$M_BIO, INFAB+FAB$B_FAC
+        $OPEN   FAB=INFAB
+        BLBC    R0, 90$
+        MOVB    #FAB$M_BIO, OUTFAB+FAB$B_FAC
+        $CREATE FAB=OUTFAB
+        BLBC    R0, 90$
+        $CONNECT RAB=INRAB
+        BLBC    R0, 90$
+        $CONNECT RAB=OUTRAB
+        BLBC    R0, 90$
+        MOVL    #1, INRAB+RAB$L_BKT     ; the next VBN
+10$:    $READ   RAB=INRAB
+        BLBC    R0, 20$
+        MOVL    INRAB+RAB$L_BKT, OUTRAB+RAB$L_BKT
+        MOVL    INRAB+RAB$L_RBF, OUTRAB+RAB$L_RBF
+        MOVW    INRAB+RAB$W_RSZ, OUTRAB+RAB$W_RSZ
+        $WRITE  RAB=OUTRAB
+        BLBC    R0, 90$
+        MOVZWL  INRAB+RAB$W_RSZ, R0     ; blocks so far, and the next
+        ADDL2   #511, R0
+        DIVL2   #512, R0
+        ADDL2   R0, RECORDS
+        ADDL3   R0, INRAB+RAB$L_BKT, INRAB+RAB$L_BKT
+        BRB     10$
+20$:    CMPL    R0, #RMS$_EOF
+        BNEQ    90$
+        MOVL    #1, BLOCKMODE
+        BSBW    LOG
+        MOVL    #SS$_NORMAL, R0
+90$:    RSB
+
+; LOG: with /LOG, writes %COPY-S-COPIED, from copied to to (n records),
+; or (n blocks).
 ; Uses R0-R5.
 LOG:
         .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5>
@@ -142,7 +195,9 @@ LOG:
         BSBB    ADD
         SOBGTR  R4, 20$
         MOVAB   CLOSE, R1
-        BSBB    ADDTEXT
+        BLBC    BLOCKMODE, 30$
+        MOVAB   BLOCKS, R1
+30$:    BSBB    ADDTEXT
         PUSHAB  MSG
         CALLS   #1, G^PUT_LINE
 90$:    RSB

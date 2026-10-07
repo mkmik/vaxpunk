@@ -7,9 +7,12 @@
 ; directory from the default one; $SEARCH finds each file. * matches any
 ; characters, % one. /OWNER and /PROTECTION list a file a line, with its
 ; owner's UIC and its protection, which $OPEN puts in a protection XAB.
+; /FULL lists all VMS's does about each, from its XABs, and the blocks
+; they use and have.
 ; ponytail: one directory, since RMS has no wildcard directories. A file
 ; the process may not read shows neither, where VMS's DIRECTORY asks the
-; XQP for them.
+; XQP for them. /FULL's directories are contiguous, and the times
+; Files-11 doesn't keep, like the last access, are <None specified>.
 ;
         .LIBRARY "starlet.mlb"
         .LIBRARY "sysexe.mlb"
@@ -18,6 +21,9 @@
         $FABDEF
         $NAMDEF
         $XABPRODEF
+        $XABDATDEF
+        $XABFHCDEF
+        $XABSUMDEF
 
         .EXTERNAL PUT_LINE
 
@@ -50,11 +56,28 @@ EXP:    .BLKB   255
 RES:    .BLKB   255
 LINE:   .BLKB   256                     ; a line being made, .ASCIC
 FILES:  .LONG   0
-DETAIL: .LONG   0                       ; bit 0 /OWNER, bit 1 /PROTECTION
+DETAIL: .LONG   0                       ; bit 0 /OWNER, bit 1 /PROTECTION, 2 /FULL
 FAB2:   $FAB    FNA=RES, XAB=XAB        ; $OPEN's, of the file $SEARCH found
-XAB:    $XABPRO
+XAB:    $XABPRO NXT=DAT
+DAT:    $XABDAT NXT=FHC
+FHC:    $XABFHC
+SUM:    $XABSUM                         ; an indexed file's keys
+USED:   .LONG   0                       ; /FULL's blocks: used
+ALLOC:  .LONG   0                       ; and allocated
+TIME:   .BLKB   23                      ; a time, as $ASCTIM writes it
+TIMEDSC:
+        .LONG   23
+        .ADDRESS TIME
 LETTERS:                                ; the access a protection's bits deny
         .ASCII  "RWED"
+CATS:   .BYTE   0, 8, 15, 22            ; each category's name in CATNAMES
+CATNAMES:
+        .ASCIC  "System:"
+        .ASCIC  "Owner:"
+        .ASCIC  "Group:"
+        .ASCIC  "World:"
+DIRTYPE:
+        .ASCII  ".DIR"
 
         .PSECT  CODE, EXE, LONG
         .ENTRY  START, ^M<R2, R3, R4, R5, R6>
@@ -64,7 +87,10 @@ LETTERS:                                ; the access a protection's bits deny
 2$:     PRESENT "PROTECTION"
         BLBC    R0, 3$
         BISL2   #2, DETAIL
-3$:     GETVALUE "FILE", SPECDSC, SPECDSC
+3$:     PRESENT "FULL"
+        BLBC    R0, 4$
+        BISL2   #4, DETAIL
+4$:     GETVALUE "FILE", SPECDSC, SPECDSC
         BLBS    R0, 5$
         CLRL    SPECDSC
 5$:     MOVB    SPECDSC, FAB+FAB$B_FNS
@@ -83,7 +109,10 @@ LETTERS:                                ; the access a protection's bits deny
         BSBW    SAY
         PRINT   ""
 20$:    INCL    FILES
-        TSTL    DETAIL
+        BBC     #2, DETAIL, 22$
+        BSBW    FULL
+        BRW     10$
+22$:    TSTL    DETAIL
         BEQL    25$
         BSBW    DETAILS
         BRW     10$
@@ -120,9 +149,18 @@ LETTERS:                                ; the access a protection's bits deny
         BSBW    ADDDEC
         CMPL    FILES, #1
         BEQL    67$
-        ADDTEXT " files."
-        BRB     70$
-67$:    ADDTEXT " file."
+        ADDTEXT " files"
+        BRB     68$
+67$:    ADDTEXT " file"
+68$:    BBC     #2, DETAIL, 69$         ; /FULL: and their blocks
+        ADDTEXT ", "
+        MOVL    USED, R1
+        BSBW    ADDDEC
+        ADDTEXT "/"
+        MOVL    ALLOC, R1
+        BSBW    ADDDEC
+        ADDTEXT " blocks"
+69$:    ADDTEXT "."
 70$:    BSBW    SAY
 80$:    MOVL    #SS$_NORMAL, R0
 90$:    RET
@@ -175,6 +213,291 @@ DETAILS:
 40$:    MOVZBL  #44, R0
         BSBW    ADDCHAR
         BRB     30$
+
+; FULL: writes what VMS's DIRECTORY/FULL does about the file $SEARCH
+; found, from $OPEN's XABs, and adds its blocks to USED and ALLOC. Uses
+; R0-R6.
+FULL:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5, R6>
+        MOVZBL  NAM+NAM$B_NAME, R2      ; NAME.TYPE;VERSION
+        ADDB2   NAM+NAM$B_TYPE, R2
+        ADDB2   NAM+NAM$B_VER, R2
+        MOVL    NAM+NAM$L_NAME, R1
+        BSBW    ADD
+        MOVL    #30, R3
+        BSBW    PADTO
+        MOVB    NAM+NAM$B_RSL, FAB2+FAB$B_FNS
+        $OPEN   FAB=FAB2
+        BLBS    R0, 5$
+        ADDTEXT "No privilege for attempted operation"
+        BSBW    SAY
+        PRINT   ""
+        RSB
+5$:     MOVAB   SUM, FAB2+FAB$L_XAB     ; an indexed file's keys
+        CMPB    FAB2+FAB$B_ORG, #FAB$C_IDX
+        BNEQ    7$
+        $DISPLAY FAB=FAB2
+7$:     MOVAB   XAB, FAB2+FAB$L_XAB
+        $CLOSE  FAB=FAB2
+        ADDTEXT "File ID:  ("
+        MOVZWL  NAM+NAM$W_FID, R1
+        BSBW    ADDDEC
+        ADDTEXT ","
+        MOVZWL  NAM+NAM$W_FID+2, R1
+        BSBW    ADDDEC
+        ADDTEXT ","
+        MOVZWL  NAM+NAM$W_FID+4, R1
+        BSBW    ADDDEC
+        ADDTEXT ")"
+        MOVL    #62, R3
+        BSBW    PADTO
+        BSBW    SAY
+        MOVL    FHC+XAB$L_EBK, R6       ; R6 = the blocks used: up to the
+        BEQL    10$                     ; end of file, or all of an indexed
+        DECL    R6                      ; file's that has none
+        TSTW    FHC+XAB$W_FFB
+        BEQL    12$
+        INCL    R6
+        BRB     12$
+10$:    MOVL    FAB2+FAB$L_ALQ, R6
+12$:    ADDL2   R6, USED
+        ADDL2   FAB2+FAB$L_ALQ, ALLOC
+        ADDTEXT "Size:"
+        MOVL    R6, R1
+        MOVL    #18, R3
+        BSBW    RIGHT
+        ADDTEXT "/"
+        MOVL    FAB2+FAB$L_ALQ, R1
+        BSBW    ADDDEC
+        MOVL    #30, R3
+        BSBW    PADTO
+        ADDTEXT "Owner:    ["
+        MOVZWL  XAB+XAB$L_UIC+2, R1
+        BSBW    ADDOCT
+        ADDTEXT ","
+        MOVZWL  XAB+XAB$L_UIC, R1
+        BSBW    ADDOCT
+        ADDTEXT "]"
+        BSBW    SAY
+        ADDTEXT "Created:    "
+        MOVAB   DAT+XAB$Q_CDT, R0
+        BSBW    ADDTIME
+        BSBW    SAY
+        ADDTEXT "Modified:   "
+        MOVAB   DAT+XAB$Q_RDT, R0
+        BSBW    ADDTIME
+        ADDTEXT " ("
+        MOVZWL  DAT+XAB$W_RVN, R1
+        BSBW    ADDDEC
+        ADDTEXT ")"
+        BSBW    SAY
+        ADDTEXT "Expires:    "
+        MOVAB   DAT+XAB$Q_EDT, R0
+        TSTL    (R0)
+        BNEQ    15$
+        TSTL    4(R0)
+        BNEQ    15$
+        ADDTEXT "<None specified>"
+        BRB     17$
+15$:    BSBW    ADDTIME
+17$:    BSBW    SAY
+        ADDTEXT "Backup:     "
+        MOVAB   DAT+XAB$Q_BDT, R0
+        TSTL    (R0)
+        BNEQ    18$
+        TSTL    4(R0)
+        BNEQ    18$
+        ADDTEXT "<No backup recorded>"
+        BRB     19$
+18$:    BSBW    ADDTIME
+19$:    BSBW    SAY
+        PRINT   "Effective:  <None specified>"
+        PRINT   "Recording:  <None specified>"
+        PRINT   "Accessed:   <None specified>"
+        PRINT   "Attr Mod:   <None specified>"
+        PRINT   "Data Mod:   <None specified>"
+        PRINT   "Linkcount:  1"
+        ADDTEXT "File organization:  "
+        MOVZBL  FAB2+FAB$B_ORG, R0
+        CMPL    R0, #FAB$C_REL
+        BEQL    22$
+        BGTRU   24$
+        ADDTEXT "Sequential"
+        BRB     26$
+22$:    ADDTEXT "Relative, maximum record number: "
+        MOVL    FAB2+FAB$L_MRN, R1
+        BSBW    ADDDEC
+        BRB     26$
+24$:    ADDTEXT "Indexed, Prolog: "
+        MOVZWL  SUM+XAB$W_PVN, R1
+        BSBW    ADDDEC
+        ADDTEXT ", Using "
+        MOVZBL  SUM+XAB$B_NOK, R1
+        BSBW    ADDDEC
+        ADDTEXT " key"
+        CMPB    SUM+XAB$B_NOK, #1
+        BEQL    25$
+        ADDTEXT "s"
+25$:    CMPB    SUM+XAB$B_NOA, #1       ; and its areas, if more than one
+        BLEQU   26$
+        BSBW    SAY
+        MOVL    #29, R3
+        BSBW    PADTO
+        ADDTEXT "In "
+        MOVZBL  SUM+XAB$B_NOA, R1
+        BSBW    ADDDEC
+        ADDTEXT " areas"
+26$:    BSBW    SAY
+        PRINT   "Shelved state:      Online "
+        PRINT   "Caching attribute:  Writethrough"
+        ADDTEXT "File attributes:    Allocation: "
+        MOVL    FAB2+FAB$L_ALQ, R1
+        BSBW    ADDDEC
+        ADDTEXT ", Extend: "
+        MOVZWL  FAB2+FAB$W_DEQ, R1
+        BSBW    ADDDEC
+        CMPB    FAB2+FAB$B_ORG, #FAB$C_REL
+        BLSSU   30$
+        BGTRU   28$
+        ADDTEXT ", Bucket size: "
+        BRB     29$
+28$:    ADDTEXT ", Maximum bucket size: "
+29$:    MOVZBL  FAB2+FAB$B_BKS, R1
+        BSBW    ADDDEC
+30$:    ADDTEXT ", Global buffer count: 0"
+        BSBW    ISDIR
+        BLBS    R0, 32$
+        ADDTEXT ", No version limit"
+        BRB     34$
+32$:    ADDTEXT ", No default version limit, Contiguous, Directory file"
+34$:    BSBW    SAY
+        ADDTEXT "Record format:      "
+        BSBW    RECFMT
+        BSBW    SAY
+        ADDTEXT "Record attributes:  "
+        BBC     #FAB$V_CR, FAB2+FAB$B_RAT, 40$
+        ADDTEXT "Carriage return carriage control"
+        BRB     46$
+40$:    BBC     #FAB$V_FTN, FAB2+FAB$B_RAT, 42$
+        ADDTEXT "Fortran carriage control"
+        BRB     46$
+42$:    BBC     #FAB$V_PRN, FAB2+FAB$B_RAT, 44$
+        ADDTEXT "Print file carriage control"
+        BRB     46$
+44$:    ADDTEXT "No carriage control"
+46$:    BBC     #FAB$V_BLK, FAB2+FAB$B_RAT, 48$
+        ADDTEXT ", Non-spanned"
+48$:    BSBW    SAY
+        PRINT   "RMS attributes:     None"
+        PRINT   "Journaling enabled: None"
+        ADDTEXT "File protection:    "
+        MOVZWL  XAB+XAB$W_PRO, R4
+        CLRL    R5                      ; each category: what it may do
+50$:    MOVZBL  CATS[R5], R0
+        MOVAB   CATNAMES[R0], R1
+        MOVZBL  (R1)+, R2
+        BSBW    ADD
+        CLRL    R3
+52$:    BBS     R3, R4, 54$
+        MOVZBL  LETTERS[R3], R0
+        BSBW    ADDCHAR
+54$:    AOBLSS  #4, R3, 52$
+        ASHL    #-4, R4, R4
+        INCL    R5
+        CMPL    R5, #4
+        BGEQU   56$
+        ADDTEXT ", "
+        BRB     50$
+56$:    BSBW    SAY
+        PRINT   "Access Cntrl List:  None"
+        PRINT   "Client attributes:  None"
+        PRINT   ""
+        RSB
+
+; RECFMT: appends FAB2's record format, as DIRECTORY/FULL words it.
+; Uses R0-R5.
+RECFMT:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5>
+        MOVZBL  FAB2+FAB$B_RFM, R0
+        CMPL    R0, #FAB$C_FIX
+        BNEQ    10$
+        ADDTEXT "Fixed length "
+        MOVZWL  FAB2+FAB$W_MRS, R1
+        BSBW    ADDDEC
+        ADDTEXT " byte records"
+        RSB
+10$:    TSTL    R0
+        BNEQ    20$
+        ADDTEXT "Undefined"
+        RSB
+20$:    CMPL    R0, #FAB$C_VAR
+        BNEQ    30$
+        ADDTEXT "Variable length"
+        BRB     80$
+30$:    CMPL    R0, #FAB$C_VFC
+        BNEQ    40$
+        ADDTEXT "VFC, "
+        MOVZBL  FAB2+FAB$B_FSZ, R1
+        BSBW    ADDDEC
+        ADDTEXT " byte header"
+        BRB     80$
+40$:    CMPL    R0, #FAB$C_STM
+        BNEQ    50$
+        ADDTEXT "Stream"
+        BRB     80$
+50$:    CMPL    R0, #FAB$C_STMLF
+        BNEQ    60$
+        ADDTEXT "Stream_LF"
+        BRB     80$
+60$:    ADDTEXT "Stream_CR"
+80$:    ADDTEXT ", maximum "
+        MOVZWL  FAB2+FAB$W_MRS, R1
+        BSBW    ADDDEC
+        ADDTEXT " bytes, longest "
+        MOVZWL  FHC+XAB$W_LRL, R1
+        BSBW    ADDDEC
+        ADDTEXT " bytes"
+        RSB
+
+; ISDIR: R0 = 1 if the file $SEARCH found is a directory, NAME.DIR;1.
+; Uses R0-R1.
+ISDIR:
+        .JSB_ENTRY
+        CLRL    R0
+        CMPB    NAM+NAM$B_TYPE, #4
+        BNEQ    90$
+        MOVL    NAM+NAM$L_TYPE, R1
+        CMPL    (R1), DIRTYPE
+        BNEQ    90$
+        INCL    R0
+90$:    RSB
+
+; ADDTIME: R0 = a quadword time. Appends it, as $ASCTIM writes it. Uses
+; R0-R5.
+ADDTIME:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5>
+        $ASCTIM_S TIMBUF=TIMEDSC, TIMADR=(R0)
+        MOVAB   TIME, R1
+        MOVL    #23, R2
+        BSBW    ADD
+        RSB
+
+; RIGHT: R1 = a value, R3 = a column. Appends it in decimal, ending at the
+; column, blanks before it. Uses R0-R5.
+RIGHT:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5>
+        MOVL    R1, R4                  ; its digits
+        MOVL    #1, R2
+10$:    DIVL2   #10, R4
+        BEQL    20$
+        INCL    R2
+        BRB     10$
+20$:    SUBL2   R2, R3
+        PUSHL   R1
+        BSBW    PADTO
+        MOVL    (SP)+, R1
+        BSBW    ADDDEC
+        RSB
 
 ; PADTO: appends blanks to LINE until it is R3 characters long. Uses R0-R2.
 PADTO:
