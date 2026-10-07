@@ -31,6 +31,9 @@ vmacro -o conputchar.obj vtools/lib/conputchar.mar
 vlink hello.obj putoutput.obj conputchar.obj && vrun hello.exe
 ```
 
+`vtools/examples/bliss` has an example to try, with the commands in a
+Justfile.
+
 Status (PRD-0004 step 4): modules with `MAIN` and `IDENT`; `ROUTINE`,
 `GLOBAL ROUTINE`, `EXTERNAL ROUTINE`, `FORWARD ROUTINE`, `NOVALUE`; `OWN`,
 `GLOBAL`, `EXTERNAL`, `LOCAL` and `STACKLOCAL` data with an allocation unit,

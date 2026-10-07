@@ -1,15 +1,14 @@
 //! Assembles, links and runs every program in tests/run and examples/vasm
 //! under vrun, and compiles, links and runs every MACRO-32 program in
 //! tests/macro32 and examples/macro32, and every BLISS-64 program in
-//! tests/bliss, and checks each against its expected
-//! files, next to it in tests/ and in tests/examples/vasm and
-//! tests/examples/macro32 for the examples: NAME.stdout (exact output,
-//! default empty), NAME.status (exit code, default 0) and NAME.stderr (a
-//! line stderr must contain). A directory NAME/ is a program of several
-//! modules, linked in name order, then the object library vlib makes of the
-//! modules in NAME/lib/, if there is one. MACRO-32 programs link against
-//! vtools/lib's modules last, as VMS programs against the system's
-//! libraries. VRUN_FLAGS adds vrun options.
+//! tests/bliss and examples/bliss, and checks each against its expected
+//! files, next to it in tests/ and in tests/examples/ for the examples:
+//! NAME.stdout (exact output, default empty), NAME.status (exit code,
+//! default 0) and NAME.stderr (a line stderr must contain). A directory
+//! NAME/ is a program of several modules, linked in name order, then the
+//! object library vlib makes of the modules in NAME/lib/, if there is one.
+//! MACRO-32 programs link against vtools/lib's modules last, as VMS programs
+//! against the system's libraries. VRUN_FLAGS adds vrun options.
 //! Every object, library and image made on the way must parse and write back
 //! to the same bytes.
 //!

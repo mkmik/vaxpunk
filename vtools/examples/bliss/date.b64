@@ -1,0 +1,31 @@
+MODULE DATE (MAIN = DATE) =
+BEGIN
+! Prints a date with $ASCTIM. $ASCTIM, the $NUMTIM it calls and
+! LIB$PUT_OUTPUT come from the object library the Justfile makes of
+! vtools/lib's modules.
+
+EXTERNAL ROUTINE
+    LIB$PUT_OUTPUT,
+    SYS$ASCTIM;
+
+OWN
+    ! 25 October 1977, in 100 ns units since 17-NOV-1858.
+    WHEN : INITIAL(%X'0085581622DDC000');
+
+ROUTINE DATE =
+    BEGIN
+    LOCAL
+        BUF : VECTOR[CH$ALLOCATION(23)],
+        DESC : VECTOR[2, LONG],
+        LEN : WORD;
+    DESC[0] = 23 + %X'010E0000';            ! a 23-byte fixed string
+    DESC[1] = BUF;
+    SYS$ASCTIM(LEN, DESC, WHEN, 0);
+    DESC[0] = .LEN + %X'010E0000';
+    LIB$PUT_OUTPUT(%ASCID 'The VAX-11/780 was announced on');
+    LIB$PUT_OUTPUT(DESC);
+    1                                       ! SS$_NORMAL
+    END;
+
+END
+ELUDOM
