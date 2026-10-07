@@ -12,17 +12,32 @@
 ; its structure and all, into a file made with the same attributes.
 ; ponytail: one file, no wildcards; records up to RECSIZE.
 ;
+; COPY/HTTP fetches from from a web server instead, with an HTTP/1.0
+; GET: from is node::"/path", the node the server's address, or
+; node::"http://address[:port]/path", where the node, URL by custom, is
+; only a name. The body goes, byte for byte, by block I/O, into a new
+; STREAM_LF file, as VMS's C ports of curl and wget write one, binary or
+; not, which ends where the body does; it is named, where to doesn't
+; say, by the path's last part, as Files-11 takes names, INDEX.HTML for none. The
+; body ends where Content-Length says, or when the server closes. 404 and
+; 410 are RMS$_FNF, 401 and 403 RMS$_PRV, other statuses but 2xx
+; RMS$_NETFAIL, another scheme RMS$_SUPPORT.
+; ponytail: addresses only, no DNS (lwIP's is off); no https, redirects
+; or chunked bodies; no /BINARY, which SET FILE/ATTRIBUTE would do.
+;
         .LIBRARY "starlet.mlb"
         .LIBRARY "sysexe.mlb"
         $SSDEF
+        $IODEF
         $RMSDEF
         $FABDEF
         $RABDEF
         $NAMDEF
 
-        .EXTERNAL PUT_LINE
+        .EXTERNAL PUT_LINE, INET_ADDR
 
-RECSIZE = 8192
+RECSIZE = 32768                         ; 64 blocks, and more than a VAR record holds
+BUFSIZE = 1024
 
         .PSECT  DATA, NOEXE, WRT, LONG
 INFAB:  $FAB    NAM=INNAM
@@ -52,16 +67,43 @@ BLOCKMODE:
 INRES:  .BLKB   255
 OUTRES: .BLKB   255
 REC:    .BLKB   RECSIZE
+; COPY/HTTP's.
+BGA0:   .ASCID  "BGA0:"
+SOCKCHAR:                               ; a TCP socket: protocol, type, family
+        .WORD   6
+        .BYTE   1, 2
+NCHAN:  .LONG   0                       ; the connection's channel
+ADDR:   .LONG   0                       ; the server's address
+PORT:   .LONG   0                       ; and port
+IOSB:   .BLKQ   1
+STATE:  .LONG   0                       ; 0 before the status line, 1 in the headers, 2 in the body
+HSTATUS:                                ; the status line's code, 200
+        .LONG   0
+LEFT:   .LONG   0                       ; the body's bytes to come, -1 until the server closes
+RECLEN: .LONG   0                       ; REC's, a line being read
+HTTPV:  .ASCII  "http://"
+CLEN:   .ASCII  "content-length:"
+DEFIDX: .ASCII  "INDEX.HTML"            ; the name for a path ending in /
+SLASH:  .ASCII  "/"
+REQGET: .ASCIC  "GET "
+REQVER: .ASCIC  " HTTP/1.0"<13><10>"Host: "
+REQEND: .ASCIC  <13><10><13><10>
+DFN:    .BLKB   80                      ; to's default name
+NBUF:   .BLKB   BUFSIZE                 ; the request, then what comes
 
         .PSECT  CODE, EXE, LONG
-        .ENTRY  START, ^M<R2, R3, R4, R5>
+        .ENTRY  START, ^M<R2, R3, R4, R5, R6, R7, R8, R9, R10, R11>
         GETVALUE "$VERB", DESC, DESC
         CMPL    SPEC, APPE
         BNEQ    5$
         INCL    APPEND
 5$:     MOVL    #255, DESC
         GETVALUE "FROM", DESC, DESC
-        MOVAB   SPEC, INFAB+FAB$L_FNA
+        BLBS    APPEND, 7$
+        PRESENT "HTTP"
+        BLBC    R0, 7$
+        BRW     HTTP
+7$:     MOVAB   SPEC, INFAB+FAB$L_FNA
         MOVB    DESC, INFAB+FAB$B_FNS
         $OPEN   FAB=INFAB
         BLBS    R0, 10$
@@ -117,6 +159,182 @@ REC:    .BLKB   RECSIZE
         MOVL    R2, R0
         RET
 
+; HTTP: COPY/HTTP, from in SPEC, DESC its length: node::"rest", without
+; the quotes. Writes it, quotes and all, in INRES, for /LOG. The rest is
+; /path, from the server at node, or http://host[:port]/path.
+HTTP:   MOVZWL  DESC, R2
+        CMPL    R2, #253                ; INRES takes it, and two quotes
+        BGTRU   SYNTAX
+        CLRL    R6                      ; the node's length, to the ::
+10$:    ADDL3   #1, R6, R0
+        CMPL    R0, R2
+        BGEQU   SYNTAX
+        CMPB    SPEC[R6], #^A/:/
+        BNEQ    15$
+        CMPB    SPEC+1[R6], #^A/:/
+        BEQL    20$
+15$:    INCL    R6
+        BRB     10$
+20$:    SUBL3   R6, R2, R8              ; the rest's length
+        SUBL2   #2, R8
+        ADDL3   #2, R6, R7
+        MOVC3   R7, SPEC, INRES         ; node::
+        MOVB    #^A/"/, INRES[R7]
+        INCL    R7                      ; where the rest goes
+        MOVAB   SPEC-1[R7], R1
+        MOVAB   INRES[R7], R9
+        MOVC3   R8, (R1), (R9)
+        ADDL3   R7, R8, R0
+        MOVB    #^A/"/, INRES[R0]
+        INCL    R0
+        MOVB    R0, INNAM+NAM$B_RSL
+        CMPL    R8, #7                  ; http://, in any case?
+        BLSSU   30$
+        CLRL    R0
+25$:    BISB3   #^X20, (R9)[R0], R1
+        CMPB    R1, HTTPV[R0]
+        BNEQ    30$
+        AOBLSS  #7, R0, 25$
+        ADDL2   #7, R9
+        SUBL2   #7, R8
+        MOVL    R9, R10                 ; the host, to the path
+        CLRL    R11
+27$:    CMPL    R11, R8
+        BGEQU   28$
+        CMPB    (R10)[R11], #^A"/"
+        BEQL    28$
+        INCL    R11
+        BRB     27$
+28$:    ADDL2   R11, R9
+        SUBL2   R11, R8
+        BRB     40$
+30$:    TSTL    R8                      ; /path, the node the host
+        BEQL    35$
+        CMPB    (R9), #^A"/"
+        BNEQ    UNSUPPORTED
+35$:    MOVAB   INRES, R10
+        MOVL    R6, R11
+40$:    MOVL    #80, PORT               ; R10, R11: host[:port]
+        CLRL    R5                      ; the host's length, to a colon
+42$:    CMPL    R5, R11
+        BGEQU   46$
+        CMPB    (R10)[R5], #^A/:/
+        BEQL    44$
+        INCL    R5
+        BRB     42$
+44$:    ADDL3   R10, R5, R1
+        INCL    R1
+        SUBL3   R5, R11, R2
+        DECL    R2
+        BSBW    GETPORT
+        BLBS    R0, 46$
+        RET
+46$:    PUSHAL  ADDR
+        PUSHL   R10
+        PUSHL   R5
+        CALLS   #3, G^INET_ADDR
+        BLBS    R0, 50$
+        RET
+50$:    CLRL    R3                      ; R9, R8: the path; its end, to a ? or #
+52$:    CMPL    R3, R8
+        BGEQU   54$
+        CMPB    (R9)[R3], #^A/?/
+        BEQL    54$
+        CMPB    (R9)[R3], #^A/#/
+        BEQL    54$
+        INCL    R3
+        BRB     52$
+54$:    MOVL    R3, R4                  ; its last part, past the last /
+56$:    TSTL    R4
+        BEQL    58$
+        DECL    R4
+        CMPB    (R9)[R4], #^A"/"
+        BNEQ    56$
+        INCL    R4
+58$:    ADDL3   R9, R4, R1
+        SUBL3   R4, R3, R2
+        BSBW    DEFNAME
+        $ASSIGN_S DEVNAM=BGA0, CHAN=NCHAN
+        BLBS    R0, 60$
+        RET
+60$:    $QIOW_S CHAN=NCHAN, FUNC=#IO$_SETMODE, IOSB=IOSB, P1=SOCKCHAR
+        BSBW    STATUS
+        BLBC    R0, 62$
+        $QIOW_S CHAN=NCHAN, FUNC=#IO$_ACCESS, IOSB=IOSB, P3=ADDR, P4=PORT
+        BSBW    STATUS
+        BLBS    R0, 64$
+62$:    BRW     HANGUP
+64$:    MOVAB   NBUF, R3                ; GET path HTTP/1.0, Host: host
+        MOVAB   REQGET, R1
+        BSBW    CATC
+        MOVL    R9, R1
+        MOVL    R8, R2
+        BNEQ    66$
+        MOVAB   SLASH, R1
+        MOVL    #1, R2
+66$:    BSBW    CAT
+        MOVAB   REQVER, R1
+        BSBW    CATC
+        MOVL    R10, R1
+        MOVL    R11, R2
+        BSBW    CAT
+        MOVAB   REQEND, R1
+        BSBW    CATC
+        MOVAB   NBUF, R1
+        SUBL2   R1, R3
+        $QIOW_S CHAN=NCHAN, FUNC=#IO$_WRITEVBLK, IOSB=IOSB, P1=NBUF, P2=R3
+        BSBW    STATUS
+        BLBC    R0, 62$
+        MOVL    #255, DESC
+        GETVALUE "TO", DESC, DESC
+        MOVAB   SPEC, OUTFAB+FAB$L_FNA
+        MOVB    DESC, OUTFAB+FAB$B_FNS
+        MOVB    #FAB$C_STMLF, OUTFAB+FAB$B_RFM
+        MOVB    #FAB$M_CR, OUTFAB+FAB$B_RAT
+        MNEGL   #1, LEFT
+70$:    $QIOW_S CHAN=NCHAN, FUNC=#IO$_READVBLK, IOSB=IOSB, P1=NBUF, P2=#BUFSIZE
+        BSBW    STATUS
+        BLBS    R0, 72$
+        CMPL    R0, #SS$_LINKDISCON     ; the server closed: the end
+        BEQL    80$
+        BRB     HANGUP
+72$:    MOVZWL  IOSB+2, R7
+        MOVAB   NBUF, R6
+74$:    TSTL    R7
+        BEQL    70$
+        DECL    R7
+        MOVZBL  (R6)+, R0
+        BSBW    BYTE
+        BLBC    R0, HANGUP
+        CMPL    STATE, #2
+        BNEQ    74$
+        TSTL    LEFT                    ; Content-Length's bytes all came
+        BNEQ    74$
+80$:    MOVL    #RMS$_NETFAIL, R0       ; no response
+        CMPL    STATE, #2
+        BNEQ    HANGUP
+        TSTL    RECLEN                  ; the body's last bytes
+        BEQL    84$
+        BSBW    FLUSH
+        BLBC    R0, HANGUP
+84$:    MOVL    #1, BLOCKMODE
+        BSBW    LOG
+        MOVL    #SS$_NORMAL, R0
+HANGUP: MOVL    R0, R6
+        $QIOW_S CHAN=NCHAN, FUNC=#IO$_DEACCESS, IOSB=IOSB
+        CMPL    STATE, #2               ; the file was made
+        BNEQ    90$
+        $CLOSE  FAB=OUTFAB
+        BLBC    R6, 90$                 ; the first error is the one
+        MOVL    R0, R6
+90$:    MOVL    R6, R0
+        RET
+SYNTAX: MOVL    #RMS$_SYN, R0           ; from has no node::
+        RET
+UNSUPPORTED:                            ; nor /path nor http://
+        MOVL    #RMS$_SUPPORT, R0
+        RET
+
 ; BLOCKCOPY: INFAB = a relative or indexed file, open, and OUTFAB set up
 ; like it. Opens it again for block I/O, makes OUTFAB's file for block I/O
 ; and copies every block to it, RECSIZE bytes at a time, and logs it.
@@ -156,6 +374,270 @@ BLOCKCOPY:
         BSBW    LOG
         MOVL    #SS$_NORMAL, R0
 90$:    RSB
+
+; BYTE: R0 = the response's next byte. A header line, to its LF, goes in
+; REC, and so does the body, which FLUSH writes to to, made for block
+; I/O once the headers end, if the status was 2xx. R0 = SS$_NORMAL, or
+; why not.
+BYTE:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5>
+        CMPL    STATE, #2
+        BEQL    50$
+        CMPB    R0, #10
+        BEQL    10$
+        MOVL    RECLEN, R1              ; a header line's longer than REC: cut
+        CMPL    R1, #RECSIZE
+        BGEQU   30$
+        MOVB    R0, REC[R1]
+        INCL    RECLEN
+        BRB     30$
+10$:    BSBW    UNCR
+        TSTL    STATE
+        BNEQ    20$
+        BSBW    STATLINE
+        INCL    STATE
+        BRB     25$
+20$:    TSTL    RECLEN
+        BEQL    40$                     ; a blank line: the headers end
+        BSBW    CLENGTH
+25$:    CLRL    RECLEN
+30$:    MOVL    #SS$_NORMAL, R0
+        RSB
+40$:    MOVL    HSTATUS, R1
+        CMPL    R1, #200
+        BLSSU   42$
+        CMPL    R1, #299
+        BGTRU   42$
+        MOVB    #FAB$M_PUT!FAB$M_BIO, OUTFAB+FAB$B_FAC
+        $CREATE FAB=OUTFAB
+        BLBC    R0, 49$
+        MOVL    #2, STATE
+        MOVL    #1, OUTRAB+RAB$L_BKT    ; the first block's VBN
+        $CONNECT RAB=OUTRAB
+        RSB
+42$:    MOVL    #RMS$_FNF, R0
+        CMPL    R1, #404
+        BEQL    49$
+        CMPL    R1, #410
+        BEQL    49$
+        MOVL    #RMS$_PRV, R0
+        CMPL    R1, #401
+        BEQL    49$
+        CMPL    R1, #403
+        BEQL    49$
+        MOVL    #RMS$_NETFAIL, R0
+49$:    RSB
+50$:    TSTL    LEFT                    ; the body
+        BLSS    52$
+        DECL    LEFT
+52$:    MOVL    RECLEN, R1
+        MOVB    R0, REC[R1]
+        INCL    RECLEN
+        CMPL    RECLEN, #RECSIZE        ; REC is full: its blocks go
+        BLSSU   30$
+        BSBW    FLUSH
+        RSB
+
+; FLUSH: $WRITEs REC's RECLEN bytes to to's blocks from RAB$L_BKT's VBN,
+; then the next ones', and empties it. RECLEN is RECSIZE, whole blocks,
+; but for the last, which ends the file where it ends. RECORDS counts the
+; blocks. R0 = $WRITE's status. Uses R0-R1.
+FLUSH:
+        .JSB_ENTRY
+        MOVAB   REC, OUTRAB+RAB$L_RBF
+        MOVW    RECLEN, OUTRAB+RAB$W_RSZ
+        $WRITE  RAB=OUTRAB
+        BLBC    R0, 10$
+        ADDL3   #511, RECLEN, R1
+        DIVL2   #512, R1
+        ADDL2   R1, RECORDS
+        ADDL2   R1, OUTRAB+RAB$L_BKT
+        CLRL    RECLEN
+10$:    RSB
+
+; UNCR: drops the CR at the end of REC's line, if it has one. Uses R1.
+UNCR:
+        .JSB_ENTRY
+        MOVL    RECLEN, R1
+        BEQL    10$
+        CMPB    REC-1[R1], #13
+        BNEQ    10$
+        DECL    RECLEN
+10$:    RSB
+
+; STATLINE: HTTP/1.x nnn text in REC: nnn into HSTATUS, 0 if it isn't
+; a status line. Uses R0-R2.
+STATLINE:
+        .JSB_ENTRY  SCRATCH=<R2>
+        CLRL    HSTATUS
+        CLRL    R1
+10$:    CMPL    R1, RECLEN
+        BGEQU   90$
+        CMPB    REC[R1], #^A/ /
+        BEQL    20$
+        INCL    R1
+        BRB     10$
+20$:    INCL    R1
+        MOVL    #3, R2
+30$:    CMPL    R1, RECLEN
+        BGEQU   90$
+        SUBB3   #^A/0/, REC[R1], R0
+        CMPB    R0, #9
+        BGTRU   90$
+        MOVZBL  R0, R0
+        MULL2   #10, HSTATUS
+        ADDL2   R0, HSTATUS
+        INCL    R1
+        SOBGTR  R2, 30$
+        RSB
+90$:    CLRL    HSTATUS
+        RSB
+
+; CLENGTH: a header line in REC. Content-Length: n, in any case, sets
+; LEFT to n. Uses R0-R3.
+CLENGTH:
+        .JSB_ENTRY  SCRATCH=<R2, R3>
+        CMPL    RECLEN, #15
+        BLSSU   90$
+        CLRL    R1
+10$:    BISB3   #^X20, REC[R1], R0
+        CMPB    R0, CLEN[R1]
+        BNEQ    90$
+        AOBLSS  #15, R1, 10$
+20$:    CMPL    R1, RECLEN              ; blanks
+        BGEQU   90$
+        CMPB    REC[R1], #^A/ /
+        BNEQ    30$
+        INCL    R1
+        BRB     20$
+30$:    CLRL    R2                      ; digits
+        CLRL    R3
+35$:    CMPL    R1, RECLEN
+        BGEQU   40$
+        SUBB3   #^A/0/, REC[R1], R0
+        CMPB    R0, #9
+        BGTRU   40$
+        MOVZBL  R0, R0
+        MULL2   #10, R2
+        ADDL2   R0, R2
+        INCL    R3
+        INCL    R1
+        BRB     35$
+40$:    TSTL    R3
+        BEQL    90$
+        MOVL    R2, LEFT
+90$:    RSB
+
+; DEFNAME: R1, R2 = the path's last part. Makes of it to's default name
+; in DFN, as Files-11 takes one: the last dot the type's, the other dots
+; and what isn't a letter, digit, $ or - an _, in capitals, name and type
+; 39 characters at most. INDEX.HTML if there is no part. Uses R0-R5.
+DEFNAME:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5>
+        TSTL    R2
+        BNEQ    5$
+        MOVAB   DEFIDX, R1
+        MOVL    #10, R2
+5$:     MOVL    R2, R4                  ; the last dot
+10$:    DECL    R4
+        BLSS    15$
+        CMPB    (R1)[R4], #^A/./
+        BNEQ    10$
+        BRB     20$
+15$:    MOVL    R2, R4                  ; none: all name
+20$:    MOVL    R1, R5
+        SUBL3   R4, R2, -(SP)           ; the type's length, and its dot
+        MOVAB   DFN, R3
+        MOVL    R4, R2
+        BSBW    PART
+        MOVB    #^A/./, (R3)+
+        ADDL3   R5, R4, R1
+        INCL    R1
+        SUBL3   #1, (SP)+, R2
+        BSBW    PART
+        MOVAB   DFN, R0
+        MOVAB   DFN, OUTFAB+FAB$L_DNA
+        SUBL3   R0, R3, R0
+        MOVB    R0, OUTFAB+FAB$B_DNS
+        RSB
+
+; PART: puts at most 39 of the R2 characters at R1 at R3, advancing it,
+; as DEFNAME says. Uses R0-R2.
+PART:
+        .JSB_ENTRY  OUTPUT=<R3>, SCRATCH=<R2>
+        CMPL    R2, #39
+        BLEQ    10$
+        MOVL    #39, R2
+10$:    TSTL    R2
+        BLEQ    90$
+        MOVZBL  (R1)+, R0
+        CMPB    R0, #^A/a/
+        BLSSU   20$
+        CMPB    R0, #^A/z/
+        BGTRU   20$
+        SUBB2   #^A/a/-^A/A/, R0
+        BRB     50$
+20$:    CMPB    R0, #^A/A/
+        BLSSU   30$
+        CMPB    R0, #^A/Z/
+        BLEQU   50$
+30$:    CMPB    R0, #^A/0/
+        BLSSU   40$
+        CMPB    R0, #^A/9/
+        BLEQU   50$
+40$:    CMPB    R0, #^A/$/
+        BEQL    50$
+        CMPB    R0, #^A/-/
+        BEQL    50$
+        MOVB    #^A/_/, R0
+50$:    MOVB    R0, (R3)+
+        DECL    R2
+        BRB     10$
+90$:    RSB
+
+; GETPORT: R1, R2 = a port, in decimal, into PORT. R0 = SS$_NORMAL, or
+; SS$_BADPARAM for one that isn't a number from 1 to 65535. Uses R0-R2.
+GETPORT:
+        .JSB_ENTRY  SCRATCH=<R2>
+        CLRL    PORT
+        TSTL    R2
+        BLEQ    80$
+10$:    SUBB3   #^A/0/, (R1)+, R0
+        CMPB    R0, #9
+        BGTRU   80$
+        MOVZBL  R0, R0
+        MULL2   #10, PORT
+        ADDL2   R0, PORT
+        CMPL    PORT, #65535
+        BGTRU   80$
+        SOBGTR  R2, 10$
+        TSTL    PORT
+        BEQL    80$
+        MOVL    #SS$_NORMAL, R0
+        RSB
+80$:    MOVL    #SS$_BADPARAM, R0
+        RSB
+
+; STATUS: R0 = $QIOW's status. R0 = the IOSB's, if that was a success.
+STATUS:
+        .JSB_ENTRY
+        BLBC    R0, 90$
+        MOVZWL  IOSB, R0
+90$:    RSB
+
+; CATC: appends the .ASCIC string at R1 at R3, advancing it. CAT: the R2
+; characters at R1. Use R0-R2.
+CATC:
+        .JSB_ENTRY  OUTPUT=<R3>, SCRATCH=<R2>
+        MOVZBL  (R1)+, R2
+CAT:
+        .JSB_ENTRY  OUTPUT=<R3>, SCRATCH=<R2>
+10$:    TSTL    R2
+        BEQL    20$
+        MOVB    (R1)+, (R3)+
+        DECL    R2
+        BRB     10$
+20$:    RSB
 
 ; LOG: with /LOG, writes %COPY-S-COPIED, from copied to to (n records),
 ; or (n blocks).

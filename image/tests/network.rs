@@ -10,7 +10,9 @@
 //! connects to a server here, through QEMU's guestfwd, and accepts a
 //! connection from a client here, through hostfwd, and SET HOST to
 //! itself, SHOW SYSTEM there, and LOGOUT; then TELNET to a port here,
-//! through guestfwd, a line each way, and with /PORT to one there cannot be.
+//! through guestfwd, a line each way, and with /PORT to one there cannot be;
+//! then COPY/HTTP from web servers here, through guestfwd, to the data
+//! disk: by URL, by node and path, one that says 404, and an https URL.
 //!
 //! Two vaxpunks on one QEMU socket network, A and B, each with a data disk
 //! made here holding the configuration SET CONFIGURATION INTERFACE saves,
@@ -112,6 +114,32 @@ impl Vax {
     }
 }
 
+/// A web server for one request, through guestfwd, whose host side
+/// connects once: it answers with status and body and returns the request.
+fn web_server(status: &'static str, body: Vec<u8>) -> (u16, thread::JoinHandle<String>) {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let server = thread::spawn(move || {
+        let (mut c, _) = listener.accept().unwrap();
+        let mut request = Vec::new();
+        let mut buf = [0; 512];
+        while !request.ends_with(b"\r\n\r\n") {
+            let n = c.read(&mut buf).unwrap();
+            assert!(n > 0, "the request ended early");
+            request.extend_from_slice(&buf[..n]);
+        }
+        write!(
+            c,
+            "HTTP/1.0 {status}\r\nContent-Length: {}\r\nContent-Type: text/plain\r\n\r\n",
+            body.len()
+        )
+        .unwrap();
+        c.write_all(&body).unwrap();
+        String::from_utf8_lossy(&request).into_owned()
+    });
+    (port, server)
+}
+
 /// A port nothing listens on, for now.
 fn free_port() -> u16 {
     TcpListener::bind("127.0.0.1:0")
@@ -173,6 +201,15 @@ fn network() {
         c.write_all(&buf[..n]).unwrap();
         String::from_utf8_lossy(&buf[..n]).into_owned()
     });
+    let (readme_port, readme) = web_server(
+        "200 OK",
+        b"line one\r\nline two\nno newline at the end".to_vec(),
+    );
+    let (index_port, index) = web_server("200 OK", b"<html></html>\n".to_vec());
+    let (missing_port, missing) = web_server("404 Not Found", b"gone\n".to_vec());
+    // Every byte value, LFs and CRs too, past one $WRITE's 32768.
+    let blob: Vec<u8> = (0..40000u32).map(|i| (i * 7 % 256) as u8).collect();
+    let (blob_port, blob_server) = web_server("200 OK", blob.clone());
     let fwd = free_port();
     data_disk(
         &out.join("net-data.img"),
@@ -181,6 +218,10 @@ fn network() {
     let netdev = format!(
         "user,id=net0,guestfwd=tcp:10.0.2.100:7777-tcp:127.0.0.1:{server_port},\
          guestfwd=tcp:10.0.2.100:7779-tcp:127.0.0.1:{echo_port},\
+         guestfwd=tcp:10.0.2.100:7780-tcp:127.0.0.1:{readme_port},\
+         guestfwd=tcp:10.0.2.100:80-tcp:127.0.0.1:{index_port},\
+         guestfwd=tcp:10.0.2.100:7781-tcp:127.0.0.1:{missing_port},\
+         guestfwd=tcp:10.0.2.100:7782-tcp:127.0.0.1:{blob_port},\
          hostfwd=tcp:127.0.0.1:{fwd}-:7778"
     );
     let mut vax = Vax::boot(
@@ -227,11 +268,36 @@ fn network() {
     vax.console.write_all(b"\x1a").unwrap();
     vax.wait_for("$ ", at, 60);
     vax.command("TELNET 10.0.2.100 /PORT=70000");
+    vax.command(r#"COPY/HTTP/LOG URL::"http://10.0.2.100:7780/pub/Read.Me.txt" DKB0:[000000]"#);
+    vax.command("TYPE DKB0:[000000]READ_ME.TXT");
+    vax.command("DIRECTORY/FULL DKB0:[000000]READ_ME.TXT");
+    vax.command(r#"COPY/HTTP/LOG 10.0.2.100::"/" DKB0:[000000]"#);
+    vax.command(r#"COPY/HTTP URL::"http://10.0.2.100:7781/nope" DKB0:[000000]"#);
+    vax.command(r#"COPY/HTTP/LOG URL::"http://10.0.2.100:7782/kit/blob.bin" DKB0:[000000]"#);
+    vax.command(r#"COPY/HTTP URL::"https://10.0.2.100/x" DKB0:[000000]"#);
     let text = vax.stop();
     print!("{text}");
     assert_eq!(host.join().unwrap(), "hello from vaxpunk\r\n");
     assert_eq!(client.join().unwrap(), "ping from the host\r\n");
     assert_eq!(echoer.join().unwrap(), "netcat\r\n");
+    assert_eq!(
+        readme.join().unwrap(),
+        "GET /pub/Read.Me.txt HTTP/1.0\r\nHost: 10.0.2.100:7780\r\n\r\n"
+    );
+    assert_eq!(
+        index.join().unwrap(),
+        "GET / HTTP/1.0\r\nHost: 10.0.2.100\r\n\r\n"
+    );
+    assert_eq!(
+        missing.join().unwrap(),
+        "GET /nope HTTP/1.0\r\nHost: 10.0.2.100:7781\r\n\r\n"
+    );
+    assert!(
+        blob_server
+            .join()
+            .unwrap()
+            .starts_with("GET /kit/blob.bin HTTP/1.0\r\n")
+    );
     for line in [
         "%TCPIP-I-SET, WE0: 10.0.2.15        255.255.255.0    10.0.2.2",
         " WE0       10.0.2.15        255.255.255.0    10.0.2.2         up",
@@ -253,9 +319,31 @@ fn network() {
         "echo: netcat",
         "%SYSTEM-F-BADPARAM",
         "%REM-S-END, control returned to the local node",
+        r#"%COPY-S-COPIED, URL::"http://10.0.2.100:7780/pub/Read.Me.txt" copied to "#,
+        "READ_ME.TXT;1 (1 blocks)",
+        "line one\nline two\nno newline at the end\n",
+        "Record format:      Stream_LF",
+        r#"%COPY-S-COPIED, 10.0.2.100::"/" copied to "#,
+        "INDEX.HTML;1 (1 blocks)",
+        "BLOB.BIN;1 (79 blocks)",
+        "%RMS-E-FNF, file not found",
+        "%RMS-F-SUPPORT, network operation not supported",
     ] {
         assert!(text.contains(line), "no {line:?}");
     }
+    let mut img = Image::open(out.join("net-data.img"), Mode::ReadOnly).unwrap();
+    let fid = img.lookup("[000000]READ_ME.TXT").unwrap();
+    let mut fetched = Vec::new();
+    img.copy_out(fid, &mut fetched, Conversion::Binary).unwrap();
+    // STREAM_LF, the bytes as they came, to the last.
+    assert_eq!(
+        String::from_utf8_lossy(&fetched),
+        "line one\r\nline two\nno newline at the end"
+    );
+    let fid = img.lookup("[000000]BLOB.BIN").unwrap();
+    let mut fetched = Vec::new();
+    img.copy_out(fid, &mut fetched, Conversion::Binary).unwrap();
+    assert!(fetched == blob, "BLOB.BIN isn't what the server sent");
 
     // Two vaxpunks.
     let port = free_port();
