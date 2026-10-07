@@ -1,7 +1,8 @@
 //! Builds roottask.elf into OUT_DIR with the kernel's toolchain and libsel4,
 //! with the TCP/IP component's tcpip.elf in it,
 //! and the system disk, sysdisk.img, a Files-11 ODS-2 volume: in [SYSEXE],
-//! EXEC.EXE, linked from exec/*.mar, and an image for each sysexe/*.mar,
+//! EXEC.EXE, linked from exec/*.mar and, after them, exec/*.b64, which
+//! vbliss compiles, and an image for each sysexe/*.mar,
 //! linked with sysexe/lib/*.mar, its command table if there is a
 //! sysexe/NAME.cld, its ARM64 if there is a sysexe/NAME.m64, which vasm
 //! assembles, and against SYS.STB, the executive's symbols; DCL and
@@ -43,7 +44,10 @@ fn main() {
 
     let mut exec = sources("exec", &["mar"]);
     exec.push(Path::new(LIB).join("consolio.mar"));
-    let modules = compile(&exec);
+    let mut modules = compile(&exec);
+    // After the MACRO-32 modules, whose psects come first: the vector page
+    // starts where syssrv.mar says.
+    modules.extend(sources("exec", &["b64"]).iter().map(|s| bliss(s)));
     // The executive goes in S0, the system space every process shares.
     let exec = link("EXEC", 0x4001_0000, Some("EXEC$START"), &modules);
     fs::write(out.join("exec.map"), &exec.map).unwrap();
@@ -124,6 +128,47 @@ fn assemble(source: &Path) -> (String, Vec<u8>) {
             .map(|d| format!("{}:{}:{}: {}", d.file, d.line, d.col, d.msg))
             .collect();
         panic!("vasm failed:\n{}", diags.join("\n"))
+    });
+    (
+        source.display().to_string(),
+        vms_obj::obj::write(&object.records),
+    )
+}
+
+/// Compiles a BLISS-64 source with vbliss into an object module: (file
+/// name, bytes). Its warnings, the dot lint's included, are errors.
+fn bliss(source: &Path) -> (String, Vec<u8>) {
+    let text = fs::read_to_string(source).unwrap();
+    let opts = vasm::Options {
+        name: source.file_stem().unwrap().to_str().unwrap().to_uppercase(),
+        path: Some(source.into()),
+        include: vec![LIB.into()],
+        ..Default::default()
+    };
+    let bliss = vbliss::Options {
+        include: vec![LIB.into()],
+        ..Default::default()
+    };
+    let (object, out) = vbliss::compile_with(&text, &opts, &bliss);
+    let complaints: Vec<_> = out
+        .diags
+        .iter()
+        .chain(&out.lints)
+        .map(|d| format!("{}:{}: {}", d.file, d.line, d.msg))
+        .collect();
+    if !complaints.is_empty() {
+        panic!("vbliss {}:\n{}", source.display(), complaints.join("\n"));
+    }
+    let object = object.unwrap_or_else(|diags| {
+        let diags: Vec<_> = diags
+            .iter()
+            .map(|d| format!("{}:{}: {}", d.file, d.line, d.msg))
+            .collect();
+        panic!(
+            "vbliss {} didn't assemble:\n{}",
+            source.display(),
+            diags.join("\n")
+        )
     });
     (
         source.display().to_string(),

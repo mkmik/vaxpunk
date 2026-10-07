@@ -1,0 +1,122 @@
+                                Source Listing                   DD-MMM-YYYY HH:MM:SS  BLISS-64E V1.11-007-48G4L         Page 1
+                                                                 DD-MMM-YYYY HH:MM:SS  SYS$SYSDEVICE:[ORACLE]ASCTIME.B64;1
+
+    0	      1 MODULE ASCTIME (MAIN = MAIN) =
+    0	      2 BEGIN
+    1	      3 ! $ASCTIM and $NUMTIM on given times: under vrun BLISS-64, the
+    1	      4 ! executive's $NUMTIM (roottask/exec/numtim.b64) and lib/asctim.b64's
+    1	      5 ! $ASCTIM on it; on OpenVMS, VMS's own, which the oracle runs this against.
+    1	      6 REQUIRE 'PRINT';
+ R  1	      7 ! PRINT: prints a value as a signed decimal and as 16 hex digits, on a line
+ R  1	      8 ! of its own, through LIB$PUT_OUTPUT. The behaviour tests print with it,
+ R  1	      9 ! here under vrun and on OpenVMS for the oracle.
+ R  1	     10 
+ R  1	     11 EXTERNAL ROUTINE
+ R  1	     12     LIB$PUT_OUTPUT;
+ R  1	     13 
+ R  1	     14 ROUTINE PRINT (V) : NOVALUE =
+ R  1	     15     BEGIN
+ R  2	     16     LOCAL
+ R  2	     17         BUF : VECTOR[48, BYTE],
+ R  2	     18         DESC : VECTOR[2, LONG],
+ R  2	     19         X,
+ R  2	     20         I;
+ R  2	     21     I = 48;
+ R  2	     22     X = .V;
+ R  2	     23     INCR K FROM 1 TO 16 DO
+ R  2	     24         BEGIN
+ R  3	     25         LOCAL D;
+ R  3	     26         D = .X AND 15;
+ R  3	     27         I = .I - 1;
+ R  3	     28         BUF[.I] = (IF .D LSS 10 THEN %C'0' + .D ELSE %C'A' + .D - 10);
+ R  3	     29         X = .X ^ -4 AND %X'0FFFFFFFFFFFFFFF'
+ R  3	     30         END;
+ R  2	     31     I = .I - 1;
+ R  2	     32     BUF[.I] = %C' ';
+ R  2	     33     ! Digits from the remainders, negative for a negative value, so that
+ R  2	     34     ! the most negative one prints too.
+ R  2	     35     X = .V;
+ R  2	     36     DO
+ R  2	     37         BEGIN
+ R  3	     38         LOCAL D;
+ R  3	     39         D = .X - (.X / 10) * 10;
+ R  3	     40         IF .D LSS 0 THEN D = -.D;
+ R  3	     41         I = .I - 1;
+ R  3	     42         BUF[.I] = %C'0' + .D;
+ R  3	     43         X = .X / 10
+ R  3	     44         END
+ R  3	     45     UNTIL .X EQL 0;
+ R  2	     46     IF .V LSS 0
+ R  2	     47     THEN
+ R  2	     48         BEGIN
+ R  3	     49         I = .I - 1;
+ R  3	     50         BUF[.I] = %C'-'
+ R  3	     51         END;
+ R  2	     52     DESC[0] = 48 - .I + %X'010E0000';
+ R  2	     53     DESC[1] = BUF[.I];
+ R  2	     54     LIB$PUT_OUTPUT(DESC)
+ R  2	     55     END;
+    1	     56 
+    1	     57 EXTERNAL ROUTINE
+
+ASCTIME                         Source Listing                   DD-MMM-YYYY HH:MM:SS  BLISS-64E V1.11-007-48G4L         Page 2
+                                                                 DD-MMM-YYYY HH:MM:SS  SYS$SYSDEVICE:[ORACLE]ASCTIME.B64;1
+
+    1	     58     SYS$ASCTIM,
+    1	     59     SYS$NUMTIM;
+    1	     60 
+    1	     61 OWN
+    1	     62     TIMES : VECTOR[6] INITIAL(
+    1	     63         0,
+    1	     64         %X'009E37DD13161CC0',               ! 1 January 2000, 12:34:56.78
+    1	     65         %X'00B94EF3DDFDF960',               ! 29 February 2024, 23:59:59.99
+    1	     66         %X'00BC3990F9CC6840',               ! 7 October 2026, 03:04:05.06
+    1	     67         %X'002E49213AEC4000',               ! 1 March 1900
+    1	     68         -937840500000);                     ! a delta: 1 02:03:04.05
+    1	     69 
+    1	     70 ! Prints the time at t as $ASCTIM gives it with cvtflg, in a buffer of
+    1	     71 ! size n: the text, its length and the status.
+    1	     72 ROUTINE SHOWTIME (T, CVTFLG, N) : NOVALUE =
+    1	     73     BEGIN
+    2	     74     LOCAL
+    2	     75         BUF : VECTOR[CH$ALLOCATION(32)],
+    2	     76         DESC : VECTOR[2, LONG],
+    2	     77         LEN : WORD,
+    2	     78         STATUS;
+    2	     79     DESC[0] = .N + %X'010E0000';
+    2	     80     DESC[1] = BUF;
+    2	     81     STATUS = SYS$ASCTIM(LEN, DESC, .T, .CVTFLG);
+    2	     82     DESC[0] = .LEN + %X'010E0000';
+    2	     83     LIB$PUT_OUTPUT(DESC);
+    2	     84     PRINT(.LEN);
+    2	     85     PRINT(.STATUS)
+    2	     86     END;
+    1	     87 
+    1	     88 ROUTINE MAIN =
+    1	     89     BEGIN
+    2	     90     LOCAL
+    2	     91         N : VECTOR[7, WORD];
+    2	     92     INCR I FROM 0 TO 5 DO
+    2	     93         SHOWTIME(TIMES[.I], 0, 32);
+    2	     94     SHOWTIME(TIMES[1], 1, 32);
+    2	     95     SHOWTIME(TIMES[5], 1, 32);
+    2	     96     SHOWTIME(TIMES[3], 0, 10);
+    2	     97     PRINT(SYS$NUMTIM(N, TIMES[2]));
+    2	     98     INCR I FROM 0 TO 6 DO
+    2	     99         PRINT(.N[.I]);
+    2	    100     SYS$NUMTIM(N, TIMES[5]);
+    2	    101     INCR I FROM 0 TO 6 DO
+    2	    102         PRINT(.N[.I]);
+    2	    103     1
+    2	    104     END;
+    1	    105 
+    1	    106 END
+    1	    107 ELUDOM
+
+
+                                Source Listing                   DD-MMM-YYYY HH:MM:SS  BLISS-64E V1.11-007-48G4L         Page 3
+                                Source Listing                   DD-MMM-YYYY HH:MM:SS  SYS$SYSDEVICE:[ORACLE]ASCTIME.B64;1
+
+COMMAND LINE:
+
+BLISS/A64/LIST/SOURCE_LIST=(EXPAND_MACROS,REQUIRE)/NOMACHINE_CODE ASCTIME.B64

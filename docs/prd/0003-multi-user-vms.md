@@ -192,7 +192,7 @@ until the hardware or size changes; leave it.
 | 4 | No quotas: `BIOLM`, `DIOLM`, `BYTLM` (ADR-0013), `BUFQUO` (ADR-0019), ASTs (DESIGN-0002 *ASTs*); `$GETJPI` has no CPU times, quotas or counts (`getjpi.mar`, `show.mar`) | *Quotas* |
 | 5 | One file system lock for every volume, no per-file lock, no priority boost (ADR-0020, `f11.mar`, DESIGN-0002 *Files*); no file sharing or locking, `$ERASE` deletes an open file (ADR-0009, `rms.mar`) | *Lock manager* |
 | 6 | DCL procedures: no `ON`, block `IF`, lexical functions, `OPEN` or `READ`; lines without `$` skipped (`dcl.mar`) | *Command language* |
-| 7 | No `$ASCTIM`, no date in `SHOW PROCESS` (`show.mar`) | *Batch and print* |
+| 7 | `$ASCTIM`, `$NUMTIM` (PRD-0004's pilot, `numtim.b64`) and the date in `SHOW PROCESS` and `SHOW SYSTEM` done; left: `$BINTIM`, `SHOW TIME` | *Batch and print* |
 | 8 | Owners and protection done (step 2); left: a new file has the default protection, not the process's (`f11wrt.mar`), which `LOGINOUT` sets from the UAF; no version limit (`rms.mar`'s `$CREATE_DIR`) | *Privileges, UICs and protection* |
 | 9 | `BGA0:` and its units aren't seen by `$DEVICE_SCAN` and `$GETDVI`; a VCB stands for a disk in `$GETDVI` rather than its UCB (`netdriver.mar`, `getdvi.mar`, DESIGN-0002 *Devices*) | *Terminals*: `TNAnn:` units and every device listed from its UCB |
 

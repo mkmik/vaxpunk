@@ -61,7 +61,9 @@ pub fn module(m: &Module) -> String {
     for (g, v) in &m.globals {
         let _ = writeln!(o, "{g} == {v}");
     }
-    let mut fdscs = String::new();
+    // Each routine's frame descriptor goes in a psect named for its code's
+    // with _FDSC after, as vmacro puts them.
+    let mut fdscs: Vec<(String, String)> = Vec::new();
     let mut code = "";
     for f in &m.funcs {
         let p = if f.psect.is_empty() {
@@ -77,14 +79,19 @@ pub fn module(m: &Module) -> String {
             let _ = writeln!(o, "\n        .PSECT  {p}{attrs}");
             code = p;
         }
-        Routine::new(f).emit(o, &mut fdscs);
+        let fdsc = format!("{p}_FDSC");
+        let at = match fdscs.iter().position(|(n, _)| *n == fdsc) {
+            Some(i) => i,
+            None => {
+                fdscs.push((fdsc, String::new()));
+                fdscs.len() - 1
+            }
+        };
+        Routine::new(f).emit(o, &mut fdscs[at].1);
     }
-    if !fdscs.is_empty() {
-        let _ = writeln!(
-            o,
-            "\n        .PSECT  $CODE$_FDSC, PIC, SHR, EXE, NOWRT, QUAD"
-        );
-        o.push_str(&fdscs);
+    for (p, text) in &fdscs {
+        let _ = writeln!(o, "\n        .PSECT  {p}, PIC, SHR, EXE, NOWRT, QUAD");
+        o.push_str(text);
     }
     match &m.main {
         Some(main) => {
