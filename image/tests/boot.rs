@@ -30,8 +30,8 @@ struct Phase {
 }
 
 /// The executive starts and mounts the system disk; SYSTARTUP_VMS.COM
-/// can't mount the data disk, DKB0:, made afresh in out/check-datadisk.img,
-/// not the one you keep.
+/// mounts the ramdisk, MDA0:, and can't mount the data disk, DKB0:, made
+/// afresh in out/check-datadisk.img, not the one you keep.
 const BOOT: Phase = Phase {
     name: "boot",
     secs: 60,
@@ -39,6 +39,7 @@ const BOOT: Phase = Phase {
     lines: &[
         "%EXEC-I-START",
         "%MOUNT-I-MOUNTED, VAXPUNK mounted on _DKA0:",
+        "%MOUNT-I-MOUNTED, RAM mounted on _MDA0:",
         "%SYSTEM-W-NOHOMEBLK, Files-11 home block not found on volume",
     ],
 };
@@ -98,7 +99,7 @@ const SYSTEM_DISK: Phase = Phase {
     ],
 };
 
-/// MDA0:, made the default device, around a COPY/LOG to it from
+/// MDA0:, SYSTARTUP_VMS.COM's, made the default device, around a COPY/LOG to it from
 /// SYS$SYSDEVICE:, which prompts for its parameters, an EDIT in line mode
 /// and keypad mode that writes a second version, DIRECTORY, a DELETE/LOG,
 /// CLITEST's checks of the command parser, a qualifier DIRECTORY doesn't
@@ -112,7 +113,7 @@ const RAMDISK: Phase = Phase {
             "error in directory name",
             1,
             concat!(
-                "INIT MDA0: RAM\rMOUNT MDA0: RAM\rSET DEFAULT MDA0:[000000]\rSHOW DEFAULT\r",
+                "SET DEFAULT MDA0:[000000]\rSHOW DEFAULT\r",
                 "COPY/LOG\rSYS$SYSDEVICE:[SYSMGR]WELCOME.TXT\rRAM.TXT\r",
                 "EDIT RAM.TXT\rD 3:END\rI\rEdited with EDT.\r\x1a",
                 // Keypad mode: GOLD 5 goes to the top, GOLD PF3 finds OpenVMS,
@@ -138,7 +139,6 @@ const RAMDISK: Phase = Phase {
         ),
     ],
     lines: &[
-        "%MOUNT-I-MOUNTED, RAM mounted on _MDA0:",
         "  MDA0:[000000]",
         "_From: SYS$SYSDEVICE:[SYSMGR]WELCOME.TXT",
         "_To: RAM.TXT",

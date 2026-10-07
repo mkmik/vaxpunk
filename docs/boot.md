@@ -140,7 +140,9 @@ interpreter. It is linked high in P1, which tells the executive it is one
   site's own startup, as VMS runs it once at boot. It defines the system
   logical name `TCPIP$DEVICE` as `_BGA0:`, the network's template device,
   which a program assigns a channel to for a socket, as TCP/IP Services'
-  `TCPIP$STARTUP.COM` defines it. Then its `MOUNT DKB0:`
+  `TCPIP$STARTUP.COM` defines it. Then `INITIALIZE MDA0: RAM` makes the
+  ramdisk, empty, and `MOUNT MDA0: RAM` mounts it and prints
+  `%MOUNT-I-MOUNTED, RAM mounted on _MDA0:`. Then its `MOUNT DKB0:`
   mounts the data disk, whatever its label, if an `INITIALIZE DKB0:`
   wrote a volume there, at this boot or an earlier one, and prints
   `%MOUNT-I-MOUNTED, label mounted on _DKB0:`. On a blank disk it prints
@@ -219,8 +221,8 @@ interpreter. It is linked high in P1, which tells the executive it is one
   file's header, and `DIRECTORY/OWNER/PROTECTION` shows them. `HELP` runs
   `HELP.EXE`, which lists the commands from DCL's command tables, and
   `LOGOUT` deletes SYSTEM.
-- `INITIALIZE MDA0: label` runs `INIT.EXE`, whose `$INIT_VOL` makes the
-  ramdisk, `MDA0:`, 512 KB of memory, and writes an empty volume on it,
+- `INITIALIZE MDA0: label`, which `SYSTARTUP_VMS.COM` runs at boot,
+  runs `INIT.EXE`, whose `$INIT_VOL` makes the ramdisk, `MDA0:`, 512 KB of memory, and writes an empty volume on it,
   SYSTEM's, `[1,4]`, unless `/OWNER_UIC` says otherwise. Each file made
   there is its maker's, which may do anything with it; its group may read
   and run it, the world nothing, unless `SET PROTECTION` says otherwise.
@@ -379,7 +381,8 @@ and `HOME`, SYLOGIN's, then an `EDIT WELCOME.TXT`
 session, and `DEFINE`, `SHOW
 LOGICAL` and `DEASSIGN` of a logical name, `SHOW LOGICAL` alone, and
 `SET DEFAULT` and `SHOW DEFAULT` with a `DIR` between, then `[-]` and a
-`DIR [.SYSMGR]`, at the prompt, then initializes and mounts `MDA0:`,
+`DIR [.SYSMGR]`, at the prompt, then goes to `MDA0:`, which
+`SYSTARTUP_VMS.COM` mounted,
 copies a file to it with `COPY/LOG`, which prompts for the two files,
 changes it in `EDIT`'s line and keypad modes into
 a second version, lists them,

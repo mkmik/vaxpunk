@@ -1132,10 +1132,10 @@ TYPE, EDIT, COPY, DELETE, INIT, MOUNT, DISMOUNT and CREATE, and those which show
 work, which `cargo test -p boot` runs from DCL's prompt (`RUN STARTUP`,
 `RUN SNOOP`, a bad verb, `DIR [SYSEXE]P%NG`, `TYPE WELCOME.TXT` and an `EDIT WELCOME.TXT`
 session, then
-`INIT` and `MOUNT MDA0: RAM`, a `COPY/LOG` to it, which prompts for its
+`SET DEFAULT MDA0:[000000]`, which `SYSTARTUP_VMS.COM` mounted, a `COPY/LOG` to it, which prompts for its
 parameters, an `EDIT` in keypad mode that writes a second version, `DIR`,
 `DELETE`s and `DIR` again, `RUN CLITEST`) and to the end. `roottask/sysmgr/` holds the text files in
-`DKA0:[SYSMGR]`, among them `SYSTARTUP_VMS.COM`, which mounts `DKB0:` at
+`DKA0:[SYSMGR]`, among them `SYSTARTUP_VMS.COM`, which mounts `MDA0:` and `DKB0:` at
 boot, and `SYLOGIN.COM`. They run in user mode, DCL in supervisor mode, and write
 on the console with `PRINT` and `PRINTHEX` from `sysexe.mlb`, which call
 `PUT_LINE` in `sysexe/lib/print.mar`: a line at a time on `OPA0:`, with
