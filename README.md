@@ -2,20 +2,24 @@
 
 OpenVMS remake on arm64.
 
-Milestone 0 boots an unmodified seL4 kernel on QEMU aarch64 through UEFI and
-Limine, and runs a C root task that prints over the serial console. The root
-task is the PAL ([ADR-0002](docs/adr/0002-root-task-is-the-pal.md)): it
-starts `EXEC.EXE`, the executive, an image compiled from MACRO-32 with
-vtools, as a task of its own and serves the PAL calls its privileged
-instructions make ([DESIGN-0001](docs/design/0001-pal-interface.md)). The
-executive manages memory, and creates, schedules and deletes processes,
-each a thread running an image from the system disk, which take turns on
-one CPU and synchronize with IPL and event flags
-([ADR-0003](docs/adr/0003-one-cpu-many-threads.md),
-[DESIGN-0002](docs/design/0002-executive-processes.md)). seL4 is
-built with its MCS (mixed-criticality scheduling) API: threads run on
-scheduling contexts with a budget and period, and IPC replies go through
-reply objects.
+vaxpunk boots on QEMU aarch64 through UEFI into `EXEC.EXE`, the executive,
+an image compiled from MACRO-32 with vtools. The executive manages memory,
+and creates, schedules and deletes processes, each running an image from
+the system disk, which take turns on one CPU and synchronize with IPL and
+event flags ([ADR-0003](docs/adr/0003-one-cpu-many-threads.md),
+[DESIGN-0002](docs/design/0002-executive-processes.md)). The executive
+reaches the processor through VAX privileged instructions, served by a PAL
+below it ([ADR-0002](docs/adr/0002-root-task-is-the-pal.md),
+[DESIGN-0001](docs/design/0001-pal-interface.md)).
+
+Today the PAL is the root task of the seL4 microkernel, which vaxpunk uses
+to emulate the Alpha's four access modes, kernel, executive, supervisor and
+user, on an ARM64 CPU that offers only EL0 and EL1 to an OS: each mode of a
+process is a thread with an address space of its own
+([ADR-0005](docs/adr/0005-access-modes-are-threads.md)). seL4 may give way
+later to a more native approach. It is built with its MCS
+(mixed-criticality scheduling) API: threads run on scheduling contexts with
+a budget and period, and IPC replies go through reply objects.
 
 ```
 EDK2 -> Limine (BOOTAA64.EFI) -> shim -> seL4 (kernel.elf) -> root task (roottask.elf) -> EXEC.EXE -> processes
