@@ -1,0 +1,15 @@
+
+    PRINT(.X[LONE])
+.............^
+%BLS64-W-TEXT, Field name LONE invalid in structure reference to data segment X
+at line number 72 in file SYS$SYSDEVICE:[ORACLE]STRUCTS.B64;1
+
+    PRINT(.(BV + 2));
+..........^
+%BLS64-W-TEXT, Reference outside of data segment BV, possible optimizations lost
+at line number 107 in file SYS$SYSDEVICE:[ORACLE]STRUCTS.B64;1
+BLISS status %X106F1260
+%LINK-W-WRNERS, compilation warnings
+	in module STRUCTS file SYS$SYSDEVICE:[ORACLE]STRUCTS.OBJ;1
+LINK status %X10648268
+RUN status %X00010001

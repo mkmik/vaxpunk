@@ -1,7 +1,7 @@
 //! vbliss: compiles one BLISS-64 source file into an object module.
 //!
 //!     vbliss [/OBJECT=file | -o file] [/LIST[=file]] [/VARIANT=n]
-//!            [--ir] [--asm] SOURCE.B64
+//!            [/INCLUDE=(dir,...) | -I dir] [--ir] [--asm] SOURCE.B64
 //!
 //! --ir and --asm print the IR or the assembly instead of writing an object.
 //! Diagnostics go to stderr as BLISS writes them to the terminal.
@@ -47,13 +47,22 @@ fn run() -> Result<(), String> {
                 Some(n) => n.parse().map_err(|_| usage())?,
                 None => 1,
             };
+        } else if let Some(v) = qualifier(&arg, "/INCLUDE") {
+            opts.include.extend(
+                v.ok_or_else(usage)?
+                    .trim_matches(['(', ')'])
+                    .split(',')
+                    .map(PathBuf::from),
+            );
+        } else if arg == "-I" {
+            opts.include.push(args.next().ok_or_else(usage)?.into());
         } else if arg == "-o" {
             output = Some(args.next().ok_or_else(usage)?.into());
         } else if arg == "--ir" {
             ir = true;
         } else if arg == "--asm" {
             asm = true;
-        } else if source.is_none() && !arg.starts_with('-') && !arg.starts_with('/') {
+        } else if source.is_none() && !arg.starts_with('-') {
             source = Some(PathBuf::from(arg));
         } else {
             return Err(usage());
@@ -70,7 +79,7 @@ fn run() -> Result<(), String> {
         name: stem.chars().take(31).collect(),
         date: vasm::date(),
         path: Some(source.clone()),
-        include: Vec::new(),
+        include: opts.include.clone(),
     };
     let (object, out) = vbliss::compile_with(&text, &vopts, &opts);
     for m in &out.messages {

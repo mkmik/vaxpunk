@@ -681,7 +681,9 @@ routine of a module.
    ```
 
    Listing. Expected, if the defaults are as *Structures* reads them:
-   `8 64 8 24 16 2 48`.
+   `8 64 8 24 16 2 48`. **Answered:** as expected, and `BLOCK_BYTE[5]` is
+   5; `%SIZE` gives 20 for `VECTOR[10, WORD]`, 8 for `REF VECTOR`, 3 for
+   `BLOCK[3, BYTE]` and 6 for `BLOCKVECTOR[2, 3, BYTE]`.
 
 2. **PLIT layout.** The count's size and value, item sizes, padding.
 
@@ -692,7 +694,12 @@ routine of a module.
 
    Output: the count, as bytes, ahead of the data, and whether `3` is
    aligned after the byte. Again with `UPLIT` (no count) and under
-   `LONG_DEFAULT`.
+   `LONG_DEFAULT`. **Answered** under `/A64`: items are packed with no
+   alignment (`3` is at byte 9), the count is a quadword of the data's
+   bytes in quadwords rounded up (3 here), and a string fills out its last
+   unit with zeros (`PLIT('ABC', 'DEFGHIJKL')` takes 24 bytes). `INITIAL`
+   packs the same way; on structured data its items are quadwords unless
+   they say otherwise, with a warning when they overflow the data.
 
 3. **`%ASCID`.** The descriptor's size and fields.
 
@@ -703,7 +710,7 @@ routine of a module.
 
    Output: an 8-byte BLISS-32 descriptor (length word, type 14, class 1,
    longword pointer) or a 64-bit one (`DSC64$`, with the -1 in the
-   longword at 4).
+   longword at 4). **Answered:** the 8-byte BLISS-32 descriptor.
 
 4. **Extension.** What a fetch of -1 gives at each size.
 
@@ -794,7 +801,9 @@ routine of a module.
 
     Output against the expected `7 5`, written as in RN chapter 4. If
     BLISSA64 is wrong, the oracle's expected output for such tests is
-    hand-written.
+    hand-written. **Answered:** with `I` rather than `.I` (the access
+    formal is a value), BLISSA64 V1.11-7 gives `7 5`; `tests/bliss/structs.b64`
+    has the case.
 
 12. **SIGNAL with a 64-bit condition.**
 

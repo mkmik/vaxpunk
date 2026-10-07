@@ -175,6 +175,15 @@ impl Parser<'_> {
         self.lx.push_file(name, &text, true)
     }
 
+    /// Reads library `name`'s source next, unlisted.
+    pub(crate) fn library_file(&mut self, name: &str) -> R<()> {
+        let text = (self.load)(name).map_err(|e| self.error(e))?;
+        self.lx.push_file(name, &text, true)?;
+        let f = self.lx.files.last_mut().unwrap();
+        f.listed = f.lines.len() as u32;
+        Ok(())
+    }
+
     /// The next lexeme from the streams, unexpanded, and the stream it came
     /// from. Lists the source lines up to it.
     fn raw(&mut self) -> R<(Lexeme, usize)> {
@@ -1141,6 +1150,54 @@ impl Parser<'_> {
                         ));
                     }
                 }
+            }
+            "%SIZE" => {
+                let mut ps = self.params(&name, at)?;
+                let (Some(p), true) = (ps.pop(), ps.is_empty()) else {
+                    return Err(self.error_at(at, "%SIZE takes a structure attribute"));
+                };
+                num(self.subparse(p, |p| p.size_of_attr())?)
+            }
+            "%FIELDEXPAND" => {
+                let mut ps = self.params(&name, at)?.into_iter();
+                let comps = match ps.next().as_deref() {
+                    Some(
+                        [
+                            Lexeme {
+                                tok: Tok::Name(n) | Tok::Bound(n, _),
+                                ..
+                            },
+                        ],
+                    ) => match self.lookup(n).map(|id| &self.m.syms[id].kind) {
+                        Some(Kind::Field(c)) => c.clone(),
+                        _ => return Err(self.error_at(at, format!("{n} is not a field name"))),
+                    },
+                    _ => return Err(self.error_at(at, "%FIELDEXPAND takes a field name")),
+                };
+                let comps = match ps.next() {
+                    Some(n) => {
+                        let n = self.ctce_param(n)?;
+                        match comps.get(n as usize) {
+                            Some(&c) if n >= 0 => vec![c],
+                            _ => {
+                                return Err(self.error_at(
+                                    at,
+                                    "%FIELDEXPAND's component number is out of range",
+                                ));
+                            }
+                        }
+                    }
+                    None => comps,
+                };
+                let mut toks = Vec::new();
+                for (i, c) in comps.into_iter().enumerate() {
+                    if i > 0 {
+                        toks.push(lexeme(Tok::Punct(',')));
+                    }
+                    toks.push(lexeme(Tok::Num(c)));
+                }
+                self.push(toks);
+                Lexical::Done
             }
             "%TITLE" | "%SBTTL" => {
                 let (l, _) = self.scan()?;
