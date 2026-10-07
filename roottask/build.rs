@@ -51,10 +51,16 @@ fn main() {
     // The programs and the modules they share, compiled together, as the
     // executive's modules are, so that their JSBs to each other know what
     // the routines they call keep.
-    let sysexe: Vec<_> = ["sysexe", "sysexe/lib", "sysexe/dcl", "sysexe/help", "sysexe/rms"]
-        .iter()
-        .flat_map(|d| sources(d, &["mar"]))
-        .collect();
+    let sysexe: Vec<_> = [
+        "sysexe",
+        "sysexe/lib",
+        "sysexe/dcl",
+        "sysexe/help",
+        "sysexe/rms",
+    ]
+    .iter()
+    .flat_map(|d| sources(d, &["mar"]))
+    .collect();
     let compiled: HashMap<_, _> = sysexe.iter().cloned().zip(compile(&sysexe)).collect();
     let module = |p: &PathBuf| compiled[p].clone();
     let libs: Vec<_> = sources("sysexe/lib", &["mar"]).iter().map(module).collect();
