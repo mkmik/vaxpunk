@@ -5,7 +5,7 @@
 //! - the executive's routines and data (roottask/exec/*.mar, consolio.mar), and
 //!   the global ones of the libraries the system disk's images link
 //!   (roottask/sysexe/lib/*.mar) and of DCL's own (roottask/sysexe/dcl.mar,
-//!   roottask/sysexe/dcl/*.mar):
+//!   roottask/sysexe/dcl/*.mar), and of the RMS utilities' (roottask/sysexe/rms/*.mar):
 //!   the comment block right above each `NAME::`
 //!   or `.ENTRY`, whose first line reads `NAME: what it does` or, for a system
 //!   service, `$NAME args: what it does`;
@@ -302,6 +302,9 @@ fn parse_mar(
     };
     let (mut block, mut cur, mut in_code, mut in_macro) =
         (Vec::<String>::new(), None::<usize>, true, false);
+    // the module's macros that make an entry point, `.ENTRY PREFIX'NAME`,
+    // by name: their prefix
+    let (mut makers, mut macro_name) = (HashMap::<String, String>::new(), String::new());
     // the routine whose instruction came last, and that instruction, if
     // the next label follows it in the same psect
     let mut last: Option<(String, String)> = None;
@@ -322,9 +325,32 @@ fn parse_mar(
         let up = s.to_uppercase();
         if up.starts_with(".MACRO") {
             in_macro = true;
+            macro_name = up.split_whitespace().nth(1).unwrap_or("").to_string();
         }
         if in_macro {
+            if let Some(c) = re!(r"(?i)^\s+\.ENTRY\s+([\w$]+)'NAME\b").captures(line) {
+                makers.insert(macro_name.clone(), c[1].to_uppercase());
+            }
             in_macro = !up.starts_with(".ENDM");
+            block.clear();
+            continue;
+        }
+        // an entry point a macro makes: `MACRO NAME, ...`
+        if let Some((mac, name)) = up.split_once(char::is_whitespace)
+            && let Some(prefix) = makers.get(mac)
+        {
+            let name = name.trim_start().split([',', ' ']).next().unwrap_or("");
+            cur = None;
+            m.routines.push(routines.len());
+            routines.push(Routine {
+                name: format!("{prefix}{name}"),
+                line: no,
+                module: mi,
+                entry: true,
+                global: true,
+                comment: block.clone(),
+                ..Default::default()
+            });
             block.clear();
             continue;
         }
@@ -667,6 +693,7 @@ impl Api {
         let mut libs = glob(&root.join("roottask/sysexe/lib"), "mar");
         libs.push(root.join("roottask/sysexe/dcl.mar"));
         libs.extend(glob(&root.join("roottask/sysexe/dcl"), "mar"));
+        libs.extend(glob(&root.join("roottask/sysexe/rms"), "mar"));
         for p in libs {
             let (mut rs, mut ds) = (vec![], vec![]);
             let mut m = parse_mar(root, &p, mods.len(), &mut rs, &mut ds);

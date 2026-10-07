@@ -464,6 +464,19 @@ const BACKUP: Phase = Phase {
     ],
 };
 
+/// RMSTEST in a directory of its own on DKB0:, whose output must be
+/// OpenVMS's, roottask/sysexe/rmstest.out (checked after the session).
+const RMS: Phase = Phase {
+    name: "rms",
+    secs: 60,
+    steps: &[(
+        "NEW.TXT;2           [1,4]               (RWED,RWED,RE,RE)",
+        1,
+        "CREATE/DIRECTORY DKB0:[RMS]\rSET DEFAULT DKB0:[RMS]\rRUN RMSTEST\rSET DEFAULT DKB0:[000000]\r",
+    )],
+    lines: &["RMSTEST done"],
+};
+
 /// The processes STARTUP and SNOOP ran, which print as they go, done long
 /// before: STARTUP's SLEEPER and SVCTEST's NAPPER say they hibernate
 /// before SLEEPER does, and the CPU then idles, taking clock interrupts.
@@ -502,6 +515,7 @@ const PHASES: &[Phase] = &[
     PROTECTION,
     TERMINAL,
     BACKUP,
+    RMS,
     STARTUP,
 ];
 
@@ -648,6 +662,16 @@ fn boot() {
         "SPIN's registers changed"
     );
 
+    let want = fs::read_to_string(root.join("roottask/sysexe/rmstest.out")).unwrap();
+    let first = want.lines().next().unwrap();
+    let got: Vec<_> = text[text.find(first).expect("RMSTEST's output")..]
+        .lines()
+        .take(want.lines().count())
+        .collect();
+    for (n, (w, g)) in want.lines().zip(&got).enumerate() {
+        assert_eq!(w, *g, "RMSTEST's line {} isn't OpenVMS's", n + 1);
+    }
+
     let mut img = Image::open(&datadisk, Mode::ReadOnly).unwrap();
     let report = img.verify().unwrap();
     assert_eq!(report.count(Severity::Error), 0, "{:?}", report.findings);
@@ -665,6 +689,11 @@ fn boot() {
         let restored = img.lookup(&format!("[RESTORED]{name}")).unwrap();
         let (saved, restored) = (bytes(&mut img, saved), bytes(&mut img, restored));
         assert_eq!(saved, restored, "[RESTORED]{name}");
+    }
+    for file in ["[RMS]REL.REL", "[RMS]RELF.REL"] {
+        let fid = img.lookup(file).unwrap();
+        let report = img.check_file(fid).unwrap();
+        assert!(report.is_sound(), "{file}: {:?}", report.findings);
     }
     let fid = img.lookup("[000000]TXT.BCK").unwrap();
     save_set(&bytes(&mut img, fid));

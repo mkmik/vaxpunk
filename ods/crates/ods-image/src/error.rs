@@ -15,6 +15,8 @@ pub enum Kind {
     Locked,
     /// A bad argument: path syntax, option value.
     Usage(String),
+    /// A relative or indexed file's structure, or a loader's input.
+    Rms(ods_core::rms::RmsError),
 }
 
 #[derive(Debug)]
@@ -55,6 +57,11 @@ impl Error {
             Kind::Host(_) => ('E', "HOSTIO"),
             Kind::Locked => ('E', "LOCKED"),
             Kind::Usage(_) => ('E', "USAGE"),
+            Kind::Rms(e) => match e {
+                ods_core::rms::RmsError::Corrupt { .. } => ('F', "FILESTRUCT"),
+                ods_core::rms::RmsError::Unsupported(_) => ('F', "UNSUPPORTED"),
+                ods_core::rms::RmsError::Invalid(_) => ('E', "INVARG"),
+            },
             Kind::Ods(e) => match e {
                 E::Device(_) => ('F', "IOERR"),
                 E::NoHomeBlock => ('F', "NOHOMEBLK"),
@@ -89,6 +96,7 @@ impl fmt::Display for Error {
             Kind::Host(e) => write!(f, "{e}")?,
             Kind::Locked => f.write_str("image is in use by another process")?,
             Kind::Usage(m) => f.write_str(m)?,
+            Kind::Rms(e) => write!(f, "{e}")?,
         }
         if !self.context.is_empty() {
             write!(f, ": {}", self.context)?;
@@ -102,6 +110,12 @@ impl std::error::Error for Error {}
 impl From<OdsError> for Error {
     fn from(e: OdsError) -> Error {
         Error { kind: Kind::Ods(e), context: String::new() }
+    }
+}
+
+impl From<ods_core::rms::RmsError> for Error {
+    fn from(e: ods_core::rms::RmsError) -> Error {
+        Error { kind: Kind::Rms(e), context: String::new() }
     }
 }
 

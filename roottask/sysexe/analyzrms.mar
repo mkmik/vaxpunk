@@ -1,0 +1,2280 @@
+        .TITLE  ANALYZRMS ANALYZE/RMS_FILE: reports on files' RMS structure
+        .IDENT  /V0.1/
+;
+; DCL's ANALYZE/RMS_FILE file[,...] runs this, as VMS's: for each file a
+; report, on SYS$OUTPUT or /OUTPUT's file, in pages of 54 lines under a
+; heading: its header, its RMS attributes, a relative or indexed file's
+; prologue, and an indexed file's areas and keys. /CHECK, the default,
+; walks each key's index and data buckets and reports what is wrong with
+; them, as VMS does, ***  VBN n:  and why; an error that leaves no way on
+; is unrecoverable, and ends the report. /STATISTICS reports each area's
+; and key's figures as well, /SUMMARY doesn't walk, and /FDL writes,
+; instead of a report, an FDL file that makes the file again, its
+; figures in ANALYSIS_OF_KEY, to /OUTPUT's file or name.FDL. Returns
+; ANLRMS$_OK, ANLRMS$_NOTOK when the report found errors, ANLRMS$_UNWIND
+; when it couldn't go on, or %ANALYZE-E-OPENIN.
+; ponytail: buckets up to MAXBKT blocks; a relative file's cells and a
+; sequential file's records aren't checked, and of an indexed file's
+; structure what a reader needs to find its way: buckets' headers, their
+; chains, and their entries' sizes, not their keys' order.
+;
+        .LIBRARY "lib.mlb"
+        .LIBRARY "starlet.mlb"
+        .LIBRARY "sysexe.mlb"
+        $SSDEF
+        $RMSDEF
+        $FABDEF
+        $RABDEF
+        $NAMDEF
+        $XABDEF
+        $XABDATDEF
+        $XABPRODEF
+        $XABFHCDEF
+        $DVIDEF
+        $PLGDEF
+        $KEYDEF
+        $AREADEF
+        $BKTDEF
+
+        .EXTERNAL LIN$TEXT, LIN$STR, LIN$CHAR, LIN$DEC, LIN$HEX, LIN$PAD
+        .EXTERNAL LIN$PUT, LIN$STATUS, LIN$GW_LEN, LIN$T_LINE, LIN$GL_RAB
+
+MAXBKT = 32
+PAGELINES = 54
+INHIB = ^X10000000                      ; STS$M_INHIB_MSG: reported already
+ANLRMS$_OK = ^X003B8009                 ; no errors
+ANLRMS$_NOTOK = ^X003B877A              ; at least one error occurred
+ANLRMS$_UNWIND = ^X003B8782             ; unrecoverable error
+ANLRMS$_BADNXTBKT = ^X003B95EA          ; next-bucket pointer out of range
+ANALYZE$_OPENIN = ^X00B1109A            ; error opening !AS as input
+M_CHECK = 0                             ; MODE: /CHECK,
+M_STATS = 1                             ; /STATISTICS,
+M_SUMMARY = 2                           ; /SUMMARY
+M_FDL = 3                               ; or /FDL
+
+; TEXT "text": adds it to the line. LINE "text": writes it as a line.
+; Use R0-R2.
+        .MACRO  TEXT    STR, ?L
+        .SAVE_PSECT LOCAL_BLOCK
+        .PSECT  $LITERAL$
+L:      .ASCIC  STR
+        .RESTORE_PSECT
+        MOVAB   L, R1
+        BSBW    LIN$TEXT
+        .ENDM   TEXT
+        .MACRO  LINE    STR
+        TEXT    STR
+        BSBW    PUTL
+        .ENDM   LINE
+
+        .PSECT  DATA, NOEXE, WRT, LONG
+SPEC:   .LONG   255                     ; a file to analyze
+        .ADDRESS SPECBUF
+SPECBUF:
+        .BLKB   255
+CMD:    .LONG   255                     ; the command, which ends a report
+        .ADDRESS CMDBUF
+CMDBUF: .BLKB   255
+OSPEC:  .LONG   255                     ; /OUTPUT's file
+        .ADDRESS OBUF
+OBUF:   .BLKB   255
+RES:    .BLKB   255                     ; the file's name
+EXP:    .BLKB   255
+FAB:    $FAB    FAC=BIO, NAM=NAM, XAB=DAT
+NAM:    $NAM    RSA=RES, RSS=255, ESA=EXP, ESS=255
+DAT:    $XABDAT NXT=PRO
+PRO:    $XABPRO NXT=FHC
+FHC:    $XABFHC
+RAB:    $RAB    FAB=FAB
+OFAB:   $FAB    FAC=PUT, RAT=CR         ; the report's or FDL's file
+ORAB:   $RAB    FAB=OFAB
+ANLDEF: .ASCII  "ANALYZE.ANL"
+FDLDEF: .ASCII  ".FDL"
+TIME:   .BLKB   23                      ; a time, $ASCTIM's
+TIMEDSC:
+        .LONG   23
+        .ADDRESS TIME
+CLUSTER:
+        .LONG   0                       ; the volume's cluster size
+DEVDSC: .QUAD   0                       ; and its device's name
+DVILIST:
+        .WORD   4, DVI$_CLUSTER
+        .ADDRESS CLUSTER
+        .LONG   0
+        .LONG   0
+PLG:    .BLKB   512                     ; VBN 1
+BLK:    .BLKB   512                     ; a prologue block
+KD:     .BLKB   KEY$K_BLN               ; the key being analyzed
+BKT:    .BLKB   MAXBKT*512              ; a bucket
+SAVED:  .BLKB   256                     ; a line, across a page's heading
+        .ALIGN  LONG
+MODE:   .LONG   0                       ; M_x
+OUTPUT: .LONG   0                       ; 1 with /OUTPUT
+STATUS: .LONG   0                       ; the worst so far
+TITLE:  .LONG   0                       ; the heading's title, .ASCIC
+ROWS:   .LONG   0                       ; lines on this page
+PAGE:   .LONG   0
+SAVEDLEN:
+        .LONG   0
+ERRORS: .LONG   0                       ; in this file
+UNWOUND:
+        .LONG   0                       ; 1 once it can't go on
+NXTBAD: .LONG   0                       ; 1: unwound at a next-bucket pointer
+HIBLK:  .LONG   0                       ; the file's blocks
+KNUM:   .LONG   0                       ; the key's number
+KVBN:   .LONG   0                       ; and where its descriptor is
+KOFF:   .LONG   0
+BVBN:   .LONG   0                       ; the bucket in BKT
+BSIZE:  .LONG   0                       ; its bytes
+BEND:   .LONG   0                       ; where its entries end
+; A key's figures, as its walk gathers them.
+S_START:
+S_NIDX: .LONG   0                       ; index entries
+S_L1:   .LONG   0                       ; level 1 entries
+S_IUNC: .LONG   0                       ; their bytes uncompressed
+S_IST:  .LONG   0                       ; and as stored
+S_IUSED:
+        .LONG   0                       ; index buckets' bytes in use
+S_ISIZE:
+        .LONG   0                       ; and in all
+S_IBKTS:
+        .LONG   0                       ; index buckets
+S_NREC: .LONG   0                       ; data records, or SIDRs
+S_LENS: .LONG   0                       ; their bytes, uncompressed
+S_KS:   .LONG   0                       ; their keys' bytes as stored
+S_KUNC: .LONG   0                       ; and not
+S_RS:   .LONG   0                       ; the rest of them as stored
+S_RUNC: .LONG   0                       ; and not
+S_DUSED:
+        .LONG   0                       ; data buckets' bytes in use
+S_DSIZE:
+        .LONG   0                       ; and in all
+S_DBKTS:
+        .LONG   0                       ; data buckets
+S_PTRS: .LONG   0                       ; SIDR pointers
+S_LONGEST:
+        .LONG   0                       ; the longest record
+S_END:
+
+ORGS:   .ASCIC  "sequential"
+        .ASCIC  "relative"
+        .ASCIC  "indexed"
+RFMS:   .ASCIC  "undefined"
+        .ASCIC  "fixed"
+        .ASCIC  "variable"
+        .ASCIC  "variable-with-fixed-control"
+        .ASCIC  "stream"
+        .ASCIC  "stream-LF"
+        .ASCIC  "stream-CR"
+FDLRFMS:
+        .ASCIC  "undefined"
+        .ASCIC  "fixed"
+        .ASCIC  "variable"
+        .ASCIC  "vfc"
+        .ASCIC  "stream"
+        .ASCIC  "stream_lf"
+        .ASCIC  "stream_cr"
+DTPS:   .ASCIC  "string"
+        .ASCIC  "signed word"
+        .ASCIC  "unsigned word"
+        .ASCIC  "signed longword"
+        .ASCIC  "unsigned longword"
+        .ASCIC  "packed decimal"
+        .ASCIC  "signed quadword"
+        .ASCIC  "unsigned quadword"
+        .ASCIC  "collated"
+FDLDTPS:
+        .ASCIC  "string"
+        .ASCIC  "int2"
+        .ASCIC  "bin2"
+        .ASCIC  "int4"
+        .ASCIC  "bin4"
+        .ASCIC  "decimal"
+        .ASCIC  "int8"
+        .ASCIC  "bin8"
+        .ASCIC  "collated"
+PROCATS:
+        .ASCIC  "System"
+        .ASCIC  "Owner"
+        .ASCIC  "Group"
+        .ASCIC  "World"
+YES:    .ASCIC  "yes"
+NO:     .ASCIC  "no"
+; A key's flags as the report lists them: bit, name; a primary key's,
+; then an alternate key's.
+PFLAGS: .BYTE   0
+        .ASCIC  "KEY$V_DUPKEYS"
+        .BYTE   3
+        .ASCIC  "KEY$V_IDX_COMPR"
+        .BYTE   4
+        .ASCIC  "KEY$V_INITIDX"
+        .BYTE   6
+        .ASCIC  "KEY$V_KEY_COMPR"
+        .BYTE   7
+        .ASCIC  "KEY$V_REC_COMPR"
+        .BYTE   255
+AFLAGS: .BYTE   0
+        .ASCIC  "KEY$V_DUPKEYS"
+        .BYTE   1
+        .ASCIC  "KEY$V_CHGKEYS"
+        .BYTE   2
+        .ASCIC  "KEY$V_NULKEYS"
+        .BYTE   3
+        .ASCIC  "KEY$V_IDX_COMPR"
+        .BYTE   4
+        .ASCIC  "KEY$V_INITIDX"
+        .BYTE   6
+        .ASCIC  "KEY$V_KEY_COMPR"
+        .BYTE   255
+T_CHECK:
+        .ASCIC  "Check RMS File Integrity"
+T_STATS:
+        .ASCIC  "RMS File Statistics"
+T_SUMMARY:
+        .ASCIC  "RMS File Summary"
+; The errors the walk reports, after ***  VBN n:  .
+E_CHECK:
+        .ASCIC  "Bucket check byte is out of phase."
+E_FREE: .ASCIC  "Invalid first free byte offset in bucket header."
+E_KEYID:
+        .ASCIC  "Invalid key of reference in bucket header."
+E_LEVEL:
+        .ASCIC  "Invalid level number in bucket header."
+E_NXTBKT:
+        .ASCIC  "Next-bucket pointer out of range of file."
+E_VBNFREE:
+        .ASCIC  "VBN free space offset is invalid."
+E_IDXFIT:
+        .ASCIC  "Index record spills over into free space of bucket."
+E_DATAFIT:
+        .ASCIC  "Data record spills over into free space of bucket."
+E_KEYDATA:
+        .ASCIC  "Key and/or data bytes do not fit in primary data record."
+E_SIDRSIZE:
+        .ASCIC  "Invalid key/pointer size field in SIDR record."
+E_SIDRPTR:
+        .ASCIC  "SIDR pointer extends past end of SIDR record."
+E_CHECKSUM:
+        .ASCIC  "Prolog block checksum is invalid."
+
+        .PSECT  CODE, EXE, LONG
+        .ENTRY  START, ^M<R2, R3, R4, R5, R6, R7, R8, R9, R10, R11>
+        PRESENT "RMS_FILE"
+        BLBS    R0, 5$
+        PRINT   "%ANALYZE-E-NOTRMS, only ANALYZE/RMS_FILE analyzes anything yet"
+        MOVL    #SS$_BADPARAM!INHIB, R0
+        RET
+5$:     MOVL    #M_FDL, MODE
+        PRESENT "FDL"
+        BLBS    R0, 10$
+        MOVL    #M_STATS, MODE
+        PRESENT "STATISTICS"
+        BLBS    R0, 10$
+        MOVL    #M_SUMMARY, MODE
+        PRESENT "SUMMARY"
+        BLBS    R0, 10$
+        CLRL    MODE
+10$:    GETVALUE "$LINE", CMD, CMD
+        MOVL    #ANLRMS$_OK!INHIB, STATUS
+        PRESENT "OUTPUT"
+        BLBC    R0, 20$
+        MOVL    #1, OUTPUT
+        MOVL    #255, OSPEC
+        GETVALUE "OUTPUT", OSPEC, OSPEC
+        BLBS    R0, 15$
+        CLRW    OSPEC                   ; no file: the default's
+15$:
+        CMPL    MODE, #M_FDL            ; /FDL makes a file for each
+        BEQL    20$
+        MOVAB   ANLDEF, R0              ; a report: one file for them all
+        MOVL    #11, R1
+        BSBW    OPENOUT
+        BLBS    R0, 20$
+        RET
+20$:    MOVL    #255, SPEC              ; each file
+        GETVALUE "FILE", SPEC, SPEC
+        BLBC    R0, 80$
+        BSBW    ONEFILE
+        BRB     20$
+80$:    TSTL    LIN$GL_RAB
+        BEQL    90$
+        CLRL    LIN$GL_RAB
+        $CLOSE  FAB=OFAB
+90$:    MOVL    STATUS, R0
+        RET
+
+; OPENOUT: R0, R1 = the output's default name. Makes /OUTPUT's file, or
+; the default, and has the lines go there. R0 = its status, reported if
+; an error. Uses R0-R5.
+OPENOUT:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5>
+        MOVL    R0, OFAB+FAB$L_DNA
+        MOVB    R1, OFAB+FAB$B_DNS
+        MOVAB   OBUF, OFAB+FAB$L_FNA
+        MOVB    OSPEC, OFAB+FAB$B_FNS
+        $CREATE FAB=OFAB
+        BLBC    R0, 90$
+        $CONNECT RAB=ORAB
+        BLBC    R0, 90$
+        MOVAB   ORAB, LIN$GL_RAB
+90$:    RSB
+
+; ONEFILE: SPEC = a file. Opens it, and reports on it or writes its FDL.
+; Uses R0-R11.
+ONEFILE:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5, R6, R7, R8, R9, R10, R11>
+        MOVAB   SPECBUF, FAB+FAB$L_FNA
+        MOVB    SPEC, FAB+FAB$B_FNS
+        $OPEN   FAB=FAB
+        BLBS    R0, 10$
+        PUSHL   R0                      ; %ANALYZE-E-OPENIN, error opening
+        PUSHL   LIN$GL_RAB              ; it as input, on SYS$OUTPUT
+        CLRL    LIN$GL_RAB
+        $PARSE  FAB=FAB
+        TEXT    "%ANALYZE-E-OPENIN, error opening "
+        MOVZBL  NAM+NAM$B_ESL, R2
+        MOVAB   EXP, R1
+        BSBW    LIN$STR
+        TEXT    " as input"
+        BSBW    LIN$PUT
+        MOVL    (SP)+, LIN$GL_RAB
+        MOVL    (SP)+, R0
+        BSBW    LIN$STATUS
+        MOVL    #ANALYZE$_OPENIN!INHIB, STATUS
+        RSB
+10$:    $CONNECT RAB=RAB
+        BLBC    R0, 80$
+        MOVL    FAB+FAB$L_ALQ, HIBLK
+        CLRQ    ERRORS                  ; and UNWOUND
+        CLRL    NXTBAD
+        MOVZBL  NAM+NAM$B_DEV, DEVDSC   ; the volume's cluster size
+        MOVL    NAM+NAM$L_DEV, DEVDSC+4
+        PUSHR   #^M<R2, R3, R4, R5>
+        $GETDVIW_S DEVNAM=DEVDSC, ITMLST=DVILIST
+        POPR    #^M<R2, R3, R4, R5>
+        CMPL    MODE, #M_FDL
+        BNEQ    20$
+        BSBW    FDLFILE
+        BRB     80$
+20$:    BSBW    REPORT
+80$:    $CLOSE  FAB=FAB
+        RSB
+
+; ---------------------------------------------------------------- output
+
+; PUTL: writes the line, on a new page if this one is full. Keeps every
+; register.
+PUTL:
+        .JSB_ENTRY
+        PUSHR   #^M<R0, R1, R2, R3, R4, R5>
+        CMPL    ROWS, #PAGELINES
+        BLSS    10$
+        BSBW    NEWPAGE
+10$:    BSBW    LIN$PUT
+        INCL    ROWS
+        POPR    #^M<R0, R1, R2, R3, R4, R5>
+        RSB
+
+; NEED: R0 = lines. Starts a page at the next line unless this one has
+; room for them, as VMS keeps a heading with what follows it. Keeps every
+; register.
+NEED:
+        .JSB_ENTRY
+        PUSHL   R1
+        ADDL3   ROWS, R0, R1
+        CMPL    R1, #PAGELINES
+        BLEQ    10$
+        MOVL    #PAGELINES, ROWS
+10$:    MOVL    (SP)+, R1
+        RSB
+
+; BLANK: writes an empty line. Keeps every register.
+BLANK:
+        .JSB_ENTRY
+        BSBW    PUTL
+        RSB
+
+; NEWPAGE: starts a page: a form feed, the heading, the file's name and
+; two empty lines, the line being made kept for after them. Uses R0-R5.
+NEWPAGE:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5>
+        MOVZWL  LIN$GW_LEN, SAVEDLEN
+        MOVC3   SAVEDLEN, LIN$T_LINE, SAVED
+        CLRW    LIN$GW_LEN
+        INCL    PAGE
+        MOVL    #12, R1                 ; FF
+        BSBW    LIN$CHAR
+        BSBW    LIN$PUT
+        MOVL    TITLE, R1               ; !42<title!>   !%D   Page !UL
+        BSBW    LIN$TEXT
+        MOVL    #42, R1
+        BSBW    LIN$PAD
+        TEXT    "   "
+        BSBW    NOW
+        TEXT    "   Page "
+        MOVL    PAGE, R1
+        CLRL    R2
+        BSBW    LIN$DEC
+        BSBW    LIN$PUT
+        MOVZBL  NAM+NAM$B_RSL, R2
+        MOVAB   RES, R1
+        BSBW    LIN$STR
+        BSBW    LIN$PUT
+        BSBW    LIN$PUT
+        BSBW    LIN$PUT
+        MOVC3   SAVEDLEN, SAVED, LIN$T_LINE
+        MOVW    SAVEDLEN, LIN$GW_LEN
+        CLRL    ROWS
+        RSB
+
+; NOW: adds the time, as $ASCTIM writes it. Uses R0-R2.
+NOW:
+        .JSB_ENTRY  SCRATCH=<R2>
+        PUSHR   #^M<R3, R4, R5>
+        $ASCTIM_S TIMBUF=TIMEDSC
+        MOVAB   TIME, R1
+        MOVL    #23, R2
+        BSBW    LIN$STR
+        POPR    #^M<R3, R4, R5>
+        RSB
+
+; DATE: R0 = a quadword time. Adds it, as $ASCTIM writes it. Uses R0-R2.
+DATE:
+        .JSB_ENTRY  SCRATCH=<R2>
+        PUSHR   #^M<R3, R4, R5>
+        $ASCTIM_S TIMBUF=TIMEDSC, TIMADR=(R0)
+        MOVAB   TIME, R1
+        MOVL    #23, R2
+        BSBW    LIN$STR
+        POPR    #^M<R3, R4, R5>
+        RSB
+
+; DEC: R1 = a value. Adds it in decimal. Keeps every register.
+DEC:
+        .JSB_ENTRY
+        PUSHL   R2
+        CLRL    R2
+        BSBW    LIN$DEC
+        MOVL    (SP)+, R2
+        RSB
+
+; SDEC: R1 = a signed value, R2 = a width. Adds it, right-aligned in the
+; width, with a minus sign if negative. Uses R0-R2.
+SDEC:
+        .JSB_ENTRY  SCRATCH=<R2>
+        TSTL    R1
+        BGEQ    50$
+        PUSHL   R3
+        MNEGL   R1, R1                  ; its digits
+        MOVL    R1, R0
+        MOVL    #1, R3
+10$:    DIVL2   #10, R0
+        BEQL    20$
+        INCL    R3
+        BRB     10$
+20$:    INCL    R3                      ; and the sign
+30$:    CMPL    R3, R2
+        BGEQ    40$
+        PUSHL   R1
+        MOVL    #^A/ /, R1
+        BSBW    LIN$CHAR
+        MOVL    (SP)+, R1
+        INCL    R3
+        BRB     30$
+40$:    PUSHL   R1
+        MOVL    #^A/-/, R1
+        BSBW    LIN$CHAR
+        MOVL    (SP)+, R1
+        CLRL    R2
+        MOVL    (SP)+, R3
+50$:    BSBW    LIN$DEC
+        RSB
+
+; HEX4: R1 = a word. Adds %X'hhhh'. Uses R0-R2.
+HEX4:
+        .JSB_ENTRY  SCRATCH=<R2>
+        PUSHL   R1
+        TEXT    "%X'"
+        MOVL    (SP)+, R1
+        MOVL    #4, R2
+        BSBW    LIN$HEX
+        MOVL    #^A/'/, R1
+        BSBW    LIN$CHAR
+        RSB
+
+; TABLE: R0 = an index, R1 = a table of .ASCIC strings. Adds the string,
+; or ??? past the table's R2 strings. Uses R0-R2.
+TABLE:
+        .JSB_ENTRY  SCRATCH=<R2>
+        CMPL    R0, R2
+        BLSSU   10$
+        TEXT    "???"
+        RSB
+10$:    TSTL    R0
+        BEQL    20$
+        MOVZBL  (R1), R2
+        INCL    R2
+        ADDL2   R2, R1
+        DECL    R0
+        BRB     10$
+20$:    BSBW    LIN$TEXT
+        RSB
+
+; FIGURE: R1 = a label, .ASCIC, R2 = a value, R3 = 1 for a percentage.
+; Writes a statistics line: a tab, the label to column 33, the value in
+; 9 columns, and %. Uses R0-R3.
+FIGURE:
+        .JSB_ENTRY  SCRATCH=<R2, R3>
+        PUSHL   R2
+        PUSHL   R1
+        MOVL    #9, R1
+        BSBW    LIN$CHAR
+        MOVL    (SP)+, R1
+        BSBW    LIN$TEXT
+        MOVL    #33, R1
+        BSBW    LIN$PAD
+        MOVL    (SP)+, R1
+        MOVL    #9, R2
+        BSBW    SDEC
+        BLBC    R3, 10$
+        MOVL    #^A/%/, R1
+        BSBW    LIN$CHAR
+10$:    BSBW    PUTL
+        RSB
+
+; FDLNUM: R1 = a secondary, .ASCIC, R2 = a value. Writes an FDL line, a
+; tab, the secondary to column 25 and the value. FDLSTR: the same, R2 =
+; an .ASCIC value. Use R0-R2.
+FDLNUM:
+        .JSB_ENTRY  SCRATCH=<R2>
+        BSBW    FDLKEY
+        MOVL    R2, R1
+        MOVL    #0, R2
+        BSBW    SDEC
+        BSBW    LIN$PUT
+        RSB
+FDLSTR:
+        .JSB_ENTRY  SCRATCH=<R2>
+        BSBW    FDLKEY
+        MOVL    R2, R1
+        BSBW    LIN$TEXT
+        BSBW    LIN$PUT
+        RSB
+FDLKEY:
+        .JSB_ENTRY
+        PUSHL   R1
+        MOVL    #9, R1
+        BSBW    LIN$CHAR
+        MOVL    (SP)+, R1
+        BSBW    LIN$TEXT
+        PUSHL   R1
+        MOVL    #25, R1
+        BSBW    LIN$PAD
+        MOVL    (SP)+, R1
+        RSB
+
+; YESNO: R0 = 1 or 0. R2 = YES or NO. Keeps every other register.
+YESNO:
+        .JSB_ENTRY  OUTPUT=<R2>
+        MOVAB   YES, R2
+        BLBS    R0, 10$
+        MOVAB   NO, R2
+10$:    RSB
+
+; ---------------------------------------------------------------- report
+
+; REPORT: reports on the open file. Uses R0-R11.
+REPORT:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5, R6, R7, R8, R9, R10, R11>
+        MOVAB   T_CHECK, TITLE
+        CMPL    MODE, #M_STATS
+        BNEQ    5$
+        MOVAB   T_STATS, TITLE
+5$:     CMPL    MODE, #M_SUMMARY
+        BNEQ    7$
+        MOVAB   T_SUMMARY, TITLE
+7$:     MOVL    #PAGELINES, ROWS        ; a page first
+        CLRL    PAGE
+        BSBW    HEADER
+        BSBW    ATTRS
+        CMPB    FAB+FAB$B_ORG, #FAB$C_REL
+        BNEQ    10$
+        BSBW    RELPLG
+        BRB     20$
+10$:    CMPB    FAB+FAB$B_ORG, #FAB$C_IDX
+        BNEQ    20$
+        BSBW    IDXPLG
+20$:    BSBW    VERDICT
+        RSB
+
+; HEADER: the FILE HEADER section. Uses R0-R5.
+HEADER:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5>
+        LINE    "FILE HEADER"
+        BSBW    BLANK
+        TEXT    <9>"File Spec: "
+        MOVZBL  NAM+NAM$B_RSL, R2
+        MOVAB   RES, R1
+        BSBW    LIN$STR
+        BSBW    PUTL
+        TEXT    <9>"File ID: ("
+        MOVZWL  NAM+NAM$W_FID, R1
+        BSBW    DEC
+        MOVL    #44, R1
+        BSBW    LIN$CHAR
+        MOVZWL  NAM+NAM$W_FID+2, R1
+        BSBW    DEC
+        MOVL    #44, R1
+        BSBW    LIN$CHAR
+        MOVZWL  NAM+NAM$W_FID+4, R1
+        BSBW    DEC
+        MOVL    #41, R1
+        BSBW    LIN$CHAR
+        BSBW    PUTL
+        TEXT    <9>"Owner UIC: "
+        BSBW    UIC
+        BSBW    PUTL
+        TEXT    <9>"Protection:  "
+        BSBW    PROT
+        BSBW    PUTL
+        TEXT    <9>"Creation Date:   "
+        MOVAB   DAT+XAB$Q_CDT, R0
+        BSBW    DATE
+        BSBW    PUTL
+        TEXT    <9>"Revision Date:   "
+        MOVAB   DAT+XAB$Q_RDT, R0
+        BSBW    DATE
+        TEXT    ", Number: "
+        MOVZWL  DAT+XAB$W_RVN, R1
+        BSBW    DEC
+        BSBW    PUTL
+        TEXT    <9>"Expiration Date: "
+        MOVAB   DAT+XAB$Q_EDT, R0
+        TSTL    (R0)
+        BNEQ    10$
+        TSTL    4(R0)
+        BNEQ    10$
+        TEXT    "none specified"
+        BRB     15$
+10$:    BSBW    DATE
+15$:    BSBW    PUTL
+        TEXT    <9>"Backup Date:     "
+        MOVAB   DAT+XAB$Q_BDT, R0
+        TSTL    (R0)
+        BNEQ    20$
+        TSTL    4(R0)
+        BNEQ    20$
+        TEXT    "none posted"
+        BRB     25$
+20$:    BSBW    DATE
+25$:    BSBW    PUTL
+        TEXT    <9>"Contiguity Options:  "
+        BSBW    CONTIG
+        BSBW    PUTL
+        LINE    <9>"Performance Options: none"
+        LINE    <9>"Reliability Options: none"
+        LINE    <9>"Journaling Enabled:  none"
+        BSBW    BLANK
+        BSBW    BLANK
+        RSB
+
+; UIC: adds the file's owner, [group,member] in octal. Uses R0-R3.
+UIC:
+        .JSB_ENTRY  SCRATCH=<R2, R3>
+        MOVL    #91, R1
+        BSBW    LIN$CHAR
+        MOVZWL  PRO+XAB$L_UIC+2, R1
+        BSBW    OCTAL
+        MOVL    #44, R1
+        BSBW    LIN$CHAR
+        MOVZWL  PRO+XAB$L_UIC, R1
+        BSBW    OCTAL
+        MOVL    #93, R1
+        BSBW    LIN$CHAR
+        RSB
+
+; OCTAL: R1 = a value. Adds it in octal. Uses R0-R3.
+OCTAL:
+        .JSB_ENTRY  SCRATCH=<R2, R3>
+        CLRL    R3
+10$:    BICL3   #^C7, R1, -(SP)
+        INCL    R3
+        ASHL    #-3, R1, R1
+        BNEQ    10$
+20$:    ADDL3   #^A/0/, (SP)+, R1
+        BSBW    LIN$CHAR
+        SOBGTR  R3, 20$
+        RSB
+
+; PROT: adds the file's protection, System: RWED, Owner: RWED, Group: RE,
+; World:  as VMS's ANALYZE writes it. PROTFDL: (system:RWED, ...) as its
+; FDL. Use R0-R5.
+PROT:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5>
+        CLRL    R5                      ; capitals
+        BSBW    PROTS
+        RSB
+PROTFDL:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5>
+        MOVL    #40, R1                 ; (
+        BSBW    LIN$CHAR
+        MOVL    #1, R5
+        BSBW    PROTS
+        MOVL    #41, R1                 ; )
+        BSBW    LIN$CHAR
+        RSB
+
+; PROTS: R5 = 0 for PROT's categories, 1 for PROTFDL's. Adds them. Uses
+; R0-R4.
+PROTS:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4>
+        CLRL    R3                      ; each category
+        MOVZWL  PRO+XAB$W_PRO, R4
+10$:    TSTL    R3
+        BEQL    15$
+        TEXT    ", "
+15$:    MOVL    R3, R0
+        MOVAB   PROCATS, R1
+        MOVL    #4, R2
+        BLBC    R5, 17$
+        BSBW    LOWCAT
+        BRB     18$
+17$:    BSBW    TABLE
+18$:    MOVL    #^A/:/, R1
+        BSBW    LIN$CHAR
+        BLBS    R5, 19$
+        MOVL    #^A/ /, R1
+        BSBW    LIN$CHAR
+19$:    BBS     #0, R4, 20$             ; a clear bit grants it
+        MOVL    #^A/R/, R1
+        BSBW    LIN$CHAR
+20$:    BBS     #1, R4, 21$
+        MOVL    #^A/W/, R1
+        BSBW    LIN$CHAR
+21$:    BBS     #2, R4, 22$
+        MOVL    #^A/E/, R1
+        BSBW    LIN$CHAR
+22$:    BBS     #3, R4, 23$
+        MOVL    #^A/D/, R1
+        BSBW    LIN$CHAR
+23$:    ASHL    #-4, R4, R4
+        AOBLSS  #4, R3, 10$
+        RSB
+
+; LOWCAT: R0 = a category's number. Adds its name in small letters. Uses
+; R0-R2.
+LOWCAT:
+        .JSB_ENTRY  SCRATCH=<R2>
+        MOVAB   PROCATS, R1
+10$:    TSTL    R0
+        BEQL    20$
+        MOVZBL  (R1), R2
+        INCL    R2
+        ADDL2   R2, R1
+        DECL    R0
+        BRB     10$
+20$:    MOVZBL  (R1)+, R2
+30$:    MOVZBL  (R1)+, R0
+        BISB2   #^X20, R0
+        PUSHL   R1
+        MOVL    R0, R1
+        BSBW    LIN$CHAR
+        MOVL    (SP)+, R1
+        SOBGTR  R2, 30$
+        RSB
+
+; CONTIG: adds the file's contiguity: contiguous, contiguous-best-try or
+; none. Uses R0-R2.
+CONTIG:
+        .JSB_ENTRY  SCRATCH=<R2>
+        BBC     #FAB$V_CTG, FAB+FAB$L_FOP, 10$
+        TEXT    "contiguous"
+        RSB
+10$:    BBC     #FAB$V_CBT, FAB+FAB$L_FOP, 20$
+        TEXT    "contiguous-best-try"
+        RSB
+20$:    TEXT    "none"
+        RSB
+
+; ATTRS: the RMS FILE ATTRIBUTES section. Uses R0-R5.
+ATTRS:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5>
+        LINE    "RMS FILE ATTRIBUTES"
+        BSBW    BLANK
+        TEXT    <9>"File Organization: "
+        BSBW    ORGNAME
+        BSBW    PUTL
+        TEXT    <9>"Record Format: "
+        MOVZBL  FAB+FAB$B_RFM, R0
+        MOVAB   RFMS, R1
+        MOVL    #7, R2
+        BSBW    TABLE
+        BSBW    PUTL
+        TEXT    <9>"Record Attributes: "
+        BBC     #FAB$V_BLK, FAB+FAB$B_RAT, 10$
+        TEXT    "no-span"
+10$:    MOVL    #^A/ /, R1
+        BSBW    LIN$CHAR
+        BBC     #FAB$V_CR, FAB+FAB$B_RAT, 12$
+        TEXT    "carriage-return"
+12$:    BBC     #FAB$V_FTN, FAB+FAB$B_RAT, 14$
+        TEXT    "fortran"
+14$:    BBC     #FAB$V_PRN, FAB+FAB$B_RAT, 16$
+        TEXT    "print"
+16$:    MOVL    #^A/ /, R1
+        BSBW    LIN$CHAR
+        BSBW    PUTL
+        TEXT    <9>"Maximum Record Size: "
+        MOVZWL  FAB+FAB$W_MRS, R1
+        BSBW    DEC
+        BSBW    PUTL
+        TSTB    FAB+FAB$B_ORG           ; sequential: its longest record
+        BEQL    18$
+        TSTW    FHC+XAB$W_LRL           ; the others: if they have one
+        BEQL    20$
+18$:    TEXT    <9>"Longest Record: "
+        MOVZWL  FHC+XAB$W_LRL, R1
+        BSBW    DEC
+        BSBW    PUTL
+20$:    CMPB    FAB+FAB$B_RFM, #FAB$C_VFC
+        BNEQ    22$
+        TEXT    <9>"Fixed Control Size: "
+        MOVZBL  FAB+FAB$B_FSZ, R1
+        BSBW    DEC
+        BSBW    PUTL
+22$:    TEXT    <9>"Blocks Allocated: "
+        MOVL    HIBLK, R1
+        BSBW    DEC
+        TEXT    ", Default Extend Size: "
+        MOVZWL  FAB+FAB$W_DEQ, R1
+        BSBW    DEC
+        BSBW    PUTL
+        TSTB    FAB+FAB$B_ORG
+        BNEQ    30$
+        TEXT    <9>"End-of-File VBN: "      ; sequential: its end of file
+        MOVL    FHC+XAB$L_EBK, R1
+        BSBW    DEC
+        TEXT    ", Offset: "
+        MOVZWL  FHC+XAB$W_FFB, R1
+        BSBW    HEX4
+        BSBW    PUTL
+        BRB     40$
+30$:    TEXT    <9>"Bucket Size: "          ; the others: buckets
+        MOVZBL  FAB+FAB$B_BKS, R1
+        BSBW    DEC
+        BSBW    PUTL
+40$:    LINE    <9>"File Monitoring: disabled"
+        TSTB    FAB+FAB$B_ORG           ; variable records' length hints
+        BNEQ    50$
+        CMPB    FAB+FAB$B_RFM, #FAB$C_VAR
+        BEQL    45$
+        CMPB    FAB+FAB$B_RFM, #FAB$C_VFC
+        BNEQ    50$
+45$:    LINE    <9>"File Length Hint (Record Count):    -1 (invalid)"
+        LINE    <9>"File Length Hint (Data Byte Count): -1 (invalid)"
+50$:    LINE    <9>"Global Buffer Count  pre-V8.3:          0"
+        LINE    <9>"Global Buffer Count post-V8.3:          0"
+        LINE    <9>"Global Buffer Flags post-V8.3:       none"
+        BSBW    BLANK
+        BSBW    BLANK
+        RSB
+
+; ORGNAME: adds the file's organization. Uses R0-R2.
+ORGNAME:
+        .JSB_ENTRY  SCRATCH=<R2>
+        EXTZV   #4, #4, FAB+FAB$B_ORG, R0
+        MOVAB   ORGS, R1
+        MOVL    #3, R2
+        BSBW    TABLE
+        RSB
+
+; RELPLG: a relative file's FIXED PROLOG section. Uses R0-R5.
+RELPLG:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5>
+        MOVL    #1, R0
+        MOVAB   PLG, R2
+        MOVL    #1, R1
+        BSBW    READ
+        LINE    "FIXED PROLOG"
+        BSBW    BLANK
+        LINE    <9>"Prolog Flags:"
+        LINE    <9><9>"(0)  PLG$V_NOEXTEND   0"
+        TEXT    <9>"First Data Bucket VBN: "
+        MOVZWL  PLG+PLG$W_DVBN, R1
+        BSBW    DEC
+        BSBW    PUTL
+        TEXT    <9>"Maximum Record Number: "
+        MOVL    PLG+PLG$L_MRN, R1
+        BSBW    DEC
+        BSBW    PUTL
+        TEXT    <9>"End-of-File VBN: "
+        MOVL    PLG+PLG$L_EOF, R1
+        BSBW    DEC
+        BSBW    PUTL
+        TEXT    <9>"Prolog Version: "
+        MOVZWL  PLG+PLG$W_VER_NO, R1
+        BSBW    DEC
+        BSBW    PUTL
+        BSBW    BLANK
+        RSB
+
+; VERDICT: how many errors, the command, and, with /OUTPUT, the count on
+; SYS$OUTPUT. Sets STATUS. Uses R0-R5.
+VERDICT:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5>
+        TSTB    FAB+FAB$B_ORG           ; after the attributes' blank lines
+        BEQL    5$
+        BSBW    BLANK
+5$:
+        TSTL    ERRORS
+        BNEQ    10$
+        LINE    "The analysis uncovered NO errors."
+        BRB     20$
+10$:    TEXT    "The analysis uncovered "
+        BSBW    COUNT
+        MOVL    #^A/./, R1
+        BSBW    LIN$CHAR
+        BSBW    PUTL
+        MOVL    #ANLRMS$_NOTOK!INHIB, STATUS
+        BLBC    UNWOUND, 20$
+        MOVL    #ANLRMS$_UNWIND!INHIB, STATUS
+        BLBC    NXTBAD, 20$
+        MOVL    #ANLRMS$_BADNXTBKT!INHIB, STATUS
+20$:    BSBW    BLANK
+        BSBW    BLANK
+        MOVZWL  CMD, R2
+        MOVAB   CMDBUF, R1
+        BSBW    LIN$STR
+        BSBW    PUTL
+        BLBC    OUTPUT, 90$
+        PUSHL   LIN$GL_RAB              ; %ANLRMS-I-ERRORS, <file> n errors
+        CLRL    LIN$GL_RAB
+        TEXT    "%ANLRMS-I-ERRORS, <"
+        MOVZBL  NAM+NAM$B_RSL, R2
+        MOVAB   RES, R1
+        BSBW    LIN$STR
+        TEXT    "> "
+        BSBW    COUNT
+        BSBW    LIN$PUT
+        MOVL    (SP)+, LIN$GL_RAB
+90$:    RSB
+
+; COUNT: adds ERRORS, n error or n errors. Uses R0-R2.
+COUNT:
+        .JSB_ENTRY  SCRATCH=<R2>
+        MOVL    ERRORS, R1
+        BSBW    DEC
+        TEXT    " error"
+        CMPL    ERRORS, #1
+        BEQL    10$
+        MOVL    #^A/s/, R1
+        BSBW    LIN$CHAR
+10$:    RSB
+
+; READ: R0 = a VBN, R1 = blocks, R2 = where. Reads them. R0 = $READ's
+; status. Uses R0-R2.
+READ:
+        .JSB_ENTRY  SCRATCH=<R2>
+        MOVL    R0, RAB+RAB$L_BKT
+        MULL3   #512, R1, R0
+        MOVW    R0, RAB+RAB$W_USZ
+        MOVL    R2, RAB+RAB$L_UBF
+        PUSHR   #^M<R3, R4, R5>
+        $READ   RAB=RAB
+        POPR    #^M<R3, R4, R5>
+        RSB
+
+; ERROR: R1 = an error's text, .ASCIC, R0 = the VBN it is in. Writes
+; ***  VBN n:  text, and counts it. Keeps every register.
+ERROR:
+        .JSB_ENTRY
+        PUSHR   #^M<R0, R1, R2>
+        INCL    ERRORS
+        PUSHL   R1
+        PUSHL   R0
+        TEXT    "***  VBN "
+        MOVL    (SP)+, R1
+        BSBW    DEC
+        TEXT    ":  "
+        MOVL    (SP)+, R1
+        BSBW    LIN$TEXT
+        BSBW    PUTL
+90$:    POPR    #^M<R0, R1, R2>
+        RSB
+
+; UNWIND: the walk can't go on: Unrecoverable error encountered in
+; structure of file, and UNWOUND set. Keeps every register.
+UNWIND:
+        .JSB_ENTRY
+        PUSHR   #^M<R0, R1, R2>
+        MOVL    #1, UNWOUND
+        LINE    "Unrecoverable error encountered in structure of file."
+90$:    POPR    #^M<R0, R1, R2>
+        RSB
+
+; ------------------------------------------------------------- indexed
+
+; IDXPLG: an indexed file's FIXED PROLOG section, its areas and its keys.
+; Uses R0-R11.
+IDXPLG:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5, R6, R7, R8, R9, R10, R11>
+        MOVL    #1, R0
+        MOVAB   PLG, R2
+        MOVL    #1, R1
+        BSBW    READ
+        LINE    "FIXED PROLOG"
+        BSBW    BLANK
+        TEXT    <9>"Number of Areas: "
+        MOVZBL  PLG+PLG$B_AMAX, R1
+        BSBW    DEC
+        TEXT    ", VBN of First Descriptor: "
+        MOVZBL  PLG+PLG$B_AVBN, R1
+        BSBW    DEC
+        BSBW    PUTL
+        TEXT    <9>"Prolog Version: "
+        MOVZWL  PLG+PLG$W_VER_NO, R1
+        BSBW    DEC
+        BSBW    PUTL
+        BSBW    BLANK
+        CLRL    R6                      ; each area
+10$:    MOVZBL  PLG+PLG$B_AMAX, R0
+        CMPL    R6, R0
+        BGEQU   20$
+        BSBW    AREA
+        INCL    R6
+        BRB     10$
+20$:    MOVL    #1, KVBN                ; each key
+        CLRL    KNUM
+        CLRL    KOFF
+30$:    BSBW    KEY
+        BLBS    UNWOUND, 90$
+        MOVL    KD+KEY$L_IDXFL, R0
+        BEQL    90$
+        MOVL    R0, KVBN
+        MOVZWL  KD+KEY$W_NOFF, KOFF
+        INCL    KNUM
+        BRB     30$
+90$:    RSB
+
+; AREA: R6 = an area. Its AREA DESCRIPTOR section, and with /STATISTICS
+; its figures. Uses R0-R5.
+AREA:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5>
+        DIVL3   #8, R6, R0              ; its block, eight to one
+        MOVZBL  PLG+PLG$B_AVBN, R3
+        ADDL2   R0, R3
+        MOVL    R3, R0
+        MOVL    #1, R1
+        MOVAB   BLK, R2
+        BSBW    READ
+        BICL3   #^C7, R6, R4            ; R4 = its offset
+        MULL2   #AREA$K_BLN, R4
+        MOVAB   BLK(R4), R5             ; R5 = it
+        MOVL    #3, R0
+        BSBW    NEED
+        TEXT    "AREA DESCRIPTOR #"
+        MOVL    R6, R1
+        BSBW    DEC
+        TEXT    " (VBN "
+        MOVL    R3, R1
+        BSBW    DEC
+        TEXT    ", offset "
+        MOVL    R4, R1
+        BSBW    HEX4
+        MOVL    #41, R1
+        BSBW    LIN$CHAR
+        BSBW    PUTL
+        BSBW    BLANK
+        TEXT    <9>"Bucket Size: "
+        MOVZBL  AREA$B_ARBKTSZ(R5), R1
+        BSBW    DEC
+        BSBW    PUTL
+        TEXT    <9>"Reclaimed Bucket VBN: "
+        MOVL    AREA$L_AVAIL(R5), R1
+        BSBW    DEC
+        BSBW    PUTL
+        TEXT    <9>"Current Extent Start: "
+        MOVL    AREA$L_CVBN(R5), R1
+        BSBW    DEC
+        TEXT    ", Blocks: "
+        MOVL    AREA$L_CNBLK(R5), R1
+        BSBW    DEC
+        TEXT    ", Used: "
+        MOVL    AREA$L_USED(R5), R1
+        BSBW    DEC
+        TEXT    ", Next: "
+        MOVL    AREA$L_NXTVBN(R5), R1
+        BSBW    DEC
+        BSBW    PUTL
+        TSTL    AREA$L_NXT(R5)
+        BEQL    10$
+        TEXT    <9>"Next Extent Start: "
+        MOVL    AREA$L_NXT(R5), R1
+        BSBW    DEC
+        TEXT    ", Blocks: "
+        MOVL    AREA$L_NXBLK(R5), R1
+        BSBW    DEC
+        BSBW    PUTL
+10$:    TEXT    <9>"Default Extend Quantity: "
+        MOVZWL  AREA$W_DEQ(R5), R1
+        BSBW    DEC
+        BSBW    PUTL
+        TEXT    <9>"Total Allocation: "
+        MOVL    AREA$L_TOTAL_ALLOC(R5), R1
+        BSBW    DEC
+        BSBW    PUTL
+        BSBW    BLANK
+        CMPL    MODE, #M_STATS
+        BNEQ    90$
+        TEXT    "STATISTICS FOR AREA #"
+        MOVL    R6, R1
+        BSBW    DEC
+        BSBW    PUTL
+        BSBW    BLANK
+        TEXT    <9>"Count of Reclaimed Blocks:"
+        MOVL    #33, R1
+        BSBW    LIN$PAD
+        CLRL    R1
+        MOVL    #9, R2
+        BSBW    LIN$DEC
+        BSBW    PUTL
+        BSBW    BLANK
+90$:    RSB
+
+; GETKEY: reads key KNUM's descriptor, at KVBN and KOFF, into KD. R0 =
+; the read's status. Uses R0-R5.
+GETKEY:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5>
+        MOVL    KVBN, R0
+        MOVL    #1, R1
+        MOVAB   BLK, R2
+        BSBW    READ
+        BLBC    R0, 90$
+        MOVL    KOFF, R1
+        MOVC3   #KEY$K_BLN, BLK(R1), KD
+        MOVL    #1, R0
+90$:    RSB
+
+; KEY: key KNUM's KEY DESCRIPTOR section; with /CHECK or /STATISTICS the
+; walk of its buckets and what is wrong with them, and with /STATISTICS
+; its figures. Uses R0-R11.
+KEY:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5, R6, R7, R8, R9, R10, R11>
+        BSBW    GETKEY
+        BSBW    KEYDESC
+        TSTL    MODE                    ; /CHECK
+        BEQL    10$
+        CMPL    MODE, #M_STATS
+        BNEQ    20$
+10$:    BSBW    WALK
+20$:    BSBW    BLANK
+        BLBS    UNWOUND, 90$
+        CMPL    MODE, #M_STATS
+        BNEQ    90$
+        BSBW    KSTATS
+90$:    RSB
+
+; KEYDESC: the lines that describe KD. Uses R0-R7.
+KEYDESC:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5, R6, R7>
+        MOVL    #3, R0
+        BSBW    NEED
+        TEXT    "KEY DESCRIPTOR #"
+        MOVL    KNUM, R1
+        BSBW    DEC
+        TEXT    " (VBN "
+        MOVL    KVBN, R1
+        BSBW    DEC
+        TEXT    ", offset "
+        MOVL    KOFF, R1
+        BSBW    HEX4
+        MOVL    #41, R1
+        BSBW    LIN$CHAR
+        BSBW    PUTL
+        BSBW    BLANK
+        TSTL    KD+KEY$L_IDXFL
+        BEQL    10$
+        TEXT    <9>"Next Key Descriptor VBN: "
+        MOVL    KD+KEY$L_IDXFL, R1
+        BSBW    DEC
+        TEXT    ", Offset: "
+        MOVZWL  KD+KEY$W_NOFF, R1
+        BSBW    HEX4
+        BSBW    PUTL
+10$:    TEXT    <9>"Index Area: "
+        MOVZBL  KD+KEY$B_IANUM, R1
+        BSBW    DEC
+        TEXT    ", Level 1 Index Area: "
+        MOVZBL  KD+KEY$B_LANUM, R1
+        BSBW    DEC
+        TEXT    ", Data Area: "
+        MOVZBL  KD+KEY$B_DANUM, R1
+        BSBW    DEC
+        BSBW    PUTL
+        TEXT    <9>"Root Level: "
+        MOVZBL  KD+KEY$B_ROOTLEV, R1
+        BSBW    DEC
+        BSBW    PUTL
+        TEXT    <9>"Index Bucket Size: "
+        MOVZBL  KD+KEY$B_IDXBKTSZ, R1
+        BSBW    DEC
+        TEXT    ", Data Bucket Size: "
+        MOVZBL  KD+KEY$B_DATBKTSZ, R1
+        BSBW    DEC
+        BSBW    PUTL
+        BBS     #KEY$V_INITIDX, KD+KEY$B_FLAGS, 15$
+        TEXT    <9>"Root VBN: "
+        MOVL    KD+KEY$L_ROOTVBN, R1
+        BSBW    DEC
+        BSBW    PUTL
+15$:    MOVL    #2, R0
+        BSBW    NEED
+        LINE    <9>"Key Flags:"
+        MOVAB   PFLAGS, R6              ; R6 = the flags it lists
+        TSTL    KNUM
+        BEQL    20$
+        MOVAB   AFLAGS, R6
+20$:    MOVZBL  (R6)+, R7               ; each: (n)  name  value
+        CMPL    R7, #255
+        BEQL    30$
+        TEXT    <9><9>"("
+        MOVL    R7, R1
+        BSBW    DEC
+        MOVL    #41, R1
+        BSBW    LIN$CHAR
+        MOVL    #7, R1
+        BSBW    LIN$PAD
+        MOVL    R6, R1
+        BSBW    LIN$TEXT
+        MOVL    #23, R1
+        BSBW    LIN$PAD
+        MOVL    #^A/ /, R1
+        BSBW    LIN$CHAR
+        EXTZV   R7, #1, KD+KEY$B_FLAGS, R1
+        BSBW    DEC
+        BSBW    PUTL
+        MOVZBL  (R6), R0
+        ADDL2   R0, R6
+        INCL    R6
+        BRB     20$
+30$:    TEXT    <9>"Key Segments: "
+        MOVZBL  KD+KEY$B_SEGMENTS, R1
+        BSBW    DEC
+        BSBW    PUTL
+        BBC     #KEY$V_NULKEYS, KD+KEY$B_FLAGS, 35$
+        TEXT    <9>"Null Character: %X'"
+        MOVZBL  KD+KEY$B_NULLCHAR, R1
+        MOVL    #2, R2
+        BSBW    LIN$HEX
+        MOVL    #^A/'/, R1
+        BSBW    LIN$CHAR
+        BSBW    PUTL
+35$:    TEXT    <9>"Key Size: "
+        MOVZBL  KD+KEY$B_KEYSZ, R1
+        BSBW    DEC
+        BSBW    PUTL
+        TEXT    <9>"Minimum Record Size: "
+        MOVZWL  KD+KEY$W_MINRECSZ, R1
+        BSBW    DEC
+        BSBW    PUTL
+        TEXT    <9>"Index Fill Quantity: "
+        MOVZWL  KD+KEY$W_IDXFILL, R1
+        BSBW    DEC
+        TEXT    ", Data Fill Quantity: "
+        MOVZWL  KD+KEY$W_DATFILL, R1
+        BSBW    DEC
+        BSBW    PUTL
+        TEXT    <9>"Segment Positions:"
+        MOVAB   KD+KEY$W_POSITION, R6
+        MOVL    #2, R7
+        BSBW    SEGS
+        TEXT    <9>"Segment Sizes:"
+        MOVAB   KD+KEY$B_SIZE, R6
+        MOVL    #1, R7
+        BSBW    SEGS
+        TEXT    <9>"Data Type: "
+        BSBW    DTPNAME
+        BSBW    PUTL
+        TEXT    <9>"Name: "<34>
+        BSBW    KEYNAME
+        MOVL    #34, R1
+        BSBW    LIN$CHAR
+        BSBW    PUTL
+        BBS     #KEY$V_INITIDX, KD+KEY$B_FLAGS, 90$
+        TEXT    <9>"First Data Bucket VBN: "
+        MOVL    KD+KEY$L_LDVBN, R1
+        BSBW    DEC
+        BSBW    PUTL
+90$:    RSB
+
+; SEGS: R6 = the segments' positions, R7 = 2, or their sizes, R7 = 1.
+; Adds them, after the label to column 22, 6 columns each, and writes the
+; line. Uses R0-R7.
+SEGS:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5, R6, R7>
+        MOVL    #21, R1
+        BSBW    LIN$PAD
+        MOVZBL  KD+KEY$B_SEGMENTS, R3
+        BEQL    90$
+10$:    MOVZWL  (R6), R1
+        CMPL    R7, #2
+        BEQL    20$
+        MOVZBL  (R6), R1
+20$:    MOVL    #6, R2
+        BSBW    LIN$DEC
+        ADDL2   R7, R6
+        SOBGTR  R3, 10$
+90$:    BSBW    PUTL
+        RSB
+
+; DTPNAME: adds KD's data type, as the report names it. Uses R0-R2.
+DTPNAME:
+        .JSB_ENTRY  SCRATCH=<R2>
+        MOVZBL  KD+KEY$B_DATATYPE, R0
+        BBCC    #5, R0, 10$             ; descending
+        TEXT    "descending "
+        MOVZBL  KD+KEY$B_DATATYPE, R0
+        BICL2   #32, R0
+10$:    MOVAB   DTPS, R1
+        MOVL    #9, R2
+        BSBW    TABLE
+        RSB
+
+; KEYNAME: adds KD's name, without the spaces or NULs after it. Uses
+; R0-R2.
+KEYNAME:
+        .JSB_ENTRY  SCRATCH=<R2>
+        MOVL    #32, R2
+10$:    MOVZBL  KD+KEY$T_KEYNAM-1[R2], R0
+        BEQL    20$
+        CMPB    R0, #^A/ /
+        BNEQ    30$
+20$:    SOBGTR  R2, 10$
+        RSB
+30$:    MOVAB   KD+KEY$T_KEYNAM, R1
+        BSBW    LIN$STR
+        RSB
+
+; FIG "label", value[, 1]: writes a statistics line, the value a
+; percentage with the 1. Uses R0-R3.
+        .MACRO  FIG     LABEL, VALUE, PCT=0, ?L
+        .SAVE_PSECT LOCAL_BLOCK
+        .PSECT  $LITERAL$
+L:      .ASCIC  LABEL
+        .RESTORE_PSECT
+        MOVAB   L, R1
+        MOVL    VALUE, R2
+        MOVL    #PCT, R3
+        BSBW    FIGURE
+        .ENDM   FIG
+
+; KSTATS: KD's STATISTICS FOR KEY section, from the walk's figures. Uses
+; R0-R5.
+KSTATS:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5>
+        TEXT    "STATISTICS FOR KEY #"
+        MOVL    KNUM, R1
+        BSBW    DEC
+        BSBW    PUTL
+        BSBW    BLANK
+        BBC     #KEY$V_INITIDX, KD+KEY$B_FLAGS, 10$
+        LINE    <9>"! This index is uninitialized - there are no records."
+        BSBW    BLANK
+        RSB
+10$:    BSBW    FIGURES
+        FIG     "Number of Index Levels:", FG_DEPTH
+        FIG     "Count of Level 1 Records:", FG_L1
+        FIG     "Mean Length of Index Entry:", FG_ILEN
+        FIG     "Count of Index Blocks:", FG_IBLKS
+        FIG     "Mean Index Bucket Fill:", FG_IFILL, 1
+        FIG     "Mean Index Entry Compression:", FG_ICOMP, 1
+        BSBW    BLANK
+        TSTL    KNUM
+        BEQL    20$
+        FIG     "Count of SIDR Arrays:", FG_NREC        ; an alternate key's
+        FIG     "Mean Duplicates per Data Record:", FG_DUPS
+        FIG     "Mean Length of Data Record:", FG_DLEN
+        FIG     "Count of Data Blocks:", FG_DBLKS
+        FIG     "Mean Data Bucket Fill:", FG_DFILL, 1
+        FIG     "Mean Data Key Compression:", FG_KCOMP, 1
+        BSBW    BLANK
+        BSBW    BLANK
+        RSB
+20$:    FIG     "Count of Data Records:", FG_NREC       ; the primary key's
+        FIG     "Mean Length of Data Record:", FG_DLEN
+        FIG     "Count of Data Blocks:", FG_DBLKS
+        FIG     "Mean Data Bucket Fill:", FG_DFILL, 1
+        FIG     "Mean Data Key Compression:", FG_KCOMP, 1
+        FIG     "Mean Data Record Compression:", FG_RCOMP, 1
+        BSBW    BLANK
+        FIG     "Overall Space Efficiency:", FG_EFF, 1
+        TEXT    <9>"Longest Record Length:"<9><9>"     "
+        MOVL    S_LONGEST, R1
+        BSBW    DEC
+        BSBW    PUTL
+        BSBW    BLANK
+        RSB
+
+; FIGURES: works out KD's figures from its walk's, as VMS's ANALYZE does:
+; means rounded, fills, compressions and the space efficiency truncated.
+; Uses R0-R3.
+FIGURES:
+        .JSB_ENTRY  SCRATCH=<R2, R3>
+        MOVZBL  KD+KEY$B_ROOTLEV, FG_DEPTH
+        MOVL    S_L1, FG_L1
+        MOVL    S_IUNC, R0
+        MOVL    S_NIDX, R1
+        BSBW    RDIV
+        MOVL    R0, FG_ILEN
+        MOVZBL  KD+KEY$B_IDXBKTSZ, R0
+        MULL3   R0, S_IBKTS, FG_IBLKS
+        MOVL    S_IUSED, R0
+        MOVL    S_ISIZE, R1
+        BSBW    PCT
+        MOVL    R0, FG_IFILL
+        SUBL3   S_IST, S_IUNC, R0
+        MOVL    S_IUNC, R1
+        BSBW    PCT
+        MOVL    R0, FG_ICOMP
+        MOVL    S_NREC, FG_NREC
+        MOVL    S_LENS, R0
+        MOVL    S_NREC, R1
+        BSBW    RDIV
+        MOVL    R0, FG_DLEN
+        MOVZBL  KD+KEY$B_DATBKTSZ, R0
+        MULL3   R0, S_DBKTS, FG_DBLKS
+        MOVL    S_DUSED, R0
+        MOVL    S_DSIZE, R1
+        BSBW    PCT
+        MOVL    R0, FG_DFILL
+        SUBL3   S_KS, S_KUNC, R0
+        MOVL    S_KUNC, R1
+        BSBW    PCT
+        MOVL    R0, FG_KCOMP
+        SUBL3   S_RS, S_RUNC, R0
+        MOVL    S_RUNC, R1
+        BSBW    PCT
+        MOVL    R0, FG_RCOMP
+        MOVL    S_LENS, R0
+        MULL3   #512, HIBLK, R1
+        BSBW    PCT
+        MOVL    R0, FG_EFF
+        CLRQ    FG_DUPS                 ; and FG_FDUPS
+        MOVL    S_NREC, R1
+        BEQL    90$
+        SUBL3   S_NREC, S_PTRS, R0
+        DIVL3   R1, R0, FG_DUPS
+        BSBW    RDIV
+        MOVL    R0, FG_FDUPS
+90$:    RSB
+
+; PCT: R0 = a part, R1 = the whole. R0 = the part in percent, truncated,
+; or 0 of nothing. Uses R0-R3.
+PCT:
+        .JSB_ENTRY  SCRATCH=<R2, R3>
+        TSTL    R1
+        BEQL    80$
+        EMUL    #100, R0, #0, R2
+        EDIV    R1, R2, R0, R2
+        RSB
+80$:    CLRL    R0
+        RSB
+
+; RDIV: R0 = a count, R1 = a divisor. R0 = their quotient, rounded, or 0
+; for a divisor of 0. Uses R0-R2.
+RDIV:
+        .JSB_ENTRY  SCRATCH=<R2>
+        TSTL    R1
+        BEQL    80$
+        DIVL3   #2, R1, R2
+        ADDL2   R2, R0
+        DIVL2   R1, R0
+        RSB
+80$:    CLRL    R0
+        RSB
+
+; ---------------------------------------------------------------- walk
+
+; WALK: walks KD's index, a level at a time, each along its chain from
+; the first bucket the level above points at, then its data or SIDR
+; buckets, gathering their figures in S_ and reporting what is wrong.
+; Stops with UNWOUND set if it can't go on. Uses R0-R11.
+WALK:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5, R6, R7, R8, R9, R10, R11>
+        MOVC5   #0, (SP), #0, #S_END-S_START, S_START
+        BBC     #KEY$V_INITIDX, KD+KEY$B_FLAGS, 5$
+        RSB
+5$:     MOVZBL  KD+KEY$B_ROOTLEV, R10   ; R10 = the level
+        MOVL    KD+KEY$L_ROOTVBN, R11   ; R11 = its first bucket
+10$:    TSTL    R10
+        BEQL    50$
+        MOVL    R11, R9                 ; R9 = a bucket of it
+        CLRL    R8                      ; R8 = how many so far
+20$:    MOVL    R9, R0
+        MOVZBL  KD+KEY$B_IDXBKTSZ, R1
+        MOVL    R10, R2
+        BSBW    GETBKT
+        BLBS    UNWOUND, 90$
+        BSBW    IXBKT
+        BLBS    UNWOUND, 90$
+        TSTL    R8
+        BNEQ    25$
+        MOVL    R0, R7                  ; the first: where the next level is
+25$:    INCL    R8
+        BSBW    NEXTBKT
+        BLBS    UNWOUND, 90$
+        TSTL    R0
+        BEQL    30$
+        MOVL    R0, R9
+        BRB     20$
+30$:    MOVL    R7, R11
+        DECL    R10
+        BRB     10$
+50$:    MOVL    KD+KEY$L_LDVBN, R9      ; the data, or SIDR, buckets
+        CLRL    R8
+60$:    MOVL    R9, R0
+        MOVZBL  KD+KEY$B_DATBKTSZ, R1
+        CLRL    R2
+        BSBW    GETBKT
+        BLBS    UNWOUND, 90$
+        TSTL    KNUM
+        BNEQ    65$
+        BSBW    DATABKT
+        BRB     67$
+65$:    BSBW    SIDRBKT
+67$:    BLBS    UNWOUND, 90$
+        INCL    R8
+        BSBW    NEXTBKT
+        BLBS    UNWOUND, 90$
+        TSTL    R0
+        BEQL    90$
+        MOVL    R0, R9
+        BRB     60$
+90$:    RSB
+
+; NEXTBKT: R8 = the buckets of this level so far. R0 = the next one's
+; VBN, or 0 after the last; an error, unrecoverable, if it is past the
+; file, or if the chain is longer than the file. Uses R0, R1.
+NEXTBKT:
+        .JSB_ENTRY
+        CLRL    R0
+        BBS     #BKT$V_LASTBKT, BKT+BKT$B_BKTCB, 90$
+        MOVL    BKT+BKT$L_NXTBKT, R0
+        BEQL    10$
+        CMPL    R0, HIBLK
+        BGTRU   10$
+        CMPL    R8, HIBLK
+        BLEQU   90$
+        BSBW    LOOP
+        RSB
+10$:    MOVL    BVBN, R0
+        MOVAB   E_NXTBKT, R1
+        BSBW    ERROR
+        BSBW    UNWIND
+        MOVL    #1, NXTBAD
+        CLRL    R0
+90$:    RSB
+
+; LOOP: BVBN's chain goes round: VBN n:  The bucket chains for key #k
+; contain a loop, unrecoverable. Uses R0-R2.
+LOOP:
+        .JSB_ENTRY  SCRATCH=<R2>
+        INCL    ERRORS
+        TEXT    "***  VBN "
+        MOVL    BVBN, R1
+        BSBW    DEC
+        TEXT    ":  The bucket chains for key #"
+        MOVL    KNUM, R1
+        BSBW    DEC
+        TEXT    " contain a loop."
+        BSBW    PUTL
+80$:    BSBW    UNWIND
+        RSB
+
+; GETBKT: R0 = a bucket's VBN, R1 = its blocks, R2 = its level. Reads it
+; into BKT, and checks its header: BVBN, BSIZE and BEND, where its
+; entries end, are set. A bucket past the file, or an index bucket whose
+; free space offsets are wrong, is unrecoverable. Uses R0-R5.
+GETBKT:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5>
+        MOVL    R0, BVBN
+        MULL3   #512, R1, BSIZE
+        MOVL    R2, R5                  ; R5 = the level
+        TSTL    R0
+        BEQL    5$
+        ADDL3   R0, R1, R3
+        DECL    R3
+        CMPL    R3, HIBLK
+        BGTRU   5$
+        MOVAB   BKT, R2
+        BSBW    READ
+        BLBS    R0, 10$
+5$:     INCL    ERRORS                  ; not in the file
+        TEXT    "***  Structure references block with invalid VBN "
+        MOVL    BVBN, R1
+        BSBW    DEC
+        MOVL    #^A/./, R1
+        BSBW    LIN$CHAR
+        BSBW    PUTL
+7$:     BSBW    UNWIND
+        RSB
+10$:    MOVL    BSIZE, R4               ; R4 = its last byte's offset
+        DECL    R4
+        MOVL    BVBN, R0
+        CMPB    BKT, BKT(R4)            ; the check characters
+        BEQL    20$
+        MOVAB   E_CHECK, R1
+        BSBW    ERROR
+20$:    CMPB    BKT+BKT$B_INDEXNO, KNUM
+        BEQL    25$
+        MOVAB   E_KEYID, R1
+        BSBW    ERROR
+25$:    CMPB    BKT+BKT$B_LEVEL, R5
+        BEQL    30$
+        MOVAB   E_LEVEL, R1
+        BSBW    ERROR
+30$:    MOVZWL  BKT+BKT$W_FREESPACE, R3 ; R3 = where the entries end
+        TSTL    R5
+        BNEQ    50$
+        CMPL    R3, #BKT$K_OVERHDSZ     ; a data bucket's: in it
+        BLSSU   35$
+        CMPL    R3, R4
+        BLEQU   40$
+35$:    MOVAB   E_FREE, R1              ; else to its end, to see more
+        BSBW    ERROR
+        MOVL    R4, R3
+40$:    MOVL    R3, BEND
+        RSB
+50$:    SUBL3   #BKT$K_ENDOVHD, BSIZE, R2       ; an index bucket's: keys
+        MOVZWL  BKT(R2), R2             ; up to its pointers, R2 the free
+        CMPL    R2, R4                  ; byte below them
+        BGEQU   60$
+        INCL    R2
+        CMPL    R3, #BKT$K_OVERHDSZ
+        BLSSU   55$
+        CMPL    R3, R2
+        BGTRU   55$
+        MOVL    R3, BEND
+        RSB
+55$:    MOVAB   E_FREE, R1
+        BRB     70$
+60$:    MOVAB   E_VBNFREE, R1
+70$:    BSBW    ERROR
+        BSBW    UNWIND
+        RSB
+
+; IXBKT: R10 = the level of the index bucket in BKT. Counts its entries,
+; their bytes, and its bytes in use. R0 = its first entry's pointer.
+; Uses R0-R6.
+IXBKT:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5, R6>
+        EXTZV   #BKT$V_PTR_SZ, #2, BKT+BKT$B_BKTCB, R6
+        ADDL2   #2, R6                  ; R6 = a pointer's size
+        MOVZBL  KD+KEY$B_KEYSZ, R5
+        MOVL    #BKT$K_OVERHDSZ, R2     ; each key
+10$:    CMPL    R2, BEND
+        BGEQU   30$
+        MOVL    R5, R3                  ; R3 = its bytes as stored
+        BBC     #KEY$V_IDX_COMPR, KD+KEY$B_FLAGS, 20$
+        MOVZBL  BKT(R2), R3
+        ADDL2   #2, R3
+20$:    ADDL2   R3, R2
+        CMPL    R2, BEND
+        BGTRU   80$
+        INCL    S_NIDX
+        CMPL    R10, #1
+        BNEQ    25$
+        INCL    S_L1
+25$:    ADDL3   R3, R6, R0
+        ADDL2   R0, S_IST
+        ADDL3   R5, R6, R0
+        ADDL2   R0, S_IUNC
+        BRB     10$
+30$:    SUBL3   #BKT$K_ENDOVHD, BSIZE, R2       ; in use: but the gap below
+        MOVZWL  BKT(R2), R2             ; the pointers
+        INCL    R2
+        SUBL3   R2, BSIZE, R0
+        ADDL2   BEND, R0
+        ADDL2   R0, S_IUSED
+        ADDL2   BSIZE, S_ISIZE
+        INCL    S_IBKTS
+        SUBL3   #BKT$K_ENDOVHD, BSIZE, R2       ; the first pointer
+        SUBL2   R6, R2
+        CLRL    R0
+        MOVAB   BKT(R2), R1
+        ADDL2   R6, R1
+40$:    ASHL    #8, R0, R0
+        MOVB    -(R1), R0
+        SOBGTR  R6, 40$
+        RSB
+80$:    MOVL    BVBN, R0
+        MOVAB   E_IDXFIT, R1
+        BSBW    ERROR
+        BSBW    UNWIND
+        CLRL    R0
+        RSB
+
+; DATABKT: counts the primary data bucket in BKT's records, their bytes
+; and its bytes in use. Uses R0-R6.
+DATABKT:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5, R6>
+        ADDL3   #1, BEND, R0
+        ADDL2   R0, S_DUSED
+        ADDL2   BSIZE, S_DSIZE
+        INCL    S_DBKTS
+        MOVL    #BKT$K_OVERHDSZ, R2     ; R2 = each record
+10$:    CMPL    R2, BEND
+        BLSSU   15$
+        RSB
+15$:    MOVZBL  BKT(R2), R3             ; R3 = its control byte
+        BICL3   #^C3, R3, R4
+        ADDL2   #7, R4                  ; R4 = its header's bytes
+        BBC     #3, R3, 20$             ; an RRV: control, ID, ID, VBN
+        ADDL2   R4, R2
+        CMPL    R2, BEND
+        BGTRU   80$
+        BRB     10$
+20$:    MOVZWL  FAB+FAB$W_MRS, R5       ; R5 = its bytes: a FIX record's
+        CMPB    FAB+FAB$B_RFM, #FAB$C_FIX
+        BNEQ    25$
+        BITB    #KEY$M_KEY_COMPR!KEY$M_REC_COMPR, KD+KEY$B_FLAGS
+        BEQL    30$
+25$:    ADDL3   R2, R4, R0              ; or as its size says
+        ADDL2   #2, R0
+        CMPL    R0, BEND
+        BGTRU   80$
+        SUBL2   #2, R0
+        MOVZWL  BKT(R0), R5
+        ADDL2   #2, R4
+30$:    ADDL3   R2, R4, R6              ; R6 = its body
+        ADDL2   R4, R2
+        ADDL2   R5, R2
+        CMPL    R2, BEND
+        BGTRU   80$
+        BBS     #2, R3, 10$             ; deleted: not counted
+        INCL    S_NREC
+        BSBW    RECORD
+        BRB     10$
+80$:    MOVL    BVBN, R0
+        MOVAB   E_KEYDATA, R1
+        BSBW    ERROR
+        BSBW    UNWIND
+        RSB
+
+; RECORD: R6 = a primary data record's body in BKT, R5 = its bytes.
+; Counts it: its bytes uncompressed, its key's and its rest's as stored
+; and not, and the longest. Uses R0, R1.
+RECORD:
+        .JSB_ENTRY
+        CLRL    R3                      ; R3 = the key's bytes as stored
+        CLRL    R4                      ; R4 = and not
+        BBC     #KEY$V_KEY_COMPR, KD+KEY$B_FLAGS, 10$
+        MOVZBL  BKT(R6), R3
+        ADDL2   #2, R3
+        MOVZBL  KD+KEY$B_KEYSZ, R4
+        ADDL2   R3, S_KS
+        ADDL2   R4, S_KUNC
+        BRB     20$
+10$:    BBC     #KEY$V_REC_COMPR, KD+KEY$B_FLAGS, 20$
+        MOVZBL  KD+KEY$B_KEYSZ, R3
+        MOVL    R3, R4
+20$:    SUBL3   R3, R5, R2              ; R2 = the rest's bytes
+        BBC     #KEY$V_REC_COMPR, KD+KEY$B_FLAGS, 30$
+        ADDL2   R2, S_RS
+        ADDL3   R6, R3, R0              ; uncompressed: segments
+        MOVL    R2, R1
+        BSBW    SEGMENTS
+        MOVL    R0, R2
+        ADDL2   R2, S_RUNC
+30$:    ADDL2   R4, R2
+        ADDL2   R2, S_LENS
+        CMPL    R2, S_LONGEST
+        BLEQU   90$
+        MOVL    R2, S_LONGEST
+90$:    RSB
+
+; SEGMENTS: R0 = compressed data at BKT's offset R0, R1 = its bytes. R0 =
+; their bytes uncompressed: each segment's literal and its repeats. Uses
+; R0, R1.
+SEGMENTS:
+        .JSB_ENTRY
+        ADDL3   R0, R1, R4              ; R4 = the end
+        MOVL    R0, R2
+        CLRL    R0
+10$:    ADDL3   #3, R2, R3
+        CMPL    R3, R4
+        BGTRU   90$
+        MOVZWL  BKT(R2), R3             ; a literal
+        ADDL2   R3, R0
+        ADDL2   #2, R2
+        ADDL2   R3, R2
+        CMPL    R2, R4
+        BGEQU   90$
+        MOVZBL  BKT(R2), R3             ; its repeats
+        ADDL2   R3, R0
+        INCL    R2
+        BRB     10$
+90$:    RSB
+
+; SIDRBKT: counts the SIDR bucket in BKT's SIDRs, their pointers, bytes,
+; and its bytes in use. Uses R0-R6.
+SIDRBKT:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5, R6>
+        ADDL3   #1, BEND, R0
+        ADDL2   R0, S_DUSED
+        ADDL2   BSIZE, S_DSIZE
+        INCL    S_DBKTS
+        MOVL    #BKT$K_OVERHDSZ, R2     ; R2 = each SIDR
+10$:    CMPL    R2, BEND
+        BLSSU   15$
+        RSB
+15$:    ADDL3   #2, R2, R0
+        CMPL    R0, BEND
+        BGTRU   70$
+        MOVZWL  BKT(R2), R5             ; R5 = its bytes
+        ADDL3   R0, R5, R6              ; R6 = its end
+        CMPL    R6, BEND
+        BGTRU   70$
+        INCL    S_NREC
+        ADDL3   #2, R5, R1
+        ADDL2   R1, S_LENS
+        MOVZBL  KD+KEY$B_KEYSZ, R3      ; R3 = its key's bytes
+        BBC     #KEY$V_KEY_COMPR, KD+KEY$B_FLAGS, 20$
+        MOVZBL  BKT(R0), R3
+        ADDL2   #2, R3
+        ADDL2   R3, S_KS
+        MOVZBL  KD+KEY$B_KEYSZ, R1
+        ADDL2   R1, S_KUNC
+20$:    ADDL2   R0, R3                  ; R3 = each pointer
+30$:    CMPL    R3, R6
+        BGEQU   60$
+        MOVZBL  BKT(R3), R4
+        INCL    R3
+        BBS     #4, R4, 30$             ; a deleted one's stub
+        BICL3   #^C3, R4, R1
+        ADDL2   #4, R1
+        ADDL2   R1, R3
+        CMPL    R3, R6
+        BGTRU   80$
+        BBS     #2, R4, 30$
+        INCL    S_PTRS
+        BRB     30$
+60$:    MOVL    R6, R2
+        BRB     10$
+70$:    MOVAB   E_SIDRSIZE, R1
+        BRB     85$
+80$:    MOVAB   E_SIDRPTR, R1
+85$:    MOVL    BVBN, R0
+        BSBW    ERROR
+        BSBW    UNWIND
+        RSB
+
+; ---------------------------------------------------------------- FDL
+
+; FDLFILE: writes the open file's FDL, to /OUTPUT's file or name.FDL:
+; its attributes, an indexed file's areas and keys, and their figures,
+; with what is wrong with its buckets among them.
+; Uses R0-R11.
+FDLFILE:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5, R6, R7, R8, R9, R10, R11>
+        BLBS    OUTPUT, 5$
+        MOVL    NAM+NAM$L_NAME, R0      ; name.FDL
+        MOVZBL  NAM+NAM$B_NAME, R1
+        MOVC3   R1, (R0), OBUF
+        MOVZBL  NAM+NAM$B_NAME, R0
+        MOVW    R0, OSPEC
+5$:     MOVAB   FDLDEF, R0
+        MOVL    #4, R1
+        BSBW    OPENOUT
+        BLBS    R0, 7$
+        RSB
+7$:     MNEGL   #^X10000000, ROWS       ; no pages: errors go in as lines
+        TEXT    "IDENT"<9>"FDL_VERSION 02 "<34>
+        PUSHR   #^M<R3, R4, R5>
+        $ASCTIM_S TIMBUF=TIMEDSC
+        POPR    #^M<R3, R4, R5>
+        MOVAB   TIME, R1
+        MOVL    #20, R2
+        BSBW    LIN$STR
+        TEXT    "   OpenVMS ANALYZE/RMS_FILE Utility"<34>
+        BSBW    LIN$PUT
+        BSBW    LIN$PUT
+        TEXT    "SYSTEM"
+        BSBW    LIN$PUT
+        TEXT    <9>"SOURCE                  OpenVMS"
+        BSBW    LIN$PUT
+        BSBW    LIN$PUT
+        BSBW    FDLFILESEC
+        BSBW    LIN$PUT
+        BSBW    FDLRECSEC
+        CMPB    FAB+FAB$B_ORG, #FAB$C_IDX
+        BNEQ    80$
+        BSBW    FDLIDX
+80$:    CLRL    LIN$GL_RAB
+        $CLOSE  FAB=OFAB
+        RSB
+
+        .MACRO  FNUM    NAME, VALUE, ?L
+        .SAVE_PSECT LOCAL_BLOCK
+        .PSECT  $LITERAL$
+L:      .ASCIC  "NAME"
+        .RESTORE_PSECT
+        MOVAB   L, R1
+        MOVL    VALUE, R2
+        BSBW    FDLNUM
+        .ENDM   FNUM
+        .MACRO  FSTR    NAME, VALUE, ?L
+        .SAVE_PSECT LOCAL_BLOCK
+        .PSECT  $LITERAL$
+L:      .ASCIC  "NAME"
+        .RESTORE_PSECT
+        MOVAB   L, R1
+        MOVAB   VALUE, R2
+        BSBW    FDLSTR
+        .ENDM   FSTR
+        .MACRO  FYES    NAME, ?L
+        .SAVE_PSECT LOCAL_BLOCK
+        .PSECT  $LITERAL$
+L:      .ASCIC  "NAME"
+        .RESTORE_PSECT
+        BSBW    YESNO
+        MOVAB   L, R1
+        BSBW    FDLSTR
+        .ENDM   FYES
+        .MACRO  FKEY    NAME, ?L
+        .SAVE_PSECT LOCAL_BLOCK
+        .PSECT  $LITERAL$
+L:      .ASCIC  "NAME"
+        .RESTORE_PSECT
+        MOVAB   L, R1
+        BSBW    FDLKEY
+        .ENDM   FKEY
+
+; FDLFILESEC: FILE. Uses R0-R5.
+FDLFILESEC:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5>
+        TEXT    "FILE"
+        BSBW    LIN$PUT
+        FNUM    ALLOCATION, HIBLK
+        EXTZV   #FAB$V_CBT, #1, FAB+FAB$L_FOP, R0
+        FYES    BEST_TRY_CONTIGUOUS
+        TSTB    FAB+FAB$B_ORG
+        BEQL    10$
+        MOVZBL  FAB+FAB$B_BKS, R0
+        FNUM    BUCKET_SIZE, R0
+10$:    FNUM    CLUSTER_SIZE, CLUSTER
+        EXTZV   #FAB$V_CTG, #1, FAB+FAB$L_FOP, R0
+        FYES    CONTIGUOUS
+        MOVZWL  FAB+FAB$W_DEQ, R0
+        FNUM    EXTENSION, R0
+        FSTR    FILE_MONITORING, NO
+        CMPB    FAB+FAB$B_ORG, #FAB$C_REL       ; the prologue's
+        BNEQ    20$
+        MOVL    #1, R0
+        MOVAB   PLG, R2
+        MOVL    #1, R1
+        BSBW    READ
+        FNUM    MAX_RECORD_NUMBER, PLG+PLG$L_MRN
+20$:    FKEY    NAME
+        MOVL    #34, R1
+        BSBW    LIN$CHAR
+        MOVZBL  NAM+NAM$B_RSL, R2
+        MOVAB   RES, R1
+        BSBW    LIN$STR
+        MOVL    #34, R1
+        BSBW    LIN$CHAR
+        BSBW    LIN$PUT
+        FKEY    ORGANIZATION
+        BSBW    ORGNAME
+        BSBW    LIN$PUT
+        FKEY    OWNER
+        BSBW    UIC
+        BSBW    LIN$PUT
+        FKEY    PROTECTION
+        BSBW    PROTFDL
+        BSBW    LIN$PUT
+        FNUM    GLOBAL_BUFFER_COUNT, #0
+        FNUM    GLBUFF_CNT_V83, #0
+        FKEY    GLBUFF_FLAGS_V83
+        TEXT    "none"
+        BSBW    LIN$PUT
+        RSB
+
+; FDLRECSEC: RECORD. Uses R0-R5.
+FDLRECSEC:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5>
+        TEXT    "RECORD"
+        BSBW    LIN$PUT
+        EXTZV   #FAB$V_BLK, #1, FAB+FAB$B_RAT, R0
+        XORL2   #1, R0
+        FYES    BLOCK_SPAN
+        FKEY    CARRIAGE_CONTROL
+        BBC     #FAB$V_CR, FAB+FAB$B_RAT, 10$
+        TEXT    "carriage_return"
+        BRB     40$
+10$:    BBC     #FAB$V_FTN, FAB+FAB$B_RAT, 20$
+        TEXT    "fortran"
+        BRB     40$
+20$:    BBC     #FAB$V_PRN, FAB+FAB$B_RAT, 30$
+        TEXT    "print"
+        BRB     40$
+30$:    TEXT    "none"
+40$:    BSBW    LIN$PUT
+        CMPB    FAB+FAB$B_RFM, #FAB$C_VFC
+        BNEQ    50$
+        MOVZBL  FAB+FAB$B_FSZ, R0
+        FNUM    CONTROL_FIELD_SIZE, R0
+50$:    FKEY    FORMAT
+        MOVZBL  FAB+FAB$B_RFM, R0
+        MOVAB   FDLRFMS, R1
+        MOVL    #7, R2
+        BSBW    TABLE
+        BSBW    LIN$PUT
+        MOVZWL  FAB+FAB$W_MRS, R0
+        FNUM    SIZE, R0
+        RSB
+
+; FDLIDX: an indexed file's AREA and KEY sections, then its
+; ANALYSIS_OF_AREA and ANALYSIS_OF_KEY ones. Uses R0-R11.
+FDLIDX:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5, R6, R7, R8, R9, R10, R11>
+        MOVL    #1, R0
+        MOVAB   PLG, R2
+        MOVL    #1, R1
+        BSBW    READ
+        CLRL    R6                      ; each area
+10$:    MOVZBL  PLG+PLG$B_AMAX, R0
+        CMPL    R6, R0
+        BGEQU   20$
+        BSBW    LIN$PUT
+        BSBW    FDLAREA
+        INCL    R6
+        BRB     10$
+20$:    MOVL    #1, KVBN                ; each key
+        CLRL    KNUM
+        CLRL    KOFF
+30$:    BSBW    LIN$PUT
+        BSBW    GETKEY
+        BSBW    FDLKEYSEC
+        MOVL    KD+KEY$L_IDXFL, R0
+        BEQL    40$
+        MOVL    R0, KVBN
+        MOVZWL  KD+KEY$W_NOFF, KOFF
+        INCL    KNUM
+        BRB     30$
+40$:    CLRL    R6                      ; each area's analysis
+50$:    MOVZBL  PLG+PLG$B_AMAX, R0
+        CMPL    R6, R0
+        BGEQU   60$
+        BSBW    LIN$PUT
+        TEXT    "ANALYSIS_OF_AREA "
+        MOVL    R6, R1
+        BSBW    DEC
+        BSBW    LIN$PUT
+        FNUM    RECLAIMED_SPACE, #0
+        INCL    R6
+        BRB     50$
+60$:    MOVL    #1, KVBN                ; each key's
+        CLRL    KNUM
+        CLRL    KOFF
+70$:    BSBW    GETKEY
+        BSBW    FDLANAL
+        BLBS    UNWOUND, 90$
+        MOVL    KD+KEY$L_IDXFL, R0
+        BEQL    90$
+        MOVL    R0, KVBN
+        MOVZWL  KD+KEY$W_NOFF, KOFF
+        INCL    KNUM
+        BRB     70$
+90$:    RSB
+
+; FDLAREA: R6 = an area. Its AREA section. Uses R0-R5.
+FDLAREA:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5>
+        DIVL3   #8, R6, R0
+        MOVZBL  PLG+PLG$B_AVBN, R3
+        ADDL2   R3, R0
+        MOVL    #1, R1
+        MOVAB   BLK, R2
+        BSBW    READ
+        BICL3   #^C7, R6, R4
+        MULL2   #AREA$K_BLN, R4
+        MOVAB   BLK(R4), R5
+        TEXT    "AREA "
+        MOVL    R6, R1
+        BSBW    DEC
+        BSBW    LIN$PUT
+        FNUM    ALLOCATION, AREA$L_TOTAL_ALLOC(R5)
+        MOVZBL  AREA$B_ARBKTSZ(R5), R0
+        FNUM    BUCKET_SIZE, R0
+        MOVZWL  AREA$W_DEQ(R5), R0
+        FNUM    EXTENSION, R0
+        RSB
+
+; FDLKEYSEC: KD's KEY section. Uses R0-R7.
+FDLKEYSEC:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5, R6, R7>
+        TEXT    "KEY "
+        MOVL    KNUM, R1
+        BSBW    DEC
+        BSBW    LIN$PUT
+        EXTZV   #KEY$V_CHGKEYS, #1, KD+KEY$B_FLAGS, R0
+        FYES    CHANGES
+        EXTZV   #KEY$V_KEY_COMPR, #1, KD+KEY$B_FLAGS, R0
+        FYES    DATA_KEY_COMPRESSION
+        TSTL    KNUM
+        BNEQ    10$
+        EXTZV   #KEY$V_REC_COMPR, #1, KD+KEY$B_FLAGS, R0
+        FYES    DATA_RECORD_COMPRESSION
+10$:    MOVZBL  KD+KEY$B_DANUM, R0
+        FNUM    DATA_AREA, R0
+        MOVZWL  KD+KEY$W_DATFILL, R0
+        MOVZBL  KD+KEY$B_DATBKTSZ, R1
+        BSBW    FILLPCT
+        FNUM    DATA_FILL, R0
+        EXTZV   #KEY$V_DUPKEYS, #1, KD+KEY$B_FLAGS, R0
+        FYES    DUPLICATES
+        MOVZBL  KD+KEY$B_IANUM, R0
+        FNUM    INDEX_AREA, R0
+        EXTZV   #KEY$V_IDX_COMPR, #1, KD+KEY$B_FLAGS, R0
+        FYES    INDEX_COMPRESSION
+        MOVZWL  KD+KEY$W_IDXFILL, R0
+        MOVZBL  KD+KEY$B_IDXBKTSZ, R1
+        BSBW    FILLPCT
+        FNUM    INDEX_FILL, R0
+        MOVZBL  KD+KEY$B_LANUM, R0
+        FNUM    LEVEL1_INDEX_AREA, R0
+        FKEY    NAME
+        MOVL    #34, R1
+        BSBW    LIN$CHAR
+        BSBW    KEYNAME
+        MOVL    #34, R1
+        BSBW    LIN$CHAR
+        BSBW    LIN$PUT
+        EXTZV   #KEY$V_NULKEYS, #1, KD+KEY$B_FLAGS, R0
+        FYES    NULL_KEY
+        BBC     #KEY$V_NULKEYS, KD+KEY$B_FLAGS, 20$
+        MOVZBL  KD+KEY$B_NULLCHAR, R0
+        FNUM    NULL_VALUE, R0
+20$:    TSTL    KNUM
+        BNEQ    30$
+        FNUM    PROLOG, #3
+30$:    CLRL    R6                      ; each segment
+40$:    MOVZBL  KD+KEY$B_SEGMENTS, R0
+        CMPL    R6, R0
+        BGEQU   50$
+        MOVL    #9, R1
+        BSBW    LIN$CHAR
+        TEXT    "SEG"
+        MOVL    R6, R1
+        BSBW    DEC
+        TEXT    "_LENGTH"
+        MOVL    #25, R1
+        BSBW    LIN$PAD
+        MOVZBL  KD+KEY$B_SIZE[R6], R1
+        BSBW    DEC
+        BSBW    LIN$PUT
+        MOVL    #9, R1
+        BSBW    LIN$CHAR
+        TEXT    "SEG"
+        MOVL    R6, R1
+        BSBW    DEC
+        TEXT    "_POSITION"
+        MOVL    #25, R1
+        BSBW    LIN$PAD
+        MOVZWL  KD+KEY$W_POSITION[R6], R1
+        BSBW    DEC
+        BSBW    LIN$PUT
+        INCL    R6
+        BRB     40$
+50$:    FKEY    TYPE
+        MOVZBL  KD+KEY$B_DATATYPE, R0
+        BBCC    #5, R0, 60$
+        MOVL    #^A/d/, R1
+        BSBW    LIN$CHAR
+60$:    MOVAB   FDLDTPS, R1
+        MOVL    #9, R2
+        BSBW    TABLE
+        BSBW    LIN$PUT
+        RSB
+
+; FILLPCT: R0 = a fill quantity, bytes, R1 = a bucket size. R0 = the
+; fill, percent of the bucket. Uses R0-R3.
+FILLPCT:
+        .JSB_ENTRY  SCRATCH=<R2, R3>
+        MULL2   #512, R1
+        BSBW    PCT
+        RSB
+
+; FDLANAL: KD's ANALYSIS_OF_KEY section, its figures from a walk, after
+; what the walk found wrong, as VMS's ANALYZE writes them; nothing after
+; an unrecoverable error. Uses R0-R11.
+FDLANAL:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5, R6, R7, R8, R9, R10, R11>
+        BSBW    WALK
+        BLBC    UNWOUND, 5$
+        RSB
+5$:     BSBW    LIN$PUT
+        TEXT    "ANALYSIS_OF_KEY "
+        MOVL    KNUM, R1
+        BSBW    DEC
+        BSBW    LIN$PUT
+        BBC     #KEY$V_INITIDX, KD+KEY$B_FLAGS, 10$
+        TEXT    <9>"! This index is uninitialized - there are no records."
+        BSBW    LIN$PUT
+        RSB
+10$:    BSBW    FIGURES
+        FNUM    DATA_FILL, FG_DFILL
+        FNUM    DATA_KEY_COMPRESSION, FG_KCOMP
+        TSTL    KNUM
+        BNEQ    20$
+        FNUM    DATA_RECORD_COMPRESSION, FG_RCOMP
+20$:    FNUM    DATA_RECORD_COUNT, FG_NREC
+        FNUM    DATA_SPACE_OCCUPIED, FG_DBLKS
+        FNUM    DEPTH, FG_DEPTH
+        TSTL    KNUM
+        BEQL    30$
+        FNUM    DUPLICATES_PER_SIDR, FG_FDUPS
+30$:    FNUM    INDEX_COMPRESSION, FG_ICOMP
+        FNUM    INDEX_FILL, FG_IFILL
+        FNUM    INDEX_SPACE_OCCUPIED, FG_IBLKS
+        FNUM    LEVEL1_RECORD_COUNT, FG_L1
+        FNUM    MEAN_DATA_LENGTH, FG_DLEN
+        FNUM    MEAN_INDEX_LENGTH, FG_ILEN
+        TSTL    KNUM
+        BNEQ    90$
+        FNUM    LONGEST_RECORD_LENGTH, S_LONGEST
+90$:    RSB
+
+        .PSECT  DATA
+; A key's figures, as FIGURES works them out.
+FG_DEPTH:
+        .LONG   0
+FG_L1:  .LONG   0
+FG_ILEN:
+        .LONG   0
+FG_IBLKS:
+        .LONG   0
+FG_IFILL:
+        .LONG   0
+FG_ICOMP:
+        .LONG   0
+FG_NREC:
+        .LONG   0
+FG_DLEN:
+        .LONG   0
+FG_DBLKS:
+        .LONG   0
+FG_DFILL:
+        .LONG   0
+FG_KCOMP:
+        .LONG   0
+FG_RCOMP:
+        .LONG   0
+FG_EFF: .LONG   0
+FG_DUPS:
+        .LONG   0
+FG_FDUPS:
+        .LONG   0
+
+        .END    START

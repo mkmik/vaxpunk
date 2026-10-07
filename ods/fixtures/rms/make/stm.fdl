@@ -1,0 +1,5 @@
+FILE
+	ORGANIZATION	sequential
+RECORD
+	FORMAT	stream
+	CARRIAGE_CONTROL	carriage_return

@@ -37,6 +37,7 @@ UNIX_HI = ^X007C9567                    ; 1-Jan-1970 in VMS time
 UNIX_LO = ^X4BEB4000
 
         .PSECT  EXEC$DATA, NOEXE, WRT, QUAD
+MONTHS: .ASCII  "JANFEBMARAPRMAYJUNJULAUGSEPOCTNOVDEC"     ; $ASCTIM's
 EXE$GQ_SYSTIME::                        ; the system time
         .BLKQ   1
 EXE$GQ_BOOTTIME::                       ; the system time at boot
@@ -278,6 +279,192 @@ ABSTIM:
         RET
 90$:    MOVL    #SS$_ACCVIO, R0
         RET
+
+; $ASCTIM timlen, timbuf, timadr, cvtflg: writes the time at timadr, or
+; the system time if timadr is 0, as text in the buffer the descriptor
+; timbuf describes, as much as fits, and its length in the word at
+; timlen if there is one. An absolute time is dd-MMM-yyyy hh:mm:ss.cc,
+; the day padded with a space, a delta dddd hh:mm:ss.cc; with cvtflg's
+; bit 0 set, hh:mm:ss.cc only. R0 = SS$_NORMAL, SS$_BUFFEROVF if it
+; didn't all fit, or SS$_ACCVIO.
+        .ENTRY  EXE$ASCTIM, ^M<R2, R3, R4, R5, R6, R7, R8>
+        SUBL2   #24, SP                 ; the text, built here
+        MOVL    SP, R6                  ; R6 = where it goes next
+        MOVL    12(AP), R2
+        BNEQ    10$
+        DSBINT  #IPL$_HWCLK
+        MOVQ    EXE$GQ_SYSTIME, R0
+        ENBINT
+        BRB     20$
+10$:    IFNORD  #8, (R2), 85$
+        MOVQ    (R2), R0
+20$:    CLRL    R8                      ; R8 = 1 for a delta, made positive
+        TSTL    R1
+        BGEQ    25$
+        INCL    R8
+        MCOML   R1, R1
+        MNEGL   R0, R0
+        BNEQ    25$
+        INCL    R1
+25$:    MOVL    #1000, R2               ; hundredths of a second
+        BSBW    DIV64
+        MOVL    #100, R2
+        BSBW    DIV64
+        BSBW    DIV64                   ; R7 = hundredths, then seconds,
+        PUSHL   R3                      ; minutes and hours on the stack
+        MOVL    #60, R2
+        BSBW    DIV64
+        PUSHL   R3
+        BSBW    DIV64
+        PUSHL   R3
+        MOVL    #24, R2
+        BSBW    DIV64
+        PUSHL   R3                      ; and R0 = days
+        BLBS    16(AP), 50$             ; the time only
+        TSTL    R8
+        BEQL    30$
+        MOVL    R0, R1                  ; a delta's days
+        MOVL    #4, R2
+        BSBW    PADDED
+        BRB     45$
+30$:    BSBW    DATE                    ; an absolute time's date
+45$:    MOVB    #^A/ /, (R6)+
+50$:    MOVL    (SP)+, R1               ; hh:mm:ss.cc
+        BSBW    TWO
+        MOVB    #^A/:/, (R6)+
+        MOVL    (SP)+, R1
+        BSBW    TWO
+        MOVB    #^A/:/, (R6)+
+        MOVL    (SP)+, R1
+        BSBW    TWO
+        MOVB    #^A/./, (R6)+
+        MOVL    (SP)+, R1
+        BSBW    TWO
+        SUBL3   SP, R6, R7              ; R7 = its length
+        MOVL    8(AP), R2               ; into the buffer
+        IFNORD  #8, (R2), 85$
+        MOVZWL  (R2), R3
+        MOVL    4(R2), R4
+        IFNOWRT R3, (R4), 85$
+        MOVL    #SS$_NORMAL, R5
+        CMPL    R3, R7
+        BGEQU   60$
+        MOVL    #SS$_BUFFEROVF, R5
+        MOVL    R3, R7
+60$:    MOVC3   R7, (SP), (R4)
+        MOVL    4(AP), R0
+        BEQL    70$
+        IFNOWRT #2, (R0), 85$
+        MOVW    R7, (R0)
+70$:    MOVL    R5, R0
+        RET
+85$:    MOVL    #SS$_ACCVIO, R0
+        RET
+
+; DIV64: R0, R1 = a quadword, unsigned, R2 = a divisor up to 32767. R0,
+; R1 = the quotient, R3 = the remainder, a 16-bit piece at a time. Uses
+; R0-R5.
+DIV64:
+        .JSB_ENTRY  OUTPUT=<R3>, SCRATCH=<R4, R5>
+        PUSHL   R1
+        PUSHL   R0
+        CLRL    R3
+        MOVL    #3, R5                  ; the top piece first
+10$:    MOVZWL  (SP)[R5], R4
+        ASHL    #16, R3, R3
+        ADDL2   R4, R3
+        DIVL3   R2, R3, R4
+        MOVW    R4, (SP)[R5]
+        MULL2   R2, R4
+        SUBL2   R4, R3
+        SOBGEQ  R5, 10$
+        MOVL    (SP)+, R0
+        MOVL    (SP)+, R1
+        RSB
+
+; DATE: R0 = days since 17-NOV-1858, R6 = where the text goes. Writes the
+; date there, dd-MMM-yyyy, by Fliegel and Van Flandern's algorithm from
+; the Julian day number, and R6 past it. Uses R0-R5.
+DATE:
+        .JSB_ENTRY  OUTPUT=<R6>, SCRATCH=<R2, R3, R4, R5>
+        ADDL3   #2400001+68569, R0, R2  ; R2 = l
+        MULL3   #4, R2, R3              ; R3 = n
+        DIVL2   #146097, R3
+        MULL3   #146097, R3, R0
+        ADDL2   #3, R0
+        DIVL2   #4, R0
+        SUBL2   R0, R2
+        ADDL3   #1, R2, R4              ; R4 = i
+        MULL2   #4000, R4
+        DIVL2   #1461001, R4
+        MULL3   #1461, R4, R0
+        DIVL2   #4, R0
+        SUBL2   R0, R2
+        ADDL2   #31, R2
+        MULL3   #80, R2, R5             ; R5 = j
+        DIVL2   #2447, R5
+        MULL3   #2447, R5, R0           ; R2 = the day
+        DIVL2   #80, R0
+        SUBL2   R0, R2
+        DIVL3   #11, R5, R0             ; R0 = j / 11
+        ADDL2   #2, R5                  ; R5 = the month
+        MULL3   #12, R0, R1
+        SUBL2   R1, R5
+        SUBL2   #49, R3                 ; R3 = the year
+        MULL2   #100, R3
+        ADDL2   R4, R3
+        ADDL2   R0, R3
+        PUSHL   R3
+        MOVL    R2, R1                  ; dd-MMM-yyyy
+        MOVL    #2, R2
+        BSBW    PADDED
+        MOVB    #^A/-/, (R6)+
+        MULL3   #3, R5, R0
+        MOVAB   MONTHS-3[R0], R0
+        MOVB    (R0)+, (R6)+
+        MOVB    (R0)+, (R6)+
+        MOVB    (R0)+, (R6)+
+        MOVB    #^A/-/, (R6)+
+        MOVL    (SP)+, R3
+        DIVL3   #100, R3, R1
+        BSBW    TWO
+        DIVL3   #100, R3, R0
+        MULL2   #100, R0
+        SUBL3   R0, R3, R1
+        BSBW    TWO
+        RSB
+
+; PADDED: R1 = a value, R2 = a width. Writes it in decimal at R6, spaces
+; before it to the width, and R6 past it. Uses R0-R4.
+PADDED:
+        .JSB_ENTRY  OUTPUT=<R6>, SCRATCH=<R2, R3, R4>
+        ADDL2   R2, R6
+        MOVL    R6, R3
+10$:    DIVL3   #10, R1, R4             ; the digits, from the right
+        MULL3   #10, R4, R0
+        SUBL3   R0, R1, R0
+        ADDB3   #^A/0/, R0, -(R3)
+        MOVL    R4, R1
+        DECL    R2
+        TSTL    R1
+        BNEQ    10$
+20$:    TSTL    R2                      ; then spaces
+        BLEQ    90$
+        MOVB    #^A/ /, -(R3)
+        DECL    R2
+        BRB     20$
+90$:    RSB
+
+; TWO: R1 = 0-99, R6 = where it goes. Writes it as two digits, and R6
+; past them. Uses R0, R1.
+TWO:
+        .JSB_ENTRY  OUTPUT=<R6>
+        DIVL3   #10, R1, R0
+        ADDB3   #^A/0/, R0, (R6)+
+        MULL2   #10, R0
+        SUBL2   R0, R1
+        ADDB3   #^A/0/, R1, (R6)+
+        RSB
 
 ; $SETIMR efn, daytim, astadr, reqidt: clears event flag efn, and sets it
 ; at daytim, a time or a delta, and then, if there is astadr, queues an

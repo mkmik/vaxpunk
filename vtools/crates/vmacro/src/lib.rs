@@ -1351,6 +1351,9 @@ fn address(op: insn::Op, i: usize) -> bool {
             | (Op::Evax(insn::Evax::Lda), 1)
             | (Op::Movc3, 1 | 2)
             | (Op::Movc5, 1 | 4)
+            | (Op::Cmpc3, 1 | 2)
+            | (Op::Cmpc5, 1 | 4)
+            | (Op::Locc(_), 2)
             | (Op::Insque | Op::Remque, _)
     )
 }

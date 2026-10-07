@@ -7,7 +7,8 @@
 //! assembles, and against SYS.STB, the executive's symbols; DCL and
 //! HELP with DCL$TABLES, from cld/*.cld, and DCL with sysexe/dcl/*.mar,
 //! its CDU, and HELP and TCPIP with sysexe/help/*.mar, which describes
-//! command tables; in [SYSMGR], the files in sysmgr/,
+//! command tables, and CREATE, CONVERT and ANALYZRMS with sysexe/rms/*.mar,
+//! FDL and their output; in [SYSMGR], the files in sysmgr/,
 //! as text.
 
 use std::collections::HashMap;
@@ -50,10 +51,16 @@ fn main() {
     // The programs and the modules they share, compiled together, as the
     // executive's modules are, so that their JSBs to each other know what
     // the routines they call keep.
-    let sysexe: Vec<_> = ["sysexe", "sysexe/lib", "sysexe/dcl", "sysexe/help"]
-        .iter()
-        .flat_map(|d| sources(d, &["mar"]))
-        .collect();
+    let sysexe: Vec<_> = [
+        "sysexe",
+        "sysexe/lib",
+        "sysexe/dcl",
+        "sysexe/help",
+        "sysexe/rms",
+    ]
+    .iter()
+    .flat_map(|d| sources(d, &["mar"]))
+    .collect();
     let compiled: HashMap<_, _> = sysexe.iter().cloned().zip(compile(&sysexe)).collect();
     let module = |p: &PathBuf| compiled[p].clone();
     let libs: Vec<_> = sources("sysexe/lib", &["mar"]).iter().map(module).collect();
@@ -81,6 +88,9 @@ fn main() {
         }
         if name == "HELP" || name == "TCPIP" {
             modules.extend(sources("sysexe/help", &["mar"]).iter().map(module));
+        }
+        if ["CREATE", "CONVERT", "ANALYZRMS"].contains(&name.as_str()) {
+            modules.extend(sources("sysexe/rms", &["mar"]).iter().map(module));
         }
         modules.extend(libs.iter().cloned());
         modules.push(stb.clone());
@@ -244,7 +254,7 @@ fn disk(path: &Path, images: &[(String, Vec<u8>)]) {
     fn ok<T>(r: ods_image::Result<T>) -> T {
         r.unwrap_or_else(|e| panic!("the system disk: {e}"))
     }
-    let mut vol = ok(Image::create(path, 4096, &params));
+    let mut vol = ok(Image::create(path, 8192, &params));
     ok(vol.mkdir("[SYSEXE]"));
     ok(vol.mkdir("[SYSMGR]"));
     let image = RecordAttrs {

@@ -1,0 +1,197 @@
+        .TITLE  RMSXAB  RMS: the XABs $OPEN, $CREATE and $DISPLAY fill
+        .IDENT  /V0.1/
+;
+; A FAB's XAB chain asks for more about its file than the FAB holds,
+; each XAB a kind by its XAB$B_COD (starlet.mlb's $XABxxxDEF): the file
+; header's record attributes (XABFHC), its dates (XABDAT, XABRDT), its
+; owner and protection (XABPRO), and an indexed file's areas, keys and
+; their number (XABALL, XABKEY, XABSUM, which rmsidx.mar fills). $OPEN,
+; $CREATE and $DISPLAY fill every one in the chain; a kind RMS doesn't
+; know is left alone, as are an indexed file's XABs on another file.
+;
+        .LIBRARY "lib.mlb"
+        .LIBRARY "starlet.mlb"
+        $SSDEF
+        $RMSDEF
+        $FABDEF
+        $IFBDEF
+        $XABFHCDEF
+        $XABDATDEF
+        $XABRDTDEF
+        $XABPRODEF
+        $XABSUMDEF
+        $XABKEYDEF
+        $XABALLDEF
+
+        .EXTERNAL IDX$XABSUM, IDX$XABKEY, IDX$XABALL
+
+BLOCK = 512
+MAXXAB = 16                             ; XABs in a chain, at most
+FAT$B_RTYPE = 20                        ; in the header: its record attributes
+FAT$B_RATTRIB = 21
+FAT$W_RSIZE = 22
+FAT$L_HIBLK = 24                        ; high word first
+FAT$L_EFBLK = 28                        ; high word first
+FAT$W_FFBYTE = 32
+FAT$B_BKTSIZE = 34
+FAT$B_VFCSIZE = 35
+FAT$W_MAXREC = 36
+FAT$W_DEFEXT = 38
+FAT$W_GBC = 40
+FH2$B_IDOFFSET = 0                      ; the ident area, in words
+FH2$L_FILEOWNER = 60
+FH2$W_FILEPROT = 64
+FI2$W_REVISION = 20                     ; in the ident area
+FI2$Q_CREDATE = 22
+FI2$Q_REVDATE = 30
+FI2$Q_EXPDATE = 38
+FI2$Q_BAKDATE = 46
+
+        .PSECT  EXEC$DATA, NOEXE, WRT, QUAD
+; Each XAB kind's code and the size it must have at least.
+KINDS:  .BYTE   XAB$C_FHC, XAB$C_FHCLEN
+        .BYTE   XAB$C_DAT, XAB$C_DATLEN_V2
+        .BYTE   XAB$C_RDT, XAB$C_RDTLEN
+        .BYTE   XAB$C_PRO, XAB$C_PROLEN
+        .BYTE   XAB$C_SUM, XAB$C_SUMLEN
+        .BYTE   XAB$C_KEY, XAB$C_KEYLEN_V2
+        .BYTE   XAB$C_ALL, XAB$C_ALLLEN
+        .BYTE   0
+
+        .PSECT  $CODE$
+
+; RMS$XABOUT: R7 = an open file's IFAB, R10 = a FAB. Fills each XAB in
+; the FAB's chain with what it asks for about the file. R0 =
+; RMS$_NORMAL, RMS$_XAB if one is too short for its kind, RMS$_KRF or
+; RMS$_AID for a key or area the file hasn't, or SS$_ACCVIO if the
+; caller can't read the chain or write an XAB. Uses R0-R6.
+RMS$XABOUT::
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5, R6>
+        MOVL    FAB$L_XAB(R10), R6
+        MOVL    #MAXXAB, R5
+10$:    MOVL    #RMS$_NORMAL, R0
+        TSTL    R6
+        BEQL    90$
+        IFNORD  #8, (R6), 85$
+        MOVZBL  XAB$B_BLN(R6), R1
+        IFNOWRT R1, (R6), 85$
+        MOVZBL  XAB$B_COD(R6), R1
+        MOVAB   KINDS, R2
+20$:    TSTB    (R2)                    ; its kind
+        BEQL    70$
+        CMPB    R1, (R2)
+        BEQL    30$
+        ADDL2   #2, R2
+        BRB     20$
+30$:    MOVL    #RMS$_XAB, R0
+        CMPB    XAB$B_BLN(R6), 1(R2)
+        BLSSU   90$
+        CASEB   R1, #XAB$C_DAT, #XAB$C_RDT-XAB$C_DAT
+40$:    .WORD   200$-40$                ; DAT
+        .WORD   300$-40$                ; PRO
+        .WORD   600$-40$                ; ALL
+        .WORD   500$-40$                ; KEY
+        .WORD   400$-40$                ; SUM
+        .WORD   70$-40$, 70$-40$, 70$-40$, 70$-40$, 70$-40$, 70$-40$
+        .WORD   100$-40$                ; FHC
+        .WORD   210$-40$                ; RDT
+        BRB     70$
+60$:    BLBC    R0, 90$
+70$:    MOVL    XAB$L_NXT(R6), R6
+        SOBGTR  R5, 10$
+        MOVL    #RMS$_NORMAL, R0
+        RSB
+85$:    MOVL    #SS$_ACCVIO, R0
+90$:    RSB
+; FHC: the header's record attributes, a sequential file's end of file
+; as the stream left it.
+100$:   MOVB    IFB$AB_HDR+FAT$B_RTYPE(R7), XAB$B_RFO(R6)
+        MOVB    IFB$AB_HDR+FAT$B_RATTRIB(R7), XAB$B_ATR(R6)
+        MOVW    IFB$AB_HDR+FAT$W_RSIZE(R7), XAB$W_LRL(R6)
+        ROTL    #16, IFB$AB_HDR+FAT$L_HIBLK(R7), XAB$L_HBK(R6)
+        ROTL    #16, IFB$AB_HDR+FAT$L_EFBLK(R7), XAB$L_EBK(R6)
+        MOVW    IFB$AB_HDR+FAT$W_FFBYTE(R7), XAB$W_FFB(R6)
+        CMPB    IFB$B_ORG(R7), #FAB$C_SEQ
+        BNEQ    110$
+        TSTL    IFB$L_BUF(R7)
+        BEQL    110$
+        DIVL3   #BLOCK, IFB$L_EOF(R7), R0
+        ADDL3   #1, R0, XAB$L_EBK(R6)
+        BICW3   #^C<BLOCK-1>, IFB$L_EOF(R7), XAB$W_FFB(R6)
+110$:   MOVB    IFB$AB_HDR+FAT$B_BKTSIZE(R7), XAB$B_BKZ(R6)
+        MOVB    IFB$AB_HDR+FAT$B_VFCSIZE(R7), XAB$B_HSZ(R6)
+        MOVW    IFB$AB_HDR+FAT$W_MAXREC(R7), XAB$W_MRZ(R6)
+        MOVW    IFB$AB_HDR+FAT$W_DEFEXT(R7), XAB$W_DXQ(R6)
+        MOVW    IFB$AB_HDR+FAT$W_GBC(R7), XAB$W_GBC(R6)
+        CLRW    XAB$W_VERLIMIT(R6)
+        CLRL    XAB$L_SBN(R6)
+        BRW     70$
+; DAT, RDT: the dates in the header's ident area.
+200$:   BSBW    IDENT
+        MOVQ    FI2$Q_CREDATE(R0), XAB$Q_CDT(R6)
+        MOVQ    FI2$Q_EXPDATE(R0), XAB$Q_EDT(R6)
+        MOVQ    FI2$Q_BAKDATE(R0), XAB$Q_BDT(R6)
+210$:   BSBW    IDENT
+        MOVW    FI2$W_REVISION(R0), XAB$W_RVN(R6)
+        MOVQ    FI2$Q_REVDATE(R0), XAB$Q_RDT(R6)
+        BRW     70$
+; PRO: the owner and protection.
+300$:   MOVW    IFB$AB_HDR+FH2$W_FILEPROT(R7), XAB$W_PRO(R6)
+        MOVL    IFB$AB_HDR+FH2$L_FILEOWNER(R7), XAB$L_UIC(R6)
+        BRW     70$
+; SUM, KEY, ALL: an indexed file's, from rmsidx.mar; ALL's of another
+; file is its allocation, as area 0's.
+400$:   CMPB    IFB$B_ORG(R7), #FAB$C_IDX
+        BNEQ    410$
+        MOVL    R6, R1
+        BSBW    IDX$XABSUM
+        BRW     60$
+410$:   CLRW    XAB$B_NOA(R6)
+        CLRW    XAB$W_PVN(R6)
+        BRW     70$
+500$:   CMPB    IFB$B_ORG(R7), #FAB$C_IDX
+        BNEQ    510$
+        MOVL    R6, R1
+        BSBW    IDX$XABKEY
+        BRW     60$
+510$:   BRW     70$
+600$:   CMPB    IFB$B_ORG(R7), #FAB$C_IDX
+        BNEQ    610$
+        MOVL    R6, R1
+        BSBW    IDX$XABALL
+        BRW     60$
+610$:   ROTL    #16, IFB$AB_HDR+FAT$L_HIBLK(R7), XAB$L_ALQ(R6)
+        MOVW    IFB$AB_HDR+FAT$W_DEFEXT(R7), XAB$W_DEQ(R6)
+        MOVB    IFB$AB_HDR+FAT$B_BKTSIZE(R7), XAB$B_BKZ(R6)
+        CLRB    XAB$B_AID(R6)
+        BRW     70$
+
+; RMS$FINDXAB: R10 = a FAB, R0 = an XAB code. R0 = the first XAB in
+; the FAB's chain with that code whose first 8 bytes the caller can read,
+; or 0. Uses R1.
+RMS$FINDXAB::
+        .JSB_ENTRY
+        PUSHR   #^M<R2, R3>
+        MOVL    R0, R2
+        MOVL    FAB$L_XAB(R10), R1
+        MOVL    #MAXXAB, R3
+10$:    TSTL    R1
+        BEQL    80$
+        IFNORD  #8, (R1), 80$
+        CMPB    XAB$B_COD(R1), R2
+        BEQL    90$
+        MOVL    XAB$L_NXT(R1), R1
+        SOBGTR  R3, 10$
+80$:    CLRL    R1
+90$:    MOVL    R1, R0
+        POPR    #^M<R2, R3>
+        RSB
+
+; IDENT: R7 = an IFAB. R0 = its header's ident area.
+IDENT:
+        .JSB_ENTRY
+        MOVZBL  IFB$AB_HDR+FH2$B_IDOFFSET(R7), R0
+        MOVAW   IFB$AB_HDR(R7)[R0], R0
+        RSB
+
+        .END

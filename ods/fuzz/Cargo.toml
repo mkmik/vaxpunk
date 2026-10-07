@@ -27,3 +27,10 @@ path = "fuzz_targets/structures.rs"
 test = false
 doc = false
 bench = false
+
+[[bin]]
+name = "rms"
+path = "fuzz_targets/rms.rs"
+test = false
+doc = false
+bench = false

@@ -1,0 +1,228 @@
+        .TITLE  RMSRAND Runs a script of indexed file operations
+        .IDENT  /V0.1/
+;
+; RMSRAND makes RAND.IDX, an indexed file of VAR records with three keys:
+; 8 bytes at 0, 5 at 9 with duplicates that may change, 3 at 15 with
+; duplicates, in buckets of a block. Then it runs RAND.TXT's operations
+; on it, a line each, and prints what each returned; then the records
+; along each key, and RMSRAND done with $CLOSE's status. image/tests/rms.rs writes the script
+; and knows what each line printed must be. The same source builds on
+; OpenVMS.
+;
+; A script line: an operation in column 1, a record's first 18 bytes in
+; columns 3-20, its size in columns 22-24 and the byte it is filled to
+; it with in column 26. The operations: P $PUTs the record; U $GETs the
+; record with its key 0 and $UPDATEs it to this one; D $FINDs it and
+; $DELETEs it; G $GETs it by key 0 and A by key 1. Each prints the
+; operation, the key, and the statuses in hex, then for a record read
+; its size and its first 18 bytes and its last.
+;
+        .LIBRARY "starlet.mlb"
+        $RMSDEF
+        $FABDEF
+        $RABDEF
+        $XABKEYDEF
+        .EXTERNAL LIB$PUT_OUTPUT
+
+        .PSECT  DATA, NOEXE, WRT, LONG
+LINE:   .BLKB   256                     ; a line being made
+LINEDSC:
+        .LONG   0
+        .ADDRESS LINE
+HEX:    .ASCII  "0123456789ABCDEF"
+TXT:    .BLKB   256                     ; a script line
+REC:    .BLKB   256                     ; the record it makes
+GOT:    .BLKB   256                     ; a record read
+TXTNAME:
+        .ASCII  "RAND.TXT"
+IDXNAME:
+        .ASCII  "RAND.IDX"
+KEYMSG: .ASCII  "KEY "
+DONE:   .ASCII  "RMSRAND done"
+        .ALIGN  LONG
+TFAB:   $FAB    FNA=TXTNAME, FNS=8, FAC=GET
+TRAB:   $RAB    FAB=TFAB, UBF=TXT, USZ=256
+FAB:    $FAB    FNA=IDXNAME, FNS=8, ORG=IDX, RFM=VAR, RAT=CR, MRS=200, FAC=<PUT,GET,UPD,DEL>, XAB=ALL
+ALL:    $XABALL AID=0, BKZ=1, NXT=KEY0
+KEY0:   $XABKEY REF=0, POS=0, SIZ=8, NXT=KEY1
+KEY1:   $XABKEY REF=1, POS=9, SIZ=5, FLG=<DUP,CHG>, NXT=KEY2
+KEY2:   $XABKEY REF=2, POS=15, SIZ=3, FLG=<DUP>
+RAB:    $RAB    FAB=FAB, UBF=GOT, USZ=256, KBF=TXT+2
+
+        .PSECT  CODE, EXE, LONG
+        .ENTRY  RMSRAND, ^M<R2, R3, R4, R5, R6, R7>
+        $CREATE FAB=FAB
+        BLBC    R0, 5$
+        $CONNECT RAB=RAB
+        BLBC    R0, 5$
+        $OPEN   FAB=TFAB
+        BLBC    R0, 5$
+        $CONNECT RAB=TRAB
+        BLBS    R0, 10$
+5$:     RET
+10$:    $GET    RAB=TRAB                ; each operation
+        BLBS    R0, 15$
+        BRW     50$
+15$:    MOVB    TXT, LINE               ; the operation and its key
+        MOVB    #^A/ /, LINE+1
+        MOVC3   #8, TXT+2, LINE+2
+        MOVL    #10, R2
+        MOVB    #RAB$C_KEY, RAB+RAB$B_RAC
+        CLRB    RAB+RAB$B_KRF
+        MOVB    #8, RAB+RAB$B_KSZ
+        MOVAB   TXT+2, RAB+RAB$L_KBF
+        CMPB    TXT, #^A/P/
+        BNEQ    20$
+        BSBW    MKREC
+        $PUT    RAB=RAB
+        BSBW    ADDSTS
+        BRB     45$
+20$:    CMPB    TXT, #^A/U/
+        BNEQ    25$
+        $GET    RAB=RAB
+        BSBW    ADDSTS
+        BLBC    R0, 45$
+        BSBW    MKREC
+        $UPDATE RAB=RAB
+        BSBW    ADDSTS
+        BRB     45$
+25$:    CMPB    TXT, #^A/D/
+        BNEQ    30$
+        $FIND   RAB=RAB
+        BSBW    ADDSTS
+        BLBC    R0, 45$
+        $DELETE RAB=RAB
+        BSBW    ADDSTS
+        BRB     45$
+30$:    CMPB    TXT, #^A/A/             ; by key 1, or 0
+        BNEQ    35$
+        MOVC3   #5, TXT+11, LINE+2
+        MOVL    #7, R2
+        MOVB    #1, RAB+RAB$B_KRF
+        MOVB    #5, RAB+RAB$B_KSZ
+        MOVAB   TXT+11, RAB+RAB$L_KBF
+35$:    $GET    RAB=RAB
+        BSBW    ADDSTS
+        BLBC    R0, 45$
+        BSBW    ADDREC
+45$:    BSBW    OUT
+        BRW     10$
+50$:    $CLOSE  FAB=TFAB
+        CLRL    R6                      ; then along each key
+55$:    MOVB    R6, RAB+RAB$B_KRF
+        MOVB    #RAB$C_SEQ, RAB+RAB$B_RAC
+        $REWIND RAB=RAB
+        CLRL    R7
+60$:    $GET    RAB=RAB
+        BLBC    R0, 65$
+        INCL    R7
+        CLRL    R2
+        BSBW    ADDREC
+        BSBW    OUT
+        BRB     60$
+65$:    MOVL    R0, R4
+        MOVL    KEYMSG, LINE
+        ADDB3   #^A/0/, R6, LINE+4
+        MOVB    #^A/ /, LINE+5
+        MOVL    #6, R2
+        MOVL    R7, R1
+        BSBW    ADDDEC
+        MOVL    R4, R0
+        BSBW    ADDSTS
+        BSBW    OUT
+        AOBLSS  #3, R6, 55$
+        $CLOSE  FAB=FAB
+        PUSHL   R0
+        MOVC3   #12, DONE, LINE
+        MOVL    #12, R2
+        MOVL    (SP)+, R0
+        BSBW    ADDSTS
+        BSBW    OUT
+        MOVL    #RMS$_NORMAL, R0
+        RET
+
+; MKREC: TXT = a script line. Makes its record in REC, for the RAB to
+; write. Uses R0, R1, R3-R5.
+MKREC:
+        .JSB_ENTRY  SCRATCH=<R3, R4, R5>
+        MOVZBL  TXT+21, R2              ; its size
+        SUBL2   #^A/0/, R2
+        MULL2   #10, R2
+        MOVZBL  TXT+22, R0
+        SUBL2   #^A/0/, R0
+        ADDL2   R0, R2
+        MULL2   #10, R2
+        MOVZBL  TXT+23, R0
+        SUBL2   #^A/0/, R0
+        ADDL2   R0, R2
+        PUSHL   R2
+        SUBL2   #18, R2
+        MOVC5   #0, REC, TXT+25, R2, REC+18
+        MOVC3   #18, TXT+2, REC
+        MOVL    (SP)+, R2
+        MOVAB   REC, RAB+RAB$L_RBF
+        MOVW    R2, RAB+RAB$W_RSZ
+        RSB
+
+; ADDSTS: R0 = a status, R2 = the line's bytes so far. Adds a space and
+; it in hex. Keeps R0.
+ADDSTS:
+        .JSB_ENTRY  OUTPUT=<R2>, SCRATCH=<R3, R4>
+        MOVB    #^A/ /, LINE[R2]
+        INCL    R2
+        MOVL    R0, R3
+        MOVL    #8, R4
+10$:    ROTL    #4, R3, R3
+        EXTZV   #0, #4, R3, R1
+        MOVB    HEX[R1], LINE[R2]
+        INCL    R2
+        SOBGTR  R4, 10$
+        RSB
+
+; ADDREC: R2 = the line's bytes so far. Adds a space, the size of the
+; record the RAB read, a space, its first 18 bytes and its last. Uses
+; R0-R5.
+ADDREC:
+        .JSB_ENTRY  OUTPUT=<R2>, SCRATCH=<R3, R4, R5>
+        MOVB    #^A/ /, LINE[R2]
+        INCL    R2
+        MOVZWL  RAB+RAB$W_RSZ, R1
+        BSBW    ADDDEC
+        MOVB    #^A/ /, LINE[R2]
+        INCL    R2
+        PUSHL   R2
+        MOVC3   #18, GOT, LINE[R2]
+        ADDL3   #18, (SP)+, R2
+        MOVZWL  RAB+RAB$W_RSZ, R0
+        MOVB    GOT-1[R0], LINE[R2]
+        INCL    R2
+        RSB
+
+; ADDDEC: R1 = a value, R2 = the line's bytes so far. Adds it in decimal.
+; Uses R0-R3.
+ADDDEC:
+        .JSB_ENTRY  OUTPUT=<R2>, SCRATCH=<R3>
+        CLRL    R3                      ; digits, on the stack
+10$:    DIVL3   #10, R1, R0
+        MULL3   #10, R0, -(SP)
+        SUBL3   (SP)+, R1, -(SP)
+        INCL    R3
+        MOVL    R0, R1
+        BNEQ    10$
+20$:    ADDL3   #^A/0/, (SP)+, R0
+        MOVB    R0, LINE[R2]
+        INCL    R2
+        SOBGTR  R3, 20$
+        RSB
+
+; OUT: R2 = the line's bytes. Writes it. Keeps every register.
+OUT:
+        .JSB_ENTRY
+        PUSHR   #^M<R0, R1>
+        MOVL    R2, LINEDSC
+        PUSHAQ  LINEDSC
+        CALLS   #1, G^LIB$PUT_OUTPUT
+        POPR    #^M<R0, R1>
+        RSB
+
+        .END    RMSRAND

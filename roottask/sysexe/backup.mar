@@ -160,7 +160,7 @@ INNAM:  $NAM    ESA=INEXP, ESS=255, RSA=INRES, RSS=255
 INEXP:  .BLKB   255
 INRES:  .BLKB   255
         .ALIGN  LONG
-FFAB:   $FAB    NAM=FNAM, XAB=FHC       ; a file saved or restored
+FFAB:   $FAB    NAM=FNAM, XAB=FHC, FAC=BIO      ; a file saved or restored, by blocks
 FNAM:   $NAM    RSA=FRES, RSS=255
 FRES:   .BLKB   255
         .ALIGN  LONG

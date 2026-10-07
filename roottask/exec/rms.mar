@@ -16,15 +16,16 @@
 ;
 ; $OPEN reads the file's header into an IFAB, a block of pool, which the
 ; process's PCB holds by IFI, the index $OPEN puts in FAB$W_IFI; $CONNECT
-; puts the same index in RAB$W_ISI. $GET reads sequential files' VAR and
-; FIX records, a block at a time. $CREATE makes a new file, a version
+; puts the same index in RAB$W_ISI. $CREATE makes a new file, a version
 ; above the highest there is unless the specification gives one, with
-; the FAB's record attributes and allocation. $PUT appends records to a
-; file $CREATE made or $OPEN opened for FAB$M_PUT on a volume that may be
-; written, a block at a time, extending it as it fills; $CLOSE writes its
-; last block and its end of file. $READ and $WRITE are block I/O: they
-; read a file's blocks, and write them at its end, as they are. An image's files close when it exits,
-; those its command interpreter opened when the process does.
+; the FAB's record attributes and allocation, and opens it. The record
+; services, $GET, $FIND, $PUT, $UPDATE, $DELETE, $TRUNCATE, $REWIND and
+; $FLUSH, go to the file's organization: rmsseq.mar for sequential files,
+; and block I/O, $READ, $WRITE and $SPACE, for any; rmsrel.mar for
+; relative files; rmsidx.mar for indexed ones. rmsxab.mar fills the XABs
+; $OPEN and $DISPLAY are given. $CLOSE writes what the buffers hold and
+; the header. An image's files close when it exits, those its command
+; interpreter opened when the process does.
 ;
 ; Each file and volume has an owner and a protection mask, which
 ; FIL$CHKPRO checks as VMS's XQP does: a lookup takes execute access to
@@ -41,8 +42,7 @@
 ; services run in kernel mode holding the file system's
 ; lock, FIL$LOCK, which keeps its buffers and RMS's to one process; VMS's
 ; RMS runs in executive mode, in the process's own P1. One stream per
-; file; no $UPDATE or $TRUNCATE, so $PUT writes only at the end; no
-; file sharing or locking, search lists or concealed devices, ASTs or
+; file; no file sharing or locking, search lists or concealed devices, ASTs or
 ; completion routines, and $SEARCH finds its place again by counting the
 ; matches it skips.
 ;
@@ -61,6 +61,7 @@
         $STATEDEF
         $ARMDEF
         $XABPRODEF
+        $IFBDEF
         $XABFHCDEF
 
         .EXTERNAL SCH$GL_CURPCB, EXE$ALONONPAGED, EXE$DEANONPGDSIZ, EXE$PROBER_DSC
@@ -69,40 +70,40 @@
         .EXTERNAL FIL$ENTER, FIL$REMOVE, FIL$DELHDR, FIL$WRITEVBN, FIL$MKDIR
         .EXTERNAL FIL$LOCK, FIL$UNLOCK, FIL$CHKHDR, FIL$CHKPRO
         .EXTERNAL F11$GW_FID, F11$GL_VCB, F11$AB_DIRBLK, LNM$TRNLOG, SCH$GL_PCBVEC
+        .EXTERNAL EXE$GQ_SYSTIME, RMS$XABOUT, RMS$FINDXAB
+        .EXTERNAL SEQ$OPEN, SEQ$CONNECT, SEQ$GET, SEQ$FIND, SEQ$PUT, SEQ$UPDATE
+        .EXTERNAL SEQ$TRUNCATE, SEQ$REWIND, SEQ$FLUSH
+        .EXTERNAL BIO$READ, BIO$WRITE, BIO$SPACE
+        .EXTERNAL REL$OPEN, REL$CREATE, REL$CONNECT, REL$GET, REL$FIND, REL$PUT
+        .EXTERNAL REL$UPDATE, REL$DELETE, REL$REWIND, REL$FLUSH
+        .EXTERNAL IDX$OPEN, IDX$CREATE, IDX$CONNECT, IDX$GET, IDX$FIND, IDX$PUT
+        .EXTERNAL IDX$UPDATE, IDX$DELETE, IDX$REWIND, IDX$FLUSH
 
 BLOCK = 512
 MFD = 4                                 ; the MFD's file number
 MAXIFI = 15                             ; PCB$A_IFAB's slots, 1-15
 RESFILES = 9                            ; the volume's own files, 1-9
-EXTEND = 8                              ; blocks $PUT extends a file by
 WCC_FOUND = ^X80000000                  ; in NAM$L_WCC: $SEARCH found a file
-; An IFAB: an open file.
-IFB$L_POS = 0                           ; the next byte $GET reads, or $PUT writes
-IFB$L_EOF = 4                           ; the bytes in the file
-IFB$L_BLOCK = 8                         ; the VBN in IFB$AB_BUF, or 0
-IFB$L_VCB = 12                          ; its volume
-IFB$L_FLAGS = 16                        ; IFB$V_
-IFB$AB_HDR = 32                         ; the file's header
-IFB$AB_BUF = 544                        ; a block of the file
-IFB$K_LENGTH = 1056
-IFB$V_WRITE = 0                         ; $CREATE made it or $OPEN opened it for $PUT
-IFB$V_DIRTY = 1                         ; IFB$AB_BUF is the file's last block, IFB$L_BLOCK,
-                                        ; as $PUT left it, not yet written
-; A file header's record attributes (ods/docs/file-header.md).
 FAT$B_RTYPE = 20
 FAT$B_RATTRIB = 21
 FAT$W_RSIZE = 22
 FAT$L_HIBLK = 24                        ; high word first
 FAT$L_EFBLK = 28                        ; high word first
 FAT$W_FFBYTE = 32
+FAT$B_BKTSIZE = 34
 FAT$B_VFCSIZE = 35
 FAT$W_MAXREC = 36
+FAT$W_DEFEXT = 38
+FAT$W_GBC = 40
+FH2$B_IDOFFSET = 0                      ; the ident area, in words
 FH2$W_FID = 8
 FH2$W_FID_SEQ = 10
 FH2$B_FID_NMX = 13
 FH2$L_FILEOWNER = 60
 FH2$W_FILEPROT = 64
 FH2$W_BACKLINK = 66
+FI2$W_REVISION = 20                     ; in the ident area
+FI2$Q_REVDATE = 30
 MAXXAB = 16                             ; XABs in a chain, at most
 
         .PSECT  EXEC$DATA, NOEXE, WRT, QUAD
@@ -141,7 +142,6 @@ SYSDISK:                                ; the process's default directory, .ASCI
         .BLKB   63
 HDRBUF: .BLKB   BLOCK                   ; the header of a file $ERASE deletes, $CLOSE changes, or $CREATE follows
 XABPRO: .LONG   0                       ; the FAB's protection XAB, or 0
-XABFHC: .LONG   0                       ; its file header characteristics XAB, or 0
 MFDNAME:
         .ASCII  "000000"
 DOTDIR: .ASCII  ".DIR"
@@ -862,29 +862,24 @@ CHKACC:
 10$:    MOVL    #RMS$_PRV, R0
         RSB
 
-; FINDXAB: R10 = a FAB. Finds the protection XAB and the file header
-; characteristics XAB in its chain: XABPRO and XABFHC = their addresses,
-; or 0. R0 = RMS$_NORMAL, or SS$_ACCVIO if the caller can't read the
-; chain or write the XABs. Uses R0-R2.
+; FINDXAB: R10 = a FAB. Finds the protection XAB in its chain: XABPRO =
+; its address, or 0. R0 = RMS$_NORMAL, or SS$_ACCVIO if the caller can't
+; read the chain or write the XAB. Uses R0-R2.
 FINDXAB:
         .JSB_ENTRY  SCRATCH=<R2>
         CLRL    XABPRO
-        CLRL    XABFHC
         MOVL    FAB$L_XAB(R10), R1
         MOVL    #MAXXAB, R2
 10$:    TSTL    R1
         BEQL    70$
         IFNORD  #8, (R1), 80$
         CMPB    XAB$B_COD(R1), #XAB$C_PRO
-        BNEQ    20$
-        IFNOWRT #XAB$C_PROLEN, (R1), 80$
-        MOVL    R1, XABPRO
-20$:    CMPB    XAB$B_COD(R1), #XAB$C_FHC
-        BNEQ    30$
-        IFNOWRT #XAB$C_FHCLEN, (R1), 80$
-        MOVL    R1, XABFHC
-30$:    MOVL    XAB$L_NXT(R1), R1
+        BEQL    20$
+        MOVL    XAB$L_NXT(R1), R1
         SOBGTR  R2, 10$
+        BRB     70$
+20$:    IFNOWRT #XAB$C_PROLEN, (R1), 80$
+        MOVL    R1, XABPRO
 70$:    MOVL    #RMS$_NORMAL, R0
         RSB
 80$:    MOVL    #SS$_ACCVIO, R0
@@ -1047,16 +1042,18 @@ L:      BSBW    FIL$UNLOCK
 85$:    MOVL    #SS$_ACCVIO, R0
 90$:    FABDONE
 
-; $OPEN fab: opens the file the FAB names, for reading: puts its IFI in
-; the FAB, with its organization, record format and attributes, maximum
-; record size, allocation and VFC header size, in its NAM block, if it
-; has one, its resultant string and file ID, in its protection XAB,
-; if it has one, its owner and protection, and in its file header
-; characteristics XAB its longest record, allocation and end of file. RMS$_PRV without read access
-; to it. With FAB$M_PUT, or another way of writing, in FAB$B_FAC, for
-; $PUT as well: RMS$_WLK on a volume that can't be written, the system
-; disk's, RMS$_PRV without write access too, or for the volume's own
-; files and directories.
+; $OPEN fab: opens the file the FAB names, for FAB$B_FAC's access, $GET's
+; if it gives none: puts its IFI in the FAB, with its organization,
+; record format and attributes, maximum record size, allocation, bucket
+; size, VFC header size and default extension, and a relative file's
+; maximum record number; in its NAM block, if it has one, its resultant
+; string and file ID; and in its XABs what they ask for (RMS$XABOUT).
+; RMS$_PRV without read access to it. With FAB$M_PUT, or another way of
+; writing: RMS$_WLK on a volume that can't be written, the system disk's,
+; RMS$_PRV without write access too, or for the volume's own files and
+; directories. With FAB$M_BIO or FAB$M_BRO, a file of any organization
+; is opened for $READ, $WRITE and $SPACE. RMS$_ORG for an organization
+; RMS doesn't know, RMS$_PLV for an indexed file that isn't prologue 3.
         .ENTRY  EXE$OPEN, ^M<R2, R3, R4, R5, R6, R7, R8, R9, R10, R11>
         BSBW    FIL$LOCK
         BSBW    FABNAM
@@ -1065,26 +1062,30 @@ L:      BSBW    FIL$UNLOCK
         BLBC    R0, 90$
         BSBW    PARSEFAB
         BLBC    R0, 90$
-        BITB    #FAB$M_PUT!FAB$M_DEL!FAB$M_UPD!FAB$M_TRN, FAB$B_FAC(R10)
+        MOVZBL  FAB$B_FAC(R10), R6      ; the access: $GET's if it gives none
+        BNEQ    5$
+        MOVL    #FAB$M_GET, R6
+5$:     BITB    #FAB$M_PUT!FAB$M_DEL!FAB$M_UPD!FAB$M_TRN, R6
         BEQL    10$
         MOVL    F11$GL_VCB, R1
         MOVL    #RMS$_WLK, R0
         BBC     #VCB$V_WRITE, VCB$L_STATUS(R1), 90$
 10$:    BSBW    NEWIFAB
         BLBC    R0, 90$
+        MOVB    R6, IFB$B_FAC(R7)
         PUSHR   #^M<R7, R8, R9>
         MOVAB   IFB$AB_HDR(R7), R1
         BSBW    RMS$FIND
         POPR    #^M<R7, R8, R9>
         BLBC    R0, 80$
         MOVL    #ARM$M_READ, R0
-        BITB    #FAB$M_PUT!FAB$M_DEL!FAB$M_UPD!FAB$M_TRN, FAB$B_FAC(R10)
+        BITB    #FAB$M_PUT!FAB$M_DEL!FAB$M_UPD!FAB$M_TRN, IFB$B_FAC(R7)
         BEQL    12$
         MOVL    #ARM$M_READ!ARM$M_WRITE, R0
 12$:    MOVAB   IFB$AB_HDR(R7), R1
         BSBW    CHKACC
         BLBC    R0, 80$
-        BITB    #FAB$M_PUT!FAB$M_DEL!FAB$M_UPD!FAB$M_TRN, FAB$B_FAC(R10)
+        BITB    #FAB$M_PUT!FAB$M_DEL!FAB$M_UPD!FAB$M_TRN, IFB$B_FAC(R7)
         BEQL    20$
         MOVL    #RMS$_PRV, R0
         TSTB    IFB$AB_HDR+FH2$B_FID_NMX(R7)
@@ -1101,43 +1102,97 @@ L:      BSBW    FIL$UNLOCK
         BEQL    30$
         BSBW    PUTRES
         BLBC    R0, 80$
-30$:    MOVAB   IFB$AB_HDR(R7), R1
-        BSBW    FIL$EOF
-        MOVL    R0, IFB$L_EOF(R7)
+30$:    BSBW    ATTRS
+        PUSHR   #^M<R8, R9>
+        BSBW    ORGOPEN
+        POPR    #^M<R8, R9>
+        BLBC    R0, 80$
+        BSBW    RMS$XABOUT
+        BLBC    R0, 80$
         BSBW    INSTALL
-        MOVZBL  IFB$AB_HDR+FAT$B_RTYPE(R7), R0
-        BICB3   #^XF0, R0, FAB$B_RFM(R10)
-        BICB3   #^X0F, R0, FAB$B_ORG(R10)
-        MOVB    IFB$AB_HDR+FAT$B_RATTRIB(R7), FAB$B_RAT(R10)
-        MOVW    IFB$AB_HDR+FAT$W_MAXREC(R7), FAB$W_MRS(R10)
-        MOVB    IFB$AB_HDR+FAT$B_VFCSIZE(R7), FAB$B_FSZ(R10)
-        MOVZWL  IFB$AB_HDR+FAT$L_HIBLK(R7), R0  ; high word first
-        ASHL    #16, R0, R0
-        MOVW    IFB$AB_HDR+FAT$L_HIBLK+2(R7), R0
-        MOVL    R0, FAB$L_ALQ(R10)
-        MOVL    XABPRO, R1
-        BEQL    40$
-        MOVW    IFB$AB_HDR+FH2$W_FILEPROT(R7), XAB$W_PRO(R1)
-        MOVL    IFB$AB_HDR+FH2$L_FILEOWNER(R7), XAB$L_UIC(R1)
-40$:    MOVL    XABFHC, R1
-        BEQL    50$
-        MOVW    IFB$AB_HDR+FAT$W_RSIZE(R7), XAB$W_LRL(R1)
-        MOVL    FAB$L_ALQ(R10), XAB$L_HBK(R1)
-        DIVL3   #BLOCK, IFB$L_EOF(R7), R0
-        ADDL3   #1, R0, XAB$L_EBK(R1)
-        BICW3   #^C<BLOCK-1>, IFB$L_EOF(R7), XAB$W_FFB(R1)
-50$:    MOVL    #RMS$_NORMAL, R0
+        BSBW    FABATTRS
+        MOVL    #RMS$_NORMAL, R0
         BRB     90$
-80$:    PUSHL   R0
-        MOVL    R7, R0
-        MOVL    #IFB$K_LENGTH, R1
-        BSBW    EXE$DEANONPGDSIZ
-        MOVL    (SP)+, R0
+80$:    BSBW    FREEIFAB
 90$:    FABDONE
 
+; ATTRS: R7 = an IFAB with its file's header. Gives the IFAB the file's
+; organization, record format and attributes, record size, VFC header
+; size (2 if the header says 0) and bucket size. Uses R0.
+ATTRS:
+        .JSB_ENTRY
+        MOVZBL  IFB$AB_HDR+FAT$B_RTYPE(R7), R0
+        BICB3   #^XF0, R0, IFB$B_RFM(R7)
+        BICB3   #^X0F, R0, IFB$B_ORG(R7)
+        MOVB    IFB$AB_HDR+FAT$B_RATTRIB(R7), IFB$B_RAT(R7)
+        MOVW    IFB$AB_HDR+FAT$W_MAXREC(R7), IFB$W_MRS(R7)
+        CMPB    IFB$B_RFM(R7), #FAB$C_FIX       ; a FIX record's size
+        BNEQ    10$
+        TSTW    IFB$W_MRS(R7)
+        BNEQ    10$
+        MOVW    IFB$AB_HDR+FAT$W_RSIZE(R7), IFB$W_MRS(R7)
+10$:    MOVB    IFB$AB_HDR+FAT$B_VFCSIZE(R7), IFB$B_FSZ(R7)
+        CMPB    IFB$B_RFM(R7), #FAB$C_VFC
+        BNEQ    20$
+        TSTB    IFB$B_FSZ(R7)
+        BNEQ    20$
+        MOVB    #2, IFB$B_FSZ(R7)
+20$:    MOVB    IFB$AB_HDR+FAT$B_BKTSIZE(R7), IFB$B_BKS(R7)
+        RSB
+
+; FABATTRS: R7 = an IFAB, R10 = its FAB. Gives the FAB the file's
+; attributes: organization, record format and attributes, maximum record
+; size, VFC header size, bucket size, allocation, default extension, and
+; maximum record number. Uses R0.
+FABATTRS:
+        .JSB_ENTRY
+        MOVB    IFB$B_ORG(R7), FAB$B_ORG(R10)
+        MOVB    IFB$B_RFM(R7), FAB$B_RFM(R10)
+        MOVB    IFB$B_RAT(R7), FAB$B_RAT(R10)
+        MOVW    IFB$W_MRS(R7), FAB$W_MRS(R10)
+        MOVB    IFB$B_FSZ(R7), FAB$B_FSZ(R10)
+        MOVB    IFB$B_BKS(R7), FAB$B_BKS(R10)
+        ROTL    #16, IFB$AB_HDR+FAT$L_HIBLK(R7), FAB$L_ALQ(R10)
+        MOVW    IFB$AB_HDR+FAT$W_DEFEXT(R7), FAB$W_DEQ(R10)
+        MOVW    IFB$AB_HDR+FAT$W_GBC(R7), FAB$W_GBC(R10)
+        MOVL    IFB$L_MRN(R7), FAB$L_MRN(R10)
+        RSB
+
+; ORGOPEN: R7 = an IFAB with its file's header and attributes, R10 =
+; its FAB. Sets up its organization's state and buffer: SEQ$OPEN,
+; REL$OPEN or IDX$OPEN, or SEQ$OPEN for block I/O. R0 = their status, or
+; RMS$_ORG. Uses R0-R6, R8, R9, R11.
+ORGOPEN:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5, R6, R8, R9, R11>
+        BBC     #FAB$V_BIO, IFB$B_FAC(R7), 10$
+        BISL2   #1@IFB$V_BIO, IFB$L_FLAGS(R7)
+        BRB     20$
+10$:    BBC     #FAB$V_BRO, IFB$B_FAC(R7), 30$
+        BISL2   #1@IFB$V_BRO, IFB$L_FLAGS(R7)
+        CMPB    IFB$B_ORG(R7), #FAB$C_SEQ       ; ponytail: BRO on relative and indexed files is BIO
+        BEQL    20$
+        BISL2   #1@IFB$V_BIO, IFB$L_FLAGS(R7)
+20$:    BSBW    SEQ$OPEN
+        RSB
+30$:    CMPB    IFB$B_ORG(R7), #FAB$C_SEQ
+        BNEQ    40$
+        BSBW    SEQ$OPEN
+        RSB
+40$:    CMPB    IFB$B_ORG(R7), #FAB$C_REL
+        BNEQ    50$
+        BSBW    REL$OPEN
+        RSB
+50$:    CMPB    IFB$B_ORG(R7), #FAB$C_IDX
+        BNEQ    80$
+        BSBW    IDX$OPEN
+        RSB
+80$:    MOVL    #RMS$_ORG, R0
+        RSB
+
 ; NEWIFAB: R9 = the current PCB, R8 = an IFI it has free, R7 = an IFAB
-; for it, on F11$GL_VCB's volume, at the file's start, which INSTALL gives
-; it. R0 = RMS$_NORMAL or RMS$_DME. Uses R0-R3.
+; for it, on F11$GL_VCB's volume, with no buffer or current record yet,
+; which INSTALL gives it. R0 = RMS$_NORMAL, or RMS$_DME if the process
+; has every IFI or the pool has no room. Uses R0-R3.
 NEWIFAB:
         .JSB_ENTRY  OUTPUT=<R7, R8, R9>, SCRATCH=<R2, R3>
         MOVL    SCH$GL_CURPCB, R9       ; a free IFI
@@ -1150,14 +1205,50 @@ NEWIFAB:
         BSBW    EXE$ALONONPAGED
         BLBC    R0, 80$
         MOVL    R2, R7
-        CLRL    IFB$L_POS(R7)
-        CLRL    IFB$L_EOF(R7)
-        CLRL    IFB$L_BLOCK(R7)
-        CLRL    IFB$L_FLAGS(R7)
+        PUSHR   #^M<R4, R5>
+        MOVC5   #0, (R7), #0, #IFB$AB_HDR, (R7)
+        POPR    #^M<R4, R5>
+        MOVL    #IFB$K_LENGTH, IFB$L_SIZE(R7)
         MOVL    F11$GL_VCB, IFB$L_VCB(R7)
+        MNEGL   #1, IFB$L_CUR(R7)
         MOVL    #RMS$_NORMAL, R0
         RSB
 80$:    MOVL    #RMS$_DME, R0
+        RSB
+
+; RMS$ALLOCBUF: R7 = an IFAB, R1 = a size in bytes. Gives it a buffer of
+; pool that big, zeroed, which FREEIFAB gives back: IFB$L_BUF. R0 =
+; RMS$_NORMAL or RMS$_DME. Uses R0-R3.
+RMS$ALLOCBUF::
+        .JSB_ENTRY  SCRATCH=<R2, R3>
+        PUSHL   R1
+        BSBW    EXE$ALONONPAGED
+        BLBC    R0, 80$
+        MOVL    R2, IFB$L_BUF(R7)
+        MOVL    R1, IFB$L_BUFSZ(R7)
+        PUSHR   #^M<R4, R5>
+        MOVC5   #0, (R2), #0, 8(SP), (R2)
+        POPR    #^M<R4, R5>
+        TSTL    (SP)+
+        MOVL    #RMS$_NORMAL, R0
+        RSB
+80$:    TSTL    (SP)+
+        MOVL    #RMS$_DME, R0
+        RSB
+
+; FREEIFAB: R7 = an IFAB. Gives it and its buffer back to the pool, and
+; R0 as it was. Uses R1-R3.
+FREEIFAB:
+        .JSB_ENTRY  SCRATCH=<R2, R3>
+        PUSHL   R0
+        MOVL    IFB$L_BUF(R7), R0
+        BEQL    10$
+        MOVL    IFB$L_BUFSZ(R7), R1
+        BSBW    EXE$DEANONPGDSIZ
+10$:    MOVL    R7, R0
+        MOVL    IFB$L_SIZE(R7), R1
+        BSBW    EXE$DEANONPGDSIZ
+        MOVL    (SP)+, R0
         RSB
 
 ; INSTALL: R7 = an IFAB, R8 = its IFI, R9 = the current PCB, R10 = a FAB.
@@ -1187,51 +1278,53 @@ GETIFAB:
         RSB
 
 ; CLOSEIFI: R8 = an IFI, R7 = its IFAB, R9 = the current PCB. Closes it:
-; a file $CREATE made or $OPEN opened for $PUT gets its last block and its
-; header written. R0 = RMS$_NORMAL, or RMS$_WER if they couldn't be.
-; Holding FIL$LOCK. Uses R0 and R1.
+; a file opened for writing gets what its buffers hold and its header
+; written, with the revision date and count of a file that changed
+; (ORGFLUSH). R0 = RMS$_NORMAL, or RMS$_WER if they couldn't be. Holding
+; FIL$LOCK. Uses R0 and R1.
 CLOSEIFI:
         .JSB_ENTRY
         PUSHL   #RMS$_NORMAL
         BBC     #IFB$V_WRITE, IFB$L_FLAGS(R7), 20$
-        PUSHR   #^M<R2, R3, R4, R5>
-        BSBW    FLUSH
-        BLBC    R0, 15$
-        DIVL3   #BLOCK, IFB$L_EOF(R7), R0       ; the end of file
-        INCL    R0
-        ROTL    #16, R0, IFB$AB_HDR+FAT$L_EFBLK(R7)
-        BICW3   #^C<BLOCK-1>, IFB$L_EOF(R7), IFB$AB_HDR+FAT$W_FFBYTE(R7)
-        MOVAB   IFB$AB_HDR(R7), R1
-        BSBW    FIL$WRITEHDR
-15$:    POPR    #^M<R2, R3, R4, R5>
+        PUSHR   #^M<R2, R3, R4, R5, R6, R8, R9, R10, R11>
+        MOVL    IFB$L_VCB(R7), F11$GL_VCB
+        MOVZBL  IFB$AB_HDR+FH2$B_IDOFFSET(R7), R0       ; the ident area, in words
+        MOVAW   IFB$AB_HDR(R7)[R0], R0
+        MOVQ    EXE$GQ_SYSTIME, FI2$Q_REVDATE(R0)
+        INCW    FI2$W_REVISION(R0)
+        BISL2   #1@IFB$V_HDR, IFB$L_FLAGS(R7)
+        BSBW    ORGFLUSH
+        POPR    #^M<R2, R3, R4, R5, R6, R8, R9, R10, R11>
         BLBS    R0, 20$
         MOVL    #RMS$_WER, (SP)
 20$:    CLRL    PCB$A_IFAB(R9)[R8]
         ASHL    R8, #1, R0
         BICL2   R0, PCB$L_FILES(R9)
-        MOVL    R7, R0
-        MOVL    #IFB$K_LENGTH, R1
-        BSBW    EXE$DEANONPGDSIZ
+        PUSHR   #^M<R2, R3>
+        BSBW    FREEIFAB
+        POPR    #^M<R2, R3>
         MOVL    (SP)+, R0
         RSB
 
-; FLUSH: R7 = an IFAB. Selects its volume and writes its last block, if
-; $PUT left part of it in IFB$AB_BUF. R0 = SS$_NORMAL or the file
-; system's error. Uses R0 and R1.
-FLUSH:
-        .JSB_ENTRY
-        MOVL    IFB$L_VCB(R7), F11$GL_VCB
-        MOVL    #SS$_NORMAL, R0
-        BBCC    #IFB$V_DIRTY, IFB$L_FLAGS(R7), 90$
-        BICL3   #^C<BLOCK-1>, IFB$L_EOF(R7), R1
-        BEQL    90$
-        MOVL    IFB$L_BLOCK(R7), R1
-        BSBW    WRITEBLK
-90$:    RSB
+; ORGFLUSH: R7 = an IFAB. Writes what its buffers hold that the file
+; doesn't, and its header if it changed: SEQ$FLUSH, REL$FLUSH or
+; IDX$FLUSH. R0 = their status. Uses R0-R6, R8-R11.
+ORGFLUSH:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5, R6, R8, R9, R10, R11>
+        BBS     #IFB$V_BIO, IFB$L_FLAGS(R7), 10$
+        CMPB    IFB$B_ORG(R7), #FAB$C_REL
+        BEQL    20$
+        BGTRU   30$
+10$:    BSBW    SEQ$FLUSH
+        RSB
+20$:    BSBW    REL$FLUSH
+        RSB
+30$:    BSBW    IDX$FLUSH
+        RSB
 
-; $CLOSE fab: closes the file $OPEN opened, which first gets the owner
-; and protection of the FAB's protection XAB, if it has one (SETPRO).
-; The file is closed even if that fails, with SETPRO's status.
+; $CLOSE fab: closes the file $OPEN or $CREATE opened, which first gets
+; the owner and protection of the FAB's protection XAB, if it has one
+; (SETPRO). The file is closed even if that fails, with SETPRO's status.
         .ENTRY  EXE$CLOSE, ^M<R2, R3, R4, R5, R6, R7, R8, R9, R10, R11>
         BSBW    FIL$LOCK
         BSBW    FABNAM
@@ -1245,6 +1338,20 @@ FLUSH:
         CLRW    FAB$W_IFI(R10)
         BLBS    R6, 90$
         MOVL    R6, R0
+90$:    FABDONE
+
+; $DISPLAY fab: gives the FAB and its XABs the attributes of the file
+; it opened, as $OPEN does. R0 = RMS$_NORMAL, RMS$_IFI, or RMS$XABOUT's
+; error.
+        .ENTRY  EXE$DISPLAY, ^M<R2, R3, R4, R5, R6, R7, R8, R9, R10, R11>
+        BSBW    FIL$LOCK
+        BSBW    FABNAM
+        BLBC    R0, 90$
+        MOVZWL  FAB$W_IFI(R10), R8
+        BSBW    GETIFAB
+        BLBC    R0, 90$
+        BSBW    FABATTRS
+        BSBW    RMS$XABOUT
 90$:    FABDONE
 
 ; SETPRO: R7 = an IFAB, R10 = its FAB. If the FAB has a protection XAB
@@ -1316,164 +1423,210 @@ RABCHK:
 80$:    MOVL    #RMS$_RAB, R0
         RSB
 
-; $CONNECT rab: connects the RAB to the file its FAB opened, at its start,
-; or at its end with RAB$M_EOF in RAB$L_ROP.
+; RABIFAB: AP = a record service's arguments, a RAB first. R10 = the
+; RAB, R7 = the IFAB of the file it is connected to, on whose volume the
+; file system works, and RAB$L_STV 0. R0 = RMS$_NORMAL, RMS$_RAB, or
+; RMS$_ISI if it isn't connected. Uses R8 and R9.
+RABIFAB:
+        .JSB_ENTRY  OUTPUT=<R7, R10>, SCRATCH=<R8, R9>
+        BSBW    RABCHK
+        BLBC    R0, 90$
+        CLRL    RAB$L_STV(R10)
+        MOVZWL  RAB$W_ISI(R10), R8
+        BSBW    GETIFAB
+        BLBC    R0, 80$
+        CMPL    IFB$L_RAB(R7), R10
+        BNEQ    80$
+        MOVL    IFB$L_VCB(R7), F11$GL_VCB
+        MOVL    #RMS$_NORMAL, R0
+        RSB
+80$:    MOVL    #RMS$_ISI, R0
+90$:    RSB
+
+; $CONNECT rab: connects the RAB to the file its FAB opened: its stream
+; starts at the first record, along key RAB$B_KRF in an indexed file, or
+; with RAB$M_EOF past the last. RMS$_FAB if the RAB's FAB isn't one,
+; RMS$_IFI if it opened no file, RMS$_ACT if a RAB is connected to it
+; already, RMS$_KRF for a key the file hasn't.
+; ponytail: one stream per file, FAB$M_MSE or not.
         .ENTRY  EXE$CONNECT, ^M<R2, R3, R4, R5, R6, R7, R8, R9, R10, R11>
         BSBW    FIL$LOCK
-        BSBB    RABCHK
+        BSBW    RABCHK
         BLBC    R0, 90$
         MOVL    RAB$L_FAB(R10), R1
         IFNORD  #FAB$C_BLN, (R1), 80$
         MOVZWL  FAB$W_IFI(R1), R8
-        BSBB    GETIFAB
+        BSBW    GETIFAB
         BLBC    R0, 90$
-        CLRL    IFB$L_POS(R7)
-        BITL    #RAB$M_EOF, RAB$L_ROP(R10)
-        BEQL    10$
-        MOVL    IFB$L_EOF(R7), IFB$L_POS(R7)
-10$:    MOVW    R8, RAB$W_ISI(R10)
-        MOVL    #RMS$_NORMAL, R0
+        MOVL    #RMS$_ACT, R0
+        TSTL    IFB$L_RAB(R7)
+        BNEQ    90$
+        MOVL    IFB$L_VCB(R7), F11$GL_VCB
+        BBS     #IFB$V_BIO, IFB$L_FLAGS(R7), 10$
+        CMPB    IFB$B_ORG(R7), #FAB$C_REL
+        BEQL    20$
+        BGTRU   30$
+10$:    BSBW    SEQ$CONNECT
+        BRB     40$
+20$:    BSBW    REL$CONNECT
+        BRB     40$
+30$:    BSBW    IDX$CONNECT
+40$:    BLBC    R0, 90$
+        MOVL    R10, IFB$L_RAB(R7)
+        MOVW    R8, RAB$W_ISI(R10)
         BRB     90$
 80$:    MOVL    #RMS$_FAB, R0
 90$:    RABDONE
 
-; $DISCONNECT rab: disconnects the RAB from its file.
+; $DISCONNECT rab: disconnects the RAB from its file, writing what its
+; buffers hold that the file doesn't.
         .ENTRY  EXE$DISCONNECT, ^M<R2, R3, R4, R5, R6, R7, R8, R9, R10, R11>
         BSBW    FIL$LOCK
-        BSBW    RABCHK
+        BSBW    RABIFAB
         BLBC    R0, 90$
-        MOVZWL  RAB$W_ISI(R10), R8
-        BSBW    GETIFAB
-        BLBC    R0, 80$
+        PUSHL   R10
+        BSBW    ORGFLUSH
+        MOVL    (SP)+, R10
+        CLRL    IFB$L_RAB(R7)
         CLRW    RAB$W_ISI(R10)
-        BRB     90$
-80$:    MOVL    #RMS$_ISI, R0
 90$:    RABDONE
 
-; $GET rab: reads the next record into the RAB's user buffer, as much of
-; it as fits: RAB$L_RBF points at it and RAB$W_RSZ is its size.
-; RMS$_RTB if it didn't all fit, RMS$_EOF past the last, RMS$_RFM for a
-; file whose records are neither VAR nor FIX.
-        .ENTRY  EXE$GET, ^M<R2, R3, R4, R5, R6, R7, R8, R9, R10, R11>
+; RECORD name, seq, rel, idx[, bio]: the record service $name, which
+; calls the routine for the file's organization with R7 = the IFAB and
+; R10 = the RAB, or bio's for a file open for block I/O, RMS$_IOP by
+; default, and returns its status in RAB$L_STS. Each may use R0-R6, R8,
+; R9 and R11.
+        .MACRO  RECORD  NAME, SEQ, REL, IDX, BIO=IOP, ?L1, ?L2, ?L3, ?L4
+        .ENTRY  EXE$'NAME, ^M<R2, R3, R4, R5, R6, R7, R8, R9, R10, R11>
         BSBW    FIL$LOCK
-        BSBW    RABCHK
-        BLBC    R0, 90$
-        MOVZWL  RAB$W_ISI(R10), R8
-        BSBW    GETIFAB
-        BLBC    R0, 87$
-        MOVL    RAB$L_UBF(R10), R6
-        MOVZWL  RAB$W_USZ(R10), R5
-        BEQL    10$
-        IFNOWRT R5, (R6), 85$
-10$:    BITL    #1, IFB$L_POS(R7)       ; records start on a word
-        BEQL    15$
-        INCL    IFB$L_POS(R7)
-15$:    BICB3   #^XF0, IFB$AB_HDR+FAT$B_RTYPE(R7), R0
-        CMPB    R0, #FAB$C_FIX
-        BEQL    20$
-        CMPB    R0, #FAB$C_VAR
-        BNEQ    86$
-        BSBW    GETWORD                 ; VAR: its size first
-        BLBC    R1, 88$
-        CMPL    R0, #^XFFFF             ; none left in the block
-        BNEQ    25$
-        ADDL2   #BLOCK-1, IFB$L_POS(R7)
-        BICL2   #BLOCK-1, IFB$L_POS(R7)
-        BRB     15$
-20$:    MOVZWL  IFB$AB_HDR+FAT$W_RSIZE(R7), R0
-25$:    MOVL    R0, R4                  ; the record's size
-        MOVL    R0, R2                  ; the bytes left of it
-        CLRL    R3                      ; the bytes read
-30$:    TSTL    R2
-        BEQL    40$
-        BSBW    GETBYTE
-        BLBC    R1, 88$
-        CMPL    R3, R5
-        BGEQU   35$
-        MOVB    R0, (R6)[R3]
-35$:    INCL    R3
-        DECL    R2
-        BRB     30$
-40$:    MOVL    R6, RAB$L_RBF(R10)
-        MOVL    #RMS$_NORMAL, R0
-        CMPL    R4, R5
-        BLEQU   45$
-        MOVL    R5, R4
-        MOVL    #RMS$_RTB, R0
-45$:    MOVW    R4, RAB$W_RSZ(R10)
-        BRB     90$
-85$:    MOVL    #SS$_ACCVIO, R0
-        BRB     90$
-86$:    MOVL    #RMS$_RFM, R0
-        BRB     90$
-87$:    MOVL    #RMS$_ISI, R0
-        BRB     90$
-88$:    MOVL    R1, R0
-90$:    RABDONE
+        BSBW    RABIFAB
+        BLBC    R0, L4
+        BBC     #IFB$V_BIO, IFB$L_FLAGS(R7), L1
+        BSBW    BIO
+        BRB     L4
+L1:     CMPB    IFB$B_ORG(R7), #FAB$C_REL
+        BEQL    L2
+        BGTRU   L3
+        BSBW    SEQ
+        BRB     L4
+L2:     BSBW    REL
+        BRB     L4
+L3:     BSBW    IDX
+L4:     RABDONE
+        .ENDM   RECORD
 
-; $READ rab: block I/O. Reads the file's blocks from VBN RAB$L_BKT, or
-; from the block after the last $READ's if it is 0, into the user
-; buffer, RAB$W_USZ bytes, or those up to the end of file: RAB$L_RBF
-; points at them and RAB$W_RSZ is how many. RMS$_EOF past the end of file.
-        .ENTRY  EXE$READ, ^M<R2, R3, R4, R5, R6, R7, R8, R9, R10, R11>
+; BLOCKIO name: the block I/O service $name, which calls BIO$name with
+; R7 = the IFAB and R10 = the RAB, for a file opened with FAB$M_BIO or
+; FAB$M_BRO, else RMS$_IOP.
+        .MACRO  BLOCKIO NAME, ?L1, ?L2
+        .ENTRY  EXE$'NAME, ^M<R2, R3, R4, R5, R6, R7, R8, R9, R10, R11>
         BSBW    FIL$LOCK
-        BSBW    RABCHK
-        BLBC    R0, 90$
-        MOVZWL  RAB$W_ISI(R10), R8
-        BSBW    GETIFAB
-        BLBC    R0, 87$
-        MOVL    RAB$L_UBF(R10), R6
-        MOVZWL  RAB$W_USZ(R10), R5
-        BEQL    10$
-        IFNOWRT R5, (R6), 85$
-10$:    SUBL3   #1, RAB$L_BKT(R10), R0
-        BLSS    15$
-        MULL3   #BLOCK, R0, IFB$L_POS(R7)
-15$:    ADDL2   #BLOCK-1, IFB$L_POS(R7) ; a block's start
-        BICL2   #BLOCK-1, IFB$L_POS(R7)
-        MOVL    #RMS$_EOF, R0
-        CMPL    IFB$L_POS(R7), IFB$L_EOF(R7)
-        BGEQU   90$
-        CLRL    R4                      ; the bytes read
-20$:    CMPL    R4, R5
-        BGEQU   40$
-        BSBW    GETBYTE
-        BLBC    R1, 30$
-        MOVB    R0, (R6)[R4]
-        INCL    R4
-        BRB     20$
-30$:    CMPL    R1, #RMS$_EOF
-        BNEQ    88$
-40$:    MOVL    R6, RAB$L_RBF(R10)
-        MOVW    R4, RAB$W_RSZ(R10)
+        BSBW    RABIFAB
+        BLBC    R0, L2
+        MOVL    #RMS$_IOP, R0
+        BITL    #<1@IFB$V_BIO>!<1@IFB$V_BRO>, IFB$L_FLAGS(R7)
+        BEQL    L2
+        BSBW    BIO$'NAME
+L2:     RABDONE
+        .ENDM   BLOCKIO
+
+; $GET rab: reads a record into the RAB's user buffer, RAB$W_USZ bytes
+; at RAB$L_UBF, as much of it as fits: RAB$L_RBF points at it and
+; RAB$W_RSZ is its size, RMS$_RTB if it didn't all fit. Which record
+; RAB$B_RAC says: the next, by key or relative record number, or by RFA.
+; It becomes the current record, and its RFA goes in RAB$W_RFA.
+        RECORD  GET, SEQ$GET, REL$GET, IDX$GET
+
+; $FIND rab: finds a record as $GET does, without reading it.
+        RECORD  FIND, SEQ$FIND, REL$FIND, IDX$FIND
+
+; $PUT rab: writes the record RAB$L_RBF points at, RAB$W_RSZ bytes: at
+; the end of a sequential file, at the relative record number RAB$L_KBF
+; points at, or in key order in an indexed file.
+        RECORD  PUT, SEQ$PUT, REL$PUT, IDX$PUT
+
+; $UPDATE rab: rewrites the current record with the one RAB$L_RBF points
+; at.
+        RECORD  UPDATE, SEQ$UPDATE, REL$UPDATE, IDX$UPDATE
+
+; $DELETE rab: deletes the current record of a relative or indexed file;
+; RMS$_IOP for a sequential one.
+        RECORD  DELETE, IOP, REL$DELETE, IDX$DELETE
+
+; $TRUNCATE rab: ends a sequential file at its current record; RMS$_IOP
+; for the others.
+        RECORD  TRUNCATE, SEQ$TRUNCATE, IOP, IOP
+
+; $REWIND rab: the stream goes back to the first record.
+        RECORD  REWIND, SEQ$REWIND, REL$REWIND, IDX$REWIND, BIO=SEQ$REWIND
+
+; $FLUSH rab: writes what RMS's buffers hold that the file doesn't, and
+; the file's header.
+        RECORD  FLUSH, FLUSH, FLUSH, FLUSH, BIO=FLUSH
+
+; $FREE rab, $RELEASE rab: give up the stream's record locks; there are
+; none yet: RMS$_RNL. $WAIT rab: every service is done when it returns.
+        RECORD  FREE, RNL, RNL, RNL, BIO=RNL
+        RECORD  RELEASE, RNL, RNL, RNL, BIO=RNL
+        RECORD  WAIT, NORMAL, NORMAL, NORMAL, BIO=NORMAL
+
+; $READ rab, $WRITE rab, $SPACE rab: block I/O (rmsseq.mar).
+        BLOCKIO READ
+        BLOCKIO WRITE
+        BLOCKIO SPACE
+
+; IOP, RNL, NORMAL, FLUSH: the record services' routines that only return
+; RMS$_IOP, RMS$_RNL or RMS$_NORMAL, or call ORGFLUSH.
+IOP:
+        .JSB_ENTRY
+        MOVL    #RMS$_IOP, R0
+        RSB
+
+RNL:
+        .JSB_ENTRY
+        MOVL    #RMS$_RNL, R0
+        RSB
+
+NORMAL:
+        .JSB_ENTRY
         MOVL    #RMS$_NORMAL, R0
-        BRB     90$
-85$:    MOVL    #SS$_ACCVIO, R0
-        BRB     90$
-87$:    MOVL    #RMS$_ISI, R0
-        BRB     90$
-88$:    MOVL    R1, R0
-90$:    RABDONE
+        RSB
+
+FLUSH:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5, R6, R8, R9, R11>
+        PUSHL   R10
+        BSBW    ORGFLUSH
+        MOVL    (SP)+, R10
+        RSB
 
 ; $CREATE fab: makes a new file, as the FAB names it, with its
 ; organization, record format and attributes, maximum record size, VFC
-; header size and allocation, FAB$L_ALQ blocks, and opens it for $PUT:
-; its IFI goes in the FAB, and in its NAM block, if it has one, its
-; resultant string and file ID. Its version is one above the highest
-; there is, unless the specification gives one. The file is the current
-; process's, with the protection of the highest version there is, or the
-; default (f11wrt.mar), unless the FAB's protection XAB gives one, and an
-; owner, not 0, which takes the system's access if it isn't the
-; process's UIC (CREPRO). RMS$_WLD for a wildcard, RMS$_WLK on a volume
-; that can't be written, RMS$_PRV without write access to the directory
-; or the system's for the owner, SS$_ACCVIO if the caller can't read the
-; XAB chain or write the XAB, RMS$_FEX if that version is
-; there, RMS$_FUL if the volume is full, RMS$_CRE for another error from
-; the file system, which goes in FAB$L_STV.
+; header size, bucket size, default extension and allocation, FAB$L_ALQ
+; blocks, and opens it for $PUT and the access FAB$B_FAC gives: its IFI
+; goes in the FAB, and in its NAM block, if it has one, its resultant
+; string and file ID. A relative file gets its prologue, with FAB$L_MRN
+; (REL$CREATE); an indexed one its prologue, keys and areas from the
+; FAB's XABKEYs and XABALLs (IDX$CREATE). Its version is one above the
+; highest there is, unless the specification gives one. The file is the
+; current process's, with the protection of the highest version there
+; is, or the default (f11wrt.mar), unless the FAB's protection XAB gives
+; one, and an owner, not 0, which takes the system's access if it isn't
+; the process's UIC (CREPRO). RMS$_WLD for a wildcard, RMS$_ORG for an
+; organization RMS doesn't know, RMS$_WLK on a volume that can't be
+; written, RMS$_PRV without write access to the directory or the
+; system's for the owner, SS$_ACCVIO if the caller can't read the XAB
+; chain or write the XAB, RMS$_FEX if that version is there, RMS$_FUL if
+; the volume is full, RMS$_CRE for another error from the file system,
+; which goes in FAB$L_STV, or the organization's error.
         .ENTRY  EXE$CREATE, ^M<R2, R3, R4, R5, R6, R7, R8, R9, R10, R11>
         BSBW    FIL$LOCK
         BSBW    FABNAM
         BLBC    R0, 90$
+        MOVL    #RMS$_ORG, R0
+        CMPB    FAB$B_ORG(R10), #FAB$C_IDX
+        BGTRU   90$
+        BITB    #^X0F, FAB$B_ORG(R10)
+        BNEQ    90$
         BSBW    PARSEFAB
         BLBC    R0, 90$
         MOVL    #RMS$_WLD, R0
@@ -1502,17 +1655,12 @@ RABCHK:
         BRB     90$
 5$:     BSBW    NEWIFAB
         BLBC    R0, 90$
+        BISB3   #FAB$M_PUT, FAB$B_FAC(R10), IFB$B_FAC(R7)
         MOVAB   IFB$AB_HDR(R7), R1
         BSBW    FIL$CREHDR
         BLBC    R0, 70$
         BSBW    CREPRO
-        BISB3   FAB$B_ORG(R10), FAB$B_RFM(R10), IFB$AB_HDR+FAT$B_RTYPE(R7)
-        MOVB    FAB$B_RAT(R10), IFB$AB_HDR+FAT$B_RATTRIB(R7)
-        MOVW    FAB$W_MRS(R10), IFB$AB_HDR+FAT$W_MAXREC(R7)
-        CMPB    FAB$B_RFM(R10), #FAB$C_FIX
-        BNEQ    10$
-        MOVW    FAB$W_MRS(R10), IFB$AB_HDR+FAT$W_RSIZE(R7)
-10$:    MOVB    FAB$B_FSZ(R10), IFB$AB_HDR+FAT$B_VFCSIZE(R7)
+        BSBW    CREATTRS
         MOVL    DIRFID, IFB$AB_HDR+FH2$W_BACKLINK(R7)
         MOVW    DIRFID+4, IFB$AB_HDR+FH2$W_BACKLINK+4(R7)
         MOVL    FAB$L_ALQ(R10), R1
@@ -1533,17 +1681,32 @@ RABCHK:
         TSTL    R11
         BEQL    30$
         BSBW    PUTRES
-30$:    BISL2   #<1@IFB$V_WRITE>!<1@IFB$V_DIRTY>, IFB$L_FLAGS(R7)
-        MOVL    #1, IFB$L_BLOCK(R7)
-        MOVC5   #0, (R7), #0, #BLOCK, IFB$AB_BUF(R7)
+30$:    BISL2   #<1@IFB$V_WRITE>!<1@IFB$V_HDR>, IFB$L_FLAGS(R7)
+        BSBW    ATTRS
+        PUSHR   #^M<R8, R9>
+        BSBW    ORGCREATE
+        POPR    #^M<R8, R9>
+        BLBC    R0, 50$
+        BSBW    RMS$XABOUT
+        BLBC    R0, 50$
         BSBW    INSTALL
-        ROTL    #16, IFB$AB_HDR+FAT$L_HIBLK(R7), FAB$L_ALQ(R10)
+        BSBW    FABATTRS
         MOVL    #RMS$_NORMAL, R0
         BRB     90$
+50$:    PUSHL   R0                      ; it goes, entry and all
+        PUSHL   R7
+        MOVAB   RMS$AB_DIRHDR, R3
+        MOVL    FIELDS+16, R6
+        ADDL3   FIELDS+20, FIELDS+28, R7
+        MOVL    RESVER, R8
+        BSBW    FIL$REMOVE
+        MOVL    (SP)+, R7
+        MOVL    (SP)+, R0
 60$:    PUSHL   R0                      ; its blocks and header go back
         MOVAB   IFB$AB_HDR(R7), R1
         BSBW    FIL$DELHDR
         MOVL    (SP)+, R0
+        BRB     75$
 70$:    MOVL    R0, FAB$L_STV(R10)
         MOVL    R0, R1
         MOVL    #RMS$_FUL, R0
@@ -1553,12 +1716,57 @@ RABCHK:
         CMPL    R1, #SS$_DUPFILENAME
         BEQL    75$
         MOVL    #RMS$_CRE, R0
-75$:    PUSHL   R0
-        MOVL    R7, R0
-        MOVL    #IFB$K_LENGTH, R1
-        BSBW    EXE$DEANONPGDSIZ
-        MOVL    (SP)+, R0
+75$:    BSBW    FREEIFAB
 90$:    FABDONE
+
+; CREATTRS: R7 = an IFAB with a new file's header, R10 = its FAB. Gives
+; the header the FAB's record attributes: organization and record
+; format, attributes, maximum record size, a FIX or relative record's
+; size, VFC header size, bucket size, default extension and global
+; buffer count, and the longest record an XABFHC gives. Uses R0 and R1.
+CREATTRS:
+        .JSB_ENTRY
+        BISB3   FAB$B_ORG(R10), FAB$B_RFM(R10), IFB$AB_HDR+FAT$B_RTYPE(R7)
+        MOVB    FAB$B_RAT(R10), IFB$AB_HDR+FAT$B_RATTRIB(R7)
+        MOVW    FAB$W_MRS(R10), IFB$AB_HDR+FAT$W_MAXREC(R7)
+        CMPB    FAB$B_RFM(R10), #FAB$C_FIX
+        BEQL    10$
+        CMPB    FAB$B_ORG(R10), #FAB$C_REL
+        BNEQ    20$
+10$:    MOVW    FAB$W_MRS(R10), IFB$AB_HDR+FAT$W_RSIZE(R7)
+20$:    MOVB    FAB$B_FSZ(R10), IFB$AB_HDR+FAT$B_VFCSIZE(R7)
+        MOVB    FAB$B_BKS(R10), IFB$AB_HDR+FAT$B_BKTSIZE(R7)
+        MOVW    FAB$W_DEQ(R10), IFB$AB_HDR+FAT$W_DEFEXT(R7)
+        MOVW    FAB$W_GBC(R10), IFB$AB_HDR+FAT$W_GBC(R7)
+        MOVL    #XAB$C_FHC, R0          ; and an XABFHC's longest record
+        BSBW    RMS$FINDXAB
+        TSTL    R0
+        BEQL    90$
+        CMPB    FAB$B_RFM(R10), #FAB$C_FIX
+        BEQL    90$
+        MOVW    XAB$W_LRL(R0), IFB$AB_HDR+FAT$W_RSIZE(R7)
+90$:    RSB
+
+; ORGCREATE: R7 = an IFAB with a new file's header and attributes, R10 =
+; its FAB. Sets up its organization's state and buffer, and writes a
+; relative or indexed file's prologue: SEQ$OPEN, REL$CREATE or
+; IDX$CREATE, or SEQ$OPEN for block I/O. R0 = their status. Uses R0-R6,
+; R8, R9, R11.
+ORGCREATE:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5, R6, R8, R9, R11>
+        BITB    #FAB$M_BIO!FAB$M_BRO, IFB$B_FAC(R7)
+        BNEQ    20$
+        CMPB    IFB$B_ORG(R7), #FAB$C_REL
+        BEQL    30$
+        BGTRU   40$
+        BSBW    SEQ$OPEN
+        RSB
+20$:    BSBW    ORGOPEN
+        RSB
+30$:    BSBW    REL$CREATE
+        RSB
+40$:    BSBW    IDX$CREATE
+        RSB
 
 ; CREPRO: R7 = an IFAB with a new file's header, XABPRO = the FAB's
 ; protection XAB, or 0. Gives the header the protection of the highest
@@ -1692,274 +1900,6 @@ CRENTER:
         BRB     90$
 85$:    MOVL    #SS$_ACCVIO, R0
 90$:    FABDONE
-
-; $PUT rab: appends the record RAB$L_RBF points at, RAB$W_RSZ bytes, to
-; the file $CREATE made or $OPEN opened for it, at its end: a VAR record
-; with its size first, a FIX one as it is, each on a word, and a VAR one
-; that would cross into the next block in it, if the file's records don't
-; span blocks. RMS$_IOP for a file opened only to read, RMS$_NEF if the
-; stream isn't at the file's end, RMS$_RSZ for a FIX record of another size than the
-; file's or a VAR one longer than its maximum, RMS$_RFM for another record
-; format, RMS$_WER if the file system fails, with its error in RAB$L_STV.
-        .ENTRY  EXE$PUT, ^M<R2, R3, R4, R5, R6, R7, R8, R9, R10, R11>
-        BSBW    FIL$LOCK
-        BSBW    RABCHK
-        BLBC    R0, 90$
-        MOVZWL  RAB$W_ISI(R10), R8
-        BSBW    GETIFAB
-        BLBC    R0, 87$
-        MOVL    #RMS$_IOP, R0
-        BBC     #IFB$V_WRITE, IFB$L_FLAGS(R7), 90$
-        MOVL    #RMS$_NEF, R0           ; past it if $GET aligned a record
-        CMPL    IFB$L_POS(R7), IFB$L_EOF(R7)
-        BLSSU   90$
-        MOVL    IFB$L_VCB(R7), F11$GL_VCB
-        BBS     #IFB$V_DIRTY, IFB$L_FLAGS(R7), 5$
-        BSBW    LOADEND
-        BLBC    R1, 88$
-5$:     MOVL    IFB$L_EOF(R7), IFB$L_POS(R7)
-        MOVL    RAB$L_RBF(R10), R6
-        MOVZWL  RAB$W_RSZ(R10), R5
-        BEQL    10$
-        IFNORD  R5, (R6), 85$
-10$:    MOVL    #RMS$_RSZ, R0
-        BICB3   #^XF0, IFB$AB_HDR+FAT$B_RTYPE(R7), R1
-        CMPB    R1, #FAB$C_FIX
-        BNEQ    20$
-        CMPW    R5, IFB$AB_HDR+FAT$W_RSIZE(R7)
-        BNEQ    90$
-        BSBW    ALIGN
-        BLBC    R1, 88$
-        BRB     45$
-20$:    CMPB    R1, #FAB$C_VAR
-        BNEQ    86$
-        TSTW    IFB$AB_HDR+FAT$W_MAXREC(R7)
-        BEQL    25$
-        CMPW    R5, IFB$AB_HDR+FAT$W_MAXREC(R7)
-        BGTRU   90$
-25$:    CMPW    R5, IFB$AB_HDR+FAT$W_RSIZE(R7)  ; the longest record
-        BLEQU   30$
-        MOVW    R5, IFB$AB_HDR+FAT$W_RSIZE(R7)
-30$:    BSBW    ALIGN
-        BLBC    R1, 88$
-        BITB    #FAB$M_BLK, IFB$AB_HDR+FAT$B_RATTRIB(R7)
-        BEQL    35$
-        BICL3   #^C<BLOCK-1>, IFB$L_POS(R7), R0
-        BEQL    35$
-        ADDL2   R5, R0
-        ADDL2   #2, R0
-        CMPL    R0, #BLOCK
-        BLEQU   35$
-32$:    MNEGL   #1, R0                  ; the block ends here: all ones
-        BSBW    PUTBYTE
-        BLBC    R1, 88$
-        BICL3   #^C<BLOCK-1>, IFB$L_POS(R7), R0
-        BNEQ    32$
-35$:    MOVL    R5, R0                  ; the size, low byte first
-        BSBW    PUTBYTE
-        BLBC    R1, 88$
-        ASHL    #-8, R5, R0
-        BSBW    PUTBYTE
-        BLBC    R1, 88$
-45$:    CLRL    R4
-50$:    CMPL    R4, R5
-        BGEQU   60$
-        MOVZBL  (R6)[R4], R0
-        BSBW    PUTBYTE
-        BLBC    R1, 88$
-        INCL    R4
-        BRB     50$
-60$:    MOVL    #RMS$_NORMAL, R0
-        BRB     90$
-85$:    MOVL    #SS$_ACCVIO, R0
-        BRB     90$
-86$:    MOVL    #RMS$_RFM, R0
-        BRB     90$
-87$:    MOVL    #RMS$_ISI, R0
-        BRB     90$
-88$:    MOVL    R1, RAB$L_STV(R10)
-        MOVL    #RMS$_WER, R0
-90$:    RABDONE
-
-; $WRITE rab: block I/O. Writes the RAB$W_RSZ bytes RAB$L_RBF points at
-; to the file $CREATE made or $OPEN opened for writing, at its end, which
-; must be a block's start, VBN RAB$L_BKT if that isn't 0. The end of file
-; is then past the last byte. RMS$_IOP for a file opened only to read,
-; RMS$_NEF elsewhere than at the end, RMS$_WER if the file system fails,
-; with its error in RAB$L_STV.
-; ponytail: only at the end, as $PUT; VMS's writes any block, and its
-; end of file is at the end of the last block written.
-        .ENTRY  EXE$WRITE, ^M<R2, R3, R4, R5, R6, R7, R8, R9, R10, R11>
-        BSBW    FIL$LOCK
-        BSBW    RABCHK
-        BLBC    R0, 90$
-        MOVZWL  RAB$W_ISI(R10), R8
-        BSBW    GETIFAB
-        BLBC    R0, 87$
-        MOVL    #RMS$_IOP, R0
-        BBC     #IFB$V_WRITE, IFB$L_FLAGS(R7), 90$
-        MOVL    #RMS$_NEF, R0
-        BICL3   #^C<BLOCK-1>, IFB$L_EOF(R7), R1
-        BNEQ    90$
-        SUBL3   #1, RAB$L_BKT(R10), R1
-        BLSS    5$
-        MULL2   #BLOCK, R1
-        CMPL    R1, IFB$L_EOF(R7)
-        BNEQ    90$
-5$:     MOVL    IFB$L_VCB(R7), F11$GL_VCB
-        BBS     #IFB$V_DIRTY, IFB$L_FLAGS(R7), 10$
-        BSBW    LOADEND
-        BLBC    R1, 88$
-10$:    MOVL    IFB$L_EOF(R7), IFB$L_POS(R7)
-        MOVL    RAB$L_RBF(R10), R6
-        MOVZWL  RAB$W_RSZ(R10), R5
-        BEQL    20$
-        IFNORD  R5, (R6), 85$
-20$:    CLRL    R4
-30$:    CMPL    R4, R5
-        BGEQU   40$
-        MOVZBL  (R6)[R4], R0
-        BSBW    PUTBYTE
-        BLBC    R1, 88$
-        INCL    R4
-        BRB     30$
-40$:    MOVL    #RMS$_NORMAL, R0
-        BRB     90$
-85$:    MOVL    #SS$_ACCVIO, R0
-        BRB     90$
-87$:    MOVL    #RMS$_ISI, R0
-        BRB     90$
-88$:    MOVL    R1, RAB$L_STV(R10)
-        MOVL    #RMS$_WER, R0
-90$:    RABDONE
-
-; LOADEND: R7 = an IFAB $PUT writes, whose last block IFB$AB_BUF doesn't
-; hold. Reads it there, if the file ends partway into it, else clears it,
-; for PUTBYTE to fill. R1 = SS$_NORMAL or the disk's error. Uses R0-R5.
-LOADEND:
-        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5>
-        BICL3   #^C<BLOCK-1>, IFB$L_EOF(R7), R1
-        BNEQ    10$
-        MOVC5   #0, (R7), #0, #BLOCK, IFB$AB_BUF(R7)
-        BRB     20$
-10$:    DIVL3   #BLOCK, IFB$L_EOF(R7), R0
-        INCL    R0
-        MOVL    #1, R1
-        MOVAB   IFB$AB_BUF(R7), R2
-        MOVAB   IFB$AB_HDR(R7), R3
-        BSBW    FIL$READVBN
-        MOVL    R0, R1
-        BLBC    R1, 90$
-20$:    DIVL3   #BLOCK, IFB$L_EOF(R7), R0
-        ADDL3   #1, R0, IFB$L_BLOCK(R7)
-        BISL2   #1@IFB$V_DIRTY, IFB$L_FLAGS(R7)
-        MOVL    #SS$_NORMAL, R1
-90$:    RSB
-
-; ALIGN: R7 = an IFAB $PUT writes. Writes a byte if it is at an odd one,
-; so the next record starts on a word. R1 = PUTBYTE's status. Uses R0.
-ALIGN:
-        .JSB_ENTRY
-        MOVL    #RMS$_NORMAL, R1
-        BLBC    IFB$L_POS(R7), 10$
-        CLRL    R0
-        BSBB    PUTBYTE
-10$:    RSB
-
-; PUTBYTE: R7 = an IFAB $PUT writes, R0 = a byte. Writes it at the file's
-; end, a block at a time. R1 = RMS$_NORMAL, or the file system's error.
-PUTBYTE:
-        .JSB_ENTRY
-        BICL3   #^C<BLOCK-1>, IFB$L_POS(R7), R1
-        MOVB    R0, IFB$AB_BUF(R7)[R1]
-        INCL    IFB$L_POS(R7)
-        MOVL    IFB$L_POS(R7), IFB$L_EOF(R7)
-        BICL3   #^C<BLOCK-1>, IFB$L_POS(R7), R1
-        BNEQ    80$
-        PUSHR   #^M<R0, R2, R3, R4, R5>  ; the block is full
-        DIVL3   #BLOCK, IFB$L_POS(R7), R1
-        ADDL3   #1, R1, IFB$L_BLOCK(R7)
-        BSBB    WRITEBLK
-        PUSHL   R0
-        MOVC5   #0, (R7), #0, #BLOCK, IFB$AB_BUF(R7)
-        MOVL    (SP)+, R1
-        POPR    #^M<R0, R2, R3, R4, R5>
-        RSB
-80$:    MOVL    #RMS$_NORMAL, R1
-        RSB
-
-; WRITEBLK: R7 = an IFAB $PUT writes, R1 = a VBN. Writes the IFAB's block
-; there, extending the file first if it hasn't that many, by EXTEND
-; blocks at least. R0 = SS$_NORMAL, or the file system's error. Keeps
-; every other register.
-WRITEBLK:
-        .JSB_ENTRY
-        PUSHR   #^M<R1, R2, R3>
-        MOVAB   IFB$AB_HDR(R7), R3
-        ROTL    #16, FAT$L_HIBLK(R3), R0
-        CMPL    R1, R0
-        BLEQU   10$
-        SUBL3   R0, R1, R1
-        CMPL    R1, #EXTEND
-        BGEQU   5$
-        MOVL    #EXTEND, R1
-5$:     BSBW    FIL$EXTEND
-        ROTL    #16, FAT$L_HIBLK(R3), R1        ; enough, even if not all?
-        CMPL    (SP), R1
-        BGTRU   90$
-10$:    MOVL    (SP), R0
-        MOVL    #1, R1
-        MOVAB   IFB$AB_BUF(R7), R2
-        BSBW    FIL$WRITEVBN
-90$:    POPR    #^M<R1, R2, R3>
-        RSB
-
-; GETWORD: R7 = an IFAB. R0 = the next word of its file, low byte first,
-; R1 = RMS$_NORMAL, RMS$_EOF or the disk's error.
-GETWORD:
-        .JSB_ENTRY  SCRATCH=<R2, R3>
-        BSBB    GETBYTE
-        BLBC    R1, 90$
-        PUSHL   R0
-        BSBB    GETBYTE
-        BLBC    R1, 80$
-        ASHL    #8, R0, R0
-        BISL2   (SP)+, R0
-        RSB
-80$:    TSTL    (SP)+
-90$:    RSB
-
-; GETBYTE: R7 = an IFAB. R0 = the next byte of its file, read a block at
-; a time, R1 = RMS$_NORMAL, RMS$_EOF past its end of file, or the disk's
-; error.
-GETBYTE:
-        .JSB_ENTRY
-        MOVL    #RMS$_EOF, R1
-        CMPL    IFB$L_POS(R7), IFB$L_EOF(R7)
-        BGEQU   90$
-        PUSHR   #^M<R2, R3>
-        DIVL3   #BLOCK, IFB$L_POS(R7), R0
-        INCL    R0                      ; the byte's VBN
-        CMPL    R0, IFB$L_BLOCK(R7)
-        BEQL    20$
-        PUSHL   R0
-        BSBW    FLUSH                   ; what $PUT left in the block first
-        BLBC    R0, 10$
-        MOVL    (SP), R0
-        MOVL    #1, R1
-        MOVAB   IFB$AB_BUF(R7), R2
-        MOVAB   IFB$AB_HDR(R7), R3
-        BSBW    FIL$READVBN
-10$:    MOVL    R0, R1
-        MOVL    (SP)+, R0
-        BLBC    R1, 80$
-        MOVL    R0, IFB$L_BLOCK(R7)
-20$:    BICL3   #^C<BLOCK-1>, IFB$L_POS(R7), R0
-        MOVZBL  IFB$AB_BUF(R7)[R0], R0
-        INCL    IFB$L_POS(R7)
-        MOVL    #RMS$_NORMAL, R1
-80$:    POPR    #^M<R2, R3>
-90$:    RSB
 
 ; $CREATE_DIR devdirspec: makes the directory devdirspec names,
 ; [dev:][dir.dir...], what it leaves out from SYS$DISK: and the default

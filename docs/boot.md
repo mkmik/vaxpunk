@@ -59,7 +59,7 @@ the role PALcode played on an Alpha: it's the "hardware" layer underneath VMS
   receive interrupt when there are some.
 - `disk_init` finds the disks, virtio block devices: unit 0, the system
   disk, and unit 1, the data disk, `out/datadisk.img`, and prints
-  `disk 0: virtio-blk, 4096 blocks` and `disk 1: ...` for them. From then
+  `disk 0: virtio-blk, 8192 blocks` and `disk 1: ...` for them. From then
   on the PAL can read the disks' blocks, by number, for itself and for the
   executive, and write the data disk's for the executive. It also
   notes the network device, virtio-net, if QEMU has one.
@@ -109,8 +109,9 @@ The executive is the VMS kernel, written in MACRO-32.
 - defines the system's logical names for it, in `LNM$SYSTEM_TABLE`:
   `SYS$SYSDEVICE` is `DKA0:`, `SYS$DISK`, the default device, is
   `SYS$SYSDEVICE:`, `SYS$SYSTEM`, where the images are, is
-  `SYS$SYSDEVICE:[SYSEXE]`, and `SYS$MANAGER`, where the system manager's
-  files are, is `SYS$SYSDEVICE:[SYSMGR]`
+  `SYS$SYSDEVICE:[SYSEXE]`, `SYS$MANAGER`, where the system manager's
+  files are, is `SYS$SYSDEVICE:[SYSMGR]`, and `SYS$SCRATCH`, where
+  `CONVERT` puts its work file, is `SYS$DISK:[]`, the default directory
 - lowers IPL to 0 and creates the console's process, SYSTEM, which runs
   `DCL.EXE`, with the logical names `SYS$INPUT`, `SYS$OUTPUT` and
   `SYS$ERROR` standing for the console, `_OPA0:`, in its process table.

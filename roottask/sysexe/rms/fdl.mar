@@ -1,0 +1,946 @@
+        .TITLE  FDL     Reads File Definition Language files
+        .IDENT  /V0.1/
+;
+; FDL$PARSE reads an FDL file, as CREATE/FDL and CONVERT/FDL take it, into
+; a FAB, a RAB and their XABs: an XABALL for each AREA, then an XABKEY
+; for each KEY, chained from the FAB. A statement is a line: a primary,
+; FILE, RECORD, AREA n, KEY n and the others, or one of its secondaries,
+; a keyword and a value: a number, yes or no, a keyword, or a string. A
+; keyword, primary, secondary or value, may be abbreviated to any part of
+; it no other starts with. ! starts a comment. Unknown keywords are
+; reported as VMS's FDL$PARSE does, %FDL-W-UNSECKW and the like, and the
+; file parsed with warnings.
+; ponytail: the FAB, RAB and XABs are this module's, one set at a time,
+; up to MAXKEYS keys and MAXAREAS areas; FILE, RECORD, AREA and KEY set
+; what RMS's $CREATE uses, and the other primaries and secondaries, like
+; PROTECTION, OWNER, ACCESS and SHARING, are taken and left alone.
+;
+        .LIBRARY "starlet.mlb"
+        $SSDEF
+        $RMSDEF
+        $FABDEF
+        $RABDEF
+        $XABDEF
+        $XABKEYDEF
+        $XABALLDEF
+
+        .EXTERNAL LIN$TEXT, LIN$STR, LIN$CHAR, LIN$DEC, LIN$PUT, LIN$STATUS
+
+MAXKEYS = 16
+MAXAREAS = 16
+FDL$_WARNING = ^X00B48058               ; parsed with warnings
+FDL$_OPENFDL = ^X00B4807C               ; error opening !AS
+INHIB = ^X10000000                      ; STS$M_INHIB_MSG: reported already
+
+; The primaries: what they hold.
+P_FILE = 1
+P_RECORD = 2
+P_AREA = 3
+P_KEY = 4
+P_OTHER = 5                             ; anything, left alone
+
+; The secondaries: the value they take, and where it goes. A table entry
+; is the keyword, .ASCIC, then a byte of what it is, H_x, and a byte of
+; its argument.
+H_SKIP = 0                              ; any value, left alone
+H_NUM = 1                               ; a number: arg = its field, F_x
+H_YES = 2                               ; yes or no: arg = its flag, Y_x
+H_KW = 3                                ; a keyword: arg = its field, F_x
+H_STR = 4                               ; a string: arg = its field, F_x
+
+; Number and keyword fields.
+F_ALQ = 1                               ; FAB$L_ALQ, or the area's
+F_DEQ = 2                               ; FAB$W_DEQ, or the area's
+F_BKS = 3                               ; FAB$B_BKS, or the area's XAB$B_BKZ
+F_MRN = 4
+F_MRS = 5
+F_FSZ = 6
+F_ORG = 7
+F_RFM = 8
+F_RAT = 9
+F_POS = 10                              ; the key's segment's position
+F_SIZ = 11                              ; and size
+F_DAN = 12
+F_IAN = 13
+F_LAN = 14
+F_DFL = 15                              ; percent
+F_IFL = 16
+F_NUL = 17                              ; the key's null value
+F_PROLOG = 18
+F_DTP = 19
+F_NAME = 20                             ; the file's name
+F_KNM = 21                              ; the key's name
+
+; Yes or no flags.
+Y_CTG = 1                               ; FAB$M_CTG, or the area's XAB$M_CTG
+Y_CBT = 2
+Y_SPAN = 3                              ; no: FAB$M_BLK
+Y_CHG = 4
+Y_DUP = 5
+Y_NULKEY = 6
+Y_KCMPR = 7                             ; no: XAB$M_KEY_NCMPR
+Y_RCMPR = 8                             ; no: XAB$M_DAT_NCMPR
+Y_ICMPR = 9                             ; no: XAB$M_IDX_NCMPR
+
+        .PSECT  FDL_DATA, NOEXE, WRT, LONG
+FDL$AB_FAB::                            ; the FAB FDL$PARSE makes
+        $FAB    RAT=CR
+FDL$AB_RAB::                            ; and its RAB
+        $RAB    FAB=FDL$AB_FAB
+KEYS:   .BLKB   MAXKEYS*XAB$C_KEYLEN    ; the XABKEYs
+AREAS:  .BLKB   MAXAREAS*XAB$C_ALLLEN   ; the XABALLs
+KNAMES: .BLKB   MAXKEYS*32              ; the keys' names
+DFILL:  .BLKB   MAXKEYS                 ; their fills, percent, or 0
+IFILL:  .BLKB   MAXKEYS
+LSET:   .BLKB   MAXKEYS                 ; 1: LEVEL1_INDEX_AREA given
+NKEYS:  .LONG   0                       ; keys and areas defined
+NAREAS: .LONG   0
+FDL$GB_NAMELEN::                        ; FILE's NAME, if it has one
+        .BYTE   0
+FDL$T_NAME::
+        .BLKB   255
+        .ALIGN  LONG
+PRI:    .LONG   0                       ; the primary, P_x, or 0
+NUM:    .LONG   0                       ; its number, AREA's or KEY's
+SEG:    .LONG   0                       ; a SEGn_ secondary's n
+STMT:   .LONG   0                       ; the statement's number
+WARNED: .LONG   0                       ; 1 once a warning is out
+PTR:    .LONG   0                       ; the statement, as far as read
+END:    .LONG   0                       ; and its end
+TOKA:   .LONG   0                       ; the word read last
+TOKL:   .LONG   0
+TEXT:   .BLKB   256                     ; the statement
+INFAB:  $FAB    DNA=FDLTYPE, DNS=4, FAC=GET
+INRAB:  $RAB    FAB=INFAB, UBF=TEXT, USZ=255
+FDLTYPE:
+        .ASCII  ".FDL"
+
+; The keyword tables: each entry .ASCIC, then its code and argument
+; bytes; a 0 ends the table.
+        .MACRO  KW      NAME, CODE=0, ARG=0
+        .ASCIC  "NAME"
+        .BYTE   CODE, ARG
+        .ENDM   KW
+
+PRIMARIES:
+        KW      FILE, P_FILE
+        KW      RECORD, P_RECORD
+        KW      AREA, P_AREA
+        KW      KEY, P_KEY
+        KW      TITLE, P_OTHER
+        KW      IDENT, P_OTHER
+        KW      SYSTEM, P_OTHER
+        KW      DATE, P_OTHER
+        KW      ACCESS, P_OTHER
+        KW      SHARING, P_OTHER
+        KW      CONNECT, P_OTHER
+        KW      JOURNALING, P_OTHER
+        KW      ANALYSIS_OF_AREA, P_OTHER
+        KW      ANALYSIS_OF_KEY, P_OTHER
+        .BYTE   0
+FILESEC:
+        KW      ALLOCATION, H_NUM, F_ALQ
+        KW      BEST_TRY_CONTIGUOUS, H_YES, Y_CBT
+        KW      BUCKET_SIZE, H_NUM, F_BKS
+        KW      CLUSTER_SIZE
+        KW      CONTIGUOUS, H_YES, Y_CTG
+        KW      DEFAULT_NAME
+        KW      DEFERRED_WRITE
+        KW      DELETE_ON_CLOSE
+        KW      DIRECTORY_ENTRY
+        KW      ERASE_ON_DELETE
+        KW      EXTENSION, H_NUM, F_DEQ
+        KW      FILE_MONITORING
+        KW      GLBUFF_CNT_V83
+        KW      GLBUFF_FLAGS_V83
+        KW      GLOBAL_BUFFER_COUNT
+        KW      MAX_RECORD_NUMBER, H_NUM, F_MRN
+        KW      MAXIMIZE_VERSION
+        KW      NAME, H_STR, F_NAME
+        KW      ORGANIZATION, H_KW, F_ORG
+        KW      OUTPUT_FILE_PARSE
+        KW      OWNER
+        KW      PRINT_ON_CLOSE
+        KW      PROTECTION
+        KW      READ_CHECK
+        KW      REVISION
+        KW      SEQUENTIAL_ONLY
+        KW      SUBMIT_ON_CLOSE
+        KW      SUPERSEDE
+        KW      TEMPORARY
+        KW      TRUNCATE_ON_CLOSE
+        KW      USER_FILE_OPEN
+        KW      WINDOW_SIZE
+        KW      WRITE_CHECK
+        .BYTE   0
+RECSEC:
+        KW      BLOCK_SPAN, H_YES, Y_SPAN
+        KW      CARRIAGE_CONTROL, H_KW, F_RAT
+        KW      CONTROL_FIELD_SIZE, H_NUM, F_FSZ
+        KW      FORMAT, H_KW, F_RFM
+        KW      SIZE, H_NUM, F_MRS
+        .BYTE   0
+AREASEC:
+        KW      ALLOCATION, H_NUM, F_ALQ
+        KW      BEST_TRY_CONTIGUOUS, H_YES, Y_CBT
+        KW      BUCKET_SIZE, H_NUM, F_BKS
+        KW      CONTIGUOUS, H_YES, Y_CTG
+        KW      EXACT_POSITIONING
+        KW      EXTENSION, H_NUM, F_DEQ
+        KW      POSITION
+        KW      VOLUME
+        .BYTE   0
+KEYSEC:
+        KW      CHANGES, H_YES, Y_CHG
+        KW      DATA_AREA, H_NUM, F_DAN
+        KW      DATA_FILL, H_NUM, F_DFL
+        KW      DATA_KEY_COMPRESSION, H_YES, Y_KCMPR
+        KW      DATA_RECORD_COMPRESSION, H_YES, Y_RCMPR
+        KW      DUPLICATES, H_YES, Y_DUP
+        KW      INDEX_AREA, H_NUM, F_IAN
+        KW      INDEX_COMPRESSION, H_YES, Y_ICMPR
+        KW      INDEX_FILL, H_NUM, F_IFL
+        KW      LEVEL1_INDEX_AREA, H_NUM, F_LAN
+        KW      NAME, H_STR, F_KNM
+        KW      NULL_KEY, H_YES, Y_NULKEY
+        KW      NULL_VALUE, H_NUM, F_NUL
+        KW      PROLOG, H_NUM, F_PROLOG
+        KW      SEG0_LENGTH, H_NUM, F_SIZ
+        KW      SEG0_POSITION, H_NUM, F_POS
+        KW      TYPE, H_KW, F_DTP
+        .BYTE   0
+YESNO:
+        KW      YES, 1
+        KW      NO, 0
+        KW      TRUE, 1
+        KW      FALSE, 0
+        .BYTE   0
+ORGS:
+        KW      SEQUENTIAL, FAB$C_SEQ
+        KW      RELATIVE, FAB$C_REL
+        KW      INDEXED, FAB$C_IDX
+        .BYTE   0
+RFMS:
+        KW      UNDEFINED, FAB$C_UDF
+        KW      FIXED, FAB$C_FIX
+        KW      VARIABLE, FAB$C_VAR
+        KW      VFC, FAB$C_VFC
+        KW      STREAM, FAB$C_STM
+        KW      STREAM_LF, FAB$C_STMLF
+        KW      STREAM_CR, FAB$C_STMCR
+        .BYTE   0
+RATS:
+        KW      NONE, 0
+        KW      CARRIAGE_RETURN, FAB$M_CR
+        KW      FORTRAN, FAB$M_FTN
+        KW      PRINT, FAB$M_PRN
+        .BYTE   0
+DTPS:
+        KW      STRING, XAB$C_STG
+        KW      DSTRING, XAB$C_DSTG
+        KW      INT2, XAB$C_IN2
+        KW      DINT2, XAB$C_DIN2
+        KW      BIN2, XAB$C_BN2
+        KW      DBIN2, XAB$C_DBN2
+        KW      INT4, XAB$C_IN4
+        KW      DINT4, XAB$C_DIN4
+        KW      BIN4, XAB$C_BN4
+        KW      DBIN4, XAB$C_DBN4
+        KW      INT8, XAB$C_IN8
+        KW      DINT8, XAB$C_DIN8
+        KW      BIN8, XAB$C_BN8
+        KW      DBIN8, XAB$C_DBN8
+        KW      DECIMAL, XAB$C_PAC
+        KW      DDECIMAL, XAB$C_DPAC
+        KW      COLLATED, XAB$C_COL
+        KW      DCOLLATED, XAB$C_DCOL
+        .BYTE   0
+
+M_UNPRIKW:
+        .ASCIC  "%FDL-W-UNPRIKW, unrecognized primary keyword in statement "
+M_ABPRIKW:
+        .ASCIC  "%FDL-W-ABPRIKW, ambiguous primary keyword in statement "
+M_UNSECKW:
+        .ASCIC  "%FDL-W-UNSECKW, unrecognized secondary keyword in statement "
+M_UNQUAKW:
+        .ASCIC  "%FDL-W-UNQUAKW, unrecognized qualifier keyword in statement "
+M_ABKW: .ASCIC  "%FDL-W-ABKW, ambiguous keyword in statement "
+M_SYNTAX:
+        .ASCIC  "%FDL-W-SYNTAX, syntax error in statement "
+M_OPENFDL:
+        .ASCIC  "%FDL-F-OPENFDL, error opening "
+
+        .PSECT  FDL_CODE, EXE, LONG
+
+; FDL$PARSE fdl_spec, fab_pointer, rab_pointer: reads the FDL file
+; fdl_spec names, a string's descriptor, .FDL its type by default, into
+; FDL$AB_FAB, FDL$AB_RAB and their XABs, whose addresses go in the
+; longwords at fab_pointer and rab_pointer. FDL$T_NAME is FILE's NAME,
+; FDL$GB_NAMELEN bytes. R0 = SS$_NORMAL; FDL$_WARNING once it has
+; reported a statement it didn't take; or FDL$_OPENFDL, reported, when it
+; can't open the file.
+        .ENTRY  FDL$PARSE, ^M<R2, R3, R4, R5, R6, R7, R8, R9, R10, R11>
+        BSBW    INIT
+        MOVL    4(AP), R0
+        MOVL    4(R0), INFAB+FAB$L_FNA
+        MOVB    (R0), INFAB+FAB$B_FNS
+        $OPEN   FAB=INFAB
+        BLBC    R0, 80$
+        $CONNECT RAB=INRAB
+        BLBC    R0, 70$
+10$:    $GET    RAB=INRAB               ; each statement
+        BLBC    R0, 20$
+        INCL    STMT
+        MOVAB   TEXT, PTR
+        MOVZWL  INRAB+RAB$W_RSZ, R0
+        ADDL3   #TEXT, R0, END
+        BSBW    STATEMENT
+        BRB     10$
+20$:    $CLOSE  FAB=INFAB
+        BSBW    FINISH
+        MOVL    #FDL$AB_FAB, @8(AP)
+        MOVL    #FDL$AB_RAB, @12(AP)
+        MOVL    #SS$_NORMAL, R0
+        BLBC    WARNED, 90$
+        MOVL    #FDL$_WARNING, R0
+90$:    RET
+70$:    PUSHL   R0
+        $CLOSE  FAB=INFAB
+        MOVL    (SP)+, R0
+80$:    PUSHL   R0                      ; %FDL-F-OPENFDL, error opening it
+        MOVAB   M_OPENFDL, R1
+        BSBW    LIN$TEXT
+        MOVL    INFAB+FAB$L_FNA, R1
+        MOVZBL  INFAB+FAB$B_FNS, R2
+        BSBW    LIN$STR
+        BSBW    LIN$PUT
+        MOVL    (SP)+, R0
+        BSBW    LIN$STATUS
+        MOVL    #FDL$_OPENFDL!INHIB, R0
+        RET
+
+; INIT: makes the FAB, RAB and XABs as an empty FDL file has them: a
+; sequential file of variable records with carriage return control, no
+; areas, no keys. Uses R0-R5.
+INIT:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5>
+        MOVC5   #0, (SP), #0, #FAB$C_BLN, FDL$AB_FAB
+        MOVB    #FAB$C_BID, FDL$AB_FAB+FAB$B_BID
+        MOVB    #FAB$C_BLN, FDL$AB_FAB+FAB$B_BLN
+        MOVB    #FAB$C_VAR, FDL$AB_FAB+FAB$B_RFM
+        MOVB    #FAB$M_CR, FDL$AB_FAB+FAB$B_RAT
+        MOVC5   #0, (SP), #0, #MAXKEYS*XAB$C_KEYLEN, KEYS
+        MOVC5   #0, (SP), #0, #MAXAREAS*XAB$C_ALLLEN, AREAS
+        MOVC5   #0, (SP), #0, #MAXKEYS*3, DFILL
+        MOVC5   #0, (SP), #0, #MAXKEYS*32, KNAMES
+        CLRL    R0
+10$:    MULL3   #XAB$C_KEYLEN, R0, R1
+        MOVAB   KEYS(R1), R1
+        MOVB    #XAB$C_KEY, XAB$B_COD(R1)
+        MOVB    #XAB$C_KEYLEN, XAB$B_BLN(R1)
+        MOVB    R0, XAB$B_REF(R1)
+        MOVB    #XAB$C_PRG3, XAB$B_PROLOG(R1)
+        AOBLSS  #MAXKEYS, R0, 10$
+        CLRL    R0
+20$:    MULL3   #XAB$C_ALLLEN, R0, R1
+        MOVAB   AREAS(R1), R1
+        MOVB    #XAB$C_ALL, XAB$B_COD(R1)
+        MOVB    #XAB$C_ALLLEN, XAB$B_BLN(R1)
+        MOVB    R0, XAB$B_AID(R1)
+        AOBLSS  #MAXAREAS, R0, 20$
+        CLRQ    NKEYS                   ; and NAREAS
+        CLRB    FDL$GB_NAMELEN
+        CLRQ    PRI                     ; and NUM
+        CLRQ    STMT                    ; and WARNED
+        RSB
+
+; FINISH: chains the XABs, the areas' then the keys', to the FAB, each key
+; with its segments counted and its fills in bytes of its buckets. Uses
+; R0-R5.
+FINISH:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5>
+        MOVAB   FDL$AB_FAB+FAB$L_XAB, R3        ; R3 = the last link
+        CLRL    R0
+10$:    CMPL    R0, NAREAS
+        BGEQU   20$
+        MULL3   #XAB$C_ALLLEN, R0, R1
+        MOVAB   AREAS(R1), R1
+        MOVL    R1, (R3)
+        MOVAB   XAB$L_NXT(R1), R3
+        INCL    R0
+        BRB     10$
+20$:    CLRL    R0
+30$:    CMPL    R0, NKEYS
+        BGEQU   80$
+        MULL3   #XAB$C_KEYLEN, R0, R1
+        MOVAB   KEYS(R1), R1
+        MOVL    R1, (R3)
+        MOVAB   XAB$L_NXT(R1), R3
+        MOVL    #8, R2                  ; its segments: up to the last sized
+35$:    TSTB    XAB$B_SIZ-1(R1)[R2]
+        BNEQ    37$
+        SOBGTR  R2, 35$
+        INCL    R2
+37$:    MOVB    R2, XAB$B_NSG(R1)
+        TSTB    LSET[R0]                ; the level 1 index's area: the
+        BNEQ    38$                     ; index's unless given
+        MOVB    XAB$B_IAN(R1), XAB$B_LAN(R1)
+38$:
+        MOVZBL  XAB$B_DAN(R1), R4       ; fills: percent of a bucket
+        MOVZBL  DFILL[R0], R5
+        BSBW    FILL
+        MOVW    R5, XAB$W_DFL(R1)
+        MOVZBL  XAB$B_IAN(R1), R4
+        MOVZBL  IFILL[R0], R5
+        BSBW    FILL
+        MOVW    R5, XAB$W_IFL(R1)
+        INCL    R0
+        BRB     30$
+80$:    CLRL    (R3)
+        RSB
+
+; FILL: R4 = an area, R5 = a fill, percent, or 0. R5 = its bytes of the
+; area's buckets, or 0 for full ones. Keeps every other register.
+FILL:
+        .JSB_ENTRY  OUTPUT=<R5>
+        PUSHR   #^M<R0, R1>
+        TSTL    R5
+        BEQL    90$
+        MOVZBL  FDL$AB_FAB+FAB$B_BKS, R0        ; the area's bucket size,
+        CMPL    R4, NAREAS                      ; or the file's
+        BGEQU   10$
+        MULL3   #XAB$C_ALLLEN, R4, R1
+        MOVZBL  AREAS+XAB$B_BKZ(R1), R0
+10$:    TSTL    R0
+        BNEQ    20$
+        MOVL    #2, R0
+20$:    MULL2   #512, R0
+        MULL2   R0, R5
+        DIVL2   #100, R5
+90$:    POPR    #^M<R0, R1>
+        RSB
+
+; STATEMENT: PTR to END = a statement. Takes it: a primary, which the
+; secondaries after it are of, or a secondary. Uses R0-R11.
+STATEMENT:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5, R6, R7, R8, R9, R10, R11>
+        BSBW    UPCASE
+        BSBW    WORD
+        TSTL    TOKL
+        BNEQ    5$
+        RSB                             ; nothing, or a comment
+5$:     CMPL    PRI, #P_OTHER           ; a primary? first after one
+        BEQL    10$                     ; whose secondaries are anything,
+        TSTL    PRI                     ; or before any
+        BEQL    10$
+        BSBW    SECONDARY               ; else after its secondaries
+        BLBS    R0, 90$
+10$:    MOVAB   PRIMARIES, R3
+        BSBW    LOOKUP
+        TSTL    R0
+        BGTR    20$
+        CMPL    PRI, #P_OTHER           ; anything goes
+        BEQL    90$
+        MOVAB   M_UNPRIKW, R1
+        TSTL    PRI
+        BEQL    15$
+        MOVAB   M_UNSECKW, R1
+15$:    TSTL    R0
+        BEQL    17$
+        MOVAB   M_ABPRIKW, R1
+17$:    BSBW    WARN
+        RSB
+20$:    MOVZBL  (R1), R0                ; its code
+        MOVL    R0, PRI
+        CLRL    NUM
+        CMPL    R0, #P_AREA             ; AREA n, KEY n
+        BEQL    30$
+        CMPL    R0, #P_KEY
+        BNEQ    90$
+30$:    BSBW    WORD
+        BSBW    NUMBER
+        BLBC    R0, 80$
+        MOVL    R1, NUM
+        MOVL    #MAXAREAS, R0
+        MOVAB   NAREAS, R2
+        CMPL    PRI, #P_AREA
+        BEQL    40$
+        MOVL    #MAXKEYS, R0
+        MOVAB   NKEYS, R2
+40$:    CMPL    R1, R0
+        BGEQU   80$
+        INCL    R1                      ; defined up to it
+        CMPL    R1, (R2)
+        BLEQU   90$
+        MOVL    R1, (R2)
+        RSB
+80$:    MOVL    #P_OTHER, PRI           ; not a key or area we can have:
+        MOVAB   M_SYNTAX, R1            ; what follows is left alone
+        BSBW    WARN
+90$:    RSB
+
+; SECONDARY: TOKA, TOKL = a word of a statement in PRI. If it is one of
+; PRI's secondaries, takes it and its value: R0 = 1, the value reported
+; if it isn't one. Else R0 = 0. Uses R0-R11.
+SECONDARY:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5, R6, R7, R8, R9, R10, R11>
+        MOVL    PRI, R0
+        MOVAB   FILESEC, R3
+        CMPL    R0, #P_FILE
+        BEQL    10$
+        MOVAB   RECSEC, R3
+        CMPL    R0, #P_RECORD
+        BEQL    10$
+        MOVAB   AREASEC, R3
+        CMPL    R0, #P_AREA
+        BEQL    10$
+        MOVAB   KEYSEC, R3
+10$:    CLRL    SEG                     ; SEGn_x: n, and the table's SEG0_x
+        CMPL    TOKL, #5
+        BLSSU   15$
+        MOVL    TOKA, R1
+        CMPB    (R1), #^A/S/
+        BNEQ    15$
+        CMPB    1(R1), #^A/E/
+        BNEQ    15$
+        CMPB    2(R1), #^A/G/
+        BNEQ    15$
+        CMPB    4(R1), #^A/_/
+        BNEQ    15$
+        SUBB3   #^A/0/, 3(R1), R0
+        CMPB    R0, #7
+        BGTRU   15$
+        MOVZBL  R0, SEG
+        MOVB    #^A/0/, 3(R1)
+15$:    BSBW    LOOKUP
+        TSTL    R0
+        BGTR    20$
+        CLRL    R0                      ; not one of them
+        RSB
+20$:    MOVZBL  (R1)+, R6               ; R6 = what, R7 = its argument
+        MOVZBL  (R1), R7
+        CASEB   R6, #0, #4
+30$:    .WORD   40$-30$                 ; H_SKIP
+        .WORD   50$-30$                 ; H_NUM
+        .WORD   60$-30$                 ; H_YES
+        .WORD   70$-30$                 ; H_KW
+        .WORD   75$-30$                 ; H_STR
+40$:    MOVL    #1, R0                  ; anything
+        RSB
+50$:    BSBW    WORD
+        BSBW    NUMBER
+        BLBC    R0, 85$
+        MOVL    R7, R0
+        BSBW    SETNUM
+        BRB     40$
+60$:    BSBW    WORD
+        MOVAB   YESNO, R3
+        BSBW    LOOKUP
+        TSTL    R0
+        BLEQ    80$
+        MOVZBL  (R1), R1
+        MOVL    R7, R0
+        BSBW    SETYES
+        BRB     40$
+70$:    BSBW    WORD
+        MOVAB   ORGS, R3
+        CMPL    R7, #F_ORG
+        BEQL    72$
+        MOVAB   RFMS, R3
+        CMPL    R7, #F_RFM
+        BEQL    72$
+        MOVAB   RATS, R3
+        CMPL    R7, #F_RAT
+        BEQL    72$
+        MOVAB   DTPS, R3
+72$:    BSBW    LOOKUP
+        TSTL    R0
+        BLEQ    80$
+        MOVZBL  (R1), R1
+        MOVL    R7, R0
+        BSBW    SETNUM
+        BRB     40$
+75$:    BSBW    STRING
+        MOVL    R7, R0
+        BSBW    SETSTR
+        BRB     40$
+80$:    MOVAB   M_UNQUAKW, R1           ; a keyword it can't have
+        TSTL    R0
+        BEQL    82$
+        MOVAB   M_ABKW, R1
+82$:    BSBW    WARN
+        BRB     40$
+85$:    MOVAB   M_SYNTAX, R1
+        BRB     82$
+
+; SETNUM: R0 = a field, F_x, R1 = a value. Sets it in the FAB, or in
+; area or key NUM's XAB. Uses R0-R3.
+SETNUM:
+        .JSB_ENTRY  SCRATCH=<R2, R3>
+        MOVAB   FDL$AB_FAB, R2
+        MULL3   #XAB$C_KEYLEN, NUM, R3
+        MOVAB   KEYS(R3), R3            ; the key's XAB
+        CMPL    PRI, #P_AREA
+        BNEQ    5$
+        MULL3   #XAB$C_ALLLEN, NUM, R3
+        MOVAB   AREAS(R3), R3           ; or the area's
+5$:     CASEB   R0, #F_ALQ, #F_PROLOG-F_ALQ
+10$:    .WORD   20$-10$                 ; F_ALQ
+        .WORD   21$-10$                 ; F_DEQ
+        .WORD   22$-10$                 ; F_BKS
+        .WORD   23$-10$                 ; F_MRN
+        .WORD   24$-10$                 ; F_MRS
+        .WORD   25$-10$                 ; F_FSZ
+        .WORD   26$-10$                 ; F_ORG
+        .WORD   27$-10$                 ; F_RFM
+        .WORD   28$-10$                 ; F_RAT
+        .WORD   29$-10$                 ; F_POS
+        .WORD   30$-10$                 ; F_SIZ
+        .WORD   31$-10$                 ; F_DAN
+        .WORD   32$-10$                 ; F_IAN
+        .WORD   33$-10$                 ; F_LAN
+        .WORD   34$-10$                 ; F_DFL
+        .WORD   35$-10$                 ; F_IFL
+        .WORD   36$-10$                 ; F_NUL
+        .WORD   37$-10$                 ; F_PROLOG
+        CMPL    R0, #F_DTP
+        BNEQ    90$
+        MOVB    R1, XAB$B_DTP(R3)
+        RSB
+20$:    CMPL    PRI, #P_AREA
+        BEQL    40$
+        MOVL    R1, FAB$L_ALQ(R2)
+        RSB
+40$:    MOVL    R1, XAB$L_ALQ(R3)
+        RSB
+21$:    CMPL    PRI, #P_AREA
+        BEQL    41$
+        MOVW    R1, FAB$W_DEQ(R2)
+        RSB
+41$:    MOVW    R1, XAB$W_DEQ(R3)
+        RSB
+22$:    CMPL    PRI, #P_AREA
+        BEQL    42$
+        MOVB    R1, FAB$B_BKS(R2)
+        RSB
+42$:    MOVB    R1, XAB$B_BKZ(R3)
+        RSB
+23$:    MOVL    R1, FAB$L_MRN(R2)
+        RSB
+24$:    MOVW    R1, FAB$W_MRS(R2)
+        RSB
+25$:    MOVB    R1, FAB$B_FSZ(R2)
+        RSB
+26$:    MOVB    R1, FAB$B_ORG(R2)
+        RSB
+27$:    MOVB    R1, FAB$B_RFM(R2)
+        RSB
+28$:    BICB2   #FAB$M_CR!FAB$M_FTN!FAB$M_PRN, FAB$B_RAT(R2)
+        BISB2   R1, FAB$B_RAT(R2)
+        RSB
+29$:    MOVL    SEG, R0
+        MOVW    R1, XAB$W_POS(R3)[R0]
+        RSB
+30$:    MOVL    SEG, R0
+        MOVB    R1, XAB$B_SIZ(R3)[R0]
+        RSB
+31$:    MOVB    R1, XAB$B_DAN(R3)
+        RSB
+32$:    MOVB    R1, XAB$B_IAN(R3)
+        RSB
+33$:    MOVB    R1, XAB$B_LAN(R3)
+        MOVL    NUM, R0
+        MOVB    #1, LSET[R0]
+        RSB
+34$:    MOVL    NUM, R0
+        MOVB    R1, DFILL[R0]
+        RSB
+35$:    MOVL    NUM, R0
+        MOVB    R1, IFILL[R0]
+        RSB
+36$:    MOVB    R1, XAB$B_NUL(R3)
+        RSB
+37$:    MOVB    R1, XAB$B_PROLOG(R3)
+90$:    RSB
+
+; SETYES: R0 = a flag, Y_x, R1 = 1 for yes, 0 for no. Sets it in the
+; FAB, or in area or key NUM's XAB. Uses R0-R3.
+SETYES:
+        .JSB_ENTRY  SCRATCH=<R2, R3>
+        MULL3   #XAB$C_KEYLEN, NUM, R3
+        MOVAB   KEYS+XAB$B_FLG(R3), R3  ; the bits it sets, R2, and where
+        CASEB   R0, #Y_CTG, #Y_ICMPR-Y_CTG
+10$:    .WORD   20$-10$                 ; Y_CTG
+        .WORD   25$-10$                 ; Y_CBT
+        .WORD   30$-10$                 ; Y_SPAN
+        .WORD   40$-10$                 ; Y_CHG
+        .WORD   41$-10$                 ; Y_DUP
+        .WORD   42$-10$                 ; Y_NULKEY
+        .WORD   45$-10$                 ; Y_KCMPR
+        .WORD   46$-10$                 ; Y_RCMPR
+        .WORD   47$-10$                 ; Y_ICMPR
+        RSB
+20$:    MOVL    #FAB$M_CTG@-16, R2      ; FOP's third byte
+        MOVL    #XAB$M_CTG, R0
+        BRB     27$
+25$:    MOVL    #FAB$M_CBT@-16, R2
+        MOVL    #XAB$M_CBT, R0
+27$:    CMPL    PRI, #P_AREA            ; the area's, or the file's
+        BNEQ    28$
+        MULL3   #XAB$C_ALLLEN, NUM, R3
+        MOVAB   AREAS+XAB$B_AOP(R3), R3
+        MOVL    R0, R2
+        BRB     80$
+28$:    MOVAB   FDL$AB_FAB+FAB$L_FOP+2, R3
+        BRB     80$
+30$:    MOVAB   FDL$AB_FAB+FAB$B_RAT, R3        ; BLK is no span
+        MOVL    #FAB$M_BLK, R2
+        XORL2   #1, R1
+        BRB     80$
+40$:    MOVL    #XAB$M_CHG, R2
+        BRB     80$
+41$:    MOVL    #XAB$M_DUP, R2
+        BRB     80$
+42$:    MOVL    #XAB$M_NUL, R2
+        BRB     80$
+45$:    MOVL    #XAB$M_KEY_NCMPR, R2    ; NCMPR is no compression
+        BRB     48$
+46$:    MOVL    #XAB$M_DAT_NCMPR, R2
+        BRB     48$
+47$:    MOVL    #XAB$M_IDX_NCMPR, R2
+48$:    XORL2   #1, R1
+80$:    BICB2   R2, (R3)                ; yes sets them, no clears them
+        BLBC    R1, 90$
+        BISB2   R2, (R3)
+90$:    RSB
+
+; SETSTR: R0 = a field, F_NAME or F_KNM, R1, R2 = a string. Sets it: the
+; file's name, or key NUM's, 32 bytes, padded with spaces. Uses R0-R5.
+SETSTR:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5>
+        CMPL    R0, #F_NAME
+        BNEQ    10$
+        MOVB    R2, FDL$GB_NAMELEN
+        MOVC3   R2, (R1), FDL$T_NAME
+        RSB
+10$:    MULL3   #32, NUM, R3
+        MOVAB   KNAMES(R3), R3
+        MULL3   #XAB$C_KEYLEN, NUM, R4
+        MOVL    R3, KEYS+XAB$L_KNM(R4)
+        MOVC5   R2, (R1), #^A/ /, #32, (R3)
+        RSB
+
+; WARN: R1 = an .ASCIC message that ends in "statement ". Reports it with
+; the statement's number, then the word read last, as VMS's FDL$PARSE
+; does: %FDL-W-x, ... in statement n, and on a line of its own \WORD\.
+; Uses R0-R2.
+WARN:
+        .JSB_ENTRY  SCRATCH=<R2>
+        BSBW    LIN$TEXT
+        MOVL    STMT, R1
+        CLRL    R2
+        BSBW    LIN$DEC
+        MOVL    #^A/ /, R1
+        BSBW    LIN$CHAR
+        BSBW    LIN$PUT
+        MOVL    #^A/ /, R1
+        BSBW    LIN$CHAR
+        MOVL    #^A/\/, R1
+        BSBW    LIN$CHAR
+        MOVL    TOKA, R1
+        MOVL    TOKL, R2
+        BSBW    LIN$STR
+        MOVL    #^A/\/, R1
+        BSBW    LIN$CHAR
+        BSBW    LIN$PUT
+        MOVL    #1, WARNED
+        RSB
+
+; UPCASE: PTR to END = a statement. Makes its letters capitals but in
+; quotes, and ends it at a ! outside them. Uses R0-R2.
+UPCASE:
+        .JSB_ENTRY  SCRATCH=<R2>
+        MOVL    PTR, R1
+        CLRL    R2                      ; the quote it is in, or 0
+10$:    CMPL    R1, END
+        BGEQU   90$
+        MOVZBL  (R1), R0
+        TSTL    R2
+        BEQL    20$
+        CMPL    R0, R2                  ; in quotes: to the other
+        BNEQ    40$
+        CLRL    R2
+        BRB     40$
+20$:    CMPB    R0, #^A/"/
+        BEQL    25$
+        CMPB    R0, #^A/'/
+        BNEQ    30$
+25$:    MOVL    R0, R2
+        BRB     40$
+30$:    CMPB    R0, #^A/!/
+        BNEQ    35$
+        MOVL    R1, END
+        RSB
+35$:    CMPB    R0, #^A/a/
+        BLSSU   40$
+        CMPB    R0, #^A/z/
+        BGTRU   40$
+        SUBB2   #^A/a/-^A/A/, (R1)
+40$:    INCL    R1
+        BRB     10$
+90$:    RSB
+
+; WORD: reads a word from PTR on, after spaces and tabs: letters, digits,
+; _ and $, or else the one character there. TOKA, TOKL = it, 0 bytes at
+; the end. Uses R0, R1.
+WORD:
+        .JSB_ENTRY
+        BSBW    SPACES
+        MOVL    PTR, R1
+        MOVL    R1, TOKA
+10$:    CMPL    R1, END
+        BGEQU   20$
+        BSBW    WORDCH
+        BLBC    R0, 15$
+        INCL    R1
+        BRB     10$
+15$:    CMPL    R1, TOKA                ; nothing of a word: the character
+        BNEQ    20$
+        INCL    R1
+20$:    MOVL    R1, PTR
+        SUBL3   TOKA, R1, TOKL
+        RSB
+
+; WORDCH: R1 = a character's address. R0 = 1 if it is a letter, a digit, _
+; or $, else 0. Keeps every other register.
+WORDCH:
+        .JSB_ENTRY
+        MOVZBL  (R1), R0
+        CMPB    R0, #^A/_/
+        BEQL    80$
+        CMPB    R0, #^A/$/
+        BEQL    80$
+        CMPB    R0, #^A/0/
+        BLSSU   90$
+        CMPB    R0, #^A/9/
+        BLEQU   80$
+        CMPB    R0, #^A/A/
+        BLSSU   90$
+        CMPB    R0, #^A/Z/
+        BGTRU   90$
+80$:    MOVL    #1, R0
+        RSB
+90$:    CLRL    R0
+        RSB
+
+; SPACES: moves PTR past spaces and tabs. Uses R0.
+SPACES:
+        .JSB_ENTRY
+10$:    CMPL    PTR, END
+        BGEQU   90$
+        MOVZBL  @PTR, R0
+        CMPB    R0, #^A/ /
+        BEQL    20$
+        CMPB    R0, #9
+        BNEQ    90$
+20$:    INCL    PTR
+        BRB     10$
+90$:    RSB
+
+; STRING: reads a value as a string from PTR on: what is in quotes, or the
+; rest of the statement without the spaces after it. R1, R2 = it. Uses
+; R0-R2.
+STRING:
+        .JSB_ENTRY  SCRATCH=<R2>
+        BSBW    SPACES
+        MOVL    PTR, R1
+        MOVL    END, R2
+        CMPL    R1, R2
+        BGEQU   80$
+        MOVZBL  (R1), R0
+        CMPB    R0, #^A/"/
+        BEQL    10$
+        CMPB    R0, #^A/'/
+        BNEQ    40$
+10$:    INCL    R1                      ; in quotes: to the other
+        MOVL    R1, R2
+20$:    CMPL    R2, END
+        BGEQU   30$
+        CMPB    (R2), R0
+        BEQL    30$
+        INCL    R2
+        BRB     20$
+30$:    MOVL    R2, PTR
+        SUBL2   R1, R2
+        RSB
+40$:    CMPB    -1(R2), #^A/ /          ; the rest
+        BEQL    45$
+        CMPB    -1(R2), #9
+        BNEQ    80$
+45$:    DECL    R2
+        CMPL    R2, R1
+        BGTRU   40$
+80$:    MOVL    R2, PTR
+        SUBL2   R1, R2
+        RSB
+
+; NUMBER: TOKA, TOKL = a word. R1 = its value as a decimal number, R0 = 1;
+; or R0 = 0 if it isn't one. Uses R0-R3.
+NUMBER:
+        .JSB_ENTRY  SCRATCH=<R2, R3>
+        CLRL    R0
+        CLRL    R1
+        MOVL    TOKA, R2
+        MOVL    TOKL, R3
+        BEQL    90$
+10$:    MOVZBL  (R2)+, R0
+        SUBL2   #^A/0/, R0
+        CMPL    R0, #9
+        BGTRU   80$
+        MULL2   #10, R1
+        ADDL2   R0, R1
+        SOBGTR  R3, 10$
+        MOVL    #1, R0
+        RSB
+80$:    CLRL    R0
+90$:    RSB
+
+; LOOKUP: TOKA, TOKL = a word, R3 = a keyword table. Finds the keyword
+; it is, or the one it is the start of if no other starts with it: R0 =
+; 1, R1 = the entry's code and argument bytes. Else R0 = 0, or -1 if it
+; starts several. Uses R0-R5.
+LOOKUP:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5>
+        CLRL    R5                      ; R5 = the one it starts, if any
+        CLRL    R4                      ; R4 = how many
+        TSTL    TOKL
+        BEQL    80$
+10$:    MOVZBL  (R3), R0                ; each keyword
+        BEQL    80$
+        CMPL    TOKL, R0
+        BGTRU   30$
+        PUSHR   #^M<R0, R3>
+        CMPC3   TOKL, @TOKA, 1(R3)
+        MOVL    R0, R2                  ; 0 if the same
+        POPR    #^M<R0, R3>
+        TSTL    R2
+        BNEQ    30$
+        ADDL3   #1, R3, R1              ; it starts it: its code
+        ADDL2   R0, R1
+        CMPL    TOKL, R0                ; all of it?
+        BNEQ    20$
+        MOVL    #1, R0
+        RSB
+20$:    MOVL    R1, R5
+        INCL    R4
+30$:    ADDL2   R0, R3
+        ADDL2   #3, R3
+        BRB     10$
+80$:    MOVL    R5, R1
+        MOVL    R4, R0
+        CMPL    R0, #1
+        BLEQ    90$
+        MNEGL   #1, R0
+90$:    RSB
+
+        .END

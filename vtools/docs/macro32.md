@@ -24,7 +24,8 @@ vlink hello.obj consolio.obj conputchar.obj && vrun hello.exe
 Justfile.
 
 Status: integer instructions, the calling standard's `CALLS`, `CALLG` and
-`RET`, `JSB` and `RSB`, `CASE`, bit fields, `MOVC3` and `MOVC5`, `INSQUE` and
+`RET`, `JSB` and `RSB`, `CASE`, bit fields, `MOVC3`, `MOVC5`, `CMPC3`, `CMPC5`,
+`LOCC` and `SKPC`, `INSQUE` and
 `REMQUE`, the privileged `MTPR`, `MFPR`, `HALT`, `CHMx`, `PROBEx` and `REI`, Alpha's
 `CALL_PAL`, and AMACRO's 64-bit pieces: the `EVAX_` built-ins, `QUAD_ARGS`,
 quadword mode and the 64-bit call macros. Not yet: floating point, packed decimal, the interlocked queue
@@ -292,7 +293,7 @@ What doesn't carry over:
 | Arithmetic and logic | `ADDx2/3`, `SUBx2/3`, `MULx2/3`, `DIVx2/3`, `BISx2/3`, `BICx2/3`, `XORx2/3`, `INCx`, `DECx`, `CMPx`, `TSTx`, `BITx`, `ASHL`, `ASHQ`, `ROTL`, `EMUL`, `EDIV` |
 | Branch | `BRB`, `BRW`, `Bcc` (all 16), `BLBS`, `BLBC`, `BBS`, `BBC`, `BBSS`, `BBSC`, `BBCS`, `BBCC`, `JMP`, `CASEB/W/L`, `ACBB/W/L`, `AOBLSS`, `AOBLEQ`, `SOBGTR`, `SOBGEQ` |
 | Call | `CALLS`, `CALLG`, `RET`, `JSB`, `BSBB`, `BSBW`, `RSB` |
-| Field and string | `EXTV`, `EXTZV`, `INSV`, `MOVC3`, `MOVC5` |
+| Field and string | `EXTV`, `EXTZV`, `INSV`, `MOVC3`, `MOVC5`, `CMPC3`, `CMPC5`, `LOCC`, `SKPC` |
 | Queue | `INSQUE`, `REMQUE` |
 | Privileged | `MTPR`, `MFPR`, `HALT`, `CHMK`, `CHME`, `CHMS`, `CHMU`, `PROBER`, `PROBEW`, `REI`, `CALL_PAL`: PAL calls, see *Privileged instructions* |
 | 64-bit | AMACRO's `EVAX_` built-ins, `EVAX_CALLG_64`: see *64-bit* |
@@ -320,7 +321,7 @@ Limits:
 - `ASHL` and `ASHQ` with a count in a register wrap counts of 32 (64) and
   more instead of clearing the result.
 - `MOVC5` copies forwards only; `MOVC3` handles any overlap. Both copy a byte
-  at a time.
+  at a time, and `CMPC3`, `CMPC5`, `LOCC` and `SKPC` look at one.
 - `PUSHR` and `POPR` take a constant mask and can't save SP or PC.
 - `INSQUE` and `REMQUE` aren't interlocked, and the queue's links are
   longwords, so it must lie below 4 GB. They set Z as the VAX does: the

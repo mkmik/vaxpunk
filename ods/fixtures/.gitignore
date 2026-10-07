@@ -1,4 +1,5 @@
-# Images are downloaded by fetch.sh, never committed.
+# Images are downloaded by fetch.sh, never committed; rms/ is made on
+# OpenVMS by rms/make/make.sh, and committed.
 *
 !.gitignore
 !fetch.sh
@@ -6,3 +7,6 @@
 !*.img.xz
 !expected/
 !expected/**
+!rms/
+!rms/**
+rms/make/make.log*

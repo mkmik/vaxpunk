@@ -1,0 +1,741 @@
+        .TITLE  CONVERT Copies records from files into a file of any organization
+        .IDENT  /V0.1/
+;
+; DCL's CONVERT input[,...] output runs this, as VMS's CONVERT: it makes
+; the output file as /FDL's file says (FDL$PARSE, rms/fdl.mar), or with
+; the first input's organization, record attributes, keys and areas, and
+; copies every input's records into it, along /KEY's key of an indexed
+; one. An indexed output gets them in order of its primary key, as VMS's
+; sort gives them: they go first into a work file, SYS$SCRATCH:CONVWORK,
+; indexed by that key, then from it into the output; /NOSORT puts them in
+; as they come. A record the output can't take is an exception: CONVERT
+; says why, %CONVERT-I-DUP for a key the output has already and doesn't
+; allow twice, %CONVERT-I-RTS and -RTL for a size a FIX or limited format
+; can't have, unless /PAD pads it, with 0 or /PAD's character, or
+; /TRUNCATE cuts it; and /EXCEPTIONS_FILE writes it there. /APPEND adds
+; to a sequential output, /MERGE to an indexed one. /STATISTICS reports
+; the records as VMS's does. Returns SS$_NORMAL, or %CONV-F-OPENIN, -OPENOUT
+; or %CONVERT-F-CREA_ERR with RMS's reason, or the error a $PUT got.
+; ponytail: records up to RECSIZE bytes; /STATISTICS's I/O counts, page
+; faults and CPU time are 0, which the executive doesn't count; its
+; elapsed time wraps at 429 seconds.
+;
+        .LIBRARY "starlet.mlb"
+        .LIBRARY "sysexe.mlb"
+        $SSDEF
+        $RMSDEF
+        $FABDEF
+        $RABDEF
+        $NAMDEF
+        $XABDEF
+        $XABKEYDEF
+        $XABALLDEF
+        $XABSUMDEF
+
+        .EXTERNAL FDL$PARSE
+        .EXTERNAL LIN$TEXT, LIN$STR, LIN$CHAR, LIN$DEC, LIN$PUT, LIN$STATUS
+
+RECSIZE = 8192
+MAXKEYS = 16
+MAXAREAS = 16
+INHIB = ^X10000000                      ; STS$M_INHIB_MSG: reported already
+CONV$_OPENIN = ^X00B2109C               ; error opening !AS as input
+CONV$_OPENOUT = ^X00B210A4              ; error opening !AS as output
+CONVERT$_CREA_ERR = ^X00B28074          ; error creating work file !AS
+FDL$_WARNING = ^X00B48058
+
+        .PSECT  DATA, NOEXE, WRT, LONG
+SPEC:   .LONG   255                     ; a parameter's or qualifier's value
+        .ADDRESS SPECBUF
+SPECBUF:
+        .BLKB   255
+OUTSPEC:
+        .LONG   255                     ; OUTPUT
+        .ADDRESS OUTBUF
+OUTBUF: .BLKB   255
+EXPBUF: .BLKB   255                     ; a file's expanded name
+INFAB:  $FAB    FAC=GET, NAM=INNAM
+INNAM:  $NAM    ESA=EXPBUF, ESS=255
+INRAB:  $RAB    FAB=INFAB, UBF=REC, USZ=RECSIZE
+OUTFAB: $FAB    FAC=PUT, NAM=OUTNAM
+OUTNAM: $NAM    ESA=EXPBUF, ESS=255
+OUTRAB: $RAB    FAB=OUTFAB
+WFAB:   $FAB    FNA=WNAME, FNS=8, DNA=WDEF, DNS=16, ORG=IDX, FAC=<PUT,GET>, XAB=WKEY
+WRAB:   $RAB    FAB=WFAB, UBF=REC, USZ=RECSIZE, RAC=KEY
+WKEY:   $XABKEY REF=0, FLG=<DUP>
+WNAME:  .ASCII  "CONVWORK"
+WDEF:   .ASCII  "SYS$SCRATCH:.TMP"
+XFAB:   $FAB    FAC=PUT, RAT=CR         ; the exceptions file
+XRAB:   $RAB    FAB=XFAB
+XDEF:   .ASCII  "SYS$OUTPUT"
+SUM:    $XABSUM                         ; an indexed input's keys and areas
+KEYS:   .BLKB   MAXKEYS*XAB$C_KEYLEN    ; their XABs
+AREAS:  .BLKB   MAXAREAS*XAB$C_ALLLEN
+KNAMES: .BLKB   MAXKEYS*32
+REC:    .BLKB   RECSIZE                 ; a record
+PADDED: .BLKB   RECSIZE                 ; one padded
+        .ALIGN  LONG
+OFAB:   .LONG   0                       ; the output's FAB
+TARGET: .LONG   0                       ; the RAB records go to first
+FLAGS:  .LONG   0                       ; F_x
+PADCH:  .LONG   0                       ; /PAD's character
+NFILES: .LONG   0                       ; the counts /STATISTICS reports
+NRECS:  .LONG   0
+NEXC:   .LONG   0
+T0:     .QUAD   0                       ; when CONVERT started
+T1:     .QUAD   0
+F_STATS = 0                             ; /STATISTICS
+F_PAD = 1                               ; /PAD
+F_TRUNC = 2                             ; /TRUNCATE
+F_SORT = 3                              ; records through the work file
+F_EXC = 4                               ; an exceptions file is open
+F_FDL = 5                               ; /FDL made the output
+
+M_OPENIN:
+        .ASCIC  "%CONV-F-OPENIN, error opening "
+M_ASIN: .ASCIC  " as input"
+M_OPENOUT:
+        .ASCIC  "%CONV-F-OPENOUT, error opening "
+M_ASOUT:
+        .ASCIC  " as output"
+M_CREA: .ASCIC  "%CONVERT-F-CREA_ERR, error creating work file CONVWORK"
+M_DUP:  .ASCIC  "%CONVERT-I-DUP, duplicate key encountered"
+M_RTS:  .ASCIC  "%CONVERT-I-RTS, record too short for fixed record format file"
+M_RTL:  .ASCIC  "%CONVERT-I-RTL, record longer than maximum record length"
+M_WARNING:
+        .ASCIC  "-FDL-W-WARNING, parsed with warnings"
+M_SPACE:
+        .ASCIC  " "
+M_STATS:
+        .ASCIC  " CONVERT Statistics"
+M_FILES:
+        .ASCIC  "Number of Files Processed:"
+M_RECS: .ASCIC  "Total Records Processed:"
+M_EXCS: .ASCIC  "Total Exception Records:"
+M_VALID:
+        .ASCIC  "Total Valid Records:"
+M_ELAPSED:
+        .ASCIC  "Elapsed Time:"
+M_BIO:  .ASCIC  <9>"Buffered I/O Count: "<9>
+M_DIO:  .ASCIC  <9>"Direct I/O Count: "<9>
+M_PF:   .ASCIC  <9>"Page Faults: "<9><9>
+M_CPU:  .ASCIC  <9>"CPU Time:"
+
+        .PSECT  CODE, EXE, LONG
+        .ENTRY  START, ^M<R2, R3, R4, R5, R6, R7, R8, R9, R10, R11>
+        $GETTIM_S TIMADR=T0
+        BSBW    OPTIONS
+        GETVALUE "OUTPUT", OUTSPEC, OUTSPEC
+        MOVL    #255, SPEC
+        GETVALUE "INPUT", SPEC, SPEC
+        BSBW    OPENIN
+        BLBS    R0, 10$
+        RET
+10$:    BSBW    OPENOUT
+        BLBS    R0, 20$
+        $CLOSE  FAB=INFAB
+        MOVL    R6, R0
+        RET
+20$:    BSBW    COPYIN                  ; each input
+        BLBC    R0, 80$
+        INCL    NFILES
+        $CLOSE  FAB=INFAB
+        MOVL    #255, SPEC
+        GETVALUE "INPUT", SPEC, SPEC
+        BLBC    R0, 30$
+        BSBW    OPENIN
+        BLBS    R0, 20$
+        BRB     85$
+30$:    BBC     #F_SORT, FLAGS, 40$     ; then the work file's, in order
+        BSBW    LOAD
+        BLBC    R0, 85$
+40$:    $CLOSE  FAB=@OFAB
+        BBC     #F_EXC, FLAGS, 50$
+        $CLOSE  FAB=XFAB
+50$:    BBC     #F_STATS, FLAGS, 60$
+        BSBW    STATS
+60$:    MOVL    #SS$_NORMAL, R0
+        RET
+80$:    PUSHL   R0                      ; a $PUT's error
+        $CLOSE  FAB=INFAB
+        MOVL    (SP)+, R0
+85$:    PUSHL   R0
+        $CLOSE  FAB=@OFAB
+        BBC     #F_SORT, FLAGS, 87$
+        $CLOSE  FAB=WFAB
+        $ERASE  FAB=WFAB
+87$:    MOVL    (SP)+, R0
+        RET
+
+; OPTIONS: takes the qualifiers that set FLAGS, PADCH and the input's key
+; of reference, and opens /EXCEPTIONS_FILE's file. Uses R0-R5.
+OPTIONS:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5>
+        PRESENT "STATISTICS"
+        BLBC    R0, 10$
+        BBSS    #F_STATS, FLAGS, 10$
+10$:    PRESENT "TRUNCATE"
+        BLBC    R0, 20$
+        BBSS    #F_TRUNC, FLAGS, 20$
+20$:    PRESENT "PAD"
+        BLBC    R0, 30$
+        BBSS    #F_PAD, FLAGS, 25$
+25$:    MOVL    #255, SPEC
+        GETVALUE "PAD", SPEC, SPEC
+        BLBC    R0, 30$
+        BSBW    PADCHAR
+30$:    PRESENT "KEY"
+        BLBC    R0, 40$
+        MOVL    #255, SPEC
+        GETVALUE "KEY", SPEC, SPEC
+        BSBW    DECIMAL
+        MOVB    R1, INRAB+RAB$B_KRF
+40$:    PRESENT "EXCEPTIONS_FILE"
+        BLBC    R0, 90$
+        MOVL    #255, SPEC
+        GETVALUE "EXCEPTIONS_FILE", SPEC, SPEC
+        MOVAB   SPECBUF, XFAB+FAB$L_FNA
+        MOVB    SPEC, XFAB+FAB$B_FNS
+        BLBS    R0, 45$
+        MOVAB   XDEF, XFAB+FAB$L_FNA    ; no file: SYS$OUTPUT
+        MOVB    #10, XFAB+FAB$B_FNS
+45$:    $CREATE FAB=XFAB
+        BLBC    R0, 90$
+        $CONNECT RAB=XRAB
+        BLBC    R0, 90$
+        BBSS    #F_EXC, FLAGS, 90$
+90$:    RSB
+
+; PADCHAR: SPEC = /PAD's value: a character, or %Xnn, %Dnn or %Onn. Sets
+; PADCH. Uses R0-R3.
+PADCHAR:
+        .JSB_ENTRY  SCRATCH=<R2, R3>
+        MOVZBL  SPECBUF, PADCH
+        CMPW    SPEC, #2
+        BLSSU   90$
+        CMPB    SPECBUF, #^A/%/
+        BNEQ    90$
+        MOVZBL  SPECBUF+1, R0
+        MOVL    #16, R2
+        CMPB    R0, #^A/X/
+        BEQL    10$
+        MOVL    #10, R2
+        CMPB    R0, #^A/D/
+        BEQL    10$
+        MOVL    #8, R2
+10$:    CLRL    R1                      ; the digits after
+        MOVL    #2, R3
+20$:    CMPW    R3, SPEC
+        BGEQU   80$
+        MOVZBL  SPECBUF[R3], R0
+        SUBL2   #^A/0/, R0
+        CMPL    R0, #9
+        BLEQU   30$
+        SUBL2   #^A/A/-^A/0/-10, R0
+30$:    MULL2   R2, R1
+        ADDL2   R0, R1
+        INCL    R3
+        BRB     20$
+80$:    MOVL    R1, PADCH
+90$:    RSB
+
+; DECIMAL: SPEC = a number. R1 = its value. Uses R0-R3.
+DECIMAL:
+        .JSB_ENTRY  SCRATCH=<R2, R3>
+        CLRL    R1
+        CLRL    R3
+10$:    CMPW    R3, SPEC
+        BGEQU   90$
+        MOVZBL  SPECBUF[R3], R0
+        SUBL2   #^A/0/, R0
+        MULL2   #10, R1
+        ADDL2   R0, R1
+        INCL    R3
+        BRB     10$
+90$:    RSB
+
+; OPENIN: SPEC = an input's name. Opens it and connects INRAB. R0 = its
+; status: an error is reported, %CONV-F-OPENIN, and R0 is CONV$_OPENIN.
+; Uses R0-R5.
+OPENIN:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5>
+        MOVAB   SPECBUF, INFAB+FAB$L_FNA
+        MOVB    SPEC, INFAB+FAB$B_FNS
+        CLRL    INFAB+FAB$L_XAB
+        $OPEN   FAB=INFAB
+        BLBC    R0, 80$
+        $CONNECT RAB=INRAB
+        BLBS    R0, 90$
+        PUSHL   R0
+        $CLOSE  FAB=INFAB
+        MOVL    (SP)+, R0
+80$:    MOVAB   INFAB, R1
+        MOVAB   M_OPENIN, R2
+        MOVAB   M_ASIN, R3
+        BSBW    OPENERR
+        MOVL    #CONV$_OPENIN!INHIB, R0
+90$:    RSB
+
+; OPENERR: R0 = a status, R1 = the FAB that got it, R2 and R3 = the
+; message's two parts, .ASCIC. Reports it, as VMS's CONVERT does: the
+; message with the file's expanded name, then the status's. Uses R0-R3.
+OPENERR:
+        .JSB_ENTRY  SCRATCH=<R2, R3>
+        PUSHR   #^M<R0, R1, R2, R3>
+        CLRB    INNAM+NAM$B_ESL         ; its expanded name, $PARSE's
+        CLRB    OUTNAM+NAM$B_ESL
+        $PARSE  FAB=(R1)
+        POPR    #^M<R0, R1, R2, R3>
+        PUSHL   R0
+        PUSHL   R1
+        MOVL    R2, R1
+        BSBW    LIN$TEXT
+        MOVL    (SP)+, R1
+        MOVL    FAB$L_NAM(R1), R0
+        MOVZBL  NAM$B_ESL(R0), R2
+        BNEQ    10$
+        MOVZBL  FAB$B_FNS(R1), R2       ; none: as given
+        MOVL    FAB$L_FNA(R1), R1
+        BRB     20$
+10$:    MOVL    NAM$L_ESA(R0), R1
+20$:    BSBW    LIN$STR
+        MOVL    R3, R1
+        BSBW    LIN$TEXT
+        BSBW    LIN$PUT
+        MOVL    (SP)+, R0
+        CMPL    R0, #FDL$_WARNING
+        BEQL    30$
+        BSBW    LIN$STATUS
+        RSB
+30$:    MOVAB   M_WARNING, R1
+        BSBW    LIN$TEXT
+        BSBW    LIN$PUT
+        RSB
+
+; OPENOUT: INFAB = the first input, open. Opens the output, OUTSPEC: for
+; /APPEND or /MERGE the file there, else a new one, as /FDL says or as the
+; input is; and, for a new indexed one but with /NOSORT, the work file.
+; Sets OFAB and TARGET. R0 = 1, or 0 with R6 = the error, reported.
+; Uses R0-R6.
+OPENOUT:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5, R6>
+        MOVAB   OUTFAB, R6
+        PRESENT "APPEND"                ; there already: at its end,
+        BLBC    R0, 5$
+        MOVL    #RAB$M_EOF, OUTRAB+RAB$L_ROP
+        BRB     10$
+5$:     PRESENT "MERGE"                 ; or by key
+        BLBC    R0, 20$
+10$:    BSBW    SETNAME
+        $OPEN   FAB=(R6)
+        BLBC    R0, 80$
+        BRW     60$
+20$:    PRESENT "FDL"                   ; new: as /FDL says
+        BLBC    R0, 40$
+        MOVL    #255, SPEC
+        GETVALUE "FDL", SPEC, SPEC
+        PUSHL   #0                      ; its RAB
+        PUSHL   #0                      ; its FAB
+        PUSHAL  4(SP)
+        PUSHAL  4(SP)
+        PUSHAQ  SPEC
+        CALLS   #3, G^FDL$PARSE
+        MOVL    (SP)+, R6
+        TSTL    (SP)+
+        CMPL    R0, #SS$_NORMAL
+        BEQL    30$
+        BICL3   #INHIB, R0, R1          ; can't read it: reported
+        CMPL    R1, #FDL$_WARNING
+        BEQL    25$
+        MOVL    R0, R6
+        CLRL    R0
+        RSB
+25$:    MOVAB   OUTFAB, R6              ; parsed with warnings
+        BSBW    SETNAME
+        BRB     80$
+30$:    BBSS    #F_FDL, FLAGS, 50$
+        BRB     50$
+40$:    BSBW    LIKEIN                  ; or as the input is
+50$:    BSBW    SETNAME
+        BISB2   #FAB$M_PUT, FAB$B_FAC(R6)
+        $CREATE FAB=(R6)
+        BLBC    R0, 80$
+        PRESENT "SORT"                  ; indexed: sorted first
+        BLBC    R0, 60$
+        CMPB    FAB$B_ORG(R6), #FAB$C_IDX
+        BNEQ    60$
+        BSBW    WORKFILE
+        BLBS    R0, 60$
+        PUSHL   R0
+        $CLOSE  FAB=(R6)
+        MOVL    (SP)+, R0
+        MOVL    #CONVERT$_CREA_ERR!INHIB, R6
+        CLRL    R0
+        RSB
+60$:    MOVL    R6, OFAB
+        MOVL    R6, OUTRAB+RAB$L_FAB
+        CLRB    OUTRAB+RAB$B_RAC
+        CMPB    FAB$B_ORG(R6), #FAB$C_IDX
+        BNEQ    65$
+        MOVB    #RAB$C_KEY, OUTRAB+RAB$B_RAC
+65$:    $CONNECT RAB=OUTRAB
+        BLBC    R0, 80$
+        MOVAB   OUTRAB, R0
+        BBC     #F_SORT, FLAGS, 70$
+        MOVAB   WRAB, R0
+70$:    MOVL    R0, TARGET
+        MOVL    #1, R0
+        RSB
+80$:    MOVL    R6, R1                  ; %CONV-F-OPENOUT
+        MOVAB   M_OPENOUT, R2
+        MOVAB   M_ASOUT, R3
+        BSBW    OPENERR
+        MOVL    #CONV$_OPENOUT!INHIB, R6
+        CLRL    R0
+        RSB
+
+; SETNAME: R6 = the output's FAB. Names it OUTSPEC, with OUTNAM, and the
+; first input's name and type for what OUTSPEC leaves out. Keeps every
+; register.
+SETNAME:
+        .JSB_ENTRY
+        MOVAB   OUTBUF, FAB$L_FNA(R6)
+        MOVB    OUTSPEC, FAB$B_FNS(R6)
+        MOVAB   OUTNAM, FAB$L_NAM(R6)
+        MOVL    INFAB+FAB$L_FNA, FAB$L_DNA(R6)
+        MOVB    INFAB+FAB$B_FNS, FAB$B_DNS(R6)
+        RSB
+
+; LIKEIN: R6 = OUTFAB. Makes it as INFAB's file is: its organization,
+; record attributes, sizes and allocation, and an indexed one's keys and
+; areas, XABs $DISPLAY fills. Uses R0-R5.
+LIKEIN:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5>
+        MOVB    INFAB+FAB$B_ORG, FAB$B_ORG(R6)
+        MOVB    INFAB+FAB$B_RFM, FAB$B_RFM(R6)
+        MOVB    INFAB+FAB$B_RAT, FAB$B_RAT(R6)
+        MOVW    INFAB+FAB$W_MRS, FAB$W_MRS(R6)
+        MOVB    INFAB+FAB$B_FSZ, FAB$B_FSZ(R6)
+        MOVB    INFAB+FAB$B_BKS, FAB$B_BKS(R6)
+        MOVL    INFAB+FAB$L_MRN, FAB$L_MRN(R6)
+        MOVL    INFAB+FAB$L_ALQ, FAB$L_ALQ(R6)
+        MOVW    INFAB+FAB$W_DEQ, FAB$W_DEQ(R6)
+        CMPB    INFAB+FAB$B_ORG, #FAB$C_IDX
+        BNEQ    90$
+        MOVAB   SUM, INFAB+FAB$L_XAB    ; how many
+        $DISPLAY FAB=INFAB
+        BLBC    R0, 90$
+        MOVZBL  SUM+XAB$B_NOA, R4
+        MOVZBL  SUM+XAB$B_NOK, R5
+        CMPL    R4, #MAXAREAS
+        BLEQU   5$
+        MOVL    #MAXAREAS, R4
+5$:     CMPL    R5, #MAXKEYS
+        BLEQU   7$
+        MOVL    #MAXKEYS, R5
+7$:     MOVAB   INFAB+FAB$L_XAB, R3     ; R3 = the last link
+        CLRL    R0
+10$:    CMPL    R0, R4                  ; an XABALL for each area
+        BGEQU   20$
+        MULL3   #XAB$C_ALLLEN, R0, R1
+        MOVAB   AREAS(R1), R1
+        MOVB    #XAB$C_ALL, XAB$B_COD(R1)
+        MOVB    #XAB$C_ALLLEN, XAB$B_BLN(R1)
+        MOVB    R0, XAB$B_AID(R1)
+        MOVL    R1, (R3)
+        MOVAB   XAB$L_NXT(R1), R3
+        INCL    R0
+        BRB     10$
+20$:    CLRL    R0                      ; and an XABKEY for each key
+30$:    CMPL    R0, R5
+        BGEQU   40$
+        MULL3   #XAB$C_KEYLEN, R0, R1
+        MOVAB   KEYS(R1), R1
+        MOVB    #XAB$C_KEY, XAB$B_COD(R1)
+        MOVB    #XAB$C_KEYLEN, XAB$B_BLN(R1)
+        MOVB    R0, XAB$B_REF(R1)
+        MULL3   #32, R0, R2
+        MOVAB   KNAMES(R2), XAB$L_KNM(R1)
+        MOVL    R1, (R3)
+        MOVAB   XAB$L_NXT(R1), R3
+        INCL    R0
+        BRB     30$
+40$:    CLRL    (R3)
+        $DISPLAY FAB=INFAB
+        MOVL    INFAB+FAB$L_XAB, FAB$L_XAB(R6)
+        CLRL    INFAB+FAB$L_XAB
+90$:    RSB
+
+; WORKFILE: R6 = a new indexed output's FAB. Makes the work file, indexed
+; by the output's primary key, with duplicates, and connects WRAB. R0 =
+; its status: an error is reported, %CONVERT-F-CREA_ERR. Uses R0-R5.
+WORKFILE:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5>
+        MOVL    FAB$L_XAB(R6), R1       ; its key 0's XAB
+        MOVL    #16, R2
+10$:    TSTL    R1
+        BEQL    30$
+        CMPB    XAB$B_COD(R1), #XAB$C_KEY
+        BNEQ    20$
+        TSTB    XAB$B_REF(R1)
+        BEQL    40$
+20$:    MOVL    XAB$L_NXT(R1), R1
+        SOBGTR  R2, 10$
+30$:    MOVL    #RMS$_KEY, R0
+        BRB     80$
+40$:    MOVB    XAB$B_DTP(R1), WKEY+XAB$B_DTP   ; its segments, type
+        MOVB    XAB$B_NSG(R1), WKEY+XAB$B_NSG
+        PUSHL   R1
+        MOVC3   #16, XAB$W_POS0(R1), WKEY+XAB$W_POS0
+        MOVL    (SP), R1
+        MOVC3   #8, XAB$B_SIZ0(R1), WKEY+XAB$B_SIZ0
+        MOVL    (SP)+, R1
+        MOVB    FAB$B_RFM(R6), WFAB+FAB$B_RFM
+        MOVW    FAB$W_MRS(R6), WFAB+FAB$W_MRS
+        $CREATE FAB=WFAB
+        BLBC    R0, 80$
+        $CONNECT RAB=WRAB
+        BLBS    R0, 70$
+        PUSHL   R0
+        $CLOSE  FAB=WFAB
+        MOVL    (SP)+, R0
+        BRB     80$
+70$:    BBSS    #F_SORT, FLAGS, 90$
+        RSB
+80$:    PUSHL   R0
+        MOVAB   M_CREA, R1
+        BSBW    LIN$TEXT
+        BSBW    LIN$PUT
+        MOVL    (SP)+, R0
+        BSBW    LIN$STATUS
+90$:    RSB
+
+; COPYIN: copies the open input's records to TARGET, each fitted to the
+; output's format. R0 = RMS$_NORMAL, or a $PUT's error other than a
+; duplicate key, which is an exception. Uses R0-R6.
+COPYIN:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5, R6>
+10$:    $GET    RAB=INRAB
+        BLBS    R0, 20$
+        CMPL    R0, #RMS$_EOF
+        BNEQ    90$
+        MOVL    #RMS$_NORMAL, R0
+        RSB
+20$:    INCL    NRECS
+        MOVL    INRAB+RAB$L_RBF, R1
+        MOVZWL  INRAB+RAB$W_RSZ, R2
+        BSBW    FIT
+        BLBC    R0, 10$
+        MOVL    TARGET, R0
+        BSBW    PUTREC
+        BLBS    R0, 10$
+90$:    RSB
+
+; FIT: R1, R2 = a record. Fits it to the output: a FIX one's size, padded
+; with /PAD, cut with /TRUNCATE, or an exception; a longer one than its
+; maximum, cut or an exception. R0 = 1 with R1, R2 = the record to put,
+; or 0 for an exception, reported. Uses R0-R6.
+FIT:
+        .JSB_ENTRY  OUTPUT=<R2>, SCRATCH=<R3, R4, R5, R6>
+        MOVL    OFAB, R6
+        MOVZWL  FAB$W_MRS(R6), R3
+        BEQL    80$
+        CMPL    R2, R3
+        BEQL    80$
+        BLSSU   20$
+        BBC     #F_TRUNC, FLAGS, 10$    ; longer
+        MOVL    R3, R2
+        BRB     80$
+10$:    MOVAB   M_RTL, R0
+        BRB     70$
+20$:    CMPB    FAB$B_RFM(R6), #FAB$C_FIX       ; shorter
+        BNEQ    80$
+        BBC     #F_PAD, FLAGS, 30$
+        PUSHL   R3
+        MOVC5   R2, (R1), PADCH, R3, PADDED
+        MOVL    (SP)+, R2
+        MOVAB   PADDED, R1
+        BRB     80$
+30$:    MOVAB   M_RTS, R0
+70$:    BSBW    EXCEPTION
+        CLRL    R0
+        RSB
+80$:    MOVL    #1, R0
+        RSB
+
+; PUTREC: R0 = a RAB, R1, R2 = a record. $PUTs it; a duplicate key is an
+; exception. R0 = RMS$_NORMAL, or the $PUT's other error. Uses R0-R3.
+PUTREC:
+        .JSB_ENTRY  SCRATCH=<R2, R3>
+        MOVL    R0, R3
+        MOVL    R1, RAB$L_RBF(R3)
+        MOVW    R2, RAB$W_RSZ(R3)
+        MOVL    R1, RAB$L_KBF(R3)
+        PUSHR   #^M<R1, R2>
+        $PUT    RAB=(R3)
+        POPR    #^M<R1, R2>
+        BLBS    R0, 80$
+        CMPL    R0, #RMS$_DUP
+        BNEQ    90$
+        MOVAB   M_DUP, R0
+        BSBW    EXCEPTION
+80$:    MOVL    #RMS$_NORMAL, R0
+90$:    RSB
+
+; EXCEPTION: R0 = a message, .ASCIC, R1, R2 = the record. Reports it, and
+; writes the record to the exceptions file if there is one. Keeps every
+; register.
+EXCEPTION:
+        .JSB_ENTRY
+        PUSHR   #^M<R0, R1, R2, R3, R4, R5>
+        INCL    NEXC
+        PUSHL   R1
+        MOVL    R0, R1
+        BSBW    LIN$TEXT
+        BSBW    LIN$PUT
+        MOVL    (SP)+, R1
+        BBC     #F_EXC, FLAGS, 90$
+        MOVL    R1, XRAB+RAB$L_RBF
+        MOVW    R2, XRAB+RAB$W_RSZ
+        $PUT    RAB=XRAB
+90$:    POPR    #^M<R0, R1, R2, R3, R4, R5>
+        RSB
+
+; LOAD: copies the work file's records, in order, into the output, then
+; deletes it. R0 = RMS$_NORMAL or an error. Uses R0-R3.
+LOAD:
+        .JSB_ENTRY  SCRATCH=<R2, R3>
+        CLRB    WRAB+RAB$B_RAC          ; in order
+        $REWIND RAB=WRAB
+10$:    $GET    RAB=WRAB
+        BLBC    R0, 20$
+        MOVL    WRAB+RAB$L_RBF, R1
+        MOVZWL  WRAB+RAB$W_RSZ, R2
+        MOVAB   OUTRAB, R0
+        BSBW    PUTREC
+        BLBS    R0, 10$
+        RSB
+20$:    CMPL    R0, #RMS$_EOF
+        BNEQ    90$
+        $CLOSE  FAB=WFAB
+        $ERASE  FAB=WFAB
+        BICL2   #1@F_SORT, FLAGS
+90$:    RSB
+
+; STATS: reports the counts, as VMS's CONVERT/STATISTICS. Uses R0-R5.
+STATS:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5>
+        $GETTIM_S TIMADR=T1
+        MOVAB   M_SPACE, R1
+        BSBW    LIN$TEXT
+        BSBW    LIN$PUT
+        MOVAB   M_STATS, R1
+        BSBW    LIN$TEXT
+        BSBW    LIN$PUT
+        MOVAB   M_FILES, R1
+        MOVL    NFILES, R2
+        MOVL    #10, R3
+        BSBW    COUNT
+        BSBW    LIN$PUT
+        MOVAB   M_RECS, R1
+        MOVL    NRECS, R2
+        MOVL    #12, R3
+        BSBW    COUNT
+        MOVAB   M_BIO, R1
+        CLRL    R2
+        MOVL    #8, R3
+        BSBW    COUNT
+        BSBW    LIN$PUT
+        MOVAB   M_EXCS, R1
+        MOVL    NEXC, R2
+        MOVL    #12, R3
+        BSBW    COUNT
+        MOVAB   M_DIO, R1
+        CLRL    R2
+        MOVL    #8, R3
+        BSBW    COUNT
+        BSBW    LIN$PUT
+        MOVAB   M_VALID, R1
+        SUBL3   NEXC, NRECS, R2
+        MOVL    #16, R3
+        BSBW    COUNT
+        MOVAB   M_PF, R1
+        CLRL    R2
+        MOVL    #8, R3
+        BSBW    COUNT
+        BSBW    LIN$PUT
+        MOVAB   M_ELAPSED, R1
+        BSBW    LIN$TEXT
+        SUBL3   T0, T1, R0              ; in 100 ns units
+        CLRL    R1
+        EDIV    #100000, R0, R0, R1     ; hundredths
+        MOVL    #10, R2
+        BSBW    DELTA
+        MOVAB   M_CPU, R1
+        BSBW    LIN$TEXT
+        CLRL    R0
+        MOVL    #10, R2
+        BSBW    DELTA
+        BSBW    LIN$PUT
+        RSB
+
+; COUNT: R1 = a label, .ASCIC, R2 = a count, R3 = its width. Adds them.
+; Uses R0-R3.
+COUNT:
+        .JSB_ENTRY  SCRATCH=<R2, R3>
+        BSBW    LIN$TEXT
+        MOVL    R2, R1
+        MOVL    R3, R2
+        BSBW    LIN$DEC
+        RSB
+
+; DELTA: R0 = a time in hundredths of a second, R2 = how many spaces
+; before it. Adds it as VMS writes a delta time, d hh:mm:ss.cc. Uses
+; R0-R5.
+DELTA:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5>
+10$:    MOVL    #^A/ /, R1
+        BSBW    LIN$CHAR
+        SOBGTR  R2, 10$
+        DIVL3   #8640000, R0, R1        ; days
+        MULL3   #8640000, R1, R3
+        SUBL2   R3, R0
+        CLRL    R2
+        BSBW    LIN$DEC
+        MOVL    #^A/ /, R1
+        BSBW    LIN$CHAR
+        MOVL    #360000, R4             ; hours, minutes, seconds
+        MOVL    #^A/:/, R5
+20$:    DIVL3   R4, R0, R1
+        MULL3   R4, R1, R3
+        SUBL2   R3, R0
+        BSBW    TWO
+        CMPL    R4, #100
+        BNEQ    25$
+        MOVL    #^A/./, R5
+25$:    MOVL    R5, R1
+        BSBW    LIN$CHAR
+        DIVL2   #60, R4
+        CMPL    R4, #100
+        BGEQU   20$
+        MOVL    R0, R1                  ; hundredths
+        BSBW    TWO
+        RSB
+
+; TWO: R1 = 0-99. Adds it as two digits. Uses R1.
+TWO:
+        .JSB_ENTRY
+        PUSHR   #^M<R0, R2>
+        DIVL3   #10, R1, R0
+        MULL3   #10, R0, R2
+        SUBL2   R2, R1
+        ADDL2   #^A/0/, R0
+        PUSHL   R1
+        MOVL    R0, R1
+        BSBW    LIN$CHAR
+        ADDL3   #^A/0/, (SP)+, R1
+        BSBW    LIN$CHAR
+        POPR    #^M<R0, R2>
+        RSB
+
+        .END    START
