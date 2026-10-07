@@ -80,6 +80,7 @@ pub(crate) struct Attrs {
     pub structure: Option<StructAttr>,
     pub initial: Option<Vec<Init>>,
     pub preset: Option<Vec<(Vec<Option<Expr>>, Expr)>>,
+    pub volatile: bool,
 }
 
 /// The size in bytes of an allocation unit, if `name` is one.
@@ -101,11 +102,14 @@ pub fn rewrite(e: &Expr, f: &mut dyn FnMut(&Expr) -> Option<Expr>) -> Expr {
     }
     let mut b = |e: &Expr| Box::new(rewrite(e, f));
     match e {
-        Expr::Num(_) | Expr::Name(_) | Expr::Ascid(_) | Expr::Temp(_) => e.clone(),
+        Expr::Num(_) | Expr::Name(_) | Expr::Ascid(_) | Expr::Temp(_) | Expr::Jacket => e.clone(),
+        Expr::Special(s, args) => Expr::Special(*s, args.iter().map(|a| *b(a)).collect()),
+        Expr::Op(op, x, y) => Expr::Op(*op, b(x), b(y)),
         Expr::Fetch(a) => Expr::Fetch(b(a)),
         Expr::Field(a, p, s, x) => Expr::Field(b(a), b(p), b(s), b(x)),
         Expr::Let(t, v, body) => Expr::Let(*t, b(v), b(body)),
-        Expr::Plit(counted, items) => Expr::Plit(
+        Expr::Plit(n, counted, items) => Expr::Plit(
+            *n,
             *counted,
             items
                 .iter()
@@ -448,7 +452,11 @@ impl Parser<'_> {
                     self.pos += 1;
                     a.signed = Some(word == "SIGNED");
                 }
-                "VOLATILE" | "ALIAS" | "WEAK" | "NOVALUE" => self.pos += 1,
+                "VOLATILE" => {
+                    self.pos += 1;
+                    a.volatile = true;
+                }
+                "ALIAS" | "WEAK" | "NOVALUE" => self.pos += 1,
                 "FIELD" => {
                     self.pos += 1;
                     self.expect_punct('(')?;
@@ -578,6 +586,9 @@ impl Parser<'_> {
                 unreachable!()
             };
             let id = self.declare(name, kind)?;
+            if a.volatile {
+                self.volatile.push(id);
+            }
             let mut init = match (initial, preset) {
                 (Some(i), _) => i,
                 (None, Some(p)) => self.preset(id, p)?,
@@ -773,7 +784,9 @@ impl Parser<'_> {
                 break;
             }
         }
-        Ok(Expr::Plit(counted, self.init_list(unit)?))
+        let items = self.init_list(unit)?;
+        self.lets += 1;
+        Ok(Expr::Plit(self.lets - 1, counted, items))
     }
 
     /// Access actuals up to the `]` or `;`: expressions, field names

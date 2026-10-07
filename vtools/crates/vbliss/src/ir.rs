@@ -38,6 +38,8 @@ pub enum Op {
     /// BLISS's `^`: left by a positive count, arithmetic right by a
     /// negative one, -63 to 63.
     Ash,
+    /// Rotate right by 0-63.
+    Ror,
     /// Comparisons, 1 if true, else 0; `u` unsigned.
     Ceq,
     Cne,
@@ -76,6 +78,25 @@ pub enum Ins {
     Arg(u32, u32),
     /// `dst = call target(args)`, by the calling standard.
     Call(Option<u32>, V, Vec<V>),
+    /// `dst = jsb target(arg rN, ...) nopreserve rN...`: a JSB linkage's
+    /// call, each argument in a VAX register, R0 the result; R0, R1 and
+    /// the registers named after `nopreserve` aren't kept.
+    Jsb(Option<u32>, V, Vec<(V, u8)>, Vec<u8>),
+    /// `dst = regarg rN`: a JSB routine's parameter, in VAX register N.
+    RegArg(u32, u8),
+    /// `sethandler v`: the routine's condition handler, at 16(FP).
+    SetHandler(V),
+    /// `setenable v`: the address of the routine's enable vector, where the
+    /// module's handler jacket finds it, at 32(FP).
+    SetEnable(V),
+    /// `dst = argcount`, `dst = argn i` (from 1) and `dst = argptr`: the
+    /// routine's argument list, as a count and the arguments, a fullword
+    /// each, which the prologue copies when the routine reads one.
+    ArgCount(u32),
+    ArgN(u32, V),
+    ArgPtr(u32),
+    /// `barrier`: a memory barrier.
+    Barrier,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -142,6 +163,7 @@ impl Op {
             Shr => "shr",
             Sar => "sar",
             Ash => "ash",
+            Ror => "ror",
             Ceq => "ceq",
             Cne => "cne",
             Clt => "clt",
@@ -187,6 +209,33 @@ impl fmt::Display for Ins {
                 }
                 f.write_str(")")
             }
+            Ins::Jsb(d, t, args, nopreserve) => {
+                if let Some(d) = d {
+                    write!(f, "%{d} =l ")?;
+                }
+                write!(f, "jsb {t}(")?;
+                for (i, (a, r)) in args.iter().enumerate() {
+                    if i > 0 {
+                        f.write_str(", ")?;
+                    }
+                    write!(f, "{a} r{r}")?;
+                }
+                f.write_str(")")?;
+                if !nopreserve.is_empty() {
+                    f.write_str(" nopreserve")?;
+                    for r in nopreserve {
+                        write!(f, " r{r}")?;
+                    }
+                }
+                Ok(())
+            }
+            Ins::RegArg(d, r) => write!(f, "%{d} =l regarg r{r}"),
+            Ins::SetHandler(v) => write!(f, "sethandler {v}"),
+            Ins::SetEnable(v) => write!(f, "setenable {v}"),
+            Ins::ArgCount(d) => write!(f, "%{d} =l argcount"),
+            Ins::ArgN(d, i) => write!(f, "%{d} =l argn {i}"),
+            Ins::ArgPtr(d) => write!(f, "%{d} =l argptr"),
+            Ins::Barrier => f.write_str("barrier"),
         }
     }
 }

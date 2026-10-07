@@ -1,0 +1,214 @@
+                                Source Listing                   DD-MMM-YYYY HH:MM:SS  BLISS-64E V1.11-007-48G4L         Page 1
+                                                                 DD-MMM-YYYY HH:MM:SS  SYS$SYSDEVICE:[ORACLE]CONDITIONS.B64;1
+
+    0	      1 MODULE CONDITIONS (MAIN = MAIN) =
+    0	      2 BEGIN
+    1	      3 ! Condition handling: ENABLE with enable actuals, SIGNAL and SIGNAL_STOP,
+    1	      4 ! continuing with a value, resignaling, SETUNWIND and the handlers it
+    1	      5 ! calls with SS$_UNWIND, and ESTABLISH and REVERT.
+    1	      6 REQUIRE 'PRINT';
+ R  1	      7 ! PRINT: prints a value as a signed decimal and as 16 hex digits, on a line
+ R  1	      8 ! of its own, through LIB$PUT_OUTPUT. The behaviour tests print with it,
+ R  1	      9 ! here under vrun and on OpenVMS for the oracle.
+ R  1	     10 
+ R  1	     11 EXTERNAL ROUTINE
+ R  1	     12     LIB$PUT_OUTPUT;
+ R  1	     13 
+ R  1	     14 ROUTINE PRINT (V) : NOVALUE =
+ R  1	     15     BEGIN
+ R  2	     16     LOCAL
+ R  2	     17         BUF : VECTOR[48, BYTE],
+ R  2	     18         DESC : VECTOR[2, LONG],
+ R  2	     19         X,
+ R  2	     20         I;
+ R  2	     21     I = 48;
+ R  2	     22     X = .V;
+ R  2	     23     INCR K FROM 1 TO 16 DO
+ R  2	     24         BEGIN
+ R  3	     25         LOCAL D;
+ R  3	     26         D = .X AND 15;
+ R  3	     27         I = .I - 1;
+ R  3	     28         BUF[.I] = (IF .D LSS 10 THEN %C'0' + .D ELSE %C'A' + .D - 10);
+ R  3	     29         X = .X ^ -4 AND %X'0FFFFFFFFFFFFFFF'
+ R  3	     30         END;
+ R  2	     31     I = .I - 1;
+ R  2	     32     BUF[.I] = %C' ';
+ R  2	     33     ! Digits from the remainders, negative for a negative value, so that
+ R  2	     34     ! the most negative one prints too.
+ R  2	     35     X = .V;
+ R  2	     36     DO
+ R  2	     37         BEGIN
+ R  3	     38         LOCAL D;
+ R  3	     39         D = .X - (.X / 10) * 10;
+ R  3	     40         IF .D LSS 0 THEN D = -.D;
+ R  3	     41         I = .I - 1;
+ R  3	     42         BUF[.I] = %C'0' + .D;
+ R  3	     43         X = .X / 10
+ R  3	     44         END
+ R  3	     45     UNTIL .X EQL 0;
+ R  2	     46     IF .V LSS 0
+ R  2	     47     THEN
+ R  2	     48         BEGIN
+ R  3	     49         I = .I - 1;
+ R  3	     50         BUF[.I] = %C'-'
+ R  3	     51         END;
+ R  2	     52     DESC[0] = 48 - .I + %X'010E0000';
+ R  2	     53     DESC[1] = BUF[.I];
+ R  2	     54     LIB$PUT_OUTPUT(DESC)
+ R  2	     55     END;
+    1	     56 LIBRARY 'SYS$LIBRARY:STARLET';
+    1	     58 
+
+CONDITIONS                      Source Listing                   DD-MMM-YYYY HH:MM:SS  BLISS-64E V1.11-007-48G4L         Page 2
+                                                                 DD-MMM-YYYY HH:MM:SS  SYS$SYSDEVICE:[ORACLE]CONDITIONS.B64;1
+
+    1	     59 BUILTIN
+    1	     60     ESTABLISH,
+    1	     61     REVERT;
+    1	     62 
+    1	     63 LITERAL
+    1	     64     FIRST = %X'08018003',
+    1	     65     SECOND = %X'08018010',
+    1	     66     THIRD = %X'08018021';
+    1	     67 
+    1	     68 FORWARD ROUTINE
+    1	     69     INNER;
+    1	     70 
+    1	     71 ! Takes FIRST, counting it in its enable actual, and continues with 42;
+    1	     72 ! lets anything else go.
+    1	     73 ROUTINE CONTINUE_H (SIG : REF VECTOR[, LONG], MCH : REF BLOCK[, BYTE], EN : REF VECTOR) =
+    1	     74     BEGIN
+    2	     75     IF .SIG[1] NEQ FIRST THEN RETURN SS$_RESIGNAL;
+    2	     76     PRINT(.SIG[0]);
+    2	     77     PRINT(.SIG[2]);
+    2	     78     PRINT(.EN[0]);
+    2	     79     .EN[1] = ..EN[1] + 1;
+    2	     80     MCH[CHF$IH_MCH_SAVR0] = 42;
+
+CONDITIONS                      Source Listing                   DD-MMM-YYYY HH:MM:SS  BLISS-64E V1.11-007-48G4L         Page 3
+                                                                 DD-MMM-YYYY HH:MM:SS  SYS$SYSDEVICE:[ORACLE]CONDITIONS.B64;1
+
+		;;    [CHF$IH_MCH_SAVR0]=  48 , 0 , 64 , 1
+    2	     81     SS$_CONTINUE
+    2	     82     END;
+    1	     83 
+    1	     84 ! Takes SECOND and SIGNAL_STOP's THIRD: unwinds to its establisher's
+    1	     85 ! caller with the depth it found it at as the value.
+    1	     86 ROUTINE UNWIND_H (SIG : REF VECTOR[, LONG], MCH : REF BLOCK[, BYTE], EN : REF VECTOR) =
+    1	     87     BEGIN
+    2	     88     IF .SIG[1] EQL SS$_UNWIND THEN
+    2	     89         BEGIN
+    3	     90         PRINT(-1);
+    3	     91         RETURN SS$_CONTINUE
+    3	     92         END;
+    2	     93     IF .SIG[1] NEQ SECOND AND .SIG[1] NEQ ((THIRD AND NOT 7) OR 4) THEN RETURN SS$_RESIGNAL;
+    2	     94     PRINT(.SIG[1]);
+    2	     95     MCH[CHF$IH_MCH_SAVR0] = 100 + .MCH[CHF$IS_MCH_DEPTH];
+
+CONDITIONS                      Source Listing                   DD-MMM-YYYY HH:MM:SS  BLISS-64E V1.11-007-48G4L         Page 4
+                                                                 DD-MMM-YYYY HH:MM:SS  SYS$SYSDEVICE:[ORACLE]CONDITIONS.B64;1
+
+		;;    [CHF$IH_MCH_SAVR0]=  48 , 0 , 64 , 1
+		;;    [CHF$IS_MCH_DEPTH]=  16 , 0 , 32 , 1
+    2	     96     SETUNWIND();
+    2	     97     SS$_CONTINUE
+    2	     98     END;
+    1	     99 
+    1	    100 ! Notes that its frame is being unwound.
+    1	    101 ROUTINE NOTE_H (SIG : REF VECTOR[, LONG], MCH : REF BLOCK[, BYTE], EN : REF VECTOR) =
+    1	    102     BEGIN
+    2	    103     IF .SIG[1] EQL SS$_UNWIND THEN PRINT(-2);
+    2	    104     SS$_RESIGNAL
+    2	    105     END;
+    1	    106 
+    1	    107 ROUTINE ESTABLISHED (SIG : REF VECTOR[, LONG], MCH : REF BLOCK[, BYTE]) =
+    1	    108     BEGIN
+    2	    109     IF .SIG[1] NEQ FIRST THEN RETURN SS$_RESIGNAL;
+    2	    110     MCH[CHF$IH_MCH_SAVR0] = 7;
+
+CONDITIONS                      Source Listing                   DD-MMM-YYYY HH:MM:SS  BLISS-64E V1.11-007-48G4L         Page 5
+                                                                 DD-MMM-YYYY HH:MM:SS  SYS$SYSDEVICE:[ORACLE]CONDITIONS.B64;1
+
+		;;    [CHF$IH_MCH_SAVR0]=  48 , 0 , 64 , 1
+    2	    111     SS$_CONTINUE
+    2	    112     END;
+    1	    113 
+    1	    114 ROUTINE INNER (C) =
+    1	    115     BEGIN
+    2	    116     ENABLE
+    2	    117         NOTE_H;
+    2	    118     SIGNAL(.C, 5);
+    2	    119     PRINT(999);
+    2	    120     0
+    2	    121     END;
+    1	    122 
+    1	    123 ROUTINE OUTER (C) =
+    1	    124     BEGIN
+    2	    125     LOCAL
+    2	    126         COUNT : VOLATILE;
+    2	    127     ENABLE
+    2	    128         CONTINUE_H(COUNT);
+    2	    129     PRINT(SIGNAL(FIRST, 17));
+    2	    130     PRINT(SIGNAL(FIRST, 18));
+    2	    131     PRINT(.COUNT);
+    2	    132     INNER(.C)
+    2	    133     END;
+    1	    134 
+    1	    135 ROUTINE TOP (C) =
+    1	    136     BEGIN
+    2	    137     ENABLE
+    2	    138         UNWIND_H;
+    2	    139     OUTER(.C)
+    2	    140     END;
+    1	    141 
+    1	    142 ROUTINE STOPS =
+    1	    143     BEGIN
+    2	    144     ENABLE
+    2	    145         UNWIND_H;
+    2	    146     SIGNAL_STOP(THIRD);
+    2	    147     PRINT(999);
+    2	    148     0
+    2	    149     END;
+    1	    150 
+    1	    151 ROUTINE DYNAMIC =
+    1	    152     BEGIN
+    2	    153     LOCAL
+    2	    154         V;
+    2	    155     ESTABLISH(ESTABLISHED);
+    2	    156     V = SIGNAL(FIRST);
+    2	    157     REVERT();
+    2	    158     .V
+    2	    159     END;
+    1	    160 
+    1	    161 ROUTINE MAIN =
+    1	    162     BEGIN
+    2	    163     PRINT(TOP(SECOND));
+    2	    164     PRINT(STOPS());
+    2	    165     PRINT(DYNAMIC());
+    2	    166     1
+
+CONDITIONS                      Source Listing                   DD-MMM-YYYY HH:MM:SS  BLISS-64E V1.11-007-48G4L         Page 6
+                                                                 DD-MMM-YYYY HH:MM:SS  SYS$SYSDEVICE:[ORACLE]CONDITIONS.B64;1
+
+    2	    167     END;
+    1	    168 
+    1	    169 END
+    1	    170 ELUDOM
+
+
+;				Library Statistics
+;
+;					     -------- Symbols --------	    Pages
+;	File				     Total    Loaded   Percent      Mapped
+;
+;  SYS$COMMON:[SYSLIB]STARLET.L64;1	     30633         5         0      2331
+
+
+
+
+                                Source Listing                   DD-MMM-YYYY HH:MM:SS  BLISS-64E V1.11-007-48G4L         Page 7
+                                Source Listing                   DD-MMM-YYYY HH:MM:SS  SYS$SYSDEVICE:[ORACLE]CONDITIONS.B64;1
+
+COMMAND LINE:
+
+BLISS/A64/LIST/SOURCE_LIST=(EXPAND_MACROS,REQUIRE)/NOMACHINE_CODE CONDITIONS.B64

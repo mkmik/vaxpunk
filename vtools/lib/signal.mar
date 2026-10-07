@@ -1,0 +1,334 @@
+        .TITLE  SIGNAL  Condition handling for programs that run under vrun
+        .IDENT  /V1.0/
+;
+; LIB$SIGNAL, LIB$STOP, LIB$ESTABLISH, LIB$REVERT, LIB$SIG_TO_RET and
+; SYS$UNWIND for test programs under vrun, which has no executive: the
+; executive's (roottask/sysexe/lib/signal.mar and roottask/exec/
+; sysunwind.mar) without access modes, probes or PAL calls, so that the
+; same BLISS and MACRO-32 sources handle conditions under vrun as on
+; vaxpunk and on OpenVMS. EXE$SIGNAL searches the frames for handlers
+; (DESIGN-0004 *Condition handling*); a condition no handler takes is
+; written as its number and, if severe, ends the run with it.
+;
+        .LIBRARY "lib.mlb"
+        .LIBRARY "starlet.mlb"
+        .LIBRARY "vrun.mlb"
+        $CHFDEF
+        $FDSCDEF
+        $FRMDEF
+        $SSDEF
+        $STSDEF
+
+        .EXTRN  CON$PUTCHAR
+        .CALL_LINKAGE CON$PUTCHAR               ; keeps every register
+
+; EXE$SIGNAL's locals, below its FP, which SYS$UNWIND finds and writes.
+UNW_LAST = -4                           ; the last frame $UNWIND removes, 0 if none
+UNW_PC = -8                             ; where it goes on, 0 for the return address
+UNW_FRAME0 = -12                        ; the frame that signaled
+UNW_MCH = -16                           ; the mechanism array
+UNW_LENGTH = 16
+
+; What UNWIND goes on with, which it builds from the frames it removes.
+IMG_X18 = 0                             ; x18-x28: VAX SP, then R2-R11
+IMG_FP = 88
+IMG_SP = 96
+IMG_PC = 104
+IMG_LENGTH = 112
+
+        .PSECT  $CODE$
+
+; LIB$ESTABLISH new_handler: makes new_handler the condition handler of
+; the caller's frame. R0 = the one it had, or 0.
+        .ENTRY  LIB$ESTABLISH, ^M<>
+        MOVL    FP, R1
+        MOVL    FRM$Q_FP(R1), R1
+        MOVL    FRM$Q_HANDLER(R1), R0
+        MOVL    4(AP), FRM$Q_HANDLER(R1)
+        RET
+
+; LIB$REVERT: takes the caller's frame's condition handler away. R0 = it,
+; or 0.
+        .ENTRY  LIB$REVERT, ^M<>
+        MOVL    FP, R1
+        MOVL    FRM$Q_FP(R1), R1
+        MOVL    FRM$Q_HANDLER(R1), R0
+        CLRL    FRM$Q_HANDLER(R1)
+        RET
+
+; LIB$SIG_TO_RET sigargs, mchargs: a handler that returns from the
+; routine that established it with the condition as its status.
+        .ENTRY  LIB$SIG_TO_RET, ^M<>
+        MOVL    CHF$L_SIGARGLST(AP), R0
+        MOVL    CHF$L_SIG_NAME(R0), R0
+        CMPL    R0, #SS$_UNWIND
+        BEQL    90$
+        MOVL    CHF$L_MCHARGLST(AP), R1
+        EVAX_STQ R0, CHF$IH_MCH_RETVAL(R1)
+        CLRQ    -(SP)
+        CALLS   #2, SYS$UNWIND
+90$:    RET
+
+; LIB$SIGNAL condition [,arguments...]: signals condition: builds the
+; signal arrays, the arguments, the PC LIB$SIGNAL returns to and a PSL of
+; 0, and the mechanism array, and EXE$SIGNAL looks for a handler from the
+; caller's frame out. Returns once one continues, with R0 and R1 from the
+; mechanism array; if none takes it, CATCHALL writes it, and ends the run
+; if it is severe.
+LIB$SIGNAL::
+        .CALL_ENTRY MAX_ARGS=255
+        CLRL    R2
+        BRB     SIGNAL
+
+; LIB$STOP condition [,arguments...]: signals condition made severe; ends
+; the run unless a handler unwinds.
+LIB$STOP::
+        .CALL_ENTRY MAX_ARGS=255
+        MOVL    #1, R2
+; SIGNAL: R2 = 1 for LIB$STOP, 0 for LIB$SIGNAL.
+SIGNAL: .GLOBAL_LABEL
+        SUBL2   #CHF$S_MCH, SP          ; the mechanism array
+        MOVL    SP, R3
+        EVAX_STQ R0, CHF$IH_MCH_RETVAL(R3)
+        EVAX_STQ R1, CHF$IH_MCH_RETVAL2(R3)
+        MOVL    #CHF$S_MCH/8-1, CHF$IS_MCH_ARGS(R3)
+        CLRL    CHF$IS_MCH_FLAGS(R3)
+        MOVL    FP, R1
+        MOVQ    FRM$Q_FP(R1), CHF$PH_MCH_FRAME(R3) ; the caller's frame
+        CLRQ    CHF$IS_MCH_DEPTH(R3)
+        CLRQ    CHF$PH_MCH_DADDR(R3)
+        CLRQ    CHF$PH_MCH_ESF_ADDR(R3)
+        MOVAB   CHF$IH_MCH_SAVX2(R3), R4
+        MOVL    #16, R5
+5$:     CLRQ    (R4)+                   ; x2-x17: none to give
+        SOBGTR  R5, 5$
+        CLRL    R6                      ; the PSL
+        MOVZBL  (AP), R5                ; the condition and its arguments
+        CLRL    -(SP)                   ; the 64-bit signal array, quadwords
+        PUSHL   R6
+        PUSHL   FRM$Q_PC+4(R1)
+        PUSHL   FRM$Q_PC(R1)            ; the PC LIB$SIGNAL returns to
+        MOVL    R5, R4
+10$:    MOVL    (AP)[R4], R7            ; the arguments, the last first
+        ASHL    #-31, R7, R8
+        PUSHL   R8
+        PUSHL   R7
+        SOBGTR  R4, 10$
+        PUSHL   #SS$_SIGNAL64
+        ADDL3   #2, R5, -(SP)
+        MOVL    SP, R7
+        MOVL    R7, CHF$PH_MCH_SIG64_ADDR(R3)
+        CLRL    CHF$PH_MCH_SIG64_ADDR+4(R3)
+        PUSHL   R6                      ; the 32-bit one, longwords
+        PUSHL   FRM$Q_PC(R1)
+        MOVL    R5, R4
+20$:    PUSHL   (AP)[R4]
+        SOBGTR  R4, 20$
+        ADDL3   #2, R5, -(SP)
+        MOVL    SP, R4
+        MOVL    R4, CHF$PH_MCH_SIG_ADDR(R3)
+        CLRL    CHF$PH_MCH_SIG_ADDR+4(R3)
+        BLBC    R2, 30$
+        INSV    #STS$K_SEVERE, #0, #3, CHF$L_SIG_NAME(R4)
+        INSV    #STS$K_SEVERE, #0, #3, CHF64$Q_SIG_NAME(R7)
+30$:    PUSHL   R3
+        PUSHL   R4
+        CALLS   #2, EXE$SIGNAL
+        BLBS    R2, 40$
+        BLBS    R0, 50$
+40$:    PUSHL   R4
+        CALLS   #1, CATCHALL
+50$:    EVAX_LDQ R0, CHF$IH_MCH_RETVAL(R3)
+        EVAX_LDQ R1, CHF$IH_MCH_RETVAL2(R3)
+        RET
+
+; EXE$SIGNAL sigargs, mchargs: calls the handlers from the frame mchargs
+; has out, each frame's static one or the one at its (FP), with sigargs
+; and mchargs. A handler returns a status with the low bit set to go on
+; where the condition was signaled, or clear to let the next one have
+; it; an $UNWIND it called takes effect as it returns. R0 = SS$_CONTINUE
+; once a handler took it, SS$_RESIGNAL if none did.
+        .ENTRY  EXE$SIGNAL, ^M<R2, R3, R4, R5, R6, R7, R8, R9, R10, R11>
+        SUBL2   #UNW_LENGTH, SP
+        CLRQ    UNW_PC(FP)              ; and UNW_LAST
+        MOVQ    4(AP), R6               ; R6 = sigargs, R7 = mchargs
+        MOVL    R7, UNW_MCH(FP)
+        MOVL    CHF$PH_MCH_FRAME(R7), R2
+        MOVL    R2, UNW_FRAME0(FP)
+        CLRL    CHF$IS_MCH_DEPTH(R7)
+SEARCH: TSTL    R2
+        BEQL    NONE
+        BSBW    FHANDLER
+        TSTL    R1
+        BEQL    OUTWARD
+        MOVL    R2, CHF$PH_MCH_FRAME(R7)
+        CALLG   (AP), (R1)
+; HANDLER: where a handler returns to; SYS$UNWIND finds EXE$SIGNAL's
+; frame by it.
+HANDLER:
+        TSTL    UNW_LAST(FP)
+        BNEQ    UNWIND
+        BLBC    R0, OUTWARD
+        MOVL    #SS$_CONTINUE, R0
+        RET
+OUTWARD:
+        MOVL    FRM$Q_FP(R2), R0        ; the caller's frame
+        CMPL    R0, R2
+        BLEQU   NONE
+        MOVL    R0, R2
+        INCL    CHF$IS_MCH_DEPTH(R7)
+        BRB     SEARCH
+NONE:   MOVL    #SS$_RESIGNAL, R0
+        RET
+
+; UNWIND: R7 = mchargs. Returns from the frame UNW_LAST says, as its RET
+; would, having removed every frame from this one out to it, each one's
+; handler called first with SS$_UNWIND: x18 and R2-R11 as the frames
+; saved them, R0 and R1 from mchargs, FP and SP from the frame. Goes on at
+; UNW_PC, or else where the frame returns to.
+UNWIND: SUBL2   #IMG_LENGTH, SP
+        MOVL    SP, R9                  ; what it goes on with
+        PUSHL   #SS$_UNWIND             ; the handlers' signal array,
+        PUSHL   #1
+        MOVL    SP, R10
+        PUSHL   R7                      ; and argument list
+        PUSHL   R10
+        PUSHL   #2
+        MOVL    SP, R10
+        MOVL    FP, R2
+        MOVL    UNW_LAST(FP), R3
+10$:    BSBW    FHANDLER
+        TSTL    R1
+        BEQL    20$
+        MOVL    R2, CHF$PH_MCH_FRAME(R7)
+        CALLG   (R10), (R1)
+20$:    MOVL    FRM$Q_FDSC(R2), R4      ; what the frame saved
+        BEQL    40$
+        MOVL    FDSC$L_SAVED(R4), R5
+        ADDL3   FDSC$L_RSA(R4), R2, R6
+        CLRL    R11
+30$:    BBC     R11, R5, 35$
+        MOVQ    (R6)+, IMG_X18(R9)[R11]
+35$:    AOBLSS  #11, R11, 30$
+40$:    CMPL    R2, R3
+        BEQL    50$
+        MOVL    FRM$Q_FP(R2), R2
+        BRB     10$
+50$:    MOVL    FRM$Q_FDSC(R2), R4      ; the last one's caller goes on
+        ADDL3   FDSC$L_SIZE(R4), R2, IMG_SP(R9)
+        CLRL    IMG_SP+4(R9)
+        MOVQ    FRM$Q_FP(R2), IMG_FP(R9)
+        MOVQ    FRM$Q_PC(R2), IMG_PC(R9)
+        MOVL    UNW_PC(FP), R0
+        BEQL    60$
+        MOVL    R0, IMG_PC(R9)
+        CLRL    IMG_PC+4(R9)
+60$:    EVAX_LDQ R0, CHF$IH_MCH_RETVAL(R7)
+        EVAX_LDQ R1, CHF$IH_MCH_RETVAL2(R7)
+        MOVL    R9, R2
+        .DISABLE FLAGGING               ; the frame's registers, by name
+        mov     x16, x19                ; R2: what it goes on with
+        ldp     x18, x19, [x16, #IMG_X18]
+        ldp     x20, x21, [x16, #IMG_X18+16]
+        ldp     x22, x23, [x16, #IMG_X18+32]
+        ldp     x24, x25, [x16, #IMG_X18+48]
+        ldp     x26, x27, [x16, #IMG_X18+64]
+        ldr     x28, [x16, #IMG_X18+80]
+        ldr     x29, [x16, #IMG_FP]
+        add     x12, x29, #32           ; AP, its argument list
+        ldr     x17, [x16, #IMG_SP]
+        mov     sp, x17
+        ldr     x17, [x16, #IMG_PC]
+        br      x17
+        .ENABLE FLAGGING
+
+; FHANDLER: R2 = a frame. R1 = its condition handler: its descriptor's
+; static one, else the one at its (FP), or 0. Uses R0.
+FHANDLER:
+        .JSB_ENTRY
+        MOVL    FRM$Q_HANDLER(R2), R1
+        MOVL    FRM$Q_FDSC(R2), R0
+        BEQL    90$
+        BBC     #FDSC$V_HANDLER, FDSC$L_FLAGS(R0), 90$
+        MOVL    FDSC$Q_HANDLER(R0), R1
+90$:    RSB
+
+; SYS$UNWIND [depadr] [,newpc]: in a condition handler, removes the frames
+; from the one that signaled out to the one that established the handler,
+; or as many as the longword at depadr says. They go once the handler
+; returns. SS$_NORMAL; SS$_NOSIGNAL outside a handler, SS$_UNWINDING if
+; it asked already, SS$_INSFRAME if there are fewer frames.
+        .ENTRY  SYS$UNWIND, ^M<R2, R3, R4>
+        MOVAB   HANDLER, R1
+        MOVL    FP, R2
+10$:    TSTL    R2
+        BEQL    80$
+        CMPL    FRM$Q_PC(R2), R1
+        BEQL    20$                     ; R2 is the handler's frame
+        MOVL    FRM$Q_FP(R2), R0
+        CMPL    R0, R2
+        BLEQU   80$
+        MOVL    R0, R2
+        BRB     10$
+20$:    MOVL    FRM$Q_FP(R2), R2        ; EXE$SIGNAL's
+        TSTL    UNW_LAST(R2)
+        BNEQ    82$
+        MOVL    UNW_MCH(R2), R0
+        ADDL3   #1, CHF$IS_MCH_DEPTH(R0), R3
+        CMPB    (AP), #1
+        BLSSU   30$
+        MOVL    4(AP), R0
+        BEQL    30$
+        MOVL    (R0), R3
+        BLEQ    70$
+30$:    MOVL    UNW_FRAME0(R2), R0
+        BRB     45$
+40$:    MOVL    FRM$Q_FP(R0), R0
+        BEQL    86$
+45$:    SOBGTR  R3, 40$
+        MOVL    R0, UNW_LAST(R2)
+        CLRL    UNW_PC(R2)
+        CMPB    (AP), #2
+        BLSSU   70$
+        MOVL    8(AP), UNW_PC(R2)
+70$:    MOVL    #SS$_NORMAL, R0
+        RET
+80$:    MOVL    #SS$_NOSIGNAL, R0
+        RET
+82$:    MOVL    #SS$_UNWINDING, R0
+        RET
+86$:    MOVL    #SS$_INSFRAME, R0
+        RET
+
+; CATCHALL sigargs: a condition no handler took: writes "%SIGNAL-F-
+; condition", its number in hex, and ends the run with it if it is severe.
+        .ENTRY  CATCHALL, ^M<R2, R3, R4>
+        MOVL    4(AP), R2
+        MOVL    CHF$L_SIG_NAME(R2), R2
+        MOVAB   TEXT, R3
+        MOVL    #TEXT_LENGTH, R4
+10$:    MOVZBL  (R3)+, R0
+        JSB     G^CON$PUTCHAR
+        SOBGTR  R4, 10$
+        MOVL    #8, R4
+20$:    ROTL    #4, R2, R2
+        EXTZV   #0, #4, R2, R0
+        MOVZBL  HEX[R0], R0
+        JSB     G^CON$PUTCHAR
+        SOBGTR  R4, 20$
+        MOVZBL  #10, R0
+        JSB     G^CON$PUTCHAR
+        BICL3   #^C<STS$M_SEVERITY>, R2, R0
+        CMPL    R0, #STS$K_SEVERE
+        BNEQ    90$
+        MOVL    R2, R0
+        .DISABLE FLAGGING
+        svc     #1                      ; vrun's exit, R0 the status
+        .ENABLE FLAGGING
+90$:    RET
+
+TEXT:   .ASCII  "%SIGNAL-F-condition "
+TEXT_LENGTH = . - TEXT
+HEX:    .ASCII  "0123456789ABCDEF"
+
+        .END

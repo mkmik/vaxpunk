@@ -1,0 +1,72 @@
+        .TITLE  MACRO   The MACRO-32 side of the BLISS-64 interop test
+        .LIBRARY "lib.mlb"
+        .LIBRARY "starlet.mlb"
+        $CHFDEF
+        $SSDEF
+
+        .EXTERNAL BADD, BTWICE, BSIGNAL, LIB$SIGNAL, SYS$UNWIND
+
+        .PSECT  $CODE$
+
+; MSUM: a JSB routine: R0 = R2 + 10 * R3. Keeps R2 and R3.
+MSUM::
+        .JSB_ENTRY
+        MULL3   #10, R3, R0
+        ADDL2   R2, R0
+        RSB
+
+; MSCRATCH: a JSB routine that changes R4 and R5, which it doesn't
+; keep: R0 = R4 * R5.
+MSCRATCH::
+        .JSB_ENTRY SCRATCH=<R4, R5>
+        MULL3   R4, R5, R0
+        CLRL    R4
+        CLRL    R5
+        RSB
+
+; MTRIPLE n: R0 = 3 * n.
+        .ENTRY  MTRIPLE, ^M<>
+        MULL3   #3, 4(AP), R0
+        RET
+
+; MCALLB a, b: calls BLISS-64 both ways: R0 = BADD(a, b) * 100 + BTWICE
+; of a, which takes it in R4 by a JSB linkage.
+        .ENTRY  MCALLB, ^M<R2, R4>
+        PUSHL   8(AP)
+        PUSHL   4(AP)
+        CALLS   #2, G^BADD
+        MULL3   #100, R0, R2
+        MOVL    4(AP), R4
+        JSB     G^BTWICE
+        ADDL2   R2, R0
+        RET
+
+; MSIG cond: signals cond with 9; R0 = what LIB$SIGNAL returns.
+        .ENTRY  MSIG, ^M<>
+        PUSHL   #9
+        PUSHL   4(AP)
+        CALLS   #2, G^LIB$SIGNAL
+        RET
+
+; MCATCH: establishes MHANDLER and calls BSIGNAL, which signals from
+; BLISS-64; R0 = what BSIGNAL returns, or 77 once MHANDLER unwinds.
+        .ENTRY  MCATCH, ^M<>
+        MOVAB   MHANDLER, (FP)
+        CALLS   #0, G^BSIGNAL
+        RET
+
+; MHANDLER sigargs, mchargs: takes any condition but SS$_UNWIND: the
+; establisher returns 77.
+        .ENTRY  MHANDLER, ^M<>
+        MOVL    CHF$L_SIGARGLST(AP), R0
+        CMPL    CHF$L_SIG_NAME(R0), #SS$_UNWIND
+        BEQL    10$
+        MOVL    CHF$L_MCHARGLST(AP), R1
+        MOVL    #77, CHF$IH_MCH_RETVAL(R1)
+        CLRL    CHF$IH_MCH_RETVAL+4(R1)
+        CLRQ    -(SP)
+        CALLS   #2, G^SYS$UNWIND
+10$:    MOVL    #SS$_CONTINUE, R0
+        RET
+
+        .END

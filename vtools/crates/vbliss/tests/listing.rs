@@ -7,7 +7,8 @@ use std::fs;
 use std::path::Path;
 
 /// A listing without its page headers (two lines, the blank after them
-/// and the blank before a page break) and without what follows the source.
+/// and the blank before a page break) and without the summary after the
+/// source: library statistics and the command line.
 fn body(listing: &str) -> String {
     let lines: Vec<&str> = listing.lines().collect();
     let mut out: Vec<&str> = Vec::new();
@@ -20,7 +21,7 @@ fn body(listing: &str) -> String {
             i += 3;
             continue;
         }
-        if lines[i] == "COMMAND LINE:" {
+        if lines[i] == "COMMAND LINE:" || lines[i].contains("Library Statistics") {
             break;
         }
         out.push(lines[i]);
@@ -44,7 +45,11 @@ fn listings() {
         }
         let source = path.with_extension("b64");
         let text = fs::read_to_string(&source).unwrap();
-        let out = vbliss::translate(&source, &text, &vbliss::Options::default());
+        let opts = vbliss::Options {
+            include: vec![dir.join("../../lib")],
+            ..vbliss::Options::default()
+        };
+        let out = vbliss::translate(&source, &text, &opts);
         let (ours, theirs) = (
             body(&out.listing),
             body(&fs::read_to_string(&path).unwrap()),

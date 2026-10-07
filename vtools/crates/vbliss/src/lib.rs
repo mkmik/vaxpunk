@@ -7,11 +7,13 @@
 //! into vasm source, which vasm assembles. `listing` writes the listing.
 
 mod arm64;
+mod builtin;
 mod data;
 mod ir;
 mod irgen;
 mod lex;
 mod lexical;
+mod linkage;
 mod listing;
 mod parse;
 

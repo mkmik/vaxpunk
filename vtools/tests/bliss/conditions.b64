@@ -1,0 +1,120 @@
+MODULE CONDITIONS (MAIN = MAIN) =
+BEGIN
+! Condition handling: ENABLE with enable actuals, SIGNAL and SIGNAL_STOP,
+! continuing with a value, resignaling, SETUNWIND and the handlers it
+! calls with SS$_UNWIND, and ESTABLISH and REVERT.
+REQUIRE 'PRINT';
+LIBRARY 'SYS$LIBRARY:STARLET';
+
+BUILTIN
+    ESTABLISH,
+    REVERT;
+
+LITERAL
+    FIRST = %X'08018003',
+    SECOND = %X'08018010',
+    THIRD = %X'08018021';
+
+FORWARD ROUTINE
+    INNER;
+
+! Takes FIRST, counting it in its enable actual, and continues with 42;
+! lets anything else go.
+ROUTINE CONTINUE_H (SIG : REF VECTOR[, LONG], MCH : REF BLOCK[, BYTE], EN : REF VECTOR) =
+    BEGIN
+    IF .SIG[1] NEQ FIRST THEN RETURN SS$_RESIGNAL;
+    PRINT(.SIG[0]);
+    PRINT(.SIG[2]);
+    PRINT(.EN[0]);
+    .EN[1] = ..EN[1] + 1;
+    MCH[CHF$IH_MCH_SAVR0] = 42;
+    SS$_CONTINUE
+    END;
+
+! Takes SECOND and SIGNAL_STOP's THIRD: unwinds to its establisher's
+! caller with the depth it found it at as the value.
+ROUTINE UNWIND_H (SIG : REF VECTOR[, LONG], MCH : REF BLOCK[, BYTE], EN : REF VECTOR) =
+    BEGIN
+    IF .SIG[1] EQL SS$_UNWIND THEN
+        BEGIN
+        PRINT(-1);
+        RETURN SS$_CONTINUE
+        END;
+    IF .SIG[1] NEQ SECOND AND .SIG[1] NEQ ((THIRD AND NOT 7) OR 4) THEN RETURN SS$_RESIGNAL;
+    PRINT(.SIG[1]);
+    MCH[CHF$IH_MCH_SAVR0] = 100 + .MCH[CHF$IS_MCH_DEPTH];
+    SETUNWIND();
+    SS$_CONTINUE
+    END;
+
+! Notes that its frame is being unwound.
+ROUTINE NOTE_H (SIG : REF VECTOR[, LONG], MCH : REF BLOCK[, BYTE], EN : REF VECTOR) =
+    BEGIN
+    IF .SIG[1] EQL SS$_UNWIND THEN PRINT(-2);
+    SS$_RESIGNAL
+    END;
+
+ROUTINE ESTABLISHED (SIG : REF VECTOR[, LONG], MCH : REF BLOCK[, BYTE]) =
+    BEGIN
+    IF .SIG[1] NEQ FIRST THEN RETURN SS$_RESIGNAL;
+    MCH[CHF$IH_MCH_SAVR0] = 7;
+    SS$_CONTINUE
+    END;
+
+ROUTINE INNER (C) =
+    BEGIN
+    ENABLE
+        NOTE_H;
+    SIGNAL(.C, 5);
+    PRINT(999);
+    0
+    END;
+
+ROUTINE OUTER (C) =
+    BEGIN
+    LOCAL
+        COUNT : VOLATILE;
+    ENABLE
+        CONTINUE_H(COUNT);
+    PRINT(SIGNAL(FIRST, 17));
+    PRINT(SIGNAL(FIRST, 18));
+    PRINT(.COUNT);
+    INNER(.C)
+    END;
+
+ROUTINE TOP (C) =
+    BEGIN
+    ENABLE
+        UNWIND_H;
+    OUTER(.C)
+    END;
+
+ROUTINE STOPS =
+    BEGIN
+    ENABLE
+        UNWIND_H;
+    SIGNAL_STOP(THIRD);
+    PRINT(999);
+    0
+    END;
+
+ROUTINE DYNAMIC =
+    BEGIN
+    LOCAL
+        V;
+    ESTABLISH(ESTABLISHED);
+    V = SIGNAL(FIRST);
+    REVERT();
+    .V
+    END;
+
+ROUTINE MAIN =
+    BEGIN
+    PRINT(TOP(SECOND));
+    PRINT(STOPS());
+    PRINT(DYNAMIC());
+    1
+    END;
+
+END
+ELUDOM

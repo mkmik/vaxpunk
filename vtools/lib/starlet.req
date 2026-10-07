@@ -1031,7 +1031,7 @@ MACRO
     DSC64$B_CLASS = 3, 0, 8, 0 %,
     DSC64$L_MBMO = 4, 0, 32, 0 %,  ! -1
     DSC64$Q_LENGTH = 8, 0, 0, 0 %,
-    DSC64$PQ_POINTER = 16, 0, 0, 0 %;
+    DSC64$PQ_POINTER = 16, 0, 0, 1 %;
 
 ! $ILEDEF
 LITERAL
@@ -1047,13 +1047,13 @@ MACRO
     ILEA_64$W_CODE = 2, 0, 16, 0 %,
     ILEA_64$L_MBMO = 4, 0, 32, 0 %,  ! -1
     ILEA_64$Q_LENGTH = 8, 0, 0, 0 %,
-    ILEA_64$PQ_BUFADDR = 16, 0, 0, 0 %,
+    ILEA_64$PQ_BUFADDR = 16, 0, 0, 1 %,
     ILEB_64$W_MBO = 0, 0, 16, 0 %,
     ILEB_64$W_CODE = 2, 0, 16, 0 %,
     ILEB_64$L_MBMO = 4, 0, 32, 0 %,
     ILEB_64$Q_LENGTH = 8, 0, 0, 0 %,
-    ILEB_64$PQ_BUFADDR = 16, 0, 0, 0 %,
-    ILEB_64$PQ_RETLEN_ADDR = 24, 0, 0, 0 %;
+    ILEB_64$PQ_BUFADDR = 16, 0, 0, 1 %,
+    ILEB_64$PQ_RETLEN_ADDR = 24, 0, 0, 1 %;
 
 ! $CHFDEF
 LITERAL
@@ -1070,18 +1070,19 @@ MACRO
     CHF64$Q_SIG_ARG1 = 16, 0, 0, 0 %,
     CHF$IS_MCH_ARGS = 0, 0, 32, 1 %,  ! the quadwords after the first, 24
     CHF$IS_MCH_FLAGS = 4, 0, 32, 1 %,
-    CHF$PH_MCH_FRAME = 8, 0, 0, 0 %,  ! the establisher's FP
+    CHF$PH_MCH_FRAME = 8, 0, 0, 1 %,  ! the establisher's FP
     CHF$IS_MCH_DEPTH = 16, 0, 32, 1 %,  ! 0 the frame that signaled, 1 its caller
-    CHF$PH_MCH_DADDR = 24, 0, 0, 0 %,  ! handler data, 0
-    CHF$PH_MCH_ESF_ADDR = 32, 0, 0, 0 %,  ! the exception's frame, 0 for a signal
-    CHF$PH_MCH_SIG_ADDR = 40, 0, 0, 0 %,  ! the 32-bit signal array
-    CHF$IH_MCH_RETVAL = 48, 0, 0, 0 %,  ! R0
-    CHF$IH_MCH_RETVAL2 = 56, 0, 0, 0 %,  ! R1
-    CHF$IH_MCH_SAVX2 = 64, 0, 0, 0 %,  ! x2-x17, 8 bytes each
-    CHF$PH_MCH_SIG64_ADDR = 192, 0, 0, 0 %,  ! the 64-bit signal array
+    CHF$PH_MCH_DADDR = 24, 0, 0, 1 %,  ! handler data, 0
+    CHF$PH_MCH_ESF_ADDR = 32, 0, 0, 1 %,  ! the exception's frame, 0 for a signal
+    CHF$PH_MCH_SIG_ADDR = 40, 0, 0, 1 %,  ! the 32-bit signal array
+    CHF$IH_MCH_RETVAL = 48, 0, 0, 1 %,  ! R0
+    CHF$IH_MCH_RETVAL2 = 56, 0, 0, 1 %,  ! R1
+    CHF$IH_MCH_SAVX2 = 64, 0, 0, 1 %,  ! x2-x17, 8 bytes each
+    CHF$PH_MCH_SIG64_ADDR = 192, 0, 0, 1 %,  ! the 64-bit signal array
     CHF$L_MCH_FRAME = 8, 0, 32, 0 %,
     CHF$L_MCH_DEPTH = 16, 0, 32, 0 %,
     CHF$L_MCH_SAVR0 = 48, 0, 32, 0 %,
+    CHF$IH_MCH_SAVR0 = 48, 0, 0, 1 %,  ! OpenVMS Alpha's name for it
     CHF$L_MCH_SAVR1 = 56, 0, 32, 0 %;
 
 ! $STSDEF
