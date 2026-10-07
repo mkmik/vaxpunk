@@ -1459,7 +1459,13 @@ SIDRINS:
         BSBW    INITKEY
         BLBS    R0, 15$
         RSB
-15$:    BSBW    DOWN
+15$:    BBC     #KEY$V_DUPKEYS, KEY$B_FLAGS(R9), 16$
+        BSBW    HASDUP                  ; another record's already?
+        TSTL    R0
+        BEQL    16$
+        BLBC    R0, 90$
+        BISW2   #1@X$V_OKDUP, X$W_FLAGS(R11)
+16$:    BSBW    DOWN
         BLBS    R0, 17$
         RSB
 17$:    MOVL    X$L_RFAVBN(R11), R0
@@ -1476,7 +1482,6 @@ SIDRINS:
         MOVL    (SP)+, R6
         TSTL    R0
         BNEQ    50$
-        BISW2   #1@X$V_OKDUP, X$W_FLAGS(R11)
         SUBL3   #1, X$L_Q(R11), R0      ; then at its end, if there is room
         BSBW    WALKTO
         BLBC    R0, 90$
@@ -1550,6 +1555,38 @@ SIDRINS:
         ADDL3   W$L_BUF(R8), R0, R3
         MOVC3   R5, @X$L_WORK2(R11), (R3)
         BSBW    WRW
+90$:    RSB
+
+; HASDUP: R7 = an IFAB, R11 = its state, R9 = an alternate key's
+; descriptor, X$T_KEY = a value of it. R0 = 1 if a SIDR of the value
+; points at a record, else 0, or a bucket's error. Uses R0-R6, R8.
+HASDUP:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5, R6, R8>
+        CLRL    R5
+        MOVZBL  KEY$B_KEYSZ(R9), R6
+        BSBW    IDX$DESCEND
+        CMPL    R0, #RMS$_RNF
+        BEQL    80$
+        BLBC    R0, 90$
+        MOVL    R1, R0
+        MOVZBL  KEY$B_DATBKTSZ(R9), R1
+        BSBW    IDX$LOADW
+        BLBC    R0, 90$
+10$:    BSBW    IDX$SCAN                ; each SIDR of the value
+        CMPL    R0, #RMS$_EOF
+        BEQL    80$
+        BLBC    R0, 90$
+        MOVAB   W$T_CUR(R8), R1
+        BSBW    IDX$MATCHKEY
+        TSTL    R0
+        BLSS    20$
+        BNEQ    80$
+        BSBW    IDX$PTRNEXT             ; a pointer not deleted?
+        TSTL    R0
+        BNEQ    90$
+20$:    BSBW    IDX$NEXTW
+        BRB     10$
+80$:    CLRL    R0
 90$:    RSB
 
 ; REMOVEW: R9 = a key's descriptor, R8 = a walk at a level 0 entry,
@@ -1829,7 +1866,9 @@ IDX$PUT::
 
 ; IDX$UPDATE: R7 = an IFAB, R10 = a RAB. Rewrites the current record
 ; with the one RAB$L_RBF points at, RAB$W_RSZ bytes, keeping its RFA
-; (UPDCORE); then, as on VMS, there is no current record. R0 = RMS$_NORMAL, RMS$_FAC, RMS$_CUR, RMS$_RSZ, RMS$_CHG,
+; (UPDCORE); then, as on VMS, there is no current record. R0 =
+; RMS$_NORMAL, RMS$_OK_DUP if a key it changed is another record's too,
+; RMS$_FAC, RMS$_CUR, RMS$_RSZ, RMS$_CHG,
 ; RMS$_CHK, RMS$_DUP, SS$_ACCVIO, or a bucket's error. Uses R0-R6, R8,
 ; R9, R11.
 IDX$UPDATE::
@@ -1842,8 +1881,13 @@ IDX$UPDATE::
         MOVL    #RMS$_CUR, R0
         TSTL    X$L_CURVBN(R11)
         BEQL    90$
+        BICW2   #1@X$V_OKDUP, X$W_FLAGS(R11)
         BSBW    UPDCORE
         CLRL    X$L_CURVBN(R11)         ; not current any more, as VMS's
+        CMPL    R0, #RMS$_NORMAL        ; a new key another record has?
+        BNEQ    90$
+        BBC     #X$V_OKDUP, X$W_FLAGS(R11), 90$
+        MOVL    #RMS$_OK_DUP, R0
 90$:    RSB
 
 ; UPDCORE: R7 = an IFAB, R11 = its state, R1 = a record, R2 = its size,
