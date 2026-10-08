@@ -695,6 +695,7 @@ NAM$L_NAME = 76
 NAM$L_TYPE = 80
 NAM$L_VER = 84
 NAM$M_WILDCARD = ^X100                  ; the specification has a wildcard
+NAM$M_SEARCH_LIST = ^X800               ; its device is a search list
         .ENDM   $NAMDEF
 
 ; $DVIDEF: $GETDVI's item codes, VMS's, those vaxpunk knows.
@@ -1578,9 +1579,11 @@ SIOCSIFDHCP = -2145359489               ; vaxpunk's, not VMS's: a DHCP server se
 ; length, a word item code, a buffer address and the address of a word
 ; for the length returned, or 0; a longword 0 ends it.
         .MACRO  $LNMDEF
+LNM$_INDEX = 1                          ; which equivalence string the items after it are about, a longword
 LNM$_STRING = 2                         ; the equivalence string
 LNM$_TABLE = 4                          ; the name of the table it was found in
 LNM$_LENGTH = 5                         ; the equivalence string's length, a longword
+LNM$_MAX_INDEX = 7                      ; the last equivalence string's index, a longword
 LNM$C_NAMLENGTH = 255                   ; the longest name or equivalence string
 LNM$C_MAXDEPTH = 10                     ; translations of a device name, at most
         .ENDM   $LNMDEF

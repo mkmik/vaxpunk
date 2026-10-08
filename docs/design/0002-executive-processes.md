@@ -740,7 +740,15 @@ word for the length returned, and a longword 0 at the end (`$LNMDEF`).
   `SYS$SYSTEM` is `SYS$SYSROOT:[SYSEXE]`, a rooted directory in
   `[SYS0.]`, and `LOGINOUT` defines each process's `SYS$DISK`.
 
-ponytail: one equivalence string per name, so no search lists; no access
+A name may have more than one equivalence string, up to 128: a search
+list. `$CRELNM` takes one `LNM$_STRING` item for each, in order, and
+`DEFINE` a list, `DEFINE HOME MDA0:[000000],SYS$MANAGER`. `$TRNLNM`'s
+`LNM$_INDEX` item picks the string the items after it are about, and
+`LNM$_MAX_INDEX` gives the last one's index. The block keeps the strings
+one after another, each `.ASCIC`, then a 0 byte, so the first is where
+it always was.
+
+ponytail: no access
 modes, so no user-mode names that image rundown deletes and no names an
 outer mode can't delete; no `LNM$JOB` or `LNM$GROUP`, no tables of one's
 own, no directory tables, and `$DELLNM` without a name doesn't empty the
@@ -1031,9 +1039,21 @@ takes each part from the first that has it, in capitals, into the
 expanded specification, checks it, and walks
 the directory from the MFD, each name `NAME.DIR;1` in the one before
 (`[000000]` is the MFD). The images' default is `SYS$SYSTEM:` instead.
-ponytail: no search lists, rooted directories or concealed devices; the
-expanded string has the device a name translates to, as VMS's does
-without them.
+A device that is a search list stands for each of its strings in turn.
+`$OPEN`, `$ERASE` and the image activator try each until one has the
+file (`RMS$LOCATE`). `$CREATE` makes the file in the first. `$PARSE`
+expands with the first and sets `NAM$M_SEARCH_LIST`, and `$SEARCH` then
+parses the FAB's specification again with each string, keeping which
+one it is in, in bits 24-30 of `NAM$L_WCC`. Only the first search list
+that the device's translations reach is stepped through, and only in
+the table whose device the expanded string takes. An equivalence that
+is only a name, `SYS$MANAGER`, is a device. `SET DEFAULT HOME:` leaves
+`SYS$DISK` as `HOME:` and the process with no default directory (an
+empty one to `$SETDDIR`, which is vaxpunk's), so that each string's own
+directory holds.
+ponytail: no rooted directories or concealed devices; the expanded
+string has the device a name translates to, as VMS's does without
+them.
 A relative directory is made absolute first, against the default
 specification's directory if it has one, else the process's: `[]` is
 that one, `[-]` its parent, `[--]` the one above, `[.SUB]` and `[-.SUB]`
@@ -1184,6 +1204,6 @@ taking the clock's interrupts.
 - Writing the system disk, the disk's interrupt, `$QIO` on disk
   channels, logical names in file specifications (`SYS$SYSTEM:DCL.EXE`)
   and `SYS$DISK`.
-- Access modes and search lists for logical names.
+- Access modes for logical names.
 - `INITIALIZE/SIZE`, and the index file extended past the headers
   `INITIALIZE` made room for.

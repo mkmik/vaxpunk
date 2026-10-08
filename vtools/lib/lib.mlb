@@ -308,13 +308,14 @@ CEB$K_LENGTH = 48
         .ENDM   $CEBDEF
 
 ; $LNMBDEF: a logical name block, from pool, on its table's queue: a
-; logical name and its equivalence string.
+; logical name and its equivalence strings, more than one for a search
+; list.
         .MACRO  $LNMBDEF
 LNMB$L_FLINK = 0                        ; the table
 LNMB$L_BLINK = 4
 LNMB$W_SIZE = 8                         ; its size, as allocated
-LNMB$T_NAME = 10                        ; the name, .ASCIC, then the equivalence, .ASCIC
-LNMB$K_LENGTH = 10                      ; past that, both strings
+LNMB$T_NAME = 10                        ; the name, .ASCIC, then each equivalence, .ASCIC, then a 0
+LNMB$K_LENGTH = 10                      ; past that, the strings
         .ENDM   $LNMBDEF
 
 ; $TQEDEF: a timer queue entry, from pool, on EXE$GQ_TQFL in the order it

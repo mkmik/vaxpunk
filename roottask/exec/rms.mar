@@ -10,7 +10,11 @@
 ; leaves out comes from the FAB's default specification, then from
 ; SYS$DISK: and the process's default directory, which $SETDDIR sets. A
 ; device may be a logical name, SYS$SYSTEM:, which stands for some of the
-; parts: those the specification gives win. The device is DKA0:, the
+; parts: those the specification gives win. A search list, a logical
+; name with more than one equivalence string, stands for each in turn:
+; $OPEN, $ERASE and an image's activation take the file from the first
+; that has it, $SEARCH finds the files in each, and $CREATE makes one in
+; the first. The device is DKA0:, the
 ; system disk, or MDA0:, the ramdisk, with a volume mounted on it, which
 ; f11.mar reads and f11wrt.mar writes.
 ;
@@ -42,9 +46,11 @@
 ; services run in kernel mode holding the file system's
 ; lock, FIL$LOCK, which keeps its buffers and RMS's to one process; VMS's
 ; RMS runs in executive mode, in the process's own P1. One stream per
-; file; no file sharing or locking, search lists or concealed devices, ASTs or
+; file; no file sharing or locking or concealed devices, ASTs or
 ; completion routines, and $SEARCH finds its place again by counting the
-; matches it skips.
+; matches it skips, and the search list string it is in, in NAM$L_WCC.
+; Only the first search list a device's translations meet is stepped
+; through; one inside it stands for its first string.
 ;
         .LIBRARY "lib.mlb"
         .LIBRARY "starlet.mlb"
@@ -69,7 +75,8 @@
         .EXTERNAL FIL$SELECT, FIL$CREHDR, FIL$WRITEHDR, FIL$SETNAME, FIL$EXTEND
         .EXTERNAL FIL$ENTER, FIL$REMOVE, FIL$DELHDR, FIL$WRITEVBN, FIL$MKDIR
         .EXTERNAL FIL$LOCK, FIL$UNLOCK, FIL$CHKHDR, FIL$CHKPRO
-        .EXTERNAL F11$GW_FID, F11$GL_VCB, F11$AB_DIRBLK, LNM$TRNLOG, SCH$GL_PCBVEC
+        .EXTERNAL F11$GW_FID, F11$GL_VCB, F11$AB_DIRBLK, LNM$TRNLOG, LNM$EQUIV
+        .EXTERNAL SCH$GL_PCBVEC
         .EXTERNAL EXE$GQ_SYSTIME, RMS$XABOUT, RMS$FINDXAB
         .EXTERNAL SEQ$OPEN, SEQ$CONNECT, SEQ$GET, SEQ$FIND, SEQ$PUT, SEQ$UPDATE
         .EXTERNAL SEQ$TRUNCATE, SEQ$REWIND, SEQ$FLUSH
@@ -83,7 +90,10 @@ BLOCK = 512
 MFD = 4                                 ; the MFD's file number
 MAXIFI = 15                             ; PCB$A_IFAB's slots, 1-15
 RESFILES = 9                            ; the volume's own files, 1-9
-WCC_FOUND = ^X80000000                  ; in NAM$L_WCC: $SEARCH found a file
+WCC_FOUND = ^X80000000                  ; in NAM$L_WCC: $SEARCH found a file,
+WCC_V_LIST = 24                         ; the search list string it is in,
+WCC_S_LIST = 7
+WCC_SKIP = ^XFFFFFF                     ; and the matches it skips there
 FAT$B_RTYPE = 20
 FAT$B_RATTRIB = 21
 FAT$W_RSIZE = 22
@@ -115,6 +125,7 @@ SPECT:  .BLKQ   5
 DEFT:   .BLKQ   5
 SYST:   .BLKQ   5
 EQUT:   .BLKQ   5
+DEVBUF: .BLKB   3*256                   ; SPECT's, DEFT's and SYST's device, when XLATE adds its colon
 RMS$T_EXP::                             ; the expanded specification
         .BLKB   256
 EXPLEN: .LONG   0
@@ -122,6 +133,10 @@ FIELDS: .BLKQ   5                       ; its parts
 RMS$L_VERSION::                         ; the version it asks for: -1 any, 0 the highest
         .LONG   0
 WILD:   .LONG   0                       ; 1 if it has a wildcard
+SLIDX:  .LONG   0                       ; which string of a search list RMS$PARSE takes
+SLON:   .LONG   0                       ; 1 until XLATE meets the table with the device
+SLOWN:  .LONG   0                       ; 1 while XLATE translates that table's
+SLMORE: .LONG   0                       ; 1 if the search list has strings after SLIDX
 CREDIR: .LONG   0                       ; 0, or 1 + the directories DIRWALK made
 RMS$AB_DIRHDR::                         ; its directory's header
         .BLKB   BLOCK
@@ -151,7 +166,7 @@ DOTDIR: .ASCII  ".DIR"
 ; RMS$PARSE: R0 = a file specification, R1 = its length, R2 = a default
 ; one, R3 = its length, 0 if there is none, R4 = the system's default,
 ; .ASCIC. Expands the specification into RMS$T_EXP, each one's device
-; translated (XLATE), the parts it leaves
+; translated (XLATE), the first string of a search list, the parts it leaves
 ; out taken from the default, then from the system's, a relative
 ; directory made absolute (RESOLVE), checks it, finds
 ; its directory and reads the directory's header into RMS$AB_DIRHDR. R0 =
@@ -161,8 +176,16 @@ DOTDIR: .ASCII  ".DIR"
 ; names' blocks, which another process may delete. Uses R1.
 RMS$PARSE::
         .JSB_ENTRY
+        CLRL    SLIDX
+        BRB     PARSEIDX
+; PARSEIDX: the same, with the string SLIDX says of a search list. SLMORE
+; = 1 if it has more after that one. RMS$_NMF past its last.
+PARSEIDX:
+        .JSB_ENTRY
         PUSHR   #^M<R2, R3, R4, R5, R6, R7, R8, R9, R10, R11>
         CLRL    WILD
+        MOVL    #1, SLON
+        CLRL    SLMORE
         DSBINT  #IPL$_SYNCH
         PUSHL   R4
         PUSHL   R3
@@ -282,12 +305,22 @@ SPLIT:
 ; LNM$FILE_DEV, without an underscore before it, up to LNM$C_MAXDEPTH
 ; times, splits the equivalence string into EQUT: its device becomes the
 ; table's, and its other parts fill in those the table leaves out.
-; SYS$SYSTEM:DCL.EXE is DKA0:[SYSEXE]DCL.EXE. R0 = RMS$_NORMAL, or
-; SPLIT's error. IPL$_SYNCH. Uses R0-R9.
+; SYS$SYSTEM:DCL.EXE is DKA0:[SYSEXE]DCL.EXE. An equivalence that is
+; only a name, DKA0, is a device, copied with its colon to the table's
+; DEVBUF. The equivalence is the
+; first string of a search list, but in the first table with a device,
+; whose device MERGE takes: there, of the first search list, the one
+; SLIDX says, and SLMORE = 1 if there are more. R0 = RMS$_NORMAL, SPLIT's
+; error, or RMS$_NMF past the list's last. IPL$_SYNCH. Uses R0-R9.
 XLATE:
         .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5, R6, R7, R8, R9>
         MOVL    R2, R8
-        MOVL    #LNM$C_MAXDEPTH, R9
+        CLRL    SLOWN
+        TSTL    4(R8)
+        BEQL    5$
+        MOVL    SLON, SLOWN
+        CLRL    SLON
+5$:     MOVL    #LNM$C_MAXDEPTH, R9
 10$:    MOVL    (R8), R6                ; the device, without its colon
         SUBL3   #1, 4(R8), R7
         BLEQ    80$
@@ -296,13 +329,44 @@ XLATE:
         BSBW    LNM$TRNLOG
         TSTL    R1
         BEQL    80$
-        MOVZBL  LNMB$T_NAME(R1), R0
-        MOVAB   LNMB$T_NAME+1(R1)[R0], R0
-        MOVZBL  (R0)+, R1
+        MOVL    R1, R5
+        CLRL    R0
+        BSBW    LNM$EQUIV               ; R0 = the first string, R1 = the last's index
+        TSTL    SLOWN
+        BEQL    15$
+        TSTL    R1
+        BEQL    15$                     ; not a search list
+        CLRL    SLOWN
+        CMPL    SLIDX, R1
+        BGTRU   85$
+        BEQL    12$
+        MOVL    #1, SLMORE
+12$:    MOVL    SLIDX, R0
+        MOVL    R5, R1
+        BSBW    LNM$EQUIV
+15$:    MOVZBL  (R0)+, R1
         MOVAQ   EQUT, R2
         BSBW    SPLIT
         BLBC    R0, 90$
-        MOVQ    EQUT, (R8)
+        TSTL    EQUT+4                  ; only a name: a device without its colon
+        BNEQ    17$
+        TSTL    EQUT+12
+        BNEQ    17$
+        BISL3   EQUT+28, EQUT+36, R0
+        BNEQ    17$
+        MOVL    EQUT+20, R6
+        BEQL    17$
+        MOVAB   SPECT, R0               ; the table's DEVBUF
+        SUBL3   R0, R8, R0
+        DIVL2   #40, R0
+        ASHL    #8, R0, R0
+        MOVAB   DEVBUF[R0], R7
+        MOVC3   R6, @EQUT+16, (R7)
+        MOVB    #^A/:/, (R3)
+        MOVL    R7, EQUT
+        ADDL3   #1, R6, EQUT+4
+        CLRQ    EQUT+16
+17$:    MOVQ    EQUT, (R8)
         MOVL    #1, R0
 20$:    MOVAQ   (R8)[R0], R1
         TSTL    4(R1)
@@ -312,6 +376,8 @@ XLATE:
 30$:    AOBLSS  #5, R0, 20$
         SOBGTR  R9, 10$
 80$:    MOVL    #RMS$_NORMAL, R0
+        BRB     90$
+85$:    MOVL    #RMS$_NMF, R0
 90$:    MOVL    R8, R2
         RSB
 
@@ -699,6 +765,31 @@ RMS$FIND::
 80$:    MOVL    #RMS$_WLD, R0
 90$:    RSB
 
+; RMS$LOCATE: R0-R4 as for RMS$PARSE, R5 = a buffer. RMS$PARSE, then
+; RMS$FIND, with each string of a search list in turn until the file is
+; there: the status of the last try. Holding FIL$LOCK. Uses R0-R9.
+RMS$LOCATE::
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5, R6, R7, R8, R9>
+        CLRL    SLIDX
+10$:    PUSHR   #^M<R0, R1, R2, R3, R4, R5>
+        BSBW    PARSEIDX
+        BLBC    R0, 20$
+        MOVL    20(SP), R1
+        BSBW    RMS$FIND
+20$:    MOVL    R0, R6
+        POPR    #^M<R0, R1, R2, R3, R4, R5>
+        BLBS    R6, 90$
+        TSTL    SLMORE
+        BEQL    90$
+        CMPL    R6, #RMS$_FNF
+        BEQL    30$
+        CMPL    R6, #RMS$_DNF
+        BNEQ    90$
+30$:    INCL    SLIDX
+        BRB     10$
+90$:    MOVL    R6, R0
+        RSB
+
 ; SEARCH: after RMS$PARSE, R9 = how many matches to skip. Finds the next
 ; file the expanded specification names, and makes its resultant
 ; specification. R5 = its file number, R0 = SS$_NORMAL, SS$_NOMOREFILES,
@@ -915,19 +1006,37 @@ FABNAM:
 ; SS$_ACCVIO. Uses R0-R4.
 PARSEFAB:
         .JSB_ENTRY  SCRATCH=<R2, R3, R4>
-        MOVL    FAB$L_FNA(R10), R0
-        MOVZBL  FAB$B_FNS(R10), R1
+        BSBB    FABCHK
+        BLBC    R0, 90$
+        BSBB    FABSPEC
+        BSBW    RMS$PARSE
+90$:    RSB
+
+; FABCHK: R10 = a FAB. R0 = RMS$_NORMAL, or SS$_ACCVIO if the caller
+; can't read its file specification and its default one. Uses R0-R3.
+FABCHK:
+        .JSB_ENTRY  SCRATCH=<R2, R3>
+        BSBB    FABSPEC
+        TSTL    R1
         BEQL    10$
         IFNORD  R1, (R0), 80$
-10$:    MOVL    FAB$L_DNA(R10), R2
-        MOVZBL  FAB$B_DNS(R10), R3
+10$:    TSTL    R3
         BEQL    20$
         IFNORD  R3, (R2), 80$
-20$:    BSBW    SYSDFLT
-        BSBW    RMS$PARSE
+20$:    MOVL    #RMS$_NORMAL, R0
         RSB
 80$:    MOVL    #SS$_ACCVIO, R0
         RSB
+
+; FABSPEC: R10 = a FAB. R0-R4 as RMS$PARSE takes them: its file
+; specification, its default one and the system's.
+FABSPEC:
+        .JSB_ENTRY  OUTPUT=<R1, R2, R3, R4>
+        MOVL    FAB$L_FNA(R10), R0
+        MOVZBL  FAB$B_FNS(R10), R1
+        MOVL    FAB$L_DNA(R10), R2
+        MOVZBL  FAB$B_DNS(R10), R3
+        BRW     SYSDFLT
 
 ; SYSDFLT: R4 = SYSDEF, SYS$DISK: and the current process's default
 ; directory. Keeps every other register.
@@ -968,9 +1077,12 @@ L:      BSBW    FIL$UNLOCK
 
 ; $PARSE fab: parses the FAB's file specification, with its default one,
 ; into its NAM block: the expanded string, if the NAM block has an area
-; for it, its parts, its directory's ID, and NAM$M_WILDCARD. $SEARCH
-; then finds the files it names. RMS$_DNF, when the directory doesn't
-; exist, still gives the expanded string and its parts.
+; for it, its parts, its directory's ID, NAM$M_WILDCARD, and
+; NAM$M_SEARCH_LIST if its device is a search list, whose first string
+; it is expanded with. $SEARCH then finds the files it names. RMS$_DNF,
+; when the directory doesn't exist, still gives the expanded string and
+; its parts; but not for a search list's first string with more after
+; it.
         .ENTRY  EXE$PARSE, ^M<R2, R3, R4, R5, R6, R7, R8, R9, R10, R11>
         BSBW    FIL$LOCK
         BSBW    FABNAM
@@ -998,8 +1110,12 @@ L:      BSBW    FIL$UNLOCK
         MOVW    DIRFID+4, NAM$W_DID+4(R11)
         CLRL    NAM$L_FNB(R11)
         TSTL    WILD
+        BEQL    15$
+        BISL2   #NAM$M_WILDCARD, NAM$L_FNB(R11)
+15$:    TSTL    SLMORE
         BEQL    20$
-        MOVL    #NAM$M_WILDCARD, NAM$L_FNB(R11)
+        BISL2   #NAM$M_SEARCH_LIST, NAM$L_FNB(R11)
+        MOVL    #RMS$_NORMAL, R9        ; the next string's directory may be there
 20$:    MOVL    R9, R0
 90$:    FABDONE
 
@@ -1007,7 +1123,10 @@ L:      BSBW    FIL$UNLOCK
 ; FAB's NAM block names, and puts its resultant string, its parts and its
 ; file ID there. RMS$_FNF if there is none at all, then RMS$_NMF when
 ; there are no more, and the next $SEARCH starts again. NAM$L_WCC counts
-; the matches to skip, and WCC_FOUND says one was found.
+; the matches to skip, and WCC_FOUND says one was found. With
+; NAM$M_SEARCH_LIST, it is the FAB's specification that is parsed again,
+; with each string of the search list in turn, which NAM$L_WCC holds
+; too: a string whose directory isn't there is passed over.
         .ENTRY  EXE$SEARCH, ^M<R2, R3, R4, R5, R6, R7, R8, R9, R10, R11>
         BSBW    FIL$LOCK
         BSBW    FABNAM
@@ -1020,20 +1139,42 @@ L:      BSBW    FIL$UNLOCK
         BEQL    90$
         MOVL    NAM$L_ESA(R11), R0
         IFNORD  R1, (R0), 85$
+3$:     EXTZV   #WCC_V_LIST, #WCC_S_LIST, NAM$L_WCC(R11), SLIDX
+        BITL    #NAM$M_SEARCH_LIST, NAM$L_FNB(R11)
+        BEQL    4$
+        BSBW    FABCHK
+        BLBC    R0, 90$
+        BSBW    FABSPEC
+        BRB     5$
+4$:     MOVL    NAM$L_ESA(R11), R0
+        MOVZBL  NAM$B_ESL(R11), R1
         CLRQ    R2
         BSBW    SYSDFLT
-        BSBW    RMS$PARSE
-        BLBC    R0, 90$
-        BICL3   #WCC_FOUND, NAM$L_WCC(R11), R9
+5$:     BSBW    PARSEIDX
+        BLBS    R0, 7$
+        CMPL    R0, #RMS$_NMF           ; the search list is shorter now
+        BEQL    10$
+        CMPL    R0, #RMS$_DNF
+        BNEQ    90$
+        TSTL    SLMORE
+        BNEQ    8$
+        TSTL    SLIDX
+        BNEQ    10$
+        BRB     90$
+7$:     BICL3   #^C<WCC_SKIP>, NAM$L_WCC(R11), R9
         BSBW    SEARCH
         BLBS    R0, 20$
         CMPL    R0, #SS$_NOMOREFILES
         BNEQ    90$
-        MOVL    #RMS$_NMF, R0
-        TSTL    NAM$L_WCC(R11)
-        BNEQ    10$
+        TSTL    SLMORE
+        BEQL    10$
+8$:     BICL2   #WCC_SKIP, NAM$L_WCC(R11)       ; the next string, from its first match
+        ADDL2   #1@WCC_V_LIST, NAM$L_WCC(R11)
+        BRB     3$
+10$:    MOVL    #RMS$_NMF, R0
+        BBS     #31, NAM$L_WCC(R11), 15$        ; WCC_FOUND
         MOVL    #RMS$_FNF, R0
-10$:    CLRL    NAM$L_WCC(R11)
+15$:    CLRL    NAM$L_WCC(R11)
         BRB     90$
 20$:    INCL    NAM$L_WCC(R11)
         BISL2   #WCC_FOUND, NAM$L_WCC(R11)
@@ -1060,25 +1201,32 @@ L:      BSBW    FIL$UNLOCK
         BLBC    R0, 90$
         BSBW    FINDXAB
         BLBC    R0, 90$
-        BSBW    PARSEFAB
+        BSBW    FABCHK
         BLBC    R0, 90$
+        BSBW    FABSPEC
+        PUSHR   #^M<R0, R1, R2, R3>
+        BSBW    NEWIFAB
+        MOVL    R0, R6
+        POPR    #^M<R0, R1, R2, R3>
+        BLBS    R6, 5$
+        MOVL    R6, R0
+        BRB     90$
+5$:     PUSHR   #^M<R7, R8, R9>
+        MOVAB   IFB$AB_HDR(R7), R5
+        BSBW    RMS$LOCATE
+        POPR    #^M<R7, R8, R9>
+        BLBC    R0, 80$
+        MOVL    F11$GL_VCB, IFB$L_VCB(R7)       ; the volume it was found on
         MOVZBL  FAB$B_FAC(R10), R6      ; the access: $GET's if it gives none
-        BNEQ    5$
+        BNEQ    7$
         MOVL    #FAB$M_GET, R6
-5$:     BITB    #FAB$M_PUT!FAB$M_DEL!FAB$M_UPD!FAB$M_TRN, R6
+7$:     MOVB    R6, IFB$B_FAC(R7)
+        BITB    #FAB$M_PUT!FAB$M_DEL!FAB$M_UPD!FAB$M_TRN, R6
         BEQL    10$
         MOVL    F11$GL_VCB, R1
         MOVL    #RMS$_WLK, R0
-        BBC     #VCB$V_WRITE, VCB$L_STATUS(R1), 90$
-10$:    BSBW    NEWIFAB
-        BLBC    R0, 90$
-        MOVB    R6, IFB$B_FAC(R7)
-        PUSHR   #^M<R7, R8, R9>
-        MOVAB   IFB$AB_HDR(R7), R1
-        BSBW    RMS$FIND
-        POPR    #^M<R7, R8, R9>
-        BLBC    R0, 80$
-        MOVL    #ARM$M_READ, R0
+        BBC     #VCB$V_WRITE, VCB$L_STATUS(R1), 80$
+10$:    MOVL    #ARM$M_READ, R0
         BITB    #FAB$M_PUT!FAB$M_DEL!FAB$M_UPD!FAB$M_TRN, IFB$B_FAC(R7)
         BEQL    12$
         MOVL    #ARM$M_READ!ARM$M_WRITE, R0
@@ -1843,18 +1991,18 @@ CRENTER:
         MOVL    #1, R9
         CLRQ    R2
         BSBW    SYSDFLT
-        BSBW    RMS$PARSE
         BRB     15$
-10$:    BSBW    PARSEFAB
-15$:    BLBC    R0, 90$
+10$:    BSBW    FABCHK
+        BLBC    R0, 90$
+        BSBW    FABSPEC
+15$:    PUSHL   R9
+        MOVAB   HDRBUF, R5
+        BSBW    RMS$LOCATE
+        MOVL    (SP)+, R9
+        BLBC    R0, 90$
         MOVL    F11$GL_VCB, R1
         MOVL    #RMS$_WLK, R0
         BBC     #VCB$V_WRITE, VCB$L_STATUS(R1), 90$
-        PUSHL   R9
-        MOVAB   HDRBUF, R1
-        BSBW    RMS$FIND
-        MOVL    (SP)+, R9
-        BLBC    R0, 90$
         MOVL    #RMS$_PRV, R0
         TSTB    HDRBUF+FH2$B_FID_NMX
         BNEQ    20$
@@ -1890,7 +2038,7 @@ CRENTER:
         BSBW    FIL$DELHDR
         BLBC    R0, 80$
         BLBC    R9, 30$                 ; one match fewer to skip
-        BITL    #^C<WCC_FOUND>, NAM$L_WCC(R11)
+        BITL    #WCC_SKIP, NAM$L_WCC(R11)
         BEQL    30$
         DECL    NAM$L_WCC(R11)
 30$:    MOVL    #RMS$_NORMAL, R0
@@ -1980,6 +2128,8 @@ RMS$RUNDOWN::
 ; the word at oldlen. Each argument may be 0. newdir is [dir.dir...] or
 ; <...>, up to 63 characters, not relative: RMS$_DIR if it isn't, SS$_ACCVIO if the
 ; caller can't read or write an argument. It isn't looked for on the disk.
+; An empty newdir, vaxpunk's, leaves no default directory: a file's then
+; comes from SYS$DISK's logical name, a string of a search list each.
         .ENTRY  EXE$SETDDIR, ^M<R2, R3, R4, R5, R6>
         DSBINT  #IPL$_SYNCH
         MOVL    SCH$GL_CURPCB, R6
@@ -2008,7 +2158,11 @@ RMS$RUNDOWN::
         BLBC    R0, 90$
         MOVZWL  (R1), R2
         MOVL    4(R1), R1
-        CMPL    R2, #3
+        TSTL    R2
+        BNEQ    32$
+        CLRB    (R6)
+        BRB     70$
+32$:    CMPL    R2, #3
         BLSSU   85$
         CMPL    R2, #63
         BGTRU   85$

@@ -3,13 +3,15 @@
 ;
 ; DCL's DIRECTORY [spec] runs this. Lists the files spec names, as VMS's DIRECTORY
 ; does: the directory, then their names, four to a line, then how many.
+; A search list's files are in more than one: each has its heading and
+; total, and a grand total follows.
 ; RMS's $PARSE expands spec, what it leaves out taken from *.*;*, and the
 ; directory from the default one; $SEARCH finds each file. * matches any
 ; characters, % one. /OWNER and /PROTECTION list a file a line, with its
 ; owner's UIC and its protection, which $OPEN puts in a protection XAB.
 ; /FULL lists all VMS's does about each, from its XABs, and the blocks
 ; they use and have.
-; ponytail: one directory, since RMS has no wildcard directories. A file
+; ponytail: no wildcard directories, which RMS hasn't. A file
 ; the process may not read shows neither, where VMS's DIRECTORY asks the
 ; XQP for them. /FULL's directories are contiguous, and the times
 ; Files-11 doesn't keep, like the last access, are <None specified>.
@@ -55,7 +57,12 @@ NAM:    $NAM    ESA=EXP, ESS=255, RSA=RES, RSS=255
 EXP:    .BLKB   255
 RES:    .BLKB   255
 LINE:   .BLKB   256                     ; a line being made, .ASCIC
-FILES:  .LONG   0
+FILES:  .LONG   0                       ; in this directory
+DIRS:   .LONG   0                       ; the directories before it,
+GFILES: .LONG   0                       ; their files
+GUSED:  .LONG   0                       ; and /FULL's blocks
+GALLOC: .LONG   0
+CURDIR: .BLKB   256                     ; its device and directory, .ASCIC
 DETAIL: .LONG   0                       ; bit 0 /OWNER, bit 1 /PROTECTION, 2 /FULL
 FAB2:   $FAB    FNA=RES, XAB=XAB        ; $OPEN's, of the file $SEARCH found
 XAB:    $XABPRO NXT=DAT
@@ -98,17 +105,8 @@ DIRTYPE:
         BLBC    R0, 90$
 10$:    $SEARCH FAB=FAB
         BLBC    R0, 50$
-        TSTL    FILES
-        BNEQ    20$
-        PRINT   ""                      ; the first: its directory
-        ADDTEXT "Directory "
-        MOVZBL  NAM+NAM$B_DEV, R2
-        ADDB2   NAM+NAM$B_DIR, R2
-        MOVL    NAM+NAM$L_DEV, R1
-        BSBW    ADD
-        BSBW    SAY
-        PRINT   ""
-20$:    INCL    FILES
+        BSBW    NEWDIR
+        INCL    FILES
         BBC     #2, DETAIL, 22$
         BSBW    FULL
         BRW     10$
@@ -140,30 +138,95 @@ DIRTYPE:
         BNEQ    90$
         PRINT   "%DIRECT-W-NOFILES, no files found"
         BRB     80$
-60$:    TSTB    LINE
-        BEQL    65$
+60$:    BSBW    TOTAL
+        CMPL    DIRS, #1
+        BLEQ    80$
+        PRINT   ""
+        ADDTEXT "Grand total of "
+        MOVL    DIRS, R1
+        BSBW    ADDDEC
+        ADDTEXT " directories, "
+        MOVL    GFILES, R1
+        MOVL    GUSED, R2
+        MOVL    GALLOC, R3
+        BSBW    COUNTS
         BSBW    SAY
-65$:    PRINT   ""
-        ADDTEXT "Total of "
-        MOVL    FILES, R1
-        BSBW    ADDDEC
-        CMPL    FILES, #1
-        BEQL    67$
-        ADDTEXT " files"
-        BRB     68$
-67$:    ADDTEXT " file"
-68$:    BBC     #2, DETAIL, 69$         ; /FULL: and their blocks
-        ADDTEXT ", "
-        MOVL    USED, R1
-        BSBW    ADDDEC
-        ADDTEXT "/"
-        MOVL    ALLOC, R1
-        BSBW    ADDDEC
-        ADDTEXT " blocks"
-69$:    ADDTEXT "."
-70$:    BSBW    SAY
 80$:    MOVL    #SS$_NORMAL, R0
 90$:    RET
+
+; NEWDIR: before the file $SEARCH found, if its directory isn't the last
+; one's: that one's total, then its heading. Uses R0-R5.
+NEWDIR:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5>
+        MOVZBL  NAM+NAM$B_DEV, R2
+        ADDB2   NAM+NAM$B_DIR, R2
+        MOVZBL  CURDIR, R0
+        CMPC5   R2, @NAM+NAM$L_DEV, #0, R0, CURDIR+1
+        BNEQ    10$
+        TSTL    DIRS                    ; the same, but for the first
+        BNEQ    90$
+        TSTL    FILES
+        BNEQ    90$
+10$:    TSTL    FILES
+        BEQL    20$
+        BSBW    TOTAL
+20$:    MOVZBL  NAM+NAM$B_DEV, R2
+        ADDB2   NAM+NAM$B_DIR, R2
+        MOVB    R2, CURDIR
+        MOVC3   R2, @NAM+NAM$L_DEV, CURDIR+1
+        PRINT   ""
+        ADDTEXT "Directory "
+        MOVAB   CURDIR, R1
+        MOVZBL  (R1)+, R2
+        BSBW    ADD
+        BSBW    SAY
+        PRINT   ""
+90$:    RSB
+
+; TOTAL: ends the directory's list with how many files it has, and adds
+; them, and their blocks, to the grand total. Uses R0-R5.
+TOTAL:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5>
+        TSTB    LINE
+        BEQL    10$
+        BSBW    SAY
+10$:    PRINT   ""
+        ADDTEXT "Total of "
+        MOVL    FILES, R1
+        MOVL    USED, R2
+        MOVL    ALLOC, R3
+        BSBW    COUNTS
+        BSBW    SAY
+        INCL    DIRS
+        ADDL2   FILES, GFILES
+        ADDL2   USED, GUSED
+        ADDL2   ALLOC, GALLOC
+        CLRQ    USED                    ; and ALLOC
+        CLRL    FILES
+        RSB
+
+; COUNTS: appends "R1 files.", or "file" for one, and with /FULL ", R2/R3
+; blocks", to LINE. Uses R0-R5.
+COUNTS:
+        .JSB_ENTRY  SCRATCH=<R4, R5>
+        PUSHR   #^M<R1, R2, R3>
+        BSBW    ADDDEC
+        CMPL    (SP), #1
+        BEQL    10$
+        ADDTEXT " files"
+        BRB     20$
+10$:    ADDTEXT " file"
+20$:    BBC     #2, DETAIL, 30$         ; /FULL: and their blocks
+        ADDTEXT ", "
+        MOVL    4(SP), R1
+        BSBW    ADDDEC
+        ADDTEXT "/"
+        MOVL    8(SP), R1
+        BSBW    ADDDEC
+        ADDTEXT " blocks"
+30$:    ADDTEXT "."
+        POPR    #^M<R1, R2, R3>
+        RSB
 
 ; DETAILS: writes a line for the file $SEARCH found: its name, then its
 ; owner and protection, as DETAIL asks, or, if the process may not read
