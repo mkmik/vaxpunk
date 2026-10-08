@@ -20,7 +20,7 @@ runs at 24 MHz instead of 62.5 MHz.
 
 One thing that doesn't work under HVF is the halt. `LOGOUT` deletes
 SYSTEM, the swapper prints `%EXEC-I-LOGOUT` and halts, and the root task
-calls `poweroff()` (`roottask/src/main.c`). That issues semihosting's
+calls `poweroff()` (`pal/src/main.c`). That issues semihosting's
 `SYS_EXIT`, `HLT #0xF000` with `x0 = 0x18`, and `run-qemu.sh` passes
 `-semihosting-config enable=on,target=native,userspace=on` so QEMU accepts
 it from EL0.
@@ -67,7 +67,7 @@ seL4, at EL1, could issue it, and seL4 has no system call to do that.
   `SMC` only with `virtualization=on`. Under HVF that needs nested
   virtualization, which only newer Apple chips with recent macOS and QEMU
   have. It also changes the exception level Limine hands over at, which
-  `kernel/config.cmake` relies on, and the DTB seL4 dumped at configure
+  `pal/kernel/config.cmake` relies on, and the DTB seL4 dumped at configure
   time.
 - **Patch seL4** with a system call that issues `HVC`. A fork of the kernel
   to maintain, for one call.

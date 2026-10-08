@@ -12,7 +12,7 @@
 set -eu
 
 root=$(cd "$(dirname "$0")/.." && pwd)
-. "$root/kernel/qemu.env"
+. "$root/pal/kernel/qemu.env"
 
 cpu="-cpu $QEMU_CPU"
 gdb=""

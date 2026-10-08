@@ -72,7 +72,7 @@ DEC built `DCLTABLES` on VMS, with CDU running as `SET COMMAND`. FreeVMS
 compiles its CLDs on the host with a flex and bison CDU, and links the
 tables into DCL as an object.
 
-vaxpunk has no compiler or linker of its own yet. `roottask/build.rs`
+vaxpunk has no compiler or linker of its own yet. `vms/build.rs`
 assembles and links every image on the host, and writes them to the
 system disk.
 
@@ -90,10 +90,10 @@ system disk.
 2. **Table format.** The tables are bytes with no addresses in them:
    strings are `.ASCIC`, and blocks point to each other with word
    offsets from the table's start. They are documented in
-   `vtools/docs/command-tables.md`. A `ROUTINE`, which needs an
+   `crosstools/vtools/docs/command-tables.md`. A `ROUTINE`, which needs an
    address, is a longword after the table's bytes, which the linker
    fills, and which `CLI$DISPATCH` calls.
-3. **Every DCL verb is CLD.** `roottask/cld/*.cld` compile into one
+3. **Every DCL verb is CLD.** `vms/cld/*.cld` compile into one
    table, `DCL$TABLES`, linked into `DCL.EXE`.
    - DCL parses every command with it, after symbols and labels, so one
      set of rules matches each verb: 4 characters, or fewer if unique.
@@ -108,7 +108,7 @@ system disk.
    - `HELP` is an image, as on VMS, linked with `DCL$TABLES`, which
      describes the verbs from them: their parameters, keywords,
      qualifiers and syntaxes.
-4. **`CLI`, a library module** in `roottask/sysexe/lib/cli.mar`, is
+4. **`CLI`, a library module** in `vms/sysexe/lib/cli.mar`, is
    linked into every image on the system disk, as `PUT_LINE` is, and
    into DCL, in supervisor mode. It has:
    - **`CLI$DCL_PARSE(line, table [,param_routine])`.** It parses a

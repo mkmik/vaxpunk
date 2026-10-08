@@ -14,5 +14,5 @@ COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
 # GitHub sets HOME to /github/home in containers: keep Rust out of it.
 ENV RUSTUP_HOME=/usr/local/rustup CARGO_HOME=/usr/local/cargo PATH=/usr/local/cargo/bin:$PATH
 RUN curl -sSf https://sh.rustup.rs | sh -s -- -y --no-modify-path --profile minimal
-# kernel/build.rs would guess it; say it.
+# pal/kernel/build.rs would guess it; say it.
 ENV CROSS_COMPILE=aarch64-linux-gnu-

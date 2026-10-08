@@ -38,7 +38,7 @@ an image, has `$VERB` and `$LINE` for every command.
 
 ## Decision
 
-1. **The CDU is a module DCL links**, `roottask/sysexe/dcl/cdu.mar`,
+1. **The CDU is a module DCL links**, `vms/sysexe/dcl/cdu.mar`,
    which build.rs links into `DCL.EXE` only. `CDU$COMPILE text, table,
    tablen` compiles CLD text into tables in a buffer.
    - It reads what vcdu reads: the same statements, clauses, defaults

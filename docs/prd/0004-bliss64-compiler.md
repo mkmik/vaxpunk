@@ -89,18 +89,18 @@ Decisions this PRD rests on:
                └── VASM, vasm ported to BLISS-64, linked in
 ```
 
-**`vbliss`** (`vtools/crates/vbliss`) is the stage 0 compiler, in Rust: a
+**`vbliss`** (`crosstools/vtools/crates/vbliss`) is the stage 0 compiler, in Rust: a
 front end (lexer, macro expander, parser, name resolution), the IR, the
 ARM64 back end, the listing and the lint. It links `vasm` as a library and
 writes an OBJ in one command, as `vmacro` does.
 
 **`BLISS.EXE`** is the BLISS-64 compiler written in BLISS-64
-(`vtools/bliss/`). It is a port of `vbliss`, with the same passes, the same
+(`crosstools/vtools/bliss/`). It is a port of `vbliss`, with the same passes, the same
 IR and the same output. It reads and writes files through a small I/O
 module with two implementations: `vrun`'s file monitor calls on the host,
 and RMS on vaxpunk.
 
-**VASM** is `vasm` ported to BLISS-64 (`vtools/bliss/vasm/`): the lexer,
+**VASM** is `vasm` ported to BLISS-64 (`crosstools/vtools/bliss/vasm/`): the lexer,
 macro facility, directives, ARM64 encoder and OBJ writer, with the same
 output as the Rust `vasm` byte for byte. `BLISS.EXE` links it and hands it
 the assembly it generates; it also builds alone as `VASM.EXE`, an
@@ -119,7 +119,7 @@ The language is the BLISS Language Reference Manual (AA-H275E-TK, May
 1987), common BLISS and its BLISS-32 parts, as Alpha's BLISS-64 and
 BLISS-32 change them. The
 1987 manual predates Alpha, so the first deliverable is
-`vtools/docs/bliss64.md`: the BLISS-64 differences, each with where it was
+`crosstools/vtools/docs/bliss64.md`: the BLISS-64 differences, each with where it was
 learned (DEC's Alpha BLISS documentation, the kit's release notes, or a
 probe of the reference compiler). Among them: 64-bit fullwords and
 `%BPVAL`, `%UPVAL` and the allocation units, quadword fields, the Alpha
@@ -249,7 +249,7 @@ Rules 1 to 4 come with the front end; 5 and 6 later. A line ending in
   console and an exit, and semihosting is out because it is an undefined
   instruction under HVF ([PRD-0001](0001-vtools.md)). `vrun` gains file
   monitor calls (open, read, write, close, on paths the driver allows),
-  documented in `vtools/docs/runner-abi.md`, working under TCG and HVF.
+  documented in `crosstools/vtools/docs/runner-abi.md`, working under TCG and HVF.
 
 ## Testing strategy
 
@@ -268,7 +268,7 @@ bounds, `CASE` ranges, `SELECTONE` order, `LEAVE` values, `PLIT` layout.
 
 **Running the oracle.** AXPbox runs on its own copy of the system disk
 with BLISSA64 installed, never the user's playground disk, in batch through
-`ods/vms/run-vms.py`. Its results are committed as expected outputs, so
+`crosstools/ods/vms/run-vms.py`. Its results are committed as expected outputs, so
 CI never needs AXPbox. AXPbox hangs about once in six scripted runs; the
 harness retries.
 
@@ -304,7 +304,7 @@ module from the system disk, and its OBJ must equal the one the host made.
   leave open is listed there for the oracle to probe.
 - **`vrun` file I/O.** Settled: the stub forwards the calls to `vrun` over
   the console UART, which QEMU offers under TCG and HVF alike, so no file
-  has to be named up front (`vtools/docs/runner-abi.md`). It costs a QEMU
+  has to be named up front (`crosstools/vtools/docs/runner-abi.md`). It costs a QEMU
   exit per byte under HVF; a faster channel can come if compile times show
   it matters.
 - **Precompiled libraries.** `LIBRARY` is how BLISS avoids reparsing
@@ -333,7 +333,7 @@ module from the system disk, and its OBJ must equal the one the host made.
 Each step ends with something you can run or look at.
 
 1. **Spec notes.** Read the Language Reference Manual and DEC's Alpha
-   BLISS documentation; write `vtools/docs/bliss64.md` with the BLISS-64
+   BLISS documentation; write `crosstools/vtools/docs/bliss64.md` with the BLISS-64
    delta and its sources. *Visible:* the document.
 2. **Calling standard.** [PRD-0005](0005-macro32-on-the-calling-standard.md):
    `vmacro`, the PAL and the executive moved to

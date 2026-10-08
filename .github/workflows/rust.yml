@@ -1,17 +1,17 @@
 name: rust
 
-# The Cargo workspace. Its default members, ods/ and vtools/, are built and
-# tested. The OS crates (kernel, shim, roottask, image) need the cross C
-# toolchain, so here CI only checks their formatting: their Rust is in */*.rs.
+# The Cargo workspace. Its default members, crosstools/ and vms/ (the
+# system disk), are built and tested. The seL4 crates (pal/ and boot/) need
+# the cross C toolchain, so here CI only checks their formatting.
 # boot.yml builds and boots them.
-# vrun's tests run CLITEST, the command parser's check, from roottask/sysexe,
-# and CDU$COMPILE, SET COMMAND's compiler, on roottask/cld's CLD.
+# vrun's tests run CLITEST, the command parser's check, from vms/sysexe,
+# and CDU$COMPILE, SET COMMAND's compiler, on vms/cld's CLD.
 on:
   push:
     branches: [main]
-    paths: ["Cargo.toml", "Cargo.lock", "*/*.rs", "*/Cargo.toml", "ods/**", "vtools/**", "roottask/sysexe/**", "roottask/cld/**", ".github/workflows/rust.yml"]
+    paths: ["Cargo.toml", "Cargo.lock", "*/*.rs", "*/Cargo.toml", "pal/*/*.rs", "pal/*/Cargo.toml", "crosstools/**", "vms/**", ".github/workflows/rust.yml"]
   pull_request:
-    paths: ["Cargo.toml", "Cargo.lock", "*/*.rs", "*/Cargo.toml", "ods/**", "vtools/**", "roottask/sysexe/**", "roottask/cld/**", ".github/workflows/rust.yml"]
+    paths: ["Cargo.toml", "Cargo.lock", "*/*.rs", "*/Cargo.toml", "pal/*/*.rs", "pal/*/Cargo.toml", "crosstools/**", "vms/**", ".github/workflows/rust.yml"]
 
 jobs:
   test:
@@ -42,12 +42,12 @@ jobs:
           brew install aarch64-elf-binutils qemu
       - name: The ods CLI and FUSE daemon use ods-image only
         run: |
-          ! grep -rn 'ods-core' ods/crates/ods-cli/Cargo.toml ods/crates/ods-fuse/Cargo.toml &&
-          ! grep -rn 'ods_core' ods/crates/ods-cli/src ods/crates/ods-fuse/src
+          ! grep -rn 'ods-core' crosstools/ods/crates/ods-cli/Cargo.toml crosstools/ods/crates/ods-fuse/Cargo.toml &&
+          ! grep -rn 'ods_core' crosstools/ods/crates/ods-cli/src crosstools/ods/crates/ods-fuse/src
       - name: The libraries the OS will use build without std
         run: cargo build -p ods-core -p vms-obj --target aarch64-unknown-none
       - run: cargo fmt --check
       - run: cargo clippy --all-targets -- -D warnings
       - name: Fixtures
-        run: ods/fixtures/fetch.sh
+        run: crosstools/ods/fixtures/fetch.sh
       - run: cargo test --release

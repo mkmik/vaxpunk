@@ -1,0 +1,16 @@
+        .TITLE  GETTIM  SYS$GETTIM for programs that run under vrun
+        .IDENT  /V1.0/
+; vrun has no clock: SYS$GETTIM gives time 0, 17-NOV-1858 00:00:00.00, so
+; that programs that format the time print the same each run. $NUMTIM
+; is the executive's (numtim.b64, a link to vms/exec/numtim.b64),
+; and $ASCTIM asctim.b64's; they call this for the system time.
+
+        .PSECT  $CODE$
+
+; SYS$GETTIM timadr: 0 into the quadword at timadr. R0 = SS$_NORMAL.
+        .ENTRY  SYS$GETTIM, ^M<>
+        CLRQ    @4(AP)
+        MOVL    #1, R0                          ; SS$_NORMAL
+        RET
+
+        .END

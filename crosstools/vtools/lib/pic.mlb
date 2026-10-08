@@ -1,0 +1,15 @@
+; pic.mlb: macros for position-independent code (docs/linker.md). Use it with
+; .LIBRARY "pic.mlb" and vasm -I crosstools/vtools/lib.
+
+; $LDADR REG, SYMBOL: loads SYMBOL's address into REG, a 64-bit register,
+; from a linkage slot in $LINK$. The code reaches the slot PC-relative; the
+; slot holds the address, which the loader fixes up if the image moves. Each
+; use makes its own slot.
+        .MACRO  $LDADR  REG, SYMBOL, ?SLOT
+        .SAVE_PSECT
+        .PSECT  $LINK$
+SLOT:   .ADDRESS SYMBOL
+        .RESTORE_PSECT
+        adrp    REG, SLOT
+        ldr     REG, [REG, #:lo12:SLOT]
+        .ENDM   $LDADR

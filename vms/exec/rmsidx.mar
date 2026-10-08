@@ -1,0 +1,1347 @@
+        .TITLE  RMSIDX  RMS: indexed files, prologue 3
+        .IDENT  /V0.1/
+;
+; An indexed file keeps its records in buckets in primary key order,
+; with an index above them for each key; an alternate key's index leads
+; to SIDRs, which give the records' RFAs (crosstools/ods/docs/indexed.md). $OPEN
+; reads the prologue's key and area descriptors into the IFAB's buffer,
+; with the stream's state, two walks, and three buckets' room: a walk
+; follows one bucket's entries, expanding compressed keys as it goes.
+;
+; A record is found by descending a key's index from its root, comparing
+; the key, or its first RAB$B_KSZ bytes, with each index entry, to a data
+; bucket, then walking it, and the next buckets along the level, to the
+; first record whose key is equal or greater (RAB$M_KGE), or greater
+; (RAB$M_KGT); along an alternate key, to the SIDR, and from its first
+; pointer that isn't deleted to the record, by RFA: the record's bucket
+; and ID where it was put, or an RRV there saying where it went.
+;
+; The stream remembers where it is along its key of reference by the key
+; and RFA of a record, not by a place in a bucket, which a $PUT may move:
+; the next $GET descends again to the record after it, the record itself
+; after a $FIND, or the first before any. $GET by RFA goes to the record
+; at once.
+;
+; rmsidxw.mar writes: $CREATE's prologue, $PUT, $UPDATE and $DELETE.
+; ponytail: buckets are read each time they are wanted, none kept; with
+; duplicate keys a $GET walks every duplicate before the current one;
+; collated and packed decimal keys are refused at $OPEN.
+;
+        .LIBRARY "lib.mlb"
+        .LIBRARY "starlet.mlb"
+        $SSDEF
+        $RMSDEF
+        $FABDEF
+        $RABDEF
+        $IFBDEF
+        $PLGDEF
+        $KEYDEF
+        $AREADEF
+        $BKTDEF
+        $IRCDEF
+        $IDXDEF
+        $XABKEYDEF
+        $XABSUMDEF
+        $XABALLDEF
+
+        .EXTERNAL RMS$ALLOCBUF, RMS$READBKT, FIL$READVBN
+
+BLOCK = 512
+MAXBKS = 32                             ; the largest bucket RMS takes, blocks
+MAXLEV = 32                             ; index levels a descent keeps
+
+        .PSECT  EXEC$DATA, NOEXE, WRT, QUAD
+IDX$AB_PLG::                             ; a prologue block being read
+        .BLKB   BLOCK
+
+        .PSECT  $CODE$
+
+; IDX$OPEN: R7 = an IFAB with an indexed file's header and attributes.
+; Reads its prologue's key and area descriptors into a buffer, with the
+; stream's state and room for its buckets, IFB$L_BUF, and puts the
+; stream before the first record along key 0. R0 = RMS$_NORMAL, RMS$_PLV
+; if it isn't prologue 3, RMS$_IFL for a damaged prologue, RMS$_BKS for
+; a bucket over MAXBKS blocks, RMS$_DTP for a collated or packed decimal
+; key, RMS$_DME, or the disk's error. Uses R0-R6, R8, R9, R11.
+IDX$OPEN::
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5, R6, R8, R9, R11>
+        MOVL    #1, R0
+        BSBW    IDX$RDPLG
+        BLBC    R0, 90$
+        MOVL    #RMS$_PLV, R0
+        CMPW    IDX$AB_PLG+PLG$W_VER_NO, #PLG$C_VER_3
+        BNEQ    90$
+        MOVZBL  IDX$AB_PLG+PLG$B_AMAX, R5   ; areas
+        MOVZBL  IDX$AB_PLG+PLG$B_AVBN, R6
+        MOVL    #1, R3                  ; the keys, and the largest bucket
+        CLRL    R4                      ; keys
+        MOVL    #1, R8
+        CLRL    R2
+10$:    MOVL    #RMS$_IFL, R0
+        CMPL    R4, #255
+        BGEQU   90$
+        CMPL    R2, #BLOCK-KEY$K_BLN
+        BGTRU   90$
+        PUSHL   R2
+        MOVL    R8, R0
+        BSBW    IDX$RDPLG
+        MOVL    (SP)+, R2
+        BLBC    R0, 90$
+        MOVAB   IDX$AB_PLG(R2), R1
+        MOVL    #RMS$_DTP, R0
+        BICB3   #KEY$C_DESCENDING, KEY$B_DATATYPE(R1), R9
+        CMPB    R9, #KEY$C_PACKED
+        BEQL    90$
+        CMPB    R9, #KEY$C_COLLATED
+        BGEQU   90$
+        MOVZBL  KEY$B_IDXBKTSZ(R1), R0
+        CMPL    R0, R3
+        BLEQU   12$
+        MOVL    R0, R3
+12$:    MOVZBL  KEY$B_DATBKTSZ(R1), R0
+        CMPL    R0, R3
+        BLEQU   14$
+        MOVL    R0, R3
+14$:    INCL    R4
+        MOVL    KEY$L_IDXFL(R1), R8
+        MOVZWL  KEY$W_NOFF(R1), R2
+        TSTL    R8
+        BNEQ    10$
+        CLRL    R2                      ; the areas' bucket sizes
+20$:    CMPL    R2, R5
+        BGEQU   30$
+        DIVL3   #8, R2, R0
+        ADDL2   R6, R0
+        BSBW    IDX$RDPLG
+        BLBC    R0, 90$
+        BICL3   #^C7, R2, R0
+        MULL2   #AREA$K_BLN, R0
+        MOVZBL  IDX$AB_PLG+AREA$B_ARBKTSZ(R0), R0
+        CMPL    R0, R3
+        BLEQU   25$
+        MOVL    R0, R3
+25$:    INCL    R2
+        BRB     20$
+30$:    MOVL    #RMS$_BKS, R0
+        CMPL    R3, #MAXBKS
+        BGTRU   90$
+        MULL3   #KEY$K_BLN+8, R4, R1    ; the buffer: state, keys, areas, buckets
+        MULL3   #AREA$K_BLN, R5, R0
+        ADDL2   R0, R1
+        MULL3   #BLOCK*4, R3, R0        ; three buckets and WORK2,
+        ADDL2   R0, R1
+        MOVZWL  IFB$W_MRS(R7), R0       ; and WORK, a bucket or a record
+        MULL3   #BLOCK, R3, R2
+        CMPL    R0, R2
+        BGEQU   32$
+        MOVL    R2, R0
+32$:    ADDL2   R0, R1
+        ADDL2   #X$K_LENGTH, R1
+        PUSHR   #^M<R3, R4, R5>
+        BSBW    RMS$ALLOCBUF
+        POPR    #^M<R3, R4, R5>
+        BLBC    R0, 90$
+        MOVL    IFB$L_BUF(R7), R11
+        MOVL    R11, IFB$L_IDX(R7)
+        MOVL    R4, X$L_NKEYS(R11)
+        MOVL    R5, X$L_NAREAS(R11)
+        MOVL    R6, X$L_AVBN(R11)
+        MOVL    R3, X$L_BKS(R11)
+        MOVAB   X$K_LENGTH(R11), R0     ; where each part goes
+        MOVL    R0, X$L_KEYS(R11)
+        MULL3   #KEY$K_BLN, R4, R1
+        ADDL2   R1, R0
+        MOVL    R0, X$L_KLOC(R11)
+        ADDL2   R4, R0
+        ADDL2   R4, R0
+        ADDL2   R4, R0
+        ADDL2   R4, R0
+        ADDL2   R4, R0
+        ADDL2   R4, R0
+        ADDL2   R4, R0
+        ADDL2   R4, R0
+        MOVL    R0, X$L_AREAS(R11)
+        MULL3   #AREA$K_BLN, R5, R1
+        ADDL2   R1, R0
+        MULL3   #BLOCK, R3, R1          ; a bucket's bytes
+        MOVL    R0, X$L_BUF0(R11)
+        ADDL2   R1, R0
+        MOVL    R0, X$L_BUF1(R11)
+        ADDL2   R1, R0
+        MOVL    R0, X$L_BUF2(R11)
+        ADDL2   R1, R0
+        MOVL    R0, X$L_WORK2(R11)
+        ADDL2   R1, R0
+        MOVL    R0, X$L_WORK(R11)
+        MOVZWL  IFB$W_MRS(R7), R2
+        CMPL    R2, R1
+        BGEQU   35$
+        MOVL    R1, R2
+35$:    MOVL    R2, X$L_WORKSZ(R11)
+        BSBW    RDKEYS
+        BLBC    R0, 90$
+        BSBW    RDAREAS
+        BLBC    R0, 90$
+        CLRB    X$B_KRF(R11)
+        MOVB    #X$C_BOF, X$B_STATE(R11)
+        CLRL    X$L_CURVBN(R11)
+        MOVL    #RMS$_NORMAL, R0
+90$:    RSB
+
+; IDX$RDPLG: R7 = an IFAB, R0 = a VBN. Reads that prologue block into IDX$AB_PLG.
+; R0 = RMS$_NORMAL or the disk's error. Uses R0-R3.
+IDX$RDPLG::
+        .JSB_ENTRY  SCRATCH=<R2, R3>
+        MOVL    #1, R1
+        MOVAB   IDX$AB_PLG, R2
+        BSBW    RMS$READBKT
+        RSB
+
+; RDKEYS: R7 = an IFAB, R11 = its state. Copies the key descriptors,
+; along their chain from VBN 1, to X$L_KEYS, and where each is to
+; X$L_KLOC: its VBN and offset, a longword each. R0 = RMS$_NORMAL or the
+; disk's error. Uses R0-R6.
+RDKEYS:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5, R6>
+        MOVL    X$L_KEYS(R11), R4
+        MOVL    X$L_KLOC(R11), R5
+        MOVL    #1, R6                  ; VBN
+        CLRL    R2                      ; offset
+        CLRL    R3                      ; the key
+10$:    MOVL    R6, (R5)+
+        MOVL    R2, (R5)+
+        PUSHR   #^M<R2, R3>
+        MOVL    R6, R0
+        BSBW    IDX$RDPLG
+        POPR    #^M<R2, R3>
+        BLBC    R0, 90$
+        PUSHR   #^M<R2, R3, R4, R5>
+        MOVC3   #KEY$K_BLN, IDX$AB_PLG(R2), (R4)
+        POPR    #^M<R2, R3, R4, R5>
+        MOVL    KEY$L_IDXFL(R4), R6
+        MOVZWL  KEY$W_NOFF(R4), R2
+        ADDL2   #KEY$K_BLN, R4
+        AOBLSS  X$L_NKEYS(R11), R3, 10$
+        MOVL    #RMS$_NORMAL, R0
+90$:    RSB
+
+; RDAREAS: R7 = an IFAB, R11 = its state. Copies the area descriptors,
+; eight to a block from X$L_AVBN, to X$L_AREAS. R0 = RMS$_NORMAL or the
+; disk's error. Uses R0-R4.
+RDAREAS:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4>
+        MOVL    X$L_AREAS(R11), R4
+        CLRL    R3
+10$:    MOVL    #RMS$_NORMAL, R0
+        CMPL    R3, X$L_NAREAS(R11)
+        BGEQU   90$
+        DIVL3   #8, R3, R0
+        ADDL2   X$L_AVBN(R11), R0
+        PUSHL   R3
+        BSBW    IDX$RDPLG
+        MOVL    (SP)+, R3
+        BLBC    R0, 90$
+        BICL3   #^C7, R3, R0
+        MULL2   #AREA$K_BLN, R0
+        PUSHR   #^M<R3, R4>
+        MOVC3   #AREA$K_BLN, IDX$AB_PLG(R0), (R4)
+        POPR    #^M<R3, R4>
+        ADDL2   #AREA$K_BLN, R4
+        INCL    R3
+        BRB     10$
+90$:    RSB
+
+; IDX$KEYDESC: R11 = an indexed file's state, R0 = a key number. R9 = its
+; key descriptor. Keeps every other register.
+IDX$KEYDESC::
+        .JSB_ENTRY  OUTPUT=<R9>
+        MULL3   #KEY$K_BLN, R0, R9
+        ADDL2   X$L_KEYS(R11), R9
+        RSB
+
+; IDX$CONNECT, IDX$REWIND: R7 = an IFAB, R10 = a RAB. The stream goes
+; before the first record along key RAB$B_KRF, or with RAB$M_EOF past the
+; last. R0 = RMS$_NORMAL, or RMS$_KRF for a key the file hasn't. Uses R0
+; and R11.
+IDX$CONNECT::
+IDX$REWIND::
+        .JSB_ENTRY  SCRATCH=<R11>
+        MOVL    IFB$L_IDX(R7), R11
+        MOVL    #RMS$_KRF, R0
+        MOVZBL  RAB$B_KRF(R10), R1
+        CMPL    R1, X$L_NKEYS(R11)
+        BGEQU   90$
+        MOVB    R1, X$B_KRF(R11)
+        MOVB    #X$C_BOF, X$B_STATE(R11)
+        BBC     #RAB$V_EOF, RAB$L_ROP(R10), 10$
+        MOVB    #X$C_EOF, X$B_STATE(R11)
+10$:    CLRL    X$L_CURVBN(R11)
+        MOVL    #RMS$_NORMAL, R0
+90$:    RSB
+
+; IDX$XABSUM: R7 = an indexed file's IFAB, R1 = an XABSUM. Gives it the
+; file's areas and keys and its prologue version. R0 = RMS$_NORMAL. Uses
+; R0 and R1.
+IDX$XABSUM::
+        .JSB_ENTRY
+        PUSHL   R11
+        MOVL    IFB$L_IDX(R7), R11
+        MOVB    X$L_NAREAS(R11), XAB$B_NOA(R1)
+        MOVB    X$L_NKEYS(R11), XAB$B_NOK(R1)
+        MOVW    #PLG$C_VER_3, XAB$W_PVN(R1)
+        MOVL    (SP)+, R11
+        MOVL    #RMS$_NORMAL, R0
+        RSB
+
+; IDX$XABKEY: R7 = an indexed file's IFAB, R1 = an XABKEY. Gives it key
+; XAB$B_REF's definition: areas, root, flags, data type, segments, sizes,
+; fills, first data bucket, its name to XAB$L_KNM's 32 bytes if it isn't
+; 0. R0 = RMS$_NORMAL, RMS$_KRF for a key the file hasn't, or SS$_ACCVIO.
+; Uses R0-R4.
+IDX$XABKEY::
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4>
+        PUSHR   #^M<R5, R9, R11>
+        MOVL    IFB$L_IDX(R7), R11
+        MOVL    R1, R4
+        MOVL    #RMS$_KRF, R0
+        MOVZBL  XAB$B_REF(R4), R0
+        CMPL    R0, X$L_NKEYS(R11)
+        BLSSU   5$
+        MOVL    #RMS$_KRF, R0
+        BRW     90$
+5$:     BSBW    IDX$KEYDESC
+        MOVB    KEY$B_IANUM(R9), XAB$B_IAN(R4)
+        MOVB    KEY$B_LANUM(R9), XAB$B_LAN(R4)
+        MOVB    KEY$B_DANUM(R9), XAB$B_DAN(R4)
+        MOVB    KEY$B_ROOTLEV(R9), XAB$B_LVL(R4)
+        MOVB    KEY$B_IDXBKTSZ(R9), XAB$B_IBS(R4)
+        MOVB    KEY$B_DATBKTSZ(R9), XAB$B_DBS(R4)
+        MOVL    KEY$L_ROOTVBN(R9), XAB$L_RVB(R4)
+        BICB3   #^C<KEY$M_DUPKEYS!KEY$M_CHGKEYS!KEY$M_NULKEYS>, KEY$B_FLAGS(R9), R0
+        BBS     #KEY$V_IDX_COMPR, KEY$B_FLAGS(R9), 10$
+        BISB2   #XAB$M_IDX_NCMPR, R0
+10$:    BBS     #KEY$V_KEY_COMPR, KEY$B_FLAGS(R9), 20$
+        BISB2   #XAB$M_KEY_NCMPR, R0
+20$:    BBS     #KEY$V_REC_COMPR, KEY$B_FLAGS(R9), 30$
+        BISB2   #XAB$M_DAT_NCMPR, R0
+30$:    MOVB    R0, XAB$B_FLG(R4)
+        MOVB    KEY$B_DATATYPE(R9), XAB$B_DTP(R4)
+        MOVB    KEY$B_SEGMENTS(R9), XAB$B_NSG(R4)
+        MOVB    KEY$B_NULLCHAR(R9), XAB$B_NUL(R4)
+        MOVB    KEY$B_KEYSZ(R9), XAB$B_TKS(R4)
+        MOVW    KEY$W_MINRECSZ(R9), XAB$W_MRL(R4)
+        MOVW    KEY$W_IDXFILL(R9), XAB$W_IFL(R4)
+        MOVW    KEY$W_DATFILL(R9), XAB$W_DFL(R4)
+        PUSHR   #^M<R4>
+        MOVC3   #16, KEY$W_POSITION(R9), XAB$W_POS(R4)
+        MOVL    (SP), R4
+        MOVC3   #8, KEY$B_SIZE(R9), XAB$B_SIZ(R4)
+        POPR    #^M<R4>
+        MOVL    KEY$L_LDVBN(R9), XAB$L_DVB(R4)
+        CMPB    XAB$B_BLN(R4), #XAB$C_KEYLEN
+        BLSSU   40$
+        PUSHR   #^M<R4>
+        MOVC3   #8, KEY$B_TYPE(R9), XAB$B_TYP(R4)
+        POPR    #^M<R4>
+        MOVB    #XAB$C_PRG3, XAB$B_PROLOG(R4)
+40$:    MOVL    XAB$L_KNM(R4), R1
+        BEQL    80$
+        IFNOWRT #32, (R1), 85$
+        MOVC3   #32, KEY$T_KEYNAM(R9), (R1)
+80$:    MOVL    #RMS$_NORMAL, R0
+        BRB     90$
+85$:    MOVL    #SS$_ACCVIO, R0
+90$:    POPR    #^M<R5, R9, R11>
+        RSB
+
+; IDX$XABALL: R7 = an indexed file's IFAB, R1 = an XABALL. Gives it area
+; XAB$B_AID's allocation: its options, placement, blocks, extension and
+; bucket size. R0 = RMS$_NORMAL, or RMS$_AID for an area the file hasn't.
+; Uses R0-R2.
+IDX$XABALL::
+        .JSB_ENTRY  SCRATCH=<R2>
+        PUSHL   R11
+        MOVL    IFB$L_IDX(R7), R11
+        MOVL    #RMS$_AID, R0
+        MOVZBL  XAB$B_AID(R1), R2
+        CMPL    R2, X$L_NAREAS(R11)
+        BGEQU   90$
+        MULL2   #AREA$K_BLN, R2
+        ADDL2   X$L_AREAS(R11), R2
+        MOVB    AREA$B_AOP(R2), XAB$B_AOP(R1)
+        MOVB    AREA$B_ALN(R2), XAB$B_ALN(R1)
+        MOVW    AREA$W_VOLUME(R2), XAB$W_VOL(R1)
+        MOVL    AREA$L_LOC(R2), XAB$L_LOC(R1)
+        MOVL    AREA$L_TOTAL_ALLOC(R2), XAB$L_ALQ(R1)
+        MOVW    AREA$W_DEQ(R2), XAB$W_DEQ(R1)
+        MOVB    AREA$B_ARBKTSZ(R2), XAB$B_BKZ(R1)
+        MOVL    AREA$W_RFI(R2), XAB$W_RFI(R1)
+        MOVW    AREA$W_RFI+4(R2), XAB$W_RFI+4(R1)
+        MOVL    #RMS$_NORMAL, R0
+90$:    MOVL    (SP)+, R11
+        RSB
+
+; IDX$GETKEY: R9 = a key descriptor, R1 = a record, R2 = its size, R3 =
+; 256 bytes. Puts the key there, its segments one after another. R0 = 1,
+; or 0 if the record is too short to hold it. Keeps every other register.
+IDX$GETKEY::
+        .JSB_ENTRY
+        CLRL    R0
+        CMPW    R2, KEY$W_MINRECSZ(R9)
+        BLSSU   90$
+        PUSHR   #^M<R1, R2, R3, R4, R5, R6>
+        MOVL    R3, R6                  ; where the next segment goes
+        CLRL    R5                      ; the segment
+10$:    MOVZWL  KEY$W_POSITION(R9)[R5], R0
+        MOVZBL  KEY$B_SIZE(R9)[R5], R2
+        ADDL2   (SP), R0
+        PUSHR   #^M<R2, R5>
+        MOVC3   R2, (R0), (R6)
+        POPR    #^M<R2, R5>
+        ADDL2   R2, R6
+        INCL    R5
+        CMPB    R5, KEY$B_SEGMENTS(R9)
+        BLSSU   10$
+        POPR    #^M<R1, R2, R3, R4, R5, R6>
+        MOVL    #1, R0
+90$:    RSB
+
+; IDX$KEYCMP: R9 = a key descriptor, R1 and R2 = two keys, R3 = how many
+; of their bytes to compare, strings only: integers compare whole. R0 =
+; -1, 0 or 1 as the first is less than, equal to or greater than the
+; second in the key's order. Keeps every other register.
+IDX$KEYCMP::
+        .JSB_ENTRY
+        PUSHR   #^M<R1, R2, R3, R4, R5>
+        BICB3   #KEY$C_DESCENDING, KEY$B_DATATYPE(R9), R4
+        BEQL    20$
+        CMPB    R4, #KEY$C_UNSGNQUAD
+        BGTRU   20$
+        MOVZBL  KEY$B_KEYSZ(R9), R3     ; an integer: from its top byte
+        DECL    R3
+        MOVZBL  (R1)[R3], R0
+        MOVZBL  (R2)[R3], R5
+        CMPB    R4, #KEY$C_SGNWORD      ; signed: its sign bit flipped
+        BEQL    5$
+        CMPB    R4, #KEY$C_SGNLONG
+        BEQL    5$
+        CMPB    R4, #KEY$C_SGNQUAD
+        BNEQ    10$
+5$:     XORB2   #^X80, R0
+        XORB2   #^X80, R5
+10$:    CMPL    R0, R5
+        BNEQ    30$
+        TSTL    R3
+        BEQL    40$
+        DECL    R3
+        MOVZBL  (R1)[R3], R0
+        MOVZBL  (R2)[R3], R5
+        BRB     10$
+20$:    CMPC3   R3, (R1), (R2)          ; a string
+        BEQL    40$
+30$:    BLSSU   35$
+        MOVL    #1, R0
+        BRB     50$
+35$:    MNEGL   #1, R0
+        BRB     50$
+40$:    CLRL    R0
+50$:    BBC     #5, KEY$B_DATATYPE(R9), 60$     ; descending
+        MNEGL   R0, R0
+60$:    POPR    #^M<R1, R2, R3, R4, R5>
+        RSB
+
+; IDX$ISNULL: R9 = a key descriptor with KEY$V_NULKEYS, R1 = a key. R0 =
+; 1 if every byte of it is the null character, else 0. Keeps every
+; other register.
+IDX$ISNULL::
+        .JSB_ENTRY
+        CLRL    R0
+        BBC     #KEY$V_NULKEYS, KEY$B_FLAGS(R9), 90$
+        PUSHR   #^M<R1, R2>
+        MOVZBL  KEY$B_KEYSZ(R9), R2
+        SKPC    KEY$B_NULLCHAR(R9), R2, (R1)
+        BNEQ    80$
+        MOVL    #1, R0
+        BRB     85$
+80$:    CLRL    R0
+85$:    POPR    #^M<R1, R2>
+90$:    RSB
+
+; IDX$EXPKEY: R9 = a key descriptor, R1 = a compressed key: its length,
+; its front count and its bytes, R2 = the key before it in the bucket,
+; R3 = 256 bytes. Puts the key there: the front count's bytes of the one
+; before, its bytes, and its last byte again up to KEY$B_KEYSZ. R0 = the
+; bytes it took, or 0 if they make a key too long. Keeps every other
+; register.
+IDX$EXPKEY::
+        .JSB_ENTRY
+        PUSHR   #^M<R1, R2, R3, R4, R5, R6>
+        MOVZBL  (R1), R4                ; its bytes
+        MOVZBL  1(R1), R5               ; and front count
+        ADDL3   R4, R5, R6
+        MOVZBL  KEY$B_KEYSZ(R9), R0
+        CMPL    R6, R0
+        BGTRU   80$
+        TSTL    R6
+        BEQL    80$
+        PUSHL   R4
+        MOVC3   R5, (R2), (R3)          ; the front, R3 past it
+        MOVL    4(SP), R1               ; then the bytes
+        MOVL    (SP), R0
+        MOVC3   R0, 2(R1), (R3)
+        MOVZBL  KEY$B_KEYSZ(R9), R0     ; then the last again
+        SUBL2   R6, R0
+        BEQL    70$
+        MOVZBL  -1(R3), R1
+        MOVC5   #0, (R3), R1, R0, (R3)
+70$:    MOVL    (SP)+, R0
+        ADDL2   #2, R0
+        POPR    #^M<R1, R2, R3, R4, R5, R6>
+        RSB
+80$:    POPR    #^M<R1, R2, R3, R4, R5, R6>
+        CLRL    R0
+        RSB
+
+; IDX$LOADW: R7 = an IFAB, R11 = its state, R8 = a walk, whose X$W_BUF
+; is a bucket's room, R0 = a bucket's VBN, R1 = its size in blocks. Reads
+; it there, and starts the walk at its first entry, with no key before
+; it. R0 = RMS$_NORMAL, RMS$_CHK if its check characters differ, with
+; its VBN in R1, or the disk's error. Uses R0-R2.
+IDX$LOADW::
+        .JSB_ENTRY  SCRATCH=<R2>
+        MOVL    R0, W$L_VBN(R8)
+        MULL3   #BLOCK, R1, W$L_SIZE(R8)
+        MOVL    W$L_BUF(R8), R2
+        BSBW    RMS$READBKT
+        BLBC    R0, 90$
+        MOVL    W$L_BUF(R8), R2
+        ADDL3   W$L_SIZE(R8), R2, R1
+        MOVL    #RMS$_CHK, R0
+        CMPB    BKT$B_CHECKCHAR(R2), -1(R1)
+        BNEQ    80$
+        MOVZWL  BKT$W_FREESPACE(R2), W$L_FREE(R8)
+        SUBL3   #1, W$L_SIZE(R8), R1
+        CMPL    W$L_FREE(R8), R1
+        BGTRU   80$
+        CMPL    W$L_FREE(R8), #BKT$K_OVERHDSZ
+        BLSSU   80$
+        MOVL    #BKT$K_OVERHDSZ, W$L_OFF(R8)
+        CLRL    W$L_INDEX(R8)
+        MOVL    #RMS$_NORMAL, R0
+        RSB
+80$:    MOVL    W$L_VBN(R8), R1
+90$:    RSB
+
+; IDX$ENTRY: R11 = an indexed file's state, R9 = the key descriptor of
+; the bucket R8's walk is in, a data or SIDR one. Parses the entry at
+; W$L_OFF: its control byte, ID, RRV's ID and VBN, or an RRV's pointer,
+; its body and the bytes of its key there, and its length; and expands
+; its key into W$T_CUR from W$T_PREV. R0 = 1 for a record or SIDR, 2 for
+; an RRV, 0 past the last entry, or RMS$_IRC with the bucket's VBN in R1
+; for a damaged one. Uses R0-R4.
+IDX$ENTRY::
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4>
+        MOVL    W$L_OFF(R8), R2
+        CLRL    R0
+        CMPL    R2, W$L_FREE(R8)
+        BGEQU   90$
+        ADDL2   W$L_BUF(R8), R2         ; R2 = the entry
+        TSTB    KEY$B_KEYREF(R9)
+        BEQL    10$
+        MOVZWL  (R2), R3                ; a SIDR: its size, its key
+        MOVAB   2(R2), W$L_BODY(R8)
+        MOVL    R3, W$L_BLEN(R8)
+        ADDL3   #2, R3, W$L_LEN(R8)
+        CLRL    W$L_CTL(R8)
+        BRB     40$
+10$:    MOVZBL  IRC$B_CONTROL(R2), R3   ; a primary bucket's
+        MOVL    R3, W$L_CTL(R8)
+        MOVZWL  IRC$W_ID(R2), W$L_ID(R8)
+        MOVZWL  IRC$W_RRV_ID(R2), W$L_RRVID(R8)
+        BICL3   #^C3, R3, R4            ; the pointer's size
+        ADDL2   #2, R4
+        BSBW    PTRAT
+        MOVL    R0, W$L_RRVVBN(R8)
+        BBC     #IRC$V_RRV, R3, 20$
+        ADDL3   #5, R4, W$L_LEN(R8)     ; an RRV: ID, new ID and pointer
+        MOVL    #2, R0
+        BRW     80$
+20$:    ADDL2   #5, R4                  ; a record: its size, unless a FIX one's
+        ADDL2   R2, R4
+        BITB    #KEY$M_KEY_COMPR!KEY$M_REC_COMPR, KEY$B_FLAGS(R9)
+        BNEQ    30$
+        CMPB    IFB$B_RFM(R7), #FAB$C_FIX
+        BNEQ    30$
+        MOVL    R4, W$L_BODY(R8)
+        MOVZWL  IFB$W_MRS(R7), W$L_BLEN(R8)
+        BRB     35$
+30$:    MOVZWL  (R4)+, W$L_BLEN(R8)
+        MOVL    R4, W$L_BODY(R8)
+35$:    ADDL3   W$L_BODY(R8), W$L_BLEN(R8), R3
+        SUBL3   R2, R3, W$L_LEN(R8)
+40$:    ADDL3   W$L_OFF(R8), W$L_LEN(R8), R3    ; within the entries?
+        CMPL    R3, W$L_FREE(R8)
+        BGTRU   85$
+        MOVL    W$L_BODY(R8), R1        ; its key
+        MOVAB   W$T_PREV(R8), R2
+        MOVAB   W$T_CUR(R8), R3
+        BBC     #KEY$V_KEY_COMPR, KEY$B_FLAGS(R9), 50$
+        BSBW    IDX$EXPKEY
+        TSTL    R0
+        BEQL    85$
+        MOVL    R0, W$L_KLEN(R8)
+        BRB     70$
+50$:    MOVZBL  KEY$B_KEYSZ(R9), R0     ; whole: first, or in place
+        TSTB    KEY$B_KEYREF(R9)
+        BNEQ    60$
+        BBS     #KEY$V_REC_COMPR, KEY$B_FLAGS(R9), 60$
+        CLRL    W$L_KLEN(R8)
+        MOVL    W$L_BLEN(R8), R2
+        BSBW    IDX$GETKEY
+        BLBC    R0, 85$
+        BRB     70$
+60$:    MOVL    R0, W$L_KLEN(R8)
+        CMPL    R0, W$L_BLEN(R8)
+        BGTRU   85$
+        PUSHR   #^M<R1, R3>
+        MOVC3   R0, (R1), (R3)
+        POPR    #^M<R1, R3>
+70$:    MOVL    #1, R0
+80$:    RSB
+85$:    MOVL    W$L_VBN(R8), R1
+        MOVL    #RMS$_IRC, R0
+90$:    RSB
+
+; PTRAT: R2 = an entry, R4 = its pointer's size, 2-5. R0 = the pointer at
+; 5(R2). Keeps every other register.
+PTRAT:
+        .JSB_ENTRY
+        PUSHL   R1
+        CLRL    R0
+        MOVL    R4, R1
+10$:    ASHL    #8, R0, R0
+        MOVB    4(R2)[R1], R0
+        SOBGTR  R1, 10$
+        MOVL    (SP)+, R1
+        RSB
+
+; IDX$NEXTW: R8 = a walk. Goes on to the entry after the one IDX$ENTRY
+; parsed, which becomes the key before it. Uses R0-R3.
+IDX$NEXTW::
+        .JSB_ENTRY  SCRATCH=<R2, R3>
+        PUSHR   #^M<R4, R5>
+        MOVC3   #256, W$T_CUR(R8), W$T_PREV(R8)
+        POPR    #^M<R4, R5>
+        ADDL2   W$L_LEN(R8), W$L_OFF(R8)
+        INCL    W$L_INDEX(R8)
+        RSB
+
+; IDX$IXENTRY: R9 = a key descriptor, R8 = a walk in an index bucket.
+; Parses entry W$L_INDEX at W$L_OFF: its key, expanded into W$T_CUR, its
+; length in W$L_LEN, and its bucket pointer in W$L_RRVVBN. R0 = 1, 0 past
+; the last, or RMS$_IRC with the bucket's VBN in R1. Uses R0-R4.
+IDX$IXENTRY::
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4>
+        CLRL    R0
+        CMPL    W$L_OFF(R8), W$L_FREE(R8)
+        BGEQU   90$
+        ADDL3   W$L_BUF(R8), W$L_OFF(R8), R1
+        MOVAB   W$T_PREV(R8), R2
+        MOVAB   W$T_CUR(R8), R3
+        BBC     #KEY$V_IDX_COMPR, KEY$B_FLAGS(R9), 10$
+        BSBW    IDX$EXPKEY
+        TSTL    R0
+        BEQL    85$
+        BRB     20$
+10$:    MOVZBL  KEY$B_KEYSZ(R9), R0
+        PUSHR   #^M<R0, R1, R3>
+        MOVC3   R0, (R1), (R3)
+        POPR    #^M<R0, R1, R3>
+20$:    MOVL    R0, W$L_LEN(R8)
+        ADDL3   W$L_OFF(R8), R0, R1
+        CMPL    R1, W$L_FREE(R8)
+        BGTRU   85$
+        MOVL    W$L_INDEX(R8), R2
+        BSBW    IDX$IXPTR
+        BLBC    R1, 85$
+        MOVL    R0, W$L_RRVVBN(R8)
+        MOVL    #1, R0
+        RSB
+85$:    MOVL    W$L_VBN(R8), R1
+        MOVL    #RMS$_IRC, R0
+90$:    RSB
+
+; IDX$IXPTR: R8 = a walk in an index bucket, R2 = an entry's index. R0 =
+; its bucket pointer, R1 = 1, or 0 if it would be among the keys. Uses
+; R0-R4.
+IDX$IXPTR::
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4>
+        MOVL    W$L_BUF(R8), R3
+        EXTZV   #BKT$V_PTR_SZ, #2, BKT$B_BKTCB(R3), R4
+        ADDL2   #2, R4
+        MULL3   R2, R4, R0
+        ADDL2   R4, R0
+        ADDL2   #BKT$K_ENDOVHD, R0
+        SUBL3   R0, W$L_SIZE(R8), R0    ; its offset
+        CLRL    R1
+        CMPL    R0, W$L_FREE(R8)
+        BLSS    90$
+        MOVAB   -5(R3)[R0], R2          ; for PTRAT's 5(R2)
+        BSBW    PTRAT
+        MOVL    #1, R1
+90$:    RSB
+
+; IDX$DESCEND: R7 = an IFAB, R11 = its state, R9 = a key descriptor,
+; X$T_KEY = a key, R6 = how many of its bytes to compare, R5 = 1 to find
+; the first key greater, 0 greater or equal. Walks the key's index from
+; its root down in walk 0, keeping each level's bucket and entry in
+; X$L_PATH, to the level 0 bucket the key goes in: R1 = its VBN. R0 =
+; RMS$_NORMAL, RMS$_RNF if the key has no index yet, or a bucket's
+; error. Uses R0-R4, R8.
+IDX$DESCEND::
+        .JSB_ENTRY  OUTPUT=<R8>, SCRATCH=<R2, R3, R4>
+        MOVAB   X$K_WALK0(R11), R8
+        MOVL    X$L_BUF0(R11), W$L_BUF(R8)
+        MOVL    #RMS$_RNF, R0
+        MOVL    KEY$L_ROOTVBN(R9), R1
+        BEQL    90$
+        MOVZBL  KEY$B_ROOTLEV(R9), X$L_LEVEL(R11)
+        BEQL    90$
+10$:    MOVL    R1, R0
+        MOVZBL  KEY$B_IDXBKTSZ(R9), R1
+        BSBW    IDX$LOADW
+        BLBC    R0, 90$
+20$:    BSBW    IDX$IXENTRY
+        CMPL    R0, #1
+        BNEQ    40$
+        MOVAB   W$T_CUR(R8), R1         ; its key, against the one wanted
+        MOVAB   X$T_KEY(R11), R2
+        MOVL    R6, R3
+        BSBW    IDX$KEYCMP
+        TSTL    R5
+        BEQL    25$
+        TSTL    R0                      ; greater?
+        BGTR    50$
+        BRB     30$
+25$:    TSTL    R0                      ; greater or equal?
+        BGEQ    50$
+30$:    BSBW    IDX$NEXTW
+        BRB     20$
+40$:    TSTL    R0                      ; none: the last
+        BNEQ    90$
+        MOVL    W$L_VBN(R8), R1
+        MOVL    #RMS$_IRC, R0
+        SUBL3   #1, W$L_INDEX(R8), R2
+        BLSS    90$
+        MOVL    R2, W$L_INDEX(R8)
+        BSBW    IDX$IXPTR
+        MOVL    R0, W$L_RRVVBN(R8)
+50$:    MOVL    X$L_LEVEL(R11), R0      ; the path
+        MOVAQ   X$L_PATH(R11)[R0], R0
+        MOVL    W$L_VBN(R8), (R0)
+        MOVL    W$L_INDEX(R8), 4(R0)
+        MOVL    W$L_RRVVBN(R8), R1
+        SOBGTR  X$L_LEVEL(R11), 10$
+        MOVL    #RMS$_NORMAL, R0
+90$:    RSB
+
+; IDX$GET: R7 = an IFAB, R10 = a RAB. Reads a record into the RAB's user
+; buffer, as much as fits (RMS$_RTB if not all, its size in RAB$L_STV):
+; by RAB$B_RAC the next along the stream's key of reference, the first
+; whose key along RAB$B_KRF is RAB$L_KBF's, RAB$B_KSZ bytes of it, or
+; greater or equal or greater with RAB$M_KGE or RAB$M_KGT, which makes
+; that key the stream's, or the one at RAB$W_RFA. It becomes the current
+; record, its RFA goes in RAB$W_RFA, and the stream goes on after it.
+; R0 = RMS$_NORMAL, RMS$_RTB, RMS$_EOF, RMS$_RNF, RMS$_KRF, RMS$_KSZ,
+; RMS$_KBF, RMS$_RAC, RMS$_RFA, SS$_ACCVIO, or a bucket's error. IDX$FIND
+; finds it without reading it, and a $GET by RAB$C_SEQ after reads it.
+; Uses R0-R6, R8, R9, R11.
+IDX$FIND::
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5, R6, R8, R9, R11>
+        MOVL    IFB$L_IDX(R7), R11
+        CMPB    X$B_STATE(R11), #X$C_AT ; a $FIND goes past one
+        BNEQ    10$
+        MOVB    #X$C_AFTER, X$B_STATE(R11)
+10$:    BSBW    LOCATE
+        BLBC    R0, 90$
+        MOVB    #X$C_AT, X$B_STATE(R11)
+90$:    RSB
+
+IDX$GET::
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5, R6, R8, R9, R11>
+        MOVL    IFB$L_IDX(R7), R11
+        MOVL    RAB$L_UBF(R10), R3
+        MOVZWL  RAB$W_USZ(R10), R4
+        BEQL    10$
+        IFNOWRT R4, (R3), 85$
+10$:    BSBW    LOCATE
+        BLBC    R0, 90$
+        MOVB    #X$C_AFTER, X$B_STATE(R11)
+        CLRL    R0
+        BSBW    IDX$KEYDESC
+        MOVL    RAB$L_UBF(R10), R3
+        MOVZWL  RAB$W_USZ(R10), R4
+        BSBW    IDX$DECODE
+        MOVL    RAB$L_UBF(R10), RAB$L_RBF(R10)
+        CMPL    R0, R4
+        BGTRU   20$
+        MOVW    R0, RAB$W_RSZ(R10)
+        MOVL    #RMS$_NORMAL, R0
+        RSB
+20$:    MOVL    R0, RAB$L_STV(R10)
+        MOVW    R4, RAB$W_RSZ(R10)
+        MOVL    #RMS$_RTB, R0
+        RSB
+85$:    MOVL    #SS$_ACCVIO, R0
+90$:    RSB
+
+; LOCATE: R7 = an IFAB, R10 = a RAB, R11 = the file's state. Finds the
+; record $GET or $FIND wants, by RAB$B_RAC, which becomes the current
+; record and the stream's, its RFA in RAB$W_RFA, 0 if there is none: R8
+; = the walk at it. R0 = RMS$_NORMAL, RMS$_EOF, RMS$_RNF, RMS$_KRF,
+; RMS$_KSZ, RMS$_KBF, RMS$_RAC, RMS$_RFA, SS$_ACCVIO, or a bucket's
+; error. Uses R0-R6, R8, R9.
+LOCATE:
+        .JSB_ENTRY  OUTPUT=<R8>, SCRATCH=<R2, R3, R4, R5, R6, R9>
+        CLRL    X$L_CURVBN(R11)
+        MOVZBL  RAB$B_RAC(R10), R0
+        CMPL    R0, #RAB$C_RFA
+        BEQL    30$
+        CLRL    RAB$L_RFA0(R10)
+        CLRW    RAB$W_RFA4(R10)
+        TSTL    R0
+        BEQL    40$
+        CMPL    R0, #RAB$C_KEY
+        BEQL    10$
+        MOVL    #RMS$_RAC, R0
+        RSB
+10$:    BSBW    KEYARG                  ; by key
+        BLBC    R0, 90$
+        CLRL    R5                      ; greater or equal,
+        BBC     #RAB$V_KGT, RAB$L_ROP(R10), 15$
+        MOVL    #1, R5                  ; or greater
+15$:    BSBW    IDX$FINDKEY
+        BLBC    R0, 80$
+        BITL    #RAB$M_KGE!RAB$M_KGT, RAB$L_ROP(R10)
+        BNEQ    60$
+        MOVAB   W$T_CUR(R8), R1         ; equal: R8's key is the record's,
+        TSTB    KEY$B_KEYREF(R9)        ; or the SIDR's in walk 0
+        BEQL    17$
+        MOVAB   X$K_WALK0+W$T_CUR(R11), R1
+17$:    BSBW    IDX$MATCHKEY
+        TSTL    R0
+        BEQL    60$
+        MOVL    #RMS$_RNF, R0
+        RSB
+30$:    MOVL    #RMS$_RFA, R0           ; by RFA
+        MOVL    RAB$L_RFA0(R10), R1
+        BEQL    90$
+        MOVL    R1, X$L_CTXVBN(R11)
+        MOVW    RAB$W_RFA4(R10), X$W_CTXID(R11)
+        BSBW    FETCHCTX
+        BLBC    R0, 80$
+        BSBW    CTXKEY                  ; its key along the stream's key
+        BLBC    R0, 90$
+        BRB     70$
+40$:    MOVZBL  X$B_STATE(R11), R0      ; the next
+        CASEB   R0, #0, #X$C_EOF
+45$:    .WORD   50$-45$                 ; X$C_BOF: the first
+        .WORD   55$-45$                 ; X$C_AFTER: the next
+        .WORD   58$-45$                 ; X$C_AT: this one
+        .WORD   59$-45$                 ; X$C_EOF
+50$:    BSBW    FIRST
+        BRB     57$
+55$:    BSBW    IDX$NEXT
+57$:    BLBC    R0, 80$
+        BRB     60$
+58$:    BSBW    FETCHCTX
+        BLBC    R0, 80$
+        BRB     70$
+59$:    MOVL    #RMS$_EOF, R0
+        RSB
+60$:    CMPB    RAB$B_RAC(R10), #RAB$C_KEY      ; by key: the stream's key now
+        BNEQ    65$
+        MOVB    RAB$B_KRF(R10), X$B_KRF(R11)
+65$:    BSBW    SETCTX                  ; the stream's record and key
+70$:    MOVL    X$L_CTXVBN(R11), X$L_CURVBN(R11)
+        MOVW    X$W_CTXID(R11), X$W_CURID(R11)
+        MOVL    X$L_CTXVBN(R11), RAB$L_RFA0(R10)
+        MOVW    X$W_CTXID(R11), RAB$W_RFA4(R10)
+        MOVL    #RMS$_NORMAL, R0
+        RSB
+80$:    CMPL    R0, #RMS$_EOF           ; past the last: there it stays,
+        BNEQ    90$                     ; but a key not found moves nothing
+        CMPB    RAB$B_RAC(R10), #RAB$C_KEY
+        BEQL    85$
+        MOVB    #X$C_EOF, X$B_STATE(R11)
+        RSB
+85$:    MOVL    #RMS$_RNF, R0
+90$:    RSB
+
+; KEYARG: R10 = a RAB, R11 = an indexed file's state. Copies the key
+; RAB$L_KBF points at, RAB$B_KSZ bytes, or the key's size if it is 0, to
+; X$T_KEY: R6 = its size, R9 = key RAB$B_KRF's descriptor. R0 =
+; RMS$_NORMAL, RMS$_KRF, RMS$_KSZ, longer than the key or short of an
+; integer, or RMS$_KBF if the caller can't read it. Uses R0-R6, R9.
+KEYARG:
+        .JSB_ENTRY  OUTPUT=<R6, R9>, SCRATCH=<R2, R3, R4, R5>
+        MOVL    #RMS$_KRF, R0
+        MOVZBL  RAB$B_KRF(R10), R1
+        CMPL    R1, X$L_NKEYS(R11)
+        BGEQU   90$
+        MOVL    R1, R0
+        BSBW    IDX$KEYDESC
+        MOVL    #RMS$_KSZ, R0
+        MOVZBL  KEY$B_KEYSZ(R9), R1
+        MOVZBL  RAB$B_KSZ(R10), R6
+        BNEQ    10$
+        MOVL    R1, R6
+10$:    CMPL    R6, R1
+        BGTRU   90$
+        BEQL    20$
+        BICB3   #KEY$C_DESCENDING, KEY$B_DATATYPE(R9), R2
+        BNEQ    90$                     ; only strings are generic
+20$:    MOVL    RAB$L_KBF(R10), R1
+        IFNORD  R6, (R1), 80$
+        PUSHL   R6
+        MOVC3   R6, (R1), X$T_KEY(R11)
+        MOVL    (SP)+, R6
+        MOVL    #RMS$_NORMAL, R0
+        RSB
+80$:    MOVL    #RMS$_KBF, R0
+90$:    RSB
+
+; IDX$MATCHKEY: R9 = a key descriptor, R6 = a size, R1 = a key. R0 = 0 if its
+; first R6 bytes are X$T_KEY's, else not. Keeps every other register.
+IDX$MATCHKEY::
+        .JSB_ENTRY
+        PUSHR   #^M<R2, R3>
+        MOVAB   X$T_KEY(R11), R2
+        MOVL    R6, R3
+        BSBW    IDX$KEYCMP
+        POPR    #^M<R2, R3>
+        RSB
+
+; IDX$FINDKEY: R7 = an IFAB, R11 = its state, R9 = a key's descriptor,
+; X$T_KEY = a value, R6 = how many of its bytes, R5 = 1 for the first
+; greater, 0 greater or equal. Finds the first record along the key with
+; such a key: R8 = the walk at it, walk 0's, or walk 1's along an
+; alternate key, with walk 0 at the SIDR, whose key W$T_CUR is then the
+; record's. R0 = RMS$_NORMAL, RMS$_EOF if there is none, or a bucket's
+; error. Uses R0-R4, R8.
+IDX$FINDKEY::
+        .JSB_ENTRY  OUTPUT=<R8>, SCRATCH=<R2, R3, R4>
+        BSBW    IDX$DESCEND
+        CMPL    R0, #RMS$_RNF           ; no index yet: no records
+        BNEQ    5$
+        MOVL    #RMS$_EOF, R0
+5$:     BLBC    R0, 90$
+        MOVL    R1, R0
+        MOVZBL  KEY$B_DATBKTSZ(R9), R1
+        BSBW    IDX$LOADW
+        BLBC    R0, 90$
+10$:    BSBW    IDX$SCAN                    ; the next record or SIDR
+        BLBC    R0, 90$
+        MOVAB   W$T_CUR(R8), R1         ; is it at the key?
+        MOVAB   X$T_KEY(R11), R2
+        MOVL    R6, R3
+        BSBW    IDX$KEYCMP
+        TSTL    R5
+        BEQL    20$
+        TSTL    R0
+        BGTR    30$
+        BRB     25$
+20$:    TSTL    R0
+        BGEQ    30$
+25$:    BSBW    IDX$NEXTW
+        BRB     10$
+30$:    TSTB    KEY$B_KEYREF(R9)        ; a SIDR: its first pointer's record
+        BEQL    80$
+        BSBW    SIDRREC
+        BLBS    R0, 90$
+        CMPL    R0, #RMS$_RNF           ; it has none: the next SIDR
+        BNEQ    90$
+        MOVAB   X$K_WALK0(R11), R8
+        BRB     25$
+80$:    MOVL    #RMS$_NORMAL, R0
+90$:    RSB
+
+; IDX$SCAN: R11 = an indexed file's state, R9 = a key's descriptor, R8 = a
+; walk in one of its level 0 buckets. From its entry on, finds the next
+; record or SIDR, along the buckets' chain: R0 = RMS$_NORMAL with the
+; walk at it, parsed (IDX$ENTRY), RMS$_EOF past the last, or a bucket's
+; error. Uses R0-R4.
+IDX$SCAN::
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4>
+10$:    BSBW    IDX$ENTRY
+        CMPL    R0, #1
+        BEQL    80$
+        CMPL    R0, #2                  ; past the records: the next bucket
+        BLEQU   20$
+        RSB
+20$:    MOVL    W$L_BUF(R8), R2
+        MOVL    #RMS$_EOF, R0
+        BBS     #BKT$V_LASTBKT, BKT$B_BKTCB(R2), 90$
+        MOVL    BKT$L_NXTBKT(R2), R0
+        MOVZBL  KEY$B_DATBKTSZ(R9), R1
+        BSBW    IDX$LOADW
+        BLBS    R0, 10$
+        RSB
+80$:    TSTB    KEY$B_KEYREF(R9)        ; a SIDR's pointers
+        BEQL    85$
+        ADDL3   W$L_BODY(R8), W$L_KLEN(R8), W$L_PTR(R8)
+        ADDL3   W$L_BODY(R8), W$L_BLEN(R8), W$L_PEND(R8)
+85$:    MOVL    #RMS$_NORMAL, R0
+90$:    RSB
+
+; IDX$PTRNEXT: R8 = a walk at a SIDR. Takes its next pointer that isn't
+; deleted, from W$L_PTR: its RFA in W$L_RRVVBN and W$L_RRVID, and
+; W$L_PTR past it. R0 = 1, 0 if there is none left, or RMS$_IRC. Uses
+; R0-R4.
+IDX$PTRNEXT::
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4>
+10$:    CLRL    R0
+        MOVL    W$L_PTR(R8), R2
+        CMPL    R2, W$L_PEND(R8)
+        BGEQU   90$
+        MOVZBL  (R2), R3
+        BBC     #IRC$V_NOPTRSZ, R3, 20$
+        INCL    W$L_PTR(R8)             ; a deleted one's stub
+        BRB     10$
+20$:    BICL3   #^C3, R3, R4
+        ADDL2   #2, R4
+        ADDL3   #3, R4, R1              ; its bytes
+        ADDL2   R1, W$L_PTR(R8)
+        CMPL    W$L_PTR(R8), W$L_PEND(R8)
+        BGTRU   85$
+        BBS     #IRC$V_DELETED, R3, 10$
+        MOVZWL  1(R2), W$L_RRVID(R8)
+        SUBL2   #2, R2                  ; the pointer at 3(R2), for PTRAT's 5
+        BSBW    PTRAT
+        MOVL    R0, W$L_RRVVBN(R8)
+        MOVL    #1, R0
+        RSB
+85$:    MOVL    W$L_VBN(R8), R1
+        MOVL    #RMS$_IRC, R0
+90$:    RSB
+
+; SIDRREC: R11 = an indexed file's state, R8 = walk 0 at a SIDR. Takes
+; its next pointer that isn't deleted, and fetches its record into walk
+; 1: R8 = walk 1. R0 = RMS$_NORMAL, RMS$_RNF if the SIDR has no pointer
+; left, R8 still walk 0, or a bucket's error. Uses R0-R4, R8.
+SIDRREC:
+        .JSB_ENTRY  OUTPUT=<R8>, SCRATCH=<R2, R3, R4>
+        BSBW    IDX$PTRNEXT
+        CMPL    R0, #1
+        BEQL    10$
+        TSTL    R0
+        BNEQ    90$
+        MOVL    #RMS$_RNF, R0
+        RSB
+10$:    MOVL    W$L_RRVVBN(R8), R0
+        MOVL    W$L_RRVID(R8), R1
+        BSBW    IDX$FETCH
+90$:    RSB
+
+; IDX$FETCH: R11 = an indexed file's state, R0 = a VBN and R1 = an ID, a
+; record's RFA. Finds it in walk 1, there or where its RRV says: R8 =
+; walk 1, at it, parsed, along key 0. R0 = RMS$_NORMAL, RMS$_RNF if it
+; is gone, or a bucket's error. Keeps R9. Uses R0-R4, R8.
+IDX$FETCH::
+        .JSB_ENTRY  OUTPUT=<R8>, SCRATCH=<R2, R3, R4>
+        PUSHR   #^M<R5, R9>
+        MOVL    #2, R5                  ; buckets, an RRV's and its record's
+        PUSHL   R0
+        CLRL    R0
+        BSBW    IDX$KEYDESC
+        MOVL    (SP)+, R0
+        MOVAB   X$K_WALK1(R11), R8
+        MOVL    X$L_BUF1(R11), W$L_BUF(R8)
+10$:    PUSHL   R1                      ; the ID
+        MOVZBL  KEY$B_DATBKTSZ(R9), R1
+        BSBW    IDX$LOADW
+        MOVL    (SP)+, R1
+        BLBC    R0, 90$
+20$:    PUSHL   R1
+        BSBW    IDX$ENTRY
+        MOVL    (SP)+, R1
+        TSTL    R0
+        BEQL    25$
+        CMPL    R0, #2                  ; a record or an RRV
+        BGTRU   90$
+        CMPL    R1, W$L_ID(R8)
+        BEQL    30$
+        PUSHL   R1
+        BSBW    IDX$NEXTW
+        MOVL    (SP)+, R1
+        BRB     20$
+25$:    MOVL    #RMS$_RNF, R0           ; not there
+        BRB     90$
+30$:    CMPL    R0, #1                  ; the record
+        BEQL    80$
+        MOVL    W$L_RRVID(R8), R1       ; an RRV: where it went
+        MOVL    W$L_RRVVBN(R8), R0
+        SOBGTR  R5, 10$
+        MOVL    #RMS$_RNF, R0
+        BRB     90$
+80$:    MOVL    #RMS$_NORMAL, R0
+90$:    POPR    #^M<R5, R9>
+        RSB
+
+; FETCHCTX: R11 = an indexed file's state. Fetches the stream's record,
+; X$L_CTXVBN and X$W_CTXID, into walk 1 (IDX$FETCH). Uses R0-R4, R8.
+FETCHCTX:
+        .JSB_ENTRY  OUTPUT=<R8>, SCRATCH=<R2, R3, R4>
+        MOVL    X$L_CTXVBN(R11), R0
+        MOVZWL  X$W_CTXID(R11), R1
+        BSBW    IDX$FETCH
+        RSB
+
+; SETCTX: R11 = an indexed file's state, R8 = the walk at a record, and
+; walk 0 at its SIDR if the stream's key isn't 0. Makes it the stream's
+; record: its RFA, and its key along the stream's key, the SIDR's. Uses
+; R0-R5.
+SETCTX:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5>
+        MOVL    W$L_RRVVBN(R8), X$L_CTXVBN(R11)
+        MOVW    W$L_RRVID(R8), X$W_CTXID(R11)
+        MOVAB   W$T_CUR(R8), R1
+        TSTB    X$B_KRF(R11)
+        BEQL    10$
+        MOVAB   X$K_WALK0+W$T_CUR(R11), R1
+10$:    MOVC3   #256, (R1), X$T_CTXKEY(R11)
+        RSB
+
+; CTXKEY: R11 = an indexed file's state, R8 = walk 1 at the stream's
+; record. Puts its key along the stream's key in X$T_CTXKEY. R0 =
+; RMS$_NORMAL, or RMS$_RNF if the record has none: it is too short or
+; the key is null. Uses R0-R6, R9.
+CTXKEY:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5, R6, R9>
+        TSTB    X$B_KRF(R11)
+        BNEQ    10$
+        MOVC3   #256, W$T_CUR(R8), X$T_CTXKEY(R11)
+        MOVL    #RMS$_NORMAL, R0
+        RSB
+10$:    CLRL    R0                      ; the record's first bytes
+        BSBW    IDX$KEYDESC
+        MOVL    X$L_WORK(R11), R3
+        MOVL    X$L_BKS(R11), R4
+        MULL2   #BLOCK, R4
+        BSBW    IDX$DECODE
+        CMPL    R0, R4
+        BLEQU   20$
+        MOVL    R4, R0
+20$:    MOVL    R0, R2
+        MOVZBL  X$B_KRF(R11), R0
+        BSBW    IDX$KEYDESC
+        MOVL    X$L_WORK(R11), R1
+        MOVAB   X$T_CTXKEY(R11), R3
+        BSBW    IDX$GETKEY
+        BLBC    R0, 80$
+        MOVAB   X$T_CTXKEY(R11), R1
+        BSBW    IDX$ISNULL
+        BLBS    R0, 80$
+        MOVL    #RMS$_NORMAL, R0
+        RSB
+80$:    MOVL    #RMS$_RNF, R0
+        RSB
+
+; FIRST: R7 = an IFAB, R11 = its state. Finds the first record along the
+; stream's key: R8 = the walk at it, and walk 0 at its SIDR along an
+; alternate key. R0 = RMS$_NORMAL, RMS$_EOF if there is none, or a
+; bucket's error. Uses R0-R4, R8, R9.
+FIRST:
+        .JSB_ENTRY  OUTPUT=<R8>, SCRATCH=<R2, R3, R4, R9>
+        MOVZBL  X$B_KRF(R11), R0
+        BSBW    IDX$KEYDESC
+        MOVAB   X$K_WALK0(R11), R8
+        MOVL    X$L_BUF0(R11), W$L_BUF(R8)
+        MOVL    #RMS$_EOF, R0
+        MOVL    KEY$L_LDVBN(R9), R0
+        BEQL    85$
+        MOVZBL  KEY$B_DATBKTSZ(R9), R1
+        BSBW    IDX$LOADW
+        BLBC    R0, 90$
+10$:    BSBW    IDX$SCAN
+        BLBC    R0, 90$
+        TSTB    KEY$B_KEYREF(R9)
+        BEQL    90$
+        BSBW    SIDRREC                 ; a SIDR: its first live pointer's
+        CMPL    R0, #RMS$_RNF
+        BNEQ    90$
+        MOVAB   X$K_WALK0(R11), R8
+        BSBW    IDX$NEXTW
+        BRB     10$
+85$:    MOVL    #RMS$_EOF, R0
+90$:    RSB
+
+; IDX$NEXT: R7 = an IFAB, R11 = its state. Finds the record after the
+; stream's, X$T_CTXKEY and X$L_CTXVBN/X$W_CTXID, along its key: the first
+; with a greater key, or with duplicates, the one after it among those
+; with its key. R8 = the walk at it, and walk 0 at its SIDR along an
+; alternate key. R0 = RMS$_NORMAL, RMS$_EOF if there is none, or a
+; bucket's error. Uses R0-R6, R8, R9.
+IDX$NEXT::
+        .JSB_ENTRY  OUTPUT=<R8>, SCRATCH=<R2, R3, R4, R5, R6, R9>
+        MOVZBL  X$B_KRF(R11), R0
+        BSBW    IDX$KEYDESC
+        MOVC3   #256, X$T_CTXKEY(R11), X$T_KEY(R11)
+        MOVZBL  KEY$B_KEYSZ(R9), R6
+        MOVL    #1, R5                  ; no duplicates: the first greater
+        BBC     #KEY$V_DUPKEYS, KEY$B_FLAGS(R9), 50$
+        CLRL    R5                      ; duplicates: from the first equal
+        BSBW    IDX$DESCEND
+        BLBC    R0, 80$
+        MOVL    R1, R0
+        MOVZBL  KEY$B_DATBKTSZ(R9), R1
+        BSBW    IDX$LOADW
+        BLBC    R0, 90$
+10$:    BSBW    IDX$SCAN                    ; each with a key not past it
+        BLBC    R0, 90$
+        MOVAB   W$T_CUR(R8), R1
+        BSBW    IDX$MATCHKEY
+        TSTL    R0
+        BLSS    40$                     ; before it
+        BGTR    60$                     ; past it: that one
+        TSTB    KEY$B_KEYREF(R9)
+        BNEQ    20$
+        CMPL    W$L_RRVVBN(R8), X$L_CTXVBN(R11) ; the stream's record?
+        BNEQ    40$
+        CMPW    W$L_RRVID(R8), X$W_CTXID(R11)
+        BNEQ    40$
+        BSBW    IDX$NEXTW               ; then the next
+        BSBW    IDX$SCAN
+        BRB     90$
+20$:    BSBW    IDX$PTRNEXT                 ; a SIDR: is it among its pointers?
+        CMPL    R0, #1
+        BEQL    25$
+        TSTL    R0
+        BNEQ    90$
+        BRB     40$
+25$:    CMPL    W$L_RRVVBN(R8), X$L_CTXVBN(R11)
+        BNEQ    20$
+        CMPW    W$L_RRVID(R8), X$W_CTXID(R11)
+        BNEQ    20$
+30$:    BSBW    SIDRREC                 ; then the next pointer's record,
+        BLBS    R0, 90$                 ; in this SIDR or one after it
+        CMPL    R0, #RMS$_RNF
+        BNEQ    90$
+        MOVAB   X$K_WALK0(R11), R8
+        BSBW    IDX$NEXTW
+        BSBW    IDX$SCAN
+        BLBC    R0, 90$
+        BRB     30$
+40$:    BSBW    IDX$NEXTW
+        BRB     10$
+50$:    BSBW    IDX$FINDKEY
+        BRB     90$
+60$:    TSTB    KEY$B_KEYREF(R9)        ; a greater key's first record
+        BEQL    70$
+        BRB     30$
+70$:    MOVL    #RMS$_NORMAL, R0
+        RSB
+80$:    CMPL    R0, #RMS$_RNF
+        BNEQ    90$
+        MOVL    #RMS$_EOF, R0
+90$:    RSB
+
+; IDX$DECODE: R11 = an indexed file's state, R9 = key 0's descriptor, R8
+; = a walk at a record, R3 = a buffer, R4 = its size. Writes the record
+; there, as much as fits: its key back in place and its compressed bytes
+; expanded. R0 = the record's size. Keeps every other register.
+IDX$DECODE::
+        .JSB_ENTRY
+        PUSHR   #^M<R1, R2, R3, R4, R5, R6, R10, R11>
+        BITB    #KEY$M_KEY_COMPR!KEY$M_REC_COMPR, KEY$B_FLAGS(R9)
+        BNEQ    10$
+        MOVL    W$L_BLEN(R8), R0        ; as it is
+        CMPL    R0, R4
+        BGEQU   5$
+        MOVL    R0, R4
+5$:     PUSHL   R0
+        MOVC3   R4, @W$L_BODY(R8), (R3)
+        MOVL    (SP)+, R0
+        BRW     90$
+; R6 = where the rest of the record is, R5 = where it ends; R10 = the
+; bytes left of a literal run, R11 = repeats left of its last byte, R2 =
+; that byte, R1 = the record's size so far.
+10$:    ADDL3   W$L_BODY(R8), W$L_KLEN(R8), R6
+        ADDL3   W$L_BODY(R8), W$L_BLEN(R8), R5
+        CLRQ    R10
+        CLRL    R2
+        CLRL    R1
+20$:    BSBW    SEGAT                   ; a key segment here?
+        BLBC    R0, 30$
+        BRB     20$
+30$:    BBS     #KEY$V_REC_COMPR, KEY$B_FLAGS(R9), 40$
+        CMPL    R6, R5                  ; the rest as it is
+        BGEQU   85$
+        MOVZBL  (R6)+, R0
+        BRB     60$
+40$:    TSTL    R10                     ; or expanded
+        BEQL    45$
+        DECL    R10
+        MOVZBL  (R6)+, R2
+        TSTL    R10
+        BNEQ    55$
+        CMPL    R6, R5
+        BGEQU   55$
+        MOVZBL  (R6)+, R11              ; its repeats
+        BRB     55$
+45$:    TSTL    R11
+        BEQL    50$
+        DECL    R11
+        BRB     55$
+50$:    CMPL    R6, R5                  ; the next run
+        BGEQU   85$
+        MOVZWL  (R6)+, R10
+        BNEQ    40$
+        CMPL    R6, R5
+        BGEQU   85$
+        MOVZBL  (R6)+, R11
+        BRB     40$
+55$:    MOVL    R2, R0
+60$:    CMPL    R1, R4
+        BGEQU   65$
+        MOVB    R0, (R3)[R1]
+65$:    INCL    R1
+        BRB     20$
+85$:    BSBW    SEGAT                   ; a key segment may end it
+        BLBS    R0, 85$
+        MOVL    R1, R0                  ; the size
+90$:    POPR    #^M<R1, R2, R3, R4, R5, R6, R10, R11>
+        RSB
+
+; SEGAT: for IDX$DECODE: R1 = the record's size so far, R3 and R4 its
+; buffer. If a key segment starts there, writes it from the key, W$T_CUR,
+; and R1 past it: R0 = 1, else 0. Uses R0.
+SEGAT:
+        .JSB_ENTRY
+        PUSHR   #^M<R5, R6, R7>
+        CLRL    R5                      ; the segment
+        CLRL    R6                      ; where it is in the key
+10$:    CMPB    R5, KEY$B_SEGMENTS(R9)
+        BGEQU   80$
+        CMPW    R1, KEY$W_POSITION(R9)[R5]
+        BEQL    20$
+        MOVZBL  KEY$B_SIZE(R9)[R5], R0
+        ADDL2   R0, R6
+        INCL    R5
+        BRB     10$
+20$:    MOVZBL  KEY$B_SIZE(R9)[R5], R7
+        BEQL    80$
+        MOVAB   W$T_CUR(R8)[R6], R6
+30$:    CMPL    R1, R4
+        BGEQU   40$
+        MOVB    (R6), (R3)[R1]
+40$:    INCL    R6
+        INCL    R1
+        SOBGTR  R7, 30$
+        MOVL    #1, R0
+        BRB     90$
+80$:    CLRL    R0
+90$:    POPR    #^M<R5, R6, R7>
+        RSB
+
+        .END

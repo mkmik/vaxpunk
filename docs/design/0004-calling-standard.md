@@ -6,7 +6,7 @@ This is the calling standard every routine on vaxpunk follows, in any
 language: how arguments and results travel, which registers survive a
 call, what a frame looks like, and how condition handling finds its way
 through frames. [ADR-0023](../adr/0023-calling-standard.md) records why it
-is this way, and `vtools/docs/amacro.md` what OpenVMS did on Alpha,
+is this way, and `crosstools/vtools/docs/amacro.md` what OpenVMS did on Alpha,
 Itanium and x86-64, which this follows. The last sections say how
 MACRO-32 ([PRD-0005](../prd/0005-macro32-on-the-calling-standard.md)),
 BLISS-64 ([PRD-0004](../prd/0004-bliss64-compiler.md)), C and Fortran map
@@ -306,7 +306,7 @@ and BLISS-64's `JSB` linkages call one.
 ## MACRO-32
 
 `vmacro` compiles MACRO-32 onto the standard as AMACRO compiled it onto
-Alpha's (`vtools/docs/amacro.md`).
+Alpha's (`crosstools/vtools/docs/amacro.md`).
 
 | VAX | ARM64 |
 | --- | --- |
@@ -365,7 +365,7 @@ sign-extends from bit 31.
   `.ENABLE QUADWORD` and `/ENABLE=QUADWORD` for 64-bit address arithmetic,
   `$SETUP_CALL64`, `$PUSH_ARG64` and `$CALL64` with 8 register arguments,
   `EVAX_CALLG_64`, `$IS_32BITS`, `$IS_DESC64`, `$PUSH64`, `$POP64`, and the
-  `EVAX_` built-ins in `vtools/docs/macro32.md`'s table, each compiled to
+  `EVAX_` built-ins in `crosstools/vtools/docs/macro32.md`'s table, each compiled to
   the ARM64 instructions that do its job.
 
 ## BLISS-64

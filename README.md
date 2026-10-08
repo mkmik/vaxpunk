@@ -208,9 +208,9 @@ EDK2 prints a few `Error: Image at ... start failed` and `Tpm2...` lines
 before Limine starts. That is normal for the firmware QEMU ships. Don't
 type before DCL's prompt: EDK2 and Limine read keys too.
 
-Day to day: edit `roottask/` (`src/` for the PAL, `exec/` for the
-executive, `sysexe/` for the programs on the system disk, `sysmgr/` for
-its text files), then `cargo run -p boot`. Only the root task and the
+Day to day: edit `vms/` (`exec/` for the executive, `sysexe/` for the
+programs on the system disk, `sysmgr/` for its text files) or `pal/src/`
+for the PAL, then `cargo run -p boot`. Only the root task and the
 system disk are rebuilt and the ESP image re-stitched. On an M3, the root task prints
 about one second after the command.
 
@@ -218,34 +218,38 @@ about one second after the command.
 
 | Directory | What | Output |
 | --- | --- | --- |
-| `kernel/` | seL4 16.0.0 (submodule), built with its own CMake | `kernel.elf`, libsel4's headers, `platform_gen.json` |
-| `shim/` | Limine-protocol program that loads seL4 and the root task; see [shim/README.md](shim/README.md) | `shim.elf` |
-| `tcpip/` | the TCP/IP component the root task starts below the executive: lwIP (submodule) with a virtio-net driver and the port adapter, in freestanding C; see [DESIGN-0003](docs/design/0003-tcpip-port.md) | `tcpip.elf` |
-| `roottask/` | the root task, the PAL, in freestanding C (`src/`); the MACRO-32 executive (`exec/`) and the programs it runs (`sysexe/`), which `build.rs` compiles and links with the vtools crates and writes, with `sysmgr/`'s text, to the system disk with `ods-image` | `roottask.elf`, `sysdisk.img` |
-| `image/` | Limine config, the ESP builder (mtools) and `boot`, which copies the three ELFs and `sysdisk.img` to `out/`, stitches the ESP and runs QEMU | `out/esp.img` |
+| `vms/` | the OS above the PAL, with nothing of seL4 in it: the MACRO-32 and BLISS executive (`exec/`), the programs it runs (`sysexe/`), DCL's command tables (`cld/`) and SYSTEM's text files (`sysmgr/`), which `build.rs` compiles and links with the vtools crates and writes to the system disk with `ods-image`; see [vms/README.md](vms/README.md) | `sysdisk.img` |
+| `pal/` | everything that knows seL4: the root task, which is the PAL the executive calls with privileged instructions, in freestanding C (`src/`), and the components under it; see [pal/README.md](pal/README.md) | `roottask.elf` |
+| `pal/kernel/` | seL4 16.0.0 (submodule), built with its own CMake | `kernel.elf`, libsel4's headers, `platform_gen.json` |
+| `pal/shim/` | Limine-protocol program that loads seL4 and the root task; see [pal/shim/README.md](pal/shim/README.md) | `shim.elf` |
+| `pal/tcpip/` | the TCP/IP component the root task starts below the executive: lwIP (submodule) with a virtio-net driver and the port adapter, in freestanding C; see [DESIGN-0003](docs/design/0003-tcpip-port.md) | `tcpip.elf` |
+| `boot/` | Limine config, the ESP builder (mtools) and `boot`, which copies the three ELFs and `sysdisk.img` to `out/`, stitches the ESP and runs QEMU; see [boot/README.md](boot/README.md) | `out/esp.img` |
 | `scripts/` | host setup, Limine download, QEMU wrapper and console filter | `out/serial.log` |
-| `ods/` | Files-11 ODS-2/ODS-5 file system in Rust: the library, the `ods` CLI and a FUSE mount; see [ods/README.md](ods/README.md) | `target/` |
-| `vtools/` | VMS-style toolchain in Rust: the `vasm` assembler, the `vmacro` MACRO-32 compiler, `vlink` linker and `vlib` librarian, object, library and image formats, `vdump` to inspect them, and `vrun`, which runs images in QEMU; see its [PRD](docs/prd/0001-vtools.md) | `target/` |
+| `crosstools/` | the host tools that build vaxpunk and its disks; see [crosstools/README.md](crosstools/README.md) | |
+| `crosstools/ods/` | Files-11 ODS-2/ODS-5 file system in Rust: the library, the `ods` CLI and a FUSE mount; see [crosstools/ods/README.md](crosstools/ods/README.md) | `target/` |
+| `crosstools/vtools/` | VMS-style toolchain in Rust: the `vasm` assembler, the `vmacro` MACRO-32 compiler, `vlink` linker and `vlib` librarian, object, library and image formats, `vdump` to inspect them, and `vrun`, which runs images in QEMU; see [crosstools/vtools/README.md](crosstools/vtools/README.md) and its [PRD](docs/prd/0001-vtools.md) | `target/` |
 | `docs/` | ADRs, PRDs and design documents, numbered per kind; see [docs/README.md](docs/README.md) | |
 
-The whole repository is one Cargo workspace. `kernel/`, `shim/` and
-`roottask/` are crates whose `build.rs` runs the component's C build (seL4's
-CMake, or gcc) into Cargo's `OUT_DIR`; `cargo build -p <name>` builds one
-with what it needs. The components share nothing but those output files.
-The kernel hands `shim` and `roottask` its libsel4 headers,
+The whole repository is one Cargo workspace. `pal/kernel/`, `pal/shim/`,
+`pal/tcpip/` and `pal/` are crates whose `build.rs` runs the component's C
+build (seL4's CMake, or gcc) into Cargo's `OUT_DIR`, and `vms/`'s builds
+the system disk with the vtools crates, no C toolchain needed;
+`cargo build -p <name>` builds one with what it needs. The components share
+nothing but those output files.
+The kernel hands `shim`, `tcpip` and `pal` its libsel4 headers,
 `platform_gen.json` and toolchain prefix (`links = "sel4"`), and each crate
 exports its ELF's path as `ELF` for `boot`.
 
-- `kernel/config.cmake` sets `KernelIsMCS`, and the root task refuses to
+- `pal/kernel/config.cmake` sets `KernelIsMCS`, and the root task refuses to
   build against a non-MCS libsel4. Code written for the classic API needs
   the MCS forms: `seL4_Recv`, `seL4_NBRecv` and `seL4_ReplyRecv` take a reply
   object cap, `seL4_Reply` and `seL4_CNode_SaveCaller` are gone, and a new
   thread runs only once it is bound to a configured scheduling context
   (`seL4_SchedControl_Configure`, `seL4_SchedContext_Bind`).
-- The kernel rebuilds only when `kernel/config.cmake`, `kernel/qemu.env`,
-  `kernel/requirements.txt`, `CROSS_COMPILE` or a file in `kernel/seL4`
+- The kernel rebuilds only when `pal/kernel/config.cmake`, `pal/kernel/qemu.env`,
+  `pal/kernel/requirements.txt`, `CROSS_COMPILE` or a file in `pal/kernel/seL4`
   change, and the shim and root task rebuild with it.
-- `kernel/qemu.env` holds the QEMU CPU, RAM and GIC version. seL4 compiles in
+- `pal/kernel/qemu.env` holds the QEMU CPU, RAM and GIC version. seL4 compiles in
   that machine's memory map, and `scripts/run-qemu.sh` reads the same file.
 - Any root task can replace `roottask.elf`: it must be a static AArch64 ELF
   whose first segment is page aligned. seL4 calls its entry point with the
@@ -266,8 +270,9 @@ exports its ELF's path as `ELF` for `boot`.
   STABLE-2_2_1_RELEASE), Limine 11.4.1 by version and
   SHA-256 in `scripts/fetch-limine.sh`. The EDK2 firmware comes from the
   QEMU install (`EDK2_FW=` overrides it).
-- The Rust projects, `ods/` and `vtools/`, are the workspace's default
-  members, so a plain `cargo test` tests both without the C toolchain;
+- The host tools in `crosstools/` and the system disk in `vms/` are the
+  workspace's default members, so a plain `cargo test` builds and tests
+  them without the C toolchain;
   `cargo test -p 'ods*'` or `cargo test -p 'v*'` tests one. `ods-fuse` needs
   FUSE (fuse3 on Linux, macFUSE on macOS). vtools's tests run images under
   `vrun` in QEMU; `VRUN_FLAGS=--hvf cargo test -p 'v*'` runs them under HVF.
@@ -373,7 +378,7 @@ gdb-multiarch out/roottask.elf -ex 'target remote :1234' -ex 'b main' -ex c
 without building.
 
 `cargo run -p boot -- --hvf` runs under Hypervisor.framework instead of TCG.
-It boots the same kernel, which is why `kernel/qemu.env` picks GICv3 (HVF
+It boots the same kernel, which is why `pal/kernel/qemu.env` picks GICv3 (HVF
 does not emulate GICv2). This is best effort: the kernel is built for a
 Cortex-A57 while HVF offers only `-cpu host`, and seL4 warns that the
 counter runs at 24 MHz instead of the 62.5 MHz it was built for.

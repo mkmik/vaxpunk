@@ -2,11 +2,11 @@
 //!
 //! Nothing in the page is written by hand: it is all read from the code and the
 //! design documents, so keeping it current means keeping these current:
-//! - the executive's routines and data (roottask/exec/*.mar, consolio.mar,
-//!   and the `GLOBAL ROUTINE`s of roottask/exec/*.b64, BLISS-64), and
+//! - the executive's routines and data (vms/exec/*.mar, consolio.mar,
+//!   and the `GLOBAL ROUTINE`s of vms/exec/*.b64, BLISS-64), and
 //!   the global ones of the libraries the system disk's images link
-//!   (roottask/sysexe/lib/*.mar, and the `GLOBAL ROUTINE`s of its *.b64) and of DCL's own (roottask/sysexe/dcl.mar,
-//!   roottask/sysexe/dcl/*.mar), and of the RMS utilities' (roottask/sysexe/rms/*.mar):
+//!   (vms/sysexe/lib/*.mar, and the `GLOBAL ROUTINE`s of its *.b64) and of DCL's own (vms/sysexe/dcl.mar,
+//!   vms/sysexe/dcl/*.mar), and of the RMS utilities' (vms/sysexe/rms/*.mar):
 //!   the comment block right above each `NAME::`
 //!   or `.ENTRY`, whose first line reads `NAME: what it does` or, for a system
 //!   service, `$NAME args: what it does`;
@@ -15,7 +15,7 @@
 //!   branches to it, the code that runs on into it and the routines that use
 //!   its address, and whether it comes back with `RSB`;
 //! - the system service vector, the SERVICE and STUB lines of syssrv.mar;
-//! - the macro libraries (vtools/lib/*.mlb, roottask/sysexe/*.mlb): the comment
+//! - the macro libraries (crosstools/vtools/lib/*.mlb, vms/sysexe/*.mlb): the comment
 //!   block right above each `.MACRO`, and the `SYM = value ; meaning` lines of
 //!   the $xxxDEF macros;
 //! - the PAL calls: the tables of DESIGN-0001 (docs/design/0001-pal-interface.md).
@@ -719,23 +719,23 @@ fn calls(rs: &[Routine], r: usize, seen: &mut HashSet<usize>) -> Vec<usize> {
 impl Api {
     fn load(root: &Path) -> Api {
         let (mut routines, mut data, mut macros) = (vec![], vec![], vec![]);
-        let mut exec = glob(&root.join("roottask/exec"), "mar");
-        exec.push(root.join("vtools/lib/consolio.mar"));
+        let mut exec = glob(&root.join("vms/exec"), "mar");
+        exec.push(root.join("crosstools/vtools/lib/consolio.mar"));
         let mut mods: Vec<Module> = exec
             .iter()
             .enumerate()
             .map(|(i, p)| parse_mar(root, p, i, &mut routines, &mut data))
             .collect();
-        for p in glob(&root.join("roottask/exec"), "b64") {
+        for p in glob(&root.join("vms/exec"), "b64") {
             let m = parse_b64(root, &p, mods.len(), &mut routines);
             mods.push(m);
         }
         // The images' libraries, and DCL's: their global routines and data
         // only, since their local names may be the executive's too.
-        let mut libs = glob(&root.join("roottask/sysexe/lib"), "mar");
-        libs.push(root.join("roottask/sysexe/dcl.mar"));
-        libs.extend(glob(&root.join("roottask/sysexe/dcl"), "mar"));
-        libs.extend(glob(&root.join("roottask/sysexe/rms"), "mar"));
+        let mut libs = glob(&root.join("vms/sysexe/lib"), "mar");
+        libs.push(root.join("vms/sysexe/dcl.mar"));
+        libs.extend(glob(&root.join("vms/sysexe/dcl"), "mar"));
+        libs.extend(glob(&root.join("vms/sysexe/rms"), "mar"));
         for p in libs {
             let (mut rs, mut ds) = (vec![], vec![]);
             let mut m = parse_mar(root, &p, mods.len(), &mut rs, &mut ds);
@@ -752,19 +752,19 @@ impl Api {
             }
             mods.push(m);
         }
-        for p in glob(&root.join("roottask/sysexe/lib"), "b64") {
+        for p in glob(&root.join("vms/sysexe/lib"), "b64") {
             let mut m = parse_b64(root, &p, mods.len(), &mut routines);
             m.image = true;
             mods.push(m);
         }
-        let mut lib_paths = glob(&root.join("vtools/lib"), "mlb");
-        lib_paths.extend(glob(&root.join("roottask/sysexe"), "mlb"));
+        let mut lib_paths = glob(&root.join("crosstools/vtools/lib"), "mlb");
+        lib_paths.extend(glob(&root.join("vms/sysexe"), "mlb"));
         let libs: Vec<Lib> = lib_paths
             .iter()
             .enumerate()
             .map(|(i, p)| parse_mlb(root, p, i, &mut macros))
             .collect();
-        let mut services = parse_sstab(&root.join("roottask/exec/syssrv.mar"));
+        let mut services = parse_sstab(&root.join("vms/exec/syssrv.mar"));
         let paldoc = read(&root.join(PAL_DOC));
 
         let mut by_name = HashMap::new();
@@ -1702,11 +1702,11 @@ impl Page<'_> {
     fn ch_images(&mut self) -> String {
         let body = self.modules("3", true);
         let intro = concat!(
-            "<p>Routines and data of the libraries in <code>roottask/sysexe/lib</code>, which ",
+            "<p>Routines and data of the libraries in <code>vms/sysexe/lib</code>, which ",
             "<code>build.rs</code> links into every image on the system disk, and into DCL: ",
             "console output, and the command parser and the <code>CLI$</code> routines ",
             r#"(<a href="../adr/0017-command-tables-from-cld-with-vcdu.md">ADR-0017</a>); "#,
-            "and of <code>roottask/sysexe/dcl.mar</code> and <code>dcl/</code>, DCL's own modules, ",
+            "and of <code>vms/sysexe/dcl.mar</code> and <code>dcl/</code>, DCL's own modules, ",
             "whose shared names are <code>DCL$</code>, and the CLD compiler ",
             r#"SET COMMAND uses (<a href="../adr/0018-set-command-and-foreign-commands.md">ADR-0018</a>). "#,
             "Only their global names are here.</p>"

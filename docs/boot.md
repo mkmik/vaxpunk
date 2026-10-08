@@ -14,22 +14,22 @@ commands.
 QEMU's firmware finds the boot disk (`out/esp.img`) and starts Limine, a
 bootloader. QEMU tells the firmware to boot from that disk alone, so the
 firmware leaves the other devices, the other disks and the network, to the
-OS. As [image/limine.conf](../image/limine.conf) says, Limine loads
+OS. As [boot/limine.conf](../boot/limine.conf) says, Limine loads
 three files into memory: the shim, the seL4 kernel and the root task.
 Limine then jumps to the shim.
 
 QEMU has a second disk, the system disk (`out/sysdisk.img`). It is a
 Files-11 ODS-2 volume, the file system VMS uses, which
-[roottask/build.rs](../roottask/build.rs) makes at build time: the VMS
+[vms/build.rs](../vms/build.rs) makes at build time: the VMS
 executable files in `[SYSEXE]` and a text file in `[SYSMGR]`, owned by
 SYSTEM's UIC, `[1,4]`, which every user may read and run. The firmware
 and Limine leave it alone; the root task reads it later.
 
 ## 2. The shim
 
-The shim ([shim/src/main.c](../shim/src/main.c), `shim_main`) is a small C
+The shim ([pal/shim/src/main.c](../pal/shim/src/main.c), `shim_main`) is a small C
 program. Its job is to put the machine in the state seL4 expects at startup
-([shim/README.md](../shim/README.md) has the details).
+([pal/shim/README.md](../pal/shim/README.md) has the details).
 
 - It looks up the serial port's address in the hardware description (the
   DTB) so it can print. That's the `vaxpunk shim:` line.
@@ -45,7 +45,7 @@ system.
 
 ## 4. The root task, also called the PAL
 
-The root task ([roottask/src/main.c](../roottask/src/main.c), `main`) plays
+The root task ([pal/src/main.c](../pal/src/main.c), `main`) plays
 the role PALcode played on an Alpha: it's the "hardware" layer underneath VMS
 ([ADR-0002](adr/0002-root-task-is-the-pal.md)).
 
@@ -90,9 +90,9 @@ the role PALcode played on an Alpha: it's the "hardware" layer underneath VMS
 
 The executive is the VMS kernel, written in MACRO-32, with one module in
 BLISS-64: `$NUMTIM`
-([roottask/exec/numtim.b64](../roottask/exec/numtim.b64)), which `vbliss`
+([vms/exec/numtim.b64](../vms/exec/numtim.b64)), which `vbliss`
 compiles.
-`EXEC$START` ([roottask/exec/exec.mar](../roottask/exec/exec.mar)):
+`EXEC$START` ([vms/exec/exec.mar](../vms/exec/exec.mar)):
 
 - fills in the system control block (handlers for traps, mode changes and
   software interrupts, plus the timer and the console receive interrupt)
@@ -126,7 +126,7 @@ compiles.
 
 ## 6. SYSTEM and DCL
 
-DCL ([roottask/sysexe/dcl.mar](../roottask/sysexe/dcl.mar)) is the command
+DCL ([vms/sysexe/dcl.mar](../vms/sysexe/dcl.mar)) is the command
 interpreter. It is linked high in P1, which tells the executive it is one
 ([ADR-0006](adr/0006-cli-in-p1-runs-images-in-its-process.md)):
 
@@ -202,9 +202,9 @@ interpreter. It is linked high in P1, which tells the executive it is one
   VMS's, and `$STATUS` holds the last command's status: one that is an
   error ends the procedures, as VMS's default `ON ERROR THEN EXIT` does.
 - DCL parses each command with its command tables, `DCL$TABLES`, which
-  `roottask/build.rs` compiled from the verbs' definitions in
-  `roottask/cld/*.cld` with vcdu, and linked into `DCL.EXE`. The parser,
-  `CLI$$DCL_PARSE` in `roottask/sysexe/lib/cli.mar`, matches the verb on
+  `vms/build.rs` compiled from the verbs' definitions in
+  `vms/cld/*.cld` with vcdu, and linked into `DCL.EXE`. The parser,
+  `CLI$$DCL_PARSE` in `vms/sysexe/lib/cli.mar`, matches the verb on
   its first 4 characters, then its parameters and its qualifiers, such as
   `/LOG`. It prompts for a parameter the command needs but lacks, `_From: `,
   and reports a mistake as VMS does: `%DCL-W-IVQUAL, unrecognized
@@ -330,9 +330,9 @@ and there's no login yet.
 ## 7. STARTUP and the test processes
 
 `RUN STARTUP` at the prompt starts the tests
-([roottask/sysexe/startup.mar](../roottask/sysexe/startup.mar)). STARTUP
+([vms/sysexe/startup.mar](../vms/sysexe/startup.mar)). STARTUP
 runs inside SYSTEM; the programs it starts are processes of their own,
-and each one in [roottask/sysexe/](../roottask/sysexe/) tests one
+and each one in [vms/sysexe/](../vms/sysexe/) tests one
 executive feature:
 
 - STARTUP allocates 4 pages, writes them, checks what it reads back and

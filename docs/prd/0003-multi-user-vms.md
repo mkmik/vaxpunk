@@ -206,8 +206,8 @@ until the hardware or size changes; leave it.
 | 13 | An AST routine's kernel code can be deleted halfway without `IPL$_ASTDEL` around it (ADR-0011) | Raise IPL as VMS does around such code |
 | 14 | A network connection whose `CLOSE` finds no pool stays open; unit numbers wrap at 99 whether in use or not (`netdriver.mar`) | Preallocate the close message in the UCB; skip units in use |
 | 15 | A name whose versions spill into a second directory record matches twice (`f11.mar` `FIL$SEARCHDIR`); a directory is rewritten whole on each change (`f11wrt.mar`) | Search every record of a name; it matters once a file has many versions |
-| 16 | `EXTZV`/`INSV` read and write 8 bytes around the field, not atomically, and fault across a page end (`vmacro/src/insn.rs`); `vtools/tests/macro32-bugs/fields.mar` shows it | Narrower accesses at a page end; atomic where the field is shared |
-| 17 | Shift counts of 32 and up wrap instead of clearing (`vmacro/src/insn.rs`); `vtools/tests/macro32-bugs/shifts.mar` shows it | A compare and select, as the note says |
+| 16 | `EXTZV`/`INSV` read and write 8 bytes around the field, not atomically, and fault across a page end (`vmacro/src/insn.rs`); `crosstools/vtools/tests/macro32-bugs/fields.mar` shows it | Narrower accesses at a page end; atomic where the field is shared |
+| 17 | Shift counts of 32 and up wrap instead of clearing (`vmacro/src/insn.rs`); `crosstools/vtools/tests/macro32-bugs/shifts.mar` shows it | A compare and select, as the note says |
 | 18 | `IOC$CANCEL` doesn't wait for rundown's cancels to finish (`qio.mar`) | Needed once a driver can't stop at once: the interrupt-driven disk (tier 4) |
 | 19 | Common event flag clusters are kept while processes wait on them (`event.mar`) | Fine as is; listed so it isn't fixed twice |
 
@@ -215,7 +215,7 @@ until the hardware or size changes; leave it.
 
 | # | Notes | What closes them |
 | --- | --- | --- |
-| 20 | No shareable images: the CLI parser is linked into every image (ADR-0017); images run where they are linked, no fixups (`process.mar`, `roottask/src/main.c`); `$CRMPSC`, `$MGBLSC` are stubs; one mapping per PFN (DESIGN-0001, `main.c`) | Global sections, then shareable images and the EIAF; PRD-0001 left room in the format |
+| 20 | No shareable images: the CLI parser is linked into every image (ADR-0017); images run where they are linked, no fixups (`process.mar`, `pal/src/main.c`); `$CRMPSC`, `$MGBLSC` are stubs; one mapping per PFN (DESIGN-0001, `main.c`) | Global sections, then shareable images and the EIAF; PRD-0001 left room in the format |
 | 21 | An image is read whole when activated (`f11.mar` `FIL$OPENFILE`) | Map sections page by page, with global sections |
 | 22 | Files-11: one index file bitmap block, so at most 4,096 files; no extension headers; free blocks counted each time; the index file grows 16 blocks at a time (ADR-0009, ADR-0012, `f11.mar`, `f11wrt.mar`, DESIGN-0002) | Extension headers when a file's map fills; a free count in the VCB |
 | 23 | RMS: one stream per file, no wildcard directories, ASTs or completion routines; `SET PROTECTION` and `DIRECTORY/PROTECTION` need read access to the file, where VMS's ask the XQP; runs in kernel mode (`rms.mar`, `set.mar`, `directory.mar`, DESIGN-0002) | Sharing with PRD-0008's step 9; wildcard directories with item 24; executive mode with the mode threads of ADR-0005 |
@@ -244,7 +244,7 @@ says what replaces it; this PRD doesn't schedule them.
 | 38 | The console UART polled each 10 ms tick, at QEMU virt's fixed address; device addresses not from the DTB (DESIGN-0001, `main.c`) |
 | 39 | 1,024 PFNs, 4 MB, and 96 page tables, as much as the root CNode leaves room for (DESIGN-0001, `main.c`). This one turns into tier 1 when many logged-in users and batch jobs run out of memory: frame caps in a CNode of their own |
 | 40 | A seL4 call per page to switch the kernel's view of two processes; page protection set once; the tick a PAL thread (ADR-0004, ADR-0005, `main.c`) |
-| 41 | The TCP/IP component's page mapped writable and executable; frames copied, no offloads (`main.c`, `tcpip/src/main.c`) |
+| 41 | The TCP/IP component's page mapped writable and executable; frames copied, no offloads (`main.c`, `pal/tcpip/src/main.c`) |
 | 42 | Power off works under TCG only; with HVF the `HLT` is a fault (`main.c`, ADR-0008) |
 | 43 | `EMUL` is signed, so the clock's seconds fit until 2038 (`timeschdl.mar`, DESIGN-0002) |
 | 44 | `vlink` rescans every definition per module taken; `vcdu` limits keywords of a qualifier after a value (`vlink/src/lib.rs`, `vcdu/src/lib.rs`) |

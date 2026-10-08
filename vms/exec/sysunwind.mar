@@ -1,0 +1,504 @@
+        .TITLE  SYSUNWIND       Condition handling: exceptions, signals, $UNWIND and $PUTMSG
+        .IDENT  /V0.2/
+;
+; A routine establishes a condition handler by writing its address at
+; (FP), which is 16(FP) in its frame (DESIGN-0004), as on the VAX, or
+; with LIB$ESTABLISH (sysexe/lib/signal.mar); a frame descriptor may name
+; a static one. A condition is signaled by an exception in an outer mode,
+; or by LIB$SIGNAL: either way EXE$SIGNAL calls the handlers it finds,
+; from the frame that signaled it out, with a signal array and a
+; mechanism array ($CHFDEF, 64-bit VMS's), in the mode that signaled it.
+; A handler continues, resignals, or calls $UNWIND to return from the
+; frame that established it. A condition no handler takes goes to
+; EXE$CATCHALL, which writes its message with $PUTMSG and, if it is
+; severe, exits (ADR-0021).
+;
+; An exception reaches the executive in kernel mode (DESIGN-0001,
+; *Exceptions*). EXE$ACVIOLAT and EXE$OPCDEC copy the PAL's frame, which
+; has every register, and the arrays below the stacks of the mode that
+; took it, and REI to EXE$SRCHANDLER there, with the registers it took it
+; with, which calls EXE$SIGNAL. A handler that continues goes back to the
+; instruction that took it, or to the PC it wrote in the signal array.
+;
+; EXE$SRCHANDLER, EXE$SIGNAL, EXE$CATCHALL, $UNWIND and $PUTMSG run in
+; outer modes, so they are in the vector, EXEC$VECTOR, which this module
+; adds to after syssrv.mar's part (vms/exec/syssrv.mar).
+; ponytail: no exception vectors; a handler's own conditions are searched
+; for from its frame out through the frames already searched; $UNWIND
+; restores what frames saved, not what JSB routines they called did.
+;
+        .LIBRARY "lib.mlb"
+        .LIBRARY "starlet.mlb"
+        $CHFDEF
+        $FDSCDEF
+        $FRMDEF
+        $INTSTKDEF
+        $IODEF
+        $PALDEF
+        $PSLDEF
+        $SSDEF
+        $STSDEF
+
+        .EXTERNAL EXE$IMGEXIT, SYS$EXIT
+
+; What EXE$ACVIOLAT and EXE$OPCDEC copy below the stacks of the mode that
+; took the exception, from its lowest address: EXE$SRCHANDLER's SP.
+ARGS = 0                                ; the handlers' argument list: 2, then the arrays
+MECH = ARGS + 16                        ; the mechanism array
+SIG = MECH + CHF$S_MCH                  ; the 32-bit signal array, at most 6 longwords
+SIG64 = SIG + 24                        ; the 64-bit one, at most 2 and 5 quadwords
+FRAME = SIG64 + 48                      ; the PAL's frame, $INTSTKDEF
+AREA = FRAME + INTSTK$K_LENGTH          ; all of it, a multiple of 16
+
+; EXE$SIGNAL's locals, below its FP, which SYS$UNWIND finds and writes.
+UNW_LAST = -4                           ; the last frame $UNWIND removes, 0 if none
+UNW_PC = -8                             ; where it goes on, 0 for the return address
+UNW_FRAME0 = -12                        ; the frame that signaled
+UNW_MCH = -16                           ; the mechanism array
+UNW_LENGTH = 16
+
+; What UNWIND goes on with, which it builds from the frames it removes.
+IMG_X18 = 0                             ; x18-x28: VAX SP, then R2-R11
+IMG_FP = 88
+IMG_SP = 96
+IMG_PC = 104
+IMG_LENGTH = 112
+
+        .PSECT  $CODE$
+
+; EXE$ACVIOLAT: the access violation handler. Below the PAL's frame, the
+; VAX's parameters: a mask, bit 2 for a write, and the address. An outer
+; mode took it, since one in kernel mode stops the system: signals
+; SS$_ACCVIO there, with the mask and the address.
+EXE$ACVIOLAT::
+        .EXCEPTION_ENTRY
+        MOVL    #SS$_ACCVIO, R0
+        MOVL    #2, R1
+        BRB     REFLECT
+
+; EXE$OPCDEC: the reserved instruction handler: privileged instructions
+; and PAL calls, and undefined instructions, in an outer mode. Signals
+; SS$_OPCDEC there.
+EXE$OPCDEC::
+        .EXCEPTION_ENTRY
+        MOVL    #SS$_OPCDEC, R0
+        CLRL    R1
+; REFLECT: R0 = the condition, R1 = the parameters the PAL pushed below
+; its frame, 0 or 2 quadwords, at SP. Copies the frame and makes the
+; arrays, AREA, below both stack pointers of the mode that took the
+; exception, and REIs to EXE$SRCHANDLER in that mode, with its SP at them
+; and the other registers as the exception found them. If it can't write
+; there, the image exits with the condition.
+REFLECT:
+        .GLOBAL_LABEL                   ; EXE$ACVIOLAT's and EXE$OPCDEC's
+        MOVL    SP, R2                  ; the parameters
+        ASHL    #3, R1, R4
+        ADDL2   R2, R4                  ; the frame
+        MOVL    INTSTK$Q_SP(R4), R5
+        CMPL    INTSTK$Q_X_SP(R4), R5
+        BGEQU   10$
+        MOVL    INTSTK$Q_X_SP(R4), R5
+10$:    BICL2   #15, R5
+        SUBL2   #AREA, R5
+        IFNOWRT #AREA, (R5), 90$
+        MOVL    R4, R6
+        MOVAB   FRAME(R5), R7
+        MOVL    #INTSTK$K_LENGTH/8, R8
+20$:    MOVQ    (R6)+, (R7)+
+        SOBGTR  R8, 20$
+        MOVL    #2, ARGS(R5)
+        MOVAB   SIG(R5), ARGS+4(R5)
+        MOVAB   MECH(R5), ARGS+8(R5)
+        MOVAB   MECH(R5), R7            ; the mechanism array
+        MOVL    #CHF$S_MCH/8, R8
+30$:    CLRQ    (R7)+
+        SOBGTR  R8, 30$
+        MOVL    #CHF$S_MCH/8-1, MECH+CHF$IS_MCH_ARGS(R5)
+        MOVQ    INTSTK$Q_X0+232(R4), MECH+CHF$PH_MCH_FRAME(R5) ; its FP, x29
+        MOVAB   FRAME(R5), MECH+CHF$PH_MCH_ESF_ADDR(R5)
+        MOVAB   SIG(R5), MECH+CHF$PH_MCH_SIG_ADDR(R5)
+        MOVAB   SIG64(R5), MECH+CHF$PH_MCH_SIG64_ADDR(R5)
+        MOVAB   INTSTK$Q_X0(R4), R6     ; x0 and x1, then x2-x17
+        MOVAB   MECH+CHF$IH_MCH_RETVAL(R5), R7
+        MOVL    #18, R8
+40$:    MOVQ    (R6)+, (R7)+
+        SOBGTR  R8, 40$
+        ADDL3   #3, R1, SIG(R5)         ; the 32-bit signal array
+        MOVL    R0, SIG+CHF$L_SIG_NAME(R5)
+        ADDL3   #3, R1, SIG64(R5)       ; and the 64-bit one
+        MOVL    #SS$_SIGNAL64, SIG64+CHF64$L_SIGNAL64(R5)
+        MOVL    R0, SIG64+CHF64$Q_SIG_NAME(R5)
+        CLRL    SIG64+CHF64$Q_SIG_NAME+4(R5)
+        MOVAB   SIG+CHF$L_SIG_ARG1(R5), R6
+        MOVAB   SIG64+CHF64$Q_SIG_ARG1(R5), R7
+        TSTL    R1
+        BEQL    50$
+        MOVL    (R2), (R6)+             ; the mask
+        MOVL    8(R2), (R6)+            ; the address
+        MOVQ    (R2), (R7)+
+        MOVQ    8(R2), (R7)+
+50$:    MOVL    INTSTK$Q_PC(R4), (R6)+
+        MOVL    INTSTK$Q_PS(R4), (R6)
+        MOVQ    INTSTK$Q_PC(R4), (R7)+
+        MOVQ    INTSTK$Q_PS(R4), (R7)
+        MOVAB   EXE$SRCHANDLER, R0
+        MOVL    R0, INTSTK$Q_PC(R4)
+        CLRL    INTSTK$Q_PC+4(R4)
+        MOVL    R5, INTSTK$Q_SP(R4)
+        CLRL    INTSTK$Q_SP+4(R4)
+        MOVL    R5, INTSTK$Q_X_SP(R4)
+        CLRL    INTSTK$Q_X_SP+4(R4)
+        MOVL    R4, SP
+        REI
+90$:    PUSHL   R0
+        CALLS   #1, G^EXE$IMGEXIT
+
+        .PSECT  EXEC$VECTOR, EXE, NOWRT, LONG
+; EXE$SRCHANDLER: where an exception REIs to, in the mode that took it,
+; with SP at what REFLECT made, and every other register as the exception
+; found it. Calls EXE$SIGNAL, then, unless a handler unwound,
+; EXE$CATCHALL if none took it, and goes back with REI, to the 32-bit
+; signal array's PC, with R0 and R1 from the mechanism array.
+EXE$SRCHANDLER::
+        .EXCEPTION_ENTRY
+        CALLG   (SP), EXE$SIGNAL        ; SP is at ARGS
+        BLBS    R0, 10$
+        PUSHAB  SIG(SP)
+        CALLS   #1, EXE$CATCHALL
+10$:    MOVL    SIG(SP), R0             ; the count: the PC is the one before last
+        MOVL    SIG-4(SP)[R0], FRAME+INTSTK$Q_PC(SP)
+        EVAX_LDQ R0, MECH+CHF$IH_MCH_RETVAL(SP)
+        EVAX_LDQ R1, MECH+CHF$IH_MCH_RETVAL2(SP)
+        MOVAB   FRAME(SP), SP
+        EVAX_STQ R0, INTSTK$Q_R0(SP)
+        EVAX_STQ R1, INTSTK$Q_R1(SP)
+        REI
+
+; EXE$SIGNAL sigargs, mchargs: looks for a handler for the condition
+; sigargs signals, from the frame mchargs has, the one that signaled it,
+; its depth 0, out to its mode's first. It calls each handler on the
+; way, a frame's static one or the one at its (FP), with sigargs and
+; mchargs, which have the frame and its depth. A handler returns
+; SS$_CONTINUE, or any status with the low bit set, to go on where the
+; condition was signaled, with R0 and R1 from mchargs, or SS$_RESIGNAL,
+; or any with it clear, to let the next one have it; an $UNWIND it called
+; takes effect as it returns. R0 = SS$_CONTINUE once a handler took it,
+; SS$_RESIGNAL if none did. Doesn't return after an $UNWIND. Runs in the
+; mode that signaled.
+        .ENTRY  EXE$SIGNAL, ^M<R2, R3, R4, R5, R6, R7, R8, R9, R10, R11>
+        SUBL2   #UNW_LENGTH, SP
+        CLRQ    UNW_PC(FP)              ; and UNW_LAST
+        MOVQ    4(AP), R6               ; R6 = sigargs, R7 = mchargs
+        MOVL    R7, UNW_MCH(FP)
+        MOVL    CHF$PH_MCH_FRAME(R7), R2
+        MOVL    R2, UNW_FRAME0(FP)
+        CLRL    CHF$IS_MCH_DEPTH(R7)
+        CALL_PAL #PAL$_RD_PS
+        EXTZV   #PSL$V_CURMOD, #2, R0, R8 ; the mode the frames are in
+SEARCH: TSTL    R2
+        BEQL    NONE
+        IFNORD  #FRM$K_LENGTH, (R2), NONE, MODE=R8
+        BSBW    FHANDLER
+        TSTL    R1
+        BEQL    OUTWARD
+        MOVL    R2, CHF$PH_MCH_FRAME(R7)
+        CALLG   (AP), (R1)
+; HANDLER: where a handler returns to; SYS$UNWIND finds EXE$SIGNAL's
+; frame by it.
+HANDLER:
+        TSTL    UNW_LAST(FP)
+        BNEQ    UNWIND
+        BLBC    R0, OUTWARD
+        MOVL    #SS$_CONTINUE, R0
+        RET
+OUTWARD:
+        MOVL    FRM$Q_FP(R2), R0        ; the caller's frame
+        CMPL    R0, R2
+        BLEQU   NONE                    ; not further out: no frame
+        MOVL    R0, R2
+        INCL    CHF$IS_MCH_DEPTH(R7)
+        BRB     SEARCH
+NONE:   MOVL    #SS$_RESIGNAL, R0
+        RET
+
+; UNWIND: R7 = mchargs, R8 = the mode. Returns from the frame UNW_LAST
+; says, as its RET would, having removed every frame from this one out to
+; it, each one's handler called first with SS$_UNWIND, the frames' first:
+; x18 and R2-R11 as each of them saved them, the outermost's last, so as
+; they were in its caller; R0 and R1 from mchargs; FP and SP from the
+; frame, and AP from FP. Goes on at UNW_PC, or else where the frame returns to.
+UNWIND: SUBL2   #IMG_LENGTH, SP
+        MOVL    SP, R9                  ; what it goes on with
+        PUSHL   #SS$_UNWIND             ; the handlers' signal array,
+        PUSHL   #1
+        MOVL    SP, R10
+        PUSHL   R7                      ; and argument list
+        PUSHL   R10
+        PUSHL   #2
+        MOVL    SP, R10
+        MOVL    FP, R2
+        MOVL    UNW_LAST(FP), R3
+10$:    BSBW    FHANDLER
+        TSTL    R1
+        BEQL    20$
+        MOVL    R2, CHF$PH_MCH_FRAME(R7)
+        CALLG   (R10), (R1)
+20$:    MOVL    FRM$Q_FDSC(R2), R4      ; what the frame saved
+        BEQL    40$
+        IFNORD  #FDSC$K_LENGTH, (R4), 40$, MODE=R8
+        MOVL    FDSC$L_SAVED(R4), R5
+        ADDL3   FDSC$L_RSA(R4), R2, R6
+        CLRL    R11
+30$:    BBC     R11, R5, 35$
+        MOVQ    (R6)+, IMG_X18(R9)[R11]
+35$:    AOBLSS  #11, R11, 30$
+40$:    CMPL    R2, R3
+        BEQL    50$
+        MOVL    FRM$Q_FP(R2), R2
+        BRB     10$
+50$:    MOVL    FRM$Q_FDSC(R2), R4      ; the last one's caller goes on
+        ADDL3   FDSC$L_SIZE(R4), R2, IMG_SP(R9)
+        CLRL    IMG_SP+4(R9)
+        MOVQ    FRM$Q_FP(R2), IMG_FP(R9)
+        MOVQ    FRM$Q_PC(R2), IMG_PC(R9)
+        MOVL    UNW_PC(FP), R0
+        BEQL    60$
+        MOVL    R0, IMG_PC(R9)
+        CLRL    IMG_PC+4(R9)
+60$:    EVAX_LDQ R0, CHF$IH_MCH_RETVAL(R7)
+        EVAX_LDQ R1, CHF$IH_MCH_RETVAL2(R7)
+        MOVL    R9, R2
+        .DISABLE FLAGGING               ; the frame's registers, by name
+        mov     x16, x19                ; R2: what it goes on with
+        ldp     x18, x19, [x16, #IMG_X18]
+        ldp     x20, x21, [x16, #IMG_X18+16]
+        ldp     x22, x23, [x16, #IMG_X18+32]
+        ldp     x24, x25, [x16, #IMG_X18+48]
+        ldp     x26, x27, [x16, #IMG_X18+64]
+        ldr     x28, [x16, #IMG_X18+80]
+        ldr     x29, [x16, #IMG_FP]
+        add     x12, x29, #32           ; AP, its argument list
+        ldr     x17, [x16, #IMG_SP]
+        mov     sp, x17
+        ldr     x17, [x16, #IMG_PC]
+        br      x17
+        .ENABLE FLAGGING
+
+; FHANDLER: R2 = a frame, R8 = its mode. R1 = its condition handler: its
+; descriptor's static one, else the one at its (FP), or 0. Uses R0.
+FHANDLER:
+        .JSB_ENTRY
+        MOVL    FRM$Q_HANDLER(R2), R1
+        MOVL    FRM$Q_FDSC(R2), R0
+        BEQL    90$
+        IFNORD  #FDSC$K_LENGTH, (R0), 90$, MODE=R8
+        BBC     #FDSC$V_HANDLER, FDSC$L_FLAGS(R0), 90$
+        MOVL    FDSC$Q_HANDLER(R0), R1
+90$:    RSB
+
+; $UNWIND [depadr] [,newpc]: in a condition handler, removes the frames
+; from the one that signaled the condition out: as many as the longword
+; at depadr says, or, without depadr, out to the one that established the
+; handler. They go once the handler returns: the last one's caller goes
+; on as if it had returned, or at newpc, with R0 and R1 from the
+; mechanism array. SS$_NORMAL, and no unwind for a depth of 0 or less;
+; SS$_NOSIGNAL outside a handler, SS$_UNWINDING if it asked already,
+; SS$_INSFRAME if there are fewer frames, SS$_ACCVIO. Runs in the
+; caller's mode.
+        .ENTRY  SYS$UNWIND, ^M<R2, R3, R4>
+        CALL_PAL #PAL$_RD_PS
+        EXTZV   #PSL$V_CURMOD, #2, R0, R4
+        MOVAB   HANDLER, R1
+        MOVL    FP, R2
+10$:    IFNORD  #FRM$K_LENGTH, (R2), 80$, MODE=R4
+        CMPL    FRM$Q_PC(R2), R1
+        BEQL    20$                     ; R2 is the handler's frame
+        MOVL    FRM$Q_FP(R2), R0
+        CMPL    R0, R2
+        BLEQU   80$
+        MOVL    R0, R2
+        BRB     10$
+20$:    MOVL    FRM$Q_FP(R2), R2        ; EXE$SIGNAL's
+        TSTL    UNW_LAST(R2)
+        BNEQ    82$
+        MOVL    UNW_MCH(R2), R0
+        ADDL3   #1, CHF$IS_MCH_DEPTH(R0), R3
+        CMPB    (AP), #1
+        BLSSU   30$
+        MOVL    4(AP), R0
+        BEQL    30$
+        IFNORD  #4, (R0), 84$, MODE=R4
+        MOVL    (R0), R3
+        BLEQ    70$
+30$:    MOVL    UNW_FRAME0(R2), R0
+        BRB     45$
+40$:    MOVL    FRM$Q_FP(R0), R0
+        BEQL    86$
+        IFNORD  #FRM$K_LENGTH, (R0), 86$, MODE=R4
+45$:    SOBGTR  R3, 40$
+        MOVL    R0, UNW_LAST(R2)
+        CLRL    UNW_PC(R2)
+        CMPB    (AP), #2
+        BLSSU   70$
+        MOVL    8(AP), UNW_PC(R2)
+70$:    MOVL    #SS$_NORMAL, R0
+        RET
+80$:    MOVL    #SS$_NOSIGNAL, R0
+        RET
+82$:    MOVL    #SS$_UNWINDING, R0
+        RET
+84$:    MOVL    #SS$_ACCVIO, R0
+        RET
+86$:    MOVL    #SS$_INSFRAME, R0
+        RET
+
+; EXE$CATCHALL sigargs: what becomes of a condition no handler took, as
+; with VMS's catch-all handler: writes its message with $PUTMSG, without
+; the PC and PSL, and, if it is severe, exits with it, STS$M_INHIB_MSG
+; set, so that the command interpreter doesn't write it again, through
+; the mode's exit handlers. Returns otherwise. Keeps every register but
+; R0 and R1.
+        .ENTRY  EXE$CATCHALL, ^M<R2>
+        MOVL    4(AP), R2
+        SUBL2   #2, (R2)
+        PUSHL   R2
+        CALLS   #1, SYS$PUTMSG
+        ADDL2   #2, (R2)
+        BICL3   #^C<STS$M_SEVERITY>, CHF$L_SIG_NAME(R2), R0
+        CMPL    R0, #STS$K_SEVERE
+        BNEQ    90$
+        BISL3   #STS$M_INHIB_MSG, CHF$L_SIG_NAME(R2), -(SP)
+        CALLS   #1, SYS$EXIT
+90$:    RET
+
+; $PUTMSG msgvec: writes the messages msgvec has, a count of longwords,
+; then each message's condition and its FAO arguments, on SYS$OUTPUT, or
+; OPA0: for a process without one: the first with its % and the others
+; with a -, each on a line, $GETMSG's text with each !XB, !XW and !XL in
+; it the next argument in hex, 2, 4 or 8 digits. A system condition's
+; arguments follow it, as many as its message has, past the count if need
+; be: an exception's PC and PSL, which EXE$CATCHALL's count leaves out, as
+; on VMS. Another facility's follow their count, and are 0 past the last;
+; one that ends msgvec has none. R0 = $QIOW's status, or $ASSIGN's
+; error. Runs in the caller's mode.
+; ponytail: no action routine or facility name, the FAO directives the
+; executive's messages use, on SYS$OUTPUT, not SYS$ERROR.
+        .ENTRY  SYS$PUTMSG, ^M<R2, R3, R4, R5, R6, R7, R8, R9, R10, R11>
+        MOVL    4(AP), R2
+        SUBL2   #768, SP
+        MOVL    SP, R3                  ; the text, 256 bytes
+        MOVAB   256(SP), R4             ; the lines, 512 bytes
+        MOVZWL  (R2)+, -(SP)            ; 12(R5): the longwords left
+        ADDL2   #2, R2                  ; R2: the next condition
+        CLRL    -(SP)                   ; 8(R5): the text's length
+        PUSHL   R3
+        PUSHL   #256                    ; (R5): the text's descriptor
+        MOVL    SP, R5
+        CLRL    -(SP)                   ; (R6): the next condition, 0 if past the arguments taken
+        MOVAL   (SP), R6
+        CLRL    R8                      ; the lines' length
+1$:     TSTL    12(R5)
+        BGTR    2$
+        BRW     50$
+2$:     $GETMSG_S MSGID=(R2), MSGLEN=8(R5), BUFADR=(R5)
+        MOVZWL  8(R5), R7
+        MOVAB   4(R2), R10
+        CLRL    (R6)
+        MOVL    #255, R9                ; the arguments left: as many as it has
+        BITL    #^XFFF0000, (R2)        ; the facility
+        BEQL    5$
+        CLRL    R9
+        CMPL    12(R5), #2
+        BLSS    4$                      ; no count
+        MOVL    (R10), R9
+        SUBL3   #2, 12(R5), R0
+        CMPL    R9, R0
+        BLEQU   4$
+        MOVL    R0, R9
+4$:     MOVAL   4(R10)[R9], (R6)
+        ADDL2   #4, R10
+5$:     CLRL    R11                     ; where in the text
+        TSTL    R8
+        BEQL    10$
+        MOVB    #^A/-/, (R3)            ; not the first
+        MOVL    #13, R0
+        BSBW    PUT
+        MOVL    #10, R0
+        BSBW    PUT
+10$:    CMPL    R11, R7
+        BGEQU   45$
+        MOVZBL  (R3)[R11], R0
+        INCL    R11
+        CMPB    R0, #^A/!/
+        BNEQ    40$
+        SUBL3   R11, R7, R1
+        CMPL    R1, #2
+        BLSSU   40$                     ; no room for XL
+        CMPB    (R3)[R11], #^A/X/
+        BNEQ    40$
+        MOVZBL  1(R3)[R11], R1
+        PUSHL   #2                      ; the digits
+        CMPB    R1, #^A/B/
+        BEQL    20$
+        MOVL    #4, (SP)
+        CMPB    R1, #^A/W/
+        BEQL    20$
+        MOVL    #8, (SP)
+        CMPB    R1, #^A/L/
+        BEQL    20$
+        ADDL2   #4, SP
+        BRB     40$
+20$:    ADDL2   #2, R11
+        CLRL    R1
+        TSTL    R9
+        BEQL    25$
+        DECL    R9
+        MOVL    (R10)+, R1
+25$:    SUBL3   (SP), #8, R0
+        ASHL    #2, R0, R0
+        ROTL    R0, R1, R1              ; its first digit at the top
+30$:    ROTL    #4, R1, R1
+        EXTZV   #0, #4, R1, R0
+        MOVZBL  HEX[R0], R0
+        BSBB    PUT
+        SOBGTR  (SP), 30$
+        ADDL2   #4, SP
+        BRB     10$
+40$:    BSBB    PUT
+        BRB     10$
+45$:    MOVL    (R6), R0                ; the next condition
+        BNEQ    47$
+        MOVL    R10, R0
+47$:    SUBL3   R2, R0, R1
+        ASHL    #-2, R1, R1
+        SUBL2   R1, 12(R5)
+        MOVL    R0, R2
+        BRW     1$
+50$:    MOVB    #13, (R4)[R8]
+        MOVB    #10, 1(R4)[R8]
+        ADDL2   #2, R8
+        $ASSIGN_S DEVNAM=OUTPUT, CHAN=(R6)
+        BLBS    R0, 60$
+        $ASSIGN_S DEVNAM=OPA0, CHAN=(R6)
+        BLBC    R0, 90$
+60$:    $QIOW_S CHAN=(R6), FUNC=#IO$_WRITEVBLK, P1=(R4), P2=R8
+        PUSHL   R0
+        $DASSGN_S CHAN=(R6)
+        MOVL    (SP)+, R0
+90$:    RET
+
+; PUT: R0 = a character, R4 = the lines, R8 = their length. Appends the
+; character, if there is room for it and CR LF.
+PUT:
+        .JSB_ENTRY  SCRATCH=<R8>
+        CMPL    R8, #510
+        BGEQU   10$
+        MOVB    R0, (R4)[R8]
+        INCL    R8
+10$:    RSB
+
+HEX:    .ASCII  "0123456789ABCDEF"      ; a hex digit's character
+OUTPUT: .ASCID  "SYS$OUTPUT"            ; where $PUTMSG writes
+OPA0:   .ASCID  "OPA0:"                 ; or, without it, the console
+
+        .END

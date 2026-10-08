@@ -37,7 +37,7 @@ in its interface.
 
 ## What the PAL sets up
 
-The root task (`roottask/src/main.c`) reads `[SYSEXE]EXEC.EXE` from the
+The root task (`pal/src/main.c`) reads `[SYSEXE]EXEC.EXE` from the
 system disk (*The disks*) and starts it, in S0, the system space
 every process shares (*Memory*):
 
@@ -66,7 +66,7 @@ from 0 up for these. Nothing else is mapped. The boot context starts with:
 
 ### The restart parameter block
 
-`$RPBDEF` in `vtools/lib/lib.mlb`, longwords:
+`$RPBDEF` in `crosstools/vtools/lib/lib.mlb`, longwords:
 
 | Offset | Field | Holds |
 | --- | --- | --- |
@@ -80,7 +80,7 @@ from 0 up for these. Nothing else is mapped. The boot context starts with:
 ### The disks
 
 Unit 0, the system disk, is `sysdisk.img`, a Files-11 ODS-2 volume
-labelled `VAXPUNK`, which `roottask/build.rs` writes with `ods-image`:
+labelled `VAXPUNK`, which `vms/build.rs` writes with `ods-image`:
 the images in `[SYSEXE]`, SYSTEM's files in `[SYSMGR]`. QEMU attaches it
 read only as a virtio-blk device on one of QEMU virt's 32 virtio-mmio
 transports, from `0x0a000000`, in modern (virtio 1) mode:
@@ -363,7 +363,7 @@ The root task then prints `root task done` and suspends itself.
 ## How MACRO-32 calls it
 
 vmacro compiles privileged instructions into PAL calls, as AMACRO compiled
-them into `CALL_PAL` (`vtools/docs/macro32.md`). The executive writes VAX
+them into `CALL_PAL` (`crosstools/vtools/docs/macro32.md`). The executive writes VAX
 source:
 
 ```
@@ -388,7 +388,7 @@ and gets:
   the call; x7 isn't a VAX register. Every other register, and the VAX's
   view of R0, comes back unchanged.
 - **Constants.** The processor register must be a constant, as in AMACRO.
-  `$PRDEF` in `vtools/lib/lib.mlb` defines the VAX's `PR$_` names.
+  `$PRDEF` in `crosstools/vtools/lib/lib.mlb` defines the VAX's `PR$_` names.
 
 | VAX instruction | PAL call |
 | --- | --- |

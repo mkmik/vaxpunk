@@ -1,0 +1,19 @@
+[package]
+name = "boot"
+description = "Stitches the ESP image and boots it in QEMU: cargo run -p boot"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "boot"
+path = "main.rs"
+
+[dependencies]
+kernel = { path = "../pal/kernel" }
+pal = { path = "../pal" }
+vms = { path = "../vms" }
+shim = { path = "../pal/shim" }
+
+[dev-dependencies]
+ods-image = { path = "../crosstools/ods/crates/ods-image" }

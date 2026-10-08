@@ -37,7 +37,7 @@ against real VMS.
    on; RMS selects it from a specification's device, `DKA0:` or `MDA0:`,
    and refuses one with nothing mounted (`RMS$_DNR`).
 3. **`$INIT_VOL devnam, volnam` writes an empty ODS-2 volume** on the
-   ramdisk, laid out as `INITIALIZE` does (`ods/docs/initialize.md`): the
+   ramdisk, laid out as `INITIALIZE` does (`crosstools/ods/docs/initialize.md`): the
    home block, the index file bitmap, 64 header slots, `BITMAP.SYS` with
    its SCB, the MFD, and the nine reserved files' headers, entered in the
    MFD. **`$MOUNT itmlst`** mounts a volume, with `MNT$_DEVNAM` and

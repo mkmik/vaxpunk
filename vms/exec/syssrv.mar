@@ -1,0 +1,382 @@
+        .TITLE  SYSSRV  The system service vector, the change mode dispatchers
+        .IDENT  /V0.2/
+;
+; A program calls a system service as on VMS, with CALLS or CALLG to
+; SYS$name, or with the $name_S macros in starlet.mlb: by the calling
+; standard, arguments in x0-x7 and on the stack, their count in x9
+; (DESIGN-0004). SYS$name, frameless, changes mode to kernel with CHMK and
+; the service's code, which goes in x7, so it moves x7 to x10 first; the
+; PAL delivers the CHMK through the SCB to EXE$CMODKRNL with every
+; register as it was and the code below its frame. EXE$CMODKRNL checks the
+; arguments and calls the service's EXE$name routine with them, then REIs
+; with its status in R0. $CMEXEC changes mode to executive instead, with
+; CHME, which EXE$CMODEXEC serves.
+;
+; Programs run in user mode, and command interpreters in supervisor mode,
+; so SYS$name, EXE$CMODEXEC, and EXE$USRSTART and EXE$CLISTART, where a
+; process enters those modes, are in a page of their own, the vector,
+; which EXEC$START makes user readable: code an outer mode may run, as
+; VMS's system service vector is.
+;
+; Services that aren't implemented yet are stubs that return
+; SS$_ILLSER. An access violation or a reserved instruction in an outer
+; mode is a condition signaled there (vms/exec/sysunwind.mar), whose
+; code is in the vector too: modules after this one add to EXEC$VECTOR,
+; before EXEC$VECTOREND.
+;
+        .LIBRARY "lib.mlb"
+        .LIBRARY "starlet.mlb"
+        $SSDEF
+        $INTSTKDEF
+        .DISABLE FLAGGING               ; the calling standard's registers, by name
+        $PCBDEF
+        $PRVDEF
+
+        .EXTERNAL SCH$GL_CURPCB
+CMEXECOK = 32767                        ; EXE$CMODEXEC's CHMK: may the process?
+
+; SERVICE name, nargs[, EXH]: SYS$name, which calls EXE$name with at least
+; nargs arguments. STUB name, nargs: the same, with an EXE$name that fails.
+        .MACRO  SERVICE NAME, NARGS, EXH
+        .EXTERNAL EXE$'NAME
+        VECTOR  NAME, NARGS, EXH
+        .ENDM   SERVICE
+
+        .MACRO  STUB    NAME, NARGS
+        VECTOR  NAME, NARGS
+        .ENTRY  EXE$'NAME, ^M<>
+        MOVL    #SS$_ILLSER, R0
+        RET
+        .ENDM   STUB
+
+; ESERVICE name, nargs: SYS$name for the executive mode service, which
+; changes mode with CHME instead, to EXE$CMODEXEC.
+        .MACRO  ESERVICE NAME, NARGS
+        .SAVE_PSECT
+        .PSECT  EXEC$VECTOR
+SYS$'NAME::
+        .CALL_ENTRY
+        mov     x10, x7                 ; CHME's code goes in x7
+        CHME    #0
+        RET
+        .RESTORE_PSECT
+        .ENDM   ESERVICE
+
+; VECTOR name, nargs[, EXH]: SYS$name and its entries in the tables.
+; SYS$name is frameless: it moves x7, the eighth argument, to x10, where
+; the dispatcher finds it, since CHMK's code goes in x7. With EXH, $EXIT's:
+; SYS$EXIT calls the caller's mode's exit handlers in that mode. EXE$EXIT
+; returns SS$_NORMAL with R1 = the next one's block, which it took off the
+; list: SYS$EXIT writes the status where the block says, calls the handler
+; with the block's argument list, and calls EXE$EXIT again, with the
+; status. Any other status is an error, which it returns.
+        .MACRO  VECTOR  NAME, NARGS, EXH, ?L1, ?L2
+        .SAVE_PSECT
+        .PSECT  EXEC$SSTAB, NOEXE, NOWRT, LONG
+        .ADDRESS EXE$'NAME
+        .PSECT  EXEC$SSARG, NOEXE, NOWRT, BYTE
+        .BYTE   NARGS
+        .PSECT  EXEC$VECTOR
+SYS$'NAME::
+        .CALL_ENTRY
+        .IF     BLANK <EXH>
+        mov     x10, x7                 ; CHMK's code goes in x7
+        CHMK    #CODE
+        RET
+        .IFF
+L1:     MOVL    4(AP), R0               ; $EXIT's one argument
+        mov     x9, #1
+        CHMK    #CODE
+        CMPL    R0, #SS$_NORMAL
+        BNEQ    L2
+        MOVL    4(AP), @12(R1)
+        CALLG   8(R1), @4(R1)
+        BRB     L1
+L2:     RET
+        .ENDC
+        .RESTORE_PSECT
+CODE = CODE + 1
+        .ENDM   VECTOR
+
+        .PSECT  EXEC$VECTOR, EXE, NOWRT, 12
+; EXE$VECTOR: the vector's first page, code an outer mode may run, up to
+; EXE$VECTOREND. Not a routine.
+EXE$VECTOR::
+
+        .PSECT  EXEC$SSTAB, NOEXE, NOWRT, LONG
+EXE$AL_SSTAB::                          ; EXE$name by code
+        .PSECT  EXEC$SSARG, NOEXE, NOWRT, BYTE
+EXE$AB_SSARG::                          ; argument counts by code
+        .PSECT  $CODE$
+CODE = 0
+; Process control
+        SERVICE CREPRC, 12
+        SERVICE DELPRC, 2
+        SERVICE EXIT, 1, EXH
+        SERVICE FORCEX, 3
+        SERVICE HIBER, 0
+        SERVICE WAKE, 2
+        SERVICE SCHDWK, 4
+        SERVICE CANWAK, 2
+        SERVICE SUSPND, 2
+        SERVICE RESUME, 2
+        SERVICE SETPRI, 4
+        SERVICE SETPRN, 1
+        SERVICE GETJPI, 7
+        SERVICE GETJPIW, 7
+        SERVICE DCLEXH, 1
+        SERVICE CANEXH, 1
+        SERVICE SETPRV, 4
+        SERVICE CMKRNL, 2
+        ESERVICE CMEXEC, 2
+; Event flags
+        SERVICE ASCEFC, 2
+        SERVICE DACEFC, 1
+        STUB    DLCEFC, 1
+        SERVICE SETEF, 1
+        SERVICE CLREF, 1
+        SERVICE READEF, 2
+        SERVICE WAITFR, 1
+        SERVICE WFLOR, 2
+        SERVICE WFLAND, 2
+; Memory
+        SERVICE CRETVA, 2
+        SERVICE DELTVA, 2
+        SERVICE EXPREG, 2
+        STUB    CNTREG, 4
+        STUB    SETPRT, 5
+        STUB    LKWSET, 3
+        STUB    ULWSET, 3
+        STUB    LCKPAG, 3
+        STUB    ULKPAG, 3
+        STUB    CRMPSC, 12
+        STUB    MGBLSC, 7
+; ASTs, time, I/O, logical names, system information
+        SERVICE DCLAST, 3
+        SERVICE SETAST, 1
+        SERVICE ASTEXIT, 0
+        SERVICE GETTIM, 1
+        SERVICE ASCTIM, 4
+        SERVICE SETIMR, 4
+        SERVICE CANTIM, 2
+        SERVICE ASSIGN, 4
+        SERVICE DASSGN, 1
+        SERVICE CANCEL, 1
+        SERVICE CREMBX, 8
+        SERVICE DELMBX, 1
+        SERVICE QIO, 12
+        SERVICE QIOW, 12
+        SERVICE CRELNM, 5
+        SERVICE DELLNM, 3
+        SERVICE TRNLNM, 5
+        SERVICE GETSYI, 7
+        SERVICE GETSYIW, 7
+        SERVICE GETMSG, 5
+; Images
+        SERVICE IMGACT, 1
+; RMS: files on Files-11 volumes
+        SERVICE OPEN, 1
+        SERVICE CLOSE, 1
+        SERVICE CONNECT, 1
+        SERVICE DISCONNECT, 1
+        SERVICE GET, 1
+        SERVICE PARSE, 1
+        SERVICE SEARCH, 1
+        SERVICE SETDDIR, 3
+        SERVICE CREATE, 1
+        SERVICE PUT, 1
+        SERVICE ERASE, 1
+        SERVICE CREATE_DIR, 1
+        SERVICE DISPLAY, 1
+        SERVICE FIND, 1
+        SERVICE UPDATE, 1
+        SERVICE DELETE, 1
+        SERVICE TRUNCATE, 1
+        SERVICE REWIND, 1
+        SERVICE FLUSH, 1
+        SERVICE FREE, 1
+        SERVICE RELEASE, 1
+        SERVICE WAIT, 1
+        SERVICE READ, 1
+        SERVICE WRITE, 1
+        SERVICE SPACE, 1
+; Volumes
+        SERVICE MOUNT, 1
+        SERVICE INIT_VOL, 2
+        SERVICE DISMOU, 2
+; Devices
+        SERVICE GETDVI, 8
+        SERVICE GETDVIW, 8
+        SERVICE DEVICE_SCAN, 5
+
+; ARGSIN: keeps a call's arguments where the dispatcher's code leaves
+; them alone, in registers REI restores from the PAL's frame: the first
+; seven in R2-R8 (x19-x25), the eighth, which SYS$name moved to x10, in R9,
+; and their count, x9's bits 7:0, in R10, at most 12, the most a service
+; takes.
+        .MACRO  ARGSIN  ?L
+        mov     x19, x0
+        mov     x20, x1
+        mov     x21, x2
+        mov     x22, x3
+        mov     x23, x4
+        mov     x24, x5
+        mov     x25, x6
+        mov     x26, x10
+        and     x27, x9, #255
+        cmp     x27, #12
+        b.ls    L
+        mov     x27, #12
+L:
+        .ENDM   ARGSIN
+
+; CALLSVC: R11 = a service's EXE$name, R0 = the fewest arguments it
+; takes, R2-R10 as ARGSIN left them, SP at the PAL's frame. Calls it with
+; them by the calling standard, those past the eighth copied from the
+; caller's stack, `sp` in the frame, which the previous mode must be able
+; to read. Each must be a sign-extended longword: no service here takes
+; 64-bit addresses. R0 = the service's status, or SS$_INSFARG with fewer
+; arguments, SS$_ACCVIO if the stack ones can't be read, or
+; SS$_ARG_GTR_32_BITS.
+        .MACRO  CALLSVC ?REGS, ?STACK, ?COPY, ?AGAIN, ?CALL, ?WIDE, ?DONE
+        CMPL    R10, R0
+        BGEQU   REGS
+        MOVL    #SS$_INSFARG, R0
+        BRW     DONE
+REGS:   .IRP    N, <19, 20, 21, 22, 23, 24, 25, 26>
+        cmp     x27, #N-18
+        b.lo    STACK
+        cmp     x'N, w'N, sxtw
+        b.ne    WIDE
+        .ENDR
+STACK:  and     sp, x18, #0xfffffffffffffff0
+        SUBL3   #8, R10, R0             ; past the eighth
+        BLEQ    CALL
+        ASHL    #3, R0, R1
+        PROBER  #0, R1, @INTSTK$Q_X_SP(SP)
+        BNEQ    COPY
+        MOVL    #SS$_ACCVIO, R0
+        BRW     DONE
+COPY:   ldr     x16, [x18, #INTSTK$Q_X_SP]
+        and     x17, x18, #0xfffffffffffffff0
+        add     x14, x0, #1
+        and     x14, x14, #0xfffffffffffffffe
+        sub     sp, x17, x14, lsl #3
+        mov     x17, sp
+AGAIN:  ldr     x14, [x16], #8
+        cmp     x14, w14, sxtw
+        b.ne    WIDE
+        str     x14, [x17], #8
+        subs    x0, x0, #1
+        b.ne    AGAIN
+CALL:   mov     x0, x19
+        mov     x1, x20
+        mov     x2, x21
+        mov     x3, x22
+        mov     x4, x23
+        mov     x5, x24
+        mov     x6, x25
+        mov     x7, x26
+        mov     x9, x27
+        blr     x28
+        BRB     DONE
+WIDE:   MOVL    #SS$_ARG_GTR_32_BITS, R0
+DONE:
+        .ENDM   CALLSVC
+
+; EXE$CMODKRNL: the CHMK handler. The service's code below the PAL's
+; frame on the kernel stack, its arguments and every other register as
+; the caller left them (ARGSIN). Code CMEXECOK is EXE$CMODEXEC's question,
+; answered in R0. R0 and R1 go back to the caller in the frame, which REI
+; restores every register from.
+EXE$CMODKRNL::
+        .EXCEPTION_ENTRY
+        ARGSIN
+        MOVL    (SP), R11               ; the code
+        ADDL2   #16, SP                 ; the frame
+        CMPL    R11, #CODE
+        BGEQU   60$
+        MOVZBL  EXE$AB_SSARG[R11], R0
+        MOVL    EXE$AL_SSTAB[R11], R11
+        CALLSVC
+        BRB     90$
+60$:    CMPL    R11, #CMEXECOK          ; may it change mode to executive?
+        BNEQ    80$
+        MOVL    SCH$GL_CURPCB, R1
+        MOVL    #SS$_NORMAL, R0
+        IFPRIV  CMEXEC, 90$, R1
+        IFPRIV  CMKRNL, 90$, R1
+        MOVL    #SS$_NOPRIV, R0
+        BRB     90$
+80$:    MOVL    #SS$_ILLSER, R0
+90$:    EVAX_STQ R0, INTSTK$Q_R0(SP)
+        EVAX_STQ R1, INTSTK$Q_R1(SP)
+        REI
+
+        .PSECT  EXEC$VECTOR
+; EXE$CMODEXEC: the CHME handler, in executive mode, as EXE$CMODKRNL.
+; $CMEXEC is the one executive mode service, code 0, for a process with
+; CMEXEC or CMKRNL, which the PCB says: this mode can't read it, so a
+; CHMK asks the kernel, SS$_NOPRIV without.
+EXE$CMODEXEC::
+        .EXCEPTION_ENTRY
+        ARGSIN
+        MOVL    (SP), R11
+        ADDL2   #16, SP
+        TSTL    R11
+        BNEQ    80$
+        CHMK    #CMEXECOK
+        BLBC    R0, 90$
+        MOVL    #2, R0
+        MOVAB   EXE$CMEXEC, R11
+        CALLSVC
+        BRB     90$
+80$:    MOVL    #SS$_ILLSER, R0
+90$:    EVAX_STQ R0, INTSTK$Q_R0(SP)
+        EVAX_STQ R1, INTSTK$Q_R1(SP)
+        REI
+
+; $CMEXEC routin, arglst: calls routin in executive mode with arglst.
+        .ENTRY  EXE$CMEXEC, ^M<>
+        CALLG   @8(AP), @4(AP)
+        RET
+
+; EXE$USRSTART: where a process enters user mode, with R1 = its image's
+; transfer address: calls the image, and exits with the status it returns.
+; A clear FP ends the frames a condition's handlers are looked for in.
+EXE$USRSTART::
+        .EXCEPTION_ENTRY
+        CLRL    FP
+        CALLS   #0, (R1)
+        PUSHL   R0
+        CALLS   #1, SYS$EXIT
+
+; EXE$ASTDISP: where an AST routine is called, in the AST's access mode,
+; with R1 = the routine and R0 = its parameter: calls it with the
+; parameter, then $ASTEXIT, which goes back to what the AST interrupted.
+; Its conditions aren't looked for in the frames it interrupted.
+EXE$ASTDISP::
+        .EXCEPTION_ENTRY
+        CLRL    FP
+        PUSHL   R0
+        CALLS   #1, (R1)
+        CALLS   #0, SYS$ASTEXIT
+
+; EXE$CLISTART: where a process enters its command interpreter, in
+; supervisor mode, with R1 = its transfer address and R0 = the status of
+; the image that ran last: calls it with the status, and deletes the
+; process if it returns.
+EXE$CLISTART::
+        .EXCEPTION_ENTRY
+        CLRL    FP
+        PUSHL   R0
+        CALLS   #1, (R1)
+        CLRQ    -(SP)
+        CALLS   #2, SYS$DELPRC
+
+; The vector ends at a page, past what later modules add to EXEC$VECTOR.
+        .PSECT  EXEC$VECTOREND, EXE, NOWRT, 12
+; EXE$VECTOREND: past the vector's last page. Not a routine.
+EXE$VECTOREND::
+
+        .END

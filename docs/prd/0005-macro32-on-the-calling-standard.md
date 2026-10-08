@@ -13,7 +13,7 @@ x2-x11, longwords zero-extended, a frame only MACRO-32 understands.
 [DESIGN-0004](../design/0004-calling-standard.md) specifies it.
 
 DEC did this in 1992, and again for Itanium and x86-64
-(`vtools/docs/amacro.md`). AMACRO compiled the VAX executive onto the
+(`crosstools/vtools/docs/amacro.md`). AMACRO compiled the VAX executive onto the
 Alpha calling standard: routines were declared, registers kept 64 bits
 for callers in other languages, `4(AP)` still read the first argument,
 and V7.0 added the pieces that let MACRO-32 handle 64-bit addresses where
@@ -57,7 +57,7 @@ routine and is called by one, with nothing in between.
 ## What `vmacro` does
 
 Everything in DESIGN-0004's *MACRO-32* and *JSB* sections, from
-`vtools/docs/amacro.md`'s *What vmacro takes*. In short:
+`crosstools/vtools/docs/amacro.md`'s *What vmacro takes*. In short:
 
 **Registers.** R0 and R1 in x0 and x1, R2-R11 in x19-x28, SP in x18, FP
 in x29; AP is the argument list at `32(FP)`, x12 in a routine that writes
@@ -130,14 +130,14 @@ error); a branch into another routine; raw ARM64 naming x2-x30.
 | Where | What |
 | --- | --- |
 | The tree's `.mar` files | `.JSB_ENTRY` or `.JSB32_ENTRY` on each of the 360 JSB routines, `output` and `scratch` from the register contract its comment states (AGENTS.md's "Uses Rn."); `.GLOBAL_LABEL` where needed; `home_args=TRUE` on callers whose JSB routines read AP |
-| `roottask/src/main.c` | The PAL's frame holds the PC, the PSL, x0-x30 and `sp`; `REI` restores them all; `CHMx` takes its code from x7's bits 31:16 and pushes it below the frame; delivery to an inner mode sets its x18 and `sp` to the frame |
-| `roottask/exec/syssrv.mar` | `SYS$name` frameless, moving x7 to x10 for services with eight or more arguments; `EXE$CMODKRNL` and `EXE$CMODEXEC` pop the code, check x9, copy arguments past the eighth from the caller's stack, check sign extension, call `EXE$name`, and write x0 and x1 into the frame; `ARGLIST` goes |
-| `roottask/exec/sysunwind.mar` | `EXE$SIGNAL` and `SYS$UNWIND` walk `0(FP)`, find handlers at `16(FP)` and descriptors at `24(FP)`, build 64-bit VMS's arrays, call removed frames' handlers with `SS$_UNWIND`, and restore registers and `sp` from descriptors |
-| `roottask/sysexe/lib/signal.mar` | `LIB$SIGNAL` and `LIB$ESTABLISH`: the same frame |
+| `pal/src/main.c` | The PAL's frame holds the PC, the PSL, x0-x30 and `sp`; `REI` restores them all; `CHMx` takes its code from x7's bits 31:16 and pushes it below the frame; delivery to an inner mode sets its x18 and `sp` to the frame |
+| `vms/exec/syssrv.mar` | `SYS$name` frameless, moving x7 to x10 for services with eight or more arguments; `EXE$CMODKRNL` and `EXE$CMODEXEC` pop the code, check x9, copy arguments past the eighth from the caller's stack, check sign extension, call `EXE$name`, and write x0 and x1 into the frame; `ARGLIST` goes |
+| `vms/exec/sysunwind.mar` | `EXE$SIGNAL` and `SYS$UNWIND` walk `0(FP)`, find handlers at `16(FP)` and descriptors at `24(FP)`, build 64-bit VMS's arrays, call removed frames' handlers with `SS$_UNWIND`, and restore registers and `sp` from descriptors |
+| `vms/sysexe/lib/signal.mar` | `LIB$SIGNAL` and `LIB$ESTABLISH`: the same frame |
 | Handlers in the tree | Read the mechanism array's 64-bit fields |
-| `roottask/sysexe/spin.mar` | Fills all 64 bits of every register it checks, with built-ins |
-| `vtools/crates/vrun` stub | Enters an image with x9 = 1 and x18 = `sp`; on a fault, walks FP and prints each frame's PC and routine name from its descriptor |
-| `vtools/docs/macro32.md`, `runner-abi.md`, DESIGN-0001, ADR-0021 | Follow the code |
+| `vms/sysexe/spin.mar` | Fills all 64 bits of every register it checks, with built-ins |
+| `crosstools/vtools/crates/vrun` stub | Enters an image with x9 = 1 and x18 = `sp`; on a fault, walks FP and prints each frame's PC and routine name from its descriptor |
+| `crosstools/vtools/docs/macro32.md`, `runner-abi.md`, DESIGN-0001, ADR-0021 | Follow the code |
 
 ## Testing strategy
 
@@ -146,7 +146,7 @@ boot test and every test image (`svctest`, `chftest`, `asttest`,
 `mbxtest`, `spin`...) pass after each step, with no change to their
 expected output except register dumps and tracebacks.
 
-**64-bit callers.** `vtools/tests/run` programs whose callers are
+**64-bit callers.** `crosstools/vtools/tests/run` programs whose callers are
 hand-written ARM64 built with `call.mlb`, standing in for BLISS-64. One
 fills x18-x28 with 64-bit patterns and calls MACRO-32 routines that use
 `PUSHR`, call `.JSB_ENTRY` and `.JSB32_ENTRY` routines, write registers

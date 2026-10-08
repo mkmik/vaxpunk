@@ -1,0 +1,1441 @@
+        .TITLE  CDU     Compiles CLD into command tables, for SET COMMAND
+        .IDENT  /V0.1/
+;
+; CDU$COMPILE is the Command Definition Utility on vaxpunk: DCL's SET
+; COMMAND compiles a .CLD file with it into command tables of the format
+; vcdu writes (crosstools/vtools/docs/command-tables.md), which CLI$DCL_PARSE parses
+; with (ADR-0018). It reads the language as vcdu does: the same
+; statements and clauses, the same defaults, and the same checks, but
+; ROUTINE, which needs an address, as VMS's SET COMMAND without /OBJECT
+; does. build.rs links it into DCL.
+;
+; It makes the tables in one pass over the text. A block is written when
+; its definition ends, after the blocks it refers to; a reference to a
+; syntax or a type is filled at the end, when all are defined. The header
+; has room for MAXVERB verb names, in the order they are defined.
+; DISALLOW's infix expressions are made prefix in EXPRBUF, an operator put
+; in front of its first operand once it is read, then copied after the
+; command's entities. ponytail: the first error ends the compile, where
+; vcdu reports them all.
+;
+        .LIBRARY "starlet.mlb"
+        $SSDEF
+
+        .EXTERNAL PUT_LINE
+
+MAXVERB = 64                            ; verb names in a table, synonyms too
+MAXDEF = 64                             ; syntaxes and types
+MAXFIX = 128                            ; references to them
+MAXENT = 64                             ; a command's parameters, qualifiers, or a type's keywords
+MAXSYN = 8                              ; a verb's synonyms
+EXPRMAX = 512                           ; a command's DISALLOW, its bytes
+INHIB = ^X10000000                      ; STS$M_INHIB_MSG
+
+; CDU's status codes, facility 17: an error each.
+CDU$_INVCHAR = ^X11801A                 ; a character CLD doesn't have
+CDU$_MISSQUOTE = ^X118022               ; a string with no closing quote
+CDU$_SYMTOOLONG = ^X11802A              ; a name longer than 31 characters
+CDU$_INVITEM = ^X118032                 ; a word or character not in its place
+CDU$_INVDEFINE = ^X118042               ; DEFINE of something else
+CDU$_DUPDEF = ^X11804A                  ; a verb, syntax or type defined twice
+CDU$_CONFROUTIMG = ^X11805A             ; an IMAGE and a CLIROUTINE
+CDU$_IMAGELEN = ^X118062                ; an image name too long
+CDU$_INVPARM = ^X1180AA                 ; parameters not P1, P2, ... up to P8
+CDU$_DUPQUAL = ^X1180CA                 ; a qualifier defined twice
+CDU$_INVPLACE = ^X1180F2                ; a PLACEMENT that can't be
+CDU$_INVTYPE = ^X118152                 ; a $ type that isn't built in
+CDU$_UNDEFSYNTAX = ^X118162             ; a SYNTAX= no DEFINE SYNTAX names
+CDU$_UNDEFTYPE = ^X11816A               ; a TYPE= no DEFINE TYPE names
+CDU$_INVREQPARM = ^X118182              ; a required parameter after an optional one
+CDU$_INVROUT = ^X118192                 ; ROUTINE, which needs /OBJECT
+CDU$_TABOVF = ^X1181FA                  ; more than the tables hold
+
+; Tokens.
+C_LPAREN = 40                           ; the punctuation, by code
+C_RPAREN = 41
+C_COMMA = 44
+C_EQUALS = 61
+T_END = 0
+T_WORD = 1                              ; a name or a keyword, in capitals
+T_STR = 2                               ; a quoted string, without its quotes
+T_PUNCT = 3                             ; ( ) , or =, in TOKEN+1
+
+; The tables.
+VERSION = 2
+ENT_DEFAULT = 1
+ENT_NEGATABLE = 2
+ENT_VALUE = 4
+ENT_REQUIRED = 8
+ENT_LIST = 16
+ENT_CONCAT = 32
+ENT_BATCH = 64
+TYP_KEYWORD = 5
+OP_NAME = 1
+OP_NEG = 2
+OP_NOT = 3
+OP_AND = 4
+OP_OR = 5
+OP_ANY2 = 6
+INHERIT = 255
+
+; What an entity is: ENTITY's argument.
+K_PARAM = 0
+K_QUAL = 1
+K_KEYWORD = 2
+
+; A definition: a syntax or a type, its name and its block.
+DEF$B_KIND = 0                          ; D_SYNTAX or D_TYPE
+DEF$W_AT = 2                            ; its block's offset
+DEF$T_NAME = 4                          ; .ASCIC
+DEF$K_LENGTH = 36
+D_SYNTAX = 1
+D_TYPE = 2
+; A reference to one, filled at the end.
+FIX$B_KIND = 0                          ; D_
+FIX$W_AT = 2                            ; the word to fill
+FIX$L_LINE = 4                          ; where it was
+FIX$T_NAME = 8                          ; .ASCIC
+FIX$K_LENGTH = 40
+
+; IFWORD "text", dest: branches to dest if the token is the word text.
+; Uses R0-R3.
+        .MACRO  IFWORD  TEXT, DEST, ?L, ?M
+        .SAVE_PSECT LOCAL_BLOCK
+        .PSECT  CDU_TEXT, NOEXE, NOWRT
+L:      .ASCIC  TEXT
+        .RESTORE_PSECT
+        MOVAB   L, R1
+        BSBW    ISWORD
+        BLBC    R0, M
+        BRW     DEST
+M:
+        .ENDM   IFWORD
+
+; IFPUNCT char, dest: branches to dest if the token is that character.
+        .MACRO  IFPUNCT CHAR, DEST, ?M
+        CMPL    TOKTYP, #T_PUNCT
+        BNEQ    M
+        CMPB    TOKEN+1, #CHAR
+        BNEQ    M
+        BRW     DEST
+M:
+        .ENDM   IFPUNCT
+
+; FAIL status [,arg]: reports it, with the .ASCIC arg, and ends the
+; compile with it.
+        .MACRO  FAIL    STATUS, ARG=NOARG
+        MOVL    #STATUS, R0
+        MOVAB   ARG, R1
+        BRW     ERROR
+        .ENDM   FAIL
+
+        .PSECT  CDU_DATA, NOEXE, WRT, LONG
+SAVESP: .LONG   0                       ; SP in CDU$COMPILE, where errors go back to
+OUTEND: .LONG   0                       ; past the buffer the tables go in
+OUTP:   .LONG   0                       ; where their next byte goes
+TXT:    .LONG   0                       ; the text's next character
+TXTEND: .LONG   0                       ; past its last
+LINE:   .LONG   0                       ; TXT's line
+TOKTYP: .LONG   0                       ; the token LEX read: T_
+TOKLINE:                                ; its line
+        .LONG   0
+TOKEND: .LONG   0                       ; past it, where TAKE moves TXT,
+TOKENDLN:                               ; and that line
+        .LONG   0
+MARKTXT:                                ; where MARK was, which BACK goes back to
+        .LONG   0
+MARKLN: .LONG   0
+NVERB:  .LONG   0                       ; the verb names in the header
+NDEF:   .LONG   0
+NFIX:   .LONG   0
+; The command being defined.
+ISSYN:  .LONG   0                       ; 1 for a syntax
+CMDLN:  .LONG   0                       ; its line
+NOPARM: .LONG   0                       ; NOPARAMETERS
+NOQUAL: .LONG   0                       ; NOQUALIFIERS
+NODIS:  .LONG   0                       ; NODISALLOWS
+NDIS:   .LONG   0                       ; its DISALLOWs
+EXPRLEN:                                ; their bytes in EXPRBUF
+        .LONG   0
+OPTPARM:                                ; 1 once a parameter is optional
+        .LONG   0
+NPARM:  .LONG   0
+NQUAL:  .LONG   0
+NSYN:   .LONG   0
+PARMS:  .BLKW   MAXENT                  ; the parameters' entities,
+QUALS:  .BLKW   MAXENT                  ; the qualifiers',
+KWS:    .BLKW   MAXENT                  ; or a type's keywords'
+NKW:    .LONG   0
+CMDNAME:
+        .BLKB   32
+CMDIMAGE:
+        .BLKB   256
+CMDCLI: .BLKB   32                      ; its CLIROUTINE
+SYNS:   .BLKB   MAXSYN*32               ; its synonyms, .ASCIC
+EXPRBUF:
+        .BLKB   EXPRMAX
+; The entity being defined.
+E_KIND: .LONG   0                       ; K_
+E_FLAGS:                                ; ENT_
+        .LONG   0
+E_NEG:  .LONG   0                       ; 1 NEGATABLE, 2 NONNEGATABLE, 0 neither
+E_CONC: .LONG   0                       ; 1 CONCATENATE, 2 NOCONCATENATE, 0 neither
+E_PLACE:                                ; its PLACEMENT, 0 GLOBAL
+        .LONG   0
+E_LINE: .LONG   0
+E_NAME: .BLKB   32
+E_LABEL:                                ; .ASCIC, empty if not given
+        .BLKB   32
+E_PROMPT:
+        .BLKB   256
+E_DEFVAL:                               ; VALUE's DEFAULT
+        .BLKB   256
+E_TYPE: .BLKB   256                     ; VALUE's TYPE
+E_SYNTAX:
+        .BLKB   32
+DEFS:   .BLKB   MAXDEF*DEF$K_LENGTH
+FIXES:  .BLKB   MAXFIX*FIX$K_LENGTH
+TOKEN:  .BLKB   256                     ; a word or a string, .ASCIC
+MSG:    .BLKB   256                     ; a message being made, .ASCIC
+NOARG:  .BYTE   0
+
+        .PSECT  CDU_TEXT, NOEXE, NOWRT
+; The words that start a command's clause, and so end an entity's.
+CLAUSES:
+        .ASCIC  "IMAGE"
+        .ASCIC  "ROUTINE"
+        .ASCIC  "CLIROUTINE"
+        .ASCIC  "SYNONYM"
+        .ASCIC  "PARAMETER"
+        .ASCIC  "QUALIFIER"
+        .ASCIC  "DISALLOW"
+        .ASCIC  "NODISALLOWS"
+        .ASCIC  "NOPARAMETERS"
+        .ASCIC  "NOQUALIFIERS"
+        .ASCIC  "CLIFLAGS"
+        .ASCIC  "KEYWORD"
+        .BYTE   0
+; The built-in types, each .ASCIC and its code.
+TYPES:  .ASCIC  "$FILE"
+        .BYTE   1
+        .ASCIC  "$INFILE"
+        .BYTE   1
+        .ASCIC  "$OUTFILE"
+        .BYTE   1
+        .ASCIC  "$OUTLOG"
+        .BYTE   1
+        .ASCIC  "$NUMBER"
+        .BYTE   2
+        .ASCIC  "$REST_OF_LINE"
+        .BYTE   3
+        .ASCIC  "$QUOTED_STRING"
+        .BYTE   4
+        .ASCIC  "$DATETIME"
+        .BYTE   6
+        .ASCIC  "$DELTATIME"
+        .BYTE   6
+        .ASCIC  "$ACL"
+        .BYTE   6
+        .ASCIC  "$EXPRESSION"
+        .BYTE   6
+        .ASCIC  "$PARENTHESIZED_VALUE"
+        .BYTE   6
+        .ASCIC  "$UIC"
+        .BYTE   7
+        .BYTE   0
+; The messages: a status, its name and its text, .ASCIC, until a 0.
+MESSAGES:
+        .LONG   CDU$_INVCHAR
+        .ASCIC  "INVCHAR"
+        .ASCIC  "invalid character "
+        .LONG   CDU$_MISSQUOTE
+        .ASCIC  "MISSQUOTE"
+        .ASCIC  "quoted string not terminated before end of line"
+        .LONG   CDU$_SYMTOOLONG
+        .ASCIC  "SYMTOOLONG"
+        .ASCIC  "symbol longer than 31 characters "
+        .LONG   CDU$_INVITEM
+        .ASCIC  "INVITEM"
+        .ASCIC  "invalid item "
+        .LONG   CDU$_INVDEFINE
+        .ASCIC  "INVDEFINE"
+        .ASCIC  "invalid DEFINE statement "
+        .LONG   CDU$_DUPDEF
+        .ASCIC  "DUPDEF"
+        .ASCIC  "duplicate definition of "
+        .LONG   CDU$_CONFROUTIMG
+        .ASCIC  "CONFROUTIMG"
+        .ASCIC  "only one routine or image clause is allowed"
+        .LONG   CDU$_IMAGELEN
+        .ASCIC  "IMAGELEN"
+        .ASCIC  "an image spec is limited to 39 characters in length"
+        .LONG   CDU$_INVPARM
+        .ASCIC  "INVPARM"
+        .ASCIC  "parameters must be P1 to P8, in order "
+        .LONG   CDU$_DUPQUAL
+        .ASCIC  "DUPQUAL"
+        .ASCIC  "qualifier has already been defined "
+        .LONG   CDU$_INVPLACE
+        .ASCIC  "INVPLACE"
+        .ASCIC  "placement must be GLOBAL, LOCAL or POSITIONAL, of a qualifier with no keywords "
+        .LONG   CDU$_INVTYPE
+        .ASCIC  "INVTYPE"
+        .ASCIC  "builtin type is not defined "
+        .LONG   CDU$_UNDEFSYNTAX
+        .ASCIC  "UNDEFSYNTAX"
+        .ASCIC  "syntax is not defined "
+        .LONG   CDU$_UNDEFTYPE
+        .ASCIC  "UNDEFTYPE"
+        .ASCIC  "type is not defined "
+        .LONG   CDU$_INVREQPARM
+        .ASCIC  "INVREQPARM"
+        .ASCIC  "all required parameters must precede optional ones "
+        .LONG   CDU$_INVROUT
+        .ASCIC  "INVROUT"
+        .ASCIC  "a ROUTINE clause is only valid when generating an object file"
+        .LONG   CDU$_TABOVF
+        .ASCIC  "TABOVF"
+        .ASCIC  "command tables full"
+        .LONG   0
+ATLINE: .ASCIC  ", line "
+
+        .PSECT  CDU_CODE, EXE, LONG
+; CDU$COMPILE text, table, tablen: compiles the CLD in the string text
+; describes into command tables, in the buffer table describes, up to
+; 64 KB, and their length into the word tablen. R0 = SS$_NORMAL, or a
+; CDU$_ error, reported as %CDU-E-, with STS$M_INHIB_MSG.
+        .ENTRY  CDU$COMPILE, ^M<R2, R3, R4, R5, R6, R7, R8, R9, R10, R11>
+        BSBW    COMPILE
+        RET
+
+; COMPILE: CDU$COMPILE's work, with its argument list. R11 = the tables
+; throughout.
+COMPILE:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5, R6, R7, R8, R9, R10, R11>
+        MOVL    SP, SAVESP
+        MOVL    4(AP), R0               ; the text
+        MOVL    4(R0), TXT
+        MOVZWL  (R0), R1
+        ADDL3   TXT, R1, TXTEND
+        MOVL    #1, LINE
+        MOVL    8(AP), R0               ; the buffer
+        MOVL    4(R0), R11
+        MOVZWL  (R0), R1
+        ADDL3   R11, R1, OUTEND
+        MOVL    R11, OUTP
+        CLRL    NVERB
+        CLRL    NDEF
+        CLRL    NFIX
+        MOVZWL  #VERSION, R0            ; the header, room for MAXVERB names
+        BSBW    PUTW
+        CLRL    R0
+        BSBW    PUTW
+        MOVL    #MAXVERB*2, R6
+10$:    BSBW    PUTW
+        SOBGTR  R6, 10$
+; The statements.
+20$:    BSBW    LEX
+        CMPL    TOKTYP, #T_END
+        BNEQ    30$
+        BRW     FIXUP
+30$:    BSBW    TAKE
+        IFWORD  "MODULE", 40$           ; ignored, as SET COMMAND does
+        IFWORD  "IDENT", 40$
+        IFWORD  "DEFINE", 50$
+        FAIL    CDU$_INVITEM, TOKEN
+40$:    BSBW    NAMEORSTR
+        BRB     20$
+50$:    BSBW    LEX
+        BSBW    TAKE
+        IFWORD  "VERB", 60$
+        IFWORD  "SYNTAX", 70$
+        IFWORD  "TYPE", 80$
+        FAIL    CDU$_INVDEFINE, TOKEN
+60$:    CLRL    ISSYN
+        BSBW    COMMAND
+        BRB     20$
+70$:    MOVL    #1, ISSYN
+        BSBW    COMMAND
+        BRB     20$
+80$:    BSBW    TYPE
+        BRB     20$
+
+; FIXUP: fills the references to syntaxes and types, and ends the compile
+; with the tables' length.
+FIXUP:  CLRL    R6                      ; a reference
+10$:    CMPL    R6, NFIX
+        BGEQU   50$
+        MULL3   #FIX$K_LENGTH, R6, R7
+        MOVAB   FIXES[R7], R7
+        MOVZBL  FIX$B_KIND(R7), R0
+        MOVAB   FIX$T_NAME(R7), R1
+        BSBW    FINDDEF
+        TSTL    R2
+        BEQL    20$
+        MOVZWL  FIX$W_AT(R7), R1
+        ADDL2   R11, R1
+        MOVZWL  DEF$W_AT(R2), R0
+        MOVB    R0, (R1)+
+        ROTL    #24, R0, R0
+        MOVB    R0, (R1)
+        INCL    R6
+        BRB     10$
+20$:    MOVL    FIX$L_LINE(R7), TOKLINE
+        MOVAB   FIX$T_NAME(R7), R1
+        MOVL    #CDU$_UNDEFSYNTAX, R0
+        CMPB    FIX$B_KIND(R7), #D_SYNTAX
+        BEQL    30$
+        MOVL    #CDU$_UNDEFTYPE, R0
+30$:    BRW     ERROR
+50$:    MOVW    NVERB, 2(R11)
+        SUBL3   R11, OUTP, R0
+        MOVW    R0, @12(AP)
+        MOVL    #SS$_NORMAL, R0
+        RSB
+
+; ERROR: R0 = a CDU$_ status, R1 = an .ASCIC argument. Writes
+; %CDU-E-NAME, its text, the argument and the line of the token, and
+; returns from CDU$COMPILE with the status, from any routine COMPILE
+; calls: COMPILE's code, which SAVESP takes the stack back to.
+ERROR:  MOVL    SAVESP, SP
+        PUSHL   R0
+        PUSHL   R1
+        CLRB    MSG
+        MOVAB   PREFIX, R1
+        BSBW    ADDC
+        MOVAB   MESSAGES, R5
+10$:    TSTL    (R5)
+        BEQL    30$
+        CMPL    (R5)+, 4(SP)
+        BEQL    20$
+        MOVZBL  (R5), R0                ; past the name and the text
+        ADDL2   R0, R5
+        INCL    R5
+        MOVZBL  (R5), R0
+        ADDL2   R0, R5
+        INCL    R5
+        BRB     10$
+20$:    MOVL    R5, R1                  ; NAME, text
+        BSBW    ADDC
+        MOVAB   COMMA, R1
+        BSBW    ADDC
+        MOVZBL  (R5), R0
+        ADDL3   R0, R5, R1
+        INCL    R1
+        BSBW    ADDC
+30$:    MOVL    (SP)+, R1               ; the argument
+        BSBW    ADDC
+        MOVAB   ATLINE, R1
+        BSBW    ADDC
+        MOVL    TOKLINE, R1             ; the line, in decimal
+        CLRL    R2
+40$:    DIVL3   #10, R1, R3
+        MULL3   #10, R3, R4
+        SUBL3   R4, R1, R4
+        ADDL2   #^A"0", R4
+        PUSHL   R4
+        INCL    R2
+        MOVL    R3, R1
+        BNEQ    40$
+50$:    MOVL    (SP)+, R4
+        MOVZBL  MSG, R0
+        CMPL    R0, #255
+        BGEQU   55$
+        INCB    MSG
+        MOVB    R4, MSG+1[R0]
+55$:    SOBGTR  R2, 50$
+        PUSHAB  MSG
+        CALLS   #1, G^PUT_LINE
+        BISL3   #INHIB, (SP)+, R0
+        RSB
+COMMA:  .ASCIC  ", "
+PREFIX: .ASCIC  "%CDU-E-"
+
+; COMMAND: after DEFINE VERB or SYNTAX, ISSYN says which: takes its name
+; and its clauses, writes its entities, its DISALLOW and its block, and
+; adds it to the header or the syntaxes.
+COMMAND:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5, R6, R7, R8, R9, R10>
+        BSBW    NAME
+        MOVL    TOKLINE, CMDLN
+        MOVAB   TOKEN, R1
+        MOVAB   CMDNAME, R3
+        BSBW    COPYC
+        CLRB    CMDIMAGE
+        CLRB    CMDCLI
+        CLRL    NOPARM
+        CLRL    NOQUAL
+        CLRL    NODIS
+        CLRL    NDIS
+        CLRL    EXPRLEN
+        CLRL    OPTPARM
+        CLRL    NPARM
+        CLRL    NQUAL
+        CLRL    NSYN
+; Each clause, after a comma or not.
+CLAUSE: BSBW    LEX
+        IFPUNCT C_COMMA, 5$
+        BRB     10$
+5$:     BSBW    TAKE
+        BSBW    LEX
+10$:    MOVAB   CLAUSES, R1
+        BSBW    INLIST
+        BLBS    R0, 20$
+        BRW     ENDCMD                  ; the next statement
+20$:    IFWORD  "KEYWORD", 25$
+        BSBW    TAKE
+        IFWORD  "IMAGE", IMAGE
+        IFWORD  "CLIROUTINE", CLIRTN
+        IFWORD  "SYNONYM", SYNONYM
+        IFWORD  "PARAMETER", PARAM
+        IFWORD  "QUALIFIER", QUAL
+        IFWORD  "DISALLOW", DISALLOW
+        IFWORD  "NODISALLOWS", 30$
+        IFWORD  "NOPARAMETERS", 40$
+        IFWORD  "NOQUALIFIERS", 50$
+        IFWORD  "ROUTINE", 60$
+25$:    FAIL    CDU$_INVITEM, TOKEN     ; KEYWORD, CLIFLAGS
+30$:    MOVL    #1, NODIS
+        BRB     CLAUSE
+40$:    MOVL    #1, NOPARM
+        BRB     CLAUSE
+50$:    MOVL    #1, NOQUAL
+        BRB     CLAUSE
+60$:    FAIL    CDU$_INVROUT
+
+IMAGE:  TSTB    CMDCLI
+        BNEQ    20$
+        BSBW    NAMEORSTR
+        CMPB    TOKEN, #39
+        BLEQU   10$
+        FAIL    CDU$_IMAGELEN
+10$:    MOVAB   TOKEN, R1
+        MOVAB   CMDIMAGE, R3
+        BSBW    COPYC
+        BRW     CLAUSE
+20$:    FAIL    CDU$_CONFROUTIMG
+
+CLIRTN: TSTB    CMDIMAGE
+        BNEQ    10$
+        BSBW    NAME
+        MOVAB   TOKEN, R1
+        MOVAB   CMDCLI, R3
+        BSBW    COPYC
+        BRW     CLAUSE
+10$:    FAIL    CDU$_CONFROUTIMG
+
+SYNONYM:
+        BSBW    NAME
+        MOVL    NSYN, R0
+        CMPL    R0, #MAXSYN
+        BLSSU   10$
+        FAIL    CDU$_TABOVF
+10$:    INCL    NSYN
+        ASHL    #5, R0, R0
+        MOVAB   SYNS[R0], R3
+        MOVAB   TOKEN, R1
+        BSBW    COPYC
+        BRW     CLAUSE
+
+; PARAM: P1, P2, ... in order, up to P8, required ones first.
+PARAM:  BSBW    NAME
+        MOVL    NPARM, R0
+        CMPL    R0, #8
+        BGEQU   10$
+        CMPB    TOKEN, #2
+        BNEQ    10$
+        CMPB    TOKEN+1, #^A"P"
+        BNEQ    10$
+        ADDL2   #^A"1", R0
+        CMPB    TOKEN+2, R0
+        BEQL    20$
+10$:    FAIL    CDU$_INVPARM, TOKEN
+20$:    MOVL    #K_PARAM, E_KIND
+        BSBW    ENTITY
+        MOVL    NPARM, R1
+        MOVW    R0, PARMS[R1]
+        INCL    NPARM
+        BBS     #3, E_FLAGS, 30$        ; ENT_REQUIRED
+        MOVL    #1, OPTPARM
+        BRW     CLAUSE
+30$:    TSTL    OPTPARM
+        BNEQ    40$
+        BRW     CLAUSE
+40$:    FAIL    CDU$_INVREQPARM, E_NAME
+
+; QUAL: a qualifier, whose name its command has no other of.
+QUAL:
+        BSBW    NAME
+        CLRL    R6
+10$:    CMPL    R6, NQUAL
+        BGEQU   20$
+        MOVZWL  QUALS[R6], R1
+        MOVAB   7(R11)[R1], R1          ; its name
+        MOVAB   TOKEN, R3
+        BSBW    SAMEC
+        BLBC    R0, 15$
+        FAIL    CDU$_DUPQUAL, TOKEN
+15$:    INCL    R6
+        BRB     10$
+20$:    CMPL    NQUAL, #MAXENT
+        BLSSU   30$
+        FAIL    CDU$_TABOVF
+30$:    MOVL    #K_QUAL, E_KIND
+        BSBW    ENTITY
+        MOVL    NQUAL, R1
+        MOVW    R0, QUALS[R1]
+        INCL    NQUAL
+        BRW     CLAUSE
+
+; DISALLOW: an expression, into EXPRBUF.
+DISALLOW:
+        INCL    NDIS
+        BSBW    EXPR
+        BRW     CLAUSE
+
+; ENDCMD: the command's DISALLOWs, ORed, then its block: name, image,
+; CLIROUTINE, parameters, qualifiers, DISALLOW and no ROUTINE. A syntax
+; with no parameters or qualifiers, and no NO for them, inherits its
+; verb's, and its DISALLOW too, unless it says NODISALLOWS.
+ENDCMD: CLRL    R8                      ; the DISALLOW's offset
+        TSTL    NDIS
+        BEQL    20$
+        SUBL3   R11, OUTP, R8
+        SUBL3   #1, NDIS, R6
+        BEQL    15$
+10$:    MOVZBL  #OP_OR, R0
+        BSBW    PUTB
+        SOBGTR  R6, 10$
+15$:    CLRL    R6
+17$:    CMPL    R6, EXPRLEN
+        BGEQU   20$
+        MOVZBL  EXPRBUF[R6], R0
+        BSBW    PUTB
+        INCL    R6
+        BRB     17$
+20$:    TSTL    R8
+        BNEQ    25$
+        TSTL    ISSYN
+        BEQL    25$
+        TSTL    NODIS
+        BEQL    25$
+        MOVL    #1, R8                  ; a syntax's NODISALLOWS
+25$:    SUBL3   R11, OUTP, R9           ; the block
+        MOVAB   CMDNAME, R1
+        BSBW    PUTC
+        MOVAB   CMDIMAGE, R1
+        BSBW    PUTC
+        MOVAB   CMDCLI, R1
+        BSBW    PUTC
+        MOVL    NPARM, R6
+        MOVAB   PARMS, R7
+        MOVL    NOPARM, R0
+        BSBW    PUTLIST
+        MOVL    NQUAL, R6
+        MOVAB   QUALS, R7
+        MOVL    NOQUAL, R0
+        BSBW    PUTLIST
+        MOVL    R8, R0
+        BSBW    PUTW
+        CLRL    R0                      ; no ROUTINE
+        BSBW    PUTW
+        TSTL    ISSYN
+        BEQL    30$
+        MOVL    #D_SYNTAX, R0           ; a syntax
+        MOVAB   CMDNAME, R1
+        MOVL    R9, R2
+        BRW     ADDDEF
+30$:    MOVL    CMDLN, TOKLINE          ; a verb, and its synonyms
+        ADDL3   R11, R9, R1
+        MOVL    R9, R2
+        BSBW    ADDVERB
+        CLRL    R6
+40$:    CMPL    R6, NSYN
+        BGEQU   50$
+        MOVL    OUTP, R10               ; where its name goes
+        ASHL    #5, R6, R1
+        MOVAB   SYNS[R1], R1
+        BSBW    PUTC
+        MOVL    R10, R1
+        MOVL    R9, R2
+        BSBW    ADDVERB
+        INCL    R6
+        BRB     40$
+50$:    RSB
+
+; PUTLIST: R6 = how many entities, R7 = their offsets, words, R0 = 1 if
+; NOPARAMETERS or NOQUALIFIERS. Writes the count and the offsets; for a
+; syntax with none, unless R0, INHERIT. Uses R0-R2, R6, R7.
+PUTLIST:
+        .JSB_ENTRY  SCRATCH=<R2, R6, R7>
+        TSTL    R6
+        BNEQ    10$
+        TSTL    ISSYN
+        BEQL    10$
+        TSTL    R0
+        BNEQ    10$
+        MOVZBL  #INHERIT, R0
+        BRW     PUTB
+10$:    MOVL    R6, R0
+        BSBW    PUTB
+20$:    DECL    R6
+        BLSS    30$
+        MOVZWL  (R7)+, R0
+        BSBW    PUTW
+        BRB     20$
+30$:    RSB
+
+; ADDVERB: R1 = a verb's name, .ASCIC, in the tables, R2 = its block's
+; offset. Adds it to the header, unless a verb has that name already.
+; Uses R0-R5.
+ADDVERB:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5>
+        MOVL    R1, R3
+        CLRL    R4
+10$:    CMPL    R4, NVERB
+        BGEQU   20$
+        ASHL    #2, R4, R5              ; its name's offset, then its block's
+        ADDL2   R11, R5
+        MOVZWL  4(R5), R1
+        ADDL2   R11, R1
+        PUSHL   R2
+        BSBW    SAMEC
+        MOVL    (SP)+, R2
+        BLBC    R0, 15$
+        FAIL    CDU$_DUPDEF, (R3)
+15$:    INCL    R4
+        BRB     10$
+20$:    CMPL    R4, #MAXVERB
+        BLSSU   30$
+        FAIL    CDU$_TABOVF
+30$:    INCL    NVERB
+        ASHL    #2, R4, R4
+        ADDL2   R11, R4
+        SUBL3   R11, R3, R0
+        MOVW    R0, 4(R4)
+        MOVW    R2, 6(R4)
+        RSB
+
+; TYPE: after DEFINE TYPE: its name and keywords; writes their entities,
+; then its block, and adds it to the types.
+TYPE:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5, R6, R7, R8, R9>
+        BSBW    NAME
+        MOVAB   TOKEN, R1
+        MOVAB   CMDNAME, R3
+        BSBW    COPYC
+        CLRL    NKW
+10$:    BSBW    LEX
+        IFPUNCT C_COMMA, 15$
+        BRB     20$
+15$:    BSBW    TAKE
+        BSBW    LEX
+20$:    IFWORD  "KEYWORD", 30$
+        BRB     50$
+30$:    BSBW    TAKE
+        BSBW    NAME
+        CMPL    NKW, #MAXENT
+        BLSSU   40$
+        FAIL    CDU$_TABOVF
+40$:    MOVL    #K_KEYWORD, E_KIND
+        BSBW    ENTITY
+        MOVL    NKW, R1
+        MOVW    R0, KWS[R1]
+        INCL    NKW
+        BRB     10$
+50$:    SUBL3   R11, OUTP, R9           ; the block
+        MOVL    NKW, R6
+        MOVAB   KWS, R7
+        MOVL    R6, R0
+        BSBW    PUTB
+60$:    DECL    R6
+        BLSS    70$
+        MOVZWL  (R7)+, R0
+        BSBW    PUTW
+        BRB     60$
+70$:    MOVL    #D_TYPE, R0
+        MOVAB   CMDNAME, R1
+        MOVL    R9, R2
+        BRW     ADDDEF
+
+; ADDDEF: R0 = D_SYNTAX or D_TYPE, R1 = its name, R2 = its block's
+; offset. Adds it, unless one of that kind has its name already. Uses
+; R0-R5.
+ADDDEF:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5>
+        PUSHR   #^M<R0, R1, R2>
+        BSBW    FINDDEF
+        TSTL    R2
+        BEQL    10$
+        MOVL    4(SP), R1
+        FAIL    CDU$_DUPDEF, (R1)
+10$:    MOVL    NDEF, R0
+        CMPL    R0, #MAXDEF
+        BLSSU   20$
+        FAIL    CDU$_TABOVF
+20$:    INCL    NDEF
+        MULL2   #DEF$K_LENGTH, R0
+        MOVAB   DEFS[R0], R3
+        POPR    #^M<R0, R1, R2>
+        MOVB    R0, DEF$B_KIND(R3)
+        MOVW    R2, DEF$W_AT(R3)
+        ADDL2   #DEF$T_NAME, R3
+        BRW     COPYC
+
+; FINDDEF: R0 = D_SYNTAX or D_TYPE, R1 = a name. R2 = the definition of
+; that kind with that name, or 0. Uses R0-R5.
+FINDDEF:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5>
+        MOVL    R1, R3
+        MOVL    R0, R4
+        CLRL    R5
+10$:    CMPL    R5, NDEF
+        BGEQU   80$
+        MULL3   #DEF$K_LENGTH, R5, R2
+        MOVAB   DEFS[R2], R2
+        CMPB    DEF$B_KIND(R2), R4
+        BNEQ    20$
+        MOVAB   DEF$T_NAME(R2), R1
+        PUSHL   R2
+        BSBW    SAMEC
+        MOVL    (SP)+, R2
+        BLBS    R0, 90$
+20$:    INCL    R5
+        BRB     10$
+80$:    CLRL    R2
+90$:    RSB
+
+; ENTITY: TOKEN = the name of a parameter, qualifier or keyword, E_KIND
+; = which. Takes its clauses, each after a comma, up to a word that
+; starts a command's clause or KEYWORD, and writes it: R0 = its offset.
+; E_FLAGS has its flags.
+ENTITY:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5, R6, R7, R8, R9>
+        MOVAB   TOKEN, R1
+        MOVAB   E_NAME, R3
+        BSBW    COPYC
+        MOVL    TOKLINE, E_LINE
+        CLRL    E_FLAGS
+        CLRL    E_NEG
+        CLRL    E_CONC
+        CLRL    E_PLACE
+        CLRB    E_LABEL
+        CLRB    E_PROMPT
+        CLRB    E_DEFVAL
+        CLRB    E_TYPE
+        CLRB    E_SYNTAX
+; Each clause.
+ECLAUSE:
+        BSBW    LEX
+        IFPUNCT C_COMMA, 10$
+        BRW     PUTENT
+10$:    BSBW    MARK
+        BSBW    TAKE
+        BSBW    LEX
+        CMPL    TOKTYP, #T_WORD
+        BNEQ    20$
+        MOVAB   CLAUSES, R1
+        BSBW    INLIST
+        BLBC    R0, 30$
+20$:    BSBW    BACK                    ; not its: the comma is the command's
+        BRW     PUTENT
+30$:    BSBW    TAKE
+        IFWORD  "DEFAULT", 40$
+        IFWORD  "LABEL", 50$
+        IFWORD  "PROMPT", 60$
+        IFWORD  "VALUE", 70$
+        IFWORD  "SYNTAX", 80$
+        CMPL    E_KIND, #K_PARAM        ; not a parameter's
+        BEQL    35$
+        IFWORD  "NEGATABLE", 90$
+        IFWORD  "NONNEGATABLE", 100$
+        IFWORD  "BATCH", 110$
+        IFWORD  "PLACEMENT", 120$
+35$:    FAIL    CDU$_INVITEM, TOKEN
+40$:    BISL2   #ENT_DEFAULT, E_FLAGS
+        BRB     ECLAUSE
+50$:    BSBW    EQUALS
+        BSBW    UPCASE
+        MOVAB   E_LABEL, R3
+        BRB     65$
+60$:    BSBW    EQUALS
+        MOVAB   E_PROMPT, R3
+65$:    MOVAB   TOKEN, R1
+        BSBW    COPYC
+        BRB     ECLAUSE
+70$:    BSBW    VALUE
+        BRB     ECLAUSE
+80$:    BSBW    EQUALS
+        BSBW    UPCASE
+        MOVAB   E_SYNTAX, R3
+        BRB     65$
+90$:    MOVL    #1, E_NEG
+        BRB     ECLAUSE
+100$:   MOVL    #2, E_NEG
+        BRW     ECLAUSE
+110$:   BISL2   #ENT_BATCH, E_FLAGS
+        BRW     ECLAUSE
+120$:   BSBW    EQUALS
+        BSBW    UPCASE
+        CLRL    E_PLACE
+        IFWORD  "GLOBAL", 130$
+        IFWORD  "LOCAL", 125$
+        IFWORD  "POSITIONAL", 127$
+        FAIL    CDU$_INVPLACE, TOKEN
+125$:   MOVL    #1, E_PLACE
+        BRW     ECLAUSE
+127$:   MOVL    #2, E_PLACE
+130$:   BRW     ECLAUSE
+
+; VALUE: after VALUE: its clauses, if it has any, in parentheses.
+VALUE:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5, R6, R7, R8, R9>
+        BISL2   #ENT_VALUE, E_FLAGS
+        BSBW    LEX
+        IFPUNCT C_LPAREN, 10$
+        RSB
+10$:    BSBW    TAKE
+20$:    BSBW    LEX
+        BSBW    TAKE
+        IFWORD  "REQUIRED", 30$
+        IFWORD  "LIST", 40$
+        IFWORD  "CONCATENATE", 50$
+        IFWORD  "NOCONCATENATE", 60$
+        IFWORD  "DEFAULT", 70$
+        IFWORD  "TYPE", 80$
+        FAIL    CDU$_INVITEM, TOKEN
+30$:    BISL2   #ENT_REQUIRED, E_FLAGS
+        BRB     90$
+40$:    BISL2   #ENT_LIST, E_FLAGS
+        BRB     90$
+50$:    MOVL    #1, E_CONC
+        BRB     90$
+60$:    MOVL    #2, E_CONC
+        BRB     90$
+70$:    BSBW    EQUALS
+        MOVAB   E_DEFVAL, R3
+        BRB     85$
+80$:    BSBW    EQUALS
+        BSBW    UPCASE
+        MOVAB   E_TYPE, R3
+85$:    MOVAB   TOKEN, R1
+        BSBW    COPYC
+90$:    BSBW    LEX
+        IFPUNCT C_COMMA, 95$
+        IFPUNCT C_RPAREN, 100$
+        FAIL    CDU$_INVITEM, TOKEN
+95$:    BSBW    TAKE
+        BRW     20$
+100$:   BRW     TAKE
+
+; PUTENT: writes the entity: flags, type, its keywords and its syntax,
+; filled at the end, placement, name, label, prompt and default value.
+; R0 = its offset.
+PUTENT: .GLOBAL_LABEL                   ; ENTITY's tail
+        MOVL    E_FLAGS, R6
+        CMPL    E_NEG, #1               ; negatable: a qualifier, unless not
+        BEQL    10$
+        TSTL    E_NEG
+        BNEQ    20$
+        CMPL    E_KIND, #K_QUAL
+        BNEQ    20$
+10$:    BISL2   #ENT_NEGATABLE, R6
+20$:    BBC     #4, R6, 30$             ; ENT_LIST: concatenates, unless not
+        TSTL    E_CONC
+        BEQL    25$
+30$:    CMPL    E_CONC, #1
+        BNEQ    40$
+25$:    BISL2   #ENT_CONCAT, R6
+40$:    TSTL    E_PLACE                 ; PLACEMENT: a qualifier's
+        BEQL    45$
+        CMPL    E_KIND, #K_QUAL
+        BEQL    45$
+        FAIL    CDU$_INVPLACE, E_NAME
+45$:    CLRL    R7                      ; the type
+        TSTB    E_TYPE
+        BEQL    60$
+        CMPB    E_TYPE+1, #^A"$"
+        BNEQ    55$
+        MOVAB   TYPES, R8               ; built in
+50$:    MOVZBL  (R8), R0
+        BNEQ    52$
+        FAIL    CDU$_INVTYPE, E_TYPE
+52$:    MOVL    R8, R1
+        MOVAB   E_TYPE, R3
+        BSBW    SAMEC
+        MOVZBL  (R8), R1
+        ADDL2   R1, R8
+        INCL    R8
+        MOVZBL  (R8)+, R7
+        BLBC    R0, 50$
+        BRB     60$
+55$:    TSTL    E_PLACE                 ; keywords, but not a placed qualifier's
+        BEQL    57$
+        FAIL    CDU$_INVPLACE, E_NAME
+57$:    MOVL    #TYP_KEYWORD, R7
+60$:    SUBL3   R11, OUTP, R9           ; the entity
+        MOVL    R6, R0
+        BSBW    PUTB
+        MOVL    R7, R0
+        BSBW    PUTB
+        CMPL    R7, #TYP_KEYWORD        ; its type's keywords
+        BNEQ    65$
+        MOVL    #D_TYPE, R0
+        MOVAB   E_TYPE, R1
+        BSBW    ADDFIX
+65$:    CLRL    R0
+        BSBW    PUTW
+        TSTB    E_SYNTAX                ; its syntax
+        BEQL    70$
+        MOVL    #D_SYNTAX, R0
+        MOVAB   E_SYNTAX, R1
+        BSBW    ADDFIX
+70$:    CLRL    R0
+        BSBW    PUTW
+        MOVL    E_PLACE, R0
+        BSBW    PUTB
+        MOVAB   E_NAME, R1
+        BSBW    PUTC
+        MOVAB   E_LABEL, R8             ; the label: the name by default
+        TSTB    (R8)
+        BNEQ    80$
+        MOVAB   E_NAME, R8
+80$:    MOVL    R8, R1
+        BSBW    PUTC
+        MOVAB   E_PROMPT, R1            ; the prompt: the label by default
+        TSTB    (R1)
+        BNEQ    85$
+        MOVL    R8, R1
+85$:    BSBW    PUTC
+        MOVAB   E_DEFVAL, R1
+        BSBW    PUTC
+        MOVL    R6, E_FLAGS
+        MOVL    R9, R0
+        RSB
+
+; ADDFIX: R0 = D_SYNTAX or D_TYPE, R1 = its name: the word at OUTP is to
+; be its offset, filled at the end. Uses R0-R5.
+ADDFIX:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5>
+        MOVL    NFIX, R2
+        CMPL    R2, #MAXFIX
+        BLSSU   10$
+        FAIL    CDU$_TABOVF
+10$:    INCL    NFIX
+        MULL2   #FIX$K_LENGTH, R2
+        MOVAB   FIXES[R2], R3
+        MOVB    R0, FIX$B_KIND(R3)
+        SUBL3   R11, OUTP, R0
+        MOVW    R0, FIX$W_AT(R3)
+        MOVL    E_LINE, FIX$L_LINE(R3)
+        ADDL2   #FIX$T_NAME, R3
+        BRW     COPYC
+
+; EXPR: a DISALLOW expression, into EXPRBUF in prefix form: OR binds
+; least, then AND, then NOT.
+EXPR:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5, R6, R7>
+        PUSHL   EXPRLEN                 ; where it starts
+        BSBB    ANDEXPR
+10$:    BSBW    LEX
+        IFWORD  "OR", 20$
+        TSTL    (SP)+
+        RSB
+20$:    BSBW    TAKE
+        MOVZBL  #OP_OR, R0
+        MOVL    (SP), R1
+        BSBW    INSERT
+        BSBB    ANDEXPR
+        BRB     10$
+ANDEXPR:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5, R6, R7>
+        PUSHL   EXPRLEN
+        BSBB    UNARY
+10$:    BSBW    LEX
+        IFWORD  "AND", 20$
+        TSTL    (SP)+
+        RSB
+20$:    BSBW    TAKE
+        MOVZBL  #OP_AND, R0
+        MOVL    (SP), R1
+        BSBW    INSERT
+        BSBB    UNARY
+        BRB     10$
+; UNARY: ( expression ), NOT, NEG name, ANY2 (expression, ...) or a name.
+UNARY:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5, R6, R7>
+        BSBW    LEX
+        IFPUNCT C_LPAREN, 10$
+        BSBW    NAME
+        IFWORD  "NOT", 20$
+        IFWORD  "NEG", 30$
+        IFWORD  "ANY2", 40$
+        MOVZBL  #OP_NAME, R0
+        BRB     35$
+10$:    BSBW    TAKE
+        BSBW    EXPR
+        BRW     CLOSE
+20$:    MOVZBL  #OP_NOT, R0
+        BSBW    EXPRB
+        BRB     UNARY
+30$:    BSBW    NAME
+        MOVZBL  #OP_NEG, R0
+35$:    BSBW    EXPRB
+        MOVZBL  TOKEN, R6               ; the name, .ASCIC
+        CLRL    R7
+        MOVL    R6, R0
+37$:    BSBW    EXPRB
+        CMPL    R7, R6
+        BGEQU   39$
+        MOVZBL  TOKEN+1[R7], R0
+        INCL    R7
+        BRB     37$
+39$:    RSB
+40$:    MOVZBL  #OP_ANY2, R0
+        BSBW    EXPRB
+        PUSHL   EXPRLEN                 ; the count's place
+        CLRL    R0
+        BSBW    EXPRB
+        BSBW    LEX
+        IFPUNCT C_LPAREN, 50$
+        FAIL    CDU$_INVITEM, TOKEN
+50$:    BSBW    TAKE
+60$:    MOVL    (SP), R0
+        INCB    EXPRBUF[R0]
+        BSBW    EXPR
+        BSBW    LEX
+        IFPUNCT C_COMMA, 70$
+        TSTL    (SP)+
+        BRB     CLOSE
+70$:    BSBW    TAKE
+        BRB     60$
+; CLOSE: a ) must follow.
+CLOSE:  BSBW    LEX
+        IFPUNCT C_RPAREN, 10$
+        FAIL    CDU$_INVITEM, TOKEN
+10$:    BRW     TAKE
+
+; EXPRB: appends the byte in R0 to EXPRBUF. Uses R3.
+EXPRB:
+        .JSB_ENTRY  SCRATCH=<R3>
+        MOVL    EXPRLEN, R3
+        CMPL    R3, #EXPRMAX
+        BLSSU   10$
+        FAIL    CDU$_TABOVF
+10$:    MOVB    R0, EXPRBUF[R3]
+        INCL    EXPRLEN
+        RSB
+
+; INSERT: R0 = an operator, R1 = where its first operand starts in
+; EXPRBUF: puts it in front. Uses R0-R3.
+INSERT:
+        .JSB_ENTRY  SCRATCH=<R2, R3>
+        PUSHL   R0
+        CLRL    R0
+        BSBB    EXPRB                   ; one more byte
+        MOVL    EXPRLEN, R2
+        DECL    R2
+10$:    CMPL    R2, R1
+        BLEQ    20$
+        MOVB    EXPRBUF-1[R2], EXPRBUF[R2]
+        DECL    R2
+        BRB     10$
+20$:    MOVL    (SP)+, R0
+        MOVB    R0, EXPRBUF[R1]
+        RSB
+
+; NAME: takes a word, a name, into TOKEN.
+NAME:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5>
+        BSBW    LEX
+        CMPL    TOKTYP, #T_WORD
+        BEQL    10$
+        FAIL    CDU$_INVITEM, TOKEN
+10$:    BRW     TAKE
+
+; NAMEORSTR: takes a word or a string into TOKEN.
+NAMEORSTR:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5>
+        BSBW    LEX
+        CMPL    TOKTYP, #T_WORD
+        BEQL    10$
+        CMPL    TOKTYP, #T_STR
+        BEQL    10$
+        FAIL    CDU$_INVITEM, TOKEN
+10$:    BRW     TAKE
+
+; EQUALS: [=] word or string, into TOKEN.
+EQUALS:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5>
+        BSBW    LEX
+        IFPUNCT C_EQUALS, 10$
+        BRB     NAMEORSTR
+10$:    BSBW    TAKE
+        BRB     NAMEORSTR
+
+; UPCASE: TOKEN, in capitals. Uses R0, R1.
+UPCASE:
+        .JSB_ENTRY
+        MOVZBL  TOKEN, R1
+10$:    DECL    R1
+        BLSS    20$
+        MOVZBL  TOKEN+1[R1], R0
+        CMPB    R0, #^A"a"
+        BLSSU   10$
+        CMPB    R0, #^A"z"
+        BGTRU   10$
+        SUBB2   #^A"a"-^A"A", TOKEN+1[R1]
+        BRB     10$
+20$:    RSB
+
+; ISWORD: R1 = an .ASCIC word. R0 = 1 if the token is it. Uses R0-R3.
+ISWORD:
+        .JSB_ENTRY  SCRATCH=<R2, R3>
+        CLRL    R0
+        CMPL    TOKTYP, #T_WORD
+        BNEQ    10$
+        MOVAB   TOKEN, R3
+        BRW     SAMEC
+10$:    RSB
+
+; INLIST: R1 = .ASCIC words, then a 0. R0 = 1 if the token is one of
+; them. Uses R0-R3.
+INLIST:
+        .JSB_ENTRY  SCRATCH=<R2, R3>
+        CLRL    R0
+        CMPL    TOKTYP, #T_WORD
+        BNEQ    20$
+10$:    TSTB    (R1)
+        BEQL    20$
+        MOVAB   TOKEN, R3
+        BSBW    SAMEC
+        BLBS    R0, 20$
+        MOVZBL  (R1), R2
+        ADDL2   R2, R1
+        INCL    R1
+        BRB     10$
+20$:    RSB
+
+; MARK: remembers where the text is, for BACK.
+MARK:
+        .JSB_ENTRY
+        MOVL    TXT, MARKTXT
+        MOVL    LINE, MARKLN
+        RSB
+BACK:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5>
+        MOVL    MARKTXT, TXT
+        MOVL    MARKLN, LINE
+        BRW     LEX
+
+; TAKE: moves past the token LEX read.
+TAKE:
+        .JSB_ENTRY
+        MOVL    TOKEND, TXT
+        MOVL    TOKENDLN, LINE
+        RSB
+
+; LEX: reads the next token, from TXT, without moving past it: TOKTYP,
+; TOKEN, TOKLINE, and where it ends. Skips blanks, line ends and
+; comments, from ! to the line's end. Uses R0-R5.
+LEX:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5>
+        MOVL    TXT, R1
+        MOVL    LINE, R4
+        MOVL    TXTEND, R2
+10$:    CMPL    R1, R2
+        BLSSU   20$
+        MOVL    #T_END, TOKTYP
+        CLRB    TOKEN
+        BRW     DONE
+20$:    MOVZBL  (R1), R0
+        CMPB    R0, #10
+        BNEQ    30$
+        INCL    R4
+        INCL    R1
+        BRB     10$
+30$:    CMPB    R0, #^A" "
+        BLEQU   35$                     ; blanks, tabs, CR
+        CMPB    R0, #^A"!"
+        BNEQ    40$
+32$:    CMPL    R1, R2                  ; a comment
+        BGEQU   10$
+        CMPB    (R1), #10
+        BEQL    10$
+        INCL    R1
+        BRB     32$
+35$:    INCL    R1
+        BRB     10$
+40$:    MOVL    R4, TOKLINE
+        CMPB    R0, #^A/"/
+        BNEQ    50$
+        BRW     STR
+50$:    BSBW    NAMECHAR
+        BLBC    R0, 70$
+        MOVL    #T_WORD, TOKTYP         ; a word, in capitals
+        CLRL    R3
+60$:    CMPL    R1, R2
+        BGEQU   65$
+        MOVZBL  (R1), R0
+        BSBW    NAMECHAR
+        BLBC    R0, 65$
+        MOVZBL  (R1)+, R0
+        CMPB    R0, #^A"a"
+        BLSSU   62$
+        CMPB    R0, #^A"z"
+        BGTRU   62$
+        SUBB2   #^A"a"-^A"A", R0
+62$:    CMPL    R3, #255
+        BGEQU   60$
+        INCL    R3
+        MOVB    R0, TOKEN[R3]
+        BRB     60$
+65$:    MOVB    R3, TOKEN
+        CMPL    R3, #31                 ; a name, but a path, has 31 at most
+        BLEQU   DONE
+67$:    CMPB    TOKEN[R3], #^A"."
+        BEQL    DONE
+        SOBGTR  R3, 67$
+        FAIL    CDU$_SYMTOOLONG, TOKEN
+70$:    MOVZBL  (R1), R0                ; ( ) , =
+        MOVAB   PUNCTS, R3
+75$:    TSTB    (R3)
+        BEQL    80$
+        CMPB    (R3)+, R0
+        BNEQ    75$
+        MOVL    #T_PUNCT, TOKTYP
+        MOVB    #1, TOKEN
+        MOVB    R0, TOKEN+1
+        INCL    R1
+        BRB     DONE
+80$:    MOVB    #1, TOKEN
+        MOVB    R0, TOKEN+1
+        FAIL    CDU$_INVCHAR, TOKEN
+; STR: R1 = a quote. A string, to its closing quote on its line; "" is a
+; quote in it.
+STR:    MOVL    #T_STR, TOKTYP
+        INCL    R1
+        CLRL    R3
+10$:    CMPL    R1, R2
+        BGEQU   30$
+        MOVZBL  (R1)+, R0
+        CMPB    R0, #10
+        BEQL    30$
+        CMPB    R0, #^A/"/
+        BNEQ    20$
+        CMPL    R1, R2
+        BGEQU   25$
+        CMPB    (R1), #^A/"/
+        BNEQ    25$
+        INCL    R1                      ; ""
+20$:    CMPL    R3, #255
+        BGEQU   10$
+        INCL    R3
+        MOVB    R0, TOKEN[R3]
+        BRB     10$
+25$:    MOVB    R3, TOKEN
+        BRB     DONE
+30$:    FAIL    CDU$_MISSQUOTE
+DONE:   MOVL    R1, TOKEND
+        MOVL    R4, TOKENDLN
+        RSB
+PUNCTS: .ASCII  "(),="
+        .BYTE   0
+
+; NAMECHAR: R0 = a character. R0 = 1 if a name may have it: a letter, a
+; digit, $, _ or a dot.
+NAMECHAR:
+        .JSB_ENTRY
+        CMPB    R0, #^A"a"
+        BLSSU   10$
+        CMPB    R0, #^A"z"
+        BLEQU   80$
+10$:    CMPB    R0, #^A"A"
+        BLSSU   20$
+        CMPB    R0, #^A"Z"
+        BLEQU   80$
+20$:    CMPB    R0, #^A"0"
+        BLSSU   30$
+        CMPB    R0, #^A"9"
+        BLEQU   80$
+30$:    CMPB    R0, #^A"$"
+        BEQL    80$
+        CMPB    R0, #^A"_"
+        BEQL    80$
+        CMPB    R0, #^A"."
+        BEQL    80$
+        CLRL    R0
+        RSB
+80$:    MOVL    #1, R0
+        RSB
+
+; PUTB: writes the byte in R0 to the tables. PUTW: the word. PUTC: the
+; .ASCIC string at R1. CDU$_TABOVF past the buffer. Use R0-R2.
+PUTW:
+        .JSB_ENTRY  SCRATCH=<R2>
+        BSBB    PUTB
+        ROTL    #24, R0, R0
+        BSBB    PUTB
+        ROTL    #8, R0, R0
+        RSB
+PUTC:
+        .JSB_ENTRY  SCRATCH=<R2>
+        MOVZBL  (R1), R2
+        INCL    R2
+10$:    MOVZBL  (R1)+, R0
+        BSBB    PUTB
+        SOBGTR  R2, 10$
+        RSB
+PUTB:
+        .JSB_ENTRY  SCRATCH=<R2>
+        CMPL    OUTP, OUTEND
+        BLSSU   10$
+        FAIL    CDU$_TABOVF
+10$:    MOVB    R0, @OUTP
+        INCL    OUTP
+        RSB
+
+; COPYC: copies the .ASCIC string at R1 to R3. Uses R0-R5.
+COPYC:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5>
+        MOVZBL  (R1), R0
+        INCL    R0
+        MOVC3   R0, (R1), (R3)
+        RSB
+
+; SAMEC: R0 = 1 if the .ASCIC strings at R1 and R3 are the same, else 0.
+; Uses R2.
+SAMEC:
+        .JSB_ENTRY  SCRATCH=<R2>
+        MOVZBL  (R1), R2
+        CMPB    R2, (R3)
+        BNEQ    20$
+10$:    TSTL    R2
+        BEQL    30$
+        CMPB    (R1)[R2], (R3)[R2]
+        BNEQ    20$
+        DECL    R2
+        BRB     10$
+20$:    CLRL    R0
+        RSB
+30$:    MOVL    #1, R0
+        RSB
+
+; ADDC: appends the .ASCIC string at R1 to MSG, as much as fits. Uses
+; R0-R3.
+ADDC:
+        .JSB_ENTRY  SCRATCH=<R2, R3>
+        MOVZBL  (R1)+, R2
+        MOVZBL  MSG, R0
+10$:    TSTL    R2
+        BEQL    20$
+        CMPL    R0, #255
+        BGEQU   20$
+        INCL    R0
+        MOVB    (R1)+, MSG[R0]
+        DECL    R2
+        BRB     10$
+20$:    MOVB    R0, MSG
+        RSB
+
+        .END

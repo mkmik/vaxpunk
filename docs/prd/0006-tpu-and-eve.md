@@ -114,7 +114,7 @@ keyboards that lack them.
 ## Testing strategy
 
 **Oracle: scripted sessions.** The same keystrokes to `EDIT/TPU` on
-AXPbox, on its own disk through `ods/vms/run-vms.py`, and to vaxpunk's
+AXPbox, on its own disk through `crosstools/ods/vms/run-vms.py`, and to vaxpunk's
 TPU, with the file each writes compared, and the final screen compared
 as a terminal emulator renders it. The oracle's outputs are committed, so
 CI never needs AXPbox.

@@ -74,7 +74,7 @@ same source kept working.
   which need no capability. Release kernels don't have them.
 - Once there are access modes other than kernel, the PAL must check the
   mode on privileged calls.
-- The console routines in `vtools/lib/consolio.mar` still write through
+- The console routines in `crosstools/vtools/lib/consolio.mar` still write through
   vrun's `svc #2`. They run under vrun until the executive links them;
   `CON$PUTCHAR` then becomes `MTPR R0, #PR$_TXDB`.
 

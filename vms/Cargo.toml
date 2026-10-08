@@ -1,0 +1,18 @@
+[package]
+name = "vms"
+description = "The OS above the PAL: the executive, the programs it runs and the system disk they go on"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lib]
+path = "lib.rs"
+
+[build-dependencies]
+vasm = { path = "../crosstools/vtools/crates/vasm" }
+vbliss = { path = "../crosstools/vtools/crates/vbliss" }
+vcdu = { path = "../crosstools/vtools/crates/vcdu" }
+vlink = { path = "../crosstools/vtools/crates/vlink" }
+vmacro = { path = "../crosstools/vtools/crates/vmacro" }
+vms-obj = { path = "../crosstools/vtools/crates/vms-obj" }
+ods-image = { path = "../crosstools/ods/crates/ods-image" }

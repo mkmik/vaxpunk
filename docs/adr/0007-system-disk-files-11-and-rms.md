@@ -28,7 +28,7 @@ driver does the I/O, with interrupts.
 ## Decision
 
 1. **The system disk is an ODS-2 volume** labelled `VAXPUNK`, which
-   `roottask/build.rs` makes with `ods-image`: the images in `[SYSEXE]`,
+   `vms/build.rs` makes with `ods-image`: the images in `[SYSEXE]`,
    SYSTEM's files in `[SYSMGR]`. QEMU attaches it read only as a
    virtio-blk device on a virtio-mmio transport. It replaces `sys.vol`,
    `$BVDDEF`, the shim's `volume` module and the S0 mapping of the volume.
