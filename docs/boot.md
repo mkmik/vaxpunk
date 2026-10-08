@@ -99,9 +99,10 @@ compiles.
 - starts memory management (`MMG$INIT`) and lets user-mode code use the
   system service vector
 - starts the scheduler (`SCH$INIT`) and the system time (`EXE$INITTIM`)
-- empties the type-ahead buffer, where typed characters wait until a
-  program reads them, and turns on the console receive interrupt
-  (`TTY$INIT`)
+- makes the console's unit control block, `OPA0:`, the first terminal,
+  with its characteristics, a VT100's 80 by 24, and an empty type-ahead
+  buffer, where typed characters wait until a program reads them, and
+  turns on the console receive interrupt (`TTY$INIT`)
 - finds the port in the RPB (`NET$INIT`); its interrupt, at IPL 21, and
   the software interrupt it requests, at IPL 6, are in the SCB too
 - prints `%EXEC-I-START … free pages`
@@ -317,11 +318,16 @@ interpreter. It is linked high in P1, which tells the executive it is one
   on a raw ICMP socket and prints each reply.
   `SET HOST address` runs `RTPAD.EXE`, and so does `TELNET address`,
   which connects to port 23 there:
-  the other side's `TELNETD` creates a process named after the
-  connection's unit, `_BG03:` say, running DCL with the connection as its
-  input and output, and RTPAD passes lines both ways until `LOGOUT` there
-  prints `%REM-S-END` here, or CTRL/Z is typed. `TELNET address port`,
-  or `/PORT=port`, connects to that port instead. `RUN TCPTEST` connects
+  the other side's `TELNETD` makes the connection a terminal, `_TNA1:`
+  say, which the terminal driver there speaks Telnet on, and creates a
+  process named after it, running DCL with it as its input and output.
+  That terminal offers to echo, so RTPAD goes a character at a time:
+  every key goes there, CTRL/Y too, and comes back echoed, so EDIT's
+  keypad mode works there as on the console, on a screen of this
+  terminal's width and page, which RTPAD sends. `LOGOUT` there prints
+  `%REM-S-END` here, and so does CTRL/]. `TELNET address port`, or
+  `/PORT=port`, connects to that port instead, a line at a time unless
+  what listens there offers to echo, until CTRL/Z. `RUN TCPTEST` connects
   to a server on the host and accepts a connection from it.
 
 The system disk is read only, the ramdisk is gone when the system stops,

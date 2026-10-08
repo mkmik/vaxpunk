@@ -251,17 +251,31 @@ or the ioctls, in one request, not both; a unit is cloned at
   `TCPIP$TELNET`, the remote login server, unless it is there already.
   Without a network it does nothing. ponytail: one route, the default; a
   routing table when there is a second interface.
-- **`TELNETD.EXE`**, process `TCPIP$TELNET`. Listens on TCP port 23; for
-  each connection creates a process running `DCL.EXE` with the
-  connection's unit, `_BGnn:`, which `$GETDVI`'s `DVI$_DEVNAM` gives, as
-  `SYS$INPUT`, `SYS$OUTPUT` and `SYS$ERROR`, named so, and keeps its own
-  channel until the new DCL has assigned one, `DVI$_REFCNT` 2. DCL quits when a read ends with `SS$_LINKDISCON` or
-  `SS$_LINKABORT`; its last channel going closes the connection.
-- **`RTPAD.EXE`**, DCL's `SET HOST address`. Connects to port 23 there,
-  then waits for either of two reads, the connection's and the terminal's,
-  with `$WFLOR`: what comes on the connection it writes on the terminal,
-  each line typed it sends with CR LF. When the other end closes it prints
-  `%REM-S-END`. Line at a time, edited locally; no Telnet options.
+- **`TELNETD.EXE`**, process `TCPIP$TELNET`. Listens on TCP port 23;
+  makes each connection a TELNET terminal, `_TNAn:`, with `IO$_TTY_PORT`
+  on its channel, which the terminal driver then drives over the
+  connection, speaking Telnet (DESIGN-0002, *I/O*;
+  [ADR-0027](../adr/0027-terminals-are-ucbs-and-telnet-is-in-the-driver.md)).
+  Then it creates a process running `DCL.EXE` with the terminal, whose
+  name `$GETDVI`'s `DVI$_DEVNAM` gives, as `SYS$INPUT`, `SYS$OUTPUT` and
+  `SYS$ERROR`, named so, and keeps its own channel until the new DCL has
+  assigned one, `DVI$_REFCNT` 2. DCL quits when a read ends with
+  `SS$_HANGUP`, the connection gone; the terminal's last channel going
+  closes the connection.
+- **`RTPAD.EXE`**, DCL's `SET HOST address` and `TELNET`. Connects to
+  port 23 there, or the port given, then waits for either of two reads,
+  the connection's and the terminal's, with `$WFLOR`: what comes on the
+  connection it writes on the terminal, Telnet's commands taken out and
+  answered. It starts a line at a time, edited and echoed here, each
+  line sent with CR LF, until CTRL/Z. Once the other end offers `WILL
+  ECHO`, as TELNETD's terminal does, it goes a character at a time: it
+  makes the terminal PASTHRU and NOECHO and reads a key at a time with
+  no terminators, so CTRL/C and CTRL/Y go to the other end too; a
+  carriage return goes as CR NUL, and CTRL/] ends the session. It agrees
+  to `SGA`, answers `DO NAWS` with the terminal's width and page,
+  refuses the other options, and puts the terminal back as it was. When
+  the other end closes it prints `%REM-S-END`. ponytail: no `TELNET>`
+  command mode at CTRL/]; a send for each key.
 - **`COPY.EXE`**, `COPY/HTTP`: connects a TCP socket to the server and
   sends an HTTP/1.0 GET; the body goes into a STREAM_LF file.
 - **`TCPTEST.EXE`** tries TCP both directions against the host, and UDP:
@@ -273,4 +287,4 @@ or the ioctls, in one request, not both; a unit is cloned at
 
 ponytail: `BGA0:` and its units aren't among the devices `$DEVICE_SCAN`
 sees, and `$GETDVI` sees a unit by its channel only; a remote login has
-no username or password, and EDIT still writes on the console.
+no username or password.

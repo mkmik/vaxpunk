@@ -90,8 +90,8 @@ RAB:    $RAB    FAB=FAB, USZ=LINESIZE
 OUTFAB: $FAB    FNA=SPEC
 OUTRAB: $RAB    FAB=OUTFAB
 RES:    .BLKB   255                     ; the file's name, once opened
-CHAN:   .LONG   0                       ; OPA0:'s, once assigned
-OPA0:   .ASCID  "OPA0:"
+CHAN:   .LONG   0                       ; the terminal's, once assigned
+INPUT:  .ASCID  "SYS$INPUT"
 PROMPT: .ASCII  "*"
 TAB:    .ASCII  <9>                     ; INSERT's prompt
 IOSB:   .BLKQ   1
@@ -166,7 +166,7 @@ TEXT2:  .BLKB   TEXTSIZE                ; the other arena, which COMPACT copies 
 
         .PSECT  CODE, EXE, LONG
         .ENTRY  START, ^M<R2, R3, R4, R5, R6, R7, R8, R9, R10, R11>
-        $ASSIGN_S DEVNAM=OPA0, CHAN=CHAN
+        $ASSIGN_S DEVNAM=INPUT, CHAN=CHAN
         BLBC    R0, QUIT
         BSBW    LOAD
         BLBC    R0, QUIT
@@ -314,7 +314,7 @@ LOAD:
         MOVL    (SP)+, R0
 90$:    RSB
 
-; ADD: reads lines from the console, each after a tab, up to a CTRL/Z,
+; ADD: reads lines from the terminal, each after a tab, up to a CTRL/Z,
 ; and inserts them before the current line, while the buffer has room.
 ; The current line stays the one they went before. Uses R0-R5 and R10.
 ADD:
@@ -883,13 +883,15 @@ SS3:    .BYTE   ^A/A/, ^A/D/
         .WORD   13
         .BYTE   0
 
-; READKEY: R0 = the next character typed, without echo; a carriage
-; return if it ended the read, and CTRL/Z if the read fails. Uses R0, R1.
+; READKEY: R0 = the next character typed, without echo: the one read,
+; or the terminator that ended the read, a control character; CTRL/Z if
+; the read fails. Uses R0, R1.
 READKEY:
         .JSB_ENTRY
         $QIOW_S CHAN=CHAN, FUNC=#IO$_READVBLK!IO$M_NOECHO!IO$M_NOFILTR, IOSB=IOSB, P1=KEY, P2=#1
         BLBC    R0, 80$
-        MOVZBL  #13, R0
+        BLBC    IOSB, 80$
+        MOVZBL  IOSB+4, R0
         TSTW    IOSB+2
         BEQL    90$
         MOVZBL  KEY, R0
@@ -1057,7 +1059,7 @@ PUTC:
         INCL    SLEN
         RSB
 
-; FLUSH: writes what is in SBUF on the console. Uses R0, R1.
+; FLUSH: writes what is in SBUF on the terminal. Uses R0, R1.
 FLUSH:
         .JSB_ENTRY
         $QIOW_S CHAN=CHAN, FUNC=#IO$_WRITEVBLK, P1=SBUF, P2=SLEN

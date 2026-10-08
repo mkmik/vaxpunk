@@ -42,7 +42,7 @@ Decisions this PRD rests on:
 | Decision | Choice |
 | --- | --- |
 | Language | BLISS-64 ([PRD-0004](0004-bliss64-compiler.md)); MACRO-32 only where BLISS-64 can't reach |
-| Waits for | PRD-0004's pilot (work order step 10), and the per-terminal UCB of PRD-0003 (backlog item 3) for the terminal's size |
+| Waits for | PRD-0004's pilot (work order step 10); the per-terminal UCB of PRD-0003 it needs for the terminal's size, with timed and escape-sequence reads, is done (PRD-0003 step 3, ADR-0027) |
 | Spec | DEC's *Guide to the DEC Text Processing Utility* and *DEC Text Processing Utility Reference Manual*, and the *Guide to the Extensible Versatile Editor* |
 | Oracle | `EDIT/TPU` on OpenVMS Alpha V8.4-2L1 in AXPbox: an oracle for behaviour and screens, never for code |
 | EVE | Ours, in TPU, from the manuals and the oracle's behaviour |

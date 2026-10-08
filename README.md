@@ -124,7 +124,8 @@ delete and translate logical names (`SHOW LOGICAL SYS$INPUT`, or `SHOW
 LOGICAL` alone to list them all), `SHOW PROCESS` and `SHOW SYSTEM` show
 the process and list them all, `TCPIP` sets and shows the network's
 settings and the hosts it knows by name (*Networking*), `SET HOST
-host` logs in to another vaxpunk, `COPY` and `DELETE` copy and delete
+host` logs in to another vaxpunk, on a terminal of its own there, where
+EDIT's keypad mode works too (CTRL/] comes back), `COPY` and `DELETE` copy and delete
 files, `BACKUP` saves them in a save set VMS's BACKUP reads, and lists and
 restores one, `INITIALIZE`, `MOUNT` and `DISMOUNT` make, mount and dismount a
 volume on the data disk, `DKB0:`, or the ramdisk, `MDA0:`, which

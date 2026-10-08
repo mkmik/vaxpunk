@@ -1,0 +1,69 @@
+        .TITLE  TTTEST  Checks the terminal driver's reads
+        .IDENT  /V0.1/
+;
+; Reads SYS$INPUT, a terminal, as programs that work a screen do: a timed
+; read of 0 seconds and one of 1 second end with SS$_TIMEOUT, nothing
+; typed. Then it says TTTEST: keys, and a second on, the keys typed are in
+; the type-ahead buffer: ab, ESC [ A, hellox; IO$_SENSEMODE!IO$M_TYPEAHDCNT
+; counts them. A read with IO$M_ESCAPE ends at the escape sequence, which
+; follows ab in the buffer, and one whose terminators are x alone, a
+; mask's long form, reads hello. A failed EXPECT exits with 2 * N.
+;
+        .LIBRARY "starlet.mlb"
+        .LIBRARY "sysexe.mlb"
+        $SSDEF
+        $IODEF
+
+        .PSECT  DATA, NOEXE, WRT, LONG
+INPUT:  .ASCID  "SYS$INPUT"
+CHAN:   .LONG   0
+IOSB:   .BLKQ   1
+SEC:    .LONG   -10000000, -1           ; a second
+BUF:    .BLKB   16
+SEQ:    .ASCII  "ab"<27>"[A"
+SEQLEN = .-SEQ
+HELLO:  .ASCII  "hello"
+        .ALIGN  LONG
+X:      .WORD   16, 0                   ; the terminators: x, the long form
+        .ADDRESS XMASK
+XMASK:  .LONG   0, 0, 0, <1@<^A/x/-96>>
+
+        .PSECT  CODE, EXE, LONG
+        .ENTRY  START, ^M<R2>
+        $ASSIGN_S DEVNAM=INPUT, CHAN=CHAN
+        EXPECT  #SS$_NORMAL, 1
+        $QIOW_S CHAN=CHAN, FUNC=#IO$_READVBLK!IO$M_TIMED!IO$M_NOECHO, IOSB=IOSB, P1=BUF, P2=#16, P3=#0
+        MOVZWL  IOSB, R0
+        EXPECT  #SS$_TIMEOUT, 2
+        $QIOW_S CHAN=CHAN, FUNC=#IO$_READVBLK!IO$M_TIMED!IO$M_NOECHO, IOSB=IOSB, P1=BUF, P2=#16, P3=#1
+        MOVZWL  IOSB, R0
+        EXPECT  #SS$_TIMEOUT, 3
+        PRINT   "TTTEST: keys"
+        $SETIMR_S EFN=#5, DAYTIM=SEC
+        $WAITFR_S EFN=#5
+        $QIOW_S CHAN=CHAN, FUNC=#IO$_SENSEMODE!IO$M_TYPEAHDCNT, IOSB=IOSB, P1=BUF
+        MOVZWL  BUF, R0                 ; the count
+        EXPECT  #11, 4
+        MOVZBL  BUF+2, R0               ; the first
+        EXPECT  #^A/a/, 5
+        $QIOW_S CHAN=CHAN, FUNC=#IO$_READVBLK!IO$M_ESCAPE!IO$M_NOECHO, IOSB=IOSB, P1=BUF, P2=#16
+        MOVZWL  IOSB, R0
+        EXPECT  #SS$_NORMAL, 6
+        MOVL    IOSB, R0
+        EXPECT  #<2@16>!SS$_NORMAL, 7   ; ab,
+        MOVL    IOSB+4, R0
+        EXPECT  #<SEQLEN-2@16>!27, 8    ; then ESC [ A
+        CMPC3   #SEQLEN, BUF, SEQ
+        EXPECT  #0, 9
+        $QIOW_S CHAN=CHAN, FUNC=#IO$_READVBLK!IO$M_NOECHO, IOSB=IOSB, P1=BUF, P2=#16, P4=#X
+        MOVL    IOSB, R0
+        EXPECT  #<5@16>!SS$_NORMAL, 10  ; hello,
+        MOVL    IOSB+4, R0
+        EXPECT  #<1@16>!^A/x/, 11       ; then x
+        CMPC3   #5, BUF, HELLO
+        EXPECT  #0, 12
+        PRINT   "TTTEST: ok"
+        MOVL    #SS$_NORMAL, R0
+        RET
+
+        .END    START

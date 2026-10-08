@@ -481,7 +481,9 @@ const PROTECTION: Phase = Phase {
 
 /// SET TERMINAL changes the console's width, page, BROADCAST and PASTHRU,
 /// which SHOW TERMINAL shows, refuses a width of 600, and after /NOECHO
-/// the command typed next isn't echoed; then it puts them back.
+/// the command typed next isn't echoed; then it puts them back. TTTEST
+/// checks timed reads, the type-ahead count of the keys typed for it, a
+/// read an escape sequence ends and one with terminators of its own.
 const TERMINAL: Phase = Phase {
     name: "terminal",
     secs: 20,
@@ -500,6 +502,12 @@ const TERMINAL: Phase = Phase {
             1,
             "SET TERMINAL/ECHO/WIDTH=80/PAGE=24/BROADCAST/NOPASTHRU OPA0:\rSHOW TERMINAL\r",
         ),
+        (
+            "   Broadcast          No Readsync        No Form            Fulldup",
+            1,
+            "RUN TTTEST\r",
+        ),
+        ("TTTEST: keys", 1, "ab\x1b[Ahellox"),
     ],
     lines: &[
         "Terminal: _OPA0:      Device_Type: VT100         Owner: SYSTEM",
@@ -511,6 +519,7 @@ const TERMINAL: Phase = Phase {
         "   Input:    9600     LFfill:  0      Width:  80      Parity: None",
         "   Interactive        Echo               Type_ahead         No Escape",
         "   Broadcast          No Readsync        No Form            Fulldup",
+        "TTTEST: ok",
     ],
 };
 

@@ -11,7 +11,7 @@
 ; SHOW TERMINAL shows the terminal's characteristics (lib/term.mar), under
 ; VMS's headings and names, four to a line.
 ; ponytail: no node, CPU time, I/O or page counts: the counters don't
-; exist yet. The console has no speed, parity or fill,
+; exist yet. A terminal has no speed, parity or fill,
 ; so SHOW TERMINAL shows a VT100's on a 9600 baud line; and it has no
 ; TT3$ characteristics, so no DEC_CRT5, Ansi_Color or VMS Style Input.
 ;

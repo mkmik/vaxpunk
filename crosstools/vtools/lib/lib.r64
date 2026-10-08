@@ -250,6 +250,7 @@ LITERAL
     TQE$C_TMSNGL = 0,  ! $SETIMR: sets an event flag
     TQE$C_WKSNGL = 1,  ! $SCHDWK: wakes the process
     TQE$C_WKREPT = 2,  ! and again every TQE$Q_DELTA
+    TQE$C_SSSNGL = 3,  ! a driver's: JSBs TQE$L_AST with R5 = the entry, its own, at IPL$_SYNCH
     DYN$C_TQE = 15;  ! TQE$B_TYPE
 MACRO
     TQE$L_TQFL = 0, 0, 32, 0 %,  ! timer queue
@@ -306,6 +307,17 @@ LITERAL
     UCB$K_LENGTH = 28,
     UCB$K_NETLENGTH = 48,  ! a network unit, which BGA0: clones
     UCB$K_MBLENGTH = 60,  ! a mailbox
+    UCB$K_TTLENGTH = 5560,  ! a terminal
+    UCB$K_TT_TYPEAHEAD = 256,
+    UCB$K_TT_RECALL = 16,  ! a power of 2
+    UCB$K_TT_OUTSIZE = 1024,
+    UCB$V_TT_CTRLC = 0,  ! UCB$L_TT_CTRL: CTRL/C came
+    UCB$V_TT_CTRLY = 1,  ! CTRL/Y came
+    UCB$V_TT_HANGUP = 2,  ! UCB$L_TT_STS: the line is gone: reads and writes end with SS$_HANGUP
+    UCB$V_TT_TIMER = 3,  ! UCB$A_TT_TQE is on the timer queue
+    UCB$V_TT_OVER = 4,  ! the line being read is in overstrike mode, CTRL/A's
+    UCB$V_TT_RECV = 5,  ! a TELNET terminal's receive is on the port
+    UCB$V_TT_TN = 6,  ! a TELNET terminal, TNAn, not the console
     UCB$V_PRMMBX = 0,  ! UCB$L_MBSTS: permanent, until $DELMBX
     UCB$M_PRMMBX = 1,
     UCB$V_ONLINE = 4,  ! the device is online
@@ -318,16 +330,38 @@ MACRO
     UCB$T_NAME = 16, 0, 0, 0 %,  ! the device's name, DDCU, 4 characters
     UCB$L_START = 20, 0, 32, 0 %,  ! a disk driver's start I/O routine, which does an IRP's I/O, or 0
     UCB$L_ERRCNT = 24, 0, 32, 0 %,  ! the errors the device reported, SS$_DRVERR
-    UCB$L_CONN = 28, 0, 32, 0 %,  ! a network unit's connection on the port, 0 none yet
+    UCB$L_CONN = 28, 0, 32, 0 %,  ! a network unit's or a TELNET terminal's connection on the port, 0 none
     UCB$L_MBSTS = 28, 0, 32, 0 %,  ! a mailbox's UCB$V_PRMMBX
-    UCB$L_LINK = 32, 0, 32, 0 %,  ! a cloned unit's, a network unit's or a mailbox's: the next of its kind
+    UCB$L_LINK = 32, 0, 32, 0 %,  ! a cloned unit's, a network unit's, a mailbox's or a terminal's: the next of its kind
     UCB$L_REFC = 36, 0, 32, 0 %,  ! the channels assigned to it
-    UCB$L_UNIT = 40, 0, 32, 0 %,  ! its number, nn in its name, BGnn or MBnn
+    UCB$L_UNIT = 40, 0, 32, 0 %,  ! its number, n in its name, BGnn, MBnn or TNAn
     UCB$L_PROTO = 44, 0, 32, 0 %,  ! a network unit's socket's protocol, TCPIP$C_
     UCB$L_MSGQFL = 44, 0, 32, 0 %,  ! a mailbox's messages, oldest first
     UCB$L_MSGQBL = 48, 0, 32, 0 %,
     UCB$L_MAXMSG = 52, 0, 32, 0 %,  ! the longest message it takes
-    UCB$L_BUFQUO = 56, 0, 32, 0 %;  ! the bytes of messages it may still hold
+    UCB$L_BUFQUO = 56, 0, 32, 0 %,  ! the bytes of messages it may still hold
+    UCB$A_TT_CHAR = 44, 0, 32, 1 %,  ! a terminal's characteristics, IO$_SENSEMODE's 12 bytes: class, type, width, TT$ bits and page, TT2$ bits
+    UCB$L_TT_STS = 56, 0, 32, 0 %,  ! UCB$V_TT_
+    UCB$L_TT_PUT = 60, 0, 32, 0 %,  ! the type-ahead buffer, a ring: where the next character received goes
+    UCB$L_TT_GET = 64, 0, 32, 0 %,  ! and where a read takes the next from
+    UCB$Q_TT_CTRLC = 68, 0, 64, 0 %,  ! the CTRL/C ASTs enabled: IRPs, as ACBs
+    UCB$Q_TT_CTRLY = 76, 0, 64, 0 %,  ! and the CTRL/Y ones
+    UCB$L_TT_LEN = 84, 0, 32, 0 %,  ! the line being read: its length,
+    UCB$L_TT_CURSOR = 88, 0, 32, 0 %,  ! where the cursor is in it,
+    UCB$L_TT_BACK = 92, 0, 32, 0 %,  ! and how many lines back a recall is, 0 none
+    UCB$L_TT_ESC = 96, 0, 32, 0 %,  ! an escape sequence being read: its state, and its length in the high word
+    UCB$L_TT_RECALL = 100, 0, 32, 0 %,  ! the recall buffer's slot the next line read goes in
+    UCB$L_TT_NRECALL = 104, 0, 32, 0 %,  ! how many lines the recall buffer holds
+    UCB$Q_TT_WRTQ = 108, 0, 64, 0 %,  ! a TELNET terminal's writes waiting to be sent, IRPs
+    UCB$L_TT_SEND = 116, 0, 32, 0 %,  ! its send on the port, an IRP, or 0
+    UCB$L_TT_OUTLEN = 120, 0, 32, 0 %,  ! the bytes in UCB$A_TT_OUT
+    UCB$L_TT_TELNET = 124, 0, 32, 0 %,  ! Telnet's state, the command and option it is in, a subnegotiation's count
+    UCB$L_TT_SB = 128, 0, 32, 0 %,  ! a subnegotiation's last four bytes
+    UCB$A_TT_TQE = 132, 0, 32, 1 %,  ! a timed read's timer queue entry, TQE$K_LENGTH bytes
+    UCB$A_TT_RING = 180, 0, 32, 1 %,  ! the type-ahead buffer, UCB$K_TT_TYPEAHEAD bytes
+    UCB$A_TT_RECALL = 436, 0, 32, 1 %,  ! the lines read, UCB$K_TT_RECALL of 256 bytes, each .ASCIC
+    UCB$A_TT_OUT = 4532, 0, 32, 1 %,  ! a TELNET terminal's echo and prompts, not yet sent, UCB$K_TT_OUTSIZE bytes
+    UCB$L_TT_CTRL = 5556, 0, 32, 0 %;  ! CTRL/C and CTRL/Y that came, for SERVICE: the console's interrupt sets them
 
 ! $IRPDEF
 LITERAL

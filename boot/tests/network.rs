@@ -17,7 +17,9 @@
 //! connects to a server here, through QEMU's guestfwd, accepts a
 //! connection from a client here, through hostfwd, and sends a datagram
 //! from here back twice, to its sender and connected to it; and SET HOST to
-//! itself, SHOW SYSTEM there, and LOGOUT; then TELNET, by a name DNS knows, to a port here,
+//! itself, a character at a time on a TELNET terminal, TNA1:, which has the
+//! console's width and page, as Telnet's NAWS gives them: SHOW TERMINAL,
+//! EDIT's keypad mode there, SHOW SYSTEM, and LOGOUT; then TELNET, by a name DNS knows, to a port here,
 //! through guestfwd, a line each way, and with /PORT to one there cannot be;
 //! then COPY/HTTP from web servers here, through guestfwd, to the data
 //! disk: by URL, by node and path, one that says 404, by URL with a
@@ -217,11 +219,10 @@ fn data_disk(path: &Path) {
 }
 
 /// Whether SHOW SYSTEM, in a remote login, lists itself in a process named
-/// for its connection's unit, _BGnn:, whose number depends on the sockets
-/// before it.
+/// for its terminal, _TNA1:.
 fn remote_login(text: &str) -> bool {
     text.lines()
-        .any(|l| l.contains(" _BG") && l.contains(":          CUR     4 SHOW.EXE"))
+        .any(|l| l.contains(" _TNA1:          CUR     4 SHOW.EXE"))
 }
 
 #[test]
@@ -357,9 +358,19 @@ fn network() {
         (String::new(), String::new())
     });
     vax.command("RUN TCPTEST");
+    vax.command("SET TERMINAL/WIDTH=100/PAGE=30");
     vax.command("SET HOST 10.0.2.15");
+    vax.command("SHOW TERMINAL");
+    // Keypad mode paints the screen there; CTRL/Z goes back to line mode.
+    vax.reply("EDIT SYS$MANAGER:WELCOME.TXT", "*");
+    vax.reply("C", "[EOB]");
+    let at = vax.text().len();
+    vax.console.write_all(b"\x1a").unwrap();
+    vax.wait_for("*", at, 60);
+    vax.command("QUIT");
     vax.command("SHOW SYSTEM");
     vax.command("LOGOUT");
+    vax.command("SET TERMINAL/WIDTH=80/PAGE=24");
     vax.reply("TELNET ECHO 7779", "hello from port 7779");
     vax.reply("netcat", "echo: netcat");
     // The host closing doesn't reach the guest through guestfwd: CTRL/Z.
@@ -447,6 +458,11 @@ fn network() {
         "datagram from the host",
         "TCPTEST: ok",
         "TCPIP$TELNET    LEF     4 TELNETD.EXE",
+        "Terminal: _TNA1:",
+        "   Input:    9600     LFfill:  0      Width: 100      Parity: None",
+        "   Output:   9600     CRfill:  0      Page:   30",
+        "   Wrap               Scope              Remote             Eightbit",
+        "\x1b=\x1b[2J",
         "echo: netcat",
         "%SYSTEM-F-BADPARAM",
         "%REM-S-END, control returned to the local node",

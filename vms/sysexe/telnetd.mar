@@ -1,18 +1,20 @@
         .TITLE  TELNETD The remote login server
-        .IDENT  /V0.2/
+        .IDENT  /V0.3/
 ;
 ; SET HOST's other end. TCPIP.EXE starts it at boot, as the process
-; TCPIP$TELNET. It listens on TCP port 23, a socket on TCPIP$DEVICE:, and,
-; for each connection it accepts, creates a process that runs DCL with
-; the connection's network unit, _BGnn:, as its SYS$INPUT, SYS$OUTPUT and
-; SYS$ERROR, named so, as VMS names a process on a terminal before anyone
-; logs in. DCL reads the commands that come and writes on the connection;
-; LOGOUT, or the line going, deletes the process, and its unit's last
-; channel closes the connection. The server keeps its channel until DCL
-; has assigned its own, which $GETDVI's DVI$_REFCNT shows.
+; TCPIP$TELNET. It listens on TCP port 23, a socket on TCPIP$DEVICE:, and
+; makes each connection it accepts a TELNET terminal, _TNAn:, with
+; IO$_TTY_PORT, as TCP/IP Services' TELNET server gives a remote login a
+; TNA device; the executive's terminal driver speaks Telnet on it. Then it
+; creates a process that runs DCL with the terminal as its SYS$INPUT,
+; SYS$OUTPUT and SYS$ERROR, named so, as VMS names a process on a
+; terminal before anyone logs in. DCL reads the commands typed there and
+; writes there; LOGOUT, or the line going, deletes the process, and the
+; terminal's last channel closes the connection. The server keeps its
+; channel until DCL has assigned its own, which $GETDVI's DVI$_REFCNT
+; shows.
 ; ponytail: no username or password: a remote login is SYSTEM's, as the
-; console's is; and the connection is DCL's terminal itself, where TCP/IP
-; Services' TELNET server gives it a TNA pseudo-terminal.
+; console's is.
 ;
         .LIBRARY "starlet.mlb"
         .LIBRARY "sysexe.mlb"
@@ -36,11 +38,11 @@ LCHAN:  .LONG   0                       ; the listening channel
 CHAN:   .LONG   0                       ; a connection's
 IOSB:   .BLKQ   1
 MS50:   .LONG   -500000, -1             ; 50 ms
-UNIT:   .LONG   6                       ; the unit's name, _BGnn:
+UNIT:   .LONG   6                       ; the terminal's name, _TNAn:
         .ADDRESS UNITNAME
 UNITNAME:
         .BLKB   6
-REFCNT: .LONG   0                       ; the unit's channels
+REFCNT: .LONG   0                       ; the terminal's channels
 NAMEITEM:                               ; $GETDVI's items: the name
         .WORD   6, DVI$_DEVNAM
         .ADDRESS UNITNAME, 0
@@ -62,13 +64,16 @@ REFITEM:                                ; the channels
         $QIOW_S CHAN=LCHAN, FUNC=#IO$_ACCESS!IO$M_ACCEPT, IOSB=IOSB, P4=#CHAN
         BSBW    STATUS
         BLBC    R0, 80$
+        $QIOW_S CHAN=CHAN, FUNC=#IO$_TTY_PORT, IOSB=IOSB
+        BSBW    STATUS
+        BLBC    R0, 80$
         BSBW    LOGIN
 80$:    $DASSGN_S CHAN=CHAN
         BRB     10$
 90$:    RET
 
-; LOGIN: creates the process for the connection on CHAN, and waits until
-; it has assigned a channel to the connection's unit, or 5 seconds.
+; LOGIN: creates the process for the terminal on CHAN, and waits until
+; it has assigned a channel to it, or 5 seconds.
 LOGIN:
         .JSB_ENTRY  SCRATCH=<R2>
         $GETDVIW_S CHAN=CHAN, ITMLST=NAMEITEM

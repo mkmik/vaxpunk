@@ -188,13 +188,13 @@ until the hardware or size changes; leave it.
 | --- | --- | --- |
 | 1 | Privileges done (step 1), files' and volumes' protection (step 2); left: mailboxes with no protection mask (ADR-0019, `mbdriver.mar`); a `$CREMBX` logical name takes `SYSNAM` until `LNM$JOB` (`mbdriver.mar`) | *Privileges, UICs and protection* |
 | 2 | No username or password: `TELNETD` logs in as `SYSTEM` (`telnetd.mar`, DESIGN-0003); the link address picks the command interpreter (ADR-0006); `SYS$DISK` and `SYSTARTUP_VMS.COM` set up by DCL, not `LOGINOUT` and `STARTUP` (DESIGN-0002) | *Login* |
-| 3 | One terminal: the line, the ASTs, the recall buffer and the characteristics live in `ttdriver.mar`, not the UCB, so `SET TERMINAL` and `SHOW TERMINAL` work on the console only, and of the characteristics only `NOECHO` changes what the driver does (`ttdriver.mar`, `lib/term.mar`); EDIT still writes on the console in a remote login (DESIGN-0003) | *Terminals* |
+| 3 | Terminals per UCB done, with `TNAn:` for `SET HOST` (step 3, ADR-0027); left: no `$BRKTHRU`; a hangup ends the terminal's reads and writes, not its process; at most 9 `TNAn:` units (`ttdriver.mar`, DESIGN-0002 *I/O*) | *Terminals*, and `LOGINOUT` for the hangup |
 | 4 | No quotas: `BIOLM`, `DIOLM`, `BYTLM` (ADR-0013), `BUFQUO` (ADR-0019), ASTs (DESIGN-0002 *ASTs*); `$GETJPI` has no CPU times, quotas or counts (`getjpi.mar`, `show.mar`) | *Quotas* |
 | 5 | One file system lock for every volume, no per-file lock, no priority boost (ADR-0020, `f11.mar`, DESIGN-0002 *Files*); no file sharing or locking, `$ERASE` deletes an open file (ADR-0009, `rms.mar`) | *Lock manager* |
 | 6 | DCL procedures: no `ON`, block `IF`, lexical functions, `OPEN` or `READ`; lines without `$` skipped (`dcl.mar`) | *Command language* |
 | 7 | `$ASCTIM`, `$NUMTIM` (PRD-0004's pilot, `numtim.b64`) and the date in `SHOW PROCESS` and `SHOW SYSTEM` done; left: `$BINTIM`, `SHOW TIME` | *Batch and print* |
 | 8 | Owners and protection done (step 2); left: a new file has the default protection, not the process's (`f11wrt.mar`), which `LOGINOUT` sets from the UAF; no version limit (`rms.mar`'s `$CREATE_DIR`) | *Privileges, UICs and protection* |
-| 9 | `BGA0:` and its units aren't seen by `$DEVICE_SCAN` and `$GETDVI`; a VCB stands for a disk in `$GETDVI` rather than its UCB (`netdriver.mar`, `getdvi.mar`, DESIGN-0002 *Devices*) | *Terminals*: `TNAnn:` units and every device listed from its UCB |
+| 9 | Terminals, `TNAn:` too, listed from their UCBs (step 3); left: `BGA0:` and its units aren't seen by `$DEVICE_SCAN` and `$GETDVI`; a VCB stands for a disk in `$GETDVI` rather than its UCB (`netdriver.mar`, `getdvi.mar`, DESIGN-0002 *Devices*) | Every device listed from its UCB |
 
 ### Tier 2: can crash or lose data
 
@@ -224,7 +224,7 @@ until the hardware or size changes; leave it.
 | 26 | One message table, no message files, `$PUTMSG` or `LIB$SIGNAL` (`getmsg.mar`, `cli.mar`, `dcl.mar`, DESIGN-0002) | Message files when a utility brings its own facility; `$PUTMSG` with condition handling |
 | 27 | `HELP` has no text (`help.mar`) | A help library, `HELPLIB.HLB` |
 | 28 | Mailbox writes never wait, no `IO$_WRITEOF` or attention ASTs (`mbdriver.mar`) | When a program needs them; the job controller may |
-| 29 | Terminal editing: insert mode only, recall buffer the console's and no `RECALL` (`ttdriver.mar`, DESIGN-0002); `SET HOST` is line mode with no Telnet options (`rtpad.mar`); EDIT lacks several commands (`edit.mar`) | The per-terminal UCB (tier 1) makes the recall buffer DCL's; character mode `SET HOST` with the terminal's characteristics |
+| 29 | Terminal editing and `SET HOST` done (step 3); left: the recall buffer is the terminal's, not DCL's, and there's no `RECALL`; no CTRL/O, CTRL/T, XON and XOFF or formatted writes (`ttdriver.mar`, DESIGN-0002); no `TELNET>` command mode at CTRL/] (`rtpad.mar`); EDIT lacks several commands (`edit.mar`) | DCL's own recall buffer with `RECALL`; the rest when a user misses it |
 | 30 | `$EXPREG` grows P0 only (`memory.mar`); image rundown frees every P0 page, mapped or not (`process.mar`) | When a program grows P1 or the walk shows in a profile |
 | 31 | The scheduler has no priority boosts or decay (`sched.mar`, DESIGN-0002) | Boosts on I/O completion and wakes, with decay; worth it once interactive users share the CPU with batch jobs |
 | 32 | The CLI: parse limits of 128 entities, 1 KB of values, a 512-byte line; the parse copied to a fixed address; the first `SET COMMAND` error ends the compile; at most 8 `SET COMMAND` files; a qualifier the syntax lacks is an error, not ignored; an entity present by default doesn't count; `$IMGACT` calls the image (ADR-0017, ADR-0018, `cli.mar`, `cdu.mar`, `process.mar`, DESIGN-0002) | When a command or a CLD file runs into one |
@@ -301,7 +301,7 @@ Each step ends in something `cargo test -p boot` checks.
    process with another UIC can't read a `(W)` file.
 3. **Terminals per UCB.** The console's state moves into its UCB;
    `IO$_SETMODE`/`SENSEMODE` characteristics, `SET TERMINAL`, `SHOW
-   TERMINAL` (done for the console); `TELNETD` makes `TNAnn:` units. *Visible:* EDIT's keypad mode
+   TERMINAL`; `TELNETD` makes `TNAn:` units (done, ADR-0027). *Visible:* EDIT's keypad mode
    works in a `SET HOST` session.
 4. **UAF and LOGINOUT.** `SYSUAF.DAT`, `AUTHORIZE`, `LOGINOUT`, `SET
    PASSWORD`; `STARTUP` runs `SYSTARTUP_VMS.COM`; the console and `TELNETD`

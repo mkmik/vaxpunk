@@ -315,9 +315,7 @@ PROMPT1:
         BRB     GOTLINE
 20$:    $QIOW_S CHAN=CHAN, FUNC=#IO$_READPROMPT, IOSB=IOSB, P1=DCL$LINE, P2=#LINESIZE, P5=#PROMPT, P6=#2
         BLBC    R0, QUIT
-        CMPW    IOSB, #SS$_LINKDISCON   ; SET HOST's: the line is gone
-        BEQL    QUIT
-        CMPW    IOSB, #SS$_LINKABORT
+        CMPW    IOSB, #SS$_HANGUP       ; a TELNET terminal's line is gone
         BEQL    QUIT
         MOVZWL  IOSB+2, R7
 ; GOTLINE: R7 = the length of the command in DCL$LINE.

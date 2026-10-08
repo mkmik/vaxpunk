@@ -1,30 +1,55 @@
         .TITLE  RTPAD   SET HOST and TELNET: a remote login
-        .IDENT  /V0.1/
+        .IDENT  /V0.2/
 ;
 ; DCL's SET HOST host runs this, NODE the host, as VMS's DCL ran
 ; RTPAD.EXE, and so does TELNET host [port] or TELNET host /PORT=n,
 ; as TCP/IP Services' TELNET takes them: an address, or a name in the
 ; hosts database or DNS (HOST_ADDR). It connects to TCP port 23
 ; there, a socket on TCPIP$DEVICE:, where another vaxpunk's TELNETD gives it
-; a DCL of its own, or to the port, whatever listens there, and passes lines
-; both ways: what comes
-; on the connection it writes on the terminal, and each line read on the
-; terminal, edited there, it sends with a CR LF.
-; When the other end closes, at its LOGOUT, or CTRL/Z is typed here, it
-; says so and returns.
-; ponytail: line at a time, the local terminal's editing and echo, no
-; Telnet option negotiation; good for DCL, not for EDIT's keypad mode.
+; a terminal of its own, or to the port, whatever listens there, and
+; passes what comes on the connection to the terminal, and what is typed
+; on the terminal to the connection.
+; It starts a line at a time: the terminal edits and echoes each line,
+; which goes with a CR LF. Once the other end offers to echo, Telnet's
+; WILL ECHO (RFC 857), it goes a character at a time, as a TELNET client
+; does: the terminal is PASTHRU and NOECHO, so that every key, CTRL/C and
+; CTRL/Y too, goes to the other end, which echoes it; and CTRL/] ends the
+; session. It agrees to suppress go ahead, sends the terminal's width and
+; page when asked, Telnet's NAWS (RFC 1073), and refuses the other
+; options. When the other end closes, at its LOGOUT, or CTRL/Z ends a line
+; here, or CTRL/], it says so and returns, the terminal as it was.
+; ponytail: no TELNET> command mode at CTRL/], which ends the session;
+; a key a read, a send a key.
 ;
         .LIBRARY "starlet.mlb"
         .LIBRARY "sysexe.mlb"
         $SSDEF
         $IODEF
+        $TTDEF
+        $TT2DEF
         $INETSYMDEF
         $SOCKADDRINDEF
 
         .EXTERNAL HOST_ADDR
 
 BUFSIZE = 1024
+CTRLZ = 26
+ESCAPE = 29                             ; CTRL/], which ends a session a character at a time
+IAC = 255                               ; Telnet's commands and options
+DONT = 254
+DO = 253
+WONT = 252
+WILL = 251
+SB = 250
+SE = 240
+OPT_ECHO = 1
+OPT_SGA = 3
+OPT_NAWS = 31
+; STATE, Telnet's, in what comes on the connection: after
+S_IAC = 1                               ; IAC
+S_OPT = 2                               ; IAC and a command that takes an option, in CMD
+S_SB = 3                                ; IAC SB, up to IAC SE
+S_SBIAC = 4                             ; and IAC in it
 
         .PSECT  DATA, NOEXE, WRT, LONG
 DEVICE: .ASCID  "TCPIP$DEVICE:"
@@ -50,11 +75,21 @@ PVALBUF:
 NIOSB:  .BLKQ   1                       ; the connection's read's
 TIOSB:  .BLKQ   1                       ; the terminal's
 IOSB:   .BLKQ   1                       ; a write's
+SAVED:  .BLKB   12                      ; the terminal's characteristics, as they were
+CHAR:   .BLKB   12                      ; and a character at a time
+NOTERM: .LONG   0, 0                    ; a read's terminators: none
+CHARMODE:                               ; 1: a character at a time
+        .LONG   0
+AGREED: .LONG   0                       ; the options answered: a bit each
+STATE:  .LONG   0                       ; Telnet's, S_
+CMD:    .LONG   0
 NBUF:   .BLKB   BUFSIZE                 ; what came on the connection
+OUT:    .BLKB   BUFSIZE                 ; and of it, what goes to the terminal
 TBUF:   .BLKB   BUFSIZE+2               ; a line typed, and its CR LF
+REPLY:  .BLKB   32                      ; a Telnet command to send
 
         .PSECT  CODE, EXE, LONG
-        .ENTRY  START, ^M<R2>
+        .ENTRY  START, ^M<R2, R3, R4, R5, R6>
         GETVALUE "NODE", NODE, NODE
         PUSHAL  ADDR
         PUSHAB  NODEBUF
@@ -90,6 +125,9 @@ TBUF:   .BLKB   BUFSIZE+2               ; a line typed, and its CR LF
         BLBC    R0, 90$
         $ASSIGN_S DEVNAM=INPUT, CHAN=TCHAN
         BLBC    R0, 90$
+        $QIOW_S CHAN=TCHAN, FUNC=#IO$_SENSEMODE, IOSB=IOSB, P1=SAVED, P2=#12
+        BSBW    STATUS
+        BLBC    R0, 90$
         BSBW    NREAD
         BSBW    TREAD
 10$:    $WFLOR_S EFN=#1, MASK=#6        ; flag 1 or 2
@@ -97,31 +135,56 @@ TBUF:   .BLKB   BUFSIZE+2               ; a line typed, and its CR LF
         BEQL    20$
         MOVZWL  NIOSB, R0
         BLBC    R0, 80$                 ; the other end closed
-        MOVZWL  NIOSB+2, R0
-        $QIOW_S CHAN=TCHAN, FUNC=#IO$_WRITEVBLK, IOSB=IOSB, P1=NBUF, P2=R0
-        BSBW    NREAD
-20$:    TSTW    TIOSB                   ; a line was typed
+        BSBW    NETIN
+        TSTL    R6
+        BEQL    15$
+        $QIOW_S CHAN=TCHAN, FUNC=#IO$_WRITEVBLK, IOSB=IOSB, P1=OUT, P2=R6
+15$:    BSBW    NREAD
+20$:    TSTW    TIOSB                   ; a key, or a line, was typed
         BEQL    10$
         MOVZWL  TIOSB, R0
         BLBC    R0, 80$
-        CMPB    TIOSB+4, #26            ; CTRL/Z: done here
+        TSTL    CHARMODE
+        BNEQ    40$
+        CMPB    TIOSB+4, #CTRLZ         ; CTRL/Z: done here
         BEQL    70$
         MOVZWL  TIOSB+2, R0
         MOVB    #13, TBUF[R0]
         MOVB    #10, TBUF+1[R0]
         ADDL2   #2, R0
-        $QIOW_S CHAN=NCHAN, FUNC=#IO$_WRITEVBLK, IOSB=IOSB, P1=TBUF, P2=R0
+        BRB     50$
+40$:    MOVZBL  TBUF, R0                ; a key
+        CMPB    R0, #ESCAPE
+        BEQL    70$
+        MOVL    #1, R1
+        CMPB    R0, #13                 ; a carriage return goes with a NUL,
+        BNEQ    42$
+        CLRB    TBUF+1
+        INCL    R1
+42$:    CMPB    R0, #IAC                ; an IAC doubled
+        BNEQ    44$
+        MOVB    R0, TBUF+1
+        INCL    R1
+44$:    MOVL    R1, R0
+50$:    $QIOW_S CHAN=NCHAN, FUNC=#IO$_WRITEVBLK, IOSB=IOSB, P1=TBUF, P2=R0
         BSBW    TREAD
         BRB     10$
 70$:    $CANCEL_S CHAN=NCHAN
         $QIOW_S CHAN=NCHAN, FUNC=#IO$_DEACCESS, IOSB=IOSB
+        TSTL    CHARMODE
+        BEQL    80$
+        PRINT   ""                      ; off the other end's line
 80$:    $CANCEL_S CHAN=TCHAN
-        PRINT   "%REM-S-END, control returned to the local node"
+        TSTL    CHARMODE
+        BEQL    85$
+        $QIOW_S CHAN=TCHAN, FUNC=#IO$_SETMODE, IOSB=IOSB, P1=SAVED, P2=#12
+85$:    PRINT   "%REM-S-END, control returned to the local node"
         MOVL    #SS$_NORMAL, R0
 90$:    RET
 
 ; NREAD, TREAD: read the connection, with event flag 1, and the
-; terminal, with 2, each into its buffer.
+; terminal, with 2, each into its buffer: a line, or a key without echo
+; and with no terminators once CHARMODE.
 NREAD:
         .JSB_ENTRY
         CLRQ    NIOSB
@@ -130,7 +193,146 @@ NREAD:
 TREAD:
         .JSB_ENTRY
         CLRQ    TIOSB
+        TSTL    CHARMODE
+        BNEQ    10$
         $QIO_S  EFN=#2, CHAN=TCHAN, FUNC=#IO$_READVBLK, IOSB=TIOSB, P1=TBUF, P2=#BUFSIZE
+        RSB
+10$:    $QIO_S  EFN=#2, CHAN=TCHAN, FUNC=#IO$_READVBLK!IO$M_NOECHO!IO$M_NOFILTR, IOSB=TIOSB, P1=TBUF, P2=#1, P4=#NOTERM
+        RSB
+
+; NETIN: takes Telnet's commands out of what came on the connection, NBUF,
+; NIOSB's count, and answers them; the rest goes in OUT, R6 bytes, for the
+; terminal. Uses R0-R6.
+NETIN:
+        .JSB_ENTRY  OUTPUT=<R6>, SCRATCH=<R2, R3, R4, R5>
+        MOVAB   NBUF, R2
+        MOVZWL  NIOSB+2, R3
+        CLRL    R6
+        TSTL    R3
+        BEQL    90$
+10$:    MOVZBL  (R2)+, R0
+        MOVL    STATE, R1
+        BNEQ    20$
+        CMPB    R0, #IAC
+        BNEQ    15$
+        MOVL    #S_IAC, STATE
+        BRB     80$
+15$:    MOVB    R0, OUT[R6]             ; data
+        INCL    R6
+        BRB     80$
+20$:    CLRL    STATE
+        CMPL    R1, #S_IAC
+        BNEQ    30$
+        CMPB    R0, #IAC
+        BEQL    15$
+        CMPB    R0, #SB
+        BNEQ    25$
+        MOVL    #S_SB, STATE
+        BRB     80$
+25$:    CMPB    R0, #WILL
+        BLSSU   80$
+        MOVL    R0, CMD
+        MOVL    #S_OPT, STATE
+        BRB     80$
+30$:    CMPL    R1, #S_OPT
+        BNEQ    40$
+        BSBB    OPTION
+        BRB     80$
+40$:    MOVL    #S_SB, STATE            ; a subnegotiation: skipped
+        CMPL    R1, #S_SBIAC
+        BEQL    45$
+        CMPB    R0, #IAC
+        BNEQ    80$
+        MOVL    #S_SBIAC, STATE
+        BRB     80$
+45$:    CMPB    R0, #SE
+        BNEQ    80$
+        CLRL    STATE
+80$:    SOBGTR  R3, 10$
+90$:    RSB
+
+; OPTION: R0 = the option of a WILL, WONT, DO or DONT, CMD. Answers it,
+; once: WILL ECHO with DO ECHO, and a character at a time from then on
+; (CHARS); WILL SGA with DO SGA; DO NAWS with WILL NAWS and the terminal's
+; size; any other WILL with DONT, DO with WONT. Uses R0, R1, R4, R5.
+OPTION:
+        .JSB_ENTRY  SCRATCH=<R4, R5>
+        MOVAB   REPLY, R4
+        MOVB    #IAC, (R4)+
+        CMPL    CMD, #WILL
+        BNEQ    30$
+        MOVB    #DO, (R4)+
+        CMPB    R0, #OPT_ECHO
+        BNEQ    10$
+        BBSS    #OPT_ECHO, AGREED, 90$
+        MOVB    R0, (R4)+
+        BSBB    SEND
+        BRW     CHARS
+10$:    CMPB    R0, #OPT_SGA
+        BNEQ    20$
+        BBSS    #OPT_SGA, AGREED, 90$
+        BRB     80$
+20$:    MOVB    #DONT, -1(R4)
+        BRB     80$
+30$:    CMPL    CMD, #DO
+        BNEQ    90$
+        MOVB    #WONT, (R4)+
+        CMPB    R0, #OPT_NAWS
+        BNEQ    80$
+        BBSS    #0, AGREED, 90$         ; bit 0: NAWS
+        MOVB    #WILL, -1(R4)
+        MOVB    R0, (R4)+
+        MOVB    #IAC, (R4)+
+        MOVB    #SB, (R4)+
+        MOVB    R0, (R4)+
+        MOVZWL  SAVED+2, R1             ; the width,
+        BSBB    SIZE
+        MOVZBL  SAVED+7, R1             ; and the page
+        BSBB    SIZE
+        MOVB    #IAC, (R4)+
+        MOVB    #SE, (R4)+
+        BRB     85$
+80$:    MOVB    R0, (R4)+
+85$:    BSBB    SEND
+90$:    RSB
+
+; SIZE: R1 = a size, put at R4 as NAWS has it, two bytes, high first,
+; an IAC doubled. Uses R1, R5.
+SIZE:
+        .JSB_ENTRY  OUTPUT=<R4>, SCRATCH=<R5>
+        ROTL    #-8, R1, R5
+        MOVB    R5, (R4)+
+        CMPB    R5, #IAC
+        BNEQ    10$
+        MOVB    R5, (R4)+
+10$:    MOVB    R1, (R4)+
+        CMPB    R1, #IAC
+        BNEQ    20$
+        MOVB    R1, (R4)+
+20$:    RSB
+
+; SEND: sends REPLY, up to R4, on the connection. Uses R0, R1.
+SEND:
+        .JSB_ENTRY
+        MOVAB   REPLY, R1
+        SUBL3   R1, R4, R1
+        $QIOW_S CHAN=NCHAN, FUNC=#IO$_WRITEVBLK, IOSB=IOSB, P1=REPLY, P2=R1
+        RSB
+
+; CHARS: goes a character at a time: makes the terminal PASTHRU and
+; NOECHO, and reads it again, a key, in place of the line being read.
+; Uses R0, R1.
+CHARS:
+        .JSB_ENTRY
+        MOVL    #1, CHARMODE
+        MOVQ    SAVED, CHAR
+        MOVL    SAVED+8, CHAR+8
+        BISL2   #TT$M_NOECHO, CHAR+4
+        BISL2   #TT2$M_PASTHRU, CHAR+8
+        $QIOW_S CHAN=TCHAN, FUNC=#IO$_SETMODE, IOSB=IOSB, P1=CHAR, P2=#12
+        $CANCEL_S CHAN=TCHAN
+        $WAITFR_S EFN=#2
+        BSBW    TREAD
         RSB
 
 ; GETPORT: the port in PVAL, in decimal, into PORT. R0 = SS$_NORMAL,

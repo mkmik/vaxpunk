@@ -27,7 +27,10 @@ when the PAL asks, on top of the kernel stack, and
 request packet to the device's driver, and its completion is a kernel
 mode AST, and
 [ADR-0019](../adr/0019-mailboxes.md): a mailbox is a unit of its own,
-`MBnn`, and process deletion writes the termination message to it.
+`MBnn`, and process deletion writes the termination message to it, and
+[ADR-0027](../adr/0027-terminals-are-ucbs-and-telnet-is-in-the-driver.md):
+each terminal is a UCB of its own, and a remote login's is a TELNET
+terminal the terminal driver drives over its connection.
 
 The executive borrows VMS's structure and names (PCB, `SCH$`, `MMG$`,
 `EXE$` routines, `SS$_` codes, the system service interfaces) but none of
@@ -47,7 +50,7 @@ its code.
 | `lnm.mar` | logical name tables, `$CRELNM`, `$DELLNM`, `$TRNLNM` |
 | `qio.mar` | the devices' UCBs, `$ASSIGN`, `$DASSGN`, `$CANCEL`, `$QIO`, `$QIOW`; IRPs, their completion and cancelling |
 | `mbdriver.mar` | mailboxes: `$CREMBX`, `$DELMBX`, their driver, and `MB$SEND`, which writes the termination message |
-| `ttdriver.mar` | the console's terminal driver: writes, queued reads and their editing, the console receive interrupt and the type-ahead buffer, CTRL/C and CTRL/Y ASTs |
+| `ttdriver.mar` | the terminal driver, a UCB per terminal, the console's and TELNET's: writes, queued reads, their terminators, editing and timers, the console receive interrupt and the type-ahead buffers, CTRL/C and CTRL/Y ASTs, Telnet on a TCP connection |
 | `getdvi.mar` | `$GETDVI`, `$GETDVIW`, `$DEVICE_SCAN`: what the devices are |
 | `syssrv.mar` | the system service vector, the `CHMK` and `CHME` dispatchers, `$CMEXEC`, where processes enter user and supervisor mode, and the stubs |
 | `f11.mar` | Files-11 ODS-2 volumes: the disks' VCBs, reading and writing their blocks, `FIL$MOUNT` and `$MOUNT`, headers, maps, directories, `FIL$OPENFILE` for the image activator |
@@ -501,6 +504,7 @@ The timer queue, `EXE$GQ_TQFL`, holds timer queue entries (`$TQEDEF`,
 | `TQE$C_TMSNGL` | `$SETIMR` | sets the event flag, waking the process if its wait is over, and, with an AST, becomes its ACB |
 | `TQE$C_WKSNGL` | `$SCHDWK` | `$WAKE`s the process |
 | `TQE$C_WKREPT` | `$SCHDWK` with a repeat time | the same, and goes back on the queue, due one repeat time later |
+| `TQE$C_SSSNGL` | a driver: a terminal's timed read | calls the driver's routine, `TQE$L_AST`, with R5 the entry, which is the driver's own, in its UCB; `EXE$RMVTQE` takes it off before |
 
 - `EXE$GQ_1ST_TIME` holds when the first entry is due, or never.
   `EXE$HWCLKINT` compares it with the system time on each tick and, once
@@ -760,8 +764,11 @@ table. VMS's logical name directories, hash table and mutex replace this.
 device's driver in an I/O request packet, and comes back to the process
 as a kernel mode AST.
 
-- **Devices.** Each has a unit control block (`$UCBDEF`) in `qio.mar`,
-  `IOC$AB_UCB`: `OPA0:`, `DKA0:`, `DKB0:`, `MDA0:`. A UCB holds a queue of
+- **Devices.** Each has a unit control block (`$UCBDEF`): the disks' in
+  `qio.mar`, `IOC$AB_UCB`, `DKA0:`, `DKB0:`, `MDA0:`; the terminals' in
+  `ttdriver.mar`'s list, `TT$GL_UNITS`, the console's, `OPA0:`, and a
+  TELNET terminal's, `TNAn:`, from pool; and the network's and the
+  mailboxes' units, cloned from pool too. A UCB holds a queue of
   IRPs waiting for the device, its driver's FDT routine, a disk's VCB, a
   disk driver's start I/O routine, which the file system calls too
   ([ADR-0015](../adr/0015-file-system-io-through-the-disk-driver.md)),
@@ -792,55 +799,106 @@ as a kernel mode AST.
   something else, is cleared and waited for again, as VMS's `$SYNCH`
   does.
 - **Cancelling.** `IOC$CANCEL` takes a process's IRPs for some of its
-  channels off the UCBs, and its CTRL/C and CTRL/Y ASTs off the console's
-  queues. `$CANCEL` completes the requests with `SS$_ABORT`, and leaves
+  channels off the UCBs, and its CTRL/C and CTRL/Y ASTs off the
+  terminals' queues (`TT$CANCEL`). `$CANCEL` completes the requests with `SS$_ABORT`, and leaves
   those done already. Rundown and `$DASSGN` free them unfinished, from
   its AST queue too: image rundown cancels the image's channels before
   its P0 goes, process rundown all of them, `$DASSGN` the one.
 
-The console's driver, `ttdriver.mar`, `TT$FDT`:
+The terminals' driver, `ttdriver.mar`, `TT$FDT`, as VMS's, the I/O
+User's Reference Manual's terminal chapter, with its function codes,
+modifiers and IOSB. Each terminal is a UCB of its own, with its
+characteristics, its type-ahead buffer, the line being read, its recall
+buffer and its CTRL/C and CTRL/Y ASTs ($UCBDEF's `UCB$x_TT_`): the
+console, `OPA0:`, which `TTY$INIT` makes at boot, and a TELNET terminal,
+`TNA1:` to `TNA9:`, for each remote login
+([ADR-0027](../adr/0027-terminals-are-ucbs-and-telnet-is-in-the-driver.md)).
 
-- **Writing**, for `IO$_WRITEVBLK`, `IO$_WRITELBLK` and `IO$_WRITEPBLK`,
-  is done in the FDT routine, from the caller's buffer, at `IPL$_SYNCH`,
-  so lines don't mix; then the request is completed with the byte count.
-  A write doesn't wait behind a read.
+- **Writing**, for `IO$_WRITEVBLK`, `IO$_WRITELBLK` and `IO$_WRITEPBLK`:
+  the console's is done in the FDT routine, from the caller's buffer, at
+  `IPL$_SYNCH`, so lines don't mix, then completed with the byte count.
+  A TELNET terminal's write is copied into its IRP, Telnet's IAC
+  doubled, and queued on the UCB's `UCB$Q_TT_WRTQ`; it is sent on the
+  connection in parts of up to 4 KB, one send on the port at a time,
+  since the TCP/IP component retries waiting sends in tag order, and is
+  completed once its last part is sent. A write doesn't wait behind a
+  read; a read doesn't start, nor write its prompt, while writes wait.
 - **Reading**, for `IO$_READVBLK`, `IO$_READLBLK`, `IO$_READPBLK`, and
-  `IO$_READPROMPT`, whose prompt is in p5 and p6, queues the IRP, with
-  the prompt copied in, on `OPA0:`'s UCB. The read at the head writes its
-  prompt and takes the characters typed, one at a time, editing the line
-  in the IRP; when it ends it is completed, with the line's length and,
-  in the IOSB's second longword, its terminator, a carriage return or
-  CTRL/Z, or none if the buffer filled, and the next read starts.
+  `IO$_READPROMPT`, whose prompt is in p5 and p6, queues the IRP on the
+  terminal's UCB, with its terminators, a 256-bit mask, and the prompt
+  copied in. The terminators are p4's: a quadword, whose first word is
+  0 for the short form, a mask of characters 0 to 31 in its second
+  longword, or else the length of a mask its second longword points to;
+  or VMS's default set, every control character but BS, TAB, LF, VT and
+  FF, and DEL. The read at the head writes its prompt and takes the
+  characters typed, one at a time, editing the line in the IRP; when it
+  ends it is completed, with the line's length and, in the IOSB's second
+  longword, its terminator and the terminator's size: none if the
+  buffer filled, the escape sequence's length for one. Then the next
+  read starts. Modifiers: `IO$M_NOECHO`, `IO$M_NOFILTR`, `IO$M_PURGE`
+  (empty the type-ahead buffer first), `IO$M_TIMED` (end with
+  `SS$_TIMEOUT` p3 seconds after the last character; 0 takes what is
+  typed ahead), `IO$M_TRMNOECHO`, `IO$M_ESCAPE` (an escape sequence ends
+  the read, and follows the line in the buffer; `SS$_BADESCAPE` for a
+  bad one, `SS$_PARTESCAPE` when it doesn't fit), `IO$M_CVTLOW`.
+  A timed read's timer is a timer queue entry in the UCB of the driver's
+  own kind, `TQE$C_SSSNGL`, which calls `TT$TIMEOUT`.
 - **Receiving.** `TTY$RCVINT`, the console receive interrupt
-  (DESIGN-0001), puts each character in `TTY$AB_RING`, the 256-byte
-  type-ahead buffer, and requests the `IPL$_IOPOST` software interrupt.
+  (DESIGN-0001), puts each character in the console's type-ahead
+  buffer, 256 bytes, and requests the `IPL$_IOPOST` software interrupt.
   When the buffer is full it leaves the rest in the UART and disables
-  its interrupt until `GETCHAR` takes a character, so the host waits, as
-  for a terminal's XOFF, and no line loses its end. `TTY$IOPOST` gives the buffer's
-  characters to the read at the head, at `IPL$_SYNCH`. CTRL/C and CTRL/Y
-  empty the buffer instead, and `TTY$IOPOST` delivers their ASTs.
+  its interrupt until a read takes a character, so the host waits, as
+  for a terminal's XOFF, and no line loses its end. `TTY$IOPOST` gives the
+  buffer's characters to the read at the head, at `IPL$_SYNCH`. A TELNET
+  terminal receives on its connection as much as its type-ahead buffer
+  has room for, so TCP's window waits instead; `TT$NETDONE` takes
+  Telnet's commands out of what comes. Unless the terminal is PASSALL or
+  PASTHRU, CTRL/C and CTRL/Y empty the buffer instead, for their ASTs,
+  and CTRL/X empties it and is CTRL/U.
 - **CTRL/C and CTRL/Y ASTs.** `IO$_SETMODE` with `IO$M_CTRLCAST` or
   `IO$M_CTRLYAST` puts the AST p1 names, with p2 its parameter, in p3's
-  mode or the caller's, the outer one, in an IRP on `TTY$Q_CTRLC` or
-  `TTY$Q_CTRLY`, in place of the one the channel had; p1 = 0 only takes
-  that off. `TTY$IOPOST` echoes `*CANCEL*` or `*INTERRUPT*` and queues
-  every AST on the key's queue, which takes it off: one enable, one AST.
-  CTRL/Y first completes the console reads of each process it goes to
-  with `SS$_CONTROLY`, so that DCL's own read isn't queued behind the
-  image's. CTRL/C with no AST is CTRL/Y; CTRL/Y with none does nothing.
-- **Editing**: each character is echoed, up to a carriage return, echoed
-  as CR LF, or a CTRL/Z, echoed as `*EXIT*`. The line is edited as on
-  VMS, in insert mode: the left and right arrows move the cursor, CTRL/H
-  to the start and CTRL/E to the end, DEL erases the character before the
-  cursor and CTRL/U all of them. The up arrow or CTRL/B recalls the line
-  read before, and again the one before that, up to 16, from
-  `TTY$AB_RECALL`, and the down arrow goes back. Other control characters
-  and escape sequences are dropped, and the buffer's last character ends
-  the read too. With `IO$M_NOECHO` nothing is echoed or recalled, and with
-  `IO$M_NOFILTR` every character but a carriage return goes in the buffer
-  as it is, so a read of one byte reads a key, as EDT's keypad mode does,
-  escape sequences a character at a time. Echo is the read's, so what is
-  typed ahead shows when a read takes it.
+  mode or the caller's, the outer one, in an IRP on the terminal's
+  `UCB$Q_TT_CTRLC` or `UCB$Q_TT_CTRLY`, in place of the one the channel
+  had; p1 = 0 only takes that off. The terminal echoes `*CANCEL*` or
+  `*INTERRUPT*` and queues every AST on the key's queue, which takes it
+  off: one enable, one AST. CTRL/Y first completes the terminal's reads
+  of each process it goes to with `SS$_CONTROLY`, so that DCL's own read
+  isn't queued behind the image's. CTRL/C with no AST is CTRL/Y; CTRL/Y
+  with none does nothing.
+- **Editing**, unless `IO$M_NOFILTR`, or the terminal's PASSALL or
+  PASTHRU, which put every character that isn't a terminator in the
+  buffer as it is: DEL erases the character before the cursor, CTRL/U
+  all of them, CTRL/R types the prompt and the line again. With line
+  editing, `TT2$M_EDITING`, as on VMS: the left and right arrows and
+  CTRL/D and CTRL/F move the cursor, CTRL/H to the start and CTRL/E to
+  the end, CTRL/J erases the word before it, CTRL/A changes between
+  insert and overstrike, whose default `TT2$M_INSERT` says; the up arrow
+  or CTRL/B recalls the line read before, and again the one before that,
+  up to 16, from the terminal's recall buffer, and the down arrow goes
+  back. Other escape sequences are dropped, and so are control
+  characters that aren't terminators, but TAB. A carriage return is
+  echoed as CR LF and CTRL/Z as `*EXIT*`, unless `IO$M_NOECHO` or
+  `IO$M_TRMNOECHO`; with `IO$M_NOECHO` nothing is echoed or recalled.
+  Echo is the read's, so what is typed ahead shows when a read takes it.
+- **Characteristics.** `IO$_SETMODE` without the AST modifiers sets
+  them, 8 or 12 bytes, as VMS's buffer has them: class, type, width,
+  `TT$` bits and page, `TT2$` bits; `IO$_SENSEMODE` and `$GETDVI` return
+  them, and with `IO$M_TYPEAHDCNT` it returns what the type-ahead buffer
+  holds. A TELNET terminal starts with the console's, and `TT$M_REMOTE`;
+  its width and page are what the client's NAWS says.
+- **TELNET terminals.** `IO$_TTY_PORT` on a connected TCP socket's
+  channel makes the connection a terminal: `TT$TNPORT` clones a UCB, the
+  first free `TNAn`, moves the connection and the channel to it, and the
+  network unit goes once no channel has it. The terminal speaks Telnet
+  (RFC 854): it offers `WILL ECHO` and `WILL SGA`, asks `DO NAWS`, takes
+  the window size from its subnegotiation, refuses any other option, and
+  turns a CR LF or CR NUL into a carriage return and IAC IP into CTRL/C.
+  Its echo and prompts go to a 1 KB buffer in the UCB, sent with the
+  writes, in order. When the connection closes or fails, the terminal
+  hangs up: its reads and writes end with `SS$_HANGUP`, which DCL
+  quits at. Once its last channel goes, `TT$CANCEL` closes the
+  connection, forgetting what the terminal has on the port
+  (`NET$TTCLOSE`), and frees the UCB.
 
 The disks' driver, in `f11.mar`, reads the blocks from LBN p3 into the
 p2 bytes at p1, for `IO$_READLBLK` and `IO$_READPBLK`, or writes them
@@ -854,19 +912,24 @@ made. `SS$_DRVERR`, the PAL's word that the device itself failed, adds
 one to the UCB's error count. The file system's own reads and writes go
 to `DK$STARTIO` too (*Files*).
 
-ponytail: the console's line being read is kept in `ttdriver.mar`, not
-its UCB, since there is one terminal; output waits for the console at
-`IPL$_SYNCH`, and a write in the middle of a line being read doesn't
-redisplay it. The recall buffer is the console's, shared by every
-reader, where VMS has DCL's own, with `RECALL`. No quotas. The
-terminal's characteristics, which `IO$_SETMODE` sets and
-`IO$_SENSEMODE` and `$GETDVI` return, are `ttdriver.mar`'s too,
-`TTY$AB_CHAR`; of them only `NOECHO` changes what the driver does.
+ponytail: the console's output waits for it at `IPL$_SYNCH`, and a
+write in the middle of a line being read doesn't redisplay it; a
+TELNET terminal's echo and prompts past its 1 KB buffer, while a send
+is on the port, are lost. The recall buffer is the terminal's, shared
+by its readers, where VMS has DCL's own, with `RECALL`. No CTRL/O,
+CTRL/T, XON and XOFF, formatted writes, `$BRKTHRU` or quotas; a hangup
+ends the reads and writes, not the process. Of the characteristics,
+`NOECHO`, `PASSALL`, `ESCAPE`, `EDITING`, `INSERT` and `PASTHRU` change
+what the driver does; the others, the width and page too, are kept for
+the programs that ask.
 
 ### Devices
 
-The devices are the disks, each a VCB (*Files*), and the console,
-`OPA0:`, numbered in that order: `DKA0:`, `DKB0:`, `MDA0:`, `OPA0:`.
+The devices are the disks, each a VCB (*Files*), and the terminals,
+`TT$GL_UNITS`, numbered in that order: `DKA0:`, `DKB0:`, `MDA0:`,
+`OPA0:`, then the `TNAn:` there are. What `$GETDVI` returns of a
+terminal is copied from its UCB at `IPL$_SYNCH`, since a TELNET terminal
+can go once the IPL drops.
 `getdvi.mar` answers what they are, with VMS's services, item codes and
 bits (`$DVIDEF`, `$DVSDEF`, `$DCDEF`, `$DEVDEF` in `starlet.mlb`):
 
@@ -878,23 +941,25 @@ bits (`$DVIDEF`, `$DVSDEF`, `$DCDEF`, `$DEVDEF` in `starlet.mlb`):
   `SS$_NOMOREDEV` after the last.
 - **`$GETDVI efn, chan, devnam, itmlst, iosb, astadr, astprm, nullarg`**
   finds the device `devnam` names, translated as `$ASSIGN` translates it
-  (`IOC$TRNDEVNAM`), or else `chan`'s, the console, and returns the items
+  (`IOC$TRNDEVNAM`), or else `chan`'s, and returns the items
   asked for: `DVI$_DEVCHAR` (`DEV$M_FOD`, `DIR`, `SHR`, `AVL`, `IDV`,
   `ODV`, `RND` for a disk, with `MNT` once mounted and `SWL` too if read
-  only; `REC`, `CCL`, `TRM`, `AVL`, `IDV`, `ODV` for the console),
-  `DEVCLASS`, `UNIT` (0), `ERRCNT` (a disk's UCB's, 0 for the
-  console), `DEVNAM`, `VOLNAM`, `FREEBLOCKS`
+  only; `REC`, `CCL`, `TRM`, `AVL`, `IDV`, `ODV` for a terminal),
+  `DEVCLASS`, `UNIT` and `REFCNT` (a terminal's, 0 for a disk), `ERRCNT`
+  (a disk's UCB's, 0 for a terminal), a terminal's `DEVTYPE`,
+  `DEVBUFSIZ`, `DEVDEPEND` and `DEVDEPEND2`, its characteristics,
+  `DEVNAM`, `VOLNAM`, `FREEBLOCKS`
   (`FIL$FREEBLOCKS`), `CLUSTER`, `MOUNTCNT`, the `AVL`, `MNT` and `SWL`
-  bits, and `STS`, `UCB$M_ONLINE` if the device is there: the console, a
+  bits, and `STS`, `UCB$M_ONLINE` if the device is there: a terminal, a
   mounted disk, the ramdisk once made, a PAL disk whose first block
   reads. Others are `SS$_BADPARAM`. It clears and sets the event flag and
   fills the IOSB, done at once; `$GETDVIW` is `$GETDVI`.
 
 DCL's `SHOW DEVICES` scans the disks, then the terminals, and asks
 `$GETDVIW` about each; with `/MOUNTED` it lists only the devices with a
-volume mounted. ponytail: a VCB, or none for the console, stands
-for the device rather than its UCB, which has no operation or
-reference counts, device type or `MAXBLOCK` yet; no ASTs.
+volume mounted. ponytail: a VCB, or none for a terminal, stands
+for the device rather than its UCB, which has no operation counts,
+device type or `MAXBLOCK` yet; no ASTs.
 
 ### Files
 
@@ -1180,7 +1245,7 @@ on the console with `PRINT` and `PRINTHEX` from `sysexe.mlb`, which call
 | `DCL` | the command interpreter (*The command interpreter*) |
 | `DIRECTORY` | `$PARSE`s its parameter, with `*.*;*` for what it leaves out, and lists the files `$SEARCH` finds: the directory, the names four to a line, how many; with `/OWNER` and `/PROTECTION`, a line each, with what `$OPEN` puts in a protection XAB: `[g,m]` and `(RWED,RWED,RE,)` |
 | `TYPE` | `$OPEN`s the file its parameter names and writes each record `$GET` reads on the console, a line each |
-| `EDIT` | EDT: `$GET`s the file its parameter names into a buffer, a line a record, and at its `*` prompt, read with `IO$_READPROMPT`, types the lines a range names (numbers, `.`, `BEGIN`, `END`, `WHOLE`, `REST`, `"text"` searches), `INSERT`s lines typed up to a CTRL/Z before it, `DELETE`s or `REPLACE`s them; `CHANGE` goes to keypad mode, which paints a VT100 screen, reads a key at a time with `IO$M_NOECHO` and `IO$M_NOFILTR` and changes the buffer, until CTRL/Z; `EXIT` `$CREATE`s the next version and `$PUT`s the buffer to it, `QUIT` doesn't |
+| `EDIT` | EDT: `$GET`s the file its parameter names into a buffer, a line a record, and at its `*` prompt, read with `IO$_READPROMPT`, types the lines a range names (numbers, `.`, `BEGIN`, `END`, `WHOLE`, `REST`, `"text"` searches), `INSERT`s lines typed up to a CTRL/Z before it, `DELETE`s or `REPLACE`s them; `CHANGE` goes to keypad mode, which paints a VT100 screen, reads a key at a time with `IO$M_NOECHO` and `IO$M_NOFILTR`, a terminator being a key too, and changes the buffer, until CTRL/Z, on the terminal `SYS$INPUT` is, the console or a remote login's; `EXIT` `$CREATE`s the next version and `$PUT`s the buffer to it, `QUIT` doesn't |
 | `COPY` | `$OPEN`s its first parameter, `$CREATE`s its second, with the first's attributes and its name and type for what the second leaves out, and copies each record with `$GET` and `$PUT`; with `/LOG`, `%COPY-S-COPIED, from copied to to (n records)`. `APPEND` runs it too, and it `$OPEN`s the second for `$PUT` instead, `%APPEND-S-APPENDED` |
 | `BACKUP` | with `/SAVE_SET` after its second parameter, `$PARSE`s its first, with `*.*;*` for what it leaves out, and writes each file `$SEARCH` finds, but directories and the save set, into a new save set in VMS's format: 32,256-byte `FIX` records, each a block with a header, its CRC-16 and the block's CRC-32, then a summary record, and for each file a `FILE` record of its name, IDs, allocation, owner, protection and record attributes, from `$OPEN`'s FAB and XABs, and `VBN` records of its blocks, which `$READ` reads. With `/SAVE_SET` after its first, it checks each block's CRCs and `$CREATE`s each file in the directory its second names, with its name, version, attributes, owner and protection, and `$WRITE`s its blocks; `/LIST` lists the save set as `BACKUP/LIST` does, and without a second parameter that is all. `/LOG`: `%BACKUP-S-COPIED` or `%BACKUP-S-CREATED` for each. VMS's BACKUP reads its save sets, and it VMS's. ponytail: no file to file copy, `/IMAGE` or `[...]`; no dates or XOR blocks |
 | `DELETE` | `$PARSE`s its parameter, which must give a version or `;*` (`%DELETE-E-DELVER`), and `$ERASE`s each file `$SEARCH` finds; with `/LOG`, `%DELETE-I-FILDEL, name deleted` for each |
@@ -1201,6 +1266,7 @@ on the console with `PRINT` and `PRINTHEX` from `sysexe.mlb`, which call
 | `TIMETEST` | checks that `$GETTIM` reads a time after 2026; waits for `$SETIMR`s, a delta and a time, 50 ms on, and that a cancelled one, due 200 ms on, never sets its flag; hibernates through three repeating `$SCHDWK` wakeups, cancels them, and checks that the next wakeup is a new one's |
 | `PROTTEST` | creates `PROTCHILD`, the same image as a process of UIC `[200,1]` with no privileges, and reads its termination message: it reads `DKB0:[000000]DATA.TXT`, then may not give it another owner, delete it or make a file in `[000000]`. `PROTTEST` says so, or returns the status that stopped it, `RMS$_PRV` |
 | `CTRLC` | enables a CTRL/C AST, starts a console read and waits for it; the AST, once CTRL/C is typed, `$CANCEL`s the read, which ends with `SS$_ABORT` |
+| `TTTEST` | reads the terminal: a timed read of 0 seconds and one of 1 end with `SS$_TIMEOUT`; then `IO$M_TYPEAHDCNT` counts the keys typed for it, a read with `IO$M_ESCAPE` ends at the escape sequence after `ab`, and one whose terminators, a mask's long form, are `x` alone reads `hello` |
 | `HELP` | describes DCL's verbs, from `DCL$TABLES`, which `build.rs` links into it as into DCL: with no topic, each verb and its parameters, then what DCL does without a verb; with one, each verb whose name starts with it, its parameters, the keywords a parameter may be and the qualifiers, then each syntax a qualifier or keyword leads to that has parameters or qualifiers of its own. ponytail: no text, which VMS's HELP reads from a help library |
 | `CLITEST` | parses commands with its own tables, `CLITEST.CLD`, and `CLI$DCL_PARSE`, and checks what `CLI$PRESENT` and `CLI$GET_VALUE` say of them: lists, concatenation, quoted strings, default values, negation, keywords and their values, a syntax switched to, abbreviations, each error, qualifiers given after a parameter's value, a `ROUTINE` `CLI$DISPATCH` calls, tables looked in first, and `LIB$GET_FOREIGN`'s line; run as a foreign command, or as a verb with an image, it writes the words after the verb |
 | `ASTTEST` | checks that `$DCLAST`'s AST is delivered as the service returns, or when `$SETAST` enables ASTs again; that one declared in an AST routine waits until it returns; that a `$SETIMR` AST's `$WAKE` ends a `$HIBER`; and that one delivered while it computes in user mode leaves every register as it was |

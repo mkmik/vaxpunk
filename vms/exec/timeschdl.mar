@@ -131,11 +131,17 @@ EXE$SWTIMINT::
 ; TQEXPIRE: R6 = a timer queue entry that is due, off the queue. Sets its
 ; event flag or wakes its process, if the process is still there, then
 ; frees it, or puts it back on the queue if it repeats. A $SETIMR entry
-; with an AST becomes its ACB, and goes on the process's AST queue.
+; with an AST becomes its ACB, and goes on the process's AST queue. A
+; driver's, TQE$C_SSSNGL, is its own: its routine is called.
 ; IPL$_SYNCH. Uses R0-R5.
 TQEXPIRE:
         .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5>
-        MOVAL   TQE$L_PID(R6), R2
+        CMPB    TQE$B_RQTYPE(R6), #TQE$C_SSSNGL
+        BNEQ    5$
+        MOVL    R6, R5
+        JSB     @TQE$L_AST(R6)
+        RSB
+5$:     MOVAL   TQE$L_PID(R6), R2
         CLRL    R3
         BSBW    EXE$NAMPID              ; R1 = its PCB
         BLBC    R0, 80$
@@ -186,6 +192,13 @@ EXE$INSTIMQ::
 20$:    MOVL    (R2), R2
         BRB     10$
 30$:    INSQUE  (R5), @4(R2)            ; before the first one due later
+        BRB     SETFIRST
+
+; EXE$RMVTQE: R5 = a timer queue entry that is on the queue. Takes it
+; off. IPL$_SYNCH. Uses R0 and R1.
+EXE$RMVTQE::
+        .JSB_ENTRY
+        REMQUE  (R5), R0
         BRB     SETFIRST
 
 ; EXE$RMVTIMQ: R0 = a PID, R1 = a mask of TQE$C_ request types, R2 = a
