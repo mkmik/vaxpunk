@@ -1,0 +1,286 @@
+MODULE TCPIP_NAME (IDENT = 'V0.1') =
+%TITLE 'TCPIP: SET and SHOW NAME_SERVICE'
+BEGIN
+!
+! The BIND resolver's configuration, as TCP/IP Services keeps it: logical
+! names, TCPIP$BIND_SERVER000 to 002 (one server each), TCPIP$BIND_DOMAIN,
+! TCPIP$BIND_DOMLST (the /PATH, its domains joined by commas),
+! TCPIP$BIND_RETRY, TCPIP$BIND_TIMEOUT, TCPIP$BIND_TRANSPORT and
+! TCPIP$BIND_STATE, in the process's table, or with /SYSTEM in the
+! system's. A resolver translates each through LNM$FILE_DEV, so the
+! process's name hides the system's (ADR-0026). TCPIP.MAR's tables call
+! SET_NAME_SERVICE and SHOW_NAME_SERVICE.
+! ponytail: /NOSERVER and /NOPATH take out all of them, not the ones
+! named; a fourth server is passed over; values are kept as text.
+!
+LIBRARY 'SYS$LIBRARY:STARLET';
+
+EXTERNAL ROUTINE
+    CLI$PRESENT,
+    CLI$GET_VALUE,
+    LIB$PUT_OUTPUT,
+    SYS$CRELNM,
+    SYS$DELLNM,
+    SYS$TRNLNM;
+
+MACRO
+    ! A string literal as its address and length.
+    T(S) = UPLIT BYTE (S), %CHARCOUNT(S) %;
+
+LITERAL
+    STATIC = %X'010E0000',              ! a static text descriptor's class and type
+    SERVERS = 3;
+
+BIND
+    PROCESS = %ASCID 'LNM$PROCESS_TABLE',
+    SYSTEM = %ASCID 'LNM$SYSTEM_TABLE',
+    FILE_DEV = %ASCID 'LNM$FILE_DEV',
+    SERVER = PLIT (%ASCID 'TCPIP$BIND_SERVER000', %ASCID 'TCPIP$BIND_SERVER001',
+        %ASCID 'TCPIP$BIND_SERVER002') : VECTOR,
+    DOMAIN = %ASCID 'TCPIP$BIND_DOMAIN',
+    DOMLST = %ASCID 'TCPIP$BIND_DOMLST',
+    RETRY = %ASCID 'TCPIP$BIND_RETRY',
+    TIMEOUT = %ASCID 'TCPIP$BIND_TIMEOUT',
+    TRANSPORT = %ASCID 'TCPIP$BIND_TRANSPORT',
+    STATE = %ASCID 'TCPIP$BIND_STATE';
+
+OWN
+    TRANS : VECTOR[256, BYTE],            ! a translation,
+    TRANSLEN : WORD,                      ! its length
+    ITEMS : VECTOR[4, LONG],            ! $TRNLNM's and $CRELNM's item list
+    VAL : VECTOR[256, BYTE],            ! a qualifier's value,
+    VALLEN : WORD,                      ! its length
+    VALDSC : VECTOR[2, LONG],
+    LINE : VECTOR[256, BYTE],           ! a line being written,
+    LINELEN,                            ! its length
+    LINEDSC : VECTOR[2, LONG];
+
+! GET table, name: name's equivalence string in the table, a descriptor,
+! into TRANS. TRANSLEN = its length, 0 if there is none.
+ROUTINE GET (TAB, NAME) : NOVALUE =
+    BEGIN
+    ITEMS[0] = 255 + LNM$_STRING ^ 16;
+    ITEMS[1] = TRANS;
+    ITEMS[2] = TRANSLEN;
+    ITEMS[3] = 0;
+    IF NOT SYS$TRNLNM(0, .TAB, .NAME, 0, ITEMS) THEN TRANSLEN = 0
+    END;
+
+! PUT table, name, text, length: makes name stand for the text in the
+! table. Returns $CRELNM's status.
+ROUTINE PUT (TAB, NAME, TEXT, LEN) =
+    BEGIN
+    ITEMS[0] = .LEN + LNM$_STRING ^ 16;
+    ITEMS[1] = .TEXT;
+    ITEMS[2] = 0;
+    ITEMS[3] = 0;
+    SYS$CRELNM(0, .TAB, .NAME, 0, ITEMS)
+    END;
+
+! VALUE qualifier: the qualifier's next value into VAL, VALLEN long.
+! Returns CLI$GET_VALUE's status: low bit clear when there are no more.
+ROUTINE VALUE (Q) =
+    BEGIN
+    VALDSC[0] = 255 + STATIC;
+    VALDSC[1] = VAL;
+    CLI$GET_VALUE(.Q, VALDSC, VALLEN)
+    END;
+
+! SAME text, length: 1 if TRANS is the text, in any case, else 0.
+ROUTINE SAME (TEXT, LEN) =
+    BEGIN
+    IF .LEN NEQ .TRANSLEN THEN RETURN 0;
+    INCR I FROM 0 TO .LEN - 1 DO
+        BEGIN
+        LOCAL
+            A,
+            B;
+        A = CH$RCHAR(CH$PLUS(.TEXT, .I));
+        B = .TRANS[.I];
+        IF .A GEQU %C'a' AND .A LEQU %C'z' THEN A = .A - 32;
+        IF .B GEQU %C'a' AND .B LEQU %C'z' THEN B = .B - 32;
+        IF .A NEQ .B THEN RETURN 0
+        END;
+    1
+    END;
+
+! ADDSERVER table: VAL as the next server in the table, unless it is one
+! already. Returns a status.
+ROUTINE ADDSERVER (TAB) =
+    BEGIN
+    INCR I FROM 0 TO SERVERS - 1 DO
+        BEGIN
+        GET(.TAB, .SERVER[.I]);
+        IF .TRANSLEN EQL 0 THEN RETURN PUT(.TAB, .SERVER[.I], VAL, .VALLEN);
+        IF SAME(VAL, .VALLEN) THEN RETURN SS$_NORMAL
+        END;
+    SS$_NORMAL
+    END;
+
+! ADDPATH table: VAL after the table's /PATH, and a comma. Returns a
+! status.
+ROUTINE ADDPATH (TAB) =
+    BEGIN
+    GET(.TAB, DOMLST);
+    IF .TRANSLEN + 1 + .VALLEN GTR 255 THEN RETURN SS$_BADPARAM;
+    IF .TRANSLEN NEQ 0 THEN
+        BEGIN
+        TRANS[.TRANSLEN] = %C',';
+        TRANSLEN = .TRANSLEN + 1
+        END;
+    CH$MOVE(.VALLEN, VAL, TRANS[.TRANSLEN]);
+    PUT(.TAB, DOMLST, TRANS, .TRANSLEN + .VALLEN)
+    END;
+
+! SET_NAME_SERVICE: SET NAME_SERVICE [/[NO]SERVER=(host,...)]
+! [/[NO]DOMAIN=domain] [/[NO]PATH=(domain,...)] [/RETRY=n] [/TIMEOUT=n]
+! [/TRANSPORT=protocol] [/ENABLE | /DISABLE] [/SYSTEM]: the process's
+! resolver configuration, or with /SYSTEM the system's, which needs
+! SYSNAM. A server or a /PATH domain goes after those there already.
+GLOBAL ROUTINE SET_NAME_SERVICE =
+    BEGIN
+    LOCAL
+        TAB,
+        S;
+    TAB = PROCESS;
+    IF CLI$PRESENT(%ASCID 'SYSTEM') THEN TAB = SYSTEM;
+    S = CLI$PRESENT(%ASCID 'SERVER');
+    IF .S EQL CLI$_NEGATED
+    THEN
+        INCR I FROM 0 TO SERVERS - 1 DO SYS$DELLNM(.TAB, .SERVER[.I], 0)
+    ELSE IF .S
+    THEN
+        WHILE VALUE(%ASCID 'SERVER') DO
+            BEGIN
+            S = ADDSERVER(.TAB);
+            IF NOT .S THEN RETURN .S
+            END;
+    S = CLI$PRESENT(%ASCID 'DOMAIN');
+    IF .S EQL CLI$_NEGATED
+    THEN
+        SYS$DELLNM(.TAB, DOMAIN, 0)
+    ELSE IF .S
+    THEN
+        BEGIN
+        VALUE(%ASCID 'DOMAIN');
+        S = PUT(.TAB, DOMAIN, VAL, .VALLEN);
+        IF NOT .S THEN RETURN .S
+        END;
+    S = CLI$PRESENT(%ASCID 'PATH');
+    IF .S EQL CLI$_NEGATED
+    THEN
+        SYS$DELLNM(.TAB, DOMLST, 0)
+    ELSE IF .S
+    THEN
+        WHILE VALUE(%ASCID 'PATH') DO
+            BEGIN
+            S = ADDPATH(.TAB);
+            IF NOT .S THEN RETURN .S
+            END;
+    INCR I FROM 0 TO 2 DO
+        BEGIN
+        BIND
+            QUALS = PLIT (%ASCID 'RETRY', %ASCID 'TIMEOUT', %ASCID 'TRANSPORT') : VECTOR,
+            NAMES = PLIT (RETRY, TIMEOUT, TRANSPORT) : VECTOR;
+        IF CLI$PRESENT(.QUALS[.I])
+        THEN
+            BEGIN
+            VALUE(.QUALS[.I]);
+            S = PUT(.TAB, .NAMES[.I], VAL, .VALLEN);
+            IF NOT .S THEN RETURN .S
+            END
+        END;
+    IF CLI$PRESENT(%ASCID 'ENABLE') THEN RETURN PUT(.TAB, STATE, T('ENABLED'));
+    IF CLI$PRESENT(%ASCID 'DISABLE') THEN RETURN PUT(.TAB, STATE, T('DISABLED'));
+    SS$_NORMAL
+    END;
+
+! ADD text, length: appends the text to LINE.
+ROUTINE ADD (TEXT, LEN) : NOVALUE =
+    BEGIN
+    LOCAL
+        N;
+    N = MIN(.LEN, 255 - .LINELEN);
+    CH$MOVE(.N, .TEXT, LINE[.LINELEN]);
+    LINELEN = .LINELEN + .N
+    END;
+
+! SAY: writes LINE, and empties it.
+ROUTINE SAY : NOVALUE =
+    BEGIN
+    LINEDSC[0] = .LINELEN + STATIC;
+    LINEDSC[1] = LINE;
+    LIB$PUT_OUTPUT(LINEDSC);
+    LINELEN = 0
+    END;
+
+! SHOWITEM label, length, table, name, default: writes a line of SHOW
+! NAME_SERVICE's, the label and what name stands for in the table, or the
+! default, a .ASCIC string, if it stands for nothing.
+ROUTINE SHOWITEM (LBL, LEN, TAB, NAME, DEFAULT : REF VECTOR[, BYTE]) : NOVALUE =
+    BEGIN
+    ADD(.LBL, .LEN);
+    GET(.TAB, .NAME);
+    IF .TRANSLEN NEQ 0
+    THEN
+        ADD(TRANS, .TRANSLEN)
+    ELSE IF .DEFAULT NEQ 0
+    THEN
+        ADD(DEFAULT[1], .DEFAULT[0]);
+    SAY()
+    END;
+
+! SHOWTABLE heading, length, table, system: SHOW NAME_SERVICE's part for
+! the table: its state, then each setting; the system's say the
+! defaults of those it hasn't.
+ROUTINE SHOWTABLE (HEAD, HLEN, TAB, SYS) : NOVALUE =
+    BEGIN
+    BIND
+        UDP = UPLIT BYTE (%ASCIC 'UDP'),
+        TWO = UPLIT BYTE (%ASCIC '2'),
+        FIVE = UPLIT BYTE (%ASCIC '5');
+    ADD(.HEAD, .HLEN);
+    SAY();
+    SAY();
+    ADD(T('  State:     '));
+    IF .SYS THEN ADD(T('Started, '));
+    GET(.TAB, STATE);
+    IF SAME(T('DISABLED')) THEN ADD(T('Disabled')) ELSE ADD(T('Enabled'));
+    SAY();
+    SAY();
+    SHOWITEM(T('  Transport: '), .TAB, TRANSPORT, (IF .SYS THEN UDP ELSE 0));
+    SHOWITEM(T('  Domain:    '), .TAB, DOMAIN, 0);
+    SHOWITEM(T('  Retry:     '), .TAB, RETRY, (IF .SYS THEN TWO ELSE 0));
+    SHOWITEM(T('  Timeout:   '), .TAB, TIMEOUT, (IF .SYS THEN FIVE ELSE 0));
+    ADD(T('  Servers:   '));
+    INCR I FROM 0 TO SERVERS - 1 DO
+        BEGIN
+        GET(.TAB, .SERVER[.I]);
+        IF .TRANSLEN NEQ 0 THEN
+            BEGIN
+            IF .I NEQ 0 THEN ADD(T(', '));
+            ADD(TRANS, .TRANSLEN)
+            END
+        END;
+    SAY();
+    SHOWITEM(T('  Path:      '), .TAB, DOMLST, 0)
+    END;
+
+! SHOW_NAME_SERVICE: SHOW NAME_SERVICE: the domain a resolver uses, then
+! the system's configuration and the process's, as TCP/IP Services
+! shows them.
+GLOBAL ROUTINE SHOW_NAME_SERVICE =
+    BEGIN
+    ADD(T('BIND Resolver Parameters'));
+    SAY();
+    SAY();
+    SHOWITEM(T(' Local domain: '), FILE_DEV, DOMAIN, 0);
+    SAY();
+    SHOWTABLE(T(' System'), SYSTEM, 1);
+    SAY();
+    SHOWTABLE(T(' Process'), PROCESS, 0);
+    SS$_NORMAL
+    END;
+
+END
+ELUDOM

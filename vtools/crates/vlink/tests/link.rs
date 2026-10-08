@@ -165,6 +165,29 @@ fn branch_ranges() {
     }
 }
 
+/// A BL that can't reach a fixed address, as an image's call to the
+/// executive, goes through a veneer at the end of the code: `ldr x16, 8;
+/// br x16` and the address. Each address gets one veneer.
+#[test]
+fn veneers() {
+    let main = module(
+        "MAIN",
+        ".EXTERNAL SYS\n.PSECT $CODE$\nSTART:: bl SYS\nbl SYS\nb SYS\nret\n.END START",
+    );
+    let sys = module("SYS", "SYS == 0x40037618\n.END");
+    let linked = link(&[main, sys], vlink::DEFAULT_BASE).unwrap();
+    let code = &linked.image.sections[0];
+    let word = |i: usize| u32::from_le_bytes(code.data[4 * i..4 * i + 4].try_into().unwrap());
+    let veneer = (field(word(0), 0, 26)) as usize;
+    assert_eq!(field(word(1), 0, 26), veneer as i64 - 4);
+    assert_eq!(field(word(2), 0, 26), veneer as i64 - 8);
+    assert_eq!(code.data.len(), veneer + 16);
+    assert_eq!(word(veneer / 4), 0x5800_0050);
+    assert_eq!(word(veneer / 4 + 1), 0xd61f_0200);
+    assert_eq!(code.data[veneer + 8..], 0x4003_7618u64.to_le_bytes());
+    assert!(linked.map.contains("$VENEER$"), "{}", linked.map);
+}
+
 #[test]
 fn value_checks() {
     let target = module(

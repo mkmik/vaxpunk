@@ -15,6 +15,9 @@ $ !   TCPIP SET CONFIGURATION INTERFACE WE0 /HOST=a.b.c.d /NETWORK_MASK=m.m.m.m
 $ !   TCPIP SET ROUTE /DEFAULT /GATEWAY=g.g.g.g /PERMANENT
 $ INITIALIZE MDA0: RAM
 $ MOUNT MDA0: RAM
+$ ! The BIND resolver asks Google's public DNS server, for a host the
+$ ! hosts database hasn't: PING, TELNET and nslookup.
+$ TCPIP SET NAME_SERVICE /SERVER=8.8.8.8 /SYSTEM
 $ ! Last, it mounts the data disk, which nothing at boot needs, if an
 $ ! INITIALIZE DKB0: made a volume there;
 $ ! on a blank one, MOUNT fails with NOHOMEBLK, and the procedure ends.

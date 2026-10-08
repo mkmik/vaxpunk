@@ -51,6 +51,7 @@ kept current, like a design document.
 | [ADR-0023](adr/0023-calling-standard.md) | The vaxpunk calling standard is AAPCS64 with VMS's argument count, sign extension and self-describing frames, and MACRO-32 is compiled onto it as AMACRO compiled it onto Alpha's | Accepted |
 | [ADR-0024](adr/0024-sockets-have-tcpip-services-qio-interface.md) | Sockets have TCP/IP Services' $QIO interface, with UDP and raw ICMP, and the interface is set with its ioctls | Proposed |
 | [ADR-0025](adr/0025-hosts-database.md) | Host names come from TCP/IP Services' hosts database, which the programs read themselves, and TCP/IP's files live on the ramdisk, which the startup procedure fills at each boot | Proposed |
+| [ADR-0026](adr/0026-name-service-and-nslookup.md) | The resolver's configuration is TCP/IP Services' TCPIP$BIND_* logical names, which SET NAME_SERVICE sets, and the programs ask DNS themselves, through a resolver every image links | Proposed |
 
 ### PRDs
 

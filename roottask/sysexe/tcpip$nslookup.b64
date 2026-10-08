@@ -1,0 +1,401 @@
+MODULE TCPIP$NSLOOKUP (MAIN = NSLOOKUP, IDENT = 'V0.2') =
+%TITLE 'NSLOOKUP: asks a DNS server for a host'
+BEGIN
+!
+! nslookup, the BIND tool TCP/IP Services defines as a foreign command,
+! nslookup :== $SYS$SYSTEM:TCPIP$NSLOOKUP.EXE (ADR-0026):
+!
+!     nslookup [-PORT=n] [-TIMEOUT=s] [-RETRY=n] [host [server]]
+!
+! It asks the server, an address or a name in the hosts database, or else
+! those the resolver's logical names say, for the host's address, or for
+! an address's name, through lib/dns.b64's resolver, and writes the answer
+! as BIND 9's nslookup does. With no host it reads one from each line
+! after > until EXIT or CTRL/Z.
+! ponytail: A and PTR queries only, so no IPv6; no SET or SERVER commands
+! at the > prompt.
+!
+LIBRARY 'SYS$LIBRARY:STARLET';
+
+EXTERNAL ROUTINE
+    DNS_ADDSERVER,
+    DNS_CLOSE,
+    DNS_FIND,
+    DNS_GET16,
+    DNS_INIT,
+    DNS_NAMEAT,
+    DNS_SEARCH,
+    DNS_SERVERS,
+    INET_ADDR,
+    LIB$GET_FOREIGN,
+    LIB$GET_INPUT,
+    LIB$PUT_OUTPUT;
+
+EXTERNAL
+    DNS_PORT,
+    DNS_TIMEOUT,
+    DNS_TRIES,
+    DNS_NSERVERS,
+    DNS_SERVER : VECTOR[, LONG],
+    DNS_SNAME : VECTOR[, BYTE],
+    DNS_SNLEN : VECTOR,
+    DNS_ANSWERED,
+    DNS_RCODE,
+    DNS_REPLY : VECTOR[, BYTE],
+    DNS_RLEN;
+
+MACRO
+    ! A string literal as its address and length.
+    T(S) = UPLIT BYTE (S), %CHARCOUNT(S) %;
+
+LITERAL
+    STATIC = %X'010E0000',              ! a static text descriptor's class and type
+    TYPE_A = 1,
+    TYPE_CNAME = 5,
+    TYPE_PTR = 12,
+    TAB = 9;
+
+BIND
+    RCODES = UPLIT BYTE ('NOERROR FORMERR SERVFAILNXDOMAINNOTIMP  REFUSED ') : VECTOR[, BYTE];
+
+OWN
+    ARGS : VECTOR[256, BYTE],           ! the command's words,
+    ARGSLEN : WORD,                     ! their length
+    ARGSDSC : VECTOR[2, LONG],
+    AT,                                 ! the next word: where it starts,
+    WLEN,                               ! and its length
+    NAME : VECTOR[256, BYTE],           ! a name read from the answer,
+    NAMELEN,
+    TARGET : VECTOR[256, BYTE],         ! another,
+    TARGETLEN,
+    LINE : VECTOR[256, BYTE],           ! a line being written,
+    LINELEN,
+    LINEDSC : VECTOR[2, LONG];
+
+! ADD text, length: appends the text to LINE, as much as fits.
+ROUTINE ADD (TEXT, LEN) : NOVALUE =
+    BEGIN
+    LOCAL
+        N;
+    N = MIN(.LEN, 255 - .LINELEN);
+    CH$MOVE(.N, .TEXT, LINE[.LINELEN]);
+    LINELEN = .LINELEN + .N
+    END;
+
+! ADDCHAR character: appends it to LINE.
+ROUTINE ADDCHAR (C) : NOVALUE =
+    IF .LINELEN LSS 255 THEN
+        BEGIN
+        LINE[.LINELEN] = .C;
+        LINELEN = .LINELEN + 1
+        END;
+
+! ADDDEC n: appends n, 0 or more, in decimal.
+ROUTINE ADDDEC (V) : NOVALUE =
+    BEGIN
+    LOCAL
+        BUF : VECTOR[24, BYTE],
+        I,
+        X;
+    I = 24;
+    X = .V;
+    DO
+        BEGIN
+        I = .I - 1;
+        BUF[.I] = %C'0' + .X MOD 10;
+        X = .X / 10
+        END
+    UNTIL .X EQL 0;
+    ADD(BUF[.I], 24 - .I)
+    END;
+
+! ADDADDR address: appends the address at it, four bytes, a.b.c.d.
+ROUTINE ADDADDR (A : REF VECTOR[, BYTE]) : NOVALUE =
+    INCR I FROM 0 TO 3 DO
+        BEGIN
+        IF .I NEQ 0 THEN ADDCHAR(%C'.');
+        ADDDEC(.A[.I])
+        END;
+
+! SAY: writes LINE, and empties it.
+ROUTINE SAY : NOVALUE =
+    BEGIN
+    LINEDSC[0] = .LINELEN + STATIC;
+    LINEDSC[1] = LINE;
+    LIB$PUT_OUTPUT(LINEDSC);
+    LINELEN = 0
+    END;
+
+! UPCASE character: it, a capital if it is a small letter.
+ROUTINE UPCASE (C) =
+    IF .C GEQU %C'a' AND .C LEQU %C'z' THEN .C - 32 ELSE .C;
+
+! NUMBER text, length: the decimal number the text is, or -1.
+ROUTINE NUMBER (TEXT, LEN) =
+    BEGIN
+    LOCAL
+        N;
+    IF .LEN EQL 0 OR .LEN GTR 9 THEN RETURN -1;
+    N = 0;
+    INCR I FROM 0 TO .LEN - 1 DO
+        BEGIN
+        LOCAL
+            C;
+        C = CH$RCHAR(CH$PLUS(.TEXT, .I));
+        IF .C LSSU %C'0' OR .C GTRU %C'9' THEN RETURN -1;
+        N = .N * 10 + .C - %C'0'
+        END;
+    .N
+    END;
+
+! WORD: the next word of ARGS, from AT, blanks and quotes left out: AT
+! where it starts, WLEN its length, 0 at the end.
+ROUTINE WORD : NOVALUE =
+    BEGIN
+    WHILE .AT LSS .ARGSLEN AND (.ARGS[.AT] EQL %C' ' OR .ARGS[.AT] EQL %C'"') DO
+        AT = .AT + 1;
+    WLEN = 0;
+    WHILE .AT + .WLEN LSS .ARGSLEN AND .ARGS[.AT + .WLEN] NEQ %C' '
+        AND .ARGS[.AT + .WLEN] NEQ %C'"' DO
+        WLEN = .WLEN + 1
+    END;
+
+! RECORDS: writes DNS_REPLY's answers of the types nslookup shows, A,
+! CNAME and PTR, as BIND 9's nslookup writes them.
+ROUTINE RECORDS : NOVALUE =
+    BEGIN
+    LOCAL
+        P;
+    P = 12;
+    INCR I FROM 1 TO DNS_GET16(4) DO
+        BEGIN
+        P = DNS_NAMEAT(.P, NAME, NAMELEN);
+        IF .P LSS 0 THEN RETURN;
+        P = .P + 4
+        END;
+    INCR I FROM 1 TO DNS_GET16(6) DO
+        BEGIN
+        LOCAL
+            RTYPE,
+            RDLEN;
+        P = DNS_NAMEAT(.P, NAME, NAMELEN);
+        IF .P LSS 0 OR .P + 10 GTR .DNS_RLEN THEN RETURN;
+        RTYPE = DNS_GET16(.P);
+        RDLEN = DNS_GET16(.P + 8);
+        P = .P + 10;
+        IF .P + .RDLEN GTR .DNS_RLEN THEN RETURN;
+        IF .RTYPE EQL TYPE_A AND .RDLEN EQL 4
+        THEN
+            BEGIN
+            ADD(T('Name:'));
+            ADDCHAR(TAB);
+            ADD(NAME, .NAMELEN);
+            SAY();
+            ADD(T('Address: '));
+            ADDADDR(DNS_REPLY[.P]);
+            SAY()
+            END
+        ELSE IF (.RTYPE EQL TYPE_CNAME OR .RTYPE EQL TYPE_PTR)
+            AND DNS_NAMEAT(.P, TARGET, TARGETLEN) GEQ 0
+        THEN
+            BEGIN
+            ADD(NAME, .NAMELEN);
+            ADDCHAR(TAB);
+            IF .RTYPE EQL TYPE_CNAME THEN ADD(T('canonical name = ')) ELSE ADD(T('name = '));
+            ADD(TARGET, .TARGETLEN);
+            ADDCHAR(%C'.');
+            SAY()
+            END;
+        P = .P + .RDLEN
+        END
+    END;
+
+! HEADER: the server that answered, as BIND 9's nslookup names it.
+ROUTINE HEADER : NOVALUE =
+    BEGIN
+    ADD(T('Server:'));
+    ADDCHAR(TAB);
+    ADDCHAR(TAB);
+    ADD(DNS_SNAME[.DNS_ANSWERED * 256], .DNS_SNLEN[.DNS_ANSWERED]);
+    SAY();
+    ADD(T('Address:'));
+    ADDCHAR(TAB);
+    ADDADDR(DNS_SERVER[.DNS_ANSWERED]);
+    ADDCHAR(%C'#');
+    ADDDEC(.DNS_PORT);
+    SAY();
+    SAY()
+    END;
+
+! LOOKUP text, length: the host's address, or the name of the address the
+! text is, from the servers, written as BIND 9's nslookup writes it.
+ROUTINE LOOKUP (TEXT, LEN) : NOVALUE =
+    BEGIN
+    LOCAL
+        ADDR : VECTOR[4, BYTE],
+        S;
+    IF INET_ADDR(.LEN, .TEXT, ADDR)
+    THEN
+        BEGIN
+        ! An address: its name, d.c.b.a.in-addr.arpa's PTR record.
+        DECR I FROM 3 TO 0 DO
+            BEGIN
+            ADDDEC(.ADDR[.I]);
+            ADDCHAR(%C'.')
+            END;
+        ADD(T('in-addr.arpa'));
+        S = DNS_SEARCH(.LINELEN, LINE, TYPE_PTR);
+        LINELEN = 0
+        END
+    ELSE
+        S = DNS_SEARCH(.LEN, .TEXT, TYPE_A);
+    IF .S EQL SS$_TIMEOUT
+    THEN
+        BEGIN
+        ADD(T(';; connection timed out; no servers could be reached'));
+        SAY();
+        SAY();
+        RETURN
+        END;
+    IF .S
+    THEN
+        BEGIN
+        HEADER();
+        IF (.DNS_REPLY[2] AND 4) EQL 0
+        THEN
+            BEGIN
+            ADD(T('Non-authoritative answer:'));
+            SAY()
+            END;
+        RECORDS();
+        SAY();
+        RETURN
+        END;
+    HEADER();
+    IF .DNS_RCODE EQL 0
+    THEN
+        ADD(T('*** Can''t find '))
+    ELSE
+        ADD(T('** server can''t find '));
+    ADD(.TEXT, .LEN);
+    ADD(T(': '));
+    IF .DNS_RCODE EQL 0
+    THEN
+        ADD(T('No answer'))
+    ELSE IF .DNS_RCODE LEQ 5
+    THEN
+        BEGIN
+        LOCAL
+            N;
+        N = 8;
+        WHILE .RCODES[.DNS_RCODE * 8 + .N - 1] EQL %C' ' DO N = .N - 1;
+        ADD(RCODES[.DNS_RCODE * 8], .N)
+        END
+    ELSE
+        ADDDEC(.DNS_RCODE);
+    SAY();
+    SAY()
+    END;
+
+! NSLOOKUP: the command. Returns SS$_NORMAL, or why it can't ask.
+ROUTINE NSLOOKUP =
+    BEGIN
+    LOCAL
+        S,
+        HOST,
+        HOSTLEN;
+    ARGSDSC[0] = 255 + STATIC;
+    ARGSDSC[1] = ARGS;
+    S = LIB$GET_FOREIGN(ARGSDSC, 0, ARGSLEN);
+    IF NOT .S THEN RETURN .S;
+    DNS_INIT();
+    HOST = 0;
+    HOSTLEN = 0;
+    AT = 0;
+    WHILE (WORD(); .WLEN NEQ 0) DO
+        BEGIN
+        LOCAL
+            W;
+        W = ARGS[.AT];
+        IF CH$RCHAR(.W) EQL %C'-' AND .WLEN GTR 1
+        THEN
+            BEGIN
+            ! -PORT=n, -TIMEOUT=s, -RETRY=n: an option, in any case.
+            LOCAL
+                EQ,
+                K,
+                N;
+            EQ = CH$FIND_CH(.WLEN, .W, %C'=');
+            IF CH$FAIL(.EQ) THEN K = .WLEN ELSE K = CH$DIFF(.EQ, .W);
+            N = -1;
+            IF NOT CH$FAIL(.EQ) THEN N = NUMBER(CH$PLUS(.EQ, 1), .WLEN - .K - 1);
+            INCR I FROM 1 TO .K - 1 DO
+                CH$WCHAR(UPCASE(CH$RCHAR(CH$PLUS(.W, .I))), CH$PLUS(.W, .I));
+            IF CH$EQL(.K, .W, 5, UPLIT BYTE ('-PORT')) AND .N GTR 0 AND .N LEQ 65535
+            THEN
+                DNS_PORT = .N
+            ELSE IF CH$EQL(.K, .W, 8, UPLIT BYTE ('-TIMEOUT')) AND .N GTR 0
+            THEN
+                DNS_TIMEOUT = .N
+            ELSE IF CH$EQL(.K, .W, 6, UPLIT BYTE ('-RETRY')) AND .N GTR 0
+            THEN
+                DNS_TRIES = .N
+            ELSE
+                BEGIN
+                ADD(T('*** Invalid option: '));
+                ADD(CH$PLUS(.W, 1), .WLEN - 1);
+                SAY()
+                END
+            END
+        ELSE IF .HOSTLEN EQL 0
+        THEN
+            BEGIN
+            HOST = .W;
+            HOSTLEN = .WLEN
+            END
+        ELSE IF .DNS_NSERVERS EQL 0
+        THEN
+            BEGIN
+            IF NOT DNS_ADDSERVER(.WLEN, .W)
+            THEN
+                BEGIN
+                ADD(T('nslookup: couldn''t get address for '''));
+                ADD(.W, .WLEN);
+                ADD(T(''': not found'));
+                SAY();
+                RETURN SS$_NORMAL
+                END
+            END;
+        AT = .AT + .WLEN
+        END;
+    DNS_SERVERS();
+    IF .DNS_NSERVERS EQL 0
+    THEN
+        BEGIN
+        ADD(T('*** Default servers are not available'));
+        SAY();
+        RETURN SS$_NORMAL
+        END;
+    IF .HOSTLEN NEQ 0
+    THEN
+        LOOKUP(.HOST, .HOSTLEN)
+    ELSE
+        ! No host: one from each line after >, until EXIT or CTRL/Z.
+        WHILE 1 DO
+            BEGIN
+            ARGSDSC[0] = 255 + STATIC;
+            IF NOT LIB$GET_INPUT(ARGSDSC, %ASCID '> ', ARGSLEN) THEN EXITLOOP;
+            AT = 0;
+            WORD();
+            IF .WLEN EQL 4 AND (CH$EQL(4, ARGS[.AT], 4, UPLIT BYTE ('EXIT'))
+                OR CH$EQL(4, ARGS[.AT], 4, UPLIT BYTE ('exit')))
+            THEN
+                EXITLOOP;
+            IF .WLEN NEQ 0 THEN LOOKUP(ARGS[.AT], .WLEN)
+            END;
+    DNS_CLOSE();
+    SS$_NORMAL
+    END;
+
+END
+ELUDOM

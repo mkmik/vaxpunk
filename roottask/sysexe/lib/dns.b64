@@ -1,0 +1,431 @@
+MODULE DNS (IDENT = 'V0.1') =
+%TITLE 'DNS: the BIND resolver, for the system disk''s programs'
+BEGIN
+!
+! build.rs links this module into each image, as it does lib/inet.mar.
+! It asks DNS servers over UDP, as TCP/IP Services' BIND resolver does,
+! configured by the logical names SET NAME_SERVICE defines, the
+! process's or else the system's (ADR-0026): TCPIP$BIND_SERVER000 to 002,
+! TCPIP$BIND_DOMAIN, TCPIP$BIND_DOMLST, TCPIP$BIND_TIMEOUT and
+! TCPIP$BIND_RETRY, and vaxpunk's TCPIP$BIND_PORT. HOST_ADDR asks
+! DNS_ADDR for a name the hosts database hasn't; nslookup calls the
+! rest. A name without a dot is tried in each /PATH domain, or else in
+! the domain, then as it is. Each server gets TCPIP$BIND_TIMEOUT seconds,
+! 5 by default, and all of them TCPIP$BIND_RETRY tries, 2 by default.
+! ponytail: A and PTR queries, over UDP only; no cache, as on VMS.
+!
+LIBRARY 'SYS$LIBRARY:STARLET';
+
+EXTERNAL ROUTINE
+    HOST_LOCAL,
+    SYS$ASSIGN,
+    SYS$CANCEL,
+    SYS$CANTIM,
+    SYS$DASSGN,
+    SYS$GETTIM,
+    SYS$QIO,
+    SYS$QIOW,
+    SYS$SETIMR,
+    SYS$TRNLNM,
+    SYS$WAITFR,
+    SYS$WFLOR;
+
+LITERAL
+    MAXSERVERS = 3,
+    MAXMSG = 512,                       ! a UDP message, at most
+    TYPE_A = 1,
+    NXDOMAIN = 3,
+    TCPIP$_NORECORD = %X'076486A0';     ! information not found
+
+BIND
+    FILE_DEV = %ASCID 'LNM$FILE_DEV',
+    SERVERNAME = PLIT (%ASCID 'TCPIP$BIND_SERVER000', %ASCID 'TCPIP$BIND_SERVER001',
+        %ASCID 'TCPIP$BIND_SERVER002') : VECTOR;
+
+GLOBAL
+    DNS_PORT,                           ! the servers' UDP port, 53
+    DNS_TIMEOUT,                        ! seconds each server gets
+    DNS_TRIES,                          ! times the servers are tried
+    DNS_NSERVERS,                       ! the servers:
+    DNS_SERVER : VECTOR[MAXSERVERS, LONG], ! their addresses,
+    DNS_SNAME : VECTOR[MAXSERVERS * 256, BYTE], ! their names as given, 256 bytes each,
+    DNS_SNLEN : VECTOR[MAXSERVERS],     ! and those names' lengths
+    DNS_ANSWERED,                       ! the server that answered
+    DNS_RCODE,                          ! the answer's RCODE: 0, or 3 for NXDOMAIN
+    DNS_REPLY : VECTOR[MAXMSG, BYTE],   ! the answer,
+    DNS_RLEN,                           ! its length
+    DNS_TRY : VECTOR[256, BYTE],        ! the name it answers,
+    DNS_TRYLEN;                         ! its length
+
+OWN
+    CHAN : WORD,                        ! the UDP socket, or 0
+    IOSB : VECTOR[4, WORD],
+    RIOSB : VECTOR[4, WORD],            ! a read's
+    SOCKET : INITIAL(TCPIP$C_UDP + TCPIP$C_DGRAM ^ 16 + TCPIP$C_AF_INET ^ 24),
+    SIN : VECTOR[16, BYTE],             ! a server's socket name,
+    SINITEM : VECTOR[2, LONG],          ! as an item_list_2
+    DELTA,                              ! DNS_TIMEOUT, as a delta time
+    TRANS : VECTOR[256, BYTE],          ! a logical name's translation,
+    TRANSLEN : WORD,                    ! its length
+    ITEMS : VECTOR[4, LONG],
+    QUERY : VECTOR[MAXMSG, BYTE],       ! the question,
+    QLEN,                               ! its length,
+    QID;                                ! its identifier
+
+! NUMBER text, length: the decimal number the text is, or -1.
+ROUTINE NUMBER (TEXT, LEN) =
+    BEGIN
+    LOCAL
+        N;
+    IF .LEN EQL 0 OR .LEN GTR 9 THEN RETURN -1;
+    N = 0;
+    INCR I FROM 0 TO .LEN - 1 DO
+        BEGIN
+        LOCAL
+            C;
+        C = CH$RCHAR(CH$PLUS(.TEXT, .I));
+        IF .C LSSU %C'0' OR .C GTRU %C'9' THEN RETURN -1;
+        N = .N * 10 + .C - %C'0'
+        END;
+    .N
+    END;
+
+! LOGICAL name: TRANS, TRANSLEN long, what the logical name stands for,
+! the process's or else the system's; TRANSLEN 0 if it stands for nothing.
+ROUTINE LOGICAL (LNAME) : NOVALUE =
+    BEGIN
+    ITEMS[0] = 255 + LNM$_STRING ^ 16;
+    ITEMS[1] = TRANS;
+    ITEMS[2] = TRANSLEN;
+    ITEMS[3] = 0;
+    IF NOT SYS$TRNLNM(0, FILE_DEV, .LNAME, 0, ITEMS) THEN TRANSLEN = 0
+    END;
+
+! SETTING name, default: the number the logical name stands for, or the
+! default if it stands for none above 0.
+ROUTINE SETTING (LNAME, DEFAULT) =
+    BEGIN
+    LOCAL
+        N;
+    LOGICAL(.LNAME);
+    N = NUMBER(TRANS, .TRANSLEN);
+    IF .N LEQ 0 THEN .DEFAULT ELSE .N
+    END;
+
+! DNS_INIT: no servers, and the port, timeout and tries the logical names
+! say, or 53, 5 and 2.
+GLOBAL ROUTINE DNS_INIT : NOVALUE =
+    BEGIN
+    DNS_NSERVERS = 0;
+    DNS_PORT = SETTING(%ASCID 'TCPIP$BIND_PORT', 53);
+    DNS_TIMEOUT = SETTING(%ASCID 'TCPIP$BIND_TIMEOUT', 5);
+    DNS_TRIES = SETTING(%ASCID 'TCPIP$BIND_RETRY', 2)
+    END;
+
+! DNS_ADDSERVER len, adr: the server whose address, or name in the hosts
+! database, is the len characters at adr, as the next one; a fourth is
+! passed over. Returns SS$_NORMAL, or HOST_LOCAL's status.
+GLOBAL ROUTINE DNS_ADDSERVER (LEN, TEXT) =
+    BEGIN
+    LOCAL
+        S;
+    IF .DNS_NSERVERS GEQ MAXSERVERS OR .LEN GTR 255 THEN RETURN SS$_NORMAL;
+    S = HOST_LOCAL(.LEN, .TEXT, DNS_SERVER[.DNS_NSERVERS]);
+    IF .S
+    THEN
+        BEGIN
+        CH$MOVE(.LEN, .TEXT, DNS_SNAME[.DNS_NSERVERS * 256]);
+        DNS_SNLEN[.DNS_NSERVERS] = .LEN;
+        DNS_NSERVERS = .DNS_NSERVERS + 1
+        END;
+    .S
+    END;
+
+! DNS_SERVERS: the servers TCPIP$BIND_SERVER000 to 002 name, those of
+! them that are addresses or in the hosts database, unless there are
+! servers already.
+GLOBAL ROUTINE DNS_SERVERS : NOVALUE =
+    IF .DNS_NSERVERS EQL 0
+    THEN
+        INCR I FROM 0 TO MAXSERVERS - 1 DO
+            BEGIN
+            LOGICAL(.SERVERNAME[.I]);
+            IF .TRANSLEN NEQ 0 THEN DNS_ADDSERVER(.TRANSLEN, TRANS)
+            END;
+
+! DNS_GET16 offset: the 16-bit number in DNS_REPLY there, high byte first.
+GLOBAL ROUTINE DNS_GET16 (OFF) =
+    .DNS_REPLY[.OFF] * 256 + .DNS_REPLY[.OFF + 1];
+
+! DNS_NAMEAT offset, buffer, length: the name at the offset in DNS_REPLY,
+! its labels joined by dots, in the buffer, 256 bytes, and its length in
+! the fullword length. Returns the offset past the name there, or -1 if
+! it isn't one.
+GLOBAL ROUTINE DNS_NAMEAT (OFF, BUF : REF VECTOR[, BYTE], BLEN : REF VECTOR) =
+    BEGIN
+    LOCAL
+        P,
+        NEXT,
+        HOPS,
+        N;
+    P = .OFF;
+    NEXT = -1;
+    HOPS = 0;
+    N = 0;
+    WHILE 1 DO
+        BEGIN
+        LOCAL
+            L;
+        IF .P GEQ .DNS_RLEN THEN RETURN -1;
+        L = .DNS_REPLY[.P];
+        IF .L EQL 0 THEN EXITLOOP;
+        IF (.L AND %X'C0') EQL %X'C0'
+        THEN
+            BEGIN
+            ! A pointer to the rest of the name, earlier in the message.
+            IF .P + 1 GEQ .DNS_RLEN THEN RETURN -1;
+            IF .NEXT LSS 0 THEN NEXT = .P + 2;
+            HOPS = .HOPS + 1;
+            IF .HOPS GTR 32 THEN RETURN -1;
+            P = (.L AND %X'3F') * 256 + .DNS_REPLY[.P + 1]
+            END
+        ELSE
+            BEGIN
+            IF .P + 1 + .L GTR .DNS_RLEN OR .N + .L + 1 GTR 255 THEN RETURN -1;
+            IF .N NEQ 0
+            THEN
+                BEGIN
+                BUF[.N] = %C'.';
+                N = .N + 1
+                END;
+            CH$MOVE(.L, DNS_REPLY[.P + 1], BUF[.N]);
+            N = .N + .L;
+            P = .P + 1 + .L
+            END
+        END;
+    BLEN[0] = .N;
+    IF .NEXT LSS 0 THEN NEXT = .P + 1;
+    .NEXT
+    END;
+
+! DNS_FIND type: the offset in DNS_REPLY of the data of its first answer
+! of the type, or -1 if it has none.
+GLOBAL ROUTINE DNS_FIND (RTYPE) =
+    BEGIN
+    LOCAL
+        NAME : VECTOR[256, BYTE],
+        NLEN,
+        P;
+    P = 12;
+    INCR I FROM 1 TO DNS_GET16(4) DO
+        BEGIN
+        P = DNS_NAMEAT(.P, NAME, NLEN);
+        IF .P LSS 0 THEN RETURN -1;
+        P = .P + 4
+        END;
+    INCR I FROM 1 TO DNS_GET16(6) DO
+        BEGIN
+        P = DNS_NAMEAT(.P, NAME, NLEN);
+        IF .P LSS 0 OR .P + 10 GTR .DNS_RLEN THEN RETURN -1;
+        IF DNS_GET16(.P) EQL .RTYPE THEN RETURN .P + 10;
+        P = .P + 10 + DNS_GET16(.P + 8)
+        END;
+    -1
+    END;
+
+! LABELS text, length: the name in the text, its labels each after its
+! length, at the end of QUERY. Returns 0 if a label is longer than 63.
+ROUTINE LABELS (TEXT, LEN) =
+    BEGIN
+    LOCAL
+        I;
+    I = 0;
+    WHILE .I LSS .LEN DO
+        BEGIN
+        LOCAL
+            N;
+        N = 0;
+        WHILE .I + .N LSS .LEN AND CH$RCHAR(CH$PLUS(.TEXT, .I + .N)) NEQ %C'.' DO
+            N = .N + 1;
+        IF .N GTR 63 OR .QLEN + .N + 6 GTR MAXMSG THEN RETURN 0;
+        IF .N NEQ 0
+        THEN
+            BEGIN
+            QUERY[.QLEN] = .N;
+            CH$MOVE(.N, CH$PLUS(.TEXT, .I), QUERY[.QLEN + 1]);
+            QLEN = .QLEN + .N + 1
+            END;
+        I = .I + .N + 1
+        END;
+    1
+    END;
+
+! ASK type: asks the servers for DNS_TRY's records of the type, each
+! server DNS_TIMEOUT seconds, all of them DNS_TRIES times. Returns 1 with
+! the answer in DNS_REPLY and DNS_ANSWERED the server; 0 if none answers,
+! or the name can't be asked.
+ROUTINE ASK (QTYPE) =
+    BEGIN
+    LOCAL
+        NOW : VECTOR[2, LONG];
+    SYS$GETTIM(NOW);
+    QID = .NOW[0] AND %X'FFFF';
+    CH$FILL(0, 12, QUERY);
+    QUERY[0] = .QID / 256;
+    QUERY[1] = .QID MOD 256;
+    QUERY[2] = 1;                       ! RD: recursion desired
+    QUERY[5] = 1;                       ! one question
+    QLEN = 12;
+    IF NOT LABELS(DNS_TRY, .DNS_TRYLEN) THEN RETURN 0;
+    QUERY[.QLEN] = 0;
+    QUERY[.QLEN + 1] = 0;
+    QUERY[.QLEN + 2] = .QTYPE;
+    QUERY[.QLEN + 3] = 0;
+    QUERY[.QLEN + 4] = 1;               ! class IN
+    QLEN = .QLEN + 5;
+    DELTA = -.DNS_TIMEOUT * 10000000;
+    INCR K FROM 1 TO .DNS_TRIES DO
+        INCR S FROM 0 TO .DNS_NSERVERS - 1 DO
+            BEGIN
+            LOCAL
+                ST;
+            SIN[0] = TCPIP$C_AF_INET;
+            SIN[2] = .DNS_PORT / 256;
+            SIN[3] = .DNS_PORT MOD 256;
+            CH$MOVE(4, DNS_SERVER[.S], SIN[4]);
+            ST = SYS$QIOW(0, .CHAN, IO$_WRITEVBLK, IOSB, 0, 0, QUERY, .QLEN, SINITEM, 0, 0, 0);
+            IF .ST THEN ST = .IOSB[0];
+            IF .ST
+            THEN
+                BEGIN
+                SYS$SETIMR(2, DELTA, 0, 0);
+                ! Answers until ours, or the time is up.
+                WHILE 1 DO
+                    BEGIN
+                    RIOSB[0] = 0;
+                    IF NOT SYS$QIO(1, .CHAN, IO$_READVBLK, RIOSB, 0, 0, DNS_REPLY, MAXMSG, 0, 0,
+                        0, 0)
+                    THEN
+                        EXITLOOP;
+                    SYS$WFLOR(1, 6);
+                    IF .RIOSB[0] EQL 0
+                    THEN
+                        BEGIN
+                        SYS$CANCEL(.CHAN);
+                        SYS$WAITFR(1);
+                        EXITLOOP
+                        END;
+                    DNS_RLEN = .RIOSB[1];
+                    IF .RIOSB[0] AND .DNS_RLEN GEQ 12 AND DNS_GET16(0) EQL .QID
+                        AND (.DNS_REPLY[2] AND %X'80') NEQ 0
+                    THEN
+                        BEGIN
+                        SYS$CANTIM(0, 0);
+                        DNS_ANSWERED = .S;
+                        RETURN 1
+                        END
+                    END
+                END
+            END;
+    0
+    END;
+
+! DNS_SEARCH len, adr, type: asks the servers for the records of the type
+! of the name that is the len characters at adr, as the search rules say:
+! for an A record, a name without a dot in each domain first, then as it
+! is. Returns SS$_NORMAL, with the answer that has one in DNS_REPLY, the
+! name it answers in DNS_TRY; SS$_TIMEOUT if no server answers; or
+! TCPIP$_NORECORD, with the last answer's DNS_RCODE, if none has one.
+GLOBAL ROUTINE DNS_SEARCH (LEN, TEXT, QTYPE) =
+    BEGIN
+    LOCAL
+        DOMAINS : VECTOR[256, BYTE],
+        DLEN,
+        D,
+        S;
+    IF .LEN GTR 200 OR .LEN EQL 0 THEN RETURN TCPIP$_NORECORD;
+    IF .CHAN EQL 0
+    THEN
+        BEGIN
+        SINITEM[0] = SIN$K_LENGTH + TCPIP$C_SOCK_NAME ^ 16;
+        SINITEM[1] = SIN;
+        S = SYS$ASSIGN(%ASCID 'TCPIP$DEVICE:', CHAN, 0, 0);
+        IF NOT .S THEN RETURN .S;
+        S = SYS$QIOW(0, .CHAN, IO$_SETMODE, IOSB, 0, 0, SOCKET, 0, 0, 0, 0, 0);
+        IF .S THEN S = .IOSB[0];
+        IF NOT .S
+        THEN
+            BEGIN
+            SYS$DASSGN(.CHAN);
+            CHAN = 0;
+            RETURN .S
+            END
+        END;
+    DLEN = 0;
+    IF .QTYPE EQL TYPE_A AND CH$FAIL(CH$FIND_CH(.LEN, .TEXT, %C'.'))
+    THEN
+        BEGIN
+        LOGICAL(%ASCID 'TCPIP$BIND_DOMLST');
+        IF .TRANSLEN EQL 0 THEN LOGICAL(%ASCID 'TCPIP$BIND_DOMAIN');
+        DLEN = .TRANSLEN;
+        CH$MOVE(.DLEN, TRANS, DOMAINS)
+        END;
+    D = 0;
+    DNS_RCODE = NXDOMAIN;
+    WHILE .D LEQ .DLEN + 1 DO
+        BEGIN
+        CH$MOVE(.LEN, .TEXT, DNS_TRY);
+        DNS_TRYLEN = .LEN;
+        IF .D LSS .DLEN
+        THEN
+            BEGIN
+            ! The next domain, up to a comma.
+            LOCAL
+                DL;
+            DL = 0;
+            WHILE .D + .DL LSS .DLEN AND .DOMAINS[.D + .DL] NEQ %C',' DO DL = .DL + 1;
+            DL = MIN(.DL, 254 - .LEN);
+            DNS_TRY[.LEN] = %C'.';
+            CH$MOVE(.DL, DOMAINS[.D], DNS_TRY[.LEN + 1]);
+            DNS_TRYLEN = .LEN + 1 + .DL;
+            D = .D + .DL + 1
+            END
+        ELSE
+            D = .DLEN + 2;              ! then as it is
+        IF NOT ASK(.QTYPE) THEN RETURN SS$_TIMEOUT;
+        DNS_RCODE = .DNS_REPLY[3] AND 15;
+        IF .DNS_RCODE EQL 0 AND DNS_FIND(.QTYPE) GEQ 0 THEN RETURN SS$_NORMAL;
+        IF .DNS_RCODE NEQ 0 AND .DNS_RCODE NEQ NXDOMAIN THEN EXITLOOP
+        END;
+    TCPIP$_NORECORD
+    END;
+
+! DNS_CLOSE: closes the socket DNS_SEARCH opened, if it did.
+GLOBAL ROUTINE DNS_CLOSE : NOVALUE =
+    IF .CHAN NEQ 0
+    THEN
+        BEGIN
+        SYS$DASSGN(.CHAN);
+        CHAN = 0
+        END;
+
+! DNS_ADDR len, adr, result: the address DNS gives the host whose name is
+! the len characters at adr, from the servers the logical names say, in
+! the longword at result, as INET_ADDR writes it. Returns SS$_NORMAL, or
+! TCPIP$_NORECORD if there are no servers, none answers, or none has it.
+GLOBAL ROUTINE DNS_ADDR (LEN, TEXT, RESULT) =
+    BEGIN
+    LOCAL
+        S;
+    DNS_INIT();
+    DNS_SERVERS();
+    IF .DNS_NSERVERS EQL 0 THEN RETURN TCPIP$_NORECORD;
+    S = DNS_SEARCH(.LEN, .TEXT, TYPE_A);
+    DNS_CLOSE();
+    IF NOT .S THEN RETURN TCPIP$_NORECORD;
+    CH$MOVE(4, DNS_REPLY[DNS_FIND(TYPE_A)], .RESULT);
+    SS$_NORMAL
+    END;
+
+END
+ELUDOM
