@@ -1,7 +1,7 @@
 [workspace]
 resolver = "3"
-members = ["crosstools/ods/crates/*", "crosstools/vtools/crates/*", "pal", "pal/kernel", "pal/shim", "pal/tcpip", "vms", "image", "apidoc"]
-# pal and its crates, and image (boot), build C with the cross toolchain from
+members = ["crosstools/ods/crates/*", "crosstools/vtools/crates/*", "pal", "pal/kernel", "pal/shim", "pal/tcpip", "vms", "boot", "apidoc"]
+# pal and its crates, and boot, build C with the cross toolchain from
 # scripts/setup-host.sh, so a plain cargo build or test leaves them out.
 default-members = ["crosstools/ods/crates/*", "crosstools/vtools/crates/*", "vms", "apidoc"]
 

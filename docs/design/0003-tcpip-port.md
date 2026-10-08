@@ -266,7 +266,7 @@ or the ioctls, in one request, not both; a unit is cloned at
   sends an HTTP/1.0 GET; the body goes into a STREAM_LF file.
 - **`TCPTEST.EXE`** tries TCP both directions against the host, and UDP:
   a datagram from the host back to its sender, named, then on the socket
-  connected to it (`image/tests/network.rs`).
+  connected to it (`boot/tests/network.rs`).
 - Programs print through `SYS$OUTPUT` (`lib/print.mar`), falling back to
   `OPA0:` for a process without one, so a remote session's output goes to
   its connection.

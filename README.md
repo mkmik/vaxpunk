@@ -223,7 +223,7 @@ about one second after the command.
 | `pal/kernel/` | seL4 16.0.0 (submodule), built with its own CMake | `kernel.elf`, libsel4's headers, `platform_gen.json` |
 | `pal/shim/` | Limine-protocol program that loads seL4 and the root task; see [pal/shim/README.md](pal/shim/README.md) | `shim.elf` |
 | `pal/tcpip/` | the TCP/IP component the root task starts below the executive: lwIP (submodule) with a virtio-net driver and the port adapter, in freestanding C; see [DESIGN-0003](docs/design/0003-tcpip-port.md) | `tcpip.elf` |
-| `image/` | Limine config, the ESP builder (mtools) and `boot`, which copies the three ELFs and `sysdisk.img` to `out/`, stitches the ESP and runs QEMU; see [image/README.md](image/README.md) | `out/esp.img` |
+| `boot/` | Limine config, the ESP builder (mtools) and `boot`, which copies the three ELFs and `sysdisk.img` to `out/`, stitches the ESP and runs QEMU; see [boot/README.md](boot/README.md) | `out/esp.img` |
 | `scripts/` | host setup, Limine download, QEMU wrapper and console filter | `out/serial.log` |
 | `crosstools/` | the host tools that build vaxpunk and its disks; see [crosstools/README.md](crosstools/README.md) | |
 | `crosstools/ods/` | Files-11 ODS-2/ODS-5 file system in Rust: the library, the `ods` CLI and a FUSE mount; see [crosstools/ods/README.md](crosstools/ods/README.md) | `target/` |

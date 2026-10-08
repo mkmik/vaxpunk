@@ -1,7 +1,7 @@
 name: rust
 
 # The Cargo workspace. Its default members, crosstools/ and vms/ (the
-# system disk), are built and tested. The seL4 crates (pal/ and image) need
+# system disk), are built and tested. The seL4 crates (pal/ and boot/) need
 # the cross C toolchain, so here CI only checks their formatting.
 # boot.yml builds and boots them.
 # vrun's tests run CLITEST, the command parser's check, from vms/sysexe,

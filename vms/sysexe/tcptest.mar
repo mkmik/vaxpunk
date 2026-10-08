@@ -4,7 +4,7 @@
 ; Tries sockets on TCPIP$DEVICE:, the network's port driver, both ways,
 ; as a program written for TCP/IP Services would. It connects to port
 ; 7777 on 10.0.2.100, which QEMU's user network forwards to a server on
-; the host (image/tests/network.rs), sends a line, writes the line that
+; the host (boot/tests/network.rs), sends a line, writes the line that
 ; comes back and closes. Then it listens on port 7778, which the host
 ; reaches through QEMU, accepts a connection, writes where it came from
 ; and the line that comes, sends it back and closes. Then it waits on

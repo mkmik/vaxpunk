@@ -26,9 +26,9 @@ fn boot() -> io::Result<()> {
     for file in [kernel::ELF, shim::ELF, pal::ELF, vms::DISK].map(Path::new) {
         fs::copy(file, out.join(file.file_name().unwrap()))?;
     }
-    let mkesp = Command::new(root.join("image/mkesp.sh")).status()?;
+    let mkesp = Command::new(root.join("boot/mkesp.sh")).status()?;
     if !mkesp.success() {
-        return Err(io::Error::other("image/mkesp.sh failed"));
+        return Err(io::Error::other("boot/mkesp.sh failed"));
     }
     if env::args().skip(1).eq(["--images"]) {
         return Ok(());

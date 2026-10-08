@@ -12,5 +12,5 @@ rm -f "$img"
 mformat -i "$img" -C -T 131072 -h 64 -s 32 -F -v ESP ::
 mmd -i "$img" ::/EFI ::/EFI/BOOT ::/boot
 mcopy -i "$img" "$root/third_party/limine/BOOTAA64.EFI" ::/EFI/BOOT/
-mcopy -i "$img" "$root/image/limine.conf" "$root/out/shim.elf" \
+mcopy -i "$img" "$root/boot/limine.conf" "$root/out/shim.elf" \
 	"$root/out/kernel.elf" "$root/out/roottask.elf" ::/boot/

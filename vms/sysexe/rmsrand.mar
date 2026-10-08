@@ -5,7 +5,7 @@
 ; 8 bytes at 0, 5 at 9 with duplicates that may change, 3 at 15 with
 ; duplicates, in buckets of a block. Then it runs RAND.TXT's operations
 ; on it, a line each, and prints what each returned; then the records
-; along each key, and RMSRAND done with $CLOSE's status. image/tests/rms.rs writes the script
+; along each key, and RMSRAND done with $CLOSE's status. boot/tests/rms.rs writes the script
 ; and knows what each line printed must be. The same source builds on
 ; OpenVMS.
 ;

@@ -1,4 +1,4 @@
-# image: booting it
+# boot: putting it together and booting it
 
 The `boot` crate puts the pieces together and runs them in QEMU.
 
