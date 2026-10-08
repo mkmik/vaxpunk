@@ -46,7 +46,8 @@ const BOOT: Phase = Phase {
 
 /// RUN STARTUP, whose processes print theirs by the end, and SNOOP; then
 /// DIRECTORY, TYPE, TYPE/HEAD, TYPE/TAIL and EDIT on the system disk,
-/// DCLTEST.COM's and DCL's lines with symbols, those SYLOGIN.COM defined too, CLITEST's words as a
+/// DCLTEST.COM's and DCL's lines with symbols, a PIPE whose && skips and
+/// || runs after a failure, those SYLOGIN.COM defined too, CLITEST's words as a
 /// foreign command, EDIT's EXIT that can't write there, a logical name,
 /// SHOW LOGICAL and SET DEFAULT, until SET DEFAULT [-] fails in [000000].
 const SYSTEM_DISK: Phase = Phase {
@@ -60,6 +61,8 @@ const SYSTEM_DISK: Phase = Phase {
             "TYPE/HEAD=3 WELCOME.TXT\rTYPE/TAIL=2 WELCOME.TXT\r",
             "@DCLTEST 3 \"Two words\"\r@DCLTEST FAIL\rSHOW SYMBOL $STATUS\r",
             "X = 6 * 7\rWRITE SYS$OUTPUT \"X is \", X\rSHOW SYMBOL HOME\rHOME\r",
+            "PIPE P = \"PIPE: \" ; WRITE SYS$OUTPUT P, \"a;b\" ; TYPE NOSUCH.TXT && ",
+            "WRITE SYS$OUTPUT P, \"two\" || WRITE SYS$OUTPUT P, \"three\"\r",
             "EDIT WELCOME.TXT\r\"index\"\r\"zzz\"\rEXIT\rQUIT\r",
             // More than the type-ahead buffer's 255: the console holds back the rest.
             "DEFINE FOO SYS$INPUT\rSHOW LOGICAL FOO\rSHOW LOGICAL\rDEASSIGN FOO\r",
@@ -79,6 +82,8 @@ const SYSTEM_DISK: Phase = Phase {
         "%RMS-E-FNF, file not found",
         "  $STATUS == 268534418   Hex = 10018292  Octal = 02000301222",
         "X is 42",
+        "PIPE: a;b",
+        "PIPE: three",
         "  HOME == \"SET DEFAULT SYS$MANAGER:\"",
         "    9\tand DIRECTORY [000000]",
         "String was not found",
@@ -526,6 +531,8 @@ const PHASES: &[Phase] = &[
 const ABSENT: &[&str] = &[
     "DCLTEST: not here",
     "DCLTEST: failed",
+    // PIPE's && after TYPE fails.
+    "PIPE: two",
     "FSTEST: a count changed",
     "CHFTEST: exited",
     // SET TERMINAL/NOECHO's: the command after it isn't echoed.

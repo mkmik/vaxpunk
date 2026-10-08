@@ -1,0 +1,139 @@
+        .TITLE  PIPE    DCL's PIPE command
+        .IDENT  /V0.1/
+;
+; PIPE, which does several commands from one line, as VMS's does: a ; b
+; does a, then b; a && b does b only if a succeeded, a || b only if it
+; failed; ;, && and || alike, from left to right, so that a && b || c
+; does c if a or b failed. A separator in quotes is the command's. The
+; line waits in PIPEBUF, and DCL$NEXT takes a command from it before any
+; other, each time DCL is called, so a command that runs an image gets
+; the image's status. An error in one ends no procedure until the last:
+; || is there to catch it.
+; ponytail: no pipelines, |, no redirection, < and >, no background, &,
+; and no subshells, ( ), which on VMS run in subprocesses joined by
+; mailboxes: vaxpunk has no SPAWN, no IO$_WRITEOF and no RMS on a mailbox
+; yet. PIPE says so for |, &, < and >; parentheses are left to the
+; commands, whose expressions have them.
+; One of DCL's modules: ../dcl.mar says how they fit.
+;
+        .LIBRARY "lib.mlb"
+        .LIBRARY "../sysexe.mlb"
+        .LIBRARY "../dcl.mlb"
+        $DCLDEF
+
+        .EXTERNAL DCL$DEPTH, DCL$LASTSTAT, DCL$LINE, DCL$NEXT, DCL$RESTVAL
+        .EXTERNAL DCL$WARN
+
+        .PSECT  DATA, NOEXE, WRT, LONG
+V_COMMAND:
+        .ASCID  "COMMAND"
+PIPEBUF:                                ; PIPE's line
+        .BLKB   LINESIZE
+PIPEPOS:                                ; the next command in it
+        .LONG   0
+DCL$PIPEEND::                           ; past its last, or 0 for none left
+        .LONG   0
+DCL$PIPEDEPTH::                         ; the procedure level PIPE ran at
+        .LONG   0
+PIPEOP: .LONG   0                       ; before the next command: 0 ;, 1 &&, 2 ||
+
+        .PSECT  CODE, EXE, LONG
+; DCL$PIPE, PIPE command-sequence: keeps the line in PIPEBUF for
+; DCL$PIPENEXT, unless it has |, &, < or > outside quotes and && and ||.
+DCL$PIPE::
+        .EXCEPTION_ENTRY
+        MOVAB   V_COMMAND, R1
+        BSBW    DCL$RESTVAL
+        MOVL    R6, R1
+        CLRL    R2                      ; 1 in quotes
+10$:    CMPL    R1, R7
+        BGEQU   40$
+        MOVZBL  (R1)+, R0
+        CMPB    R0, #^A/"/
+        BNEQ    15$
+        XORL2   #1, R2
+15$:    BLBS    R2, 10$
+        CMPB    R0, #^A/</
+        BEQL    30$
+        CMPB    R0, #^A/>/
+        BEQL    30$
+        CMPB    R0, #^A/|/
+        BEQL    20$
+        CMPB    R0, #^A/&/
+        BNEQ    10$
+20$:    CMPL    R1, R7                  ; doubled: && or ||
+        BGEQU   30$
+        CMPB    R0, (R1)+
+        BEQL    10$
+30$:    PRINT   "%DCL-W-PIPENOTSUP, pipelines, redirection and background commands (| < > &) are not supported"
+        BRW     DCL$WARN
+40$:    SUBL3   R6, R7, R0
+        MOVC3   R0, (R6), PIPEBUF
+        MOVL    R3, DCL$PIPEEND
+        MOVAB   PIPEBUF, PIPEPOS
+        CLRL    PIPEOP
+        MOVL    DCL$DEPTH, DCL$PIPEDEPTH
+        BRW     DCL$NEXT
+
+; DCL$PIPENEXT: R0 = 1 with the next command of PIPE's line to do in
+; DCL$LINE, R6 = its first character and R7 = past its last; it skips
+; those && and || say to. R0 = 0 if there is none, or a procedure a
+; command of the line called runs. The line goes if that procedure's
+; caller ended. Uses R1-R5, R8.
+DCL$PIPENEXT::
+        .JSB_ENTRY  OUTPUT=<R6, R7>, SCRATCH=<R1, R2, R3, R4, R5, R8>
+10$:    CLRL    R0
+        TSTL    DCL$PIPEEND
+        BEQL    90$
+        CMPL    DCL$DEPTH, DCL$PIPEDEPTH
+        BGTR    90$
+        BEQL    20$
+        CLRL    DCL$PIPEEND
+        BRB     90$
+20$:    MOVL    PIPEPOS, R6
+        MOVL    DCL$PIPEEND, R7
+        MOVL    R6, R1
+        CLRL    R2                      ; 1 in quotes
+30$:    CMPL    R1, R7
+        BGEQU   48$
+        CMPB    (R1), #^A/"/
+        BNEQ    32$
+        XORL2   #1, R2
+32$:    BLBS    R2, 46$
+        MOVL    R1, R4                  ; the command's end
+        CMPB    (R1), #59               ; a semicolon
+        BNEQ    34$
+        CLRL    R8
+        ADDL3   #1, R1, R3              ; and the next one's start
+        BRB     50$
+34$:    MOVL    #1, R8
+        CMPB    (R1), #^A/&/
+        BEQL    36$
+        MOVL    #2, R8
+        CMPB    (R1), #^A/|/
+        BNEQ    46$
+36$:    ADDL3   #2, R1, R3              ; DCL$PIPE saw it doubled
+        BRB     50$
+46$:    INCL    R1
+        BRB     30$
+48$:    MOVL    R7, R4                  ; the last
+        MOVL    R7, R3
+        CLRL    DCL$PIPEEND
+        CLRL    R8
+50$:    MOVL    R3, PIPEPOS
+        MOVL    PIPEOP, R0
+        MOVL    R8, PIPEOP
+        CMPL    R0, #1                  ; && after a failure?
+        BNEQ    52$
+        BLBC    DCL$LASTSTAT, 10$
+52$:    CMPL    R0, #2                  ; || after a success?
+        BNEQ    54$
+        BLBS    DCL$LASTSTAT, 10$
+54$:    SUBL3   R6, R4, R0
+        MOVC3   R0, (R6), DCL$LINE
+        MOVAB   DCL$LINE, R6
+        MOVL    R3, R7
+        MOVL    #1, R0
+90$:    RSB
+
+        .END

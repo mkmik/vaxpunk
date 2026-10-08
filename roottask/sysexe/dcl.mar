@@ -71,6 +71,9 @@
 ;               stopped, without its exit handlers, and the procedures
 ;   HELP [verb] runs HELP.EXE, which lists the commands from DCL$TABLES
 ;   LOGOUT      ends the process
+;   PIPE command ; command && command || command
+;               does the commands one after another, those after && only
+;               if the one before succeeded, after || only if it failed
 ;   @file [p1 ... p8]
 ;               runs the command procedure file, file.COM if it has no
 ;               type, with P1 to P8 local symbols of its parameters
@@ -140,10 +143,10 @@
 ; an image, CTRL/Y, CONTINUE and STOP. The rest are in dcl/: logical.mar
 ; has the logical name commands, setshow.mar SET and SHOW DEFAULT, SHOW
 ; DEVICES and SET COMMAND, proc.mar @ and the commands that steer a
-; procedure, symbol.mar the symbols and their commands, expr.mar symbol
-; substitution and expressions, message.mar the messages, and cdu.mar
-; the CLD compiler. What they share is global, named DCL$name, and
-; dcl.mlb has their constants.
+; procedure, pipe.mar PIPE, symbol.mar the symbols and their commands,
+; expr.mar symbol substitution and expressions, message.mar the
+; messages, and cdu.mar the CLD compiler. What they share is global,
+; named DCL$name, and dcl.mlb has their constants.
 ;
         .LIBRARY "lib.mlb"
         .LIBRARY "starlet.mlb"
@@ -159,6 +162,7 @@
         .EXTERNAL DCL$ADD, DCL$ADDCSTR, DCL$ASSIGN, DCL$DEASSIGN, DCL$DEFINE
         .EXTERNAL DCL$DELSYM, DCL$DO, DCL$ENDPROCS, DCL$EXIT, DCL$EXITPROC
         .EXTERNAL DCL$FINDSYM, DCL$GETPROC, DCL$GOTO, DCL$IF, DCL$NAMESCAN
+        .EXTERNAL DCL$PIPE, DCL$PIPEDEPTH, DCL$PIPEEND, DCL$PIPENEXT
         .EXTERNAL DCL$SAMESTR, DCL$SAY, DCL$SETCOMMAND, DCL$SETDEF, DCL$SHOW
         .EXTERNAL DCL$SKIP, DCL$STATUS, DCL$STRASSIGN, DCL$SUBST, DCL$SYMNAM
         .EXTERNAL DCL$TOSTR, DCL$VSTACK, DCL$WRITE
@@ -218,6 +222,8 @@ ROUTINES:
         .ADDRESS DCL$IF
         .ASCIC  "LOGOUT"
         .ADDRESS LOGOUT
+        .ASCIC  "PIPE"
+        .ADDRESS DCL$PIPE
         .ASCIC  "RUN"
         .ADDRESS RUN
         .ASCIC  "SET"
@@ -275,14 +281,17 @@ DCL$PTABVEC::                           ; the process's tables, for CLI$$DCL_PAR
 10$:    MOVL    4(AP), R0
         BRW     DCL$DONE
 
-; DCL$NEXT: reads the next command, from the procedure running or from
-; the console, and does it.
+; DCL$NEXT: reads the next command, from PIPE's line, the procedure
+; running or the console, and does it.
 DCL$NEXT::
         .GLOBAL_LABEL                   ; CTRLY's too
         MOVL    DCL$SAVESP, SP
         BBCC    #0, CTRLYHIT, 5$
         BSBW    DCL$ENDPROCS
-5$:     TSTL    DCL$DEPTH
+5$:     BSBW    DCL$PIPENEXT            ; substituted with PIPE's line
+        BLBC    R0, 7$
+        BRW     DCL$COMMAND
+7$:     TSTL    DCL$DEPTH
         BEQL    PROMPT1
         BSBW    DCL$GETPROC
         BLBS    R0, 10$
@@ -582,8 +591,9 @@ ACTFAIL:
 
 ; DCL$DONE: R0 = a command's status, or an image's. Makes it $STATUS,
 ; and reports it if it is a failure no one reported, which it then marks
-; reported. An error or a fatal error ends the procedures running. Then
-; the next command.
+; reported. An error or a fatal error ends the procedures running, but
+; that PIPE's line runs in while the line has commands left. Then the
+; next command.
 DCL$DONE::
         .GLOBAL_LABEL
         MOVL    R0, DCL$LASTSTAT
@@ -595,7 +605,11 @@ DCL$DONE::
         BISL2   #INHIB, DCL$LASTSTAT
 10$:    TSTL    DCL$DEPTH
         BEQL    20$
-        BICL3   #^C7, DCL$LASTSTAT, R0  ; the severity
+        TSTL    DCL$PIPEEND
+        BEQL    12$
+        CMPL    DCL$DEPTH, DCL$PIPEDEPTH
+        BEQL    20$
+12$:    BICL3   #^C7, DCL$LASTSTAT, R0  ; the severity
         CMPL    R0, #2                  ; STS$K_ERROR
         BEQL    15$
         CMPL    R0, #4                  ; STS$K_SEVERE
@@ -758,12 +772,13 @@ CTRLYON:
         RSB
 
 ; CTRLY: DCL's CTRL/Y AST, in supervisor mode, on top of what CTRL/Y
-; stopped. With an image running, ends the procedures running and does
+; stopped. Drops what is left of PIPE's line. With an image running, ends the procedures running and does
 ; commands, until CONTINUE returns from here, or a command runs another
 ; image. Without, it is enabled again, and DCL ends the procedures at its
 ; next command. Saves the registers DCL does, so that CONTINUE can return
 ; from here.
         .ENTRY  CTRLY, ^M<R2, R3, R4, R5, R6, R7, R8, R9, R10, R11>
+        CLRL    DCL$PIPEEND
         TSTL    IMGRUN
         BNEQ    10$
         MOVL    #1, CTRLYHIT
