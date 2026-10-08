@@ -3,17 +3,21 @@
 //!
 //! One vaxpunk on QEMU's user network, with nothing saved on its ramdisk,
 //! so START COMMUNICATION asks QEMU's DHCP server at boot for the address,
-//! mask and gateway: then TCPIP's SET INTERFACE, SET ROUTE,
+//! mask and gateway: SHOW NAME_SERVICE, then a DNS server here for the
+//! process's resolver, through TCPIP$BIND_PORT; then TCPIP's SET INTERFACE, SET ROUTE,
 //! one without /DEFAULT that fails, PING to QEMU's gateway and to
 //! an address nobody has, and at the TCPIP> prompt SHOW
 //! INTERFACE, HELP, an interface there is not, and EXIT; then the hosts
 //! database: SHOW HOST, which makes it with LOCALHOST, SET HOST with
 //! aliases, SHOW HOST of them all, of an alias and of a name it hasn't,
-//! SET NOHOST, confirmed, and PING by an alias; then TCPTEST, which
+//! SET NOHOST, confirmed, and PING by an alias; then SET and SHOW
+//! NAME_SERVICE, nslookup of a name, an address, one there isn't, one that
+//! gets no answer, and at its > prompt, and PING by a name DNS knows;
+//! then TCPTEST, which
 //! connects to a server here, through QEMU's guestfwd, accepts a
 //! connection from a client here, through hostfwd, and sends a datagram
 //! from here back twice, to its sender and connected to it; and SET HOST to
-//! itself, SHOW SYSTEM there, and LOGOUT; then TELNET, by name, to a port here,
+//! itself, SHOW SYSTEM there, and LOGOUT; then TELNET, by a name DNS knows, to a port here,
 //! through guestfwd, a line each way, and with /PORT to one there cannot be;
 //! then COPY/HTTP from web servers here, through guestfwd, to the data
 //! disk: by URL, by node and path, one that says 404, by URL with a
@@ -146,6 +150,51 @@ fn web_server(status: &'static str, body: Vec<u8>) -> (u16, thread::JoinHandle<S
     (port, server)
 }
 
+/// A DNS server on UDP, which the guest reaches at 10.0.2.2: WWW.EXAMPLE.ORG
+/// is at 192.0.2.7, and 192.0.2.7 is www.example.org; ECHO.EXAMPLE.ORG is
+/// 10.0.2.100, the echo server's guestfwd; SILENT.EXAMPLE.ORG gets no
+/// answer, and every other name NXDOMAIN. Returns its port.
+fn dns_server() -> u16 {
+    let socket = UdpSocket::bind("127.0.0.1:0").unwrap();
+    let port = socket.local_addr().unwrap().port();
+    thread::spawn(move || {
+        let mut q = [0; 512];
+        while let Ok((n, from)) = socket.recv_from(&mut q) {
+            // The question: its name's labels, then type and class.
+            let (mut at, mut labels) = (12, Vec::new());
+            while at < n && q[at] != 0 {
+                let len = q[at] as usize;
+                labels.push(String::from_utf8_lossy(&q[at + 1..at + 1 + len]).to_lowercase());
+                at += 1 + len;
+            }
+            let qtype = u16::from_be_bytes([q[at + 1], q[at + 2]]);
+            let question = &q[12..at + 5];
+            let name = labels.join(".");
+            let rdata: Option<(u16, Vec<u8>)> = match (name.as_str(), qtype) {
+                ("silent.example.org", _) => continue,
+                ("www.example.org", 1) => Some((1, vec![192, 0, 2, 7])),
+                ("echo.example.org", 1) => Some((1, vec![10, 0, 2, 100])),
+                ("7.2.0.192.in-addr.arpa", 12) => {
+                    Some((12, b"\x03www\x07example\x03org\x00".to_vec()))
+                }
+                _ => None,
+            };
+            let mut r = q[..2].to_vec();
+            // A recursive answer, NXDOMAIN without data; one question.
+            let (rcode, answers) = if rdata.is_some() { (0, 1) } else { (3, 0) };
+            r.extend((0x8180u16 | rcode).to_be_bytes());
+            r.extend([0, 1, 0, answers, 0, 0, 0, 0]);
+            r.extend(question);
+            if let Some((t, d)) = rdata {
+                r.extend([0xc0, 12, 0, t as u8, 0, 1, 0, 0, 1, 44, 0, d.len() as u8]);
+                r.extend(d);
+            }
+            socket.send_to(&r, from).unwrap();
+        }
+    });
+    port
+}
+
 /// A port nothing listens on, for now.
 fn free_port() -> u16 {
     TcpListener::bind("127.0.0.1:0")
@@ -216,6 +265,7 @@ fn network() {
     let (blob_port, blob_server) = web_server("200 OK", blob.clone());
     let fwd = free_port();
     let ufwd = free_port();
+    let dns = dns_server();
     data_disk(&out.join("net-data.img"));
     let netdev = format!(
         "user,id=net0,guestfwd=tcp:10.0.2.100:7777-tcp:127.0.0.1:{server_port},\
@@ -234,6 +284,10 @@ fn network() {
             ("NETDEV", netdev),
         ],
     );
+    // The resolver asks the DNS server here, not the startup's 8.8.8.8.
+    vax.command("TCPIP SHOW NAME_SERVICE");
+    vax.command("TCPIP SET NAME_SERVICE /SERVER=10.0.2.2");
+    vax.command(&format!("DEFINE TCPIP$BIND_PORT {dns}"));
     vax.command("TCPIP SET INTERFACE WE0 /HOST=10.0.2.15 /NETWORK_MASK=255.255.255.0");
     vax.command("TCPIP SET ROUTE /DEFAULT /GATEWAY=10.0.2.2");
     vax.command("TCPIP SET ROUTE /GATEWAY=10.0.2.3");
@@ -256,6 +310,20 @@ fn network() {
     vax.command("Y");
     vax.command("TCPIP SHOW HOST /ADDRESS=10.0.2.50");
     vax.command("TCPIP PING GW /NUMBER_PACKETS=1");
+    vax.command("TCPIP SET NAME_SERVICE /NOSERVER");
+    vax.command("TCPIP SET NAME_SERVICE /SERVER=GATEWAY /DOMAIN=example.org /PATH=(A.TEST,B.TEST)");
+    vax.command("TCPIP SET NAME_SERVICE /NOPATH");
+    vax.command("TCPIP SHOW NAME_SERVICE");
+    vax.command(&format!("NSLOOKUP -PORT={dns} WWW"));
+    vax.command(&format!("NSLOOKUP -PORT={dns} 192.0.2.7"));
+    vax.command(&format!("NSLOOKUP -PORT={dns} NOPE.EXAMPLE.ORG"));
+    vax.command(&format!(
+        "NSLOOKUP -PORT={dns} -TIMEOUT=1 -RETRY=1 SILENT.EXAMPLE.ORG"
+    ));
+    vax.reply(&format!("NSLOOKUP -PORT={dns}"), "> ");
+    vax.reply("www", "> ");
+    vax.command("exit");
+    vax.command("TCPIP PING WWW /NUMBER_PACKETS=1");
     let client = thread::spawn(move || {
         for _ in 0..100 {
             if let Ok(mut k) = TcpStream::connect(("127.0.0.1", fwd)) {
@@ -292,7 +360,7 @@ fn network() {
     vax.command("SET HOST 10.0.2.15");
     vax.command("SHOW SYSTEM");
     vax.command("LOGOUT");
-    vax.reply("TELNET WEB.EXAMPLE 7779", "hello from port 7779");
+    vax.reply("TELNET ECHO 7779", "hello from port 7779");
     vax.reply("netcat", "echo: netcat");
     // The host closing doesn't reach the guest through guestfwd: CTRL/Z.
     let at = vax.text().len();
@@ -354,6 +422,22 @@ fn network() {
         "10.0.2.50       gone, gone2\nRemove? [N]: Y\n$ ",
         "ADDRESS=10.0.2.50\n%TCPIP-E-HOSTERROR, cannot process host request\n",
         "PING GW (10.0.2.2): 56 data bytes",
+        "BIND Resolver Parameters\n\n Local domain: \n\n System\n\n  State:     Started, Enabled\n\n  \
+         Transport: UDP\n  Domain:    \n  Retry:     2\n  Timeout:   5\n  \
+         Servers:   8.8.8.8\n  Path:      \n\n Process\n\n  State:     Enabled\n\n  \
+         Transport: \n  Domain:    \n  Retry:     \n  Timeout:   \n  Servers:   \n  Path:      \n$ ",
+        " Local domain: EXAMPLE.ORG\n",
+        "  Domain:    EXAMPLE.ORG\n  Retry:     \n  Timeout:   \n  Servers:   GATEWAY\n  Path:      \n$ ",
+        &format!(
+            "Server:\t\tGATEWAY\nAddress:\t10.0.2.2#{dns}\n\nNon-authoritative answer:\n\
+             Name:\tWWW.EXAMPLE.ORG\nAddress: 192.0.2.7\n\n$ "
+        ),
+        "Non-authoritative answer:\n7.2.0.192.in-addr.arpa\tname = www.example.org.\n",
+        "** server can't find NOPE.EXAMPLE.ORG: NXDOMAIN\n",
+        ";; connection timed out; no servers could be reached\n",
+        "> www\nServer:\t\tGATEWAY\n",
+        "Name:\twww.EXAMPLE.ORG\nAddress: 192.0.2.7\n\n> exit\n$ ",
+        "PING WWW (192.0.2.7): 56 data bytes",
         "TCPTEST: connected to 10.0.2.100 port 7777",
         "hello from the host",
         "TCPTEST: accepted a connection from address 0202000A",

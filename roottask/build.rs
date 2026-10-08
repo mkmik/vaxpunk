@@ -2,8 +2,9 @@
 //! with the TCP/IP component's tcpip.elf in it,
 //! and the system disk, sysdisk.img, a Files-11 ODS-2 volume: in [SYSEXE],
 //! EXEC.EXE, linked from exec/*.mar and, after them, exec/*.b64, which
-//! vbliss compiles, and an image for each sysexe/*.mar,
-//! linked with sysexe/lib/*.mar, its command table if there is a
+//! vbliss compiles, and an image for each sysexe/*.mar or *.b64, the
+//! two linked together when both are there, and with sysexe/lib/*.mar and
+//! *.b64, its command table if there is a
 //! sysexe/NAME.cld, its ARM64 if there is a sysexe/NAME.m64, which vasm
 //! assembles, and against SYS.STB, the executive's symbols; DCL and
 //! HELP with DCL$TABLES, from cld/*.cld, and DCL with sysexe/dcl/*.mar,
@@ -67,14 +68,25 @@ fn main() {
     .collect();
     let compiled: HashMap<_, _> = sysexe.iter().cloned().zip(compile(&sysexe)).collect();
     let module = |p: &PathBuf| compiled[p].clone();
-    let libs: Vec<_> = sources("sysexe/lib", &["mar"]).iter().map(module).collect();
+    let mut libs: Vec<_> = sources("sysexe/lib", &["mar"]).iter().map(module).collect();
+    libs.extend(sources("sysexe/lib", &["b64"]).iter().map(|s| bliss(s)));
     let mut files = vec![("EXEC.EXE".to_string(), exec.image.write())];
     // Each process has its own P0, so every image goes at the same address,
     // but DCL: linked in P1, at VA$C_CLI, it is a command interpreter, which
     // stays while the images it runs come and go in P0.
-    for source in sources("sysexe", &["mar"]) {
+    let mut programs = sources("sysexe", &["mar", "b64"]);
+    programs.dedup_by(|a, b| a.file_stem() == b.file_stem());
+    for source in programs {
         let name = source.file_stem().unwrap().to_str().unwrap().to_uppercase();
-        let mut modules = vec![module(&source)];
+        let mut modules = Vec::new();
+        if source.with_extension("mar").exists() {
+            modules.push(module(&source.with_extension("mar")));
+        }
+        // A program's BLISS-64, alone or with its MACRO-32.
+        let b64 = source.with_extension("b64");
+        if b64.exists() {
+            modules.push(bliss(&b64));
+        }
         let cld = source.with_extension("cld");
         if cld.exists() {
             modules.push(tables(&name, &[cld]));

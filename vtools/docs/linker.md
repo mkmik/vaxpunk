@@ -41,8 +41,14 @@ Status: work order steps 6, 7 and 9. Procedure descriptors come later.
    counter. Stores are range-checked. So are ARM64
    instruction patches: a target out of reach, or a `:lo12:` address not aligned
    to the access size, is an error naming the module and location. Nothing is
-   silently truncated, and there are no range-extension veneers. Data stored
-   into a demand-zero psect is an error.
+   silently truncated. A `B` or `BL` that can't reach a fixed address, as a
+   call from an image in P0 to a system service in S0, is the one
+   exception: vlink notes the address and links again with a veneer for it
+   in `$VENEER$`, a code psect of a module of its own, `$VENEERS`:
+   `ldr x16, 8; br x16` and the address, which DESIGN-0004 lets a linker put
+   between a call and its target. A target that moves with the image gets no
+   veneer, and stays an error. Data stored into a demand-zero psect is an
+   error.
 5. **Picks the transfer address** from `/TRANSFER`, or else from the first
    module whose end-of-module record has one.
 

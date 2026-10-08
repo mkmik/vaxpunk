@@ -5,7 +5,7 @@
 //! - the executive's routines and data (roottask/exec/*.mar, consolio.mar,
 //!   and the `GLOBAL ROUTINE`s of roottask/exec/*.b64, BLISS-64), and
 //!   the global ones of the libraries the system disk's images link
-//!   (roottask/sysexe/lib/*.mar) and of DCL's own (roottask/sysexe/dcl.mar,
+//!   (roottask/sysexe/lib/*.mar, and the `GLOBAL ROUTINE`s of its *.b64) and of DCL's own (roottask/sysexe/dcl.mar,
 //!   roottask/sysexe/dcl/*.mar), and of the RMS utilities' (roottask/sysexe/rms/*.mar):
 //!   the comment block right above each `NAME::`
 //!   or `.ENTRY`, whose first line reads `NAME: what it does` or, for a system
@@ -750,6 +750,11 @@ impl Api {
                 m.data.push(data.len());
                 data.push(d);
             }
+            mods.push(m);
+        }
+        for p in glob(&root.join("roottask/sysexe/lib"), "b64") {
+            let mut m = parse_b64(root, &p, mods.len(), &mut routines);
+            m.image = true;
             mods.push(m);
         }
         let mut lib_paths = glob(&root.join("vtools/lib"), "mlb");

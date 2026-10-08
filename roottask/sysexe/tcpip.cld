@@ -13,8 +13,8 @@ define verb HELP
 	parameter P1, label=TOPIC, value(type=$rest_of_line)
 
 ! PING host [/NUMBER_PACKETS=n]: an ICMP echo request to the host, an
-! address or a name in the hosts database, each second, until CTRL/C, or
-! n of them.
+! address or a name in the hosts database or DNS, each second, until
+! CTRL/C, or n of them.
 define verb PING
 	routine PING
 	parameter P1, label=HOST, prompt="Host", value(required)
@@ -27,6 +27,7 @@ define type SET_OPTIONS
 	keyword CONFIGURATION, syntax=SET_CONFIGURATION
 	keyword HOST, syntax=SET_HOST
 	keyword INTERFACE, syntax=SET_INTERFACE
+	keyword NAME_SERVICE, syntax=SET_NAME_SERVICE
 	keyword NOHOST, syntax=SET_NOHOST
 	keyword ROUTE, syntax=SET_ROUTE
 
@@ -48,6 +49,24 @@ define syntax SET_NOHOST
 	parameter P1, label=OPTION, value(required, type=SET_OPTIONS)
 	parameter P2, label=NAME, prompt="Host", value(required)
 	qualifier CONFIRM, default
+
+! SET NAME_SERVICE [/[NO]SERVER=(host,...)] [/[NO]DOMAIN=domain]
+! [/[NO]PATH=(domain,...)] [/RETRY=n] [/TIMEOUT=n] [/TRANSPORT=protocol]
+! [/ENABLE | /DISABLE] [/SYSTEM]: the BIND resolver's configuration, the
+! process's, or the system's (tcpip.b64).
+define syntax SET_NAME_SERVICE
+	routine SET_NAME_SERVICE
+	parameter P1, label=OPTION, value(required, type=SET_OPTIONS)
+	qualifier DOMAIN, value(required)
+	qualifier PATH, value(required, list)
+	qualifier SERVER, value(required, list)
+	qualifier RETRY, nonnegatable, value(required)
+	qualifier TIMEOUT, nonnegatable, value(required)
+	qualifier TRANSPORT, nonnegatable, value(required)
+	qualifier ENABLE, nonnegatable
+	qualifier DISABLE, nonnegatable
+	qualifier SYSTEM, nonnegatable
+	disallow ENABLE and DISABLE
 
 ! SET INTERFACE WE0 /HOST=address /NETWORK_MASK=mask, or /DHCP: the
 ! running system.
@@ -93,6 +112,7 @@ define verb SHOW
 define type SHOW_OPTIONS
 	keyword HOST, syntax=SHOW_HOST
 	keyword INTERFACE, syntax=SHOW_INTERFACE
+	keyword NAME_SERVICE, syntax=SHOW_NAME_SERVICE
 
 ! SHOW HOST [host] [/ADDRESS=address] [/LOCAL]: the hosts in the hosts
 ! database, or the one with that name, alias or address.
@@ -103,6 +123,12 @@ define syntax SHOW_HOST
 	qualifier ADDRESS, nonnegatable, value(required)
 	qualifier LOCAL, nonnegatable
 	disallow NAME and ADDRESS
+
+! SHOW NAME_SERVICE: the BIND resolver's configuration, the system's and
+! the process's.
+define syntax SHOW_NAME_SERVICE
+	routine SHOW_NAME_SERVICE
+	parameter P1, label=OPTION, value(required, type=SHOW_OPTIONS)
 
 define syntax SHOW_INTERFACE
 	routine SHOW_INTERFACE

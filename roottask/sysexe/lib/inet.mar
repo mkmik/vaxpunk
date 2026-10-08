@@ -7,7 +7,8 @@
 ; TCPIP$HOST.DAT, which TCPIP's SET HOST writes (ADR-0025): an indexed
 ; file of 271-byte records, a type, 0 for a host's name and 1 for an
 ; alias, the address in dotted text, and the name, both padded with
-; blanks; key 0 is the name, key 1 the address.
+; blanks; key 0 is the name, key 1 the address. Then it asks DNS
+; (lib/dns.b64, ADR-0026), as TCP/IP Services' resolver does.
 ; ponytail: reads every record, as it must to match names in any case;
 ; the file on the ramdisk, not where a TCPIP$HOST logical name says.
 ;
@@ -16,6 +17,8 @@
         $RMSDEF
         $FABDEF
         $RABDEF
+
+        .EXTERNAL DNS_ADDR
 
 HOST_REC = 271                          ; a record: type, address, name
 HOST_ADDRLEN = 15
@@ -72,12 +75,25 @@ HOSTSLEN = . - HOSTS
 80$:    MOVL    #SS$_IVADDR, R0
         RET
 
-; HOST_ADDR len, adr, result: the address of the host whose name, or an
+; HOST_ADDR len, adr, result: as HOST_LOCAL, and if the hosts database
+; hasn't the name, or there is none, the address DNS gives it (DNS_ADDR).
+; R0 = SS$_NORMAL, TCPIP$_NORECORD if neither has the name, or RMS's
+; error if the hosts database can't be read.
+        .ENTRY  HOST_ADDR, ^M<>
+        CALLG   (AP), G^HOST_LOCAL
+        CMPL    R0, #TCPIP$_NORECORD
+        BEQL    10$
+        CMPL    R0, #RMS$_FNF
+        BNEQ    90$
+10$:    CALLG   (AP), G^DNS_ADDR
+90$:    RET
+
+; HOST_LOCAL len, adr, result: the address of the host whose name, or an
 ; alias's, in any case, is the len characters at adr, or that they are,
 ; a.b.c.d, in the longword at result, as INET_ADDR writes it. R0 =
 ; SS$_NORMAL, TCPIP$_NORECORD if the hosts database hasn't the name, or
 ; RMS's error if it can't be read.
-        .ENTRY  HOST_ADDR, ^M<R2, R3, R4, R5, R6>
+        .ENTRY  HOST_LOCAL, ^M<R2, R3, R4, R5, R6>
         PUSHL   12(AP)
         PUSHL   8(AP)
         PUSHL   4(AP)

@@ -28,7 +28,7 @@
 ; SET HOST, SET NOHOST and SHOW HOST keep the hosts database,
 ; MDA0:[000000]TCPIP$HOST.DAT, TCP/IP Services' indexed file of names and
 ; addresses, which HOST_ADDR (lib/inet.mar) looks names up in for PING,
-; TELNET and COPY (ADR-0025); the first of them to find none makes it,
+; TELNET and COPY (ADR-0025), before DNS (ADR-0026); the first of them to find none makes it,
 ; with LOCALHOST, as TCP/IP Services' CREATE HOST does. The ramdisk is
 ; made afresh at each boot, so the hosts are those SYSTARTUP_VMS.COM sets.
 ; ponytail: one interface and one route, the default; the hosts read at

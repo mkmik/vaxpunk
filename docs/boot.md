@@ -148,7 +148,11 @@ interpreter. It is linked high in P1, which tells the executive it is one
   `TCPIP$CONFIG.DAT`. So the only hosts a boot knows, and its fixed
   address if it has one, are what `TCPIP SET HOST`, `SET CONFIGURATION
   INTERFACE` and `SET ROUTE /PERMANENT` lines in this procedure save
-  ([ADR-0025](adr/0025-hosts-database.md)). Then its `MOUNT DKB0:`
+  ([ADR-0025](adr/0025-hosts-database.md)). Then `TCPIP SET
+  NAME_SERVICE /SERVER=8.8.8.8 /SYSTEM` defines the system logical name
+  `TCPIP$BIND_SERVER000` as `8.8.8.8`, Google's public DNS server, which
+  every program asks for a host the hosts database hasn't, and `nslookup`
+  asks for any ([ADR-0026](adr/0026-name-service-and-nslookup.md)). Then its `MOUNT DKB0:`
   mounts the data disk, whatever its label, if an `INITIALIZE DKB0:`
   wrote a volume there, at this boot or an earlier one, and prints
   `%MOUNT-I-MOUNTED, label mounted on _DKB0:`. On a blank disk it prints
@@ -156,7 +160,8 @@ interpreter. It is linked high in P1, which tells the executive it is one
   is `@SYS$MANAGER:SYLOGIN`, which
   runs `DKA0:[SYSMGR]SYLOGIN.COM`, as VMS runs it
   at each login: it defines the global symbol `HOME`, a command that goes
-  back to `[SYSMGR]`, and runs `TCPIP START COMMUNICATION`. With a
+  back to `[SYSMGR]`, and `NSLOOKUP`, a foreign command that runs
+  `SYS$SYSTEM:TCPIP$NSLOOKUP.EXE`, and runs `TCPIP START COMMUNICATION`. With a
   network, that opens a UDP socket on `TCPIP$DEVICE:` and, with ioctls on
   it, sets the interface's address, mask and gateway as `TCPIP
   SET CONFIGURATION INTERFACE` and `SET ROUTE /PERMANENT` saved them

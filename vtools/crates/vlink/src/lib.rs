@@ -10,7 +10,7 @@
 
 mod map;
 
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 use vms_obj::exe::{Eisd, Fixups, Image, SECTION_ALIGN, Section};
 use vms_obj::obj::{self, Gsd, Record, Tir, psc, sym};
@@ -42,6 +42,9 @@ pub struct Linked {
 /// The image base VMS uses by default: the first page above 64 KB.
 pub const DEFAULT_BASE: u64 = 0x10000;
 
+/// A veneer's bytes.
+const VENEER: u64 = 16;
+
 /// Links object files and object libraries, given as (file name, contents), in
 /// order. Errors come back as VMS messages.
 pub fn link(inputs: &[(String, Vec<u8>)], opts: &Options) -> Result<Linked, Vec<String>> {
@@ -65,7 +68,14 @@ pub fn link(inputs: &[(String, Vec<u8>)], opts: &Options) -> Result<Linked, Vec<
     }
     l.resolve()?;
     l.layout(opts.base)?;
-    let (data, mut errors) = l.execute();
+    let (mut data, mut errors) = l.execute();
+    // A B or BL that can't reach a fixed address, the executive's from an
+    // image in P0, goes through a veneer: then everything again.
+    if !l.far.is_empty() {
+        l.add_veneers();
+        l.layout(opts.base)?;
+        (data, errors) = l.execute();
+    }
     // A fixup in a PIC psect is always worth a warning; a store that can't
     // move matters only if the image must.
     for (code, msg) in l.problems() {
@@ -241,6 +251,10 @@ struct Linker {
     warnings: Vec<String>,
     /// What the image holds that matters if it moves, by address.
     stored: BTreeMap<u64, Stored>,
+    /// Fixed addresses a B or BL couldn't reach, and the psect of their
+    /// veneers once there is one, in this order.
+    far: BTreeSet<u64>,
+    veneers: Option<usize>,
 }
 
 impl Linker {
@@ -439,6 +453,7 @@ impl Linker {
     }
 
     fn layout(&mut self, base: u64) -> Result<(), Vec<String>> {
+        self.sections.clear();
         for p in &mut self.psects {
             let mut size = 0;
             for part in &mut p.parts {
@@ -483,6 +498,37 @@ impl Linker {
             at = pos;
         }
         Ok(())
+    }
+
+    /// Adds $VENEER$, a code psect of a module of its own, with a veneer
+    /// for each address in `far`: `ldr x16, 8; br x16` and the address,
+    /// which DESIGN-0004 lets a linker put between a call and its target.
+    fn add_veneers(&mut self) {
+        let flags = psc::PIC | psc::REL | psc::SHR | psc::EXE | psc::RD;
+        let p = self.psect("$VENEER$", flags, 3).unwrap();
+        let module = self.modules.len();
+        self.psects[p].parts.push(Part {
+            module,
+            size: VENEER * self.far.len() as u64,
+            align: 3,
+            offset: 0,
+        });
+        self.modules.push(Module {
+            name: "$VENEERS".into(),
+            version: String::new(),
+            file: String::new(),
+            psects: vec![(p, 0)],
+            records: Vec::new(),
+            transfer: None,
+        });
+        self.veneers = Some(p);
+    }
+
+    /// The veneer that jumps to `target`, if there is one.
+    fn veneer(&self, target: u64) -> Option<u64> {
+        let p = &self.psects[self.veneers?];
+        let i = self.far.iter().position(|&t| t == target)?;
+        Some(p.base + VENEER * i as u64)
     }
 
     /// Where a module's psect contribution starts.
@@ -629,6 +675,7 @@ impl Linker {
             })
             .collect();
         let mut stored = BTreeMap::new();
+        let mut far = BTreeSet::new();
         let (mut errors, mut warnings) = (Vec::new(), Vec::new());
         for (i, m) in self.modules.iter().enumerate() {
             let mut run = Run {
@@ -638,6 +685,7 @@ impl Linker {
                 loc: None,
                 data: &mut data,
                 stored: &mut stored,
+                far: &mut far,
             };
             let cmds = m.records.iter().filter_map(|r| match r {
                 Record::Tir(c) => Some(c),
@@ -658,6 +706,21 @@ impl Linker {
         }
         self.warnings.extend(warnings);
         self.stored = stored;
+        if self.veneers.is_some() {
+            for &target in &self.far {
+                let at = self.veneer(target).unwrap();
+                let s = self
+                    .sections
+                    .iter()
+                    .position(|s| s.start <= at && at < s.end);
+                let off = (at - self.sections[s.unwrap()].start) as usize;
+                let code = [0x5800_0050u32.to_le_bytes(), 0xd61f_0200u32.to_le_bytes()];
+                data[s.unwrap()][off..off + 8].copy_from_slice(&code.concat());
+                data[s.unwrap()][off + 8..off + 16].copy_from_slice(&target.to_le_bytes());
+            }
+        } else {
+            self.far = far;
+        }
         (data, errors)
     }
 }
@@ -672,6 +735,8 @@ struct Run<'a> {
     loc: Option<u64>,
     data: &'a mut Vec<Vec<u8>>,
     stored: &'a mut BTreeMap<u64, Stored>,
+    /// The fixed addresses B and BL couldn't reach.
+    far: &'a mut BTreeSet<u64>,
 }
 
 impl Run<'_> {
@@ -892,7 +957,19 @@ impl Run<'_> {
                 };
                 let (s, k) = self.pop()?;
                 let p = self.loc.unwrap_or(0);
-                let word = reloc::apply(kind, insn, s, p).map_err(|e| {
+                let mut word = reloc::apply(kind, insn, s, p);
+                if word.is_err() && kind == reloc::Kind::Jump26 && k == Some(0) {
+                    // The first pass notes the address and goes on; the
+                    // second has the veneer.
+                    word = match self.l.veneers {
+                        None => {
+                            self.far.insert(s);
+                            Ok(insn)
+                        }
+                        Some(_) => reloc::apply(kind, insn, self.l.veneer(s).unwrap(), p),
+                    };
+                }
+                let word = word.map_err(|e| {
                     format!(
                         "%VLINK-E-RELOC, {e}: target %X{s:X}, instruction at {}",
                         self.l.place(p)

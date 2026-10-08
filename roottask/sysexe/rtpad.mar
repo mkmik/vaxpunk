@@ -4,7 +4,7 @@
 ; DCL's SET HOST host runs this, NODE the host, as VMS's DCL ran
 ; RTPAD.EXE, and so does TELNET host [port] or TELNET host /PORT=n,
 ; as TCP/IP Services' TELNET takes them: an address, or a name in the
-; hosts database (HOST_ADDR). It connects to TCP port 23
+; hosts database or DNS (HOST_ADDR). It connects to TCP port 23
 ; there, a socket on TCPIP$DEVICE:, where another vaxpunk's TELNETD gives it
 ; a DCL of its own, or to the port, whatever listens there, and passes lines
 ; both ways: what comes
