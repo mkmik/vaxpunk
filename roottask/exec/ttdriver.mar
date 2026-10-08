@@ -156,6 +156,7 @@ TT$FDT::
         CMPL    R0, #IO$_READPROMPT
         BNEQ    25$
         MOVL    48(AP), R6
+        BEQL    25$                     ; no prompt
         CMPL    R6, #65535
         BGTRU   87$
         IFNORD  R6, @44(AP), 85$

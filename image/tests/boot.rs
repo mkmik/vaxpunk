@@ -243,7 +243,8 @@ const RAMDISK: Phase = Phase {
 };
 
 /// INITIALIZE, MOUNT and COPY on DKB0:, a CREATE/DIRECTORY two levels deep
-/// there and a COPY into it, an APPEND/LOG to the file copied there and
+/// there and a COPY into it, a CREATE/LOG of a text file there from two
+/// lines and CTRL/Z, an APPEND/LOG to the file copied there and
 /// one to the system disk that fails, SHOW DEVICES, a DISMOUNT of DKA0:
 /// that fails and one of DKB0: that doesn't, a DIRECTORY there that fails,
 /// a MOUNT without a label, a DIRECTORY of the new directory and a DELETE
@@ -268,6 +269,7 @@ const DATA_DISK: Phase = Phase {
             "Directory DKB0:[SUB]",
             1,
             concat!(
+                "CREATE/LOG DKB0:[SUB.DEEP]NOTE.TXT\rFirst line\rSecond line\r\x1a",
                 "APPEND/LOG SYS$SYSDEVICE:[SYSMGR]WELCOME.TXT DKB0:[000000]DATA.TXT\r",
                 "APPEND DKB0:[000000]DATA.TXT SYS$SYSDEVICE:[SYSMGR]WELCOME.TXT\r",
             ),
@@ -286,6 +288,7 @@ const DATA_DISK: Phase = Phase {
         "%MOUNT-I-MOUNTED, DATA mounted on _DKB0:",
         "Directory DKB0:[SUB]",
         "DEEP.DIR;1",
+        "%CREATE-I-CREATED, DKB0:[SUB.DEEP]NOTE.TXT;1 created",
         "%APPEND-S-APPENDED, DKA0:[SYSMGR]WELCOME.TXT;1 appended to DKB0:[000000]DATA.TXT;1 (10 records)",
         "%RMS-E-WLK, device currently write locked",
         "Directory DKB0:[000000]",
@@ -299,6 +302,7 @@ const DATA_DISK: Phase = Phase {
         "%RMS-E-DNR, device not ready, not mounted, or unavailable",
         "Directory DKB0:[SUB.DEEP]",
         "DEEP.TXT;1",
+        "NOTE.TXT;1",
         "%RMS-E-MKD, ACP could not mark file for deletion",
         "Process name:       \"SYSTEM\"",
         "UIC:                [1,4]",
@@ -783,6 +787,11 @@ fn boot() {
     assert!(data.contains("and the rest of what INITIALIZE made."));
     assert_eq!(data.matches("Welcome to vaxpunk",).count(), 2, "{data}");
     assert!(img.lookup("[SUB.DEEP]DEEP.TXT").is_ok());
+    let fid = img.lookup("[SUB.DEEP]NOTE.TXT").unwrap();
+    let mut note = Vec::new();
+    img.copy_out(fid, &mut note, Conversion::RecordsToLines)
+        .unwrap();
+    assert_eq!(String::from_utf8_lossy(&note), "First line\nSecond line\n");
     for name in ["DATA.TXT;1", "NEW.TXT;1", "NEW.TXT;2"] {
         let saved = img.lookup(&format!("[000000]{name}")).unwrap();
         let restored = img.lookup(&format!("[RESTORED]{name}")).unwrap();
