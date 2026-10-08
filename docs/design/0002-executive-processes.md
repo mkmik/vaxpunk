@@ -276,8 +276,8 @@ an image runs it with `$IMGACT` and the parse:
 | `DEASSIGN name` | `$DELLNM` from `LNM$PROCESS`, or the table the same qualifiers name |
 | `SHOW LOGICAL name` | `$TRNLNM` in `LNM$FILE_DEV`, or the table the same qualifiers name: `"name" = "equivalence" (table)`, or `%SHOW-S-NOTRAN` |
 | `SHOW LOGICAL [*]` | lists every name, the process's table's and then the system's, or only that table's, in the order they were made, under each table's name; it copies them one at a time with `$CMKRNL`, so it takes CMKRNL. ponytail: VMS's DCL asks the executive's logical name routines, and sorts them |
-| `SET DEFAULT [dev:][dir]` | `$PARSE`s it, which must name no file, `$SETDDIR` with the directory it expands to, and `$CRELNM` of `SYS$DISK` in `LNM$PROCESS` with its device; one that doesn't exist is still set, after `%DCL-I-INVDEF` |
-| `SHOW DEFAULT` | the device and directory `$PARSE` expands an empty specification to |
+| `SET DEFAULT [dev:][dir]` | `$PARSE`s it, which must name no file, `$SETDDIR` with the directory it expands to, and `$CRELNM` of `SYS$DISK` in `LNM$PROCESS` with its device; one that doesn't exist is still set |
+| `SHOW DEFAULT` | the device and directory `$PARSE` expands an empty specification to, then `%DCL-I-INVDEF` if it doesn't exist; for a search list, each directory it takes that to which exists, after `=` |
 | `EDIT spec` | `EDIT.EXE` |
 | `COPY[/LOG] from to` | `COPY.EXE` |
 | `BACKUP[/LOG][/LIST] input output` | `BACKUP.EXE` |
@@ -1054,8 +1054,14 @@ device if the name is a logical name, so `TYPE F` reads the file `F`
 names; otherwise it stays a file name. The process's default directory
 fills in only if `SYS$DISK`'s translation gives no directory, so after
 `SET DEFAULT HOME:`, which keeps the default directory, each string's
-own directory holds, and `SHOW DEFAULT` says `HOME:[SYSMGR]` and then
-each string.
+own directory holds. `SHOW DEFAULT` says `HOME:[SYSMGR]`, then, as
+OpenVMS does, each directory the list's strings take the default to,
+depth first through each logical name, the device translated, a
+string's own directory winning: `= MDA0:[000000]`, `= MDA0:[SYSMGR]`,
+`= DKA0:[SYSMGR]`, the ones that exist, or `%DCL-I-INVDEF` if none
+does. A name that translates to a search list, `SET DEFAULT
+SYS$MANAGER:`, is translated first, as far as the list:
+`SYS$SYSROOT:[SYSMGR]`.
 ponytail: no rooted directories or concealed devices; the expanded
 string has the device a name translates to, as VMS's does without
 them.

@@ -132,6 +132,11 @@ DDIRDSC:                                ; the default directory
         .LONG   63
         .ADDRESS DDIR
 DDIR:   .BLKB   63
+NEWTOK: .BLKB   LINESIZE*2+1            ; TRNDEV's spec, as it makes it
+SLFAB:  $FAB    DNA=DDIR, NAM=SLNAM     ; SHOWDIR's $PARSE
+SLNAM:  $NAM    ESA=SLEXP, ESS=255
+SLEXP:  .BLKB   255                     ; its expanded string
+SHOWN:  .LONG   0                       ; the directories SHOWSL showed
 ; SHOWSL's frame, on the stack: its $TRNLNM's items, their buffers, and
 ; the name it translates.
 F_ITM = 0
@@ -139,17 +144,20 @@ F_IDX = 40
 F_MAX = 44
 F_LEN = 48
 F_NDSC = 52
-F_STR = 60
+F_ODIR = 60                             ; the directory over its strings
+F_NEW = 68                              ; a string, that directory over it
+F_STR = F_NEW+LINESIZE+1
 FRAME = F_STR+LINESIZE+1
 
         .PSECT  CODE, EXE, LONG
 ; DCL$SETDEF, SET DEFAULT spec: $PARSEs spec, which must name no file,
 ; and makes the directory it expands to the default, with $SETDDIR, and
 ; its device the process's SYS$DISK. One that doesn't exist is still
-; set, as VMS does, with a message. A device that is a search list,
+; set, as VMS does: SHOW DEFAULT says so. A device that is a search list,
 ; HOME: for MDA0:[000000],SYS$MANAGER, becomes SYS$DISK as it is, and the
 ; default directory the spec's, or none, so that each string's own
-; directory holds (SEARCHDEF).
+; directory holds (SEARCHDEF); one that translates to a search list,
+; SYS$MANAGER:, becomes it first (TRNDEV).
 DCL$SETDEF::
         .EXCEPTION_ENTRY
         MOVAB   V_DIR, R1
@@ -178,14 +186,6 @@ DCL$SETDEF::
         MOVZBW  DEFNAM+NAM$B_DEV, DISKITEMS
         MOVL    DEFNAM+NAM$L_DEV, DISKITEMS+4
         $CRELNM_S TABNAM=DCL$PROCESS, LOGNAM=DISK, ITMLST=DISKITEMS
-        BLBC    R0, 20$
-        CMPL    R6, #RMS$_DNF
-        BNEQ    20$
-        ADDTEXT "%DCL-I-INVDEF, "
-        BSBW    ADDDEF
-        ADDTEXT " does not exist"
-        BSBW    DCL$SAY
-        BRW     DCL$OK
 20$:    BRW     DCL$DONE
 
 ; SEARCHDEF: SET DEFAULT's for a search list, as VMS's: R8 = the length
@@ -195,7 +195,8 @@ DCL$SETDEF::
 ; one, made absolute against the old, else stays: SHOW DEFAULT then says
 ; HOME:[SYSMGR], whose strings' own directories RMS takes before it.
 SEARCHDEF:
-        BSBB    HASDIR
+        BSBW    TRNDEV
+        BSBW    HASDIR
         BEQL    20$
         MOVZBL  DEFNAM+NAM$B_DIR, DIRDSC
         MOVL    DEFNAM+NAM$L_DIR, DIRDSC+4
@@ -207,7 +208,7 @@ SEARCHDEF:
         SUBL3   R0, R1, R0              ; up to the colon
         INCL    R0
         BRB     40$
-30$:    BSBB    HASDIR                  ; only a directory: SYS$DISK stays
+30$:    BSBW    HASDIR                  ; only a directory: SYS$DISK stays
         BNEQ    80$
         MOVB    #^A/:/, DCL$TOKEN[R8]
         ADDL3   #1, R8, R0
@@ -217,6 +218,55 @@ SEARCHDEF:
         BLBC    R0, 90$
 80$:    BRW     DCL$OK
 90$:    BRW     DCL$DONE
+
+; TRNDEV: R8 = the length of a spec in DCL$TOKEN whose device $PARSE
+; found a search list behind. As VMS's SET DEFAULT, replaces the device
+; with its translation while it is a logical name of one string, until
+; it is a search list: SYS$MANAGER: becomes SYS$SYSROOT:[SYSMGR]. A
+; directory in the spec wins over the translation's. R8 = the new length.
+; Uses R0-R7 and R9.
+TRNDEV:
+        .JSB_ENTRY  OUTPUT=<R8>, SCRATCH=<R2, R3, R4, R5, R6, R7, R9>
+        MOVL    #LNM$C_MAXDEPTH, R9
+10$:    MOVL    R8, R0
+        MOVAB   DCL$TOKEN, R1
+        BSBW    STRDEV                  ; R6, R7: the device
+        TSTL    R7
+        BEQL    90$
+        BSBW    ISLIST                  ; its name to ISDSC
+        BLBS    R0, 90$                 ; a search list: done
+        $TRNLNM_S TABNAM=FILE_DEV, LOGNAM=ISDSC, ITMLST=DISKSTR
+        BLBC    R0, 90$                 ; not a logical name
+        ADDL3   #1, R7, R6              ; the rest, past the colon
+        CMPL    R6, R8
+        BLEQU   20$
+        MOVL    R8, R6
+20$:    MOVZWL  SLDSC, R7               ; the translation
+        LOCC    #^A/:/, R7, SLSTR
+        BEQL    40$                     ; only a name
+        SUBL3   R0, R7, R2
+        INCL    R2                      ; its device, with the colon
+        SUBL3   R6, R8, R4
+        MOVAB   DCL$TOKEN[R6], R5
+        LOCC    #91, R4, (R5)           ; the rest has a directory: the
+        BNEQ    30$                     ; translation's goes
+        LOCC    #60, R4, (R5)
+        BEQL    35$
+30$:    MOVL    R2, R7
+35$:    MOVC3   R7, SLSTR, NEWTOK
+        BRB     50$
+40$:    MOVC3   R7, SLSTR, NEWTOK
+        MOVB    #^A/:/, (R3)+
+50$:    SUBL3   R6, R8, R0
+        MOVC3   R0, DCL$TOKEN[R6], (R3)
+        MOVAB   NEWTOK, R0
+        SUBL3   R0, R3, R0
+        CMPL    R0, #LINESIZE
+        BGTRU   90$
+        MOVL    R0, R8
+        MOVC3   R8, NEWTOK, DCL$TOKEN
+        SOBGTR  R9, 10$
+90$:    RSB
 
 ; HASDIR: R8 = the length of a spec in DCL$TOKEN. Z clear if it has a
 ; directory, [ or <. Uses R0 and R1.
@@ -303,15 +353,18 @@ DCL$SETCOMMAND::
 80$:    BRW     DCL$DONE
 
 ; DCL$SHOWDEF, SHOW DEFAULT: shows the default device and directory,
-; what $PARSE expands an empty specification to. When SYS$DISK is a
-; search list, as VMS does: SYS$DISK's string and the default directory,
-; HOME:[SYSMGR], then each string of the list after "=", a string that
-; names another search list as that list's strings (SHOWSL).
+; what $PARSE expands an empty specification to, then %DCL-I-INVDEF if
+; that directory isn't there. When SYS$DISK is a search list, as VMS
+; does: SYS$DISK's string and the default directory,
+; SYS$SYSROOT:[SYSMGR], then after "=" each directory the list's strings
+; take it to that is there, MDA0:[SYSMGR] (SHOWSL), or %DCL-I-INVDEF if
+; none is.
 DCL$SHOWDEF::
         .EXCEPTION_ENTRY
         CLRB    DEFFAB+FAB$B_FNS
         CLRB    DEFFAB+FAB$B_DNS
         $PARSE  FAB=DEFFAB
+        MOVL    R0, R6
         CMPL    R0, #RMS$_DNF
         BEQL    10$
         BLBC    R0, 20$
@@ -320,34 +373,61 @@ DCL$SHOWDEF::
         ADDTEXT "  "
         BSBW    ADDDEF
         BSBW    DCL$SAY
-        MOVL    #SS$_NORMAL, R0
+        CMPL    R6, #RMS$_DNF
+        BNEQ    15$
+        ADDTEXT "%DCL-I-INVDEF, "
+        BSBW    ADDDEF
+        ADDTEXT " does not exist"
+        BSBW    DCL$SAY
+15$:    MOVL    #SS$_NORMAL, R0
 20$:    BRW     DCL$DONE
 30$:    BSBW    GETDDIR
         BLBC    R0, 20$
         $TRNLNM_S TABNAM=FILE_DEV, LOGNAM=DISK, ITMLST=DISKSTR
         BLBC    R0, 20$
         ADDTEXT "  "
+        BSBW    ADDLIST
+        BSBW    DCL$SAY
+        MOVB    DDIRDSC, SLFAB+FAB$B_DNS
+        CLRL    SHOWN
+        MOVL    SLDSC, R0
+        MOVAB   SLSTR, R1
+        BSBW    STRDEV                  ; the list's name
+        CLRQ    R2                      ; its strings' directories hold
+        MOVL    #LNM$C_MAXDEPTH, R9
+        BSBW    SHOWSL
+        BLBC    R0, 90$
+        TSTL    SHOWN
+        BNEQ    80$
+        ADDTEXT "%DCL-I-INVDEF, "
+        BSBW    ADDLIST
+        ADDTEXT " does not exist"
+        BSBW    DCL$SAY
+80$:    MOVL    #SS$_NORMAL, R0
+90$:    BRW     DCL$DONE
+
+; ADDLIST: adds SYS$DISK's string, in SLSTR, and the default directory,
+; in DDIR, to the message. Uses R0-R2.
+ADDLIST:
+        .JSB_ENTRY  SCRATCH=<R2>
         MOVAB   SLSTR, R1
         MOVL    SLDSC, R2
         BSBW    DCL$ADD
         MOVAB   DDIR, R1
         MOVZWL  DDIRDSC, R2
-        BSBW    DCL$ADD
-        BSBW    DCL$SAY
-        MOVL    SLDSC, R0
-        MOVAB   SLSTR, R1
-        BSBW    STRDEV                  ; the list's name
-        MOVL    #LNM$C_MAXDEPTH, R9
-        BSBW    SHOWSL
-        BRB     20$
+        BRW     DCL$ADD
 
-; SHOWSL: R6 = a logical name, R7 = its length, R9 = how many more
-; search lists deep it may go. Shows each of its strings, "  =   string",
-; one that names another search list as that one's strings. R0 =
-; $TRNLNM's status. Uses R0-R5.
+; SHOWSL: R6 = a logical name, R7 = its length, R2 = the length of a
+; directory that goes in place of its strings' own, R3 its address, or 0,
+; R9 = how many more names deep it may go. As RMS takes the default
+; directory through each of the name's strings, depth first, through
+; each logical name a string's device is: shows "  =   dev:[dir]" for
+; each directory that is there, and counts them in SHOWN. A string's own
+; directory, or one over it, wins over the default. R0 = $TRNLNM's
+; status. Uses R0-R5.
 SHOWSL:
         .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5>
-        PUSHR   #^M<R6, R7, R9, R11>
+        PUSHR   #^M<R6, R7, R9, R10, R11>
         SUBL2   #FRAME, SP
         MOVL    SP, R11
         MOVL    #<LNM$_INDEX@16>+4, F_ITM(R11)
@@ -361,51 +441,117 @@ SHOWSL:
         CLRQ    F_ITM+32(R11)
         MOVL    R7, F_NDSC(R11)
         MOVL    R6, F_NDSC+4(R11)
+        MOVQ    R2, F_ODIR(R11)
         CLRL    F_IDX(R11)
 10$:    CLRW    F_LEN(R11)
         $TRNLNM_S TABNAM=FILE_DEV, LOGNAM=F_NDSC(R11), ITMLST=F_ITM(R11)
         BLBC    R0, 90$
-        MOVZWL  F_LEN(R11), R0
-        MOVAB   F_STR(R11), R1
-        BSBB    STRDEV
+        BSBW    OVERDIR                 ; the string, in F_NEW
+        BLBC    R0, 60$                 ; too long: passed over
+        MOVL    R10, R0
+        MOVAB   F_NEW(R11), R1
+        BSBW    STRDEV
         TSTL    R7
         BEQL    50$
         TSTL    R9
         BEQL    50$
-        BSBB    ISLIST
+        BSBW    ISNAME
         BLBC    R0, 50$
-        DECL    R9
-        BSBB    SHOWSL
+        CLRQ    R2                      ; its directory goes over the name's
+        LOCC    #91, R10, F_NEW(R11)
+        BNEQ    20$
+        LOCC    #60, R10, F_NEW(R11)
+        BEQL    30$
+20$:    MOVL    R0, R2
+        MOVL    R1, R3
+30$:    DECL    R9
+        BSBW    SHOWSL
         INCL    R9
         BLBC    R0, 90$
         BRB     60$
-50$:    ADDTEXT "  =   "
-        MOVAB   F_STR(R11), R1
-        MOVZWL  F_LEN(R11), R2
-        BSBW    DCL$ADD
-        BSBW    DCL$SAY
+50$:    MOVL    R10, R0
+        BSBW    SHOWDIR
 60$:    INCL    F_IDX(R11)
         CMPL    F_IDX(R11), F_MAX(R11)
         BLEQ    10$
         MOVL    #SS$_NORMAL, R0
 90$:    ADDL2   #FRAME, SP
-        POPR    #^M<R6, R7, R9, R11>
+        POPR    #^M<R6, R7, R9, R10, R11>
         RSB
+
+; OVERDIR: R11 = SHOWSL's frame. Copies the string in F_STR to F_NEW,
+; with the directory in F_ODIR, if any, in place of its own, after a
+; colon: R10 = its length. R0 = 0 if it would be too long. Uses R0-R5.
+OVERDIR:
+        .JSB_ENTRY  OUTPUT=<R10>, SCRATCH=<R2, R3, R4, R5>
+        MOVZWL  F_LEN(R11), R10
+        TSTL    F_ODIR(R11)
+        BNEQ    10$
+        MOVC3   R10, F_STR(R11), F_NEW(R11)
+        BRB     80$
+10$:    LOCC    #91, R10, F_STR(R11)
+        BNEQ    20$
+        LOCC    #60, R10, F_STR(R11)
+20$:    SUBL2   R0, R10                 ; up to its directory
+        ADDL3   R10, F_ODIR(R11), R0
+        INCL    R0
+        CMPL    R0, #LINESIZE
+        BGTRU   90$
+        MOVC3   R10, F_STR(R11), F_NEW(R11)
+        TSTL    R10
+        BEQL    40$
+        CMPB    -1(R3), #^A/:/
+        BEQL    40$
+        MOVB    #^A/:/, (R3)+           ; a name: its colon
+40$:    MOVC3   F_ODIR(R11), @F_ODIR+4(R11), (R3)
+        MOVAB   F_NEW(R11), R0
+        SUBL3   R0, R3, R10
+80$:    MOVL    #1, R0
+        RSB
+90$:    CLRL    R0
+        RSB
+
+; SHOWDIR: R11 = SHOWSL's frame, R0 = the length of the string in F_NEW.
+; $PARSEs it, with the default directory, and shows the device and
+; directory it expands to, "  =   MDA0:[SYSMGR]", if the directory is
+; there, counting it in SHOWN. Uses R0-R5.
+SHOWDIR:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5>
+        MOVB    R0, SLFAB+FAB$B_FNS
+        MOVAB   F_NEW(R11), SLFAB+FAB$L_FNA
+        $PARSE  FAB=SLFAB
+        BLBC    R0, 90$
+        ADDTEXT "  =   "
+        MOVL    SLNAM+NAM$L_DEV, R1
+        MOVZBL  SLNAM+NAM$B_DEV, R2
+        ADDB2   SLNAM+NAM$B_DIR, R2
+        BSBW    DCL$ADD
+        BSBW    DCL$SAY
+        INCL    SHOWN
+90$:    RSB
 
 ; ISLIST: R6 = a name, R7 = its length. R0 = 1 if it is a logical name
 ; with more than one string, else 0. Uses R0 and R1.
 ISLIST:
         .JSB_ENTRY
-        MOVL    R7, ISDSC
-        MOVL    R6, ISDSC+4
-        CLRL    ISMAX
-        $TRNLNM_S TABNAM=FILE_DEV, LOGNAM=ISDSC, ITMLST=LISTMAX
+        BSBB    ISNAME
         BLBC    R0, 80$
         TSTL    ISMAX
         BEQL    80$
         MOVL    #1, R0
         RSB
 80$:    CLRL    R0
+        RSB
+
+; ISNAME: R6 = a name, R7 = its length. R0 = $TRNLNM's status for it,
+; success if it is a logical name, its last index in ISMAX. Uses R0 and
+; R1.
+ISNAME:
+        .JSB_ENTRY
+        MOVL    R7, ISDSC
+        MOVL    R6, ISDSC+4
+        CLRL    ISMAX
+        $TRNLNM_S TABNAM=FILE_DEV, LOGNAM=ISDSC, ITMLST=LISTMAX
         RSB
 
 ; STRDEV: R1 = a file specification, R0 = its length. R6 = its device,

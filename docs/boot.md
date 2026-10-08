@@ -142,7 +142,20 @@ interpreter. It is linked high in P1, which tells the executive it is one
   which a program assigns a channel to for a socket, as TCP/IP Services'
   `TCPIP$STARTUP.COM` defines it. Then `INITIALIZE MDA0: RAM` makes the
   ramdisk, empty, and `MOUNT MDA0: RAM` mounts it and prints
-  `%MOUNT-I-MOUNTED, RAM mounted on _MDA0:`. It holds TCP/IP's two
+  `%MOUNT-I-MOUNTED, RAM mounted on _MDA0:`. Next it makes
+  `SYS$SYSROOT` a search list, as a VMScluster's common system disk has
+  it: `SYS$SPECIFIC`, this system's own root, is the ramdisk, `MDA0:`,
+  and `SYS$COMMON`, the root every system shares, is the system disk.
+  `CREATE/DIRECTORY` makes `MDA0:[SYSEXE]` and `MDA0:[SYSMGR]`, and
+  `SYS$SYSTEM` and `SYS$MANAGER` become `SYS$SYSROOT:[SYSEXE]` and
+  `SYS$SYSROOT:[SYSMGR]`, and `SYS$DISK`, the default device of a
+  process that hasn't set its own, `SYS$SYSROOT:`, so SYSTEM's `SHOW
+  DEFAULT` says `SYS$SYSROOT:[SYSMGR]`, `=   MDA0:[SYSMGR]` and
+  `=   DKA0:[SYSMGR]`, as on VMS. RMS looks for a file in the ramdisk's
+  directory first and then in the system disk's, and makes a new one in
+  the ramdisk's, so `COPY` to `SYS$MANAGER:` works though `DKA0:` is
+  write locked, and a file there hides the system disk's of the same
+  name until the system stops. The ramdisk also holds TCP/IP's two
   files: the hosts database, `TCPIP$HOST.DAT`, which the first `TCPIP
   SET HOST` or `SHOW HOST` makes, and the saved network configuration,
   `TCPIP$CONFIG.DAT`. So the only hosts a boot knows, and its fixed
@@ -160,7 +173,7 @@ interpreter. It is linked high in P1, which tells the executive it is one
   is `@SYS$MANAGER:SYLOGIN`, which
   runs `DKA0:[SYSMGR]SYLOGIN.COM`, as VMS runs it
   at each login: it defines the global symbol `HOME`, a command that goes
-  back to `[SYSMGR]`, and `NSLOOKUP`, a foreign command that runs
+  back to `SYS$SYSROOT:[SYSMGR]`, and `NSLOOKUP`, a foreign command that runs
   `SYS$SYSTEM:TCPIP$NSLOOKUP.EXE`, and runs `TCPIP START COMMUNICATION`. With a
   network, that opens a UDP socket on `TCPIP$DEVICE:` and, with ioctls on
   it, sets the interface's address, mask and gateway as `TCPIP
