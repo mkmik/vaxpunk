@@ -64,6 +64,7 @@ fn clitest() {
         transfer: None,
         link_time: 0,
         relocatable: false,
+        shareable: None,
     };
     let linked = vlink::link(&modules, &opts).unwrap();
     let exe = Path::new(env!("CARGO_TARGET_TMPDIR")).join("clitest.exe");

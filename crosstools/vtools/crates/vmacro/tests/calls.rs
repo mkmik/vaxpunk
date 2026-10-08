@@ -1,5 +1,6 @@
-//! Calls and jumps: `bl` and `b` to a plain address, which reach ±128 MB,
-//! and through a register to a G^ one, which may be in another image.
+//! Calls and jumps: `bl` and `b` to an address, `G^` or not, which the
+//! linker sends through a veneer when the target is out of their ±128 MB,
+//! as in another image, and through a register to any other operand.
 
 use vasm::Dialect;
 
@@ -24,19 +25,17 @@ fn near() {
     assert!(lines("JSB", "PUT").contains(&"bl PUT".to_string()));
 }
 
-/// Whether `code` takes the address of `sym` with `adrp`, ±4 GB, and then
-/// jumps with `op` to a register.
-fn far(code: &[String], sym: &str, op: &str) -> bool {
-    code.iter()
-        .any(|l| l.starts_with("adrp") && l.ends_with(sym))
-        && code.iter().any(|l| l.starts_with(&format!("{op} x")))
-}
-
 #[test]
 fn general() {
-    assert!(far(&lines("CALLS", "#0, G^SYS$EXIT"), "SYS$EXIT", "blr"));
-    assert!(far(&lines("JSB", "G^EXE$OUTCHAR"), "EXE$OUTCHAR", "blr"));
-    assert!(far(&lines("JMP", "G^EXE$DELSELF"), "EXE$DELSELF", "br"));
+    assert!(lines("CALLS", "#0, G^SYS$EXIT").contains(&"bl SYS$EXIT".to_string()));
+    assert!(lines("JSB", "G^EXE$OUTCHAR").contains(&"bl EXE$OUTCHAR".to_string()));
+    assert!(lines("JMP", "G^EXE$DELSELF").contains(&"b EXE$DELSELF".to_string()));
+    // A constant address is reached through a register.
+    assert!(
+        lines("JSB", "G^4096")
+            .iter()
+            .any(|l| l.starts_with("blr x"))
+    );
 }
 
 /// `.ENTRY` builds DESIGN-0004's frame and its descriptor, which says what

@@ -6,9 +6,12 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use std::{env, fs};
 
 const USAGE: &str = "usage: vlink [/EXE=file] [/MAP[=file]] [/BASE=address] [/TRANSFER=symbol] \
-                     [/RELOCATABLE] FILE...
-       vlink [-o file] [-m file] [--base address] [--transfer symbol] [--relocatable] FILE...
-A FILE is an object module, or an object library: LIB.OLB/LIBRARY or LIB.OLB.";
+                     [/RELOCATABLE] [/SHAREABLE] FILE...
+       vlink [-o file] [-m file] [--base address] [--transfer symbol] [--relocatable] \
+                     [--shareable] FILE...
+A FILE is an object module, an object library (LIB.OLB/LIBRARY or LIB.OLB), a
+shareable image to link against, or an options file, FILE.OPT/OPTIONS, which
+gives a shareable image's SYMBOL_VECTOR=(NAME=PROCEDURE,...).";
 
 fn main() -> ExitCode {
     match run() {
@@ -26,7 +29,8 @@ fn run() -> Result<(), Vec<String>> {
     let usage = || vec![format!("%VLINK-F-USAGE, {USAGE}")];
     let (mut inputs, mut exe, mut map, mut base, mut transfer) =
         (Vec::new(), None, None, None, None);
-    let (mut want_map, mut relocatable) = (false, false);
+    let (mut want_map, mut relocatable, mut shareable) = (false, false, false);
+    let mut vector = Vec::new();
     let mut args = env::args().skip(1);
     while let Some(arg) = args.next() {
         // DCL qualifiers, /NAME or /NAME=value, then Unix options.
@@ -43,6 +47,7 @@ fn run() -> Result<(), Vec<String>> {
             ("/BASE", Some(v)) => base = Some(v),
             ("/TRANSFER", Some(v)) => transfer = Some(v),
             ("/RELOCATABLE" | "--RELOCATABLE", None) => relocatable = true,
+            ("/SHAREABLE" | "--SHAREABLE", None) => shareable = true,
             ("-O", None) => exe = Some(args.next().ok_or_else(usage)?.into()),
             ("-M", None) => {
                 want_map = true;
@@ -51,6 +56,12 @@ fn run() -> Result<(), Vec<String>> {
             ("--BASE", None) => base = Some(args.next().ok_or_else(usage)?),
             ("--TRANSFER", None) => transfer = Some(args.next().ok_or_else(usage)?),
             _ if arg.starts_with('-') => return Err(usage()),
+            _ if name.ends_with("/OPTIONS") => {
+                let path = &arg[..arg.len() - 8];
+                let text = fs::read_to_string(path)
+                    .map_err(|e| vec![format!("%VLINK-F-OPENIN, {path}: {e}")])?;
+                vector.extend(vlink::options(&text)?);
+            }
             _ if name.ends_with("/LIBRARY") => {
                 inputs.push((PathBuf::from(&arg[..arg.len() - 8]), true));
             }
@@ -62,7 +73,14 @@ fn run() -> Result<(), Vec<String>> {
     };
     let exe = exe.unwrap_or_else(|| first.with_extension("exe"));
     let map = want_map.then(|| map.unwrap_or_else(|| exe.with_extension("map")));
+    if !vector.is_empty() && !shareable {
+        return Err(vec![
+            "%VLINK-F-NOTSHR, SYMBOL_VECTOR is for a /SHAREABLE image".into(),
+        ]);
+    }
     let base = match base {
+        // A shareable image is linked at 0, as on Alpha, and moved.
+        None if shareable => 0,
         None => vlink::DEFAULT_BASE,
         Some(b) => {
             number(&b).ok_or_else(|| vec![format!("%VLINK-F-BADBASE, bad base address {b}")])?
@@ -91,6 +109,7 @@ fn run() -> Result<(), Vec<String>> {
         transfer: transfer.map(|t| t.to_ascii_uppercase()),
         link_time: link_time(),
         relocatable,
+        shareable: shareable.then_some(vector),
     };
     let linked = vlink::link(&files, &opts)?;
     for w in &linked.warnings {

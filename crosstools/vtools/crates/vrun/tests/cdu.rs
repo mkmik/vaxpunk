@@ -98,6 +98,7 @@ fn native(cld: &str) -> Result<Vec<u8>, String> {
         transfer: None,
         link_time: 0,
         relocatable: false,
+        shareable: None,
     };
     let linked = vlink::link(&modules, &opts).unwrap();
     // The tests run at once: an image each.

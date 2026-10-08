@@ -5,6 +5,7 @@ use alloc::string::String;
 use alloc::vec;
 use alloc::vec::Vec;
 
+use crate::obj::{self, Gsd, Record};
 use crate::record::{Field, Reader, ascic, from_ascic, record};
 use crate::{ARCH_ARM64, Error};
 
@@ -55,8 +56,72 @@ impl Eihd {
     pub const K_MINORID: u32 = 0;
     /// `imgtype` of an executable image.
     pub const K_EXE: u32 = 1;
+    /// `imgtype` of a shareable image, which others link against.
+    pub const K_LIM: u32 = 2;
     /// `lnkflags`: the image has no transfer address.
     pub const M_LNKNOTFR: u32 = 0x2;
+    /// `lnkflags`: the image may move; its fixup section says how.
+    pub const M_PICIMG: u32 = 0x8;
+}
+
+record! {
+    /// Image symbol table header (`EIHS$`): where the global symbol table
+    /// is, for a shareable image. vaxpunk has no debugger tables.
+    pub struct Eihs {
+        pub majorid: u32,
+        pub minorid: u32,
+        pub dstvbn: u32,
+        pub dstsize: u32,
+        /// The first block of the GST, counting from 1.
+        pub gstvbn: u32,
+        /// How many records the GST has.
+        pub gstsize: u32,
+        pub dmtvbn: u32,
+        pub dmtbytes: u32,
+    }
+}
+
+impl Eihs {
+    pub const K_MAJORID: u32 = 1;
+    pub const K_MINORID: u32 = 1;
+}
+
+record! {
+    /// A GST entry (`EGSD$C_SYMG`, `EGST$`), after the subrecord's type and
+    /// size: a symbol of a shareable image's symbol vector.
+    pub struct Egst {
+        pub datyp: u8,
+        pub temp: u8,
+        pub flags: u16,
+        /// The entry's offset in the symbol vector.
+        pub value: u64,
+        /// The procedure's entry point, as linked.
+        pub lp_1: u64,
+        /// Its value, as linked: the same.
+        pub lp_2: u64,
+        pub psindx: u32,
+        pub name: String,
+    }
+}
+
+/// GSD subrecord type of a GST entry.
+pub const EGSD_C_SYMG: u16 = 8;
+
+record! {
+    /// Shareable image list entry (`SHL$`), in a fixup section: a shareable
+    /// image the image calls, by name. The rest is the image activator's.
+    pub struct Shl {
+        pub baseva: u32,
+        pub shlptr: u32,
+        pub ident: u32,
+        pub permctx: u32,
+        /// Size of the entry, 64.
+        pub size: u8,
+        pub fill_1: [u8; 2],
+        pub flags: u8,
+        pub icb: u32,
+        pub imgnam: [u8; 40],
+    }
 }
 
 record! {
@@ -139,12 +204,14 @@ record! {
         /// The image's own quadword and longword addresses.
         pub qrelfixoff: u32,
         pub lrelfixoff: u32,
-        /// The rest are for shareable images, which wait.
+        /// The quadwords that get addresses in shareable images.
         pub qdotadroff: u32,
+        /// Alpha's other lists, which vaxpunk doesn't use.
         pub ldotadroff: u32,
         pub codeadroff: u32,
         pub lpfixoff: u32,
         pub chgprtoff: u32,
+        /// The shareable image list, and its entries.
         pub shlstoff: u32,
         pub shrimgcnt: u32,
         pub shlextra: u32,
@@ -169,70 +236,166 @@ pub struct Fixups {
     pub long_max: i32,
 }
 
+/// A shareable image that an image calls, from its fixup section's
+/// shareable image list, and where the image holds addresses in it, which
+/// the image activator sets once it has mapped that image.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ShlRef {
+    /// The shareable image's name, which the image activator looks for in
+    /// `SYS$SHARE:`, with `.EXE`.
+    pub name: String,
+    /// Each quadword to set: its offset from the image's lowest section
+    /// address, and the offset in the shareable image's symbol vector of
+    /// the entry that holds the address. In increasing order of offset.
+    pub quad: Vec<(u32, u32)>,
+}
+
+/// A shareable image's symbol vector: the procedures other images may
+/// call, each a quadword holding its address. Entry i is at `addr` + 8i.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct SymbolVector {
+    /// Where the vector is, as linked.
+    pub addr: u64,
+    /// Each entry's procedure: its name and its address, as linked.
+    pub entries: Vec<(String, u64)>,
+}
+
 /// A relocation record's bitmap skips at most this many slots; past that, a
 /// new record is smaller.
 const MAX_GAP: u32 = 64;
 
-impl Fixups {
-    /// The fixup section: the header, then the quadword and longword
-    /// relocation records.
-    pub fn write(&self) -> Vec<u8> {
-        let mut out = vec![0; Eiaf::SIZE];
-        let qrelfixoff = records(&mut out, &self.quad, 8);
-        let lrelfixoff = records(&mut out, &self.long, 4);
-        let eiaf = Eiaf {
-            majorid: 0,
-            minorid: 0,
-            iaflink: 0,
-            fixuplnk: 0,
-            size: Eiaf::SIZE as u32,
-            flags: 0,
-            qrelfixoff,
-            lrelfixoff,
-            qdotadroff: 0,
-            ldotadroff: 0,
-            codeadroff: 0,
-            lpfixoff: 0,
-            chgprtoff: 0,
-            shlstoff: 0,
-            shrimgcnt: 0,
-            shlextra: 0,
+/// The fixup section: the header, the quadword and longword relocation
+/// records of `own`, the shareable image list and the `.ADDRESS` fixups
+/// of `shl`.
+pub fn write_eiaf(own: Option<&Fixups>, shl: &[ShlRef]) -> Vec<u8> {
+    let mut out = vec![0; Eiaf::SIZE];
+    let empty = Fixups::default();
+    let f = own.unwrap_or(&empty);
+    let qrelfixoff = records(&mut out, &f.quad, 8);
+    let lrelfixoff = records(&mut out, &f.long, 4);
+    let shlstoff = if shl.is_empty() { 0 } else { out.len() as u32 };
+    for s in shl {
+        let entry = Shl {
+            baseva: 0,
+            shlptr: 0,
+            ident: 0,
             permctx: 0,
-            base_va: 0,
-            lppsbfixoff: 0,
-            lw_min: self.long_min,
-            lw_max: self.long_max,
+            size: Shl::SIZE as u8,
+            fill_1: [0; 2],
+            flags: 0,
+            icb: 0,
+            imgnam: ascic(&s.name),
         };
-        put(&mut out, 0, |v| eiaf.write(v));
-        out
+        entry.write(&mut out);
     }
+    // A group for each image with fixups: the count and its index in the
+    // list, then the pairs. A zero count ends them.
+    let qdotadroff = if shl.iter().all(|s| s.quad.is_empty()) {
+        0
+    } else {
+        let at = out.len() as u32;
+        for (i, s) in shl.iter().enumerate().filter(|(_, s)| !s.quad.is_empty()) {
+            (s.quad.len() as u32).put(&mut out);
+            (i as u32).put(&mut out);
+            for &(off, entry) in &s.quad {
+                off.put(&mut out);
+                entry.put(&mut out);
+            }
+        }
+        out.extend([0; 8]);
+        at
+    };
+    let eiaf = Eiaf {
+        majorid: 0,
+        minorid: 0,
+        iaflink: 0,
+        fixuplnk: 0,
+        size: Eiaf::SIZE as u32,
+        flags: 0,
+        qrelfixoff,
+        lrelfixoff,
+        qdotadroff,
+        ldotadroff: 0,
+        codeadroff: 0,
+        lpfixoff: 0,
+        chgprtoff: 0,
+        shlstoff,
+        shrimgcnt: shl.len() as u32,
+        shlextra: 0,
+        permctx: 0,
+        base_va: 0,
+        lppsbfixoff: 0,
+        lw_min: f.long_min,
+        lw_max: f.long_max,
+    };
+    put(&mut out, 0, |v| eiaf.write(v));
+    out
+}
 
-    /// Parses a fixup section. Only the image's own fixups are allowed.
-    pub fn parse(b: &[u8]) -> Result<Fixups, Error> {
-        let h = Eiaf::parse(b)?;
-        if (h.size as usize) < Eiaf::SIZE {
-            return Err(Error::Invalid("fixup section header size"));
-        }
-        let shared = [
-            h.qdotadroff,
-            h.ldotadroff,
-            h.codeadroff,
-            h.lpfixoff,
-            h.chgprtoff,
-            h.shrimgcnt,
-            h.lppsbfixoff,
-        ];
-        if shared.iter().any(|&f| f != 0) {
-            return Err(Error::Invalid("fixups for shareable images"));
-        }
-        Ok(Fixups {
-            quad: slots(b, h.qrelfixoff, 8)?,
-            long: slots(b, h.lrelfixoff, 4)?,
-            long_min: h.lw_min,
-            long_max: h.lw_max,
-        })
+/// Parses a fixup section: the image's own fixups, if it may move, and the
+/// shareable images it calls.
+fn parse_eiaf(b: &[u8], movable: bool) -> Result<(Option<Fixups>, Vec<ShlRef>), Error> {
+    let h = Eiaf::parse(b)?;
+    if (h.size as usize) < Eiaf::SIZE {
+        return Err(Error::Invalid("fixup section header size"));
     }
+    let unsupported = [
+        h.ldotadroff,
+        h.codeadroff,
+        h.lpfixoff,
+        h.chgprtoff,
+        h.lppsbfixoff,
+    ];
+    if unsupported.iter().any(|&f| f != 0) {
+        return Err(Error::Invalid("fixup kind"));
+    }
+    let own = Fixups {
+        quad: slots(b, h.qrelfixoff, 8)?,
+        long: slots(b, h.lrelfixoff, 4)?,
+        long_min: h.lw_min,
+        long_max: h.lw_max,
+    };
+    if !movable && own != Fixups::default() {
+        return Err(Error::Invalid("fixups in an image that can't move"));
+    }
+    let mut shl = Vec::new();
+    if h.shrimgcnt != 0 {
+        let mut r = Reader(from(b, h.shlstoff as usize)?);
+        for _ in 0..h.shrimgcnt {
+            let entry = Shl::read(&mut r)?;
+            if usize::from(entry.size) != Shl::SIZE {
+                return Err(Error::Invalid("shareable image list entry size"));
+            }
+            shl.push(ShlRef {
+                name: from_ascic(&entry.imgnam),
+                quad: Vec::new(),
+            });
+        }
+    }
+    if h.qdotadroff != 0 {
+        let mut r = Reader(from(b, h.qdotadroff as usize)?);
+        loop {
+            let count = u32::read(&mut r)?;
+            let image = u32::read(&mut r)?;
+            if count == 0 {
+                break;
+            }
+            let s = shl
+                .get_mut(image as usize)
+                .ok_or(Error::Invalid("shareable image index"))?;
+            for _ in 0..count {
+                let pair = (u32::read(&mut r)?, u32::read(&mut r)?);
+                if s.quad.last().is_some_and(|l| l.0 >= pair.0) {
+                    return Err(Error::Invalid("fixup order"));
+                }
+                s.quad.push(pair);
+            }
+        }
+    }
+    Ok((movable.then_some(own), shl))
+}
 
+impl Fixups {
     /// Steps 1 and 2 of moving an image (docs/image-format.md): checks that
     /// the image, linked with its lowest section at `linked`, may have it at
     /// `base` instead, and returns the displacement.
@@ -363,8 +526,8 @@ pub struct Section {
     pub data: Vec<u8>,
 }
 
-/// An executable image.
-#[derive(Clone, Debug, PartialEq, Eq)]
+/// An executable or shareable image.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Image {
     /// Image name, up to 39 characters.
     pub name: String,
@@ -378,6 +541,10 @@ pub struct Image {
     pub sections: Vec<Section>,
     /// What a loader patches to move the image; None if it can't move.
     pub fixups: Option<Fixups>,
+    /// The shareable images it calls, in the order of their indexes.
+    pub shareables: Vec<ShlRef>,
+    /// For a shareable image, its symbol vector.
+    pub vector: Option<SymbolVector>,
 }
 
 impl Image {
@@ -389,10 +556,12 @@ impl Image {
     pub fn write(&self) -> Vec<u8> {
         let activoff = Eihd::SIZE.next_multiple_of(8);
         let imgidoff = activoff + Eiha::SIZE;
-        let isdoff = imgidoff + Eihi::SIZE;
+        let symdbgoff = imgidoff + Eihi::SIZE;
+        let isdoff = symdbgoff + if self.vector.is_some() { Eihs::SIZE } else { 0 };
 
-        let fixups = self.fixups.as_ref().map(|f| {
-            let data = f.write();
+        let eiaf = self.fixups.is_some() || !self.shareables.is_empty();
+        let fixups = eiaf.then(|| {
+            let data = write_eiaf(self.fixups.as_ref(), &self.shareables);
             let end = self.sections.iter().map(|s| s.vaddr + u64::from(s.size));
             // Never at 0, which would say that there is none.
             let end = end.max().unwrap_or(0).max(1);
@@ -428,13 +597,21 @@ impl Image {
             size: hdr_size as u32,
             isdoff: isdoff as u32,
             activoff: activoff as u32,
-            symdbgoff: 0,
+            symdbgoff: if self.vector.is_some() {
+                symdbgoff as u32
+            } else {
+                0
+            },
             imgidoff: imgidoff as u32,
             patchoff: 0,
             iafva: fixups.as_ref().map_or(0, |s| s.vaddr),
-            symvva: 0,
+            symvva: self.vector.as_ref().map_or(0, |v| v.addr),
             version_array_off: 0,
-            imgtype: Eihd::K_EXE,
+            imgtype: if self.vector.is_some() {
+                Eihd::K_LIM
+            } else {
+                Eihd::K_EXE
+            },
             subtype: 0,
             imgiocnt: 0,
             iochancnt: 0,
@@ -444,12 +621,16 @@ impl Image {
                 Eihd::M_LNKNOTFR
             } else {
                 0
+            } | if self.fixups.is_some() {
+                Eihd::M_PICIMG
+            } else {
+                0
             },
             ident: 0,
             sysver: 0,
             matchctl: 0,
             fill_1: [0; 3],
-            symvect_size: 0,
+            symvect_size: self.vector.as_ref().map_or(0, |v| v.entries.len() as u32),
             virt_mem_block_size: SECTION_SHIFT,
             ext_fixup_off: 0,
             noopt_psect_off: 0,
@@ -503,6 +684,22 @@ impl Image {
                 fill_1: 0,
             };
             put(&mut file, at, |v| eisd.write(v));
+        }
+        if let Some(vector) = &self.vector {
+            let gst = gst(&self.name, &self.ident, vector);
+            let eihs = Eihs {
+                majorid: Eihs::K_MAJORID,
+                minorid: Eihs::K_MINORID,
+                dstvbn: 0,
+                dstsize: 0,
+                gstvbn: (file.len() / BLOCK + 1) as u32,
+                gstsize: gst.len() as u32,
+                dmtvbn: 0,
+                dmtbytes: 0,
+            };
+            put(&mut file, symdbgoff, |v| eihs.write(v));
+            file.extend(obj::write(&gst));
+            file.resize(file.len().next_multiple_of(BLOCK), 0);
         }
         file
     }
@@ -565,19 +762,44 @@ impl Image {
             });
         }
 
-        let fixups = match eihd.iafva {
-            0 => None,
+        let movable = eihd.lnkflags & Eihd::M_PICIMG != 0;
+        let (fixups, shareables) = match eihd.iafva {
+            0 if movable => return Err(Error::Invalid("movable image without fixups")),
+            0 => (None, Vec::new()),
             va => {
                 let i = sections
                     .iter()
                     .position(|s| s.vaddr == va)
                     .ok_or(Error::Invalid("fixup section address"))?;
-                let f = Fixups::parse(&sections.remove(i).data)?;
-                if !within(&f, &sections) {
+                let (f, shl) = parse_eiaf(&sections.remove(i).data, movable)?;
+                let slots = shl.iter().flat_map(|s| s.quad.iter().map(|q| q.0));
+                let images = Fixups {
+                    quad: slots.collect(),
+                    ..Fixups::default()
+                };
+                if !f.iter().chain([&images]).all(|f| within(f, &sections)) {
                     return Err(Error::Invalid("fixup outside the image's contents"));
                 }
-                Some(f)
+                (f, shl)
             }
+        };
+        let vector = match eihd.imgtype {
+            Eihd::K_EXE => None,
+            Eihd::K_LIM => {
+                let eihs = Eihs::parse(from(hdr, eihd.symdbgoff as usize)?)?;
+                let block = (eihs.gstvbn as usize)
+                    .checked_sub(1)
+                    .ok_or(Error::Invalid("GST block number"))?;
+                let entries = parse_gst(from(file, block * BLOCK)?, eihs.gstsize)?;
+                if entries.len() != eihd.symvect_size as usize {
+                    return Err(Error::Invalid("symbol vector size"));
+                }
+                Some(SymbolVector {
+                    addr: eihd.symvva,
+                    entries,
+                })
+            }
+            _ => return Err(Error::Invalid("image type")),
         };
 
         Ok(Image {
@@ -587,8 +809,107 @@ impl Image {
             transfer: eiha.tfradr1,
             sections,
             fixups,
+            shareables,
+            vector,
         })
     }
+}
+
+/// A shareable image's GST: a module whose global symbol directory has an
+/// entry for each procedure of the symbol vector, as the Alpha linker
+/// writes it.
+fn gst(name: &str, ident: &str, vector: &SymbolVector) -> Vec<Record> {
+    let abs = Gsd::Psc(obj::Psc {
+        align: 0,
+        temp: 0,
+        flags: obj::psc::PIC | obj::psc::LIB | obj::psc::RD,
+        alloc: 0,
+        name: ".$$ABS$$.".into(),
+    });
+    let entries: Vec<Gsd> = (vector.entries.iter().enumerate())
+        .map(|(i, (name, addr))| {
+            let mut data = Vec::new();
+            Egst {
+                datyp: 0,
+                temp: 0,
+                flags: obj::sym::DEF | obj::sym::UNI | obj::sym::REL | obj::sym::NORM,
+                value: 8 * i as u64,
+                lp_1: *addr,
+                lp_2: *addr,
+                psindx: 0,
+                name: name.clone(),
+            }
+            .write(&mut data);
+            Gsd::Other {
+                gsdtyp: EGSD_C_SYMG,
+                data,
+            }
+        })
+        .collect();
+    let mut records = vec![
+        Record::Mhd(obj::Mhd {
+            strlvl: obj::STRLVL,
+            temp: 0,
+            arch1: ARCH_ARM64,
+            arch2: 0,
+            recsiz: obj::MAX_RECORD as u32,
+            name: name.into(),
+            version: ident.into(),
+            date: [b' '; 17],
+        }),
+        Record::Gsd(vec![abs]),
+    ];
+    // An entry is at most 80 bytes: 100 to a record fit in its 8 KB.
+    records.extend(entries.chunks(100).map(|c| Record::Gsd(c.to_vec())));
+    records.push(Record::Eom(
+        obj::Eom {
+            total_lps: 0,
+            comcod: 0,
+        },
+        None,
+    ));
+    records
+}
+
+/// The symbol vector's entries, from a GST of `count` records at the
+/// start of `b`. Every entry is a procedure's, and entry i is at 8i.
+fn parse_gst(b: &[u8], count: u32) -> Result<Vec<(String, u64)>, Error> {
+    // The records' own sizes say where the GST ends.
+    let mut r = Reader(b);
+    let mut len = 0;
+    for _ in 0..count {
+        let _rectyp = u16::read(&mut r)?;
+        let size = u16::read(&mut r)? as usize;
+        r.take(
+            size.checked_sub(4)
+                .ok_or(Error::Invalid("GST record size"))?,
+        )?;
+        len += size;
+    }
+    let mut entries = Vec::new();
+    for record in obj::parse(&b[..len])? {
+        let Record::Gsd(subrecords) = record else {
+            continue;
+        };
+        for sub in subrecords {
+            let Gsd::Other {
+                gsdtyp: EGSD_C_SYMG,
+                data,
+            } = sub
+            else {
+                continue;
+            };
+            let e = Egst::parse(&data)?;
+            if e.flags & obj::sym::NORM == 0 {
+                return Err(Error::Invalid("symbol vector entry that isn't a procedure"));
+            }
+            if e.value != 8 * entries.len() as u64 {
+                return Err(Error::Invalid("symbol vector entry order"));
+            }
+            entries.push((e.name, e.lp_1));
+        }
+    }
+    Ok(entries)
 }
 
 /// Whether each fixup names bytes that a section holds in the file.
@@ -659,7 +980,7 @@ mod tests {
             link_time: 0x00a1_b2c3_d4e5_f607,
             transfer: SECTION_ALIGN,
             sections,
-            fixups: None,
+            ..Image::default()
         }
     }
 
@@ -733,9 +1054,66 @@ mod tests {
         assert_eq!(got, records);
         assert_eq!(eiaf(36), 92 + 4 * records.len() as u32, "EIAF$L_LRELFIXOFF");
 
-        bytes[fix + 40] = 1; // EIAF$L_QDOTADROFF
+        bytes[fix + 44] = 1; // EIAF$L_LDOTADROFF
         let err = Image::parse(&bytes);
-        assert_eq!(err, Err(Error::Invalid("fixups for shareable images")));
+        assert_eq!(err, Err(Error::Invalid("fixup kind")));
+    }
+
+    /// `movable()` as a shareable image with two procedures in its vector,
+    /// and an image that can't move calling it, through a quadword in its
+    /// data section.
+    #[test]
+    fn shareable_images() {
+        let mut shr = movable();
+        shr.transfer = 0;
+        shr.vector = Some(SymbolVector {
+            addr: 0x20000,
+            entries: vec![("LIB$ONE".into(), 0x10000), ("LIB$TWO".into(), 0x10004)],
+        });
+        let bytes = shr.write();
+        let word = |b: &[u8], at: usize| u32_at(b, at).unwrap();
+        assert_eq!(word(&bytes, 52), Eihd::K_LIM, "EIHD$L_IMGTYPE");
+        assert_eq!(word(&bytes, 80), Eihd::M_LNKNOTFR | Eihd::M_PICIMG);
+        assert_eq!(word(&bytes, 40), 0x20000, "EIHD$Q_SYMVVA");
+        assert_eq!(word(&bytes, 96), 2, "EIHD$L_SYMVECT_SIZE");
+        let eihs = word(&bytes, 20) as usize;
+        assert_eq!(word(&bytes, eihs + 20), 4, "GST records: MHD, 2 EGSD, EEOM");
+        assert_eq!(Image::parse(&bytes), Ok(shr.clone()));
+
+        let mut main = movable();
+        main.fixups = None;
+        main.shareables = vec![
+            ShlRef {
+                name: "UNUSED".into(),
+                quad: vec![],
+            },
+            ShlRef {
+                name: "LIBRTL".into(),
+                quad: vec![(0x10000, 8)],
+            },
+        ];
+        let bytes = main.write();
+        assert_eq!(word(&bytes, 80) & Eihd::M_PICIMG, 0, "can't move");
+        assert_eq!(Image::parse(&bytes), Ok(main.clone()));
+        let fix = (word(&bytes, 12) as usize + 3 * Eisd::SIZE + 28, 32);
+        let fix = (word(&bytes, fix.0) as usize - 1) * BLOCK;
+        let eiaf = |at: usize| word(&bytes, fix + at);
+        assert_eq!((eiaf(32), eiaf(36)), (0, 0), "no relocation fixups");
+        assert_eq!((eiaf(60), eiaf(64)), (92, 2), "SHLSTOFF, SHRIMGCNT");
+        assert_eq!(
+            bytes[fix + 92 + 64 + 24..fix + 92 + 64 + 31],
+            *b"\x06LIBRTL"
+        );
+        let groups: Vec<u32> = (0..6).map(|i| eiaf(eiaf(40) as usize + 4 * i)).collect();
+        assert_eq!(groups, [1, 1, 0x10000, 8, 0, 0], "QDOTADROFF's group");
+
+        // A slot in the demand-zero section.
+        main.shareables[1].quad[0].0 = 0x20000;
+        let err = Image::parse(&main.write());
+        assert_eq!(
+            err,
+            Err(Error::Invalid("fixup outside the image's contents"))
+        );
     }
 
     #[test]

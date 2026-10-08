@@ -44,7 +44,7 @@
         .EXTERNAL SCH$SCHED, SCH$DACEFC_ALL, SGN$GW_QUANTUM
         .EXTERNAL EXE$ALONONPAGED, EXE$DEANONPGDSIZ, MMG$CREPAG, MMG$DELPAG
         .EXTERNAL MMG$SETPRT, EXE$RMVTIMQ, EXE$USRSTART, EXE$CLISTART
-        .EXTERNAL FIL$OPENFILE, RMS$RUNDOWN
+        .EXTERNAL FIL$OPENFILE, FIL$OPENSHR, RMS$RUNDOWN
         .EXTERNAL EXE$OUTZSTRING, EXE$OUTCSTRING, EXE$OUTHEX, EXE$OUTCRLF
         .EXTERNAL LNM$CREATE, LNM$DELTBL, SCH$QAST, EXE$FLUSHAST, IOC$CANCEL, SYS$EXIT
         .EXTERNAL MB$FINDNUM, MB$SEND, EXE$GQ_SYSTIME
@@ -61,9 +61,16 @@ EW = PTE$M_VALID ! <PRT$C_EW @ PTE$V_PROT>
 EIHD$L_SIZE = 8
 EIHD$L_ISDOFF = 12
 EIHD$L_ACTIVOFF = 16
+EIHD$Q_IAFVA = 32
+EIHD$Q_SYMVVA = 40
 EIHD$L_IMGTYPE = 52
 EIHD$L_LNKFLAGS = 80
+EIHD$L_SYMVECT_SIZE = 96
 EIHD$L_ARCH = 112
+EIHD$K_EXE = 1
+EIHD$K_LIM = 2                          ; a shareable image
+EIHD$V_LNKNOTFR = 1
+EIHD$V_PICIMG = 3                       ; it may move: its fixup section says how
 EIHA$Q_TFRADR1 = 8
 EISD$L_EISDSIZE = 8
 EISD$L_SECSIZE = 12
@@ -74,6 +81,14 @@ EISD$V_GBL = 0
 EISD$V_DZRO = 2
 EISD$V_WRT = 3
 EISD$V_EXE = 11
+EIAF$L_QRELFIXOFF = 32                  ; the fixup section's
+EIAF$L_LRELFIXOFF = 36
+EIAF$L_QDOTADROFF = 40
+EIAF$L_SHLSTOFF = 60
+EIAF$L_SHRIMGCNT = 64
+EIAF$L_LW_MAX = 88
+SHL$T_IMGNAM = 24                       ; a shareable image list entry's name, .ASCIC
+SHL$K_LENGTH = 64
 
         .PSECT  EXEC$DATA, NOEXE, WRT, QUAD
 EXITMSG:
@@ -535,12 +550,13 @@ NEXTISD:
 ; FIL$OPENFILE reads from SYS$SYSTEM: unless its name says where: maps its
 ; sections at their addresses, with their contents and protection. An
 ; image in P0 is user readable and, where it is writable, user writable,
-; and the end of P0 goes past it. One from VA$C_CLI up to the stacks in P1
-; is a command interpreter: supervisor readable and writable instead,
-; P1 starts at it, and its transfer address goes in PCB$L_CLI. R1 = the
-; transfer address, R0 = SS$_NORMAL, FIL$OPENFILE's error, such as
-; RMS$_FNF, SS$_BADIMGHDR, SS$_VASFULL or SS$_INSFMEM.
-; ponytail: images run where they are linked; the EIAF moves them.
+; and the end of P0 goes past it, and past each shareable image it calls,
+; which SHRACT activates after it. One from VA$C_CLI up to the stacks in P1
+; is a command interpreter: supervisor readable and writable instead, P1
+; starts at it, and its transfer address goes in PCB$L_CLI. R1 = the
+; transfer address, R0 = SS$_NORMAL, FIL$OPENFILE's or FIL$OPENSHR's
+; error, such as RMS$_FNF, SS$_BADIMGHDR, SS$_VASFULL or SS$_INSFMEM.
+; ponytail: an image runs where it is linked; only shareable images move.
 IMG$ACTIVATE::
         .JSB_ENTRY
         PUSHR   #^M<R2, R3, R4, R5, R6, R7, R8, R9, R10, R11>
@@ -554,33 +570,14 @@ IMG$ACTIVATE::
         MOVL    R1, R8
         CMPL    (R8), #3                ; an ARM64 executable image
         BNEQ    90$
-        CMPL    EIHD$L_IMGTYPE(R8), #1
+        CMPL    EIHD$L_IMGTYPE(R8), #EIHD$K_EXE
         BNEQ    90$
         CMPL    EIHD$L_ARCH(R8), #183
         BNEQ    90$
-        BBS     #1, EIHD$L_LNKFLAGS(R8), 90$    ; no transfer address
-; Its address range.
-        MOVL    #-1, R9                 ; the lowest
-        CLRL    R11                     ; past the highest
-        MOVL    EIHD$L_ISDOFF(R8), R10
-10$:    BSBW    NEXTISD
-        TSTL    R3
-        BEQL    20$
-        BBS     #EISD$V_GBL, EISD$L_FLAGS(R3), 90$
-        TSTL    EISD$Q_VIRT_ADDR+4(R3)
-        BNEQ    90$
-        MOVL    EISD$Q_VIRT_ADDR(R3), R0
-        CMPL    R0, R9
-        BGEQU   12$
-        MOVL    R0, R9
-12$:    ADDL2   EISD$L_SECSIZE(R3), R0
-        ADDL2   #MMG$C_PAGESIZE-1, R0
-        BICL2   #MMG$C_PAGESIZE-1, R0
-        CMPL    R0, R11
-        BLEQU   10$
-        MOVL    R0, R11
-        BRB     10$
-20$:    CMPL    R9, #VA$C_P0BASE
+        BBS     #EIHD$V_LNKNOTFR, EIHD$L_LNKFLAGS(R8), 90$
+        BSBW    RANGE
+        BLBC    R0, 99$
+        CMPL    R9, #VA$C_P0BASE
         BLSSU   95$
         MOVL    #UW, R6                 ; writable sections' PTE
         MOVL    #UR, R7                 ; the others'
@@ -597,46 +594,21 @@ IMG$ACTIVATE::
         MOVL    R9, PCB$L_FREP1VA(R4)
         MOVL    #SW, R6
         MOVL    #SR, R7
-35$:
-; Each section: zeroed pages, the contents, the protection.
-        MOVL    EIHD$L_ISDOFF(R8), R10
-40$:    BSBW    NEXTISD
-        TSTL    R3
-        BEQL    60$
-        MOVL    EISD$Q_VIRT_ADDR(R3), R0
-        MOVL    EISD$L_SECSIZE(R3), R1
-        ADDL2   #MMG$C_PAGESIZE-1, R1
-        ASHL    #-MMG$C_VPCTX, R1, R1
-        MOVL    #KW, R2
-        PUSHR   #^M<R0, R1>
-        BSBW    MMG$CREPAG
-        BLBC    R0, 92$
-        BBS     #EISD$V_DZRO, EISD$L_FLAGS(R3), 45$
-        SUBL3   #1, EISD$L_VBN(R3), R0
-        MULL2   #BLOCK, R0
-        ADDL2   R8, R0
-        PUSHR   #^M<R3, R4, R9>
-        MOVL    R0, R1
-        MOVL    EISD$L_SECSIZE(R3), R9  ; the bytes left
-        MOVL    EISD$Q_VIRT_ADDR(R3), R3
-42$:    MOVL    R9, R2                  ; MOVC3 copies 65535 at most
-        CMPL    R2, #65535
-        BLEQU   43$
-        MOVL    #65535, R2
-43$:    SUBL2   R2, R9
-        MOVC3   R2, (R1), (R3)
-        TSTL    R9
-        BNEQ    42$
-        POPR    #^M<R3, R4, R9>
-45$:    POPR    #^M<R0, R1>
-        MOVL    R6, R2
-        BBS     #EISD$V_WRT, EISD$L_FLAGS(R3), 50$
-        MOVL    R7, R2
-        BBC     #EISD$V_EXE, EISD$L_FLAGS(R3), 50$
-        BISL2   #PTE$M_EXEC, R2
-50$:    BSBW    MMG$SETPRT
-        BRB     40$
-60$:    ADDL3   R8, EIHD$L_ACTIVOFF(R8), R0
+35$:    CLRL    R2                      ; where it is linked
+        BSBW    MAPISD
+        BLBC    R0, 99$
+; The shareable images it calls, which only an image in P0 may.
+        MOVL    EIHD$Q_IAFVA(R8), R10
+        BEQL    40$
+        TSTL    EIAF$L_SHRIMGCNT(R10)
+        BEQL    40$
+        CMPL    R11, #VA$C_S0BASE
+        BGTRU   90$
+        BSBW    SHRLIST
+        BLBC    R0, 99$
+40$:    CLRL    R2
+        BSBW    PROTECT
+        ADDL3   R8, EIHD$L_ACTIVOFF(R8), R0
         MOVL    EIHA$Q_TFRADR1(R0), R1
         CMPL    R11, #VA$C_S0BASE
         BLEQU   65$
@@ -655,10 +627,275 @@ IMG$ACTIVATE::
         RSB
 90$:    MOVL    #SS$_BADIMGHDR, R0
         BRB     99$
-92$:    ADDL2   #8, SP                  ; R0 and R1, keeping the status
+95$:    MOVL    #SS$_VASFULL, R0
+        BRB     99$
+
+; RANGE: R8 = an image file. R9 = the lowest address of its sections, R11
+; the end of the highest, rounded up to a page. R0 = SS$_NORMAL, or
+; SS$_BADIMGHDR for a global section or one past 4 GB.
+RANGE:
+        .JSB_ENTRY  OUTPUT=<R9, R11>
+        PUSHR   #^M<R3, R10>
+        MOVL    #-1, R9
+        CLRL    R11
+        MOVL    EIHD$L_ISDOFF(R8), R10
+10$:    BSBW    NEXTISD
+        TSTL    R3
+        BEQL    80$
+        BBS     #EISD$V_GBL, EISD$L_FLAGS(R3), 90$
+        TSTL    EISD$Q_VIRT_ADDR+4(R3)
+        BNEQ    90$
+        MOVL    EISD$Q_VIRT_ADDR(R3), R0
+        CMPL    R0, R9
+        BGEQU   20$
+        MOVL    R0, R9
+20$:    ADDL2   EISD$L_SECSIZE(R3), R0
+        ADDL2   #MMG$C_PAGESIZE-1, R0
+        BICL2   #MMG$C_PAGESIZE-1, R0
+        CMPL    R0, R11
+        BLEQU   10$
+        MOVL    R0, R11
+        BRB     10$
+80$:    MOVL    #SS$_NORMAL, R0
+        BRB     95$
+90$:    MOVL    #SS$_BADIMGHDR, R0
+95$:    POPR    #^M<R3, R10>
+        RSB
+
+; MAPISD: R8 = an image file, R2 = how far from where it is linked it
+; goes. Maps each of its sections there, kernel writable, with its
+; contents. R0 = SS$_NORMAL, or MMG$CREPAG's error.
+MAPISD:
+        .JSB_ENTRY
+        PUSHR   #^M<R2, R3, R4, R5, R6, R9, R10>
+        MOVL    R2, R6
+        MOVL    EIHD$L_ISDOFF(R8), R10
+10$:    BSBW    NEXTISD
+        TSTL    R3
+        BEQL    80$
+        ADDL3   R6, EISD$Q_VIRT_ADDR(R3), R0
+        MOVL    EISD$L_SECSIZE(R3), R1
+        ADDL2   #MMG$C_PAGESIZE-1, R1
+        ASHL    #-MMG$C_VPCTX, R1, R1
+        MOVL    #KW, R2
+        BSBW    MMG$CREPAG
+        BLBC    R0, 90$
+        BBS     #EISD$V_DZRO, EISD$L_FLAGS(R3), 10$
+        PUSHL   R3
+        SUBL3   #1, EISD$L_VBN(R3), R1
+        MULL2   #BLOCK, R1
+        ADDL2   R8, R1                  ; from the file
+        MOVL    EISD$L_SECSIZE(R3), R9  ; the bytes left
+        ADDL3   R6, EISD$Q_VIRT_ADDR(R3), R3
+20$:    MOVL    R9, R2                  ; MOVC3 copies 65535 at most
+        CMPL    R2, #65535
+        BLEQU   30$
+        MOVL    #65535, R2
+30$:    SUBL2   R2, R9
+        MOVC3   R2, (R1), (R3)
+        TSTL    R9
+        BNEQ    20$
+        MOVL    (SP)+, R3
+        BRB     10$
+80$:    MOVL    #SS$_NORMAL, R0
+90$:    POPR    #^M<R2, R3, R4, R5, R6, R9, R10>
+        RSB
+
+; PROTECT: R8 = an image file, mapped R2 bytes from where it is linked,
+; R6 = the PTE of its writable sections, R7 = the others'. Gives each
+; section its protection, executable if it is code. Uses R0-R2.
+PROTECT:
+        .JSB_ENTRY  SCRATCH=<R2>
+        PUSHR   #^M<R3, R4, R10>
+        MOVL    R2, R4
+        MOVL    EIHD$L_ISDOFF(R8), R10
+10$:    BSBW    NEXTISD
+        TSTL    R3
+        BEQL    90$
+        ADDL3   R4, EISD$Q_VIRT_ADDR(R3), R0
+        MOVL    EISD$L_SECSIZE(R3), R1
+        ADDL2   #MMG$C_PAGESIZE-1, R1
+        ASHL    #-MMG$C_VPCTX, R1, R1
+        MOVL    R6, R2
+        BBS     #EISD$V_WRT, EISD$L_FLAGS(R3), 20$
+        MOVL    R7, R2
+        BBC     #EISD$V_EXE, EISD$L_FLAGS(R3), 20$
+        BISL2   #PTE$M_EXEC, R2
+20$:    BSBW    MMG$SETPRT
+        BRB     10$
+90$:    POPR    #^M<R3, R4, R10>
+        RSB
+
+; SHRLIST: R10 = the fixup section of an image in P0, mapped where it is
+; linked, from R9 up. Activates each shareable image of its list, with
+; SHRACT, and sets the quadwords its .ADDRESS fixups name, which the
+; image calls through, to the addresses in that image's symbol vector.
+; R0 = SS$_NORMAL, SHRACT's error, or SS$_BADIMGHDR.
+SHRLIST:
+        .JSB_ENTRY
+        PUSHR   #^M<R2, R3, R4, R5, R6, R7>
+        CLRL    R7                      ; the shareable image's index
+10$:    CMPL    R7, EIAF$L_SHRIMGCNT(R10)
+        BGEQU   80$
+        MULL3   #SHL$K_LENGTH, R7, R0
+        ADDL2   EIAF$L_SHLSTOFF(R10), R0
+        ADDL2   R10, R0                 ; its list entry
+        BSBW    SHRACT                  ; R1 = its symbol vector, R2 = its size
+        BLBC    R0, 90$
+        MOVL    EIAF$L_QDOTADROFF(R10), R3
+        BEQL    70$
+        ADDL2   R10, R3
+; A group of fixups: the count and the image's index, then each a pair:
+; an offset in the image, from R9, and one in the symbol vector.
+20$:    MOVL    (R3)+, R4
+        BEQL    70$
+        MOVL    (R3)+, R5
+        CMPL    R5, R7
+        BEQL    30$
+        ASHL    #3, R4, R4              ; another image's
+        ADDL2   R4, R3
+        BRB     20$
+30$:    MOVL    (R3)+, R5
+        MOVL    (R3)+, R6
+        CMPL    R6, R2
+        BGEQU   85$
+        ADDL2   R9, R5
+        ADDL3   R1, R6, R0
+        EVAX_LDQ R0, (R0)
+        EVAX_STQ R0, (R5)
+        SOBGTR  R4, 30$
+        BRB     20$
+70$:    INCL    R7
+        BRB     10$
+80$:    MOVL    #SS$_NORMAL, R0
+90$:    POPR    #^M<R2, R3, R4, R5, R6, R7>
+        RSB
+85$:    MOVL    #SS$_BADIMGHDR, R0
+        BRB     90$
+
+; SHRACT: R0 = an entry of the shareable image list of the image being
+; activated in P0. Activates the shareable image it names, which
+; FIL$OPENSHR reads from SYS$SHARE:, at the next 64 KB past the end of P0,
+; which then goes past it: maps its sections there, moves the addresses
+; it holds with RELOCATE, and gives the sections their protection, user
+; readable and, where writable, user writable. R1 = the address of its
+; symbol vector, R2 = the vector's size in bytes. R0 = SS$_NORMAL,
+; FIL$OPENSHR's error, SS$_BADIMGHDR, SS$_VASFULL or SS$_INSFMEM.
+; ponytail: each process maps its own copy, as VMS maps a shareable image
+; that isn't installed; global sections and INSTALL share them. One that
+; calls shareable images of its own is refused.
+SHRACT:
+        .JSB_ENTRY  OUTPUT=<R2>
+        PUSHR   #^M<R3, R4, R5, R6, R7, R8, R9, R10, R11>
+        MOVZBL  SHL$T_IMGNAM(R0), R7
+        MOVAB   SHL$T_IMGNAM+1(R0), R6
+        BSBW    FIL$OPENSHR
+        BLBC    R0, 98$
+        PUSHL   R3                      ; the file's pool block, to free
+        PUSHL   R1
+        MOVL    R1, R8
+        CMPL    (R8), #3                ; an ARM64 shareable image that moves
+        BNEQ    90$
+        CMPL    EIHD$L_IMGTYPE(R8), #EIHD$K_LIM
+        BNEQ    90$
+        CMPL    EIHD$L_ARCH(R8), #183
+        BNEQ    90$
+        BBC     #EIHD$V_PICIMG, EIHD$L_LNKFLAGS(R8), 90$
+        TSTL    EIHD$Q_IAFVA(R8)
+        BEQL    90$
+        BSBW    RANGE
+        BLBC    R0, 99$
+        MOVL    SCH$GL_CURPCB, R4
+        ADDL3   #^XFFFF, PCB$L_FREP0VA(R4), R0
+        BICL2   #^XFFFF, R0             ; where it goes
+        SUBL3   R9, R0, R5              ; how far it moves
+        ADDL3   R5, R11, R0             ; its end
+        CMPL    R0, #VA$C_S0BASE
+        BGTRU   95$
+        MOVL    R0, PCB$L_FREP0VA(R4)
+        MOVL    R5, R2
+        BSBW    MAPISD
+        BLBC    R0, 99$
+        ADDL3   R5, EIHD$Q_IAFVA(R8), R10       ; its fixup section, moved
+        TSTL    EIAF$L_SHRIMGCNT(R10)
+        BNEQ    90$
+        BSBW    RELOCATE
+        BLBC    R0, 99$
+        MOVL    R5, R2
+        MOVL    #UW, R6
+        MOVL    #UR, R7
+        BSBW    PROTECT
+        ADDL3   R5, EIHD$Q_SYMVVA(R8), R1
+        ASHL    #3, EIHD$L_SYMVECT_SIZE(R8), R2
+        MOVL    #SS$_NORMAL, R0
+99$:    MOVL    (SP)+, R3               ; the file's pool block
+        MOVL    (SP)+, R4
+        PUSHR   #^M<R0, R1, R2>
+        MOVL    R3, R0
+        MOVL    R4, R1
+        BSBW    EXE$DEANONPGDSIZ
+        POPR    #^M<R0, R1, R2>
+98$:    POPR    #^M<R3, R4, R5, R6, R7, R8, R9, R10, R11>
+        RSB
+90$:    MOVL    #SS$_BADIMGHDR, R0
         BRB     99$
 95$:    MOVL    #SS$_VASFULL, R0
         BRB     99$
+
+; RELOCATE: R10 = the fixup section of an image mapped R5 bytes from where
+; it was linked, R9 = its lowest address as linked. Adds R5 to each
+; address the image holds, which its relocation records name
+; (crosstools/vtools/docs/image-format.md). R0 = SS$_NORMAL, or
+; SS$_BADIMGHDR if a longword address would no longer fit in 31 bits.
+RELOCATE:
+        .JSB_ENTRY
+        PUSHR   #^M<R2, R3, R4, R6, R7, R8>
+        ADDL3   R5, R9, R8              ; where the offsets count from
+        TSTL    EIAF$L_LRELFIXOFF(R10)
+        BEQL    10$
+        ADDL3   R5, EIAF$L_LW_MAX(R10), R0
+        BVS     90$
+10$:    MOVL    EIAF$L_QRELFIXOFF(R10), R3
+        MOVL    #8, R7
+        BSBB    RECORDS
+        MOVL    EIAF$L_LRELFIXOFF(R10), R3
+        MOVL    #4, R7
+        BSBB    RECORDS
+        MOVL    #SS$_NORMAL, R0
+        BRB     95$
+90$:    MOVL    #SS$_BADIMGHDR, R0
+95$:    POPR    #^M<R2, R3, R4, R6, R7, R8>
+        RSB
+
+; RECORDS: R3 = the offset of a list of relocation records in the fixup
+; section at R10, or 0 for none, R7 = the bytes in each slot, 8 or 4, R8
+; = where the image starts, R5 = how far it moved. Adds R5 to the
+; quadword or longword in each slot a record's bits name. Uses R0-R4, R6.
+RECORDS:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R6>
+        TSTL    R3
+        BEQL    90$
+        ADDL2   R10, R3
+10$:    MOVL    (R3)+, R4               ; the bits, a multiple of 32
+        BEQL    90$
+        ADDL3   R8, (R3)+, R6           ; the first slot
+20$:    MOVL    (R3)+, R2               ; the next 32 slots
+        MOVL    #32, R1
+30$:    BLBC    R2, 50$
+        CMPL    R7, #8
+        BEQL    40$
+        ADDL2   R5, (R6)
+        BRB     50$
+40$:    EVAX_LDQ R0, (R6)
+        EVAX_ADDQ R0, R5, R0
+        EVAX_STQ R0, (R6)
+50$:    ADDL2   R7, R6
+        ASHL    #-1, R2, R2
+        SOBGTR  R1, 30$
+        SUBL2   #32, R4
+        BGTR    20$
+        BRB     10$
+90$:    RSB
 
 ; $EXIT code: ends the image, once the caller's mode has no exit handler
 ; left. While it has one, takes it off its list and returns SS$_NORMAL

@@ -61,6 +61,8 @@ pub mod psc {
 pub mod sym {
     pub const WEAK: u16 = 1 << 0;
     pub const DEF: u16 = 1 << 1;
+    /// Universal: a shareable image's symbol others may link against.
+    pub const UNI: u16 = 1 << 2;
     pub const REL: u16 = 1 << 3;
     pub const COMM: u16 = 1 << 4;
     pub const NORM: u16 = 1 << 6;

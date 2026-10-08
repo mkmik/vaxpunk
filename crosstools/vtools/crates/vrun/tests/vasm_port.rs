@@ -84,6 +84,7 @@ fn build(out: &Path) -> PathBuf {
         transfer: None,
         link_time: 0,
         relocatable: false,
+        shareable: None,
     };
     let image = vlink::link(&objects, &link)
         .unwrap_or_else(|e| panic!("{e:?}"))

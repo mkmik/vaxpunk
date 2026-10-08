@@ -55,8 +55,10 @@ Decisions this PRD rests on:
 - Paging to a page file, swapping, working set trimming. Memory is
   allocated and kept, as now.
 - Access control lists, security auditing, `SET AUDIT`. UIC protection only.
-- Shareable images and installed images, `INSTALL`. They come after
-  Milestone 1 (*Backlog*, tier 3).
+- Installed images, `INSTALL`, and processes sharing a shareable image's
+  pages. They come after Milestone 1 (*Backlog*, tier 3); shareable
+  images themselves are there, a copy in each process
+  ([ADR-0028](../adr/0028-shareable-images.md)).
 - RMS relative files, and indexed files beyond what `SYSUAF.DAT` needs:
   [PRD-0008](0008-rms-record-and-indexed-files.md).
 - DECnet, mail and remote file access ([PRD-0002](0002-networking.md)
@@ -215,7 +217,7 @@ until the hardware or size changes; leave it.
 
 | # | Notes | What closes them |
 | --- | --- | --- |
-| 20 | No shareable images: the CLI parser is linked into every image (ADR-0017); images run where they are linked, no fixups (`process.mar`, `pal/src/main.c`); `$CRMPSC`, `$MGBLSC` are stubs; one mapping per PFN (DESIGN-0001, `main.c`) | Global sections, then shareable images and the EIAF; PRD-0001 left room in the format |
+| 20 | Shareable images are mapped a copy in each process, as VMS maps one that isn't installed, and only from P0 images, without `DATA` entries, `GSMATCH` or one calling another; `LIBRTL.EXE` has the `LIB$` routines but `LIB$GET_FOREIGN`, and the CLI parser is linked into every image (ADR-0017, ADR-0028); images run where they are linked (`process.mar`, `pal/src/main.c`); `$CRMPSC`, `$MGBLSC` are stubs; one mapping per PFN (DESIGN-0001, `main.c`) | A frame capability per extra mapping, global sections, then `INSTALL /SHARED` |
 | 21 | An image is read whole when activated (`f11.mar` `FIL$OPENFILE`) | Map sections page by page, with global sections |
 | 22 | Files-11: one index file bitmap block, so at most 4,096 files; no extension headers; free blocks counted each time; the index file grows 16 blocks at a time (ADR-0009, ADR-0012, `f11.mar`, `f11wrt.mar`, DESIGN-0002) | Extension headers when a file's map fills; a free count in the VCB |
 | 23 | RMS: one stream per file, no wildcard directories, ASTs or completion routines; `SET PROTECTION` and `DIRECTORY/PROTECTION` need read access to the file, where VMS's ask the XQP; runs in kernel mode (`rms.mar`, `set.mar`, `directory.mar`, DESIGN-0002) | Sharing with PRD-0008's step 9; wildcard directories with item 24; executive mode with the mode threads of ADR-0005 |

@@ -121,6 +121,7 @@ fn high_base() {
         transfer: None,
         link_time: 0,
         relocatable: false,
+        shareable: None,
     };
     let exe = Path::new(env!("CARGO_TARGET_TMPDIR")).join("hello-high.exe");
     fs::write(&exe, vlink::link(&objects, &opts).unwrap().image.write()).unwrap();
@@ -172,6 +173,7 @@ fn run(dir: &Path, expected: &Path, name: &str, tool: Tool, macro32: bool) -> Re
             transfer: None,
             link_time: 0,
             relocatable,
+            shareable: None,
         };
         vlink::link(&objects, &opts).map_err(|e| e.join("\n"))
     };

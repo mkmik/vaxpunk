@@ -130,6 +130,8 @@ fn hello_exe() {
         link_time: 0,
         transfer: 0x10000,
         fixups: None,
+        shareables: Vec::new(),
+        vector: None,
         sections: vec![
             Section {
                 vaddr: 0x10000,
@@ -185,6 +187,8 @@ fn movable_exe() {
             long_min: 0x10014,
             long_max: 0x10014,
         }),
+        shareables: Vec::new(),
+        vector: None,
     };
     let map = "\
 Program Section Synopsis

@@ -89,6 +89,7 @@ fn link_as(
             transfer: None,
             link_time: 0,
             relocatable,
+            shareable: None,
         },
     )
 }
@@ -518,4 +519,115 @@ fn bases_and_layout() {
         let adr = u32::from_le_bytes(image.sections[0].data[..4].try_into().unwrap());
         assert_eq!(field(adr, 5, 19) + i64::from(adr >> 29 & 3), 0x10000);
     }
+}
+
+/// The bytes at `addr` in an image's sections, as a quadword.
+fn quad_at(image: &Image, addr: u64) -> u64 {
+    let s = (image.sections.iter())
+        .find(|s| (s.vaddr..s.vaddr + u64::from(s.size)).contains(&addr))
+        .unwrap_or_else(|| panic!("no section holds {addr:#x}"));
+    let at = (addr - s.vaddr) as usize;
+    u64::from_le_bytes(s.data[at..at + 8].try_into().unwrap())
+}
+
+/// Where the veneer at `at` in `image` jumps: through its slot, `adrp x16`
+/// then `ldr x16, [x16, #lo12]`.
+fn through_veneer(image: &Image, at: u64) -> u64 {
+    let word = |a: u64| (quad_at(image, a & !7) >> (8 * (a & 7))) as u32;
+    let (adrp, ldr) = (word(at), word(at + 4));
+    assert_eq!(adrp & 0x9f00_001f, 0x9000_0010, "adrp x16");
+    assert_eq!(ldr & 0xffc0_03ff, 0xf940_0210, "ldr x16, [x16, #lo12]");
+    assert_eq!(word(at + 8), 0xd61f_0200, "br x16");
+    let page = ((adrp >> 5 & 0x7ffff) << 2 | adrp >> 29 & 3) as i64;
+    let page = (page << 43 >> 31) as u64;
+    let slot = (at & !0xfff).wrapping_add(page) + u64::from(ldr >> 10 & 0xfff) * 8;
+    quad_at(image, slot)
+}
+
+/// A shareable image with two procedures in its vector, an image linked
+/// against it, and what the image activator does with both: moves the
+/// shareable image and sets the image's slots from its symbol vector.
+#[test]
+fn shareable_images() {
+    let shr = module(
+        "SHR",
+        ".EXTERNAL SYS, NEAR\n.PSECT $CODE$\nLIB$ONE:: mov x0, #1\nret\n\
+         LIB$TWO:: bl SYS\nbl NEAR\nret\n.PSECT $DATA$\nCOUNT:: .QUAD LIB$ONE\n.END",
+    );
+    let sys = module("SYS", "SYS == 0x40037618\nNEAR == 0x1000\n.END");
+    let shareable = |vector: &[&str]| {
+        vlink::link(
+            &[shr.clone(), sys.clone()],
+            &Options {
+                name: "SHR".into(),
+                shareable: Some(vector.iter().map(|s| s.to_string()).collect()),
+                ..Options::default()
+            },
+        )
+    };
+    let err = shareable(&["LIB$ONE", "COUNT"]).unwrap_err();
+    assert_eq!(
+        err,
+        ["%VLINK-E-NOTPROC, symbol vector entry COUNT is not a procedure of the image"]
+    );
+    // NEAR is in reach of a BL, but the image moves and it doesn't: both go
+    // through veneers.
+    let linked = shareable(&["LIB$TWO", "LIB$ONE"]).unwrap();
+    let mut shr_image = linked.image;
+    let vector = shr_image.vector.clone().unwrap();
+    let names: Vec<&str> = vector.entries.iter().map(|e| e.0.as_str()).collect();
+    assert_eq!(names, ["LIB$TWO", "LIB$ONE"]);
+    assert_eq!(shr_image.sections[0].vaddr, 0, "linked at 0");
+    assert_eq!(shr_image.transfer, 0);
+    let bytes = shr_image.write();
+    assert_eq!(Image::parse(&bytes).as_ref(), Ok(&shr_image));
+
+    let main = module(
+        "MAIN",
+        ".EXTERNAL LIB$ONE, LIB$TWO\n.PSECT $CODE$\nSTART:: bl LIB$ONE\n\
+         adrp x0, LIB$TWO\nadd x0, x0, #:lo12:LIB$TWO\nret\n\
+         .PSECT $DATA$\nPTR:: .QUAD LIB$TWO\n.END START",
+    );
+    let shr_file = ("SHR.EXE".to_string(), bytes);
+    let linked = link(&[main.clone(), shr_file.clone()], vlink::DEFAULT_BASE).unwrap();
+    let mut main_image = linked.image;
+    assert!(main_image.fixups.is_none(), "it doesn't move");
+    let shl = &main_image.shareables;
+    assert_eq!(shl.len(), 1);
+    assert_eq!(shl[0].name, "SHR");
+    let entries: Vec<u32> = shl[0].quad.iter().map(|q| q.1).collect();
+    assert_eq!(entries, [8, 0], "LIB$ONE, then LIB$TWO");
+    assert!(linked.map.contains("$VENEERS"), "{}", linked.map);
+
+    // The activator: SHR at the next 64 KB after MAIN, its own fixups...
+    let base = 0x50000;
+    let f = shr_image.fixups.take().unwrap();
+    let d = f.displacement(0, base).unwrap();
+    for s in &mut shr_image.sections {
+        f.apply(d, s.vaddr, &mut s.data).unwrap();
+        s.vaddr = s.vaddr.wrapping_add_signed(d);
+    }
+    // ...then MAIN's slots, from SHR's symbol vector.
+    let origin = main_image.sections[0].vaddr;
+    for &(off, entry) in &main_image.shareables[0].quad {
+        let value = quad_at(&shr_image, base + vector.addr + u64::from(entry));
+        let at = origin + u64::from(off);
+        let s = (main_image.sections.iter_mut())
+            .find(|s| (s.vaddr..s.vaddr + u64::from(s.size)).contains(&at))
+            .unwrap();
+        let i = (at - s.vaddr) as usize;
+        s.data[i..i + 8].copy_from_slice(&value.to_le_bytes());
+    }
+    let one = base + vector.entries[1].1;
+    let two = base + vector.entries[0].1;
+    let bl = quad_at(&main_image, origin) as u32;
+    let veneer = origin.wrapping_add_signed(field(bl, 0, 26));
+    assert_eq!(through_veneer(&main_image, veneer), one, "BL LIB$ONE");
+    let ptr = quad_at(&main_image, main_image.sections[2].vaddr);
+    assert_eq!(through_veneer(&main_image, ptr), two, ".QUAD LIB$TWO");
+
+    // An image that isn't shareable can't be linked against.
+    let plain = ("MAIN.EXE".to_string(), main_image.write());
+    let err = link(&[main, plain], vlink::DEFAULT_BASE).unwrap_err();
+    assert_eq!(err, ["%VLINK-F-NOTSHR, MAIN.EXE is not a shareable image"]);
 }

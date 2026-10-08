@@ -84,6 +84,14 @@ fn run() -> Result<u8, String> {
             opt.image.display()
         )
     })?;
+    // ponytail: no image activator here, so nothing to call them through.
+    if let Some(shr) = image.shareables.first() {
+        return Err(format!(
+            "SHRIMG, {} calls shareable image {}, which vrun can't activate",
+            opt.image.display(),
+            shr.name
+        ));
+    }
     let mut symbols = match &opt.map {
         Some(path) => map_symbols(
             &fs::read_to_string(path)
@@ -632,6 +640,8 @@ mod tests {
             transfer: 0x10000,
             sections: vec![section(0x10000, 0x20), section(0x20000, 8)],
             fixups: None,
+            shareables: Vec::new(),
+            vector: None,
         }
     }
 

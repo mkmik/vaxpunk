@@ -5,9 +5,10 @@ header of 512-byte blocks, then the contents of each image section, each
 starting on a block boundary. This document lists the changes from Alpha. The
 code is `vms-obj/src/exe.rs`.
 
-Status: only what a statically linked executable needs is produced, plus a
-fixup section when the image is linked `/RELOCATABLE`, so that a loader can
-move it. Shareable images and debug symbol tables keep their Alpha slots,
+Status: executables, with a fixup section when the image is linked
+`/RELOCATABLE`, so that a loader can move it, or when it calls a shareable
+image; and shareable images, which always move, with their symbol vector
+and global symbol table. Debug symbol tables keep their Alpha slots,
 unused.
 
 ## Sources
@@ -35,21 +36,21 @@ All header bytes that aren't part of a structure are 0xFF.
 | 8 | `SIZE` | header bytes used, up to the end of the EISD list |
 | 12 | `ISDOFF` | offset of the first EISD |
 | 16 | `ACTIVOFF` | offset of the EIHA |
-| 20 | `SYMDBGOFF` | 0: no debug symbol table |
+| 20 | `SYMDBGOFF` | offset of the EIHS, in a shareable image; else 0 |
 | 24 | `IMGIDOFF` | offset of the EIHI |
 | 28 | `PATCHOFF` | 0 |
-| 32 | `IAFVA` | address of the fixup section; 0: none, the image can't move |
-| 40 | `SYMVVA` | 0: no symbol vector |
+| 32 | `IAFVA` | address of the fixup section; 0: none |
+| 40 | `SYMVVA` | address of the symbol vector, in a shareable image; else 0 |
 | 48 | `VERSION_ARRAY_OFF` | 0 |
-| 52 | `IMGTYPE` | 1, executable |
+| 52 | `IMGTYPE` | 1, executable, or 2, shareable (`EIHD$K_LIM`) |
 | 56 | `SUBTYPE` | 0, native |
 | 60 | `IMGIOCNT`, `IOCHANCNT` | 0 |
 | 68 | `PRIVREQS` | all ones |
 | 76 | `HDRBLKCNT` | number of header blocks |
-| 80 | `LNKFLAGS` | `LNKNOTFR` (2) if there is no transfer address |
+| 80 | `LNKFLAGS` | `LNKNOTFR` (2) if there is no transfer address; `PICIMG` (8) if the image may move |
 | 84 | `IDENT`, `SYSVER` | 0 |
 | 92 | `MATCHCTL` | 0 |
-| 96 | `SYMVECT_SIZE` | 0 |
+| 96 | `SYMVECT_SIZE` | the symbol vector's entries, in a shareable image; else 0 |
 | 100 | `VIRT_MEM_BLOCK_SIZE` | 16: sections are aligned to 2^16 bytes |
 | 104 | `EXT_FIXUP_OFF`, `NOOPT_PSECT_OFF` | 0 |
 | **112** | **`ARCH`** | **183, ARM64** |
@@ -58,8 +59,8 @@ All header bytes that aren't part of a structure are 0xFF.
 **Change:** Alpha images have no architecture field, because only Alpha ran
 them. vaxpunk puts one at offset 112, which Alpha leaves as fill, with the same
 code as the object format (183, ELF's `EM_AARCH64`). A reader rejects any other
-value. The EIHA and friends follow the fixed part, 8-byte aligned; readers find
-them through the offsets.
+value. The EIHA, EIHI and, in a shareable image, the EIHS follow the fixed
+part, 8-byte aligned; readers find them through the offsets.
 
 ## Activation (`EIHA$`)
 
@@ -110,12 +111,15 @@ to shareable images, which a reader rejects for now.
 
 ## Fixup section (`EIAF$`)
 
-An image linked `/RELOCATABLE` (`docs/linker.md`) may be loaded at another
-64 KB-aligned base. Every address it stores in its own data then has to move
-with it, and the fixup section lists where they are. It is one more image
-section, after the others, 64 KB aligned, read-only, with the `FIXUPVEC` flag;
-`EIHD$Q_IAFVA` holds its address. A loader reads it and may unmap it once the
-fixups are done. A reader takes it out of the section list (`Image::fixups` in
+An image linked `/RELOCATABLE` or `/SHAREABLE` (`docs/linker.md`) may be
+loaded at another 64 KB-aligned base. Every address it stores in its own data
+then has to move with it, and the fixup section lists where they are; its
+`LNKFLAGS` has `PICIMG`. An image that calls a shareable image has one too,
+movable or not: it lists those images, and where the image holds addresses
+in them. It is one more image section, after the others, 64 KB aligned,
+read-only, with the `FIXUPVEC` flag; `EIHD$Q_IAFVA` holds its address. A
+loader reads it and may unmap it once the fixups are done. A reader takes it
+out of the section list (`Image::fixups` and `Image::shareables` in
 `vms-obj`). `vdump` shows each fixup with the value there, and, given the link
 map with `--map`, the psect it is in.
 
@@ -138,7 +142,8 @@ look alike and aren't:
   binutils decodes them but never writes them, since its images don't move.
 
 So vaxpunk uses the relocation fixups, in the record format binutils decodes,
-and leaves the `.ADDRESS` lists for shareable images.
+for an image's own addresses, and the quadword `.ADDRESS` list for the
+addresses it holds in shareable images.
 
 ### Layout
 
@@ -153,7 +158,10 @@ the header count from the start of the section.
 | 28 | `FLAGS` | 0 |
 | 32 | `QRELFIXOFF` | offset of the quadword relocation records; 0 for none |
 | 36 | `LRELFIXOFF` | offset of the longword relocation records; 0 for none |
-| 40 | `QDOTADROFF`, `LDOTADROFF`, `CODEADROFF`, `LPFIXOFF`, `CHGPRTOFF`, `SHLSTOFF`, `SHRIMGCNT` | 0: shareable images, and see below |
+| 40 | `QDOTADROFF` | offset of the quadword `.ADDRESS` fixups; 0 for none |
+| 44 | `LDOTADROFF`, `CODEADROFF`, `LPFIXOFF`, `CHGPRTOFF` | 0, and see below |
+| 60 | `SHLSTOFF` | offset of the shareable image list; 0 for none |
+| 64 | `SHRIMGCNT` | the entries in the list |
 | 68 | `SHLEXTRA`, `PERMCTX`, `BASE_VA`, `LPPSBFIXOFF` | 0 |
 | **84** | **`LW_MIN`** | **the lowest address a longword fixup holds, signed** |
 | **88** | **`LW_MAX`** | **the highest one** |
@@ -170,8 +178,28 @@ A set bit says that the quadword or longword there holds an address of the
 image. vlink starts a new record when the next address isn't a whole number
 of slots after the base, or when more than 64 empty slots would come first.
 Entries are in increasing order, never twice, and always inside a section
-with contents. A reader rejects anything else, and any fixups for shareable
-images.
+with contents. A reader rejects anything else, and relocation records in an
+image without `PICIMG`.
+
+### Shareable images an image calls
+
+The shareable image list has a 64-byte `SHL$` entry for each image, in the
+order of their indexes. vaxpunk fills in only the name, which the image
+activator looks for in `SYS$SHARE:`, with `.EXE`:
+
+| Offset | Field | vaxpunk value |
+| --- | --- | --- |
+| 0 | `BASEVA`, `SHLPTR`, `IDENT`, `PERMCTX` | 0 |
+| 16 | `SIZE` | 64 |
+| 17 | `FILL_1`, `FLAGS`, `ICB` | 0 |
+| 24 | `IMGNAM` | the image's name, `.ASCIC`, 40 bytes |
+
+The quadword `.ADDRESS` fixups are groups, one for each image with any: a
+longword count and the image's index in the list, then that many pairs of
+longwords, the offset of a quadword in this image (from its lowest section
+address, as above) and the offset in the shareable image's symbol vector
+of the entry the quadword gets. A zero count and index end them. The
+offsets are in increasing order within a group.
 
 **Changes:**
 
@@ -181,11 +209,66 @@ images.
 - `LW_MIN` and `LW_MAX` are new: with them, a loader can tell which
   displacements keep every longword address in range without scanning. They
   follow the Alpha fields, and `SIZE` counts them.
+- vaxpunk writes no `LDOTADROFF`, `CODEADROFF` or `LPFIXOFF` lists, and
+  a reader rejects them: an image reaches a shareable image only through
+  quadwords (`docs/linker.md`).
 - No change protection list. binutils makes each section with fixups writable
   in its descriptor and lists, from `CHGPRTOFF`, the protection to restore
   once the fixups are done. vaxpunk keeps each section's final protection in
   its descriptor instead: `$LINK$` stays read-only there, and the loader
   patches it before it applies protections.
+
+## Shareable images
+
+A shareable image (`IMGTYPE` 2) is always linked to move, `PICIMG` set, at
+0 unless the linker was told otherwise; the image activator puts it where
+it goes. It has no transfer address.
+
+### Symbol vector
+
+The procedures other images may call, in a quadword each, which holds the
+procedure's address and moves with the image (a relocation fixup).
+`EIHD$Q_SYMVVA` holds the vector's address and `EIHD$L_SYMVECT_SIZE` the
+number of entries. An image that calls the procedure in entry i gets the
+quadword at `SYMVVA` + 8i, moved, from the image activator.
+
+**Change:** Alpha's entries are 16 bytes, two quadwords, since a procedure
+value there is a procedure descriptor and its code address is the second
+quadword. vaxpunk calls the code address (`docs/linker.md`), and has only
+procedure entries, so an entry is one quadword.
+
+### Global symbol table (`EIHS$`, GST)
+
+The image symbol table header, 32 bytes at `EIHD$L_SYMDBGOFF`, says where
+the GST is:
+
+| Offset | Field | vaxpunk value |
+| --- | --- | --- |
+| 0 | `MAJORID`, `MINORID` | 1, 1 |
+| 8 | `DSTVBN`, `DSTSIZE` | 0: no debug symbol table |
+| 16 | `GSTVBN` | the GST's first block, counting from 1 |
+| 20 | `GSTSIZE` | how many records it has |
+| 24 | `DMTVBN`, `DMTBYTES` | 0 |
+
+The GST comes after the section contents, from a block boundary: an object
+module (`docs/object-format.md`), as the Alpha linker writes it. Its module
+header has the image's name and ident; a GSD record defines the absolute
+psect, `.$$ABS$$.` (`PIC`, `LIB`, `RD`, empty); further GSD records have an
+`EGSD$C_SYMG` subrecord (type 8, `EGST$`) for each entry of the symbol
+vector; and an end-of-module record ends it.
+
+| Offset | Field | vaxpunk value |
+| --- | --- | --- |
+| 0 | `GSDTYP`, `GSDSIZ` | 8, the subrecord's size |
+| 4 | `DATYP`, `TEMP` | 0 |
+| 6 | `FLAGS` | `DEF`, `UNI`, `REL`, `NORM`: a procedure others may call |
+| 8 | `VALUE` | the entry's offset in the symbol vector |
+| 16 | `LP_1`, `LP_2` | the procedure's address, as linked |
+| 32 | `PSINDX` | 0 |
+| 36 | `NAME` | `.ASCIC` |
+
+The linker reads the GST to link against the image. A reader rejects an
+entry that isn't a procedure's, and entries not in the vector's order.
 
 ## Moving an image
 
