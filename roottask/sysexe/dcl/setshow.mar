@@ -105,7 +105,7 @@ PTABFREE:                               ; the room left
         .ADDRESS PTABS
 CLDBUF: .BLKB   CLDMAX                  ; the .CLD file, its lines each ending in LF
 PTABS:  .BLKB   PTABMAX                 ; the process's command tables
-DEFFAB: $FAB    FNA=DCL$TOKEN, NAM=DEFNAM ; SET and SHOW DEFAULT's $PARSE
+DEFFAB: $FAB    FNA=DCL$TOKEN, DNA=DDIR, NAM=DEFNAM ; SET and SHOW DEFAULT's $PARSE
 DEFNAM: $NAM    ESA=EXP, ESS=255
 EXP:    .BLKB   255                     ; its expanded string
 DIRDSC: .LONG   0, 0                    ; a descriptor of the directory in it
@@ -115,26 +115,32 @@ DISKITEMS:                              ; $CRELNM's: the device in EXP
         .LONG   0, 0, 0
 FILE_DEV:
         .ASCID  "LNM$FILE_DEV"
-SLITEMS:                                ; SHOW DEFAULT's $TRNLNM: a string of a search list
-        .WORD   4, LNM$_INDEX
-        .ADDRESS SLIDX, 0
+DISKSTR:                                ; SHOW DEFAULT's $TRNLNM: SYS$DISK's string
         .WORD   LINESIZE, LNM$_STRING
         .ADDRESS SLSTR, SLDSC
-        .WORD   4, LNM$_MAX_INDEX
-        .ADDRESS SLMAX, 0
         .LONG   0
-SLIDX:  .LONG   0
-SLMAX:  .LONG   0
 SLDSC:  .LONG   0                       ; the string, a descriptor
         .ADDRESS SLSTR
 SLSTR:  .BLKB   LINESIZE
-SLNDSC: .LONG   0                       ; the search list's name, a descriptor
-        .ADDRESS SLNAME
-SLNAME: .BLKB   LINESIZE
+LISTMAX:                                ; ISLIST's $TRNLNM: a name's last index
+        .WORD   4, LNM$_MAX_INDEX
+        .ADDRESS ISMAX, 0
+        .LONG   0
+ISMAX:  .LONG   0
+ISDSC:  .LONG   0, 0                    ; the name
 DDIRDSC:                                ; the default directory
         .LONG   63
         .ADDRESS DDIR
 DDIR:   .BLKB   63
+; SHOWSL's frame, on the stack: its $TRNLNM's items, their buffers, and
+; the name it translates.
+F_ITM = 0
+F_IDX = 40
+F_MAX = 44
+F_LEN = 48
+F_NDSC = 52
+F_STR = 60
+FRAME = F_STR+LINESIZE+1
 
         .PSECT  CODE, EXE, LONG
 ; DCL$SETDEF, SET DEFAULT spec: $PARSEs spec, which must name no file,
@@ -151,7 +157,8 @@ DCL$SETDEF::
         TSTL    R8
         BNEQ    5$
         BRW     DCL$INSFPRM
-5$:
+5$:     BSBW    GETDDIR                 ; a relative directory is relative to it
+        MOVB    DDIRDSC, DEFFAB+FAB$B_DNS
         MOVB    R8, DEFFAB+FAB$B_FNS
         $PARSE  FAB=DEFFAB
         MOVL    R0, R6
@@ -181,32 +188,52 @@ DCL$SETDEF::
         BRW     DCL$OK
 20$:    BRW     DCL$DONE
 
-; SEARCHDEF: SET DEFAULT's for a search list, R8 = the length of the
-; spec in DCL$TOKEN: SYS$DISK becomes its device, up to its colon, if
-; it has one, and the default directory its expanded directory if it
-; gives one, else none.
+; SEARCHDEF: SET DEFAULT's for a search list, as VMS's: R8 = the length
+; of the spec in DCL$TOKEN. SYS$DISK becomes its device as given, up to
+; its colon, or all of it and a colon if it is only a logical name, SET
+; DEFAULT HOME, and the default directory the expanded one if it gives
+; one, made absolute against the old, else stays: SHOW DEFAULT then says
+; HOME:[SYSMGR], whose strings' own directories RMS takes before it.
 SEARCHDEF:
-        CLRL    DIRDSC                  ; none, somewhere $SETDDIR may probe
-        MOVAB   EXP, DIRDSC+4
-        LOCC    #91, R8, DCL$TOKEN      ; [ or <: a directory
-        BNEQ    10$
-        LOCC    #60, R8, DCL$TOKEN
+        BSBB    HASDIR
         BEQL    20$
-10$:    MOVZBL  DEFNAM+NAM$B_DIR, DIRDSC
+        MOVZBL  DEFNAM+NAM$B_DIR, DIRDSC
         MOVL    DEFNAM+NAM$L_DIR, DIRDSC+4
-20$:    $SETDDIR_S NEWDIR=DIRDSC
+        $SETDDIR_S NEWDIR=DIRDSC
         BLBC    R0, 90$
-        LOCC    #^A/:/, R8, DCL$TOKEN
-        BEQL    80$
+20$:    LOCC    #^A/:/, R8, DCL$TOKEN
+        BEQL    30$
         MOVAB   DCL$TOKEN, R0
         SUBL3   R0, R1, R0              ; up to the colon
         INCL    R0
-        MOVW    R0, DISKITEMS
+        BRB     40$
+30$:    BSBB    HASDIR                  ; only a directory: SYS$DISK stays
+        BNEQ    80$
+        MOVB    #^A/:/, DCL$TOKEN[R8]
+        ADDL3   #1, R8, R0
+40$:    MOVW    R0, DISKITEMS
         MOVAB   DCL$TOKEN, DISKITEMS+4
         $CRELNM_S TABNAM=DCL$PROCESS, LOGNAM=DISK, ITMLST=DISKITEMS
         BLBC    R0, 90$
 80$:    BRW     DCL$OK
 90$:    BRW     DCL$DONE
+
+; HASDIR: R8 = the length of a spec in DCL$TOKEN. Z clear if it has a
+; directory, [ or <. Uses R0 and R1.
+HASDIR:
+        .JSB_ENTRY
+        LOCC    #91, R8, DCL$TOKEN
+        BNEQ    90$
+        LOCC    #60, R8, DCL$TOKEN
+90$:    RSB
+
+; GETDDIR: the process's default directory, to DDIR, its length in
+; DDIRDSC. Uses R0 and R1.
+GETDDIR:
+        .JSB_ENTRY
+        MOVW    #63, DDIRDSC
+        $SETDDIR_S OLDLEN=DDIRDSC, OLDDIR=DDIRDSC
+        RSB
 
 ; DCL$SETCOMMAND, SET COMMAND file: compiles the command definitions in
 ; file, file.CLD if it has no type, with CDU$COMPILE, into the process's
@@ -277,13 +304,13 @@ DCL$SETCOMMAND::
 
 ; DCL$SHOWDEF, SHOW DEFAULT: shows the default device and directory,
 ; what $PARSE expands an empty specification to. When SYS$DISK is a
-; search list, as VMS does: SYS$DISK's equivalence and the default
-; directory, then each string of the list with it, after "=".
-; ponytail: a list SYS$DISK stands for through other names, and each
-; string's own logical names, aren't followed.
+; search list, as VMS does: SYS$DISK's string and the default directory,
+; HOME:[SYSMGR], then each string of the list after "=", a string that
+; names another search list as that list's strings (SHOWSL).
 DCL$SHOWDEF::
         .EXCEPTION_ENTRY
         CLRB    DEFFAB+FAB$B_FNS
+        CLRB    DEFFAB+FAB$B_DNS
         $PARSE  FAB=DEFFAB
         CMPL    R0, #RMS$_DNF
         BEQL    10$
@@ -295,44 +322,121 @@ DCL$SHOWDEF::
         BSBW    DCL$SAY
         MOVL    #SS$_NORMAL, R0
 20$:    BRW     DCL$DONE
-30$:    MOVW    #63, DDIRDSC
-        $SETDDIR_S OLDLEN=DDIRDSC, OLDDIR=DDIRDSC
+30$:    BSBW    GETDDIR
         BLBC    R0, 20$
-        CLRL    SLIDX
-        $TRNLNM_S TABNAM=FILE_DEV, LOGNAM=DISK, ITMLST=SLITEMS
+        $TRNLNM_S TABNAM=FILE_DEV, LOGNAM=DISK, ITMLST=DISKSTR
         BLBC    R0, 20$
         ADDTEXT "  "
-        BSBB    ADDSL
-        BSBW    DCL$SAY
-        MOVL    SLDSC, R0               ; the list's name, without its colon
-        BEQL    40$
-        CMPB    SLSTR-1[R0], #^A/:/
-        BNEQ    40$
-        DECL    R0
-40$:    MOVL    R0, SLNDSC
-        MOVC3   R0, SLSTR, SLNAME
-        CLRL    SLIDX
-50$:    $TRNLNM_S TABNAM=FILE_DEV, LOGNAM=SLNDSC, ITMLST=SLITEMS
-        BLBC    R0, 20$
-        ADDTEXT "  =   "
-        BSBB    ADDSL
-        BSBW    DCL$SAY
-        INCL    SLIDX
-        CMPL    SLIDX, SLMAX
-        BLEQ    50$
-        MOVL    #SS$_NORMAL, R0
-        BRB     20$
-
-; ADDSL: appends SLSTR, SLDSC long, and the default directory in DDIR to
-; DCL$MSG. Uses R0-R2.
-ADDSL:
-        .JSB_ENTRY  SCRATCH=<R2>
         MOVAB   SLSTR, R1
         MOVL    SLDSC, R2
         BSBW    DCL$ADD
         MOVAB   DDIR, R1
         MOVZWL  DDIRDSC, R2
-        BRW     DCL$ADD
+        BSBW    DCL$ADD
+        BSBW    DCL$SAY
+        MOVL    SLDSC, R0
+        MOVAB   SLSTR, R1
+        BSBW    STRDEV                  ; the list's name
+        MOVL    #LNM$C_MAXDEPTH, R9
+        BSBW    SHOWSL
+        BRB     20$
+
+; SHOWSL: R6 = a logical name, R7 = its length, R9 = how many more
+; search lists deep it may go. Shows each of its strings, "  =   string",
+; one that names another search list as that one's strings. R0 =
+; $TRNLNM's status. Uses R0-R5.
+SHOWSL:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5>
+        PUSHR   #^M<R6, R7, R9, R11>
+        SUBL2   #FRAME, SP
+        MOVL    SP, R11
+        MOVL    #<LNM$_INDEX@16>+4, F_ITM(R11)
+        MOVAL   F_IDX(R11), F_ITM+4(R11)
+        CLRL    F_ITM+8(R11)
+        MOVL    #<LNM$_STRING@16>+LINESIZE, F_ITM+12(R11)
+        MOVAB   F_STR(R11), F_ITM+16(R11)
+        MOVAW   F_LEN(R11), F_ITM+20(R11)
+        MOVL    #<LNM$_MAX_INDEX@16>+4, F_ITM+24(R11)
+        MOVAL   F_MAX(R11), F_ITM+28(R11)
+        CLRQ    F_ITM+32(R11)
+        MOVL    R7, F_NDSC(R11)
+        MOVL    R6, F_NDSC+4(R11)
+        CLRL    F_IDX(R11)
+10$:    CLRW    F_LEN(R11)
+        $TRNLNM_S TABNAM=FILE_DEV, LOGNAM=F_NDSC(R11), ITMLST=F_ITM(R11)
+        BLBC    R0, 90$
+        MOVZWL  F_LEN(R11), R0
+        MOVAB   F_STR(R11), R1
+        BSBB    STRDEV
+        TSTL    R7
+        BEQL    50$
+        TSTL    R9
+        BEQL    50$
+        BSBB    ISLIST
+        BLBC    R0, 50$
+        DECL    R9
+        BSBB    SHOWSL
+        INCL    R9
+        BLBC    R0, 90$
+        BRB     60$
+50$:    ADDTEXT "  =   "
+        MOVAB   F_STR(R11), R1
+        MOVZWL  F_LEN(R11), R2
+        BSBW    DCL$ADD
+        BSBW    DCL$SAY
+60$:    INCL    F_IDX(R11)
+        CMPL    F_IDX(R11), F_MAX(R11)
+        BLEQ    10$
+        MOVL    #SS$_NORMAL, R0
+90$:    ADDL2   #FRAME, SP
+        POPR    #^M<R6, R7, R9, R11>
+        RSB
+
+; ISLIST: R6 = a name, R7 = its length. R0 = 1 if it is a logical name
+; with more than one string, else 0. Uses R0 and R1.
+ISLIST:
+        .JSB_ENTRY
+        MOVL    R7, ISDSC
+        MOVL    R6, ISDSC+4
+        CLRL    ISMAX
+        $TRNLNM_S TABNAM=FILE_DEV, LOGNAM=ISDSC, ITMLST=LISTMAX
+        BLBC    R0, 80$
+        TSTL    ISMAX
+        BEQL    80$
+        MOVL    #1, R0
+        RSB
+80$:    CLRL    R0
+        RSB
+
+; STRDEV: R1 = a file specification, R0 = its length. R6 = its device,
+; without its colon, R7 = its length: up to a colon, or all of it if it
+; is only a name; 0 if it has none or an underscore is before it, which
+; RMS wouldn't translate. Uses R0 and R1.
+STRDEV:
+        .JSB_ENTRY  OUTPUT=<R6, R7>
+        MOVL    R1, R6
+        CLRL    R7
+10$:    CMPL    R7, R0
+        BGEQU   40$                     ; only a name
+        MOVZBL  (R6)[R7], R1
+        CMPB    R1, #^A/:/
+        BEQL    40$
+        CMPB    R1, #91                 ; [
+        BEQL    80$
+        CMPB    R1, #60                 ; <
+        BEQL    80$
+        CMPB    R1, #^A/./
+        BEQL    80$
+        CMPB    R1, #59                 ; a semicolon
+        BEQL    80$
+        INCL    R7
+        BRB     10$
+40$:    TSTL    R7
+        BEQL    90$
+        CMPB    (R6), #^A/_/
+        BNEQ    90$
+80$:    CLRL    R7
+90$:    RSB
 
 ; DCL$SHOWDEV, SHOW DEVICES [name]: lists the disks, with their status,
 ; error counts and their volumes' labels and free blocks, then the
