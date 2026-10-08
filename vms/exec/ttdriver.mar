@@ -1,90 +1,136 @@
-        .TITLE  TTDRIVER The console's terminal driver
-        .IDENT  /V0.3/
+        .TITLE  TTDRIVER Terminals: the console, and TELNET's
+        .IDENT  /V0.4/
 ;
-; OPA0:, the console, is a terminal, and this is its driver
-; (docs/adr/0013-qio-irps-and-drivers.md). $QIO calls TT$FDT, which
-; writes a buffer at once, and queues a read on the console's UCB, in an
-; IRP that holds its prompt and the line read.
+; The terminal driver (docs/adr/0013-qio-irps-and-drivers.md). Each
+; terminal is a UCB of its own, $UCBDEF's UCB$x_TT_ fields, with its
+; characteristics, its type-ahead buffer, the line being read, its recall
+; buffer and its CTRL/C and CTRL/Y ASTs: the console, OPA0:, and a
+; TELNET terminal, TNAn, for each remote login, which TELNETD makes of a
+; TCP connection with IO$_TTY_PORT. TT$GL_UNITS lists them, the console
+; first. Their characters come in two ways: the console's receive
+; interrupt puts each in its type-ahead buffer and requests IPL$_IOPOST,
+; and a TELNET terminal's receive on the port, NET$TTIO's, brings them
+; to TT$NETDONE, which takes Telnet's commands out of them. They go out
+; two ways too: the console is written at once, a character at a time,
+; waiting for it; a TELNET terminal's echo and prompts are kept in its
+; UCB and its writes queued, then sent on its connection one send at a
+; time, so they stay in order.
 ;
-; What the console receives, its receive interrupt puts in the type-ahead
-; buffer, and requests the IPL$_IOPOST software interrupt, where the read
-; at the head of the queue takes the characters, echoing and editing the
-; line, or recalling one read before, up to a carriage return or CTRL/Z,
-; or a key at a time with IO$M_NOFILTR. A read that ends is completed,
-; and the next one writes its prompt and goes on from there. What is
-; typed while no read is queued waits in the buffer.
-; IO$_SETMODE sets the terminal's characteristics, in TTY$AB_CHAR, and
-; IO$_SENSEMODE returns them; with IO$M_CTRLCAST or IO$M_CTRLYAST,
-; IO$_SETMODE enables a CTRL/C or CTRL/Y AST instead, once. CTRL/C and CTRL/Y
-; empty the buffer instead, and deliver the ASTs enabled for them; CTRL/Y
-; ends the reads of the processes it goes to with SS$_CONTROLY, so that
-; DCL, whose AST it is, prompts on top of the image (ADR-0014). CTRL/C
-; that no AST is enabled for is CTRL/Y.
-; ponytail: one terminal, so the line being read, the ASTs and the
-; characteristics are kept here, not in its UCB; output is written a
-; buffer at a time at IPL$_SYNCH, waiting for the console, so lines don't
-; mix. Of the characteristics only NOECHO changes what the driver does;
-; the others, the width and page too, are kept for the programs that ask.
+; $QIO calls TT$FDT, which writes a buffer, or queues a read on the
+; terminal's UCB, in an IRP that holds its terminators, its prompt and the
+; line read. The read at the head of the queue writes its prompt, then
+; takes the characters typed, as VMS's terminal driver does: it echoes
+; them and edits the line, unless IO$M_NOFILTR or the terminal's PASSALL
+; or PASTHRU say not to, until a terminator ends it, the buffer fills,
+; or, with IO$M_TIMED, no character comes for p3 seconds. The
+; terminators are p4's, or by default every control character but BS,
+; TAB, LF, VT and FF, and DEL. With IO$M_ESCAPE or the terminal's
+; ESCAPE an escape sequence ends the read too, and follows the data in
+; the buffer. CTRL/C and CTRL/Y empty the type-ahead buffer, and deliver
+; the ASTs IO$_SETMODE enabled for them; CTRL/Y ends the reads of the
+; processes it goes to with SS$_CONTROLY, so that DCL, whose AST it is,
+; prompts on top of the image (ADR-0014). CTRL/C that no AST is enabled
+; for is CTRL/Y. In PASSALL and PASTHRU they are characters like the
+; others.
+; ponytail: no CTRL/O, CTRL/T, XON and XOFF, or formatted writes: a
+; write goes out as it is, as with IO$M_NOFORMAT; no $BRKTHRU. The
+; console's output waits for it at IPL$_SYNCH; a TELNET terminal's echo
+; and prompts past UCB$K_TT_OUTSIZE bytes not yet sent are lost; a
+; hangup ends the reads and writes with SS$_HANGUP, not the process.
+; At most 9 TELNET terminals, TNA1 to TNA9: a device's name has 4
+; characters.
 ;
         .LIBRARY "lib.mlb"
         .LIBRARY "starlet.mlb"
         $PRDEF
         $IPLDEF
+        $PCBDEF
         $UCBDEF
         $IRPDEF
+        $TQEDEF
+        $PORTDEF
         $IODEF
         $SSDEF
         $DCDEF
         $TTDEF
         $TT2DEF
 
-        .EXTERNAL SCH$QAST, EXE$DEANONPGDSIZ
-        .EXTERNAL EXE$OUTCHAR, EXE$OUTCRLF, EXE$OUTZSTRING
-        .EXTERNAL IOC$AB_OPA0, IOC$ALLOCIRP, IOC$REQCOM
+        .EXTERNAL SCH$QAST, EXE$ALONONPAGED, EXE$DEANONPGDSIZ
+        .EXTERNAL EXE$OUTCHAR, EXE$GQ_SYSTIME, EXE$INSTIMQ, EXE$RMVTQE
+        .EXTERNAL IOC$ALLOCIRP, IOC$REQCOM, IOC$CANCELQ
+        .EXTERNAL NET$TTIO, NET$TTCLOSE, NET$FREEUNIT
 
-TYPEAHEAD = 256                         ; the type-ahead buffer, a ring
+TYPEAHEAD = UCB$K_TT_TYPEAHEAD
 RXCS$V_DONE = 7                         ; RXCS: a character is waiting
 RXCS$M_IE = ^X40                        ; interrupt when one is
+CTRLA = 1
+CTRLB = 2
 CTRLC = 3
+CTRLD = 4
+CTRLE = 5
+CTRLF = 6
+CTRLH = 8
+TAB = 9
+CTRLJ = 10
+CR = 13
+CTRLR = 18
+CTRLU = 21
+CTRLX = 24
 CTRLY = 25
 CTRLZ = 26
-RECALL = 16                             ; lines in the recall buffer, a power of 2
+ESC = 27
+DEL = 127
+MAXUNIT = 9                             ; TNA1 to TNA9
+; A read's IRP holds, past the packet, its terminators, a bit for each
+; character, then its prompt, then the line read. IRP$L_PROMPT counts
+; the terminators and the prompt, where IOC$POST finds the line; a
+; timed read keeps its seconds, p3, in IRP$L_MEDIA. A TELNET terminal's
+; write holds its bytes, Telnet's IAC doubled: IRP$L_IOST2 of them,
+; IRP$L_MEDIA sent so far.
+TTIRP$A_MASK = IRP$K_LENGTH
+TTIRP$K_MASK = 32
+TTIRP$A_PROMPT = IRP$K_LENGTH+TTIRP$K_MASK
+; R6's bits past a read's function code and modifiers, while it is read.
+F_V_EDIT = 17                           ; line editing: the arrows, CTRL/A, CTRL/B...
+; UCB$L_TT_ESC's states: in an escape sequence, after
+ESC_START = 1                           ; ESC
+ESC_CSI = 2                             ; ESC [: parameters, then the final character
+ESC_SS3 = 3                             ; ESC O: the final character
+ESC_INTER = 4                           ; ESC and an intermediate character
+; Telnet (RFC 854): commands, options, and UCB$L_TT_TELNET's states.
+IAC = 255
+DONT = 254
+DO = 253
+WONT = 252
+WILL = 251
+SB = 250
+IP = 244
+SE = 240
+OPT_ECHO = 1
+OPT_SGA = 3                             ; suppress go ahead
+OPT_NAWS = 31                           ; the window's size (RFC 1073)
+TN_IAC = 1                              ; after IAC
+TN_OPT = 2                              ; after IAC and a command that takes an option
+TN_CR = 3                               ; after a carriage return: an LF or NUL goes
+TN_SB = 4                               ; after IAC SB: the option
+TN_SBDATA = 5                           ; in a subnegotiation
+TN_SBIAC = 6                            ; and after IAC in it
 
         .PSECT  EXEC$DATA, NOEXE, WRT, QUAD
-TTY$AB_CHAR::                           ; the console's characteristics, as IO$_SENSEMODE gives them:
-        .BYTE   DC$_TERM, DT$_VT100     ; its class and type,
-        .WORD   80                      ; its width,
+TT$GL_UNITS::                           ; the terminals, linked by UCB$L_LINK: the console, then TELNET's
+        .LONG   0
+IOC$AB_OPA0::                           ; the console's UCB, which TTY$INIT makes
+        .BLKB   UCB$K_TTLENGTH
+DEFCHAR:                                ; a terminal's characteristics at first: a VT100's
+        .BYTE   DC$_TERM, DT$_VT100
+        .WORD   80
         .LONG   <24@TT$V_PAGE>!TT$M_TTSYNC!TT$M_LOWER!TT$M_MECHTAB!TT$M_WRAP!TT$M_SCOPE!TT$M_EIGHTBIT
         .LONG   TT2$M_EDITING!TT2$M_INSERT!TT2$M_ANSICRT!TT2$M_AVO!TT2$M_EDIT!TT2$M_DECCRT
-TTY$K_CHAR = 12                         ; TT$ bits and page, then TT2$ bits
-TTY$GL_PUT::                            ; where the next character received goes in the ring
-        .LONG   0
-TTY$GL_GET::                            ; where a read takes the next from
-        .LONG   0
-TTY$AB_RING::                           ; the type-ahead buffer: received, not yet read
-        .BLKB   TYPEAHEAD
-TTY$GL_CTRLY::                          ; 1: CTRL/Y came, for TTY$IOPOST
-        .LONG   0
-TTY$GL_CTRLC::                          ; 1: CTRL/C came
-        .LONG   0
-TTY$Q_CTRLC::                           ; the CTRL/C ASTs enabled: IRPs, as ACBs
-        .ADDRESS TTY$Q_CTRLC, TTY$Q_CTRLC
-TTY$Q_CTRLY::                           ; and the CTRL/Y ones
-        .ADDRESS TTY$Q_CTRLY, TTY$Q_CTRLY
-TTY$GL_LEN::                            ; the line being read: its length,
-        .LONG   0
-TTY$GL_CURSOR::                         ; where the cursor is in it,
-        .LONG   0
-TTY$GL_BACK::                           ; how many lines back a recall is, 0: none,
-        .LONG   0
-TTY$GL_ESC::                            ; and 1 after an ESC, 2 in an escape sequence
-        .LONG   0
-TTY$GL_RECALL::                         ; the recall buffer's slot the next line read goes in
-        .LONG   0
-TTY$GL_NRECALL::                        ; how many lines the recall buffer holds
-        .LONG   0
-TTY$AB_RECALL::                         ; the lines read, 256 bytes each: .ASCIC
-        .BLKB   RECALL*256
+STANDARD:                               ; the terminators a read has by default
+        .LONG   ^XFFFFE0FF, 0, 0, ^X80000000, ^XFFFFE0FF, 0, 0, ^X80000000
+OFFER:  .BYTE   IAC, WILL, OPT_ECHO, IAC, WILL, OPT_SGA, IAC, DO, OPT_NAWS
+OFFERLEN = .-OFFER
+OPA0:   .ASCII  "OPA0"
 INTERRUPT:
         .ASCIZ  <13><10>"*INTERRUPT*"<13><10>
 CANCEL: .ASCIZ  <13><10>"*CANCEL*"<13><10>
@@ -92,23 +138,34 @@ EXIT:   .ASCIZ  "*EXIT*"<13><10>
 
         .PSECT  $CODE$
 
-; TT$FDT: the console's FDT routine, which $QIO calls. R4 = the current
-; PCB, R5 = OPA0:'s UCB, AP = $QIO's arguments. Writes p2 bytes at p1, for
-; IO$_WRITEVBLK, IO$_WRITELBLK and IO$_WRITEPBLK, and completes the
-; request with the count. Queues a read of a line into them, for
-; IO$_READVBLK, IO$_READLBLK and IO$_READPBLK, and for IO$_READPROMPT
-; once it has written the p6 bytes at p5, without echo for IO$M_NOECHO
-; and a key at a time for IO$M_NOFILTR (EDIT). Its IOSB has the line's
-; length and its terminator, a carriage return or CTRL/Z, and its size, or
-; 0 if the buffer filled. IO$_SETMODE with IO$M_CTRLCAST or
-; IO$M_CTRLYAST enables an AST for CTRL/C or CTRL/Y, in place of the one
-; the channel had: p1 is its routine, or 0 to disable it, p2 its
-; parameter and p3 its mode, or the caller's if that is an outer one.
-; Without them it sets the characteristics from the p2 bytes at p1, 8 or
-; 12, as TTY$AB_CHAR has them, its class aside, and IO$_SENSEMODE writes
-; them there.
+; TT$FDT: a terminal's FDT routine, which $QIO calls. R4 = the current
+; PCB, R5 = the terminal's UCB, AP = $QIO's arguments.
+;   IO$_WRITEVBLK, IO$_WRITELBLK, IO$_WRITEPBLK
+;                  write the p2 bytes at p1; the IOSB has their count
+;   IO$_READVBLK, IO$_READLBLK, IO$_READPBLK
+;                  read into the p2 bytes at p1, and IO$_READPROMPT once it
+;                  has written the p6 bytes at p5; p4 = the terminators,
+;                  0 for the default, or a quadword: a word 0 and a mask
+;                  of characters 0-31, or a length and the address of a
+;                  mask that long, up to 32 bytes; p3 = IO$M_TIMED's
+;                  seconds. Modifiers: IO$M_NOECHO, IO$M_NOFILTR,
+;                  IO$M_PURGE, IO$M_TIMED, IO$M_TRMNOECHO, IO$M_ESCAPE,
+;                  IO$M_CVTLOW. The IOSB has the line's length, its
+;                  terminator, and the terminator's size: 0 if the buffer
+;                  filled, an escape sequence's length
+;   IO$_SETMODE    with IO$M_CTRLCAST or IO$M_CTRLYAST enables an AST for
+;                  CTRL/C or CTRL/Y, in place of the one the channel had:
+;                  p1 is its routine, or 0 to disable it, p2 its parameter
+;                  and p3 its mode, or the caller's if that is an outer
+;                  one; without them sets the characteristics from the p2
+;                  bytes at p1, 8 or 12, as UCB$A_TT_CHAR has them, its
+;                  class aside
+;   IO$_SENSEMODE  writes the characteristics to p1, p2 bytes; with
+;                  IO$M_TYPEAHDCNT, what the type-ahead buffer holds, 8
+;                  bytes: a word its count, a byte its first character
 ; R0 = SS$_NORMAL, SS$_ILLIOFUNC, SS$_ACCVIO, SS$_BADPARAM, or
-; IOC$ALLOCIRP's failure. IPL$_SYNCH. Uses R0-R8.
+; IOC$ALLOCIRP's failure; a request on a TELNET terminal whose line is
+; gone ends with SS$_HANGUP. IPL$_SYNCH. Uses R0-R8.
 TT$FDT::
         .JSB_ENTRY  INPUT=<AP>, SCRATCH=<R2, R3, R4, R5, R6, R7, R8>
         BICL3   #^C63, 12(AP), R0       ; the function, without modifiers
@@ -139,20 +196,17 @@ TT$FDT::
         MOVL    #SS$_ILLIOFUNC, R0
         RSB
 10$:    IFNORD  R3, (R2), 85$           ; a write
-        CLRL    R1
-        BSBW    IOC$ALLOCIRP
-        BLBC    R0, 90$
-        PUSHL   R3
-        MOVL    28(AP), R2
-        MOVL    32(AP), R3
-        BSBW    WRITE
-        MOVL    (SP)+, R3
-        ASHL    #16, IRP$L_BCNT(R3), R0
+        BBC     #UCB$V_TT_TN, UCB$L_TT_STS(R5), 12$
+        BRW     TNWRITE
+12$:    BSBW    WRITE                   ; the console's, at once
+        ASHL    #16, R3, R0
         BISL2   #SS$_NORMAL, R0
-        CLRL    R1
-        BRW     IOC$REQCOM
+        BRW     FDTDONE
 20$:    IFNOWRT R3, (R2), 85$           ; a read
-        CLRL    R6                      ; its prompt's size
+        BBC     #UCB$V_TT_HANGUP, UCB$L_TT_STS(R5), 22$
+        MOVZWL  #SS$_HANGUP, R0
+        BRW     FDTDONE
+22$:    CLRL    R6                      ; its prompt's size
         CMPL    R0, #IO$_READPROMPT
         BNEQ    25$
         MOVL    48(AP), R6
@@ -161,22 +215,67 @@ TT$FDT::
         BGTRU   87$
         IFNORD  R6, @44(AP), 85$
 25$:    ADDL3   R6, R3, R1
+        ADDL2   #TTIRP$K_MASK, R1
         BSBW    IOC$ALLOCIRP
         BLBC    R0, 90$
-        MOVL    R6, IRP$L_PROMPT(R3)
+        ADDL3   #TTIRP$K_MASK, R6, IRP$L_PROMPT(R3)
         MOVL    #IRP$M_BUFIO, IRP$L_STS(R3)
+        MOVL    36(AP), IRP$L_MEDIA(R3) ; a timed read's seconds
+        BSBW    TERMINATORS
+        BLBC    R0, 80$
         TSTL    R6
         BEQL    30$
         PUSHR   #^M<R3, R4, R5>
-        MOVC3   R6, @44(AP), IRP$K_LENGTH(R3)
+        MOVC3   R6, @44(AP), TTIRP$A_PROMPT(R3)
         POPR    #^M<R3, R4, R5>
 30$:    INSQUE  (R3), @UCB$L_IOQBL(R5)
         BSBW    STARTIO
         MOVL    #SS$_NORMAL, R0
         RSB
+80$:    PUSHL   R0                      ; its terminators can't be read
+        MOVL    R3, R0
+        MOVZWL  IRP$W_SIZE(R0), R1
+        BSBW    EXE$DEANONPGDSIZ
+        MOVL    (SP)+, R0
+        RSB
 85$:    MOVL    #SS$_ACCVIO, R0
         RSB
 87$:    MOVL    #SS$_BADPARAM, R0
+90$:    RSB
+
+; TNWRITE: TT$FDT's write on a TELNET terminal, R2 and R3 its bytes,
+; which go in its IRP, IAC doubled, on the terminal's queue of writes.
+; It is done once they are sent.
+TNWRITE:
+        MOVZWL  #SS$_HANGUP, R0
+        BBS     #UCB$V_TT_HANGUP, UCB$L_TT_STS(R5), 5$
+        MOVL    #SS$_NORMAL, R0
+        TSTL    R3
+        BNEQ    10$
+5$:     BRW     FDTDONE
+10$:    MOVL    R3, R1                  ; its size: one more for each IAC
+        CLRL    R6
+15$:    CMPB    (R2)[R6], #IAC
+        BNEQ    17$
+        INCL    R1
+17$:    AOBLSS  R3, R6, 15$
+        BSBW    IOC$ALLOCIRP
+        BLBC    R0, 90$
+        MOVL    28(AP), R2
+        MOVL    32(AP), R6
+        MOVAB   IRP$K_LENGTH(R3), R7
+20$:    MOVB    (R2)+, R0
+        MOVB    R0, (R7)+
+        CMPB    R0, #IAC
+        BNEQ    25$
+        MOVB    R0, (R7)+
+25$:    SOBGTR  R6, 20$
+        MOVAB   IRP$K_LENGTH(R3), R0
+        SUBL3   R0, R7, IRP$L_IOST2(R3)
+        CLRL    IRP$L_MEDIA(R3)
+        INSQUE  (R3), @UCB$Q_TT_WRTQ+4(R5)
+        BSBW    KICK
+        MOVL    #SS$_NORMAL, R0
 90$:    RSB
 
 ; SETMODE: TT$FDT's IO$_SETMODE. Takes the channel's AST off the queue,
@@ -184,9 +283,9 @@ TT$FDT::
 ; the request's, which is completed with a second.
 ; Without either modifier it sets the characteristics, TTSET.
 SETMODE:
-        MOVAQ   TTY$Q_CTRLC, R8
+        MOVAQ   UCB$Q_TT_CTRLC(R5), R8
         BBS     #IO$V_CTRLCAST, 12(AP), 10$
-        MOVAQ   TTY$Q_CTRLY, R8
+        MOVAQ   UCB$Q_TT_CTRLY(R5), R8
         BBS     #IO$V_CTRLYAST, 12(AP), 10$
         BRW     TTSET
 10$:    CLRL    R1                      ; the AST's, then the request's
@@ -233,53 +332,110 @@ SETMODE:
 90$:    RSB
 
 ; TTSET: TT$FDT's IO$_SETMODE of the characteristics: copies the p2
-; bytes at p1, past the class, to TTY$AB_CHAR, and completes the request.
+; bytes at p1, past the class, to UCB$A_TT_CHAR, and completes the
+; request.
 TTSET:
-        BSBB    TTBUF
+        BSBW    TTBUF
         BLBC    R0, 90$
         MOVL    #1, R1                  ; past the class
-10$:    MOVB    (R2)[R1], TTY$AB_CHAR[R1]
+10$:    MOVB    (R2)[R1], UCB$A_TT_CHAR(R5)[R1]
         AOBLSS  R3, R1, 10$
-        BRB     TTDONE
+        MOVL    #SS$_NORMAL, R0
+        BRW     FDTDONE
 90$:    RSB
 
-; TTSENSE: TT$FDT's IO$_SENSEMODE: copies TTY$AB_CHAR to the p2 bytes
-; at p1, and completes the request.
+; TTSENSE: TT$FDT's IO$_SENSEMODE: copies UCB$A_TT_CHAR to the p2 bytes
+; at p1, or with IO$M_TYPEAHDCNT what the type-ahead buffer holds, and
+; completes the request.
 TTSENSE:
-        BSBB    TTBUF
+        BBS     #IO$V_TYPEAHDCNT, 12(AP), 50$
+        BSBW    TTBUF
         BLBC    R0, 90$
         MOVL    #SS$_ACCVIO, R0
         IFNOWRT R3, (R2), 90$
         CLRL    R1
-10$:    MOVB    TTY$AB_CHAR[R1], (R2)[R1]
+10$:    MOVB    UCB$A_TT_CHAR(R5)[R1], (R2)[R1]
         AOBLSS  R3, R1, 10$
-        BRB     TTDONE
+        MOVL    #SS$_NORMAL, R0
+        BRW     FDTDONE
+50$:    MOVL    28(AP), R2
+        MOVL    #SS$_ACCVIO, R0
+        IFNOWRT #8, (R2), 90$
+        CLRQ    (R2)
+        DSBINT  #IPL$_CONSOLE           ; the console's ring, which its interrupt fills
+        SUBL3   UCB$L_TT_GET(R5), UCB$L_TT_PUT(R5), R0
+        BICL2   #^C<TYPEAHEAD-1>, R0
+        MOVW    R0, (R2)
+        BEQL    60$
+        MOVL    UCB$L_TT_GET(R5), R1
+        MOVB    UCB$A_TT_RING(R5)[R1], 2(R2)
+60$:    ENBINT
+        MOVL    #SS$_NORMAL, R0
+        BRW     FDTDONE
 90$:    RSB
 
-; TTDONE: completes TTSET's or TTSENSE's request with SS$_NORMAL, in
-; an IRP of its own.
-TTDONE:
+; TERMINATORS: R3 = a read's IRP, AP = $QIO's arguments. Puts its
+; terminators, p4's or the default ones, in the IRP. R0 = SS$_NORMAL, or
+; SS$_ACCVIO if p4 can't be read. Uses R0-R2.
+TERMINATORS:
+        .JSB_ENTRY  SCRATCH=<R2>
+        MOVAB   TTIRP$A_MASK(R3), R2
+        MOVL    40(AP), R0
+        BNEQ    10$
+        MOVQ    STANDARD, (R2)
+        MOVQ    STANDARD+8, 8(R2)
+        MOVQ    STANDARD+16, 16(R2)
+        MOVQ    STANDARD+24, 24(R2)
+        BRB     80$
+10$:    CLRQ    (R2)
+        CLRQ    8(R2)
+        CLRQ    16(R2)
+        CLRQ    24(R2)
+        IFNORD  #8, (R0), 85$
+        MOVZWL  (R0), R1                ; its length
+        BNEQ    20$
+        MOVL    4(R0), (R2)             ; the short form: characters 0-31
+        BRB     80$
+20$:    CMPL    R1, #TTIRP$K_MASK
+        BLEQU   30$
+        MOVL    #TTIRP$K_MASK, R1
+30$:    MOVL    4(R0), R0
+        IFNORD  R1, (R0), 85$
+40$:    MOVB    (R0)+, (R2)+
+        SOBGTR  R1, 40$
+80$:    MOVL    #SS$_NORMAL, R0
+        RSB
+85$:    MOVL    #SS$_ACCVIO, R0
+        RSB
+
+; FDTDONE: R0 = the IOSB's first longword. Completes TT$FDT's request at
+; once, in an IRP of its own. R4 = the current PCB, R5 = the UCB, AP =
+; $QIO's arguments. R0 = SS$_NORMAL or IOC$ALLOCIRP's failure. Uses R0-R3.
+FDTDONE:
+        .JSB_ENTRY  INPUT=<AP>, SCRATCH=<R2, R3>
+        PUSHL   R0
         CLRL    R1
         BSBW    IOC$ALLOCIRP
         BLBC    R0, 90$
-        MOVL    #SS$_NORMAL, R0
+        MOVL    (SP)+, R0
         CLRL    R1
         BRW     IOC$REQCOM
-90$:    RSB
+90$:    ADDL2   #4, SP
+        RSB
 
-; TTBUF: R2 = p1, R3 = p2, as a characteristics buffer: up to
-; TTY$K_CHAR bytes of it. R0 = SS$_NORMAL, SS$_BADPARAM if it is shorter
-; than 8, or SS$_ACCVIO if the caller can't read it.
+; TTBUF: R2 = p1, R3 = p2, as a characteristics buffer: up to 12 bytes
+; of it. R0 = SS$_NORMAL, SS$_BADPARAM if it is shorter than 8, or
+; SS$_ACCVIO if the caller can't read it.
 TTBUF:
-        .JSB_ENTRY  OUTPUT=<R2, R3>
+        .JSB_ENTRY  INPUT=<AP>, OUTPUT=<R2, R3>
         MOVL    28(AP), R2
         MOVL    32(AP), R3
         MOVL    #SS$_BADPARAM, R0
         CMPL    R3, #8
         BLSSU   90$
-        CMPL    R3, #TTY$K_CHAR
+        CMPL    R3, #12
         BLEQU   10$
-        MOVL    #TTY$K_CHAR, R3
+        MOVL    #12, R3
 10$:    MOVL    #SS$_ACCVIO, R0
         IFNORD  R3, (R2), 90$
         MOVL    #SS$_NORMAL, R0
@@ -298,242 +454,407 @@ WRITE:
         BRB     10$
 20$:    RSB
 
-; STARTIO: works on the console's queue of reads: the one at its head
-; writes its prompt, if it hasn't, and takes the characters in the
-; type-ahead buffer, editing the line in its IRP, until the buffer is
-; empty or the line ends. Then it is completed, and the next one goes on.
-; IPL$_SYNCH. Uses R0-R8.
+; STARTIO: R5 = a terminal's UCB. Works on its queue of reads: the one at
+; its head, once the writes queued before it are sent, writes its
+; prompt, if it hasn't, and takes the characters in the type-ahead
+; buffer, editing the line in its IRP, until the buffer is empty or the
+; line ends. Then it is completed, and the next one goes on. Last, a
+; TELNET terminal sends what it has to (KICK). IPL$_SYNCH. Uses R0-R4,
+; R6-R8.
 STARTIO:
-        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5, R6, R7, R8>
-10$:    MOVAB   G^IOC$AB_OPA0, R0
-        MOVL    UCB$L_IOQFL(R0), R4     ; the read at the head
-        CMPL    R4, R0
-        BEQL    90$                     ; none
-        BBSS    #IRP$V_STARTED, IRP$L_STS(R4), 20$
-        CLRL    TTY$GL_LEN              ; it starts: an empty line, after the prompt
-        CLRL    TTY$GL_CURSOR
-        CLRL    TTY$GL_BACK
-        CLRL    TTY$GL_ESC
-        MOVAB   IRP$K_LENGTH(R4), R2
-        MOVL    IRP$L_PROMPT(R4), R3
-        BSBB    WRITE
-20$:    MOVL    TTY$GL_LEN, R1
-        MOVL    TTY$GL_CURSOR, R5
-        MOVL    TTY$GL_BACK, R7
+        .JSB_ENTRY  INPUT=<R5>, SCRATCH=<R2, R3, R4, R6, R7, R8>
+10$:    MOVL    UCB$L_IOQFL(R5), R4     ; the read at the head
+        CMPL    R4, R5
+        BNEQ    12$
+        BRW     90$                     ; none
+12$:    BBS     #IRP$V_STARTED, IRP$L_STS(R4), 20$
+        MOVAQ   UCB$Q_TT_WRTQ(R5), R0
+        CMPL    (R0), R0
+        BEQL    14$
+        BRW     90$                     ; writes go first
+14$:    BBSS    #IRP$V_STARTED, IRP$L_STS(R4), 15$
+15$:    CLRL    UCB$L_TT_LEN(R5)        ; it starts: an empty line, after the prompt
+        CLRL    UCB$L_TT_CURSOR(R5)
+        CLRL    UCB$L_TT_BACK(R5)
+        CLRL    UCB$L_TT_ESC(R5)
+        BICL2   #<1@UCB$V_TT_OVER>, UCB$L_TT_STS(R5)
+        BBS     #TT2$V_INSERT, UCB$A_TT_CHAR+8(R5), 16$
+        BISL2   #<1@UCB$V_TT_OVER>, UCB$L_TT_STS(R5)
+16$:    BBC     #IO$V_PURGE, IRP$L_FUNC(R4), 17$
+        BSBW    PURGE
+17$:    MOVAB   TTIRP$A_PROMPT(R4), R1
+        SUBL3   #TTIRP$K_MASK, IRP$L_PROMPT(R4), R2
+        BSBW    TTPUTSTR
+        BSBW    TIMER
+20$:    MOVL    UCB$L_TT_LEN(R5), R1
+        MOVL    UCB$L_TT_CURSOR(R5), R9
+        MOVL    UCB$L_TT_BACK(R5), R7
         ADDL3   #IRP$K_LENGTH, IRP$L_PROMPT(R4), R2
         ADDL2   R4, R2
         MOVL    IRP$L_BCNT(R4), R3
-        MOVL    IRP$L_FUNC(R4), R6
-        BBC     #TT$V_NOECHO, TTY$AB_CHAR+4, 25$
-        BISL2   #IO$M_NOECHO, R6        ; SET TERMINAL/NOECHO: every read
-25$:    CLRL    R0
-        CMPL    R1, R3
-        BGEQU   40$                     ; full
-        BSBW    GETCHAR
+        BSBW    FLAGS
+25$:    CMPL    R1, R3
+        BLSSU   27$
+        CLRL    R0                      ; full: no terminator
+        MOVZWL  #SS$_NORMAL, R11
+        BRB     40$
+27$:    BSBW    GETCHAR
         BLSS    30$                     ; no more yet
+        BSBW    TIMER
         BSBW    EDIT
-        MOVL    R1, TTY$GL_LEN
-        MOVL    R5, TTY$GL_CURSOR
-        MOVL    R7, TTY$GL_BACK
+        MOVL    R1, UCB$L_TT_LEN(R5)
+        MOVL    R9, UCB$L_TT_CURSOR(R5)
+        MOVL    R7, UCB$L_TT_BACK(R5)
         TSTL    R0
-        BLSS    20$
-40$:    REMQUE  (R4), R3                ; it ends
-        MOVL    R0, R8
-        ASHL    #16, R1, R0
-        BISL2   #SS$_NORMAL, R0
+        BLSS    25$
+40$:    MOVL    R0, R8                  ; it ends
+        PUSHL   R1
+        REMQUE  (R4), R3
+        BSBW    DISARM
+        ASHL    #16, (SP)+, R0
+        BISL2   R11, R0
         MOVL    R8, R1
         BSBW    IOC$REQCOM
-        BRB     10$
-30$:    MOVL    R1, TTY$GL_LEN
-        MOVL    R5, TTY$GL_CURSOR
-        MOVL    R7, TTY$GL_BACK
-90$:    RSB
+        BRW     10$
+30$:    MOVL    R1, UCB$L_TT_LEN(R5)
+        MOVL    R9, UCB$L_TT_CURSOR(R5)
+        MOVL    R7, UCB$L_TT_BACK(R5)
+        BBC     #IO$V_TIMED, IRP$L_FUNC(R4), 90$
+        TSTL    IRP$L_MEDIA(R4)
+        BNEQ    90$
+        CLRL    R0                      ; a timed read of 0 seconds: what there was
+        MOVZWL  #SS$_TIMEOUT, R11
+        BRB     40$
+90$:    BSBW    KICK
+        RSB
+
+; FLAGS: R4 = a read's IRP, R5 = its terminal's UCB. R6 = its function
+; and modifiers, with those the terminal's characteristics add: NOECHO
+; for its NOECHO, NOFILTR for PASSALL or PASTHRU, ESCAPE for its ESCAPE,
+; and F_V_EDIT for line editing, TT2$M_EDITING, if it filters.
+FLAGS:
+        .JSB_ENTRY  OUTPUT=<R6>
+        MOVL    IRP$L_FUNC(R4), R6
+        BBC     #TT$V_NOECHO, UCB$A_TT_CHAR+4(R5), 10$
+        BISL2   #IO$M_NOECHO, R6
+10$:    BBS     #TT$V_PASSALL, UCB$A_TT_CHAR+4(R5), 15$
+        BBC     #TT2$V_PASTHRU, UCB$A_TT_CHAR+8(R5), 20$
+15$:    BISL2   #IO$M_NOFILTR, R6
+20$:    BBC     #TT$V_ESCAPE, UCB$A_TT_CHAR+4(R5), 30$
+        BISL2   #IO$M_ESCAPE, R6
+30$:    BBS     #IO$V_NOFILTR, R6, 40$
+        BBC     #TT2$V_EDITING, UCB$A_TT_CHAR+8(R5), 40$
+        BISL2   #<1@F_V_EDIT>, R6
+40$:    RSB
 
 ; EDIT: R0 = a character typed, for the line at R2, R3 bytes, R1 of them
-; read, the cursor at R5, R7 lines back in the recall buffer, R6 = the
-; read's function. Echoes the character and edits the line, as VMS does,
-; in insert mode: the left and right arrows move the cursor, CTRL/H to the
-; line's start and CTRL/E to its end, DEL erases the character before the
-; cursor and CTRL/U all of them. The up arrow or CTRL/B recalls the line
-; read before, again for the one before that, up to RECALL lines, and the
-; down arrow goes back down, to an empty line past the last. Other control
-; characters and escape sequences are dropped. A carriage return ends the
-; line, echoed as CR LF, or CTRL/Z, echoed as *EXIT*. With IO$M_NOECHO
-; nothing is echoed or recalled, and with IO$M_NOFILTR every character but
-; a carriage return goes in the line as it is, so a buffer of one byte
-; reads a key. R0 = the terminator, as in the I/O status block: the
-; character, one byte, if it ended the line, else -1. Uses R8.
-; ponytail: insert mode only, no CTRL/A for overstrike or CTRL/J; the
-; recall buffer is the console's, every reader's, not DCL's, and has no
-; RECALL command; VMS ends a read with IO$M_NOFILTR at any control
-; character in the terminator mask too.
+; read, the cursor at R9, R7 lines back in the recall buffer, R4 = the
+; read's IRP, R5 = the terminal's UCB, R6 = FLAGS'. Echoes the character
+; and edits the line, as VMS does. Unless R6 has IO$M_NOFILTR, DEL
+; erases the character before the cursor, CTRL/U all of them, and CTRL/R
+; types the line again; with line editing, F_V_EDIT, the left and right
+; arrows, CTRL/D and CTRL/F move the cursor, CTRL/H to the line's start
+; and CTRL/E to its end, CTRL/J erases the word before it, CTRL/A
+; changes between insert and overstrike, and the up arrow or CTRL/B
+; recalls the line read before, again for the one before that, up to
+; UCB$K_TT_RECALL lines, and the down arrow goes back down, to an empty
+; line past the last. A terminator ends the line: a carriage return,
+; echoed as CR LF, which saves the line in the recall buffer, or CTRL/Z,
+; echoed as *EXIT*, unless R6 has IO$M_NOECHO or IO$M_TRMNOECHO; others
+; aren't echoed. With IO$M_ESCAPE an escape sequence ends the line, and
+; goes in the buffer after it; with line editing those that aren't the
+; arrows are dropped. Another control character that isn't a terminator
+; is dropped, but TAB, unless R6 has IO$M_NOFILTR, which puts every
+; character that isn't a terminator in the line. R0 = -1 to go on, or
+; the IOSB's second longword: the terminator and its size; then R11 =
+; the read's status. Uses R8 and R10.
 EDIT:
-        .JSB_ENTRY  OUTPUT=<R5, R7>, SCRATCH=<R8>
-        TSTL    TTY$GL_ESC
-        BEQL    10$
-        BRW     60$
-10$:    CMPB    R0, #13
+        .JSB_ENTRY  OUTPUT=<R1, R7, R9, R11>, SCRATCH=<R8, R10>
+        MOVZWL  #SS$_NORMAL, R11
+        TSTW    UCB$L_TT_ESC(R5)
+        BEQL    2$
+        BRW     ESCCHAR
+2$:     CMPB    R0, #ESC
+        BNEQ    5$
+        BBS     #IO$V_ESCAPE, R6, 3$
+        BBC     #F_V_EDIT, R6, 5$
+3$:     MOVL    #<1@16>!ESC_START, UCB$L_TT_ESC(R5)
+        BBC     #IO$V_ESCAPE, R6, 4$
+        MOVB    R0, (R2)[R1]            ; it goes after the line
+4$:     BRW     DROP
+5$:     BBS     #IO$V_NOFILTR, R6, TERM1
+        CMPB    R0, #DEL
+        BNEQ    6$
+        TSTL    R9                      ; DEL: erase the character before the cursor
+        BEQL    4$
+        BSBW    RUBOUT
+        BRB     4$
+6$:     CMPB    R0, #CTRLU
+        BNEQ    8$
+7$:     TSTL    R9                      ; CTRL/U: erase all before the cursor
+        BEQL    4$
+        BSBW    RUBOUT
+        BRB     7$
+8$:     CMPB    R0, #CTRLR
+        BNEQ    9$
+        BSBW    RETYPE
+        BRB     4$
+9$:     BBC     #F_V_EDIT, R6, TERM1
+        CMPB    R0, #CTRLA
+        BNEQ    10$
+        XORL2   #<1@UCB$V_TT_OVER>, UCB$L_TT_STS(R5)
+        BRB     4$
+10$:    CMPB    R0, #CTRLB
+        BNEQ    11$
+        BRW     UP
+11$:    CMPB    R0, #CTRLD
         BNEQ    12$
-        BRW     50$
-12$:    BBS     #IO$V_NOFILTR, R6, 15$
-        CMPB    R0, #CTRLZ
-        BEQL    40$
-        CMPB    R0, #127
-        BEQL    20$
-        CMPB    R0, #8
-        BEQL    30$
-        CMPB    R0, #5
-        BEQL    32$
-        CMPB    R0, #21
-        BEQL    25$
-        CMPB    R0, #2
-        BEQL    35$
-        CMPB    R0, #27
-        BEQL    38$
+        BRW     LEFT1
+12$:    CMPB    R0, #CTRLE
+        BNEQ    14$
+13$:    CMPL    R9, R1                  ; CTRL/E
+        BGEQU   4$
+        BSBW    RIGHT
+        BRB     13$
+14$:    CMPB    R0, #CTRLF
+        BNEQ    15$
+        BRW     RIGHT1
+15$:    CMPB    R0, #CTRLH
+        BNEQ    16$
+        BSBW    START
+        BRB     4$
+16$:    CMPB    R0, #CTRLJ
+        BNEQ    TERM1
+        BSBW    DELWORD
+        BRB     4$
+TERM1:  ASHL    #-3, R0, R8             ; a terminator?
+        MOVZBL  TTIRP$A_MASK(R4)[R8], R8
+        BICL3   #^C7, R0, R10
+        EXTZV   R10, #1, R8, R8
+        BLBC    R8, 20$
+        BRW     TERM
+20$:    CMPB    R0, #^A/a/              ; IO$M_CVTLOW
+        BLSSU   22$
+        CMPB    R0, #^A/z/
+        BGTRU   22$
+        BBC     #IO$V_CVTLOW, R6, 22$
+        SUBB2   #^A/a/-^A/A/, R0
+22$:    BBC     #IO$V_NOFILTR, R6, 25$
+        MOVB    R0, (R2)[R1]            ; IO$M_NOFILTR: as it is
+        INCL    R1
+        MOVL    R1, R9
+        BSBW    ECHO
+        BRW     DROP
+25$:    CMPB    R0, #TAB
+        BEQL    27$
         CMPB    R0, #^A/ /
-        BLSSU   39$
-        CMPB    R0, #126
-        BGTRU   39$
-        MOVL    R1, R8                  ; insert at the cursor
-13$:    CMPL    R8, R5
-        BLEQU   14$
+        BLSSU   DROP
+        CMPB    R0, #DEL
+        BEQL    DROP
+27$:    BBC     #UCB$V_TT_OVER, UCB$L_TT_STS(R5), 30$
+        CMPL    R9, R1                  ; overstrike
+        BGEQU   30$
+        MOVB    R0, (R2)[R9]
+        BSBW    RIGHT
+        BRB     DROP
+30$:    MOVL    R1, R8                  ; insert at the cursor
+32$:    CMPL    R8, R9
+        BLEQU   34$
         MOVB    -1(R2)[R8], (R2)[R8]
-        SOBGTR  R8, 13$
-14$:    MOVB    R0, (R2)[R5]
+        SOBGTR  R8, 32$
+34$:    MOVB    R0, (R2)[R9]
         INCL    R1
         BSBW    RIGHT
         BSBW    TAIL
-        BRB     39$
-15$:    MOVB    R0, (R2)[R1]            ; IO$M_NOFILTR
-        INCL    R1
-        BSBW    ECHO
-        BRB     39$
-20$:    TSTL    R5                      ; DEL: erase the character before the cursor
-        BEQL    39$
-        BSBW    RUBOUT
-        BRB     39$
-25$:    TSTL    R5                      ; CTRL/U: erase all before the cursor
-        BEQL    39$
-        BSBW    RUBOUT
-        BRB     25$
-30$:    BSBW    START                   ; CTRL/H
-        BRB     39$
-32$:    CMPL    R5, R1                  ; CTRL/E
-        BGEQU   39$
-        BSBW    RIGHT
-        BRB     32$
-35$:    BBS     #IO$V_NOECHO, R6, 39$  ; up, or CTRL/B: the line before
-        CMPL    R7, TTY$GL_NRECALL
-        BGEQU   39$
+DROP:   MNEGL   #1, R0
+        RSB
+TERM:   CMPB    R0, #CR
+        BNEQ    45$
+        BBS     #IO$V_NOFILTR, R6, 41$
+        BBS     #IO$V_NOECHO, R6, 41$
+        TSTL    R1
+        BEQL    41$
+        BSBW    SAVE
+        MOVZBL  #CR, R0
+41$:    BBS     #IO$V_NOECHO, R6, 49$
+        BBS     #IO$V_TRMNOECHO, R6, 49$
+        BSBW    TTPUTC
+        MOVZBL  #10, R0
+        BSBW    TTPUTC
+        MOVZBL  #CR, R0
+        BRB     49$
+45$:    CMPB    R0, #CTRLZ
+        BNEQ    49$
+        BBS     #IO$V_NOECHO, R6, 49$
+        BBS     #IO$V_TRMNOECHO, R6, 49$
+        PUSHL   R1
+        MOVAB   EXIT, R1
+        BSBW    PUTZ
+        MOVL    (SP)+, R1
+        MOVZBL  #CTRLZ, R0
+49$:    MOVZBL  R0, R0                  ; the terminator, one byte
+        BISL2   #<1@16>, R0
+        RSB
+UP:     BBS     #IO$V_NOECHO, R6, DROP  ; up, or CTRL/B: the line before
+        CMPL    R7, UCB$L_TT_NRECALL(R5)
+        BGEQU   DROP
         INCL    R7
         BSBW    FETCH
-        BRB     39$
-38$:    MOVL    #1, TTY$GL_ESC
-39$:    MNEGL   #1, R0
-        RSB
-40$:    BBS     #IO$V_NOECHO, R6, 45$   ; CTRL/Z
-        PUSHR   #^M<R1, R2>
-        MOVAB   EXIT, R1
-        JSB     G^EXE$OUTZSTRING
-        POPR    #^M<R1, R2>
-45$:    MOVL    #<1@16>!CTRLZ, R0       ; CTRL/Z, one byte
-        RSB
-50$:    BBS     #IO$V_NOFILTR, R6, 51$
-        BBS     #IO$V_NOECHO, R6, 51$
-        TSTL    R1
-        BEQL    51$
-        BSBW    SAVE
-51$:    BBS     #IO$V_NOECHO, R6, 52$
-        JSB     G^EXE$OUTCRLF
-52$:    MOVL    #<1@16>!13, R0          ; a carriage return, one byte
-        RSB
-60$:    CMPL    TTY$GL_ESC, #1          ; after ESC: [ or O, then the key
-        BNEQ    62$
-        CLRL    TTY$GL_ESC
-        CMPB    R0, #^A/[/
-        BEQL    61$
-        CMPB    R0, #^A/O/
-        BNEQ    39$
-61$:    MOVL    #2, TTY$GL_ESC
-        BRB     39$
-62$:    CMPB    R0, #^A/0/              ; past ESC [ n ; n
-        BLSSU   63$
-        CMPB    R0, #59                 ; a semicolon
-        BLEQU   39$
-63$:    CLRL    TTY$GL_ESC
-        CMPB    R0, #^A/A/
-        BEQL    35$
-        CMPB    R0, #^A/B/
-        BEQL    65$
-        CMPB    R0, #^A/C/
-        BEQL    67$
-        CMPB    R0, #^A/D/
-        BEQL    69$
-        BRB     39$
-65$:    TSTL    R7                      ; down: the line after
-        BEQL    39$
+        BRB     DROP
+DOWN:   TSTL    R7                      ; down: the line after
+        BEQL    DROP
         DECL    R7
         BSBW    FETCH
-        BRB     39$
-67$:    CMPL    R5, R1                  ; right
-        BGEQU   39$
+        BRB     DROP
+RIGHT1: CMPL    R9, R1
+        BGEQU   DROP
         BSBW    RIGHT
-        BRB     39$
-69$:    TSTL    R5                      ; left
-        BEQL    39$
+        BRB     DROP
+LEFT1:  TSTL    R9
+        BEQL    DROP
         BSBW    LEFT
-        BRB     39$
+        BRB     DROP
+; ESCCHAR: EDIT's character in an escape sequence: ESC, then [ or O, or
+; intermediate characters, then a final one.
+ESCCHAR:
+        EXTZV   #16, #16, UCB$L_TT_ESC(R5), R8  ; its length so far
+        BBC     #IO$V_ESCAPE, R6, 52$
+        ADDL3   R1, R8, R10             ; where this one goes
+        CMPL    R10, R3
+        BLSSU   51$
+        MOVZWL  #SS$_PARTESCAPE, R11    ; it doesn't fit
+        BRW     ESCEND
+51$:    MOVB    R0, (R2)[R10]
+52$:    INCL    R8
+        MOVZWL  UCB$L_TT_ESC(R5), R10   ; the state
+        INSV    R8, #16, #16, UCB$L_TT_ESC(R5)
+        CMPL    R10, #ESC_START
+        BNEQ    60$
+        MOVW    #ESC_CSI, UCB$L_TT_ESC(R5)
+        CMPB    R0, #^A/[/
+        BEQL    DROP
+        MOVW    #ESC_SS3, UCB$L_TT_ESC(R5)
+        CMPB    R0, #^A/O/
+        BEQL    DROP
+        MOVW    #ESC_INTER, UCB$L_TT_ESC(R5)
+        CMPB    R0, #^X20
+        BLSSU   BADESC
+        CMPB    R0, #^X2F
+        BLEQU   DROP
+        CMPB    R0, #^X7E
+        BLEQU   FINAL
+        BRB     BADESC
+60$:    CMPL    R10, #ESC_CSI
+        BNEQ    65$
+        CMPB    R0, #^X20               ; parameters and intermediates
+        BLSSU   BADESC
+        CMPB    R0, #^X3F
+        BLEQU   DROP
+        BRB     68$
+65$:    CMPL    R10, #ESC_INTER
+        BNEQ    68$
+        CMPB    R0, #^X20
+        BLSSU   BADESC
+        CMPB    R0, #^X2F
+        BLEQU   DROP
+        CMPB    R0, #^X7E
+        BLEQU   FINAL
+        BRB     BADESC
+68$:    CMPB    R0, #^X40               ; CSI's or SS3's final character
+        BLSSU   BADESC
+        CMPB    R0, #^X7E
+        BGTRU   BADESC
+FINAL:  BBS     #IO$V_ESCAPE, R6, ESCEND
+        CLRL    UCB$L_TT_ESC(R5)        ; line editing: the arrows
+        CMPL    R10, #ESC_INTER
+        BEQL    70$
+        CMPB    R0, #^A/A/
+        BEQL    UP
+        CMPB    R0, #^A/B/
+        BEQL    DOWN
+        CMPB    R0, #^A/C/
+        BEQL    RIGHT1
+        CMPB    R0, #^A/D/
+        BEQL    LEFT1
+70$:    BRW     DROP
+BADESC: MOVZWL  #SS$_BADESCAPE, R11
+        BBS     #IO$V_ESCAPE, R6, ESCEND
+        CLRL    UCB$L_TT_ESC(R5)
+        BRW     DROP
+ESCEND: CLRL    UCB$L_TT_ESC(R5)        ; it ends the read: ESC, R8 long
+        MOVAB   TT$POST, IRP$L_POST(R4)
+        ASHL    #16, R8, R0
+        BISL2   #ESC, R0
+        RSB
 
-; GETCHAR: R0 = the next character in the type-ahead buffer, or -1 if it
-; is empty, and the condition codes for it.
+; GETCHAR: R5 = a terminal's UCB. R0 = the next character in its
+; type-ahead buffer, or -1 if it is empty, and the condition codes for it.
 GETCHAR:
         .JSB_ENTRY
-        DSBINT  #IPL$_CONSOLE           ; the ring, which the receive interrupt fills
+        DSBINT  #IPL$_CONSOLE           ; the console's ring, which its interrupt fills
         MNEGL   #1, R0
-        CMPL    TTY$GL_GET, TTY$GL_PUT
+        CMPL    UCB$L_TT_GET(R5), UCB$L_TT_PUT(R5)
         BEQL    10$
-        MOVL    TTY$GL_GET, R0
-        INCL    TTY$GL_GET
-        BICL2   #^C<TYPEAHEAD-1>, TTY$GL_GET
-        MOVZBL  TTY$AB_RING[R0], R0
-        MTPR    #RXCS$M_IE, #PR$_RXCS   ; room again, if the ring was full
+        MOVL    UCB$L_TT_GET(R5), R0
+        INCL    UCB$L_TT_GET(R5)
+        BICL2   #^C<TYPEAHEAD-1>, UCB$L_TT_GET(R5)
+        MOVZBL  UCB$A_TT_RING(R5)[R0], R0
+        BSBB    RXROOM
 10$:    ENBINT
         TSTL    R0
         RSB
 
-; ECHO: echoes the character in R0, unless R6 has IO$M_NOECHO. Keeps
-; every register.
+; PURGE: R5 = a terminal's UCB. Empties its type-ahead buffer.
+PURGE:
+        .JSB_ENTRY
+        DSBINT  #IPL$_CONSOLE
+        MOVL    UCB$L_TT_PUT(R5), UCB$L_TT_GET(R5)
+        BSBB    RXROOM
+        ENBINT
+        RSB
+
+; RXROOM: R5 = a terminal's UCB, whose type-ahead buffer has room. Enables
+; the console's receive interrupt again, if it is the console's: it was
+; disabled when the buffer filled. Keeps every register.
+RXROOM:
+        .JSB_ENTRY
+        BBS     #UCB$V_TT_TN, UCB$L_TT_STS(R5), 10$
+        MTPR    #RXCS$M_IE, #PR$_RXCS
+10$:    RSB
+
+; ECHO: echoes the character in R0 on the terminal R5, unless R6 has
+; IO$M_NOECHO. Keeps every register.
 ECHO:
         .JSB_ENTRY
         BBS     #IO$V_NOECHO, R6, 10$
-        JMP     G^EXE$OUTCHAR
+        BSBW    TTPUTC
 10$:    RSB
 
-; RIGHT: moves the cursor, R5, right over the character the line, R2,
+; RIGHT: moves the cursor, R9, right over the character the line, R2,
 ; has there, echoing it. Uses R0.
 RIGHT:
-        .JSB_ENTRY  OUTPUT=<R5>
-        MOVZBL  (R2)[R5], R0
-        INCL    R5
+        .JSB_ENTRY  OUTPUT=<R9>
+        MOVZBL  (R2)[R9], R0
+        INCL    R9
         BRB     ECHO
 
-; LEFT: moves the cursor, R5, left. Uses R0.
+; LEFT: moves the cursor, R9, left. Uses R0.
 LEFT:
-        .JSB_ENTRY  OUTPUT=<R5>
-        DECL    R5
+        .JSB_ENTRY  OUTPUT=<R9>
+        DECL    R9
         MOVZBL  #8, R0
         BRB     ECHO
 
-; START: moves the cursor, R5, to the line's start. Uses R0.
+; START: moves the cursor, R9, to the line's start. Uses R0.
 START:
-        .JSB_ENTRY  OUTPUT=<R5>
-        TSTL    R5
+        .JSB_ENTRY  OUTPUT=<R9>
+        TSTL    R9
         BEQL    10$
         BSBB    LEFT
         BRB     START
 10$:    RSB
 
-; TAIL: echoes the line, R2, from the cursor, R5, to its end, R1, then
+; TAIL: echoes the line, R2, from the cursor, R9, to its end, R1, then
 ; moves back to the cursor. TAILB does too, with a blank past the end,
 ; over the character erased there. Uses R0 and R8.
 TAIL:
@@ -547,7 +868,7 @@ TAILB:  .GLOBAL_LABEL                   ; RUBOUT's tail too
         INCL    R8
 BACK:
         MOVZBL  #8, R0
-10$:    CMPL    R8, R5
+10$:    CMPL    R8, R9
         BLEQU   20$
         BSBB    ECHO
         DECL    R8
@@ -555,7 +876,7 @@ BACK:
 20$:    RSB
 ECHOTAIL:
         .JSB_ENTRY  SCRATCH=<R8>
-        MOVL    R5, R8
+        MOVL    R9, R8
 10$:    CMPL    R8, R1
         BGEQU   20$
         MOVZBL  (R2)[R8], R0
@@ -564,12 +885,12 @@ ECHOTAIL:
         BRB     10$
 20$:    RSB
 
-; RUBOUT: erases the character before the cursor, R5, from the line, R2,
+; RUBOUT: erases the character before the cursor, R9, from the line, R2,
 ; R1 long, and from the screen. Uses R0 and R8.
 RUBOUT:
-        .JSB_ENTRY  OUTPUT=<R5>, SCRATCH=<R8>
+        .JSB_ENTRY  OUTPUT=<R1, R9>, SCRATCH=<R8>
         BSBB    LEFT
-        MOVL    R5, R8
+        MOVL    R9, R8
 10$:    ADDL3   #1, R8, R0
         CMPL    R0, R1
         BGEQU   20$
@@ -579,175 +900,484 @@ RUBOUT:
 20$:    DECL    R1
         BRB     TAILB
 
+; DELWORD: CTRL/J: erases the word before the cursor, R9, and the blanks
+; after it, from the line, R2, R1 long. Uses R0 and R8.
+DELWORD:
+        .JSB_ENTRY  OUTPUT=<R1, R9>, SCRATCH=<R8>
+10$:    TSTL    R9
+        BEQL    90$
+        CMPB    -1(R2)[R9], #^A/ /
+        BNEQ    20$
+        BSBB    RUBOUT
+        BRB     10$
+20$:    TSTL    R9
+        BEQL    90$
+        CMPB    -1(R2)[R9], #^A/ /
+        BEQL    90$
+        BSBB    RUBOUT
+        BRB     20$
+90$:    RSB
+
+; RETYPE: CTRL/R: writes the read's prompt and line, R2, R1 long, again,
+; on a new line, and puts the cursor back at R9. R4 = the read's IRP.
+; Uses R0 and R8.
+RETYPE:
+        .JSB_ENTRY  SCRATCH=<R8>
+        BBS     #IO$V_NOECHO, R6, 90$
+        MOVZBL  #CR, R0
+        BSBW    TTPUTC
+        MOVZBL  #10, R0
+        BSBW    TTPUTC
+        PUSHR   #^M<R1, R2>
+        MOVAB   TTIRP$A_PROMPT(R4), R1
+        SUBL3   #TTIRP$K_MASK, IRP$L_PROMPT(R4), R2
+        BSBW    TTPUTSTR
+        POPR    #^M<R1, R2>
+        PUSHL   R9
+        CLRL    R9
+        BSBB    ECHOTAIL
+        MOVL    (SP)+, R9
+        SUBL3   R9, R1, R8              ; back to the cursor
+        BEQL    90$
+        MOVZBL  #8, R0
+10$:    BSBW    ECHO
+        SOBGTR  R8, 10$
+90$:    RSB
+
 ; FETCH: puts in the line, R2, in place of the R1 characters there, the
 ; one read R7 lines back, or an empty one for 0, up to R3 characters, and
-; leaves the cursor, R5, at its end. Uses R0 and R8.
+; leaves the cursor, R9, at its end. Uses R0 and R8.
 FETCH:
-        .JSB_ENTRY  OUTPUT=<R5>, SCRATCH=<R8>
+        .JSB_ENTRY  OUTPUT=<R1, R9>, SCRATCH=<R8>
         BSBB    START
         PUSHL   R1                      ; the old line's length
         CLRL    R1
         TSTL    R7
         BEQL    20$
-        SUBL3   R7, TTY$GL_RECALL, R8
-        BICL2   #^C<RECALL-1>, R8
+        SUBL3   R7, UCB$L_TT_RECALL(R5), R8
+        BICL2   #^C<UCB$K_TT_RECALL-1>, R8
         ASHL    #8, R8, R8
-        MOVAB   TTY$AB_RECALL[R8], R8
+        MOVAB   UCB$A_TT_RECALL(R5)[R8], R8
         MOVZBL  (R8)+, R1
         CMPL    R1, R3
         BLEQU   10$
         MOVL    R3, R1
-10$:    CMPL    R5, R1
+10$:    CMPL    R9, R1
         BGEQU   20$
-        MOVB    (R8)[R5], (R2)[R5]
-        BSBB    RIGHT
+        MOVB    (R8)[R9], (R2)[R9]
+        BSBW    RIGHT
         BRB     10$
 20$:    SUBL3   R1, (SP)+, R8           ; blank the rest of the old line
         BLEQ    40$
         PUSHL   R8
         MOVZBL  #^A/ /, R0
-30$:    BSBB    ECHO
+30$:    BSBW    ECHO
         SOBGTR  R8, 30$
         MOVL    (SP)+, R8
         MOVZBL  #8, R0
-35$:    BSBB    ECHO
+35$:    BSBW    ECHO
         SOBGTR  R8, 35$
 40$:    RSB
 
 ; SAVE: puts the R1 characters of the line, R2, up to 255, in the recall
-; buffer, over its oldest line once it is full. Uses R0, R5 and R8.
+; buffer of the terminal R5, over its oldest line once it is full. Uses
+; R0 and R8.
 SAVE:
-        .JSB_ENTRY  SCRATCH=<R5, R8>
-        MOVL    TTY$GL_RECALL, R8
+        .JSB_ENTRY  SCRATCH=<R8>
+        PUSHL   R9
+        MOVL    UCB$L_TT_RECALL(R5), R8
         ASHL    #8, R8, R8
-        MOVAB   TTY$AB_RECALL[R8], R8
+        MOVAB   UCB$A_TT_RECALL(R5)[R8], R8
         MOVZBL  #255, R0
         CMPL    R1, R0
         BGEQU   10$
         MOVL    R1, R0
 10$:    MOVB    R0, (R8)+
-        CLRL    R5
-20$:    CMPL    R5, R0
+        CLRL    R9
+20$:    CMPL    R9, R0
         BGEQU   30$
-        MOVB    (R2)[R5], (R8)[R5]
-        INCL    R5
+        MOVB    (R2)[R9], (R8)[R9]
+        INCL    R9
         BRB     20$
-30$:    INCL    TTY$GL_RECALL
-        BICL2   #^C<RECALL-1>, TTY$GL_RECALL
-        CMPL    TTY$GL_NRECALL, #RECALL
+30$:    MOVL    (SP)+, R9
+        INCL    UCB$L_TT_RECALL(R5)
+        BICL2   #^C<UCB$K_TT_RECALL-1>, UCB$L_TT_RECALL(R5)
+        CMPL    UCB$L_TT_NRECALL(R5), #UCB$K_TT_RECALL
         BGEQU   40$
-        INCL    TTY$GL_NRECALL
+        INCL    UCB$L_TT_NRECALL(R5)
 40$:    RSB
 
-; TTY$INIT: empties the type-ahead buffer and enables the console receive
-; interrupt. The SCB must have TTY$RCVINT for it, and TTY$IOPOST for
-; IPL$_IOPOST. Uses R0.
-TTY$INIT::
-        .JSB_ENTRY
-        CLRL    TTY$GL_PUT
-        CLRL    TTY$GL_GET
-        MOVL    #RXCS$M_IE, R0
-        MTPR    R0, #PR$_RXCS
+; TT$POST: IOC$POST's call, in the reader's process, for a read, R6, that
+; an escape sequence ended: copies the sequence, which follows the line in
+; the IRP, to the caller's buffer after it. Uses R0-R5.
+TT$POST::
+        .JSB_ENTRY  INPUT=<R6>, SCRATCH=<R2, R3, R4, R5>
+        EXTZV   #16, #16, IRP$L_IOST1(R6), R1   ; the line's length
+        EXTZV   #16, #16, IRP$L_IOST2(R6), R0   ; the sequence's
+        ADDL3   #IRP$K_LENGTH, IRP$L_PROMPT(R6), R2
+        ADDL2   R6, R2
+        ADDL2   R1, R2
+        ADDL2   IRP$L_BUFADR(R6), R1
+        MOVC3   R0, (R2), (R1)
         RSB
 
-; TTY$RCVINT: the console receive interrupt, at IPL$_CONSOLE. Puts each
-; character the console received in the type-ahead buffer, and requests
-; the IPL$_IOPOST software interrupt, which gives them to the reads. CTRL/C
-; and CTRL/Y empty the buffer, for TTY$IOPOST to deliver their ASTs. When
-; the buffer is full it leaves the rest in the console and disables this
-; interrupt, which GETCHAR enables again: the host waits to send more, as
-; for a terminal's XOFF, rather than lose a line's end. ponytail: a CTRL/Y
-; typed then waits too, until a read takes a character.
-TTY$RCVINT::
-        .EXCEPTION_ENTRY
-        PUSHR   #^M<R0, R1>
-10$:    MFPR    #PR$_RXCS, R0
-        BBC     #RXCS$V_DONE, R0, 30$
-        ADDL3   #1, TTY$GL_PUT, R1
-        BICL2   #^C<TYPEAHEAD-1>, R1
-        CMPL    R1, TTY$GL_GET
-        BEQL    25$                     ; full
-        MFPR    #PR$_RXDB, R0
-        CMPB    R0, #CTRLY
-        BNEQ    15$
-        MOVL    TTY$GL_PUT, TTY$GL_GET
-        MOVL    #1, TTY$GL_CTRLY
-        BRB     10$
-15$:    CMPB    R0, #CTRLC
+; TTPUTC: writes the character in R0 on the terminal R5: the console's at
+; once, a TELNET terminal's, Telnet's IAC doubled, to be sent (PUTRAW).
+; Keeps every register.
+TTPUTC:
+        .JSB_ENTRY  PRESERVE=<R0, R1>
+        BBS     #UCB$V_TT_TN, UCB$L_TT_STS(R5), 10$
+        JSB     G^EXE$OUTCHAR
+        RSB
+10$:    CMPB    R0, #IAC
         BNEQ    20$
-        MOVL    TTY$GL_PUT, TTY$GL_GET
-        MOVL    #1, TTY$GL_CTRLC
-        BRB     10$
-20$:    PUSHL   R1
-        MOVL    TTY$GL_PUT, R1
-        MOVB    R0, TTY$AB_RING[R1]
-        MOVL    (SP)+, TTY$GL_PUT
-        BRB     10$
-25$:    MTPR    #0, #PR$_RXCS
-30$:    SOFTINT #IPL$_IOPOST
-        POPR    #^M<R0, R1>
-        REI
+        BSBB    PUTRAW
+20$:    BSBB    PUTRAW
+        RSB
 
-; TTY$IOPOST: the IPL$_IOPOST software interrupt. Delivers the ASTs of a
-; CTRL/C or CTRL/Y that came, then gives what is in the type-ahead buffer
-; to the console's reads.
-TTY$IOPOST::
-        .EXCEPTION_ENTRY
-        SETIPL  #IPL$_SYNCH
-        PUSHR   #^M<R0, R1, R2, R3, R4, R5, R6, R7, R8>
+; PUTRAW: puts the byte in R0 in what the TELNET terminal R5 has to send,
+; after sending what it has if that is full and it can (KICK). A byte it
+; has no room for, or for a line that is gone, is lost. Keeps every
+; register.
+PUTRAW:
+        .JSB_ENTRY  PRESERVE=<R0, R1>
+        BBS     #UCB$V_TT_HANGUP, UCB$L_TT_STS(R5), 90$
+        CMPL    UCB$L_TT_OUTLEN(R5), #UCB$K_TT_OUTSIZE
+        BLSSU   10$
+        PUSHL   R0
+        BSBW    KICK
+        MOVL    (SP)+, R0
+        CMPL    UCB$L_TT_OUTLEN(R5), #UCB$K_TT_OUTSIZE
+        BGEQU   90$
+10$:    MOVL    UCB$L_TT_OUTLEN(R5), R1
+        MOVB    R0, UCB$A_TT_OUT(R5)[R1]
+        INCL    UCB$L_TT_OUTLEN(R5)
+90$:    RSB
+
+; TTPUTSTR: writes the R2 bytes at R1 on the terminal R5. Uses R0-R2.
+TTPUTSTR:
+        .JSB_ENTRY  SCRATCH=<R2>
+        TSTL    R2
+        BEQL    90$
+10$:    MOVZBL  (R1)+, R0
+        BSBB    TTPUTC
+        SOBGTR  R2, 10$
+90$:    RSB
+
+; PUTZ: writes the .ASCIZ string at R1 on the terminal R5. Uses R0, R1.
+PUTZ:
+        .JSB_ENTRY
+10$:    MOVZBL  (R1)+, R0
+        BEQL    90$
+        BSBB    TTPUTC
+        BRB     10$
+90$:    RSB
+
+; KICK: R5 = a terminal's UCB. A TELNET terminal's, unless a send of its
+; is on the port already, sends what PUTRAW put aside, or else the next
+; part of its first write, up to PORT$K_BUFSIZE bytes; and unless its
+; receive is on the port, receives as many characters as its type-ahead
+; buffer has room for, if that is 64 or more. Without pool for them, they
+; wait for the next KICK. Once the line is gone, it drops what it has to
+; send. IPL$_SYNCH. Uses R0-R3.
+KICK:
+        .JSB_ENTRY  SCRATCH=<R2, R3>
+        BBS     #UCB$V_TT_TN, UCB$L_TT_STS(R5), 5$
+        RSB
+5$:     BBC     #UCB$V_TT_HANGUP, UCB$L_TT_STS(R5), 8$
+        CLRL    UCB$L_TT_OUTLEN(R5)
+        RSB
+8$:     TSTL    UCB$L_TT_SEND(R5)
+        BNEQ    50$
+        MOVL    UCB$L_TT_OUTLEN(R5), R3
+        BEQL    20$
+        MOVAB   UCB$A_TT_OUT(R5), R2
+        CLRL    R1
+        MOVL    #PORT$C_SEND, R0
+        JSB     G^NET$TTIO
+        BLBC    R0, 50$
+        MOVL    R1, UCB$L_TT_SEND(R5)
+        CLRL    UCB$L_TT_OUTLEN(R5)
+        BRB     50$
+20$:    MOVAQ   UCB$Q_TT_WRTQ(R5), R0
+        MOVL    (R0), R1                ; the first write
+        CMPL    R1, R0
+        BEQL    50$
+        SUBL3   IRP$L_MEDIA(R1), IRP$L_IOST2(R1), R3   ; what is left of it
+        CMPL    R3, #PORT$K_BUFSIZE
+        BLEQU   30$
+        MOVL    #PORT$K_BUFSIZE, R3
+30$:    ADDL3   #IRP$K_LENGTH, IRP$L_MEDIA(R1), R2
+        ADDL2   R1, R2
+        PUSHR   #^M<R1, R3>
+        MOVL    #PORT$C_SEND, R0
+        JSB     G^NET$TTIO
+        MOVL    R1, R2                  ; the send
+        POPR    #^M<R1, R3>
+        BLBC    R0, 50$
+        MOVL    R2, UCB$L_TT_SEND(R5)
+        ADDL2   R3, IRP$L_MEDIA(R1)
+50$:    BBS     #UCB$V_TT_RECV, UCB$L_TT_STS(R5), 90$
+        SUBL3   UCB$L_TT_PUT(R5), UCB$L_TT_GET(R5), R3  ; the room in the ring
+        DECL    R3
+        BICL2   #^C<TYPEAHEAD-1>, R3
+        CMPL    R3, #64
+        BLSSU   90$
+        CLRL    R1
+        MOVL    #PORT$C_RECV, R0
+        JSB     G^NET$TTIO
+        BLBC    R0, 90$
+        BISL2   #<1@UCB$V_TT_RECV>, UCB$L_TT_STS(R5)
+90$:    RSB
+
+; TT$NETDONE: NET$FORK's call for a TELNET terminal's send or receive,
+; R3, done: R6 = the response, R1 = the tag's buffer, with what was
+; received. A send that was a write's last part completes the write; a
+; receive's characters go to the terminal, Telnet's commands taken out
+; of them (TNIN). A failure, or a receive of nothing, the peer gone,
+; hangs the terminal up. Then the terminal goes on (SERVICE).
+; IPL$_SYNCH. Uses R0 and R1.
+TT$NETDONE::
+        .JSB_ENTRY  INPUT=<R1, R3, R6>
+        MOVL    IRP$L_UCB(R3), R5
+        CMPB    PORTMSG$B_TYPE(R6), #PORT$C_RECV
+        BEQL    50$
+        CLRL    UCB$L_TT_SEND(R5)       ; a send
+        TSTL    PORTMSG$L_STATUS(R6)
+        BNEQ    80$
+        MOVL    IRP$L_ASTPRM(R3), R0    ; the write it was a part of, or 0
+        BEQL    90$
+        MOVAQ   UCB$Q_TT_WRTQ(R5), R1
+        CMPL    (R1), R0
+        BNEQ    90$                     ; cancelled
+        CMPL    IRP$L_MEDIA(R0), IRP$L_IOST2(R0)
+        BLSSU   90$
+        REMQUE  (R0), R3
+        ASHL    #16, IRP$L_BCNT(R3), R0
+        BISL2   #SS$_NORMAL, R0
+        CLRL    R1
+        BSBW    IOC$REQCOM
+        BRB     90$
+50$:    BICL2   #<1@UCB$V_TT_RECV>, UCB$L_TT_STS(R5)  ; a receive
+        TSTL    PORTMSG$L_STATUS(R6)
+        BNEQ    80$
+        MOVL    PORTMSG$L_LEN(R6), R8
+        BEQL    80$
+        MOVL    R1, R7
+60$:    MOVZBL  (R7)+, R0
+        BSBW    TNIN
+        SOBGTR  R8, 60$
+        BRB     90$
+80$:    BSBW    HANGUP
+90$:    BSBW    SERVICE
+        RSB
+
+; TNIN: R0 = a byte a TELNET terminal, R5, received. Gives it to the
+; terminal (INPUT), or takes it as part of a Telnet command: an IAC
+; doubled is the byte 255, IAC IP is CTRL/C, a carriage return's LF or
+; NUL goes. The terminal accepts the options it offered, ECHO and SGA,
+; and the client's NAWS, whose window size becomes its width and page,
+; and refuses any other. Uses R0-R2.
+TNIN:
+        .JSB_ENTRY  SCRATCH=<R2>
+        MOVZBL  UCB$L_TT_TELNET(R5), R2 ; the state
+        CMPL    R2, #TN_CR
+        BNEQ    10$
+        CLRB    UCB$L_TT_TELNET(R5)
+        TSTB    R0
+        BEQL    90$
+        CMPB    R0, #10
+        BEQL    90$
+        CLRL    R2
+10$:    TSTL    R2
+        BNEQ    20$
+        CMPB    R0, #IAC
+        BNEQ    12$
+        MOVB    #TN_IAC, UCB$L_TT_TELNET(R5)
+        RSB
+12$:    CMPB    R0, #CR
+        BNEQ    14$
+        MOVB    #TN_CR, UCB$L_TT_TELNET(R5)
+14$:    BSBW    INPUT
+90$:    RSB
+20$:    CMPL    R2, #TN_IAC
+        BNEQ    30$
+        CLRB    UCB$L_TT_TELNET(R5)
+        CMPB    R0, #IAC
+        BEQL    14$
+        CMPB    R0, #SB
+        BNEQ    22$
+        MOVB    #TN_SB, UCB$L_TT_TELNET(R5)
+        RSB
+22$:    CMPB    R0, #WILL
+        BLSSU   24$
+        MOVB    R0, UCB$L_TT_TELNET+1(R5)
+        MOVB    #TN_OPT, UCB$L_TT_TELNET(R5)
+        RSB
+24$:    CMPB    R0, #IP
+        BNEQ    90$
+        MOVZBL  #CTRLC, R0
+        BRB     14$
+30$:    CMPL    R2, #TN_OPT
+        BNEQ    40$
+        CLRB    UCB$L_TT_TELNET(R5)
+        CMPB    UCB$L_TT_TELNET+1(R5), #WILL
+        BNEQ    34$
+        CMPB    R0, #OPT_NAWS
+        BEQL    90$
+        MOVZBL  #DONT, R2
+        BRB     38$
+34$:    CMPB    UCB$L_TT_TELNET+1(R5), #DO
+        BNEQ    90$
+        CMPB    R0, #OPT_ECHO
+        BEQL    90$
+        CMPB    R0, #OPT_SGA
+        BEQL    90$
+        MOVZBL  #WONT, R2
+38$:    PUSHL   R0
+        MOVZBL  #IAC, R0
+        BSBW    PUTRAW
+        MOVL    R2, R0
+        BSBW    PUTRAW
+        MOVL    (SP)+, R0
+        BSBW    PUTRAW
+        RSB
+40$:    CMPL    R2, #TN_SB
+        BNEQ    50$
+        MOVB    R0, UCB$L_TT_TELNET+1(R5)       ; the option
+        CLRB    UCB$L_TT_TELNET+2(R5)
+        CLRL    UCB$L_TT_SB(R5)
+        MOVB    #TN_SBDATA, UCB$L_TT_TELNET(R5)
+        RSB
+50$:    CMPL    R2, #TN_SBDATA
+        BNEQ    60$
+        CMPB    R0, #IAC
+        BNEQ    55$
+        MOVB    #TN_SBIAC, UCB$L_TT_TELNET(R5)
+        RSB
+55$:    ASHL    #8, UCB$L_TT_SB(R5), UCB$L_TT_SB(R5)
+        MOVB    R0, UCB$L_TT_SB(R5)
+        CMPB    UCB$L_TT_TELNET+2(R5), #4
+        BGEQU   90$
+        INCB    UCB$L_TT_TELNET+2(R5)
+        RSB
+60$:    CMPB    R0, #IAC                ; after IAC in a subnegotiation
+        BNEQ    65$
+        MOVB    #TN_SBDATA, UCB$L_TT_TELNET(R5)
+        BRB     55$
+65$:    CLRB    UCB$L_TT_TELNET(R5)
+        CMPB    R0, #SE
+        BNEQ    90$
+        CMPB    UCB$L_TT_TELNET+1(R5), #OPT_NAWS
+        BNEQ    90$
+        CMPB    UCB$L_TT_TELNET+2(R5), #4
+        BLSSU   90$
+        EXTZV   #16, #16, UCB$L_TT_SB(R5), R2   ; the width
+        BEQL    70$
+        CMPL    R2, #511
+        BGTRU   70$
+        MOVW    R2, UCB$A_TT_CHAR+2(R5)
+70$:    MOVZWL  UCB$L_TT_SB(R5), R2     ; and the height
+        BEQL    90$
+        CMPL    R2, #255
+        BGTRU   90$
+        MOVB    R2, UCB$A_TT_CHAR+7(R5)
+        RSB
+
+; INPUT: R0 = a character the terminal R5 received. Puts it in its
+; type-ahead buffer. Unless the terminal is PASSALL or PASTHRU, CTRL/C
+; and CTRL/Y empty the buffer instead, for SERVICE to deliver their ASTs,
+; and CTRL/X empties it and is CTRL/U. R0 = 1, or 0 if the buffer is
+; full and the character isn't taken. At IPL$_CONSOLE for the console.
+INPUT:
+        .JSB_ENTRY
+        BBS     #TT$V_PASSALL, UCB$A_TT_CHAR+4(R5), 20$
+        BBS     #TT2$V_PASTHRU, UCB$A_TT_CHAR+8(R5), 20$
+        CMPB    R0, #CTRLY
+        BNEQ    5$
+        MOVL    UCB$L_TT_PUT(R5), UCB$L_TT_GET(R5)
+        BISL2   #<1@UCB$V_TT_CTRLY>, UCB$L_TT_CTRL(R5)
+        BRB     80$
+5$:     CMPB    R0, #CTRLC
+        BNEQ    10$
+        MOVL    UCB$L_TT_PUT(R5), UCB$L_TT_GET(R5)
+        BISL2   #<1@UCB$V_TT_CTRLC>, UCB$L_TT_CTRL(R5)
+        BRB     80$
+10$:    CMPB    R0, #CTRLX
+        BNEQ    20$
+        MOVL    UCB$L_TT_PUT(R5), UCB$L_TT_GET(R5)
+        MOVZBL  #CTRLU, R0
+20$:    ADDL3   #1, UCB$L_TT_PUT(R5), R1
+        BICL2   #^C<TYPEAHEAD-1>, R1
+        CMPL    R1, UCB$L_TT_GET(R5)
+        BEQL    90$                     ; full
+        PUSHL   R1
+        MOVL    UCB$L_TT_PUT(R5), R1
+        MOVB    R0, UCB$A_TT_RING(R5)[R1]
+        MOVL    (SP)+, UCB$L_TT_PUT(R5)
+80$:    MOVL    #1, R0
+        RSB
+90$:    CLRL    R0
+        RSB
+
+; SERVICE: R5 = a terminal's UCB. Delivers the ASTs of a CTRL/C or
+; CTRL/Y that came, then gives what is in the type-ahead buffer to the
+; reads (STARTIO). IPL$_SYNCH. Uses R0-R8.
+SERVICE:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R6, R7, R8>
         DSBINT  #IPL$_CONSOLE
-        MOVL    TTY$GL_CTRLC, R6
-        CLRL    TTY$GL_CTRLC
-        MOVL    TTY$GL_CTRLY, R7
-        CLRL    TTY$GL_CTRLY
+        MOVL    UCB$L_TT_CTRL(R5), R6
+        CLRL    UCB$L_TT_CTRL(R5)
         ENBINT
-        BLBC    R6, 20$
-        MOVAQ   TTY$Q_CTRLC, R8         ; CTRL/C
+        BBC     #UCB$V_TT_CTRLC, R6, 20$
+        MOVAQ   UCB$Q_TT_CTRLC(R5), R8  ; CTRL/C
         CMPL    (R8), R8
         BEQL    10$                     ; no AST for it: CTRL/Y
         MOVAB   CANCEL, R1
-        JSB     G^EXE$OUTZSTRING
+        BSBW    PUTZ
         BSBW    DELIVER
         BRB     20$
-10$:    MOVL    #1, R7
-20$:    BLBC    R7, 30$
-        MOVAQ   TTY$Q_CTRLY, R8         ; CTRL/Y
+10$:    BISL2   #<1@UCB$V_TT_CTRLY>, R6
+20$:    BBC     #UCB$V_TT_CTRLY, R6, 30$
+        MOVAQ   UCB$Q_TT_CTRLY(R5), R8  ; CTRL/Y
         CMPL    (R8), R8
         BEQL    30$                     ; no AST for it
         MOVAB   INTERRUPT, R1
-        JSB     G^EXE$OUTZSTRING
+        BSBW    PUTZ
         BSBW    DELIVER
 30$:    BSBW    STARTIO
-        POPR    #^M<R0, R1, R2, R3, R4, R5, R6, R7, R8>
-        REI
+        RSB
 
-; DELIVER: R8 = TTY$Q_CTRLC or TTY$Q_CTRLY. Queues each AST there to its
-; process, which disables it, after ending that process's reads on the
-; console with SS$_CONTROLY for CTRL/Y. IPL$_SYNCH. Uses R0-R5.
+; DELIVER: R8 = a terminal's UCB$Q_TT_CTRLC or UCB$Q_TT_CTRLY, R5 = the
+; UCB. Queues each AST there to its process, which disables it, after
+; ending that process's reads on the terminal with SS$_CONTROLY for
+; CTRL/Y. IPL$_SYNCH. Uses R0-R4.
 DELIVER:
-        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5>
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4>
+        PUSHL   R5
 10$:    REMQUE  @(R8), R5
         BVS     90$                     ; none left
-        MOVAQ   TTY$Q_CTRLY, R0
+        MOVL    (SP), R4
+        MOVAQ   UCB$Q_TT_CTRLY(R4), R0
         CMPL    R8, R0
         BNEQ    20$
         MOVL    IRP$L_PID(R5), R2
         BSBB    ABORT
 20$:    BSBW    SCH$QAST
         BRB     10$
-90$:    RSB
+90$:    MOVL    (SP)+, R5
+        RSB
 
-; ABORT: R2 = a PID. Completes its reads on the console with SS$_CONTROLY.
-; IPL$_SYNCH. Uses R0-R4.
+; ABORT: R2 = a PID, R4 = a terminal's UCB. Completes the process's
+; reads on the terminal with SS$_CONTROLY. IPL$_SYNCH. Uses R0-R3.
 ABORT:
-        .JSB_ENTRY  SCRATCH=<R2, R3, R4>
+        .JSB_ENTRY  SCRATCH=<R2, R3>
         PUSHL   R5
-        MOVAB   G^IOC$AB_OPA0, R5
-        MOVL    UCB$L_IOQFL(R5), R4
-10$:    CMPL    R4, R5
+        MOVL    UCB$L_IOQFL(R4), R5
+10$:    CMPL    R5, R4
         BEQL    90$
-        MOVL    R4, R3
-        MOVL    (R4), R4                ; the next, before this one goes
+        MOVL    R5, R3
+        MOVL    (R5), R5                ; the next, before this one goes
         CMPL    IRP$L_PID(R3), R2
         BNEQ    10$
         REMQUE  (R3), R3
@@ -759,5 +1389,302 @@ ABORT:
         BRB     10$
 90$:    MOVL    (SP)+, R5
         RSB
+
+; HANGUP: R5 = a TELNET terminal's UCB, whose line is gone. Its reads and
+; writes, those queued and those to come, end with SS$_HANGUP.
+; IPL$_SYNCH. Uses R0-R3.
+HANGUP:
+        .JSB_ENTRY  SCRATCH=<R2, R3>
+        BBSS    #UCB$V_TT_HANGUP, UCB$L_TT_STS(R5), 90$
+        CLRL    UCB$L_TT_OUTLEN(R5)
+        BSBW    DISARM
+10$:    REMQUE  @UCB$L_IOQFL(R5), R3
+        BVS     20$
+        MOVZWL  #SS$_HANGUP, R0
+        CLRL    R1
+        BSBW    IOC$REQCOM
+        BRB     10$
+20$:    REMQUE  @UCB$Q_TT_WRTQ(R5), R3
+        BVS     90$
+        MOVZWL  #SS$_HANGUP, R0
+        CLRL    R1
+        BSBW    IOC$REQCOM
+        BRB     20$
+90$:    RSB
+
+; TIMER: R4 = a read's IRP, R5 = its terminal's UCB. For a timed read of
+; some seconds, starts its timer again: the read ends that long after the
+; last character, or after its start. IPL$_SYNCH. Uses R0-R3.
+TIMER:
+        .JSB_ENTRY  SCRATCH=<R2, R3>
+        BBC     #IO$V_TIMED, IRP$L_FUNC(R4), 90$
+        TSTL    IRP$L_MEDIA(R4)
+        BEQL    90$
+        BSBB    DISARM
+        MOVAB   UCB$A_TT_TQE(R5), R2
+        MOVB    #DYN$C_TQE, TQE$B_TYPE(R2)
+        MOVB    #TQE$C_SSSNGL, TQE$B_RQTYPE(R2)
+        CLRL    TQE$L_PID(R2)
+        MOVAB   TT$TIMEOUT, TQE$L_AST(R2)
+        EMUL    IRP$L_MEDIA(R4), #10000000, #0, R0      ; the seconds, in 100 ns
+        DSBINT  #IPL$_HWCLK
+        ADDL2   G^EXE$GQ_SYSTIME, R0
+        BCC     10$
+        INCL    R1
+10$:    ADDL2   G^EXE$GQ_SYSTIME+4, R1
+        ENBINT
+        MOVQ    R0, TQE$Q_TIME(R2)
+        PUSHL   R5
+        MOVL    R2, R5
+        JSB     G^EXE$INSTIMQ
+        MOVL    (SP)+, R5
+        BISL2   #<1@UCB$V_TT_TIMER>, UCB$L_TT_STS(R5)
+90$:    RSB
+
+; DISARM: R5 = a terminal's UCB. Takes its timer off the timer queue, if
+; it is on it. IPL$_SYNCH. Uses R0 and R1.
+DISARM:
+        .JSB_ENTRY
+        BBCC    #UCB$V_TT_TIMER, UCB$L_TT_STS(R5), 90$
+        PUSHL   R5
+        MOVAB   UCB$A_TT_TQE(R5), R5
+        JSB     G^EXE$RMVTQE
+        MOVL    (SP)+, R5
+90$:    RSB
+
+; TT$TIMEOUT: a terminal's timer, R5 = its UCB$A_TT_TQE, from the timer
+; queue: the timed read at the head of its queue ends with SS$_TIMEOUT,
+; and the next goes on. IPL$_SYNCH. Uses R0-R5.
+TT$TIMEOUT::
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5>
+        SUBL2   #UCB$A_TT_TQE, R5
+        BICL2   #<1@UCB$V_TT_TIMER>, UCB$L_TT_STS(R5)
+        MOVL    UCB$L_IOQFL(R5), R3
+        CMPL    R3, R5
+        BEQL    90$
+        BBC     #IRP$V_STARTED, IRP$L_STS(R3), 90$
+        BBC     #IO$V_TIMED, IRP$L_FUNC(R3), 90$
+        REMQUE  (R3), R3
+        ASHL    #16, UCB$L_TT_LEN(R5), R0
+        BISL2   #SS$_TIMEOUT, R0
+        CLRL    R1
+        BSBW    IOC$REQCOM
+        BSBW    STARTIO
+90$:    RSB
+
+; INITUCB: R5 = a terminal's UCB, UCB$K_TTLENGTH bytes. Makes it an
+; empty one, of no unit yet, with DEFCHAR's characteristics. Uses R0-R3.
+INITUCB:
+        .JSB_ENTRY  SCRATCH=<R2, R3>
+        PUSHL   R5
+        MOVC5   #0, (R5), #0, #UCB$K_TTLENGTH, (R5)
+        MOVL    (SP)+, R5
+        MOVL    R5, UCB$L_IOQFL(R5)
+        MOVL    R5, UCB$L_IOQBL(R5)
+        MOVAB   TT$FDT, UCB$L_FDT(R5)
+        MOVAQ   UCB$Q_TT_CTRLC(R5), R0
+        MOVL    R0, (R0)
+        MOVL    R0, 4(R0)
+        MOVAQ   UCB$Q_TT_CTRLY(R5), R0
+        MOVL    R0, (R0)
+        MOVL    R0, 4(R0)
+        MOVAQ   UCB$Q_TT_WRTQ(R5), R0
+        MOVL    R0, (R0)
+        MOVL    R0, 4(R0)
+        MOVL    DEFCHAR, UCB$A_TT_CHAR(R5)
+        MOVQ    DEFCHAR+4, UCB$A_TT_CHAR+4(R5)
+        RSB
+
+; TTY$INIT: makes the console's UCB, the first terminal, and enables its
+; receive interrupt. The SCB must have TTY$RCVINT for it, and TTY$IOPOST
+; for IPL$_IOPOST. Uses R0-R3.
+TTY$INIT::
+        .JSB_ENTRY  SCRATCH=<R2, R3>
+        PUSHL   R5
+        MOVAB   IOC$AB_OPA0, R5
+        BSBW    INITUCB
+        MOVL    OPA0, UCB$T_NAME(R5)
+        MOVL    R5, TT$GL_UNITS
+        MOVL    (SP)+, R5
+        MTPR    #RXCS$M_IE, #PR$_RXCS
+        RSB
+
+; TTY$RCVINT: the console receive interrupt, at IPL$_CONSOLE. Puts each
+; character the console received in its type-ahead buffer (INPUT), and
+; requests the IPL$_IOPOST software interrupt, which gives them to the
+; reads. When the buffer is full it leaves the rest in the console and
+; disables this interrupt, which a read enables again (RXROOM): the host
+; waits to send more, as for a terminal's XOFF, rather than lose a line's
+; end. ponytail: a CTRL/Y typed then waits too, until a read takes a
+; character.
+TTY$RCVINT::
+        .EXCEPTION_ENTRY
+        PUSHR   #^M<R0, R1, R5>
+        MOVAB   IOC$AB_OPA0, R5
+10$:    MFPR    #PR$_RXCS, R0
+        BBC     #RXCS$V_DONE, R0, 30$
+        ADDL3   #1, UCB$L_TT_PUT(R5), R1
+        BICL2   #^C<TYPEAHEAD-1>, R1
+        CMPL    R1, UCB$L_TT_GET(R5)
+        BEQL    25$                     ; full
+        MFPR    #PR$_RXDB, R0
+        BSBW    INPUT
+        BRB     10$
+25$:    MTPR    #0, #PR$_RXCS
+30$:    SOFTINT #IPL$_IOPOST
+        POPR    #^M<R0, R1, R5>
+        REI
+
+; TTY$IOPOST: the IPL$_IOPOST software interrupt. Delivers the ASTs of a
+; CTRL/C or CTRL/Y typed on the console, then gives what is in its
+; type-ahead buffer to its reads (SERVICE).
+TTY$IOPOST::
+        .EXCEPTION_ENTRY
+        SETIPL  #IPL$_SYNCH
+        PUSHR   #^M<R0, R1, R2, R3, R4, R5, R6, R7, R8>
+        MOVAB   IOC$AB_OPA0, R5
+        BSBW    SERVICE
+        POPR    #^M<R0, R1, R2, R3, R4, R5, R6, R7, R8>
+        REI
+
+; TT$FINDUNIT: R3 = a device name's four characters, DDCU. R5 = the
+; terminal by that name, or 0. Keeps every other register.
+TT$FINDUNIT::
+        .JSB_ENTRY  OUTPUT=<R5>
+        MOVL    TT$GL_UNITS, R5
+10$:    TSTL    R5
+        BEQL    90$
+        CMPL    (R3), UCB$T_NAME(R5)
+        BEQL    90$
+        MOVL    UCB$L_LINK(R5), R5
+        BRB     10$
+90$:    RSB
+
+; TT$TNPORT: IO$_TTY_PORT on a network unit, R5, with a TCP connection;
+; R4 = the current PCB, AP = $QIO's arguments. Makes a TELNET terminal,
+; TNAn, the first n from 1 to 9 no other has, which takes the
+; connection from the unit, and moves the channel to it; the unit is
+; freed once no channel has it. The terminal offers the client to echo
+; and suppress go ahead, and asks for its window size (RFC 857, 858,
+; 1073), then receives. R0 = SS$_NORMAL, or SS$_INSFMEM without pool or
+; a free unit number. IPL$_SYNCH. Uses R0-R8.
+TT$TNPORT::
+        .JSB_ENTRY  INPUT=<AP>, SCRATCH=<R2, R3, R4, R5, R6, R7, R8>
+        MOVL    #1, R6                  ; the unit's number
+10$:    MOVL    TT$GL_UNITS, R0
+20$:    TSTL    R0
+        BEQL    30$
+        CMPL    UCB$L_UNIT(R0), R6
+        BEQL    25$
+        MOVL    UCB$L_LINK(R0), R0
+        BRB     20$
+25$:    AOBLEQ  #MAXUNIT, R6, 10$
+        MOVL    #SS$_INSFMEM, R0
+        RSB
+30$:    MOVL    #UCB$K_TTLENGTH, R1
+        BSBW    EXE$ALONONPAGED
+        BLBC    R0, 90$
+        MOVL    R5, R7                  ; the network unit
+        MOVL    R2, R5
+        BSBW    INITUCB
+        BISL2   #<1@UCB$V_TT_TN>, UCB$L_TT_STS(R5)
+        BISL2   #TT$M_REMOTE, UCB$A_TT_CHAR+4(R5)
+        MOVL    R6, UCB$L_UNIT(R5)
+        MOVW    #^A/TN/, UCB$T_NAME(R5)
+        MOVB    #^A/A/, UCB$T_NAME+2(R5)
+        ADDB3   #^A/0/, R6, UCB$T_NAME+3(R5)
+        MOVL    UCB$L_CONN(R7), UCB$L_CONN(R5)
+        CLRL    UCB$L_CONN(R7)
+        MOVZWL  8(AP), R0               ; the channel
+        MOVL    R5, PCB$AL_CCB(R4)[R0]
+        MOVL    #1, UCB$L_REFC(R5)
+        DECL    UCB$L_REFC(R7)
+        BNEQ    40$
+        PUSHL   R5
+        MOVL    R7, R5
+        JSB     G^NET$FREEUNIT
+        MOVL    (SP)+, R5
+40$:    MOVAL   TT$GL_UNITS, R0         ; the last terminal
+45$:    TSTL    (R0)
+        BEQL    47$
+        MOVL    (R0), R0
+        ADDL2   #UCB$L_LINK, R0
+        BRB     45$
+47$:    MOVL    R5, (R0)
+        MOVAB   OFFER, R1
+        MOVL    #OFFERLEN, R2
+50$:    MOVZBL  (R1)+, R0
+        BSBW    PUTRAW
+        SOBGTR  R2, 50$
+        BSBW    KICK
+        MOVL    #SS$_NORMAL, R0
+        BRW     FDTDONE
+90$:    RSB
+
+; TT$CANCEL: R4 = the current PCB, R6 = a mask of its channels, R7 = a
+; status, or 0, as IOC$CANCEL has them. Ends the terminals' requests for
+; those channels, reads and writes, as IOC$CANCELQ does, and frees their
+; CTRL/C and CTRL/Y ASTs. For 0, the channels are going: a TELNET
+; terminal is closed and freed once its last channel goes. Then the
+; others go on (STARTIO). IPL$_SYNCH. Uses R0-R3.
+TT$CANCEL::
+        .JSB_ENTRY  INPUT=<R4, R6, R7>, SCRATCH=<R2, R3>
+        MOVL    TT$GL_UNITS, R8
+10$:    TSTL    R8
+        BNEQ    15$
+        RSB
+15$:    PUSHL   UCB$L_LINK(R8)          ; the next, before this one may go
+        MOVL    UCB$L_IOQFL(R8), R9     ; the read at the head
+        MOVL    R8, R5
+        BSBW    IOC$CANCELQ
+        MOVAQ   UCB$Q_TT_WRTQ(R8), R5
+        BSBW    IOC$CANCELQ
+        PUSHL   R7
+        CLRL    R7
+        MOVAQ   UCB$Q_TT_CTRLC(R8), R5
+        BSBW    IOC$CANCELQ
+        MOVAQ   UCB$Q_TT_CTRLY(R8), R5
+        BSBW    IOC$CANCELQ
+        MOVL    (SP)+, R7
+        MOVL    R8, R5
+        CMPL    UCB$L_IOQFL(R5), R9
+        BEQL    20$
+        BSBW    DISARM                  ; the timed read at the head went
+20$:    TSTL    R7
+        BNEQ    40$
+        MOVL    #1, R0                  ; its channels that are going
+25$:    BBC     R0, R6, 30$
+        CMPL    PCB$AL_CCB(R4)[R0], R5
+        BNEQ    30$
+        DECL    UCB$L_REFC(R5)
+30$:    AOBLEQ  #PCB$C_MAXCHAN, R0, 25$
+        BBC     #UCB$V_TT_TN, UCB$L_TT_STS(R5), 40$
+        TSTL    UCB$L_REFC(R5)
+        BNEQ    40$
+        BSBW    TEARDOWN
+        BRB     50$
+40$:    PUSHR   #^M<R4, R6, R7>
+        BSBW    STARTIO
+        POPR    #^M<R4, R6, R7>
+50$:    MOVL    (SP)+, R8
+        BRB     10$
+
+; TEARDOWN: R5 = a TELNET terminal no channel has. Closes its connection,
+; forgetting what it has on the port (NET$TTCLOSE), and frees it.
+; IPL$_SYNCH. Uses R0-R3.
+TEARDOWN:
+        .JSB_ENTRY  SCRATCH=<R2, R3>
+        BSBW    DISARM
+        JSB     G^NET$TTCLOSE
+        MOVAL   TT$GL_UNITS, R0         ; off the list
+10$:    CMPL    (R0), R5
+        BEQL    20$
+        MOVL    (R0), R0
+        ADDL2   #UCB$L_LINK, R0
+        BRB     10$
+20$:    MOVL    UCB$L_LINK(R5), (R0)
+        MOVL    R5, R0
+        MOVL    #UCB$K_TTLENGTH, R1
+        BRW     EXE$DEANONPGDSIZ
 
         .END

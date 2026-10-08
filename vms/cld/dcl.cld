@@ -107,7 +107,7 @@ define syntax SET_FILE
 	disallow not OWNER_UIC
 
 ! SET TERMINAL [device]: SET.EXE sets the terminal's characteristics.
-! ponytail: the ones the console keeps that a program may care about;
+! ponytail: the ones a terminal keeps that a program may care about;
 ! no /INQUIRE, /DEVICE_TYPE, /SPEED or /PERMANENT.
 define syntax SET_TERMINAL
 	image SET
@@ -119,10 +119,14 @@ define syntax SET_TERMINAL
 	qualifier ECHO
 	qualifier EIGHTBIT
 	qualifier ESCAPE
+	qualifier INSERT, nonnegatable
+	qualifier LINE_EDITING
 	qualifier LOWERCASE
+	qualifier OVERSTRIKE, nonnegatable
 	qualifier PASTHRU
 	qualifier TAB
 	qualifier WRAP
+	disallow INSERT and OVERSTRIKE
 
 define verb SHOW
 	cliroutine SHOW

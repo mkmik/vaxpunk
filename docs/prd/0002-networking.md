@@ -173,7 +173,7 @@ Rule that keeps this true: no seL4 or lwIP idiom appears above the port. If the 
 - [x] Ring sizes, entry layout and data buffer pool size. Two rings of 32 messages of 32 bytes, 32 tags, 16 buffers of 4 KB ([DESIGN-0003](../design/0003-tcpip-port.md)).
 - [x] Name and syntax of the DCL configuration commands. TCP/IP Services' own, in the `TCPIP` utility: `TCPIP SET INTERFACE WE0 /HOST=address /NETWORK_MASK=mask` or `/DHCP`, `SET ROUTE /DEFAULT /GATEWAY=address`, `SHOW INTERFACE`, and `SET CONFIGURATION INTERFACE` and `SET ROUTE /PERMANENT` to save them ([ADR-0022](../adr/0022-tcpip-utility-and-dhcp.md)).
 - [x] UDP in step 4 or later. Later, with TCP/IP Services' $QIO interface for all sockets, UDP and raw ICMP ones too ([ADR-0024](../adr/0024-sockets-have-tcpip-services-qio-interface.md)).
-- [ ] Which application-layer protocols to use: Telnet or something VMS-flavoured for SET HOST; what to use for remote file access, mail and chat. SET HOST is line mode over TCP port 23, a step short of Telnet; the rest is open.
+- [ ] Which application-layer protocols to use: Telnet or something VMS-flavoured for SET HOST; what to use for remote file access, mail and chat. SET HOST is Telnet over TCP port 23, a character at a time, with the window's size (ADR-0027); the rest is open.
 
 ## Work order
 

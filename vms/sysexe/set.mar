@@ -14,8 +14,9 @@
 ;   $CLOSE gives them to the file.
 ; - SET TERMINAL [device], which reads the terminal's characteristics
 ;   (lib/term.mar), changes those its qualifiers name, /WIDTH=n from 1 to
-;   511, /PAGE=n up to 255, and /[NO]BROADCAST, ECHO, EIGHTBIT, ESCAPE,
-;   LOWERCASE, PASTHRU, TAB and WRAP, and sets them with IO$_SETMODE.
+;   511, /PAGE=n up to 255, /[NO]BROADCAST, ECHO, EIGHTBIT, ESCAPE,
+;   LINE_EDITING, LOWERCASE, PASTHRU, TAB and WRAP, and /INSERT or
+;   /OVERSTRIKE, the line editing's mode, and sets them with IO$_SETMODE.
 ; ponytail: one file, no wildcards, no /LOG.
 ;
         .LIBRARY "starlet.mlb"
@@ -190,6 +191,9 @@ SETTERM:
         TTBIT   "TAB", TT$V_MECHTAB, CHAR+4
         TTBIT   "WRAP", TT$V_WRAP, CHAR+4
         TTBIT   "PASTHRU", TT2$V_PASTHRU, CHAR+8
+        TTBIT   "LINE_EDITING", TT2$V_EDITING, CHAR+8
+        TTBIT   "INSERT", TT2$V_INSERT, CHAR+8
+        TTBIT   "OVERSTRIKE", TT2$V_INSERT, CHAR+8, ON=BBCC
         $QIOW_S CHAN=CHAN, FUNC=#IO$_SETMODE, IOSB=IOSB, P1=CHAR, P2=#12
         BLBC    R0, 90$
         MOVZWL  IOSB, R0

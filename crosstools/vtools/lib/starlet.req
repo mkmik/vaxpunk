@@ -40,7 +40,10 @@ LITERAL
     SS$_NOIOCHAN = 436,
     SS$_NOLOGNAM = 444,
     SS$_PAGOWNVIO = 492,
-    SS$_TIMEOUT = 556,
+    SS$_TIMEOUT = 556,  ! a timed read's time ran out
+    SS$_BADESCAPE = 60,  ! a terminal read: an escape sequence's syntax is wrong
+    SS$_PARTESCAPE = 508,  ! a terminal read: the buffer filled in an escape sequence
+    SS$_HANGUP = 716,  ! the terminal's line is gone: a TELNET connection closed
     SS$_REJECT = 660,  ! the peer refused the connection
     SS$_FILALRACC = 164,  ! a datagram socket's peer is set already
     SS$_NOLINKS = 636,  ! the socket isn't connected, or a datagram has nowhere to go
@@ -738,6 +741,7 @@ LITERAL
     TT$V_HALFDUP = 20,
     TT$V_MODEM = 21,
     TT$V_PAGE = 24,  ! the page length, a byte
+    TT$M_PASSALL = 1,
     TT$M_NOECHO = 2,
     TT$M_ESCAPE = 8,
     TT$M_TTSYNC = 32,
@@ -745,6 +749,7 @@ LITERAL
     TT$M_MECHTAB = 256,
     TT$M_WRAP = 512,
     TT$M_SCOPE = 4096,
+    TT$M_REMOTE = 8192,  ! a TELNET terminal's
     TT$M_EIGHTBIT = 32768,
     TT$M_NOBRDCST = 131072;
 
@@ -765,7 +770,7 @@ LITERAL
     TT2$V_DIALUP = 15,
     TT2$V_SECURE = 16,
     TT2$V_DISCONNECT = 17,
-    TT2$V_PASTHRU = 18,  ! reads pass every character but CTRL/C and CTRL/Y
+    TT2$V_PASTHRU = 18,  ! reads pass every character, CTRL/C and CTRL/Y too, unedited
     TT2$V_SYSPWD = 19,
     TT2$V_SIXEL = 20,
     TT2$V_DRCS = 21,  ! soft characters
@@ -1112,6 +1117,7 @@ LITERAL
     IO$_READLBLK = 33,
     IO$_READVBLK = 49,
     IO$_READPROMPT = 55,  ! writes the prompt in p5 and p6 first
+    IO$_TTY_PORT = 41,  ! a TCP connection's socket: becomes a TELNET terminal, TNAn
     IO$_SETMODE = 35,  ! a terminal: sets its characteristics, or enables a CTRL/C or CTRL/Y AST
     IO$V_CTRLYAST = 7,  ! SETMODE: the AST is CTRL/Y's
     IO$M_CTRLYAST = 128,
@@ -1121,6 +1127,20 @@ LITERAL
     IO$M_NOECHO = 64,
     IO$V_NOFILTR = 9,  ! a read doesn't edit: DEL, CTRL/U are data
     IO$M_NOFILTR = 512,
+    IO$V_TIMED = 7,  ! a terminal read ends p3 seconds after the last character
+    IO$M_TIMED = 128,
+    IO$V_CVTLOW = 8,  ! a terminal read makes lowercase uppercase
+    IO$M_CVTLOW = 256,
+    IO$V_PURGE = 11,  ! a terminal read empties the type-ahead buffer first
+    IO$M_PURGE = 2048,
+    IO$V_TRMNOECHO = 12,  ! a terminal read doesn't echo its terminator
+    IO$M_TRMNOECHO = 4096,
+    IO$V_ESCAPE = 14,  ! a terminal read ends at an escape sequence
+    IO$M_ESCAPE = 16384,
+    IO$V_TYPEAHDCNT = 6,  ! a terminal's SENSEMODE: what the type-ahead buffer holds
+    IO$M_TYPEAHDCNT = 64,
+    IO$V_NOFORMAT = 8,  ! a terminal write: as it is, which every write is here
+    IO$M_NOFORMAT = 256,
     IO$V_NOW = 6,  ! a mailbox's read doesn't wait for a message
     IO$M_NOW = 64,
     IO$_SETCHAR = 26,  ! a socket: as IO$_SETMODE, which is the same function there

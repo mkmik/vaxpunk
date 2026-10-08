@@ -4,13 +4,16 @@
 ; A program finds the devices with $DEVICE_SCAN and asks about each with
 ; $GETDVI, as on VMS, with VMS's item codes (starlet.mlb's $DVIDEF and
 ; $DVSDEF). The devices are the disks, in f11.mar's order, each a VCB,
-; then the console, OPA0:, the one terminal: DEVICE numbers them so.
-; A channel to a mailbox, or to a socket, a network unit BGnn, has its
-; name, class, unit and reference count too.
-; ponytail: a VCB stands for a disk, and 0 for the console, not their UCBs
-; (qio.mar), which have no device types yet; a disk's error count is its
-; UCB's; a network unit's class is 0, until we know TCP/IP Services'. $GETDVI
-; is done when it returns, and takes no AST.
+; then the terminals, the console, OPA0:, and TELNET's, TNAn:, in
+; ttdriver.mar's TT$GL_UNITS: DEVICE numbers them so. What is returned
+; of a terminal is copied from its UCB at IPL$_SYNCH, since a TELNET
+; terminal can go once the IPL drops. A channel to a mailbox, or to a
+; socket, a network unit BGnn, has its name, class, unit and reference
+; count too.
+; ponytail: a VCB stands for a disk, and 0 for a terminal, not their
+; UCBs (qio.mar), which have no device types yet; a disk's error count is
+; its UCB's; a network unit's class is 0, until we know TCP/IP Services'.
+; $GETDVI is done when it returns, and takes no AST.
 ;
         .LIBRARY "lib.mlb"
         .LIBRARY "starlet.mlb"
@@ -28,21 +31,24 @@
         .EXTERNAL FIL$FREEBLOCKS, FIL$READLBLK, FIL$MATCH, MD$GL_BASE
         .EXTERNAL FIL$LOCK, FIL$UNLOCK
         .EXTERNAL IOC$TRNDEVNAM, EXE$PROBER_DSC, EXE$SETEF, EXE$CLREF
-        .EXTERNAL SCH$GL_CURPCB, MB$FDT, NET$FDT, IOC$AB_BGA0, TTY$AB_CHAR
+        .EXTERNAL SCH$GL_CURPCB, MB$FDT, NET$FDT, IOC$AB_BGA0, TT$FDT, TT$GL_UNITS
 
 DISK = DEV$M_FOD!DEV$M_DIR!DEV$M_SHR!DEV$M_AVL!DEV$M_IDV!DEV$M_ODV!DEV$M_RND
 TERM = DEV$M_REC!DEV$M_CCL!DEV$M_TRM!DEV$M_AVL!DEV$M_IDV!DEV$M_ODV
 
         .PSECT  EXEC$DATA, NOEXE, WRT, QUAD
-OPA0:   .ASCII  "OPA0"
+TTNAME: .BLKB   4                       ; the terminal a VCB of 0 stands for: its name,
+TTUNIT: .LONG   0                       ; its unit,
+TTREFC: .LONG   0                       ; its channels,
+TTCHAR: .BLKB   12                      ; and its characteristics, IO$_SENSEMODE's
 NAMBUF: .BLKB   6                       ; a device's name, _DDCU:
 VALUE:  .LONG   0                       ; a value item's
 
         .PSECT  $CODE$
 
-; DEVICE: R4 = a device's number. R5 = its VCB, or 0 for the console.
-; R0 = SS$_NORMAL, or SS$_NOMOREDEV past the last. Keeps every other
-; register.
+; DEVICE: R4 = a device's number. R5 = its VCB, or 0 for a terminal,
+; which COPYTT copies. R0 = SS$_NORMAL, or SS$_NOMOREDEV past the last.
+; IPL$_SYNCH. Keeps every other register.
 DEVICE:
         .JSB_ENTRY  OUTPUT=<R5>
         CMPL    R4, #255            ; a caller's context, which may be anything
@@ -53,18 +59,38 @@ DEVICE:
         MOVAB   F11$A_VCBEND, R0
         CMPL    R5, R0
         BLSSU   10$
-        BNEQ    80$
-        CLRL    R5                      ; the one past the disks
+        SUBL2   R0, R5                  ; past the disks: the terminals
+        DIVL2   #VCB$K_LENGTH, R5
+        MOVL    G^TT$GL_UNITS, R0
+5$:     TSTL    R0
+        BEQL    80$
+        DECL    R5
+        BLSS    7$
+        MOVL    UCB$L_LINK(R0), R0
+        BRB     5$
+7$:     BSBB    COPYTT
+        CLRL    R5
 10$:    MOVL    #SS$_NORMAL, R0
         RSB
 80$:    MOVL    #SS$_NOMOREDEV, R0
+        RSB
+
+; COPYTT: R0 = a terminal's UCB. Copies what $GETDVI returns of it to
+; TTNAME, TTUNIT, TTREFC and TTCHAR. IPL$_SYNCH. Keeps every register.
+COPYTT:
+        .JSB_ENTRY
+        MOVL    UCB$T_NAME(R0), TTNAME
+        MOVL    UCB$L_UNIT(R0), TTUNIT
+        MOVL    UCB$L_REFC(R0), TTREFC
+        MOVL    UCB$A_TT_CHAR(R0), TTCHAR
+        MOVQ    UCB$A_TT_CHAR+4(R0), TTCHAR+4
         RSB
 
 ; DEVNAME: R5 = a device's VCB, or 0. Makes its name, _DDCU:, in NAMBUF.
 ; R1 = NAMBUF, R2 = 6. Keeps every other register.
 DEVNAME:
         .JSB_ENTRY  OUTPUT=<R2>
-        MOVAB   OPA0, R1
+        MOVAB   TTNAME, R1
         TSTL    R5
         BEQL    10$
         MOVAB   VCB$T_DEVNAM(R5), R1
@@ -91,7 +117,7 @@ DEVCHAR:
 10$:    RSB
 
 ; ONLINE: R5 = a device's VCB, or 0. R0 = UCB$M_ONLINE if the device is
-; there: the console, a disk with a volume mounted, the ramdisk once
+; there: a terminal, a disk with a volume mounted, the ramdisk once
 ; made, or a PAL disk whose first block reads; else 0. Holding FIL$LOCK.
 ; Uses R1-R2.
 ONLINE:
@@ -126,9 +152,10 @@ ONLINE:
 ; sets it, and writes SS$_NORMAL in the IOSB's first word, if there is
 ; one. SS$_NOSUCHDEV for a device that isn't there, SS$_IVCHAN for a
 ; channel that isn't assigned, SS$_BADPARAM for an item code it doesn't
-; know, or the disk's error for DVI$_FREEBLOCKS. The console's
+; know, or the disk's error for DVI$_FREEBLOCKS. A terminal's
 ; DVI$_DEVTYPE, DVI$_DEVBUFSIZ, DVI$_DEVDEPEND and DVI$_DEVDEPEND2 are
-; its characteristics, as IO$_SENSEMODE gives them. A mailbox or a
+; its characteristics, as IO$_SENSEMODE gives them; it has a DVI$_UNIT
+; and DVI$_REFCNT, a disk 0. A mailbox or a
 ; network unit, by its channel, has DVI$_DEVNAM, DVI$_DEVCLASS, DVI$_UNIT
 ; and DVI$_REFCNT, and 0 for any other item.
 ; ponytail: done at once, no AST; the items $DVIDEF lists.
@@ -178,7 +205,13 @@ ONLINE:
         MOVAB   MB$FDT, R0
         CMPL    UCB$L_FDT(R5), R0
         BEQL    21$
-        MOVAB   NET$FDT, R0
+        MOVAB   TT$FDT, R0
+        CMPL    UCB$L_FDT(R5), R0
+        BNEQ    19$
+        MOVL    R5, R0                  ; a terminal
+        BSBW    COPYTT
+        BRB     22$
+19$:    MOVAB   NET$FDT, R0
         CMPL    UCB$L_FDT(R5), R0
         BNEQ    22$
         MOVAB   G^IOC$AB_BGA0, R0       ; a unit, not the template
@@ -274,10 +307,18 @@ ITEM:
         MOVL    #DC$_DISK, R0
 27$:    BRW     LONG
 30$:    CMPL    R10, #DVI$_UNIT
-        BEQL    32$
-        CMPL    R10, #DVI$_ERRCNT
+        BNEQ    31$
+        MOVL    TTUNIT, R0
+        BRB     33$
+31$:    CMPL    R10, #DVI$_REFCNT
+        BNEQ    34$
+        MOVL    TTREFC, R0
+33$:    TSTL    R5                      ; a disk's are 0
+        BEQL    38$
+        BRB     32$
+34$:    CMPL    R10, #DVI$_ERRCNT
         BNEQ    35$
-        TSTL    R5                      ; the console's is 0
+        TSTL    R5                      ; a terminal's is 0
         BEQL    32$
         MOVL    VCB$L_UCB(R5), R0
         MOVL    UCB$L_ERRCNT(R0), R0
@@ -331,26 +372,26 @@ ITEM:
         MOVZWL  #512, R0                ; a disk's block
         TSTL    R5
         BNEQ    62$
-        MOVZWL  TTY$AB_CHAR+2, R0       ; the console's width
+        MOVZWL  TTCHAR+2, R0            ; a terminal's width
 62$:    BRW     LONG
 64$:    CLRL    R0                      ; a disk's are 0
         CMPL    R10, #DVI$_DEVTYPE
         BNEQ    66$
         TSTL    R5
         BNEQ    62$
-        MOVZBL  TTY$AB_CHAR+1, R0
+        MOVZBL  TTCHAR+1, R0
         BRB     62$
 66$:    CMPL    R10, #DVI$_DEVDEPEND
         BNEQ    68$
         TSTL    R5
         BNEQ    62$
-        MOVL    TTY$AB_CHAR+4, R0
+        MOVL    TTCHAR+4, R0
         BRB     62$
 68$:    CMPL    R10, #DVI$_DEVDEPEND2
         BNEQ    80$
         TSTL    R5
         BNEQ    62$
-        MOVL    TTY$AB_CHAR+8, R0
+        MOVL    TTCHAR+8, R0
         BRB     62$
 80$:    MOVL    #SS$_BADPARAM, R0
         RSB
@@ -451,7 +492,9 @@ MOUNTED:
         BEQL    40$
         IFNOWRT #8, (R8), 85$
         MOVL    (R8), R4
-40$:    BSBW    DEVICE
+40$:    DSBINT  #IPL$_SYNCH             ; the terminals stay
+        BSBW    DEVICE
+        ENBINT
         BLBC    R0, 90$
         INCL    R4
         TSTL    R10

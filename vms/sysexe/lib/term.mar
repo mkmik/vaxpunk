@@ -4,9 +4,8 @@
 ; SET TERMINAL and SHOW TERMINAL work on the terminal their DEVICE_NAME
 ; names, or else on SYS$INPUT's, as VMS's do on SYS$COMMAND's. They read
 ; its characteristics with IO$_SENSEMODE, as VMS's do, in a buffer laid
-; out as ttdriver.mar's TTY$AB_CHAR.
-; ponytail: SYS$INPUT, as vaxpunk has no SYS$COMMAND; the console is the
-; one terminal, so a SET HOST session's network unit is no such device.
+; out as a terminal's UCB$A_TT_CHAR (ttdriver.mar).
+; ponytail: SYS$INPUT, as vaxpunk has no SYS$COMMAND.
 ;
         .LIBRARY "starlet.mlb"
         $SSDEF
