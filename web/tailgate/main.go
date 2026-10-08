@@ -2,7 +2,8 @@
 // compiled to WebAssembly, behind a gVisor TCP/IP stack that is 10.0.2.2 on the tab's LAN. A
 // connection from the VMS system to 10.0.2.2:port goes to that port of the tailcat server, which
 // proxies it to its own localhost; one to any other address goes through the server as an exit
-// node ("tailcat serve exit-node"). Tailcat reaches the server over DERP relays, on WebSockets.
+// node ("tailcat serve exit-node"). UDP, DNS among it, goes the same two ways; ICMP goes nowhere,
+// so only 10.0.2.2 answers a ping. Tailcat reaches the server over DERP relays, on WebSockets.
 //
 // It sets one global JavaScript function:
 //
@@ -34,6 +35,7 @@ import (
 	"gvisor.dev/gvisor/pkg/tcpip/network/ipv4"
 	"gvisor.dev/gvisor/pkg/tcpip/stack"
 	"gvisor.dev/gvisor/pkg/tcpip/transport/tcp"
+	"gvisor.dev/gvisor/pkg/tcpip/transport/udp"
 	"gvisor.dev/gvisor/pkg/waiter"
 	"tailscale.com/types/logger"
 )
@@ -56,7 +58,7 @@ func start(this js.Value, args []js.Value) any {
 
 	s := stack.New(stack.Options{
 		NetworkProtocols:   []stack.NetworkProtocolFactory{ipv4.NewProtocol, arp.NewProtocol},
-		TransportProtocols: []stack.TransportProtocolFactory{tcp.NewProtocol},
+		TransportProtocols: []stack.TransportProtocolFactory{tcp.NewProtocol, udp.NewProtocol},
 	})
 	link := channel.New(256, 1500, tcpip.LinkAddress(mac))
 	if err := s.CreateNIC(1, ethernet.New(link)); err != nil {
@@ -76,6 +78,18 @@ func start(this js.Value, args []js.Value) any {
 		go forward(cl, r, dst)
 	})
 	s.SetTransportProtocolHandler(tcp.ProtocolNumber, fwd.HandlePacket)
+	ufwd := udp.NewForwarder(s, func(r *udp.ForwarderRequest) bool {
+		id := r.ID()
+		dst := netip.AddrPortFrom(netip.AddrFrom4(id.LocalAddress.As4()), id.LocalPort)
+		var wq waiter.Queue
+		ep, err := r.CreateEndpoint(&wq)
+		if err != nil {
+			return false
+		}
+		go forwardUDP(cl, gonet.NewUDPConn(&wq, ep), dst)
+		return true
+	})
+	s.SetTransportProtocolHandler(udp.ProtocolNumber, ufwd.HandlePacket)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	go func() {
@@ -158,6 +172,46 @@ func forward(cl *tailcat.Client, r *tcp.ForwarderRequest, dst netip.AddrPort) {
 	go func() { io.Copy(c, g); closeWrite(c) }()
 	io.Copy(g, c)
 	g.CloseWrite()
+}
+
+// forwardUDP copies datagrams between the system's flow g and dst, through tailcat, until the flow
+// has been idle for a minute.
+func forwardUDP(cl *tailcat.Client, g net.Conn, dst netip.AddrPort) {
+	defer g.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	var c net.Conn
+	var err error
+	if dst.Addr() == gw {
+		c, err = cl.DialUDPPort(ctx, dst.Port())
+	} else {
+		c, err = cl.DialUDP(ctx, dst)
+	}
+	if err != nil {
+		log.Printf("tailgate: udp %v: %v", dst, err)
+		return
+	}
+	defer c.Close()
+	go copyUDP(g, c)
+	copyUDP(c, g)
+}
+
+// copyUDP copies datagrams from src to dst until src has been idle for a minute or either fails;
+// then it closes both, which stops the copy the other way too.
+func copyUDP(dst, src net.Conn) {
+	defer dst.Close()
+	defer src.Close()
+	b := make([]byte, 65535)
+	for {
+		src.SetReadDeadline(time.Now().Add(time.Minute))
+		n, err := src.Read(b)
+		if err != nil {
+			return
+		}
+		if _, err := dst.Write(b[:n]); err != nil {
+			return
+		}
+	}
 }
 
 func closeWrite(c net.Conn) {
