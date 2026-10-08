@@ -44,14 +44,15 @@ const BOOT: Phase = Phase {
     ],
 };
 
-/// The process's first SET DEFAULT, to a search list of the ramdisk and
-/// SYS$MANAGER, then back to SYS$MANAGER:. RUN STARTUP, whose processes
+/// SYSTEM's default, SYS$SYSROOT:[SYSMGR], and its first SET DEFAULT, to a
+/// search list of the ramdisk and SYS$MANAGER, then back to SYS$MANAGER:. RUN STARTUP, whose processes
 /// print theirs by the end, and SNOOP; then
 /// DIRECTORY, TYPE, TYPE/HEAD, TYPE/TAIL and EDIT on the system disk,
 /// DCLTEST.COM's and DCL's lines with symbols, a PIPE whose && skips and
 /// || runs after a failure, those SYLOGIN.COM defined too, CLITEST's words as a
 /// foreign command, EDIT's EXIT that can't write there, a logical name,
-/// SHOW LOGICAL and SET DEFAULT, until SET DEFAULT [-] fails in [000000].
+/// SHOW LOGICAL, SET DEFAULT HOME's SYS$SYSROOT:[SYSMGR] and SET DEFAULT
+/// on the system disk, until SET DEFAULT [-] fails in [000000].
 const SYSTEM_DISK: Phase = Phase {
     name: "system disk",
     secs: 30,
@@ -60,12 +61,12 @@ const SYSTEM_DISK: Phase = Phase {
             "%EXEC-I-START",
             1,
             concat!(
-                "DEFINE HOME MDA0:[000000],SYS$MANAGER\rSET DEFAULT HOME:\rSHOW DEFAULT\r",
+                "SHOW DEFAULT\rDEFINE HOME MDA0:[000000],SYS$MANAGER\rSET DEFAULT HOME:\rSHOW DEFAULT\r",
                 "SET DEFAULT SYS$MANAGER:\rDEASSIGN HOME\r",
             ),
         ),
         (
-            "  =   SYS$MANAGER",
+            "  =   DKA0:[SYSMGR]",
             1,
             concat!(
                 "RUN STARTUP\rRUN SNOOP\rFOO\rDIR [SYSEXE]P%NG\rTYPE WELCOME.TXT\r",
@@ -77,14 +78,16 @@ const SYSTEM_DISK: Phase = Phase {
                 "EDIT WELCOME.TXT\r\"index\"\r\"zzz\"\rEXIT\rQUIT\r",
                 // More than the type-ahead buffer's 255: the console holds back the rest.
                 "DEFINE FOO SYS$INPUT\rSHOW LOGICAL FOO\rSHOW LOGICAL\rDEASSIGN FOO\r",
-                "SHOW LOGICAL FOO\rSHOW DEFAULT\rSET DEFAULT [SYSEXE]\rSHOW DEFAULT\rDIR D*\r",
+                "SHOW LOGICAL FOO\rSHOW DEFAULT\rSET DEFAULT SYS$SYSDEVICE:[SYSMGR]\rSHOW DEFAULT\r",
+                "SET DEFAULT [SYSEXE]\rSHOW DEFAULT\rDIR D*\r",
                 "SET DEFAULT [NOSUCH]\rSHOW DEFAULT\rSET DEFAULT [-]\rSHOW DEFAULT\r",
                 "DIR [.SYSMGR]W*\rSET DEFAULT [-]\r",
             ),
         ),
     ],
     lines: &[
-        "\n  =   MDA0:[000000]\n  =   SYS$MANAGER\n",
+        "$ SHOW DEFAULT\n  SYS$SYSROOT:[SYSMGR]\n  =   MDA0:[SYSMGR]\n  =   DKA0:[SYSMGR]\n",
+        "\n  =   MDA0:[000000]\n  =   MDA0:[SYSMGR]\n  =   DKA0:[SYSMGR]\n",
         " \\FOO\\",
         "PING.EXE;1          PONG.EXE;1",
         "Total of 2 files.",
@@ -105,7 +108,9 @@ const SYSTEM_DISK: Phase = Phase {
         "no translation for logical name FOO",
         "(LNM$SYSTEM_TABLE)",
         "  \"SYS$ERROR\" = \"_OPA0:\"",
-        "  \"SYS$SYSTEM\" = \"SYS$SYSDEVICE:[SYSEXE]\"",
+        "  \"SYS$SYSTEM\" = \"SYS$SYSROOT:[SYSEXE]\"",
+        "  \"SYS$SYSROOT\" = \"SYS$SPECIFIC:\"\n        = \"SYS$COMMON:\"",
+        "  SYS$SYSROOT:[SYSMGR]\n  =   MDA0:[SYSMGR]\n  =   DKA0:[SYSMGR]\n",
         "  DKA0:[SYSMGR]",
         "  DKA0:[SYSEXE]",
         "DCL.EXE;1           DELETE.EXE;1        DIRECTORY.EXE;1",
@@ -128,8 +133,9 @@ const SYSTEM_DISK: Phase = Phase {
 /// directory, a COPY that makes the file in the first, a DIRECTORY that
 /// finds it in both, a TYPE that finds a file in the second, SET DEFAULT
 /// to it without a colon, a DIRECTORY of a search list with one inside it,
-/// and a TYPE of a logical name that is a file's specification, as on
-/// OpenVMS.
+/// a TYPE of a logical name that is a file's specification, as on
+/// OpenVMS, and a COPY to SYS$MANAGER:, which SYS$SYSROOT puts in the
+/// ramdisk's [SYSMGR], and a DIRECTORY that finds it there and on DKA0:.
 const RAMDISK: Phase = Phase {
     name: "ramdisk",
     secs: 30,
@@ -186,6 +192,8 @@ const RAMDISK: Phase = Phase {
             concat!(
                 "DEFINE F MDA0:[000000]WELCOME.TXT\rTYPE/HEAD=2 F\r",
                 "SET DEFAULT MDA0:[000000]\rDELETE WELCOME.TXT;1\r",
+                "COPY/LOG SYS$MANAGER:WELCOME.TXT SYS$MANAGER:WELCOME.TXT\r",
+                "DIR SYS$MANAGER:WELCOME.TXT\rDELETE SYS$SPECIFIC:[SYSMGR]WELCOME.TXT;1\r",
                 "DEASSIGN HOME\rSHOW LOGICAL HOME\r",
             ),
         ),
@@ -214,13 +222,22 @@ const RAMDISK: Phase = Phase {
             "Grand total of 2 directories, 2 files.",
         ),
         "! DCLTEST.CLD: GREET, a verb DCLTEST.COM adds with SET COMMAND.",
-        "$ SET DEFAULT HOME\n$ SHOW DEFAULT\n  HOME:[000000]\n  =   MDA0:[000000]\n  =   SYS$MANAGER\n",
+        concat!(
+            "$ SET DEFAULT HOME\n$ SHOW DEFAULT\n  HOME:[000000]\n  =   MDA0:[000000]\n",
+            "  =   MDA0:[SYSMGR]\n  =   DKA0:[SYSMGR]\n",
+        ),
         concat!(
             "Directory DKA0:[SYSMGR]\n\nWELCOME.TXT;1\n\nTotal of 1 file.\n\n",
             "Directory MDA0:[000000]\n\nWELCOME.TXT;1\n\nTotal of 1 file.\n\n",
             "Grand total of 2 directories, 2 files.",
         ),
         "$ TYPE/HEAD=2 F\n\n        Welcome to vaxpunk",
+        "%COPY-S-COPIED, DKA0:[SYSMGR]WELCOME.TXT;1 copied to MDA0:[SYSMGR]WELCOME.TXT;1 (10 records)",
+        concat!(
+            "Directory MDA0:[SYSMGR]\n\nWELCOME.TXT;1\n\nTotal of 1 file.\n\n",
+            "Directory DKA0:[SYSMGR]\n\nWELCOME.TXT;1\n\nTotal of 1 file.\n\n",
+            "Grand total of 2 directories, 2 files.",
+        ),
         "no translation for logical name HOME",
     ],
 };
