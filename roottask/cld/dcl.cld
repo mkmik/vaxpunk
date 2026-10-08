@@ -41,6 +41,10 @@ define verb IF
 define verb LOGOUT
 	cliroutine LOGOUT
 
+define verb PIPE
+	cliroutine PIPE
+	parameter P1, label=COMMAND, prompt="Command", value(required, type=$rest_of_line)
+
 define verb RUN
 	cliroutine RUN
 	parameter P1, label=FILE, prompt="File", value(required, type=$infile)
