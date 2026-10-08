@@ -14,7 +14,10 @@
         $LNMBDEF
         $SSDEF
         $LNMDEF
+        $CLIMSGDEF
         $DCLDEF
+
+MAXEQV = 128                            ; a search list's strings, at most
 
         .EXTERNAL SCH$GL_CURPCB, LNM$GQ_SYSTEM, DCL$ADD, DCL$ADDCSTR
         .EXTERNAL DCL$ADDNAME, DCL$DONE, DCL$GETVAL, DCL$ISPRES, DCL$NAMDSC
@@ -25,16 +28,21 @@
         .PSECT  DATA, NOEXE, WRT, LONG
 FILE_DEV:
         .ASCID  "LNM$FILE_DEV"
-CREITEMS:                               ; $CRELNM's: the equivalence, in DCL$TOKEN
-        .WORD   0, LNM$_STRING
-        .ADDRESS DCL$TOKEN
-        .LONG   0, 0
-TRNITEMS:                               ; $TRNLNM's: the equivalence and the table
+CREITEMS:                               ; $CRELNM's: an LNM$_STRING for each equivalence
+        .BLKB   <12*MAXEQV>+4
+EQVS:   .BLKB   512                     ; their strings
+TRNITEMS:                               ; $TRNLNM's: an equivalence, its table and the last's index
+        .WORD   4, LNM$_INDEX
+        .ADDRESS EQVIDX, 0
         .WORD   LINESIZE, LNM$_STRING
         .ADDRESS EQV, EQVLEN
         .WORD   31, LNM$_TABLE
         .ADDRESS TABNAM, TABLEN
+        .WORD   4, LNM$_MAX_INDEX
+        .ADDRESS EQVMAX, 0
         .LONG   0
+EQVIDX: .LONG   0
+EQVMAX: .LONG   0
 EQV:    .BLKB   LINESIZE
 EQVLEN: .WORD   0
 TABNAM: .BLKB   31
@@ -81,17 +89,33 @@ V_DEVICES:
 
         .PSECT  CODE, EXE, LONG
 ; DCL$DEFINE, DEFINE[/PROCESS|/SYSTEM|/TABLE=table][/[NO]LOG] name
-; equivalence: makes name a logical name in the table, the process's by
-; default, telling if it replaced one, unless /NOLOG.
+; equivalence[,...]: makes name a logical name in the table, the
+; process's by default, telling if it replaced one, unless /NOLOG. More
+; than one equivalence makes a search list.
 DCL$DEFINE::
         .EXCEPTION_ENTRY
         MOVL    #1, R1
         BSBW    LNMTAB
         MOVAB   DCL$V_LOGNAM, R1
         BSBW    DCL$NAMEVAL
-        MOVAB   V_EQUNAM, R1
+        MOVAB   CREITEMS, R6            ; the next item
+        MOVAB   EQVS, R7                ; where its string goes
+5$:     MOVAB   V_EQUNAM, R1
         BSBW    DCL$GETVAL
-        MOVW    R8, CREITEMS
+        MOVL    R0, R9
+        MOVW    R8, (R6)
+        MOVW    #LNM$_STRING, 2(R6)
+        MOVL    R7, 4(R6)
+        CLRL    8(R6)
+        MOVC3   R8, DCL$TOKEN, (R7)
+        MOVL    R3, R7
+        ADDL2   #12, R6
+        CMPL    R9, #CLI$_COMMA
+        BNEQ    7$
+        MOVAB   CREITEMS+<12*MAXEQV>, R0
+        CMPL    R6, R0
+        BLSSU   5$
+7$:     CLRL    (R6)
         $CRELNM_S TABNAM=@TABDSC, LOGNAM=DCL$NAMDSC, ITMLST=CREITEMS
         CMPL    R0, #SS$_SUPERSEDE
         BNEQ    DCL$DONE
@@ -146,27 +170,21 @@ DCL$SHOW::
         BNEQ    15$
         CMPB    DCL$NAME, #^A/*/
         BEQL    LIST
-15$:    $TRNLNM_S TABNAM=@TABDSC, LOGNAM=DCL$NAMDSC, ITMLST=TRNITEMS
+15$:    MOVL    TABDSC, R6
+        MOVL    #1, R7
+        BSBW    PAIRS
         BLBS    R0, 20$
         CMPL    R0, #SS$_NOLOGNAM
         BNEQ    DCL$DONE
         ADDTEXT "%SHOW-S-NOTRAN, no translation for logical name "
         BSBW    DCL$ADDNAME
         BSBW    DCL$SAY
-        BRW     DCL$OK
-20$:    ADDTEXT "   "
-        BSBW    PAIR
-        ADDTEXT " ("
-        MOVAB   TABNAM, R1
-        MOVZWL  TABLEN, R2
-        BSBW    DCL$ADD
-        ADDTEXT ")"
-        BSBW    DCL$SAY
-        BRW     DCL$OK
+20$:    BRW     DCL$OK
 
 ; LIST: lists the logical names of the process's table, then the system's,
 ; those TABMASK has, as VMS's SHOW LOGICAL does, under each table's name.
-; It takes CMKRNL, for GETLNM: SS$_NOPRIV without.
+; It takes CMKRNL, for GETLNM: SS$_NOPRIV without. A name deleted after
+; GETLNM found it is left out.
 LIST:   CLRL    R6                      ; the table: 0 the process's, 1 the system's
 10$:    BBS     R6, TABMASK, 12$
         BRW     30$
@@ -180,29 +198,30 @@ LIST:   CLRL    R6                      ; the table: 0 the process's, 1 the syst
         ADDTEXT ")"
         BSBW    DCL$SAY
         PRINT   ""
-        CLRL    R7                      ; the name's index
+        CLRL    R8                      ; the name's index
 20$:    MOVL    R6, LNMARGS+4
-        MOVL    R7, LNMARGS+8
+        MOVL    R8, LNMARGS+8
         $CMKRNL_S ROUTIN=GETLNM, ARGLST=LNMARGS
         BLBS    R0, 25$
         CMPL    R0, #SS$_NOLOGNAM
         BEQL    30$
         BRW     DCL$DONE
-25$:    ADDTEXT "  "
-        BSBW    PAIR
-        BSBW    DCL$SAY
-        INCL    R7
+25$:    PUSHR   #^M<R6, R8>
+        MOVL    TABDSCS+4[R6], R6       ; DCL$PROCESS or SYSTEM, by TABMASK's bit
+        CLRL    R7
+        BSBW    PAIRS
+        POPR    #^M<R6, R8>
+        INCL    R8
         BRB     20$
 30$:    AOBLEQ  #1, R6, 10$
         BRW     DCL$OK
 
 ; GETLNM table, index: in kernel mode, copies the index'th logical name
 ; of a table, 0 the process's and 1 the system's, to DCL$NAME and
-; DCL$NAMDSC, and its equivalence to EQV and EQVLEN. SS$_NOLOGNAM past
-; the last. A name made or deleted between calls may be missed or shown
-; twice. ponytail: walks the executive's tables itself, as DIRECTORY
-; reads the boot volume; VMS's DCL asks the executive's logical name
-; routines.
+; DCL$NAMDSC. SS$_NOLOGNAM past the last. A name made or deleted between
+; calls may be missed or shown twice. ponytail: walks the executive's
+; tables itself, as DIRECTORY reads the boot volume; VMS's DCL asks the
+; executive's logical name routines.
         .ENTRY  GETLNM, ^M<R2, R3, R4, R5>
         MOVL    G^SCH$GL_CURPCB, R2
         MOVAQ   PCB$Q_LNMHD(R2), R2
@@ -220,25 +239,58 @@ LIST:   CLRL    R6                      ; the table: 0 the process's, 1 the syst
         MOVZBL  LNMB$T_NAME(R1), DCL$NAMDSC
         MOVC3   DCL$NAMDSC, LNMB$T_NAME+1(R1), DCL$NAME
         MOVL    (SP)+, R1
-        MOVZBL  LNMB$T_NAME(R1), R0
-        MOVAB   LNMB$T_NAME+1(R1)[R0], R1
-        MOVZBL  (R1)+, R0
-        MOVW    R0, EQVLEN
-        MOVC3   R0, (R1), EQV
         MOVL    #SS$_NORMAL, R0
         BRB     90$
 80$:    MOVL    #SS$_NOLOGNAM, R0
 90$:    ENBINT
         RET
 
-; PAIR: appends "name" = "equivalence", of DCL$NAME and EQV, to DCL$MSG.
-; Uses R0-R2.
-PAIR:
-        .JSB_ENTRY  SCRATCH=<R2>
-        BSBW    DCL$QUOTE
+; PAIRS: R6 = a table name's descriptor, R7 = 1 to say the table.
+; Translates DCL$NAME in it and shows "name" = "equivalence", then each
+; further string of a search list on a line of its own, as VMS's SHOW
+; LOGICAL does. R0 = $TRNLNM's status. Uses R0-R5.
+PAIRS:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5>
+        CLRL    EQVIDX
+        BSBB    TRANS
+        BLBC    R0, 90$
+        ADDTEXT "  "
+        BLBC    R7, 10$
+        ADDTEXT " "
+10$:    BSBW    DCL$QUOTE
         BSBW    DCL$ADDNAME
         BSBW    DCL$QUOTE
         ADDTEXT " = "
+        BSBB    QUOTEQV
+        BLBC    R7, 20$
+        ADDTEXT " ("
+        MOVAB   TABNAM, R1
+        MOVZWL  TABLEN, R2
+        BSBW    DCL$ADD
+        ADDTEXT ")"
+20$:    BSBW    DCL$SAY
+30$:    CMPL    EQVIDX, EQVMAX
+        BGEQ    80$
+        INCL    EQVIDX
+        BSBB    TRANS
+        BLBC    R0, 90$
+        ADDTEXT "        = "
+        BSBB    QUOTEQV
+        BSBW    DCL$SAY
+        BRB     30$
+80$:    MOVL    #SS$_NORMAL, R0
+90$:    RSB
+
+; TRANS: R6 = a table name's descriptor. $TRNLNM of DCL$NAME in it, the
+; equivalence EQVIDX says, into TRNITEMS's buffers. Uses R0-R5.
+TRANS:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5>
+        $TRNLNM_S TABNAM=(R6), LOGNAM=DCL$NAMDSC, ITMLST=TRNITEMS
+        RSB
+
+; QUOTEQV: appends "equivalence", EQV's, to DCL$MSG. Uses R0-R2.
+QUOTEQV:
+        .JSB_ENTRY  SCRATCH=<R2>
         BSBW    DCL$QUOTE
         MOVAB   EQV, R1
         MOVZWL  EQVLEN, R2

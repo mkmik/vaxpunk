@@ -15,7 +15,7 @@ define verb DEASSIGN
 define verb DEFINE
 	cliroutine DEFINE
 	parameter P1, label=LOGICAL_NAME, prompt="Log_name", value(required)
-	parameter P2, label=EQUIVALENCE_NAME, prompt="Equ_name", value(required)
+	parameter P2, label=EQUIVALENCE_NAME, prompt="Equ_name", value(required, list)
 	qualifier LOG, default
 	qualifier PROCESS
 	qualifier SYSTEM

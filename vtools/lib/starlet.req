@@ -660,7 +660,8 @@ MACRO
 LITERAL
     NAM$C_BID = 2,
     NAM$C_BLN = 96,
-    NAM$M_WILDCARD = 256;  ! the specification has a wildcard
+    NAM$M_WILDCARD = 256,  ! the specification has a wildcard
+    NAM$M_SEARCH_LIST = 2048;  ! its device is a search list
 MACRO
     NAM$B_BID = 0, 0, 8, 0 %,
     NAM$B_BLN = 1, 0, 8, 0 %,
@@ -1225,9 +1226,11 @@ LITERAL
 
 ! $LNMDEF
 LITERAL
+    LNM$_INDEX = 1,  ! which equivalence string the items after it are about, a longword
     LNM$_STRING = 2,  ! the equivalence string
     LNM$_TABLE = 4,  ! the name of the table it was found in
     LNM$_LENGTH = 5,  ! the equivalence string's length, a longword
+    LNM$_MAX_INDEX = 7,  ! the last equivalence string's index, a longword
     LNM$C_NAMLENGTH = 255,  ! the longest name or equivalence string
     LNM$C_MAXDEPTH = 10;  ! translations of a device name, at most
 

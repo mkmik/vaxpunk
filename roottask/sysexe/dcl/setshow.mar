@@ -113,12 +113,37 @@ DISK:   .ASCID  "SYS$DISK"
 DISKITEMS:                              ; $CRELNM's: the device in EXP
         .WORD   0, LNM$_STRING
         .LONG   0, 0, 0
+FILE_DEV:
+        .ASCID  "LNM$FILE_DEV"
+SLITEMS:                                ; SHOW DEFAULT's $TRNLNM: a string of a search list
+        .WORD   4, LNM$_INDEX
+        .ADDRESS SLIDX, 0
+        .WORD   LINESIZE, LNM$_STRING
+        .ADDRESS SLSTR, SLDSC
+        .WORD   4, LNM$_MAX_INDEX
+        .ADDRESS SLMAX, 0
+        .LONG   0
+SLIDX:  .LONG   0
+SLMAX:  .LONG   0
+SLDSC:  .LONG   0                       ; the string, a descriptor
+        .ADDRESS SLSTR
+SLSTR:  .BLKB   LINESIZE
+SLNDSC: .LONG   0                       ; the search list's name, a descriptor
+        .ADDRESS SLNAME
+SLNAME: .BLKB   LINESIZE
+DDIRDSC:                                ; the default directory
+        .LONG   63
+        .ADDRESS DDIR
+DDIR:   .BLKB   63
 
         .PSECT  CODE, EXE, LONG
 ; DCL$SETDEF, SET DEFAULT spec: $PARSEs spec, which must name no file,
 ; and makes the directory it expands to the default, with $SETDDIR, and
 ; its device the process's SYS$DISK. One that doesn't exist is still
-; set, as VMS does, with a message.
+; set, as VMS does, with a message. A device that is a search list,
+; HOME: for MDA0:[000000],SYS$MANAGER, becomes SYS$DISK as it is, and the
+; default directory the spec's, or none, so that each string's own
+; directory holds (SEARCHDEF).
 DCL$SETDEF::
         .EXCEPTION_ENTRY
         MOVAB   V_DIR, R1
@@ -136,7 +161,10 @@ DCL$SETDEF::
 10$:    MOVL    #RMS$_SYN, R0
         TSTB    DEFNAM+NAM$B_NAME
         BNEQ    20$
-        MOVZBL  DEFNAM+NAM$B_DIR, DIRDSC
+        BITL    #NAM$M_SEARCH_LIST, DEFNAM+NAM$L_FNB
+        BEQL    15$
+        BRW     SEARCHDEF
+15$:    MOVZBL  DEFNAM+NAM$B_DIR, DIRDSC
         MOVL    DEFNAM+NAM$L_DIR, DIRDSC+4
         $SETDDIR_S NEWDIR=DIRDSC
         BLBC    R0, 20$
@@ -152,6 +180,32 @@ DCL$SETDEF::
         BSBW    DCL$SAY
         BRW     DCL$OK
 20$:    BRW     DCL$DONE
+
+; SEARCHDEF: SET DEFAULT's for a search list, R8 = the length of the
+; spec in DCL$TOKEN: SYS$DISK becomes its device, up to its colon, if
+; it has one, and the default directory its expanded directory if it
+; gives one, else none.
+SEARCHDEF:
+        CLRL    DIRDSC
+        LOCC    #91, R8, DCL$TOKEN      ; [ or <: a directory
+        BNEQ    10$
+        LOCC    #60, R8, DCL$TOKEN
+        BEQL    20$
+10$:    MOVZBL  DEFNAM+NAM$B_DIR, DIRDSC
+        MOVL    DEFNAM+NAM$L_DIR, DIRDSC+4
+20$:    $SETDDIR_S NEWDIR=DIRDSC
+        BLBC    R0, 90$
+        LOCC    #^A/:/, R8, DCL$TOKEN
+        BEQL    80$
+        MOVAB   DCL$TOKEN, R0
+        SUBL3   R0, R1, R0              ; up to the colon
+        INCL    R0
+        MOVW    R0, DISKITEMS
+        MOVAB   DCL$TOKEN, DISKITEMS+4
+        $CRELNM_S TABNAM=DCL$PROCESS, LOGNAM=DISK, ITMLST=DISKITEMS
+        BLBC    R0, 90$
+80$:    BRW     DCL$OK
+90$:    BRW     DCL$DONE
 
 ; DCL$SETCOMMAND, SET COMMAND file: compiles the command definitions in
 ; file, file.CLD if it has no type, with CDU$COMPILE, into the process's
@@ -221,7 +275,11 @@ DCL$SETCOMMAND::
 80$:    BRW     DCL$DONE
 
 ; DCL$SHOWDEF, SHOW DEFAULT: shows the default device and directory,
-; what $PARSE expands an empty specification to.
+; what $PARSE expands an empty specification to. When SYS$DISK is a
+; search list, as VMS does: SYS$DISK's equivalence and the default
+; directory, then each string of the list with it, after "=".
+; ponytail: a list SYS$DISK stands for through other names, and each
+; string's own logical names, aren't followed.
 DCL$SHOWDEF::
         .EXCEPTION_ENTRY
         CLRB    DEFFAB+FAB$B_FNS
@@ -229,11 +287,51 @@ DCL$SHOWDEF::
         CMPL    R0, #RMS$_DNF
         BEQL    10$
         BLBC    R0, 20$
-10$:    ADDTEXT "  "
+10$:    BITL    #NAM$M_SEARCH_LIST, DEFNAM+NAM$L_FNB
+        BNEQ    30$
+        ADDTEXT "  "
         BSBW    ADDDEF
         BSBW    DCL$SAY
         MOVL    #SS$_NORMAL, R0
 20$:    BRW     DCL$DONE
+30$:    MOVW    #63, DDIRDSC
+        $SETDDIR_S OLDLEN=DDIRDSC, OLDDIR=DDIRDSC
+        BLBC    R0, 20$
+        CLRL    SLIDX
+        $TRNLNM_S TABNAM=FILE_DEV, LOGNAM=DISK, ITMLST=SLITEMS
+        BLBC    R0, 20$
+        ADDTEXT "  "
+        BSBB    ADDSL
+        BSBW    DCL$SAY
+        MOVL    SLDSC, R0               ; the list's name, without its colon
+        BEQL    40$
+        CMPB    SLSTR-1[R0], #^A/:/
+        BNEQ    40$
+        DECL    R0
+40$:    MOVL    R0, SLNDSC
+        MOVC3   R0, SLSTR, SLNAME
+        CLRL    SLIDX
+50$:    $TRNLNM_S TABNAM=FILE_DEV, LOGNAM=SLNDSC, ITMLST=SLITEMS
+        BLBC    R0, 20$
+        ADDTEXT "  =   "
+        BSBB    ADDSL
+        BSBW    DCL$SAY
+        INCL    SLIDX
+        CMPL    SLIDX, SLMAX
+        BLEQ    50$
+        MOVL    #SS$_NORMAL, R0
+        BRB     20$
+
+; ADDSL: appends SLSTR, SLDSC long, and the default directory in DDIR to
+; DCL$MSG. Uses R0-R2.
+ADDSL:
+        .JSB_ENTRY  SCRATCH=<R2>
+        MOVAB   SLSTR, R1
+        MOVL    SLDSC, R2
+        BSBW    DCL$ADD
+        MOVAB   DDIR, R1
+        MOVZWL  DDIRDSC, R2
+        BRW     DCL$ADD
 
 ; DCL$SHOWDEV, SHOW DEVICES [name]: lists the disks, with their status,
 ; error counts and their volumes' labels and free blocks, then the

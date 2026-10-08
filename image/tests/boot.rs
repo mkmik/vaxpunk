@@ -110,7 +110,10 @@ const SYSTEM_DISK: Phase = Phase {
 /// and keypad mode that writes a second version, DIRECTORY, a DELETE/LOG,
 /// CLITEST's checks of the command parser, a qualifier DIRECTORY doesn't
 /// have, HELP SHOW, a logical name in the system table, and a line edited
-/// and one recalled with the up arrow.
+/// and one recalled with the up arrow. Then a search list, HOME, of the
+/// ramdisk and SYS$MANAGER: SET DEFAULT to it, a COPY that makes the file in
+/// the first, a DIRECTORY that finds it in both, and a TYPE that finds a
+/// file in the second.
 const RAMDISK: Phase = Phase {
     name: "ramdisk",
     secs: 30,
@@ -143,6 +146,23 @@ const RAMDISK: Phase = Phase {
                 "LOGICAL OO\x1b[D\x1b[DZ\x08SHOW \x05\r",
             ),
         ),
+        (
+            "\"ZOO\" = \"TWO\" (LNM$PROCESS_TABLE)",
+            1,
+            concat!(
+                "DEFINE HOME MDA0:[000000],SYS$MANAGER\rSHOW LOGICAL HOME\r",
+                "SET DEFAULT HOME:\rSHOW DEFAULT\r",
+                "COPY SYS$SYSDEVICE:[SYSMGR]WELCOME.TXT WELCOME.TXT\rDIR WELCOME.TXT\r",
+            ),
+        ),
+        (
+            "Grand total of 2 directories",
+            1,
+            concat!(
+                "TYPE DCLTEST.CLD\rSET DEFAULT MDA0:[000000]\rDELETE WELCOME.TXT;1\r",
+                "DEASSIGN HOME\rSHOW LOGICAL HOME\r",
+            ),
+        ),
     ],
     lines: &[
         "  MDA0:[000000]",
@@ -161,6 +181,15 @@ const RAMDISK: Phase = Phase {
         "    /[NO]MOUNTED",
         "   \"ZZZ\" = \"YYY\" (LNM$SYSTEM_TABLE)",
         "\"ZOO\" = \"TWO\" (LNM$PROCESS_TABLE)",
+        "   \"HOME\" = \"MDA0:[000000]\" (LNM$PROCESS_TABLE)\n        = \"SYS$MANAGER\"",
+        "  HOME:\n  =   MDA0:[000000]\n  =   SYS$MANAGER\n",
+        concat!(
+            "Directory MDA0:[000000]\n\nWELCOME.TXT;1\n\nTotal of 1 file.\n\n",
+            "Directory DKA0:[SYSMGR]\n\nWELCOME.TXT;1\n\nTotal of 1 file.\n\n",
+            "Grand total of 2 directories, 2 files.",
+        ),
+        "! DCLTEST.CLD: GREET, a verb DCLTEST.COM adds with SET COMMAND.",
+        "no translation for logical name HOME",
     ],
 };
 
@@ -177,7 +206,7 @@ const DATA_DISK: Phase = Phase {
     steps: &[
         // Once the ramdisk's last command has run: the type-ahead buffer is empty.
         (
-            "\"ZOO\" = \"TWO\" (LNM$PROCESS_TABLE)",
+            "no translation for logical name HOME",
             1,
             concat!(
                 "INIT/PROTECTION=(S:RWED,O:RWED,G:RWED,W:RWED) DKB0: DATA\rMOUNT DKB0: DATA\r",
