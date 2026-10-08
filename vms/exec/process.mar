@@ -57,7 +57,7 @@ UW = PTE$M_VALID ! <PRT$C_UW @ PTE$V_PROT>
 SR = PTE$M_VALID ! <PRT$C_SR @ PTE$V_PROT>
 SW = PTE$M_VALID ! <PRT$C_SW @ PTE$V_PROT>
 EW = PTE$M_VALID ! <PRT$C_EW @ PTE$V_PROT>
-; Image header fields (vtools/docs/image-format.md).
+; Image header fields (crosstools/vtools/docs/image-format.md).
 EIHD$L_SIZE = 8
 EIHD$L_ISDOFF = 12
 EIHD$L_ACTIVOFF = 16

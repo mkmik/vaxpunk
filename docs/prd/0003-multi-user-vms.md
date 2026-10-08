@@ -206,8 +206,8 @@ until the hardware or size changes; leave it.
 | 13 | An AST routine's kernel code can be deleted halfway without `IPL$_ASTDEL` around it (ADR-0011) | Raise IPL as VMS does around such code |
 | 14 | A network connection whose `CLOSE` finds no pool stays open; unit numbers wrap at 99 whether in use or not (`netdriver.mar`) | Preallocate the close message in the UCB; skip units in use |
 | 15 | A name whose versions spill into a second directory record matches twice (`f11.mar` `FIL$SEARCHDIR`); a directory is rewritten whole on each change (`f11wrt.mar`) | Search every record of a name; it matters once a file has many versions |
-| 16 | `EXTZV`/`INSV` read and write 8 bytes around the field, not atomically, and fault across a page end (`vmacro/src/insn.rs`); `vtools/tests/macro32-bugs/fields.mar` shows it | Narrower accesses at a page end; atomic where the field is shared |
-| 17 | Shift counts of 32 and up wrap instead of clearing (`vmacro/src/insn.rs`); `vtools/tests/macro32-bugs/shifts.mar` shows it | A compare and select, as the note says |
+| 16 | `EXTZV`/`INSV` read and write 8 bytes around the field, not atomically, and fault across a page end (`vmacro/src/insn.rs`); `crosstools/vtools/tests/macro32-bugs/fields.mar` shows it | Narrower accesses at a page end; atomic where the field is shared |
+| 17 | Shift counts of 32 and up wrap instead of clearing (`vmacro/src/insn.rs`); `crosstools/vtools/tests/macro32-bugs/shifts.mar` shows it | A compare and select, as the note says |
 | 18 | `IOC$CANCEL` doesn't wait for rundown's cancels to finish (`qio.mar`) | Needed once a driver can't stop at once: the interrupt-driven disk (tier 4) |
 | 19 | Common event flag clusters are kept while processes wait on them (`event.mar`) | Fine as is; listed so it isn't fixed twice |
 

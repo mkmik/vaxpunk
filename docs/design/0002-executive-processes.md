@@ -56,10 +56,10 @@ its code.
 | `rms.mar` | RMS: file specifications, `$PARSE`, `$SEARCH`, `$OPEN`, `$CREATE`, `$CONNECT`, `$GET`, `$PUT`, `$DISCONNECT`, `$CLOSE`, `$ERASE` |
 | `sysunwind.mar` | conditions: the exception handlers, `EXE$SIGNAL`, which calls the condition handlers, `$UNWIND`, the catch-all and `$PUTMSG` |
 
-`vms/build.rs` links them, with `vtools/lib/consolio.mar`, into
-`EXEC.EXE`, in S0 at `0x40010000`. The structures are in `vtools/lib/lib.mlb` (`$PCBDEF`,
+`vms/build.rs` links them, with `crosstools/vtools/lib/consolio.mar`, into
+`EXEC.EXE`, in S0 at `0x40010000`. The structures are in `crosstools/vtools/lib/lib.mlb` (`$PCBDEF`,
 `$CEBDEF`, `$PTEDEF`, `$RPBDEF`, `$VCBDEF`...), what programs need in
-`vtools/lib/starlet.mlb` (`$SSDEF`, `$PRTDEF`, the `$name_S` macros, RMS's
+`crosstools/vtools/lib/starlet.mlb` (`$SSDEF`, `$PRTDEF`, the `$name_S` macros, RMS's
 `$FABDEF`, `$RABDEF`, `$NAMDEF`, `$RMSDEF` and the `$FAB`, `$RAB`, `$NAM`
 blocks and `$OPEN`... calls, `$MNTDEF`).
 
@@ -326,7 +326,7 @@ message files.
 
 [ADR-0017](../adr/0017-command-tables-from-cld-with-vcdu.md): commands are
 defined in CLD, which vcdu compiles into command tables at build time
-(`vtools/docs/command-tables.md`). `CLI`, `vms/sysexe/lib/cli.mar`,
+(`crosstools/vtools/docs/command-tables.md`). `CLI`, `vms/sysexe/lib/cli.mar`,
 parses commands with them, and is linked into DCL and into every image:
 
 - **`CLI$DCL_PARSE line, table [,prompt]`** parses a command into the
@@ -929,7 +929,7 @@ blocks, and `RMS$VOLIDLE` while it looks through the PCBs. At boot,
 ponytail: one lock for every volume, where the XQP `$ENQ`s one per
 volume and one per file; no priority boost for the holder.
 
-`FIL$SELECT` picks the VCB by device name. `f11.mar` reads Files-11 (`ods/docs/`) as VMS's XQP
+`FIL$SELECT` picks the VCB by device name. `f11.mar` reads Files-11 (`crosstools/ods/docs/`) as VMS's XQP
 does:
 
 - **`FIL$MOUNT`**, at boot for `DKA0:` and from `$MOUNT itmlst`, which
@@ -995,7 +995,7 @@ does:
   access, as VMS's `CREATE/DIRECTORY` does, and one block holding only
   the end of block's -1, entered last.
 - **`FIL$INIT`**, for `$INIT_VOL devnam, volnam, itmlst`, writes an empty volume
-  on `DKB0:`, 4,096 blocks, or the ramdisk, 1,024, as `INITIALIZE` lays one out (`ods/docs/initialize.md`):
+  on `DKB0:`, 4,096 blocks, or the ramdisk, 1,024, as `INITIALIZE` lays one out (`crosstools/ods/docs/initialize.md`):
   the boot block, the home block, the index file bitmap, 64 header
   slots, `BITMAP.SYS`'s SCB and bitmap and the MFD's first block, and the
   nine reserved files, (1,1,0) to (9,9,0), in the MFD. The volume and its
@@ -1113,7 +1113,7 @@ file sharing or locking, and no `$UPDATE` or `$TRUNCATE`, so `$PUT` writes only 
 Conditions are signaled and handled as on VMS
 ([ADR-0021](../adr/0021-condition-handlers-run-in-the-mode-that-signals.md)).
 A routine establishes a condition handler by writing its address at `0(FP)`, in
-its frame, which `.ENTRY` leaves 0 (`vtools/docs/macro32.md`), or with
+its frame, which `.ENTRY` leaves 0 (`crosstools/vtools/docs/macro32.md`), or with
 `LIB$ESTABLISH`. A condition is signaled by an exception in an outer
 mode, or by `LIB$SIGNAL` or `LIB$STOP`, which build the signal array, the
 condition and its arguments, then the PC and PSL, and the mechanism

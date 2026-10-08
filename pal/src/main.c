@@ -795,7 +795,7 @@ static void boot_pages(seL4_Word va, const uint8_t *src, seL4_Word size, uint32_
 }
 
 /*
- * Maps the sections of an executable image (vtools/docs/image-format.md) at
+ * Maps the sections of an executable image (crosstools/vtools/docs/image-format.md) at
  * their link addresses, with their protection, and returns the transfer
  * address.
  * ponytail: link address only, no fixups; relocate with the EIAF when an
@@ -842,7 +842,7 @@ static seL4_Word load_image(const uint8_t *file, seL4_Word size)
 }
 
 /*
- * Files-11 ODS-2 (ods/docs/), as much of it as VMS's primary bootstrap,
+ * Files-11 ODS-2 (crosstools/ods/docs/), as much of it as VMS's primary bootstrap,
  * VMB, read to find the executive on the system disk: the home block, the
  * index file's header, the directories on the way and the file's map.
  */

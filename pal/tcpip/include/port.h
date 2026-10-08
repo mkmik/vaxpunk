@@ -1,7 +1,7 @@
 /*
  * The port (docs/design/0003-tcpip-port.md): the pages the executive and
  * the TCP/IP component share, and the messages they pass there. The
- * executive's side is $PORTDEF in vtools/lib/lib.mlb, which must match.
+ * executive's side is $PORTDEF in crosstools/vtools/lib/lib.mlb, which must match.
  *
  * Page 0 holds the header and the two rings; page 1 + n is tag n's data
  * buffer, for tags below PORT_BUFFERS. The executive writes commands and

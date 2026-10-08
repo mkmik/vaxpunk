@@ -3,7 +3,7 @@
 ;
 ; RMSDUMP file [key], a foreign command (RMSDUMP :== $RMSDUMP), reads the
 ; file's records in order, along key number key of an indexed file, 0 by
-; default, and prints each on a line of its own, as ods/fixtures/rms's
+; default, and prints each on a line of its own, as crosstools/ods/fixtures/rms's
 ; dumps hold them: a printable byte as it is, a backslash and the others
 ; as \xNN. Then a line RMSDUMP: n records, and the status that ended
 ; them. The same source builds on OpenVMS.

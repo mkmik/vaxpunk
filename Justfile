@@ -19,6 +19,6 @@ wasm-demo port="8765":
     (sleep 1 && {{ if os() == "macos" { "open" } else { "xdg-open" } }} http://localhost:{{port}}/demo/) &
     exec python3 -m http.server -b localhost -d out/site {{port}}
 
-# Regenerates the BLISS require files (vtools/lib/*.r64, *.req) from lib.mlb and starlet.mlb.
+# Regenerates the BLISS require files (crosstools/vtools/lib/*.r64, *.req) from lib.mlb and starlet.mlb.
 defs:
     cargo run -p vdefs

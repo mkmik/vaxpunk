@@ -13,7 +13,7 @@ x2-x11, longwords zero-extended, a frame only MACRO-32 understands.
 [DESIGN-0004](../design/0004-calling-standard.md) specifies it.
 
 DEC did this in 1992, and again for Itanium and x86-64
-(`vtools/docs/amacro.md`). AMACRO compiled the VAX executive onto the
+(`crosstools/vtools/docs/amacro.md`). AMACRO compiled the VAX executive onto the
 Alpha calling standard: routines were declared, registers kept 64 bits
 for callers in other languages, `4(AP)` still read the first argument,
 and V7.0 added the pieces that let MACRO-32 handle 64-bit addresses where
@@ -57,7 +57,7 @@ routine and is called by one, with nothing in between.
 ## What `vmacro` does
 
 Everything in DESIGN-0004's *MACRO-32* and *JSB* sections, from
-`vtools/docs/amacro.md`'s *What vmacro takes*. In short:
+`crosstools/vtools/docs/amacro.md`'s *What vmacro takes*. In short:
 
 **Registers.** R0 and R1 in x0 and x1, R2-R11 in x19-x28, SP in x18, FP
 in x29; AP is the argument list at `32(FP)`, x12 in a routine that writes
@@ -136,8 +136,8 @@ error); a branch into another routine; raw ARM64 naming x2-x30.
 | `vms/sysexe/lib/signal.mar` | `LIB$SIGNAL` and `LIB$ESTABLISH`: the same frame |
 | Handlers in the tree | Read the mechanism array's 64-bit fields |
 | `vms/sysexe/spin.mar` | Fills all 64 bits of every register it checks, with built-ins |
-| `vtools/crates/vrun` stub | Enters an image with x9 = 1 and x18 = `sp`; on a fault, walks FP and prints each frame's PC and routine name from its descriptor |
-| `vtools/docs/macro32.md`, `runner-abi.md`, DESIGN-0001, ADR-0021 | Follow the code |
+| `crosstools/vtools/crates/vrun` stub | Enters an image with x9 = 1 and x18 = `sp`; on a fault, walks FP and prints each frame's PC and routine name from its descriptor |
+| `crosstools/vtools/docs/macro32.md`, `runner-abi.md`, DESIGN-0001, ADR-0021 | Follow the code |
 
 ## Testing strategy
 
@@ -146,7 +146,7 @@ boot test and every test image (`svctest`, `chftest`, `asttest`,
 `mbxtest`, `spin`...) pass after each step, with no change to their
 expected output except register dumps and tracebacks.
 
-**64-bit callers.** `vtools/tests/run` programs whose callers are
+**64-bit callers.** `crosstools/vtools/tests/run` programs whose callers are
 hand-written ARM64 built with `call.mlb`, standing in for BLISS-64. One
 fills x18-x28 with 64-bit patterns and calls MACRO-32 routines that use
 `PUSHR`, call `.JSB_ENTRY` and `.JSB32_ENTRY` routines, write registers

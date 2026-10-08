@@ -225,8 +225,9 @@ about one second after the command.
 | `pal/tcpip/` | the TCP/IP component the root task starts below the executive: lwIP (submodule) with a virtio-net driver and the port adapter, in freestanding C; see [DESIGN-0003](docs/design/0003-tcpip-port.md) | `tcpip.elf` |
 | `image/` | Limine config, the ESP builder (mtools) and `boot`, which copies the three ELFs and `sysdisk.img` to `out/`, stitches the ESP and runs QEMU; see [image/README.md](image/README.md) | `out/esp.img` |
 | `scripts/` | host setup, Limine download, QEMU wrapper and console filter | `out/serial.log` |
-| `ods/` | Files-11 ODS-2/ODS-5 file system in Rust: the library, the `ods` CLI and a FUSE mount; see [ods/README.md](ods/README.md) | `target/` |
-| `vtools/` | VMS-style toolchain in Rust: the `vasm` assembler, the `vmacro` MACRO-32 compiler, `vlink` linker and `vlib` librarian, object, library and image formats, `vdump` to inspect them, and `vrun`, which runs images in QEMU; see [vtools/README.md](vtools/README.md) and its [PRD](docs/prd/0001-vtools.md) | `target/` |
+| `crosstools/` | the host tools that build vaxpunk and its disks; see [crosstools/README.md](crosstools/README.md) | |
+| `crosstools/ods/` | Files-11 ODS-2/ODS-5 file system in Rust: the library, the `ods` CLI and a FUSE mount; see [crosstools/ods/README.md](crosstools/ods/README.md) | `target/` |
+| `crosstools/vtools/` | VMS-style toolchain in Rust: the `vasm` assembler, the `vmacro` MACRO-32 compiler, `vlink` linker and `vlib` librarian, object, library and image formats, `vdump` to inspect them, and `vrun`, which runs images in QEMU; see [crosstools/vtools/README.md](crosstools/vtools/README.md) and its [PRD](docs/prd/0001-vtools.md) | `target/` |
 | `docs/` | ADRs, PRDs and design documents, numbered per kind; see [docs/README.md](docs/README.md) | |
 
 The whole repository is one Cargo workspace. `pal/kernel/`, `pal/shim/`,
@@ -269,8 +270,9 @@ exports its ELF's path as `ELF` for `boot`.
   STABLE-2_2_1_RELEASE), Limine 11.4.1 by version and
   SHA-256 in `scripts/fetch-limine.sh`. The EDK2 firmware comes from the
   QEMU install (`EDK2_FW=` overrides it).
-- The Rust projects, `ods/` and `vtools/`, are the workspace's default
-  members, so a plain `cargo test` tests both without the C toolchain;
+- The host tools in `crosstools/` and the system disk in `vms/` are the
+  workspace's default members, so a plain `cargo test` builds and tests
+  them without the C toolchain;
   `cargo test -p 'ods*'` or `cargo test -p 'v*'` tests one. `ods-fuse` needs
   FUSE (fuse3 on Linux, macFUSE on macOS). vtools's tests run images under
   `vrun` in QEMU; `VRUN_FLAGS=--hvf cargo test -p 'v*'` runs them under HVF.

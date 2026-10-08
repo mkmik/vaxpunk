@@ -1,7 +1,7 @@
         .TITLE  CHFTEST_ARM ARM64 routines CHFTEST calls, as BLISS-64 would build them
         .IDENT  /V0.1/
 ;
-; Routines with the calling standard's frames (vtools/lib/call.mlb,
+; Routines with the calling standard's frames (crosstools/vtools/lib/call.mlb,
 ; DESIGN-0004), which condition handling must find its way through.
 ;
         .LIBRARY "call.mlb"

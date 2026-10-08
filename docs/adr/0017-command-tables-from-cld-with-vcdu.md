@@ -90,7 +90,7 @@ system disk.
 2. **Table format.** The tables are bytes with no addresses in them:
    strings are `.ASCIC`, and blocks point to each other with word
    offsets from the table's start. They are documented in
-   `vtools/docs/command-tables.md`. A `ROUTINE`, which needs an
+   `crosstools/vtools/docs/command-tables.md`. A `ROUTINE`, which needs an
    address, is a longword after the table's bytes, which the linker
    fills, and which `CLI$DISPATCH` calls.
 3. **Every DCL verb is CLD.** `vms/cld/*.cld` compile into one

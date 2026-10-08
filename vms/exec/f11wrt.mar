@@ -4,10 +4,10 @@
 ; What VMS's XQP does when files are written, on F11$GL_VCB's volume
 ; (f11.mar), which must be on a disk that can be written, DKB0: or MDA0::
 ; a new file gets a header from the index file bitmap, blocks from the
-; storage bitmap (ods/docs/bitmap.md), with a map pointer for each run of
-; them, and an entry in a directory (ods/docs/directory.md); deleting it
+; storage bitmap (crosstools/ods/docs/bitmap.md), with a map pointer for each run of
+; them, and an entry in a directory (crosstools/ods/docs/directory.md); deleting it
 ; gives all three back. FIL$MKDIR makes a directory the same way. FIL$INIT, which $INIT_VOL calls, writes an empty
-; volume, laid out as INITIALIZE does (ods/docs/initialize.md). RMS
+; volume, laid out as INITIALIZE does (crosstools/ods/docs/initialize.md). RMS
 ; (rms.mar) calls these holding FIL$LOCK, as it calls f11.mar's. A new
 ; file is its creator's, with VMS's default protection, FILEPROT; a new
 ; directory takes its parent's, which no one may delete.
@@ -39,7 +39,7 @@ MAXVER = 32767
 MAXRUN = 16384                          ; blocks a format 2 pointer maps
 IDXEXT = 16                             ; headers the index file grows by
 DK$C_BLOCKS = BITS                      ; DKB0:'s volume: what one bitmap block maps
-; A file header (ods/docs/file-header.md).
+; A file header (crosstools/ods/docs/file-header.md).
 FH2$B_IDOFFSET = 0
 FH2$B_MPOFFSET = 1
 FH2$B_ACOFFSET = 2

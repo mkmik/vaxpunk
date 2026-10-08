@@ -101,7 +101,7 @@ fn main() {
 }
 
 /// Where `.LIBRARY` finds lib.mlb and starlet.mlb.
-const LIB: &str = "../vtools/lib";
+const LIB: &str = "../crosstools/vtools/lib";
 
 /// Assembles an ARM64 source with vasm into an object module: (file name,
 /// bytes).

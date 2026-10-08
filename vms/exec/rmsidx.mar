@@ -3,7 +3,7 @@
 ;
 ; An indexed file keeps its records in buckets in primary key order,
 ; with an index above them for each key; an alternate key's index leads
-; to SIDRs, which give the records' RFAs (ods/docs/indexed.md). $OPEN
+; to SIDRs, which give the records' RFAs (crosstools/ods/docs/indexed.md). $OPEN
 ; reads the prologue's key and area descriptors into the IFAB's buffer,
 ; with the stream's state, two walks, and three buckets' room: a walk
 ; follows one bucket's entries, expanding compressed keys as it goes.

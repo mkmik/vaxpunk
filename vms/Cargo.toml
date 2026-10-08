@@ -9,10 +9,10 @@ license.workspace = true
 path = "lib.rs"
 
 [build-dependencies]
-vasm = { path = "../vtools/crates/vasm" }
-vbliss = { path = "../vtools/crates/vbliss" }
-vcdu = { path = "../vtools/crates/vcdu" }
-vlink = { path = "../vtools/crates/vlink" }
-vmacro = { path = "../vtools/crates/vmacro" }
-vms-obj = { path = "../vtools/crates/vms-obj" }
-ods-image = { path = "../ods/crates/ods-image" }
+vasm = { path = "../crosstools/vtools/crates/vasm" }
+vbliss = { path = "../crosstools/vtools/crates/vbliss" }
+vcdu = { path = "../crosstools/vtools/crates/vcdu" }
+vlink = { path = "../crosstools/vtools/crates/vlink" }
+vmacro = { path = "../crosstools/vtools/crates/vmacro" }
+vms-obj = { path = "../crosstools/vtools/crates/vms-obj" }
+ods-image = { path = "../crosstools/ods/crates/ods-image" }

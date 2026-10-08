@@ -2,7 +2,7 @@
         .IDENT  /V0.1/
 ;
 ; A sequential file's records follow one another from its first byte to
-; its end of file, in one of RMS's record formats (ods/docs/records.md):
+; its end of file, in one of RMS's record formats (crosstools/ods/docs/records.md):
 ; FIX, VAR and VFC records start on a word, VAR and VFC ones after their
 ; size, a VFC one's size counting its fixed control part, FAB$B_FSZ bytes,
 ; which goes to and comes from RAB$L_RHB; STM, STMLF and STMCR records end

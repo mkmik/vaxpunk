@@ -1,6 +1,6 @@
 //! cargo test -p boot --test rms: RMS on relative and indexed files
 //! OpenVMS made (docs/prd/0008-rms-record-and-indexed-files.md). A data
-//! disk made here holds ods/fixtures/rms's files, each with the record
+//! disk made here holds crosstools/ods/fixtures/rms's files, each with the record
 //! attributes its FDL file gives; vaxpunk boots with it as DKB0:, and
 //! RMSDUMP prints each file's records along each of its keys, which must
 //! be what OpenVMS printed, the fixture's dump of that key. CONVERT/FDL
@@ -142,7 +142,7 @@ fn fixture_disk(path: &Path, fixtures: &Path) {
 #[test]
 fn fixtures() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
-    let fixtures = root.join("ods/fixtures/rms");
+    let fixtures = root.join("crosstools/ods/fixtures/rms");
     let disk = root.join("out/rms-datadisk.img");
     fixture_disk(&disk, &fixtures);
     let mut vax = Vax::boot(&disk, &root.join("out/rms.log"));
@@ -189,7 +189,7 @@ const CONVERSIONS: &[(&str, &str, &str, &str, usize)] = &[
 #[test]
 fn convert() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
-    let fixtures = root.join("ods/fixtures/rms");
+    let fixtures = root.join("crosstools/ods/fixtures/rms");
     let disk = root.join("out/convert-datadisk.img");
     let _ = fs::remove_file(&disk);
     let params = InitParams {

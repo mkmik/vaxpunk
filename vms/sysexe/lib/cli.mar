@@ -2,7 +2,7 @@
         .IDENT  /V0.1/
 ;
 ; CLI$DCL_PARSE parses a command against command tables that vcdu
-; compiled from CLD (ADR-0017, vtools/docs/command-tables.md), as VMS's
+; compiled from CLD (ADR-0017, crosstools/vtools/docs/command-tables.md), as VMS's
 ; DCL does, into a result block. CLI$PRESENT and CLI$GET_VALUE answer
 ; from the block of the last parse in this image or, if there was none,
 ; from the one DCL parsed and $IMGACT copied to VA$C_CLI_RESULT. build.rs

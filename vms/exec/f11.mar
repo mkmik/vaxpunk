@@ -2,7 +2,7 @@
         .IDENT  /V0.2/
 ;
 ; Each disk has a VCB: DKA0:, the system disk, a Files-11 ODS-2 volume
-; (ods/docs/) that the PAL reads a block at a time with READLBLK; DKB0:,
+; (crosstools/ods/docs/) that the PAL reads a block at a time with READLBLK; DKB0:,
 ; the data disk, which the PAL also writes, with WRITELBLK; and MDA0:,
 ; the ramdisk (mddriver.mar). The file system can write the last two.
 ; DK$FDT is their driver, for $QIO's reads and writes by LBN, and its

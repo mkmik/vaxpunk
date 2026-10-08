@@ -300,7 +300,7 @@ though several are already items there for other reasons.
 | --- | --- | --- | --- |
 | The machine has 1,024 pages, 4 MB, and about 3.3 MB are free after boot | `PFN_COUNT` in `pal/src/main.c`; PRD-0003 item 39 | Everything: the 256 MB default is about 75 times what is free | Frame caps in a CNode of their own. The 256 MB untyped the PAL retypes from then puts the ceiling near 64-128 MB |
 | The image activator reads the whole image file into nonpaged pool, which is 512 KB for the whole system | `FIL$OPENFILE` in `f11.mar`; `POOL_PAGES` in `memory.mar` | WASMRUN.EXE: 20,000-40,000 lines of MACRO-32 is likely 300-600 KB of code. `edit.mar`, the largest program today, is 44 KB of source | Map an image's sections page by page, as the `ponytail:` note there says |
-| No floating point: `vmacro` has no F/D/G instructions or IEEE built-ins, and `vasm` encodes no FP arithmetic, so raw ARM64 can't stand in | `vtools/docs/macro32.md`, `vtools/docs/assembler.md` | M3 | FP encodings in `vasm`, then IEEE built-ins in `vmacro`. Cheaper than soft-float on ARM64 |
+| No floating point: `vmacro` has no F/D/G instructions or IEEE built-ins, and `vasm` encodes no FP arithmetic, so raw ARM64 can't stand in | `crosstools/vtools/docs/macro32.md`, `crosstools/vtools/docs/assembler.md` | M3 | FP encodings in `vasm`, then IEEE built-ins in `vmacro`. Cheaper than soft-float on ARM64 |
 | A Files-11 volume holds at most 4,096 blocks, 2 MB | PRD-0003 item 22 | Go modules, several MB each, can't be stored | Clusters and multi-block bitmaps |
 
 **What decides the order**

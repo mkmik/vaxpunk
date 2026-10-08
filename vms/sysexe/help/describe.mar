@@ -2,7 +2,7 @@
         .IDENT  /V0.2/
 ;
 ; HELP$TOPIC describes the commands of a command table (ADR-0017,
-; vtools/docs/command-tables.md) for a HELP [topic] command: DCL's HELP,
+; crosstools/vtools/docs/command-tables.md) for a HELP [topic] command: DCL's HELP,
 ; in HELP.EXE, with DCL$TABLES, and the TCPIP> prompt's, in TCPIP.EXE,
 ; which build.rs link this module into. With no topic it lists each verb
 ; with its parameters. HELP verb describes each verb whose name starts

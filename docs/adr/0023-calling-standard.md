@@ -15,18 +15,18 @@ longwords and preserved in full, `n(AP)` read from an argument list the
 prologue homes at `32(FP)` when the routine uses AP, JSB a native call,
 and DEC's 64-bit extensions under DEC's names.
 The standard is [DESIGN-0004](../design/0004-calling-standard.md); what
-DEC did is in `vtools/docs/amacro.md`.
+DEC did is in `crosstools/vtools/docs/amacro.md`.
 
 ## Context
 
-`vmacro` calls as the VAX did, a convention `vtools/docs/macro32.md`
+`vmacro` calls as the VAX did, a convention `crosstools/vtools/docs/macro32.md`
 calls provisional. Three things need a real one: BLISS-64
 ([PRD-0004](../prd/0004-bliss64-compiler.md)) must call MACRO-32 and be
 called by it; 64-bit code needs arguments that hold 64-bit addresses;
 and C or Fortran, if they come, will come from compilers that speak
 AAPCS64.
 
-OpenVMS solved this three times (`vtools/docs/amacro.md`). On Alpha, DEC
+OpenVMS solved this three times (`crosstools/vtools/docs/amacro.md`). On Alpha, DEC
 wrote the calling standard to fit VAX code: R2-R15 saved, so VAX R2-R11
 stayed where they were. On Itanium and x86-64, VMS took the platform's
 conventions and added what VMS needs: an argument count with the

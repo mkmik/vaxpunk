@@ -2,7 +2,7 @@
         .IDENT  /V0.1/
 ;
 ; A relative file is a prologue block and buckets of cells, cell n
-; holding record number n, from 1 (ods/docs/relative.md): a control byte,
+; holding record number n, from 1 (crosstools/ods/docs/relative.md): a control byte,
 ; DLC$V_REC if it has a record and DLC$V_DELETED if that was deleted, a
 ; VAR or VFC record's size, and the record, in a cell big enough for
 ; FAB$W_MRS bytes. The prologue keeps the first bucket's VBN, the highest

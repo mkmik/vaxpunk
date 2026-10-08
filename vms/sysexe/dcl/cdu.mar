@@ -3,7 +3,7 @@
 ;
 ; CDU$COMPILE is the Command Definition Utility on vaxpunk: DCL's SET
 ; COMMAND compiles a .CLD file with it into command tables of the format
-; vcdu writes (vtools/docs/command-tables.md), which CLI$DCL_PARSE parses
+; vcdu writes (crosstools/vtools/docs/command-tables.md), which CLI$DCL_PARSE parses
 ; with (ADR-0018). It reads the language as vcdu does: the same
 ; statements and clauses, the same defaults, and the same checks, but
 ; ROUTINE, which needs an address, as VMS's SET COMMAND without /OBJECT

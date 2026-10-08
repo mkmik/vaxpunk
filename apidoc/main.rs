@@ -15,7 +15,7 @@
 //!   branches to it, the code that runs on into it and the routines that use
 //!   its address, and whether it comes back with `RSB`;
 //! - the system service vector, the SERVICE and STUB lines of syssrv.mar;
-//! - the macro libraries (vtools/lib/*.mlb, vms/sysexe/*.mlb): the comment
+//! - the macro libraries (crosstools/vtools/lib/*.mlb, vms/sysexe/*.mlb): the comment
 //!   block right above each `.MACRO`, and the `SYM = value ; meaning` lines of
 //!   the $xxxDEF macros;
 //! - the PAL calls: the tables of DESIGN-0001 (docs/design/0001-pal-interface.md).
@@ -720,7 +720,7 @@ impl Api {
     fn load(root: &Path) -> Api {
         let (mut routines, mut data, mut macros) = (vec![], vec![], vec![]);
         let mut exec = glob(&root.join("vms/exec"), "mar");
-        exec.push(root.join("vtools/lib/consolio.mar"));
+        exec.push(root.join("crosstools/vtools/lib/consolio.mar"));
         let mut mods: Vec<Module> = exec
             .iter()
             .enumerate()
@@ -757,7 +757,7 @@ impl Api {
             m.image = true;
             mods.push(m);
         }
-        let mut lib_paths = glob(&root.join("vtools/lib"), "mlb");
+        let mut lib_paths = glob(&root.join("crosstools/vtools/lib"), "mlb");
         lib_paths.extend(glob(&root.join("vms/sysexe"), "mlb"));
         let libs: Vec<Lib> = lib_paths
             .iter()

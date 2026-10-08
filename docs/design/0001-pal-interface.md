@@ -66,7 +66,7 @@ from 0 up for these. Nothing else is mapped. The boot context starts with:
 
 ### The restart parameter block
 
-`$RPBDEF` in `vtools/lib/lib.mlb`, longwords:
+`$RPBDEF` in `crosstools/vtools/lib/lib.mlb`, longwords:
 
 | Offset | Field | Holds |
 | --- | --- | --- |
@@ -363,7 +363,7 @@ The root task then prints `root task done` and suspends itself.
 ## How MACRO-32 calls it
 
 vmacro compiles privileged instructions into PAL calls, as AMACRO compiled
-them into `CALL_PAL` (`vtools/docs/macro32.md`). The executive writes VAX
+them into `CALL_PAL` (`crosstools/vtools/docs/macro32.md`). The executive writes VAX
 source:
 
 ```
@@ -388,7 +388,7 @@ and gets:
   the call; x7 isn't a VAX register. Every other register, and the VAX's
   view of R0, comes back unchanged.
 - **Constants.** The processor register must be a constant, as in AMACRO.
-  `$PRDEF` in `vtools/lib/lib.mlb` defines the VAX's `PR$_` names.
+  `$PRDEF` in `crosstools/vtools/lib/lib.mlb` defines the VAX's `PR$_` names.
 
 | VAX instruction | PAL call |
 | --- | --- |

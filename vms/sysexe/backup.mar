@@ -90,7 +90,7 @@ BSA$K_FILESIZE = 46                     ; the blocks allocated
 BSA$K_UIC = 47
 BSA$K_FPRO = 48
 BSA$K_RECATTR = 52                      ; the header's 32 bytes of them
-; Those record attributes, a file header's (ods/docs/file-header.md).
+; Those record attributes, a file header's (crosstools/ods/docs/file-header.md).
 FAT$B_RTYPE = 0                         ; organization and record format
 FAT$B_RATTRIB = 1
 FAT$W_RSIZE = 2                         ; the longest record

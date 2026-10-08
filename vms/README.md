@@ -18,6 +18,6 @@ instructions, which vmacro compiles into PAL calls
 image.
 
 The macro libraries (`lib.mlb`, `starlet.mlb`) are in
-[vtools/lib](../vtools/lib). [DESIGN-0002](../docs/design/0002-executive-processes.md)
+[crosstools/vtools/lib](../crosstools/vtools/lib). [DESIGN-0002](../docs/design/0002-executive-processes.md)
 describes how the executive works, and [boot.md](../docs/boot.md) walks
 through what it does at boot.

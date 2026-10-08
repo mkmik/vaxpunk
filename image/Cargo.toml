@@ -16,4 +16,4 @@ vms = { path = "../vms" }
 shim = { path = "../pal/shim" }
 
 [dev-dependencies]
-ods-image = { path = "../ods/crates/ods-image" }
+ods-image = { path = "../crosstools/ods/crates/ods-image" }

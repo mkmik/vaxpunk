@@ -88,7 +88,7 @@ system connect to its own address.
 ## The port
 
 The executive's and the component's view of the same 17 pages,
-`pal/tcpip/include/port.h` and `$PORTDEF` in `vtools/lib/lib.mlb`, which match:
+`pal/tcpip/include/port.h` and `$PORTDEF` in `crosstools/vtools/lib/lib.mlb`, which match:
 
 | Offset | What |
 | --- | --- |

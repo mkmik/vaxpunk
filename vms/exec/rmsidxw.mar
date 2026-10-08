@@ -2,7 +2,7 @@
         .IDENT  /V0.1/
 ;
 ; rmsidx.mar finds records; this module adds, changes and removes them
-; (ods/docs/indexed.md). $PUT puts a record in its data bucket in
+; (crosstools/ods/docs/indexed.md). $PUT puts a record in its data bucket in
 ; primary key order, and a pointer to it in each alternate key's SIDR,
 ; making the SIDR if the key is new. A full bucket splits in two along
 ; its level: the records after the split go to a new bucket, which the
