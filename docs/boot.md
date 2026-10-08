@@ -268,6 +268,10 @@ interpreter. It is linked high in P1, which tells the executive it is one
   header marked a directory and one block (`FIL$MKDIR`). `COPY`,
   `DIRECTORY` and `SET DEFAULT` then take `[SUB.DEEP]` as any other.
   `DELETE` refuses a directory with files in it (`%RMS-E-MKD`).
+- `CREATE/LOG DKB0:[SUB.DEEP]NOTE.TXT`, without `/DIRECTORY`, runs the
+  same `CREATE.EXE`, which `$CREATE`s a text file there, variable length
+  records with carriage return carriage control, then reads lines from
+  `SYS$INPUT` and `$PUT`s each, until CTRL/Z, echoed as `*EXIT*`.
 - `DISMOUNT DKB0:` runs `DISMOUNT.EXE`, whose `$DISMOU` makes the file
   system forget the volume, unless a process has a file on it open, so
   it can be mounted again, or initialized afresh. The system disk can't
@@ -418,8 +422,8 @@ a `DIR/BRIEFLY`, a qualifier `DIRECTORY` doesn't have, `HELP SHOW`, and
 a `DEFINE/SYSTEM` it looks up with `SHOW LOGICAL/SYSTEM`, then
 initializes, with `/PROTECTION`, and mounts `DKB0:`, made afresh, which `SYSTARTUP_VMS.COM`
 couldn't mount at boot, copies a file there and lists
-it, makes `[SUB.DEEP]` there with `CREATE/DIRECTORY` and copies a file
-into it, runs `SHOW DEVICES`, tries to dismount `DKA0:`, dismounts
+it, makes `[SUB.DEEP]` there with `CREATE/DIRECTORY`, copies a file
+into it and types another with `CREATE`, runs `SHOW DEVICES`, tries to dismount `DKA0:`, dismounts
 `DKB0:`, fails to list it, mounts it again, without a label, lists
 `[SUB.DEEP]`, fails to delete `SUB.DIR`, runs `SHOW PROCESS` and `SHOW SYSTEM`, then runs
 CTRLC and types CTRL/C, types CTRL/Y at the prompt, stops SPIN, with a

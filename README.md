@@ -129,7 +129,8 @@ files, `BACKUP` saves them in a save set VMS's BACKUP reads, and lists and
 restores one, `INITIALIZE`, `MOUNT` and `DISMOUNT` make, mount and dismount a
 volume on the data disk, `DKB0:`, or the ramdisk, `MDA0:`, which
 `SYSTARTUP_VMS.COM` makes and mounts at boot, the disks they can write ([ADR-0009](docs/adr/0009-ramdisk-writable-files-11.md)), where
-`CREATE/DIRECTORY [A.B]` makes directories, `SET COMMAND file` adds the
+`CREATE/DIRECTORY [A.B]` makes directories, `CREATE file` a text file
+of the lines typed up to CTRL/Z, `SET COMMAND file` adds the
 verbs a `.CLD` file defines (`SET COMMAND SYS$MANAGER:DCLTEST`, then
 `GREET world`), `name := $image` makes a foreign command, `HELP` lists
 the commands and `LOGOUT` ends the process:
