@@ -84,7 +84,7 @@ const SYSTEM_DISK: Phase = Phase {
         ),
     ],
     lines: &[
-        "  HOME:\n  =   MDA0:[000000]\n  =   SYS$MANAGER\n",
+        "\n  =   MDA0:[000000]\n  =   SYS$MANAGER\n",
         " \\FOO\\",
         "PING.EXE;1          PONG.EXE;1",
         "Total of 2 files.",
@@ -124,9 +124,12 @@ const SYSTEM_DISK: Phase = Phase {
 /// CLITEST's checks of the command parser, a qualifier DIRECTORY doesn't
 /// have, HELP SHOW, a logical name in the system table, and a line edited
 /// and one recalled with the up arrow. Then a search list, HOME, of the
-/// ramdisk and SYS$MANAGER: SET DEFAULT to it, a COPY that makes the file in
-/// the first, a DIRECTORY that finds it in both, and a TYPE that finds a
-/// file in the second.
+/// ramdisk and SYS$MANAGER: SET DEFAULT to it, which keeps the default
+/// directory, a COPY that makes the file in the first, a DIRECTORY that
+/// finds it in both, a TYPE that finds a file in the second, SET DEFAULT
+/// to it without a colon, a DIRECTORY of a search list with one inside it,
+/// and a TYPE of a logical name that is a file's specification, as on
+/// OpenVMS.
 const RAMDISK: Phase = Phase {
     name: "ramdisk",
     secs: 30,
@@ -172,7 +175,17 @@ const RAMDISK: Phase = Phase {
             "Grand total of 2 directories",
             1,
             concat!(
-                "TYPE DCLTEST.CLD\rSET DEFAULT MDA0:[000000]\rDELETE WELCOME.TXT;1\r",
+                "TYPE DCLTEST.CLD\rSET DEFAULT HOME\rSHOW DEFAULT\r",
+                "DEFINE INNER SYS$MANAGER,MDA0:[000000]\r",
+                "DEFINE OUTER SYS$SYSDEVICE:[SYSEXE],INNER\rDIR OUTER:WELCOME.TXT\r",
+            ),
+        ),
+        (
+            "Grand total of 2 directories",
+            2,
+            concat!(
+                "DEFINE F MDA0:[000000]WELCOME.TXT\rTYPE/HEAD=2 F\r",
+                "SET DEFAULT MDA0:[000000]\rDELETE WELCOME.TXT;1\r",
                 "DEASSIGN HOME\rSHOW LOGICAL HOME\r",
             ),
         ),
@@ -201,6 +214,13 @@ const RAMDISK: Phase = Phase {
             "Grand total of 2 directories, 2 files.",
         ),
         "! DCLTEST.CLD: GREET, a verb DCLTEST.COM adds with SET COMMAND.",
+        "$ SET DEFAULT HOME\n$ SHOW DEFAULT\n  HOME:[000000]\n  =   MDA0:[000000]\n  =   SYS$MANAGER\n",
+        concat!(
+            "Directory DKA0:[SYSMGR]\n\nWELCOME.TXT;1\n\nTotal of 1 file.\n\n",
+            "Directory MDA0:[000000]\n\nWELCOME.TXT;1\n\nTotal of 1 file.\n\n",
+            "Grand total of 2 directories, 2 files.",
+        ),
+        "$ TYPE/HEAD=2 F\n\n        Welcome to vaxpunk",
         "no translation for logical name HOME",
     ],
 };

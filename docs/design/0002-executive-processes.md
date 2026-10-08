@@ -1039,18 +1039,23 @@ takes each part from the first that has it, in capitals, into the
 expanded specification, checks it, and walks
 the directory from the MFD, each name `NAME.DIR;1` in the one before
 (`[000000]` is the MFD). The images' default is `SYS$SYSTEM:` instead.
-A device that is a search list stands for each of its strings in turn.
-`$OPEN`, `$ERASE` and the image activator try each until one has the
-file (`RMS$LOCATE`). `$CREATE` makes the file in the first. `$PARSE`
+A device that is a search list stands for each of its strings in turn,
+as on OpenVMS (checked against V8.4-2L1 in AXPbox). `$OPEN`, `$ERASE`
+and the image activator try each until one has the file
+(`RMS$LOCATE`). `$CREATE` makes the file in the first. `$PARSE`
 expands with the first and sets `NAM$M_SEARCH_LIST`, and `$SEARCH` then
 parses the FAB's specification again with each string, keeping which
-one it is in, in bits 24-30 of `NAM$L_WCC`. Only the first search list
-that the device's translations reach is stepped through, and only in
-the table whose device the expanded string takes. An equivalence that
-is only a name, `SYS$MANAGER`, is a device. `SET DEFAULT HOME:` leaves
-`SYS$DISK` as `HOME:` and the process with no default directory (an
-empty one to `$SETDDIR`, which is vaxpunk's), so that each string's own
-directory holds.
+one it is in, in bits 19-30 of `NAM$L_WCC`. A string that names another
+search list stands for that list's strings, depth first, so
+`OUTER = DKA0:[000000],INNER` is `DKA0:[000000]` and then each of
+`INNER`'s. Only the table whose device the expanded string takes is
+stepped through. A specification or a string that is only a name is a
+device if the name is a logical name, so `TYPE F` reads the file `F`
+names; otherwise it stays a file name. The process's default directory
+fills in only if `SYS$DISK`'s translation gives no directory, so after
+`SET DEFAULT HOME:`, which keeps the default directory, each string's
+own directory holds, and `SHOW DEFAULT` says `HOME:[SYSMGR]` and then
+each string.
 ponytail: no rooted directories or concealed devices; the expanded
 string has the device a name translates to, as VMS's does without
 them.
