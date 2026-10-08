@@ -49,8 +49,6 @@
 ; file; no file sharing or locking or concealed devices, ASTs or
 ; completion routines, and $SEARCH finds its place again by counting the
 ; matches it skips, and the search list string it is in, in NAM$L_WCC.
-; Only the first search list a device's translations meet is stepped
-; through; one inside it stands for its first string.
 ;
         .LIBRARY "lib.mlb"
         .LIBRARY "starlet.mlb"
@@ -91,9 +89,9 @@ MFD = 4                                 ; the MFD's file number
 MAXIFI = 15                             ; PCB$A_IFAB's slots, 1-15
 RESFILES = 9                            ; the volume's own files, 1-9
 WCC_FOUND = ^X80000000                  ; in NAM$L_WCC: $SEARCH found a file,
-WCC_V_LIST = 24                         ; the search list string it is in,
-WCC_S_LIST = 7
-WCC_SKIP = ^XFFFFFF                     ; and the matches it skips there
+WCC_V_LIST = 19                         ; the search list string it is in,
+WCC_S_LIST = 12
+WCC_SKIP = ^X7FFFF                      ; and the matches it skips there
 FAT$B_RTYPE = 20
 FAT$B_RATTRIB = 21
 FAT$W_RSIZE = 22
@@ -125,7 +123,9 @@ SPECT:  .BLKQ   5
 DEFT:   .BLKQ   5
 SYST:   .BLKQ   5
 EQUT:   .BLKQ   5
-DEVBUF: .BLKB   3*256                   ; SPECT's, DEFT's and SYST's device, when XLATE adds its colon
+DEVBUF: .BLKB   3*256                   ; SPECT's, DEFT's and SYST's device, when NAMEDEV adds its colon
+SYSDIRQ:                                ; SYST's directory, until XLATE has looked for one
+        .BLKQ   1
 RMS$T_EXP::                             ; the expanded specification
         .BLKB   256
 EXPLEN: .LONG   0
@@ -136,6 +136,8 @@ WILD:   .LONG   0                       ; 1 if it has a wildcard
 SLIDX:  .LONG   0                       ; which string of a search list RMS$PARSE takes
 SLON:   .LONG   0                       ; 1 until XLATE meets the table with the device
 SLOWN:  .LONG   0                       ; 1 while XLATE translates that table's
+SLTOP:  .LONG   0                       ; 1 until PICK has counted its strings
+SLREM:  .LONG   0                       ; PICK's: which string, in what is left
 SLMORE: .LONG   0                       ; 1 if the search list has strings after SLIDX
 CREDIR: .LONG   0                       ; 0, or 1 + the directories DIRWALK made
 RMS$AB_DIRHDR::                         ; its directory's header
@@ -167,7 +169,10 @@ DOTDIR: .ASCII  ".DIR"
 ; one, R3 = its length, 0 if there is none, R4 = the system's default,
 ; .ASCIC. Expands the specification into RMS$T_EXP, each one's device
 ; translated (XLATE), the first string of a search list, the parts it leaves
-; out taken from the default, then from the system's, a relative
+; out taken from the default, then from the system's, whose directory,
+; the process's default one, only if its device's translation gives
+; none, as on VMS: SYS$DISK HOME:, a search list, with each string's
+; directory, a relative
 ; directory made absolute (RESOLVE), checks it, finds
 ; its directory and reads the directory's header into RMS$AB_DIRHDR. R0 =
 ; RMS$_NORMAL, RMS$_SYN, RMS$_DEV, RMS$_DIR, RMS$_FNM, RMS$_VER, RMS$_DNF,
@@ -207,7 +212,12 @@ PARSEIDX:
         MOVAQ   SYST, R2
         BSBW    SPLIT
         BLBC    R0, 10$
+        MOVQ    SYST+8, SYSDIRQ         ; the default directory: VMS's, only if
+        CLRQ    SYST+8                  ; SYS$DISK's names give none
         BSBW    XLATE
+        TSTL    SYST+12
+        BNEQ    10$
+        MOVQ    SYSDIRQ, SYST+8
 10$:    ADDL2   #12, SP
         BLBC    R0, 20$
         BSBW    RESOLVE
@@ -305,21 +315,26 @@ SPLIT:
 ; LNM$FILE_DEV, without an underscore before it, up to LNM$C_MAXDEPTH
 ; times, splits the equivalence string into EQUT: its device becomes the
 ; table's, and its other parts fill in those the table leaves out.
-; SYS$SYSTEM:DCL.EXE is DKA0:[SYSEXE]DCL.EXE. An equivalence that is
-; only a name, DKA0, is a device, copied with its colon to the table's
-; DEVBUF. The equivalence is the
-; first string of a search list, but in the first table with a device,
-; whose device MERGE takes: there, of the first search list, the one
-; SLIDX says, and SLMORE = 1 if there are more. R0 = RMS$_NORMAL, SPLIT's
-; error, or RMS$_NMF past the list's last. IPL$_SYNCH. Uses R0-R9.
+; SYS$SYSTEM:DCL.EXE is DKA0:[SYSEXE]DCL.EXE. A table, or an equivalence,
+; that is only a name is a device if the name is a logical name
+; (NAMEDEV): TYPE F with F a file's specification, or a search list's
+; string that names another. Of a search list the equivalence is the
+; first string, but in the first table with a device, whose device MERGE
+; takes: there, the string SLIDX says counting each string of a search
+; list inside it as VMS does, one after another (PICK), and SLMORE = 1 if
+; there are more. R0 = RMS$_NORMAL, SPLIT's error, or RMS$_NMF past the
+; last. IPL$_SYNCH. Uses R0-R9.
 XLATE:
         .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5, R6, R7, R8, R9>
         MOVL    R2, R8
+        BSBW    NAMEDEV
         CLRL    SLOWN
         TSTL    4(R8)
         BEQL    5$
         MOVL    SLON, SLOWN
+        MOVL    SLON, SLTOP
         CLRL    SLON
+        MOVL    SLIDX, SLREM
 5$:     MOVL    #LNM$C_MAXDEPTH, R9
 10$:    MOVL    (R8), R6                ; the device, without its colon
         SUBL3   #1, 4(R8), R7
@@ -331,42 +346,19 @@ XLATE:
         BEQL    80$
         MOVL    R1, R5
         CLRL    R0
-        BSBW    LNM$EQUIV               ; R0 = the first string, R1 = the last's index
+        BSBW    LNM$EQUIV               ; R0 = the first string
         TSTL    SLOWN
         BEQL    15$
-        TSTL    R1
-        BEQL    15$                     ; not a search list
-        CLRL    SLOWN
-        CMPL    SLIDX, R1
-        BGTRU   85$
-        BEQL    12$
-        MOVL    #1, SLMORE
-12$:    MOVL    SLIDX, R0
-        MOVL    R5, R1
-        BSBW    LNM$EQUIV
+        BSBW    PICK
+        TSTL    R0
+        BEQL    85$
 15$:    MOVZBL  (R0)+, R1
         MOVAQ   EQUT, R2
         BSBW    SPLIT
         BLBC    R0, 90$
-        TSTL    EQUT+4                  ; only a name: a device without its colon
-        BNEQ    17$
-        TSTL    EQUT+12
-        BNEQ    17$
-        BISL3   EQUT+28, EQUT+36, R0
-        BNEQ    17$
-        MOVL    EQUT+20, R6
-        BEQL    17$
-        MOVAB   SPECT, R0               ; the table's DEVBUF
-        SUBL3   R0, R8, R0
-        DIVL2   #40, R0
-        ASHL    #8, R0, R0
-        MOVAB   DEVBUF[R0], R7
-        MOVC3   R6, @EQUT+16, (R7)
-        MOVB    #^A/:/, (R3)
-        MOVL    R7, EQUT
-        ADDL3   #1, R6, EQUT+4
-        CLRQ    EQUT+16
-17$:    MOVQ    EQUT, (R8)
+        MOVAQ   EQUT, R2
+        BSBW    NAMEDEV
+        MOVQ    EQUT, (R8)
         MOVL    #1, R0
 20$:    MOVAQ   (R8)[R0], R1
         TSTL    4(R1)
@@ -380,6 +372,160 @@ XLATE:
 85$:    MOVL    #RMS$_NMF, R0
 90$:    MOVL    R8, R2
         RSB
+
+; NAMEDEV: R2 = a table of parts, R8 = the table, SPECT, DEFT or SYST,
+; XLATE translates. If the parts are only a name, without an underscore
+; before it, and the name is a logical name, it becomes the device, with
+; its colon, in the table's DEVBUF. IPL$_SYNCH. Uses R0-R7.
+NAMEDEV:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5, R6, R7>
+        TSTL    4(R2)
+        BNEQ    90$
+        TSTL    12(R2)
+        BNEQ    90$
+        BISL3   28(R2), 36(R2), R0
+        BNEQ    90$
+        MOVL    20(R2), R7
+        BEQL    90$
+        CMPL    R7, #LNM$C_NAMLENGTH
+        BGTRU   90$
+        MOVL    16(R2), R6
+        CMPB    (R6), #^A/_/
+        BEQL    90$
+        PUSHL   R2
+        BSBW    LNM$TRNLOG
+        MOVL    (SP)+, R2
+        TSTL    R1
+        BEQL    90$
+        MOVAB   SPECT, R0               ; the table's DEVBUF
+        SUBL3   R0, R8, R0
+        DIVL2   #40, R0
+        ASHL    #8, R0, R0
+        MOVAB   DEVBUF[R0], R0
+        PUSHR   #^M<R0, R2>
+        MOVC3   R7, (R6), (R0)
+        MOVB    #^A/:/, (R3)
+        POPR    #^M<R0, R2>
+        MOVL    R0, (R2)
+        ADDL3   #1, R7, 4(R2)
+        CLRQ    16(R2)
+90$:    RSB
+
+; PICK: R5 = the logical name block of a name XLATE translates, R9 = how
+; many more translations it may make. R0 = the string of it SLREM says,
+; counting a string that names a search list as its strings, each as
+; many as it has, depth first, as VMS's RMS goes through nested search
+; lists; SLREM becomes the string's own count. The first time, SLMORE = 1
+; if there are more after SLIDX. R0 = 0 past the last. IPL$_SYNCH. Uses
+; R0-R3.
+PICK:
+        .JSB_ENTRY  SCRATCH=<R2, R3>
+        MOVL    R9, R2
+        TSTL    SLTOP
+        BEQL    5$
+        CLRL    SLTOP
+        MOVL    R5, R1
+        BSBW    LEAVES                  ; how many in all
+        CMPL    SLREM, R0
+        BGEQU   80$
+        ADDL3   #1, SLREM, R1
+        CMPL    R1, R0
+        BGEQU   5$
+        CMPL    R1, #1@WCC_S_LIST       ; as many as NAM$L_WCC holds
+        BGEQU   5$
+        MOVL    #1, SLMORE
+5$:     CLRL    R3
+10$:    MOVL    R3, R0
+        MOVL    R5, R1
+        BSBW    LNM$EQUIV
+        CMPL    R3, R1
+        BGTR    80$
+        PUSHL   R0
+        BSBW    STRLEAVES
+        CMPL    SLREM, R0
+        BLSSU   20$
+        SUBL2   R0, SLREM
+        TSTL    (SP)+
+        INCL    R3
+        BRB     10$
+20$:    MOVL    (SP)+, R0
+        RSB
+80$:    CLRL    R0
+        RSB
+
+; LEAVES: R1 = a logical name block, R2 = how many more translations
+; there may be. R0 = how many strings it stands for, each of its own
+; counted as STRLEAVES does. IPL$_SYNCH. Keeps every other register.
+LEAVES:
+        .JSB_ENTRY
+        PUSHR   #^M<R1, R3, R4>
+        CLRQ    R3                      ; R3 = the string, R4 = the count
+10$:    MOVL    R3, R0
+        MOVL    (SP), R1
+        BSBW    LNM$EQUIV
+        CMPL    R3, R1
+        BGTR    80$
+        BSBB    STRLEAVES
+        ADDL2   R0, R4
+        INCL    R3
+        BRB     10$
+80$:    MOVL    R4, R0
+        POPR    #^M<R1, R3, R4>
+        RSB
+
+; STRLEAVES: R0 = an equivalence string, .ASCIC, R2 = how many more
+; translations there may be. R0 = how many strings it stands for: those
+; of its device's logical name, if it has one and there may be another
+; translation, else 1. IPL$_SYNCH. Keeps every other register.
+STRLEAVES:
+        .JSB_ENTRY
+        PUSHR   #^M<R1, R2, R3, R6, R7>
+        BSBB    ELDEV
+        TSTL    R7
+        BEQL    80$
+        DECL    R2
+        BLEQ    80$
+        PUSHL   R2
+        BSBW    LNM$TRNLOG
+        MOVL    (SP)+, R2
+        TSTL    R1
+        BEQL    80$
+        BSBB    LEAVES
+        BRB     90$
+80$:    MOVL    #1, R0
+90$:    POPR    #^M<R1, R2, R3, R6, R7>
+        RSB
+
+; ELDEV: R0 = an equivalence string, .ASCIC. R6 = the device XLATE would
+; translate next, without its colon, R7 = its length: up to a colon, or
+; all of it if it is only a name; R7 = 0 if it has none, or if an
+; underscore is before it. Uses R0 and R1.
+ELDEV:
+        .JSB_ENTRY  OUTPUT=<R6, R7>
+        MOVZBL  (R0)+, R1
+        MOVL    R0, R6
+        CLRL    R7
+10$:    CMPL    R7, R1
+        BGEQU   40$                     ; only a name
+        MOVZBL  (R6)[R7], R0
+        CMPB    R0, #^A/:/
+        BEQL    40$
+        CMPB    R0, #91                 ; [
+        BEQL    80$
+        CMPB    R0, #60                 ; <
+        BEQL    80$
+        CMPB    R0, #^A/./
+        BEQL    80$
+        CMPB    R0, #59                 ; a semicolon
+        BEQL    80$
+        INCL    R7
+        BRB     10$
+40$:    TSTL    R7
+        BEQL    90$
+        CMPB    (R6), #^A/_/
+        BNEQ    90$
+80$:    CLRL    R7
+90$:    RSB
 
 ; RESOLVE: makes the directories in SPECT and DEFT absolute, as VMS's RMS
 ; does: the default's relative to the system's, the specification's to the
@@ -2128,8 +2274,6 @@ RMS$RUNDOWN::
 ; the word at oldlen. Each argument may be 0. newdir is [dir.dir...] or
 ; <...>, up to 63 characters, not relative: RMS$_DIR if it isn't, SS$_ACCVIO if the
 ; caller can't read or write an argument. It isn't looked for on the disk.
-; An empty newdir, vaxpunk's, leaves no default directory: a file's then
-; comes from SYS$DISK's logical name, a string of a search list each.
         .ENTRY  EXE$SETDDIR, ^M<R2, R3, R4, R5, R6>
         DSBINT  #IPL$_SYNCH
         MOVL    SCH$GL_CURPCB, R6
@@ -2158,11 +2302,7 @@ RMS$RUNDOWN::
         BLBC    R0, 90$
         MOVZWL  (R1), R2
         MOVL    4(R1), R1
-        TSTL    R2
-        BNEQ    32$
-        CLRB    (R6)
-        BRB     70$
-32$:    CMPL    R2, #3
+        CMPL    R2, #3
         BLSSU   85$
         CMPL    R2, #63
         BGTRU   85$
