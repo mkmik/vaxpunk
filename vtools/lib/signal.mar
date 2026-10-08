@@ -3,7 +3,7 @@
 ;
 ; LIB$SIGNAL, LIB$STOP, LIB$ESTABLISH, LIB$REVERT, LIB$SIG_TO_RET and
 ; SYS$UNWIND for test programs under vrun, which has no executive: the
-; executive's (roottask/sysexe/lib/signal.mar and roottask/exec/
+; executive's (vms/sysexe/lib/signal.mar and vms/exec/
 ; sysunwind.mar) without access modes, probes or PAL calls, so that the
 ; same BLISS and MACRO-32 sources handle conditions under vrun as on
 ; vaxpunk and on OpenVMS. EXE$SIGNAL searches the frames for handlers

@@ -1,0 +1,13 @@
+[package]
+name = "pal"
+description = "The PAL, the seL4 root task the executive runs on, freestanding C"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lib]
+path = "lib.rs"
+
+[dependencies]
+kernel = { path = "kernel" }
+tcpip = { path = "tcpip" }

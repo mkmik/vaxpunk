@@ -33,7 +33,7 @@ xterm.open(document.getElementById('terminal'));
 const {master, slave} = openpty();
 xterm.loadAddon(master);
 
-// The machine of scripts/run-qemu.sh and kernel/qemu.env, which seL4's memory map is compiled
+// The machine of scripts/run-qemu.sh and pal/kernel/qemu.env, which seL4's memory map is compiled
 // for, on a LAN of the browser's other demo tabs (lan.js) in place of QEMU's user network.
 const net = lan();
 const Module = {

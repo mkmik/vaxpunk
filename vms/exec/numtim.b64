@@ -6,7 +6,7 @@ BEGIN
 ! units since 17-NOV-1858 00:00 for an absolute time, minus their count
 ! for a delta time. Like $PUTMSG it runs in the caller's mode, so its code
 ! is in the vector, EXEC$VECTOR, which programs in outer modes can run
-! (roottask/exec/syssrv.mar). The first BLISS-64 in the system (PRD-0004
+! (vms/exec/syssrv.mar). The first BLISS-64 in the system (PRD-0004
 ! step 11), compiled by vbliss.
 !
 LIBRARY 'SYS$LIBRARY:STARLET';

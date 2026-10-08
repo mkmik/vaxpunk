@@ -20,7 +20,7 @@
 ;
 ; Services that aren't implemented yet are stubs that return
 ; SS$_ILLSER. An access violation or a reserved instruction in an outer
-; mode is a condition signaled there (roottask/exec/sysunwind.mar), whose
+; mode is a condition signaled there (vms/exec/sysunwind.mar), whose
 ; code is in the vector too: modules after this one add to EXEC$VECTOR,
 ; before EXEC$VECTOREND.
 ;

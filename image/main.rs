@@ -23,7 +23,7 @@ fn boot() -> io::Result<()> {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
     let out = root.join("out");
     fs::create_dir_all(&out)?;
-    for file in [kernel::ELF, shim::ELF, roottask::ELF, roottask::DISK].map(Path::new) {
+    for file in [kernel::ELF, shim::ELF, pal::ELF, vms::DISK].map(Path::new) {
         fs::copy(file, out.join(file.file_name().unwrap()))?;
     }
     let mkesp = Command::new(root.join("image/mkesp.sh")).status()?;

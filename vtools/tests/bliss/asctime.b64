@@ -1,7 +1,7 @@
 MODULE ASCTIME (MAIN = MAIN) =
 BEGIN
 ! $ASCTIM and $NUMTIM on given times: under vrun BLISS-64, the
-! executive's $NUMTIM (roottask/exec/numtim.b64) and lib/asctim.b64's
+! executive's $NUMTIM (vms/exec/numtim.b64) and lib/asctim.b64's
 ! $ASCTIM on it; on OpenVMS, VMS's own, which the oracle runs this against.
 REQUIRE 'PRINT';
 

@@ -1,9 +1,9 @@
 [workspace]
 resolver = "3"
-members = ["ods/crates/*", "vtools/crates/*", "kernel", "shim", "tcpip", "roottask", "image", "apidoc"]
-# kernel, shim, tcpip, roottask and image (boot) build C with the cross toolchain from
+members = ["ods/crates/*", "vtools/crates/*", "pal", "pal/kernel", "pal/shim", "pal/tcpip", "vms", "image", "apidoc"]
+# pal and its crates, and image (boot), build C with the cross toolchain from
 # scripts/setup-host.sh, so a plain cargo build or test leaves them out.
-default-members = ["ods/crates/*", "vtools/crates/*", "apidoc"]
+default-members = ["ods/crates/*", "vtools/crates/*", "vms", "apidoc"]
 
 [workspace.package]
 version = "0.1.0"

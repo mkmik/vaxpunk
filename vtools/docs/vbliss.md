@@ -63,7 +63,7 @@ on the way `PSECT` declarations (each storage class's psect and its
 attributes), `SWITCHES`, `EXTERNAL LITERAL`, `GLOBAL LITERAL`,
 `UNDECLARE`, and undeclared names taken as external with a warning, as
 BLISSA64 takes them. Step 11, the pilot: `$NUMTIM` is BLISS-64,
-`roottask/exec/numtim.b64`, which roottask's `build.rs` compiles into the
+`vms/exec/numtim.b64`, which vms/build.rs compiles into the
 executive and fails on any message or lint warning; SVCTEST checks it at
 boot, and `tests/bliss/asctime.b64` runs it under vrun, with a BLISS-64
 `$ASCTIM` on it (`lib/asctim.b64`), against VMS's own.

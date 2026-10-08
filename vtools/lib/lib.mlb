@@ -343,7 +343,7 @@ DYN$C_TQE = 15                          ; TQE$B_TYPE
         .ENDM   $TQEDEF
 
 ; $ACBDEF: an AST control block, from pool, on its process's AST queue,
-; PCB$Q_ASTQFL, until the AST is delivered (roottask/exec/astdel.mar).
+; PCB$Q_ASTQFL, until the AST is delivered (vms/exec/astdel.mar).
         .MACRO  $ACBDEF
 ACB$L_ASTQFL = 0                        ; the AST queue
 ACB$L_ASTQBL = 4
@@ -359,7 +359,7 @@ DYN$C_ACB = 2                           ; ACB$B_TYPE
         .ENDM   $ACBDEF
 
 ; $VCBDEF: a volume control block: a disk and the Files-11 volume mounted
-; on it, if one is (roottask/exec/f11.mar).
+; on it, if one is (vms/exec/f11.mar).
         .MACRO  $VCBDEF
 VCB$L_STATUS = 0                        ; VCB$V_
 VCB$L_HDRVBN = 4                        ; INDEXF.SYS's VBN of file 1's header
@@ -381,7 +381,7 @@ VCB$V_RAMDISK = 2                       ; the device is the ramdisk, MDA0:, not 
         .ENDM   $VCBDEF
 
 ; $UCBDEF: a unit control block: a device, the requests waiting for it,
-; and its driver (roottask/exec/qio.mar). UCB$L_STS's bits are also
+; and its driver (vms/exec/qio.mar). UCB$L_STS's bits are also
 ; $GETDVI's DVI$_STS.
         .MACRO  $UCBDEF
 UCB$L_IOQFL = 0                         ; IRPs waiting for the device
@@ -446,7 +446,7 @@ DYN$C_IRP = 10                          ; IRP$B_TYPE
         .ENDM   $IRPDEF
 
 ; $PORTDEF: the port, the pages the executive shares with the TCP/IP
-; component below it (tcpip/include/port.h, which this must match;
+; component below it (pal/tcpip/include/port.h, which this must match;
 ; docs/design/0003-tcpip-port.md). Page 0 is the header and two rings of
 ; PORT$K_RING messages, the executive's commands and the component's
 ; responses; page 1 + n is tag n's buffer, for the first PORT$K_BUFFERS.

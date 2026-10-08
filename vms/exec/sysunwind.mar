@@ -22,7 +22,7 @@
 ;
 ; EXE$SRCHANDLER, EXE$SIGNAL, EXE$CATCHALL, $UNWIND and $PUTMSG run in
 ; outer modes, so they are in the vector, EXEC$VECTOR, which this module
-; adds to after syssrv.mar's part (roottask/exec/syssrv.mar).
+; adds to after syssrv.mar's part (vms/exec/syssrv.mar).
 ; ponytail: no exception vectors; a handler's own conditions are searched
 ; for from its frame out through the frames already searched; $UNWIND
 ; restores what frames saved, not what JSB routines they called did.

@@ -1,16 +1,12 @@
 [package]
-name = "roottask"
-description = "The vaxpunk root task, freestanding C"
+name = "vms"
+description = "The OS above the PAL: the executive, the programs it runs and the system disk they go on"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 
 [lib]
 path = "lib.rs"
-
-[dependencies]
-kernel = { path = "../kernel" }
-tcpip = { path = "../tcpip" }
 
 [build-dependencies]
 vasm = { path = "../vtools/crates/vasm" }

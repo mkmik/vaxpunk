@@ -553,7 +553,7 @@ const BACKUP: Phase = Phase {
 };
 
 /// RMSTEST in a directory of its own on DKB0:, whose output must be
-/// OpenVMS's, roottask/sysexe/rmstest.out (checked after the session).
+/// OpenVMS's, vms/sysexe/rmstest.out (checked after the session).
 const RMS: Phase = Phase {
     name: "rms",
     secs: 60,
@@ -765,7 +765,7 @@ fn boot() {
         "SPIN's registers changed"
     );
 
-    let want = fs::read_to_string(root.join("roottask/sysexe/rmstest.out")).unwrap();
+    let want = fs::read_to_string(root.join("vms/sysexe/rmstest.out")).unwrap();
     let first = want.lines().next().unwrap();
     let got: Vec<_> = text[text.find(first).expect("RMSTEST's output")..]
         .lines()

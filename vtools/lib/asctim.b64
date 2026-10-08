@@ -4,7 +4,7 @@ BEGIN
 !
 ! $ASCTIM for programs that run under vrun, from $NUMTIM's numbers
 ! (numtim.b64, the executive's). The system's own $ASCTIM is MACRO-32
-! (roottask/exec/timeschdl.mar); tests/bliss/asctime.b64 runs this one
+! (vms/exec/timeschdl.mar); tests/bliss/asctime.b64 runs this one
 ! against VMS's.
 !
 LIBRARY 'SYS$LIBRARY:STARLET';

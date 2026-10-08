@@ -2,7 +2,7 @@
 
 Oct 1, 2026 · @Marko Mikulicic
 
-How the MACRO-32 executive (`roottask/exec/`) manages memory, creates,
+How the MACRO-32 executive (`vms/exec/`) manages memory, creates,
 schedules and deletes processes, synchronizes, and serves system calls,
 on the PAL interface of [DESIGN-0001](0001-pal-interface.md). It follows
 [ADR-0003](../adr/0003-one-cpu-many-threads.md): processes are threads that
@@ -56,7 +56,7 @@ its code.
 | `rms.mar` | RMS: file specifications, `$PARSE`, `$SEARCH`, `$OPEN`, `$CREATE`, `$CONNECT`, `$GET`, `$PUT`, `$DISCONNECT`, `$CLOSE`, `$ERASE` |
 | `sysunwind.mar` | conditions: the exception handlers, `EXE$SIGNAL`, which calls the condition handlers, `$UNWIND`, the catch-all and `$PUTMSG` |
 
-`roottask/build.rs` links them, with `vtools/lib/consolio.mar`, into
+`vms/build.rs` links them, with `vtools/lib/consolio.mar`, into
 `EXEC.EXE`, in S0 at `0x40010000`. The structures are in `vtools/lib/lib.mlb` (`$PCBDEF`,
 `$CEBDEF`, `$PTEDEF`, `$RPBDEF`, `$VCBDEF`...), what programs need in
 `vtools/lib/starlet.mlb` (`$SSDEF`, `$PRTDEF`, the `$name_S` macros, RMS's
@@ -326,7 +326,7 @@ message files.
 
 [ADR-0017](../adr/0017-command-tables-from-cld-with-vcdu.md): commands are
 defined in CLD, which vcdu compiles into command tables at build time
-(`vtools/docs/command-tables.md`). `CLI`, `roottask/sysexe/lib/cli.mar`,
+(`vtools/docs/command-tables.md`). `CLI`, `vms/sysexe/lib/cli.mar`,
 parses commands with them, and is linked into DCL and into every image:
 
 - **`CLI$DCL_PARSE line, table [,prompt]`** parses a command into the
@@ -414,7 +414,7 @@ It passes a prompt routine at the console, which reads with
     `WRITE`'s expressions are a `$REST_OF_LINE`, which DCL's expression
     code reads.
 - `SET COMMAND file` reads `file.CLD` with RMS and compiles it with
-  `CDU$COMPILE`, `roottask/sysexe/dcl/cdu.mar`, into DCL's P1 data: 16
+  `CDU$COMPILE`, `vms/sysexe/dcl/cdu.mar`, into DCL's P1 data: 16
   KB of tables, 8 files at most.
 - A verb that is a symbol whose value starts with `$`, `name :=
   $image`, is a foreign command: DCL runs `image` with a block that
@@ -1158,14 +1158,14 @@ from there out again, through the frames already searched.
 
 ## The system disk's programs
 
-`roottask/sysexe/` holds the programs in `DKA0:[SYSEXE]`: DCL, DIRECTORY,
+`vms/sysexe/` holds the programs in `DKA0:[SYSEXE]`: DCL, DIRECTORY,
 TYPE, EDIT, COPY, DELETE, INIT, MOUNT, DISMOUNT and CREATE, and those which show the services at
 work, which `cargo test -p boot` runs from DCL's prompt (`RUN STARTUP`,
 `RUN SNOOP`, a bad verb, `DIR [SYSEXE]P%NG`, `TYPE WELCOME.TXT` and an `EDIT WELCOME.TXT`
 session, then
 `SET DEFAULT MDA0:[000000]`, which `SYSTARTUP_VMS.COM` mounted, a `COPY/LOG` to it, which prompts for its
 parameters, an `EDIT` in keypad mode that writes a second version, `DIR`,
-`DELETE`s and `DIR` again, `RUN CLITEST`) and to the end. `roottask/sysmgr/` holds the text files in
+`DELETE`s and `DIR` again, `RUN CLITEST`) and to the end. `vms/sysmgr/` holds the text files in
 `DKA0:[SYSMGR]`, among them `SYSTARTUP_VMS.COM`, which mounts `MDA0:` and `DKB0:` at
 boot, and `SYLOGIN.COM`. They run in user mode, DCL in supervisor mode, and write
 on the console with `PRINT` and `PRINTHEX` from `sysexe.mlb`, which call

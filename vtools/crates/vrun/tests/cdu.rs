@@ -1,5 +1,5 @@
 //! Runs CDU$COMPILE, the CLD compiler that DCL's SET COMMAND uses
-//! (roottask/sysexe/dcl/cdu.mar), under vrun, and checks that the tables
+//! (vms/sysexe/dcl/cdu.mar), under vrun, and checks that the tables
 //! it makes mean what vcdu's mean: the same verbs, syntaxes, entities and
 //! DISALLOWs, wherever in the tables they are. Then the errors it reports.
 
@@ -85,7 +85,7 @@ fn native(cld: &str) -> Result<Vec<u8>, String> {
             .map(|c| format!("\t.BYTE\t{}\n", c.join(", ")))
             .collect::<String>()
     );
-    let cdu = fs::read_to_string(root().join("roottask/sysexe/dcl/cdu.mar")).unwrap();
+    let cdu = fs::read_to_string(root().join("vms/sysexe/dcl/cdu.mar")).unwrap();
     let modules = [
         compile("DUMP", DUMP),
         compile("CDU", &cdu),
@@ -314,7 +314,7 @@ fn same(cld: &str) {
 
 #[test]
 fn dcl_tables() {
-    let dir = root().join("roottask/cld");
+    let dir = root().join("vms/cld");
     let mut paths: Vec<_> = fs::read_dir(&dir)
         .unwrap()
         .map(|e| e.unwrap().path())

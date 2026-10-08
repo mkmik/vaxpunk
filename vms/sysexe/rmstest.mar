@@ -5,7 +5,7 @@
 ; default directory, works them with RMS's services and prints what each
 ; returns and every record it reads, a line each. The same source builds
 ; on OpenVMS, with MACRO/MIGRATION and LINK, and its output there is
-; roottask/sysexe/rmstest.out, which the boot test compares vaxpunk's
+; vms/sysexe/rmstest.out, which the boot test compares vaxpunk's
 ; with. So it uses only VMS's own: STARLET's macros and LIB$PUT_OUTPUT.
 ;
 ; A line is the service, its status in hex, and what it gave: an RFA as

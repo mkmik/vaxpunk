@@ -3,12 +3,12 @@
 `vcdu` compiles VMS's Command Definition Language into command tables. It
 does what VMS's `SET COMMAND/OBJECT` does, as a cross tool
 ([ADR-0017](../../docs/adr/0017-command-tables-from-cld-with-vcdu.md)).
-`CLI$DCL_PARSE`, in `roottask/sysexe/lib/cli.mar`, parses commands with
+`CLI$DCL_PARSE`, in `vms/sysexe/lib/cli.mar`, parses commands with
 the tables, and DCL parses every command with `DCL$TABLES`, which
-`roottask/build.rs` compiles from `roottask/cld/*.cld`. `HELP.EXE`
-(`roottask/sysexe/help.mar`) describes DCL's verbs from the same table.
+`vms/build.rs` compiles from `vms/cld/*.cld`. `HELP.EXE`
+(`vms/sysexe/help.mar`) describes DCL's verbs from the same table.
 On vaxpunk, DCL's `SET COMMAND file` compiles a `.CLD` file into tables
-of the same format with `CDU$COMPILE` (`roottask/sysexe/dcl/cdu.mar`,
+of the same format with `CDU$COMPILE` (`vms/sysexe/dcl/cdu.mar`,
 [ADR-0018](../../docs/adr/0018-set-command-and-foreign-commands.md)),
 which reads the same language, but `ROUTINE`.
 
@@ -25,7 +25,7 @@ source; build.rs compiles it with vmacro.
 
 ```
 vcdu -o copy.obj copy.cld
-vcdu --macro -o /dev/stdout roottask/cld/*.cld
+vcdu --macro -o /dev/stdout vms/cld/*.cld
 ```
 
 ## The language

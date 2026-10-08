@@ -11,7 +11,7 @@ Project-wide documents, one numbered series per kind:
 
 A format, ABI or on-disk structure that belongs to one component is
 documented next to its code, in that component's `docs/` (`vtools/docs/`,
-`ods/docs/`) or README (`shim/README.md`). Those files are named by topic,
+`ods/docs/`) or README (`pal/shim/README.md`). Those files are named by topic,
 not numbered, because the code cites them by path.
 
 [boot.md](boot.md) walks through the boot sequence in plain words. It is

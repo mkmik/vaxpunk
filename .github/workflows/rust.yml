@@ -1,17 +1,17 @@
 name: rust
 
-# The Cargo workspace. Its default members, ods/ and vtools/, are built and
-# tested. The OS crates (kernel, shim, roottask, image) need the cross C
-# toolchain, so here CI only checks their formatting: their Rust is in */*.rs.
+# The Cargo workspace. Its default members, ods/, vtools/ and vms/ (the
+# system disk), are built and tested. The seL4 crates (pal/ and image) need
+# the cross C toolchain, so here CI only checks their formatting.
 # boot.yml builds and boots them.
-# vrun's tests run CLITEST, the command parser's check, from roottask/sysexe,
-# and CDU$COMPILE, SET COMMAND's compiler, on roottask/cld's CLD.
+# vrun's tests run CLITEST, the command parser's check, from vms/sysexe,
+# and CDU$COMPILE, SET COMMAND's compiler, on vms/cld's CLD.
 on:
   push:
     branches: [main]
-    paths: ["Cargo.toml", "Cargo.lock", "*/*.rs", "*/Cargo.toml", "ods/**", "vtools/**", "roottask/sysexe/**", "roottask/cld/**", ".github/workflows/rust.yml"]
+    paths: ["Cargo.toml", "Cargo.lock", "*/*.rs", "*/Cargo.toml", "pal/*/*.rs", "pal/*/Cargo.toml", "ods/**", "vtools/**", "vms/**", ".github/workflows/rust.yml"]
   pull_request:
-    paths: ["Cargo.toml", "Cargo.lock", "*/*.rs", "*/Cargo.toml", "ods/**", "vtools/**", "roottask/sysexe/**", "roottask/cld/**", ".github/workflows/rust.yml"]
+    paths: ["Cargo.toml", "Cargo.lock", "*/*.rs", "*/Cargo.toml", "pal/*/*.rs", "pal/*/Cargo.toml", "ods/**", "vtools/**", "vms/**", ".github/workflows/rust.yml"]
 
 jobs:
   test:

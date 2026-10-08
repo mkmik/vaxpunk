@@ -117,7 +117,7 @@ fn corpus(dir: &Path) -> Vec<String> {
     };
     let mut sources = files(&v.join("tests/run"), &["mar"]);
     sources.extend(files(&v.join("examples/vasm"), &["mar"]));
-    sources.extend(files(&repo.join("roottask/sysexe"), &["m64"]));
+    sources.extend(files(&repo.join("vms/sysexe"), &["m64"]));
     sources.push(v.join("crates/vasm/tests/expressions.mar"));
     sources.push(v.join("bliss/fio.mar"));
     for p in &sources {
@@ -144,7 +144,7 @@ fn corpus(dir: &Path) -> Vec<String> {
     // What vbliss makes of BLISS-64, VASM's own modules included.
     let mut bliss = files(&v.join("tests/bliss"), &["b64", "b32"]);
     bliss.extend(files(&v.join("lib"), &["b64"]));
-    bliss.extend(files(&repo.join("roottask/exec"), &["b64"]));
+    bliss.extend(files(&repo.join("vms/exec"), &["b64"]));
     bliss.extend(files(&v.join("bliss/vasm"), &["b64"]));
     for p in &bliss {
         let text = fs::read_to_string(p).unwrap();

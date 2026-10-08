@@ -10,9 +10,10 @@ name = "boot"
 path = "main.rs"
 
 [dependencies]
-kernel = { path = "../kernel" }
-roottask = { path = "../roottask" }
-shim = { path = "../shim" }
+kernel = { path = "../pal/kernel" }
+pal = { path = "../pal" }
+vms = { path = "../vms" }
+shim = { path = "../pal/shim" }
 
 [dev-dependencies]
 ods-image = { path = "../ods/crates/ods-image" }

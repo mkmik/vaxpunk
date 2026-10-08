@@ -27,7 +27,7 @@ Services' $QIO interface ([ADR-0024](../adr/0024-sockets-have-tcpip-services-qio
 
 ## The TCP/IP component
 
-`tcpip/` builds `tcpip.elf`, freestanding C: lwIP 2.2.1 (the `tcpip/lwip`
+`tcpip/` builds `tcpip.elf`, freestanding C: lwIP 2.2.1 (the `pal/tcpip/lwip`
 submodule) with its raw API and no OS (`NO_SYS`), configured by
 `include/lwipopts.h` for IPv4, ARP, ICMP, TCP, UDP and raw ICMP sockets,
 a virtio-net driver
@@ -35,9 +35,9 @@ and the adapter between lwIP and the port (`src/main.c`). `include/` also
 holds the few libc headers lwIP includes, and `src/libc.c` their
 functions.
 
-The root task embeds `tcpip.elf` (`roottask/src/tcpip.S`) and, if QEMU has
-a virtio-net device, starts it (`start_tcpip` in `roottask/src/main.c`)
-after `EXEC.EXE`. What it sets up is in `tcpip/include/component.h`:
+The root task embeds `tcpip.elf` (`pal/src/tcpip.S`) and, if QEMU has
+a virtio-net device, starts it (`start_tcpip` in `pal/src/main.c`)
+after `EXEC.EXE`. What it sets up is in `pal/tcpip/include/component.h`:
 
 | Component address | What |
 | --- | --- |
@@ -88,7 +88,7 @@ system connect to its own address.
 ## The port
 
 The executive's and the component's view of the same 17 pages,
-`tcpip/include/port.h` and `$PORTDEF` in `vtools/lib/lib.mlb`, which match:
+`pal/tcpip/include/port.h` and `$PORTDEF` in `vtools/lib/lib.mlb`, which match:
 
 | Offset | What |
 | --- | --- |
@@ -143,7 +143,7 @@ the executive never sends more than the component can hold. A `SEND` or
 
 ## The port driver
 
-`roottask/exec/netdriver.mar`.
+`vms/exec/netdriver.mar`.
 
 - `NET$INIT` finds the port in the RPB at boot; `EXEC$START` puts
   `NET$INTERRUPT` at SCB `^X100` and `NET$FORK` at software interrupt

@@ -4,7 +4,7 @@
 ; LIB$SIGNAL and LIB$STOP signal a condition, LIB$ESTABLISH and
 ; LIB$REVERT set the caller's condition handler, and LIB$SIG_TO_RET is a
 ; handler that makes a condition its establisher's status. The executive
-; looks for the handlers, in the vector (roottask/exec/sysunwind.mar,
+; looks for the handlers, in the vector (vms/exec/sysunwind.mar,
 ; ADR-0021). build.rs links this module into each image, as it does
 ; lib/print.mar.
 ;

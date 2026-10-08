@@ -102,7 +102,7 @@
 ;               deletes a local symbol, or with /GLOBAL a global one;
 ;               /ALL instead of a name deletes them all
 ;
-; The verbs are DCL$TABLES's, from roottask/cld/*.cld (ADR-0017).
+; The verbs are DCL$TABLES's, from vms/cld/*.cld (ADR-0017).
 ; CLI$$DCL_PARSE parses each command with them, and prompts for the
 ; parameters it needs at the console: a verb, or a qualifier, may be
 ; abbreviated to 4 characters, or fewer that no other starts with. An

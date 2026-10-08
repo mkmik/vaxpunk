@@ -145,7 +145,7 @@ for a `.JSB32_ENTRY` one, everything it modifies. A JSB routine in another
 module modifies all of R2-R11, unless `.CALL_LINKAGE name, ...` says what
 it does, or `.DEFINE_LINKAGE name, ...` and `.USE_LINKAGE linkage_name=name`
 before the `JSB`; `.USE_LINKAGE` with registers says it for a `JSB`
-through an address. `vmacro::compile_modules`, which roottask's build
+through an address. `vmacro::compile_modules`, which vms/build.rs
 uses, compiles modules linked together and gives each the linkages of the
 others' routines, from their declarations.
 

@@ -4,7 +4,7 @@
     0	      1 MODULE ASCTIME (MAIN = MAIN) =
     0	      2 BEGIN
     1	      3 ! $ASCTIM and $NUMTIM on given times: under vrun BLISS-64, the
-    1	      4 ! executive's $NUMTIM (roottask/exec/numtim.b64) and lib/asctim.b64's
+    1	      4 ! executive's $NUMTIM (vms/exec/numtim.b64) and lib/asctim.b64's
     1	      5 ! $ASCTIM on it; on OpenVMS, VMS's own, which the oracle runs this against.
     1	      6 REQUIRE 'PRINT';
  R  1	      7 ! PRINT: prints a value as a signed decimal and as 16 hex digits, on a line

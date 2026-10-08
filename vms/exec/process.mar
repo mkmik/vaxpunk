@@ -663,7 +663,7 @@ IMG$ACTIVATE::
 ; $EXIT code: ends the image, once the caller's mode has no exit handler
 ; left. While it has one, takes it off its list and returns SS$_NORMAL
 ; with R1 = its block, for SYS$EXIT to call it in that mode
-; (roottask/exec/syssrv.mar); one it can't read ends the list. Else
+; (vms/exec/syssrv.mar); one it can't read ends the list. Else
 ; EXE$IMGEXIT.
         .ENTRY  EXE$EXIT, ^M<>
         BSBW    EXHLIST

@@ -37,7 +37,7 @@ in its interface.
 
 ## What the PAL sets up
 
-The root task (`roottask/src/main.c`) reads `[SYSEXE]EXEC.EXE` from the
+The root task (`pal/src/main.c`) reads `[SYSEXE]EXEC.EXE` from the
 system disk (*The disks*) and starts it, in S0, the system space
 every process shares (*Memory*):
 
@@ -80,7 +80,7 @@ from 0 up for these. Nothing else is mapped. The boot context starts with:
 ### The disks
 
 Unit 0, the system disk, is `sysdisk.img`, a Files-11 ODS-2 volume
-labelled `VAXPUNK`, which `roottask/build.rs` writes with `ods-image`:
+labelled `VAXPUNK`, which `vms/build.rs` writes with `ods-image`:
 the images in `[SYSEXE]`, SYSTEM's files in `[SYSMGR]`. QEMU attaches it
 read only as a virtio-blk device on one of QEMU virt's 32 virtio-mmio
 transports, from `0x0a000000`, in modern (virtio 1) mode:

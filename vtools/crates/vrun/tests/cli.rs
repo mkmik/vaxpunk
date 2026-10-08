@@ -1,5 +1,5 @@
 //! Runs CLITEST, the system disk's check of the command parser
-//! (roottask/sysexe/clitest.mar, with lib/cli.mar and its CLITEST.CLD
+//! (vms/sysexe/clitest.mar, with lib/cli.mar and its CLITEST.CLD
 //! compiled by vcdu, and lib/getforeign.mar), under vrun, so that the
 //! parser is checked where the system itself can't be built. A stub stands
 //! in for PUT_LINE, which writes with vrun's put, SYS$EXIT, and
@@ -36,7 +36,7 @@ NL:     .ASCII  <10>
 #[test]
 fn clitest() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");
-    let sysexe = root.join("roottask/sysexe");
+    let sysexe = root.join("vms/sysexe");
     let compile = |name: &str, source: &str| {
         let opts = vasm::Options {
             name: name.into(),
