@@ -3,7 +3,8 @@
 ;
 ; DCL's TYPE spec runs this. Opens the file spec names, in the default directory
 ; unless it says where, with RMS, and writes each of its records on the console, a
-; line each. Returns RMS's status if it can't.
+; line each, or /HEAD's first n or /TAIL's last n, 10 if it doesn't say. Returns
+; RMS's status if it can't.
 ; ponytail: one file, no wildcards; a record past 255 characters is cut
 ; there.
 ;
@@ -24,29 +25,88 @@ SPECDSC:                                ; FILE, the parameter
 SPEC:   .BLKB   255
 RAB:    $RAB    FAB=FAB, UBF=REC+1, USZ=255
 REC:    .BLKB   256                     ; a record, .ASCIC
+NUMDSC:                                 ; /HEAD's value
+        .LONG   10
+        .ADDRESS NUM
+NUM:    .BLKB   10
 
         .PSECT  CODE, EXE, LONG
-        .ENTRY  START, ^M<R2>
-        GETVALUE "FILE", SPECDSC, SPECDSC
+        .ENTRY  START, ^M<R2, R3, R4, R5>
+        MNEGL   #1, R3                  ; R3 = the lines left to write
+        MNEGL   #1, R5                  ; R5 = /TAIL's lines, or all
+        PRESENT "HEAD"
+        BLBC    R0, 3$
+        MOVL    #10, R3
+        GETVALUE "HEAD", NUMDSC, NUMDSC
+        BLBC    R0, 3$
+        BSBW    NUMBER
+        MOVL    R1, R3
+3$:     PRESENT "TAIL"
+        BLBC    R0, 5$
+        MOVL    #10, R5
+        MOVL    #10, NUMDSC
+        GETVALUE "TAIL", NUMDSC, NUMDSC
+        BLBC    R0, 5$
+        BSBW    NUMBER
+        MOVL    R1, R5
+5$:     GETVALUE "FILE", SPECDSC, SPECDSC
         MOVB    SPECDSC, FAB+FAB$B_FNS
         $OPEN   FAB=FAB
         BLBC    R0, 90$
         $CONNECT RAB=RAB
         BLBC    R0, 80$
-10$:    $GET    RAB=RAB
+        CLRL    R4                      ; R4 = the lines left to skip
+        CMPL    R5, #-1
+        BEQL    10$
+6$:     $GET    RAB=RAB                 ; /TAIL: count them, and back
+        BLBS    R0, 7$
+        CMPL    R0, #RMS$_RTB
+        BNEQ    8$
+7$:     INCL    R4
+        BRB     6$
+8$:     CMPL    R0, #RMS$_EOF
+        BNEQ    80$
+        $REWIND RAB=RAB
+        BLBC    R0, 80$
+        SUBL2   R5, R4
+        BGEQ    10$
+        CLRL    R4
+10$:    TSTL    R3
+        BEQL    40$
+        $GET    RAB=RAB
         BLBS    R0, 20$
         CMPL    R0, #RMS$_RTB           ; too long: what fits
         BNEQ    30$
-20$:    MOVB    RAB+RAB$W_RSZ, REC
+20$:    TSTL    R4
+        BEQL    25$
+        DECL    R4
+        BRB     10$
+25$:    DECL    R3
+        MOVB    RAB+RAB$W_RSZ, REC
         PUSHAB  REC
         CALLS   #1, G^PUT_LINE
         BRB     10$
 30$:    CMPL    R0, #RMS$_EOF
         BNEQ    80$
-        MOVL    #SS$_NORMAL, R0
+40$:    MOVL    #SS$_NORMAL, R0
 80$:    MOVL    R0, R2
         $CLOSE  FAB=FAB
         MOVL    R2, R0
 90$:    RET
+
+; NUMBER: NUMDSC = a qualifier's digits. R1 = their value. Uses R0-R2.
+NUMBER:
+        .JSB_ENTRY  SCRATCH=<R2>
+        CLRL    R1
+        CLRL    R2
+10$:    CMPW    R2, NUMDSC
+        BGEQU   90$
+        MOVZBL  NUM[R2], R0
+        SUBL2   #^A/0/, R0
+        MULL2   #10, R1
+        ADDL2   R0, R1
+        INCL    R2
+        BRB     10$
+90$:    RSB
 
         .END    START

@@ -2,3 +2,5 @@
 define verb TYPE
 	image TYPE
 	parameter P1, label=FILE, prompt="File", value(required, type=$infile)
+	qualifier HEAD, value(type=$number)
+	qualifier TAIL, value(type=$number)

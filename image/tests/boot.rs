@@ -45,8 +45,8 @@ const BOOT: Phase = Phase {
 };
 
 /// RUN STARTUP, whose processes print theirs by the end, and SNOOP; then
-/// DIRECTORY, TYPE and EDIT on the system disk, DCLTEST.COM's and DCL's
-/// lines with symbols, those SYLOGIN.COM defined too, CLITEST's words as a
+/// DIRECTORY, TYPE, TYPE/HEAD, TYPE/TAIL and EDIT on the system disk,
+/// DCLTEST.COM's and DCL's lines with symbols, those SYLOGIN.COM defined too, CLITEST's words as a
 /// foreign command, EDIT's EXIT that can't write there, a logical name,
 /// SHOW LOGICAL and SET DEFAULT, until SET DEFAULT [-] fails in [000000].
 const SYSTEM_DISK: Phase = Phase {
@@ -57,6 +57,7 @@ const SYSTEM_DISK: Phase = Phase {
         1,
         concat!(
             "RUN STARTUP\rRUN SNOOP\rFOO\rDIR [SYSEXE]P%NG\rTYPE WELCOME.TXT\r",
+            "TYPE/HEAD=3 WELCOME.TXT\rTYPE/TAIL=2 WELCOME.TXT\r",
             "@DCLTEST 3 \"Two words\"\r@DCLTEST FAIL\rSHOW SYMBOL $STATUS\r",
             "X = 6 * 7\rWRITE SYS$OUTPUT \"X is \", X\rSHOW SYMBOL HOME\rHOME\r",
             "EDIT WELCOME.TXT\r\"index\"\r\"zzz\"\rEXIT\rQUIT\r",
@@ -656,6 +657,19 @@ fn boot() {
         text.matches("*INTERRUPT*").count(),
         9,
         "CTRL/Y or CTRL/C interrupted after SET NOCONTROL"
+    );
+    assert_eq!(
+        text.matches("This file is SYS$MANAGER:WELCOME.TXT").count(),
+        1,
+        "TYPE WELCOME.TXT, and not TYPE/HEAD=3's 4th line"
+    );
+    assert_eq!(
+        (
+            text.matches("DIRECTORY lists the files in").count(),
+            text.matches("and DIRECTORY [000000] the volume").count()
+        ),
+        (1, 3),
+        "TYPE/TAIL=2 WELCOME.TXT: its 9th line, not its 8th"
     );
     assert!(
         !text.contains("SPIN: a register changed"),
