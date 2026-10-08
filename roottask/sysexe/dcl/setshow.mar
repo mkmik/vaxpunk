@@ -186,7 +186,8 @@ DCL$SETDEF::
 ; it has one, and the default directory its expanded directory if it
 ; gives one, else none.
 SEARCHDEF:
-        CLRL    DIRDSC
+        CLRL    DIRDSC                  ; none, somewhere $SETDDIR may probe
+        MOVAB   EXP, DIRDSC+4
         LOCC    #91, R8, DCL$TOKEN      ; [ or <: a directory
         BNEQ    10$
         LOCC    #60, R8, DCL$TOKEN
