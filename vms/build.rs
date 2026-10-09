@@ -20,7 +20,14 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 fn main() {
-    for path in ["exec", "sysexe", "sysmgr", "cld", LIB, "../crosstools/vtools/bliss"] {
+    for path in [
+        "exec",
+        "sysexe",
+        "sysmgr",
+        "cld",
+        LIB,
+        "../crosstools/vtools/bliss",
+    ] {
         println!("cargo::rerun-if-changed={path}");
     }
     let out = PathBuf::from(env::var("OUT_DIR").unwrap());
