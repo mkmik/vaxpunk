@@ -60,7 +60,8 @@ const BOOT: Phase = Phase {
 };
 
 /// SYSTEM's default, SYS$SYSROOT:[SYSMGR], and its first SET DEFAULT, to a
-/// search list of the ramdisk and SYS$MANAGER, then back to SYS$MANAGER:. RUN STARTUP, whose processes
+/// search list of the ramdisk and SYS$MANAGER, then back to SYS$MANAGER:, and
+/// STARTUP_P1 and STARTUP_P8 from F$GETSYI. RUN STARTUP, whose processes
 /// print theirs by the end, and SNOOP; then
 /// DIRECTORY, of LIBRTL.EXE in SYS$SHARE too, TYPE, TYPE/HEAD, TYPE/TAIL
 /// and EDIT on the system disk,
@@ -79,6 +80,7 @@ const SYSTEM_DISK: Phase = Phase {
             concat!(
                 "SHOW DEFAULT\rDEFINE HOME MDA0:[000000],SYS$MANAGER\rSET DEFAULT HOME:\rSHOW DEFAULT\r",
                 "SET DEFAULT SYS$MANAGER:\rDEASSIGN HOME\r",
+                "WRITE SYS$OUTPUT \"[\", F$GETSYI(\"STARTUP_P1\"), \"|\", F$GETSYI(\"STARTUP_P8\"), \"]\"\r",
             ),
         ),
         (
@@ -103,6 +105,8 @@ const SYSTEM_DISK: Phase = Phase {
     ],
     lines: &[
         "$ SHOW DEFAULT\n  SYS$SYSROOT:[SYSMGR]\n  =   MDA0:[SYSMGR]\n  =   DKA0:[SYSMGR]\n",
+        // boot()'s --p1 and --p8, blank-padded to 4 characters.
+        "[TEST|8   ]",
         "\n  =   MDA0:[000000]\n  =   MDA0:[SYSMGR]\n  =   DKA0:[SYSMGR]\n",
         " \\FOO\\",
         "PING.EXE;1          PONG.EXE;1",
@@ -881,6 +885,7 @@ fn boot() {
     let _ = fs::remove_file(&datadisk);
     let mut qemu = Qemu(
         Command::new(env!("CARGO_BIN_EXE_boot"))
+            .args(["--p1=TEST", "--p8=8"])
             .env("DATADISK", &datadisk)
             .stdin(Stdio::piped())
             .stdout(Stdio::null())

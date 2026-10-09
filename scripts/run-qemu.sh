@@ -1,10 +1,13 @@
 #!/bin/sh
 # Boot out/esp.img: EDK2 -> Limine -> shim -> seL4 -> root task.
-# Usage: run-qemu.sh [--gdb] [--hvf] [--uart1[=PORT]] | --firmware. Quit with Ctrl-A x.
+# Usage: run-qemu.sh [--gdb] [--hvf] [--uart1[=PORT]] [--pN=VALUE...] | --firmware.
+# Quit with Ctrl-A x.
 #   --firmware  print the EDK2 firmware image's path and exit
 #   --gdb    wait for a debugger on localhost:1234 (-s -S)
 #   --hvf    use Hypervisor.framework instead of TCG (best effort, macOS only)
 #   --uart1  serve the second UART on telnet localhost:PORT (default 4444)
+#   --p1=VALUE ... --p8=VALUE  the SYSGEN parameters STARTUP_P1 to STARTUP_P8,
+#            up to 4 characters each, which SYSTARTUP_VMS.COM reads as P1 to P8
 # EDK2_FW overrides the firmware image, DATADISK the data disk's, LOG the
 # console log's, NETDEV the network's QEMU -netdev (QEMU's user network,
 # slirp, by default) and MAC the network device's address: a second
@@ -18,6 +21,7 @@ cpu="-cpu $QEMU_CPU"
 gdb=""
 uart1=null
 firmware=""
+p1="" p2="" p3="" p4="" p5="" p6="" p7="" p8=""
 for arg; do
 	case $arg in
 	--gdb) gdb="-s -S" ;;
@@ -25,7 +29,15 @@ for arg; do
 	--firmware) firmware=1 ;;
 	--uart1) uart1=telnet:localhost:4444,server,nowait ;;
 	--uart1=*) uart1=telnet:localhost:${arg#--uart1=},server,nowait ;;
-	*) echo "usage: $0 [--gdb] [--hvf] [--uart1[=PORT]] | --firmware" >&2; exit 2 ;;
+	--p[1-8]=*)
+		value=${arg#--p?=}
+		if [ ${#value} -gt 4 ]; then
+			echo "run-qemu: ${arg%%=*}: $value: STARTUP_Pn is at most 4 characters" >&2
+			exit 2
+		fi
+		n=${arg#--p}
+		eval "p${n%%=*}=\$value" ;;
+	*) echo "usage: $0 [--gdb] [--hvf] [--uart1[=PORT]] [--pN=VALUE...] | --firmware" >&2; exit 2 ;;
 	esac
 done
 
@@ -72,8 +84,13 @@ if [ "$firmware" ]; then echo "$EDK2_FW"; exit; fi
 # (ADR-0031).
 # On a halt the root task prints %PAL-I-POWEROFF, and serial-filter.py ends
 # QEMU with SIGTERM, by the PID in a file of its own (ADR-0008).
+# STARTUP_P1 to STARTUP_P8 go to the root task as a fw_cfg file, 32
+# characters, blank-padded, as VMS keeps them; the PAL passes them on to
+# the executive in the RPB, and $GETSYI returns them.
 datadisk=${DATADISK:-$root/out/datadisk.img}
 pidfile=$(mktemp)
+startup=$(mktemp)
+printf '%-4s%-4s%-4s%-4s%-4s%-4s%-4s%-4s' "$p1" "$p2" "$p3" "$p4" "$p5" "$p6" "$p7" "$p8" >"$startup"
 [ -f "$datadisk" ] || dd if=/dev/zero of="$datadisk" bs=512 count=4096 2>/dev/null
 qemu-system-aarch64 -machine "virt,secure=off,gic-version=$QEMU_GIC,acpi=off" $cpu \
 	-smp 1 -m "$QEMU_MEM" -display none -bios "$EDK2_FW" \
@@ -83,6 +100,7 @@ qemu-system-aarch64 -machine "virt,secure=off,gic-version=$QEMU_GIC,acpi=off" $c
 	-device virtio-blk-device,drive=sysdisk \
 	-drive "if=none,id=datadisk,format=raw,file=$datadisk" \
 	-device virtio-blk-device,drive=datadisk -global virtio-mmio.force-legacy=false \
+	-fw_cfg "name=opt/vaxpunk/startup,file=$startup" \
 	-netdev "${NETDEV:-user,id=net0}" -device "virtio-net-device,netdev=net0${MAC:+,mac=$MAC}" \
 	-device virtio-rng-device \
 	-chardev "stdio,id=con,mux=on,signal=off,logfile=${LOG:-$root/out/serial.log}" \

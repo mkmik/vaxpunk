@@ -227,7 +227,8 @@ RPB$L_FREEPFN = 8                       ; and those below this one are in use
 RPB$L_BOOTTIME = 12                     ; seconds since 1970 at boot, from the RTC
 RPB$L_PORT = 16                         ; port 0's pages, in S0, or 0 without a network
 RPB$Q_HWPCB = 64                        ; the boot context's HWPCB
-RPB$K_LENGTH = 192
+RPB$T_STARTUP = 192                     ; STARTUP_P1 to STARTUP_P8, 4 characters each, blank-padded
+RPB$K_LENGTH = 224
         .ENDM   $RPBDEF
 
 ; $STATEDEF: scheduling states, SCH$C_.

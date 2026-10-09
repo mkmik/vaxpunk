@@ -52,8 +52,15 @@ the role PALcode played on an Alpha: it's the "hardware" layer underneath VMS
 ([ADR-0002](adr/0002-root-task-is-the-pal.md)).
 
 - It maps the serial port and the real-time clock, and reads the clock once
-  to get the boot time. Then it prints `hello from the root task` and a list
-  of the free memory blocks seL4 gave it.
+  to get the boot time. Then it prints `hello from the root task`.
+- It reads the startup parameters (`fwcfg_init`): the SYSGEN parameters
+  `STARTUP_P1` to `STARTUP_P8`, 4 characters each. `run-qemu.sh` makes
+  them from its `--p1` to `--p8`, as in `cargo run -p boot -- --p1=MIN`,
+  and hands them to QEMU's firmware configuration device as the file
+  `opt/vaxpunk/startup`. The root task finds that file in the device's
+  directory and prints `STARTUP_P1-8: "MIN                             "`.
+  Parameters not given are blank.
+- It prints a list of the free memory blocks seL4 gave it.
 - It starts a clock thread that wakes up every 10 ms. Each wakeup becomes
   VMS's timer interrupt ([ADR-0004](adr/0004-interval-timer-is-a-pal-thread.md)).
   On each wakeup the PAL also checks the serial port for typed
@@ -71,8 +78,8 @@ the role PALcode played on an Alpha: it's the "hardware" layer underneath VMS
 - `start_exec` reads `EXEC.EXE` from the system disk, as VMS's first
   bootstrap did: the home block, the index file, the top directory,
   `[SYSEXE]`, then the file (`f11_boot_file`). It loads it, and creates
-  the restart parameter block (RPB), a page describing memory and the
-  boot time. With a network device it also makes the port's 17 pages
+  the restart parameter block (RPB), a page describing memory, the
+  boot time and the startup parameters. With a network device it also makes the port's 17 pages
   for the executive, at `0x4FF00000`, and puts their address in the RPB.
   It then starts EXEC in kernel mode at IPL 31, with R11 pointing at the
   RPB.
@@ -148,7 +155,11 @@ interpreter. It is linked high in P1, which tells the executive it is one
 - DCL opens a channel to `SYS$INPUT`, and `$GETDVI` says it is no
   terminal, so DCL takes its commands from it as a command procedure,
   `@SYS$INPUT`: `DKA0:[SYSMGR]SYSTARTUP_VMS.COM`, the site's own
-  startup, as VMS's STARTUP process runs it once at boot. It defines the system
+  startup, as VMS's STARTUP process runs it once at boot. First, as VMS's
+  `STARTUP.COM` does, it sets `P1` to `P8` from `F$GETSYI("STARTUP_P1")`
+  to `F$GETSYI("STARTUP_P8")`, blanks trimmed and in upper case, so the
+  rest of it can test them. `EXEC$START` copied them from the RPB to
+  `SGN$GB_STARTUP_P1`, where `$GETSYI` finds them. Next it defines the system
   logical name `TCPIP$DEVICE` as `_BGA0:`, the network's template device,
   which a program assigns a channel to for a socket, as TCP/IP Services'
   `TCPIP$STARTUP.COM` defines it. Then `INITIALIZE MDA0: RAM` makes the

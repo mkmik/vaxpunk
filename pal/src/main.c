@@ -255,6 +255,58 @@ static void uart_init(seL4_BootInfo *bi)
 }
 
 /*
+ * QEMU virt's firmware configuration device, fw_cfg, after the RTC: its
+ * file opt/vaxpunk/startup, which run-qemu.sh makes from --p1 to --p8,
+ * holds the SYSGEN parameters STARTUP_P1 to STARTUP_P8, 4 characters
+ * each, blank-padded, as VMS keeps them. The PAL reads them once, for the
+ * executive (RPB$T_STARTUP); without the file they are blank. The
+ * selector register takes a key big-endian, then the data register
+ * returns the item a byte at a time; key 0x19 is the file directory: a
+ * count, then each file's size, key and name, all big-endian.
+ */
+#define FWCFG_PADDR 0x09020000UL
+#define FWCFG_VA 0xffffd000UL
+enum { FWCFG_DATA = 0, FWCFG_SEL = 8, FWCFG_FILE_DIR = 0x19 };
+static char startup_p[33]; /* and a NUL, to print */
+
+static void fwcfg_read(volatile uint8_t *fwcfg, void *buf, seL4_Word n)
+{
+	uint8_t *b = buf;
+	while (n--)
+		*b++ = fwcfg[FWCFG_DATA];
+}
+
+static uint32_t be32(const uint8_t *p)
+{
+	return (uint32_t)p[0] << 24 | p[1] << 16 | p[2] << 8 | p[3];
+}
+
+static void fwcfg_init(seL4_BootInfo *bi)
+{
+	static const char name[] = "opt/vaxpunk/startup";
+	memset(startup_p, ' ', 32);
+	seL4_CPtr frame = device_frame(bi, FWCFG_PADDR);
+	if (!frame)
+		return;
+	map(frame, seL4_CapInitThreadVSpace, FWCFG_VA, seL4_ReadWrite, seL4_ARM_ExecuteNever);
+	volatile uint8_t *fwcfg = (volatile uint8_t *)FWCFG_VA;
+	volatile uint16_t *sel = (volatile uint16_t *)(FWCFG_VA + FWCFG_SEL);
+	uint8_t e[64]; /* size, key, 2 reserved, name[56] */
+	*sel = __builtin_bswap16(FWCFG_FILE_DIR);
+	fwcfg_read(fwcfg, e, 4);
+	for (uint32_t n = be32(e); n--;) {
+		fwcfg_read(fwcfg, e, sizeof e);
+		if (memcmp(e + 8, name, sizeof name))
+			continue;
+		uint32_t size = be32(e);
+		*sel = __builtin_bswap16(e[4] << 8 | e[5]);
+		fwcfg_read(fwcfg, startup_p, size < 32 ? size : 32);
+		print("STARTUP_P1-8: \"%s\"\n", startup_p);
+		return;
+	}
+}
+
+/*
  * The disks: virtio block devices on QEMU virt's 32 virtio-mmio
  * transports, 0x200 bytes apart from 0x0a000000, which the PAL drives
  * itself, polled, a request at a time (virtio 1.x, modern MMIO: QEMU needs
@@ -1050,8 +1102,8 @@ static seL4_Word f11_boot_file(uint8_t *buf, seL4_Word size)
 #define EXEC_STACK_TOP 0x5fff0000UL
 #define EXEC_STACK_PAGES 4
 enum { RPB_BASE = 0, RPB_PFNCNT = 4, RPB_FREEPFN = 8, RPB_BOOTTIME = 12, RPB_PORT = 16,
-       RPB_HWPCB = 64,
-       RPB_LENGTH = 192 };
+       RPB_HWPCB = 64, RPB_STARTUP = 192,
+       RPB_LENGTH = 224 };
 
 static seL4_CPtr fault_ep, sched_control;
 static seL4_Time slice;
@@ -1791,6 +1843,7 @@ static void start_exec(void)
 			      [RPB_FREEPFN / 4] = boot_pfn, [RPB_BOOTTIME / 4] = boot_time,
 			      [RPB_PORT / 4] = net_slot >= 0 ? PORT_VA : 0 };
 	memcpy(rpb, fields, sizeof fields);
+	memcpy(rpb + RPB_STARTUP, startup_p, 32);
 
 	cur = new_ctx(RPB_VA + RPB_HWPCB);
 	cur->started = 1;
@@ -1922,6 +1975,7 @@ int main(seL4_BootInfo *bi)
 	next_slot = bi->empty.start;
 	uart_init(bi);
 	print("hello from the root task\n");
+	fwcfg_init(bi);
 
 	print("boot info: node %lu of %lu, %lu untyped caps\n", bi->nodeID, bi->numNodes, n);
 	for (seL4_Word i = 0; i < n; i++) {
