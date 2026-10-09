@@ -1,0 +1,38 @@
+! SELECT shows the text between its marker and the cursor in reverse;
+! E3 removes it into a paste buffer, E2 puts it back at the cursor.
+PROCEDURE do_select
+    sel := SELECT (REVERSE);
+ENDPROCEDURE;
+PROCEDURE do_remove
+    LOCAL r;
+    r := SELECT_RANGE;
+    IF r <> 0 THEN
+        ERASE (paste);
+        POSITION (paste);
+        COPY_TEXT (r);
+        POSITION (w);
+        ERASE (r);
+    ENDIF;
+    sel := 0;
+ENDPROCEDURE;
+PROCEDURE do_insert
+    COPY_TEXT (paste);
+ENDPROCEDURE;
+b := CREATE_BUFFER ("main");
+paste := CREATE_BUFFER ("paste");
+w := CREATE_WINDOW (1, 21, ON);
+MAP (w, b);
+COPY_TEXT ("The quick brown fox");
+SPLIT_LINE;
+COPY_TEXT ("jumps over the lazy dog");
+SPLIT_LINE;
+COPY_TEXT ("and runs away.");
+POSITION (BEGINNING_OF (b));
+DEFINE_KEY ("do_select", E4);
+DEFINE_KEY ("do_remove", E3);
+DEFINE_KEY ("do_insert", E2);
+DEFINE_KEY ("MOVE_VERTICAL (-1)", UP);
+DEFINE_KEY ("MOVE_VERTICAL (1)", DOWN);
+DEFINE_KEY ("MOVE_HORIZONTAL (-1)", LEFT);
+DEFINE_KEY ("MOVE_HORIZONTAL (1)", RIGHT);
+DEFINE_KEY ("QUIT (OFF)", CTRL_Z_KEY);

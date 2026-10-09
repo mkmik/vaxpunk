@@ -1,0 +1,22 @@
+! Key maps: GOLD (PF1) and a key, a key map list of two maps, a learn
+! sequence, an undefined key's message, LOOKUP_KEY's comment.
+message_buffer := CREATE_BUFFER ("Message");
+SET (EOB_TEXT, message_buffer, "");
+message_window := CREATE_WINDOW (22, 3, OFF);
+MAP (message_window, message_buffer);
+b := CREATE_BUFFER ("main");
+w := CREATE_WINDOW (1, 21, ON);
+MAP (w, b);
+CREATE_KEY_MAP ("mine");
+CREATE_KEY_MAP ("other");
+CREATE_KEY_MAP_LIST ("both", "mine", "other");
+SET (KEY_MAP_LIST, "both", b);
+DEFINE_KEY ("COPY_TEXT ('<gold-a>')", KEY_NAME ("a", SHIFT_KEY), "golden a", "mine");
+DEFINE_KEY ("COPY_TEXT ('<mine>')", F7, "from mine", "mine");
+DEFINE_KEY ("COPY_TEXT ('<other>')", F7, "from other", "other");
+DEFINE_KEY ("COPY_TEXT ('<f8>')", F8, "f8 key", "other");
+DEFINE_KEY ("LEARN_BEGIN (EXACT)", F9, "learn", "mine");
+DEFINE_KEY ("DEFINE_KEY (LEARN_END, F14)", F10, "done", "mine");
+DEFINE_KEY ("SPLIT_LINE", RET_KEY, "return", "mine");
+DEFINE_KEY ("MESSAGE (LOOKUP_KEY (F8, COMMENT) + ' / ' + LOOKUP_KEY (F7, KEY_MAP))", F12, "", "mine");
+DEFINE_KEY ("QUIT (OFF)", CTRL_Z_KEY, "", "mine");

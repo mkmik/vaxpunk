@@ -68,6 +68,7 @@ OWN
     WANT,
     CURROW,
     CURCOL,
+    MSGROW,                             ! where the next message goes with no message buffer
     ATTR;                               ! the video the terminal writes in
 
 EXTERNAL
@@ -86,7 +87,15 @@ EXTERNAL ROUTINE
     READKEY;
 
 FORWARD ROUTINE
-    SCR_MESSAGE : NOVALUE;
+    SCR_MESSAGE : NOVALUE,
+    SPANVIDEO;
+
+LITERAL
+    MAXSPANS = 32;
+
+OWN
+    NSPANS,
+    SPANS : VECTOR[MAXSPANS * 5];
 
 MACRO
     ARGCOUNT(LO, HI) =
@@ -169,6 +178,7 @@ GLOBAL ROUTINE SCR_START =
     PUT(%CHAR(%C'r', 27, %C'=', 27, %C'[', %C'?', %C'6', %C'l', 27, %C'[', %C'?', %C'7',
               %C'l', 27, %C'[', %C'?', %C'8', %C'h'));
     ATTR = 0;
+    MSGROW = -1;
     ON = TRUE;
     MSG_SINK = SCR_MESSAGE;
     TRUE
@@ -203,7 +213,7 @@ ROUTINE TEXTROW (R, C, TEXT, LEN, V) : NOVALUE =
 
 ! LINEROW window, line, row: a buffer's line in a window's row, its tabs
 ! out to every 8 columns, cut at the window's right edge with a diamond.
-ROUTINE LINEROW (W : REF VECTOR, L : REF VECTOR, R) : NOVALUE =
+ROUTINE LINEROW (W : REF VECTOR, L : REF VECTOR, R, LN) : NOVALUE =
     BEGIN
     LOCAL
         COL,
@@ -242,7 +252,7 @@ ROUTINE LINEROW (W : REF VECTOR, L : REF VECTOR, R) : NOVALUE =
             ELSE IF .X GEQ 0
             THEN
                 SETCELL(.R, .X, (IF .C EQL 9 THEN %C' ' ELSE IF .C LSS 32 THEN %C'?' ELSE .C),
-                        .W[W_VIDEO]);
+                        .W[W_VIDEO] OR (IF .NSPANS EQL 0 THEN 0 ELSE SPANVIDEO(.LN, .I)));
             COL = .COL + 1
             END
         END
@@ -333,6 +343,80 @@ ROUTINE SCROLLTO (W : REF VECTOR, ROWS) =
     .N
     END;
 
+! The stretches of a buffer shown in a video: its ranges', and the select
+! range's in the current window: from line number and offset to line
+! number and offset, both taken in.
+! SPANSOF window: SPANS for its buffer.
+ROUTINE SPANSOF (W : REF VECTOR) : NOVALUE =
+    BEGIN
+    LOCAL
+        B : REF VECTOR,
+        R : REF VECTOR;
+    B = .W[W_BUF];
+    NSPANS = 0;
+    R = .B[B_RANGES];
+    WHILE .R NEQ 0 AND .NSPANS LSS MAXSPANS DO
+        BEGIN
+        BIND
+            S = .R[R_START] : VECTOR,
+            E = .R[R_END] : VECTOR;
+        IF .S[M_BUF] EQL .B
+        THEN
+            BEGIN
+            SPANS[5 * .NSPANS] = LINENO(.B, .S[M_LINE]);
+            SPANS[5 * .NSPANS + 1] = .S[M_OFF];
+            SPANS[5 * .NSPANS + 2] = LINENO(.B, .E[M_LINE]);
+            SPANS[5 * .NSPANS + 3] = .E[M_OFF];
+            SPANS[5 * .NSPANS + 4] = KWVIDEO(.R[R_VIDEO]);
+            NSPANS = .NSPANS + 1
+            END;
+        R = .R[R_NEXT]
+        END;
+    IF .W EQL .CURWIN AND .B[B_SELMARK] NEQ 0 AND .NSPANS LSS MAXSPANS
+    THEN
+        BEGIN
+        ! From the marker to the editing point, the later not taken in.
+        BIND
+            M = .B[B_SELMARK] : VECTOR;
+        LOCAL
+            ML,
+            PL,
+            MO,
+            PO;
+        ML = LINENO(.B, .M[M_LINE]);
+        PL = LINENO(.B, .B[B_LINE]);
+        MO = .M[M_OFF];
+        PO = .B[B_OFF];
+        IF .ML LSS .PL OR .ML EQL .PL AND .MO LSS .PO
+        THEN
+            (SPANS[5 * .NSPANS] = .ML; SPANS[5 * .NSPANS + 1] = .MO;
+             SPANS[5 * .NSPANS + 2] = .PL; SPANS[5 * .NSPANS + 3] = .PO - 1)
+        ELSE
+            (SPANS[5 * .NSPANS] = .PL; SPANS[5 * .NSPANS + 1] = .PO;
+             SPANS[5 * .NSPANS + 2] = .ML; SPANS[5 * .NSPANS + 3] = .MO - 1);
+        SPANS[5 * .NSPANS + 4] = KWVIDEO(.M[M_VIDEO]);
+        IF .ML NEQ .PL OR .MO NEQ .PO THEN NSPANS = .NSPANS + 1
+        END
+    END;
+
+! SPANVIDEO line number, offset: the video the spans give the place.
+ROUTINE SPANVIDEO (LN, O) =
+    BEGIN
+    LOCAL
+        V;
+    V = 0;
+    INCR I FROM 0 TO .NSPANS - 1 DO
+        BEGIN
+        LOCAL
+            AFTERSTART,
+            BEFOREEND;
+        AFTERSTART = .LN GTR .SPANS[5 * .I] OR .LN EQL .SPANS[5 * .I] AND .O GEQ .SPANS[5 * .I + 1];
+        BEFOREEND = .LN LSS .SPANS[5 * .I + 2] OR .LN EQL .SPANS[5 * .I + 2] AND .O LEQ .SPANS[5 * .I + 3];
+        IF .AFTERSTART AND .BEFOREEND THEN V = .V OR .SPANS[5 * .I + 4]
+        END;
+    .V
+    END;
+
 ! PAINT window: its rows in WANT.
 ROUTINE PAINT (W : REF VECTOR) : NOVALUE =
     BEGIN
@@ -341,16 +425,19 @@ ROUTINE PAINT (W : REF VECTOR) : NOVALUE =
         ROWS,
         CROW,
         L,
+        LN,
         R;
     B = .W[W_BUF];
     ROWS = .W[W_LEN] - (IF .W[W_STATUS] THEN 1 ELSE 0);
     IF .ROWS LEQ 0 THEN RETURN;
     CROW = SCROLLTO(.W, .ROWS);
     W[W_SHOWN] = TRUE;
+    SPANSOF(.W);
     BEGIN
     BIND
         FM = .W[W_FIRST] : VECTOR;
-    L = .FM[M_LINE]
+    L = .FM[M_LINE];
+    LN = (IF .NSPANS EQL 0 THEN 0 ELSE LINENO(.B, .L))
     END;
     INCR I FROM 0 TO .ROWS - 1 DO
         BEGIN
@@ -373,7 +460,8 @@ ROUTINE PAINT (W : REF VECTOR) : NOVALUE =
         ELSE IF .L NEQ -1
         THEN
             BEGIN
-            LINEROW(.W, .L, .R);
+            LINEROW(.W, .L, .R, .LN);
+            LN = .LN + 1;
             BEGIN
             BIND
                 LL = .L : VECTOR;
@@ -459,6 +547,11 @@ GLOBAL ROUTINE SCR_UPDATE : NOVALUE =
         IF .FIRST GEQ 0
         THEN
             BEGIN
+            ! From the first change to the row's last character, and the
+            ! rest cleared, as DEC's TPU writes a row that changed: what
+            ! is on the screen it doesn't know of goes too.
+            LAST = .SCR_W - 1;
+            WHILE .LAST GEQ .FIRST AND .CELL(.WANT, .R, .LAST)<0, 16, 0> EQL %C' ' DO LAST = .LAST - 1;
             MOVETO(.R, .FIRST);
             INCR C FROM .FIRST TO .LAST DO
                 BEGIN
@@ -468,7 +561,8 @@ GLOBAL ROUTINE SCR_UPDATE : NOVALUE =
                 VIDEO(SRL(.X, 8));
                 TT$PUT(CELL(.WANT, .R, .C), 1)
                 END;
-            VIDEO(0)
+            VIDEO(0);
+            IF .LAST LSS .SCR_W - 1 THEN PUT(%CHAR(27, %C'[', %C'K'))
             END
         END;
     CH$MOVE(MAXW * MAXH * 2, .WANT, .SHOWN);
@@ -679,6 +773,43 @@ ROUTINE MSGBUF =
     0
     END;
 
+! CURSORROW: the row, from 0, the editing point is on in the current
+! window, as the screen shows it now, or the cursor's last row.
+ROUTINE CURSORROW =
+    BEGIN
+    LOCAL
+        W : REF VECTOR,
+        B : REF VECTOR,
+        L,
+        ROWS;
+    W = .CURWIN;
+    IF .W EQL 0 THEN RETURN .CURROW;
+    IF .W[W_MAPPED] EQL 0 OR .W[W_BUF] EQL 0 OR NOT .W[W_SHOWN] THEN RETURN .CURROW;
+    B = .W[W_BUF];
+    ROWS = .W[W_LEN] - (IF .W[W_STATUS] THEN 1 ELSE 0);
+    BEGIN
+    BIND
+        FM = .W[W_FIRST] : VECTOR;
+    L = .FM[M_LINE]
+    END;
+    INCR N FROM 0 TO .ROWS - 1 DO
+        BEGIN
+        IF .L EQL .B[B_LINE] THEN RETURN .W[W_TOP] - 1 + .N;
+        IF .L EQL 0 THEN EXITLOOP;
+        BEGIN
+        BIND
+            LL = .L : VECTOR;
+        L = .LL[L_NEXT]
+        END
+        END;
+    .CURROW
+    END;
+
+! SCR_KEY: a key is about to run: its messages, with no message buffer,
+! start under the cursor again.
+GLOBAL ROUTINE SCR_KEY : NOVALUE =
+    MSGROW = -1;
+
 ! SCR_MESSAGE text, length: a message: a line at the end of the message
 ! buffer, whose window shows it last; with no message buffer, the
 ! screen's last row.
@@ -692,13 +823,16 @@ GLOBAL ROUTINE SCR_MESSAGE (TEXT, LEN) : NOVALUE =
     IF .B EQL 0
     THEN
         BEGIN
-        INCR C FROM 0 TO .SCR_W - 1 DO SETCELL(.SCR_H - 1, .C, %C' ', 0);
-        CH$MOVE(MAXW * MAXH * 2, .SHOWN, .WANT);
-        TEXTROW(.SCR_H - 1, 0, .TEXT, MIN(.LEN, .SCR_W), 0);
-        CH$MOVE(MAXW * MAXH * 2, .WANT, .SHOWN);
-        MOVETO(.SCR_H - 1, 0);
-        PUT(%CHAR(27, %C'[', %C'K'));
+        ! No message buffer: on the screen, as DEC's TPU writes it, from
+        ! the row under the cursor, a row a line, over what is there; the
+        ! screen manager doesn't know, and paints over it only rows that
+        ! change.
+        IF .MSGROW LSS 0 THEN MSGROW = CURSORROW() + 1;
+        MSGROW = MIN(.MSGROW, .SCR_H - 1);
+        MOVETO(.MSGROW, 0);
+        VIDEO(0);
         TT$PUT(.TEXT, MIN(.LEN, .SCR_W));
+        MSGROW = .MSGROW + 1;
         RETURN
         END;
     L = MEM_GET(L_SIZE * 8);
@@ -925,6 +1059,102 @@ GLOBAL ROUTINE SCR_INFO (ARGS : REF VECTOR, N, R) =
     NOTMINE
     END;
 
+! SCROLL (window [, n]): the window's text n lines on, the editing point
+! with it, the cursor on the same row; the lines it went.
+! ponytail: no endless scrolling without n.
+ROUTINE BX_SCROLL (ARGS : REF VECTOR, N, R) =
+    BEGIN
+    LOCAL
+        W : REF VECTOR,
+        B : REF VECTOR,
+        FM : REF VECTOR,
+        K,
+        DONE;
+    ARGCOUNT(1, 2);
+    IF VTYPE(.ARGS[0]) NEQ TY_WINDOW THEN RETURN ARGMISMATCH(1, .ARGS[0]);
+    W = VPTR(.ARGS[0]);
+    IF .W[W_MAPPED] EQL 0 OR .W[W_BUF] EQL 0 THEN RETURN BI_ERR(TPU$_WINDNOTVIS);
+    ! The window as it is first, as DEC's TPU updates it.
+    SCR_UPDATE();
+    K = (IF .N GTR 1 THEN VINT(.ARGS[1]) ELSE 0);
+    B = .W[W_BUF];
+    FM = .W[W_FIRST];
+    DONE = 0;
+    WHILE .K GTR 0 AND .FM[M_LINE] NEQ 0 AND .B[B_LINE] NEQ 0 DO
+        BEGIN
+        BIND
+            F = .FM[M_LINE] : VECTOR,
+            P = .B[B_LINE] : VECTOR;
+        FM[M_LINE] = .F[L_NEXT];
+        B[B_LINE] = .P[L_NEXT];
+        K = .K - 1;
+        DONE = .DONE + 1
+        END;
+    WHILE .K LSS 0 AND PREVLINE(.B, .FM[M_LINE]) NEQ 0 DO
+        BEGIN
+        FM[M_LINE] = PREVLINE(.B, .FM[M_LINE]);
+        B[B_LINE] = PREVLINE(.B, .B[B_LINE]);
+        K = .K + 1;
+        DONE = .DONE - 1
+        END;
+    IF .B[B_LINE] NEQ 0 THEN (BIND P = .B[B_LINE] : VECTOR; B[B_OFF] = MIN(.B[B_OFF], .P[L_LEN]))
+    ELSE B[B_OFF] = 0;
+    .R = MKINT(.DONE);
+    SS_NORMAL
+    END;
+
+! SHIFT (window, n): its text shown n columns further left; the shift.
+ROUTINE BX_SHIFT (ARGS : REF VECTOR, N, R) =
+    BEGIN
+    LOCAL
+        W : REF VECTOR;
+    ARGCOUNT(2, 2);
+    IF VTYPE(.ARGS[0]) NEQ TY_WINDOW THEN RETURN ARGMISMATCH(1, .ARGS[0]);
+    IF VTYPE(.ARGS[1]) NEQ TY_INTEGER THEN RETURN ARGMISMATCH(2, .ARGS[1]);
+    W = VPTR(.ARGS[0]);
+    W[W_SHIFT] = MAX(0, .W[W_SHIFT] + VINT(.ARGS[1]));
+    .R = MKINT(.W[W_SHIFT]);
+    SS_NORMAL
+    END;
+
+! CURSOR_VERTICAL (n), CURSOR_HORIZONTAL (n): the cursor n rows or columns
+! on, as far as it can; how far it went.
+! ponytail: the cursor is the editing point: it goes no further than the
+! text, as MOVE_VERTICAL and MOVE_HORIZONTAL take it.
+ROUTINE BX_CURSOR (ARGS : REF VECTOR, N, R, VERT) =
+    BEGIN
+    LOCAL
+        B : REF VECTOR,
+        K,
+        DONE;
+    ARGCOUNT(1, 1);
+    IF VTYPE(.ARGS[0]) NEQ TY_INTEGER THEN RETURN ARGMISMATCH(1, .ARGS[0]);
+    B = .BUF_CURRENT;
+    IF .B EQL 0 THEN RETURN BI_ERR(TPU$_NOCURRENTBUF);
+    K = VINT(.ARGS[0]);
+    DONE = 0;
+    IF .VERT
+    THEN
+        BEGIN
+        WHILE .K GTR 0 AND .B[B_LINE] NEQ 0 DO
+            (BIND P = .B[B_LINE] : VECTOR; B[B_LINE] = .P[L_NEXT]; K = .K - 1; DONE = .DONE + 1);
+        WHILE .K LSS 0 AND PREVLINE(.B, .B[B_LINE]) NEQ 0 DO
+            (B[B_LINE] = PREVLINE(.B, .B[B_LINE]); K = .K + 1; DONE = .DONE - 1);
+        IF .B[B_LINE] NEQ 0 THEN (BIND P = .B[B_LINE] : VECTOR; B[B_OFF] = MIN(.B[B_OFF], .P[L_LEN]))
+        ELSE B[B_OFF] = 0
+        END
+    ELSE IF .B[B_LINE] NEQ 0
+    THEN
+        BEGIN
+        BIND
+            P = .B[B_LINE] : VECTOR;
+        DONE = MAX(-.B[B_OFF], MIN(.K, .P[L_LEN] - .B[B_OFF]));
+        B[B_OFF] = .B[B_OFF] + .DONE
+        END;
+    .R = MKINT(.DONE);
+    SS_NORMAL
+    END;
+
 ! SCR_CALL number, args, count, result: this module's built-ins, or NOTMINE.
 GLOBAL ROUTINE SCR_CALL (B, ARGS : REF VECTOR, N, R) =
     SELECTONE .B OF
@@ -939,6 +1169,10 @@ GLOBAL ROUTINE SCR_CALL (B, ARGS : REF VECTOR, N, R) =
         [B_CURRENT_WINDOW] : (.R = (IF .CURWIN EQL 0 THEN MKINT(0) ELSE MKV(TY_WINDOW, .CURWIN));
                               SS_NORMAL);
         [B_CURRENT_ROW] : (.R = MKINT(.CURROW + 1); SS_NORMAL);
+        [B_SCROLL] : BX_SCROLL(.ARGS, .N, .R);
+        [B_SHIFT] : BX_SHIFT(.ARGS, .N, .R);
+        [B_CURSOR_VERTICAL] : BX_CURSOR(.ARGS, .N, .R, TRUE);
+        [B_CURSOR_HORIZONTAL] : BX_CURSOR(.ARGS, .N, .R, FALSE);
         [B_CURRENT_COLUMN] : (.R = MKINT(.CURCOL + 1); SS_NORMAL);
         [OTHERWISE] : NOTMINE;
         TES;

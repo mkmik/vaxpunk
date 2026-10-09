@@ -219,6 +219,27 @@ ROUTINE TPU$MAIN =
     KEY_INIT();
     ! The screen, unless /NODISPLAY says there is none.
     IF CL_QUAL(T('DISPLAY'), VAL, VLEN) GEQ 0 THEN SCR_START();
+    ! The section: /SECTION's, or EVE's, unless /NOSECTION.
+    ! ponytail: a section is TPU's source, compiled at each start, until
+    ! section files (PRD-0006 step 9).
+    Q = CL_QUAL(T('SECTION'), VAL, VLEN);
+    IF .Q GEQ 0
+    THEN
+        BEGIN
+        IF .VLEN EQL 0 THEN (VAL = UPLIT BYTE ('SYS$SHARE:EVE$SECTION'); VLEN = 21);
+        NLEN = FILE_NAME(.VAL, .VLEN, T('.TPU'), NAME);
+        TEXT = READ_WHOLE(NAME, .NLEN, TLEN);
+        IF .TEXT EQL 0
+        THEN
+            BEGIN
+            IF .Q GTR 0 THEN (MSG_OUT(0, TPU$_OPENIN, STR_MAKE(NAME, .NLEN)); SCR_END(); FIO$EXIT(%X'1C'))
+            END
+        ELSE
+            BEGIN
+            IF COMPILE(.TEXT, .TLEN, OBJ) AND .OBJ NEQ 0 THEN VM_RUN(.OBJ);
+            MEM_FREE(.TEXT)
+            END
+        END;
     Q = CL_QUAL(T('COMMAND'), VAL, VLEN);
     IF .Q GEQ 0
     THEN

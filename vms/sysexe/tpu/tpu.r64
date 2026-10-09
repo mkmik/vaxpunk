@@ -177,7 +177,9 @@ LITERAL
     B_GOAL = 16,                        ! MOVE_VERTICAL's offset to keep,
     B_GOALLINE = 17,                    ! and where it left the editing point
     B_GOALOFF = 18,
-    B_SIZE = 19,
+    B_SELMARK = 19,                      ! SELECT's marker, or 0
+    B_RANGES = 20,                      ! its ranges with a video attribute
+    B_SIZE = 21,
     BF_MODIFIED = 1,
     BF_OVERSTRIKE = 2,
     BF_NOWRITE = 4,
@@ -211,13 +213,16 @@ LITERAL
     R_START = 1,                        ! markers of the range's own
     R_END = 2,
     R_VIDEO = 3,
-    R_SIZE = 4;
+    R_NEXT = 4,                         ! the buffer's next range with a video attribute
+    R_BUF = 5,                          ! the buffer that lists it, or 0
+    R_SIZE = 6;
 
 
 ! A key typed that has no keyword of its own, a character: KEY_BASE plus
 ! its code, a keyword code past the table's.
 LITERAL
-    KEY_BASE = 65536;
+    KEY_BASE = 65536,
+    SHIFT_BIT = %X'100000';             ! a key after the shift key, GOLD
 
 ! What a built-in returns: SS_NORMAL, or the TPU$_ keyword of an error.
 LITERAL

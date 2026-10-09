@@ -28,7 +28,6 @@ REQUIRE 'TPUKW';
 
 LITERAL
     NOTMINE = -1,
-    SHIFT_BIT = %X'100000',
     MAXMAPS = 16;
 
 ! A key map, a definition, a key map list.
@@ -103,6 +102,7 @@ EXTERNAL ROUTINE
     BUF_KEYMAPS,                        ! (buffer): its key map list's name, a string value
     BUF_CALL,
     SCR_UPDATE : NOVALUE,               ! (): the screen as the buffers are
+    SCR_KEY : NOVALUE,                  ! (): a key is about to run
     SCR_ACTIVE;                         ! (): whether there is a screen
 
 FORWARD ROUTINE
@@ -202,7 +202,9 @@ GLOBAL ROUTINE READKEY =
     IF .K EQL .KEY_SHIFT
     THEN
         BEGIN
+        ! GOLD and a letter: either case.
         K = RAWKEY();
+        IF .K GEQ KEY_BASE + %C'a' AND .K LEQ KEY_BASE + %C'z' THEN K = .K - 32;
         IF .K GEQ 0 THEN K = .K OR SHIFT_BIT
         END;
     IF .LEARNING AND .K GEQ 0
@@ -244,11 +246,13 @@ ROUTINE FINDNAMED (L, NAME) =
 
 ROUTINE NEWMAP (NAME) =
     BEGIN
+    EXTERNAL ROUTINE
+        CASEOF;
     LOCAL
         M : REF VECTOR;
     M = MEM_GET(KM_SIZE * 8);
-    VREF(.NAME);
-    M[KM_NAME] = .NAME;
+    ! Its name in capitals, as DEC's TPU keeps it.
+    M[KM_NAME] = CASEOF(.NAME, K_UPPER);
     M[KM_NEXT] = .MAPS;
     MAPS = .M;
     .M
@@ -256,11 +260,12 @@ ROUTINE NEWMAP (NAME) =
 
 ROUTINE NEWLIST (NAME) =
     BEGIN
+    EXTERNAL ROUTINE
+        CASEOF;
     LOCAL
         L : REF VECTOR;
     L = MEM_GET(KL_SIZE * 8);
-    VREF(.NAME);
-    L[KL_NAME] = .NAME;
+    L[KL_NAME] = CASEOF(.NAME, K_UPPER);
     L[KL_SELF] = TRUE;
     L[KL_NEXT] = .LISTS;
     LISTS = .L;
@@ -616,6 +621,7 @@ GLOBAL ROUTINE KEY_DO (K) : NOVALUE =
         D : REF VECTOR,
         M;
     KEY_LAST = .K;
+    SCR_KEY();
     L = LISTOF();
     IF .L NEQ 0 THEN IF .L[KL_PRE] NEQ 0 THEN RUNPROG(.L[KL_PRE]);
     D = LOOKUP(.L, .K, M);

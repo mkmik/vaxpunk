@@ -385,9 +385,9 @@ ROUTINE SOURCE (V, NP) =
             LOCAL
                 B : REF VECTOR;
             B = BUFP(.V);
-            ! Its lines: no empty one after the last.
+            ! Its lines, each with its line end.
             IF .B[B_FIRST] EQL 0 THEN (.NP = 0; RETURN MEM_GET(8));
-            PIECES(.B, .B[B_FIRST], 0, .B[B_LAST], (BIND Q = .B[B_LAST] : VECTOR; .Q[L_LEN]), .NP)
+            PIECES(.B, .B[B_FIRST], 0, 0, 0, .NP)
             END;
         [OTHERWISE] : 0;
         TES
@@ -523,6 +523,11 @@ GLOBAL ROUTINE BUF_MAP (V, OPS) =
 ! or overstrike mode; the point ends after them.
 ROUTINE PUT (B : REF VECTOR, V : REF VECTOR, N) : NOVALUE =
     BEGIN
+    LOCAL
+        ATEOB;
+    ! At the end of the buffer, each piece is a new line, and a line end
+    ! after the last leaves the editing point at the end again.
+    ATEOB = .B[B_LINE] EQL 0;
     INCR I FROM 0 TO .N - 1 DO
         BEGIN
         IF .I GTR 0
@@ -530,8 +535,25 @@ ROUTINE PUT (B : REF VECTOR, V : REF VECTOR, N) : NOVALUE =
             BEGIN
             LOCAL
                 NEW;
-            NEW = SPLIT(.B, .B[B_LINE], .B[B_OFF]);
-            IF .NEW NEQ 0 THEN (B[B_LINE] = .NEW; B[B_OFF] = 0)
+            IF .ATEOB
+            THEN
+                (B[B_LINE] = 0; B[B_OFF] = 0)
+            ELSE
+                BEGIN
+                NEW = SPLIT(.B, .B[B_LINE], .B[B_OFF]);
+                IF .NEW NEQ 0 THEN (B[B_LINE] = .NEW; B[B_OFF] = 0)
+                END
+            END;
+        ! An empty line at the end of the buffer is a line still.
+        IF .ATEOB AND SLEN(.V[.I]) EQL 0 AND .I LSS .N - 1
+        THEN
+            BEGIN
+            LOCAL
+                L : REF VECTOR;
+            L = LINE_NEW(0, 0);
+            LINK(.B, .L, 0);
+            B[B_LINE] = .L;
+            B[B_OFF] = 0
             END;
         IF SLEN(.V[.I]) GTR 0
         THEN
@@ -568,13 +590,15 @@ GLOBAL ROUTINE MARK_NEW (B : REF VECTOR, L, O) =
     .M
     END;
 
-! MARK_DETACH marker: the buffer stops keeping it.
+! MARK_DETACH marker: the buffer stops keeping it; no longer its select
+! marker if it was.
 ROUTINE MARK_DETACH (M : REF VECTOR) : NOVALUE =
     BEGIN
     LOCAL
         B : REF VECTOR;
     B = .M[M_BUF];
     IF .B EQL 0 THEN RETURN;
+    IF .B[B_SELMARK] EQL .M THEN B[B_SELMARK] = 0;
     IF .M[M_PREV] NEQ 0 THEN (BIND P = .M[M_PREV] : VECTOR; P[M_NEXT] = .M[M_NEXT]) ELSE B[B_MARKS] = .M[M_NEXT];
     IF .M[M_NEXT] NEQ 0 THEN (BIND P = .M[M_NEXT] : VECTOR; P[M_PREV] = .M[M_PREV]);
     M[M_BUF] = 0
@@ -586,8 +610,24 @@ GLOBAL ROUTINE MARK_FREE (M : REF VECTOR) : NOVALUE =
     MEM_FREE(.M)
     END;
 
+! UNLIST range: off its buffer's list of ranges with a video attribute.
+ROUTINE UNLIST (R : REF VECTOR) : NOVALUE =
+    BEGIN
+    LOCAL
+        P;
+    IF .R[R_BUF] EQL 0 THEN RETURN;
+    P = .R[R_BUF] + B_RANGES * 8;
+    WHILE ..P NEQ 0 DO
+        BEGIN
+        IF ..P EQL .R THEN (.P = .R[R_NEXT]; EXITLOOP);
+        P = ..P + R_NEXT * 8
+        END;
+    R[R_BUF] = 0
+    END;
+
 GLOBAL ROUTINE RANGE_FREE (R : REF VECTOR) : NOVALUE =
     BEGIN
+    UNLIST(.R);
     MARK_FREE(.R[R_START]);
     MARK_FREE(.R[R_END]);
     MEM_FREE(.R)
@@ -604,6 +644,16 @@ GLOBAL ROUTINE RANGE_NEW (B, L1, O1, L2, O2, VIDEO) =
     R[R_START] = MARK_NEW(.B, .L1, .O1);
     R[R_END] = MARK_NEW(.B, .L2, .O2);
     R[R_VIDEO] = .VIDEO;
+    ! One with a video attribute is shown so.
+    IF .VIDEO NEQ 0 AND .VIDEO NEQ K_NONE
+    THEN
+        BEGIN
+        BIND
+            BB = .B : VECTOR;
+        R[R_BUF] = .B;
+        R[R_NEXT] = .BB[B_RANGES];
+        BB[B_RANGES] = .R
+        END;
     MKV(TY_RANGE, .R)
     END;
 
@@ -1237,6 +1287,8 @@ ROUTINE BX_WRITE_FILE (ARGS : REF VECTOR, N, R) =
     IF .F EQL 0 THEN RETURN SS_NORMAL;
     NL = FILE_NAME(SADDR(.F), SLEN(.F), 0, 0, NAME);
     P = SOURCE(.ARGS[0], K);
+    ! A buffer's text ends with its last line, not an empty one after it.
+    IF VTYPE(.ARGS[0]) EQL TY_BUFFER AND .K GTR 0 THEN (K = .K - 1; VUNREF(.(.P + .K * 8)));
     IF NOT WRITE_FROM(.P, .K, NAME, .NL,
                       (IF VTYPE(.ARGS[0]) EQL TY_BUFFER THEN (BIND B = BUFP(.ARGS[0]) : VECTOR; .B[B_FIRST])
                        ELSE (BIND RG = VPTR(.ARGS[0]) : VECTOR, M = .RG[R_START] : VECTOR; .M[M_LINE])))
@@ -1332,6 +1384,7 @@ ROUTINE BX_DELETE (ARGS : REF VECTOR, N) =
         [TY_RANGE] :
             BEGIN
             BIND RG = VPTR(.V) : VECTOR;
+            UNLIST(RG);
             MARK_DETACH(.RG[R_START]);
             MARK_DETACH(.RG[R_END])
             END;
@@ -1515,6 +1568,85 @@ ROUTINE BX_FILL (ARGS : REF VECTOR, N) =
     SS_NORMAL
     END;
 
+! SELECT (video): a marker at the editing point that starts the select
+! range, shown in that video; DELETE or letting go of it ends it.
+ROUTINE BX_SELECT (ARGS : REF VECTOR, N, R) =
+    BEGIN
+    LOCAL
+        B : REF VECTOR,
+        M : REF VECTOR;
+    ARGCOUNT(1, 1);
+    IF VTYPE(.ARGS[0]) NEQ TY_KEYWORD THEN RETURN ARGMISMATCH(1, .ARGS[0]);
+    CURBUF(B);
+    IF .B[B_SELMARK] NEQ 0 THEN (.R = 0; RETURN BI_ERR(TPU$_ONESELECT));
+    M = MARK_NEW(.B, .B[B_LINE], .B[B_OFF]);
+    M[M_VIDEO] = VINT(.ARGS[0]);
+    B[B_SELMARK] = .M;
+    .R = MKV(TY_MARKER, .M);
+    SS_NORMAL
+    END;
+
+! SELECT_RANGE: the range from the select marker to the editing point, not
+! taking in the character at the later of the two; 0 if there is none.
+ROUTINE BX_SELECT_RANGE (ARGS, N, R) =
+    BEGIN
+    LOCAL
+        B : REF VECTOR,
+        M : REF VECTOR,
+        L1,
+        O1,
+        L2,
+        O2;
+    ARGCOUNT(0, 0);
+    .R = MKINT(0);
+    CURBUF(B);
+    M = .B[B_SELMARK];
+    IF .M EQL 0 THEN RETURN BI_ERR(TPU$_NOSELECT);
+    IF .M[M_LINE] EQL .B[B_LINE] AND .M[M_OFF] EQL .B[B_OFF] THEN RETURN BI_ERR(TPU$_SELRANGEZERO);
+    IF BEFORE(.B, .M[M_LINE], .M[M_OFF], .B[B_LINE], .B[B_OFF])
+    THEN
+        (L1 = .M[M_LINE]; O1 = .M[M_OFF]; L2 = .B[B_LINE]; O2 = .B[B_OFF])
+    ELSE
+        (L1 = .B[B_LINE]; O1 = .B[B_OFF]; L2 = .M[M_LINE]; O2 = .M[M_OFF]);
+    ! The range ends before the later place.
+    IF .O2 GTR 0
+    THEN
+        O2 = .O2 - 1
+    ELSE
+        BEGIN
+        L2 = (IF .L2 EQL 0 THEN .B[B_LAST] ELSE (BIND LL = .L2 : VECTOR; .LL[L_PREV]));
+        O2 = (IF .L2 EQL 0 THEN 0 ELSE (BIND LL = .L2 : VECTOR; .LL[L_LEN]))
+        END;
+    .R = RANGE_NEW(.B, .L1, .O1, .L2, .O2, K_NONE);
+    SS_NORMAL
+    END;
+
+! BUF_EXIT: writes each buffer that has changed and has a file, and isn't
+! NO_WRITE, as EXIT does.
+! ponytail: a changed buffer with no file isn't asked a name for.
+GLOBAL ROUTINE BUF_EXIT : NOVALUE =
+    BEGIN
+    LOCAL
+        B : REF VECTOR;
+    B = .BUF_FIRST;
+    WHILE .B NEQ 0 DO
+        BEGIN
+        IF (.B[B_FLAGS] AND (BF_MODIFIED OR BF_NOWRITE)) EQL BF_MODIFIED
+           AND (.B[B_OUTFILE] NEQ 0 OR .B[B_INFILE] NEQ 0)
+        THEN
+            BEGIN
+            LOCAL
+                ARGS : VECTOR[1],
+                R;
+            ARGS[0] = MKV(TY_BUFFER, .B);
+            R = 0;
+            BX_WRITE_FILE(ARGS, 1, R);
+            VUNREF(.R)
+            END;
+        B = .B[B_NEXT]
+        END
+    END;
+
 ! ---- SET and GET_INFO
 
 ! ONOFF value: 1 for ON or an odd integer, 0 for OFF or an even one, -1
@@ -1551,12 +1683,29 @@ GLOBAL ROUTINE BUF_SET (ARGS : REF VECTOR, N) =
         IF ONOFF(.ARGS[1]) EQL 1 THEN MSG_FLAGS = .MSG_FLAGS AND NOT .BIT ELSE MSG_FLAGS = .MSG_FLAGS OR .BIT;
         RETURN SS_NORMAL
         END;
+    ! SET (KEY_MAP_LIST, name [, buffer]): the buffer's, the current one's
+    ! if none is given.
+    IF .K EQL K_KEY_MAP_LIST
+    THEN
+        BEGIN
+        ARGCOUNT(2, 3);
+        IF VTYPE(.ARGS[1]) NEQ TY_STRING THEN RETURN ARGMISMATCH(2, .ARGS[1]);
+        IF .N GTR 2
+        THEN
+            (IF VTYPE(.ARGS[2]) NEQ TY_BUFFER THEN RETURN ARGMISMATCH(3, .ARGS[2]); B = BUFP(.ARGS[2]))
+        ELSE
+            (CURBUF(B));
+        VUNREF(.B[B_KEYMAPS]);
+        VREF(.ARGS[1]);
+        B[B_KEYMAPS] = .ARGS[1];
+        RETURN SS_NORMAL
+        END;
     ! The rest name a buffer second.
     SELECTONE .K OF
         SET
         [K_INSERT, K_OVERSTRIKE, K_FORWARD, K_REVERSE, K_NO_WRITE, K_SYSTEM, K_PERMANENT,
          K_MODIFIABLE, K_MODIFIED, K_OUTPUT_FILE, K_EOB_TEXT, K_MARGINS, K_LEFT_MARGIN,
-         K_RIGHT_MARGIN, K_TAB_STOPS, K_MAX_LINES, K_KEY_MAP_LIST] : 0;
+         K_RIGHT_MARGIN, K_TAB_STOPS, K_MAX_LINES] : 0;
         [OTHERWISE] : RETURN NOTMINE;
         TES;
     IF .N LSS 2 THEN RETURN BI_ERR(TPU$_TOOFEW);
@@ -1574,7 +1723,7 @@ GLOBAL ROUTINE BUF_SET (ARGS : REF VECTOR, N) =
         [K_PERMANENT] : SETFLAG(.B, BF_PERMANENT, TRUE);
         [K_MODIFIABLE] : SETFLAG(.B, BF_UNMODIFIABLE, NOT .ON);
         [K_MODIFIED] : SETFLAG(.B, BF_MODIFIED, .ON);
-        [K_OUTPUT_FILE, K_EOB_TEXT, K_KEY_MAP_LIST] :
+        [K_OUTPUT_FILE, K_EOB_TEXT] :
             BEGIN
             LOCAL
                 AT;
@@ -1584,7 +1733,6 @@ GLOBAL ROUTINE BUF_SET (ARGS : REF VECTOR, N) =
                     SET
                     [K_OUTPUT_FILE] : B_OUTFILE;
                     [K_EOB_TEXT] : B_EOBTEXT;
-                    [K_KEY_MAP_LIST] : B_KEYMAPS;
                     TES);
             VUNREF(.B[.AT]);
             VREF(.ARGS[2]);
@@ -1804,6 +1952,8 @@ GLOBAL ROUTINE BUF_CALL (B, ARGS : REF VECTOR, N, R) =
             BX_CURRENT(.B, .ARGS, .N, .R);
         [B_DELETE] : BX_DELETE(.ARGS, .N);
         [B_FILL] : BX_FILL(.ARGS, .N);
+        [B_SELECT] : BX_SELECT(.ARGS, .N, .R);
+        [B_SELECT_RANGE] : BX_SELECT_RANGE(.ARGS, .N, .R);
         [B_SET] :
             BEGIN
             IF .N LSS 1 THEN RETURN BI_ERR(TPU$_TOOFEW);

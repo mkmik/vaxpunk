@@ -20,6 +20,11 @@ FILE.keys is typed (\\r and \\x1b escapes as Python's), a second apart, and
 what TPU sent the terminal is written to FILE.vt, which the vrun test
 renders as a VT100 would.
 
+A FILE.eve is a session with DEC's EVE: EDIT/TPU/NOJOURNAL/NOINITIALIZATION
+FILE.TXT, made empty if no FILE.txt is given, with FILE.eve's lines typed
+as FILE.keys's are; the screen goes to FILE.vt and the file EVE wrote
+then, if it wrote one, to FILE.out.
+
 All files go in one boot of the oracle's system disk, $TPU_ORACLE_DISK or
 the BLISS oracle's (bliss-oracle.py says how to make one), cloned so that
 the disk itself never changes (run-vms.py --system). AXPbox hangs in about
@@ -51,6 +56,23 @@ def script(files):
         cmds += [f"CREATE {os.path.basename(path)}", *lines, "@@CTRLZ"]
     for path in files:
         name, ext = os.path.splitext(os.path.basename(path))
+        if ext.upper() == ".EVE":
+            with open(path, encoding="latin-1") as f:
+                typed = f.read().splitlines()
+            txt = os.path.splitext(path)[0] + ".txt"
+            if not os.path.exists(txt):
+                cmds += [f"CREATE {name}.TXT", "@@CTRLZ"]
+            cmds += ["SET TERMINAL/DEVICE=VT100/WIDTH=80/PAGE=24/NOEIGHTBIT",
+                     mark("BEGIN SCREEN", name),
+                     f"@@START EDIT/TPU/NOJOURNAL/NOINITIALIZATION {name}.TXT",
+                     *[f"@@KEYS {k}" for k in typed],
+                     "@@PROMPT",
+                     mark("END", name),
+                     "SET TERMINAL/WIDTH=255/PAGE=0",
+                     mark("BEGIN FILE", name),
+                     f'IF F$SEARCH("{name}.TXT;2") .NES. "" THEN TYPE {name}.TXT;2',
+                     mark("END", name)]
+            continue
         if ext.upper() != ".TPU":
             continue
         keys = os.path.splitext(path)[0] + ".keys"
@@ -115,7 +137,7 @@ def screens(raw):
     out = {}
     for m in re.finditer(rb"@@ORACLE BEGIN SCREEN (\w+)\r?\n(.*?)@@ORACLE", raw, re.S):
         body = m.group(2)
-        start = body.find(b".TPU")
+        start = body.find(b"EDIT/TPU")
         start = body.find(b"\n", start) + 1 if start >= 0 else 0
         end = body.rfind(b"$ ")
         out[m.group(1).decode().upper()] = body[start:end if end > start else len(body)]
@@ -133,7 +155,18 @@ def main(files, log=None):
     for path in files:
         name, ext = os.path.splitext(path)
         key = os.path.basename(name).upper()
-        if ext.upper() != ".TPU":
+        if ext.upper() not in (".TPU", ".EVE"):
+            continue
+        if ext.upper() == ".EVE":
+            if key not in shown:
+                sys.exit(f"{path}: no screen in the raw log")
+            with open(name + ".vt", "wb") as f:
+                f.write(shown[key])
+            written = found.get(("FILE", key), [])
+            if written:
+                with open(name + ".out", "w") as f:
+                    f.write("".join(line + "\n" for line in written))
+            print(f"{path}: {len(shown[key])} bytes to the screen, {len(written)} lines written")
             continue
         if os.path.exists(name + ".keys"):
             if key not in shown:

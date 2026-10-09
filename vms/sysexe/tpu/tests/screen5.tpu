@@ -1,0 +1,26 @@
+! Ranges shown in a video, SCROLL and SHIFT.
+b := CREATE_BUFFER ("main");
+w := CREATE_WINDOW (1, 11, ON);
+MAP (w, b);
+i := 1;
+LOOP
+    EXITIF i > 30;
+    COPY_TEXT ("row " + STR (i) + " " + ("-" * (i * 3)));
+    SPLIT_LINE;
+    i := i + 1;
+ENDLOOP;
+POSITION (BEGINNING_OF (b));
+MOVE_VERTICAL (2);
+m1 := MARK (NONE);
+MOVE_HORIZONTAL (5);
+r1 := CREATE_RANGE (m1, MARK (NONE), BOLD);
+MOVE_VERTICAL (2);
+m2 := MARK (NONE);
+MOVE_VERTICAL (1);
+r2 := CREATE_RANGE (m2, MARK (NONE), UNDERLINE);
+POSITION (BEGINNING_OF (b));
+DEFINE_KEY ("SCROLL (w, 5)", E6);
+DEFINE_KEY ("SCROLL (w, -2)", E5);
+DEFINE_KEY ("SHIFT (w, 10)", RIGHT);
+DEFINE_KEY ("SHIFT (w, -3)", LEFT);
+DEFINE_KEY ("QUIT (OFF)", CTRL_Z_KEY);
