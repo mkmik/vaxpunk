@@ -64,7 +64,10 @@ the role PALcode played on an Alpha: it's the "hardware" layer underneath VMS
   `disk 0: virtio-blk, 8192 blocks` and `disk 1: ...` for them. From then
   on the PAL can read the disks' blocks, by number, for itself and for the
   executive, and write the data disk's for the executive. It also
-  notes the network device, virtio-net, if QEMU has one.
+  notes the network device, virtio-net, if QEMU has one, and sets up
+  the entropy device, virtio-rng, printing `entropy: virtio-rng`. The
+  PAL reads random bytes from it for `$GET_ENTROPY`
+  ([ADR-0031](adr/0031-entropy-from-virtio-rng.md)).
 - `start_exec` reads `EXEC.EXE` from the system disk, as VMS's first
   bootstrap did: the home block, the index file, the top directory,
   `[SYSEXE]`, then the file (`f11_boot_file`). It loads it, and creates
@@ -419,7 +422,8 @@ executive feature:
   reads the system disk's home block by its LBN with `$QIOW`. A `$QIOW`
   from ARM64 with a buffer above 4 GB gets `SS$_ARG_GTR_32_BITS` from the
   service dispatcher. It turns fixed times into text with `$ASCTIM` and
-  into numbers with `$NUMTIM`, and checks the result. It takes
+  into numbers with `$NUMTIM`, and checks the result. It fills two
+  buffers with `$GET_ENTROPY` and checks that they differ. It takes
   privileges away and back with `$SETPRV`, and makes OUTSIDER, a process
   in another UIC group it may touch only with `WORLD`. It starts a
   second SLEEPER, NAPPER, and makes it exit with `$FORCEX` before its

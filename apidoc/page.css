@@ -53,6 +53,8 @@ html:not(.vt) .num{color:var(--maroon)}
 .tag{font:700 .65rem var(--sans);text-transform:uppercase;letter-spacing:.08em;padding:.1rem .45rem;
 border:1.5px solid var(--ink)}.t-service,.t-pal{background:var(--ink);color:var(--paper);text-shadow:none}
 .t-stub{border-style:dashed;color:var(--dim)}
+.t-departure{border-color:var(--orange);color:var(--orange)}
+.departure{border-left-style:double;border-left-width:4px}
 .src{margin-left:auto;font:.75rem var(--mono);color:var(--dim)}
 dl{display:grid;grid-template-columns:8.5rem 1fr;gap:.35rem 1rem;margin:.7rem 0 0}
 dt{font:700 .7rem/1.9 var(--sans);text-transform:uppercase;letter-spacing:.1em;color:var(--dim)}

@@ -1,0 +1,40 @@
+        .TITLE  ENTROPY $GET_ENTROPY: random bytes from the host
+        .IDENT  /V0.1/
+;
+; $GET_ENTROPY is VSI OpenVMS's service for random bytes, modelled on
+; getentropy(): at most 256 at a time, good enough for keys. The PAL reads
+; them from the machine's entropy device, virtio-rng, which QEMU fills
+; from the host's random generator (ADR-0031).
+;
+; vaxpunk: VAX and Alpha VMS had no such service, and no entropy device;
+; programs hashed the time and the counters $GETJPI and $GETRMI give.
+; It comes from VSI's OpenVMS, and the PAL call under it, GETENTROPY, is
+; vaxpunk's own.
+;
+        .LIBRARY "lib.mlb"
+        .LIBRARY "starlet.mlb"
+        $PALDEF
+        $SSDEF
+
+        .PSECT  $CODE$
+
+; $GET_ENTROPY buffer, buflen: fills the buflen bytes at buffer, at most
+; 256, with random bytes. SS$_BADPARAM for more than 256, SS$_ACCVIO if
+; the caller can't write them, SS$_NOSUCHDEV if the machine has no
+; entropy device.
+;
+; vaxpunk: a VSI OpenVMS service, which VAX and Alpha VMS didn't have.
+        .ENTRY  EXE$GET_ENTROPY, ^M<>
+        CMPL    8(AP), #256
+        BGTRU   80$
+        IFNOWRT 8(AP), @4(AP), 90$
+        MOVL    4(AP), R0
+        MOVL    8(AP), R1
+        CALL_PAL #PAL$_GETENTROPY
+        RET
+80$:    MOVL    #SS$_BADPARAM, R0
+        RET
+90$:    MOVL    #SS$_ACCVIO, R0
+        RET
+
+        .END

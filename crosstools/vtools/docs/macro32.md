@@ -355,7 +355,7 @@ function codes are in
 | `CALL_PAL #code` | any PAL call, as on Alpha: arguments in R0-R5, which go to x0-x5, the result in R0 |
 
 `CALL_PAL` is for the calls the VAX has no instruction for, `SWPCTX`,
-`WTINT`, `WRPTE`, `DELCTX`, `READLBLK`, `WRITELBLK` and `RD_PS`, whose
+`WTINT`, `WRPTE`, `DELCTX`, `READLBLK`, `WRITELBLK`, `GETENTROPY` and `RD_PS`, whose
 codes `$PALDEF` names.
 The code must be a constant.
 

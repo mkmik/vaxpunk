@@ -187,7 +187,7 @@ DELTA:  .LONG   ^XA459A2E0, ^XFFFFFF25  ; 1 02:03:04.05, a delta time
 NUMBUF: .BLKW   7                       ; $NUMTIM's
 
         .PSECT  CODE, EXE, LONG
-        .ENTRY  START, ^M<R2>
+        .ENTRY  START, ^M<R2, R3>
         $SETPRN_S PRCNAM=OTHER_NAME
         EXPECT  #SS$_NORMAL, 1
         $SETPRN_S PRCNAM=MY_NAME
@@ -494,6 +494,17 @@ NUMBUF: .BLKW   7                       ; $NUMTIM's
         BRB     81$
 80$:    BRW     90$
 81$:
+; $GET_ENTROPY: two fills of 256 bytes, which differ, and its errors.
+        $GET_ENTROPY_S BUFFER=BLOCK, BUFLEN=#256
+        EXPECT  #SS$_NORMAL, 100
+        $GET_ENTROPY_S BUFFER=BLOCK+256, BUFLEN=#256
+        EXPECT  #SS$_NORMAL, 101
+        CMPC3   #256, BLOCK, BLOCK+256
+        BEQL    80$
+        $GET_ENTROPY_S BUFFER=BLOCK, BUFLEN=#257
+        EXPECT  #SS$_BADPARAM, 102
+        $GET_ENTROPY_S BUFFER=G^EXE$GL_RPB, BUFLEN=#4
+        EXPECT  #SS$_ACCVIO, 103
 
 ; Other processes: lower this one's priority below NAPPER's so it runs
 ; and hibernates; suspend it while it does, so that $WAKE leaves it

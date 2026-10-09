@@ -42,6 +42,7 @@ LITERAL
     PAL$_READLBLK = 70,  ! R0 = buffer, R1 = byte count, R2 = LBN, R3 = unit; R0 = status
     PAL$_WRITELBLK = 71,  ! the same, writing the buffer there
     PAL$_DOORBELL = 72,  ! R0 = a port: MTPR #n, #PR$_DOORBELL
+    PAL$_GETENTROPY = 73,  ! R0 = buffer, R1 = byte count, at most 256; R0 = status
     PAL$_RD_PS = 145;  ! R0 = the PSL: the modes and IPL
 
 ! $IPLDEF
