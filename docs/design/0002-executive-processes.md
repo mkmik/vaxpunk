@@ -1312,7 +1312,9 @@ work, which `cargo test -p boot` runs from DCL's prompt (`RUN STARTUP`,
 session, then
 `SET DEFAULT MDA0:[000000]`, which `SYSTARTUP_VMS.COM` mounted, a `COPY/LOG` to it, which prompts for its
 parameters, an `EDIT` in keypad mode that writes a second version, `DIR`,
-`DELETE`s and `DIR` again, `RUN CLITEST`) and to the end. `vms/sysmgr/` holds the text files in
+`DELETE`s and `DIR` again, `RUN CLITEST`) and to the end. `CDEMO`, from
+`crosstools/vtools/examples/c`, calls a C library through its BLISS-64
+adapter, and the boot test runs it too. `vms/sysmgr/` holds the text files in
 `DKA0:[SYSMGR]`, among them `SYSTARTUP_VMS.COM`, which mounts `MDA0:` and `DKB0:` at
 boot, and `SYLOGIN.COM`. They run in user mode, DCL in supervisor mode, and write
 on the console with `PRINT` and `PRINTHEX` from `sysexe.mlb`, which call

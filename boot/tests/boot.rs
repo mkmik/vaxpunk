@@ -111,7 +111,9 @@ const SYSTEM_DISK: Phase = Phase {
         " \\FOO\\",
         "PING.EXE;1          PONG.EXE;1",
         "Total of 2 files.",
-        "Directory DKA0:[SYSLIB]\n\nEVE$SECTION.TPU$SECTION;1",
+        // Apart: STARTUP's processes may print between them.
+        "Directory DKA0:[SYSLIB]",
+        "EVE$SECTION.TPU$SECTION;1",
         "LIBRTL.EXE;1",
         "and the rest of what INITIALIZE made.",
         "CLITEST: foreign ONE \"Two\" 3",
@@ -660,6 +662,17 @@ const TPU: Phase = Phase {
     ],
 };
 
+/// CDEMO, a BLISS-64 program that calls a C library through the library's
+/// BLISS-64 adapter (crosstools/vtools/examples/c), prints what it prints
+/// under vrun, crosstools/vtools/tests/examples/c/cdemo.stdout (checked
+/// after the session).
+const C: Phase = Phase {
+    name: "c",
+    secs: 30,
+    steps: &[("$ TYPE TPUEVE.TXT", 1, "RUN CDEMO\r")],
+    lines: &["C calls 7"],
+};
+
 /// The processes STARTUP and SNOOP ran, which print as they go, done long
 /// before: STARTUP's SLEEPER and SVCTEST's NAPPER say they hibernate
 /// before SLEEPER does, and the CPU then idles, taking clock interrupts.
@@ -781,6 +794,7 @@ const PHASES: &[Phase] = &[
     BACKUP,
     RMS,
     TPU,
+    C,
     STARTUP,
     USERS,
 ];
@@ -949,14 +963,20 @@ fn boot() {
         "SPIN's registers changed"
     );
 
-    let want = fs::read_to_string(root.join("vms/sysexe/rmstest.out")).unwrap();
-    let first = want.lines().next().unwrap();
-    let got: Vec<_> = text[text.find(first).expect("RMSTEST's output")..]
-        .lines()
-        .take(want.lines().count())
-        .collect();
-    for (n, (w, g)) in want.lines().zip(&got).enumerate() {
-        assert_eq!(w, *g, "RMSTEST's line {} isn't OpenVMS's", n + 1);
+    // RMSTEST's output must be OpenVMS's, and CDEMO's what vrun printed.
+    for (program, file) in [
+        ("RMSTEST", "vms/sysexe/rmstest.out"),
+        ("CDEMO", "crosstools/vtools/tests/examples/c/cdemo.stdout"),
+    ] {
+        let want = fs::read_to_string(root.join(file)).unwrap();
+        let first = want.lines().next().unwrap();
+        let got: Vec<_> = text[text.find(first).expect(program)..]
+            .lines()
+            .take(want.lines().count())
+            .collect();
+        for (n, (w, g)) in want.lines().zip(&got).enumerate() {
+            assert_eq!(w, *g, "{program}'s line {} isn't {file}'s", n + 1);
+        }
     }
 
     let mut img = Image::open(&datadisk, Mode::ReadOnly).unwrap();

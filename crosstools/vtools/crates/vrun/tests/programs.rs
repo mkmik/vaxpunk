@@ -1,8 +1,10 @@
 //! Assembles, links and runs every program in tests/run and examples/vasm
 //! under vrun, and compiles, links and runs every MACRO-32 program in
-//! tests/macro32 and examples/macro32, and every BLISS-64 program in
-//! tests/bliss and examples/bliss, and checks each against its expected
-//! files, next to it in tests/ and in tests/examples/ for the examples:
+//! tests/macro32 and examples/macro32, every BLISS-64 program in
+//! tests/bliss and examples/bliss, and the programs with C modules in
+//! examples/c, which the cross gcc compiles and velf converts. Checks each
+//! against its expected files, next to it in tests/ and in tests/examples/
+//! for the examples:
 //! NAME.stdout (exact output, default empty), NAME.status (exit code,
 //! default 0) and NAME.stderr (a line stderr must contain). A directory
 //! NAME/ is a program of several modules, linked in name order, then the
@@ -57,6 +59,13 @@ fn macro32() {
 #[test]
 fn bliss() {
     all(&[("tests/bliss", "tests/bliss")], vmacro::compile, true);
+}
+
+/// BLISS-64 programs that call C, which the cross gcc compiles
+/// (`velf::gcc`).
+#[test]
+fn c() {
+    all(&[("examples/c", "tests/examples/c")], vmacro::compile, true);
 }
 
 /// Known vmacro bugs, PRD-0003 items 16 and 17: each program here moves to
@@ -270,10 +279,10 @@ fn library(dir: &Path, tool: Tool) -> Result<Vec<u8>, String> {
     Ok(bytes)
 }
 
-/// A source file: .mar for vasm or vmacro, .b64 for vbliss.
+/// A source file: .mar for vasm or vmacro, .b64 for vbliss, .c for gcc.
 fn is_source(p: &Path) -> bool {
     p.extension()
-        .is_some_and(|e| e == "mar" || e == "b64" || e == "b32")
+        .is_some_and(|e| e == "mar" || e == "b64" || e == "b32" || e == "c")
 }
 
 /// The source files in `dir`, in name order.
@@ -287,12 +296,17 @@ fn sources(dir: &Path) -> Vec<PathBuf> {
     s
 }
 
-/// Assembles or compiles `source`, with vbliss if it is BLISS; returns its
-/// file name and the object.
+/// Assembles or compiles `source`, with vbliss if it is BLISS and gcc and
+/// velf if it is C; returns its file name and the object.
 fn assemble(source: &Path, tool: Tool) -> Result<(String, Vec<u8>), String> {
     let text = fs::read_to_string(source).unwrap();
     let module = source.file_stem().unwrap().to_string_lossy().to_uppercase();
     let opts = options(&module, source);
+    if source.extension().is_some_and(|e| e == "c") {
+        let elf = Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("{module}.o"));
+        let records = velf::convert(&velf::gcc(source, &elf)?, &module, opts.date)?;
+        return Ok((source.display().to_string(), obj::write(&records)));
+    }
     let result = if source.extension().is_some_and(|e| e == "b64" || e == "b32") {
         // With the qualifiers its first line gives the oracle.
         let bliss = vbliss::Options {

@@ -1,0 +1,121 @@
+MODULE CDEMO_VMS =
+BEGIN
+! The VMS face of CDEMO, the C library in cdemo.c: VMS's conventions
+! outside, C's inside. Outside, strings are descriptors, results come
+! back by reference and the value is a condition value. Inside, strings
+! are an address and a length, and a negative int is an error.
+!
+! A call from BLISS-64 to C needs no jacket: the vaxpunk calling standard
+! is AAPCS64's, so the arguments are where C looks for them, and C
+! doesn't read the count in x9. Three things need care:
+!
+! - C's int results come back in the low half of x0, with the upper half
+!   zero, not the sign: take .R<0, 32, 1>.
+! - What C writes through a pointer is as wide as its type: an int is a
+!   longword.
+! - A call from C back to BLISS-64 has no count in x9, and its int
+!   arguments' upper halves are anything: the routine C calls takes
+!   <0, 32, 1> of them and never ACTUALCOUNT. And no condition may pass
+!   from it into C's frames, which have no frame descriptor: the handler
+!   search would take what C keeps at 16(FP) for a handler.
+LIBRARY 'SYS$LIBRARY:STARLET';
+
+EXTERNAL ROUTINE
+    CDEMO_SUM,
+    CDEMO_NAME,
+    CDEMO_WORDS;
+
+FORWARD ROUTINE
+    EMIT,
+    STOP;
+
+! CDEMO$SUM a, ..., j, sum, minimum: the sum of a to j, as quadwords, to
+! sum, and the smallest of them, a longword, to minimum. a, g, h and i
+! are longwords, c a signed byte, d an unsigned byte, e a signed word, f
+! an unsigned word. Returns SS$_NORMAL.
+GLOBAL ROUTINE CDEMO$SUM (A, B, C, D, E, F, G, H, I, J, SUM : REF VECTOR[1], MINIMUM) =
+    BEGIN
+    ! Twelve arguments in, eleven out: the last three go on the stack.
+    SUM[0] = CDEMO_SUM(.A, .B, .C, .D, .E, .F, .G, .H, .I, .J, .MINIMUM);
+    SS$_NORMAL
+    END;
+
+! CDEMO$NAME n, name, len: n's English name, 0 to 9, into the string
+! name describes, and its length, a word, to len. Returns SS$_NORMAL, or
+! SS$_BADPARAM for any other n or a string too short.
+GLOBAL ROUTINE CDEMO$NAME (N, NAME : REF BLOCK[, BYTE], LEN : REF VECTOR[1, WORD]) =
+    BEGIN
+    LOCAL
+        R;
+    R = CDEMO_NAME(.N, .NAME[DSC$A_POINTER], .NAME[DSC$W_LENGTH]);
+    R = .R<0, 32, 1>;
+    IF .R LSS 0 THEN RETURN SS$_BADPARAM;
+    LEN[0] = .R;
+    SS$_NORMAL
+    END;
+
+! CDEMO$WORDS text, action, user_arg, count, stop_at: calls
+! action(word, user_arg) for each word of the string text describes, with
+! a descriptor of the word, until action returns a failure status or
+! signals. Returns SS$_NORMAL with the number of words to count, a
+! longword, or what action returned or signaled, with the offset of the
+! word it stopped at to stop_at, a quadword.
+GLOBAL ROUTINE CDEMO$WORDS (TEXT : REF BLOCK[, BYTE], ACTION, USER_ARG, COUNT : REF VECTOR[1, LONG],
+    STOP_AT) =
+    BEGIN
+    LOCAL
+        ! What EMIT needs: the action routine, its argument, and the
+        ! status that stopped the words.
+        CONTEXT : VECTOR[3],
+        R;
+    CONTEXT[0] = .ACTION;
+    CONTEXT[1] = .USER_ARG;
+    CONTEXT[2] = SS$_NORMAL;
+    R = CDEMO_WORDS(.TEXT[DSC$A_POINTER], .TEXT[DSC$W_LENGTH], EMIT, CONTEXT, .STOP_AT);
+    R = .R<0, 32, 1>;
+    IF .R GEQ 0 THEN COUNT[0] = .R;
+    .CONTEXT[2]
+    END;
+
+! EMIT context, word, len: what cdemo_words calls for each word, by C's
+! conventions. Calls the action routine by VMS's, with a descriptor of
+! the len bytes at word. Returns 0 to go on, or -1 to stop, with the
+! action routine's status in the context. STOP catches what it signals.
+ROUTINE EMIT (CONTEXT : REF VECTOR[3], WORD, LEN) =
+    BEGIN
+    LOCAL
+        DESC : BLOCK[DSC$K_S_BLN, BYTE],
+        CTX : VOLATILE,
+        STATUS;
+    ENABLE
+        STOP(CTX);
+    CTX = .CONTEXT;
+    DESC[DSC$W_LENGTH] = .LEN<0, 32, 1>;
+    DESC[DSC$B_DTYPE] = DSC$K_DTYPE_T;
+    DESC[DSC$B_CLASS] = DSC$K_CLASS_S;
+    DESC[DSC$A_POINTER] = .WORD;
+    STATUS = (.CONTEXT[0])(DESC, .CONTEXT[1]);
+    IF .STATUS THEN RETURN 0;
+    CONTEXT[2] = .STATUS;
+    -1
+    END;
+
+! STOP: EMIT's handler. Takes whatever the action routine signals, keeps
+! it as the status, and unwinds to EMIT's caller, cdemo_words, which
+! sees -1 from EMIT and stops. The search never reaches C's frames, and
+! the unwind gives C back the registers it keeps, from the frame
+! descriptors of the frames it removes.
+ROUTINE STOP (SIG : REF VECTOR[, LONG], MCH : REF BLOCK[, BYTE], EN : REF VECTOR) =
+    BEGIN
+    LOCAL
+        CONTEXT : REF VECTOR[3];
+    IF .SIG[1] EQL SS$_UNWIND THEN RETURN SS$_CONTINUE;
+    CONTEXT = ..EN[1];
+    CONTEXT[2] = .SIG[1];
+    MCH[CHF$IH_MCH_SAVR0] = -1;
+    SETUNWIND();
+    SS$_CONTINUE
+    END;
+
+END
+ELUDOM

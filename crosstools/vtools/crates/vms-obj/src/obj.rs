@@ -17,6 +17,8 @@ pub const ETBT: u16 = 13;
 
 /// Maximum record size (`EOBJ$C_MAXRECSIZ`).
 pub const MAX_RECORD: usize = 8192;
+/// Largest STO_IMM a writer makes, so that a command always fits in a record.
+pub const MAX_IMM: usize = 4096;
 /// Structure level (`EOBJ$C_STRLVL`).
 pub const STRLVL: u8 = 2;
 
@@ -121,6 +123,37 @@ pub enum Gsd {
     Ref(SymRef),
     /// Any other subrecord, kept as bytes (`IDC`, `PSC64`, the linker's own).
     Other { gsdtyp: u16, data: Vec<u8> },
+}
+
+impl Gsd {
+    /// Size in a record, padded to a quadword as every subrecord is.
+    pub fn size(&self) -> usize {
+        let body = match self {
+            Gsd::Psc(p) => 9 + p.name.len(),
+            Gsd::Def(d) => 29 + d.name.len(),
+            Gsd::Ref(r) => 5 + r.name.len(),
+            Gsd::Other { data, .. } => data.len(),
+        };
+        (4 + body).next_multiple_of(8)
+    }
+}
+
+/// Groups GSD subrecords or TIR commands into records that stay under the
+/// size limit.
+pub fn split<T>(items: Vec<T>, size: impl Fn(&T) -> usize) -> Vec<Vec<T>> {
+    const ROOM: usize = MAX_RECORD - 64;
+    let mut groups: Vec<Vec<T>> = Vec::new();
+    let mut used = ROOM;
+    for item in items {
+        let n = size(&item);
+        if used + n > ROOM {
+            groups.push(Vec::new());
+            used = 0;
+        }
+        used += n;
+        groups.last_mut().unwrap().push(item);
+    }
+    groups
 }
 
 record! {

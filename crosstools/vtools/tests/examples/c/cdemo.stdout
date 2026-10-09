@@ -1,0 +1,22 @@
+CDEMO$SUM status 1
+sum 4999964913
+minimum -100000
+cdemo_name 12 as a quadword 4294967295
+cdemo_name 12 as an int -1
+CDEMO$NAME 12 status 20
+CDEMO$NAME 7 status 1
+seven
+calling
+C
+from
+BLISS
+CDEMO$WORDS status 1
+words 4
+letters 17
+one
+CDEMO$WORDS status 134316050
+stopped at 4
+three
+CDEMO$WORDS status 134316060
+stopped at 7
+C calls 7
