@@ -76,6 +76,7 @@ from 0 up for these. Nothing else is mapped. The boot context starts with:
 | 12 | `RPB$L_BOOTTIME` | seconds since 1970 at boot, from QEMU virt's PL031 RTC, which the PAL maps after the UART and reads once |
 | 16 | `RPB$L_PORT` | port 0's pages, `0x4FF00000`, or 0 without a network device |
 | 64 | `RPB$Q_HWPCB` | the boot context's HWPCB, 128 bytes |
+| 192 | `RPB$T_STARTUP` | the SYSGEN parameters `STARTUP_P1` to `STARTUP_P8`, 4 characters each, blank-padded, from QEMU's fw_cfg file `opt/vaxpunk/startup`, which `run-qemu.sh` makes from `--p1` to `--p8` |
 
 ### The disks
 

@@ -24,6 +24,7 @@
         $PRTDEF
         $SSDEF
         $PCBDEF
+        $RPBDEF
 
         .EXTERNAL EXE$OUTZSTRING, EXE$OUTHEX, EXE$OUTCRLF
         .EXTERNAL EXE$CMODKRNL, EXE$CMODEXEC, EXE$ACVIOLAT, EXE$OPCDEC
@@ -39,6 +40,8 @@ UREXEC = PTE$M_VALID ! <PRT$C_UR @ PTE$V_PROT> ! PTE$M_EXEC
         .PSECT  EXEC$DATA, NOEXE, WRT, QUAD
 EXE$GL_RPB::                            ; the restart parameter block
         .LONG   0
+SGN$GB_STARTUP_P1::                     ; SYSGEN's STARTUP_P1 to STARTUP_P8, 4 characters
+        .BLKB   32                      ; each, from the RPB: run-qemu.sh's --p1 to --p8
 EXE$AL_SCB::                            ; the system control block
         .BLKB   SCB$K_LENGTH
 STARTUP_IMAGE:
@@ -83,6 +86,7 @@ SYSLNM: .ASCIC  "SYS$SYSDEVICE"         ; the system disk
 EXEC$START::
         .EXCEPTION_ENTRY
         MOVL    R11, EXE$GL_RPB
+        MOVC3   #32, RPB$T_STARTUP(R11), SGN$GB_STARTUP_P1
         MOVAB   EXE$OPCDEC, EXE$AL_SCB+SCB$L_OPCDEC
         MOVAB   EXE$ACVIOLAT, EXE$AL_SCB+SCB$L_ACCVIO
         MOVAB   EXE$CMODKRNL, EXE$AL_SCB+SCB$L_CHMK

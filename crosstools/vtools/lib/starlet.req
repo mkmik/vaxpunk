@@ -1278,7 +1278,15 @@ LITERAL
     SYI$_VERSION = 4096,  ! the system's version, 8 characters
     SYI$_MAXPROCESSCNT = 4105,  ! how many processes there may be
     SYI$_QUANTUM = 4137,  ! ticks of 10 ms in a quantum
-    SYI$_BOOTTIME = 4286;  ! the system time at boot, a quadword
+    SYI$_BOOTTIME = 4286,  ! the system time at boot, a quadword
+    SYI$_STARTUP_P1 = 4289,  ! the SYSGEN parameter STARTUP_P1, 4 characters
+    SYI$_STARTUP_P2 = 4290,  ! STARTUP_P2
+    SYI$_STARTUP_P3 = 4291,  ! STARTUP_P3
+    SYI$_STARTUP_P4 = 4292,  ! STARTUP_P4
+    SYI$_STARTUP_P5 = 4293,  ! STARTUP_P5
+    SYI$_STARTUP_P6 = 4294,  ! STARTUP_P6
+    SYI$_STARTUP_P7 = 4295,  ! STARTUP_P7
+    SYI$_STARTUP_P8 = 4296;  ! STARTUP_P8
 
 ! $UAIDEF
 LITERAL

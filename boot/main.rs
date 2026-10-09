@@ -1,7 +1,9 @@
-//! cargo run -p boot [-- [--autologin] [--gdb] [--hvf] [--uart1[=PORT]]]: copies
-//! the kernel, shim, root task and system disk cargo built into out/, stitches
-//! out/esp.img with mkesp.sh and becomes scripts/run-qemu.sh, which gets the
-//! arguments. With --images it stops before QEMU, for web/demo-images.sh.
+//! cargo run -p boot [-- [--autologin] [--gdb] [--hvf] [--uart1[=PORT]]
+//! [--p1=VALUE ... --p8=VALUE]]: copies the kernel, shim, root task and system
+//! disk cargo built into out/, stitches out/esp.img with mkesp.sh and becomes
+//! scripts/run-qemu.sh, which gets the arguments: --p1 to --p8 are STARTUP_P1
+//! to STARTUP_P8, for SYSTARTUP_VMS.COM. With --images it stops before QEMU,
+//! for web/demo-images.sh.
 //! --autologin writes [SYSEXE]SYSALF.DAT on out/sysdisk.img, so LOGINOUT logs
 //! the console in as SYSTEM without asking.
 

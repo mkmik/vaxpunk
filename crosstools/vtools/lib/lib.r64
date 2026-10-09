@@ -150,14 +150,15 @@ LITERAL
 
 ! $RPBDEF
 LITERAL
-    RPB$K_LENGTH = 192;
+    RPB$K_LENGTH = 224;
 MACRO
     RPB$L_BASE = 0, 0, 32, 0 %,  ! the RPB's own address
     RPB$L_PFNCNT = 4, 0, 32, 0 %,  ! PFNs 0 to PFNCNT-1 are the executive's
     RPB$L_FREEPFN = 8, 0, 32, 0 %,  ! and those below this one are in use
     RPB$L_BOOTTIME = 12, 0, 32, 0 %,  ! seconds since 1970 at boot, from the RTC
     RPB$L_PORT = 16, 0, 32, 0 %,  ! port 0's pages, in S0, or 0 without a network
-    RPB$Q_HWPCB = 64, 0, 64, 0 %;  ! the boot context's HWPCB
+    RPB$Q_HWPCB = 64, 0, 64, 0 %,  ! the boot context's HWPCB
+    RPB$T_STARTUP = 192, 0, 0, 0 %;  ! STARTUP_P1 to STARTUP_P8, 4 characters each, blank-padded
 
 ! $STATEDEF
 LITERAL

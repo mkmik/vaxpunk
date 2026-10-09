@@ -1,6 +1,18 @@
 $ ! SYSTARTUP_VMS.COM: the STARTUP process's DCL runs it when the system
 $ ! starts, before anyone logs in, as VMS's STARTUP runs it: the site's
 $ ! own startup.
+$ ! P1 to P8 are the SYSGEN parameters STARTUP_P1 to STARTUP_P8, up to 4
+$ ! characters each, as VMS's STARTUP.COM reads them; run-qemu.sh's
+$ ! --p1 to --p8 set them, as in cargo run -p boot -- --p1=MIN. Test
+$ ! them here to start the system one way or another.
+$ IF P1 .EQS. "" THEN P1 = F$EDIT(F$GETSYI("STARTUP_P1"), "TRIM,UPCASE")
+$ IF P2 .EQS. "" THEN P2 = F$EDIT(F$GETSYI("STARTUP_P2"), "TRIM,UPCASE")
+$ IF P3 .EQS. "" THEN P3 = F$EDIT(F$GETSYI("STARTUP_P3"), "TRIM,UPCASE")
+$ IF P4 .EQS. "" THEN P4 = F$EDIT(F$GETSYI("STARTUP_P4"), "TRIM,UPCASE")
+$ IF P5 .EQS. "" THEN P5 = F$EDIT(F$GETSYI("STARTUP_P5"), "TRIM,UPCASE")
+$ IF P6 .EQS. "" THEN P6 = F$EDIT(F$GETSYI("STARTUP_P6"), "TRIM,UPCASE")
+$ IF P7 .EQS. "" THEN P7 = F$EDIT(F$GETSYI("STARTUP_P7"), "TRIM,UPCASE")
+$ IF P8 .EQS. "" THEN P8 = F$EDIT(F$GETSYI("STARTUP_P8"), "TRIM,UPCASE")
 $ ! TCPIP$DEVICE names the network's template device, which a program
 $ ! assigns a channel to for a socket, as TCP/IP Services' TCPIP$STARTUP
 $ ! defines it.
