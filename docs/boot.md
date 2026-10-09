@@ -359,8 +359,9 @@ interpreter. It is linked high in P1, which tells the executive it is one
 - A command that fails prints VMS's message for the status, when DCL
   knows it: `DIR DKB0:` looks in `DKB0:[SYSMGR]`, the default directory
   on that disk, and prints `%RMS-E-DNF, directory not found`.
-- `MCR OPCCRASH`, with the `CMKRNL` privilege, halts the processor in
-  kernel mode. The root task prints `%PAL-I-POWEROFF`, and `run-qemu.sh`'s
+- `SHUTDOWN`, a symbol SYLOGIN.COM defines for `@SYS$SYSTEM:SHUTDOWN`,
+  runs `SHUTDOWN.COM`, which ends with `MCR OPCCRASH`. `OPCCRASH`, with
+  the `CMKRNL` privilege, halts the processor in kernel mode. The root task prints `%PAL-I-POWEROFF`, and `run-qemu.sh`'s
   console filter, `scripts/serial-filter.py`, sees it and stops QEMU.
 - CTRL/Y is an AST of DCL's: when DCL starts, and before each image it
   runs, it asks the console's driver for one with `IO$_SETMODE`

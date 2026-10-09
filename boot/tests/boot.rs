@@ -688,7 +688,8 @@ const STARTUP: Phase = Phase {
 /// lists every user in SYSUAF.LIS; SYSTEM changes its password with SET
 /// PASSWORD, after getting the old one wrong, and logs out. JOE logs in,
 /// with his UIC, privileges and directory, can't run AUTHORIZE or
-/// OPCCRASH, and logs out; SYSTEM logs in with its new password.
+/// OPCCRASH, and logs out; SYSTEM logs in with its new password and shuts
+/// the system down.
 const USERS: Phase = Phase {
     name: "users",
     secs: 60,
@@ -729,7 +730,7 @@ const USERS: Phase = Phase {
         ("Username:", 5, "SYSTEM\r"),
         ("Password:", 5, "newpw\r"),
         ("\x1b[6n", 3, "\x1b[50;100R"),
-        ("\tWelcome to vaxpunk", 3, "SHOW PROCESS\rSHOW TERMINAL\r"),
+        ("\tWelcome to vaxpunk", 3, "SHOW PROCESS\rSHOW TERMINAL\rSHUTDOWN\r"),
     ],
     lines: &[
         "%UAF-I-ADDMSG, user record successfully added",
@@ -754,6 +755,8 @@ const USERS: Phase = Phase {
         // TTSIZE's, from the size the console said.
         "   Input:    9600     LFfill:  0      Width: 100      Parity: None",
         "   Output:   9600     CRfill:  0      Page:   50",
+        "SHUTDOWN -- Perform an Orderly System Shutdown",
+        "%PAL-I-POWEROFF",
     ],
 };
 
