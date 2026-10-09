@@ -16,6 +16,9 @@ The cross gcc is `aarch64-elf-gcc` (`CROSS_COMPILE` changes the prefix).
 `cargo test -p vrun --test programs c` builds and runs it too, and checks
 its output against
 [tests/examples/c/cdemo.stdout](../../tests/examples/c/cdemo.stdout).
+`vms/build.rs` puts it on the system disk as `[SYSEXE]CDEMO.EXE`: `RUN
+CDEMO` at DCL's prompt, which `cargo test -p boot` does too, checking the
+same output.
 
 ## cdemo
 

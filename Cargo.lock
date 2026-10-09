@@ -731,6 +731,8 @@ dependencies = [
  "vasm",
  "vbliss",
  "vcdu",
+ "velf",
+ "vlib",
  "vlink",
  "vmacro",
  "vms-obj",

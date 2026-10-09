@@ -12,7 +12,9 @@
 //! command tables, and CREATE, CONVERT and ANALYZRMS with sysexe/rms/*.mar,
 //! FDL and their output; TPU, from sysexe/tpu/*.b64 and its I/O module
 //! sysexe/tpu/fio.mar (PRD-0006), and in [SYSLIB] EVE's section file,
-//! sysexe/tpu/eve/eve.section; in [SYSMGR], the files in sysmgr/,
+//! sysexe/tpu/eve/eve.section; CDEMO, the BLISS-64 program that calls a C
+//! library, from crosstools/vtools/examples/c, its C compiled by the cross
+//! gcc and converted by velf; in [SYSMGR], the files in sysmgr/,
 //! as text, and in [SYSEXE] sysexe/*.com; and in [SYSEXE], SYSUAF.DAT, the users, SYSTEM and DEFAULT.
 
 use std::collections::HashMap;
@@ -30,6 +32,7 @@ fn main() {
         "sysuaf.fdl",
         "uafhash.rs",
         "../crosstools/vtools/bliss",
+        CDEMO,
     ] {
         println!("cargo::rerun-if-changed={path}");
     }
@@ -139,11 +142,41 @@ fn main() {
     modules.push(stb.clone());
     let image = link("TPU", vlink::DEFAULT_BASE, None, &modules);
     files.push(("[SYSEXE]TPU.EXE".into(), image.image.write()));
+    // CDEMO, as the example's Justfile builds it: its C library and the
+    // library's BLISS-64 adapter in an object library, which MAIN links.
+    let cdemo = Path::new(CDEMO);
+    let mut olb = vlib::new(0);
+    let c = cdemo.join("lib/cdemo.c");
+    let elf =
+        velf::gcc(&c, &out.join("cdemo.o")).unwrap_or_else(|e| panic!("{}: {e}", c.display()));
+    let records = velf::convert(&elf, "CDEMO", vasm::Options::default().date)
+        .unwrap_or_else(|e| panic!("velf {}: {e}", c.display()));
+    let adapter = bliss(&cdemo.join("lib/cdemo_vms.b64"));
+    for (file, object) in [
+        (c.display().to_string(), vms_obj::obj::write(&records)),
+        adapter,
+    ] {
+        let warnings = vlib::replace(&mut olb, &file, &object, 0)
+            .unwrap_or_else(|e| panic!("vlib {file}: {e}"));
+        assert!(warnings.is_empty(), "vlib {file}: {warnings:?}");
+    }
+    let modules = [
+        bliss(&cdemo.join("main.b64")),
+        ("LIB.OLB".into(), olb.write()),
+        librtl_exe.clone(),
+        stb.clone(),
+    ];
+    let image = link("CDEMO", vlink::DEFAULT_BASE, None, &modules);
+    files.push(("[SYSEXE]CDEMO.EXE".into(), image.image.write()));
     disk(&out.join("sysdisk.img"), &files);
 }
 
 /// Where `.LIBRARY` finds lib.mlb and starlet.mlb.
 const LIB: &str = "../crosstools/vtools/lib";
+
+/// CDEMO's sources: a BLISS-64 program, and the C library it calls with
+/// the library's BLISS-64 adapter.
+const CDEMO: &str = "../crosstools/vtools/examples/c/cdemo";
 
 /// Assembles an ARM64 source with vasm into an object module: (file name,
 /// bytes).

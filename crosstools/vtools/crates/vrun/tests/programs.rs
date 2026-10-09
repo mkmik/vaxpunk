@@ -61,8 +61,8 @@ fn bliss() {
     all(&[("tests/bliss", "tests/bliss")], vmacro::compile, true);
 }
 
-/// BLISS-64 programs that call C, compiled by the cross gcc
-/// (`CROSS_COMPILE`, default `aarch64-elf-`, else `aarch64-linux-gnu-`).
+/// BLISS-64 programs that call C, which the cross gcc compiles
+/// (`velf::gcc`).
 #[test]
 fn c() {
     all(&[("examples/c", "tests/examples/c")], vmacro::compile, true);
@@ -303,7 +303,8 @@ fn assemble(source: &Path, tool: Tool) -> Result<(String, Vec<u8>), String> {
     let module = source.file_stem().unwrap().to_string_lossy().to_uppercase();
     let opts = options(&module, source);
     if source.extension().is_some_and(|e| e == "c") {
-        let records = velf::convert(&gcc(source)?, &module, opts.date)?;
+        let elf = Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("{module}.o"));
+        let records = velf::convert(&velf::gcc(source, &elf)?, &module, opts.date)?;
         return Ok((source.display().to_string(), obj::write(&records)));
     }
     let result = if source.extension().is_some_and(|e| e == "b64" || e == "b32") {
@@ -332,32 +333,4 @@ fn assemble(source: &Path, tool: Tool) -> Result<(String, Vec<u8>), String> {
         "round trip"
     );
     Ok((source.display().to_string(), bytes))
-}
-
-/// The ELF object the cross gcc makes of `source`, with velf's flags.
-fn gcc(source: &Path) -> Result<Vec<u8>, String> {
-    let cross = std::env::var("CROSS_COMPILE").unwrap_or_else(|_| {
-        let elf = Command::new("aarch64-elf-gcc").arg("--version").output();
-        if elf.is_ok() {
-            "aarch64-elf-"
-        } else {
-            "aarch64-linux-gnu-"
-        }
-        .into()
-    });
-    let stem = source.file_stem().unwrap().to_string_lossy();
-    let out = Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("{stem}.o"));
-    let res = Command::new(format!("{cross}gcc"))
-        .args(["-O2", "-Wall", "-Wextra", "-Werror"])
-        .args(velf::GCC_FLAGS)
-        .arg("-c")
-        .arg(source)
-        .arg("-o")
-        .arg(&out)
-        .output()
-        .map_err(|e| format!("{cross}gcc: {e}"))?;
-    if !res.status.success() {
-        return Err(String::from_utf8_lossy(&res.stderr).into_owned());
-    }
-    Ok(fs::read(&out).unwrap())
 }

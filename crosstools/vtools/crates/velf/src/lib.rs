@@ -3,6 +3,9 @@
 //! vlink take C code as they take MACRO-32 and BLISS-64. `docs/velf.md`
 //! says what it maps to what, and what the compiler must be told.
 
+use std::path::Path;
+use std::process::Command;
+
 use vms_obj::ARCH_ARM64;
 use vms_obj::obj::{self, Eom, Gsd, Mhd, Psc, Record, SymDef, SymRef, Tir, psc, sym};
 
@@ -22,6 +25,35 @@ pub const GCC_FLAGS: &[&str] = &[
     "-mbranch-protection=none",
     "-mno-outline-atomics",
 ];
+
+/// Compiles the C source with the cross gcc, `CROSS_COMPILE` or else
+/// `aarch64-elf-` if there is one, else `aarch64-linux-gnu-`: optimized,
+/// GCC_FLAGS, and every warning an error. Writes the ELF object to
+/// `object` and returns it, or what gcc said.
+pub fn gcc(source: &Path, object: &Path) -> Result<Vec<u8>, String> {
+    let cross = std::env::var("CROSS_COMPILE").unwrap_or_else(|_| {
+        let elf = Command::new("aarch64-elf-gcc").arg("--version").output();
+        if elf.is_ok() {
+            "aarch64-elf-"
+        } else {
+            "aarch64-linux-gnu-"
+        }
+        .into()
+    });
+    let res = Command::new(format!("{cross}gcc"))
+        .args(["-O2", "-Wall", "-Wextra", "-Werror"])
+        .args(GCC_FLAGS)
+        .arg("-c")
+        .arg(source)
+        .arg("-o")
+        .arg(object)
+        .output()
+        .map_err(|e| format!("{cross}gcc: {e}"))?;
+    if !res.status.success() {
+        return Err(String::from_utf8_lossy(&res.stderr).into_owned());
+    }
+    std::fs::read(object).map_err(|e| format!("{}: {e}", object.display()))
+}
 
 /// Payload room in one record, below the record size limit.
 const ROOM: usize = obj::MAX_RECORD - 64;
