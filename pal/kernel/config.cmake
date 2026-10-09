@@ -7,6 +7,9 @@ set(KernelMaxNumNodes 1 CACHE STRING "")
 set(KernelVerificationBuild OFF CACHE BOOL "")
 set(KernelDebugBuild ON CACHE BOOL "")
 set(KernelPrinting ON CACHE BOOL "") # the kernel's own messages; the PAL drives the UART itself
+# A GIC answering ID 1023, the line dropped before the kernel read it, is
+# benign and seL4 ignores it; don't print "Spurious interrupt!" for it.
+set(KernelIRQReporting OFF CACHE BOOL "")
 # Mixed-criticality scheduling: threads run on scheduling context capabilities
 # (budget and period) instead of a fixed timeslice, and replies go through
 # reply objects. The root task gets seL4_CapInitThreadSC and the sched control
