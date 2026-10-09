@@ -17,8 +17,8 @@
 //! connects to a server here, through QEMU's guestfwd, accepts a
 //! connection from a client here, through hostfwd, and sends a datagram
 //! from here back twice, to its sender and connected to it; and SET HOST to
-//! itself, a character at a time on a TELNET terminal, TNA1:, which has the
-//! console's width and page, as Telnet's NAWS gives them: SHOW TERMINAL,
+//! itself, as SYSTEM again, a character at a time on a TELNET terminal,
+//! TNA1:, which has the console's width and page, as Telnet's NAWS gives them: SHOW TERMINAL,
 //! EDIT's keypad mode there, SHOW SYSTEM, and LOGOUT; then TELNET, by a name DNS knows, to a port here,
 //! through guestfwd, a line each way, and with /PORT to one there cannot be;
 //! then COPY/HTTP from web servers here, through guestfwd, to the data
@@ -28,9 +28,10 @@
 //! Two vaxpunks on one QEMU socket network, A and B, where no DHCP server
 //! answers at boot: each saves its address and gateway with SET
 //! CONFIGURATION INTERFACE and SET ROUTE /PERMANENT, on its ramdisk, as
-//! SYSTARTUP_VMS.COM would, and START COMMUNICATION applies them. B logs
-//! in to A with TELNET, SHOW SYSTEM lists A's processes, and LOGOUT comes
-//! back to B, which pings A.
+//! SYSTARTUP_VMS.COM would, and START COMMUNICATION applies them. A's
+//! AUTHORIZE adds JOE; B logs in to A with TELNET as JOE, whose UIC and
+//! privileges SHOW PROCESS shows, SHOW SYSTEM lists his process, and LOGOUT
+//! comes back to B, which pings A.
 //! Then B saves another address, keeping the saved gateway, another
 //! gateway with SET ROUTE /PERMANENT, keeping that address, and DHCP,
 //! keeping both, which SHOW INTERFACE doesn't show, since they are for
@@ -67,9 +68,20 @@ impl Vax {
             .spawn()
             .unwrap();
         let console = qemu.stdin.take().unwrap();
-        let vax = Vax { qemu, console, log };
-        vax.wait_for("\n$ ", 0, 60);
+        let mut vax = Vax { qemu, console, log };
+        vax.wait_for("Username: ", 0, 120);
+        vax.login("SYSTEM", "MANAGER");
         vax
+    }
+
+    /// Answers the Username: prompt, then Password:, whose answer isn't
+    /// echoed, and waits for DCL's prompt.
+    fn login(&mut self, user: &str, password: &str) {
+        let at = self.reply(user, "Password: ");
+        self.console
+            .write_all(format!("{password}\r").as_bytes())
+            .unwrap();
+        self.wait_for("$ ", at, 60);
     }
 
     fn text(&self) -> String {
@@ -359,7 +371,8 @@ fn network() {
     });
     vax.command("RUN TCPTEST");
     vax.command("SET TERMINAL/WIDTH=100/PAGE=30");
-    vax.command("SET HOST 10.0.2.15");
+    vax.reply("SET HOST 10.0.2.15", "Username: ");
+    vax.login("SYSTEM", "MANAGER");
     vax.command("SHOW TERMINAL");
     // Keypad mode paints the screen there; CTRL/Z goes back to line mode.
     vax.reply("EDIT SYS$MANAGER:WELCOME.TXT", "*");
@@ -523,7 +536,12 @@ fn network() {
         vax.command("TCPIP SET ROUTE /DEFAULT /GATEWAY=10.0.0.1 /PERMANENT");
         vax.command("TCPIP START COMMUNICATION");
     }
-    b.command("TELNET 10.0.0.1");
+    a.command(
+        "MCR AUTHORIZE ADD JOE /PASSWORD=JOEPW /UIC=[200,1] /PRIVILEGES=(TMPMBX,OPER,NETMBX) /DEVICE=MDA0: /DIRECTORY=[000000]",
+    );
+    b.reply("TELNET 10.0.0.1", "Username: ");
+    b.login("JOE", "JOEPW");
+    b.command("SHOW PROCESS/PRIVILEGES");
     b.command("SHOW SYSTEM");
     b.command("LOGOUT");
     b.command("TCPIP PING /NUMBER_PACKETS=2 10.0.0.1");
@@ -537,7 +555,12 @@ fn network() {
     assert!(a.contains("%TCPIP-I-SET, WE0: 10.0.0.1         255.255.255.0    10.0.0.1"));
     for line in [
         "%TCPIP-I-SET, WE0: 10.0.0.2         255.255.255.0    10.0.0.1",
-        "TCPIP$TELNET    LEF     4 TELNETD.EXE",
+        "UIC:                [200,1]",
+        "Authorized privileges:\n TMPMBX       OPER         NETMBX",
+        // DEFAULT's: ADD's /PRIVILEGES are the authorized ones.
+        "Process privileges:\n TMPMBX       NETMBX\n",
+        "JOE             CUR     4 SHOW.EXE",
+        "  JOE          logged out at ",
         "%REM-S-END, control returned to the local node",
         "64 bytes from 10.0.0.1: icmp_seq=1 ttl=255 time=",
         "2 packets transmitted, 2 packets received, 0% packet loss",
@@ -546,5 +569,4 @@ fn network() {
     ] {
         assert!(b.contains(line), "no {line:?}");
     }
-    assert!(remote_login(&b), "no remote DCL's SHOW SYSTEM");
 }

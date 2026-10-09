@@ -208,6 +208,8 @@ CODE = 0
         SERVICE GETDVI, 8
         SERVICE GETDVIW, 8
         SERVICE DEVICE_SCAN, 5
+; Security
+        SERVICE HASH_PASSWORD, 5
 
 ; ARGSIN: keeps a call's arguments where the dispatcher's code leaves
 ; them alone, in registers REI restores from the PAL's frame: the first

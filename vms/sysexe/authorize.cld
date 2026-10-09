@@ -1,0 +1,79 @@
+! AUTHORIZE.CLD: the commands of AUTHORIZE, which AUTHORIZE.EXE parses
+! with CLI$DCL_PARSE, after MCR AUTHORIZE or at its UAF> prompt, as VMS's
+! does, and which build.rs links into AUTHORIZE.EXE as AUTHORIZE_TABLES.
+! ponytail: the qualifiers PRD-0003 asks for, and the quotas; no /FLAGS,
+! access times, rights identifiers or /LGICMD.
+module AUTHORIZE_TABLES
+
+! ADD username: a new user, with the DEFAULT record's values but those
+! its qualifiers give, and the password USER without /PASSWORD.
+define verb ADD
+	routine ADD
+	parameter P1, label=USERNAME, prompt="Username", value(required)
+	qualifier PASSWORD, nonnegatable, value(required)
+	qualifier UIC, nonnegatable, value(required, type=$uic)
+	qualifier PRIVILEGES, nonnegatable, value(required, list)
+	qualifier DEFPRIVILEGES, nonnegatable, value(required, list)
+	qualifier DEVICE, nonnegatable, value(required)
+	qualifier DIRECTORY, nonnegatable, value(required)
+	qualifier OWNER, nonnegatable, value(required)
+	qualifier ACCOUNT, nonnegatable, value(required)
+	qualifier CLI, nonnegatable, value(required)
+	qualifier PRIORITY, nonnegatable, value(required, type=$number)
+	qualifier ASTLM, nonnegatable, value(required, type=$number)
+	qualifier BIOLM, nonnegatable, value(required, type=$number)
+	qualifier BYTLM, nonnegatable, value(required, type=$number)
+	qualifier DIOLM, nonnegatable, value(required, type=$number)
+	qualifier ENQLM, nonnegatable, value(required, type=$number)
+	qualifier FILLM, nonnegatable, value(required, type=$number)
+	qualifier PRCLM, nonnegatable, value(required, type=$number)
+	qualifier TQELM, nonnegatable, value(required, type=$number)
+
+! MODIFY username: changes the values its qualifiers give.
+define verb MODIFY
+	routine MODIFY
+	parameter P1, label=USERNAME, prompt="Username", value(required)
+	qualifier PASSWORD, nonnegatable, value(required)
+	qualifier UIC, nonnegatable, value(required, type=$uic)
+	qualifier PRIVILEGES, nonnegatable, value(required, list)
+	qualifier DEFPRIVILEGES, nonnegatable, value(required, list)
+	qualifier DEVICE, nonnegatable, value(required)
+	qualifier DIRECTORY, nonnegatable, value(required)
+	qualifier OWNER, nonnegatable, value(required)
+	qualifier ACCOUNT, nonnegatable, value(required)
+	qualifier CLI, nonnegatable, value(required)
+	qualifier PRIORITY, nonnegatable, value(required, type=$number)
+	qualifier ASTLM, nonnegatable, value(required, type=$number)
+	qualifier BIOLM, nonnegatable, value(required, type=$number)
+	qualifier BYTLM, nonnegatable, value(required, type=$number)
+	qualifier DIOLM, nonnegatable, value(required, type=$number)
+	qualifier ENQLM, nonnegatable, value(required, type=$number)
+	qualifier FILLM, nonnegatable, value(required, type=$number)
+	qualifier PRCLM, nonnegatable, value(required, type=$number)
+	qualifier TQELM, nonnegatable, value(required, type=$number)
+
+! REMOVE username: takes the user out of SYSUAF.DAT.
+define verb REMOVE
+	routine REMOVE
+	parameter P1, label=USERNAME, prompt="Username", value(required)
+
+! SHOW username, or *: the user's record, or a line of it with /BRIEF.
+define verb SHOW
+	routine SHOW
+	parameter P1, label=USERNAME, prompt="Username", value(required)
+	qualifier BRIEF
+
+! LIST [username]: writes the records, a line each, or all of them with
+! /FULL, to SYSUAF.LIS.
+define verb LIST
+	routine LIST
+	parameter P1, label=USERNAME
+	qualifier FULL
+
+define verb EXIT
+	routine EXIT
+
+! HELP [command]: describes the commands, from these tables.
+define verb HELP
+	routine HELP
+	parameter P1, label=TOPIC, value(type=$rest_of_line)

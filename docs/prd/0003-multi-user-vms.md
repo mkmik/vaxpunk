@@ -190,7 +190,7 @@ until the hardware or size changes; leave it.
 | # | Notes | What closes them |
 | --- | --- | --- |
 | 1 | Privileges done (step 1), files' and volumes' protection (step 2); left: mailboxes with no protection mask (ADR-0019, `mbdriver.mar`); a `$CREMBX` logical name takes `SYSNAM` until `LNM$JOB` (`mbdriver.mar`) | *Privileges, UICs and protection* |
-| 2 | No username or password: `TELNETD` logs in as `SYSTEM` (`telnetd.mar`, DESIGN-0003); the link address picks the command interpreter (ADR-0006); `SYS$DISK` and `SYSTARTUP_VMS.COM` set up by DCL, not `LOGINOUT` and `STARTUP` (DESIGN-0002) | *Login* |
+| 2 | Done (step 4, [ADR-0029](../adr/0029-loginout-and-sysuaf.md)): `LOGINOUT` on the console and `TELNETD`'s terminals, the UAF picks the command interpreter, `STARTUP` runs `SYSTARTUP_VMS.COM`; left: the console asks for a username again at once, not at a key (`exec.mar`); `SET PASSWORD`'s privilege is a fixed list of known images until `INSTALL` (`process.mar`) | *Login* |
 | 3 | Terminals per UCB done, with `TNAn:` for `SET HOST` (step 3, ADR-0027); left: no `$BRKTHRU`; a hangup ends the terminal's reads and writes, not its process; at most 9 `TNAn:` units (`ttdriver.mar`, DESIGN-0002 *I/O*) | *Terminals*, and `LOGINOUT` for the hangup |
 | 4 | No quotas: `BIOLM`, `DIOLM`, `BYTLM` (ADR-0013), `BUFQUO` (ADR-0019), ASTs (DESIGN-0002 *ASTs*); `$GETJPI` has no CPU times, quotas or counts (`getjpi.mar`, `show.mar`) | *Quotas* |
 | 5 | One file system lock for every volume, no per-file lock, no priority boost (ADR-0020, `f11.mar`, DESIGN-0002 *Files*); no file sharing or locking, `$ERASE` deletes an open file (ADR-0009, `rms.mar`) | *Lock manager* |
@@ -275,10 +275,11 @@ says what replaces it; this PRD doesn't schedule them.
 
 ## Open questions
 
-- [ ] Which password hash: something from the host-side standard library
+- [x] Which password hash: something from the host-side standard library
   we can reimplement in MACRO-32 without a big-number library (SHA-256
   with a salt and many rounds), or a real KDF? It must fit `UAF$Q_PWD`'s
-  8 bytes, or the record grows past `$UAFDEF`'s.
+  8 bytes, or the record grows past `$UAFDEF`'s. SHA-256, salted and
+  iterated 4096 times, its first 8 bytes ([ADR-0029](../adr/0029-loginout-and-sysuaf.md)).
 - [x] Is `SYSUAF.DAT` an indexed file, as on VMS, which RMS doesn't do, or
   a sequential file of fixed records that `AUTHORIZE` rewrites? Indexed,
   as on OpenVMS Alpha V8.4 (VAX/VMS V1.0's was 184-byte fixed records).
@@ -310,7 +311,8 @@ Each step ends in something `cargo test -p boot` checks.
    PASSWORD`; `STARTUP` runs `SYSTARTUP_VMS.COM`; the console and `TELNETD`
    start `LOGINOUT`. Needs PRD-0008's steps 1 to 6, indexed files.
    *Visible:* `Username:` at boot; a user made with `AUTHORIZE` logs in
-   over `SET HOST` with their UIC and privileges.
+   over `SET HOST` with their UIC and privileges. Done
+   ([ADR-0029](../adr/0029-loginout-and-sysuaf.md)).
 5. **Quotas and accounting.** Quotas charged and checked; CPU time and I/O
    counts kept; `$ASCTIM`, `$BINTIM`, `SHOW TIME`. *Visible:* `SHOW
    PROCESS/QUOTAS/ACCOUNTING`; a process that queues reads past `BIOLM`

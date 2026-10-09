@@ -6,15 +6,14 @@
 ; makes each connection it accepts a TELNET terminal, _TNAn:, with
 ; IO$_TTY_PORT, as TCP/IP Services' TELNET server gives a remote login a
 ; TNA device; the executive's terminal driver speaks Telnet on it. Then it
-; creates a process that runs DCL with the terminal as its SYS$INPUT,
+; creates a process that runs LOGINOUT with the terminal as its SYS$INPUT,
 ; SYS$OUTPUT and SYS$ERROR, named so, as VMS names a process on a
-; terminal before anyone logs in. DCL reads the commands typed there and
-; writes there; LOGOUT, or the line going, deletes the process, and the
-; terminal's last channel closes the connection. The server keeps its
-; channel until DCL has assigned its own, which $GETDVI's DVI$_REFCNT
-; shows.
-; ponytail: no username or password: a remote login is SYSTEM's, as the
-; console's is.
+; terminal before anyone logs in. LOGINOUT asks for a username and a
+; password, and gives the process the user's DCL, which reads the
+; commands typed there and writes there; LOGOUT, three failed logins, or
+; the line going, deletes the process, and the terminal's last channel
+; closes the connection. The server keeps its channel until LOGINOUT has
+; assigned its own, which $GETDVI's DVI$_REFCNT shows.
 ;
         .LIBRARY "starlet.mlb"
         .LIBRARY "sysexe.mlb"
@@ -26,7 +25,8 @@
 
         .PSECT  DATA, NOEXE, WRT, LONG
 DEVICE: .ASCID  "TCPIP$DEVICE:"
-DCL:    .ASCID  "DCL.EXE"
+LOGINOUT:
+        .ASCID  "LOGINOUT.EXE"
 TCP:    .WORD   TCPIP$C_TCP             ; a TCP socket: protocol, type, family
         .BYTE   TCPIP$C_STREAM, TCPIP$C_AF_INET
 NAME:   .WORD   SIN$K_LENGTH, TCPIP$C_SOCK_NAME ; port 23, any address
@@ -78,7 +78,7 @@ LOGIN:
         .JSB_ENTRY  SCRATCH=<R2>
         $GETDVIW_S CHAN=CHAN, ITMLST=NAMEITEM
         BLBC    R0, 90$
-        $CREPRC_S IMAGE=DCL, INPUT=UNIT, OUTPUT=UNIT, ERROR=UNIT, PRCNAM=UNIT, BASPRI=#4
+        $CREPRC_S IMAGE=LOGINOUT, INPUT=UNIT, OUTPUT=UNIT, ERROR=UNIT, PRCNAM=UNIT, BASPRI=#4
         BLBC    R0, 90$
         MOVL    #100, R2
 10$:    $SETIMR_S EFN=#1, DAYTIM=MS50

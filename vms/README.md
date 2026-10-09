@@ -12,6 +12,7 @@ instructions, which vmacro compiles into PAL calls
 | `sysexe/librtl/` | The run-time library's `LIB$` routines, a shareable image every program but DCL calls ([ADR-0028](../docs/adr/0028-shareable-images.md)); its symbol vector is `librtl.opt` | `[SYSLIB]LIBRTL.EXE` |
 | `cld/` | DCL's verbs, as CLD that vcdu compiles into DCL$TABLES ([ADR-0017](../docs/adr/0017-command-tables-from-cld-with-vcdu.md)) | in `DCL.EXE` and `HELP.EXE` |
 | `sysmgr/` | SYSTEM's text files: SYSTARTUP_VMS.COM, SYLOGIN.COM, WELCOME.TXT | `[SYSMGR]` |
+| `sysuaf.fdl`, `uafhash.rs` | SYSUAF.DAT's layout, and the password hash `build.rs` writes SYSTEM's with ([ADR-0029](../docs/adr/0029-loginout-and-sysuaf.md)) | `[SYSEXE]SYSUAF.DAT` |
 
 `build.rs` compiles and links all of it with the vtools crates and writes
 `sysdisk.img` with ods-image. It needs no C toolchain:

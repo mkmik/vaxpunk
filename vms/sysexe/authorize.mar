@@ -1,0 +1,941 @@
+        .TITLE  AUTHORIZE       Keeps the users in SYSUAF.DAT
+        .IDENT  /V0.1/
+;
+; MCR AUTHORIZE, or RUN SYS$SYSTEM:AUTHORIZE, as on VMS: it opens
+; SYSUAF.DAT, SYS$SYSTEM:SYSUAF.DAT unless the logical name SYSUAF says
+; where, which only SYSTEM may write, and does the command after
+; AUTHORIZE, or each one read after UAF> until EXIT or CTRL/Z, parsed with
+; its own tables, AUTHORIZE.CLD:
+;   ADD username   makes a record from DEFAULT's, without its flags, with
+;                  the qualifiers' values and the password USER without
+;                  /PASSWORD
+;   MODIFY username
+;                  changes the values its qualifiers give
+;   REMOVE username
+;                  deletes the record
+;   SHOW username  writes the record, or a line of it with /BRIEF; *
+;                  for each one
+;   LIST [username]
+;                  writes them so, a line each, or all of them with
+;                  /FULL, to SYSUAF.LIS in the default directory
+; The qualifiers: /PASSWORD, hashed with $HASH_PASSWORD and a new salt,
+; /UIC, /PRIVILEGES and /DEFPRIVILEGES, each a list of privileges, NOname
+; taking one away, ALL and NOALL all of them, /DEVICE, /DIRECTORY,
+; /OWNER, /ACCOUNT, /CLI, /PRIORITY and the quotas, /ASTLM, /BIOLM,
+; /BYTLM, /DIOLM, /ENQLM, /FILLM, /PRCLM and /TQELM.
+; ponytail: no rights database, wildcards but *, /FLAGS, access times,
+; or COPY and RENAME.
+;
+        .LIBRARY "lib.mlb"
+        .LIBRARY "starlet.mlb"
+        .LIBRARY "sysexe.mlb"
+        $SSDEF
+        $RMSDEF
+        $FABDEF
+        $RABDEF
+        $CLIMSGDEF
+        $UAFDEF
+        $UAIDEF
+
+        .EXTERNAL PUT_LINE, PRV_NAMES, PRV_LOOKUP, GET_UIC, LIB$SIGNAL
+        .EXTERNAL LIB$GET_FOREIGN, LIB$GET_INPUT, CLI$GET_VALUE, CLI$PRESENT
+        .EXTERNAL CLI$DCL_PARSE, CLI$DISPATCH, AUTHORIZE_TABLES, HELP$TOPIC
+
+NAMESIZE = 32                           ; a username, padded: the key
+INHIB = ^X10000000                      ; STS$M_INHIB_MSG: reported
+COL2 = 43                               ; the full display's second column
+; A number qualifier's entry in NUMQUALS: its name, where it goes, how
+; big it is.
+NQ$L_NAME = 0
+NQ$W_OFFSET = 4
+NQ$W_SIZE = 6
+NQ$K_LENGTH = 8
+; A string qualifier's in STRQUALS: its name, where it goes, how long it
+; is, and 0 counted, 1 blank padded, 2 counted and ends in a colon.
+SQ$L_NAME = 0
+SQ$W_OFFSET = 4
+SQ$B_SIZE = 6
+SQ$B_KIND = 7
+SQ$K_LENGTH = 8
+
+; NUMQUAL "name", field, size: an entry of NUMQUALS. STRQUAL the same, of
+; STRQUALS.
+        .MACRO  NUMQUAL NAME, FIELD, SIZE, ?L
+        .SAVE_PSECT LOCAL_BLOCK
+        .PSECT  CLI_NAMES, NOEXE, NOWRT, LONG
+L:      .ASCID  NAME
+        .RESTORE_PSECT
+        .ADDRESS L
+        .WORD   FIELD, SIZE
+        .ENDM   NUMQUAL
+        .MACRO  STRQUAL NAME, FIELD, SIZE, KIND, ?L
+        .SAVE_PSECT LOCAL_BLOCK
+        .PSECT  CLI_NAMES, NOEXE, NOWRT, LONG
+L:      .ASCID  NAME
+        .RESTORE_PSECT
+        .ADDRESS L
+        .WORD   FIELD
+        .BYTE   SIZE, KIND
+        .ENDM   STRQUAL
+
+; TEXT "text": appends text to LINE. Uses R0-R5.
+        .MACRO  TEXT    STR, ?L
+        .SAVE_PSECT LOCAL_BLOCK
+        .PSECT  $LITERAL$
+L:      .ASCIC  STR
+        .RESTORE_PSECT
+        MOVAB   L, R1
+        BSBW    ADDCSTR
+        .ENDM   TEXT
+
+        .PSECT  DATA, NOEXE, WRT, LONG
+LINDSC: .LONG   255                     ; a command, after AUTHORIZE or UAF>
+        .ADDRESS LINBUF
+LINLEN: .WORD   0
+LINBUF: .BLKB   255
+PROMPT: .ASCID  "UAF> "
+DONE:   .LONG   0                       ; 1 once EXIT
+UAFFAB: $FAB    FNA=UAFNAM, FNS=UAFNAMLEN, DNA=UAFDEF, DNS=UAFDEFLEN, FAC=<GET,PUT,UPD,DEL>
+UAFRAB: $RAB    FAB=UAFFAB, UBF=REC, USZ=UAF$C_LENGTH, RBF=REC, RSZ=UAF$C_FIXED, RAC=KEY, KBF=KEY, KSZ=NAMESIZE
+UAFNAM: .ASCII  "SYSUAF"
+UAFNAMLEN = .-UAFNAM
+UAFDEF: .ASCII  "SYS$SYSTEM:.DAT"
+UAFDEFLEN = .-UAFDEF
+LISFAB: $FAB    FNA=LISNAM, FNS=LISNAMLEN, FAC=<PUT>, RAT=CR
+LISRAB: $RAB    FAB=LISFAB, RBF=LINE+1
+LISNAM: .ASCII  "SYSUAF.LIS"
+LISNAMLEN = .-LISNAM
+LISTING:                                ; 1 while LIST writes SYSUAF.LIS
+        .LONG   0
+REC:    .BLKB   UAF$C_LENGTH            ; a record
+KEY:    .BLKB   NAMESIZE                ; its username, padded with blanks
+KEYDSC: .LONG   NAMESIZE
+        .ADDRESS KEY
+DEFAULT:
+        .ASCII  "DEFAULT"
+VALDSC: .LONG   64                      ; a qualifier's value
+        .ADDRESS VALBUF
+VALLEN: .WORD   0
+VALBUF: .BLKB   65                      ; and room for STRING's colon
+PWDDSC: .LONG   0                       ; the new password
+        .ADDRESS PWD
+PWD:    .BLKB   NAMESIZE
+NOW:    .BLKQ   1
+MASK:   .BLKQ   1                       ; a privilege's bit
+LINE:   .BLKB   256                     ; a line being made, .ASCIC
+PBIT:   .LONG   0                       ; PRIVLIST's privilege
+P_USERNAME:
+        .ASCID  "USERNAME"
+P_UIC:  .ASCID  "UIC"
+P_PRIVS:
+        .ASCID  "PRIVILEGES"
+P_DEFPRIVS:
+        .ASCID  "DEFPRIVILEGES"
+P_PASSWORD:
+        .ASCID  "PASSWORD"
+NUMQUALS:
+        NUMQUAL "PRIORITY", UAF$B_PRI, 1
+        NUMQUAL "ASTLM", UAF$W_ASTLM, 2
+        NUMQUAL "BIOLM", UAF$W_BIOLM, 2
+        NUMQUAL "BYTLM", UAF$L_BYTLM, 4
+        NUMQUAL "DIOLM", UAF$W_DIOLM, 2
+        NUMQUAL "ENQLM", UAF$W_ENQLM, 2
+        NUMQUAL "FILLM", UAF$W_FILLM, 2
+        NUMQUAL "PRCLM", UAF$W_PRCCNT, 2
+        NUMQUAL "TQELM", UAF$W_TQCNT, 2
+        .LONG   0
+STRQUALS:
+        STRQUAL "DEVICE", UAF$T_DEFDEV, 32, 2
+        STRQUAL "DIRECTORY", UAF$T_DEFDIR, 64, 0
+        STRQUAL "OWNER", UAF$T_OWNER, 32, 0
+        STRQUAL "ACCOUNT", UAF$T_ACCOUNT, 32, 1
+        STRQUAL "CLI", UAF$T_DEFCLI, 32, 0
+        .LONG   0
+; The full display's quotas, three to a line: each its label, .ASCIC,
+; where it is, its size, 1, 2 or 4, and the column its value ends at.
+QUOTAS: .ASCIC  "Maxjobs:"
+        .WORD   UAF$W_MAXJOBS, 2, 18
+        .ASCIC  "Fillm:"
+        .WORD   UAF$W_FILLM, 2, 36
+        .ASCIC  "Bytlm:"
+        .WORD   UAF$L_BYTLM, 4, 57
+        .ASCIC  "Maxacctjobs:"
+        .WORD   UAF$W_MAXACCTJOBS, 2, 18
+        .ASCIC  "Shrfillm:"
+        .WORD   UAF$W_SHRFILLM, 2, 36
+        .ASCIC  "Pbytlm:"
+        .WORD   UAF$L_PBYTLM, 4, 57
+        .ASCIC  "Maxdetach:"
+        .WORD   UAF$W_MAXDETACH, 2, 18
+        .ASCIC  "BIOlm:"
+        .WORD   UAF$W_BIOLM, 2, 36
+        .ASCIC  "JTquota:"
+        .WORD   UAF$L_JTQUOTA, 4, 57
+        .ASCIC  "Prclm:"
+        .WORD   UAF$W_PRCCNT, 2, 18
+        .ASCIC  "DIOlm:"
+        .WORD   UAF$W_DIOLM, 2, 36
+        .ASCIC  "WSdef:"
+        .WORD   UAF$L_DFWSCNT, 4, 57
+        .ASCIC  "Prio:"
+        .WORD   UAF$B_PRI, 1, 18
+        .ASCIC  "ASTlm:"
+        .WORD   UAF$W_ASTLM, 2, 36
+        .ASCIC  "WSquo:"
+        .WORD   UAF$L_WSQUOTA, 4, 57
+        .ASCIC  "Queprio:"
+        .WORD   UAF$B_QUEPRI, 1, 18
+        .ASCIC  "TQElm:"
+        .WORD   UAF$W_TQCNT, 2, 36
+        .ASCIC  "WSextent:"
+        .WORD   UAF$L_WSEXTENT, 4, 57
+        .ASCIC  "CPU:"
+        .WORD   UAF$L_CPUTIM, 4, 18
+        .ASCIC  "Enqlm:"
+        .WORD   UAF$W_ENQLM, 2, 36
+        .ASCIC  "Pgflquo:"
+        .WORD   UAF$L_PGFLQUOTA, 4, 57
+        .BYTE   0
+
+        .PSECT  CODE, EXE, LONG
+; START: opens SYSUAF.DAT, then does the command after AUTHORIZE, or each
+; one read after UAF> until EXIT or the end of the input. R0 = the
+; command's status, or, after UAF>, SS$_NORMAL: the errors are reported
+; there.
+        .ENTRY  START, ^M<R2, R3, R4, R5, R6, R7>
+        $OPEN   FAB=UAFFAB
+        BLBS    R0, 5$
+        MOVL    R0, R2
+        PRINT   "%UAF-E-NAOFIL, unable to open system authorization file (SYSUAF.DAT)"
+        PUSHL   R2
+        CALLS   #1, G^LIB$SIGNAL
+        BISL3   #INHIB, R2, R0
+        RET
+5$:     $CONNECT RAB=UAFRAB
+        BLBC    R0, 90$
+        PUSHAW  LINLEN
+        CLRL    -(SP)                   ; no prompt: none
+        PUSHAQ  LINDSC
+        CALLS   #3, G^LIB$GET_FOREIGN
+        BLBC    R0, 90$
+        TSTW    LINLEN
+        BEQL    10$
+        BSBW    DO
+        BRB     90$
+10$:    PUSHAW  LINLEN
+        PUSHAQ  PROMPT
+        PUSHAQ  LINDSC
+        CALLS   #3, G^LIB$GET_INPUT
+        BLBC    R0, 80$                 ; CTRL/Z
+        BSBW    DO
+        BLBS    R0, 20$
+        CMPL    R0, #CLI$_NOCOMD        ; a blank line
+        BEQL    20$
+        BBS     #28, R0, 20$            ; STS$V_INHIB_MSG: reported
+        BICL2   #7, R0                  ; a warning, so that LIB$SIGNAL returns
+        PUSHL   R0
+        CALLS   #1, G^LIB$SIGNAL
+20$:    BLBC    DONE, 10$
+80$:    MOVL    #SS$_NORMAL, R0
+90$:    PUSHL   R0
+        $CLOSE  FAB=UAFFAB
+        MOVL    (SP)+, R0
+        RET
+
+; DO: parses the command in LINBUF, LINLEN long, and calls its routine.
+; R0 = its status, or the parse's.
+DO:
+        .JSB_ENTRY
+        PUSHL   LINDSC
+        MOVW    LINLEN, LINDSC
+        PUSHAB  G^AUTHORIZE_TABLES
+        PUSHAQ  LINDSC
+        CALLS   #2, G^CLI$DCL_PARSE
+        MOVL    (SP)+, LINDSC
+        BLBC    R0, 90$
+        CALLS   #0, G^CLI$DISPATCH
+90$:    RSB
+
+; EXIT: the end of the commands after UAF>.
+        .ENTRY  EXIT, ^M<>
+        MOVL    #1, DONE
+        MOVL    #SS$_NORMAL, R0
+        RET
+
+; HELP: HELP [command]: describes the commands, from AUTHORIZE_TABLES
+; (help/describe.mar).
+        .ENTRY  HELP, ^M<>
+        PUSHAB  G^AUTHORIZE_TABLES
+        CALLS   #1, G^HELP$TOPIC
+        MOVL    #SS$_NORMAL, R0
+        RET
+
+; ADD username: a record from DEFAULT's, without its flags, with this
+; username, the qualifiers' values and a password, USER unless /PASSWORD
+; says.
+        .ENTRY  ADD, ^M<R2, R3, R4, R5, R6, R7>
+        MOVC5   #7, DEFAULT, #^A/ /, #NAMESIZE, KEY
+        BSBW    FIND
+        BLBC    R0, 90$
+        BSBW    GETNAME
+        BLBC    R0, 90$
+        MOVC3   #NAMESIZE, KEY, REC+UAF$T_USERNAME
+        CLRL    REC+UAF$L_FLAGS         ; DEFAULT's DISUSER too
+        CLRW    REC+UAF$W_LOGFAILS
+        CLRQ    REC+UAF$Q_LASTLOGIN_I
+        CLRQ    REC+UAF$Q_LASTLOGIN_N
+        MOVL    #^A/USER/, PWD
+        MOVW    #4, PWDDSC
+        BSBW    APPLY
+        BLBC    R0, 90$
+        BSBW    SETPWD
+        BLBC    R0, 90$
+        MOVB    #RAB$C_KEY, UAFRAB+RAB$B_RAC
+        MOVW    #UAF$C_FIXED, UAFRAB+RAB$W_RSZ
+        $PUT    RAB=UAFRAB
+        BLBS    R0, 10$
+        CMPL    R0, #RMS$_DUP
+        BNEQ    90$
+        PRINT   "%UAF-W-UAEERR, invalid user name, user name already exists"
+        MOVL    #RMS$_DUP!INHIB, R0
+        RET
+10$:    PRINT   "%UAF-I-ADDMSG, user record successfully added"
+90$:    RET
+
+; MODIFY username: the record, with the qualifiers' values.
+        .ENTRY  MODIFY, ^M<R2, R3, R4, R5, R6, R7>
+        BSBW    GETNAME
+        BLBC    R0, 90$
+        BSBW    FIND
+        BLBC    R0, 90$
+        CLRW    PWDDSC                  ; no new password, unless /PASSWORD
+        BSBW    APPLY
+        BLBC    R0, 90$
+        TSTW    PWDDSC
+        BEQL    10$
+        BSBW    SETPWD
+        BLBC    R0, 90$
+10$:    $UPDATE RAB=UAFRAB
+        BLBC    R0, 90$
+        PRINT   "%UAF-I-MDFYMSG, user record(s) updated"
+90$:    RET
+
+; REMOVE username: deletes the record.
+        .ENTRY  REMOVE, ^M<R2, R3, R4, R5, R6, R7>
+        BSBW    GETNAME
+        BLBC    R0, 90$
+        BSBW    FIND
+        BLBC    R0, 90$
+        $DELETE RAB=UAFRAB
+        BLBC    R0, 90$
+        PRINT   "%UAF-I-REMMSG, record removed from system authorization file"
+90$:    RET
+
+; SHOW username, or *: writes the record, or each one, whole, or a line
+; with /BRIEF.
+        .ENTRY  SHOW, ^M<R2, R3, R4, R5, R6, R7>
+        CLRL    LISTING
+        PRESENT "BRIEF"
+        MOVL    R0, R7
+        BSBW    GETNAME
+        BLBC    R0, 90$
+        CMPB    KEY, #^A/*/
+        BEQL    10$
+        BSBW    FIND
+        BLBC    R0, 90$
+        BLBS    R7, 5$
+        BSBW    FULL
+        BRB     80$
+5$:     BSBW    HEADER
+        BSBW    BRIEF
+        BRB     80$
+10$:    BSBW    EACH
+80$:    MOVL    #SS$_NORMAL, R0
+90$:    RET
+
+; LIST [username]: writes the records, or the one, a line each, or whole
+; with /FULL, to SYSUAF.LIS.
+        .ENTRY  LIST, ^M<R2, R3, R4, R5, R6, R7>
+        PRESENT "FULL"
+        BICL3   #^C1, R0, R7
+        XORL2   #1, R7                  ; 1: brief
+        MOVC5   #1, STAR, #^A/ /, #NAMESIZE, KEY
+        BSBW    GETNAME
+        BLBS    R0, 5$
+        CMPL    R0, #CLI$_ABSENT        ; none: all of them
+        BNEQ    90$
+5$:     PRINT   "%UAF-I-LSTMSG1, writing listing file"
+        $CREATE FAB=LISFAB
+        BLBC    R0, 90$
+        $CONNECT RAB=LISRAB
+        BLBC    R0, 80$
+        MOVL    #1, LISTING
+        CMPB    KEY, #^A/*/
+        BEQL    10$
+        BSBW    FIND
+        BLBC    R0, 80$
+        BLBC    R7, 7$
+        BSBW    HEADER
+        BSBW    BRIEF
+        BRB     70$
+7$:     BSBW    FULL
+        BRB     70$
+10$:    BSBW    EACH
+70$:    CLRL    LISTING
+        $CLOSE  FAB=LISFAB
+        PRINT   "%UAF-I-LSTMSG2, listing file SYSUAF.LIS complete"
+        MOVL    #SS$_NORMAL, R0
+        RET
+80$:    CLRL    LISTING
+        PUSHL   R0
+        $CLOSE  FAB=LISFAB
+        MOVL    (SP)+, R0
+90$:    RET
+
+; EACH: R7 = 1 for brief lines, else 0. Writes every record, in
+; username order. Uses R0-R6.
+EACH:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5, R6>
+        BLBC    R7, 5$
+        BSBW    HEADER
+5$:     MOVB    #RAB$C_SEQ, UAFRAB+RAB$B_RAC
+        $REWIND RAB=UAFRAB
+10$:    $GET    RAB=UAFRAB
+        BLBC    R0, 80$
+        BLBC    R7, 20$
+        BSBW    BRIEF
+        BRB     10$
+20$:    BSBW    FULL
+        BRB     10$
+80$:    MOVB    #RAB$C_KEY, UAFRAB+RAB$B_RAC
+        RSB
+
+; GETNAME: the parameter USERNAME, in capitals, into KEY, padded with
+; blanks. R0 = SS$_NORMAL, or SS$_BADPARAM for one longer than 12, which
+; it says. Uses R0-R5.
+GETNAME:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5>
+        MOVW    #64, VALDSC
+        PUSHAW  VALLEN
+        PUSHAQ  VALDSC
+        PUSHAQ  P_USERNAME
+        CALLS   #3, G^CLI$GET_VALUE
+        BLBC    R0, 90$
+        CMPW    VALLEN, #12
+        BGTRU   80$
+        MOVC5   VALLEN, VALBUF, #^A/ /, #NAMESIZE, KEY
+        MOVL    #SS$_NORMAL, R0
+        RSB
+80$:    PRINT   "%UAF-W-NAMETOOLONG, user name too long"
+        MOVL    #SS$_BADPARAM!INHIB, R0
+90$:    RSB
+
+; FIND: reads KEY's record into REC. R0 = SS$_NORMAL, or RMS's error,
+; RMS$_RNF said as AUTHORIZE does. Uses R0-R1.
+FIND:
+        .JSB_ENTRY
+        MOVB    #RAB$C_KEY, UAFRAB+RAB$B_RAC
+        $GET    RAB=UAFRAB
+        BLBS    R0, 90$
+        CMPL    R0, #RMS$_RNF
+        BNEQ    90$
+        PRINT   "%UAF-W-BADUSR, username does not exist"
+        MOVL    #RMS$_RNF!INHIB, R0
+90$:    RSB
+
+; SETPWD: PWD, PWDDSC's length long, becomes REC's password: its hash with
+; a new salt. R0 = $HASH_PASSWORD's status. Uses R0-R5.
+SETPWD:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5>
+        MOVZWL  PWDDSC, R2
+        MOVAB   PWD, R1
+        BSBW    UPCASE
+        $GETTIM_S TIMADR=NOW            ; the salt: never 0
+        BISW3   #1, NOW+2, REC+UAF$W_SALT
+        MOVB    #UAI$C_SHA256, REC+UAF$B_ENCRYPT
+        MOVZWL  REC+UAF$W_SALT, R1
+        $HASH_PASSWORD_S PWDDSC=PWDDSC, ALG=#UAI$C_SHA256, SALT=R1, USRDSC=KEYDSC, HASH=REC+UAF$Q_PWD
+        BLBC    R0, 90$
+        MOVQ    NOW, REC+UAF$Q_PWD_DATE
+90$:    RSB
+
+; UPCASE: R1 = a string, R2 = its length. Puts its letters in capitals.
+; Uses R0-R2.
+UPCASE:
+        .JSB_ENTRY  SCRATCH=<R2>
+10$:    TSTL    R2
+        BEQL    90$
+        CMPB    (R1), #^A/a/
+        BLSSU   20$
+        CMPB    (R1), #^A/z/
+        BGTRU   20$
+        SUBB2   #^A/a/-^A/A/, (R1)
+20$:    INCL    R1
+        DECL    R2
+        BRB     10$
+90$:    RSB
+
+; APPLY: puts the qualifiers' values in REC, and /PASSWORD's in PWD and
+; PWDDSC. R0 = SS$_NORMAL, or the first error, which it says. Uses R0-R7.
+APPLY:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5, R6, R7>
+        MOVAQ   P_PASSWORD, R1
+        BSBW    VALUE
+        BLBC    R0, 10$
+        CMPW    VALLEN, #NAMESIZE
+        BGTRU   87$
+        MOVW    VALLEN, PWDDSC
+        MOVC3   VALLEN, VALBUF, PWD
+10$:    PUSHAL  REC+UAF$L_UIC
+        PUSHAQ  P_UIC
+        CALLS   #2, G^GET_UIC
+        BLBS    R0, 15$
+        CMPL    R0, #CLI$_ABSENT
+        BNEQ    85$
+15$:    MOVAQ   REC+UAF$Q_PRIV, R6
+        MOVAQ   P_PRIVS, R7
+        BSBW    PRIVS
+        BLBC    R0, 90$
+        MOVAQ   REC+UAF$Q_DEF_PRIV, R6
+        MOVAQ   P_DEFPRIVS, R7
+        BSBW    PRIVS
+        BLBC    R0, 90$
+        MOVAB   NUMQUALS, R6
+20$:    TSTL    (R6)
+        BEQL    40$
+        MOVL    NQ$L_NAME(R6), R1
+        BSBW    VALUE
+        BLBC    R0, 30$
+        BSBW    DECIMAL
+        BLBC    R0, 85$
+        MOVZWL  NQ$W_OFFSET(R6), R0
+        MOVAB   REC[R0], R0
+        CMPW    NQ$W_SIZE(R6), #2
+        BEQL    27$
+        BGTRU   28$
+        MOVB    R3, (R0)
+        BRB     30$
+27$:    MOVW    R3, (R0)
+        BRB     30$
+28$:    MOVL    R3, (R0)
+30$:    ADDL2   #NQ$K_LENGTH, R6
+        BRB     20$
+40$:    MOVAB   STRQUALS, R6
+50$:    TSTL    (R6)
+        BEQL    80$
+        MOVL    SQ$L_NAME(R6), R1
+        BSBW    VALUE
+        BLBC    R0, 70$
+        BSBW    STRING
+        BLBC    R0, 85$
+70$:    ADDL2   #SQ$K_LENGTH, R6
+        BRB     50$
+80$:    MOVL    #SS$_NORMAL, R0
+        RSB
+85$:    PRINT   "%UAF-W-BADVALUE, invalid keyword value"
+        MOVL    #SS$_BADPARAM!INHIB, R0
+        RSB
+87$:    PRINT   "%UAF-W-PWDSIZ, password too long"
+        MOVL    #SS$_BADPARAM!INHIB, R0
+90$:    RSB
+
+; VALUE: R1 = a qualifier's name, .ASCID. Its value into VALBUF, VALLEN
+; long. R0 = CLI$GET_VALUE's status, clear if it is absent. Uses R0-R1.
+VALUE:
+        .JSB_ENTRY
+        MOVW    #64, VALDSC
+        PUSHAW  VALLEN
+        PUSHAQ  VALDSC
+        PUSHL   R1
+        CALLS   #3, G^CLI$GET_VALUE
+        RSB
+
+; DECIMAL: VALBUF, VALLEN long. R3 = its value, a decimal number. R0 = 1,
+; or 0 if it isn't one. Uses R0-R3.
+DECIMAL:
+        .JSB_ENTRY  SCRATCH=<R2>, OUTPUT=<R3>
+        CLRL    R3
+        MOVZWL  VALLEN, R2
+        BEQL    80$
+        MOVAB   VALBUF, R1
+10$:    MOVZBL  (R1)+, R0
+        SUBL2   #^A/0/, R0
+        CMPL    R0, #9
+        BGTRU   80$
+        MULL2   #10, R3
+        ADDL2   R0, R3
+        SOBGTR  R2, 10$
+        MOVL    #1, R0
+        RSB
+80$:    CLRL    R0
+        RSB
+
+; STRING: R6 = a STRQUALS entry, VALBUF its value, VALLEN long. Puts it
+; in REC as the entry says. R0 = 1, or 0 if it is too long. Uses R0-R5.
+STRING:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5>
+        MOVZWL  SQ$W_OFFSET(R6), R0
+        MOVAB   REC[R0], R3             ; where
+        MOVZBL  SQ$B_SIZE(R6), R4       ; its room
+        MOVZWL  VALLEN, R2
+        CMPB    SQ$B_KIND(R6), #1
+        BNEQ    10$
+        CMPL    R2, R4                  ; padded
+        BGTRU   80$
+        MOVC5   R2, VALBUF, #^A/ /, R4, (R3)
+        BRB     70$
+10$:    CMPB    SQ$B_KIND(R6), #2       ; a device: a colon at its end
+        BNEQ    20$
+        TSTL    R2
+        BEQL    20$
+        CMPB    VALBUF-1[R2], #^A/:/
+        BEQL    20$
+        MOVB    #^A/:/, VALBUF[R2]
+        INCL    R2
+20$:    DECL    R4                      ; counted
+        CMPL    R2, R4
+        BGTRU   80$
+        MOVB    R2, (R3)+
+        MOVC5   R2, VALBUF, #^A/ /, R4, (R3)
+70$:    MOVL    #1, R0
+        RSB
+80$:    CLRL    R0
+        RSB
+
+; PRIVS: R6 = a privilege mask in REC, R7 = a qualifier's name, .ASCID,
+; a list of privileges. Sets each one's bit, or clears it for NOname.
+; R0 = SS$_NORMAL, or SS$_BADPARAM for a name it doesn't know, which it
+; says. Uses R0-R5.
+PRIVS:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5>
+10$:    MOVW    #64, VALDSC
+        PUSHAW  VALLEN
+        PUSHAQ  VALDSC
+        PUSHL   R7
+        CALLS   #3, G^CLI$GET_VALUE
+        BLBC    R0, 80$                 ; past the last
+        MOVAB   VALBUF, R4
+        MOVZWL  VALLEN, R5
+        CLRL    R3                      ; 1: NOname
+        PUSHAQ  MASK
+        PUSHL   R5
+        PUSHL   R4
+        CALLS   #3, G^PRV_LOOKUP
+        BLBS    R0, 30$
+        CMPL    R5, #2                  ; NOname?
+        BLEQ    85$
+        CMPW    (R4), #^A/NO/
+        BNEQ    85$
+        MOVL    #1, R3
+        ADDL2   #2, R4
+        SUBL2   #2, R5
+        PUSHAQ  MASK
+        PUSHL   R5
+        PUSHL   R4
+        CALLS   #3, G^PRV_LOOKUP
+        BLBC    R0, 85$
+30$:    TSTL    R3
+        BNEQ    40$
+        BISL2   MASK, (R6)
+        BISL2   MASK+4, 4(R6)
+        BRB     10$
+40$:    BICL2   MASK, (R6)
+        BICL2   MASK+4, 4(R6)
+        BRB     10$
+80$:    MOVL    #SS$_NORMAL, R0
+        RSB
+85$:    PRINT   "%UAF-W-BADVALUE, invalid keyword value"
+        MOVL    #SS$_BADPARAM!INHIB, R0
+        RSB
+
+; OUT: writes LINE, on SYS$OUTPUT or, while LIST runs, in SYSUAF.LIS, and
+; empties it. Uses R0-R1.
+OUT:
+        .JSB_ENTRY
+        TSTL    LISTING
+        BNEQ    10$
+        PUSHAB  LINE
+        CALLS   #1, G^PUT_LINE
+        BRB     20$
+10$:    MOVZBW  LINE, LISRAB+RAB$W_RSZ
+        $PUT    RAB=LISRAB
+20$:    CLRB    LINE
+        RSB
+
+; ADDSTR: appends the R2 bytes at R1 to LINE. ADDCSTR: the .ASCIC
+; string at R1. ADDTRIM: the R2 bytes at R1 but the blanks at their end.
+; Uses R0-R5.
+ADDTRIM:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5>
+10$:    TSTL    R2
+        BEQL    ADDSTR
+        CMPB    -1(R1)[R2], #^A/ /
+        BNEQ    ADDSTR
+        DECL    R2
+        BRB     10$
+ADDCSTR:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5>
+        MOVZBL  (R1)+, R2
+ADDSTR:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5>
+        MOVZBL  LINE, R0
+        ADDL3   R0, R2, R3
+        CMPL    R3, #255
+        BLEQU   10$
+        SUBL3   R0, #255, R2
+10$:    PUSHL   R2
+        MOVC3   R2, (R1), LINE+1[R0]
+        MOVL    (SP)+, R0
+        ADDB2   R0, LINE
+        RSB
+
+; PAD: R3 = a column. Appends blanks to LINE up to it. Uses R0.
+PAD:
+        .JSB_ENTRY
+10$:    MOVZBL  LINE, R0
+        CMPL    R0, R3
+        BGEQ    20$
+        INCB    LINE
+        MOVB    #^A/ /, LINE+1[R0]
+        BRB     10$
+20$:    RSB
+
+; ADDDEC: appends R1 in decimal to LINE, its last digit at column R3, or
+; right after what is there. Uses R0-R5.
+ADDDEC:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5>
+        CLRL    R4                      ; the digits, on the stack
+10$:    DIVL3   #10, R1, R5
+        MULL3   #10, R5, R0
+        SUBL3   R0, R1, R0
+        ADDL2   #^A/0/, R0
+        PUSHL   R0
+        INCL    R4
+        MOVL    R5, R1
+        BNEQ    10$
+        SUBL2   R4, R3
+        BSBB    PAD
+20$:    MOVZBL  LINE, R0
+        INCB    LINE
+        MOVL    (SP)+, R1
+        MOVB    R1, LINE+1[R0]
+        SOBGTR  R4, 20$
+        RSB
+
+; ADDUIC: appends the UIC in R1 to LINE, [group,member] in octal. Uses
+; R0-R5.
+ADDUIC:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5>
+        PUSHL   R1
+        TEXT    "["
+        MOVL    (SP), R1
+        EXTZV   #16, #16, R1, R1
+        BSBB    ADDOCT
+        TEXT    ","
+        MOVL    (SP)+, R1
+        MOVZWL  R1, R1
+        BSBB    ADDOCT
+        TEXT    "]"
+        RSB
+
+; ADDOCT: appends R1 in octal to LINE. Uses R0-R3, R5.
+ADDOCT:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R5>
+        CLRL    R5
+10$:    BICL3   #^C7, R1, R0
+        ADDL2   #^A/0/, R0
+        PUSHL   R0
+        INCL    R5
+        ASHL    #-3, R1, R1
+        BNEQ    10$
+20$:    MOVZBL  LINE, R0
+        INCB    LINE
+        MOVL    (SP)+, R1
+        MOVB    R1, LINE+1[R0]
+        SOBGTR  R5, 20$
+        RSB
+
+; ADDFIELD: R1 = a counted string in REC. Appends its text. Uses R0-R5.
+ADDFIELD:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5>
+        MOVZBL  (R1)+, R2
+        BRW     ADDSTR
+
+; HEADER: the brief lines' heading. Uses R0-R5.
+HEADER:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5>
+        TEXT    " Owner                 Username        UIC           Account    Privs  Pri Default Directory"
+        BSBW    OUT
+        BSBW    OUT
+        RSB
+
+; BRIEF: REC's line. Uses R0-R5.
+BRIEF:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5>
+        TEXT    " "
+        MOVAB   REC+UAF$T_OWNER, R1
+        BSBB    ADDFIELD
+        MOVL    #23, R3
+        BSBW    PAD
+        MOVAB   REC+UAF$T_USERNAME, R1
+        MOVL    #NAMESIZE, R2
+        BSBW    ADDTRIM
+        MOVL    #39, R3
+        BSBW    PAD
+        MOVL    REC+UAF$L_UIC, R1
+        BSBW    ADDUIC
+        MOVL    #53, R3
+        BSBW    PAD
+        MOVAB   REC+UAF$T_ACCOUNT, R1
+        MOVL    #8, R2
+        BSBW    ADDTRIM
+        MOVL    #64, R3
+        BSBW    PAD
+        BBS     #14, REC+UAF$Q_PRIV, 10$        ; PRV$V_SETPRV: any
+        TEXT    "Normal"
+        BRB     20$
+10$:    TEXT    "All"
+20$:    MOVZBL  REC+UAF$B_PRI, R1
+        MOVL    #74, R3
+        BSBW    ADDDEC
+        TEXT    " "
+        MOVAB   REC+UAF$T_DEFDEV, R1
+        BSBW    ADDFIELD
+        MOVAB   REC+UAF$T_DEFDIR, R1
+        BSBW    ADDFIELD
+        BSBW    OUT
+        RSB
+
+; FULL: REC, as SHOW shows it. Uses R0-R6.
+FULL:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5, R6>
+        BSBW    OUT
+        TEXT    "Username: "
+        MOVAB   REC+UAF$T_USERNAME, R1
+        MOVL    #NAMESIZE, R2
+        BSBW    ADDTRIM
+        MOVL    #COL2, R3
+        BSBW    PAD
+        TEXT    "Owner:  "
+        MOVAB   REC+UAF$T_OWNER, R1
+        BSBW    ADDFIELD
+        BSBW    OUT
+        TEXT    "Account:  "
+        MOVAB   REC+UAF$T_ACCOUNT, R1
+        MOVL    #NAMESIZE, R2
+        BSBW    ADDTRIM
+        MOVL    #COL2, R3
+        BSBW    PAD
+        TEXT    "UIC:    "
+        MOVL    REC+UAF$L_UIC, R1
+        BSBW    ADDUIC
+        BSBW    OUT
+        TEXT    "CLI:      "
+        MOVAB   REC+UAF$T_DEFCLI, R1
+        BSBW    ADDFIELD
+        MOVL    #COL2, R3
+        BSBW    PAD
+        TEXT    "Tables: "
+        MOVAB   REC+UAF$T_CLITABLES, R1
+        BSBW    ADDFIELD
+        BSBW    OUT
+        TEXT    "Default:  "
+        MOVAB   REC+UAF$T_DEFDEV, R1
+        BSBW    ADDFIELD
+        MOVAB   REC+UAF$T_DEFDIR, R1
+        BSBW    ADDFIELD
+        BSBW    OUT
+        TEXT    "LGICMD:   "
+        MOVAB   REC+UAF$T_LGICMD, R1
+        BSBW    ADDFIELD
+        BSBW    OUT
+        TEXT    "Login Fails:"
+        MOVZWL  REC+UAF$W_LOGFAILS, R1
+        MOVL    #18, R3
+        BSBW    ADDDEC
+        BSBW    OUT
+        MOVAB   QUOTAS, R6
+10$:    TSTB    (R6)
+        BEQL    40$
+        MOVL    R6, R1
+        BSBW    ADDCSTR
+        MOVZBL  (R6), R0
+        ADDL2   R0, R6
+        INCL    R6                      ; the field's offset, size, column
+        MOVZWL  (R6), R0
+        MOVAB   REC[R0], R0
+        CMPW    2(R6), #2
+        BEQL    12$
+        BGTRU   14$
+        MOVZBL  (R0), R1
+        BRB     16$
+12$:    MOVZWL  (R0), R1
+        BRB     16$
+14$:    MOVL    (R0), R1
+16$:    MOVZWL  4(R6), R3
+        MOVZWL  (R6), R0                ; CPU: (none) for 0
+        CMPL    R0, #UAF$L_CPUTIM
+        BNEQ    18$
+        TSTL    R1
+        BNEQ    18$
+        SUBL2   #6, R3
+        BSBW    PAD
+        TEXT    "(none)"
+        BRB     20$
+18$:    BSBW    ADDDEC
+20$:    ADDL2   #6, R6
+        CMPW    -2(R6), #57             ; the third of a line: the end of it
+        BNEQ    30$
+        BSBW    OUT
+        BRB     10$
+30$:    TEXT    "  "
+        BRB     10$
+40$:    TEXT    "Authorized Privileges: "
+        BSBW    OUT
+        MOVAQ   REC+UAF$Q_PRIV, R6
+        BSBW    PRIVLIST
+        TEXT    "Default Privileges: "
+        BSBW    OUT
+        MOVAQ   REC+UAF$Q_DEF_PRIV, R6
+        BSBW    PRIVLIST
+        RSB
+
+; PRIVLIST: R6 = a privilege mask. Writes the names of those it has, six
+; to a line, each in 13 columns. Uses R0-R5, R7.
+PRIVLIST:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5, R7>
+        MOVAB   G^PRV_NAMES, R7
+        CLRL    PBIT
+10$:    TSTB    (R7)
+        BEQL    80$
+        MOVL    PBIT, R0
+        BBC     R0, (R6), 30$
+        MOVZBL  LINE, R0
+        BNEQ    15$
+        TEXT    "  "
+        BRB     20$
+15$:    SUBL3   #2, R0, R1              ; the next column
+        DIVL2   #13, R1
+        MULL3   #13, R1, R3
+        ADDL2   #2+13, R3
+        BSBW    PAD
+20$:    MOVL    R7, R1
+        BSBW    ADDCSTR
+        MOVZBL  LINE, R0                ; the sixth: the line's end
+        CMPL    R0, #2+<13*5>
+        BLSS    30$
+        BSBW    OUT
+30$:    MOVZBL  (R7), R0
+        ADDL2   R0, R7
+        INCL    R7
+        INCL    PBIT
+        BRB     10$
+80$:    TSTB    LINE
+        BEQL    90$
+        BSBW    OUT
+90$:    RSB
+
+        .PSECT  $LITERAL$
+STAR:   .ASCII  "*"
+
+        .END    START

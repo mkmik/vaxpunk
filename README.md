@@ -45,8 +45,11 @@ cargo run -p boot
 ```
 
 The first run builds seL4 (about 10 seconds), downloads Limine and boots QEMU.
-Quit QEMU with `Ctrl-A x`, or `LOGOUT`, which halts the system and powers
-QEMU off. EDK2 and Limine clear the console and move the
+Log in as `SYSTEM`, password `MANAGER`, and change it with `SET PASSWORD`
+([ADR-0029](docs/adr/0029-loginout-and-sysuaf.md)). Quit QEMU with
+`Ctrl-A x`, or `MCR OPCCRASH`, which halts the system and powers QEMU
+off; `LOGOUT` ends your process, and the console asks for a username
+again. EDK2 and Limine clear the console and move the
 cursor around, so `scripts/serial-filter.py` turns their output into plain
 lines before it reaches your terminal. From the shim's banner on, output
 passes through untouched: terminal handling there is the guest's business.
@@ -77,6 +80,11 @@ tcpip: lwIP 2.2.1 on virtio-net, MAC 52:54:0:12:34:56
 %EXEC-I-START, vaxpunk executive, free pages: 00000369
 %MOUNT-I-MOUNTED, VAXPUNK mounted on _DKA0:
 %SYSTEM-W-NOHOMEBLK, Files-11 home block not found on volume
+  SYSTEM       job terminated at  9-OCT-2026 09:01:38.33
+
+Username: SYSTEM
+Password:
+	Welcome to vaxpunk
 $
 ```
 
@@ -108,12 +116,21 @@ Device                  Device           Error
 OPA0:                   Online               0
 ```
 
-The `$` is DCL's prompt, on the console's process, `SYSTEM`. `RUN image`
+The system starts in a process of its own, `STARTUP`, which runs
+`SYS$MANAGER:SYSTARTUP_VMS.COM` and ends, then `LOGINOUT` asks for a
+username and a password and checks them against `SYSUAF.DAT`.
+`MCR AUTHORIZE` adds users (`ADD JOE /PASSWORD=secret /UIC=[200,1]
+/DEVICE=DKB0: /DIRECTORY=[JOE]`), changes, removes, shows and lists
+them; each logs in with their own UIC, privileges and default directory,
+at the console or with `SET HOST`. The users live on the ramdisk until
+the system stops: `SYSTARTUP_VMS.COM` says how to keep them on the data
+disk, and so the password you set.
+The `$` is DCL's prompt, on your process, `SYSTEM`. `RUN image`
 runs an image from `SYS$SYSTEM:` (`.EXE` is the default type), `DIRECTORY`
 lists files, in the default directory unless told where (`DIR`, `DIR
 [SYSEXE]P%NG`, `DIR [000000]`, `DIR SYS$SYSTEM:`; a device may be a
 logical name), `SET DEFAULT [dev:][dir]` (or `[-]`, `[.dir]`) and
-`SHOW DEFAULT` set and show that, `DKA0:[SYSMGR]` at first, `SHOW DEVICES`
+`SHOW DEFAULT` set and show that, `SYS$SYSROOT:[SYSMGR]` at first, `SHOW DEVICES`
 lists the devices, `TYPE file` writes a text file (`TYPE WELCOME.TXT`),
 `EDIT file` edits one with EDT: its line mode types and changes lines,
 `CHANGE` at its `*` prompt goes to keypad mode, on the screen, and
@@ -134,7 +151,7 @@ volume on the data disk, `DKB0:`, or the ramdisk, `MDA0:`, which
 of the lines typed up to CTRL/Z, `SET COMMAND file` adds the
 verbs a `.CLD` file defines (`SET COMMAND SYS$MANAGER:DCLTEST`, then
 `GREET world`), `name := $image` makes a foreign command, `HELP` lists
-the commands and `LOGOUT` ends the process:
+the commands and `LOGOUT` logs out:
 
 ```
 $ DIR [SYSEXE]

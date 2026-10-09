@@ -245,7 +245,7 @@ or the ioctls, in one request, not both; a unit is cloned at
   that `SYSTARTUP_VMS.COM` makes at each boot (ADR-0025; TCP/IP
   Services kept `TCPIP$CONFIGURATION.DAT` and `TCPIP$ROUTE.DAT` in
   `SYS$SYSTEM`); `SHOW INTERFACE` senses and prints.
-  `START COMMUNICATION`, which `SYLOGIN.COM` runs, applies the saved
+  `START COMMUNICATION`, which `SYSTARTUP_VMS.COM` runs, applies the saved
   configuration, or DHCP if none is saved, unless the interface has an address already, prints
   `%TCPIP-I-SET`, or the error, a DHCP server's timeout, and creates
   `TCPIP$TELNET`, the remote login server, unless it is there already.
@@ -256,12 +256,14 @@ or the ioctls, in one request, not both; a unit is cloned at
   on its channel, which the terminal driver then drives over the
   connection, speaking Telnet (DESIGN-0002, *I/O*;
   [ADR-0027](../adr/0027-terminals-are-ucbs-and-telnet-is-in-the-driver.md)).
-  Then it creates a process running `DCL.EXE` with the terminal, whose
+  Then it creates a process running `LOGINOUT.EXE` with the terminal, whose
   name `$GETDVI`'s `DVI$_DEVNAM` gives, as `SYS$INPUT`, `SYS$OUTPUT` and
-  `SYS$ERROR`, named so, and keeps its own channel until the new DCL has
-  assigned one, `DVI$_REFCNT` 2. DCL quits when a read ends with
-  `SS$_HANGUP`, the connection gone; the terminal's last channel going
-  closes the connection.
+  `SYS$ERROR`, named so, and keeps its own channel until `LOGINOUT` has
+  assigned one, `DVI$_REFCNT` 2. `LOGINOUT` logs the user in and gives the
+  process DCL ([ADR-0029](../adr/0029-loginout-and-sysuaf.md)), keeping its
+  channels for it. `LOGINOUT` and DCL quit when a read ends with
+  `SS$_HANGUP`, the connection gone, and `LOGINOUT` after three failed
+  logins; the terminal's last channel going closes the connection.
 - **`RTPAD.EXE`**, DCL's `SET HOST address` and `TELNET`. Connects to
   port 23 there, or the port given, then waits for either of two reads,
   the connection's and the terminal's, with `$WFLOR`: what comes on the

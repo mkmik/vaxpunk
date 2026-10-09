@@ -29,7 +29,7 @@
         $TTDEF
         $TT2DEF
 
-        .EXTERNAL PRV_NAMES, LIB$SIGNAL, PUT_LINE, GET_PROT, GET_UIC, TERM_SENSE
+        .EXTERNAL PRV_LOOKUP, LIB$SIGNAL, PUT_LINE, GET_PROT, GET_UIC, TERM_SENSE
 
 ; TTBIT "name", bit, base, ON=BBSS, OFF=BBCC: sets the bit at base for
 ; the qualifier /name, and clears it for /NOname; ON=BBCC, OFF=BBSS the
@@ -68,8 +68,6 @@ DESC:   .LONG   31                      ; a value of PRIVILEGES
         .ADDRESS NAME
 LEN:    .WORD   0
 NAME:   .BLKB   31
-ALLNAM: .ASCIC  "ALL"
-ALL:    .LONG   ^XFFFFFFFF, ^X7F        ; every privilege
 MASK:   .BLKQ   1                       ; $SETPRV's
 STATUS: .LONG   SS$_NORMAL              ; or SS$_NOTALLPRIV once one stays off
 LINE:   .BLKB   40                      ; " \name\", .ASCIC
@@ -226,51 +224,13 @@ DECIMAL:
 
 ; LOOKUP: R5 = a privilege's name, R6 = its length. Puts its bit in MASK,
 ; or every bit for ALL. R0 = 1, or 0 for a name it doesn't know. Uses
-; R0-R3.
+; R0-R1.
 LOOKUP:
-        .JSB_ENTRY  SCRATCH=<R2, R3>
-        CLRQ    MASK
-        MOVAB   ALLNAM, R1
-        BSBB    MATCH
-        BLBC    R0, 5$
-        MOVQ    ALL, MASK
-        RSB
-5$:     MOVAB   G^PRV_NAMES, R1
-        CLRL    R2                      ; its bit
-10$:    TSTB    (R1)
-        BEQL    80$
-        PUSHL   R1
-        BSBB    MATCH
-        MOVL    (SP)+, R1
-        BLBS    R0, 20$
-        MOVZBL  (R1), R0
-        ADDL2   R0, R1
-        INCL    R1
-        INCL    R2
-        BRB     10$
-20$:    BBSS    R2, MASK, 30$
-30$:    MOVL    #1, R0
-        RSB
-80$:    CLRL    R0
-        RSB
-
-; MATCH: R1 = a .ASCIC name, R5 = a value, R6 = its length. R0 = 1 if
-; they are the same, else 0. Uses R0, R1 and R3.
-MATCH:
-        .JSB_ENTRY  SCRATCH=<R3>
-        MOVZBL  (R1)+, R0
-        CMPL    R0, R6
-        BNEQ    80$
-        CLRL    R3
-10$:    CMPL    R3, R6
-        BEQL    70$
-        CMPB    (R1)[R3], (R5)[R3]
-        BNEQ    80$
-        INCL    R3
-        BRB     10$
-70$:    MOVL    #1, R0
-        RSB
-80$:    CLRL    R0
+        .JSB_ENTRY
+        PUSHAQ  MASK
+        PUSHL   R6
+        PUSHL   R5
+        CALLS   #3, G^PRV_LOOKUP
         RSB
 
         .END    START
