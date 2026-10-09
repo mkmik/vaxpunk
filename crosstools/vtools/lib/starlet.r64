@@ -1117,6 +1117,7 @@ LITERAL
     IO$_READLBLK = 33,
     IO$_READVBLK = 49,
     IO$_READPROMPT = 55,  ! writes the prompt in p5 and p6 first
+    IO$_WRITEOF = 40,  ! a mailbox: an end of file, which a read gets as SS$_ENDOFFILE
     IO$_TTY_PORT = 41,  ! a TCP connection's socket: becomes a TELNET terminal, TNAn
     IO$_SETMODE = 35,  ! a terminal: sets its characteristics, or enables a CTRL/C or CTRL/Y AST
     IO$V_CTRLYAST = 7,  ! SETMODE: the AST is CTRL/Y's

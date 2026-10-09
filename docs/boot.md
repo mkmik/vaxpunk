@@ -218,7 +218,11 @@ interpreter. It is linked high in P1, which tells the executive it is one
   the global symbol `HOME`, a command that goes back to
   `SYS$SYSROOT:[SYSMGR]`, and `NSLOOKUP`, a foreign command that runs
   `SYS$SYSTEM:TCPIP$NSLOOKUP.EXE`. The second is `@SYS$LOGIN:LOGIN`, the
-  user's own `LOGIN.COM`, if there is one. Then DCL reads a line with the `$` prompt: `$QIOW`
+  user's own `LOGIN.COM`, if there is one. SYSTEM's,
+  `DKA0:[SYSMGR]LOGIN.COM`, goes on only if `F$MODE()` says
+  `INTERACTIVE`, which it does since DCL's `SYS$INPUT` is a terminal, and
+  prints `SYSTEM on _OPA0:,` and the time, with `F$FAO`, `F$GETJPI`,
+  `F$GETDVI` and `F$TIME`. Then DCL reads a line with the `$` prompt: `$QIOW`
   hands the read to the console's driver, which writes the prompt and
   holds the request until a line is typed, and DCL waits for its event
   flag ([ADR-0013](adr/0013-qio-irps-and-drivers.md)). That's where the
@@ -234,10 +238,16 @@ interpreter. It is linked high in P1, which tells the executive it is one
   words after the file name are the local symbols `P1` to `P8`.
   `name = expression` makes a local symbol, which the procedure that made
   it and those it calls see, and `name == expression` a global one;
-  `'name'` in a command stands for its value. `IF expression THEN
-  command`, `GOTO label` and `WRITE SYS$OUTPUT` work in procedures as in
-  VMS's, and `$STATUS` holds the last command's status: one that is an
-  error ends the procedures, as VMS's default `ON ERROR THEN EXIT` does.
+  `'name'` in a command stands for its value. `IF`, block `IF`s, `GOTO`,
+  `ON`, the lexical functions and `OPEN`, `READ`, `WRITE` and `CLOSE`
+  work in procedures as in VMS's, and `$STATUS` holds the last command's
+  status: one that is an error ends the procedure, as VMS's default `ON
+  ERROR THEN EXIT` does. The lines after a command that runs an image, up
+  to the next that starts with `$`, are the image's input: DCL writes them
+  to a mailbox, with an end of file after them, and makes `SYS$INPUT` that
+  mailbox until the image exits, so `CREATE` and `LIB$GET_INPUT` read them
+  as they would lines typed at the terminal; `SYS$COMMAND`, which
+  `$CREPRC` defines with `SYS$INPUT`, stays the terminal.
 - DCL parses each command with its command tables, `DCL$TABLES`, which
   `vms/build.rs` compiled from the verbs' definitions in
   `vms/cld/*.cld` with vcdu, and linked into `DCL.EXE`. The parser,

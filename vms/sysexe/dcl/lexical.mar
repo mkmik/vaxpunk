@@ -1,0 +1,1454 @@
+        .TITLE  LEXICAL DCL's lexical functions
+        .IDENT  /V0.1/
+;
+; The lexical functions, F$name(argument[,...]), which DCL$EXPR calls as
+; it meets them in an expression. Each argument is an expression of its
+; own, one left out an empty string, and the function's value takes the
+; place of the call:
+;
+;   F$LENGTH(string), F$EXTRACT(start, length, string),
+;   F$LOCATE(substring, string), F$ELEMENT(n, delimiter, string),
+;   F$EDIT(string, edits), F$INTEGER(x), F$STRING(x), F$TYPE(symbol)
+;               work on strings and symbols
+;   F$FAO(control[, argument...])
+;               formats the arguments as $FAO would
+;   F$MODE(), F$ENVIRONMENT(item), F$VERIFY([procedure])
+;               say how DCL runs
+;   F$TIME(), F$MESSAGE(status)
+;               the time, a status's message
+;   F$TRNLNM(name[, table[, index]]), F$SEARCH(spec), F$PARSE(spec[,
+;   default[, related[, field]]])
+;               translate logical names and file specifications
+;   F$GETJPI(pid, item), F$GETSYI(item), F$GETDVI(device, item)
+;               ask $GETJPI, $GETSYI and $GETDVI, an item at a time
+;
+; ponytail: F$SEARCH has one stream and no context argument; F$PARSE
+; ignores related and SYNTAX_ONLY; F$FAO takes !AS, !UL, !SL, !ZL, !XL
+; and !OL with B, W or L, !%S, !/, !_, !!, !n*c and widths, not !#, !-,
+; !+, !%T or !%D. A process's username, node name and the
+; F$FILE_ATTRIBUTES, F$CVTIME and F$CONTEXT functions wait for LOGINOUT
+; and the rest of PRD-0003.
+; One of DCL's modules: ../dcl.mar says how they fit.
+;
+        .LIBRARY "lib.mlb"
+        .LIBRARY "starlet.mlb"
+        .LIBRARY "../sysexe.mlb"
+        .LIBRARY "../dcl.mlb"
+        $SSDEF
+        $RMSDEF
+        $FABDEF
+        $NAMDEF
+        $LNMDEF
+        $JPIDEF
+        $SYIDEF
+        $DVIDEF
+        $DCDEF
+        $DCLDEF
+
+        .EXTERNAL DCL$DEPTH, DCL$EXPR, DCL$EXPSYN, DCL$GETSYM, DCL$HASCY
+        .EXTERNAL DCL$NAMESCAN, DCL$NOON, DCL$ONSEV, DCL$PROCNAM, DCL$SAMESTR
+        .EXTERNAL DCL$SAVESP, DCL$SKIP, DCL$SYMNAM, DCL$TOINT, DCL$TOSTR
+        .EXTERNAL DCL$VERIFY, DCL$VSTKEND, DCL$WARN, DCL$DONE, DCL$MSG
+        .EXTERNAL DCL$ADD, DCL$ADDCSTR, DCL$SAY, PRV_NAMES
+
+; FUNC name, min, max, routine: an entry of FUNCS: the name, .ASCIC, the
+; fewest and most arguments, and the routine; RAW for min, a routine that
+; parses its own arguments.
+        .MACRO  FUNC    NAME, MIN, MAX, ROUTINE
+        .ASCIC  NAME
+        .BYTE   MIN, MAX
+        .ADDRESS ROUTINE
+        .ENDM   FUNC
+RAW = 255
+; ITEM name, code, format: an entry of an item table: the name, .ASCIC,
+; the item code and how its value is made into the function's (F_).
+        .MACRO  ITEM    NAME, CODE, FORMAT
+        .ASCIC  NAME
+        .WORD   CODE
+        .BYTE   FORMAT
+        .ENDM   ITEM
+F_INT = 0                               ; a longword, an integer
+F_STR = 1                               ; a string
+F_PID = 2                               ; a longword, in 8 hex digits
+F_UIC = 3                               ; a longword UIC, [group,member] in octal
+F_PRIV = 4                              ; a quadword of privileges, their names
+F_TIME = 5                              ; a quadword time, as $ASCTIM writes it
+F_BOOL = 6                              ; a longword, "TRUE" if it is 1, else "FALSE"
+F_TRIM = 7                              ; a string without its trailing blanks
+F_SPEC = 8                              ; the function's own
+NUL = 0                                 ; F_SPEC items: none to ask for
+
+        .PSECT  DATA, NOEXE, WRT, LONG
+FUNCS:  FUNC    "F$EDIT", 2, 2, EDIT
+        FUNC    "F$ELEMENT", 3, 3, ELEMENT
+        FUNC    "F$ENVIRONMENT", 1, 1, ENVIRON
+        FUNC    "F$EXTRACT", 3, 3, EXTRACT
+        FUNC    "F$FAO", 1, 16, FAO
+        FUNC    "F$GETDVI", 2, 2, GETDVI
+        FUNC    "F$GETJPI", 2, 2, GETJPI
+        FUNC    "F$GETSYI", 1, 1, GETSYI
+        FUNC    "F$INTEGER", 1, 1, INTEGER
+        FUNC    "F$LENGTH", 1, 1, LENGTH
+        FUNC    "F$LOCATE", 2, 2, LOCATE
+        FUNC    "F$MESSAGE", 1, 1, MESSAGE
+        FUNC    "F$MODE", 0, 0, MODE
+        FUNC    "F$PARSE", 1, 5, PARSE
+        FUNC    "F$SEARCH", 1, 2, SEARCH
+        FUNC    "F$STRING", 1, 1, STRING
+        FUNC    "F$TIME", 0, 0, TIME
+        FUNC    "F$TRNLNM", 1, 3, TRNLNM
+        FUNC    "F$TYPE", RAW, 1, TYPE
+        FUNC    "F$VERIFY", 0, 2, VERIFY
+        .BYTE   0
+EDITS:  .ASCIC  "COLLAPSE"              ; F$EDIT's edits, by their bits
+        .ASCIC  "COMPRESS"
+        .ASCIC  "LOWERCASE"
+        .ASCIC  "TRIM"
+        .ASCIC  "UNCOMMENT"
+        .ASCIC  "UPCASE"
+        .BYTE   0
+E_COLLAPSE = 0
+E_COMPRESS = 1
+E_LOWER = 2
+E_TRIM = 3
+E_UNCOMMENT = 4
+E_UPCASE = 5
+FIELDS: .ASCIC  "NODE"                  ; F$PARSE's fields, by their index
+        .ASCIC  "DEVICE"
+        .ASCIC  "DIRECTORY"
+        .ASCIC  "NAME"
+        .ASCIC  "TYPE"
+        .ASCIC  "VERSION"
+        .BYTE   0
+ENVS:   ITEM    "DEPTH", 0, F_SPEC      ; F$ENVIRONMENT's items, by their codes
+        ITEM    "MAX_DEPTH", 1, F_SPEC
+        ITEM    "DEFAULT", 2, F_SPEC
+        ITEM    "PROCEDURE", 3, F_SPEC
+        ITEM    "ON_SEVERITY", 4, F_SPEC
+        ITEM    "ON_CONTROL_Y", 5, F_SPEC
+        ITEM    "VERIFY_PROCEDURE", 6, F_SPEC
+        ITEM    "VERIFY_IMAGE", 7, F_SPEC
+        ITEM    "INTERACTIVE", 8, F_SPEC
+        ITEM    "PROMPT", 9, F_SPEC
+        .BYTE   0
+JPIS:   ITEM    "PID", JPI$_PID, F_PID
+        ITEM    "OWNER", JPI$_OWNER, F_PID
+        ITEM    "PRCNAM", JPI$_PRCNAM, F_STR
+        ITEM    "IMAGNAME", JPI$_IMAGNAME, F_STR
+        ITEM    "UIC", JPI$_UIC, F_UIC
+        ITEM    "GRP", JPI$_GRP, F_INT
+        ITEM    "MEM", JPI$_MEM, F_INT
+        ITEM    "PRI", JPI$_PRI, F_INT
+        ITEM    "PRIB", JPI$_PRIB, F_INT
+        ITEM    "STATE", JPI$_STATE, F_INT
+        ITEM    "STS", JPI$_STS, F_INT
+        ITEM    "CURPRIV", JPI$_CURPRIV, F_PRIV
+        ITEM    "PROCPRIV", JPI$_PROCPRIV, F_PRIV
+        ITEM    "AUTHPRIV", JPI$_AUTHPRIV, F_PRIV
+        ITEM    "MODE", NUL, F_SPEC
+        .BYTE   0
+SYIS:   ITEM    "VERSION", SYI$_VERSION, F_TRIM
+        ITEM    "MAXPROCESSCNT", SYI$_MAXPROCESSCNT, F_INT
+        ITEM    "QUANTUM", SYI$_QUANTUM, F_INT
+        ITEM    "BOOTTIME", SYI$_BOOTTIME, F_TIME
+        .BYTE   0
+DVIS:   ITEM    "DEVNAM", DVI$_DEVNAM, F_STR
+        ITEM    "VOLNAM", DVI$_VOLNAM, F_STR
+        ITEM    "DEVCHAR", DVI$_DEVCHAR, F_INT
+        ITEM    "DEVCLASS", DVI$_DEVCLASS, F_INT
+        ITEM    "DEVTYPE", DVI$_DEVTYPE, F_INT
+        ITEM    "DEVBUFSIZ", DVI$_DEVBUFSIZ, F_INT
+        ITEM    "DEVDEPEND", DVI$_DEVDEPEND, F_INT
+        ITEM    "DEVDEPEND2", DVI$_DEVDEPEND2, F_INT
+        ITEM    "UNIT", DVI$_UNIT, F_INT
+        ITEM    "ERRCNT", DVI$_ERRCNT, F_INT
+        ITEM    "REFCNT", DVI$_REFCNT, F_INT
+        ITEM    "FREEBLOCKS", DVI$_FREEBLOCKS, F_INT
+        ITEM    "MOUNTCNT", DVI$_MOUNTCNT, F_INT
+        ITEM    "CLUSTER", DVI$_CLUSTER, F_INT
+        ITEM    "STS", DVI$_STS, F_INT
+        ITEM    "AVL", DVI$_AVL, F_BOOL
+        ITEM    "MNT", DVI$_MNT, F_BOOL
+        ITEM    "SWL", DVI$_SWL, F_BOOL
+        ITEM    "EXISTS", DVI$_DEVCLASS, F_SPEC
+        .BYTE   0
+SEVS:   .ASCIC  "NONE"                  ; F$ENVIRONMENT("ON_SEVERITY")'s, by ON's rank
+        .ASCIC  "WARNING"
+        .ASCIC  "ERROR"
+        .ASCIC  "SEVERE_ERROR"
+S_TRUE: .ASCIC  "TRUE"
+S_FALSE:
+        .ASCIC  "FALSE"
+S_INTER:
+        .ASCIC  "INTERACTIVE"
+S_BATCH:
+        .ASCIC  "BATCH"
+S_OTHER:
+        .ASCIC  "OTHER"
+S_INT:  .ASCIC  "INTEGER"
+S_STR:  .ASCIC  "STRING"
+S_PROMPT:
+        .ASCIC  "$ "
+HEX:    .ASCII  "0123456789ABCDEF"
+INPUT:  .ASCID  "SYS$INPUT"
+DISK:   .ASCID  "SYS$DISK"
+FILE_DEV:
+        .ASCID  "LNM$FILE_DEV"
+NAMDSC: .LONG   0                       ; F$TRNLNM's name,
+        .ADDRESS NAMBUF
+TABDSC: .LONG   0                       ; its table,
+        .ADDRESS TABBUF
+NAMBUF: .BLKB   256
+TABBUF: .BLKB   256
+TRNITEMS:                               ; and what it asks
+        .WORD   4, LNM$_INDEX
+        .ADDRESS TRNIDX, 0
+        .WORD   255, LNM$_STRING
+        .ADDRESS BUF, BUFLEN
+        .LONG   0
+TRNIDX: .LONG   0
+ITEMS:  .WORD   255                     ; $GETJPI's, $GETSYI's or $GETDVI's: an item
+ITEMCODE:
+        .WORD   0
+        .ADDRESS BUF, BUFLEN
+        .LONG   0
+PIDVAL: .LONG   0                       ; F$GETJPI's PID
+DEVDSC: .LONG   0                       ; F$GETDVI's device
+        .ADDRESS TABBUF
+BUFLEN: .WORD   0                       ; what a service returned
+        .ALIGN  QUAD
+BUF:    .BLKB   256
+TIMDSC: .LONG   255                     ; $ASCTIM's and $GETMSG's string
+        .ADDRESS BUF
+TIMLEN: .WORD   0
+DIRDSC: .LONG   255                     ; the default directory
+        .ADDRESS DIRBUF
+DIRLEN: .WORD   0
+DIRBUF: .BLKB   256
+TMP:    .BLKB   256                     ; a string being made
+KW:     .BLKB   32                      ; a keyword being matched
+SFAB:   $FAB    NAM=SNAM                ; F$SEARCH's stream
+SNAM:   $NAM    ESA=SEXP, ESS=255, RSA=SRES, RSS=255
+SEXP:   .BLKB   255
+SRES:   .BLKB   255
+SSPEC:  .BLKB   256                     ; its specification, .ASCIC
+SBUSY:  .LONG   0                       ; 1 while it has more files to find
+PFAB:   $FAB    FNA=TMP, DNA=TABBUF, NAM=PNAM ; F$PARSE's
+PNAM:   $NAM    ESA=PEXP, ESS=255
+PEXP:   .BLKB   255
+ARGCNT: .LONG   0                       ; F$FAO's: the arguments given
+NEXTARG:
+        .LONG   0                       ; and the next one
+LASTNUM:
+        .LONG   0                       ; the last number it wrote, for !%S
+NUMBUF: .BLKB   32                      ; a number's digits
+NUMDIRS:
+        .ASCII  "USZXO"                 ; F$FAO's number directives
+        .ALIGN  LONG
+EMPTY:  .LONG   1, 0                    ; a value, ""
+        .BYTE   0
+
+        .PSECT  CODE, EXE, LONG
+; DCL$LEXICAL: DCL$SYMNAM = a lexical function's name, R6 = the ( after
+; it, R7 = past the line, R9 = a value in DCL$VSTACK. Works out each
+; argument into the values from R9 on and makes R9 the function's
+; value, with R6 past the ). An error goes back to DCL's stack. Uses
+; R0-R5, R8, R10.
+DCL$LEXICAL::
+        .JSB_ENTRY  OUTPUT=<R6>, SCRATCH=<R2, R3, R4, R5, R8, R10>
+        MOVAB   FUNCS, R10
+10$:    TSTB    (R10)
+        BNEQ    15$
+        BRW     UNDFUN
+15$:    MOVL    R10, R1
+        MOVAB   DCL$SYMNAM, R2
+        BSBW    DCL$SAMESTR
+        MOVZBL  (R10), R1
+        ADDL2   R1, R10
+        INCL    R10                     ; its MIN, MAX and routine
+        BLBS    R0, 20$
+        ADDL2   #6, R10
+        BRB     10$
+20$:    INCL    R6
+        CMPB    (R10), #RAW
+        BNEQ    25$
+        MOVL    2(R10), R0
+        JSB     (R0)
+        RSB
+25$:    PUSHL   R11
+        PUSHL   R9
+        CLRL    R11                     ; the arguments
+        BSBW    DCL$SKIP
+        CMPL    R6, R7
+        BGEQU   SYNTAX
+        CMPB    (R6), #^A/)/
+        BNEQ    30$
+        INCL    R6
+        BRB     50$
+30$:    MOVAB   DCL$VSTKEND-VAL$K_LENGTH, R0
+        CMPL    R9, R0
+        BGTRU   SYNTAX
+        BSBW    DCL$SKIP
+        CMPL    R6, R7
+        BGEQU   SYNTAX
+        CMPB    (R6), #44
+        BEQL    35$
+        CMPB    (R6), #^A/)/
+        BEQL    35$
+        PUSHL   R10
+        BSBW    DCL$EXPR
+        MOVL    (SP)+, R10
+        BRB     37$
+35$:    MOVL    #1, VAL$L_TYPE(R9)      ; left out: ""
+        CLRB    VAL$T_STR(R9)
+37$:    INCL    R11
+        BSBW    DCL$SKIP
+        CMPL    R6, R7
+        BGEQU   SYNTAX
+        MOVZBL  (R6)+, R0
+        CMPB    R0, #44
+        BNEQ    40$
+        ADDL2   #VAL$K_LENGTH, R9
+        BRB     30$
+40$:    CMPB    R0, #^A/)/
+        BNEQ    SYNTAX
+50$:    MOVL    (SP)+, R9
+        MOVZBL  (R10), R0
+        CMPL    R11, R0
+        BLSS    INSFARG
+        MOVZBL  1(R10), R0
+        CMPL    R11, R0
+        BGTR    MAXARG
+        PUSHL   R6
+        MOVL    2(R10), R0
+        JSB     (R0)
+        MOVL    (SP)+, R6
+        MOVL    (SP)+, R11
+        RSB
+
+; The errors in a lexical function's call. Each reports itself, and goes
+; back to DCL's stack.
+SYNTAX: .EXCEPTION_ENTRY
+        BRW     DCL$EXPSYN
+UNDFUN: .EXCEPTION_ENTRY
+        MOVL    DCL$SAVESP, SP
+        CLRB    DCL$MSG
+        ADDTEXT "%DCL-W-IVFNAM, invalid lexical function name - check validity and spelling"
+        BSBW    DCL$SAY
+        ADDTEXT " \"
+        MOVAB   DCL$SYMNAM, R1
+        BSBW    DCL$ADDCSTR
+        ADDTEXT "\"
+        BSBW    DCL$SAY
+        BRW     DCL$WARN
+INSFARG:
+        .EXCEPTION_ENTRY
+        MOVL    DCL$SAVESP, SP
+        PRINT   "%DCL-W-ARGREQ, missing argument - supply all required arguments"
+        BRW     DCL$WARN
+MAXARG: .EXCEPTION_ENTRY
+        MOVL    DCL$SAVESP, SP
+        PRINT   "%DCL-W-MAXPARM, too many parameters - reenter command with fewer parameters"
+        BRW     DCL$WARN
+; IVKEYW: KW = a keyword no table has.
+IVKEYW: .EXCEPTION_ENTRY
+        MOVL    DCL$SAVESP, SP
+        CLRB    DCL$MSG
+        ADDTEXT "%DCL-W-IVKEYW, unrecognized keyword - check validity and spelling"
+        BSBW    DCL$SAY
+        ADDTEXT " \"
+        MOVAB   KW, R1
+        BSBW    DCL$ADDCSTR
+        ADDTEXT "\"
+        BSBW    DCL$SAY
+        BRW     DCL$WARN
+; FAILED: R0 = a service's status, a failure: reported as a command's.
+FAILED: .EXCEPTION_ENTRY
+        MOVL    DCL$SAVESP, SP
+        BRW     DCL$DONE
+
+; The functions: R9 = the first argument's value, the next one after it,
+; R11 = how many there are. Each makes R9 its value. They use R0-R6, R8
+; and R10.
+
+; F$LENGTH(string): its length.
+LENGTH: .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5, R6, R8, R10>
+        CLRL    R0
+        BSBW    ARGSTR
+        MOVZBL  (R1), R0
+        BSBW    RESINT
+        RSB
+
+; F$EXTRACT(start, length, string): length characters of string from
+; start, the first 0, as many as there are.
+EXTRACT:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5, R6, R8, R10>
+        MOVL    #2, R0
+        BSBW    ARGSTR
+        MOVL    R1, R10
+        CLRL    R0
+        BSBW    ARGINT
+        MOVL    R0, R6
+        MOVL    #1, R0
+        BSBW    ARGINT
+        MOVL    R0, R8
+        TSTL    R6
+        BGEQ    5$
+        CLRL    R6
+5$:     TSTL    R8
+        BGEQ    7$
+        CLRL    R8
+7$:     MOVZBL  (R10), R2
+        SUBL2   R6, R2                  ; what is left from start
+        BGTR    10$
+        CLRL    R2
+10$:    CMPL    R8, R2
+        BGEQ    20$
+        MOVL    R8, R2
+20$:    MOVAB   1(R10)[R6], R1
+        BSBW    RESSTR
+        RSB
+
+; F$LOCATE(substring, string): where substring first is in string, or
+; string's length if it isn't.
+LOCATE: .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5, R6, R8, R10>
+        CLRL    R0
+        BSBW    ARGSTR
+        MOVL    R1, R10
+        MOVL    #1, R0
+        BSBW    ARGSTR
+        MOVL    R1, R8
+        MOVZBL  (R10), R4
+        MOVZBL  (R8), R5
+        CLRL    R6
+10$:    SUBL3   R6, R5, R0
+        CMPL    R0, R4
+        BLSS    80$
+        MOVAB   1(R8)[R6], R1
+        CMPC3   R4, (R1), 1(R10)
+        BEQL    90$
+        INCL    R6
+        BRB     10$
+80$:    MOVL    R5, R6
+90$:    MOVL    R6, R0
+        BSBW    RESINT
+        RSB
+
+; F$ELEMENT(n, delimiter, string): the nth of the elements delimiter
+; separates in string, the first 0, or delimiter if there are fewer.
+ELEMENT:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5, R6, R8, R10>
+        CLRL    R0
+        BSBW    ARGINT
+        MOVL    R0, R6
+        MOVL    #1, R0
+        BSBW    ARGSTR
+        MOVL    R1, R10
+        MOVL    #2, R0
+        BSBW    ARGSTR
+        MOVL    R1, R8
+        TSTB    (R10)
+        BEQL    80$
+        MOVZBL  1(R10), R5              ; the delimiter
+        MOVZBL  (R8), R4
+        MOVAB   1(R8), R2
+        ADDL3   R2, R4, R3              ; past the string
+        TSTL    R6
+        BLSS    80$
+10$:    TSTL    R6
+        BEQL    30$
+20$:    CMPL    R2, R3
+        BGEQU   80$
+        CMPB    (R2)+, R5
+        BNEQ    20$
+        DECL    R6
+        BRB     10$
+30$:    MOVL    R2, R1
+40$:    CMPL    R2, R3
+        BGEQU   50$
+        CMPB    (R2), R5
+        BEQL    50$
+        INCL    R2
+        BRB     40$
+50$:    SUBL3   R1, R2, R2
+        BSBW    RESSTR
+        RSB
+80$:    MOVL    R10, R1
+        BSBW    RESCSTR
+        RSB
+
+; F$EDIT(string, edits): string edited as the list of keywords says:
+; COLLAPSE takes out the blanks and tabs, COMPRESS makes each run of them
+; a blank, LOWERCASE and UPCASE change the letters, TRIM takes out those
+; at the ends, UNCOMMENT what follows a !. Outside quotes only.
+EDIT:   .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5, R6, R8, R10>
+        MOVL    #1, R0
+        BSBW    ARGSTR
+        MOVAB   EDITS, R10
+        BSBW    KEYWORDS
+        MOVL    R0, R10                 ; the edits
+        CLRL    R0
+        BSBW    ARGSTR
+        MOVZBL  (R1)+, R2               ; what is left of the string
+        MOVAB   TMP, R3                 ; where the next character goes
+        CLRL    R4                      ; 1 in quotes
+        CLRL    R5                      ; 1 after a blank COMPRESS kept
+        BBC     #E_TRIM, R10, 10$
+5$:     TSTL    R2                      ; leading blanks
+        BEQL    10$
+        CMPB    (R1), #^A/ /
+        BEQL    7$
+        CMPB    (R1), #9
+        BNEQ    10$
+7$:     INCL    R1
+        DECL    R2
+        BRB     5$
+10$:    TSTL    R2
+        BEQL    60$
+        MOVZBL  (R1)+, R0
+        DECL    R2
+        CMPB    R0, #^A/"/
+        BNEQ    15$
+        XORL2   #1, R4
+        BRB     50$
+15$:    BLBS    R4, 50$
+        CMPB    R0, #^A/!/
+        BNEQ    20$
+        BBS     #E_UNCOMMENT, R10, 60$
+20$:    CMPB    R0, #^A/ /
+        BEQL    25$
+        CMPB    R0, #9
+        BNEQ    30$
+25$:    BBS     #E_COLLAPSE, R10, 10$
+        BBC     #E_COMPRESS, R10, 50$
+        BLBS    R5, 10$
+        MOVB    #^A/ /, (R3)+
+        MOVL    #1, R5
+        BRB     10$
+30$:    BBC     #E_UPCASE, R10, 35$
+        CMPB    R0, #^A/a/
+        BLSSU   35$
+        CMPB    R0, #^A/z/
+        BGTRU   35$
+        SUBB2   #^A/a/-^A/A/, R0
+35$:    BBS     #E_UPCASE, R10, 50$     ; it wins
+        BBC     #E_LOWER, R10, 50$
+        CMPB    R0, #^A/A/
+        BLSSU   50$
+        CMPB    R0, #^A/Z/
+        BGTRU   50$
+        ADDB2   #^A/a/-^A/A/, R0
+50$:    MOVB    R0, (R3)+
+        CLRL    R5
+        BRB     10$
+60$:    MOVAB   TMP, R1
+        BBC     #E_TRIM, R10, 70$
+65$:    CMPL    R3, R1                  ; trailing blanks
+        BEQL    70$
+        CMPB    -1(R3), #^A/ /
+        BEQL    67$
+        CMPB    -1(R3), #9
+        BNEQ    70$
+67$:    DECL    R3
+        BRB     65$
+70$:    SUBL3   R1, R3, R2
+        BSBW    RESSTR
+        RSB
+
+; F$INTEGER(x): x as an integer. F$STRING(x): as a string.
+INTEGER:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5, R6, R8, R10>
+        CLRL    R0
+        BSBW    ARGINT
+        BSBW    RESINT
+        RSB
+STRING: .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5, R6, R8, R10>
+        CLRL    R0
+        BSBW    ARGSTR
+        BSBW    RESCSTR
+        RSB
+
+; F$TYPE(symbol): RAW, R6 past the (. "INTEGER" if the symbol is an
+; integer, or a string of one, "STRING" if it is another string, ""
+; if there is none, with R6 past the ).
+TYPE:   .JSB_ENTRY  OUTPUT=<R6>, SCRATCH=<R2, R3, R4, R5, R8, R10>
+        BSBW    DCL$SKIP
+        BSBW    DCL$NAMESCAN
+        BSBW    DCL$SKIP
+        CMPL    R6, R7
+        BGEQU   SYNTAX
+        CMPB    (R6)+, #^A/)/
+        BNEQ    SYNTAX
+        TSTL    R8
+        BEQL    SYNTAX
+        BSBW    DCL$GETSYM
+        BLBS    R0, 10$
+        CLRL    R2
+        BSBW    RESSTR
+        RSB
+10$:    MOVAB   S_INT, R1
+        TSTL    VAL$L_TYPE(R9)
+        BEQL    80$
+        MOVZBL  VAL$T_STR(R9), R2       ; a string: digits, after a sign?
+        BEQL    70$
+        MOVAB   VAL$T_STR+1(R9), R3
+        CMPB    (R3), #^A/-/
+        BEQL    20$
+        CMPB    (R3), #^A/+/
+        BNEQ    30$
+20$:    INCL    R3
+        DECL    R2
+        BEQL    70$
+30$:    CMPB    (R3), #^A/0/
+        BLSSU   70$
+        CMPB    (R3)+, #^A/9/
+        BGTRU   70$
+        SOBGTR  R2, 30$
+        BRB     80$
+70$:    MOVAB   S_STR, R1
+80$:    BSBW    RESCSTR
+        RSB
+
+; F$MODE(): INTERACTIVE if SYS$INPUT is a terminal, BATCH if it is a
+; file, else OTHER.
+MODE:   .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5, R6, R8, R10>
+        BSBW    GETMODE
+        BSBW    RESCSTR
+        RSB
+
+; GETMODE: R1 = F$MODE()'s value, .ASCIC. Uses R0-R5.
+GETMODE:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5>
+        MOVW    #DVI$_DEVCLASS, ITEMCODE
+        $GETDVIW_S DEVNAM=INPUT, ITMLST=ITEMS
+        MOVAB   S_OTHER, R1
+        BLBC    R0, 90$
+        MOVAB   S_INTER, R1
+        CMPL    BUF, #DC$_TERM
+        BEQL    90$
+        MOVAB   S_BATCH, R1
+        CMPL    BUF, #DC$_DISK
+        BEQL    90$
+        MOVAB   S_OTHER, R1
+90$:    RSB
+
+; F$TIME(): the time now, as $ASCTIM writes it.
+TIME:   .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5, R6, R8, R10>
+        $ASCTIM_S TIMLEN=TIMLEN, TIMBUF=TIMDSC
+        BLBS    R0, 10$
+        BRW     FAILED
+10$:    MOVAB   BUF, R1
+        MOVZWL  TIMLEN, R2
+        BSBW    RESSTR
+        RSB
+
+; F$MESSAGE(status): its message, from $GETMSG.
+MESSAGE:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5, R6, R8, R10>
+        CLRL    R0
+        BSBW    ARGINT
+        $GETMSG_S MSGID=R0, MSGLEN=TIMLEN, BUFADR=TIMDSC
+        MOVAB   BUF, R1
+        MOVZWL  TIMLEN, R2
+        BSBW    RESSTR
+        RSB
+
+; F$VERIFY([procedure[, image]]): 1 if SET VERIFY is on, else 0; with
+; procedure, then turns it on if procedure is true, else off.
+VERIFY: .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5, R6, R8, R10>
+        MOVL    DCL$VERIFY, R6
+        CLRL    R0
+        BSBW    ARGGIVEN
+        BLBC    R0, 10$
+        CLRL    R0
+        BSBW    ARGINT
+        BICL3   #^C1, R0, DCL$VERIFY
+10$:    MOVL    R6, R0
+        BSBW    RESINT
+        RSB
+
+; F$TRNLNM(name[, table[, index]]): the logical name's equivalence
+; string, index's, the first 0, in table, LNM$FILE_DEV by default, or ""
+; if it has none.
+TRNLNM: .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5, R6, R8, R10>
+        CLRL    R0
+        BSBW    ARGSTR
+        MOVAB   NAMBUF, R3
+        BSBW    UPCOPY
+        MOVL    R2, NAMDSC
+        MOVAB   FILE_DEV, R6
+        MOVL    #1, R0
+        BSBW    ARGGIVEN
+        BLBC    R0, 10$
+        MOVL    #1, R0
+        BSBW    ARGSTR
+        MOVAB   TABBUF, R3
+        BSBW    UPCOPY
+        MOVL    R2, TABDSC
+        MOVAB   TABDSC, R6
+10$:    CLRL    TRNIDX
+        MOVL    #2, R0
+        BSBW    ARGGIVEN
+        BLBC    R0, 20$
+        MOVL    #2, R0
+        BSBW    ARGINT
+        MOVL    R0, TRNIDX
+20$:    $TRNLNM_S TABNAM=(R6), LOGNAM=NAMDSC, ITMLST=TRNITEMS
+        CLRL    R2
+        BLBC    R0, 30$
+        MOVZWL  BUFLEN, R2
+30$:    MOVAB   BUF, R1
+        BSBW    RESSTR
+        RSB
+
+; F$SEARCH(spec): the next file spec names, or "" past the last. A spec
+; with a wildcard goes on from the file before, if it is the same spec;
+; one without finds the file anew each time.
+SEARCH: .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5, R6, R8, R10>
+        CLRL    R0
+        BSBW    ARGSTR
+        MOVL    R1, R6
+        TSTL    SBUSY
+        BEQL    10$
+        MOVAB   SSPEC, R2
+        BSBW    DCL$SAMESTR
+        BLBS    R0, 20$
+10$:    MOVZBL  (R6), R0
+        INCL    R0
+        MOVC3   R0, (R6), SSPEC
+        MOVAB   SSPEC+1, SFAB+FAB$L_FNA
+        MOVB    SSPEC, SFAB+FAB$B_FNS
+        $PARSE  FAB=SFAB
+        BLBC    R0, 80$
+        MOVL    #1, SBUSY
+20$:    $SEARCH FAB=SFAB
+        BLBC    R0, 80$
+        BITL    #NAM$M_WILDCARD, SNAM+NAM$L_FNB
+        BNEQ    30$
+        CLRL    SBUSY
+30$:    MOVAB   SRES, R1
+        MOVZBL  SNAM+NAM$B_RSL, R2
+        BSBW    RESSTR
+        RSB
+80$:    CLRL    SBUSY
+        CLRL    R2
+        BSBW    RESSTR
+        RSB
+
+; F$PARSE(spec[, default[, related[, field]]]): spec expanded, with
+; default's parts where it has none, as $PARSE does, or only its field:
+; NODE, DEVICE, DIRECTORY, NAME, TYPE or VERSION. "" if it can't be.
+PARSE:  .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5, R6, R8, R10>
+        MOVL    #3, R0                  ; the field's index, or -1
+        BSBW    ARGGIVEN
+        MNEGL   #1, R10
+        BLBC    R0, 5$
+        MOVL    #3, R0
+        BSBW    ARGSTR
+        MOVAB   FIELDS, R10
+        BSBW    KEYWORDS
+        CLRL    R10                     ; its bit's
+3$:     BBS     R10, R0, 5$
+        AOBLSS  #6, R10, 3$
+5$:     CLRB    PFAB+FAB$B_DNS
+        MOVL    #1, R0
+        BSBW    ARGGIVEN
+        BLBC    R0, 10$
+        MOVL    #1, R0
+        BSBW    ARGSTR
+        MOVZBL  (R1)+, R2
+        MOVB    R2, PFAB+FAB$B_DNS
+        MOVC3   R2, (R1), TABBUF
+10$:    CLRL    R0
+        BSBW    ARGSTR
+        MOVZBL  (R1)+, R2
+        MOVB    R2, PFAB+FAB$B_FNS
+        MOVC3   R2, (R1), TMP
+        $PARSE  FAB=PFAB
+        CLRL    R2
+        BLBC    R0, 80$
+        MOVAB   PEXP, R1
+        MOVZBL  PNAM+NAM$B_ESL, R2
+        TSTL    R10
+        BLSS    80$
+        CLRL    R2                      ; NODE: none
+        TSTL    R10
+        BEQL    80$
+        DECL    R10                     ; the others, from NAM$B_DEV and NAM$L_DEV on
+        MOVZBL  PNAM+NAM$B_DEV[R10], R2
+        MOVL    PNAM+NAM$L_DEV[R10], R1
+80$:    BSBW    RESSTR
+        RSB
+
+; F$ENVIRONMENT(item): about DCL: DEPTH, MAX_DEPTH, DEFAULT, PROCEDURE,
+; ON_SEVERITY, ON_CONTROL_Y, VERIFY_PROCEDURE, VERIFY_IMAGE,
+; INTERACTIVE or PROMPT.
+ENVIRON:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5, R6, R8, R10>
+        CLRL    R0
+        MOVAB   ENVS, R10
+        BSBW    GETITEM
+        MOVZWL  -2(R10), R0             ; its code
+        CASEL   R0, #0, #9
+1$:     .WORD   10$-1$, 20$-1$, 30$-1$, 40$-1$, 50$-1$
+        .WORD   60$-1$, 70$-1$, 80$-1$, 90$-1$, 95$-1$
+10$:    MOVL    DCL$DEPTH, R0
+        BRB     12$
+20$:    MOVL    #MAXDEPTH, R0
+12$:    BSBW    RESINT
+        RSB
+30$:    $TRNLNM_S TABNAM=FILE_DEV, LOGNAM=DISK, ITMLST=TRNITEMS
+        CLRL    R2
+        BLBC    R0, 35$
+        MOVZWL  BUFLEN, R2
+35$:    PUSHL   R2
+        $SETDDIR_S OLDLEN=DIRLEN, OLDDIR=DIRDSC
+        MOVL    (SP)+, R2
+        MOVAB   BUF[R2], R1
+        MOVZWL  DIRLEN, R0
+        MOVC3   R0, DIRBUF, (R1)
+        MOVAB   BUF, R1
+        SUBL3   R1, R3, R2
+        BSBW    RESSTR
+        RSB
+40$:    BSBW    DCL$PROCNAM
+        BRB     99$
+50$:    MOVL    DCL$DEPTH, R0
+        CLRL    R1
+        TSTL    R0
+        BEQL    55$
+        TSTL    DCL$NOON[R0]
+        BNEQ    55$
+        MOVL    DCL$ONSEV[R0], R1
+55$:    MOVAB   SEVS, R2                ; the R1th
+57$:    MOVL    R2, R0
+        MOVZBL  (R2)+, R3
+        ADDL2   R3, R2
+        SOBGEQ  R1, 57$
+        MOVL    R0, R1
+        BRB     99$
+60$:    BSBW    DCL$HASCY
+        BRB     75$
+70$:    MOVL    DCL$VERIFY, R0
+75$:    BSBW    BOOL
+        BRB     99$
+80$:    MOVAB   S_FALSE, R1
+        BRB     99$
+90$:    BSBW    GETMODE
+        MOVAB   S_INTER, R2
+        BSBW    DCL$SAMESTR
+        BRB     75$
+95$:    MOVAB   S_PROMPT, R1
+99$:    BSBW    RESCSTR
+        RSB
+
+; F$GETJPI(pid, item): an item $GETJPI returns of the process pid names,
+; in hex, or of this one for "": PID, OWNER, PRCNAM, IMAGNAME, UIC, GRP,
+; MEM, PRI, PRIB, STATE, STS, CURPRIV, PROCPRIV, AUTHPRIV or MODE.
+GETJPI: .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5, R6, R8, R10>
+        MOVL    #1, R0
+        MOVAB   JPIS, R10
+        BSBW    GETITEM
+        CMPB    (R10), #F_SPEC          ; MODE
+        BNEQ    5$
+        BSBW    GETMODE
+        BSBW    RESCSTR
+        RSB
+5$:     CLRL    R6                      ; the PID's address
+        CLRL    R0
+        BSBW    ARGGIVEN
+        BLBC    R0, 20$
+        CLRL    R0
+        BSBW    ARGSTR
+        MOVZBL  (R1)+, R2
+        CLRL    PIDVAL
+10$:    SOBGEQ  R2, 12$
+        MOVAB   PIDVAL, R6
+        BRB     20$
+12$:    MOVZBL  (R1)+, R0
+        CMPB    R0, #^A/a/
+        BLSSU   13$
+        SUBB2   #^A/a/-^A/A/, R0
+13$:    SUBL2   #^A/0/, R0
+        CMPL    R0, #9
+        BLEQU   15$
+        SUBL2   #<^A/A/-^A/0/-10>, R0
+15$:    ASHL    #4, PIDVAL, PIDVAL
+        BISL2   R0, PIDVAL
+        BRB     10$
+20$:    $GETJPIW_S PIDADR=(R6), ITMLST=ITEMS
+        BLBS    R0, 30$
+        BRW     FAILED
+30$:    BSBW    FORMAT
+        RSB
+
+; F$GETSYI(item): an item $GETSYI returns: VERSION, MAXPROCESSCNT,
+; QUANTUM or BOOTTIME.
+GETSYI: .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5, R6, R8, R10>
+        CLRL    R0
+        MOVAB   SYIS, R10
+        BSBW    GETITEM
+        $GETSYIW_S ITMLST=ITEMS
+        BLBS    R0, 10$
+        BRW     FAILED
+10$:    BSBW    FORMAT
+        RSB
+
+; F$GETDVI(device, item): an item $GETDVI returns of the device, as
+; $DVIDEF names them, or EXISTS, TRUE if there is such a device.
+GETDVI: .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5, R6, R8, R10>
+        MOVL    #1, R0
+        MOVAB   DVIS, R10
+        BSBW    GETITEM
+        CLRL    R0
+        BSBW    ARGSTR
+        MOVAB   TABBUF, R3
+        BSBW    UPCOPY
+        MOVL    R2, DEVDSC
+        $GETDVIW_S DEVNAM=DEVDSC, ITMLST=ITEMS
+        CMPB    (R10), #F_SPEC          ; EXISTS
+        BNEQ    10$
+        BSBW    BOOL
+        BSBW    RESCSTR
+        RSB
+10$:    BLBS    R0, 20$
+        BRW     FAILED
+20$:    BSBW    FORMAT
+        RSB
+
+; F$FAO(control[, argument...]): control with its directives replaced by
+; the arguments, as $FAO formats them.
+FAO:    .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5, R6, R8, R10>
+        MOVL    R11, ARGCNT
+        MOVL    #1, NEXTARG
+        CLRL    R0
+        BSBW    ARGSTR
+        MOVL    R1, R6                  ; the next character of control
+        MOVZBL  (R6)+, R8               ; how many are left
+        MOVAB   TMP, R3                 ; where the next goes
+10$:    SOBGEQ  R8, 15$
+        BRW     90$
+15$:    MOVZBL  (R6)+, R0
+        CMPB    R0, #^A/!/
+        BEQL    20$
+        BSBW    PUTC
+        BRB     10$
+20$:    CLRL    R10                     ; a directive: its width, or 0
+25$:    SOBGEQ  R8, 27$
+        BRW     90$
+27$:    MOVZBL  (R6)+, R0
+        SUBL3   #^A/0/, R0, R1
+        CMPL    R1, #9
+        BGTRU   30$
+        MULL2   #10, R10
+        ADDL2   R1, R10
+        BRB     25$
+30$:    CMPB    R0, #^A/!/
+        BEQL    35$
+        CMPB    R0, #^A/_/
+        BNEQ    40$
+        MOVZBL  #9, R0
+35$:    BSBW    PUTC
+        BRB     10$
+40$:    CMPB    R0, #^A|/|
+        BNEQ    45$
+        MOVZBL  #13, R0
+        BSBW    PUTC
+        MOVZBL  #10, R0
+        BRB     35$
+45$:    CMPB    R0, #^A/*/              ; !n*c: c n times
+        BNEQ    50$
+        SOBGEQ  R8, 47$
+        BRW     90$
+47$:    MOVZBL  (R6)+, R0
+48$:    SOBGEQ  R10, 49$
+        BRB     10$
+49$:    BSBW    PUTC
+        BRB     48$
+50$:    CMPB    R0, #^A/%/              ; !%S: an s if the last number isn't 1
+        BNEQ    55$
+        SOBGEQ  R8, 52$
+        BRW     90$
+52$:    MOVZBL  (R6)+, R0
+        BICB2   #^X20, R0
+        CMPB    R0, #^A/S/
+        BNEQ    10$
+        CMPL    LASTNUM, #1
+        BEQL    10$
+        MOVZBL  #^A/s/, R0
+        BRB     35$
+55$:    SOBGEQ  R8, 57$                 ; two letters: AS, or a number's
+        BRW     90$
+57$:    BICB2   #^X20, R0
+        MOVZBL  (R6)+, R1
+        BICB2   #^X20, R1
+        CMPB    R0, #^A/A/
+        BNEQ    60$
+        BSBW    FAOSTR
+        BRW     10$
+60$:    PUSHL   R1                      ; a number's: U, S, Z, X or O
+        PUSHL   R0
+        MOVAB   NUMDIRS, R2
+        LOCC    R0, #5, (R2)
+        MOVL    R0, R2
+        MOVL    (SP)+, R0
+        MOVL    (SP)+, R1
+        TSTL    R2
+        BEQL    70$
+        BSBW    FAONUM
+70$:    BRW     10$
+90$:    MOVAB   TMP, R1
+        SUBL3   R1, R3, R2
+        BSBW    RESSTR
+        RSB
+
+; FAOSTR: R10 = a width, or 0. F$FAO's !AS: the next argument, as a
+; string, at R3, padded with blanks or cut to the width. Uses R0-R2,
+; R4, R5.
+FAOSTR: .JSB_ENTRY  OUTPUT=<R3>, SCRATCH=<R2, R4, R5>
+        BSBW    NEXTVAL
+        PUSHL   R3
+        PUSHL   R9
+        MOVL    R1, R9
+        BSBW    DCL$TOSTR
+        MOVAB   VAL$T_STR(R9), R1
+        MOVL    (SP)+, R9
+        MOVL    (SP)+, R3
+        MOVZBL  (R1)+, R4
+        MOVL    R10, R5
+        BNEQ    10$
+        MOVL    R4, R5
+10$:    SOBGEQ  R5, 20$
+        RSB
+20$:    MOVZBL  #^A/ /, R0
+        SOBGEQ  R4, 30$
+        CLRL    R4
+        BRB     40$
+30$:    MOVZBL  (R1)+, R0
+40$:    BSBW    PUTC
+        BRB     10$
+
+; FAONUM: R0 = a number directive's first letter, U, S, Z, X or O, R1 =
+; its size, B, W or L, R10 = a width, or 0. F$FAO's !UL and the rest: the
+; next argument, as an integer, at R3, padded or cut to the width. Uses
+; R0-R2, R4, R5.
+FAONUM: .JSB_ENTRY  OUTPUT=<R3>, SCRATCH=<R2, R4, R5>
+        PUSHL   R0
+        PUSHL   R1
+        BSBW    NEXTVAL
+        PUSHL   R3
+        PUSHL   R9
+        MOVL    R1, R9
+        BSBW    DCL$TOINT
+        MOVL    VAL$L_INT(R9), R2       ; the number
+        MOVL    (SP)+, R9
+        MOVL    (SP)+, R3
+        MOVL    (SP)+, R1
+        MOVL    (SP)+, R0
+        MOVL    #32, R4                 ; its bits
+        CMPB    R1, #^A/B/
+        BNEQ    5$
+        MOVL    #8, R4
+        CVTBL   R2, R5
+        MOVZBL  R2, R2
+5$:     CMPB    R1, #^A/W/
+        BNEQ    7$
+        MOVL    #16, R4
+        CVTWL   R2, R5
+        MOVZWL  R2, R2
+7$:     CMPB    R0, #^A/S/
+        BNEQ    9$
+        CMPL    R4, #32
+        BEQL    9$
+        MOVL    R5, R2                  ; signed
+9$:     MOVL    R2, LASTNUM
+        CLRL    R5                      ; zeros to fill with: Z, X and O
+        MOVL    #10, R1
+        CMPB    R0, #^A/Z/
+        BNEQ    10$
+        MOVL    R10, R5
+10$:    CMPB    R0, #^A/X/
+        BNEQ    20$
+        MOVL    #16, R1
+        DIVL3   #4, R4, R5
+20$:    CMPB    R0, #^A/O/
+        BNEQ    30$
+        MOVL    #8, R1
+        ADDL3   #2, R4, R5
+        DIVL2   #3, R5
+30$:    PUSHL   R3
+        BSBW    NUMSTR
+        MOVL    (SP)+, R3
+        MOVL    R10, R5                 ; right-aligned in the width
+        BNEQ    40$
+        MOVL    R0, R5
+40$:    CMPL    R5, R0
+        BGEQ    50$
+        MOVL    R5, R0                  ; too wide: *
+45$:    SOBGEQ  R5, 47$
+        RSB
+47$:    MOVZBL  #^A/*/, R0
+        BSBW    PUTC
+        BRB     45$
+50$:    PUSHL   R0
+        SUBL2   R0, R5
+55$:    SOBGEQ  R5, 57$
+        BRB     60$
+57$:    MOVZBL  #^A/ /, R0
+        BSBW    PUTC
+        BRB     55$
+60$:    MOVL    (SP)+, R4
+        MOVAB   NUMBUF, R1
+65$:    SOBGEQ  R4, 67$
+        RSB
+67$:    MOVZBL  (R1)+, R0
+        BSBW    PUTC
+        BRB     65$
+
+; NUMSTR: R2 = a number, R1 = its base, R5 = the fewest digits, R0 = S
+; if it is signed. Writes it to NUMBUF: R0 = its length. Uses R0-R5.
+NUMSTR: .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5>
+        CLRL    R3                      ; 1 if negative
+        CMPB    R0, #^A/S/
+        BNEQ    5$
+        TSTL    R2
+        BGEQ    5$
+        MNEGL   R2, R2
+        INCL    R3
+5$:     CLRL    R4                      ; the digits, on the stack
+10$:    PUSHL   R3
+        CLRL    R3
+        EDIV    R1, R2, R2, R0          ; R2 as unsigned
+        MOVL    (SP)+, R3
+        MOVZBL  HEX[R0], R0
+        PUSHL   R0
+        INCL    R4
+        DECL    R5
+        TSTL    R2
+        BNEQ    10$
+        TSTL    R5
+        BGTR    10$
+        MOVAB   NUMBUF, R1
+        TSTL    R3
+        BEQL    20$
+        MOVB    #^A/-/, (R1)+
+20$:    MOVL    (SP)+, R0
+        MOVB    R0, (R1)+
+        SOBGTR  R4, 20$
+        MOVAB   NUMBUF, R0
+        SUBL3   R0, R1, R0
+        RSB
+
+; NEXTVAL: R1 = F$FAO's next argument, or "" past the last. Uses R0, R1.
+NEXTVAL:
+        .JSB_ENTRY
+        MOVL    NEXTARG, R0
+        CMPL    R0, ARGCNT
+        BLSS    10$
+        MOVAB   EMPTY, R1
+        RSB
+10$:    INCL    NEXTARG
+        BRW     ARGP
+
+; PUTC: R0 = a character, R3 = where it goes in TMP, unless TMP is full.
+PUTC:   .JSB_ENTRY  OUTPUT=<R3>
+        PUSHAB  TMP+255
+        CMPL    R3, (SP)+
+        BGEQU   10$
+        MOVB    R0, (R3)+
+10$:    RSB
+
+; GETITEM: R0 = the argument that names an item, R10 = an item table.
+; Finds it: R10 = its format, after its name and code, which goes in
+; ITEMS. Else IVKEYW. Uses R0-R6, R8.
+GETITEM:
+        .JSB_ENTRY  OUTPUT=<R10>, SCRATCH=<R2, R3, R4, R5, R6, R8>
+        BSBW    ARGSTR
+        BSBW    KEYWORD
+        BSBW    MATCHKW
+        BLBS    R0, 10$
+        BRW     IVKEYW
+10$:    MOVZBL  (R10), R0
+        ADDL2   R0, R10
+        MOVW    1(R10), ITEMCODE
+        ADDL2   #3, R10
+        RSB
+
+; FORMAT: R10 = an item's format, its value in BUF, BUFLEN long. Makes it
+; the function's value. Uses R0-R6.
+FORMAT: .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5, R6>
+        MOVZBL  (R10), R0
+        CASEL   R0, #F_INT, #F_TRIM-F_INT
+1$:     .WORD   10$-1$, 20$-1$, 30$-1$, 40$-1$, 50$-1$, 60$-1$, 70$-1$, 80$-1$
+10$:    MOVL    BUF, R0
+        BRW     RESINT
+20$:    MOVAB   BUF, R1
+        MOVZWL  BUFLEN, R2
+        BRW     RESSTR
+30$:    MOVL    BUF, R2                 ; a PID
+        MOVL    #16, R1
+        MOVL    #8, R5
+        CLRL    R0
+        BSBW    NUMSTR
+        MOVL    R0, R2
+        MOVAB   NUMBUF, R1
+        BRW     RESSTR
+40$:    MOVAB   TMP, R3                 ; [group,member]
+        MOVB    #91, (R3)+
+        MOVZWL  BUF+2, R2
+        BSBW    OCTAL
+        MOVB    #44, (R3)+
+        MOVZWL  BUF, R2
+        BSBW    OCTAL
+        MOVB    #93, (R3)+
+        BRB     55$
+50$:    MOVAB   TMP, R3                 ; privileges' names, a comma between
+        MOVAB   PRV_NAMES, R6
+        CLRL    R5
+51$:    TSTB    (R6)
+        BEQL    55$
+        BBC     R5, BUF, 53$
+        MOVAB   TMP, R0
+        CMPL    R3, R0
+        BEQL    52$
+        MOVB    #44, (R3)+
+52$:    PUSHL   R5
+        MOVZBL  (R6), R0
+        MOVC3   R0, 1(R6), (R3)
+        MOVL    (SP)+, R5
+53$:    MOVZBL  (R6), R0
+        ADDL2   R0, R6
+        INCL    R6
+        AOBLSS  #64, R5, 51$
+55$:    MOVAB   TMP, R1
+        SUBL3   R1, R3, R2
+        BRW     RESSTR
+60$:    $ASCTIM_S TIMLEN=TIMLEN, TIMBUF=TIMDSC, TIMADR=BUF
+        MOVAB   BUF, R1
+        MOVZWL  TIMLEN, R2
+        BRW     RESSTR
+70$:    MOVL    BUF, R0                 ; a boolean
+        BSBW    BOOL
+        BRW     RESCSTR
+80$:    MOVAB   BUF, R1                 ; a string, its blanks at the end gone
+        MOVZWL  BUFLEN, R2
+85$:    TSTL    R2
+        BEQL    87$
+        CMPB    -1(R1)[R2], #^A/ /
+        BNEQ    87$
+        DECL    R2
+        BRB     85$
+87$:    BRW     RESSTR
+
+; OCTAL: R2 = a number, R3 = where it goes. Writes it in octal, R3 past
+; it. Uses R0-R2, R4, R5.
+OCTAL:  .JSB_ENTRY  OUTPUT=<R3>, SCRATCH=<R2, R4, R5>
+        PUSHL   R3
+        MOVL    #8, R1
+        MOVL    #1, R5
+        CLRL    R0
+        BSBW    NUMSTR
+        MOVL    (SP)+, R3
+        PUSHL   R0
+        MOVC3   R0, NUMBUF, (R3)        ; R3 past it
+        TSTL    (SP)+
+        RSB
+
+; BOOL: R0 = a truth value. R1 = "TRUE" if its low bit is set, else
+; "FALSE".
+BOOL:   .JSB_ENTRY
+        MOVAB   S_TRUE, R1
+        BLBS    R0, 10$
+        MOVAB   S_FALSE, R1
+10$:    RSB
+
+; KEYWORD: R1 = a string, .ASCIC. Copies it to KW in capitals, the first
+; 31 characters, without blanks around it. Uses R0-R3.
+KEYWORD:
+        .JSB_ENTRY  SCRATCH=<R2, R3>
+        MOVZBL  (R1)+, R2
+        CLRL    R3
+10$:    SOBGEQ  R2, 20$
+        MOVB    R3, KW
+        RSB
+20$:    MOVZBL  (R1)+, R0
+        CMPB    R0, #^A/ /
+        BEQL    10$
+        CMPB    R0, #^A/a/
+        BLSSU   30$
+        CMPB    R0, #^A/z/
+        BGTRU   30$
+        SUBB2   #^A/a/-^A/A/, R0
+30$:    CMPL    R3, #31
+        BGEQU   10$
+        INCL    R3
+        MOVB    R0, KW[R3]
+        BRB     10$
+
+; MATCHKW: R10 = a table of .ASCIC names, each followed by 3 bytes, until
+; a 0. R0 = 1 and R10 = the one KW names, all of it, or R0 = 0. Uses R1,
+; R2.
+MATCHKW:
+        .JSB_ENTRY  OUTPUT=<R10>, SCRATCH=<R2>
+10$:    CLRL    R0
+        TSTB    (R10)
+        BEQL    90$
+        MOVL    R10, R1
+        MOVAB   KW, R2
+        BSBW    DCL$SAMESTR
+        BLBS    R0, 90$
+        MOVZBL  (R10), R0
+        ADDL2   R0, R10
+        ADDL2   #4, R10
+        BRB     10$
+90$:    RSB
+
+; KEYWORDS: R1 = a list of keywords, .ASCIC, a comma between each two,
+; R10 = a table of their names, .ASCIC, until a 0. R0 = a bit for each,
+; by its place in the table; one may be abbreviated. Else IVKEYW. Uses
+; R0-R6, R8.
+KEYWORDS:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5, R6, R8>
+        MOVZBL  (R1)+, R2               ; what is left of the list
+        CLRL    R8                      ; the bits
+10$:    TSTL    R2                      ; the next keyword
+        BNEQ    12$
+        MOVL    R8, R0
+        RSB
+12$:    CMPB    (R1), #^A/ /
+        BEQL    15$
+        CMPB    (R1), #44
+        BNEQ    17$
+15$:    INCL    R1
+        DECL    R2
+        BRB     10$
+17$:    CLRL    R3                      ; its length, in KW
+20$:    TSTL    R2
+        BEQL    30$
+        MOVZBL  (R1), R0
+        CMPB    R0, #^A/ /
+        BEQL    30$
+        CMPB    R0, #44
+        BEQL    30$
+        CMPB    R0, #^A/a/
+        BLSSU   25$
+        CMPB    R0, #^A/z/
+        BGTRU   25$
+        SUBB2   #^A/a/-^A/A/, R0
+25$:    CMPL    R3, #31
+        BGEQU   27$
+        INCL    R3
+        MOVB    R0, KW[R3]
+27$:    INCL    R1
+        DECL    R2
+        BRB     20$
+30$:    MOVB    R3, KW
+        MOVL    R10, R4                 ; which one
+        CLRL    R5
+40$:    TSTB    (R4)
+        BNEQ    42$
+        BRW     IVKEYW
+42$:    CMPB    R3, (R4)
+        BGTRU   50$
+        CLRL    R6
+45$:    CMPL    R6, R3
+        BGEQU   60$
+        CMPB    KW+1[R6], 1(R4)[R6]
+        BNEQ    50$
+        INCL    R6
+        BRB     45$
+50$:    MOVZBL  (R4), R0
+        ADDL2   R0, R4
+        INCL    R4
+        INCL    R5
+        BRB     40$
+60$:    BBSS    R5, R8, 10$
+        BRB     10$
+
+; UPCOPY: R1 = a string, .ASCIC, R3 = where it goes. Copies it there, in
+; capitals: R2 = its length. Uses R0-R3.
+UPCOPY: .JSB_ENTRY  OUTPUT=<R2>, SCRATCH=<R3>
+        MOVZBL  (R1)+, R2
+        PUSHL   R2
+10$:    SOBGEQ  R2, 20$
+        MOVL    (SP)+, R2
+        RSB
+20$:    MOVZBL  (R1)+, R0
+        CMPB    R0, #^A/a/
+        BLSSU   30$
+        CMPB    R0, #^A/z/
+        BGTRU   30$
+        SUBB2   #^A/a/-^A/A/, R0
+30$:    MOVB    R0, (R3)+
+        BRB     10$
+
+; ARGP: R0 = an argument's place, the first 0. R1 = its value. Uses R0,
+; R1.
+ARGP:   .JSB_ENTRY
+        MULL3   #VAL$K_LENGTH, R0, R1
+        ADDL2   R9, R1
+        RSB
+
+; ARGGIVEN: R0 = an argument's place. R0 = 1 if it was given, and isn't
+; "", else 0. Uses R0, R1.
+ARGGIVEN:
+        .JSB_ENTRY
+        CMPL    R0, R11
+        BGEQ    80$
+        BSBB    ARGP
+        TSTL    VAL$L_TYPE(R1)
+        BEQL    90$
+        TSTB    VAL$T_STR(R1)
+        BNEQ    90$
+80$:    CLRL    R0
+        RSB
+90$:    MOVL    #1, R0
+        RSB
+
+; ARGSTR: R0 = an argument's place. Makes it a string: R1 = it, .ASCIC.
+; Uses R0-R4.
+ARGSTR: .JSB_ENTRY  SCRATCH=<R2, R3, R4>
+        PUSHL   R9
+        BSBB    ARGP
+        MOVL    R1, R9
+        BSBW    DCL$TOSTR
+        MOVAB   VAL$T_STR(R9), R1
+        MOVL    (SP)+, R9
+        RSB
+
+; ARGINT: R0 = an argument's place. Makes it an integer: R0 = it. Uses
+; R0-R5.
+ARGINT: .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5>
+        PUSHL   R9
+        BSBB    ARGP
+        MOVL    R1, R9
+        BSBW    DCL$TOINT
+        MOVL    VAL$L_INT(R9), R0
+        MOVL    (SP)+, R9
+        RSB
+
+; RESINT: R0 = an integer, the function's value.
+RESINT: .JSB_ENTRY
+        CLRL    VAL$L_TYPE(R9)
+        MOVL    R0, VAL$L_INT(R9)
+        RSB
+
+; RESCSTR: R1 = a string, .ASCIC, the function's value. RESSTR: R1 = a
+; string, R2 = its length, the first 255 characters. Uses R0-R5.
+RESCSTR:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5>
+        MOVZBL  (R1)+, R2
+RESSTR: .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5>
+        CMPL    R2, #255
+        BLEQU   10$
+        MOVL    #255, R2
+10$:    PUSHL   R2
+        MOVC3   R2, (R1), TMP           ; it may be in an argument's value
+        MOVL    (SP), R2
+        MOVB    R2, VAL$T_STR(R9)
+        MOVC3   R2, TMP, VAL$T_STR+1(R9)
+        TSTL    (SP)+
+        MOVL    #1, VAL$L_TYPE(R9)
+        RSB
+
+        .END

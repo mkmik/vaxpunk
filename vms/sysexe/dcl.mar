@@ -91,11 +91,21 @@
 ;               LIB$GET_FOREIGN
 ;   IF expression THEN command
 ;               does command if the expression is true, odd
+;   IF expression THEN, or $ THEN [command] on the next line, ...,
+;   ELSE [command], ..., ENDIF
+;               a block: the lines up to ELSE if it is true, else those
+;               after, up to ENDIF
 ;   GOTO label  goes on from the procedure's line label: starts
 ;   EXIT [status]
 ;               ends the procedure, with $STATUS or status; outside
 ;               one, the image CTRL/Y stopped exits with it, through its
 ;               exit handlers
+;   ON condition THEN command
+;               does command when a command's status is WARNING, ERROR
+;               or SEVERE_ERROR or worse, once, or at CTRL/Y, CONTROL_Y
+;   SET [NO]ON  the procedure acts on its errors, or goes on
+;   SET [NO]VERIFY
+;               writes a procedure's lines as it does them, or not
 ;   WRITE SYS$OUTPUT expression[,...]
 ;               writes the values on the console
 ;   OPEN[/READ][/WRITE][/APPEND] name file
@@ -104,7 +114,9 @@
 ;   READ[/KEY=string[/INDEX=n][/MATCH=GE|GT]][/DELETE] name symbol
 ;               reads the next record of the file, or the one with that
 ;               key, into a local symbol, and deletes it with /DELETE;
-;               /END_OF_FILE=label and /ERROR=label go there instead
+;               /END_OF_FILE=label and /ERROR=label go there instead;
+;               READ SYS$INPUT reads a procedure's next data line, or
+;               the terminal, as SYS$COMMAND does, after /PROMPT's text
 ;   WRITE[/UPDATE] name expression[,...]
 ;               writes a record to it, or rewrites the one READ read
 ;   CLOSE name  closes it
@@ -127,9 +139,11 @@
 ; STS$M_INHIB_MSG set is one the image reported itself. It reads the
 ; commands from SYS$INPUT, a terminal, but SYS$MANAGER:SYLOGIN.COM's and
 ; the user's SYS$LOGIN:LOGIN.COM's, which it runs first, if they are
-; there, and a command procedure's, whose lines start with $. When
-; SYS$INPUT isn't a terminal, but a file, as STARTUP's is, it runs that as
-; a procedure and logs out.
+; there, and a command procedure's, whose lines start with $; the lines
+; after one that runs an image, up to the next that starts with $, are
+; the image's SYS$INPUT, and READ SYS$INPUT's. When SYS$INPUT isn't a
+; terminal, but a file, as STARTUP's is, it runs that as a procedure and
+; logs out.
 ;
 ; CTRL/Y is DCL's supervisor mode AST, which it enables on the console
 ; with IO$_SETMODE (ADR-0014). It stops the image DCL runs, where it is,
@@ -142,26 +156,30 @@
 ; Local symbols are the procedure's that made them, and those it calls
 ; see them; global ones are everyone's. $STATUS is the last command's
 ; status and $SEVERITY its severity. Expressions are integers, "strings"
-; and symbols, with * /, + -, .EQ. .NE. .LT. .LE. .GT. .GE. and their
-; string forms .EQS. ... .GES., .AND., .OR., in that order, ( ), and -
-; and .NOT. in front of an operand. + joins two strings; a string
+; and symbols, %X, %O and %D numbers and lexical functions, F$name(...)
+; (dcl/lexical.mar), with * /, + -, .EQ. .NE. .LT. .LE. .GT. .GE. and
+; their string forms .EQS. ... .GES., .AND., .OR., in that order, ( ),
+; and - and .NOT. in front of an operand. + joins two strings; a string
 ; elsewhere is its integer, or 1 if it starts with T or Y, else 0. A
-; command whose status is an error or a fatal error ends every procedure,
-; as VMS's ON ERROR THEN EXIT does; so does CTRL/Y, at the next command.
+; command whose status is an error or a fatal error ends the procedure,
+; and its status is that of the @ in the one that called it, unless an
+; ON or SET NOON says otherwise; CTRL/Y ends every procedure, at the next
+; command, but for an ON CONTROL_Y's.
 ; ponytail: message texts for a few statuses only. @
 ; reads the whole procedure into PBUF, and it goes when the procedure
-; ends: 16 KB for those running at once. No ON, IF blocks, lexical
-; functions or READ of a terminal; lines without $, an image's input on
-; VMS, are skipped. .NOT. takes an operand, not a comparison.
+; ends: 16 KB for those running at once. .NOT. takes an operand, not a
+; comparison.
+; No - at a line's end to go on to the next, no &name substitution and
+; no CALL, GOSUB or symbol[offset,size] substrings.
 ;
 ; This module reads the commands, parses them and does those that run
 ; an image, CTRL/Y, CONTINUE and STOP. The rest are in dcl/: logical.mar
 ; has the logical name commands, setshow.mar SET and SHOW DEFAULT, SHOW
 ; DEVICES and SET COMMAND, proc.mar @ and the commands that steer a
-; procedure, pipe.mar PIPE, symbol.mar the symbols and their commands,
-; file.mar OPEN, READ, CLOSE and WRITE to a file,
-; expr.mar symbol substitution and expressions, message.mar the
-; messages, and cdu.mar the CLD compiler. What they share is global,
+; procedure, IF and ON, pipe.mar PIPE, symbol.mar the symbols and their
+; commands, expr.mar symbol substitution and expressions, lexical.mar the
+; lexical functions, file.mar OPEN, READ, WRITE and CLOSE, message.mar
+; the messages, and cdu.mar the CLD compiler. What they share is global,
 ; named DCL$name, and dcl.mlb has their constants.
 ;
         .LIBRARY "lib.mlb"
@@ -185,10 +203,13 @@
         .EXTERNAL DCL$PIPE, DCL$PIPEDEPTH, DCL$PIPEEND, DCL$PIPENEXT
         .EXTERNAL DCL$SAMESTR, DCL$SAY, DCL$SETCOMMAND, DCL$SETDEF, DCL$SHOW
         .EXTERNAL DCL$SKIP, DCL$STATUS, DCL$STRASSIGN, DCL$SUBST, DCL$SYMNAM
-        .EXTERNAL DCL$TOSTR, DCL$VSTACK, DCL$WRITE
+        .EXTERNAL DCL$TOSTR, DCL$VSTACK, DCL$WRITE, DCL$ELSE, DCL$ENDIF
+        .EXTERNAL DCL$DATAIN, DCL$DATAEND
+        .EXTERNAL DCL$ON, DCL$ONACT, DCL$CYACT, DCL$HASCY, DCL$NOON
 
         .PSECT  DATA, NOEXE, WRT, LONG
-CHAN:   .LONG   0                       ; SYS$INPUT's, once assigned
+DCL$CHAN::                              ; SYS$INPUT's channel, once assigned
+CHAN:   .LONG   0
 INPUT:  .ASCID  "SYS$INPUT"
 DCL$NAMDSC::                            ; a logical name: its length
         .LONG   0
@@ -220,6 +241,9 @@ V_IDENT:
         .ASCID  "IDENTIFICATION"
 V_CONTROL:
         .ASCID  "OPTION.CONTROL"
+V_VERIFY:
+        .ASCID  "OPTION.VERIFY"
+V_ON:   .ASCID  "OPTION.ON"
 VALDSC: .LONG   LINESIZE                ; DCL$GETVAL's: DCL$TOKEN
         .ADDRESS DCL$TOKEN
 VALLEN: .WORD   0
@@ -236,6 +260,10 @@ ROUTINES:
         .ADDRESS DCL$DEFINE
         .ASCIC  "DELSYM"
         .ADDRESS DCL$DELSYM
+        .ASCIC  "ELSE"
+        .ADDRESS DCL$ELSE
+        .ASCIC  "ENDIF"
+        .ADDRESS DCL$ENDIF
         .ASCIC  "EXIT"
         .ADDRESS DCL$EXIT
         .ASCIC  "GOTO"
@@ -244,6 +272,8 @@ ROUTINES:
         .ADDRESS DCL$IF
         .ASCIC  "LOGOUT"
         .ADDRESS LOGOUT
+        .ASCIC  "ON"
+        .ADDRESS DCL$ON
         .ASCIC  "OPEN"
         .ADDRESS DCL$OPEN
         .ASCIC  "PIPE"
@@ -302,6 +332,10 @@ CTRLYHIT:                               ; 1: CTRL/Y came with no image
         .LONG   0
 NOCTRLY:                                ; 1 after SET NOCONTROL: no CTRL/Y AST
         .LONG   0
+DCL$VERIFY::                            ; 1 after SET VERIFY: a procedure's lines are written
+        .LONG   0
+VECHO:  .LONG   0                       ; 1: the line read is to be written
+PENDCY: .LONG   0                       ; 1: CTRL/Y ran an image down for ON CONTROL_Y
 STOPPID:                                ; STOP/IDENTIFICATION's PID
         .LONG   0
 DCL$LASTSTAT::                          ; $STATUS
@@ -332,8 +366,13 @@ DCL$PTABVEC::                           ; the process's tables, for CLI$$DCL_PAR
         BRB     DCL$NEXT
 7$:     BSBW    CTRLYON
         BRB     DCL$NEXT
-10$:    MOVL    4(AP), R0
-        BRW     DCL$DONE
+10$:    BSBW    DCL$DATAEND             ; an image ran: SYS$INPUT as it was
+        MOVL    4(AP), R0
+        BBCC    #0, PENDCY, 20$         ; the image CTRL/Y ran down: ON CONTROL_Y
+        MOVL    R0, DCL$LASTSTAT
+        MOVL    #1, CTRLYHIT
+        BRW     DCL$NEXT
+20$:    BRW     DCL$DONE
 
 ; DCL$NEXT: reads the next command, from PIPE's line, the procedure
 ; running or the console, and does it.
@@ -341,7 +380,9 @@ DCL$NEXT::
         .GLOBAL_LABEL                   ; CTRLY's too
         MOVL    DCL$SAVESP, SP
         BBCC    #0, CTRLYHIT, 5$
-        BSBW    DCL$ENDPROCS
+        BSBW    DCL$CYACT
+        BLBC    R0, 5$
+        BRW     DCL$COMMAND             ; ON CONTROL_Y's
 5$:     BSBW    DCL$PIPENEXT            ; substituted with PIPE's line
         BLBC    R0, 7$
         BRW     DCL$COMMAND
@@ -358,6 +399,7 @@ DCL$NEXT::
         BGEQU   DCL$NEXT
         CMPB    (R6), #^A/$/            ; a command, else data, skipped
         BNEQ    DCL$NEXT
+        MOVL    DCL$VERIFY, VECHO       ; SET VERIFY: written once substituted
         INCL    R6
         BRB     SUBLINE
 PROMPT1:
@@ -380,6 +422,12 @@ GOTLINE:
         ADDL2   R6, R7                  ; past the line
 SUBLINE:
         BSBW    DCL$SUBST
+        BBCC    #0, VECHO, DCL$COMMAND
+        ADDTEXT "$"
+        MOVL    R6, R1
+        SUBL3   R6, R7, R2
+        BSBW    DCL$ADD
+        BSBW    DCL$SAY
 ; DCL$COMMAND: R6 = a command's first character in DCL$LINE, R7 = past
 ; its last. Does it.
 DCL$COMMAND::
@@ -647,6 +695,7 @@ IMAGE:  CLRL    R0                      ; a type?
         MOVL    DOTEXE, (R0)
         ADDL2   #4, R8
 20$:    MOVL    R8, TOKDSC
+        BSBW    DCL$DATAIN
         BSBW    RUNNING
         $IMGACT_S IMAGE=TOKDSC, CMDLIN=(R9)
         MOVAB   TOKDSC, R1
@@ -666,6 +715,11 @@ DCL$WARN::
 ; Reports it, and prompts for the next command. The image CTRL/Y stopped,
 ; if there was one, is gone.
 ACTFAIL:
+        PUSHL   R1
+        PUSHL   R0
+        BSBW    DCL$DATAEND
+        MOVL    (SP)+, R0
+        MOVL    (SP)+, R1
         CLRL    IMGRUN
         CLRL    DCL$CTRLYFP
         PUSHL   R0
@@ -685,9 +739,10 @@ ACTFAIL:
 
 ; DCL$DONE: R0 = a command's status, or an image's. Makes it $STATUS,
 ; and reports it if it is a failure no one reported, which it then marks
-; reported. An error or a fatal error ends the procedures running, but
-; that PIPE's line runs in while the line has commands left. Then the
-; next command.
+; reported. Then the procedure running does what its ON says for it, but
+; that PIPE's line runs in while the line has commands left: by default,
+; an error or a fatal error ends it, and the status is then its @'s, in
+; the procedure that called it. Then the next command.
 DCL$DONE::
         .GLOBAL_LABEL
         MOVL    R0, DCL$LASTSTAT
@@ -703,11 +758,11 @@ DCL$DONE::
         BEQL    12$
         CMPL    DCL$DEPTH, DCL$PIPEDEPTH
         BEQL    20$
-12$:    BICL3   #^C7, DCL$LASTSTAT, R0  ; the severity
-        CMPL    R0, #2                  ; STS$K_ERROR
-        BEQL    15$
-        CMPL    R0, #4                  ; STS$K_SEVERE
-        BNEQ    20$
+12$:    BSBW    DCL$ONACT
+        BLBS    R0, 15$
+        TSTL    R0
+        BEQL    20$
+        BRW     DCL$COMMAND             ; its ON command
 15$:    BSBW    DCL$EXITPROC
         BRB     10$
 20$:    BRW     DCL$NEXT
@@ -719,17 +774,47 @@ DCL$OK::
         BRW     DCL$NEXT
 
 ; SET [NO]CONTROL[=Y]: enables DCL's CTRL/Y AST, or disables it, so that
-; CTRL/Y, and CTRL/C no image has an AST for, do nothing.
-SET:    MOVAB   V_CONTROL, R1
+; CTRL/Y, and CTRL/C no image has an AST for, do nothing. SET [NO]VERIFY:
+; writes a procedure's command lines as it does them, or not. SET [NO]ON:
+; the procedure running acts on errors as its ON says, or goes on.
+SET:    MOVAB   V_VERIFY, R1
         BSBW    DCL$ISPRES
         CMPL    R0, #CLI$_ABSENT
-        BEQL    DCL$SETDEF
-        CLRL    NOCTRLY
+        BEQL    3$
+        BSBW    ISNEG
+        MOVL    R0, DCL$VERIFY
+        BRW     DCL$OK
+3$:     MOVAB   V_ON, R1
+        BSBW    DCL$ISPRES
+        CMPL    R0, #CLI$_ABSENT
+        BEQL    5$
+        BSBW    ISNEG
+        XORL3   #1, R0, R1
+        MOVL    DCL$DEPTH, R0
+        MOVL    R1, DCL$NOON[R0]
+        BRW     DCL$OK
+5$:     MOVAB   V_CONTROL, R1
+        BSBW    DCL$ISPRES
+        CMPL    R0, #CLI$_ABSENT
+        BNEQ    7$
+        BRW     DCL$SETDEF
+7$:     CLRL    NOCTRLY
         CMPL    R0, #CLI$_NEGATED
         BNEQ    10$
         MOVL    #1, NOCTRLY
 10$:    BSBW    CTRLYON
         BRW     DCL$OK
+
+; ISNEG: R0 = CLI$PRESENT's status for a keyword that is there. R0 = 0
+; if it was negated, NO..., else 1.
+ISNEG:
+        .JSB_ENTRY
+        CMPL    R0, #CLI$_NEGATED
+        BEQL    10$
+        MOVL    #1, R0
+        RSB
+10$:    CLRL    R0
+        RSB
 
 ; DCL$GETVAL: R1 = an entity's name, .ASCID. Copies its first value in
 ; the command's parse to DCL$TOKEN: R8 = its length, 0 if it has none.
@@ -880,8 +965,14 @@ CTRLYON:
         MOVL    #1, CTRLYHIT
         BSBW    CTRLYON
         RET
-10$:    MOVL    FP, DCL$CTRLYFP
+10$:    BSBW    DCL$HASCY               ; ON CONTROL_Y: the image goes
+        BLBC    R0, 20$
+        MOVL    #1, PENDCY
+        BSBW    CTRLYON
+        $EXIT_S #<SS$_ABORT!INHIB>
+20$:    MOVL    FP, DCL$CTRLYFP
         MOVL    SP, DCL$SAVESP
+        BSBW    DCL$DATAEND
         BSBW    DCL$ENDPROCS
         BRW     DCL$NEXT
 

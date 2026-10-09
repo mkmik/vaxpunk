@@ -30,6 +30,13 @@ define verb DEFINE
 	qualifier TABLE, value(required)
 	disallow any2(PROCESS, SYSTEM, TABLE)
 
+define verb ELSE
+	cliroutine ELSE
+	parameter P1, label=COMMAND, value(type=$rest_of_line)
+
+define verb ENDIF
+	cliroutine ENDIF
+
 define verb EXIT
 	cliroutine EXIT
 	parameter P1, label=STATUS, value(type=$rest_of_line)
@@ -48,6 +55,12 @@ define verb IF
 
 define verb LOGOUT
 	cliroutine LOGOUT
+
+! ON condition THEN command: condition is WARNING, ERROR, SEVERE_ERROR or
+! CONTROL_Y, which DCL parses itself, with THEN and the command.
+define verb ON
+	cliroutine ON
+	parameter P1, label=ARGUMENT, prompt="Condition", value(required, type=$rest_of_line)
 
 ! OPEN logical-name file-spec: opens a file for READ and WRITE, for
 ! reading by default; /WRITE alone makes a new sequential file, /READ/WRITE
@@ -75,8 +88,9 @@ define verb PIPE
 
 ! READ logical-name symbol: reads the next record of the file OPEN
 ! opened, or with /KEY the one with that key, along key /INDEX, into a
-! local symbol. ponytail: no /PROMPT, /NOLOCK or /TIME_OUT, which
-! read terminals and shared files.
+! local symbol; SYS$INPUT a procedure's next data line, or the terminal,
+! after /PROMPT's text, as SYS$COMMAND. ponytail: no /NOLOCK or
+! /TIME_OUT, which read shared files and terminals.
 define verb READ
 	cliroutine READ
 	parameter P1, label=LOGICAL_NAME, prompt="Log_name", value(required)
@@ -87,6 +101,7 @@ define verb READ
 	qualifier INDEX, value(required, type=$number)
 	qualifier KEY, value(required)
 	qualifier MATCH, value(required, type=MATCH_OPTIONS)
+	qualifier PROMPT, value(required)
 
 define type MATCH_OPTIONS
 	keyword EQ
@@ -108,9 +123,11 @@ define type SET_OPTIONS
 	keyword FILE, syntax=SET_FILE
 	keyword HOST, syntax=SET_HOST
 	keyword PASSWORD, syntax=SET_PASSWORD
+	keyword ON, negatable
 	keyword PROCESS, syntax=SET_PROCESS
 	keyword PROTECTION, value(list), syntax=SET_PROTECTION
 	keyword TERMINAL, syntax=SET_TERMINAL
+	keyword VERIFY, negatable
 
 ! SET [NO]CONTROL[=Y]: CTRL/Y, and CTRL/C no image takes, on or off.
 ! ponytail: no T, CTRL/T has no status line to show.

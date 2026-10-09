@@ -62,7 +62,7 @@ const BOOT: Phase = Phase {
 /// print theirs by the end, and SNOOP; then
 /// DIRECTORY, of LIBRTL.EXE in SYS$SHARE too, TYPE, TYPE/HEAD, TYPE/TAIL
 /// and EDIT on the system disk,
-/// DCLTEST.COM's and DCL's lines with symbols, a PIPE whose && skips and
+/// LOGIN.COM's line, DCLTEST.COM's and DCL's lines with symbols, a PIPE whose && skips and
 /// || runs after a failure, those SYLOGIN.COM defined too, CLITEST's words as a
 /// foreign command, EDIT's EXIT that can't write there, a logical name,
 /// SHOW LOGICAL, SET DEFAULT HOME's SYS$SYSROOT:[SYSMGR] and SET DEFAULT
@@ -110,6 +110,8 @@ const SYSTEM_DISK: Phase = Phase {
         "CLITEST: foreign ONE \"Two\" 3",
         "CLITEST: foreign world",
         "DCLTEST: ok, 3 and 4",
+        // LOGIN.COM's, at a terminal, F$MODE() INTERACTIVE.
+        "SYSTEM on _OPA0:, ",
         "%RMS-E-FNF, file not found",
         "  $STATUS == 268534418   Hex = 10018292  Octal = 02000301222",
         "X is 42",

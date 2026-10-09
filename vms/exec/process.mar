@@ -112,6 +112,8 @@ KNOWN:  .ASCIC  "SETPWD.EXE"            ; SET PASSWORD writes SYSUAF.DAT
         .ASCIC  "_DKA0:[SYSEXE]SETPWD.EXE"
         .LONG   PRV$M_SYSPRV, 0
         .BYTE   0
+CMDNAME:
+        .ASCIC  "SYS$COMMAND"
 
         .PSECT  $CODE$
 
@@ -428,7 +430,9 @@ EXE$PRCPRIV::
 
 ; PPNAMES: R8 = a new PCB, AP = $CREPRC's arguments, checked. Makes its
 ; logical name table, with its process-permanent names: SYS$INPUT,
-; SYS$OUTPUT and SYS$ERROR, those of input, output and error it was given.
+; SYS$OUTPUT and SYS$ERROR, those of input, output and error it was given,
+; and SYS$COMMAND, input's too, where DCL reads its commands, while
+; SYS$INPUT may be a procedure's data lines.
 ; R0 = SS$_NORMAL or SS$_INSFMEM. Uses R1, R2, R5-R7, R9 and R10.
 PPNAMES:
         .JSB_ENTRY  SCRATCH=<R2, R5, R6, R7, R9, R10>
@@ -451,7 +455,15 @@ PPNAMES:
         MOVL    (SP)+, R2
         BLBS    R0, 10$
         BRB     80$
-70$:    MOVL    #SS$_NORMAL, R0
+70$:    MOVL    12(AP), R1              ; SYS$COMMAND
+        BEQL    75$
+        MOVZWL  (R1), R9
+        MOVL    4(R1), R8
+        MOVAB   CMDNAME+1, R6
+        MOVZBL  CMDNAME, R7
+        BSBW    LNM$CREATE
+        BLBC    R0, 80$
+75$:    MOVL    #SS$_NORMAL, R0
 80$:    POPR    #^M<R3, R8>
         RSB
 

@@ -175,7 +175,7 @@ In the executive, for one node: [ADR-0030](../adr/0030-lock-manager-in-the-execu
   `F$EXTRACT`, `F$LOCATE`, `F$ELEMENT`, `F$EDIT`, `F$INTEGER`,
   `F$STRING`, `F$FAO`, `F$VERIFY`.
 - `OPEN`, `READ`, `WRITE` and `CLOSE` on files (done, with PRD-0008's
-  step 8; `READ` of a terminal and `/PROMPT` left), and `SET VERIFY`.
+  step 8), and `SET VERIFY`.
 - Input lines without `$` go to the running image as `SYS$INPUT`, as VMS
   does, rather than being skipped.
 
@@ -198,7 +198,7 @@ until the hardware or size changes; leave it.
 | 3 | Terminals per UCB done, with `TNAn:` for `SET HOST` (step 3, ADR-0027); left: no `$BRKTHRU`; a hangup ends the terminal's reads and writes, not its process; at most 9 `TNAn:` units (`ttdriver.mar`, DESIGN-0002 *I/O*) | *Terminals*, and `LOGINOUT` for the hangup |
 | 4 | No quotas: `BIOLM`, `DIOLM`, `BYTLM` (ADR-0013), `BUFQUO` (ADR-0019), ASTs (DESIGN-0002 *ASTs*); `$GETJPI` has no CPU times, quotas or counts (`getjpi.mar`, `show.mar`) | *Quotas* |
 | 5 | No lock manager yet ([ADR-0030](../adr/0030-lock-manager-in-the-executive.md) designs it); one file system lock for every volume, no per-file lock, no priority boost (ADR-0020, `f11.mar`, DESIGN-0002 *Files*); no file sharing or locking, `$ERASE` deletes an open file (ADR-0009, `rms.mar`) | *Lock manager* |
-| 6 | DCL procedures: no `ON`, block `IF`, lexical functions or `READ` of a terminal; lines without `$` skipped (`dcl.mar`) | *Command language* |
+| 6 | Block `IF`, `ON`, `SET [NO]ON`, `SET VERIFY`, the lexical functions, `OPEN`/`READ`/`WRITE`/`CLOSE` and data lines as `SYS$INPUT` done (step 8); left: an image's data lines go through a mailbox that replaces `SYS$INPUT`, for want of logical names' access modes and RMS on process-permanent files (`dcl/proc.mar`); `F$SEARCH` has one stream, `F$FAO` some directives (`dcl/lexical.mar`) | *Command language* |
 | 7 | `$ASCTIM`, `$NUMTIM` (PRD-0004's pilot, `numtim.b64`) and the date in `SHOW PROCESS` and `SHOW SYSTEM` done; left: `$BINTIM`, `SHOW TIME` | *Batch and print* |
 | 8 | Owners and protection done (step 2); left: a new file has the default protection, not the process's (`f11wrt.mar`), which `LOGINOUT` sets from the UAF; no version limit (`rms.mar`'s `$CREATE_DIR`) | *Privileges, UICs and protection* |
 | 9 | Terminals, `TNAn:` too, listed from their UCBs (step 3); left: `BGA0:` and its units aren't seen by `$DEVICE_SCAN` and `$GETDVI`; a VCB stands for a disk in `$GETDVI` rather than its UCB (`netdriver.mar`, `getdvi.mar`, DESIGN-0002 *Devices*) | Every device listed from its UCB |
@@ -230,7 +230,7 @@ until the hardware or size changes; leave it.
 | 25 | Logical names: no access modes, attributes, tables of one's own, directories, or rooted or concealed names; `$DELLNM` without a name; DCL walks the tables itself for `SHOW LOGICAL`; `SYS$SYSROOT` is a search list of whole volumes, `MDA0:` and `DKA0:`, not of rooted directories (`lnm.mar`, `dcl.mar`, DESIGN-0002) | Access modes first, which `LOGINOUT`'s user-mode names need; `LNM$GROUP` and `LNM$JOB` are tier 1 |
 | 26 | One message table, no message files, `$PUTMSG` or `LIB$SIGNAL` (`getmsg.mar`, `cli.mar`, `dcl.mar`, DESIGN-0002) | Message files when a utility brings its own facility; `$PUTMSG` with condition handling |
 | 27 | `HELP` has no text (`help.mar`) | A help library, `HELPLIB.HLB` |
-| 28 | Mailbox writes never wait, no `IO$_WRITEOF` or attention ASTs (`mbdriver.mar`) | When a program needs them; the job controller may |
+| 28 | `IO$_WRITEOF` done; left: mailbox writes never wait, no attention ASTs (`mbdriver.mar`) | When a program needs them; the job controller may |
 | 29 | Terminal editing and `SET HOST` done (step 3); left: the recall buffer is the terminal's, not DCL's, and there's no `RECALL`; no CTRL/O, CTRL/T, XON and XOFF or formatted writes (`ttdriver.mar`, DESIGN-0002); no `TELNET>` command mode at CTRL/] (`rtpad.mar`); EDIT lacks several commands (`edit.mar`) | DCL's own recall buffer with `RECALL`; the rest when a user misses it |
 | 30 | `$EXPREG` grows P0 only (`memory.mar`); image rundown frees every P0 page, mapped or not (`process.mar`) | When a program grows P1 or the walk shows in a profile |
 | 31 | The scheduler has no priority boosts or decay (`sched.mar`, DESIGN-0002) | Boosts on I/O completion and wakes, with decay; worth it once interactive users share the CPU with batch jobs |
@@ -329,7 +329,8 @@ Each step ends in something `cargo test -p boot` checks.
    (PRD-0008's step 9); `$ERASE` of an open file refused.
    *Visible:* two sessions, `%RMS-E-FLK` on the second open for write.
 8. **Command language.** Block `IF`, `ON`, `$STATUS`, `OPEN`/`READ`/`WRITE`/
-   `CLOSE` (done), the lexical functions, image input from the procedure.
+   `CLOSE`, the lexical functions, image input from the procedure (done,
+   in `dcl/proc.mar`, `lexical.mar` and `file.mar`).
    *Visible:* a `LOGIN.COM` that uses `F$MODE()` to skip its terminal
    setup in batch.
 9. **Batch.** `JOB_CONTROL`, `$SNDJBC`, `$GETQUI`, the queue commands,
