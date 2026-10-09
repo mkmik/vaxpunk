@@ -9,6 +9,7 @@ instructions, which vmacro compiles into PAL calls
 | --- | --- | --- |
 | `exec/` | The executive in MACRO-32 and BLISS-64: scheduler, memory, system services, $QIO and drivers, Files-11, RMS, logical names. Linked as one image, its modules in file-name order | `[SYSEXE]EXEC.EXE` |
 | `sysexe/` | The programs: DCL, the utilities, and the tests STARTUP runs. `lib/` is linked into every image; `dcl/`, `help/` and `rms/` only into the programs that use them | `[SYSEXE]*.EXE` |
+| `sysexe/tpu/` | TPU, the Text Processing Utility ([PRD-0006](../docs/prd/0006-tpu-and-eve.md)): BLISS-64, and `fio.mar`, its I/O module; its tests run under vrun | `[SYSEXE]TPU.EXE` |
 | `sysexe/librtl/` | The run-time library's `LIB$` routines, a shareable image every program but DCL calls ([ADR-0028](../docs/adr/0028-shareable-images.md)); its symbol vector is `librtl.opt` | `[SYSLIB]LIBRTL.EXE` |
 | `cld/` | DCL's verbs, as CLD that vcdu compiles into DCL$TABLES ([ADR-0017](../docs/adr/0017-command-tables-from-cld-with-vcdu.md)) | in `DCL.EXE` and `HELP.EXE` |
 | `sysmgr/` | SYSTEM's text files: SYSTARTUP_VMS.COM, SYLOGIN.COM, WELCOME.TXT | `[SYSMGR]` |

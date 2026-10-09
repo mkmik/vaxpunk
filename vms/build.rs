@@ -10,7 +10,8 @@
 //! HELP with DCL$TABLES, from cld/*.cld, and DCL with sysexe/dcl/*.mar,
 //! its CDU, and HELP and TCPIP with sysexe/help/*.mar, which describes
 //! command tables, and CREATE, CONVERT and ANALYZRMS with sysexe/rms/*.mar,
-//! FDL and their output; in [SYSMGR], the files in sysmgr/,
+//! FDL and their output; TPU, from sysexe/tpu/*.b64 and its I/O module
+//! sysexe/tpu/fio.mar (PRD-0006); in [SYSMGR], the files in sysmgr/,
 //! as text.
 
 use std::collections::HashMap;
@@ -19,7 +20,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 fn main() {
-    for path in ["exec", "sysexe", "sysmgr", "cld", LIB] {
+    for path in ["exec", "sysexe", "sysmgr", "cld", LIB, "../crosstools/vtools/bliss"] {
         println!("cargo::rerun-if-changed={path}");
     }
     let out = PathBuf::from(env::var("OUT_DIR").unwrap());
@@ -117,6 +118,18 @@ fn main() {
         let image = link(&name, base, None, &modules);
         files.push((format!("[SYSEXE]{name}.EXE"), image.image.write()));
     }
+    // A program of its own directory: its BLISS-64 and its MACRO-32.
+    for dir in ["tpu"] {
+        let path = format!("sysexe/{dir}");
+        let mut modules: Vec<_> = sources(&path, &["b64"]).iter().map(|s| bliss(s)).collect();
+        modules.extend(compile(&sources(&path, &["mar"])));
+        modules.extend(libs.iter().cloned());
+        modules.push(librtl_exe.clone());
+        modules.push(stb.clone());
+        let name = dir.to_uppercase();
+        let image = link(&name, vlink::DEFAULT_BASE, None, &modules);
+        files.push((format!("[SYSEXE]{name}.EXE"), image.image.write()));
+    }
     disk(&out.join("sysdisk.img"), &files);
 }
 
@@ -156,8 +169,13 @@ fn bliss(source: &Path) -> (String, Vec<u8>) {
         include: vec![LIB.into()],
         ..Default::default()
     };
+    // Its own directory's require files, and the I/O module's (fio.r64).
     let bliss = vbliss::Options {
-        include: vec![LIB.into()],
+        include: vec![
+            source.parent().unwrap().into(),
+            LIB.into(),
+            "../crosstools/vtools/bliss".into(),
+        ],
         ..Default::default()
     };
     let (object, out) = vbliss::compile_with(&text, &opts, &bliss);
