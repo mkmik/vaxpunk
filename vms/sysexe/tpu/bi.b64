@@ -31,6 +31,7 @@ EXTERNAL ROUTINE
     TYPENAME,
     TYPEKW,
     MSG_FORMAT,
+    MSG_LINE,
     MSG_SHOWN,
     MSG_SEVERITY,
     FAO,
@@ -538,7 +539,7 @@ ROUTINE BI_MESSAGE (ARGS : REF VECTOR, N, R) =
                 END;
             IF NOT KW_ISERROR(.K) THEN RETURN BI_ERR(TPU$_MSGNOTFND);
             IF NOT MSG_SHOWN(.K) THEN RETURN SS_NORMAL;
-            L = MSG_FORMAT(.K, ARGS[2], MAX(.N - 2, 0), 15, BUF);
+            L = MSG_LINE(.K, ARGS[2], MAX(.N - 2, 0), BUF);
             MSG_PUT(BUF, .L)
             END;
         [OTHERWISE] :
@@ -715,11 +716,14 @@ ROUTINE BI_KEY_NAME (ARGS : REF VECTOR, N, R) =
     END;
 
 ! EXIT: writes the buffers that changed and have files, and ends the
-! session.
+! session, the screen showing what writing them said.
 ROUTINE BI_EXIT (ARGS, N, R) =
     BEGIN
+    EXTERNAL ROUTINE
+        SCR_UPDATE : NOVALUE;
     ARGCOUNT(0, 0);
     BUF_EXIT();
+    SCR_UPDATE();
     SCR_END();
     FIO$EXIT(SS_NORMAL)
     END;

@@ -85,10 +85,25 @@ fn build(out: &Path) -> PathBuf {
     exe
 }
 
-/// What the oracle printed, its directory taken out of file names.
+/// What the oracle printed, its directory and versions taken out of file
+/// names: a `;` and digits after a letter.
 fn expected(text: &str) -> String {
-    text.replace("SYS$SYSDEVICE:[TPUORACLE]", "")
-        .replace(";1", "")
+    let text = text.replace("SYS$SYSDEVICE:[TPUORACLE]", "");
+    let mut out = String::new();
+    let mut chars = text.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c == ';'
+            && out.ends_with(|p: char| p.is_ascii_alphabetic())
+            && chars.peek().is_some_and(char::is_ascii_digit)
+        {
+            while chars.peek().is_some_and(char::is_ascii_digit) {
+                chars.next();
+            }
+        } else {
+            out.push(c);
+        }
+    }
+    out
 }
 
 /// Runs one test; Err says how it differs.
@@ -182,6 +197,66 @@ fn tpu() {
     assert!(failures.is_empty(), "{}", failures.join("\n"));
 }
 
+/// EVE (eve/eve.tpu, as the section) on each eve/tests/NAME.txt, NAME.eve
+/// typed, a burst a line: the screen must end as the oracle's EVE left it,
+/// NAME.vt, and the file must be NAME.out if there is one.
+#[test]
+fn eve() {
+    let tmp = Path::new(env!("CARGO_TARGET_TMPDIR")).join("eve");
+    let _ = fs::remove_dir_all(&tmp);
+    fs::create_dir_all(&tmp).unwrap();
+    let exe = build(&tmp);
+    let eve = repo().join("vms/sysexe/tpu/eve");
+    let tests = eve.join("tests");
+    let mut names: Vec<_> = fs::read_dir(&tests)
+        .unwrap()
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| p.extension().is_some_and(|x| x == "eve"))
+        .map(|p| p.file_stem().unwrap().to_string_lossy().into_owned())
+        .collect();
+    names.sort();
+    let mut failures = Vec::new();
+    for name in &names {
+        let dir = tmp.join(name);
+        fs::create_dir_all(&dir).unwrap();
+        let up = name.to_uppercase();
+        fs::copy(eve.join("eve.tpu"), dir.join("EVE.TPU")).unwrap();
+        fs::copy(tests.join(format!("{name}.txt")), dir.join(format!("{up}.TXT"))).unwrap();
+        fs::write(
+            dir.join("TT.IN"),
+            unescape(&fs::read_to_string(tests.join(format!("{name}.eve"))).unwrap()),
+        )
+        .unwrap();
+        let out = Command::new(env!("CARGO_BIN_EXE_vrun"))
+            .args(["--timeout", "60", "--files"])
+            .arg(&dir)
+            .arg(&exe)
+            .arg(format!("/SECTION=EVE.TPU {up}.TXT"))
+            .output()
+            .unwrap();
+        let got = render(&fs::read(dir.join("TT.OUT")).unwrap_or_default());
+        let vt = fs::read(tests.join(format!("{name}.vt"))).unwrap();
+        let want = render(expected(&String::from_utf8_lossy(&vt)).as_bytes());
+        if got != want {
+            failures.push(format!(
+                "{name}: showed\n{got}\nexpected\n{want}\nstderr: {}",
+                String::from_utf8_lossy(&out.stderr)
+            ));
+            continue;
+        }
+        let want_out = tests.join(format!("{name}.out"));
+        if want_out.exists() {
+            let want = fs::read_to_string(&want_out).unwrap();
+            let got = fs::read_to_string(dir.join(format!("{up}.TXT"))).unwrap_or_default();
+            if got != want {
+                failures.push(format!("{name}: wrote\n{got}\nexpected\n{want}"));
+            }
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
 /// The screen a VT100 of 80 by 24 shows after `bytes`, up to where TPU
 /// puts the terminal back as it found it at the end: its rows, blanks at
 /// their ends cut, and where the cursor is.
@@ -192,7 +267,7 @@ fn render(bytes: &[u8]) -> String {
         .rposition(|w| w == EXIT)
         .unwrap_or(bytes.len());
     let mut parser = vt100::Parser::new(24, 80, 0);
-    parser.process(&bytes[..end]);
+    parser.process(&home_after_decstbm(&bytes[..end]));
     let screen = parser.screen();
     let mut out: Vec<String> = screen
         .rows(0, 80)
@@ -202,6 +277,8 @@ fn render(bytes: &[u8]) -> String {
     for r in 0..24 {
         let mask: String = (0..80)
             .map(|c| match screen.cell(r, c) {
+                // Erased cells are plain on a VT100, whatever the video.
+                Some(x) if !x.has_contents() => ' ',
                 Some(x) if x.inverse() => 'R',
                 Some(x) if x.bold() => 'B',
                 Some(x) if x.underline() => 'U',
@@ -217,15 +294,40 @@ fn render(bytes: &[u8]) -> String {
     out.join("\n")
 }
 
+/// `bytes` with a cursor home after each DECSTBM, `ESC [ t ; b r`, which
+/// a VT100 does and the vt100 crate doesn't.
+fn home_after_decstbm(bytes: &[u8]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        out.push(bytes[i]);
+        if bytes[i..].starts_with(b"\x1b[") {
+            let n = bytes[i + 2..]
+                .iter()
+                .take_while(|c| c.is_ascii_digit() || **c == b';')
+                .count();
+            if bytes.get(i + 2 + n) == Some(&b'r') {
+                out.extend_from_slice(&bytes[i + 1..i + 3 + n]);
+                out.extend_from_slice(b"\x1b[H");
+                i += 3 + n;
+                continue;
+            }
+        }
+        i += 1;
+    }
+    out
+}
+
 /// Prints the oracle's screens: TPU_SHOW=1 cargo test -p vrun --test tpu show.
 #[test]
 fn show() {
     if std::env::var("TPU_SHOW").is_err() {
         return;
     }
-    let tests = repo().join("vms/sysexe/tpu/tests");
-    let mut vts: Vec<_> = fs::read_dir(&tests)
+    let tpu = repo().join("vms/sysexe/tpu");
+    let mut vts: Vec<_> = fs::read_dir(tpu.join("tests"))
         .unwrap()
+        .chain(fs::read_dir(tpu.join("eve/tests")).unwrap())
         .flatten()
         .map(|e| e.path())
         .filter(|p| p.extension().is_some_and(|x| x == "vt"))

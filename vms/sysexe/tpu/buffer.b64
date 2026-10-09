@@ -140,7 +140,8 @@ GLOBAL ROUTINE LINENO (B : REF VECTOR, L) =
 ! ---- Markers following edits
 
 ! The markers of a buffer, and the editing point, are places: (line,
-! offset) pairs. FIX buffer, routine, a, b, c: calls the routine on the
+! offset) pairs. A window's first line is a place at offset -1, which
+! stays on its line as text goes in or out of it. FIX buffer, routine, a, b, c: calls the routine on the
 ! address of each place's line and offset.
 ROUTINE EACHPLACE (B : REF VECTOR, FN, A, X, C) : NOVALUE =
     BEGIN
@@ -171,11 +172,11 @@ ROUTINE FIX_SPLIT (LP, OP, L, O, NEW) : NOVALUE =
 
 ! After joining line l, whose length was len, with next.
 ROUTINE FIX_JOIN (LP, OP, L, LEN, NXT) : NOVALUE =
-    IF ..LP EQL .NXT THEN (.LP = .L; .OP = ..OP + .LEN);
+    IF ..LP EQL .NXT THEN (.LP = .L; IF ..OP GEQ 0 THEN .OP = ..OP + .LEN);
 
 ! Before deleting line l: on to the start of the next one.
 ROUTINE FIX_DELLINE (LP, OP, L, NXT, X) : NOVALUE =
-    IF ..LP EQL .L THEN (.LP = .NXT; .OP = 0);
+    IF ..LP EQL .L THEN (.LP = .NXT; IF ..OP GEQ 0 THEN .OP = 0);
 
 ! ---- Editing
 

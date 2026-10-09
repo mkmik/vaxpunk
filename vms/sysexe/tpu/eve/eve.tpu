@@ -1,0 +1,1301 @@
+! EVE, the Extensible Versatile Editor, for vaxpunk's TPU (PRD-0006).
+!
+! Written from DEC's Guide to the Extensible Versatile Editor and from
+! what DEC's EVE does on the oracle (crosstools/ods/vms/tpu-oracle.py's
+! .eve sessions), never from DEC's EVE sources.
+!
+! The screen: the buffer's window over all rows but the last two, with
+! its status line, a prompt area, and a message window of one line. Keys
+! are EVE's on a VT200 keypad: the editing keypad (Find, Insert Here,
+! Remove, Select, Prev Screen, Next Screen), the arrows, Do, Help, F10 to
+! F14 and the control keys. Do reads a command; each word of it can be
+! cut short, and what follows the command's words is its parameter.
+! Commands are eve_ procedures, as DEC's EVE has them, so an
+! initialization file can call them.
+!
+! ponytail: no word wrap while typing, no command recall, no box
+! selection, no help library (HELP lists the commands).
+
+! ---- Messages, prompts and status lines
+
+PROCEDURE eve$prompt (text)
+! A line read after the prompt, in reverse video, as EVE asks.
+SET (PROMPT_AREA, eve$x_prompt_row, 1, REVERSE);
+RETURN READ_LINE (text);
+ENDPROCEDURE;
+
+PROCEDURE eve$yes (text)
+! Whether the answer to a question is yes, the default.
+LOCAL answer;
+answer := EDIT (eve$prompt (text), TRIM, LOWER, NOT_IN_PLACE);
+RETURN (answer = "") OR (SUBSTR (answer, 1, 1) = "y");
+ENDPROCEDURE;
+
+PROCEDURE eve$pad (text, width)
+! The text, blanks after it up to the width.
+LOCAL s;
+s := text;
+LOOP
+    EXITIF LENGTH (s) >= width;
+    s := s + " ";
+ENDLOOP;
+RETURN s;
+ENDPROCEDURE;
+
+PROCEDURE eve$status (w)
+! The window's status line: its buffer, and whether it is written, its
+! mode and its direction.
+LOCAL b, right;
+b := GET_INFO (w, "buffer");
+IF b = 0 THEN RETURN; ENDIF;
+IF GET_INFO (b, "no_write") THEN
+    right := "| Read-only | ";
+ELSE
+    right := "| Write | ";
+ENDIF;
+IF GET_INFO (b, "mode") = INSERT THEN
+    right := right + "Insert | ";
+ELSE
+    right := right + "Overstrike | ";
+ENDIF;
+IF GET_INFO (b, "direction") = FORWARD THEN
+    right := right + "Forward ";
+ELSE
+    right := right + "Reverse ";
+ENDIF;
+SET (STATUS_LINE, w, REVERSE,
+     eve$pad (" Buffer: " + GET_INFO (b, "name"),
+              GET_INFO (w, "width") - LENGTH (right)) + right);
+ENDPROCEDURE;
+
+PROCEDURE eve$update_status
+! Every editing window's status line.
+LOCAL w;
+w := GET_INFO (WINDOWS, "first");
+LOOP
+    EXITIF w = 0;
+    IF (w <> message_window) AND (w <> eve$x_prompt_window)
+       AND (GET_INFO (w, "status_line") <> 0) THEN
+        eve$status (w);
+    ENDIF;
+    w := GET_INFO (WINDOWS, "next");
+ENDLOOP;
+ENDPROCEDURE;
+
+! ---- Moving
+
+PROCEDURE eve$vertical (n)
+! Down n lines, up if n is negative, as far as the buffer goes.
+ON_ERROR
+    [OTHERWISE]:
+ENDON_ERROR;
+MOVE_VERTICAL (n);
+ENDPROCEDURE;
+
+PROCEDURE eve$horizontal (n)
+ON_ERROR
+    [OTHERWISE]:
+ENDON_ERROR;
+MOVE_HORIZONTAL (n);
+ENDPROCEDURE;
+
+PROCEDURE eve_move_up
+eve$vertical (-1);
+ENDPROCEDURE;
+
+PROCEDURE eve_move_down
+eve$vertical (1);
+ENDPROCEDURE;
+
+PROCEDURE eve_move_left
+eve$horizontal (-1);
+ENDPROCEDURE;
+
+PROCEDURE eve_move_right
+eve$horizontal (1);
+ENDPROCEDURE;
+
+PROCEDURE eve_start_of_line
+MOVE_HORIZONTAL (-CURRENT_OFFSET);
+ENDPROCEDURE;
+
+PROCEDURE eve_end_of_line
+IF MARK (NONE) <> END_OF (CURRENT_BUFFER) THEN
+    MOVE_HORIZONTAL (LENGTH (CURRENT_LINE) - CURRENT_OFFSET);
+ENDIF;
+ENDPROCEDURE;
+
+PROCEDURE eve_top
+POSITION (BEGINNING_OF (CURRENT_BUFFER));
+ENDPROCEDURE;
+
+PROCEDURE eve_bottom
+POSITION (END_OF (CURRENT_BUFFER));
+ENDPROCEDURE;
+
+PROCEDURE eve$screen_lines
+! The lines a screen moves: the window's, less one kept in view.
+RETURN GET_INFO (CURRENT_WINDOW, "visible_length") - 2;
+ENDPROCEDURE;
+
+PROCEDURE eve_next_screen
+eve$vertical (eve$screen_lines);
+ENDPROCEDURE;
+
+PROCEDURE eve_previous_screen
+eve$vertical (-eve$screen_lines);
+ENDPROCEDURE;
+
+PROCEDURE eve_move_by_line
+IF CURRENT_DIRECTION = FORWARD THEN
+    IF CURRENT_OFFSET < LENGTH (CURRENT_LINE) THEN
+        eve_end_of_line;
+    ELSE
+        eve$vertical (1);
+        eve_end_of_line;
+    ENDIF;
+ELSE
+    IF CURRENT_OFFSET > 0 THEN
+        eve_start_of_line;
+    ELSE
+        eve$vertical (-1);
+    ENDIF;
+ENDIF;
+ENDPROCEDURE;
+
+PROCEDURE eve_line (n)
+! The start of line n.
+LOCAL count;
+count := GET_INFO (CURRENT_BUFFER, "record_count");
+IF n > count THEN
+    MESSAGE (FAO ("Buffer has only !UL line!%S", count));
+    RETURN;
+ENDIF;
+IF n < 1 THEN
+    MESSAGE ("Line number must be positive");
+    RETURN;
+ENDIF;
+POSITION (BEGINNING_OF (CURRENT_BUFFER));
+eve$vertical (n - 1);
+ENDPROCEDURE;
+
+PROCEDURE eve_mark (name)
+eve$x_marks {EDIT (name, UPPER, NOT_IN_PLACE)} := MARK (NONE);
+MESSAGE ("Current position marked as " + name);
+ENDPROCEDURE;
+
+PROCEDURE eve_go_to (name)
+LOCAL m;
+m := eve$x_marks {EDIT (name, UPPER, NOT_IN_PLACE)};
+IF m = TPU$K_UNSPECIFIED THEN
+    MESSAGE ("No mark called " + name);
+ELSE
+    POSITION (m);
+ENDIF;
+ENDPROCEDURE;
+
+! ---- Direction and mode
+
+PROCEDURE eve_forward
+SET (FORWARD, CURRENT_BUFFER);
+eve$update_status;
+ENDPROCEDURE;
+
+PROCEDURE eve_reverse
+SET (REVERSE, CURRENT_BUFFER);
+eve$update_status;
+ENDPROCEDURE;
+
+PROCEDURE eve_change_direction
+IF CURRENT_DIRECTION = FORWARD THEN eve_reverse; ELSE eve_forward; ENDIF;
+ENDPROCEDURE;
+
+PROCEDURE eve_insert_mode
+SET (INSERT, CURRENT_BUFFER);
+eve$update_status;
+ENDPROCEDURE;
+
+PROCEDURE eve_overstrike_mode
+SET (OVERSTRIKE, CURRENT_BUFFER);
+eve$update_status;
+ENDPROCEDURE;
+
+PROCEDURE eve_change_mode
+IF GET_INFO (CURRENT_BUFFER, "mode") = INSERT THEN
+    eve_overstrike_mode;
+ELSE
+    eve_insert_mode;
+ENDIF;
+ENDPROCEDURE;
+
+! ---- Typing and erasing
+
+PROCEDURE eve_return
+SPLIT_LINE;
+ENDPROCEDURE;
+
+PROCEDURE eve_tab
+COPY_TEXT (ASCII (9));
+ENDPROCEDURE;
+
+PROCEDURE eve_delete
+! The character before the cursor; at a line's start, the line joins
+! the one before it.
+IF MARK (NONE) = BEGINNING_OF (CURRENT_BUFFER) THEN RETURN; ENDIF;
+IF CURRENT_OFFSET = 0 THEN
+    APPEND_LINE;
+ELSE
+    IF GET_INFO (CURRENT_BUFFER, "mode") = OVERSTRIKE THEN
+        MOVE_HORIZONTAL (-1);
+        ERASE_CHARACTER (1);
+        COPY_TEXT (" ");
+        MOVE_HORIZONTAL (-1);
+    ELSE
+        ERASE_CHARACTER (-1);
+    ENDIF;
+ENDIF;
+ENDPROCEDURE;
+
+PROCEDURE eve_erase_character
+IF CURRENT_OFFSET < LENGTH (CURRENT_LINE) THEN
+    eve$x_restore_char := ERASE_CHARACTER (1);
+ENDIF;
+ENDPROCEDURE;
+
+PROCEDURE eve_restore_character
+COPY_TEXT (eve$x_restore_char);
+MOVE_HORIZONTAL (-LENGTH (eve$x_restore_char));
+ENDPROCEDURE;
+
+PROCEDURE eve_erase_line
+! The line, and its line end, kept for RESTORE LINE.
+IF MARK (NONE) = END_OF (CURRENT_BUFFER) THEN RETURN; ENDIF;
+eve_start_of_line;
+eve$x_restore_line := ERASE_LINE;
+ENDPROCEDURE;
+
+PROCEDURE eve_restore_line
+eve_start_of_line;
+COPY_TEXT (eve$x_restore_line);
+SPLIT_LINE;
+MOVE_VERTICAL (-1);
+ENDPROCEDURE;
+
+PROCEDURE eve_erase_start_of_line
+LOCAL n;
+n := CURRENT_OFFSET;
+IF n > 0 THEN
+    eve$x_restore_char := ERASE_CHARACTER (-n);
+ENDIF;
+ENDPROCEDURE;
+
+PROCEDURE eve$word_end
+! Past the word at the cursor and the blanks after it.
+LOCAL line, i;
+line := CURRENT_LINE;
+i := CURRENT_OFFSET + 1;
+LOOP
+    EXITIF i > LENGTH (line);
+    EXITIF SUBSTR (line, i, 1) = " ";
+    i := i + 1;
+ENDLOOP;
+LOOP
+    EXITIF i > LENGTH (line);
+    EXITIF SUBSTR (line, i, 1) <> " ";
+    i := i + 1;
+ENDLOOP;
+RETURN i - 1 - CURRENT_OFFSET;
+ENDPROCEDURE;
+
+PROCEDURE eve$word_start
+! Back to the start of the word before the cursor.
+LOCAL line, i;
+line := CURRENT_LINE;
+i := CURRENT_OFFSET;
+LOOP
+    EXITIF i = 0;
+    EXITIF SUBSTR (line, i, 1) <> " ";
+    i := i - 1;
+ENDLOOP;
+LOOP
+    EXITIF i = 0;
+    EXITIF SUBSTR (line, i, 1) = " ";
+    i := i - 1;
+ENDLOOP;
+RETURN CURRENT_OFFSET - i;
+ENDPROCEDURE;
+
+PROCEDURE eve_move_by_word
+IF CURRENT_DIRECTION = FORWARD THEN
+    IF CURRENT_OFFSET >= LENGTH (CURRENT_LINE) THEN
+        eve$horizontal (1);
+    ELSE
+        MOVE_HORIZONTAL (eve$word_end);
+    ENDIF;
+ELSE
+    IF CURRENT_OFFSET = 0 THEN
+        eve$horizontal (-1);
+    ELSE
+        MOVE_HORIZONTAL (-eve$word_start);
+    ENDIF;
+ENDIF;
+ENDPROCEDURE;
+
+PROCEDURE eve_erase_word
+LOCAL n;
+n := eve$word_end;
+IF n = 0 THEN
+    IF MARK (NONE) <> END_OF (CURRENT_BUFFER) THEN
+        eve$x_restore_word := ""; APPEND_LINE;
+    ENDIF;
+ELSE
+    eve$x_restore_word := ERASE_CHARACTER (n);
+ENDIF;
+ENDPROCEDURE;
+
+PROCEDURE eve_erase_previous_word
+LOCAL n;
+n := eve$word_start;
+IF n = 0 THEN
+    eve_delete;
+ELSE
+    eve$x_restore_word := ERASE_CHARACTER (-n);
+ENDIF;
+ENDPROCEDURE;
+
+PROCEDURE eve_restore_word
+COPY_TEXT (eve$x_restore_word);
+MOVE_HORIZONTAL (-LENGTH (eve$x_restore_word));
+ENDPROCEDURE;
+
+PROCEDURE eve_restore
+eve_restore_line;
+ENDPROCEDURE;
+
+PROCEDURE eve$word_case (how)
+LOCAL start, n, r;
+n := eve$word_end;
+IF n = 0 THEN RETURN; ENDIF;
+start := MARK (NONE);
+MOVE_HORIZONTAL (n - 1);
+r := CREATE_RANGE (start, MARK (NONE), NONE);
+POSITION (start);
+IF how = "c" THEN
+    CHANGE_CASE (r, LOWER);
+    CHANGE_CASE (CREATE_RANGE (start, start, NONE), UPPER);
+ELSE
+    IF how = "u" THEN CHANGE_CASE (r, UPPER); ELSE CHANGE_CASE (r, LOWER); ENDIF;
+ENDIF;
+MOVE_HORIZONTAL (n);
+ENDPROCEDURE;
+
+PROCEDURE eve_uppercase_word
+eve$word_case ("u");
+ENDPROCEDURE;
+
+PROCEDURE eve_lowercase_word
+eve$word_case ("l");
+ENDPROCEDURE;
+
+PROCEDURE eve_capitalize_word
+eve$word_case ("c");
+ENDPROCEDURE;
+
+PROCEDURE eve_insert_page_break
+COPY_TEXT (ASCII (12));
+SPLIT_LINE;
+ENDPROCEDURE;
+
+PROCEDURE eve_quote
+COPY_TEXT (ASCII (READ_CHAR));
+ENDPROCEDURE;
+
+PROCEDURE eve_center_line
+LOCAL text, width;
+text := EDIT (CURRENT_LINE, TRIM, NOT_IN_PLACE);
+width := GET_INFO (CURRENT_BUFFER, "right_margin")
+         - GET_INFO (CURRENT_BUFFER, "left_margin") + 1;
+eve_start_of_line;
+ERASE_CHARACTER (LENGTH (CURRENT_LINE));
+COPY_TEXT (eve$pad ("", GET_INFO (CURRENT_BUFFER, "left_margin") - 1
+                        + (width - LENGTH (text)) / 2) + text);
+ENDPROCEDURE;
+
+PROCEDURE eve_fill_paragraph
+! The lines around the cursor up to blank lines, filled between the
+! buffer's margins.
+LOCAL start, finish;
+IF EDIT (CURRENT_LINE, TRIM, NOT_IN_PLACE) = "" THEN RETURN; ENDIF;
+LOOP
+    EXITIF MARK (NONE) = BEGINNING_OF (CURRENT_BUFFER);
+    MOVE_VERTICAL (-1);
+    IF EDIT (CURRENT_LINE, TRIM, NOT_IN_PLACE) = "" THEN
+        MOVE_VERTICAL (1);
+        EXITIF 1;
+    ENDIF;
+ENDLOOP;
+eve_start_of_line;
+start := MARK (NONE);
+LOOP
+    eve$vertical (1);
+    EXITIF MARK (NONE) = END_OF (CURRENT_BUFFER);
+    EXITIF EDIT (CURRENT_LINE, TRIM, NOT_IN_PLACE) = "";
+ENDLOOP;
+MOVE_HORIZONTAL (-1);
+finish := MARK (NONE);
+FILL (CREATE_RANGE (start, finish, NONE));
+ENDPROCEDURE;
+
+! ---- Finding
+
+PROCEDURE eve$found (r)
+! The range found: the cursor at its start, shown in bold until the
+! next find.
+eve$x_found := CREATE_RANGE (BEGINNING_OF (r), END_OF (r), BOLD);
+POSITION (BEGINNING_OF (r));
+ENDPROCEDURE;
+
+PROCEDURE eve$search (target, direction)
+! The next range that matches, from the cursor in the direction, or 0;
+! lowercase matches either case.
+LOCAL how, here, r;
+IF EDIT (target, LOWER, NOT_IN_PLACE) = target THEN
+    how := NO_EXACT;
+ELSE
+    how := EXACT;
+ENDIF;
+here := MARK (NONE);
+IF direction = FORWARD THEN
+    IF here = END_OF (CURRENT_BUFFER) THEN RETURN 0; ENDIF;
+    MOVE_HORIZONTAL (1);
+ELSE
+    IF here = BEGINNING_OF (CURRENT_BUFFER) THEN RETURN 0; ENDIF;
+    MOVE_HORIZONTAL (-1);
+ENDIF;
+r := SEARCH_QUIETLY (target, direction, how);
+POSITION (here);
+RETURN r;
+ENDPROCEDURE;
+
+PROCEDURE eve_find (target)
+LOCAL r, other;
+IF target = "" THEN
+    MESSAGE ("Nothing to find.");
+    RETURN;
+ENDIF;
+eve$x_target := target;
+r := eve$search (target, CURRENT_DIRECTION);
+IF r <> 0 THEN
+    eve$found (r);
+    RETURN;
+ENDIF;
+IF CURRENT_DIRECTION = FORWARD THEN other := REVERSE; ELSE other := FORWARD; ENDIF;
+r := eve$search (target, other);
+IF r <> 0 THEN
+    IF eve$yes ("Found in other direction.  Go there? ") THEN
+        IF other = FORWARD THEN eve_forward; ELSE eve_reverse; ENDIF;
+        eve$found (r);
+    ENDIF;
+    RETURN;
+ENDIF;
+MESSAGE ("Could not find: " + target);
+ENDPROCEDURE;
+
+PROCEDURE eve$find_key
+! The Find key: asks for what, in the direction the buffer goes.
+LOCAL target;
+IF CURRENT_DIRECTION = FORWARD THEN
+    target := eve$prompt ("Forward Find: ");
+ELSE
+    target := eve$prompt ("Reverse Find: ");
+ENDIF;
+eve_find (target);
+ENDPROCEDURE;
+
+PROCEDURE eve_find_next
+IF eve$x_target = "" THEN
+    MESSAGE ("Nothing to find.");
+ELSE
+    eve_find (eve$x_target);
+ENDIF;
+ENDPROCEDURE;
+
+PROCEDURE eve_set_find_case_exact
+MESSAGE ("Find case EXACT is not available; lowercase finds either case");
+ENDPROCEDURE;
+
+PROCEDURE eve$replace_all (old, new, ask)
+! Replaces old with new from the cursor on; asks at each one if ask.
+LOCAL r, n, answer;
+n := 0;
+LOOP
+    r := eve$search (old, FORWARD);
+    EXITIF r = 0;
+    eve$found (r);
+    IF ask THEN
+        UPDATE (CURRENT_WINDOW);
+        answer := EDIT (eve$prompt ("Replace? Type Yes, No, All, Last, or Quit: "),
+                        TRIM, LOWER, NOT_IN_PLACE);
+        EXITIF SUBSTR (answer, 1, 1) = "q";
+        IF SUBSTR (answer, 1, 1) = "a" THEN ask := 0; answer := "y"; ENDIF;
+    ELSE
+        answer := "y";
+    ENDIF;
+    IF (answer = "") OR (SUBSTR (answer, 1, 1) = "y") OR (SUBSTR (answer, 1, 1) = "l") THEN
+        ERASE (r);
+        COPY_TEXT (new);
+        n := n + 1;
+        EXITIF SUBSTR (answer, 1, 1) = "l";
+    ENDIF;
+    MOVE_HORIZONTAL (-1);
+ENDLOOP;
+eve$x_found := 0;
+MESSAGE (FAO ("Replaced !UL occurrence!%S", n));
+ENDPROCEDURE;
+
+PROCEDURE eve_replace (old)
+LOCAL new;
+IF old = "" THEN old := eve$prompt ("Old string: "); ENDIF;
+IF old = "" THEN RETURN; ENDIF;
+new := eve$prompt ("New string: ");
+eve$replace_all (old, new, 1);
+ENDPROCEDURE;
+
+PROCEDURE eve_global_replace (old)
+LOCAL here, new;
+IF old = "" THEN old := eve$prompt ("Old string: "); ENDIF;
+IF old = "" THEN RETURN; ENDIF;
+new := eve$prompt ("New string: ");
+here := MARK (NONE);
+POSITION (BEGINNING_OF (CURRENT_BUFFER));
+MOVE_HORIZONTAL (-1);
+eve$replace_all (old, new, 0);
+POSITION (here);
+ENDPROCEDURE;
+
+! ---- Selecting, removing and inserting
+
+PROCEDURE eve_select
+IF eve$x_select <> 0 THEN
+    MESSAGE ("Selection already active.");
+    RETURN;
+ENDIF;
+eve$x_select := SELECT (REVERSE);
+MESSAGE ("Move the text cursor to select text.");
+ENDPROCEDURE;
+
+PROCEDURE eve_reset
+eve$x_select := 0;
+eve$x_found := 0;
+MESSAGE ("Selection cancelled.");
+ENDPROCEDURE;
+
+PROCEDURE eve$selection
+! The text selected, or the range found, or 0; the selection ends.
+LOCAL r;
+IF eve$x_select <> 0 THEN
+    r := SELECT_RANGE;
+    eve$x_select := 0;
+    IF r = 0 THEN MESSAGE ("Nothing selected."); ENDIF;
+    RETURN r;
+ENDIF;
+IF eve$x_found <> 0 THEN
+    r := CREATE_RANGE (BEGINNING_OF (eve$x_found), END_OF (eve$x_found), NONE);
+    eve$x_found := 0;
+    RETURN r;
+ENDIF;
+MESSAGE ("Use Select before Remove.");
+RETURN 0;
+ENDPROCEDURE;
+
+PROCEDURE eve$store (r, remove)
+! The range into the paste buffer, taken out of its buffer if remove.
+LOCAL here;
+here := MARK (NONE);
+ERASE (eve$x_paste_buffer);
+POSITION (eve$x_paste_buffer);
+IF remove THEN MOVE_TEXT (r); ELSE COPY_TEXT (r); ENDIF;
+POSITION (here);
+ENDPROCEDURE;
+
+PROCEDURE eve_remove
+LOCAL r;
+r := eve$selection;
+IF r = 0 THEN RETURN; ENDIF;
+eve$store (r, 1);
+MESSAGE ("Remove completed.");
+ENDPROCEDURE;
+
+PROCEDURE eve_store_text
+LOCAL r;
+r := eve$selection;
+IF r = 0 THEN RETURN; ENDIF;
+eve$store (r, 0);
+MESSAGE ("Store completed.");
+ENDPROCEDURE;
+
+PROCEDURE eve_insert_here
+COPY_TEXT (eve$x_paste_buffer);
+ENDPROCEDURE;
+
+PROCEDURE eve_select_all
+POSITION (BEGINNING_OF (CURRENT_BUFFER));
+eve$x_select := SELECT (REVERSE);
+POSITION (END_OF (CURRENT_BUFFER));
+ENDPROCEDURE;
+
+! ---- Buffers and files
+
+PROCEDURE eve$file_buffer_name (file)
+! The buffer a file goes in: its name and type, in capitals.
+LOCAL name, i;
+name := file;
+i := INDEX (name, "]");
+IF i = 0 THEN i := INDEX (name, ":"); ENDIF;
+IF i > 0 THEN name := SUBSTR (name, i + 1, LENGTH (name)); ENDIF;
+i := INDEX (name, ";");
+IF i > 0 THEN name := SUBSTR (name, 1, i - 1); ENDIF;
+RETURN EDIT (name, UPPER, NOT_IN_PLACE);
+ENDPROCEDURE;
+
+PROCEDURE eve$find_buffer (name)
+! The buffer called name, or 0.
+LOCAL b, up;
+up := EDIT (name, UPPER, NOT_IN_PLACE);
+b := GET_INFO (BUFFERS, "first");
+LOOP
+    EXITIF b = 0;
+    IF GET_INFO (b, "name") = up THEN RETURN b; ENDIF;
+    b := GET_INFO (BUFFERS, "next");
+ENDLOOP;
+RETURN 0;
+ENDPROCEDURE;
+
+PROCEDURE eve$show_buffer (b)
+! The buffer in the current window.
+MAP (CURRENT_WINDOW, b);
+eve$status (CURRENT_WINDOW);
+ENDPROCEDURE;
+
+PROCEDURE eve$new_buffer (name, file)
+! A buffer for a file EVE edits: read from it if there is one.
+LOCAL b;
+IF file = "" THEN
+    b := CREATE_BUFFER (name);
+ELSE
+    IF FILE_SEARCH (file) = "" THEN
+        b := CREATE_BUFFER (name);
+        SET (OUTPUT_FILE, b, file);
+        MESSAGE ("Input file does not exist: " + file);
+    ELSE
+        b := CREATE_BUFFER (name, file);
+    ENDIF;
+ENDIF;
+SET (EOB_TEXT, b, "[End of file]");
+RETURN b;
+ENDPROCEDURE;
+
+PROCEDURE eve_get_file (file)
+LOCAL name, b;
+IF file = "" THEN file := eve$prompt ("File to get: "); ENDIF;
+IF file = "" THEN RETURN; ENDIF;
+name := eve$file_buffer_name (file);
+b := eve$find_buffer (name);
+IF b = 0 THEN b := eve$new_buffer (name, file); ENDIF;
+eve$show_buffer (b);
+ENDPROCEDURE;
+
+PROCEDURE eve_include_file (file)
+IF file = "" THEN file := eve$prompt ("File to include: "); ENDIF;
+IF file = "" THEN RETURN; ENDIF;
+READ_FILE (file);
+ENDPROCEDURE;
+
+PROCEDURE eve_write_file (file)
+IF file = "" THEN
+    WRITE_FILE (CURRENT_BUFFER);
+ELSE
+    WRITE_FILE (CURRENT_BUFFER, file);
+ENDIF;
+ENDPROCEDURE;
+
+PROCEDURE eve_save_file
+WRITE_FILE (CURRENT_BUFFER);
+ENDPROCEDURE;
+
+PROCEDURE eve_save_file_as (file)
+IF file = "" THEN file := eve$prompt ("File to save in: "); ENDIF;
+IF file = "" THEN RETURN; ENDIF;
+SET (OUTPUT_FILE, CURRENT_BUFFER, file);
+WRITE_FILE (CURRENT_BUFFER);
+ENDPROCEDURE;
+
+PROCEDURE eve_buffer (name)
+LOCAL b;
+IF name = "" THEN name := eve$prompt ("Buffer name: "); ENDIF;
+IF name = "" THEN RETURN; ENDIF;
+b := eve$find_buffer (name);
+IF b = 0 THEN
+    b := CREATE_BUFFER (EDIT (name, UPPER, NOT_IN_PLACE));
+    SET (EOB_TEXT, b, "[End of file]");
+ENDIF;
+eve$show_buffer (b);
+ENDPROCEDURE;
+
+PROCEDURE eve$other_buffer (way)
+! The next or previous user buffer after the current one.
+LOCAL b, first, here;
+here := CURRENT_BUFFER;
+b := GET_INFO (BUFFERS, "first");
+LOOP
+    EXITIF b = here;
+    b := GET_INFO (BUFFERS, "next");
+ENDLOOP;
+LOOP
+    IF way = "next" THEN
+        b := GET_INFO (BUFFERS, "next");
+        IF b = 0 THEN b := GET_INFO (BUFFERS, "first"); ENDIF;
+    ELSE
+        b := GET_INFO (BUFFERS, "previous");
+        IF b = 0 THEN b := GET_INFO (BUFFERS, "last"); ENDIF;
+    ENDIF;
+    EXITIF b = here;
+    EXITIF GET_INFO (b, "system") = 0;
+ENDLOOP;
+IF b <> here THEN eve$show_buffer (b); ENDIF;
+ENDPROCEDURE;
+
+PROCEDURE eve_next_buffer
+eve$other_buffer ("next");
+ENDPROCEDURE;
+
+PROCEDURE eve_previous_buffer
+eve$other_buffer ("previous");
+ENDPROCEDURE;
+
+PROCEDURE eve_delete_buffer (name)
+LOCAL b;
+IF name = "" THEN b := CURRENT_BUFFER; ELSE b := eve$find_buffer (name); ENDIF;
+IF b = 0 THEN
+    MESSAGE ("No such buffer: " + name);
+    RETURN;
+ENDIF;
+IF GET_INFO (b, "modified") AND NOT GET_INFO (b, "no_write") THEN
+    IF NOT eve$yes ("Buffer " + GET_INFO (b, "name")
+                    + " is modified.  Delete it anyway? ") THEN
+        RETURN;
+    ENDIF;
+ENDIF;
+IF b = CURRENT_BUFFER THEN eve$other_buffer ("next"); ENDIF;
+IF b = CURRENT_BUFFER THEN
+    MESSAGE ("Cannot delete the only buffer.");
+    RETURN;
+ENDIF;
+DELETE (b);
+ENDPROCEDURE;
+
+PROCEDURE eve_show_buffers
+! The buffers, one a line, in a buffer of their own.
+LOCAL b, list;
+list := eve$find_buffer ("BUFFER LIST");
+IF list = 0 THEN
+    list := CREATE_BUFFER ("BUFFER LIST");
+    SET (SYSTEM, list);
+    SET (NO_WRITE, list);
+    SET (EOB_TEXT, list, "[End of file]");
+ENDIF;
+ERASE (list);
+POSITION (list);
+COPY_TEXT ("Buffer name                     Lines  File");
+SPLIT_LINE;
+b := GET_INFO (BUFFERS, "first");
+LOOP
+    EXITIF b = 0;
+    IF GET_INFO (b, "system") = 0 THEN
+        COPY_TEXT (eve$pad (GET_INFO (b, "name"), 30)
+                   + FAO (" !6UL  ", GET_INFO (b, "record_count"))
+                   + GET_INFO (b, "file_name"));
+        SPLIT_LINE;
+    ENDIF;
+    b := GET_INFO (BUFFERS, "next");
+ENDLOOP;
+POSITION (BEGINNING_OF (list));
+eve$show_buffer (list);
+ENDPROCEDURE;
+
+PROCEDURE eve_set_left_margin (n)
+SET (LEFT_MARGIN, CURRENT_BUFFER, n);
+ENDPROCEDURE;
+
+PROCEDURE eve_set_right_margin (n)
+SET (RIGHT_MARGIN, CURRENT_BUFFER, n);
+ENDPROCEDURE;
+
+PROCEDURE eve_set_tabs (n)
+SET (TAB_STOPS, CURRENT_BUFFER, n);
+ENDPROCEDURE;
+
+! ---- Windows
+
+PROCEDURE eve$text_rows
+! The rows the editing windows share: all but the prompt area and the
+! message window.
+RETURN eve$x_prompt_row - 1;
+ENDPROCEDURE;
+
+PROCEDURE eve$window (top, length, b)
+LOCAL w;
+w := CREATE_WINDOW (top, length, ON);
+MAP (w, b);
+eve$status (w);
+RETURN w;
+ENDPROCEDURE;
+
+PROCEDURE eve_one_window
+LOCAL b;
+IF eve$x_windows = 1 THEN
+    MESSAGE ("Already one window.");
+    RETURN;
+ENDIF;
+b := CURRENT_BUFFER;
+UNMAP (eve$x_top_window);
+UNMAP (eve$x_bottom_window);
+eve$x_main_window := eve$window (1, eve$text_rows, b);
+eve$x_windows := 1;
+ENDPROCEDURE;
+
+PROCEDURE eve_two_windows
+LOCAL b, half;
+IF eve$x_windows = 2 THEN
+    MESSAGE ("Already two windows.");
+    RETURN;
+ENDIF;
+b := CURRENT_BUFFER;
+half := eve$text_rows / 2;
+UNMAP (eve$x_main_window);
+eve$x_top_window := eve$window (1, half, b);
+eve$x_bottom_window := eve$window (half + 1, eve$text_rows - half, b);
+eve$x_windows := 2;
+ENDPROCEDURE;
+
+PROCEDURE eve_other_window
+IF eve$x_windows = 1 THEN
+    MESSAGE ("Only one window.");
+    RETURN;
+ENDIF;
+IF CURRENT_WINDOW = eve$x_top_window THEN
+    POSITION (eve$x_bottom_window);
+ELSE
+    POSITION (eve$x_top_window);
+ENDIF;
+ENDPROCEDURE;
+
+PROCEDURE eve_next_window
+eve_other_window;
+ENDPROCEDURE;
+
+PROCEDURE eve_previous_window
+eve_other_window;
+ENDPROCEDURE;
+
+PROCEDURE eve_refresh
+REFRESH;
+ENDPROCEDURE;
+
+! ---- Keys and programs
+
+PROCEDURE eve_tpu (text)
+IF text = "" THEN text := eve$prompt ("TPU command: "); ENDIF;
+IF text <> "" THEN EXECUTE (text); ENDIF;
+ENDPROCEDURE;
+
+PROCEDURE eve_define_key (text)
+LOCAL key;
+IF text = "" THEN text := eve$prompt ("Command to define: "); ENDIF;
+IF text = "" THEN RETURN; ENDIF;
+MESSAGE ("Press the key you want to define.");
+UPDATE (message_window);
+key := READ_KEY;
+DEFINE_KEY ("eve$command (" + eve$quote (text) + ")", key, text);
+MESSAGE ("Key defined.");
+ENDPROCEDURE;
+
+PROCEDURE eve_learn
+MESSAGE ("Press keystrokes to be learned.  Press Ctrl/R to remember these keystrokes.");
+LEARN_BEGIN (EXACT);
+ENDPROCEDURE;
+
+PROCEDURE eve_remember
+LOCAL key, seq;
+seq := LEARN_END;
+MESSAGE ("Press the key you want to use to do what was just learned.");
+UPDATE (message_window);
+key := READ_KEY;
+DEFINE_KEY (seq, key, "a learned sequence");
+MESSAGE ("Key sequence remembered.");
+ENDPROCEDURE;
+
+PROCEDURE eve_repeat (n)
+LOCAL key;
+MESSAGE ("Press the key to repeat.");
+UPDATE (message_window);
+key := READ_KEY;
+LOOP
+    EXITIF n <= 0;
+    EXECUTE (LOOKUP_KEY (key, PROGRAM));
+    n := n - 1;
+ENDLOOP;
+ENDPROCEDURE;
+
+PROCEDURE eve_help
+MESSAGE ("Commands: " + eve$x_help);
+ENDPROCEDURE;
+
+! ---- Ending
+
+PROCEDURE eve_exit
+EXIT;
+ENDPROCEDURE;
+
+PROCEDURE eve_quit
+LOCAL b;
+b := GET_INFO (BUFFERS, "first");
+LOOP
+    EXITIF b = 0;
+    IF GET_INFO (b, "modified") AND NOT GET_INFO (b, "no_write") THEN
+        IF NOT eve$yes ("Buffer modifications will not be saved, continue quitting [Yes]? ") THEN
+            RETURN;
+        ENDIF;
+        EXITIF 1;
+    ENDIF;
+    b := GET_INFO (BUFFERS, "next");
+ENDLOOP;
+QUIT (OFF);
+ENDPROCEDURE;
+
+! ---- Commands
+
+PROCEDURE eve$quote (text)
+! The text as a TPU string literal.
+LOCAL s, i, c;
+s := '"';
+i := 1;
+LOOP
+    EXITIF i > LENGTH (text);
+    c := SUBSTR (text, i, 1);
+    IF c = '"' THEN s := s + '""'; ELSE s := s + c; ENDIF;
+    i := i + 1;
+ENDLOOP;
+RETURN s + '"';
+ENDPROCEDURE;
+
+PROCEDURE eve$split (text, words, starts)
+! The words of text into the arrays, from 1, and where each starts;
+! their number.
+LOCAL i, n, start;
+n := 0;
+i := 1;
+LOOP
+    LOOP
+        EXITIF i > LENGTH (text);
+        EXITIF SUBSTR (text, i, 1) <> " ";
+        i := i + 1;
+    ENDLOOP;
+    EXITIF i > LENGTH (text);
+    start := i;
+    LOOP
+        EXITIF i > LENGTH (text);
+        EXITIF SUBSTR (text, i, 1) = " ";
+        i := i + 1;
+    ENDLOOP;
+    n := n + 1;
+    words {n} := EDIT (SUBSTR (text, start, i - start), LOWER, NOT_IN_PLACE);
+    starts {n} := start;
+ENDLOOP;
+RETURN n;
+ENDPROCEDURE;
+
+PROCEDURE eve$def (name, kind, prompt)
+! A command: its words, the kind of parameter it takes ("" none, "s" a
+! string, "i" an integer) and what it asks for one.
+LOCAL n, words, starts;
+words := CREATE_ARRAY;
+starts := CREATE_ARRAY;
+eve$x_ncommands := eve$x_ncommands + 1;
+n := eve$split (name, words, starts);
+eve$x_cmd_words {eve$x_ncommands} := words;
+eve$x_cmd_count {eve$x_ncommands} := n;
+eve$x_cmd_name {eve$x_ncommands} := name;
+eve$x_cmd_kind {eve$x_ncommands} := kind;
+eve$x_cmd_prompt {eve$x_ncommands} := prompt;
+IF eve$x_help = "" THEN
+    eve$x_help := EDIT (name, UPPER, NOT_IN_PLACE);
+ELSE
+    eve$x_help := eve$x_help + ", " + EDIT (name, UPPER, NOT_IN_PLACE);
+ENDIF;
+ENDPROCEDURE;
+
+PROCEDURE eve$matches (c, words, n)
+! Whether input words 1 to the command's count each start its words;
+! 2 if they are its words exactly.
+LOCAL cw, k, i, w, exact;
+k := eve$x_cmd_count {c};
+IF n < k THEN RETURN 0; ENDIF;
+cw := eve$x_cmd_words {c};
+exact := 2;
+i := 1;
+LOOP
+    EXITIF i > k;
+    w := words {i};
+    IF SUBSTR (cw {i}, 1, LENGTH (w)) <> w THEN RETURN 0; ENDIF;
+    IF cw {i} <> w THEN exact := 1; ENDIF;
+    i := i + 1;
+ENDLOOP;
+RETURN exact;
+ENDPROCEDURE;
+
+PROCEDURE eve$command (text)
+! Does a command: the longest one the words start, the rest of the
+! line its parameter.
+LOCAL words, starts, n, c, m, best, bestlen, nbest, exact, arg, kind, proc, i;
+words := CREATE_ARRAY;
+starts := CREATE_ARRAY;
+n := eve$split (text, words, starts);
+IF n = 0 THEN RETURN; ENDIF;
+best := 0;
+bestlen := 0;
+nbest := 0;
+exact := 0;
+c := 1;
+LOOP
+    EXITIF c > eve$x_ncommands;
+    m := eve$matches (c, words, n);
+    IF m > 0 THEN
+        IF eve$x_cmd_count {c} > bestlen THEN
+            best := c; bestlen := eve$x_cmd_count {c}; nbest := 1; exact := m;
+        ELSE
+            IF eve$x_cmd_count {c} = bestlen THEN
+                IF m = 2 THEN
+                    IF exact <> 2 THEN best := c; nbest := 1; exact := 2; ENDIF;
+                ELSE
+                    IF exact <> 2 THEN nbest := nbest + 1; ENDIF;
+                ENDIF;
+            ENDIF;
+        ENDIF;
+    ENDIF;
+    c := c + 1;
+ENDLOOP;
+IF bestlen < n THEN
+    arg := EDIT (SUBSTR (text, starts {bestlen + 1}, LENGTH (text)), TRIM, NOT_IN_PLACE);
+ELSE
+    arg := "";
+ENDIF;
+text := EDIT (text, TRIM, NOT_IN_PLACE);
+IF best = 0 THEN
+    MESSAGE ("Don't understand command: " + text);
+    RETURN;
+ENDIF;
+IF nbest > 1 THEN
+    MESSAGE ("Ambiguous command: " + text);
+    RETURN;
+ENDIF;
+kind := eve$x_cmd_kind {best};
+proc := "eve_";
+i := 1;
+LOOP
+    EXITIF i > LENGTH (eve$x_cmd_name {best});
+    IF SUBSTR (eve$x_cmd_name {best}, i, 1) = " " THEN
+        proc := proc + "_";
+    ELSE
+        proc := proc + SUBSTR (eve$x_cmd_name {best}, i, 1);
+    ENDIF;
+    i := i + 1;
+ENDLOOP;
+IF kind = "" THEN
+    EXECUTE (proc);
+    RETURN;
+ENDIF;
+IF (arg = "") AND (eve$x_cmd_prompt {best} <> "") THEN
+    arg := eve$prompt (eve$x_cmd_prompt {best});
+    IF arg = "" THEN RETURN; ENDIF;
+ENDIF;
+IF kind = "i" THEN
+    IF arg = "" THEN RETURN; ENDIF;
+    EXECUTE (proc + " (" + STR (INT (arg)) + ")");
+ELSE
+    EXECUTE (proc + " (" + eve$quote (arg) + ")");
+ENDIF;
+ENDPROCEDURE;
+
+PROCEDURE eve_do
+! The Do key: a command, read in the prompt area.
+LOCAL text;
+SET (PROMPT_AREA, eve$x_prompt_row, 1, NONE);
+text := READ_LINE ("Command: ");
+ERASE (message_buffer);
+eve$command (text);
+ENDPROCEDURE;
+
+PROCEDURE eve$commands
+eve$def ("bottom", "", "");
+eve$def ("buffer", "s", "");
+eve$def ("capitalize word", "", "");
+eve$def ("center line", "", "");
+eve$def ("change direction", "", "");
+eve$def ("change mode", "", "");
+eve$def ("define key", "s", "");
+eve$def ("delete", "", "");
+eve$def ("delete buffer", "s", "");
+eve$def ("end of line", "", "");
+eve$def ("erase character", "", "");
+eve$def ("erase line", "", "");
+eve$def ("erase previous word", "", "");
+eve$def ("erase start of line", "", "");
+eve$def ("erase word", "", "");
+eve$def ("exit", "", "");
+eve$def ("fill paragraph", "", "");
+eve$def ("find", "s", "");
+eve$def ("find next", "", "");
+eve$def ("forward", "", "");
+eve$def ("get file", "s", "");
+eve$def ("global replace", "s", "");
+eve$def ("go to", "s", "Mark name: ");
+eve$def ("help", "", "");
+eve$def ("include file", "s", "");
+eve$def ("insert here", "", "");
+eve$def ("insert mode", "", "");
+eve$def ("insert page break", "", "");
+eve$def ("learn", "", "");
+eve$def ("line", "i", "Line number: ");
+eve$def ("lowercase word", "", "");
+eve$def ("mark", "s", "Mark name: ");
+eve$def ("move by line", "", "");
+eve$def ("move by word", "", "");
+eve$def ("move down", "", "");
+eve$def ("move left", "", "");
+eve$def ("move right", "", "");
+eve$def ("move up", "", "");
+eve$def ("next buffer", "", "");
+eve$def ("next screen", "", "");
+eve$def ("next window", "", "");
+eve$def ("one window", "", "");
+eve$def ("other window", "", "");
+eve$def ("overstrike mode", "", "");
+eve$def ("previous buffer", "", "");
+eve$def ("previous screen", "", "");
+eve$def ("previous window", "", "");
+eve$def ("quit", "", "");
+eve$def ("quote", "", "");
+eve$def ("refresh", "", "");
+eve$def ("remember", "", "");
+eve$def ("remove", "", "");
+eve$def ("repeat", "i", "Number of times: ");
+eve$def ("replace", "s", "");
+eve$def ("reset", "", "");
+eve$def ("restore", "", "");
+eve$def ("restore character", "", "");
+eve$def ("restore line", "", "");
+eve$def ("restore word", "", "");
+eve$def ("reverse", "", "");
+eve$def ("save file", "", "");
+eve$def ("save file as", "s", "");
+eve$def ("select", "", "");
+eve$def ("select all", "", "");
+eve$def ("set left margin", "i", "Left margin: ");
+eve$def ("set right margin", "i", "Right margin: ");
+eve$def ("set tabs", "i", "Tab stops every: ");
+eve$def ("show buffers", "", "");
+eve$def ("start of line", "", "");
+eve$def ("store text", "", "");
+eve$def ("top", "", "");
+eve$def ("tpu", "s", "");
+eve$def ("two windows", "", "");
+eve$def ("uppercase word", "", "");
+eve$def ("write file", "s", "");
+ENDPROCEDURE;
+
+! ---- Keys
+
+PROCEDURE eve$keys
+DEFINE_KEY ("eve$find_key", E1, "find");
+DEFINE_KEY ("eve_insert_here", E2, "insert here");
+DEFINE_KEY ("eve_remove", E3, "remove");
+DEFINE_KEY ("eve_select", E4, "select");
+DEFINE_KEY ("eve_previous_screen", E5, "previous screen");
+DEFINE_KEY ("eve_next_screen", E6, "next screen");
+DEFINE_KEY ("eve_do", DO, "do");
+DEFINE_KEY ("eve_help", HELP, "help");
+DEFINE_KEY ("eve_exit", F10, "exit");
+DEFINE_KEY ("eve_start_of_line", F12, "start of line");
+DEFINE_KEY ("eve_erase_previous_word", F13, "erase previous word");
+DEFINE_KEY ("eve_change_mode", F14, "change mode");
+DEFINE_KEY ("eve_move_up", UP, "move up");
+DEFINE_KEY ("eve_move_down", DOWN, "move down");
+DEFINE_KEY ("eve_move_left", LEFT, "move left");
+DEFINE_KEY ("eve_move_right", RIGHT, "move right");
+DEFINE_KEY ("eve_return", RET_KEY, "return");
+DEFINE_KEY ("eve_delete", DEL_KEY, "delete");
+DEFINE_KEY ("eve_tab", TAB_KEY, "tab");
+DEFINE_KEY ("eve_change_mode", CTRL_A_KEY, "change mode");
+DEFINE_KEY ("eve_end_of_line", CTRL_E_KEY, "end of line");
+DEFINE_KEY ("eve_start_of_line", CTRL_H_KEY, "start of line");
+DEFINE_KEY ("eve_erase_previous_word", CTRL_J_KEY, "erase previous word");
+DEFINE_KEY ("eve_insert_page_break", CTRL_L_KEY, "insert page break");
+DEFINE_KEY ("eve_remember", CTRL_R_KEY, "remember");
+DEFINE_KEY ("eve_erase_start_of_line", CTRL_U_KEY, "erase start of line");
+DEFINE_KEY ("eve_quote", CTRL_V_KEY, "quote");
+DEFINE_KEY ("eve_refresh", CTRL_W_KEY, "refresh");
+DEFINE_KEY ("eve_exit", CTRL_Z_KEY, "exit");
+ENDPROCEDURE;
+
+! ---- Starting
+
+PROCEDURE tpu$init_procedure
+LOCAL file, rows, b;
+eve$x_ncommands := 0;
+eve$x_help := "";
+eve$x_cmd_words := CREATE_ARRAY;
+eve$x_cmd_count := CREATE_ARRAY;
+eve$x_cmd_name := CREATE_ARRAY;
+eve$x_cmd_kind := CREATE_ARRAY;
+eve$x_cmd_prompt := CREATE_ARRAY;
+eve$x_marks := CREATE_ARRAY;
+eve$x_select := 0;
+eve$x_found := 0;
+eve$x_target := "";
+eve$x_restore_char := "";
+eve$x_restore_word := "";
+eve$x_restore_line := "";
+eve$commands;
+eve$keys;
+SET (MESSAGE_FLAGS, 1);
+rows := GET_INFO (SCREEN, "visible_length");
+eve$x_prompt_row := rows - 1;
+message_buffer := CREATE_BUFFER ("MESSAGES");
+SET (SYSTEM, message_buffer);
+SET (NO_WRITE, message_buffer);
+SET (EOB_TEXT, message_buffer, "");
+message_window := CREATE_WINDOW (rows, 1, OFF);
+MAP (message_window, message_buffer);
+! The prompt area: an empty window, which clears what was asked there at
+! the next update.
+eve$x_prompt_buffer := CREATE_BUFFER ("PROMPTS");
+SET (SYSTEM, eve$x_prompt_buffer);
+SET (NO_WRITE, eve$x_prompt_buffer);
+SET (EOB_TEXT, eve$x_prompt_buffer, "");
+eve$x_prompt_window := CREATE_WINDOW (eve$x_prompt_row, 1, OFF);
+MAP (eve$x_prompt_window, eve$x_prompt_buffer);
+eve$x_paste_buffer := CREATE_BUFFER ("INSERT HERE");
+SET (SYSTEM, eve$x_paste_buffer);
+SET (NO_WRITE, eve$x_paste_buffer);
+file := GET_INFO (COMMAND_LINE, "file_name");
+IF file = "" THEN
+    b := eve$new_buffer ("MAIN", "");
+ELSE
+    b := eve$new_buffer (eve$file_buffer_name (file), file);
+ENDIF;
+eve$x_main_window := eve$window (1, eve$text_rows, b);
+eve$x_windows := 1;
+POSITION (BEGINNING_OF (b));
+MESSAGE (TPU$_NOJOURNAL);
+ENDPROCEDURE;

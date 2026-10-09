@@ -38,7 +38,7 @@ LITERAL
     W_STATUS = 3,                       ! a status line
     W_BUF = 4,                          ! the buffer mapped to it, or 0
     W_MAPPED = 5,                       ! its place in the order windows are shown, or 0
-    W_FIRST = 6,                        ! a marker at the first line it shows
+    W_FIRST = 6,                        ! a marker at the first line it shows, offset -1
     W_CURSOR = 7,                       ! a marker where its cursor is, when not current
     W_STATTEXT = 8,                     ! the status line's text, a string, or 0 for DEC's
     W_STATVIDEO = 9,
@@ -74,6 +74,7 @@ OWN
 EXTERNAL
     BUF_CURRENT,
     MSG_SINK,
+    MSG_SHOW,
     KEY_LAST;
 
 EXTERNAL ROUTINE
@@ -308,7 +309,7 @@ ROUTINE SCROLLTO (W : REF VECTOR, ROWS) =
     B = .W[W_BUF];
     FM = .W[W_FIRST];
     PLACE(.W, CL, CO);
-    IF NOT .W[W_SHOWN] THEN (FM[M_LINE] = .B[B_FIRST]; FM[M_OFF] = 0);
+    IF NOT .W[W_SHOWN] THEN (FM[M_LINE] = .B[B_FIRST]; FM[M_OFF] = -1);
     ! Is the cursor's line in the window, from its first?
     L = .FM[M_LINE];
     N = 0;
@@ -325,7 +326,7 @@ ROUTINE SCROLLTO (W : REF VECTOR, ROWS) =
         END;
     IF NOT .W[W_SHOWN] OR LINENO(.B, .CL) LSS LINENO(.B, .FM[M_LINE])
     THEN
-        (FM[M_LINE] = .CL; FM[M_OFF] = 0; RETURN 0);
+        (FM[M_LINE] = .CL; FM[M_OFF] = -1; RETURN 0);
     ! Below: the line ROWS - 1 above the cursor's comes first.
     L = .CL;
     N = 0;
@@ -339,7 +340,7 @@ ROUTINE SCROLLTO (W : REF VECTOR, ROWS) =
         N = .N + 1
         END;
     FM[M_LINE] = .L;
-    FM[M_OFF] = 0;
+    FM[M_OFF] = -1;
     .N
     END;
 
@@ -661,7 +662,7 @@ ROUTINE BX_MAP (ARGS : REF VECTOR, N) =
         BEGIN
         IF .W[W_FIRST] NEQ 0 THEN MARK_FREE(.W[W_FIRST]);
         IF .W[W_CURSOR] NEQ 0 THEN (MARK_FREE(.W[W_CURSOR]); W[W_CURSOR] = 0);
-        W[W_FIRST] = MARK_NEW(.B, .B[B_FIRST], 0);
+        W[W_FIRST] = MARK_NEW(.B, .B[B_FIRST], -1);
         W[W_BUF] = .B;
         W[W_SHOWN] = FALSE
         END;
@@ -954,8 +955,16 @@ GLOBAL ROUTINE SCR_SET (ARGS : REF VECTOR, N) =
         PROMPTVIDEO = (IF VTYPE(.ARGS[3]) EQL TY_KEYWORD THEN KWVIDEO(VINT(.ARGS[3])) ELSE 0);
         RETURN SS_NORMAL
         END;
+    IF .K EQL K_MESSAGE_FLAGS
+    THEN
+        BEGIN
+        ARGCOUNT(2, 2);
+        IF VTYPE(.ARGS[1]) NEQ TY_INTEGER THEN RETURN ARGMISMATCH(2, .ARGS[1]);
+        MSG_SHOW = (IF VINT(.ARGS[1]) EQL 0 THEN 15 ELSE VINT(.ARGS[1]) AND 15);
+        RETURN SS_NORMAL
+        END;
     IF .K EQL K_SCREEN_UPDATE OR .K EQL K_BELL OR .K EQL K_AUTO_REPEAT OR .K EQL K_CROSS_WINDOW_BOUNDS
-       OR .K EQL K_COLUMN_MOVE_VERTICAL OR .K EQL K_MESSAGE_FLAGS OR .K EQL K_TIMER
+       OR .K EQL K_COLUMN_MOVE_VERTICAL OR .K EQL K_TIMER
        OR .K EQL K_FACILITY_NAME OR .K EQL K_DETACHED_ACTION OR .K EQL K_LINE_NUMBER
        OR .K EQL K_TRACEBACK
     THEN

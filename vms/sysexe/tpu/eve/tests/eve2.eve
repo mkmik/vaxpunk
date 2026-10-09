@@ -1,0 +1,8 @@
+
+New text\r
+\x1b[29~line 2\r
+typed on line two
+\x1b[1~fourth\r
+\x1b[1~\r
+X
+\x1a

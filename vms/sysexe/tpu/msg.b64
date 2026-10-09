@@ -19,6 +19,7 @@ LITERAL
 
 GLOBAL
     MSG_FLAGS,                          ! SET (INFORMATIONAL) off: 1, SET (SUCCESS) off: 2
+    MSG_SHOW : INITIAL (15),            ! SET (MESSAGE_FLAGS): MESSAGE_TEXT's flags messages are shown with
     MSG_SINK;                           ! a routine taking the line instead of SYS$OUTPUT, or 0
 
 EXTERNAL ROUTINE
@@ -193,6 +194,20 @@ GLOBAL ROUTINE MSG_FORMAT (K, ARGS, NARGS, FLAGS, BUF) =
     .L
     END;
 
+! MSG_LINE code, args, count, buffer: MSG_FORMAT as SET (MESSAGE_FLAGS)
+! says messages are shown; the text alone starts with a capital, as DEC's
+! TPU writes it.
+GLOBAL ROUTINE MSG_LINE (K, ARGS, NARGS, BUF) =
+    BEGIN
+    LOCAL
+        L;
+    L = MSG_FORMAT(.K, .ARGS, .NARGS, .MSG_SHOW, .BUF);
+    IF (.MSG_SHOW AND 14) EQL 0 AND .L GTR 0
+    THEN
+        IF GETB(.BUF) GEQU %C'a' AND GETB(.BUF) LEQU %C'z' THEN PUTB(.BUF, GETB(.BUF) - 32);
+    .L
+    END;
+
 ! MSG_PUT text, length: a line where MESSAGE writes.
 GLOBAL ROUTINE MSG_PUT (TEXT, LEN) : NOVALUE =
     IF .MSG_SINK NEQ 0
@@ -222,8 +237,8 @@ GLOBAL ROUTINE MSG_OUTV (CONT, K, ARGS, NARGS) : NOVALUE =
         L;
     IF NOT .CONT THEN SHOWN = MSG_SHOWN(.K);
     IF NOT .SHOWN THEN RETURN;
-    L = MSG_FORMAT(.K, .ARGS, .NARGS, 15, BUF);
-    IF .CONT THEN BUF[0] = %C'-';
+    L = MSG_LINE(.K, .ARGS, .NARGS, BUF);
+    IF .CONT AND .BUF[0] EQL %C'%' THEN BUF[0] = %C'-';
     MSG_PUT(BUF, .L)
     END;
 
