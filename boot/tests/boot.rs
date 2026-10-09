@@ -591,6 +591,38 @@ const RMS: Phase = Phase {
     lines: &["RMSTEST done"],
 };
 
+/// EDIT/TPU/NODISPLAY runs a command file CREATE makes on DKB0:: TPU
+/// (PRD-0006) reads WELCOME.TXT into a buffer, finds a pattern in it, puts
+/// a line before it and writes it to a file, whose head TYPE shows.
+const TPU: Phase = Phase {
+    name: "tpu",
+    secs: 30,
+    steps: &[(
+        "RMSTEST done",
+        1,
+        concat!(
+            "CREATE TPUTEST.TPU\r",
+            "b := CREATE_BUFFER (\"t\", \"SYS$SYSDEVICE:[SYSMGR]WELCOME.TXT\");\r",
+            "POSITION (BEGINNING_OF (b));\r",
+            "r := SEARCH_QUIETLY (\"Files-11\" + ARB (6), FORWARD);\r",
+            "MESSAGE (\"TPU found \" + STR (r) + \" in \" + ",
+            "STR (GET_INFO (b, \"record_count\")) + \" lines\");\r",
+            "COPY_TEXT (\"Edited with TPU\");\r",
+            "SPLIT_LINE;\r",
+            "WRITE_FILE (b, \"TPUTEST.OUT\");\r",
+            "QUIT (OFF);\r\x1a",
+            "EDIT/TPU/NODISPLAY/COMMAND=TPUTEST.TPU\r",
+            "TYPE/HEAD=2 TPUTEST.OUT\r",
+        ),
+    )],
+    lines: &[
+        "%TPU-S-FILEIN, 10 lines read from file SYS$SYSDEVICE:[SYSMGR]WELCOME.TXT",
+        "TPU found Files-11 ODS-2 in 10 lines",
+        "%TPU-S-FILEOUT, 11 lines written to file TPUTEST.OUT",
+        "Edited with TPU",
+    ],
+};
+
 /// The processes STARTUP and SNOOP ran, which print as they go, done long
 /// before: STARTUP's SLEEPER and SVCTEST's NAPPER say they hibernate
 /// before SLEEPER does, and the CPU then idles, taking clock interrupts.
@@ -699,6 +731,7 @@ const PHASES: &[Phase] = &[
     TERMINAL,
     BACKUP,
     RMS,
+    TPU,
     STARTUP,
     USERS,
 ];

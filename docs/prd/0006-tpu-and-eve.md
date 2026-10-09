@@ -4,7 +4,10 @@ Oct 6, 2026 · @Marko Mikulicic
 
 ## Context and goal
 
-**Status: started** (replanned Oct 9, 2026). The three things this PRD
+**Status: steps 1 to 6 done** (replanned Oct 9, 2026): TPU's language,
+buffers and patterns run under `vrun` against the oracle
+(`crosstools/vtools/crates/vrun/tests/tpu.rs`), and `EDIT/TPU/NODISPLAY`
+on vaxpunk; the subset is [vms/sysexe/tpu/subset.md](../../vms/sysexe/tpu/subset.md). The three things this PRD
 waited for are in: BLISS-64 is the system's compiler
 ([PRD-0004](0004-bliss64-compiler.md) steps 11 and 13: `numtim.b64` in the
 executive, and VASM, 6,600 lines of BLISS-64, built by stage 0), each

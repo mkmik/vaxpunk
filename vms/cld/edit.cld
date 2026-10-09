@@ -1,4 +1,30 @@
-! EDIT spec: EDIT.EXE, EDT.
+! EDIT spec: EDIT.EXE, EDT. EDIT/TPU: TPU.EXE, the Text Processing Utility
+! (PRD-0006), with EDIT/TPU's qualifiers, which TPU reads itself from the
+! command line.
 define verb EDIT
 	image EDIT
 	parameter P1, label=FILE, prompt="File", value(required, type=$file)
+	qualifier EDT
+	qualifier TPU, syntax=EDIT_TPU
+
+define syntax EDIT_TPU
+	image TPU
+	parameter P1, label=FILE, value(type=$file)
+	qualifier TPU
+	qualifier EDT
+	qualifier DISPLAY, value
+	qualifier COMMAND, value(type=$file)
+	qualifier SECTION, value(type=$file)
+	qualifier INITIALIZATION, value(type=$file)
+	qualifier OUTPUT, value(type=$file)
+	qualifier JOURNAL, value(type=$file)
+	qualifier READ_ONLY
+	qualifier WRITE
+	qualifier MODIFY
+	qualifier CREATE
+	qualifier RECOVER
+	qualifier START_POSITION, value(list)
+	qualifier CHARACTER_SET, value
+	qualifier INTERFACE, value
+	qualifier DEBUG, value(type=$file)
+	qualifier WORK, value(type=$file)

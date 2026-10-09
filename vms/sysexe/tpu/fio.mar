@@ -1,0 +1,271 @@
+        .TITLE  FIO     The I/O module of TPU.EXE on vaxpunk
+        .IDENT  /V0.1/
+;
+; What TPU needs from the system, the routines crosstools/vtools/bliss/
+; fio.r64 declares (PRD-0006 "Two I/O modules"), on vaxpunk: files through
+; RMS, memory from $EXPREG, lines through LIB$PUT_OUTPUT, the command line
+; from CLI$GET_VALUE's $LINE, the time from $ASCTIM, and $EXIT. Under
+; vrun, crosstools/vtools/bliss/fio.mar serves the same routines. A file
+; is read and written as a stream of bytes, each record a line ended by a
+; line feed, as under vrun: variable length records with carriage return
+; control, as EDIT writes them.
+; ponytail: two files open at once; a record past RECMAX bytes is cut.
+;
+        .LIBRARY "starlet.mlb"
+        $SSDEF
+        $RMSDEF
+        $FABDEF
+        $RABDEF
+
+        .EXTERNAL LIB$PUT_OUTPUT, CLI$GET_VALUE
+
+SLOTS = 2
+RECMAX = 8192
+CHUNK = 16                              ; pages $EXPREG gives FIO$ALLOC at least
+; A channel's slot: its FAB, RAB, where it is in the record, then the record.
+S_FAB = 0
+S_RAB = FAB$C_BLN
+S_LEN = S_RAB + RAB$C_BLN               ; the record's bytes, with its line feed
+S_AT = S_LEN + 4                        ; the next to read, or the bytes written
+S_MODE = S_AT + 4                       ; 0 closed, 1 reading, 2 writing
+S_REC = S_MODE + 4
+S_SIZE = S_REC + RECMAX + 4
+
+        .PSECT  FIO_DATA, NOEXE, WRT, QUAD
+FABT:   $FAB                            ; what a slot's FAB and RAB start as
+RABT:   $RAB
+SLOT:   .BLKB   SLOTS*S_SIZE
+LINNAM: .ASCID  "$LINE"
+LINDSC: .LONG   512                     ; the command line
+        .ADDRESS LINE
+LINLEN: .WORD   0
+LINE:   .BLKB   512
+TIMDSC: .LONG   23
+        .ADDRESS TIMBUF
+TIMBUF: .BLKB   23
+OUTDSC: .LONG   0                       ; FIO$PUT_LINE's line
+        .ADDRESS 0
+NEXT:   .LONG   0                       ; FIO$ALLOC's next free byte
+LIMIT:  .LONG   0                       ; and its end
+RETADR: .BLKL   2
+
+        .PSECT  FIO_CODE, EXE, LONG
+; CHAN: R0 = a channel. R1 = its slot, or 0 if it isn't open.
+CHAN:
+        .JSB_ENTRY
+        DECL    R0
+        CMPL    R0, #SLOTS
+        BGEQU   10$
+        MULL3   #S_SIZE, R0, R1
+        MOVAB   SLOT[R1], R1
+        TSTL    S_MODE(R1)
+        BNEQ    20$
+10$:    CLRL    R1
+20$:    RSB
+
+; FIO$OPEN name, length, mode, channel: opens the file to read (mode 0) or
+; makes a new version of it to write (mode 1), and stores its channel.
+; Returns RMS's status, or SS$_NOIOCHAN with every slot in use.
+        .ENTRY  FIO$OPEN, ^M<R2, R3, R4, R5, R6, R7>
+        CLRL    R7
+10$:    CMPL    R7, #SLOTS
+        BLSSU   20$
+        MOVL    #SS$_NOIOCHAN, R0
+        RET
+20$:    MULL3   #S_SIZE, R7, R6
+        MOVAB   SLOT[R6], R6
+        TSTL    S_MODE(R6)
+        BEQL    30$
+        INCL    R7
+        BRB     10$
+30$:    MOVC3   #FAB$C_BLN, FABT, S_FAB(R6)
+        MOVC3   #RAB$C_BLN, RABT, S_RAB(R6)
+        MOVL    4(AP), S_FAB+FAB$L_FNA(R6)
+        MOVB    8(AP), S_FAB+FAB$B_FNS(R6)
+        MOVAB   S_FAB(R6), S_RAB+RAB$L_FAB(R6)
+        MOVAB   S_REC(R6), S_RAB+RAB$L_UBF(R6)
+        MOVAB   S_REC(R6), S_RAB+RAB$L_RBF(R6)
+        MOVW    #RECMAX, S_RAB+RAB$W_USZ(R6)
+        CLRL    S_LEN(R6)
+        CLRL    S_AT(R6)
+        TSTL    12(AP)
+        BNEQ    40$
+        MOVB    #FAB$M_GET, S_FAB+FAB$B_FAC(R6)
+        $OPEN   FAB=S_FAB(R6)
+        MOVL    #1, R2
+        BRB     50$
+40$:    MOVB    #FAB$M_PUT, S_FAB+FAB$B_FAC(R6)
+        MOVB    #FAB$C_VAR, S_FAB+FAB$B_RFM(R6)
+        MOVB    #FAB$M_CR, S_FAB+FAB$B_RAT(R6)
+        $CREATE FAB=S_FAB(R6)
+        MOVL    #2, R2
+50$:    BLBC    R0, 90$
+        $CONNECT RAB=S_RAB(R6)
+        BLBC    R0, 80$
+        MOVL    R2, S_MODE(R6)
+        ADDL3   #1, R7, @16(AP)
+        RET
+80$:    PUSHL   R0
+        $CLOSE  FAB=S_FAB(R6)
+        MOVL    (SP)+, R0
+90$:    RET
+
+; FIO$READ channel, buffer, length, count: reads at most length bytes,
+; the rest of a record and its line feed, and stores how many at count.
+; SS$_ENDOFFILE at the end.
+        .ENTRY  FIO$READ, ^M<R2, R3, R4, R5, R6>
+        CLRL    @16(AP)
+        MOVL    4(AP), R0
+        BSBW    CHAN
+        MOVL    R1, R6
+        BNEQ    10$
+        MOVL    #SS$_IVCHAN, R0
+        RET
+10$:    CMPL    S_AT(R6), S_LEN(R6)
+        BLSSU   20$
+        $GET    RAB=S_RAB(R6)
+        BLBS    R0, 15$
+        CMPL    R0, #RMS$_RTB           ; too long: what fits
+        BEQL    15$
+        CMPL    R0, #RMS$_EOF
+        BNEQ    90$
+        MOVL    #SS$_ENDOFFILE, R0
+        RET
+15$:    MOVZWL  S_RAB+RAB$W_RSZ(R6), R0
+        MOVB    #10, S_REC(R6)[R0]      ; the line feed after it
+        ADDL3   #1, R0, S_LEN(R6)
+        CLRL    S_AT(R6)
+20$:    SUBL3   S_AT(R6), S_LEN(R6), R2 ; what is left of it, as much as fits
+        CMPL    R2, 12(AP)
+        BLEQU   30$
+        MOVL    12(AP), R2
+30$:    MOVL    R2, @16(AP)
+        ADDL3   S_AT(R6), R6, R1
+        ADDL2   R2, S_AT(R6)
+        MOVC3   R2, S_REC(R1), @8(AP)
+        MOVL    #SS$_NORMAL, R0
+90$:    RET
+
+; PUTREC: R6 = a slot being written. Writes the bytes gathered as a record.
+; R0 = RMS's status.
+PUTREC:
+        .JSB_ENTRY
+        MOVW    S_AT(R6), S_RAB+RAB$W_RSZ(R6)
+        CLRL    S_AT(R6)
+        $PUT    RAB=S_RAB(R6)
+        RSB
+
+; FIO$WRITE channel, buffer, length: writes the bytes, a record at each
+; line feed.
+        .ENTRY  FIO$WRITE, ^M<R2, R3, R4, R5, R6>
+        MOVL    4(AP), R0
+        BSBW    CHAN
+        MOVL    R1, R6
+        BNEQ    10$
+        MOVL    #SS$_IVCHAN, R0
+        RET
+10$:    MOVL    8(AP), R2
+        MOVL    12(AP), R3
+20$:    DECL    R3
+        BLSS    80$
+        MOVZBL  (R2)+, R1
+        CMPB    R1, #10
+        BEQL    40$
+        CMPL    S_AT(R6), #RECMAX
+        BGEQU   20$                     ; too long: cut
+        ADDL3   S_AT(R6), R6, R0
+        MOVB    R1, S_REC(R0)
+        INCL    S_AT(R6)
+        BRB     20$
+40$:    PUSHR   #^M<R2, R3>
+        BSBW    PUTREC
+        POPR    #^M<R2, R3>
+        BLBS    R0, 20$
+        RET
+80$:    MOVL    #SS$_NORMAL, R0
+        RET
+
+; FIO$CLOSE channel: writes what is gathered if it is being written, and
+; closes it.
+        .ENTRY  FIO$CLOSE, ^M<R2, R3, R4, R5, R6>
+        MOVL    4(AP), R0
+        BSBW    CHAN
+        MOVL    R1, R6
+        BNEQ    10$
+        MOVL    #SS$_IVCHAN, R0
+        RET
+10$:    CMPL    S_MODE(R6), #2
+        BNEQ    20$
+        TSTL    S_AT(R6)
+        BEQL    20$
+        BSBW    PUTREC
+20$:    CLRL    S_MODE(R6)
+        $CLOSE  FAB=S_FAB(R6)
+        RET
+
+; FIO$ALLOC size: the address of size bytes of zeroed memory, 16-byte
+; aligned, or 0 if there is no more. Memory is never freed.
+        .ENTRY  FIO$ALLOC, ^M<R2>
+        ADDL3   #15, 4(AP), R2
+        BICL2   #15, R2
+        SUBL3   NEXT, LIMIT, R0
+        CMPL    R2, R0
+        BLEQU   20$
+        ADDL3   #^XFFF, R2, R0          ; more pages, at least CHUNK of them
+        ASHL    #-12, R0, R0
+        CMPL    R0, #CHUNK
+        BGEQU   10$
+        MOVL    #CHUNK, R0
+10$:    $EXPREG_S PAGCNT=R0, RETADR=RETADR
+        BLBC    R0, 90$
+        CMPL    RETADR, LIMIT           ; next to what is left?
+        BEQL    15$
+        MOVL    RETADR, NEXT
+15$:    ADDL3   #1, RETADR+4, LIMIT
+20$:    MOVL    NEXT, R0
+        ADDL2   R2, NEXT
+        RET
+90$:    CLRL    R0
+        RET
+
+; FIO$PUT_LINE text, length: writes a line on SYS$OUTPUT.
+        .ENTRY  FIO$PUT_LINE, ^M<>
+        MOVW    8(AP), OUTDSC
+        MOVL    4(AP), OUTDSC+4
+        PUSHAQ  OUTDSC
+        CALLS   #1, G^LIB$PUT_OUTPUT
+        RET
+
+; FIO$ARGS address, length: stores the command line's address and length,
+; past its verb: the $LINE DCL's parse holds.
+        .ENTRY  FIO$ARGS, ^M<R2>
+        CLRW    LINLEN
+        PUSHAW  LINLEN
+        PUSHAQ  LINDSC
+        PUSHAQ  LINNAM
+        CALLS   #3, G^CLI$GET_VALUE
+        MOVAB   LINE, R1
+        MOVZWL  LINLEN, R2
+        ADDL2   R1, R2
+10$:    CMPL    R1, R2                  ; past the verb, to its first / or blank
+        BGEQU   20$
+        CMPB    (R1), #^A"/"
+        BEQL    20$
+        CMPB    (R1)+, #^A" "
+        BNEQ    10$
+20$:    MOVL    R1, @4(AP)
+        SUBL3   R1, R2, @8(AP)
+        RET
+
+; FIO$DATE buffer: the time as dd-mmm-yyyy hh:mm, 17 bytes at buffer.
+        .ENTRY  FIO$DATE, ^M<R2, R3, R4, R5>
+        $ASCTIM_S TIMBUF=TIMDSC
+        MOVC3   #17, TIMBUF, @4(AP)
+        RET
+
+; FIO$EXIT status: ends the image with status, a condition value.
+        .ENTRY  FIO$EXIT, ^M<>
+        $EXIT_S CODE=4(AP)
+        RET
+
+        .END
