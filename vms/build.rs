@@ -125,18 +125,17 @@ fn main() {
         let image = link(&name, base, None, &modules);
         files.push((format!("[SYSEXE]{name}.EXE"), image.image.write()));
     }
-    // A program of its own directory: its BLISS-64 and its MACRO-32.
-    for dir in ["tpu"] {
-        let path = format!("sysexe/{dir}");
-        let mut modules: Vec<_> = sources(&path, &["b64"]).iter().map(|s| bliss(s)).collect();
-        modules.extend(compile(&sources(&path, &["mar"])));
-        modules.extend(libs.iter().cloned());
-        modules.push(librtl_exe.clone());
-        modules.push(stb.clone());
-        let name = dir.to_uppercase();
-        let image = link(&name, vlink::DEFAULT_BASE, None, &modules);
-        files.push((format!("[SYSEXE]{name}.EXE"), image.image.write()));
-    }
+    // TPU, a program of its own directory: its BLISS-64 and its MACRO-32.
+    let mut modules: Vec<_> = sources("sysexe/tpu", &["b64"])
+        .iter()
+        .map(|s| bliss(s))
+        .collect();
+    modules.extend(compile(&sources("sysexe/tpu", &["mar"])));
+    modules.extend(libs.iter().cloned());
+    modules.push(librtl_exe.clone());
+    modules.push(stb.clone());
+    let image = link("TPU", vlink::DEFAULT_BASE, None, &modules);
+    files.push(("[SYSEXE]TPU.EXE".into(), image.image.write()));
     disk(&out.join("sysdisk.img"), &files);
 }
 
