@@ -55,6 +55,7 @@ kept current, like a design document.
 | [ADR-0027](adr/0027-terminals-are-ucbs-and-telnet-is-in-the-driver.md) | Each terminal is a UCB of its own, and a remote login is a TELNET terminal, TNAn, that the terminal driver drives over the TCP connection | Proposed |
 | [ADR-0028](adr/0028-shareable-images.md) | Shareable images are Alpha's, linked against their symbol vector and called through linker veneers; the image activator maps a copy into each process, and LIBRTL.EXE holds the LIB$ routines | Proposed |
 | [ADR-0029](adr/0029-loginout-and-sysuaf.md) | LOGINOUT logs a terminal's process in from SYSUAF.DAT, whose passwords are salted, iterated SHA-256, and gives it its command interpreter in kernel mode | Proposed |
+| [ADR-0030](adr/0030-lock-manager-in-the-executive.md) | The lock manager is part of the executive, for one node, with VMS's $ENQ, $DEQ and $GETLKI, and its logic is BLISS-64 | Proposed |
 
 ### PRDs
 
