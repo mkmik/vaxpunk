@@ -64,7 +64,7 @@ kept current, like a design document.
 | [PRD-0003](prd/0003-multi-user-vms.md) | Milestone 1: a multi-user VMS you log in to |
 | [PRD-0004](prd/0004-bliss64-compiler.md) | A BLISS-64 compiler for ARM64, bootstrapped in Rust and then written in BLISS-64 |
 | [PRD-0005](prd/0005-macro32-on-the-calling-standard.md) | MACRO-32 on the vaxpunk calling standard, as AMACRO put it on Alpha's |
-| [PRD-0006](prd/0006-tpu-and-eve.md) | TPU, the Text Processing Utility, and EVE on it, in BLISS-64 (waits for PRD-0004) |
+| [PRD-0006](prd/0006-tpu-and-eve.md) | TPU, the Text Processing Utility, and EVE on it, in BLISS-64 |
 | [PRD-0007](prd/0007-wasmrun.md) | WASMRUN, a WebAssembly interpreter for VMS written in MACRO-32 |
 | [PRD-0008](prd/0008-rms-record-and-indexed-files.md) | RMS: every record format, relative files and indexed files |
 
