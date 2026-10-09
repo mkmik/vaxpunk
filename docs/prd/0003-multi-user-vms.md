@@ -47,7 +47,7 @@ Decisions this PRD rests on:
 | VMS's data layouts (`$UAFDEF`, `$LKBDEF`, `$PRVDEF`, protection masks) | Programs and habits carry over; the layouts are documented and stable |
 | One CPU, no cluster | ADR-0003 holds; a lock manager for one node is a fraction of the work and the interface is the same |
 | Passwords hashed with a modern function, stored in `$UAFDEF`'s field | Purdy's polynomial is broken; nothing reads our UAF but us |
-| Native code stays MACRO-32 | No BLISS or C compiler yet; nothing here needs one |
+| Native code is MACRO-32 or BLISS-64 | Drivers and code that lives on IPL stay MACRO-32; long logic such as the lock manager is cheaper in BLISS-64, which is in ([PRD-0004](0004-bliss64-compiler.md), `numtim.b64`) |
 
 ## Non-goals
 
@@ -114,7 +114,8 @@ Decisions this PRD rests on:
 - The executive checks the privileges VMS does for the services that exist:
   `CMKRNL`, `CMEXEC`, `SETPRV`, `WORLD` and `GROUP` (other processes in
   `$DELPRC`, `$FORCEX`, `$GETJPI`, `$SUSPND`), `PRMMBX` and `TMPMBX`,
-  `SYSNAM` and `GRPNAM` (logical name tables), `LOG_IO` and `PHY_IO`
+  `SYSNAM` and `GRPNAM` (logical name tables), `SYSLCK` (`$ENQ`'s
+  `LCK$M_SYSTEM`), `LOG_IO` and `PHY_IO`
   (closing `f11.mar`'s note), `MOUNT` and `VOLPRO`, `OPER`, `SYSPRV`,
   `BYPASS`, `READALL`.
 - Files have an owner UIC and a protection mask in their header, which
@@ -135,6 +136,8 @@ Decisions this PRD rests on:
 
 ### Lock manager
 
+In the executive, for one node: [ADR-0030](../adr/0030-lock-manager-in-the-executive.md).
+
 - `$ENQ`, `$ENQW`, `$DEQ` and `$GETLKI` on a resource tree with the six
   lock modes, conversions, value blocks, the `NOQUEUE`, `CONVERT`,
   `SYSTEM` and `VALBLK` flags, completion and blocking ASTs, and
@@ -146,7 +149,8 @@ Decisions this PRD rests on:
 - RMS shares a file between processes: `FAB$B_SHR` with `SHRGET`,
   `SHRPUT`, `UPI`; `RMS$_FLK` when it can't. `$ERASE` of an open file
   says so (closing `rms.mar`'s note).
-- `SHOW SYSTEM` and `SHOW PROCESS/LOCKS` see them.
+- `SHOW PROCESS/QUOTAS` shows the enqueue quota left. No DCL command
+  lists locks on VMS; SDA's `SHOW LOCKS` does, and there is no SDA yet.
 
 ### Batch and print
 
@@ -193,7 +197,7 @@ until the hardware or size changes; leave it.
 | 2 | Done (step 4, [ADR-0029](../adr/0029-loginout-and-sysuaf.md)): `LOGINOUT` on the console and `TELNETD`'s terminals, the UAF picks the command interpreter, `STARTUP` runs `SYSTARTUP_VMS.COM`; left: the console asks for a username again at once, not at a key (`exec.mar`); `SET PASSWORD`'s privilege is a fixed list of known images until `INSTALL` (`process.mar`) | *Login* |
 | 3 | Terminals per UCB done, with `TNAn:` for `SET HOST` (step 3, ADR-0027); left: no `$BRKTHRU`; a hangup ends the terminal's reads and writes, not its process; at most 9 `TNAn:` units (`ttdriver.mar`, DESIGN-0002 *I/O*) | *Terminals*, and `LOGINOUT` for the hangup |
 | 4 | No quotas: `BIOLM`, `DIOLM`, `BYTLM` (ADR-0013), `BUFQUO` (ADR-0019), ASTs (DESIGN-0002 *ASTs*); `$GETJPI` has no CPU times, quotas or counts (`getjpi.mar`, `show.mar`) | *Quotas* |
-| 5 | One file system lock for every volume, no per-file lock, no priority boost (ADR-0020, `f11.mar`, DESIGN-0002 *Files*); no file sharing or locking, `$ERASE` deletes an open file (ADR-0009, `rms.mar`) | *Lock manager* |
+| 5 | No lock manager yet ([ADR-0030](../adr/0030-lock-manager-in-the-executive.md) designs it); one file system lock for every volume, no per-file lock, no priority boost (ADR-0020, `f11.mar`, DESIGN-0002 *Files*); no file sharing or locking, `$ERASE` deletes an open file (ADR-0009, `rms.mar`) | *Lock manager* |
 | 6 | DCL procedures: no `ON`, block `IF`, lexical functions or `READ` of a terminal; lines without `$` skipped (`dcl.mar`) | *Command language* |
 | 7 | `$ASCTIM`, `$NUMTIM` (PRD-0004's pilot, `numtim.b64`) and the date in `SHOW PROCESS` and `SHOW SYSTEM` done; left: `$BINTIM`, `SHOW TIME` | *Batch and print* |
 | 8 | Owners and protection done (step 2); left: a new file has the default protection, not the process's (`f11wrt.mar`), which `LOGINOUT` sets from the UAF; no version limit (`rms.mar`'s `$CREATE_DIR`) | *Privileges, UICs and protection* |
@@ -283,11 +287,11 @@ says what replaces it; this PRD doesn't schedule them.
 - [x] Is `SYSUAF.DAT` an indexed file, as on VMS, which RMS doesn't do, or
   a sequential file of fixed records that `AUTHORIZE` rewrites? Indexed,
   as on OpenVMS Alpha V8.4 (VAX/VMS V1.0's was 184-byte fixed records).
-  Step 4 waits for PRD-0008's indexed files.
+  PRD-0008's steps 1 to 6, which step 4 needs, are done.
 - [ ] Do access control lists come in Milestone 1 after all? Nothing in
   ordinary use needs them; `SYSPRV` and groups cover the cases above.
-- [ ] Is the lock manager in the executive, as on VMS, or a process? In the
-  executive; it is called at `IPL$_SYNCH` by the file system.
+- [x] Is the lock manager in the executive, as on VMS, or a process? In the
+  executive, for one node, with its logic in BLISS-64: [ADR-0030](../adr/0030-lock-manager-in-the-executive.md).
 - [ ] Is `PRINT` worth doing without a printer, or only batch queues?
 
 ## Work order
@@ -318,9 +322,11 @@ Each step ends in something `cargo test -p boot` checks.
    PROCESS/QUOTAS/ACCOUNTING`; a process that queues reads past `BIOLM`
    waits instead of taking the pool.
 6. **Lock manager.** `$ENQ`, `$DEQ`, `$GETLKI`, deadlock detection,
-   `LOCKTEST`. *Visible:* `LOCKTEST: ok`.
+   `LOCKTEST`, as [ADR-0030](../adr/0030-lock-manager-in-the-executive.md)
+   decides. *Visible:* `LOCKTEST: ok`.
 7. **File system and RMS on locks.** A lock per volume and per file in
-   place of `FIL$LOCK`; RMS sharing; `$ERASE` of an open file refused.
+   place of `FIL$LOCK`, in an ADR that supersedes ADR-0020; RMS sharing
+   (PRD-0008's step 9); `$ERASE` of an open file refused.
    *Visible:* two sessions, `%RMS-E-FLK` on the second open for write.
 8. **Command language.** Block `IF`, `ON`, `$STATUS`, `OPEN`/`READ`/`WRITE`/
    `CLOSE` (done), the lexical functions, image input from the procedure.
