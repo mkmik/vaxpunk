@@ -1,6 +1,14 @@
 ! The verbs DCL does itself: CLIROUTINE names the code in DCL that does
 ! each, which takes its values from the parse.
 
+! CLOSE logical-name: closes the file OPEN opened as logical-name.
+! ponytail: no /DISPOSITION.
+define verb CLOSE
+	cliroutine CLOSE
+	parameter P1, label=LOGICAL_NAME, prompt="Log_name", value(required)
+	qualifier ERROR, value(required)
+	qualifier LOG, default
+
 define verb CONTINUE
 	cliroutine CONTINUE
 
@@ -41,9 +49,49 @@ define verb IF
 define verb LOGOUT
 	cliroutine LOGOUT
 
+! OPEN logical-name file-spec: opens a file for READ and WRITE, for
+! reading by default; /WRITE alone makes a new sequential file, /READ/WRITE
+! opens one of any organization for both, and /APPEND writes after its
+! last record. ponytail: /SHARE is taken and does nothing, as RMS has
+! one stream per file until PRD-0008's step 9.
+define verb OPEN
+	cliroutine OPEN
+	parameter P1, label=LOGICAL_NAME, prompt="Log_name", value(required)
+	parameter P2, label=FILE, prompt="Filename", value(required, type=$file)
+	qualifier APPEND
+	qualifier ERROR, value(required)
+	qualifier READ
+	qualifier SHARE, value(type=SHARE_OPTIONS)
+	qualifier WRITE
+	disallow APPEND and WRITE
+
+define type SHARE_OPTIONS
+	keyword READ
+	keyword WRITE
+
 define verb PIPE
 	cliroutine PIPE
 	parameter P1, label=COMMAND, prompt="Command", value(required, type=$rest_of_line)
+
+! READ logical-name symbol: reads the next record of the file OPEN
+! opened, or with /KEY the one with that key, along key /INDEX, into a
+! local symbol. ponytail: no /PROMPT, /NOLOCK or /TIME_OUT, which
+! read terminals and shared files.
+define verb READ
+	cliroutine READ
+	parameter P1, label=LOGICAL_NAME, prompt="Log_name", value(required)
+	parameter P2, label=SYMBOL, prompt="Symbol", value(required)
+	qualifier DELETE
+	qualifier END_OF_FILE, value(required)
+	qualifier ERROR, value(required)
+	qualifier INDEX, value(required, type=$number)
+	qualifier KEY, value(required)
+	qualifier MATCH, value(required, type=MATCH_OPTIONS)
+
+define type MATCH_OPTIONS
+	keyword EQ
+	keyword GE
+	keyword GT
 
 define verb RUN
 	cliroutine RUN
@@ -186,7 +234,12 @@ define verb TCPIP
 	image TCPIP
 	parameter P1, label=COMMAND, value(type=$rest_of_line)
 
+! WRITE logical-name expression[,...]: writes a record to the file OPEN
+! opened, or a line to SYS$OUTPUT or SYS$ERROR; /UPDATE rewrites the
+! record READ read last. ponytail: no /SYMBOL.
 define verb WRITE
 	cliroutine WRITE
 	parameter P1, label=LOGICAL_NAME, prompt="Log_name", value(required)
 	parameter P2, label=EXPRESSION, prompt="Expression", value(required, type=$rest_of_line)
+	qualifier ERROR, value(required)
+	qualifier UPDATE

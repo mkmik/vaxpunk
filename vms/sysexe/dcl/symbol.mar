@@ -2,7 +2,7 @@
         .IDENT  /V0.1/
 ;
 ; The symbol table, DCL$SYMTAB, and the commands that set, show and delete
-; symbols, and WRITE.
+; symbols, and WRITE, which file.mar finishes for a file OPEN opened.
 ; One of DCL's modules: ../dcl.mar says how they fit.
 ;
         .LIBRARY "lib.mlb"
@@ -12,7 +12,8 @@
         $DCLDEF
 
         .EXTERNAL DCL$ADD, DCL$ADDCSTR, DCL$ADDHEX, DCL$ADDOCT, DCL$ADDSYM
-        .EXTERNAL DCL$ADDVAL, DCL$DEPTH, DCL$EXPR, DCL$EXPSYN, DCL$GETVAL
+        .EXTERNAL DCL$ADDVAL, DCL$DEPTH, DCL$EXPR, DCL$EXPSYN, DCL$FINDFILE
+        .EXTERNAL DCL$GETVAL, DCL$UNDFIL, DCL$WRITEREC
         .EXTERNAL DCL$INSFPRM, DCL$ISPRES, DCL$LASTSTAT, DCL$OK, DCL$QREST
         .EXTERNAL DCL$QUOTE, DCL$RESTVAL, DCL$SAY, DCL$SKIP, DCL$SYMOVF
         .EXTERNAL DCL$TOSTR, DCL$UNDSYM, DCL$VALNAME, DCL$VERB, DCL$VSTACK
@@ -106,12 +107,15 @@ SETTARGET:
         BSBW    DCL$SETSYM
         BRW     DCL$OK
 
-; DCL$WRITE, WRITE SYS$OUTPUT expression[,...]: writes the values, as
-; strings, one after the other, on a line.
+; DCL$WRITE, WRITE name expression[,...]: writes the values, as
+; strings, one after the other, on a line of SYS$OUTPUT or SYS$ERROR, or
+; as a record of the file OPEN opened as name.
 DCL$WRITE::
         .EXCEPTION_ENTRY
         MOVAB   DCL$V_LOGNAM, R1
-        BSBW    DCL$GETVAL
+        BSBW    DCL$FINDFILE
+        TSTL    R11
+        BNEQ    10$
         CMPB    R8, V_OUTPUT
         BNEQ    7$
         MOVAB   V_OUTPUT, R1
@@ -122,9 +126,9 @@ DCL$WRITE::
         MOVAB   V_ERROR, R1
         BSBW    DCL$VERB
         BLBS    R0, 10$
-8$:     PRINT   "%DCL-W-UNDFIL, file has not been opened by DCL - check logical name"
-        BRW     DCL$WARN
-10$:    MOVAB   DCL$V_EXPR, R1
+8$:     BRW     DCL$UNDFIL
+10$:    PUSHL   R11
+        MOVAB   DCL$V_EXPR, R1
         BSBW    DCL$RESTVAL
 15$:    MOVAB   DCL$VSTACK, R9
         BSBW    DCL$EXPR
@@ -140,7 +144,10 @@ DCL$WRITE::
         BRW     DCL$EXPSYN
 17$:    INCL    R6
         BRB     15$
-20$:    BSBW    DCL$SAY
+20$:    MOVL    (SP)+, R11
+        BEQL    30$
+        BRW     DCL$WRITEREC
+30$:    BSBW    DCL$SAY
         BRW     DCL$OK
 
 ; DCL$SHOWSYM, SHOW SYMBOL[/LOCAL|/GLOBAL] name: shows its value, as VMS

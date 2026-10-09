@@ -164,7 +164,6 @@ message text.
   laid out as VMS's.
 - DCL's `OPEN` opens any organization; `READ/KEY=/INDEX=/MATCH=` reads by
   key, `READ/DELETE` deletes what it read, `WRITE/UPDATE` rewrites it.
-  These need PRD-0003's step 8 first.
 - `DIRECTORY/FULL` says `File organization: Indexed, Prologue: 3, Using 2
   keys` and the rest, as VMS does. `TYPE` of an indexed file reads it by
   primary key.
@@ -230,12 +229,13 @@ instead, `RAB$V_NLK` and `RAB$V_RRL` to read past it, `RAB$V_ULK` with
 
 Each step ends in something you can run or look at.
 
-Steps 1 to 7 are done, and of step 8 `DIRECTORY/FULL`, `TYPE` and `COPY`
-of relative and indexed files: what is left of it, DCL's `OPEN`, `READ`
-and `WRITE`, comes with PRD-0003's step 8, and step 9 with its step 7.
+Steps 1 to 8 are done; step 9 comes with PRD-0003's step 7.
 `boot/tests/rms.rs` checks each against the fixtures and a model, and
 the reports `ANALYZE/RMS_FILE` and `DIRECTORY/FULL` write matched the
-oracle's on every fixture.
+oracle's on every fixture. DCL's `OPEN`, `READ`, `WRITE` and `CLOSE`
+came ahead of the rest of PRD-0003's step 8, which they don't need:
+`IDXM.COM` in the boot test makes `IDXM.IDX` as `MAKE.COM` did on the
+oracle, and leaves the same records.
 
 1. **Layouts.** `crosstools/ods/docs/indexed.md` and `crosstools/ods/docs/relative.md`: the
    prologue, area and key descriptors, buckets, records, RRVs and SIDRs,

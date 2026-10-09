@@ -12,11 +12,12 @@
         $RMSDEF
         $FABDEF
         $RABDEF
+        $SSDEF
         $DCLDEF
 
         .EXTERNAL DCL$COMMAND, DCL$CONTINUE, DCL$CTRLYFP, DCL$DEPTH, DCL$DONE
         .EXTERNAL DCL$EXPR, DCL$INSFPRM, DCL$LASTSTAT, DCL$LINE, DCL$NAMESCAN
-        .EXTERNAL DCL$NEXT, DCL$OK, DCL$QWORD, DCL$RESTVAL, DCL$SAMESTR
+        .EXTERNAL DCL$NEXT, DCL$QWORD, DCL$RESTVAL, DCL$SAMESTR
         .EXTERNAL DCL$SETSYM, DCL$SKIP, DCL$SYMEND, DCL$SYMNAM, DCL$SYMTAB
         .EXTERNAL DCL$TARGET, DCL$TOINT, DCL$TOKEN, DCL$VALNAME, DCL$VERB
         .EXTERNAL DCL$VSTACK, DCL$V_EXPR, DCL$WARN, DCL$WORD
@@ -179,11 +180,16 @@ DCL$GOTO::
         .EXCEPTION_ENTRY
         MOVAB   V_LABEL, R1
         BSBW    DCL$VALNAME
+        MOVL    #SS$_NORMAL, R9
+; DCL$GOTOSYM: DCL$SYMNAM = a label, R9 = a status. The same, with R9
+; $STATUS after, as for a READ's /END_OF_FILE or /ERROR label.
+DCL$GOTOSYM::
+        .GLOBAL_LABEL
+        PUSHL   R9
         MOVL    DCL$DEPTH, R11
         TSTL    R11
-        BNEQ    7$
-        BRW     DCL$OK
-7$:     MOVC3   #32, DCL$SYMNAM, DCL$TARGET
+        BEQL    60$
+        MOVC3   #32, DCL$SYMNAM, DCL$TARGET
         MOVL    PSTART[R11], R10        ; a line
 10$:    CMPL    R10, PEND[R11]
         BLSSU   20$
@@ -221,7 +227,8 @@ DCL$GOTO::
         INCL    R10
         BRB     10$
 50$:    MOVL    R10, PNEXT[R11]
-        BRW     DCL$OK
+60$:    MOVL    (SP)+, DCL$LASTSTAT
+        BRW     DCL$NEXT
 
 ; DCL$EXIT, EXIT [status]: ends the procedure running, if one is, with
 ; status, or $STATUS. Outside one, makes the image CTRL/Y stopped, if
