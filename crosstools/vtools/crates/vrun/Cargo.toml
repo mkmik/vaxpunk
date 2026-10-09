@@ -12,6 +12,7 @@ vms-obj = { path = "../vms-obj" }
 vasm = { path = "../vasm" }
 vbliss = { path = "../vbliss" }
 vcdu = { path = "../vcdu" }
+velf = { path = "../velf" }
 vlib = { path = "../vlib" }
 vlink = { path = "../vlink" }
 vmacro = { path = "../vmacro" }

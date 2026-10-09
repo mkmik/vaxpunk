@@ -1,0 +1,40 @@
+# Builds and runs the C examples with the cross gcc and the vtools
+# commands. `just --dry-run NAME` shows the commands without running them.
+# Output goes to target/examples/c.
+
+bin := "../../../../target/debug"
+out := "../../../../target/examples/c"
+lib := "../../lib"
+cross := env_var_or_default("CROSS_COMPILE", "aarch64-elf-")
+# velf's GCC_FLAGS (crates/velf/src/lib.rs), which docs/velf.md explains.
+cflags := "-O2 -Wall -Wextra -ffreestanding -fno-pic -fno-pie -fno-common -ffixed-x18 -mgeneral-regs-only -fno-omit-frame-pointer -fno-stack-protector -fno-asynchronous-unwind-tables -fno-unwind-tables -mbranch-protection=none -mno-outline-atomics"
+
+_default:
+    @just --list
+
+# Runs every example.
+all: cdemo
+
+_build:
+    cargo build -q -p vbliss -p vmacro -p velf -p vlib -p vlink -p vrun
+    mkdir -p {{out}}
+
+# SYSLIB.OLB: the crosstools/vtools/lib modules the examples call,
+# LIB$PUT_OUTPUT and condition handling.
+_syslib: _build
+    {{bin}}/vmacro -I {{lib}} -o {{out}}/putoutput.obj  {{lib}}/putoutput.mar
+    {{bin}}/vmacro -I {{lib}} -o {{out}}/conputchar.obj {{lib}}/conputchar.mar
+    {{bin}}/vmacro -I {{lib}} -o {{out}}/signal.obj     {{lib}}/signal.mar
+    {{bin}}/vlib --create {{out}}/syslib.olb {{out}}/putoutput.obj {{out}}/conputchar.obj {{out}}/signal.obj
+
+# MAIN, in BLISS-64, calls CDEMO, a C library, through CDEMO_VMS, its VMS
+# face in BLISS-64. gcc compiles the C, velf makes it an object module,
+# and LIB.OLB holds both modules.
+cdemo: _syslib
+    {{cross}}gcc {{cflags}} -c cdemo/lib/cdemo.c -o {{out}}/cdemo.o
+    {{bin}}/velf -o {{out}}/cdemo.obj {{out}}/cdemo.o
+    {{bin}}/vbliss -I {{lib}} -o {{out}}/cdemo_vms.obj cdemo/lib/cdemo_vms.b64
+    {{bin}}/vlib --create {{out}}/lib.olb {{out}}/cdemo.obj {{out}}/cdemo_vms.obj
+    {{bin}}/vbliss -I {{lib}} -o {{out}}/main.obj cdemo/main.b64
+    {{bin}}/vlink -o {{out}}/cdemo.exe {{out}}/main.obj {{out}}/lib.olb {{out}}/syslib.olb
+    {{bin}}/vrun {{out}}/cdemo.exe

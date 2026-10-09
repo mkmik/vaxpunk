@@ -1,0 +1,144 @@
+MODULE MAIN (MAIN = MAIN) =
+BEGIN
+! Calls CDEMO, a C library, through CDEMO_VMS, its VMS face, as any VMS
+! program calls a library: by the calling standard, with descriptors and
+! condition values. Both are in LIB.OLB, which the Justfile makes of
+! lib/. Prints what comes back.
+LIBRARY 'SYS$LIBRARY:STARLET';
+
+EXTERNAL ROUTINE
+    CDEMO$SUM,
+    CDEMO$NAME,
+    CDEMO$WORDS,
+    CDEMO_NAME,
+    LIB$PUT_OUTPUT;
+
+EXTERNAL
+    ! cdemo.c's int, a longword.
+    CDEMO_CALLS : LONG SIGNED;
+
+LITERAL
+    QUIT = %X'08018012',                    ! an error
+    PANIC = %X'0801801C';                   ! a fatal one
+
+! SAY text, value: prints text and value, in decimal, on a line.
+ROUTINE SAY (TEXT : REF BLOCK[, BYTE], VALUE) : NOVALUE =
+    BEGIN
+    LOCAL
+        BUF : VECTOR[80, BYTE],
+        DIGITS : VECTOR[20, BYTE],
+        DESC : BLOCK[DSC$K_S_BLN, BYTE],
+        L,
+        N,
+        X;
+    L = .TEXT[DSC$W_LENGTH];
+    CH$MOVE(.L, .TEXT[DSC$A_POINTER], CH$PTR(BUF));
+    BUF[.L] = %C' ';
+    L = .L + 1;
+    IF .VALUE LSS 0 THEN
+        BEGIN
+        BUF[.L] = %C'-';
+        L = .L + 1
+        END;
+    ! The digits, last first, from the remainders, which are negative for
+    ! a negative value.
+    X = .VALUE;
+    N = 0;
+    DO
+        BEGIN
+        LOCAL
+            D;
+        D = .X - (.X / 10) * 10;
+        IF .D LSS 0 THEN D = -.D;
+        DIGITS[.N] = %C'0' + .D;
+        N = .N + 1;
+        X = .X / 10
+        END
+    UNTIL .X EQL 0;
+    DECR K FROM .N - 1 TO 0 DO
+        BEGIN
+        BUF[.L] = .DIGITS[.K];
+        L = .L + 1
+        END;
+    DESC[DSC$W_LENGTH] = .L;
+    DESC[DSC$B_DTYPE] = DSC$K_DTYPE_T;
+    DESC[DSC$B_CLASS] = DSC$K_CLASS_S;
+    DESC[DSC$A_POINTER] = BUF;
+    LIB$PUT_OUTPUT(DESC)
+    END;
+
+! SHOW word, letters: the action routine CDEMO$WORDS calls for each word,
+! by the calling standard. Prints the word and adds its length to the
+! quadword at letters. QUIT makes it fail, PANIC makes it signal.
+ROUTINE SHOW (WORD : REF BLOCK[, BYTE], LETTERS : REF VECTOR[1]) =
+    BEGIN
+    IF CH$EQL(.WORD[DSC$W_LENGTH], .WORD[DSC$A_POINTER], 4, CH$PTR(UPLIT BYTE('QUIT')))
+    THEN
+        RETURN QUIT;
+    IF CH$EQL(.WORD[DSC$W_LENGTH], .WORD[DSC$A_POINTER], 5, CH$PTR(UPLIT BYTE('PANIC')))
+    THEN
+        SIGNAL(PANIC);
+    LIB$PUT_OUTPUT(.WORD);
+    LETTERS[0] = .LETTERS[0] + .WORD[DSC$W_LENGTH];
+    SS$_NORMAL
+    END;
+
+ROUTINE MAIN =
+    BEGIN
+    LOCAL
+        SUM,
+        MINIMUM : LONG SIGNED,
+        NAMEBUF : VECTOR[16, BYTE],
+        NAME : BLOCK[DSC$K_S_BLN, BYTE],
+        LEN : WORD,
+        COUNT : LONG,
+        LETTERS,
+        STOPPED,
+        R,
+        STATUS;
+
+    ! Every width and sign, the last arguments on the stack both ways.
+    STATUS = CDEMO$SUM(-100000, 5000000000, -3, 200, -300, 65000, 7, 8, -9, 10, SUM, MINIMUM);
+    SAY(%ASCID 'CDEMO$SUM status', .STATUS);
+    SAY(%ASCID 'sum', .SUM);
+    SAY(%ASCID 'minimum', .MINIMUM);
+
+    ! C's int -1, straight from C, without and with its sign.
+    R = CDEMO_NAME(12, NAMEBUF, 16);
+    SAY(%ASCID 'cdemo_name 12 as a quadword', .R);
+    SAY(%ASCID 'cdemo_name 12 as an int', .R<0, 32, 1>);
+
+    ! Through a table of addresses in C's read-only data.
+    NAME[DSC$W_LENGTH] = 16;
+    NAME[DSC$B_DTYPE] = DSC$K_DTYPE_T;
+    NAME[DSC$B_CLASS] = DSC$K_CLASS_S;
+    NAME[DSC$A_POINTER] = NAMEBUF;
+    STATUS = CDEMO$NAME(12, NAME, LEN);
+    SAY(%ASCID 'CDEMO$NAME 12 status', .STATUS);
+    STATUS = CDEMO$NAME(7, NAME, LEN);
+    SAY(%ASCID 'CDEMO$NAME 7 status', .STATUS);
+    NAME[DSC$W_LENGTH] = .LEN;
+    LIB$PUT_OUTPUT(NAME);
+
+    ! C calling back: each word, then a failure, then a condition.
+    LETTERS = 0;
+    STATUS = CDEMO$WORDS(%ASCID '  calling C  from BLISS ', SHOW, LETTERS, COUNT, STOPPED);
+    SAY(%ASCID 'CDEMO$WORDS status', .STATUS);
+    SAY(%ASCID 'words', .COUNT);
+    SAY(%ASCID 'letters', .LETTERS);
+    STATUS = CDEMO$WORDS(%ASCID 'one QUIT two', SHOW, LETTERS, COUNT, STOPPED);
+    SAY(%ASCID 'CDEMO$WORDS status', .STATUS);
+    SAY(%ASCID 'stopped at', .STOPPED);
+    ! C works out where it stopped from registers it keeps across the
+    ! call, after the unwind.
+    STATUS = CDEMO$WORDS(%ASCID 'three  PANIC four', SHOW, LETTERS, COUNT, STOPPED);
+    SAY(%ASCID 'CDEMO$WORDS status', .STATUS);
+    SAY(%ASCID 'stopped at', .STOPPED);
+
+    ! C's global.
+    SAY(%ASCID 'C calls', .CDEMO_CALLS);
+    SS$_NORMAL
+    END;
+
+END
+ELUDOM

@@ -692,6 +692,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "velf"
+version = "0.1.0"
+dependencies = [
+ "vasm",
+ "vms-obj",
+]
+
+[[package]]
 name = "vlib"
 version = "0.1.0"
 dependencies = [
@@ -739,6 +747,7 @@ dependencies = [
  "vasm",
  "vbliss",
  "vcdu",
+ "velf",
  "vlib",
  "vlink",
  "vmacro",

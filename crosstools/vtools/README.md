@@ -11,6 +11,7 @@ plan.
 | `crates/vmacro` | MACRO-32 compiler for ARM64, as AMACRO compiled MACRO-32 for Alpha ([docs/macro32.md](docs/macro32.md), [docs/amacro.md](docs/amacro.md)) |
 | `crates/vbliss` | BLISS-64 compiler for ARM64 ([docs/vbliss.md](docs/vbliss.md), [docs/bliss64.md](docs/bliss64.md)) |
 | `crates/vasm` | ARM64 assembler with VMS-style directives; the other compilers emit through it ([docs/assembler.md](docs/assembler.md)) |
+| `crates/velf` | Turns a C compiler's ELF object into an object module, so C goes into libraries and images ([docs/velf.md](docs/velf.md)) |
 | `crates/vcdu` | Compiles CLD into command tables, like SET COMMAND/OBJECT ([docs/command-tables.md](docs/command-tables.md)) |
 | `crates/vlink` | Links object modules into an executable image ([docs/linker.md](docs/linker.md)) |
 | `crates/vlib` | Puts object modules into object libraries, like LIBRARY/OBJECT |
@@ -28,11 +29,12 @@ The other directories:
 - `bliss/`: vasm rewritten in BLISS-64, with `fio.mar`, its I/O under vrun.
   vrun's `vasm_port` test checks that it assembles `tests/vasm-port.txt`
   the same way the Rust vasm does.
-- `examples/`: small MACRO-32, BLISS and vasm programs, each directory
-  with its own README.
+- `examples/`: small MACRO-32, BLISS and vasm programs, and a BLISS
+  program calling a C library, each directory with its own README.
 - `tests/`: sources with their expected listings and output, which the
   crates' tests compare against.
 
 The crates are default members of the repository's Cargo workspace, so
 `cargo build` and `cargo test` cover them. vrun's tests need
-`qemu-system-aarch64` and cross binutils.
+`qemu-system-aarch64`, cross binutils and, for `examples/c`, the cross
+gcc.

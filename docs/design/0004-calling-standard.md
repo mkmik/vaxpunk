@@ -395,3 +395,12 @@ routines that read their count or return longwords through jackets.
 Fortran's VMS conventions sit on top: arguments by reference, `CHARACTER`
 by descriptor, an omitted optional argument as 0 and the count, a
 `CHARACTER` function's result through a hidden descriptor first.
+
+Today the C compiler is a stock gcc, with the flags in
+`crosstools/vtools/docs/velf.md`, whose objects `velf` converts. It gives
+an `int` result with the upper half zero, not the sign, and has no unwind
+table yet, so no condition may reach a C frame: at 16(FP) and 24(FP) it
+keeps saved registers. A BLISS-64 routine C calls is the jacket: it
+doesn't read x9, takes the low longword of an `int`, calls VMS routines
+by this standard, and catches every condition, unwinding to C with an
+error. `crosstools/vtools/examples/c` shows each of these.
