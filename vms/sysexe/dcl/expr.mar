@@ -14,7 +14,7 @@
 
         .EXTERNAL DCL$ADDCSTR, DCL$ADDSYM, DCL$GETSYM, DCL$LINE, DCL$LINE2
         .EXTERNAL DCL$MSG, DCL$SAMESTR, DCL$SAVESP, DCL$SAY, DCL$SYMNAM
-        .EXTERNAL DCL$WARN
+        .EXTERNAL DCL$WARN, DCL$LEXICAL
 
         .PSECT  DATA, NOEXE, WRT, LONG
 S_NOT:  .ASCIC  "NOT"
@@ -60,7 +60,7 @@ OPS:    .ASCIC  "OR"
 OPTXT:  .BLKB   6                       ; an operator OPSCAN read, .ASCIC
 DCL$VSTACK::                            ; the values an expression holds
         .BLKB   NVAL*VAL$K_LENGTH
-VSTACKEND:
+DCL$VSTKEND::                           ; past them
 
         .PSECT  CODE, EXE, LONG
 ; The errors in an expression or a symbol, which can come from deep in
@@ -303,7 +303,7 @@ BINARY:
         BEQL    90$
         PUSHL   R1
         ADDL2   #VAL$K_LENGTH, R9       ; the right operand's value
-        MOVAB   VSTACKEND-VAL$K_LENGTH, R0
+        MOVAB   DCL$VSTKEND-VAL$K_LENGTH, R0
         CMPL    R9, R0
         BLEQU   30$
         BRW     DCL$EXPSYN
@@ -366,8 +366,9 @@ OPSCAN:
         CLRL    R1
         RSB
 
-; PRIMARY: as DCL$EXPR, for an operand: "string", an integer, a symbol,
-; (expression), - operand or .NOT. operand.
+; PRIMARY: as DCL$EXPR, for an operand: "string", an integer, %X, %O or
+; %D and one, a symbol,
+; a lexical function, (expression), - operand or .NOT. operand.
 PRIMARY:
         .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5, R6, R8, R10>
         BSBW    DCL$SKIP
@@ -398,19 +399,45 @@ PRIMARY:
         BRB     10$
 17$:    MOVB    R2, VAL$T_STR(R9)
         RSB
-20$:    CMPB    R0, #^A/0/
+20$:    MOVL    #10, R3                 ; an integer's base
+        CMPB    R0, #^A/%/              ; %X, %O or %D: in hex, octal or decimal
+        BNEQ    22$
+        INCL    R6
+        CMPL    R6, R7
+        BGEQU   35$
+        MOVZBL  (R6)+, R0
+        BICB2   #^X20, R0
+        MOVL    #16, R3
+        CMPB    R0, #^A/X/
+        BEQL    24$
+        MOVL    #8, R3
+        CMPB    R0, #^A/O/
+        BEQL    24$
+        MOVL    #10, R3
+        CMPB    R0, #^A/D/
+        BEQL    24$
+        BRB     35$
+22$:    CMPB    R0, #^A/0/
         BLSSU   30$
         CMPB    R0, #^A/9/
         BGTRU   30$
-        CLRL    VAL$L_TYPE(R9)          ; an integer
+24$:    CLRL    VAL$L_TYPE(R9)          ; an integer
         CLRL    R2
 25$:    CMPL    R6, R7
         BGEQU   27$
         MOVZBL  (R6), R0
-        SUBL2   #^A/0/, R0
+        CMPB    R0, #^A/a/
+        BLSSU   26$
+        SUBB2   #^A/a/-^A/A/, R0
+26$:    SUBL2   #^A/0/, R0
         CMPL    R0, #9
-        BGTRU   27$
-        MULL2   #10, R2
+        BLEQU   28$
+        SUBL2   #<^A/A/-^A/0/-10>, R0   ; a letter
+        CMPL    R0, #10
+        BLSSU   27$
+28$:    CMPL    R0, R3
+        BGEQU   27$
+        MULL2   R3, R2
         ADDL2   R0, R2
         INCL    R6
         BRB     25$
@@ -455,7 +482,16 @@ PRIMARY:
 60$:    BSBW    DCL$NAMESCAN
         TSTL    R8
         BEQL    35$
-        BSBW    DCL$GETSYM
+        BSBW    DCL$SKIP                ; F$name(: a lexical function
+        CMPL    R6, R7
+        BGEQU   65$
+        CMPB    (R6), #^A/(/
+        BNEQ    65$
+        CMPW    DCL$SYMNAM+1, #^X2446   ; F$
+        BNEQ    65$
+        BSBW    DCL$LEXICAL
+        RSB
+65$:    BSBW    DCL$GETSYM
         BLBS    R0, 70$
         BRW     DCL$UNDSYM
 70$:    RSB

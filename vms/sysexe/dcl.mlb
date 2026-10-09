@@ -13,7 +13,7 @@ CLDMAX = 16384                          ; a .CLD file SET COMMAND compiles
 PTABMAX = 16384                         ; the process's command tables
 MAXPTAB = 8                             ; how many, a SET COMMAND each
 NSYM = 64                               ; symbols
-NVAL = 16                               ; values an expression may hold at once
+NVAL = 40                               ; values an expression may hold at once, lexical functions' arguments too
 GLOBAL = -1                             ; a global symbol's level
 ANY = -2                                ; SCOPE: neither /LOCAL nor /GLOBAL
 ; A value: an integer or a string.

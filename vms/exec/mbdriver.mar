@@ -16,7 +16,7 @@
 ; sends a process's termination message so (process.mar).
 ; ponytail: a write is done at once, as VMS's with IO$M_NOW, and fails
 ; with SS$_MBFULL when there's no room, rather than waiting for a reader
-; or for room; no IO$_WRITEOF, attention ASTs or protection mask.
+; or for room; no attention ASTs or protection mask.
 ;
         .LIBRARY "lib.mlb"
         .LIBRARY "starlet.mlb"
@@ -42,6 +42,7 @@ MBM$W_SIZE = 8                          ; the block's
 MBM$L_PID = 12                          ; who wrote it
 MBM$L_LEN = 16                          ; its size
 MBM$K_LENGTH = 20
+EOF = -1                                ; MBM$L_LEN of IO$_WRITEOF's, an end of file
 
         .PSECT  EXEC$DATA, NOEXE, WRT, QUAD
 MB$GL_UNITS::                           ; the mailboxes, linked by UCB$L_LINK
@@ -230,11 +231,16 @@ NEWMBX:
 ;   IO$_WRITEVBLK  writes the p2 bytes at p1 as a message, at once:
 ;                  SS$_MBTOOSML if it is longer than the mailbox takes,
 ;                  SS$_MBFULL if the mailbox has no room for it
+;   IO$_WRITEOF    writes an end of file, which a read gets as
+;                  SS$_ENDOFFILE and no bytes
 ;   IO$_READVBLK   reads the oldest message, up to p2 bytes of it, into
 ;                  p1, or waits until one comes; with IO$M_NOW, ends with
 ;                  SS$_ENDOFFILE if there is none. The IOSB has its size,
 ;                  and the writer's PID in its second longword, and
-;                  SS$_BUFFEROVF if it didn't all fit
+;                  SS$_BUFFEROVF if it didn't all fit. IO$_READLBLK and
+;                  IO$_READPROMPT are the same, without the prompt, so
+;                  that a program reads a mailbox that is SYS$INPUT as it
+;                  reads a terminal
 ; R0 = SS$_NORMAL, SS$_ILLIOFUNC, SS$_ACCVIO, SS$_MBTOOSML, SS$_MBFULL, or
 ; IOC$ALLOCIRP's failure. IPL$_SYNCH. Uses R0-R8.
 MB$FDT::
@@ -242,20 +248,29 @@ MB$FDT::
         BICL3   #^C63, 12(AP), R0       ; the function, without modifiers
         CMPL    R0, #IO$_WRITEVBLK
         BEQL    MBWRITE
+        CMPL    R0, #IO$_WRITEOF
+        BEQL    MBWRITE
         CMPL    R0, #IO$_READVBLK
+        BEQL    MBREAD
+        CMPL    R0, #IO$_READLBLK
+        BEQL    MBREAD
+        CMPL    R0, #IO$_READPROMPT
         BEQL    MBREAD
         MOVL    #SS$_ILLIOFUNC, R0
         RSB
 
-; MBWRITE: MB$FDT's IO$_WRITEVBLK.
+; MBWRITE: MB$FDT's IO$_WRITEVBLK, and IO$_WRITEOF.
 MBWRITE:
+        MOVL    #EOF, R7
+        CMPL    R0, #IO$_WRITEOF
+        BEQL    5$
         MOVL    28(AP), R6
         MOVL    32(AP), R7
         MOVL    #SS$_MBTOOSML, R0
         CMPL    R7, UCB$L_MAXMSG(R5)
         BGTRU   90$
         IFNORD  R7, (R6), 85$
-        CLRL    R1
+5$:     CLRL    R1
         BSBW    IOC$ALLOCIRP            ; the write's, done at once
         BLBC    R0, 90$
         MOVL    R3, R8
@@ -265,7 +280,9 @@ MBWRITE:
         BSBW    MB$SEND
         BLBC    R0, 80$
         MOVL    R8, R3
-        ASHL    #16, R7, R0
+        MOVL    R7, R2
+        BSBW    BYTES
+        ASHL    #16, R0, R0
         BISL2   #SS$_NORMAL, R0
         CLRL    R1
         BRW     IOC$REQCOM
@@ -305,35 +322,50 @@ MBREAD: MOVL    28(AP), R6
 85$:    MOVL    #SS$_ACCVIO, R0
 90$:    RSB
 
-; MB$SEND: R5 = a mailbox's UCB, R1 = a message, R2 = its size, R3 = the
-; writer's PID. Queues a copy of the message on the mailbox, for the read
+; MB$SEND: R5 = a mailbox's UCB, R1 = a message, R2 = its size, or EOF
+; for an end of file, R3 = the writer's PID. Queues a copy of the message on the mailbox, for the read
 ; waiting there, if there is one. R0 = SS$_NORMAL, SS$_MBTOOSML if it is
 ; longer than the mailbox takes, SS$_MBFULL if the mailbox has no room
 ; for it, or SS$_INSFMEM. IPL$_SYNCH. Keeps every other register.
 MB$SEND::
         .JSB_ENTRY
+        CMPL    R2, #EOF
+        BEQL    5$
         MOVL    #SS$_MBTOOSML, R0
         CMPL    R2, UCB$L_MAXMSG(R5)
         BGTRU   90$
         MOVL    #SS$_MBFULL, R0
         CMPL    R2, UCB$L_BUFQUO(R5)
         BGTRU   90$
-        PUSHR   #^M<R1, R2, R3, R4, R5>
-        ADDL3   #MBM$K_LENGTH, R2, R1
+5$:     PUSHR   #^M<R1, R2, R3, R4, R5>
+        BSBW    BYTES
+        ADDL3   #MBM$K_LENGTH, R0, R1
         BSBW    EXE$ALONONPAGED
         BLBC    R0, 80$
         MOVW    R1, MBM$W_SIZE(R2)
         MOVL    8(SP), MBM$L_PID(R2)
         MOVL    4(SP), MBM$L_LEN(R2)
         MOVL    16(SP), R5
-        SUBL2   4(SP), UCB$L_BUFQUO(R5)
+        PUSHL   R2
+        MOVL    8(SP), R2
+        BSBW    BYTES
+        MOVL    (SP)+, R2
+        SUBL2   R0, UCB$L_BUFQUO(R5)
         INSQUE  (R2), @UCB$L_MSGQBL(R5)
-        MOVC3   4(SP), @0(SP), MBM$K_LENGTH(R2)
+        MOVC3   R0, @0(SP), MBM$K_LENGTH(R2)
         MOVL    16(SP), R5
         BSBB    HANDOUT
         MOVL    #SS$_NORMAL, R0
 80$:    POPR    #^M<R1, R2, R3, R4, R5>
 90$:    RSB
+
+; BYTES: R2 = a message's size, or EOF. R0 = the bytes it holds.
+BYTES:  .JSB_ENTRY
+        MOVL    R2, R0
+        CMPL    R0, #EOF
+        BNEQ    10$
+        CLRL    R0
+10$:    RSB
 
 ; HANDOUT: R5 = a mailbox's UCB. Gives its messages, oldest first, to the
 ; reads waiting there, in turn, while there are both, and completes them.
@@ -349,6 +381,10 @@ HANDOUT:
         BEQL    90$
         REMQUE  (R3), R3
         REMQUE  (R4), R4
+        MOVZWL  #SS$_ENDOFFILE, R2      ; IO$_WRITEOF's: no bytes
+        CLRL    R1
+        CMPL    MBM$L_LEN(R4), #EOF
+        BEQL    20$
         ADDL2   MBM$L_LEN(R4), UCB$L_BUFQUO(R5)
         MOVL    #SS$_NORMAL, R2
         MOVL    MBM$L_LEN(R4), R1

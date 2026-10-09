@@ -2,7 +2,7 @@
         .IDENT  /V0.1/
 ;
 ; @, which runs a command procedure, the procedure levels in PBUF, and
-; the commands that steer one: IF, GOTO and EXIT.
+; the commands that steer one: IF, ELSE, ENDIF, GOTO, EXIT and ON.
 ; One of DCL's modules: ../dcl.mar says how they fit.
 ;
         .LIBRARY "lib.mlb"
@@ -13,6 +13,10 @@
         $FABDEF
         $RABDEF
         $SSDEF
+        $NAMDEF
+        $IODEF
+        $LNMDEF
+        $DVIDEF
         $DCLDEF
 
         .EXTERNAL DCL$COMMAND, DCL$CONTINUE, DCL$CTRLYFP, DCL$DEPTH, DCL$DONE
@@ -21,13 +25,51 @@
         .EXTERNAL DCL$SETSYM, DCL$SKIP, DCL$SYMEND, DCL$SYMNAM, DCL$SYMTAB
         .EXTERNAL DCL$TARGET, DCL$TOINT, DCL$TOKEN, DCL$VALNAME, DCL$VERB
         .EXTERNAL DCL$VSTACK, DCL$V_EXPR, DCL$WARN, DCL$WORD, DCL$QUIET
+        .EXTERNAL DCL$SUBST, DCL$PROCESS
 
         .PSECT  DATA, NOEXE, WRT, LONG
 V_LABEL:
         .ASCID  "LABEL"
+INNAME: .ASCID  "SYS$INPUT"
+INITEMS:                                ; SYS$INPUT's own equivalence, kept,
+        .WORD   LINESIZE, LNM$_STRING
+        .ADDRESS INSTR, INLEN
+        .LONG   0
+INEQV:  .WORD   0, LNM$_STRING          ; and given back
+        .ADDRESS INSTR, 0
+        .LONG   0
+INLEN:  .WORD   0
+INSTR:  .BLKB   LINESIZE
+MBXITEMS:                               ; the mailbox's name
+        .WORD   64, DVI$_DEVNAM
+        .ADDRESS MBXNAM, MBXLEN
+        .LONG   0
+MBXLEN: .WORD   0
+MBXNAM: .BLKB   64
+CREITEMS:                               ; SYS$INPUT, the mailbox
+        .WORD   0, LNM$_STRING
+        .ADDRESS MBXNAM, 0
+        .LONG   0
+        .ALIGN  LONG
+DCHAN:  .LONG   0                       ; DCL's channel to it
+DATAMBX:                                ; 1 while it is SYS$INPUT
+        .LONG   0
 V_STATUS:
         .ASCID  "STATUS"
 V_THEN: .ASCIC  "THEN"
+V_IF:   .ASCIC  "IF"
+V_ELSE: .ASCIC  "ELSE"
+V_ENDIF:
+        .ASCIC  "ENDIF"
+V_ONARG:
+        .ASCID  "ARGUMENT"
+ONCONDS:                                ; ON's conditions, in their ranks' order
+        .ASCIC  "WARNING"
+        .ASCIC  "ERROR"
+        .ASCIC  "SEVERE_ERROR"
+        .ASCIC  "CONTROL_Y"
+        .BYTE   0
+RANK:   .BYTE   1, 0, 2, 0, 3, 3, 3, 3  ; each severity's rank: WARNING, ERROR, SEVERE_ERROR
 DOTCOM: .ASCII  ".COM"
 PNAME:  .ASCIC  "P1"                    ; a parameter's symbol, P1 to P8
 PSTART: .BLKL   MAXDEPTH+1              ; each one's first line in PBUF,
@@ -35,9 +77,21 @@ PNEXT:  .BLKL   MAXDEPTH+1              ; the next one it reads,
 PEND:   .ADDRESS PBUF                   ; and past its last; level 0's is PBUF
         .BLKL   MAXDEPTH
 PROCFAB:                                ; @'s
-        $FAB    FNA=DCL$TOKEN, DNA=DOTCOM, DNS=4
+        $FAB    FNA=DCL$TOKEN, DNA=DOTCOM, DNS=4, NAM=PROCNAM
+PROCNAM:
+        $NAM    RSA=PROCRES, RSS=255
+PROCRES:
+        .BLKB   255
 PROCRAB:
         $RAB    FAB=PROCFAB, USZ=LINESIZE
+        .ALIGN  LONG
+DCL$ONSEV::                             ; each level's ON: the least rank it acts on,
+        .BLKL   MAXDEPTH+1
+DCL$NOON::                              ; 1 after SET NOON,
+        .BLKL   MAXDEPTH+1
+ONCMD:  .BLKB   <MAXDEPTH+1>*256        ; its command, .ASCIC, none for EXIT,
+ONCY:   .BLKB   <MAXDEPTH+1>*256        ; and ON CONTROL_Y's, none for none
+PNAMES: .BLKB   <MAXDEPTH+1>*256        ; each one's file, .ASCIC
 PBUF:   .BLKB   PBUFSIZE                ; the procedures' lines, each .ASCIC, the outer's first
 PBUFEND:
 
@@ -93,6 +147,13 @@ DCL$DO::
         MOVL    PEND-4[R10], PSTART[R10]
         MOVL    PSTART[R10], PNEXT[R10]
         MOVL    R11, PEND[R10]
+        MOVL    R10, R4
+        BSBW    NEWON
+        ASHL    #8, R10, R0             ; its file
+        MOVAB   PNAMES[R0], R3
+        MOVZBL  PROCNAM+NAM$B_RSL, R0
+        MOVB    R0, (R3)+
+        MOVC3   R0, PROCRES, (R3)
         MOVAB   DCL$VSTACK, R9
         MOVB    #^A/1/, PNAME+2
 40$:    MOVL    #1, VAL$L_TYPE(R9)
@@ -132,6 +193,81 @@ DCL$GETPROC::
         MOVL    #1, R0
         RSB
 
+; DCL$DATALINE: if the procedure running's next line is data, not a
+; command, which starts with $, copies it to DCL$LINE and goes past it:
+; R0 = 1, R7 = its length. Else R0 = 0. Uses R0-R5.
+DCL$DATALINE::
+        .JSB_ENTRY  OUTPUT=<R7>, SCRATCH=<R2, R3, R4, R5>
+        MOVL    DCL$DEPTH, R1
+        BEQL    80$
+        MOVL    PNEXT[R1], R2
+        CMPL    R2, PEND[R1]
+        BGEQU   80$
+        MOVZBL  (R2), R7
+        MOVAB   1(R2), R3
+        ADDL3   R3, R7, R4              ; past it
+10$:    CMPL    R3, R4
+        BGEQU   20$
+        CMPB    (R3), #^A/ /
+        BNEQ    15$
+        INCL    R3
+        BRB     10$
+15$:    CMPB    (R3), #^A/$/
+        BEQL    80$
+20$:    MOVL    R4, PNEXT[R1]
+        MOVC3   R7, 1(R2), DCL$LINE
+        MOVL    #1, R0
+        RSB
+80$:    CLRL    R0
+        RSB
+
+; DCL$DATAIN: before an image runs. In a procedure, SYS$INPUT becomes a
+; mailbox that holds the data lines after the command, up to the next
+; command, and an end of file, as VMS gives an image the procedure as its
+; SYS$INPUT: LIB$GET_INPUT, CREATE and the rest read them, and nothing
+; after. Uses R0-R5.
+; ponytail: SYS$INPUT replaced in the process's table, and put back after,
+; for want of access modes; up to PBUFSIZE bytes of lines, the mailbox's
+; buffer quota; a mailbox takes TMPMBX. A procedure is a file on VMS,
+; which RMS reads as SYS$INPUT, and gives back what follows to DCL.
+DCL$DATAIN::
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5>
+        BSBB    DCL$DATAEND
+        TSTL    DCL$DEPTH
+        BNEQ    5$
+        RSB
+5$:     PUSHL   R7
+        $TRNLNM_S TABNAM=DCL$PROCESS, LOGNAM=INNAME, ITMLST=INITEMS
+        BLBC    R0, 80$
+        $CREMBX_S CHAN=DCHAN, MAXMSG=#LINESIZE, BUFQUO=#PBUFSIZE
+        BLBC    R0, 80$
+10$:    BSBW    DCL$DATALINE
+        BLBC    R0, 20$
+        $QIOW_S CHAN=DCHAN, FUNC=#IO$_WRITEVBLK, P1=DCL$LINE, P2=R7
+        BRB     10$
+20$:    $QIOW_S CHAN=DCHAN, FUNC=#IO$_WRITEOF
+        $GETDVIW_S CHAN=DCHAN, ITMLST=MBXITEMS
+        BLBC    R0, 70$
+        MOVW    MBXLEN, CREITEMS
+        $CRELNM_S TABNAM=DCL$PROCESS, LOGNAM=INNAME, ITMLST=CREITEMS
+        BLBC    R0, 70$
+        MOVL    #1, DATAMBX
+        BRB     80$
+70$:    $DASSGN_S CHAN=DCHAN
+80$:    MOVL    (SP)+, R7
+        RSB
+
+; DCL$DATAEND: after an image ran. SYS$INPUT as it was, if DCL$DATAIN
+; made it a mailbox, which goes once the image's channel has. Uses R0-R5.
+DCL$DATAEND::
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5>
+        BLBC    DATAMBX, 90$
+        CLRL    DATAMBX
+        MOVW    INLEN, INEQV
+        $CRELNM_S TABNAM=DCL$PROCESS, LOGNAM=INNAME, ITMLST=INEQV
+        $DASSGN_S CHAN=DCHAN
+90$:    RSB
+
 ; DCL$EXITPROC: ends the procedure running, with its local symbols. Uses
 ; R0 and R1.
 DCL$EXITPROC::
@@ -157,7 +293,10 @@ DCL$ENDPROCS::
 10$:    RSB
 
 ; DCL$IF, IF expression THEN command: does command if the expression is
-; true.
+; true. IF expression THEN, with nothing after THEN or with THEN on the
+; next line, $ THEN [command], starts a block, which ends at ENDIF, with
+; ELSE [command] before it for when the expression is false: when it is,
+; DCL skips the lines up to that ELSE, or past the ENDIF.
 DCL$IF::
         .EXCEPTION_ENTRY
         MOVAB   DCL$V_EXPR, R1
@@ -167,16 +306,340 @@ DCL$IF::
         BSBW    DCL$TOINT
         PUSHL   VAL$L_INT(R9)
         BSBW    DCL$WORD
-        CMPL    R8, #4
-        BNEQ    10$
-        MOVAB   V_THEN, R1
-        BSBW    DCL$VERB
-        BLBS    R0, 20$
-10$:    PRINT   "%DCL-W-NOTHEN, IF command contains no THEN keyword"
-        BRW     DCL$WARN
-20$:    BLBS    (SP)+, 30$
+        TSTL    R8
+        BNEQ    5$
+        BSBW    NEXTTHEN                ; THEN on the next line: a block
+        BLBS    R0, BLOCK
+        BRB     10$
+5$:     MOVAB   V_THEN, R1
+        BSBW    ISWORD
+        BLBC    R0, 10$
+        BSBW    DCL$SKIP
+        CMPL    R6, R7
+        BGEQU   BLOCK                   ; THEN last: a block
+        BLBS    (SP)+, 30$
         BRW     DCL$NEXT
+10$:    PRINT   "%DCL-W-NOTHEN, IF or ON statement syntax error - check placement of THEN keyword"
+        BRW     DCL$WARN
 30$:    BRW     DCL$COMMAND
+; BLOCK: (SP) = the expression's value, R6 = what follows THEN, R7 = past
+; it. Does it if the value is true, else skips to the ELSE, and does
+; what follows it, or past the ENDIF.
+BLOCK:  BLBC    (SP)+, 10$
+        BRW     DCL$COMMAND
+10$:    MOVL    #1, R0
+        BSBW    SKIPBLK
+        BRW     DCL$COMMAND
+
+; DCL$ELSE, ELSE [command]: reached at the end of a block's THEN part,
+; skips past its ENDIF.
+DCL$ELSE::
+        .EXCEPTION_ENTRY
+        CLRL    R0
+        BSBW    SKIPBLK
+        BRW     DCL$NEXT
+
+; DCL$ENDIF, ENDIF: the end of a block. Nothing to do.
+DCL$ENDIF::
+        .EXCEPTION_ENTRY
+        BRW     DCL$NEXT
+
+; NEXTTHEN: after an IF without THEN. Reads the procedure's next line,
+; which must be $ THEN [command]: R0 = 1 and R6 = the command, R7 = past
+; it, in DCL$LINE, or R0 = 0. Uses R0-R5, R8-R11.
+NEXTTHEN:
+        .JSB_ENTRY  OUTPUT=<R6, R7>, SCRATCH=<R2, R3, R4, R5, R8, R9, R10, R11>
+        TSTL    DCL$DEPTH
+        BEQL    80$
+        BSBW    DCL$GETPROC
+        BLBC    R0, 80$
+        MOVAB   DCL$LINE, R6
+        ADDL2   R6, R7
+        BSBW    DCL$SUBST
+        BSBW    TOVERB
+        MOVAB   V_THEN, R1
+        BSBW    ISWORD
+        BLBC    R0, 80$
+        BSBW    DCL$SKIP
+        MOVL    #1, R0
+        RSB
+80$:    CLRL    R0
+        RSB
+
+; SKIPBLK: R0 = 1 to stop at an ELSE, 0 for an ENDIF only. Skips the
+; procedure's lines up to the next ELSE or ENDIF of the block it is in,
+; past the blocks inside it, and past that line. At an ELSE, R6 = the
+; command after it, in DCL$LINE, R7 = past it; else R6 = R7. Uses R0-R5,
+; R8-R11.
+SKIPBLK:
+        .JSB_ENTRY  OUTPUT=<R6, R7>, SCRATCH=<R2, R3, R4, R5, R8, R9, R10, R11>
+        MOVL    R0, R9
+        CLRL    R11                     ; the blocks inside it it is in
+10$:    MOVL    DCL$DEPTH, R1
+        BEQL    90$
+        MOVL    PNEXT[R1], R10
+        CMPL    R10, PEND[R1]
+        BGEQU   90$
+        MOVZBL  (R10), R0
+        ADDL3   R0, R10, R2
+        INCL    R2
+        MOVL    R2, PNEXT[R1]
+        MOVAB   1(R10), R6
+        ADDL3   R6, R0, R7
+        BSBW    TOVERB
+        MOVAB   V_IF, R1
+        BSBW    ISWORD
+        BLBC    R0, 20$
+        BSBW    ISBLOCK
+        BLBC    R0, 10$
+        INCL    R11
+        BRB     10$
+20$:    MOVAB   V_ENDIF, R1
+        BSBW    ISWORD
+        BLBC    R0, 30$
+        TSTL    R11
+        BEQL    90$
+        DECL    R11
+        BRB     10$
+30$:    MOVAB   V_ELSE, R1
+        BSBW    ISWORD
+        BLBC    R0, 10$
+        TSTL    R11
+        BNEQ    10$
+        BLBC    R9, 10$
+        MOVZBL  (R10), R7               ; this ELSE: its command
+        MOVC3   R7, 1(R10), DCL$LINE
+        MOVAB   DCL$LINE, R6
+        ADDL2   R6, R7
+        BSBW    DCL$SUBST
+        BSBW    TOVERB
+        BSBW    DCL$SKIP
+        RSB
+90$:    MOVL    R7, R6
+        RSB
+
+; TOVERB: R6 = a procedure's line, R7 = past it. Skips the $, blanks and
+; a label, and copies the verb to DCL$TOKEN, as DCL$WORD: R8 = its
+; length, 0 if the line isn't a command, R6 past it. Uses R0, R2.
+TOVERB:
+        .JSB_ENTRY  OUTPUT=<R6, R8>, SCRATCH=<R2>
+        CLRL    R8
+        BSBW    DCL$SKIP
+        CMPL    R6, R7
+        BGEQU   90$
+        CMPB    (R6), #^A/$/
+        BNEQ    90$
+        INCL    R6
+        BSBW    DCL$SKIP
+        MOVL    R6, R2
+        BSBW    DCL$NAMESCAN
+        TSTL    R8
+        BEQL    10$
+        BSBW    DCL$SKIP
+        CMPL    R6, R7
+        BGEQU   10$
+        CMPB    (R6), #^A/:/
+        BNEQ    10$
+        INCL    R6                      ; a label, not :=
+        CMPL    R6, R7
+        BGEQU   20$
+        CMPB    (R6), #^A/=/
+        BNEQ    20$
+10$:    MOVL    R2, R6
+20$:    BSBW    DCL$WORD
+90$:    RSB
+
+; ISWORD: R1 = a word, .ASCIC. R0 = 1 if the R8 characters in DCL$TOKEN
+; are it, or its first 4 or more, else 0. Uses R2.
+ISWORD:
+        .JSB_ENTRY  SCRATCH=<R2>
+        CLRL    R0
+        CMPB    R8, (R1)
+        BEQL    10$
+        CMPL    R8, #4
+        BLSS    20$
+10$:    BSBW    DCL$VERB
+20$:    RSB
+
+; ISBLOCK: R6 = what follows an IF, R7 = past it. R0 = 1 if the IF starts
+; a block: THEN isn't one of the words, outside quotes and before a !,
+; or is the last. Uses R2-R5.
+ISBLOCK:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5, R6>
+        CLRL    R3                      ; 1 if THEN is a word
+        CLRL    R4                      ; 1 if it was the last
+10$:    BSBW    DCL$SKIP
+        CMPL    R6, R7
+        BGEQU   80$
+        CMPB    (R6), #^A/!/
+        BEQL    80$
+        MOVL    R6, R5                  ; a word, to a blank or ! outside quotes
+        CLRL    R2
+20$:    CMPL    R6, R7
+        BGEQU   30$
+        MOVZBL  (R6), R0
+        CMPB    R0, #^A/"/
+        BNEQ    22$
+        XORL2   #1, R2
+        BRB     25$
+22$:    BLBS    R2, 25$
+        CMPB    R0, #^A/ /
+        BEQL    30$
+        CMPB    R0, #^A/!/
+        BEQL    30$
+25$:    INCL    R6
+        BRB     20$
+30$:    CLRL    R4
+        SUBL3   R5, R6, R0
+        CMPL    R0, #4
+        BNEQ    10$
+        BICL3   #^X20202020, (R5), R0   ; in capitals
+        CMPL    R0, V_THEN+1
+        BNEQ    10$
+        MOVL    #1, R3
+        MOVL    #1, R4
+        BRB     10$
+80$:    MOVL    #1, R0
+        TSTL    R3
+        BEQL    90$
+        MOVL    R4, R0
+90$:    RSB
+
+; DCL$ON, ON condition THEN command: what the procedure running does when
+; a command's status is condition or worse, WARNING, ERROR or
+; SEVERE_ERROR, in place of ON ERROR THEN EXIT; or at CTRL/Y, CONTROL_Y,
+; in place of ending the procedures.
+DCL$ON::
+        .EXCEPTION_ENTRY
+        TSTL    DCL$DEPTH
+        BNEQ    3$
+        PRINT   "%DCL-W-ONLEVL, invalid ON context - use only within command procedures"
+        BRW     DCL$WARN
+3$:     MOVAB   V_ONARG, R1
+        BSBW    DCL$RESTVAL
+        BSBW    DCL$WORD
+        MOVAB   ONCONDS, R9             ; which condition
+        MOVL    #1, R10                 ; its severity rank, or 0 for CONTROL_Y
+5$:     TSTB    (R9)
+        BEQL    8$
+        MOVL    R9, R1
+        BSBW    DCL$VERB
+        BLBS    R0, 10$
+        MOVZBL  (R9), R0
+        ADDL2   R0, R9
+        INCL    R9
+        AOBLEQ  #4, R10, 5$
+8$:     PRINT   "%DCL-W-ONERR, invalid ON condition - use WARNING, SEVERE, ERROR, or CONTROL_Y"
+        BRW     DCL$WARN
+10$:    TSTL    R8
+        BEQL    8$
+        CMPL    R10, #4
+        BNEQ    15$
+        CLRL    R10
+15$:    BSBW    DCL$WORD
+        MOVAB   V_THEN, R1
+        BSBW    ISWORD
+        BLBS    R0, 20$
+        PRINT   "%DCL-W-NOTHEN, IF or ON statement syntax error - check placement of THEN keyword"
+        BRW     DCL$WARN
+20$:    BSBW    DCL$SKIP
+        MOVL    DCL$DEPTH, R11
+        ASHL    #8, R11, R3
+        MOVAB   ONCY[R3], R3
+        TSTL    R10
+        BEQL    30$
+        MOVL    R10, DCL$ONSEV[R11]
+        ADDL2   #ONCMD-ONCY, R3
+30$:    SUBL3   R6, R7, R0              ; its command, .ASCIC
+        MOVB    R0, (R3)+
+        MOVC3   R0, (R6), (R3)
+        BRW     DCL$NEXT
+
+; DCL$ONACT: after a command whose status, $STATUS, the procedure running
+; must act on. R0 = 0 for none, 1 to end the procedure, or 2 to do the ON
+; command, now in DCL$LINE: R6 = its first character, R7 = past its
+; last. The procedure is back on ON ERROR THEN EXIT after its ON command
+; ran. Uses R0-R5.
+DCL$ONACT::
+        .JSB_ENTRY  OUTPUT=<R6, R7>, SCRATCH=<R2, R3, R4, R5>
+        MOVL    DCL$DEPTH, R4
+        TSTL    DCL$NOON[R4]
+        BNEQ    80$
+        BICL3   #^C7, DCL$LASTSTAT, R0
+        MOVZBL  RANK[R0], R0
+        BEQL    80$
+        CMPL    R0, DCL$ONSEV[R4]
+        BLSS    80$
+        ASHL    #8, R4, R1
+        MOVAB   ONCMD[R1], R1
+        MOVZBL  (R1)+, R7
+        BNEQ    10$
+        MOVL    #1, R0
+        RSB
+10$:    MOVC3   R7, (R1), DCL$LINE
+        BSBB    DEFON
+        MOVAB   DCL$LINE, R6
+        ADDL2   R6, R7
+        MOVL    #2, R0
+        RSB
+80$:    CLRL    R0
+        RSB
+
+; DCL$PROCNAM: R1 = the file of the procedure running, .ASCIC, empty at
+; the console's level. Uses R0, R1.
+DCL$PROCNAM::
+        .JSB_ENTRY
+        ASHL    #8, DCL$DEPTH, R0
+        MOVAB   PNAMES[R0], R1
+        RSB
+
+; DCL$HASCY: R0 = 1 if the procedure running has an ON CONTROL_Y, else
+; 0. Uses R0, R1.
+DCL$HASCY::
+        .JSB_ENTRY
+        MOVL    DCL$DEPTH, R0
+        BEQL    10$
+        ASHL    #8, R0, R1
+        MOVZBL  ONCY[R1], R0
+        BEQL    10$
+        MOVL    #1, R0
+10$:    RSB
+
+; DCL$CYACT: after CTRL/Y. R0 = 1 if the procedure running has an ON
+; CONTROL_Y, whose command is now in DCL$LINE, R6 = its first character,
+; R7 = past its last; else ends the procedures, R0 = 0. Uses R0-R5.
+DCL$CYACT::
+        .JSB_ENTRY  OUTPUT=<R6, R7>, SCRATCH=<R2, R3, R4, R5>
+        MOVL    DCL$DEPTH, R0
+        BEQL    80$
+        ASHL    #8, R0, R1
+        MOVAB   ONCY[R1], R1
+        MOVZBL  (R1)+, R7
+        BEQL    80$
+        MOVC3   R7, (R1), DCL$LINE
+        MOVAB   DCL$LINE, R6
+        ADDL2   R6, R7
+        MOVL    #1, R0
+        RSB
+80$:    BSBW    DCL$ENDPROCS
+        CLRL    R0
+        RSB
+
+; NEWON: R4 = a procedure level, a new one. ON ERROR THEN EXIT there,
+; SET ON, and no ON CONTROL_Y. Uses R0.
+NEWON:
+        .JSB_ENTRY
+        CLRL    DCL$NOON[R4]
+        ASHL    #8, R4, R0
+        CLRB    ONCY[R0]
+; DEFON: R4 = a procedure level. Back to ON ERROR THEN EXIT there. Uses
+; R0.
+DEFON:
+        .JSB_ENTRY
+        MOVL    #2, DCL$ONSEV[R4]
+        ASHL    #8, R4, R0
+        CLRB    ONCMD[R0]
+        RSB
 
 ; DCL$GOTO, GOTO label: goes on from the line of the procedure running
 ; that starts with label:. Does nothing at the console.

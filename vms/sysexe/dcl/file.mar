@@ -22,6 +22,7 @@
         $FABDEF
         $RABDEF
         $SSDEF
+        $IODEF
         $DCLDEF
 
 NFILE = 8                               ; files open at once
@@ -35,7 +36,7 @@ FIL$K_LENGTH = FIL$R_RAB+RAB$C_BLN
         .EXTERNAL DCL$ADD, DCL$DEPTH, DCL$DONE, DCL$GETVAL, DCL$GOTOSYM
         .EXTERNAL DCL$ISPRES, DCL$MSG, DCL$OK, DCL$SAY, DCL$SETSYM, DCL$STATUS
         .EXTERNAL DCL$TOKEN, DCL$VALNAME, DCL$VSTACK, DCL$V_FILE, DCL$V_LOGNAM
-        .EXTERNAL DCL$WARN
+        .EXTERNAL DCL$WARN, DCL$CHAN, DCL$DATALINE, DCL$LINE
 
         .PSECT  DATA, NOEXE, WRT, LONG
 FABT:   $FAB    DNA=DOTDAT, DNS=4, RAT=CR       ; a file's FAB and RAB, before OPEN fills them in
@@ -63,6 +64,15 @@ V_UPDATE:
         .ASCID  "UPDATE"
 V_WRITE:
         .ASCID  "WRITE"
+V_PROMPT:
+        .ASCID  "PROMPT"
+S_INPUT:
+        .ASCIC  "SYS$INPUT"
+S_COMMAND:
+        .ASCIC  "SYS$COMMAND"
+DATAPROMPT:
+        .ASCII  "DATA: "
+IOSB:   .BLKQ   1
         .ALIGN  LONG
 FILES:  .BLKB   NFILE*FIL$K_LENGTH      ; the files open
 FILESEND:
@@ -234,14 +244,15 @@ DCL$CLOSE::
 ; string, GE the first equal or greater, GT the first greater. The next
 ; READ without /KEY reads the record after it along that key. /DELETE
 ; deletes the record after reading it. Past the last record, goes to the
-; /END_OF_FILE label, if there is one.
+; /END_OF_FILE label, if there is one. SYS$INPUT and SYS$COMMAND, which
+; OPEN didn't open, are TERMREAD's.
 DCL$READ::
         .EXCEPTION_ENTRY
         MOVAB   DCL$V_LOGNAM, R1
         BSBW    DCL$FINDFILE
         TSTL    R11
         BNEQ    5$
-        BRW     DCL$UNDFIL
+        BRW     TERMREAD
 5$:     MOVAB   FIL$R_RAB(R11), R10
         MOVB    #RAB$C_SEQ, RAB$B_RAC(R10)
         BICL2   #RAB$M_KGE!RAB$M_KGT, RAB$L_ROP(R10)
@@ -292,6 +303,59 @@ DCL$READ::
         BLBS    R0, 40$
         BRW     FILERR
 40$:    MOVAB   V_SYMBOL, R1
+        BSBW    DCL$VALNAME
+        MOVL    DCL$DEPTH, R10
+        MOVAB   DCL$VSTACK, R9
+        BSBW    DCL$SETSYM
+        BRW     DCL$OK
+
+; TERMREAD: READ SYS$INPUT symbol, or SYS$COMMAND, DCL$TOKEN = the name,
+; R8 = its length. SYS$INPUT in a procedure is its next data line, a line
+; that doesn't start with $, or past the last the end of file; else a
+; line typed at the terminal after /PROMPT's text, or DATA:, and CTRL/Z
+; the end of file. Any other name is UNDFIL.
+TERMREAD:
+        .EXCEPTION_ENTRY
+        CMPB    R8, S_INPUT
+        BNEQ    10$
+        CMPC3   R8, DCL$TOKEN, S_INPUT+1
+        BNEQ    10$
+        TSTL    DCL$DEPTH
+        BEQL    20$
+        BSBW    DCL$DATALINE
+        BLBC    R0, 40$
+        MOVAB   DCL$LINE, R1
+        BRB     50$
+10$:    CMPB    R8, S_COMMAND
+        BNEQ    15$
+        CMPC3   R8, DCL$TOKEN, S_COMMAND+1
+        BEQL    20$
+15$:    BRW     DCL$UNDFIL
+20$:    MOVAB   V_PROMPT, R1
+        BSBW    DCL$GETVAL
+        MOVAB   DCL$TOKEN, R1
+        TSTL    R8
+        BNEQ    25$
+        MOVAB   DATAPROMPT, R1
+        MOVL    #6, R8
+25$:    $QIOW_S CHAN=DCL$CHAN, FUNC=#IO$_READPROMPT, IOSB=IOSB, P1=RECBUF, P2=#RECSIZE, P5=R1, P6=R8
+        BLBC    R0, 30$
+        MOVZWL  IOSB, R0
+        CMPL    R0, #SS$_ENDOFFILE
+        BEQL    40$
+        BLBC    R0, 30$
+        MOVAB   RECBUF, R1
+        MOVZWL  IOSB+2, R7
+        BRB     50$
+30$:    BRW     FILERR
+40$:    MOVL    #RMS$_EOF, R9
+        MOVAB   V_EOF, R1
+        BRW     LABEL
+50$:    MOVAB   DCL$VSTACK, R9          ; R1 = the line, R7 = its length
+        MOVL    #1, VAL$L_TYPE(R9)
+        MOVB    R7, VAL$T_STR(R9)
+        MOVC3   R7, (R1), VAL$T_STR+1(R9)
+        MOVAB   V_SYMBOL, R1
         BSBW    DCL$VALNAME
         MOVL    DCL$DEPTH, R10
         MOVAB   DCL$VSTACK, R9
