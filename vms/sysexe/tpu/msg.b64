@@ -215,10 +215,13 @@ GLOBAL ROUTINE MSG_SHOWN (K) =
 ! parameters, values; a continuation line starts with - instead of %.
 GLOBAL ROUTINE MSG_OUTV (CONT, K, ARGS, NARGS) : NOVALUE =
     BEGIN
+    OWN
+        SHOWN;                          ! the last message's first line was
     LOCAL
         BUF : VECTOR[MAXLINE, BYTE],
         L;
-    IF NOT .CONT AND NOT MSG_SHOWN(.K) THEN RETURN;
+    IF NOT .CONT THEN SHOWN = MSG_SHOWN(.K);
+    IF NOT .SHOWN THEN RETURN;
     L = MSG_FORMAT(.K, .ARGS, .NARGS, 15, BUF);
     IF .CONT THEN BUF[0] = %C'-';
     MSG_PUT(BUF, .L)

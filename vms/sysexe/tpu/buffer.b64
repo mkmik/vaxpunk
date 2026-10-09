@@ -67,6 +67,7 @@ ROUTINE LINE_NEW (TEXT, LEN) =
     L[L_CAP] = MAX(.LEN, 16);
     L[L_TEXT] = MEM_GET(.L[L_CAP]);
     L[L_LEN] = .LEN;
+    L[L_MARGIN] = 1;
     CH$MOVE(.LEN, .TEXT, .L[L_TEXT]);
     .L
     END;
@@ -380,7 +381,9 @@ ROUTINE SOURCE (V, NP) =
             LOCAL
                 B : REF VECTOR;
             B = BUFP(.V);
-            PIECES(.B, .B[B_FIRST], 0, 0, 0, .NP)
+            ! Its lines: no empty one after the last.
+            IF .B[B_FIRST] EQL 0 THEN (.NP = 0; RETURN MEM_GET(8));
+            PIECES(.B, .B[B_FIRST], 0, .B[B_LAST], (BIND Q = .B[B_LAST] : VECTOR; .Q[L_LEN]), .NP)
             END;
         [OTHERWISE] : 0;
         TES
@@ -436,6 +439,80 @@ GLOBAL ROUTINE BUF_TEXT (V, LENP) =
     .LENP = SLEN(.TX);
     VUNREF(.TX);
     .P
+    END;
+
+! BUF_MAP range | buffer, operations: EDIT's operations (EDITSTR) on each
+! line's part of the text; FALSE for other types.
+GLOBAL ROUTINE BUF_MAP (V, OPS) =
+    BEGIN
+    EXTERNAL ROUTINE
+        EDITSTR;
+    LOCAL
+        B : REF VECTOR,
+        L : REF VECTOR,
+        O,
+        LE,
+        OE;
+    IF VTYPE(.V) EQL TY_BUFFER
+    THEN
+        BEGIN
+        B = BUFP(.V);
+        L = .B[B_FIRST];
+        O = 0;
+        LE = 0;
+        OE = 0
+        END
+    ELSE IF VTYPE(.V) EQL TY_RANGE
+    THEN
+        BEGIN
+        BIND
+            RG = VPTR(.V) : VECTOR,
+            S = .RG[R_START] : VECTOR,
+            E = .RG[R_END] : VECTOR;
+        B = .S[M_BUF];
+        IF .B EQL 0 THEN RETURN FALSE;
+        L = .S[M_LINE];
+        O = .S[M_OFF];
+        LE = .E[M_LINE];
+        OE = .E[M_OFF];
+        AFTER(LE, OE)
+        END
+    ELSE
+        RETURN FALSE;
+    IF NOT MODIFY(.B) THEN RETURN TRUE;
+    WHILE .L NEQ 0 DO
+        BEGIN
+        LOCAL
+            E,
+            OLD,
+            NEW,
+            NXT;
+        NXT = .L[L_NEXT];
+        E = (IF .L EQL .LE THEN .OE ELSE .L[L_LEN]);
+        IF .E GTR .O
+        THEN
+            BEGIN
+            OLD = STR_MAKE(.L[L_TEXT] + .O, .E - .O);
+            NEW = EDITSTR(.OLD, .OPS);
+            IF SLEN(.NEW) EQL SLEN(.OLD)
+            THEN
+                CH$MOVE(SLEN(.NEW), SADDR(.NEW), .L[L_TEXT] + .O)
+            ELSE
+                BEGIN
+                LOCAL
+                    LP;
+                REMOVE(.B, .L, .O, .E - .O);
+                LP = .L;
+                INSERT(.B, LP, .O, SADDR(.NEW), SLEN(.NEW))
+                END;
+            VUNREF(.OLD);
+            VUNREF(.NEW)
+            END;
+        IF .L EQL .LE THEN EXITLOOP;
+        L = .NXT;
+        O = 0
+        END;
+    TRUE
     END;
 
 ! PUT buffer, pieces, count: inserts them at the editing point, in insert
@@ -609,15 +686,25 @@ ROUTINE READ_INTO (B : REF VECTOR, NAME, LEN) =
     .N
     END;
 
-! WRITE_FROM pieces, count, name, length: writes them as lines; whether it
-! could.
-ROUTINE WRITE_FROM (V : REF VECTOR, N, NAME, LEN) =
+! BUF_READ buffer, name, length: READ_INTO, for the command file.
+GLOBAL ROUTINE BUF_READ (B, NAME, LEN) =
+    READ_INTO(.B, .NAME, .LEN);
+
+! WRITE_FROM pieces, count, name, length, line: writes them as lines,
+! each after blanks up to its line's left margin; whether it could.
+ROUTINE WRITE_FROM (V : REF VECTOR, N, NAME, LEN, L : REF VECTOR) =
     BEGIN
     LOCAL
         CHAN;
     IF NOT FIO$OPEN(.NAME, .LEN, FIO$K_WRITE, CHAN) THEN RETURN FALSE;
     INCR I FROM 0 TO .N - 1 DO
         BEGIN
+        IF .L NEQ 0
+        THEN
+            BEGIN
+            INCR J FROM 2 TO .L[L_MARGIN] DO FIO$WRITE(.CHAN, UPLIT BYTE (' '), 1);
+            L = .L[L_NEXT]
+            END;
         FIO$WRITE(.CHAN, SADDR(.V[.I]), SLEN(.V[.I]));
         FIO$WRITE(.CHAN, UPLIT BYTE (10), 1)
         END;
@@ -1136,9 +1223,9 @@ ROUTINE BX_WRITE_FILE (ARGS : REF VECTOR, N, R) =
     IF .F EQL 0 THEN RETURN SS_NORMAL;
     NL = FILE_NAME(SADDR(.F), SLEN(.F), 0, 0, NAME);
     P = SOURCE(.ARGS[0], K);
-    ! A buffer's text ends with its last line, not an empty one after it.
-    IF VTYPE(.ARGS[0]) EQL TY_BUFFER AND .K GTR 0 THEN (K = .K - 1; VUNREF(.(.P + .K * 8)));
-    IF NOT WRITE_FROM(.P, .K, NAME, .NL)
+    IF NOT WRITE_FROM(.P, .K, NAME, .NL,
+                      (IF VTYPE(.ARGS[0]) EQL TY_BUFFER THEN (BIND B = BUFP(.ARGS[0]) : VECTOR; .B[B_FIRST])
+                       ELSE (BIND RG = VPTR(.ARGS[0]) : VECTOR, M = .RG[R_START] : VECTOR; .M[M_LINE])))
     THEN
         BEGIN
         FREEPIECES(.P, .K);
@@ -1239,6 +1326,177 @@ ROUTINE BX_DELETE (ARGS : REF VECTOR, N) =
         TES;
     VUNREF(.V);
     ARGS[0] = 0;
+    SS_NORMAL
+    END;
+
+! FILL (range | buffer [, separators [, left [, right [, indent]]]]):
+! the words again in lines from the left margin to the right one, the
+! first line indented by indent more. A word keeps the blanks after it;
+! a line end between words is a blank; a line that ends in blanks loses
+! one. A line's left margin is its own (L_MARGIN), not blanks.
+! ponytail: only blanks and tabs separate words.
+ROUTINE BX_FILL (ARGS : REF VECTOR, N) =
+    BEGIN
+    LOCAL
+        V,
+        B : REF VECTOR,
+        P : REF VECTOR,
+        K,
+        LM,
+        RM,
+        IND,
+        OUT : REF VECTOR,
+        NOUT,
+        CAP,
+        LINE : REF VECTOR,
+        L1,
+        O1,
+        L2,
+        O2,
+        ENDBREAK;
+    ARGCOUNT(1, 5);
+    V = .ARGS[0];
+    IF VTYPE(.V) EQL TY_BUFFER
+    THEN
+        BEGIN
+        B = BUFP(.V);
+        L1 = .B[B_FIRST];
+        O1 = 0;
+        L2 = 0;
+        O2 = 0
+        END
+    ELSE IF VTYPE(.V) EQL TY_RANGE
+    THEN
+        BEGIN
+        BIND
+            RG = VPTR(.V) : VECTOR,
+            S = .RG[R_START] : VECTOR,
+            E = .RG[R_END] : VECTOR;
+        B = .S[M_BUF];
+        IF .B EQL 0 THEN RETURN ARGMISMATCH(1, .V);
+        L1 = .S[M_LINE];
+        O1 = .S[M_OFF];
+        L2 = .E[M_LINE];
+        O2 = .E[M_OFF];
+        AFTER(L2, O2)
+        END
+    ELSE
+        RETURN ARGMISMATCH(1, .V);
+    LM = .B[B_LMARGIN];
+    RM = .B[B_RMARGIN];
+    IND = 0;
+    IF .N GTR 2 THEN (IF VTYPE(.ARGS[2]) NEQ TY_INTEGER THEN RETURN ARGMISMATCH(3, .ARGS[2]); LM = VINT(.ARGS[2]));
+    IF .N GTR 3 THEN (IF VTYPE(.ARGS[3]) NEQ TY_INTEGER THEN RETURN ARGMISMATCH(4, .ARGS[3]); RM = VINT(.ARGS[3]));
+    IF .N GTR 4 THEN (IF VTYPE(.ARGS[4]) NEQ TY_INTEGER THEN RETURN ARGMISMATCH(5, .ARGS[4]); IND = VINT(.ARGS[4]));
+    IF .LM LSS 1 OR .RM LEQ .LM OR .LM + .IND LSS 1 THEN RETURN BI_ERR(TPU$_BADMARGINS);
+    IF NOT MODIFY(.B) THEN (VREF(.B[B_NAME]); RETURN BI_ERR(TPU$_NOTMODIFIABLE, .B[B_NAME]));
+    ENDBREAK = .L2 NEQ 0 AND .O2 EQL 0;
+    P = PIECES(.B, .L1, .O1, .L2, .O2, K);
+    CAP = 16;
+    OUT = MEM_GET(.CAP * 8);
+    NOUT = 0;
+    LINE = LINE_NEW(0, 0);
+    INCR I FROM 0 TO .K - 1 DO
+        BEGIN
+        LOCAL
+            S,
+            SL,
+            J;
+        S = SADDR(.P[.I]);
+        SL = SLEN(.P[.I]);
+        J = 0;
+        WHILE .J LSS .SL AND (GETB(.S + .J) EQL %C' ' OR GETB(.S + .J) EQL 9) DO J = .J + 1;
+        WHILE .J LSS .SL DO
+            BEGIN
+            LOCAL
+                W,
+                WL,
+                SEP,
+                SEPL,
+                WIDTH;
+            W = .S + .J;
+            WL = 0;
+            WHILE .J LSS .SL AND GETB(.S + .J) NEQ %C' ' AND GETB(.S + .J) NEQ 9 DO (J = .J + 1; WL = .WL + 1);
+            SEP = .S + .J;
+            SEPL = 0;
+            WHILE .J LSS .SL AND (GETB(.S + .J) EQL %C' ' OR GETB(.S + .J) EQL 9) DO (J = .J + 1; SEPL = .SEPL + 1);
+            ! A line end after a word is a blank.
+            IF .SEPL EQL 0 THEN (SEP = UPLIT BYTE (' '); SEPL = 1);
+            WIDTH = .RM - (IF .NOUT EQL 0 THEN .LM + .IND ELSE .LM) + 1;
+            IF .LINE[L_LEN] GTR 0 AND .LINE[L_LEN] + .WL GTR .WIDTH
+            THEN
+                BEGIN
+                IF GETB(.LINE[L_TEXT] + .LINE[L_LEN] - 1) EQL %C' ' THEN LINE[L_LEN] = .LINE[L_LEN] - 1;
+                IF .NOUT EQL .CAP
+                THEN
+                    BEGIN
+                    LOCAL
+                        NEW;
+                    NEW = MEM_GET(.CAP * 16);
+                    CH$MOVE(.CAP * 8, .OUT, .NEW);
+                    MEM_FREE(.OUT);
+                    OUT = .NEW;
+                    CAP = .CAP * 2
+                    END;
+                OUT[.NOUT] = STR_MAKE(.LINE[L_TEXT], .LINE[L_LEN]);
+                NOUT = .NOUT + 1;
+                LINE[L_LEN] = 0
+                END;
+            LINE_ROOM(.LINE, .LINE[L_LEN] + .WL + .SEPL);
+            CH$MOVE(.WL, .W, .LINE[L_TEXT] + .LINE[L_LEN]);
+            CH$MOVE(.SEPL, .SEP, .LINE[L_TEXT] + .LINE[L_LEN] + .WL);
+            LINE[L_LEN] = .LINE[L_LEN] + .WL + .SEPL
+            END
+        END;
+    IF .LINE[L_LEN] GTR 0
+    THEN
+        BEGIN
+        IF GETB(.LINE[L_TEXT] + .LINE[L_LEN] - 1) EQL %C' ' THEN LINE[L_LEN] = .LINE[L_LEN] - 1;
+        IF .NOUT EQL .CAP
+        THEN
+            BEGIN
+            LOCAL
+                NEW;
+            NEW = MEM_GET(.CAP * 16);
+            CH$MOVE(.CAP * 8, .OUT, .NEW);
+            MEM_FREE(.OUT);
+            OUT = .NEW
+            END;
+        OUT[.NOUT] = STR_MAKE(.LINE[L_TEXT], .LINE[L_LEN]);
+        NOUT = .NOUT + 1
+        END;
+    MEM_FREE(.LINE[L_TEXT]);
+    MEM_FREE(.LINE);
+    FREEPIECES(.P, .K);
+    ! Out with the old text, in with the new, the editing point kept.
+    BEGIN
+    LOCAL
+        M : REF VECTOR,
+        LAST0,
+        FIRST : REF VECTOR;
+    M = MARK_NEW(.B, .B[B_LINE], .B[B_OFF]);
+    DELETE_TEXT(.B, .L1, .O1, .L2, .O2);
+    ! A range from a line's start to the buffer's end leaves no line.
+    IF .L2 EQL 0 AND .O1 EQL 0 THEN L1 = 0;
+    LAST0 = .B[B_LAST];
+    B[B_LINE] = .L1;
+    B[B_OFF] = .O1;
+    PUT(.B, .OUT, .NOUT);
+    IF .ENDBREAK THEN SPLIT(.B, .B[B_LINE], .B[B_OFF]);
+    ! The lines' margins.
+    FIRST = (IF .L1 NEQ 0 THEN .L1 ELSE IF .LAST0 EQL 0 THEN .B[B_FIRST]
+             ELSE (BIND Q = .LAST0 : VECTOR; .Q[L_NEXT]));
+    INCR I FROM 0 TO .NOUT - 1 DO
+        BEGIN
+        IF .FIRST EQL 0 THEN EXITLOOP;
+        FIRST[L_MARGIN] = (IF .I EQL 0 THEN .LM + .IND ELSE .LM);
+        FIRST = .FIRST[L_NEXT]
+        END;
+    B[B_LINE] = .M[M_LINE];
+    B[B_OFF] = .M[M_OFF];
+    MARK_FREE(.M)
+    END;
+    FREEPIECES(.OUT, .NOUT);
     SS_NORMAL
     END;
 
@@ -1445,7 +1703,7 @@ GLOBAL ROUTINE BUF_INFO (ARGS : REF VECTOR, N, R) =
                 ELSE IF REQ('NEXT') THEN (IF .WALK NEQ 0 THEN (BIND P = .WALK : VECTOR; WALK = .P[B_NEXT]))
                 ELSE IF REQ('CURRENT') THEN WALK = .BUF_CURRENT
                 ELSE RETURN NOTMINE;
-                .R = (IF .WALK EQL 0 THEN 0 ELSE MKV(TY_BUFFER, .WALK));
+                .R = (IF .WALK EQL 0 THEN MKINT(0) ELSE MKV(TY_BUFFER, .WALK));
                 RETURN SS_NORMAL
                 END;
             IF .K EQL K_COMMAND_LINE
@@ -1530,6 +1788,7 @@ GLOBAL ROUTINE BUF_CALL (B, ARGS : REF VECTOR, N, R) =
         [B_CURRENT_LINE, B_CURRENT_CHARACTER, B_CURRENT_OFFSET, B_CURRENT_BUFFER] :
             BX_CURRENT(.B, .ARGS, .N, .R);
         [B_DELETE] : BX_DELETE(.ARGS, .N);
+        [B_FILL] : BX_FILL(.ARGS, .N);
         [B_SET] :
             BEGIN
             IF .N LSS 1 THEN RETURN BI_ERR(TPU$_TOOFEW);

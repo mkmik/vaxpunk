@@ -1,0 +1,31 @@
+! Error handlers that return values, errors in EXECUTE, informational messages.
+PROCEDURE safe_div (a, b)
+    ON_ERROR
+        [TPU$_DIVBYZERO] : RETURN -1;
+    ENDON_ERROR;
+    RETURN a / b;
+ENDPROCEDURE;
+PROCEDURE noisy
+    ON_ERROR
+        MESSAGE ("noisy handler: " + STR (ERROR));
+    ENDON_ERROR;
+    x := SUBSTR (1);
+    MESSAGE ("noisy goes on");
+    x := 1 / 0;
+    MESSAGE ("noisy ends");
+ENDPROCEDURE;
+MESSAGE (STR (safe_div (10, 2)) + " " + STR (safe_div (1, 0)));
+noisy;
+EXECUTE ("y := 1 + ""a""");
+MESSAGE ("after execute");
+MESSAGE (STR (GET_INFO (SYSTEM, "informational")));
+SET (INFORMATIONAL, OFF);
+EXECUTE ("PROCEDURE p1 (z) LOCAL q; ENDPROCEDURE; q := 1");
+SET (INFORMATIONAL, ON);
+MESSAGE (MESSAGE_TEXT (TPU$_TOOFEW));
+MESSAGE (MESSAGE_TEXT (TPU$_FILEIN, 0, 3, "X.Y"));
+MESSAGE (MESSAGE_TEXT (TPU$_FILEIN, 1, 1, "X.Y"));
+MESSAGE (MESSAGE_TEXT (TPU$_ENDOFBUF, 2));
+MESSAGE (TPU$_STRNOTFOUND);
+MESSAGE (STR (TPU$_STRNOTFOUND));
+QUIT (OFF);

@@ -1,0 +1,35 @@
+3
+%TPU-W-BEGOFBUF, attempt to move past the beginning of buffer TWO
+-TPU-I-INBUILTIN, occurred in built-in MOVE_HORIZONTAL
+-TPU-I-ATLINE, at line 11
+after begofbuf: 0
+%TPU-W-ENDOFBUF, attempt to move past the end of buffer TWO
+-TPU-I-INBUILTIN, occurred in built-in MOVE_HORIZONTAL
+-TPU-I-ATLINE, at line 14
+%TPU-W-ENDOFBUF, attempt to move past the end of buffer TWO
+-TPU-I-INBUILTIN, occurred in built-in MOVE_VERTICAL
+-TPU-I-ATLINE, at line 15
+gamma
+5[]
+0[g]
+beta/gamma/delta
+1 3
+3 [beta/gamma/delta]
+beta
+0
+beta/gamma/delta
+1
+alpha  epsilon
+TWO INSERT FORWARD
+OVERSTRIKE REVERSE
+%TPU-W-DUPBUFNAME, buffer TWO already exists
+-TPU-I-INBUILTIN, occurred in built-in CREATE_BUFFER
+-TPU-I-ATLINE, at line 49
+$LOCAL$INI$
+TWO
+COPY
+OTHER
+c is unspecified
+left: $LOCAL$INI$
+left: TWO
+left: OTHER

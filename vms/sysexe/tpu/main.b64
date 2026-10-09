@@ -21,7 +21,10 @@ GLOBAL
     CL_LEN;
 
 EXTERNAL ROUTINE
-    MSG_OUT : NOVALUE;
+    MSG_OUT : NOVALUE,
+    BUF_NEW,
+    BUF_READ,
+    BUF_TEXT;
 
 ! UPPER character.
 ROUTINE UPPER (C) =
@@ -203,6 +206,7 @@ ROUTINE TPU$MAIN =
         NLEN,
         TEXT,
         TLEN,
+        B,
         OBJ;
     FIO$ARGS(CL_TEXT, CL_LEN);
     SYM_INIT();
@@ -212,7 +216,13 @@ ROUTINE TPU$MAIN =
         BEGIN
         IF .VLEN EQL 0 THEN (VAL = UPLIT BYTE ('TPU$COMMAND'); VLEN = 11);
         NLEN = FILE_NAME(.VAL, .VLEN, T('.TPU'), NAME);
-        TEXT = READ_WHOLE(NAME, .NLEN, TLEN);
+        ! Into a buffer of its own, as DEC's TPU reads it.
+        B = BUF_NEW(T('$LOCAL$INI$'));
+        IF BUF_READ(.B, NAME, .NLEN) GEQ 0
+        THEN
+            TEXT = BUF_TEXT(MKV(TY_BUFFER, .B), TLEN)
+        ELSE
+            TEXT = 0;
         IF .TEXT EQL 0 AND .Q GTR 0
         THEN
             BEGIN

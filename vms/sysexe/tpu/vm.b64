@@ -36,7 +36,8 @@ LITERAL
     F_RESUME = 7,                       ! where the statement after it starts
     F_INH = 8,                          ! running the handler: 1
     F_SAVED = 9,                        ! the statement to resume after the handler
-    F_SIZE = 10;
+    F_VIA = 10,                         ! the built-in that ran it, as EXECUTE does, or 0
+    F_SIZE = 11;
 
 ! What an error leaves for the loop to do.
 LITERAL
@@ -53,7 +54,8 @@ OWN
     PENDPC,
     ERRKW,                              ! ERROR: a keyword
     ERRLINE,
-    ERRTEXT;                            ! ERROR_TEXT: a string, or 0
+    ERRTEXT,                            ! ERROR_TEXT: a string, or 0
+    CURB;                               ! the built-in running, or 0
 
 GLOBAL
     VM_ABORTING,                        ! ABORT or CTRL/C: unwinding to the top
@@ -168,7 +170,16 @@ ROUTINE WHERE : NOVALUE =
                     MKINT(.F[F_LINE]))
         ELSE
             MSG_OUT(1, (IF .I EQL .NFRAME - 1 THEN TPU$_ATPROCLINE ELSE TPU$_FROMPROCLINE),
-                    MKINT(.F[F_LINE] - .OBJ[C_LINE0] + 1), STR_MAKE(YNAME(.Y), .Y[Y_LEN]))
+                    MKINT(.F[F_LINE] - .OBJ[C_LINE0] + 1), STR_MAKE(YNAME(.Y), .Y[Y_LEN]));
+        IF .F[F_VIA] NEQ 0
+        THEN
+            BEGIN
+            LOCAL
+                NAME,
+                L;
+            NAME = BI_NAME(.F[F_VIA], L);
+            MSG_OUT(1, TPU$_FROMBUILTIN, STR_MAKE(.NAME, .L))
+            END
         END
     END;
 
@@ -247,6 +258,23 @@ ROUTINE RAISE (K, BNAME, BLEN) : NOVALUE =
     END
     END;
 
+! BI_SIGNAL code, parameters...: an error a built-in reports at once, as
+! well as the one it returns.
+GLOBAL ROUTINE BI_SIGNAL (K) : NOVALUE =
+    BEGIN
+    BUILTIN
+        ACTUALCOUNT,
+        ACTUALPARAMETER;
+    LOCAL
+        NAME,
+        L;
+    INCR I FROM 0 TO .ERRN - 1 DO VUNREF(.ERRARGS[.I]);
+    ERRN = ACTUALCOUNT() - 1;
+    INCR I FROM 0 TO .ERRN - 1 DO ERRARGS[.I] = ACTUALPARAMETER(.I + 2);
+    NAME = BI_NAME(.CURB, L);
+    RAISE(.K, .NAME, .L)
+    END;
+
 ! VM_ERROR code, parameters...: an error outside any built-in.
 GLOBAL ROUTINE VM_ERROR (K) : NOVALUE =
     BEGIN
@@ -284,7 +312,7 @@ ROUTINE BINOP (OP, A, B, R) =
     IF .TA EQL TY_INTEGER AND .TB EQL TY_INTEGER
     THEN
         BEGIN
-        IF .OP EQL OP_DIV AND .Y EQL 0 THEN RETURN TPU$_DIVBYZERO;
+        IF .OP EQL OP_DIV AND .Y EQL 0 THEN (.R = MKINT(0); RETURN TPU$_DIVBYZERO);
         .R = MKINT(CASE .OP FROM OP_ADD TO OP_GE OF
                     SET
                     [OP_ADD] : .X + .Y;
@@ -346,6 +374,8 @@ ROUTINE BINOP (OP, A, B, R) =
         X = PAT_BINARY(.OP, .A, .B, .R);
         IF .X THEN RETURN SS_NORMAL
         END;
+    ! A comparison that fails is FALSE; anything else, unspecified.
+    IF .OP GEQ OP_LT AND .OP LEQ OP_GE THEN .R = MKINT(0);
     BEGIN
     LOCAL
         N,
@@ -476,6 +506,7 @@ ROUTINE CALLPROC (OBJ : REF VECTOR, N, REFS, RET) =
     F[F_LINE] = .OBJ[C_LINE0];
     F[F_RESUME] = .OBJ[C_CODE];
     F[F_INH] = 0;
+    F[F_VIA] = 0;
     INCR I FROM .N TO .OBJ[C_NPARAM] - 1 DO PUSH(0);
     INCR I FROM 1 TO .OBJ[C_NLOCAL] DO PUSH(MKINT(0));
     TRUE
@@ -529,6 +560,8 @@ ROUTINE RUN (OBJ : REF VECTOR, RESULT) =
     .RESULT = MKINT(0);
     IF NOT CALLPROC(.OBJ, 0, 0, 0) THEN RETURN SS_ABORTED;
     F = FR(.NFRAME - 1);
+    F[F_VIA] = .CURB;
+    CURB = 0;
     PC = .OBJ[C_CODE];
     WHILE TRUE DO
         BEGIN
@@ -755,7 +788,9 @@ ROUTINE RUN (OBJ : REF VECTOR, RESULT) =
                 REFS = .PC + 3;
                 AT = .TOP - .N;
                 R = 0;
+                CURB = .B;
                 S = BI_CALL(.B, STACK[.AT], .N, R);
+                CURB = 0;
                 PC = COPYBACK(.REFS, .N, .AT, .F[F_BASE]);
                 WHILE .TOP GTR .AT DO VUNREF(POP());
                 PUSH(.R);

@@ -1,0 +1,66 @@
+! More of the language: nesting, recursion, unspecified, errors of operators.
+PROCEDURE depth (n)
+    IF n = 0 THEN RETURN 0; ENDIF;
+    RETURN 1 + depth (n - 1);
+ENDPROCEDURE;
+PROCEDURE classify (x)
+    CASE GET_INFO (x, "type")
+        [INTEGER] :
+            CASE x FROM 1 TO 3
+                [1] : RETURN "one";
+                [2, 3] : RETURN "few";
+                [OUTRANGE] : RETURN "many";
+            ENDCASE;
+        [STRING] : RETURN "string " + x;
+        [UNSPECIFIED] : RETURN "nothing";
+    ENDCASE;
+    RETURN "other";
+ENDPROCEDURE;
+PROCEDURE first_even (a)
+    LOCAL i;
+    i := 1;
+    LOOP
+        EXITIF i > 10;
+        IF (a{i} AND 1) = 0 THEN RETURN i; ENDIF;
+        i := i + 1;
+    ENDLOOP;
+    RETURN -1;
+ENDPROCEDURE;
+PROCEDURE with_const
+    CONSTANT k := 6 * 7, s := "con" + "stant";
+    RETURN s + " " + STR (k);
+ENDPROCEDURE;
+PROCEDURE aborter
+    MESSAGE ("before abort");
+    ABORT;
+    MESSAGE ("after abort");
+ENDPROCEDURE;
+MESSAGE (STR (depth (100)));
+MESSAGE (classify (2) + "," + classify (9) + "," + classify ("x") + "," + classify (TPU$K_UNSPECIFIED) + "," + classify (FORWARD));
+a := CREATE_ARRAY (10, 1);
+i := 1;
+LOOP
+    EXITIF i > 10;
+    a{i} := i * 3;
+    i := i + 1;
+ENDLOOP;
+MESSAGE (STR (first_even (a)));
+MESSAGE (with_const);
+x := TPU$K_UNSPECIFIED;
+IF x = TPU$K_UNSPECIFIED THEN MESSAGE ("unspecified equal"); ENDIF;
+MESSAGE (STR (7 / 0));
+MESSAGE (STR (NOT "a"));
+MESSAGE (STR (1 < "a"));
+MESSAGE (STR (- "a"));
+MESSAGE ("[" + "ab" * -1 + "]");
+MESSAGE (SUBSTR ("abcdef", 0, 2) + "|" + SUBSTR ("abcdef", -3, 5));
+MESSAGE (STR (INT ("777", 8)) + " " + STR (INT ("101", 2)) + " " + STR (INT ("-12")));
+MESSAGE (STR (INDEX ("", "")) + STR (INDEX ("abc", "")));
+b := CREATE_ARRAY;
+b{FORWARD} := "kw";
+b{"FORWARD"} := "str";
+MESSAGE (b{FORWARD} + " " + b{"FORWARD"} + " " + STR (GET_INFO (b, "size")));
+MESSAGE (STR (GET_INFO (b, "type")));
+aborter;
+MESSAGE ("not reached at top level");
+QUIT (OFF);
