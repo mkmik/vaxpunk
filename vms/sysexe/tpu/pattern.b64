@@ -49,7 +49,8 @@ LITERAL
     NK_ALT = 18,
     NK_ASSIGN = 19,                     ! N_A matched, its range to the cell N_B
     NK_ASSIGNED = 20,                   ! continuation only: N_A's place where it began
-    NK_EMPTY = 21;
+    NK_EMPTY = 21,
+    NK_MATCHL = 22;
 
 ! A pattern value's object: the count, then the tree.
 LITERAL
@@ -112,7 +113,7 @@ ROUTINE FREENODE (N : REF VECTOR) : NOVALUE =
         SET
         [NK_CONCAT, NK_ALT] : (FREENODE(.N[N_A]); FREENODE(.N[N_B]));
         [NK_ASSIGN] : FREENODE(.N[N_A]);
-        [NK_STR, NK_ANY, NK_NOTANY, NK_SPAN, NK_SPANL, NK_SCAN, NK_SCANL, NK_MATCH] : VUNREF(.N[N_A]);
+        [NK_STR, NK_ANY, NK_NOTANY, NK_SPAN, NK_SPANL, NK_SCAN, NK_SCANL, NK_MATCH, NK_MATCHL] : VUNREF(.N[N_A]);
         [OTHERWISE] : 0;
         TES;
     MEM_FREE(.N)
@@ -126,7 +127,7 @@ ROUTINE COPY (N : REF VECTOR) =
         SET
         [NK_CONCAT, NK_ALT] : NODE(.N[N_KIND], COPY(.N[N_A]), COPY(.N[N_B]));
         [NK_ASSIGN] : NODE(NK_ASSIGN, COPY(.N[N_A]), .N[N_B]);
-        [NK_STR, NK_ANY, NK_NOTANY, NK_SPAN, NK_SPANL, NK_SCAN, NK_SCANL, NK_MATCH] :
+        [NK_STR, NK_ANY, NK_NOTANY, NK_SPAN, NK_SPANL, NK_SCAN, NK_SCANL, NK_MATCH, NK_MATCHL] :
             (VREF(.N[N_A]); NODE(.N[N_KIND], .N[N_A], .N[N_B]));
         [OTHERWISE] : NODE(.N[N_KIND], .N[N_A], .N[N_B]);
         TES
@@ -264,7 +265,7 @@ ROUTINE GO (K : REF VECTOR, L, O) =
 ! place with the rest after it.
 ROUTINE MATCH (N : REF VECTOR, L : REF VECTOR, O, K : REF VECTOR) =
     BEGIN
-    CASE .N[N_KIND] FROM NK_STR TO NK_EMPTY OF
+    CASE .N[N_KIND] FROM NK_STR TO NK_MATCHL OF
         SET
         [NK_STR] :
             BEGIN
@@ -321,8 +322,9 @@ ROUTINE MATCH (N : REF VECTOR, L : REF VECTOR, O, K : REF VECTOR) =
             IF .COUNT EQL 0 THEN RETURN FALSE;
             GO(.K, .LL, .OO)
             END;
-        [NK_MATCH] :
+        [NK_MATCH, NK_MATCHL] :
             BEGIN
+            ! MATCH on the line, MATCHL across lines.
             LOCAL
                 LL,
                 OO;
@@ -331,12 +333,25 @@ ROUTINE MATCH (N : REF VECTOR, L : REF VECTOR, O, K : REF VECTOR) =
             WHILE NOT ATEND(.LL, .OO) DO
                 BEGIN
                 IF STRAT(.LL, .OO, .N[N_A]) THEN RETURN GO(.K, .LL, .OO + SLEN(.N[N_A]));
+                IF .N[N_KIND] EQL NK_MATCH AND CH(.LL, .OO) LSS 0 THEN RETURN FALSE;
                 STEP(LL, OO)
                 END;
             FALSE
             END;
         [NK_LINE_BEGIN] : IF .O EQL 0 AND .L NEQ 0 THEN GO(.K, .L, .O) ELSE FALSE;
-        [NK_LINE_END] : IF .L EQL 0 THEN FALSE ELSE IF .O EQL .L[L_LEN] THEN GO(.K, .L, .O) ELSE FALSE;
+        [NK_LINE_END] :
+            BEGIN
+            ! It matches the line end, which it takes.
+            LOCAL
+                LL,
+                OO;
+            IF .L EQL 0 THEN RETURN FALSE;
+            IF .O NEQ .L[L_LEN] OR ATEND(.L, .O) THEN RETURN FALSE;
+            LL = .L;
+            OO = .O;
+            STEP(LL, OO);
+            GO(.K, .LL, .OO)
+            END;
         [NK_BUFFER_BEGIN] :
             BEGIN
             BIND
@@ -607,7 +622,8 @@ GLOBAL ROUTINE PAT_CALL (B, ARGS : REF VECTOR, N, R) =
         [B_SCAN] : BX_PRIM(NK_SCAN, .ARGS, .N, .R);
         [B_SCANL] : BX_PRIM(NK_SCANL, .ARGS, .N, .R);
         [B_ARB] : BX_PRIM(NK_ARB, .ARGS, .N, .R);
-        [B_MATCH, B_MATCHL] : BX_PRIM(NK_MATCH, .ARGS, .N, .R);
+        [B_MATCH] : BX_PRIM(NK_MATCH, .ARGS, .N, .R);
+        [B_MATCHL] : BX_PRIM(NK_MATCHL, .ARGS, .N, .R);
         [OTHERWISE] : NOTMINE;
         TES;
 

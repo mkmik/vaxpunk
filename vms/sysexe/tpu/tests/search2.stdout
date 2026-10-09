@@ -1,0 +1,21 @@
+%TPU-I-HIDDEN, global variable R hidden by declaration
+-TPU-I-SOURCELINE, at source line 3
+from middle: [two] 1
+behind: none
+back: [one] 1
+any3: [333] 1
+notany2: [22] 1
+span back: [1] 1
+line_begin: [f] 2
+line_end: [/] 1
+buffer_end: [] 4
+buffer_begin: [o] 1
+empty: [t] 1
+across: [five/six] 2
+match across: [six seven] 3
+alts: [four 4444] 2
+two parts: [six seven] 3
+[six][six seven]
+in range: [4444]
+five is outside
+reverse range: [4]

@@ -40,7 +40,11 @@ fn build(out: &Path) -> PathBuf {
             ..Default::default()
         };
         let bopts = vbliss::Options {
-            include: vec![tpu.clone(), bliss.clone(), repo.join("crosstools/vtools/lib")],
+            include: vec![
+                tpu.clone(),
+                bliss.clone(),
+                repo.join("crosstools/vtools/lib"),
+            ],
             ..vbliss::Options::from_source(&text)
         };
         let (object, output) = vbliss::compile_with(&text, &opts, &bopts);

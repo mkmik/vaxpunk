@@ -1,0 +1,26 @@
+5 -1
+%TPU-E-ARGMISMATCH, parameter 1's data type, INTEGER, unsupported
+-TPU-I-INBUILTIN, occurred in built-in SUBSTR
+-TPU-I-ATPROCLINE, at line 5 of procedure NOISY
+-TPU-I-FROMLINE, called from line 18
+noisy handler: TPU$_ARGMISMATCH
+noisy goes on
+%TPU-E-DIVBYZERO, divide by zero
+-TPU-I-INBUILTIN, occurred in built-in /
+-TPU-I-ATPROCLINE, at line 7 of procedure NOISY
+-TPU-I-FROMLINE, called from line 18
+noisy handler: TPU$_DIVBYZERO
+noisy ends
+%TPU-W-BINARYOPER, operand combination INTEGER + STRING unsupported
+-TPU-I-INBUILTIN, occurred in built-in +
+-TPU-I-ATLINE, at line 2
+-TPU-I-FROMBUILTIN, called from built-in EXECUTE
+-TPU-I-FROMLINE, called from line 19
+after execute
+1
+%TPU-E-TOOFEW, too few arguments
+%TPU-S-FILEIN, 3 lines read from file X.Y
+1 line read from file X.Y
+%ENDOFBUF
+%TPU-W-STRNOTFOUND, string not found
+TPU$_STRNOTFOUND

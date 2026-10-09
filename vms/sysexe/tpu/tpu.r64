@@ -191,7 +191,8 @@ LITERAL
     L_LEN = 2,
     L_CAP = 3,
     L_TEXT = 4,
-    L_SIZE = 5;
+    L_MARGIN = 5,                       ! its left margin, which FILL sets: 1 for none
+    L_SIZE = 6;
 
 ! A marker; a range.
 LITERAL

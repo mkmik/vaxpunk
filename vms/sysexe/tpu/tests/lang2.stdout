@@ -1,0 +1,53 @@
+%TPU-I-HIDDEN, global variable X hidden by declaration
+-TPU-I-SOURCELINE, at source line 6
+%TPU-I-HIDDEN, global variable A hidden by declaration
+-TPU-I-SOURCELINE, at source line 19
+%TPU-I-HIDDEN, global variable I hidden by declaration
+-TPU-I-SOURCELINE, at source line 20
+100
+few,many,string x,nothing,other
+2
+constant 42
+unspecified equal
+%TPU-E-DIVBYZERO, divide by zero
+-TPU-I-INBUILTIN, occurred in built-in /
+-TPU-I-ATLINE, at line 51
+0
+%TPU-W-UNARYOPER, operand combination NOT STRING unsupported
+-TPU-I-INBUILTIN, occurred in built-in NOT
+-TPU-I-ATLINE, at line 52
+%TPU-E-ARGMISMATCH, parameter 1's data type, UNSPECIFIED, unsupported
+-TPU-I-INBUILTIN, occurred in built-in STR
+-TPU-I-ATLINE, at line 52
+%TPU-W-MSGNOTFND, message was not found; the default message has been returned
+-TPU-I-INBUILTIN, occurred in built-in MESSAGE
+-TPU-I-ATLINE, at line 52
+%TPU-W-BINARYOPER, operand combination INTEGER < STRING unsupported
+-TPU-I-INBUILTIN, occurred in built-in <
+-TPU-I-ATLINE, at line 53
+0
+%TPU-W-UNARYOPER, operand combination - STRING unsupported
+-TPU-I-INBUILTIN, occurred in built-in -
+-TPU-I-ATLINE, at line 54
+%TPU-E-ARGMISMATCH, parameter 1's data type, UNSPECIFIED, unsupported
+-TPU-I-INBUILTIN, occurred in built-in STR
+-TPU-I-ATLINE, at line 54
+%TPU-W-MSGNOTFND, message was not found; the default message has been returned
+-TPU-I-INBUILTIN, occurred in built-in MESSAGE
+-TPU-I-ATLINE, at line 54
+[]
+|
+%TPU-E-BADVALUE, integer value 2 is outside specified limits
+-TPU-I-INBUILTIN, occurred in built-in INT
+-TPU-I-ATLINE, at line 57
+%TPU-W-INVNUMSTR, invalid numeric string
+-TPU-I-INBUILTIN, occurred in built-in INT
+-TPU-I-ATLINE, at line 57
+511 0 -12
+00
+%TPU-W-BADREQUEST, request "SIZE" of ARRAY is not understood
+-TPU-I-INBUILTIN, occurred in built-in GET_INFO
+-TPU-I-ATLINE, at line 62
+kw str 0
+ARRAY
+before abort

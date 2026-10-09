@@ -19,12 +19,14 @@ LITERAL
     NOTMINE = -1;                       ! from BUF_CALL and PAT_CALL: not theirs
 
 EXTERNAL
+    COMP_LINE1,
     ERRARGS : VECTOR,
     ERRN,
     MSG_FLAGS;
 
 EXTERNAL ROUTINE
     BI_ERR,
+    BI_SIGNAL : NOVALUE,
     ARGMISMATCH,
     TYPENAME,
     TYPEKW,
@@ -42,7 +44,8 @@ EXTERNAL ROUTINE
     BUF_STR,                            ! (value, separator): a range's or buffer's text, or 0
     BUF_INFO,                           ! (args, count, result): GET_INFO of a buffer's object, or NOTMINE
     BUF_TEXT,                           ! (value, address of length): text to compile, or 0
-    PAT_CALL;
+    PAT_CALL,
+    BUF_MAP;                            ! (range or buffer, EDIT's bits): whether it could
 
 BIND
     BINAMES = UPLIT BYTE (NAMESTR(BUILTINS), 0) : VECTOR[, BYTE];
@@ -160,6 +163,12 @@ ROUTINE BI_INT (ARGS : REF VECTOR, N, R) =
     ARGTYPE(0, TY_STRING);
     RADIX = 10;
     IF .N GTR 1 THEN (ARGTYPE(1, TY_INTEGER); RADIX = VINT(.ARGS[1]));
+    IF .RADIX NEQ 8 AND .RADIX NEQ 10 AND .RADIX NEQ 16
+    THEN
+        BEGIN
+        BI_SIGNAL(TPU$_BADVALUE, MKINT(.RADIX));
+        RETURN BI_ERR(TPU$_INVNUMSTR)
+        END;
     S = SADDR(.ARGS[0]);
     L = SLEN(.ARGS[0]);
     I = 0;
@@ -237,6 +246,12 @@ ROUTINE BI_SUBSTR (ARGS : REF VECTOR, N, R) =
         START,
         LEN,
         L;
+    ! The first argument's type is checked before their count.
+    IF .N GEQ 1
+    THEN
+        IF VTYPE(.ARGS[0]) NEQ TY_STRING AND VTYPE(.ARGS[0]) NEQ TY_RANGE
+        THEN
+            RETURN ARGMISMATCH(1, .ARGS[0]);
     ARGCOUNT(2, 3);
     V = .ARGS[0];
     IF VTYPE(.V) NEQ TY_STRING
@@ -257,8 +272,8 @@ ROUTINE BI_SUBSTR (ARGS : REF VECTOR, N, R) =
         IF VTYPE(.ARGS[2]) NEQ TY_INTEGER THEN (VUNREF(.V); RETURN ARGMISMATCH(3, .ARGS[2]));
         LEN = VINT(.ARGS[2])
         END;
-    IF .START LSS 1 THEN START = 1;
-    IF .START GTR .L THEN LEN = 0 ELSE LEN = MAX(0, MIN(.LEN, .L - .START + 1));
+    IF .START LSS 1 OR .START GTR .L THEN LEN = 0 ELSE LEN = MAX(0, MIN(.LEN, .L - .START + 1));
+    IF .LEN EQL 0 THEN START = 1;
     .R = STR_MAKE(SADDR(.V) + .START - 1, .LEN);
     VUNREF(.V);
     SS_NORMAL
@@ -297,31 +312,163 @@ GLOBAL ROUTINE CASEOF (V, HOW) =
     .W
     END;
 
-! CHANGE_CASE (string | range | buffer, UPPER | LOWER | INVERT): a
-! string variable gets the string in that case.
-ROUTINE BI_CHANGE_CASE (ARGS : REF VECTOR, N, R) =
+! EDIT's operations, as bits.
+LITERAL
+    E_TRIML = 1,
+    E_TRIMT = 2,
+    E_COMPRESS = 4,
+    E_COLLAPSE = 8,
+    E_UPPER = 16,
+    E_LOWER = 32,
+    E_INVERT = 64,
+    E_NOQUOTE = 128;                    ! quotes are text: their insides change too
+
+! EDITSTR string value, operations: a new string, edited.
+GLOBAL ROUTINE EDITSTR (V, OPS) =
     BEGIN
     LOCAL
-        HOW;
-    ARGCOUNT(2, 3);
-    ARGTYPE(1, TY_KEYWORD);
-    HOW = VINT(.ARGS[1]);
-    IF .HOW NEQ K_UPPER AND .HOW NEQ K_LOWER AND .HOW NEQ K_INVERT
+        W,
+        S,
+        L,
+        D,
+        N,
+        Q,
+        BLANK;
+    S = SADDR(.V);
+    L = SLEN(.V);
+    W = STR_NEW(.L);
+    D = SADDR(.W);
+    N = 0;
+    Q = 0;
+    BLANK = FALSE;
+    INCR I FROM 0 TO .L - 1 DO
+        BEGIN
+        LOCAL
+            C,
+            SP;
+        C = GETB(.S + .I);
+        SP = (.C EQL %C' ' OR .C EQL 9) AND .Q EQL 0;
+        IF (.OPS AND E_NOQUOTE) EQL 0 AND (.C EQL %C'"' OR .C EQL %C'''')
+        THEN
+            (IF .Q EQL 0 THEN Q = .C ELSE IF .Q EQL .C THEN Q = 0);
+        IF .SP AND (.OPS AND E_COLLAPSE) NEQ 0
+        THEN
+            0
+        ELSE IF .SP AND (.OPS AND E_COMPRESS) NEQ 0 AND .BLANK
+        THEN
+            0
+        ELSE
+            BEGIN
+            IF .Q EQL 0 AND .C NEQ %C'"' AND .C NEQ %C'''' OR (.OPS AND E_NOQUOTE) NEQ 0
+            THEN
+                BEGIN
+                LOCAL
+                    LO,
+                    UP;
+                LO = .C GEQU %C'a' AND .C LEQU %C'z';
+                UP = .C GEQU %C'A' AND .C LEQU %C'Z';
+                IF .LO AND (.OPS AND (E_UPPER OR E_INVERT)) NEQ 0 THEN C = .C - 32;
+                IF .UP AND (.OPS AND (E_LOWER OR E_INVERT)) NEQ 0 THEN C = .C + 32
+                END;
+            IF .SP AND (.OPS AND E_COMPRESS) NEQ 0 THEN C = %C' ';
+            PUTB(.D + .N, .C);
+            N = .N + 1
+            END;
+        BLANK = .SP
+        END;
+    ! The trims, on what is left.
+    BEGIN
+    LOCAL
+        A,
+        Z;
+    A = 0;
+    Z = .N;
+    IF (.OPS AND E_TRIML) NEQ 0
     THEN
-        RETURN BI_ERR(TPU$_BADKEY, TYPENAME(.ARGS[1]));
+        WHILE .A LSS .Z AND (GETB(.D + .A) EQL %C' ' OR GETB(.D + .A) EQL 9) DO A = .A + 1;
+    IF (.OPS AND E_TRIMT) NEQ 0
+    THEN
+        WHILE .Z GTR .A AND (GETB(.D + .Z - 1) EQL %C' ' OR GETB(.D + .Z - 1) EQL 9) DO Z = .Z - 1;
+    CH$MOVE(.Z - .A, .D + .A, .D);
+    (VPTR(.W) + 8) = .Z - .A
+    END;
+    .W
+    END;
+
+! EDITARGS args, count, first, address of in place: EDIT's or
+! CHANGE_CASE's keywords from the second argument on, as E_ bits, or -1
+! with the error's argument at BADP.
+ROUTINE EDITOPS (ARGS : REF VECTOR, N, INPLACE, BADP) =
+    BEGIN
+    LOCAL
+        OPS;
+    OPS = 0;
+    .INPLACE = TRUE;
+    INCR I FROM 1 TO .N - 1 DO
+        BEGIN
+        LOCAL
+            V;
+        V = .ARGS[.I];
+        IF VTYPE(.V) EQL TY_INTEGER
+        THEN
+            (IF NOT VINT(.V) THEN OPS = .OPS OR E_NOQUOTE)
+        ELSE IF VTYPE(.V) NEQ TY_KEYWORD
+        THEN
+            (.BADP = .I; RETURN -1)
+        ELSE
+            OPS = .OPS OR (SELECTONE VINT(.V) OF
+                            SET
+                            [K_TRIM] : E_TRIML OR E_TRIMT;
+                            [K_TRIM_LEADING] : E_TRIML;
+                            [K_TRIM_TRAILING] : E_TRIMT;
+                            [K_COMPRESS] : E_COMPRESS;
+                            [K_COLLAPSE] : E_COLLAPSE;
+                            [K_UPPER] : E_UPPER;
+                            [K_LOWER] : E_LOWER;
+                            [K_INVERT] : E_INVERT;
+                            [K_ON] : 0;
+                            [K_OFF] : E_NOQUOTE;
+                            [K_IN_PLACE] : 0;
+                            [K_NOT_IN_PLACE] : (.INPLACE = FALSE; 0);
+                            [OTHERWISE] : (.BADP = .I; RETURN -1);
+                            TES)
+        END;
+    .OPS
+    END;
+
+! EDIT and CHANGE_CASE (string | range | buffer, keywords): edits in place
+! a string variable, a range's or a buffer's text; returns the result.
+ROUTINE BI_EDIT (ARGS : REF VECTOR, N, R, ISCASE) =
+    BEGIN
+    LOCAL
+        OPS,
+        INPLACE,
+        BAD;
+    ARGCOUNT(2, 10);
+    OPS = EDITOPS(.ARGS, .N, INPLACE, BAD);
+    IF .OPS LSS 0 THEN RETURN BI_ERR(TPU$_BADKEY, TYPENAME(.ARGS[.BAD]));
+    ! CHANGE_CASE changes quoted text too.
+    IF .ISCASE THEN OPS = .OPS OR E_NOQUOTE;
     IF VTYPE(.ARGS[0]) EQL TY_STRING
     THEN
         BEGIN
         LOCAL
             W;
-        W = CASEOF(.ARGS[0], .HOW);
-        VUNREF(.ARGS[0]);
-        ARGS[0] = .W;
-        VREF(.W);
+        W = EDITSTR(.ARGS[0], .OPS);
+        IF .INPLACE
+        THEN
+            BEGIN
+            VUNREF(.ARGS[0]);
+            VREF(.W);
+            ARGS[0] = .W
+            END;
         .R = .W;
         RETURN SS_NORMAL
         END;
-    NOTMINE
+    IF NOT BUF_MAP(.ARGS[0], .OPS) THEN RETURN ARGMISMATCH(1, .ARGS[0]);
+    VREF(.ARGS[0]);
+    .R = .ARGS[0];
+    SS_NORMAL
     END;
 
 ! ---- Messages
@@ -412,7 +559,7 @@ ROUTINE BI_MESSAGE_TEXT (ARGS : REF VECTOR, N, R) =
     THEN
         RETURN ARGMISMATCH(1, .ARGS[0]);
     IF NOT KW_ISERROR(VINT(.ARGS[0])) THEN (.R = STR_MAKE(0, 0); RETURN BI_ERR(TPU$_MSGNOTFND));
-    FLAGS = 1;
+    FLAGS = 15;
     IF .N GTR 1 THEN (ARGTYPE(1, TY_INTEGER); FLAGS = VINT(.ARGS[1]));
     IF .FLAGS EQL 0 THEN FLAGS = 15;
     L = MSG_FORMAT(VINT(.ARGS[0]), ARGS[2], MAX(.N - 2, 0), .FLAGS, BUF);
@@ -471,7 +618,10 @@ ROUTINE BI_EXECUTE (ARGS : REF VECTOR, N, R) =
             RETURN ARGMISMATCH(1, .ARGS[0]);
         TEXT = SOURCE(.ARGS[0], L);
         IF .TEXT EQL 0 AND VTYPE(.ARGS[0]) NEQ TY_STRING THEN RETURN ARGMISMATCH(1, .ARGS[0]);
+        ! DEC's TPU counts a string EXECUTE compiles from line 2.
+        IF VTYPE(.ARGS[0]) EQL TY_STRING THEN COMP_LINE1 = 2;
         S = COMPILE(.TEXT, .L, OBJ);
+        COMP_LINE1 = 0;
         IF VTYPE(.ARGS[0]) NEQ TY_STRING THEN MEM_FREE(.TEXT);
         IF .S NEQ SS_NORMAL OR .OBJ EQL 0 THEN RETURN BI_ERR(TPU$_EXECUTEFAIL)
         END;
@@ -517,13 +667,12 @@ ROUTINE BI_GET_INFO (ARGS : REF VECTOR, N, R) =
         IF STR_EQL(.W, T('FIRST')) THEN (.R = ARR_WALK(.V, TRUE); RETURN SS_NORMAL);
         IF STR_EQL(.W, T('NEXT')) THEN (.R = ARR_WALK(.V, FALSE); RETURN SS_NORMAL);
         IF STR_EQL(.W, T('LOW_INDEX')) THEN (.R = MKINT(ARR_INFO(.V, 0)); RETURN SS_NORMAL);
-        IF STR_EQL(.W, T('HIGH_INDEX')) THEN (.R = MKINT(ARR_INFO(.V, 1)); RETURN SS_NORMAL);
-        IF STR_EQL(.W, T('SIZE')) THEN (.R = MKINT(ARR_INFO(.V, 2)); RETURN SS_NORMAL)
+        IF STR_EQL(.W, T('HIGH_INDEX')) THEN (.R = MKINT(ARR_INFO(.V, 1)); RETURN SS_NORMAL)
         END;
     S = BUF_INFO(.ARGS, .N, .R);
     IF .S NEQ NOTMINE THEN RETURN .S;
-    VREF(.W);
-    BI_ERR(TPU$_BADREQUEST, .W, STR_MAKE(0, 0), TYPENAME(.V))
+    .R = MKINT(0);
+    BI_ERR(TPU$_BADREQUEST, CASEOF(.W, K_UPPER), STR_MAKE(0, 0), TYPENAME(.V))
     END;
 
 ! KEY_NAME (string | key [, SHIFT_KEY | modifiers]): the keyword for a
@@ -565,7 +714,8 @@ GLOBAL ROUTINE BI_CALL (B, ARGS : REF VECTOR, N, R) =
             [B_LENGTH] : BI_LENGTH(.ARGS, .N, .R);
             [B_SUBSTR] : BI_SUBSTR(.ARGS, .N, .R);
             [B_INDEX] : BI_INDEX(.ARGS, .N, .R);
-            [B_CHANGE_CASE] : BI_CHANGE_CASE(.ARGS, .N, .R);
+            [B_CHANGE_CASE] : BI_EDIT(.ARGS, .N, .R, TRUE);
+            [B_EDIT] : BI_EDIT(.ARGS, .N, .R, FALSE);
             [B_FAO] : BI_FAO(.ARGS, .N, .R);
             [B_MESSAGE] : BI_MESSAGE(.ARGS, .N, .R);
             [B_MESSAGE_TEXT] : BI_MESSAGE_TEXT(.ARGS, .N, .R);

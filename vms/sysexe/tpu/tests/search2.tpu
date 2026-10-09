@@ -1,0 +1,45 @@
+! More SEARCH: in a range, backwards with patterns, counts, keywords alone.
+PROCEDURE try (p, d, label)
+    LOCAL r;
+    r := SEARCH_QUIETLY (p, d);
+    IF r = 0 THEN
+        MESSAGE (label + ": none");
+    ELSE
+        MESSAGE (label + ": [" + STR (r, "/") + "] " + STR (GET_INFO (BEGINNING_OF (r), "record_number")));
+    ENDIF;
+ENDPROCEDURE;
+b := CREATE_BUFFER ("s");
+POSITION (b);
+COPY_TEXT ("one 1 two 22 three 333");
+SPLIT_LINE;
+COPY_TEXT ("four 4444 five");
+SPLIT_LINE;
+COPY_TEXT ("six seven");
+POSITION (BEGINNING_OF (b));
+MOVE_HORIZONTAL (6);
+try ("two", FORWARD, "from middle");
+try ("one", FORWARD, "behind");
+try ("one", REVERSE, "back");
+try (ANY ("0123456789", 3), FORWARD, "any3");
+try (NOTANY ("abcdefghijklmnopqrstuvwxyz ", 2), FORWARD, "notany2");
+try (SPAN ("0123456789"), REVERSE, "span back");
+try (LINE_BEGIN, FORWARD, "line_begin");
+try (LINE_END, FORWARD, "line_end");
+try (BUFFER_END, FORWARD, "buffer_end");
+try (BUFFER_BEGIN, REVERSE, "buffer_begin");
+try ("", FORWARD, "empty");
+try ("five" + LINE_END + LINE_BEGIN + "six", FORWARD, "across");
+try (MATCH ("seven"), FORWARD, "match across");
+try (("four" | "six") + " " + (SPAN ("0123456789") | "seven"), FORWARD, "alts");
+try (LINE_BEGIN + ARB (3) @ w1 + " " + REMAIN @ w2, FORWARD, "two parts");
+MESSAGE ("[" + STR (w1) + "][" + STR (w2) + "]");
+POSITION (BEGINNING_OF (b));
+MOVE_VERTICAL (1);
+m := MARK (NONE);
+MOVE_HORIZONTAL (9);
+r := CREATE_RANGE (m, MARK (NONE), NONE);
+MESSAGE ("in range: [" + STR (SEARCH_QUIETLY (SPAN ("0123456789"), FORWARD, NO_EXACT, r)) + "]");
+x := SEARCH_QUIETLY ("five", FORWARD, NO_EXACT, r);
+IF x = 0 THEN MESSAGE ("five is outside"); ENDIF;
+MESSAGE ("reverse range: [" + STR (SEARCH_QUIETLY ("4", REVERSE, NO_EXACT, r)) + "]");
+QUIT (OFF);

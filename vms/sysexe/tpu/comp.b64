@@ -76,6 +76,9 @@ LITERAL
     MAXLOCAL = 383,                     ! 127 parameters and 255 locals, and the CASE temporaries
     MAXNAME = 132;
 
+GLOBAL
+    COMP_LINE1;                         ! the number of the text's first line, if not 1
+
 OWN
     SRC,                                ! the text,
     SRCEND,                             ! its end,
@@ -1568,7 +1571,7 @@ ROUTINE UNIT (TEXT, LEN) =
     SRC = .TEXT;
     SRCEND = .TEXT + .LEN;
     POS = .TEXT;
-    LINE = 1;
+    LINE = (IF .COMP_LINE1 EQL 0 THEN 1 ELSE .COMP_LINE1);
     FAILED = FALSE;
     CODE = 0;
     CLEN = 0;
