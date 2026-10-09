@@ -1,9 +1,9 @@
 _default:
     @just --list
 
-# Stitches the ESP image and boots it in QEMU, under HVF on a Mac.
+# Stitches the ESP image and boots it in QEMU, under HVF on a Mac, the console logged in as SYSTEM.
 boot:
-    cargo run -p boot -- {{ if os() == "macos" { "--hvf" } else { "" } }}
+    cargo run -p boot -- --autologin {{ if os() == "macos" { "--hvf" } else { "" } }}
 
 # Builds the web demo into out/site, serves it on localhost and opens it. QEMU for the browser is built in Docker the first time, about an hour.
 wasm-demo port="8765":
