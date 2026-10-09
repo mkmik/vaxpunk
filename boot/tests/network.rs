@@ -70,7 +70,13 @@ impl Vax {
         let console = qemu.stdin.take().unwrap();
         let mut vax = Vax { qemu, console, log };
         vax.wait_for("Username: ", 0, 120);
-        vax.login("SYSTEM", "MANAGER");
+        // login's, but SYLOGIN.COM's TTSIZE asks the console for its size
+        // (a TELNET terminal has NAWS's) before DCL's prompt.
+        let at = vax.reply("SYSTEM", "Password: ");
+        vax.console.write_all(b"MANAGER\r").unwrap();
+        let at = vax.wait_for("\x1b[6n", at, 60);
+        vax.console.write_all(b"\x1b[24;80R").unwrap();
+        vax.wait_for("$ ", at, 60);
         vax
     }
 

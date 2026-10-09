@@ -1,0 +1,105 @@
+        .TITLE  TTSIZE  Sets the console's page and width to its real size
+        .IDENT  /V0.1/
+;
+; Asks the terminal where the cursor lands after moving it to row 999,
+; column 999 (it stops at the bottom right corner), then sets the page
+; and width of SYS$COMMAND to that row and column, like SET TERMINAL/PAGE=rows
+; /WIDTH=columns. The console's serial line has no way to say its window's
+; size, as a TELNET terminal's NAWS does, so SYLOGIN.COM runs this at
+; login on OPA0:. A terminal that doesn't answer in 3 seconds keeps its
+; settings. As crosstools/ods/vms/ttsize.mar does on OpenVMS.
+;
+        .LIBRARY "starlet.mlb"
+        $SSDEF
+        $IODEF
+        $DCDEF
+
+        .PSECT  DATA, NOEXE, WRT, LONG
+TTNAME: .ASCID  "SYS$COMMAND"
+CHAN:   .LONG   0
+IOSB:   .BLKQ   1
+CHAR:   .BLKL   3                       ; class, type, width; characteristics,
+                                        ; the page in the top byte; extended
+NUMS:   .BLKL   2                       ; rows, columns
+REPLY:  .BLKB   32
+; Save the cursor, go to the corner, ask where it is, restore the cursor.
+; The answer is ESC [ rows ; columns R.
+PROMPT: .ASCII  <27>"7"<27>"[999;999H"<27>"[6n"<27>"8"
+PROMPT_LEN = .-PROMPT
+        .ALIGN  LONG
+TERM:   .WORD   11, 0                   ; the terminators: R alone, the long
+        .ADDRESS MASK                   ; form, so the answer's ESC doesn't
+MASK:   .LONG   0, 0, <1@<^A/R/-64>>    ; end the read
+
+        .PSECT  CODE, EXE, LONG
+; TTSIZE: sets SYS$COMMAND's page and width to what the terminal answers to a
+; cursor position report; leaves them be if it doesn't. Returns
+; SS$_NORMAL, or a failed service's status. Uses R2-R6.
+        .ENTRY  TTSIZE, ^M<R2,R3,R4,R5,R6>
+        $ASSIGN_S DEVNAM=TTNAME, CHAN=CHAN
+        BLBC    R0, 90$
+        $QIOW_S CHAN=CHAN, FUNC=#IO$_SENSEMODE, IOSB=IOSB, P1=CHAR, P2=#12
+        BLBC    R0, 90$
+        MOVZWL  IOSB, R0
+        BLBC    R0, 90$
+        CMPB    CHAR, #DC$_TERM
+        BNEQ    80$
+        $QIOW_S CHAN=CHAN, FUNC=#IO$_READPROMPT!IO$M_NOECHO!IO$M_NOFILTR!IO$M_TIMED!IO$M_PURGE, IOSB=IOSB, P1=REPLY, P2=#32, P3=#3, P4=#TERM, P5=#PROMPT, P6=#PROMPT_LEN
+        BLBC    R0, 90$
+        MOVZWL  IOSB, R0
+        BLBC    R0, 80$                 ; no answer: leave the terminal be
+
+; NOFILTR keeps line editing from taking the answer for a key's escape
+; sequence. With ESCAPE the read ends at the sequence itself, its
+; terminator, so scan the data and the terminator both.
+        MOVAB   REPLY, R2
+        MOVZWL  IOSB+2, R3              ; the data's size
+        MOVZWL  IOSB+6, R4              ; the terminator's
+        ADDL2   R4, R3
+        CMPL    R3, #32
+        BLEQU   5$
+        MOVL    #32, R3
+5$:     ADDL2   R2, R3                  ; the answer's end
+        CLRQ    NUMS
+        CLRL    R5                      ; the number being read: 0 rows, 1 columns
+        CLRL    R6                      ; set inside a number
+10$:    CMPL    R2, R3
+        BGEQU   30$
+        MOVZBL  (R2)+, R1
+        SUBL2   #^A/0/, R1
+        CMPL    R1, #9
+        BGTRU   20$                     ; not a digit
+        MOVL    #1, R6
+        MULL3   #10, NUMS[R5], R0
+        ADDL3   R0, R1, NUMS[R5]
+        CMPL    NUMS[R5], #9999
+        BLEQ    10$
+        MOVL    #9999, NUMS[R5]         ; a flood of digits mustn't overflow
+        BRB     10$
+20$:    TSTL    R6
+        BEQL    10$
+        CLRL    R6
+        INCL    R5
+        CMPL    R5, #2
+        BLSS    10$
+
+30$:    MOVL    NUMS, R0                ; rows
+        BEQL    80$
+        MOVL    NUMS+4, R1              ; columns
+        BEQL    80$
+        CMPL    R0, #255                ; the longest page VMS takes
+        BLEQ    40$
+        MOVL    #255, R0
+40$:    CMPL    R1, #511                ; and the widest line
+        BLEQ    50$
+        MOVL    #511, R1
+50$:    MOVW    R1, CHAR+2
+        MOVB    R0, CHAR+7
+        $QIOW_S CHAN=CHAN, FUNC=#IO$_SETMODE, IOSB=IOSB, P1=CHAR, P2=#12
+        BLBC    R0, 90$
+        MOVZWL  IOSB, R0
+        BLBC    R0, 90$
+80$:    MOVL    #SS$_NORMAL, R0
+90$:    RET
+
+        .END    TTSIZE

@@ -218,7 +218,12 @@ interpreter. It is linked high in P1, which tells the executive it is one
   `DKA0:[SYSMGR]SYLOGIN.COM`, as VMS runs it at each login: it defines
   the global symbol `HOME`, a command that goes back to
   `SYS$SYSROOT:[SYSMGR]`, and `NSLOOKUP`, a foreign command that runs
-  `SYS$SYSTEM:TCPIP$NSLOOKUP.EXE`. The second is `@SYS$LOGIN:LOGIN`, the
+  `SYS$SYSTEM:TCPIP$NSLOOKUP.EXE`. On `OPA0:` it then runs `TTSIZE`,
+  which finds the console window's size: a serial line can't send it, as
+  a TELNET client sends NAWS, so `TTSIZE` moves the cursor to row 999,
+  column 999, asks the terminal where it is with `ESC [6n`, and makes the
+  row and column it answers the terminal's page and width. A terminal
+  that doesn't answer in 3 seconds keeps 80 by 24. The second is `@SYS$LOGIN:LOGIN`, the
   user's own `LOGIN.COM`, if there is one. SYSTEM's,
   `DKA0:[SYSMGR]LOGIN.COM`, goes on only if `F$MODE()` says
   `INTERACTIVE`, which it does since DCL's `SYS$INPUT` is a terminal, and

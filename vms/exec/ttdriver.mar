@@ -1414,9 +1414,11 @@ HANGUP:
 
 ; TIMER: R4 = a read's IRP, R5 = its terminal's UCB. For a timed read of
 ; some seconds, starts its timer again: the read ends that long after the
-; last character, or after its start. IPL$_SYNCH. Uses R0-R3.
+; last character, or after its start. IPL$_SYNCH. Keeps every register:
+; the character loop calls it with a character and its line in R0-R3.
 TIMER:
-        .JSB_ENTRY  SCRATCH=<R2, R3>
+        .JSB_ENTRY
+        PUSHR   #^M<R0, R1, R2, R3>
         BBC     #IO$V_TIMED, IRP$L_FUNC(R4), 90$
         TSTL    IRP$L_MEDIA(R4)
         BEQL    90$
@@ -1439,7 +1441,8 @@ TIMER:
         JSB     G^EXE$INSTIMQ
         MOVL    (SP)+, R5
         BISL2   #<1@UCB$V_TT_TIMER>, UCB$L_TT_STS(R5)
-90$:    RSB
+90$:    POPR    #^M<R0, R1, R2, R3>
+        RSB
 
 ; DISARM: R5 = a terminal's UCB. Takes its timer off the timer queue, if
 ; it is on it. IPL$_SYNCH. Uses R0 and R1.
