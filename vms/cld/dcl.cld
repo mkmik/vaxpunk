@@ -107,6 +107,7 @@ define type SET_OPTIONS
 	keyword DEFAULT, syntax=SET_DEFAULT
 	keyword FILE, syntax=SET_FILE
 	keyword HOST, syntax=SET_HOST
+	keyword PASSWORD, syntax=SET_PASSWORD
 	keyword PROCESS, syntax=SET_PROCESS
 	keyword PROTECTION, value(list), syntax=SET_PROTECTION
 	keyword TERMINAL, syntax=SET_TERMINAL
@@ -131,6 +132,11 @@ define syntax SET_HOST
 	image RTPAD
 	parameter P1, label=OPTION, value(required, type=SET_OPTIONS)
 	parameter P2, label=NODE, prompt="Node", value(required)
+
+! SET PASSWORD: SETPWD.EXE asks for the old password and the new one.
+define syntax SET_PASSWORD
+	image SETPWD
+	parameter P1, label=OPTION, value(required, type=SET_OPTIONS)
 
 ! SET PROCESS/PRIVILEGES=(priv[,...]): SET.EXE.
 define syntax SET_PROCESS

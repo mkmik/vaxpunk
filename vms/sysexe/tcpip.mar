@@ -20,7 +20,7 @@
 ; commands save (ADR-0025). /DHCP
 ; has the TCP/IP component ask a DHCP server for the address, mask and
 ; gateway instead. SHOW INTERFACE senses them and writes them, and
-; whether the link is up. START COMMUNICATION, which SYLOGIN.COM runs at
+; whether the link is up. START COMMUNICATION, which SYSTARTUP_VMS.COM runs at
 ; boot, sets the interface from the saved settings, or with DHCP if there
 ; are none, and says so, and starts TELNETD, the remote login server SET
 ; HOST talks to. PING sends ICMP echo requests on a raw ICMP socket, one

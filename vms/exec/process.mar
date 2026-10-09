@@ -37,6 +37,7 @@
         $ACCDEF
         $MSGDEF
         $SSDEF
+        $UAFDEF
 
         .EXTERNAL SCH$GL_CURPCB, SCH$GL_SWPPCB, SCH$GL_PCBVEC, SCH$GL_SEQ
         .EXTERNAL SCH$GQ_HIBWQ, SCH$GQ_SUSPWQ, SCH$GQ_DELQ
@@ -99,6 +100,17 @@ STDNAMES:                               ; for $CREPRC's input, output and error
         .ASCIC  "SYS$INPUT"
         .ASCIC  "SYS$OUTPUT"
         .ASCIC  "SYS$ERROR"
+        .BYTE   0
+DCLNAME:                                ; the command interpreter of a record that names none
+        .ASCIC  "DCL"
+; KNOWN: the images that get privileges while they run, as INSTALL
+; /PRIVILEGED gives them on VMS: each its name, .ASCIC, the file it is
+; read from instead, on the system disk, whose underscore keeps logical
+; names out, .ASCIC, and the privileges, a quadword, until a 0.
+; ponytail: a fixed list until INSTALL.
+KNOWN:  .ASCIC  "SETPWD.EXE"            ; SET PASSWORD writes SYSUAF.DAT
+        .ASCIC  "_DKA0:[SYSEXE]SETPWD.EXE"
+        .LONG   PRV$M_SYSPRV, 0
         .BYTE   0
 
         .PSECT  $CODE$
@@ -235,7 +247,7 @@ EXE$PRCPRIV::
 ; directory. mbxunt, if it isn't 0, is the unit number of a mailbox, MBnn,
 ; which gets the process's termination message when it is deleted. Its
 ; UIC is uic, or its creator's for 0; another one than the creator's takes
-; DETACH, else SS$_NOPRIV. Its privileges, current and permanent, are those
+; DETACH, else SS$_NOPRIV. It has its creator's username. Its privileges, current and permanent, are those
 ; in the quadword prvadr points at that its creator has, or its creator's
 ; for 0; a creator with SETPRV gives any, and authorizes them too.
 ; Otherwise it has its creator's authorized privileges. quota and stsflg
@@ -328,6 +340,8 @@ EXE$PRCPRIV::
         MOVZWL  44(AP), PCB$L_TMBU(R8)
         PUSHR   #^M<R3, R4>                     ; the creator's default directory
         MOVC3   #64, PCB$T_DEFDIR(R4), PCB$T_DEFDIR(R8)
+        MOVL    4(SP), R4
+        MOVC3   #13, PCB$T_USERNAME(R4), PCB$T_USERNAME(R8)     ; and username
         POPR    #^M<R3, R4>
         MOVAB   PCB$Q_HWPCB(R8), PCB$L_HWPCB(R8)
         MOVL    #VA$C_P0BASE, PCB$L_FREP0VA(R8) ; no pages yet, should it be deleted first
@@ -546,8 +560,10 @@ NEXTISD:
         RSB
 
 ; IMG$ACTIVATE: R4 = the current PCB, R5 = 1 if the image may be a command
-; interpreter, else 0. Activates the image the PCB names, which
-; FIL$OPENFILE reads from SYS$SYSTEM: unless its name says where: maps its
+; interpreter, 2 if it must be one, else 0. Activates the image the PCB
+; names, which FIL$OPENFILE reads from SYS$SYSTEM: unless its name says
+; where, or from the system disk for a known image, which KNOWN gives
+; privileges, enabled until the image exits: maps its
 ; sections at their addresses, with their contents and protection. An
 ; image in P0 is user readable and, where it is writable, user writable,
 ; and the end of P0 goes past it, and past each shareable image it calls,
@@ -560,9 +576,11 @@ NEXTISD:
 IMG$ACTIVATE::
         .JSB_ENTRY
         PUSHR   #^M<R2, R3, R4, R5, R6, R7, R8, R9, R10, R11>
-        PUSHL   R5
         MOVZBL  PCB$T_IMAGE(R4), R7
         MOVAB   PCB$T_IMAGE+1(R4), R6
+        BSBW    KNOWNIMG
+        PUSHL   R1                      ; its privileges, or 0
+        PUSHL   R5
         BSBW    FIL$OPENFILE
         BLBC    R0, 98$
         PUSHL   R3                      ; the file's pool block, to free
@@ -583,6 +601,8 @@ IMG$ACTIVATE::
         MOVL    #UR, R7                 ; the others'
         CMPL    R11, #VA$C_S0BASE
         BGTRU   30$
+        CMPL    8(SP), #2               ; it must be a command interpreter
+        BEQL    90$
         MOVL    R11, PCB$L_FREP0VA(R4)
         BRB     35$
 30$:    TSTL    8(SP)                   ; a command interpreter? R5's copy
@@ -623,12 +643,46 @@ IMG$ACTIVATE::
         BSBW    EXE$DEANONPGDSIZ
         POPR    #^M<R0, R1>
 98$:    TSTL    (SP)+                   ; R5's copy
-        POPR    #^M<R2, R3, R4, R5, R6, R7, R8, R9, R10, R11>
+        MOVL    (SP)+, R2               ; the privileges of a known image
+        BLBC    R0, 97$
+        TSTL    R2
+        BEQL    97$
+        MOVL    SCH$GL_CURPCB, R3
+        BISL2   (R2), PCB$Q_PRIV(R3)
+        BISL2   4(R2), PCB$Q_PRIV+4(R3)
+97$:    POPR    #^M<R2, R3, R4, R5, R6, R7, R8, R9, R10, R11>
         RSB
 90$:    MOVL    #SS$_BADIMGHDR, R0
         BRB     99$
 95$:    MOVL    #SS$_VASFULL, R0
         BRB     99$
+
+; KNOWNIMG: R6 = an image's name, R7 = its length. If KNOWN lists it, R6
+; and R7 = the file it is read from, R1 = the address of its privileges;
+; else R1 = 0. Uses R0.
+KNOWNIMG:
+        .JSB_ENTRY  OUTPUT=<R1, R6, R7>
+        MOVAB   KNOWN, R1
+10$:    TSTB    (R1)
+        BEQL    80$
+        PUSHL   R1
+        MOVL    R1, R0
+        BSBW    EXE$MATCHNAME
+        MOVL    (SP)+, R1
+        MOVZBL  (R1), -(SP)             ; past the name: the file
+        ADDL2   (SP)+, R1
+        INCL    R1
+        BLBS    R0, 20$
+        MOVZBL  (R1), R0                ; past the file and the privileges
+        ADDL2   R0, R1
+        ADDL2   #9, R1
+        BRB     10$
+20$:    MOVZBL  (R1)+, R7
+        MOVL    R1, R6
+        ADDL3   R6, R7, R1
+        RSB
+80$:    CLRL    R1
+        RSB
 
 ; RANGE: R8 = an image file. R9 = the lowest address of its sections, R11
 ; the end of the highest, rounded up to a page. R0 = SS$_NORMAL, or
@@ -1431,6 +1485,56 @@ SUSPEND:
         RET
 95$:    MOVL    #SS$_ACCVIO, R0
         RET
+
+; EXE$LOGIN uaf: makes the current process the user the SYSUAF.DAT record
+; at uaf describes, for LOGINOUT, which calls it in kernel mode with
+; $CMKRNL once the password is right. Activates the command interpreter
+; the record names, UAF$T_DEFCLI, image.EXE, DCL.EXE for none, in P1,
+; where it must be linked: the executive calls it when LOGINOUT's image
+; exits, and LOGINOUT's channels, to the terminal, stay for it, so that a
+; TELNET terminal stays open. Then the process takes the record's
+; username, UIC and base priority, its privileges UAF$Q_PRIV as the
+; authorized ones and UAF$Q_DEF_PRIV as the permanent and current ones.
+; R0 = SS$_NORMAL, SS$_ACCVIO if the record can't be read, SS$_IVLOGNAM
+; for a name longer than 35, or IMG$ACTIVATE's error: SS$_BADIMGHDR for an
+; image that isn't a command interpreter.
+        .ENTRY  EXE$LOGIN, ^M<R2, R3, R4, R5, R6, R7, R8>
+        MOVL    4(AP), R8
+        IFNORD  #UAF$C_FIXED, (R8), 85$
+        MOVAB   UAF$T_DEFCLI(R8), R6
+        MOVZBL  (R6)+, R7
+        BNEQ    10$
+        MOVAB   DCLNAME, R6
+        MOVZBL  (R6)+, R7
+10$:    CMPL    R7, #35
+        BGTRU   87$
+        MOVL    SCH$GL_CURPCB, R4
+        MOVAB   PCB$T_IMAGE(R4), R0
+        ADDB3   #4, R7, (R0)+
+        MOVC3   R7, (R6), (R0)
+        MOVL    #^A/.EXE/, (R3)
+        MOVL    SCH$GL_CURPCB, R4
+        MOVL    #2, R5                  ; only a command interpreter
+        BSBW    IMG$ACTIVATE
+        BLBC    R0, 90$
+        MOVL    SCH$GL_CURPCB, R4
+        MOVL    PCB$L_CHANS(R4), PCB$L_CLICHANS(R4)
+        MOVAB   PCB$T_USERNAME(R4), R0
+        MOVB    #12, (R0)+
+        MOVC3   #12, UAF$T_USERNAME(R8), (R0)
+        MOVL    SCH$GL_CURPCB, R4
+        MOVL    UAF$L_UIC(R8), PCB$L_UIC(R4)
+        MOVQ    UAF$Q_PRIV(R8), PCB$Q_AUTHPRIV(R4)
+        MOVQ    UAF$Q_DEF_PRIV(R8), PCB$Q_PROCPRIV(R4)
+        MOVQ    UAF$Q_DEF_PRIV(R8), PCB$Q_PRIV(R4)
+        BICB3   #^C31, UAF$B_PRI(R8), PCB$B_PRIB(R4)
+        MOVB    PCB$B_PRIB(R4), PCB$B_PRI(R4)
+        MOVL    #SS$_NORMAL, R0
+        RET
+85$:    MOVL    #SS$_ACCVIO, R0
+        RET
+87$:    MOVL    #SS$_IVLOGNAM, R0
+90$:    RET
 
 ; $IMGACT image, cmdlin: runs image in the current process, as a command
 ; interpreter does: runs down the image there was, keeping the channels

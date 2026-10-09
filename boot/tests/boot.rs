@@ -1,5 +1,5 @@
-//! cargo test -p boot: boots without a terminal and types commands at the
-//! console's DCL prompt, a phase at a time. Each phase types its steps,
+//! cargo test -p boot: boots without a terminal, logs in at the console
+//! and types commands at DCL's prompt, a phase at a time. Each phase types its steps,
 //! each once a line has come so many times, the echo of what it typed
 //! before included, then waits for the lines it must have printed, all
 //! within its deadline; one that runs out says which phase stalled, on
@@ -29,18 +29,31 @@ struct Phase {
     lines: &'static [&'static str],
 }
 
-/// The executive starts and mounts the system disk; SYSTARTUP_VMS.COM
-/// mounts the ramdisk, MDA0:, and can't mount the data disk, DKB0:, made
-/// afresh in out/check-datadisk.img, not the one you keep.
+/// The executive starts and mounts the system disk; STARTUP's
+/// SYSTARTUP_VMS.COM mounts the ramdisk, MDA0:, and can't mount the data
+/// disk, DKB0:, made afresh in out/check-datadisk.img, not the one you
+/// keep. Then LOGINOUT asks for a username: one that isn't there fails,
+/// SYSTEM with the wrong password too, and with the right one, in lower
+/// case, logs in, with a failure to report.
 const BOOT: Phase = Phase {
     name: "boot",
     secs: 60,
-    steps: &[],
+    steps: &[
+        ("Username:", 1, "NOBODY\r"),
+        ("Password:", 1, "nobodys\r"),
+        ("Username:", 2, "SYSTEM\r"),
+        ("Password:", 2, "wrongpw\r"),
+        ("Username:", 3, "system\r"),
+        ("Password:", 3, "manager\r"),
+    ],
     lines: &[
         "%EXEC-I-START",
         "%MOUNT-I-MOUNTED, VAXPUNK mounted on _DKA0:",
         "%MOUNT-I-MOUNTED, RAM mounted on _MDA0:",
         "%SYSTEM-W-NOHOMEBLK, Files-11 home block not found on volume",
+        "  SYSTEM       job terminated at ",
+        "Username: NOBODY\nPassword: \nUser authorization failure\n",
+        "\tWelcome to vaxpunk\n\t1 failure since last successful login\n",
     ],
 };
 
@@ -59,7 +72,7 @@ const SYSTEM_DISK: Phase = Phase {
     secs: 30,
     steps: &[
         (
-            "%EXEC-I-START",
+            "1 failure since last successful login",
             1,
             concat!(
                 "SHOW DEFAULT\rDEFINE HOME MDA0:[000000],SYS$MANAGER\rSET DEFAULT HOME:\rSHOW DEFAULT\r",
@@ -603,6 +616,75 @@ const STARTUP: Phase = Phase {
     ],
 };
 
+/// AUTHORIZE adds JOE, in another UIC group, with a few privileges and
+/// his default directory on DKB0:, shows him, whole and on a line, and
+/// lists every user in SYSUAF.LIS; SYSTEM changes its password with SET
+/// PASSWORD, after getting the old one wrong, and logs out. JOE logs in,
+/// with his UIC, privileges and directory, can't run AUTHORIZE or
+/// OPCCRASH, and logs out; SYSTEM logs in with its new password.
+const USERS: Phase = Phase {
+    name: "users",
+    secs: 60,
+    steps: &[
+        (
+            "process USURP exited with status 1000043C",
+            1,
+            concat!(
+                "MCR AUTHORIZE ADD JOE /PASSWORD=joespw /UIC=[200,1] /DEVICE=DKB0",
+                " /DIRECTORY=[000000] /PRIVILEGES=(TMPMBX,OPER,NETMBX) /OWNER=JOE /ACCOUNT=USERS\r",
+                "MCR AUTHORIZE ADD JOE\r",
+            ),
+        ),
+        (
+            "%UAF-W-UAEERR",
+            1,
+            concat!(
+                "MCR AUTHORIZE\rSHOW JOE\rMODIFY JOE /DEFPRIVILEGES=(NOALL,TMPMBX,OPER)\r",
+                "SHOW/BRIEF *\rLIST\rEXIT\rTYPE SYSUAF.LIS\r",
+            ),
+        ),
+        (
+            "%UAF-I-LSTMSG2",
+            1,
+            "SET PASSWORD\rwrongpw\rSET PASSWORD\rmanager\rnewpw\rnewpw\rLOGOUT\r",
+        ),
+        ("Username:", 4, "JOE\r"),
+        ("Password:", 4, "joespw\r"),
+        (
+            "\tWelcome to vaxpunk",
+            2,
+            concat!(
+                "SHOW PROCESS/PRIVILEGES\rSHOW DEFAULT\rSHOW LOGICAL SYS$LOGIN\r",
+                "MCR AUTHORIZE SHOW JOE\rMCR OPCCRASH\rLOGOUT\r",
+            ),
+        ),
+        ("Username:", 5, "SYSTEM\r"),
+        ("Password:", 5, "newpw\r"),
+        ("\tWelcome to vaxpunk", 3, "SHOW PROCESS\r"),
+    ],
+    lines: &[
+        "%UAF-I-ADDMSG, user record successfully added",
+        "%UAF-W-UAEERR, invalid user name, user name already exists",
+        "Username: JOE                              Owner:  JOE",
+        "Account:  USERS                            UIC:    [200,1]",
+        "Default:  DKB0:[000000]",
+        "Authorized Privileges: \n  TMPMBX       OPER         NETMBX",
+        "%UAF-I-MDFYMSG, user record(s) updated",
+        " JOE                   JOE             [200,1]       USERS      Normal   4 DKB0:[000000]",
+        " SYSTEM MANAGER        SYSTEM          [1,4]         SYSTEM     All      4 SYS$SYSROOT:[SYSMGR]",
+        "%UAF-I-LSTMSG2, listing file SYSUAF.LIS complete",
+        "%SET-E-PWDNOTVAL, old password validation error - password not changed",
+        "  SYSTEM       logged out at ",
+        "Process privileges:\n TMPMBX       OPER\n",
+        "UIC:                [200,1]",
+        "\n  DKB0:[000000]\n",
+        "\"SYS$LOGIN\" = \"DKB0:[000000]\" (LNM$PROCESS_TABLE)",
+        "%UAF-E-NAOFIL, unable to open system authorization file (SYSUAF.DAT)",
+        "  JOE          logged out at ",
+        "Process name:       \"SYSTEM\"",
+    ],
+};
+
 const PHASES: &[Phase] = &[
     BOOT,
     SYSTEM_DISK,
@@ -616,6 +698,7 @@ const PHASES: &[Phase] = &[
     BACKUP,
     RMS,
     STARTUP,
+    USERS,
 ];
 
 /// What the log must not hold: the lines of DCLTEST.COM's a failure skips
@@ -632,6 +715,11 @@ const ABSENT: &[&str] = &[
     "SYS$OUTPUT \"QUIET\"",
     // RUN SNOOP's ACCVIO is written once, not again by DCL.
     "%NONAME-F-NOMSG, Message number 0000000C",
+    // The passwords, which aren't echoed.
+    "nobodys",
+    "wrongpw",
+    "manager",
+    "newpw",
 ];
 
 /// The boot binary, killed with its QEMU when dropped, on a panic too.
@@ -740,13 +828,13 @@ fn boot() {
     assert!(present.is_empty(), "{present:?}");
     assert_eq!(
         text.matches("%SYSTEM-F-NOPRIV").count(),
-        2,
-        "SHOW LOGICAL and DEFINE/SYSTEM without CMKRNL and SYSNAM"
+        3,
+        "SHOW LOGICAL and DEFINE/SYSTEM without CMKRNL and SYSNAM, JOE's OPCCRASH"
     );
     assert_eq!(
         text.matches("%RMS-E-PRV").count(),
-        2,
-        "PROTTEST before SET PROTECTION=(W:R) and after MOUNT/PROTECTION=(W)"
+        3,
+        "PROTTEST before SET PROTECTION=(W:R) and after MOUNT/PROTECTION=(W), JOE's AUTHORIZE"
     );
     assert_eq!(
         text.matches("PROTTEST: [200,1] read").count(),

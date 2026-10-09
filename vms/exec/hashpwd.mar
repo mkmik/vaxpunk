@@ -1,0 +1,245 @@
+        .TITLE  HASHPWD $HASH_PASSWORD: a password's hash
+        .IDENT  /V0.1/
+;
+; SYSUAF.DAT keeps a password as a hash of it, its username and a salt,
+; which $HASH_PASSWORD makes for LOGINOUT, AUTHORIZE and SET PASSWORD, as
+; on VMS. VMS's algorithms are Purdy's polynomial, which is broken;
+; vaxpunk's, UAI$C_SHA256 (ADR-0029), is SHA-256 of the salt, a word, the
+; username without its blanks and the password, then 4095 times more of
+; the last digest and the password. The hash is the last digest's first
+; 8 bytes, which fit in UAF$Q_PWD. vms/uafhash.rs does the same on the
+; host, for build.rs's SYSTEM password.
+;
+        .LIBRARY "lib.mlb"
+        .LIBRARY "starlet.mlb"
+        $SSDEF
+        $UAIDEF
+
+        .EXTERNAL EXE$PROBER_DSC
+
+ROUNDS = 4096                           ; digests in all
+MAXLEN = 32                             ; the longest password and username
+; The routine's locals, on the kernel stack, at R11.
+L_W = 0                                 ; the message schedule, 64 longwords
+L_H = 256                               ; the hash so far, 8
+L_MSG = 288                             ; a message, padded: two blocks
+L_LEN = 416                             ; its length, at most 119
+L_PWD = 420                             ; the password,
+L_PWDLEN = 452                          ; its length,
+L_BLK = 456                             ; the block being hashed,
+L_NBLK = 460                            ; the blocks left,
+L_CNT = 464                             ; and the digests left
+L_SIZE = 480
+
+; SWAP reg, tmp: reverses the bytes of the longword in reg, from big endian
+; to little or back. Uses tmp.
+        .MACRO  SWAP    REG, TMP
+        ROTL    #8, REG, TMP
+        BICL2   #^XFF00FF00, TMP
+        ROTL    #24, REG, REG
+        BICL2   #^X00FF00FF, REG
+        BISL2   TMP, REG
+        .ENDM   SWAP
+
+        .PSECT  EXEC$DATA, NOEXE, WRT, QUAD
+IV:     .LONG   ^X6A09E667, ^XBB67AE85, ^X3C6EF372, ^XA54FF53A
+        .LONG   ^X510E527F, ^X9B05688C, ^X1F83D9AB, ^X5BE0CD19
+KTAB:   .LONG   ^X428A2F98, ^X71374491, ^XB5C0FBCF, ^XE9B5DBA5
+        .LONG   ^X3956C25B, ^X59F111F1, ^X923F82A4, ^XAB1C5ED5
+        .LONG   ^XD807AA98, ^X12835B01, ^X243185BE, ^X550C7DC3
+        .LONG   ^X72BE5D74, ^X80DEB1FE, ^X9BDC06A7, ^XC19BF174
+        .LONG   ^XE49B69C1, ^XEFBE4786, ^X0FC19DC6, ^X240CA1CC
+        .LONG   ^X2DE92C6F, ^X4A7484AA, ^X5CB0A9DC, ^X76F988DA
+        .LONG   ^X983E5152, ^XA831C66D, ^XB00327C8, ^XBF597FC7
+        .LONG   ^XC6E00BF3, ^XD5A79147, ^X06CA6351, ^X14292967
+        .LONG   ^X27B70A85, ^X2E1B2138, ^X4D2C6DFC, ^X53380D13
+        .LONG   ^X650A7354, ^X766A0ABB, ^X81C2C92E, ^X92722C85
+        .LONG   ^XA2BFE8A1, ^XA81A664B, ^XC24B8B70, ^XC76C51A3
+        .LONG   ^XD192E819, ^XD6990624, ^XF40E3585, ^X106AA070
+        .LONG   ^X19A4C116, ^X1E376C08, ^X2748774C, ^X34B0BCB5
+        .LONG   ^X391C0CB3, ^X4ED8AA4A, ^X5B9CCA4F, ^X682E6FF3
+        .LONG   ^X748F82EE, ^X78A5636F, ^X84C87814, ^X8CC70208
+        .LONG   ^X90BEFFFA, ^XA4506CEB, ^XBEF9A3F7, ^XC67178F2
+
+        .PSECT  $CODE$
+
+; $HASH_PASSWORD pwddsc, alg, salt, usrdsc, hash: hashes the password
+; pwddsc describes, as it is, with the word salt and the username usrdsc
+; describes, without the blanks at its end, by algorithm alg, a byte,
+; into the quadword hash. SS$_BADPARAM for an algorithm but
+; UAI$C_SHA256, or a password or username longer than 32; SS$_ACCVIO if
+; the caller can't read them or write hash.
+        .ENTRY  EXE$HASH_PASSWORD, ^M<R2, R3, R4, R5, R6, R7, R8, R9, R10, R11>
+        CMPB    8(AP), #UAI$C_SHA256
+        BNEQ    87$
+        MOVL    4(AP), R1
+        BSBW    EXE$PROBER_DSC
+        BLBC    R0, 90$
+        MOVL    16(AP), R1
+        BSBW    EXE$PROBER_DSC
+        BLBC    R0, 90$
+        MOVL    20(AP), R0
+        IFNOWRT #8, (R0), 85$
+        MOVL    16(AP), R1              ; the username, without its blanks
+        MOVZWL  (R1), R6
+        MOVL    4(R1), R7
+10$:    TSTL    R6
+        BEQL    15$
+        CMPB    -1(R7)[R6], #^A/ /
+        BNEQ    15$
+        DECL    R6
+        BRB     10$
+15$:    CMPL    R6, #MAXLEN
+        BGTRU   87$
+        MOVL    4(AP), R1
+        CMPW    (R1), #MAXLEN
+        BGTRU   87$
+        SUBL2   #L_SIZE, SP
+        MOVL    SP, R11
+        MOVZWL  (R1), L_PWDLEN(R11)
+        MOVC3   L_PWDLEN(R11), @4(R1), L_PWD(R11)
+        MOVW    12(AP), L_MSG(R11)      ; salt, username, password
+        MOVC3   R6, (R7), L_MSG+2(R11)
+        MOVC3   L_PWDLEN(R11), L_PWD(R11), (R3)
+        MOVAB   L_MSG(R11), R0
+        SUBL3   R0, R3, L_LEN(R11)
+        BSBW    SHA256
+        MOVL    #ROUNDS-1, L_CNT(R11)
+20$:    BSBW    SHA_DIGEST              ; the last digest, then the password
+        MOVC3   L_PWDLEN(R11), L_PWD(R11), L_MSG+32(R11)
+        ADDL3   #32, L_PWDLEN(R11), L_LEN(R11)
+        BSBW    SHA256
+        SOBGTR  L_CNT(R11), 20$
+        BSBW    SHA_DIGEST
+        MOVQ    L_MSG(R11), @20(AP)
+        ADDL2   #L_SIZE, SP
+        MOVL    #SS$_NORMAL, R0
+        RET
+85$:    MOVL    #SS$_ACCVIO, R0
+        RET
+87$:    MOVL    #SS$_BADPARAM, R0
+90$:    RET
+
+; SHA_DIGEST: R11 = the locals. Writes the hash so far as SHA-256's digest,
+; each longword big endian, in the message's first 32 bytes. Uses R0-R2.
+SHA_DIGEST:
+        .JSB_ENTRY  SCRATCH=<R2>
+        CLRL    R2
+10$:    MOVL    L_H(R11)[R2], R0
+        SWAP    R0, R1
+        MOVL    R0, L_MSG(R11)[R2]
+        AOBLSS  #8, R2, 10$
+        RSB
+
+; SHA256: R11 = the locals. Hashes the message's L_LEN bytes, at most 119,
+; with SHA-256, into L_H: pads it, a 1 bit, 0s and its length in bits, to
+; one block or two, and compresses each. Uses R0-R10.
+SHA256:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5, R6, R7, R8, R9, R10>
+        MOVC3   #32, IV, L_H(R11)
+        MOVAB   L_MSG(R11), R1
+        MOVL    L_LEN(R11), R0
+        MOVB    #^X80, (R1)[R0]
+10$:    INCL    R0
+        CMPL    R0, #128
+        BGEQU   20$
+        CLRB    (R1)[R0]
+        BRB     10$
+20$:    MOVL    #1, L_NBLK(R11)
+        MOVL    #64, R2                 ; past the last block
+        ADDL3   #9, L_LEN(R11), R0
+        CMPL    R0, #64
+        BLEQU   30$
+        MOVL    #2, L_NBLK(R11)
+        MOVL    #128, R2
+30$:    ASHL    #3, L_LEN(R11), R0      ; the bits, below 65536
+        MOVB    R0, -1(R1)[R2]
+        ASHL    #-8, R0, R0
+        MOVB    R0, -2(R1)[R2]
+        MOVL    R1, L_BLK(R11)
+40$:    MOVL    L_BLK(R11), R1
+        BSBB    SHA_BLOCK
+        ADDL2   #64, L_BLK(R11)
+        SOBGTR  L_NBLK(R11), 40$
+        RSB
+
+; SHA_BLOCK: R1 = a 64-byte block, R11 = the locals. SHA-256's compression
+; of it into L_H. Uses R0-R10.
+SHA_BLOCK:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5, R6, R7, R8, R9, R10>
+        CLRL    R10                     ; W 0-15: the block, big endian
+10$:    MOVL    (R1)[R10], R0
+        SWAP    R0, R2
+        MOVL    R0, L_W(R11)[R10]
+        AOBLSS  #16, R10, 10$
+; W 16-63: s1(W[t-2]) + W[t-7] + s0(W[t-15]) + W[t-16].
+20$:    ROTL    #15, -8(R11)[R10], R0   ; s1: ROTR 17, ROTR 19, SHR 10
+        ROTL    #13, -8(R11)[R10], R1
+        XORL2   R1, R0
+        ROTL    #22, -8(R11)[R10], R1
+        BICL2   #^XFFC00000, R1
+        XORL2   R1, R0
+        ADDL2   -28(R11)[R10], R0
+        ROTL    #25, -60(R11)[R10], R1  ; s0: ROTR 7, ROTR 18, SHR 3
+        ROTL    #14, -60(R11)[R10], R2
+        XORL2   R2, R1
+        ROTL    #29, -60(R11)[R10], R2
+        BICL2   #^XE0000000, R2
+        XORL2   R2, R1
+        ADDL2   R1, R0
+        ADDL2   -64(R11)[R10], R0
+        MOVL    R0, L_W(R11)[R10]
+        AOBLSS  #64, R10, 20$
+; The 64 rounds, with a-h in R2-R9.
+        MOVQ    L_H(R11), R2
+        MOVQ    L_H+8(R11), R4
+        MOVQ    L_H+16(R11), R6
+        MOVQ    L_H+24(R11), R8
+        CLRL    R10
+30$:    ROTL    #26, R6, R0             ; T1 = h + S1(e) + Ch(e,f,g) + K + W
+        ROTL    #21, R6, R1
+        XORL2   R1, R0
+        ROTL    #7, R6, R1
+        XORL2   R1, R0
+        ADDL2   R9, R0
+        ADDL2   KTAB[R10], R0
+        ADDL2   L_W(R11)[R10], R0
+        XORL3   R7, R8, R1              ; Ch: g xor (e and (f xor g)), h free
+        BICL3   R6, R1, R9
+        XORL2   R9, R1
+        XORL2   R8, R1
+        ADDL2   R1, R0
+        ADDL2   R0, R5                  ; d + T1: the next e
+        ROTL    #30, R2, R1             ; T1 + S0(a) + Maj(a,b,c): the next a
+        ROTL    #19, R2, R9
+        XORL2   R9, R1
+        ROTL    #10, R2, R9
+        XORL2   R9, R1
+        ADDL2   R1, R0
+        XORL3   R2, R3, R1              ; Maj: (a and b) xor (c and (a xor b))
+        BICL3   R4, R1, R9
+        XORL2   R9, R1
+        BICL3   R3, R2, R9
+        XORL2   R2, R9
+        XORL2   R9, R1
+        ADDL2   R1, R0
+        MOVL    R8, R9
+        MOVL    R7, R8
+        MOVL    R6, R7
+        MOVL    R5, R6
+        MOVL    R4, R5
+        MOVL    R3, R4
+        MOVL    R2, R3
+        MOVL    R0, R2
+        AOBLSS  #64, R10, 30$
+        ADDL2   R2, L_H(R11)
+        ADDL2   R3, L_H+4(R11)
+        ADDL2   R4, L_H+8(R11)
+        ADDL2   R5, L_H+12(R11)
+        ADDL2   R6, L_H+16(R11)
+        ADDL2   R7, L_H+20(R11)
+        ADDL2   R8, L_H+24(R11)
+        ADDL2   R9, L_H+28(R11)
+        RSB
+
+        .END

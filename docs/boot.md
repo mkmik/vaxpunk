@@ -6,8 +6,9 @@ kept current: a PR that changes what boot does changes this file too (see
 [AGENTS.md](../AGENTS.md)).
 
 Booting goes through five programs, each starting the next one. Then the
-executive starts the console's process, which runs DCL and waits for
-commands.
+executive starts the STARTUP process, which runs the site's startup
+procedure, and then the console's, which asks for a username and a
+password and runs DCL, which waits for commands.
 
 ## 1. Firmware, then Limine
 
@@ -118,29 +119,32 @@ compiles.
   shareable images are, are `SYS$SYSDEVICE:[SYSLIB]`, `SYS$MANAGER`, where the system manager's
   files are, is `SYS$SYSDEVICE:[SYSMGR]`, and `SYS$SCRATCH`, where
   `CONVERT` puts its work file, is `SYS$DISK:[]`, the default directory
-- lowers IPL to 0 and creates the console's process, SYSTEM, which runs
-  `DCL.EXE`, with the logical names `SYS$INPUT`, `SYS$OUTPUT` and
-  `SYS$ERROR` standing for the console, `_OPA0:`, in its process table.
-  SYSTEM inherits the swapper's UIC, `[1,4]`, and its privileges, every
-  one, which `SCH$INIT` gave it, and passes them on to the processes it
-  creates
+- lowers IPL to 0 and creates the process `STARTUP`, which runs
+  `DCL.EXE`, with the logical name `SYS$INPUT` standing for the procedure
+  `SYS$MANAGER:SYSTARTUP_VMS.COM`, and `SYS$OUTPUT` and `SYS$ERROR` for
+  the console, `_OPA0:`, in its process table. STARTUP inherits the
+  swapper's username, `SYSTEM`, its UIC, `[1,4]`, and its privileges,
+  every one, which `SCH$INIT` gave it, and passes them on to the
+  processes it creates
 - then becomes the swapper (process 1). The swapper cleans up deleted
-  processes and sleeps the rest of the time.
+  processes and sleeps the rest of the time. Once STARTUP is gone, it
+  creates the console's process, which logs you in (section 6), and does
+  again each time that process is deleted.
 
-## 6. SYSTEM and DCL
+## 6. STARTUP, logging in, and DCL
 
 DCL ([vms/sysexe/dcl.mar](../vms/sysexe/dcl.mar)) is the command
 interpreter. It is linked high in P1, which tells the executive it is one
 ([ADR-0006](adr/0006-cli-in-p1-runs-images-in-its-process.md)):
 
-- When SYSTEM starts (`EXE$PROCSTRT`), the executive makes its stacks,
+- When STARTUP starts (`EXE$PROCSTRT`), the executive makes its stacks,
   reads `SYS$SYSTEM:DCL.EXE`, which is `DKA0:[SYSEXE]DCL.EXE`, from the
   disk (`FIL$OPENFILE`), loads it
   into P1 and calls it in supervisor mode.
-- DCL opens a channel to `SYS$INPUT`, which `$ASSIGN` translates to the
-  console, `OPA0:`. Its first command is `@SYS$MANAGER:SYSTARTUP_VMS`,
-  which runs the command procedure `DKA0:[SYSMGR]SYSTARTUP_VMS.COM`, the
-  site's own startup, as VMS runs it once at boot. It defines the system
+- DCL opens a channel to `SYS$INPUT`, and `$GETDVI` says it is no
+  terminal, so DCL takes its commands from it as a command procedure,
+  `@SYS$INPUT`: `DKA0:[SYSMGR]SYSTARTUP_VMS.COM`, the site's own
+  startup, as VMS's STARTUP process runs it once at boot. It defines the system
   logical name `TCPIP$DEVICE` as `_BGA0:`, the network's template device,
   which a program assigns a channel to for a socket, as TCP/IP Services'
   `TCPIP$STARTUP.COM` defines it. Then `INITIALIZE MDA0: RAM` makes the
@@ -153,13 +157,14 @@ interpreter. It is linked high in P1, which tells the executive it is one
   `MDA0:[SYSMGR]`, and `SYS$SYSTEM` becomes `SYS$SYSROOT:[SYSEXE]`,
   `SYS$LIBRARY` and `SYS$SHARE` `SYS$SYSROOT:[SYSLIB]`, `SYS$MANAGER`
   `SYS$SYSROOT:[SYSMGR]`, and `SYS$DISK`, the default device of a
-  process that hasn't set its own, `SYS$SYSROOT:`, so SYSTEM's `SHOW
-  DEFAULT` says `SYS$SYSROOT:[SYSMGR]`, `=   MDA0:[SYSMGR]` and
-  `=   DKA0:[SYSMGR]`, as on VMS. RMS looks for a file in the ramdisk's
+  process that hasn't one of its own, `SYS$SYSROOT:`. RMS looks for a file in the ramdisk's
   directory first and then in the system disk's, and makes a new one in
   the ramdisk's, so `COPY` to `SYS$MANAGER:` works though `DKA0:` is
   write locked, and a file there hides the system disk's of the same
-  name until the system stops. The ramdisk also holds TCP/IP's two
+  name until the system stops. So `COPY` puts a copy of `SYSUAF.DAT`,
+  the users, which the build wrote in `DKA0:[SYSEXE]`, in `MDA0:[SYSEXE]`,
+  where `AUTHORIZE` and `SET PASSWORD` can change it, and `SET
+  PROTECTION` lets only SYSTEM read it. The ramdisk also holds TCP/IP's two
   files: the hosts database, `TCPIP$HOST.DAT`, which the first `TCPIP
   SET HOST` or `SHOW HOST` makes, and the saved network configuration,
   `TCPIP$CONFIG.DAT`. So the only hosts a boot knows, and its fixed
@@ -169,23 +174,51 @@ interpreter. It is linked high in P1, which tells the executive it is one
   NAME_SERVICE /SERVER=8.8.8.8 /SYSTEM` defines the system logical name
   `TCPIP$BIND_SERVER000` as `8.8.8.8`, Google's public DNS server, which
   every program asks for a host the hosts database hasn't, and `nslookup`
-  asks for any ([ADR-0026](adr/0026-name-service-and-nslookup.md)). Then its `MOUNT DKB0:`
-  mounts the data disk, whatever its label, if an `INITIALIZE DKB0:`
-  wrote a volume there, at this boot or an earlier one, and prints
-  `%MOUNT-I-MOUNTED, label mounted on _DKB0:`. On a blank disk it prints
-  `%SYSTEM-W-NOHOMEBLK` instead, and the disk stays unmounted. The second
-  is `@SYS$MANAGER:SYLOGIN`, which
-  runs `DKA0:[SYSMGR]SYLOGIN.COM`, as VMS runs it
-  at each login: it defines the global symbol `HOME`, a command that goes
-  back to `SYS$SYSROOT:[SYSMGR]`, and `NSLOOKUP`, a foreign command that runs
-  `SYS$SYSTEM:TCPIP$NSLOOKUP.EXE`, and runs `TCPIP START COMMUNICATION`. With a
-  network, that opens a UDP socket on `TCPIP$DEVICE:` and, with ioctls on
+  asks for any ([ADR-0026](adr/0026-name-service-and-nslookup.md)). `TCPIP START COMMUNICATION`
+  opens a UDP socket on `TCPIP$DEVICE:` and, with ioctls on
   it, sets the interface's address, mask and gateway as `TCPIP
   SET CONFIGURATION INTERFACE` and `SET ROUTE /PERMANENT` saved them
   on the ramdisk, or asks a DHCP server for them if the saved settings
   say `DHCP` or nothing is saved, waiting up to 10 seconds for its answer, and prints
   `%TCPIP-I-SET, WE0: ...`, and creates the process `TCPIP$TELNET`, which runs `TELNETD.EXE` and waits
-  on TCP port 23 for `SET HOST` from another vaxpunk. Then DCL reads a line with the `$` prompt: `$QIOW`
+  on TCP port 23 for `SET HOST` from another vaxpunk. Then its `MOUNT DKB0:`
+  mounts the data disk, whatever its label, if an `INITIALIZE DKB0:`
+  wrote a volume there, at this boot or an earlier one, and prints
+  `%MOUNT-I-MOUNTED, label mounted on _DKB0:`. On a blank disk it prints
+  `%SYSTEM-W-NOHOMEBLK` instead, and the disk stays unmounted. Its last
+  command is `LOGOUT`, which, with no terminal, prints
+  `  SYSTEM       job terminated at  9-OCT-2026 10:00:00.00`, as VMS's STARTUP
+  does, and deletes the process.
+- The swapper then creates the console's process, named after the
+  console, `_OPA0:`, which runs `LOGINOUT.EXE`
+  ([vms/sysexe/loginout.mar](../vms/sysexe/loginout.mar)) in user mode,
+  with every privilege ([ADR-0029](adr/0029-loginout-and-sysuaf.md)).
+  LOGINOUT prints `Username:` and reads a name, then `Password:` and
+  reads the password without echoing it. It finds the user's record in
+  `SYS$SYSTEM:SYSUAF.DAT`, an indexed file keyed by username, with RMS,
+  and has `$HASH_PASSWORD` hash the password with the record's salt
+  and the username, SHA-256 4096 times over, to compare it with the hash
+  in the record. The build wrote one user who may log in, `SYSTEM`, whose
+  password is `MANAGER`. A wrong username or password prints `User
+  authorization failure`, and a wrong password is counted in the record;
+  after three failures LOGINOUT exits and the swapper starts another.
+  With both right, LOGINOUT names the process after the user, makes the
+  record's default directory the process's, `[SYSMGR]` for SYSTEM, and
+  defines `SYS$DISK`, `SYS$LOGIN` and `SYS$SCRATCH` from it, so
+  SYSTEM's `SHOW DEFAULT` says `SYS$SYSROOT:[SYSMGR]`, `=   MDA0:[SYSMGR]`
+  and `=   DKA0:[SYSMGR]`, as on VMS. Then, with `$CMKRNL`, it calls
+  `EXE$LOGIN` in the executive, which loads `DCL.EXE` into P1 and gives
+  the process the record's UIC, privileges and priority. LOGINOUT prints
+  `Welcome to vaxpunk`, and how many failures there were since the last
+  login, and exits. The executive throws its pages away, as for any
+  image that exits, and calls DCL.
+- DCL opens a channel to `SYS$INPUT`, the console, `OPA0:`. Its first
+  command is `@SYS$MANAGER:SYLOGIN`, which runs
+  `DKA0:[SYSMGR]SYLOGIN.COM`, as VMS runs it at each login: it defines
+  the global symbol `HOME`, a command that goes back to
+  `SYS$SYSROOT:[SYSMGR]`, and `NSLOOKUP`, a foreign command that runs
+  `SYS$SYSTEM:TCPIP$NSLOOKUP.EXE`. The second is `@SYS$LOGIN:LOGIN`, the
+  user's own `LOGIN.COM`, if there is one. Then DCL reads a line with the `$` prompt: `$QIOW`
   hands the read to the console's driver, which writes the prompt and
   holds the request until a line is typed, and DCL waits for its event
   flag ([ADR-0013](adr/0013-qio-irps-and-drivers.md)). That's where the
@@ -253,8 +286,19 @@ interpreter. It is linked high in P1, which tells the executive it is one
   PROTECTION=(W:R) file` and `SET FILE/OWNER_UIC=[200,1] file` run
   `SET.EXE` too, which changes the protection and the owner in the
   file's header, and `DIRECTORY/OWNER/PROTECTION` shows them. `HELP` runs
-  `HELP.EXE`, which lists the commands from DCL's command tables, and
-  `LOGOUT` deletes SYSTEM.
+  `HELP.EXE`, which lists the commands from DCL's command tables.
+  `MCR AUTHORIZE` runs `AUTHORIZE.EXE`, which reads `SYSUAF.DAT` and
+  does the command after it, or each one after its `UAF>` prompt:
+  `ADD JOE /PASSWORD=secret /UIC=[200,1]` makes a user from the `DEFAULT`
+  record, with the qualifiers' values, `MODIFY`, `REMOVE`, `SHOW` and
+  `LIST` change, delete, show and list them. Only SYSTEM may: the file is
+  SYSTEM's alone. `SET PASSWORD` runs `SETPWD.EXE`, which asks for the
+  old password and the new one twice and writes its hash in the user's
+  record; the executive gives that image the `SYSPRV` privilege while it
+  runs, so that any user may change their own. `LOGOUT` prints
+  `  SYSTEM       logged out at`, the time, and deletes the process; the
+  swapper then starts LOGINOUT on the console again, which asks for the
+  next username.
 - `INITIALIZE MDA0: label`, which `SYSTARTUP_VMS.COM` runs at boot,
   runs `INIT.EXE`, whose `$INIT_VOL` makes the ramdisk, `MDA0:`, 512 KB of memory, and writes an empty volume on it,
   SYSTEM's, `[1,4]`, unless `/OWNER_UIC` says otherwise. Each file made
@@ -296,8 +340,8 @@ interpreter. It is linked high in P1, which tells the executive it is one
 - A command that fails prints VMS's message for the status, when DCL
   knows it: `DIR DKB0:` looks in `DKB0:[SYSMGR]`, the default directory
   on that disk, and prints `%RMS-E-DNF, directory not found`.
-  When the swapper deletes what SYSTEM left, it prints `%EXEC-I-LOGOUT`
-  and halts. The root task prints `%PAL-I-POWEROFF`, and `run-qemu.sh`'s
+- `MCR OPCCRASH`, with the `CMKRNL` privilege, halts the processor in
+  kernel mode. The root task prints `%PAL-I-POWEROFF`, and `run-qemu.sh`'s
   console filter, `scripts/serial-filter.py`, sees it and stops QEMU.
 - CTRL/Y is an AST of DCL's: when DCL starts, and before each image it
   runs, it asks the console's driver for one with `IO$_SETMODE`
@@ -329,7 +373,9 @@ interpreter. It is linked high in P1, which tells the executive it is one
   which connects to port 23 there:
   the other side's `TELNETD` makes the connection a terminal, `_TNA1:`
   say, which the terminal driver there speaks Telnet on, and creates a
-  process named after it, running DCL with it as its input and output.
+  process named after it, running LOGINOUT with it as its input and
+  output, which asks for a username and a password there, as on the
+  console, and gives the process DCL.
   That terminal offers to echo, so RTPAD goes a character at a time:
   every key goes there, CTRL/Y too, and comes back echoed, so EDIT's
   keypad mode works there as on the console, on a screen of this
@@ -339,14 +385,15 @@ interpreter. It is linked high in P1, which tells the executive it is one
   what listens there offers to echo, until CTRL/Z. `RUN TCPTEST` connects
   to a server on the host and accepts a connection from it.
 
-The system disk is read only, the ramdisk is gone when the system stops,
-and there's no login yet.
+The system disk is read only, and the ramdisk is gone when the system
+stops, with the users `AUTHORIZE` added and the passwords `SET PASSWORD`
+changed.
 
 ## 7. STARTUP and the test processes
 
 `RUN STARTUP` at the prompt starts the tests
 ([vms/sysexe/startup.mar](../vms/sysexe/startup.mar)). STARTUP
-runs inside SYSTEM; the programs it starts are processes of their own,
+runs inside your process; the programs it starts are processes of their own,
 and each one in [vms/sysexe/](../vms/sysexe/) tests one
 executive feature:
 
@@ -417,7 +464,9 @@ register, and checks them, so CTRL/Y and `CONTINUE` can be tried on it.
 `RUN CTRLC` starts **CTRLC**, which asks for a CTRL/C AST and waits for a
 line; CTRL/C runs its AST, which cancels the read with `$CANCEL`.
 
-`cargo test -p boot` boots the system, types `RUN STARTUP`, `RUN SNOOP`, a bad
+`cargo test -p boot` boots the system, logs in, as `NOBODY`, then as
+`SYSTEM` with a wrong password, both of which fail, then as `SYSTEM`,
+whose login reports the one failure, types `RUN STARTUP`, `RUN SNOOP`, a bad
 command, `DIR [SYSEXE]P%NG`, `DIR SYS$SHARE:`, `TYPE WELCOME.TXT`,
 `@DCLTEST 3 "Two words"`, whose procedure, `[SYSMGR]DCLTEST.COM`, counts
 in a loop, checks expressions and calls itself, `@DCLTEST FAIL`, which
@@ -449,8 +498,13 @@ say `%SYSTEM-F-NOPRIV`, gives them back, runs PROTTEST, which can't read
 `DATA.TXT` on `DKB0:` until `SET PROTECTION=(W:R)`, then can as its
 owner after `SET FILE/OWNER_UIC=[200,1]` and `SET PROTECTION=(W)`, with
 `DIRECTORY/OWNER/PROTECTION` after each, and can't once `DKB0:` is
-mounted `/PROTECTION=(W)`, and looks for the
-success lines in `out/serial.log`. Once QEMU is gone, `ods-image` checks
+mounted `/PROTECTION=(W)`, adds JOE, of UIC `[200,1]`, with `MCR
+AUTHORIZE`, shows him and lists the users in `SYSUAF.LIS`, changes
+SYSTEM's password with `SET PASSWORD`, logs out and in as JOE, who has
+his UIC, privileges and default directory and may not run AUTHORIZE or
+OPCCRASH, logs out again and in as SYSTEM with the new password, and
+looks for the success lines in `out/serial.log`. The passwords typed
+are nowhere in it. Once QEMU is gone, `ods-image` checks
 the data disk's volume and finds the files on it, `[SUB.DEEP]`'s too. The test runs in
 named phases, `boot`, `system disk`, `ramdisk` and so on, each with its own
 deadline, and one that runs out fails with the phase it stalled at, what it
@@ -459,7 +513,8 @@ was waiting for and the last line the console printed.
 `cargo test -p boot --test network` boots one system on QEMU's user
 network, sets and shows the interface, runs TCPTEST against a server and
 a client of its own and with a UDP datagram both ways, and logs in to the
-system itself with `SET HOST`.
+system itself, as SYSTEM, with `SET HOST`.
 Then it boots two, on one QEMU socket network, saves an address on each
-and applies it with `TCPIP START COMMUNICATION`, and logs in from one to
-the other.
+and applies it with `TCPIP START COMMUNICATION`, adds JOE on one with
+`AUTHORIZE`, and logs in from the other as JOE, with his UIC and
+privileges.

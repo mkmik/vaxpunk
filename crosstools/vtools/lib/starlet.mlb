@@ -1618,6 +1618,7 @@ JPI$_STATE = ^X306                      ; the scheduling state, SCH$C_
 JPI$_PRIB = ^X309                       ; the base priority
 JPI$_PID = ^X319
 JPI$_PRCNAM = ^X31C                     ; the process's name
+JPI$_USERNAME = ^X202                   ; its user's name, 12 characters padded with blanks
 JPI$_IMAGNAME = ^X207                   ; the image it runs, or ran last
 JPI$_UIC = ^X304                        ; its UIC, a longword
 JPI$_MEM = ^X307                        ; the UIC's member, and its group
@@ -1634,6 +1635,17 @@ SYI$_MAXPROCESSCNT = 4105               ; how many processes there may be
 SYI$_QUANTUM = 4137                     ; ticks of 10 ms in a quantum
 SYI$_BOOTTIME = 4286                    ; the system time at boot, a quadword
         .ENDM   $SYIDEF
+
+; $UAIDEF: the password hash algorithms, $HASH_PASSWORD's alg and a
+; SYSUAF.DAT record's UAF$B_ENCRYPT. vaxpunk has one, SHA256, a number
+; from those VMS leaves to sites (ADR-0029).
+        .MACRO  $UAIDEF
+UAI$C_AD_II = 0                         ; VMS's: a CRC
+UAI$C_PURDY = 1                         ; Purdy's polynomial
+UAI$C_PURDY_V = 2                       ; with the username's length
+UAI$C_PURDY_S = 3                       ; and its blanks
+UAI$C_SHA256 = 128                      ; salted, iterated SHA-256: vaxpunk's
+        .ENDM   $UAIDEF
 
 ; $PRVDEF: the privileges, VMS's bits in a quadword mask: PRV$V_name, and
 ; PRV$M_name, the mask in the first longword, for those vaxpunk checks.
@@ -2243,4 +2255,13 @@ PRT$C_UR = 15
         .EXTERNAL SYS$CREATE_DIR
         CALLS   #1, G^SYS$CREATE_DIR
         .ENDM   $CREATE_DIR_S
+        .MACRO  $HASH_PASSWORD_S PWDDSC, ALG, SALT, USRDSC, HASH
+        $PUSHADR HASH
+        $PUSHADR USRDSC
+        PUSHL   SALT
+        PUSHL   ALG
+        $PUSHADR PWDDSC
+        .EXTERNAL SYS$HASH_PASSWORD
+        CALLS   #5, G^SYS$HASH_PASSWORD
+        .ENDM   $HASH_PASSWORD_S
 

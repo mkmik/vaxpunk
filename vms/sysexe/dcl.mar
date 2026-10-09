@@ -2,12 +2,12 @@
         .IDENT  /V0.1/
 ;
 ; A small DCL. build.rs links it in P1, at VA$C_CLI, which makes it a
-; command interpreter: EXEC$START creates the console's process, SYSTEM,
-; with it, and the executive calls it in supervisor mode, with SS$_NORMAL
-; at first and then, each time an image it runs exits, with the image's
-; status (docs/design/0002-executive-processes.md). Its data stays in P1
-; from one call to the next. It reports a failure status, prompts for a
-; command on the console and does it:
+; command interpreter: LOGINOUT gives it to the process it logs in, and
+; the executive to STARTUP, and calls it in supervisor mode, with
+; SS$_NORMAL at first and then, each time an image it runs exits, with
+; the image's status (docs/design/0002-executive-processes.md). Its data
+; stays in P1 from one call to the next. It reports a failure status,
+; prompts for a command on the terminal and does it:
 ;
 ;   RUN image   runs image, image.EXE if it has no type, in this process
 ;   DIRECTORY [spec]
@@ -70,7 +70,10 @@
 ;               deletes the process; with no name, ends the image CTRL/Y
 ;               stopped, without its exit handlers, and the procedures
 ;   HELP [verb] runs HELP.EXE, which lists the commands from DCL$TABLES
-;   LOGOUT      ends the process
+;   MCR image [command]
+;               runs SYS$SYSTEM:image.EXE, which takes command with
+;               LIB$GET_FOREIGN
+;   LOGOUT      says the user logged out, and ends the process
 ;   PIPE command ; command && command || command
 ;               does the commands one after another, those after && only
 ;               if the one before succeeded, after || only if it failed
@@ -122,9 +125,11 @@
 ; it: HOME ==
 ; "SET DEFAULT [SYSMGR]" makes HOME a command. A status with
 ; STS$M_INHIB_MSG set is one the image reported itself. It reads the
-; commands from SYS$INPUT, but SYS$MANAGER:SYSTARTUP_VMS.COM's and
-; SYLOGIN.COM's, which it runs first, and a command procedure's, whose
-; lines start with $.
+; commands from SYS$INPUT, a terminal, but SYS$MANAGER:SYLOGIN.COM's and
+; the user's SYS$LOGIN:LOGIN.COM's, which it runs first, if they are
+; there, and a command procedure's, whose lines start with $. When
+; SYS$INPUT isn't a terminal, but a file, as STARTUP's is, it runs that as
+; a procedure and logs out.
 ;
 ; CTRL/Y is DCL's supervisor mode AST, which it enables on the console
 ; with IO$_SETMODE (ADR-0014). It stops the image DCL runs, where it is,
@@ -166,6 +171,9 @@
         $SSDEF
         $CLIMSGDEF
         $IODEF
+        $DVIDEF
+        $DCDEF
+        $JPIDEF
         $DCLDEF
 
         .EXTERNAL DCL$TABLES, CLI$$DCL_PARSE, CLI$$RESULT, CLI$$IMAGE
@@ -255,9 +263,27 @@ ROUTINES:
         .ASCIC  "WRITE"
         .ADDRESS DCL$WRITE
         .BYTE   0
-FIRST:  .ASCIC  "@SYS$MANAGER:SYSTARTUP_VMS"     ; the first commands, until a 0
-        .ASCIC  "@SYS$MANAGER:SYLOGIN"
+FIRST:  .ASCIC  "@SYS$MANAGER:SYLOGIN"   ; the first commands on a terminal, until a 0
+        .ASCIC  "@SYS$LOGIN:LOGIN"
         .BYTE   0
+BATCH:  .ASCIC  "@SYS$INPUT"             ; and when SYS$INPUT is a file
+        .ASCIC  "LOGOUT"
+        .BYTE   0
+CLASSITEM:                              ; $GETDVI's item: SYS$INPUT's class
+        .WORD   4, DVI$_DEVCLASS
+        .ADDRESS DEVCLASS, 0
+        .LONG   0
+DEVCLASS:
+        .LONG   0
+USERITEM:                               ; $GETJPI's: the username
+        .WORD   12, JPI$_USERNAME
+        .ADDRESS USERNAME, 0
+        .LONG   0
+USERNAME:
+        .BLKB   12
+TIMDSC: .LONG   23                      ; LOGOUT's time
+        .ADDRESS TIMBUF
+TIMBUF: .BLKB   23
 DCL$LINE2::                             ; a command being made
         .BLKB   LINESIZE
 DOTEXE: .ASCII  ".EXE"
@@ -265,6 +291,10 @@ DOTEXE: .ASCII  ".EXE"
 DCL$SAVESP::                            ; SP as DCL was called, where errors go back to
         .LONG   0
 FIRSTP: .ADDRESS FIRST                  ; the next of the first commands
+STARTED:                                ; 1 once DCL has started
+        .LONG   0
+DCL$QUIET::                             ; 1: @ says nothing of a first command's procedure it can't open
+        .LONG   0
 IMGRUN: .LONG   0                       ; 1 while an image runs, or is about to
 DCL$CTRLYFP::                           ; while CTRL/Y has it stopped, FP in the AST, else 0
         .LONG   0
@@ -290,11 +320,17 @@ DCL$PTABVEC::                           ; the process's tables, for CLI$$DCL_PAR
         .ENTRY  DCL, ^M<R2, R3, R4, R5, R6, R7, R8, R9, R10, R11>
         MOVL    SP, DCL$SAVESP
         CLRL    IMGRUN
-        TSTL    CHAN
-        BNEQ    10$
+        BBSS    #0, STARTED, 10$
         $ASSIGN_S DEVNAM=INPUT, CHAN=CHAN
-        BLBC    R0, QUIT
-        BSBW    CTRLYON
+        BLBC    R0, 5$
+        $GETDVIW_S CHAN=CHAN, ITMLST=CLASSITEM
+        CMPL    DEVCLASS, #DC$_TERM
+        BEQL    7$
+        $DASSGN_S CHAN=CHAN
+5$:     CLRL    CHAN                    ; a file: its commands, then LOGOUT
+        MOVAB   BATCH, FIRSTP
+        BRB     DCL$NEXT
+7$:     BSBW    CTRLYON
         BRB     DCL$NEXT
 10$:    MOVL    4(AP), R0
         BRW     DCL$DONE
@@ -330,8 +366,10 @@ PROMPT1:
         BEQL    20$
         ADDL3   R1, R7, FIRSTP
         MOVC3   R7, (R1), DCL$LINE
+        MOVL    #1, DCL$QUIET
         BRB     GOTLINE
-20$:    $QIOW_S CHAN=CHAN, FUNC=#IO$_READPROMPT, IOSB=IOSB, P1=DCL$LINE, P2=#LINESIZE, P5=#PROMPT, P6=#2
+20$:    CLRL    DCL$QUIET
+        $QIOW_S CHAN=CHAN, FUNC=#IO$_READPROMPT, IOSB=IOSB, P1=DCL$LINE, P2=#LINESIZE, P5=#PROMPT, P6=#2
         BLBC    R0, QUIT
         CMPW    IOSB, #SS$_HANGUP       ; a TELNET terminal's line is gone
         BEQL    QUIT
@@ -387,7 +425,7 @@ DCL$COMMAND::
         MOVC3   R8, DCL$TOKEN, DCL$SYMNAM+1
         BSBW    DCL$FINDSYM
         TSTL    R1
-        BEQL    VERBS
+        BEQL    NOTSYM
         MOVAB   DCL$VSTACK, R9          ; its value, then the rest, in DCL$LINE
         MOVC3   #VAL$K_LENGTH, SYM$R_VALUE(R1), (R9)
         BSBW    DCL$TOSTR
@@ -411,6 +449,13 @@ DCL$COMMAND::
         BSBW    DCL$WORD
         TSTL    R8
         BEQL    5$
+NOTSYM: CMPL    R8, #3                  ; MCR?
+        BNEQ    VERBS
+        CMPW    DCL$TOKEN, #^A/MC/
+        BNEQ    VERBS
+        CMPB    DCL$TOKEN+2, #^A/R/
+        BNEQ    VERBS
+        BRW     MCR
 ; VERBS: R6 = past the verb, R8 = its length. Parses the command with
 ; DCL$TABLES (ADR-0017), prompting for missing parameters at the
 ; console, and runs the verb's image with the parse, or does the verb's
@@ -449,7 +494,24 @@ VERBS:  SUBL3   R8, R6, R0              ; the command
         JMP     (R0)
 60$:    PRINT   "%DCL-W-INVROUT, invalid routine specified in command tables - check .CLD file"
         BRW     DCL$WARN
-LOGOUT:                                 ; the process ends
+; LOGOUT: writes VMS's line, the username and the time, that the user
+; logged out, or that the job ended if SYS$INPUT isn't a terminal, and
+; ends the process.
+LOGOUT: $GETJPIW_S ITMLST=USERITEM
+        $ASCTIM_S TIMBUF=TIMDSC
+        ADDTEXT "  "
+        MOVAB   USERNAME, R1
+        MOVL    #12, R2
+        BSBW    DCL$ADD
+        TSTL    CHAN
+        BEQL    10$
+        ADDTEXT " logged out at "
+        BRB     20$
+10$:    ADDTEXT " job terminated at "
+20$:    MOVAB   TIMBUF, R1
+        MOVL    #23, R2
+        BSBW    DCL$ADD
+        BSBW    DCL$SAY
 QUIT:   $DELPRC_S
 
 ; DCL$CONTINUE: returns from the CTRL/Y AST to the image it stopped,
@@ -517,12 +579,31 @@ RUN:    MOVAB   DCL$V_FILE, R1
         CLRL    R9                      ; no command line
         BRB     IMAGE
 
+; MCR image [command]: runs image as a foreign command, with a parse
+; whose $LINE is image command, as VMS's MCR does.
+MCR:    BSBW    DCL$SKIP
+        MOVL    R6, R10
+        BSBW    DCL$WORD
+        TSTL    R8
+        BNEQ    10$
+        BRW     DCL$INSFPRM
+10$:    CMPL    R8, #31
+        BLEQU   20$
+        MOVL    #31, R8
+20$:    MOVB    R8, DCL$SYMNAM
+        MOVC3   R8, DCL$TOKEN, DCL$SYMNAM+1
+        BRB     FLINE
+
 ; FOREIGN: R9 = the value, $image, of the symbol DCL$SYMNAM, the verb,
 ; R10 = the command's first character, R7 = past its last. Runs image,
 ; with a parse whose $LINE is the command, in capitals outside quotes,
 ; which LIB$GET_FOREIGN takes the words after the verb from.
 FOREIGN:
-        MOVL    R10, R1
+        MOVZBL  VAL$T_STR(R9), R8       ; the image, past the $
+        DECL    R8
+        MOVC3   R8, VAL$T_STR+2(R9), DCL$TOKEN
+; FLINE: DCL$TOKEN = an image, R8 = its length, the rest as FOREIGN's.
+FLINE:  MOVL    R10, R1
         CLRL    R2                      ; 1 in quotes
 10$:    CMPL    R1, R7
         BGEQU   30$
@@ -543,9 +624,6 @@ FOREIGN:
         PUSHAB  DCL$SYMNAM
         PUSHAQ  CMDDSC
         CALLS   #2, G^CLI$$FOREIGN
-        MOVZBL  VAL$T_STR(R9), R8       ; the image, past the $
-        DECL    R8
-        MOVC3   R8, VAL$T_STR+2(R9), DCL$TOKEN
         BRB     WITHPARSE
 
 ; IMGVERB: runs the parsed verb's image, with the parse as its command.
@@ -780,12 +858,14 @@ RUNNING:
 ; after SET NOCONTROL. Uses R0 and R1.
 CTRLYON:
         .JSB_ENTRY
+        TSTL    CHAN                    ; no terminal
+        BEQL    20$
         MOVAB   CTRLY, R0
         TSTL    NOCTRLY
         BEQL    10$
         CLRL    R0
 10$:    $QIOW_S CHAN=CHAN, FUNC=#IO$_SETMODE!IO$M_CTRLYAST, P1=(R0)
-        RSB
+20$:    RSB
 
 ; CTRLY: DCL's CTRL/Y AST, in supervisor mode, on top of what CTRL/Y
 ; stopped. Drops what is left of PIPE's line. With an image running, ends the procedures running and does

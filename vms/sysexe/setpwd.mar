@@ -1,0 +1,154 @@
+        .TITLE  SETPWD  Changes the user's password
+        .IDENT  /V0.1/
+;
+; DCL runs this for SET PASSWORD. It asks for the old password, then the
+; new one twice, without echoing them, as VMS's does, and puts the new
+; one's hash, with a new salt, in the user's record in SYSUAF.DAT,
+; SYS$SYSTEM:SYSUAF.DAT unless the logical name SYSUAF says where. The
+; file is SYSTEM's, which the user may not write: the executive gives this
+; image SYSPRV while it runs (KNOWN in process.mar), as VMS installs its
+; own, and it changes only the record of the process's username, and only
+; with its password.
+;
+        .LIBRARY "lib.mlb"
+        .LIBRARY "starlet.mlb"
+        .LIBRARY "sysexe.mlb"
+        $SSDEF
+        $IODEF
+        $JPIDEF
+        $FABDEF
+        $RABDEF
+        $UAFDEF
+        $UAIDEF
+
+        .EXTERNAL PUT_LINE
+
+NAMESIZE = 32                           ; the key, and the longest password
+INHIB = ^X10000000                      ; STS$M_INHIB_MSG: reported
+CLI$_PWDNOTVAL = ^X00038882             ; the old one isn't right
+CLI$_PWDNOTVER = ^X0003888A             ; the two new ones differ
+CLI$_PWDLOCKED = ^X00038892             ; the record has LOCKPWD
+
+        .PSECT  DATA, NOEXE, WRT, LONG
+INPUT:  .ASCID  "SYS$INPUT"
+CHAN:   .LONG   0
+IOSB:   .BLKQ   1
+NAMDSC: .LONG   NAMESIZE                ; the username, padded with blanks
+        .ADDRESS NAME
+NAME:   .BLKB   NAMESIZE
+USERITEM:
+        .WORD   12, JPI$_USERNAME
+        .ADDRESS NAME, 0
+        .LONG   0
+OLDDSC: .LONG   0                       ; the passwords: the old one,
+        .ADDRESS OLD
+OLD:    .BLKB   NAMESIZE
+NEWDSC: .LONG   0                       ; the new one,
+        .ADDRESS NEW
+NEW:    .BLKB   NAMESIZE
+VERDSC: .LONG   0                       ; and the new one again
+        .ADDRESS VER
+VER:    .BLKB   NAMESIZE
+HASH:   .BLKQ   1
+NOW:    .BLKQ   1
+UAFFAB: $FAB    FNA=UAFNAM, FNS=UAFNAMLEN, DNA=UAFDEF, DNS=UAFDEFLEN, FAC=<GET,UPD>
+UAFRAB: $RAB    FAB=UAFFAB, UBF=REC, USZ=UAF$C_LENGTH, RBF=REC, RAC=KEY, KBF=NAME, KSZ=NAMESIZE
+UAFNAM: .ASCII  "SYSUAF"
+UAFNAMLEN = .-UAFNAM
+UAFDEF: .ASCII  "SYS$SYSTEM:.DAT"
+UAFDEFLEN = .-UAFDEF
+REC:    .BLKB   UAF$C_LENGTH
+
+        .PSECT  $LITERAL$
+OLDP:   .ASCIC  "Old password: "
+NEWP:   .ASCIC  "New password: "
+VERP:   .ASCIC  "Verification: "
+
+        .PSECT  CODE, EXE, LONG
+        .ENTRY  START, ^M<R2, R3, R4, R5, R6>
+        MOVC5   #0, (SP), #^A/ /, #NAMESIZE, NAME
+        $GETJPIW_S ITMLST=USERITEM
+        BLBC    R0, 90$
+        $ASSIGN_S DEVNAM=INPUT, CHAN=CHAN
+        BLBC    R0, 90$
+        $OPEN   FAB=UAFFAB
+        BLBC    R0, 90$
+        $CONNECT RAB=UAFRAB
+        BLBC    R0, 80$
+        $GET    RAB=UAFRAB
+        BLBC    R0, 80$
+        BBC     #UAF$V_LOCKPWD, REC+UAF$L_FLAGS, 10$
+        PRINT   "%SET-F-PWDLOCKED, password is locked to prevent change"
+        MOVL    #CLI$_PWDLOCKED!INHIB, R0
+        BRB     80$
+10$:    MOVAB   OLDP, R1
+        MOVAQ   OLDDSC, R2
+        BSBW    ASK
+        BLBC    R0, 80$
+        MOVZBL  REC+UAF$B_ENCRYPT, R0
+        MOVZWL  REC+UAF$W_SALT, R1
+        $HASH_PASSWORD_S PWDDSC=OLDDSC, ALG=R0, SALT=R1, USRDSC=NAMDSC, HASH=HASH
+        BLBC    R0, 80$
+        CMPL    HASH, REC+UAF$Q_PWD
+        BNEQ    20$
+        CMPL    HASH+4, REC+UAF$Q_PWD+4
+        BEQL    30$
+20$:    PRINT   "%SET-E-PWDNOTVAL, old password validation error - password not changed"
+        MOVL    #CLI$_PWDNOTVAL!INHIB, R0
+        BRB     80$
+30$:    MOVAB   NEWP, R1
+        MOVAQ   NEWDSC, R2
+        BSBW    ASK
+        BLBC    R0, 80$
+        MOVAB   VERP, R1
+        MOVAQ   VERDSC, R2
+        BSBW    ASK
+        BLBC    R0, 80$
+        CMPC5   NEWDSC, NEW, #0, VERDSC, VER
+        BEQL    40$
+        PRINT   "%SET-E-PWDNOTVER, new password verification error - password not changed"
+        MOVL    #CLI$_PWDNOTVER!INHIB, R0
+        BRB     80$
+40$:    $GETTIM_S TIMADR=NOW            ; a new salt, never 0
+        BISW3   #1, NOW+2, REC+UAF$W_SALT
+        MOVB    #UAI$C_SHA256, REC+UAF$B_ENCRYPT
+        MOVZWL  REC+UAF$W_SALT, R1
+        $HASH_PASSWORD_S PWDDSC=NEWDSC, ALG=#UAI$C_SHA256, SALT=R1, USRDSC=NAMDSC, HASH=REC+UAF$Q_PWD
+        BLBC    R0, 80$
+        MOVQ    NOW, REC+UAF$Q_PWD_DATE
+        $UPDATE RAB=UAFRAB
+80$:    PUSHL   R0
+        $CLOSE  FAB=UAFFAB
+        MOVL    (SP)+, R0
+90$:    RET
+
+; ASK: R1 = a prompt, .ASCIC, R2 = a descriptor of a password's buffer,
+; NAMESIZE long. Reads the password after the prompt, without echoing it,
+; in capitals, and sets the descriptor's length. R0 = SS$_NORMAL, or the
+; read's error. Uses R0-R5.
+ASK:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5>
+        MOVZBL  (R1)+, R0
+        MOVL    R2, R5
+        $QIOW_S CHAN=CHAN, FUNC=#IO$_READPROMPT!IO$M_NOECHO, IOSB=IOSB, P1=@4(R5), P2=#NAMESIZE, P5=R1, P6=R0
+        BLBC    R0, 90$
+        MOVZWL  IOSB, R0
+        BLBC    R0, 90$
+        PRINT   ""                      ; the line the password didn't echo
+        MOVZWL  IOSB+2, R2
+        MOVW    R2, (R5)
+        MOVL    4(R5), R1
+10$:    TSTL    R2                      ; in capitals
+        BEQL    20$
+        CMPB    (R1), #^A/a/
+        BLSSU   15$
+        CMPB    (R1), #^A/z/
+        BGTRU   15$
+        SUBB2   #^A/a/-^A/A/, (R1)
+15$:    INCL    R1
+        DECL    R2
+        BRB     10$
+20$:    MOVL    #SS$_NORMAL, R0
+90$:    RSB
+
+        .END    START

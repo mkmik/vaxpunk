@@ -11,7 +11,7 @@
 //! its CDU, and HELP and TCPIP with sysexe/help/*.mar, which describes
 //! command tables, and CREATE, CONVERT and ANALYZRMS with sysexe/rms/*.mar,
 //! FDL and their output; in [SYSMGR], the files in sysmgr/,
-//! as text.
+//! as text; and in [SYSEXE], SYSUAF.DAT, the users, SYSTEM and DEFAULT.
 
 use std::collections::HashMap;
 use std::env;
@@ -19,7 +19,15 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 fn main() {
-    for path in ["exec", "sysexe", "sysmgr", "cld", LIB] {
+    for path in [
+        "exec",
+        "sysexe",
+        "sysmgr",
+        "cld",
+        LIB,
+        "sysuaf.fdl",
+        "uafhash.rs",
+    ] {
         println!("cargo::rerun-if-changed={path}");
     }
     let out = PathBuf::from(env::var("OUT_DIR").unwrap());
@@ -95,7 +103,7 @@ fn main() {
         if name == "DCL" {
             modules.extend(sources("sysexe/dcl", &["mar"]).iter().map(module));
         }
-        if name == "HELP" || name == "TCPIP" {
+        if ["HELP", "TCPIP", "AUTHORIZE"].contains(&name.as_str()) {
             modules.extend(sources("sysexe/help", &["mar"]).iter().map(module));
         }
         if ["CREATE", "CONVERT", "ANALYZRMS"].contains(&name.as_str()) {
@@ -363,7 +371,122 @@ fn disk(path: &Path, images: &[(String, Vec<u8>)]) {
         let (size, lines) = (Some(text.len() as u64), Conversion::LinesToRecords);
         ok(vol.copy_in(&mut &text[..], &spec, lines, size, None));
     }
+    // SYSUAF.DAT's layout, as OpenVMS's: keys at the username, the UIC, the
+    // UIC with its sub-identifier, and the parent identifier.
+    let fdl = ods_image::rms::fdl::parse(include_str!("sysuaf.fdl"))
+        .unwrap_or_else(|e| panic!("sysuaf.fdl: {e:?}"));
+    let users = [
+        User {
+            name: b"SYSTEM",
+            uic: [1, 4],
+            owner: b"SYSTEM MANAGER",
+            account: b"SYSTEM",
+            device: b"SYS$SYSROOT:",
+            directory: b"[SYSMGR]",
+            privileges: u64::MAX >> 25, // all 39
+            password: b"MANAGER",
+        },
+        // A new user's values, which AUTHORIZE's ADD copies: TMPMBX and NETMBX.
+        User {
+            name: b"DEFAULT",
+            uic: [0o200, 0o200],
+            owner: b"",
+            account: b"",
+            device: b"SYS$SYSDEVICE:",
+            directory: b"[USER]",
+            privileges: 1 << 15 | 1 << 20,
+            password: b"",
+        },
+    ]
+    .map(|u| u.record());
+    let (fid, _) = ok(vol.load_indexed(&fdl.spec, &users, "[SYSEXE]SYSUAF.DAT"));
+    let mut attrs = ok(vol.attributes(fid));
+    attrs.protection = 0xff88; // (S:RWE,O:RWE,G,W): SYSTEM's alone
+    ok(vol.set_attributes(fid, &attrs));
     ok(vol.flush());
+}
+
+include!("uafhash.rs");
+
+/// A user in SYSUAF.DAT: the UIC is [group,member], the privileges are
+/// authorized and enabled at login alike, and no password makes an
+/// account no one may log in to, DISUSER.
+struct User {
+    name: &'static [u8],
+    uic: [u16; 2],
+    owner: &'static [u8],
+    account: &'static [u8],
+    device: &'static [u8],
+    directory: &'static [u8],
+    privileges: u64,
+    password: &'static [u8],
+}
+
+impl User {
+    /// Its record, $UAFDEF's fixed part (lib.mlb), the password hashed as
+    /// $HASH_PASSWORD does.
+    fn record(&self) -> Vec<u8> {
+        let mut r = vec![0u8; 644];
+        let padded = |r: &mut [u8], at: usize, len: usize, s: &[u8]| {
+            r[at..at + len].fill(b' ');
+            r[at..at + s.len()].copy_from_slice(s);
+        };
+        let counted = |r: &mut [u8], at: usize, len: usize, s: &[u8]| {
+            r[at + 1..at + len].fill(b' ');
+            r[at] = s.len() as u8;
+            r[at + 1..at + 1 + s.len()].copy_from_slice(s);
+        };
+        let word =
+            |r: &mut [u8], at: usize, v: u16| r[at..at + 2].copy_from_slice(&v.to_le_bytes());
+        let long =
+            |r: &mut [u8], at: usize, v: u32| r[at..at + 4].copy_from_slice(&v.to_le_bytes());
+        (r[0], r[1]) = (1, 1); // UAF$C_USER_ID, UAF$C_VERSION1
+        word(&mut r, 2, 644); // no user data
+        padded(&mut r, 4, 32, self.name);
+        long(&mut r, 36, (self.uic[0] as u32) << 16 | self.uic[1] as u32);
+        padded(&mut r, 52, 32, self.account);
+        counted(&mut r, 84, 32, self.owner);
+        counted(&mut r, 116, 32, self.device);
+        counted(&mut r, 148, 64, self.directory);
+        counted(&mut r, 212, 64, b"");
+        counted(&mut r, 276, 32, b"DCL");
+        counted(&mut r, 308, 32, b"DCLTABLES");
+        if self.password.is_empty() {
+            r[468] = 1 << 4; // UAF$V_DISACNT
+        } else {
+            let salt = 0x5aa5;
+            word(&mut r, 358, salt);
+            r[340..348].copy_from_slice(&hash_password(self.password, salt, self.name));
+        }
+        r[360] = 128; // UAI$C_SHA256
+        r[362] = 6; // the shortest password
+        r[412..420].copy_from_slice(&self.privileges.to_le_bytes());
+        r[420..428].copy_from_slice(&self.privileges.to_le_bytes());
+        r[516] = 4; // the base priority
+        // The quotas, OpenVMS's DEFAULT's.
+        for (at, v) in [
+            (524, 10),
+            (526, 150),
+            (528, 150),
+            (530, 100),
+            (532, 300),
+            (534, 4000),
+            (536, 300),
+        ] {
+            word(&mut r, at, v);
+        }
+        for (at, v) in [
+            (544, 4096),
+            (540, 8192),
+            (548, 16384),
+            (552, 256000),
+            (560, 128000),
+            (568, 4096),
+        ] {
+            long(&mut r, at, v);
+        }
+        r
+    }
 }
 
 /// The files in `dir` with one of `exts`, sorted.

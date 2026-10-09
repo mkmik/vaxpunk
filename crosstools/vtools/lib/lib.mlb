@@ -287,7 +287,8 @@ PCB$Q_PRIV = 592                        ; current privileges, $PRVDEF's bits: wh
 PCB$Q_AUTHPRIV = 600                    ; authorized: what $SETPRV may enable without SETPRV
 PCB$Q_PROCPRIV = 608                    ; permanent: what the current ones go back to when an image exits
 PCB$L_UIC = 616                         ; its UIC: the group in the high word, the member in the low
-PCB$K_LENGTH = 624
+PCB$T_USERNAME = 620                    ; its user's name, .ASCIC, 12 characters padded with blanks
+PCB$K_LENGTH = 640
 PCB$C_MAXCHAN = 31                      ; channels 1-31, a bit each in PCB$L_CHANS
 PCB$V_WAKEPEN = 0                       ; a $WAKE came that $HIBER hasn't seen
 PCB$V_WALL = 1                          ; the wait is for all of EFWM
@@ -781,3 +782,74 @@ X$C_EOF = 3                             ; past the last
 X$V_LASTPUT = 0                         ; X$T_LASTPUT holds a key
 X$V_OKDUP = 1                           ; a $PUT found a key it has
         .ENDM   $IDXDEF
+
+; $UAFDEF: a SYSUAF.DAT record, VMS's layout: the user's name, UIC,
+; password, privileges and quotas. The username and the account are blank
+; padded; the other strings are counted, then blank padded. Keys: 0 the
+; username, 1 the UIC, 2 the UIC and sub-identifier, 3 the parent
+; identifier.
+        .MACRO  $UAFDEF
+UAF$B_RTYPE = 0                         ; the record's type: UAF$C_USER_ID
+UAF$B_VERSION = 1                       ; its format: UAF$C_VERSION1
+UAF$W_USRDATOFF = 2                     ; where the user data is, a counted string
+UAF$T_USERNAME = 4                      ; the username, 32 characters
+UAF$L_UIC = 36
+UAF$W_MEM = 36                          ; the UIC's member,
+UAF$W_GRP = 38                          ; and its group
+UAF$L_SUB_ID = 40                       ; the user's sub-identifier
+UAF$Q_PARENT_ID = 44                    ; the identifier that owns the account
+UAF$T_ACCOUNT = 52                      ; the account, 32 characters
+UAF$T_OWNER = 84                        ; the owner's name, 32
+UAF$T_DEFDEV = 116                      ; the default device, 32
+UAF$T_DEFDIR = 148                      ; the default directory, 64
+UAF$T_LGICMD = 212                      ; the login command file, 64
+UAF$T_DEFCLI = 276                      ; the command interpreter, 32
+UAF$T_CLITABLES = 308                   ; its tables, 32
+UAF$Q_PWD = 340                         ; the password's hash
+UAF$Q_PWD2 = 348                        ; the second password's
+UAF$W_LOGFAILS = 356                    ; login failures since the last login
+UAF$W_SALT = 358                        ; the hash's salt
+UAF$B_ENCRYPT = 360                     ; its algorithm: UAI$C_ in starlet.mlb
+UAF$B_ENCRYPT2 = 361                    ; the second password's algorithm
+UAF$B_PWD_LENGTH = 362                  ; the shortest password
+UAF$Q_EXPIRATION = 364                  ; when the account expires
+UAF$Q_PWD_LIFETIME = 372                ; how long a password lasts
+UAF$Q_PWD_DATE = 380                    ; when the password changed
+UAF$Q_PWD2_DATE = 388                   ; when the second one changed
+UAF$Q_LASTLOGIN_I = 396                 ; the last interactive login
+UAF$Q_LASTLOGIN_N = 404                 ; and the last other one
+UAF$Q_PRIV = 412                        ; the authorized privileges, $PRVDEF's bits
+UAF$Q_DEF_PRIV = 420                    ; those a login enables
+UAF$L_FLAGS = 468                       ; UAF$V_
+UAF$B_PRI = 516                         ; the base priority
+UAF$B_QUEPRI = 517                      ; the highest priority of its jobs in a queue
+UAF$W_MAXJOBS = 518                     ; its processes at once, 0 for any
+UAF$W_MAXACCTJOBS = 520                 ; its account's
+UAF$W_MAXDETACH = 522                   ; its detached processes
+UAF$W_PRCCNT = 524                      ; subprocesses: PRCLM
+UAF$W_BIOLM = 526                       ; buffered I/O
+UAF$W_DIOLM = 528                       ; direct I/O
+UAF$W_TQCNT = 530                       ; timer queue entries: TQELM
+UAF$W_ASTLM = 532
+UAF$W_ENQLM = 534                       ; locks
+UAF$W_FILLM = 536                       ; open files
+UAF$W_SHRFILLM = 538                    ; shared files
+UAF$L_WSQUOTA = 540                     ; the working set's quota,
+UAF$L_DFWSCNT = 544                     ; its default size,
+UAF$L_WSEXTENT = 548                    ; and its most
+UAF$L_PGFLQUOTA = 552                   ; page file pages
+UAF$L_CPUTIM = 556                      ; CPU time, 10 ms ticks, 0 for any
+UAF$L_BYTLM = 560                       ; buffered I/O bytes
+UAF$L_PBYTLM = 564                      ; paged buffered I/O bytes
+UAF$L_JTQUOTA = 568                     ; the job table's bytes
+UAF$C_FIXED = 644                       ; the record's fixed part: a record without user data
+UAF$C_LENGTH = 1412                     ; the longest record
+UAF$C_USER_ID = 1
+UAF$C_VERSION1 = 1
+UAF$V_DISCTLY = 0                       ; FLAGS: no CTRL/Y
+UAF$V_DEFCLI = 1                        ; only the default command interpreter
+UAF$V_LOCKPWD = 2                       ; no SET PASSWORD
+UAF$V_CAPTIVE = 3
+UAF$V_DISACNT = 4                       ; no login
+UAF$V_DISWELCOM = 5                     ; no welcome message
+        .ENDM   $UAFDEF

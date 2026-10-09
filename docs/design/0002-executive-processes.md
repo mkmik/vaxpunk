@@ -30,7 +30,10 @@ mode AST, and
 `MBnn`, and process deletion writes the termination message to it, and
 [ADR-0027](../adr/0027-terminals-are-ucbs-and-telnet-is-in-the-driver.md):
 each terminal is a UCB of its own, and a remote login's is a TELNET
-terminal the terminal driver drives over its connection.
+terminal the terminal driver drives over its connection, and
+[ADR-0029](../adr/0029-loginout-and-sysuaf.md): `LOGINOUT` logs a
+terminal's process in from `SYSUAF.DAT` and gives it its command
+interpreter.
 
 The executive borrows VMS's structure and names (PCB, `SCH$`, `MMG$`,
 `EXE$` routines, `SS$_` codes, the system service interfaces) but none of
@@ -46,7 +49,8 @@ its code.
 | `astdel.mar` | AST queues, `SCH$QAST`, the AST delivery interrupt, `$DCLAST`, `$SETAST`, `$ASTEXIT` |
 | `timeschdl.mar` | the interval timer and software timer interrupts, the system time, the timer queue, `$GETTIM`, `$SETIMR`, `$CANTIM`, `$SCHDWK`, `$CANWAK` |
 | `event.mar` | event flags, local and common |
-| `process.mar` | `$CREPRC`, process start, image activation, `$IMGACT`, `$EXIT`, image rundown, deletion, `$FORCEX`, `$HIBER`, `$WAKE`, `$SUSPND`, `$RESUME`, `$SETPRI`, `$SETPRN`, `$CMKRNL`, `$SETPRV` |
+| `process.mar` | `$CREPRC`, process start, image activation, `$IMGACT`, `$EXIT`, image rundown, deletion, `$FORCEX`, `$HIBER`, `$WAKE`, `$SUSPND`, `$RESUME`, `$SETPRI`, `$SETPRN`, `$CMKRNL`, `$SETPRV`, `EXE$LOGIN` |
+| `hashpwd.mar` | `$HASH_PASSWORD`, salted, iterated SHA-256 |
 | `lnm.mar` | logical name tables, `$CRELNM`, `$DELLNM`, `$TRNLNM` |
 | `qio.mar` | the devices' UCBs, `$ASSIGN`, `$DASSGN`, `$CANCEL`, `$QIO`, `$QIOW`; IRPs, their completion and cancelling |
 | `mbdriver.mar` | mailboxes: `$CREMBX`, `$DELMBX`, their driver, and `MB$SEND`, which writes the termination message |
@@ -90,10 +94,13 @@ blocks and `$OPEN`... calls, `$MNTDEF`).
    Then
    `LNM$CREATE` puts the system's logical names in `LNM$SYSTEM_TABLE`
    (*Logical names*).
-7. Lowers IPL to 0 and creates the console's process, `SYSTEM`, from
-   `DCL.EXE` (*The command interpreter*).
+7. Lowers IPL to 0 and creates `STARTUP`, a process whose `DCL.EXE` runs
+   its `SYS$INPUT`, `SYS$MANAGER:SYSTARTUP_VMS.COM` (*The command
+   interpreter*).
 8. Becomes the swapper: it deletes what deleted processes left behind,
-   and hibernates in between.
+   and hibernates in between. Once `STARTUP` is gone, and whenever the
+   console's process is, it creates `LOGINOUT.EXE` on `_OPA0:`, named
+   so (*Logging in*).
 
 ## Memory
 
@@ -271,13 +278,14 @@ there is. The image activator puts its transfer address in
   exit handlers first.
 
 The command interpreter keeps nothing on its stack across an image; what
-it remembers is in its P1 data. `EXEC$START` creates the console's
-process, `SYSTEM`, with `DCL.EXE`, whose first commands, before it
-prompts, are `@SYS$MANAGER:SYSTARTUP_VMS`, the site's startup, which
-mounts `DKB0:`, and `@SYS$MANAGER:SYLOGIN`. ponytail: VMS runs
-`SYSTARTUP_VMS.COM` in a `STARTUP` process of its own, before anyone
-logs in. Its verbs are those of `DCL$TABLES` (*Commands*); a verb with
-an image runs it with `$IMGACT` and the parse:
+it remembers is in its P1 data. `LOGINOUT` gives a process its DCL
+(*Logging in*), whose first commands, before it prompts, are
+`@SYS$MANAGER:SYLOGIN` and `@SYS$LOGIN:LOGIN`, each if the file is
+there. `STARTUP`'s `SYS$INPUT` is a file, not a terminal, as a batch
+job's is on VMS: its DCL runs it, `@SYS$INPUT`, the site's startup, which
+mounts `DKB0:` and starts the network, then logs out. Its verbs are
+those of `DCL$TABLES` (*Commands*); a verb with an image runs it with
+`$IMGACT` and the parse:
 
 | Command | Does |
 | --- | --- |
@@ -306,7 +314,9 @@ an image runs it with `$IMGACT` and the parse:
 | `CONTINUE` | returns from the CTRL/Y AST, which goes back to the image |
 | `STOP [process-name]`, `STOP/IDENTIFICATION=pid` | `$DELPRC`, by name or by the PID in hex; with no name, ends the procedures, and the image CTRL/Y stopped with `$EXIT` from DCL, which skips its exit handlers, user mode's, with `SS$_ABORT` |
 | `HELP [verb]` | `HELP.EXE`, which describes the verbs from `DCL$TABLES` (*The system disk's programs*) |
-| `LOGOUT` | `$DELPRC` |
+| `LOGOUT` | writes `  username     logged out at  9-OCT-2026 10:00:00.00`, or `job terminated at` without a terminal, and `$DELPRC` |
+| `MCR image [command]` | runs `SYS$SYSTEM:image.EXE` as a foreign command, with `command` |
+| `SET PASSWORD` | `SETPWD.EXE` |
 | `@file [p1 ... p8]` | reads `file.COM` with RMS and takes its `$` lines as commands |
 | `SET COMMAND file` | compiles `file.CLD`'s verbs into the process's tables, which DCL parses with first |
 | `name := $image`, then `name args` | runs `image`, a foreign command, which reads `args` with `LIB$GET_FOREIGN` |
@@ -333,6 +343,45 @@ procedures at the next command; the read CTRL/Y ended gives it an empty
 line. A command that runs an image ends the one CTRL/Y stopped, as
 `STOP` does. ponytail: one message table in the executive rather than
 message files.
+
+### Logging in
+
+`LOGINOUT.EXE` runs in each terminal's process before anyone logs in:
+the swapper creates the console's on `_OPA0:` once `STARTUP` has run
+`SYSTARTUP_VMS.COM`, and again each time it is deleted, and `TELNETD`
+one on each TELNET terminal it makes. Each is named after its terminal
+and has every privilege, the swapper's or `TELNETD`'s. It asks for a
+username, then a password with `IO$M_NOECHO`, both in capitals, finds
+the username's record in `SYSUAF.DAT` by key 0, and compares
+`UAF$Q_PWD` with the password's hash, `$HASH_PASSWORD` of it, the
+record's salt and the username by the record's algorithm, `UAF$B_ENCRYPT`
+(*System services*). A wrong one, a username that isn't there or a
+`DISUSER` record says `User authorization failure`; a wrong password
+counts in `UAF$W_LOGFAILS`, which the next login reports and clears.
+Three failures end the image, and with it the process. A right one:
+
+1. `$SETPRN` names the process after the user, unless one in its group
+   has that name, when it keeps its terminal's.
+2. `$SETDDIR` makes `UAF$T_DEFDIR` the default directory, and
+   `$CRELNM` defines `SYS$LOGIN_DEVICE` and `SYS$DISK` as
+   `UAF$T_DEFDEV`, and `SYS$LOGIN` and `SYS$SCRATCH` as both, in the
+   process's table.
+3. `$CMKRNL` calls `EXE$LOGIN` with the record. It activates the image
+   `UAF$T_DEFCLI` names, `DCL.EXE`, with `IMG$ACTIVATE`, which refuses
+   one that isn't linked in P1, and makes the channels the process has,
+   to its terminal, its command interpreter's, so that image rundown
+   keeps them, and a TELNET terminal its connection. Then the process
+   takes the record's username, `PCB$T_USERNAME`, its UIC, its base
+   priority, `UAF$Q_PRIV` as its authorized privileges and
+   `UAF$Q_DEF_PRIV` as its permanent and current ones.
+4. `LOGINOUT` writes `Welcome to vaxpunk` and the failures, and exits:
+   the executive runs it down and calls DCL, as for any image.
+
+`SYSUAF.DAT` is `SYSUAF`, with the default `SYS$SYSTEM:.DAT`;
+`SYSTARTUP_VMS.COM` copies `build.rs`'s from the system disk to the
+ramdisk, which `SYS$SYSTEM` looks in first, where `AUTHORIZE` and `SET
+PASSWORD` change it. ponytail: no quotas, account restrictions, password
+expiry or last login times.
 
 ### Commands
 
@@ -672,6 +721,7 @@ can't reach them.
 | Volumes | `$MOUNT`, `$DISMOU`, `$INIT_VOL` | |
 | ASTs | `$DCLAST`, `$SETAST`, `$ASTEXIT` | |
 | Other | `$GETSYI`, `$GETSYIW`, `$GETMSG` | |
+| Security | `$HASH_PASSWORD` | `UAI$C_SHA256` alone: SHA-256 of the salt, the username without its blanks and the password, then 4095 times of the last digest and the password; the hash is the first 8 bytes ([ADR-0029](../adr/0029-loginout-and-sysuaf.md)) |
 
 Arguments the implemented services take but ignore: `$CREPRC`'s
 quotas and status flags, `$ASSIGN`'s mailbox,
@@ -686,7 +736,8 @@ VMS's bits (`$PRVDEF`): the current ones, `PCB$Q_PRIV`, which the
 checks look at; the permanent ones, which the current ones go back to
 when an image exits; and the authorized ones, which `$SETPRV` may enable
 without `SETPRV`. The swapper has every privilege and the UIC `[1,4]`,
-and `SYSTEM` inherits them: `$CREPRC` gives a process its creator's
+and `STARTUP` and `LOGINOUT` inherit them, until `LOGINOUT` gives the
+process its user's (*Logging in*): `$CREPRC` gives a process its creator's
 UIC, or another one for `DETACH`, its creator's privileges or those of
 its `prvadr` the creator has, and its creator's authorized ones. A
 service checks with `IFPRIV` and `IFNPRIV` from `lib.mlb`, and says
@@ -712,6 +763,14 @@ service checks with `IFPRIV` and `IFNPRIV` from `lib.mlb`, and says
 PROCESS/PRIVILEGES` lists the authorized and current ones, by the names
 in `sysexe/lib/prvnam.mar`. Files and volumes are checked by their
 owner and protection (*Files*).
+
+A known image gets privileges while it runs, as an image installed with
+privileges does on VMS: `KNOWN` in `process.mar` lists each by name, the
+file the image activator reads instead, on the system disk, by a
+specification with an underscore before the device, which no logical
+name redirects, and its privileges, which it enables after activating
+it, until the image exits. `SETPWD.EXE` gets `SYSPRV`, to write
+`SYSUAF.DAT`. ponytail: a fixed list until `INSTALL`.
 
 ### Logical names
 
@@ -744,8 +803,9 @@ word for the length returned, and a longword 0 at the end (`$LNMDEF`).
   name too.
 - **Process-permanent names.** `$CREPRC`'s `input`, `output` and `error`
   are the equivalences of the new process's `SYS$INPUT`, `SYS$OUTPUT` and
-  `SYS$ERROR`, those it was given. `EXEC$START` gives `SYSTEM` `_OPA0:` for
-  all three, as `LOGINOUT` gives a terminal's process its terminal.
+  `SYS$ERROR`, those it was given. The swapper gives the console's
+  `LOGINOUT` `_OPA0:` for all three, and `TELNETD` a remote login's its
+  `_TNAn:`; `STARTUP`'s `SYS$INPUT` is `SYSTARTUP_VMS.COM`.
 - **System names.** `EXEC$START` makes `SYS$SYSDEVICE`, `DKA0:`;
   `SYS$DISK`, `SYS$SYSDEVICE:`, the default device, which `SET DEFAULT`
   gives a process one of its own of; `SYS$SYSTEM`,
@@ -753,7 +813,8 @@ word for the length returned, and a longword 0 at the end (`$LNMDEF`).
   `SYS$SHARE`, `SYS$SYSDEVICE:[SYSLIB]`, where the shareable images are.
   `SYSTARTUP_VMS.COM` makes them `SYS$SYSROOT:` names. ponytail: VMS's
   `SYS$SYSTEM` is `SYS$SYSROOT:[SYSEXE]`, a rooted directory in
-  `[SYS0.]`, and `LOGINOUT` defines each process's `SYS$DISK`.
+  `[SYS0.]`. `LOGINOUT` defines each process's `SYS$DISK`, `SYS$LOGIN`,
+  `SYS$LOGIN_DEVICE` and `SYS$SCRATCH`.
 
 A name may have more than one equivalence string, up to 128: a search
 list. `$CRELNM` takes one `LNM$_STRING` item for each, in order, and
@@ -1272,6 +1333,10 @@ condition handling routines, with the symbol vector `librtl.opt` gives
 | `MOUNT` | `$MOUNT` with its parameters, the device and the label, if there is one, and `/OWNER_UIC` and `/PROTECTION`'s items |
 | `DISMOUNT` | `$DISMOU` with its parameter, the device |
 | `SET` | `$SETPRV`s each privilege of `SET PROCESS/PRIVILEGES`, `NO` before one to disable it, `ALL` for every one, permanently; `%DCL-W-IVKEYW` for a name it doesn't know. `SET PROTECTION=(code[,...]) file` and `SET FILE/OWNER_UIC=uic file` `$OPEN` the file with a protection XAB, change it and `$CLOSE` it |
+| `LOGINOUT` | logs a terminal's process in (*Logging in*) |
+| `AUTHORIZE` | `MCR AUTHORIZE`: opens `SYSUAF.DAT` and does the command after it, or each one after its `UAF>` prompt, parsed with its own tables, `sysexe/authorize.cld`: `ADD` from `DEFAULT`'s record, `MODIFY`, `REMOVE`, `SHOW` and `LIST`, which writes `SYSUAF.LIS`, with `/PASSWORD`, which it hashes with a new salt, `/UIC`, `/PRIVILEGES`, `/DEFPRIVILEGES`, `/DEVICE`, `/DIRECTORY`, `/OWNER`, `/ACCOUNT`, `/CLI`, `/PRIORITY` and the quotas |
+| `SETPWD` | `SET PASSWORD`: asks for the old password and the new one twice, without echoing them, and puts the new one's hash in the process's user's record, with `SYSPRV`, a known image's (*Privileges*) |
+| `OPCCRASH` | `MCR OPCCRASH`: in kernel mode, `HALT`s, and the PAL powers off |
 | `SHOW` | `SHOW PROCESS`: what `$GETJPI` says of the process, its UIC, and with `/PRIVILEGES` its authorized and current privileges; `SHOW SYSTEM`: a line per process |
 | `CREATE` | `$CREATE_DIR` with its parameter, for `CREATE/DIRECTORY` |
 | `STARTUP` | makes 4 pages with `$EXPREG`, checks and deletes them; creates `SLEEPER` at a higher priority, which runs at once, and `PING` and `PONG`; waits until `PONG` sets flag 66 of their cluster; deletes `SLEEPER`; creates `SVCTEST`, `HOG`, `TIMETEST`, `ASTTEST`, `MBXTEST`, `FSTEST1` and `FSTEST2` and `CHFTEST` |

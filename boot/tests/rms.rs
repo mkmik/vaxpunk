@@ -62,14 +62,18 @@ impl Vax {
             .spawn()
             .unwrap();
         let console = qemu.stdin.take().unwrap();
-        let vax = Vax {
+        let mut vax = Vax {
             qemu,
             console,
             log: log.to_path_buf(),
             _one: one,
         };
         vax.wait_for("%MOUNT-I-MOUNTED, DATA mounted on _DKB0:", 0, 60);
-        vax.wait_for("\n$ ", 0, 60);
+        let at = vax.wait_for("Username: ", 0, 60);
+        vax.console.write_all(b"SYSTEM\r").unwrap();
+        let at = vax.wait_for("Password: ", at, 20);
+        vax.console.write_all(b"MANAGER\r").unwrap(); // not echoed
+        vax.wait_for("\n$ ", at, 60);
         vax
     }
 

@@ -17,10 +17,10 @@
 
         .EXTERNAL DCL$COMMAND, DCL$CONTINUE, DCL$CTRLYFP, DCL$DEPTH, DCL$DONE
         .EXTERNAL DCL$EXPR, DCL$INSFPRM, DCL$LASTSTAT, DCL$LINE, DCL$NAMESCAN
-        .EXTERNAL DCL$NEXT, DCL$QWORD, DCL$RESTVAL, DCL$SAMESTR
+        .EXTERNAL DCL$NEXT, DCL$OK, DCL$QWORD, DCL$RESTVAL, DCL$SAMESTR
         .EXTERNAL DCL$SETSYM, DCL$SKIP, DCL$SYMEND, DCL$SYMNAM, DCL$SYMTAB
         .EXTERNAL DCL$TARGET, DCL$TOINT, DCL$TOKEN, DCL$VALNAME, DCL$VERB
-        .EXTERNAL DCL$VSTACK, DCL$V_EXPR, DCL$WARN, DCL$WORD
+        .EXTERNAL DCL$VSTACK, DCL$V_EXPR, DCL$WARN, DCL$WORD, DCL$QUIET
 
         .PSECT  DATA, NOEXE, WRT, LONG
 V_LABEL:
@@ -45,7 +45,8 @@ PBUFEND:
 ; DCL$DO, @file [p1 ... p8]: reads the procedure file names,
 ; file.COM if it has no type, into PBUF after the one running, and runs
 ; it, one level deeper, with its parameters local symbols P1 to P8, ""
-; those not given.
+; those not given. A procedure it can't open is an error, but one of the
+; first commands', DCL$QUIET's, which isn't run.
 DCL$DO::
         .EXCEPTION_ENTRY
         INCL    R6
@@ -59,7 +60,10 @@ DCL$DO::
         BRW     DCL$WARN
 7$:     MOVB    R8, PROCFAB+FAB$B_FNS
         $OPEN   FAB=PROCFAB
-        BLBC    R0, 80$
+        BLBS    R0, 8$
+        BBCC    #0, DCL$QUIET, 80$
+        BRW     DCL$OK
+8$:     CLRL    DCL$QUIET
         $CONNECT RAB=PROCRAB
         BLBC    R0, 70$
         MOVL    DCL$DEPTH, R0

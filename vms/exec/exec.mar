@@ -6,11 +6,14 @@
 ; (docs/design/0001-pal-interface.md). EXEC$START sets up the system
 ; control block, memory, the scheduler, the system time and the console,
 ; mounts the system disk, defines the system's logical names for it,
-; starts the console's process, SYSTEM, which
-; runs DCL, and becomes the
-; swapper, process 1, which deletes what deleted processes leave behind
-; (docs/design/0002-executive-processes.md). When SYSTEM is deleted, at
-; LOGOUT, the swapper halts, and the PAL powers the machine off.
+; starts the STARTUP process, whose DCL runs SYSTARTUP_VMS.COM, and
+; becomes the swapper, process 1, which deletes what deleted processes
+; leave behind (docs/design/0002-executive-processes.md). Once STARTUP
+; is gone, the swapper starts LOGINOUT on the console, which asks for a
+; username and a password, and again each time the process there is
+; deleted, at LOGOUT.
+; ponytail: VMS's console waits for a key before Username:; this one
+; asks again at once.
 ;
         .LIBRARY "lib.mlb"
         .LIBRARY "starlet.mlb"
@@ -38,18 +41,21 @@ EXE$GL_RPB::                            ; the restart parameter block
         .LONG   0
 EXE$AL_SCB::                            ; the system control block
         .BLKB   SCB$K_LENGTH
-CONSOLE_IMAGE:
+STARTUP_IMAGE:
         .ASCID  "DCL.EXE"
-CONSOLE_NAME:
-        .ASCID  "SYSTEM"
-CONSOLE_PID:                            ; SYSTEM's PID
-        .LONG   0
-LOGOUT: .ASCIZ  "%EXEC-I-LOGOUT, SYSTEM logged out, halting"
-CONSOLE_DEVICE:                         ; its SYS$INPUT, SYS$OUTPUT and SYS$ERROR
+STARTUP_NAME:
+        .ASCID  "STARTUP"
+STARTUP_INPUT:                          ; the procedure its DCL runs
+        .ASCID  "SYS$MANAGER:SYSTARTUP_VMS.COM"
+CONSOLE_IMAGE:
+        .ASCID  "LOGINOUT.EXE"
+CONSOLE_DEVICE:                         ; its SYS$INPUT, SYS$OUTPUT and SYS$ERROR, and its name
         .ASCID  "_OPA0:"
+CONSOLE_PID:                            ; STARTUP's PID, then the console's process's
+        .LONG   0
 BANNER: .ASCIZ  "%EXEC-I-START, vaxpunk executive, free pages: "
 NOSTART:
-        .ASCIZ  "%EXEC-F-NOSTART, can't create SYSTEM, status "
+        .ASCIZ  "%EXEC-F-NOSTART, can't create STARTUP or the console's process, status "
 NOMOUNT:
         .ASCIZ  "%EXEC-F-NOMOUNT, can't mount the system disk, DKA0:, status "
 ; The logical names in LNM$SYSTEM_TABLE at boot, each name and its
@@ -123,7 +129,7 @@ EXEC$START::
         ADDL2   R9, R8
         BRB     20$
 30$:    SETIPL  #0
-        $CREPRC_S PIDADR=CONSOLE_PID, IMAGE=CONSOLE_IMAGE, INPUT=CONSOLE_DEVICE, OUTPUT=CONSOLE_DEVICE, ERROR=CONSOLE_DEVICE, PRCNAM=CONSOLE_NAME, BASPRI=#4
+        $CREPRC_S PIDADR=CONSOLE_PID, IMAGE=STARTUP_IMAGE, INPUT=STARTUP_INPUT, OUTPUT=CONSOLE_DEVICE, ERROR=CONSOLE_DEVICE, PRCNAM=STARTUP_NAME, BASPRI=#4
         BLBS    R0, SWAPPER
         MOVAB   NOSTART, R1
 ; FAIL: R1 = a message, R0 = a status. Writes them and halts.
@@ -135,24 +141,30 @@ FAIL:   MOVL    R0, R2
         HALT
 
 ; The swapper: deletes the context, kernel stack and PCB of each process
-; that deleted itself, then hibernates until another does. Once SYSTEM
-; has, the system halts.
+; that deleted itself, then hibernates until another does. Once STARTUP
+; has, or the console's process, it creates the console's next one,
+; LOGINOUT on _OPA0:, named so.
 SWAPPER:
 10$:    SETIPL  #IPL$_SYNCH
         REMQUE  @SCH$GQ_DELQ, R4
         BVS     20$
-        CMPL    PCB$L_PID(R4), CONSOLE_PID
-        BEQL    30$
+        PUSHL   PCB$L_PID(R4)
         JSB     G^EXE$DELETEPCB
+        CMPL    (SP)+, CONSOLE_PID
+        BNEQ    10$
+        SETIPL  #0
+        $CREPRC_S PIDADR=CONSOLE_PID, IMAGE=CONSOLE_IMAGE, INPUT=CONSOLE_DEVICE, OUTPUT=CONSOLE_DEVICE, ERROR=CONSOLE_DEVICE, PRCNAM=CONSOLE_DEVICE, BASPRI=#4
+        BLBS    R0, 10$
+        MOVL    R0, R2
+        MOVAB   NOSTART, R1
+        JSB     G^EXE$OUTZSTRING
+        MOVL    R2, R1
+        JSB     G^EXE$OUTHEX
+        JSB     G^EXE$OUTCRLF
         BRB     10$
 20$:    SETIPL  #0
         $HIBER_S
         BRB     10$
-30$:    MOVAB   LOGOUT, R1
-        JSB     G^EXE$OUTZSTRING
-        JSB     G^EXE$OUTCRLF
-        MOVL    #SS$_NORMAL, R0
-        HALT
 
 ; CON$PUTCHAR: writes the character in R0 on the console, for consolio's
 ; EXE$OUT* routines. Keeps every register.

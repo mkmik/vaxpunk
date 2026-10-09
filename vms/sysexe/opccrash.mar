@@ -1,0 +1,23 @@
+        .TITLE  OPCCRASH        Stops the system
+        .IDENT  /V0.1/
+;
+; MCR OPCCRASH stops the system, as VMS's SHUTDOWN.COM does last: in
+; kernel mode, which takes CMKRNL, it halts the processor, and the PAL
+; powers the machine off (ADR-0008). Without CMKRNL it fails with
+; SS$_NOPRIV.
+; ponytail: no SHUTDOWN.COM to warn the users and stop their processes
+; first; the file system writes each change as it goes, so nothing is
+; lost.
+;
+        .LIBRARY "starlet.mlb"
+
+        .PSECT  CODE, EXE, LONG
+        .ENTRY  START, ^M<>
+        $CMKRNL_S ROUTIN=STOP
+        RET
+
+; STOP: in kernel mode, halts. Doesn't return.
+        .ENTRY  STOP, ^M<>
+        HALT
+
+        .END    START

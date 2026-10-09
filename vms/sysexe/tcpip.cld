@@ -136,7 +136,7 @@ define syntax SHOW_INTERFACE
 	parameter P2, label=INTERFACE
 
 ! START COMMUNICATION: the saved configuration, or DHCP, and the remote login
-! server, as SYLOGIN.COM does at boot.
+! server, as SYSTARTUP_VMS.COM does at boot.
 define verb START
 	routine START_COMMUNICATION
 	parameter P1, label=OPTION, prompt="What", value(required, type=START_OPTIONS)

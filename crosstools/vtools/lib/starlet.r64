@@ -1263,6 +1263,7 @@ LITERAL
     JPI$_PRIB = 777,  ! the base priority
     JPI$_PID = 793,
     JPI$_PRCNAM = 796,  ! the process's name
+    JPI$_USERNAME = 514,  ! its user's name, 12 characters padded with blanks
     JPI$_IMAGNAME = 519,  ! the image it runs, or ran last
     JPI$_UIC = 772,  ! its UIC, a longword
     JPI$_MEM = 775,  ! the UIC's member, and its group
@@ -1277,6 +1278,14 @@ LITERAL
     SYI$_MAXPROCESSCNT = 4105,  ! how many processes there may be
     SYI$_QUANTUM = 4137,  ! ticks of 10 ms in a quantum
     SYI$_BOOTTIME = 4286;  ! the system time at boot, a quadword
+
+! $UAIDEF
+LITERAL
+    UAI$C_AD_II = 0,  ! VMS's: a CRC
+    UAI$C_PURDY = 1,  ! Purdy's polynomial
+    UAI$C_PURDY_V = 2,  ! with the username's length
+    UAI$C_PURDY_S = 3,  ! and its blanks
+    UAI$C_SHA256 = 128;  ! salted, iterated SHA-256: vaxpunk's
 
 ! $PRVDEF
 LITERAL

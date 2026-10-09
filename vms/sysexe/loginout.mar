@@ -1,0 +1,289 @@
+        .TITLE  LOGINOUT        Logs a user in
+        .IDENT  /V0.1/
+;
+; The executive runs this on the console, and TELNETD on each TELNET
+; terminal, in a process of its own named after the terminal, with every
+; privilege. It asks for a username and a password, finds the user's
+; record in SYSUAF.DAT, SYS$SYSTEM:SYSUAF.DAT unless the logical name
+; SYSUAF says where, by key 0, the username, and checks the password's
+; hash ($HASH_PASSWORD). A wrong username and a wrong password both say
+; User authorization failure; only a wrong password counts, in the
+; record's UAF$W_LOGFAILS, which the next login reports and clears. Three
+; failures, or the line going, end the process, and so a TELNET
+; connection. Once both are right, it names the process after the user,
+; unless another process has that name, defines SYS$LOGIN,
+; SYS$LOGIN_DEVICE, SYS$SCRATCH and SYS$DISK in its table from the
+; record's default device and directory, which it makes the default
+; directory, and calls EXE$LOGIN in kernel mode, which gives the process
+; the user's UIC, privileges and priority, and the command interpreter
+; the record names, DCL. The executive calls DCL when this image exits,
+; and DCL runs SYLOGIN.COM and the user's LOGIN.COM.
+; ponytail: no quotas, account restrictions, password expiry or last
+; login times (PRD-0003's later steps).
+;
+        .LIBRARY "lib.mlb"
+        .LIBRARY "starlet.mlb"
+        .LIBRARY "sysexe.mlb"
+        $SSDEF
+        $IODEF
+        $LNMDEF
+        $FABDEF
+        $RABDEF
+        $UAFDEF
+
+        .EXTERNAL EXE$LOGIN, PUT_LINE, LIB$SIGNAL
+
+NAMESIZE = 32                           ; the longest username, and password
+
+        .PSECT  DATA, NOEXE, WRT, LONG
+INPUT:  .ASCID  "SYS$INPUT"
+CHAN:   .LONG   0                       ; the terminal's
+IOSB:   .BLKQ   1
+UPROMPT:
+        .ASCII  <13><10>"Username: "
+UPROMPTLEN = .-UPROMPT
+PPROMPT:
+        .ASCII  "Password: "
+PPROMPTLEN = .-PPROMPT
+TRIES:  .LONG   0                       ; the logins left
+NAMDSC: .LONG   NAMESIZE                ; the username, in capitals, padded with blanks: the key
+        .ADDRESS NAME
+NAME:   .BLKB   NAMESIZE
+NAMLEN: .LONG   0                       ; without the blanks
+PWDDSC: .LONG   0                       ; the password, in capitals
+        .ADDRESS PWD
+PWD:    .BLKB   NAMESIZE
+HASH:   .BLKQ   1
+UAFFAB: $FAB    FNA=UAFNAM, FNS=UAFNAMLEN, DNA=UAFDEF, DNS=UAFDEFLEN, FAC=<GET,UPD>
+UAFRAB: $RAB    FAB=UAFFAB, UBF=REC, USZ=UAF$C_LENGTH, RBF=REC, RAC=KEY, KBF=NAME, KSZ=NAMESIZE
+UAFNAM: .ASCII  "SYSUAF"
+UAFNAMLEN = .-UAFNAM
+UAFDEF: .ASCII  "SYS$SYSTEM:.DAT"
+UAFDEFLEN = .-UAFDEF
+REC:    .BLKB   UAF$C_LENGTH            ; the user's record
+FAILS:  .LONG   0                       ; its failures, before this login
+KARGS:  .LONG   1                       ; EXE$LOGIN's arguments: the record
+        .ADDRESS REC
+PROCTAB:
+        .ASCID  "LNM$PROCESS_TABLE"
+LNMDSC: .LONG   0                       ; a logical name being defined
+        .ADDRESS 0
+ITEMS:  .WORD   0, LNM$_STRING          ; and its string
+        .ADDRESS VALUE
+        .LONG   0, 0
+VALUE:  .BLKB   96                      ; the device, then the directory
+DIRDSC: .LONG   0                       ; the directory
+        .ADDRESS 0
+; The logical names, the device's or the login directory's: 0 the
+; device, 1 with the directory.
+NAMES:  .BYTE   0
+        .ASCIC  "SYS$LOGIN_DEVICE"
+        .BYTE   0
+        .ASCIC  "SYS$DISK"
+        .BYTE   1
+        .ASCIC  "SYS$LOGIN"
+        .BYTE   1
+        .ASCIC  "SYS$SCRATCH"
+        .BYTE   255
+LINE:   .BLKB   64                      ; a line being made, .ASCIC
+
+        .PSECT  CODE, EXE, LONG
+        .ENTRY  START, ^M<R2, R3, R4, R5, R6>
+        $ASSIGN_S DEVNAM=INPUT, CHAN=CHAN
+        BLBC    R0, 90$
+        MOVL    #3, TRIES
+10$:    BSBW    ASK
+        BLBC    R0, 90$
+        TSTL    NAMLEN
+        BEQL    10$                     ; an empty line: ask again
+        BSBW    CHECK
+        BLBS    R0, LOGIN
+        PRINT   "User authorization failure"
+        SOBGTR  TRIES, 10$
+90$:    $EXIT_S #SS$_NORMAL             ; the process goes
+        RET                             ; $EXIT doesn't return
+
+; LOGIN: REC = the user's record, the file open. Clears and keeps its
+; failures, makes the process the user's, reports the failures and exits
+; to the command interpreter.
+LOGIN:  MOVZWL  REC+UAF$W_LOGFAILS, FAILS
+        CLRW    REC+UAF$W_LOGFAILS
+        $UPDATE RAB=UAFRAB
+        $CLOSE  FAB=UAFFAB
+        MOVL    NAMLEN, NAMDSC
+        $SETPRN_S PRCNAM=NAMDSC         ; one that has it already: keep the terminal's
+        BSBW    DEFAULTS
+        BLBC    R0, 80$
+        $CMKRNL_S ROUTIN=G^EXE$LOGIN, ARGLST=KARGS
+        BLBC    R0, 80$
+        BBS     #UAF$V_DISWELCOM, REC+UAF$L_FLAGS, 10$
+        PUSHAB  WELCOME
+        CALLS   #1, G^PUT_LINE
+10$:    MOVL    FAILS, R1
+        BEQL    20$
+        BSBW    FAILURES
+20$:    $EXIT_S #SS$_NORMAL
+        RET                             ; $EXIT doesn't return
+80$:    PUSHL   R0
+        CALLS   #1, G^LIB$SIGNAL
+        $EXIT_S #SS$_NORMAL
+        RET
+
+; ASK: reads the username and the password, without echoing it, into
+; NAME and PWD, in capitals. R0 = SS$_NORMAL, or the read's error, such
+; as SS$_HANGUP. Uses R0-R5.
+ASK:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5>
+        $QIOW_S CHAN=CHAN, FUNC=#IO$_READPROMPT, IOSB=IOSB, P1=NAME, P2=#NAMESIZE, P5=#UPROMPT, P6=#UPROMPTLEN
+        BSBW    STATUS
+        BLBC    R0, 90$
+        MOVZWL  IOSB+2, R2
+        MOVL    R2, NAMLEN
+        BEQL    90$
+        MOVAB   NAME, R1
+        BSBW    UPCASE
+        SUBL3   NAMLEN, #NAMESIZE, R0   ; blanks after it
+        MOVAB   NAME, R1
+        ADDL2   NAMLEN, R1
+        MOVC5   #0, (SP), #^A/ /, R0, (R1)
+        $QIOW_S CHAN=CHAN, FUNC=#IO$_READPROMPT!IO$M_NOECHO, IOSB=IOSB, P1=PWD, P2=#NAMESIZE, P5=#PPROMPT, P6=#PPROMPTLEN
+        BSBW    STATUS
+        BLBC    R0, 90$
+        PRINT   ""                      ; the line the password didn't echo
+        MOVZWL  IOSB+2, R2
+        MOVW    R2, PWDDSC
+        MOVAB   PWD, R1
+        BSBW    UPCASE
+        MOVL    #SS$_NORMAL, R0
+90$:    RSB
+
+; UPCASE: R1 = a string, R2 = its length. Puts its letters in capitals.
+; Uses R0-R2.
+UPCASE:
+        .JSB_ENTRY  SCRATCH=<R2>
+10$:    TSTL    R2
+        BEQL    90$
+        CMPB    (R1), #^A/a/
+        BLSSU   20$
+        CMPB    (R1), #^A/z/
+        BGTRU   20$
+        SUBB2   #^A/a/-^A/A/, (R1)
+20$:    INCL    R1
+        DECL    R2
+        BRB     10$
+90$:    RSB
+
+; STATUS: R0 = $QIOW's status. R0 = the IOSB's, if that was a success.
+STATUS:
+        .JSB_ENTRY
+        BLBC    R0, 90$
+        MOVZWL  IOSB, R0
+90$:    RSB
+
+; CHECK: finds NAME's record in SYSUAF.DAT and checks PWD against its
+; hash. R0 = 1 if they match, with REC the record and the file open, else
+; 0, with the file closed and a wrong password counted. Uses R0-R5.
+CHECK:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5>
+        MOVB    #FAB$M_GET!FAB$M_UPD, UAFFAB+FAB$B_FAC
+        $OPEN   FAB=UAFFAB
+        BLBS    R0, 10$
+        MOVB    #FAB$M_GET, UAFFAB+FAB$B_FAC    ; a disk that is write locked
+        $OPEN   FAB=UAFFAB
+        BLBS    R0, 10$
+        PUSHL   R0                      ; no one may log in: say why
+        CALLS   #1, G^LIB$SIGNAL
+        BRB     80$
+10$:    $CONNECT RAB=UAFRAB
+        BLBC    R0, 70$
+        $GET    RAB=UAFRAB
+        BLBC    R0, 70$
+        BBS     #UAF$V_DISACNT, REC+UAF$L_FLAGS, 70$
+        MOVZBL  REC+UAF$B_ENCRYPT, R0
+        MOVZWL  REC+UAF$W_SALT, R1
+        $HASH_PASSWORD_S PWDDSC=PWDDSC, ALG=R0, SALT=R1, USRDSC=NAMDSC, HASH=HASH
+        BLBC    R0, 60$
+        CMPL    HASH, REC+UAF$Q_PWD
+        BNEQ    60$
+        CMPL    HASH+4, REC+UAF$Q_PWD+4
+        BNEQ    60$
+        MOVL    #1, R0
+        RSB
+60$:    INCW    REC+UAF$W_LOGFAILS      ; the password: count it
+        $UPDATE RAB=UAFRAB
+70$:    $CLOSE  FAB=UAFFAB
+80$:    CLRL    R0
+        RSB
+
+; DEFAULTS: REC = the user's record. Makes its default directory the
+; process's, and defines the logical names NAMES lists from its default
+; device and directory. R0 = SS$_NORMAL, or $SETDDIR's or $CRELNM's
+; error. Uses R0-R6.
+DEFAULTS:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5, R6>
+        MOVZBL  REC+UAF$T_DEFDIR, DIRDSC
+        MOVAB   REC+UAF$T_DEFDIR+1, DIRDSC+4
+        $SETDDIR_S NEWDIR=DIRDSC
+        BLBC    R0, 90$
+        MOVZBL  REC+UAF$T_DEFDEV, R6
+        MOVC3   R6, REC+UAF$T_DEFDEV+1, VALUE
+        MOVZBL  REC+UAF$T_DEFDIR, R0
+        MOVC3   R0, REC+UAF$T_DEFDIR+1, VALUE[R6]
+        MOVAB   NAMES, R5
+10$:    MOVZBL  (R5)+, R0               ; with the directory?
+        CMPL    R0, #255
+        BEQL    80$
+        MOVW    R6, ITEMS
+        BLBC    R0, 20$
+        ADDW2   DIRDSC, ITEMS
+20$:    MOVZBL  (R5)+, LNMDSC
+        MOVL    R5, LNMDSC+4
+        ADDL2   LNMDSC, R5
+        PUSHL   R5
+        $CRELNM_S TABNAM=PROCTAB, LOGNAM=LNMDSC, ITMLST=ITEMS
+        MOVL    (SP)+, R5
+        BLBC    R0, 90$
+        BRB     10$
+80$:    MOVL    #SS$_NORMAL, R0
+90$:    RSB
+
+; FAILURES: R1 = the login failures since the last login, 1 or more.
+; Says how many, as VMS does. Uses R0-R5.
+FAILURES:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5>
+        MOVAB   LINE+1, R3
+        MOVB    #9, (R3)+
+        CLRL    R4                      ; the digits, on the stack
+10$:    DIVL3   #10, R1, R5
+        MULL3   #10, R5, R0
+        SUBL3   R0, R1, R0
+        ADDL2   #^A/0/, R0
+        PUSHL   R0
+        INCL    R4
+        MOVL    R5, R1
+        BNEQ    10$
+20$:    MOVL    (SP)+, R0
+        MOVB    R0, (R3)+
+        SOBGTR  R4, 20$
+        MOVAB   FAILURE, R1
+        CMPL    FAILS, #1
+        BEQL    30$
+        MOVAB   FAILURES2, R1
+30$:    MOVZBL  (R1)+, R2
+        MOVC3   R2, (R1), (R3)
+        MOVAB   LINE+1, R0
+        SUBL3   R0, R3, R0
+        MOVB    R0, LINE
+        PUSHAB  LINE
+        CALLS   #1, G^PUT_LINE
+        RSB
+
+        .PSECT  $LITERAL$
+WELCOME:
+        .ASCIC  <9>"Welcome to vaxpunk"
+FAILURE:
+        .ASCIC  " failure since last successful login"
+FAILURES2:
+        .ASCIC  " failures since last successful login"
+
+        .END    START
