@@ -8,7 +8,8 @@
 ; vrun, crosstools/vtools/bliss/fio.mar serves the same routines. A file
 ; is read and written as a stream of bytes, each record a line ended by a
 ; line feed, as under vrun: variable length records with carriage return
-; control, as EDIT writes them.
+; control, as EDIT writes them. The TT$ routines are the terminal, SYS$INPUT,
+; a key at a time, which vrun/tt.b64 has under vrun.
 ; ponytail: two files open at once; a record past RECMAX bytes is cut.
 ;
         .LIBRARY "starlet.mlb"
@@ -16,6 +17,7 @@
         $RMSDEF
         $FABDEF
         $RABDEF
+        $IODEF
 
         .EXTERNAL LIB$PUT_OUTPUT, CLI$GET_VALUE
 
@@ -48,6 +50,15 @@ OUTDSC: .LONG   0                       ; FIO$PUT_LINE's line
 NEXT:   .LONG   0                       ; FIO$ALLOC's next free byte
 LIMIT:  .LONG   0                       ; and its end
 RETADR: .BLKL   2
+TTNAME: .ASCID  "SYS$INPUT"
+TTCHAN: .LONG   0
+TTCHAR: .BLKB   12                      ; the terminal's characteristics
+TTIOSB: .BLKQ   1
+NOTERM: .LONG   0, 0                    ; a read's terminators: none
+TTKEY:  .BLKB   4
+TTAHEAD: .BLKB  8                       ; the type-ahead count, and the first
+TTLEN:  .LONG   0                       ; the bytes gathered to write
+TTBUF:  .BLKB   1024
 
         .PSECT  FIO_CODE, EXE, LONG
 ; CHAN: R0 = a channel. R1 = its slot, or 0 if it isn't open.
@@ -266,6 +277,70 @@ PUTREC:
 ; FIO$EXIT status: ends the image with status, a condition value.
         .ENTRY  FIO$EXIT, ^M<>
         $EXIT_S CODE=4(AP)
+        RET
+
+; TT$OPEN width, page: whether SYS$INPUT is a terminal; its width and page.
+        .ENTRY  TT$OPEN, ^M<R2>
+        $ASSIGN_S DEVNAM=TTNAME, CHAN=TTCHAN
+        BLBC    R0, 90$
+        $QIOW_S CHAN=TTCHAN, FUNC=#IO$_SENSEMODE, IOSB=TTIOSB, P1=TTCHAR, P2=#12
+        BLBC    R0, 90$
+        BLBC    TTIOSB, 90$
+        MOVZWL  TTCHAR+2, @4(AP)
+        MOVZBL  TTCHAR+7, @8(AP)
+        MOVL    #1, R0
+        RET
+90$:    CLRL    R0
+        RET
+
+; TT$FLUSH: writes what TT$PUT gathered.
+        .ENTRY  TT$FLUSH, ^M<R2>
+        TSTL    TTLEN
+        BEQL    10$
+        $QIOW_S CHAN=TTCHAN, FUNC=#IO$_WRITEVBLK, IOSB=TTIOSB, P1=TTBUF, P2=TTLEN
+        CLRL    TTLEN
+10$:    RET
+
+; TT$PUT text, length: sends it to the terminal, through TTBUF.
+        .ENTRY  TT$PUT, ^M<R2, R3>
+        MOVL    4(AP), R2
+        MOVL    8(AP), R3
+10$:    DECL    R3
+        BLSS    90$
+        CMPL    TTLEN, #1024
+        BLSSU   20$
+        CALLS   #0, TT$FLUSH
+20$:    MOVL    TTLEN, R0
+        MOVB    (R2)+, TTBUF[R0]
+        INCL    TTLEN
+        BRB     10$
+90$:    RET
+
+; TT$GET: the next byte typed, unechoed and unfiltered, or -1 if the read
+; fails.
+        .ENTRY  TT$GET, ^M<R2>
+        CALLS   #0, TT$FLUSH
+        $QIOW_S CHAN=TTCHAN, FUNC=#IO$_READVBLK!IO$M_NOECHO!IO$M_NOFILTR, IOSB=TTIOSB, P1=TTKEY, P2=#1, P4=#NOTERM
+        BLBC    R0, 90$
+        BLBC    TTIOSB, 90$
+        MOVZBL  TTKEY, R0
+        RET
+90$:    MNEGL   #1, R0
+        RET
+
+; TT$WAITING: whether a key has been typed and not yet read.
+        .ENTRY  TT$WAITING, ^M<R2>
+        $QIOW_S CHAN=TTCHAN, FUNC=#IO$_SENSEMODE!IO$M_TYPEAHDCNT, IOSB=TTIOSB, P1=TTAHEAD
+        CLRL    R0
+        BLBC    TTIOSB, 90$
+        TSTW    TTAHEAD
+        BEQL    90$
+        MOVL    #1, R0
+90$:    RET
+
+; TT$CLOSE: what is gathered written.
+        .ENTRY  TT$CLOSE, ^M<>
+        CALLS   #0, TT$FLUSH
         RET
 
         .END

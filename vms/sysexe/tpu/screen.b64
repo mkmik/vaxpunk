@@ -453,7 +453,7 @@ GLOBAL ROUTINE SCR_UPDATE : NOVALUE =
         FIRST = -1;
         LAST = -1;
         INCR C FROM 0 TO .SCR_W - 1 DO
-            IF CELL(.WANT, .R, .C)<0, 16, 0> NEQ CELL(.SHOWN, .R, .C)<0, 16, 0>
+            IF .CELL(.WANT, .R, .C)<0, 16, 0> NEQ .CELL(.SHOWN, .R, .C)<0, 16, 0>
             THEN
                 (IF .FIRST LSS 0 THEN FIRST = .C; LAST = .C);
         IF .FIRST GEQ 0
@@ -464,7 +464,7 @@ GLOBAL ROUTINE SCR_UPDATE : NOVALUE =
                 BEGIN
                 LOCAL
                     X;
-                X = CELL(.WANT, .R, .C)<0, 16, 0>;
+                X = .CELL(.WANT, .R, .C)<0, 16, 0>;
                 VIDEO(SRL(.X, 8));
                 TT$PUT(CELL(.WANT, .R, .C), 1)
                 END;

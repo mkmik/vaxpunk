@@ -593,33 +593,53 @@ const RMS: Phase = Phase {
 
 /// EDIT/TPU/NODISPLAY runs a command file CREATE makes on DKB0:: TPU
 /// (PRD-0006) reads WELCOME.TXT into a buffer, finds a pattern in it, puts
-/// a line before it and writes it to a file, whose head TYPE shows.
+/// a line before it and writes it to a file, whose head TYPE shows. Then
+/// EDIT/TPU on the console's screen: a window on a buffer, its status
+/// line, a line typed into it, and CTRL/Z, which writes it to a file TYPE
+/// shows.
 const TPU: Phase = Phase {
     name: "tpu",
-    secs: 30,
-    steps: &[(
-        "RMSTEST done",
-        1,
-        concat!(
-            "CREATE TPUTEST.TPU\r",
-            "b := CREATE_BUFFER (\"t\", \"SYS$SYSDEVICE:[SYSMGR]WELCOME.TXT\");\r",
-            "POSITION (BEGINNING_OF (b));\r",
-            "r := SEARCH_QUIETLY (\"Files-11\" + ARB (6), FORWARD);\r",
-            "MESSAGE (\"TPU found \" + STR (r) + \" in \" + ",
-            "STR (GET_INFO (b, \"record_count\")) + \" lines\");\r",
-            "COPY_TEXT (\"Edited with TPU\");\r",
-            "SPLIT_LINE;\r",
-            "WRITE_FILE (b, \"TPUTEST.OUT\");\r",
-            "QUIT (OFF);\r\x1a",
-            "EDIT/TPU/NODISPLAY/COMMAND=TPUTEST.TPU\r",
-            "TYPE/HEAD=2 TPUTEST.OUT\r",
+    secs: 45,
+    steps: &[
+        (
+            "RMSTEST done",
+            1,
+            concat!(
+                "CREATE TPUTEST.TPU\r",
+                "b := CREATE_BUFFER (\"t\", \"SYS$SYSDEVICE:[SYSMGR]WELCOME.TXT\");\r",
+                "POSITION (BEGINNING_OF (b));\r",
+                "r := SEARCH_QUIETLY (\"Files-11\" + ARB (6), FORWARD);\r",
+                "MESSAGE (\"TPU found \" + STR (r) + \" in \" + ",
+                "STR (GET_INFO (b, \"record_count\")) + \" lines\");\r",
+                "COPY_TEXT (\"Edited with TPU\");\r",
+                "SPLIT_LINE;\r",
+                "WRITE_FILE (b, \"TPUTEST.OUT\");\r",
+                "QUIT (OFF);\r\x1a",
+                "EDIT/TPU/NODISPLAY/COMMAND=TPUTEST.TPU\r",
+                "TYPE/HEAD=2 TPUTEST.OUT\r",
+            ),
         ),
-    )],
+        (
+            "Edited with TPU",
+            1,
+            concat!(
+                "CREATE TPUSCR.TPU\r",
+                "b := CREATE_BUFFER (\"scr\");\r",
+                "w := CREATE_WINDOW (1, 20, ON);\r",
+                "MAP (w, b);\r",
+                "DEFINE_KEY (\"WRITE_FILE (b, 'TPUSCR.OUT'); QUIT (OFF)\", CTRL_Z_KEY);\r\x1a",
+                "EDIT/TPU/NOSECTION/COMMAND=TPUSCR.TPU\r",
+            ),
+        ),
+        ("Buffer : SCR", 1, "typed on vaxpunk\x1aTYPE TPUSCR.OUT\r"),
+    ],
     lines: &[
         "%TPU-S-FILEIN, 10 lines read from file SYS$SYSDEVICE:[SYSMGR]WELCOME.TXT",
         "TPU found Files-11 ODS-2 in 10 lines",
         "%TPU-S-FILEOUT, 11 lines written to file TPUTEST.OUT",
         "Edited with TPU",
+        "1 line written to file TPUSCR.OUT",
+        "$ TYPE TPUSCR.OUT",
     ],
 };
 

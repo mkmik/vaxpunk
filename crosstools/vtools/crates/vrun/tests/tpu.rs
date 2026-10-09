@@ -198,6 +198,20 @@ fn render(bytes: &[u8]) -> String {
         .rows(0, 80)
         .map(|r| r.trim_end().to_string())
         .collect();
+    // The video of each row with any: R reverse, B bold, U underline.
+    for r in 0..24 {
+        let mask: String = (0..80)
+            .map(|c| match screen.cell(r, c) {
+                Some(x) if x.inverse() => 'R',
+                Some(x) if x.bold() => 'B',
+                Some(x) if x.underline() => 'U',
+                _ => ' ',
+            })
+            .collect();
+        if mask.trim() != "" {
+            out.push(format!("video {:2} {}", r + 1, mask.trim_end()));
+        }
+    }
     let (row, col) = screen.cursor_position();
     out.push(format!("cursor {},{}", row + 1, col + 1));
     out.join("\n")
