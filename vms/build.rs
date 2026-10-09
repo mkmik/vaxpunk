@@ -142,27 +142,17 @@ fn main() {
     modules.push(stb.clone());
     let image = link("TPU", vlink::DEFAULT_BASE, None, &modules);
     files.push(("[SYSEXE]TPU.EXE".into(), image.image.write()));
-    // CDEMO, as the example's Justfile builds it: its C library and the
-    // library's BLISS-64 adapter in an object library, which MAIN links.
+    // CDEMO: MAIN, the C library and the library's BLISS-64 adapter.
     let cdemo = Path::new(CDEMO);
-    let mut olb = vlib::new(0);
     let c = cdemo.join("lib/cdemo.c");
     let elf =
         velf::gcc(&c, &out.join("cdemo.o")).unwrap_or_else(|e| panic!("{}: {e}", c.display()));
     let records = velf::convert(&elf, "CDEMO", vasm::Options::default().date)
         .unwrap_or_else(|e| panic!("velf {}: {e}", c.display()));
-    let adapter = bliss(&cdemo.join("lib/cdemo_vms.b64"));
-    for (file, object) in [
-        (c.display().to_string(), vms_obj::obj::write(&records)),
-        adapter,
-    ] {
-        let warnings = vlib::replace(&mut olb, &file, &object, 0)
-            .unwrap_or_else(|e| panic!("vlib {file}: {e}"));
-        assert!(warnings.is_empty(), "vlib {file}: {warnings:?}");
-    }
     let modules = [
         bliss(&cdemo.join("main.b64")),
-        ("LIB.OLB".into(), olb.write()),
+        (c.display().to_string(), vms_obj::obj::write(&records)),
+        bliss(&cdemo.join("lib/cdemo_vms.b64")),
         librtl_exe.clone(),
         stb.clone(),
     ];

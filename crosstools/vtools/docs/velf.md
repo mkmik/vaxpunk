@@ -71,7 +71,6 @@ local symbol's psect and offset, then stores:
 | `ADD_ABS_LO12_NC` | `STO_A64_ADD_LO12` |
 | `LDST8`, `16`, `32`, `64`, `128_ABS_LO12_NC` | `STO_A64_LDST8_LO12` to `LDST128_LO12` |
 | `ABS64`, `ABS32` | `STO_QW`, `STO_LW` |
-| `PREL64`, `PREL32` | `STA_PQ` of the place, `OPR_SUB`, `STO_QW` or `STO_LW` |
 
 An instruction store gets the instruction with the relocated field
 cleared. Anything else, such as the large code model's `MOVW` relocations,

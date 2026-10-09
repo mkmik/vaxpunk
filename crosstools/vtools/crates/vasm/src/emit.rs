@@ -7,11 +7,6 @@ use crate::asm::{Chunk, Module};
 use crate::encode::Fix;
 use crate::expr::Value;
 
-/// Payload room in one record, below the record size limit.
-const ROOM: usize = obj::MAX_RECORD - 64;
-/// Largest STO_IMM, so a command always fits in a record.
-const MAX_IMM: usize = 4096;
-
 /// The records of `m`. `name` is used if the source had no .TITLE.
 pub fn records(m: &Module, name: &str, date: [u8; 17], tool: &str) -> Vec<Record> {
     let mut out = vec![
@@ -101,7 +96,7 @@ pub fn records(m: &Module, name: &str, date: [u8; 17], tool: &str) -> Vec<Record
             name: name.clone(),
         }));
     }
-    out.extend(split(gsd, gsd_size).into_iter().map(Record::Gsd));
+    out.extend(obj::split(gsd, Gsd::size).into_iter().map(Record::Gsd));
 
     let mut cmds = Vec::new();
     for (i, p) in m.psects.iter().enumerate() {
@@ -127,7 +122,10 @@ pub fn records(m: &Module, name: &str, date: [u8; 17], tool: &str) -> Vec<Record
             loc = *offset;
             match chunk {
                 Chunk::Bytes(b) => {
-                    cmds.extend(b.chunks(MAX_IMM).map(|d| Tir::StoImm { data: d.to_vec() }));
+                    cmds.extend(
+                        b.chunks(obj::MAX_IMM)
+                            .map(|d| Tir::StoImm { data: d.to_vec() }),
+                    );
                     loc += b.len() as u64;
                 }
                 Chunk::Insn { fix, word, target } => {
@@ -149,7 +147,7 @@ pub fn records(m: &Module, name: &str, date: [u8; 17], tool: &str) -> Vec<Record
             }
         }
     }
-    out.extend(split(cmds, Tir::size).into_iter().map(Record::Tir));
+    out.extend(obj::split(cmds, Tir::size).into_iter().map(Record::Tir));
 
     let transfer = m.transfer.map(|(psect, offset)| Transfer {
         tfrflg: 0,
@@ -208,30 +206,4 @@ fn store(fix: Fix, insn: u32) -> Tir {
         Fix::Movw(2, false) => Tir::StoA64MovwG2Nc { insn },
         Fix::Movw(_, _) => Tir::StoA64MovwG3 { insn },
     }
-}
-
-fn gsd_size(g: &Gsd) -> usize {
-    let body = match g {
-        Gsd::Psc(p) => 9 + p.name.len(),
-        Gsd::Def(d) => 29 + d.name.len(),
-        Gsd::Ref(r) => 5 + r.name.len(),
-        Gsd::Other { data, .. } => data.len(),
-    };
-    (4 + body).next_multiple_of(8)
-}
-
-/// Groups items into records that stay under the size limit.
-fn split<T>(items: Vec<T>, size: impl Fn(&T) -> usize) -> Vec<Vec<T>> {
-    let mut groups: Vec<Vec<T>> = Vec::new();
-    let mut used = ROOM;
-    for item in items {
-        let n = size(&item);
-        if used + n > ROOM {
-            groups.push(Vec::new());
-            used = 0;
-        }
-        used += n;
-        groups.last_mut().unwrap().push(item);
-    }
-    groups
 }

@@ -55,11 +55,6 @@ pub fn gcc(source: &Path, object: &Path) -> Result<Vec<u8>, String> {
     std::fs::read(object).map_err(|e| format!("{}: {e}", object.display()))
 }
 
-/// Payload room in one record, below the record size limit.
-const ROOM: usize = obj::MAX_RECORD - 64;
-/// Largest STO_IMM, so a command always fits in a record.
-const MAX_IMM: usize = 4096;
-
 /// The psects velf fills, DEC C's names, in the order they are defined.
 /// `$READONLY_ADDR$` holds read-only data with addresses in it, which an
 /// image that moves must patch, so it isn't PIC.
@@ -83,7 +78,6 @@ const SHN_LORESERVE: u16 = 0xff00;
 const SHN_COMMON: u16 = 0xfff2;
 const STB_LOCAL: u8 = 0;
 const STB_WEAK: u8 = 2;
-const STT_FILE: u8 = 4;
 
 /// What a relocation stores, and so the TIR store it becomes.
 #[derive(Clone, Copy)]
@@ -93,8 +87,6 @@ enum Kind {
     Insn(fn(u32) -> Tir, u32),
     /// A quadword or longword, S + A.
     Abs(usize),
-    /// A longword or quadword, S + A - P.
-    Rel(usize),
 }
 
 /// What each AArch64 relocation velf takes becomes. They are those a
@@ -105,8 +97,6 @@ fn kind(r_type: u32) -> Option<Kind> {
     Some(match r_type {
         257 => Kind::Abs(8),                                                // ABS64
         258 => Kind::Abs(4),                                                // ABS32
-        260 => Kind::Rel(8),                                                // PREL64
-        261 => Kind::Rel(4),                                                // PREL32
         273 => Kind::Insn(|insn| Tir::StoA64Branch19 { insn }, IMM19),      // LD_PREL_LO19
         274 => Kind::Insn(|insn| Tir::StoA64Adr { insn }, 3 << 29 | IMM19), // ADR_PREL_LO21
         275 | 276 => Kind::Insn(|insn| Tir::StoA64Adrp { insn }, 3 << 29 | IMM19), // ADR_PREL_PG_HI21, _NC
@@ -139,7 +129,6 @@ struct Section<'a> {
 struct Symbol<'a> {
     name: &'a str,
     bind: u8,
-    typ: u8,
     shndx: u16,
     value: u64,
 }
@@ -208,18 +197,12 @@ pub fn convert(elf: &[u8], name: &str, date: [u8; 17]) -> Result<Vec<Record>, St
     // Global symbols, by VMS name: C's names in upper case, as DEC C
     // makes them by default.
     let mut names: Vec<(String, &str)> = Vec::new();
-    for s in symbols
-        .iter()
-        .filter(|s| s.bind != STB_LOCAL && s.typ != STT_FILE)
-    {
+    for s in symbols.iter().filter(|s| s.bind != STB_LOCAL) {
         let vms = vms_name(s.name)?;
-        match names.iter().find(|(n, _)| *n == vms) {
-            Some((_, c)) if *c != s.name => {
-                return Err(format!("{} and {c} are both {vms} in upper case", s.name));
-            }
-            Some(_) => continue,
-            None => names.push((vms.clone(), s.name)),
+        if let Some((_, c)) = names.iter().find(|(n, _)| *n == vms) {
+            return Err(format!("{} and {c} are both {vms} in upper case", s.name));
         }
+        names.push((vms.clone(), s.name));
         let weak = if s.bind == STB_WEAK { sym::WEAK } else { 0 };
         match s.shndx {
             SHN_UNDEF => gsd.push(Gsd::Ref(SymRef {
@@ -259,7 +242,7 @@ pub fn convert(elf: &[u8], name: &str, date: [u8; 17]) -> Result<Vec<Record>, St
     let mut cmds = Vec::new();
     for (i, s) in sections.iter().enumerate() {
         let Some(pl) = places[i] else { continue };
-        if s.kind == SHT_NOBITS || s.size == 0 {
+        if s.kind == SHT_NOBITS {
             continue;
         }
         let psect = index[pl.psect];
@@ -281,7 +264,7 @@ pub fn convert(elf: &[u8], name: &str, date: [u8; 17]) -> Result<Vec<Record>, St
             let start = r.offset as usize;
             let len = match k {
                 Kind::Insn(..) => 4,
-                Kind::Abs(n) | Kind::Rel(n) => n,
+                Kind::Abs(n) => n,
             };
             if start < at || start + len > s.data.len() {
                 return Err(format!("bad relocation at {}+{:#x}", s.name, r.offset));
@@ -295,14 +278,6 @@ pub fn convert(elf: &[u8], name: &str, date: [u8; 17]) -> Result<Vec<Record>, St
                 }
                 Kind::Abs(8) => cmds.push(Tir::StoQw {}),
                 Kind::Abs(_) => cmds.push(Tir::StoLw {}),
-                Kind::Rel(n) => {
-                    cmds.push(Tir::StaPq {
-                        psect,
-                        offset: pl.offset + r.offset,
-                    });
-                    cmds.push(Tir::OprSub {});
-                    cmds.push(if n == 8 { Tir::StoQw {} } else { Tir::StoLw {} });
-                }
             }
             at = start + len;
         }
@@ -325,8 +300,8 @@ pub fn convert(elf: &[u8], name: &str, date: [u8; 17]) -> Result<Vec<Record>, St
             text: concat!("velf ", env!("CARGO_PKG_VERSION")).into(),
         },
     ];
-    out.extend(split(gsd, gsd_size).into_iter().map(Record::Gsd));
-    out.extend(split(cmds, Tir::size).into_iter().map(Record::Tir));
+    out.extend(obj::split(gsd, Gsd::size).into_iter().map(Record::Gsd));
+    out.extend(obj::split(cmds, Tir::size).into_iter().map(Record::Tir));
     out.push(Record::Eom(
         Eom {
             total_lps: 0,
@@ -400,7 +375,7 @@ fn push(
 fn imm(cmds: &mut Vec<Tir>, bytes: &[u8]) {
     cmds.extend(
         bytes
-            .chunks(MAX_IMM)
+            .chunks(obj::MAX_IMM)
             .map(|d| Tir::StoImm { data: d.to_vec() }),
     );
 }
@@ -411,32 +386,6 @@ fn vms_name(name: &str) -> Result<String, String> {
         return Err(format!("{name:?} can't be a VMS name"));
     }
     Ok(name.to_ascii_uppercase())
-}
-
-fn gsd_size(g: &Gsd) -> usize {
-    let body = match g {
-        Gsd::Psc(p) => 9 + p.name.len(),
-        Gsd::Def(d) => 29 + d.name.len(),
-        Gsd::Ref(r) => 5 + r.name.len(),
-        Gsd::Other { data, .. } => data.len(),
-    };
-    (4 + body).next_multiple_of(8)
-}
-
-/// Groups items into records that stay under the size limit.
-fn split<T>(items: Vec<T>, size: impl Fn(&T) -> usize) -> Vec<Vec<T>> {
-    let mut groups: Vec<Vec<T>> = Vec::new();
-    let mut used = ROOM;
-    for item in items {
-        let n = size(&item);
-        if used + n > ROOM {
-            groups.push(Vec::new());
-            used = 0;
-        }
-        used += n;
-        groups.last_mut().unwrap().push(item);
-    }
-    groups
 }
 
 // The ELF reader: a little-endian ELF64 relocatable object for AArch64.
@@ -536,7 +485,6 @@ fn symbols<'a>(sections: &[Section<'a>]) -> Result<Vec<Symbol<'a>>, String> {
             Ok(Symbol {
                 name: string(strings, u32_at(e, 0))?,
                 bind: e[4] >> 4,
-                typ: e[4] & 15,
                 shndx: u16_at(e, 6),
                 value: u64_at(e, 8),
             })

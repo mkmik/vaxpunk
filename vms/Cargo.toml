@@ -13,7 +13,6 @@ vasm = { path = "../crosstools/vtools/crates/vasm" }
 vbliss = { path = "../crosstools/vtools/crates/vbliss" }
 vcdu = { path = "../crosstools/vtools/crates/vcdu" }
 velf = { path = "../crosstools/vtools/crates/velf" }
-vlib = { path = "../crosstools/vtools/crates/vlib" }
 vlink = { path = "../crosstools/vtools/crates/vlink" }
 vmacro = { path = "../crosstools/vtools/crates/vmacro" }
 vms-obj = { path = "../crosstools/vtools/crates/vms-obj" }
