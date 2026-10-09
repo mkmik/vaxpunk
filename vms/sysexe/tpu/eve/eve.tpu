@@ -16,6 +16,32 @@
 ! ponytail: no word wrap while typing, no command recall, no box
 ! selection, no help library (HELP lists the commands).
 
+VARIABLE
+    eve$x_bottom_window,
+    eve$x_cmd_count,
+    eve$x_cmd_kind,
+    eve$x_cmd_name,
+    eve$x_cmd_prompt,
+    eve$x_cmd_words,
+    eve$x_found,
+    eve$x_help,
+    eve$x_main_window,
+    eve$x_marks,
+    eve$x_ncommands,
+    eve$x_paste_buffer,
+    eve$x_prompt_buffer,
+    eve$x_prompt_row,
+    eve$x_prompt_window,
+    eve$x_restore_char,
+    eve$x_restore_line,
+    eve$x_restore_word,
+    eve$x_select,
+    eve$x_target,
+    eve$x_top_window,
+    eve$x_windows,
+    message_buffer,
+    message_window;
+
 ! ---- Messages, prompts and status lines
 
 PROCEDURE eve$prompt (text)
@@ -100,19 +126,24 @@ MOVE_HORIZONTAL (n);
 ENDPROCEDURE;
 
 PROCEDURE eve_move_up
-eve$vertical (-1);
+! The cursor is free: it keeps its column, past a line's end too.
+CURSOR_VERTICAL (-1);
 ENDPROCEDURE;
 
 PROCEDURE eve_move_down
-eve$vertical (1);
+CURSOR_VERTICAL (1);
 ENDPROCEDURE;
 
 PROCEDURE eve_move_left
-eve$horizontal (-1);
+IF (CURRENT_OFFSET = 0) AND NOT GET_INFO (CURRENT_WINDOW, "beyond_eol") THEN
+    eve$horizontal (-1);
+ELSE
+    CURSOR_HORIZONTAL (-1);
+ENDIF;
 ENDPROCEDURE;
 
 PROCEDURE eve_move_right
-eve$horizontal (1);
+CURSOR_HORIZONTAL (1);
 ENDPROCEDURE;
 
 PROCEDURE eve_start_of_line
@@ -120,7 +151,10 @@ MOVE_HORIZONTAL (-CURRENT_OFFSET);
 ENDPROCEDURE;
 
 PROCEDURE eve_end_of_line
-IF MARK (NONE) <> END_OF (CURRENT_BUFFER) THEN
+IF MARK (NONE) = END_OF (CURRENT_BUFFER) THEN RETURN; ENDIF;
+IF CURRENT_OFFSET >= LENGTH (CURRENT_LINE) THEN
+    MESSAGE ("You are already at the end of a line.");
+ELSE
     MOVE_HORIZONTAL (LENGTH (CURRENT_LINE) - CURRENT_OFFSET);
 ENDIF;
 ENDPROCEDURE;
@@ -134,16 +168,18 @@ POSITION (END_OF (CURRENT_BUFFER));
 ENDPROCEDURE;
 
 PROCEDURE eve$screen_lines
-! The lines a screen moves: the window's, less one kept in view.
-RETURN GET_INFO (CURRENT_WINDOW, "visible_length") - 2;
+! The lines a screen moves: the window's rows of text, less two kept in
+! view.
+RETURN GET_INFO (CURRENT_WINDOW, "visible_length") - 3;
 ENDPROCEDURE;
 
 PROCEDURE eve_next_screen
-eve$vertical (eve$screen_lines);
+! The window and the cursor on together.
+SCROLL (CURRENT_WINDOW, eve$screen_lines);
 ENDPROCEDURE;
 
 PROCEDURE eve_previous_screen
-eve$vertical (-eve$screen_lines);
+SCROLL (CURRENT_WINDOW, -eve$screen_lines);
 ENDPROCEDURE;
 
 PROCEDURE eve_move_by_line
@@ -168,7 +204,8 @@ PROCEDURE eve_line (n)
 LOCAL count;
 count := GET_INFO (CURRENT_BUFFER, "record_count");
 IF n > count THEN
-    MESSAGE (FAO ("Buffer has only !UL line!%S", count));
+    MESSAGE (FAO ("Buffer has only !UL line!%S.  (Now going to End of Buffer).", count));
+    POSITION (END_OF (CURRENT_BUFFER));
     RETURN;
 ENDIF;
 IF n < 1 THEN
@@ -241,6 +278,13 @@ ENDPROCEDURE;
 PROCEDURE eve_delete
 ! The character before the cursor; at a line's start, the line joins
 ! the one before it.
+IF GET_INFO (CURRENT_WINDOW, "beyond_eol") THEN
+    ! Past the line's end: the cursor goes back, and in overstrike the
+    ! line is filled out to it.
+    CURSOR_HORIZONTAL (-1);
+    IF GET_INFO (CURRENT_BUFFER, "mode") = OVERSTRIKE THEN COPY_TEXT (""); ENDIF;
+    RETURN;
+ENDIF;
 IF MARK (NONE) = BEGINNING_OF (CURRENT_BUFFER) THEN RETURN; ENDIF;
 IF CURRENT_OFFSET = 0 THEN
     APPEND_LINE;
@@ -342,12 +386,18 @@ ENDIF;
 ENDPROCEDURE;
 
 PROCEDURE eve_erase_word
+! The word at the cursor and the blanks after it; at a line's end, the
+! next line joins this one after a blank.
 LOCAL n;
 n := eve$word_end;
 IF n = 0 THEN
-    IF MARK (NONE) <> END_OF (CURRENT_BUFFER) THEN
-        eve$x_restore_word := ""; APPEND_LINE;
-    ENDIF;
+    IF MARK (NONE) = END_OF (CURRENT_BUFFER) THEN RETURN; ENDIF;
+    MOVE_VERTICAL (1);
+    IF MARK (NONE) = END_OF (CURRENT_BUFFER) THEN MOVE_HORIZONTAL (-1); RETURN; ENDIF;
+    eve_start_of_line;
+    APPEND_LINE;
+    COPY_TEXT (" ");
+    eve$x_restore_word := "";
 ELSE
     eve$x_restore_word := ERASE_CHARACTER (n);
 ENDIF;
@@ -411,14 +461,16 @@ COPY_TEXT (ASCII (READ_CHAR));
 ENDPROCEDURE;
 
 PROCEDURE eve_center_line
-LOCAL text, width;
+! The line's text half way between the margins, the cursor on its start.
+LOCAL text, col;
 text := EDIT (CURRENT_LINE, TRIM, NOT_IN_PLACE);
-width := GET_INFO (CURRENT_BUFFER, "right_margin")
-         - GET_INFO (CURRENT_BUFFER, "left_margin") + 1;
+col := (GET_INFO (CURRENT_BUFFER, "left_margin")
+        + GET_INFO (CURRENT_BUFFER, "right_margin") - LENGTH (text)) / 2;
+IF col < 1 THEN col := 1; ENDIF;
 eve_start_of_line;
 ERASE_CHARACTER (LENGTH (CURRENT_LINE));
-COPY_TEXT (eve$pad ("", GET_INFO (CURRENT_BUFFER, "left_margin") - 1
-                        + (width - LENGTH (text)) / 2) + text);
+COPY_TEXT (eve$pad ("", col - 1) + text);
+MOVE_HORIZONTAL (-LENGTH (text));
 ENDPROCEDURE;
 
 PROCEDURE eve_fill_paragraph
@@ -635,7 +687,17 @@ MESSAGE ("Store completed.");
 ENDPROCEDURE;
 
 PROCEDURE eve_insert_here
+! The text stored. COPY_TEXT puts a line end after a buffer's last line,
+! which the text had only if storing it left the paste buffer's editing
+! point at its end.
+LOCAL here, ended;
+IF GET_INFO (eve$x_paste_buffer, "record_count") = 0 THEN RETURN; ENDIF;
+here := MARK (NONE);
+POSITION (eve$x_paste_buffer);
+ended := MARK (NONE) = END_OF (eve$x_paste_buffer);
+POSITION (here);
 COPY_TEXT (eve$x_paste_buffer);
+IF NOT ended AND (MARK (NONE) <> END_OF (CURRENT_BUFFER)) THEN APPEND_LINE; ENDIF;
 ENDPROCEDURE;
 
 PROCEDURE eve_select_all
@@ -686,7 +748,12 @@ ELSE
     IF FILE_SEARCH (file) = "" THEN
         b := CREATE_BUFFER (name);
         SET (OUTPUT_FILE, b, file);
-        MESSAGE ("Input file does not exist: " + file);
+        IF INDEX (file, ";") = 0 THEN
+            MESSAGE ("Editing new file.  Could not find: "
+                     + EDIT (file, UPPER, NOT_IN_PLACE) + ";");
+        ELSE
+            MESSAGE ("Editing new file.  Could not find: " + EDIT (file, UPPER, NOT_IN_PLACE));
+        ENDIF;
     ELSE
         b := CREATE_BUFFER (name, file);
     ENDIF;
@@ -1132,7 +1199,9 @@ PROCEDURE eve_do
 LOCAL text;
 SET (PROMPT_AREA, eve$x_prompt_row, 1, NONE);
 text := READ_LINE ("Command: ");
+! The messages, and the prompt, go before the command runs.
 ERASE (message_buffer);
+UPDATE (ALL);
 eve$command (text);
 ENDPROCEDURE;
 
@@ -1238,8 +1307,8 @@ DEFINE_KEY ("eve_delete", DEL_KEY, "delete");
 DEFINE_KEY ("eve_tab", TAB_KEY, "tab");
 DEFINE_KEY ("eve_change_mode", CTRL_A_KEY, "change mode");
 DEFINE_KEY ("eve_end_of_line", CTRL_E_KEY, "end of line");
-DEFINE_KEY ("eve_start_of_line", CTRL_H_KEY, "start of line");
-DEFINE_KEY ("eve_erase_previous_word", CTRL_J_KEY, "erase previous word");
+DEFINE_KEY ("eve_start_of_line", BS_KEY, "start of line");
+DEFINE_KEY ("eve_erase_word", LF_KEY, "erase word");
 DEFINE_KEY ("eve_insert_page_break", CTRL_L_KEY, "insert page break");
 DEFINE_KEY ("eve_remember", CTRL_R_KEY, "remember");
 DEFINE_KEY ("eve_erase_start_of_line", CTRL_U_KEY, "erase start of line");
@@ -1267,7 +1336,6 @@ eve$x_restore_char := "";
 eve$x_restore_word := "";
 eve$x_restore_line := "";
 eve$commands;
-eve$keys;
 SET (MESSAGE_FLAGS, 1);
 rows := GET_INFO (SCREEN, "visible_length");
 eve$x_prompt_row := rows - 1;
@@ -1299,3 +1367,6 @@ eve$x_windows := 1;
 POSITION (BEGINNING_OF (b));
 MESSAGE (TPU$_NOJOURNAL);
 ENDPROCEDURE;
+
+! The keys, defined once, which a section file keeps.
+eve$keys;

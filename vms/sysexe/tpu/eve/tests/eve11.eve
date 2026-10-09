@@ -1,0 +1,7 @@
+
+\x1b[29~two\r
+\x1b[29~other window\r
+\x1b[B
+in the other 
+\x1b[29~one window\r
+\x1a

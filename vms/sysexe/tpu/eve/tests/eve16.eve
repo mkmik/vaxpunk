@@ -1,0 +1,7 @@
+
+\x1b[29~set right margin 30\r
+\x1b[29~fill paragraph\r
+\x1b[29~bottom\r
+\x1b[A
+\x1b[29~center line\r
+\x1a

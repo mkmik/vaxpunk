@@ -1,0 +1,6 @@
+
+\x1b[29~uppercase word\r
+\x1b[29~erase word\r
+\x1b[B\x05
+\n
+\x1a

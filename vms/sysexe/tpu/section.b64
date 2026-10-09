@@ -1,0 +1,488 @@
+MODULE SECTION (IDENT = 'V0.1') =
+%TITLE 'TPU: section files'
+BEGIN
+!
+! SAVE and loading a section file (PRD-0006 step 9): what a program
+! defined, ready to run without compiling it again, as the Guide to the
+! DEC Text Processing Utility (5.4) says a section file is: procedures
+! and their code, constants and their values, the names of variables (not
+! their values), and the key maps and key map lists with the keys defined
+! in them.
+!
+! Its layout is ours: a line "TPU$SECTION 1 n", n being how many
+! keywords this TPU has (a keyword is its number in the code), then the
+! saved bytes in hexadecimal, 32 a line, as the I/O module writes a
+! record at each line feed. The bytes are items, each a tag byte:
+!   P name code     a procedure: its symbol, and its code object
+!   C name value    a constant
+!   V name          a variable
+!   K ...           the key maps and lists, as KEY_SAVE writes them
+!   E               the end
+! A name is a byte length and the text. A value is a type byte and, for
+! an integer or keyword a longword, for a string a longword length and
+! the text, for a program a code object; any other value is saved as
+! unspecified. A code object is its counts, handler, case table and
+! line, its bytecode, then where in the bytecode an operand names a
+! symbol (written as the name) or a constant cell (written as the value).
+! Longwords are little-endian.
+!
+REQUIRE 'TPU';
+REQUIRE 'TPUKW';
+REQUIRE 'FIO';
+
+LITERAL
+    NOTMINE = -1,
+    MAGICLEN = 12;
+
+EXTERNAL ROUTINE
+    BI_ERR,
+    ARGMISMATCH,
+    MSG_OUT : NOVALUE,
+    FILE_NAME,
+    SYM_WALK : NOVALUE,
+    KEY_SAVE,
+    KEY_LOAD : NOVALUE;
+
+OWN
+    ! What SAVE writes, growing.
+    WBUF,
+    WLEN,
+    WCAP,
+    NPROC,
+    NVAR,
+    ! What loading reads.
+    RP,
+    REND;
+
+MACRO
+    ARGCOUNT(LO, HI) =
+        BEGIN
+        IF .N LSS LO THEN RETURN BI_ERR(TPU$_TOOFEW);
+        IF .N GTR HI THEN RETURN BI_ERR(TPU$_TOOMANY)
+        END %;
+
+! ---- Writing
+
+! SEC_WB byte: one more byte saved.
+GLOBAL ROUTINE SEC_WB (X) : NOVALUE =
+    BEGIN
+    IF .WLEN EQL .WCAP
+    THEN
+        BEGIN
+        LOCAL
+            NEW;
+        NEW = MEM_GET(.WCAP * 2);
+        CH$MOVE(.WLEN, .WBUF, .NEW);
+        MEM_FREE(.WBUF);
+        WBUF = .NEW;
+        WCAP = .WCAP * 2
+        END;
+    PUTB(.WBUF + .WLEN, .X);
+    WLEN = .WLEN + 1
+    END;
+
+! SEC_WL longword: four bytes saved, the low first.
+GLOBAL ROUTINE SEC_WL (X) : NOVALUE =
+    INCR I FROM 0 TO 3 DO SEC_WB(SRL(.X, .I * 8) AND 255);
+
+! WTEXT text, length: a longword length and the text.
+ROUTINE WTEXT (TEXT, LEN) : NOVALUE =
+    BEGIN
+    SEC_WL(.LEN);
+    INCR I FROM 0 TO .LEN - 1 DO SEC_WB(GETB(.TEXT + .I))
+    END;
+
+! WNAME symbol: its name, a length byte and the text.
+ROUTINE WNAME (Y : REF VECTOR) : NOVALUE =
+    BEGIN
+    SEC_WB(.Y[Y_LEN]);
+    INCR I FROM 0 TO .Y[Y_LEN] - 1 DO SEC_WB(GETB(YNAME(.Y) + .I))
+    END;
+
+FORWARD ROUTINE
+    WCODE : NOVALUE;
+
+! SEC_WVAL value: a value saved.
+GLOBAL ROUTINE SEC_WVAL (V) : NOVALUE =
+    SELECTONE VTYPE(.V) OF
+        SET
+        [TY_INTEGER, TY_KEYWORD] : (SEC_WB(VTYPE(.V)); SEC_WL(VINT(.V)));
+        [TY_STRING] : (SEC_WB(TY_STRING); WTEXT(SADDR(.V), SLEN(.V)));
+        [TY_PROGRAM] : (SEC_WB(TY_PROGRAM); WCODE(VPTR(.V)));
+        [OTHERWISE] : SEC_WB(TY_UNSPEC);
+        TES;
+
+! OPERANDS code, at, routine: calls the routine on the offset of each
+! longword operand of the operation at offset at that names a symbol
+! (with 1) or a constant cell (with 2); returns the next operation's
+! offset.
+ROUTINE OPERANDS (CODE, AT, FN) =
+    BEGIN
+    LOCAL
+        OP,
+        P;
+    OP = GETB(.CODE + .AT);
+    P = .AT + 1;
+    SELECTONE .OP OF
+        SET
+        [OP_STMT] : P = .P + 4;
+        [OP_INT, OP_KW, OP_JUMP, OP_JFALSE] : P = .P + 4;
+        [OP_VAL] : ((.FN)(.P, 2); P = .P + 4);
+        [OP_LOADG, OP_STOREG, OP_AMBIG] : ((.FN)(.P, 1); P = .P + 4);
+        [OP_LOADL, OP_STOREL, OP_HEND] : P = .P + 1;
+        [OP_CALL, OP_BUILTIN, OP_PASSIGN] :
+            BEGIN
+            LOCAL
+                NREF;
+            IF .OP EQL OP_CALL THEN ((.FN)(.P, 1); NREF = GETB(.CODE + .P + 4); P = .P + 5);
+            IF .OP EQL OP_BUILTIN THEN (NREF = GETB(.CODE + .P + 2); P = .P + 3);
+            IF .OP EQL OP_PASSIGN THEN NREF = 1;
+            ! The references: none, a local's byte, or a symbol.
+            INCR I FROM 1 TO .NREF DO
+                SELECTONE GETB(.CODE + .P) OF
+                    SET
+                    [REF_LOCAL] : P = .P + 2;
+                    [REF_GLOBAL] : ((.FN)(.P + 1, 1); P = .P + 5);
+                    [OTHERWISE] : P = .P + 1;
+                    TES
+            END;
+        [OTHERWISE] : 0;
+        TES;
+    .P
+    END;
+
+OWN
+    WCODEAT;                            ! the code WFIX writes the operands of
+
+! WFIX offset, kind: one operand's relocation.
+ROUTINE WFIX (AT, KIND) : NOVALUE =
+    BEGIN
+    LOCAL
+        X;
+    X = .(.WCODEAT + .AT)<0, 32, 0>;
+    SEC_WB(.KIND);
+    SEC_WL(.AT);
+    IF .KIND EQL 1 THEN WNAME(.X) ELSE SEC_WVAL(..X)
+    END;
+
+! WCODE code object: one saved.
+ROUTINE WCODE (OBJ : REF VECTOR) : NOVALUE =
+    BEGIN
+    LOCAL
+        CODE,
+        AT,
+        TAB : REF VECTOR,
+        SAVED;
+    SEC_WL(.OBJ[C_NREQ]);
+    SEC_WL(.OBJ[C_NPARAM]);
+    SEC_WL(.OBJ[C_NLOCAL]);
+    SEC_WL(.OBJ[C_HANDLER]);
+    SEC_WL(.OBJ[C_LINE0]);
+    TAB = .OBJ[C_CASES];
+    IF .TAB EQL 0
+    THEN
+        SEC_WL(-1)
+    ELSE
+        INCR I FROM 0 TO 2 * .TAB[0] DO SEC_WL(.TAB[.I]);
+    CODE = .OBJ[C_CODE];
+    WTEXT(.CODE, .OBJ[C_LEN]);
+    ! A code object's own operands, though one in them may be saved
+    ! first (a program in a constant).
+    SAVED = .WCODEAT;
+    AT = 0;
+    WHILE .AT LSS .OBJ[C_LEN] DO
+        BEGIN
+        WCODEAT = .CODE;
+        AT = OPERANDS(.CODE, .AT, WFIX)
+        END;
+    WCODEAT = .SAVED;
+    SEC_WB(0)
+    END;
+
+! WSYM symbol: one symbol saved, if a program made it.
+ROUTINE WSYM (Y : REF VECTOR) : NOVALUE =
+    SELECTONE .Y[Y_KIND] OF
+        SET
+        [YK_PROC] :
+            IF .Y[Y_PROC] NEQ 0
+            THEN
+                (SEC_WB(%C'P'); WNAME(.Y); WCODE(.Y[Y_PROC]); NPROC = .NPROC + 1);
+        [YK_CONST] : (SEC_WB(%C'C'); WNAME(.Y); SEC_WVAL(.Y[Y_VALUE]));
+        [YK_VAR] : (SEC_WB(%C'V'); WNAME(.Y); NVAR = .NVAR + 1);
+        [OTHERWISE] : 0;
+        TES;
+
+! HEX digit: its character.
+ROUTINE HEX (D) =
+    IF .D LSS 10 THEN %C'0' + .D ELSE %C'A' + .D - 10;
+
+! SAVE (file [, ...]): the section file.
+ROUTINE BX_SAVE (ARGS : REF VECTOR, N, R) =
+    BEGIN
+    LOCAL
+        NAME : VECTOR[256, BYTE],
+        NL,
+        CHAN,
+        NKEYS,
+        LINE : VECTOR[80, BYTE],
+        L;
+    ARGCOUNT(1, 6);
+    IF VTYPE(.ARGS[0]) NEQ TY_STRING THEN RETURN ARGMISMATCH(1, .ARGS[0]);
+    NL = FILE_NAME(SADDR(.ARGS[0]), SLEN(.ARGS[0]), T('.TPU$SECTION'), NAME);
+    WCAP = 4096;
+    WBUF = MEM_GET(.WCAP);
+    WLEN = 0;
+    NPROC = 0;
+    NVAR = 0;
+    WCODEAT = 0;
+    SYM_WALK(WSYM);
+    SEC_WB(%C'K');
+    NKEYS = KEY_SAVE();
+    SEC_WB(%C'E');
+    IF NOT FIO$OPEN(NAME, .NL, FIO$K_WRITE, CHAN)
+    THEN
+        BEGIN
+        MEM_FREE(.WBUF);
+        RETURN BI_ERR(TPU$_OPENOUT, STR_MAKE(NAME, .NL))
+        END;
+    ! The first line, then the bytes.
+    CH$MOVE(MAGICLEN, UPLIT BYTE ('TPU$SECTION '), LINE);
+    L = MAGICLEN;
+    LINE[.L] = (%C'1');
+    LINE[.L + 1] = (%C' ');
+    L = .L + 2;
+    BEGIN
+    EXTERNAL ROUTINE
+        NUMBER;
+    L = .L + NUMBER(LINE[.L], KW_COUNT, 10, 1, FALSE)
+    END;
+    LINE[.L] = (10);
+    FIO$WRITE(.CHAN, LINE, .L + 1);
+    INCR I FROM 0 TO .WLEN - 1 BY 32 DO
+        BEGIN
+        L = 0;
+        INCR J FROM .I TO MIN(.I + 32, .WLEN) - 1 DO
+            BEGIN
+            LINE[.L] = (HEX(SRL(GETB(.WBUF + .J), 4)));
+            LINE[.L + 1] = (HEX(GETB(.WBUF + .J) AND 15));
+            L = .L + 2
+            END;
+        LINE[.L] = (10);
+        FIO$WRITE(.CHAN, LINE, .L + 1)
+        END;
+    FIO$CLOSE(.CHAN);
+    MEM_FREE(.WBUF);
+    MSG_OUT(0, TPU$_SECTSAVED, MKINT(.NPROC), MKINT(.NVAR), MKINT(.NKEYS));
+    SS_NORMAL
+    END;
+
+! ---- Reading
+
+! SEC_RB: the next byte.
+GLOBAL ROUTINE SEC_RB =
+    BEGIN
+    LOCAL
+        X;
+    IF .RP GEQ .REND THEN RETURN 0;
+    X = GETB(.RP);
+    RP = .RP + 1;
+    .X
+    END;
+
+! SEC_RL: the next longword, sign-extended.
+GLOBAL ROUTINE SEC_RL =
+    BEGIN
+    LOCAL
+        X;
+    X = 0;
+    INCR I FROM 0 TO 3 DO X = .X OR SLL(SEC_RB(), .I * 8);
+    VINT(.X)
+    END;
+
+! RNAME: the next name's symbol, made if new.
+ROUTINE RNAME =
+    BEGIN
+    LOCAL
+        L,
+        AT;
+    L = SEC_RB();
+    AT = .RP;
+    RP = .RP + .L;
+    SYM_FIND(.AT, .L)
+    END;
+
+FORWARD ROUTINE
+    RCODE;
+
+! SEC_RVAL: the next value.
+GLOBAL ROUTINE SEC_RVAL =
+    BEGIN
+    LOCAL
+        TY;
+    TY = SEC_RB();
+    SELECTONE .TY OF
+        SET
+        [TY_INTEGER, TY_KEYWORD] : MKV(.TY, SEC_RL());
+        [TY_STRING] :
+            BEGIN
+            LOCAL
+                L,
+                AT;
+            L = SEC_RL();
+            AT = .RP;
+            RP = .RP + .L;
+            STR_MAKE(.AT, .L)
+            END;
+        [TY_PROGRAM] : MKV(TY_PROGRAM, RCODE());
+        [OTHERWISE] : 0;
+        TES
+    END;
+
+! RCODE: the next code object.
+ROUTINE RCODE =
+    BEGIN
+    LOCAL
+        OBJ : REF VECTOR,
+        N,
+        CODE;
+    OBJ = MEM_GET(C_SIZE * 8);
+    OBJ[C_REF] = 1;
+    OBJ[C_NREQ] = SEC_RL();
+    OBJ[C_NPARAM] = SEC_RL();
+    OBJ[C_NLOCAL] = SEC_RL();
+    OBJ[C_HANDLER] = SEC_RL();
+    OBJ[C_LINE0] = SEC_RL();
+    N = SEC_RL();
+    IF .N GEQ 0
+    THEN
+        BEGIN
+        LOCAL
+            TAB : REF VECTOR;
+        TAB = MEM_GET((1 + 2 * .N) * 8);
+        TAB[0] = .N;
+        INCR I FROM 1 TO 2 * .N DO TAB[.I] = SEC_RL();
+        OBJ[C_CASES] = .TAB
+        END;
+    N = SEC_RL();
+    CODE = MEM_GET(MAX(.N, 1));
+    CH$MOVE(.N, .RP, .CODE);
+    RP = .RP + .N;
+    OBJ[C_CODE] = .CODE;
+    OBJ[C_LEN] = .N;
+    ! The operands, put back.
+    WHILE TRUE DO
+        BEGIN
+        LOCAL
+            KIND,
+            AT;
+        KIND = SEC_RB();
+        IF .KIND EQL 0 THEN EXITLOOP;
+        AT = SEC_RL();
+        IF .KIND EQL 1
+        THEN
+            (.CODE + .AT)<0, 32, 0> = RNAME()
+        ELSE
+            BEGIN
+            LOCAL
+                CELL;
+            CELL = MEM_GET(8);
+            .CELL = SEC_RVAL();
+            (.CODE + .AT)<0, 32, 0> = .CELL
+            END
+        END;
+    .OBJ
+    END;
+
+! UNHEX character: its value, or -1.
+ROUTINE UNHEX (C) =
+    IF .C GEQU %C'0' AND .C LEQU %C'9' THEN .C - %C'0'
+    ELSE IF .C GEQU %C'A' AND .C LEQU %C'F' THEN .C - %C'A' + 10
+    ELSE -1;
+
+! SEC_LOAD text, length: whether the text is a section file of this
+! TPU's; if it is, what it saved is defined.
+GLOBAL ROUTINE SEC_LOAD (TEXT, LEN) =
+    BEGIN
+    LOCAL
+        I,
+        K,
+        BYTES,
+        N;
+    IF .LEN LSS MAGICLEN THEN RETURN FALSE;
+    INCR J FROM 0 TO MAGICLEN - 1 DO
+        IF GETB(.TEXT + .J) NEQ GETB(UPLIT BYTE ('TPU$SECTION ') + .J) THEN RETURN FALSE;
+    ! Version 1, and as many keywords as this TPU has.
+    I = MAGICLEN;
+    IF GETB(.TEXT + .I) NEQ %C'1' THEN RETURN FALSE;
+    I = .I + 2;
+    K = 0;
+    WHILE .I LSS .LEN AND GETB(.TEXT + .I) GEQU %C'0' AND GETB(.TEXT + .I) LEQU %C'9' DO
+        (K = .K * 10 + GETB(.TEXT + .I) - %C'0'; I = .I + 1);
+    IF .K NEQ KW_COUNT THEN RETURN FALSE;
+    ! The bytes, from their hexadecimal, in place.
+    BYTES = MEM_GET(.LEN / 2 + 1);
+    N = 0;
+    WHILE .I + 1 LSS .LEN DO
+        BEGIN
+        LOCAL
+            H,
+            L;
+        H = UNHEX(GETB(.TEXT + .I));
+        IF .H LSS 0
+        THEN
+            I = .I + 1
+        ELSE
+            BEGIN
+            L = UNHEX(GETB(.TEXT + .I + 1));
+            PUTB(.BYTES + .N, SLL(.H, 4) OR .L);
+            N = .N + 1;
+            I = .I + 2
+            END
+        END;
+    RP = .BYTES;
+    REND = .BYTES + .N;
+    WHILE .RP LSS .REND DO
+        BEGIN
+        LOCAL
+            TAG,
+            Y : REF VECTOR;
+        TAG = SEC_RB();
+        SELECTONE .TAG OF
+            SET
+            [%C'P'] :
+                BEGIN
+                Y = RNAME();
+                Y[Y_KIND] = YK_PROC;
+                Y[Y_PROC] = RCODE();
+                BEGIN
+                BIND
+                    OBJ = .Y[Y_PROC] : VECTOR;
+                OBJ[C_NAME] = .Y
+                END
+                END;
+            [%C'C'] :
+                BEGIN
+                Y = RNAME();
+                VUNREF(.Y[Y_VALUE]);
+                Y[Y_KIND] = YK_CONST;
+                Y[Y_VALUE] = SEC_RVAL()
+                END;
+            [%C'V'] :
+                BEGIN
+                Y = RNAME();
+                IF .Y[Y_KIND] EQL YK_NONE THEN Y[Y_KIND] = YK_VAR
+                END;
+            [%C'K'] : KEY_LOAD();
+            [OTHERWISE] : EXITLOOP;
+            TES
+        END;
+    ! ponytail: the bytes stay, as the strings the code was made of did.
+    TRUE
+    END;
+
+! SEC_CALL number, args, count, result: SAVE; NOTMINE for the rest.
+GLOBAL ROUTINE SEC_CALL (B, ARGS : REF VECTOR, N, R) =
+    IF .B EQL B_SAVE THEN BX_SAVE(.ARGS, .N, .R) ELSE NOTMINE;
+
+END
+ELUDOM

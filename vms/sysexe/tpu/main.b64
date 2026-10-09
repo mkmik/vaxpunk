@@ -3,7 +3,7 @@ MODULE TPU (MAIN = TPU$MAIN, IDENT = 'V0.1') =
 BEGIN
 !
 ! EDIT/TPU (PRD-0006). Starts as the Guide to the DEC Text Processing
-! Utility (5.6.4) says: reads the command file, /COMMAND's or
+! Utility (5.6.4) says: loads the section, reads the command file, /COMMAND's or
 ! TPU$COMMAND.TPU, compiles and runs it, calling TPU$INIT_PROCEDURE before
 ! it and TPU$INIT_POSTPROCEDURE after it if they are defined.
 !
@@ -11,7 +11,9 @@ BEGIN
 ! the file, as FIO$ARGS gives it: under vrun, vrun's arguments.
 ! Without /NODISPLAY, and with a terminal, the screen starts first, and
 ! the keys run once the command file has, until EXIT or QUIT.
-! ponytail: no section files.
+! The section, /SECTION's or SYS$SHARE:EVE$SECTION, is a section file
+! SAVE wrote, NAME.TPU$SECTION, or, if there is none, TPU source,
+! NAME.TPU, compiled and run.
 !
 REQUIRE 'TPU';
 REQUIRE 'TPUKW';
@@ -30,6 +32,7 @@ EXTERNAL ROUTINE
     MSG_OUT : NOVALUE,
     BUF_NEW,
     BUF_READ,
+    SEC_LOAD,
     BUF_TEXT;
 
 ! UPPER character.
@@ -219,22 +222,28 @@ ROUTINE TPU$MAIN =
     KEY_INIT();
     ! The screen, unless /NODISPLAY says there is none.
     IF CL_QUAL(T('DISPLAY'), VAL, VLEN) GEQ 0 THEN SCR_START();
-    ! The section: /SECTION's, or EVE's, unless /NOSECTION.
-    ! ponytail: a section is TPU's source, compiled at each start, until
-    ! section files (PRD-0006 step 9).
+    ! The section: /SECTION's, or EVE's, unless /NOSECTION: a section
+    ! file SAVE wrote, or else TPU's source, which is compiled and run.
     Q = CL_QUAL(T('SECTION'), VAL, VLEN);
     IF .Q GEQ 0
     THEN
         BEGIN
         IF .VLEN EQL 0 THEN (VAL = UPLIT BYTE ('SYS$SHARE:EVE$SECTION'); VLEN = 21);
-        NLEN = FILE_NAME(.VAL, .VLEN, T('.TPU'), NAME);
+        NLEN = FILE_NAME(.VAL, .VLEN, T('.TPU$SECTION'), NAME);
         TEXT = READ_WHOLE(NAME, .NLEN, TLEN);
+        IF .TEXT EQL 0
+        THEN
+            BEGIN
+            NLEN = FILE_NAME(.VAL, .VLEN, T('.TPU'), NAME);
+            TEXT = READ_WHOLE(NAME, .NLEN, TLEN)
+            END;
         IF .TEXT EQL 0
         THEN
             BEGIN
             IF .Q GTR 0 THEN (MSG_OUT(0, TPU$_OPENIN, STR_MAKE(NAME, .NLEN)); SCR_END(); FIO$EXIT(%X'1C'))
             END
-        ELSE
+        ELSE IF NOT SEC_LOAD(.TEXT, .TLEN)
+        THEN
             BEGIN
             IF COMPILE(.TEXT, .TLEN, OBJ) AND .OBJ NEQ 0 THEN VM_RUN(.OBJ);
             MEM_FREE(.TEXT)

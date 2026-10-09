@@ -4,7 +4,8 @@ BEGIN
 !
 ! The terminal TPU's tests have under vrun (crosstools/vtools/crates/vrun/
 ! tests/tpu.rs): a VT100 of 80 by 24 whose keys are the file TT.IN and
-! whose screen is the file TT.OUT. TT.IN holds a burst of keys per line,
+! whose screen is the file TT.OUT. TT.IN holds a burst of keys per line
+! (a line feed typed is 255 and n),
 ! as the oracle types them, a second apart: a key is waiting (TT$WAITING)
 ! until the line's last has been read, so that TPU updates the screen
 ! between bursts as DEC's does. With no TT.IN there is no terminal. On
@@ -72,6 +73,8 @@ GLOBAL ROUTINE TT$GET =
             C;
         C = .BUF[.AT];
         AT = .AT + 1;
+        ! A line feed typed, which can't be one, ends a burst: 255, n.
+        IF .C EQL 255 AND .AT LSS .BUFLEN THEN (AT = .AT + 1; RETURN 10);
         IF .C NEQ 10 THEN RETURN .C
         END;
     -1

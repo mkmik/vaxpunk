@@ -178,6 +178,49 @@ ROUTINE FIX_JOIN (LP, OP, L, LEN, NXT) : NOVALUE =
 ROUTINE FIX_DELLINE (LP, OP, L, NXT, X) : NOVALUE =
     IF ..LP EQL .L THEN (.LP = .NXT; IF ..OP GEQ 0 THEN .OP = 0);
 
+! ---- The free cursor
+
+! BUF_PAD buffer: how many columns past its line's end the cursor is,
+! CURSOR_VERTICAL or CURSOR_HORIZONTAL having put it there; 0 once the
+! editing point has moved.
+GLOBAL ROUTINE BUF_PAD (B : REF VECTOR) =
+    IF .B[B_PAD] GTR 0 AND .B[B_LINE] NEQ 0 AND .B[B_PADLINE] EQL .B[B_LINE]
+       AND .B[B_PADOFF] EQL .B[B_OFF]
+    THEN
+        .B[B_PAD]
+    ELSE
+        0;
+
+! BUF_SETPAD buffer, columns: the cursor that far past the editing point,
+! at its line's end.
+GLOBAL ROUTINE BUF_SETPAD (B : REF VECTOR, N) : NOVALUE =
+    BEGIN
+    B[B_PAD] = .N;
+    B[B_PADLINE] = .B[B_LINE];
+    B[B_PADOFF] = .B[B_OFF]
+    END;
+
+FORWARD ROUTINE
+    INSERT : NOVALUE;
+
+! PADOUT buffer: text is going in where the cursor is: blanks out to it
+! first, if it is past the line's end, as DEC's TPU fills them in.
+ROUTINE PADOUT (B : REF VECTOR) : NOVALUE =
+    BEGIN
+    LOCAL
+        N,
+        BLANKS : VECTOR[64, BYTE];
+    N = BUF_PAD(.B);
+    B[B_PAD] = 0;
+    IF .N LEQ 0 OR (.B[B_FLAGS] AND BF_UNMODIFIABLE) NEQ 0 THEN RETURN;
+    INCR I FROM 0 TO 63 DO BLANKS[.I] = %C' ';
+    WHILE .N GTR 0 DO
+        BEGIN
+        INSERT(.B, B[B_LINE], .B[B_OFF], BLANKS, MIN(.N, 64));
+        N = .N - 64
+        END
+    END;
+
 ! ---- Editing
 
 ! MODIFY buffer: marks it changed; whether it may be.
@@ -944,6 +987,7 @@ ROUTINE BX_COPY_TEXT (ARGS : REF VECTOR, N, R, MOVE) =
     P = SOURCE(.ARGS[0], K);
     IF .P EQL 0 THEN RETURN ARGMISMATCH(1, .ARGS[0]);
     IF NOT MODIFY(.B) THEN (FREEPIECES(.P, .K); VREF(.B[B_NAME]); RETURN BI_ERR(TPU$_NOTMODIFIABLE, .B[B_NAME]));
+    PADOUT(.B);
     IF .MOVE AND VTYPE(.ARGS[0]) NEQ TY_STRING
     THEN
         BEGIN
@@ -1014,6 +1058,7 @@ ROUTINE BX_SPLIT_LINE (ARGS, N) =
     ARGCOUNT(0, 0);
     CURBUF(B);
     IF NOT MODIFY(.B) THEN (VREF(.B[B_NAME]); RETURN BI_ERR(TPU$_NOTMODIFIABLE, .B[B_NAME]));
+    PADOUT(.B);
     NEW = SPLIT(.B, .B[B_LINE], .B[B_OFF]);
     IF .NEW NEQ 0 THEN (B[B_LINE] = .NEW; B[B_OFF] = 0);
     SS_NORMAL
@@ -1048,6 +1093,7 @@ ROUTINE BX_ERASE_CHARACTER (ARGS : REF VECTOR, N, R) =
     ARGCOUNT(1, 1);
     IF VTYPE(.ARGS[0]) NEQ TY_INTEGER THEN RETURN ARGMISMATCH(1, .ARGS[0]);
     CURBUF(B);
+    PADOUT(.B);
     L = .B[B_LINE];
     .R = STR_MAKE(0, 0);
     IF .L EQL 0 THEN RETURN SS_NORMAL;
@@ -1258,6 +1304,26 @@ ROUTINE BX_READ_FILE (ARGS : REF VECTOR, N, R) =
     MSG_OUT(0, TPU$_FILEIN, MKINT(.K), STR_MAKE(NAME, .NL));
     VUNREF(..R);
     .R = STR_MAKE(NAME, .NL);
+    SS_NORMAL
+    END;
+
+! FILE_SEARCH (file): the file's name in capitals if there is such a
+! file, else "".
+! ponytail: no wildcards, and no list to walk: one name in, one out.
+ROUTINE BX_FILE_SEARCH (ARGS : REF VECTOR, N, R) =
+    BEGIN
+    LOCAL
+        NAME : VECTOR[256, BYTE],
+        NL,
+        CHAN;
+    ARGCOUNT(1, 5);
+    IF VTYPE(.ARGS[0]) NEQ TY_STRING THEN RETURN ARGMISMATCH(1, .ARGS[0]);
+    NL = FILE_NAME(SADDR(.ARGS[0]), SLEN(.ARGS[0]), 0, 0, NAME);
+    IF .NL GTR 0 AND FIO$OPEN(NAME, .NL, FIO$K_READ, CHAN)
+    THEN
+        (FIO$CLOSE(.CHAN); .R = STR_MAKE(NAME, .NL))
+    ELSE
+        .R = STR_MAKE(0, 0);
     SS_NORMAL
     END;
 
@@ -1949,8 +2015,18 @@ GLOBAL ROUTINE BUF_CALL (B, ARGS : REF VECTOR, N, R) =
         [B_CREATE_BUFFER] : BX_CREATE_BUFFER(.ARGS, .N, .R);
         [B_READ_FILE] : BX_READ_FILE(.ARGS, .N, .R);
         [B_WRITE_FILE] : BX_WRITE_FILE(.ARGS, .N, .R);
+        [B_FILE_SEARCH] : BX_FILE_SEARCH(.ARGS, .N, .R);
         [B_CURRENT_LINE, B_CURRENT_CHARACTER, B_CURRENT_OFFSET, B_CURRENT_BUFFER] :
             BX_CURRENT(.B, .ARGS, .N, .R);
+        [B_CURRENT_DIRECTION] :
+            BEGIN
+            LOCAL
+                BP : REF VECTOR;
+            ARGCOUNT(0, 0);
+            CURBUF(BP);
+            .R = MKKW(IF (.BP[B_FLAGS] AND BF_REVERSE) NEQ 0 THEN K_REVERSE ELSE K_FORWARD);
+            SS_NORMAL
+            END;
         [B_DELETE] : BX_DELETE(.ARGS, .N);
         [B_FILL] : BX_FILL(.ARGS, .N);
         [B_SELECT] : BX_SELECT(.ARGS, .N, .R);

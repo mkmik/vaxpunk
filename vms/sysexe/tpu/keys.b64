@@ -782,6 +782,126 @@ GLOBAL ROUTINE KEY_SET (ARGS : REF VECTOR, N) =
         TES
     END;
 
+! KEY_SAVE: the key maps, their keys defined by programs, and the key map
+! lists, as a section file has them (section.b64): for each map M, its
+! name, then D, key and program and comment for each key, then 0; for
+! each list L, its name, SELF_INSERT, its UNDEFINED_KEY, PRE_KEY and
+! POST_KEY programs, and its maps' names; 0 at the end. Returns how many
+! keys.
+GLOBAL ROUTINE KEY_SAVE =
+    BEGIN
+    EXTERNAL ROUTINE
+        SEC_WB : NOVALUE,
+        SEC_WL : NOVALUE,
+        SEC_WVAL : NOVALUE;
+    LOCAL
+        M : REF VECTOR,
+        L : REF VECTOR,
+        NKEYS;
+    NKEYS = 0;
+    M = .MAPS;
+    WHILE .M NEQ 0 DO
+        BEGIN
+        LOCAL
+            D : REF VECTOR;
+        SEC_WB(%C'M');
+        SEC_WVAL(.M[KM_NAME]);
+        D = .M[KM_DEFS];
+        WHILE .D NEQ 0 DO
+            BEGIN
+            ! ponytail: a learn sequence isn't saved.
+            IF VTYPE(.D[KD_PROG]) EQL TY_PROGRAM
+            THEN
+                BEGIN
+                SEC_WB(%C'D');
+                SEC_WL(.D[KD_KEY]);
+                SEC_WVAL(.D[KD_PROG]);
+                SEC_WVAL(.D[KD_COMMENT]);
+                NKEYS = .NKEYS + 1
+                END;
+            D = .D[KD_NEXT]
+            END;
+        SEC_WB(0);
+        M = .M[KM_NEXT]
+        END;
+    L = .LISTS;
+    WHILE .L NEQ 0 DO
+        BEGIN
+        SEC_WB(%C'L');
+        SEC_WVAL(.L[KL_NAME]);
+        SEC_WL(.L[KL_SELF]);
+        SEC_WVAL(.L[KL_UNDEF]);
+        SEC_WVAL(.L[KL_PRE]);
+        SEC_WVAL(.L[KL_POST]);
+        SEC_WL(.L[KL_N]);
+        INCR I FROM 0 TO .L[KL_N] - 1 DO SEC_WVAL(.L[KL_MAPS + .I]);
+        L = .L[KL_NEXT]
+        END;
+    SEC_WB(0);
+    .NKEYS
+    END;
+
+! KEY_LOAD: what KEY_SAVE saved, defined again: maps and lists made if
+! there are none of their names, keys defined in them.
+GLOBAL ROUTINE KEY_LOAD : NOVALUE =
+    BEGIN
+    EXTERNAL ROUTINE
+        SEC_RB,
+        SEC_RL,
+        SEC_RVAL;
+    WHILE TRUE DO
+        BEGIN
+        LOCAL
+            TAG,
+            NAME;
+        TAG = SEC_RB();
+        IF .TAG NEQ %C'M' AND .TAG NEQ %C'L' THEN EXITLOOP;
+        NAME = SEC_RVAL();
+        IF .TAG EQL %C'M'
+        THEN
+            BEGIN
+            LOCAL
+                M : REF VECTOR;
+            M = FINDNAMED(.MAPS, .NAME);
+            IF .M EQL 0 THEN M = NEWMAP(.NAME);
+            WHILE SEC_RB() EQL %C'D' DO
+                BEGIN
+                LOCAL
+                    K,
+                    D : REF VECTOR;
+                K = SEC_RL();
+                D = INMAP(.M, .K);
+                IF .D EQL 0
+                THEN
+                    BEGIN
+                    D = MEM_GET(KD_SIZE * 8);
+                    D[KD_KEY] = .K;
+                    D[KD_NEXT] = .M[KM_DEFS];
+                    M[KM_DEFS] = .D
+                    END
+                ELSE
+                    (VUNREF(.D[KD_PROG]); VUNREF(.D[KD_COMMENT]));
+                D[KD_PROG] = SEC_RVAL();
+                D[KD_COMMENT] = SEC_RVAL()
+                END
+            END
+        ELSE
+            BEGIN
+            LOCAL
+                L : REF VECTOR;
+            L = FINDNAMED(.LISTS, .NAME);
+            IF .L EQL 0 THEN L = NEWLIST(.NAME);
+            L[KL_SELF] = SEC_RL();
+            L[KL_UNDEF] = SEC_RVAL();
+            L[KL_PRE] = SEC_RVAL();
+            L[KL_POST] = SEC_RVAL();
+            L[KL_N] = SEC_RL();
+            INCR I FROM 0 TO .L[KL_N] - 1 DO L[KL_MAPS + .I] = SEC_RVAL()
+            END;
+        VUNREF(.NAME)
+        END
+    END;
+
 ! KEY_CALL number, args, count, result: this module's built-ins, or
 ! NOTMINE.
 GLOBAL ROUTINE KEY_CALL (B, ARGS : REF VECTOR, N, R) =

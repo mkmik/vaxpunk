@@ -61,6 +61,16 @@ GLOBAL ROUTINE SYM_LOOK (TEXT, LEN) =
     0
     END;
 
+! SYM_WALK routine: calls the routine on each symbol.
+GLOBAL ROUTINE SYM_WALK (FN) : NOVALUE =
+    INCR H FROM 0 TO BUCKETS - 1 DO
+        BEGIN
+        LOCAL
+            Y : REF VECTOR;
+        Y = .TABLE[.H];
+        WHILE .Y NEQ 0 DO ((.FN)(.Y); Y = .Y[Y_NEXT])
+        END;
+
 ! SYM_FIND name, length: the symbol of that name, made, of no kind yet,
 ! if there is none.
 GLOBAL ROUTINE SYM_FIND (TEXT, LEN) =

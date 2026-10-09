@@ -179,7 +179,10 @@ LITERAL
     B_GOALOFF = 18,
     B_SELMARK = 19,                      ! SELECT's marker, or 0
     B_RANGES = 20,                      ! its ranges with a video attribute
-    B_SIZE = 21,
+    B_PAD = 21,                         ! columns the cursor is past the line's end,
+    B_PADLINE = 22,                     ! while the editing point stays where it was then
+    B_PADOFF = 23,
+    B_SIZE = 24,
     BF_MODIFIED = 1,
     BF_OVERSTRIKE = 2,
     BF_NOWRITE = 4,

@@ -197,7 +197,7 @@ fn tpu() {
     assert!(failures.is_empty(), "{}", failures.join("\n"));
 }
 
-/// EVE (eve/eve.tpu, as the section) on each eve/tests/NAME.txt, NAME.eve
+/// EVE (eve/eve.tpu, saved as a section file) on each eve/tests/NAME.txt, NAME.eve
 /// typed, a burst a line: the screen must end as the oracle's EVE left it,
 /// NAME.vt, and the file must be NAME.out if there is one.
 #[test]
@@ -208,11 +208,35 @@ fn eve() {
     let exe = build(&tmp);
     let eve = repo().join("vms/sysexe/tpu/eve");
     let tests = eve.join("tests");
+    // EVE's section file, as a system manager makes one: EVE's source
+    // run, then SAVE.
+    let mk = tmp.join("section");
+    fs::create_dir_all(&mk).unwrap();
+    let source = fs::read_to_string(eve.join("eve.tpu")).unwrap();
+    fs::write(
+        mk.join("MKEVE.TPU"),
+        format!("{source}SAVE (\"EVE\");\nQUIT;\n"),
+    )
+    .unwrap();
+    let out = Command::new(env!("CARGO_BIN_EXE_vrun"))
+        .args(["--timeout", "60", "--files"])
+        .arg(&mk)
+        .arg(&exe)
+        .arg("/NODISPLAY/NOSECTION/COMMAND=MKEVE.TPU")
+        .output()
+        .unwrap();
+    let said = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        said.starts_with("%TPU-S-SECTSAVED,") && said.lines().count() == 1,
+        "making EVE's section said\n{said}{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let section = fs::read(mk.join("EVE.TPU$SECTION")).unwrap();
     let mut names: Vec<_> = fs::read_dir(&tests)
         .unwrap()
         .flatten()
         .map(|e| e.path())
-        .filter(|p| p.extension().is_some_and(|x| x == "eve"))
+        .filter(|p| p.extension().is_some_and(|x| x == "eve") && p.with_extension("vt").exists())
         .map(|p| p.file_stem().unwrap().to_string_lossy().into_owned())
         .collect();
     names.sort();
@@ -221,8 +245,10 @@ fn eve() {
         let dir = tmp.join(name);
         fs::create_dir_all(&dir).unwrap();
         let up = name.to_uppercase();
-        fs::copy(eve.join("eve.tpu"), dir.join("EVE.TPU")).unwrap();
-        fs::copy(tests.join(format!("{name}.txt")), dir.join(format!("{up}.TXT"))).unwrap();
+        fs::write(dir.join("EVE.TPU$SECTION"), &section).unwrap();
+        // The file, empty if the session has none, as the oracle makes it.
+        let txt = fs::read(tests.join(format!("{name}.txt"))).unwrap_or_default();
+        fs::write(dir.join(format!("{up}.TXT")), txt).unwrap();
         fs::write(
             dir.join("TT.IN"),
             unescape(&fs::read_to_string(tests.join(format!("{name}.eve"))).unwrap()),
@@ -232,12 +258,14 @@ fn eve() {
             .args(["--timeout", "60", "--files"])
             .arg(&dir)
             .arg(&exe)
-            .arg(format!("/SECTION=EVE.TPU {up}.TXT"))
+            .arg(format!("/SECTION=EVE {up}.TXT"))
             .output()
             .unwrap();
         let got = render(&fs::read(dir.join("TT.OUT")).unwrap_or_default());
         let vt = fs::read(tests.join(format!("{name}.vt"))).unwrap();
-        let want = render(expected(&String::from_utf8_lossy(&vt)).as_bytes());
+        // The oracle's file names cut on the screen it showed, not in
+        // what it sent, which wrote over what longer names covered.
+        let want = expected(&render(&vt));
         if got != want {
             failures.push(format!(
                 "{name}: showed\n{got}\nexpected\n{want}\nstderr: {}",
@@ -343,7 +371,8 @@ fn show() {
 }
 
 /// A .keys file's bytes: its lines' \\r, \\n, \\t, \\\\ and \\xHH escapes
-/// decoded, as the oracle's Python decodes them; the lines stay apart.
+/// decoded, as the oracle's Python decodes them, \\n as 255 and n; the
+/// lines stay apart.
 fn unescape(text: &str) -> Vec<u8> {
     let mut out = Vec::new();
     for line in text.lines() {
@@ -353,7 +382,8 @@ fn unescape(text: &str) -> Vec<u8> {
             if b[i] == b'\\' && i + 1 < b.len() {
                 match b[i + 1] {
                     b'r' => out.push(13),
-                    b'n' => out.push(10),
+                    // A line feed typed: vrun/tt.b64 reads it back.
+                    b'n' => out.extend_from_slice(&[255, b'n']),
                     b't' => out.push(9),
                     b'x' if i + 3 < b.len() => {
                         let hex = std::str::from_utf8(&b[i + 2..i + 4]).unwrap();

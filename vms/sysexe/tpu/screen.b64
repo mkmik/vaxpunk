@@ -85,6 +85,8 @@ EXTERNAL ROUTINE
     MARK_FREE : NOVALUE,
     LINENO,
     BUF_NEW,
+    BUF_PAD,
+    BUF_SETPAD : NOVALUE,
     READKEY;
 
 FORWARD ROUTINE
@@ -477,7 +479,8 @@ ROUTINE PAINT (W : REF VECTOR) : NOVALUE =
         CO;
     PLACE(.W, CL, CO);
     W[W_ROW] = .W[W_TOP] - 1 + .CROW;
-    W[W_COL] = MIN(COLOF(.CL, .CO) - .W[W_SHIFT], .W[W_WIDTH] - 1);
+    W[W_COL] = MIN(COLOF(.CL, .CO) + (IF .W EQL .CURWIN THEN BUF_PAD(.W[W_BUF]) ELSE 0)
+                   - .W[W_SHIFT], .W[W_WIDTH] - 1);
     IF .W[W_COL] LSS 0 THEN W[W_COL] = 0
     END;
     IF .W[W_STATUS]
@@ -1032,6 +1035,9 @@ GLOBAL ROUTINE SCR_INFO (ARGS : REF VECTOR, N, R) =
         ELSE IF REQ('SHIFT_AMOUNT') THEN .R = MKINT(.X[W_SHIFT])
         ELSE IF REQ('CURRENT_ROW') THEN .R = MKINT(.X[W_ROW] + 1)
         ELSE IF REQ('CURRENT_COLUMN') THEN .R = MKINT(.X[W_COL] + 1)
+        ELSE IF REQ('BEYOND_EOL')
+        THEN
+            .R = MKINT(IF X NEQ .CURWIN OR .X[W_BUF] EQL 0 THEN FALSE ELSE BUF_PAD(.X[W_BUF]) GTR 0)
         ELSE RETURN NOTMINE;
         RETURN SS_NORMAL
         END;
@@ -1126,15 +1132,37 @@ ROUTINE BX_SHIFT (ARGS : REF VECTOR, N, R) =
     SS_NORMAL
     END;
 
+! OFFAT line, column: the offset shown in that column, or the line's
+! length if it is past its end.
+ROUTINE OFFAT (L : REF VECTOR, COL) =
+    BEGIN
+    LOCAL
+        C,
+        O;
+    C = 0;
+    O = 0;
+    WHILE .O LSS .L[L_LEN] DO
+        BEGIN
+        LOCAL
+            NEXT;
+        NEXT = (IF GETB(.L[L_TEXT] + .O) EQL 9 THEN .C + 8 - .C MOD 8 ELSE .C + 1);
+        IF .NEXT GTR .COL THEN EXITLOOP;
+        C = .NEXT;
+        O = .O + 1
+        END;
+    .O
+    END;
+
 ! CURSOR_VERTICAL (n), CURSOR_HORIZONTAL (n): the cursor n rows or columns
-! on, as far as it can; how far it went.
-! ponytail: the cursor is the editing point: it goes no further than the
-! text, as MOVE_VERTICAL and MOVE_HORIZONTAL take it.
+! on; how far it went. It keeps its column going up and down, and may go
+! past a line's end, where text typed is put after blanks (BUF_PAD); not
+! past the buffer's ends.
 ROUTINE BX_CURSOR (ARGS : REF VECTOR, N, R, VERT) =
     BEGIN
     LOCAL
         B : REF VECTOR,
         K,
+        COL,
         DONE;
     ARGCOUNT(1, 1);
     IF VTYPE(.ARGS[0]) NEQ TY_INTEGER THEN RETURN ARGMISMATCH(1, .ARGS[0]);
@@ -1142,6 +1170,7 @@ ROUTINE BX_CURSOR (ARGS : REF VECTOR, N, R, VERT) =
     IF .B EQL 0 THEN RETURN BI_ERR(TPU$_NOCURRENTBUF);
     K = VINT(.ARGS[0]);
     DONE = 0;
+    COL = COLOF(.B[B_LINE], .B[B_OFF]) + BUF_PAD(.B);
     IF .VERT
     THEN
         BEGIN
@@ -1149,16 +1178,42 @@ ROUTINE BX_CURSOR (ARGS : REF VECTOR, N, R, VERT) =
             (BIND P = .B[B_LINE] : VECTOR; B[B_LINE] = .P[L_NEXT]; K = .K - 1; DONE = .DONE + 1);
         WHILE .K LSS 0 AND PREVLINE(.B, .B[B_LINE]) NEQ 0 DO
             (B[B_LINE] = PREVLINE(.B, .B[B_LINE]); K = .K + 1; DONE = .DONE - 1);
-        IF .B[B_LINE] NEQ 0 THEN (BIND P = .B[B_LINE] : VECTOR; B[B_OFF] = MIN(.B[B_OFF], .P[L_LEN]))
-        ELSE B[B_OFF] = 0
+        IF .B[B_LINE] NEQ 0
+        THEN
+            BEGIN
+            B[B_OFF] = OFFAT(.B[B_LINE], .COL);
+            BUF_SETPAD(.B, MAX(0, .COL - COLOF(.B[B_LINE], .B[B_OFF])))
+            END
+        ELSE
+            B[B_OFF] = 0
         END
     ELSE IF .B[B_LINE] NEQ 0
     THEN
         BEGIN
         BIND
             P = .B[B_LINE] : VECTOR;
-        DONE = MAX(-.B[B_OFF], MIN(.K, .P[L_LEN] - .B[B_OFF]));
-        B[B_OFF] = .B[B_OFF] + .DONE
+        LOCAL
+            PAD;
+        PAD = BUF_PAD(.B);
+        IF .K GTR 0
+        THEN
+            BEGIN
+            ! Along the line, then past its end.
+            DONE = MIN(.K, .P[L_LEN] - .B[B_OFF]);
+            B[B_OFF] = .B[B_OFF] + .DONE;
+            PAD = .PAD + .K - .DONE;
+            DONE = .K
+            END
+        ELSE
+            BEGIN
+            ! Back to the line's end, then along it.
+            DONE = MIN(-.K, .PAD);
+            PAD = .PAD - .DONE;
+            K = MIN(-.K - .DONE, .B[B_OFF]);
+            B[B_OFF] = .B[B_OFF] - .K;
+            DONE = -(.DONE + .K)
+            END;
+        BUF_SETPAD(.B, .PAD)
         END;
     .R = MKINT(.DONE);
     SS_NORMAL
