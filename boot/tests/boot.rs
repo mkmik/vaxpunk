@@ -45,6 +45,8 @@ const BOOT: Phase = Phase {
         ("Password:", 2, "wrongpw\r"),
         ("Username:", 3, "system\r"),
         ("Password:", 3, "manager\r"),
+        // SYLOGIN.COM's TTSIZE asks the console for its size.
+        ("\x1b[6n", 1, "\x1b[24;80R"),
     ],
     lines: &[
         "%EXEC-I-START",
@@ -715,6 +717,7 @@ const USERS: Phase = Phase {
         ),
         ("Username:", 4, "JOE\r"),
         ("Password:", 4, "joespw\r"),
+        ("\x1b[6n", 2, "\x1b[24;80R"),
         (
             "\tWelcome to vaxpunk",
             2,
@@ -725,7 +728,8 @@ const USERS: Phase = Phase {
         ),
         ("Username:", 5, "SYSTEM\r"),
         ("Password:", 5, "newpw\r"),
-        ("\tWelcome to vaxpunk", 3, "SHOW PROCESS\r"),
+        ("\x1b[6n", 3, "\x1b[50;100R"),
+        ("\tWelcome to vaxpunk", 3, "SHOW PROCESS\rSHOW TERMINAL\r"),
     ],
     lines: &[
         "%UAF-I-ADDMSG, user record successfully added",
@@ -747,6 +751,9 @@ const USERS: Phase = Phase {
         "%UAF-E-NAOFIL, unable to open system authorization file (SYSUAF.DAT)",
         "  JOE          logged out at ",
         "Process name:       \"SYSTEM\"",
+        // TTSIZE's, from the size the console said.
+        "   Input:    9600     LFfill:  0      Width: 100      Parity: None",
+        "   Output:   9600     CRfill:  0      Page:   50",
     ],
 };
 
