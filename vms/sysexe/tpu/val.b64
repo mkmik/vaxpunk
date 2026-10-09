@@ -1,0 +1,292 @@
+MODULE VAL (IDENT = 'V0.1') =
+%TITLE 'TPU: string operators, equality and arrays'
+BEGIN
+!
+! The string operators: + joins, - takes out the first occurrence, *
+! repeats. Values are equal when they are of one type and the same: a
+! string by its text, a marker by where it is, anything else by being
+! the same object or the same number.
+!
+! An array is a hash table of elements, each holding its index and its
+! value, whatever their types; GET_INFO's "first" and "next" walk it in
+! the table's order, which DEC's TPU doesn't promise either.
+!
+REQUIRE 'TPU';
+
+LITERAL
+    A_REF = 0,
+    A_LOW = 1,                          ! CREATE_ARRAY's integer indexes: the lowest,
+    A_COUNT = 2,                        ! how many
+    A_CURB = 3,                         ! "next": the bucket and element it is at
+    A_CURE = 4,
+    A_BUCKETS = 5,                      ! then the buckets
+    NBUCKETS = 64,
+    A_SIZE = A_BUCKETS + NBUCKETS,
+    E_NEXT = 0,
+    E_KEY = 1,
+    E_VALUE = 2,
+    E_SIZE = 3;
+
+EXTERNAL ROUTINE
+    MARK_COMPARE;
+
+! STR_CONCAT a, b: a string of the two.
+GLOBAL ROUTINE STR_CONCAT (A, B) =
+    BEGIN
+    LOCAL
+        V;
+    V = STR_NEW(SLEN(.A) + SLEN(.B));
+    CH$MOVE(SLEN(.A), SADDR(.A), SADDR(.V));
+    CH$MOVE(SLEN(.B), SADDR(.B), SADDR(.V) + SLEN(.A));
+    .V
+    END;
+
+! STR_INDEX a, b: where b first is in a, from 1, or 0.
+GLOBAL ROUTINE STR_INDEX (A, B) =
+    BEGIN
+    LOCAL
+        LA,
+        LB;
+    LA = SLEN(.A);
+    LB = SLEN(.B);
+    IF .LB EQL 0 THEN RETURN 0;
+    INCR I FROM 0 TO .LA - .LB DO
+        IF CH$EQL(.LB, SADDR(.A) + .I, .LB, SADDR(.B)) THEN RETURN .I + 1;
+    0
+    END;
+
+! STR_REDUCE a, b: a without the first b in it.
+GLOBAL ROUTINE STR_REDUCE (A, B) =
+    BEGIN
+    LOCAL
+        AT,
+        V;
+    AT = STR_INDEX(.A, .B);
+    IF .AT EQL 0 THEN (VREF(.A); RETURN .A);
+    V = STR_NEW(SLEN(.A) - SLEN(.B));
+    CH$MOVE(.AT - 1, SADDR(.A), SADDR(.V));
+    CH$MOVE(SLEN(.A) - .AT + 1 - SLEN(.B), SADDR(.A) + .AT - 1 + SLEN(.B), SADDR(.V) + .AT - 1);
+    .V
+    END;
+
+! STR_REPEAT a, n: a n times.
+GLOBAL ROUTINE STR_REPEAT (A, N) =
+    BEGIN
+    LOCAL
+        V,
+        L;
+    L = SLEN(.A);
+    IF .N LSS 0 THEN N = 0;
+    IF .N * .L GTR 65535 THEN N = 65535 / MAX(.L, 1);
+    V = STR_NEW(.N * .L);
+    INCR I FROM 0 TO .N - 1 DO CH$MOVE(.L, SADDR(.A), SADDR(.V) + .I * .L);
+    .V
+    END;
+
+! STR_COMPARE a, b: negative, 0 or positive as a sorts before, with or
+! after b, character by character.
+GLOBAL ROUTINE STR_COMPARE (A, B) =
+    BEGIN
+    LOCAL
+        LA,
+        LB;
+    LA = SLEN(.A);
+    LB = SLEN(.B);
+    INCR I FROM 0 TO MIN(.LA, .LB) - 1 DO
+        BEGIN
+        LOCAL
+            CA,
+            CB;
+        CA = GETB(SADDR(.A) + .I);
+        CB = GETB(SADDR(.B) + .I);
+        IF .CA NEQ .CB THEN RETURN .CA - .CB
+        END;
+    .LA - .LB
+    END;
+
+! VAL_EQUAL a, b: whether the two values are equal, as = says.
+GLOBAL ROUTINE VAL_EQUAL (A, B) =
+    BEGIN
+    IF VTYPE(.A) NEQ VTYPE(.B) THEN RETURN FALSE;
+    SELECTONE VTYPE(.A) OF
+        SET
+        [TY_STRING] : RETURN STR_COMPARE(.A, .B) EQL 0;
+        [TY_MARKER] : RETURN MARK_COMPARE(.A, .B) EQL 0;
+        [OTHERWISE] : RETURN .A EQL .B;
+        TES
+    END;
+
+! ---- Arrays
+
+ROUTINE HASH (K) =
+    BEGIN
+    LOCAL
+        H;
+    IF VTYPE(.K) EQL TY_STRING
+    THEN
+        BEGIN
+        H = 0;
+        INCR I FROM 0 TO SLEN(.K) - 1 DO H = (.H * 31 + GETB(SADDR(.K) + .I)) AND %X'FFFFFF'
+        END
+    ELSE
+        H = .K XOR SRL(.K, 32);
+    .H AND (NBUCKETS - 1)
+    END;
+
+! FIND array, index: the element with that index, or 0.
+ROUTINE FIND (A : REF VECTOR, K) =
+    BEGIN
+    LOCAL
+        E : REF VECTOR;
+    E = .A[A_BUCKETS + HASH(.K)];
+    WHILE .E NEQ 0 DO
+        BEGIN
+        IF VTYPE(.E[E_KEY]) EQL VTYPE(.K)
+        THEN
+            IF (IF VTYPE(.K) EQL TY_STRING THEN STR_COMPARE(.E[E_KEY], .K) EQL 0
+                ELSE .E[E_KEY] EQL .K)
+            THEN
+                RETURN .E;
+        E = .E[E_NEXT]
+        END;
+    0
+    END;
+
+! ARR_NEW count, low: a new array, with count integer indexes from low.
+GLOBAL ROUTINE ARR_NEW (N, LOW) =
+    BEGIN
+    LOCAL
+        A : REF VECTOR;
+    A = MEM_GET(A_SIZE * 8);
+    A[A_REF] = 1;
+    A[A_LOW] = .LOW;
+    A[A_COUNT] = .N;
+    MKV(TY_ARRAY, .A)
+    END;
+
+! ARR_GET array, index: the element's value, or unspecified.
+GLOBAL ROUTINE ARR_GET (AV, K) =
+    BEGIN
+    LOCAL
+        E : REF VECTOR;
+    E = FIND(VPTR(.AV), .K);
+    IF .E EQL 0 THEN RETURN 0;
+    VREF(.E[E_VALUE]);
+    .E[E_VALUE]
+    END;
+
+! ARR_SET array, index, value: the element gets the value, which it
+! holds; unspecified takes the element out.
+GLOBAL ROUTINE ARR_SET (AV, K, V) : NOVALUE =
+    BEGIN
+    LOCAL
+        A : REF VECTOR,
+        E : REF VECTOR,
+        H;
+    A = VPTR(.AV);
+    E = FIND(.A, .K);
+    IF .V EQL 0
+    THEN
+        BEGIN
+        LOCAL
+            P;
+        IF .E EQL 0 THEN RETURN;
+        P = A[A_BUCKETS + HASH(.K)];
+        WHILE ..P NEQ .E DO P = ..P;
+        .P = .E[E_NEXT];
+        IF .A[A_CURE] EQL .E THEN A[A_CURE] = .E[E_NEXT];
+        VUNREF(.E[E_KEY]);
+        VUNREF(.E[E_VALUE]);
+        MEM_FREE(.E);
+        RETURN
+        END;
+    IF .E EQL 0
+    THEN
+        BEGIN
+        E = MEM_GET(E_SIZE * 8);
+        VREF(.K);
+        E[E_KEY] = .K;
+        H = A_BUCKETS + HASH(.K);
+        E[E_NEXT] = .A[.H];
+        A[.H] = .E
+        END
+    ELSE
+        VUNREF(.E[E_VALUE]);
+    E[E_VALUE] = .V
+    END;
+
+! ARR_FREE address: frees an array no one holds.
+GLOBAL ROUTINE ARR_FREE (A : REF VECTOR) : NOVALUE =
+    BEGIN
+    INCR B FROM 0 TO NBUCKETS - 1 DO
+        BEGIN
+        LOCAL
+            E : REF VECTOR;
+        E = .A[A_BUCKETS + .B];
+        WHILE .E NEQ 0 DO
+            BEGIN
+            LOCAL
+                N;
+            N = .E[E_NEXT];
+            VUNREF(.E[E_KEY]);
+            VUNREF(.E[E_VALUE]);
+            MEM_FREE(.E);
+            E = .N
+            END
+        END;
+    MEM_FREE(.A)
+    END;
+
+! ARR_WALK array, first: the index of the first element, or of the one
+! after the last one asked for; unspecified at the end.
+GLOBAL ROUTINE ARR_WALK (AV, FIRST) =
+    BEGIN
+    LOCAL
+        A : REF VECTOR,
+        E : REF VECTOR,
+        B;
+    A = VPTR(.AV);
+    IF .FIRST
+    THEN
+        (B = 0; E = .A[A_BUCKETS])
+    ELSE
+        BEGIN
+        B = .A[A_CURB];
+        E = .A[A_CURE];
+        IF .E NEQ 0 THEN E = .E[E_NEXT]
+        END;
+    WHILE .E EQL 0 DO
+        BEGIN
+        B = .B + 1;
+        IF .B GEQ NBUCKETS THEN (A[A_CURE] = 0; A[A_CURB] = NBUCKETS; RETURN 0);
+        E = .A[A_BUCKETS + .B]
+        END;
+    A[A_CURB] = .B;
+    A[A_CURE] = .E;
+    VREF(.E[E_KEY]);
+    .E[E_KEY]
+    END;
+
+! ARR_INFO array, which: 0 the lowest integer index, 1 the highest, 2 the
+! number of elements.
+GLOBAL ROUTINE ARR_INFO (AV, W) =
+    BEGIN
+    LOCAL
+        A : REF VECTOR,
+        N;
+    A = VPTR(.AV);
+    IF .W EQL 0 THEN RETURN .A[A_LOW];
+    IF .W EQL 1 THEN RETURN .A[A_LOW] + .A[A_COUNT] - 1;
+    N = 0;
+    INCR B FROM 0 TO NBUCKETS - 1 DO
+        BEGIN
+        LOCAL
+            E : REF VECTOR;
+        E = .A[A_BUCKETS + .B];
+        WHILE .E NEQ 0 DO (N = .N + 1; E = .E[E_NEXT])
+        END;
+    .N
+    END;
+
+END
+ELUDOM

@@ -172,11 +172,12 @@ The scheduler's first `SWPCTX` to the new HWPCB starts its thread at
 
 1. Makes the executive, supervisor and user stacks at the top of P1 and
    puts their tops in the HWPCB.
-2. `IMG$ACTIVATE`, the image activator, reads the image from the system
-   disk, in `SYS$SYSTEM:` unless its name says where, into pool
-   (`FIL$OPENFILE`, *Files*), checks its header and that it is all in P0, or all
-   from `VA$C_CLI` to the stacks in P1, and maps each section: zeroed
-   pages, the contents copied in, then, after the shareable images it
+2. `IMG$ACTIVATE`, the image activator, reads the image's header from
+   the system disk, in `SYS$SYSTEM:` unless its name says where, into
+   pool (`FIL$OPENFILE`, *Files*), checks it and that the image is all in
+   P0, or all from `VA$C_CLI` to the stacks in P1, and maps each
+   section: zeroed pages, the contents read into them from the file
+   (`FIL$READIMG`), then, after the shareable images it
    calls, the protection: code read and
    execute, read-only data read, the rest write, for user mode in P0 and
    supervisor mode in P1. Then it frees the pool. An image in P0 may call
@@ -1099,10 +1100,15 @@ does:
   `*` and `%`, and the version asked for: any, the highest (the first of
   the name's record) or one. It can skip matches, which is how `$SEARCH`
   goes on from where it was.
-- **`FIL$OPENFILE`** finds an image and reads it whole into pool, for the
-  image activator, which frees it once the sections are copied:
-  `RMS$_PRV` without execute access to it. **`FIL$OPENSHR`** does the
-  same for a shareable image, from `SYS$SHARE:name.EXE`.
+- **`FIL$OPENFILE`** finds an image and reads its header, the blocks
+  `EIHD$L_HDRBLKCNT` says, into pool, with a copy of the file's header and
+  its volume after them, for the image activator, which frees it once the
+  sections are in: `RMS$_PRV` without execute access to it.
+  **`FIL$OPENSHR`** does the same for a shareable image, from
+  `SYS$SHARE:name.EXE`. **`FIL$READIMG`** reads a section's blocks
+  through a 4 KB buffer in pool into its pages, holding `FIL$LOCK`, so
+  that an image can be larger than the pool. ponytail: VMS maps the
+  sections and reads a page when it is first touched.
 - **`FIL$CHKPRO`** says whether the current process may read, write,
   execute or delete what an owner's UIC and a protection mask guard,
   or control it, by VMS's rules (below), and **`FIL$CHKHDR`** checks a

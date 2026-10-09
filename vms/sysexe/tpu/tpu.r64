@@ -1,0 +1,264 @@
+! TPU.R64: what TPU's modules share (PRD-0006): values and the objects
+! they point at, the bytecode, and each module's global routines.
+!
+! A value is a quadword: its type in the high longword and, in the low
+! one, an integer, a keyword's code or an object's address (vaxpunk's
+! addresses fit in 32 bits). Strings, arrays, markers, ranges, patterns,
+! programs and learn sequences are counted: VREF and VUNREF keep the
+! count, and the last VUNREF frees the object. Buffers and windows live
+! until DELETE, and are never freed: a deleted one is marked dead.
+
+LITERAL
+    TRUE = 1,
+    FALSE = 0;
+
+BUILTIN
+    SLL,
+    SRL,
+    SRA;
+
+MACRO
+    ! A byte at an address, and storing one.
+    GETB(A) = .(A)<0, 8, 0> %,
+    PUTB(A, V) = (A)<0, 8, 0> = (V) %,
+    ! A string literal as its address and length.
+    T(S) = UPLIT BYTE (S), %CHARCOUNT(S) %;
+
+! The types, as GET_INFO (x, "type") names them.
+LITERAL
+    TY_UNSPEC = 0,
+    TY_INTEGER = 1,
+    TY_STRING = 2,
+    TY_KEYWORD = 3,
+    TY_BUFFER = 4,
+    TY_MARKER = 5,
+    TY_RANGE = 6,
+    TY_WINDOW = 7,
+    TY_PATTERN = 8,
+    TY_ARRAY = 9,
+    TY_PROGRAM = 10,
+    TY_LEARN = 11,
+    TY_PROCESS = 12;
+
+MACRO
+    VTYPE(V) = SRL((V), 32) %,
+    VINT(V) = ((((V) AND %X'FFFFFFFF') XOR %X'80000000') - %X'80000000') %,
+    VPTR(V) = ((V) AND %X'FFFFFFFF') %,
+    MKV(TY, X) = (SLL((TY), 32) OR ((X) AND %X'FFFFFFFF')) %,
+    MKINT(X) = MKV(TY_INTEGER, X) %,
+    MKKW(K) = MKV(TY_KEYWORD, K) %,
+    ! Types whose objects are counted.
+    COUNTED(TY) = ((TY) EQL TY_STRING OR (TY) GEQ TY_MARKER AND (TY) NEQ TY_WINDOW
+                   AND (TY) NEQ TY_PROCESS) %;
+
+! A string object: the count, the length, then the text.
+LITERAL
+    S_REF = 0,
+    S_LEN = 1,
+    S_HDR = 16;
+
+MACRO
+    STEXT(P) = ((P) + S_HDR) %,
+    SLEN(V) = .(VPTR(V) + 8) %,
+    SADDR(V) = (VPTR(V) + S_HDR) %;
+
+! The bytecode: a byte for the operation, then its operands, longwords
+! and bytes, unaligned.
+LITERAL
+    OP_END = 0,                         ! the end of a program's code
+    OP_STMT = 1,                        ! word line, word to the statement's end
+    OP_INT = 2,                         ! long: push an integer
+    OP_VAL = 3,                         ! long: push a constant value's address's value
+    OP_UNSPEC = 4,                      ! push unspecified
+    OP_KW = 5,                          ! long: push a keyword
+    OP_LOADL = 6,                       ! byte: push local or parameter n
+    OP_STOREL = 7,                      ! byte: pop into local n
+    OP_LOADG = 8,                       ! long: push a symbol's value
+    OP_STOREG = 9,                      ! long: pop into a symbol's value
+    OP_POP = 10,
+    OP_ADD = 11,
+    OP_SUB = 12,
+    OP_MUL = 13,
+    OP_DIV = 14,
+    OP_NEG = 15,
+    OP_AND = 16,
+    OP_OR = 17,
+    OP_XOR = 18,
+    OP_NOT = 19,
+    OP_EQ = 20,
+    OP_NE = 21,
+    OP_LT = 22,
+    OP_LE = 23,
+    OP_GT = 24,
+    OP_GE = 25,
+    OP_ALT = 26,                        ! pattern |
+    OP_LINK = 27,                       ! pattern &
+    OP_PASSIGN = 28,                    ! pattern @: a reference follows
+    OP_JUMP = 29,                       ! long: to an offset in the code
+    OP_JFALSE = 30,                     ! long: pop, jump if even
+    OP_CALL = 31,                       ! long symbol, byte count, references
+    OP_BUILTIN = 32,                    ! word number, byte count, references
+    OP_RETURN = 33,                     ! pop the result, return
+    OP_SETRESULT = 34,                  ! pop into the procedure's result
+    OP_INDEX = 35,                      ! a reference: push array{pop}
+    OP_STOREX = 36,                     ! a reference: array{pop2} := pop
+    OP_ABORT = 37,
+    OP_HEND = 38,                       ! byte: the end of an ON_ERROR clause
+    OP_ERROR = 39,                      ! push ERROR
+    OP_ERRLINE = 40,                    ! push ERROR_LINE
+    OP_ERRTEXT = 41,                    ! push ERROR_TEXT
+    OP_LOADR = 42,                      ! push the procedure's result
+    OP_AMBIG = 43;                      ! long symbol: a variable's value, or a call
+
+! A reference to where an argument came from, after OP_CALL and
+! OP_BUILTIN for each argument, and after OP_INDEX, OP_STOREX and
+! OP_PASSIGN: a byte, then a byte or a longword.
+LITERAL
+    REF_NONE = 0,
+    REF_LOCAL = 1,                      ! byte: the local's number
+    REF_GLOBAL = 2;                     ! long: the symbol
+
+! A symbol, in the hash table SYM_FIND looks in. Names are upper case.
+LITERAL
+    Y_NEXT = 0,
+    Y_KIND = 1,                         ! YK_
+    Y_VALUE = 2,                        ! a variable's or a constant's value
+    Y_PROC = 3,                         ! a procedure's code object
+    Y_CODE = 4,                         ! a built-in's or a keyword's number
+    Y_LEN = 5,                          ! the name's length; the name follows
+    Y_SIZE = 6,
+    YK_NONE = 0,                        ! seen, not yet a variable or procedure
+    YK_VAR = 1,
+    YK_CONST = 2,
+    YK_PROC = 3,
+    YK_BUILTIN = 4,
+    YK_KEYWORD = 5;
+
+MACRO
+    YNAME(Y) = ((Y) + Y_SIZE * 8) %;
+
+! A code object: a procedure's, or a program's unbound code.
+LITERAL
+    C_REF = 0,
+    C_CODE = 1,                         ! the bytecode's address
+    C_LEN = 2,
+    C_NREQ = 3,                         ! required parameters
+    C_NPARAM = 4,                       ! parameters, required and optional
+    C_NLOCAL = 5,                       ! locals after the parameters
+    C_HANDLER = 6,                      ! ON_ERROR's offset in the code, or -1
+    C_CASES = 7,                        ! a case-style handler's table, or 0
+    C_NAME = 8,                         ! its symbol, or 0
+    C_LINE0 = 9,                        ! the line it starts on
+    C_SIZE = 10;
+
+! A case-style handler's table: its length, then for each clause the
+! keyword (or H_OTHERWISE) and the clause's offset in the code.
+LITERAL
+    H_OTHERWISE = -1;
+
+! A buffer's, a line's, a marker's and a range's layout (buffer.b64).
+LITERAL
+    B_NEXT = 0,                         ! the next buffer, in the order they were made
+    B_NAME = 1,                         ! a string value, in capitals
+    B_FIRST = 2,                        ! the first and last lines
+    B_LAST = 3,
+    B_NLINES = 4,
+    B_LINE = 5,                         ! the editing point: the line, 0 at the end,
+    B_OFF = 6,                          ! and the offset
+    B_MARKS = 7,                        ! the markers
+    B_FLAGS = 8,
+    B_OUTFILE = 9,                      ! a string value, or 0
+    B_INFILE = 10,
+    B_EOBTEXT = 11,
+    B_LMARGIN = 12,
+    B_RMARGIN = 13,
+    B_TABS = 14,                        ! tab stops: every n columns
+    B_KEYMAPS = 15,                     ! the key map list's name, a string value, or 0
+    B_GOAL = 16,                        ! MOVE_VERTICAL's offset to keep,
+    B_GOALLINE = 17,                    ! and where it left the editing point
+    B_GOALOFF = 18,
+    B_SELMARK = 19,                      ! SELECT's marker, or 0
+    B_RANGES = 20,                      ! its ranges with a video attribute
+    B_PAD = 21,                         ! columns the cursor is past the line's end,
+    B_PADLINE = 22,                     ! while the editing point stays where it was then
+    B_PADOFF = 23,
+    B_SIZE = 24,
+    BF_MODIFIED = 1,
+    BF_OVERSTRIKE = 2,
+    BF_NOWRITE = 4,
+    BF_SYSTEM = 8,
+    BF_PERMANENT = 16,
+    BF_UNMODIFIABLE = 32,
+    BF_REVERSE = 64,
+    BF_DEAD = 128;
+
+! A line.
+LITERAL
+    L_NEXT = 0,
+    L_PREV = 1,
+    L_LEN = 2,
+    L_CAP = 3,
+    L_TEXT = 4,
+    L_MARGIN = 5,                       ! its left margin, which FILL sets: 1 for none
+    L_SIZE = 6;
+
+! A marker; a range.
+LITERAL
+    M_REF = 0,
+    M_BUF = 1,                          ! 0 once the marker is deleted
+    M_LINE = 2,
+    M_OFF = 3,
+    M_NEXT = 4,
+    M_PREV = 5,
+    M_VIDEO = 6,
+    M_SIZE = 7,
+    R_REF = 0,
+    R_START = 1,                        ! markers of the range's own
+    R_END = 2,
+    R_VIDEO = 3,
+    R_NEXT = 4,                         ! the buffer's next range with a video attribute
+    R_BUF = 5,                          ! the buffer that lists it, or 0
+    R_SIZE = 6;
+
+
+! A key typed that has no keyword of its own, a character: KEY_BASE plus
+! its code, a keyword code past the table's.
+LITERAL
+    KEY_BASE = 65536,
+    SHIFT_BIT = %X'100000';             ! a key after the shift key, GOLD
+
+! What a built-in returns: SS_NORMAL, or the TPU$_ keyword of an error.
+LITERAL
+    SS_NORMAL = 1,
+    SS_ABORTED = 2;                     ! from VM_RUN: ABORT unwound it
+
+EXTERNAL ROUTINE
+    ! mem.b64
+    MEM_GET,                            ! (size): zeroed memory
+    MEM_FREE : NOVALUE,                 ! (address)
+    STR_NEW,                            ! (length): a string value, its text to fill
+    STR_MAKE,                           ! (text, length): a string value
+    STR_EQL,                            ! (value, text, length)
+    VREF : NOVALUE,                     ! (value)
+    VUNREF : NOVALUE,                   ! (value)
+    ! sym.b64
+    SYM_INIT : NOVALUE,
+    SYM_FIND,                           ! (name, length): the symbol, made if new
+    SYM_LOOK,                           ! (name, length): the symbol, or 0
+    KW_NAME,                            ! (code, address of length): a keyword's name
+    KW_FIND,                            ! (name, length): a keyword's code, or 0
+    ! comp.b64
+    COMPILE,                            ! (text, length, code object address): status
+    ! vm.b64
+    VM_RUN,                             ! (code object): status
+    VM_ERROR : NOVALUE,                 ! (TPU$_ code, text, length)
+    MSG_PUT : NOVALUE,                  ! (text, length): MESSAGE's output
+    ! builtin.b64
+    BI_CALL,                            ! (number, args, count, result address): status
+    ! fio.mar on vaxpunk, vrun/tt.b64 under vrun: the terminal
+    TT$OPEN,                            ! (address of width, of height): whether there is one
+    TT$PUT : NOVALUE,                   ! (text, length)
+    TT$FLUSH : NOVALUE,
+    TT$GET,                             ! (): a byte typed, -1 at the end
+    TT$WAITING,                         ! (): whether one is waiting
+    TT$CLOSE : NOVALUE;

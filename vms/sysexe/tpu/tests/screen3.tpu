@@ -1,0 +1,17 @@
+! Two windows on two buffers, one a status line of its own, EOB text,
+! tabs, a line wider than the screen, and the cursor going between them.
+a := CREATE_BUFFER ("top");
+b := CREATE_BUFFER ("bottom");
+w1 := CREATE_WINDOW (1, 11, ON);
+w2 := CREATE_WINDOW (12, 11, ON);
+SET (EOB_TEXT, b, "<<end>>");
+MAP (w1, a);
+COPY_TEXT ("tab:" + ASCII (9) + "x" + ASCII (9) + ASCII (9) + "y");
+SPLIT_LINE;
+COPY_TEXT ("wide " * 20);
+MAP (w2, b);
+COPY_TEXT ("in the bottom window");
+SET (STATUS_LINE, w2, REVERSE, "my own status line");
+DEFINE_KEY ("POSITION (w1)", PF3);
+DEFINE_KEY ("POSITION (w2)", PF2);
+DEFINE_KEY ("QUIT (OFF)", CTRL_Z_KEY);

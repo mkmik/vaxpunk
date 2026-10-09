@@ -1,0 +1,6 @@
+42 items, done
+%TPU-W-INVFAOPARAM, FAO parameter 0 must be string or integer
+-TPU-I-INBUILTIN, occurred in built-in FAO
+-TPU-I-ATLINE, at line 3
+
+255 000000FF 00000000010

@@ -1,0 +1,1639 @@
+MODULE COMP (IDENT = 'V0.1') =
+%TITLE 'TPU: the compiler, from TPU source to bytecode'
+BEGIN
+!
+! COMPILE text, length, code: compiles a compilation unit, as the Guide
+! to the DEC Text Processing Utility (chapter 4) describes the language:
+! procedure, VARIABLE and CONSTANT declarations, then the unbound code,
+! which becomes a code object of its own, a program. It reads the text
+! twice with the same recursive descent parser. The first pass emits
+! nothing: it notes the global variables the text assigns and the
+! procedures it declares, as DEC's compiler knows the whole unit before
+! it compiles a procedure. The second emits the bytecode (tpu.r64) and
+! says what DEC's says about it: HIDDEN, UNREACHABLE, AMBIGSYMUSED.
+!
+! A syntax error is reported once, where it is found, and the lexer then
+! gives only the end of the text, so that every loop of the parser ends.
+! ponytail: no MODULE, EQUIVALENCE, %IF or %IFDEF; DEC's error recovery,
+! which lists the symbols it expected, is a single message here.
+!
+REQUIRE 'TPU';
+REQUIRE 'TPUKW';
+
+! The tokens: the symbols, then the reserved words.
+LITERAL
+    TK_EOF = 0,
+    TK_NAME = 1,
+    TK_INT = 2,
+    TK_STR = 3,
+    TK_ASSIGN = 4,
+    TK_EQ = 5,
+    TK_NE = 6,
+    TK_LT = 7,
+    TK_LE = 8,
+    TK_GT = 9,
+    TK_GE = 10,
+    TK_PLUS = 11,
+    TK_MINUS = 12,
+    TK_STAR = 13,
+    TK_SLASH = 14,
+    TK_LPAR = 15,
+    TK_RPAR = 16,
+    TK_LBRACE = 17,
+    TK_RBRACE = 18,
+    TK_LBRACK = 19,
+    TK_RBRACK = 20,
+    TK_COMMA = 21,
+    TK_SEMI = 22,
+    TK_COLON = 23,
+    TK_BAR = 24,
+    TK_AMP = 25,
+    TK_AT = 26,
+    TK_BAD = 27;
+
+MACRO
+    RESERVED =
+        TK_PROCEDURE, 'PROCEDURE', TK_ENDPROCEDURE, 'ENDPROCEDURE', TK_IF, 'IF',
+        TK_THEN, 'THEN', TK_ELSE, 'ELSE', TK_ENDIF, 'ENDIF', TK_LOOP, 'LOOP',
+        TK_EXITIF, 'EXITIF', TK_ENDLOOP, 'ENDLOOP', TK_CASE, 'CASE', TK_FROM, 'FROM',
+        TK_TO, 'TO', TK_INRANGE, 'INRANGE', TK_OUTRANGE, 'OUTRANGE',
+        TK_ENDCASE, 'ENDCASE', TK_ON_ERROR, 'ON_ERROR', TK_ENDON_ERROR, 'ENDON_ERROR',
+        TK_RETURN, 'RETURN', TK_ABORT, 'ABORT', TK_LOCAL, 'LOCAL',
+        TK_CONSTANT, 'CONSTANT', TK_VARIABLE, 'VARIABLE', TK_AND, 'AND', TK_OR, 'OR',
+        TK_XOR, 'XOR', TK_NOT, 'NOT', TK_ERROR, 'ERROR', TK_ERROR_LINE, 'ERROR_LINE',
+        TK_ERROR_TEXT, 'ERROR_TEXT', TK_MODULE, 'MODULE', TK_ENDMODULE, 'ENDMODULE',
+        TK_EQUIVALENCE, 'EQUIVALENCE' %,
+    RWLIT[ID, S] = ID = TK_BAD + %COUNT + 1 %,
+    RWSTR[ID, S] = %CHAR(%CHARCOUNT(S)), S %;
+
+LITERAL
+    RWLIT(RESERVED);
+
+BIND
+    RWTAB = UPLIT BYTE (RWSTR(RESERVED), 0) : VECTOR[, BYTE];
+
+LITERAL
+    MAXLOCAL = 383,                     ! 127 parameters and 255 locals, and the CASE temporaries
+    MAXNAME = 132;
+
+GLOBAL
+    COMP_LINE1;                         ! the number of the text's first line, if not 1
+
+OWN
+    SRC,                                ! the text,
+    SRCEND,                             ! its end,
+    POS,                                ! where the lexer is
+    LINE,                               ! and on which line
+    TOK,                                ! the token: TK_
+    TVAL,                               ! an integer's value
+    TTEXT,                              ! its text
+    TLEN,
+    TLINE,
+    PASS,                               ! 1 or 2
+    FAILED,                             ! a syntax error was reported
+    ! The code being emitted: where, how much, room for how much.
+    CODE,
+    CLEN,
+    CCAP,
+    ! The procedure being compiled: its symbol (0 in unbound code), its
+    ! locals, parameters first: their names, kinds and constants' values.
+    PROC,
+    PLINE,                              ! the line its PROCEDURE is on
+    NLOC,
+    NPAR,
+    LNAME : VECTOR[MAXLOCAL],
+    LLEN : VECTOR[MAXLOCAL],
+    LCONST : VECTOR[MAXLOCAL],          ! a constant's value cell, or 0
+    ! The innermost LOOP's EXITIF jumps, a chain through their operands.
+    EXITS,
+    INLOOP,
+    DEAD,                               ! the last statement ended the flow
+    UNREACH,                            ! UNREACHABLE to say, in so many statements
+    UDEPTH,                             ! of a list outside this deep
+    DEPTH,                              ! statement lists open
+    WARNED;                             ! UNREACHABLE said for this list
+
+EXTERNAL ROUTINE
+    MSG_OUT : NOVALUE,                  ! (continuation, code, parameters...)
+    KW_ISERROR,
+    VM_EVAL;                            ! (code object): the value it returns
+
+FORWARD ROUTINE
+    EXPR : NOVALUE,
+    STATEMENTS : NOVALUE,
+    MINLABEL,
+    MAXLABEL,
+    LABELLESS;
+
+! ---- The lexer
+
+! UPPER character: it in upper case.
+ROUTINE UPPER (C) =
+    IF .C GEQU %C'a' AND .C LEQU %C'z' THEN .C - 32 ELSE .C;
+
+ROUTINE NAMECHAR (C) =
+    (.C GEQU %C'A' AND .C LEQU %C'Z') OR (.C GEQU %C'a' AND .C LEQU %C'z')
+    OR (.C GEQU %C'0' AND .C LEQU %C'9') OR .C EQL %C'$' OR .C EQL %C'_';
+
+! RESERVED_WORD: the TK_ code of the name in TTEXT if it is reserved, or
+! TK_NAME.
+ROUTINE RESERVED_WORD =
+    BEGIN
+    LOCAL
+        I,
+        CODE;
+    I = 0;
+    CODE = TK_BAD + 1;
+    WHILE .RWTAB[.I] NEQ 0 DO
+        BEGIN
+        IF .RWTAB[.I] EQL .TLEN
+        THEN
+            BEGIN
+            LOCAL
+                SAME;
+            SAME = TRUE;
+            INCR J FROM 0 TO .TLEN - 1 DO
+                IF UPPER(GETB(.TTEXT + .J)) NEQ .RWTAB[.I + 1 + .J] THEN (SAME = FALSE; EXITLOOP);
+            IF .SAME THEN RETURN .CODE
+            END;
+        CODE = .CODE + 1;
+        I = .I + .RWTAB[.I] + 1
+        END;
+    TK_NAME
+    END;
+
+! SYNERR text, length: reports a syntax error at the token, and ends the
+! compilation.
+ROUTINE SYNERR (TEXT, LEN) : NOVALUE =
+    BEGIN
+    IF .FAILED THEN RETURN;
+    FAILED = TRUE;
+    MSG_OUT(0, TPU$_SYNTAXERROR, STR_MAKE(.TEXT, .LEN));
+    MSG_OUT(1, TPU$_SOURCELINE, MKINT(.TLINE));
+    TOK = TK_EOF
+    END;
+
+! NEXT: reads the next token into TOK and the rest.
+ROUTINE NEXT : NOVALUE =
+    BEGIN
+    LOCAL
+        C,
+        C2;
+    IF .FAILED THEN (TOK = TK_EOF; RETURN);
+    ! Blanks, line ends and comments.
+    WHILE .POS LSSA .SRCEND DO
+        BEGIN
+        C = GETB(.POS);
+        IF .C EQL %C'!'
+        THEN
+            WHILE .POS LSSA .SRCEND AND GETB(.POS) NEQ 10 DO POS = .POS + 1
+        ELSE IF .C EQL 10
+        THEN
+            (LINE = .LINE + 1; POS = .POS + 1)
+        ELSE IF .C LEQU 32 OR .C EQL 127
+        THEN
+            POS = .POS + 1
+        ELSE
+            EXITLOOP
+        END;
+    TTEXT = .POS;
+    TLINE = .LINE;
+    IF .POS GEQA .SRCEND THEN (TOK = TK_EOF; TLEN = 0; RETURN);
+    C = GETB(.POS);
+    C2 = (IF .POS + 1 LSSA .SRCEND THEN GETB(.POS + 1) ELSE 0);
+    POS = .POS + 1;
+    IF NAMECHAR(.C) AND NOT (.C GEQU %C'0' AND .C LEQU %C'9')
+    THEN
+        BEGIN
+        WHILE .POS LSSA .SRCEND AND NAMECHAR(GETB(.POS)) DO POS = .POS + 1;
+        TLEN = .POS - .TTEXT;
+        TOK = RESERVED_WORD();
+        RETURN
+        END;
+    IF (.C GEQU %C'0' AND .C LEQU %C'9') OR .C EQL %C'%'
+    THEN
+        BEGIN
+        LOCAL
+            RADIX,
+            DIGITS;
+        RADIX = 10;
+        IF .C EQL %C'%'
+        THEN
+            BEGIN
+            RADIX = (SELECTONE UPPER(.C2) OF
+                        SET
+                        [%C'B'] : 2;
+                        [%C'O'] : 8;
+                        [%C'X'] : 16;
+                        [OTHERWISE] : 0;
+                        TES);
+            IF .RADIX EQL 0 THEN (TOK = TK_BAD; TLEN = 1; RETURN);
+            POS = .POS + 1
+            END
+        ELSE
+            POS = .POS - 1;
+        TVAL = 0;
+        DIGITS = 0;
+        WHILE .POS LSSA .SRCEND DO
+            BEGIN
+            LOCAL
+                D;
+            C = UPPER(GETB(.POS));
+            D = (IF .C GEQU %C'0' AND .C LEQU %C'9' THEN .C - %C'0'
+                 ELSE IF .C GEQU %C'A' AND .C LEQU %C'Z' THEN .C - %C'A' + 10
+                 ELSE 99);
+            IF .D EQL 99 THEN EXITLOOP;
+            IF .D GEQ .RADIX THEN (TOK = TK_BAD; TLEN = .POS - .TTEXT; RETURN);
+            TVAL = (.TVAL * .RADIX + .D) AND %X'FFFFFFFF';
+            DIGITS = .DIGITS + 1;
+            POS = .POS + 1
+            END;
+        TVAL = .TVAL<0, 32, 1>;
+        TLEN = .POS - .TTEXT;
+        TOK = (IF .DIGITS EQL 0 THEN TK_BAD ELSE TK_INT);
+        RETURN
+        END;
+    IF .C EQL %C'"' OR .C EQL %C''''
+    THEN
+        BEGIN
+        ! Up to the closing quote on the same line; a doubled quote is one.
+        WHILE TRUE DO
+            BEGIN
+            IF .POS GEQA .SRCEND OR GETB(.POS) EQL 10 THEN (TOK = TK_BAD; TLEN = 1; RETURN);
+            IF GETB(.POS) EQL .C
+            THEN
+                BEGIN
+                IF .POS + 1 LSSA .SRCEND AND GETB(.POS + 1) EQL .C
+                THEN
+                    POS = .POS + 2
+                ELSE
+                    EXITLOOP
+                END
+            ELSE
+                POS = .POS + 1
+            END;
+        POS = .POS + 1;
+        TLEN = .POS - .TTEXT;
+        TOK = TK_STR;
+        RETURN
+        END;
+    TLEN = 1;
+    TOK = (SELECTONE .C OF
+            SET
+            [%C':'] : IF .C2 EQL %C'=' THEN (POS = .POS + 1; TLEN = 2; TK_ASSIGN) ELSE TK_COLON;
+            [%C'<'] : IF .C2 EQL %C'=' THEN (POS = .POS + 1; TLEN = 2; TK_LE)
+                      ELSE IF .C2 EQL %C'>' THEN (POS = .POS + 1; TLEN = 2; TK_NE)
+                      ELSE TK_LT;
+            [%C'>'] : IF .C2 EQL %C'=' THEN (POS = .POS + 1; TLEN = 2; TK_GE) ELSE TK_GT;
+            [%C'='] : TK_EQ;
+            [%C'+'] : TK_PLUS;
+            [%C'-'] : TK_MINUS;
+            [%C'*'] : TK_STAR;
+            [%C'/'] : TK_SLASH;
+            [%C'('] : TK_LPAR;
+            [%C')'] : TK_RPAR;
+            [%C'{'] : TK_LBRACE;
+            [%C'}'] : TK_RBRACE;
+            [%C'['] : TK_LBRACK;
+            [%C']'] : TK_RBRACK;
+            [%C','] : TK_COMMA;
+            [%C';'] : TK_SEMI;
+            [%C'|'] : TK_BAR;
+            [%C'&'] : TK_AMP;
+            [%C'@'] : TK_AT;
+            [OTHERWISE] : TK_BAD;
+            TES)
+    END;
+
+! PEEK: the token after the current one, which stays current.
+ROUTINE PEEK =
+    BEGIN
+    LOCAL
+        S : VECTOR[7],
+        K;
+    S[0] = .POS;
+    S[1] = .LINE;
+    S[2] = .TOK;
+    S[3] = .TVAL;
+    S[4] = .TTEXT;
+    S[5] = .TLEN;
+    S[6] = .TLINE;
+    NEXT();
+    K = .TOK;
+    POS = .S[0];
+    LINE = .S[1];
+    TOK = .S[2];
+    TVAL = .S[3];
+    TTEXT = .S[4];
+    TLEN = .S[5];
+    TLINE = .S[6];
+    .K
+    END;
+
+! EXPECT token, text, length: reads past the token, or reports that the
+! text was expected.
+ROUTINE EXPECT (K, TEXT, LEN) : NOVALUE =
+    IF .TOK EQL .K THEN NEXT() ELSE SYNERR(.TEXT, .LEN);
+
+! ACCEPT token: reads past the token if it is there; whether it was.
+ROUTINE ACCEPT (K) =
+    IF .TOK EQL .K THEN (NEXT(); TRUE) ELSE FALSE;
+
+! STRVAL: the string the STR token is, its quotes undone.
+ROUTINE STRVAL =
+    BEGIN
+    LOCAL
+        Q,
+        N,
+        V,
+        D;
+    Q = GETB(.TTEXT);
+    ! Each doubled quote is one.
+    V = STR_NEW(.TLEN - 2);
+    D = SADDR(.V);
+    N = 0;
+    BEGIN
+    LOCAL
+        I;
+    I = 1;
+    WHILE .I LSS .TLEN - 1 DO
+        BEGIN
+        PUTB(.D + .N, GETB(.TTEXT + .I));
+        N = .N + 1;
+        IF GETB(.TTEXT + .I) EQL .Q THEN I = .I + 1;
+        I = .I + 1
+        END
+    END;
+    (VPTR(.V) + 8) = .N;
+    .V
+    END;
+
+! ---- Emitting code
+
+ROUTINE ROOM (N) : NOVALUE =
+    BEGIN
+    LOCAL
+        NEW;
+    IF .CLEN + .N LEQ .CCAP THEN RETURN;
+    CCAP = MAX(.CCAP * 2, .CLEN + .N + 256);
+    NEW = MEM_GET(.CCAP);
+    CH$MOVE(.CLEN, .CODE, .NEW);
+    MEM_FREE(.CODE);
+    CODE = .NEW
+    END;
+
+ROUTINE EMITB (B) : NOVALUE =
+    IF .PASS EQL 2 THEN (ROOM(1); PUTB(.CODE + .CLEN, .B); CLEN = .CLEN + 1);
+
+ROUTINE EMITW (W) : NOVALUE =
+    IF .PASS EQL 2 THEN (EMITB(.W AND 255); EMITB(SRL(.W, 8) AND 255));
+
+ROUTINE EMITL (L) : NOVALUE =
+    IF .PASS EQL 2 THEN (EMITW(.L AND %X'FFFF'); EMITW(SRL(.L, 16) AND %X'FFFF'));
+
+! PATCHL offset, value: sets the longword at that offset in the code.
+ROUTINE PATCHL (AT, L) : NOVALUE =
+    IF .PASS EQL 2 THEN (.CODE + .AT)<0, 32, 0> = .L;
+
+! JUMPTO op: emits a jump whose target comes later; its operand's offset.
+ROUTINE JUMPTO (OP) =
+    BEGIN
+    EMITB(.OP);
+    EMITL(0);
+    .CLEN - 4
+    END;
+
+! HERE offset: points the jump whose operand is at offset here.
+ROUTINE HERE (AT) : NOVALUE =
+    PATCHL(.AT, .CLEN);
+
+! A constant: a value cell the code points at, which keeps the value.
+ROUTINE EMITVAL (V) : NOVALUE =
+    BEGIN
+    LOCAL
+        CELL;
+    IF .PASS NEQ 2 THEN (VUNREF(.V); RETURN);
+    CELL = MEM_GET(8);
+    .CELL = .V;
+    EMITB(OP_VAL);
+    EMITL(.CELL)
+    END;
+
+! ---- Names
+
+! TOKIS text, length: whether the name token is that word, in capitals.
+ROUTINE TOKIS (TEXT, LEN) =
+    BEGIN
+    IF .TLEN NEQ .LEN THEN RETURN FALSE;
+    INCR I FROM 0 TO .LEN - 1 DO
+        IF UPPER(GETB(.TTEXT + .I)) NEQ GETB(.TEXT + .I) THEN RETURN FALSE;
+    TRUE
+    END;
+
+! SYMBOL: the symbol of the name token, made if new.
+ROUTINE SYMBOL =
+    SYM_FIND(.TTEXT, .TLEN);
+
+! NAMEVAL: the name token as a string value, in upper case.
+ROUTINE NAMEVAL =
+    BEGIN
+    LOCAL
+        V;
+    V = STR_NEW(.TLEN);
+    INCR I FROM 0 TO .TLEN - 1 DO
+        PUTB(SADDR(.V) + .I, UPPER(GETB(.TTEXT + .I)));
+    .V
+    END;
+
+! ADDLOCAL: declares the name token as a local, or a parameter; says if
+! it hides a global variable.
+ROUTINE ADDLOCAL : NOVALUE =
+    BEGIN
+    LOCAL
+        Y : REF VECTOR,
+        N;
+    IF .NLOC GEQ MAXLOCAL THEN (SYNERR(T('too many local variables')); RETURN);
+    ! Kept in upper case, so that LOCALNO compares them as they are.
+    N = MEM_GET(.TLEN);
+    INCR I FROM 0 TO .TLEN - 1 DO PUTB(.N + .I, UPPER(GETB(.TTEXT + .I)));
+    LNAME[.NLOC] = .N;
+    LLEN[.NLOC] = .TLEN;
+    LCONST[.NLOC] = 0;
+    NLOC = .NLOC + 1;
+    Y = SYM_LOOK(.TTEXT, .TLEN);
+    IF .PASS EQL 2 AND .Y NEQ 0
+    THEN
+        IF .Y[Y_KIND] EQL YK_VAR
+        THEN
+            BEGIN
+            MSG_OUT(0, TPU$_HIDDEN, NAMEVAL());
+            MSG_OUT(1, TPU$_SOURCELINE, MKINT(.TLINE))
+            END
+    END;
+
+! FINDLOCAL: the number of the local the name token is, or -1, in upper
+! case.
+ROUTINE FINDLOCAL =
+    BEGIN
+    LOCAL
+        BUF : VECTOR[MAXNAME, BYTE];
+    IF .TLEN GTR MAXNAME THEN RETURN -1;
+    INCR I FROM 0 TO .TLEN - 1 DO BUF[.I] = UPPER(GETB(.TTEXT + .I));
+    DECR I FROM .NLOC - 1 TO 0 DO
+        IF .LLEN[.I] EQL .TLEN
+        THEN
+            IF CH$EQL(.TLEN, .LNAME[.I], .TLEN, BUF)
+            THEN
+                RETURN .I;
+    -1
+    END;
+
+! ---- Expressions
+
+! CONSTEXPR: compiles an expression and runs it: its value. A CONSTANT's
+! value and a CASE label are evaluated so.
+ROUTINE CONSTEXPR =
+    BEGIN
+    LOCAL
+        SAVE : VECTOR[3],
+        OBJ : REF VECTOR,
+        V;
+    IF .PASS NEQ 2 THEN (EXPR(); RETURN MKINT(0));
+    SAVE[0] = .CODE;
+    SAVE[1] = .CLEN;
+    SAVE[2] = .CCAP;
+    CODE = 0;
+    CLEN = 0;
+    CCAP = 0;
+    EXPR();
+    EMITB(OP_RETURN);
+    EMITB(OP_END);
+    OBJ = MEM_GET(C_SIZE * 8);
+    OBJ[C_REF] = 1;
+    OBJ[C_CODE] = .CODE;
+    OBJ[C_LEN] = .CLEN;
+    OBJ[C_NLOCAL] = .NLOC;
+    OBJ[C_HANDLER] = -1;
+    V = (IF .FAILED THEN MKINT(0) ELSE VM_EVAL(.OBJ));
+    MEM_FREE(.CODE);
+    MEM_FREE(.OBJ);
+    CODE = .SAVE[0];
+    CLEN = .SAVE[1];
+    CCAP = .SAVE[2];
+    .V
+    END;
+
+! EMITREF: after a call's or a built-in's argument, where it came from:
+! a lone variable is passed by reference.
+ROUTINE EMITREF (KIND, X) : NOVALUE =
+    BEGIN
+    EMITB(.KIND);
+    IF .KIND EQL REF_LOCAL THEN EMITB(.X);
+    IF .KIND EQL REF_GLOBAL THEN EMITL(.X)
+    END;
+
+! ARGS: compiles a call's arguments, between parentheses if there are
+! any: pushes each, and leaves the references in REFS; the count.
+ROUTINE ARGS (REFK : REF VECTOR, REFX : REF VECTOR) =
+    BEGIN
+    LOCAL
+        N;
+    N = 0;
+    IF .TOK NEQ TK_LPAR THEN RETURN 0;
+    NEXT();
+    IF .TOK EQL TK_RPAR THEN (NEXT(); RETURN 0);
+    WHILE TRUE DO
+        BEGIN
+        LOCAL
+            K;
+        IF .N GEQ 127 THEN (SYNERR(T('too many arguments')); RETURN .N);
+        REFK[.N] = REF_NONE;
+        REFX[.N] = 0;
+        IF .TOK EQL TK_COMMA OR .TOK EQL TK_RPAR
+        THEN
+            EMITB(OP_UNSPEC)            ! left out: a null parameter
+        ELSE
+            BEGIN
+            IF .TOK EQL TK_NAME AND FINDLOCAL() LSS 0
+            THEN
+                BEGIN
+                LOCAL
+                    Y : REF VECTOR;
+                Y = SYMBOL();
+                ! DEC's compiler says when a name it can't yet tell from a
+                ! procedure is an argument.
+                IF .Y[Y_KIND] EQL YK_NONE AND .PASS EQL 2
+                THEN
+                    BEGIN
+                    MSG_OUT(0, TPU$_AMBIGSYMUSED, NAMEVAL());
+                    MSG_OUT(1, TPU$_SOURCELINE, MKINT(.TLINE))
+                    END
+                END;
+            IF .TOK EQL TK_NAME
+            THEN
+                BEGIN
+                K = PEEK();
+                IF .K EQL TK_COMMA OR .K EQL TK_RPAR
+                THEN
+                    BEGIN
+                    LOCAL
+                        L,
+                        Y : REF VECTOR;
+                    L = FINDLOCAL();
+                    IF .L GEQ 0
+                    THEN
+                        (IF .LCONST[.L] EQL 0 THEN (REFK[.N] = REF_LOCAL; REFX[.N] = .L))
+                    ELSE
+                        BEGIN
+                        Y = SYMBOL();
+                        IF .Y[Y_KIND] EQL YK_VAR OR .Y[Y_KIND] EQL YK_NONE
+                        THEN
+                            (REFK[.N] = REF_GLOBAL; REFX[.N] = .Y)
+                        END
+                    END
+                END;
+            EXPR()
+            END;
+        N = .N + 1;
+        IF .TOK EQL TK_RPAR THEN (NEXT(); EXITLOOP);
+        EXPECT(TK_COMMA, T('","'));
+        IF .FAILED THEN EXITLOOP
+        END;
+    .N
+    END;
+
+! CALL op, operand, operand size: a call to a procedure or a built-in,
+! the name token current: its arguments, then the operation.
+ROUTINE CALL (OP, X) : NOVALUE =
+    BEGIN
+    LOCAL
+        REFK : VECTOR[128],
+        REFX : VECTOR[128],
+        N;
+    NEXT();
+    N = ARGS(REFK, REFX);
+    EMITB(.OP);
+    IF .OP EQL OP_BUILTIN THEN EMITW(.X) ELSE EMITL(.X);
+    EMITB(.N);
+    INCR I FROM 0 TO .N - 1 DO EMITREF(.REFK[.I], .REFX[.I])
+    END;
+
+! PRIMARY: a number, a string, a parenthesized expression, a name.
+ROUTINE PRIMARY : NOVALUE =
+    BEGIN
+    SELECTONE .TOK OF
+        SET
+        [TK_INT] :
+            BEGIN
+            EMITB(OP_INT);
+            EMITL(.TVAL);
+            NEXT()
+            END;
+        [TK_STR] :
+            BEGIN
+            EMITVAL(STRVAL());
+            NEXT()
+            END;
+        [TK_LPAR] :
+            BEGIN
+            NEXT();
+            EXPR();
+            EXPECT(TK_RPAR, T('")"'))
+            END;
+        [TK_ERROR] : (EMITB(OP_ERROR); NEXT());
+        [TK_ERROR_LINE] : (EMITB(OP_ERRLINE); NEXT());
+        [TK_ERROR_TEXT] : (EMITB(OP_ERRTEXT); NEXT());
+        [TK_NAME] :
+            BEGIN
+            LOCAL
+                L,
+                Y : REF VECTOR;
+            L = FINDLOCAL();
+            IF .L GEQ 0
+            THEN
+                BEGIN
+                IF .LCONST[.L] NEQ 0
+                THEN
+                    BEGIN
+                    EMITB(OP_VAL);
+                    EMITL(.LCONST[.L])
+                    END
+                ELSE
+                    BEGIN
+                    EMITB(OP_LOADL);
+                    EMITB(.L)
+                    END;
+                NEXT()
+                END
+            ELSE
+                BEGIN
+                Y = SYMBOL();
+                CASE .Y[Y_KIND] FROM YK_NONE TO YK_KEYWORD OF
+                    SET
+                    [YK_VAR, YK_CONST] :
+                        BEGIN
+                        EMITB(OP_LOADG);
+                        EMITL(.Y);
+                        NEXT()
+                        END;
+                    [YK_KEYWORD] :
+                        BEGIN
+                        EMITB(OP_KW);
+                        EMITL(.Y[Y_CODE]);
+                        NEXT()
+                        END;
+                    [YK_BUILTIN] : CALL(OP_BUILTIN, .Y[Y_CODE]);
+                    [YK_PROC] : CALL(OP_CALL, .Y);
+                    [YK_NONE] :
+                        ! Ambiguous: a variable or a procedure when it runs.
+                        IF PEEK() EQL TK_LPAR
+                        THEN
+                            CALL(OP_CALL, .Y)
+                        ELSE
+                            BEGIN
+                            EMITB(OP_AMBIG);
+                            EMITL(.Y);
+                            NEXT()
+                            END;
+                    TES
+                END;
+            ! An array's element: a{i} or a(i).
+            WHILE .TOK EQL TK_LBRACE DO
+                BEGIN
+                NEXT();
+                EXPR();
+                EXPECT(TK_RBRACE, T('"}"'));
+                EMITB(OP_INDEX)
+                END
+            END;
+        [OTHERWISE] : SYNERR(T('expression'));
+        TES
+    END;
+
+! An array element with parentheses, a(i), where a is a variable.
+ROUTINE ISARRAYREF =
+    BEGIN
+    LOCAL
+        Y : REF VECTOR;
+    IF PEEK() NEQ TK_LPAR THEN RETURN FALSE;
+    IF FINDLOCAL() GEQ 0 THEN RETURN TRUE;
+    Y = SYM_LOOK(.TTEXT, .TLEN);
+    IF .Y EQL 0 THEN FALSE ELSE .Y[Y_KIND] EQL YK_VAR
+    END;
+
+ROUTINE UNARY : NOVALUE =
+    BEGIN
+    IF .TOK EQL TK_MINUS
+    THEN
+        (NEXT(); UNARY(); EMITB(OP_NEG))
+    ELSE IF .TOK EQL TK_PLUS
+    THEN
+        (NEXT(); UNARY())
+    ELSE IF .TOK EQL TK_NAME AND ISARRAYREF()
+    THEN
+        BEGIN
+        ! a(i): the variable, then the index.
+        LOCAL
+            L;
+        L = FINDLOCAL();
+        IF .L GEQ 0
+        THEN
+            (EMITB(OP_LOADL); EMITB(.L))
+        ELSE
+            (EMITB(OP_LOADG); EMITL(SYMBOL()));
+        NEXT();
+        NEXT();
+        EXPR();
+        EXPECT(TK_RPAR, T('")"'));
+        EMITB(OP_INDEX);
+        WHILE .TOK EQL TK_LBRACE DO
+            BEGIN
+            NEXT();
+            EXPR();
+            EXPECT(TK_RBRACE, T('"}"'));
+            EMITB(OP_INDEX)
+            END
+        END
+    ELSE
+        PRIMARY()
+    END;
+
+ROUTINE NOTLEVEL : NOVALUE =
+    IF .TOK EQL TK_NOT THEN (NEXT(); NOTLEVEL(); EMITB(OP_NOT)) ELSE UNARY();
+
+ROUTINE MULLEVEL : NOVALUE =
+    BEGIN
+    NOTLEVEL();
+    WHILE TRUE DO
+        BEGIN
+        LOCAL
+            OP;
+        OP = (SELECTONE .TOK OF
+                SET
+                [TK_STAR] : OP_MUL;
+                [TK_SLASH] : OP_DIV;
+                [TK_AND] : OP_AND;
+                [OTHERWISE] : 0;
+                TES);
+        IF .OP EQL 0 THEN EXITLOOP;
+        NEXT();
+        NOTLEVEL();
+        EMITB(.OP)
+        END
+    END;
+
+! The pattern operator @: a variable gets the range the part matched.
+ROUTINE PASSIGN : NOVALUE =
+    BEGIN
+    LOCAL
+        L,
+        Y : REF VECTOR;
+    IF .TOK NEQ TK_NAME THEN (SYNERR(T('variable')); RETURN);
+    EMITB(OP_PASSIGN);
+    L = FINDLOCAL();
+    IF .L GEQ 0
+    THEN
+        EMITREF(REF_LOCAL, .L)
+    ELSE
+        BEGIN
+        Y = SYMBOL();
+        IF .Y[Y_KIND] EQL YK_NONE THEN Y[Y_KIND] = YK_VAR;
+        EMITREF(REF_GLOBAL, .Y)
+        END;
+    NEXT()
+    END;
+
+ROUTINE ADDLEVEL : NOVALUE =
+    BEGIN
+    MULLEVEL();
+    WHILE TRUE DO
+        BEGIN
+        LOCAL
+            OP;
+        OP = (SELECTONE .TOK OF
+                SET
+                [TK_PLUS] : OP_ADD;
+                [TK_MINUS] : OP_SUB;
+                [TK_BAR] : OP_ALT;
+                [TK_AMP] : OP_LINK;
+                [TK_OR] : OP_OR;
+                [TK_XOR] : OP_XOR;
+                [TK_AT] : OP_PASSIGN;
+                [OTHERWISE] : 0;
+                TES);
+        IF .OP EQL 0 THEN EXITLOOP;
+        NEXT();
+        IF .OP EQL OP_PASSIGN
+        THEN
+            PASSIGN()
+        ELSE
+            BEGIN
+            LOCAL
+                AT;
+            AT = .CLEN;
+            MULLEVEL();
+            ! & unanchors only a pattern variable: anything else, + anchors.
+            IF .OP EQL OP_LINK AND .PASS EQL 2
+            THEN
+                IF NOT ((.CLEN - .AT EQL 2 AND GETB(.CODE + .AT) EQL OP_LOADL)
+                        OR (.CLEN - .AT EQL 5 AND (GETB(.CODE + .AT) EQL OP_LOADG
+                                                    OR GETB(.CODE + .AT) EQL OP_AMBIG)))
+                THEN
+                    OP = OP_ADD;
+            EMITB(.OP)
+            END
+        END
+    END;
+
+GLOBAL ROUTINE EXPR : NOVALUE =
+    BEGIN
+    ADDLEVEL();
+    WHILE TRUE DO
+        BEGIN
+        LOCAL
+            OP;
+        OP = (SELECTONE .TOK OF
+                SET
+                [TK_EQ] : OP_EQ;
+                [TK_NE] : OP_NE;
+                [TK_LT] : OP_LT;
+                [TK_LE] : OP_LE;
+                [TK_GT] : OP_GT;
+                [TK_GE] : OP_GE;
+                [OTHERWISE] : 0;
+                TES);
+        IF .OP EQL 0 THEN EXITLOOP;
+        NEXT();
+        ADDLEVEL();
+        EMITB(.OP)
+        END
+    END;
+
+! ---- Statements
+
+! A statement's start: its line, and how far its end is, patched later.
+ROUTINE STMTSTART =
+    BEGIN
+    EMITB(OP_STMT);
+    EMITW(.TLINE);
+    EMITW(0);
+    .CLEN
+    END;
+
+ROUTINE STMTEND (AT) : NOVALUE =
+    IF .PASS EQL 2
+    THEN
+        BEGIN
+        LOCAL
+            D;
+        D = .CLEN - .AT;
+        PUTB(.CODE + .AT - 2, .D AND 255);
+        PUTB(.CODE + .AT - 1, SRL(.D, 8))
+        END;
+
+! ASSIGN: the name token := an expression, or a{i} := one.
+ROUTINE ASSIGN : NOVALUE =
+    BEGIN
+    LOCAL
+        L,
+        Y : REF VECTOR,
+        LINE0;
+    LINE0 = .TLINE;
+    L = FINDLOCAL();
+    IF .L GEQ 0 AND .LCONST[.L] NEQ 0 THEN (SYNERR(T('variable')); RETURN);
+    IF .L LSS 0
+    THEN
+        BEGIN
+        Y = SYMBOL();
+        IF .Y[Y_KIND] EQL YK_NONE THEN Y[Y_KIND] = YK_VAR
+        END;
+    NEXT();
+    IF .TOK EQL TK_LBRACE OR .TOK EQL TK_LPAR
+    THEN
+        BEGIN
+        ! a{i} := v: the array, the index, the value.
+        LOCAL
+            CLOSE;
+        CLOSE = (IF .TOK EQL TK_LBRACE THEN TK_RBRACE ELSE TK_RPAR);
+        IF .L GEQ 0 THEN (EMITB(OP_LOADL); EMITB(.L)) ELSE (EMITB(OP_LOADG); EMITL(.Y));
+        NEXT();
+        EXPR();
+        EXPECT(.CLOSE, T('"}"'));
+        WHILE .TOK EQL TK_LBRACE DO
+            BEGIN
+            EMITB(OP_INDEX);
+            NEXT();
+            EXPR();
+            EXPECT(TK_RBRACE, T('"}"'))
+            END;
+        EXPECT(TK_ASSIGN, T('":="'));
+        EXPR();
+        EMITB(OP_STOREX);
+        RETURN
+        END;
+    EXPECT(TK_ASSIGN, T('":="'));
+    EXPR();
+    IF .L GEQ 0
+    THEN
+        (EMITB(OP_STOREL); EMITB(.L))
+    ELSE IF .Y EQL .PROC
+    THEN
+        EMITB(OP_SETRESULT)
+    ELSE IF .Y[Y_KIND] EQL YK_VAR
+    THEN
+        (EMITB(OP_STOREG); EMITL(.Y))
+    ELSE
+        SYNERR(T('variable'))
+    END;
+
+! CASELABEL: a CASE label's constant expression, evaluated.
+ROUTINE CASELABEL =
+    CONSTEXPR();
+
+! A temporary local, for a CASE's selector.
+ROUTINE TEMPLOCAL =
+    BEGIN
+    IF .NLOC GEQ MAXLOCAL THEN (SYNERR(T('too many local variables')); RETURN 0);
+    LNAME[.NLOC] = 0;
+    LLEN[.NLOC] = -1;
+    LCONST[.NLOC] = 0;
+    NLOC = .NLOC + 1;
+    .NLOC - 1
+    END;
+
+! COMPARE local, value, op: pushes the local OP the constant.
+ROUTINE COMPARE (L, V, OP) : NOVALUE =
+    BEGIN
+    EMITB(OP_LOADL);
+    EMITB(.L);
+    VREF(.V);
+    EMITVAL(.V);
+    EMITB(.OP)
+    END;
+
+! CASESTMT: CASE selector [FROM lo TO hi] [labels] : statements ...
+! ENDCASE. Each clause tests its labels and runs its statements; INRANGE
+! and OUTRANGE's statements are jumped to from the end, once the labels'
+! limits are known.
+ROUTINE CASESTMT : NOVALUE =
+    BEGIN
+    LOCAL
+        SEL,
+        LO,
+        HI,
+        HAVELIM,
+        SEEN,
+        ENDS,
+        INAT,
+        OUTAT;
+    NEXT();
+    EXPR();
+    SEL = TEMPLOCAL();
+    EMITB(OP_STOREL);
+    EMITB(.SEL);
+    HAVELIM = FALSE;
+    SEEN = FALSE;
+    LO = HI = MKINT(0);
+    IF ACCEPT(TK_FROM)
+    THEN
+        BEGIN
+        LO = CASELABEL();
+        EXPECT(TK_TO, T('TO'));
+        HI = CASELABEL();
+        HAVELIM = TRUE
+        END;
+    ENDS = 0;                           ! the chain of jumps to ENDCASE
+    INAT = OUTAT = -1;
+    WHILE .TOK EQL TK_LBRACK DO
+        BEGIN
+        LOCAL
+            MATCH,
+            SKIP,
+            SPECIAL;
+        NEXT();
+        MATCH = 0;                      ! the chain of jumps to the statements
+        SPECIAL = 0;
+        WHILE TRUE DO
+            BEGIN
+            IF .TOK EQL TK_INRANGE OR .TOK EQL TK_OUTRANGE
+            THEN
+                BEGIN
+                SPECIAL = .SPECIAL OR (IF .TOK EQL TK_INRANGE THEN 1 ELSE 2);
+                NEXT()
+                END
+            ELSE
+                BEGIN
+                LOCAL
+                    V,
+                    J;
+                V = CASELABEL();
+                COMPARE(.SEL, .V, OP_EQ);
+                EMITB(OP_JFALSE);
+                EMITL(.CLEN + 9);       ! over the jump that follows
+                J = JUMPTO(OP_JUMP);
+                PATCHL(.J, .MATCH);
+                MATCH = .J;
+                ! Without FROM and TO, the labels' least and greatest.
+                IF NOT .HAVELIM
+                THEN
+                    BEGIN
+                    IF NOT .SEEN
+                    THEN
+                        (VREF(.V); VREF(.V); LO = .V; HI = .V; SEEN = TRUE)
+                    ELSE
+                        (LO = MINLABEL(.LO, .V); HI = MAXLABEL(.HI, .V))
+                    END;
+                VUNREF(.V)
+                END;
+            IF NOT ACCEPT(TK_COMMA) THEN EXITLOOP
+            END;
+        EXPECT(TK_RBRACK, T('"]"'));
+        EXPECT(TK_COLON, T('":"'));
+        ! Not one of the labels: on to the next clause.
+        SKIP = JUMPTO(OP_JUMP);
+        IF (.SPECIAL AND 1) NEQ 0 THEN INAT = .CLEN;
+        IF (.SPECIAL AND 2) NEQ 0 THEN OUTAT = .CLEN;
+        WHILE .MATCH NEQ 0 DO
+            BEGIN
+            LOCAL
+                NXT;
+            NXT = (IF .PASS EQL 2 THEN .(.CODE + .MATCH)<0, 32, 0> ELSE 0);
+            HERE(.MATCH);
+            MATCH = .NXT
+            END;
+        STATEMENTS();
+        BEGIN
+        LOCAL
+            J;
+        J = JUMPTO(OP_JUMP);
+        PATCHL(.J, .ENDS);
+        ENDS = .J
+        END;
+        HERE(.SKIP);
+        IF .PASS NEQ 2 THEN ENDS = 0
+        END;
+    ! No label matched: INRANGE or OUTRANGE, by the limits.
+    IF .INAT GEQ 0 OR .OUTAT GEQ 0
+    THEN
+        BEGIN
+        LOCAL
+            J1,
+            J2;
+        COMPARE(.SEL, .LO, OP_GE);
+        J1 = JUMPTO(OP_JFALSE);
+        COMPARE(.SEL, .HI, OP_LE);
+        J2 = JUMPTO(OP_JFALSE);
+        IF .INAT GEQ 0 THEN (EMITB(OP_JUMP); EMITL(.INAT)) ELSE (EMITB(OP_JUMP); EMITL(-1));
+        HERE(.J1);
+        HERE(.J2);
+        IF .OUTAT GEQ 0 THEN (EMITB(OP_JUMP); EMITL(.OUTAT))
+        END;
+    ! Fill in the jumps to ENDCASE, and the missing INRANGE's.
+    WHILE .ENDS NEQ 0 DO
+        BEGIN
+        LOCAL
+            NXT;
+        NXT = .(.CODE + .ENDS)<0, 32, 0>;
+        HERE(.ENDS);
+        ENDS = .NXT
+        END;
+    IF .PASS EQL 2 AND .INAT LSS 0 AND .OUTAT GEQ 0
+    THEN
+        ! The JUMP -1 above: no INRANGE clause, so on past ENDCASE.
+        INCR I FROM 0 TO .CLEN - 5 DO
+            IF GETB(.CODE + .I) EQL OP_JUMP AND .(.CODE + .I + 1)<0, 32, 1> EQL -1
+            THEN
+                (PATCHL(.I + 1, .CLEN); EXITLOOP);
+    VUNREF(.LO);
+    VUNREF(.HI);
+    EXPECT(TK_ENDCASE, T('ENDCASE'))
+    END;
+
+! The lesser and the greater of two labels of the same type.
+ROUTINE MINLABEL (A, B) =
+    BEGIN
+    IF LABELLESS(.B, .A) THEN (VREF(.B); VUNREF(.A); .B) ELSE .A
+    END;
+
+ROUTINE MAXLABEL (A, B) =
+    BEGIN
+    IF LABELLESS(.A, .B) THEN (VREF(.B); VUNREF(.A); .B) ELSE .A
+    END;
+
+! LABELLESS a, b: whether label a orders before b: integers and keywords
+! by value, strings as strings.
+ROUTINE LABELLESS (A, B) =
+    BEGIN
+    IF VTYPE(.A) NEQ VTYPE(.B) THEN RETURN FALSE;
+    IF VTYPE(.A) EQL TY_STRING
+    THEN
+        RETURN CH$LSS(SLEN(.A), SADDR(.A), SLEN(.B), SADDR(.B), 0);
+    VINT(.A) LSS VINT(.B)
+    END;
+
+! STATEMENT: one statement, its line and end marked for ON_ERROR.
+ROUTINE STATEMENT : NOVALUE =
+    BEGIN
+    LOCAL
+        AT;
+    IF .TOK EQL TK_SEMI THEN RETURN;
+    ! DEC's compiler says so once the statement holding it is read.
+    IF .DEAD AND NOT .WARNED AND .PASS EQL 2 THEN (UNREACH = 2; UDEPTH = .DEPTH; WARNED = TRUE);
+    AT = STMTSTART();
+    SELECTONE .TOK OF
+        SET
+        [TK_IF] :
+            BEGIN
+            LOCAL
+                JF,
+                JE;
+            NEXT();
+            EXPR();
+            JF = JUMPTO(OP_JFALSE);
+            EXPECT(TK_THEN, T('THEN'));
+            STATEMENTS();
+            IF ACCEPT(TK_ELSE)
+            THEN
+                BEGIN
+                JE = JUMPTO(OP_JUMP);
+                HERE(.JF);
+                STATEMENTS();
+                HERE(.JE)
+                END
+            ELSE
+                HERE(.JF);
+            EXPECT(TK_ENDIF, T('ENDIF'));
+            DEAD = FALSE
+            END;
+        [TK_LOOP] :
+            BEGIN
+            LOCAL
+                TOP,
+                OUTER,
+                WASIN;
+            NEXT();
+            OUTER = .EXITS;
+            WASIN = .INLOOP;
+            EXITS = 0;
+            INLOOP = TRUE;
+            TOP = .CLEN;
+            STATEMENTS();
+            EMITB(OP_JUMP);
+            EMITL(.TOP);
+            WHILE .EXITS NEQ 0 DO
+                BEGIN
+                LOCAL
+                    NXT;
+                NXT = (IF .PASS EQL 2 THEN .(.CODE + .EXITS)<0, 32, 0> ELSE 0);
+                HERE(.EXITS);
+                EXITS = .NXT
+                END;
+            EXITS = .OUTER;
+            INLOOP = .WASIN;
+            EXPECT(TK_ENDLOOP, T('ENDLOOP'));
+            DEAD = FALSE
+            END;
+        [TK_EXITIF] :
+            BEGIN
+            LOCAL
+                J,
+                SKIP;
+            NEXT();
+            IF NOT .INLOOP THEN (SYNERR(T('EXITIF outside a LOOP')); RETURN);
+            IF .TOK NEQ TK_SEMI AND .TOK NEQ TK_ENDLOOP AND .TOK NEQ TK_EOF
+            THEN
+                BEGIN
+                EXPR();
+                SKIP = JUMPTO(OP_JFALSE);
+                J = JUMPTO(OP_JUMP);
+                IF .PASS EQL 2 THEN PATCHL(.J, .EXITS);
+                EXITS = .J;
+                HERE(.SKIP)
+                END
+            ELSE
+                BEGIN
+                J = JUMPTO(OP_JUMP);
+                IF .PASS EQL 2 THEN PATCHL(.J, .EXITS);
+                EXITS = .J;
+                DEAD = TRUE
+                END
+            END;
+        [TK_CASE] : (CASESTMT(); DEAD = FALSE);
+        [TK_RETURN] :
+            BEGIN
+            NEXT();
+            IF .TOK EQL TK_SEMI OR .TOK EQL TK_EOF OR .TOK EQL TK_ENDPROCEDURE
+               OR .TOK EQL TK_ENDIF OR .TOK EQL TK_ELSE OR .TOK EQL TK_ENDLOOP
+               OR .TOK EQL TK_ENDCASE OR .TOK EQL TK_LBRACK OR .TOK EQL TK_ENDON_ERROR
+            THEN
+                (EMITB(OP_INT); EMITL(0))
+            ELSE
+                EXPR();
+            EMITB(OP_RETURN);
+            DEAD = TRUE
+            END;
+        [TK_ABORT] : (NEXT(); EMITB(OP_ABORT); DEAD = TRUE);
+        [TK_NAME] :
+            BEGIN
+            LOCAL
+                K;
+            K = PEEK();
+            IF .K EQL TK_ASSIGN OR .K EQL TK_LBRACE OR (.K EQL TK_LPAR AND ISARRAYREF())
+            THEN
+                ASSIGN()
+            ELSE
+                (EXPR(); EMITB(OP_POP))
+            END;
+        [OTHERWISE] : SYNERR(T('statement'));
+        TES;
+    STMTEND(.AT)
+    END;
+
+! STATEMENTS: statements, separated by semicolons, up to a word that
+! ends them.
+GLOBAL ROUTINE STATEMENTS : NOVALUE =
+    BEGIN
+    LOCAL
+        WASWARNED;
+    WASWARNED = .WARNED;
+    WARNED = FALSE;
+    DEAD = FALSE;
+    DEPTH = .DEPTH + 1;
+    WHILE TRUE DO
+        BEGIN
+        SELECTONE .TOK OF
+            SET
+            [TK_EOF, TK_ENDPROCEDURE, TK_ENDIF, TK_ELSE, TK_ENDLOOP, TK_ENDCASE,
+             TK_LBRACK, TK_ENDON_ERROR, TK_ENDMODULE] : EXITLOOP;
+            [TK_PROCEDURE, TK_VARIABLE, TK_CONSTANT, TK_LOCAL] :
+                (SYNERR(T('statement')); EXITLOOP);
+            [OTHERWISE] : 0;
+            TES;
+        STATEMENT();
+        IF ACCEPT(TK_SEMI)
+        THEN
+            BEGIN
+            ! DEC's says it a statement later than the one that holds it.
+            IF .UNREACH GTR 0 AND NOT .DEAD AND .DEPTH LSS .UDEPTH
+            THEN
+                BEGIN
+                UNREACH = .UNREACH - 1;
+                IF .UNREACH EQL 0
+                THEN
+                    BEGIN
+                    MSG_OUT(0, TPU$_UNREACHABLE);
+                    MSG_OUT(1, TPU$_SOURCELINE, MKINT(.TLINE))
+                    END
+                END
+            END
+        ELSE
+            SELECTONE .TOK OF
+                SET
+                [TK_EOF, TK_ENDPROCEDURE, TK_ENDIF, TK_ELSE, TK_ENDLOOP, TK_ENDCASE,
+                 TK_LBRACK, TK_ENDON_ERROR, TK_ENDMODULE] : EXITLOOP;
+                [OTHERWISE] : (SYNERR(T('";"')); EXITLOOP);
+                TES
+        END;
+    DEPTH = .DEPTH - 1;
+    WARNED = .WASWARNED
+    END;
+
+! ---- Declarations
+
+! NEWCODE: a code object for what has been emitted since START, with the
+! locals and handler given; the emitted code goes into it.
+ROUTINE NEWCODE (Y, HANDLER, CASES) =
+    BEGIN
+    LOCAL
+        OBJ : REF VECTOR;
+    ! The end: the result, 0 unless the procedure's name was assigned.
+    EMITB(OP_LOADR);
+    EMITB(OP_RETURN);
+    EMITB(OP_END);
+    OBJ = MEM_GET(C_SIZE * 8);
+    OBJ[C_REF] = 1;
+    OBJ[C_CODE] = .CODE;
+    OBJ[C_LEN] = .CLEN;
+    OBJ[C_NREQ] = .NPAR;
+    OBJ[C_NPARAM] = .NPAR;
+    OBJ[C_NLOCAL] = .NLOC - .NPAR;
+    OBJ[C_HANDLER] = .HANDLER;
+    OBJ[C_CASES] = .CASES;
+    OBJ[C_NAME] = .Y;
+    OBJ[C_LINE0] = (IF .Y EQL 0 THEN 1 ELSE .PLINE);
+    .OBJ
+    END;
+
+! DECLS: LOCAL and CONSTANT declarations, in a procedure or unbound code.
+ROUTINE DECLS : NOVALUE =
+    WHILE .TOK EQL TK_LOCAL OR .TOK EQL TK_CONSTANT DO
+        BEGIN
+        IF .TOK EQL TK_LOCAL
+        THEN
+            BEGIN
+            NEXT();
+            WHILE .TOK EQL TK_NAME DO
+                BEGIN
+                ADDLOCAL();
+                NEXT();
+                IF NOT ACCEPT(TK_COMMA) THEN EXITLOOP
+                END
+            END
+        ELSE
+            BEGIN
+            NEXT();
+            WHILE .TOK EQL TK_NAME DO
+                BEGIN
+                LOCAL
+                    N,
+                    CELL;
+                ADDLOCAL();
+                N = .NLOC - 1;
+                NEXT();
+                EXPECT(TK_ASSIGN, T('":="'));
+                CELL = MEM_GET(8);
+                .CELL = CONSTEXPR();
+                LCONST[.N] = .CELL;
+                IF NOT ACCEPT(TK_COMMA) THEN EXITLOOP
+                END
+            END;
+        EXPECT(TK_SEMI, T('";"'))
+        END;
+
+! HANDLER: ON_ERROR ... ENDON_ERROR, procedural or case-style: its offset
+! in the code, and a case-style one's table at CASES.
+ROUTINE HANDLER (CASES : REF VECTOR) =
+    BEGIN
+    LOCAL
+        J,
+        AT,
+        TAB : VECTOR[129],
+        N;
+    .CASES = 0;
+    IF .TOK NEQ TK_ON_ERROR THEN RETURN -1;
+    NEXT();
+    J = JUMPTO(OP_JUMP);
+    AT = .CLEN;
+    IF .TOK NEQ TK_LBRACK
+    THEN
+        BEGIN
+        STATEMENTS();
+        EMITB(OP_HEND);
+        EMITB(0)
+        END
+    ELSE
+        BEGIN
+        N = 0;
+        WHILE ACCEPT(TK_LBRACK) DO
+            BEGIN
+            LOCAL
+                RETF;
+            RETF = 0;
+            WHILE TRUE DO
+                BEGIN
+                LOCAL
+                    K;
+                IF .TOK NEQ TK_NAME THEN (SYNERR(T('error keyword')); EXITLOOP);
+                K = KW_FIND(.TTEXT, .TLEN);
+                IF TOKIS(T('OTHERWISE'))
+                THEN
+                    (K = H_OTHERWISE; RETF = 1)
+                ELSE IF .K EQL 0 OR NOT KW_ISERROR(.K)
+                THEN
+                    BEGIN
+                    IF .PASS EQL 2
+                    THEN
+                        BEGIN
+                        MSG_OUT(0, TPU$_NOTERRORKEYWORD);
+                        MSG_OUT(1, TPU$_SOURCELINE, MKINT(.TLINE))
+                        END;
+                    FAILED = TRUE;
+                    TOK = TK_EOF;
+                    EXITLOOP
+                    END
+                ELSE IF .K EQL TPU$_CONTROLC
+                THEN
+                    RETF = 1;
+                IF .N LSS 64 THEN (TAB[1 + 2 * .N] = .K; TAB[2 + 2 * .N] = .CLEN; N = .N + 1);
+                NEXT();
+                IF NOT ACCEPT(TK_COMMA) THEN EXITLOOP
+                END;
+            EXPECT(TK_RBRACK, T('"]"'));
+            EXPECT(TK_COLON, T('":"'));
+            STATEMENTS();
+            EMITB(OP_HEND);
+            EMITB(.RETF)
+            END;
+        IF .PASS EQL 2
+        THEN
+            BEGIN
+            LOCAL
+                P : REF VECTOR;
+            TAB[0] = .N;
+            P = MEM_GET((1 + 2 * .N) * 8);
+            CH$MOVE((1 + 2 * .N) * 8, TAB, .P);
+            .CASES = .P
+            END
+        END;
+    EXPECT(TK_ENDON_ERROR, T('ENDON_ERROR'));
+    ACCEPT(TK_SEMI);
+    HERE(.J);
+    .AT
+    END;
+
+! PROCEDURE: PROCEDURE name [(required; optional)] declarations [ON_ERROR
+! ... ENDON_ERROR] statements ENDPROCEDURE.
+ROUTINE PROCEDURE : NOVALUE =
+    BEGIN
+    LOCAL
+        Y : REF VECTOR,
+        SAVE : VECTOR[3],
+        NREQ,
+        H,
+        CASES,
+        OBJ : REF VECTOR;
+    PLINE = .TLINE;
+    NEXT();
+    IF .TOK NEQ TK_NAME THEN (SYNERR(T('procedure name')); RETURN);
+    Y = SYMBOL();
+    IF .Y[Y_KIND] EQL YK_BUILTIN OR .Y[Y_KIND] EQL YK_KEYWORD OR .Y[Y_KIND] EQL YK_CONST
+    THEN
+        (SYNERR(T('procedure name')); RETURN);
+    Y[Y_KIND] = YK_PROC;
+    SAVE[0] = .CODE;
+    SAVE[1] = .CLEN;
+    SAVE[2] = .CCAP;
+    CODE = 0;
+    CLEN = 0;
+    CCAP = 0;
+    PROC = .Y;
+    NLOC = 0;
+    NEXT();
+    NREQ = -1;
+    IF ACCEPT(TK_LPAR)
+    THEN
+        BEGIN
+        WHILE .TOK EQL TK_NAME OR .TOK EQL TK_SEMI DO
+            BEGIN
+            IF ACCEPT(TK_SEMI)
+            THEN
+                NREQ = .NLOC
+            ELSE
+                BEGIN
+                ADDLOCAL();
+                NEXT();
+                ACCEPT(TK_COMMA)
+                END
+            END;
+        EXPECT(TK_RPAR, T('")"'))
+        END;
+    NPAR = .NLOC;
+    IF .NREQ LSS 0 THEN NREQ = .NPAR;
+    ACCEPT(TK_SEMI);
+    DECLS();
+    H = HANDLER(CASES);
+    STATEMENTS();
+    EXPECT(TK_ENDPROCEDURE, T('ENDPROCEDURE'));
+    IF .PASS EQL 2
+    THEN
+        BEGIN
+        OBJ = NEWCODE(.Y, .H, .CASES);
+        OBJ[C_NREQ] = .NREQ;
+        Y[Y_PROC] = .OBJ
+        END
+    ELSE
+        MEM_FREE(.CODE);
+    CODE = .SAVE[0];
+    CLEN = .SAVE[1];
+    CCAP = .SAVE[2];
+    PROC = 0;
+    NLOC = 0;
+    NPAR = 0
+    END;
+
+! VARIABLES: VARIABLE names; and CONSTANT names := values; outside a
+! procedure: global ones.
+ROUTINE GLOBALDECL : NOVALUE =
+    BEGIN
+    IF .TOK EQL TK_VARIABLE
+    THEN
+        BEGIN
+        NEXT();
+        WHILE .TOK EQL TK_NAME DO
+            BEGIN
+            LOCAL
+                Y : REF VECTOR;
+            Y = SYMBOL();
+            IF .Y[Y_KIND] EQL YK_NONE THEN Y[Y_KIND] = YK_VAR;
+            NEXT();
+            IF NOT ACCEPT(TK_COMMA) THEN EXITLOOP
+            END
+        END
+    ELSE
+        BEGIN
+        NEXT();
+        WHILE .TOK EQL TK_NAME DO
+            BEGIN
+            LOCAL
+                Y : REF VECTOR,
+                V;
+            Y = SYMBOL();
+            NEXT();
+            EXPECT(TK_ASSIGN, T('":="'));
+            V = CONSTEXPR();
+            IF .PASS EQL 2
+            THEN
+                BEGIN
+                IF .Y[Y_KIND] EQL YK_NONE OR .Y[Y_KIND] EQL YK_VAR
+                THEN
+                    BEGIN
+                    VUNREF(.Y[Y_VALUE]);
+                    Y[Y_KIND] = YK_CONST;
+                    Y[Y_VALUE] = .V
+                    END
+                ELSE
+                    VUNREF(.V)
+                END;
+            IF NOT ACCEPT(TK_COMMA) THEN EXITLOOP
+            END
+        END;
+    EXPECT(TK_SEMI, T('";"'))
+    END;
+
+! UNIT: the compilation unit, once.
+ROUTINE UNIT (TEXT, LEN) =
+    BEGIN
+    LOCAL
+        H,
+        CASES,
+        START,
+        OBJ;
+    SRC = .TEXT;
+    SRCEND = .TEXT + .LEN;
+    POS = .TEXT;
+    LINE = (IF .COMP_LINE1 EQL 0 THEN 1 ELSE .COMP_LINE1);
+    FAILED = FALSE;
+    CODE = 0;
+    CLEN = 0;
+    CCAP = 0;
+    PROC = 0;
+    NLOC = 0;
+    NPAR = 0;
+    EXITS = 0;
+    INLOOP = FALSE;
+    DEAD = FALSE;
+    WARNED = FALSE;
+    UNREACH = 0;
+    DEPTH = 0;
+    NEXT();
+    WHILE TRUE DO
+        SELECTONE .TOK OF
+            SET
+            [TK_PROCEDURE] : (PROCEDURE(); ACCEPT(TK_SEMI));
+            [TK_VARIABLE, TK_CONSTANT] : GLOBALDECL();
+            [OTHERWISE] : EXITLOOP;
+            TES;
+    DECLS();
+    H = HANDLER(CASES);
+    START = .CLEN;
+    STATEMENTS();
+    IF .TOK NEQ TK_EOF THEN SYNERR(T('end of text'));
+    IF .FAILED THEN (MEM_FREE(.CODE); RETURN -1);
+    IF .PASS NEQ 2 OR .CLEN EQL .START AND .H LSS 0 THEN (MEM_FREE(.CODE); RETURN 0);
+    NEWCODE(0, .H, .CASES)
+    END;
+
+! COMPILE text, length, address: compiles the text; stores the program,
+! its unbound code, at the address, 0 if it has none. SS_NORMAL, or
+! TPU$_COMPILEFAIL.
+GLOBAL ROUTINE COMPILE (TEXT, LEN, OUT) =
+    BEGIN
+    LOCAL
+        R;
+    .OUT = 0;
+    PASS = 1;
+    R = UNIT(.TEXT, .LEN);
+    IF .R LSS 0
+    THEN
+        BEGIN
+        ! Pass 1 found the error; pass 2 says where, with the messages
+        ! before it.
+        PASS = 2;
+        UNIT(.TEXT, .LEN);
+        MSG_OUT(0, TPU$_COMPILEFAIL);
+        RETURN TPU$_COMPILEFAIL
+        END;
+    PASS = 2;
+    R = UNIT(.TEXT, .LEN);
+    IF .R LSS 0
+    THEN
+        BEGIN
+        MSG_OUT(0, TPU$_COMPILEFAIL);
+        RETURN TPU$_COMPILEFAIL
+        END;
+    .OUT = .R;
+    SS_NORMAL
+    END;
+
+END
+ELUDOM

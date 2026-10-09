@@ -1,0 +1,22 @@
+! Two windows on one buffer, ADJUST_WINDOW, UNMAP and REFRESH.
+b := CREATE_BUFFER ("shared");
+w1 := CREATE_WINDOW (1, 10, ON);
+w2 := CREATE_WINDOW (11, 10, ON);
+MAP (w1, b);
+i := 1;
+LOOP
+    EXITIF i > 25;
+    COPY_TEXT ("shared line " + STR (i));
+    SPLIT_LINE;
+    i := i + 1;
+ENDLOOP;
+POSITION (BEGINNING_OF (b));
+MAP (w2, b);
+POSITION (END_OF (b));
+DEFINE_KEY ("POSITION (w1)", F7);
+DEFINE_KEY ("POSITION (w2)", F8);
+DEFINE_KEY ("ADJUST_WINDOW (w1, 0, -4)", F9);
+DEFINE_KEY ("UNMAP (w2)", F10);
+DEFINE_KEY ("REFRESH", CTRL_W_KEY);
+DEFINE_KEY ("MOVE_VERTICAL (1)", DOWN);
+DEFINE_KEY ("QUIT (OFF)", CTRL_Z_KEY);

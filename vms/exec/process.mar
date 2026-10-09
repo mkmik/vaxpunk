@@ -45,7 +45,7 @@
         .EXTERNAL SCH$SCHED, SCH$DACEFC_ALL, SGN$GW_QUANTUM
         .EXTERNAL EXE$ALONONPAGED, EXE$DEANONPGDSIZ, MMG$CREPAG, MMG$DELPAG
         .EXTERNAL MMG$SETPRT, EXE$RMVTIMQ, EXE$USRSTART, EXE$CLISTART
-        .EXTERNAL FIL$OPENFILE, FIL$OPENSHR, RMS$RUNDOWN
+        .EXTERNAL FIL$OPENFILE, FIL$OPENSHR, FIL$READIMG, RMS$RUNDOWN
         .EXTERNAL EXE$OUTZSTRING, EXE$OUTCSTRING, EXE$OUTHEX, EXE$OUTCRLF
         .EXTERNAL LNM$CREATE, LNM$DELTBL, SCH$QAST, EXE$FLUSHAST, IOC$CANCEL, SYS$EXIT
         .EXTERNAL MB$FINDNUM, MB$SEND, EXE$GQ_SYSTIME
@@ -728,9 +728,10 @@ RANGE:
 95$:    POPR    #^M<R3, R10>
         RSB
 
-; MAPISD: R8 = an image file, R2 = how far from where it is linked it
-; goes. Maps each of its sections there, kernel writable, with its
-; contents. R0 = SS$_NORMAL, or MMG$CREPAG's error.
+; MAPISD: R8 = an image's header, from FIL$OPENFILE or FIL$OPENSHR, R2 =
+; how far from where it is linked it goes. Maps each of its sections
+; there, kernel writable, and reads their contents in with FIL$READIMG.
+; R0 = SS$_NORMAL, MMG$CREPAG's error, or FIL$READIMG's.
 MAPISD:
         .JSB_ENTRY
         PUSHR   #^M<R2, R3, R4, R5, R6, R9, R10>
@@ -747,21 +748,11 @@ MAPISD:
         BSBW    MMG$CREPAG
         BLBC    R0, 90$
         BBS     #EISD$V_DZRO, EISD$L_FLAGS(R3), 10$
-        PUSHL   R3
-        SUBL3   #1, EISD$L_VBN(R3), R1
-        MULL2   #BLOCK, R1
-        ADDL2   R8, R1                  ; from the file
-        MOVL    EISD$L_SECSIZE(R3), R9  ; the bytes left
-        ADDL3   R6, EISD$Q_VIRT_ADDR(R3), R3
-20$:    MOVL    R9, R2                  ; MOVC3 copies 65535 at most
-        CMPL    R2, #65535
-        BLEQU   30$
-        MOVL    #65535, R2
-30$:    SUBL2   R2, R9
-        MOVC3   R2, (R1), (R3)
-        TSTL    R9
-        BNEQ    20$
-        MOVL    (SP)+, R3
+        MOVL    EISD$L_VBN(R3), R0      ; from the file
+        MOVL    EISD$L_SECSIZE(R3), R1
+        ADDL3   R6, EISD$Q_VIRT_ADDR(R3), R2
+        BSBW    FIL$READIMG
+        BLBC    R0, 90$
         BRB     10$
 80$:    MOVL    #SS$_NORMAL, R0
 90$:    POPR    #^M<R2, R3, R4, R5, R6, R9, R10>

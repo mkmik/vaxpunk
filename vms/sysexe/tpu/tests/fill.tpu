@@ -1,0 +1,25 @@
+! FILL a paragraph between margins.
+b := CREATE_BUFFER ("f");
+POSITION (b);
+COPY_TEXT ("This is a long line that will have to be filled into a narrow column of text by FILL.");
+SPLIT_LINE;
+COPY_TEXT ("A second   line with   extra spaces.");
+SET (MARGINS, b, 1, 20);
+r := CREATE_RANGE (BEGINNING_OF (b), END_OF (b), NONE);
+FILL (r);
+POSITION (BEGINNING_OF (b));
+LOOP
+    EXITIF MARK (NONE) = END_OF (b);
+    MESSAGE ("[" + CURRENT_LINE + "]");
+    MOVE_VERTICAL (1);
+ENDLOOP;
+ERASE (b);
+COPY_TEXT ("short words to fill with margins five to thirty");
+FILL (b, " ", 5, 30);
+POSITION (BEGINNING_OF (b));
+LOOP
+    EXITIF MARK (NONE) = END_OF (b);
+    MESSAGE ("[" + CURRENT_LINE + "]");
+    MOVE_VERTICAL (1);
+ENDLOOP;
+QUIT (OFF);

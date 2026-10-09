@@ -1,4 +1,52 @@
-! EDIT spec: EDIT.EXE, EDT.
+! EDIT spec: TPU.EXE, the Text Processing Utility (PRD-0006), which
+! starts EVE, with EDIT/TPU's qualifiers, which TPU reads itself from the
+! command line, as EDIT has been since VMS V5. EDIT/EDT: EDIT.EXE, EDT.
 define verb EDIT
+	image TPU
+	parameter P1, label=FILE, value(type=$file)
+	qualifier TPU, syntax=EDIT_TPU
+	qualifier EDT, syntax=EDIT_EDT
+	qualifier DISPLAY, value
+	qualifier COMMAND, value(type=$file)
+	qualifier SECTION, value(type=$file)
+	qualifier INITIALIZATION, value(type=$file)
+	qualifier OUTPUT, value(type=$file)
+	qualifier JOURNAL, value(type=$file)
+	qualifier READ_ONLY
+	qualifier WRITE
+	qualifier MODIFY
+	qualifier CREATE
+	qualifier RECOVER
+	qualifier START_POSITION, value(list)
+	qualifier CHARACTER_SET, value
+	qualifier INTERFACE, value
+	qualifier DEBUG, value(type=$file)
+	qualifier WORK, value(type=$file)
+
+define syntax EDIT_EDT
 	image EDIT
 	parameter P1, label=FILE, prompt="File", value(required, type=$file)
+	qualifier EDT
+	qualifier TPU
+
+define syntax EDIT_TPU
+	image TPU
+	parameter P1, label=FILE, value(type=$file)
+	qualifier TPU
+	qualifier EDT
+	qualifier DISPLAY, value
+	qualifier COMMAND, value(type=$file)
+	qualifier SECTION, value(type=$file)
+	qualifier INITIALIZATION, value(type=$file)
+	qualifier OUTPUT, value(type=$file)
+	qualifier JOURNAL, value(type=$file)
+	qualifier READ_ONLY
+	qualifier WRITE
+	qualifier MODIFY
+	qualifier CREATE
+	qualifier RECOVER
+	qualifier START_POSITION, value(list)
+	qualifier CHARACTER_SET, value
+	qualifier INTERFACE, value
+	qualifier DEBUG, value(type=$file)
+	qualifier WORK, value(type=$file)

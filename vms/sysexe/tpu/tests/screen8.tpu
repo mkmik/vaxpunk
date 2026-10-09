@@ -1,0 +1,20 @@
+! Typing: overstrike, tabs, a line wider than the screen with the cursor
+! past its edge, typing at the end of the buffer, deleting at a line's
+! start.
+b := CREATE_BUFFER ("main");
+w := CREATE_WINDOW (1, 21, ON);
+MAP (w, b);
+COPY_TEXT ("overstrike me");
+SPLIT_LINE;
+COPY_TEXT ("tab" + ASCII (9) + "stop");
+SPLIT_LINE;
+COPY_TEXT ("x" * 90);
+POSITION (BEGINNING_OF (b));
+DEFINE_KEY ("SET (OVERSTRIKE, CURRENT_BUFFER)", F7);
+DEFINE_KEY ("SET (INSERT, CURRENT_BUFFER)", F8);
+DEFINE_KEY ("SPLIT_LINE", RET_KEY);
+DEFINE_KEY ("ERASE_CHARACTER (-1)", DEL_KEY);
+DEFINE_KEY ("MOVE_VERTICAL (1)", DOWN);
+DEFINE_KEY ("MOVE_HORIZONTAL (1)", RIGHT);
+DEFINE_KEY ("POSITION (LINE_END)", F9);
+DEFINE_KEY ("QUIT (OFF)", CTRL_Z_KEY);

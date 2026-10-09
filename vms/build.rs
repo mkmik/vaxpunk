@@ -10,7 +10,9 @@
 //! HELP with DCL$TABLES, from cld/*.cld, and DCL with sysexe/dcl/*.mar,
 //! its CDU, and HELP and TCPIP with sysexe/help/*.mar, which describes
 //! command tables, and CREATE, CONVERT and ANALYZRMS with sysexe/rms/*.mar,
-//! FDL and their output; in [SYSMGR], the files in sysmgr/,
+//! FDL and their output; TPU, from sysexe/tpu/*.b64 and its I/O module
+//! sysexe/tpu/fio.mar (PRD-0006), and in [SYSLIB] EVE's section file,
+//! sysexe/tpu/eve/eve.section; in [SYSMGR], the files in sysmgr/,
 //! as text; and in [SYSEXE], SYSUAF.DAT, the users, SYSTEM and DEFAULT.
 
 use std::collections::HashMap;
@@ -27,6 +29,7 @@ fn main() {
         LIB,
         "sysuaf.fdl",
         "uafhash.rs",
+        "../crosstools/vtools/bliss",
     ] {
         println!("cargo::rerun-if-changed={path}");
     }
@@ -125,6 +128,17 @@ fn main() {
         let image = link(&name, base, None, &modules);
         files.push((format!("[SYSEXE]{name}.EXE"), image.image.write()));
     }
+    // TPU, a program of its own directory: its BLISS-64 and its MACRO-32.
+    let mut modules: Vec<_> = sources("sysexe/tpu", &["b64"])
+        .iter()
+        .map(|s| bliss(s))
+        .collect();
+    modules.extend(compile(&sources("sysexe/tpu", &["mar"])));
+    modules.extend(libs.iter().cloned());
+    modules.push(librtl_exe.clone());
+    modules.push(stb.clone());
+    let image = link("TPU", vlink::DEFAULT_BASE, None, &modules);
+    files.push(("[SYSEXE]TPU.EXE".into(), image.image.write()));
     disk(&out.join("sysdisk.img"), &files);
 }
 
@@ -164,8 +178,13 @@ fn bliss(source: &Path) -> (String, Vec<u8>) {
         include: vec![LIB.into()],
         ..Default::default()
     };
+    // Its own directory's require files, and the I/O module's (fio.r64).
     let bliss = vbliss::Options {
-        include: vec![LIB.into()],
+        include: vec![
+            source.parent().unwrap().into(),
+            LIB.into(),
+            "../crosstools/vtools/bliss".into(),
+        ],
         ..Default::default()
     };
     let (object, out) = vbliss::compile_with(&text, &opts, &bliss);
@@ -364,6 +383,17 @@ fn disk(path: &Path, images: &[(String, Vec<u8>)]) {
         let size = Some(data.len() as u64);
         ok(vol.copy_in(&mut &data[..], spec, Conversion::Binary, size, Some(image)));
     }
+    // EVE's section file, which TPU loads from SYS$SHARE: the vrun test
+    // checks that it is what TPU saves of sysexe/tpu/eve/eve.tpu.
+    let section = fs::read("sysexe/tpu/eve/eve.section").unwrap();
+    let size = Some(section.len() as u64);
+    ok(vol.copy_in(
+        &mut &section[..],
+        "[SYSLIB]EVE$SECTION.TPU$SECTION",
+        Conversion::LinesToRecords,
+        size,
+        None,
+    ));
     for source in sources("sysmgr", &["txt", "com", "cld"]) {
         let name = source.file_name().unwrap().to_str().unwrap().to_uppercase();
         let text = fs::read(&source).unwrap();

@@ -1,0 +1,5 @@
+! FAO.
+MESSAGE (FAO ("!SL items, !AS", 42, "done"));
+MESSAGE (FAO ("[!5SL][!-5SL][!5AS]", 7, 8, "ab"));
+MESSAGE (FAO ("!UL !XL !OL", 255, 255, 8));
+QUIT (OFF);

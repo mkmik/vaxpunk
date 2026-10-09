@@ -139,8 +139,9 @@ interpreter. It is linked high in P1, which tells the executive it is one
 
 - When STARTUP starts (`EXE$PROCSTRT`), the executive makes its stacks,
   reads `SYS$SYSTEM:DCL.EXE`, which is `DKA0:[SYSEXE]DCL.EXE`, from the
-  disk (`FIL$OPENFILE`), loads it
-  into P1 and calls it in supervisor mode.
+  disk, its header (`FIL$OPENFILE`) and then each section into its pages
+  (`FIL$READIMG`), which loads it into P1, and calls it in supervisor
+  mode.
 - DCL opens a channel to `SYS$INPUT`, and `$GETDVI` says it is no
   terminal, so DCL takes its commands from it as a command procedure,
   `@SYS$INPUT`: `DKA0:[SYSMGR]SYSTARTUP_VMS.COM`, the site's own

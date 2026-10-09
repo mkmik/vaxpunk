@@ -1,0 +1,26 @@
+%TPU-I-AMBIGSYMUSED, ambiguous symbol X used as procedure parameter
+-TPU-I-SOURCELINE, at source line 6
+INTEGER
+STRING
+KEYWORD
+ARRAY
+%TPU-E-UNDEFINEDPROC, undefined procedure call X
+-TPU-I-ATLINE, at line 6
+INTEGER
+PATTERN
+FORWARD
+UPPER
+%TPU-E-ARGMISMATCH, parameter 1's data type, UNSPECIFIED, unsupported
+-TPU-I-INBUILTIN, occurred in built-in STR
+-TPU-I-ATLINE, at line 10
+%TPU-W-MSGNOTFND, message was not found; the default message has been returned
+-TPU-I-INBUILTIN, occurred in built-in MESSAGE
+-TPU-I-ATLINE, at line 10
+kw =
+kw <>
+int <> string
+not int = string
+KEYWORD
+KP5
+CTRL_Z_KEY
+RET_KEY

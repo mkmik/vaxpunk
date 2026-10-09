@@ -1,0 +1,631 @@
+MODULE PATTERN (IDENT = 'V0.1') =
+%TITLE 'TPU: patterns and searching'
+BEGIN
+!
+! A pattern is a tree of nodes, built by the pattern operators (+, &, |,
+! @) and built-ins (ANY, SPAN, MATCH...) from strings, pattern keywords
+! and other patterns, as the Guide to the DEC Text Processing Utility
+! (3.7) describes. Each new pattern copies the trees it is made of, so a
+! pattern's nodes are its own.
+!
+! SEARCH tries the pattern at each place from where it starts, forward
+! or back, as the guide's 3.7.5 says. The matcher backtracks: each node
+! is matched with a continuation, the nodes still to match after it, and
+! an alternative or UNANCHOR tries again when the rest fails. A line end
+! is a place too, after a line's last character. @'s assignments are
+! made only when the whole pattern matches.
+! ponytail: SPAN and SCAN take the longest run and never give any back;
+! no PAGE_BREAK, and no diacritical-insensitive search.
+!
+REQUIRE 'TPU';
+REQUIRE 'TPUKW';
+
+LITERAL
+    NOTMINE = -1;
+
+! A node.
+LITERAL
+    N_KIND = 0,
+    N_A = 1,                            ! a string value, a set, or the left node
+    N_B = 2,                            ! the right node, a count, or @'s cell
+    N_SIZE = 3,
+    NK_STR = 1,
+    NK_ANY = 2,                         ! N_B characters in the set
+    NK_NOTANY = 3,
+    NK_SPAN = 4,                        ! the longest run in the set; L: across lines
+    NK_SPANL = 5,
+    NK_SCAN = 6,                        ! the longest run not in the set
+    NK_SCANL = 7,
+    NK_ARB = 8,                         ! N_B characters
+    NK_MATCH = 9,                       ! up to the string and through it
+    NK_LINE_BEGIN = 10,
+    NK_LINE_END = 11,
+    NK_BUFFER_BEGIN = 12,
+    NK_BUFFER_END = 13,
+    NK_REMAIN = 14,
+    NK_ANCHOR = 15,
+    NK_UNANCHOR = 16,
+    NK_CONCAT = 17,
+    NK_ALT = 18,
+    NK_ASSIGN = 19,                     ! N_A matched, its range to the cell N_B
+    NK_ASSIGNED = 20,                   ! continuation only: N_A's place where it began
+    NK_EMPTY = 21,
+    NK_MATCHL = 22;
+
+! A pattern value's object: the count, then the tree.
+LITERAL
+    P_REF = 0,
+    P_ROOT = 1,
+    P_SIZE = 2;
+
+! A continuation: the node to match next and the one after.
+LITERAL
+    CN_NODE = 0,
+    CN_NEXT = 1,
+    CN_L = 2,                            ! for NK_ASSIGNED: where the part began
+    CN_O = 3,
+    CN_SIZE = 4;
+
+OWN
+    BUF,                                ! the buffer being searched
+    LIML,                               ! where the search must end: a line and offset,
+    LIMO,                               ! line -1 for the end of the buffer
+    EXACT,                              ! case counts
+    ENDL,                               ! where the match ended
+    ENDO,
+    ! @'s assignments made so far: cell, line, offset, line, offset.
+    LOG : VECTOR[5 * 64],
+    NLOG;
+
+EXTERNAL
+    BUF_CURRENT;
+
+EXTERNAL ROUTINE
+    BI_ERR,
+    ARGMISMATCH,
+    TYPENAME,
+    STR_CONCAT,
+    RANGE_NEW,
+    LINENO;
+
+FORWARD ROUTINE
+    MATCH,
+    COPY;
+
+! ---- Building
+
+ROUTINE NODE (KIND, A, B) =
+    BEGIN
+    LOCAL
+        N : REF VECTOR;
+    N = MEM_GET(N_SIZE * 8);
+    N[N_KIND] = .KIND;
+    N[N_A] = .A;
+    N[N_B] = .B;
+    .N
+    END;
+
+! FREENODE node: frees a tree.
+ROUTINE FREENODE (N : REF VECTOR) : NOVALUE =
+    BEGIN
+    IF .N EQL 0 THEN RETURN;
+    SELECTONE .N[N_KIND] OF
+        SET
+        [NK_CONCAT, NK_ALT] : (FREENODE(.N[N_A]); FREENODE(.N[N_B]));
+        [NK_ASSIGN] : FREENODE(.N[N_A]);
+        [NK_STR, NK_ANY, NK_NOTANY, NK_SPAN, NK_SPANL, NK_SCAN, NK_SCANL, NK_MATCH, NK_MATCHL] : VUNREF(.N[N_A]);
+        [OTHERWISE] : 0;
+        TES;
+    MEM_FREE(.N)
+    END;
+
+! COPY node: a copy of a tree.
+ROUTINE COPY (N : REF VECTOR) =
+    BEGIN
+    IF .N EQL 0 THEN RETURN 0;
+    SELECTONE .N[N_KIND] OF
+        SET
+        [NK_CONCAT, NK_ALT] : NODE(.N[N_KIND], COPY(.N[N_A]), COPY(.N[N_B]));
+        [NK_ASSIGN] : NODE(NK_ASSIGN, COPY(.N[N_A]), .N[N_B]);
+        [NK_STR, NK_ANY, NK_NOTANY, NK_SPAN, NK_SPANL, NK_SCAN, NK_SCANL, NK_MATCH, NK_MATCHL] :
+            (VREF(.N[N_A]); NODE(.N[N_KIND], .N[N_A], .N[N_B]));
+        [OTHERWISE] : NODE(.N[N_KIND], .N[N_A], .N[N_B]);
+        TES
+    END;
+
+GLOBAL ROUTINE PAT_FREE (P : REF VECTOR) : NOVALUE =
+    BEGIN
+    FREENODE(.P[P_ROOT]);
+    MEM_FREE(.P)
+    END;
+
+! PATVAL node: a pattern value of the tree.
+ROUTINE PATVAL (N) =
+    BEGIN
+    LOCAL
+        P : REF VECTOR;
+    P = MEM_GET(P_SIZE * 8);
+    P[P_REF] = 1;
+    P[P_ROOT] = .N;
+    MKV(TY_PATTERN, .P)
+    END;
+
+! TONODE value: a new tree for a string, a pattern keyword or a pattern;
+! 0 for anything else.
+ROUTINE TONODE (V) =
+    SELECTONE VTYPE(.V) OF
+        SET
+        [TY_STRING] : (VREF(.V); NODE(NK_STR, .V, 0));
+        [TY_PATTERN] : (BIND P = VPTR(.V) : VECTOR; COPY(.P[P_ROOT]));
+        [TY_KEYWORD] :
+            BEGIN
+            LOCAL
+                K;
+            K = (SELECTONE VINT(.V) OF
+                    SET
+                    [K_LINE_BEGIN] : NK_LINE_BEGIN;
+                    [K_LINE_END] : NK_LINE_END;
+                    [K_BUFFER_BEGIN] : NK_BUFFER_BEGIN;
+                    [K_BUFFER_END] : NK_BUFFER_END;
+                    [K_REMAIN] : NK_REMAIN;
+                    [K_ANCHOR] : NK_ANCHOR;
+                    [K_UNANCHOR] : NK_UNANCHOR;
+                    [OTHERWISE] : 0;
+                    TES);
+            IF .K EQL 0 THEN 0 ELSE NODE(.K, 0, 0)
+            END;
+        [OTHERWISE] : 0;
+        TES;
+
+! PAT_BINARY op, a, b, result: the pattern operators; whether the operands
+! made a pattern. For @, b is the variable's cell.
+GLOBAL ROUTINE PAT_BINARY (OP, A, B, R) =
+    BEGIN
+    LOCAL
+        NA,
+        NB;
+    IF .OP EQL OP_PASSIGN
+    THEN
+        BEGIN
+        NA = TONODE(.A);
+        IF .NA EQL 0 OR .B EQL 0 THEN (FREENODE(.NA); RETURN FALSE);
+        .R = PATVAL(NODE(NK_ASSIGN, .NA, .B));
+        RETURN TRUE
+        END;
+    ! Two strings + make a string, which BINOP makes.
+    NA = TONODE(.A);
+    NB = TONODE(.B);
+    IF .NA EQL 0 OR .NB EQL 0 THEN (FREENODE(.NA); FREENODE(.NB); RETURN FALSE);
+    IF .OP EQL OP_ALT
+    THEN
+        .R = PATVAL(NODE(NK_ALT, .NA, .NB))
+    ELSE IF .OP EQL OP_LINK AND (VTYPE(.B) EQL TY_PATTERN OR VTYPE(.B) EQL TY_KEYWORD)
+    THEN
+        ! A pattern variable after &: matched anywhere after.
+        .R = PATVAL(NODE(NK_CONCAT, .NA, NODE(NK_CONCAT, NODE(NK_UNANCHOR, 0, 0), .NB)))
+    ELSE
+        .R = PATVAL(NODE(NK_CONCAT, .NA, .NB));
+    TRUE
+    END;
+
+! ---- Matching
+
+! ATEND line, offset: whether the place is the end of the search: its
+! limit, or the end of the buffer.
+ROUTINE ATEND (L, O) =
+    BEGIN
+    IF .L EQL 0 THEN RETURN TRUE;
+    IF .LIML EQL -1 THEN RETURN FALSE;
+    .L EQL .LIML AND .O GEQ .LIMO
+    END;
+
+! CH line, offset: the character there, or -1 at a line end.
+ROUTINE CH (L : REF VECTOR, O) =
+    IF .O LSS .L[L_LEN] THEN GETB(.L[L_TEXT] + .O) ELSE -1;
+
+! STEP addresses of line and offset: the next place.
+ROUTINE STEP (LP, OP) : NOVALUE =
+    BEGIN
+    BIND
+        L = ..LP : VECTOR;
+    IF ..OP LSS .L[L_LEN] THEN .OP = ..OP + 1 ELSE (.LP = .L[L_NEXT]; .OP = 0)
+    END;
+
+ROUTINE FOLD (C) =
+    IF NOT .EXACT AND .C GEQU %C'A' AND .C LEQU %C'Z' THEN .C + 32 ELSE .C;
+
+! INSET character, set: whether the character is in the set's string.
+ROUTINE INSET (C, S) =
+    BEGIN
+    IF .C LSS 0 THEN RETURN FALSE;
+    INCR I FROM 0 TO SLEN(.S) - 1 DO
+        IF FOLD(GETB(SADDR(.S) + .I)) EQL FOLD(.C) THEN RETURN TRUE;
+    FALSE
+    END;
+
+! STRAT line, offset, string: whether the string is there, on one line.
+ROUTINE STRAT (L : REF VECTOR, O, S) =
+    BEGIN
+    IF .L EQL 0 THEN RETURN SLEN(.S) EQL 0;
+    IF .O + SLEN(.S) GTR .L[L_LEN] THEN RETURN FALSE;
+    IF .LIML NEQ -1 AND .L EQL .LIML AND .O + SLEN(.S) GTR .LIMO THEN RETURN FALSE;
+    INCR I FROM 0 TO SLEN(.S) - 1 DO
+        IF FOLD(GETB(.L[L_TEXT] + .O + .I)) NEQ FOLD(GETB(SADDR(.S) + .I)) THEN RETURN FALSE;
+    TRUE
+    END;
+
+! GO continuation, line, offset: matches the rest from the place.
+ROUTINE GO (K : REF VECTOR, L, O) =
+    BEGIN
+    IF .K EQL 0 THEN (ENDL = .L; ENDO = .O; RETURN TRUE);
+    MATCH(.K[CN_NODE], .L, .O, .K[CN_NEXT])
+    END;
+
+! MATCH node, line, offset, continuation: whether the node matches at the
+! place with the rest after it.
+ROUTINE MATCH (N : REF VECTOR, L : REF VECTOR, O, K : REF VECTOR) =
+    BEGIN
+    CASE .N[N_KIND] FROM NK_STR TO NK_MATCHL OF
+        SET
+        [NK_STR] :
+            BEGIN
+            IF NOT STRAT(.L, .O, .N[N_A]) THEN RETURN FALSE;
+            GO(.K, .L, .O + SLEN(.N[N_A]))
+            END;
+        [NK_ANY, NK_NOTANY, NK_ARB] :
+            BEGIN
+            LOCAL
+                LL,
+                OO;
+            LL = .L;
+            OO = .O;
+            INCR I FROM 1 TO .N[N_B] DO
+                BEGIN
+                LOCAL
+                    C;
+                IF ATEND(.LL, .OO) THEN RETURN FALSE;
+                C = CH(.LL, .OO);
+                IF .N[N_KIND] EQL NK_ANY THEN IF NOT INSET(.C, .N[N_A]) THEN RETURN FALSE;
+                IF .N[N_KIND] EQL NK_NOTANY THEN IF .C LSS 0 OR INSET(.C, .N[N_A]) THEN RETURN FALSE;
+                STEP(LL, OO)
+                END;
+            GO(.K, .LL, .OO)
+            END;
+        [NK_SPAN, NK_SPANL, NK_SCAN, NK_SCANL] :
+            BEGIN
+            LOCAL
+                LL,
+                OO,
+                COUNT,
+                ACROSS,
+                IN;
+            LL = .L;
+            OO = .O;
+            COUNT = 0;
+            ACROSS = .N[N_KIND] EQL NK_SPANL OR .N[N_KIND] EQL NK_SCANL;
+            IN = .N[N_KIND] EQL NK_SPAN OR .N[N_KIND] EQL NK_SPANL;
+            WHILE NOT ATEND(.LL, .OO) DO
+                BEGIN
+                LOCAL
+                    C;
+                C = CH(.LL, .OO);
+                ! A line end can't start the run.
+                IF .C LSS 0
+                THEN
+                    (IF NOT .ACROSS OR .COUNT EQL 0 THEN EXITLOOP)
+                ELSE IF INSET(.C, .N[N_A]) NEQ .IN
+                THEN
+                    EXITLOOP;
+                STEP(LL, OO);
+                COUNT = .COUNT + 1
+                END;
+            IF .COUNT EQL 0 THEN RETURN FALSE;
+            GO(.K, .LL, .OO)
+            END;
+        [NK_MATCH, NK_MATCHL] :
+            BEGIN
+            ! MATCH on the line, MATCHL across lines.
+            LOCAL
+                LL,
+                OO;
+            LL = .L;
+            OO = .O;
+            WHILE NOT ATEND(.LL, .OO) DO
+                BEGIN
+                IF STRAT(.LL, .OO, .N[N_A]) THEN RETURN GO(.K, .LL, .OO + SLEN(.N[N_A]));
+                IF .N[N_KIND] EQL NK_MATCH AND CH(.LL, .OO) LSS 0 THEN RETURN FALSE;
+                STEP(LL, OO)
+                END;
+            FALSE
+            END;
+        [NK_LINE_BEGIN] : IF .O EQL 0 AND .L NEQ 0 THEN GO(.K, .L, .O) ELSE FALSE;
+        [NK_LINE_END] :
+            BEGIN
+            ! It matches the line end, which it takes.
+            LOCAL
+                LL,
+                OO;
+            IF .L EQL 0 THEN RETURN FALSE;
+            IF .O NEQ .L[L_LEN] OR ATEND(.L, .O) THEN RETURN FALSE;
+            LL = .L;
+            OO = .O;
+            STEP(LL, OO);
+            GO(.K, .LL, .OO)
+            END;
+        [NK_BUFFER_BEGIN] :
+            BEGIN
+            BIND
+                B = .BUF : VECTOR;
+            IF .L EQL .B[B_FIRST] AND .O EQL 0 THEN GO(.K, .L, .O) ELSE FALSE
+            END;
+        [NK_BUFFER_END] : IF .L EQL 0 THEN GO(.K, .L, .O) ELSE FALSE;
+        [NK_REMAIN] :
+            BEGIN
+            IF .L EQL 0 THEN RETURN GO(.K, .L, .O);
+            IF .LIML NEQ -1 AND .L EQL .LIML THEN RETURN GO(.K, .L, .LIMO);
+            GO(.K, .L, .L[L_LEN])
+            END;
+        [NK_ANCHOR, NK_EMPTY] : GO(.K, .L, .O);
+        [NK_UNANCHOR] :
+            BEGIN
+            LOCAL
+                LL,
+                OO;
+            LL = .L;
+            OO = .O;
+            WHILE TRUE DO
+                BEGIN
+                IF GO(.K, .LL, .OO) THEN RETURN TRUE;
+                IF ATEND(.LL, .OO) THEN RETURN FALSE;
+                STEP(LL, OO)
+                END;
+            FALSE
+            END;
+        [NK_CONCAT] :
+            BEGIN
+            LOCAL
+                F : VECTOR[CN_SIZE];
+            F[CN_NODE] = .N[N_B];
+            F[CN_NEXT] = .K;
+            MATCH(.N[N_A], .L, .O, F)
+            END;
+        [NK_ALT] :
+            IF MATCH(.N[N_A], .L, .O, .K) THEN TRUE ELSE MATCH(.N[N_B], .L, .O, .K);
+        [NK_ASSIGN] :
+            BEGIN
+            LOCAL
+                F : VECTOR[CN_SIZE],
+                DONE : VECTOR[N_SIZE];
+            DONE[N_KIND] = NK_ASSIGNED;
+            DONE[N_B] = .N[N_B];
+            F[CN_NODE] = DONE;
+            F[CN_NEXT] = .K;
+            F[CN_L] = .L;
+            F[CN_O] = .O;
+            DONE[N_A] = F;
+            MATCH(.N[N_A], .L, .O, F)
+            END;
+        [NK_ASSIGNED] :
+            BEGIN
+            ! The part @ names matched from where its frame says to here.
+            BIND
+                F = .N[N_A] : VECTOR;
+            IF .NLOG GEQ 64 THEN RETURN GO(.K, .L, .O);
+            LOG[5 * .NLOG] = .N[N_B];
+            LOG[5 * .NLOG + 1] = .F[CN_L];
+            LOG[5 * .NLOG + 2] = .F[CN_O];
+            LOG[5 * .NLOG + 3] = .L;
+            LOG[5 * .NLOG + 4] = .O;
+            NLOG = .NLOG + 1;
+            IF GO(.K, .L, .O) THEN RETURN TRUE;
+            NLOG = .NLOG - 1;
+            FALSE
+            END;
+        TES
+    END;
+
+! LAST address of line, address of offset: the place before, which ends a
+! range whose text stops there.
+ROUTINE BACK (LP, OP) : NOVALUE =
+    BEGIN
+    BIND
+        B = .BUF : VECTOR;
+    IF ..OP GTR 0 THEN (.OP = ..OP - 1; RETURN);
+    IF ..LP EQL 0
+    THEN
+        BEGIN
+        .LP = .B[B_LAST];
+        IF ..LP NEQ 0 THEN (BIND L = ..LP : VECTOR; .OP = .L[L_LEN])
+        END
+    ELSE
+        BEGIN
+        BIND
+            L = ..LP : VECTOR;
+        IF .L[L_PREV] NEQ 0
+        THEN
+            (.LP = .L[L_PREV]; BEGIN BIND P = ..LP : VECTOR; .OP = .P[L_LEN] END)
+        END
+    END;
+
+! MAKERANGE line1, off1, line2, off2: the range a match from the first
+! place to before the second is.
+ROUTINE MAKERANGE (L1, O1, L2, O2) =
+    BEGIN
+    IF .L1 NEQ .L2 OR .O1 NEQ .O2 THEN BACK(L2, O2);
+    RANGE_NEW(.BUF, .L1, .O1, .L2, .O2, K_NONE)
+    END;
+
+! SEARCH (pattern, FORWARD | REVERSE [, EXACT | NO_EXACT [, buffer |
+! range]]), and SEARCH_QUIETLY: the range that matched, or 0.
+ROUTINE BX_SEARCH (ARGS : REF VECTOR, N, R, QUIET) =
+    BEGIN
+    LOCAL
+        PAT : REF VECTOR,
+        ROOT : REF VECTOR,
+        FWD,
+        L,
+        O,
+        STARTL,
+        STARTO,
+        ANCH;
+    IF .N LSS 2 THEN RETURN BI_ERR(TPU$_TOOFEW);
+    IF .N GTR 4 THEN RETURN BI_ERR(TPU$_TOOMANY);
+    .R = MKINT(0);
+    ROOT = TONODE(.ARGS[0]);
+    IF .ROOT EQL 0 THEN RETURN ARGMISMATCH(1, .ARGS[0]);
+    IF VTYPE(.ARGS[1]) NEQ TY_KEYWORD THEN (FREENODE(.ROOT); RETURN ARGMISMATCH(2, .ARGS[1]));
+    FWD = VINT(.ARGS[1]) NEQ K_REVERSE;
+    EXACT = FALSE;
+    IF .N GTR 2
+    THEN
+        BEGIN
+        IF VTYPE(.ARGS[2]) EQL TY_KEYWORD THEN EXACT = VINT(.ARGS[2]) EQL K_EXACT;
+        IF VTYPE(.ARGS[2]) EQL TY_INTEGER THEN EXACT = (VINT(.ARGS[2]) AND 1) NEQ 0
+        END;
+    LIML = -1;
+    LIMO = 0;
+    IF .N GTR 3 AND VTYPE(.ARGS[3]) EQL TY_BUFFER
+    THEN
+        BEGIN
+        BIND
+            B = VPTR(.ARGS[3]) : VECTOR;
+        BUF = B;
+        IF .FWD THEN (L = .B[B_FIRST]; O = 0) ELSE (L = 0; O = 0)
+        END
+    ELSE IF .N GTR 3 AND VTYPE(.ARGS[3]) EQL TY_RANGE
+    THEN
+        BEGIN
+        BIND
+            RG = VPTR(.ARGS[3]) : VECTOR,
+            S = .RG[R_START] : VECTOR,
+            E = .RG[R_END] : VECTOR;
+        BUF = .S[M_BUF];
+        ! The limit is the place after the range's end.
+        LIML = .E[M_LINE];
+        LIMO = .E[M_OFF];
+        IF .LIML NEQ 0 THEN (STEP(LIML, LIMO); IF .LIML EQL 0 THEN LIML = -1) ELSE LIML = -1;
+        IF .FWD THEN (L = .S[M_LINE]; O = .S[M_OFF]) ELSE (L = .E[M_LINE]; O = .E[M_OFF])
+        END
+    ELSE
+        BEGIN
+        IF .BUF_CURRENT EQL 0 THEN (FREENODE(.ROOT); RETURN BI_ERR(TPU$_NOCURRENTBUF));
+        BUF = .BUF_CURRENT;
+        BEGIN
+        BIND
+            B = .BUF : VECTOR;
+        L = .B[B_LINE];
+        O = .B[B_OFF]
+        END
+        END;
+    ! ANCHOR first: only where the search starts.
+    ANCH = FALSE;
+    BEGIN
+    LOCAL
+        F : REF VECTOR;
+    F = .ROOT;
+    WHILE .F[N_KIND] EQL NK_CONCAT DO F = .F[N_A];
+    IF .F[N_KIND] EQL NK_ANCHOR THEN ANCH = TRUE
+    END;
+    STARTL = .L;
+    STARTO = .O;
+    WHILE TRUE DO
+        BEGIN
+        NLOG = 0;
+        IF MATCH(.ROOT, .L, .O, 0)
+        THEN
+            BEGIN
+            .R = MAKERANGE(.L, .O, .ENDL, .ENDO);
+            ! The partial assignments.
+            INCR I FROM 0 TO .NLOG - 1 DO
+                BEGIN
+                LOCAL
+                    CELL;
+                CELL = .LOG[5 * .I];
+                VUNREF(..CELL);
+                .CELL = MAKERANGE(.LOG[5 * .I + 1], .LOG[5 * .I + 2], .LOG[5 * .I + 3],
+                                  .LOG[5 * .I + 4])
+                END;
+            FREENODE(.ROOT);
+            RETURN SS_NORMAL
+            END;
+        IF .ANCH THEN EXITLOOP;
+        IF .FWD
+        THEN
+            BEGIN
+            IF ATEND(.L, .O) THEN EXITLOOP;
+            STEP(L, O)
+            END
+        ELSE
+            BEGIN
+            LOCAL
+                PL,
+                PO;
+            PL = .L;
+            PO = .O;
+            BACK(L, O);
+            IF .L EQL .PL AND .O EQL .PO THEN EXITLOOP
+            END
+        END;
+    FREENODE(.ROOT);
+    IF .QUIET THEN RETURN SS_NORMAL;
+    BI_ERR(TPU$_STRNOTFOUND)
+    END;
+
+! A set's argument: a string, or a range's or buffer's text.
+ROUTINE SETARG (V) =
+    BEGIN
+    EXTERNAL ROUTINE
+        BUF_STR;
+    IF VTYPE(.V) EQL TY_STRING THEN (VREF(.V); RETURN .V);
+    BUF_STR(.V, 0)
+    END;
+
+! ANY, NOTANY, SPAN, SCAN, SPANL, SCANL, ARB, MATCH: pattern built-ins.
+ROUTINE BX_PRIM (KIND, ARGS : REF VECTOR, N, R) =
+    BEGIN
+    LOCAL
+        S,
+        COUNT;
+    IF .N LSS 1 THEN RETURN BI_ERR(TPU$_TOOFEW);
+    IF .KIND EQL NK_ARB
+    THEN
+        BEGIN
+        IF .N GTR 1 THEN RETURN BI_ERR(TPU$_TOOMANY);
+        IF VTYPE(.ARGS[0]) NEQ TY_INTEGER THEN RETURN ARGMISMATCH(1, .ARGS[0]);
+        .R = PATVAL(NODE(NK_ARB, 0, VINT(.ARGS[0])));
+        RETURN SS_NORMAL
+        END;
+    IF .N GTR 2 THEN RETURN BI_ERR(TPU$_TOOMANY);
+    S = SETARG(.ARGS[0]);
+    IF .S EQL 0 THEN RETURN ARGMISMATCH(1, .ARGS[0]);
+    COUNT = 1;
+    IF .N GTR 1
+    THEN
+        BEGIN
+        IF VTYPE(.ARGS[1]) NEQ TY_INTEGER THEN (VUNREF(.S); RETURN ARGMISMATCH(2, .ARGS[1]));
+        COUNT = VINT(.ARGS[1])
+        END;
+    .R = PATVAL(NODE(.KIND, .S, .COUNT));
+    SS_NORMAL
+    END;
+
+! PAT_CALL number, args, count, result: this module's built-ins, or NOTMINE.
+GLOBAL ROUTINE PAT_CALL (B, ARGS : REF VECTOR, N, R) =
+    SELECTONE .B OF
+        SET
+        [B_SEARCH] : BX_SEARCH(.ARGS, .N, .R, FALSE);
+        [B_SEARCH_QUIETLY] : BX_SEARCH(.ARGS, .N, .R, TRUE);
+        [B_ANY, B_ANYL] : BX_PRIM(NK_ANY, .ARGS, .N, .R);
+        [B_NOTANY, B_NOTANYL] : BX_PRIM(NK_NOTANY, .ARGS, .N, .R);
+        [B_SPAN] : BX_PRIM(NK_SPAN, .ARGS, .N, .R);
+        [B_SPANL] : BX_PRIM(NK_SPANL, .ARGS, .N, .R);
+        [B_SCAN] : BX_PRIM(NK_SCAN, .ARGS, .N, .R);
+        [B_SCANL] : BX_PRIM(NK_SCANL, .ARGS, .N, .R);
+        [B_ARB] : BX_PRIM(NK_ARB, .ARGS, .N, .R);
+        [B_MATCH] : BX_PRIM(NK_MATCH, .ARGS, .N, .R);
+        [B_MATCHL] : BX_PRIM(NK_MATCHL, .ARGS, .N, .R);
+        [OTHERWISE] : NOTMINE;
+        TES;
+
+END
+ELUDOM

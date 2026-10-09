@@ -1,0 +1,17 @@
+%TPU-I-AMBIGSYMUSED, ambiguous symbol Y used as procedure parameter
+-TPU-I-SOURCELINE, at source line 4
+%TPU-I-AMBIGSYMUSED, ambiguous symbol LATER used as procedure parameter
+-TPU-I-SOURCELINE, at source line 7
+%TPU-I-AMBIGSYMUSED, ambiguous symbol TWICE used as procedure parameter
+-TPU-I-SOURCELINE, at source line 9
+42
+from a string
+%TPU-W-EXECUTEFAIL, execution aborted
+-TPU-I-INBUILTIN, occurred in built-in EXECUTE
+-TPU-I-ATLINE, at line 6
+later
+42
+a program
+empty is 0
+an integer
+2

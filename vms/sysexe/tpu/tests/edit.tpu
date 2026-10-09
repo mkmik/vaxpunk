@@ -1,0 +1,16 @@
+! EDIT on strings.
+s := "  some   spaced    text  ";
+t := s; EDIT (t, TRIM); MESSAGE ("[" + t + "]");
+t := s; EDIT (t, TRIM_LEADING); MESSAGE ("[" + t + "]");
+t := s; EDIT (t, TRIM_TRAILING); MESSAGE ("[" + t + "]");
+t := s; EDIT (t, COMPRESS); MESSAGE ("[" + t + "]");
+t := s; EDIT (t, COLLAPSE); MESSAGE ("[" + t + "]");
+t := s; EDIT (t, UPPER); MESSAGE ("[" + t + "]");
+t := "MiXeD"; EDIT (t, LOWER); MESSAGE ("[" + t + "]");
+t := "MiXeD"; EDIT (t, INVERT); MESSAGE ("[" + t + "]");
+t := s; EDIT (t, TRIM, UPPER); MESSAGE ("[" + t + "]");
+t := s; EDIT (t, COMPRESS, TRIM); MESSAGE ("[" + t + "]");
+t := 'a "quoted" word'; EDIT (t, UPPER, OFF); MESSAGE ("[" + t + "]");
+t := 'a "quoted" word'; EDIT (t, UPPER, ON); MESSAGE ("[" + t + "]");
+u := EDIT (t, LOWER); MESSAGE ("[" + u + "]");
+QUIT (OFF);

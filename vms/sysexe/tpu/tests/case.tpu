@@ -1,0 +1,10 @@
+! CHANGE_CASE on a string variable.
+s := "MiXeD cAsE";
+CHANGE_CASE (s, UPPER);
+MESSAGE (s);
+CHANGE_CASE (s, LOWER);
+MESSAGE (s);
+s := "hello world";
+CHANGE_CASE (s, INVERT);
+MESSAGE (s);
+QUIT (OFF);

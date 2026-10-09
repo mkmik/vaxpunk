@@ -1,0 +1,5 @@
+
+\x1b[29~buffer other\r
+hello
+\x1b[29~quit\r
+y\r

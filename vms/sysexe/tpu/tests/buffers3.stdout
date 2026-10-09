@@ -1,0 +1,14 @@
+%TPU-S-FILEIN, 6 lines read from file SYS$SYSDEVICE:[TPUORACLE]DATA.TXT;1
+8
+top line
+first line
+bottom line
+bottom LINE AND MORE
+FIRST LINE
+	THIRD with a tab
+TOP LINE
+%TPU-S-FILEOUT, 3 lines written to file SYS$SYSDEVICE:[TPUORACLE]BUFFERS3.OUT;1
+0 8
+9
+[] 9
+TOP LINE
