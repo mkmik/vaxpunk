@@ -136,7 +136,7 @@ ROUTINE BI_STR (ARGS : REF VECTOR, N, R) =
         [OTHERWISE] :
             BEGIN
             .R = BUF_STR(.V, (IF .N GTR 1 THEN .ARGS[1] ELSE 0));
-            IF ..R EQL 0 THEN RETURN ARGMISMATCH(1, .V)
+            IF ..R EQL 0 THEN (.R = MKINT(0); RETURN ARGMISMATCH(1, .V))
             END;
         TES;
     SS_NORMAL
@@ -526,6 +526,19 @@ ROUTINE BI_GET_INFO (ARGS : REF VECTOR, N, R) =
     BI_ERR(TPU$_BADREQUEST, .W, STR_MAKE(0, 0), TYPENAME(.V))
     END;
 
+! KEY_NAME (string | key [, SHIFT_KEY | modifiers]): the keyword for a
+! key: a key's own, or one for the character typed.
+! ponytail: no modifiers yet.
+ROUTINE BI_KEY_NAME (ARGS : REF VECTOR, N, R) =
+    BEGIN
+    ARGCOUNT(1, 3);
+    IF VTYPE(.ARGS[0]) EQL TY_KEYWORD THEN (.R = .ARGS[0]; RETURN SS_NORMAL);
+    ARGTYPE(0, TY_STRING);
+    IF SLEN(.ARGS[0]) NEQ 1 THEN RETURN BI_ERR(TPU$_NOTDEFINABLE);
+    .R = MKKW(KEY_BASE + GETB(SADDR(.ARGS[0])));
+    SS_NORMAL
+    END;
+
 ! QUIT [(ON | OFF [, severity])]: ends the session.
 ROUTINE BI_QUIT (ARGS : REF VECTOR, N, R) =
     BEGIN
@@ -561,6 +574,7 @@ GLOBAL ROUTINE BI_CALL (B, ARGS : REF VECTOR, N, R) =
             [B_CREATE_ARRAY] : BI_CREATE_ARRAY(.ARGS, .N, .R);
             [B_GET_INFO] : BI_GET_INFO(.ARGS, .N, .R);
             [B_QUIT] : BI_QUIT(.ARGS, .N, .R);
+            [B_KEY_NAME] : BI_KEY_NAME(.ARGS, .N, .R);
             [OTHERWISE] : NOTMINE;
             TES);
     IF .S EQL NOTMINE THEN S = BUF_CALL(.B, .ARGS, .N, .R);

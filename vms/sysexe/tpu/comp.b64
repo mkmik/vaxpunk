@@ -825,7 +825,18 @@ ROUTINE ADDLEVEL : NOVALUE =
             PASSIGN()
         ELSE
             BEGIN
+            LOCAL
+                AT;
+            AT = .CLEN;
             MULLEVEL();
+            ! & unanchors only a pattern variable: anything else, + anchors.
+            IF .OP EQL OP_LINK AND .PASS EQL 2
+            THEN
+                IF NOT ((.CLEN - .AT EQL 2 AND GETB(.CODE + .AT) EQL OP_LOADL)
+                        OR (.CLEN - .AT EQL 5 AND (GETB(.CODE + .AT) EQL OP_LOADG
+                                                    OR GETB(.CODE + .AT) EQL OP_AMBIG)))
+                THEN
+                    OP = OP_ADD;
             EMITB(.OP)
             END
         END

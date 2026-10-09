@@ -156,6 +156,65 @@ LITERAL
 LITERAL
     H_OTHERWISE = -1;
 
+! A buffer's, a line's, a marker's and a range's layout (buffer.b64).
+LITERAL
+    B_NEXT = 0,                         ! the next buffer, in the order they were made
+    B_NAME = 1,                         ! a string value, in capitals
+    B_FIRST = 2,                        ! the first and last lines
+    B_LAST = 3,
+    B_NLINES = 4,
+    B_LINE = 5,                         ! the editing point: the line, 0 at the end,
+    B_OFF = 6,                          ! and the offset
+    B_MARKS = 7,                        ! the markers
+    B_FLAGS = 8,
+    B_OUTFILE = 9,                      ! a string value, or 0
+    B_INFILE = 10,
+    B_EOBTEXT = 11,
+    B_LMARGIN = 12,
+    B_RMARGIN = 13,
+    B_TABS = 14,                        ! tab stops: every n columns
+    B_KEYMAPS = 15,                     ! the key map list's name, a string value, or 0
+    B_SIZE = 16,
+    BF_MODIFIED = 1,
+    BF_OVERSTRIKE = 2,
+    BF_NOWRITE = 4,
+    BF_SYSTEM = 8,
+    BF_PERMANENT = 16,
+    BF_UNMODIFIABLE = 32,
+    BF_REVERSE = 64,
+    BF_DEAD = 128;
+
+! A line.
+LITERAL
+    L_NEXT = 0,
+    L_PREV = 1,
+    L_LEN = 2,
+    L_CAP = 3,
+    L_TEXT = 4,
+    L_SIZE = 5;
+
+! A marker; a range.
+LITERAL
+    M_REF = 0,
+    M_BUF = 1,                          ! 0 once the marker is deleted
+    M_LINE = 2,
+    M_OFF = 3,
+    M_NEXT = 4,
+    M_PREV = 5,
+    M_VIDEO = 6,
+    M_SIZE = 7,
+    R_REF = 0,
+    R_START = 1,                        ! markers of the range's own
+    R_END = 2,
+    R_VIDEO = 3,
+    R_SIZE = 4;
+
+
+! A key typed that has no keyword of its own, a character: KEY_BASE plus
+! its code, a keyword code past the table's.
+LITERAL
+    KEY_BASE = 65536;
+
 ! What a built-in returns: SS_NORMAL, or the TPU$_ keyword of an error.
 LITERAL
     SS_NORMAL = 1,

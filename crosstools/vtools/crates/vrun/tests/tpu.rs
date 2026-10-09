@@ -13,12 +13,6 @@ use std::process::Command;
 
 use vms_obj::obj;
 
-/// The tests TPU passes so far; the rest are run and reported, not failed.
-const PASSING: &[&str] = &[
-    "arith", "arrays", "case", "compile", "control", "errors", "fao", "hello", "procs",
-    "quotes", "strings",
-];
-
 fn repo() -> PathBuf {
     fs::canonicalize(Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../..")).unwrap()
 }
@@ -148,16 +142,9 @@ fn tpu() {
         .map(|p| p.file_stem().unwrap().to_string_lossy().into_owned())
         .collect();
     names.sort();
-    let mut failures = Vec::new();
-    for name in &names {
-        match run(&exe, &tests, name) {
-            Ok(()) if !PASSING.contains(&name.as_str()) => {
-                eprintln!("{name}: passes now; add it to PASSING")
-            }
-            Ok(()) => {}
-            Err(e) if PASSING.contains(&name.as_str()) => failures.push(e),
-            Err(e) => eprintln!("not yet: {e}"),
-        }
-    }
+    let failures: Vec<_> = names
+        .iter()
+        .filter_map(|name| run(&exe, &tests, name).err())
+        .collect();
     assert!(failures.is_empty(), "{}", failures.join("\n"));
 }

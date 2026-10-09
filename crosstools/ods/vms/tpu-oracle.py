@@ -35,7 +35,7 @@ def mark(what, name):
 
 
 def script(files):
-    cmds = ["SET TERMINAL/WIDTH=255/PAGE=0",
+    cmds = ["SET TERMINAL/WIDTH=255/PAGE=0/TAB",
             "CREATE/DIRECTORY SYS$SYSDEVICE:[TPUORACLE]",
             "SET DEFAULT SYS$SYSDEVICE:[TPUORACLE]",
             "DEFINE SYS$SCRATCH SYS$SYSDEVICE:[TPUORACLE]"]
