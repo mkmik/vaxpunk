@@ -18,6 +18,12 @@
 ; the user's UIC, privileges and priority, and the command interpreter
 ; the record names, DCL. The executive calls DCL when this image exits,
 ; and DCL runs SYLOGIN.COM and the user's LOGIN.COM.
+; A terminal the Automatic Login Facility's file, SYS$SYSTEM:SYSALF.DAT
+; unless the logical name SYSALF says where, names is logged in at once
+; as its user, without a username or a password. Each of its lines is a
+; terminal and a username, as SYSMAN's ALF ADD takes them: OPA0: SYSTEM.
+; ponytail: VMS's SYSALF.DAT is an indexed file SYSMAN writes; ours is
+; text, which boot --autologin writes, until there is a SYSMAN.
 ; ponytail: no quotas, account restrictions, password expiry or last
 ; login times (PRD-0003's later steps).
 ;
@@ -30,6 +36,7 @@
         $FABDEF
         $RABDEF
         $UAFDEF
+        $DVIDEF
 
         .EXTERNAL EXE$LOGIN, PUT_LINE, LIB$SIGNAL
 
@@ -85,13 +92,26 @@ NAMES:  .BYTE   0
         .BYTE   1
         .ASCIC  "SYS$SCRATCH"
         .BYTE   255
-LINE:   .BLKB   64                      ; a line being made, .ASCIC
+LINE:   .BLKB   64                      ; a line being made, .ASCIC, or SYSALF.DAT's
+ALFFAB: $FAB    FNA=ALFNAM, FNS=ALFNAMLEN, DNA=UAFDEF, DNS=UAFDEFLEN, FAC=GET
+ALFRAB: $RAB    FAB=ALFFAB, UBF=LINE, USZ=64
+ALFNAM: .ASCII  "SYSALF"
+ALFNAMLEN = .-ALFNAM
+DVIITEM:                                ; $GETDVI's items: the terminal's name
+        .WORD   6, DVI$_DEVNAM
+        .ADDRESS TERM, 0
+        .LONG   0
+TERM:   .BLKB   6                       ; _DDCU:
 
         .PSECT  CODE, EXE, LONG
         .ENTRY  START, ^M<R2, R3, R4, R5, R6>
         $ASSIGN_S DEVNAM=INPUT, CHAN=CHAN
         BLBC    R0, 90$
-        MOVL    #3, TRIES
+        BSBW    ALF
+        BLBC    R0, 5$
+        BSBW    FIND
+        BLBS    R0, LOGIN
+5$:     MOVL    #3, TRIES
 10$:    BSBW    ASK
         BLBC    R0, 90$
         TSTL    NAMLEN
@@ -138,14 +158,9 @@ ASK:
         BSBW    STATUS
         BLBC    R0, 90$
         MOVZWL  IOSB+2, R2
-        MOVL    R2, NAMLEN
+        BSBW    PADNAME
+        TSTL    NAMLEN
         BEQL    90$
-        MOVAB   NAME, R1
-        BSBW    UPCASE
-        SUBL3   NAMLEN, #NAMESIZE, R0   ; blanks after it
-        MOVAB   NAME, R1
-        ADDL2   NAMLEN, R1
-        MOVC5   #0, (SP), #^A/ /, R0, (R1)
         $QIOW_S CHAN=CHAN, FUNC=#IO$_READPROMPT!IO$M_NOECHO, IOSB=IOSB, P1=PWD, P2=#NAMESIZE, P5=#PPROMPT, P6=#PPROMPTLEN
         BSBW    STATUS
         BLBC    R0, 90$
@@ -156,6 +171,63 @@ ASK:
         BSBW    UPCASE
         MOVL    #SS$_NORMAL, R0
 90$:    RSB
+
+; PADNAME: NAME = a username, R2 = its length. Puts it in capitals,
+; with blanks after it, and its length in NAMLEN. Uses R0-R5.
+PADNAME:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5>
+        MOVL    R2, NAMLEN
+        MOVAB   NAME, R1
+        BSBW    UPCASE
+        SUBL3   NAMLEN, #NAMESIZE, R0   ; blanks after it
+        MOVAB   NAME, R1
+        ADDL2   NAMLEN, R1
+        MOVC5   #0, (SP), #^A/ /, R0, (R1)
+        RSB
+
+; ALF: finds the terminal's line in SYSALF.DAT, if there is the file. R0
+; = 1 with its username in NAME and NAMLEN, else 0. Uses R0-R5.
+ALF:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5>
+        $GETDVIW_S CHAN=CHAN, ITMLST=DVIITEM
+        BLBC    R0, 80$
+        $OPEN   FAB=ALFFAB
+        BLBC    R0, 80$
+        $CONNECT RAB=ALFRAB
+        BLBC    R0, 70$
+10$:    $GET    RAB=ALFRAB
+        BLBC    R0, 70$
+        MOVZWL  ALFRAB+RAB$W_RSZ, R2
+        SUBL2   #5, R2                  ; after DDCU:
+        BLEQ    10$
+        CMPL    LINE, TERM+1
+        BNEQ    10$
+        CMPB    LINE+4, #^A/:/
+        BNEQ    10$
+        MOVAB   LINE+5, R1
+20$:    CMPB    (R1), #^A/ /            ; the blanks before the username
+        BNEQ    30$
+        INCL    R1
+        SOBGTR  R2, 20$
+        BRB     10$
+30$:    CLRL    R3                      ; its length, to a blank or the end
+40$:    CMPB    (R1)[R3], #^A/ /
+        BEQL    50$
+        INCL    R3
+        CMPL    R3, R2
+        BLSS    40$
+50$:    CMPL    R3, #NAMESIZE
+        BGTR    10$
+        PUSHL   R3
+        MOVC3   R3, (R1), NAME
+        MOVL    (SP)+, R2
+        BSBW    PADNAME
+        $CLOSE  FAB=ALFFAB
+        MOVL    #1, R0
+        RSB
+70$:    $CLOSE  FAB=ALFFAB
+80$:    CLRL    R0
+        RSB
 
 ; UPCASE: R1 = a string, R2 = its length. Puts its letters in capitals.
 ; Uses R0-R2.
@@ -185,6 +257,29 @@ STATUS:
 ; 0, with the file closed and a wrong password counted. Uses R0-R5.
 CHECK:
         .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5>
+        BSBW    FIND
+        BLBC    R0, 80$
+        MOVZBL  REC+UAF$B_ENCRYPT, R0
+        MOVZWL  REC+UAF$W_SALT, R1
+        $HASH_PASSWORD_S PWDDSC=PWDDSC, ALG=R0, SALT=R1, USRDSC=NAMDSC, HASH=HASH
+        BLBC    R0, 60$
+        CMPL    HASH, REC+UAF$Q_PWD
+        BNEQ    60$
+        CMPL    HASH+4, REC+UAF$Q_PWD+4
+        BNEQ    60$
+        MOVL    #1, R0
+        RSB
+60$:    INCW    REC+UAF$W_LOGFAILS      ; the password: count it
+        $UPDATE RAB=UAFRAB
+        $CLOSE  FAB=UAFFAB
+80$:    CLRL    R0
+        RSB
+
+; FIND: opens SYSUAF.DAT and reads NAME's record into REC. R0 = 1 with
+; the file open, else 0, with it closed, for no such user or one
+; DISUSERed. Uses R0-R5.
+FIND:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5>
         MOVB    #FAB$M_GET!FAB$M_UPD, UAFFAB+FAB$B_FAC
         $OPEN   FAB=UAFFAB
         BLBS    R0, 10$
@@ -199,18 +294,8 @@ CHECK:
         $GET    RAB=UAFRAB
         BLBC    R0, 70$
         BBS     #UAF$V_DISACNT, REC+UAF$L_FLAGS, 70$
-        MOVZBL  REC+UAF$B_ENCRYPT, R0
-        MOVZWL  REC+UAF$W_SALT, R1
-        $HASH_PASSWORD_S PWDDSC=PWDDSC, ALG=R0, SALT=R1, USRDSC=NAMDSC, HASH=HASH
-        BLBC    R0, 60$
-        CMPL    HASH, REC+UAF$Q_PWD
-        BNEQ    60$
-        CMPL    HASH+4, REC+UAF$Q_PWD+4
-        BNEQ    60$
         MOVL    #1, R0
         RSB
-60$:    INCW    REC+UAF$W_LOGFAILS      ; the password: count it
-        $UPDATE RAB=UAFRAB
 70$:    $CLOSE  FAB=UAFFAB
 80$:    CLRL    R0
         RSB

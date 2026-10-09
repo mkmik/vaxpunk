@@ -197,7 +197,13 @@ interpreter. It is linked high in P1, which tells the executive it is one
   console, `_OPA0:`, which runs `LOGINOUT.EXE`
   ([vms/sysexe/loginout.mar](../vms/sysexe/loginout.mar)) in user mode,
   with every privilege ([ADR-0029](adr/0029-loginout-and-sysuaf.md)).
-  LOGINOUT prints `Username:` and reads a name, then `Password:` and
+  First it looks for its terminal in the Automatic Login Facility's file,
+  `SYS$SYSTEM:SYSALF.DAT`, whose lines are a terminal and a username,
+  `OPA0: SYSTEM`. `just boot` runs `cargo run -p boot -- --autologin`,
+  which writes that line into `[SYSEXE]` on its copy of the system disk;
+  then LOGINOUT logs the console in as `SYSTEM` without asking, and
+  goes on from the welcome below. Without the file, or a line for the
+  terminal, LOGINOUT prints `Username:` and reads a name, then `Password:` and
   reads the password without echoing it. It finds the user's record in
   `SYS$SYSTEM:SYSUAF.DAT`, an indexed file keyed by username, with RMS,
   and has `$HASH_PASSWORD` hash the password with the record's salt

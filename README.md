@@ -400,7 +400,10 @@ It boots the same kernel, which is why `pal/kernel/qemu.env` picks GICv3 (HVF
 does not emulate GICv2). This is best effort: the kernel is built for a
 Cortex-A57 while HVF offers only `-cpu host`, and seL4 warns that the
 counter runs at 24 MHz instead of the 62.5 MHz it was built for.
-`just boot` adds `--hvf` on a Mac.
+`just boot` adds `--hvf` on a Mac, and `--autologin`, which writes
+`[SYSEXE]SYSALF.DAT` on `out/sysdisk.img` so the console logs in as
+`SYSTEM` without a username or a password, as VMS's Automatic Login
+Facility does. After a `LOGOUT` it logs in again; `MCR OPCCRASH` stops it.
 
 `cargo run -p boot -- --uart1` serves the second serial port on telnet
 `localhost:4444` (`--uart1=PORT` picks another port, for QEMUs in parallel
