@@ -375,7 +375,7 @@ fn network() {
     vax.login("SYSTEM", "MANAGER");
     vax.command("SHOW TERMINAL");
     // Keypad mode paints the screen there; CTRL/Z goes back to line mode.
-    vax.reply("EDIT SYS$MANAGER:WELCOME.TXT", "*");
+    vax.reply("EDIT/EDT SYS$MANAGER:WELCOME.TXT", "*");
     vax.reply("C", "[EOB]");
     let at = vax.text().len();
     vax.console.write_all(b"\x1a").unwrap();

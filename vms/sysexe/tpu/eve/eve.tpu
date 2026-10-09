@@ -1338,6 +1338,17 @@ eve$x_restore_line := "";
 eve$commands;
 SET (MESSAGE_FLAGS, 1);
 rows := GET_INFO (SCREEN, "visible_length");
+IF rows = 0 THEN
+    ! /NODISPLAY: no windows, only the file's buffer, for a command file.
+    file := GET_INFO (COMMAND_LINE, "file_name");
+    IF file = "" THEN
+        b := eve$new_buffer ("MAIN", "");
+    ELSE
+        b := eve$new_buffer (eve$file_buffer_name (file), file);
+    ENDIF;
+    POSITION (BEGINNING_OF (b));
+    RETURN;
+ENDIF;
 eve$x_prompt_row := rows - 1;
 message_buffer := CREATE_BUFFER ("MESSAGES");
 SET (SYSTEM, message_buffer);

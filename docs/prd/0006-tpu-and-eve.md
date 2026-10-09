@@ -4,19 +4,18 @@ Oct 6, 2026 · @Marko Mikulicic
 
 ## Context and goal
 
-**Status: steps 1 to 6 done** (replanned Oct 9, 2026): TPU's language,
-buffers and patterns run under `vrun` against the oracle
-(`crosstools/vtools/crates/vrun/tests/tpu.rs`), and `EDIT/TPU/NODISPLAY`
-on vaxpunk; the subset is [vms/sysexe/tpu/subset.md](../../vms/sysexe/tpu/subset.md). The three things this PRD
-waited for are in: BLISS-64 is the system's compiler
-([PRD-0004](0004-bliss64-compiler.md) steps 11 and 13: `numtim.b64` in the
-executive, and VASM, 6,600 lines of BLISS-64, built by stage 0), each
-terminal has a UCB with its size and a read that parses escape sequences
-([ADR-0027](../adr/0027-terminals-are-ucbs-and-telnet-is-in-the-driver.md)),
-and there are shareable images
-([ADR-0028](../adr/0028-shareable-images.md)). Until EVE is done `EDIT`
-stays EDT, `edit.mar`, and its gaps are
-[PRD-0003](0003-multi-user-vms.md)'s backlog item 29.
+**Status: done** (Oct 9, 2026): TPU's language, buffers, patterns,
+screen and keys run under `vrun` against the oracle
+(`crosstools/vtools/crates/vrun/tests/tpu.rs`); EVE,
+[vms/sysexe/tpu/eve/eve.tpu](../../vms/sysexe/tpu/eve/eve.tpu), matches
+fifteen scripted sessions of DEC's EVE, screen and file, from a section
+file `SAVE` wrote; and on vaxpunk `EDIT` is TPU, which loads EVE's
+section from `SYS$SHARE`, and `EDIT/EDT` is EDT. The subset is
+[vms/sysexe/tpu/subset.md](../../vms/sysexe/tpu/subset.md). What EVE
+leaves out is in `eve.tpu`'s first comment: word wrap while typing,
+command recall, the `$CHOICES$` buffer for an ambiguous command, and
+`REPLACE`'s questions as DEC's EVE asks them; EDT's gaps stay
+[PRD-0003](0003-multi-user-vms.md)'s backlog item 29, for `EDIT/EDT`.
 
 TPU is DEC's Text Processing Utility, from VMS V4.2. It is not an editor
 but an interpreter for a small block-structured language whose data types

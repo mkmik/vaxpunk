@@ -11,8 +11,8 @@ BEGIN
 !
 ! Its layout is ours: a line "TPU$SECTION 1 n", n being how many
 ! keywords this TPU has (a keyword is its number in the code), then the
-! saved bytes in hexadecimal, 32 a line, as the I/O module writes a
-! record at each line feed. The bytes are items, each a tag byte:
+! saved bytes in hexadecimal, LINEBYTES a line, as the I/O module writes
+! a record at each line feed, and reads one at a time. The bytes are items, each a tag byte:
 !   P name code     a procedure: its symbol, and its code object
 !   C name value    a constant
 !   V name          a variable
@@ -32,7 +32,8 @@ REQUIRE 'FIO';
 
 LITERAL
     NOTMINE = -1,
-    MAGICLEN = 12;
+    MAGICLEN = 12,
+    LINEBYTES = 1024;
 
 EXTERNAL ROUTINE
     BI_ERR,
@@ -152,7 +153,8 @@ ROUTINE OPERANDS (CODE, AT, FN) =
     END;
 
 OWN
-    WCODEAT;                            ! the code WFIX writes the operands of
+    WCODEAT,                            ! the code WFIX writes the operands of,
+    WCODEPOS;                           ! and where its copy is in what is saved
 
 ! WFIX offset, kind: one operand's relocation.
 ROUTINE WFIX (AT, KIND) : NOVALUE =
@@ -160,6 +162,8 @@ ROUTINE WFIX (AT, KIND) : NOVALUE =
     LOCAL
         X;
     X = .(.WCODEAT + .AT)<0, 32, 0>;
+    ! Not the address in the copy saved, which would differ each time.
+    INCR I FROM 0 TO 3 DO PUTB(.WBUF + .WCODEPOS + .AT + .I, 0);
     SEC_WB(.KIND);
     SEC_WL(.AT);
     IF .KIND EQL 1 THEN WNAME(.X) ELSE SEC_WVAL(..X)
@@ -172,7 +176,9 @@ ROUTINE WCODE (OBJ : REF VECTOR) : NOVALUE =
         CODE,
         AT,
         TAB : REF VECTOR,
-        SAVED;
+        POS,
+        SAVED,
+        SAVEDPOS;
     SEC_WL(.OBJ[C_NREQ]);
     SEC_WL(.OBJ[C_NPARAM]);
     SEC_WL(.OBJ[C_NLOCAL]);
@@ -186,16 +192,20 @@ ROUTINE WCODE (OBJ : REF VECTOR) : NOVALUE =
         INCR I FROM 0 TO 2 * .TAB[0] DO SEC_WL(.TAB[.I]);
     CODE = .OBJ[C_CODE];
     WTEXT(.CODE, .OBJ[C_LEN]);
+    POS = .WLEN - .OBJ[C_LEN];
     ! A code object's own operands, though one in them may be saved
     ! first (a program in a constant).
     SAVED = .WCODEAT;
+    SAVEDPOS = .WCODEPOS;
     AT = 0;
     WHILE .AT LSS .OBJ[C_LEN] DO
         BEGIN
         WCODEAT = .CODE;
+        WCODEPOS = .POS;
         AT = OPERANDS(.CODE, .AT, WFIX)
         END;
     WCODEAT = .SAVED;
+    WCODEPOS = .SAVEDPOS;
     SEC_WB(0)
     END;
 
@@ -224,7 +234,7 @@ ROUTINE BX_SAVE (ARGS : REF VECTOR, N, R) =
         NL,
         CHAN,
         NKEYS,
-        LINE : VECTOR[80, BYTE],
+        LINE : VECTOR[2 * LINEBYTES + 1, BYTE],
         L;
     ARGCOUNT(1, 6);
     IF VTYPE(.ARGS[0]) NEQ TY_STRING THEN RETURN ARGMISMATCH(1, .ARGS[0]);
@@ -258,10 +268,10 @@ ROUTINE BX_SAVE (ARGS : REF VECTOR, N, R) =
     END;
     LINE[.L] = (10);
     FIO$WRITE(.CHAN, LINE, .L + 1);
-    INCR I FROM 0 TO .WLEN - 1 BY 32 DO
+    INCR I FROM 0 TO .WLEN - 1 BY LINEBYTES DO
         BEGIN
         L = 0;
-        INCR J FROM .I TO MIN(.I + 32, .WLEN) - 1 DO
+        INCR J FROM .I TO MIN(.I + LINEBYTES, .WLEN) - 1 DO
             BEGIN
             LINE[.L] = (HEX(SRL(GETB(.WBUF + .J), 4)));
             LINE[.L + 1] = (HEX(GETB(.WBUF + .J) AND 15));

@@ -232,6 +232,17 @@ fn eve() {
         String::from_utf8_lossy(&out.stderr)
     );
     let section = fs::read(mk.join("EVE.TPU$SECTION")).unwrap();
+    // The system disk's copy (vms/build.rs puts it in SYS$SHARE) must be
+    // this one: TPU_BLESS=1 writes it.
+    let disk = eve.join("eve.section");
+    if std::env::var("TPU_BLESS").is_ok() {
+        fs::write(&disk, &section).unwrap();
+    }
+    assert!(
+        fs::read(&disk).ok() == Some(section.clone()),
+        "{} isn't EVE's section as TPU saves it now: run TPU_BLESS=1 cargo test -p vrun --test tpu eve",
+        disk.display()
+    );
     let mut names: Vec<_> = fs::read_dir(&tests)
         .unwrap()
         .flatten()

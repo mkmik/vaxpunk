@@ -11,7 +11,8 @@
 //! its CDU, and HELP and TCPIP with sysexe/help/*.mar, which describes
 //! command tables, and CREATE, CONVERT and ANALYZRMS with sysexe/rms/*.mar,
 //! FDL and their output; TPU, from sysexe/tpu/*.b64 and its I/O module
-//! sysexe/tpu/fio.mar (PRD-0006); in [SYSMGR], the files in sysmgr/,
+//! sysexe/tpu/fio.mar (PRD-0006), and in [SYSLIB] EVE's section file,
+//! sysexe/tpu/eve/eve.section; in [SYSMGR], the files in sysmgr/,
 //! as text; and in [SYSEXE], SYSUAF.DAT, the users, SYSTEM and DEFAULT.
 
 use std::collections::HashMap;
@@ -382,6 +383,17 @@ fn disk(path: &Path, images: &[(String, Vec<u8>)]) {
         let size = Some(data.len() as u64);
         ok(vol.copy_in(&mut &data[..], spec, Conversion::Binary, size, Some(image)));
     }
+    // EVE's section file, which TPU loads from SYS$SHARE: the vrun test
+    // checks that it is what TPU saves of sysexe/tpu/eve/eve.tpu.
+    let section = fs::read("sysexe/tpu/eve/eve.section").unwrap();
+    let size = Some(section.len() as u64);
+    ok(vol.copy_in(
+        &mut &section[..],
+        "[SYSLIB]EVE$SECTION.TPU$SECTION",
+        Conversion::LinesToRecords,
+        size,
+        None,
+    ));
     for source in sources("sysmgr", &["txt", "com", "cld"]) {
         let name = source.file_name().unwrap().to_str().unwrap().to_uppercase();
         let text = fs::read(&source).unwrap();

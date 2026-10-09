@@ -89,7 +89,7 @@ const SYSTEM_DISK: Phase = Phase {
                 "X = 6 * 7\rWRITE SYS$OUTPUT \"X is \", X\rSHOW SYMBOL HOME\rHOME\r",
                 "PIPE P = \"PIPE: \" ; WRITE SYS$OUTPUT P, \"a;b\" ; TYPE NOSUCH.TXT && ",
                 "WRITE SYS$OUTPUT P, \"two\" || WRITE SYS$OUTPUT P, \"three\"\r",
-                "EDIT WELCOME.TXT\r\"index\"\r\"zzz\"\rEXIT\rQUIT\r",
+                "EDIT/EDT WELCOME.TXT\r\"index\"\r\"zzz\"\rEXIT\rQUIT\r",
                 // More than the type-ahead buffer's 255: the console holds back the rest.
                 "DEFINE FOO SYS$INPUT\rSHOW LOGICAL FOO\rSHOW LOGICAL\rDEASSIGN FOO\r",
                 "SHOW LOGICAL FOO\rSHOW DEFAULT\rSET DEFAULT SYS$SYSDEVICE:[SYSMGR]\rSHOW DEFAULT\r",
@@ -105,7 +105,8 @@ const SYSTEM_DISK: Phase = Phase {
         " \\FOO\\",
         "PING.EXE;1          PONG.EXE;1",
         "Total of 2 files.",
-        "Directory DKA0:[SYSLIB]\n\nLIBRTL.EXE;1\n",
+        "Directory DKA0:[SYSLIB]\n\nEVE$SECTION.TPU$SECTION;1",
+        "LIBRTL.EXE;1",
         "and the rest of what INITIALIZE made.",
         "CLITEST: foreign ONE \"Two\" 3",
         "CLITEST: foreign world",
@@ -163,7 +164,7 @@ const RAMDISK: Phase = Phase {
             concat!(
                 "SET DEFAULT MDA0:[000000]\rSHOW DEFAULT\r",
                 "COPY/LOG\rSYS$SYSDEVICE:[SYSMGR]WELCOME.TXT\rRAM.TXT\r",
-                "EDIT RAM.TXT\rD 3:END\rI\rEdited with EDT.\r\x1a",
+                "EDIT/EDT RAM.TXT\rD 3:END\rI\rEdited with EDT.\r\x1a",
                 // Keypad mode: GOLD 5 goes to the top, GOLD PF3 finds OpenVMS,
                 // seven DEL Cs delete it, and EDT-edited goes in its place.
                 "C\r\x1bOP\x1bOu\x1bOP\x1bOROpenVMS\r",
@@ -360,7 +361,7 @@ const CONTROL_KEYS: Phase = Phase {
         (
             "HELP verb describes a verb",
             1,
-            "EDIT SYS$MANAGER:WELCOME.TXT\r",
+            "EDIT/EDT SYS$MANAGER:WELCOME.TXT\r",
         ),
         ("    1\t", 3, "\x19"),
         ("*INTERRUPT*", 6, "SHOW DEFAULT\rCONTINUE\r"),
@@ -596,10 +597,11 @@ const RMS: Phase = Phase {
 /// a line before it and writes it to a file, whose head TYPE shows. Then
 /// EDIT/TPU on the console's screen: a window on a buffer, its status
 /// line, a line typed into it, and CTRL/Z, which writes it to a file TYPE
-/// shows.
+/// shows. Then EDIT, which is EVE, from its section file in SYS$SHARE, on
+/// a new file: a line typed, and CTRL/Z, which writes it.
 const TPU: Phase = Phase {
     name: "tpu",
-    secs: 45,
+    secs: 90,
     steps: &[
         (
             "RMSTEST done",
@@ -615,7 +617,7 @@ const TPU: Phase = Phase {
                 "SPLIT_LINE;\r",
                 "WRITE_FILE (b, \"TPUTEST.OUT\");\r",
                 "QUIT (OFF);\r\x1a",
-                "EDIT/TPU/NODISPLAY/COMMAND=TPUTEST.TPU\r",
+                "EDIT/TPU/NODISPLAY/NOSECTION/COMMAND=TPUTEST.TPU\r",
                 "TYPE/HEAD=2 TPUTEST.OUT\r",
             ),
         ),
@@ -632,6 +634,12 @@ const TPU: Phase = Phase {
             ),
         ),
         ("Buffer : SCR", 1, "typed on vaxpunk\x1aTYPE TPUSCR.OUT\r"),
+        ("$ TYPE TPUSCR.OUT", 1, "EDIT TPUEVE.TXT\r"),
+        (
+            "Buffer: TPUEVE.TXT",
+            1,
+            "Edited with EVE\x1aTYPE TPUEVE.TXT\r",
+        ),
     ],
     lines: &[
         "%TPU-S-FILEIN, 10 lines read from file SYS$SYSDEVICE:[SYSMGR]WELCOME.TXT",
@@ -640,6 +648,9 @@ const TPU: Phase = Phase {
         "Edited with TPU",
         "1 line written to file TPUSCR.OUT",
         "$ TYPE TPUSCR.OUT",
+        "1 line written to file TPUEVE.TXT",
+        "$ TYPE TPUEVE.TXT",
+        "Edited with EVE",
     ],
 };
 
