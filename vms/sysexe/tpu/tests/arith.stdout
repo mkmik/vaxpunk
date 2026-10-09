@@ -1,0 +1,43 @@
+16
+-20
+3
+-3
+-7
+7
+3
+367
+3
+119
+7
+5
+-1
+-2
+7
+6
+1
+0
+1
+1
+0
+2147483647
+-2147483648
+-2147483648
+1410065408
+1 0
+000000FF
+00000000377
+%TPU-E-BADVALUE, integer value 2 is outside specified limits
+-TPU-I-INBUILTIN, occurred in built-in STR
+-TPU-I-ATLINE, at line 30
+
+FFFFFF01
+42
+%TPU-W-INVNUMSTR, invalid numeric string
+-TPU-I-INBUILTIN, occurred in built-in INT
+-TPU-I-ATLINE, at line 33
+0
+255
+%TPU-W-INVNUMSTR, invalid numeric string
+-TPU-I-INBUILTIN, occurred in built-in INT
+-TPU-I-ATLINE, at line 35
+0

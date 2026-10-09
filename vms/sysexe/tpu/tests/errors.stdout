@@ -1,0 +1,46 @@
+handled: %TPU-W-BINARYOPER, operand combination STRING + INTEGER unsupported
+line 9
+TPU$_BINARYOPER
+5
+resume handler
+resumed
+%TPU-W-BINARYOPER, operand combination INTEGER + STRING unsupported
+-TPU-I-INBUILTIN, occurred in built-in +
+-TPU-I-ATPROCLINE, at line 6 of procedure CASE_STYLE
+-TPU-I-FROMLINE, called from line 47
+case: otherwise
+%TPU-W-BINARYOPER, operand combination INTEGER - STRING unsupported
+-TPU-I-INBUILTIN, occurred in built-in -
+-TPU-I-ATPROCLINE, at line 2 of procedure UNHANDLED
+-TPU-I-FROMLINE, called from line 48
+after unhandled
+%TPU-W-BINARYOPER, operand combination INTEGER + STRING unsupported
+-TPU-I-INBUILTIN, occurred in built-in +
+-TPU-I-ATPROCLINE, at line 5 of procedure INNER
+-TPU-I-FROMPROCLINE, called from line 3 of procedure OUTER
+-TPU-I-FROMLINE, called from line 49
+inner otherwise
+outer got 0
+%TPU-W-BINARYOPER, operand combination STRING + INTEGER unsupported
+-TPU-I-INBUILTIN, occurred in built-in +
+-TPU-I-ATLINE, at line 50
+%TPU-E-ARGMISMATCH, parameter 1's data type, UNSPECIFIED, unsupported
+-TPU-I-INBUILTIN, occurred in built-in MESSAGE
+-TPU-I-ATLINE, at line 50
+after top-level error
+50
+%TPU-E-ARGMISMATCH, parameter 1's data type, UNSPECIFIED, unsupported
+%TPU-E-UNDEFINEDPROC, undefined procedure call NO_SUCH_PROCEDURE
+-TPU-I-ATLINE, at line 54
+after undefined
+%TPU-E-TOOFEW, too few arguments
+-TPU-I-INBUILTIN, occurred in built-in SUBSTR
+-TPU-I-ATLINE, at line 56
+%TPU-E-TOOMANY, too many arguments
+-TPU-I-INBUILTIN, occurred in built-in SUBSTR
+-TPU-I-ATLINE, at line 57
+%TPU-E-ARGMISMATCH, parameter 1's data type, INTEGER, unsupported
+-TPU-I-INBUILTIN, occurred in built-in LENGTH
+-TPU-I-ATLINE, at line 58
+0
+%SYSTEM-S-NORMAL, normal successful completion

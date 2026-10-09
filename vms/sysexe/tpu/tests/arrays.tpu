@@ -1,0 +1,32 @@
+! Arrays: integer and string indexes, growth, deletion, GET_INFO.
+a := CREATE_ARRAY (10, 1);
+a{1} := "first";
+a{8} := 88;
+a{42} := "dynamic";
+a{"Kansas"} := "Toto";
+a("paren") := "p";
+MESSAGE (a{1} + " " + STR (a{8}) + " " + a{42} + " " + a{"Kansas"} + " " + a{"paren"});
+IF a{2} = TPU$K_UNSPECIFIED THEN MESSAGE ("2 unspecified"); ENDIF;
+IF a{"nope"} = TPU$K_UNSPECIFIED THEN MESSAGE ("nope unspecified"); ENDIF;
+MESSAGE (STR (GET_INFO (a, "high_index")) + " " + STR (GET_INFO (a, "low_index")));
+a{"Kansas"} := TPU$K_UNSPECIFIED;
+IF a{"Kansas"} = TPU$K_UNSPECIFIED THEN MESSAGE ("deleted"); ENDIF;
+b := CREATE_ARRAY;
+b{"x"} := 1;
+b{"y"} := 2;
+b{3} := 3;
+n := 0;
+sum := 0;
+i := GET_INFO (b, "first");
+LOOP
+    EXITIF i = TPU$K_UNSPECIFIED;
+    n := n + 1;
+    sum := sum + b{i};
+    i := GET_INFO (b, "next");
+ENDLOOP;
+MESSAGE (STR (n) + " " + STR (sum));
+c := b;
+c{"x"} := 100;
+MESSAGE (STR (b{"x"}));
+MESSAGE (STR (GET_INFO (b, "type") = ARRAY));
+QUIT (OFF);

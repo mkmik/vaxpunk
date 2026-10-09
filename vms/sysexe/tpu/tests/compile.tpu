@@ -1,0 +1,15 @@
+! COMPILE and EXECUTE at run time.
+p := COMPILE ("y := 41 + 1");
+EXECUTE (p);
+MESSAGE (STR (y));
+EXECUTE ("MESSAGE ('from a string')");
+EXECUTE ("PROCEDURE later RETURN 'later'; ENDPROCEDURE");
+MESSAGE (later);
+q := COMPILE ("PROCEDURE twice (x) RETURN x * 2; ENDPROCEDURE");
+MESSAGE (STR (twice (21)));
+IF GET_INFO (p, "type") = PROGRAM THEN MESSAGE ("a program"); ENDIF;
+r := COMPILE ("");
+IF r = 0 THEN MESSAGE ("empty is 0"); ENDIF;
+IF GET_INFO (r, "type") = INTEGER THEN MESSAGE ("an integer"); ENDIF;
+EXECUTE ("x := 1; x := x + 1; MESSAGE (STR (x))");
+QUIT (OFF);

@@ -1,0 +1,306 @@
+TPU$_ADJSCROLLREG|%TPU-I-ADJSCROLLREG, scrolling parameters altered to top: !UL, bottom: !UL, amount: !UL
+TPU$_AMBIGSYMUSED|%TPU-I-AMBIGSYMUSED, ambiguous symbol !AS!AS used as procedure parameter
+TPU$_ARGMISMATCH|%TPU-E-ARGMISMATCH, parameter !UL's data type, !AS!AS, unsupported
+TPU$_ASYNCACTIVE|%TPU-W-ASYNCACTIVE, journal file prohibited with asynchronous handlers declared
+TPU$_ATLINE|%TPU-I-ATLINE, at line !UL
+TPU$_ATPROCLINE|%TPU-I-ATPROCLINE, at line !UL of procedure !AS
+TPU$_BACKUPERR|%TPU-E-BACKUPERR, error making backup copy of !AS
+TPU$_BADASSIGN|%TPU-E-BADASSIGN, target of the assignment cannot be a function/keyword
+TPU$_BADBUFWRITE|%TPU-W-BADBUFWRITE, error occurred writing buffer !AS
+TPU$_BADCASELIMIT|%TPU-E-BADCASELIMIT, CASE constant outside CASE limits
+TPU$_BADCASERANGE|%TPU-E-BADCASERANGE, invalid CASE range
+TPU$_BADCHAR|%TPU-E-BADCHAR, unrecognized character in input
+TPU$_BADDELETE|%TPU-E-BADDELETE, cannot modify constant integer, keyword, or string
+TPU$_BADDISPVAL|%TPU-W-BADDISPVAL, display value = !SL, must be between !UL and !UL
+TPU$_BADEXITIF|%TPU-E-BADEXITIF, EXITIF occurs outside a LOOP
+TPU$_BADFIRSTLINE|%TPU-W-BADFIRSTLINE, first line = !SL, must be between !UL and !UL
+TPU$_BADHIERARCHY|%TPU-E-BADHIERARCHY, invalid hierarchy identifier specified
+TPU$_BADJOUCHAR|%TPU-W-BADJOUCHAR, expected character in journal file
+TPU$_BADJOUCOM|%TPU-E-BADJOUCOM, journaled command file was !AS, recovering with !AS
+TPU$_BADJOUCPOS|%TPU-E-BADJOUCPOS, journaled starting character was !UL, recovering with !UL
+TPU$_BADJOUEDIT|%TPU-E-BADJOUEDIT, journaled edit mode was !AS, recovering with !AS
+TPU$_BADJOUEIGHT|%TPU-E-BADJOUEIGHT, journaled eightbit was !AS, recovering with !AS
+TPU$_BADJOUFILE|%TPU-E-BADJOUFILE, operation terminated due to error in journal file access
+TPU$_BADJOUINIT|%TPU-E-BADJOUINIT, journaled init file was !AS, recovering with !AS
+TPU$_BADJOUINPUT|%TPU-E-BADJOUINPUT, journaled input file was !AS, recovering with !AS
+TPU$_BADJOUKEY|%TPU-W-BADJOUKEY, expected key in journal file
+TPU$_BADJOULINE|%TPU-E-BADJOULINE, journaled line editing was !AS, recovering with !AS
+TPU$_BADJOULPOS|%TPU-E-BADJOULPOS, journaled starting line was !UL, recovering with !UL
+TPU$_BADJOUPAGE|%TPU-E-BADJOUPAGE, journaled page length was !UL, recovering with !UL
+TPU$_BADJOUSEC|%TPU-E-BADJOUSEC, journaled section file was !AS, recovering with !AS
+TPU$_BADJOUSTR|%TPU-W-BADJOUSTR, expected string in journal file
+TPU$_BADJOUTERM|%TPU-E-BADJOUTERM, journaled terminal type was !AS, recovering with !AS
+TPU$_BADJOUWIDTH|%TPU-E-BADJOUWIDTH, journaled width was !UL, recovering with !UL
+TPU$_BADKEY|%TPU-W-BADKEY, !AS!AS is an invalid keyword
+TPU$_BADLENGTHCHANGE|%TPU-W-BADLENGTHCHANGE, terminal will not support change of length
+TPU$_BADMARGINS|%TPU-W-BADMARGINS, margins specified incorrectly
+TPU$_BADPROCNAME|%TPU-E-BADPROCNAME, variable used as a procedure
+TPU$_BADPROMPTLEN|%TPU-W-BADPROMPTLEN, prompt area length = !SL, must be between !UL and !UL
+TPU$_BADREQUEST|%TPU-W-BADREQUEST, request "!AS!AS" of !AS!AS is not understood
+TPU$_BADSCREENWIDTH|%TPU-W-BADSCREENWIDTH, terminal must be wider than widest window, !UL columns
+TPU$_BADSECTION|%TPU-E-BADSECTION, bad section file
+TPU$_BADSTRCNT|%TPU-W-BADSTRCNT, invalid string count found in journal file
+TPU$_BADSYMTAB|%TPU-E-BADSYMTAB, bad symbol table
+TPU$_BADUSERDESC|%TPU-E-BADUSERDESC, descriptor from user routine invalid or memory inaccessible
+TPU$_BADVALUE|%TPU-E-BADVALUE, integer value !SL is outside specified limits
+TPU$_BADWIDTHCHANGE|%TPU-W-BADWIDTHCHANGE, terminal will not support change of width
+TPU$_BADWINDADJUST|%TPU-W-BADWINDADJUST, attempt to make window less than 1 line long, no adjustment
+TPU$_BADWINDLEN|%TPU-W-BADWINDLEN, window length = !SL, must be between !UL and !UL
+TPU$_BEGOFBUF|%TPU-W-BEGOFBUF, attempt to move past the beginning of buffer !AS
+TPU$_BINARYOPER|%TPU-W-BINARYOPER, operand combination !AS!AS !AS !AS!AS unsupported
+TPU$_BITMAPREADERR|%TPU-E-BITMAPREADERR, could not read bitmap file !AS
+TPU$_BOTLINETRUNC|%TPU-I-BOTLINETRUNC, calculated new last line !SL, changed to !UL
+TPU$_BUILTININV|%TPU-E-BUILTININV, built-in is invalid at this time
+TPU$_BUILTOBSOLETE|%TPU-I-BUILTOBSOLETE, built-in no longer supported
+TPU$_CALLUSERFAIL|%TPU-W-CALLUSERFAIL, CALL_USER routine failed with status %X!XL
+TPU$_CANCELQUIT|%TPU-W-CANCELQUIT, QUIT canceled by request
+TPU$_CANNOTUNSEL|%TPU-E-CANNOTUNSEL, cannot unselect item from unselect action routine
+TPU$_CAPTIVE|%TPU-W-CAPTIVE, unable to create a subprocess in a captive account
+TPU$_CLIPBOARDFAIL|%TPU-W-CLIPBOARDFAIL, unexpected clipboard failure
+TPU$_CLIPBOARDLOCKED|%TPU-W-CLIPBOARDLOCKED, clipboard is locked by another process
+TPU$_CLIPBOARDNODATA|%TPU-W-CLIPBOARDNODATA, clipboard does not contain the requested data
+TPU$_CLIPBOARDZERO|%TPU-W-CLIPBOARDZERO, clipboard data has 0 length
+TPU$_CLOSEDIC|%TPU-E-CLOSEDIC, error closing the dictionary file
+TPU$_CLOSEIN|%TPU-E-CLOSEIN, error closing input file !AS
+TPU$_CLOSEOUT|%TPU-E-CLOSEOUT, error closing output file !AS
+TPU$_CNVERR|%TPU-E-CNVERR, error occurred in the conversion routine
+TPU$_COMPILED|%TPU-S-COMPILED, compilation completed without errors
+TPU$_COMPILEFAIL|%TPU-W-COMPILEFAIL, compilation aborted
+TPU$_CONSTRTOOLARGE|%TPU-E-CONSTRTOOLARGE, constant string too large
+TPU$_CONTRADEF|%TPU-E-CONTRADEF, contradictory definition for variable or constant !AS!AS
+TPU$_CONTROLC|%TPU-E-CONTROLC, operation aborted by CTRL/C
+TPU$_CREATED|%TPU-S-CREATED, File !AS created
+TPU$_CREATEFAIL|%TPU-W-CREATEFAIL, unable to activate subprocess
+TPU$_DEBUG|%TPU-S-DEBUG, breakpoint at line !UL
+TPU$_DELETEFAIL|%TPU-W-DELETEFAIL, unable to terminate subprocess
+TPU$_DICADD|%TPU-S-DICADD, '!AS' has been added to a dictionary as '!AS'
+TPU$_DICDEL|%TPU-S-DICDEL, '!AS' has been removed from '!AS' of a dictionary
+TPU$_DICUPDERR|%TPU-E-DICUPDERR, error updating dictionary file
+TPU$_DIVBYZERO|%TPU-E-DIVBYZERO, divide by zero
+TPU$_DUPBUFNAME|%TPU-W-DUPBUFNAME, buffer !AS already exists
+TPU$_DUPKEYMAP|%TPU-W-DUPKEYMAP, attempt to define a duplicate key map !AS
+TPU$_DUPKEYMAPLIST|%TPU-W-DUPKEYMAPLIST, attempt to define a duplicate key-map list !AS
+TPU$_EMPTYKMLIST|%TPU-W-EMPTYKMLIST, key-map list !AS does not contain any key maps
+TPU$_ENDOFBUF|%TPU-W-ENDOFBUF, attempt to move past the end of buffer !AS
+TPU$_ERRSYMACTIVE|%TPU-W-ERRSYMACTIVE, special error symbol already active
+TPU$_EXECUTEFAIL|%TPU-W-EXECUTEFAIL, execution aborted
+TPU$_EXITFAIL|%TPU-W-EXITFAIL, attempt to EXIT was unsuccessful
+TPU$_EXITING|%TPU-S-EXITING, editor exiting
+TPU$_EXPCOMPLEX|%TPU-E-EXPCOMPLEX, expression too complex
+TPU$_EXPECTED|%TPU-I-EXPECTED, one of the following symbols was expected:
+TPU$_EXTNOTFOUND|%TPU-E-EXTNOTFOUND, extension !AS not found
+TPU$_EXTRANEOUSARGS|%TPU-E-EXTRANEOUSARGS, one or more extraneous arguments specified
+TPU$_FACILITY|%SYSTEM-E-IDMISMATCH, ident mismatch with existing global section
+TPU$_FACTOOLONG|%TPU-W-FACTOOLONG, facility name, !AS, exceeds maximum length !UL
+TPU$_FAILURE_STATUS|%TPU-E-FAILURE_STATUS, facility !AS returned failure status of !XL
+TPU$_FENCEPOST|%TPU-W-FENCEPOST, no visible record found in specified range
+TPU$_FILECONVERTED|%TPU-E-FILECONVERTED, file format is being converted to a supported type
+TPU$_FILEIN|%TPU-S-FILEIN, !UL line!%S read from file !AS
+TPU$_FILEOUT|%TPU-S-FILEOUT, !UL line!%S written to file !AS
+TPU$_FLAGTRUNC|%TPU-W-FLAGTRUNC, value of message flags exceeds maximum value 15, truncated
+TPU$_FROMBUILTIN|%TPU-I-FROMBUILTIN, called from built-in !AS!AS
+TPU$_FROMLINE|%TPU-I-FROMLINE, called from line !UL
+TPU$_FROMPROCLINE|%TPU-I-FROMPROCLINE, called from line !UL of procedure !AS
+TPU$_GBLSELOWNER|%TPU-W-GBLSELOWNER, you are the global selection owner
+TPU$_GETMEM|%TPU-E-GETMEM, memory allocation failure (Insufficient virtual memory)
+TPU$_HIDDEN|%TPU-I-HIDDEN, global variable !AS hidden by declaration
+TPU$_ICONNAMERDERR|%TPU-E-ICONNAMERDERR, could not read the application icon name
+TPU$_ILLCONDIT|%TPU-E-ILLCONDIT, illegal compilation conditional
+TPU$_ILLEGALTYPE|%TPU-E-ILLEGALTYPE, illegal data type
+TPU$_ILLPATAS|%TPU-E-ILLPATAS, pattern assignment target only valid in procedure !AS!AS
+TPU$_ILLREQUEST|%TPU-W-ILLREQUEST, request "!AS!AS" is invalid
+TPU$_ILLSEVERITY|%TPU-W-ILLSEVERITY, illegal severity of !SL specified, error severity used
+TPU$_INBUILTIN|%TPU-I-INBUILTIN, occurred in built-in !AS!AS
+TPU$_INCKWDCOM|%TPU-W-INCKWDCOM, inconsistent keyword combination
+TPU$_INDEXTYPE|%TPU-W-INDEXTYPE, array index data type, !AS!AS, unsupported
+TPU$_INPUT_CANCELED|%TPU-W-INPUT_CANCELED, input request canceled
+TPU$_INVBUFDELETE|%TPU-W-INVBUFDELETE, cannot delete a permanent buffer
+TPU$_INVCHARSET|%TPU-W-INVCHARSET, unrecognized character set; using default character set DEC_MCS
+TPU$_INVFAOPARAM|%TPU-W-INVFAOPARAM, FAO parameter !UL must be string or integer
+TPU$_INVGBLSELDATA|%TPU-W-INVGBLSELDATA, the selected data cannot be processed
+TPU$_INVINTERFACE|%TPU-E-INVINTERFACE, unrecognized interface
+TPU$_INVIOCODE|%TPU-E-INVIOCODE, invalid Operation Code passed to an I/O operation
+TPU$_INVNUMSTR|%TPU-W-INVNUMSTR, invalid numeric string
+TPU$_INVPARAM|%TPU-E-INVPARAM, parameter !UL's data type, !AS!AS, illegal; expected !AS!AS
+TPU$_INVRANGE|%TPU-W-INVRANGE, invalid range enclosure specified
+TPU$_INVSYSRECMODE|%TPU-E-INVSYSRECMODE, invalid default system record mode
+TPU$_INVTABSPEC|%TPU-W-INVTABSPEC, tabs specification incorrect, not changed
+TPU$_INVTIME|%TPU-W-INVTIME, invalid time interval
+TPU$_INVWIDGETCLASS|%TPU-E-INVWIDGETCLASS, the widget class cannot be defined
+TPU$_JNLACTIVE|%TPU-W-JNLACTIVE, asynchronous actions prohibited when journal file open
+TPU$_JNLNOTOPEN|%TPU-E-JNLNOTOPEN, journal file not open, recovery aborted
+TPU$_JNLOPEN|%TPU-E-JNLOPEN, journal file already open
+TPU$_JOURNALBEG|%TPU-I-JOURNALBEG, journal of edit session started
+TPU$_JOURNALCLOSE|%TPU-S-JOURNALCLOSE, journal file successfully closed, journaling stopped
+TPU$_JOURNALEOF|%TPU-W-JOURNALEOF, end of journal file found unexpectedly
+TPU$_JRNLBUFBEG|%TPU-I-JRNLBUFBEG, journaling started for buffer !AS
+TPU$_JRNLNOTSAFE|%TPU-W-JRNLNOTSAFE, buffer !AS is not safe for journaling
+TPU$_JRNLOPEN|%TPU-W-JRNLOPEN, journal file already open for buffer !AS
+TPU$_JRNLOPENERR|%TPU-E-JRNLOPENERR, error opening or locking journal file !AS
+TPU$_KEYMAPNOTFND|%TPU-W-KEYMAPNOTFND, key map !AS not found in key-map list !AS
+TPU$_KEYSUPERSEDED|%TPU-I-KEYSUPERSEDED, definition of key !AS!AS superseded
+TPU$_KEYWORDPARAM|%TPU-E-KEYWORDPARAM, keyword !AS!AS used as procedure/variable/constant
+TPU$_LINENOTMOD|%TPU-W-LINENOTMOD, attempt to change unmodifiable line(s)
+TPU$_LINETOOLONG|%TPU-W-LINETOOLONG, line is maximum length, cannot add text to it
+TPU$_MAXMAPPEDBUF|%TPU-W-MAXMAPPEDBUF, a single buffer can be mapped to at most !UL window!%S
+TPU$_MAXVALUE|%TPU-W-MAXVALUE, maximum value is !SL
+TPU$_MINVALUE|%TPU-W-MINVALUE, minimum value is !SL
+TPU$_MISSINGQUOTE|%TPU-E-MISSINGQUOTE, missing quote
+TPU$_MISSYMTAB|%TPU-E-MISSYMTAB, missing symbol table
+TPU$_MIXEDTYPES|%TPU-E-MIXEDTYPES, operator with mixed or unsupported data types
+TPU$_MODRANGEMARKS|%TPU-E-MODRANGEMARKS, MODIFY_RANGE requires either two marks or none
+TPU$_MOUSEINV|%TPU-W-MOUSEINV, mouse location information is invalid
+TPU$_MOVETOCOPY|%TPU-W-MOVETOCOPY, move from unmodifiable buffer !AS changed to copy
+TPU$_MOVETOCOPYTEXT|%TPU-W-MOVETOCOPYTEXT, moving unmodifiable line(s) from buffer !AS changed to copy
+TPU$_MSGBUFSET|%TPU-W-MSGBUFSET, attempt to change modifiable setting of message buffer
+TPU$_MSGNOTFND|%TPU-W-MSGNOTFND, message was not found; the default message has been returned
+TPU$_MULTIDEF|%TPU-E-MULTIDEF, parameter/local/constant !AS multiply defined
+TPU$_MULTIPLENAMES|%TPU-W-MULTIPLENAMES, there is more than one name matching, all are returned
+TPU$_MULTISELECT|%TPU-E-MULTISELECT, multiple identical CASE selectors
+TPU$_MUSTBECONST|%TPU-E-MUSTBECONST, expression must be a compile-time constant
+TPU$_MUSTBEONE|%TPU-W-MUSTBEONE, string must be 1 character long
+TPU$_NEEDFILENAME|%TPU-S-NEEDFILENAME, Type filename for buffer !AS (press RETURN to not write it): 
+TPU$_NEEDTOASSIGN|%TPU-E-NEEDTOASSIGN, built-in must return a value
+TPU$_NO|%TPU-I-NO, NO
+TPU$_NOASSIGNMENT|%TPU-E-NOASSIGNMENT, expression without assignment
+TPU$_NOBREAKPOINT|%TPU-W-NOBREAKPOINT, no breakpoint is active
+TPU$_NOCACHE|%TPU-E-NOCACHE, insufficient virtual memory to allocate a new cache
+TPU$_NOCALLUSER|%TPU-E-NOCALLUSER, could not find a routine for CALL_USER to invoke
+TPU$_NOCHARREAD|%TPU-W-NOCHARREAD, no character was read by the READ_CHAR built-in
+TPU$_NOCLA|%TPU-W-NOCLA, no conversion source has been specified yet
+TPU$_NOCOPYBUF|%TPU-W-NOCOPYBUF, cannot COPY a buffer to itself
+TPU$_NOCURRENTBUF|%TPU-W-NOCURRENTBUF, no buffer has been selected as default
+TPU$_NODEFINITION|%TPU-W-NODEFINITION, key !AS!AS currently has no definition
+TPU$_NODIC|%TPU-W-NODIC, no dictionary available in this editing session
+TPU$_NODICENT|%TPU-W-NODICENT, no entry found in a dictionary
+TPU$_NODICUPD|%TPU-W-NODICUPD, the dictionary is restricted updating
+TPU$_NOENDOFLINE|%TPU-S-NOENDOFLINE, returning a range of text with no end of line
+TPU$_NOEOBSTR|%TPU-W-NOEOBSTR, cannot return a string at end of buffer
+TPU$_NOFILEACCESS|%TPU-E-NOFILEACCESS, unable to access file !AS
+TPU$_NOFOCUSOWNER|%TPU-W-NOFOCUSOWNER, there is no input focus owner
+TPU$_NOGBLSELDATA|%TPU-W-NOGBLSELDATA, no global selection data
+TPU$_NOGBLSELOWNER|%TPU-W-NOGBLSELOWNER, there is no global selection owner
+TPU$_NOJOURNAL|%TPU-W-NOJOURNAL, editing session is not being journaled
+TPU$_NOKEYMAP|%TPU-W-NOKEYMAP, attempt to access an undefined key map !AS
+TPU$_NOKEYMAPLIST|%TPU-W-NOKEYMAPLIST, attempt to access an undefined key-map list !AS
+TPU$_NONAMES|%TPU-W-NONAMES, there are no names matching the one requested
+TPU$_NONANSICRT|%TPU-E-NONANSICRT, SYS$INPUT must be supported CRT
+TPU$_NOPARENT|%TPU-W-NOPARENT, there is no parent process to attach to
+TPU$_NOPROCESS|%TPU-W-NOPROCESS, no subprocess to interact with
+TPU$_NOREDEFINE|%TPU-E-NOREDEFINE, built-in procedure !AS!AS cannot be redefined
+TPU$_NORETURNVALUE|%TPU-E-NORETURNVALUE, built-in does not return a value
+TPU$_NOSELECT|%TPU-W-NOSELECT, no select active
+TPU$_NOSHOWBUF|%TPU-W-NOSHOWBUF, variable SHOW_BUFFER does not exist or is not a buffer
+TPU$_NOTARRAY|%TPU-W-NOTARRAY, indexed variable is not an array
+TPU$_NOTDEFINABLE|%TPU-W-NOTDEFINABLE, that key is not definable
+TPU$_NOTERRORKEYWORD|%TPU-E-NOTERRORKEYWORD, error handler selector is not an error keyword
+TPU$_NOTIMPLEMENTED|%TPU-E-NOTIMPLEMENTED, built-in compiled by !AS is not implemented by !AS
+TPU$_NOTJOURNAL|%TPU-E-NOTJOURNAL, File !AS is not a journal file
+TPU$_NOTLEARNING|%TPU-W-NOTLEARNING, you have not begun a learn sequence
+TPU$_NOTMODIFIABLE|%TPU-W-NOTMODIFIABLE, attempt to change unmodifiable buffer !AS
+TPU$_NOTSAMEBUF|%TPU-W-NOTSAMEBUF, the markers are not in the same buffer
+TPU$_NOTSUBCLASS|%TPU-W-NOTSUBCLASS, object is not a subclass of WindowObjClass
+TPU$_NOTYET|%TPU-W-NOTYET, not yet implemented
+TPU$_NOWINDOW|%TPU-W-NOWINDOW, attempt to position the cursor outside all of the mapped windows
+TPU$_NULLSTRING|%TPU-W-NULLSTRING, null string used
+TPU$_OCCLUDED|%TPU-I-OCCLUDED, built-in/keyword !AS occluded by declaration
+TPU$_ONELEARN|%TPU-W-ONELEARN, cannot start a learn sequence while one is active
+TPU$_ONESELECT|%TPU-W-ONESELECT, select already active, maximum 1 per buffer
+TPU$_ONOROFF|%TPU-E-ONOROFF, parameter !UL must be ON, OFF, true or false
+TPU$_OPENDIC|%TPU-E-OPENDIC, error opening the dictionary file
+TPU$_OPENIN|%TPU-E-OPENIN, error opening !AS as input
+TPU$_OPENOUT|%TPU-E-OPENOUT, error opening !AS as output
+TPU$_OVERLAPRANGE|%TPU-W-OVERLAPRANGE, overlapping ranges, operation terminated
+TPU$_PARSEFAIL|%TPU-W-PARSEFAIL, error parsing !AS
+TPU$_PARSEOVER|%TPU-E-PARSEOVER, parser stack overflow
+TPU$_PREMATUREEOF|%TPU-E-PREMATUREEOF, premature end-of-file detected
+TPU$_PRESSRET|%TPU-S-PRESSRET, Press RETURN to continue... 
+TPU$_PROCESSBEG|%TPU-S-PROCESSBEG, subprocess activated
+TPU$_PROCESSEND|%TPU-S-PROCESSEND, subprocess terminated
+TPU$_PROCSUPERSEDED|%TPU-I-PROCSUPERSEDED, definition of procedure !AS!AS superseded
+TPU$_QUITTING|%TPU-S-QUITTING, editor quitting
+TPU$_READABORTED|%TPU-W-READABORTED, READ_CHAR, READ_KEY, or READ_LINE built-in was aborted
+TPU$_READERR|%TPU-E-READERR, error reading !AS
+TPU$_READLINEHELP|%TPU-I-READLINEHELP, DECTPU is executing the READ_LINE built-in function, enter text or cancel
+TPU$_REALLYQUIT|%TPU-S-REALLYQUIT, Buffer modifications will not be saved, continue quitting (Y or N)? 
+TPU$_REALLYRECOVER|%TPU-S-REALLYRECOVER, Continue recovering (Y or N)? 
+TPU$_RECJNLOPEN|%TPU-E-RECJNLOPEN, journal file is open, recovery status unchanged
+TPU$_RECOVERABORT|%TPU-W-RECOVERABORT, recovery aborted by journal file inconsistency, journal file closed
+TPU$_RECOVERBEG|%TPU-S-RECOVERBEG, recovery started
+TPU$_RECOVERBUFBEG|%TPU-S-RECOVERBUFBEG, recovery started for buffer !AS
+TPU$_RECOVERBUFEND|%TPU-S-RECOVERBUFEND, recovery complete for buffer !AS
+TPU$_RECOVERBUFFILE1|%TPU-S-RECOVERBUFFILE1, can not recover from file !AS 
+TPU$_RECOVERBUFFILE2|%TPU-S-RECOVERBUFFILE2, Type new specification for original input file: 
+TPU$_RECOVERBUFFILE3|%TPU-S-RECOVERBUFFILE3, Type new specification for inserted file: 
+TPU$_RECOVERBUFFILE4|%TPU-S-RECOVERBUFFILE4, can not find inserted file !AS 
+TPU$_RECOVEREND|%TPU-S-RECOVEREND, recovery complete
+TPU$_RECOVERFAIL|%TPU-E-RECOVERFAIL, recovery terminated abnormally, journal file inconsistency
+TPU$_RECOVERQUIT|%TPU-W-RECOVERQUIT, no file name specified, nothing recovered
+TPU$_RECURLEARN|%TPU-W-RECURLEARN, learn sequence replay halted due to recursion
+TPU$_REFRESH_NEEDED|%TPU-W-REFRESH_NEEDED, screen refresh needed
+TPU$_REGWIDDUP|%TPU-W-REGWIDDUP, registration string already associated with a different widget
+TPU$_REPLAYFAIL|%TPU-W-REPLAYFAIL, an inconsistency has been discovered, halting execution
+TPU$_REPLAYWARNING|%TPU-W-REPLAYWARNING, an inconsistency has been discovered, continuing execution
+TPU$_REQARGSMISSING|%TPU-E-REQARGSMISSING, one or more required arguments missing
+TPU$_REQUIRESDECW|%TPU-E-REQUIRESDECW, feature requires the DECwindows screen updater
+TPU$_REQUIRESMOTIF|%TPU-E-REQUIRESMOTIF, feature requires the Motif screen updater
+TPU$_REQUIRESTERM|%TPU-E-REQUIRESTERM, feature requires a terminal
+TPU$_REQUIRESULTRIX|%TPU-E-REQUIRESULTRIX, feature not available on this operating system
+TPU$_REQUIRESVMS|%TPU-E-REQUIRESVMS, feature not available on this operating system
+TPU$_RESTOREFAIL|%TPU-E-RESTOREFAIL, error during RESTORE operation
+TPU$_REVERSECASE|%TPU-I-REVERSECASE, CASE limits were reversed
+TPU$_ROUND|%TPU-I-ROUND, FORWARD was rounded to the top
+TPU$_SAVEAMBIGSYM|%TPU-I-SAVEAMBIGSYM, saving ambiguous symbol !AS!AS
+TPU$_SAVEERROR|%TPU-E-SAVEERROR, error during SAVE operation
+TPU$_SAVEUNDEFPROC|%TPU-I-SAVEUNDEFPROC, saving undefined procedure !AS!AS
+TPU$_SCANADVANCE|%TPU-E-SCANADVANCE, *** Scanner advanced to "!AS" ***
+TPU$_SEARCHFAIL|%TPU-W-SEARCHFAIL, error searching for !AS
+TPU$_SECTRESTORED|%TPU-I-SECTRESTORED, !UL procedure!%S, !UL variable!%S, !UL key!%S restored
+TPU$_SECTSAVED|%TPU-S-SECTSAVED, !UL procedure!%S, !UL variable!%S, !UL key!%S saved
+TPU$_SECTUNDEFPROC|%TPU-W-SECTUNDEFPROC, saved !UL undefined procedure!%S, !UL ambiguous symbol!%S
+TPU$_SELRANGEZERO|%TPU-W-SELRANGEZERO, select range has 0 length
+TPU$_SENDFAIL|%TPU-W-SENDFAIL, unable to send to subprocess
+TPU$_SOURCELINE|%TPU-I-SOURCELINE, at source line !UL
+TPU$_STACKOVER|%TPU-E-STACKOVER, stack overflow during compilation
+TPU$_STATOOLONG|%TPU-I-STATOOLONG, truncating status line to !UL character!%S
+TPU$_STRNOTFOUND|%TPU-W-STRNOTFOUND, string not found
+TPU$_STRTOOLARGE|%TPU-E-STRTOOLARGE, string greater than 65535 characters
+TPU$_STRTOOLNG|%TPU-E-STRTOOLNG, string is too long for a conversion source
+TPU$_SUCCESS|%TPU-S-SUCCESS, successful completion
+TPU$_SYMDELETE|%TPU-E-SYMDELETE, *** Error symbol deleted ***
+TPU$_SYMINSERT|%TPU-E-SYMINSERT, *** "!AS" inserted before error symbol ***
+TPU$_SYMREPLACE|%TPU-E-SYMREPLACE, *** Error symbol replaced by "!AS" ***
+TPU$_SYMTBLFUL|%TPU-E-SYMTBLFUL, all symbol tables are full
+TPU$_SYNTAXERROR|%TPU-E-SYNTAXERROR, syntax error
+TPU$_SYSERROR|%TPU-E-SYSERROR, system service error
+TPU$_TEXT|%TPU-I-TEXT, !AS
+TPU$_TIMEOUT|%TPU-W-TIMEOUT, built-in timed out
+TPU$_TOOFEW|%TPU-E-TOOFEW, too few arguments
+TPU$_TOOMANY|%TPU-E-TOOMANY, too many arguments
+TPU$_TOOMANYPARAM|%TPU-E-TOOMANYPARAM, too many formal parameters/local variables
+TPU$_TOOMANYRECS|%TPU-E-TOOMANYRECS, too many records
+TPU$_TOPLINETRUNC|%TPU-I-TOPLINETRUNC, calculated new first line !SL, changed to 1
+TPU$_TRUNCATE|%TPU-W-TRUNCATE, line truncated to !UL character!%S
+TPU$_TYPEREDEFINE|%TPU-W-TYPEREDEFINE, widget resource type "!AS" redefined to data type "!AS"
+TPU$_UIDICONERR|%TPU-E-UIDICONERR, could not read icon !AS from UID file
+TPU$_UIDOPENERR|%TPU-E-UIDOPENERR, could not open the specified UID file(s)
+TPU$_UIDWIDGETERR|%TPU-E-UIDWIDGETERR, could not read widget !AS from UID file
+TPU$_UKNFACILITY|%TPU-W-UKNFACILITY, unknown facility code specified
+TPU$_UNARYOPER|%TPU-W-UNARYOPER, operand combination !AS !AS!AS unsupported
+TPU$_UNDEFINEDPROC|%TPU-E-UNDEFINEDPROC, undefined procedure call !AS!AS
+TPU$_UNDWIDCLA|%TPU-W-UNDWIDCLA, undefined widget class specified
+TPU$_UNKCSCOMP|%TPU-W-UNKCSCOMP, ignoring unknown compound string component
+TPU$_UNKESCAPE|%TPU-W-UNKESCAPE, unknown escape sequence read
+TPU$_UNKKEYWORD|%TPU-E-UNKKEYWORD, an unknown keyword has been used as an argument
+TPU$_UNKLEXICAL|%TPU-E-UNKLEXICAL, unknown lexical element
+TPU$_UNKOPCODE|%TPU-E-UNKOPCODE, unknown opcode !XB
+TPU$_UNKTYPE|%TPU-E-UNKTYPE, unknown data type !XB
+TPU$_UNKWNDESC|%TPU-E-UNKWNDESC, unknown descriptor type
+TPU$_UNLINKWORKERR|%TPU-E-UNLINKWORKERR, error unlinking work file
+TPU$_UNREACHABLE|%TPU-I-UNREACHABLE, unreachable code
+TPU$_WIDMISMATCH|%TPU-E-WIDMISMATCH, parameter !UL's class, !AS, unsupported
+TPU$_WINDNOTMAPPED|%TPU-W-WINDNOTMAPPED, the window is not mapped to a buffer
+TPU$_WINDNOTVIS|%TPU-W-WINDNOTVIS, built-in cannot operate on an invisible window
+TPU$_WORKFILEFAIL|%TPU-E-WORKFILEFAIL, error opening the work file
+TPU$_WRITEERR|%TPU-E-WRITEERR, error writing !AS
+TPU$_YES|%TPU-I-YES, YES

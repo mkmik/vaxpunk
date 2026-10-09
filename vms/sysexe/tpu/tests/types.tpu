@@ -1,0 +1,20 @@
+! Values of each type and what GET_INFO and STR say about them.
+MESSAGE (STR (GET_INFO (1, "type")));
+MESSAGE (STR (GET_INFO ("s", "type")));
+MESSAGE (STR (GET_INFO (FORWARD, "type")));
+MESSAGE (STR (GET_INFO (CREATE_ARRAY, "type")));
+MESSAGE (STR (GET_INFO (x, "type")));
+MESSAGE (STR (GET_INFO (ANY ("a"), "type")));
+MESSAGE (STR (FORWARD));
+MESSAGE (STR (UPPER));
+MESSAGE (STR (TPU$K_UNSPECIFIED));
+IF FORWARD = FORWARD THEN MESSAGE ("kw ="); ENDIF;
+IF FORWARD <> REVERSE THEN MESSAGE ("kw <>"); ENDIF;
+IF 1 <> "1" THEN MESSAGE ("int <> string"); ENDIF;
+IF NOT (1 = "1") THEN MESSAGE ("not int = string"); ENDIF;
+k := KEY_NAME ("a");
+MESSAGE (STR (GET_INFO (k, "type")));
+MESSAGE (STR (KEY_NAME (KP5)));
+MESSAGE (STR (Ctrl_Z_KEY));
+MESSAGE (STR (RET_KEY));
+QUIT (OFF);

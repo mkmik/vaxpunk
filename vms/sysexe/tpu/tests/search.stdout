@@ -1,0 +1,32 @@
+%TPU-I-HIDDEN, global variable R hidden by declaration
+-TPU-I-SOURCELINE, at source line 3
+string: [abc]
+span: [abc123]
+any: [1]
+notany: [a]
+line_begin: [The]
+line_end: [fox]
+alternation: [quick]
+alternation2: [quick]
+scan: [xyzabc1]
+spaces: [  indented]
+remain: [abc123def]
+missing: none
+anchor: none
+anchor2: [xyz]
+unanchor: [The quick brown fox]
+arb: [abc123]
+match: [quick brown fox]
+case: [abc again ABC]
+link: [indented 4]
+partial: [abc123def]
+v1 [123]
+spanl: [ ]
+scanl: [yzabc123defThe quick brown fo]
+reverse: [ABC] 4
+in buffer: [abc]
+exact: [ABC] 4
+%TPU-W-STRNOTFOUND, string not found
+-TPU-I-INBUILTIN, occurred in built-in SEARCH
+-TPU-I-ATLINE, at line 54
+after failed SEARCH: 0

@@ -1,0 +1,56 @@
+! SEARCH and patterns.
+PROCEDURE try (p, label)
+    LOCAL r;
+    POSITION (BEGINNING_OF (CURRENT_BUFFER));
+    r := SEARCH_QUIETLY (p, FORWARD);
+    IF r = 0 THEN
+        MESSAGE (label + ": none");
+    ELSE
+        MESSAGE (label + ": [" + STR (r) + "]");
+    ENDIF;
+ENDPROCEDURE;
+b := CREATE_BUFFER ("s");
+POSITION (b);
+COPY_TEXT ("xyzabc123def");
+SPLIT_LINE;
+COPY_TEXT ("The quick brown fox");
+SPLIT_LINE;
+COPY_TEXT ("  indented 42 lines");
+SPLIT_LINE;
+COPY_TEXT ("abc again ABC");
+POSITION (BEGINNING_OF (b));
+try ("abc", "string");
+try ("abc" + SPAN ("12345"), "span");
+try (ANY ("0123456789"), "any");
+try (NOTANY ("xyz"), "notany");
+try (LINE_BEGIN + "The", "line_begin");
+try ("fox" + LINE_END, "line_end");
+try ("quick" | "brown", "alternation");
+try ("brown" | "quick", "alternation2");
+try (SCAN ("0123456789") + ANY ("0123456789"), "scan");
+try (LINE_BEGIN + SPAN (" ") + "indented", "spaces");
+try ("abc" + REMAIN, "remain");
+try ("zzz", "missing");
+try (ANCHOR + "abc", "anchor");
+try (ANCHOR + "xyz", "anchor2");
+try ("The" + UNANCHOR + "fox", "unanchor");
+try (ARB (3) + "123", "arb");
+try ("quick " + MATCH ("fox"), "match");
+try (LINE_BEGIN + "abc" + ARB (7) + "ABC", "case");
+p1 := ANY ("0123456789");
+try ("indented" & p1, "link");
+pat := "abc" + (SPAN ("0123456789") @ v1) + "def";
+try (pat, "partial");
+MESSAGE ("v1 [" + STR (v1) + "]");
+try (SPANL (" "), "spanl");
+try (SCANL ("x"), "scanl");
+POSITION (END_OF (b));
+r := SEARCH_QUIETLY ("abc", REVERSE);
+MESSAGE ("reverse: [" + STR (r) + "] " + STR (GET_INFO (BEGINNING_OF (r), "record_number")));
+r := SEARCH_QUIETLY ("ABC", FORWARD, NO_EXACT, b);
+MESSAGE ("in buffer: [" + STR (r) + "]");
+r := SEARCH_QUIETLY ("ABC", FORWARD, EXACT, b);
+MESSAGE ("exact: [" + STR (r) + "] " + STR (GET_INFO (BEGINNING_OF (r), "record_number")));
+r := SEARCH ("nothere", FORWARD);
+MESSAGE ("after failed SEARCH: " + STR (r));
+QUIT (OFF);

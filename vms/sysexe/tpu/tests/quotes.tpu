@@ -1,0 +1,5 @@
+! Both quotes, and doubled quotes.
+MESSAGE ('it''s');
+MESSAGE ("say ""hi""");
+MESSAGE (' "q" ' + "'a'");
+QUIT (OFF);
