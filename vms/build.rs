@@ -210,9 +210,13 @@ fn compile(sources: &[PathBuf]) -> Vec<(String, Vec<u8>)> {
     for (source, object) in sources.iter().zip(objects) {
         match object {
             Ok(object) => {
-                for d in &object.warnings {
-                    println!("cargo::warning={}:{}: {}", d.file, d.line, d.msg);
-                }
+                // A warning fails the build, as an error does: CI must not pass it.
+                failed.extend(
+                    object
+                        .warnings
+                        .iter()
+                        .map(|d| format!("{}:{}: warning: {}", d.file, d.line, d.msg)),
+                );
                 let file = source.display().to_string();
                 out.push((file, vms_obj::obj::write(&object.records)));
             }
@@ -274,12 +278,24 @@ fn link_shareable(name: &str, vector: Vec<String>, modules: &[(String, Vec<u8>)]
     checked(name, vlink::link(modules, &opts))
 }
 
-/// The image, after its warnings, but not its information, or the link's
-/// errors.
+/// The image, or the link's errors and warnings, which fail the build
+/// alike; its information doesn't.
 fn checked(name: &str, linked: Result<vlink::Linked, Vec<String>>) -> vlink::Linked {
     let linked = linked.unwrap_or_else(|msgs| panic!("vlink {name} failed:\n{}", msgs.join("\n")));
-    for w in linked.warnings.iter().filter(|w| !w.contains("-I-")) {
-        println!("cargo::warning={w}");
+    let warnings: Vec<_> = linked
+        .warnings
+        .iter()
+        .filter(|w| !w.contains("-I-"))
+        .collect();
+    if !warnings.is_empty() {
+        panic!(
+            "vlink {name} warned:\n{}",
+            warnings
+                .iter()
+                .map(|w| w.as_str())
+                .collect::<Vec<_>>()
+                .join("\n")
+        );
     }
     linked
 }
