@@ -1,0 +1,146 @@
+MODULE MEM (IDENT = 'V0.1') =
+%TITLE 'TPU: memory, strings and the counts of objects'
+BEGIN
+!
+! Memory comes from FIO$ALLOC in blocks of a power of two, 16 bytes to
+! 16 MB, each after a quadword that says which size it is. A freed block
+! goes on its size's free list for the next MEM_GET of that size.
+! ponytail: a block is never split or merged; up to half of it is waste.
+!
+REQUIRE 'TPU';
+REQUIRE 'FIO';
+
+LITERAL
+    CLASSES = 21;
+
+OWN
+    FREE : VECTOR[CLASSES];
+
+EXTERNAL ROUTINE
+    ARR_FREE : NOVALUE,
+    MARK_FREE : NOVALUE,
+    RANGE_FREE : NOVALUE,
+    PAT_FREE : NOVALUE;
+
+! MEM_GET size: the address of size bytes of zeroed memory. Stops TPU
+! if there is no more.
+GLOBAL ROUTINE MEM_GET (SIZE) =
+    BEGIN
+    LOCAL
+        K,
+        P;
+    K = 0;
+    WHILE SLL(16, .K) LSS .SIZE + 8 DO
+        K = .K + 1;
+    P = .FREE[.K];
+    IF .P NEQ 0
+    THEN
+        BEGIN
+        FREE[.K] = ..P;
+        CH$FILL(0, SLL(16, .K), .P)
+        END
+    ELSE
+        BEGIN
+        IF .K GEQ CLASSES THEN P = 0 ELSE P = FIO$ALLOC(SLL(16, .K));
+        IF .P EQL 0
+        THEN
+            BEGIN
+            FIO$PUT_LINE(T('%TPU-F-GETMEM, DECTPU could not allocate dynamic memory'));
+            FIO$EXIT(%X'2C')            ! SS$_ABORT
+            END
+        END;
+    .P = .K;
+    .P + 8
+    END;
+
+! MEM_FREE address: gives back memory MEM_GET gave.
+GLOBAL ROUTINE MEM_FREE (P) : NOVALUE =
+    BEGIN
+    LOCAL
+        B,
+        K;
+    IF .P EQL 0 THEN RETURN;
+    B = .P - 8;
+    K = ..B;
+    .B = .FREE[.K];
+    FREE[.K] = .B
+    END;
+
+! STR_NEW length: a new string value of that length, for the caller to
+! fill in at STEXT.
+GLOBAL ROUTINE STR_NEW (LEN) =
+    BEGIN
+    LOCAL
+        P : REF VECTOR;
+    P = MEM_GET(S_HDR + .LEN);
+    P[S_REF] = 1;
+    P[S_LEN] = .LEN;
+    MKV(TY_STRING, .P)
+    END;
+
+! STR_MAKE text, length: a string value with a copy of the text.
+GLOBAL ROUTINE STR_MAKE (TEXT, LEN) =
+    BEGIN
+    LOCAL
+        V;
+    V = STR_NEW(.LEN);
+    CH$MOVE(.LEN, .TEXT, SADDR(.V));
+    .V
+    END;
+
+! STR_EQL value, text, length: whether the value is a string equal to the
+! text, case ignored.
+GLOBAL ROUTINE STR_EQL (V, TEXT, LEN) =
+    BEGIN
+    LOCAL
+        S;
+    IF VTYPE(.V) NEQ TY_STRING OR SLEN(.V) NEQ .LEN THEN RETURN FALSE;
+    S = SADDR(.V);
+    INCR I FROM 0 TO .LEN - 1 DO
+        BEGIN
+        LOCAL
+            A,
+            B;
+        A = GETB(.S + .I);
+        B = GETB(.TEXT + .I);
+        IF .A GEQU %C'a' AND .A LEQU %C'z' THEN A = .A - 32;
+        IF .B GEQU %C'a' AND .B LEQU %C'z' THEN B = .B - 32;
+        IF .A NEQ .B THEN RETURN FALSE
+        END;
+    TRUE
+    END;
+
+! VREF value: counts one more holder of the value's object.
+GLOBAL ROUTINE VREF (V) : NOVALUE =
+    BEGIN
+    LOCAL
+        P;
+    IF NOT COUNTED(VTYPE(.V)) THEN RETURN;
+    P = VPTR(.V);
+    .P = ..P + 1
+    END;
+
+! VUNREF value: one holder fewer; the last one frees the object.
+GLOBAL ROUTINE VUNREF (V) : NOVALUE =
+    BEGIN
+    LOCAL
+        P,
+        TY;
+    TY = VTYPE(.V);
+    IF NOT COUNTED(.TY) THEN RETURN;
+    P = VPTR(.V);
+    .P = ..P - 1;
+    IF ..P GTR 0 THEN RETURN;
+    CASE .TY FROM TY_STRING TO TY_LEARN OF
+        SET
+        [TY_STRING, TY_LEARN] : MEM_FREE(.P);
+        [TY_ARRAY] : ARR_FREE(.P);
+        [TY_MARKER] : MARK_FREE(.P);
+        [TY_RANGE] : RANGE_FREE(.P);
+        [TY_PATTERN] : PAT_FREE(.P);
+        [INRANGE] : 0;                   ! ponytail: programs are kept
+        TES
+    END;
+
+END
+ELUDOM

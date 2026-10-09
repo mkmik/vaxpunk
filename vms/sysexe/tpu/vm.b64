@@ -1,0 +1,868 @@
+MODULE VM (IDENT = 'V0.1') =
+%TITLE 'TPU: the interpreter'
+BEGIN
+!
+! VM_RUN runs a code object's bytecode (tpu.r64) on a stack of values,
+! with a frame for each procedure being run. A procedure's parameters
+! and locals are on the stack under the values its expressions push.
+! Arguments are passed by reference as TPU passes them: copied in, and
+! when the procedure or built-in returns, copied back to each variable
+! the caller passed (the references after OP_CALL and OP_BUILTIN).
+!
+! An error, from a built-in or an operator, is handled as the Guide to
+! the DEC Text Processing Utility (4.9.4.14) and DEC's TPU do it: with no
+! ON_ERROR, its message and where it happened are written and the
+! statement goes on; a procedural handler runs, and then the statement
+! after the one that failed; a case-style one runs the clause for the
+! error, or OTHERWISE, which then returns FALSE, as does an error no
+! clause names.
+!
+REQUIRE 'TPU';
+REQUIRE 'TPUKW';
+
+LITERAL
+    STACKMAX = 16384,
+    FRAMEMAX = 512;
+
+! A frame.
+LITERAL
+    F_OBJ = 0,                          ! the code object
+    F_RET = 1,                          ! where the caller goes on
+    F_BASE = 2,                         ! the first parameter's place on the stack
+    F_NARGS = 3,                        ! the arguments the caller gave
+    F_REFS = 4,                         ! the caller's references, or 0
+    F_RESULT = 5,
+    F_LINE = 6,                         ! the statement's line
+    F_RESUME = 7,                       ! where the statement after it starts
+    F_INH = 8,                          ! running the handler: 1
+    F_SAVED = 9,                        ! the statement to resume after the handler
+    F_SIZE = 10;
+
+! What an error leaves for the loop to do.
+LITERAL
+    P_NONE = 0,
+    P_HANDLER = 1,                      ! run the handler at PENDPC
+    P_RETFALSE = 2;                     ! return FALSE
+
+OWN
+    STACK : VECTOR[STACKMAX],
+    TOP,
+    FRAMES : VECTOR[FRAMEMAX * F_SIZE],
+    NFRAME,
+    PEND,
+    PENDPC,
+    ERRKW,                              ! ERROR: a keyword
+    ERRLINE,
+    ERRTEXT;                            ! ERROR_TEXT: a string, or 0
+
+GLOBAL
+    VM_ABORTING,                        ! ABORT or CTRL/C: unwinding to the top
+    ! A built-in's error's parameters, which BI_ERR keeps.
+    ERRARGS : VECTOR[6],
+    ERRN;
+
+EXTERNAL ROUTINE
+    MSG_OUT : NOVALUE,
+    MSG_OUTV : NOVALUE,
+    MSG_FORMAT,
+    MSG_SEVERITY,
+    MSG_SHOWN,
+    BI_NAME,                            ! (number, address of length): a built-in's name
+    ARR_GET,
+    ARR_SET,
+    STR_CONCAT,
+    STR_REDUCE,
+    STR_REPEAT,
+    STR_COMPARE,
+    VAL_EQUAL,
+    MARK_COMPARE,
+    PAT_BINARY;
+
+MACRO
+    FR(I) = FRAMES[(I) * F_SIZE] %;
+
+FORWARD ROUTINE
+    OPNAME;
+
+! TYPENAME value: the name of its type, a string value.
+GLOBAL ROUTINE TYPENAME (V) =
+    BEGIN
+    LOCAL
+        K,
+        P,
+        L;
+    K = (CASE VTYPE(.V) FROM TY_UNSPEC TO TY_PROCESS OF
+            SET
+            [TY_UNSPEC] : K_UNSPECIFIED;
+            [TY_INTEGER] : K_INTEGER;
+            [TY_STRING] : K_STRING;
+            [TY_KEYWORD] : K_KEYWORD;
+            [TY_BUFFER] : K_BUFFER;
+            [TY_MARKER] : K_MARKER;
+            [TY_RANGE] : K_RANGE;
+            [TY_WINDOW] : K_WINDOW;
+            [TY_PATTERN] : K_PATTERN;
+            [TY_ARRAY] : K_ARRAY;
+            [TY_PROGRAM] : K_PROGRAM;
+            [TY_LEARN] : K_LEARN;
+            [TY_PROCESS] : K_PROCESS;
+            TES);
+    P = KW_NAME(.K, L);
+    STR_MAKE(.P, .L)
+    END;
+
+! TYPEKW value: the keyword for its type, as GET_INFO (x, "type") gives.
+GLOBAL ROUTINE TYPEKW (V) =
+    CASE VTYPE(.V) FROM TY_UNSPEC TO TY_PROCESS OF
+        SET
+        [TY_UNSPEC] : K_UNSPECIFIED;
+        [TY_INTEGER] : K_INTEGER;
+        [TY_STRING] : K_STRING;
+        [TY_KEYWORD] : K_KEYWORD;
+        [TY_BUFFER] : K_BUFFER;
+        [TY_MARKER] : K_MARKER;
+        [TY_RANGE] : K_RANGE;
+        [TY_WINDOW] : K_WINDOW;
+        [TY_PATTERN] : K_PATTERN;
+        [TY_ARRAY] : K_ARRAY;
+        [TY_PROGRAM] : K_PROGRAM;
+        [TY_LEARN] : K_LEARN;
+        [TY_PROCESS] : K_PROCESS;
+        TES;
+
+! BI_ERR code, parameters...: keeps an error's parameters for the
+! message; returns the code, for a built-in to return.
+GLOBAL ROUTINE BI_ERR (K) =
+    BEGIN
+    BUILTIN
+        ACTUALCOUNT,
+        ACTUALPARAMETER;
+    INCR I FROM 0 TO .ERRN - 1 DO VUNREF(.ERRARGS[.I]);
+    ERRN = ACTUALCOUNT() - 1;
+    INCR I FROM 0 TO .ERRN - 1 DO ERRARGS[.I] = ACTUALPARAMETER(.I + 2);
+    .K
+    END;
+
+! ARGMISMATCH n, value: the error for parameter n of the wrong type.
+GLOBAL ROUTINE ARGMISMATCH (N, V) =
+    BI_ERR(TPU$_ARGMISMATCH, MKINT(.N), TYPENAME(.V));
+
+! ---- Errors
+
+! WHERE: the lines that say where the error happened, from the frame
+! running to the outermost.
+ROUTINE WHERE : NOVALUE =
+    BEGIN
+    DECR I FROM .NFRAME - 1 TO 0 DO
+        BEGIN
+        LOCAL
+            F : REF VECTOR,
+            OBJ : REF VECTOR,
+            Y : REF VECTOR;
+        F = FR(.I);
+        OBJ = .F[F_OBJ];
+        Y = .OBJ[C_NAME];
+        IF .Y EQL 0
+        THEN
+            MSG_OUT(1, (IF .I EQL .NFRAME - 1 THEN TPU$_ATLINE ELSE TPU$_FROMLINE),
+                    MKINT(.F[F_LINE]))
+        ELSE
+            MSG_OUT(1, (IF .I EQL .NFRAME - 1 THEN TPU$_ATPROCLINE ELSE TPU$_FROMPROCLINE),
+                    MKINT(.F[F_LINE] - .OBJ[C_LINE0] + 1), STR_MAKE(YNAME(.Y), .Y[Y_LEN]))
+        END
+    END;
+
+! SHOW code, built-in name, length: the error's message and where.
+ROUTINE SHOW (K, BNAME, BLEN) : NOVALUE =
+    BEGIN
+    IF NOT MSG_SHOWN(.K) THEN RETURN;
+    MSG_OUTV(0, .K, ERRARGS, .ERRN);
+    IF .BNAME NEQ 0 THEN MSG_OUT(1, TPU$_INBUILTIN, STR_MAKE(.BNAME, .BLEN));
+    IF .NFRAME GTR 0 THEN WHERE()
+    END;
+
+! RAISE code, built-in name, length: an error happened, its parameters in
+! ERRARGS. Sets ERROR and the rest, and decides, as ON_ERROR says, what
+! the loop does next.
+ROUTINE RAISE (K, BNAME, BLEN) : NOVALUE =
+    BEGIN
+    LOCAL
+        F : REF VECTOR,
+        OBJ : REF VECTOR,
+        BUF : VECTOR[1024, BYTE],
+        L,
+        SEV;
+    ERRKW = .K;
+    SEV = MSG_SEVERITY(.K);
+    L = MSG_FORMAT(.K, ERRARGS, .ERRN, 15, BUF);
+    VUNREF(.ERRTEXT);
+    ERRTEXT = STR_MAKE(BUF, .L);
+    IF .NFRAME EQL 0 THEN (SHOW(.K, .BNAME, .BLEN); RETURN);
+    F = FR(.NFRAME - 1);
+    ERRLINE = .F[F_LINE];
+    OBJ = .F[F_OBJ];
+    ! Success and information aren't trapped.
+    IF .SEV EQL %C'S' OR .SEV EQL %C'I' THEN (SHOW(.K, .BNAME, .BLEN); RETURN);
+    IF .OBJ[C_HANDLER] LSS 0 THEN (SHOW(.K, .BNAME, .BLEN); RETURN);
+    IF .F[F_INH]
+    THEN
+        BEGIN
+        ! An error in the handler.
+        SHOW(.K, .BNAME, .BLEN);
+        IF .OBJ[C_CASES] NEQ 0 THEN PEND = P_RETFALSE;
+        RETURN
+        END;
+    IF .OBJ[C_CASES] EQL 0
+    THEN
+        BEGIN
+        ! Procedural: a warning's message isn't shown.
+        IF .SEV NEQ %C'W' THEN SHOW(.K, .BNAME, .BLEN);
+        PEND = P_HANDLER;
+        PENDPC = .OBJ[C_CODE] + .OBJ[C_HANDLER];
+        RETURN
+        END;
+    BEGIN
+    LOCAL
+        TAB : REF VECTOR,
+        OTHER;
+    TAB = .OBJ[C_CASES];
+    OTHER = -1;
+    INCR I FROM 0 TO .TAB[0] - 1 DO
+        BEGIN
+        IF .TAB[1 + 2 * .I] EQL .K
+        THEN
+            BEGIN
+            PEND = P_HANDLER;
+            PENDPC = .OBJ[C_CODE] + .TAB[2 + 2 * .I];
+            RETURN
+            END;
+        IF .TAB[1 + 2 * .I] EQL H_OTHERWISE THEN OTHER = .TAB[2 + 2 * .I]
+        END;
+    SHOW(.K, .BNAME, .BLEN);
+    IF .OTHER GEQ 0
+    THEN
+        (PEND = P_HANDLER; PENDPC = .OBJ[C_CODE] + .OTHER)
+    ELSE
+        PEND = P_RETFALSE
+    END
+    END;
+
+! VM_ERROR code, parameters...: an error outside any built-in.
+GLOBAL ROUTINE VM_ERROR (K) : NOVALUE =
+    BEGIN
+    BUILTIN
+        ACTUALCOUNT,
+        ACTUALPARAMETER;
+    INCR I FROM 0 TO .ERRN - 1 DO VUNREF(.ERRARGS[.I]);
+    ERRN = ACTUALCOUNT() - 1;
+    INCR I FROM 0 TO .ERRN - 1 DO ERRARGS[.I] = ACTUALPARAMETER(.I + 2);
+    RAISE(.K, 0, 0)
+    END;
+
+! ---- Operators
+
+! BINOP op, a, b, result: an operator on two values; a status.
+ROUTINE BINOP (OP, A, B, R) =
+    BEGIN
+    LOCAL
+        TA,
+        TB,
+        X,
+        Y;
+    TA = VTYPE(.A);
+    TB = VTYPE(.B);
+    X = VINT(.A);
+    Y = VINT(.B);
+    .R = 0;
+    IF .OP EQL OP_EQ OR .OP EQL OP_NE
+    THEN
+        BEGIN
+        X = VAL_EQUAL(.A, .B);
+        .R = MKINT(IF .OP EQL OP_EQ THEN .X ELSE NOT .X AND 1);
+        RETURN SS_NORMAL
+        END;
+    IF .TA EQL TY_INTEGER AND .TB EQL TY_INTEGER
+    THEN
+        BEGIN
+        IF .OP EQL OP_DIV AND .Y EQL 0 THEN RETURN TPU$_DIVBYZERO;
+        .R = MKINT(CASE .OP FROM OP_ADD TO OP_GE OF
+                    SET
+                    [OP_ADD] : .X + .Y;
+                    [OP_SUB] : .X - .Y;
+                    [OP_MUL] : .X * .Y;
+                    [OP_DIV] : .X / .Y;
+                    [OP_AND] : .X AND .Y;
+                    [OP_OR] : .X OR .Y;
+                    [OP_XOR] : .X XOR .Y;
+                    [OP_LT] : .X LSS .Y;
+                    [OP_LE] : .X LEQ .Y;
+                    [OP_GT] : .X GTR .Y;
+                    [OP_GE] : .X GEQ .Y;
+                    [INRANGE] : 0;
+                    TES);
+        IF .OP NEQ OP_ALT AND .OP NEQ OP_LINK THEN RETURN SS_NORMAL
+        END;
+    IF .TA EQL TY_STRING AND .TB EQL TY_STRING
+    THEN
+        SELECTONE .OP OF
+            SET
+            [OP_ADD] : (.R = STR_CONCAT(.A, .B); RETURN SS_NORMAL);
+            [OP_SUB] : (.R = STR_REDUCE(.A, .B); RETURN SS_NORMAL);
+            [OP_LT, OP_LE, OP_GT, OP_GE] :
+                BEGIN
+                X = STR_COMPARE(.A, .B);
+                .R = MKINT(SELECTONE .OP OF
+                            SET
+                            [OP_LT] : .X LSS 0;
+                            [OP_LE] : .X LEQ 0;
+                            [OP_GT] : .X GTR 0;
+                            [OP_GE] : .X GEQ 0;
+                            TES);
+                RETURN SS_NORMAL
+                END;
+            [OTHERWISE] : 0;
+            TES;
+    IF .TA EQL TY_STRING AND .TB EQL TY_INTEGER AND .OP EQL OP_MUL
+    THEN
+        (.R = STR_REPEAT(.A, .Y); RETURN SS_NORMAL);
+    IF .TA EQL TY_MARKER AND .TB EQL TY_MARKER
+       AND (.OP EQL OP_LT OR .OP EQL OP_LE OR .OP EQL OP_GT OR .OP EQL OP_GE)
+    THEN
+        BEGIN
+        X = MARK_COMPARE(.A, .B);
+        .R = MKINT(IF .X EQL 2 THEN 0
+                   ELSE SELECTONE .OP OF
+                        SET
+                        [OP_LT] : .X LSS 0;
+                        [OP_LE] : .X LEQ 0;
+                        [OP_GT] : .X GTR 0;
+                        [OP_GE] : .X GEQ 0;
+                        TES);
+        RETURN SS_NORMAL
+        END;
+    IF .OP EQL OP_ADD OR .OP EQL OP_ALT OR .OP EQL OP_LINK
+    THEN
+        BEGIN
+        X = PAT_BINARY(.OP, .A, .B, .R);
+        IF .X THEN RETURN SS_NORMAL
+        END;
+    BEGIN
+    LOCAL
+        N,
+        L;
+    N = OPNAME(.OP, L);
+    BI_ERR(TPU$_BINARYOPER, TYPENAME(.A), STR_MAKE(0, 0), STR_MAKE(.N, .L), TYPENAME(.B),
+           STR_MAKE(0, 0))
+    END;
+    TPU$_BINARYOPER
+    END;
+
+! OPNAME op, address of length: the operator's name, for INBUILTIN.
+ROUTINE OPNAME (OP, LENP) =
+    BEGIN
+    .LENP = 1;
+    SELECTONE .OP OF
+        SET
+        [OP_ADD] : UPLIT BYTE ('+');
+        [OP_SUB, OP_NEG] : UPLIT BYTE ('-');
+        [OP_MUL] : UPLIT BYTE ('*');
+        [OP_DIV] : UPLIT BYTE ('/');
+        [OP_AND] : (.LENP = 3; UPLIT BYTE ('AND'));
+        [OP_OR] : (.LENP = 2; UPLIT BYTE ('OR'));
+        [OP_XOR] : (.LENP = 3; UPLIT BYTE ('XOR'));
+        [OP_NOT] : (.LENP = 3; UPLIT BYTE ('NOT'));
+        [OP_LT] : UPLIT BYTE ('<');
+        [OP_LE] : (.LENP = 2; UPLIT BYTE ('<='));
+        [OP_GT] : UPLIT BYTE ('>');
+        [OP_GE] : (.LENP = 2; UPLIT BYTE ('>='));
+        [OP_ALT] : UPLIT BYTE ('|');
+        [OP_LINK] : UPLIT BYTE ('&');
+        [OP_PASSIGN] : UPLIT BYTE ('@');
+        [OTHERWISE] : UPLIT BYTE ('=');
+        TES
+    END;
+
+! ---- The stack and references
+
+ROUTINE PUSH (V) : NOVALUE =
+    BEGIN
+    IF .TOP GEQ STACKMAX
+    THEN
+        BEGIN
+        MSG_OUT(0, TPU$_STACKOVER);
+        VM_ABORTING = TRUE;
+        RETURN
+        END;
+    STACK[.TOP] = .V;
+    TOP = .TOP + 1
+    END;
+
+ROUTINE POP =
+    BEGIN
+    TOP = .TOP - 1;
+    .STACK[.TOP]
+    END;
+
+! STORE where, value: a variable gets the value, which it now holds.
+ROUTINE STORE (CELL, V) : NOVALUE =
+    BEGIN
+    VUNREF(..CELL);
+    .CELL = .V
+    END;
+
+! REFCELL address of the reference, base, address of its end: the cell
+! the reference names, or 0, and where the next reference starts.
+ROUTINE REFCELL (P, BASE, NEXTP) =
+    BEGIN
+    LOCAL
+        K;
+    K = GETB(.P);
+    IF .K EQL REF_LOCAL
+    THEN
+        (.NEXTP = .P + 2; RETURN STACK[.BASE + GETB(.P + 1)]);
+    IF .K EQL REF_GLOBAL
+    THEN
+        BEGIN
+        LOCAL
+            Y : REF VECTOR;
+        .NEXTP = .P + 5;
+        Y = .(.P + 1)<0, 32, 0>;
+        IF .Y[Y_KIND] EQL YK_NONE THEN Y[Y_KIND] = YK_VAR;
+        IF .Y[Y_KIND] NEQ YK_VAR THEN RETURN 0;
+        RETURN Y[Y_VALUE]
+        END;
+    .NEXTP = .P + 1;
+    0
+    END;
+
+! COPYBACK references, count, arguments' place, base: each argument
+! passed from a variable goes back to it; returns where the references end.
+ROUTINE COPYBACK (P, N, AT, BASE) =
+    BEGIN
+    INCR I FROM 0 TO .N - 1 DO
+        BEGIN
+        LOCAL
+            CELL;
+        CELL = REFCELL(.P, .BASE, P);
+        IF .CELL NEQ 0
+        THEN
+            BEGIN
+            VREF(.STACK[.AT + .I]);
+            STORE(.CELL, .STACK[.AT + .I])
+            END
+        END;
+    .P
+    END;
+
+! ---- Calls
+
+! CALLPROC code object, count, references: a new frame for the procedure,
+! its arguments on the stack. Returns FALSE if it can't be called.
+ROUTINE CALLPROC (OBJ : REF VECTOR, N, REFS, RET) =
+    BEGIN
+    LOCAL
+        F : REF VECTOR;
+    IF .N LSS .OBJ[C_NREQ] THEN (VM_ERROR(TPU$_TOOFEW); RETURN FALSE);
+    IF .N GTR .OBJ[C_NPARAM] THEN (VM_ERROR(TPU$_TOOMANY); RETURN FALSE);
+    IF .NFRAME GEQ FRAMEMAX THEN (VM_ERROR(TPU$_STACKOVER); VM_ABORTING = TRUE; RETURN FALSE);
+    F = FR(.NFRAME);
+    NFRAME = .NFRAME + 1;
+    F[F_OBJ] = .OBJ;
+    F[F_RET] = .RET;
+    F[F_BASE] = .TOP - .N;
+    F[F_NARGS] = .N;
+    F[F_REFS] = .REFS;
+    F[F_RESULT] = MKINT(0);
+    F[F_LINE] = .OBJ[C_LINE0];
+    F[F_RESUME] = .OBJ[C_CODE];
+    F[F_INH] = 0;
+    INCR I FROM .N TO .OBJ[C_NPARAM] - 1 DO PUSH(0);
+    INCR I FROM 1 TO .OBJ[C_NLOCAL] DO PUSH(MKINT(0));
+    TRUE
+    END;
+
+! RETURNPROC result: ends the running frame: the caller's variables get
+! their arguments back, and the result is pushed. Where to go on.
+ROUTINE RETURNPROC (V) =
+    BEGIN
+    LOCAL
+        F : REF VECTOR,
+        RET;
+    F = FR(.NFRAME - 1);
+    IF .F[F_REFS] NEQ 0
+    THEN
+        BEGIN
+        LOCAL
+            CALLER : REF VECTOR;
+        CALLER = FR(.NFRAME - 2);
+        COPYBACK(.F[F_REFS], .F[F_NARGS], .F[F_BASE], .CALLER[F_BASE])
+        END;
+    WHILE .TOP GTR .F[F_BASE] DO VUNREF(POP());
+    VUNREF(.F[F_RESULT]);
+    RET = .F[F_RET];
+    NFRAME = .NFRAME - 1;
+    PUSH(.V);
+    .RET
+    END;
+
+! LOCALS frame: where the frame's expression stack starts.
+ROUTINE LOCALS (F : REF VECTOR) =
+    BEGIN
+    LOCAL
+        OBJ : REF VECTOR;
+    OBJ = .F[F_OBJ];
+    .F[F_BASE] + .OBJ[C_NPARAM] + .OBJ[C_NLOCAL]
+    END;
+
+! ---- The loop
+
+! RUN code object, address: runs the object in a new frame until it
+! returns; stores its result. A status: SS_NORMAL, or SS_ABORTED if
+! ABORT unwound it.
+ROUTINE RUN (OBJ : REF VECTOR, RESULT) =
+    BEGIN
+    LOCAL
+        DEPTH,
+        PC,
+        F : REF VECTOR;
+    DEPTH = .NFRAME;
+    .RESULT = MKINT(0);
+    IF NOT CALLPROC(.OBJ, 0, 0, 0) THEN RETURN SS_ABORTED;
+    F = FR(.NFRAME - 1);
+    PC = .OBJ[C_CODE];
+    WHILE TRUE DO
+        BEGIN
+        LOCAL
+            OP;
+        IF .VM_ABORTING
+        THEN
+            BEGIN
+            WHILE .NFRAME GTR .DEPTH DO (RETURNPROC(0); VUNREF(POP()));
+            RETURN SS_ABORTED
+            END;
+        IF .PEND NEQ P_NONE
+        THEN
+            BEGIN
+            LOCAL
+                P;
+            P = .PEND;
+            PEND = P_NONE;
+            IF .P EQL P_HANDLER
+            THEN
+                BEGIN
+                WHILE .TOP GTR LOCALS(.F) DO VUNREF(POP());
+                IF NOT .F[F_INH] THEN F[F_SAVED] = .F[F_RESUME];
+                F[F_INH] = 1;
+                PC = .PENDPC
+                END
+            ELSE
+                BEGIN
+                ! Return FALSE.
+                PC = RETURNPROC(MKINT(0));
+                IF .NFRAME EQL .DEPTH THEN (.RESULT = POP(); RETURN SS_NORMAL);
+                F = FR(.NFRAME - 1);
+                OBJ = .F[F_OBJ]
+                END
+            END;
+        OP = GETB(.PC);
+        PC = .PC + 1;
+        CASE .OP FROM OP_END TO OP_AMBIG OF
+            SET
+            [OP_END] :
+                BEGIN
+                PC = RETURNPROC(MKINT(0));
+                IF .NFRAME EQL .DEPTH THEN (.RESULT = POP(); RETURN SS_NORMAL);
+                F = FR(.NFRAME - 1);
+                OBJ = .F[F_OBJ]
+                END;
+            [OP_STMT] :
+                BEGIN
+                F[F_LINE] = .(.PC)<0, 16, 0>;
+                F[F_RESUME] = .PC + 4 + .(.PC + 2)<0, 16, 0>;
+                PC = .PC + 4
+                END;
+            [OP_INT] : (PUSH(MKINT(.(.PC)<0, 32, 1>)); PC = .PC + 4);
+            [OP_VAL, OP_LOADG] :
+                BEGIN
+                LOCAL
+                    CELL;
+                CELL = .(.PC)<0, 32, 0>;
+                IF .OP EQL OP_LOADG THEN CELL = .CELL + Y_VALUE * 8;
+                VREF(..CELL);
+                PUSH(..CELL);
+                PC = .PC + 4
+                END;
+            [OP_UNSPEC] : PUSH(0);
+            [OP_KW] : (PUSH(MKKW(.(.PC)<0, 32, 0>)); PC = .PC + 4);
+            [OP_LOADL] :
+                BEGIN
+                LOCAL
+                    V;
+                V = .STACK[.F[F_BASE] + GETB(.PC)];
+                VREF(.V);
+                PUSH(.V);
+                PC = .PC + 1
+                END;
+            [OP_STOREL] : (STORE(STACK[.F[F_BASE] + GETB(.PC)], POP()); PC = .PC + 1);
+            [OP_STOREG] :
+                BEGIN
+                LOCAL
+                    Y : REF VECTOR;
+                Y = .(.PC)<0, 32, 0>;
+                IF .Y[Y_KIND] EQL YK_NONE THEN Y[Y_KIND] = YK_VAR;
+                STORE(Y[Y_VALUE], POP());
+                PC = .PC + 4
+                END;
+            [OP_POP] : VUNREF(POP());
+            [OP_ADD, OP_SUB, OP_MUL, OP_DIV, OP_AND, OP_OR, OP_XOR, OP_EQ, OP_NE,
+             OP_LT, OP_LE, OP_GT, OP_GE, OP_ALT, OP_LINK] :
+                BEGIN
+                LOCAL
+                    A,
+                    B,
+                    R,
+                    S;
+                B = POP();
+                A = POP();
+                S = BINOP(.OP, .A, .B, R);
+                VUNREF(.A);
+                VUNREF(.B);
+                PUSH(.R);
+                IF .S NEQ SS_NORMAL
+                THEN
+                    BEGIN
+                    LOCAL
+                        N,
+                        L;
+                    N = OPNAME(.OP, L);
+                    RAISE(.S, .N, .L)
+                    END
+                END;
+            [OP_NEG, OP_NOT] :
+                BEGIN
+                LOCAL
+                    A;
+                A = POP();
+                IF VTYPE(.A) EQL TY_INTEGER
+                THEN
+                    PUSH(MKINT(IF .OP EQL OP_NEG THEN -VINT(.A) ELSE NOT VINT(.A)))
+                ELSE
+                    BEGIN
+                    LOCAL
+                        N,
+                        L;
+                    N = OPNAME(.OP, L);
+                    BI_ERR(TPU$_UNARYOPER, STR_MAKE(.N, .L), TYPENAME(.A));
+                    VUNREF(.A);
+                    PUSH(0);
+                    RAISE(TPU$_UNARYOPER, .N, .L)
+                    END
+                END;
+            [OP_PASSIGN] :
+                BEGIN
+                LOCAL
+                    A,
+                    R,
+                    CELL;
+                CELL = REFCELL(.PC, .F[F_BASE], PC);
+                A = POP();
+                R = 0;
+                IF NOT PAT_BINARY(OP_PASSIGN, .A, .CELL, R)
+                THEN
+                    BEGIN
+                    BI_ERR(TPU$_UNARYOPER, STR_MAKE(UPLIT BYTE ('@'), 1), TYPENAME(.A));
+                    RAISE(TPU$_UNARYOPER, UPLIT BYTE ('@'), 1)
+                    END;
+                VUNREF(.A);
+                PUSH(.R)
+                END;
+            [OP_JUMP] : PC = .OBJ[C_CODE] + .(.PC)<0, 32, 0>;
+            [OP_JFALSE] :
+                BEGIN
+                LOCAL
+                    A,
+                    TRUTH;
+                A = POP();
+                TRUTH = (VTYPE(.A) EQL TY_INTEGER OR VTYPE(.A) EQL TY_KEYWORD) AND VINT(.A);
+                VUNREF(.A);
+                IF .TRUTH THEN PC = .PC + 4 ELSE PC = .OBJ[C_CODE] + .(.PC)<0, 32, 0>
+                END;
+            [OP_CALL, OP_AMBIG] :
+                BEGIN
+                LOCAL
+                    Y : REF VECTOR,
+                    N,
+                    REFS,
+                    AFTER,
+                    CALLEE : REF VECTOR;
+                Y = .(.PC)<0, 32, 0>;
+                IF .OP EQL OP_CALL
+                THEN
+                    BEGIN
+                    N = GETB(.PC + 4);
+                    REFS = .PC + 5;
+                    AFTER = .REFS;
+                    INCR I FROM 1 TO .N DO
+                        AFTER = .AFTER + (CASE GETB(.AFTER) FROM 0 TO 2 OF
+                                            SET [0] : 1; [1] : 2; [2] : 5; TES)
+                    END
+                ELSE
+                    (N = 0; REFS = 0; AFTER = .PC + 4);
+                CALLEE = (IF .Y[Y_KIND] EQL YK_PROC THEN .Y[Y_PROC] ELSE 0);
+                IF .CALLEE NEQ 0
+                THEN
+                    BEGIN
+                    IF CALLPROC(.CALLEE, .N, .REFS, .AFTER)
+                    THEN
+                        BEGIN
+                        F = FR(.NFRAME - 1);
+                        OBJ = .CALLEE;
+                        PC = .OBJ[C_CODE]
+                        END
+                    ELSE
+                        BEGIN
+                        INCR I FROM 1 TO .N DO VUNREF(POP());
+                        PUSH(MKINT(0));
+                        PC = .AFTER
+                        END
+                    END
+                ELSE IF .N EQL 0 AND (.Y[Y_KIND] EQL YK_VAR OR .Y[Y_KIND] EQL YK_CONST)
+                THEN
+                    BEGIN
+                    VREF(.Y[Y_VALUE]);
+                    PUSH(.Y[Y_VALUE]);
+                    PC = .AFTER
+                    END
+                ELSE
+                    BEGIN
+                    INCR I FROM 1 TO .N DO VUNREF(POP());
+                    PUSH(MKINT(0));
+                    PC = .AFTER;
+                    VM_ERROR(TPU$_UNDEFINEDPROC, STR_MAKE(YNAME(.Y), .Y[Y_LEN]))
+                    END
+                END;
+            [OP_BUILTIN] :
+                BEGIN
+                LOCAL
+                    B,
+                    N,
+                    AT,
+                    R,
+                    S,
+                    REFS;
+                B = .(.PC)<0, 16, 0>;
+                N = GETB(.PC + 2);
+                REFS = .PC + 3;
+                AT = .TOP - .N;
+                R = 0;
+                S = BI_CALL(.B, STACK[.AT], .N, R);
+                PC = COPYBACK(.REFS, .N, .AT, .F[F_BASE]);
+                WHILE .TOP GTR .AT DO VUNREF(POP());
+                PUSH(.R);
+                IF .S NEQ SS_NORMAL AND .S NEQ 0
+                THEN
+                    BEGIN
+                    LOCAL
+                        NAME,
+                        L;
+                    NAME = BI_NAME(.B, L);
+                    RAISE(.S, .NAME, .L)
+                    END
+                END;
+            [OP_RETURN] :
+                BEGIN
+                PC = RETURNPROC(POP());
+                IF .NFRAME EQL .DEPTH THEN (.RESULT = POP(); RETURN SS_NORMAL);
+                F = FR(.NFRAME - 1);
+                OBJ = .F[F_OBJ]
+                END;
+            [OP_SETRESULT] : STORE(F[F_RESULT], POP());
+            [OP_LOADR] : (VREF(.F[F_RESULT]); PUSH(.F[F_RESULT]));
+            [OP_INDEX] :
+                BEGIN
+                LOCAL
+                    A,
+                    I;
+                I = POP();
+                A = POP();
+                IF VTYPE(.A) EQL TY_ARRAY
+                THEN
+                    PUSH(ARR_GET(.A, .I))
+                ELSE
+                    (PUSH(0); VM_ERROR(TPU$_NOTARRAY));
+                VUNREF(.A);
+                VUNREF(.I)
+                END;
+            [OP_STOREX] :
+                BEGIN
+                LOCAL
+                    A,
+                    I,
+                    V;
+                V = POP();
+                I = POP();
+                A = POP();
+                IF VTYPE(.A) EQL TY_ARRAY
+                THEN
+                    ARR_SET(.A, .I, .V)
+                ELSE
+                    (VUNREF(.V); VM_ERROR(TPU$_NOTARRAY));
+                VUNREF(.A);
+                VUNREF(.I)
+                END;
+            [OP_ABORT] : VM_ABORTING = TRUE;
+            [OP_HEND] :
+                BEGIN
+                F[F_INH] = 0;
+                IF GETB(.PC)
+                THEN
+                    PEND = P_RETFALSE
+                ELSE
+                    BEGIN
+                    WHILE .TOP GTR LOCALS(.F) DO VUNREF(POP());
+                    PC = .F[F_SAVED]
+                    END
+                END;
+            [OP_ERROR] : PUSH(IF .ERRKW EQL 0 THEN 0 ELSE MKKW(.ERRKW));
+            [OP_ERRLINE] : PUSH(MKINT(.ERRLINE));
+            [OP_ERRTEXT] : (VREF(.ERRTEXT); PUSH(.ERRTEXT));
+            [INRANGE] : 0;
+            TES
+        END;
+    SS_NORMAL
+    END;
+
+! VM_RUN code object: runs a program; a status.
+GLOBAL ROUTINE VM_RUN (OBJ) =
+    BEGIN
+    LOCAL
+        R,
+        S;
+    S = RUN(.OBJ, R);
+    VUNREF(.R);
+    .S
+    END;
+
+! VM_EVAL code object: runs it, and returns what it returns.
+GLOBAL ROUTINE VM_EVAL (OBJ) =
+    BEGIN
+    LOCAL
+        R;
+    RUN(.OBJ, R);
+    .R
+    END;
+
+! VM_CALL procedure's symbol: calls the procedure with no arguments, if it
+! is one; its result.
+GLOBAL ROUTINE VM_CALL (Y : REF VECTOR) =
+    BEGIN
+    LOCAL
+        R;
+    IF .Y EQL 0 THEN RETURN 0;
+    IF .Y[Y_KIND] NEQ YK_PROC OR .Y[Y_PROC] EQL 0 THEN RETURN 0;
+    RUN(.Y[Y_PROC], R);
+    .R
+    END;
+
+END
+ELUDOM

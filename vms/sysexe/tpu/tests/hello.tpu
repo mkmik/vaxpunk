@@ -1,0 +1,3 @@
+! The smallest program: a message, and QUIT.
+MESSAGE ("Hello, world");
+QUIT (OFF);

@@ -1,0 +1,53 @@
+! IF, LOOP and EXITIF, CASE.
+PROCEDURE grade (n)
+    CASE n FROM 0 TO 10
+        [10] : RETURN "A+";
+        [9] : RETURN "A";
+        [8, 7] : RETURN "B";
+        [0, 1, 2, 3, 4, 5] : RETURN "F";
+        [INRANGE] : RETURN "D";
+        [OUTRANGE] : RETURN "invalid";
+    ENDCASE;
+ENDPROCEDURE;
+PROCEDURE kind (s)
+    CASE s
+        ["a"] : RETURN "letter a";
+        ["b", "c"] : RETURN "b or c";
+        [OUTRANGE] : RETURN "out";
+    ENDCASE;
+    RETURN "none";
+ENDPROCEDURE;
+PROCEDURE way (k)
+    CASE k
+        [FORWARD] : RETURN "forward";
+        [REVERSE] : RETURN "reverse";
+    ENDCASE;
+    RETURN "other";
+ENDPROCEDURE;
+i := 0;
+total := 0;
+LOOP
+    i := i + 1;
+    EXITIF i > 10;
+    IF i = 3 THEN
+        total := total + 100;
+    ELSE
+        IF (i AND 1) = 0 THEN total := total + i; ENDIF;
+    ENDIF;
+ENDLOOP;
+MESSAGE (STR (i) + " " + STR (total));
+LOOP
+    EXITIF;
+    MESSAGE ("never");
+ENDLOOP;
+IF 3 THEN MESSAGE ("3 is true"); ENDIF;
+IF 2 THEN MESSAGE ("2 is true"); ELSE MESSAGE ("2 is false"); ENDIF;
+n := -1;
+LOOP
+    EXITIF n > 12;
+    MESSAGE (STR (n) + " " + grade (n));
+    n := n + 1;
+ENDLOOP;
+MESSAGE (kind ("a") + "," + kind ("c") + "," + kind ("z") + "," + kind (""));
+MESSAGE (way (FORWARD) + "," + way (REVERSE) + "," + way (ON));
+QUIT (OFF);

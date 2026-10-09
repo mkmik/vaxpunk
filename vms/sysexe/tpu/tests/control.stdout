@@ -1,0 +1,23 @@
+%TPU-I-HIDDEN, global variable N hidden by declaration
+-TPU-I-SOURCELINE, at source line 2
+%TPU-I-UNREACHABLE, unreachable code
+-TPU-I-SOURCELINE, at source line 44
+11 130
+3 is true
+2 is false
+-1 invalid
+0 F
+1 F
+2 F
+3 F
+4 F
+5 F
+6 D
+7 B
+8 B
+9 A
+10 A+
+11 invalid
+12 invalid
+letter a,b or c,out,out
+forward,reverse,other

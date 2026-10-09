@@ -1,0 +1,236 @@
+MODULE TPU (MAIN = TPU$MAIN, IDENT = 'V0.1') =
+%TITLE 'TPU: the Text Processing Utility'
+BEGIN
+!
+! EDIT/TPU (PRD-0006). Starts as the Guide to the DEC Text Processing
+! Utility (5.6.4) says: reads the command file, /COMMAND's or
+! TPU$COMMAND.TPU, compiles and runs it, calling TPU$INIT_PROCEDURE before
+! it and TPU$INIT_POSTPROCEDURE after it if they are defined.
+!
+! The command line is what EDIT/TPU had after the verb, qualifiers and
+! the file, as FIO$ARGS gives it: under vrun, vrun's arguments.
+! ponytail: no section files, no screen and no keys yet: with or without
+! /NODISPLAY, TPU ends after the command file.
+!
+REQUIRE 'TPU';
+REQUIRE 'TPUKW';
+REQUIRE 'FIO';
+
+GLOBAL
+    CL_TEXT,                            ! the command line
+    CL_LEN;
+
+EXTERNAL ROUTINE
+    MSG_OUT : NOVALUE;
+
+! UPPER character.
+ROUTINE UPPER (C) =
+    IF .C GEQU %C'a' AND .C LEQU %C'z' THEN .C - 32 ELSE .C;
+
+! CL_QUAL name, length, address of value, address of its length: whether
+! the qualifier is on the command line, as /NAME or /NAME=value; 0 if it
+! isn't, 1 if it is, -1 if /NONAME is.
+GLOBAL ROUTINE CL_QUAL (NAME, NLEN, VALP, VLENP) =
+    BEGIN
+    LOCAL
+        I;
+    .VALP = 0;
+    .VLENP = 0;
+    I = 0;
+    WHILE .I LSS .CL_LEN DO
+        BEGIN
+        IF GETB(.CL_TEXT + .I) EQL %C'/'
+        THEN
+            BEGIN
+            LOCAL
+                J,
+                NEG,
+                L;
+            J = .I + 1;
+            NEG = FALSE;
+            IF .J + 1 LSS .CL_LEN AND UPPER(GETB(.CL_TEXT + .J)) EQL %C'N'
+               AND UPPER(GETB(.CL_TEXT + .J + 1)) EQL %C'O'
+            THEN
+                (NEG = TRUE; J = .J + 2);
+            L = 0;
+            WHILE .J + .L LSS .CL_LEN AND GETB(.CL_TEXT + .J + .L) NEQ %C'/'
+                  AND GETB(.CL_TEXT + .J + .L) NEQ %C'=' AND GETB(.CL_TEXT + .J + .L) NEQ %C' ' DO
+                L = .L + 1;
+            ! An abbreviation of the name will do.
+            IF .L GTR 0 AND .L LEQ .NLEN
+            THEN
+                BEGIN
+                LOCAL
+                    SAME;
+                SAME = TRUE;
+                INCR K FROM 0 TO .L - 1 DO
+                    IF UPPER(GETB(.CL_TEXT + .J + .K)) NEQ GETB(.NAME + .K) THEN SAME = FALSE;
+                IF .SAME
+                THEN
+                    BEGIN
+                    J = .J + .L;
+                    IF .J LSS .CL_LEN AND GETB(.CL_TEXT + .J) EQL %C'='
+                    THEN
+                        BEGIN
+                        L = 0;
+                        J = .J + 1;
+                        WHILE .J + .L LSS .CL_LEN AND GETB(.CL_TEXT + .J + .L) NEQ %C'/'
+                              AND GETB(.CL_TEXT + .J + .L) NEQ %C' ' DO
+                            L = .L + 1;
+                        .VALP = .CL_TEXT + .J;
+                        .VLENP = .L
+                        END;
+                    RETURN (IF .NEG THEN -1 ELSE 1)
+                    END
+                END
+            END;
+        I = .I + 1
+        END;
+    0
+    END;
+
+! CL_FILE address of length: the file parameter, or 0.
+GLOBAL ROUTINE CL_FILE (LENP) =
+    BEGIN
+    LOCAL
+        I;
+    I = 0;
+    WHILE .I LSS .CL_LEN DO
+        BEGIN
+        LOCAL
+            C;
+        C = GETB(.CL_TEXT + .I);
+        IF .C EQL %C'/'
+        THEN
+            WHILE .I LSS .CL_LEN AND GETB(.CL_TEXT + .I) NEQ %C' ' DO I = .I + 1
+        ELSE IF .C EQL %C' '
+        THEN
+            I = .I + 1
+        ELSE
+            BEGIN
+            LOCAL
+                L;
+            L = 0;
+            WHILE .I + .L LSS .CL_LEN AND GETB(.CL_TEXT + .I + .L) NEQ %C' '
+                  AND GETB(.CL_TEXT + .I + .L) NEQ %C'/' DO
+                L = .L + 1;
+            .LENP = .L;
+            RETURN .CL_TEXT + .I
+            END
+        END;
+    .LENP = 0;
+    0
+    END;
+
+! FILE_NAME name, length, default type, length, buffer: the name in
+! capitals, with the type if it has none; its length.
+GLOBAL ROUTINE FILE_NAME (NAME, LEN, TYPE, TLEN, BUF) =
+    BEGIN
+    LOCAL
+        DOT,
+        L;
+    DOT = FALSE;
+    L = MIN(.LEN, 250);
+    INCR I FROM 0 TO .L - 1 DO
+        BEGIN
+        LOCAL
+            C;
+        C = UPPER(GETB(.NAME + .I));
+        IF .C EQL %C'.' THEN DOT = TRUE;
+        IF .C EQL %C']' OR .C EQL %C':' THEN DOT = FALSE;
+        PUTB(.BUF + .I, .C)
+        END;
+    IF NOT .DOT THEN (CH$MOVE(.TLEN, .TYPE, .BUF + .L); L = .L + .TLEN);
+    .L
+    END;
+
+! READ_WHOLE name, length, address of length: the file's text, in memory
+! MEM_GET gave, or 0 if it can't be read.
+GLOBAL ROUTINE READ_WHOLE (NAME, LEN, LENP) =
+    BEGIN
+    LOCAL
+        CHAN,
+        BUF,
+        CAP,
+        L;
+    IF NOT FIO$OPEN(.NAME, .LEN, FIO$K_READ, CHAN) THEN RETURN 0;
+    CAP = 4096;
+    BUF = MEM_GET(.CAP);
+    L = 0;
+    WHILE TRUE DO
+        BEGIN
+        LOCAL
+            GOT,
+            S;
+        IF .L EQL .CAP
+        THEN
+            BEGIN
+            LOCAL
+                NEW;
+            NEW = MEM_GET(.CAP * 2);
+            CH$MOVE(.L, .BUF, .NEW);
+            MEM_FREE(.BUF);
+            BUF = .NEW;
+            CAP = .CAP * 2
+            END;
+        S = FIO$READ(.CHAN, .BUF + .L, .CAP - .L, GOT);
+        IF NOT .S OR .GOT EQL 0 THEN EXITLOOP;
+        L = .L + .GOT
+        END;
+    FIO$CLOSE(.CHAN);
+    .LENP = .L;
+    .BUF
+    END;
+
+! RUNPROC name, length: calls the procedure if it is defined.
+ROUTINE RUNPROC (NAME, LEN) : NOVALUE =
+    BEGIN
+    LOCAL
+        Y : REF VECTOR;
+    EXTERNAL ROUTINE
+        VM_CALL;
+    Y = SYM_LOOK(.NAME, .LEN);
+    IF .Y NEQ 0 THEN VUNREF(VM_CALL(.Y))
+    END;
+
+ROUTINE TPU$MAIN =
+    BEGIN
+    LOCAL
+        VAL,
+        VLEN,
+        Q,
+        NAME : VECTOR[256, BYTE],
+        NLEN,
+        TEXT,
+        TLEN,
+        OBJ;
+    FIO$ARGS(CL_TEXT, CL_LEN);
+    SYM_INIT();
+    Q = CL_QUAL(T('COMMAND'), VAL, VLEN);
+    IF .Q GEQ 0
+    THEN
+        BEGIN
+        IF .VLEN EQL 0 THEN (VAL = UPLIT BYTE ('TPU$COMMAND'); VLEN = 11);
+        NLEN = FILE_NAME(.VAL, .VLEN, T('.TPU'), NAME);
+        TEXT = READ_WHOLE(NAME, .NLEN, TLEN);
+        IF .TEXT EQL 0 AND .Q GTR 0
+        THEN
+            BEGIN
+            MSG_OUT(0, TPU$_OPENIN, STR_MAKE(NAME, .NLEN));
+            FIO$EXIT(%X'1C')
+            END
+        END
+    ELSE
+        TEXT = 0;
+    RUNPROC(T('TPU$INIT_PROCEDURE'));
+    IF .TEXT NEQ 0
+    THEN
+        BEGIN
+        IF COMPILE(.TEXT, .TLEN, OBJ) AND .OBJ NEQ 0 THEN VM_RUN(.OBJ)
+        END;
+    RUNPROC(T('TPU$INIT_POSTPROCEDURE'));
+    FIO$EXIT(SS_NORMAL)
+    END;
+
+END
+ELUDOM

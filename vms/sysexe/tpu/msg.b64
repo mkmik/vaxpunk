@@ -1,0 +1,244 @@
+MODULE MSG (IDENT = 'V0.1') =
+%TITLE 'TPU: messages and FAO'
+BEGIN
+!
+! Messages as TPU writes them: %TPU-W-NAME, text, the text an FAO
+! control string from tpukw.r64 with the message's parameters put in,
+! and then -TPU-I-... lines saying where. MSG_PUT writes a line where
+! MESSAGE writes: the message buffer, or with /NODISPLAY and none,
+! SYS$OUTPUT. FAO is $FAO's directives that TPU's FAO and MESSAGE_TEXT
+! take: !AS, !SL, !UL, !ZL, !XL, !OL, !/, !_, !}, !!, !%S.
+! ponytail: no field widths, !%T or !%D.
+!
+REQUIRE 'TPU';
+REQUIRE 'TPUKW';
+REQUIRE 'FIO';
+
+LITERAL
+    MAXLINE = 1024;
+
+GLOBAL
+    MSG_FLAGS,                          ! SET (INFORMATIONAL) off: 1, SET (SUCCESS) off: 2
+    MSG_SINK;                           ! a routine taking the line instead of SYS$OUTPUT, or 0
+
+EXTERNAL ROUTINE
+    MSG_SEVERITY,
+    MSG_TEXT;
+
+! NUMBER buffer, value, radix, width, signed: writes the integer in the
+! radix, at least width digits with leading zeros, minus sign first if
+! signed and negative; the count written.
+GLOBAL ROUTINE NUMBER (BUF, V, RADIX, WIDTH, SIGNED) =
+    BEGIN
+    LOCAL
+        D : VECTOR[40, BYTE],
+        N,
+        X,
+        NEG,
+        L;
+    X = .V AND %X'FFFFFFFF';
+    NEG = FALSE;
+    IF .SIGNED AND .V<31, 1, 0> THEN (NEG = TRUE; X = (-.V<0, 32, 1>) AND %X'FFFFFFFF');
+    N = 0;
+    DO
+        BEGIN
+        LOCAL
+            R;
+        R = .X MOD .RADIX;
+        D[.N] = (IF .R LSS 10 THEN %C'0' + .R ELSE %C'A' + .R - 10);
+        N = .N + 1;
+        X = .X / .RADIX
+        END
+    UNTIL .X EQL 0;
+    WHILE .N LSS .WIDTH DO (D[.N] = %C'0'; N = .N + 1);
+    L = 0;
+    IF .NEG THEN (PUTB(.BUF, %C'-'); L = 1);
+    DECR I FROM .N - 1 TO 0 DO (PUTB(.BUF + .L, .D[.I]); L = .L + 1);
+    .L
+    END;
+
+! An empty string, which a missing !AS parameter stands for.
+OWN
+    EMPTY : VECTOR[2] INITIAL (1000000, 0);
+
+MACRO
+    STR_EMPTY = MKV(TY_STRING, EMPTY) %;
+
+! FAO control, length, args, count, buffer, size: formats the control
+! string with the values; the length written, or -1 if a parameter isn't
+! what its directive takes (the number of that parameter at BADP).
+GLOBAL ROUTINE FAO (CTL, CTLLEN, ARGS : REF VECTOR, NARGS, BUF, SIZE, BADP) =
+    BEGIN
+    LOCAL
+        I,
+        A,
+        L,
+        LASTNUM;
+    I = 0;
+    A = 0;
+    L = 0;
+    LASTNUM = 0;
+    WHILE .I LSS .CTLLEN AND .L LSS .SIZE - 40 DO
+        BEGIN
+        LOCAL
+            C;
+        C = GETB(.CTL + .I);
+        I = .I + 1;
+        IF .C NEQ %C'!' OR .I GEQ .CTLLEN
+        THEN
+            (PUTB(.BUF + .L, .C); L = .L + 1)
+        ELSE
+            BEGIN
+            LOCAL
+                D1,
+                D2,
+                V;
+            D1 = GETB(.CTL + .I);
+            D2 = (IF .I + 1 LSS .CTLLEN THEN GETB(.CTL + .I + 1) ELSE 0);
+            IF .D1 GEQU %C'a' AND .D1 LEQU %C'z' THEN D1 = .D1 - 32;
+            IF .D2 GEQU %C'a' AND .D2 LEQU %C'z' THEN D2 = .D2 - 32;
+            SELECTONE .D1 OF
+                SET
+                [%C'/'] : (PUTB(.BUF + .L, 13); PUTB(.BUF + .L + 1, 10); L = .L + 2; I = .I + 1);
+                [%C'_'] : (PUTB(.BUF + .L, 9); L = .L + 1; I = .I + 1);
+                [%C'}'] : (PUTB(.BUF + .L, 12); L = .L + 1; I = .I + 1);
+                [%C'!'] : (PUTB(.BUF + .L, %C'!'); L = .L + 1; I = .I + 1);
+                [%C'%'] :
+                    BEGIN
+                    IF .D2 EQL %C'S' AND .LASTNUM NEQ 1 THEN (PUTB(.BUF + .L, %C's'); L = .L + 1);
+                    I = .I + 2
+                    END;
+                [%C'A'] :
+                    BEGIN
+                    V = (IF .A LSS .NARGS THEN .ARGS[.A] ELSE STR_EMPTY);
+                    A = .A + 1;
+                    I = .I + 2;
+                    IF VTYPE(.V) NEQ TY_STRING THEN (.BADP = .A - 1; RETURN -1);
+                    BEGIN
+                    LOCAL
+                        N;
+                    N = MIN(SLEN(.V), .SIZE - 40 - .L);
+                    CH$MOVE(.N, SADDR(.V), .BUF + .L);
+                    L = .L + .N
+                    END
+                    END;
+                [%C'S', %C'U', %C'Z', %C'X', %C'O'] :
+                    BEGIN
+                    V = (IF .A LSS .NARGS THEN .ARGS[.A] ELSE MKINT(0));
+                    A = .A + 1;
+                    I = .I + 2;
+                    IF VTYPE(.V) NEQ TY_INTEGER THEN (.BADP = .A - 1; RETURN -1);
+                    LASTNUM = VINT(.V);
+                    L = .L + (SELECTONE .D1 OF
+                                SET
+                                [%C'S'] : NUMBER(.BUF + .L, .LASTNUM, 10, 1, TRUE);
+                                [%C'U', %C'Z'] : NUMBER(.BUF + .L, .LASTNUM, 10, 1, FALSE);
+                                [%C'X'] : NUMBER(.BUF + .L, .LASTNUM, 16, 8, FALSE);
+                                [%C'O'] : NUMBER(.BUF + .L, .LASTNUM, 8, 11, FALSE);
+                                TES)
+                    END;
+                [OTHERWISE] : (PUTB(.BUF + .L, %C'!'); L = .L + 1);
+                TES
+            END
+        END;
+    .L
+    END;
+
+! MSG_FORMAT code, args, count, flags, buffer: the message as TPU shows
+! it, flags as MESSAGE_TEXT's (1 text, 2 name, 4 severity, 8 facility),
+! %TPU-W-NAME, text for all; its length.
+GLOBAL ROUTINE MSG_FORMAT (K, ARGS, NARGS, FLAGS, BUF) =
+    BEGIN
+    LOCAL
+        L,
+        CTL,
+        CTLLEN,
+        BAD,
+        N;
+    L = 0;
+    IF (.FLAGS AND 14) NEQ 0
+    THEN
+        BEGIN
+        PUTB(.BUF, %C'%');
+        L = 1;
+        IF (.FLAGS AND 8) NEQ 0 THEN (CH$MOVE(3, UPLIT BYTE ('TPU'), .BUF + .L); L = .L + 3);
+        IF (.FLAGS AND 4) NEQ 0
+        THEN
+            BEGIN
+            IF .L GTR 1 THEN (PUTB(.BUF + .L, %C'-'); L = .L + 1);
+            PUTB(.BUF + .L, MSG_SEVERITY(.K));
+            L = .L + 1
+            END;
+        IF (.FLAGS AND 2) NEQ 0
+        THEN
+            BEGIN
+            LOCAL
+                NAME,
+                NLEN;
+            IF .L GTR 1 THEN (PUTB(.BUF + .L, %C'-'); L = .L + 1);
+            NAME = KW_NAME(.K, NLEN);
+            ! Without the TPU$_ before it.
+            CH$MOVE(.NLEN - 5, .NAME + 5, .BUF + .L);
+            L = .L + .NLEN - 5
+            END;
+        IF (.FLAGS AND 1) NEQ 0 THEN (CH$MOVE(2, UPLIT BYTE (', '), .BUF + .L); L = .L + 2)
+        END;
+    IF (.FLAGS AND 1) NEQ 0
+    THEN
+        BEGIN
+        CTL = MSG_TEXT(.K, CTLLEN);
+        N = FAO(.CTL, .CTLLEN, .ARGS, .NARGS, .BUF + .L, MAXLINE - .L, BAD);
+        IF .N GTR 0 THEN L = .L + .N
+        END;
+    .L
+    END;
+
+! MSG_PUT text, length: a line where MESSAGE writes.
+GLOBAL ROUTINE MSG_PUT (TEXT, LEN) : NOVALUE =
+    IF .MSG_SINK NEQ 0
+    THEN
+        (.MSG_SINK)(.TEXT, .LEN)
+    ELSE
+        FIO$PUT_LINE(.TEXT, .LEN);
+
+! MSG_SHOWN code: whether SET (INFORMATIONAL) and SET (SUCCESS) let the
+! message be shown.
+GLOBAL ROUTINE MSG_SHOWN (K) =
+    SELECTONE MSG_SEVERITY(.K) OF
+        SET
+        [%C'I'] : (.MSG_FLAGS AND 1) EQL 0;
+        [%C'S'] : (.MSG_FLAGS AND 2) EQL 0;
+        [OTHERWISE] : TRUE;
+        TES;
+
+! MSG_OUTV continuation, code, args, count: writes the message with its
+! parameters, values; a continuation line starts with - instead of %.
+GLOBAL ROUTINE MSG_OUTV (CONT, K, ARGS, NARGS) : NOVALUE =
+    BEGIN
+    LOCAL
+        BUF : VECTOR[MAXLINE, BYTE],
+        L;
+    IF NOT .CONT AND NOT MSG_SHOWN(.K) THEN RETURN;
+    L = MSG_FORMAT(.K, .ARGS, .NARGS, 15, BUF);
+    IF .CONT THEN BUF[0] = %C'-';
+    MSG_PUT(BUF, .L)
+    END;
+
+! MSG_OUT continuation, code, parameters...: MSG_OUTV with the values
+! given, which it then lets go of.
+GLOBAL ROUTINE MSG_OUT (CONT, K) : NOVALUE =
+    BEGIN
+    BUILTIN
+        ACTUALCOUNT,
+        ACTUALPARAMETER;
+    LOCAL
+        ARGS : VECTOR[6],
+        N;
+    N = ACTUALCOUNT() - 2;
+    INCR I FROM 0 TO .N - 1 DO ARGS[.I] = ACTUALPARAMETER(.I + 3);
+    MSG_OUTV(.CONT, .K, ARGS, .N);
+    INCR I FROM 0 TO .N - 1 DO VUNREF(.ARGS[.I])
+    END;
+
+END
+ELUDOM

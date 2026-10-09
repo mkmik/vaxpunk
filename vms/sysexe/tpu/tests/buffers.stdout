@@ -1,0 +1,28 @@
+%TPU-S-FILEIN, 6 lines read from file SYS$SYSDEVICE:[TPUORACLE]DATA.TXT;1
+MAIN
+6
+first line
+second line
+3 o
+secXYZond line
+6
+ond line
+7
+secXYZ
+first linesecXYZ
+first lineXYZ
+ond line
+5
+%TPU-W-NOEOBSTR, cannot return a string at end of buffer
+-TPU-I-INBUILTIN, occurred in built-in CURRENT_LINE
+-TPU-I-ATLINE, at line 27
+[] 0
+7
+
+0
+17 []
+0 []
+FIRSTine
+1
+0
+%TPU-S-FILEOUT, 7 lines written to file SYS$SYSDEVICE:[TPUORACLE]BUFFERS.OUT;1

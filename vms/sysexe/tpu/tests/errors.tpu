@@ -1,0 +1,60 @@
+! Errors: what TPU prints, ON_ERROR in both styles, ERROR and its friends.
+PROCEDURE mismatch
+    ON_ERROR
+        MESSAGE ("handled: " + ERROR_TEXT);
+        MESSAGE ("line " + STR (ERROR_LINE));
+        MESSAGE (STR (ERROR));
+        RETURN 5;
+    ENDON_ERROR;
+    x := "abc" + 1;
+    MESSAGE ("not reached");
+ENDPROCEDURE;
+PROCEDURE resume
+    ON_ERROR
+        MESSAGE ("resume handler");
+    ENDON_ERROR;
+    x := "abc" * "d";
+    MESSAGE ("resumed");
+ENDPROCEDURE;
+PROCEDURE case_style
+    ON_ERROR
+        [TPU$_ARGMISMATCH] : MESSAGE ("case: argmismatch");
+        [OTHERWISE] : MESSAGE ("case: otherwise");
+    ENDON_ERROR;
+    x := 1 + "a";
+    MESSAGE ("after case-style");
+    x := SUBSTR (1, 2, 3);
+    MESSAGE ("after otherwise");
+ENDPROCEDURE;
+PROCEDURE unhandled
+    x := 1 - "a";
+    MESSAGE ("after unhandled");
+ENDPROCEDURE;
+PROCEDURE outer
+    LOCAL r;
+    r := inner;
+    MESSAGE ("outer got " + STR (r));
+ENDPROCEDURE;
+PROCEDURE inner
+    ON_ERROR
+        [OTHERWISE] : MESSAGE ("inner otherwise");
+    ENDON_ERROR;
+    x := 1 + "a";
+    RETURN 9;
+ENDPROCEDURE;
+MESSAGE (STR (mismatch));
+resume;
+case_style;
+unhandled;
+outer;
+MESSAGE ("x" + 1);
+MESSAGE ("after top-level error");
+MESSAGE (STR (ERROR_LINE));
+MESSAGE (ERROR_TEXT);
+no_such_procedure;
+MESSAGE ("after undefined");
+x := SUBSTR ("abc");
+x := SUBSTR ("abc", 1, 2, 3, 4);
+MESSAGE (STR (LENGTH (5)));
+MESSAGE (1);
+QUIT (OFF);

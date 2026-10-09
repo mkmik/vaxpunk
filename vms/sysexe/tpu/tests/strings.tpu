@@ -1,0 +1,23 @@
+! Strings: the operators and the string built-ins.
+MESSAGE ('abc' + "def");
+MESSAGE ("FILENAME.MEM" - "FILE");
+MESSAGE ("woolly" - "wool");
+MESSAGE ("abcabc" - "bc");
+MESSAGE ("abc" - "x");
+MESSAGE ("ab" * 3);
+MESSAGE ("[" + "x" * 0 + "]");
+MESSAGE (STR (LENGTH ("hello")));
+MESSAGE (STR (LENGTH ("")));
+MESSAGE (SUBSTR ("abcdef", 2, 3));
+MESSAGE (SUBSTR ("abcdef", 4));
+MESSAGE ("[" + SUBSTR ("abcdef", 5, 10) + "]");
+MESSAGE ("[" + SUBSTR ("abcdef", 9, 2) + "]");
+MESSAGE (STR (INDEX ("abcdef", "cd")));
+MESSAGE (STR (INDEX ("abcdef", "x")));
+MESSAGE (STR (INDEX ("abcabc", "c")));
+MESSAGE (ASCII (75));
+MESSAGE (STR (ASCII ("K")));
+MESSAGE (STR (ASCII ("Kx")));
+MESSAGE (STR ("abc" < "abd") + STR ("b" > "abc") + STR ("abc" = "abc") + STR ("abc" = "ABC"));
+MESSAGE (STR ("" < "a") + STR ("ab" < "abc"));
+QUIT (OFF);

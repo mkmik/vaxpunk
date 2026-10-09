@@ -1,0 +1,573 @@
+MODULE BI (IDENT = 'V0.1') =
+%TITLE 'TPU: the built-ins of the language'
+BEGIN
+!
+! BI_CALL runs a built-in procedure: its arguments, values the caller
+! may get back (CHANGE_CASE changes the variable it is given), and its
+! result. It returns SS_NORMAL, or the TPU$_ keyword of an error with
+! its parameters kept by BI_ERR; the interpreter reports it. This
+! module has the language's built-ins, the DEC Text Processing Utility
+! Reference Manual's chapter 2 for each: strings, numbers, messages,
+! arrays, COMPILE and EXECUTE. The buffers' are in BUF_CALL, the
+! patterns' in PAT_CALL, and a built-in no module has is TPU$_NOTYET.
+!
+REQUIRE 'TPU';
+REQUIRE 'TPUKW';
+REQUIRE 'FIO';
+
+LITERAL
+    NOTMINE = -1;                       ! from BUF_CALL and PAT_CALL: not theirs
+
+EXTERNAL
+    ERRARGS : VECTOR,
+    ERRN,
+    MSG_FLAGS;
+
+EXTERNAL ROUTINE
+    BI_ERR,
+    ARGMISMATCH,
+    TYPENAME,
+    TYPEKW,
+    MSG_FORMAT,
+    MSG_SHOWN,
+    MSG_SEVERITY,
+    FAO,
+    NUMBER,
+    KW_ISERROR,
+    STR_INDEX,
+    ARR_NEW,
+    ARR_WALK,
+    ARR_INFO,
+    BUF_CALL,                           ! (number, args, count, result): a status, or NOTMINE
+    BUF_STR,                            ! (value, separator): a range's or buffer's text, or 0
+    BUF_INFO,                           ! (args, count, result): GET_INFO of a buffer's object, or NOTMINE
+    BUF_TEXT,                           ! (value, address of length): text to compile, or 0
+    PAT_CALL;
+
+BIND
+    BINAMES = UPLIT BYTE (NAMESTR(BUILTINS), 0) : VECTOR[, BYTE];
+
+OWN
+    BIPTR : VECTOR[BI_COUNT + 1];
+
+! BI_NAME number, address: a built-in's name, its length stored there.
+GLOBAL ROUTINE BI_NAME (B, LENP) =
+    BEGIN
+    LOCAL
+        P;
+    IF .BIPTR[1] EQL 0
+    THEN
+        BEGIN
+        LOCAL
+            I;
+        I = 0;
+        INCR K FROM 1 TO BI_COUNT DO (BIPTR[.K] = BINAMES[.I]; I = .I + .BINAMES[.I] + 1)
+        END;
+    P = .BIPTR[.B];
+    .LENP = GETB(.P);
+    .P + 1
+    END;
+
+! COUNT n, least, most: TOOFEW, TOOMANY, or SS_NORMAL.
+ROUTINE COUNT (N, LO, HI) =
+    IF .N LSS .LO THEN TPU$_TOOFEW ELSE IF .N GTR .HI THEN TPU$_TOOMANY ELSE SS_NORMAL;
+
+MACRO
+    ! Returns from the built-in unless it has from LO to HI arguments.
+    ARGCOUNT(LO, HI) =
+        BEGIN
+        LOCAL
+            S_;
+        S_ = COUNT(.N, LO, HI);
+        IF .S_ NEQ SS_NORMAL THEN RETURN BI_ERR(.S_)
+        END %,
+    ! Returns ARGMISMATCH unless argument I (from 0) is of type TY.
+    ARGTYPE(I, TY) =
+        IF VTYPE(.ARGS[I]) NEQ TY THEN RETURN ARGMISMATCH(I + 1, .ARGS[I]) %;
+
+! ISKW value, keyword: whether the value is that keyword.
+ROUTINE ISKW (V, K) =
+    VTYPE(.V) EQL TY_KEYWORD AND VINT(.V) EQL .K;
+
+! ---- Strings and numbers
+
+! STR (value [, radix | separator]): an integer in decimal, octal or hex,
+! a keyword's name, a string, a range's or buffer's text.
+ROUTINE BI_STR (ARGS : REF VECTOR, N, R) =
+    BEGIN
+    LOCAL
+        V,
+        BUF : VECTOR[48, BYTE],
+        L;
+    ARGCOUNT(1, 2);
+    V = .ARGS[0];
+    SELECTONE VTYPE(.V) OF
+        SET
+        [TY_INTEGER] :
+            BEGIN
+            LOCAL
+                RADIX;
+            RADIX = 10;
+            IF .N GTR 1
+            THEN
+                BEGIN
+                ARGTYPE(1, TY_INTEGER);
+                RADIX = VINT(.ARGS[1]);
+                IF .RADIX NEQ 8 AND .RADIX NEQ 10 AND .RADIX NEQ 16
+                THEN
+                    BEGIN
+                    .R = STR_MAKE(0, 0);
+                    RETURN BI_ERR(TPU$_BADVALUE, MKINT(.RADIX))
+                    END
+                END;
+            L = NUMBER(BUF, VINT(.V), .RADIX,
+                       (SELECTONE .RADIX OF SET [16] : 8; [8] : 11; [OTHERWISE] : 1; TES),
+                       .RADIX EQL 10);
+            .R = STR_MAKE(BUF, .L)
+            END;
+        [TY_STRING] : (VREF(.V); .R = .V);
+        [TY_KEYWORD] :
+            BEGIN
+            LOCAL
+                P;
+            P = KW_NAME(VINT(.V), L);
+            .R = STR_MAKE(.P, .L)
+            END;
+        [OTHERWISE] :
+            BEGIN
+            .R = BUF_STR(.V, (IF .N GTR 1 THEN .ARGS[1] ELSE 0));
+            IF ..R EQL 0 THEN RETURN ARGMISMATCH(1, .V)
+            END;
+        TES;
+    SS_NORMAL
+    END;
+
+! INT (string [, radix]): the number the string is; a keyword's code.
+ROUTINE BI_INT (ARGS : REF VECTOR, N, R) =
+    BEGIN
+    LOCAL
+        S,
+        L,
+        I,
+        NEG,
+        RADIX,
+        X,
+        DIGITS;
+    ARGCOUNT(1, 2);
+    .R = MKINT(0);
+    IF VTYPE(.ARGS[0]) EQL TY_INTEGER THEN (.R = .ARGS[0]; RETURN SS_NORMAL);
+    IF VTYPE(.ARGS[0]) EQL TY_KEYWORD THEN (.R = MKINT(VINT(.ARGS[0])); RETURN SS_NORMAL);
+    ARGTYPE(0, TY_STRING);
+    RADIX = 10;
+    IF .N GTR 1 THEN (ARGTYPE(1, TY_INTEGER); RADIX = VINT(.ARGS[1]));
+    S = SADDR(.ARGS[0]);
+    L = SLEN(.ARGS[0]);
+    I = 0;
+    NEG = FALSE;
+    IF .I LSS .L AND (GETB(.S + .I) EQL %C'-' OR GETB(.S + .I) EQL %C'+')
+    THEN
+        (NEG = GETB(.S + .I) EQL %C'-'; I = .I + 1);
+    X = 0;
+    DIGITS = 0;
+    WHILE .I LSS .L DO
+        BEGIN
+        LOCAL
+            C,
+            D;
+        C = GETB(.S + .I);
+        IF .C GEQU %C'a' AND .C LEQU %C'z' THEN C = .C - 32;
+        D = (IF .C GEQU %C'0' AND .C LEQU %C'9' THEN .C - %C'0'
+             ELSE IF .C GEQU %C'A' AND .C LEQU %C'Z' THEN .C - %C'A' + 10 ELSE 99);
+        IF .D GEQ .RADIX
+        THEN
+            BEGIN
+            ! Blanks may end it.
+            WHILE .I LSS .L AND GETB(.S + .I) EQL %C' ' DO I = .I + 1;
+            IF .I LSS .L THEN RETURN BI_ERR(TPU$_INVNUMSTR);
+            EXITLOOP
+            END;
+        X = .X * .RADIX + .D;
+        DIGITS = .DIGITS + 1;
+        I = .I + 1
+        END;
+    IF .DIGITS EQL 0 THEN RETURN BI_ERR(TPU$_INVNUMSTR);
+    .R = MKINT(IF .NEG THEN -.X ELSE .X);
+    SS_NORMAL
+    END;
+
+! ASCII (integer | string): the character, or the first character's code.
+ROUTINE BI_ASCII (ARGS : REF VECTOR, N, R) =
+    BEGIN
+    ARGCOUNT(1, 1);
+    IF VTYPE(.ARGS[0]) EQL TY_INTEGER
+    THEN
+        BEGIN
+        LOCAL
+            C : VECTOR[1, BYTE];
+        C[0] = VINT(.ARGS[0]) AND 255;
+        .R = STR_MAKE(C, 1);
+        RETURN SS_NORMAL
+        END;
+    ARGTYPE(0, TY_STRING);
+    .R = MKINT(IF SLEN(.ARGS[0]) EQL 0 THEN 0 ELSE GETB(SADDR(.ARGS[0])));
+    SS_NORMAL
+    END;
+
+! LENGTH (string | range | buffer).
+ROUTINE BI_LENGTH (ARGS : REF VECTOR, N, R) =
+    BEGIN
+    LOCAL
+        V;
+    ARGCOUNT(1, 1);
+    IF VTYPE(.ARGS[0]) EQL TY_STRING THEN (.R = MKINT(SLEN(.ARGS[0])); RETURN SS_NORMAL);
+    .R = MKINT(0);
+    V = BUF_STR(.ARGS[0], 0);
+    IF .V EQL 0 THEN RETURN ARGMISMATCH(1, .ARGS[0]);
+    .R = MKINT(SLEN(.V));
+    VUNREF(.V);
+    SS_NORMAL
+    END;
+
+! SUBSTR (string | range, start [, length]): from start, the first
+! character 1.
+ROUTINE BI_SUBSTR (ARGS : REF VECTOR, N, R) =
+    BEGIN
+    LOCAL
+        V,
+        START,
+        LEN,
+        L;
+    ARGCOUNT(2, 3);
+    V = .ARGS[0];
+    IF VTYPE(.V) NEQ TY_STRING
+    THEN
+        BEGIN
+        V = BUF_STR(.V, 0);
+        IF .V EQL 0 THEN RETURN ARGMISMATCH(1, .ARGS[0])
+        END
+    ELSE
+        VREF(.V);
+    IF VTYPE(.ARGS[1]) NEQ TY_INTEGER THEN (VUNREF(.V); RETURN ARGMISMATCH(2, .ARGS[1]));
+    L = SLEN(.V);
+    START = VINT(.ARGS[1]);
+    LEN = .L;
+    IF .N GTR 2
+    THEN
+        BEGIN
+        IF VTYPE(.ARGS[2]) NEQ TY_INTEGER THEN (VUNREF(.V); RETURN ARGMISMATCH(3, .ARGS[2]));
+        LEN = VINT(.ARGS[2])
+        END;
+    IF .START LSS 1 THEN START = 1;
+    IF .START GTR .L THEN LEN = 0 ELSE LEN = MAX(0, MIN(.LEN, .L - .START + 1));
+    .R = STR_MAKE(SADDR(.V) + .START - 1, .LEN);
+    VUNREF(.V);
+    SS_NORMAL
+    END;
+
+! INDEX (string, substring).
+ROUTINE BI_INDEX (ARGS : REF VECTOR, N, R) =
+    BEGIN
+    ARGCOUNT(2, 2);
+    ARGTYPE(0, TY_STRING);
+    ARGTYPE(1, TY_STRING);
+    .R = MKINT(STR_INDEX(.ARGS[0], .ARGS[1]));
+    SS_NORMAL
+    END;
+
+! CASEOF string value, how: a copy in UPPER, LOWER or INVERT case.
+GLOBAL ROUTINE CASEOF (V, HOW) =
+    BEGIN
+    LOCAL
+        W;
+    W = STR_MAKE(SADDR(.V), SLEN(.V));
+    INCR I FROM 0 TO SLEN(.W) - 1 DO
+        BEGIN
+        LOCAL
+            P,
+            C,
+            LOWER,
+            UPPERC;
+        P = SADDR(.W) + .I;
+        C = GETB(.P);
+        LOWER = .C GEQU %C'a' AND .C LEQU %C'z' OR .C GEQU 224 AND .C LEQU 254 AND .C NEQ 247;
+        UPPERC = .C GEQU %C'A' AND .C LEQU %C'Z' OR .C GEQU 192 AND .C LEQU 222 AND .C NEQ 215;
+        IF .LOWER AND (.HOW EQL K_UPPER OR .HOW EQL K_INVERT) THEN PUTB(.P, .C - 32);
+        IF .UPPERC AND (.HOW EQL K_LOWER OR .HOW EQL K_INVERT) THEN PUTB(.P, .C + 32)
+        END;
+    .W
+    END;
+
+! CHANGE_CASE (string | range | buffer, UPPER | LOWER | INVERT): a
+! string variable gets the string in that case.
+ROUTINE BI_CHANGE_CASE (ARGS : REF VECTOR, N, R) =
+    BEGIN
+    LOCAL
+        HOW;
+    ARGCOUNT(2, 3);
+    ARGTYPE(1, TY_KEYWORD);
+    HOW = VINT(.ARGS[1]);
+    IF .HOW NEQ K_UPPER AND .HOW NEQ K_LOWER AND .HOW NEQ K_INVERT
+    THEN
+        RETURN BI_ERR(TPU$_BADKEY, TYPENAME(.ARGS[1]));
+    IF VTYPE(.ARGS[0]) EQL TY_STRING
+    THEN
+        BEGIN
+        LOCAL
+            W;
+        W = CASEOF(.ARGS[0], .HOW);
+        VUNREF(.ARGS[0]);
+        ARGS[0] = .W;
+        VREF(.W);
+        .R = .W;
+        RETURN SS_NORMAL
+        END;
+    NOTMINE
+    END;
+
+! ---- Messages
+
+! FAO (control [, parameters...]).
+ROUTINE BI_FAO (ARGS : REF VECTOR, N, R) =
+    BEGIN
+    LOCAL
+        BUF : VECTOR[4096, BYTE],
+        L,
+        BAD;
+    ARGCOUNT(1, 127);
+    ARGTYPE(0, TY_STRING);
+    .R = STR_MAKE(0, 0);
+    ! A directive with a field width.
+    INCR I FROM 0 TO SLEN(.ARGS[0]) - 2 DO
+        IF GETB(SADDR(.ARGS[0]) + .I) EQL %C'!'
+        THEN
+            BEGIN
+            LOCAL
+                C;
+            C = GETB(SADDR(.ARGS[0]) + .I + 1);
+            IF .C EQL %C'-' OR .C GEQU %C'0' AND .C LEQU %C'9'
+            THEN
+                RETURN BI_ERR(TPU$_INVFAOPARAM, MKINT(0))
+            END;
+    L = FAO(SADDR(.ARGS[0]), SLEN(.ARGS[0]), ARGS[1], .N - 1, BUF, 4096, BAD);
+    IF .L LSS 0 THEN RETURN BI_ERR(TPU$_INVFAOPARAM, MKINT(.BAD + 1));
+    VUNREF(..R);
+    .R = STR_MAKE(BUF, .L);
+    SS_NORMAL
+    END;
+
+! MESSAGE (string | keyword | integer [, severity [, FAO parameters]]):
+! a line where messages go; a message code's text, formatted.
+ROUTINE BI_MESSAGE (ARGS : REF VECTOR, N, R) =
+    BEGIN
+    LOCAL
+        V;
+    ARGCOUNT(1, 127);
+    V = .ARGS[0];
+    SELECTONE VTYPE(.V) OF
+        SET
+        [TY_STRING] : MSG_PUT(SADDR(.V), SLEN(.V));
+        [TY_KEYWORD, TY_INTEGER] :
+            BEGIN
+            LOCAL
+                K,
+                BUF : VECTOR[1024, BYTE],
+                L;
+            K = VINT(.V);
+            IF VTYPE(.V) EQL TY_INTEGER
+            THEN
+                BEGIN
+                ! A system message: only the successful one is known.
+                IF .K EQL 1
+                THEN
+                    MSG_PUT(T('%SYSTEM-S-NORMAL, normal successful completion'))
+                ELSE
+                    RETURN BI_ERR(TPU$_MSGNOTFND);
+                RETURN SS_NORMAL
+                END;
+            IF NOT KW_ISERROR(.K) THEN RETURN BI_ERR(TPU$_MSGNOTFND);
+            IF NOT MSG_SHOWN(.K) THEN RETURN SS_NORMAL;
+            L = MSG_FORMAT(.K, ARGS[2], MAX(.N - 2, 0), 15, BUF);
+            MSG_PUT(BUF, .L)
+            END;
+        [OTHERWISE] :
+            BEGIN
+            V = BUF_STR(.V, 0);
+            IF .V EQL 0 THEN RETURN ARGMISMATCH(1, .ARGS[0]);
+            MSG_PUT(SADDR(.V), SLEN(.V));
+            VUNREF(.V)
+            END;
+        TES;
+    SS_NORMAL
+    END;
+
+! MESSAGE_TEXT (keyword [, flags [, FAO parameters]]).
+ROUTINE BI_MESSAGE_TEXT (ARGS : REF VECTOR, N, R) =
+    BEGIN
+    LOCAL
+        BUF : VECTOR[1024, BYTE],
+        L,
+        FLAGS;
+    ARGCOUNT(1, 127);
+    IF VTYPE(.ARGS[0]) NEQ TY_KEYWORD AND VTYPE(.ARGS[0]) NEQ TY_INTEGER
+    THEN
+        RETURN ARGMISMATCH(1, .ARGS[0]);
+    IF NOT KW_ISERROR(VINT(.ARGS[0])) THEN (.R = STR_MAKE(0, 0); RETURN BI_ERR(TPU$_MSGNOTFND));
+    FLAGS = 1;
+    IF .N GTR 1 THEN (ARGTYPE(1, TY_INTEGER); FLAGS = VINT(.ARGS[1]));
+    IF .FLAGS EQL 0 THEN FLAGS = 15;
+    L = MSG_FORMAT(VINT(.ARGS[0]), ARGS[2], MAX(.N - 2, 0), .FLAGS, BUF);
+    .R = STR_MAKE(BUF, .L);
+    SS_NORMAL
+    END;
+
+! ---- Programs
+
+! SOURCE value, address of length: the text to compile: a string, a
+! range's or a buffer's.
+ROUTINE SOURCE (V, LENP) =
+    BEGIN
+    IF VTYPE(.V) EQL TY_STRING THEN (.LENP = SLEN(.V); RETURN SADDR(.V));
+    BUF_TEXT(.V, .LENP)
+    END;
+
+! COMPILE (string | range | buffer): the program, or 0 if it has no
+! unbound code.
+ROUTINE BI_COMPILE (ARGS : REF VECTOR, N, R) =
+    BEGIN
+    LOCAL
+        TEXT,
+        L,
+        OBJ,
+        S;
+    ARGCOUNT(1, 1);
+    TEXT = SOURCE(.ARGS[0], L);
+    IF .TEXT EQL 0 AND VTYPE(.ARGS[0]) NEQ TY_STRING THEN RETURN ARGMISMATCH(1, .ARGS[0]);
+    S = COMPILE(.TEXT, .L, OBJ);
+    IF VTYPE(.ARGS[0]) NEQ TY_STRING THEN MEM_FREE(.TEXT);
+    IF .S NEQ SS_NORMAL THEN (.R = MKINT(0); RETURN SS_NORMAL);
+    .R = (IF .OBJ EQL 0 THEN MKINT(0) ELSE MKV(TY_PROGRAM, .OBJ));
+    SS_NORMAL
+    END;
+
+! EXECUTE (program | string | range | buffer): compiles if need be, and
+! runs it.
+ROUTINE BI_EXECUTE (ARGS : REF VECTOR, N, R) =
+    BEGIN
+    LOCAL
+        OBJ,
+        S;
+    ARGCOUNT(1, 1);
+    IF VTYPE(.ARGS[0]) EQL TY_PROGRAM
+    THEN
+        OBJ = VPTR(.ARGS[0])
+    ELSE
+        BEGIN
+        LOCAL
+            TEXT,
+            L;
+        IF VTYPE(.ARGS[0]) EQL TY_INTEGER OR VTYPE(.ARGS[0]) EQL TY_UNSPEC
+           OR VTYPE(.ARGS[0]) EQL TY_KEYWORD
+        THEN
+            RETURN ARGMISMATCH(1, .ARGS[0]);
+        TEXT = SOURCE(.ARGS[0], L);
+        IF .TEXT EQL 0 AND VTYPE(.ARGS[0]) NEQ TY_STRING THEN RETURN ARGMISMATCH(1, .ARGS[0]);
+        S = COMPILE(.TEXT, .L, OBJ);
+        IF VTYPE(.ARGS[0]) NEQ TY_STRING THEN MEM_FREE(.TEXT);
+        IF .S NEQ SS_NORMAL OR .OBJ EQL 0 THEN RETURN BI_ERR(TPU$_EXECUTEFAIL)
+        END;
+    VM_RUN(.OBJ);
+    SS_NORMAL
+    END;
+
+! ---- Arrays and the rest
+
+! CREATE_ARRAY [(count [, low])].
+ROUTINE BI_CREATE_ARRAY (ARGS : REF VECTOR, N, R) =
+    BEGIN
+    LOCAL
+        CNT,
+        LOW;
+    ARGCOUNT(0, 2);
+    CNT = 0;
+    LOW = 1;
+    IF .N GTR 0 THEN (ARGTYPE(0, TY_INTEGER); CNT = VINT(.ARGS[0]));
+    IF .N GTR 1 THEN (ARGTYPE(1, TY_INTEGER); LOW = VINT(.ARGS[1]));
+    .R = ARR_NEW(.CNT, .LOW);
+    SS_NORMAL
+    END;
+
+! GET_INFO (thing, "what" [, ...]): the language's; the rest are the
+! buffers' module's.
+ROUTINE BI_GET_INFO (ARGS : REF VECTOR, N, R) =
+    BEGIN
+    LOCAL
+        V,
+        W,
+        S;
+    ARGCOUNT(2, 4);
+    V = .ARGS[0];
+    W = .ARGS[1];
+    IF VTYPE(.W) NEQ TY_STRING THEN RETURN ARGMISMATCH(2, .W);
+    IF STR_EQL(.W, T('TYPE'))
+    THEN
+        (.R = MKKW(TYPEKW(.V)); RETURN SS_NORMAL);
+    IF VTYPE(.V) EQL TY_ARRAY
+    THEN
+        BEGIN
+        IF STR_EQL(.W, T('FIRST')) THEN (.R = ARR_WALK(.V, TRUE); RETURN SS_NORMAL);
+        IF STR_EQL(.W, T('NEXT')) THEN (.R = ARR_WALK(.V, FALSE); RETURN SS_NORMAL);
+        IF STR_EQL(.W, T('LOW_INDEX')) THEN (.R = MKINT(ARR_INFO(.V, 0)); RETURN SS_NORMAL);
+        IF STR_EQL(.W, T('HIGH_INDEX')) THEN (.R = MKINT(ARR_INFO(.V, 1)); RETURN SS_NORMAL);
+        IF STR_EQL(.W, T('SIZE')) THEN (.R = MKINT(ARR_INFO(.V, 2)); RETURN SS_NORMAL)
+        END;
+    S = BUF_INFO(.ARGS, .N, .R);
+    IF .S NEQ NOTMINE THEN RETURN .S;
+    VREF(.W);
+    BI_ERR(TPU$_BADREQUEST, .W, STR_MAKE(0, 0), TYPENAME(.V))
+    END;
+
+! QUIT [(ON | OFF [, severity])]: ends the session.
+ROUTINE BI_QUIT (ARGS : REF VECTOR, N, R) =
+    BEGIN
+    LOCAL
+        SEV;
+    ARGCOUNT(0, 2);
+    SEV = 1;
+    IF .N GTR 1 THEN (ARGTYPE(1, TY_INTEGER); SEV = VINT(.ARGS[1]) AND 3);
+    ! ponytail: no buffer is checked for changes, as with QUIT (OFF).
+    FIO$EXIT(%X'0091C000' + 8 * 0 + .SEV)
+    END;
+
+! BI_CALL number, args, count, result: runs built-in number on the
+! arguments; a status.
+GLOBAL ROUTINE BI_CALL (B, ARGS : REF VECTOR, N, R) =
+    BEGIN
+    LOCAL
+        S;
+    S = (SELECTONE .B OF
+            SET
+            [B_STR] : BI_STR(.ARGS, .N, .R);
+            [B_INT] : BI_INT(.ARGS, .N, .R);
+            [B_ASCII] : BI_ASCII(.ARGS, .N, .R);
+            [B_LENGTH] : BI_LENGTH(.ARGS, .N, .R);
+            [B_SUBSTR] : BI_SUBSTR(.ARGS, .N, .R);
+            [B_INDEX] : BI_INDEX(.ARGS, .N, .R);
+            [B_CHANGE_CASE] : BI_CHANGE_CASE(.ARGS, .N, .R);
+            [B_FAO] : BI_FAO(.ARGS, .N, .R);
+            [B_MESSAGE] : BI_MESSAGE(.ARGS, .N, .R);
+            [B_MESSAGE_TEXT] : BI_MESSAGE_TEXT(.ARGS, .N, .R);
+            [B_COMPILE] : BI_COMPILE(.ARGS, .N, .R);
+            [B_EXECUTE] : BI_EXECUTE(.ARGS, .N, .R);
+            [B_CREATE_ARRAY] : BI_CREATE_ARRAY(.ARGS, .N, .R);
+            [B_GET_INFO] : BI_GET_INFO(.ARGS, .N, .R);
+            [B_QUIT] : BI_QUIT(.ARGS, .N, .R);
+            [OTHERWISE] : NOTMINE;
+            TES);
+    IF .S EQL NOTMINE THEN S = BUF_CALL(.B, .ARGS, .N, .R);
+    IF .S EQL NOTMINE THEN S = PAT_CALL(.B, .ARGS, .N, .R);
+    IF .S EQL NOTMINE THEN S = BI_ERR(TPU$_NOTYET);
+    .S
+    END;
+
+END
+ELUDOM
