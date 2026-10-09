@@ -95,6 +95,16 @@
 ;               exit handlers
 ;   WRITE SYS$OUTPUT expression[,...]
 ;               writes the values on the console
+;   OPEN[/READ][/WRITE][/APPEND] name file
+;               opens a file of any organization as name, for reading by
+;               default; /WRITE alone makes a new one
+;   READ[/KEY=string[/INDEX=n][/MATCH=GE|GT]][/DELETE] name symbol
+;               reads the next record of the file, or the one with that
+;               key, into a local symbol, and deletes it with /DELETE;
+;               /END_OF_FILE=label and /ERROR=label go there instead
+;   WRITE[/UPDATE] name expression[,...]
+;               writes a record to it, or rewrites the one READ read
+;   CLOSE name  closes it
 ;   SHOW SYMBOL name
 ;               shows a symbol's value: the nearest, or with /LOCAL or
 ;               /GLOBAL that one; /ALL instead of a name shows them all
@@ -136,14 +146,15 @@
 ; ponytail: message texts for a few statuses only. @
 ; reads the whole procedure into PBUF, and it goes when the procedure
 ; ends: 16 KB for those running at once. No ON, IF blocks, lexical
-; functions, OPEN or READ; lines without $, an image's input on VMS, are
-; skipped. .NOT. takes an operand, not a comparison.
+; functions or READ of a terminal; lines without $, an image's input on
+; VMS, are skipped. .NOT. takes an operand, not a comparison.
 ;
 ; This module reads the commands, parses them and does those that run
 ; an image, CTRL/Y, CONTINUE and STOP. The rest are in dcl/: logical.mar
 ; has the logical name commands, setshow.mar SET and SHOW DEFAULT, SHOW
 ; DEVICES and SET COMMAND, proc.mar @ and the commands that steer a
 ; procedure, pipe.mar PIPE, symbol.mar the symbols and their commands,
+; file.mar OPEN, READ, CLOSE and WRITE to a file,
 ; expr.mar symbol substitution and expressions, message.mar the
 ; messages, and cdu.mar the CLD compiler. What they share is global,
 ; named DCL$name, and dcl.mlb has their constants.
@@ -159,7 +170,8 @@
 
         .EXTERNAL DCL$TABLES, CLI$$DCL_PARSE, CLI$$RESULT, CLI$$IMAGE
         .EXTERNAL CLI$$ROUTINE, CLI$GET_VALUE, CLI$PRESENT, CLI$$FOREIGN
-        .EXTERNAL DCL$ADD, DCL$ADDCSTR, DCL$ASSIGN, DCL$DEASSIGN, DCL$DEFINE
+        .EXTERNAL DCL$ADD, DCL$ADDCSTR, DCL$ASSIGN, DCL$CLOSE, DCL$DEASSIGN
+        .EXTERNAL DCL$DEFINE, DCL$OPEN, DCL$READ
         .EXTERNAL DCL$DELSYM, DCL$DO, DCL$ENDPROCS, DCL$EXIT, DCL$EXITPROC
         .EXTERNAL DCL$FINDSYM, DCL$GETPROC, DCL$GOTO, DCL$IF, DCL$NAMESCAN
         .EXTERNAL DCL$PIPE, DCL$PIPEDEPTH, DCL$PIPEEND, DCL$PIPENEXT
@@ -206,6 +218,8 @@ VALLEN: .WORD   0
 ; The CLIROUTINEs of DCL$TABLES: each name, .ASCIC, and its code, until
 ; a 0.
 ROUTINES:
+        .ASCIC  "CLOSE"
+        .ADDRESS DCL$CLOSE
         .ASCIC  "CONTINUE"
         .ADDRESS DCL$CONTINUE
         .ASCIC  "DEASSIGN"
@@ -222,8 +236,12 @@ ROUTINES:
         .ADDRESS DCL$IF
         .ASCIC  "LOGOUT"
         .ADDRESS LOGOUT
+        .ASCIC  "OPEN"
+        .ADDRESS DCL$OPEN
         .ASCIC  "PIPE"
         .ADDRESS DCL$PIPE
+        .ASCIC  "READ"
+        .ADDRESS DCL$READ
         .ASCIC  "RUN"
         .ADDRESS RUN
         .ASCIC  "SET"

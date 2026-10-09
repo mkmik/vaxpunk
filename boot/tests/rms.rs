@@ -6,7 +6,9 @@
 //! be what OpenVMS printed, the fixture's dump of that key. CONVERT/FDL
 //! makes those files again from the inputs and FDL files OpenVMS made them
 //! from, with the same records, and ANALYZE/RMS_FILE finds them sound;
-//! COPY copies one, and DIRECTORY/FULL describes it.
+//! COPY copies one, and DIRECTORY/FULL describes it. A procedure,
+//! IDXM.COM, makes IDXM.IDX with DCL's OPEN, READ and WRITE as MAKE.COM did
+//! on OpenVMS, and must leave the same records.
 //! Then RMSRAND runs a long script of random operations on an indexed
 //! file, each of whose results a model here knows, and `ods` checks the
 //! file after.
@@ -215,6 +217,15 @@ fn convert() {
             .unwrap();
         }
     }
+    let com = idxm_com();
+    vol.copy_in(
+        &mut com.as_bytes(),
+        "[000000]IDXM.COM",
+        Conversion::LinesToRecords,
+        Some(com.len() as u64),
+        None,
+    )
+    .unwrap();
     vol.flush().unwrap();
     drop(vol);
     let mut failed = Vec::new();
@@ -266,9 +277,40 @@ fn convert() {
         if !full.contains("File organization:  Indexed, Prolog: 3, Using 3 keys") {
             failed.push(format!("DIRECTORY/FULL: {full}"));
         }
+        // DCL's OPEN, READ and WRITE make IDXM.IDX as OpenVMS's did.
+        vax.command("CONVERT/FDL=IDX1.FDL DATA.TXT IDXM.IDX", "\n$ ");
+        let said = vax.command("@IDXM", "\n$ ");
+        let want = [
+            "IDXM: lookup 98994",
+            "IDXM: generic K0000010 ZETA added record 3",
+            "IDXM: key 1 K0000015 OMEGA updated, longer than it was before by a lot",
+            "IDXM: next K0000004 ZETA added record 1",
+            "IDXM: 257 records",
+            "IDXM: written by DCL",
+        ];
+        let got: Vec<_> = said.lines().filter(|l| l.starts_with("IDXM: ")).collect();
+        if got != want || said.contains("%DCL-") || said.contains("%RMS-") {
+            failed.push(format!("@IDXM: {said}"));
+        }
+        for key in 0..2 {
+            let got = vax.command(&format!("RMSDUMP IDXM.IDX {key}"), "\n$ ");
+            let got: Vec<_> = got
+                .lines()
+                .skip(1)
+                .take_while(|l| !l.starts_with("RMSDUMP: "))
+                .collect();
+            let want = fs::read_to_string(fixtures.join(format!("idxm_key{key}.dump"))).unwrap();
+            if got != want.lines().collect::<Vec<_>>() {
+                failed.push(format!("IDXM.IDX key {key}: {} records", got.len()));
+            }
+        }
     }
     let mut vol = Image::open(&disk, Mode::ReadOnly).unwrap();
-    for out in CONVERSIONS.iter().map(|c| c.0).chain(["COPY.IDX"]) {
+    for out in CONVERSIONS
+        .iter()
+        .map(|c| c.0)
+        .chain(["COPY.IDX", "IDXM.IDX"])
+    {
         let fid = vol.lookup(&format!("[000000]{out}")).unwrap();
         let report = vol.check_file(fid).unwrap();
         if !report.is_sound() {
@@ -276,6 +318,56 @@ fn convert() {
         }
     }
     assert!(failed.is_empty(), "{}", failed.join("\n"));
+}
+
+/// IDXM.COM: MAKE.COM's IDXM, without its lexical functions, then a
+/// lookup that fails to /ERROR, a generic one, one by key 1 and the next
+/// along it, a count to /END_OF_FILE, a sequential file written and read
+/// back, and a CLOSE/NOLOG of a file not open.
+fn idxm_com() -> String {
+    let mut com = String::from("$ OPEN/READ/WRITE F IDXM.IDX\n");
+    for i in 1..=60 {
+        com += &format!("$ WRITE F \"K{:07} ZETA added record {i}\"\n", i * 3 + 1);
+    }
+    com += r#"$ READ/KEY="K0000009"/DELETE F R
+$ READ/KEY="K0000012"/DELETE F R
+$ READ/KEY="K0000300"/DELETE F R
+$ READ/KEY="K0000015" F R
+$ WRITE/UPDATE F "K0000015 OMEGA updated, longer than it was before by a lot"
+$ READ/KEY="K0000018" F R
+$ WRITE/UPDATE F "K0000018 ALPHA"
+$ READ/KEY="K0000600" F R
+$ WRITE/UPDATE F "K0000600 BETA changed"
+$ READ/KEY="K0000001"/ERROR=NONE F R
+$ WRITE SYS$OUTPUT "IDXM: found K0000001"
+$ NONE:
+$ WRITE SYS$OUTPUT "IDXM: lookup ", $STATUS
+$ READ/KEY="K000001" F R
+$ WRITE SYS$OUTPUT "IDXM: generic ", R
+$ READ/INDEX=1/KEY="OMEGA" F R
+$ WRITE SYS$OUTPUT "IDXM: key 1 ", R
+$ READ F R
+$ WRITE SYS$OUTPUT "IDXM: next ", R
+$ CLOSE F
+$ OPEN F IDXM.IDX
+$ N = 0
+$ COUNT:
+$ READ/END_OF_FILE=DONE F R
+$ N = N + 1
+$ GOTO COUNT
+$ DONE:
+$ CLOSE F
+$ WRITE SYS$OUTPUT "IDXM: ", N, " records"
+$ OPEN/WRITE O NOTE
+$ WRITE O "written by ", "DCL"
+$ CLOSE O
+$ OPEN/READ O NOTE.DAT
+$ READ O R
+$ CLOSE O
+$ WRITE SYS$OUTPUT "IDXM: ", R
+$ CLOSE/NOLOG O
+"#;
+    com
 }
 
 /// RMSRAND's file: its alternate keys' values. Key 2 follows key 0, so

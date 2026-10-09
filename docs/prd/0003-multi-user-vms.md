@@ -170,7 +170,8 @@ Decisions this PRD rests on:
   `F$SEARCH`, `F$PARSE`, `F$ENVIRONMENT`, `F$MODE`, `F$TIME`, `F$LENGTH`,
   `F$EXTRACT`, `F$LOCATE`, `F$ELEMENT`, `F$EDIT`, `F$INTEGER`,
   `F$STRING`, `F$FAO`, `F$VERIFY`.
-- `OPEN`, `READ`, `WRITE` and `CLOSE` on files, and `SET VERIFY`.
+- `OPEN`, `READ`, `WRITE` and `CLOSE` on files (done, with PRD-0008's
+  step 8; `READ` of a terminal and `/PROMPT` left), and `SET VERIFY`.
 - Input lines without `$` go to the running image as `SYS$INPUT`, as VMS
   does, rather than being skipped.
 
@@ -193,7 +194,7 @@ until the hardware or size changes; leave it.
 | 3 | Terminals per UCB done, with `TNAn:` for `SET HOST` (step 3, ADR-0027); left: no `$BRKTHRU`; a hangup ends the terminal's reads and writes, not its process; at most 9 `TNAn:` units (`ttdriver.mar`, DESIGN-0002 *I/O*) | *Terminals*, and `LOGINOUT` for the hangup |
 | 4 | No quotas: `BIOLM`, `DIOLM`, `BYTLM` (ADR-0013), `BUFQUO` (ADR-0019), ASTs (DESIGN-0002 *ASTs*); `$GETJPI` has no CPU times, quotas or counts (`getjpi.mar`, `show.mar`) | *Quotas* |
 | 5 | One file system lock for every volume, no per-file lock, no priority boost (ADR-0020, `f11.mar`, DESIGN-0002 *Files*); no file sharing or locking, `$ERASE` deletes an open file (ADR-0009, `rms.mar`) | *Lock manager* |
-| 6 | DCL procedures: no `ON`, block `IF`, lexical functions, `OPEN` or `READ`; lines without `$` skipped (`dcl.mar`) | *Command language* |
+| 6 | DCL procedures: no `ON`, block `IF`, lexical functions or `READ` of a terminal; lines without `$` skipped (`dcl.mar`) | *Command language* |
 | 7 | `$ASCTIM`, `$NUMTIM` (PRD-0004's pilot, `numtim.b64`) and the date in `SHOW PROCESS` and `SHOW SYSTEM` done; left: `$BINTIM`, `SHOW TIME` | *Batch and print* |
 | 8 | Owners and protection done (step 2); left: a new file has the default protection, not the process's (`f11wrt.mar`), which `LOGINOUT` sets from the UAF; no version limit (`rms.mar`'s `$CREATE_DIR`) | *Privileges, UICs and protection* |
 | 9 | Terminals, `TNAn:` too, listed from their UCBs (step 3); left: `BGA0:` and its units aren't seen by `$DEVICE_SCAN` and `$GETDVI`; a VCB stands for a disk in `$GETDVI` rather than its UCB (`netdriver.mar`, `getdvi.mar`, DESIGN-0002 *Devices*) | Every device listed from its UCB |
@@ -320,7 +321,7 @@ Each step ends in something `cargo test -p boot` checks.
    place of `FIL$LOCK`; RMS sharing; `$ERASE` of an open file refused.
    *Visible:* two sessions, `%RMS-E-FLK` on the second open for write.
 8. **Command language.** Block `IF`, `ON`, `$STATUS`, `OPEN`/`READ`/`WRITE`/
-   `CLOSE`, the lexical functions, image input from the procedure.
+   `CLOSE` (done), the lexical functions, image input from the procedure.
    *Visible:* a `LOGIN.COM` that uses `F$MODE()` to skip its terminal
    setup in batch.
 9. **Batch.** `JOB_CONTROL`, `$SNDJBC`, `$GETQUI`, the queue commands,

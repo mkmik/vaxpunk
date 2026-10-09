@@ -1,0 +1,324 @@
+        .TITLE  FILE    DCL's file commands
+        .IDENT  /V0.1/
+;
+; OPEN, CLOSE, READ, and WRITE to a file: a procedure opens a file of
+; any organization by a logical name, reads its records into symbols,
+; by key too, deletes them, writes and rewrites them. Each file is a FAB
+; and a RAB in FILES, in DCL's P1, and stays open until CLOSE or the end
+; of the process, as VMS's process-permanent files do: rms.mar closes the
+; command interpreter's files only then.
+; ponytail: OPEN makes no logical name, VMS's ESC and IFI one in
+; LNM$PROCESS, which only DCL's file commands find the file by; OPEN/WRITE
+; makes VAR records with CR, not VFC with PRN; a record READ reads, and
+; one WRITE writes, is a symbol's 255 bytes at most, not VMS's 2048, and
+; one longer is RMS$_RTB, as VMS's past its own.
+; One of DCL's modules: ../dcl.mar says how they fit.
+;
+        .LIBRARY "lib.mlb"
+        .LIBRARY "starlet.mlb"
+        .LIBRARY "../sysexe.mlb"
+        .LIBRARY "../dcl.mlb"
+        $RMSDEF
+        $FABDEF
+        $RABDEF
+        $SSDEF
+        $DCLDEF
+
+NFILE = 8                               ; files open at once
+RECSIZE = 255                           ; a record READ reads, at most: a symbol's
+; A file OPEN opened.
+FIL$T_NAME = 0                          ; its logical name, .ASCIC, empty in a free entry
+FIL$R_FAB = 32
+FIL$R_RAB = FIL$R_FAB+FAB$C_BLN
+FIL$K_LENGTH = FIL$R_RAB+RAB$C_BLN
+
+        .EXTERNAL DCL$ADD, DCL$DEPTH, DCL$DONE, DCL$GETVAL, DCL$GOTOSYM
+        .EXTERNAL DCL$ISPRES, DCL$MSG, DCL$OK, DCL$SAY, DCL$SETSYM, DCL$STATUS
+        .EXTERNAL DCL$TOKEN, DCL$VALNAME, DCL$VSTACK, DCL$V_FILE, DCL$V_LOGNAM
+        .EXTERNAL DCL$WARN
+
+        .PSECT  DATA, NOEXE, WRT, LONG
+FABT:   $FAB    DNA=DOTDAT, DNS=4, RAT=CR       ; a file's FAB and RAB, before OPEN fills them in
+RABT:   $RAB    UBF=RECBUF, USZ=RECSIZE
+RECBUF: .BLKB   RECSIZE                 ; the record READ reads
+DOTDAT: .ASCII  ".DAT"
+SPEC:   .BLKB   LINESIZE                ; the file OPEN opens
+V_APPEND:
+        .ASCID  "APPEND"
+V_DELETE:
+        .ASCID  "DELETE"
+V_EOF:  .ASCID  "END_OF_FILE"
+V_ERROR:
+        .ASCID  "ERROR"
+V_GE:   .ASCID  "MATCH.GE"
+V_GT:   .ASCID  "MATCH.GT"
+V_INDEX:
+        .ASCID  "INDEX"
+V_KEY:  .ASCID  "KEY"
+V_LOG:  .ASCID  "LOG"
+V_READ: .ASCID  "READ"
+V_SYMBOL:
+        .ASCID  "SYMBOL"
+V_UPDATE:
+        .ASCID  "UPDATE"
+V_WRITE:
+        .ASCID  "WRITE"
+        .ALIGN  LONG
+FILES:  .BLKB   NFILE*FIL$K_LENGTH      ; the files open
+FILESEND:
+
+        .PSECT  CODE, EXE, LONG
+; DCL$FINDFILE: R1 = an entity's name, .ASCID, whose value is a logical
+; name. Copies it to DCL$TOKEN, without a colon at its end: R8 = its
+; length, R11 = the file OPEN opened as it, or 0. Uses R0-R5.
+DCL$FINDFILE::
+        .JSB_ENTRY  OUTPUT=<R8, R11>, SCRATCH=<R2, R3, R4, R5>
+        BSBW    DCL$GETVAL
+        CLRL    R11
+        TSTL    R8
+        BEQL    30$
+        MOVAB   DCL$TOKEN-1[R8], R0
+        CMPB    (R0), #^A/:/
+        BNEQ    5$
+        DECL    R8
+        BEQL    30$
+5$:     MOVAB   FILES, R11
+10$:    CMPB    R8, FIL$T_NAME(R11)
+        BNEQ    20$
+        CMPC3   R8, DCL$TOKEN, FIL$T_NAME+1(R11)
+        BEQL    30$
+20$:    ADDL2   #FIL$K_LENGTH, R11
+        MOVAB   FILESEND, R0
+        CMPL    R11, R0
+        BLSSU   10$
+        CLRL    R11
+30$:    RSB
+
+; DCL$UNDFIL: after READ, WRITE or CLOSE of a logical name OPEN didn't
+; open. Goes to the /ERROR label, or reports it.
+DCL$UNDFIL::
+        .EXCEPTION_ENTRY
+        MOVAB   V_ERROR, R1
+        BSBW    DCL$VALNAME
+        TSTL    R8
+        BEQL    10$
+        MOVL    #CLIWARN, R9
+        BRW     DCL$GOTOSYM
+10$:    PRINT   "%DCL-W-UNDFIL, file has not been opened by DCL - check logical name"
+        BRW     DCL$WARN
+
+; FILERR: R0 = the status a file command failed with. Goes to its
+; /ERROR label, with R0 $STATUS, or reports it.
+FILERR: .GLOBAL_LABEL
+        MOVL    R0, R9
+        MOVAB   V_ERROR, R1
+; LABEL: R1 = a label qualifier's name, .ASCID, R9 = a status. Goes to
+; its label, with R9 $STATUS, or with none given reports R9.
+LABEL:  .GLOBAL_LABEL
+        BSBW    DCL$VALNAME
+        TSTL    R8
+        BEQL    10$
+        BRW     DCL$GOTOSYM
+10$:    MOVL    R9, R0
+        BRW     DCL$DONE
+
+; DCL$OPEN, OPEN[/READ][/WRITE][/APPEND] name file: opens file as name,
+; for reading, with /WRITE alone a new sequential file of VAR records
+; for writing, with /READ/WRITE an existing one of any organization for
+; both, with /APPEND an existing one to write after its last record. A
+; name OPEN opened already stays as it is.
+DCL$OPEN::
+        .EXCEPTION_ENTRY
+        MOVAB   DCL$V_LOGNAM, R1
+        BSBW    DCL$FINDFILE
+        TSTL    R11
+        BEQL    5$
+        BRW     DCL$OK
+5$:     MOVL    #SS$_IVLOGNAM, R0
+        CMPL    R8, #31
+        BGTRU   7$
+        MOVL    #RMS$_DME, R0           ; no room
+        MOVAB   FILES, R11
+10$:    TSTB    FIL$T_NAME(R11)
+        BEQL    20$
+        ADDL2   #FIL$K_LENGTH, R11
+        MOVAB   FILESEND, R1
+        CMPL    R11, R1
+        BLSSU   10$
+7$:     BRW     FILERR
+20$:    MOVB    R8, FIL$T_NAME(R11)
+        MOVC3   R8, DCL$TOKEN, FIL$T_NAME+1(R11)
+        MOVC3   #FAB$C_BLN, FABT, FIL$R_FAB(R11)
+        MOVC3   #RAB$C_BLN, RABT, FIL$R_RAB(R11)
+        MOVAB   FIL$R_FAB(R11), R10
+        MOVL    R10, FIL$R_RAB+RAB$L_FAB(R11)
+        MOVAB   DCL$V_FILE, R1
+        BSBW    DCL$GETVAL
+        MOVC3   R8, DCL$TOKEN, SPEC
+        MOVAB   SPEC, FAB$L_FNA(R10)
+        MOVB    R8, FAB$B_FNS(R10)
+        MOVAB   V_APPEND, R1
+        BSBW    DCL$ISPRES
+        BLBC    R0, 30$
+        MOVB    #FAB$M_PUT!FAB$M_UPD!FAB$M_DEL, FAB$B_FAC(R10)
+        BISL2   #RAB$M_EOF, FIL$R_RAB+RAB$L_ROP(R11)
+        BRB     50$
+30$:    MOVB    #FAB$M_GET, FAB$B_FAC(R10)
+        MOVAB   V_WRITE, R1
+        BSBW    DCL$ISPRES
+        BLBC    R0, 50$
+        MOVAB   V_READ, R1
+        BSBW    DCL$ISPRES
+        BLBS    R0, 40$
+        MOVB    #FAB$M_PUT, FAB$B_FAC(R10)
+        $CREATE FAB=(R10)
+        BRB     60$
+40$:    MOVB    #FAB$M_GET!FAB$M_PUT!FAB$M_UPD!FAB$M_DEL, FAB$B_FAC(R10)
+50$:    $OPEN   FAB=(R10)
+60$:    BLBC    R0, 70$
+        $CONNECT RAB=FIL$R_RAB(R11)
+        BLBS    R0, 90$
+        PUSHL   R0
+        $CLOSE  FAB=(R10)
+        MOVL    (SP)+, R0
+70$:    CLRB    FIL$T_NAME(R11)
+80$:    MOVL    R0, R9
+        MOVAB   V_ERROR, R1
+        BSBW    DCL$VALNAME
+        TSTL    R8
+        BEQL    85$
+        BRW     DCL$GOTOSYM
+85$:    CMPB    FAB$B_FAC(R10), #FAB$M_GET
+        BNEQ    86$
+        ADDTEXT "%DCL-E-OPENIN, error opening "
+        BRB     87$
+86$:    ADDTEXT "%DCL-E-OPENOUT, error opening "
+87$:    MOVAB   SPEC, R1
+        MOVZBL  FAB$B_FNS(R10), R2
+        BSBW    DCL$ADD
+        CMPB    FAB$B_FAC(R10), #FAB$M_GET
+        BNEQ    88$
+        ADDTEXT " as input"
+        BRB     89$
+88$:    ADDTEXT " as output"
+89$:    BSBW    DCL$SAY
+        MOVZBL  #^A/-/, R0
+        MOVL    R9, R1
+        BSBW    DCL$STATUS
+        BISL3   #INHIB, R9, R0
+        BRW     DCL$DONE
+90$:    BRW     DCL$OK
+
+; DCL$CLOSE, CLOSE name: closes the file OPEN opened as name. /NOLOG
+; says nothing of a name OPEN didn't open.
+DCL$CLOSE::
+        .EXCEPTION_ENTRY
+        MOVAB   DCL$V_LOGNAM, R1
+        BSBW    DCL$FINDFILE
+        TSTL    R11
+        BNEQ    10$
+        MOVAB   V_LOG, R1
+        BSBW    DCL$ISPRES
+        BLBS    R0, 5$
+        BRW     DCL$OK
+5$:     BRW     DCL$UNDFIL
+10$:    CLRB    FIL$T_NAME(R11)
+        $CLOSE  FAB=FIL$R_FAB(R11)
+        BLBC    R0, 20$
+        BRW     DCL$OK
+20$:    BRW     FILERR
+
+; DCL$READ, READ name symbol: reads the next record of the file OPEN
+; opened as name into the local symbol. With /KEY=string, the record
+; with that key, along key /INDEX=n, the last READ's or 0: EQ, the default /MATCH, the first whose key starts with
+; string, GE the first equal or greater, GT the first greater. The next
+; READ without /KEY reads the record after it along that key. /DELETE
+; deletes the record after reading it. Past the last record, goes to the
+; /END_OF_FILE label, if there is one.
+DCL$READ::
+        .EXCEPTION_ENTRY
+        MOVAB   DCL$V_LOGNAM, R1
+        BSBW    DCL$FINDFILE
+        TSTL    R11
+        BNEQ    5$
+        BRW     DCL$UNDFIL
+5$:     MOVAB   FIL$R_RAB(R11), R10
+        MOVB    #RAB$C_SEQ, RAB$B_RAC(R10)
+        BICL2   #RAB$M_KGE!RAB$M_KGT, RAB$L_ROP(R10)
+        MOVAB   V_INDEX, R1
+        BSBW    DCL$GETVAL
+        CLRL    R2
+        MOVAB   DCL$TOKEN, R1
+        TSTL    R8
+        BEQL    12$
+10$:    MOVZBL  (R1)+, R0
+        SUBL2   #^A/0/, R0
+        MULL2   #10, R2
+        ADDL2   R0, R2
+        SOBGTR  R8, 10$
+        MOVB    R2, RAB$B_KRF(R10)
+12$:    MOVAB   V_GE, R1
+        BSBW    DCL$ISPRES
+        BLBC    R0, 14$
+        BISL2   #RAB$M_KGE, RAB$L_ROP(R10)
+14$:    MOVAB   V_GT, R1
+        BSBW    DCL$ISPRES
+        BLBC    R0, 16$
+        BISL2   #RAB$M_KGT, RAB$L_ROP(R10)
+16$:    MOVAB   V_KEY, R1               ; last: it stays in DCL$TOKEN
+        BSBW    DCL$GETVAL
+        TSTL    R8
+        BEQL    20$
+        MOVB    #RAB$C_KEY, RAB$B_RAC(R10)
+        MOVAB   DCL$TOKEN, RAB$L_KBF(R10)
+        MOVB    R8, RAB$B_KSZ(R10)
+20$:    $GET    RAB=(R10)
+        BLBS    R0, 30$
+        CMPL    R0, #RMS$_EOF
+        BNEQ    25$
+        MOVL    R0, R9
+        MOVAB   V_EOF, R1
+        BRW     LABEL
+25$:    BRW     FILERR
+30$:    MOVAB   DCL$VSTACK, R9
+        MOVL    #1, VAL$L_TYPE(R9)
+        MOVZWL  RAB$W_RSZ(R10), R0
+        MOVB    R0, VAL$T_STR(R9)
+        MOVC3   R0, @RAB$L_RBF(R10), VAL$T_STR+1(R9)
+        MOVAB   V_DELETE, R1
+        BSBW    DCL$ISPRES
+        BLBC    R0, 40$
+        $DELETE RAB=(R10)
+        BLBS    R0, 40$
+        BRW     FILERR
+40$:    MOVAB   V_SYMBOL, R1
+        BSBW    DCL$VALNAME
+        MOVL    DCL$DEPTH, R10
+        MOVAB   DCL$VSTACK, R9
+        BSBW    DCL$SETSYM
+        BRW     DCL$OK
+
+; DCL$WRITEREC: R11 = a file OPEN opened, DCL$MSG = what WRITE made of
+; its expressions. Writes it as a record, by key in an indexed file, or
+; with /UPDATE rewrites the record READ read last with it.
+DCL$WRITEREC::
+        .EXCEPTION_ENTRY
+        MOVAB   FIL$R_RAB(R11), R10
+        MOVAB   DCL$MSG+1, RAB$L_RBF(R10)
+        MOVZBW  DCL$MSG, RAB$W_RSZ(R10)
+        MOVAB   V_UPDATE, R1
+        BSBW    DCL$ISPRES
+        BLBC    R0, 10$
+        $UPDATE RAB=(R10)
+        BRB     20$
+10$:    MOVB    #RAB$C_SEQ, RAB$B_RAC(R10)
+        CMPB    FIL$R_FAB+FAB$B_ORG(R11), #FAB$C_IDX
+        BNEQ    15$
+        MOVB    #RAB$C_KEY, RAB$B_RAC(R10)
+15$:    $PUT    RAB=(R10)
+20$:    CLRB    DCL$MSG
+        BLBC    R0, 30$
+        BRW     DCL$OK
+30$:    BRW     FILERR
+
+        .END
