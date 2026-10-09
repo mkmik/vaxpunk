@@ -130,6 +130,8 @@ ONDEV:  .ASCIZ  " mounted on _"
 DEVNAM: .BLKB   6                       ; the device's, .ASCIZ
 IMAGEDEF:                               ; where images are
         .ASCIC  "SYS$SYSTEM:"
+SHAREDEF:                               ; and shareable images
+        .ASCIC  "SYS$SHARE:.EXE"
 LABEL:  .BLKB   13                      ; the label $MOUNT asks for, .ASCIC
         .ALIGN  LONG
 MNTSET: .LONG   0                       ; bit 0: $MOUNT has MNTOWNER, bit 1 MNTPROT
@@ -969,11 +971,22 @@ FIL$MATCH::
 FIL$OPENFILE::
         .JSB_ENTRY  OUTPUT=<R2, R3>
         PUSHR   #^M<R4, R5, R6, R7, R8, R9, R10, R11>
+        MOVAB   IMAGEDEF, R4
+        BRB     OPEN
+
+; FIL$OPENSHR: R6 = a shareable image's name, R7 = its length. Reads the
+; file as FIL$OPENFILE does, from SYS$SHARE:name.EXE unless the name says
+; otherwise, as VMS's image activator looks for one.
+; ponytail: VMS first translates the name as a logical name.
+FIL$OPENSHR::
+        .JSB_ENTRY  OUTPUT=<R2, R3>
+        PUSHR   #^M<R4, R5, R6, R7, R8, R9, R10, R11>
+        MOVAB   SHAREDEF, R4
+OPEN:   .GLOBAL_LABEL                   ; FIL$OPENFILE's too
         BSBW    FIL$LOCK
         MOVL    R6, R0
         MOVL    R7, R1
-        CLRQ    R2                      ; no default but SYS$SYSTEM
-        MOVAB   IMAGEDEF, R4
+        CLRQ    R2                      ; no default but the system's, R4
         MOVAB   F11$AB_FILHDR, R5
         BSBW    RMS$LOCATE
         BLBC    R0, 90$

@@ -135,7 +135,9 @@ and types it.
   process's pages, but how big a section file gets and whether it is
   mapped or read decides how much of the 4 MB a session costs.
 - **Shareable images.** `TPU$TPUSHR` assumes the image activator maps
-  shareable images; until it does, TPU links whole into one image.
+  shareable images, which it does, a copy in each process
+  ([ADR-0028](../adr/0028-shareable-images.md)); whether TPU is one
+  before processes share their pages, or links whole into one image.
 - **Help.** EVE's `HELP` reads a help library; whether `LBR` and the `HELP`
   utility exist by then.
 

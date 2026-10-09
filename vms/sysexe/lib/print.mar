@@ -1,46 +1,23 @@
         .TITLE  PRINT   Console output for the system disk's programs
         .IDENT  /V0.1/
 ;
-; The programs run in user mode, so they write on the console as a VMS
-; program does: on a channel to SYS$OUTPUT, or OPA0: for a process that
-; has none, with $QIOW, a line at a time, which the executive writes
-; whole. SYS$OUTPUT is the console, or a network unit for a SET HOST
-; session. build.rs links this module into each of
-; them; sysexe.mlb's PRINT and PRINTHEX call it, and a program written
-; for VMS calls LIB$PUT_OUTPUT.
+; PUT_LINE writes a line with LIB$PUT_OUTPUT, in LIBRTL.EXE, on SYS$OUTPUT
+; (librtl/putoutput.mar). build.rs links this module into each program;
+; sysexe.mlb's PRINT and PRINTHEX call it, and a program written for VMS
+; calls LIB$PUT_OUTPUT itself.
 ;
-        .LIBRARY "starlet.mlb"
-        $IODEF
+        .EXTERNAL LIB$PUT_OUTPUT
 
         .PSECT  PRINT_DATA, NOEXE, WRT, LONG
-CHAN:   .LONG   0                       ; SYS$OUTPUT's, once assigned
-OUTPUT: .ASCID  "SYS$OUTPUT"
-OPA0:   .ASCID  "OPA0:"
 HEX:    .ASCII  "0123456789ABCDEF"
-LINE:   .BLKB   1028
+LINE:   .BLKB   264                     ; the text, then the value
+DESC:   .WORD   0                       ; LINE's descriptor: the length
+        .BYTE   14, 1                   ; DSC$K_DTYPE_T, DSC$K_CLASS_S
+        .ADDRESS LINE
 
         .PSECT  PRINT_CODE, EXE, LONG
-; LIB$PUT_OUTPUT string: writes the string, by descriptor, its first 1024
-; characters, and CR LF, as VMS's run-time library does. R0 = $QIOW's
-; status.
-        .ENTRY  LIB$PUT_OUTPUT, ^M<R2, R3>
-        MOVL    4(AP), R1
-        MOVZWL  (R1), R2
-        MOVL    4(R1), R1
-        CMPL    R2, #1024
-        BLEQU   10$
-        MOVL    #1024, R2
-10$:    CLRL    R3
-20$:    CMPL    R3, R2
-        BGEQU   30$
-        MOVB    (R1)[R3], LINE[R3]
-        INCL    R3
-        BRB     20$
-30$:    BSBW    WRITE
-        RET
-
 ; PUT_LINE text, value: writes the .ASCIC text, value in 8 hex digits if
-; there is a value, and CR LF. R0 = $QIOW's status.
+; there is a value, and CR LF. R0 = LIB$PUT_OUTPUT's status.
         .ENTRY  PUT_LINE, ^M<R2, R3, R4>
         MOVL    4(AP), R1
         MOVZBL  (R1)+, R2
@@ -59,23 +36,9 @@ LINE:   .BLKB   1028
         MOVB    HEX[R0], LINE[R3]
         INCL    R3
         SOBGTR  R2, 30$
-40$:    BSBW    WRITE
+40$:    MOVW    R3, DESC
+        PUSHAB  DESC
+        CALLS   #1, G^LIB$PUT_OUTPUT
         RET
-
-; WRITE: R3 = the bytes in LINE. Adds CR LF and writes it. R0 = $QIOW's
-; status. Uses R0-R3.
-WRITE:
-        .JSB_ENTRY  SCRATCH=<R2, R3>
-        MOVB    #13, LINE[R3]
-        MOVB    #10, LINE+1[R3]
-        ADDL2   #2, R3
-        TSTL    CHAN
-        BNEQ    50$
-        $ASSIGN_S DEVNAM=OUTPUT, CHAN=CHAN
-        BLBS    R0, 50$
-        $ASSIGN_S DEVNAM=OPA0, CHAN=CHAN
-        BLBC    R0, 90$
-50$:    $QIOW_S CHAN=CHAN, FUNC=#IO$_WRITEVBLK, P1=LINE, P2=R3
-90$:    RSB
 
         .END

@@ -1,0 +1,10 @@
+! LIBRTL.EXE's symbol vector: the routines other images call, each with
+! its place for good. A new one goes at the end, as on VMS, so that the
+! images linked against it keep working.
+SYMBOL_VECTOR=(LIB$PUT_OUTPUT=PROCEDURE, -
+               LIB$GET_INPUT=PROCEDURE, -
+               LIB$ESTABLISH=PROCEDURE, -
+               LIB$REVERT=PROCEDURE, -
+               LIB$SIG_TO_RET=PROCEDURE, -
+               LIB$SIGNAL=PROCEDURE, -
+               LIB$STOP=PROCEDURE)

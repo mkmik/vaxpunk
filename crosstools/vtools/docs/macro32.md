@@ -305,10 +305,11 @@ without `B^`/`W^`/`L^`, `#n` with `S^`/`I^`, `@#address`, `address` and
 `@address` (`G^` too), and `[Rx]` indexing any memory mode. Operands are
 evaluated left to right with their side effects, as on the VAX.
 
-A jump or call to `address` is `b` or `bl`, which reach ±128 MB: the image
-it is in. One to `G^address`, which may be in another image, as `SYS$name`
-in the executive is, takes the address with `adrp` and `add`, ±4 GB, and
-goes through a register.
+A jump or call to `address` or `G^address` is `b` or `bl`, which reach
+±128 MB. A `G^` target may be in another image, as `SYS$name` in the
+executive or `LIB$name` in a shareable image is: there the linker puts a
+veneer between the call and its target (`docs/linker.md`). A jump or call to
+a constant address, or through any other operand, goes through a register.
 
 Limits:
 

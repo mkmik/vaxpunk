@@ -4,7 +4,9 @@
 //! two linked together when both are there, and with sysexe/lib/*.mar and
 //! *.b64, its command table if there is a
 //! sysexe/NAME.cld, its ARM64 if there is a sysexe/NAME.m64, which vasm
-//! assembles, and against SYS.STB, the executive's symbols; DCL and
+//! assembles, and against LIBRTL.EXE and SYS.STB, the executive's symbols;
+//! in [SYSLIB], LIBRTL.EXE, the shareable image of sysexe/librtl/*.mar,
+//! with the symbol vector librtl.opt gives, which DCL links in instead; DCL and
 //! HELP with DCL$TABLES, from cld/*.cld, and DCL with sysexe/dcl/*.mar,
 //! its CDU, and HELP and TCPIP with sysexe/help/*.mar, which describes
 //! command tables, and CREATE, CONVERT and ANALYZRMS with sysexe/rms/*.mar,
@@ -38,6 +40,7 @@ fn main() {
     let sysexe: Vec<_> = [
         "sysexe",
         "sysexe/lib",
+        "sysexe/librtl",
         "sysexe/dcl",
         "sysexe/help",
         "sysexe/rms",
@@ -49,7 +52,18 @@ fn main() {
     let module = |p: &PathBuf| compiled[p].clone();
     let mut libs: Vec<_> = sources("sysexe/lib", &["mar"]).iter().map(module).collect();
     libs.extend(sources("sysexe/lib", &["b64"]).iter().map(|s| bliss(s)));
-    let mut files = vec![("EXEC.EXE".to_string(), exec.image.write())];
+    let mut files = vec![("[SYSEXE]EXEC.EXE".to_string(), exec.image.write())];
+    // LIBRTL.EXE, which moves: linked at 0, as on Alpha.
+    let librtl: Vec<_> = sources("sysexe/librtl", &["mar"])
+        .iter()
+        .map(module)
+        .collect();
+    let opt = fs::read_to_string("sysexe/librtl/librtl.opt").unwrap();
+    let vector = vlink::options(&opt).unwrap_or_else(|e| panic!("librtl.opt: {e:?}"));
+    let modules: Vec<_> = librtl.iter().cloned().chain([stb.clone()]).collect();
+    let shr = link_shareable("LIBRTL", vector, &modules);
+    files.push(("[SYSLIB]LIBRTL.EXE".into(), shr.image.write()));
+    let librtl_exe = ("LIBRTL.EXE".to_string(), shr.image.write());
     // Each process has its own P0, so every image goes at the same address,
     // but DCL: linked in P1, at VA$C_CLI, it is a command interpreter, which
     // stays while the images it runs come and go in P0.
@@ -88,6 +102,12 @@ fn main() {
             modules.extend(sources("sysexe/rms", &["mar"]).iter().map(module));
         }
         modules.extend(libs.iter().cloned());
+        // DCL, in P1, can't call a shareable image, which goes in P0.
+        if name == "DCL" {
+            modules.extend(librtl.iter().cloned());
+        } else {
+            modules.push(librtl_exe.clone());
+        }
         modules.push(stb.clone());
         let base = if name == "DCL" {
             0x7FF0_0000
@@ -95,7 +115,7 @@ fn main() {
             vlink::DEFAULT_BASE
         };
         let image = link(&name, base, None, &modules);
-        files.push((format!("{name}.EXE"), image.image.write()));
+        files.push((format!("[SYSEXE]{name}.EXE"), image.image.write()));
     }
     disk(&out.join("sysdisk.img"), &files);
 }
@@ -238,12 +258,27 @@ fn link(
         base,
         name: name.into(),
         transfer: transfer.map(Into::into),
-        link_time: 0,
-        relocatable: false,
+        ..Default::default()
     };
-    let linked = vlink::link(modules, &opts)
-        .unwrap_or_else(|msgs| panic!("vlink {name} failed:\n{}", msgs.join("\n")));
-    for w in &linked.warnings {
+    checked(name, vlink::link(modules, &opts))
+}
+
+/// Links object modules into a shareable image, at 0, with the symbol
+/// vector `vector`.
+fn link_shareable(name: &str, vector: Vec<String>, modules: &[(String, Vec<u8>)]) -> vlink::Linked {
+    let opts = vlink::Options {
+        name: name.into(),
+        shareable: Some(vector),
+        ..Default::default()
+    };
+    checked(name, vlink::link(modules, &opts))
+}
+
+/// The image, after its warnings, but not its information, or the link's
+/// errors.
+fn checked(name: &str, linked: Result<vlink::Linked, Vec<String>>) -> vlink::Linked {
+    let linked = linked.unwrap_or_else(|msgs| panic!("vlink {name} failed:\n{}", msgs.join("\n")));
+    for w in linked.warnings.iter().filter(|w| !w.contains("-I-")) {
         println!("cargo::warning={w}");
     }
     linked
@@ -276,7 +311,8 @@ fn symbol_table(map: &str) -> (String, Vec<u8>) {
 }
 
 /// The system disk: an ODS-2 volume labelled VAXPUNK with the images in
-/// [SYSEXE], fixed 512-byte records as VMS's are, and sysmgr/'s files in
+/// [SYSEXE] and [SYSLIB], as `images` names them, fixed 512-byte records as
+/// VMS's are, and sysmgr/'s files in
 /// [SYSMGR], their lines variable-length records, with names in capitals.
 /// [1,4] owns them, and all may read and run them: (S:RWED,O:RWED,G:RE,W:RE).
 fn disk(path: &Path, images: &[(String, Vec<u8>)]) {
@@ -292,6 +328,7 @@ fn disk(path: &Path, images: &[(String, Vec<u8>)]) {
     }
     let mut vol = ok(Image::create(path, 8192, &params));
     ok(vol.mkdir("[SYSEXE]"));
+    ok(vol.mkdir("[SYSLIB]"));
     ok(vol.mkdir("[SYSMGR]"));
     let image = RecordAttrs {
         rtype: rfm::FIX,
@@ -299,10 +336,9 @@ fn disk(path: &Path, images: &[(String, Vec<u8>)]) {
         maxrec: 512,
         ..Default::default()
     };
-    for (name, data) in images {
-        let spec = format!("[SYSEXE]{name}");
+    for (spec, data) in images {
         let size = Some(data.len() as u64);
-        ok(vol.copy_in(&mut &data[..], &spec, Conversion::Binary, size, Some(image)));
+        ok(vol.copy_in(&mut &data[..], spec, Conversion::Binary, size, Some(image)));
     }
     for source in sources("sysmgr", &["txt", "com", "cld"]) {
         let name = source.file_name().unwrap().to_str().unwrap().to_uppercase();

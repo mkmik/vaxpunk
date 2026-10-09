@@ -5,7 +5,9 @@
 //! - the executive's routines and data (vms/exec/*.mar, consolio.mar,
 //!   and the `GLOBAL ROUTINE`s of vms/exec/*.b64, BLISS-64), and
 //!   the global ones of the libraries the system disk's images link
-//!   (vms/sysexe/lib/*.mar, and the `GLOBAL ROUTINE`s of its *.b64) and of DCL's own (vms/sysexe/dcl.mar,
+//!   (vms/sysexe/lib/*.mar, and the `GLOBAL ROUTINE`s of its *.b64),
+//!   of LIBRTL.EXE, the shareable image they call (vms/sysexe/librtl/*.mar),
+//!   and of DCL's own (vms/sysexe/dcl.mar,
 //!   vms/sysexe/dcl/*.mar), and of the RMS utilities' (vms/sysexe/rms/*.mar):
 //!   the comment block right above each `NAME::`
 //!   or `.ENTRY`, whose first line reads `NAME: what it does` or, for a system
@@ -733,6 +735,7 @@ impl Api {
         // The images' libraries, and DCL's: their global routines and data
         // only, since their local names may be the executive's too.
         let mut libs = glob(&root.join("vms/sysexe/lib"), "mar");
+        libs.extend(glob(&root.join("vms/sysexe/librtl"), "mar"));
         libs.push(root.join("vms/sysexe/dcl.mar"));
         libs.extend(glob(&root.join("vms/sysexe/dcl"), "mar"));
         libs.extend(glob(&root.join("vms/sysexe/rms"), "mar"));

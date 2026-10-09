@@ -445,6 +445,17 @@ fn test(v: &str, size: Size) -> Flags {
 }
 
 /// A branch target: a plain expression.
+/// The destination of a jump or call that is `b` or `bl`: `address`, or
+/// `G^address` when it isn't a constant. A `G^` one may be in another
+/// image, past `bl`'s ±128 MB, where the linker puts a veneer between.
+pub(crate) fn direct<'a>(g: &Gen, op: &'a Opnd) -> Option<&'a str> {
+    match op {
+        Opnd::Mem(Mode::Rel(e), None) => Some(e),
+        Opnd::Mem(Mode::Gen(e), None) if g.constant(e).is_none() => Some(e),
+        _ => None,
+    }
+}
+
 fn target(op: &Opnd) -> Result<&str> {
     match op {
         Opnd::Mem(Mode::Rel(e), None) => Ok(e),
@@ -692,10 +703,10 @@ pub fn compile(
             Ok(None)
         }
         Op::Jmp => {
-            match &ops[0] {
-                Opnd::Mem(Mode::Rel(e), None) => g.emit(format!("b {e}")),
-                o => {
-                    let a = g.address(o, size)?;
+            match direct(g, &ops[0]) {
+                Some(e) => g.emit(format!("b {e}")),
+                None => {
+                    let a = g.address(&ops[0], size)?;
                     g.emit(format!("br {a}"));
                 }
             }
@@ -704,9 +715,9 @@ pub fn compile(
         Op::Jsb => {
             // A native call, as AMACRO made it: the return address is in
             // x30, not on the VAX stack.
-            let call = match &ops[0] {
-                Opnd::Mem(Mode::Rel(e), None) => format!("bl {e}"),
-                o => format!("blr {}", g.address(o, size)?),
+            let call = match direct(g, &ops[0]) {
+                Some(e) => format!("bl {e}"),
+                None => format!("blr {}", g.address(&ops[0], size)?),
             };
             g.emit(format!("and sp, x{SP}, #0xfffffffffffffff0"));
             g.emit(call);
@@ -745,10 +756,10 @@ pub fn compile(
                 None if calls => (Some(g.read(&ops[0], Size::L, Ext::Any)?), None),
                 None => (None, Some(g.address(&ops[0], Size::B)?)),
             };
-            let call = match &ops[1] {
-                Opnd::Mem(Mode::Rel(e), None) => format!("bl {e}"),
-                o => {
-                    let t = g.address(o, Size::B)?;
+            let call = match direct(g, &ops[1]) {
+                Some(e) => format!("bl {e}"),
+                None => {
+                    let t = g.address(&ops[1], Size::B)?;
                     if t != "x13" {
                         g.emit(format!("mov x13, {t}"));
                     }

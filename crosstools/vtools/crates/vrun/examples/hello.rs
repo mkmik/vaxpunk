@@ -25,6 +25,8 @@ fn main() {
         link_time: 0,
         transfer: 0x10000,
         fixups: None,
+        shareables: Vec::new(),
+        vector: None,
         sections: vec![Section {
             vaddr: 0x10000,
             size: data.len() as u32,

@@ -61,6 +61,10 @@ SYSLNM: .ASCIC  "SYS$SYSDEVICE"         ; the system disk
         .ASCIC  "SYS$SYSDEVICE:"
         .ASCIC  "SYS$SYSTEM"            ; the images
         .ASCIC  "SYS$SYSDEVICE:[SYSEXE]"
+        .ASCIC  "SYS$LIBRARY"           ; the libraries
+        .ASCIC  "SYS$SYSDEVICE:[SYSLIB]"
+        .ASCIC  "SYS$SHARE"             ; the shareable images, LIBRTL.EXE
+        .ASCIC  "SYS$SYSDEVICE:[SYSLIB]"
         .ASCIC  "SYS$MANAGER"           ; the system manager's files
         .ASCIC  "SYS$SYSDEVICE:[SYSMGR]"
         .ASCIC  "SYS$SCRATCH"           ; work files, CONVERT's: the default

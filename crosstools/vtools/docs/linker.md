@@ -2,20 +2,25 @@
 
 `vlink` links object modules (`docs/object-format.md`) into an executable
 image (`docs/image-format.md`) at a fixed base address, taking modules from
-object libraries (`docs/library-format.md`) as they are needed. With
-`/RELOCATABLE`, the image also says how to move it elsewhere.
+object libraries (`docs/library-format.md`) as they are needed, and procedures
+from shareable images. With `/RELOCATABLE`, the image also says how to move
+it elsewhere; with `/SHAREABLE`, it is a shareable image, which others link
+against.
 
 ```
-vlink [/EXE=file] [/MAP[=file]] [/BASE=address] [/TRANSFER=symbol] [/RELOCATABLE] FILE...
-vlink [-o file] [-m file] [--base address] [--transfer symbol] [--relocatable] FILE...
+vlink [/EXE=file] [/MAP[=file]] [/BASE=address] [/TRANSFER=symbol] [/RELOCATABLE] [/SHAREABLE] FILE...
+vlink [-o file] [-m file] [--base address] [--transfer symbol] [--relocatable] [--shareable] FILE...
 ```
 
 A FILE is an object module or an object library, `LIB.OLB/LIBRARY` as on VMS,
-or just `LIB.OLB`: vlink knows a library when it sees one.
+or just `LIB.OLB`: vlink knows a library when it sees one. It is also a
+shareable image to link against, `LIBRTL.EXE`, or an options file,
+`FILE.OPT/OPTIONS`, which gives a shareable image's symbol vector (*Shareable
+images*).
 
 The image defaults to the first input's name with `.exe`, the map to the image's
 with `.map`. Addresses are decimal, `0x` or `%X` hex. The default base is
-`%X10000`, as on VMS. Messages are VMS-style (`%VLINK-E-UDFSYM, ...`); any error
+`%X10000`, as on VMS, and a shareable image's 0, as on Alpha. Messages are VMS-style (`%VLINK-E-UDFSYM, ...`); any error
 means no image is written.
 
 Status: work order steps 6, 7 and 9. Procedure descriptors come later.
@@ -47,8 +52,9 @@ Status: work order steps 6, 7 and 9. Procedure descriptors come later.
    in `$VENEER$`, a code psect of a module of its own, `$VENEERS`:
    `ldr x16, 8; br x16` and the address, which DESIGN-0004 lets a linker put
    between a call and its target. A target that moves with the image gets no
-   veneer, and stays an error. Data stored into a demand-zero psect is an
-   error.
+   veneer, and stays an error. In an image that moves, every `B` or `BL` to a
+   fixed address goes through a veneer, since the distance changes. Data
+   stored into a demand-zero psect is an error.
 5. **Picks the transfer address** from `/TRANSFER`, or else from the first
    module whose end-of-module record has one.
 
@@ -77,6 +83,60 @@ goes in, replacing a module of the same name, as `LIBRARY/REPLACE` does.
 each module's strong global definitions; a symbol already there for another
 module stays with that module, with a warning. `/LIST` prints the module
 names, and with `/NAMES` the symbols of each.
+
+## Shareable images
+
+A shareable image holds procedures that other images call, a copy of which
+the image activator maps into each process that runs one of them
+(ADR-0028). `LIBRTL.EXE`, VMS's run-time library, is one.
+
+### Making one
+
+`/SHAREABLE` links a shareable image, which always moves, as if
+`/RELOCATABLE`, from 0 unless `/BASE` says otherwise. Its symbol vector
+lists the procedures other images may call, in an options file, as VMS
+LINK takes it:
+
+```
+! LIBRTL.OPT
+SYMBOL_VECTOR=(LIB$PUT_OUTPUT=PROCEDURE, -
+               LIB$GET_INPUT=PROCEDURE)
+```
+
+`!` starts a comment and `-` ends a line that goes on. Each entry is a
+procedure of the image, a global symbol in a code psect, or the link fails
+with `%VLINK-E-NOTPROC`; DATA entries aren't there yet. An entry keeps its
+place: new ones go at the end, so that images linked against the old vector
+still work. vlink adds `$SYMVECT$`, a read-only `NOPIC` psect of a module of
+its own, `$SYMVECT`, with a quadword for each, the procedure's address, a
+fixup; and the global symbol table, from which other links learn the names
+(`docs/image-format.md`).
+
+### Linking against one
+
+A shareable image among the inputs defines each procedure of its symbol
+vector for the modules that reference it and don't define it themselves.
+The image calls each one it uses through a veneer of its own, in
+`$VENEER$`, before those for fixed addresses:
+
+```
+        adrp    x16, slot
+        ldr     x16, [x16, #:lo12:slot]
+        br      x16
+        nop
+```
+
+The slot is a quadword in `$LINK$`, in `$VENEERS`'s part, which the image
+activator sets to the procedure's address from the shareable image's symbol
+vector: a quadword `.ADDRESS` fixup, in the fixup section's group for that
+image. The procedure's name stands for its veneer's address, which moves with
+the image, so a `BL`, an `adrp` and `add`, and a `.ADDRESS` of it all work, and
+the image's code holds no address in another image: it can still be shared.
+A shareable image no module calls into isn't in the image's list.
+
+ponytail: an address the image takes of such a procedure is its veneer's,
+not the procedure's, so two images' addresses of it differ. Nothing compares
+them yet.
 
 ## The map
 

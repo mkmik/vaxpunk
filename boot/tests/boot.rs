@@ -47,7 +47,8 @@ const BOOT: Phase = Phase {
 /// SYSTEM's default, SYS$SYSROOT:[SYSMGR], and its first SET DEFAULT, to a
 /// search list of the ramdisk and SYS$MANAGER, then back to SYS$MANAGER:. RUN STARTUP, whose processes
 /// print theirs by the end, and SNOOP; then
-/// DIRECTORY, TYPE, TYPE/HEAD, TYPE/TAIL and EDIT on the system disk,
+/// DIRECTORY, of LIBRTL.EXE in SYS$SHARE too, TYPE, TYPE/HEAD, TYPE/TAIL
+/// and EDIT on the system disk,
 /// DCLTEST.COM's and DCL's lines with symbols, a PIPE whose && skips and
 /// || runs after a failure, those SYLOGIN.COM defined too, CLITEST's words as a
 /// foreign command, EDIT's EXIT that can't write there, a logical name,
@@ -69,7 +70,7 @@ const SYSTEM_DISK: Phase = Phase {
             "  =   DKA0:[SYSMGR]",
             1,
             concat!(
-                "RUN STARTUP\rRUN SNOOP\rFOO\rDIR [SYSEXE]P%NG\rTYPE WELCOME.TXT\r",
+                "RUN STARTUP\rRUN SNOOP\rFOO\rDIR [SYSEXE]P%NG\rDIR SYS$SHARE:\rTYPE WELCOME.TXT\r",
                 "TYPE/HEAD=3 WELCOME.TXT\rTYPE/TAIL=2 WELCOME.TXT\r",
                 "@DCLTEST 3 \"Two words\"\r@DCLTEST FAIL\rSHOW SYMBOL $STATUS\r",
                 "X = 6 * 7\rWRITE SYS$OUTPUT \"X is \", X\rSHOW SYMBOL HOME\rHOME\r",
@@ -91,6 +92,7 @@ const SYSTEM_DISK: Phase = Phase {
         " \\FOO\\",
         "PING.EXE;1          PONG.EXE;1",
         "Total of 2 files.",
+        "Directory DKA0:[SYSLIB]\n\nLIBRTL.EXE;1\n",
         "and the rest of what INITIALIZE made.",
         "CLITEST: foreign ONE \"Two\" 3",
         "CLITEST: foreign world",

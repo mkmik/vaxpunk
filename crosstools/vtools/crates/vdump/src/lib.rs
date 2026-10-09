@@ -5,7 +5,7 @@ use std::collections::HashMap;
 use std::fmt::Write;
 
 use vms_obj::Error;
-use vms_obj::exe::{Eiaf, Eihd, Eisd, Image};
+use vms_obj::exe::{Eiaf, Eihd, Eisd, Image, write_eiaf};
 use vms_obj::obj::{self, Gsd, Record, Tir, psc, sym};
 use vms_obj::olb::{self, Library};
 use vms_obj::reloc::{self, Need, Weight};
@@ -96,12 +96,23 @@ fn image(image: &Image, iafva: u64, map: Option<&str>) -> String {
             hex(o, "  ", s.vaddr, &s.data);
         }
     }
-    let Some(f) = &image.fixups else {
+    if let Some(v) = &image.vector {
+        let _ = writeln!(
+            o,
+            "Symbol vector: {:016X}, {} entries",
+            v.addr,
+            v.entries.len()
+        );
+        for (i, (name, addr)) in v.entries.iter().enumerate() {
+            let _ = writeln!(o, "  {:4}  {addr:016X}  {name}", 8 * i);
+        }
+    }
+    if image.fixups.is_none() && image.shareables.is_empty() {
         return out;
-    };
+    }
 
     // The section as vms-obj writes it, which is how it parsed.
-    let raw = f.write();
+    let raw = write_eiaf(image.fixups.as_ref(), &image.shareables);
     let h = Eiaf::parse(&raw).expect("a fixup section header");
     let _ = writeln!(
         o,
@@ -119,6 +130,17 @@ fn image(image: &Image, iafva: u64, map: Option<&str>) -> String {
         "  quadword relocation fixups at {}, longword relocation fixups at {}",
         h.qrelfixoff, h.lrelfixoff
     );
+    let start = image.sections.iter().map(|s| s.vaddr).min().unwrap_or(0);
+    for (i, shl) in image.shareables.iter().enumerate() {
+        let _ = writeln!(o, "  shareable image {i}: {}", shl.name);
+        for &(off, entry) in &shl.quad {
+            let at = start + u64::from(off);
+            let _ = writeln!(o, "    quadword at {at:016X}: symbol vector + {entry}");
+        }
+    }
+    let Some(f) = &image.fixups else {
+        return out;
+    };
     if !f.long.is_empty() {
         let _ = writeln!(
             o,
@@ -127,7 +149,6 @@ fn image(image: &Image, iafva: u64, map: Option<&str>) -> String {
         );
     }
     let psects = map.map_or(Vec::new(), map_psects);
-    let start = image.sections.iter().map(|s| s.vaddr).min().unwrap_or(0);
     for (list, size, kind) in [(&f.quad, 8, "quadword"), (&f.long, 4, "longword")] {
         for &off in list {
             let at = start + u64::from(off);

@@ -728,7 +728,9 @@ impl Macro32 {
                     ));
                 }
                 let call = match ops.first() {
-                    Some(Opnd::Mem(Mode::Rel(e), None)) => format!("bl {e}"),
+                    Some(o) if insn::direct(&g, o).is_some() => {
+                        format!("bl {}", insn::direct(&g, o).unwrap())
+                    }
                     Some(o) => {
                         let t = g.address(o, operand::Size::B)?;
                         g.emit(format!("mov x13, {t}"));

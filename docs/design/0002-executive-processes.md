@@ -53,7 +53,7 @@ its code.
 | `ttdriver.mar` | the terminal driver, a UCB per terminal, the console's and TELNET's: writes, queued reads, their terminators, editing and timers, the console receive interrupt and the type-ahead buffers, CTRL/C and CTRL/Y ASTs, Telnet on a TCP connection |
 | `getdvi.mar` | `$GETDVI`, `$GETDVIW`, `$DEVICE_SCAN`: what the devices are |
 | `syssrv.mar` | the system service vector, the `CHMK` and `CHME` dispatchers, `$CMEXEC`, where processes enter user and supervisor mode, and the stubs |
-| `f11.mar` | Files-11 ODS-2 volumes: the disks' VCBs, reading and writing their blocks, `FIL$MOUNT` and `$MOUNT`, headers, maps, directories, `FIL$OPENFILE` for the image activator |
+| `f11.mar` | Files-11 ODS-2 volumes: the disks' VCBs, reading and writing their blocks, `FIL$MOUNT` and `$MOUNT`, headers, maps, directories, `FIL$OPENFILE` and `FIL$OPENSHR` for the image activator |
 | `f11wrt.mar` | Files-11 writes: headers, blocks, directory entries, `FIL$INIT` and `$INIT_VOL` |
 | `mddriver.mar` | `MDA0:`, the ramdisk |
 | `rms.mar` | RMS: file specifications, `$PARSE`, `$SEARCH`, `$OPEN`, `$CREATE`, `$CONNECT`, `$GET`, `$PUT`, `$DISCONNECT`, `$CLOSE`, `$ERASE` |
@@ -169,9 +169,18 @@ The scheduler's first `SWPCTX` to the new HWPCB starts its thread at
    disk, in `SYS$SYSTEM:` unless its name says where, into pool
    (`FIL$OPENFILE`, *Files*), checks its header and that it is all in P0, or all
    from `VA$C_CLI` to the stacks in P1, and maps each section: zeroed
-   pages, the contents copied in, then the protection: code read and
+   pages, the contents copied in, then, after the shareable images it
+   calls, the protection: code read and
    execute, read-only data read, the rest write, for user mode in P0 and
-   supervisor mode in P1. Then it frees the pool.
+   supervisor mode in P1. Then it frees the pool. An image in P0 may call
+   shareable images, which its fixup section lists
+   ([ADR-0028](../adr/0028-shareable-images.md)): for each, `SHRACT`
+   reads it from `SYS$SHARE:` (`FIL$OPENSHR`), maps it the same way at the
+   next 64 KB past the end of P0, adds how far it moved to each address
+   its relocation records name, and protects it for user mode; `SHRLIST`
+   then sets the image's quadwords for that image's procedures from its
+   symbol vector. ponytail: a copy in each process, as VMS maps a
+   shareable image that isn't installed.
 3. An image in P1 is a command interpreter: `EXE$CLIENTRY` (*The command
    interpreter*). Any other, `EXE$USRENTRY`: `REI` to `EXE$USRSTART`, in
    user mode, on an empty user stack, with the image's transfer address in
@@ -739,8 +748,10 @@ word for the length returned, and a longword 0 at the end (`$LNMDEF`).
   all three, as `LOGINOUT` gives a terminal's process its terminal.
 - **System names.** `EXEC$START` makes `SYS$SYSDEVICE`, `DKA0:`;
   `SYS$DISK`, `SYS$SYSDEVICE:`, the default device, which `SET DEFAULT`
-  gives a process one of its own of; and `SYS$SYSTEM`,
-  `SYS$SYSDEVICE:[SYSEXE]`, where the images are. ponytail: VMS's
+  gives a process one of its own of; `SYS$SYSTEM`,
+  `SYS$SYSDEVICE:[SYSEXE]`, where the images are; and `SYS$LIBRARY` and
+  `SYS$SHARE`, `SYS$SYSDEVICE:[SYSLIB]`, where the shareable images are.
+  `SYSTARTUP_VMS.COM` makes them `SYS$SYSROOT:` names. ponytail: VMS's
   `SYS$SYSTEM` is `SYS$SYSROOT:[SYSEXE]`, a rooted directory in
   `[SYS0.]`, and `LOGINOUT` defines each process's `SYS$DISK`.
 
@@ -1029,7 +1040,8 @@ does:
   goes on from where it was.
 - **`FIL$OPENFILE`** finds an image and reads it whole into pool, for the
   image activator, which frees it once the sections are copied:
-  `RMS$_PRV` without execute access to it.
+  `RMS$_PRV` without execute access to it. **`FIL$OPENSHR`** does the
+  same for a shareable image, from `SYS$SHARE:name.EXE`.
 - **`FIL$CHKPRO`** says whether the current process may read, write,
   execute or delete what an owner's UIC and a protection mask guard,
   or control it, by VMS's rules (below), and **`FIL$CHKHDR`** checks a
@@ -1103,7 +1115,8 @@ the specification leaves out, so `SYS$SYSTEM:DCL.EXE` is
 takes each part from the first that has it, in capitals, into the
 expanded specification, checks it, and walks
 the directory from the MFD, each name `NAME.DIR;1` in the one before
-(`[000000]` is the MFD). The images' default is `SYS$SYSTEM:` instead.
+(`[000000]` is the MFD). The images' default is `SYS$SYSTEM:` instead,
+and the shareable images' `SYS$SHARE:.EXE`.
 A device that is a search list stands for each of its strings in turn,
 as on OpenVMS (checked against V8.4-2L1 in AXPbox). `$OPEN`, `$ERASE`
 and the image activator try each until one has the file
@@ -1234,11 +1247,17 @@ parameters, an `EDIT` in keypad mode that writes a second version, `DIR`,
 `DKA0:[SYSMGR]`, among them `SYSTARTUP_VMS.COM`, which mounts `MDA0:` and `DKB0:` at
 boot, and `SYLOGIN.COM`. They run in user mode, DCL in supervisor mode, and write
 on the console with `PRINT` and `PRINTHEX` from `sysexe.mlb`, which call
-`PUT_LINE` in `sysexe/lib/print.mar`: a line at a time on `OPA0:`, with
-`$QIOW`. They take their parameters and qualifiers with `GETVALUE` and
+`PUT_LINE` in `sysexe/lib/print.mar`, which calls `LIB$PUT_OUTPUT`: a
+line at a time on `SYS$OUTPUT`, with `$QIOW`. They take their parameters
+and qualifiers with `GETVALUE` and
 `PRESENT`, also in `sysexe.mlb`, which call `CLI$GET_VALUE` and
 `CLI$PRESENT` in `sysexe/lib/cli.mar` (*Commands*). `build.rs` links
-`sysexe/lib/` into each, and `sysexe/NAME.cld`'s table into `NAME.EXE`.
+`sysexe/lib/` into each, and `sysexe/NAME.cld`'s table into `NAME.EXE`,
+and links each against `LIBRTL.EXE`, in `DKA0:[SYSLIB]`, the shareable
+image of `sysexe/librtl/`: `LIB$PUT_OUTPUT`, `LIB$GET_INPUT` and the
+condition handling routines, with the symbol vector `librtl.opt` gives
+([ADR-0028](../adr/0028-shareable-images.md)). DCL, in P1, links
+`sysexe/librtl/` in instead.
 
 | Program | Does |
 | --- | --- |

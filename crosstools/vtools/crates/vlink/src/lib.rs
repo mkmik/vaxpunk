@@ -1,7 +1,9 @@
 //! vlink: links object modules into an executable image at a fixed base,
 //! and writes a VMS-style map.
 //!
-//! Object libraries give the modules that define what the others need.
+//! Object libraries give the modules that define what the others need, and
+//! shareable images the procedures their symbol vectors hold, which the
+//! image calls through veneers whose addresses the image activator sets.
 //! Psects with the same name are merged across modules; CON contributions are
 //! concatenated, OVR ones overlaid. Psects go into image sections by
 //! protection: code, read-only data, writable data, demand-zero. Then each
@@ -12,11 +14,12 @@ mod map;
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
-use vms_obj::exe::{Eisd, Fixups, Image, SECTION_ALIGN, Section};
+use vms_obj::exe::{Eisd, Fixups, Image, SECTION_ALIGN, Section, ShlRef, SymbolVector};
 use vms_obj::obj::{self, Gsd, Record, Tir, psc, sym};
 use vms_obj::olb::{self, Library};
 use vms_obj::reloc::{self, Need, Weight};
 
+#[derive(Default)]
 pub struct Options {
     /// Address of the first image section.
     pub base: u64,
@@ -29,6 +32,9 @@ pub struct Options {
     /// Make an image a loader may move: anything that can't move is an
     /// error, and the image gets a fixup section.
     pub relocatable: bool,
+    /// Make a shareable image, which other images link against and call
+    /// through its symbol vector, of these procedures. It is relocatable.
+    pub shareable: Option<Vec<String>>,
 }
 
 #[derive(Debug)]
@@ -45,11 +51,21 @@ pub const DEFAULT_BASE: u64 = 0x10000;
 /// A veneer's bytes.
 const VENEER: u64 = 16;
 
+/// Whether `bytes` is an executable image rather than an object module or
+/// library: its header starts with major id 3, minor id 0.
+fn is_image(bytes: &[u8]) -> bool {
+    bytes.starts_with(&[3, 0, 0, 0, 0, 0, 0, 0])
+}
+
 /// Links object files and object libraries, given as (file name, contents), in
 /// order. Errors come back as VMS messages.
 pub fn link(inputs: &[(String, Vec<u8>)], opts: &Options) -> Result<Linked, Vec<String>> {
     let mut l = Linker::default();
     for (file, bytes) in inputs {
+        if is_image(bytes) {
+            l.shareable(file, bytes)?;
+            continue;
+        }
         if olb::is_library(bytes) {
             let lib = Library::parse(bytes).map_err(|e| {
                 vec![format!(
@@ -66,20 +82,31 @@ pub fn link(inputs: &[(String, Vec<u8>)], opts: &Options) -> Result<Linked, Vec<
         })?;
         l.add(file, records)?;
     }
+    let relocatable = opts.relocatable || opts.shareable.is_some();
+    l.relocatable = relocatable;
     l.resolve()?;
+    if !l.imports.is_empty() {
+        l.add_veneers();
+    }
+    if let Some(names) = &opts.shareable {
+        l.add_vector(names)?;
+    }
     l.layout(opts.base)?;
     let (mut data, mut errors) = l.execute();
     // A B or BL that can't reach a fixed address, the executive's from an
     // image in P0, goes through a veneer: then everything again.
-    if !l.far.is_empty() {
+    while l.far.len() > l.veneered {
         l.add_veneers();
         l.layout(opts.base)?;
         (data, errors) = l.execute();
     }
+    if let Some(names) = &opts.shareable {
+        l.write_vector(names, &mut data);
+    }
     // A fixup in a PIC psect is always worth a warning; a store that can't
     // move matters only if the image must.
     for (code, msg) in l.problems() {
-        if opts.relocatable {
+        if relocatable {
             errors.push(format!("%VLINK-E-{code}, {msg}"));
         } else if code == "NOTPIC" {
             l.warnings.push(format!("%VLINK-W-{code}, {msg}"));
@@ -88,7 +115,7 @@ pub fn link(inputs: &[(String, Vec<u8>)], opts: &Options) -> Result<Linked, Vec<
     if !errors.is_empty() {
         return Err(errors);
     }
-    let fixups = if opts.relocatable {
+    let fixups = if relocatable {
         let f = l.fixup_list()?;
         l.warnings.push(format!(
             "%VLINK-I-FIXUPS, {} quadword and {} longword fixups",
@@ -116,6 +143,7 @@ pub fn link(inputs: &[(String, Vec<u8>)], opts: &Options) -> Result<Linked, Vec<
             .find_map(|(i, m)| m.transfer.map(|t| (i, t)))
         {
             Some((m, (psect, offset))) => l.part_base(m, psect).map_err(|e| vec![e])? + offset,
+            None if opts.shareable.is_some() => 0,
             None => {
                 l.warnings
                     .push("%VLINK-W-USRTFR, the image has no transfer address".into());
@@ -145,6 +173,13 @@ pub fn link(inputs: &[(String, Vec<u8>)], opts: &Options) -> Result<Linked, Vec<
             })
             .collect(),
         fixups,
+        shareables: l.shl_list(),
+        vector: opts.shareable.as_ref().map(|names| SymbolVector {
+            addr: l.psects[l.vector.unwrap()].base,
+            entries: (names.iter())
+                .map(|n| (n.clone(), l.value(n).unwrap()))
+                .collect(),
+        }),
     };
     let map = map::map(&l, &image);
     Ok(Linked {
@@ -152,6 +187,44 @@ pub fn link(inputs: &[(String, Vec<u8>)], opts: &Options) -> Result<Linked, Vec<
         map,
         warnings: l.warnings,
     })
+}
+
+/// The symbol vector's procedures, from an options file: `!` starts a
+/// comment and `-` at the end of a line continues it, as on VMS.
+/// ponytail: SYMBOL_VECTOR only, and only PROCEDURE entries.
+pub fn options(text: &str) -> Result<Vec<String>, Vec<String>> {
+    let joined = text
+        .lines()
+        .map(|l| l.split('!').next().unwrap().trim())
+        .fold(String::new(), |mut acc, l| {
+            match l.strip_suffix('-') {
+                Some(l) => acc += l,
+                None => {
+                    acc += l;
+                    acc.push('\n');
+                }
+            }
+            acc
+        });
+    let mut names = Vec::new();
+    for line in joined.lines().filter(|l| !l.is_empty()) {
+        let upper = line.to_ascii_uppercase().replace(' ', "");
+        let list = upper
+            .strip_prefix("SYMBOL_VECTOR=(")
+            .and_then(|l| l.strip_suffix(')'))
+            .ok_or_else(|| vec![format!("%VLINK-F-OPTION, unsupported option: {line}")])?;
+        for entry in list.split(',') {
+            match entry.split_once('=') {
+                Some((name, "PROCEDURE")) => names.push(name.to_string()),
+                _ => {
+                    return Err(vec![format!(
+                        "%VLINK-F-OPTION, symbol vector entry {entry} is not NAME=PROCEDURE"
+                    )]);
+                }
+            }
+        }
+    }
+    Ok(names)
 }
 
 struct Module {
@@ -221,6 +294,13 @@ impl Class {
     }
 }
 
+/// A shareable image linked against: its name and its symbol vector's
+/// procedures, in order.
+struct Shared {
+    name: String,
+    entries: Vec<String>,
+}
+
 struct ImageSection {
     class: Class,
     start: u64,
@@ -255,6 +335,16 @@ struct Linker {
     /// veneers once there is one, in this order.
     far: BTreeSet<u64>,
     veneers: Option<usize>,
+    /// How many of `far` have a veneer.
+    veneered: usize,
+    /// The shareable images linked against, and the procedures of theirs
+    /// the image calls: name, image, symbol vector entry. Each has a veneer
+    /// before those of `far`, and a slot in `$LINK$` that it jumps through.
+    shared: Vec<Shared>,
+    imports: Vec<(String, usize, usize)>,
+    /// The symbol vector's psect, in a shareable image.
+    vector: Option<usize>,
+    relocatable: bool,
 }
 
 impl Linker {
@@ -328,6 +418,20 @@ impl Linker {
         if cur.is_some() {
             return Err(bad("the last module has no end-of-module record"));
         }
+        Ok(())
+    }
+
+    /// Adds a shareable image to link against.
+    fn shareable(&mut self, file: &str, bytes: &[u8]) -> Result<(), Vec<String>> {
+        let bad = |why: String| vec![format!("%VLINK-F-NOTSHR, {file} {why}")];
+        let image = Image::parse(bytes).map_err(|e| bad(format!("is not an image: {e}")))?;
+        let Some(vector) = image.vector else {
+            return Err(bad("is not a shareable image".into()));
+        };
+        self.shared.push(Shared {
+            name: image.name,
+            entries: vector.entries.into_iter().map(|e| e.0).collect(),
+        });
         Ok(())
     }
 
@@ -427,9 +531,21 @@ impl Linker {
                 }
             }
         }
+        // What no module defines, a shareable image may: the image calls
+        // it there.
+        for (name, ..) in &self.refs {
+            if self.defs.contains_key(name) || self.imports.iter().any(|i| i.0 == *name) {
+                continue;
+            }
+            let found = self.shared.iter().enumerate().find_map(|(i, s)| {
+                let entry = s.entries.iter().position(|e| e == name)?;
+                Some((name.clone(), i, entry))
+            });
+            self.imports.extend(found);
+        }
         let mut undefined: Vec<(String, Vec<String>)> = Vec::new();
         for (name, module, weak) in &self.refs {
-            if *weak || self.defs.contains_key(name) {
+            if *weak || self.defs.contains_key(name) || self.imports.iter().any(|i| i.0 == *name) {
                 continue;
             }
             let by = self.modules[*module].name.clone();
@@ -500,35 +616,159 @@ impl Linker {
         Ok(())
     }
 
-    /// Adds $VENEER$, a code psect of a module of its own, with a veneer
-    /// for each address in `far`: `ldr x16, 8; br x16` and the address,
-    /// which DESIGN-0004 lets a linker put between a call and its target.
+    /// Adds or resizes $VENEER$, a code psect of a module of its own,
+    /// $VENEERS, with a veneer for each procedure of a shareable image the
+    /// image calls, then one for each address in `far`, which DESIGN-0004
+    /// lets a linker put between a call and its target. Those for
+    /// `imports` jump through a quadword slot each, in $VENEERS's part of
+    /// $LINK$, and define the procedures' names as their addresses.
     fn add_veneers(&mut self) {
+        let n = self.imports.len() as u64;
+        self.veneered = self.far.len();
+        let size = VENEER * (n + self.far.len() as u64);
+        if let Some(p) = self.veneers {
+            self.psects[p].parts[0].size = size;
+            return;
+        }
         let flags = psc::PIC | psc::REL | psc::SHR | psc::EXE | psc::RD;
         let p = self.psect("$VENEER$", flags, 3).unwrap();
+        let link = self.psect("$LINK$", psc::REL | psc::RD, 3).unwrap();
         let module = self.modules.len();
         self.psects[p].parts.push(Part {
             module,
-            size: VENEER * self.far.len() as u64,
+            size,
             align: 3,
             offset: 0,
         });
+        self.psects[link].parts.push(Part {
+            module,
+            size: 8 * n,
+            align: 3,
+            offset: 0,
+        });
+        let link_part = self.psects[link].parts.len() - 1;
         self.modules.push(Module {
             name: "$VENEERS".into(),
             version: String::new(),
             file: String::new(),
-            psects: vec![(p, 0)],
+            psects: vec![(p, self.psects[p].parts.len() - 1), (link, link_part)],
             records: Vec::new(),
             transfer: None,
         });
+        for (i, (name, ..)) in self.imports.iter().enumerate() {
+            let def = Def {
+                module,
+                psect: Some(0),
+                value: VENEER * i as u64,
+                weak: false,
+            };
+            self.defs.insert(name.clone(), def);
+        }
         self.veneers = Some(p);
     }
 
     /// The veneer that jumps to `target`, if there is one.
     fn veneer(&self, target: u64) -> Option<u64> {
         let p = &self.psects[self.veneers?];
-        let i = self.far.iter().position(|&t| t == target)?;
-        Some(p.base + VENEER * i as u64)
+        let i = self
+            .far
+            .iter()
+            .take(self.veneered)
+            .position(|&t| t == target)?;
+        Some(p.base + VENEER * (self.imports.len() + i) as u64)
+    }
+
+    /// The slot that import `i`'s veneer jumps through.
+    fn slot(&self, i: usize) -> u64 {
+        self.part_base(self.module("$VENEERS"), 1).unwrap() + 8 * i as u64
+    }
+
+    /// The index of a module the linker made.
+    fn module(&self, name: &str) -> usize {
+        self.modules.iter().position(|m| m.name == name).unwrap()
+    }
+
+    /// Adds $SYMVECT$, the symbol vector of a shareable image, a read-only
+    /// psect of a module of its own, $SYMVECT: a quadword for each of
+    /// `names`, a procedure of the image's.
+    fn add_vector(&mut self, names: &[String]) -> Result<(), Vec<String>> {
+        let mut errors = Vec::new();
+        for name in names {
+            let code = self.defs.get(name).and_then(|d| {
+                let (p, _) = *self.modules[d.module].psects.get(d.psect? as usize)?;
+                Some(self.psects[p].flags & psc::EXE != 0)
+            });
+            if code != Some(true) {
+                errors.push(format!(
+                    "%VLINK-E-NOTPROC, symbol vector entry {name} is not a procedure of the image"
+                ));
+            }
+        }
+        if !errors.is_empty() {
+            return Err(errors);
+        }
+        let p = self.psect("$SYMVECT$", psc::REL | psc::RD, 3).unwrap();
+        let module = self.modules.len();
+        self.psects[p].parts.push(Part {
+            module,
+            size: 8 * names.len() as u64,
+            align: 3,
+            offset: 0,
+        });
+        self.modules.push(Module {
+            name: "$SYMVECT".into(),
+            version: String::new(),
+            file: String::new(),
+            psects: vec![(p, self.psects[p].parts.len() - 1)],
+            records: Vec::new(),
+            transfer: None,
+        });
+        self.vector = Some(p);
+        Ok(())
+    }
+
+    /// Fills in the symbol vector: each procedure's address, a fixup.
+    fn write_vector(&mut self, names: &[String], data: &mut [Vec<u8>]) {
+        let base = self.psects[self.vector.unwrap()].base;
+        let module = self.module("$SYMVECT");
+        for (i, name) in names.iter().enumerate() {
+            let at = base + 8 * i as u64;
+            let value = self.value(name).unwrap();
+            let s = self
+                .sections
+                .iter()
+                .position(|s| s.start <= at && at < s.end);
+            let off = (at - self.sections[s.unwrap()].start) as usize;
+            data[s.unwrap()][off..off + 8].copy_from_slice(&value.to_le_bytes());
+            let stored = Stored {
+                size: 8,
+                module,
+                value,
+                stuck: None,
+            };
+            self.stored.insert(at, stored);
+        }
+    }
+
+    /// The fixup section's shareable image list: each image the image
+    /// calls, with its imports' slots, which the image activator sets from
+    /// that image's symbol vector.
+    fn shl_list(&self) -> Vec<ShlRef> {
+        let start = self.sections.first().map_or(0, |s| s.start);
+        let mut list: Vec<ShlRef> = Vec::new();
+        for (i, s) in self.shared.iter().enumerate() {
+            let quad: Vec<(u32, u32)> = (self.imports.iter().enumerate())
+                .filter(|(_, imp)| imp.1 == i)
+                .map(|(j, imp)| ((self.slot(j) - start) as u32, 8 * imp.2 as u32))
+                .collect();
+            if !quad.is_empty() {
+                list.push(ShlRef {
+                    name: s.name.clone(),
+                    quad,
+                });
+            }
+        }
+        list
     }
 
     /// Where a module's psect contribution starts.
@@ -706,21 +946,32 @@ impl Linker {
         }
         self.warnings.extend(warnings);
         self.stored = stored;
-        if self.veneers.is_some() {
-            for &target in &self.far {
-                let at = self.veneer(target).unwrap();
-                let s = self
-                    .sections
-                    .iter()
-                    .position(|s| s.start <= at && at < s.end);
-                let off = (at - self.sections[s.unwrap()].start) as usize;
-                let code = [0x5800_0050u32.to_le_bytes(), 0xd61f_0200u32.to_le_bytes()];
-                data[s.unwrap()][off..off + 8].copy_from_slice(&code.concat());
-                data[s.unwrap()][off + 8..off + 16].copy_from_slice(&target.to_le_bytes());
+        let mut put = |at: u64, bytes: &[u8]| {
+            let s = self
+                .sections
+                .iter()
+                .position(|s| s.start <= at && at < s.end);
+            let off = (at - self.sections[s.unwrap()].start) as usize;
+            data[s.unwrap()][off..off + bytes.len()].copy_from_slice(bytes);
+        };
+        if let Some(p) = self.veneers {
+            // adrp x16, slot; ldr x16, [x16, #:lo12:slot]; br x16; nop
+            for i in 0..self.imports.len() {
+                let (at, slot) = (self.psects[p].base + VENEER * i as u64, self.slot(i));
+                let adrp = reloc::apply(reloc::Kind::Adrp, 0x9000_0010, slot, at).unwrap();
+                let ldr = reloc::apply(reloc::Kind::Ldst(3), 0xf940_0210, slot, at + 4).unwrap();
+                let code = [adrp, ldr, 0xd61f_0200, 0xd503_201f];
+                put(at, &code.map(u32::to_le_bytes).concat());
             }
-        } else {
-            self.far = far;
+            // ldr x16, 8; br x16; and the address
+            for &target in self.far.iter().take(self.veneered) {
+                let at = self.veneer(target).unwrap();
+                let code = [0x5800_0050u32.to_le_bytes(), 0xd61f_0200u32.to_le_bytes()];
+                put(at, &code.concat());
+                put(at + 8, &target.to_le_bytes());
+            }
         }
+        self.far.extend(far);
         (data, errors)
     }
 }
@@ -958,15 +1209,22 @@ impl Run<'_> {
                 let (s, k) = self.pop()?;
                 let p = self.loc.unwrap_or(0);
                 let mut word = reloc::apply(kind, insn, s, p);
-                if word.is_err() && kind == reloc::Kind::Jump26 && k == Some(0) {
+                // A fixed address can't be reached from an image that
+                // moves, however near.
+                let far = word.is_err() || self.l.relocatable;
+                let mut k = k;
+                if far && kind == reloc::Kind::Jump26 && k == Some(0) {
                     // The first pass notes the address and goes on; the
-                    // second has the veneer.
-                    word = match self.l.veneers {
+                    // next has the veneer, which moves with the image.
+                    word = match self.l.veneer(s) {
                         None => {
                             self.far.insert(s);
                             Ok(insn)
                         }
-                        Some(_) => reloc::apply(kind, insn, self.l.veneer(s).unwrap(), p),
+                        Some(v) => {
+                            k = Some(1);
+                            reloc::apply(kind, insn, v, p)
+                        }
                     };
                 }
                 let word = word.map_err(|e| {

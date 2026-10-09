@@ -21,7 +21,8 @@ Limine then jumps to the shim.
 QEMU has a second disk, the system disk (`out/sysdisk.img`). It is a
 Files-11 ODS-2 volume, the file system VMS uses, which
 [vms/build.rs](../vms/build.rs) makes at build time: the VMS
-executable files in `[SYSEXE]` and a text file in `[SYSMGR]`, owned by
+executable files in `[SYSEXE]`, the shareable image they call,
+`LIBRTL.EXE`, in `[SYSLIB]`, and text files in `[SYSMGR]`, owned by
 SYSTEM's UIC, `[1,4]`, which every user may read and run. The firmware
 and Limine leave it alone; the root task reads it later.
 
@@ -113,7 +114,8 @@ compiles.
 - defines the system's logical names for it, in `LNM$SYSTEM_TABLE`:
   `SYS$SYSDEVICE` is `DKA0:`, `SYS$DISK`, the default device, is
   `SYS$SYSDEVICE:`, `SYS$SYSTEM`, where the images are, is
-  `SYS$SYSDEVICE:[SYSEXE]`, `SYS$MANAGER`, where the system manager's
+  `SYS$SYSDEVICE:[SYSEXE]`, `SYS$LIBRARY` and `SYS$SHARE`, where the
+  shareable images are, are `SYS$SYSDEVICE:[SYSLIB]`, `SYS$MANAGER`, where the system manager's
   files are, is `SYS$SYSDEVICE:[SYSMGR]`, and `SYS$SCRATCH`, where
   `CONVERT` puts its work file, is `SYS$DISK:[]`, the default directory
 - lowers IPL to 0 and creates the console's process, SYSTEM, which runs
@@ -147,8 +149,9 @@ interpreter. It is linked high in P1, which tells the executive it is one
   `SYS$SYSROOT` a search list, as a VMScluster's common system disk has
   it: `SYS$SPECIFIC`, this system's own root, is the ramdisk, `MDA0:`,
   and `SYS$COMMON`, the root every system shares, is the system disk.
-  `CREATE/DIRECTORY` makes `MDA0:[SYSEXE]` and `MDA0:[SYSMGR]`, and
-  `SYS$SYSTEM` and `SYS$MANAGER` become `SYS$SYSROOT:[SYSEXE]` and
+  `CREATE/DIRECTORY` makes `MDA0:[SYSEXE]`, `MDA0:[SYSLIB]` and
+  `MDA0:[SYSMGR]`, and `SYS$SYSTEM` becomes `SYS$SYSROOT:[SYSEXE]`,
+  `SYS$LIBRARY` and `SYS$SHARE` `SYS$SYSROOT:[SYSLIB]`, `SYS$MANAGER`
   `SYS$SYSROOT:[SYSMGR]`, and `SYS$DISK`, the default device of a
   process that hasn't set its own, `SYS$SYSROOT:`, so SYSTEM's `SHOW
   DEFAULT` says `SYS$SYSROOT:[SYSMGR]`, `=   MDA0:[SYSMGR]` and
@@ -214,8 +217,14 @@ interpreter. It is linked high in P1, which tells the executive it is one
   image reads with `CLI$GET_VALUE` and `CLI$PRESENT`; DCL does the others
   itself, and reads their values and qualifiers the same way.
 - `RUN image` reads the image from `SYS$SYSTEM:` and loads it into the same
-  process's P0 (`$IMGACT`) and runs it in user mode. When the image
-  exits, the executive throws away its pages and the channels and files
+  process's P0 (`$IMGACT`) and runs it in user mode. Every image but DCL
+  calls `LIB$PUT_OUTPUT` and the other run-time routines in
+  `LIBRTL.EXE`, a shareable image: the image activator reads
+  `SYS$SHARE:LIBRTL.EXE` too, loads it into P0 after the image, at the
+  next 64 KB, moves the addresses it holds there (`SHRACT`), and puts its
+  routines' addresses where the image looks for them (`SHRLIST`,
+  [ADR-0028](adr/0028-shareable-images.md)). When the image
+  exits, the executive throws away its pages, and `LIBRTL`'s, and the channels and files
   it opened, and calls DCL again with the exit status. DCL prints a
   message if the status is an error, then the prompt again.
 - `DIRECTORY` (`DIR`) runs `DIRECTORY.EXE`, which lists files with RMS's
@@ -409,7 +418,7 @@ register, and checks them, so CTRL/Y and `CONTINUE` can be tried on it.
 line; CTRL/C runs its AST, which cancels the read with `$CANCEL`.
 
 `cargo test -p boot` boots the system, types `RUN STARTUP`, `RUN SNOOP`, a bad
-command, `DIR [SYSEXE]P%NG`, `TYPE WELCOME.TXT`,
+command, `DIR [SYSEXE]P%NG`, `DIR SYS$SHARE:`, `TYPE WELCOME.TXT`,
 `@DCLTEST 3 "Two words"`, whose procedure, `[SYSMGR]DCLTEST.COM`, counts
 in a loop, checks expressions and calls itself, `@DCLTEST FAIL`, which
 stops at a `TYPE` that fails, `SHOW SYMBOL $STATUS`, a symbol it writes,

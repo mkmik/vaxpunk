@@ -1,7 +1,7 @@
         .TITLE  GETINPUT        Reads a line from SYS$INPUT, as LIB$GET_INPUT
         .IDENT  /V0.1/
 ;
-; build.rs links this module into each image, as it does lib/print.mar.
+; It is in LIBRTL.EXE, the shareable image every program calls (build.rs).
 ;
         .LIBRARY "starlet.mlb"
         $IODEF

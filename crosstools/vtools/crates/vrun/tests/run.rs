@@ -16,6 +16,8 @@ fn image(code: &[u32]) -> Image {
         transfer: BASE,
         sections: vec![code_section(code)],
         fixups: None,
+        shareables: Vec::new(),
+        vector: None,
     }
 }
 
@@ -315,6 +317,7 @@ fn copies_a_host_file() {
         transfer: None,
         link_time: 0,
         relocatable: false,
+        shareable: None,
     };
     let image = vlink::link(&objects, &link).unwrap().image;
 
@@ -395,6 +398,7 @@ fn bliss_copies_a_host_file() {
         transfer: None,
         link_time: 0,
         relocatable: false,
+        shareable: None,
     };
     let image = vlink::link(&objects, &link).unwrap().image;
 

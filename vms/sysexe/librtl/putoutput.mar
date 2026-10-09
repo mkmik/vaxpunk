@@ -1,0 +1,49 @@
+        .TITLE  PUTOUTPUT       Writes a line to SYS$OUTPUT, as LIB$PUT_OUTPUT
+        .IDENT  /V0.1/
+;
+; The programs run in user mode, so they write on the console as a VMS
+; program does: on a channel to SYS$OUTPUT, or OPA0: for a process that
+; has none, with $QIOW, a line at a time, which the executive writes
+; whole. SYS$OUTPUT is the console, or a network unit for a SET HOST
+; session. It is in LIBRTL.EXE, the shareable image every program calls
+; (build.rs); lib/print.mar's PUT_LINE calls it too.
+;
+        .LIBRARY "starlet.mlb"
+        $IODEF
+
+        .PSECT  PUTOUTPUT_DATA, NOEXE, WRT, LONG
+CHAN:   .LONG   0                       ; SYS$OUTPUT's, once assigned
+OUTPUT: .ASCID  "SYS$OUTPUT"
+OPA0:   .ASCID  "OPA0:"
+LINE:   .BLKB   1026
+
+        .PSECT  PUTOUTPUT_CODE, EXE, LONG
+; LIB$PUT_OUTPUT string: writes the string, by descriptor, its first 1024
+; characters, and CR LF, as VMS's run-time library does. R0 = $QIOW's
+; status.
+        .ENTRY  LIB$PUT_OUTPUT, ^M<R2, R3>
+        MOVL    4(AP), R1
+        MOVZWL  (R1), R2
+        MOVL    4(R1), R1
+        CMPL    R2, #1024
+        BLEQU   10$
+        MOVL    #1024, R2
+10$:    CLRL    R3
+20$:    CMPL    R3, R2
+        BGEQU   30$
+        MOVB    (R1)[R3], LINE[R3]
+        INCL    R3
+        BRB     20$
+30$:    MOVB    #13, LINE[R3]
+        MOVB    #10, LINE+1[R3]
+        ADDL2   #2, R3
+        TSTL    CHAN
+        BNEQ    50$
+        $ASSIGN_S DEVNAM=OUTPUT, CHAN=CHAN
+        BLBS    R0, 50$
+        $ASSIGN_S DEVNAM=OPA0, CHAN=CHAN
+        BLBC    R0, 90$
+50$:    $QIOW_S CHAN=CHAN, FUNC=#IO$_WRITEVBLK, P1=LINE, P2=R3
+90$:    RET
+
+        .END
