@@ -1,0 +1,15 @@
+! A window with a status line on a buffer, typed into: Return splits the
+! line, the arrows move, Ctrl/Z quits.
+b := CREATE_BUFFER ("main");
+w := CREATE_WINDOW (1, 21, ON);
+MAP (w, b);
+COPY_TEXT ("first line of the buffer");
+SPLIT_LINE;
+COPY_TEXT ("second line");
+DEFINE_KEY ("SPLIT_LINE", RET_KEY);
+DEFINE_KEY ("MOVE_VERTICAL (-1)", UP);
+DEFINE_KEY ("MOVE_VERTICAL (1)", DOWN);
+DEFINE_KEY ("MOVE_HORIZONTAL (-1)", LEFT);
+DEFINE_KEY ("MOVE_HORIZONTAL (1)", RIGHT);
+DEFINE_KEY ("ERASE_CHARACTER (-1)", DEL_KEY);
+DEFINE_KEY ("QUIT (OFF)", CTRL_Z_KEY);

@@ -1,0 +1,799 @@
+MODULE KEYS (IDENT = 'V0.1') =
+%TITLE 'TPU: keys, key maps and the main loop'
+BEGIN
+!
+! Keys come from the terminal (TT$GET) a byte at a time; READKEY makes a
+! key's keyword of them, as a VT100 or later sends them: escape sequences
+! for the arrows, the keypad (in application mode), the editing keypad
+! and the function keys, control characters for CTRL_x_KEY, and any other
+! character a key of its own, KEY_BASE plus its code. The shift key, PF1
+! unless SET (SHIFT_KEY) says otherwise, adds SHIFT_BIT to the key after
+! it, as GOLD does in EVE.
+!
+! A key map is a list of keys' definitions, each a program or a learn
+! sequence and a comment; a key map list is the key maps a buffer's keys
+! are looked up in, first to last, with what to do with a key none of them
+! defines: insert it if it is a character and SELF_INSERT is on, call the
+! UNDEFINED_KEY procedure, or say it has no definition. TPU starts with
+! TPU$KEY_MAP_LIST, holding TPU$KEY_MAP, which every buffer uses until SET
+! (KEY_MAP_LIST) says otherwise.
+!
+! KEY_LOOP is TPU's main loop once the command file has run: it updates
+! the screen when no key is waiting, reads a key, and runs it.
+! ponytail: learn sequences replay their keys, ignoring EXACT; at most 16
+! key maps in a list.
+!
+REQUIRE 'TPU';
+REQUIRE 'TPUKW';
+
+LITERAL
+    NOTMINE = -1,
+    SHIFT_BIT = %X'100000',
+    MAXMAPS = 16;
+
+! A key map, a definition, a key map list.
+LITERAL
+    KM_NEXT = 0,
+    KM_NAME = 1,                        ! a string value
+    KM_DEFS = 2,
+    KM_SIZE = 3,
+    KD_NEXT = 0,
+    KD_KEY = 1,
+    KD_PROG = 2,                        ! a program or learn value
+    KD_COMMENT = 3,                     ! a string value, or 0
+    KD_SIZE = 4,
+    KL_NEXT = 0,
+    KL_NAME = 1,
+    KL_SELF = 2,                        ! SELF_INSERT
+    KL_UNDEF = 3,                       ! the UNDEFINED_KEY program, or 0
+    KL_PRE = 4,
+    KL_POST = 5,
+    KL_N = 6,
+    KL_MAPS = 7,                        ! MAXMAPS key maps
+    KL_SIZE = KL_MAPS + MAXMAPS;
+
+! The escape sequences of a VT100 and later, and the keys they are: the
+! final character after ESC O, after ESC [, and the number before ESC [ ~.
+BIND
+    SS3KEYS = UPLIT (
+        %C'A', K_UP, %C'B', K_DOWN, %C'C', K_RIGHT, %C'D', K_LEFT,
+        %C'P', K_PF1, %C'Q', K_PF2, %C'R', K_PF3, %C'S', K_PF4,
+        %C'p', K_KP0, %C'q', K_KP1, %C'r', K_KP2, %C's', K_KP3, %C't', K_KP4,
+        %C'u', K_KP5, %C'v', K_KP6, %C'w', K_KP7, %C'x', K_KP8, %C'y', K_KP9,
+        %C'm', K_MINUS, %C'l', K_COMMA, %C'n', K_PERIOD, %C'M', K_ENTER, 0) : VECTOR,
+    TILDEKEYS = UPLIT (
+        1, K_E1, 2, K_E2, 3, K_E3, 4, K_E4, 5, K_E5, 6, K_E6,
+        17, K_F6, 18, K_F7, 19, K_F8, 20, K_F9, 21, K_F10,
+        23, K_F11, 24, K_F12, 25, K_F13, 26, K_F14, 28, K_HELP, 29, K_DO,
+        31, K_F17, 32, K_F18, 33, K_F19, 34, K_F20, 0) : VECTOR,
+    CTRLKEYS = UPLIT (
+        K_NULL_KEY, K_CTRL_A_KEY, K_CTRL_B_KEY, K_CTRL_C_KEY, K_CTRL_D_KEY,
+        K_CTRL_E_KEY, K_CTRL_F_KEY, K_CTRL_G_KEY, K_BS_KEY, K_TAB_KEY,
+        K_LF_KEY, K_CTRL_K_KEY, K_CTRL_L_KEY, K_RET_KEY, K_CTRL_N_KEY,
+        K_CTRL_O_KEY, K_CTRL_P_KEY, K_CTRL_Q_KEY, K_CTRL_R_KEY, K_CTRL_S_KEY,
+        K_CTRL_T_KEY, K_CTRL_U_KEY, K_CTRL_V_KEY, K_CTRL_W_KEY, K_CTRL_X_KEY,
+        K_CTRL_Y_KEY, K_CTRL_Z_KEY) : VECTOR;
+
+GLOBAL
+    KEY_LAST,                           ! LAST_KEY's keyword code, or 0
+    KEY_SHIFT;                          ! the shift key's code
+
+OWN
+    MAPS,                               ! the key maps
+    LISTS,                              ! the key map lists
+    PENDING,                            ! a byte read ahead, or -1
+    ! Learning: the keys so far, LEARN_BEGIN to LEARN_END.
+    LEARNING,
+    LKEYS,
+    LN,
+    LCAP,
+    ! Replaying: the learn sequence's keys left.
+    RKEYS,
+    RN;
+
+EXTERNAL
+    BUF_CURRENT,
+    COMP_LINE1;
+
+EXTERNAL ROUTINE
+    BI_ERR,
+    ARGMISMATCH,
+    TYPENAME,
+    MSG_OUT : NOVALUE,
+    BUF_KEYMAPS,                        ! (buffer): its key map list's name, a string value
+    BUF_CALL,
+    SCR_UPDATE : NOVALUE,               ! (): the screen as the buffers are
+    SCR_ACTIVE;                         ! (): whether there is a screen
+
+FORWARD ROUTINE
+    KEY_DO : NOVALUE;
+
+! ---- Reading keys
+
+! GETB_: the next byte from the terminal, -1 at the end.
+ROUTINE NEXTBYTE =
+    BEGIN
+    LOCAL
+        C;
+    IF .PENDING GEQ 0 THEN (C = .PENDING; PENDING = -1; RETURN .C);
+    TT$GET()
+    END;
+
+! LOOKTAB table, value: the key the table pairs with the value, or 0.
+ROUTINE LOOKTAB (TAB : REF VECTOR, V) =
+    BEGIN
+    LOCAL
+        I;
+    I = 0;
+    WHILE .TAB[.I] NEQ 0 DO
+        BEGIN
+        IF .TAB[.I] EQL .V THEN RETURN .TAB[.I + 1];
+        I = .I + 2
+        END;
+    0
+    END;
+
+! RAWKEY: the next key the terminal sends, -1 at the end of its input.
+ROUTINE RAWKEY =
+    BEGIN
+    LOCAL
+        C;
+    C = NEXTBYTE();
+    IF .C LSS 0 THEN RETURN -1;
+    IF .C EQL 27
+    THEN
+        BEGIN
+        LOCAL
+            C2;
+        C2 = NEXTBYTE();
+        IF .C2 EQL %C'O'
+        THEN
+            BEGIN
+            LOCAL
+                K;
+            K = LOOKTAB(SS3KEYS, NEXTBYTE());
+            RETURN (IF .K EQL 0 THEN KEY_BASE + 27 ELSE .K)
+            END;
+        IF .C2 EQL %C'['
+        THEN
+            BEGIN
+            LOCAL
+                N,
+                F,
+                K;
+            N = 0;
+            WHILE TRUE DO
+                BEGIN
+                F = NEXTBYTE();
+                IF .F LSS 0 THEN RETURN -1;
+                IF .F GEQU %C'0' AND .F LEQU %C'9'
+                THEN
+                    N = .N * 10 + .F - %C'0'
+                ELSE IF .F NEQ %C';'
+                THEN
+                    EXITLOOP
+                END;
+            K = (IF .F EQL %C'~' THEN LOOKTAB(TILDEKEYS, .N) ELSE LOOKTAB(SS3KEYS, .F));
+            RETURN (IF .K EQL 0 THEN KEY_BASE + 27 ELSE .K)
+            END;
+        PENDING = .C2;
+        RETURN KEY_BASE + 27
+        END;
+    IF .C LSS 27 THEN RETURN .CTRLKEYS[.C];
+    IF .C EQL 127 THEN RETURN K_DEL_KEY;
+    KEY_BASE + .C
+    END;
+
+! READKEY: the next key, from a learn sequence being replayed or from the
+! terminal, after the shift key if it was pressed; -1 at the end.
+GLOBAL ROUTINE READKEY =
+    BEGIN
+    LOCAL
+        K;
+    IF .RN GTR 0
+    THEN
+        BEGIN
+        K = ..RKEYS;
+        RKEYS = .RKEYS + 8;
+        RN = .RN - 1;
+        RETURN .K
+        END;
+    K = RAWKEY();
+    IF .K EQL .KEY_SHIFT
+    THEN
+        BEGIN
+        K = RAWKEY();
+        IF .K GEQ 0 THEN K = .K OR SHIFT_BIT
+        END;
+    IF .LEARNING AND .K GEQ 0
+    THEN
+        BEGIN
+        IF .LN EQL .LCAP
+        THEN
+            BEGIN
+            LOCAL
+                NEW;
+            LCAP = MAX(.LCAP * 2, 64);
+            NEW = MEM_GET(.LCAP * 8);
+            CH$MOVE(.LN * 8, .LKEYS, .NEW);
+            MEM_FREE(.LKEYS);
+            LKEYS = .NEW
+            END;
+        (.LKEYS + .LN * 8) = .K;
+        LN = .LN + 1
+        END;
+    .K
+    END;
+
+! ---- Key maps
+
+! FINDNAMED list, name value: the key map or key map list of that name,
+! case ignored, or 0.
+ROUTINE FINDNAMED (L, NAME) =
+    BEGIN
+    LOCAL
+        P : REF VECTOR;
+    P = .L;
+    WHILE .P NEQ 0 DO
+        BEGIN
+        IF STR_EQL(.P[KM_NAME], SADDR(.NAME), SLEN(.NAME)) THEN RETURN .P;
+        P = .P[KM_NEXT]
+        END;
+    0
+    END;
+
+ROUTINE NEWMAP (NAME) =
+    BEGIN
+    LOCAL
+        M : REF VECTOR;
+    M = MEM_GET(KM_SIZE * 8);
+    VREF(.NAME);
+    M[KM_NAME] = .NAME;
+    M[KM_NEXT] = .MAPS;
+    MAPS = .M;
+    .M
+    END;
+
+ROUTINE NEWLIST (NAME) =
+    BEGIN
+    LOCAL
+        L : REF VECTOR;
+    L = MEM_GET(KL_SIZE * 8);
+    VREF(.NAME);
+    L[KL_NAME] = .NAME;
+    L[KL_SELF] = TRUE;
+    L[KL_NEXT] = .LISTS;
+    LISTS = .L;
+    .L
+    END;
+
+! KEY_INIT: TPU$KEY_MAP_LIST, holding TPU$KEY_MAP.
+GLOBAL ROUTINE KEY_INIT : NOVALUE =
+    BEGIN
+    LOCAL
+        L : REF VECTOR,
+        N;
+    PENDING = -1;
+    KEY_SHIFT = K_PF1;
+    N = STR_MAKE(T('TPU$KEY_MAP'));
+    NEWMAP(.N);
+    L = NEWLIST(STR_MAKE(T('TPU$KEY_MAP_LIST')));
+    L[KL_MAPS] = .N;
+    L[KL_N] = 1
+    END;
+
+! LISTOF: the key map list the current buffer uses.
+ROUTINE LISTOF =
+    BEGIN
+    LOCAL
+        L;
+    IF .BUF_CURRENT NEQ 0
+    THEN
+        BEGIN
+        L = BUF_KEYMAPS(.BUF_CURRENT);
+        IF .L NEQ 0 THEN (L = FINDNAMED(.LISTS, .L); IF .L NEQ 0 THEN RETURN .L)
+        END;
+    FINDNAMED(.LISTS, STR_MAKE(T('TPU$KEY_MAP_LIST')))
+    END;
+
+! INMAP map, key: the key's definition in the map, or 0.
+ROUTINE INMAP (M : REF VECTOR, K) =
+    BEGIN
+    LOCAL
+        D : REF VECTOR;
+    D = .M[KM_DEFS];
+    WHILE .D NEQ 0 DO
+        BEGIN
+        IF .D[KD_KEY] EQL .K THEN RETURN .D;
+        D = .D[KD_NEXT]
+        END;
+    0
+    END;
+
+! LOOKUP list, key, address: the key's definition in the first map of the
+! list that has one, or 0; the map at the address.
+ROUTINE LOOKUP (L : REF VECTOR, K, MAPP) =
+    BEGIN
+    .MAPP = 0;
+    IF .L EQL 0 THEN RETURN 0;
+    INCR I FROM 0 TO .L[KL_N] - 1 DO
+        BEGIN
+        LOCAL
+            M,
+            D;
+        M = FINDNAMED(.MAPS, .L[KL_MAPS + .I]);
+        IF .M NEQ 0
+        THEN
+            BEGIN
+            D = INMAP(.M, .K);
+            IF .D NEQ 0 THEN (.MAPP = .M; RETURN .D)
+            END
+        END;
+    0
+    END;
+
+! MAPARG value: the key map a third or fourth argument names, a key map
+! or the first of a key map list; the current buffer's list's first if
+! it is 0.
+ROUTINE MAPARG (V) =
+    BEGIN
+    LOCAL
+        L : REF VECTOR,
+        M;
+    IF VTYPE(.V) EQL TY_STRING
+    THEN
+        BEGIN
+        M = FINDNAMED(.MAPS, .V);
+        IF .M NEQ 0 THEN RETURN .M;
+        L = FINDNAMED(.LISTS, .V)
+        END
+    ELSE
+        L = LISTOF();
+    IF .L EQL 0 THEN RETURN 0;
+    IF .L[KL_N] EQL 0 THEN RETURN 0;
+    FINDNAMED(.MAPS, .L[KL_MAPS])
+    END;
+
+! KEYARG value: a key's code, from a keyword or a one-character string.
+ROUTINE KEYARG (V) =
+    BEGIN
+    IF VTYPE(.V) EQL TY_KEYWORD THEN RETURN VINT(.V);
+    IF VTYPE(.V) EQL TY_STRING
+    THEN
+        IF SLEN(.V) EQL 1 THEN RETURN KEY_BASE + GETB(SADDR(.V));
+    -1
+    END;
+
+! PROGARG value, address of status: the program a definition is: a
+! program or learn sequence as it is, a string, range or buffer compiled.
+ROUTINE PROGARG (V) =
+    BEGIN
+    EXTERNAL ROUTINE
+        BUF_TEXT;
+    LOCAL
+        TEXT,
+        L,
+        OBJ;
+    IF VTYPE(.V) EQL TY_PROGRAM OR VTYPE(.V) EQL TY_LEARN THEN (VREF(.V); RETURN .V);
+    IF VTYPE(.V) EQL TY_STRING
+    THEN
+        (TEXT = SADDR(.V); L = SLEN(.V))
+    ELSE
+        BEGIN
+        TEXT = BUF_TEXT(.V, L);
+        IF .TEXT EQL 0 THEN RETURN 0
+        END;
+    ! DEC's TPU counts a string's lines from 2, as EXECUTE's.
+    IF VTYPE(.V) EQL TY_STRING THEN COMP_LINE1 = 2;
+    IF NOT COMPILE(.TEXT, .L, OBJ) THEN OBJ = 0;
+    COMP_LINE1 = 0;
+    IF VTYPE(.V) NEQ TY_STRING THEN MEM_FREE(.TEXT);
+    IF .OBJ EQL 0 THEN RETURN MKINT(0);
+    MKV(TY_PROGRAM, .OBJ)
+    END;
+
+! DEFINE_KEY (code, key [, comment [, key map]]).
+ROUTINE BX_DEFINE_KEY (ARGS : REF VECTOR, N) =
+    BEGIN
+    LOCAL
+        K,
+        P,
+        M : REF VECTOR,
+        D : REF VECTOR;
+    IF .N LSS 2 THEN RETURN BI_ERR(TPU$_TOOFEW);
+    IF .N GTR 4 THEN RETURN BI_ERR(TPU$_TOOMANY);
+    K = KEYARG(.ARGS[1]);
+    IF .K LSS 0 THEN RETURN ARGMISMATCH(2, .ARGS[1]);
+    IF .K EQL .KEY_SHIFT THEN RETURN BI_ERR(TPU$_NOTDEFINABLE);
+    M = MAPARG(IF .N GTR 3 THEN .ARGS[3] ELSE 0);
+    IF .M EQL 0 THEN RETURN BI_ERR(TPU$_NOKEYMAP);
+    P = PROGARG(.ARGS[0]);
+    IF .P EQL 0 THEN RETURN ARGMISMATCH(1, .ARGS[0]);
+    D = INMAP(.M, .K);
+    IF .D EQL 0
+    THEN
+        BEGIN
+        D = MEM_GET(KD_SIZE * 8);
+        D[KD_KEY] = .K;
+        D[KD_NEXT] = .M[KM_DEFS];
+        M[KM_DEFS] = .D
+        END
+    ELSE
+        (VUNREF(.D[KD_PROG]); VUNREF(.D[KD_COMMENT]));
+    D[KD_PROG] = .P;
+    D[KD_COMMENT] = 0;
+    IF .N GTR 2 AND VTYPE(.ARGS[2]) EQL TY_STRING THEN (VREF(.ARGS[2]); D[KD_COMMENT] = .ARGS[2]);
+    SS_NORMAL
+    END;
+
+! UNDEFINE_KEY (key [, key map | list]).
+ROUTINE BX_UNDEFINE_KEY (ARGS : REF VECTOR, N) =
+    BEGIN
+    LOCAL
+        K,
+        M : REF VECTOR,
+        P;
+    IF .N LSS 1 THEN RETURN BI_ERR(TPU$_TOOFEW);
+    K = KEYARG(.ARGS[0]);
+    IF .K LSS 0 THEN RETURN ARGMISMATCH(1, .ARGS[0]);
+    IF .N GTR 1 AND VTYPE(.ARGS[1]) EQL TY_STRING AND FINDNAMED(.MAPS, .ARGS[1]) NEQ 0
+    THEN
+        M = FINDNAMED(.MAPS, .ARGS[1])
+    ELSE
+        LOOKUP((IF .N GTR 1 AND VTYPE(.ARGS[1]) EQL TY_STRING THEN FINDNAMED(.LISTS, .ARGS[1])
+                ELSE LISTOF()), .K, M);
+    IF .M EQL 0 THEN RETURN SS_NORMAL;
+    P = M[KM_DEFS];
+    WHILE ..P NEQ 0 DO
+        BEGIN
+        BIND
+            D = ..P : VECTOR;
+        IF .D[KD_KEY] EQL .K
+        THEN
+            BEGIN
+            .P = .D[KD_NEXT];
+            VUNREF(.D[KD_PROG]);
+            VUNREF(.D[KD_COMMENT]);
+            MEM_FREE(D);
+            EXITLOOP
+            END;
+        P = ..P
+        END;
+    SS_NORMAL
+    END;
+
+! LOOKUP_KEY (key, COMMENT | KEY_MAP | PROGRAM [, key map | list]).
+ROUTINE BX_LOOKUP_KEY (ARGS : REF VECTOR, N, R) =
+    BEGIN
+    LOCAL
+        K,
+        W,
+        D : REF VECTOR,
+        M : REF VECTOR;
+    IF .N LSS 2 THEN RETURN BI_ERR(TPU$_TOOFEW);
+    K = KEYARG(.ARGS[0]);
+    IF .K LSS 0 THEN RETURN ARGMISMATCH(1, .ARGS[0]);
+    IF VTYPE(.ARGS[1]) NEQ TY_KEYWORD THEN RETURN ARGMISMATCH(2, .ARGS[1]);
+    W = VINT(.ARGS[1]);
+    IF .N GTR 2 AND VTYPE(.ARGS[2]) EQL TY_STRING AND FINDNAMED(.MAPS, .ARGS[2]) NEQ 0
+    THEN
+        (M = FINDNAMED(.MAPS, .ARGS[2]); D = INMAP(.M, .K))
+    ELSE
+        D = LOOKUP((IF .N GTR 2 AND VTYPE(.ARGS[2]) EQL TY_STRING THEN FINDNAMED(.LISTS, .ARGS[2])
+                    ELSE LISTOF()), .K, M);
+    SELECTONE .W OF
+        SET
+        [K_PROGRAM] :
+            .R = (IF .D EQL 0 THEN MKINT(0) ELSE (VREF(.D[KD_PROG]); .D[KD_PROG]));
+        [K_COMMENT] :
+            .R = (IF .D EQL 0 THEN MKINT(0)
+                  ELSE IF .D[KD_COMMENT] EQL 0 THEN STR_MAKE(0, 0)
+                  ELSE (VREF(.D[KD_COMMENT]); .D[KD_COMMENT]));
+        [K_KEY_MAP] :
+            .R = (IF .D EQL 0 THEN STR_MAKE(0, 0) ELSE (VREF(.M[KM_NAME]); .M[KM_NAME]));
+        [OTHERWISE] : RETURN BI_ERR(TPU$_BADKEY, TYPENAME(.ARGS[1]));
+        TES;
+    SS_NORMAL
+    END;
+
+! CREATE_KEY_MAP (name), CREATE_KEY_MAP_LIST (name, map...): their names.
+ROUTINE BX_CREATE_KEY_MAP (ARGS : REF VECTOR, N, R, ISLIST) =
+    BEGIN
+    IF .N LSS (IF .ISLIST THEN 2 ELSE 1) THEN RETURN BI_ERR(TPU$_TOOFEW);
+    INCR I FROM 0 TO .N - 1 DO
+        IF VTYPE(.ARGS[.I]) NEQ TY_STRING THEN RETURN ARGMISMATCH(.I + 1, .ARGS[.I]);
+    IF FINDNAMED(.MAPS, .ARGS[0]) NEQ 0 OR FINDNAMED(.LISTS, .ARGS[0]) NEQ 0
+    THEN
+        (VREF(.ARGS[0]); RETURN BI_ERR(TPU$_DUPKEYMAP, .ARGS[0]));
+    IF .ISLIST
+    THEN
+        BEGIN
+        LOCAL
+            L : REF VECTOR;
+        L = NEWLIST(.ARGS[0]);
+        INCR I FROM 1 TO MIN(.N - 1, MAXMAPS) DO
+            (VREF(.ARGS[.I]); L[KL_MAPS + .I - 1] = .ARGS[.I]);
+        L[KL_N] = MIN(.N - 1, MAXMAPS)
+        END
+    ELSE
+        NEWMAP(.ARGS[0]);
+    VREF(.ARGS[0]);
+    .R = .ARGS[0];
+    SS_NORMAL
+    END;
+
+! ADD_KEY_MAP (list, "first" | "last", map...).
+ROUTINE BX_ADD_KEY_MAP (ARGS : REF VECTOR, N) =
+    BEGIN
+    LOCAL
+        L : REF VECTOR,
+        FIRST;
+    IF .N LSS 3 THEN RETURN BI_ERR(TPU$_TOOFEW);
+    INCR I FROM 0 TO .N - 1 DO
+        IF VTYPE(.ARGS[.I]) NEQ TY_STRING THEN RETURN ARGMISMATCH(.I + 1, .ARGS[.I]);
+    L = FINDNAMED(.LISTS, .ARGS[0]);
+    IF .L EQL 0 THEN (VREF(.ARGS[0]); RETURN BI_ERR(TPU$_NOKEYMAPLIST, .ARGS[0]));
+    FIRST = STR_EQL(.ARGS[1], T('FIRST'));
+    INCR I FROM 2 TO .N - 1 DO
+        BEGIN
+        IF .L[KL_N] GEQ MAXMAPS THEN EXITLOOP;
+        VREF(.ARGS[.I]);
+        IF .FIRST
+        THEN
+            BEGIN
+            ! In the order given: each after the ones put first before it.
+            DECR J FROM .L[KL_N] - 1 TO .I - 2 DO L[KL_MAPS + .J + 1] = .L[KL_MAPS + .J];
+            L[KL_MAPS + .I - 2] = .ARGS[.I]
+            END
+        ELSE
+            L[KL_MAPS + .L[KL_N]] = .ARGS[.I];
+        L[KL_N] = .L[KL_N] + 1
+        END;
+    SS_NORMAL
+    END;
+
+! REMOVE_KEY_MAP (list, map [, ALL]).
+ROUTINE BX_REMOVE_KEY_MAP (ARGS : REF VECTOR, N) =
+    BEGIN
+    LOCAL
+        L : REF VECTOR,
+        ALL,
+        I;
+    IF .N LSS 2 THEN RETURN BI_ERR(TPU$_TOOFEW);
+    IF VTYPE(.ARGS[0]) NEQ TY_STRING THEN RETURN ARGMISMATCH(1, .ARGS[0]);
+    IF VTYPE(.ARGS[1]) NEQ TY_STRING THEN RETURN ARGMISMATCH(2, .ARGS[1]);
+    L = FINDNAMED(.LISTS, .ARGS[0]);
+    IF .L EQL 0 THEN (VREF(.ARGS[0]); RETURN BI_ERR(TPU$_NOKEYMAPLIST, .ARGS[0]));
+    ALL = .N GTR 2 AND VTYPE(.ARGS[2]) EQL TY_KEYWORD;
+    I = 0;
+    WHILE .I LSS .L[KL_N] DO
+        BEGIN
+        IF STR_EQL(.L[KL_MAPS + .I], SADDR(.ARGS[1]), SLEN(.ARGS[1]))
+        THEN
+            BEGIN
+            VUNREF(.L[KL_MAPS + .I]);
+            INCR J FROM .I TO .L[KL_N] - 2 DO L[KL_MAPS + .J] = .L[KL_MAPS + .J + 1];
+            L[KL_N] = .L[KL_N] - 1;
+            IF NOT .ALL THEN EXITLOOP
+            END
+        ELSE
+            I = .I + 1
+        END;
+    SS_NORMAL
+    END;
+
+! ---- Running keys
+
+! RUNPROG value: runs a key's program or learn sequence.
+ROUTINE RUNPROG (P) : NOVALUE =
+    BEGIN
+    IF VTYPE(.P) EQL TY_PROGRAM THEN (VM_RUN(VPTR(.P)); RETURN);
+    IF VTYPE(.P) EQL TY_LEARN
+    THEN
+        BEGIN
+        LOCAL
+            SAVEK,
+            SAVEN;
+        BIND
+            LS = VPTR(.P) : VECTOR;
+        SAVEK = .RKEYS;
+        SAVEN = .RN;
+        RKEYS = LS[2];
+        RN = .LS[1];
+        WHILE .RN GTR 0 DO KEY_DO(READKEY());
+        RKEYS = .SAVEK;
+        RN = .SAVEN
+        END
+    END;
+
+! KEY_DO key: runs the key as the main loop does: its definition in the
+! current buffer's key map list, or its character, or what the list says
+! to do with an undefined key.
+GLOBAL ROUTINE KEY_DO (K) : NOVALUE =
+    BEGIN
+    LOCAL
+        L : REF VECTOR,
+        D : REF VECTOR,
+        M;
+    KEY_LAST = .K;
+    L = LISTOF();
+    IF .L NEQ 0 THEN IF .L[KL_PRE] NEQ 0 THEN RUNPROG(.L[KL_PRE]);
+    D = LOOKUP(.L, .K, M);
+    IF .D NEQ 0
+    THEN
+        RUNPROG(.D[KD_PROG])
+    ELSE IF .K GEQ KEY_BASE + 32 AND .K LSS KEY_BASE + 256 AND .K NEQ KEY_BASE + 127
+            AND (IF .L EQL 0 THEN TRUE ELSE .L[KL_SELF])
+    THEN
+        BEGIN
+        LOCAL
+            ARGS : VECTOR[1],
+            R,
+            C : VECTOR[1, BYTE];
+        C[0] = .K - KEY_BASE;
+        ARGS[0] = STR_MAKE(C, 1);
+        R = 0;
+        BUF_CALL(B_COPY_TEXT, ARGS, 1, R);
+        VUNREF(.ARGS[0]);
+        VUNREF(.R)
+        END
+    ELSE IF .L NEQ 0 AND .L[KL_UNDEF] NEQ 0
+    THEN
+        RUNPROG(.L[KL_UNDEF])
+    ELSE
+        BEGIN
+        LOCAL
+            NAME,
+            NL;
+        NAME = KW_NAME(.K, NL);
+        MSG_OUT(0, TPU$_NODEFINITION, (IF .NAME EQL 0 THEN STR_MAKE(0, 0) ELSE STR_MAKE(.NAME, .NL)))
+        END;
+    L = LISTOF();
+    IF .L NEQ 0 THEN IF .L[KL_POST] NEQ 0 THEN RUNPROG(.L[KL_POST])
+    END;
+
+! KEY_LOOP: the main loop: until the terminal's input ends, the screen
+! updated when no key is waiting, then a key, run.
+GLOBAL ROUTINE KEY_LOOP : NOVALUE =
+    BEGIN
+    EXTERNAL
+        VM_ABORTING;
+    WHILE TRUE DO
+        BEGIN
+        LOCAL
+            K;
+        IF NOT TT$WAITING() THEN SCR_UPDATE();
+        K = READKEY();
+        IF .K LSS 0 THEN RETURN;
+        KEY_DO(.K);
+        VM_ABORTING = FALSE
+        END
+    END;
+
+! ---- Built-ins
+
+! READ_KEY: the next key's keyword. READ_CHAR: its character.
+ROUTINE BX_READ (ARGS, N, R, CHAR) =
+    BEGIN
+    LOCAL
+        K;
+    IF .N GTR 0 THEN RETURN BI_ERR(TPU$_TOOMANY);
+    IF NOT SCR_ACTIVE() THEN (.R = MKINT(0); RETURN BI_ERR(TPU$_REQUIRESTERM));
+    IF NOT TT$WAITING() THEN SCR_UPDATE();
+    K = READKEY();
+    KEY_LAST = .K;
+    IF .CHAR
+    THEN
+        BEGIN
+        LOCAL
+            C : VECTOR[1, BYTE];
+        IF .K GEQ KEY_BASE AND .K LSS KEY_BASE + 256
+        THEN
+            (C[0] = .K - KEY_BASE; .R = STR_MAKE(C, 1))
+        ELSE
+            .R = STR_MAKE(0, 0);
+        RETURN SS_NORMAL
+        END;
+    .R = (IF .K LSS 0 THEN 0 ELSE MKKW(.K));
+    SS_NORMAL
+    END;
+
+! LEARN_BEGIN (EXACT | NO_EXACT), LEARN_END, LEARN_ABORT.
+ROUTINE BX_LEARN (B, ARGS, N, R) =
+    BEGIN
+    SELECTONE .B OF
+        SET
+        [B_LEARN_BEGIN] :
+            BEGIN
+            IF .LEARNING THEN RETURN BI_ERR(TPU$_ONELEARN);
+            LEARNING = TRUE;
+            LN = 0
+            END;
+        [B_LEARN_END] :
+            BEGIN
+            LOCAL
+                LS : REF VECTOR;
+            IF NOT .LEARNING THEN (.R = 0; RETURN BI_ERR(TPU$_NOTLEARNING));
+            LEARNING = FALSE;
+            ! Without the key that ended it.
+            IF .LN GTR 0 THEN LN = .LN - 1;
+            LS = MEM_GET((2 + .LN) * 8);
+            LS[0] = 1;
+            LS[1] = .LN;
+            CH$MOVE(.LN * 8, .LKEYS, LS[2]);
+            .R = MKV(TY_LEARN, .LS)
+            END;
+        [B_LEARN_ABORT] :
+            BEGIN
+            .R = MKINT(.RN GTR 0);
+            RN = 0
+            END;
+        TES;
+    SS_NORMAL
+    END;
+
+! KEY_SET args, count: SET's requests on keys; NOTMINE for the rest.
+GLOBAL ROUTINE KEY_SET (ARGS : REF VECTOR, N) =
+    BEGIN
+    LOCAL
+        K,
+        L : REF VECTOR;
+    K = VINT(.ARGS[0]);
+    SELECTONE .K OF
+        SET
+        [K_SHIFT_KEY] :
+            BEGIN
+            IF .N LSS 2 THEN RETURN BI_ERR(TPU$_TOOFEW);
+            KEY_SHIFT = KEYARG(.ARGS[1]);
+            RETURN SS_NORMAL
+            END;
+        [K_SELF_INSERT, K_UNDEFINED_KEY, K_PRE_KEY_PROCEDURE, K_POST_KEY_PROCEDURE] :
+            BEGIN
+            IF .N LSS 3 THEN RETURN BI_ERR(TPU$_TOOFEW);
+            IF VTYPE(.ARGS[1]) NEQ TY_STRING THEN RETURN ARGMISMATCH(2, .ARGS[1]);
+            L = FINDNAMED(.LISTS, .ARGS[1]);
+            IF .L EQL 0 THEN (VREF(.ARGS[1]); RETURN BI_ERR(TPU$_NOKEYMAPLIST, .ARGS[1]));
+            IF .K EQL K_SELF_INSERT
+            THEN
+                L[KL_SELF] = (IF VTYPE(.ARGS[2]) EQL TY_KEYWORD THEN VINT(.ARGS[2]) EQL K_ON
+                              ELSE VINT(.ARGS[2]) AND 1)
+            ELSE
+                BEGIN
+                LOCAL
+                    AT;
+                AT = (SELECTONE .K OF
+                        SET
+                        [K_UNDEFINED_KEY] : KL_UNDEF;
+                        [K_PRE_KEY_PROCEDURE] : KL_PRE;
+                        [K_POST_KEY_PROCEDURE] : KL_POST;
+                        TES);
+                VUNREF(.L[.AT]);
+                L[.AT] = (IF VTYPE(.ARGS[2]) EQL TY_KEYWORD THEN 0 ELSE PROGARG(.ARGS[2]))
+                END;
+            RETURN SS_NORMAL
+            END;
+        [OTHERWISE] : NOTMINE;
+        TES
+    END;
+
+! KEY_CALL number, args, count, result: this module's built-ins, or
+! NOTMINE.
+GLOBAL ROUTINE KEY_CALL (B, ARGS : REF VECTOR, N, R) =
+    SELECTONE .B OF
+        SET
+        [B_DEFINE_KEY] : BX_DEFINE_KEY(.ARGS, .N);
+        [B_UNDEFINE_KEY] : BX_UNDEFINE_KEY(.ARGS, .N);
+        [B_LOOKUP_KEY] : BX_LOOKUP_KEY(.ARGS, .N, .R);
+        [B_CREATE_KEY_MAP] : BX_CREATE_KEY_MAP(.ARGS, .N, .R, FALSE);
+        [B_CREATE_KEY_MAP_LIST] : BX_CREATE_KEY_MAP(.ARGS, .N, .R, TRUE);
+        [B_ADD_KEY_MAP] : BX_ADD_KEY_MAP(.ARGS, .N);
+        [B_REMOVE_KEY_MAP] : BX_REMOVE_KEY_MAP(.ARGS, .N);
+        [B_READ_KEY] : BX_READ(.ARGS, .N, .R, FALSE);
+        [B_READ_CHAR] : BX_READ(.ARGS, .N, .R, TRUE);
+        [B_LAST_KEY] : (.R = (IF .KEY_LAST EQL 0 THEN MKINT(0) ELSE MKKW(.KEY_LAST)); SS_NORMAL);
+        [B_LEARN_BEGIN, B_LEARN_END, B_LEARN_ABORT] : BX_LEARN(.B, .ARGS, .N, .R);
+        [OTHERWISE] : NOTMINE;
+        TES;
+
+END
+ELUDOM

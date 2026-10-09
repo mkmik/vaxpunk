@@ -40,6 +40,10 @@ EXTERNAL ROUTINE
     BI_ERR,
     ARGMISMATCH,
     TYPENAME,
+    SCR_POSITION,
+    SCR_DELETE : NOVALUE,
+    KEY_SET,
+    SCR_SET,
     MSG_OUT : NOVALUE,
     FILE_NAME,
     READ_WHOLE,
@@ -686,6 +690,10 @@ ROUTINE READ_INTO (B : REF VECTOR, NAME, LEN) =
     .N
     END;
 
+! BUF_KEYMAPS buffer: the name of its key map list, a string value, or 0.
+GLOBAL ROUTINE BUF_KEYMAPS (B : REF VECTOR) =
+    .B[B_KEYMAPS];
+
 ! BUF_READ buffer, name, length: READ_INTO, for the command file.
 GLOBAL ROUTINE BUF_READ (B, NAME, LEN) =
     READ_INTO(.B, .NAME, .LEN);
@@ -733,6 +741,7 @@ ROUTINE BX_POSITION (ARGS : REF VECTOR, N) =
     SELECTONE VTYPE(.V) OF
         SET
         [TY_BUFFER] : BUF_CURRENT = BUFP(.V);
+        [TY_WINDOW] : RETURN SCR_POSITION(VPTR(.V));
         [TY_MARKER, TY_RANGE] :
             BEGIN
             LOCAL
@@ -844,6 +853,9 @@ ROUTINE BX_MOVE_VERTICAL (ARGS : REF VECTOR, N) =
     CURBUF(B);
     K = VINT(.ARGS[0]);
     L = .B[B_LINE];
+    ! The offset to keep: where the last MOVE_VERTICAL meant to be, if the
+    ! editing point is still where it left it.
+    IF .B[B_GOALLINE] NEQ .L OR .B[B_GOALOFF] NEQ .B[B_OFF] THEN B[B_GOAL] = .B[B_OFF];
     WHILE .K GTR 0 DO
         BEGIN
         IF .L EQL 0 THEN (VREF(.B[B_NAME]); RETURN BI_ERR(TPU$_ENDOFBUF, .B[B_NAME]));
@@ -861,7 +873,9 @@ ROUTINE BX_MOVE_VERTICAL (ARGS : REF VECTOR, N) =
         K = .K + 1;
         B[B_LINE] = .L
         END;
-    IF .L EQL 0 THEN B[B_OFF] = 0 ELSE B[B_OFF] = MIN(.B[B_OFF], .L[L_LEN]);
+    IF .L EQL 0 THEN B[B_OFF] = 0 ELSE B[B_OFF] = MIN(.B[B_GOAL], .L[L_LEN]);
+    B[B_GOALLINE] = .B[B_LINE];
+    B[B_GOALOFF] = .B[B_OFF];
     SS_NORMAL
     END;
 
@@ -1322,6 +1336,7 @@ ROUTINE BX_DELETE (ARGS : REF VECTOR, N) =
             MARK_DETACH(.RG[R_END])
             END;
         [TY_UNSPEC, TY_INTEGER, TY_STRING, TY_KEYWORD] : RETURN BI_ERR(TPU$_BADDELETE);
+        [TY_WINDOW] : SCR_DELETE(VPTR(.V));
         [OTHERWISE] : 0;
         TES;
     VUNREF(.V);
@@ -1793,7 +1808,15 @@ GLOBAL ROUTINE BUF_CALL (B, ARGS : REF VECTOR, N, R) =
             BEGIN
             IF .N LSS 1 THEN RETURN BI_ERR(TPU$_TOOFEW);
             IF VTYPE(.ARGS[0]) NEQ TY_KEYWORD THEN RETURN ARGMISMATCH(1, .ARGS[0]);
-            BUF_SET(.ARGS, .N)
+            BEGIN
+            LOCAL
+                S;
+            S = BUF_SET(.ARGS, .N);
+            IF .S EQL NOTMINE THEN S = KEY_SET(.ARGS, .N);
+            IF .S EQL NOTMINE THEN S = SCR_SET(.ARGS, .N);
+            IF .S EQL NOTMINE THEN S = BI_ERR(TPU$_NOTYET);
+            .S
+            END
             END;
         [OTHERWISE] : NOTMINE;
         TES

@@ -23,8 +23,10 @@ fn build(out: &Path) -> PathBuf {
     let tpu = repo.join("vms/sysexe/tpu");
     let bliss = repo.join("crosstools/vtools/bliss");
     let mut objects = Vec::new();
+    // Its modules, and the terminal it has under vrun (vrun/tt.b64).
     let mut sources: Vec<_> = fs::read_dir(&tpu)
         .unwrap()
+        .chain(fs::read_dir(tpu.join("vrun")).unwrap())
         .flatten()
         .map(|e| e.path())
         .filter(|p| p.extension().is_some_and(|x| x == "b64"))
@@ -105,6 +107,32 @@ fn run(exe: &Path, tests: &Path, name: &str) -> Result<(), String> {
         fs::copy(&p, dir.join(up)).unwrap();
     }
     let up = name.to_uppercase();
+    let keys = tests.join(format!("{name}.keys"));
+    if keys.exists() {
+        // On the screen: the keys in TT.IN, a burst a line; the screen is
+        // TT.OUT, which must look as the oracle's did.
+        fs::write(
+            dir.join("TT.IN"),
+            unescape(&fs::read_to_string(&keys).unwrap()),
+        )
+        .unwrap();
+        let out = Command::new(env!("CARGO_BIN_EXE_vrun"))
+            .args(["--timeout", "60", "--files"])
+            .arg(&dir)
+            .arg(exe)
+            .arg(format!("/NOSECTION/COMMAND={up}.TPU"))
+            .output()
+            .unwrap();
+        let got = render(&fs::read(dir.join("TT.OUT")).unwrap_or_default());
+        let want = render(&fs::read(tests.join(format!("{name}.vt"))).unwrap());
+        if got != want {
+            return Err(format!(
+                "{name}: showed\n{got}\nexpected\n{want}\nstderr: {}",
+                String::from_utf8_lossy(&out.stderr)
+            ));
+        }
+        return Ok(());
+    }
     let out = Command::new(env!("CARGO_BIN_EXE_vrun"))
         .args(["--timeout", "60", "--files"])
         .arg(&dir)
@@ -142,13 +170,89 @@ fn tpu() {
         .unwrap()
         .flatten()
         .map(|e| e.path())
-        .filter(|p| p.extension().is_some_and(|x| x == "stdout"))
+        .filter(|p| p.extension().is_some_and(|x| x == "stdout" || x == "vt"))
         .map(|p| p.file_stem().unwrap().to_string_lossy().into_owned())
         .collect();
     names.sort();
+    names.dedup();
     let failures: Vec<_> = names
         .iter()
         .filter_map(|name| run(&exe, &tests, name).err())
         .collect();
     assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+/// The screen a VT100 of 80 by 24 shows after `bytes`, up to where TPU
+/// puts the terminal back as it found it at the end: its rows, blanks at
+/// their ends cut, and where the cursor is.
+fn render(bytes: &[u8]) -> String {
+    const EXIT: &[u8] = b"\x1b>\x1b[?7h";
+    let end = bytes
+        .windows(EXIT.len())
+        .rposition(|w| w == EXIT)
+        .unwrap_or(bytes.len());
+    let mut parser = vt100::Parser::new(24, 80, 0);
+    parser.process(&bytes[..end]);
+    let screen = parser.screen();
+    let mut out: Vec<String> = screen
+        .rows(0, 80)
+        .map(|r| r.trim_end().to_string())
+        .collect();
+    let (row, col) = screen.cursor_position();
+    out.push(format!("cursor {},{}", row + 1, col + 1));
+    out.join("\n")
+}
+
+/// Prints the oracle's screens: TPU_SHOW=1 cargo test -p vrun --test tpu show.
+#[test]
+fn show() {
+    if std::env::var("TPU_SHOW").is_err() {
+        return;
+    }
+    let tests = repo().join("vms/sysexe/tpu/tests");
+    let mut vts: Vec<_> = fs::read_dir(&tests)
+        .unwrap()
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| p.extension().is_some_and(|x| x == "vt"))
+        .collect();
+    vts.sort();
+    for vt in vts {
+        println!(
+            "===== {}\n{}",
+            vt.display(),
+            render(&fs::read(&vt).unwrap())
+        );
+    }
+}
+
+/// A .keys file's bytes: its lines' \\r, \\n, \\t, \\\\ and \\xHH escapes
+/// decoded, as the oracle's Python decodes them; the lines stay apart.
+fn unescape(text: &str) -> Vec<u8> {
+    let mut out = Vec::new();
+    for line in text.lines() {
+        let b = line.as_bytes();
+        let mut i = 0;
+        while i < b.len() {
+            if b[i] == b'\\' && i + 1 < b.len() {
+                match b[i + 1] {
+                    b'r' => out.push(13),
+                    b'n' => out.push(10),
+                    b't' => out.push(9),
+                    b'x' if i + 3 < b.len() => {
+                        let hex = std::str::from_utf8(&b[i + 2..i + 4]).unwrap();
+                        out.push(u8::from_str_radix(hex, 16).unwrap());
+                        i += 2;
+                    }
+                    c => out.push(c),
+                }
+                i += 2;
+            } else {
+                out.push(b[i]);
+                i += 1;
+            }
+        }
+        out.push(b'\n');
+    }
+    out
 }

@@ -1,0 +1,947 @@
+MODULE SCREEN (IDENT = 'V0.1') =
+%TITLE 'TPU: windows and the screen'
+BEGIN
+!
+! The screen manager: windows, rows of the screen that show a buffer with
+! a status line under them, as the Guide to the DEC Text Processing
+! Utility (3.14) describes; the prompt area READ_LINE asks in; and
+! SCR_UPDATE, which makes the screen show the buffers. It builds what each
+! row should show, a character and a video attribute a column, from the
+! windows in the order they were mapped, then sends the terminal what
+! differs from what it shows, row by row. A window keeps the first line it
+! shows, and the cursor scrolls it: by as many lines as it went past an
+! edge if the window has been shown, else so that the cursor's line is
+! the first, as DEC's TPU does. The terminal is set up and put back as
+! DEC's TPU does it on a VT100, 7-bit, through TT$PUT.
+! ponytail: no scrolling regions (each changed row is written again), no
+! SCROLLING margins or PAD; tabs every 8 columns; a window mapped over
+! another hides the rows it covers.
+!
+REQUIRE 'TPU';
+REQUIRE 'TPUKW';
+
+LITERAL
+    NOTMINE = -1,
+    MAXW = 255,
+    MAXH = 100,
+    V_REVERSE = 1,
+    V_BOLD = 2,
+    V_UNDERLINE = 4,
+    V_BLINK = 8,
+    V_GRAPHIC = 16;                     ! the special graphics set: the diamond
+
+! A window.
+LITERAL
+    W_NEXT = 0,                         ! the next window made
+    W_TOP = 1,                          ! its first row, from 1
+    W_LEN = 2,                          ! its rows, the status line's included
+    W_STATUS = 3,                       ! a status line
+    W_BUF = 4,                          ! the buffer mapped to it, or 0
+    W_MAPPED = 5,                       ! its place in the order windows are shown, or 0
+    W_FIRST = 6,                        ! a marker at the first line it shows
+    W_CURSOR = 7,                       ! a marker where its cursor is, when not current
+    W_STATTEXT = 8,                     ! the status line's text, a string, or 0 for DEC's
+    W_STATVIDEO = 9,
+    W_VIDEO = 10,
+    W_SHOWN = 11,                       ! shown since it was mapped
+    W_SHIFT = 12,
+    W_WIDTH = 13,
+    W_ROW = 14,                         ! where its cursor was last shown
+    W_COL = 15,
+    W_SIZE = 16;
+
+GLOBAL
+    SCR_W,
+    SCR_H;
+
+OWN
+    ON,                                 ! there is a screen
+    WINDOWS,
+    CURWIN,
+    MAPSEQ,
+    PROMPTROW,                          ! the prompt area: its row, rows and video
+    PROMPTLEN,
+    PROMPTVIDEO,
+    ! What the terminal shows, and what it should: a halfword a column,
+    ! the character and the video bits above it.
+    SHOWN,
+    WANT,
+    CURROW,
+    CURCOL,
+    ATTR;                               ! the video the terminal writes in
+
+EXTERNAL
+    BUF_CURRENT,
+    MSG_SINK,
+    KEY_LAST;
+
+EXTERNAL ROUTINE
+    BI_ERR,
+    ARGMISMATCH,
+    TYPENAME,
+    MARK_NEW,
+    MARK_FREE : NOVALUE,
+    LINENO,
+    BUF_NEW,
+    READKEY;
+
+FORWARD ROUTINE
+    SCR_MESSAGE : NOVALUE;
+
+MACRO
+    ARGCOUNT(LO, HI) =
+        BEGIN
+        IF .N LSS LO THEN RETURN BI_ERR(TPU$_TOOFEW);
+        IF .N GTR HI THEN RETURN BI_ERR(TPU$_TOOMANY)
+        END %,
+    CELL(IMG, R, C) = ((IMG) + ((R) * MAXW + (C)) * 2) %,
+    PUT(S) = TT$PUT(UPLIT BYTE (S), %CHARCOUNT(S)) %;
+
+! ---- The terminal
+
+! NUMBER value: sends it in decimal.
+ROUTINE SENDNUM (V) : NOVALUE =
+    BEGIN
+    LOCAL
+        D : VECTOR[12, BYTE],
+        N;
+    N = 0;
+    DO
+        (D[.N] = %C'0' + .V MOD 10; V = .V / 10; N = .N + 1)
+    UNTIL .V EQL 0;
+    DECR I FROM .N - 1 TO 0 DO TT$PUT(D[.I], 1)
+    END;
+
+! MOVETO row, column: the cursor there, from 0.
+ROUTINE MOVETO (R, C) : NOVALUE =
+    BEGIN
+    PUT(%CHAR(27, %C'['));
+    SENDNUM(.R + 1);
+    PUT(';');
+    SENDNUM(.C + 1);
+    PUT('H')
+    END;
+
+! VIDEO bits: the terminal writes in that video from now.
+ROUTINE VIDEO (V) : NOVALUE =
+    BEGIN
+    IF (.V AND NOT V_GRAPHIC) NEQ (.ATTR AND NOT V_GRAPHIC)
+    THEN
+        BEGIN
+        PUT(%CHAR(27, %C'[', %C'0'));
+        IF (.V AND V_BOLD) NEQ 0 THEN PUT(';1');
+        IF (.V AND V_UNDERLINE) NEQ 0 THEN PUT(';4');
+        IF (.V AND V_BLINK) NEQ 0 THEN PUT(';5');
+        IF (.V AND V_REVERSE) NEQ 0 THEN PUT(';7');
+        PUT('m')
+        END;
+    IF (.V AND V_GRAPHIC) NEQ (.ATTR AND V_GRAPHIC)
+    THEN
+        (IF (.V AND V_GRAPHIC) NEQ 0 THEN PUT(%CHAR(14)) ELSE PUT(%CHAR(15)));
+    ATTR = .V
+    END;
+
+! KWVIDEO keyword: its video bits.
+ROUTINE KWVIDEO (K) =
+    SELECTONE .K OF
+        SET
+        [K_REVERSE] : V_REVERSE;
+        [K_BOLD] : V_BOLD;
+        [K_UNDERLINE] : V_UNDERLINE;
+        [K_BLINK] : V_BLINK;
+        [OTHERWISE] : 0;
+        TES;
+
+! SCR_START: sets the terminal up, as DEC's TPU does, if there is one
+! and /NODISPLAY isn't given; whether it did.
+GLOBAL ROUTINE SCR_START =
+    BEGIN
+    IF NOT TT$OPEN(SCR_W, SCR_H) THEN RETURN FALSE;
+    SCR_W = MIN(.SCR_W, MAXW);
+    SCR_H = MIN(.SCR_H, MAXH);
+    SHOWN = MEM_GET(MAXW * MAXH * 2);
+    WANT = MEM_GET(MAXW * MAXH * 2);
+    INCR I FROM 0 TO MAXW * MAXH - 1 DO (.SHOWN + .I * 2)<0, 16, 0> = %C' ';
+    PUT(%CHAR(27, %C'\', 27, %C'[', %C'0', %C'm', 27, %C'[', %C'2', %C'0', %C'l', 27, %C')',
+              %C'0', 15, 27, %C'[', %C'm', 27, %C'[', %C'2', %C'J', 27, %C'[', %C'?', %C'3',
+              %C'l', 27, %C'[', %C';'));
+    SENDNUM(.SCR_H);
+    PUT(%CHAR(%C'r', 27, %C'=', 27, %C'[', %C'?', %C'6', %C'l', 27, %C'[', %C'?', %C'7',
+              %C'l', 27, %C'[', %C'?', %C'8', %C'h'));
+    ATTR = 0;
+    ON = TRUE;
+    MSG_SINK = SCR_MESSAGE;
+    TRUE
+    END;
+
+! SCR_END: puts the terminal back, at the end of the session.
+GLOBAL ROUTINE SCR_END : NOVALUE =
+    BEGIN
+    IF NOT .ON THEN RETURN;
+    PUT(%CHAR(27, %C'>', 27, %C'[', %C'?', %C'7', %C'h', 27, %C'[', %C';', %C'r', 27, %C'[',
+              %C'm'));
+    MOVETO(.SCR_H - 1, 0);
+    PUT(%CHAR(13, 10));
+    TT$CLOSE();
+    ON = FALSE
+    END;
+
+GLOBAL ROUTINE SCR_ACTIVE =
+    .ON;
+
+! ---- Building the rows
+
+! SETCELL row, column, character, video: what a cell should show.
+ROUTINE SETCELL (R, C, CH, V) : NOVALUE =
+    IF .R GEQ 0 AND .R LSS .SCR_H AND .C GEQ 0 AND .C LSS .SCR_W
+    THEN
+        CELL(.WANT, .R, .C)<0, 16, 0> = (.CH AND 255) OR SLL(.V, 8);
+
+! TEXTROW row, column, text, length, video: the text from that column.
+ROUTINE TEXTROW (R, C, TEXT, LEN, V) : NOVALUE =
+    INCR I FROM 0 TO .LEN - 1 DO SETCELL(.R, .C + .I, GETB(.TEXT + .I), .V);
+
+! LINEROW window, line, row: a buffer's line in a window's row, its tabs
+! out to every 8 columns, cut at the window's right edge with a diamond.
+ROUTINE LINEROW (W : REF VECTOR, L : REF VECTOR, R) : NOVALUE =
+    BEGIN
+    LOCAL
+        COL,
+        WIDTH;
+    COL = 0;
+    WIDTH = .W[W_WIDTH];
+    INCR I FROM 0 TO .L[L_LEN] - 1 DO
+        BEGIN
+        LOCAL
+            C,
+            N;
+        C = GETB(.L[L_TEXT] + .I);
+        N = (IF .C EQL 9 THEN 8 - .COL MOD 8 ELSE 1);
+        INCR J FROM 1 TO .N DO
+            BEGIN
+            LOCAL
+                X;
+            X = .COL - .W[W_SHIFT];
+            IF .X GEQ .WIDTH - 1 AND .COL + 1 LSS .L[L_MARGIN] - 1 + 99999
+            THEN
+                BEGIN
+                ! More than fits: a diamond in the last column.
+                IF .X EQL .WIDTH - 1
+                THEN
+                    BEGIN
+                    LOCAL
+                        MORE;
+                    MORE = .I LSS .L[L_LEN] - 1 OR .J LSS .N;
+                    IF .MORE
+                    THEN
+                        SETCELL(.R, .X, %C'`', .W[W_VIDEO] OR V_GRAPHIC)
+                    ELSE
+                        SETCELL(.R, .X, (IF .C EQL 9 THEN %C' ' ELSE .C), .W[W_VIDEO])
+                    END
+                END
+            ELSE IF .X GEQ 0
+            THEN
+                SETCELL(.R, .X, (IF .C EQL 9 THEN %C' ' ELSE IF .C LSS 32 THEN %C'?' ELSE .C),
+                        .W[W_VIDEO]);
+            COL = .COL + 1
+            END
+        END
+    END;
+
+! COLOF line, offset: the column the offset is shown in, tabs out to 8.
+ROUTINE COLOF (L : REF VECTOR, O) =
+    BEGIN
+    LOCAL
+        COL;
+    IF .L EQL 0 THEN RETURN 0;
+    COL = 0;
+    INCR I FROM 0 TO MIN(.O, .L[L_LEN]) - 1 DO
+        IF GETB(.L[L_TEXT] + .I) EQL 9 THEN COL = .COL + 8 - .COL MOD 8 ELSE COL = .COL + 1;
+    .COL
+    END;
+
+! NEXTLINE buffer, line: the line after it; 0, the end of the buffer,
+! after the last.
+ROUTINE NEXTLINE (L : REF VECTOR) =
+    IF .L EQL 0 THEN -1 ELSE .L[L_NEXT];
+
+ROUTINE PREVLINE (B : REF VECTOR, L : REF VECTOR) =
+    IF .L EQL 0 THEN .B[B_LAST] ELSE .L[L_PREV];
+
+! PLACE window, address of line, address of offset: where its cursor is:
+! its buffer's editing point if it is current, else its own marker.
+ROUTINE PLACE (W : REF VECTOR, LP, OP) : NOVALUE =
+    BEGIN
+    BIND
+        B = .W[W_BUF] : VECTOR;
+    IF .W EQL .CURWIN OR .W[W_CURSOR] EQL 0
+    THEN
+        (.LP = .B[B_LINE]; .OP = .B[B_OFF])
+    ELSE
+        (BIND M = .W[W_CURSOR] : VECTOR; .LP = .M[M_LINE]; .OP = .M[M_OFF])
+    END;
+
+! SCROLLTO window, rows of text: makes its first line one that shows its
+! cursor, as DEC's TPU does: a window not yet shown starts at its
+! buffer's start, or at the cursor's line if that doesn't show it; one
+! shown scrolls, the cursor's line becoming its first row if the cursor
+! went above it, its last if below. The cursor's row, from 0.
+ROUTINE SCROLLTO (W : REF VECTOR, ROWS) =
+    BEGIN
+    LOCAL
+        B : REF VECTOR,
+        FM : REF VECTOR,
+        CL,
+        CO,
+        L,
+        N;
+    B = .W[W_BUF];
+    FM = .W[W_FIRST];
+    PLACE(.W, CL, CO);
+    IF NOT .W[W_SHOWN] THEN (FM[M_LINE] = .B[B_FIRST]; FM[M_OFF] = 0);
+    ! Is the cursor's line in the window, from its first?
+    L = .FM[M_LINE];
+    N = 0;
+    WHILE .N LSS .ROWS DO
+        BEGIN
+        IF .L EQL .CL THEN RETURN .N;
+        IF .L EQL 0 THEN EXITLOOP;
+        BEGIN
+        BIND
+            LL = .L : VECTOR;
+        L = .LL[L_NEXT]
+        END;
+        N = .N + 1
+        END;
+    IF NOT .W[W_SHOWN] OR LINENO(.B, .CL) LSS LINENO(.B, .FM[M_LINE])
+    THEN
+        (FM[M_LINE] = .CL; FM[M_OFF] = 0; RETURN 0);
+    ! Below: the line ROWS - 1 above the cursor's comes first.
+    L = .CL;
+    N = 0;
+    WHILE .N LSS .ROWS - 1 DO
+        BEGIN
+        LOCAL
+            P;
+        P = PREVLINE(.B, .L);
+        IF .P EQL 0 THEN EXITLOOP;
+        L = .P;
+        N = .N + 1
+        END;
+    FM[M_LINE] = .L;
+    FM[M_OFF] = 0;
+    .N
+    END;
+
+! PAINT window: its rows in WANT.
+ROUTINE PAINT (W : REF VECTOR) : NOVALUE =
+    BEGIN
+    LOCAL
+        B : REF VECTOR,
+        ROWS,
+        CROW,
+        L,
+        R;
+    B = .W[W_BUF];
+    ROWS = .W[W_LEN] - (IF .W[W_STATUS] THEN 1 ELSE 0);
+    IF .ROWS LEQ 0 THEN RETURN;
+    CROW = SCROLLTO(.W, .ROWS);
+    W[W_SHOWN] = TRUE;
+    BEGIN
+    BIND
+        FM = .W[W_FIRST] : VECTOR;
+    L = .FM[M_LINE]
+    END;
+    INCR I FROM 0 TO .ROWS - 1 DO
+        BEGIN
+        R = .W[W_TOP] - 1 + .I;
+        INCR C FROM 0 TO .SCR_W - 1 DO SETCELL(.R, .C, %C' ', 0);
+        IF .L EQL 0
+        THEN
+            BEGIN
+            ! The end of the buffer: its text, once.
+            LOCAL
+                E;
+            E = .B[B_EOBTEXT];
+            IF .E EQL 0
+            THEN
+                TEXTROW(.R, 0, UPLIT BYTE ('[EOB]'), 5, .W[W_VIDEO])
+            ELSE
+                TEXTROW(.R, 0, SADDR(.E), MIN(SLEN(.E), .W[W_WIDTH]), .W[W_VIDEO]);
+            L = -1
+            END
+        ELSE IF .L NEQ -1
+        THEN
+            BEGIN
+            LINEROW(.W, .L, .R);
+            BEGIN
+            BIND
+                LL = .L : VECTOR;
+            L = .LL[L_NEXT]
+            END
+            END
+        END;
+    ! The cursor's place.
+    BEGIN
+    LOCAL
+        CL,
+        CO;
+    PLACE(.W, CL, CO);
+    W[W_ROW] = .W[W_TOP] - 1 + .CROW;
+    W[W_COL] = MIN(COLOF(.CL, .CO) - .W[W_SHIFT], .W[W_WIDTH] - 1);
+    IF .W[W_COL] LSS 0 THEN W[W_COL] = 0
+    END;
+    IF .W[W_STATUS]
+    THEN
+        BEGIN
+        LOCAL
+            V,
+            R2;
+        R2 = .W[W_TOP] - 1 + .ROWS;
+        V = (IF .W[W_STATVIDEO] EQL 0 THEN V_REVERSE ELSE .W[W_STATVIDEO]);
+        INCR C FROM 0 TO .SCR_W - 1 DO SETCELL(.R2, .C, %C' ', .V);
+        IF .W[W_STATTEXT] NEQ 0
+        THEN
+            TEXTROW(.R2, 0, SADDR(.W[W_STATTEXT]), SLEN(.W[W_STATTEXT]), .V)
+        ELSE
+            BEGIN
+            LOCAL
+                C;
+            TEXTROW(.R2, 0, UPLIT BYTE ('   Buffer : '), 12, .V);
+            C = 12;
+            TEXTROW(.R2, .C, SADDR(.B[B_NAME]), SLEN(.B[B_NAME]), .V);
+            C = .C + SLEN(.B[B_NAME]);
+            TEXTROW(.R2, .C, UPLIT BYTE ('   File : '), 10, .V);
+            C = .C + 10;
+            IF .B[B_OUTFILE] NEQ 0
+            THEN
+                TEXTROW(.R2, .C, SADDR(.B[B_OUTFILE]), SLEN(.B[B_OUTFILE]), .V)
+            ELSE IF .B[B_INFILE] NEQ 0
+            THEN
+                TEXTROW(.R2, .C, SADDR(.B[B_INFILE]), SLEN(.B[B_INFILE]), .V)
+            END
+        END
+    END;
+
+! SCR_UPDATE: the screen as the windows' buffers are.
+GLOBAL ROUTINE SCR_UPDATE : NOVALUE =
+    BEGIN
+    LOCAL
+        W : REF VECTOR,
+        SEQ;
+    IF NOT .ON THEN RETURN;
+    ! What the screen should show: what it shows, then each window, in the
+    ! order they were mapped.
+    CH$MOVE(MAXW * MAXH * 2, .SHOWN, .WANT);
+    SEQ = 1;
+    WHILE .SEQ LEQ .MAPSEQ DO
+        BEGIN
+        W = .WINDOWS;
+        WHILE .W NEQ 0 DO
+            BEGIN
+            IF .W[W_MAPPED] EQL .SEQ AND .W[W_BUF] NEQ 0 THEN PAINT(.W);
+            W = .W[W_NEXT]
+            END;
+        SEQ = .SEQ + 1
+        END;
+    ! What differs, row by row.
+    INCR R FROM 0 TO .SCR_H - 1 DO
+        BEGIN
+        LOCAL
+            FIRST,
+            LAST;
+        FIRST = -1;
+        LAST = -1;
+        INCR C FROM 0 TO .SCR_W - 1 DO
+            IF CELL(.WANT, .R, .C)<0, 16, 0> NEQ CELL(.SHOWN, .R, .C)<0, 16, 0>
+            THEN
+                (IF .FIRST LSS 0 THEN FIRST = .C; LAST = .C);
+        IF .FIRST GEQ 0
+        THEN
+            BEGIN
+            MOVETO(.R, .FIRST);
+            INCR C FROM .FIRST TO .LAST DO
+                BEGIN
+                LOCAL
+                    X;
+                X = CELL(.WANT, .R, .C)<0, 16, 0>;
+                VIDEO(SRL(.X, 8));
+                TT$PUT(CELL(.WANT, .R, .C), 1)
+                END;
+            VIDEO(0)
+            END
+        END;
+    CH$MOVE(MAXW * MAXH * 2, .WANT, .SHOWN);
+    ! The cursor, in the current window.
+    IF .CURWIN NEQ 0
+    THEN
+        BEGIN
+        BIND
+            CW = .CURWIN : VECTOR;
+        IF .CW[W_MAPPED] NEQ 0 THEN (CURROW = .CW[W_ROW]; CURCOL = .CW[W_COL])
+        END;
+    MOVETO(.CURROW, .CURCOL);
+    TT$FLUSH()
+    END;
+
+! REFRESH: the whole screen again.
+ROUTINE REFRESH : NOVALUE =
+    BEGIN
+    IF NOT .ON THEN RETURN;
+    PUT(%CHAR(27, %C'[', %C'0', %C'm', 27, %C'[', %C'2', %C'J'));
+    ATTR = 0;
+    INCR I FROM 0 TO MAXW * MAXH - 1 DO (.SHOWN + .I * 2)<0, 16, 0> = %C' ';
+    SCR_UPDATE()
+    END;
+
+! ---- Windows and the cursor
+
+! SAVECURSOR: the current window keeps its buffer's editing point as its
+! cursor, before another becomes current.
+ROUTINE SAVECURSOR : NOVALUE =
+    BEGIN
+    LOCAL
+        W : REF VECTOR,
+        B : REF VECTOR;
+    W = .CURWIN;
+    IF .W EQL 0 THEN RETURN;
+    B = .W[W_BUF];
+    IF .B EQL 0 THEN RETURN;
+    IF .W[W_CURSOR] NEQ 0 THEN MARK_FREE(.W[W_CURSOR]);
+    W[W_CURSOR] = MARK_NEW(.B, .B[B_LINE], .B[B_OFF])
+    END;
+
+! SETCURRENT window: makes it the current window, its buffer the current
+! buffer, with the editing point where its cursor was.
+GLOBAL ROUTINE SETCURRENT (W : REF VECTOR) : NOVALUE =
+    BEGIN
+    LOCAL
+        B : REF VECTOR;
+    IF .W NEQ .CURWIN THEN SAVECURSOR();
+    CURWIN = .W;
+    B = .W[W_BUF];
+    IF .B EQL 0 THEN RETURN;
+    BUF_CURRENT = .B;
+    IF .W[W_CURSOR] NEQ 0
+    THEN
+        BEGIN
+        BIND
+            M = .W[W_CURSOR] : VECTOR;
+        IF .M[M_BUF] EQL .B THEN (B[B_LINE] = .M[M_LINE]; B[B_OFF] = .M[M_OFF])
+        END
+    END;
+
+! CREATE_WINDOW (top, length, ON | OFF).
+ROUTINE BX_CREATE_WINDOW (ARGS : REF VECTOR, N, R) =
+    BEGIN
+    LOCAL
+        W : REF VECTOR;
+    ARGCOUNT(3, 3);
+    IF VTYPE(.ARGS[0]) NEQ TY_INTEGER THEN RETURN ARGMISMATCH(1, .ARGS[0]);
+    IF VTYPE(.ARGS[1]) NEQ TY_INTEGER THEN RETURN ARGMISMATCH(2, .ARGS[1]);
+    W = MEM_GET(W_SIZE * 8);
+    W[W_TOP] = VINT(.ARGS[0]);
+    W[W_LEN] = VINT(.ARGS[1]);
+    W[W_STATUS] = (IF VTYPE(.ARGS[2]) EQL TY_KEYWORD THEN VINT(.ARGS[2]) EQL K_ON
+                   ELSE VINT(.ARGS[2]) AND 1);
+    W[W_WIDTH] = (IF .SCR_W EQL 0 THEN 80 ELSE .SCR_W);
+    W[W_NEXT] = .WINDOWS;
+    WINDOWS = .W;
+    .R = MKV(TY_WINDOW, .W);
+    SS_NORMAL
+    END;
+
+! MAP (window, buffer).
+ROUTINE BX_MAP (ARGS : REF VECTOR, N) =
+    BEGIN
+    LOCAL
+        W : REF VECTOR,
+        B : REF VECTOR;
+    ARGCOUNT(2, 2);
+    IF VTYPE(.ARGS[0]) NEQ TY_WINDOW THEN RETURN ARGMISMATCH(1, .ARGS[0]);
+    IF VTYPE(.ARGS[1]) NEQ TY_BUFFER THEN RETURN ARGMISMATCH(2, .ARGS[1]);
+    W = VPTR(.ARGS[0]);
+    B = VPTR(.ARGS[1]);
+    IF .W[W_BUF] NEQ .B
+    THEN
+        BEGIN
+        IF .W[W_FIRST] NEQ 0 THEN MARK_FREE(.W[W_FIRST]);
+        IF .W[W_CURSOR] NEQ 0 THEN (MARK_FREE(.W[W_CURSOR]); W[W_CURSOR] = 0);
+        W[W_FIRST] = MARK_NEW(.B, .B[B_FIRST], 0);
+        W[W_BUF] = .B;
+        W[W_SHOWN] = FALSE
+        END;
+    MAPSEQ = .MAPSEQ + 1;
+    W[W_MAPPED] = .MAPSEQ;
+    SAVECURSOR();
+    CURWIN = .W;
+    BUF_CURRENT = .B;
+    SS_NORMAL
+    END;
+
+! UNMAP (window).
+ROUTINE BX_UNMAP (ARGS : REF VECTOR, N) =
+    BEGIN
+    LOCAL
+        W : REF VECTOR,
+        BEST : REF VECTOR,
+        X : REF VECTOR;
+    ARGCOUNT(1, 1);
+    IF VTYPE(.ARGS[0]) NEQ TY_WINDOW THEN RETURN ARGMISMATCH(1, .ARGS[0]);
+    W = VPTR(.ARGS[0]);
+    IF .W EQL .CURWIN THEN SAVECURSOR();
+    W[W_MAPPED] = 0;
+    W[W_SHOWN] = FALSE;
+    ! Its rows go blank, unless another window shows them.
+    INCR I FROM 0 TO .W[W_LEN] - 1 DO
+        INCR C FROM 0 TO .SCR_W - 1 DO SETCELL(.W[W_TOP] - 1 + .I, .C, %C' ', 0);
+    IF .W NEQ .CURWIN THEN RETURN SS_NORMAL;
+    ! The window mapped last becomes current.
+    BEST = 0;
+    X = .WINDOWS;
+    WHILE .X NEQ 0 DO
+        BEGIN
+        IF .X[W_MAPPED] NEQ 0
+        THEN
+            IF .BEST EQL 0 THEN BEST = .X ELSE IF .X[W_MAPPED] GTR .BEST[W_MAPPED] THEN BEST = .X;
+        X = .X[W_NEXT]
+        END;
+    CURWIN = 0;
+    IF .BEST NEQ 0 THEN SETCURRENT(.BEST);
+    SS_NORMAL
+    END;
+
+! ADJUST_WINDOW (window, top change, bottom change).
+ROUTINE BX_ADJUST_WINDOW (ARGS : REF VECTOR, N) =
+    BEGIN
+    LOCAL
+        W : REF VECTOR,
+        TOP,
+        BOT;
+    ARGCOUNT(3, 3);
+    IF VTYPE(.ARGS[0]) NEQ TY_WINDOW THEN RETURN ARGMISMATCH(1, .ARGS[0]);
+    W = VPTR(.ARGS[0]);
+    TOP = .W[W_TOP] + VINT(.ARGS[1]);
+    BOT = .W[W_TOP] + .W[W_LEN] - 1 + VINT(.ARGS[2]);
+    TOP = MAX(.TOP, 1);
+    BOT = MIN(.BOT, .SCR_H);
+    IF .BOT - .TOP + 1 LSS (IF .W[W_STATUS] THEN 2 ELSE 1) THEN RETURN BI_ERR(TPU$_WINDNOTVIS);
+    W[W_TOP] = .TOP;
+    W[W_LEN] = .BOT - .TOP + 1;
+    SETCURRENT(.W);
+    SS_NORMAL
+    END;
+
+! SCR_DELETE window: DELETE's: out of the list, unmapped, never shown.
+GLOBAL ROUTINE SCR_DELETE (W : REF VECTOR) : NOVALUE =
+    BEGIN
+    LOCAL
+        P;
+    IF .W[W_MAPPED] NEQ 0
+    THEN
+        BEGIN
+        LOCAL
+            ARGS : VECTOR[1];
+        ARGS[0] = MKV(TY_WINDOW, .W);
+        BX_UNMAP(ARGS, 1)
+        END;
+    P = WINDOWS;
+    WHILE ..P NEQ 0 DO
+        BEGIN
+        IF ..P EQL .W THEN (.P = .W[W_NEXT]; EXITLOOP);
+        P = ..P
+        END;
+    IF .W[W_FIRST] NEQ 0 THEN MARK_FREE(.W[W_FIRST]);
+    IF .W[W_CURSOR] NEQ 0 THEN MARK_FREE(.W[W_CURSOR]);
+    W[W_BUF] = 0
+    END;
+
+! SCR_POSITION window: POSITION's window case.
+GLOBAL ROUTINE SCR_POSITION (W : REF VECTOR) =
+    BEGIN
+    IF .W[W_MAPPED] EQL 0 OR .W[W_BUF] EQL 0 THEN RETURN BI_ERR(TPU$_WINDNOTMAPPED);
+    SETCURRENT(.W);
+    SS_NORMAL
+    END;
+
+! ---- Messages and READ_LINE
+
+! MSGBUF: the buffer messages go to, TPU$X_MESSAGE_BUFFER's or
+! MESSAGE_BUFFER's, or 0.
+ROUTINE MSGBUF =
+    BEGIN
+    LOCAL
+        Y : REF VECTOR;
+    Y = SYM_LOOK(T('TPU$X_MESSAGE_BUFFER'));
+    IF .Y NEQ 0 THEN IF VTYPE(.Y[Y_VALUE]) EQL TY_BUFFER THEN RETURN VPTR(.Y[Y_VALUE]);
+    Y = SYM_LOOK(T('MESSAGE_BUFFER'));
+    IF .Y NEQ 0 THEN IF VTYPE(.Y[Y_VALUE]) EQL TY_BUFFER THEN RETURN VPTR(.Y[Y_VALUE]);
+    0
+    END;
+
+! SCR_MESSAGE text, length: a message: a line at the end of the message
+! buffer, whose window shows it last; with no message buffer, the
+! screen's last row.
+GLOBAL ROUTINE SCR_MESSAGE (TEXT, LEN) : NOVALUE =
+    BEGIN
+    LOCAL
+        B : REF VECTOR,
+        L : REF VECTOR,
+        NEW;
+    B = MSGBUF();
+    IF .B EQL 0
+    THEN
+        BEGIN
+        INCR C FROM 0 TO .SCR_W - 1 DO SETCELL(.SCR_H - 1, .C, %C' ', 0);
+        CH$MOVE(MAXW * MAXH * 2, .SHOWN, .WANT);
+        TEXTROW(.SCR_H - 1, 0, .TEXT, MIN(.LEN, .SCR_W), 0);
+        CH$MOVE(MAXW * MAXH * 2, .WANT, .SHOWN);
+        MOVETO(.SCR_H - 1, 0);
+        PUT(%CHAR(27, %C'[', %C'K'));
+        TT$PUT(.TEXT, MIN(.LEN, .SCR_W));
+        RETURN
+        END;
+    L = MEM_GET(L_SIZE * 8);
+    L[L_CAP] = MAX(.LEN, 16);
+    L[L_TEXT] = MEM_GET(.L[L_CAP]);
+    L[L_LEN] = .LEN;
+    L[L_MARGIN] = 1;
+    CH$MOVE(.LEN, .TEXT, .L[L_TEXT]);
+    ! The new last line.
+    L[L_PREV] = .B[B_LAST];
+    IF .B[B_LAST] NEQ 0 THEN (BIND P = .B[B_LAST] : VECTOR; P[L_NEXT] = .L) ELSE B[B_FIRST] = .L;
+    B[B_LAST] = .L;
+    B[B_NLINES] = .B[B_NLINES] + 1;
+    ! Its windows show it.
+    B[B_LINE] = .L;
+    B[B_OFF] = 0;
+    BEGIN
+    LOCAL
+        W : REF VECTOR;
+    W = .WINDOWS;
+    WHILE .W NEQ 0 DO
+        BEGIN
+        IF .W[W_BUF] EQL .B AND .W NEQ .CURWIN
+        THEN
+            BEGIN
+            IF .W[W_CURSOR] NEQ 0 THEN MARK_FREE(.W[W_CURSOR]);
+            W[W_CURSOR] = MARK_NEW(.B, .L, 0)
+            END;
+        W = .W[W_NEXT]
+        END
+    END
+    END;
+
+! READ_LINE [(prompt [, count])]: a line typed after the prompt, in the
+! prompt area, or the screen's last row; Return, CTRL/Z or count keys
+! end it.
+ROUTINE BX_READ_LINE (ARGS : REF VECTOR, N, R) =
+    BEGIN
+    LOCAL
+        ROW,
+        V,
+        P,
+        PL,
+        MAX,
+        ANS : VECTOR[256, BYTE],
+        AL;
+    ARGCOUNT(0, 2);
+    P = 0;
+    PL = 0;
+    IF .N GTR 0 THEN (IF VTYPE(.ARGS[0]) NEQ TY_STRING THEN RETURN ARGMISMATCH(1, .ARGS[0]);
+                      P = SADDR(.ARGS[0]); PL = MIN(SLEN(.ARGS[0]), 255));
+    MAX = 255;
+    IF .N GTR 1 THEN (IF VTYPE(.ARGS[1]) NEQ TY_INTEGER THEN RETURN ARGMISMATCH(2, .ARGS[1]);
+                      MAX = MIN(VINT(.ARGS[1]), 255));
+    IF NOT .ON THEN (.R = STR_MAKE(0, 0); RETURN BI_ERR(TPU$_REQUIRESTERM));
+    IF NOT TT$WAITING() THEN SCR_UPDATE();
+    ROW = (IF .PROMPTROW GTR 0 THEN .PROMPTROW - 1 ELSE .SCR_H - 1);
+    V = .PROMPTVIDEO;
+    AL = 0;
+    ! The prompt area, its text kept where SCR_UPDATE finds it.
+    CH$MOVE(MAXW * MAXH * 2, .SHOWN, .WANT);
+    INCR C FROM 0 TO .SCR_W - 1 DO SETCELL(.ROW, .C, %C' ', 0);
+    TEXTROW(.ROW, 0, .P, .PL, .V);
+    CH$MOVE(MAXW * MAXH * 2, .WANT, .SHOWN);
+    MOVETO(.ROW, 0);
+    VIDEO(0);
+    PUT(%CHAR(27, %C'[', %C'K'));
+    VIDEO(.V);
+    TT$PUT(.P, .PL);
+    WHILE .AL LSS .MAX DO
+        BEGIN
+        LOCAL
+            K;
+        TT$FLUSH();
+        K = READKEY();
+        KEY_LAST = .K;
+        IF .K LSS 0 OR .K EQL K_RET_KEY OR .K EQL K_CTRL_Z_KEY OR .K EQL K_LF_KEY THEN EXITLOOP;
+        IF .K EQL K_DEL_KEY
+        THEN
+            BEGIN
+            IF .AL GTR 0
+            THEN
+                BEGIN
+                AL = .AL - 1;
+                SETCELL(.ROW, .PL + .AL, %C' ', 0);
+                PUT(%CHAR(8, %C' ', 8))
+                END
+            END
+        ELSE IF .K GEQ KEY_BASE + 32 AND .K LSS KEY_BASE + 256
+        THEN
+            BEGIN
+            ANS[.AL] = .K - KEY_BASE;
+            CELL(.SHOWN, .ROW, .PL + .AL)<0, 16, 0> = .ANS[.AL] OR SLL(.V, 8);
+            TT$PUT(ANS[.AL], 1);
+            AL = .AL + 1
+            END
+        END;
+    VIDEO(0);
+    .R = STR_MAKE(ANS, .AL);
+    SS_NORMAL
+    END;
+
+! ---- SET and GET_INFO
+
+! SCR_SET args, count: SET's requests on windows and the screen; NOTMINE
+! for the rest.
+GLOBAL ROUTINE SCR_SET (ARGS : REF VECTOR, N) =
+    BEGIN
+    LOCAL
+        K,
+        W : REF VECTOR;
+    K = VINT(.ARGS[0]);
+    IF .K EQL K_PROMPT_AREA
+    THEN
+        BEGIN
+        ARGCOUNT(4, 4);
+        PROMPTROW = VINT(.ARGS[1]);
+        PROMPTLEN = VINT(.ARGS[2]);
+        PROMPTVIDEO = (IF VTYPE(.ARGS[3]) EQL TY_KEYWORD THEN KWVIDEO(VINT(.ARGS[3])) ELSE 0);
+        RETURN SS_NORMAL
+        END;
+    IF .K EQL K_SCREEN_UPDATE OR .K EQL K_BELL OR .K EQL K_AUTO_REPEAT OR .K EQL K_CROSS_WINDOW_BOUNDS
+       OR .K EQL K_COLUMN_MOVE_VERTICAL OR .K EQL K_MESSAGE_FLAGS OR .K EQL K_TIMER
+       OR .K EQL K_FACILITY_NAME OR .K EQL K_DETACHED_ACTION OR .K EQL K_LINE_NUMBER
+       OR .K EQL K_TRACEBACK
+    THEN
+        ! ponytail: taken and not acted on.
+        RETURN SS_NORMAL;
+    SELECTONE .K OF
+        SET
+        [K_STATUS_LINE, K_VIDEO, K_WIDTH, K_SCROLLING, K_TEXT, K_PAD] : 0;
+        [OTHERWISE] : RETURN NOTMINE;
+        TES;
+    IF .N LSS 3 THEN RETURN BI_ERR(TPU$_TOOFEW);
+    IF VTYPE(.ARGS[1]) NEQ TY_WINDOW THEN RETURN ARGMISMATCH(2, .ARGS[1]);
+    W = VPTR(.ARGS[1]);
+    SELECTONE .K OF
+        SET
+        [K_STATUS_LINE] :
+            BEGIN
+            ! SET (STATUS_LINE, window, NONE | video, text).
+            IF VTYPE(.ARGS[2]) EQL TY_KEYWORD AND VINT(.ARGS[2]) EQL K_NONE AND .N LSS 4
+            THEN
+                W[W_STATUS] = FALSE
+            ELSE
+                BEGIN
+                W[W_STATUS] = TRUE;
+                W[W_STATVIDEO] = (IF VTYPE(.ARGS[2]) EQL TY_KEYWORD THEN KWVIDEO(VINT(.ARGS[2]))
+                                  ELSE 0);
+                IF .N GTR 3 AND VTYPE(.ARGS[3]) EQL TY_STRING
+                THEN
+                    (VUNREF(.W[W_STATTEXT]); VREF(.ARGS[3]); W[W_STATTEXT] = .ARGS[3])
+                END
+            END;
+        [K_VIDEO] : W[W_VIDEO] = KWVIDEO(VINT(.ARGS[2]));
+        [K_WIDTH] : W[W_WIDTH] = MAX(1, MIN(VINT(.ARGS[2]), MAXW));
+        [OTHERWISE] : 0;
+        TES;
+    SS_NORMAL
+    END;
+
+! SCR_INFO args, count, result: GET_INFO's requests of windows, SCREEN and
+! WINDOWS; NOTMINE for the rest.
+GLOBAL ROUTINE SCR_INFO (ARGS : REF VECTOR, N, R) =
+    BEGIN
+    LOCAL
+        V,
+        W;
+    MACRO
+        REQ(S) = STR_EQL(.W, T(S)) %;
+    V = .ARGS[0];
+    W = .ARGS[1];
+    IF VTYPE(.V) EQL TY_WINDOW
+    THEN
+        BEGIN
+        BIND
+            X = VPTR(.V) : VECTOR;
+        IF REQ('BUFFER') THEN .R = (IF .X[W_BUF] EQL 0 THEN MKINT(0) ELSE MKV(TY_BUFFER, .X[W_BUF]))
+        ELSE IF REQ('TOP') OR REQ('ORIGINAL_TOP') OR REQ('VISIBLE_TOP') THEN .R = MKINT(.X[W_TOP])
+        ELSE IF REQ('BOTTOM') OR REQ('ORIGINAL_BOTTOM') OR REQ('VISIBLE_BOTTOM')
+        THEN .R = MKINT(.X[W_TOP] + .X[W_LEN] - 1 - (IF .X[W_STATUS] THEN 1 ELSE 0))
+        ELSE IF REQ('LENGTH') OR REQ('ORIGINAL_LENGTH') OR REQ('VISIBLE_LENGTH')
+        THEN .R = MKINT(.X[W_LEN])
+        ELSE IF REQ('VISIBLE') OR REQ('MAPPED') THEN .R = MKINT(.X[W_MAPPED] NEQ 0)
+        ELSE IF REQ('STATUS_LINE')
+        THEN .R = (IF .X[W_STATTEXT] NEQ 0 THEN (VREF(.X[W_STATTEXT]); .X[W_STATTEXT]) ELSE STR_MAKE(0, 0))
+        ELSE IF REQ('WIDTH') THEN .R = MKINT(.X[W_WIDTH])
+        ELSE IF REQ('SHIFT_AMOUNT') THEN .R = MKINT(.X[W_SHIFT])
+        ELSE IF REQ('CURRENT_ROW') THEN .R = MKINT(.X[W_ROW] + 1)
+        ELSE IF REQ('CURRENT_COLUMN') THEN .R = MKINT(.X[W_COL] + 1)
+        ELSE RETURN NOTMINE;
+        RETURN SS_NORMAL
+        END;
+    IF VTYPE(.V) EQL TY_KEYWORD
+    THEN
+        BEGIN
+        IF VINT(.V) EQL K_SCREEN
+        THEN
+            BEGIN
+            IF REQ('WIDTH') OR REQ('ORIGINAL_WIDTH') THEN .R = MKINT(.SCR_W)
+            ELSE IF REQ('VISIBLE_LENGTH') OR REQ('LENGTH') OR REQ('ORIGINAL_LENGTH') THEN .R = MKINT(.SCR_H)
+            ELSE IF REQ('CURRENT_ROW') THEN .R = MKINT(.CURROW + 1)
+            ELSE IF REQ('CURRENT_COLUMN') THEN .R = MKINT(.CURCOL + 1)
+            ELSE IF REQ('VT100') OR REQ('VT200') OR REQ('ANSI_CRT') OR REQ('DEC_CRT') OR REQ('EDIT_MODE')
+            THEN .R = MKINT(1)
+            ELSE IF REQ('VT300') OR REQ('VT400') OR REQ('EIGHT_BIT') OR REQ('DEC_CRT2') OR REQ('DEC_CRT3')
+            THEN .R = MKINT(0)
+            ELSE RETURN NOTMINE;
+            RETURN SS_NORMAL
+            END;
+        IF VINT(.V) EQL K_WINDOWS OR VINT(.V) EQL K_WINDOW
+        THEN
+            BEGIN
+            OWN
+                WALK;
+            IF REQ('FIRST') THEN WALK = .WINDOWS
+            ELSE IF REQ('NEXT') THEN (IF .WALK NEQ 0 THEN (BIND P = .WALK : VECTOR; WALK = .P[W_NEXT]))
+            ELSE IF REQ('CURRENT') THEN WALK = .CURWIN
+            ELSE RETURN NOTMINE;
+            .R = (IF .WALK EQL 0 THEN MKINT(0) ELSE MKV(TY_WINDOW, .WALK));
+            RETURN SS_NORMAL
+            END
+        END;
+    NOTMINE
+    END;
+
+! SCR_CALL number, args, count, result: this module's built-ins, or NOTMINE.
+GLOBAL ROUTINE SCR_CALL (B, ARGS : REF VECTOR, N, R) =
+    SELECTONE .B OF
+        SET
+        [B_CREATE_WINDOW] : BX_CREATE_WINDOW(.ARGS, .N, .R);
+        [B_MAP] : BX_MAP(.ARGS, .N);
+        [B_UNMAP] : BX_UNMAP(.ARGS, .N);
+        [B_ADJUST_WINDOW] : BX_ADJUST_WINDOW(.ARGS, .N);
+        [B_UPDATE] : (SCR_UPDATE(); SS_NORMAL);
+        [B_REFRESH] : (REFRESH(); SS_NORMAL);
+        [B_READ_LINE] : BX_READ_LINE(.ARGS, .N, .R);
+        [B_CURRENT_WINDOW] : (.R = (IF .CURWIN EQL 0 THEN MKINT(0) ELSE MKV(TY_WINDOW, .CURWIN));
+                              SS_NORMAL);
+        [B_CURRENT_ROW] : (.R = MKINT(.CURROW + 1); SS_NORMAL);
+        [B_CURRENT_COLUMN] : (.R = MKINT(.CURCOL + 1); SS_NORMAL);
+        [OTHERWISE] : NOTMINE;
+        TES;
+
+END
+ELUDOM

@@ -45,6 +45,10 @@ EXTERNAL ROUTINE
     BUF_INFO,                           ! (args, count, result): GET_INFO of a buffer's object, or NOTMINE
     BUF_TEXT,                           ! (value, address of length): text to compile, or 0
     PAT_CALL,
+    KEY_CALL,
+    SCR_CALL,
+    SCR_INFO,
+    SCR_END : NOVALUE,
     BUF_MAP;                            ! (range or buffer, EDIT's bits): whether it could
 
 BIND
@@ -671,6 +675,8 @@ ROUTINE BI_GET_INFO (ARGS : REF VECTOR, N, R) =
         END;
     S = BUF_INFO(.ARGS, .N, .R);
     IF .S NEQ NOTMINE THEN RETURN .S;
+    S = SCR_INFO(.ARGS, .N, .R);
+    IF .S NEQ NOTMINE THEN RETURN .S;
     .R = MKINT(0);
     BI_ERR(TPU$_BADREQUEST, CASEOF(.W, K_UPPER), STR_MAKE(0, 0), TYPENAME(.V))
     END;
@@ -697,6 +703,7 @@ ROUTINE BI_QUIT (ARGS : REF VECTOR, N, R) =
     SEV = 1;
     IF .N GTR 1 THEN (ARGTYPE(1, TY_INTEGER); SEV = VINT(.ARGS[1]) AND 3);
     ! ponytail: no buffer is checked for changes, as with QUIT (OFF).
+    SCR_END();
     FIO$EXIT(%X'0091C000' + 8 * 0 + .SEV)
     END;
 
@@ -729,6 +736,8 @@ GLOBAL ROUTINE BI_CALL (B, ARGS : REF VECTOR, N, R) =
             TES);
     IF .S EQL NOTMINE THEN S = BUF_CALL(.B, .ARGS, .N, .R);
     IF .S EQL NOTMINE THEN S = PAT_CALL(.B, .ARGS, .N, .R);
+    IF .S EQL NOTMINE THEN S = KEY_CALL(.B, .ARGS, .N, .R);
+    IF .S EQL NOTMINE THEN S = SCR_CALL(.B, .ARGS, .N, .R);
     IF .S EQL NOTMINE THEN S = BI_ERR(TPU$_NOTYET);
     .S
     END;

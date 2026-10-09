@@ -174,7 +174,10 @@ LITERAL
     B_RMARGIN = 13,
     B_TABS = 14,                        ! tab stops: every n columns
     B_KEYMAPS = 15,                     ! the key map list's name, a string value, or 0
-    B_SIZE = 16,
+    B_GOAL = 16,                        ! MOVE_VERTICAL's offset to keep,
+    B_GOALLINE = 17,                    ! and where it left the editing point
+    B_GOALOFF = 18,
+    B_SIZE = 19,
     BF_MODIFIED = 1,
     BF_OVERSTRIKE = 2,
     BF_NOWRITE = 4,
@@ -243,4 +246,11 @@ EXTERNAL ROUTINE
     VM_ERROR : NOVALUE,                 ! (TPU$_ code, text, length)
     MSG_PUT : NOVALUE,                  ! (text, length): MESSAGE's output
     ! builtin.b64
-    BI_CALL;                            ! (number, args, count, result address): status
+    BI_CALL,                            ! (number, args, count, result address): status
+    ! fio.mar on vaxpunk, vrun/tt.b64 under vrun: the terminal
+    TT$OPEN,                            ! (address of width, of height): whether there is one
+    TT$PUT : NOVALUE,                   ! (text, length)
+    TT$FLUSH : NOVALUE,
+    TT$GET,                             ! (): a byte typed, -1 at the end
+    TT$WAITING,                         ! (): whether one is waiting
+    TT$CLOSE : NOVALUE;

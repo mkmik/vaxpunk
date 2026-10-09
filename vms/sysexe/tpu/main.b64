@@ -9,8 +9,9 @@ BEGIN
 !
 ! The command line is what EDIT/TPU had after the verb, qualifiers and
 ! the file, as FIO$ARGS gives it: under vrun, vrun's arguments.
-! ponytail: no section files, no screen and no keys yet: with or without
-! /NODISPLAY, TPU ends after the command file.
+! Without /NODISPLAY, and with a terminal, the screen starts first, and
+! the keys run once the command file has, until EXIT or QUIT.
+! ponytail: no section files.
 !
 REQUIRE 'TPU';
 REQUIRE 'TPUKW';
@@ -21,6 +22,11 @@ GLOBAL
     CL_LEN;
 
 EXTERNAL ROUTINE
+    KEY_INIT : NOVALUE,
+    KEY_LOOP : NOVALUE,
+    SCR_START,
+    SCR_ACTIVE,
+    SCR_END : NOVALUE,
     MSG_OUT : NOVALUE,
     BUF_NEW,
     BUF_READ,
@@ -210,6 +216,9 @@ ROUTINE TPU$MAIN =
         OBJ;
     FIO$ARGS(CL_TEXT, CL_LEN);
     SYM_INIT();
+    KEY_INIT();
+    ! The screen, unless /NODISPLAY says there is none.
+    IF CL_QUAL(T('DISPLAY'), VAL, VLEN) GEQ 0 THEN SCR_START();
     Q = CL_QUAL(T('COMMAND'), VAL, VLEN);
     IF .Q GEQ 0
     THEN
@@ -239,6 +248,8 @@ ROUTINE TPU$MAIN =
         IF COMPILE(.TEXT, .TLEN, OBJ) AND .OBJ NEQ 0 THEN VM_RUN(.OBJ)
         END;
     RUNPROC(T('TPU$INIT_POSTPROCEDURE'));
+    ! With a screen, the keys, until EXIT or QUIT, or the terminal's end.
+    IF SCR_ACTIVE() THEN (KEY_LOOP(); SCR_END());
     FIO$EXIT(SS_NORMAL)
     END;
 

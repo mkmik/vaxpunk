@@ -1,0 +1,33 @@
+! The message window, a prompt area, READ_LINE, and a long buffer that
+! scrolls: E6 (Next Screen) moves 20 lines on, and a key asks for a line.
+PROCEDURE ask
+    LOCAL s;
+    s := READ_LINE ("Say something: ");
+    MESSAGE ("You said: " + s);
+ENDPROCEDURE;
+PROCEDURE page_down
+    MOVE_VERTICAL (20);
+ENDPROCEDURE;
+message_buffer := CREATE_BUFFER ("Message");
+SET (NO_WRITE, message_buffer);
+SET (SYSTEM, message_buffer);
+SET (EOB_TEXT, message_buffer, "");
+message_window := CREATE_WINDOW (22, 2, OFF);
+MAP (message_window, message_buffer);
+SET (PROMPT_AREA, 24, 1, REVERSE);
+b := CREATE_BUFFER ("long");
+w := CREATE_WINDOW (1, 21, ON);
+MAP (w, b);
+i := 1;
+LOOP
+    EXITIF i > 60;
+    COPY_TEXT ("line " + STR (i) + " of sixty");
+    SPLIT_LINE;
+    i := i + 1;
+ENDLOOP;
+POSITION (BEGINNING_OF (b));
+MESSAGE ("Ready");
+DEFINE_KEY ("page_down", E6);
+DEFINE_KEY ("ask", PF2);
+DEFINE_KEY ("MOVE_VERTICAL (1)", DOWN);
+DEFINE_KEY ("QUIT (OFF)", CTRL_Z_KEY);

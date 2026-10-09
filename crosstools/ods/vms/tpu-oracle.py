@@ -14,6 +14,12 @@ are only copied in, for READ_FILE. Next to each FILE.TPU it writes:
     FILE.stdout  what TPU printed: MESSAGE's lines and its own messages
     FILE.out     FILE.OUT, if the program wrote one (WRITE_FILE)
 
+A FILE.TPU with a FILE.keys beside it runs on the screen instead, on a
+VT100 of 80 by 24, without /NODISPLAY: once it starts, each line of
+FILE.keys is typed (\\r and \\x1b escapes as Python's), a second apart, and
+what TPU sent the terminal is written to FILE.vt, which the vrun test
+renders as a VT100 would.
+
 All files go in one boot of the oracle's system disk, $TPU_ORACLE_DISK or
 the BLISS oracle's (bliss-oracle.py says how to make one), cloned so that
 the disk itself never changes (run-vms.py --system). AXPbox hangs in about
@@ -46,6 +52,18 @@ def script(files):
     for path in files:
         name, ext = os.path.splitext(os.path.basename(path))
         if ext.upper() != ".TPU":
+            continue
+        keys = os.path.splitext(path)[0] + ".keys"
+        if os.path.exists(keys):
+            with open(keys, encoding="latin-1") as f:
+                typed = f.read().splitlines()
+            cmds += ["SET TERMINAL/DEVICE=VT100/WIDTH=80/PAGE=24/NOEIGHTBIT",
+                     mark("BEGIN SCREEN", name),
+                     f"@@START {TPU.replace('/NODISPLAY', '')}{name}.TPU",
+                     *[f"@@KEYS {k}" for k in typed],
+                     "@@PROMPT",
+                     mark("END", name),
+                     "SET TERMINAL/WIDTH=255/PAGE=0"]
             continue
         out = f"{name}.OUT"
         # SYS$INPUT the null device: a program that doesn't end the
@@ -91,13 +109,38 @@ def boot(files):
     sys.exit(f"the oracle failed three times; last log: {log}")
 
 
+def screens(raw):
+    """What each screen session sent: {name: bytes}, from its command's echo
+    to the prompt after it."""
+    out = {}
+    for m in re.finditer(rb"@@ORACLE BEGIN SCREEN (\w+)\r?\n(.*?)@@ORACLE", raw, re.S):
+        body = m.group(2)
+        start = body.find(b".TPU")
+        start = body.find(b"\n", start) + 1 if start >= 0 else 0
+        end = body.rfind(b"$ ")
+        out[m.group(1).decode().upper()] = body[start:end if end > start else len(body)]
+    return out
+
+
 def main(files, log=None):
-    with open(log or boot(files), encoding="utf-8") as f:
+    log = log or boot(files)
+    with open(log, encoding="utf-8") as f:
         found = sections(f.read())
+    shown = {}
+    if os.path.exists(log + ".raw"):
+        with open(log + ".raw", "rb") as f:
+            shown = screens(f.read())
     for path in files:
         name, ext = os.path.splitext(path)
         key = os.path.basename(name).upper()
         if ext.upper() != ".TPU":
+            continue
+        if os.path.exists(name + ".keys"):
+            if key not in shown:
+                sys.exit(f"{path}: no screen in the raw log")
+            with open(name + ".vt", "wb") as f:
+                f.write(shown[key])
+            print(f"{path}: {len(shown[key])} bytes to the screen")
             continue
         if ("OUT", key) not in found:
             sys.exit(f"{path}: no output in the console log")

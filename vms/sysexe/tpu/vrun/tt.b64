@@ -1,0 +1,95 @@
+MODULE TT (IDENT = 'V0.1') =
+%TITLE 'TPU: the terminal, under vrun'
+BEGIN
+!
+! The terminal TPU's tests have under vrun (crosstools/vtools/crates/vrun/
+! tests/tpu.rs): a VT100 of 80 by 24 whose keys are the file TT.IN and
+! whose screen is the file TT.OUT. TT.IN holds a burst of keys per line,
+! as the oracle types them, a second apart: a key is waiting (TT$WAITING)
+! until the line's last has been read, so that TPU updates the screen
+! between bursts as DEC's does. With no TT.IN there is no terminal. On
+! vaxpunk, sysexe/tpu/fio.mar has these routines, on the terminal driver.
+!
+REQUIRE 'TPU';
+REQUIRE 'FIO';
+
+LITERAL
+    BUFMAX = 4096;
+
+OWN
+    INCHAN,
+    OUTCHAN,
+    BUF : VECTOR[BUFMAX, BYTE],
+    BUFLEN,
+    AT,
+    OUT : VECTOR[BUFMAX, BYTE],
+    OUTLEN;
+
+! TT$OPEN address of width, address of height: whether there is a
+! terminal; its size.
+GLOBAL ROUTINE TT$OPEN (WP, HP) =
+    BEGIN
+    IF NOT FIO$OPEN(T('TT.IN'), FIO$K_READ, INCHAN) THEN RETURN FALSE;
+    IF NOT FIO$OPEN(T('TT.OUT'), FIO$K_WRITE, OUTCHAN) THEN RETURN FALSE;
+    .WP = 80;
+    .HP = 24;
+    TRUE
+    END;
+
+! TT$FLUSH: writes what TT$PUT gathered.
+GLOBAL ROUTINE TT$FLUSH : NOVALUE =
+    BEGIN
+    IF .OUTLEN GTR 0 THEN FIO$WRITE(.OUTCHAN, OUT, .OUTLEN);
+    OUTLEN = 0
+    END;
+
+! TT$PUT text, length: sends it to the screen.
+GLOBAL ROUTINE TT$PUT (TEXT, LEN) : NOVALUE =
+    INCR I FROM 0 TO .LEN - 1 DO
+        BEGIN
+        IF .OUTLEN EQL BUFMAX THEN TT$FLUSH();
+        OUT[.OUTLEN] = GETB(.TEXT + .I);
+        OUTLEN = .OUTLEN + 1
+        END;
+
+! FILL: more of TT.IN; whether there is any.
+ROUTINE FILL =
+    BEGIN
+    IF .AT LSS .BUFLEN THEN RETURN TRUE;
+    AT = 0;
+    BUFLEN = 0;
+    FIO$READ(.INCHAN, BUF, BUFMAX, BUFLEN);
+    .BUFLEN GTR 0
+    END;
+
+! TT$GET: the next byte typed, or -1 at the end.
+GLOBAL ROUTINE TT$GET =
+    BEGIN
+    TT$FLUSH();
+    WHILE FILL() DO
+        BEGIN
+        LOCAL
+            C;
+        C = .BUF[.AT];
+        AT = .AT + 1;
+        IF .C NEQ 10 THEN RETURN .C
+        END;
+    -1
+    END;
+
+! TT$WAITING: whether a key of this burst is still to be read.
+GLOBAL ROUTINE TT$WAITING =
+    BEGIN
+    IF NOT FILL() THEN RETURN FALSE;
+    .BUF[.AT] NEQ 10
+    END;
+
+! TT$CLOSE: the screen written out.
+GLOBAL ROUTINE TT$CLOSE : NOVALUE =
+    BEGIN
+    TT$FLUSH();
+    FIO$CLOSE(.OUTCHAN)
+    END;
+
+END
+ELUDOM

@@ -7,7 +7,12 @@ usage: run-vms.py [--system IMG] CMDFILE [LOG]
 
 CMDFILE (UTF-8, Latin-1 characters only): one line is typed per DCL prompt.
 After `CREATE file` (not /DIRECTORY) the following lines are typed as the
-file's text, up to a line starting with @@CTRLZ, which sends Ctrl-Z.
+file's text, up to a line starting with @@CTRLZ, which sends Ctrl-Z. For
+a program that reads keys, as an editor does: `@@START command` types a
+command and doesn't wait for the prompt, `@@KEYS text` types text, its
+\\r and \\x1b escapes decoded as Python's, then waits a second for the
+screen to settle, and `@@PROMPT` waits for the DCL prompt. Everything the
+console sends, carriage returns and NULs too, goes to LOG.raw as well.
 
 Flow: SRM `boot dka400` -> the date prompt -> menu option 8 (DCL) -> `$$$`
 -> SET TERMINAL/EIGHTBIT/WIDTH=132 -> CMDFILE -> LOGOUT -> option 9
@@ -41,23 +46,29 @@ MONTHS = "JAN FEB MAR APR MAY JUN JUL AUG SEP OCT NOV DEC".split()
 class Console:
     """Telnet console: strips telnet commands, NUL fill and CR; logs as UTF-8."""
 
-    def __init__(self, sock, log, prompt=PROMPT):
-        self.sock, self.log, self.prompt = sock, log, prompt
+    def __init__(self, sock, log, prompt=PROMPT, raw=None):
+        self.sock, self.log, self.prompt, self.raw = sock, log, prompt, raw
         self.buf, self.mark, self.skip = "", 0, 0
 
     def clean(self, data):
-        out = bytearray()
+        out, raw = bytearray(), bytearray()
         for b in data:
             if self.skip == 1:                # byte after IAC
                 if b == 0xFF:                 # IAC IAC = literal 0xFF
                     out.append(b)
+                    raw.append(b)
                 self.skip = 2 if 251 <= b <= 254 else 0  # WILL/WONT/DO/DONT + option
             elif self.skip == 2:              # option byte
                 self.skip = 0
             elif b == 0xFF:
                 self.skip = 1
-            elif b not in (0, 13):
-                out.append(b)
+            else:
+                raw.append(b)
+                if b not in (0, 13):
+                    out.append(b)
+        if self.raw:
+            self.raw.write(raw)
+            self.raw.flush()
         return out.decode("latin-1")
 
     def pump(self, secs):
@@ -161,8 +172,9 @@ def run_emulator(cmds, logpath, port, config, boot, installed):
                 time.sleep(0.2)
         else:
             raise RuntimeError("could not connect to the console port")
-        with sock, open(logpath, "w", encoding="utf-8") as log:
-            c = Console(sock, log, "$ " if installed else PROMPT)
+        with sock, open(logpath, "w", encoding="utf-8") as log, \
+                open(logpath + ".raw", "wb") as raw:
+            c = Console(sock, log, "$ " if installed else PROMPT, raw)
             c.wait(c.seen("P00>>>"), 300, "SRM prompt")
             c.send("show device\r")
             c.wait(c.seen("P00>>>"), 60, "show device")
@@ -205,6 +217,19 @@ def run_emulator(cmds, logpath, port, config, boot, installed):
 
             text = skip = False
             for line in cmds:
+                if line.startswith("@@START "):
+                    c.send(line[8:] + "\r")
+                    c.pump(2)
+                    continue
+                if line.startswith("@@KEYS "):
+                    c.send(line[7:].encode("latin-1").decode("unicode_escape"))
+                    end = time.time() + 1
+                    while time.time() < end:
+                        c.pump(0.2)
+                    continue
+                if line.startswith("@@PROMPT"):
+                    c.wait(c.at_prompt, CMD_TIMEOUT, "prompt after a program")
+                    continue
                 if line.startswith("@@CTRLZ"):
                     if not skip:
                         c.send("\x1a")
