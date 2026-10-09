@@ -111,7 +111,9 @@ const SYSTEM_DISK: Phase = Phase {
         " \\FOO\\",
         "PING.EXE;1          PONG.EXE;1",
         "Total of 2 files.",
-        "Directory DKA0:[SYSLIB]\n\nEVE$SECTION.TPU$SECTION;1",
+        // Apart: STARTUP's processes may print between them.
+        "Directory DKA0:[SYSLIB]",
+        "EVE$SECTION.TPU$SECTION;1",
         "LIBRTL.EXE;1",
         "and the rest of what INITIALIZE made.",
         "CLITEST: foreign ONE \"Two\" 3",
