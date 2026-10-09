@@ -13,7 +13,7 @@
 //! FDL and their output; TPU, from sysexe/tpu/*.b64 and its I/O module
 //! sysexe/tpu/fio.mar (PRD-0006), and in [SYSLIB] EVE's section file,
 //! sysexe/tpu/eve/eve.section; in [SYSMGR], the files in sysmgr/,
-//! as text; and in [SYSEXE], SYSUAF.DAT, the users, SYSTEM and DEFAULT.
+//! as text, and in [SYSEXE] sysexe/*.com; and in [SYSEXE], SYSUAF.DAT, the users, SYSTEM and DEFAULT.
 
 use std::collections::HashMap;
 use std::env;
@@ -356,7 +356,7 @@ fn symbol_table(map: &str) -> (String, Vec<u8>) {
 /// The system disk: an ODS-2 volume labelled VAXPUNK with the images in
 /// [SYSEXE] and [SYSLIB], as `images` names them, fixed 512-byte records as
 /// VMS's are, and sysmgr/'s files in
-/// [SYSMGR], their lines variable-length records, with names in capitals.
+/// [SYSMGR] and sysexe/*.com in [SYSEXE], their lines variable-length records, with names in capitals.
 /// [1,4] owns them, and all may read and run them: (S:RWED,O:RWED,G:RE,W:RE).
 fn disk(path: &Path, images: &[(String, Vec<u8>)]) {
     use ods_image::{Conversion, Image, InitParams, RecordAttrs, rfm};
@@ -394,10 +394,12 @@ fn disk(path: &Path, images: &[(String, Vec<u8>)]) {
         size,
         None,
     ));
-    for source in sources("sysmgr", &["txt", "com", "cld"]) {
+    let texts = sources("sysmgr", &["txt", "com", "cld"]).into_iter();
+    for source in texts.chain(sources("sysexe", &["com"])) {
         let name = source.file_name().unwrap().to_str().unwrap().to_uppercase();
         let text = fs::read(&source).unwrap();
-        let spec = format!("[SYSMGR]{name}");
+        let dir = source.parent().unwrap().to_str().unwrap().to_uppercase();
+        let spec = format!("[{dir}]{name}");
         let (size, lines) = (Some(text.len() as u64), Conversion::LinesToRecords);
         ok(vol.copy_in(&mut &text[..], &spec, lines, size, None));
     }

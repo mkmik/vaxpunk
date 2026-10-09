@@ -494,7 +494,10 @@ DCL$COMMAND::
         MOVC3   R7, DCL$LINE2, DCL$LINE
         MOVAB   DCL$LINE, R6
         ADDL2   R6, R7
-        BSBW    DCL$WORD
+        CMPB    (R6), #^A/@/            ; name := @procedure
+        BNEQ    55$
+        BRW     DCL$DO
+55$:    BSBW    DCL$WORD
         TSTL    R8
         BEQL    5$
 NOTSYM: CMPL    R8, #3                  ; MCR?
