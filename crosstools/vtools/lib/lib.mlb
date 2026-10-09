@@ -47,6 +47,7 @@ PAL$_DELCTX = ^X42                      ; R0 = HWPCB of a context to delete
 PAL$_READLBLK = ^X46                    ; R0 = buffer, R1 = byte count, R2 = LBN, R3 = unit; R0 = status
 PAL$_WRITELBLK = ^X47                   ; the same, writing the buffer there
 PAL$_DOORBELL = ^X48                    ; R0 = a port: MTPR #n, #PR$_DOORBELL
+PAL$_GETENTROPY = ^X49                  ; R0 = buffer, R1 = byte count, at most 256; R0 = status
 PAL$_RD_PS = ^X91                       ; R0 = the PSL: the modes and IPL
         .ENDM   $PALDEF
 

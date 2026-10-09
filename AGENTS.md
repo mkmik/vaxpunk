@@ -35,6 +35,8 @@ generates it from the sources into docs/api/index.html, so maintaining it means 
   returns, then `IPL$_x.` if it must run at that IPL and `Uses Rn.` or `Keeps every register.`
 - Every global data cell has a comment on its line or above it; every `.MACRO` a comment block above it;
   every `$xxxDEF` symbol a `; meaning` where the name doesn't say it.
+- Where an interface isn't VAX or Alpha VMS's, a paragraph of its comment block that begins `vaxpunk:`
+  says how it differs; apidoc tags the entry *Not VMS* ([ADR-0031](docs/adr/0031-entropy-from-virtio-rng.md)).
 - A new system service goes in syssrv.mar's vector, a new PAL call in DESIGN-0001's tables, a new
   module or macro library where the script globs for them.
 

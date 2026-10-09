@@ -104,6 +104,16 @@ MFD's (file 4), `SYSEXE.DIR` in the MFD, `EXEC.EXE` in that, then the
 file, through the map in its header, up to its end of file. The executive
 reads and writes the disks with `READLBLK` and `WRITELBLK` (*Function codes*).
 
+### The entropy device
+
+The last transport is a virtio-rng device, which `scripts/run-qemu.sh`
+attaches with no backend of its own, so QEMU fills it from the host's
+random generator ([ADR-0031](../adr/0031-entropy-from-virtio-rng.md)).
+The PAL gives it a queue of its own, in the page after the disks', and
+`GETENTROPY` hands it the data page for each request, polled, as the
+disks' are. VAX and Alpha machines had no such device, and VMS on them no
+service to read one: this is vaxpunk's, for `$GET_ENTROPY`.
+
 ## Calling the PAL
 
 The executive calls the PAL with `svc #0`:
@@ -442,6 +452,7 @@ unused.
 | 0x46 | `READLBLK` | vaxpunk | a0 = buffer, a1 = byte count, a2 = LBN, a3 = unit | v0 = status | reads a disk's blocks from the LBN into the buffer, which kernel mode must be able to write |
 | 0x47 | `WRITELBLK` | vaxpunk | a0 = buffer, a1 = byte count, a2 = LBN, a3 = unit | v0 = status | writes the buffer, which kernel mode must be able to read, to a disk's blocks from the LBN |
 | 0x48 | `MTPR_DOORBELL` | vaxpunk | a0 = port | | signals the port's component; never waits |
+| 0x49 | `GETENTROPY` | vaxpunk | a0 = buffer, a1 = byte count | v0 = status | fills the buffer, at most 256 bytes, which kernel mode must be able to write, from the entropy device |
 | 0x82 | `CHME` | Alpha | the code in x7's bits 31:16 | | delivers through the SCB, to executive mode |
 | 0x83 | `CHMK` | Alpha | the code in x7's bits 31:16 | | delivers through the SCB, to kernel mode |
 | 0x84 | `CHMS` | Alpha | the code in x7's bits 31:16 | | delivers through the SCB, to supervisor mode |
@@ -471,6 +482,13 @@ mode may write (read), `SS$_ILLBLKNUM` past the disk's end,
 `SS$_NOSUCHDEV` with no such disk and `SS$_DRVERR` if the device fails,
 as it does for a write to the system disk, which QEMU attaches read only.
 The executive waits in it until the device is done.
+
+`GETENTROPY` is `$GET_ENTROPY`'s, and only `EXE$GET_ENTROPY` calls it.
+It asks the device until the buffer is full, since it may give fewer
+bytes than asked. Its status is `SS$_NORMAL`, `SS$_ACCVIO` if a page of
+the buffer isn't one kernel mode may write, `SS$_BADPARAM` for more than
+256 bytes, `SS$_NOSUCHDEV` without the device and `SS$_DRVERR` if it
+gives nothing.
 
 ### The Alpha calls
 

@@ -277,7 +277,7 @@ enum { VIO_MAGIC = 0x000, VIO_VERSION = 0x004, VIO_DEVICE = 0x008, VIO_DRVFEAT =
        VIO_QREADY = 0x044, VIO_QNOTIFY = 0x050, VIO_INTSTATUS = 0x060, VIO_INTACK = 0x064,
        VIO_STATUS = 0x070, VIO_QDESC = 0x080, VIO_QDRIVER = 0x090, VIO_QDEVICE = 0x0a0,
        VIO_CAPACITY = 0x100 };
-enum { VIO_ACK = 1, VIO_DRIVER = 2, VIO_DRIVER_OK = 4, VIO_FEATURES_OK = 8, VIO_NET = 1, VIO_BLK = 2,
+enum { VIO_ACK = 1, VIO_DRIVER = 2, VIO_DRIVER_OK = 4, VIO_FEATURES_OK = 8, VIO_NET = 1, VIO_BLK = 2, VIO_RNG = 4,
        VIO_QSIZE = 4, VIOD_NEXT = 1, VIOD_WRITE = 2 };
 struct vio_queue {
 	struct {
@@ -304,11 +304,11 @@ static struct disk {
 	volatile uint32_t *vio; /* 0: no such unit */
 	uint64_t blocks;
 	struct vio_queue *vq;
-} disks[DISK_UNITS];
+} disks[DISK_UNITS], rng; /* rng: the entropy device, its queue */
 static uint8_t *vio_data; /* a page: 8 blocks */
 static seL4_CPtr vio_frame[VIRTIO_SLOTS * 0x200 / 4096]; /* the transports' pages */
 static int net_slot = -1; /* the virtio-net device's transport, or -1 */
-#define VQ_VA 0xfffe0000UL /* a page per unit */
+#define VQ_VA 0xfffe0000UL /* a page per unit, then the entropy device's */
 #define VIO_DATA_VA 0xfffd0000UL
 
 /* A page of the PAL's for the device, mapped at va, and its physical address. */
@@ -330,9 +330,10 @@ static void wr64(volatile uint32_t *vio, unsigned reg, uint64_t v)
 	vio[reg / 4 + 1] = v >> 32;
 }
 
-/* Sets up the block device at vio as unit u, whose data goes through the
- * page at data. */
-static void disk_setup(unsigned u, volatile uint32_t *vio, uint64_t data)
+/* Negotiates virtio 1 with the device at vio and gives it queue 0, of
+ * VIO_QSIZE descriptors, in a page of the PAL's at va. Returns the queue
+ * and its physical address in *q, or 0 if the device won't. */
+static struct vio_queue *vio_setup(volatile uint32_t *vio, seL4_Word va, uint64_t *q)
 {
 	vio[VIO_STATUS / 4] = 0;
 	vio[VIO_STATUS / 4] = VIO_ACK | VIO_DRIVER;
@@ -340,17 +341,43 @@ static void disk_setup(unsigned u, volatile uint32_t *vio, uint64_t data)
 	vio[VIO_DRVFEAT / 4] = 1;
 	vio[VIO_STATUS / 4] = VIO_ACK | VIO_DRIVER | VIO_FEATURES_OK;
 	if (!(vio[VIO_STATUS / 4] & VIO_FEATURES_OK) || vio[VIO_QNUMMAX / 4] < VIO_QSIZE)
-		return;
-	seL4_Word va = VQ_VA + u * PAGE_SIZE;
-	uint64_t q = dma_page(va);
-	struct vio_queue *vq = (struct vio_queue *)va;
+		return 0;
+	*q = dma_page(va);
 	vio[VIO_QSEL / 4] = 0;
 	vio[VIO_QNUM / 4] = VIO_QSIZE;
-	wr64(vio, VIO_QDESC, q + __builtin_offsetof(struct vio_queue, desc));
-	wr64(vio, VIO_QDRIVER, q + __builtin_offsetof(struct vio_queue, avail));
-	wr64(vio, VIO_QDEVICE, q + __builtin_offsetof(struct vio_queue, used));
+	wr64(vio, VIO_QDESC, *q + __builtin_offsetof(struct vio_queue, desc));
+	wr64(vio, VIO_QDRIVER, *q + __builtin_offsetof(struct vio_queue, avail));
+	wr64(vio, VIO_QDEVICE, *q + __builtin_offsetof(struct vio_queue, used));
 	vio[VIO_QREADY / 4] = 1;
 	vio[VIO_STATUS / 4] = VIO_ACK | VIO_DRIVER | VIO_FEATURES_OK | VIO_DRIVER_OK;
+	return (struct vio_queue *)va;
+}
+
+/* Makes descriptor chain 0 of vq available to the device at vio and waits
+ * until it is used. Returns the bytes the device wrote. */
+static uint32_t vio_kick(volatile uint32_t *vio, struct vio_queue *vq)
+{
+	uint16_t idx = vq->avail.idx;
+	vq->avail.ring[idx % VIO_QSIZE] = 0;
+	__asm__ volatile("dmb sy" ::: "memory");
+	vq->avail.idx = idx + 1;
+	__asm__ volatile("dmb sy" ::: "memory");
+	vio[VIO_QNOTIFY / 4] = 0;
+	while (*(volatile uint16_t *)&vq->used.idx != (uint16_t)(idx + 1))
+		;
+	__asm__ volatile("dmb sy" ::: "memory");
+	vio[VIO_INTACK / 4] = vio[VIO_INTSTATUS / 4];
+	return vq->used.ring[idx % VIO_QSIZE].len;
+}
+
+/* Sets up the block device at vio as unit u, whose data goes through the
+ * page at data. */
+static void disk_setup(unsigned u, volatile uint32_t *vio, uint64_t data)
+{
+	uint64_t q;
+	struct vio_queue *vq = vio_setup(vio, VQ_VA + u * PAGE_SIZE, &q);
+	if (!vq)
+		return;
 	/* The request: its header, the data and the status, a chain of three. */
 	vq->desc[0] = (typeof(vq->desc[0])){ q + __builtin_offsetof(struct vio_queue, req), 16,
 					     VIOD_NEXT, 1 };
@@ -362,8 +389,21 @@ static void disk_setup(unsigned u, volatile uint32_t *vio, uint64_t data)
 	print("disk %u: virtio-blk, %lu blocks\n", u, (seL4_Word)disks[u].blocks);
 }
 
-/* Finds the disks among the virtio-mmio transports and sets them up, and
- * the network device, for the TCP/IP component. */
+/* Sets up the entropy device at vio, whose bytes come through the page at
+ * data: a chain of one descriptor, which the device fills. */
+static void rng_setup(volatile uint32_t *vio, uint64_t data)
+{
+	uint64_t q;
+	struct vio_queue *vq = vio_setup(vio, VQ_VA + DISK_UNITS * PAGE_SIZE, &q);
+	if (!vq)
+		return;
+	vq->desc[0] = (typeof(vq->desc[0])){ data, 0, VIOD_WRITE, 0 };
+	rng = (struct disk){ vio, 0, vq };
+	print("entropy: virtio-rng\n");
+}
+
+/* Finds the disks and the entropy device among the virtio-mmio transports
+ * and sets them up, and the network device, for the TCP/IP component. */
 static void disk_init(seL4_BootInfo *bi)
 {
 	for (unsigned p = 0; p < VIRTIO_SLOTS * 0x200 / PAGE_SIZE; p++) {
@@ -384,6 +424,8 @@ static void disk_init(seL4_BootInfo *bi)
 			disk_setup(u++, r, data);
 		else if (r[VIO_DEVICE / 4] == VIO_NET && net_slot < 0)
 			net_slot = s;
+		else if (r[VIO_DEVICE / 4] == VIO_RNG && !rng.vio)
+			rng_setup(r, data);
 	}
 }
 
@@ -397,16 +439,7 @@ static int disk_io8(struct disk *d, uint64_t lbn, unsigned n, int write)
 	vq->desc[1].len = n * DISK_BLOCK;
 	vq->desc[1].flags = write ? VIOD_NEXT : VIOD_NEXT | VIOD_WRITE;
 	vq->status = 0xff;
-	uint16_t idx = vq->avail.idx;
-	vq->avail.ring[idx % VIO_QSIZE] = 0;
-	__asm__ volatile("dmb sy" ::: "memory");
-	vq->avail.idx = idx + 1;
-	__asm__ volatile("dmb sy" ::: "memory");
-	d->vio[VIO_QNOTIFY / 4] = 0;
-	while (*(volatile uint16_t *)&vq->used.idx != (uint16_t)(idx + 1))
-		;
-	__asm__ volatile("dmb sy" ::: "memory");
-	d->vio[VIO_INTACK / 4] = d->vio[VIO_INTSTATUS / 4];
+	vio_kick(d->vio, vq);
 	return vq->status == 0;
 }
 
@@ -720,18 +753,28 @@ static uint64_t *quad(seL4_Word va)
  * without the disk, DRVERR if the device fails, as it does for a write to
  * the system disk, which QEMU attaches read only.
  */
-enum { SS_NORMAL = 1, SS_ACCVIO = 12, SS_DRVERR = 140, SS_ILLBLKNUM = 220, SS_NOSUCHDEV = 2312 };
+enum { SS_NORMAL = 1, SS_ACCVIO = 12, SS_BADPARAM = 20, SS_DRVERR = 140, SS_ILLBLKNUM = 220,
+       SS_NOSUCHDEV = 2312 };
+
+/* The PAL's view of each page of the len bytes at va, in at, if kernel
+ * mode may read them, and write them unless out is 0. */
+static int kbuf(seL4_Word va, seL4_Word len, int out, uint8_t **at)
+{
+	for (seL4_Word p = va & ~(PAGE_SIZE - 1), i = 0; p < va + len; p += PAGE_SIZE, i++) {
+		uint32_t *pte = p < SPACE_END ? pte_at(p, 0) : 0;
+		if (!pte || !mapped(*pte) || (out && may_write[prot(*pte)] < 0))
+			return 0;
+		at[i] = (uint8_t *)(PHYS + (*pte & PTE_PFN) * PAGE_SIZE);
+	}
+	return 1;
+}
 
 static seL4_Word lblk(seL4_Word va, seL4_Word len, seL4_Word lbn, seL4_Word u, int write)
 {
 	uint8_t *at[2 + 0xffff / PAGE_SIZE]; /* the PAL's view of each page */
 	seL4_Word first = va & ~(PAGE_SIZE - 1);
-	for (seL4_Word p = first, i = 0; p < va + len; p += PAGE_SIZE, i++) {
-		uint32_t *pte = p < SPACE_END ? pte_at(p, 0) : 0;
-		if (!pte || !mapped(*pte) || (!write && may_write[prot(*pte)] < 0))
-			return SS_ACCVIO;
-		at[i] = (uint8_t *)(PHYS + (*pte & PTE_PFN) * PAGE_SIZE);
-	}
+	if (!kbuf(va, len, !write, at))
+		return SS_ACCVIO;
 	if (u >= DISK_UNITS || !disks[u].vio)
 		return SS_NOSUCHDEV;
 	struct disk *d = &disks[u];
@@ -754,6 +797,36 @@ static seL4_Word lblk(seL4_Word va, seL4_Word len, seL4_Word lbn, seL4_Word u, i
 			at[off / PAGE_SIZE][off % PAGE_SIZE] = vio_data[i];
 		}
 		done += n, lbn += k, blocks -= k;
+	}
+	return SS_NORMAL;
+}
+
+/*
+ * GETENTROPY: fills the len bytes at va, at most 256, with bytes from the
+ * entropy device, virtio-rng, which QEMU takes from the host's generator.
+ * Kernel mode must be able to write the buffer. Returns an SS$ status:
+ * NORMAL, ACCVIO for a buffer it can't, BADPARAM for more than 256 bytes,
+ * NOSUCHDEV without the device, DRVERR if it gives nothing.
+ */
+static seL4_Word getentropy(seL4_Word va, seL4_Word len)
+{
+	uint8_t *at[2];
+	if (len > 256)
+		return SS_BADPARAM;
+	if (!kbuf(va, len, 1, at))
+		return SS_ACCVIO;
+	if (!rng.vio)
+		return SS_NOSUCHDEV;
+	seL4_Word first = va & ~(PAGE_SIZE - 1);
+	for (seL4_Word done = 0; done < len;) {
+		rng.vq->desc[0].len = len - done;
+		uint32_t n = vio_kick(rng.vio, rng.vq); /* it may write fewer */
+		if (!n)
+			return SS_DRVERR;
+		for (uint32_t i = 0; i < n && done < len; i++, done++) {
+			seL4_Word off = va + done - first;
+			at[off / PAGE_SIZE][off % PAGE_SIZE] = vio_data[i];
+		}
 	}
 	return SS_NORMAL;
 }
@@ -1080,7 +1153,8 @@ enum {
 	HALT = 0x00, SWPCTX = 0x05, MFPR_IPL = 0x0e, MTPR_IPL = 0x0f, MFPR_PCBB = 0x12,
 	MFPR_SCBB = 0x16, MTPR_SCBB = 0x17, MTPR_SIRR = 0x18, MFPR_SISR = 0x19, WTINT = 0x3e,
 	MTPR_TXDB = 0x40, WRPTE = 0x41, DELCTX = 0x42, MTPR_RXCS = 0x43, MFPR_RXCS = 0x44,
-	MFPR_RXDB = 0x45, READLBLK = 0x46, WRITELBLK = 0x47, MTPR_DOORBELL = 0x48, CHME = 0x82, CHMU = 0x85, PROBER = 0x8f,
+	MFPR_RXDB = 0x45, READLBLK = 0x46, WRITELBLK = 0x47, MTPR_DOORBELL = 0x48,
+	GETENTROPY = 0x49, CHME = 0x82, CHMU = 0x85, PROBER = 0x8f,
 	PROBEW = 0x90, RD_PS = 0x91, REI = 0x92
 };
 
@@ -1544,6 +1618,8 @@ static int serve_one(seL4_MessageInfo_t msg)
 	case WRITELBLK:
 		return ret(lblk(a0 & 0xffffffff, a1 & 0xffff, mr[seL4_UnknownSyscall_X2] & 0xffffffff,
 				mr[seL4_UnknownSyscall_X3] & 0xffffffff, code == WRITELBLK));
+	case GETENTROPY:
+		return ret(getentropy(a0 & 0xffffffff, a1 & 0xffffffff));
 	case WRPTE: {
 		uint32_t old;
 		if (!wrpte(a0 & 0xffffffff, a1, &old))

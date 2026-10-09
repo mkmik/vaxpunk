@@ -2266,3 +2266,12 @@ PRT$C_UR = 15
         CALLS   #5, G^SYS$HASH_PASSWORD
         .ENDM   $HASH_PASSWORD_S
 
+; $GET_ENTROPY_S BUFFER, BUFLEN: fills the BUFLEN bytes at BUFFER, at most
+; 256, with random bytes.
+        .MACRO  $GET_ENTROPY_S BUFFER, BUFLEN
+        PUSHL   BUFLEN
+        $PUSHADR BUFFER
+        .EXTERNAL SYS$GET_ENTROPY
+        CALLS   #2, G^SYS$GET_ENTROPY
+        .ENDM   $GET_ENTROPY_S
+

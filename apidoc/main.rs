@@ -56,6 +56,7 @@ enum K {
     P,
     Pre,
     Note,
+    Departure,
 }
 type Doc = Vec<(K, String)>;
 
@@ -70,7 +71,8 @@ fn comment(line: &str) -> String {
     text.strip_prefix(' ').unwrap_or(text).to_string()
 }
 
-/// Comment lines as paragraphs, indented examples and ponytail notes.
+/// Comment lines as paragraphs, indented examples, ponytail notes and
+/// `vaxpunk:` ones, which say where vaxpunk departs from VMS.
 fn blocks(lines: &[String]) -> Doc {
     let (mut out, mut kind, mut buf) = (Doc::new(), None, Vec::<String>::new());
     let flush = |out: &mut Doc, kind: Option<K>, buf: &mut Vec<String>| {
@@ -84,18 +86,24 @@ fn blocks(lines: &[String]) -> Doc {
         if line.trim().is_empty() {
             flush(&mut out, kind, &mut buf);
             kind = None;
-        } else if let Some(rest) = line.strip_prefix("ponytail:") {
+        } else if let Some((k, rest)) = line
+            .strip_prefix("ponytail:")
+            .map(|r| (K::Note, r))
+            .or_else(|| line.strip_prefix("vaxpunk:").map(|r| (K::Departure, r)))
+        {
             flush(&mut out, kind, &mut buf);
-            kind = Some(K::Note);
+            kind = Some(k);
             buf.push(rest.trim().to_string());
-        } else if (line.starts_with("  ") || line.starts_with('\t')) && kind != Some(K::Note) {
+        } else if (line.starts_with("  ") || line.starts_with('\t'))
+            && !matches!(kind, Some(K::Note | K::Departure))
+        {
             if kind != Some(K::Pre) {
                 flush(&mut out, kind, &mut buf);
                 kind = Some(K::Pre);
             }
             buf.push(line.clone());
         } else {
-            if !matches!(kind, Some(K::P | K::Note)) {
+            if !matches!(kind, Some(K::P | K::Note | K::Departure)) {
                 flush(&mut out, kind, &mut buf);
                 kind = Some(K::P);
             }
@@ -1134,6 +1142,10 @@ impl Page<'_> {
             .map(|(k, t)| match k {
                 K::Pre => format!("<pre>{}</pre>", self.link(t)),
                 K::Note => format!(r#"<p class="note"><b>Limit.</b> {}</p>"#, self.link(t)),
+                K::Departure => format!(
+                    r#"<p class="note departure"><b>Departs from VMS.</b> {}</p>"#,
+                    self.link(&capitalize(t))
+                ),
                 K::P => format!("<p>{}</p>", self.link(t)),
             })
             .collect()
@@ -1206,8 +1218,14 @@ impl Page<'_> {
             .collect();
         let class = tag.to_lowercase();
         let class = class.split_whitespace().next().unwrap();
+        // An entry whose text says it departs from VMS says so up top too.
+        let departs = if rows.contains(r#"class="note departure""#) {
+            r#"<span class="tag t-departure">Not VMS</span>"#
+        } else {
+            ""
+        };
         format!(
-            r##"<article class="entry" id="{anchor}"><header><h4><a href="#{anchor}">{}</a></h4><span class="tag t-{class}">{tag}</span>{source}</header><dl>{rows}</dl></article>"##,
+            r##"<article class="entry" id="{anchor}"><header><h4><a href="#{anchor}">{}</a></h4><span class="tag t-{class}">{tag}</span>{departs}{source}</header><dl>{rows}</dl></article>"##,
             esc(name)
         )
     }
@@ -1588,6 +1606,14 @@ impl Page<'_> {
                     String::new()
                 } else {
                     format!("<p>{}</p>", self.md(&capitalize(what)))
+                } + &if col("Origin").starts_with("vaxpunk") {
+                    self.prose(&vec![(
+                        K::Departure,
+                        "Alpha OpenVMS PALcode has no such call: it is vaxpunk's own, from 0x40."
+                            .into(),
+                    )])
+                } else {
+                    String::new()
                 },
             ),
             ("Used by", self.routine_refs(&p.users)),
@@ -1637,7 +1663,9 @@ impl Page<'_> {
             r#"<a href="../design/0002-executive-processes.md">DESIGN-0002</a> (the executive).</p>"#,
             "<p>Press <kbd>/</kbd> to search. Every name in the text links to its entry. ",
             "<i>Status</i> lists the condition values found in a routine's code and in what it calls ",
-            "whose failure it passes on. A <i>Limit</i> is a deliberate shortcut, with the way past it.</p>"
+            "whose failure it passes on. A <i>Limit</i> is a deliberate shortcut, with the way past it. ",
+            "<i>Not VMS</i> marks an interface VAX and Alpha VMS didn't have, or have differently, ",
+            "and its text says how.</p>"
         );
         let t = self.table(&rows, Self::md, None);
         self.chapter("", "ch-overview", "Overview", intro, &t)

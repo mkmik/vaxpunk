@@ -173,7 +173,7 @@ Every `wasi_snapshot_preview1` function is present, because instantiation fails 
 | Environment | `environ_get`, `environ_sizes_get` | Only what the user asks for: `/ENVIRONMENT=("K=V",...)` plus logical names in a dedicated table (e.g. `WASM$ENV`) | Full |
 | Exit | `proc_exit` | Flush output, then `SYS$EXIT` with a status that keeps the numeric code (see below) | Full |
 | Clocks | `clock_time_get`, `clock_res_get` | Realtime: `SYS$GETUTC` (or `SYS$GETTIM` adjusted by `SYS$TIMEZONE_DIFFERENTIAL`), converted from the 1858 VMS epoch to Unix nanoseconds. Monotonic: realtime clamped so it never goes backwards. CPU time: `$GETJPI` `JPI$_CPUTIM` | Full |
-| Random | `random_get` | Pluggable entropy source: a vaxpunk system service backed by a virtio-rng or seL4-side generator; on legacy VMS a ChaCha20 generator seeded from time, PID and system counters, flagged as not cryptographic | Full |
+| Random | `random_get` | Pluggable entropy source: `$GET_ENTROPY`, which the PAL serves from virtio-rng ([ADR-0031](../adr/0031-entropy-from-virtio-rng.md)); on legacy VMS a ChaCha20 generator seeded from time, PID and system counters, flagged as not cryptographic | Full |
 | Standard streams | `fd_read`, `fd_write` on fds 0–2 | `SYS$INPUT`, `SYS$OUTPUT`, `SYS$ERROR`; terminal via `$QIO`, files via RMS (details below) | Full |
 | Files | `path_open`, `fd_read`, `fd_write`, `fd_pread`, `fd_pwrite`, `fd_seek`, `fd_tell`, `fd_close`, `fd_sync`, `fd_datasync`, `fd_filestat_get`, `fd_filestat_set_size` | RMS (`$OPEN`, `$CREATE`, `$CONNECT`, block-mode `$READ`/`$WRITE`, `$GET`/`$PUT` for record files, `$FLUSH`, `$TRUNCATE`) | Full |
 | Directories | `fd_readdir`, `path_create_directory`, `path_remove_directory`, `path_filestat_get` | `$SEARCH`/`$PARSE` with wildcards, `LIB$CREATE_DIR`, `LIB$DELETE_FILE` on `.DIR;1` | Full |
@@ -309,9 +309,10 @@ though several are already items there for other reasons.
   flags and ASTs, CTRL/C and CTRL/Y ASTs, `$SETIMR`, `$WFLOR`, `$HIBER`,
   `$EXIT` with any status, and handlers that catch `SS$_ACCVIO` all work.
   Missing: `$GETUTC`; `$GETTIM` serves, since system time is the RTC's
-  and in effect UTC. Also missing: `JPI$_CPUTIM`; any entropy source
-  (QEMU has no virtio-rng); and read with timeout, for which `$SETIMR`
-  and `$CANCEL` stand in. The clock ticks every 10 ms.
+  and in effect UTC. Also missing: `JPI$_CPUTIM`, and read with timeout,
+  for which `$SETIMR` and `$CANCEL` stand in. Random bytes come from
+  `$GET_ENTROPY` ([ADR-0031](../adr/0031-entropy-from-virtio-rng.md)).
+  The clock ticks every 10 ms.
 - **M6** needs the most RMS work. `$GET` reads VAR and FIX records only,
   and sequentially. `$PUT` only appends. There is no block I/O, `$UPDATE`,
   `$TRUNCATE`, `$RENAME` or `$FLUSH`, and no wildcard directories in
@@ -373,8 +374,7 @@ though several are already items there for other reasons.
 **Milestones in this light**
 
 - M0 grows to include vaxpunk's side: the page limit, mapped image
-  sections, FP in `vasm` and `vmacro`, `$GETUTC`, an entropy source, and
-  multi-module images. Bigger volumes and RMS block I/O and Stream\_LF
+  sections, FP in `vasm` and `vmacro`, `$GETUTC` and multi-module images. Bigger volumes and RMS block I/O and Stream\_LF
   come before M6.
 - A Rust hello world needs about 1 MB of linear memory and fits even in
   today's 4 MB. TinyGo or Rust can carry M4 and M5 while Go waits for the
@@ -412,7 +412,7 @@ The biggest risk is speed on Go programs: Go wasm is `i64`- and call-heavy, so a
 - [ ] Should the environment also expose DCL symbols, or only an explicit logical-name table?
 - [ ] Is `JMP @(Rn)+` threaded dispatch accepted and fast with Alpha's AMACRO compiler?
 - [x] Do Alpha's `EVAX_` built-ins include IEEE T/S-floating arithmetic, or is soft-float the only route on Alpha from MACRO-32? No; soft-float (see *Feasibility on vaxpunk*).
-- [ ] Where does entropy come from on vaxpunk: a new system service, or a device read via `$QIO`?
+- [x] Where does entropy come from on vaxpunk: a new system service, or a device read via `$QIO`? A system service, VSI's `$GET_ENTROPY`, which the PAL serves from virtio-rng ([ADR-0031](../adr/0031-entropy-from-virtio-rng.md)).
 - [ ] Which user-mode RMS subset will vaxpunk have by M6, and does WASMRUN drive the schedule for it?
 - [ ] Should the bundled-executable format (`WASM LINK`) store the module translated (faster start) or as plain `.wasm` (simpler, portable)?
 - [ ] For networking later: map `sock_*` onto the vaxpunk QIO network device directly, or onto its sockets library?

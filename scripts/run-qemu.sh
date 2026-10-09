@@ -67,6 +67,9 @@ if [ "$firmware" ]; then echo "$EDK2_FW"; exit; fi
 # the disks, which the TCP/IP component drives. On QEMU's user network the
 # guest is 10.0.2.15/24 and the host 10.0.2.2, its gateway, which QEMU's
 # DHCP server gives.
+# The entropy device, virtio-rng, is the last transport. The PAL reads it
+# for GETENTROPY, and QEMU fills it from the host's random generator
+# (ADR-0031).
 # On a halt the root task prints %PAL-I-POWEROFF, and serial-filter.py ends
 # QEMU with SIGTERM, by the PID in a file of its own (ADR-0008).
 datadisk=${DATADISK:-$root/out/datadisk.img}
@@ -81,6 +84,7 @@ qemu-system-aarch64 -machine "virt,secure=off,gic-version=$QEMU_GIC,acpi=off" $c
 	-drive "if=none,id=datadisk,format=raw,file=$datadisk" \
 	-device virtio-blk-device,drive=datadisk -global virtio-mmio.force-legacy=false \
 	-netdev "${NETDEV:-user,id=net0}" -device "virtio-net-device,netdev=net0${MAC:+,mac=$MAC}" \
+	-device virtio-rng-device \
 	-chardev "stdio,id=con,mux=on,signal=off,logfile=${LOG:-$root/out/serial.log}" \
 	-serial chardev:con -serial "$uart1" -monitor chardev:con \
 	-pidfile "$pidfile" $gdb | "$root/scripts/serial-filter.py" "$pidfile"

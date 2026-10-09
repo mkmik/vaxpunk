@@ -51,6 +51,7 @@ its code.
 | `event.mar` | event flags, local and common |
 | `process.mar` | `$CREPRC`, process start, image activation, `$IMGACT`, `$EXIT`, image rundown, deletion, `$FORCEX`, `$HIBER`, `$WAKE`, `$SUSPND`, `$RESUME`, `$SETPRI`, `$SETPRN`, `$CMKRNL`, `$SETPRV`, `EXE$LOGIN` |
 | `hashpwd.mar` | `$HASH_PASSWORD`, salted, iterated SHA-256 |
+| `entropy.mar` | `$GET_ENTROPY`, random bytes from the PAL's entropy device |
 | `lnm.mar` | logical name tables, `$CRELNM`, `$DELLNM`, `$TRNLNM` |
 | `qio.mar` | the devices' UCBs, `$ASSIGN`, `$DASSGN`, `$CANCEL`, `$QIO`, `$QIOW`; IRPs, their completion and cancelling |
 | `mbdriver.mar` | mailboxes: `$CREMBX`, `$DELMBX`, their driver, and `MB$SEND`, which writes the termination message |
@@ -723,6 +724,7 @@ can't reach them.
 | ASTs | `$DCLAST`, `$SETAST`, `$ASTEXIT` | |
 | Other | `$GETSYI`, `$GETSYIW`, `$GETMSG` | |
 | Security | `$HASH_PASSWORD` | `UAI$C_SHA256` alone: SHA-256 of the salt, the username without its blanks and the password, then 4095 times of the last digest and the password; the hash is the first 8 bytes ([ADR-0029](../adr/0029-loginout-and-sysuaf.md)) |
+| Security, VSI's | `$GET_ENTROPY` | not on VAX or Alpha VMS: VSI's, at most 256 bytes a call, from the PAL's virtio-rng ([ADR-0031](../adr/0031-entropy-from-virtio-rng.md)) |
 
 Arguments the implemented services take but ignore: `$CREPRC`'s
 quotas and status flags, `$ASSIGN`'s mailbox,
@@ -1348,7 +1350,7 @@ condition handling routines, with the symbol vector `librtl.opt` gives
 | `STARTUP` | makes 4 pages with `$EXPREG`, checks and deletes them; creates `SLEEPER` at a higher priority, which runs at once, and `PING` and `PONG`; waits until `PONG` sets flag 66 of their cluster; deletes `SLEEPER`; creates `SVCTEST`, `HOG`, `TIMETEST`, `ASTTEST`, `MBXTEST`, `FSTEST1` and `FSTEST2` and `CHFTEST` |
 | `SLEEPER` | hibernates until it is deleted |
 | `PING`, `PONG` | take three turns through common event flags 64 and 65 of the cluster `PINGPONG`; `PONG` then sets flag 66, which `STARTUP` waits for |
-| `SVCTEST` | checks the statuses of the services the others don't use, and of errors: local event flags, the dispatcher's checks and a stub, `$CRETVA` and `$DELTVA`, `$CMKRNL` and `$CMEXEC`, with privileges and without; a process in another UIC group, which takes `DETACH` and, to touch it, `WORLD`; what user mode may `PROBE`, and that services refuse it the executive's data; the console's channels; logical names in both tables, `$ASSIGN` through two of them, and the errors; `$SETPRI`, and `$SUSPND`, `$WAKE`, `$RESUME` and `$DELPRC` on a process of its own, and `$FORCEX` on another, which exits with `SS$_FORCEDEXIT` before its image runs; `$DCLEXH` and `$CANEXH`, and a `$FORCEX` of itself, whose `$EXIT` calls its exit handler, which says it is ok; then creates one whose image doesn't exist, which exits with `RMS$_FNF`, and `SNOOP` and `USURP` |
+| `SVCTEST` | checks the statuses of the services the others don't use, and of errors: local event flags, the dispatcher's checks and a stub, `$CRETVA` and `$DELTVA`, `$CMKRNL` and `$CMEXEC`, with privileges and without; a process in another UIC group, which takes `DETACH` and, to touch it, `WORLD`; what user mode may `PROBE`, and that services refuse it the executive's data; the console's channels; logical names in both tables, `$ASSIGN` through two of them, and the errors; `$SETPRI`, and `$SUSPND`, `$WAKE`, `$RESUME` and `$DELPRC` on a process of its own, and `$FORCEX` on another, which exits with `SS$_FORCEDEXIT` before its image runs; `$GET_ENTROPY`, twice, whose bytes differ; `$DCLEXH` and `$CANEXH`, and a `$FORCEX` of itself, whose `$EXIT` calls its exit handler, which says it is ok; then creates one whose image doesn't exist, which exits with `RMS$_FNF`, and `SNOOP` and `USURP` |
 | `SNOOP` | reads S0 from user mode, which no handler takes: exits with `SS$_ACCVIO`, its message written |
 | `USURP` | raises IPL from user mode, and exits the same way with `SS$_OPCDEC` |
 | `HOG` | associates a common event flag cluster, creates `NUDGE` at its own priority and loops reading flag 64 until `NUDGE` sets it, with no wait: only quantum end lets `NUDGE` run |

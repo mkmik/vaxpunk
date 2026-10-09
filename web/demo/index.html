@@ -50,6 +50,7 @@ const Module = {
     '-drive', 'if=none,id=datadisk,format=raw,file=/pack/datadisk.img',
     '-device', 'virtio-blk-device,drive=datadisk', '-global', 'virtio-mmio.force-legacy=false',
     '-netdev', 'socket,id=net0,connect=localhost:1', '-device', `virtio-net-device,netdev=net0,mac=${net.mac}`,
+    '-device', 'virtio-rng-device',
     '-serial', 'mon:stdio', '-serial', 'null',
   ],
   preRun: [mod => {
