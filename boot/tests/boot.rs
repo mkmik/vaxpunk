@@ -730,7 +730,11 @@ const USERS: Phase = Phase {
         ("Username:", 5, "SYSTEM\r"),
         ("Password:", 5, "newpw\r"),
         ("\x1b[6n", 3, "\x1b[50;100R"),
-        ("\tWelcome to vaxpunk", 3, "SHOW PROCESS\rSHOW TERMINAL\rSHUTDOWN\r"),
+        (
+            "\tWelcome to vaxpunk",
+            3,
+            "SHOW PROCESS\rSHOW TERMINAL\rSHUTDOWN\r",
+        ),
     ],
     lines: &[
         "%UAF-I-ADDMSG, user record successfully added",
