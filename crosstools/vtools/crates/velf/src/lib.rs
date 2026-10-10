@@ -24,6 +24,13 @@ pub const GCC_FLAGS: &[&str] = &[
     "-fno-unwind-tables",
     "-mbranch-protection=none",
     "-mno-outline-atomics",
+    "-U__linux__",
+    "-U__linux",
+    "-Ulinux",
+    "-U__gnu_linux__",
+    "-U__unix__",
+    "-U__unix",
+    "-Uunix",
 ];
 
 /// Compiles the C source with the cross gcc, `CROSS_COMPILE` or else
