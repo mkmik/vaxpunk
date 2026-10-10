@@ -15,3 +15,8 @@ pal = { path = "../pal" }
 vms = { path = "../vms" }
 shim = { path = "../pal/shim" }
 ods-image = { path = "../crosstools/ods/crates/ods-image" }
+
+[dev-dependencies]
+# network.rs's TLS server and its certificates, for SSL3$CLIENT.
+rcgen = { version = "0.13", default-features = false, features = ["crypto", "pem", "ring"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }

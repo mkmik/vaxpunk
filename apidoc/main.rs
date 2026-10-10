@@ -8,7 +8,8 @@
 //!   (vms/sysexe/lib/*.mar, and the `GLOBAL ROUTINE`s of its *.b64),
 //!   of LIBRTL.EXE, the shareable image they call (vms/sysexe/librtl/*.mar),
 //!   and of DCL's own (vms/sysexe/dcl.mar,
-//!   vms/sysexe/dcl/*.mar), and of the RMS utilities' (vms/sysexe/rms/*.mar):
+//!   vms/sysexe/dcl/*.mar), of the RMS utilities' (vms/sysexe/rms/*.mar),
+//!   and of the C run-time library's side of VMS (vms/crtl/*.mar):
 //!   the comment block right above each `NAME::`
 //!   or `.ENTRY`, whose first line reads `NAME: what it does` or, for a system
 //!   service, `$NAME args: what it does`;
@@ -747,6 +748,7 @@ impl Api {
         libs.push(root.join("vms/sysexe/dcl.mar"));
         libs.extend(glob(&root.join("vms/sysexe/dcl"), "mar"));
         libs.extend(glob(&root.join("vms/sysexe/rms"), "mar"));
+        libs.extend(glob(&root.join("vms/crtl"), "mar"));
         for p in libs {
             let (mut rs, mut ds) = (vec![], vec![]);
             let mut m = parse_mar(root, &p, mods.len(), &mut rs, &mut ds);

@@ -404,3 +404,10 @@ keeps saved registers. A BLISS-64 routine C calls is the jacket: it
 doesn't read x9, takes the low longword of an `int`, calls VMS routines
 by this standard, and catches every condition, unwinding to C with an
 error. `crosstools/vtools/examples/c` shows each of these.
+The C run-time library's jackets are smaller
+([ADR-0032](../adr/0032-c-run-time-library-and-ssl3-on-mbed-tls.md)):
+MACRO-32 routines of at most eight arguments, which the prologue homes
+from x0-x7 whatever x9 holds, and, for the system services, ARM64 ones
+that sign-extend each argument, set x9 and branch to the service
+(`vms/crtl`). gcc's pointers are 64-bit, so an address in a VMS
+structure, a descriptor or an item list, is a 32-bit integer in C.

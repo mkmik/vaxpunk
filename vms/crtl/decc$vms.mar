@@ -1,0 +1,169 @@
+        .TITLE  DECC$VMS        The C run-time library's side of VMS
+        .IDENT  /V0.1/
+;
+; What the C run-time library asks of VMS, in routines C calls: memory
+; from $EXPREG, records on SYS$OUTPUT and from SYS$INPUT, files through
+; RMS, the command line, logical names and messages; decc$sys.m64 has the system
+; services starlet.h declares. C sets no argument count in x9
+; (DESIGN-0004, *C and Fortran*), so each routine takes at most eight
+; arguments, which the prologue homes from x0-x7 whatever x9 holds, names
+; them at fixed offsets from AP, and never reads (AP) itself. None of them
+; signals.
+;
+        .LIBRARY "starlet.mlb"
+        $SSDEF
+        $RMSDEF
+        $FABDEF
+        $RABDEF
+        $LNMDEF
+
+        .EXTERNAL LIB$PUT_OUTPUT, LIB$GET_INPUT, LIB$GET_FOREIGN, HOST_ADDR
+
+        .PSECT  DECC$VMS_DATA, NOEXE, WRT, QUAD
+FABT:   $FAB    FAC=GET                 ; what a file's FAB and RAB start as
+RABT:   $RAB
+RETADR: .BLKL   2
+OUTDSC: .LONG   0                       ; DECC$$PUT's record
+        .ADDRESS 0
+INDSC:  .LONG   0                       ; DECC$$GET's buffer
+        .ADDRESS 0
+PRDSC:  .LONG   0                       ; and its prompt
+        .ADDRESS 0
+INLEN:  .WORD   0
+NAMDSC: .LONG   0                       ; DECC$$TRNLNM's name
+        .ADDRESS 0
+FILEDEV: .ASCID "LNM$FILE_DEV"
+TRNITM: .WORD   0, LNM$_STRING          ; and its item list
+        .ADDRESS 0, INLEN
+        .LONG   0
+
+        .PSECT  DECC$VMS_CODE, EXE, LONG
+; DECC$$EXPREG pages: the address of pages new zeroed pages at the end of
+; P0, or 0 if there are no more.
+        .ENTRY  DECC$$EXPREG, ^M<>
+        $EXPREG_S PAGCNT=4(AP), RETADR=RETADR
+        BLBC    R0, 90$
+        MOVL    RETADR, R0
+        RET
+90$:    CLRL    R0
+        RET
+
+; DECC$$PUT text, length: writes the length bytes at text as a record on
+; SYS$OUTPUT. R0 = LIB$PUT_OUTPUT's status.
+        .ENTRY  DECC$$PUT, ^M<>
+        MOVW    8(AP), OUTDSC
+        MOVL    4(AP), OUTDSC+4
+        PUSHAQ  OUTDSC
+        CALLS   #1, G^LIB$PUT_OUTPUT
+        RET
+
+; DECC$$GET buffer, size, prompt, plength, length: reads a record from
+; SYS$INPUT into buffer, at most size bytes, after the plength bytes at
+; prompt if plength isn't 0, and its length to the longword length.
+; R0 = LIB$GET_INPUT's status: SS$_ENDOFFILE at CTRL/Z.
+        .ENTRY  DECC$$GET, ^M<>
+        MOVW    8(AP), INDSC
+        MOVL    4(AP), INDSC+4
+        MOVW    16(AP), PRDSC
+        MOVL    12(AP), PRDSC+4
+        CLRW    INLEN
+        PUSHAW  INLEN
+        TSTL    16(AP)
+        BEQL    10$
+        PUSHAQ  PRDSC
+        BRB     20$
+10$:    CLRL    -(SP)
+20$:    PUSHAQ  INDSC
+        CALLS   #3, G^LIB$GET_INPUT
+        MOVZWL  INLEN, @20(AP)
+        RET
+
+; DECC$$OPEN block, name, length: opens the file the length bytes at name
+; name, to read, with its FAB and its RAB in the 256 bytes at block.
+; R0 = RMS's status.
+        .ENTRY  DECC$$OPEN, ^M<R2, R3, R4, R5, R6>
+        MOVL    4(AP), R6
+        MOVC3   #FAB$C_BLN, FABT, (R6)
+        MOVC3   #RAB$C_BLN, RABT, FAB$C_BLN(R6)
+        MOVL    8(AP), FAB$L_FNA(R6)
+        MOVB    12(AP), FAB$B_FNS(R6)
+        MOVL    R6, FAB$C_BLN+RAB$L_FAB(R6)
+        $OPEN   FAB=(R6)
+        BLBC    R0, 90$
+        $CONNECT RAB=FAB$C_BLN(R6)
+        BLBS    R0, 90$
+        PUSHL   R0
+        $CLOSE  FAB=(R6)
+        MOVL    (SP)+, R0
+90$:    RET
+
+; DECC$$READ block, buffer, size, length: reads the next record of the
+; file DECC$$OPEN opened in block into buffer, at most size bytes, and
+; its length to the longword length. R0 = RMS's status: RMS$_EOF at the
+; end, RMS$_RTB if the record was longer than size.
+        .ENTRY  DECC$$READ, ^M<R6>
+        MOVL    4(AP), R6
+        MOVL    8(AP), FAB$C_BLN+RAB$L_UBF(R6)
+        MOVW    12(AP), FAB$C_BLN+RAB$W_USZ(R6)
+        $GET    RAB=FAB$C_BLN(R6)
+        MOVZWL  FAB$C_BLN+RAB$W_RSZ(R6), @16(AP)
+        RET
+
+; DECC$$CLOSE block: closes the file DECC$$OPEN opened in block.
+        .ENTRY  DECC$$CLOSE, ^M<R6>
+        MOVL    4(AP), R6
+        $CLOSE  FAB=(R6)
+        RET
+
+; DECC$$FOREIGN buffer, size, length: the command line that ran the
+; image, past its verb, into buffer, at most size bytes, and its length to
+; the longword length: none if RUN ran it. R0 = SS$_NORMAL.
+        .ENTRY  DECC$$FOREIGN, ^M<>
+        MOVW    8(AP), INDSC
+        MOVL    4(AP), INDSC+4
+        CLRW    INLEN
+        PUSHAW  INLEN
+        CLRL    -(SP)
+        PUSHAQ  INDSC
+        CALLS   #3, G^LIB$GET_FOREIGN
+        MOVZWL  INLEN, @12(AP)
+        RET
+
+; DECC$$GETMSG msgid, buffer, size, length: the message of the
+; condition value msgid, %FACILITY-S-IDENT, text, into buffer, at most
+; size bytes, and its length to the longword length. R0 = $GETMSG's
+; status.
+        .ENTRY  DECC$$GETMSG, ^M<>
+        MOVW    12(AP), INDSC
+        MOVL    8(AP), INDSC+4
+        CLRW    INLEN
+        $GETMSG_S MSGID=4(AP), MSGLEN=INLEN, BUFADR=INDSC
+        MOVZWL  INLEN, @16(AP)
+        RET
+
+; DECC$$TRNLNM name, nlength, buffer, size, length: the equivalence of
+; the logical name the nlength bytes at name name, looked up in
+; LNM$FILE_DEV, into buffer, at most size bytes, and its length to the
+; longword length. R0 = $TRNLNM's status: SS$_NOLOGNAM for none.
+        .ENTRY  DECC$$TRNLNM, ^M<>
+        MOVW    8(AP), NAMDSC
+        MOVL    4(AP), NAMDSC+4
+        MOVW    16(AP), TRNITM
+        MOVL    12(AP), TRNITM+4
+        CLRW    INLEN
+        $TRNLNM_S TABNAM=FILEDEV, LOGNAM=NAMDSC, ITMLST=TRNITM
+        MOVZWL  INLEN, @20(AP)
+        RET
+
+; DECC$$HOST_ADDR len, adr, result: the address of the host the len
+; characters at adr name, or that they are, a.b.c.d, from the hosts
+; database or DNS, in network order to the longword result: lib/inet.mar's
+; HOST_ADDR. R0 = SS$_NORMAL, TCPIP$_NORECORD or RMS's error.
+        .ENTRY  DECC$$HOST_ADDR, ^M<>
+        PUSHL   12(AP)
+        PUSHL   8(AP)
+        PUSHL   4(AP)
+        CALLS   #3, G^HOST_ADDR
+        RET
+
+        .END

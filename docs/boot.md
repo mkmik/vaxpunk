@@ -68,7 +68,7 @@ the role PALcode played on an Alpha: it's the "hardware" layer underneath VMS
   receive interrupt when there are some.
 - `disk_init` finds the disks, virtio block devices: unit 0, the system
   disk, and unit 1, the data disk, `out/datadisk.img`, and prints
-  `disk 0: virtio-blk, 8192 blocks` and `disk 1: ...` for them. From then
+  `disk 0: virtio-blk, 16384 blocks` and `disk 1: ...` for them. From then
   on the PAL can read the disks' blocks, by number, for itself and for the
   executive, and write the data disk's for the executive. It also
   notes the network device, virtio-net, if QEMU has one, and sets up
@@ -171,8 +171,9 @@ interpreter. It is linked high in P1, which tells the executive it is one
   `CREATE/DIRECTORY` makes `MDA0:[SYSEXE]`, `MDA0:[SYSLIB]` and
   `MDA0:[SYSMGR]`, and `SYS$SYSTEM` becomes `SYS$SYSROOT:[SYSEXE]`,
   `SYS$LIBRARY` and `SYS$SHARE` `SYS$SYSROOT:[SYSLIB]`, `SYS$MANAGER`
-  `SYS$SYSROOT:[SYSMGR]`, and `SYS$DISK`, the default device of a
-  process that hasn't one of its own, `SYS$SYSROOT:`. RMS looks for a file in the ramdisk's
+  `SYS$SYSROOT:[SYSMGR]`, `SSL3$CERTS`, where SSL3 finds `CERT.PEM`,
+  the CAs it trusts, `SYS$COMMON:[SSL3.CERTS]`, and `SYS$DISK`, the
+  default device of a process that hasn't one of its own, `SYS$SYSROOT:`. RMS looks for a file in the ramdisk's
   directory first and then in the system disk's, and makes a new one in
   the ramdisk's, so `COPY` to `SYS$MANAGER:` works though `DKA0:` is
   write locked, and a file there hides the system disk's of the same

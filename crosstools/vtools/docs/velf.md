@@ -19,7 +19,8 @@ characters, so `/OBJECT` names one whose C file has a longer name.
 ## The compiler's flags
 
 `velf::GCC_FLAGS` holds them, and the tests and `examples/c/Justfile`
-use them:
+use them, as `vms/c.rs` does for the C run-time library and SSL3 through
+`velf::gcc_with`, which adds include directories and options:
 
 | Flag | Why |
 | --- | --- |
@@ -33,6 +34,7 @@ use them:
 | `-fno-asynchronous-unwind-tables`, `-fno-unwind-tables` | No `.eh_frame`: VMS walks frames through their descriptors (velf drops `.eh_frame` anyway) |
 | `-mbranch-protection=none` | No pointer authentication or BTI instructions, which Ubuntu's gcc adds by default |
 | `-mno-outline-atomics` | Atomic operations inline, not calls to libgcc's `__aarch64_*` helpers, which Linux gcc makes by default |
+| `-U__linux__`, `-U__unix__` and their kin | The code is for VMS, not the Linux a Linux cross gcc predefines these for: code that tests them would call Linux's routines, as Mbed TLS calls `getpid` |
 
 ## What goes where
 

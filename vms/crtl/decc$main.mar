@@ -1,0 +1,16 @@
+        .TITLE  DECC$MAIN       A C program's transfer address
+        .IDENT  /V0.1/
+;
+; build.rs links this module into each C program, whose transfer address
+; it is, as DEC C put __MAIN into the object module that defines main.
+;
+        .EXTERNAL DECC$$START
+
+        .PSECT  DECC$MAIN_CODE, EXE, LONG
+; DECC$$TRANSFER: runs the C program, through DECC$$START, which ends the
+; image with exit().
+        .ENTRY  DECC$$TRANSFER, ^M<>
+        CALLS   #0, G^DECC$$START
+        RET
+
+        .END    DECC$$TRANSFER

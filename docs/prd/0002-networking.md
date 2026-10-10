@@ -109,7 +109,7 @@ Function codes the driver needs at minimum:
 
 The driver stays in kernel mode and is not a system service. Error conditions map to standard `SS$_` codes in the IOSB.
 
-**Sockets library.** A userland shareable image for ported software. It implements `socket`, `bind`, `listen`, `accept`, `connect`, `send`, `recv` and `close` as $QIOW calls on the device. It adds no kernel interface of its own.
+**Sockets library.** A userland shareable image for ported software. It implements `socket`, `bind`, `listen`, `accept`, `connect`, `send`, `recv` and `close` as $QIOW calls on the device. It adds no kernel interface of its own. Started in the C run-time library ([ADR-0032](../adr/0032-c-run-time-library-and-ssl3-on-mbed-tls.md)): `socket`, `connect`, `send`, `recv`, `close`, `decc$socket_fd` and `gethostbyname`, linked into each program until shareable images can call each other; `bind`, `listen` and `accept` are left.
 
 ## lwIP component and port protocol
 

@@ -16,15 +16,20 @@
 ; GET on a TCP socket on TCPIP$DEVICE:: from is node::"/path", the node the server's address, or
 ; node::"http://host[:port]/path", where the node, URL by custom, is
 ; only a name; a host is an address or a name in the hosts database
-; or DNS (HOST_ADDR). The body goes, byte for byte, by block I/O, into a new
+; or DNS (HOST_ADDR). With https://, the GET and the response go through
+; TLS, which SSL3 makes on the socket (ADR-0032): it checks the server's
+; certificate against the CAs it trusts, SSL_CERT_FILE's or
+; SSL3$CERTS:CERT.PEM, and its name against the host, and a failure is
+; RMS$_NETFAIL after OpenSSL's errors. COPY calls SSL3's routines, C's,
+; as any MACRO-32 routine. The body goes, byte for byte, by block I/O, into a new
 ; STREAM_LF file, as VMS's C ports of curl and wget write one, binary or
 ; not, which ends where the body does; it is named, where to doesn't
 ; say, by the path's last part, as Files-11 takes names, INDEX.HTML for none. The
 ; body ends where Content-Length says, or when the server closes. 404 and
 ; 410 are RMS$_FNF, 401 and 403 RMS$_PRV, other statuses but 2xx
 ; RMS$_NETFAIL, another scheme RMS$_SUPPORT.
-; ponytail: no DNS, the hosts database only (ADR-0025); no https, redirects
-; or chunked bodies; no /BINARY, which SET FILE/ATTRIBUTE would do.
+; ponytail: no redirects or chunked bodies; no /BINARY, which SET
+; FILE/ATTRIBUTE would do.
 ;
         .LIBRARY "starlet.mlb"
         .LIBRARY "sysexe.mlb"
@@ -38,6 +43,16 @@
         $SOCKADDRINDEF
 
         .EXTERNAL PUT_LINE, HOST_ADDR
+        .EXTERNAL TLS_CLIENT_METHOD, SSL_CTX_NEW, SSL_CTX_SET_DEFAULT_VERIFY_PATHS
+        .EXTERNAL SSL_CTX_SET_VERIFY, SSL_CTX_SET_OPTIONS, SSL_NEW, SSL_SET_FD, SSL_SET1_HOST, SSL_CONNECT
+        .EXTERNAL SSL_READ, SSL_WRITE, SSL_GET_ERROR, SSL_SHUTDOWN
+        .EXTERNAL ERR_PEEK_ERROR, ERR_PRINT_ERRORS_FP, SSL_GET_VERIFY_RESULT
+        .EXTERNAL X509_VERIFY_CERT_ERROR_STRING, DECC$SOCKET_FD, DECC$FPRINTF, DECC$GA_STDERR
+
+SSL_VERIFY_PEER = 1                     ; openssl/ssl.h's
+SSL_OP_IGNORE_UNEXPECTED_EOF = ^X80
+SSL_ERROR_ZERO_RETURN = 6
+CERTIFICATE_VERIFY_FAILED = ^X0A000086  ; openssl/err.h's SSL error 134
 
 RECSIZE = 32768                         ; 64 blocks, and more than a VAR record holds
 BUFSIZE = 1024
@@ -88,6 +103,14 @@ HSTATUS:                                ; the status line's code, 200
 LEFT:   .LONG   0                       ; the body's bytes to come, -1 until the server closes
 RECLEN: .LONG   0                       ; REC's, a line being read
 HTTPV:  .ASCII  "http://"
+HTTPSV: .ASCII  "https://"
+TLS:    .LONG   0                       ; 1 for https://
+HOSTLEN:                                ; the host's name's length
+        .LONG   0
+HOSTZ:  .BLKB   256                     ; and the name, with a NUL, as C wants
+SSLP:   .LONG   0                       ; SSL3's SSL, the TLS connection, or 0
+VERIFYF:                                ; why the certificate failed, as s_client says
+        .ASCII  "verify error:num=%ld:%s"<10><0>
 CLEN:   .ASCII  "content-length:"
 DEFIDX: .ASCII  "INDEX.HTML"            ; the name for a path ending in /
 SLASH:  .ASCII  "/"
@@ -194,7 +217,18 @@ HTTP:   MOVZWL  DESC, R2
         MOVB    #^A/"/, INRES[R0]
         INCL    R0
         MOVB    R0, INNAM+NAM$B_RSL
-        CMPL    R8, #7                  ; http://, in any case?
+        CMPL    R8, #8                  ; https://, in any case?
+        BLSSU   23$
+        CLRL    R0
+21$:    BISB3   #^X20, (R9)[R0], R1
+        CMPB    R1, HTTPSV[R0]
+        BNEQ    23$
+        AOBLSS  #8, R0, 21$
+        MOVL    #1, TLS
+        ADDL2   #8, R9
+        SUBL2   #8, R8
+        BRB     26$
+23$:    CMPL    R8, #7                  ; http://, in any case?
         BLSSU   30$
         CLRL    R0
 25$:    BISB3   #^X20, (R9)[R0], R1
@@ -203,7 +237,7 @@ HTTP:   MOVZWL  DESC, R2
         AOBLSS  #7, R0, 25$
         ADDL2   #7, R9
         SUBL2   #7, R8
-        MOVL    R9, R10                 ; the host, to the path
+26$:    MOVL    R9, R10                 ; the host, to the path
         CLRL    R11
 27$:    CMPL    R11, R8
         BGEQU   28$
@@ -221,7 +255,9 @@ HTTP:   MOVZWL  DESC, R2
 35$:    MOVAB   INRES, R10
         MOVL    R6, R11
 40$:    MOVL    #80, PORT               ; R10, R11: host[:port]
-        CLRL    R5                      ; the host's length, to a colon
+        BLBC    TLS, 41$
+        MOVL    #443, PORT
+41$:    CLRL    R5                      ; the host's length, to a colon
 42$:    CMPL    R5, R11
         BGEQU   46$
         CMPB    (R10)[R5], #^A/:/
@@ -235,7 +271,8 @@ HTTP:   MOVZWL  DESC, R2
         BSBW    GETPORT
         BLBS    R0, 46$
         RET
-46$:    PUSHAL  ADDR
+46$:    MOVL    R5, HOSTLEN
+        PUSHAL  ADDR
         PUSHL   R10
         PUSHL   R5
         CALLS   #3, G^HOST_ADDR
@@ -272,6 +309,9 @@ HTTP:   MOVZWL  DESC, R2
         BLBC    R0, 62$
         $QIOW_S CHAN=NCHAN, FUNC=#IO$_ACCESS, IOSB=IOSB, P3=#SERVER
         BSBW    STATUS
+        BLBC    R0, 62$
+        BLBC    TLS, 64$
+        BSBW    TLSOPEN
         BLBS    R0, 64$
 62$:    BRW     HANGUP
 64$:    MOVAB   NBUF, R3                ; GET path HTTP/1.0, Host: host
@@ -292,9 +332,12 @@ HTTP:   MOVZWL  DESC, R2
         BSBW    CATC
         MOVAB   NBUF, R1
         SUBL2   R1, R3
+        BLBS    TLS, 67$
         $QIOW_S CHAN=NCHAN, FUNC=#IO$_WRITEVBLK, IOSB=IOSB, P1=NBUF, P2=R3
         BSBW    STATUS
-        BLBC    R0, 62$
+        BRB     68$
+67$:    BSBW    TLSWRITE
+68$:    BLBC    R0, 62$
         MOVL    #255, DESC
         GETVALUE "TO", DESC, DESC
         MOVAB   SPEC, OUTFAB+FAB$L_FNA
@@ -302,14 +345,17 @@ HTTP:   MOVZWL  DESC, R2
         MOVB    #FAB$C_STMLF, OUTFAB+FAB$B_RFM
         MOVB    #FAB$M_CR, OUTFAB+FAB$B_RAT
         MNEGL   #1, LEFT
-70$:    $QIOW_S CHAN=NCHAN, FUNC=#IO$_READVBLK, IOSB=IOSB, P1=NBUF, P2=#BUFSIZE
+70$:    BLBC    TLS, 71$
+        BSBW    TLSREAD
+        BRB     72$
+71$:    $QIOW_S CHAN=NCHAN, FUNC=#IO$_READVBLK, IOSB=IOSB, P1=NBUF, P2=#BUFSIZE
         BSBW    STATUS
-        BLBS    R0, 72$
+        MOVZWL  IOSB+2, R7
+72$:    BLBS    R0, 73$
         CMPL    R0, #SS$_LINKDISCON     ; the server closed: the end
         BEQL    80$
         BRB     HANGUP
-72$:    MOVZWL  IOSB+2, R7
-        MOVAB   NBUF, R6
+73$:    MOVAB   NBUF, R6
 74$:    TSTL    R7
         BEQL    70$
         DECL    R7
@@ -331,7 +377,11 @@ HTTP:   MOVZWL  DESC, R2
         BSBW    LOG
         MOVL    #SS$_NORMAL, R0
 HANGUP: MOVL    R0, R6
-        $QIOW_S CHAN=NCHAN, FUNC=#IO$_DEACCESS, IOSB=IOSB
+        TSTL    SSLP                    ; TLS's close_notify first
+        BEQL    85$
+        PUSHL   SSLP
+        CALLS   #1, G^SSL_SHUTDOWN
+85$:    $QIOW_S CHAN=NCHAN, FUNC=#IO$_DEACCESS, IOSB=IOSB
         CMPL    STATE, #2               ; the file was made
         BNEQ    90$
         $CLOSE  FAB=OUTFAB
@@ -626,6 +676,109 @@ GETPORT:
         MOVL    #SS$_NORMAL, R0
         RSB
 80$:    MOVL    #SS$_BADPARAM, R0
+        RSB
+
+; TLSOPEN: NCHAN = a connection to an https:// server, R10 = the host's
+; name, HOSTLEN its length. Makes a TLS connection on it with SSL3, in
+; SSLP, which checks the server's certificate against the CAs SSL3
+; trusts by default and its name against the host's. R0 = SS$_NORMAL,
+; or RMS$_NETFAIL after OpenSSL's errors. Uses R0-R5.
+TLSOPEN:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5>
+        MOVC3   HOSTLEN, (R10), HOSTZ
+        CLRB    (R3)
+        CALLS   #0, G^TLS_CLIENT_METHOD
+        PUSHL   R0
+        CALLS   #1, G^SSL_CTX_NEW
+        MOVL    R0, R2                  ; the context, for its one SSL
+        BEQL    90$
+        PUSHL   R2
+        CALLS   #1, G^SSL_CTX_SET_DEFAULT_VERIFY_PATHS
+        CLRL    -(SP)
+        PUSHL   #SSL_VERIFY_PEER
+        PUSHL   R2
+        CALLS   #3, G^SSL_CTX_SET_VERIFY
+        PUSHL   #SSL_OP_IGNORE_UNEXPECTED_EOF ; a close ends a body, as without TLS
+        PUSHL   R2
+        CALLS   #2, G^SSL_CTX_SET_OPTIONS
+        PUSHL   R2
+        CALLS   #1, G^SSL_NEW
+        MOVL    R0, SSLP
+        BEQL    90$
+        MOVZWL  NCHAN, -(SP)            ; its socket, as a C file descriptor
+        CALLS   #1, G^DECC$SOCKET_FD
+        PUSHL   R0
+        PUSHL   SSLP
+        CALLS   #2, G^SSL_SET_FD
+        PUSHAB  HOSTZ
+        PUSHL   SSLP
+        CALLS   #2, G^SSL_SET1_HOST
+        PUSHL   SSLP
+        CALLS   #1, G^SSL_CONNECT
+        CMPL    R0, #1
+        BNEQ    90$
+        MOVL    #SS$_NORMAL, R0
+        RSB
+90$:    BRW     TLSERR
+
+; TLSWRITE: writes the R3 bytes at NBUF over TLS. R0 = SS$_NORMAL, or
+; RMS$_NETFAIL after OpenSSL's errors. Uses R0-R1.
+TLSWRITE:
+        .JSB_ENTRY
+        PUSHL   R3
+        PUSHAB  NBUF
+        PUSHL   SSLP
+        CALLS   #3, G^SSL_WRITE
+        CMPL    R0, R3
+        BNEQ    90$
+        MOVL    #SS$_NORMAL, R0
+        RSB
+90$:    BRW     TLSERR
+
+; TLSREAD: reads what the server sent over TLS, up to BUFSIZE bytes, into
+; NBUF. R7 = how many. R0 = SS$_NORMAL; SS$_LINKDISCON once the server
+; has closed, with close_notify; or RMS$_NETFAIL after OpenSSL's errors.
+TLSREAD:
+        .JSB_ENTRY  OUTPUT=<R7>
+        PUSHL   #BUFSIZE
+        PUSHAB  NBUF
+        PUSHL   SSLP
+        CALLS   #3, G^SSL_READ
+        MOVL    R0, R7
+        BLEQ    10$
+        MOVL    #SS$_NORMAL, R0
+        RSB
+10$:    PUSHL   R0
+        PUSHL   SSLP
+        CALLS   #2, G^SSL_GET_ERROR
+        CMPL    R0, #SSL_ERROR_ZERO_RETURN
+        BNEQ    90$
+        MOVL    #SS$_LINKDISCON, R0
+        RSB
+90$:    BRW     TLSERR
+
+; TLSERR: says why TLS failed on stderr: what was wrong with the server's
+; certificate, if that was it, as OpenSSL's s_client says it, then
+; OpenSSL's errors. R0 = RMS$_NETFAIL. Uses R1.
+TLSERR:
+        .JSB_ENTRY
+        CALLS   #0, G^ERR_PEEK_ERROR
+        CMPL    R0, #CERTIFICATE_VERIFY_FAILED
+        BNEQ    10$
+        PUSHL   SSLP
+        CALLS   #1, G^SSL_GET_VERIFY_RESULT
+        PUSHL   R0
+        PUSHL   R0
+        CALLS   #1, G^X509_VERIFY_CERT_ERROR_STRING
+        MOVL    (SP)+, R1
+        PUSHL   R0
+        PUSHL   R1
+        PUSHAB  VERIFYF
+        PUSHL   G^DECC$GA_STDERR
+        CALLS   #4, G^DECC$FPRINTF
+10$:    PUSHL   G^DECC$GA_STDERR
+        CALLS   #1, G^ERR_PRINT_ERRORS_FP
+        MOVL    #RMS$_NETFAIL, R0
         RSB
 
 ; STATUS: R0 = $QIOW's status. R0 = the IOSB's, if that was a success.

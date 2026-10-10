@@ -14,13 +14,17 @@
 //! sysexe/tpu/fio.mar (PRD-0006), and in [SYSLIB] EVE's section file,
 //! sysexe/tpu/eve/eve.section; CDEMO, the BLISS-64 program that calls a C
 //! library, from crosstools/vtools/examples/c, its C compiled by the cross
-//! gcc and converted by velf; in [SYSMGR], the files in sysmgr/,
+//! gcc and converted by velf; CRTLTEST and SSL3$CLIENT, C programs, from
+//! crtl/test/crtltest.c and ssl3/ssl3$client.c, with SSL3 and Mbed TLS's
+//! library and the C run-time library (c.rs); in [SSL3.CERTS], CERT.PEM,
+//! the CA bundle SSL3 trusts (c.rs); in [SYSMGR], the files in sysmgr/,
 //! as text, and in [SYSEXE] sysexe/*.com; and in [SYSEXE], SYSUAF.DAT, the users, SYSTEM and DEFAULT.
 
 use std::collections::HashMap;
 use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::process::Command;
 
 fn main() {
     for path in [
@@ -33,6 +37,9 @@ fn main() {
         "uafhash.rs",
         "../crosstools/vtools/bliss",
         CDEMO,
+        "crtl",
+        "ssl3",
+        "c.rs",
     ] {
         println!("cargo::rerun-if-changed={path}");
     }
@@ -81,6 +88,10 @@ fn main() {
     // Each process has its own P0, so every image goes at the same address,
     // but DCL: linked in P1, at VA$C_CLI, it is a command interpreter, which
     // stays while the images it runs come and go in P0.
+    // SSL3 on Mbed TLS, and the C run-time library, object libraries a
+    // program takes from what it calls: COPY, for https://, and the C ones.
+    let (transfer, crtl) = crtl(&out);
+    let ssl3 = ssl3(&out);
     let mut programs = sources("sysexe", &["mar", "b64"]);
     programs.dedup_by(|a, b| a.file_stem() == b.file_stem());
     for source in programs {
@@ -120,7 +131,7 @@ fn main() {
         if name == "DCL" {
             modules.extend(librtl.iter().cloned());
         } else {
-            modules.push(librtl_exe.clone());
+            modules.extend([ssl3.clone(), crtl.clone(), librtl_exe.clone()]);
         }
         modules.push(stb.clone());
         let base = if name == "DCL" {
@@ -158,6 +169,22 @@ fn main() {
     ];
     let image = link("CDEMO", vlink::DEFAULT_BASE, None, &modules);
     files.push(("[SYSEXE]CDEMO.EXE".into(), image.image.write()));
+    // The C programs.
+    let mut flags = c_flags();
+    flags.push(format!(
+        "-I{}",
+        Path::new("ssl3/include").canonicalize().unwrap().display()
+    ));
+    for source in ["crtl/test/crtltest.c", "ssl3/ssl3$client.c"] {
+        let source = Path::new(source);
+        let name = source.file_stem().unwrap().to_str().unwrap().to_uppercase();
+        let object = out.join(source.file_name().unwrap()).with_extension("o");
+        let mut modules = vec![transfer.clone(), compile_c(source, &object, &flags)];
+        modules.extend(libs.iter().cloned());
+        modules.extend([ssl3.clone(), crtl.clone(), librtl_exe.clone(), stb.clone()]);
+        let image = link(&name, vlink::DEFAULT_BASE, None, &modules);
+        files.push((format!("[SYSEXE]{name}.EXE"), image.image.write()));
+    }
     disk(&out.join("sysdisk.img"), &files);
 }
 
@@ -392,7 +419,9 @@ fn disk(path: &Path, images: &[(String, Vec<u8>)]) {
     fn ok<T>(r: ods_image::Result<T>) -> T {
         r.unwrap_or_else(|e| panic!("the system disk: {e}"))
     }
-    let mut vol = ok(Image::create(path, 8192, &params));
+    // 8 MB: the C programs, each with its own copy of its libraries,
+    // filled the 4 MB it was.
+    let mut vol = ok(Image::create(path, 16384, &params));
     ok(vol.mkdir("[SYSEXE]"));
     ok(vol.mkdir("[SYSLIB]"));
     ok(vol.mkdir("[SYSMGR]"));
@@ -413,6 +442,18 @@ fn disk(path: &Path, images: &[(String, Vec<u8>)]) {
     ok(vol.copy_in(
         &mut &section[..],
         "[SYSLIB]EVE$SECTION.TPU$SECTION",
+        Conversion::LinesToRecords,
+        size,
+        None,
+    ));
+    // SSL3's CA bundle, which SSL3$CERTS names (sysmgr/systartup_vms.com).
+    ok(vol.mkdir("[SSL3]"));
+    ok(vol.mkdir("[SSL3.CERTS]"));
+    let bundle = ca_bundle();
+    let size = Some(bundle.len() as u64);
+    ok(vol.copy_in(
+        &mut &bundle[..],
+        "[SSL3.CERTS]CERT.PEM",
         Conversion::LinesToRecords,
         size,
         None,
@@ -462,6 +503,7 @@ fn disk(path: &Path, images: &[(String, Vec<u8>)]) {
 }
 
 include!("uafhash.rs");
+include!("c.rs");
 
 /// A user in SYSUAF.DAT: the UIC is [group,member], the privileges are
 /// authorized and enabled at login alike, and no password makes an

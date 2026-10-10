@@ -11,16 +11,21 @@ instructions, which vmacro compiles into PAL calls
 | `sysexe/` | The programs: DCL, the utilities, and the tests STARTUP runs. `lib/` is linked into every image; `dcl/`, `help/` and `rms/` only into the programs that use them | `[SYSEXE]*.EXE` |
 | `sysexe/tpu/` | TPU, the Text Processing Utility ([PRD-0006](../docs/prd/0006-tpu-and-eve.md)): BLISS-64, and `fio.mar`, its I/O module; its tests run under vrun | `[SYSEXE]TPU.EXE` |
 | [`crosstools/vtools/examples/c/cdemo/`](../crosstools/vtools/examples/c) | CDEMO, a BLISS-64 program that calls a C library through the library's BLISS-64 adapter; the C compiled by the cross gcc and converted by velf | `[SYSEXE]CDEMO.EXE` |
+| `crtl/` | The C run-time library, DEC C's names on VMS's services: strings, memory, stdio on records, time, sockets on TCP/IP Services' $QIO; headers in `include/`; linked into each C program from `DECC$CRTL.OLB` ([ADR-0032](../docs/adr/0032-c-run-time-library-and-ssl3-on-mbed-tls.md)) | in each C program |
+| `ssl3/` | SSL3, OpenSSL 3.0's API for a TLS 1.2 and 1.3 client, on Mbed TLS, which `build.rs` downloads into the user's cache with Mozilla's CA bundle; `config/` configures Mbed TLS; and SSL3$CLIENT, a C program that uses it. COPY calls it for `https` | `[SYSEXE]SSL3$CLIENT.EXE`, `[SSL3.CERTS]CERT.PEM` |
 | `sysexe/librtl/` | The run-time library's `LIB$` routines, a shareable image every program but DCL calls ([ADR-0028](../docs/adr/0028-shareable-images.md)); its symbol vector is `librtl.opt` | `[SYSLIB]LIBRTL.EXE` |
 | `cld/` | DCL's verbs, as CLD that vcdu compiles into DCL$TABLES ([ADR-0017](../docs/adr/0017-command-tables-from-cld-with-vcdu.md)) | in `DCL.EXE` and `HELP.EXE` |
 | `sysmgr/` | SYSTEM's text files: SYSTARTUP_VMS.COM, SYLOGIN.COM, WELCOME.TXT | `[SYSMGR]` |
 | `sysuaf.fdl`, `uafhash.rs` | SYSUAF.DAT's layout, and the password hash `build.rs` writes SYSTEM's with ([ADR-0029](../docs/adr/0029-loginout-and-sysuaf.md)) | `[SYSEXE]SYSUAF.DAT` |
 
 `build.rs` compiles and links all of it with the vtools crates and writes
-`sysdisk.img` with ods-image: `cargo build -p vms`. Only CDEMO's C needs
-a C compiler, the cross gcc (`aarch64-elf-gcc`, `aarch64-linux-gnu-gcc`
-or `CROSS_COMPILE`'s). Its file comment says which sources go into which
-image.
+`sysdisk.img` with ods-image: `cargo build -p vms`. The C, CDEMO's, the
+C run-time library's and SSL3's, needs the cross gcc (`aarch64-elf-gcc`,
+`aarch64-linux-gnu-gcc` or `CROSS_COMPILE`'s), and the first build on a
+machine downloads Mbed TLS's release and Mozilla's CA bundle with `curl`
+into `~/Library/Caches/vaxpunk` (macOS) or `~/.cache/vaxpunk`, and
+unpacks the release with `tar`. Its file
+comment says which sources go into which image.
 
 The macro libraries (`lib.mlb`, `starlet.mlb`) are in
 [crosstools/vtools/lib](../crosstools/vtools/lib). [DESIGN-0002](../docs/design/0002-executive-processes.md)
