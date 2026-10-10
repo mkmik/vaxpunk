@@ -93,8 +93,8 @@ impl<D: BlockDevice> Volume<D> {
         let runs = match self.allocate(f.blocks, f.alloc, None) {
             Ok(r) => r,
             Err(e) => {
-                let old = self.read_block(lbn)?;
-                self.delete_header(lbn, crate::layout::Header(old))?;
+                // alloc_header took the file number only: give it back.
+                self.set_index_bit(fid.num, false)?;
                 return Err(e);
             }
         };
@@ -189,8 +189,8 @@ impl<D: BlockDevice> Volume<D> {
         let runs = match self.allocate(v, Alloc::Contiguous, None) {
             Ok(r) => r,
             Err(e) => {
-                let old = self.read_block(lbn)?;
-                self.delete_header(lbn, crate::layout::Header(old))?;
+                // alloc_header took the file number only: give it back.
+                self.set_index_bit(fid.num, false)?;
                 return Err(e);
             }
         };

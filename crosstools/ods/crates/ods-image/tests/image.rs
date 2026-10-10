@@ -2,7 +2,7 @@
 
 use std::path::{Path, PathBuf};
 
-use ods_image::{Conversion, Image, InitParams, Level, Mode, attrs};
+use ods_image::{Conversion, Image, InitParams, Level, Mode, Severity, attrs};
 
 /// A fresh directory for one test.
 fn scratch(name: &str) -> PathBuf {
@@ -50,6 +50,21 @@ fn text_view_reads_anywhere() {
         let want = &t[(off as usize).min(t.len())..(off as usize + len).min(t.len())];
         assert_eq!(&buf[..n], want, "offset {off} length {len}");
     }
+}
+
+/// A file the volume has no room for is refused, and takes no file number
+/// with it: the volume verifies clean, and the next file fits.
+#[test]
+fn full_volume_refuses_a_file() {
+    let d = scratch("full");
+    let p = InitParams { label: b"TEST".to_vec(), ..InitParams::default() };
+    let mut img = Image::create(d.join("t.img"), 1000, &p).unwrap();
+    let big = vec![b'x'; 1000 * 512];
+    let e = img.copy_in(&mut &big[..], "[000000]BIG.DAT", Conversion::Binary, Some(big.len() as u64), None);
+    assert!(e.unwrap_err().to_string().contains("device full"));
+    img.copy_in(&mut &b"small\n"[..], "[000000]SMALL.TXT", Conversion::LinesToRecords, None, None).unwrap();
+    let report = img.verify().unwrap();
+    assert_eq!(report.count(Severity::Error) + report.count(Severity::Leak), 0, "{:?}", report.findings);
 }
 
 #[test]
