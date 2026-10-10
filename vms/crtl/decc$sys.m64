@@ -1,0 +1,68 @@
+        .TITLE  DECC$SYS        The system services C calls
+        .IDENT  /V0.1/
+;
+; starlet.h's system services, as a C compiler that knows the calling
+; standard would call them (DESIGN-0004, *C and Fortran*): each jacket
+; sign-extends its arguments' longwords, as CALLS does and the service
+; dispatcher checks, sets the count in x9, and branches to the service,
+; which returns to the C caller. The arguments are where the service
+; looks for them already: x0-x7, then the stack.
+;
+        .EXTERNAL SYS$ASSIGN, SYS$DASSGN, SYS$EXIT, SYS$GET_ENTROPY, SYS$GETTIM, SYS$QIOW
+
+; $JACKET NAME, SERVICE, NARGS: NAME, which calls SERVICE with its NARGS
+; arguments, at most 8.
+        .MACRO  $JACKET NAME, SERVICE, NARGS
+NAME::
+        $$SIGN
+        mov     x9, #NARGS
+        $$GO    SERVICE
+        .ENDM   $JACKET
+
+; $$SIGN: sign-extends x0-x7 from their low longwords.
+        .MACRO  $$SIGN
+        sxtw    x0, w0
+        sxtw    x1, w1
+        sxtw    x2, w2
+        sxtw    x3, w3
+        sxtw    x4, w4
+        sxtw    x5, w5
+        sxtw    x6, w6
+        sxtw    x7, w7
+        .ENDM   $$SIGN
+
+; $$GO SERVICE: branches to SERVICE, in S0, past b's reach.
+        .MACRO  $$GO    SERVICE
+        adrp    x16, SERVICE
+        add     x16, x16, #:lo12:SERVICE
+        br      x16
+        .ENDM   $$GO
+
+        .PSECT  $CODE$
+; DECC$$SYS_ASSIGN devnam, chan, acmode, mbxnam: $ASSIGN.
+        $JACKET DECC$$SYS_ASSIGN, SYS$ASSIGN, 4
+; DECC$$SYS_DASSGN chan: $DASSGN.
+        $JACKET DECC$$SYS_DASSGN, SYS$DASSGN, 1
+; DECC$$SYS_EXIT code: $EXIT.
+        $JACKET DECC$$SYS_EXIT, SYS$EXIT, 1
+; DECC$$SYS_GET_ENTROPY buffer, buflen: $GET_ENTROPY.
+        $JACKET DECC$$SYS_GET_ENTROPY, SYS$GET_ENTROPY, 2
+; DECC$$SYS_GETTIM timadr: $GETTIM.
+        $JACKET DECC$$SYS_GETTIM, SYS$GETTIM, 1
+
+; DECC$$SYS_QIOW efn, chan, func, iosb, astadr, astprm, p1, ..., p6:
+; $QIOW. p3-p6 are on the stack, each in a quadword.
+DECC$$SYS_QIOW::
+        $$SIGN
+        ldrsw   x16, [sp]
+        str     x16, [sp]
+        ldrsw   x16, [sp, #8]
+        str     x16, [sp, #8]
+        ldrsw   x16, [sp, #16]
+        str     x16, [sp, #16]
+        ldrsw   x16, [sp, #24]
+        str     x16, [sp, #24]
+        mov     x9, #12
+        $$GO    SYS$QIOW
+
+        .END

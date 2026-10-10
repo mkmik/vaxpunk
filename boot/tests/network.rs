@@ -23,7 +23,11 @@
 //! through guestfwd, a line each way, and with /PORT to one there cannot be;
 //! then COPY/HTTP from web servers here, through guestfwd, to the data
 //! disk: by URL, by node and path, one that says 404, by URL with a
-//! host's name, and an https URL.
+//! host's name, an ftp URL, and https URLs, whose TLS servers here
+//! have certificates a test CA signed: one before SSL_CERT_FILE names
+//! the CA, so the system's bundle doesn't trust it, and one after;
+//! then SSL3$CLIENT to TLS servers here, TLS 1.3 and 1.2, to one whose
+//! name isn't its certificate's, and to a host there isn't.
 //!
 //! Two vaxpunks on one QEMU socket network, A and B, where no DHCP server
 //! answers at boot: each saves its address and gateway with SET
@@ -42,6 +46,7 @@ use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream, UdpSocket};
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, Command, Stdio};
+use std::sync::Arc;
 use std::thread::{self, sleep};
 use std::time::{Duration, Instant};
 
@@ -170,9 +175,90 @@ fn web_server(status: &'static str, body: Vec<u8>) -> (u16, thread::JoinHandle<S
     (port, server)
 }
 
+/// The CA of the TLS servers here, which signs their certificates.
+fn tls_ca() -> (rcgen::Certificate, rcgen::KeyPair) {
+    use rcgen::{BasicConstraints, CertificateParams, DnType, IsCa, KeyPair, date_time_ymd};
+    let mut ca = CertificateParams::new(Vec::new()).unwrap();
+    ca.distinguished_name
+        .push(DnType::OrganizationName, "vaxpunk");
+    ca.distinguished_name
+        .push(DnType::CommonName, "vaxpunk test CA");
+    ca.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
+    ca.not_before = date_time_ymd(2000, 1, 1);
+    ca.not_after = date_time_ymd(2099, 12, 31);
+    let ca_key = KeyPair::generate().unwrap();
+    (ca.self_signed(&ca_key).unwrap(), ca_key)
+}
+
+/// A TLS server here, through guestfwd, for one connection, with a
+/// certificate for tls.example.org that ca signed: it reads a line,
+/// writes what answer makes of it and closes with close_notify; TLS 1.3
+/// and 1.2, or 1.2 only. Returns its port; the thread returns the line,
+/// or why the handshake failed.
+fn tls_server(
+    ca: &(rcgen::Certificate, rcgen::KeyPair),
+    tls12_only: bool,
+    answer: fn(&str) -> String,
+) -> (u16, thread::JoinHandle<String>) {
+    use rcgen::{CertificateParams, DnType, KeyPair, date_time_ymd};
+    let (ca, ca_key) = ca;
+    let mut leaf = CertificateParams::new(vec!["tls.example.org".into()]).unwrap();
+    leaf.distinguished_name
+        .push(DnType::CommonName, "tls.example.org");
+    leaf.not_before = date_time_ymd(2000, 1, 1);
+    leaf.not_after = date_time_ymd(2099, 12, 31);
+    let key = KeyPair::generate().unwrap();
+    let cert = leaf.signed_by(&key, ca, ca_key).unwrap();
+    let versions: &[&rustls::SupportedProtocolVersion] = if tls12_only {
+        &[&rustls::version::TLS12]
+    } else {
+        &[&rustls::version::TLS13, &rustls::version::TLS12]
+    };
+    let config = Arc::new(
+        rustls::ServerConfig::builder_with_provider(Arc::new(
+            rustls::crypto::ring::default_provider(),
+        ))
+        .with_protocol_versions(versions)
+        .unwrap()
+        .with_no_client_auth()
+        .with_single_cert(
+            vec![cert.der().clone()],
+            rustls::pki_types::PrivatePkcs8KeyDer::from(key.serialize_der()).into(),
+        )
+        .unwrap(),
+    );
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let server = thread::spawn(move || {
+        let (tcp, _) = listener.accept().unwrap();
+        let conn = rustls::ServerConnection::new(config).unwrap();
+        let mut tls = rustls::StreamOwned::new(conn, tcp);
+        let mut line = Vec::new();
+        let mut byte = [0];
+        while !line.ends_with(b"\r\n") {
+            match tls.read(&mut byte) {
+                Ok(1) => line.push(byte[0]),
+                Ok(_) => return "closed".into(),
+                // Its alert, since guestfwd doesn't pass the close on.
+                Err(e) => {
+                    let _ = tls.conn.write_tls(&mut tls.sock);
+                    return e.to_string();
+                }
+            }
+        }
+        let line = String::from_utf8_lossy(&line).into_owned();
+        tls.write_all(answer(&line).as_bytes()).unwrap();
+        tls.conn.send_close_notify();
+        tls.flush().unwrap();
+        line
+    });
+    (port, server)
+}
+
 /// A DNS server on UDP, which the guest reaches at 10.0.2.2: WWW.EXAMPLE.ORG
 /// is at 192.0.2.7, and 192.0.2.7 is www.example.org; ECHO.EXAMPLE.ORG is
-/// 10.0.2.100, the echo server's guestfwd; SILENT.EXAMPLE.ORG gets no
+/// 10.0.2.100, the echo server's guestfwd, and so are TLS.EXAMPLE.ORG and
+/// WRONG.EXAMPLE.ORG, the TLS servers'; SILENT.EXAMPLE.ORG gets no
 /// answer, and every other name NXDOMAIN. Returns its port.
 fn dns_server() -> u16 {
     let socket = UdpSocket::bind("127.0.0.1:0").unwrap();
@@ -193,7 +279,9 @@ fn dns_server() -> u16 {
             let rdata: Option<(u16, Vec<u8>)> = match (name.as_str(), qtype) {
                 ("silent.example.org", _) => continue,
                 ("www.example.org", 1) => Some((1, vec![192, 0, 2, 7])),
-                ("echo.example.org", 1) => Some((1, vec![10, 0, 2, 100])),
+                ("echo.example.org" | "tls.example.org" | "wrong.example.org", 1) => {
+                    Some((1, vec![10, 0, 2, 100]))
+                }
                 ("7.2.0.192.in-addr.arpa", 12) => {
                     Some((12, b"\x03www\x07example\x03org\x00".to_vec()))
                 }
@@ -224,8 +312,9 @@ fn free_port() -> u16 {
         .port()
 }
 
-/// A data disk with an empty volume, DATA, for COPY's files.
-fn data_disk(path: &Path) {
+/// A data disk with a volume, DATA, for COPY's files, with CA.PEM, the
+/// certificate of the TLS servers' CA, ca.
+fn data_disk(path: &Path, ca: &str) {
     fs::create_dir_all(path.parent().unwrap()).unwrap();
     let _ = fs::remove_file(path);
     let params = InitParams {
@@ -233,6 +322,15 @@ fn data_disk(path: &Path) {
         ..Default::default()
     };
     let mut vol = Image::create(path, 4096, &params).unwrap();
+    let size = Some(ca.len() as u64);
+    vol.copy_in(
+        &mut ca.as_bytes(),
+        "[000000]CA.PEM",
+        Conversion::LinesToRecords,
+        size,
+        None,
+    )
+    .unwrap();
     vol.flush().unwrap();
 }
 
@@ -285,7 +383,16 @@ fn network() {
     let fwd = free_port();
     let ufwd = free_port();
     let dns = dns_server();
-    data_disk(&out.join("net-data.img"));
+    let ca = tls_ca();
+    let hello = |line: &str| format!("hello, {line}");
+    let (tls_port, tls) = tls_server(&ca, false, hello);
+    let (tls12_port, tls12) = tls_server(&ca, true, hello);
+    let (wrong_port, wrong) = tls_server(&ca, false, hello);
+    let page =
+        |_: &str| "HTTP/1.0 200 OK\r\nContent-Length: 15\r\n\r\nhello over TLS\n".to_string();
+    let (https_port, https) = tls_server(&ca, false, page);
+    let (untrusted_port, untrusted) = tls_server(&ca, false, page);
+    data_disk(&out.join("net-data.img"), &ca.0.pem());
     let netdev = format!(
         "user,id=net0,guestfwd=tcp:10.0.2.100:7777-tcp:127.0.0.1:{server_port},\
          guestfwd=tcp:10.0.2.100:7779-tcp:127.0.0.1:{echo_port},\
@@ -293,6 +400,11 @@ fn network() {
          guestfwd=tcp:10.0.2.100:80-tcp:127.0.0.1:{index_port},\
          guestfwd=tcp:10.0.2.100:7781-tcp:127.0.0.1:{missing_port},\
          guestfwd=tcp:10.0.2.100:7782-tcp:127.0.0.1:{blob_port},\
+         guestfwd=tcp:10.0.2.100:7783-tcp:127.0.0.1:{tls_port},\
+         guestfwd=tcp:10.0.2.100:7784-tcp:127.0.0.1:{tls12_port},\
+         guestfwd=tcp:10.0.2.100:7785-tcp:127.0.0.1:{wrong_port},\
+         guestfwd=tcp:10.0.2.100:7786-tcp:127.0.0.1:{https_port},\
+         guestfwd=tcp:10.0.2.100:7787-tcp:127.0.0.1:{untrusted_port},\
          hostfwd=tcp:127.0.0.1:{fwd}-:7778,hostfwd=udp:127.0.0.1:{ufwd}-:7780"
     );
     let mut vax = Vax::boot(
@@ -403,7 +515,29 @@ fn network() {
     vax.command(r#"COPY/HTTP/LOG 10.0.2.100::"/" DKB0:[000000]"#);
     vax.command(r#"COPY/HTTP URL::"http://10.0.2.100:7781/nope" DKB0:[000000]"#);
     vax.command(r#"COPY/HTTP/LOG URL::"http://web.example:7782/kit/blob.bin" DKB0:[000000]"#);
-    vax.command(r#"COPY/HTTP URL::"https://10.0.2.100/x" DKB0:[000000]"#);
+    vax.command(r#"COPY/HTTP URL::"ftp://10.0.2.100/x" DKB0:[000000]"#);
+    // https: the system's CAs, SSL3$CERTS:CERT.PEM, don't have the test CA,
+    // which signed the server's certificate; SSL_CERT_FILE names it.
+    vax.command(r#"COPY/HTTP URL::"https://tls.example.org:7787/x" DKB0:[000000]"#);
+    vax.command("DEFINE SSL_CERT_FILE DKB0:[000000]CA.PEM");
+    vax.command(r#"COPY/HTTP/LOG URL::"https://tls.example.org:7786/hello.txt" DKB0:[000000]"#);
+    vax.command("TYPE DKB0:[000000]HELLO.TXT");
+    // SSL3$CLIENT: TLS 1.3, then 1.2 only, to a server whose certificate
+    // the CA on the data disk signed, which the command names, then
+    // SSL_CERT_FILE, a line each way; to one whose name isn't the
+    // certificate's; and to a host there isn't.
+    vax.command("SSLCLIENT :== $SYS$SYSTEM:SSL3$CLIENT");
+    for (port, line, ca) in [(7783, "ping", " DKB0:[000000]CA.PEM"), (7784, "twelve", "")] {
+        let at = vax.reply(&format!("SSLCLIENT tls.example.org {port}{ca}"), "issuer: ");
+        vax.wait_for("\n", at, 60);
+        // The line, then an empty one, which ends what is sent.
+        vax.console
+            .write_all(format!("{line}\r\r").as_bytes())
+            .unwrap();
+        vax.wait_for("$ ", at, 120);
+    }
+    vax.command("SSLCLIENT wrong.example.org 7785 DKB0:[000000]CA.PEM");
+    vax.command("SSLCLIENT nowhere.example.org 7785");
     let text = vax.stop();
     print!("{text}");
     assert_eq!(host.join().unwrap(), "hello from vaxpunk\r\n");
@@ -429,6 +563,11 @@ fn network() {
             .unwrap()
             .starts_with("GET /kit/blob.bin HTTP/1.0\r\n")
     );
+    assert_eq!(tls.join().unwrap(), "ping\r\n");
+    assert_eq!(tls12.join().unwrap(), "twelve\r\n");
+    assert!(wrong.join().unwrap().contains("BadCertificate"));
+    assert_eq!(https.join().unwrap(), "GET /hello.txt HTTP/1.0\r\n");
+    assert!(untrusted.join().unwrap().contains("UnknownCA"));
     for line in [
         "%TCPIP-I-SET, WE0: 10.0.2.15        255.255.255.0    10.0.2.2",
         " WE0       10.0.2.15        255.255.255.0    10.0.2.2         up",
@@ -494,6 +633,20 @@ fn network() {
         "BLOB.BIN;1 (79 blocks)",
         "%RMS-E-FNF, file not found",
         "%RMS-F-SUPPORT, network operation not supported",
+        "verify error:num=20:unable to get local issuer certificate\n\
+         error:0A000086:SSL routines::certificate verify failed\n\
+         %RMS-F-NETFAIL, network operation failed at remote node\n",
+        r#"%COPY-S-COPIED, URL::"https://tls.example.org:7786/hello.txt" copied to DKB0:[000000]HELLO.TXT;1 (1 blocks)"#,
+        "TYPE DKB0:[000000]HELLO.TXT\nhello over TLS\n",
+        "Connected to 10.0.2.100, port 7783\nTLSv1.3 connection using TLS_CHACHA20_POLY1305_SHA256\n\
+         Server certificate subject: /CN=tls.example.org\n\
+         Server certificate issuer: /CN=vaxpunk test CA/O=vaxpunk\n",
+        "hello, ping\n$ ",
+        "TLSv1.2 connection using ECDHE-ECDSA-CHACHA20-POLY1305\n",
+        "hello, twelve\n$ ",
+        "%SSL3-E-VERIFY, hostname mismatch\n%SSL3-E-FAIL, SSL_connect\n\
+         error:0A000086:SSL routines::certificate verify failed\n$ ",
+        "%SSL3-E-FAIL, no such host\n$ ",
     ] {
         assert!(text.contains(line), "no {line:?}");
     }

@@ -279,7 +279,8 @@ or the ioctls, in one request, not both; a unit is cloned at
   the other end closes it prints `%REM-S-END`. ponytail: no `TELNET>`
   command mode at CTRL/]; a send for each key.
 - **`COPY.EXE`**, `COPY/HTTP`: connects a TCP socket to the server and
-  sends an HTTP/1.0 GET; the body goes into a STREAM_LF file.
+  sends an HTTP/1.0 GET, over TLS for `https`, which SSL3 makes on the
+  socket (ADR-0032); the body goes into a STREAM_LF file.
 - **`TCPTEST.EXE`** tries TCP both directions against the host, and UDP:
   a datagram from the host back to its sender, named, then on the socket
   connected to it (`boot/tests/network.rs`).

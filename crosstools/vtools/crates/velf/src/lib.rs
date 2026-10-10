@@ -31,6 +31,12 @@ pub const GCC_FLAGS: &[&str] = &[
 /// GCC_FLAGS, and every warning an error. Writes the ELF object to
 /// `object` and returns it, or what gcc said.
 pub fn gcc(source: &Path, object: &Path) -> Result<Vec<u8>, String> {
+    gcc_with(source, object, &[])
+}
+
+/// As [`gcc`], with `args` after its own: include directories, macros, or
+/// options that override its own, as `-Os` does `-O2`.
+pub fn gcc_with(source: &Path, object: &Path, args: &[&str]) -> Result<Vec<u8>, String> {
     let cross = std::env::var("CROSS_COMPILE").unwrap_or_else(|_| {
         let elf = Command::new("aarch64-elf-gcc").arg("--version").output();
         if elf.is_ok() {
@@ -43,6 +49,7 @@ pub fn gcc(source: &Path, object: &Path) -> Result<Vec<u8>, String> {
     let res = Command::new(format!("{cross}gcc"))
         .args(["-O2", "-Wall", "-Wextra", "-Werror"])
         .args(GCC_FLAGS)
+        .args(args)
         .arg("-c")
         .arg(source)
         .arg("-o")

@@ -363,8 +363,12 @@ byte for byte, binary or not, into a new STREAM_LF file, as VMS's
 ports of curl and wget write one, named after the path's last part
 where the output doesn't say (`NOTES.TXT`, `INDEX.HTML` for a path
 ending in `/`); 404 is `%RMS-E-FNF`, 401 and 403 `%RMS-E-PRV`, another
-error `%RMS-F-NETFAIL`. Names come from the hosts database only, since
-there is no DNS yet, and plain HTTP: an `https` URL is `%RMS-F-SUPPORT`.
+error `%RMS-F-NETFAIL`. Names come from the hosts database or DNS. An
+`https` URL goes through TLS, which SSL3 makes
+([ADR-0032](docs/adr/0032-c-run-time-library-and-ssl3-on-mbed-tls.md)),
+checking the server's certificate against Mozilla's CAs in
+`SSL3$CERTS:CERT.PEM`, or the file the logical name `SSL_CERT_FILE`
+names: `COPY/HTTP URL::"https://www.google.com" []`.
 
 `run-qemu.sh` reads `NETDEV`, QEMU's `-netdev` for the network, and
 `MAC`, `LOG` and `DATADISK`, so that a second vaxpunk can share a network

@@ -19,7 +19,8 @@ characters, so `/OBJECT` names one whose C file has a longer name.
 ## The compiler's flags
 
 `velf::GCC_FLAGS` holds them, and the tests and `examples/c/Justfile`
-use them:
+use them, as `vms/c.rs` does for the C run-time library and SSL3 through
+`velf::gcc_with`, which adds include directories and options:
 
 | Flag | Why |
 | --- | --- |

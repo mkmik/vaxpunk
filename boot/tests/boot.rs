@@ -665,12 +665,16 @@ const TPU: Phase = Phase {
 /// CDEMO, a BLISS-64 program that calls a C library through the library's
 /// BLISS-64 adapter (crosstools/vtools/examples/c), prints what it prints
 /// under vrun, crosstools/vtools/tests/examples/c/cdemo.stdout (checked
-/// after the session).
+/// after the session); and CRTLTEST, a C program, finds the C run-time
+/// library's routines right.
 const C: Phase = Phase {
     name: "c",
     secs: 30,
-    steps: &[("$ TYPE TPUEVE.TXT", 1, "RUN CDEMO\r")],
-    lines: &["C calls 7"],
+    steps: &[
+        ("$ TYPE TPUEVE.TXT", 1, "RUN CDEMO\r"),
+        ("C calls 7", 1, "RUN CRTLTEST\r"),
+    ],
+    lines: &["C calls 7", "CRTLTEST: ok"],
 };
 
 /// The processes STARTUP and SNOOP ran, which print as they go, done long
