@@ -1593,6 +1593,7 @@ SIOCGIFFLAGS = -1071617775
 SIOCGIFNETMASK = -1071617771
 SIOCSIFNETMASK = -2145359594
 SIOCSIFDHCP = -2145359489               ; vaxpunk's, not VMS's: a DHCP server sets the interface
+SIOCGIFDNS = -1071617666                ; vaxpunk's, not VMS's: the DNS server DHCP gave, 0.0.0.0 if none
         .ENDM   $SIOCDEF
 
 ; $LNMDEF: logical names: item codes for the item lists of $CRELNM and

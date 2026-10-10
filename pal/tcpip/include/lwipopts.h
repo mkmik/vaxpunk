@@ -21,6 +21,14 @@
  * it on where another host may hold it. */
 #define LWIP_DHCP_DOES_ACD_CHECK 0
 #define LWIP_DNS 0
+/* The DNS server a DHCP server offers, option 6: lwIP asks for it and
+ * keeps it only for its own resolver, so it is asked for here and
+ * main.c's tcpip_dhcp_option keeps it for IFCONFIG's response. */
+#define DHCP_ADD_EXTRA_REQUEST_OPTIONS , 6
+struct pbuf;
+void tcpip_dhcp_option(unsigned type, unsigned option, unsigned len, struct pbuf *p, unsigned offset);
+#define LWIP_HOOK_DHCP_PARSE_OPTION(netif, dhcp, state, msg, type, option, len, p, offset) \
+	((void)(msg), tcpip_dhcp_option(type, option, len, p, offset))
 #define LWIP_IGMP 0
 #define LWIP_STATS 0
 #define LWIP_NETIF_LOOPBACK 1 /* to its own address, through netif_poll */

@@ -24,6 +24,7 @@
 #include "lwip/etharp.h"
 #include "lwip/netif.h"
 #include "lwip/pbuf.h"
+#include "lwip/prot/dhcp.h"
 #include "lwip/raw.h"
 #include "lwip/tcp.h"
 #include "lwip/udp.h"
@@ -572,12 +573,26 @@ static uint32_t send_dgram(struct conn *c, struct port_msg *m)
 	return st(err);
 }
 
-/* Answers an IFCONFIG with the interface's address, mask and gateway. */
+/* The first DNS server the last DHCP ACK gave, in network order, or 0. */
+static uint32_t dhcp_dns;
+
+/* lwIP's LWIP_HOOK_DHCP_PARSE_OPTION, for each option lwIP doesn't take
+ * itself: keeps an ACK's first DNS server, option 6.
+ * ponytail: one server; lwIP keeps two for its own resolver. */
+void tcpip_dhcp_option(unsigned type, unsigned option, unsigned len, struct pbuf *p, unsigned offset)
+{
+	if (type == DHCP_ACK && option == DHCP_OPTION_DNS_SERVER && len >= 4)
+		pbuf_copy_partial(p, &dhcp_dns, 4, offset);
+}
+
+/* Answers an IFCONFIG with the interface's address, mask and gateway, and
+ * DHCP's DNS server. */
 static void ifconfig(struct port_msg *m, uint32_t status)
 {
 	m->addr = ip4_addr_get_u32(netif_ip4_addr(&netif));
 	m->arg1 = ip4_addr_get_u32(netif_ip4_netmask(&netif));
 	m->arg2 = ip4_addr_get_u32(netif_ip4_gw(&netif));
+	m->len = dhcp_dns;
 	m->flags = netif_is_link_up(&netif) ? PORT_LINKUP : 0;
 	respond(m, status);
 }
@@ -692,6 +707,7 @@ static void command(struct port_msg *m)
 	case PORT_IFCONFIG: {
 		if (m->flags & (PORT_ADDR | PORT_MASK | PORT_GW | PORT_DHCP)) {
 			dhcp_release_and_stop(&netif);
+			dhcp_dns = 0;
 			netif_set_up(&netif);
 		}
 		if (m->flags & PORT_DHCP) {

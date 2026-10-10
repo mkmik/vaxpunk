@@ -84,7 +84,8 @@ runs on its timers; the component already runs them.
   DCL doesn't change.
 
 **Follow-ups:**
-- DNS, whose server QEMU's DHCP offers too (`10.0.2.3`), once there is a
-  resolver.
+- DNS, whose server QEMU's DHCP offers too (`10.0.2.3`): done, the
+  system's BIND server comes from DHCP
+  ([ADR-0026](0026-name-service-and-nslookup.md)).
 - `SHOW INTERFACE /FULL` with the lease, and DHCP renewals in the
   console log.

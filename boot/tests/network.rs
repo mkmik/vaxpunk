@@ -3,7 +3,8 @@
 //!
 //! One vaxpunk on QEMU's user network, with nothing saved on its ramdisk,
 //! so START COMMUNICATION asks QEMU's DHCP server at boot for the address,
-//! mask and gateway: SHOW NAME_SERVICE, then a DNS server here for the
+//! mask and gateway, and the DNS server, 10.0.2.3, for the system's resolver
+//! in place of the startup's 8.8.8.8: SHOW NAME_SERVICE, then a DNS server here for the
 //! process's resolver, through TCPIP$BIND_PORT; then TCPIP's SET INTERFACE, SET ROUTE,
 //! one without /DEFAULT that fails, PING to QEMU's gateway and to
 //! an address nobody has, and at the TCPIP> prompt SHOW
@@ -415,7 +416,7 @@ fn network() {
             ("NETDEV", netdev),
         ],
     );
-    // The resolver asks the DNS server here, not the startup's 8.8.8.8.
+    // The resolver asks the DNS server here: the process's server hides DHCP's 10.0.2.3.
     vax.command("TCPIP SHOW NAME_SERVICE");
     vax.command("TCPIP SET NAME_SERVICE /SERVER=10.0.2.2");
     vax.command(&format!("DEFINE TCPIP$BIND_PORT {dns}"));
@@ -593,7 +594,7 @@ fn network() {
         "PING GW (10.0.2.2): 56 data bytes",
         "BIND Resolver Parameters\n\n Local domain: \n\n System\n\n  State:     Started, Enabled\n\n  \
          Transport: UDP\n  Domain:    \n  Retry:     2\n  Timeout:   5\n  \
-         Servers:   8.8.8.8\n  Path:      \n\n Process\n\n  State:     Enabled\n\n  \
+         Servers:   10.0.2.3\n  Path:      \n\n Process\n\n  State:     Enabled\n\n  \
          Transport: \n  Domain:    \n  Retry:     \n  Timeout:   \n  Servers:   \n  Path:      \n$ ",
         " Local domain: EXAMPLE.ORG\n",
         "  Domain:    EXAMPLE.ORG\n  Retry:     \n  Timeout:   \n  Servers:   GATEWAY\n  Path:      \n$ ",

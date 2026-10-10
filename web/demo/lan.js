@@ -94,7 +94,8 @@ async function load() {
 function rnd() { return Math.floor(Math.random() * 256); }
 
 // dhcp returns the OFFER or ACK for a DHCP DISCOVER or REQUEST frame f from mac, giving it ip,
-// or null if f is anything else.
+// or null if f is anything else. Its DNS server is Google's, which tailgate reaches through an
+// exit node; 10.0.2.3, QEMU's, isn't on this LAN.
 function dhcp(f, mac, ip) {
   const ihl = (f[14] & 15) * 4, b = 14 + ihl + 8;
   if (f[12] !== 8 || f[13] !== 0 || f[23] !== 17 || f[14 + ihl + 2] !== 0 || f[14 + ihl + 3] !== 67) return null;
@@ -104,7 +105,7 @@ function dhcp(f, mac, ip) {
   if (type !== 1 && type !== 3) return null;
   const server = [10, 0, 2, 2];
   const opts = [53, 1, type === 1 ? 2 : 5, 54, 4, ...server, 51, 4, 0, 1, 0x51, 0x80, 1, 4, 255, 255, 255, 0,
-    3, 4, ...server, 255];
+    3, 4, ...server, 6, 4, 8, 8, 8, 8, 255];
   const r = new Uint8Array(14 + 20 + 8 + 240 + opts.length);
   r.set(mac, 0); r.set([...GATE_MAC, 8, 0], 6);
   // IP to 255.255.255.255, then UDP from 67 to 68 without a checksum.
