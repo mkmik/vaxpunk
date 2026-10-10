@@ -223,7 +223,8 @@ BUFFER:
 ; results it asked for, from its response: the name's address and port
 ; in the response's ADDR and PORT, the peer's in ARG1 and ARG2, each a
 ; SOCKADDRIN, BSD 4.4's with IO$M_EXTEND, and its length; the interface's
-; address, mask, gateway and link in an IFCONFIG's. Uses R0-R5.
+; address, mask, gateway, link and DHCP's DNS server in an IFCONFIG's.
+; Uses R0-R5.
 NET$POST::
         .JSB_ENTRY  INPUT=<R6>, SCRATCH=<R2, R3, R4, R5>
         BLBC    IRP$L_IOST1(R6), 90$
@@ -245,6 +246,9 @@ NET$POST::
         BEQL    20$
         MOVL    NIRP$A_MSG+PORTMSG$L_ARG1(R6), R1
         CMPL    R0, #SIOCGIFNETMASK
+        BEQL    20$
+        MOVL    NIRP$A_MSG+PORTMSG$L_LEN(R6), R1
+        CMPL    R0, #SIOCGIFDNS
         BEQL    20$
         CMPL    R0, #SIOCGIFFLAGS
         BEQL    30$
@@ -325,8 +329,9 @@ WRITENAME:
 ;                  WE0, SIOCADDRT and SIOCDELRT of the default route
 ;   IO$_SENSEMODE  writes its local name to p3 and its peer's to p4, each
 ;                  an item_list_3; or the ioctls of p6, as p5's:
-;                  SIOCGIFADDR, SIOCGIFNETMASK and SIOCGIFFLAGS of WE0,
-;                  SIOCGETRT of the default route; IOCTLS at most
+;                  SIOCGIFADDR, SIOCGIFNETMASK, SIOCGIFFLAGS and
+;                  SIOCGIFDNS (vaxpunk's) of WE0, SIOCGETRT of the
+;                  default route; IOCTLS at most
 ;   IO$_ACCESS     connects to the name p3, an item_list_2: for a
 ;                  datagram socket, sets the peer its writes go to and its
 ;                  reads come from
@@ -600,6 +605,8 @@ GETIOCTL:
 20$:    CMPL    R0, #SIOCGIFADDR
         BEQL    30$
         CMPL    R0, #SIOCGIFNETMASK
+        BEQL    30$
+        CMPL    R0, #SIOCGIFDNS
         BEQL    30$
         CMPL    R0, #SIOCGIFFLAGS
         BNEQ    86$

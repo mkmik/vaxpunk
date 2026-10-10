@@ -195,6 +195,15 @@ GLOBAL ROUTINE SET_NAME_SERVICE =
     SS$_NORMAL
     END;
 
+! DHCP_SERVER text, length: the text, an address, as the system's one
+! server, in place of those it had: the DNS server a DHCP server gave
+! (TCPIP.MAR's DHCPDNS). Needs SYSNAM. Returns $CRELNM's status.
+GLOBAL ROUTINE DHCP_SERVER (TEXT, LEN) =
+    BEGIN
+    INCR I FROM 1 TO SERVERS - 1 DO SYS$DELLNM(SYSTEM, .SERVER[.I], 0);
+    PUT(SYSTEM, .SERVER[0], .TEXT, .LEN)
+    END;
+
 ! ADD text, length: appends the text to LINE.
 ROUTINE ADD (TEXT, LEN) : NOVALUE =
     BEGIN

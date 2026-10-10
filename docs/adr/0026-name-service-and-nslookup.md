@@ -5,7 +5,9 @@ Oct 8, 2026 · @Marko Mikulicic
 Proposed. `TCPIP SET NAME_SERVICE` and `SHOW NAME_SERVICE` keep the BIND
 resolver's configuration in TCP/IP Services' logical names: the
 process's, or with `/SYSTEM` the system's. `SYSTARTUP_VMS.COM` names
-Google's public DNS server, `8.8.8.8`, for the system. A resolver
+Google's public DNS server, `8.8.8.8`, for the system, and when DHCP
+sets the interface, the DNS server the DHCP server offers takes its
+place. A resolver
 written in BLISS-64, `sysexe/lib/dns.b64`, is linked into every image.
 It reads those names and asks the servers over a UDP socket.
 `HOST_ADDR` asks it for any name the hosts database doesn't have, so
@@ -80,6 +82,26 @@ already sets x16 and x17 aside for linker veneers, but vlink had none.
    should have goes in `SYSTARTUP_VMS.COM`, as with the hosts and the
    interface in [ADR-0025](0025-hosts-database.md). That procedure runs
    `TCPIP SET NAME_SERVICE /SERVER=8.8.8.8 /SYSTEM`.
+   - **DHCP's server comes after it.** When `START COMMUNICATION` or
+     `SET INTERFACE /DHCP` has DHCP set the interface, and the DHCP
+     server offered a DNS server, option 6, that server becomes the
+     system's one server, `TCPIP$BIND_SERVER000`, and `001` and `002`
+     are deassigned. Without one, the startup's stays. TCP/IP Services'
+     DHCP client asks for the servers and the domain for its primary
+     interface, the only one here; where it puts them HP doesn't say, and
+     MultiNet's client writes the same system names, so vaxpunk does too.
+     Nothing is printed.
+   - **How it gets there.** lwIP keeps option 6 only for its own
+     resolver, which is off (`LWIP_DNS 0`). The component asks for
+     option 6 (`DHCP_ADD_EXTRA_REQUEST_OPTIONS`) and keeps the first
+     server of the last ACK through `LWIP_HOOK_DHCP_PARSE_OPTION`.
+     `IFCONFIG`'s response gives it in its length field, and the sense
+     ioctl `SIOCGIFDNS`, vaxpunk's, gives it to `TCPIP.EXE` as an
+     IFREQ's address, `0.0.0.0` for none.
+   - It matters on networks that block public DNS servers, such as a
+     VPN: QEMU's user network offers `10.0.2.3`, which forwards to the
+     host's resolver. The web demo's LAN (`web/demo/lan.js`) offers
+     `8.8.8.8`, which it reaches through tailgate's exit node.
 4. **The resolver is `sysexe/lib/dns.b64`**, which build.rs links into
    every image, as it does `inet.mar`.
    - **Servers.** `DNS_SERVERS` takes them from `TCPIP$BIND_SERVER000`
@@ -130,7 +152,10 @@ already sets x16 and x17 aside for linker veneers, but vlink had none.
 | Option | Why not |
 | --- | --- |
 | Turn on lwIP's DNS client and resolve in the TCP/IP component | Rejected in [ADR-0025](0025-hosts-database.md): it resolves below VMS, caches what TCP/IP Services doesn't, and doesn't know the hosts database or the logical names. |
-| Use the server DHCP offers, or QEMU's `10.0.2.3` | DHCP's needs a new ioctl to reach VMS, and lwIP drops it with `LWIP_DNS 0`. A fixed public server works on any network that reaches the internet, which is all a vaxpunk needs. |
+| Only a fixed public server, `8.8.8.8` | It was the first version. It fails behind a VPN or firewall that blocks DNS to public servers, while `PING 8.8.8.8` still works. |
+| Always QEMU's `10.0.2.3` | It isn't there on the web demo's LAN, nor between two vaxpunks on a socket network. |
+| Turn on `LWIP_DNS` to keep DHCP's servers | It builds lwIP's resolver, and its UDP socket, to store two addresses; the hook takes a few lines. |
+| Set the logical names from the executive when DHCP's answer comes | Logical names are made by programs with SYSNAM, as `SET NAME_SERVICE` does; the driver only reports what the port says. |
 | `SET CONFIGURATION NAME_SERVICE` and `START COMMUNICATION` loading it | Its file is on the ramdisk, which is new at each boot. Saving it would only repeat what the startup procedure says. |
 | Serve lookups from a process through `IO$_ACPCONTROL` on `BGA0:`, as INETACP does | It needs a process, and nothing calls gethostbyname or the ACP yet. The programs already look names up themselves (ADR-0025); the resolver goes where `HOST_ADDR` is. The ACP can call the same library later. |
 | Keep the resolver inside nslookup | Then `PING` and `TELNET` couldn't use DNS. |
@@ -146,6 +171,11 @@ already sets x16 and x17 aside for linker veneers, but vlink had none.
   every server's timeout times the tries: 10 seconds by default.
 - A network that intercepts DNS answers for `8.8.8.8` itself; vaxpunk
   sees what it says.
+- DHCP's server replaces any the system had, `SET NAME_SERVICE /SYSTEM`
+  before `START COMMUNICATION` included; one set after it stays. Only
+  the first server DHCP offers is kept, the domain, option 15, isn't
+  read, and a server that comes after `IFCONFIG`'s 10 seconds, or with
+  a renewal, never reaches VMS.
 - Every image is larger by the resolver, about 2 KB of data and its
   code, whether it looks names up or not.
 - `/NOSERVER=host` and `/NOPATH=domain` can't remove one entry: the

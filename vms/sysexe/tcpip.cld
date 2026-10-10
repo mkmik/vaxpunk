@@ -69,7 +69,7 @@ define syntax SET_NAME_SERVICE
 	disallow ENABLE and DISABLE
 
 ! SET INTERFACE WE0 /HOST=address /NETWORK_MASK=mask, or /DHCP: the
-! running system.
+! running system. The DNS server DHCP offers, if any, becomes the system's.
 define syntax SET_INTERFACE
 	routine SET_INTERFACE
 	parameter P1, label=OPTION, value(required, type=SET_OPTIONS)

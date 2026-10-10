@@ -195,7 +195,9 @@ interpreter. It is linked high in P1, which tells the executive it is one
   it, sets the interface's address, mask and gateway as `TCPIP
   SET CONFIGURATION INTERFACE` and `SET ROUTE /PERMANENT` saved them
   on the ramdisk, or asks a DHCP server for them if the saved settings
-  say `DHCP` or nothing is saved, waiting up to 10 seconds for its answer, and prints
+  say `DHCP` or nothing is saved, waiting up to 10 seconds for its answer.
+  If the DHCP server offered a DNS server, as QEMU's offers `10.0.2.3`, it
+  defines `TCPIP$BIND_SERVER000` as that one instead of `8.8.8.8`. It prints
   `%TCPIP-I-SET, WE0: ...`, and creates the process `TCPIP$TELNET`, which runs `TELNETD.EXE` and waits
   on TCP port 23 for `SET HOST` from another vaxpunk. Then its `MOUNT DKB0:`
   mounts the data disk, whatever its label, if an `INITIALIZE DKB0:`

@@ -19,7 +19,8 @@
 ; makes afresh at each boot, so the saved configuration is what its
 ; commands save (ADR-0025). /DHCP
 ; has the TCP/IP component ask a DHCP server for the address, mask and
-; gateway instead. SHOW INTERFACE senses them and writes them, and
+; gateway instead, and the DNS server it offers, if it does, becomes the
+; system's BIND server, in place of those SYSTARTUP_VMS.COM named. SHOW INTERFACE senses them and writes them, and
 ; whether the link is up. START COMMUNICATION, which SYSTARTUP_VMS.COM runs at
 ; boot, sets the interface from the saved settings, or with DHCP if there
 ; are none, and says so, and starts TELNETD, the remote login server SET
@@ -52,6 +53,7 @@
 
         .EXTERNAL PUT_LINE, INET_ADDR, HOST_ADDR, CLI$GET_VALUE, CLI$DCL_PARSE, CLI$DISPATCH
         .EXTERNAL LIB$GET_FOREIGN, LIB$GET_INPUT, LIB$SIGNAL, TCPIP_TABLES, HELP$TOPIC
+        .EXTERNAL DHCP_SERVER
 
 DHCP = 4                                ; SETTINGS' flags: ask a DHCP server
 ECHOLEN = 64                            ; an echo request: its header and 56 data bytes
@@ -94,6 +96,10 @@ IFMASK: .ASCII  "WE0"
 IFFLAGS:
         .ASCII  "WE0"
         .BLKB   29
+IFDNS:  .ASCII  "WE0"
+        .BLKB   13
+        .WORD   TCPIP$C_AF_INET
+        .BLKB   14
 ROUTE:  .LONG   0
         .WORD   TCPIP$C_AF_INET         ; to 0.0.0.0
         .BLKB   14
@@ -102,7 +108,8 @@ ROUTE:  .LONG   0
         .WORD   ORT$M_RTF_UP!ORT$M_RTF_GATEWAY
         .BLKB   10
 ; The ioctl lists, each an item_list_2 of ioctl_comms: sensing all of
-; them, setting all of them, and having a DHCP server set them.
+; them, setting all of them, having a DHCP server set them, and the DNS
+; server it gave.
 SENSEIOC:
         .WORD   32, TCPIP$C_IOCTL
         .ADDRESS .+4
@@ -127,6 +134,10 @@ DHCPIOC:
         .ADDRESS .+4
         .LONG   SIOCSIFDHCP
         .ADDRESS IFADDR
+DNSIOC: .WORD   8, TCPIP$C_IOCTL
+        .ADDRESS .+4
+        .LONG   SIOCGIFDNS
+        .ADDRESS IFDNS
 SETTINGS:                               ; address, mask, gateway, flags: 2 the link is up, 4 DHCP
         .BLKL   4
 CMD:    .BLKB   256                     ; the saved settings, .ASCIC
@@ -678,12 +689,17 @@ SAVE:
 80$:    RSB
 
 ; SETCHAR: sets the interface as SETTINGS says: its address, mask and
-; default route, or with DHCP whatever a DHCP server gives. R0 = a status.
+; default route, or with DHCP whatever a DHCP server gives, and its DNS
+; server as the system's (DHCPDNS). R0 = a status. Uses R0-R5.
 SETCHAR:
-        .JSB_ENTRY
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5>
         BBC     #2, SETTINGS+12, 10$    ; DHCP
         $QIOW_S CHAN=CHAN, FUNC=#IO$_SETMODE, IOSB=IOSB, P5=#DHCPIOC
-        BRB     80$
+        BLBC    R0, 90$
+        MOVZWL  IOSB, R0
+        BLBC    R0, 90$
+        BSBW    DHCPDNS
+        RSB
 10$:    MOVL    SETTINGS, IFADDR+IFR$T_ADDR+SIN$L_ADDR
         MOVL    SETTINGS+4, IFMASK+IFR$T_ADDR+SIN$L_ADDR
         MOVL    SETTINGS+8, ROUTE+ORT$L_GATEWAY_SIN_ADDR
@@ -691,6 +707,27 @@ SETCHAR:
 80$:    BLBC    R0, 90$
         MOVZWL  IOSB, R0
 90$:    RSB
+
+; DHCPDNS: the DNS server the DHCP server gave, if it gave one, as the
+; system's one BIND server, as TCP/IP Services' DHCP client sets the
+; resolver from the primary interface's lease. R0 = SS$_NORMAL: without
+; SYSNAM the system's servers stay as they were.
+; vaxpunk: the TCP/IP component's DHCP client gives the server to
+; SIOCGIFDNS, its own ioctl.
+DHCPDNS:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5>
+        $QIOW_S CHAN=CHAN, FUNC=#IO$_SENSEMODE, IOSB=IOSB, P6=#DNSIOC
+        BLBC    R0, 80$
+        BLBC    IOSB, 80$
+        MOVL    IFDNS+IFR$T_ADDR+SIN$L_ADDR, R3
+        BEQL    80$
+        CLRB    LINE
+        BSBW    ADDTEXT
+        MOVZBL  LINE, -(SP)
+        PUSHAB  LINE+1
+        CALLS   #2, G^DHCP_SERVER
+80$:    MOVL    #SS$_NORMAL, R0
+        RSB
 
 ; PARSE: CMD = INTERFACE address mask gateway [DHCP]. Puts the three in
 ; SETTINGS, and DHCP in its flags. R0 = SS$_NORMAL, or SS$_IVADDR for one

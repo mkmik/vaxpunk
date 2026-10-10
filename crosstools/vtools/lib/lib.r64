@@ -414,7 +414,7 @@ LITERAL
     PORT$C_SEND = 5,  ! LEN bytes from the buffer, a datagram to ADDR, PORT with FLAGS TO
     PORT$C_RECV = 6,  ! at most LEN bytes into the buffer, 0 if the peer closed; a datagram's sender
     PORT$C_CLOSE = 7,
-    PORT$C_IFCONFIG = 8,  ! sets those FLAGS has: ADDR, ARG1 the mask, ARG2 the gateway, or DHCP's; response: all
+    PORT$C_IFCONFIG = 8,  ! sets those FLAGS has: ADDR, ARG1 the mask, ARG2 the gateway, or DHCP's; response: all, LEN DHCP's DNS server
     PORT$C_CANCEL = 9,  ! ends the connection's commands
     PORT$C_GETNAME = 10,  ! response: ADDR and PORT the local name, ARG1 and ARG2 the peer's
     PORT$C_SHUTDOWN = 11,  ! ARG1: 0 no more receives, 1 no more sends, 2 neither

@@ -56,7 +56,8 @@ enum {
 	PORT_CLOSE, /* ends the connection and its requests */
 	PORT_IFCONFIG, /* sets those flagged: PORT_ADDR addr, PORT_MASK arg1 the mask,
 			  PORT_GW arg2 the gateway, or with PORT_DHCP those a DHCP server
-			  gives, once it has; response: all three and flags PORT_LINKUP */
+			  gives, once it has; response: all three, flags PORT_LINKUP and
+			  len the DNS server DHCP gave, or 0 */
 	PORT_CANCEL, /* ends the connection's requests with PORT_ST_ABORTED */
 	PORT_GETNAME, /* response: addr, port the local name, arg1, arg2 the peer's */
 	PORT_SHUTDOWN, /* arg1: 0 no more receives, 1 no more sends, 2 neither */

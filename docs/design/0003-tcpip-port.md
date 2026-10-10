@@ -109,7 +109,7 @@ only its own ring and index. A message is 32 bytes:
 | 2 | tag | the executive's, echoed in the response |
 | 4 | connection | the socket; 0 for none |
 | 8 | status | the response's: OK, BADPARAM, NOMEM, INUSE, REFUSED, RESET, TIMEOUT, ABORTED, UNREACH, CLOSED, NOLINKS, ISCONN, IVADDR |
-| 12 | length | bytes in the tag's buffer |
+| 12 | length | bytes in the tag's buffer; `IFCONFIG`'s response: the DNS server DHCP gave, an IPv4 address in network order, or 0 |
 | 16 | address | an IPv4 address, network order |
 | 20 | port | a TCP or UDP port |
 | 22 | protocol | `OPEN`'s: 6 TCP, 17 UDP, 1 a raw ICMP socket |
@@ -125,7 +125,7 @@ only its own ring and index. A message is 32 bytes:
 | `RECV` | TCP: data has come, at most length: length; or the peer has closed: CLOSED; or RESET. UDP, raw: a datagram has come: as much of it as fits, the rest lost, its sender in address and port; a raw ICMP socket's has its IP header first |
 | `CLOSE` | at once; the socket's waiting commands end with ABORTED |
 | `CANCEL` | at once; the socket's waiting commands end with ABORTED |
-| `IFCONFIG` | at once, with the address, mask, gateway and link state, after setting those flagged; with DHCP, once the server has given them, or after 10 seconds with `TIMEOUT`, while lwIP goes on asking |
+| `IFCONFIG` | at once, with the address, mask, gateway and link state, and the DNS server the last DHCP ACK gave, after setting those flagged; with DHCP, once the server has given them, or after 10 seconds with `TIMEOUT`, while lwIP goes on asking |
 | `GETNAME` | at once: the local address and port, and the peer's |
 | `SHUTDOWN` | at once |
 
@@ -202,7 +202,7 @@ longword request and the address of its argument.
 | --- | --- | --- |
 | `BGA0:` | `IO$_SETMODE` | makes a socket: p1 = its characteristics, a word protocol, a byte type and a byte family: `TCPIP$C_TCP` and `TCPIP$C_STREAM`, `TCPIP$C_UDP` and `TCPIP$C_DGRAM`, or `TCPIP$C_ICMP` and `TCPIP$C_RAW`, which needs SYSPRV or BYPASS; then p3 and p4 as on a unit |
 | unit | `IO$_SETMODE` | binds to the name p3; a port below 1024 needs SYSPRV or BYPASS; listens, backlog p4; or the ioctls of p5, which need OPER: `SIOCSIFADDR`, `SIOCSIFNETMASK`, `SIOCSIFDHCP` (vaxpunk's) on `WE0`, `SIOCADDRT`, `SIOCDELRT` of the default route |
-| unit | `IO$_SENSEMODE` | the local name to p3 and the peer's to p4; or the ioctls of p6: `SIOCGIFADDR`, `SIOCGIFNETMASK`, `SIOCGIFFLAGS` (`IFR$M_IFF_RUNNING` if the link is up) on `WE0`, `SIOCGETRT` of the default route, 4 at most |
+| unit | `IO$_SENSEMODE` | the local name to p3 and the peer's to p4; or the ioctls of p6: `SIOCGIFADDR`, `SIOCGIFNETMASK`, `SIOCGIFFLAGS` (`IFR$M_IFF_RUNNING` if the link is up), `SIOCGIFDNS` (vaxpunk's: DHCP's DNS server as the address) on `WE0`, `SIOCGETRT` of the default route, 4 at most |
 | unit | `IO$_ACCESS` | connects to the name p3; a datagram socket's peer |
 | unit | `IO$_ACCESS!IO$M_ACCEPT` | accepts a connection on a listening socket into the channel in the word at p4, assigned to `TCPIP$DEVICE:`; the peer's name to p3 |
 | unit | `IO$_WRITEVBLK` | sends p2 bytes at p1, at most 4096 (`SS$_IVBUFLEN`, a datagram's `SS$_TOOMUCHDATA`); a datagram to the name p3 |

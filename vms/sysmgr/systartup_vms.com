@@ -58,7 +58,10 @@ $ !   DEFINE/SYSTEM/NOLOG SYSUAF DKB0:[000000]SYSUAF.DAT
 $ COPY SYS$COMMON:[SYSEXE]SYSUAF.DAT SYS$SPECIFIC:[SYSEXE]SYSUAF.DAT
 $ SET PROTECTION=(S:RWE,O:RWE,G,W) SYS$SPECIFIC:[SYSEXE]SYSUAF.DAT
 $ ! The BIND resolver asks Google's public DNS server, for a host the
-$ ! hosts database hasn't: PING, TELNET and nslookup.
+$ ! hosts database hasn't: PING, TELNET and nslookup. When DHCP sets the
+$ ! interface, below, the DNS server the DHCP server offers takes its
+$ ! place, as QEMU's 10.0.2.3, which works where a network or a VPN
+$ ! blocks public ones.
 $ TCPIP SET NAME_SERVICE /SERVER=8.8.8.8 /SYSTEM
 $ ! START COMMUNICATION sets the network interface as TCPIP's SET
 $ ! CONFIGURATION INTERFACE and SET ROUTE /PERMANENT saved it on the
