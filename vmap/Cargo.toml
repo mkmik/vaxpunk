@@ -1,0 +1,19 @@
+[package]
+name = "vmap"
+description = "Checks and queries the map of components in map/: cargo run -p vmap -- lint"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "vmap"
+path = "src/main.rs"
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+pulldown-cmark = { version = "0.13", default-features = false, features = ["html"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = { version = "1", default-features = false, features = ["std", "serde", "parse"] }

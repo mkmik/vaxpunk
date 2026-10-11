@@ -1,0 +1,47 @@
+# The map's bands, top to bottom, and its milestones. See README.md.
+
+title = "vaxpunk"
+
+[[band]]
+id = "apps"
+title = "Applications and layered products"
+
+[[band]]
+id = "lang"
+title = "Languages, libraries and compatibility"
+
+[[band]]
+id = "user"
+title = "Command language and utilities"
+
+[[band]]
+id = "net"
+title = "Networking"
+
+[[band]]
+id = "data"
+title = "Files and records"
+
+[[band]]
+id = "exec"
+title = "Executive and drivers"
+
+[[band]]
+id = "platform"
+title = "Below the executive"
+
+[[band]]
+id = "host"
+title = "Host tools"
+
+[[milestone]]
+id = "m0"
+title = "Milestone 0: one user at the console"
+summary = "seL4 boots the PAL, the executive runs processes, DCL, Files-11 and RMS, EDT, TCP/IP and SET HOST"
+refs = ["docs/prd/0002-networking.md"]
+
+[[milestone]]
+id = "m1"
+title = "Milestone 1: a multi-user VMS you log in to"
+summary = "Users, UICs and privileges, file protection, quotas, a lock manager, batch"
+refs = ["docs/prd/0003-multi-user-vms.md"]
