@@ -309,6 +309,12 @@ a.node:hover { text-decoration: none; border-color: var(--ink); }
 .choose h2 { font-size: 18px; margin: 26px 0 6px; }
 .choose h3 { font-size: 15px; margin: 18px 0 2px; color: var(--muted); }
 .choose h4 { font-size: 13.5px; margin: 12px 0 2px; }
+.choose-filter { position: sticky; top: env(safe-area-inset-top, 0px); z-index: 5; background: var(--bg); padding-block: 10px 8px; display: flex; flex-wrap: wrap; align-items: center; gap: 6px 14px; border-bottom: 1px solid var(--line); }
+.choose-filter input[type="search"] { flex: 1 1 260px; min-width: 0; font: inherit; font-size: 16px; padding: 8px 10px; border: 1px solid var(--line-strong); border-radius: 3px; background: var(--surface); color: var(--ink); }
+.choose-filter input[type="search"]:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.choose-filter .count { color: var(--muted); font-size: 13px; font-variant-numeric: tabular-nums; flex: 1 1 100%; }
+.choose details.how { margin-top: 10px; }
+.choose details.how summary { cursor: pointer; color: var(--muted); font-size: 13.5px; }
 .asp { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 2px 12px; padding: 7px 0; border-top: 1px solid var(--line); font-size: 13.5px; }
 .asp .an { overflow-wrap: anywhere; }
 .asp .an a { font-weight: 600; }
@@ -662,7 +668,7 @@ function setChosen(label, on) {
 /* ---------- Location hash ---------- */
 
 const VIEWS = ["map", "focus", "roadmap", "choose"];
-const state = { view: "map", focus: "", show: "aspirations", milestone: "", area: "", alsoWanted: false };
+const state = { view: "map", focus: "", show: "aspirations", milestone: "", area: "", alsoWanted: false, chooseQuery: "", onlyChosen: false };
 let trail = [];
 let lastPlace = "";
 
@@ -1376,12 +1382,32 @@ function renderChoose(root) {
   const asps = COMPS.filter(c => c.intent === "aspiration");
   const alreadyWanted = asps.filter(c => M.wanted.has(c.label) && !chosen.has(c.label));
   const box = h("div", { class: "choose" });
-  add(box, h("div", { class: "intro" },
-    h("p", null, "An aspiration is a piece of OpenVMS that vaxpunk might want some day but hasn't chosen. Each one below says what choosing it would pull in: the components its hard needs reach that aren't wanted today, their features, and their fuzzy needs."),
-    h("p", null, "Tick Preview as chosen to treat it as a goal on this page: the map, the roadmap and the counts change to match. The preview stays in this browser only. Choosing it for real means setting intent = \"goal\" in its file, which turns its fuzzy needs into research debt.")));
-  const also = h("input", { type: "checkbox", checked: state.alsoWanted });
+
+  // The filter comes first and stays at the top while the list scrolls, so
+  // it can be reached on a phone without scrolling back up.
+  const q = h("input", { type: "search", id: "choose-q", placeholder: "Filter aspirations: name, label, area…", autocomplete: "off", spellcheck: "false", value: state.chooseQuery });
+  q.setAttribute("aria-label", "Filter aspirations and research debt");
+  const onlyCb = h("input", { type: "checkbox", id: "choose-only", checked: state.onlyChosen });
+  const count = h("span", { class: "count" });
+  count.setAttribute("aria-live", "polite");
+  add(box, h("div", { class: "choose-filter" }, q,
+    h("label", { class: "preview-toggle", for: "choose-only" }, onlyCb, "Previewed only (" + chosen.size + ")"),
+    count));
+
+  add(box, h("details", { class: "how" },
+    h("summary", null, "What choosing does"),
+    h("div", { class: "intro" },
+      h("p", null, "An aspiration is a piece of OpenVMS that vaxpunk might want some day but hasn't chosen. Each one below says what choosing it would pull in: the components its hard needs reach that aren't wanted today, their features, and their fuzzy needs."),
+      h("p", null, "Tick Preview as chosen to treat it as a goal on this page: the map, the roadmap and the counts change to match. The preview stays in this browser only. Choosing it for real means setting intent = \"goal\" in its file, which turns its fuzzy needs into research debt."))));
+  const also = h("input", { type: "checkbox", id: "choose-also", checked: state.alsoWanted });
   also.addEventListener("change", () => { state.alsoWanted = also.checked; route(true); });
-  add(box, h("label", { class: "preview-toggle" }, also, "Also list the " + plural(alreadyWanted.length, "aspiration") + " that something wanted already needs"));
+  add(box, h("label", { class: "preview-toggle", for: "choose-also" }, also, "Also list the " + plural(alreadyWanted.length, "aspiration") + " that something wanted already needs"));
+
+  // Each row carries the text the filter matches; areas and bands hide
+  // when none of their rows match.
+  const rowsAll = [];
+  const groups = [];
+  const searchText = (c, a) => [c.title, c.label, c.summary, (c.aka || []).join(" "), a.title].join(" ").toLowerCase();
 
   add(box, h("h2", null, "Aspirations"));
   const bandIds = new Set(MAP.bands.map(b => b.id));
@@ -1390,32 +1416,78 @@ function renderChoose(root) {
   let listed = 0;
   for (const b of bands) {
     const areas = MAP.areas.filter(a => b.id === null ? !bandIds.has(a.band) : a.band === b.id);
-    const parts = [];
+    const bandBox = h("div", { class: "choose-band" });
+    const areaBoxes = [];
     for (const a of areas) {
       const rows = asps.filter(c => c.area === a.id && (state.alsoWanted || !M.wanted.has(c.label) || chosen.has(c.label)));
       if (!rows.length) continue;
       listed += rows.length;
-      parts.push(h("h4", null, a.title), rows.map(aspRow));
+      const areaBox = h("div", { class: "choose-area" }, h("h4", null, a.title));
+      const els = rows.map(c => {
+        const el = aspRow(c);
+        el._q = searchText(c, a);
+        el._chosen = chosen.has(c.label);
+        rowsAll.push(el);
+        return el;
+      });
+      add(areaBox, els);
+      areaBoxes.push(areaBox);
+      groups.push({ box: areaBox, rows: els });
     }
-    if (parts.length) add(box, h("h3", null, b.title), parts);
+    if (areaBoxes.length) {
+      add(bandBox, h("h3", null, b.title), areaBoxes);
+      add(box, bandBox);
+      groups.push({ box: bandBox, rows: areaBoxes.flatMap(x => groups.find(g => g.box === x).rows) });
+    }
   }
-  if (!listed) add(box, h("p", { class: "empty" }, "No aspirations to list."));
+  const noAsp = h("p", { class: "empty" }, listed ? "No aspirations match the filter." : "No aspirations to list.");
+  add(box, noAsp);
 
   const debt = COMPS.filter(c => M.debt.has(c.label));
+  const debtRows = [];
   add(box, h("h2", { id: "debt" }, "Research debt (" + debt.length + ")"),
     h("p", null, "Wanted components whose needs aren't known yet: research is deferred, or a need is still fuzzy. Look into them and replace fuzzy needs with labels."));
   for (const a of MAP.areas) {
     const rows = debt.filter(c => c.area === a.id);
     if (!rows.length) continue;
-    add(box, h("h4", null, a.title), rows.map(c => {
+    const areaBox = h("div", { class: "choose-area" }, h("h4", null, a.title));
+    const els = rows.map(c => {
       const fuzzy = c.needs.filter(n => n.fuzzy);
-      return h("div", { class: "debt-row" },
+      const el = h("div", { class: "debt-row" },
         h("div", { class: "an" }, h("a", { href: focusHref(c.label) }, c.title), h("code", null, c.label), " ",
           c.research !== "done" ? chip("research", c.research) : null, " ",
           STUB(c.summary) ? chip(null, "stub", "c-nw") : null),
         fuzzy.length ? h("ul", null, fuzzy.map(n => h("li", null, n.fuzzy, n.why ? h("span", { class: "why" }, n.why) : null))) : null);
-    }));
+      el._q = searchText(c, a) + " " + fuzzy.map(n => n.fuzzy).join(" ").toLowerCase();
+      el._chosen = chosen.has(c.label);
+      debtRows.push(el);
+      return el;
+    });
+    add(areaBox, els);
+    add(box, areaBox);
+    groups.push({ box: areaBox, rows: els });
   }
+  const noDebt = h("p", { class: "empty" }, debt.length ? "No research debt matches the filter." : "No research debt.");
+  add(box, noDebt);
+
+  const apply = () => {
+    const words = state.chooseQuery.toLowerCase().split(/\s+/).filter(Boolean);
+    const show = el => (!state.onlyChosen || el._chosen) && words.every(w => el._q.includes(w));
+    for (const el of rowsAll.concat(debtRows)) el.hidden = !show(el);
+    for (const g of groups) g.box.hidden = !g.rows.some(r => !r.hidden);
+    const nA = rowsAll.filter(r => !r.hidden).length;
+    const nD = debtRows.filter(r => !r.hidden).length;
+    noAsp.hidden = nA > 0;
+    noDebt.hidden = nD > 0;
+    const filtering = words.length || state.onlyChosen;
+    count.textContent = filtering
+      ? "Showing " + nA + " of " + plural(rowsAll.length, "aspiration") + ", " + nD + " of " + debtRows.length + " research debt"
+      : plural(rowsAll.length, "aspiration") + ", " + debtRows.length + " research debt";
+  };
+  q.addEventListener("input", () => { state.chooseQuery = q.value; apply(); });
+  q.addEventListener("keydown", e => { if (e.key === "Escape") { q.value = ""; state.chooseQuery = ""; apply(); } });
+  onlyCb.addEventListener("change", () => { state.onlyChosen = onlyCb.checked; apply(); });
+  apply();
   add(root, box);
 }
 

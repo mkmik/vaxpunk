@@ -112,7 +112,9 @@ lives in the URL after `#`, so back, forward and links work:
   when there is m1 work) and by area; columns count blockers outside the
   filter too, and blockers that are ready now are marked.
 - **Choose**: the aspirations nothing wanted needs, by band and area,
-  each with what choosing it would pull in: the components its hard needs
+  under a filter that stays at the top while the list scrolls (words match
+  the title, label, summary, other names and area; "Previewed only" keeps
+  the previewed ones), each with what choosing it would pull in: the components its hard needs
   reach that aren't wanted today (through features that aren't dropped),
   and how many features, fuzzy needs and unresearched components those
   hold. "Preview as chosen" treats an aspiration as a goal on this page
