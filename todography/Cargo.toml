@@ -1,12 +1,12 @@
 [package]
-name = "vmap"
-description = "Checks and queries the map of components in map/: cargo run -p vmap -- lint"
+name = "todography"
+description = "Checks and queries the map of components in map/: cargo run -p todography -- lint"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 
 [[bin]]
-name = "vmap"
+name = "todography"
 path = "src/main.rs"
 
 [lib]

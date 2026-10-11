@@ -1,4 +1,4 @@
-//! The map as JSON, for `vmap json` and the page `vmap build` writes. The
+//! The map as JSON, for `todography json` and the page `todography build` writes. The
 //! page reads exactly these fields, so change them together with it.
 
 use crate::map::{Diag, FeatureStatus, Map, Status};

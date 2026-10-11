@@ -1,11 +1,11 @@
 +++
-title = "vmap (this map)"
+title = "todography (this map)"
 summary = "Checks the map's files, answers questions about them, and draws the map page"
-aka = ["vmap", "cargo run -p vmap", "map/", "MAP.toml", "out/map/index.html"]
+aka = ["todography", "cargo run -p todography", "map/", "MAP.toml", "out/map/index.html"]
 kind = "tool"
 intent = "goal"
 research = "done"
-refs = ["vmap/README.md", "map/README.md", "vmap/src", "vmap/assets/map.html"]
+refs = ["todography/README.md", "map/README.md", "todography/src", "todography/assets/map.html"]
 
 [[feature]]
 id = "lint"
@@ -30,7 +30,7 @@ note = "map/: the areas being written"
 
 [[feature]]
 id = "ci"
-title = "CI runs vmap lint on every PR"
+title = "CI runs todography lint on every PR"
 status = "todo"
 note = "map/README.md says CI runs it; no workflow does yet"
 
@@ -39,7 +39,7 @@ note = "map/README.md says CI runs it; no workflow does yet"
 Not a VMS piece: vaxpunk's map of itself and of a whole OpenVMS. Each
 component is a Markdown file under `map/` with TOML front matter: what
 it is, why it is on the map (goal, induced or aspiration), its features
-and their status, and what it needs. `vmap` checks every label, works
+and their status, and what it needs. `todography` checks every label, works
 out what is wanted, ready and blocked, and writes one page with the map,
 a focus view per component, a roadmap and a page for choosing
 aspirations. Coding sessions edit the map next to the code they change.

@@ -1,5 +1,5 @@
 //! Checks and queries the map of components in map/. See map/README.md for
-//! the format and vmap/README.md for the commands.
+//! the format and todography/README.md for the commands.
 
 pub mod compute;
 pub mod json;

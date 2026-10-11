@@ -3,15 +3,15 @@
 The map says what vaxpunk is made of, what a whole OpenVMS is made of, how
 the pieces depend on each other, and how far along each one is. It is data:
 one Markdown file per component, which coding sessions edit next to the
-code they change. `vmap` (in [vmap/](../vmap/)) checks it and draws it.
+code they change. `todography` (in [todography/](../todography/)) checks it and draws it.
 
 ```sh
-cargo run -p vmap -- lint            # check every label; CI runs this
-cargo run -p vmap -- build           # write out/map/index.html, the interactive map
-cargo run -p vmap -- show //exec/mailboxes      # one component, its needs and who needs it
-cargo run -p vmap -- why //rtl/crtl  # the chain from a component up to the goals that pull it in
-cargo run -p vmap -- next            # the work whose dependencies are done
-cargo run -p vmap -- debt            # wanted components whose dependencies aren't researched yet
+cargo run -p todography -- lint            # check every label; CI runs this
+cargo run -p todography -- build           # write out/map/index.html, the interactive map
+cargo run -p todography -- show //exec/mailboxes      # one component, its needs and who needs it
+cargo run -p todography -- why //rtl/crtl  # the chain from a component up to the goals that pull it in
+cargo run -p todography -- next            # the work whose dependencies are done
+cargo run -p todography -- debt            # wanted components whose dependencies aren't researched yet
 ```
 
 ## Files
@@ -92,7 +92,7 @@ a feature's `needs` (a list of labels) both count.
   induced pieces only it needs, are not wanted: the map dims them and
   hides their detail until you choose them.
 - **Why**: an induced component exists for the wanted components that
-  need it; `vmap why` and the map show the chain up to the goals.
+  need it; `todography why` and the map show the chain up to the goals.
 - **Ready** and **blocked**: unfinished work whose hard dependencies are
   met is ready; the rest is blocked, and the map says by what. A need on a
   feature is met when the feature is done. A need on a whole component is
@@ -112,4 +112,4 @@ a feature's `needs` (a list of labels) both count.
   were working.
 - A new piece appears because something needed it: add a component with
   `intent = "induced"`, and the `needs` that pulled it in.
-- `cargo run -p vmap -- lint` before you commit.
+- `cargo run -p todography -- lint` before you commit.

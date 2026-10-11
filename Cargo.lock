@@ -794,6 +794,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9e1c906769ad99c88eaa54e728060edef082f8e358ff32030cb7c7d315e81109"
 
 [[package]]
+name = "todography"
+version = "0.1.0"
+dependencies = [
+ "pulldown-cmark",
+ "serde",
+ "serde_json",
+ "toml",
+]
+
+[[package]]
 name = "toml"
 version = "1.1.8+spec-1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -942,16 +952,6 @@ name = "vmacro"
 version = "0.1.0"
 dependencies = [
  "vasm",
-]
-
-[[package]]
-name = "vmap"
-version = "0.1.0"
-dependencies = [
- "pulldown-cmark",
- "serde",
- "serde_json",
- "toml",
 ]
 
 [[package]]

@@ -1,11 +1,11 @@
-//! Checks vmap against the small map in tests/fixtures/map. Its mistakes
+//! Checks todography against the small map in tests/fixtures/map. Its mistakes
 //! are on purpose: each one should come out as one lint line.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use vmap::Map;
-use vmap::map::{Comp, Need, Status, Work};
-use vmap::{json, query};
+use todography::Map;
+use todography::map::{Comp, Need, Status, Work};
+use todography::{json, query};
 
 fn dir() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/map")
@@ -451,8 +451,8 @@ fn page() {
     assert!(html.contains("<\\/script>"));
 }
 
-fn vmap(args: &[&str]) -> (i32, String) {
-    let out = Command::new(env!("CARGO_BIN_EXE_vmap"))
+fn todography(args: &[&str]) -> (i32, String) {
+    let out = Command::new(env!("CARGO_BIN_EXE_todography"))
         .args(["--map", dir().to_str().unwrap()])
         .args(args)
         .output()
@@ -465,35 +465,35 @@ fn vmap(args: &[&str]) -> (i32, String) {
 
 #[test]
 fn cli() {
-    let (code, out) = vmap(&["lint"]);
+    let (code, out) = todography(&["lint"]);
     assert_eq!(code, 1);
     assert!(out.starts_with("map/apps/game.md: error: unresolved label //lib/regx"));
     assert!(out.ends_with("20 errors, 7 warnings, 18 components, research debt: 2\n"));
 
-    let (code, out) = vmap(&["show", "//exec/timers"]);
+    let (code, out) = todography(&["show", "//exec/timers"]);
     assert_eq!(code, 0);
     assert!(out.starts_with("//exec/timers  Timers\n"));
     assert!(out.contains("needed by:\n  //apps/mail -> :abs  Sends at a set time\n"));
     assert!(out.contains("why:\n  //apps/mail -> //exec/timers\n"));
 
-    let (_, out) = vmap(&["why", "lib/regex"]);
+    let (_, out) = todography(&["why", "lib/regex"]);
     assert_eq!(out, "//lib/regex  Regex\n  //apps/editor -> //lib/regex\n");
 
-    let (_, out) = vmap(&["rdeps", "--all", "//platform/sel4"]);
+    let (_, out) = todography(&["rdeps", "--all", "//platform/sel4"]);
     assert!(out.starts_with("//exec/qio -> //platform/sel4\n"));
     assert!(out.contains("  //exec/timers -> //exec/qio\n"));
 
-    let (_, out) = vmap(&["next"]);
+    let (_, out) = todography(&["next"]);
     assert!(out.starts_with("m0: Milestone 0\n  //apps/editor:undo"));
     assert!(out.ends_with("4 ready\n"));
 
-    let (_, out) = vmap(&["debt"]);
+    let (_, out) = todography(&["debt"]);
     assert!(out.contains(
         "//apps/editor  research done\n    fuzzy: a terminal driver  (Draws the screen)\n"
     ));
 
-    let (code, _) = vmap(&["show", "//no/such"]);
+    let (code, _) = todography(&["show", "//no/such"]);
     assert_eq!(code, 2);
-    let (code, _) = vmap(&["frobnicate"]);
+    let (code, _) = todography(&["frobnicate"]);
     assert_eq!(code, 2);
 }

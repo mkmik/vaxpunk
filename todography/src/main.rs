@@ -1,15 +1,15 @@
-//! vmap: checks and queries the map of components in map/.
+//! todography: checks and queries the map of components in map/.
 //!
-//!     cargo run -p vmap -- lint
-//!     cargo run -p vmap -- show //exec/mailboxes
+//!     cargo run -p todography -- lint
+//!     cargo run -p todography -- show //exec/mailboxes
 
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
-use vmap::{Map, json, query};
+use todography::{Map, json, query};
 
 const USAGE: &str = "\
-usage: vmap [--map DIR] COMMAND
+usage: todography [--map DIR] COMMAND
 
 commands:
   lint [--strict]                 check the map; exit 1 on errors (--strict: on warnings too)
@@ -21,7 +21,7 @@ commands:
   json                            the map as JSON
   build [--out PATH]              write the interactive map (default out/map/index.html)
 
---map DIR is the map directory or the one above it; without it vmap looks
+--map DIR is the map directory or the one above it; without it todography looks
 for map/MAP.toml here and in every directory above.
 ";
 
@@ -117,7 +117,7 @@ fn run() -> Result<ExitCode, String> {
         "next" => check_flags(&a, &["--all", "--milestone"], 0)?,
         "debt" | "json" => check_flags(&a, &[], 0)?,
         "build" => check_flags(&a, &["--out"], 0)?,
-        c => return Err(format!("unknown command {c}; try vmap help")),
+        c => return Err(format!("unknown command {c}; try todography help")),
     }
     let dir = Map::find(a.map.as_deref())?;
     let map = Map::load(&dir);
@@ -127,7 +127,7 @@ fn run() -> Result<ExitCode, String> {
         && !map.lint.errors.is_empty()
     {
         eprintln!(
-            "vmap: the map has {} lint errors; see vmap lint",
+            "todography: the map has {} lint errors; see todography lint",
             map.lint.errors.len()
         );
     }
@@ -185,7 +185,7 @@ fn main() -> ExitCode {
     match run() {
         Ok(code) => code,
         Err(e) => {
-            eprintln!("vmap: {e}");
+            eprintln!("todography: {e}");
             ExitCode::from(2)
         }
     }

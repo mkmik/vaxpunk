@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>vaxpunk map</title>
+<title>vaxpunk todography</title>
 <style>
 :root {
   color-scheme: light;
@@ -355,7 +355,7 @@ a.node:hover { text-decoration: none; border-color: var(--ink); }
 <body>
 <header class="top">
   <div class="wrap top-row">
-    <a class="brand" href="#view=map"><span class="mark" id="brand-title">map</span><span class="sub">map of components</span></a>
+    <a class="brand" href="#view=map"><span class="mark" id="brand-title">map</span><span class="sub">todography</span></a>
     <div class="search">
       <input id="q" type="search" placeholder="Search components" autocomplete="off" spellcheck="false" aria-label="Search components" aria-controls="results">
       <ul id="results" class="results" role="listbox" hidden></ul>
@@ -480,7 +480,7 @@ const BASE_WANTED = new Set(COMPS.filter(c => c.wanted).map(c => c.label));
 
 /* ---------- What the page works out (so a preview can change it) ---------- */
 
-const PREVIEW_KEY = "vmap.preview";
+const PREVIEW_KEY = "todography.preview";
 let chosen = new Set((store.get(PREVIEW_KEY, []) || []).filter(l => C.has(l) && C.get(l).intent === "aspiration"));
 let M = null;
 
@@ -765,7 +765,7 @@ function renderLint() {
     h("ul", null, items.map(d => h("li", null, fileLink(d.file), d.msg))),
   ] : null;
   fill($("#lint-panel"), 
-    h("p", { class: "empty", style: { marginTop: "10px" } }, "What vmap lint says about the map files. Run cargo run -p vmap -- lint to check again."),
+    h("p", { class: "empty", style: { marginTop: "10px" } }, "What todography lint says about the map files. Run cargo run -p todography -- lint to check again."),
     list("Errors", errors), list("Warnings", warnings));
   box.addEventListener("click", e => { if (e.target.closest("a")) box.open = false; });
 }
@@ -1262,7 +1262,7 @@ function whySection(c) {
   }
   const paths = whyPaths(c.label);
   return [
-    c.intent === "aspiration" ? h("p", { class: "state" }, "An aspiration, but something wanted needs it, so it is wanted. vmap lint suggests making it induced or a goal.") : null,
+    c.intent === "aspiration" ? h("p", { class: "state" }, "An aspiration, but something wanted needs it, so it is wanted. todography lint suggests making it induced or a goal.") : null,
     paths.length
       ? h("ul", { class: "chains" }, paths.map(p => h("li", null, p.map((l, i) => i === p.length - 1
           ? h("b", null, C.get(l).title)
@@ -1548,10 +1548,10 @@ function setupTheme() {
     if (v === "light" || v === "dark") document.documentElement.setAttribute("data-theme", v);
     else document.documentElement.removeAttribute("data-theme");
   };
-  const saved = store.get("vmap.theme", "");
+  const saved = store.get("todography.theme", "");
   sel.value = saved || "";
   apply(saved);
-  sel.addEventListener("change", () => { store.set("vmap.theme", sel.value); apply(sel.value); });
+  sel.addEventListener("change", () => { store.set("todography.theme", sel.value); apply(sel.value); });
 }
 
 let resizeTimer = 0;
@@ -1566,7 +1566,7 @@ window.addEventListener("hashchange", () => route());
 
 document.title = MAP.title + " map";
 $("#brand-title").textContent = MAP.title;
-$("#foot-gen").textContent = "Made by vmap from map/ on " + fmtTime(MAP.generated) + ".";
+$("#foot-gen").textContent = "Made by todography from map/ on " + fmtTime(MAP.generated) + ".";
 derive();
 setupTheme();
 setupSearch();

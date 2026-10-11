@@ -1,23 +1,23 @@
-# vmap
+# todography
 
-`vmap` checks and queries the map in [map/](../map/): one Markdown file per
+`todography` checks and queries the map in [map/](../map/): one Markdown file per
 component, with TOML front matter. [map/README.md](../map/README.md) says
 what goes in a file. This page says what the tool does with it.
 
 ```sh
-cargo run -p vmap -- lint                    # check the map; exit 1 on errors
-cargo run -p vmap -- lint --strict           # exit 1 on warnings too
-cargo run -p vmap -- show //exec/mailboxes   # one component or feature
-cargo run -p vmap -- why //rtl/crtl          # the chains from the goals down to it
-cargo run -p vmap -- rdeps --all //exec/qio  # what needs it, and what needs those
-cargo run -p vmap -- next                    # wanted work whose hard needs are met
-cargo run -p vmap -- next --all --milestone m1   # and the blocked work, with its blockers
-cargo run -p vmap -- debt                    # wanted components not researched yet
-cargo run -p vmap -- json                    # everything, as JSON
-cargo run -p vmap -- build                   # write out/map/index.html
+cargo run -p todography -- lint                    # check the map; exit 1 on errors
+cargo run -p todography -- lint --strict           # exit 1 on warnings too
+cargo run -p todography -- show //exec/mailboxes   # one component or feature
+cargo run -p todography -- why //rtl/crtl          # the chains from the goals down to it
+cargo run -p todography -- rdeps --all //exec/qio  # what needs it, and what needs those
+cargo run -p todography -- next                    # wanted work whose hard needs are met
+cargo run -p todography -- next --all --milestone m1   # and the blocked work, with its blockers
+cargo run -p todography -- debt                    # wanted components not researched yet
+cargo run -p todography -- json                    # everything, as JSON
+cargo run -p todography -- build                   # write out/map/index.html
 ```
 
-vmap finds the map by looking for `map/MAP.toml` in the current directory
+todography finds the map by looking for `map/MAP.toml` in the current directory
 and the ones above it. `--map DIR` points it somewhere else. `build` writes
 under the directory that holds `map/` unless `--out PATH` says otherwise.
 A label on the command line may leave out the leading `//`.
@@ -58,13 +58,13 @@ feature that needs another feature of its own component is fine.
 
 ## The page
 
-`build` puts the JSON from `vmap json` into
+`build` puts the JSON from `todography json` into
 [assets/map.html](assets/map.html) in place of the text `__MAP_DATA__`,
 which sits in the page's script as `const MAP = __MAP_DATA__;`. It writes
 the page even when lint finds errors; they are in the data, under `lint`.
 The page reads exactly the fields `json` writes, so change
 [src/json.rs](src/json.rs) and the page together. The template is built
-into the binary with `include_str!`, so rebuild vmap after editing it.
+into the binary with `include_str!`, so rebuild todography after editing it.
 
 `generated` is the time of the run, or `SOURCE_DATE_EPOCH` if it is set.
 
@@ -127,6 +127,6 @@ lives in the URL after `#`, so back, forward and links work:
 
 ## Tests
 
-`cargo test -p vmap` runs vmap on the small map in
+`cargo test -p todography` runs todography on the small map in
 [tests/fixtures/map](tests/fixtures/map). Its mistakes are on purpose:
 each should come out as one lint line.

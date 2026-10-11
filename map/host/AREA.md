@@ -15,7 +15,7 @@ transliterated to ARM64. `velf` and a stock cross gcc carry the C that the
 C run-time library and SSL3 need. `ods` reads and writes Files-11 disk
 images. `vms/build.rs` uses them all to build the system disk, the `boot`
 crate boots it in QEMU and tests it, and OpenVMS Alpha in AXPbox is the
-oracle the tools are checked against. `apidoc`, `vmap` and the browser
+oracle the tools are checked against. `apidoc`, `todography` and the browser
 demo show the project to people.
 
 The long-term goal is a native, self-hosted toolchain: BLISS-64 compiling
