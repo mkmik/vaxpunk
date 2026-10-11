@@ -8,15 +8,15 @@ status = "partial"
 milestone = "m0"
 
 [[needs]]
-on = "//exec/timers"
+on = "/exec/timers"
 why = "I/O timeouts"
 
 [[needs]]
-on = "//platform/sel4"
+on = "/platform/sel4"
 why = "Runs on it"
 
 [[needs]]
-on = "//lib/gfx"
+on = "/lib/gfx"
 soft = true
 why = "Some day"
 +++

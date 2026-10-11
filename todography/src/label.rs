@@ -1,6 +1,10 @@
-//! Labels, as in Bazel: `//exec/mailboxes` names a component,
-//! `//exec/mailboxes:basic` one of its features, and `:basic` a feature of
-//! the component whose file it is written in.
+//! Labels are URIs with the scheme `t8y`: `t8y:/exec/mailboxes` names a
+//! component and `t8y:/exec/mailboxes#basic` one of its features. Inside a
+//! map file the short forms are relative references (RFC 3986) against the
+//! file's own URI: `/exec/mailboxes`, `/exec/mailboxes#basic`, and `#basic`
+//! for a feature of the component whose file it is. Relative paths such as
+//! `qio` or `../net/ssl` are legal URIs but not accepted: they change meaning
+//! when a file moves.
 
 use std::fmt;
 
@@ -25,18 +29,28 @@ impl Label {
     /// Parses `text` as written in the file of the component at `here`.
     /// Pass an empty `here` where `:feature` has nothing to be relative to.
     pub fn parse(text: &str, here: &str) -> Result<Label, String> {
-        let (path, feature) = if let Some(rest) = text.strip_prefix("//") {
-            match rest.split_once(':') {
-                Some((p, f)) => (p, Some(f)),
-                None => (rest, None),
-            }
-        } else if let Some(f) = text.strip_prefix(':') {
-            if here.is_empty() {
-                return Err(format!("bad label \"{text}\": here it must start with //"));
+        if text.starts_with("//") {
+            return Err(format!(
+                "bad label \"{text}\": labels are t8y:/area/component#feature now, or /area/component#feature and #feature in a map file"
+            ));
+        }
+        let rest = text.strip_prefix("t8y:").unwrap_or(text);
+        let (path, feature) = if let Some(f) = rest.strip_prefix('#') {
+            if here.is_empty() || rest.len() != text.len() {
+                return Err(format!(
+                    "bad label \"{text}\": here it must start with t8y:/ or /"
+                ));
             }
             (here, Some(f))
+        } else if let Some(p) = rest.strip_prefix('/') {
+            match p.split_once('#') {
+                Some((p, f)) => (p, Some(f)),
+                None => (p, None),
+            }
         } else {
-            return Err(format!("bad label \"{text}\": a label starts with // or :"));
+            return Err(format!(
+                "bad label \"{text}\": a label is t8y:/area/component, /area/component or #feature"
+            ));
         };
         if path.is_empty() || !path.split('/').all(is_slug) {
             return Err(format!(
@@ -59,9 +73,9 @@ impl Label {
 
 impl fmt::Display for Label {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "//{}", self.path)?;
+        write!(f, "t8y:/{}", self.path)?;
         if let Some(feat) = &self.feature {
-            write!(f, ":{feat}")?;
+            write!(f, "#{feat}")?;
         }
         Ok(())
     }
@@ -84,19 +98,23 @@ mod tests {
 
     #[test]
     fn parse() {
-        let l = Label::parse("//exec/mailboxes", "x/y").unwrap();
+        let l = Label::parse("t8y:/exec/mailboxes", "x/y").unwrap();
         assert_eq!(l.path, "exec/mailboxes");
         assert_eq!(l.feature, None);
-        let l = Label::parse("//exec/mailboxes:basic", "x/y").unwrap();
+        let l = Label::parse("/exec/mailboxes#basic", "x/y").unwrap();
         assert_eq!(l.feature.as_deref(), Some("basic"));
-        assert_eq!(l.to_string(), "//exec/mailboxes:basic");
-        let l = Label::parse(":basic", "exec/mailboxes").unwrap();
-        assert_eq!(l.to_string(), "//exec/mailboxes:basic");
-        assert!(Label::parse(":basic", "").is_err());
+        assert_eq!(l.to_string(), "t8y:/exec/mailboxes#basic");
+        let l = Label::parse("#basic", "exec/mailboxes").unwrap();
+        assert_eq!(l.to_string(), "t8y:/exec/mailboxes#basic");
+        assert_eq!(Label::parse("t8y:/exec/mailboxes#basic", "").unwrap().to_string(), "t8y:/exec/mailboxes#basic");
+        assert!(Label::parse("#basic", "").is_err());
+        assert!(Label::parse("t8y:#basic", "exec/mailboxes").is_err());
         assert!(Label::parse("exec/mailboxes", "x").is_err());
-        assert!(Label::parse("//exec/Mailboxes", "x").is_err());
-        assert!(Label::parse("//exec//mailboxes", "x").is_err());
-        assert!(Label::parse("//exec/mailboxes:", "x").is_err());
-        assert!(Label::parse("//", "x").is_err());
+        assert!(Label::parse("../net/ssl", "x").is_err());
+        assert!(Label::parse("//exec/mailboxes", "x").is_err());
+        assert!(Label::parse("/exec/Mailboxes", "x").is_err());
+        assert!(Label::parse("/exec//mailboxes", "x").is_err());
+        assert!(Label::parse("/exec/mailboxes#", "x").is_err());
+        assert!(Label::parse("/", "x").is_err());
     }
 }

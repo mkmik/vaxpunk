@@ -5,14 +5,11 @@ use crate::map::{Comp, Map, Need, Work};
 use std::collections::VecDeque;
 use std::fmt::Write;
 
-/// Finds a component or feature named on the command line. The leading
-/// `//` may be left out.
+/// Finds a component or feature named on the command line: `t8y:/exec/qio`,
+/// `/exec/qio` or plain `exec/qio`, each with an optional `#feature`.
 pub fn lookup(map: &Map, text: &str) -> Result<(usize, Option<String>), String> {
-    let full = if text.starts_with("//") {
-        text.to_string()
-    } else {
-        format!("//{text}")
-    };
+    let rest = text.strip_prefix("t8y:").unwrap_or(text);
+    let full = format!("t8y:/{}", rest.trim_start_matches('/'));
     let label = Label::parse(&full, "")?;
     let &i = map.by_path.get(&label.path).ok_or_else(|| {
         format!(
@@ -26,7 +23,7 @@ pub fn lookup(map: &Map, text: &str) -> Result<(usize, Option<String>), String> 
     if let Some(f) = &label.feature
         && map.comps[i].feature(f).is_none()
     {
-        return Err(format!("{} has no feature :{f}", map.comps[i].label()));
+        return Err(format!("{} has no feature #{f}", map.comps[i].label()));
     }
     Ok((i, label.feature))
 }
@@ -133,7 +130,7 @@ pub fn show(map: &Map, i: usize, feature: Option<&str>) -> String {
             let from = n
                 .from_feature
                 .as_ref()
-                .map(|f| format!(":{f} -> "))
+                .map(|f| format!("#{f} -> "))
                 .unwrap_or_default();
             let _ = writeln!(o, "  {from}{}", need_line(n));
         }
@@ -151,10 +148,10 @@ pub fn show(map: &Map, i: usize, feature: Option<&str>) -> String {
         for e in by {
             let mut line = map.comps[e.from].label();
             if let Some(f) = &e.from_feature {
-                let _ = write!(line, ":{f}");
+                let _ = write!(line, "#{f}");
             }
             if let Some(f) = &e.on_feature {
-                let _ = write!(line, " -> :{f}");
+                let _ = write!(line, " -> #{f}");
             }
             if e.soft {
                 line.push_str("  [soft]");
@@ -230,11 +227,11 @@ pub fn rdeps(map: &Map, i: usize, feature: Option<&str>, all: bool) -> String {
                 indent = depth * 2
             );
             if let Some(f) = &e.from_feature {
-                let _ = write!(line, ":{f}");
+                let _ = write!(line, "#{f}");
             }
             let _ = write!(line, " -> {}", map.comps[t].label());
             if let Some(f) = &e.on_feature {
-                let _ = write!(line, ":{f}");
+                let _ = write!(line, "#{f}");
             }
             if e.soft {
                 line.push_str("  [soft]");

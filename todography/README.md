@@ -1,15 +1,15 @@
 # todography
 
-`todography` checks and queries the map in [map/](../map/): one Markdown file per
-component, with TOML front matter. [map/README.md](../map/README.md) says
+`todography` checks and queries the map in [docs/map/](../docs/map/): one Markdown file per
+component, with TOML front matter. [docs/map/README.md](../docs/map/README.md) says
 what goes in a file. This page says what the tool does with it.
 
 ```sh
 cargo run -p todography -- lint                    # check the map; exit 1 on errors
 cargo run -p todography -- lint --strict           # exit 1 on warnings too
-cargo run -p todography -- show //exec/mailboxes   # one component or feature
-cargo run -p todography -- why //rtl/crtl          # the chains from the goals down to it
-cargo run -p todography -- rdeps --all //exec/qio  # what needs it, and what needs those
+cargo run -p todography -- show exec/mailboxes     # one component or feature
+cargo run -p todography -- why rtl/crtl            # the chains from the goals down to it
+cargo run -p todography -- rdeps --all exec/qio    # what needs it, and what needs those
 cargo run -p todography -- next                    # wanted work whose hard needs are met
 cargo run -p todography -- next --all --milestone m1   # and the blocked work, with its blockers
 cargo run -p todography -- debt                    # wanted components not researched yet
@@ -17,10 +17,12 @@ cargo run -p todography -- json                    # everything, as JSON
 cargo run -p todography -- build                   # write out/map/index.html
 ```
 
-todography finds the map by looking for `map/MAP.toml` in the current directory
-and the ones above it. `--map DIR` points it somewhere else. `build` writes
-under the directory that holds `map/` unless `--out PATH` says otherwise.
-A label on the command line may leave out the leading `//`.
+todography finds the map by looking, in the current directory and the ones
+above it, for `MAP.toml` (inside the map) or `docs/map/MAP.toml` (at the
+workspace root). `--map DIR` points it somewhere else. `build` writes under
+the workspace root, the directory above `docs/`, unless `--out PATH` says
+otherwise. A label on the command line may be `t8y:/exec/qio`, `/exec/qio`
+or just `exec/qio`, with `#feature` after it.
 
 ## What it works out
 
@@ -75,7 +77,7 @@ partial, work ready now), a search box (title, aka, label, summary; `/`
 focuses it) that opens a component in Focus, and a badge with the lint
 errors and warnings when there are any. Four tabs switch views. The view
 lives in the URL after `#`, so back, forward and links work:
-`#view=map&show=all`, `#focus=//exec/mailboxes`, `#focus=//rtl/crtl:stdio`,
+`#view=map&show=all`, `#focus=t8y:/exec/mailboxes`, `#focus=t8y:/rtl/crtl%23stdio`,
 `#view=roadmap&milestone=m0&area=net`, `#view=choose`.
 
 - **Map**: the bands top to bottom, each band's areas as boxes, each

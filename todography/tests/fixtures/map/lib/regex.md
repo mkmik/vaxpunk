@@ -15,5 +15,5 @@ milestone = "m0"
 id = "unicode"
 title = "Unicode classes"
 status = "todo"
-needs = [":engine"]
+needs = ["#engine"]
 +++

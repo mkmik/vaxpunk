@@ -65,11 +65,11 @@ fn reads_everything() {
     assert_eq!(e.slug, "editor");
     assert_eq!(e.features.len(), 5);
     assert!(e.body.contains("</script>"));
-    assert_eq!(e.features[2].needs, ["//lib/regex:engine"]);
+    assert_eq!(e.features[2].needs, ["t8y:/lib/regex#engine"]);
     // A relative label comes out absolute.
     assert_eq!(
         comp(&m, "lib/regex").features[1].needs,
-        ["//lib/regex:engine"]
+        ["t8y:/lib/regex#engine"]
     );
 }
 
@@ -93,41 +93,41 @@ fn met_and_blocked() {
     let m = load();
     let e = comp(&m, "apps/editor");
     // A whole component that is partial is usable.
-    assert!(need(e, "//exec/qio").met);
+    assert!(need(e, "t8y:/exec/qio").met);
     // A feature that is only wip isn't done.
-    assert!(!need(e, "//lib/regex:engine").met);
+    assert!(!need(e, "t8y:/lib/regex#engine").met);
     let fuzzy = e.needs.iter().find(|n| n.fuzzy.is_some()).unwrap();
     assert!(!fuzzy.met);
-    assert!(need(comp(&m, "apps/mail"), "//exec/timers:abs").blocks());
+    assert!(need(comp(&m, "apps/mail"), "t8y:/exec/timers#abs").blocks());
 
     // A feature's needs block it, not its siblings.
     assert_eq!(
-        work(&m, "//apps/editor:search").blocked_by,
-        ["//lib/regex:engine"]
+        work(&m, "t8y:/apps/editor#search").blocked_by,
+        ["t8y:/lib/regex#engine"]
     );
-    assert!(!work(&m, "//apps/editor:search").ready);
-    assert!(work(&m, "//apps/editor:undo").ready);
+    assert!(!work(&m, "t8y:/apps/editor#search").ready);
+    assert!(work(&m, "t8y:/apps/editor#undo").ready);
     // A component-level need that is unmet blocks a component's own work.
-    assert_eq!(work(&m, "//apps/mail").blocked_by, ["//exec/timers:abs"]);
+    assert_eq!(work(&m, "t8y:/apps/mail").blocked_by, ["t8y:/exec/timers#abs"]);
     // Fuzzy needs never block.
-    assert!(work(&m, "//apps/editor:undo").blocked_by.is_empty());
+    assert!(work(&m, "t8y:/apps/editor#undo").blocked_by.is_empty());
     // A soft need never blocks: QIO's on gfx, which is todo.
-    assert!(need(comp(&m, "exec/qio"), "//lib/gfx").soft);
-    assert!(work(&m, "//exec/qio").ready);
+    assert!(need(comp(&m, "exec/qio"), "t8y:/lib/gfx").soft);
+    assert!(work(&m, "t8y:/exec/qio").ready);
     // CAD's need on gfx is hard.
-    assert_eq!(work(&m, "//apps/cad").blocked_by, ["//lib/gfx"]);
+    assert_eq!(work(&m, "t8y:/apps/cad").blocked_by, ["t8y:/lib/gfx"]);
     // Done and dropped features aren't work.
     assert!(
         m.work
             .iter()
-            .all(|w| w.label != "//apps/editor:basic" && w.label != "//apps/editor:macros")
+            .all(|w| w.label != "t8y:/apps/editor#basic" && w.label != "t8y:/apps/editor#macros")
     );
     // A component that is done isn't work.
-    assert!(m.work.iter().all(|w| w.label != "//platform/sel4"));
+    assert!(m.work.iter().all(|w| w.label != "t8y:/platform/sel4"));
     // A feature needing a feature of its own component.
     assert_eq!(
-        work(&m, "//lib/regex:unicode").blocked_by,
-        ["//lib/regex:engine"]
+        work(&m, "t8y:/lib/regex#unicode").blocked_by,
+        ["t8y:/lib/regex#engine"]
     );
 }
 
@@ -150,7 +150,7 @@ fn wanted() {
     assert!(!comp(&m, "lib/gfx").wanted);
     assert!(!comp(&m, "lib/unused").wanted);
     // Unwanted work is never ready.
-    assert!(!work(&m, "//lib/unused").ready);
+    assert!(!work(&m, "t8y:/lib/unused").ready);
 }
 
 #[test]
@@ -164,25 +164,25 @@ fn why_paths() {
     };
     assert_eq!(
         labels(comp(&m, "lib/regex")),
-        [["//apps/editor", "//lib/regex"]]
+        [["t8y:/apps/editor", "t8y:/lib/regex"]]
     );
     // Shortest first, from either goal.
     assert_eq!(
         labels(comp(&m, "exec/timers")),
         [
-            vec!["//apps/mail", "//exec/timers"],
-            vec!["//apps/editor", "//exec/qio", "//exec/timers"]
+            vec!["t8y:/apps/mail", "t8y:/exec/timers"],
+            vec!["t8y:/apps/editor", "t8y:/exec/qio", "t8y:/exec/timers"]
         ]
     );
     assert_eq!(
         labels(comp(&m, "platform/sel4")),
         [
-            vec!["//apps/editor", "//exec/qio", "//platform/sel4"],
+            vec!["t8y:/apps/editor", "t8y:/exec/qio", "t8y:/platform/sel4"],
             vec![
-                "//apps/mail",
-                "//exec/timers",
-                "//exec/qio",
-                "//platform/sel4"
+                "t8y:/apps/mail",
+                "t8y:/exec/timers",
+                "t8y:/exec/qio",
+                "t8y:/platform/sel4"
             ],
         ]
     );
@@ -201,7 +201,7 @@ fn debt() {
         .collect();
     // The editor has a fuzzy need, regex is deferred. CAD has a fuzzy need
     // but isn't wanted; gfx is deferred but isn't wanted.
-    assert_eq!(debt, ["//apps/editor", "//lib/regex"]);
+    assert_eq!(debt, ["t8y:/apps/editor", "t8y:/lib/regex"]);
 }
 
 #[test]
@@ -216,14 +216,14 @@ fn needed_by() {
     assert_eq!(
         by,
         [
-            ("//apps/mail".to_string(), Some("abs".to_string())),
-            ("//exec/qio".to_string(), None)
+            ("t8y:/apps/mail".to_string(), Some("abs".to_string())),
+            ("t8y:/exec/qio".to_string(), None)
         ]
     );
     let out = query::rdeps(&m, m.by_path["lib/regex"], Some("engine"), false);
     assert_eq!(
         out,
-        "//apps/editor:search -> //lib/regex:engine\n//lib/regex:unicode -> //lib/regex:engine\n"
+        "t8y:/apps/editor#search -> t8y:/lib/regex#engine\nt8y:/lib/regex#unicode -> t8y:/lib/regex#engine\n"
     );
 }
 
@@ -233,10 +233,10 @@ fn lint_errors() {
     let game = errors(&m, "map/apps/game.md");
     assert_eq!(game.len(), 2);
     assert!(
-        game[0].contains("unresolved label //lib/regx")
-            && game[0].contains("did you mean //lib/regex?")
+        game[0].contains("unresolved label /lib/regx")
+            && game[0].contains("did you mean t8y:/lib/regex?")
     );
-    assert!(game[1].contains("no feature :engin") && game[1].contains("did you mean :engine?"));
+    assert!(game[1].contains("no feature #engin") && game[1].contains("did you mean #engine?"));
 
     assert!(errors(&m, "map/platform/broken.md")[0].contains("unknown field `colour`"));
     assert!(errors(&m, "map/platform/broken.md")[0].starts_with("line 8:"));
@@ -293,11 +293,11 @@ fn lint_warnings() {
     );
     assert!(
         warnings(&m, "map/platform/sel4.md")[0]
-            .contains("an aspiration, but wanted: //exec/qio needs it")
+            .contains("an aspiration, but wanted: t8y:/exec/qio needs it")
     );
     assert_eq!(
         warnings(&m, "map/exec/qio.md"),
-        ["dependency cycle: //exec/qio -> //exec/timers -> //exec/qio"]
+        ["dependency cycle: t8y:/exec/qio -> t8y:/exec/timers -> t8y:/exec/qio"]
     );
     assert_eq!(
         warnings(&m, "map/platform/dupes.md"),
@@ -319,20 +319,20 @@ fn next_order() {
     assert_eq!(
         ready,
         [
-            "//apps/editor:undo",
-            "//lib/regex:engine",
-            "//exec/qio",
-            "//exec/timers:abs"
+            "t8y:/apps/editor#undo",
+            "t8y:/lib/regex#engine",
+            "t8y:/exec/qio",
+            "t8y:/exec/timers#abs"
         ]
     );
     let m1: Vec<_> = query::next_items(&m, true, Some("m1"))
         .iter()
         .map(|w| w.label.clone())
         .collect();
-    assert_eq!(m1, ["//apps/editor:search", "//apps/mail"]);
+    assert_eq!(m1, ["t8y:/apps/editor#search", "t8y:/apps/mail"]);
     let all = query::next_items(&m, true, None);
     assert_eq!(all.len(), 8);
-    assert_eq!(all.last().unwrap().label, "//lib/regex:unicode");
+    assert_eq!(all.last().unwrap().label, "t8y:/lib/regex#unicode");
 }
 
 #[test]
@@ -363,7 +363,7 @@ fn json_contract() {
     let comps = v["components"].as_array().unwrap();
     let e = comps
         .iter()
-        .find(|c| c["label"] == "//apps/editor")
+        .find(|c| c["label"] == "t8y:/apps/editor")
         .unwrap();
     for k in [
         "label",
@@ -394,10 +394,10 @@ fn json_contract() {
     assert_eq!(e["status_explicit"], false);
     assert_eq!(e["milestone"], serde_json::Value::Null);
     assert_eq!(e["progress"], serde_json::json!({"done": 1, "total": 4}));
-    assert_eq!(e["features"][2]["label"], "//apps/editor:search");
+    assert_eq!(e["features"][2]["label"], "t8y:/apps/editor#search");
     assert_eq!(
         e["features"][2]["needs"],
-        serde_json::json!(["//lib/regex:engine"])
+        serde_json::json!(["t8y:/lib/regex#engine"])
     );
     let search = e["needs"]
         .as_array()
@@ -407,32 +407,32 @@ fn json_contract() {
         .unwrap();
     assert_eq!(
         *search,
-        serde_json::json!({"on": "//lib/regex:engine", "fuzzy": null, "why": null, "soft": false,
-            "from_feature": "search", "target": "//lib/regex", "target_feature": "engine", "met": false})
+        serde_json::json!({"on": "t8y:/lib/regex#engine", "fuzzy": null, "why": null, "soft": false,
+            "from_feature": "search", "target": "t8y:/lib/regex", "target_feature": "engine", "met": false})
     );
     let t = comps
         .iter()
-        .find(|c| c["label"] == "//exec/timers")
+        .find(|c| c["label"] == "t8y:/exec/timers")
         .unwrap();
     assert_eq!(
         t["needed_by"][0],
-        serde_json::json!({"from": "//apps/mail", "from_feature": null, "on_feature": "abs",
+        serde_json::json!({"from": "t8y:/apps/mail", "from_feature": null, "on_feature": "abs",
             "why": "Sends at a set time", "soft": false})
     );
     assert_eq!(
         t["why_paths"][0],
-        serde_json::json!(["//apps/mail", "//exec/timers"])
+        serde_json::json!(["t8y:/apps/mail", "t8y:/exec/timers"])
     );
     let w = v["work"]
         .as_array()
         .unwrap()
         .iter()
-        .find(|w| w["label"] == "//apps/mail")
+        .find(|w| w["label"] == "t8y:/apps/mail")
         .unwrap();
     assert_eq!(
         *w,
-        serde_json::json!({"label": "//apps/mail", "component": "//apps/mail", "feature": null, "title": "Mail",
-            "status": "todo", "milestone": "m1", "wanted": true, "ready": false, "blocked_by": ["//exec/timers:abs"]})
+        serde_json::json!({"label": "t8y:/apps/mail", "component": "t8y:/apps/mail", "feature": null, "title": "Mail",
+            "status": "todo", "milestone": "m1", "wanted": true, "ready": false, "blocked_by": ["t8y:/exec/timers#abs"]})
     );
     assert_eq!(v["lint"]["errors"].as_array().unwrap().len(), 20);
     assert!(
@@ -467,32 +467,32 @@ fn todography(args: &[&str]) -> (i32, String) {
 fn cli() {
     let (code, out) = todography(&["lint"]);
     assert_eq!(code, 1);
-    assert!(out.starts_with("map/apps/game.md: error: unresolved label //lib/regx"));
+    assert!(out.starts_with("map/apps/game.md: error: unresolved label /lib/regx"));
     assert!(out.ends_with("20 errors, 7 warnings, 18 components, research debt: 2\n"));
 
-    let (code, out) = todography(&["show", "//exec/timers"]);
+    let (code, out) = todography(&["show", "t8y:/exec/timers"]);
     assert_eq!(code, 0);
-    assert!(out.starts_with("//exec/timers  Timers\n"));
-    assert!(out.contains("needed by:\n  //apps/mail -> :abs  Sends at a set time\n"));
-    assert!(out.contains("why:\n  //apps/mail -> //exec/timers\n"));
+    assert!(out.starts_with("t8y:/exec/timers  Timers\n"));
+    assert!(out.contains("needed by:\n  t8y:/apps/mail -> #abs  Sends at a set time\n"));
+    assert!(out.contains("why:\n  t8y:/apps/mail -> t8y:/exec/timers\n"));
 
     let (_, out) = todography(&["why", "lib/regex"]);
-    assert_eq!(out, "//lib/regex  Regex\n  //apps/editor -> //lib/regex\n");
+    assert_eq!(out, "t8y:/lib/regex  Regex\n  t8y:/apps/editor -> t8y:/lib/regex\n");
 
-    let (_, out) = todography(&["rdeps", "--all", "//platform/sel4"]);
-    assert!(out.starts_with("//exec/qio -> //platform/sel4\n"));
-    assert!(out.contains("  //exec/timers -> //exec/qio\n"));
+    let (_, out) = todography(&["rdeps", "--all", "t8y:/platform/sel4"]);
+    assert!(out.starts_with("t8y:/exec/qio -> t8y:/platform/sel4\n"));
+    assert!(out.contains("  t8y:/exec/timers -> t8y:/exec/qio\n"));
 
     let (_, out) = todography(&["next"]);
-    assert!(out.starts_with("m0: Milestone 0\n  //apps/editor:undo"));
+    assert!(out.starts_with("m0: Milestone 0\n  t8y:/apps/editor#undo"));
     assert!(out.ends_with("4 ready\n"));
 
     let (_, out) = todography(&["debt"]);
     assert!(out.contains(
-        "//apps/editor  research done\n    fuzzy: a terminal driver  (Draws the screen)\n"
+        "t8y:/apps/editor  research done\n    fuzzy: a terminal driver  (Draws the screen)\n"
     ));
 
-    let (code, _) = todography(&["show", "//no/such"]);
+    let (code, _) = todography(&["show", "t8y:/no/such"]);
     assert_eq!(code, 2);
     let (code, _) = todography(&["frobnicate"]);
     assert_eq!(code, 2);

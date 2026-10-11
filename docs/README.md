@@ -17,6 +17,12 @@ not numbered, because the code cites them by path.
 [boot.md](boot.md) walks through the boot sequence in plain words. It is
 kept current, like a design document.
 
+[map/](map/README.md) is the map of components: what vaxpunk and a whole
+OpenVMS are made of, how the pieces depend on each other and how far along
+each one is, one Markdown file per component, labelled `t8y:/area/component`.
+A change that finishes a feature or finds a missing one updates it in the
+same commit; `cargo run -p todography -- lint` checks it.
+
 `api/index.html`, the API reference, is generated from the sources by
 `cargo run -p apidoc`: don't edit it, regenerate it (see AGENTS.md).
 

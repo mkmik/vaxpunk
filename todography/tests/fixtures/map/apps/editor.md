@@ -22,22 +22,22 @@ id = "search"
 title = "Search with regular expressions"
 status = "todo"
 milestone = "m1"
-needs = ["//lib/regex:engine"]
+needs = ["/lib/regex#engine"]
 
 [[feature]]
 id = "spell"
 title = "Spelling"
 status = "todo"
-needs = ["//lib/regex:unicode"]
+needs = ["/lib/regex#unicode"]
 
 [[feature]]
 id = "macros"
 title = "Keyboard macros"
 status = "dropped"
-needs = ["//lib/gfx"]
+needs = ["/lib/gfx"]
 
 [[needs]]
-on = "//exec/qio"
+on = "/exec/qio"
 why = "Reads and writes files"
 
 [[needs]]

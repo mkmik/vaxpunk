@@ -7,6 +7,6 @@ research = "outline"
 milestone = "m1"
 
 [[needs]]
-on = "//exec/timers:abs"
+on = "/exec/timers#abs"
 why = "Sends at a set time"
 +++

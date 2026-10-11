@@ -231,7 +231,7 @@ fn work(map: &mut Map) {
                 }
             }
             let label = match &feature {
-                Some(f) => format!("{}:{f}", c.label()),
+                Some(f) => format!("{}#{f}", c.label()),
                 None => c.label(),
             };
             items.push(Work {

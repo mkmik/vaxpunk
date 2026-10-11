@@ -1,7 +1,7 @@
-//! todography: checks and queries the map of components in map/.
+//! todography: checks and queries the map of components in docs/map/.
 //!
 //!     cargo run -p todography -- lint
-//!     cargo run -p todography -- show //exec/mailboxes
+//!     cargo run -p todography -- show exec/mailboxes
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -21,8 +21,11 @@ commands:
   json                            the map as JSON
   build [--out PATH]              write the interactive map (default out/map/index.html)
 
---map DIR is the map directory or the one above it; without it todography looks
-for map/MAP.toml here and in every directory above.
+LABEL is t8y:/area/component, /area/component or area/component, with an
+optional #feature: exec/mailboxes#attention-asts.
+
+--map DIR is the map directory or the workspace root above docs/map; without it
+todography looks for MAP.toml or docs/map/MAP.toml here and in every directory above.
 ";
 
 struct Args {
@@ -84,7 +87,7 @@ fn check_flags(a: &Args, allowed: &[&str], positional: usize) -> Result<(), Stri
     if a.positional.len() != positional {
         return Err(match positional {
             0 => format!("{} takes no arguments", a.command),
-            _ => format!("{} takes a label, such as //exec/mailboxes", a.command),
+            _ => format!("{} takes a label, such as exec/mailboxes", a.command),
         });
     }
     Ok(())

@@ -459,12 +459,12 @@ for (const c of COMPS) {
 const STATUS_WORD = { done: "done", partial: "partial", wip: "in progress", todo: "to do", dropped: "dropped" };
 const STUB = s => !s || s.trim() === "STUB";
 
-/** "//a/b:c" is component "//a/b", feature "c". */
-function compOf(label) { const i = label.indexOf(":", 2); return i < 0 ? label : label.slice(0, i); }
-function featOf(label) { const i = label.indexOf(":", 2); return i < 0 ? null : label.slice(i + 1); }
+/** "t8y:/a/b#c" is component "t8y:/a/b", feature "c". */
+function compOf(label) { const i = label.indexOf("#"); return i < 0 ? label : label.slice(0, i); }
+function featOf(label) { const i = label.indexOf("#"); return i < 0 ? null : label.slice(i + 1); }
 function normLabel(s) {
   s = String(s || "").trim();
-  return s.startsWith("//") ? s : "//" + s.replace(/^\/+/, "");
+  return "t8y:/" + s.replace(/^t8y:/, "").replace(/^\/+/, "");
 }
 function featureOf(c, id) { return c.features.find(f => f.id === id) || null; }
 /** The needs of a dropped feature pull nothing in and block nothing. */
@@ -754,8 +754,8 @@ function renderLint() {
   if (warnings.length) parts.push(plural(warnings.length, "warning"));
   $("#lint-sum").textContent = parts.join(", ");
   const fileLink = file => {
-    const m = /^map\/(.+)\.md$/.exec(file);
-    const label = m ? "//" + m[1] : null;
+    const m = /^(?:docs\/)?map\/(.+)\.md$/.exec(file);
+    const label = m ? "t8y:/" + m[1] : null;
     return label && C.has(label)
       ? h("a", { class: "lf", href: focusHref(label) }, file)
       : h("span", { class: "lf" }, file);
@@ -788,7 +788,7 @@ function renderPreviewBar() {
 function searchComps(q) {
   q = q.trim().toLowerCase();
   if (!q) return [];
-  const ql = q.startsWith("//") ? q : "//" + q;
+  const ql = normLabel(q);
   const hits = [];
   for (const c of COMPS) {
     const title = c.title.toLowerCase(), label = c.label;
@@ -1011,7 +1011,7 @@ function compLink(label) {
   const c = C.get(compOf(label));
   if (!c) return h("span", { class: "missing" }, label + " (not on the map)");
   const f = featOf(label);
-  return h("a", { href: focusHref(label) }, c.title, f ? [" ", h("code", null, ":" + f)] : null);
+  return h("a", { href: focusHref(label) }, c.title, f ? [" ", h("code", null, "#" + f)] : null);
 }
 
 function pushTrail(label) {
@@ -1110,8 +1110,8 @@ function needNode(c, g) {
     return h("span", { class: "nline" },
       h("span", { class: "nmeta" },
         h("span", { class: "mk " + mark[0] }, mark[1]),
-        n.target_feature ? h("span", null, "on ", h("code", null, ":" + n.target_feature), tf ? " " + tf.title : "") : null,
-        n.from_feature ? h("span", null, "for ", h("code", null, ":" + n.from_feature)) : null),
+        n.target_feature ? h("span", null, "on ", h("code", null, "#" + n.target_feature), tf ? " " + tf.title : "") : null,
+        n.from_feature ? h("span", null, "for ", h("code", null, "#" + n.from_feature)) : null),
       n.why ? h("span", { class: "why" }, n.why) : null);
   });
   return h(t ? "a" : "div", { class: cls.join(" "), href: t ? focusHref(t.label) : null, "data-edge": edge }, head, lines);
@@ -1142,8 +1142,8 @@ function neededByColumn(c) {
         const of = e.on_feature ? featureOf(c, e.on_feature) : null;
         const meta = [
           e.soft ? h("span", { class: "mk soft" }, "soft") : null,
-          e.from_feature ? h("span", null, "its ", h("code", null, ":" + e.from_feature)) : null,
-          e.on_feature ? h("span", null, "needs ", h("code", null, ":" + e.on_feature), of ? " " + of.title : "") : null,
+          e.from_feature ? h("span", null, "its ", h("code", null, "#" + e.from_feature)) : null,
+          e.on_feature ? h("span", null, "needs ", h("code", null, "#" + e.on_feature), of ? " " + of.title : "") : null,
         ].filter(Boolean);
         return h("span", { class: "nline" },
           meta.length ? h("span", { class: "nmeta" }, meta) : null,
@@ -1235,7 +1235,7 @@ function featureRow(c, f) {
   return h("li", { class: "feat s-" + f.status, id: "f-" + f.id },
     statusBox(f.status),
     h("div", { class: "fb" },
-      h("div", { class: "ft" }, h("span", null, f.title), h("code", { class: "fid" }, ":" + f.id),
+      h("div", { class: "ft" }, h("span", null, f.title), h("code", { class: "fid" }, "#" + f.id),
         f.status === "wip" ? chip(null, "in progress", "s-wip") : null, " ",
         f.milestone ? chip(null, f.milestone, null, ms ? ms.title : null) : null),
       f.note ? h("div", { class: "fnote" }, f.note) : null,
@@ -1248,7 +1248,7 @@ function whySection(c) {
   const w = M.wanted.has(c.label);
   if (M.goals.has(c.label)) {
     return h("p", { class: "state" }, chosen.has(c.label)
-      ? "Previewed as a goal. To choose it for real, set intent = \"goal\" in map/" + c.area + "/" + c.slug + ".md."
+      ? "Previewed as a goal. To choose it for real, set intent = \"goal\" in docs/map/" + c.area + "/" + c.slug + ".md."
       : "A goal: wanted for itself.");
   }
   if (!w) {
@@ -1510,7 +1510,7 @@ function aspRow(c) {
       bits.join(", ") + ".";
     detail = h("details", { class: "ap" },
       h("summary", null, text),
-      h("div", null, "File: ", h("code", null, "map/" + c.area + "/" + c.slug + ".md")),
+      h("div", null, "File: ", h("code", null, "docs/map/" + c.area + "/" + c.slug + ".md")),
       p.others.length ? h("ul", null, p.others.map(l => {
         const o = C.get(l);
         return h("li", null, statusBox(o.status), " ", compLink(l), " ", h("code", null, l), o.intent === "induced" ? " (induced)" : "");
@@ -1566,7 +1566,7 @@ window.addEventListener("hashchange", () => route());
 
 document.title = MAP.title + " map";
 $("#brand-title").textContent = MAP.title;
-$("#foot-gen").textContent = "Made by todography from map/ on " + fmtTime(MAP.generated) + ".";
+$("#foot-gen").textContent = "Made by todography from docs/map/ on " + fmtTime(MAP.generated) + ".";
 derive();
 setupTheme();
 setupSearch();

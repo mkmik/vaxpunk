@@ -10,6 +10,6 @@ fuzzy = "Motif's widget set"
 why = "Its windows"
 
 [[needs]]
-on = "//lib/gfx"
+on = "/lib/gfx"
 why = "Draws"
 +++

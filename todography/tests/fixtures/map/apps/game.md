@@ -6,9 +6,9 @@ intent = "aspiration"
 research = "deferred"
 
 [[needs]]
-on = "//lib/regx"
+on = "/lib/regx"
 
 [[needs]]
-on = "//lib/regex:engin"
+on = "/lib/regex#engin"
 soft = true
 +++

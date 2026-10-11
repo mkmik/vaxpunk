@@ -231,7 +231,7 @@ pub struct Comp {
 
 impl Comp {
     pub fn label(&self) -> String {
-        format!("//{}", self.path)
+        format!("t8y:/{}", self.path)
     }
     pub fn feature(&self, id: &str) -> Option<&Feature> {
         self.features.iter().find(|f| f.id == id)
@@ -332,28 +332,37 @@ fn distance(a: &str, b: &str) -> usize {
 }
 
 impl Map {
-    /// Finds the map: `dir` itself or `dir/map` if given, else the first
-    /// `map/MAP.toml` walking up from the current directory.
+    /// Finds the map: `dir` itself or `dir/docs/map` if given, else, walking
+    /// up from the current directory, the first directory that holds
+    /// `MAP.toml` or `docs/map/MAP.toml`.
     pub fn find(dir: Option<&Path>) -> Result<PathBuf, String> {
         if let Some(dir) = dir {
-            if dir.join("MAP.toml").is_file() || !dir.join("map/MAP.toml").is_file() {
+            if dir.join("MAP.toml").is_file() || !dir.join("docs/map/MAP.toml").is_file() {
                 return Ok(dir.to_path_buf());
             }
-            return Ok(dir.join("map"));
+            return Ok(dir.join("docs/map"));
         }
         let cwd = std::env::current_dir().map_err(|e| e.to_string())?;
         for d in cwd.ancestors() {
-            if d.join("map/MAP.toml").is_file() {
-                return Ok(d.join("map"));
+            if d.join("MAP.toml").is_file() {
+                return Ok(d.to_path_buf());
+            }
+            if d.join("docs/map/MAP.toml").is_file() {
+                return Ok(d.join("docs/map"));
             }
         }
-        Err("no map/MAP.toml here or above; pass --map DIR".into())
+        Err("no docs/map/MAP.toml here or above; pass --map DIR".into())
     }
 
     /// Reads the map at `dir` and works out everything the map says.
     pub fn load(dir: &Path) -> Map {
         let dir = fs::canonicalize(dir).unwrap_or_else(|_| dir.to_path_buf());
+        // The workspace root: above docs/ when the map is docs/map, else the
+        // map's own parent.
         let root = match dir.parent() {
+            Some(p) if p.file_name().is_some_and(|n| n == "docs") => {
+                p.parent().unwrap_or(p).to_path_buf()
+            }
             Some(p) if !p.as_os_str().is_empty() => p.to_path_buf(),
             _ => PathBuf::from("."),
         };
@@ -395,8 +404,10 @@ impl Map {
     fn display(&self, rel: &str) -> String {
         let name = self
             .dir
-            .file_name()
-            .and_then(|n| n.to_str())
+            .strip_prefix(&self.root)
+            .ok()
+            .and_then(|p| p.to_str())
+            .filter(|p| !p.is_empty())
             .unwrap_or("map");
         if rel.is_empty() {
             format!("{name}/")
@@ -743,12 +754,12 @@ impl Map {
                 n.on = Some(label.to_string());
                 let Some(&t) = self.by_path.get(&label.path) else {
                     let hint = closest(&label.path, self.comps.iter().map(|c| c.path.as_str()))
-                        .map(|p| format!("; did you mean //{p}?"))
+                        .map(|p| format!("; did you mean t8y:/{p}?"))
                         .unwrap_or_default();
                     self.lint.error(
                         &file,
                         format!(
-                            "unresolved label {text}: no component //{}{hint}",
+                            "unresolved label {text}: no component t8y:/{}{hint}",
                             label.path
                         ),
                     );
@@ -758,12 +769,12 @@ impl Map {
                     let target = &self.comps[t];
                     if !target.broken && target.feature(f).is_none() {
                         let hint = closest(f, target.features.iter().map(|x| x.id.as_str()))
-                            .map(|x| format!("; did you mean :{x}?"))
+                            .map(|x| format!("; did you mean #{x}?"))
                             .unwrap_or_default();
                         self.lint.error(
                             &file,
                             format!(
-                                "unresolved label {text}: //{} has no feature :{f}{hint}",
+                                "unresolved label {text}: t8y:/{} has no feature #{f}{hint}",
                                 label.path
                             ),
                         );

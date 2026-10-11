@@ -17,6 +17,6 @@ status = "todo"
 milestone = "m0"
 
 [[needs]]
-on = "//exec/qio"
+on = "/exec/qio"
 why = "Its requests are QIOs"
 +++

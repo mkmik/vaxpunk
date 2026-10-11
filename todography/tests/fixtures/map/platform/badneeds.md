@@ -12,14 +12,14 @@ status = "todo"
 needs = [":Bad_Id"]
 
 [[needs]]
-on = "//platform/sel4"
+on = "/platform/sel4"
 fuzzy = "and something else"
 
 [[needs]]
 why = "Nothing at all"
 
 [[needs]]
-on = "//platform/badneeds"
+on = "/platform/badneeds"
 
 [[needs]]
 on = "platform/sel4"

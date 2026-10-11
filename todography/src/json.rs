@@ -221,7 +221,7 @@ pub fn to_json(map: &Map) -> String {
                     .iter()
                     .map(|f| Feature {
                         id: &f.id,
-                        label: format!("{}:{}", c.label(), f.id),
+                        label: format!("{}#{}", c.label(), f.id),
                         title: &f.title,
                         status: f.status.as_str(),
                         milestone: f.milestone.as_deref(),
