@@ -72,7 +72,7 @@ impl Vax {
             .envs(env.iter().map(|(k, v)| (k, v)))
             .stdin(Stdio::piped())
             .stdout(Stdio::null())
-            .stderr(Stdio::null())
+            .stderr(fs::File::create(log.with_extension("err")).unwrap())
             .spawn()
             .unwrap();
         let console = qemu.stdin.take().unwrap();
@@ -112,9 +112,10 @@ impl Vax {
             sleep(Duration::from_millis(200));
         }
         panic!(
-            "{}: no {what:?} after {from}:\n{}",
+            "{}: no {what:?} after {from}:\n{}\nQEMU's stderr:\n{}",
             self.log.display(),
-            self.text()
+            self.text(),
+            fs::read_to_string(self.log.with_extension("err")).unwrap_or_default()
         );
     }
 
@@ -306,13 +307,19 @@ fn dns_server() -> u16 {
     port
 }
 
-/// A port nothing listens on, for now.
+/// A port nothing listens on, for now, over TCP or UDP, for QEMU to listen
+/// on. It's below the ephemeral ports (Linux's start at 32768, macOS's at
+/// 49152): binding port 0, as the servers here do between now and QEMU's
+/// start, could get one of those back, and QEMU would exit.
 fn free_port() -> u16 {
-    TcpListener::bind("127.0.0.1:0")
+    use std::hash::{BuildHasher, RandomState};
+    let start = RandomState::new().hash_one(0) as u16 % 12000;
+    (0..12000)
+        .map(|i| 20000 + (start + i) % 12000)
+        .find(|&p| {
+            TcpListener::bind(("127.0.0.1", p)).is_ok() && UdpSocket::bind(("127.0.0.1", p)).is_ok()
+        })
         .unwrap()
-        .local_addr()
-        .unwrap()
-        .port()
 }
 
 /// A data disk with a volume, DATA, for COPY's files, with CA.PEM, the
