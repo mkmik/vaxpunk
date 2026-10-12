@@ -22,6 +22,10 @@ jobs:
         # back, add macos-latest here; the "macOS packages" step is still in place.
         os: [ubuntu-latest]
     runs-on: ${{ matrix.os }}
+    # packages: read lets the Fixtures step pull the private mirror.
+    permissions:
+      contents: read
+      packages: read
     steps:
       - uses: actions/checkout@v4
       - name: Toolchain
@@ -48,6 +52,12 @@ jobs:
         run: cargo build -p ods-core -p vms-obj --target aarch64-unknown-none
       - run: cargo fmt --check
       - run: cargo clippy --all-targets -- -D warnings
+      # The images come from the private mirror fixtures-mirror.yml fills,
+      # and from upstream when it lacks one or the token can't read it (a PR
+      # from a fork).
       - name: Fixtures
+        env:
+          VAXPUNK_FIXTURES_MIRROR: ghcr.io/${{ github.repository_owner }}/vaxpunk-fixtures
+          VAXPUNK_FIXTURES_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: crosstools/ods/fixtures/fetch.sh
       - run: cargo test --release
