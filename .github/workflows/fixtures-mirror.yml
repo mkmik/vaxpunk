@@ -60,3 +60,31 @@ jobs:
             oras blob fetch --descriptor "$IMAGE@sha256:$sum" >/dev/null
             echo "ok $sum"
           done
+
+  # Temporary, to try it from the PR: remove before merging.
+  verify:
+    needs: push
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: read
+    steps:
+      - uses: actions/checkout@v4
+      - name: Every downloaded image comes from the mirror
+        env:
+          XDG_CACHE_HOME: ${{ runner.temp }}/empty-cache
+          VAXPUNK_FIXTURES_MIRROR: ghcr.io/${{ github.repository_owner }}/vaxpunk-fixtures
+          VAXPUNK_FIXTURES_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          out=$(crosstools/ods/fixtures/fetch.sh --all)
+          echo "$out"
+          # Only the two images kept in the repository may come from elsewhere.
+          ! echo "$out" | grep -E '^fetch: [^ ]+$' | grep -vE '^fetch: vms-ods[25]\.img$'
+      - name: A pull without a token is refused
+        run: |
+          repo=${{ github.repository_owner }}/vaxpunk-fixtures
+          t=$(curl -s "https://ghcr.io/token?service=ghcr.io&scope=repository:$repo:pull" | sed -n 's/.*"token":"\([^"]*\)".*/\1/p')
+          code=$(curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $t" \
+            "https://ghcr.io/v2/$repo/blobs/sha256:20c893043afca59e764d56950aa46002340ef37d5b2fb3fc0ee8146fae9076be")
+          echo "anonymous pull: HTTP $code"
+          [ "$code" != 200 ]
