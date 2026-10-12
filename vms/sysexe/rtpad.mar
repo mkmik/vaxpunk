@@ -13,13 +13,14 @@
 ; which goes with a CR LF. Once the other end offers to echo, Telnet's
 ; WILL ECHO (RFC 857), it goes a character at a time, as a TELNET client
 ; does: the terminal is PASTHRU and NOECHO, so that every key, CTRL/C and
-; CTRL/Y too, goes to the other end, which echoes it; and CTRL/] ends the
-; session. It agrees to suppress go ahead, sends the terminal's width and
-; page when asked, Telnet's NAWS (RFC 1073), and refuses the other
-; options. When the other end closes, at its LOGOUT, or CTRL/Z ends a line
-; here, or CTRL/], it says so and returns, the terminal as it was.
-; ponytail: no TELNET> command mode at CTRL/], which ends the session;
-; a key a read, a send a key.
+; CTRL/Y too, goes to the other end, which echoes it. CTRL/], a key or a
+; line's terminator, gives the TELNET> prompt, the terminal as it was,
+; and its commands (rtpad.cld): CONNECT or a blank line back to the
+; session, CLOSE, EXIT or QUIT to end it. It agrees to suppress go ahead,
+; sends the terminal's width and page when asked, Telnet's NAWS (RFC
+; 1073), and refuses the other options. When the other end closes, at its LOGOUT, or CTRL/Z ends a line
+; here, or CLOSE at TELNET>, it says so and returns, the terminal as it was.
+; ponytail: a key a read, a send a key.
 ;
         .LIBRARY "starlet.mlb"
         .LIBRARY "sysexe.mlb"
@@ -30,11 +31,12 @@
         $INETSYMDEF
         $SOCKADDRINDEF
 
-        .EXTERNAL HOST_ADDR
+        .EXTERNAL HOST_ADDR, LIB$GET_INPUT, LIB$SIGNAL
+        .EXTERNAL CLI$DCL_PARSE, CLI$DISPATCH, TELNET_TABLES, HELP$TOPIC
 
 BUFSIZE = 1024
 CTRLZ = 26
-ESCAPE = 29                             ; CTRL/], which ends a session a character at a time
+ESCAPE = 29                             ; CTRL/], which gives TELNET>
 IAC = 255                               ; Telnet's commands and options
 DONT = 254
 DO = 253
@@ -87,6 +89,12 @@ NBUF:   .BLKB   BUFSIZE                 ; what came on the connection
 OUT:    .BLKB   BUFSIZE                 ; and of it, what goes to the terminal
 TBUF:   .BLKB   BUFSIZE+2               ; a line typed, and its CR LF
 REPLY:  .BLKB   32                      ; a Telnet command to send
+LINDSC: .LONG   80                      ; a command, after TELNET>
+        .ADDRESS LINBUF
+LINLEN: .WORD   0
+LINBUF: .BLKB   80
+PROMPT: .ASCID  "TELNET> "
+NEXT:   .LONG   0                       ; after a command: 0 TELNET> again, 1 the session, 2 the end
 
         .PSECT  CODE, EXE, LONG
         .ENTRY  START, ^M<R2, R3, R4, R5, R6>
@@ -148,6 +156,8 @@ REPLY:  .BLKB   32                      ; a Telnet command to send
         BNEQ    40$
         CMPB    TIOSB+4, #CTRLZ         ; CTRL/Z: done here
         BEQL    70$
+        CMPB    TIOSB+4, #ESCAPE        ; CTRL/]: TELNET>, the line dropped
+        BEQL    60$
         MOVZWL  TIOSB+2, R0
         MOVB    #13, TBUF[R0]
         MOVB    #10, TBUF+1[R0]
@@ -155,7 +165,7 @@ REPLY:  .BLKB   32                      ; a Telnet command to send
         BRB     50$
 40$:    MOVZBL  TBUF, R0                ; a key
         CMPB    R0, #ESCAPE
-        BEQL    70$
+        BEQL    60$
         MOVL    #1, R1
         CMPB    R0, #13                 ; a carriage return goes with a NUL,
         BNEQ    42$
@@ -167,13 +177,16 @@ REPLY:  .BLKB   32                      ; a Telnet command to send
         INCL    R1
 44$:    MOVL    R1, R0
 50$:    $QIOW_S CHAN=NCHAN, FUNC=#IO$_WRITEVBLK, IOSB=IOSB, P1=TBUF, P2=R0
-        BSBW    TREAD
-        BRB     10$
-70$:    $CANCEL_S CHAN=NCHAN
-        $QIOW_S CHAN=NCHAN, FUNC=#IO$_DEACCESS, IOSB=IOSB
-        TSTL    CHARMODE
-        BEQL    80$
+55$:    BSBW    TREAD
+        BRW     10$
+60$:    BSBW    COMMAND
+        BLBS    R0, 55$
+        BRB     75$
+70$:    TSTL    CHARMODE
+        BEQL    75$
         PRINT   ""                      ; off the other end's line
+75$:    $CANCEL_S CHAN=NCHAN
+        $QIOW_S CHAN=NCHAN, FUNC=#IO$_DEACCESS, IOSB=IOSB
 80$:    $CANCEL_S CHAN=TCHAN
         TSTL    CHARMODE
         BEQL    85$
@@ -181,6 +194,69 @@ REPLY:  .BLKB   32                      ; a Telnet command to send
 85$:    PRINT   "%REM-S-END, control returned to the local node"
         MOVL    #SS$_NORMAL, R0
 90$:    RET
+
+; COMMAND: CTRL/] was typed. Gives TELNET> on its own line, the terminal
+; as it was, and does the commands typed there, as AUTHORIZE does at UAF>,
+; until one goes back to the session, or ends it, as CTRL/Z does. R0 =
+; 1 for the session, the terminal a character at a time again if it was,
+; or 0 for the end. Uses R0-R1.
+COMMAND:
+        .JSB_ENTRY
+        PRINT   ""
+        TSTL    CHARMODE
+        BEQL    10$
+        $QIOW_S CHAN=TCHAN, FUNC=#IO$_SETMODE, IOSB=IOSB, P1=SAVED, P2=#12
+10$:    CLRL    NEXT
+        PUSHAW  LINLEN
+        PUSHAQ  PROMPT
+        PUSHAQ  LINDSC
+        CALLS   #3, G^LIB$GET_INPUT
+        BLBC    R0, 80$                 ; CTRL/Z
+        TSTW    LINLEN
+        BEQL    70$                     ; a blank line: the session
+        PUSHL   LINDSC
+        MOVW    LINLEN, LINDSC
+        PUSHAB  G^TELNET_TABLES
+        PUSHAQ  LINDSC
+        CALLS   #2, G^CLI$DCL_PARSE
+        MOVL    (SP)+, LINDSC
+        BLBC    R0, 20$
+        CALLS   #0, G^CLI$DISPATCH
+        BLBS    R0, 30$
+20$:    BBS     #28, R0, 30$            ; STS$V_INHIB_MSG: reported
+        BICL2   #7, R0                  ; a warning, so that LIB$SIGNAL returns
+        PUSHL   R0
+        CALLS   #1, G^LIB$SIGNAL
+30$:    MOVL    NEXT, R0
+        BEQL    10$
+        CMPL    R0, #1
+        BNEQ    80$
+70$:    TSTL    CHARMODE
+        BEQL    75$
+        $QIOW_S CHAN=TCHAN, FUNC=#IO$_SETMODE, IOSB=IOSB, P1=CHAR, P2=#12
+75$:    MOVL    #1, R0
+        RSB
+80$:    CLRL    R0
+        RSB
+
+; TELNET_CONNECT, TELNET_CLOSE: CONNECT and CLOSE at TELNET>: back to the
+; session, or its end.
+        .ENTRY  TELNET_CONNECT, ^M<>
+        MOVL    #1, NEXT
+        MOVL    #SS$_NORMAL, R0
+        RET
+        .ENTRY  TELNET_CLOSE, ^M<>
+        MOVL    #2, NEXT
+        MOVL    #SS$_NORMAL, R0
+        RET
+
+; TELNET_HELP: HELP [command] at TELNET>: describes the commands, from
+; TELNET_TABLES (help/describe.mar).
+        .ENTRY  TELNET_HELP, ^M<>
+        PUSHAB  G^TELNET_TABLES
+        CALLS   #1, G^HELP$TOPIC
+        MOVL    #SS$_NORMAL, R0
+        RET
 
 ; NREAD, TREAD: read the connection, with event flag 1, and the
 ; terminal, with 2, each into its buffer: a line, or a key without echo

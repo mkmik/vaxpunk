@@ -1,0 +1,28 @@
+! RTPAD.CLD: the commands at TELNET>, where CTRL/] takes a SET HOST or
+! TELNET session, which RTPAD.EXE parses with CLI$DCL_PARSE, as TCP/IP
+! Services' TELNET does, and which build.rs links into RTPAD.EXE as
+! TELNET_TABLES. A blank line goes back to the session, as CONNECT does.
+! ponytail: no SEND, SET, SHOW, SPAWN or ATTACH; add them when missed.
+module TELNET_TABLES
+
+! CONNECT: back to the session.
+define verb CONNECT
+	routine TELNET_CONNECT
+
+! CLOSE: closes the connection, and returns to DCL.
+define verb CLOSE
+	routine TELNET_CLOSE
+
+define verb DISCONNECT
+	routine TELNET_CLOSE
+
+define verb EXIT
+	routine TELNET_CLOSE
+
+define verb QUIT
+	routine TELNET_CLOSE
+
+! HELP [command]: describes the commands, from these tables.
+define verb HELP
+	routine TELNET_HELP
+	parameter P1, label=TOPIC, value(type=$rest_of_line)

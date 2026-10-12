@@ -273,11 +273,13 @@ or the ioctls, in one request, not both; a unit is cloned at
   ECHO`, as TELNETD's terminal does, it goes a character at a time: it
   makes the terminal PASTHRU and NOECHO and reads a key at a time with
   no terminators, so CTRL/C and CTRL/Y go to the other end too; a
-  carriage return goes as CR NUL, and CTRL/] ends the session. It agrees
+  carriage return goes as CR NUL. It agrees
   to `SGA`, answers `DO NAWS` with the terminal's width and page,
-  refuses the other options, and puts the terminal back as it was. When
-  the other end closes it prints `%REM-S-END`. ponytail: no `TELNET>`
-  command mode at CTRL/]; a send for each key.
+  refuses the other options, and puts the terminal back as it was. CTRL/],
+  a key or a line's terminator, gives the `TELNET>` prompt, a line at a
+  time, whose commands, `CLOSE`, `CONNECT` and `HELP`, CLI$DCL_PARSE parses
+  with `rtpad.cld`'s tables; a blank line goes back to the session. When
+  the other end closes it prints `%REM-S-END`. ponytail: a send for each key.
 - **`COPY.EXE`**, `COPY/HTTP`: connects a TCP socket to the server and
   sends an HTTP/1.0 GET, over TLS for `https`, which SSL3 makes on the
   socket (ADR-0032); the body goes into a STREAM_LF file.

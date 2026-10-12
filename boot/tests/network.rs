@@ -20,10 +20,10 @@
 //! from here back twice, to its sender and connected to it; and SET HOST to
 //! itself, as SYSTEM again, a character at a time on a TELNET terminal,
 //! TNA1:, which has the console's width and page, as Telnet's NAWS gives them: SHOW TERMINAL,
-//! EDIT's keypad mode there, SHOW SYSTEM, and LOGOUT; SET HOST again, and
-//! CTRL/] while a procedure spins there, which deletes its process, so
+//! EDIT's keypad mode there, SHOW SYSTEM, CTRL/] and the TELNET> prompt, and LOGOUT; SET HOST again, and
+//! CTRL/] and CLOSE while a procedure spins there, which deletes its process, so
 //! SHOW SYSTEM no longer lists _TNA1:; then TELNET, by a name DNS knows, to a port here,
-//! through guestfwd, a line each way, and with /PORT to one there cannot be;
+//! through guestfwd, a line each way, CTRL/] and CLOSE, and with /PORT to one there cannot be;
 //! then COPY/HTTP from web servers here, through guestfwd, to the data
 //! disk: by URL, by node and path, one that says 404, by URL with a
 //! host's name, an ftp URL, and https URLs, whose TLS servers here
@@ -510,8 +510,18 @@ fn network() {
     vax.wait_for("*", at, 60);
     vax.command("QUIT");
     vax.command("SHOW SYSTEM");
+    // CTRL/] gives TELNET>, the terminal a line at a time; a blank line
+    // goes back to the session.
+    let at = vax.text().len();
+    vax.console.write_all(b"\x1d").unwrap();
+    let at = vax.wait_for("TELNET> ", at, 60);
+    vax.reply("HELP", "TELNET> ");
+    vax.reply("BOGUS", "TELNET> ");
+    vax.console.write_all(b"\r").unwrap();
+    vax.wait_for("\n", at, 60);
+    vax.command("SHOW DEFAULT");
     vax.command("LOGOUT");
-    // A hangup: the session ends with CTRL/] while a procedure spins
+    // A hangup: the session ends with CTRL/] and CLOSE while a procedure spins
     // there, reading nothing, and its process goes.
     vax.command("OPEN/WRITE SPIN DKB0:[000000]SPIN.COM");
     vax.command(r#"WRITE SPIN "$ L:""#);
@@ -524,7 +534,8 @@ fn network() {
     vax.wait_for("@DKB0:[000000]SPIN\n", at, 60);
     sleep(Duration::from_secs(2));
     vax.console.write_all(b"\x1d").unwrap();
-    vax.wait_for("$ ", at, 60);
+    vax.wait_for("TELNET> ", at, 60);
+    vax.command("CLOSE");
     let mut hung_up = false;
     for _ in 0..10 {
         let at = vax.command("SHOW SYSTEM");
@@ -540,10 +551,12 @@ fn network() {
     vax.command("SET TERMINAL/WIDTH=80/PAGE=24");
     vax.reply("TELNET ECHO 7779", "hello from port 7779");
     vax.reply("netcat", "echo: netcat");
-    // The host closing doesn't reach the guest through guestfwd: CTRL/Z.
+    // The host closing doesn't reach the guest through guestfwd: CTRL/],
+    // a line's terminator, and CLOSE.
     let at = vax.text().len();
-    vax.console.write_all(b"\x1a").unwrap();
-    vax.wait_for("$ ", at, 60);
+    vax.console.write_all(b"\x1d").unwrap();
+    vax.wait_for("TELNET> ", at, 60);
+    vax.command("CLOSE");
     vax.command("TELNET 10.0.2.100 /PORT=70000");
     vax.command(r#"COPY/HTTP/LOG URL::"http://10.0.2.100:7780/pub/Read.Me.txt" DKB0:[000000]"#);
     vax.command("TYPE DKB0:[000000]READ_ME.TXT");
@@ -660,6 +673,10 @@ fn network() {
         "echo: netcat",
         "%SYSTEM-F-BADPARAM",
         "%REM-S-END, control returned to the local node",
+        "TELNET> HELP\n\n  CLOSE\n  CONNECT\n",
+        "TELNET> BOGUS\n%CLI-W-IVVERB, unrecognized command verb",
+        "TELNET> \nSHOW DEFAULT\n",
+        "echo: netcat\n\nTELNET> CLOSE\n%REM-S-END, control returned to the local node",
         r#"%COPY-S-COPIED, URL::"http://10.0.2.100:7780/pub/Read.Me.txt" copied to "#,
         "READ_ME.TXT;1 (1 blocks)",
         "line one\nline two\nno newline at the end\n",

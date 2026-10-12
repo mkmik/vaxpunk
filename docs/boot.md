@@ -420,9 +420,10 @@ interpreter. It is linked high in P1, which tells the executive it is one
   every key goes there, CTRL/Y too, and comes back echoed, so EDIT's
   keypad mode works there as on the console, on a screen of this
   terminal's width and page, which RTPAD sends. `LOGOUT` there prints
-  `%REM-S-END` here, and so does CTRL/]. `TELNET address port`, or
-  `/PORT=port`, connects to that port instead, a line at a time unless
-  what listens there offers to echo, until CTRL/Z. `RUN TCPTEST` connects
+  `%REM-S-END` here. CTRL/] gives RTPAD's `TELNET>` prompt, where
+  `CLOSE` ends the session too and a blank line goes back to it.
+  `TELNET address port`, or `/PORT=port`, connects to that port instead,
+  a line at a time unless what listens there offers to echo, until CTRL/Z. `RUN TCPTEST` connects
   to a server on the host and accepts a connection from it.
 
 The system disk is read only, and the ramdisk is gone when the system

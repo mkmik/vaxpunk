@@ -57,7 +57,7 @@ note = "PRD-0003 tier 1 #3: a device name has 4 characters"
 [[feature]]
 id = "command-mode"
 title = "TELNET> command mode at CTRL/]"
-status = "todo"
+status = "done"
 note = "PRD-0003 tier 3 #29; rtpad.mar ponytail"
 
 [[feature]]
@@ -108,6 +108,8 @@ terminal driver drives over the connection speaking Telnet, and starts
 ([ADR-0027](../../adr/0027-terminals-are-ucbs-and-telnet-is-in-the-driver.md),
 [ADR-0029](../../adr/0029-loginout-and-sysuaf.md)). RTPAD starts a
 line at a time and goes a character at a time when the other end offers
-to echo, so EDIT and EVE work in a remote session. A hangup, the
-connection closing, deletes the process created on the terminal, as
-VMS's does. Left: more than 9 terminals, and `TELNET>` command mode.
+to echo, so EDIT and EVE work in a remote session; CTRL/] gives its
+`TELNET>` prompt, where `CLOSE` ends the session and a blank line or
+`CONNECT` goes back to it. A hangup, the connection closing, deletes the
+process created on the terminal, as VMS's does. Left: more than 9
+terminals.
