@@ -22,3 +22,8 @@ wasm-demo port="8765":
 # Regenerates the BLISS require files (crosstools/vtools/lib/*.r64, *.req) from lib.mlb and starlet.mlb.
 defs:
     cargo run -p vdefs
+
+# Builds the interactive map of components (docs/map) into out/map/index.html and opens it.
+todography:
+    cargo run -p todography -- build
+    {{ if os() == "macos" { "open" } else { "xdg-open" } }} out/map/index.html
