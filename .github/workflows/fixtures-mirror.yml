@@ -1,8 +1,8 @@
 name: fixtures-mirror
 
 # Fills the private mirror of the test disk images that rust.yml's Fixtures
-# step reads first: crosstools/ods/fixtures/fetch.sh gets every image from
-# upstream (archive.org, GitHub), checks it against SHA256SUMS, and this
+# step reads first: crosstools/ods/fixtures/fetch.sh gets every image the
+# mirror lacks from upstream (archive.org, GitHub), checks it against SHA256SUMS, and this
 # pushes them, uncompressed, to ghcr.io/OWNER/vaxpunk-fixtures. Each image
 # becomes a blob whose digest is its SHA-256, which is how fetch.sh asks for
 # it, so the tag only keeps the blobs referenced: one per version of
@@ -38,7 +38,12 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y libarchive-tools
       - uses: oras-project/setup-oras@v1
-      - name: Fetch from upstream
+      # Images the mirror already has come from it; only new ones need
+      # upstream to answer.
+      - name: Fetch
+        env:
+          VAXPUNK_FIXTURES_MIRROR: ${{ env.IMAGE }}
+          VAXPUNK_FIXTURES_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: crosstools/ods/fixtures/fetch.sh ${{ (github.event_name == 'push' || inputs.all) && '--all' || '' }}
       - name: Push
         env:
