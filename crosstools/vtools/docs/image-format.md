@@ -226,16 +226,17 @@ it goes. It has no transfer address.
 
 ### Symbol vector
 
-The procedures other images may call, in a quadword each, which holds the
-procedure's address and moves with the image (a relocation fixup).
-`EIHD$Q_SYMVVA` holds the vector's address and `EIHD$L_SYMVECT_SIZE` the
-number of entries. An image that calls the procedure in entry i gets the
+The procedures other images may call and the data they may reach, in a
+quadword each, which holds the procedure's or the data's address and moves
+with the image (a relocation fixup). `EIHD$Q_SYMVVA` holds the vector's
+address and `EIHD$L_SYMVECT_SIZE` the number of entries. An image that
+calls the procedure in entry i, or holds the address of its data, gets the
 quadword at `SYMVVA` + 8i, moved, from the image activator.
 
 **Change:** Alpha's entries are 16 bytes, two quadwords, since a procedure
 value there is a procedure descriptor and its code address is the second
-quadword. vaxpunk calls the code address (`docs/linker.md`), and has only
-procedure entries, so an entry is one quadword.
+quadword. vaxpunk calls the code address (`docs/linker.md`), so an entry
+is one quadword, a procedure's as a data entry's.
 
 ### Global symbol table (`EIHS$`, GST)
 
@@ -261,14 +262,14 @@ vector; and an end-of-module record ends it.
 | --- | --- | --- |
 | 0 | `GSDTYP`, `GSDSIZ` | 8, the subrecord's size |
 | 4 | `DATYP`, `TEMP` | 0 |
-| 6 | `FLAGS` | `DEF`, `UNI`, `REL`, `NORM`: a procedure others may call |
+| 6 | `FLAGS` | `DEF`, `UNI`, `REL`, and `NORM` for a procedure others may call; without it, data |
 | 8 | `VALUE` | the entry's offset in the symbol vector |
-| 16 | `LP_1`, `LP_2` | the procedure's address, as linked |
+| 16 | `LP_1`, `LP_2` | the procedure's or the data's address, as linked |
 | 32 | `PSINDX` | 0 |
 | 36 | `NAME` | `.ASCIC` |
 
-The linker reads the GST to link against the image. A reader rejects an
-entry that isn't a procedure's, and entries not in the vector's order.
+The linker reads the GST to link against the image. A reader rejects
+entries not in the vector's order.
 
 ## Moving an image
 

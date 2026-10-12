@@ -365,7 +365,11 @@ fn link(
 
 /// Links object modules into a shareable image, at 0, with the symbol
 /// vector `vector`.
-fn link_shareable(name: &str, vector: Vec<String>, modules: &[(String, Vec<u8>)]) -> vlink::Linked {
+fn link_shareable(
+    name: &str,
+    vector: Vec<(String, bool)>,
+    modules: &[(String, Vec<u8>)],
+) -> vlink::Linked {
     let opts = vlink::Options {
         name: name.into(),
         shareable: Some(vector),

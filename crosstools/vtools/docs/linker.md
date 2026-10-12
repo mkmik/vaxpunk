@@ -86,7 +86,8 @@ names, and with `/NAMES` the symbols of each.
 
 ## Shareable images
 
-A shareable image holds procedures that other images call, a copy of which
+A shareable image holds procedures that other images call, and data they
+reach, a copy of which
 the image activator maps into each process that runs one of them
 (ADR-0028). `LIBRTL.EXE`, VMS's run-time library, is one.
 
@@ -94,23 +95,24 @@ the image activator maps into each process that runs one of them
 
 `/SHAREABLE` links a shareable image, which always moves, as if
 `/RELOCATABLE`, from 0 unless `/BASE` says otherwise. Its symbol vector
-lists the procedures other images may call, in an options file, as VMS
-LINK takes it:
+lists the procedures other images may call and the data they may reach, in
+an options file, as VMS LINK takes it:
 
 ```
-! LIBRTL.OPT
-SYMBOL_VECTOR=(LIB$PUT_OUTPUT=PROCEDURE, -
-               LIB$GET_INPUT=PROCEDURE)
+! DECC$SHR.OPT
+SYMBOL_VECTOR=(DECC$PUTS=PROCEDURE, -
+               DECC$GA_STDOUT=DATA)
 ```
 
-`!` starts a comment and `-` ends a line that goes on. Each entry is a
-procedure of the image, a global symbol in a code psect, or the link fails
-with `%VLINK-E-NOTPROC`; DATA entries aren't there yet. An entry keeps its
-place: new ones go at the end, so that images linked against the old vector
-still work. vlink adds `$SYMVECT$`, a read-only `NOPIC` psect of a module of
-its own, `$SYMVECT`, with a quadword for each, the procedure's address, a
-fixup; and the global symbol table, from which other links learn the names
-(`docs/image-format.md`).
+`!` starts a comment and `-` ends a line that goes on. A `PROCEDURE` entry
+is a global symbol of the image in a code psect, or the link fails with
+`%VLINK-E-NOTPROC`; a `DATA` entry one in a psect that isn't code, or it
+fails with `%VLINK-E-NOTDATA`. An entry keeps its place: new ones go at the
+end, so that images linked against the old vector still work. vlink adds
+`$SYMVECT$`, a read-only `NOPIC` psect of a module of its own, `$SYMVECT`,
+with a quadword for each, the procedure's or the data's address, a fixup;
+and the global symbol table, from which other links learn the names and
+which are data (`docs/image-format.md`).
 
 ### Linking against one
 
@@ -133,6 +135,15 @@ image. The procedure's name stands for its veneer's address, which moves with
 the image, so a `BL`, an `adrp` and `add`, and a `.ADDRESS` of it all work, and
 the image's code holds no address in another image: it can still be shared.
 A shareable image no module calls into isn't in the image's list.
+
+Data has no veneer: its address is known only once the image activator
+has mapped the shareable image. The image holds it in a quadword of its
+own, `.ADDRESS` of the name in a `NOPIC` psect, as in a linkage section on
+Alpha, and its code loads it from there (*Reaching other data from code*).
+vlink stores 0 there and gives the quadword a `.ADDRESS` fixup in the
+image's group, like a slot's. Anything else that uses the name, an `adrp`,
+or a quadword of the name plus an offset, fails the link with
+`%VLINK-E-SHRDATA`.
 
 ponytail: an address the image takes of such a procedure is its veneer's,
 not the procedure's, so two images' addresses of it differ. Nothing compares

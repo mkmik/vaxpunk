@@ -36,9 +36,15 @@ note = "ADR-0028"
 
 [[feature]]
 id = "data-vector"
-title = "DATA entries in the symbol vector, and the rest of the options file"
+title = "DATA entries in the symbol vector"
+status = "done"
+note = "linker.md; PRD-0003 tier 3 #20"
+
+[[feature]]
+id = "options"
+title = "The rest of the options file: SPARE entries, aliases, GSMATCH, ..."
 status = "todo"
-note = "linker.md and lib.rs ponytail: SYMBOL_VECTOR only, PROCEDURE entries only; PRD-0003 tier 3 #20"
+note = "lib.rs ponytail: SYMBOL_VECTOR only"
 
 [[feature]]
 id = "shareable-chains"
