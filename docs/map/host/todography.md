@@ -31,8 +31,8 @@ note = "docs/map/: the areas being written"
 [[feature]]
 id = "ci"
 title = "CI runs todography lint on every PR"
-status = "todo"
-note = "docs/map/README.md says CI runs it; no workflow does yet"
+status = "done"
+note = ".github/workflows/todography.yml: lint --strict and build"
 
 +++
 

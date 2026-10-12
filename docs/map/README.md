@@ -6,7 +6,7 @@ one Markdown file per component, which coding sessions edit next to the
 code they change. `todography` (in [todography/](../todography/)) checks it and draws it.
 
 ```sh
-cargo run -p todography -- lint                # check every label; CI runs this
+cargo run -p todography -- lint                # check every label; CI runs it with --strict
 cargo run -p todography -- build               # write out/map/index.html, the interactive map
 cargo run -p todography -- show exec/mailboxes  # one component, its needs and who needs it
 cargo run -p todography -- why rtl/crtl         # the chain from a component up to the goals that pull it in
