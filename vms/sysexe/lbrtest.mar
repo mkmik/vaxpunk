@@ -1,0 +1,342 @@
+        .TITLE  LBRTEST Puts the LBR$ routines to work
+        .IDENT  /V0.1/
+;
+; RUN LBRTEST, with the logical name LBRTEST a directory it may write,
+; makes LBRTEST.HLB there, a help library of two topics, with
+; LBR$PUT_RECORD and LBR$INSERT_KEY, reads one back, lists the keys, all
+; and those C*Y matches, then deletes one and adds another.
+; LBR$OUTPUT_HELP writes a subtopic of it, and the list where COPY /XYZ
+; stops matching. Then it makes LBRTEST.OLB, an object library of two
+; modules whose 61 global symbols make its symbol index two levels deep,
+; which the boot test reads on the host with vms-obj, and finds a symbol
+; and a module's first record in it. Last, LBR$OUTPUT_HELP prompts for
+; topics. A step that fails prints "LBRTEST: failed at step n" and the
+; status, and ends it; all done, it prints "LBRTEST: ok".
+;
+        .LIBRARY "starlet.mlb"
+        .LIBRARY "sysexe.mlb"
+        $SSDEF
+        $RMSDEF
+        $LBRDEF
+        $CREDEF
+        $LHIDEF
+        $HLPDEF
+        $LBRMSG
+
+        .EXTERNAL LIB$PUT_OUTPUT, LIB$GET_INPUT
+        .EXTERNAL LBR$INI_CONTROL, LBR$OPEN, LBR$CLOSE, LBR$GET_HEADER
+        .EXTERNAL LBR$SET_INDEX, LBR$LOOKUP_KEY, LBR$GET_RECORD
+        .EXTERNAL LBR$PUT_RECORD, LBR$PUT_END, LBR$INSERT_KEY
+        .EXTERNAL LBR$DELETE_KEY, LBR$GET_INDEX, LBR$OUTPUT_HELP
+
+; CHECK n: unless R0's low bit is set, prints that step n failed, with
+; R0, and returns it.
+        .MACRO  CHECK   N, ?OK
+        BLBS    R0, OK
+        PUSHL   R0
+        PRINTHEX "LBRTEST: failed at step ", #N
+        PRINTHEX "LBRTEST: status ", (SP)
+        MOVL    (SP)+, R0
+        RET
+OK:
+        .ENDM   CHECK
+
+; EXPECTS status, n: CHECK n, but R0 must be status.
+        .MACRO  EXPECTS STATUS, N, ?OK
+        CMPL    R0, STATUS
+        BEQL    OK
+        BICL2   #1, R0
+        CHECK   N
+OK:
+        .ENDM   EXPECTS
+
+; CALL routine, args...: CALLS routine, the args pushed last first.
+        .MACRO  CALL    ROUTINE, A1, A2, A3, A4, A5, A6
+        .NARG   $$N
+        .IF GE  $$N-7
+        PUSHL   A6
+        .ENDC
+        .IF GE  $$N-6
+        PUSHL   A5
+        .ENDC
+        .IF GE  $$N-5
+        PUSHL   A4
+        .ENDC
+        .IF GE  $$N-4
+        PUSHL   A3
+        .ENDC
+        .IF GE  $$N-3
+        PUSHL   A2
+        .ENDC
+        .IF GE  $$N-2
+        PUSHL   A1
+        .ENDC
+        CALLS   #$$N-1, G^ROUTINE
+        .ENDM   CALL
+
+        .PSECT  DATA, NOEXE, WRT, LONG
+CTL:    .LONG   0
+FCREATE:
+        .LONG   LBR$C_CREATE
+FREAD:  .LONG   LBR$C_READ
+FUPDATE:
+        .LONG   LBR$C_UPDATE
+THLP:   .LONG   LBR$C_TYP_HLP
+TOBJ:   .LONG   LBR$C_TYP_EOBJ
+ONE:    .LONG   1
+TWO:    .LONG   2
+WIDTH:  .LONG   80
+PROMPTF:
+        .LONG   HLP$M_PROMPT
+HLB:    .ASCID  "LBRTEST:LBRTEST.HLB"
+OLB:    .ASCID  "LBRTEST:LBRTEST.OLB"
+HLPOPT: .LONG   LBR$C_TYP_HLP, 31, 0, 1, 0, 0, 0, CRE$C_VMSV3, CRE$C_HLPCASING
+        .BLKL   11
+OBJOPT: .LONG   LBR$C_TYP_EOBJ, 128, 0, 2, 33, 0, 0, CRE$C_VMSV3, CRE$C_OBJCASING
+        .BLKL   11
+COPY:   .ASCID  "COPY"
+CREATE: .ASCID  "create"
+TYPE:   .ASCID  "TYPE"
+HELLO:  .ASCID  "HELLO"
+WORLD:  .ASCID  "WORLD"
+WORLDSYM:
+        .ASCID  "WORLD_SYMBOL"
+CSTARY: .ASCID  "C*Y"
+LOGLINE:
+        .ASCID  "copy/log"
+XYZLINE:
+        .ASCID  "COPY /XYZ"
+; The topics' lines, each .ASCIC, until a byte of 255.
+COPYTXT:
+        .ASCIC  "1 COPY"
+        .ASCIC  "  Creates a new file from one or more existing files."
+        .ASCIC  ""
+        .ASCIC  "2 /LOG"
+        .ASCIC  "  Shows each file copied."
+        .ASCIC  "! a comment HELP doesn't show"
+        .ASCIC  "2 Parameters"
+        .ASCIC  "  The files to copy, and the file to make."
+        .BYTE   255
+CREATETXT:
+        .ASCIC  "1 CREATE"
+        .ASCIC  "  Makes a file from the lines typed."
+        .BYTE   255
+TYPETXT:
+        .ASCIC  "1 TYPE"
+        .ASCIC  "  Writes a file on the terminal."
+        .BYTE   255
+; HELLO's records, as in an object file: type, size, then the rest.
+HELLOOBJ:
+        .ASCIC  <0><0><8><0>"MHD!"
+        .ASCIC  <1><0><6><0>"GS"
+        .ASCIC  <2><0><4><0>
+        .BYTE   255
+WORLDOBJ:
+        .ASCIC  <0><0><6><0>"WD"
+        .BYTE   255
+SYMBUF: .ASCII  "LBRTEST_SYMBOL_"       ; a symbol: the digits go at SYMDIG
+SYMDIG: .ASCII  "000_WITH_A_LONG_NAME_FOR_THE_INDEX"
+SYMLEN = . - SYMBUF
+SYMDSC: .LONG   SYMLEN
+        .ADDRESS SYMBUF
+RFA:    .QUAD   0
+RFA2:   .QUAD   0
+HDR:    .BLKL   128
+RECDSC: .LONG   256
+        .ADDRESS REC
+OUTDSC: .QUAD   0
+REC:    .BLKB   256
+LINEDSC:
+        .LONG   0
+        .ADDRESS LINE
+LINE:   .BLKB   300
+COUNT:  .LONG   0
+PUTDSC: .QUAD   0                       ; a record PUTMOD writes
+PREFIX: .ASCII  "LBRTEST: "
+
+        .PSECT  CODE, EXE, LONG
+        .ENTRY  START, ^M<R2, R3, R4, R5, R6, R7, R8>
+        CALL    LBR$INI_CONTROL, #CTL, #FCREATE, #THLP
+        CHECK   1
+        CALL    LBR$OPEN, #CTL, #HLB, #HLPOPT
+        CHECK   2
+        MOVAB   COPYTXT, R6
+        MOVAQ   COPY, R7
+        BSBW    PUTMOD
+        CHECK   3
+        MOVAB   CREATETXT, R6
+        MOVAQ   CREATE, R7
+        BSBW    PUTMOD
+        CHECK   4
+        CALL    LBR$CLOSE, #CTL
+        CHECK   5
+        ; Read it back.
+        CALL    LBR$INI_CONTROL, #CTL, #FREAD, #THLP
+        CHECK   6
+        CALL    LBR$OPEN, #CTL, #HLB
+        CHECK   7
+        CALL    LBR$GET_HEADER, #CTL, #HDR
+        CHECK   8
+        PRINTHEX "LBRTEST: modules ", HDR+LHI$L_MODCNT
+        CALL    LBR$LOOKUP_KEY, #CTL, #CREATE, #RFA
+        CHECK   9
+        BSBW    TYPEMOD
+        CHECK   10
+        CALL    LBR$GET_INDEX, #CTL, #ONE, #KEYOUT
+        CHECK   11
+        CALL    LBR$GET_INDEX, #CTL, #ONE, #KEYOUT, #CSTARY
+        CHECK   12
+        CALL    LBR$CLOSE, #CTL
+        CHECK   13
+        ; Delete CREATE, add TYPE.
+        CALL    LBR$INI_CONTROL, #CTL, #FUPDATE, #THLP
+        CHECK   14
+        CALL    LBR$OPEN, #CTL, #HLB
+        CHECK   15
+        CALL    LBR$DELETE_KEY, #CTL, #CREATE
+        CHECK   16
+        MOVAB   TYPETXT, R6
+        MOVAQ   TYPE, R7
+        BSBW    PUTMOD
+        CHECK   17
+        CALL    LBR$CLOSE, #CTL
+        CHECK   18
+        CALL    LBR$INI_CONTROL, #CTL, #FREAD, #THLP
+        CHECK   19
+        CALL    LBR$OPEN, #CTL, #HLB
+        CHECK   20
+        CALL    LBR$LOOKUP_KEY, #CTL, #CREATE, #RFA
+        EXPECTS #LBR$_KEYNOTFND, 21
+        CALL    LBR$GET_INDEX, #CTL, #ONE, #KEYOUT
+        CHECK   22
+        CALL    LBR$CLOSE, #CTL
+        CHECK   23
+        ; HELP COPY/LOG, and COPY /XYZ.
+        CALL    LBR$OUTPUT_HELP, #LIB$PUT_OUTPUT, #WIDTH, #LOGLINE, #HLB
+        CHECK   24
+        CALL    LBR$OUTPUT_HELP, #LIB$PUT_OUTPUT, #WIDTH, #XYZLINE, #HLB
+        CHECK   25
+        ; An object library, its symbol index two levels deep.
+        CALL    LBR$INI_CONTROL, #CTL, #FCREATE, #TOBJ
+        CHECK   26
+        CALL    LBR$OPEN, #CTL, #OLB, #OBJOPT
+        CHECK   27
+        MOVAB   HELLOOBJ, R6
+        MOVAQ   HELLO, R7
+        BSBW    PUTMOD
+        CHECK   28
+        MOVQ    RFA, RFA2               ; HELLO's
+        MOVAB   WORLDOBJ, R6
+        MOVAQ   WORLD, R7
+        BSBW    PUTMOD
+        CHECK   29
+        CALL    LBR$SET_INDEX, #CTL, #TWO
+        CHECK   30
+        CALL    LBR$INSERT_KEY, #CTL, #WORLDSYM, #RFA
+        CHECK   31
+        CLRL    R8
+10$:    BSBW    SYMBOL
+        CALL    LBR$INSERT_KEY, #CTL, #SYMDSC, #RFA2
+        CHECK   32
+        AOBLSS  #60, R8, 10$
+        CALL    LBR$CLOSE, #CTL
+        CHECK   33
+        CALL    LBR$INI_CONTROL, #CTL, #FREAD, #TOBJ
+        CHECK   34
+        CALL    LBR$OPEN, #CTL, #OLB
+        CHECK   35
+        CALL    LBR$SET_INDEX, #CTL, #TWO
+        CHECK   36
+        MOVL    #42, R8
+        BSBW    SYMBOL
+        CALL    LBR$LOOKUP_KEY, #CTL, #SYMDSC, #RFA
+        CHECK   37
+        CMPL    RFA, RFA2
+        BEQL    20$
+        CLRL    R0
+        CHECK   38
+20$:    CALL    LBR$GET_RECORD, #CTL, #RECDSC, #OUTDSC
+        CHECK   39
+        CMPW    OUTDSC, #8
+        BNEQ    25$
+        CMPL    REC+4, #^A/MHD!/
+        BEQL    30$
+25$:    CLRL    R0
+        CHECK   40
+30$:    CLRL    COUNT
+        CALL    LBR$GET_INDEX, #CTL, #TWO, #COUNTER
+        CHECK   41
+        PRINTHEX "LBRTEST: symbols ", COUNT
+        CALL    LBR$CLOSE, #CTL
+        CHECK   42
+        ; HELP's prompts.
+        CALL    LBR$OUTPUT_HELP, #LIB$PUT_OUTPUT, #WIDTH, #0, #HLB, #PROMPTF, #LIB$GET_INPUT
+        CHECK   43
+        PRINT   "LBRTEST: ok"
+        MOVL    #SS$_NORMAL, R0
+        RET
+
+; PUTMOD: R6 = a module's records, .ASCIC, until a byte of 255, R7 = its
+; key. Writes the module and puts the key to it in the current index,
+; its RFA in RFA. R0 = the status.
+PUTMOD:
+        .JSB_ENTRY
+10$:    MOVZBL  (R6)+, R2
+        CMPL    R2, #255
+        BEQL    20$
+        MOVL    R2, PUTDSC
+        MOVL    R6, PUTDSC+4
+        ADDL2   R2, R6
+        CALL    LBR$PUT_RECORD, #CTL, #PUTDSC, #RFA
+        BLBS    R0, 10$
+        RSB
+20$:    CALL    LBR$PUT_END, #CTL
+        BLBC    R0, 90$
+        CALL    LBR$INSERT_KEY, #CTL, R7, #RFA
+90$:    RSB
+
+; TYPEMOD: prints each record of the module looked up, after
+; "LBRTEST: ". R0 = SS$_NORMAL at its end, or the error.
+TYPEMOD:
+        .JSB_ENTRY
+10$:    CALL    LBR$GET_RECORD, #CTL, #RECDSC, #OUTDSC
+        BLBC    R0, 80$
+        MOVZWL  OUTDSC, R6
+        MOVC3   #9, PREFIX, LINE
+        MOVC3   R6, REC, LINE+9
+        ADDL3   #9, R6, LINEDSC
+        CALL    LIB$PUT_OUTPUT, #LINEDSC
+        BRB     10$
+80$:    CMPL    R0, #RMS$_EOF
+        BNEQ    90$
+        MOVL    #SS$_NORMAL, R0
+90$:    RSB
+
+; SYMBOL: R8 = a number. Makes SYMBUF the symbol of that number, 0 to 99.
+SYMBOL:
+        .JSB_ENTRY
+        CLRL    R3
+        MOVL    R8, R2
+        EDIV    #10, R2, R2, R3
+        ADDB3   #^A/0/, R2, SYMDIG+1
+        ADDB3   #^A/0/, R3, SYMDIG+2
+        RSB
+
+; KEYOUT key, rfa: LBR$GET_INDEX's routine that prints each key.
+        .ENTRY  KEYOUT, ^M<R2, R3, R4, R5, R6>
+        MOVL    4(AP), R1
+        MOVZWL  (R1), R6
+        MOVC3   #9, PREFIX, LINE
+        MOVL    4(AP), R1
+        MOVC3   R6, @4(R1), LINE+9
+        ADDL3   #9, R6, LINEDSC
+        CALL    LIB$PUT_OUTPUT, #LINEDSC
+        RET
+
+; COUNTER key, rfa: LBR$GET_INDEX's routine that counts the keys.
+        .ENTRY  COUNTER, ^M<>
+        INCL    COUNT
+        MOVL    #SS$_NORMAL, R0
+        RET
+
+        .END    START

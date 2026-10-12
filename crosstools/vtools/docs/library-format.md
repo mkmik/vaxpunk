@@ -6,6 +6,10 @@ the modules. Nothing in it is specific to the instruction set, so nothing
 changed: the modules are object modules (`docs/object-format.md`), and each
 says its own architecture. The code is `vms-obj/src/olb.rs`. `vlib` writes
 libraries, `vlink` searches them (`docs/linker.md`), and `vdump` shows them.
+On vaxpunk itself the `LBR$` routines (`vms/sysexe/lbrshr/`) read and write
+the same format, and its other library types too: help, text and macro
+libraries have one index, module names, and as many bytes past a module
+header's first 16 as `LHD$B_MHDUSZ` says, which the creator chooses.
 
 Status: work order step 9. Only object libraries, and only what the librarian
 and the linker need: no update history, no free block lists, no compression.

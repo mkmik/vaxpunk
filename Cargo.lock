@@ -116,6 +116,7 @@ dependencies = [
  "rustls",
  "shim",
  "vms",
+ "vms-obj",
 ]
 
 [[package]]

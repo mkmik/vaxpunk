@@ -7,6 +7,7 @@
 //!   the global ones of the libraries the system disk's images link
 //!   (vms/sysexe/lib/*.mar, and the `GLOBAL ROUTINE`s of its *.b64),
 //!   of LIBRTL.EXE, the shareable image they call (vms/sysexe/librtl/*.mar),
+//!   and of LBRSHR.EXE's LBR$ routines (vms/sysexe/lbrshr/*.mar),
 //!   and of DCL's own (vms/sysexe/dcl.mar,
 //!   vms/sysexe/dcl/*.mar), of the RMS utilities' (vms/sysexe/rms/*.mar),
 //!   and of the C run-time library's side of VMS (vms/crtl/*.mar):
@@ -745,6 +746,7 @@ impl Api {
         // only, since their local names may be the executive's too.
         let mut libs = glob(&root.join("vms/sysexe/lib"), "mar");
         libs.extend(glob(&root.join("vms/sysexe/librtl"), "mar"));
+        libs.extend(glob(&root.join("vms/sysexe/lbrshr"), "mar"));
         libs.push(root.join("vms/sysexe/dcl.mar"));
         libs.extend(glob(&root.join("vms/sysexe/dcl"), "mar"));
         libs.extend(glob(&root.join("vms/sysexe/rms"), "mar"));

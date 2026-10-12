@@ -6,7 +6,9 @@
 //! sysexe/NAME.cld, its ARM64 if there is a sysexe/NAME.m64, which vasm
 //! assembles, and against LIBRTL.EXE and SYS.STB, the executive's symbols;
 //! in [SYSLIB], LIBRTL.EXE, the shareable image of sysexe/librtl/*.mar,
-//! with the symbol vector librtl.opt gives, which DCL links in instead; DCL and
+//! with the symbol vector librtl.opt gives, which DCL links in instead, and
+//! LBRSHR.EXE, the LBR$ routines of sysexe/lbrshr/*.mar, as lbrshr.opt
+//! gives them, which the other programs link against too; DCL and
 //! HELP with DCL$TABLES, from cld/*.cld, and DCL with sysexe/dcl/*.mar,
 //! its CDU, and HELP and TCPIP with sysexe/help/*.mar, which describes
 //! command tables, and CREATE, CONVERT and ANALYZRMS with sysexe/rms/*.mar,
@@ -62,6 +64,7 @@ fn main() {
         "sysexe",
         "sysexe/lib",
         "sysexe/librtl",
+        "sysexe/lbrshr",
         "sysexe/dcl",
         "sysexe/help",
         "sysexe/rms",
@@ -85,6 +88,17 @@ fn main() {
     let shr = link_shareable("LIBRTL", vector, &modules);
     files.push(("[SYSLIB]LIBRTL.EXE".into(), shr.image.write()));
     let librtl_exe = ("LIBRTL.EXE".to_string(), shr.image.write());
+    // LBRSHR.EXE, the LBR$ routines, the same way.
+    let lbrshr: Vec<_> = sources("sysexe/lbrshr", &["mar"])
+        .iter()
+        .map(module)
+        .chain([stb.clone()])
+        .collect();
+    let opt = fs::read_to_string("sysexe/lbrshr/lbrshr.opt").unwrap();
+    let vector = vlink::options(&opt).unwrap_or_else(|e| panic!("lbrshr.opt: {e:?}"));
+    let shr = link_shareable("LBRSHR", vector, &lbrshr);
+    files.push(("[SYSLIB]LBRSHR.EXE".into(), shr.image.write()));
+    let lbrshr_exe = ("LBRSHR.EXE".to_string(), shr.image.write());
     // Each process has its own P0, so every image goes at the same address,
     // but DCL: linked in P1, at VA$C_CLI, it is a command interpreter, which
     // stays while the images it runs come and go in P0.
@@ -131,7 +145,12 @@ fn main() {
         if name == "DCL" {
             modules.extend(librtl.iter().cloned());
         } else {
-            modules.extend([ssl3.clone(), crtl.clone(), librtl_exe.clone()]);
+            modules.extend([
+                ssl3.clone(),
+                crtl.clone(),
+                librtl_exe.clone(),
+                lbrshr_exe.clone(),
+            ]);
         }
         modules.push(stb.clone());
         let base = if name == "DCL" {

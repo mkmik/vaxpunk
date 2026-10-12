@@ -63,5 +63,5 @@ DCL's verbs from `DCL$TABLES`, the tables it is linked with: each verb's
 parameters, qualifiers and keywords, and the syntaxes they switch to
 ([ADR-0017](../../adr/0017-command-tables-from-cld-with-vcdu.md)).
 `help/describe.mar` does the same for `TCPIP>`. Text needs a help
-library, `HELPLIB.HLB`, and the `LBR$` routines to read it (PRD-0003
-tier 3 #27).
+library, `HELPLIB.HLB` (PRD-0003 tier 3 #27), which `LBR$OUTPUT_HELP`
+in `LBRSHR.EXE` can now read and prompt through.
