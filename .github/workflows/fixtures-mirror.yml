@@ -2,8 +2,8 @@ name: fixtures-mirror
 
 # Fills the private mirror of the test disk images that rust.yml's Fixtures
 # step reads first: crosstools/ods/fixtures/fetch.sh gets every image the
-# mirror lacks from upstream (archive.org, GitHub), checks it against SHA256SUMS, and this
-# pushes them, uncompressed, to ghcr.io/OWNER/vaxpunk-fixtures. Each image
+# mirror lacks from upstream (archive.org, GitHub), checks each against
+# SHA256SUMS, and this pushes them, uncompressed, to ghcr.io/OWNER/vaxpunk-fixtures. Each image
 # becomes a blob whose digest is its SHA-256, which is how fetch.sh asks for
 # it, so the tag only keeps the blobs referenced: one per version of
 # SHA256SUMS, and latest. Run it by hand after SHA256SUMS changes.
@@ -12,9 +12,6 @@ name: fixtures-mirror
 # Zone): it holds DEC's software. This repository's workflows can read it
 # with their own token; everyone else's fetch.sh goes upstream.
 on:
-  # Temporary, to try it from the PR: remove before merging.
-  push:
-    branches: [fixtures-mirror]
   workflow_dispatch:
     inputs:
       all:
@@ -44,7 +41,7 @@ jobs:
         env:
           VAXPUNK_FIXTURES_MIRROR: ${{ env.IMAGE }}
           VAXPUNK_FIXTURES_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: crosstools/ods/fixtures/fetch.sh ${{ (github.event_name == 'push' || inputs.all) && '--all' || '' }}
+        run: crosstools/ods/fixtures/fetch.sh ${{ inputs.all && '--all' || '' }}
       - name: Push
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -66,30 +63,3 @@ jobs:
             echo "ok $sum"
           done
 
-  # Temporary, to try it from the PR: remove before merging.
-  verify:
-    needs: push
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      packages: read
-    steps:
-      - uses: actions/checkout@v4
-      - name: Every downloaded image comes from the mirror
-        env:
-          XDG_CACHE_HOME: ${{ runner.temp }}/empty-cache
-          VAXPUNK_FIXTURES_MIRROR: ghcr.io/${{ github.repository_owner }}/vaxpunk-fixtures
-          VAXPUNK_FIXTURES_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          out=$(crosstools/ods/fixtures/fetch.sh --all)
-          echo "$out"
-          # Only the two images kept in the repository may come from elsewhere.
-          ! echo "$out" | grep -E '^fetch: [^ ]+$' | grep -vE '^fetch: vms-ods[25]\.img$'
-      - name: A pull without a token is refused
-        run: |
-          repo=${{ github.repository_owner }}/vaxpunk-fixtures
-          t=$(curl -s "https://ghcr.io/token?service=ghcr.io&scope=repository:$repo:pull" | sed -n 's/.*"token":"\([^"]*\)".*/\1/p')
-          code=$(curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $t" \
-            "https://ghcr.io/v2/$repo/blobs/sha256:20c893043afca59e764d56950aa46002340ef37d5b2fb3fc0ee8146fae9076be")
-          echo "anonymous pull: HTTP $code"
-          [ "$code" != 200 ]
