@@ -10,7 +10,7 @@
 //! LBRSHR.EXE, the LBR$ routines of sysexe/lbrshr/*.mar, as lbrshr.opt
 //! gives them, which the other programs link against too; DCL and
 //! HELP with DCL$TABLES, from cld/*.cld, and DCL with sysexe/dcl/*.mar,
-//! its CDU, and HELP and TCPIP with sysexe/help/*.mar, which describes
+//! its CDU, and HELP, TCPIP, AUTHORIZE and RTPAD with sysexe/help/*.mar, which describes
 //! command tables, and CREATE, CONVERT and ANALYZRMS with sysexe/rms/*.mar,
 //! FDL and their output; TPU, from sysexe/tpu/*.b64 and its I/O module
 //! sysexe/tpu/fio.mar (PRD-0006), and in [SYSLIB] EVE's section file,
@@ -134,7 +134,7 @@ fn main() {
         if name == "DCL" {
             modules.extend(sources("sysexe/dcl", &["mar"]).iter().map(module));
         }
-        if ["HELP", "TCPIP", "AUTHORIZE"].contains(&name.as_str()) {
+        if ["HELP", "TCPIP", "AUTHORIZE", "RTPAD"].contains(&name.as_str()) {
             modules.extend(sources("sysexe/help", &["mar"]).iter().map(module));
         }
         if ["CREATE", "CONVERT", "ANALYZRMS"].contains(&name.as_str()) {
