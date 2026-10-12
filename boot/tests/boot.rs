@@ -677,6 +677,38 @@ const C: Phase = Phase {
     lines: &["C calls 7", "CRTLTEST: ok"],
 };
 
+/// LBRTEST, in DKB0:[LBR], puts the LBR$ routines to work on a help
+/// library and an object library of its own, which vms-obj reads after
+/// the session, and answers LBR$OUTPUT_HELP's prompts: the topic COPY,
+/// its subtopic /LOG, then Return twice, up a level and out.
+const LBR: Phase = Phase {
+    name: "lbr",
+    secs: 30,
+    steps: &[
+        (
+            "CRTLTEST: ok",
+            1,
+            "CREATE/DIRECTORY DKB0:[LBR]\rDEFINE LBRTEST DKB0:[LBR]\rRUN LBRTEST\r",
+        ),
+        ("Topic?", 1, "COPY\r"),
+        ("COPY Subtopic?", 1, "/LOG\r"),
+        ("COPY Subtopic?", 2, "\r"),
+        ("Topic?", 2, "\r"),
+    ],
+    lines: &[
+        "LBRTEST: modules 00000002",
+        "LBRTEST:   Makes a file from the lines typed.",
+        "LBRTEST: TYPE",
+        "  Shows each file copied.",
+        "Sorry, no documentation on COPY /XYZ",
+        "  /LOG       Parameters",
+        "LBRTEST: symbols 0000003D",
+        "  COPY TYPE",
+        "COPY Subtopic? /LOG",
+        "LBRTEST: ok",
+    ],
+};
+
 /// The processes STARTUP and SNOOP ran, which print as they go, done long
 /// before: STARTUP's SLEEPER and SVCTEST's NAPPER say they hibernate
 /// before SLEEPER does, and the CPU then idles, taking clock interrupts.
@@ -799,6 +831,7 @@ const PHASES: &[Phase] = &[
     RMS,
     TPU,
     C,
+    LBR,
     STARTUP,
     USERS,
 ];
@@ -1013,6 +1046,24 @@ fn boot() {
     }
     let fid = img.lookup("[000000]TXT.BCK").unwrap();
     save_set(&bytes(&mut img, fid));
+    let fid = img.lookup("[LBR]LBRTEST.OLB").unwrap();
+    lbrtest_library(&bytes(&mut img, fid));
+}
+
+/// The object library LBRTEST made, as vlink and vlib read one: HELLO,
+/// with its records and its 60 symbols, and WORLD, with one.
+fn lbrtest_library(file: &[u8]) {
+    let lib = vms_obj::olb::Library::parse(file).expect("LBRTEST.OLB");
+    let names: Vec<_> = lib.modules.iter().map(|m| m.name.as_str()).collect();
+    assert_eq!(names, ["HELLO", "WORLD"]);
+    let (hello, world) = (&lib.modules[0], &lib.modules[1]);
+    assert_eq!(hello.object, b"\0\0\x08\0MHD!\x01\0\x06\0GS\x02\0\x04\0");
+    assert_eq!(world.object, b"\0\0\x06\0WD");
+    let symbols: Vec<_> = (0..60)
+        .map(|i| format!("LBRTEST_SYMBOL_{i:03}_WITH_A_LONG_NAME_FOR_THE_INDEX"))
+        .collect();
+    assert_eq!(hello.symbols, symbols);
+    assert_eq!(world.symbols, ["WORLD_SYMBOL"]);
 }
 
 /// A file's bytes, up to its end of file.

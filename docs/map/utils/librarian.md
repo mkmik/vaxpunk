@@ -67,8 +67,8 @@ and help libraries.
 
 vaxpunk's libraries are Alpha's format, written on the host by `vlib`
 (object libraries only) and read by `vlink`
-(`crosstools/vtools/docs/library-format.md`). On vaxpunk nothing reads
-or writes a library yet. A native `LIBRARY` is an aspiration with
+(`crosstools/vtools/docs/library-format.md`). On vaxpunk the `LBR$`
+routines in `LBRSHR.EXE` read and write them, but no command does yet. A native `LIBRARY` is an aspiration with
 `LINK`: PRD-0004 leaves both to a PRD of their own. A help library is
 the nearer need: `HELP` has no text until there is one (PRD-0003 tier 3
 #27), and EVE's and TPU's help wait on it too.

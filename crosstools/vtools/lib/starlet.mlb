@@ -2284,3 +2284,132 @@ PRT$C_UR = 15
         CALLS   #2, G^SYS$GET_ENTROPY
         .ENDM   $GET_ENTROPY_S
 
+
+; $LBRDEF: the LBR$ routines' library types and functions, as VMS's.
+        .MACRO  $LBRDEF
+LBR$C_TYP_UNK = 0                       ; any type, when opening
+LBR$C_TYP_OBJ = 1                       ; object modules, VAX's
+LBR$C_TYP_MLB = 2                       ; macros
+LBR$C_TYP_HLP = 3                       ; help text
+LBR$C_TYP_TXT = 4                       ; text modules
+LBR$C_TYP_SHSTB = 5                     ; shareable image symbol tables, VAX's
+LBR$C_TYP_NCS = 6                       ; character set definitions
+LBR$C_TYP_EOBJ = 7                      ; object modules, Alpha's and vaxpunk's
+LBR$C_TYP_ESHSTB = 8                    ; shareable image symbol tables, Alpha's
+LBR$C_CREATE = 0                        ; LBR$INI_CONTROL's function: make a new library
+LBR$C_READ = 1                          ; read one
+LBR$C_UPDATE = 2                        ; change one
+LBR$C_MAXKEYLEN = 128                   ; the longest key
+LBR$C_MAXCTL = 16                       ; libraries open at once
+        .ENDM   $LBRDEF
+
+; $CREDEF: LBR$OPEN's create options, the library LBR$C_CREATE makes.
+        .MACRO  $CREDEF
+CRE$L_TYPE = 0                          ; its type, LBR$C_TYP_x
+CRE$L_KEYLEN = 4                        ; its keys' longest length
+CRE$L_ALLOC = 8                         ; blocks to allocate
+CRE$L_IDXMAX = 12                       ; its indexes, 1 to 8
+CRE$L_UHDMAX = 16                       ; bytes past a module header's 16 the user keeps there
+CRE$L_ENTALL = 20                       ; index entries to allocate
+CRE$L_LUHMAX = 24                       ; update history records to keep
+CRE$L_VERTYP = 28                       ; format: CRE$C_VMSV3
+CRE$L_IDXOPT = 32                       ; index options: CRE$M_x
+CRE$C_VMSV2 = 2
+CRE$C_VMSV3 = 3
+CRE$M_NOCASECMP = 1                     ; don't upper-case a key looked for
+CRE$M_NOCASENTR = 2                     ; don't upper-case the index's keys to compare
+CRE$M_UPCASNTRY = 4                     ; upper-case a key put in the index
+CRE$C_HLPCASING = 6                     ; help libraries' options
+CRE$C_OBJCASING = 3                     ; object libraries'
+CRE$C_MACTXTCAS = 0                     ; macro and text libraries'
+CRE$K_LENGTH = 80
+        .ENDM   $CREDEF
+
+; $LHIDEF: the 128 longwords LBR$GET_HEADER returns about a library.
+        .MACRO  $LHIDEF
+LHI$L_TYPE = 0                          ; LBR$C_TYP_x
+LHI$L_NINDEX = 4                        ; indexes
+LHI$L_MAJORID = 8                       ; format, 3
+LHI$L_MINORID = 12
+LHI$T_LBRVER = 16                       ; who made it, .ASCIC in 32 bytes
+LHI$L_CREDAT = 48                       ; when, VMS time
+LHI$L_UPDTIM = 56                       ; last changed
+LHI$L_UPDHIS = 64                       ; update history's VBN
+LHI$L_FREEVBN = 68                      ; first deleted block
+LHI$L_FREEBLK = 72                      ; deleted blocks
+LHI$B_NEXTRFA = 76                      ; the end of the library, an RFA
+LHI$L_NEXTVBN = 84                      ; the next block to allocate
+LHI$L_FREIDXBLK = 88
+LHI$L_FREEIDX = 92
+LHI$L_HIPREAL = 96                      ; the last index block
+LHI$L_IDXBLKS = 100                     ; index blocks
+LHI$L_IDXCNT = 104                      ; index entries, all indexes'
+LHI$L_MODCNT = 108                      ; modules: index 1's entries
+LHI$L_MHDUSZ = 112                      ; CRE$L_UHDMAX
+LHI$L_MAXLUHREC = 116
+LHI$L_NUMLUHREC = 120
+LHI$L_LIBSTATUS = 124                   ; 0 if a write to it failed
+        .ENDM   $LHIDEF
+
+; $HLPDEF: LBR$OUTPUT_HELP's flags.
+        .MACRO  $HLPDEF
+HLP$M_PROMPT = 1                        ; prompt for topics and subtopics
+HLP$M_PROCESS = 2                       ; search HLP$LIBRARY in the process table
+HLP$M_GROUP = 4                         ; the group table
+HLP$M_SYSTEM = 8                        ; the system table
+HLP$M_LIBLIST = 16                      ; list the libraries
+HLP$M_HELP = 32                         ; help on HELP before the topics
+        .ENDM   $HLPDEF
+
+; $LBRMSG: the LBR$ routines' status codes, facility LBR (38), as VMS's.
+        .MACRO  $LBRMSG
+LBR$_NORMAL = ^X268001                  ; success
+LBR$_KEYINDEX = ^X268009                ; key already in index
+LBR$_KEYINS = ^X268011                  ; key being inserted
+LBR$_OLDLIBRARY = ^X268019              ; old format library opened
+LBR$_NOHISTORY = ^X268403               ; library has no update history
+LBR$_EMPTYHIST = ^X26840B               ; library update history is empty
+LBR$_HDRTRUNC = ^X268800                ; header truncated
+LBR$_NOUPDHIST = ^X268808               ; no update history found
+LBR$_NULIDX = ^X268810                  ; index is empty
+LBR$_OLDMISMCH = ^X268818               ; old format library type mismatch
+LBR$_RECTRUNC = ^X268820                ; record truncated
+LBR$_STILLKEYS = ^X268828               ; keys still point at data
+LBR$_TYPMISMCH = ^X268830               ; library type mismatch
+LBR$_NOMTCHFOU = ^X268838               ; no match found
+LBR$_ERRCLOSE = ^X268840                ; error occurred during a previous write to library
+LBR$_ENDTOPIC = ^X268848                ; request LBR$OUTPUT_HELP terminate printing
+LBR$_ALLWRNGBLK = ^X269002              ; wrong block allocated
+LBR$_DUPKEY = ^X26900A                  ; duplicate key in index
+LBR$_ILLCTL = ^X269012                  ; illegal control index
+LBR$_ILLCREOPT = ^X26901A               ; illegal create options
+LBR$_ILLIDXNUM = ^X269022               ; illegal index number
+LBR$_ILLFMT = ^X26902A                  ; illegal library format
+LBR$_ILLFUNC = ^X269032                 ; illegal library function
+LBR$_ILLOP = ^X26903A                   ; illegal operation for access requested
+LBR$_ILLTYP = ^X269042                  ; illegal library type
+LBR$_INVKEY = ^X26904A                  ; invalid key
+LBR$_INVNAM = ^X269052                  ; invalid NAM block
+LBR$_INVRFA = ^X26905A                  ; invalid RFA
+LBR$_KEYNOTFND = ^X269062               ; key not found
+LBR$_LIBNOTOPN = ^X26906A               ; library not open
+LBR$_LKPNOTDON = ^X269072               ; lookup has not been done
+LBR$_LIBOPN = ^X26907A                  ; library already open
+LBR$_NOFILNAM = ^X269082                ; no file specification found
+LBR$_NOHLPTXT = ^X26908A                ; help text not found
+LBR$_NOTHLPLIB = ^X269092               ; not a HELP library
+LBR$_RECLNG = ^X26909A                  ; illegal record length
+LBR$_REFCNTZERO = ^X2690A2              ; module reference count zero
+LBR$_RFAPASTEOF = ^X2690AA              ; VBN in map block request past EOF
+LBR$_TOOMNYLIB = ^X2690B2               ; too many libraries open
+LBR$_UPDURTRAV = ^X2690BA               ; index update during traverse illegal
+LBR$_BADPARAM = ^X2690C2                ; bad parameter
+LBR$_INTRNLERR = ^X2690CA               ; LBR internal error
+LBR$_WRITEERR = ^X2690D2                ; error writing library
+LBR$_ILLOUTROU = ^X2690DA               ; output routine improperly specified or missing
+LBR$_ILLOUTWID = ^X2690E2               ; output width improperly specified or missing
+LBR$_ILLINROU = ^X2690EA                ; input routine improperly specified or missing
+LBR$_TOOMNYARG = ^X2690F2               ; too many arguments
+LBR$_USRINPERR = ^X2690FA               ; user input routine returned error status
+LBR$_NOHLPLIBS = ^X269102               ; no default help libraries can be opened
+        .ENDM   $LBRMSG

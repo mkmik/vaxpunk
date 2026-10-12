@@ -1,0 +1,1404 @@
+        .TITLE  LBR     The LBR$ routines: libraries, read and written
+        .IDENT  /V0.1/
+;
+; A program reads and writes libraries with these, as VMS's LBRSHR.EXE
+; has them: LBR$INI_CONTROL gives it a control index, LBR$OPEN opens or
+; creates a library on it, and the rest look up keys, read a module's
+; records, write new modules and put keys to them in an index. LIBRARY,
+; LINK and HELP call them on VMS. The library is Alpha's format 3, which
+; vlib writes on the host (crosstools/vtools/docs/library-format.md):
+; block 1 the header, the indexes B-trees of 512-byte blocks, and each
+; module a chain of data blocks of records, its header first.
+;
+; LBR$OPEN reads every key of every index into memory, in order, and
+; looks them up there; a change to an index changes that copy, and
+; LBR$CLOSE writes the indexes anew at the end of the file and the header
+; after them.
+; ponytail: no free block lists, cache or update history: the old index
+; blocks and a deleted module's data stay in the file, unused, as
+; LIBRARY/COMPRESS would drop them; keys are ASCII, compared a byte at a
+; time, found by a scan of the index.
+;
+        .LIBRARY "starlet.mlb"
+        $SSDEF
+        $RMSDEF
+        $FABDEF
+        $RABDEF
+        $LBRDEF
+        $CREDEF
+        $LHIDEF
+        $LBRMSG
+
+; A control index: a slot of SLOTS, one per library open.
+S_STATE = 0                             ; 0 free, 1 given out, 2 open
+S_FUNC = 4                              ; LBR$C_CREATE, READ or UPDATE
+S_TYPE = 8                              ; LBR$C_TYP_x
+S_INDEX = 12                            ; the index LBR$SET_INDEX chose, from 1
+S_KEYS = 16                             ; the keys in memory, an entry each, and
+S_KUSED = 20                            ; their bytes,
+S_KMAX = 24                             ; and their room
+S_ROFF = 28                             ; the module read: the next byte in S_RBUF,
+S_LKP = 32                              ; 0 no lookup, 1 reading, 3 at its end,
+S_HOPS = 36                             ; and the blocks it has gone through
+S_WVBN = 40                             ; the module written: its block in S_WBUF, 0 none,
+S_WOFF = 44                             ; the next byte there,
+S_WRFA = 48                             ; and its first block
+S_TRAV = 52                             ; 1 in LBR$GET_INDEX
+S_DIRTY = 56                            ; 1 if an index changed
+S_BUILD = 60                            ; LBR$CLOSE's room for the index blocks,
+S_BMAX = 64                             ; in blocks
+S_FAB = 72
+S_RAB = S_FAB + FAB$C_BLN
+S_HDR = S_RAB + RAB$C_BLN + 4           ; block 1: the library header
+S_RBUF = S_HDR + 512                    ; the block read
+S_WBUF = S_RBUF + 512                   ; the block written
+S_SIZE = S_WBUF + 512
+
+; An entry in memory: the index's number, the RFA it points at, the key.
+E_IDX = 0
+E_VBN = 1
+E_OFF = 5
+E_LEN = 7
+E_KEY = 8
+
+; The library header (LHD$) in block 1, and its index descriptors (IDD$).
+LHD_TYPE = 0
+LHD_NINDEX = 1
+LHD_SANEID = 4
+LHD_MAJORID = 8
+LHD_MINORID = 10
+LHD_LBRVER = 12
+LHD_CREDAT = 44
+LHD_UPDTIM = 52
+LHD_MHDUSZ = 60
+LHD_NEXTRFA = 76
+LHD_NEXTVBN = 82
+LHD_HIPREAL = 94
+LHD_HIPRUSD = 98
+LHD_IDXBLKS = 102
+LHD_IDXCNT = 106
+LHD_MODCNT = 110
+LHD_MODHDRS = 116
+LHD_IDD = 196
+IDD_FLAGS = 0                           ; IDD_M_x
+IDD_KEYLEN = 2
+IDD_VBN = 4                             ; the root, 0 if empty
+IDD_M_ASCII = 1
+IDD_M_VARLEN = 4
+IDD_V_NOCASECMP = 3                     ; CRE$M_x, 3 bits up
+IDD_V_UPCASNTRY = 5
+SANEID = 233579905                      ; format 3's
+MHD_ID = ^XAD                           ; MHD$B_ID's
+RFA_INDEX = ^XFFFF                      ; an entry's offset that points at an index block
+MAXDEPTH = 16                           ; deeper indexes are bad
+
+; UPCASE reg: makes the letter in reg a capital.
+        .MACRO  UPCASE  REG, ?L
+        CMPB    REG, #^A/a/
+        BLSSU   L
+        CMPB    REG, #^A/z/
+        BGTRU   L
+        SUBB2   #^A/a/-^A/A/, REG
+L:
+        .ENDM   UPCASE
+
+        .PSECT  LBR_DATA, NOEXE, WRT, QUAD
+SLOTS:  .BLKB   S_SIZE*LBR$C_MAXCTL     ; the control indexes
+FABT:   $FAB                            ; a slot's FAB and RAB, as they start
+RABT:   $RAB
+KEYBUF: .BLKB   LBR$C_MAXKEYLEN         ; the key looked up or inserted,
+KEYLEN: .LONG   0                       ; its length
+RANGE:  .BLKL   2                       ; $EXPREG's
+NOW:    .QUAD   0
+PEEK:   .BLKB   4                       ; a record's first bytes
+EOT:    .BYTE   ^X77, 0, ^X77           ; the record that ends a module
+VERSION:
+        .ASCIC  "vaxpunk LBR V0.1"
+        .ALIGN  LONG
+MHDBUF: .BLKB   128                     ; a new module's header
+TMPBLK: .BLKB   512                     ; a block whose reference count changes
+B_FIRST:                                ; LBR$CLOSE: the first index block's VBN,
+        .LONG   0
+B_NN:   .LONG   0                       ; the blocks built,
+B_CUR:  .LONG   0                       ; the one entries go in, 0 a new one,
+B_CNT:  .LONG   0                       ; and the entries of the leaves
+
+        .PSECT  LBR_CODE, EXE, LONG
+
+; LBR$INI_CONTROL library_index, func, type [, namblk]: gives out a
+; control index for a library, which LBR$OPEN then opens, writing it at
+; library_index. func is LBR$C_CREATE, READ or UPDATE, type the library's
+; LBR$C_TYP_x or LBR$C_TYP_UNK for any, both by reference. R0 =
+; LBR$_NORMAL, LBR$_ILLFUNC, LBR$_ILLTYP or LBR$_TOOMNYLIB.
+; vaxpunk: namblk, a NAM block to open by file ID, is ignored.
+        .ENTRY  LBR$INI_CONTROL, ^M<R2, R3, R4, R5, R6, R7, R8, R9, R10, R11>
+        MOVL    @8(AP), R6
+        MOVL    #LBR$_ILLFUNC, R0
+        CMPL    R6, #LBR$C_UPDATE
+        BGTRU   90$
+        MOVL    @12(AP), R7
+        MOVL    #LBR$_ILLTYP, R0
+        CMPL    R7, #255
+        BGTRU   90$
+        CMPL    R7, #LBR$C_TYP_ESHSTB
+        BLEQU   5$
+        CMPL    R7, #128                ; or the user's, 128 to 255
+        BLSSU   90$
+5$:     CLRL    R8
+        MOVAB   SLOTS, R11
+10$:    TSTL    S_STATE(R11)
+        BEQL    20$
+        ADDL2   #S_SIZE, R11
+        AOBLSS  #LBR$C_MAXCTL, R8, 10$
+        MOVL    #LBR$_TOOMNYLIB, R0
+        BRB     90$
+20$:    MOVQ    S_KEYS(R11), R9         ; keep its memory: KEYS, KUSED
+        MOVL    S_KMAX(R11), R2
+        MOVQ    S_BUILD(R11), R3        ; and BUILD, BMAX
+        PUSHR   #^M<R2, R3, R4>
+        MOVC5   #0, (SP), #0, #S_SIZE, (R11)
+        POPR    #^M<R2, R3, R4>
+        MOVL    R9, S_KEYS(R11)
+        MOVL    R2, S_KMAX(R11)
+        MOVQ    R3, S_BUILD(R11)
+        MOVC3   #FAB$C_BLN, FABT, S_FAB(R11)
+        MOVC3   #RAB$C_BLN, RABT, S_RAB(R11)
+        MOVAB   S_FAB(R11), S_RAB+RAB$L_FAB(R11)
+        MOVL    #1, S_STATE(R11)
+        MOVL    R6, S_FUNC(R11)
+        MOVL    R7, S_TYPE(R11)
+        MOVL    #1, S_INDEX(R11)
+        ADDL3   #1, R8, @4(AP)
+        MOVL    #LBR$_NORMAL, R0
+90$:    RET
+
+; LBR$OPEN library_index [, fns] [, create_options] [, dns]: opens the
+; library file fns names, its defaults dns, both by descriptor, on a
+; control index from LBR$INI_CONTROL; LBR$C_CREATE makes a new one as
+; create_options, the CRE$ array, says. R0 = LBR$_NORMAL, LBR$_LIBOPN,
+; LBR$_NOFILNAM, LBR$_ILLCREOPT, LBR$_ILLFMT, LBR$_TYPMISMCH or RMS's
+; status.
+; vaxpunk: no related file, rlfna and rns, nor resultant name, rnslen.
+        .ENTRY  LBR$OPEN, ^M<R2, R3, R4, R5, R6, R7, R8, R9, R10, R11>
+        MOVL    4(AP), R1
+        BSBW    GETSLOT
+        BLBC    R0, 99$
+        MOVL    #LBR$_LIBOPN, R0
+        CMPL    S_STATE(R11), #2
+        BEQL    99$
+        MOVL    #LBR$_NOFILNAM, R0
+        CMPB    (AP), #2
+        BLSSU   99$
+        MOVL    8(AP), R1
+        BEQL    99$
+        MOVB    (R1), S_FAB+FAB$B_FNS(R11)
+        MOVL    4(R1), S_FAB+FAB$L_FNA(R11)
+        CMPB    (AP), #4
+        BLSSU   5$
+        MOVL    16(AP), R1
+        BEQL    5$
+        MOVB    (R1), S_FAB+FAB$B_DNS(R11)
+        MOVL    4(R1), S_FAB+FAB$L_DNA(R11)
+5$:     CLRL    S_KUSED(R11)
+        CLRL    S_DIRTY(R11)
+        TSTL    S_FUNC(R11)             ; LBR$C_CREATE
+        BEQL    50$
+        MOVB    #FAB$M_BIO!FAB$M_GET, S_FAB+FAB$B_FAC(R11)
+        CMPL    S_FUNC(R11), #LBR$C_UPDATE
+        BNEQ    10$
+        BISB2   #FAB$M_PUT, S_FAB+FAB$B_FAC(R11)
+10$:    $OPEN   FAB=S_FAB(R11)
+        BLBC    R0, 99$
+        $CONNECT RAB=S_RAB(R11)
+        BLBC    R0, 90$
+        MOVL    #1, R1
+        MOVAB   S_HDR(R11), R2
+        BSBW    RDBLK
+        BLBC    R0, 90$
+        MOVL    #LBR$_ILLFMT, R0
+        CMPL    S_HDR+LHD_SANEID(R11), #SANEID
+        BNEQ    90$
+        CMPW    S_HDR+LHD_MAJORID(R11), #3
+        BNEQ    90$
+        MOVZBL  S_HDR+LHD_NINDEX(R11), R1
+        BEQL    90$
+        CMPL    R1, #8
+        BGTRU   90$
+        CMPB    S_HDR+LHD_MHDUSZ(R11), #128-16
+        BGTRU   90$
+        MOVZBL  S_HDR+LHD_TYPE(R11), R1
+        TSTL    S_TYPE(R11)
+        BEQL    20$
+        CMPL    R1, S_TYPE(R11)
+        BEQL    20$
+        MOVL    #LBR$_TYPMISMCH, R0
+        BRB     90$
+20$:    MOVL    R1, S_TYPE(R11)
+        BSBW    LOADIDX
+        BLBC    R0, 90$
+        BRW     80$
+50$:    MOVL    12(AP), R6              ; create: the options
+        MOVL    #LBR$_ILLCREOPT, R0
+        CMPB    (AP), #3
+        BLSSU   99$
+        TSTL    R6
+        BEQL    99$
+        MOVL    CRE$L_TYPE(R6), R1
+        BEQL    99$
+        TSTL    S_TYPE(R11)
+        BEQL    52$
+        CMPL    R1, S_TYPE(R11)
+        BEQL    52$
+        MOVL    #LBR$_TYPMISMCH, R0
+        BRB     99$
+52$:    MOVL    R1, S_TYPE(R11)
+        MOVL    CRE$L_IDXMAX(R6), R7
+        BEQL    99$
+        CMPL    R7, #8
+        BGTRU   99$
+        MOVL    CRE$L_KEYLEN(R6), R8
+        BEQL    99$
+        CMPL    R8, #LBR$C_MAXKEYLEN
+        BGTRU   99$
+        CMPL    CRE$L_UHDMAX(R6), #128-16
+        BGTRU   99$
+        MOVB    #FAB$M_BIO!FAB$M_GET!FAB$M_PUT, S_FAB+FAB$B_FAC(R11)
+        MOVB    #FAB$C_FIX, S_FAB+FAB$B_RFM(R11)
+        MOVW    #512, S_FAB+FAB$W_MRS(R11)
+        MOVL    CRE$L_ALLOC(R6), S_FAB+FAB$L_ALQ(R11)
+        $CREATE FAB=S_FAB(R11)
+        BLBC    R0, 99$
+        $CONNECT RAB=S_RAB(R11)
+        BLBC    R0, 90$
+        MOVC5   #0, (SP), #0, #512, S_HDR(R11)
+        MOVB    S_TYPE(R11), S_HDR+LHD_TYPE(R11)
+        MOVB    R7, S_HDR+LHD_NINDEX(R11)
+        MOVL    #SANEID, S_HDR+LHD_SANEID(R11)
+        MOVW    #3, S_HDR+LHD_MAJORID(R11)
+        MOVC3   #17, VERSION, S_HDR+LHD_LBRVER(R11)
+        $GETTIM_S NOW
+        MOVQ    NOW, S_HDR+LHD_CREDAT(R11)
+        MOVQ    NOW, S_HDR+LHD_UPDTIM(R11)
+        MOVB    CRE$L_UHDMAX(R6), S_HDR+LHD_MHDUSZ(R11)
+        MOVL    #2, S_HDR+LHD_NEXTRFA(R11)
+        MOVL    #2, S_HDR+LHD_NEXTVBN(R11)
+        EXTZV   #0, #3, CRE$L_IDXOPT(R6), R1
+        ASHL    #IDD_V_NOCASECMP, R1, R1
+        BISL2   #IDD_M_ASCII!IDD_M_VARLEN, R1
+        MOVAB   S_HDR+LHD_IDD(R11), R2
+60$:    MOVW    R1, IDD_FLAGS(R2)
+        MOVW    R8, IDD_KEYLEN(R2)
+        ADDL2   #8, R2
+        SOBGTR  R7, 60$
+        MOVL    #1, S_DIRTY(R11)
+        MOVL    #1, R1
+        MOVAB   S_HDR(R11), R2
+        BSBW    WRBLK
+        BLBC    R0, 90$
+80$:    MOVL    #2, S_STATE(R11)
+        MOVL    #1, S_INDEX(R11)
+        MOVL    #LBR$_NORMAL, R0
+        RET
+90$:    PUSHL   R0
+        $CLOSE  FAB=S_FAB(R11)
+        MOVL    (SP)+, R0
+99$:    RET
+
+; LBR$CLOSE library_index: closes the library, writing its indexes and
+; header first if they changed, and frees the control index. R0 =
+; LBR$_NORMAL, LBR$_ILLCTL, or the status of a write that failed.
+        .ENTRY  LBR$CLOSE, ^M<R2, R3, R4, R5, R6, R7, R8, R9, R10, R11>
+        MOVL    4(AP), R1
+        BSBW    GETSLOT
+        BLBC    R0, 90$
+        MOVL    #LBR$_NORMAL, R6
+        CMPL    S_STATE(R11), #2
+        BNEQ    80$
+        TSTL    S_WVBN(R11)
+        BEQL    10$
+        BSBW    ENDW
+        MOVL    R0, R6
+10$:    BLBC    R6, 20$
+        BLBC    S_DIRTY(R11), 20$
+        BSBW    WRIDX
+        MOVL    R0, R6
+20$:    $CLOSE  FAB=S_FAB(R11)
+        BLBC    R6, 80$
+        MOVL    R0, R6
+80$:    CLRL    S_STATE(R11)
+        BLBC    R6, 85$
+        MOVL    #LBR$_NORMAL, R6
+85$:    MOVL    R6, R0
+90$:    RET
+
+; LBR$GET_HEADER library_index, retary: fills the 128 longwords at retary
+; with what the library's header says, as $LHIDEF lays them out. R0 =
+; LBR$_NORMAL or LBR$_LIBNOTOPN.
+        .ENTRY  LBR$GET_HEADER, ^M<R2, R3, R4, R5, R6, R7, R8, R9, R10, R11>
+        MOVL    4(AP), R1
+        BSBW    OPENSLOT
+        BLBC    R0, 90$
+        MOVL    8(AP), R6
+        MOVC5   #0, (SP), #0, #512, (R6)
+        MOVZBL  S_HDR+LHD_TYPE(R11), LHI$L_TYPE(R6)
+        MOVZBL  S_HDR+LHD_NINDEX(R11), LHI$L_NINDEX(R6)
+        MOVZWL  S_HDR+LHD_MAJORID(R11), LHI$L_MAJORID(R6)
+        MOVZWL  S_HDR+LHD_MINORID(R11), LHI$L_MINORID(R6)
+        MOVC3   #32, S_HDR+LHD_LBRVER(R11), LHI$T_LBRVER(R6)
+        MOVQ    S_HDR+LHD_CREDAT(R11), LHI$L_CREDAT(R6)
+        MOVQ    S_HDR+LHD_UPDTIM(R11), LHI$L_UPDTIM(R6)
+        MOVL    S_HDR+LHD_NEXTRFA(R11), LHI$B_NEXTRFA(R6)
+        MOVW    S_HDR+LHD_NEXTRFA+4(R11), LHI$B_NEXTRFA+4(R6)
+        MOVL    S_HDR+LHD_NEXTVBN(R11), LHI$L_NEXTVBN(R6)
+        MOVL    S_HDR+LHD_HIPREAL(R11), LHI$L_HIPREAL(R6)
+        MOVL    S_HDR+LHD_IDXBLKS(R11), LHI$L_IDXBLKS(R6)
+        MOVL    S_HDR+LHD_IDXCNT(R11), LHI$L_IDXCNT(R6)
+        MOVL    S_HDR+LHD_MODCNT(R11), LHI$L_MODCNT(R6)
+        MOVZBL  S_HDR+LHD_MHDUSZ(R11), LHI$L_MHDUSZ(R6)
+        MOVL    #1, LHI$L_LIBSTATUS(R6)
+        MOVL    #LBR$_NORMAL, R0
+90$:    RET
+
+; LBR$SET_INDEX library_index, index_number: makes the index the one the
+; routines that take a key use, from 1, by reference. R0 = LBR$_NORMAL,
+; LBR$_LIBNOTOPN or LBR$_ILLIDXNUM.
+        .ENTRY  LBR$SET_INDEX, ^M<R2, R3, R4, R5, R6, R7, R8, R9, R10, R11>
+        MOVL    4(AP), R1
+        BSBW    OPENSLOT
+        BLBC    R0, 90$
+        MOVL    @8(AP), R1
+        BSBW    IDXNUM
+        BLBC    R0, 90$
+        MOVL    R1, S_INDEX(R11)
+        MOVL    #LBR$_NORMAL, R0
+90$:    RET
+
+; LBR$LOOKUP_KEY library_index, key, txtrfa: finds key, by descriptor, in
+; the current index, writes the RFA it points at in the quadword txtrfa,
+; and readies LBR$GET_RECORD to read that module's records. R0 =
+; LBR$_NORMAL, LBR$_KEYNOTFND, LBR$_INVKEY, LBR$_LIBNOTOPN or
+; LBR$_ILLFMT.
+        .ENTRY  LBR$LOOKUP_KEY, ^M<R2, R3, R4, R5, R6, R7, R8, R9, R10, R11>
+        MOVL    4(AP), R1
+        BSBW    OPENSLOT
+        BLBC    R0, 90$
+        CLRL    S_LKP(R11)
+        MOVL    8(AP), R1
+        BSBW    KEY
+        BLBC    R0, 90$
+        BSBW    FIND
+        MOVL    #LBR$_KEYNOTFND, R0
+        BLBC    R1, 90$
+        MOVL    12(AP), R6
+        MOVL    E_VBN(R4), (R6)
+        MOVZWL  E_OFF(R4), 4(R6)
+        MOVL    E_VBN(R4), R1
+        MOVZWL  E_OFF(R4), R2
+        BSBW    SEEK
+        BLBC    R0, 90$
+        MOVL    #LBR$_NORMAL, R0
+90$:    RET
+
+; LBR$GET_RECORD library_index, inbufdes [, outbufdes]: copies the next
+; record of the module LBR$LOOKUP_KEY found into the buffer inbufdes
+; describes, as much of it as fits, and sets outbufdes, if there, to
+; describe what it copied. R0 = LBR$_NORMAL, LBR$_RECTRUNC if it didn't
+; all fit, RMS$_EOF past the module's last record, LBR$_LKPNOTDON or
+; LBR$_LIBNOTOPN.
+; vaxpunk: move mode only; no LBR$SET_LOCATE.
+        .ENTRY  LBR$GET_RECORD, ^M<R2, R3, R4, R5, R6, R7, R8, R9, R10, R11>
+        MOVL    4(AP), R1
+        BSBW    OPENSLOT
+        BLBC    R0, 99$
+        MOVL    #LBR$_LKPNOTDON, R0
+        BLBC    S_LKP(R11), 99$
+        MOVL    #RMS$_EOF, R0
+        CMPL    S_LKP(R11), #3
+        BEQL    99$
+        MOVL    #LBR$_BADPARAM, R0
+        CMPB    (AP), #2
+        BLSSU   99$
+        MOVL    8(AP), R6
+        BEQL    99$
+        MOVZWL  (R6), R7                ; R7, R8: the buffer
+        MOVL    4(R6), R8
+        BSBW    GETB                    ; R9 = the record's length
+        BLBC    R0, 99$
+        MOVL    R1, R9
+        BSBW    GETB
+        BLBC    R0, 99$
+        INSV    R1, #8, #8, R9
+        CLRL    R10
+10$:    CMPL    R10, R9
+        BGEQU   30$
+        BSBW    GETB
+        BLBC    R0, 99$
+        CMPL    R10, R7
+        BGEQU   20$
+        MOVB    R1, (R8)[R10]
+20$:    CMPL    R10, #3
+        BGEQU   25$
+        MOVB    R1, PEEK[R10]
+25$:    INCL    R10
+        BRB     10$
+30$:    BLBC    R9, 40$
+        BSBW    GETB                    ; the pad byte
+        BLBC    R0, 99$
+40$:    CMPL    R9, #3
+        BNEQ    50$
+        CMPB    PEEK, EOT
+        BNEQ    50$
+        CMPW    PEEK+1, EOT+1
+        BNEQ    50$
+        MOVL    #3, S_LKP(R11)
+        MOVL    #RMS$_EOF, R0
+        RET
+50$:    MOVL    #LBR$_NORMAL, R0
+        CMPL    R9, R7
+        BLEQU   60$
+        MOVL    R7, R9
+        MOVL    #LBR$_RECTRUNC, R0
+60$:    CMPB    (AP), #3
+        BLSSU   99$
+        MOVL    12(AP), R6
+        BEQL    99$
+        MOVW    R9, (R6)
+        MOVL    R8, 4(R6)
+99$:    RET
+
+; LBR$PUT_RECORD library_index, bufdes, txtrfa: writes the record bufdes
+; describes as the next of a new module, which the first call starts at
+; the end of the library with its header, and writes its RFA, the
+; module's, in the quadword txtrfa. LBR$PUT_END ends the module. R0 =
+; LBR$_NORMAL, LBR$_ILLOP if the library is open to read, LBR$_RECLNG,
+; LBR$_LIBNOTOPN or RMS's status.
+        .ENTRY  LBR$PUT_RECORD, ^M<R2, R3, R4, R5, R6, R7, R8, R9, R10, R11>
+        MOVL    4(AP), R1
+        BSBW    WRSLOT
+        BLBC    R0, 90$
+        TSTL    S_WVBN(R11)
+        BNEQ    20$
+        BSBW    NEWW                    ; a new module: its header
+        MOVL    S_WVBN(R11), S_WRFA(R11)
+        MOVC5   #0, (SP), #0, #128, MHDBUF
+        MOVB    #MHD_ID, MHDBUF+1
+        $GETTIM_S MHDBUF+8
+        MOVZBL  S_HDR+LHD_MHDUSZ(R11), R3
+        ADDL2   #16, R3
+        MOVAB   MHDBUF, R2
+        BSBW    PUTREC
+        BLBC    R0, 90$
+20$:    MOVL    12(AP), R6
+        MOVL    S_WRFA(R11), (R6)
+        MOVL    #6, 4(R6)
+        MOVL    8(AP), R1
+        MOVZWL  (R1), R3
+        MOVL    4(R1), R2
+        BSBW    PUTREC
+        BLBC    R0, 90$
+        MOVL    #LBR$_NORMAL, R0
+90$:    RET
+
+; LBR$PUT_END library_index: ends the module LBR$PUT_RECORD wrote. R0 =
+; LBR$_NORMAL, LBR$_LIBNOTOPN, LBR$_ILLOP or RMS's status.
+        .ENTRY  LBR$PUT_END, ^M<R2, R3, R4, R5, R6, R7, R8, R9, R10, R11>
+        MOVL    4(AP), R1
+        BSBW    WRSLOT
+        BLBC    R0, 90$
+        TSTL    S_WVBN(R11)
+        BEQL    10$
+        BSBW    ENDW
+        BLBC    R0, 90$
+10$:    MOVL    #LBR$_NORMAL, R0
+90$:    RET
+
+; LBR$INSERT_KEY library_index, key, txtrfa: puts key, by descriptor, in
+; the current index, pointing at the module at the RFA in the quadword
+; txtrfa, and counts it in the module's header. R0 = LBR$_NORMAL,
+; LBR$_DUPKEY, LBR$_INVKEY, LBR$_INVRFA, LBR$_UPDURTRAV, LBR$_ILLOP or
+; LBR$_LIBNOTOPN.
+        .ENTRY  LBR$INSERT_KEY, ^M<R2, R3, R4, R5, R6, R7, R8, R9, R10, R11>
+        MOVL    4(AP), R1
+        BSBW    WRSLOT
+        BLBC    R0, 90$
+        MOVL    8(AP), R1
+        BSBW    KEY
+        BLBC    R0, 90$
+        BSBW    FIND
+        MOVL    #LBR$_DUPKEY, R0
+        BLBS    R1, 90$
+        MOVL    12(AP), R6
+        MOVL    (R6), R1
+        MOVZWL  4(R6), R2
+        MOVL    #1, R3
+        BSBW    REFADJ
+        BLBC    R0, 90$
+        MOVL    (R6), R1
+        MOVZWL  4(R6), R2
+        BSBW    ADDKEY
+90$:    RET
+
+; LBR$REPLACE_KEY library_index, key, oldrfa, newrfa: points key, by
+; descriptor, in the current index at the module at the RFA in the
+; quadword newrfa instead, or inserts it if it isn't there, and counts
+; it in the modules' headers. R0 as LBR$INSERT_KEY's.
+        .ENTRY  LBR$REPLACE_KEY, ^M<R2, R3, R4, R5, R6, R7, R8, R9, R10, R11>
+        MOVL    4(AP), R1
+        BSBW    WRSLOT
+        BLBC    R0, 90$
+        MOVL    8(AP), R1
+        BSBW    KEY
+        BLBC    R0, 90$
+        BSBW    FIND
+        MOVL    16(AP), R6
+        BLBS    R1, 10$
+        MOVL    (R6), R1                ; not there: insert it
+        MOVZWL  4(R6), R2
+        MOVL    #1, R3
+        BSBW    REFADJ
+        BLBC    R0, 90$
+        MOVL    (R6), R1
+        MOVZWL  4(R6), R2
+        BSBW    ADDKEY
+        RET
+10$:    MOVL    (R6), R1
+        MOVZWL  4(R6), R2
+        MOVL    #1, R3
+        BSBW    REFADJ
+        BLBC    R0, 90$
+        MOVL    E_VBN(R4), R1
+        MOVZWL  E_OFF(R4), R2
+        MNEGL   #1, R3
+        BSBW    REFADJ
+        MOVL    (R6), E_VBN(R4)
+        MOVW    4(R6), E_OFF(R4)
+        MOVL    #1, S_DIRTY(R11)
+        MOVL    #LBR$_NORMAL, R0
+90$:    RET
+
+; LBR$DELETE_KEY library_index, key: takes key, by descriptor, out of
+; the current index, and the count of it out of its module's header.
+; R0 = LBR$_NORMAL, LBR$_KEYNOTFND, LBR$_INVKEY, LBR$_UPDURTRAV,
+; LBR$_ILLOP or LBR$_LIBNOTOPN.
+        .ENTRY  LBR$DELETE_KEY, ^M<R2, R3, R4, R5, R6, R7, R8, R9, R10, R11>
+        MOVL    4(AP), R1
+        BSBW    WRSLOT
+        BLBC    R0, 90$
+        MOVL    8(AP), R1
+        BSBW    KEY
+        BLBC    R0, 90$
+        BSBW    FIND
+        MOVL    #LBR$_KEYNOTFND, R0
+        BLBC    R1, 90$
+        MOVL    E_VBN(R4), R1
+        MOVZWL  E_OFF(R4), R2
+        MNEGL   #1, R3
+        BSBW    REFADJ
+        MOVZBL  E_LEN(R4), R6           ; the entry's size
+        ADDL2   #E_KEY, R6
+        ADDL3   R6, R4, R2
+        MOVL    R4, R3
+        ADDL3   S_KEYS(R11), S_KUSED(R11), R1
+        SUBL2   R2, R1
+        BSBW    MOVE
+        SUBL2   R6, S_KUSED(R11)
+        MOVL    #1, S_DIRTY(R11)
+        MOVL    #LBR$_NORMAL, R0
+90$:    RET
+
+; LBR$DELETE_DATA library_index, txtrfa: deletes the module at the RFA
+; in the quadword txtrfa, once no key points at it. R0 = LBR$_NORMAL,
+; LBR$_STILLKEYS, LBR$_INVRFA, LBR$_ILLOP or LBR$_LIBNOTOPN.
+; vaxpunk: its blocks stay in the library, unused.
+        .ENTRY  LBR$DELETE_DATA, ^M<R2, R3, R4, R5, R6, R7, R8, R9, R10, R11>
+        MOVL    4(AP), R1
+        BSBW    WRSLOT
+        BLBC    R0, 90$
+        MOVL    8(AP), R6
+        MOVL    (R6), R1
+        MOVZWL  4(R6), R2
+        CLRL    R3
+        BSBW    REFADJ
+        BLBC    R0, 90$
+        MOVL    #LBR$_STILLKEYS, R0
+        TSTL    R1
+        BNEQ    90$
+        MOVL    #LBR$_NORMAL, R0
+90$:    RET
+
+; LBR$GET_INDEX library_index, index_number, routine [, match_desc]:
+; calls routine for each key of the index, by reference, in order, or
+; each that matches match_desc's wildcards, * and %: routine key_desc,
+; txtrfa, the key by descriptor and its RFA by reference, which returns
+; a status, and one whose low bit is clear stops it. R0 = LBR$_NORMAL,
+; the routine's status that stopped it, LBR$_NULIDX for an empty index,
+; LBR$_NOMTCHFOU if no key matched, LBR$_ILLIDXNUM or LBR$_LIBNOTOPN.
+        .ENTRY  LBR$GET_INDEX, ^M<R2, R3, R4, R5, R6, R7, R8, R9, R10, R11>
+        MOVL    4(AP), R1
+        BSBW    OPENSLOT
+        BLBC    R0, 99$
+        MOVL    @8(AP), R1
+        BSBW    IDXNUM
+        BLBC    R0, 99$
+        MOVL    R1, R10                 ; R10 = the index
+        MOVL    #LBR$_BADPARAM, R0
+        MOVL    12(AP), R7              ; R7 = the routine
+        BEQL    99$
+        CLRL    R9                      ; R9 = the match, if any
+        CMPB    (AP), #4
+        BLSSU   5$
+        MOVL    16(AP), R9
+5$:     SUBL2   #16, SP                 ; (R8): the key's descriptor, 8(R8) its RFA
+        MOVL    SP, R8
+        CLRL    8(R8)
+        CLRL    12(R8)
+        MOVL    #1, S_TRAV(R11)
+        MOVL    S_KEYS(R11), R6         ; R6 = an entry
+        CLRL    R5                      ; R5 = the keys called for
+10$:    ADDL3   S_KEYS(R11), S_KUSED(R11), R0
+        CMPL    R6, R0
+        BGEQU   50$
+        MOVZBL  E_IDX(R6), R0
+        CMPL    R0, R10
+        BNEQ    40$
+        MOVZBL  E_LEN(R6), (R8)
+        MOVAB   E_KEY(R6), 4(R8)
+        TSTL    R9
+        BEQL    20$
+        PUSHR   #^M<R5>
+        MOVL    4(R8), R2
+        MOVZWL  (R8), R3
+        MOVL    4(R9), R4
+        MOVZWL  (R9), R5
+        BSBW    WILD
+        POPR    #^M<R5>
+        BLBC    R0, 40$
+20$:    MOVL    E_VBN(R6), 8(R8)
+        MOVW    E_OFF(R6), 12(R8)
+        INCL    R5
+        PUSHAB  8(R8)
+        PUSHL   R8
+        CALLS   #2, (R7)
+        BLBC    R0, 60$
+40$:    MOVZBL  E_LEN(R6), R0
+        MOVAB   E_KEY(R6)[R0], R6
+        BRB     10$
+50$:    MOVL    #LBR$_NORMAL, R0
+        TSTL    R5
+        BNEQ    60$
+        MOVL    #LBR$_NULIDX, R0
+        TSTL    R9
+        BEQL    60$
+        MOVL    #LBR$_NOMTCHFOU, R0
+60$:    CLRL    S_TRAV(R11)
+99$:    RET
+
+; GETSLOT: R1 = the address of a library index. R11 = its control index.
+; R0 = SS$_NORMAL, or LBR$_ILLCTL if it is none given out.
+GETSLOT:
+        .JSB_ENTRY  OUTPUT=<R11>
+        MOVL    #LBR$_ILLCTL, R0
+        MOVL    (R1), R11
+        DECL    R11
+        CMPL    R11, #LBR$C_MAXCTL
+        BGEQU   90$
+        MULL2   #S_SIZE, R11
+        MOVAB   SLOTS[R11], R11
+        TSTL    S_STATE(R11)
+        BEQL    90$
+        MOVL    #SS$_NORMAL, R0
+90$:    RSB
+
+; OPENSLOT: GETSLOT, and R0 = LBR$_LIBNOTOPN if its library isn't open.
+OPENSLOT:
+        .JSB_ENTRY  OUTPUT=<R11>
+        BSBW    GETSLOT
+        BLBC    R0, 90$
+        CMPL    S_STATE(R11), #2
+        BEQL    90$
+        MOVL    #LBR$_LIBNOTOPN, R0
+90$:    RSB
+
+; WRSLOT: OPENSLOT, and R0 = LBR$_ILLOP if its library is open to read,
+; LBR$_UPDURTRAV in LBR$GET_INDEX.
+WRSLOT:
+        .JSB_ENTRY  OUTPUT=<R11>
+        BSBW    OPENSLOT
+        BLBC    R0, 90$
+        MOVL    #LBR$_ILLOP, R0
+        CMPL    S_FUNC(R11), #LBR$C_READ
+        BEQL    90$
+        MOVL    #LBR$_UPDURTRAV, R0
+        BLBS    S_TRAV(R11), 90$
+        MOVL    #SS$_NORMAL, R0
+90$:    RSB
+
+; IDXNUM: R11 = a control index, R1 = an index number. R0 = SS$_NORMAL,
+; or LBR$_ILLIDXNUM if the library hasn't it.
+IDXNUM:
+        .JSB_ENTRY
+        MOVL    #LBR$_ILLIDXNUM, R0
+        TSTL    R1
+        BEQL    90$
+        CMPB    R1, S_HDR+LHD_NINDEX(R11)
+        BGTRU   90$
+        CMPL    R1, #8
+        BGTRU   90$
+        MOVL    #SS$_NORMAL, R0
+90$:    RSB
+
+; IDD: R11 = a control index. R5 = its current index's descriptor.
+IDD:
+        .JSB_ENTRY  OUTPUT=<R5>
+        ASHL    #3, S_INDEX(R11), R5
+        ADDL2   R11, R5
+        MOVAB   S_HDR+LHD_IDD-8(R5), R5
+        RSB
+
+; KEY: R11 = a control index, R1 = a key's descriptor. Puts it in KEYBUF
+; and KEYLEN, in capitals unless the current index compares keys as they
+; are and doesn't put them in capitals. R0 = SS$_NORMAL, or LBR$_INVKEY
+; if it is empty or too long for the index.
+KEY:
+        .JSB_ENTRY
+        BSBW    IDD
+        MOVZWL  IDD_FLAGS(R5), R4
+        MOVL    #LBR$_INVKEY, R0
+        MOVZWL  (R1), R3
+        BEQL    90$
+        CMPW    R3, IDD_KEYLEN(R5)
+        BGTRU   90$
+        CMPL    R3, #LBR$C_MAXKEYLEN
+        BGTRU   90$
+        MOVL    R3, KEYLEN
+        MOVL    4(R1), R1
+        CLRL    R2
+10$:    MOVZBL  (R1)[R2], R0
+        BBC     #IDD_V_NOCASECMP, R4, 20$
+        BBC     #IDD_V_UPCASNTRY, R4, 30$
+20$:    UPCASE  R0
+30$:    MOVB    R0, KEYBUF[R2]
+        AOBLSS  R3, R2, 10$
+        MOVL    #SS$_NORMAL, R0
+90$:    RSB
+
+; FIND: R11 = a control index. Finds KEYBUF in its current index: R4 =
+; its entry, R1 = 1; or R4 = where it would go, R1 = 0.
+FIND:
+        .JSB_ENTRY  OUTPUT=<R4>
+        BSBW    IDD
+        MOVZWL  IDD_FLAGS(R5), R5
+        MOVL    S_KEYS(R11), R4
+        ADDL3   R4, S_KUSED(R11), R7
+10$:    CMPL    R4, R7
+        BGEQU   80$
+        MOVZBL  E_IDX(R4), R0
+        CMPL    R0, S_INDEX(R11)
+        BLSSU   50$
+        BGTRU   80$
+        BSBW    COMPARE
+        TSTL    R0
+        BEQL    70$
+        BLSS    80$
+50$:    MOVZBL  E_LEN(R4), R0
+        MOVAB   E_KEY(R4)[R0], R4
+        BRB     10$
+70$:    MOVL    #1, R1
+        RSB
+80$:    CLRL    R1
+        RSB
+
+; COMPARE: R4 = an entry, R5 = its index's flags. R0 = -1, 0 or 1 as
+; KEYBUF comes before the entry's key, is it, or comes after. The key is
+; in capitals to compare unless the flags say NOCASENTR.
+COMPARE:
+        .JSB_ENTRY
+        MOVZBL  E_LEN(R4), R3
+        CLRL    R2
+10$:    CMPL    R2, KEYLEN
+        BGEQU   40$
+        CMPL    R2, R3
+        BGEQU   60$
+        MOVZBL  KEYBUF[R2], R1
+        MOVZBL  E_KEY(R4)[R2], R6
+        BBS     #IDD_V_NOCASECMP+1, R5, 20$
+        UPCASE  R6
+20$:    CMPL    R1, R6
+        BLSSU   50$
+        BGTRU   60$
+        INCL    R2
+        BRB     10$
+40$:    CMPL    R2, R3
+        BLSSU   50$
+        CLRL    R0
+        RSB
+50$:    MNEGL   #1, R0
+        RSB
+60$:    MOVL    #1, R0
+        RSB
+
+; ADDKEY: R11 = a control index, R4 = where KEYBUF goes in its current
+; index, R1 and R2 = the RFA it points at. Puts it there. R0 =
+; LBR$_NORMAL or $EXPREG's status.
+ADDKEY:
+        .JSB_ENTRY
+        MOVQ    R1, R7
+        SUBL2   S_KEYS(R11), R4         ; GROW may move the keys
+        ADDL3   #E_KEY, KEYLEN, R6
+        MOVL    R6, R1
+        BSBW    GROW
+        BLBC    R0, 90$
+        ADDL2   S_KEYS(R11), R4
+        ADDL3   S_KEYS(R11), S_KUSED(R11), R1
+        SUBL2   R4, R1
+        MOVL    R4, R2
+        ADDL3   R4, R6, R3
+        BSBW    MOVE
+        MOVB    S_INDEX(R11), E_IDX(R4)
+        MOVL    R7, E_VBN(R4)
+        MOVW    R8, E_OFF(R4)
+        MOVB    KEYLEN, E_LEN(R4)
+        MOVC3   KEYLEN, KEYBUF, E_KEY(R4)
+        ADDL2   R6, S_KUSED(R11)
+        MOVL    #1, S_DIRTY(R11)
+        MOVL    #LBR$_NORMAL, R0
+90$:    RSB
+
+; GROW: R11 = a control index, R1 = bytes. Makes room for that many more
+; in its keys, in new pages if it must. R0 = SS$_NORMAL or $EXPREG's.
+GROW:
+        .JSB_ENTRY
+        ADDL3   R1, S_KUSED(R11), R2
+        CMPL    R2, S_KMAX(R11)
+        BLEQU   80$
+        ASHL    #1, R2, R2
+        CMPL    R2, #65536
+        BGEQU   10$
+        MOVL    #65536, R2
+10$:    ADDL2   #4095, R2
+        ASHL    #-12, R2, R4            ; pages
+        $EXPREG_S PAGCNT=R4, RETADR=RANGE
+        BLBC    R0, 90$
+        MOVL    S_KUSED(R11), R1
+        MOVL    S_KEYS(R11), R2
+        MOVL    RANGE, R3
+        BSBW    MOVE
+        MOVL    RANGE, S_KEYS(R11)
+        ASHL    #12, R4, S_KMAX(R11)
+80$:    MOVL    #SS$_NORMAL, R0
+90$:    RSB
+
+; MOVE: R1 = bytes, R2 = from, R3 = to: copies them, the two places
+; overlapping or not.
+MOVE:
+        .JSB_ENTRY
+        TSTL    R1
+        BEQL    90$
+        CMPL    R3, R2
+        BGTRU   20$
+10$:    MOVB    (R2)+, (R3)+
+        SOBGTR  R1, 10$
+        RSB
+20$:    ADDL2   R1, R2
+        ADDL2   R1, R3
+30$:    MOVB    -(R2), -(R3)
+        SOBGTR  R1, 30$
+90$:    RSB
+
+; WILD: R2, R3 = a string, R4, R5 = a pattern, whose * matches any
+; characters and % one, letters in either case. R0 = 1 if it matches.
+WILD:
+        .JSB_ENTRY
+        CLRQ    R6                      ; R6, R7: in the string and the pattern
+        MNEGL   #1, R8                  ; R8: the last *, R9: where it matched from
+10$:    CMPL    R6, R3
+        BGEQU   60$
+        CMPL    R7, R5
+        BGEQU   40$
+        MOVZBL  (R4)[R7], R0
+        CMPB    R0, #^A/*/
+        BEQL    30$
+        CMPB    R0, #^A/%/
+        BEQL    20$
+        MOVZBL  (R2)[R6], R1
+        UPCASE  R0
+        UPCASE  R1
+        CMPB    R0, R1
+        BNEQ    40$
+20$:    INCL    R6
+        INCL    R7
+        BRB     10$
+30$:    MOVL    R7, R8
+        INCL    R7
+        MOVL    R6, R9
+        BRB     10$
+40$:    TSTL    R8                      ; no match here: back to the last *
+        BLSS    80$
+        ADDL3   #1, R8, R7
+        INCL    R9
+        MOVL    R9, R6
+        BRB     10$
+60$:    CMPL    R7, R5
+        BGEQU   70$
+        CMPB    (R4)[R7], #^A/*/
+        BNEQ    80$
+        INCL    R7
+        BRB     60$
+70$:    MOVL    #1, R0
+        RSB
+80$:    CLRL    R0
+        RSB
+
+; RDBLK: R11 = a control index, R1 = a VBN, R2 = a buffer. Reads the
+; block there. R0 = RMS's status, or LBR$_ILLFMT if the library ends
+; before it.
+RDBLK:
+        .JSB_ENTRY
+        MOVL    R1, S_RAB+RAB$L_BKT(R11)
+        MOVL    R2, S_RAB+RAB$L_UBF(R11)
+        MOVW    #512, S_RAB+RAB$W_USZ(R11)
+        $READ   RAB=S_RAB(R11)
+        BLBS    R0, 80$
+        CMPL    R0, #RMS$_EOF
+        BNEQ    90$
+80$:    CMPW    S_RAB+RAB$W_RSZ(R11), #512
+        BEQL    90$
+        MOVL    #LBR$_ILLFMT, R0
+90$:    RSB
+
+; WRBLK: R11 = a control index, R1 = a VBN, R2 = a buffer. Writes the
+; block there. R0 = RMS's status.
+WRBLK:
+        .JSB_ENTRY
+        MOVL    R1, S_RAB+RAB$L_BKT(R11)
+        MOVL    R2, S_RAB+RAB$L_RBF(R11)
+        MOVW    #512, S_RAB+RAB$W_RSZ(R11)
+        $WRITE  RAB=S_RAB(R11)
+        RSB
+
+; LOADIDX: R11 = a control index whose library is open. Reads each
+; index's keys into memory, in order. R0 = SS$_NORMAL, LBR$_ILLFMT for a
+; bad index, or $EXPREG's or RMS's status.
+LOADIDX:
+        .JSB_ENTRY
+        MOVL    #1, R7                  ; R7 = the index
+        MOVAB   S_HDR+LHD_IDD(R11), R6
+10$:    MOVL    IDD_VBN(R6), R1
+        BEQL    20$
+        CLRL    R8
+        BSBW    WALK
+        BLBC    R0, 90$
+20$:    ADDL2   #8, R6
+        INCL    R7
+        CMPB    R7, S_HDR+LHD_NINDEX(R11)
+        BLEQU   10$
+        MOVL    #SS$_NORMAL, R0
+90$:    RSB
+
+; WALK: R11 = a control index, R1 = an index block's VBN, R7 = the index,
+; R8 = how deep the block is. Adds the keys of the block and the blocks
+; below it to the index's in memory. R0 as LOADIDX's.
+WALK:
+        .JSB_ENTRY
+        MOVL    #LBR$_ILLFMT, R0
+        CMPL    R8, #MAXDEPTH
+        BGTRU   99$
+        SUBL2   #512, SP
+        MOVL    SP, R9
+        MOVL    R9, R2
+        BSBW    RDBLK
+        BLBC    R0, 90$
+        MOVL    #LBR$_ILLFMT, R0
+        MOVZWL  (R9), R10
+        CMPL    R10, #500
+        BGTRU   90$
+        MOVAB   12(R9), R6              ; R6 = an entry, R10 = past the last
+        ADDL2   R6, R10
+10$:    CMPL    R6, R10
+        BGEQU   80$
+        MOVZBL  6(R6), R3
+        ADDL3   #7, R3, R2
+        ADDL2   R6, R2
+        MOVL    #LBR$_ILLFMT, R0
+        CMPL    R2, R10
+        BGTRU   90$
+        CMPW    4(R6), #RFA_INDEX
+        BNEQ    20$
+        MOVL    (R6), R1
+        INCL    R8
+        BSBW    WALK
+        DECL    R8
+        BRB     30$
+20$:    BSBW    APPEND
+30$:    BLBC    R0, 90$
+        MOVZBL  6(R6), R3
+        MOVAB   7(R6)[R3], R6
+        BRB     10$
+80$:    MOVL    #SS$_NORMAL, R0
+90$:    ADDL2   #512, SP
+99$:    RSB
+
+; APPEND: R11 = a control index, R6 = a leaf entry of index R7 on disk.
+; Adds it to the end of the keys in memory. R0 = SS$_NORMAL or GROW's.
+APPEND:
+        .JSB_ENTRY
+        MOVZBL  6(R6), R9
+        ADDL3   #E_KEY, R9, R1
+        BSBW    GROW
+        BLBC    R0, 90$
+        ADDL3   S_KEYS(R11), S_KUSED(R11), R4
+        MOVB    R7, E_IDX(R4)
+        MOVL    (R6), E_VBN(R4)
+        MOVW    4(R6), E_OFF(R4)
+        MOVB    R9, E_LEN(R4)
+        MOVC3   R9, 7(R6), E_KEY(R4)
+        ADDL3   #E_KEY, R9, R1
+        ADDL2   R1, S_KUSED(R11)
+        MOVL    #SS$_NORMAL, R0
+90$:    RSB
+
+; SEEK: R11 = a control index, R1, R2 = a module's RFA. Reads its first
+; block and goes past its header, for LBR$GET_RECORD. R0 = SS$_NORMAL,
+; LBR$_INVRFA, LBR$_ILLFMT or RMS's status.
+SEEK:
+        .JSB_ENTRY
+        MOVL    #LBR$_INVRFA, R0
+        CMPL    R2, #6
+        BLSSU   90$
+        CMPL    R2, #510
+        BGTRU   90$
+        CMPL    R1, #2
+        BLSSU   90$
+        MOVL    R2, R6
+        MOVAB   S_RBUF(R11), R2
+        BSBW    RDBLK
+        BLBC    R0, 90$
+        MOVL    R6, S_ROFF(R11)
+        CLRL    S_HOPS(R11)
+        BSBW    GETB                    ; R6 = the header's length
+        BLBC    R0, 90$
+        MOVL    R1, R6
+        BSBW    GETB
+        BLBC    R0, 90$
+        INSV    R1, #8, #8, R6
+        MOVL    #LBR$_ILLFMT, R0
+        CMPL    R6, #2
+        BLSSU   90$
+        BSBW    GETB                    ; LBRFLAG
+        BLBC    R0, 90$
+        BSBW    GETB                    ; ID
+        BLBC    R0, 90$
+        CMPB    R1, #MHD_ID
+        BNEQ    80$
+        INCL    R6                      ; the rest, and the pad byte
+        BICL2   #1, R6
+        SUBL2   #2, R6
+        BEQL    70$
+60$:    BSBW    GETB
+        BLBC    R0, 90$
+        SOBGTR  R6, 60$
+70$:    MOVL    #1, S_LKP(R11)
+        MOVL    #SS$_NORMAL, R0
+        RSB
+80$:    MOVL    #LBR$_ILLFMT, R0
+90$:    RSB
+
+; GETB: R11 = a control index. R1 = the next byte of the module read,
+; from the next block of its chain when it must. R0 = SS$_NORMAL,
+; LBR$_ILLFMT at the chain's end, or RMS's status.
+GETB:
+        .JSB_ENTRY
+        MOVL    S_ROFF(R11), R2
+        CMPL    R2, #512
+        BLSSU   10$
+        MOVL    #LBR$_ILLFMT, R0
+        MOVL    S_RBUF+2(R11), R1       ; the next block
+        BEQL    90$
+        INCL    S_HOPS(R11)
+        CMPL    S_HOPS(R11), S_HDR+LHD_NEXTVBN(R11)
+        BGTRU   90$
+        MOVAB   S_RBUF(R11), R2
+        BSBW    RDBLK
+        BLBC    R0, 90$
+        MOVL    #6, R2
+10$:    MOVZBL  S_RBUF(R11)[R2], R1
+        INCL    R2
+        MOVL    R2, S_ROFF(R11)
+        MOVL    #SS$_NORMAL, R0
+90$:    RSB
+
+; NEWW: R11 = a control index. Starts a data block of the module written
+; at the end of the library.
+NEWW:
+        .JSB_ENTRY
+        MOVL    S_HDR+LHD_NEXTVBN(R11), S_WVBN(R11)
+        INCL    S_HDR+LHD_NEXTVBN(R11)
+        MOVC5   #0, (SP), #0, #512, S_WBUF(R11)
+        MOVL    #6, S_WOFF(R11)
+        RSB
+
+; NEXTW: R11 = a control index. Writes the module's full data block,
+; linked to the next, and starts the next. R0 = RMS's status.
+NEXTW:
+        .JSB_ENTRY
+        MOVL    S_HDR+LHD_NEXTVBN(R11), S_WBUF+2(R11)
+        MOVL    S_WVBN(R11), R1
+        MOVAB   S_WBUF(R11), R2
+        BSBW    WRBLK
+        BLBC    R0, 90$
+        BSBW    NEWW
+90$:    RSB
+
+; PUTB: R11 = a control index, R1 = a byte. Adds it to the module
+; written. R0 = SS$_NORMAL or RMS's status.
+PUTB:
+        .JSB_ENTRY
+        CMPL    S_WOFF(R11), #512
+        BLSSU   10$
+        PUSHL   R1
+        BSBW    NEXTW
+        MOVL    (SP)+, R1
+        BLBC    R0, 90$
+10$:    MOVL    S_WOFF(R11), R2
+        MOVB    R1, S_WBUF(R11)[R2]
+        INCL    S_WOFF(R11)
+        MOVL    #SS$_NORMAL, R0
+90$:    RSB
+
+; PUTREC: R11 = a control index, R2 = a record, R3 = its length. Adds it
+; to the module written, with its length and a pad byte if odd, and
+; counts it in the block it starts in. R0 = SS$_NORMAL, LBR$_RECLNG or
+; RMS's status.
+PUTREC:
+        .JSB_ENTRY
+        MOVL    #LBR$_RECLNG, R0
+        CMPL    R3, #65535
+        BGTRU   90$
+        CMPL    S_WOFF(R11), #512
+        BLSSU   5$
+        BSBW    NEXTW
+        BLBC    R0, 90$
+5$:     INCB    S_WBUF(R11)
+        MOVZBL  R3, R1
+        BSBW    PUTB
+        BLBC    R0, 90$
+        EXTZV   #8, #8, R3, R1
+        BSBW    PUTB
+        BLBC    R0, 90$
+        CLRL    R4
+10$:    CMPL    R4, R3
+        BGEQU   20$
+        MOVZBL  (R2)[R4], R1
+        BSBW    PUTB
+        BLBC    R0, 90$
+        INCL    R4
+        BRB     10$
+20$:    BLBC    R3, 30$
+        CLRL    R1
+        BSBW    PUTB
+        BLBC    R0, 90$
+30$:    MOVL    #SS$_NORMAL, R0
+90$:    RSB
+
+; ENDW: R11 = a control index. Ends the module written with the end
+; record and writes its last block. R0 = SS$_NORMAL or RMS's status.
+ENDW:
+        .JSB_ENTRY
+        MOVAB   EOT, R2
+        MOVL    #3, R3
+        BSBW    PUTREC
+        BLBC    R0, 90$
+        MOVL    S_WVBN(R11), R1
+        MOVAB   S_WBUF(R11), R2
+        BSBW    WRBLK
+        CLRL    S_WVBN(R11)
+90$:    RSB
+
+; REFADJ: R11 = a control index, R1, R2 = a module's RFA, R3 = what to
+; add to the count of keys in its header. R1 = the new count. R0 =
+; SS$_NORMAL, LBR$_INVRFA if no module's header is there, or RMS's
+; status.
+; ponytail: a header whose count is in the next block keeps its count.
+REFADJ:
+        .JSB_ENTRY
+        MOVL    #LBR$_INVRFA, R0
+        CMPL    R2, #6
+        BLSSU   90$
+        CMPL    R2, #512-10
+        BGTRU   70$
+        MOVL    R2, R6
+        MOVL    R1, R7
+        MOVAB   S_WBUF(R11), R2         ; in the block being written,
+        CMPL    R1, S_WVBN(R11)
+        BEQL    10$
+        MOVAB   TMPBLK, R2              ; or on disk
+        BSBW    RDBLK
+        BLBC    R0, 90$
+10$:    ADDL2   R2, R6
+        MOVL    #LBR$_INVRFA, R0
+        CMPB    3(R6), #MHD_ID
+        BNEQ    90$
+        ADDL2   R3, 6(R6)
+        MOVL    6(R6), R1
+        TSTL    R3
+        BEQL    80$
+        CMPL    R7, S_WVBN(R11)
+        BEQL    80$
+        PUSHL   R1
+        MOVL    R7, R1
+        BSBW    WRBLK
+        MOVL    (SP)+, R1
+        BLBC    R0, 90$
+80$:    MOVL    #SS$_NORMAL, R0
+90$:    RSB
+70$:    MOVL    #1, R1
+        BRB     80$
+
+; WRIDX: R11 = a control index. Writes each index of the library anew,
+; as B-trees, at its end, and its header. R0 = SS$_NORMAL, LBR$_INTRNLERR
+; or $EXPREG's or RMS's status.
+WRIDX:
+        .JSB_ENTRY
+        DIVL3   #128, S_KUSED(R11), R2  ; blocks enough for any index's
+        ADDL2   #32, R2
+        CMPL    R2, S_BMAX(R11)
+        BLEQU   10$
+        ADDL3   #7, R2, R4              ; 8 to a page
+        ASHL    #-3, R4, R4
+        $EXPREG_S PAGCNT=R4, RETADR=RANGE
+        BLBC    R0, 90$
+        MOVL    RANGE, S_BUILD(R11)
+        ASHL    #3, R4, S_BMAX(R11)
+10$:    CLRL    S_HDR+LHD_IDXBLKS(R11)
+        CLRL    S_HDR+LHD_IDXCNT(R11)
+        MOVL    #1, R7                  ; R7 = the index
+        MOVAB   S_HDR+LHD_IDD(R11), R6
+20$:    BSBW    BUILD
+        BLBC    R0, 90$
+        MOVL    R1, IDD_VBN(R6)
+        ADDL2   B_CNT, S_HDR+LHD_IDXCNT(R11)
+        CMPL    R7, #1
+        BNEQ    30$
+        MOVL    B_CNT, S_HDR+LHD_MODCNT(R11)
+        MOVL    B_CNT, S_HDR+LHD_MODHDRS(R11)
+30$:    ADDL2   #8, R6
+        INCL    R7
+        CMPB    R7, S_HDR+LHD_NINDEX(R11)
+        BLEQU   20$
+        $GETTIM_S NOW
+        MOVQ    NOW, S_HDR+LHD_UPDTIM(R11)
+        MOVL    S_HDR+LHD_NEXTVBN(R11), S_HDR+LHD_NEXTRFA(R11)
+        CLRW    S_HDR+LHD_NEXTRFA+4(R11)
+        MOVL    #1, R1
+        MOVAB   S_HDR(R11), R2
+        BSBW    WRBLK
+90$:    RSB
+
+; BUILD: R11 = a control index, R7 = an index. Writes the index's keys as
+; a B-tree at the end of the library: leaves of entries that point at
+; modules, and above them blocks of entries that point at the blocks
+; below, each keyed by that block's last key, up to a root of one block.
+; R1 = the root's VBN, 0 if it has no keys, B_CNT = its keys. R0 =
+; SS$_NORMAL, LBR$_INTRNLERR if they don't fit S_BUILD, or RMS's status.
+BUILD:
+        .JSB_ENTRY
+        MOVL    S_HDR+LHD_NEXTVBN(R11), B_FIRST
+        CLRL    B_NN
+        CLRL    B_CUR
+        CLRL    B_CNT
+        MOVL    S_KEYS(R11), R6         ; the leaves, from the keys in memory
+10$:    ADDL3   S_KEYS(R11), S_KUSED(R11), R0
+        CMPL    R6, R0
+        BGEQU   20$
+        MOVZBL  E_IDX(R6), R0
+        CMPL    R0, R7
+        BNEQ    15$
+        MOVL    E_VBN(R6), R1
+        MOVZWL  E_OFF(R6), R2
+        MOVAB   E_KEY(R6), R3
+        MOVZBL  E_LEN(R6), R4
+        BSBW    ADDENT
+        BLBC    R0, 99$
+        INCL    B_CNT
+15$:    MOVZBL  E_LEN(R6), R0
+        MOVAB   E_KEY(R6)[R0], R6
+        BRB     10$
+20$:    CLRL    R1
+        TSTL    B_NN
+        BEQL    90$
+        CLRL    R8                      ; R8: the level's first block
+30$:    SUBL3   R8, B_NN, R9            ; R9: past its last
+        CMPL    R9, #1
+        BEQL    50$
+        MOVL    B_NN, R9
+        CLRL    B_CUR
+        MOVL    R8, R10                 ; a block above for each of them
+40$:    MULL3   #512, R10, R6
+        ADDL2   S_BUILD(R11), R6
+        ADDL3   B_FIRST, R10, R1
+        MOVL    #RFA_INDEX, R2
+        MOVZWL  6(R6), R3               ; its last entry
+        ADDL2   R6, R3
+        MOVZBL  6(R3), R4
+        ADDL2   #7, R3
+        BSBW    ADDENT
+        BLBC    R0, 99$
+        SUBL3   S_BUILD(R11), B_CUR, R0 ; the block above is its parent
+        DIVL2   #512, R0
+        ADDL3   B_FIRST, R0, 2(R6)
+        AOBLSS  R9, R10, 40$
+        MOVL    R9, R8
+        BRB     30$
+50$:    CLRL    R10                     ; write them
+60$:    MULL3   #512, R10, R2
+        ADDL2   S_BUILD(R11), R2
+        CLRW    6(R2)
+        ADDL3   B_FIRST, R10, R1
+        BSBW    WRBLK
+        BLBC    R0, 99$
+        AOBLSS  B_NN, R10, 60$
+        ADDL2   B_NN, S_HDR+LHD_NEXTVBN(R11)
+        ADDL2   B_NN, S_HDR+LHD_IDXBLKS(R11)
+        ADDL3   B_FIRST, B_NN, R1
+        DECL    R1
+        MOVL    R1, S_HDR+LHD_HIPREAL(R11)
+        MOVL    R1, S_HDR+LHD_HIPRUSD(R11)
+90$:    MOVL    #SS$_NORMAL, R0
+99$:    RSB
+
+; ADDENT: R11 = a control index, R1, R2 = an RFA, R3 = a key, R4 = its
+; length. Adds the entry to block B_CUR of S_BUILD, or to a new block if
+; that is 0 or full; the block's fill word at 6 keeps where its last
+; entry is. R0 = SS$_NORMAL or LBR$_INTRNLERR.
+ADDENT:
+        .JSB_ENTRY
+        ADDL3   #7, R4, R5              ; R5 = its size
+        MOVL    B_CUR, R6
+        BEQL    10$
+        MOVZWL  (R6), R0
+        ADDL2   R5, R0
+        CMPL    R0, #500
+        BLEQU   20$
+10$:    MOVL    #LBR$_INTRNLERR, R0
+        CMPL    B_NN, S_BMAX(R11)
+        BGEQU   90$
+        MULL3   #512, B_NN, R6
+        ADDL2   S_BUILD(R11), R6
+        INCL    B_NN
+        MOVL    R6, B_CUR
+        PUSHR   #^M<R1, R2, R3, R4, R5>
+        MOVC5   #0, (SP), #0, #512, (R6)
+        POPR    #^M<R1, R2, R3, R4, R5>
+20$:    MOVZWL  (R6), R0
+        ADDL3   #12, R0, R7
+        MOVW    R7, 6(R6)
+        ADDL2   R6, R7
+        MOVL    R1, (R7)
+        MOVW    R2, 4(R7)
+        MOVB    R4, 6(R7)
+        ADDW2   R5, (R6)
+        MOVC3   R4, (R3), 7(R7)
+        MOVL    #SS$_NORMAL, R0
+90$:    RSB
+
+        .END

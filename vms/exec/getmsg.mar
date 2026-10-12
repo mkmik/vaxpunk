@@ -4,8 +4,8 @@
 ; A program asks for a status's message, %FACILITY-S-NAME, text, with
 ; $GETMSG, as on VMS, so DCL writes %RMS-E-FNF, file not found. VMS finds
 ; a facility's messages in its message file or the image's message
-; section; here a table in the executive holds the file system's, RMS's
-; and the few of TCP/IP Services' that the system's programs return. A status it has no text for is VMS's %NONAME-F-NOMSG, Message
+; section; here a table in the executive holds the file system's, RMS's,
+; the LBR$ routines' and the few of TCP/IP Services' that the system's programs return. A status it has no text for is VMS's %NONAME-F-NOMSG, Message
 ; number 0000000C, with the status's severity, and SS$_MSGNOTFND.
 ; ponytail: one table, no message files; add them when an image brings
 ; its own facility's messages.
@@ -1303,6 +1303,203 @@ MESSAGES:
         .ASCIC  "TCPIP"
         .ASCIC  "NORECORD"
         .ASCIC  "information not found"
+; The LBR$ routines' (sysexe/lbrshr/), facility LBR.
+        .LONG   ^X268001
+        .ASCIC  "LBR"
+        .ASCIC  "NORMAL"
+        .ASCIC  "success"
+        .LONG   ^X268009
+        .ASCIC  "LBR"
+        .ASCIC  "KEYINDEX"
+        .ASCIC  "key already in index"
+        .LONG   ^X268011
+        .ASCIC  "LBR"
+        .ASCIC  "KEYINS"
+        .ASCIC  "key being inserted"
+        .LONG   ^X268019
+        .ASCIC  "LBR"
+        .ASCIC  "OLDLIBRARY"
+        .ASCIC  "old format library opened"
+        .LONG   ^X268403
+        .ASCIC  "LBR"
+        .ASCIC  "NOHISTORY"
+        .ASCIC  "library has no update history"
+        .LONG   ^X26840B
+        .ASCIC  "LBR"
+        .ASCIC  "EMPTYHIST"
+        .ASCIC  "library update history is empty"
+        .LONG   ^X268800
+        .ASCIC  "LBR"
+        .ASCIC  "HDRTRUNC"
+        .ASCIC  "header truncated"
+        .LONG   ^X268808
+        .ASCIC  "LBR"
+        .ASCIC  "NOUPDHIST"
+        .ASCIC  "no update history found"
+        .LONG   ^X268810
+        .ASCIC  "LBR"
+        .ASCIC  "NULIDX"
+        .ASCIC  "index is empty"
+        .LONG   ^X268818
+        .ASCIC  "LBR"
+        .ASCIC  "OLDMISMCH"
+        .ASCIC  "old format library type mismatch"
+        .LONG   ^X268820
+        .ASCIC  "LBR"
+        .ASCIC  "RECTRUNC"
+        .ASCIC  "record truncated"
+        .LONG   ^X268828
+        .ASCIC  "LBR"
+        .ASCIC  "STILLKEYS"
+        .ASCIC  "keys still point at data"
+        .LONG   ^X268830
+        .ASCIC  "LBR"
+        .ASCIC  "TYPMISMCH"
+        .ASCIC  "library type mismatch"
+        .LONG   ^X268838
+        .ASCIC  "LBR"
+        .ASCIC  "NOMTCHFOU"
+        .ASCIC  "no match found"
+        .LONG   ^X268840
+        .ASCIC  "LBR"
+        .ASCIC  "ERRCLOSE"
+        .ASCIC  "error occurred during a previous write to library"
+        .LONG   ^X268848
+        .ASCIC  "LBR"
+        .ASCIC  "ENDTOPIC"
+        .ASCIC  "request LBR$OUTPUT_HELP terminate printing"
+        .LONG   ^X269002
+        .ASCIC  "LBR"
+        .ASCIC  "ALLWRNGBLK"
+        .ASCIC  "wrong block allocated"
+        .LONG   ^X26900A
+        .ASCIC  "LBR"
+        .ASCIC  "DUPKEY"
+        .ASCIC  "duplicate key in index"
+        .LONG   ^X269012
+        .ASCIC  "LBR"
+        .ASCIC  "ILLCTL"
+        .ASCIC  "illegal control index"
+        .LONG   ^X26901A
+        .ASCIC  "LBR"
+        .ASCIC  "ILLCREOPT"
+        .ASCIC  "illegal create options"
+        .LONG   ^X269022
+        .ASCIC  "LBR"
+        .ASCIC  "ILLIDXNUM"
+        .ASCIC  "illegal index number"
+        .LONG   ^X26902A
+        .ASCIC  "LBR"
+        .ASCIC  "ILLFMT"
+        .ASCIC  "illegal library format"
+        .LONG   ^X269032
+        .ASCIC  "LBR"
+        .ASCIC  "ILLFUNC"
+        .ASCIC  "illegal library function"
+        .LONG   ^X26903A
+        .ASCIC  "LBR"
+        .ASCIC  "ILLOP"
+        .ASCIC  "illegal operation for access requested"
+        .LONG   ^X269042
+        .ASCIC  "LBR"
+        .ASCIC  "ILLTYP"
+        .ASCIC  "illegal library type"
+        .LONG   ^X26904A
+        .ASCIC  "LBR"
+        .ASCIC  "INVKEY"
+        .ASCIC  "invalid key"
+        .LONG   ^X269052
+        .ASCIC  "LBR"
+        .ASCIC  "INVNAM"
+        .ASCIC  "invalid NAM block"
+        .LONG   ^X26905A
+        .ASCIC  "LBR"
+        .ASCIC  "INVRFA"
+        .ASCIC  "invalid RFA"
+        .LONG   ^X269062
+        .ASCIC  "LBR"
+        .ASCIC  "KEYNOTFND"
+        .ASCIC  "key not found"
+        .LONG   ^X26906A
+        .ASCIC  "LBR"
+        .ASCIC  "LIBNOTOPN"
+        .ASCIC  "library not open"
+        .LONG   ^X269072
+        .ASCIC  "LBR"
+        .ASCIC  "LKPNOTDON"
+        .ASCIC  "lookup has not been done"
+        .LONG   ^X26907A
+        .ASCIC  "LBR"
+        .ASCIC  "LIBOPN"
+        .ASCIC  "library already open"
+        .LONG   ^X269082
+        .ASCIC  "LBR"
+        .ASCIC  "NOFILNAM"
+        .ASCIC  "no file specification found"
+        .LONG   ^X26908A
+        .ASCIC  "LBR"
+        .ASCIC  "NOHLPTXT"
+        .ASCIC  "help text not found"
+        .LONG   ^X269092
+        .ASCIC  "LBR"
+        .ASCIC  "NOTHLPLIB"
+        .ASCIC  "not a HELP library"
+        .LONG   ^X26909A
+        .ASCIC  "LBR"
+        .ASCIC  "RECLNG"
+        .ASCIC  "illegal record length"
+        .LONG   ^X2690A2
+        .ASCIC  "LBR"
+        .ASCIC  "REFCNTZERO"
+        .ASCIC  "module reference count zero"
+        .LONG   ^X2690AA
+        .ASCIC  "LBR"
+        .ASCIC  "RFAPASTEOF"
+        .ASCIC  "VBN in map block request past EOF"
+        .LONG   ^X2690B2
+        .ASCIC  "LBR"
+        .ASCIC  "TOOMNYLIB"
+        .ASCIC  "too many libraries open"
+        .LONG   ^X2690BA
+        .ASCIC  "LBR"
+        .ASCIC  "UPDURTRAV"
+        .ASCIC  "index update during traverse illegal"
+        .LONG   ^X2690C2
+        .ASCIC  "LBR"
+        .ASCIC  "BADPARAM"
+        .ASCIC  "bad parameter"
+        .LONG   ^X2690CA
+        .ASCIC  "LBR"
+        .ASCIC  "INTRNLERR"
+        .ASCIC  "LBR internal error"
+        .LONG   ^X2690D2
+        .ASCIC  "LBR"
+        .ASCIC  "WRITEERR"
+        .ASCIC  "error writing library"
+        .LONG   ^X2690DA
+        .ASCIC  "LBR"
+        .ASCIC  "ILLOUTROU"
+        .ASCIC  "output routine improperly specified or missing"
+        .LONG   ^X2690E2
+        .ASCIC  "LBR"
+        .ASCIC  "ILLOUTWID"
+        .ASCIC  "output width improperly specified or missing"
+        .LONG   ^X2690EA
+        .ASCIC  "LBR"
+        .ASCIC  "ILLINROU"
+        .ASCIC  "input routine improperly specified or missing"
+        .LONG   ^X2690F2
+        .ASCIC  "LBR"
+        .ASCIC  "TOOMNYARG"
+        .ASCIC  "too many arguments"
+        .LONG   ^X2690FA
+        .ASCIC  "LBR"
+        .ASCIC  "USRINPERR"
+        .ASCIC  "user input routine returned error status"
+        .LONG   ^X269102
+        .ASCIC  "LBR"
+        .ASCIC  "NOHLPLIBS"
+        .ASCIC  "no default help libraries can be opened"
         .LONG   0
 
         .PSECT  $CODE$

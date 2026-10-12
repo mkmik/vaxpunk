@@ -1,0 +1,736 @@
+        .TITLE  OUTHELP LBR$OUTPUT_HELP: help text from a help library
+        .IDENT  /V0.1/
+;
+; LBR$OUTPUT_HELP is all of HELP: it finds a topic and its subtopics in a
+; help library and writes them through the caller's output routine, and
+; then, if asked, prompts for more with the caller's input routine. A help
+; library's modules are its topics, each the lines of a .HLP file's topic:
+; "1 COPY", its text, "2 /LOG", that subtopic's text, and on down; a
+; line that starts with / is a subtopic one level below the last numbered
+; one, and one that starts with ! a comment. A topic or subtopic is
+; matched by its name's start, in capitals.
+;
+;   HELP COPY /LOG              the topic, its text, the subtopic, its text,
+;     Additional information    and its own subtopics' names
+;     available:
+;   COPY /LOG Subtopic?         a subtopic of it, ? the list again, or
+;                               Return for the level above
+;
+; ponytail: one library, library_name or HELPLIB: no HLP$LIBRARY search
+; list, @library, wildcards, "..." or HLP$M_HELP's help on HELP; a topic
+; matches one module's first lines, not more.
+;
+        .LIBRARY "starlet.mlb"
+        $SSDEF
+        $RMSDEF
+        $LBRDEF
+        $HLPDEF
+        $LBRMSG
+
+        .EXTERNAL LBR$INI_CONTROL, LBR$OPEN, LBR$CLOSE, LBR$GET_INDEX
+        .EXTERNAL LBR$LOOKUP_KEY, LBR$GET_RECORD
+
+MAXW = 8                                ; levels of a topic followed
+WSIZE = 64                              ; a word: .ASCIC, its room
+LISTSIZE = 8192
+
+; TEXT "text": appends text to LINE.
+        .MACRO  TEXT    STRING, ?L
+        .SAVE_PSECT LOCAL_BLOCK
+        .PSECT  $LITERAL$
+L:      .ASCIC  STRING
+        .RESTORE_PSECT
+        MOVAB   L, R1
+        BSBW    LASCIC
+        .ENDM   TEXT
+
+; UPCASE reg: makes the letter in reg a capital.
+        .MACRO  UPCASE  REG, ?L
+        CMPB    REG, #^A/a/
+        BLSSU   L
+        CMPB    REG, #^A/z/
+        BGTRU   L
+        SUBB2   #^A/a/-^A/A/, REG
+L:
+        .ENDM   UPCASE
+
+        .PSECT  OUTHELP_DATA, NOEXE, WRT, QUAD
+CTL:    .LONG   0                       ; the library's control index
+OUTRTN: .LONG   0                       ; the caller's output routine,
+INRTN:  .LONG   0                       ; its input routine, or 0,
+WIDTH:  .LONG   80                      ; its width,
+FLAGS:  .LONG   0                       ; and its HLP$M_ flags
+READ:   .LONG   LBR$C_READ
+HLP:    .LONG   LBR$C_TYP_HLP
+ONE:    .LONG   1
+HELPLIB:
+        .ASCID  "HELPLIB"
+DEFNAM: .ASCID  "SYS$HELP:.HLB"
+NW:     .LONG   0                       ; the words of the topic asked for,
+WORDS:  .BLKB   WSIZE*MAXW              ; each .ASCIC, in capitals
+PATH:   .BLKB   WSIZE*MAXW              ; the names they matched
+N:      .LONG   0                       ; SCAN: the level of the topic shown,
+MODE:   .LONG   0                       ; 1 to write its text, 0 only its list,
+CUR:    .LONG   0                       ; the levels matched so far,
+KEYLVL: .LONG   0                       ; the last numbered line's level,
+INTEXT: .LONG   0                       ; 1 in the topic's text,
+ACTIVE: .LONG   0                       ; 1 in the topic,
+FOUND:  .LONG   0                       ; 1 if it was there,
+BEST:   .LONG   0                       ; the most levels matched,
+LASTNSUB:                               ; and its subtopics
+        .LONG   0
+LINELEN:
+        .LONG   0                       ; a line being made
+LINEDSC:
+        .LONG   0
+        .ADDRESS LINE
+LINE:   .BLKB   256
+RECDSC: .LONG   256                     ; a record read
+        .ADDRESS REC
+OUTDSC: .QUAD   0
+REC:    .BLKB   256
+INDSC:  .LONG   256                     ; a line typed
+        .ADDRESS INBUF
+INLEN:  .WORD   0
+INBUF:  .BLKB   256
+PRMDSC: .LONG   0                       ; the prompt
+        .ADDRESS PRMBUF
+PRMBUF: .BLKB   WSIZE*MAXW+16
+KEYDSC: .LONG   0                       ; a module's name
+        .ADDRESS 0
+RFA:    .QUAD   0
+LIST:   .LONG   0                       ; COLLECT and MATCHMOD's list:
+NAMES:  .LONG   0, 0                    ; names, a count and its bytes,
+        .BLKB   LISTSIZE                ; then each .ASCIC
+MODS:   .LONG   0, 0                    ; the modules the topic matched
+        .BLKB   LISTSIZE
+
+        .PSECT  OUTHELP_CODE, EXE, LONG
+
+; LBR$OUTPUT_HELP output_routine [, output_width] [, line_desc]
+; [, library_name] [, flags] [, input_routine]: writes the help that
+; line_desc, by descriptor, asks for, from the help library library_name,
+; by descriptor, HELPLIB by default in SYS$HELP:, a line at a time by
+; calling output_routine with its descriptor, in output_width columns, by
+; reference, 80 by default. flags, by reference, HLP$M_PROMPT, then
+; prompts for topics and subtopics with input_routine, called as
+; LIB$GET_INPUT. R0 = LBR$_NORMAL, LBR$_ILLOUTROU, LBR$_ILLINROU,
+; LBR$_USRINPERR, or the library's open's status.
+        .ENTRY  LBR$OUTPUT_HELP, ^M<R2, R3, R4, R5, R6, R7, R8, R9, R10, R11>
+        MOVL    #LBR$_ILLOUTROU, R0
+        MOVL    4(AP), OUTRTN
+        BNEQ    1$
+        RET
+1$:     MOVZBL  (AP), R6                ; R6 = the arguments
+        MOVL    #80, WIDTH
+        CMPL    R6, #2
+        BLSSU   2$
+        MOVL    8(AP), R0
+        BEQL    2$
+        MOVL    (R0), WIDTH
+2$:     CLRL    FLAGS
+        CMPL    R6, #5
+        BLSSU   3$
+        MOVL    20(AP), R0
+        BEQL    3$
+        MOVL    (R0), FLAGS
+3$:     CLRL    INRTN
+        CMPL    R6, #6
+        BLSSU   4$
+        MOVL    24(AP), INRTN
+4$:     MOVL    #LBR$_ILLINROU, R0
+        BBC     #0, FLAGS, 5$           ; HLP$M_PROMPT
+        TSTL    INRTN
+        BNEQ    5$
+        RET
+5$:     PUSHAL  HLP
+        PUSHAL  READ
+        PUSHAL  CTL
+        CALLS   #3, G^LBR$INI_CONTROL
+        BLBC    R0, 99$
+        MOVAQ   HELPLIB, R1             ; the library
+        CMPL    R6, #4
+        BLSSU   6$
+        TSTL    16(AP)
+        BEQL    6$
+        MOVL    16(AP), R1
+6$:     PUSHAQ  DEFNAM
+        PUSHL   #0
+        PUSHL   R1
+        PUSHAL  CTL
+        CALLS   #4, G^LBR$OPEN
+        BLBS    R0, 7$
+        PUSHL   R0
+        PUSHAL  CTL
+        CALLS   #1, G^LBR$CLOSE
+        MOVL    (SP)+, R0
+99$:    RET
+7$:     CLRL    NW
+        CMPL    R6, #3
+        BLSSU   10$
+        MOVL    12(AP), R0
+        BEQL    10$
+        MOVL    4(R0), R1
+        MOVZWL  (R0), R2
+        BSBW    PARSE
+10$:    BSBW    SHOW
+        BLBC    R0, 85$
+20$:    BBC     #0, FLAGS, 80$
+        BSBW    PROMPT
+        PUSHAW  INLEN
+        PUSHAQ  PRMDSC
+        PUSHAQ  INDSC
+        CALLS   #3, @INRTN
+        BLBS    R0, 30$
+        CMPL    R0, #RMS$_EOF
+        BEQL    80$
+        CMPL    R0, #SS$_ENDOFFILE
+        BEQL    80$
+        MOVL    #LBR$_USRINPERR, R0
+        BRB     85$
+30$:    MOVZWL  INLEN, R2               ; blank: the level above
+        MOVAB   INBUF, R1
+        SKPC    #^A/ /, R2, (R1)
+        BNEQ    40$
+        TSTL    NW
+        BEQL    80$
+        DECL    NW
+        BRB     20$
+40$:    CMPB    (R1), #^A/?/            ; ?: again
+        BEQL    10$
+        MOVAB   INBUF, R1
+        MOVZWL  INLEN, R2
+        BSBW    PARSE
+        BRB     10$
+80$:    MOVL    #LBR$_NORMAL, R0
+85$:    PUSHL   R0
+        PUSHAL  CTL
+        CALLS   #1, G^LBR$CLOSE
+        MOVL    (SP)+, R0
+        RET
+
+; COLLECT key_desc, txtrfa: LBR$GET_INDEX's routine that adds each key to
+; the list LIST points at. R0 = SS$_NORMAL.
+        .ENTRY  COLLECT, ^M<R2, R3, R4, R5>
+        MOVL    4(AP), R0
+        MOVL    4(R0), R1
+        MOVZWL  (R0), R2
+        MOVL    LIST, R3
+        BSBW    ADDNAME
+        MOVL    #SS$_NORMAL, R0
+        RET
+
+; MATCHMOD key_desc, txtrfa: LBR$GET_INDEX's routine that adds each key
+; the first word starts to MODS. R0 = SS$_NORMAL.
+        .ENTRY  MATCHMOD, ^M<R2, R3, R4, R5, R6>
+        MOVL    4(AP), R0
+        MOVL    4(R0), R1
+        MOVZWL  (R0), R2
+        MOVAB   WORDS, R3
+        BSBW    PREFIX
+        BLBC    R0, 90$
+        MOVL    4(AP), R0
+        MOVL    4(R0), R1
+        MOVZWL  (R0), R2
+        MOVAB   MODS, R3
+        BSBW    ADDNAME
+90$:    MOVL    #SS$_NORMAL, R0
+        RET
+
+; SHOW: writes the help the NW words ask for: no words, the topics; else
+; each topic the first word matches, down to the subtopic the rest do,
+; or "Sorry, no documentation" and the list where they stop matching.
+; Then NW is the level to prompt at, WORDS the names matched. R0 = a
+; status: the output routine's error stops it.
+SHOW:
+        .JSB_ENTRY
+        TSTL    NW
+        BNEQ    10$
+        BSBW    TOPICS
+        RSB
+10$:    CLRQ    MODS
+        PUSHAB  MATCHMOD
+        PUSHAL  ONE
+        PUSHAL  CTL
+        CALLS   #3, G^LBR$GET_INDEX
+        CLRL    FOUND
+        CLRL    BEST
+        MOVL    MODS, R8                ; R8 = the modules, R9 = each
+        BEQL    60$
+        MOVAB   MODS+8, R9
+20$:    MOVL    NW, N
+        MOVL    #1, MODE
+        MOVZBL  (R9), KEYDSC
+        MOVAB   1(R9), KEYDSC+4
+        BSBW    SCAN
+        BLBC    R0, 90$
+        MOVZBL  (R9), R0
+        MOVAB   1(R9)[R0], R9
+        SOBGTR  R8, 20$
+        BLBC    FOUND, 50$
+        TSTL    LASTNSUB                ; a topic without subtopics: back up
+        BNEQ    40$
+        DECL    NW
+40$:    BRW     80$
+50$:    BSBW    SORRY                   ; matched part way: list there
+        BLBC    R0, 90$
+        MOVL    BEST, N
+        CLRL    MODE
+        BSBW    SCAN
+        BLBC    R0, 90$
+        MOVL    BEST, NW
+        BRB     80$
+60$:    BSBW    SORRY                   ; no topic: list them
+        BLBC    R0, 90$
+        CLRL    NW
+        BSBW    TOPICS
+        RSB
+80$:    MOVL    NW, R2                  ; the words are the names now
+        BEQL    88$
+        MOVAB   PATH, R3
+        MOVAB   WORDS, R4
+85$:    MOVZBL  (R3), R5
+        MOVB    R5, (R4)
+        CLRL    R6
+86$:    CMPL    R6, R5
+        BGEQU   87$
+        MOVZBL  1(R3)[R6], R0
+        UPCASE  R0
+        MOVB    R0, 1(R4)[R6]
+        INCL    R6
+        BRB     86$
+87$:    ADDL2   #WSIZE, R3
+        ADDL2   #WSIZE, R4
+        SOBGTR  R2, 85$
+88$:    MOVL    #SS$_NORMAL, R0
+90$:    RSB
+
+; SORRY: writes "Sorry, no documentation on" and the words. R0 = the
+; output's status.
+SORRY:
+        .JSB_ENTRY
+        CLRL    LINELEN
+        BSBW    OUT
+        BLBC    R0, 90$
+        TEXT    "Sorry, no documentation on "
+        BSBW    LWORDS
+        BSBW    OUT
+90$:    RSB
+
+; TOPICS: lists the library's topics. R0 = the output's status.
+TOPICS:
+        .JSB_ENTRY
+        CLRL    LINELEN
+        BSBW    OUT
+        BLBC    R0, 90$
+        TEXT    "  Information available:"
+        BSBW    OUT
+        BLBC    R0, 90$
+        CLRQ    NAMES
+        MOVAB   NAMES, LIST
+        PUSHAB  COLLECT
+        PUSHAL  ONE
+        PUSHAL  CTL
+        CALLS   #3, G^LBR$GET_INDEX
+        MOVL    #2, R6
+        BSBW    COLUMNS
+90$:    RSB
+
+; SCAN: KEYDSC = a module. Reads its lines, following the words down from
+; it to level N, and at that topic writes its names from the top, if MODE
+; is 1, and its text, then the list of its subtopics' names; sets FOUND
+; if there was one, BEST to the levels matched and LASTNSUB to its
+; subtopics, PATH to the names. R0 = a status: the output's error.
+SCAN:
+        .JSB_ENTRY
+        PUSHAQ  RFA
+        PUSHAQ  KEYDSC
+        PUSHAL  CTL
+        CALLS   #3, G^LBR$LOOKUP_KEY
+        BLBS    R0, 5$
+        MOVL    #SS$_NORMAL, R0
+        RSB
+5$:     MOVAB   PATH, R2                ; level 1: the module
+        MOVB    KEYDSC, (R2)
+        MOVC3   KEYDSC, @KEYDSC+4, 1(R2)
+        MOVL    #1, CUR
+        MOVL    #1, KEYLVL
+        CLRQ    NAMES
+        CLRL    ACTIVE
+        CLRL    INTEXT
+        TSTL    BEST
+        BNEQ    7$
+        MOVL    #1, BEST
+7$:     CMPL    N, #1
+        BNEQ    10$
+        BSBW    TARGET
+        BLBC    R0, 99$
+10$:    PUSHAQ  OUTDSC                  ; each line
+        PUSHAQ  RECDSC
+        PUSHAL  CTL
+        CALLS   #3, G^LBR$GET_RECORD
+        BLBS    R0, 12$
+        CMPL    R0, #LBR$_RECTRUNC
+        BEQL    12$
+        BRW     90$
+12$:    MOVZWL  OUTDSC, R6              ; R6, R7 = the line
+        MOVAB   REC, R7
+        TSTL    R6
+        BEQL    40$
+        CMPB    (R7), #^A/!/
+        BEQL    10$
+        CMPB    (R7), #^A"/"
+        BEQL    20$
+        CMPB    (R7), #^A/1/
+        BLSSU   40$
+        CMPB    (R7), #^A/9/
+        BGTRU   40$
+        CMPL    R6, #2
+        BLSSU   40$
+        CMPB    1(R7), #^A/ /
+        BEQL    15$
+        CMPB    1(R7), #9
+        BNEQ    40$
+15$:    MOVZBL  (R7), R8                ; R8 = its level, R2, R3 = its name
+        SUBL2   #^A/0/, R8
+        MOVAB   1(R7), R2
+        SUBL3   #1, R6, R3
+        SKPC    #^A/ /, R3, (R2)
+        BEQL    40$
+        MOVL    R1, R2
+        MOVL    R0, R3
+        MOVL    R8, KEYLVL
+        BRB     25$
+20$:    ADDL3   #1, KEYLVL, R8          ; a qualifier: a level down
+        MOVL    R7, R2
+        MOVL    R6, R3
+25$:    LOCC    #^A/ /, R3, (R2)        ; its first word
+        SUBL2   R0, R3
+        BRB     50$
+40$:    BLBC    INTEXT, 10$             ; text
+        BLBC    MODE, 10$
+        MOVL    R6, R2
+        MOVL    R7, R1
+        CLRL    LINELEN
+        BSBW    LADD
+        BSBW    OUT
+        BLBC    R0, 99$
+        BRW     10$
+50$:    CMPL    R8, #1                  ; a topic's line: level 1 is the module's
+        BEQL    10$
+        CMPL    R8, #MAXW
+        BGTRU   10$
+        CLRL    INTEXT
+        BLBC    ACTIVE, 60$
+        CMPL    R8, N
+        BGTRU   55$
+        BSBW    FLUSH                   ; past the topic
+        BLBC    R0, 99$
+        CLRL    ACTIVE
+        BRB     60$
+55$:    ADDL3   #1, N, R0               ; its subtopic
+        CMPL    R8, R0
+        BNEQ    58$
+        MOVL    R2, R1
+        MOVL    R3, R2
+        MOVAB   NAMES, R3
+        BSBW    ADDNAME
+58$:    BRW     10$
+60$:    ADDL3   #1, CUR, R0
+        CMPL    R8, R0
+        BGTRU   58$
+        SUBL3   #1, R8, CUR
+        CMPL    R8, N
+        BGTRU   58$
+        MOVL    R2, R1                  ; does its word match?
+        MOVL    R3, R2
+        SUBL3   #1, R8, R3
+        MULL2   #WSIZE, R3
+        MOVAB   WORDS[R3], R3
+        BSBW    PREFIX
+        BLBC    R0, 58$
+        MOVL    R8, CUR
+        CMPL    R8, BEST
+        BLEQ    65$
+        MOVL    R8, BEST
+65$:    SUBL3   #1, R8, R4              ; its name in PATH
+        MULL2   #WSIZE, R4
+        MOVAB   PATH[R4], R4
+        CMPL    R2, #WSIZE-1
+        BLEQU   66$
+        MOVL    #WSIZE-1, R2
+66$:    MOVB    R2, (R4)
+        MOVC3   R2, (R1), 1(R4)
+        CMPL    R8, N
+        BNEQ    58$
+        BSBW    TARGET
+        BLBC    R0, 99$
+        BRW     10$
+90$:    MOVL    #SS$_NORMAL, R0
+        BLBC    ACTIVE, 99$
+        BSBW    FLUSH
+99$:    RSB
+
+; TARGET: SCAN is at the topic: marks it found and, if MODE is 1, writes
+; its names from the top, each a level in. R0 = the output's status.
+TARGET:
+        .JSB_ENTRY
+        MOVL    #1, ACTIVE
+        MOVL    #1, FOUND
+        MOVL    #1, INTEXT
+        CLRL    LASTNSUB
+        CLRQ    NAMES
+        MOVL    #SS$_NORMAL, R0
+        BLBC    MODE, 90$
+        CLRL    R6
+        MOVAB   PATH, R7
+10$:    CLRL    LINELEN
+        BSBW    OUT
+        BLBC    R0, 90$
+        ASHL    #1, R6, R1
+        BSBW    LSPACES
+        MOVL    R7, R1
+        BSBW    LASCIC
+        BSBW    OUT
+        BLBC    R0, 90$
+        ADDL2   #WSIZE, R7
+        AOBLSS  N, R6, 10$
+        CLRL    LINELEN
+        BSBW    OUT
+90$:    RSB
+
+; FLUSH: SCAN leaves the topic: writes "Additional information
+; available:" and its subtopics' names, if it has any. R0 = the output's
+; status.
+FLUSH:
+        .JSB_ENTRY
+        MOVL    NAMES, LASTNSUB
+        MOVL    #SS$_NORMAL, R0
+        TSTL    NAMES
+        BEQL    90$
+        CLRL    LINELEN
+        BSBW    OUT
+        BLBC    R0, 90$
+        ASHL    #1, N, R6
+        MOVL    R6, R1
+        BSBW    LSPACES
+        TEXT    "Additional information available:"
+        BSBW    OUT
+        BLBC    R0, 90$
+        BSBW    COLUMNS
+90$:    RSB
+
+; COLUMNS: R6 = an indent. Writes NAMES in columns, a blank line before
+; and after, as many as fit WIDTH, each as wide as the longest name and a
+; space, in order across. R0 = the output's status.
+COLUMNS:
+        .JSB_ENTRY
+        CLRL    LINELEN
+        BSBW    OUT
+        BLBC    R0, 90$
+        CLRL    R7                      ; R7 = the longest
+        MOVL    NAMES, R8
+        BEQL    80$
+        MOVAB   NAMES+8, R9
+10$:    MOVZBL  (R9), R0
+        CMPL    R0, R7
+        BLEQU   15$
+        MOVL    R0, R7
+15$:    MOVAB   1(R9)[R0], R9
+        SOBGTR  R8, 10$
+        INCL    R7                      ; R7 = a column's width
+        SUBL3   R6, WIDTH, R10          ; R10 = the columns
+        DIVL2   R7, R10
+        BGTR    20$
+        MOVL    #1, R10
+20$:    MOVL    NAMES, R8
+        MOVAB   NAMES+8, R9
+        CLRL    R11                     ; R11 = names on the line
+30$:    TSTL    R11
+        BNEQ    40$
+        CLRL    LINELEN
+        MOVL    R6, R1
+        BSBW    LSPACES
+40$:    ADDL3   LINELEN, R7, R2
+        MOVL    R9, R1
+        BSBW    LASCIC
+        SUBL3   LINELEN, R2, R1
+        BSBW    LSPACES
+        INCL    R11
+        CMPL    R11, R10
+        BLSSU   50$
+        BSBW    OUT
+        BLBC    R0, 90$
+        CLRL    R11
+50$:    MOVZBL  (R9), R0
+        MOVAB   1(R9)[R0], R9
+        SOBGTR  R8, 30$
+        TSTL    R11
+        BEQL    80$
+        BSBW    OUT
+        BLBC    R0, 90$
+80$:    CLRL    LINELEN
+        BSBW    OUT
+90$:    RSB
+
+; PROMPT: makes PRMDSC "Topic? ", or the words and "Subtopic? ".
+PROMPT:
+        .JSB_ENTRY
+        CLRL    LINELEN
+        TSTL    NW
+        BNEQ    10$
+        TEXT    "Topic? "
+        BRB     20$
+10$:    BSBW    LWORDS
+        TEXT    " Subtopic? "
+20$:    MOVL    LINELEN, PRMDSC
+        MOVC3   LINELEN, LINE, PRMBUF
+        RSB
+
+; LWORDS: appends the NW words to LINE, a space between.
+LWORDS:
+        .JSB_ENTRY
+        CLRL    R6
+        MOVAB   WORDS, R7
+10$:    CMPL    R6, NW
+        BGEQU   90$
+        TSTL    R6
+        BEQL    20$
+        MOVL    #1, R1
+        BSBW    LSPACES
+20$:    MOVL    R7, R1
+        BSBW    LASCIC
+        ADDL2   #WSIZE, R7
+        INCL    R6
+        BRB     10$
+90$:    RSB
+
+; PARSE: R1, R2 = a line. Adds its words to WORDS, in capitals: words
+; between blanks, and each / starts one, as in COPY/LOG.
+PARSE:
+        .JSB_ENTRY
+        ADDL2   R1, R2                  ; R2 = its end
+        CLRL    R4                      ; R4 = the word's place, 0 between words
+10$:    CMPL    R1, R2
+        BGEQU   90$
+        MOVZBL  (R1)+, R0
+        CMPB    R0, #^A/ /
+        BEQL    20$
+        CMPB    R0, #9
+        BNEQ    30$
+20$:    CLRL    R4
+        BRB     10$
+30$:    CMPB    R0, #^A"/"
+        BNEQ    40$
+        CLRL    R4
+40$:    TSTL    R4
+        BNEQ    50$
+        CMPL    NW, #MAXW               ; a new word
+        BGEQU   90$
+        MULL3   #WSIZE, NW, R4
+        MOVAB   WORDS[R4], R4
+        CLRB    (R4)
+        INCL    NW
+50$:    MOVZBL  (R4), R3
+        CMPL    R3, #WSIZE-1
+        BGEQU   10$
+        UPCASE  R0
+        MOVB    R0, 1(R4)[R3]
+        INCB    (R4)
+        BRB     10$
+90$:    RSB
+
+; PREFIX: R1, R2 = a name, R3 = a word, .ASCIC, in capitals. R0 = 1 if
+; the name starts with the word, in either case.
+PREFIX:
+        .JSB_ENTRY
+        CLRL    R0
+        MOVZBL  (R3), R4
+        CMPL    R4, R2
+        BGTRU   90$
+        CLRL    R5
+10$:    CMPL    R5, R4
+        BGEQU   80$
+        MOVZBL  (R1)[R5], R6
+        UPCASE  R6
+        CMPB    R6, 1(R3)[R5]
+        BNEQ    90$
+        INCL    R5
+        BRB     10$
+80$:    MOVL    #1, R0
+90$:    RSB
+
+; ADDNAME: R1, R2 = a name, R3 = a list. Adds the name to the list, if
+; there is room.
+ADDNAME:
+        .JSB_ENTRY
+        CMPL    R2, #255
+        BGTRU   90$
+        ADDL3   4(R3), R2, R4
+        CMPL    R4, #LISTSIZE-1
+        BGEQU   90$
+        INCL    (R3)
+        ADDL3   4(R3), R3, R4
+        MOVB    R2, 8(R4)
+        PUSHR   #^M<R2, R3>
+        MOVC3   R2, (R1), 9(R4)
+        POPR    #^M<R2, R3>
+        ADDL3   #1, R2, R4
+        ADDL2   R4, 4(R3)
+90$:    RSB
+
+; LASCIC: appends the .ASCIC at R1 to LINE.
+LASCIC:
+        .JSB_ENTRY
+        MOVZBL  (R1)+, R2
+        BSBW    LADD
+        RSB
+
+; LADD: R1, R2 = a string. Appends it to LINE, as much as fits.
+LADD:
+        .JSB_ENTRY
+        MOVL    LINELEN, R3
+10$:    TSTL    R2
+        BEQL    90$
+        CMPL    R3, #256
+        BGEQU   90$
+        MOVB    (R1)+, LINE[R3]
+        INCL    R3
+        DECL    R2
+        BRB     10$
+90$:    MOVL    R3, LINELEN
+        RSB
+
+; LSPACES: R1 = a count. Appends that many spaces to LINE.
+LSPACES:
+        .JSB_ENTRY
+        MOVL    LINELEN, R3
+10$:    TSTL    R1
+        BLEQ    90$
+        CMPL    R3, #256
+        BGEQU   90$
+        MOVB    #^A/ /, LINE[R3]
+        INCL    R3
+        DECL    R1
+        BRB     10$
+90$:    MOVL    R3, LINELEN
+        RSB
+
+; OUT: writes LINE, without its trailing blanks, through the output
+; routine, and empties it. R0 = the routine's status.
+OUT:
+        .JSB_ENTRY
+        MOVL    LINELEN, R2
+10$:    TSTL    R2
+        BEQL    20$
+        CMPB    LINE-1[R2], #^A/ /
+        BNEQ    20$
+        DECL    R2
+        BRB     10$
+20$:    MOVL    R2, LINEDSC
+        CLRL    LINELEN
+        PUSHAQ  LINEDSC
+        CALLS   #1, @OUTRTN
+        RSB
+
+        .END

@@ -22,8 +22,8 @@ Limine then jumps to the shim.
 QEMU has a second disk, the system disk (`out/sysdisk.img`). It is a
 Files-11 ODS-2 volume, the file system VMS uses, which
 [vms/build.rs](../vms/build.rs) makes at build time: the VMS
-executable files in `[SYSEXE]`, the shareable image they call,
-`LIBRTL.EXE`, in `[SYSLIB]`, and text files in `[SYSMGR]`, owned by
+executable files in `[SYSEXE]`, the shareable images they call,
+`LIBRTL.EXE` and `LBRSHR.EXE`, the librarian's `LBR$` routines, in `[SYSLIB]`, and text files in `[SYSMGR]`, owned by
 SYSTEM's UIC, `[1,4]`, which every user may read and run. The firmware
 and Limine leave it alone; the root task reads it later.
 
@@ -171,7 +171,8 @@ interpreter. It is linked high in P1, which tells the executive it is one
   `CREATE/DIRECTORY` makes `MDA0:[SYSEXE]`, `MDA0:[SYSLIB]` and
   `MDA0:[SYSMGR]`, and `SYS$SYSTEM` becomes `SYS$SYSROOT:[SYSEXE]`,
   `SYS$LIBRARY` and `SYS$SHARE` `SYS$SYSROOT:[SYSLIB]`, `SYS$MANAGER`
-  `SYS$SYSROOT:[SYSMGR]`, `SSL3$CERTS`, where SSL3 finds `CERT.PEM`,
+  `SYS$SYSROOT:[SYSMGR]`, `SYS$HELP`, where `LBR$OUTPUT_HELP` looks for
+  help libraries, `SYS$SYSROOT:[SYSHLP]`, `SSL3$CERTS`, where SSL3 finds `CERT.PEM`,
   the CAs it trusts, `SYS$COMMON:[SSL3.CERTS]`, and `SYS$DISK`, the
   default device of a process that hasn't one of its own, `SYS$SYSROOT:`. RMS looks for a file in the ramdisk's
   directory first and then in the system disk's, and makes a new one in
@@ -295,7 +296,8 @@ interpreter. It is linked high in P1, which tells the executive it is one
   `SYS$SHARE:LIBRTL.EXE` too, loads it into P0 after the image, at the
   next 64 KB, moves the addresses it holds there (`SHRACT`), and puts its
   routines' addresses where the image looks for them (`SHRLIST`,
-  [ADR-0028](adr/0028-shareable-images.md)). When the image
+  [ADR-0028](adr/0028-shareable-images.md)). An image that calls the
+  `LBR$` routines gets `SYS$SHARE:LBRSHR.EXE` the same way. When the image
   exits, the executive throws away its pages, and `LIBRTL`'s, and the channels and files
   it opened, and calls DCL again with the exit status. DCL prints a
   message if the status is an error, then the prompt again.

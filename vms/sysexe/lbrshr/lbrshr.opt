@@ -1,0 +1,18 @@
+! LBRSHR.EXE's symbol vector: the LBR$ routines, each with its place for
+! good. A new one goes at the end, as on VMS, so that the images linked
+! against it keep working.
+SYMBOL_VECTOR=(LBR$INI_CONTROL=PROCEDURE, -
+               LBR$OPEN=PROCEDURE, -
+               LBR$CLOSE=PROCEDURE, -
+               LBR$GET_HEADER=PROCEDURE, -
+               LBR$SET_INDEX=PROCEDURE, -
+               LBR$LOOKUP_KEY=PROCEDURE, -
+               LBR$GET_RECORD=PROCEDURE, -
+               LBR$PUT_RECORD=PROCEDURE, -
+               LBR$PUT_END=PROCEDURE, -
+               LBR$INSERT_KEY=PROCEDURE, -
+               LBR$REPLACE_KEY=PROCEDURE, -
+               LBR$DELETE_KEY=PROCEDURE, -
+               LBR$DELETE_DATA=PROCEDURE, -
+               LBR$GET_INDEX=PROCEDURE, -
+               LBR$OUTPUT_HELP=PROCEDURE)
