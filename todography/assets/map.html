@@ -1,0 +1,1577 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>vaxpunk todography</title>
+<style>
+:root {
+  color-scheme: light;
+  --bg: #f2f3f5;
+  --surface: #ffffff;
+  --sunk: #e8eaed;
+  --ink: #1a1e23;
+  --muted: #565f68;
+  --faint: #868d96;
+  --line: #d4d8dd;
+  --line-strong: #9ea5ad;
+  --accent: #8a1c3c;
+  --accent-bg: #f6e6eb;
+  --brand: #8a1c3c;
+  --brand-ink: #ffffff;
+  --done: #2b7649;
+  --done-bg: #ddeee3;
+  --partial: #285f9e;
+  --partial-bg: #e1e9f5;
+  --wip: #945a0c;
+  --wip-bg: #f6e7cf;
+  --todo: #6b737c;
+  --dropped: #a0a6ad;
+  --error: #ad281d;
+  --error-bg: #fbe8e6;
+  --warn: #83560a;
+  --warn-bg: #faf0db;
+  --mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+  --sans: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --bg: #14171b;
+    --surface: #1c2025;
+    --sunk: #181b20;
+    --ink: #e2e5e9;
+    --muted: #a3aab3;
+    --faint: #737b84;
+    --line: #30363d;
+    --line-strong: #4f5760;
+    --accent: #e27e9b;
+    --accent-bg: #3a1c27;
+    --brand: #9b2547;
+    --brand-ink: #ffffff;
+    --done: #6bbf8b;
+    --done-bg: #1a3124;
+    --partial: #7eaae3;
+    --partial-bg: #1b2a3d;
+    --wip: #dfa257;
+    --wip-bg: #382a15;
+    --todo: #8d959e;
+    --dropped: #5f666e;
+    --error: #f08b81;
+    --error-bg: #3b1d1a;
+    --warn: #e3b05c;
+    --warn-bg: #36290f;
+  }
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --bg: #14171b;
+  --surface: #1c2025;
+  --sunk: #181b20;
+  --ink: #e2e5e9;
+  --muted: #a3aab3;
+  --faint: #737b84;
+  --line: #30363d;
+  --line-strong: #4f5760;
+  --accent: #e27e9b;
+  --accent-bg: #3a1c27;
+  --brand: #9b2547;
+  --brand-ink: #ffffff;
+  --done: #6bbf8b;
+  --done-bg: #1a3124;
+  --partial: #7eaae3;
+  --partial-bg: #1b2a3d;
+  --wip: #dfa257;
+  --wip-bg: #382a15;
+  --todo: #8d959e;
+  --dropped: #5f666e;
+  --error: #f08b81;
+  --error-bg: #3b1d1a;
+  --warn: #e3b05c;
+  --warn-bg: #36290f;
+}
+
+*, *::before, *::after { box-sizing: border-box; }
+html { -webkit-text-size-adjust: 100%; }
+body { margin: 0; background: var(--bg); color: var(--ink); font: 15px/1.45 var(--sans); overflow-x: hidden; }
+a { color: var(--accent); text-decoration: none; }
+a:hover { text-decoration: underline; }
+code, .mono { font-family: var(--mono); font-size: 0.86em; }
+button, input, select { font: inherit; color: inherit; }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+[hidden] { display: none !important; }
+.wrap { max-width: 1440px; margin: 0 auto; padding: 0 16px; }
+h2, h3, h4 { line-height: 1.25; }
+.empty { color: var(--faint); font-size: 13px; margin: 0; }
+
+/* Header */
+.top { background: var(--surface); border-bottom: 1px solid var(--line); position: relative; }
+.top-row { display: flex; align-items: center; gap: 10px 14px; padding-top: 10px; flex-wrap: wrap; }
+.brand { display: flex; align-items: baseline; gap: 8px; color: var(--ink); margin-right: auto; }
+.brand:hover { text-decoration: none; }
+.brand .mark { font-family: var(--mono); font-weight: 700; font-size: 15px; background: var(--brand); color: var(--brand-ink); padding: 2px 8px 3px; border-radius: 2px; }
+.brand .sub { color: var(--muted); }
+.search { position: relative; flex: 0 1 320px; min-width: 0; }
+.search input { width: 100%; padding: 6px 10px; border: 1px solid var(--line-strong); border-radius: 3px; background: var(--bg); }
+.results { position: absolute; top: calc(100% + 4px); left: 0; right: 0; z-index: 30; background: var(--surface); border: 1px solid var(--line-strong); border-radius: 3px; max-height: 60vh; overflow: auto; margin: 0; padding: 4px 0; list-style: none; }
+.results li { padding: 6px 10px; cursor: pointer; }
+.results li[aria-selected="true"] { background: var(--accent-bg); }
+.results .rt { font-weight: 600; }
+.results .rl { font-family: var(--mono); font-size: 12px; color: var(--muted); margin-left: 6px; }
+.results .rs { display: block; font-size: 12.5px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.lint > summary { list-style: none; cursor: pointer; font-size: 13px; padding: 4px 9px; border-radius: 3px; border: 1px solid var(--error); color: var(--error); background: var(--error-bg); white-space: nowrap; }
+.lint > summary::-webkit-details-marker { display: none; }
+.lint.warn-only > summary { border-color: var(--warn); color: var(--warn); background: var(--warn-bg); }
+.lint-panel { position: absolute; right: 16px; top: 100%; z-index: 40; width: min(680px, calc(100vw - 32px)); max-height: 70vh; overflow: auto; background: var(--surface); border: 1px solid var(--line-strong); border-radius: 3px; padding: 4px 14px 12px; font-size: 13px; }
+.lint-panel h3 { font-size: 14px; margin: 12px 0 6px; }
+.lint-panel ul { margin: 0; padding: 0; list-style: none; }
+.lint-panel li { padding: 3px 0; border-top: 1px solid var(--line); overflow-wrap: anywhere; }
+.lint-panel .lf { font-family: var(--mono); font-size: 12px; margin-right: 6px; }
+.stats { display: flex; flex-wrap: wrap; gap: 2px 16px; font-size: 13px; color: var(--muted); padding-top: 6px; }
+.stats b { color: var(--ink); font-weight: 600; font-variant-numeric: tabular-nums; }
+.stats a { color: inherit; }
+.stats .gen { margin-left: auto; }
+.tabs { display: flex; gap: 2px; margin-top: 4px; }
+.tabs a { padding: 8px 12px 7px; color: var(--muted); border-bottom: 2px solid transparent; font-weight: 500; }
+.tabs a:hover { text-decoration: none; color: var(--ink); }
+.tabs a[aria-current="page"] { color: var(--ink); border-bottom-color: var(--accent); font-weight: 600; }
+.pvbar { background: var(--accent-bg); border-bottom: 1px solid var(--line); font-size: 13.5px; }
+.pvbar .wrap { padding-top: 7px; padding-bottom: 7px; }
+.pvbar button, .btn { border: 1px solid var(--line-strong); background: var(--surface); border-radius: 3px; padding: 2px 9px; cursor: pointer; font-size: 13px; }
+main.wrap { padding-top: 14px; padding-bottom: 72px; }
+.wrap.foot { font-size: 12.5px; color: var(--faint); padding-bottom: 24px; display: flex; gap: 12px; flex-wrap: wrap; align-items: center; }
+.foot select { font-size: 12.5px; background: var(--surface); border: 1px solid var(--line); border-radius: 3px; }
+
+/* Shared marks */
+.sq { display: inline-block; width: 10px; height: 10px; border: 1.5px solid var(--todo); border-radius: 1px; flex: none; vertical-align: -1px; }
+.sq.s-done { background: var(--done); border-color: var(--done); }
+.sq.s-partial { border-color: var(--partial); box-shadow: inset 0 -4px 0 var(--partial); }
+.sq.s-wip { border-color: var(--wip); box-shadow: inset 4px 0 0 var(--wip); }
+.sq.s-dropped { border-color: var(--dropped); border-style: dashed; }
+.chip { display: inline-block; font-size: 12px; line-height: 1.5; padding: 0 6px; border: 1px solid var(--line); border-radius: 2px; color: var(--ink); background: var(--bg); white-space: nowrap; }
+.chip .k { color: var(--faint); margin-right: 3px; }
+.chip.s-done { border-color: var(--done); color: var(--done); }
+.chip.s-partial { border-color: var(--partial); color: var(--partial); }
+.chip.s-wip { border-color: var(--wip); color: var(--wip); }
+.chip.s-dropped { color: var(--faint); }
+.chip.c-w { border-color: var(--ink); }
+.chip.c-nw { border-style: dashed; color: var(--muted); }
+.chip.c-debt { border-color: var(--warn); color: var(--warn); }
+.mk { font-size: 11.5px; padding: 0 4px; border-radius: 2px; border: 1px solid currentColor; white-space: nowrap; }
+.mk.met { color: var(--done); }
+.mk.unmet { color: var(--accent); }
+.mk.soft, .mk.off { color: var(--faint); border-style: dashed; }
+.missing { color: var(--faint); }
+.bar { display: block; height: 4px; background: var(--line); border-radius: 1px; overflow: hidden; }
+.bar > i { display: block; height: 100%; background: var(--partial); }
+.bar.full > i { background: var(--done); }
+
+/* Map */
+.controls { display: flex; flex-wrap: wrap; gap: 8px 18px; align-items: center; margin-bottom: 10px; }
+.seg { display: inline-flex; border: 1px solid var(--line-strong); border-radius: 3px; overflow: hidden; flex-wrap: wrap; }
+.seg a { padding: 4px 10px; color: var(--muted); font-size: 13px; border-left: 1px solid var(--line-strong); }
+.seg a:first-child { border-left: 0; }
+.seg a:hover { text-decoration: none; color: var(--ink); }
+.seg a.on { background: var(--ink); color: var(--bg); }
+.legend { display: flex; flex-wrap: wrap; gap: 5px; align-items: center; font-size: 12px; color: var(--muted); }
+.legend .tile { pointer-events: none; }
+.legend .hint { margin-left: 6px; }
+.mapgrid { position: relative; }
+.maplines { position: absolute; left: 0; top: 0; width: 100%; height: 100%; pointer-events: none; overflow: visible; z-index: 5; }
+.maplines path { fill: none; stroke-width: 1.4; }
+.maplines .ln-need { stroke: var(--ink); opacity: 0.55; }
+.maplines .ln-by { stroke: var(--accent); opacity: 0.7; }
+.band { display: grid; grid-template-columns: 150px minmax(0, 1fr); gap: 12px; padding: 10px 8px; }
+.band:nth-of-type(even) { background: var(--sunk); }
+.band-title { margin: 0; font-size: 13px; font-weight: 600; color: var(--muted); padding-top: 7px; }
+.areas { display: flex; flex-wrap: wrap; gap: 8px; min-width: 0; }
+.area { background: var(--surface); border: 1px solid var(--line); border-radius: 3px; padding: 6px 8px 8px; flex: 1 1 210px; min-width: 0; max-width: 100%; }
+.area-head { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; margin-bottom: 6px; }
+.area-title { font-weight: 600; font-size: 13.5px; background: none; border: 0; padding: 0; cursor: pointer; text-align: left; }
+.area-title:hover { text-decoration: underline; }
+.area-count { font-size: 12px; color: var(--faint); white-space: nowrap; }
+.area-about { font-size: 13px; color: var(--muted); border-left: 2px solid var(--line); padding: 0 0 0 8px; margin: 0 0 8px; }
+.area-about p { margin: 0 0 6px; }
+.tiles { display: flex; flex-wrap: wrap; gap: 4px; }
+.tile { position: relative; display: inline-flex; align-items: center; gap: 5px; max-width: 100%; font-size: 12.5px; line-height: 1.25; padding: 3px 6px 4px 6px; border: 1px solid var(--line-strong); border-left-width: 3px; border-radius: 2px; color: var(--ink); background: var(--surface); }
+.tile:hover { text-decoration: none; }
+.tile .t { overflow-wrap: anywhere; }
+.tile.s-done { border-left-color: var(--done); background: var(--done-bg); }
+.tile.s-partial { border-left-color: var(--partial); background: var(--partial-bg); padding-bottom: 6px; }
+.tile.s-wip { border-left-color: var(--wip); background: var(--wip-bg); }
+.tile.s-todo { border-left-color: var(--line-strong); }
+.tile.s-dropped { border-left-color: var(--dropped); }
+.tile.s-dropped .t { text-decoration: line-through; color: var(--faint); }
+.tile.goal .t { font-weight: 650; }
+.tile.nw { border-style: dashed; color: var(--muted); background: transparent; }
+.tile .pb { position: absolute; left: 0; right: 0; bottom: 0; height: 3px; }
+.tile .pb > i { display: block; height: 100%; background: var(--partial); }
+.tile .more { font-family: var(--mono); font-size: 11px; color: var(--muted); border: 1px dashed var(--line-strong); border-radius: 2px; padding: 0 3px; }
+.mapgrid.hovering .tile:not(.rel) { opacity: 0.22; }
+.tile.rel-need { outline: 2px solid var(--ink); outline-offset: 1px; }
+.tile.rel-by { outline: 2px solid var(--accent); outline-offset: 1px; }
+.tile.rel-self { background: var(--brand); color: var(--brand-ink); border-color: var(--brand); outline: 0; opacity: 1; }
+.tile.rel-self .t { color: var(--brand-ink); text-decoration: none; }
+.hoverbar { position: fixed; left: 0; right: 0; bottom: 0; z-index: 20; background: var(--surface); border-top: 1px solid var(--line-strong); font-size: 13px; }
+.hoverbar .wrap { padding-top: 7px; padding-bottom: 8px; display: flex; flex-wrap: wrap; gap: 2px 10px; align-items: baseline; }
+.hoverbar b { font-weight: 600; }
+.hoverbar .hs { color: var(--muted); flex: 1 1 100%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+/* Focus */
+.trail { display: flex; flex-wrap: wrap; gap: 2px 0; font-size: 13px; color: var(--muted); margin: 0 0 12px; padding: 0; list-style: none; }
+.trail li + li::before { content: "/"; color: var(--faint); margin: 0 7px; }
+.trail .cur { color: var(--ink); font-weight: 600; }
+.focus { position: relative; display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.75fr) minmax(0, 1fr); gap: 0 56px; align-items: start; }
+.edges { position: absolute; left: 0; top: 0; pointer-events: none; overflow: visible; z-index: 0; }
+.edges path { fill: none; stroke: var(--line-strong); stroke-width: 1.3; }
+.edges path.unmet { stroke: var(--accent); opacity: 0.75; }
+.edges path.soft { stroke-dasharray: 5 4; }
+.edges path.fuzzy { stroke-dasharray: 1.5 3.5; stroke: var(--faint); }
+.edges path.inactive { stroke-dasharray: 2 4; opacity: 0.5; }
+.edges path.hot { stroke: var(--ink); stroke-width: 2.2; opacity: 1; }
+.col { position: relative; z-index: 1; min-width: 0; }
+.col-h { font-size: 13px; font-weight: 600; color: var(--muted); margin: 4px 0 8px; }
+.node { display: block; background: var(--surface); border: 1px solid var(--line-strong); border-radius: 3px; padding: 6px 9px 7px; margin-bottom: 8px; font-size: 13px; color: var(--ink); }
+a.node:hover { text-decoration: none; border-color: var(--ink); }
+.node.soft { border-style: dashed; }
+.node.unmet { border-left: 3px solid var(--accent); }
+.node.inactive, .node.nw { opacity: 0.62; }
+.node.fuzzy { background: transparent; border: 1px dotted var(--line-strong); color: var(--muted); }
+.node.missing { background: transparent; border-style: dashed; }
+.node .nh { display: flex; gap: 6px; align-items: baseline; }
+.node .nt { font-weight: 600; overflow-wrap: anywhere; }
+.node.fuzzy .nt { font-weight: 400; font-style: italic; }
+.node .nl { display: block; font-family: var(--mono); font-size: 11.5px; color: var(--muted); overflow-wrap: anywhere; }
+.nline { display: block; margin-top: 4px; }
+.nmeta { display: flex; flex-wrap: wrap; gap: 2px 6px; align-items: baseline; color: var(--muted); font-size: 12px; }
+.nmeta code { color: var(--ink); }
+.why { display: block; color: var(--muted); font-size: 12.5px; }
+.card { position: relative; z-index: 1; background: var(--surface); border: 1px solid var(--line-strong); border-top: 3px solid var(--brand); border-radius: 3px; padding: 12px 16px 16px; min-width: 0; }
+.card h2.ct { font-size: 22px; margin: 0; overflow-wrap: anywhere; }
+.card .cl { font-family: var(--mono); font-size: 13px; color: var(--muted); margin-top: 2px; overflow-wrap: anywhere; }
+.card .aka { font-size: 13px; color: var(--muted); margin-top: 2px; }
+.card .sum { margin: 10px 0; }
+.card .sum.stub { color: var(--faint); font-style: italic; }
+.chips { display: flex; flex-wrap: wrap; gap: 4px; margin: 8px 0; }
+.card h3 { font-size: 14px; margin: 18px 0 6px; padding-top: 10px; border-top: 1px solid var(--line); }
+.progress { display: flex; align-items: center; gap: 10px; font-size: 13px; color: var(--muted); margin: 8px 0; }
+.progress .bar { flex: 1 1 auto; max-width: 260px; }
+.state { font-size: 13px; margin: 6px 0; }
+.ready { color: var(--done); font-weight: 600; }
+.blocked { color: var(--muted); }
+.feats { list-style: none; margin: 0; padding: 0; }
+.feat { display: flex; gap: 9px; padding: 6px 4px; border-top: 1px solid var(--line); }
+.feat:first-child { border-top: 0; }
+.feat > .sq { margin-top: 4px; }
+.feat.hl { background: var(--accent-bg); }
+.feat .fb { min-width: 0; flex: 1; }
+.feat .ft { overflow-wrap: anywhere; }
+.feat .fid { color: var(--muted); margin: 0 4px; }
+.feat.s-dropped .ft > span:first-child { text-decoration: line-through; color: var(--faint); }
+.feat.s-done .ft > span:first-child { color: var(--muted); }
+.feat .fnote, .feat .fneeds, .feat .state { font-size: 12.5px; color: var(--muted); margin: 2px 0 0; overflow-wrap: anywhere; }
+.chains { list-style: none; padding: 0; margin: 0; }
+.chains li { padding: 3px 0; overflow-wrap: anywhere; }
+.chains .arr { color: var(--faint); }
+.prose { overflow-wrap: anywhere; }
+.prose p { margin: 0 0 10px; }
+.prose code { background: var(--bg); padding: 0 3px; border-radius: 2px; }
+.prose pre { overflow-x: auto; background: var(--bg); padding: 8px; }
+.prose table { display: block; overflow-x: auto; border-collapse: collapse; }
+.prose td, .prose th { border: 1px solid var(--line); padding: 2px 6px; }
+.refs { margin: 0; padding-left: 18px; font-size: 13px; overflow-wrap: anywhere; }
+.fuzzylist { margin: 0; padding-left: 18px; }
+.fuzzylist li { margin-bottom: 4px; }
+.preview-toggle { display: inline-flex; gap: 6px; align-items: center; font-size: 13.5px; cursor: pointer; }
+.start { max-width: 760px; }
+.start ul { padding-left: 18px; }
+
+/* Roadmap */
+.rm-controls { display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: center; margin-bottom: 8px; font-size: 13.5px; }
+.rm-controls select { background: var(--surface); border: 1px solid var(--line-strong); border-radius: 3px; padding: 3px 6px; max-width: 100%; }
+.rm-note { font-size: 13px; color: var(--muted); margin: 0 0 12px; max-width: 80ch; }
+.road { display: flex; gap: 12px; overflow-x: auto; align-items: flex-start; padding-bottom: 10px; }
+.road-col { flex: 0 0 270px; min-width: 0; }
+.road-col h2 { font-size: 14px; margin: 0 0 8px; display: flex; justify-content: space-between; gap: 6px; }
+.road-col h2 .n { color: var(--faint); font-weight: 400; }
+.item { background: var(--surface); border: 1px solid var(--line-strong); border-left: 3px solid var(--line-strong); border-radius: 3px; padding: 6px 9px 7px; margin-bottom: 6px; font-size: 13px; cursor: pointer; }
+.item:hover { border-color: var(--ink); }
+.item.s-wip { border-left-color: var(--wip); }
+.item.ready-item { border-left-color: var(--done); }
+.item .it { color: var(--ink); font-weight: 600; display: block; overflow-wrap: anywhere; }
+.item .ic { color: var(--muted); display: flex; flex-wrap: wrap; gap: 2px 6px; align-items: baseline; margin-top: 2px; }
+.item .il { font-family: var(--mono); font-size: 11.5px; color: var(--muted); display: block; overflow-wrap: anywhere; }
+.item .ib { font-size: 12.5px; color: var(--muted); margin-top: 3px; overflow-wrap: anywhere; }
+
+/* Choose */
+.choose { max-width: 920px; }
+.choose > p, .choose .intro p { max-width: 78ch; }
+.choose h2 { font-size: 18px; margin: 26px 0 6px; }
+.choose h3 { font-size: 15px; margin: 18px 0 2px; color: var(--muted); }
+.choose h4 { font-size: 13.5px; margin: 12px 0 2px; }
+.choose-filter { position: sticky; top: env(safe-area-inset-top, 0px); z-index: 5; background: var(--bg); padding-block: 10px 8px; display: flex; flex-wrap: wrap; align-items: center; gap: 6px 14px; border-bottom: 1px solid var(--line); }
+.choose-filter input[type="search"] { flex: 1 1 260px; min-width: 0; font: inherit; font-size: 16px; padding: 8px 10px; border: 1px solid var(--line-strong); border-radius: 3px; background: var(--surface); color: var(--ink); }
+.choose-filter input[type="search"]:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.choose-filter .count { color: var(--muted); font-size: 13px; font-variant-numeric: tabular-nums; flex: 1 1 100%; }
+.choose details.how { margin-top: 10px; }
+.choose details.how summary { cursor: pointer; color: var(--muted); font-size: 13.5px; }
+.asp { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 2px 12px; padding: 7px 0; border-top: 1px solid var(--line); font-size: 13.5px; }
+.asp .an { overflow-wrap: anywhere; }
+.asp .an a { font-weight: 600; }
+.asp .an code { color: var(--muted); margin-left: 6px; }
+.asp .ap { grid-column: 1 / -1; color: var(--muted); font-size: 13px; }
+.asp .ap summary { cursor: pointer; }
+.asp .ap ul { margin: 4px 0 2px; padding-left: 18px; }
+.asp.chosen { background: var(--accent-bg); padding-left: 6px; padding-right: 6px; }
+.debt-row { padding: 7px 0; border-top: 1px solid var(--line); font-size: 13.5px; }
+.debt-row .an a { font-weight: 600; }
+.debt-row code { color: var(--muted); margin-left: 6px; }
+.debt-row ul { margin: 3px 0 0; padding-left: 18px; color: var(--muted); font-size: 13px; }
+.notice { background: var(--surface); border: 1px solid var(--line); border-radius: 3px; padding: 10px 14px; }
+
+@media (max-width: 820px) {
+  .focus { grid-template-columns: minmax(0, 1fr); gap: 0; }
+  .edges { display: none; }
+  .col { margin-bottom: 8px; }
+  .card { margin-bottom: 16px; }
+}
+@media (max-width: 700px) {
+  .band { grid-template-columns: minmax(0, 1fr); gap: 6px; }
+  .band-title { padding-top: 0; }
+  .road { flex-direction: column; overflow: visible; }
+  .road-col { flex: none; width: 100%; }
+}
+@media (max-width: 640px) {
+  .search { flex: 1 1 100%; order: 3; }
+  .brand .sub { display: none; }
+  .stats .gen { margin-left: 0; }
+  .tabs a { flex: 1 1 0; text-align: center; padding: 8px 4px 7px; }
+  .lint-panel { right: 16px; left: 16px; width: auto; }
+  .card { padding: 10px 12px 14px; }
+  .card h2.ct { font-size: 20px; }
+}
+</style>
+</head>
+<body>
+<header class="top">
+  <div class="wrap top-row">
+    <a class="brand" href="#view=map"><span class="mark" id="brand-title">map</span><span class="sub">todography</span></a>
+    <div class="search">
+      <input id="q" type="search" placeholder="Search components" autocomplete="off" spellcheck="false" aria-label="Search components" aria-controls="results">
+      <ul id="results" class="results" role="listbox" hidden></ul>
+    </div>
+    <details class="lint" id="lint" hidden>
+      <summary id="lint-sum"></summary>
+      <div class="lint-panel" id="lint-panel"></div>
+    </details>
+  </div>
+  <div class="wrap stats" id="stats"></div>
+  <nav class="wrap tabs" id="tabs" aria-label="Views"></nav>
+</header>
+<div id="pvbar" class="pvbar" hidden></div>
+<main id="view" class="wrap"></main>
+<div id="hoverbar" class="hoverbar" hidden></div>
+<footer class="wrap foot">
+  <span id="foot-gen"></span>
+  <label>Theme
+    <select id="theme">
+      <option value="">system</option>
+      <option value="light">light</option>
+      <option value="dark">dark</option>
+    </select>
+  </label>
+</footer>
+<script>
+"use strict";
+const MAP = __MAP_DATA__;
+
+/* ---------- Small helpers ---------- */
+
+const $ = (sel, root) => (root || document).querySelector(sel);
+const raf = window.requestAnimationFrame ? f => window.requestAnimationFrame(f) : f => setTimeout(f, 16);
+
+function h(tag, attrs, ...kids) {
+  const el = document.createElement(tag);
+  if (attrs) {
+    for (const k of Object.keys(attrs)) {
+      const v = attrs[k];
+      if (v == null || v === false) continue;
+      if (k === "class") el.className = v;
+      else if (k === "html") el.innerHTML = v;
+      else if (k === "style" && typeof v === "object") Object.assign(el.style, v);
+      else if (k.startsWith("on") && typeof v === "function") el.addEventListener(k.slice(2), v);
+      else el.setAttribute(k, v === true ? "" : String(v));
+    }
+  }
+  add(el, kids);
+  return el;
+}
+/** Appends nodes and strings; flattens arrays and skips null and false. */
+function add(el, ...kids) {
+  for (const k of kids) {
+    if (k == null || k === false) continue;
+    if (Array.isArray(k)) add(el, ...k);
+    else el.append(k.nodeType ? k : String(k));
+  }
+  return el;
+}
+/** Replaces an element's children, as add does. */
+function fill(el, ...kids) {
+  el.replaceChildren();
+  return add(el, ...kids);
+}
+function svg(tag, attrs) {
+  const el = document.createElementNS("http://www.w3.org/2000/svg", tag);
+  for (const k of Object.keys(attrs || {})) el.setAttribute(k, String(attrs[k]));
+  return el;
+}
+/** Elements joined with commas. */
+function commas(list) {
+  const out = [];
+  list.forEach((x, i) => { if (i) out.push(", "); out.push(x); });
+  return out;
+}
+function plural(n, one, many) { return n + " " + (n === 1 ? one : (many || one + "s")); }
+
+/** localStorage that never throws, and works when it isn't there. */
+const store = {
+  get(key, fallback) {
+    try {
+      const v = window.localStorage.getItem(key);
+      return v == null ? fallback : JSON.parse(v);
+    } catch (e) { return fallback; }
+  },
+  set(key, value) {
+    try { window.localStorage.setItem(key, JSON.stringify(value)); } catch (e) { /* no storage */ }
+  },
+};
+
+/* ---------- Indexes over the data ---------- */
+
+const COMPS = MAP.components;
+const C = new Map(COMPS.map(c => [c.label, c]));
+const MILESTONE = new Map(MAP.milestones.map(m => [m.id, m]));
+const BY_AREA = new Map();
+for (const c of COMPS) {
+  if (!BY_AREA.has(c.area)) BY_AREA.set(c.area, []);
+  BY_AREA.get(c.area).push(c);
+}
+const STATUS_WORD = { done: "done", partial: "partial", wip: "in progress", todo: "to do", dropped: "dropped" };
+const STUB = s => !s || s.trim() === "STUB";
+
+/** "t8y:/a/b#c" is component "t8y:/a/b", feature "c". */
+function compOf(label) { const i = label.indexOf("#"); return i < 0 ? label : label.slice(0, i); }
+function featOf(label) { const i = label.indexOf("#"); return i < 0 ? null : label.slice(i + 1); }
+function normLabel(s) {
+  s = String(s || "").trim();
+  return "t8y:/" + s.replace(/^t8y:/, "").replace(/^\/+/, "");
+}
+function featureOf(c, id) { return c.features.find(f => f.id === id) || null; }
+/** The needs of a dropped feature pull nothing in and block nothing. */
+function isActive(c, n) {
+  if (!n.from_feature) return true;
+  const f = featureOf(c, n.from_feature);
+  return !f || f.status !== "dropped";
+}
+/** Each component's hard needs: what it pulls in. Same rule as compute.rs. */
+const HARD = new Map(COMPS.map(c => [c.label,
+  [...new Set(c.needs.filter(n => n.on && n.target && !n.soft && isActive(c, n)).map(n => n.target))]]));
+const BASE_WANTED = new Set(COMPS.filter(c => c.wanted).map(c => c.label));
+
+/* ---------- What the page works out (so a preview can change it) ---------- */
+
+const PREVIEW_KEY = "todography.preview";
+let chosen = new Set((store.get(PREVIEW_KEY, []) || []).filter(l => C.has(l) && C.get(l).intent === "aspiration"));
+let M = null;
+
+function wantedFrom(goals) {
+  const wanted = new Set(goals);
+  const queue = [...goals];
+  while (queue.length) {
+    const l = queue.shift();
+    for (const t of HARD.get(l) || []) if (!wanted.has(t)) { wanted.add(t); queue.push(t); }
+  }
+  return wanted;
+}
+function goalsWith(extra) {
+  return new Set(COMPS.filter(c => c.intent === "goal" || extra.has(c.label)).map(c => c.label));
+}
+
+function derive() {
+  const goals = goalsWith(chosen);
+  const wanted = wantedFrom(goals);
+  const debt = new Set(COMPS.filter(c => wanted.has(c.label) &&
+    (c.research === "deferred" || c.needs.some(n => n.fuzzy))).map(c => c.label));
+  const work = MAP.work.map(w => Object.assign({}, w, {
+    wanted: wanted.has(w.component),
+    ready: wanted.has(w.component) && w.blocked_by.length === 0,
+  }));
+  M = {
+    goals, wanted, debt, work,
+    workByLabel: new Map(work.map(w => [w.label, w])),
+    level: levels(work.filter(w => w.wanted)),
+    why: new Map(), closures: new Map(), up: null, dist: null,
+  };
+}
+
+/**
+ * Roadmap columns. Ready work is column 0; other work sits one column
+ * after its deepest blocker. A blocker that is a feature or a featureless
+ * component is that work item; a component with features is usable once
+ * any one is done, so it counts at its earliest feature. Anything else
+ * counts as 0. A cycle is cut where the walk meets itself.
+ */
+function levels(work) {
+  const items = new Map(work.map(w => [w.label, w]));
+  const byComp = new Map();
+  for (const w of work) {
+    if (!byComp.has(w.component)) byComp.set(w.component, []);
+    byComp.get(w.component).push(w);
+  }
+  const level = new Map();
+  const visiting = new Set();
+  const blockerLevel = label => {
+    const w = items.get(label);
+    if (w) return lv(w);
+    const c = C.get(label);
+    if (c && c.features.length) {
+      const ws = byComp.get(label) || [];
+      return ws.length ? Math.min(...ws.map(lv)) : 0;
+    }
+    return 0;
+  };
+  const lv = w => {
+    if (level.has(w.label)) return level.get(w.label);
+    if (visiting.has(w.label)) return 0;
+    visiting.add(w.label);
+    const l = w.blocked_by.length ? 1 + Math.max(...w.blocked_by.map(blockerLevel)) : 0;
+    visiting.delete(w.label);
+    level.set(w.label, l);
+    return l;
+  };
+  for (const w of work) lv(w);
+  return level;
+}
+
+/** Non-wanted components a component pulls in through hard needs, itself included. */
+function closure(label, wanted) {
+  wanted = wanted || M.wanted;
+  const key = wanted === M.wanted ? label : null;
+  if (key && M.closures.has(key)) return M.closures.get(key);
+  const seen = new Set([label]);
+  const queue = [label];
+  while (queue.length) {
+    const l = queue.shift();
+    for (const t of HARD.get(l) || []) if (!wanted.has(t) && !seen.has(t)) { seen.add(t); queue.push(t); }
+  }
+  if (key) M.closures.set(key, seen);
+  return seen;
+}
+function hiddenInduced(label) {
+  return [...closure(label)].filter(l => l !== label && C.get(l).intent === "induced");
+}
+/** What choosing an aspiration would pull in, measured against today's wanted set. */
+function pullIn(label) {
+  let wanted = M.wanted;
+  if (chosen.has(label)) {
+    const rest = new Set(chosen);
+    rest.delete(label);
+    wanted = wantedFrom(goalsWith(rest));
+  }
+  const set = closure(label, wanted);
+  const r = { others: [...set].filter(l => l !== label), size: set.size, features: 0, done: 0, fuzzy: 0, deferred: 0 };
+  for (const l of set) {
+    const c = C.get(l);
+    for (const f of c.features) if (f.status !== "dropped") { r.features++; if (f.status === "done") r.done++; }
+    r.fuzzy += c.needs.filter(n => n.fuzzy).length;
+    if (c.research === "deferred") r.deferred++;
+  }
+  return r;
+}
+
+/** Up to three shortest chains of hard needs from a goal down to a component. */
+function whyPaths(label) {
+  if (!chosen.size) return C.get(label).why_paths;
+  if (M.why.has(label)) return M.why.get(label);
+  if (!M.up) {
+    M.up = new Map(COMPS.map(c => [c.label, []]));
+    for (const c of COMPS) for (const t of HARD.get(c.label)) if (t !== c.label) M.up.get(t).push(c.label);
+    M.dist = new Map();
+    const queue = [];
+    for (const g of M.goals) { M.dist.set(g, 0); queue.push(g); }
+    while (queue.length) {
+      const l = queue.shift();
+      for (const t of HARD.get(l)) if (!M.dist.has(t)) { M.dist.set(t, M.dist.get(l) + 1); queue.push(t); }
+    }
+  }
+  const found = [];
+  if (M.wanted.has(label) && !M.goals.has(label) && M.dist.has(label)) {
+    const heap = new Heap();
+    heap.push([M.dist.get(label), [label]]);
+    let budget = 50000;
+    while (heap.size && found.length < 3 && budget > 0) {
+      const path = heap.pop()[1];
+      const top = path[path.length - 1];
+      if (M.goals.has(top)) { found.push(path.slice().reverse()); continue; }
+      for (const u of M.up.get(top)) {
+        if (!M.dist.has(u) || path.includes(u)) continue;
+        if (--budget <= 0) break;
+        heap.push([path.length + M.dist.get(u), path.concat([u])]);
+      }
+    }
+  }
+  M.why.set(label, found);
+  return found;
+}
+class Heap {
+  constructor() { this.a = []; }
+  get size() { return this.a.length; }
+  push(x) {
+    const a = this.a;
+    a.push(x);
+    let i = a.length - 1;
+    while (i > 0) {
+      const p = (i - 1) >> 1;
+      if (a[p][0] <= a[i][0]) break;
+      [a[p], a[i]] = [a[i], a[p]];
+      i = p;
+    }
+  }
+  pop() {
+    const a = this.a;
+    const top = a[0];
+    const last = a.pop();
+    if (a.length) {
+      a[0] = last;
+      let i = 0;
+      for (;;) {
+        const l = 2 * i + 1, r = l + 1;
+        let m = i;
+        if (l < a.length && a[l][0] < a[m][0]) m = l;
+        if (r < a.length && a[r][0] < a[m][0]) m = r;
+        if (m === i) break;
+        [a[m], a[i]] = [a[i], a[m]];
+        i = m;
+      }
+    }
+    return top;
+  }
+}
+
+function setChosen(label, on) {
+  if (on) chosen.add(label); else chosen.delete(label);
+  store.set(PREVIEW_KEY, [...chosen]);
+  derive();
+  route(true);
+}
+
+/* ---------- Location hash ---------- */
+
+const VIEWS = ["map", "focus", "roadmap", "choose"];
+const state = { view: "map", focus: "", show: "aspirations", milestone: "", area: "", alsoWanted: false, chooseQuery: "", onlyChosen: false };
+let trail = [];
+let lastPlace = "";
+
+function enc(v) { return encodeURIComponent(v).replace(/%2F/gi, "/").replace(/%3A/gi, ":"); }
+function parseHash() {
+  const p = {};
+  for (const part of location.hash.replace(/^#/, "").split("&")) {
+    if (!part) continue;
+    const i = part.indexOf("=");
+    const k = i < 0 ? part : part.slice(0, i);
+    let v = i < 0 ? "" : part.slice(i + 1);
+    try { v = decodeURIComponent(v); } catch (e) { /* keep it raw */ }
+    p[k] = v;
+  }
+  return p;
+}
+function readHash() {
+  const p = parseHash();
+  if (p.focus) {
+    state.view = "focus";
+    state.focus = normLabel(p.focus);
+  } else {
+    state.view = VIEWS.includes(p.view) ? p.view : "map";
+    if (state.view === "focus") state.focus = "";
+  }
+  if (state.view === "map") state.show = ["wanted", "all"].includes(p.show) ? p.show : "aspirations";
+  if (state.view === "roadmap") {
+    state.milestone = p.milestone || "";
+    state.area = p.area || "";
+  }
+}
+const focusHref = label => "#focus=" + enc(label);
+const mapHref = show => "#view=map" + (show && show !== "aspirations" ? "&show=" + show : "");
+function roadmapHref(milestone, area) {
+  return "#view=roadmap" + (milestone ? "&milestone=" + enc(milestone) : "") + (area ? "&area=" + enc(area) : "");
+}
+
+/* ---------- Header ---------- */
+
+function fmtTime(iso) {
+  const m = /^(\d{4}-\d{2}-\d{2})T(\d{2}:\d{2})/.exec(iso || "");
+  return m ? m[1] + " " + m[2] + " UTC" : String(iso || "");
+}
+
+function renderHeader() {
+  const done = COMPS.filter(c => c.status === "done").length;
+  const partial = COMPS.filter(c => c.status === "partial").length;
+  const ready = M.work.filter(w => w.ready).length;
+  const stat = (n, word, href) => {
+    const inner = [h("b", null, n), " ", word];
+    return href ? h("a", { href }, inner) : h("span", null, inner);
+  };
+  fill($("#stats"), 
+    stat(COMPS.length, "components"),
+    stat(M.wanted.size, "wanted", mapHref("wanted")),
+    stat(done, "done"),
+    stat(partial, "partial"),
+    stat(ready, "ready to work on", roadmapHref("all", "")),
+    h("span", { class: "gen" }, "generated " + fmtTime(MAP.generated)),
+  );
+}
+
+function renderTabs() {
+  const hrefs = {
+    map: mapHref(state.show),
+    focus: state.focus ? focusHref(state.focus) : "#view=focus",
+    roadmap: roadmapHref(state.milestone, state.area),
+    choose: "#view=choose",
+  };
+  const names = { map: "Map", focus: "Focus", roadmap: "Roadmap", choose: "Choose" };
+  fill($("#tabs"), ...VIEWS.map(v =>
+    h("a", { href: hrefs[v], "aria-current": state.view === v ? "page" : null }, names[v])));
+}
+
+function renderLint() {
+  const { errors, warnings } = MAP.lint;
+  const box = $("#lint");
+  if (!errors.length && !warnings.length) { box.hidden = true; return; }
+  box.hidden = false;
+  box.classList.toggle("warn-only", !errors.length);
+  const parts = [];
+  if (errors.length) parts.push(plural(errors.length, "error"));
+  if (warnings.length) parts.push(plural(warnings.length, "warning"));
+  $("#lint-sum").textContent = parts.join(", ");
+  const fileLink = file => {
+    const m = /^(?:docs\/)?map\/(.+)\.md$/.exec(file);
+    const label = m ? "t8y:/" + m[1] : null;
+    return label && C.has(label)
+      ? h("a", { class: "lf", href: focusHref(label) }, file)
+      : h("span", { class: "lf" }, file);
+  };
+  const list = (title, items) => items.length ? [
+    h("h3", null, title + " (" + items.length + ")"),
+    h("ul", null, items.map(d => h("li", null, fileLink(d.file), d.msg))),
+  ] : null;
+  fill($("#lint-panel"), 
+    h("p", { class: "empty", style: { marginTop: "10px" } }, "What todography lint says about the map files. Run cargo run -p todography -- lint to check again."),
+    list("Errors", errors), list("Warnings", warnings));
+  box.addEventListener("click", e => { if (e.target.closest("a")) box.open = false; });
+}
+
+function renderPreviewBar() {
+  const bar = $("#pvbar");
+  if (!chosen.size) { bar.hidden = true; bar.replaceChildren(); return; }
+  bar.hidden = false;
+  const names = [...chosen].map(l => h("a", { href: focusHref(l) }, C.get(l).title));
+  const extra = M.wanted.size - BASE_WANTED.size;
+  const btn = h("button", { type: "button" }, "Clear preview");
+  btn.addEventListener("click", () => { chosen = new Set(); store.set(PREVIEW_KEY, []); derive(); route(true); });
+  fill(bar, h("div", { class: "wrap" },
+    "Preview: ", commas(names), chosen.size === 1 ? " is treated as a goal. " : " are treated as goals. ",
+    plural(extra, "more component") + " wanted than the map files say. ", btn));
+}
+
+/* ---------- Search ---------- */
+
+function searchComps(q) {
+  q = q.trim().toLowerCase();
+  if (!q) return [];
+  const ql = normLabel(q);
+  const hits = [];
+  for (const c of COMPS) {
+    const title = c.title.toLowerCase(), label = c.label;
+    const aka = c.aka.map(a => a.toLowerCase());
+    let s = 0;
+    if (label === ql) s = 100;
+    else if (title === q) s = 95;
+    else if (aka.includes(q)) s = 85;
+    else if (title.startsWith(q)) s = 80;
+    else if (label.startsWith(ql) || label.includes(q)) s = 60;
+    else if (title.includes(q)) s = 55;
+    else if (aka.some(a => a.includes(q))) s = 45;
+    else if (!STUB(c.summary) && c.summary.toLowerCase().includes(q)) s = 20;
+    if (s) hits.push([s + (M.wanted.has(label) ? 1 : 0), c]);
+  }
+  hits.sort((a, b) => b[0] - a[0] || a[1].label.localeCompare(b[1].label));
+  return hits.slice(0, 12).map(x => x[1]);
+}
+
+function setupSearch() {
+  const input = $("#q"), results = $("#results");
+  let hits = [], sel = -1;
+  const draw = () => {
+    if (!input.value.trim()) { results.hidden = true; results.replaceChildren(); return; }
+    results.hidden = false;
+    if (!hits.length) { fill(results, h("li", { class: "empty" }, "No component matches.")); return; }
+    fill(results, ...hits.map((c, i) => {
+      const li = h("li", { role: "option", "aria-selected": String(i === sel), "data-label": c.label },
+        h("span", { class: "rt" }, c.title), h("span", { class: "rl" }, c.label),
+        STUB(c.summary) ? null : h("span", { class: "rs" }, c.summary));
+      li.addEventListener("click", () => go(c));
+      return li;
+    }));
+  };
+  const go = c => {
+    input.value = ""; hits = []; sel = -1; draw(); input.blur();
+    location.hash = focusHref(c.label);
+  };
+  input.addEventListener("input", () => { hits = searchComps(input.value); sel = hits.length ? 0 : -1; draw(); });
+  input.addEventListener("keydown", e => {
+    if (e.key === "ArrowDown" && hits.length) { sel = (sel + 1) % hits.length; draw(); e.preventDefault(); }
+    else if (e.key === "ArrowUp" && hits.length) { sel = (sel - 1 + hits.length) % hits.length; draw(); e.preventDefault(); }
+    else if (e.key === "Enter" && sel >= 0) { go(hits[sel]); e.preventDefault(); }
+    else if (e.key === "Escape") { input.value = ""; hits = []; draw(); input.blur(); }
+  });
+  results.addEventListener("mousedown", e => e.preventDefault());
+  input.addEventListener("blur", () => setTimeout(() => { results.hidden = true; }, 100));
+  input.addEventListener("focus", () => { if (input.value.trim()) draw(); });
+  document.addEventListener("keydown", e => {
+    const t = e.target;
+    if (e.key === "/" && !(t && /^(INPUT|SELECT|TEXTAREA)$/.test(t.tagName))) { input.focus(); e.preventDefault(); }
+  });
+}
+
+/* ---------- Map view ---------- */
+
+let tileEls = new Map();
+let pinned = null;
+const noHover = () => !!(window.matchMedia && window.matchMedia("(hover: none)").matches);
+
+function visible(c, show) {
+  if (M.wanted.has(c.label)) return true;
+  if (show === "wanted") return false;
+  if (show === "all") return true;
+  return c.intent === "aspiration";
+}
+
+function relations(label) {
+  const c = C.get(label);
+  const needs = [...new Set(c.needs.filter(n => n.target && n.target !== label).map(n => n.target))];
+  const by = [...new Set(c.needed_by.filter(e => e.from !== label).map(e => e.from))];
+  return { needs, by };
+}
+
+function legend() {
+  const sw = (cls, text, extra) => h("span", { class: "tile " + cls }, h("span", { class: "t" }, text), extra || null);
+  return h("div", { class: "legend", "aria-label": "Legend" },
+    sw("s-done w", "done"),
+    sw("s-partial w", "partial", h("span", { class: "pb" }, h("i", { style: { width: "40%" } }))),
+    sw("s-wip w", "in progress"),
+    sw("s-todo w", "to do"),
+    sw("s-dropped w", "dropped"),
+    sw("s-todo w goal", "goal"),
+    sw("s-todo nw", "not wanted"),
+    sw("s-todo nw", "aspiration", h("span", { class: "more" }, "+2")),
+    h("span", { class: "hint" }, "+2: hidden induced pieces it would pull in. Hover or tap a tile: dark outline, what it needs; red outline, what needs it."));
+}
+
+function renderMap(root) {
+  const show = state.show;
+  const seg = h("nav", { class: "seg", "aria-label": "What to show" },
+    [["wanted", "Wanted only"], ["aspirations", "Wanted + aspirations"], ["all", "Everything"]].map(([v, t]) =>
+      h("a", { href: mapHref(v), class: v === show ? "on" : null, "aria-current": v === show ? "true" : null }, t)));
+  const grid = h("div", { class: "mapgrid", id: "mapgrid" });
+  add(grid, svg("svg", { class: "maplines", id: "maplines", "aria-hidden": "true" }));
+  tileEls = new Map();
+  pinned = null;
+  const bandIds = new Set(MAP.bands.map(b => b.id));
+  const bands = MAP.bands.map(b => ({ title: b.title, areas: MAP.areas.filter(a => a.band === b.id) }));
+  const stray = MAP.areas.filter(a => !bandIds.has(a.band));
+  if (stray.length) bands.push({ title: "Not in a band", areas: stray });
+  for (const b of bands) {
+    const areas = h("div", { class: "areas" });
+    for (const a of b.areas) add(areas, areaBox(a, show));
+    if (!b.areas.length) add(areas, h("p", { class: "empty" }, "No areas yet."));
+    add(grid, h("section", { class: "band" }, h("h2", { class: "band-title" }, b.title), areas));
+  }
+  grid.addEventListener("click", e => { if (!e.target.closest(".tile")) { pinned = null; clearHighlight(); } });
+  add(root, h("div", { class: "controls" }, seg, legend()), grid);
+}
+
+function areaBox(a, show) {
+  const comps = BY_AREA.get(a.id) || [];
+  const vis = comps.filter(c => visible(c, show));
+  const nWanted = comps.filter(c => M.wanted.has(c.label)).length;
+  const about = h("div", { class: "area-about", hidden: true },
+    a.summary ? h("p", null, a.summary) : null,
+    a.body_html ? h("div", { class: "prose", html: a.body_html }) : null);
+  const btn = h("button", { type: "button", class: "area-title", "aria-expanded": "false" }, a.title);
+  btn.addEventListener("click", () => {
+    about.hidden = !about.hidden;
+    btn.setAttribute("aria-expanded", String(!about.hidden));
+  });
+  const tiles = h("div", { class: "tiles" });
+  for (const c of vis) add(tiles, tile(c, show));
+  if (!vis.length) add(tiles, h("span", { class: "empty" }, comps.length ? "Nothing wanted here yet." : "No components yet."));
+  return h("div", { class: "area", style: { flexGrow: String(Math.max(1, vis.length)) } },
+    h("div", { class: "area-head" }, btn, h("span", { class: "area-count" }, nWanted + " of " + comps.length + " wanted")),
+    about, tiles);
+}
+
+function tile(c, show) {
+  const w = M.wanted.has(c.label);
+  const cls = ["tile", "s-" + c.status, w ? "w" : "nw"];
+  if (M.goals.has(c.label)) cls.push("goal");
+  const el = h("a", { class: cls.join(" "), href: focusHref(c.label), "data-label": c.label },
+    h("span", { class: "t" }, c.title));
+  if (show === "aspirations" && !w) {
+    const hid = hiddenInduced(c.label);
+    if (hid.length) add(el, h("span", { class: "more", "aria-label": hid.length + " hidden induced pieces" }, "+" + hid.length));
+  }
+  if (c.status === "partial" && c.progress.total) {
+    add(el, h("span", { class: "pb", "aria-hidden": "true" },
+      h("i", { style: { width: Math.round(100 * c.progress.done / c.progress.total) + "%" } })));
+  }
+  el.addEventListener("mouseenter", () => { if (!pinned) highlight(c.label); });
+  el.addEventListener("mouseleave", () => { if (!pinned) clearHighlight(); });
+  el.addEventListener("focus", () => highlight(c.label));
+  el.addEventListener("blur", () => { if (!pinned) clearHighlight(); });
+  el.addEventListener("click", e => {
+    if (noHover() && pinned !== c.label) { e.preventDefault(); pinned = c.label; highlight(c.label); }
+  });
+  tileEls.set(c.label, el);
+  return el;
+}
+
+function highlight(label) {
+  clearHighlight();
+  const grid = $("#mapgrid");
+  const self = tileEls.get(label);
+  if (!grid || !self) return;
+  const { needs, by } = relations(label);
+  grid.classList.add("hovering");
+  self.classList.add("rel", "rel-self");
+  for (const l of needs) { const el = tileEls.get(l); if (el) el.classList.add("rel", "rel-need"); }
+  for (const l of by) { const el = tileEls.get(l); if (el) el.classList.add("rel", "rel-by"); }
+  drawMapLines(self, needs, by);
+  const c = C.get(label);
+  const bar = $("#hoverbar");
+  bar.hidden = false;
+  fill(bar, h("div", { class: "wrap" },
+    h("b", null, c.title), h("code", null, c.label),
+    h("span", null, STATUS_WORD[c.status] + (c.features.length ? ", " + c.progress.done + " of " + c.progress.total + " features" : "")),
+    h("span", null, "needs " + needs.length + ", needed by " + by.length),
+    noHover() ? h("span", null, "Tap again to open.") : null,
+    STUB(c.summary) ? null : h("span", { class: "hs" }, c.summary)));
+}
+
+function clearHighlight() {
+  const grid = $("#mapgrid");
+  if (grid) {
+    grid.classList.remove("hovering");
+    for (const el of grid.querySelectorAll(".rel")) el.classList.remove("rel", "rel-self", "rel-need", "rel-by");
+    const lines = $("#maplines");
+    if (lines) lines.replaceChildren();
+  }
+  const bar = $("#hoverbar");
+  if (bar) { bar.hidden = true; bar.replaceChildren(); }
+}
+
+function drawMapLines(self, needs, by) {
+  const lines = $("#maplines"), grid = $("#mapgrid");
+  if (!lines || !grid) return;
+  const r0 = grid.getBoundingClientRect();
+  if (!r0.width) return;
+  const centre = el => { const r = el.getBoundingClientRect(); return { x: r.left - r0.left + r.width / 2, y: r.top - r0.top + r.height / 2 }; };
+  const a = centre(self);
+  const draw = (labels, cls) => {
+    for (const l of labels) {
+      const el = tileEls.get(l);
+      if (!el) continue;
+      const b = centre(el);
+      const dy = b.y - a.y;
+      const lift = Math.abs(dy) < 24 ? -36 : 0;
+      const d = `M${a.x},${a.y} C${a.x},${a.y + dy / 2 + lift} ${b.x},${b.y - dy / 2 + lift} ${b.x},${b.y}`;
+      add(lines, svg("path", { d, class: cls }));
+    }
+  };
+  draw(by, "ln-by");
+  draw(needs, "ln-need");
+}
+
+/* ---------- Focus view ---------- */
+
+function statusBox(status) { return h("span", { class: "sq s-" + status, title: STATUS_WORD[status] || status }); }
+function chip(key, value, cls, title) {
+  return h("span", { class: "chip" + (cls ? " " + cls : ""), title: title || null }, key ? h("span", { class: "k" }, key) : null, value);
+}
+function compLink(label) {
+  const c = C.get(compOf(label));
+  if (!c) return h("span", { class: "missing" }, label + " (not on the map)");
+  const f = featOf(label);
+  return h("a", { href: focusHref(label) }, c.title, f ? [" ", h("code", null, "#" + f)] : null);
+}
+
+function pushTrail(label) {
+  const i = trail.indexOf(label);
+  if (i >= 0) trail = trail.slice(0, i + 1);
+  else { trail.push(label); if (trail.length > 12) trail = trail.slice(-12); }
+}
+function trailEl() {
+  return h("ol", { class: "trail", "aria-label": "Where you have been" },
+    h("li", null, h("a", { href: mapHref(state.show) }, "Map")),
+    trail.map((l, i) => h("li", null, i === trail.length - 1
+      ? h("span", { class: "cur" }, C.get(l).title)
+      : h("a", { href: focusHref(l) }, C.get(l).title))));
+}
+
+function renderFocus(root) {
+  if (!state.focus) return renderFocusStart(root);
+  const label = compOf(state.focus), feat = featOf(state.focus);
+  const c = C.get(label);
+  if (!c) {
+    add(root, h("div", { class: "notice" }, "There is no component " + label + " on the map. Search for it above, or go back to the ",
+      h("a", { href: mapHref(state.show) }, "map"), "."));
+    return;
+  }
+  pushTrail(label);
+  const wrap = h("div", { class: "focus", id: "focus" });
+  add(wrap, svg("svg", { class: "edges", "aria-hidden": "true" }), needsColumn(c), card(c), neededByColumn(c));
+  add(root, trailEl(), wrap);
+  raf(drawFocusEdges);
+  if (feat) {
+    const row = document.getElementById("f-" + feat);
+    if (row) {
+      row.classList.add("hl");
+      raf(() => { if (row.scrollIntoView) row.scrollIntoView({ block: "center" }); });
+    }
+  }
+}
+
+function renderFocusStart(root) {
+  const goals = COMPS.filter(c => M.goals.has(c.label));
+  add(root, h("div", { class: "start" },
+    h("p", null, "Focus shows one component in the middle, what it needs on the left and what needs it on the right. Open one from the map, the roadmap or the search box."),
+    trail.length ? [h("h3", null, "Where you have been"), h("ul", null, trail.map(l => h("li", null, compLink(l))))] : null,
+    h("h3", null, "Goals"),
+    h("ul", null, goals.map(c => h("li", null, compLink(c.label), " ", h("code", null, c.label))))));
+}
+
+function rankNeed(c, lines) {
+  const act = lines.filter(n => isActive(c, n));
+  if (!act.length) return 3;
+  const hard = act.filter(n => !n.soft);
+  if (!hard.length) return 2;
+  return hard.some(n => !n.met) ? 0 : 1;
+}
+
+function needsColumn(c) {
+  const groups = [], byKey = new Map(), fuzzy = [];
+  for (const n of c.needs) {
+    if (n.fuzzy) { fuzzy.push(n); continue; }
+    if (!n.on || n.target === c.label) continue;
+    const key = n.target || compOf(n.on);
+    let g = byKey.get(key);
+    if (!g) { g = { key, target: n.target, lines: [] }; byKey.set(key, g); groups.push(g); }
+    g.lines.push(n);
+  }
+  for (const g of groups) g.rank = g.target ? rankNeed(c, g.lines) : (g.lines.some(n => isActive(c, n) && !n.soft) ? 0 : 2);
+  groups.sort((a, b) => a.rank - b.rank);
+  const col = h("div", { class: "col col-needs" }, h("h3", { class: "col-h" }, "Needs (" + (groups.length + fuzzy.length) + ")"));
+  if (!groups.length && !fuzzy.length) add(col, h("p", { class: "empty" }, "Needs nothing on the map."));
+  for (const g of groups) add(col, needNode(c, g));
+  for (const n of fuzzy) {
+    add(col, h("div", { class: "node fuzzy edge", "data-edge": "fuzzy" },
+      h("span", { class: "nh" }, h("span", { class: "nt" }, n.fuzzy)),
+      h("span", { class: "nl" }, "not researched yet" + (n.soft ? ", soft" : "")),
+      n.why ? h("span", { class: "why" }, n.why) : null));
+  }
+  return col;
+}
+
+function needNode(c, g) {
+  const t = g.target ? C.get(g.target) : null;
+  const cls = ["node", "edge"];
+  if (g.rank === 2) cls.push("soft");
+  if (g.rank === 3) cls.push("inactive");
+  if (g.rank === 0) cls.push("unmet");
+  if (!t) cls.push("missing");
+  else if (!M.wanted.has(t.label)) cls.push("nw");
+  const edge = g.rank === 2 ? "soft" : g.rank === 3 ? "inactive" : g.rank === 0 ? "hard unmet" : "hard";
+  const head = t
+    ? [h("span", { class: "nh" }, statusBox(t.status), h("span", { class: "nt" }, t.title)), h("span", { class: "nl" }, t.label)]
+    : [h("span", { class: "nh" }, h("span", { class: "nt" }, g.key)), h("span", { class: "nl" }, "not on the map: no such component yet")];
+  const lines = g.lines.map(n => {
+    const act = isActive(c, n);
+    const mark = !act ? ["off", "for a dropped feature"] : n.soft ? ["soft", "soft: can wait"] : n.met ? ["met", "met"] : ["unmet", "not met"];
+    const tf = n.target_feature && t ? featureOf(t, n.target_feature) : null;
+    return h("span", { class: "nline" },
+      h("span", { class: "nmeta" },
+        h("span", { class: "mk " + mark[0] }, mark[1]),
+        n.target_feature ? h("span", null, "on ", h("code", null, "#" + n.target_feature), tf ? " " + tf.title : "") : null,
+        n.from_feature ? h("span", null, "for ", h("code", null, "#" + n.from_feature)) : null),
+      n.why ? h("span", { class: "why" }, n.why) : null);
+  });
+  return h(t ? "a" : "div", { class: cls.join(" "), href: t ? focusHref(t.label) : null, "data-edge": edge }, head, lines);
+}
+
+function neededByColumn(c) {
+  const groups = [], byKey = new Map();
+  for (const e of c.needed_by) {
+    if (e.from === c.label) continue;
+    let g = byKey.get(e.from);
+    if (!g) { g = { from: e.from, lines: [] }; byKey.set(e.from, g); groups.push(g); }
+    g.lines.push(e);
+  }
+  const col = h("div", { class: "col col-by" }, h("h3", { class: "col-h" }, "Needed by (" + groups.length + ")"));
+  if (!groups.length) add(col, h("p", { class: "empty" }, "Nothing on the map needs it."));
+  const order = g => (M.wanted.has(g.from) ? 0 : 2) + (g.lines.every(e => e.soft) ? 1 : 0);
+  groups.sort((a, b) => order(a) - order(b));
+  for (const g of groups) {
+    const f = C.get(g.from);
+    const soft = g.lines.every(e => e.soft);
+    const cls = ["node", "edge"];
+    if (soft) cls.push("soft");
+    if (!M.wanted.has(g.from)) cls.push("nw");
+    add(col, h("a", { class: cls.join(" "), href: focusHref(g.from), "data-edge": soft ? "soft" : "hard" },
+      h("span", { class: "nh" }, statusBox(f.status), h("span", { class: "nt" }, f.title)),
+      h("span", { class: "nl" }, f.label + (M.wanted.has(g.from) ? "" : ", not wanted")),
+      g.lines.map(e => {
+        const of = e.on_feature ? featureOf(c, e.on_feature) : null;
+        const meta = [
+          e.soft ? h("span", { class: "mk soft" }, "soft") : null,
+          e.from_feature ? h("span", null, "its ", h("code", null, "#" + e.from_feature)) : null,
+          e.on_feature ? h("span", null, "needs ", h("code", null, "#" + e.on_feature), of ? " " + of.title : "") : null,
+        ].filter(Boolean);
+        return h("span", { class: "nline" },
+          meta.length ? h("span", { class: "nmeta" }, meta) : null,
+          e.why ? h("span", { class: "why" }, e.why) : null);
+      })));
+  }
+  return col;
+}
+
+function previewToggle(c) {
+  const box = h("input", { type: "checkbox", checked: chosen.has(c.label) });
+  box.addEventListener("change", () => setChosen(c.label, box.checked));
+  return h("label", { class: "preview-toggle" }, box, "Preview as chosen");
+}
+
+function workState(w) {
+  if (!w || !w.wanted) return null;
+  if (w.ready) return h("div", { class: "state" }, h("span", { class: "ready" }, "Ready to work on"));
+  if (w.blocked_by.length) return h("div", { class: "state blocked" }, "Blocked by ", commas(w.blocked_by.map(blockerLink)));
+  return null;
+}
+
+function card(c) {
+  const w = M.wanted.has(c.label);
+  const el = h("article", { class: "card" });
+  add(el, 
+    h("h2", { class: "ct" }, c.title),
+    h("div", { class: "cl" }, c.label),
+    c.aka.length ? h("div", { class: "aka" }, "Also: " + c.aka.join(", ")) : null,
+    STUB(c.summary) ? h("p", { class: "sum stub" }, "A stub: not described yet.") : h("p", { class: "sum" }, c.summary));
+  const ms = c.milestone ? MILESTONE.get(c.milestone) : null;
+  add(el, h("div", { class: "chips" },
+    chip("kind", c.kind),
+    chip("intent", c.intent + (chosen.has(c.label) ? ", previewed as goal" : "")),
+    chip(null, w ? "wanted" : "not wanted", w ? "c-w" : "c-nw"),
+    chip("status", STATUS_WORD[c.status], "s-" + c.status),
+    chip("research", c.research),
+    c.milestone ? chip("milestone", c.milestone, null, ms ? ms.title : null) : null,
+    M.debt.has(c.label) ? chip(null, "research debt", "c-debt") : null));
+  if (c.features.length && c.progress.total) {
+    const p = c.progress;
+    add(el, h("div", { class: "progress" },
+      h("span", null, p.done + " of " + plural(p.total, "feature") + " done"),
+      h("span", { class: "bar" + (p.done === p.total ? " full" : "") }, h("i", { style: { width: Math.round(100 * p.done / p.total) + "%" } }))));
+  }
+  if (!c.features.length) add(el, workState(M.workByLabel.get(c.label)));
+  if (c.intent === "aspiration" && (!w || chosen.has(c.label))) add(el, h("div", { class: "state" }, previewToggle(c)));
+
+  if (c.features.length) {
+    add(el, h("h3", null, "Features"), h("ul", { class: "feats" }, c.features.map(f => featureRow(c, f))));
+  }
+
+  add(el, h("h3", null, "Why it exists"), whySection(c));
+
+  add(el, h("h3", null, "Description"),
+    c.body_html.trim() ? h("div", { class: "prose", html: c.body_html }) : h("p", { class: "empty" }, "Nothing written yet."));
+
+  if (c.refs.length) {
+    add(el, h("h3", null, "References"), h("ul", { class: "refs" }, c.refs.map(r => h("li", null, refEl(r)))));
+  }
+  const fuzzy = c.needs.filter(n => n.fuzzy);
+  if (fuzzy.length || c.research !== "done") {
+    add(el, h("h3", null, "Not researched yet"));
+    if (c.research === "deferred") add(el, h("p", { class: "state" }, "Research is deferred: its needs are guesses."));
+    else if (c.research === "outline") add(el, h("p", { class: "state" }, "Research is in outline: the big needs are known."));
+    if (fuzzy.length) {
+      add(el, h("p", { class: "state" }, w
+        ? "These fuzzy needs are research debt: look into them and replace them with labels."
+        : "These fuzzy needs become research debt if it is chosen."),
+      h("ul", { class: "fuzzylist" }, fuzzy.map(n => h("li", null, n.fuzzy, n.why ? h("span", { class: "why" }, n.why) : null))));
+    }
+  }
+  return el;
+}
+
+function refEl(r) {
+  return /^https?:\/\//.test(r) ? h("a", { href: r, target: "_blank", rel: "noopener" }, r) : h("code", null, r);
+}
+
+function featureRow(c, f) {
+  const w = M.workByLabel.get(f.label);
+  const ms = f.milestone ? MILESTONE.get(f.milestone) : null;
+  const needs = f.needs.map(l => {
+    const n = c.needs.find(x => x.from_feature === f.id && x.on === l);
+    const mark = !n || !n.target ? null
+      : n.met ? h("span", { class: "mk met" }, "met") : h("span", { class: "mk unmet" }, "not met");
+    return h("span", null, compLink(l), mark ? [" ", mark] : null);
+  });
+  return h("li", { class: "feat s-" + f.status, id: "f-" + f.id },
+    statusBox(f.status),
+    h("div", { class: "fb" },
+      h("div", { class: "ft" }, h("span", null, f.title), h("code", { class: "fid" }, "#" + f.id),
+        f.status === "wip" ? chip(null, "in progress", "s-wip") : null, " ",
+        f.milestone ? chip(null, f.milestone, null, ms ? ms.title : null) : null),
+      f.note ? h("div", { class: "fnote" }, f.note) : null,
+      f.refs.length ? h("div", { class: "fnote" }, commas(f.refs.map(refEl))) : null,
+      needs.length ? h("div", { class: "fneeds" }, "Needs ", commas(needs)) : null,
+      f.status !== "done" && f.status !== "dropped" ? workState(w) : null));
+}
+
+function whySection(c) {
+  const w = M.wanted.has(c.label);
+  if (M.goals.has(c.label)) {
+    return h("p", { class: "state" }, chosen.has(c.label)
+      ? "Previewed as a goal. To choose it for real, set intent = \"goal\" in docs/map/" + c.area + "/" + c.slug + ".md."
+      : "A goal: wanted for itself.");
+  }
+  if (!w) {
+    const by = c.needed_by.filter(e => e.from !== c.label);
+    if (c.intent === "aspiration") {
+      return h("p", { class: "state" }, "An aspiration: nothing wanted needs it" +
+        (by.length ? " (only components that aren't wanted, or soft needs)" : "") +
+        ", so it isn't wanted. Preview it as chosen to see what it pulls in.");
+    }
+    return h("p", { class: "state" }, "Induced, but nothing wanted needs it, so it isn't wanted.");
+  }
+  const paths = whyPaths(c.label);
+  return [
+    c.intent === "aspiration" ? h("p", { class: "state" }, "An aspiration, but something wanted needs it, so it is wanted. todography lint suggests making it induced or a goal.") : null,
+    paths.length
+      ? h("ul", { class: "chains" }, paths.map(p => h("li", null, p.map((l, i) => i === p.length - 1
+          ? h("b", null, C.get(l).title)
+          : [h("a", { href: focusHref(l) }, C.get(l).title), h("span", { class: "arr" }, " → ")]))))
+      : h("p", { class: "state" }, "Wanted."),
+  ];
+}
+
+function drawFocusEdges() {
+  const wrap = document.getElementById("focus");
+  if (!wrap) return;
+  const lines = $("svg.edges", wrap), cardEl = $(".card", wrap);
+  if (!lines || !cardEl) return;
+  lines.replaceChildren();
+  if (window.getComputedStyle(lines).display === "none") return;
+  const r0 = wrap.getBoundingClientRect(), rc = cardEl.getBoundingClientRect();
+  if (!rc.width) return;
+  lines.setAttribute("width", r0.width);
+  lines.setAttribute("height", r0.height);
+  const ay = rc.top - r0.top + 30;
+  const L = { x: rc.left - r0.left, y: ay }, R = { x: rc.right - r0.left, y: ay };
+  const curve = (a, b) => {
+    const dx = Math.max(20, (b.x - a.x) / 2);
+    return `M${a.x},${a.y} C${a.x + dx},${a.y} ${b.x - dx},${b.y} ${b.x},${b.y}`;
+  };
+  const link = (node, d) => {
+    const p = svg("path", { d, class: node.getAttribute("data-edge") || "" });
+    add(lines, p);
+    node.addEventListener("mouseenter", () => p.classList.add("hot"));
+    node.addEventListener("mouseleave", () => p.classList.remove("hot"));
+  };
+  for (const n of wrap.querySelectorAll(".col-needs .edge")) {
+    const r = n.getBoundingClientRect();
+    link(n, curve({ x: r.right - r0.left, y: r.top - r0.top + Math.min(16, r.height / 2) }, L));
+  }
+  for (const n of wrap.querySelectorAll(".col-by .edge")) {
+    const r = n.getBoundingClientRect();
+    link(n, curve(R, { x: r.left - r0.left, y: r.top - r0.top + Math.min(16, r.height / 2) }));
+  }
+}
+
+/* ---------- Roadmap view ---------- */
+
+function renderRoadmap(root) {
+  const wanted = M.work.filter(w => w.wanted);
+  const ms = state.milestone || (wanted.some(w => w.milestone === "m1") ? "m1" : "all");
+  const area = state.area;
+  const areasWithWork = MAP.areas.filter(a => wanted.some(w => C.get(w.component).area === a.id));
+  const msSel = h("select", { "aria-label": "Milestone" },
+    h("option", { value: "all" }, "All milestones"),
+    MAP.milestones.map(m => h("option", { value: m.id }, m.title)),
+    h("option", { value: "none" }, "No milestone"));
+  msSel.value = ms;
+  const areaSel = h("select", { "aria-label": "Area" },
+    h("option", { value: "" }, "All areas"),
+    areasWithWork.map(a => h("option", { value: a.id }, a.title)));
+  areaSel.value = area;
+  msSel.addEventListener("change", () => { location.hash = roadmapHref(msSel.value, areaSel.value); });
+  areaSel.addEventListener("change", () => { location.hash = roadmapHref(msSel.value, areaSel.value); });
+
+  const shown = wanted.filter(w =>
+    (ms === "all" || (ms === "none" ? !w.milestone : w.milestone === ms)) &&
+    (!area || C.get(w.component).area === area));
+  const cols = new Map();
+  for (const w of shown) {
+    const l = M.level.get(w.label) || 0;
+    if (!cols.has(l)) cols.set(l, []);
+    cols.get(l).push(w);
+  }
+  const m = MILESTONE.get(ms);
+  add(root,
+    h("div", { class: "rm-controls" }, h("label", null, "Milestone ", msSel), h("label", null, "Area ", areaSel)),
+    h("p", { class: "rm-note" },
+      m ? [m.summary + ". "] : null,
+      plural(shown.length, "wanted work item") + ". Ready now has nothing blocking it; each column after it waits only on work in the columns before, which may be outside this filter. A blocker marked ready can start today."));
+  if (!shown.length) {
+    add(root, h("p", { class: "notice" }, "No wanted work matches. Try all milestones or all areas."));
+    return;
+  }
+  const road = h("div", { class: "road" });
+  if (!cols.has(0)) cols.set(0, []);
+  for (const l of [...cols.keys()].sort((a, b) => a - b)) {
+    const items = cols.get(l).sort((a, b) => a.label.localeCompare(b.label));
+    add(road, h("section", { class: "road-col" },
+      h("h2", null, l === 0 ? "Ready now" : plural(l, "step") + " away", h("span", { class: "n" }, items.length)),
+      items.length ? items.map(w => workItem(w, ms === "all"))
+        : h("p", { class: "empty" }, "Nothing in this filter is ready: it all waits on other work.")));
+  }
+  add(root, road);
+}
+
+/** A blocker, marked when it is itself work that is ready now. */
+function blockerLink(label) {
+  const w = M.workByLabel.get(label);
+  return w && w.ready ? h("span", null, compLink(label), " ", h("span", { class: "mk met" }, "ready")) : compLink(label);
+}
+
+function workItem(w, showMs) {
+  const c = C.get(w.component);
+  const cls = ["item", "s-" + w.status];
+  if (w.ready) cls.push("ready-item");
+  const el = h("div", { class: cls.join(" ") },
+    h("a", { class: "it", href: focusHref(w.label) }, w.title),
+    h("div", { class: "ic" },
+      w.feature ? h("span", null, c.title) : null,
+      w.status === "wip" ? chip(null, "in progress", "s-wip") : null,
+      showMs && w.milestone ? chip(null, w.milestone) : null),
+    h("span", { class: "il" }, w.label),
+    w.blocked_by.length ? h("div", { class: "ib" }, "Waits on ", commas(w.blocked_by.map(blockerLink))) : null);
+  el.addEventListener("click", e => { if (!e.target.closest("a")) location.hash = focusHref(w.label); });
+  return el;
+}
+
+/* ---------- Choose view ---------- */
+
+function renderChoose(root) {
+  const asps = COMPS.filter(c => c.intent === "aspiration");
+  const alreadyWanted = asps.filter(c => M.wanted.has(c.label) && !chosen.has(c.label));
+  const box = h("div", { class: "choose" });
+
+  // The filter comes first and stays at the top while the list scrolls, so
+  // it can be reached on a phone without scrolling back up.
+  const q = h("input", { type: "search", id: "choose-q", placeholder: "Filter aspirations: name, label, area…", autocomplete: "off", spellcheck: "false", value: state.chooseQuery });
+  q.setAttribute("aria-label", "Filter aspirations and research debt");
+  const onlyCb = h("input", { type: "checkbox", id: "choose-only", checked: state.onlyChosen });
+  const count = h("span", { class: "count" });
+  count.setAttribute("aria-live", "polite");
+  add(box, h("div", { class: "choose-filter" }, q,
+    h("label", { class: "preview-toggle", for: "choose-only" }, onlyCb, "Previewed only (" + chosen.size + ")"),
+    count));
+
+  add(box, h("details", { class: "how" },
+    h("summary", null, "What choosing does"),
+    h("div", { class: "intro" },
+      h("p", null, "An aspiration is a piece of OpenVMS that vaxpunk might want some day but hasn't chosen. Each one below says what choosing it would pull in: the components its hard needs reach that aren't wanted today, their features, and their fuzzy needs."),
+      h("p", null, "Tick Preview as chosen to treat it as a goal on this page: the map, the roadmap and the counts change to match. The preview stays in this browser only. Choosing it for real means setting intent = \"goal\" in its file, which turns its fuzzy needs into research debt."))));
+  const also = h("input", { type: "checkbox", id: "choose-also", checked: state.alsoWanted });
+  also.addEventListener("change", () => { state.alsoWanted = also.checked; route(true); });
+  add(box, h("label", { class: "preview-toggle", for: "choose-also" }, also, "Also list the " + plural(alreadyWanted.length, "aspiration") + " that something wanted already needs"));
+
+  // Each row carries the text the filter matches; areas and bands hide
+  // when none of their rows match.
+  const rowsAll = [];
+  const groups = [];
+  const searchText = (c, a) => [c.title, c.label, c.summary, (c.aka || []).join(" "), a.title].join(" ").toLowerCase();
+
+  add(box, h("h2", null, "Aspirations"));
+  const bandIds = new Set(MAP.bands.map(b => b.id));
+  const bands = MAP.bands.map(b => ({ title: b.title, id: b.id }));
+  if (MAP.areas.some(a => !bandIds.has(a.band))) bands.push({ title: "Not in a band", id: null });
+  let listed = 0;
+  for (const b of bands) {
+    const areas = MAP.areas.filter(a => b.id === null ? !bandIds.has(a.band) : a.band === b.id);
+    const bandBox = h("div", { class: "choose-band" });
+    const areaBoxes = [];
+    for (const a of areas) {
+      const rows = asps.filter(c => c.area === a.id && (state.alsoWanted || !M.wanted.has(c.label) || chosen.has(c.label)));
+      if (!rows.length) continue;
+      listed += rows.length;
+      const areaBox = h("div", { class: "choose-area" }, h("h4", null, a.title));
+      const els = rows.map(c => {
+        const el = aspRow(c);
+        el._q = searchText(c, a);
+        el._chosen = chosen.has(c.label);
+        rowsAll.push(el);
+        return el;
+      });
+      add(areaBox, els);
+      areaBoxes.push(areaBox);
+      groups.push({ box: areaBox, rows: els });
+    }
+    if (areaBoxes.length) {
+      add(bandBox, h("h3", null, b.title), areaBoxes);
+      add(box, bandBox);
+      groups.push({ box: bandBox, rows: areaBoxes.flatMap(x => groups.find(g => g.box === x).rows) });
+    }
+  }
+  const noAsp = h("p", { class: "empty" }, listed ? "No aspirations match the filter." : "No aspirations to list.");
+  add(box, noAsp);
+
+  const debt = COMPS.filter(c => M.debt.has(c.label));
+  const debtRows = [];
+  add(box, h("h2", { id: "debt" }, "Research debt (" + debt.length + ")"),
+    h("p", null, "Wanted components whose needs aren't known yet: research is deferred, or a need is still fuzzy. Look into them and replace fuzzy needs with labels."));
+  for (const a of MAP.areas) {
+    const rows = debt.filter(c => c.area === a.id);
+    if (!rows.length) continue;
+    const areaBox = h("div", { class: "choose-area" }, h("h4", null, a.title));
+    const els = rows.map(c => {
+      const fuzzy = c.needs.filter(n => n.fuzzy);
+      const el = h("div", { class: "debt-row" },
+        h("div", { class: "an" }, h("a", { href: focusHref(c.label) }, c.title), h("code", null, c.label), " ",
+          c.research !== "done" ? chip("research", c.research) : null, " ",
+          STUB(c.summary) ? chip(null, "stub", "c-nw") : null),
+        fuzzy.length ? h("ul", null, fuzzy.map(n => h("li", null, n.fuzzy, n.why ? h("span", { class: "why" }, n.why) : null))) : null);
+      el._q = searchText(c, a) + " " + fuzzy.map(n => n.fuzzy).join(" ").toLowerCase();
+      el._chosen = chosen.has(c.label);
+      debtRows.push(el);
+      return el;
+    });
+    add(areaBox, els);
+    add(box, areaBox);
+    groups.push({ box: areaBox, rows: els });
+  }
+  const noDebt = h("p", { class: "empty" }, debt.length ? "No research debt matches the filter." : "No research debt.");
+  add(box, noDebt);
+
+  const apply = () => {
+    const words = state.chooseQuery.toLowerCase().split(/\s+/).filter(Boolean);
+    const show = el => (!state.onlyChosen || el._chosen) && words.every(w => el._q.includes(w));
+    for (const el of rowsAll.concat(debtRows)) el.hidden = !show(el);
+    for (const g of groups) g.box.hidden = !g.rows.some(r => !r.hidden);
+    const nA = rowsAll.filter(r => !r.hidden).length;
+    const nD = debtRows.filter(r => !r.hidden).length;
+    noAsp.hidden = nA > 0;
+    noDebt.hidden = nD > 0;
+    const filtering = words.length || state.onlyChosen;
+    count.textContent = filtering
+      ? "Showing " + nA + " of " + plural(rowsAll.length, "aspiration") + ", " + nD + " of " + debtRows.length + " research debt"
+      : plural(rowsAll.length, "aspiration") + ", " + debtRows.length + " research debt";
+  };
+  q.addEventListener("input", () => { state.chooseQuery = q.value; apply(); });
+  q.addEventListener("keydown", e => { if (e.key === "Escape") { q.value = ""; state.chooseQuery = ""; apply(); } });
+  onlyCb.addEventListener("change", () => { state.onlyChosen = onlyCb.checked; apply(); });
+  apply();
+  add(root, box);
+}
+
+function aspRow(c) {
+  const isChosen = chosen.has(c.label);
+  const already = M.wanted.has(c.label) && !isChosen;
+  const id = "pv-" + c.area + "-" + c.slug;
+  const cb = h("input", { type: "checkbox", id, checked: isChosen, disabled: already });
+  cb.addEventListener("change", () => setChosen(c.label, cb.checked));
+  let detail;
+  if (already) {
+    const by = [...new Set(c.needed_by.filter(e => !e.soft && e.from !== c.label && M.wanted.has(e.from)).map(e => e.from))];
+    detail = h("div", { class: "ap" }, "Already wanted: ", commas(by.map(compLink)), by.length === 1 ? " needs it." : " need it.");
+  } else {
+    const p = pullIn(c.label);
+    const bits = [plural(p.features, "feature") + (p.done ? " (" + p.done + " done)" : ""), plural(p.fuzzy, "fuzzy need")];
+    if (p.deferred) bits.push(p.size === 1 ? "needs not researched" : p.deferred + " not researched");
+    const text = (isChosen ? "Previewed. " : "") +
+      (p.others.length ? "Pulls in " + plural(p.others.length, "more component") + ". In all: " : "Pulls in nothing else. ") +
+      bits.join(", ") + ".";
+    detail = h("details", { class: "ap" },
+      h("summary", null, text),
+      h("div", null, "File: ", h("code", null, "docs/map/" + c.area + "/" + c.slug + ".md")),
+      p.others.length ? h("ul", null, p.others.map(l => {
+        const o = C.get(l);
+        return h("li", null, statusBox(o.status), " ", compLink(l), " ", h("code", null, l), o.intent === "induced" ? " (induced)" : "");
+      })) : null);
+  }
+  return h("div", { class: "asp" + (isChosen ? " chosen" : "") },
+    h("div", { class: "an" }, h("a", { href: focusHref(c.label) }, c.title), h("code", null, c.label)),
+    h("label", { class: "preview-toggle", for: id }, cb, already ? "Already wanted" : "Preview as chosen"),
+    detail);
+}
+
+/* ---------- Routing ---------- */
+
+const RENDER = { map: renderMap, focus: renderFocus, roadmap: renderRoadmap, choose: renderChoose };
+
+function route(keepScroll) {
+  readHash();
+  renderHeader();
+  renderTabs();
+  renderPreviewBar();
+  clearHighlight();
+  const root = $("#view");
+  root.replaceChildren();
+  RENDER[state.view](root);
+  const place = state.view + "|" + (state.view === "focus" ? compOf(state.focus) : "");
+  if (place !== lastPlace && keepScroll !== true && !featOf(state.focus || "")) {
+    try { window.scrollTo(0, 0); } catch (e) { /* not in every environment */ }
+  }
+  lastPlace = place;
+}
+
+function setupTheme() {
+  const sel = $("#theme");
+  const apply = v => {
+    if (v === "light" || v === "dark") document.documentElement.setAttribute("data-theme", v);
+    else document.documentElement.removeAttribute("data-theme");
+  };
+  const saved = store.get("todography.theme", "");
+  sel.value = saved || "";
+  apply(saved);
+  sel.addEventListener("change", () => { store.set("todography.theme", sel.value); apply(sel.value); });
+}
+
+let resizeTimer = 0;
+window.addEventListener("resize", () => {
+  clearTimeout(resizeTimer);
+  resizeTimer = setTimeout(() => {
+    if (state.view === "focus") drawFocusEdges();
+    if (state.view === "map" && pinned) highlight(pinned);
+  }, 120);
+});
+window.addEventListener("hashchange", () => route());
+
+document.title = MAP.title + " map";
+$("#brand-title").textContent = MAP.title;
+$("#foot-gen").textContent = "Made by todography from docs/map/ on " + fmtTime(MAP.generated) + ".";
+derive();
+setupTheme();
+setupSearch();
+renderLint();
+route();
+</script>
+</body>
+</html>

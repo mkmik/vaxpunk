@@ -1,0 +1,17 @@
+name: todography
+
+# docs/map/ is the map of components: every label must name something, and
+# no change may leave a warning behind (an aspiration something wanted needs,
+# a cycle, an induced component nothing needs). See docs/map/README.md.
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: cargo run -p todography -- lint --strict
+      - run: cargo run -p todography -- build

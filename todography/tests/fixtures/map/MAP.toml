@@ -1,0 +1,29 @@
+# A small map for todography's tests. Its mistakes are on purpose.
+title = "fixture"
+
+[[band]]
+id = "apps"
+title = "Applications"
+
+[[band]]
+id = "lib"
+title = "Libraries"
+
+[[band]]
+id = "exec"
+title = "Executive"
+
+[[band]]
+id = "platform"
+title = "Below the executive"
+
+[[milestone]]
+id = "m0"
+title = "Milestone 0"
+summary = "The first one"
+refs = ["docs/m0.md"]
+
+[[milestone]]
+id = "m1"
+title = "Milestone 1"
+summary = "The second one"
