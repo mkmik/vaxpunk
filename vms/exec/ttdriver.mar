@@ -36,7 +36,7 @@
 ; write goes out as it is, as with IO$M_NOFORMAT; no $BRKTHRU. The
 ; console's output waits for it at IPL$_SYNCH; a TELNET terminal's echo
 ; and prompts past UCB$K_TT_OUTSIZE bytes not yet sent are lost; a
-; hangup ends the reads and writes with SS$_HANGUP, not the process.
+; hangup deletes the terminal's owner, but not the processes it created.
 ; At most 9 TELNET terminals, TNA1 to TNA9: a device's name has 4
 ; characters.
 ;
@@ -58,7 +58,7 @@
         .EXTERNAL SCH$QAST, EXE$ALONONPAGED, EXE$DEANONPGDSIZ
         .EXTERNAL EXE$OUTCHAR, EXE$GQ_SYSTIME, EXE$INSTIMQ, EXE$RMVTQE
         .EXTERNAL IOC$ALLOCIRP, IOC$REQCOM, IOC$CANCELQ
-        .EXTERNAL NET$TTIO, NET$TTCLOSE, NET$FREEUNIT
+        .EXTERNAL NET$TTIO, NET$TTCLOSE, NET$FREEUNIT, EXE$DELPID, IOC$TRNDEVNAM
 
 TYPEAHEAD = UCB$K_TT_TYPEAHEAD
 RXCS$V_DONE = 7                         ; RXCS: a character is waiting
@@ -1391,8 +1391,9 @@ ABORT:
         RSB
 
 ; HANGUP: R5 = a TELNET terminal's UCB, whose line is gone. Its reads and
-; writes, those queued and those to come, end with SS$_HANGUP.
-; IPL$_SYNCH. Uses R0-R3.
+; writes, those queued and those to come, end with SS$_HANGUP, and its
+; owner, the process created on it, is deleted, as VMS deletes a
+; process whose terminal hangs up. IPL$_SYNCH. Uses R0-R3.
 HANGUP:
         .JSB_ENTRY  SCRATCH=<R2, R3>
         BBSS    #UCB$V_TT_HANGUP, UCB$L_TT_STS(R5), 90$
@@ -1405,12 +1406,44 @@ HANGUP:
         BSBW    IOC$REQCOM
         BRB     10$
 20$:    REMQUE  @UCB$Q_TT_WRTQ(R5), R3
-        BVS     90$
+        BVS     30$
         MOVZWL  #SS$_HANGUP, R0
         CLRL    R1
         BSBW    IOC$REQCOM
         BRB     20$
+30$:    MOVL    UCB$L_TT_PID(R5), R0
+        BEQL    90$
+        PUSHR   #^M<R4, R5>
+        JSB     G^EXE$DELPID
+        POPR    #^M<R4, R5>
 90$:    RSB
+
+; TT$OWNER: R1 = a device name's descriptor, $CREPRC's input, R0 = the
+; PID of the process it creates; R4 = the current PCB. If the name,
+; translated as $ASSIGN does (IOC$TRNDEVNAM), is a terminal's that has
+; no owner, the process becomes it, which a hangup deletes. VMS's
+; terminal is its owner's once LOGINOUT allocates it. IPL$_SYNCH. Uses
+; R0-R3, R5-R7.
+TT$OWNER::
+        .JSB_ENTRY  SCRATCH=<R2, R3, R5, R6, R7>
+        PUSHL   R0
+        MOVZWL  (R1), R2
+        MOVL    4(R1), R3
+        JSB     G^IOC$TRNDEVNAM
+        CMPL    R2, #4                  ; DDCU, or DDCU:
+        BEQL    10$
+        CMPL    R2, #5
+        BNEQ    90$
+        CMPB    4(R3), #^A/:/
+        BNEQ    90$
+10$:    BSBW    TT$FINDUNIT
+        TSTL    R5
+        BEQL    90$
+        TSTL    UCB$L_TT_PID(R5)
+        BNEQ    90$
+        MOVL    (SP), UCB$L_TT_PID(R5)
+90$:    MOVL    (SP)+, R0
+        RSB
 
 ; TIMER: R4 = a read's IRP, R5 = its terminal's UCB. For a timed read of
 ; some seconds, starts its timer again: the read ends that long after the

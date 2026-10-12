@@ -48,7 +48,7 @@
         .EXTERNAL FIL$OPENFILE, FIL$OPENSHR, FIL$READIMG, RMS$RUNDOWN
         .EXTERNAL EXE$OUTZSTRING, EXE$OUTCSTRING, EXE$OUTHEX, EXE$OUTCRLF
         .EXTERNAL LNM$CREATE, LNM$DELTBL, SCH$QAST, EXE$FLUSHAST, IOC$CANCEL, SYS$EXIT
-        .EXTERNAL MB$FINDNUM, MB$SEND, EXE$GQ_SYSTIME
+        .EXTERNAL MB$FINDNUM, MB$SEND, EXE$GQ_SYSTIME, TT$OWNER
 
 KSTACK = 16384                          ; a process's kernel stack
 BLOCK = 512                             ; an image's blocks
@@ -245,8 +245,9 @@ EXE$PRCPRIV::
 ; prcnam, at priority baspri, and puts its PID in pidadr. input, output
 ; and error, if given, are the equivalence strings of its process-permanent
 ; logical names SYS$INPUT, SYS$OUTPUT and SYS$ERROR; SS$_BADPARAM for one
-; that is empty or longer than 255. It starts in its creator's default
-; directory. mbxunt, if it isn't 0, is the unit number of a mailbox, MBnn,
+; that is empty or longer than 255. A terminal that input names and no
+; process owns yet is its: a hangup deletes it (TT$OWNER). It starts in
+; its creator's default directory. mbxunt, if it isn't 0, is the unit number of a mailbox, MBnn,
 ; which gets the process's termination message when it is deleted. Its
 ; UIC is uic, or its creator's for 0; another one than the creator's takes
 ; DETACH, else SS$_NOPRIV. It has its creator's username. Its privileges, current and permanent, are those
@@ -392,7 +393,11 @@ EXE$PRCPRIV::
         MOVZWL  SCH$GL_SEQ, R0
         ASHL    #16, R0, R0
         BISL3   R5, R0, PCB$L_PID(R8)
-        PUSHL   R4
+        MOVL    12(AP), R1              ; input: of a terminal, it may own it
+        BEQL    42$
+        MOVL    PCB$L_PID(R8), R0
+        JSB     G^TT$OWNER
+42$:    PUSHL   R4
         MOVL    R8, R4
         BSBW    SCH$MAKECOM
         MOVL    (SP)+, R4
@@ -1215,6 +1220,36 @@ EXE$DELETEPCB::
         CMPL    R1, R4
         BEQL    50$
         MOVL    R1, R4
+        BSBB    DELOTHER
+        BRB     90$
+50$:    ENBINT
+        BRW     EXE$DELSELF
+80$:    MOVL    #SS$_NOPRIV, R0
+90$:    ENBINT
+        RET
+
+; EXE$DELPID: R0 = a PID. Deletes that process, if it is there, as
+; $DELPRC deletes another one (DELOTHER), even the current one, which
+; goes once its kernel mode AST comes. The terminal driver's, for a
+; hangup. IPL$_SYNCH. Uses R0-R5.
+EXE$DELPID::
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5>
+        MOVZWL  R0, R1
+        CMPL    R1, #SCH$C_MAXPIX
+        BGEQU   90$
+        MOVL    SCH$GL_PCBVEC[R1], R4
+        BEQL    90$
+        CMPL    PCB$L_PID(R4), R0
+        BNEQ    90$
+        BSBB    DELOTHER
+90$:    RSB
+
+; DELOTHER: R4 = the PCB of a process to delete. Queues it DELKAST, which
+; ends its wait or suspension, and takes it out of its slot. R0 =
+; SS$_NORMAL, or SS$_INSFMEM if there is no pool for the AST.
+; IPL$_SYNCH. Uses R0-R3, R5.
+DELOTHER:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R5>
         MOVL    #ACB$K_LENGTH, R1
         BSBW    EXE$ALONONPAGED
         BLBC    R0, 90$
@@ -1231,14 +1266,8 @@ EXE$DELETEPCB::
 30$:    BSBW    SCH$QAST                ; and it ends a wait
         MOVZWL  PCB$L_PID(R4), R0
         CLRL    SCH$GL_PCBVEC[R0]
-        ENBINT
         MOVL    #SS$_NORMAL, R0
-        RET
-50$:    ENBINT
-        BRW     EXE$DELSELF
-80$:    MOVL    #SS$_NOPRIV, R0
-90$:    ENBINT
-        RET
+90$:    RSB
 
 ; DELKAST: $DELPRC's kernel mode AST. R4 = the current PCB, R5 = the ACB:
 ; frees it and deletes the process.

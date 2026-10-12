@@ -310,7 +310,7 @@ LITERAL
     UCB$K_LENGTH = 28,
     UCB$K_NETLENGTH = 48,  ! a network unit, which BGA0: clones
     UCB$K_MBLENGTH = 60,  ! a mailbox
-    UCB$K_TTLENGTH = 5560,  ! a terminal
+    UCB$K_TTLENGTH = 5564,  ! a terminal
     UCB$K_TT_TYPEAHEAD = 256,
     UCB$K_TT_RECALL = 16,  ! a power of 2
     UCB$K_TT_OUTSIZE = 1024,
@@ -364,7 +364,8 @@ MACRO
     UCB$A_TT_RING = 180, 0, 32, 1 %,  ! the type-ahead buffer, UCB$K_TT_TYPEAHEAD bytes
     UCB$A_TT_RECALL = 436, 0, 32, 1 %,  ! the lines read, UCB$K_TT_RECALL of 256 bytes, each .ASCIC
     UCB$A_TT_OUT = 4532, 0, 32, 1 %,  ! a TELNET terminal's echo and prompts, not yet sent, UCB$K_TT_OUTSIZE bytes
-    UCB$L_TT_CTRL = 5556, 0, 32, 0 %;  ! CTRL/C and CTRL/Y that came, for SERVICE: the console's interrupt sets them
+    UCB$L_TT_CTRL = 5556, 0, 32, 0 %,  ! CTRL/C and CTRL/Y that came, for SERVICE: the console's interrupt sets them
+    UCB$L_TT_PID = 5560, 0, 32, 0 %;  ! its owner: the process created on it, which a hangup deletes, or 0
 
 ! $IRPDEF
 LITERAL

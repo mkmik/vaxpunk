@@ -20,7 +20,9 @@
 //! from here back twice, to its sender and connected to it; and SET HOST to
 //! itself, as SYSTEM again, a character at a time on a TELNET terminal,
 //! TNA1:, which has the console's width and page, as Telnet's NAWS gives them: SHOW TERMINAL,
-//! EDIT's keypad mode there, SHOW SYSTEM, and LOGOUT; then TELNET, by a name DNS knows, to a port here,
+//! EDIT's keypad mode there, SHOW SYSTEM, and LOGOUT; SET HOST again, and
+//! CTRL/] while a procedure spins there, which deletes its process, so
+//! SHOW SYSTEM no longer lists _TNA1:; then TELNET, by a name DNS knows, to a port here,
 //! through guestfwd, a line each way, and with /PORT to one there cannot be;
 //! then COPY/HTTP from web servers here, through guestfwd, to the data
 //! disk: by URL, by node and path, one that says 404, by URL with a
@@ -502,6 +504,32 @@ fn network() {
     vax.command("QUIT");
     vax.command("SHOW SYSTEM");
     vax.command("LOGOUT");
+    // A hangup: the session ends with CTRL/] while a procedure spins
+    // there, reading nothing, and its process goes.
+    vax.command("OPEN/WRITE SPIN DKB0:[000000]SPIN.COM");
+    vax.command(r#"WRITE SPIN "$ L:""#);
+    vax.command(r#"WRITE SPIN "$ GOTO L""#);
+    vax.command("CLOSE SPIN");
+    vax.reply("SET HOST 10.0.2.15", "Username: ");
+    vax.login("SYSTEM", "MANAGER");
+    let at = vax.text().len();
+    vax.console.write_all(b"@DKB0:[000000]SPIN\r").unwrap();
+    vax.wait_for("@DKB0:[000000]SPIN\n", at, 60);
+    sleep(Duration::from_secs(2));
+    vax.console.write_all(b"\x1d").unwrap();
+    vax.wait_for("$ ", at, 60);
+    let mut hung_up = false;
+    for _ in 0..10 {
+        let at = vax.command("SHOW SYSTEM");
+        let shown = &vax.text()[..at];
+        let shown = &shown[shown.rfind("SHOW SYSTEM").unwrap()..];
+        if shown.contains("TCPIP$TELNET") && !shown.contains("_TNA1:") {
+            hung_up = true;
+            break;
+        }
+        sleep(Duration::from_secs(1));
+    }
+    assert!(hung_up, "the hangup left the process on _TNA1:");
     vax.command("SET TERMINAL/WIDTH=80/PAGE=24");
     vax.reply("TELNET ECHO 7779", "hello from port 7779");
     vax.reply("netcat", "echo: netcat");
