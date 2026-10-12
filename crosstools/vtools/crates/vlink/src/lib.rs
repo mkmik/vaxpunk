@@ -2,8 +2,9 @@
 //! and writes a VMS-style map.
 //!
 //! Object libraries give the modules that define what the others need, and
-//! shareable images the procedures their symbol vectors hold, which the
-//! image calls through veneers whose addresses the image activator sets.
+//! shareable images the procedures and data their symbol vectors hold: the
+//! image calls the procedures through veneers, and holds the data's
+//! addresses in quadwords, which the image activator sets.
 //! Psects with the same name are merged across modules; CON contributions are
 //! concatenated, OVR ones overlaid. Psects go into image sections by
 //! protection: code, read-only data, writable data, demand-zero. Then each
@@ -32,9 +33,10 @@ pub struct Options {
     /// Make an image a loader may move: anything that can't move is an
     /// error, and the image gets a fixup section.
     pub relocatable: bool,
-    /// Make a shareable image, which other images link against and call
-    /// through its symbol vector, of these procedures. It is relocatable.
-    pub shareable: Option<Vec<String>>,
+    /// Make a shareable image, which other images link against and reach
+    /// through its symbol vector, of these symbols, each with whether it is
+    /// DATA rather than a PROCEDURE. It is relocatable.
+    pub shareable: Option<Vec<(String, bool)>>,
 }
 
 #[derive(Debug)]
@@ -177,7 +179,7 @@ pub fn link(inputs: &[(String, Vec<u8>)], opts: &Options) -> Result<Linked, Vec<
         vector: opts.shareable.as_ref().map(|names| SymbolVector {
             addr: l.psects[l.vector.unwrap()].base,
             entries: (names.iter())
-                .map(|n| (n.clone(), l.value(n).unwrap()))
+                .map(|(n, data)| (n.clone(), l.value(n).unwrap(), *data))
                 .collect(),
         }),
     };
@@ -189,10 +191,11 @@ pub fn link(inputs: &[(String, Vec<u8>)], opts: &Options) -> Result<Linked, Vec<
     })
 }
 
-/// The symbol vector's procedures, from an options file: `!` starts a
-/// comment and `-` at the end of a line continues it, as on VMS.
-/// ponytail: SYMBOL_VECTOR only, and only PROCEDURE entries.
-pub fn options(text: &str) -> Result<Vec<String>, Vec<String>> {
+/// The symbol vector's entries, from an options file, each with whether it
+/// is DATA: `!` starts a comment and `-` at the end of a line continues it,
+/// as on VMS.
+/// ponytail: SYMBOL_VECTOR only, without SPARE entries or aliases.
+pub fn options(text: &str) -> Result<Vec<(String, bool)>, Vec<String>> {
     let joined = text
         .lines()
         .map(|l| l.split('!').next().unwrap().trim())
@@ -215,10 +218,11 @@ pub fn options(text: &str) -> Result<Vec<String>, Vec<String>> {
             .ok_or_else(|| vec![format!("%VLINK-F-OPTION, unsupported option: {line}")])?;
         for entry in list.split(',') {
             match entry.split_once('=') {
-                Some((name, "PROCEDURE")) => names.push(name.to_string()),
+                Some((name, "PROCEDURE")) => names.push((name.to_string(), false)),
+                Some((name, "DATA")) => names.push((name.to_string(), true)),
                 _ => {
                     return Err(vec![format!(
-                        "%VLINK-F-OPTION, symbol vector entry {entry} is not NAME=PROCEDURE"
+                        "%VLINK-F-OPTION, symbol vector entry {entry} is not NAME=PROCEDURE or NAME=DATA"
                     )]);
                 }
             }
@@ -295,10 +299,10 @@ impl Class {
 }
 
 /// A shareable image linked against: its name and its symbol vector's
-/// procedures, in order.
+/// entries, in order, each with whether it is DATA.
 struct Shared {
     name: String,
-    entries: Vec<String>,
+    entries: Vec<(String, bool)>,
 }
 
 struct ImageSection {
@@ -342,6 +346,12 @@ struct Linker {
     /// before those of `far`, and a slot in `$LINK$` that it jumps through.
     shared: Vec<Shared>,
     imports: Vec<(String, usize, usize)>,
+    /// The data of theirs the image reaches, the same way, but with no
+    /// veneer or slot: only a quadword may hold its address.
+    data_imports: Vec<(String, usize, usize)>,
+    /// Where the image holds a data import's address: the quadword, and
+    /// the import. The image activator sets each.
+    data_refs: Vec<(u64, usize)>,
     /// The symbol vector's psect, in a shareable image.
     vector: Option<usize>,
     relocatable: bool,
@@ -430,7 +440,7 @@ impl Linker {
         };
         self.shared.push(Shared {
             name: image.name,
-            entries: vector.entries.into_iter().map(|e| e.0).collect(),
+            entries: vector.entries.into_iter().map(|e| (e.0, e.2)).collect(),
         });
         Ok(())
     }
@@ -532,20 +542,24 @@ impl Linker {
             }
         }
         // What no module defines, a shareable image may: the image calls
-        // it there.
+        // it, or reaches its data, there.
         for (name, ..) in &self.refs {
-            if self.defs.contains_key(name) || self.imports.iter().any(|i| i.0 == *name) {
+            if self.defs.contains_key(name) || self.imported(name) {
                 continue;
             }
             let found = self.shared.iter().enumerate().find_map(|(i, s)| {
-                let entry = s.entries.iter().position(|e| e == name)?;
-                Some((name.clone(), i, entry))
+                let entry = s.entries.iter().position(|e| e.0 == *name)?;
+                Some((s.entries[entry].1, (name.clone(), i, entry)))
             });
-            self.imports.extend(found);
+            match found {
+                Some((true, d)) => self.data_imports.push(d),
+                Some((false, p)) => self.imports.push(p),
+                None => {}
+            }
         }
         let mut undefined: Vec<(String, Vec<String>)> = Vec::new();
         for (name, module, weak) in &self.refs {
-            if *weak || self.defs.contains_key(name) || self.imports.iter().any(|i| i.0 == *name) {
+            if *weak || self.defs.contains_key(name) || self.imported(name) {
                 continue;
             }
             let by = self.modules[*module].name.clone();
@@ -566,6 +580,11 @@ impl Linker {
         } else {
             Err(errors)
         }
+    }
+
+    /// Whether `name` is a procedure or data of a shareable image.
+    fn imported(&self, name: &str) -> bool {
+        (self.imports.iter().chain(&self.data_imports)).any(|i| i.0 == name)
     }
 
     fn layout(&mut self, base: u64) -> Result<(), Vec<String>> {
@@ -690,18 +709,23 @@ impl Linker {
 
     /// Adds $SYMVECT$, the symbol vector of a shareable image, a read-only
     /// psect of a module of its own, $SYMVECT: a quadword for each of
-    /// `names`, a procedure of the image's.
-    fn add_vector(&mut self, names: &[String]) -> Result<(), Vec<String>> {
+    /// `names`, a procedure of the image's, or its data: an address in a
+    /// psect that isn't code.
+    fn add_vector(&mut self, names: &[(String, bool)]) -> Result<(), Vec<String>> {
         let mut errors = Vec::new();
-        for name in names {
+        for (name, data) in names {
             let code = self.defs.get(name).and_then(|d| {
                 let (p, _) = *self.modules[d.module].psects.get(d.psect? as usize)?;
                 Some(self.psects[p].flags & psc::EXE != 0)
             });
-            if code != Some(true) {
-                errors.push(format!(
+            match (code, data) {
+                (Some(true), false) | (Some(false), true) => {}
+                (_, false) => errors.push(format!(
                     "%VLINK-E-NOTPROC, symbol vector entry {name} is not a procedure of the image"
-                ));
+                )),
+                (_, true) => errors.push(format!(
+                    "%VLINK-E-NOTDATA, symbol vector entry {name} is not data of the image"
+                )),
             }
         }
         if !errors.is_empty() {
@@ -727,11 +751,11 @@ impl Linker {
         Ok(())
     }
 
-    /// Fills in the symbol vector: each procedure's address, a fixup.
-    fn write_vector(&mut self, names: &[String], data: &mut [Vec<u8>]) {
+    /// Fills in the symbol vector: each entry's address, a fixup.
+    fn write_vector(&mut self, names: &[(String, bool)], data: &mut [Vec<u8>]) {
         let base = self.psects[self.vector.unwrap()].base;
         let module = self.module("$SYMVECT");
-        for (i, name) in names.iter().enumerate() {
+        for (i, (name, _)) in names.iter().enumerate() {
             let at = base + 8 * i as u64;
             let value = self.value(name).unwrap();
             let s = self
@@ -751,15 +775,19 @@ impl Linker {
     }
 
     /// The fixup section's shareable image list: each image the image
-    /// calls, with its imports' slots, which the image activator sets from
-    /// that image's symbol vector.
+    /// calls or reaches, with its imports' slots and the quadwords that
+    /// hold its data's addresses, which the image activator sets from that
+    /// image's symbol vector.
     fn shl_list(&self) -> Vec<ShlRef> {
         let start = self.sections.first().map_or(0, |s| s.start);
         let mut list: Vec<ShlRef> = Vec::new();
         for (i, s) in self.shared.iter().enumerate() {
-            let quad: Vec<(u32, u32)> = (self.imports.iter().enumerate())
+            let slots = (self.imports.iter().enumerate()).map(|(j, imp)| (self.slot(j), imp));
+            let data = (self.data_refs.iter()).map(|&(at, j)| (at, &self.data_imports[j]));
+            let quad: Vec<(u32, u32)> = slots
+                .chain(data)
                 .filter(|(_, imp)| imp.1 == i)
-                .map(|(j, imp)| ((self.slot(j) - start) as u32, 8 * imp.2 as u32))
+                .map(|(at, imp)| ((at - start) as u32, 8 * imp.2 as u32))
                 .collect();
             if !quad.is_empty() {
                 list.push(ShlRef {
@@ -916,6 +944,7 @@ impl Linker {
             .collect();
         let mut stored = BTreeMap::new();
         let mut far = BTreeSet::new();
+        let mut data_refs = Vec::new();
         let (mut errors, mut warnings) = (Vec::new(), Vec::new());
         for (i, m) in self.modules.iter().enumerate() {
             let mut run = Run {
@@ -926,6 +955,8 @@ impl Linker {
                 data: &mut data,
                 stored: &mut stored,
                 far: &mut far,
+                data_refs: &mut data_refs,
+                data_import: None,
             };
             let cmds = m.records.iter().filter_map(|r| match r {
                 Record::Tir(c) => Some(c),
@@ -946,6 +977,7 @@ impl Linker {
         }
         self.warnings.extend(warnings);
         self.stored = stored;
+        self.data_refs = data_refs;
         let mut put = |at: u64, bytes: &[u8]| {
             let s = self
                 .sections
@@ -988,6 +1020,11 @@ struct Run<'a> {
     stored: &'a mut BTreeMap<u64, Stored>,
     /// The fixed addresses B and BL couldn't reach.
     far: &'a mut BTreeSet<u64>,
+    /// Where the module holds a data import's address, and which.
+    data_refs: &'a mut Vec<(u64, usize)>,
+    /// The data import whose address the last command pushed, which only a
+    /// quadword store may take.
+    data_import: Option<usize>,
 }
 
 impl Run<'_> {
@@ -1109,9 +1146,45 @@ impl Run<'_> {
         Ok(at)
     }
 
+    /// Stores 0 where the image holds the address of data import `j`, a
+    /// quadword the image activator sets. As a fixup, it may not be in a
+    /// PIC psect.
+    fn data_ref(&mut self, j: usize) -> Result<(), String> {
+        let at = self.store(&[0; 8])?;
+        if self.l.psect_at(at).is_some_and(|p| p.flags & psc::PIC != 0) {
+            return Err(format!(
+                "%VLINK-E-NOTPIC, address in a PIC psect needs a fixup, at {}",
+                self.l.place(at)
+            ));
+        }
+        self.data_refs.push((at, j));
+        Ok(())
+    }
+
     fn step(&mut self, cmd: &Tir) -> Result<(), String> {
         use Tir::*;
+        // The address of a shareable image's data is known only once the
+        // image activator maps it: the image holds it in a quadword of its
+        // own, which code loads, as on Alpha.
+        let data = |name: &str| self.l.data_imports.iter().position(|d| d.0 == name);
+        if let Some(j) = self.data_import.take() {
+            if !matches!(cmd, StoQw {} | StoOff {}) {
+                let (name, image, _) = &self.l.data_imports[j];
+                return Err(format!(
+                    "%VLINK-E-SHRDATA, only a quadword may hold the address of {name}, data of {}, in module {}",
+                    self.l.shared[*image].name,
+                    self.name()
+                ));
+            }
+            self.pop()?;
+            return self.data_ref(j);
+        }
         match cmd {
+            StaGbl { name } if let Some(j) = data(name) => {
+                self.stack.push((0, Some(0)));
+                self.data_import = Some(j);
+            }
+            StoGbl { name } | StoCa { name } if let Some(j) = data(name) => self.data_ref(j)?,
             StaGbl { name } => {
                 let v = self.symbol(name)?;
                 self.stack.push(v);

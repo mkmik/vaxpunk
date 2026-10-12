@@ -78,7 +78,7 @@ note = "PRD-0007's WASI layer uses them"
 [[feature]]
 id = "data-vector"
 title = "DATA entries in the symbol vector"
-status = "todo"
+status = "done"
 note = "ADR-0028 follow-up; the C RTL's stdout and errno need them"
 
 [[needs]]

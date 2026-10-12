@@ -95,7 +95,7 @@ record! {
         pub flags: u16,
         /// The entry's offset in the symbol vector.
         pub value: u64,
-        /// The procedure's entry point, as linked.
+        /// The procedure's entry point, or the data's address, as linked.
         pub lp_1: u64,
         /// Its value, as linked: the same.
         pub lp_2: u64,
@@ -251,13 +251,15 @@ pub struct ShlRef {
 }
 
 /// A shareable image's symbol vector: the procedures other images may
-/// call, each a quadword holding its address. Entry i is at `addr` + 8i.
+/// call and the data they may reach, each a quadword holding its address.
+/// Entry i is at `addr` + 8i.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct SymbolVector {
     /// Where the vector is, as linked.
     pub addr: u64,
-    /// Each entry's procedure: its name and its address, as linked.
-    pub entries: Vec<(String, u64)>,
+    /// Each entry: its name, its address as linked, and whether it is
+    /// DATA rather than a PROCEDURE.
+    pub entries: Vec<(String, u64, bool)>,
 }
 
 /// A relocation record's bitmap skips at most this many slots; past that, a
@@ -816,8 +818,8 @@ impl Image {
 }
 
 /// A shareable image's GST: a module whose global symbol directory has an
-/// entry for each procedure of the symbol vector, as the Alpha linker
-/// writes it.
+/// entry for each entry of the symbol vector, as the Alpha linker writes
+/// it: a procedure's with `NORM`, data's without.
 fn gst(name: &str, ident: &str, vector: &SymbolVector) -> Vec<Record> {
     let abs = Gsd::Psc(obj::Psc {
         align: 0,
@@ -827,12 +829,15 @@ fn gst(name: &str, ident: &str, vector: &SymbolVector) -> Vec<Record> {
         name: ".$$ABS$$.".into(),
     });
     let entries: Vec<Gsd> = (vector.entries.iter().enumerate())
-        .map(|(i, (name, addr))| {
+        .map(|(i, (name, addr, is_data))| {
             let mut data = Vec::new();
             Egst {
                 datyp: 0,
                 temp: 0,
-                flags: obj::sym::DEF | obj::sym::UNI | obj::sym::REL | obj::sym::NORM,
+                flags: obj::sym::DEF
+                    | obj::sym::UNI
+                    | obj::sym::REL
+                    | if *is_data { 0 } else { obj::sym::NORM },
                 value: 8 * i as u64,
                 lp_1: *addr,
                 lp_2: *addr,
@@ -872,8 +877,8 @@ fn gst(name: &str, ident: &str, vector: &SymbolVector) -> Vec<Record> {
 }
 
 /// The symbol vector's entries, from a GST of `count` records at the
-/// start of `b`. Every entry is a procedure's, and entry i is at 8i.
-fn parse_gst(b: &[u8], count: u32) -> Result<Vec<(String, u64)>, Error> {
+/// start of `b`. Entry i is at 8i.
+fn parse_gst(b: &[u8], count: u32) -> Result<Vec<(String, u64, bool)>, Error> {
     // The records' own sizes say where the GST ends.
     let mut r = Reader(b);
     let mut len = 0;
@@ -900,13 +905,10 @@ fn parse_gst(b: &[u8], count: u32) -> Result<Vec<(String, u64)>, Error> {
                 continue;
             };
             let e = Egst::parse(&data)?;
-            if e.flags & obj::sym::NORM == 0 {
-                return Err(Error::Invalid("symbol vector entry that isn't a procedure"));
-            }
             if e.value != 8 * entries.len() as u64 {
                 return Err(Error::Invalid("symbol vector entry order"));
             }
-            entries.push((e.name, e.lp_1));
+            entries.push((e.name, e.lp_1, e.flags & obj::sym::NORM == 0));
         }
     }
     Ok(entries)
@@ -1068,14 +1070,18 @@ mod tests {
         shr.transfer = 0;
         shr.vector = Some(SymbolVector {
             addr: 0x20000,
-            entries: vec![("LIB$ONE".into(), 0x10000), ("LIB$TWO".into(), 0x10004)],
+            entries: vec![
+                ("LIB$ONE".into(), 0x10000, false),
+                ("LIB$TWO".into(), 0x10004, false),
+                ("LIB$DATA".into(), 0x30000, true),
+            ],
         });
         let bytes = shr.write();
         let word = |b: &[u8], at: usize| u32_at(b, at).unwrap();
         assert_eq!(word(&bytes, 52), Eihd::K_LIM, "EIHD$L_IMGTYPE");
         assert_eq!(word(&bytes, 80), Eihd::M_LNKNOTFR | Eihd::M_PICIMG);
         assert_eq!(word(&bytes, 40), 0x20000, "EIHD$Q_SYMVVA");
-        assert_eq!(word(&bytes, 96), 2, "EIHD$L_SYMVECT_SIZE");
+        assert_eq!(word(&bytes, 96), 3, "EIHD$L_SYMVECT_SIZE");
         let eihs = word(&bytes, 20) as usize;
         assert_eq!(word(&bytes, eihs + 20), 4, "GST records: MHD, 2 EGSD, EEOM");
         assert_eq!(Image::parse(&bytes), Ok(shr.clone()));

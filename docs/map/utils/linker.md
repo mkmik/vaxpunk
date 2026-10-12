@@ -28,7 +28,7 @@ note = "vlink does this on the host (ADR-0028)"
 
 [[feature]]
 id = "gsmatch"
-title = "GSMATCH, DATA entries, and a shareable image that calls another"
+title = "GSMATCH, and a shareable image that calls another"
 status = "todo"
 needs = ["#shareable"]
 note = "PRD-0003 tier 3 #20"

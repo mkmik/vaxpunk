@@ -103,8 +103,9 @@ fn image(image: &Image, iafva: u64, map: Option<&str>) -> String {
             v.addr,
             v.entries.len()
         );
-        for (i, (name, addr)) in v.entries.iter().enumerate() {
-            let _ = writeln!(o, "  {:4}  {addr:016X}  {name}", 8 * i);
+        for (i, (name, addr, data)) in v.entries.iter().enumerate() {
+            let kind = if *data { "DATA" } else { "PROCEDURE" };
+            let _ = writeln!(o, "  {:4}  {addr:016X}  {name}={kind}", 8 * i);
         }
     }
     if image.fixups.is_none() && image.shareables.is_empty() {

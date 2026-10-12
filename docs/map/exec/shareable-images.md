@@ -22,7 +22,7 @@ note = "ADR-0028, as VMS maps one that isn't installed"
 [[feature]]
 id = "data-entries"
 title = "DATA entries in the symbol vector"
-status = "todo"
+status = "done"
 note = "ADR-0028 follow-up; t8y:/rtl/librtl#data-vector, which the C RTL's shareable image waits on"
 
 [[feature]]
@@ -88,9 +88,10 @@ vaxpunk has them in OpenVMS Alpha's format
 ([ADR-0028](../../adr/0028-shareable-images.md)): vlink makes one
 with `/SHAREABLE` and a `SYMBOL_VECTOR` option, and an image calls its
 procedures through veneers that jump through a quadword the activator
-sets. The activator finds each one in `SYS$SHARE:`, maps a copy past the
+sets, and holds the addresses of its data in quadwords the activator sets
+too. The activator finds each one in `SYS$SHARE:`, maps a copy past the
 end of P0, moves it with its own fixups and fills in the image's slots,
 as VMS does for a shareable image that isn't installed. `LIBRTL.EXE` is
-the first. Missing: data entries, one shareable image calling another,
+the first. Missing: one shareable image calling another,
 `GSMATCH`, and shared pages, which wait for global sections and
 `INSTALL` (PRD-0003 tier 3 #20).

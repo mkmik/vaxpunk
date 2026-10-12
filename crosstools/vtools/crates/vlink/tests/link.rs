@@ -544,9 +544,10 @@ fn through_veneer(image: &Image, at: u64) -> u64 {
     quad_at(image, slot)
 }
 
-/// A shareable image with two procedures in its vector, an image linked
-/// against it, and what the image activator does with both: moves the
-/// shareable image and sets the image's slots from its symbol vector.
+/// A shareable image with two procedures and data in its vector, an image
+/// linked against it, and what the image activator does with both: moves
+/// the shareable image and sets the image's slots and its quadwords of the
+/// data's address from its symbol vector.
 #[test]
 fn shareable_images() {
     let shr = module(
@@ -555,28 +556,32 @@ fn shareable_images() {
          LIB$TWO:: bl SYS\nbl NEAR\nret\n.PSECT $DATA$\nCOUNT:: .QUAD LIB$ONE\n.END",
     );
     let sys = module("SYS", "SYS == 0x40037618\nNEAR == 0x1000\n.END");
-    let shareable = |vector: &[&str]| {
+    let shareable = |vector: &str| {
         vlink::link(
             &[shr.clone(), sys.clone()],
             &Options {
                 name: "SHR".into(),
-                shareable: Some(vector.iter().map(|s| s.to_string()).collect()),
+                shareable: Some(vlink::options(&format!("SYMBOL_VECTOR=({vector})")).unwrap()),
                 ..Options::default()
             },
         )
     };
-    let err = shareable(&["LIB$ONE", "COUNT"]).unwrap_err();
+    let err = shareable("LIB$ONE=PROCEDURE, COUNT=PROCEDURE, LIB$TWO=DATA").unwrap_err();
     assert_eq!(
         err,
-        ["%VLINK-E-NOTPROC, symbol vector entry COUNT is not a procedure of the image"]
+        [
+            "%VLINK-E-NOTPROC, symbol vector entry COUNT is not a procedure of the image",
+            "%VLINK-E-NOTDATA, symbol vector entry LIB$TWO is not data of the image",
+        ]
     );
     // NEAR is in reach of a BL, but the image moves and it doesn't: both go
     // through veneers.
-    let linked = shareable(&["LIB$TWO", "LIB$ONE"]).unwrap();
+    let linked = shareable("LIB$TWO=PROCEDURE, LIB$ONE=PROCEDURE, COUNT=DATA").unwrap();
     let mut shr_image = linked.image;
     let vector = shr_image.vector.clone().unwrap();
     let names: Vec<&str> = vector.entries.iter().map(|e| e.0.as_str()).collect();
-    assert_eq!(names, ["LIB$TWO", "LIB$ONE"]);
+    assert_eq!(names, ["LIB$TWO", "LIB$ONE", "COUNT"]);
+    assert!(vector.entries[2].2, "COUNT is DATA");
     assert_eq!(shr_image.sections[0].vaddr, 0, "linked at 0");
     assert_eq!(shr_image.transfer, 0);
     let bytes = shr_image.write();
@@ -584,9 +589,9 @@ fn shareable_images() {
 
     let main = module(
         "MAIN",
-        ".EXTERNAL LIB$ONE, LIB$TWO\n.PSECT $CODE$\nSTART:: bl LIB$ONE\n\
+        ".EXTERNAL LIB$ONE, LIB$TWO, COUNT\n.PSECT $CODE$\nSTART:: bl LIB$ONE\n\
          adrp x0, LIB$TWO\nadd x0, x0, #:lo12:LIB$TWO\nret\n\
-         .PSECT $DATA$\nPTR:: .QUAD LIB$TWO\n.END START",
+         .PSECT $DATA$\nPTR:: .QUAD LIB$TWO\nL_COUNT:: .QUAD COUNT\n.END START",
     );
     let shr_file = ("SHR.EXE".to_string(), bytes);
     let linked = link(&[main.clone(), shr_file.clone()], vlink::DEFAULT_BASE).unwrap();
@@ -596,7 +601,7 @@ fn shareable_images() {
     assert_eq!(shl.len(), 1);
     assert_eq!(shl[0].name, "SHR");
     let entries: Vec<u32> = shl[0].quad.iter().map(|q| q.1).collect();
-    assert_eq!(entries, [8, 0], "LIB$ONE, then LIB$TWO");
+    assert_eq!(entries, [8, 0, 16], "LIB$ONE, LIB$TWO, then COUNT");
     assert!(linked.map.contains("$VENEERS"), "{}", linked.map);
 
     // The activator: SHR at the next 64 KB after MAIN, its own fixups...
@@ -625,6 +630,28 @@ fn shareable_images() {
     assert_eq!(through_veneer(&main_image, veneer), one, "BL LIB$ONE");
     let ptr = quad_at(&main_image, main_image.sections[2].vaddr);
     assert_eq!(through_veneer(&main_image, ptr), two, ".QUAD LIB$TWO");
+    let count = quad_at(&main_image, main_image.sections[2].vaddr + 8);
+    assert_eq!(count, base + vector.entries[2].1, ".QUAD COUNT");
+
+    // Code can't reach the data itself, nor can a quadword hold an offset
+    // from it: the image activator sets only its address.
+    for (source, what) in [
+        ("adrp x0, COUNT", "an ADRP"),
+        (".PSECT $DATA$\n.QUAD COUNT+8", "an offset"),
+    ] {
+        let user = module(
+            "USER",
+            &format!(".EXTERNAL COUNT\n.PSECT $CODE$\n{source}\n.END"),
+        );
+        let err = link(&[user, shr_file.clone()], vlink::DEFAULT_BASE).unwrap_err();
+        assert_eq!(
+            err,
+            [
+                "%VLINK-E-SHRDATA, only a quadword may hold the address of COUNT, data of SHR, in module USER"
+            ],
+            "{what}"
+        );
+    }
 
     // An image that isn't shareable can't be linked against.
     let plain = ("MAIN.EXE".to_string(), main_image.write());

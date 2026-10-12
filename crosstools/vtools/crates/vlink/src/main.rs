@@ -11,7 +11,7 @@ const USAGE: &str = "usage: vlink [/EXE=file] [/MAP[=file]] [/BASE=address] [/TR
                      [--shareable] FILE...
 A FILE is an object module, an object library (LIB.OLB/LIBRARY or LIB.OLB), a
 shareable image to link against, or an options file, FILE.OPT/OPTIONS, which
-gives a shareable image's SYMBOL_VECTOR=(NAME=PROCEDURE,...).";
+gives a shareable image's SYMBOL_VECTOR=(NAME=PROCEDURE,NAME=DATA,...).";
 
 fn main() -> ExitCode {
     match run() {
