@@ -1162,17 +1162,54 @@ function previewToggle(c) {
   return h("label", { class: "preview-toggle" }, box, "Preview as chosen");
 }
 
-/** The prompt that starts an agent on a piece of work: what it is and where the map says more. */
+/**
+ * Unfinished work that must land before w, deepest first: its blockers and
+ * theirs. A blocker that is a component with features is usable once any one
+ * is done, so the walk goes through its earliest feature, as levels() does.
+ */
+function blockersOf(w) {
+  const out = [];
+  const seen = new Set([w.label]);
+  const visit = label => {
+    if (seen.has(label)) return;
+    seen.add(label);
+    let b = M.workByLabel.get(label);
+    if (!b) {
+      const fs = M.work.filter(x => x.component === label);
+      if (!fs.length) return;
+      b = fs.reduce((a, x) => (M.level.get(x.label) || 0) < (M.level.get(a.label) || 0) ? x : a);
+      if (seen.has(b.label)) return;
+      seen.add(b.label);
+    }
+    b.blocked_by.forEach(visit);
+    out.push(b);
+  };
+  w.blocked_by.forEach(visit);
+  return out;
+}
+
+const mapFile = c => "docs/map/" + c.area + "/" + c.slug + ".md";
+
+/** The prompt that starts an agent on a piece of work: what it is, what it waits on and where the map says more. */
 function workPrompt(w) {
   const c = C.get(w.component);
   const f = w.feature ? featureOf(c, w.feature) : null;
   const about = f ? f.note : STUB(c.summary) ? "" : c.summary;
-  const file = "docs/map/" + c.area + "/" + c.slug + ".md";
+  const name = f ? "the feature \"" + w.title + "\" of " + c.title : w.title;
+  const blockers = blockersOf(w);
+  const first = blockers.length ? [
+    "It is blocked. This unfinished work comes first, each item after what it needs:",
+    blockers.map(b => "- " + (b.feature ? C.get(b.component).title + ": " : "") + b.title + ", " + b.label +
+      " (" + mapFile(C.get(b.component)) + ")" + (b.blocked_by.length ? "" : ", ready now")).join("\n"),
+    "Implement all of it, then " + name + ". If that is too much for one go, say so before starting, and propose which of these dependencies to focus on first: the heavy ones that unblock the most, and why.",
+  ] : [];
   return [
-    "Implement " + (f ? "the feature \"" + w.title + "\" of " + c.title : w.title) + ", " + w.label + " on vaxpunk's map of components.",
+    "Implement " + name + ", " + w.label + " on vaxpunk's map of components.",
     about,
-    "Its entry is in " + file + "; `cargo run -p todography -- show '" + w.label + "'` prints it with its needs and why it is wanted.",
-    "When it lands, set its status = \"done\" in " + file + ".",
+    ...first,
+    "Its entry is in " + mapFile(c) + "; `cargo run -p todography -- show '" + w.label + "'` prints it with its needs and why it is wanted" +
+      (blockers.length ? ", and does the same for each label above." : "."),
+    "When a piece lands, set its status = \"done\" in its map file.",
   ].filter(Boolean).join("\n\n");
 }
 
@@ -1196,7 +1233,7 @@ function copyButton(w) {
 function workState(w) {
   if (!w || !w.wanted) return null;
   if (w.ready) return h("div", { class: "state" }, h("span", { class: "ready" }, "Ready to work on"), copyButton(w));
-  if (w.blocked_by.length) return h("div", { class: "state blocked" }, "Blocked by ", commas(w.blocked_by.map(blockerLink)));
+  if (w.blocked_by.length) return h("div", { class: "state blocked" }, "Blocked by ", commas(w.blocked_by.map(blockerLink)), copyButton(w));
   return null;
 }
 
@@ -1404,7 +1441,7 @@ function workItem(w, showMs) {
       w.feature ? h("span", null, c.title) : null,
       w.status === "wip" ? chip(null, "in progress", "s-wip") : null,
       showMs && w.milestone ? chip(null, w.milestone) : null,
-      w.ready ? copyButton(w) : null),
+      copyButton(w)),
     h("span", { class: "il" }, w.label),
     w.blocked_by.length ? h("div", { class: "ib" }, "Waits on ", commas(w.blocked_by.map(blockerLink))) : null);
   el.addEventListener("click", e => { if (!e.target.closest("a")) location.hash = focusHref(w.label); });

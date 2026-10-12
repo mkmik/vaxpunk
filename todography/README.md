@@ -104,9 +104,13 @@ lives in the URL after `#`, so back, forward and links work:
   fuzzy needs in grey. On the right, what needs it. Curves join them to
   the card; on a narrow screen they stack without curves. Clicking a
   neighbour re-centres on it, and a trail shows where you've been.
-  Work that is ready, here and in the roadmap, has a copy button: it puts
-  a prompt for an agent on the clipboard, with the work's title, label,
+  Wanted work, here and in the roadmap, has a copy button: it puts a
+  prompt for an agent on the clipboard, with the work's title, label,
   note or summary, its map file and the `show` command for the rest.
+  For blocked work the prompt also lists every unfinished blocker,
+  transitively and deepest first, and asks the agent to build them all
+  or, if that is too much for one go, to say so and propose which heavy
+  dependencies to take first.
 - **Roadmap**: the wanted work in columns. "Ready now" is the work
   nothing blocks; a later column holds work whose blockers are all in the
   columns before it. A blocker that is a feature, or a component without
