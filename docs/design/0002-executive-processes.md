@@ -993,7 +993,8 @@ TELNET terminal's echo and prompts past its 1 KB buffer, while a send
 is on the port, are lost. The recall buffer is the terminal's, shared
 by its readers, where VMS has DCL's own, with `RECALL`. No CTRL/O,
 CTRL/T, XON and XOFF, formatted writes, `$BRKTHRU` or quotas; a hangup
-ends the reads and writes, not the process. Of the characteristics,
+deletes the process `$CREPRC` created on the terminal, its owner, but
+not the processes that one created. Of the characteristics,
 `NOECHO`, `PASSALL`, `ESCAPE`, `EDITING`, `INSERT` and `PASTHRU` change
 what the driver does; the others, the width and page too, are kept for
 the programs that ask.

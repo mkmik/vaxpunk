@@ -54,7 +54,7 @@ note = "PRD-0003 tier 1 #3, step 9 (/NOTIFY)"
 [[feature]]
 id = "hangup"
 title = "A hangup deletes the terminal's process, not only its reads and writes"
-status = "todo"
+status = "done"
 milestone = "m1"
 needs = ["/exec/processes"]
 note = "PRD-0003 tier 1 #3"
@@ -163,6 +163,6 @@ TCP connection ([ADR-0027](../../adr/0027-terminals-are-ucbs-and-telnet-is-in-th
 Reads have VMS's modifiers, terminator masks, line editing and a
 16-line recall buffer; CTRL/C and CTRL/Y are ASTs
 ([ADR-0014](../../adr/0014-ctrlc-ctrly-asts.md)). What's left for
-Milestone 1 is PRD-0003 tier 1 #3: `$BRKTHRU`, a hangup that ends the
-process, more than 9 TELNET terminals. CTRL/O, CTRL/T, XON/XOFF and
+Milestone 1 is PRD-0003 tier 1 #3: `$BRKTHRU`, more than 9 TELNET
+terminals. CTRL/O, CTRL/T, XON/XOFF and
 formatted writes are tier 3 #29.

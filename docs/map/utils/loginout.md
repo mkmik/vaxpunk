@@ -90,7 +90,7 @@ note = "PRD-0003 tier 1 #2"
 [[feature]]
 id = "hangup"
 title = "A hangup ends the terminal's process"
-status = "todo"
+status = "done"
 milestone = "m1"
 needs = ["/drivers/terminal#hangup"]
 note = "PRD-0003 tier 1 #3"
@@ -204,4 +204,4 @@ checks the hash with `$HASH_PASSWORD`, counts wrong passwords, defines
 `SYS$LOGIN`, `SYS$SCRATCH` and `SYS$DISK`, and calls `EXE$LOGIN` in
 kernel mode, which makes the process the user's. `--autologin` writes a
 text `SYSALF.DAT` for the console. Missing for Milestone 1: quotas,
-`LNM$JOB`, login at a key, hangups, and batch jobs.
+`LNM$JOB`, login at a key, and batch jobs.
