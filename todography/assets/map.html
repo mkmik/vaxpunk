@@ -258,6 +258,9 @@ a.node:hover { text-decoration: none; border-color: var(--ink); }
 .progress .bar { flex: 1 1 auto; max-width: 260px; }
 .state { font-size: 13px; margin: 6px 0; }
 .ready { color: var(--done); font-weight: 600; }
+.copy { border: 0; background: none; padding: 0 4px; color: var(--muted); cursor: pointer; vertical-align: middle; }
+.copy:hover, .copy.done { color: var(--done); }
+.copy svg { width: 14px; height: 14px; display: block; }
 .blocked { color: var(--muted); }
 .feats { list-style: none; margin: 0; padding: 0; }
 .feat { display: flex; gap: 9px; padding: 6px 4px; border-top: 1px solid var(--line); }
@@ -1159,9 +1162,40 @@ function previewToggle(c) {
   return h("label", { class: "preview-toggle" }, box, "Preview as chosen");
 }
 
+/** The prompt that starts an agent on a piece of work: what it is and where the map says more. */
+function workPrompt(w) {
+  const c = C.get(w.component);
+  const f = w.feature ? featureOf(c, w.feature) : null;
+  const about = f ? f.note : STUB(c.summary) ? "" : c.summary;
+  const file = "docs/map/" + c.area + "/" + c.slug + ".md";
+  return [
+    "Implement " + (f ? "the feature \"" + w.title + "\" of " + c.title : w.title) + ", " + w.label + " on vaxpunk's map of components.",
+    about,
+    "Its entry is in " + file + "; `cargo run -p todography -- show '" + w.label + "'` prints it with its needs and why it is wanted.",
+    "When it lands, set its status = \"done\" in " + file + ".",
+  ].filter(Boolean).join("\n\n");
+}
+
+const COPY_SVG = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>';
+
+/** A button that copies workPrompt(w) to the clipboard. */
+function copyButton(w) {
+  const b = h("button", { type: "button", class: "copy", title: "Copy a prompt for an agent", "aria-label": "Copy a prompt for an agent", html: COPY_SVG });
+  b.addEventListener("click", e => {
+    e.preventDefault();
+    e.stopPropagation();
+    navigator.clipboard.writeText(workPrompt(w)).then(() => {
+      b.classList.add("done");
+      b.title = "Copied";
+      setTimeout(() => { b.classList.remove("done"); b.title = "Copy a prompt for an agent"; }, 1500);
+    });
+  });
+  return b;
+}
+
 function workState(w) {
   if (!w || !w.wanted) return null;
-  if (w.ready) return h("div", { class: "state" }, h("span", { class: "ready" }, "Ready to work on"));
+  if (w.ready) return h("div", { class: "state" }, h("span", { class: "ready" }, "Ready to work on"), copyButton(w));
   if (w.blocked_by.length) return h("div", { class: "state blocked" }, "Blocked by ", commas(w.blocked_by.map(blockerLink)));
   return null;
 }
@@ -1369,7 +1403,8 @@ function workItem(w, showMs) {
     h("div", { class: "ic" },
       w.feature ? h("span", null, c.title) : null,
       w.status === "wip" ? chip(null, "in progress", "s-wip") : null,
-      showMs && w.milestone ? chip(null, w.milestone) : null),
+      showMs && w.milestone ? chip(null, w.milestone) : null,
+      w.ready ? copyButton(w) : null),
     h("span", { class: "il" }, w.label),
     w.blocked_by.length ? h("div", { class: "ib" }, "Waits on ", commas(w.blocked_by.map(blockerLink))) : null);
   el.addEventListener("click", e => { if (!e.target.closest("a")) location.hash = focusHref(w.label); });
