@@ -1,0 +1,65 @@
+name: fixtures-mirror
+
+# Fills the private mirror of the test disk images that rust.yml's Fixtures
+# step reads first: crosstools/ods/fixtures/fetch.sh gets every image the
+# mirror lacks from upstream (archive.org, GitHub), checks each against
+# SHA256SUMS, and this pushes them, uncompressed, to ghcr.io/OWNER/vaxpunk-fixtures. Each image
+# becomes a blob whose digest is its SHA-256, which is how fetch.sh asks for
+# it, so the tag only keeps the blobs referenced: one per version of
+# SHA256SUMS, and latest. Run it by hand after SHA256SUMS changes.
+#
+# Keep the package private (its settings on GitHub, Package settings, Danger
+# Zone): it holds DEC's software. This repository's workflows can read it
+# with their own token; everyone else's fetch.sh goes upstream.
+on:
+  workflow_dispatch:
+    inputs:
+      all:
+        description: Also the distribution CD images (about 1 GB)
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  push:
+    runs-on: ubuntu-latest
+    env:
+      IMAGE: ghcr.io/${{ github.repository_owner }}/vaxpunk-fixtures
+    steps:
+      - uses: actions/checkout@v4
+      - name: Packages
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libarchive-tools
+      - uses: oras-project/setup-oras@v1
+      # Images the mirror already has come from it; only new ones need
+      # upstream to answer.
+      - name: Fetch
+        env:
+          VAXPUNK_FIXTURES_MIRROR: ${{ env.IMAGE }}
+          VAXPUNK_FIXTURES_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: crosstools/ods/fixtures/fetch.sh ${{ inputs.all && '--all' || '' }}
+      - name: Push
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          echo "$GH_TOKEN" | oras login ghcr.io -u "${{ github.actor }}" --password-stdin
+          tag=$(sha256sum crosstools/ods/fixtures/SHA256SUMS | cut -c1-12)
+          cd ~/.cache/vaxpunk/fixtures
+          # The cache names each image by its SHA-256; a file is pushed as
+          # it is, so its blob's digest is that name.
+          oras push "$IMAGE:$tag" \
+            --artifact-type application/vnd.vaxpunk.fixtures.v1 \
+            $(ls | grep -E '^[0-9a-f]{64}$')
+          oras tag "$IMAGE:$tag" latest
+      - name: Check every image is there by its SHA-256
+        run: |
+          cd ~/.cache/vaxpunk/fixtures
+          for sum in $(ls | grep -E '^[0-9a-f]{64}$'); do
+            oras blob fetch --descriptor "$IMAGE@sha256:$sum" >/dev/null
+            echo "ok $sum"
+          done
+

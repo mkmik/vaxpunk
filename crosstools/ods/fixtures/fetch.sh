@@ -7,6 +7,14 @@
 # arguments only the small downloads (a few MB) are fetched; --all adds the
 # CD images (about 1 GB).
 #
+# vaxpunk's own CI first tries a private mirror of the images in GitHub's
+# container registry, which .github/workflows/fixtures-mirror.yml fills from
+# upstream when run by hand: VAXPUNK_FIXTURES_MIRROR names it
+# (ghcr.io/OWNER/vaxpunk-fixtures) and VAXPUNK_FIXTURES_TOKEN is a token that
+# may pull it. Each image is a blob there whose digest is its line in
+# SHA256SUMS. Without both variables, as everywhere but that CI, the images
+# come from upstream, and so they do whenever the mirror lacks one.
+#
 #   fixtures/fetch.sh [--all]
 set -eu
 
@@ -30,6 +38,25 @@ tmp=$(mktemp -d "$cache/tmp.XXXXXX")
 trap 'rm -rf "$tmp"' EXIT
 trap 'exit 1' INT TERM
 
+# mirror SUM: the image whose SHA-256 is SUM, from the mirror into $tmp/img;
+# fails, leaving nothing, without a mirror or when it lacks the image.
+mirror() {
+	[ -n "${VAXPUNK_FIXTURES_MIRROR:-}" ] && [ -n "${VAXPUNK_FIXTURES_TOKEN:-}" ] || return 1
+	repo=${VAXPUNK_FIXTURES_MIRROR#ghcr.io/}
+	if [ -z "${mirror_token:-}" ]; then
+		mirror_token=$(curl -fsS -u "x:$VAXPUNK_FIXTURES_TOKEN" \
+			"https://ghcr.io/token?service=ghcr.io&scope=repository:$repo:pull" |
+			sed -n 's/.*"token":"\([^"]*\)".*/\1/p') || mirror_token=
+		[ -n "$mirror_token" ] || return 1
+	fi
+	if curl -fsSL -H "Authorization: Bearer $mirror_token" -o "$tmp/img" \
+		"https://ghcr.io/v2/$repo/blobs/sha256:$1"; then
+		return 0
+	fi
+	rm -f "$tmp/img"
+	return 1
+}
+
 # fetch NAME SOURCE: unless the cache has NAME, get it from SOURCE, a URL or
 # a file here, unpack and check it; then link NAME here to the cached copy.
 fetch() {
@@ -39,6 +66,11 @@ fetch() {
 		if [ -f "$name" ] && [ ! -L "$name" ]; then
 			mv "$name" "$tmp/img" # fetched here before there was a cache
 		else
+			case $src in
+			http*) mirror "$sum" && echo "fetch: $name from the mirror" ;;
+			esac
+		fi
+		if [ ! -f "$tmp/img" ]; then
 			echo "fetch: $name"
 			case $src in
 			http*) curl -fsSL -o "$tmp/dl" "$src" ;;
