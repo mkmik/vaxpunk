@@ -108,7 +108,10 @@ fn met_and_blocked() {
     assert!(!work(&m, "t8y:/apps/editor#search").ready);
     assert!(work(&m, "t8y:/apps/editor#undo").ready);
     // A component-level need that is unmet blocks a component's own work.
-    assert_eq!(work(&m, "t8y:/apps/mail").blocked_by, ["t8y:/exec/timers#abs"]);
+    assert_eq!(
+        work(&m, "t8y:/apps/mail").blocked_by,
+        ["t8y:/exec/timers#abs"]
+    );
     // Fuzzy needs never block.
     assert!(work(&m, "t8y:/apps/editor#undo").blocked_by.is_empty());
     // A soft need never blocks: QIO's on gfx, which is todo.
@@ -477,7 +480,10 @@ fn cli() {
     assert!(out.contains("why:\n  t8y:/apps/mail -> t8y:/exec/timers\n"));
 
     let (_, out) = todography(&["why", "lib/regex"]);
-    assert_eq!(out, "t8y:/lib/regex  Regex\n  t8y:/apps/editor -> t8y:/lib/regex\n");
+    assert_eq!(
+        out,
+        "t8y:/lib/regex  Regex\n  t8y:/apps/editor -> t8y:/lib/regex\n"
+    );
 
     let (_, out) = todography(&["rdeps", "--all", "t8y:/platform/sel4"]);
     assert!(out.starts_with("t8y:/exec/qio -> t8y:/platform/sel4\n"));

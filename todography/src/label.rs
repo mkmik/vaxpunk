@@ -106,7 +106,12 @@ mod tests {
         assert_eq!(l.to_string(), "t8y:/exec/mailboxes#basic");
         let l = Label::parse("#basic", "exec/mailboxes").unwrap();
         assert_eq!(l.to_string(), "t8y:/exec/mailboxes#basic");
-        assert_eq!(Label::parse("t8y:/exec/mailboxes#basic", "").unwrap().to_string(), "t8y:/exec/mailboxes#basic");
+        assert_eq!(
+            Label::parse("t8y:/exec/mailboxes#basic", "")
+                .unwrap()
+                .to_string(),
+            "t8y:/exec/mailboxes#basic"
+        );
         assert!(Label::parse("#basic", "").is_err());
         assert!(Label::parse("t8y:#basic", "exec/mailboxes").is_err());
         assert!(Label::parse("exec/mailboxes", "x").is_err());
