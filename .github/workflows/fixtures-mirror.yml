@@ -12,6 +12,9 @@ name: fixtures-mirror
 # Zone): it holds DEC's software. This repository's workflows can read it
 # with their own token; everyone else's fetch.sh goes upstream.
 on:
+  # Temporary, to try it from the PR: remove before merging.
+  push:
+    branches: [fixtures-mirror]
   workflow_dispatch:
     inputs:
       all:
@@ -36,7 +39,7 @@ jobs:
           sudo apt-get install -y libarchive-tools
       - uses: oras-project/setup-oras@v1
       - name: Fetch from upstream
-        run: crosstools/ods/fixtures/fetch.sh ${{ inputs.all && '--all' || '' }}
+        run: crosstools/ods/fixtures/fetch.sh ${{ (github.event_name == 'push' || inputs.all) && '--all' || '' }}
       - name: Push
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
