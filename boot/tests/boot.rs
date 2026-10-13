@@ -890,6 +890,12 @@ fn telnet_pid(text: &str) -> &str {
         .expect("TCPIP$TELNET in SHOW SYSTEM")[0]
 }
 
+/// How many times its `secs` a phase may take. CI's x86 runners emulate
+/// the arm64 guest, and a phase there can take twice as long as on another
+/// run: the system disk took 18 to 28 s of its 30 there, or ran out. A hang
+/// still stalls, only later.
+const SLACK: u64 = 3;
+
 /// Runs the phases in order; Err says where it stalled.
 fn session(log: impl Fn() -> String, mut type_: impl FnMut(&str)) -> Result<(), String> {
     for phase in PHASES {
@@ -913,7 +919,8 @@ fn session(log: impl Fn() -> String, mut type_: impl FnMut(&str)) -> Result<(), 
                 println!("{}: {:?}", phase.name, start.elapsed());
                 break;
             }
-            if start.elapsed() > Duration::from_secs(phase.secs) || text.contains("root task done")
+            if start.elapsed() > Duration::from_secs(SLACK * phase.secs)
+                || text.contains("root task done")
             {
                 let waiting = match phase.steps.get(step) {
                     Some((line, times, _)) => format!("{line:?} {times} times"),
