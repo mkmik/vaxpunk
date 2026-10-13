@@ -238,6 +238,22 @@ MACRO
     CEB$L_REFC = 20, 0, 32, 0 %,  ! processes associated
     CEB$T_EFCNAM = 24, 0, 0, 0 %;  ! name, .ASCIC, 15 characters
 
+! $GSDDEF
+LITERAL
+    GSD$K_LENGTH = 80;  ! without them
+MACRO
+    GSD$L_GSDFL = 0, 0, 32, 0 %,  ! MMG$GQ_GSDHD's queue, or 0 once $DGBLSC took it off
+    GSD$L_GSDBL = 4, 0, 32, 0 %,
+    GSD$L_SIZE = 8, 0, 32, 0 %,  ! its size, as allocated
+    GSD$L_REFCNT = 12, 0, 32, 0 %,  ! PTEs that map its pages
+    GSD$L_FLAGS = 16, 0, 32, 0 %,  ! SEC$M_WRT, SEC$M_PERM and SEC$M_SYSGBL
+    GSD$L_UIC = 20, 0, 32, 0 %,  ! its owner, who made it: a group section is that group's
+    GSD$L_PROT = 24, 0, 32, 0 %,  ! its protection mask, a file's
+    GSD$L_IDENT = 28, 0, 32, 0 %,  ! its version, as $SECDEF's ident has it
+    GSD$L_PAGCNT = 32, 0, 32, 0 %,  ! its pages
+    GSD$T_GSDNAM = 36, 0, 0, 0 %,  ! its name, .ASCIC, 43 characters
+    GSD$AL_PFN = 80, 0, 0, 0 %;  ! its pages' PFNs, PAGCNT longwords
+
 ! $LNMBDEF
 LITERAL
     LNMB$K_LENGTH = 10;  ! past that, the strings

@@ -11,13 +11,29 @@
 ;   ^X40010000  S0, every process's: EXEC.EXE
 ;   ^X48000000  nonpaged pool: PCBs, kernel stacks, common event blocks,
 ;               timer queue entries, logical names
+;   ^X4FFE0000  a page MMG$CRMPSC maps a global section's pages at to zero them
 ;   ^X4FFF0000  the RPB
 ;   ^X50000000  MDA0:'s blocks, the ramdisk's, once INITIALIZE makes them
 ;   ^X5FFF0000  the boot stack's top
 ;   ^X60000000  P1: the process's $CRETVA pages
 ;   ^X7FF00000  its command interpreter, if it has one, then its mode stacks
 ;
-; The PFN database and the pool are synchronized at IPL$_SYNCH.
+; A global section is pages any process may map by the section's name
+; with $CRMPSC or $MGBLSC, so that processes share them: its GSD, from
+; pool, names its PFNs and counts the PTEs that map them, and a PFN of
+; one is never on the free list. FREEOLD, which every page's deletion
+; goes through, counts one down, and deletes the section when the count
+; reaches 0, unless it is permanent and $DGBLSC hasn't asked. A section's
+; name is its creator's UIC group's, or, with SEC$M_SYSGBL, the
+; system's; PRMGBL and SYSGBL privileges let a process make permanent and
+; system sections.
+; ponytail: global page file sections only: sections of a file need a
+; channel to it, an RMS open with FAB$V_UFO, which isn't here; the pages
+; are made when the section is, not as they are touched; no GBL$ logical
+; names, no $UPDSEC.
+;
+; The PFN database, the pool and the global sections are synchronized
+; at IPL$_SYNCH.
 ;
         .LIBRARY "lib.mlb"
         .LIBRARY "starlet.mlb"
@@ -30,14 +46,21 @@
         $RPBDEF
         $VADEF
         $SSDEF
+        $SECDEF
+        $GSDDEF
+        $ARMDEF
+        $PRVDEF
 
-        .EXTERNAL EXE$GL_RPB, SCH$GL_CURPCB
+        .EXTERNAL EXE$GL_RPB, SCH$GL_CURPCB, EXE$PROBER_DSC, EXE$MATCHNAME, FIL$CHKPRO
 
 MMG$C_MAXPFN = 4096
 POOL_VA = ^X48000000
 POOL_PAGES = 128                        ; 512 KB
+ZEROVA = ^X4FFE0000
+GSDNAMMAX = 43                          ; a global section name's characters, at most
 KW = PTE$M_VALID ! <PRT$C_KW @ PTE$V_PROT>
 UW = PTE$M_VALID ! <PRT$C_UW @ PTE$V_PROT>
+UR = PTE$M_VALID ! <PRT$C_UR @ PTE$V_PROT>
 
         .PSECT  EXEC$DATA, NOEXE, WRT, QUAD
 MMG$GL_FREECNT::                        ; free PFNs, a stack
@@ -46,13 +69,20 @@ EXE$GL_NONPAGED::                       ; free pool blocks by address:
         .LONG   0                       ; each a link and a size
 MMG$AL_FREEPFN:
         .BLKL   MMG$C_MAXPFN
+MMG$GQ_GSDHD::                          ; global sections by name: GSDs
+        .BLKQ   1
+MMG$GL_PFNGSD::                         ; pool, by PFN: the GSD of the global section it is a page of, or 0
+        .LONG   0
 
         .PSECT  $CODE$
 
-; MMG$INIT: puts the PFNs the boot left free on the free list and makes
-; the pool. Uses R0-R5.
+; MMG$INIT: puts the PFNs the boot left free on the free list, makes
+; the pool, and MMG$GL_PFNGSD's table in it. Uses R0-R5.
 MMG$INIT::
         .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5>
+        MOVAQ   MMG$GQ_GSDHD, R0
+        MOVL    R0, (R0)
+        MOVL    R0, 4(R0)
         MOVL    EXE$GL_RPB, R5
         MOVL    RPB$L_PFNCNT(R5), R2
         CMPL    R2, #MMG$C_MAXPFN
@@ -74,6 +104,12 @@ MMG$INIT::
         MOVL    R0, EXE$GL_NONPAGED
         CLRL    (R0)
         MOVL    #POOL_PAGES*MMG$C_PAGESIZE, 4(R0)
+        MOVL    RPB$L_PFNCNT(R5), R3
+        ASHL    #2, R3, R1
+        BSBW    EXE$ALONONPAGED
+        MOVL    R2, MMG$GL_PFNGSD
+40$:    CLRL    (R2)+
+        SOBGTR  R3, 40$
         RSB
 
 ; MMG$ALLOCPFN: R0 = a free PFN, or 0 if there is none: PFN 0 is the
@@ -137,13 +173,62 @@ MMG$CREPAG::
 50$:    MOVL    #SS$_INSFMEM, R0
         BRB     45$
 
-; FREEOLD: R0 = a PTE WRPTE replaced. Frees its PFN if it had one.
+; FREEOLD: R0 = a PTE WRPTE replaced. Frees its PFN if it had one, or
+; if that is a global section's, counts the section's PTEs down.
+; IPL$_SYNCH.
 FREEOLD:
         .JSB_ENTRY
         BBC     #PTE$V_VALID, R0, 10$
         BICL2   #^C<PTE$M_PFN>, R0
+        MOVL    MMG$GL_PFNGSD, R1
+        MOVL    (R1)[R0], R1
+        BNEQ    20$
         BSBW    MMG$DEALLOCPFN
 10$:    RSB
+20$:    DECL    GSD$L_REFCNT(R1)
+        BSBW    CHKGSD
+        RSB
+
+; CHKGSD: R1 = a global section's GSD. Deletes the section if no PTE maps
+; its pages and it is temporary, or $DGBLSC took it off MMG$GQ_GSDHD:
+; frees its PFNs and its GSD. IPL$_SYNCH.
+CHKGSD:
+        .JSB_ENTRY
+        TSTL    GSD$L_REFCNT(R1)
+        BNEQ    90$
+        TSTL    GSD$L_GSDFL(R1)
+        BEQL    10$                     ; off the list already
+        BITL    #SEC$M_PERM, GSD$L_FLAGS(R1)
+        BNEQ    90$
+        REMQUE  (R1), R0
+10$:    MOVL    GSD$L_PAGCNT(R1), R2
+        MOVAL   GSD$AL_PFN(R1), R3
+        MOVL    MMG$GL_PFNGSD, R4
+        BRB     30$
+20$:    MOVL    (R3)+, R0
+        CLRL    (R4)[R0]
+        BSBW    MMG$DEALLOCPFN
+30$:    SOBGEQ  R2, 20$
+        MOVL    R1, R0
+        MOVL    GSD$L_SIZE(R0), R1
+        BSBW    EXE$DEANONPGDSIZ
+90$:    RSB
+
+; ZEROPFN: R0 = a PFN no PTE maps. Zeroes its page, through ZEROVA.
+; IPL$_SYNCH. Uses R0-R2.
+ZEROPFN:
+        .JSB_ENTRY  SCRATCH=<R2>
+        BISL3   #KW, R0, R1
+        MOVL    #ZEROVA, R0
+        CALL_PAL #PAL$_WRPTE
+        MOVL    #ZEROVA, R1
+        MOVL    #MMG$C_PAGESIZE/8, R2
+10$:    CLRQ    (R1)+
+        SOBGTR  R2, 10$
+        MOVL    #ZEROVA, R0
+        CLRL    R1
+        CALL_PAL #PAL$_WRPTE
+        RSB
 
 ; MMG$DELPAG: R0 = a page's address, R1 = a page count. Deletes those
 ; pages and frees their PFNs. Uses R0-R1.
@@ -305,9 +390,28 @@ RETADR:
         DECL    4(R2)
 10$:    RSB
 
+; GROW: R2 = the first of a range of pages in P0 or P1, R3 = a page
+; count. Grows the current process's P0 or P1 to take the range in, so
+; that its rundown deletes the pages. Uses R0 and R1.
+GROW:
+        .JSB_ENTRY
+        MOVL    SCH$GL_CURPCB, R0
+        ASHL    #MMG$C_VPCTX, R3, R1
+        ADDL2   R2, R1                  ; past the last
+        CMPL    R2, #VA$C_S0BASE
+        BGEQU   20$
+        CMPL    R1, PCB$L_FREP0VA(R0)
+        BLEQU   30$
+        MOVL    R1, PCB$L_FREP0VA(R0)
+        RSB
+20$:    CMPL    R2, PCB$L_FREP1VA(R0)
+        BGEQU   30$
+        MOVL    R2, PCB$L_FREP1VA(R0)
+30$:    RSB
+
 ; $CRETVA inadr, retadr, acmode: makes the pages of a range of the
 ; process's P0 or P1, zeroed and writable, replacing any there.
-        .ENTRY  EXE$CRETVA, ^M<R2, R3, R4, R5>
+        .ENTRY  EXE$CRETVA, ^M<R2, R3, R4>
         BSBB    INADR
         BLBC    R0, 90$
         MOVL    R2, R4
@@ -316,20 +420,9 @@ RETADR:
         MOVL    #UW, R2
         BSBW    MMG$CREPAG
         BLBC    R0, 90$
-; The process's P0 and P1 now reach these pages: its rundown deletes them.
-        MOVL    SCH$GL_CURPCB, R5
-        ASHL    #MMG$C_VPCTX, R3, R1
-        ADDL2   R4, R1                  ; past the last
-        CMPL    R4, #VA$C_S0BASE
-        BGEQU   20$
-        CMPL    R1, PCB$L_FREP0VA(R5)
-        BLEQU   30$
-        MOVL    R1, PCB$L_FREP0VA(R5)
-        BRB     30$
-20$:    CMPL    R4, PCB$L_FREP1VA(R5)
-        BGEQU   30$
-        MOVL    R4, PCB$L_FREP1VA(R5)
-30$:    MOVL    R4, R0
+        MOVL    R4, R2
+        BSBB    GROW
+        MOVL    R4, R0
         MOVL    R3, R1
         MOVL    8(AP), R2
         BSBB    RETADR
@@ -387,5 +480,340 @@ RETADR:
         RET
 95$:    MOVL    #SS$_ACCVIO, R0
         RET
+
+; GSDARGS: R1 = a gsdnam argument, the address of a descriptor, R2 = an
+; ident argument, the address of a quadword, or 0. R6 = the name, R7 =
+; its length, R9 = ident, or 0, R0 = SS$_NORMAL; SS$_ACCVIO if the
+; caller can't read them, SS$_IVGSDNAM for no name or one too long,
+; SS$_IVSECIDCTL for a match control that isn't SEC$K_MATALL, MATEQU or
+; MATLEQ.
+GSDARGS:
+        .JSB_ENTRY  OUTPUT=<R6, R7, R9>
+        MOVL    R2, R9
+        BEQL    10$
+        IFNORD  #8, (R9), 80$
+        CMPL    (R9), #SEC$K_MATLEQ
+        BGTRU   85$
+10$:    TSTL    R1
+        BEQL    84$
+        MOVL    R1, R6
+        BSBW    EXE$PROBER_DSC
+        BLBC    R0, 90$
+        MOVZWL  (R6), R7
+        BEQL    84$
+        CMPL    R7, #GSDNAMMAX
+        BGTRU   84$
+        MOVL    4(R6), R6
+        MOVL    #SS$_NORMAL, R0
+90$:    RSB
+80$:    MOVL    #SS$_ACCVIO, R0
+        RSB
+84$:    MOVL    #SS$_IVGSDNAM, R0
+        RSB
+85$:    MOVL    #SS$_IVSECIDCTL, R0
+        RSB
+
+; FINDGSD: R4 = the current PCB, R5 = a call's flags, R6 = a global
+; section's name, R7 = its length. R8 = the GSD of the section of that
+; name: a system one with SEC$M_SYSGBL, else one of the process's UIC
+; group, or 0 if there is none. IPL$_SYNCH. Uses R0 and R1.
+FINDGSD:
+        .JSB_ENTRY  OUTPUT=<R8>
+        MOVAQ   MMG$GQ_GSDHD, R8
+10$:    MOVL    (R8), R8
+        MOVAQ   MMG$GQ_GSDHD, R0
+        CMPL    R8, R0
+        BEQL    80$
+        XORL3   GSD$L_FLAGS(R8), R5, R0
+        BITL    #SEC$M_SYSGBL, R0
+        BNEQ    10$                     ; the other kind
+        BITL    #SEC$M_SYSGBL, R5
+        BNEQ    20$
+        CMPW    GSD$L_UIC+2(R8), PCB$L_UIC+2(R4)
+        BNEQ    10$                     ; another group's
+20$:    MOVAB   GSD$T_GSDNAM(R8), R0
+        BSBW    EXE$MATCHNAME
+        BLBC    R0, 10$
+        RSB
+80$:    CLRL    R8
+        RSB
+
+; CHKIDENT: R8 = a global section's GSD, R9 = an ident to match, or 0.
+; R0 = SS$_NORMAL if it matches the section's version, else
+; SS$_NOSUCHSEC.
+CHKIDENT:
+        .JSB_ENTRY
+        MOVL    #SS$_NORMAL, R0
+        TSTL    R9
+        BEQL    90$
+        MOVL    (R9), R1
+        BEQL    90$                     ; SEC$K_MATALL
+        CMPL    4(R9), GSD$L_IDENT(R8)
+        BEQL    90$
+        CMPL    R1, #SEC$K_MATEQU
+        BEQL    80$
+        XORL3   4(R9), GSD$L_IDENT(R8), R1
+        BITL    #^XFF000000, R1
+        BNEQ    80$                     ; another major version
+        CMPL    4(R9), GSD$L_IDENT(R8)
+        BLEQU   90$
+80$:    MOVL    #SS$_NOSUCHSEC, R0
+90$:    RSB
+
+; MAPGSD: AP = a $CRMPSC or $MGBLSC argument list, R4 = the current PCB,
+; R5 = the call's flags, R8 = a global section's GSD, R9 = the first of
+; its pages to map. Maps its pages from there in the range inadr gives,
+; as many as both have, or all of them past the end of the region
+; inadr's first address is in, with SEC$M_EXPREG: writable with
+; SEC$M_WRT, if the section is, else read only, if the section's owner
+; and protection let the process. retadr gets the first and last
+; addresses mapped. R0 = SS$_NORMAL, SS$_NOPRIV, SS$_ENDOFFILE for a
+; first page past the section's end, SS$_VASFULL, SS$_PAGOWNVIO or
+; SS$_ACCVIO. IPL$_SYNCH.
+MAPGSD:
+        .JSB_ENTRY  INPUT=<AP>
+        CMPL    R9, GSD$L_PAGCNT(R8)
+        BGEQU   82$
+        MOVL    #ARM$M_READ, R0
+        MOVL    #UR, R7
+        BITL    #SEC$M_WRT, R5
+        BEQL    10$
+        BITL    #SEC$M_WRT, GSD$L_FLAGS(R8)
+        BEQL    84$
+        MOVL    #ARM$M_READ!ARM$M_WRITE, R0
+        MOVL    #UW, R7
+10$:    MOVL    GSD$L_UIC(R8), R1
+        MOVL    GSD$L_PROT(R8), R2
+        BSBW    FIL$CHKPRO
+        BLBC    R0, 90$
+        SUBL3   R9, GSD$L_PAGCNT(R8), R6        ; the pages it has from there
+        BITL    #SEC$M_EXPREG, R5
+        BNEQ    20$
+        BSBW    INADR
+        BLBC    R0, 90$
+        CMPL    R3, R6
+        BLEQU   40$
+        MOVL    R6, R3
+        BRB     40$
+20$:    MOVL    8(AP), R1               ; SEC$M_EXPREG: retadr, inadr's region
+        BEQL    25$
+        IFNOWRT #8, (R1), 86$
+25$:    MOVL    4(AP), R1
+        IFNORD  #8, (R1), 86$
+        MOVL    R6, R3
+        ASHL    #MMG$C_VPCTX, R3, R0
+        CMPL    (R1), #VA$C_P1BASE
+        BGEQU   30$
+        MOVL    PCB$L_FREP0VA(R4), R2   ; past P0's end
+        ADDL2   R2, R0
+        CMPL    R0, #VA$C_S0BASE
+        BGTRU   88$
+        BRB     40$
+30$:    SUBL3   R0, PCB$L_FREP1VA(R4), R2       ; below P1's start
+        CMPL    R2, #VA$C_P1BASE
+        BLSSU   88$
+40$:    BSBW    GROW
+        MOVL    R2, R10
+        MOVL    R3, R11
+        MOVAL   GSD$AL_PFN(R8)[R9], R6
+50$:    INCL    GSD$L_REFCNT(R8)        ; first, so the page it replaces can't take it to 0
+        BISL3   (R6)+, R7, R1
+        MOVL    R10, R0
+        CALL_PAL #PAL$_WRPTE
+        BSBW    FREEOLD
+        ADDL2   #MMG$C_PAGESIZE, R10
+        SOBGTR  R11, 50$
+        MOVL    R2, R0
+        MOVL    R3, R1
+        MOVL    8(AP), R2
+        BSBW    RETADR
+        MOVL    #SS$_NORMAL, R0
+90$:    RSB
+82$:    MOVL    #SS$_ENDOFFILE, R0
+        RSB
+84$:    MOVL    #SS$_NOPRIV, R0
+        RSB
+86$:    MOVL    #SS$_ACCVIO, R0
+        RSB
+88$:    MOVL    #SS$_VASFULL, R0
+        RSB
+
+; $CRMPSC inadr, retadr, acmode, flags, gsdnam, ident, relpag, chan,
+; pagcnt, vbn, prot, pfc: makes a global page file section, flags
+; SEC$M_GBL and SEC$M_PAGFIL, of pagcnt pages, zeroed and writable,
+; called gsdnam, with ident's version, owned by the process's UIC, with
+; the protection prot, a file's mask, and maps it as $MGBLSC does; if
+; there is one by that name, whose ident matches, it maps that. Permanent
+; with SEC$M_PERM, which takes PRMGBL, and a system section with
+; SEC$M_SYSGBL, which takes SYSGBL. R0 = SS$_CREATED if it made it,
+; SS$_NORMAL if it was there, or $MGBLSC's errors, SS$_IVSECFLG,
+; SS$_ILLPAGCNT, SS$_INSFMEM.
+; vaxpunk: no sections of files yet: a channel is SS$_IVCHNLSEC, and
+; without one, a section that isn't SEC$M_PAGFIL is SS$_IVCHAN. acmode,
+; vbn and pfc are ignored.
+        .ENTRY  EXE$CRMPSC, ^M<R2, R3, R4, R5, R6, R7, R8, R9, R10, R11>
+        MOVL    SCH$GL_CURPCB, R4
+        MOVL    16(AP), R5
+        BITL    #^C<SEC$M_GBL!SEC$M_DZRO!SEC$M_WRT!SEC$M_PERM!SEC$M_SYSGBL!SEC$M_EXPREG!SEC$M_PAGFIL>, R5
+        BNEQ    82$
+        MOVL    #SS$_IVCHNLSEC, R0
+        TSTL    32(AP)
+        BNEQ    90$
+        MOVL    #SS$_IVCHAN, R0
+        BITL    #SEC$M_PAGFIL, R5
+        BEQL    90$
+        BITL    #SEC$M_GBL, R5
+        BEQL    82$
+        BISL2   #SEC$M_WRT, R5
+        MOVL    #SS$_NOPRIV, R0
+        BITL    #SEC$M_PERM, R5
+        BEQL    10$
+        IFNPRIV PRMGBL, 90$
+10$:    BITL    #SEC$M_SYSGBL, R5
+        BEQL    15$
+        IFNPRIV SYSGBL, 90$
+15$:    MOVL    36(AP), R10             ; pagcnt
+        BEQL    84$
+        CMPL    R10, #MMG$C_MAXPFN
+        BGTRU   86$
+        MOVL    20(AP), R1
+        MOVL    24(AP), R2
+        BSBW    GSDARGS
+        BLBC    R0, 90$
+        DSBINT  #IPL$_SYNCH
+        BSBW    FINDGSD
+        TSTL    R8
+        BEQL    20$
+        BSBW    CHKIDENT                ; there already: map it
+        BLBC    R0, 80$
+        MOVL    #SS$_NORMAL, R11
+        BRB     60$
+20$:    ASHL    #2, R10, R1             ; a new one
+        ADDL2   #GSD$K_LENGTH, R1
+        BSBW    EXE$ALONONPAGED
+        BLBC    R0, 80$
+        MOVL    R2, R8
+        CLRL    GSD$L_GSDFL(R8)
+        MOVL    R1, GSD$L_SIZE(R8)
+        CLRL    GSD$L_REFCNT(R8)
+        BICL3   #^C<SEC$M_WRT!SEC$M_PERM!SEC$M_SYSGBL>, R5, GSD$L_FLAGS(R8)
+        MOVL    PCB$L_UIC(R4), GSD$L_UIC(R8)
+        MOVZWL  44(AP), GSD$L_PROT(R8)
+        CLRL    GSD$L_IDENT(R8)
+        TSTL    R9
+        BEQL    25$
+        MOVL    4(R9), GSD$L_IDENT(R8)
+25$:    MOVB    R7, GSD$T_GSDNAM(R8)
+        CLRL    R1
+        BRB     35$
+30$:    MOVB    (R6)[R1], GSD$T_GSDNAM+1(R8)[R1]
+        INCL    R1
+35$:    CMPL    R1, R7
+        BLSSU   30$
+        CLRL    R11                     ; its pages, zeroed
+40$:    MOVL    R11, GSD$L_PAGCNT(R8)
+        CMPL    R11, R10
+        BGEQU   50$
+        BSBW    MMG$ALLOCPFN
+        TSTL    R0
+        BEQL    70$
+        MOVL    R0, GSD$AL_PFN(R8)[R11]
+        MOVL    MMG$GL_PFNGSD, R1
+        MOVL    R8, (R1)[R0]
+        BSBW    ZEROPFN
+        INCL    R11
+        BRB     40$
+50$:    MOVAQ   MMG$GQ_GSDHD, R0
+        INSQUE  (R8), @4(R0)
+        MOVL    #SS$_CREATED, R11
+60$:    MOVL    28(AP), R9              ; relpag
+        BSBW    MAPGSD
+        BLBC    R0, 65$
+        MOVL    R11, R0
+65$:    MOVL    R0, R11
+        MOVL    R8, R1                  ; a new temporary one not mapped goes
+        BSBW    CHKGSD
+        MOVL    R11, R0
+80$:    ENBINT
+90$:    RET
+70$:    MOVL    R8, R1                  ; out of PFNs: give back those it took
+        BSBW    CHKGSD
+        MOVL    #SS$_INSFMEM, R0
+        BRB     80$
+82$:    MOVL    #SS$_IVSECFLG, R0
+        RET
+84$:    MOVL    #SS$_ILLPAGCNT, R0
+        RET
+86$:    MOVL    #SS$_INSFMEM, R0
+        RET
+
+; $MGBLSC inadr, retadr, acmode, flags, gsdnam, ident, relpag: maps the
+; global section gsdnam, the process's UIC group's, or the system's
+; with SEC$M_SYSGBL, whose version ident matches, from its page relpag,
+; into the range inadr gives, or past the end of inadr's region with
+; SEC$M_EXPREG; writable with SEC$M_WRT, else read only. retadr gets
+; the first and last addresses mapped. The process may read the section
+; if its owner and protection allow it, and write it if they allow
+; that too. R0 = SS$_NORMAL, SS$_NOSUCHSEC, SS$_IVSECFLG, SS$_IVGSDNAM,
+; SS$_IVSECIDCTL, SS$_NOPRIV, SS$_ENDOFFILE, SS$_VASFULL,
+; SS$_PAGOWNVIO or SS$_ACCVIO.
+; vaxpunk: acmode is ignored.
+        .ENTRY  EXE$MGBLSC, ^M<R2, R3, R4, R5, R6, R7, R8, R9, R10, R11>
+        MOVL    SCH$GL_CURPCB, R4
+        MOVL    16(AP), R5
+        MOVL    #SS$_IVSECFLG, R0
+        BITL    #^C<SEC$M_GBL!SEC$M_WRT!SEC$M_SYSGBL!SEC$M_EXPREG>, R5
+        BNEQ    90$
+        MOVL    20(AP), R1
+        MOVL    24(AP), R2
+        BSBW    GSDARGS
+        BLBC    R0, 90$
+        DSBINT  #IPL$_SYNCH
+        BSBW    FINDGSD
+        MOVL    #SS$_NOSUCHSEC, R0
+        TSTL    R8
+        BEQL    80$
+        BSBW    CHKIDENT
+        BLBC    R0, 80$
+        MOVL    28(AP), R9
+        BSBW    MAPGSD
+80$:    ENBINT
+90$:    RET
+
+; $DGBLSC flags, gsdnam, ident: deletes the global section gsdnam, the
+; process's UIC group's, or the system's with SEC$M_SYSGBL, which takes
+; SYSGBL, whose version ident matches: a permanent one, which takes
+; PRMGBL, is temporary from now on. It goes once no process maps it, and
+; no one finds it by its name any more. R0 = SS$_NORMAL, SS$_NOSUCHSEC,
+; SS$_NOPRIV, SS$_IVGSDNAM, SS$_IVSECIDCTL or SS$_ACCVIO.
+        .ENTRY  EXE$DGBLSC, ^M<R2, R3, R4, R5, R6, R7, R8, R9>
+        MOVL    SCH$GL_CURPCB, R4
+        MOVL    4(AP), R5
+        MOVL    #SS$_NOPRIV, R0
+        BITL    #SEC$M_SYSGBL, R5
+        BEQL    10$
+        IFNPRIV SYSGBL, 90$
+10$:    MOVL    8(AP), R1
+        MOVL    12(AP), R2
+        BSBW    GSDARGS
+        BLBC    R0, 90$
+        DSBINT  #IPL$_SYNCH
+        BSBW    FINDGSD
+        MOVL    #SS$_NOSUCHSEC, R0
+        TSTL    R8
+        BEQL    80$
+        BSBW    CHKIDENT
+        BLBC    R0, 80$
+        MOVL    #SS$_NOPRIV, R0
+        BITL    #SEC$M_PERM, GSD$L_FLAGS(R8)
+        BEQL    20$
+        IFNPRIV PRMGBL, 80$
+20$:    REMQUE  (R8), R0
+        CLRL    GSD$L_GSDFL(R8)
+        MOVL    R8, R1
+        BSBW    CHKGSD
+        MOVL    #SS$_NORMAL, R0
+80$:    ENBINT
+90$:    RET
 
         .END

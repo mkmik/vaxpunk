@@ -149,8 +149,9 @@ CODE = 0
         STUB    ULWSET, 3
         STUB    LCKPAG, 3
         STUB    ULKPAG, 3
-        STUB    CRMPSC, 12
-        STUB    MGBLSC, 7
+        SERVICE CRMPSC, 12
+        SERVICE MGBLSC, 7
+        SERVICE DGBLSC, 3
 ; ASTs, time, I/O, logical names, system information
         SERVICE DCLAST, 3
         SERVICE SETAST, 1

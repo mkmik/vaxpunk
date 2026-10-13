@@ -518,19 +518,15 @@ static int disk_read(uint64_t lbn, uint8_t *dst, seL4_Word n)
 /*
  * Physical memory, as the executive sees it: page frames numbered from 0,
  * PFNs. The executive owns them all and keeps its own PFN database; the PAL
- * makes each frame the first time a PTE names it, and maps it twice: at
+ * makes each frame the first time a PTE names it, and maps it at
  * PHYS + PFN pages in its own address space, the way Alpha PALcode reached
- * memory by physical address, and wherever the executive's PTE says.
+ * memory by physical address, and wherever the executive's PTEs say.
  * ponytail: 4 MB, as much as the root CNode's 4096 slots leave room for;
  * frame caps in a CNode of their own for more.
  */
 #define PFN_COUNT 1024
 #define PHYS 0x100000000UL
-static seL4_CPtr pfn_frame[PFN_COUNT];	 /* mapped at PHYS */
-static seL4_CPtr pfn_cap[PFN_COUNT];	 /* mapped in the executive's kernel mode */
-static seL4_CPtr pfn_mcap[4][PFN_COUNT]; /* in its process's modes 1-3, made as needed */
-static seL4_Word pfn_va[PFN_COUNT];	 /* where, 0 if nowhere */
-static struct ctx *pfn_ctx[PFN_COUNT];	 /* whose P0 or P1, 0 for S0 */
+static seL4_CPtr pfn_frame[PFN_COUNT]; /* mapped at PHYS */
 
 static uint8_t *pfn_ptr(seL4_Word pfn)
 {
@@ -538,9 +534,93 @@ static uint8_t *pfn_ptr(seL4_Word pfn)
 		pfn_frame[pfn] = alloc(seL4_ARM_SmallPageObject, 0);
 		map(pfn_frame[pfn], seL4_CapInitThreadVSpace, PHYS + pfn * PAGE_SIZE,
 		    seL4_ReadWrite, seL4_ARM_Default_VMAttributes | seL4_ARM_ExecuteNever);
-		pfn_cap[pfn] = mint(pfn_frame[pfn], 0);
 	}
 	return (uint8_t *)(PHYS + pfn * PAGE_SIZE);
+}
+
+/*
+ * A PTE that maps a PFN: where, and the frame cap that maps it in each
+ * mode's address space, made as needed, since seL4 maps a cap at one
+ * address. A PFN's first mapping is in pfn_map, and the caps stay for its
+ * next one; any more, a global section's pages mapped by many processes,
+ * come from xmap, and give their caps' slots back when they go.
+ * ponytail: 256 more mappings; the slots come out of the root CNode's.
+ */
+#define XMAP_MAX 256
+static struct pmap {
+	seL4_Word va;	   /* 0: unused */
+	struct ctx *c;	   /* whose P0 or P1, 0 for S0 */
+	seL4_CPtr cap[4];  /* in kernel mode's address space, and modes 1-3's */
+	struct pmap *next; /* the PFN's other mappings */
+} pfn_map[PFN_COUNT], xmap[XMAP_MAX], *xmap_free;
+static unsigned xmap_used;
+static seL4_CPtr spare_slot[XMAP_MAX * 4];
+static unsigned nspare;
+
+/* The cap that maps p, a mapping of pfn, in mode m's address space. */
+static seL4_CPtr map_cap(struct pmap *p, unsigned pfn, int m)
+{
+	if (!p->cap[m]) {
+		if (!nspare)
+			p->cap[m] = mint(pfn_frame[pfn], 0);
+		else if (seL4_CNode_Copy(seL4_CapInitThreadCNode, spare_slot[--nspare],
+					 seL4_WordBits, seL4_CapInitThreadCNode, pfn_frame[pfn],
+					 seL4_WordBits, seL4_AllRights))
+			die("seL4_CNode_Copy failed", pfn);
+		else
+			p->cap[m] = spare_slot[nspare];
+	}
+	return p->cap[m];
+}
+
+/* pfn's mapping at va in c's P0 or P1, or in S0 if c is 0. */
+static struct pmap *find_map(unsigned pfn, struct ctx *c, seL4_Word va)
+{
+	for (struct pmap *p = &pfn_map[pfn]; p; p = p->next)
+		if (p->va == va && p->c == c)
+			return p;
+	die("no such mapping", va);
+}
+
+/* A new mapping of pfn at va, or 0 if there is no room for one. */
+static struct pmap *add_map(unsigned pfn, struct ctx *c, seL4_Word va)
+{
+	struct pmap *p = &pfn_map[pfn];
+	if (p->va) {
+		if (xmap_free)
+			xmap_free = (p = xmap_free)->next;
+		else if (xmap_used < XMAP_MAX)
+			p = &xmap[xmap_used++];
+		else
+			return 0;
+		p->next = pfn_map[pfn].next;
+		pfn_map[pfn].next = p;
+	}
+	p->va = va;
+	p->c = c;
+	return p;
+}
+
+/* Forgets p, a mapping of pfn its caps no longer map anywhere. */
+static void drop_map(unsigned pfn, struct pmap *p)
+{
+	p->va = 0;
+	p->c = 0;
+	if (p == &pfn_map[pfn])
+		return;
+	for (int m = 0; m < 4; m++)
+		if (p->cap[m]) {
+			if (seL4_CNode_Delete(seL4_CapInitThreadCNode, p->cap[m], seL4_WordBits))
+				die("seL4_CNode_Delete failed", pfn);
+			spare_slot[nspare++] = p->cap[m];
+			p->cap[m] = 0;
+		}
+	struct pmap **l = &pfn_map[pfn].next;
+	while (*l != p)
+		l = &(*l)->next;
+	*l = p->next;
+	p->next = xmap_free;
+	xmap_free = p;
 }
 
 /*
@@ -634,30 +714,22 @@ static void unmap(seL4_CPtr frame)
 		die("seL4_ARM_Page_Unmap failed", err);
 }
 
-/* The frame cap that maps pfn in its process's mode m address space. */
-static seL4_CPtr mode_cap(int m, unsigned pfn)
-{
-	if (!pfn_mcap[m][pfn])
-		pfn_mcap[m][pfn] = mint(pfn_frame[pfn], 0);
-	return pfn_mcap[m][pfn];
-}
-
 /*
- * Maps a P0 or P1 page of c's in the address spaces of each mode it has
- * entered that may read it, or unmaps it from all of them. Kernel mode's
- * is the executive's, which holds only the current process's pages.
+ * Maps a P0 or P1 page of c's, p, in the address spaces of each mode it
+ * has entered that may read it, or unmaps it from all of them. Kernel
+ * mode's is the executive's, which holds only the current process's pages.
  */
-static void map_page(struct ctx *c, seL4_Word va, uint32_t pte, int on)
+static void map_page(struct ctx *c, struct pmap *p, uint32_t pte, int on)
 {
 	unsigned pfn = pte & PTE_PFN;
 	for (int m = 0; m < 4; m++) {
 		if (!on) {
-			unmap(m ? pfn_mcap[m][pfn] : pfn_cap[pfn]);
+			unmap(p->cap[m]);
 			continue;
 		}
 		if (!c->tcb[m] || m > may_read[prot(pte)] || (!m && c != cur))
 			continue;
-		map_pte(m ? mode_cap(m, pfn) : pfn_cap[pfn], c->vspace[m], va, pte, m);
+		map_pte(map_cap(p, pfn, m), c->vspace[m], p->va, pte, m);
 	}
 }
 
@@ -681,12 +753,11 @@ static int outer(uint32_t pte)
 /*
  * WRPTE: makes va's page what pte says, mapped, unmapped or with a new
  * protection, and puts the PTE it had in *old. A page in P0 or P1 is the
- * current process's. Fails, returning 0, for an address outside the
- * executive's space, a reserved protection code, a PFN out of range or
- * already mapped at another address, or an S0 page outer modes may read once
- * one of them runs.
- * ponytail: one mapping per PFN; a frame cap per extra mapping for shared
- * pages.
+ * current process's. A PFN may be mapped at any number of addresses, in
+ * any number of processes: a global section's pages are. Fails, returning
+ * 0, for an address outside the executive's space, a reserved protection
+ * code, a PFN out of range, no room for another mapping of the PFN, or an
+ * S0 page outer modes may read once one of them runs.
  */
 static int wrpte(seL4_Word va, uint32_t pte, uint32_t *old)
 {
@@ -695,8 +766,7 @@ static int wrpte(seL4_Word va, uint32_t pte, uint32_t *old)
 	struct ctx *owner = s0 ? 0 : cur;
 	if (va % PAGE_SIZE || va < PAGE_SIZE || va >= SPACE_END || (!s0 && !cur))
 		return 0;
-	if (mapped(pte) && (prot(pte) == 1 || pfn >= PFN_COUNT ||
-			    (pfn_va[pfn] && (pfn_va[pfn] != va || pfn_ctx[pfn] != owner))))
+	if (mapped(pte) && (prot(pte) == 1 || pfn >= PFN_COUNT))
 		return 0;
 	uint32_t none = 0, *slot = pte_at(va, mapped(pte));
 	if (!slot)
@@ -704,15 +774,19 @@ static int wrpte(seL4_Word va, uint32_t pte, uint32_t *old)
 	if (s0 && (outer(pte) || outer(*slot)) &&
 	    (outer_started || (!outer(*slot) && nshared == sizeof shared / sizeof shared[0])))
 		return 0;
+	/* Another mapping of the PFN needs room, unless it replaces one of it. */
+	if (mapped(pte) && pfn_map[pfn].va && !xmap_free && xmap_used == XMAP_MAX &&
+	    !(mapped(*slot) && (*slot & PTE_PFN) == pfn))
+		return 0;
 	*old = *slot;
 	if (mapped(*old)) {
 		unsigned o = *old & PTE_PFN;
+		struct pmap *p = find_map(o, owner, va);
 		if (s0)
-			unmap(pfn_cap[o]);
+			unmap(p->cap[0]);
 		else
-			map_page(cur, va, *old, 0);
-		pfn_va[o] = 0;
-		pfn_ctx[o] = 0;
+			map_page(cur, p, *old, 0);
+		drop_map(o, p);
 	}
 	*slot = pte;
 	if (s0) {
@@ -730,17 +804,16 @@ static int wrpte(seL4_Word va, uint32_t pte, uint32_t *old)
 	if (!mapped(pte))
 		return 1;
 	pfn_ptr(pfn);
+	struct pmap *p = add_map(pfn, owner, va);
 	if (s0)
-		map_pte(pfn_cap[pfn], exec_vspace, va, pte, 0);
+		map_pte(map_cap(p, pfn, 0), exec_vspace, va, pte, 0);
 	else
-		map_page(cur, va, pte, 1);
+		map_page(cur, p, pte, 1);
 	if (pte & PTE_EXEC) {
-		seL4_Error err = seL4_ARM_Page_Unify_Instruction(pfn_cap[pfn], 0, PAGE_SIZE);
+		seL4_Error err = seL4_ARM_Page_Unify_Instruction(p->cap[0], 0, PAGE_SIZE);
 		if (err)
 			die("seL4_ARM_Page_Unify_Instruction failed", err);
 	}
-	pfn_va[pfn] = va;
-	pfn_ctx[pfn] = owner;
 	return 1;
 }
 
@@ -757,13 +830,14 @@ static void kernel_space(struct ctx *c, int on)
 	for (seL4_Word i = 0; i < SPACE_END >> 22; i++)
 		for (unsigned j = 0; c->dir[i] && j < 1024; j++) {
 			uint32_t pte = c->dir[i][j];
+			seL4_Word va = i << 22 | j << seL4_PageBits;
 			if (!mapped(pte))
 				continue;
+			struct pmap *p = find_map(pte & PTE_PFN, c, va);
 			if (on)
-				map_pte(pfn_cap[pte & PTE_PFN], exec_vspace,
-					i << 22 | j << seL4_PageBits, pte, 0);
+				map_pte(map_cap(p, pte & PTE_PFN, 0), exec_vspace, va, pte, 0);
 			else
-				unmap(pfn_cap[pte & PTE_PFN]);
+				unmap(p->cap[0]);
 		}
 }
 
@@ -777,9 +851,10 @@ static void free_space(struct ctx *c)
 			continue;
 		for (unsigned j = 0; j < 1024; j++)
 			if (mapped(t[j])) {
-				map_page(c, i << 22 | j << seL4_PageBits, t[j], 0);
-				pfn_va[t[j] & PTE_PFN] = 0;
-				pfn_ctx[t[j] & PTE_PFN] = 0;
+				unsigned pfn = t[j] & PTE_PFN;
+				struct pmap *p = find_map(pfn, c, i << 22 | j << seL4_PageBits);
+				map_page(c, p, t[j], 0);
+				drop_map(pfn, p);
 			}
 		memset(t, 0, 1024 * sizeof *t);
 		pte_free[pte_nfree++] = t;
@@ -1194,9 +1269,10 @@ static void mode_thread(struct ctx *c, int m)
 	for (seL4_Word i = 0; i < SPACE_END >> 22; i++)
 		for (unsigned j = 0; c->dir[i] && j < 1024; j++) {
 			uint32_t pte = c->dir[i][j];
+			seL4_Word va = i << 22 | j << seL4_PageBits;
 			if (mapped(pte) && m <= may_read[prot(pte)])
-				map_pte(mode_cap(m, pte & PTE_PFN), c->vspace[m],
-					i << 22 | j << seL4_PageBits, pte, m);
+				map_pte(map_cap(find_map(pte & PTE_PFN, c, va), pte & PTE_PFN, m),
+					c->vspace[m], va, pte, m);
 		}
 }
 

@@ -1,44 +1,56 @@
 +++
 title = "Global sections"
 summary = "Memory shared between processes, mapped from a file or the page file: $CRMPSC"
-aka = ["$CRMPSC", "$MGBLSC", "$DGBLSC", "$UPDSEC", "$CREATE_GDZRO", "$CRMPSC_GPFILE_64", "$MGBLSC_64", "private section", "global page file section", "PFN-mapped section", "memory-resident section", "shared page tables", "GBLSECTIONS", "GBLPAGES", "SYSGBL", "PRMGBL"]
+aka = ["$CRMPSC", "$MGBLSC", "$DGBLSC", "$UPDSEC", "$SECDEF", "GSD", "$CREATE_GDZRO", "$CRMPSC_GPFILE_64", "$MGBLSC_64", "private section", "global page file section", "PFN-mapped section", "memory-resident section", "shared page tables", "GBLSECTIONS", "GBLPAGES", "SYSGBL", "PRMGBL"]
 kind = "core"
 intent = "goal"
 research = "outline"
-refs = ["docs/prd/0003-multi-user-vms.md", "docs/adr/0028-shareable-images.md", "docs/design/0001-pal-interface.md", "https://wasd.vsm.com.au/htbin/helpgate/HELP/SYSTEM_SERVICES/_CRMPSC/ARGUMENTS"]
+refs = ["vms/exec/memory.mar", "vms/sysexe/gbltest.mar", "docs/prd/0003-multi-user-vms.md", "docs/adr/0028-shareable-images.md", "docs/design/0001-pal-interface.md", "https://wasd.vsm.com.au/htbin/helpgate/HELP/SYSTEM_SERVICES/_CRMPSC/ARGUMENTS"]
 
 [[feature]]
 id = "frame-caps"
 title = "A PFN mapped at more than one address: a frame capability per extra mapping"
-status = "todo"
+status = "done"
 needs = ["/platform/pal"]
-note = "PRD-0003 tier 3 #20; DESIGN-0001: a PFN maps at one address at a time"
+note = "main.c pfn_map and xmap; DESIGN-0001 Memory"
 
 [[feature]]
 id = "file-sections"
-title = "$CRMPSC and $MGBLSC: a file's blocks mapped, private or global, group or system"
+title = "$CRMPSC of a file: its blocks mapped, private or global"
 status = "todo"
-needs = ["#frame-caps", "/files/ods2"]
-note = "PRD-0003 tier 3 #20: stubs in syssrv.mar; image sections and installed images build on it"
+needs = ["#page-file-sections", "/files/ods2#qio-interface"]
+note = "PRD-0003 tier 3 #20: SS$_IVCHNLSEC now, since no channel is to a file (t8y:/rms/core#ufo); image sections and installed images build on it"
 
 [[feature]]
-id = "delete-update"
-title = "$DGBLSC, and $UPDSEC writing modified pages back to the file"
+id = "delete"
+title = "$DGBLSC: a section goes once no process maps it"
+status = "done"
+needs = ["#page-file-sections"]
+
+[[feature]]
+id = "update"
+title = "$UPDSEC, and a writable file section's modified pages written back to the file"
 status = "todo"
 needs = ["#file-sections"]
 
 [[feature]]
 id = "permanent"
-title = "Permanent and system-wide sections, with PRMGBL and SYSGBL; names translated through GBL$"
+title = "Permanent and system-wide sections, with PRMGBL and SYSGBL"
+status = "done"
+needs = ["#page-file-sections", "/exec/privileges"]
+
+[[feature]]
+id = "logical-names"
+title = "Section names translated through GBL$ logical names"
 status = "todo"
-needs = ["#file-sections", "/exec/privileges"]
+needs = ["#page-file-sections"]
 
 [[feature]]
 id = "page-file-sections"
 title = "Global page file sections: shared memory with no file behind it"
-status = "todo"
+status = "done"
 needs = ["#frame-caps"]
-note = "On VMS backed by the page file (t8y:/exec/paging); without paging, memory kept"
+note = "On VMS backed by the page file (t8y:/exec/paging); here its pages are made with it and kept. Group or system, with an ident, a protection mask; GBLTEST"
 
 [[feature]]
 id = "pfn-sections"
@@ -92,11 +104,14 @@ memory-resident sections with shared page tables, for very large shared
 memories such as database caches. SYSGEN's `GBLSECTIONS` and `GBLPAGES`
 size the tables.
 
-vaxpunk has none: `$CRMPSC` and `$MGBLSC` are stubs that return
-`SS$_ILLSER`. The PAL maps a PFN at one address at a time, so sharing a
-page needs a frame capability for each extra mapping first
-([DESIGN-0001](../../design/0001-pal-interface.md)). PRD-0003's
-backlog puts them after Milestone 1 (tier 3 #20), as the way to share
-`LIBRTL.EXE`'s pages between processes with `INSTALL /SHARED`
+vaxpunk has global page file sections: `$CRMPSC` makes one, `$MGBLSC`
+maps it, `$DGBLSC` deletes it, in `vms/exec/memory.mar`, with VMS's
+flags, idents and protection, group and system, temporary and permanent.
+Its pages are made with it, zeroed, not as they are touched. The PAL
+maps a PFN at any number of addresses, with a frame capability for each
+extra mapping ([DESIGN-0001](../../design/0001-pal-interface.md)).
+Sections of a file wait for a channel to one: RMS has no `FAB$V_UFO`.
+PRD-0003's backlog wants them (tier 3 #20) to share `LIBRTL.EXE`'s
+pages between processes with `INSTALL /SHARED`
 ([ADR-0028](../../adr/0028-shareable-images.md) follow-ups), and to
 page image sections in (tier 3 #21).

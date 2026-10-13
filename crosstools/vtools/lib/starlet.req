@@ -34,6 +34,10 @@ LITERAL
     SS$_IVCHAN = 316,
     SS$_IVDEVNAM = 324,  ! no device name, or a bad one
     SS$_IVLOGNAM = 340,
+    SS$_IVGSDNAM = 332,  ! no global section name, or one longer than 43 characters
+    SS$_IVSECFLG = 364,  ! section flags that aren't allowed together, or here
+    SS$_IVCHNLSEC = 620,  ! the channel isn't to a file open for mapping
+    SS$_IVSECIDCTL = 740,  ! a section ident's match control isn't SEC$K_MAT*
     SS$_IVLOGTAB = 348,
     SS$_IVSSRQ = 372,
     SS$_MEDOFL = 420,  ! the medium is offline: a ramdisk not made yet
@@ -75,6 +79,7 @@ LITERAL
     SS$_NOMOREPROC = 2472,  ! a wildcard $GETJPI is past the last process
     SS$_NOSUCHDEV = 2312,
     SS$_NOSUCHFILE = 2320,
+    SS$_NOSUCHSEC = 2424,  ! no global section by that name, or its ident doesn't match
     SS$_BADCHKSUM = 2056,
     SS$_BADFILEHDR = 2064,
     SS$_BADFILEVER = 2080,  ! a version above 32767
@@ -1372,6 +1377,21 @@ LITERAL
     PRT$C_UREW = 13,
     PRT$C_URKW = 14,
     PRT$C_UR = 15;
+
+! $SECDEF
+LITERAL
+    SEC$M_GBL = 1,  ! a global section, by name
+    SEC$M_CRF = 2,  ! copy on reference
+    SEC$M_DZRO = 4,  ! demand zero
+    SEC$M_WRT = 8,  ! writable
+    SEC$M_PERM = 16384,  ! permanent: there until $DGBLSC
+    SEC$M_SYSGBL = 32768,  ! a system global section, else the creator's group's
+    SEC$M_PFNMAP = 65536,  ! physical pages, by PFN
+    SEC$M_EXPREG = 131072,  ! mapped at the region's first free page
+    SEC$M_PAGFIL = 524288,  ! a global page file section: no file behind it
+    SEC$K_MATALL = 0,  ! any version
+    SEC$K_MATEQU = 1,  ! the same version
+    SEC$K_MATLEQ = 2;  ! the same major, the section's minor at least the one asked for
 
 ! $LBRDEF
 LITERAL

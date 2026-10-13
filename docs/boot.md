@@ -480,6 +480,16 @@ executive feature:
   it reads the message MBXCHILD's deletion writes there, with its PID and
   its status, `RMS$_FNF`. A permanent mailbox outlives its channel until
   `$DELMBX`.
+- **GBLTEST** checks global sections: it makes a global page file section
+  of two pages with `$CRMPSC`, maps it twice more with `$CRMPSC` and
+  `$MGBLSC`, and reads in each mapping what it wrote in another; `$MGBLSC`
+  takes or refuses an ident as its match control says. It starts
+  **GBLCHILD**, the same image in a process of UIC `[200,1]` with no
+  privileges, which can't see GBLTEST's group's section, writes in a
+  system one, can map one the world may only read but not writable, and
+  can't make one; GBLTEST reads what it wrote once its termination
+  message comes. The section goes when its last mapping is deleted; a
+  permanent one only after `$DGBLSC` too.
 - **FSTEST1** and **FSTEST2** each count the files in `SYS$SYSTEM:` 50
   times with `$PARSE` and `$SEARCH`, at once. The file system runs
   holding a lock of its own, `FIL$LOCK`, below `IPL$_SYNCH`
