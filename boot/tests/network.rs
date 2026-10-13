@@ -581,7 +581,9 @@ fn network() {
     vax.command("DIRECTORY/FULL DKB0:[000000]READ_ME.TXT");
     vax.command(r#"COPY/HTTP/LOG 10.0.2.100::"/" DKB0:[000000]"#);
     vax.command(r#"COPY/HTTP URL::"http://10.0.2.100:7781/nope" DKB0:[000000]"#);
-    vax.command(r#"COPY/HTTP/LOG/BINARY URL::"http://web.example:7782/kit/blob.bin" DKB0:[000000]*.*;*"#);
+    vax.command(
+        r#"COPY/HTTP/LOG/BINARY URL::"http://web.example:7782/kit/blob.bin" DKB0:[000000]*.*;*"#,
+    );
     vax.command("DIRECTORY/FULL DKB0:[000000]BLOB.BIN");
     vax.command(r#"COPY/HTTP URL::"ftp://10.0.2.100/x" DKB0:[000000]"#);
     vax.command(r#"COPY/HTTP/LOG URL::"http://10.0.2.100:7788/a/moved.txt" DKB0:[000000]"#);
