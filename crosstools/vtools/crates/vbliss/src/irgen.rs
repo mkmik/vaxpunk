@@ -696,7 +696,11 @@ impl Gen<'_> {
     /// REGISTER data in their registers; R0's is the value.
     fn ret(&mut self, v: V) -> R<()> {
         // Kept from the loads below only when there are some.
-        let mut v = if self.exits.is_empty() { v } else { self.fix(v) };
+        let mut v = if self.exits.is_empty() {
+            v
+        } else {
+            self.fix(v)
+        };
         for (reg, id) in self.exits.clone() {
             let p = self.place(&Expr::Name(id))?;
             let x = self.load(p);
