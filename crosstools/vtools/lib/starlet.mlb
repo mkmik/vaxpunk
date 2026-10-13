@@ -100,6 +100,11 @@ SS$_LINKDISCON = 8428                   ; the peer closed the connection
 SS$_DIRNOTEMPTY = 8564                  ; a directory to delete has files in it
 SS$_FORCEDEXIT = 8572                   ; $FORCEX ended the image
 SS$_NOLOGTAB = 8852
+SS$_SYNCH = 1673                        ; success: the lock was granted at once, with LCK$M_SYNCSTS
+SS$_NOTQUEUED = 2488                    ; a warning: the lock can't be granted at once, with LCK$M_NOQUEUE
+SS$_IVLOCKID = 8484                     ; no such lock, or not the caller's
+SS$_CVTUNGRANT = 8508                   ; a conversion of a lock that isn't granted
+SS$_NOSYSLCK = 10484                    ; LCK$M_SYSTEM needs SYSLCK in user or supervisor mode
         .ENDM   $SSDEF
 
 ; $CLIMSGDEF: the command language interpreter's status codes, facility
@@ -1761,6 +1766,25 @@ SEC$K_MATEQU = 1                        ; the same version
 SEC$K_MATLEQ = 2                        ; the same major, the section's minor at least the one asked for
         .ENDM   $SECDEF
 
+; $LCKDEF: the lock manager's modes and the flags of $ENQ and $DEQ
+; (vms/exec/locking.b64).
+        .MACRO  $LCKDEF
+LCK$K_NLMODE = 0                        ; null: holds the name, blocks nothing
+LCK$K_CRMODE = 1                        ; concurrent read
+LCK$K_CWMODE = 2                        ; concurrent write
+LCK$K_PRMODE = 3                        ; protected read
+LCK$K_PWMODE = 4                        ; protected write
+LCK$K_EXMODE = 5                        ; exclusive
+LCK$M_VALBLK = ^X1                      ; $ENQ: a value block in the status block
+LCK$M_CONVERT = ^X2                     ; $ENQ: convert the lock in the status block
+LCK$M_NOQUEUE = ^X4                     ; $ENQ: SS$_NOTQUEUED rather than wait
+LCK$M_SYNCSTS = ^X8                     ; $ENQ: SS$_SYNCH and no AST if granted at once
+LCK$M_SYSTEM = ^X10                     ; $ENQ: a name of the system's, not the UIC group's
+LCK$M_DEQALL = ^X1                      ; $DEQ: all of the caller's locks
+LCK$M_CANCEL = ^X2                      ; $DEQ: cancel a waiting conversion
+LCK$M_INVVALBLK = ^X4                   ; $DEQ: mark the value block not valid
+        .ENDM   $LCKDEF
+
 ; The _S forms of the system services: each pushes its arguments, last
 ; first, and calls SYS$name. A value argument is pushed as written
 ; (EFN=#65); an address argument is pushed as an address (PIDADR=PID), or
@@ -2149,6 +2173,47 @@ SEC$K_MATLEQ = 2                        ; the same major, the section's minor at
         .EXTERNAL SYS$QIO
         CALLS   #12, G^SYS$QIO
         .ENDM   $QIO_S
+
+        .MACRO  $ENQ_S EFN=#0, LKMODE, LKSB, FLAGS=#0, RESNAM=0, PARID=#0, ASTADR=0, ASTPRM=#0, BLKAST=0, ACMODE=#0, RSDM_ID=#0
+        PUSHL   RSDM_ID
+        PUSHL   ACMODE
+        $PUSHADR BLKAST
+        PUSHL   ASTPRM
+        $PUSHADR ASTADR
+        PUSHL   PARID
+        $PUSHADR RESNAM
+        PUSHL   FLAGS
+        $PUSHADR LKSB
+        PUSHL   LKMODE
+        PUSHL   EFN
+        .EXTERNAL SYS$ENQ
+        CALLS   #11, G^SYS$ENQ
+        .ENDM   $ENQ_S
+
+        .MACRO  $ENQW_S EFN=#0, LKMODE, LKSB, FLAGS=#0, RESNAM=0, PARID=#0, ASTADR=0, ASTPRM=#0, BLKAST=0, ACMODE=#0, RSDM_ID=#0
+        PUSHL   RSDM_ID
+        PUSHL   ACMODE
+        $PUSHADR BLKAST
+        PUSHL   ASTPRM
+        $PUSHADR ASTADR
+        PUSHL   PARID
+        $PUSHADR RESNAM
+        PUSHL   FLAGS
+        $PUSHADR LKSB
+        PUSHL   LKMODE
+        PUSHL   EFN
+        .EXTERNAL SYS$ENQW
+        CALLS   #11, G^SYS$ENQW
+        .ENDM   $ENQW_S
+
+        .MACRO  $DEQ_S LKID=#0, VALBLK=0, ACMODE=#0, FLAGS=#0
+        PUSHL   FLAGS
+        PUSHL   ACMODE
+        $PUSHADR VALBLK
+        PUSHL   LKID
+        .EXTERNAL SYS$DEQ
+        CALLS   #4, G^SYS$DEQ
+        .ENDM   $DEQ_S
 
         .MACRO  $DCLAST_S ASTADR, ASTPRM=#0, ACMODE=#0
         PUSHL   ACMODE

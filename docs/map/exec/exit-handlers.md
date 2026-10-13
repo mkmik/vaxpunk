@@ -96,4 +96,5 @@ channels and files the command interpreter had when the image started
 ([ADR-0006](../../adr/0006-cli-in-p1-runs-images-in-its-process.md)).
 Process rundown runs in the process's own context, since only it can
 reach its P0 and P1, and the swapper frees the PCB and kernel stack
-after. Locks join rundown with the lock manager (`t8y:/exec/lock-manager#rundown`).
+after. Image rundown dequeues the image's user mode locks, and process
+rundown the rest (`t8y:/exec/lock-manager#rundown`).

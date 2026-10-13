@@ -212,6 +212,10 @@ CODE = 0
 ; Security
         SERVICE HASH_PASSWORD, 5
         SERVICE GET_ENTROPY, 2
+; Locks
+        SERVICE ENQ, 10
+        SERVICE ENQW, 10
+        SERVICE DEQ, 4
 
 ; ARGSIN: keeps a call's arguments where the dispatcher's code leaves
 ; them alone, in registers REI restores from the PAL's frame: the first

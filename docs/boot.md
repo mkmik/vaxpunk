@@ -500,6 +500,20 @@ executive feature:
   read, and `PTD$READW` reads their echo; a write there waits until
   `PTD$READW` reads it. `PTD$DELETE` hangs the terminal up, and the read
   waiting there ends with `SS$_HANGUP`.
+- **LOCKTEST** checks the lock manager, `$ENQ`, `$ENQW` and `$DEQ`
+  ([ADR-0030](adr/0030-lock-manager-in-the-executive.md)): two protected
+  reads of one resource are granted together, but not an exclusive lock
+  nor a conversion to one with `LCK$M_NOQUEUE` (`SS$_NOTQUEUED`); an
+  exclusive request waits, and is granted, with its AST, once both reads
+  are dequeued; a conversion down to null is granted at once
+  (`SS$_SYNCH`); a waiting lock can't be converted, and ends with
+  `SS$_ABORT` when it is dequeued. Then it starts **LOCKTEST2**, the same
+  image, which finds itself the second because it can't have the lock on
+  `LOCKTEST$ROLE` that LOCKTEST holds. LOCKTEST2 takes `LOCKTEST$S`, wakes
+  LOCKTEST, waits for `LOCKTEST$R`, which LOCKTEST holds, and exits as
+  soon as it gets it, still holding both. Its image rundown dequeues them,
+  which grants LOCKTEST the lock on `LOCKTEST$S` it waits for, and
+  LOCKTEST prints `LOCKTEST: ok`.
 - **FSTEST1** and **FSTEST2** each count the files in `SYS$SYSTEM:` 50
   times with `$PARSE` and `$SEARCH`, at once. The file system runs
   holding a lock of its own, `FIL$LOCK`, below `IPL$_SYNCH`

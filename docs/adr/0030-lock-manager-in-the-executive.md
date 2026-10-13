@@ -2,7 +2,7 @@
 
 Oct 9, 2026 · @Marko Mikulicic
 
-Proposed. `$ENQ`, `$ENQW`, `$DEQ` and `$GETLKI` are system services like
+Accepted. `$ENQ`, `$ENQW`, `$DEQ` and `$GETLKI` are system services like
 the others: `SYS$name` changes mode to kernel, and the executive keeps the
 lock database, a resource block per resource and a lock block per lock,
 in nonpaged pool, and changes it at `IPL$_SYNCH`. Names, modes, flags,
@@ -96,9 +96,15 @@ manager's `SS$_` codes; only `RMS$_DEADLOCK` and `RMS$_EXENQLM`.
    print the names but not the numbers.
 4. **Completion.** Granting a lock writes the status block, sets the event
    flag and queues the completion AST with `SCH$QAST`, in the owner's
-   access mode. `$ENQW` waits for the event flag and the status, as
-   `$QIOW` does. A granted lock with a blocking AST gets it once for each
-   time it starts blocking a request; a conversion arms it again.
+   access mode. A lock may be granted from another process, whose context
+   can't write the owner's status block, so each request carries an AST
+   control block, made when `$ENQ` is called, while pool can still be
+   refused: granting queues it to the owner as a kernel mode AST,
+   `LCK$POST`, which writes the status block and sets the flag there, then
+   queues the caller's AST, as `IOC$POST` completes an IRP. `$ENQW` waits
+   for the event flag and the status, as `$QIOW` does. A granted lock
+   with a blocking AST gets it once for each time it starts blocking a
+   request; a conversion arms it again.
 5. **Deadlock search when a request has to wait**, not after
    `DEADLOCK_WAIT`. A cycle can only close when a request is queued, so
    searching from that request, along "waits for the holder of", finds
@@ -111,9 +117,10 @@ manager's `SS$_` codes; only `RMS$_DEADLOCK` and `RMS$_EXENQLM`.
 7. **BLISS-64 for the logic, MACRO-32 at the edges.** Queues, granting,
    conversions, deadlock search and `$GETLKI` are a BLISS-64 module,
    `vms/exec/locking.b64`, named after VMS's `LOCKING` execlet. Raising
-   and lowering IPL, waiting, and queueing ASTs stay in MACRO-32, which
-   the module calls through `LINKAGE`s for their JSB register contracts
-   ([ADR-0023](0023-calling-standard.md)).
+   and lowering IPL, waiting, checking the caller's arguments and queueing
+   ASTs stay in MACRO-32, `vms/exec/sysenqdeq.mar`, after VMS's
+   `SYSENQDEQ`, which the module calls through `LINKAGE`s for their JSB
+   register contracts ([ADR-0023](0023-calling-standard.md)).
 
 ## Alternatives considered
 
@@ -142,6 +149,11 @@ manager's `SS$_` codes; only `RMS$_DEADLOCK` and `RMS$_EXENQLM`.
   quotas; until then a process can fill pool with locks.
 - ponytail: the deadlock search runs at `IPL$_SYNCH` on every wait; with
   many locks it becomes a timer scan, as VMS's.
+- EXEC.EXE grew past what the PAL's 256 KB load buffer leaves room for:
+  the buffer is 512 KB now (`pal/src/main.c`).
+- ponytail: the hash table has 128 chains that never grow, and rundown
+  scans the lock ID table for the process's locks; a bigger table and a
+  list per process if locks get many.
 
 **What stays easy.**
 - Programs written for VMS's `$ENQ` run unchanged within the subset.
@@ -150,6 +162,11 @@ manager's `SS$_` codes; only `RMS$_DEADLOCK` and `RMS$_EXENQLM`.
   sublock, and a deadlock.
 
 **Follow-ups.**
+- Built first, for step 7: `$ENQ`, `$ENQW` and `$DEQ` with the flags
+  `CONVERT`, `NOQUEUE`, `SYNCSTS`, `SYSTEM` and `DEQALL`, completion
+  ASTs, qualified names and rundown. A value block, a blocking AST or a
+  parent lock fails with `SS$_BADPARAM` until it is built; the deadlock
+  search, `ENQLM` and `$GETLKI` come later too (`t8y:/exec/lock-manager`).
 - PRD-0003 step 7: the file system on a lock per volume and per file
   needs the file system's buffers per volume, which is why ADR-0020 kept
   one lock; that step's ADR supersedes ADR-0020.
