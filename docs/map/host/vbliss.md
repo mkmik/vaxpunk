@@ -39,21 +39,21 @@ note = "PRD-0004 step 9"
 
 [[feature]]
 id = "dot-lint"
-title = "The dot lint, rules 1 to 4"
+title = "The dot lint, rules 1 to 6"
 status = "done"
-note = "PRD-0004 step 10"
+note = "PRD-0004 step 10; rules 5 and 6 with t8y:/lang/bliss#lint-5-6"
 
 [[feature]]
 id = "missing"
 title = "GLOBAL BIND, GLOBAL registers, default structure references, PAL and atomic built-ins"
-status = "todo"
-note = "vbliss.md: not yet"
+status = "done"
+note = "t8y:/lang/bliss#missing-constructs"
 
 [[feature]]
 id = "psects"
 title = "PSECT attributes honoured, PLITs in the psect asked for, directories in REQUIRE"
-status = "todo"
-note = "data.rs and lib.rs ponytails"
+status = "done"
+note = "and EXTERNAL_NAME; crates/vbliss/tests/asm.rs"
 
 [[feature]]
 id = "debug-symbols"

@@ -33,6 +33,183 @@ pub enum Special {
     ChFind,
     ChFindNot,
     ChFindSub,
+    /// CH$TRANSLATE(tab, sn, sp, fill, dn, dp): the pointer past dp's n.
+    ChTranslate,
+    /// `<op>_ATOMIC_<size>(p, e [, retries] [; old])`: 1 if done.
+    Atomic {
+        op: crate::ir::Op,
+        size: u8,
+        retries: bool,
+        old: bool,
+    },
+    /// CMP_SWAP_x(addr, comparand, value): 1 if it stored value.
+    CmpSwap(u8),
+    /// TESTBITxx(field [, retries] [; done]): whether the bit was set
+    /// (`set_was`) or clear, then set or cleared (`set`).
+    TestBit {
+        was_set: bool,
+        set: bool,
+        retries: bool,
+        flag: bool,
+    },
+    /// ADAWI(srcaddr, dstaddr), as BLISS-32's (UM 4.1): adds the word at
+    /// srcaddr to the aligned word at dstaddr; the VAX condition codes of
+    /// the sum.
+    Adawi,
+    /// PAL_INSQUEx(pred, entry): 1 if the entry is now the only one.
+    Insque {
+        quad: bool,
+        deferred: bool,
+    },
+    /// PAL_REMQUEx(entry [; addr]): -1 if the queue was empty, 0 if it is
+    /// now, else 1; the entry's address stored in the output, R1 on Alpha.
+    Remque {
+        quad: bool,
+        deferred: bool,
+        addr: bool,
+    },
+    /// A PAL call with this function code; for CHMx, the first operand
+    /// is the change mode code.
+    Pal(u32),
+    Chm(u32),
+    Bpt,
+    RetAddr,
+    Rpcc,
+}
+
+/// The PAL calls vaxpunk's PAL has (DESIGN-0001), as BLISS-64's PAL_
+/// built-ins: the name, the function code, how many arguments and whether
+/// it returns a value.
+const PAL: &[(&str, u32, usize, bool)] = &[
+    ("PAL_HALT", 0x00, 0, false),
+    ("PAL_SWPCTX", 0x05, 1, true),
+    ("PAL_MFPR_IPL", 0x0E, 0, true),
+    ("PAL_MTPR_IPL", 0x0F, 1, true),
+    ("PAL_MFPR_PCBB", 0x12, 0, true),
+    ("PAL_MFPR_SCBB", 0x16, 0, true),
+    ("PAL_MTPR_SCBB", 0x17, 1, false),
+    ("PAL_MTPR_SIRR", 0x18, 1, false),
+    ("PAL_MFPR_SISR", 0x19, 0, true),
+    ("PAL_PROBER", 0x8F, 3, true),
+    ("PAL_PROBEW", 0x90, 3, true),
+    ("PAL_RD_PS", 0x91, 0, true),
+];
+
+/// BLISS-64's PAL built-ins vaxpunk's PAL doesn't have (RN 2.9.2): a
+/// compile error, but known names for BUILTIN.
+const NO_PAL: &[&str] = &[
+    "PAL_INSQHIL",
+    "PAL_INSQTIL",
+    "PAL_INSQHIQ",
+    "PAL_INSQTIQ",
+    "PAL_INSQHILR",
+    "PAL_INSQHIQR",
+    "PAL_INSQTILR",
+    "PAL_INSQTIQR",
+    "PAL_REMQHIL",
+    "PAL_REMQTIL",
+    "PAL_REMQHIQ",
+    "PAL_REMQTIQ",
+    "PAL_REMQHILR",
+    "PAL_REMQHIQR",
+    "PAL_REMQTILR",
+    "PAL_REMQTIQR",
+    "PAL_BUGCHK",
+    "PAL_IMB",
+    "PAL_SWASTEN",
+    "PAL_WR_PS_SW",
+    "PAL_CFLUSH",
+    "PAL_DRAINA",
+    "PAL_LDQP",
+    "PAL_STQP",
+    "PAL_GENTRAP",
+    "PAL_RSCC",
+    "PAL_READ_UNQ",
+    "PAL_WRITE_UNQ",
+    "PAL_MTPR_ASTSR",
+    "PAL_MTPR_FEN",
+    "PAL_MTPR_PRBR",
+    "PAL_MTPR_TBIAP",
+    "PAL_MTPR_IPIR",
+    "PAL_MTPR_MCES",
+    "PAL_MTPR_TBIS",
+    "PAL_MTPR_SSP",
+    "PAL_MTPR_ASTEN",
+    "PAL_MTPR_TBIA",
+    "PAL_MTPR_ESP",
+    "PAL_MTPR_USP",
+    "PAL_MTPR_VPTB",
+    "PAL_MTPR_TBISD",
+    "PAL_MTPR_TBISI",
+    "PAL_MTPR_DATFX",
+    "PAL_MTPR_ASN",
+    "PAL_MTPR_PERFMON",
+    "PAL_MFPR_MCES",
+    "PAL_MFPR_SSP",
+    "PAL_MFPR_WHAMI",
+    "PAL_MFPR_PTBR",
+    "PAL_MFPR_TBCHK",
+    "PAL_MFPR_ESP",
+    "PAL_MFPR_USP",
+    "PAL_MFPR_FEN",
+    "PAL_MFPR_PRBR",
+    "PAL_MFPR_ASTEN",
+    "PAL_MFPR_ASTSR",
+    "PAL_MFPR_VPTB",
+    "PAL_MFPR_ASN",
+    "WRITE_MBX",
+    "CMP_STORE_LONG",
+    "CMP_STORE_QUAD",
+];
+
+/// The other machine-specific built-ins vbliss has (RN 2.9), which a
+/// module must declare BUILTIN, as BLISSA64 has it.
+const MACHINE: &[&str] = &[
+    "CALL_PAL",
+    "PAL_CHME",
+    "PAL_CHMK",
+    "PAL_CHMS",
+    "PAL_CHMU",
+    "PAL_BPT",
+    "PAL_INSQUEL",
+    "PAL_INSQUEQ",
+    "PAL_INSQUEL_D",
+    "PAL_INSQUEQ_D",
+    "PAL_REMQUEL",
+    "PAL_REMQUEQ",
+    "PAL_REMQUEL_D",
+    "PAL_REMQUEQ_D",
+    "ADD_ATOMIC_LONG",
+    "ADD_ATOMIC_QUAD",
+    "AND_ATOMIC_LONG",
+    "AND_ATOMIC_QUAD",
+    "OR_ATOMIC_LONG",
+    "OR_ATOMIC_QUAD",
+    "CMP_SWAP_LONG",
+    "CMP_SWAP_QUAD",
+    "TESTBITSS",
+    "TESTBITSC",
+    "TESTBITCS",
+    "TESTBITCC",
+    "TESTBITSSI",
+    "TESTBITCCI",
+    "ADAWI",
+    "UMULH",
+    "CMPBGE",
+    "ZAP",
+    "ZAPNOT",
+    "RPCC",
+    "TRAPB",
+    "DRAINT",
+    "RETURNADDRESS",
+];
+
+/// Whether `name` is a built-in vbliss knows, for BUILTIN.
+fn known(name: &str) -> bool {
+    BUILTINS.contains(&name)
+        || MACHINE.contains(&name)
+        || NO_PAL.contains(&name)
+        || PAL.iter().any(|p| p.0 == name)
 }
 
 /// The built-ins vbliss knows, by name.
@@ -85,9 +262,14 @@ pub const BUILTINS: &[&str] = &[
     "CH$FIND_NOT_CH",
     "CH$FIND_SUB",
     "CH$FAIL",
+    "CH$TRANSTABLE",
+    "CH$TRANSLATE",
+    "SIGNALREF",
+    "SIGNALREF_STOP",
 ];
 
-/// The built-ins a module must declare BUILTIN to use (BLISSA64).
+/// The built-ins a module must declare BUILTIN to use (BLISSA64), with the
+/// machine-specific ones.
 const DECLARED: &[&str] = &[
     "ACTUALCOUNT",
     "ACTUALPARAMETER",
@@ -150,20 +332,68 @@ impl Parser<'_> {
         self.m.syms.len() - 1
     }
 
-    /// The actuals of a built-in, `(e, ...)`.
-    fn builtin_args(&mut self) -> R<Vec<Expr>> {
+    /// The actuals of a built-in, `(e, ... [; out, ...])`: the inputs and
+    /// the outputs, places the built-in stores in.
+    fn builtin_args(&mut self) -> R<(Vec<Expr>, Vec<Expr>)> {
         self.expect_punct('(')?;
-        let mut args = Vec::new();
+        let (mut args, mut outs) = (Vec::new(), Vec::new());
         if !self.eat_punct(')') {
-            loop {
-                args.push(self.value()?);
-                if !self.eat_punct(',') {
-                    break;
+            if !self.at_punct(';') {
+                loop {
+                    args.push(self.value()?);
+                    if !self.eat_punct(',') {
+                        break;
+                    }
+                }
+            }
+            if self.eat_punct(';') {
+                loop {
+                    outs.push(self.expr()?);
+                    if !self.eat_punct(',') {
+                        break;
+                    }
                 }
             }
             self.expect_punct(')')?;
         }
-        Ok(args)
+        Ok((args, outs))
+    }
+
+    /// `CH$TRANSTABLE(items)`, after its name: a PLIT of the translation
+    /// table's bytes (LRM 20.2.8).
+    fn transtable(&mut self) -> R<Expr> {
+        self.expect_punct('(')?;
+        let mut bytes = Vec::new();
+        self.trans_items(&mut bytes)?;
+        self.expect_punct(')')?;
+        let items = bytes
+            .into_iter()
+            .map(|b| crate::data::Init::Val(Expr::Num(b), 1))
+            .collect();
+        self.lets += 1;
+        Ok(Expr::Plit(self.lets - 1, false, items))
+    }
+
+    /// A translation string: codes and `REP n OF (items)`.
+    fn trans_items(&mut self, out: &mut Vec<i64>) -> R<()> {
+        loop {
+            if self.eat("REP") {
+                let n = self.ctce()?;
+                self.expect("OF")?;
+                self.expect_punct('(')?;
+                let mut group = Vec::new();
+                self.trans_items(&mut group)?;
+                self.expect_punct(')')?;
+                for _ in 0..n.max(0) {
+                    out.extend(&group);
+                }
+            } else {
+                out.push(self.ctce()? & 255);
+            }
+            if !self.eat_punct(',') {
+                return Ok(());
+            }
+        }
     }
 
     /// A temporary for a value used more than once.
@@ -174,8 +404,25 @@ impl Parser<'_> {
 
     /// The call of built-in `name`, after its name.
     pub(crate) fn builtin(&mut self, name: &str) -> R<Expr> {
-        let mut args = self.builtin_args()?;
+        if name == "CH$TRANSTABLE" {
+            return self.transtable();
+        }
+        if NO_PAL.contains(&name) {
+            return self.err(format!(
+                "{name}: vaxpunk's PAL has no such call (DESIGN-0001), or ARM64 no such operation"
+            ));
+        }
+        let (mut args, mut outs) = self.builtin_args()?;
         let n = args.len();
+        let takes_outputs = name.contains("_ATOMIC_")
+            || name.starts_with("TESTBIT")
+            || name.starts_with("PAL_REMQUE");
+        if !outs.is_empty() && !takes_outputs {
+            return self.err(format!("{name} has no output parameters"));
+        }
+        if outs.len() > 1 {
+            return self.err(format!("{name} has one output parameter"));
+        }
         let want = |p: &mut Self, k: usize| -> R<()> {
             if n == k {
                 Ok(())
@@ -315,12 +562,16 @@ impl Parser<'_> {
                 } else {
                     "LIB$STOP"
                 });
-                Expr::Call(Box::new(Expr::Name(r)), args)
+                Expr::Call(Box::new(Expr::Name(r)), args, Vec::new())
             }
             "SETUNWIND" => {
                 want(self, 0)?;
                 let r = self.library_routine("SYS$UNWIND");
-                Expr::Call(Box::new(Expr::Name(r)), vec![Expr::Num(0), Expr::Num(0)])
+                Expr::Call(
+                    Box::new(Expr::Name(r)),
+                    vec![Expr::Num(0), Expr::Num(0)],
+                    Vec::new(),
+                )
             }
             "ESTABLISH" => {
                 want(self, 1)?;
@@ -358,7 +609,8 @@ impl Parser<'_> {
                 let addr = args.remove(0);
                 match args.pop() {
                     Some(i) => add(addr, i),
-                    None => addr,
+                    // A pointer, not a name: the dot lint leaves it alone.
+                    None => Expr::Block(vec![addr], true),
                 }
             }
             "CH$PLUS" => {
@@ -475,8 +727,204 @@ impl Parser<'_> {
                 want(self, 4)?;
                 special(Special::ChFindSub, args)
             }
-            _ => return self.err(format!("{name} is not supported yet")),
+            "CH$TRANSLATE" => {
+                want(self, 6)?;
+                special(Special::ChTranslate, args)
+            }
+            "SIGNALREF" | "SIGNALREF_STOP" => {
+                if n == 0 {
+                    return self.err(format!("{name} takes a condition value's address"));
+                }
+                let r = self.library_routine(if name == "SIGNALREF" {
+                    "LIB$SIGNAL"
+                } else {
+                    "LIB$STOP"
+                });
+                args[0] = Expr::Fetch(Box::new(word(args.remove(0))));
+                Expr::Call(Box::new(Expr::Name(r)), args, Vec::new())
+            }
+            "ADD_ATOMIC_LONG" | "ADD_ATOMIC_QUAD" | "AND_ATOMIC_LONG" | "AND_ATOMIC_QUAD"
+            | "OR_ATOMIC_LONG" | "OR_ATOMIC_QUAD" => {
+                if !(2..=3).contains(&n) {
+                    return self.err(format!(
+                        "{name} takes an address, a value and a retry count"
+                    ));
+                }
+                let op = match &name[..2] {
+                    "AD" => crate::ir::Op::Add,
+                    "AN" => crate::ir::Op::And,
+                    _ => crate::ir::Op::Or,
+                };
+                let s = Special::Atomic {
+                    op,
+                    size: if name.ends_with("QUAD") { 8 } else { 4 },
+                    retries: n == 3,
+                    old: !outs.is_empty(),
+                };
+                args.append(&mut outs);
+                special(s, args)
+            }
+            "CMP_SWAP_LONG" | "CMP_SWAP_QUAD" => {
+                want(self, 3)?;
+                special(
+                    Special::CmpSwap(if name.ends_with("QUAD") { 8 } else { 4 }),
+                    args,
+                )
+            }
+            "TESTBITSS" | "TESTBITSC" | "TESTBITCS" | "TESTBITCC" | "TESTBITSSI" | "TESTBITCCI" => {
+                if !(1..=2).contains(&n) {
+                    return self.err(format!("{name} takes a bit field and a retry count"));
+                }
+                let b = name.as_bytes();
+                let s = Special::TestBit {
+                    was_set: b[7] == b'S',
+                    set: b[8] == b'S',
+                    retries: n == 2,
+                    flag: !outs.is_empty(),
+                };
+                args.append(&mut outs);
+                special(s, args)
+            }
+            "ADAWI" => {
+                want(self, 2)?;
+                special(Special::Adawi, args)
+            }
+            "PAL_INSQUEL" | "PAL_INSQUEQ" | "PAL_INSQUEL_D" | "PAL_INSQUEQ_D" => {
+                want(self, 2)?;
+                let s = Special::Insque {
+                    quad: name.as_bytes()[10] == b'Q',
+                    deferred: name.ends_with("_D"),
+                };
+                special(s, args)
+            }
+            "PAL_REMQUEL" | "PAL_REMQUEQ" | "PAL_REMQUEL_D" | "PAL_REMQUEQ_D" => {
+                want(self, 1)?;
+                let s = Special::Remque {
+                    quad: name.as_bytes()[10] == b'Q',
+                    deferred: name.ends_with("_D"),
+                    addr: !outs.is_empty(),
+                };
+                args.append(&mut outs);
+                special(s, args)
+            }
+            "CALL_PAL" => {
+                if !(1..=7).contains(&n) {
+                    return self.err("CALL_PAL takes a function code and up to six arguments");
+                }
+                let code = args.remove(0);
+                match fold(&code) {
+                    Some(c @ 0..=0xBF) => special(Special::Pal(c as u32), args),
+                    _ => return self.err("CALL_PAL's function code must be a constant, 0 to ^XBF"),
+                }
+            }
+            "PAL_CHME" | "PAL_CHMK" | "PAL_CHMS" | "PAL_CHMU" => {
+                if !(1..=7).contains(&n) {
+                    return self.err(format!("{name} takes a code and up to six arguments"));
+                }
+                let func = match name {
+                    "PAL_CHME" => 0x82,
+                    "PAL_CHMK" => 0x83,
+                    "PAL_CHMS" => 0x84,
+                    _ => 0x85,
+                };
+                special(Special::Chm(func), args)
+            }
+            "PAL_BPT" => {
+                want(self, 0)?;
+                special(Special::Bpt, args)
+            }
+            "RETURNADDRESS" => {
+                want(self, 0)?;
+                special(Special::RetAddr, args)
+            }
+            "RPCC" => {
+                want(self, 0)?;
+                special(Special::Rpcc, args)
+            }
+            "TRAPB" | "DRAINT" => {
+                // No pending arithmetic traps on ARM64.
+                want(self, 0)?;
+                Expr::Num(0)
+            }
+            "UMULH" => {
+                want(self, 2)?;
+                Expr::Op(
+                    crate::ir::Op::Umulh,
+                    Box::new(args.remove(0)),
+                    Box::new(args.remove(0)),
+                )
+            }
+            "CMPBGE" | "ZAP" | "ZAPNOT" => {
+                want(self, 2)?;
+                self.byte_op(name, args.remove(0), args.remove(0))
+            }
+            _ => match PAL.iter().find(|p| p.0 == name) {
+                Some(&(_, code, k, _)) => {
+                    want(self, k)?;
+                    special(Special::Pal(code), args)
+                }
+                None => return self.err(format!("{name} is not supported yet")),
+            },
         })
+    }
+
+    /// Alpha's byte operations, a byte at a time: CMPBGE(a, b) has bit i
+    /// set if byte i of a is at least byte i of b, unsigned; ZAP(a, m)
+    /// clears the bytes of a that m's bits 0-7 select, ZAPNOT the others.
+    fn byte_op(&mut self, name: &str, a: Expr, b: Expr) -> Expr {
+        let (ta, tb) = (self.temp(), self.temp());
+        let byte = |t: u32, i: i64| {
+            Expr::Bin(
+                BOp::And,
+                Box::new(Expr::Op(
+                    crate::ir::Op::Shr,
+                    Box::new(Expr::Temp(t)),
+                    Box::new(Expr::Num(i)),
+                )),
+                Box::new(Expr::Num(255)),
+            )
+        };
+        let mut e = Expr::Num(0);
+        for i in 0..8 {
+            let part = if name == "CMPBGE" {
+                let ge = Expr::Bin(
+                    BOp::Rel(Rel::Geq, true),
+                    Box::new(byte(ta, 8 * i)),
+                    Box::new(byte(tb, 8 * i)),
+                );
+                Expr::Op(crate::ir::Op::Shl, Box::new(ge), Box::new(Expr::Num(i)))
+            } else {
+                // The byte's mask where m's bit i says keep it.
+                let bit = Expr::Bin(
+                    BOp::And,
+                    Box::new(Expr::Op(
+                        crate::ir::Op::Shr,
+                        Box::new(Expr::Temp(tb)),
+                        Box::new(Expr::Num(i)),
+                    )),
+                    Box::new(Expr::Num(1)),
+                );
+                let keep = if name == "ZAP" {
+                    Expr::Bin(BOp::Xor, Box::new(bit), Box::new(Expr::Num(1)))
+                } else {
+                    bit
+                };
+                Expr::Bin(
+                    BOp::And,
+                    Box::new(Expr::Neg(Box::new(keep))),
+                    Box::new(Expr::Num(255i64 << (8 * i))),
+                )
+            };
+            e = Expr::Bin(BOp::Or, Box::new(e), Box::new(part));
+        }
+        if name != "CMPBGE" {
+            e = Expr::Bin(BOp::And, Box::new(Expr::Temp(ta)), Box::new(e));
+        }
+        Expr::Let(
+            ta,
+            Box::new(a),
+            Box::new(Expr::Let(tb, Box::new(b), Box::new(e))),
+        )
     }
 
     /// A CH$ function's character size, which must be 8.
@@ -608,7 +1056,7 @@ impl Parser<'_> {
                 Tok::Name(n) => n,
                 _ => return self.err("expected a built-in's name"),
             };
-            if !BUILTINS.contains(&name.as_str()) {
+            if !known(&name) {
                 return Err(self.error_at(&at, format!("{name} is not a built-in vbliss knows")));
             }
             self.declare(name, Kind::Builtin)?;

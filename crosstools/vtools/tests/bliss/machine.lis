@@ -1,0 +1,172 @@
+                                Source Listing                  DD-MMM-YYYY HH:MM:SS  BLISS-64E V1.11-007-48G4L         Page 1
+                                                                DD-MMM-YYYY HH:MM:SS  SYS$SYSDEVICE:[ORACLE]MACHINE.B64;1
+
+    0	      1 MODULE MACHINE (MAIN = MAIN) =
+    0	      2 BEGIN
+    1	      3 ! The machine-specific built-ins (RN 2.9): atomic updates, the TESTBITs,
+    1	      4 ! ADAWI, UMULH and the byte operations, the queue PAL calls, and
+    1	      5 ! CH$TRANSTABLE and CH$TRANSLATE.
+    1	      6 REQUIRE 'PRINT';
+ R  1	      7 ! PRINT: prints a value as a signed decimal and as 16 hex digits, on a line
+ R  1	      8 ! of its own, through LIB$PUT_OUTPUT. The behaviour tests print with it,
+ R  1	      9 ! here under vrun and on OpenVMS for the oracle.
+ R  1	     10 
+ R  1	     11 EXTERNAL ROUTINE
+ R  1	     12     LIB$PUT_OUTPUT;
+ R  1	     13 
+ R  1	     14 ROUTINE PRINT (V) : NOVALUE =
+ R  1	     15     BEGIN
+ R  2	     16     LOCAL
+ R  2	     17         BUF : VECTOR[48, BYTE],
+ R  2	     18         DESC : VECTOR[2, LONG],
+ R  2	     19         X,
+ R  2	     20         I;
+ R  2	     21     I = 48;
+ R  2	     22     X = .V;
+ R  2	     23     INCR K FROM 1 TO 16 DO
+ R  2	     24         BEGIN
+ R  3	     25         LOCAL D;
+ R  3	     26         D = .X AND 15;
+ R  3	     27         I = .I - 1;
+ R  3	     28         BUF[.I] = (IF .D LSS 10 THEN %C'0' + .D ELSE %C'A' + .D - 10);
+ R  3	     29         X = .X ^ -4 AND %X'0FFFFFFFFFFFFFFF'
+ R  3	     30         END;
+ R  2	     31     I = .I - 1;
+ R  2	     32     BUF[.I] = %C' ';
+ R  2	     33     ! Digits from the remainders, negative for a negative value, so that
+ R  2	     34     ! the most negative one prints too.
+ R  2	     35     X = .V;
+ R  2	     36     DO
+ R  2	     37         BEGIN
+ R  3	     38         LOCAL D;
+ R  3	     39         D = .X - (.X / 10) * 10;
+ R  3	     40         IF .D LSS 0 THEN D = -.D;
+ R  3	     41         I = .I - 1;
+ R  3	     42         BUF[.I] = %C'0' + .D;
+ R  3	     43         X = .X / 10
+ R  3	     44         END
+ R  3	     45     UNTIL .X EQL 0;
+ R  2	     46     IF .V LSS 0
+ R  2	     47     THEN
+ R  2	     48         BEGIN
+ R  3	     49         I = .I - 1;
+ R  3	     50         BUF[.I] = %C'-'
+ R  3	     51         END;
+ R  2	     52     DESC[0] = 48 - .I + %X'010E0000';
+ R  2	     53     DESC[1] = BUF[.I];
+ R  2	     54     LIB$PUT_OUTPUT(DESC)
+ R  2	     55     END;
+    1	     56 
+    1	     57 BUILTIN
+
+MACHINE                         Source Listing                  DD-MMM-YYYY HH:MM:SS  BLISS-64E V1.11-007-48G4L         Page 2
+                                                                DD-MMM-YYYY HH:MM:SS  SYS$SYSDEVICE:[ORACLE]MACHINE.B64;1
+
+    1	     58     ADD_ATOMIC_QUAD, ADD_ATOMIC_LONG, AND_ATOMIC_LONG, OR_ATOMIC_QUAD,
+    1	     59     TESTBITSS, TESTBITSC, TESTBITCS, TESTBITCC, TESTBITSSI, TESTBITCCI,
+    1	     60     ADAWI, UMULH, CMPBGE, ZAP, ZAPNOT, TRAPB,
+    1	     61     PAL_INSQUEL, PAL_REMQUEL, PAL_INSQUEQ, PAL_REMQUEQ;
+    1	     62 
+    1	     63 OWN
+    1	     64     Q : INITIAL(10),
+    1	     65     L : VECTOR[2, LONG] INITIAL(LONG(-1, 7)),
+    1	     66     FLAGS : BITVECTOR[64],
+    1	     67     W : VECTOR[4, WORD] INITIAL(WORD(%X'7FFF', 0, %X'FFFF', 5)),
+    1	     68     ADD : VECTOR[2, WORD] INITIAL(WORD(1, -2)),
+    1	     69     HEAD : VECTOR[2, LONG],
+    1	     70     E1 : VECTOR[2, LONG],
+    1	     71     E2 : VECTOR[2, LONG],
+    1	     72     QHEAD : VECTOR[2] ALIGN(4),
+    1	     73     QE1 : VECTOR[2] ALIGN(4),
+    1	     74     SRC : VECTOR[8, BYTE] INITIAL(BYTE(%C'+', %C'1', %C'x', %C'2', %C' ', %C'?', %C'-', %C'9')),
+    1	     75     DST : VECTOR[12, BYTE];
+    1	     76 
+    1	     77 ROUTINE MAIN =
+    1	     78     BEGIN
+    2	     79     LOCAL
+    2	     80         OLD,
+    2	     81         DONE,
+    2	     82         R;
+    2	     83     PRINT(ADD_ATOMIC_QUAD(Q, 5; OLD));
+    2	     84     PRINT(.OLD);
+    2	     85     PRINT(.Q);
+    2	     86     PRINT(ADD_ATOMIC_LONG(L, 1, 3; OLD));
+    2	     87     PRINT(.OLD);
+    2	     88     PRINT(.L[0]);
+    2	     89     PRINT(.L[1]);
+    2	     90     AND_ATOMIC_LONG(L[1], 3);
+    2	     91     PRINT(.L[1]);
+    2	     92     OR_ATOMIC_QUAD(Q, %X'100');
+    2	     93     PRINT(.Q);
+    2	     94 
+    2	     95     PRINT(TESTBITSS(FLAGS[3]));
+    2	     96     PRINT(TESTBITSS(FLAGS[3]));
+    2	     97     PRINT(TESTBITCS(FLAGS[40], 5; DONE));
+    2	     98     PRINT(.DONE);
+    2	     99     PRINT(TESTBITSC(FLAGS[40]));
+    2	    100     PRINT(TESTBITCC(FLAGS[40]));
+    2	    101     PRINT(TESTBITSSI(FLAGS[63]));
+    2	    102     PRINT(TESTBITCCI(FLAGS[63]));
+    2	    103     PRINT(.FLAGS<0, 64>);
+    2	    104 
+    2	    105     PRINT(ADAWI(ADD[0], W[0]));
+    2	    106     PRINT(.W[0]);
+    2	    107     PRINT(ADAWI(ADD[0], W[2]));
+    2	    108     PRINT(.W[2]);
+    2	    109     PRINT(ADAWI(ADD[1], W[3]));
+    2	    110     PRINT(.W[3]);
+    2	    111 
+    2	    112     PRINT(UMULH(-1, 16));
+    2	    113     PRINT(UMULH(%X'123456789', %X'1000000000'));
+    2	    114     PRINT(CMPBGE(%X'0102030405060708', %X'0807060504030201'));
+
+MACHINE                         Source Listing                  DD-MMM-YYYY HH:MM:SS  BLISS-64E V1.11-007-48G4L         Page 3
+                                                                DD-MMM-YYYY HH:MM:SS  SYS$SYSDEVICE:[ORACLE]MACHINE.B64;1
+
+    2	    115     PRINT(ZAP(-1, %X'0F'));
+    2	    116     PRINT(ZAPNOT(%X'1122334455667788', %X'81'));
+    2	    117     TRAPB();
+    2	    118 
+    2	    119     ! Longword queues: insert two, remove them.
+    2	    120     HEAD[0] = HEAD;
+    2	    121     HEAD[1] = HEAD;
+    2	    122     PRINT(PAL_INSQUEL(HEAD, E1));
+    2	    123     PRINT(PAL_INSQUEL(E1, E2));
+    2	    124     PRINT(.HEAD[0] EQL E1);
+    2	    125     PRINT(.HEAD[1] EQL E2);
+    2	    126     PRINT(PAL_REMQUEL(.HEAD[0]; R));
+    2	    127     PRINT(.R EQL E1);
+    2	    128     PRINT(PAL_REMQUEL(.HEAD[0]; R));
+    2	    129     PRINT(.R EQL E2);
+    2	    130     PRINT(PAL_REMQUEL(HEAD; R));
+    2	    131     ! A quadword queue.
+    2	    132     QHEAD[0] = QHEAD;
+    2	    133     QHEAD[1] = QHEAD;
+    2	    134     PRINT(PAL_INSQUEQ(QHEAD, QE1));
+    2	    135     PRINT(.QHEAD[1] EQL QE1);
+    2	    136     PRINT(PAL_REMQUEQ(QE1; R));
+    2	    137 
+    2	    138         BEGIN
+    3	    139         BIND
+    3	    140             TAB = CH$TRANSTABLE(REP 32 OF (%C'*'), %C' ', REP 10 OF (%C'*'), %C'+',
+    3	    141                 REP 1 OF (%C'*'), %C'-', REP 2 OF (%C'*'), %C'0', %C'1', %C'2', %C'3',
+    3	    142                 %C'4', %C'5', %C'6', %C'7', %C'8', %C'9', REP 198 OF (%C'*'));
+    3	    143         R = CH$TRANSLATE(TAB, 8, SRC, %C'.', 12, DST);
+    3	    144         PRINT(.R - DST);
+    3	    145         PRINT(.DST[0] + .DST[1] ^ 8 + .DST[2] ^ 16 + .DST[3] ^ 24 + .DST[4] ^ 32
+    3	    146             + .DST[5] ^ 40 + .DST[6] ^ 48 + .DST[7] ^ 56);
+    3	    147         PRINT(.DST[8] + .DST[11] ^ 8);
+    3	    148         END;
+    2	    149     1
+    2	    150     END;
+    1	    151 
+    1	    152 END
+    1	    153 ELUDOM
+
+
+                                Source Listing                  DD-MMM-YYYY HH:MM:SS  BLISS-64E V1.11-007-48G4L         Page 4
+                                Source Listing                  DD-MMM-YYYY HH:MM:SS  SYS$SYSDEVICE:[ORACLE]MACHINE.B64;1
+
+COMMAND LINE:
+
+BLISS/A64/LIST/SOURCE_LIST=(EXPAND_MACROS,REQUIRE)/NOMACHINE_CODE MACHINE.B64

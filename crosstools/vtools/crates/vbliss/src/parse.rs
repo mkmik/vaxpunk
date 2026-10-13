@@ -57,6 +57,9 @@ pub enum Kind {
     Builtin,
     /// An EXTERNAL LITERAL: a value the linker gives, its symbol's.
     ExternalLiteral,
+    /// The STRUCTURE switch's default structure attribute, under the name
+    /// `%STRUCTURE`, which no source can declare.
+    DefaultStructure(Option<Rc<StructAttr>>),
 }
 
 #[derive(Clone, Debug)]
@@ -136,7 +139,9 @@ pub enum Expr {
     Not(Box<Expr>),
     Bin(BOp, Box<Expr>, Box<Expr>),
     Assign(Box<Expr>, Box<Expr>),
-    Call(Box<Expr>, Vec<Expr>),
+    /// A call: the routine, its standard actuals, and what goes through
+    /// registers, as its linkage says (`linkage.rs`).
+    Call(Box<Expr>, Vec<Expr>, Vec<Link>),
     /// A block's expressions; `value` unless it ends with a semicolon.
     Block(Vec<Expr>, bool),
     If(Box<Expr>, Box<Expr>, Option<Box<Expr>>),
@@ -175,9 +180,26 @@ pub enum Expr {
     Return(Option<Box<Expr>>),
 }
 
+/// VAX registers and the data that goes in each.
+pub type Registers = Vec<(u8, usize)>;
+
+/// A register a call passes a value in, takes one back from, or both: a
+/// register parameter, an output parameter or a global register segment.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Link {
+    pub reg: u8,
+    pub input: Option<Expr>,
+    /// The place the register's value is stored in after the call.
+    pub output: Option<Expr>,
+}
+
 pub struct Routine {
     pub sym: usize,
     pub formals: Vec<usize>,
+    /// EXTERNAL REGISTER data, read from its register at entry, and
+    /// output formals; both left in their registers at return.
+    pub externals: Registers,
+    pub outputs: Registers,
     pub body: Expr,
     /// The sizes of its frame slots.
     pub slots: Vec<u32>,
@@ -229,8 +251,11 @@ pub struct Module {
     /// words; and where the storage classes go now.
     pub psect_attrs: Vec<(String, String)>,
     pub psects: Psects,
-    /// GLOBAL LITERALs: names and values.
-    pub global_literals: Vec<(String, i64)>,
+    /// The psects PLITs with a PSECT attribute go in, by number.
+    pub plit_psects: HashMap<u32, String>,
+    /// GLOBAL LITERALs and GLOBAL BINDs: names and values, link-time
+    /// constants.
+    pub global_literals: Vec<(String, Expr)>,
 }
 
 /// A fatal error: the file, line and column (from 0) it is at.
@@ -396,6 +421,25 @@ pub struct Parser<'a> {
     pub(crate) address_context: u32,
     /// The system services' and library routines' mechanisms, once read.
     pub(crate) services: Option<HashMap<String, Vec<crate::lint::Mechanism>>>,
+    /// Rule 6 of the dot lint: how data is used, and the calls to check.
+    pub(crate) uses: HashMap<usize, crate::lint::Use>,
+    pub(crate) calls: Vec<(usize, Vec<crate::lint::Passed>, Lexeme)>,
+    pub(crate) stores: Vec<(usize, String, Lexeme)>,
+    /// What a MAP's name stands for: the data it maps.
+    pub(crate) mapped: HashMap<usize, usize>,
+    /// Whether the expression about to be parsed is a call's actual.
+    whole_actual: bool,
+    /// The module's STRUCTURE switch, read once the structures are.
+    pending_structure: Option<Vec<Lexeme>>,
+    /// The EXTERNAL_NAME and PSECT the last routine attributes gave.
+    routine_name: Option<String>,
+    routine_psect: Option<String>,
+    /// GLOBAL and EXTERNAL REGISTER data: their registers.
+    pub(crate) reg_data: HashMap<usize, u8>,
+    /// The routines being parsed: their linkages, and their EXTERNAL
+    /// REGISTER data and output formals, as `Routine` has them.
+    pub(crate) exits: Vec<(Registers, Registers)>,
+    linkages_now: Vec<Option<Rc<Linkage>>>,
 }
 
 /// Parses the module in `text`, from file `name`.
@@ -433,12 +477,26 @@ pub fn parse(name: &str, text: &str, load: Loader, opts: &Options) -> Front {
         undeclared: Vec::new(),
         address_context: 0,
         services: None,
+        pending_structure: None,
+        uses: HashMap::new(),
+        calls: Vec::new(),
+        stores: Vec::new(),
+        mapped: HashMap::new(),
+        whole_actual: false,
+        routine_name: None,
+        routine_psect: None,
+        reg_data: HashMap::new(),
+        exits: Vec::new(),
+        linkages_now: Vec::new(),
     };
     p.lx.variant = opts.variant;
     p.m.dialect = opts.dialect;
     WIDE32.set(opts.dialect.a32);
     p.predeclare();
     let mut module = p.module();
+    if module.is_ok() {
+        p.lint_formals();
+    }
     if let (Ok(_), Some(d)) = (&module, p.diags.iter().find(|d| d.sev == 'E')) {
         module = Err(Error {
             file: p.lx.files[d.file as usize].name.clone(),
@@ -685,6 +743,11 @@ impl Parser<'_> {
         r
     }
 
+    /// The linkage of the routine being parsed.
+    pub(crate) fn linkage_now(&self) -> Option<Rc<Linkage>> {
+        self.linkages_now.last().cloned().flatten()
+    }
+
     /// Whether a routine's frame is open, for data a block computes.
     pub(crate) fn slots_open(&self) -> bool {
         self.routines > 0
@@ -865,6 +928,9 @@ impl Parser<'_> {
         self.expect_punct('=')?;
         // The switches set, the structures they change are declared.
         self.predeclare_structures()?;
+        if let Some(toks) = self.pending_structure.take() {
+            self.subparse(toks, |p| p.structure_switch())?;
+        }
         let paren = self.eat_punct('(');
         if !paren {
             self.expect("BEGIN")?;
@@ -899,6 +965,9 @@ impl Parser<'_> {
             Tok::Name(n) => Ok(n),
             _ => self.err("expected a module switch"),
         })?;
+        if name == "STRUCTURE" && self.at_punct('(') {
+            return self.structure_switch();
+        }
         if self.eat_punct('=') {
             match (name.as_str(), self.next()) {
                 ("MAIN", Tok::Name(n)) => self.m.main = Some(n),
@@ -924,6 +993,51 @@ impl Parser<'_> {
                 }
             }
         }
+        Ok(())
+    }
+
+    /// `STRUCTURE(attribute)`, after the switch's name: the default
+    /// structure for default structure references in the block (LRM 11.8,
+    /// 18.2). A module switch's is read once the structures it names are
+    /// declared.
+    fn structure_switch(&mut self) -> R<()> {
+        if self.lookup("VECTOR").is_none() {
+            let start = self.pos;
+            let mut depth = 0;
+            loop {
+                match self.next() {
+                    Tok::Punct('(') => depth += 1,
+                    Tok::Punct(')') => {
+                        depth -= 1;
+                        if depth == 0 {
+                            break;
+                        }
+                    }
+                    Tok::Eof => return self.err("unbalanced parentheses"),
+                    _ => {}
+                }
+            }
+            self.pending_structure = Some(self.toks[start..self.pos].to_vec());
+            return Ok(());
+        }
+        self.expect_punct('(')?;
+        let attr = if self.at_punct(')') {
+            None
+        } else {
+            let refr = self.eat("REF");
+            Some(Rc::new(self.struct_attr(refr)?))
+        };
+        self.expect_punct(')')?;
+        let id = self.m.syms.len();
+        self.m.syms.push(Sym {
+            name: "%STRUCTURE".into(),
+            asm: String::new(),
+            kind: Kind::DefaultStructure(attr),
+        });
+        self.scopes
+            .last_mut()
+            .unwrap()
+            .insert("%STRUCTURE".into(), id);
         Ok(())
     }
 
@@ -1048,8 +1162,14 @@ impl Parser<'_> {
                     }
                     return self.literals(global).map(|_| true);
                 }
+                Tok::Name(n) if n == "REGISTER" && !forward => {
+                    self.pos += 2;
+                    return self.registers(global, external).map(|_| true);
+                }
                 Tok::Name(n) if n == "BIND" && global => {
-                    return self.err("GLOBAL BIND is not supported yet");
+                    self.pos += 2;
+                    let routine = self.eat("ROUTINE");
+                    return self.binds(routine, true).map(|_| true);
                 }
                 _ if forward => return self.err("expected ROUTINE after FORWARD"),
                 _ => {}
@@ -1089,7 +1209,7 @@ impl Parser<'_> {
             "BIND" => {
                 self.pos += 1;
                 let routine = self.eat("ROUTINE");
-                self.binds(routine)?;
+                self.binds(routine, false)?;
             }
             "MAP" => {
                 self.pos += 1;
@@ -1170,7 +1290,8 @@ impl Parser<'_> {
                 self.library_file(&String::from_utf8_lossy(&name))?;
             }
             "REGISTER" => {
-                return self.err(format!("{word} declarations are not supported yet"));
+                self.pos += 1;
+                self.registers(false, false)?;
             }
             _ => return Ok(false),
         }
@@ -1183,7 +1304,7 @@ impl Parser<'_> {
             self.expect_punct('=')?;
             let v = self.ctce()?;
             if global {
-                self.m.global_literals.push((name.clone(), v));
+                self.m.global_literals.push((name.clone(), Expr::Num(v)));
             }
             if self.eat_punct(':') {
                 while matches!(self.peek(), Tok::Name(n) if matches!(n.as_str(),
@@ -1289,7 +1410,7 @@ impl Parser<'_> {
         loop {
             let name = self.name()?;
             let (novalue, linkage) = self.routine_attributes()?;
-            self.declare(
+            let id = self.declare(
                 name,
                 Kind::Routine {
                     global: false,
@@ -1298,6 +1419,9 @@ impl Parser<'_> {
                     linkage,
                 },
             )?;
+            if let Some(n) = self.routine_name.take() {
+                self.m.syms[id].asm = n;
+            }
             if !self.eat_punct(',') {
                 return Ok(());
             }
@@ -1305,13 +1429,22 @@ impl Parser<'_> {
     }
 
     /// `: NOVALUE`, a linkage name and the like; returns whether NOVALUE
-    /// and the linkage.
+    /// and the linkage. EXTERNAL_NAME and PSECT go in `routine_name` and
+    /// `routine_psect` for the routine being declared.
     pub(crate) fn routine_attributes(&mut self) -> R<(bool, Option<Rc<Linkage>>)> {
         let (mut novalue, mut linkage) = (false, None);
+        self.routine_name = None;
+        self.routine_psect = None;
         if self.eat_punct(':') {
             loop {
                 if self.eat("NOVALUE") {
                     novalue = true;
+                } else if self.eat("EXTERNAL_NAME") {
+                    self.routine_name = Some(self.external_name()?);
+                } else if self.eat("PSECT") {
+                    self.expect_punct('(')?;
+                    self.routine_psect = Some(self.name()?);
+                    self.expect_punct(')')?;
                 } else if self.eat("WEAK") || self.eat("VARIABLE") {
                 } else if let Tok::Name(n) = self.peek().clone()
                     && let Some(Kind::Linkage(l)) = self.lookup(&n).map(|id| &self.m.syms[id].kind)
@@ -1328,23 +1461,28 @@ impl Parser<'_> {
 
     pub(crate) fn routine(&mut self, global: bool) -> R<()> {
         let name = self.name()?;
-        let mut names = Vec::new();
+        let (mut names, mut out_names) = (Vec::new(), Vec::new());
         if self.eat_punct('(') {
+            let mut list = &mut names;
             loop {
+                if self.eat_punct(';') {
+                    list = &mut out_names;
+                }
                 let n = self.name()?;
                 let a = if self.eat_punct(':') {
                     self.attributes()?
                 } else {
                     crate::data::Attrs::default()
                 };
-                names.push((n, a));
-                if !self.eat_punct(',') {
+                list.push((n, a));
+                if !self.eat_punct(',') && !self.at_punct(';') {
                     break;
                 }
             }
             self.expect_punct(')')?;
         }
         let (novalue, mut linkage) = self.routine_attributes()?;
+        let (asm, psect) = (self.routine_name.take(), self.routine_psect.take());
         if linkage.is_none()
             && let Some(Kind::Routine { linkage: l, .. }) = self
                 .scopes
@@ -1364,6 +1502,12 @@ impl Parser<'_> {
                 "{name} has more formals than its JSB linkage has registers"
             ));
         }
+        let out_regs = linkage.as_ref().map_or(&[][..], |l| &l.outs[..]).to_vec();
+        if out_names.len() > out_regs.len() {
+            return self.err(format!(
+                "{name} has more output formals than its linkage has output parameters"
+            ));
+        }
         let sym = self.declare(
             name,
             Kind::Routine {
@@ -1377,11 +1521,15 @@ impl Parser<'_> {
         {
             *g = global;
         }
+        if let Some(n) = asm {
+            self.m.syms[sym].asm = n;
+        }
         self.expect_punct('=')?;
         let outer = std::mem::take(&mut self.slots);
         self.scopes.push(HashMap::new());
         let mut formals = Vec::new();
         for (n, mut a) in names {
+            let refr = a.structure.as_ref().is_some_and(|s| s.refr);
             let kind = self.data_kind(Storage::Local(0), &mut a)?;
             if let Kind::Data {
                 storage: Storage::Local(slot),
@@ -1392,18 +1540,37 @@ impl Parser<'_> {
                 let s = &mut self.slots[slot as usize];
                 *s = (*s).max(8);
             }
-            formals.push(self.declare(n, kind)?);
+            let id = self.declare(n, kind)?;
+            if refr {
+                self.uses.entry(id).or_default().address = true;
+            }
+            formals.push(id);
         }
+        let mut outputs = Vec::new();
+        for ((n, mut a), r) in out_names.into_iter().zip(out_regs) {
+            let kind = self.data_kind(Storage::Local(0), &mut a)?;
+            outputs.push((r, self.declare(n, kind)?));
+        }
+        let linkage = match &self.m.syms[sym].kind {
+            Kind::Routine { linkage, .. } => linkage.clone(),
+            _ => None,
+        };
+        self.linkages_now.push(linkage);
+        self.exits.push((Vec::new(), outputs));
         self.routines += 1;
         let body = self.expr();
         self.routines -= 1;
+        self.linkages_now.pop();
+        let (externals, outputs) = self.exits.pop().unwrap();
         let body = body?;
         self.scopes.pop();
         let slots = std::mem::replace(&mut self.slots, outer);
-        let psect = self.m.psects.code.clone();
+        let psect = psect.unwrap_or_else(|| self.m.psects.code.clone());
         self.m.routines.push(Routine {
             sym,
             formals,
+            externals,
+            outputs,
             body,
             slots,
             psect,
@@ -1414,9 +1581,16 @@ impl Parser<'_> {
     // Expressions, from the loosest operator to the tightest.
 
     pub fn expr(&mut self) -> R<Expr> {
+        let actual = std::mem::take(&mut self.whole_actual);
         let left = self.binary(0)?;
-        if self.eat_punct('=') {
+        if self.at_punct('=') {
+            let at = self.here();
+            self.pos += 1;
             let right = self.value()?;
+            // An actual `K = X` is a keyword macro's, if one undeclared.
+            if !actual {
+                self.lint_store(&left, &right, &at);
+            }
             return Ok(Expr::Assign(Box::new(left), Box::new(right)));
         }
         Ok(left)
@@ -1640,6 +1814,7 @@ impl Parser<'_> {
             let e = e?;
             self.check_inside(&e, &at);
             self.lint_fetch(&e, start, &at);
+            self.note_use(&e, true);
             return Ok(Expr::Fetch(Box::new(e)));
         }
         if self.eat_punct('-') {
@@ -1651,24 +1826,41 @@ impl Parser<'_> {
         let mut e = self.primary()?;
         loop {
             if self.eat_punct('(') {
-                let mut args = Vec::new();
+                let (mut args, mut outs) = (Vec::new(), Vec::new());
                 if !self.eat_punct(')') {
-                    loop {
-                        args.push(self.value()?);
-                        if !self.eat_punct(',') {
-                            break;
+                    if !self.at_punct(';') {
+                        loop {
+                            self.whole_actual = true;
+                            args.push(self.value()?);
+                            if !self.eat_punct(',') {
+                                break;
+                            }
+                        }
+                    }
+                    if self.eat_punct(';') {
+                        loop {
+                            outs.push(if self.at_punct(',') || self.at_punct(')') {
+                                None
+                            } else {
+                                Some(self.expr()?)
+                            });
+                            if !self.eat_punct(',') {
+                                break;
+                            }
                         }
                     }
                     self.expect_punct(')')?;
                 }
                 let at = self.last();
                 self.lint_call(&e, &args, &at);
-                e = Expr::Call(Box::new(e), args);
+                self.note_call(&e, &args, &at);
+                e = self.link_call(e, args, outs)?;
             } else if self.at_punct('<') {
                 if matches!(e, Expr::Field(..) | Expr::Let(..)) {
                     let at = self.here();
                     self.diag('W', &at, "Two consecutive field selectors".into());
                 }
+                self.note_use(&e, true);
                 self.pos += 1;
                 let pos = self.expr()?;
                 self.expect_punct(',')?;
@@ -1685,22 +1877,28 @@ impl Parser<'_> {
                     Expr::Name(id) => match &self.m.syms[id].kind {
                         Kind::Data {
                             structure: Some(a), ..
-                        } => Some((id, a.clone())),
+                        } => Some((Some(id), a.clone())),
                         _ => None,
                     },
                     _ => None,
                 };
+                // Else a default structure reference (LRM 11.8).
+                let attr = attr.or_else(|| match self.lookup("%STRUCTURE") {
+                    Some(d) => match &self.m.syms[d].kind {
+                        Kind::DefaultStructure(Some(a)) => Some((None, a.clone())),
+                        _ => None,
+                    },
+                    None => None,
+                });
                 let Some((id, a)) = attr else {
-                    return self.err("a structure reference needs a name with a structure");
+                    return self.err(
+                        "a structure reference needs a name with a structure or a STRUCTURE switch",
+                    );
                 };
                 self.pos += 1;
-                let access = self.access_actuals_of(Some((id, &a.fields)))?;
+                let access = self.access_actuals_of(id.map(|id| (id, &a.fields[..])))?;
                 self.expect_punct(']')?;
-                let seg = if a.refr {
-                    Expr::Fetch(Box::new(Expr::Name(id)))
-                } else {
-                    Expr::Name(id)
-                };
+                let seg = if a.refr { Expr::Fetch(Box::new(e)) } else { e };
                 e = self.instantiate(&a.st, seg, access, &a.alloc);
             } else {
                 return Ok(e);

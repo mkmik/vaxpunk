@@ -1,0 +1,57 @@
+MODULE DEFAULTS (MAIN = MAIN, STRUCTURE(VECTOR[4])) =
+BEGIN
+! Default structure references (LRM 11.8): an address followed by
+! access actuals takes the STRUCTURE switch's structure, the module's or
+! a block's; and GLOBAL BIND.
+REQUIRE 'PRINT';
+
+FIELD
+    FL = [0, 0, 32, 0],
+    FR = [0, 32, 32, 1];
+
+OWN
+    X : INITIAL(11),
+    W : VECTOR[4] INITIAL(1, 2, 3, 4),
+    N1 : VECTOR[3] INITIAL(100, 0, 0),
+    N2 : VECTOR[3] INITIAL(200, 0, 0),
+    TREE : VECTOR[3];
+
+GLOBAL BIND
+    SECOND = W[1],
+    BUMP = W + 16;
+
+GLOBAL BIND ROUTINE
+    TELL = PRINT;
+
+ROUTINE MAIN =
+    BEGIN
+    ! The module's switch: X has no structure of its own.
+    PRINT(.X[0]);
+    X[0] = .W[3];
+    PRINT(.X);
+    ! An expression's address: (W)[I] is VECTOR[4] by default too.
+    PRINT(.(W + 8)[1]);
+        BEGIN
+        SWITCHES STRUCTURE(BLOCK[1]);
+        W[2] = -5;
+        ! W has its own structure; W[2] is its third element, read
+        ! through the default BLOCK as two halves.
+        PRINT(.W[2][FL]);
+        PRINT(.W[2][FR]);
+        END;
+        BEGIN
+        SWITCHES STRUCTURE(REF VECTOR[3]);
+        ! Pointers followed through REF: TREE[1] and TREE[2] point at N1
+        ! and N2.
+        TREE[1] = N1;
+        TREE[2] = N2;
+        PRINT(.TREE[1][0] + .TREE[2][0]);
+        END;
+    PRINT(.SECOND);
+    PRINT(.BUMP);
+    TELL(42);
+    1
+    END;
+
+END
+ELUDOM

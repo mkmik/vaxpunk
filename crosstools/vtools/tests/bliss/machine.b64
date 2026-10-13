@@ -1,0 +1,104 @@
+MODULE MACHINE (MAIN = MAIN) =
+BEGIN
+! The machine-specific built-ins (RN 2.9): atomic updates, the TESTBITs,
+! ADAWI, UMULH and the byte operations, the queue PAL calls, and
+! CH$TRANSTABLE and CH$TRANSLATE.
+REQUIRE 'PRINT';
+
+BUILTIN
+    ADD_ATOMIC_QUAD, ADD_ATOMIC_LONG, AND_ATOMIC_LONG, OR_ATOMIC_QUAD,
+    TESTBITSS, TESTBITSC, TESTBITCS, TESTBITCC, TESTBITSSI, TESTBITCCI,
+    ADAWI, UMULH, CMPBGE, ZAP, ZAPNOT, TRAPB,
+    PAL_INSQUEL, PAL_REMQUEL, PAL_INSQUEQ, PAL_REMQUEQ;
+
+OWN
+    Q : INITIAL(10),
+    L : VECTOR[2, LONG] INITIAL(LONG(-1, 7)),
+    FLAGS : BITVECTOR[64],
+    W : VECTOR[4, WORD] INITIAL(WORD(%X'7FFF', 0, %X'FFFF', 5)),
+    ADD : VECTOR[2, WORD] INITIAL(WORD(1, -2)),
+    HEAD : VECTOR[2, LONG],
+    E1 : VECTOR[2, LONG],
+    E2 : VECTOR[2, LONG],
+    QHEAD : VECTOR[2] ALIGN(4),
+    QE1 : VECTOR[2] ALIGN(4),
+    SRC : VECTOR[8, BYTE] INITIAL(BYTE(%C'+', %C'1', %C'x', %C'2', %C' ', %C'?', %C'-', %C'9')),
+    DST : VECTOR[12, BYTE];
+
+ROUTINE MAIN =
+    BEGIN
+    LOCAL
+        OLD,
+        DONE,
+        R;
+    PRINT(ADD_ATOMIC_QUAD(Q, 5; OLD));
+    PRINT(.OLD);
+    PRINT(.Q);
+    PRINT(ADD_ATOMIC_LONG(L, 1, 3; OLD));
+    PRINT(.OLD);
+    PRINT(.L[0]);
+    PRINT(.L[1]);
+    AND_ATOMIC_LONG(L[1], 3);
+    PRINT(.L[1]);
+    OR_ATOMIC_QUAD(Q, %X'100');
+    PRINT(.Q);
+
+    PRINT(TESTBITSS(FLAGS[3]));
+    PRINT(TESTBITSS(FLAGS[3]));
+    PRINT(TESTBITCS(FLAGS[40], 5; DONE));
+    PRINT(.DONE);
+    PRINT(TESTBITSC(FLAGS[40]));
+    PRINT(TESTBITCC(FLAGS[40]));
+    PRINT(TESTBITSSI(FLAGS[63]));
+    PRINT(TESTBITCCI(FLAGS[63]));
+    PRINT(.FLAGS<0, 64>);
+
+    PRINT(ADAWI(ADD[0], W[0]));
+    PRINT(.W[0]);
+    PRINT(ADAWI(ADD[0], W[2]));
+    PRINT(.W[2]);
+    PRINT(ADAWI(ADD[1], W[3]));
+    PRINT(.W[3]);
+
+    PRINT(UMULH(-1, 16));
+    PRINT(UMULH(%X'123456789', %X'1000000000'));
+    PRINT(CMPBGE(%X'0102030405060708', %X'0807060504030201'));
+    PRINT(ZAP(-1, %X'0F'));
+    PRINT(ZAPNOT(%X'1122334455667788', %X'81'));
+    TRAPB();
+
+    ! Longword queues: insert two, remove them.
+    HEAD[0] = HEAD;
+    HEAD[1] = HEAD;
+    PRINT(PAL_INSQUEL(HEAD, E1));
+    PRINT(PAL_INSQUEL(E1, E2));
+    PRINT(.HEAD[0] EQL E1);
+    PRINT(.HEAD[1] EQL E2);
+    PRINT(PAL_REMQUEL(.HEAD[0]; R));
+    PRINT(.R EQL E1);
+    PRINT(PAL_REMQUEL(.HEAD[0]; R));
+    PRINT(.R EQL E2);
+    PRINT(PAL_REMQUEL(HEAD; R));
+    ! A quadword queue.
+    QHEAD[0] = QHEAD;
+    QHEAD[1] = QHEAD;
+    PRINT(PAL_INSQUEQ(QHEAD, QE1));
+    PRINT(.QHEAD[1] EQL QE1);
+    PRINT(PAL_REMQUEQ(QE1; R));
+
+        BEGIN
+        BIND
+            TAB = CH$TRANSTABLE(REP 32 OF (%C'*'), %C' ', REP 10 OF (%C'*'), %C'+',
+                REP 1 OF (%C'*'), %C'-', REP 2 OF (%C'*'), %C'0', %C'1', %C'2', %C'3',
+                %C'4', %C'5', %C'6', %C'7', %C'8', %C'9', REP 198 OF (%C'*'));
+        R = CH$TRANSLATE(TAB, 8, SRC, %C'.', 12, DST);
+        PRINT(.R - DST);
+        PRINT(.DST[0] + .DST[1] ^ 8 + .DST[2] ^ 16 + .DST[3] ^ 24 + .DST[4] ^ 32
+            + .DST[5] ^ 40 + .DST[6] ^ 48 + .DST[7] ^ 56);
+        PRINT(.DST[8] + .DST[11] ^ 8);
+        END;
+    1
+    END;
+
+END
+ELUDOM
