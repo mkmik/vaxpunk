@@ -32,14 +32,15 @@ LIBRARY and HELP call it.
 vaxpunk's `LBRSHR.EXE`, in `SYS$SHARE:`, is built from
 `vms/sysexe/lbrshr/`: `LBR$INI_CONTROL`, `LBR$OPEN` (which creates a
 library from the `CRE$` options), `LBR$CLOSE`, `LBR$GET_HEADER`,
-`LBR$SET_INDEX`, `LBR$LOOKUP_KEY`, `LBR$GET_RECORD`, `LBR$PUT_RECORD`,
+`LBR$SET_INDEX`, `LBR$LOOKUP_KEY`, `LBR$FIND`, `LBR$GET_RECORD`, `LBR$PUT_RECORD`,
 `LBR$PUT_END`, `LBR$INSERT_KEY`, `LBR$REPLACE_KEY`, `LBR$DELETE_KEY`,
 `LBR$DELETE_DATA`, `LBR$GET_INDEX` (with `*` and `%` wildcards) and
 `LBR$OUTPUT_HELP` (topics, subtopics, and the `Topic?` and `Subtopic?`
 prompts). They return VMS's `LBR$_` codes, which `$GETMSG` knows. The
 format is Alpha's, the one vlib and vlink use on the host
 (`crosstools/vtools/docs/library-format.md`): the boot test reads
-the object library LBRTEST writes with `vms-obj`.
+the object library LBRTEST writes with `vms-obj`, and LBRTEST reads
+`SYS$LIBRARY:DECC$CRTL.OLB`, which vlib wrote.
 
 `LBR$OPEN` reads every index into memory and `LBR$CLOSE` writes the
 changed ones again at the end of the file. There are no free block

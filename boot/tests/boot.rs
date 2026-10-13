@@ -703,6 +703,7 @@ const LBR: Phase = Phase {
         "Sorry, no documentation on COPY /XYZ",
         "  /LOG       Parameters",
         "LBRTEST: symbols 0000003D",
+        "LBRTEST: STRING",
         "  COPY TYPE",
         "COPY Subtopic? /LOG",
         "LBRTEST: ok",
