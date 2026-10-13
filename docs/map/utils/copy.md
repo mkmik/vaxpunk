@@ -110,6 +110,16 @@ why = "Its parameters and qualifiers"
 [[needs]]
 on = "/rtl/librtl"
 why = "Writes /LOG's lines with LIB$PUT_OUTPUT"
+
+[[needs]]
+on = "/net/ftp"
+why = "COPY/FTP"
+soft = true
+
+[[needs]]
+on = "/net/r-commands"
+why = "COPY/RCP"
+soft = true
 +++
 
 `COPY` makes new files from old ones: one to one, many to many with

@@ -119,6 +119,11 @@ soft = true
 on = "/host/vbliss"
 why = "BLISS-64's default linkage is the standard"
 soft = true
+
+[[needs]]
+on = "/exec/64-bit-addressing"
+why = "64-bit pointers in the calling standard come with P2 space"
+soft = true
 +++
 
 The OpenVMS Calling Standard is what lets any VMS language call any

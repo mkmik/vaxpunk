@@ -47,6 +47,7 @@ note = "PRD-0006 step 9; our own format, section.b64"
 id = "subprocesses"
 title = "CREATE_PROCESS, SEND, SPAWN and ATTACH from the editor"
 status = "todo"
+needs = ["/dcl/spawn"]
 note = "PRD-0006 non-goal until DCL can run a subprocess (t8y:/dcl/spawn)"
 
 [[feature]]
@@ -111,6 +112,11 @@ why = "TPU.EXE is too big to be read whole into pool (PRD-0003 tier 3 #21)"
 [[needs]]
 on = "/host/vrun"
 why = "Its tests run under vrun against the oracle's outputs"
+soft = true
+
+[[needs]]
+on = "/gui/motif"
+why = "TPU's widget built-ins"
 soft = true
 +++
 

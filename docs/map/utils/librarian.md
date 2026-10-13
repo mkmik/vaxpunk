@@ -48,8 +48,8 @@ on = "/host/vlib"
 why = "The host librarian it would be ported from; same format"
 
 [[needs]]
-on = "/lang/bliss"
-why = "Written in BLISS-64 on vaxpunk, with the rest of the native toolchain"
+on = "/lang/bliss#native"
+why = "Written in BLISS-64 and built on vaxpunk, with the rest of the native toolchain"
 
 [[needs]]
 on = "/rtl/cli"

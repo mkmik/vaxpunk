@@ -67,6 +67,7 @@ status = "todo"
 id = "processes"
 title = "LIB$SPAWN, LIB$DO_COMMAND, LIB$SET_SYMBOL: talking to DCL"
 status = "todo"
+needs = ["/dcl/spawn"]
 note = "LIB$SPAWN needs DCL's SPAWN (t8y:/dcl/spawn)"
 
 [[feature]]

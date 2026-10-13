@@ -87,13 +87,6 @@ needs = ["#self-hosting", "/rms/core", "/dcl/cld"]
 note = "PRD-0004 step 16"
 
 [[feature]]
-id = "native-link"
-title = "LINK and LIBRARY on vaxpunk, so a program is built there end to end"
-status = "todo"
-needs = ["#native"]
-note = "PRD-0004 non-goal and open question: vlink and vlib stay on the host until a PRD ports them, as LINK (t8y:/utils/linker) and LIBRARY (t8y:/utils/librarian)"
-
-[[feature]]
 id = "libraries"
 title = "Precompiled libraries (.L64) for STARLET and LIB"
 status = "todo"
@@ -103,6 +96,7 @@ note = "PRD-0004 open question"
 id = "debug-symbols"
 title = "Debug symbol records for DEBUG"
 status = "todo"
+needs = ["/host/vms-obj#debug-symbols"]
 note = "PRD-0004 non-goal; the listing is the debugging aid"
 
 [[needs]]
@@ -137,5 +131,7 @@ and a simple ARM64 back end, with no LLVM. It is the system's BLISS
 compiler: `numtim.b64` is in the executive, and TPU, NSLOOKUP and the
 DNS resolver are BLISS-64. VASM, vasm rewritten in BLISS-64, is done.
 Next come stage 1, `BLISS.EXE` in BLISS-64, then stages 2 and 3
-identical, then `BLISS` at the DCL prompt. Linking on vaxpunk waits for
-a PRD of its own.
+identical, then `BLISS` at the DCL prompt. Linking on vaxpunk is not
+this component's: `LINK` (`t8y:/utils/linker`) and `LIBRARY`
+(`t8y:/utils/librarian`) need `BLISS` at the prompt, and wait for a PRD
+of their own (PRD-0004's non-goal).

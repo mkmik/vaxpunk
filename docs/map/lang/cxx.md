@@ -21,7 +21,11 @@ on = "/exec/condition-handling"
 why = "C++ exceptions unwind through VMS frames and meet VMS conditions"
 
 [[needs]]
-fuzzy = "A C++ standard library and its ABI support, and unwind information for every frame"
+on = "/exec/calling-standard#unwind-tables"
+why = "Exceptions unwind through every frame"
+
+[[needs]]
+fuzzy = "A C++ standard library and its ABI support"
 why = "What a C++ program links and throws through"
 +++
 

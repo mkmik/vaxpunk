@@ -92,6 +92,11 @@ why = "Units and IRPs, a send's data copied into its IRP"
 [[needs]]
 on = "/exec/ipl-sync"
 why = "Completion in the IPL$_NETPOST fork"
+
+[[needs]]
+on = "/drivers/lan"
+why = "The VMS-style LAN driver, if the port gives way to it"
+soft = true
 +++
 
 On VMS with TCP/IP Services, `BG0:` is the device programs reach the

@@ -19,10 +19,6 @@ why = "A rewind or a skip takes minutes; a polled driver would hold the CPU"
 [[needs]]
 fuzzy = "A tape device to drive: a virtual tape on a host file, or virtio-scsi to a tape"
 why = "QEMU's virt machine has no tape"
-
-[[needs]]
-fuzzy = "MTAACP: ANSI-labelled volumes, files on tape through RMS"
-why = "INITIALIZE, MOUNT and COPY of tape files"
 +++
 
 VMS's tape drivers (`MKDRIVER` for SCSI tapes such as the TK50, DLT

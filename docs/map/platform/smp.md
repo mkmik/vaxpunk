@@ -13,11 +13,11 @@ on = "/platform/sel4"
 why = "A multicore seL4 build; KernelMaxNumNodes is 1"
 
 [[needs]]
-fuzzy = "Spinlocks in the executive in place of IPL alone, a current process per CPU"
+on = "/exec/ipl-sync#spinlocks"
 why = "ADR-0003: one CPU makes IPL the only synchronization"
 
 [[needs]]
-fuzzy = "MTPR_IPIR and MFPR_WHAMI in the PAL, and interprocessor interrupts"
+on = "/platform/pal#smp-calls"
 why = "DESIGN-0001 keeps them for more than one CPU"
 +++
 

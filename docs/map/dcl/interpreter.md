@@ -78,7 +78,7 @@ status = "todo"
 id = "ctrl-t"
 title = "CTRL/T: a line of the process's state; SET CONTROL=T"
 status = "todo"
-needs = ["/drivers/terminal#ctrl-o-t"]
+needs = ["/drivers/terminal#ctrl-o-t", "/exec/information-services"]
 note = "dcl.cld ponytail: no T; its line comes from $GETJPI (t8y:/exec/information-services)"
 
 [[feature]]

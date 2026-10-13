@@ -35,7 +35,7 @@ needs = ["#basic"]
 id = "cluster"
 title = "MONITOR CLUSTER and remote nodes through a server process"
 status = "todo"
-needs = ["#basic"]
+needs = ["#basic", "/exec/cluster"]
 note = "Clusters are a PRD-0003 non-goal (t8y:/exec/cluster)"
 
 [[needs]]

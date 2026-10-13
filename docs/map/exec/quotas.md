@@ -110,6 +110,11 @@ why = "BYTLM is pool a process may take"
 on = "/exec/privileges"
 why = "EXQUOTA lets a process exceed its quotas"
 soft = true
+
+[[needs]]
+on = "/exec/paging"
+why = "Working set and page file quotas"
+soft = true
 +++
 
 VMS gives each process limits so one user can't take the system:

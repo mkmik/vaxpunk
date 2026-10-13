@@ -87,6 +87,11 @@ soft = true
 on = "/utils/accounting"
 why = "Reports from the accounting file"
 soft = true
+
+[[needs]]
+on = "/exec/paging"
+why = "Page fault counts"
+soft = true
 +++
 
 VMS counts what each process uses: CPU time, buffered and direct I/O,

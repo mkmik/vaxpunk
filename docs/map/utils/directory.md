@@ -95,6 +95,11 @@ why = "Its parameter and qualifiers through CLI$GET_VALUE and CLI$PRESENT"
 [[needs]]
 on = "/rtl/librtl"
 why = "Writes its lines with LIB$PUT_OUTPUT"
+
+[[needs]]
+on = "/exec/acls"
+why = "/SECURITY shows ACLs"
+soft = true
 +++
 
 `DIRECTORY` lists the files a specification names, a heading per

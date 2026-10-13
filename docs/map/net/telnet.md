@@ -91,6 +91,11 @@ soft = true
 [[needs]]
 on = "/exec/processes"
 why = "TELNETD creates a process for each login"
+
+[[needs]]
+on = "/net/kerberos"
+why = "Kerberos authentication"
+soft = true
 +++
 
 On VMS, `SET HOST node` was DECnet's remote login (CTERM, through

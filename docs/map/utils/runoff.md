@@ -23,7 +23,7 @@ needs = ["#format"]
 id = "help-sources"
 title = "Help text kept as RUNOFF source and turned into help library modules"
 status = "todo"
-needs = ["#format"]
+needs = ["#format", "/utils/librarian#help"]
 note = "With t8y:/utils/librarian's help libraries"
 
 [[needs]]

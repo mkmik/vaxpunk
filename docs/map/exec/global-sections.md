@@ -88,6 +88,11 @@ why = "A section has an owner and a protection mask"
 on = "/exec/paging"
 why = "Pages read as they are touched, and page file sections backed by it"
 soft = true
+
+[[needs]]
+on = "/rms/core#ufo"
+why = "$CRMPSC takes a channel to the file from a UFO open; soft only because RMS needs this component through the image activator"
+soft = true
 +++
 
 A VMS section is a range of virtual pages backed by something: blocks of

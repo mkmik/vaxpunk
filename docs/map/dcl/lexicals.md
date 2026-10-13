@@ -135,6 +135,11 @@ why = "F$MESSAGE is $GETMSG"
 [[needs]]
 on = "/exec/timers"
 why = "F$TIME is $GETTIM and $ASCTIM"
+
+[[needs]]
+on = "/exec/rights-database"
+why = "The identifier lexicals read the rights database"
+soft = true
 +++
 
 Lexical functions are DCL's built-in functions, `F$name(arguments)`,
