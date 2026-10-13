@@ -364,7 +364,8 @@ byte for byte, binary or not, into a new STREAM_LF file, as VMS's
 ports of curl and wget write one, named after the path's last part
 where the output doesn't say (`NOTES.TXT`, `INDEX.HTML` for a path
 ending in `/`); 404 is `%RMS-E-FNF`, 401 and 403 `%RMS-E-PRV`, another
-error `%RMS-F-NETFAIL`. Names come from the hosts database or DNS. An
+error `%RMS-F-NETFAIL`. It follows redirects, ten at most, and takes
+chunked bodies. Names come from the hosts database or DNS. An
 `https` URL goes through TLS, which SSL3 makes
 ([ADR-0032](docs/adr/0032-c-run-time-library-and-ssl3-on-mbed-tls.md)),
 checking the server's certificate against Mozilla's CAs in

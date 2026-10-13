@@ -29,8 +29,8 @@ note = "ADR-0032, PR #143"
 [[feature]]
 id = "redirects"
 title = "Redirects and chunked bodies"
-status = "todo"
-note = "copy.mar ponytail; ADR-0032 follow-up"
+status = "done"
+note = "HTTP/1.1, Connection: close; ten redirects at most"
 
 [[feature]]
 id = "binary"
@@ -57,8 +57,9 @@ and wget, which write what they fetch as STREAM_LF files.
 
 vaxpunk's `COPY/HTTP` is in `vms/sysexe/copy.mar`: a poor man's curl
 with VMS's remote file syntax, `COPY/HTTP node::"/path"` or
-`COPY/HTTP URL::"https://host/path"`. It sends an HTTP/1.0 GET on a TCP
-socket and writes the body, byte for byte, into a STREAM_LF file;
-`https` goes through SSL3. 404 is `%RMS-E-FNF`, 401 and 403
+`COPY/HTTP URL::"https://host/path"`. It sends an HTTP/1.1 GET on a TCP
+socket and writes the body, byte for byte, chunked or not, into a
+STREAM_LF file, following redirects as `curl -L` does; `https` goes
+through SSL3. 404 is `%RMS-E-FNF`, 401 and 403
 `%RMS-E-PRV`. It is the goal that pulled in SSL3, and through it the C
 run-time library and the C cross path.
