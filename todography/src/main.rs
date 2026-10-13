@@ -20,6 +20,7 @@ commands:
   debt                            wanted components whose needs aren't researched yet
   json                            the map as JSON
   build [--out PATH]              write the interactive map (default out/map/index.html)
+  tui                             the interactive map's views in the terminal
 
 LABEL is t8y:/area/component, /area/component or area/component, with an
 optional #feature: exec/mailboxes#attention-asts.
@@ -120,9 +121,14 @@ fn run() -> Result<ExitCode, String> {
         "next" => check_flags(&a, &["--all", "--milestone"], 0)?,
         "debt" | "json" => check_flags(&a, &[], 0)?,
         "build" => check_flags(&a, &["--out"], 0)?,
+        "tui" => check_flags(&a, &[], 0)?,
         c => return Err(format!("unknown command {c}; try todography help")),
     }
     let dir = Map::find(a.map.as_deref())?;
+    if a.command == "tui" {
+        todography::tui::run(&dir)?;
+        return Ok(ExitCode::SUCCESS);
+    }
     let map = Map::load(&dir);
     if a.command != "lint"
         && a.command != "json"

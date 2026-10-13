@@ -15,6 +15,7 @@ cargo run -p todography -- next --all --milestone m1   # and the blocked work, w
 cargo run -p todography -- debt                    # wanted components not researched yet
 cargo run -p todography -- json                    # everything, as JSON
 cargo run -p todography -- build                   # write out/map/index.html
+cargo run -p todography -- tui                     # the page's views in the terminal
 ```
 
 todography finds the map by looking, in the current directory and the ones
@@ -136,6 +137,46 @@ lives in the URL after `#`, so back, forward and links work:
   for real means setting `intent = "goal"` in the file. Below is the
   research debt: wanted components not researched yet, with their fuzzy
   needs.
+
+## The terminal
+
+`tui` shows three of the page's views in the terminal, worked out from the
+map files directly rather than from the page's data: no browser, and `r`
+reads the files again after an edit. It has no lines or hover cards, so it
+says the same things another way. It sets no background colours and uses
+only the foreground colours that read on light and dark themes alike.
+
+- **Map** (`1`): the bands, each area's components as tiles flowed under
+  its name. A tile is a glyph and the title. The glyph is a circle that
+  fills as the work gets done: `○` to do, `◌` in progress, `◔ ◑ ◕`
+  partial by the share of features done, `●` done. Goals are bold; tiles
+  that aren't wanted are faint italics. `s` cycles what shows, as on the
+  page. The arrow keys move the selection, in reverse video; every tile
+  it needs is marked `↓` in blue and every tile that needs it `↑` in
+  magenta, and `t` makes the rest faint. The panel at the bottom has the
+  selection's summary and the names of both sets. `⏎` opens Focus.
+- **Focus** (`2`): needs on the left, the card in the middle, needed by
+  on the right, the same nodes and order as the page. `←` and `→` move
+  between columns, `↑` and `↓` pick in them, `⏎` re-centres on the picked
+  node and `⌫` goes back along the trail. In the card, `↑` and `↓` pick a
+  feature, which greys out the needs it doesn't have, as clicking its row
+  does on the page; `esc` lets go of it.
+- **Roadmap** (`3`): the same columns as the page. `m` cycles the
+  milestone, `⏎` opens the work in Focus.
+
+The mouse works as a tap does on the page: a click picks a tile, a node,
+a feature, a roadmap item, a search hit or a tab, and a second click on the
+same thing opens it. A click on the trail goes back to there. The wheel
+scrolls the map and the card, and moves the pick in the column under it.
+The terminal can't select text while the TUI has the mouse, so the TUI
+does: a drag selects within the column it starts in, and letting go
+copies the text, the same way `c` copies.
+
+`/` searches as the page's search box does. `c` puts the page's prompt
+for an agent on the clipboard for the work picked: the roadmap item, the
+feature picked in the card, or a component without features. It is sent
+with OSC 52, so the terminal must allow it (tmux needs `set-clipboard
+on`). The prompt's text is in `tui.rs` and in the page, so change both.
 
 ## Tests
 
