@@ -4,7 +4,7 @@ name: boot
 # boot. The toolchain is a container image, .github/toolchain.Dockerfile,
 # kept on ghcr.io under the Dockerfile's hash and built only when that tag
 # is missing. On main, or when run by hand, it then builds the GitHub Pages
-# site, web/mksite.sh's: the landing page, the API reference and the demo,
+# site, web/mksite.sh's: the landing page, the API reference, the map and the demo,
 # the images just booted on QEMU compiled to WebAssembly. Main publishes it.
 on:
   push:
@@ -86,6 +86,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - run: cargo run -p apidoc
+      - run: cargo run -p todography -- build
       - uses: actions/setup-go@v5
         with:
           go-version-file: web/tailgate/go.mod
