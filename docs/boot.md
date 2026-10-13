@@ -493,6 +493,13 @@ executive feature:
   can't make one; GBLTEST reads what it wrote once its termination
   message comes. The section goes when its last mapping is deleted; a
   permanent one only after `$DGBLSC` too.
+- **PTDTEST** checks pseudo terminals: it makes one with `PTD$CREATE`,
+  `FTAn:`, and assigns it by the name `$GETDVI` gives, as any process
+  would. A read with a prompt there writes the prompt, which `PTD$READW`
+  reads; `PTD$WRITE` types `hi` and a carriage return, which end the
+  read, and `PTD$READW` reads their echo; a write there waits until
+  `PTD$READW` reads it. `PTD$DELETE` hangs the terminal up, and the read
+  waiting there ends with `SS$_HANGUP`.
 - **FSTEST1** and **FSTEST2** each count the files in `SYS$SYSTEM:` 50
   times with `$PARSE` and `$SEARCH`, at once. The file system runs
   holding a lock of its own, `FIL$LOCK`, below `IPL$_SYNCH`

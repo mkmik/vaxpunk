@@ -1,6 +1,6 @@
 +++
 title = "Terminal driver"
-summary = "TTDRIVER: OPA0: and TNAn:, line editing, CTRL/C and CTRL/Y, characteristics"
+summary = "TTDRIVER: OPA0:, TNAn: and FTAn:, line editing, CTRL/C and CTRL/Y, characteristics"
 aka = ["TTDRIVER", "ttdriver.mar", "OPA0:", "TNA", "TT", "TX", "terminal", "IO$_READPROMPT", "IO$_SETMODE", "SET TERMINAL", "SHOW TERMINAL", "$BRKTHRU", "CTRL/O", "CTRL/T", "XON", "XOFF", "class driver", "port driver"]
 kind = "core"
 intent = "goal"
@@ -157,9 +157,11 @@ redraws it. `SET TERMINAL` and `SHOW TERMINAL` set and show the
 characteristics; virtual terminals keep a session across a disconnect.
 
 vaxpunk's is `vms/exec/ttdriver.mar`. Each terminal is a UCB of its
-own: the console, `OPA0:`, and a TELNET terminal, `TNA1:` to `TNA9:`,
+own: the console, `OPA0:`, a TELNET terminal, `TNA1:` to `TNA9:`,
 for each remote login, whose Telnet protocol the driver speaks over the
-TCP connection ([ADR-0027](../../adr/0027-terminals-are-ucbs-and-telnet-is-in-the-driver.md)).
+TCP connection ([ADR-0027](../../adr/0027-terminals-are-ucbs-and-telnet-is-in-the-driver.md)),
+and a pseudo terminal, `FTA1:` to `FTA9:`, that a program drives with
+the PTD$ routines (t8y:/drivers/pseudo-terminal, [ADR-0033](../../adr/0033-pseudo-terminals-are-a-port-of-the-terminal-driver.md)).
 Reads have VMS's modifiers, terminator masks, line editing and a
 16-line recall buffer; CTRL/C and CTRL/Y are ASTs
 ([ADR-0014](../../adr/0014-ctrlc-ctrly-asts.md)). What's left for

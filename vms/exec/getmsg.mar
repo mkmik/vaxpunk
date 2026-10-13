@@ -1277,6 +1277,10 @@ MESSAGES:
         .ASCIC  "SYSTEM"
         .ASCIC  "NOHOMEBLK"
         .ASCIC  "Files-11 home block not found on volume"
+        .LONG   SS$_DATAOVERUN
+        .ASCIC  "SYSTEM"
+        .ASCIC  "DATAOVERUN"
+        .ASCIC  "data overrun"
         .LONG   SS$_DEVICEFULL
         .ASCIC  "SYSTEM"
         .ASCIC  "DEVICEFULL"

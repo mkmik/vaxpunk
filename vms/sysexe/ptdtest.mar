@@ -1,0 +1,137 @@
+        .TITLE  PTDTEST Checks pseudo terminals
+        .IDENT  /V0.1/
+;
+; STARTUP starts it. It makes a pseudo terminal with PTD$CREATE, and
+; assigns it by the name $GETDVI gives, as any process would. A read with
+; a prompt there writes the prompt, which PTD$READW reads; PTD$WRITE
+; types a line, which ends the read and is echoed, and PTD$READW reads
+; the echo; a write there is read with PTD$READW too, and is done then.
+; PTD$DELETE hangs the terminal up: the read waiting there ends with
+; SS$_HANGUP. Each EXPECT checks a status or a value; a failed one exits
+; with 2 * N, which the executive reports.
+;
+        .LIBRARY "starlet.mlb"
+        .LIBRARY "sysexe.mlb"
+        $SSDEF
+        $IODEF
+        $DVIDEF
+        $DCDEF
+
+        .EXTERNAL PTD$CREATE, PTD$READW, PTD$WRITE, PTD$DELETE
+
+        .PSECT  DATA, NOEXE, WRT, LONG
+CHAN:   .LONG   0                       ; the control connection
+TCHAN:  .LONG   0                       ; the terminal
+CLASS:  .LONG   0
+NAMLEN: .LONG   0
+NAME:   .BLKB   16
+NAMDSC: .LONG   0
+        .ADDRESS NAME
+IOSB:   .BLKQ   1
+INADR:  .LONG   0, 0
+PROMPT: .ASCII  "> "
+OUT:    .ASCII  "out"
+LINE:   .BLKB   80
+RDBUF:  .BLKB   4+128                   ; PTD$READ's: a status longword, then the data
+WRBUF:  .LONG   0                       ; PTD$WRITE's
+        .ASCII  "hi"<13>
+DVI_ITEMS:                              ; the terminal's name and class
+        .WORD   16, DVI$_DEVNAM
+        .ADDRESS NAME
+        .ADDRESS NAMLEN
+        .WORD   4, DVI$_DEVCLASS
+        .ADDRESS CLASS
+        .LONG   0
+        .LONG   0
+
+        .PSECT  CODE, EXE, LONG
+        .ENTRY  START, ^M<>
+        PUSHAQ  INADR
+        CLRQ    -(SP)                   ; no AST, no characteristics
+        CLRQ    -(SP)
+        CLRQ    -(SP)
+        PUSHAL  CHAN
+        CALLS   #8, G^PTD$CREATE
+        EXPECT  #SS$_NORMAL, 1
+        $GETDVIW_S CHAN=CHAN, ITMLST=DVI_ITEMS
+        EXPECT  #SS$_NORMAL, 2
+        MOVL    CLASS, R0
+        EXPECT  #DC$_TERM, 3
+        MOVL    NAME, R0                ; _FTAn:
+        EXPECT  #^A/_FTA/, 4
+        MOVL    NAMLEN, NAMDSC
+        $ASSIGN_S DEVNAM=NAMDSC, CHAN=TCHAN
+        EXPECT  #SS$_NORMAL, 5
+
+; A read with a prompt: the controller reads the prompt.
+        $QIO_S  EFN=#1, CHAN=TCHAN, FUNC=#IO$_READPROMPT, IOSB=IOSB, P1=LINE, P2=#80, P5=#PROMPT, P6=#2
+        EXPECT  #SS$_NORMAL, 6
+        BSBW    READ
+        EXPECT  #<2@16>!SS$_NORMAL, 7
+        MOVZWL  RDBUF+4, R0
+        EXPECT  #^A/> /, 8
+
+; A line typed ends the read, and its echo is read.
+        PUSHL   #0                      ; no echo buffer
+        PUSHL   #0
+        PUSHL   #3
+        PUSHAL  WRBUF
+        PUSHL   #0
+        PUSHL   #0
+        PUSHL   CHAN
+        CALLS   #7, G^PTD$WRITE
+        EXPECT  #SS$_NORMAL, 9
+        $WAITFR_S EFN=#1
+        MOVL    IOSB, R0
+        EXPECT  #<2@16>!SS$_NORMAL, 10
+        MOVL    IOSB+4, R0              ; a carriage return, one byte
+        EXPECT  #<1@16>!13, 11
+        MOVZWL  LINE, R0
+        EXPECT  #^A/hi/, 12
+        $WAITFR_S EFN=#0                ; PTD$WRITE's
+        MOVL    WRBUF, R0
+        EXPECT  #<3@16>!SS$_NORMAL, 13
+        BSBW    READ
+        EXPECT  #<4@16>!SS$_NORMAL, 14
+        MOVL    RDBUF+4, R0
+        EXPECT  #^X0A0D6968, 15         ; hi CR LF
+
+; A write waits until the controller reads it.
+        $QIO_S  EFN=#1, CHAN=TCHAN, FUNC=#IO$_WRITEVBLK, IOSB=IOSB, P1=OUT, P2=#3
+        EXPECT  #SS$_NORMAL, 16
+        BSBW    READ
+        EXPECT  #<3@16>!SS$_NORMAL, 17
+        $WAITFR_S EFN=#1
+        MOVL    IOSB, R0
+        EXPECT  #<3@16>!SS$_NORMAL, 18
+
+; PTD$DELETE hangs it up.
+        $QIO_S  EFN=#1, CHAN=TCHAN, FUNC=#IO$_READVBLK, IOSB=IOSB, P1=LINE, P2=#80
+        EXPECT  #SS$_NORMAL, 19
+        PUSHL   CHAN
+        CALLS   #1, G^PTD$DELETE
+        EXPECT  #SS$_NORMAL, 20
+        $WAITFR_S EFN=#1
+        MOVZWL  IOSB, R0
+        EXPECT  #SS$_HANGUP, 21
+        $DASSGN_S CHAN=TCHAN
+        EXPECT  #SS$_NORMAL, 22
+        PRINT   "PTDTEST: ok"
+        MOVL    #SS$_NORMAL, R0
+        RET
+
+; READ: PTD$READW on the control connection, with event flag 2, into
+; RDBUF. R0 = its status longword, or PTD$READW's failure.
+READ:
+        .JSB_ENTRY
+        PUSHL   #128
+        PUSHAB  RDBUF
+        CLRQ    -(SP)
+        PUSHL   CHAN
+        PUSHL   #2
+        CALLS   #6, G^PTD$READW
+        BLBC    R0, 90$
+        MOVL    RDBUF, R0
+90$:    RSB
+
+        .END    START
