@@ -86,4 +86,4 @@ PRD-0003. Image sections are read in whole when the image is activated
 that isn't mapped is an access violation
 ([DESIGN-0001](../../design/0001-pal-interface.md)), so faulting
 pages in needs a PAL change first (`t8y:/exec/memory#page-faults`). With
-4 MB of memory (tier 4 #39) the first need is more memory, not paging.
+4 MB of memory (tier 1 #39) the first need is more memory, not paging.

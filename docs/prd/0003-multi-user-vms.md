@@ -179,6 +179,21 @@ In the executive, for one node: [ADR-0030](../adr/0030-lock-manager-in-the-execu
 - Input lines without `$` go to the running image as `SYS$INPUT`, as VMS
   does, rather than being skipped.
 
+### Capacity
+
+vaxpunk is meant to run real programs, so no component should be held
+back by a size chosen for the demo. Milestone 1 lifts them in the
+32-bit space, VAX's regions as OpenVMS Alpha kept them; the 64-bit P2
+and S2 regions come later (`t8y:/exec/64-bit-addressing`).
+
+- Every page of RAM QEMU gives is a PFN, and page tables are made as
+  processes need them, so a program's P0 and P1 can grow to their
+  regions' ends.
+- Processes up to `MAXPROCESSCNT`, and a page mapped by any number of
+  them.
+- Pool sized from memory and SYSGEN; `EXEC.EXE` of any size; open files
+  limited by `FILLM` and `CHANNELCNT`, not a constant.
+
 ## Backlog
 
 The `ponytail:` notes, ranked. Each line says where they are and what
@@ -202,6 +217,7 @@ until the hardware or size changes; leave it.
 | 7 | `$ASCTIM`, `$NUMTIM` (PRD-0004's pilot, `numtim.b64`) and the date in `SHOW PROCESS` and `SHOW SYSTEM` done; left: `$BINTIM`, `SHOW TIME` | *Batch and print* |
 | 8 | Owners and protection done (step 2); left: a new file has the default protection, not the process's (`f11wrt.mar`), which `LOGINOUT` sets from the UAF; no version limit (`rms.mar`'s `$CREATE_DIR`) | *Privileges, UICs and protection* |
 | 9 | Terminals, `TNAn:` too, listed from their UCBs (step 3); left: `BGA0:` and its units aren't seen by `$DEVICE_SCAN` and `$GETDVI`; a VCB stands for a disk in `$GETDVI` rather than its UCB (`netdriver.mar`, `getdvi.mar`, DESIGN-0002 *Devices*) | Every device listed from its UCB |
+| 39 | Sized for the demo: 1,024 PFNs (4 MB), 96 page tables, 32 contexts and 256 extra mappings, as much as the root CNode leaves room for (DESIGN-0001, `main.c`); 512 KB of pool (`memory.mar`); a 256 KB buffer for `EXEC.EXE` (`main.c`); 15 open files a process (`rms.mar`). Tracked in `t8y:/exec/capacity` | *Capacity*: frame caps in a CNode of their own |
 
 ### Tier 2: can crash or lose data
 
@@ -249,7 +265,6 @@ says what replaces it; this PRD doesn't schedule them.
 | --- | --- |
 | 37 | Disk I/O polled and synchronous, the CPU waits for each request; the file system doesn't wait on a queued IRP (ADR-0007, ADR-0015, DESIGN-0001, DESIGN-0002, `main.c`) |
 | 38 | The console UART polled each 10 ms tick, at QEMU virt's fixed address; device addresses not from the DTB (DESIGN-0001, `main.c`) |
-| 39 | 1,024 PFNs, 4 MB, and 96 page tables, as much as the root CNode leaves room for (DESIGN-0001, `main.c`). This one turns into tier 1 when many logged-in users and batch jobs run out of memory: frame caps in a CNode of their own |
 | 40 | A seL4 call per page to switch the kernel's view of two processes; page protection set once; the tick a PAL thread (ADR-0004, ADR-0005, `main.c`) |
 | 41 | The TCP/IP component's page mapped writable and executable; frames copied, no offloads (`main.c`, `pal/tcpip/src/main.c`) |
 | 42 | Power off works under TCG only; with HVF the `HLT` is a fault (`main.c`, ADR-0008) |
@@ -338,5 +353,9 @@ Each step ends in something `cargo test -p boot` checks.
    *Visible:* `SUBMIT` a procedure, `TYPE` its log.
 10. **Print, if the open question says so.** A print symbiont to a file or
     terminal. *Visible:* `PRINT WELCOME.TXT` ends in the queue's output.
-11. **Tier 2 sweep.** Whatever of tier 2 the steps above didn't touch.
+11. **Capacity.** Frame caps in a CNode of their own, page tables made
+    as needed, and the other sizes of *Capacity*, in an ADR that also
+    settles where S0 lives. *Visible:* a program that `$EXPREG`s 256 MB
+    of P0 and touches every page.
+12. **Tier 2 sweep.** Whatever of tier 2 the steps above didn't touch.
     *Visible:* the backlog's tier 2 is empty.

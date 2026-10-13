@@ -44,6 +44,10 @@ on = "/exec/memory"
 why = "P0, P1 and S0 stay; P2 and S2 are more of the same"
 
 [[needs]]
+on = "/exec/capacity#address-space-32"
+why = "The 32-bit space is usable whole first, with page tables made as needed"
+
+[[needs]]
 on = "/exec/calling-standard"
 why = "64-bit addresses passed as arguments"
 
