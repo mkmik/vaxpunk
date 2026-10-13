@@ -1,0 +1,6 @@
+Form BADCHAR_TEST
+    Layout VT
+        Device Terminal Type %VT100 End Device
+        Size 24 Lines By 80 Columns @
+    End Layout
+End Form

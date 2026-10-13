@@ -796,6 +796,37 @@ const WILDCARDS: Phase = Phase {
     ],
 };
 
+/// FORMS (t8y:/layered/decforms#ifdl) on DKB0:: FORMS TRANSLATE makes a
+/// .FORM file of a form CREATE makes, which ods-image reads after the
+/// session, and FORMS BACK_TRANSLATE makes IFDL of it again, which TYPE
+/// shows; then a file that isn't there.
+const FORMS: Phase = Phase {
+    name: "forms",
+    secs: 60,
+    steps: &[(
+        "%DIRECT-W-NOFILES, no files found",
+        1,
+        concat!(
+            "CREATE FORMTEST.IFDL\r",
+            "Form FORMTEST\rForm Data\rNAME Character(20)\rEnd Data\r",
+            "Layout VT Device Terminal Type %VT100 End Device\rSize 24 Lines By 80 Columns\r",
+            "Panel MAIN\rLiteral Text Line 1 Column 1 Value \"Name:\" End Literal\r",
+            "Field NAME Line 1 Column 7 End Field\rEnd Panel\rEnd Layout\rEnd Form\r\x1a",
+            "FORMS TRANSLATE/LOG FORMTEST\r",
+            "FORMS BACK_TRANSLATE/LOG/OUTPUT=FORMBACK FORMTEST\r",
+            "TYPE FORMBACK.IFDL\r",
+            "FORMS TRANSLATE NOSUCH\r",
+        ),
+    )],
+    lines: &[
+        "%FORMS-S-TRANSLATED, file FORMTEST.IFDL translated to FORMTEST.FORM.",
+        "%FORMS-S-BACKXLATED, file FORMTEST.FORM back-translated to FORMBACK.IFDL",
+        "        Size 24 Lines By 80 Columns\n        Panel MAIN\n            Literal Text\n",
+        "                Value \"Name:\"\n            End Literal\n            Field NAME\n",
+        "%FORMS-F-OPENIN, error opening NOSUCH.IFDL as input.",
+    ],
+};
+
 /// The processes STARTUP and SNOOP ran, which print as they go, done long
 /// before: STARTUP's SLEEPER and SVCTEST's NAPPER say they hibernate
 /// before SLEEPER does, and the CPU then idles, taking clock interrupts.
@@ -927,6 +958,7 @@ const PHASES: &[Phase] = &[
     C,
     LBR,
     WILDCARDS,
+    FORMS,
     STARTUP,
     USERS,
 ];
@@ -945,6 +977,9 @@ const ABSENT: &[&str] = &[
     "SYS$OUTPUT \"QUIET\"",
     // RUN SNOOP's ACCVIO is written once, not again by DCL.
     "%NONAME-F-NOMSG, Message number 0000000C",
+    // FORMS's form has nothing wrong with it.
+    "%FORMS-E-",
+    "%FORMS-W-",
     // The passwords, which aren't echoed.
     "nobodys",
     "wrongpw",
@@ -1150,6 +1185,16 @@ fn boot() {
     save_set(&bytes(&mut img, fid));
     let fid = img.lookup("[LBR]LBRTEST.OLB").unwrap();
     lbrtest_library(&bytes(&mut img, fid));
+    // FORMS's .FORM file: its bytes in FIX 512 records, the last padded.
+    let fid = img.lookup("[000000]FORMTEST.FORM").unwrap();
+    let form = bytes(&mut img, fid);
+    assert!(form.starts_with(b"VAXPUNK FORM"), "{:?}", &form[..16]);
+    let used = u32::from_le_bytes(form[16..20].try_into().unwrap()) as usize;
+    assert!(
+        used <= form.len() && form.len() % 512 == 0,
+        "{used} of {}",
+        form.len()
+    );
 }
 
 /// The object library LBRTEST made, as vlink and vlib read one: HELLO,

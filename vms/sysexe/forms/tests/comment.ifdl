@@ -1,0 +1,9 @@
+Form COMMENT_TEST
+    Layout VT
+        Device Terminal Type %VT100 End Device
+        Size 24 Lines By 80 Columns
+        /* This comment never ends.
+        Panel MAIN
+        End Panel
+    End Layout
+End Form

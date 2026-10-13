@@ -1,0 +1,88 @@
+
+   16            Viewport TOO_LOW Lines 20 Through 30 Columns 1 Through 80 End Viewport    { ! VIEENDLIN }
+                                  ^
+%FORMS-E-VIEENDLIN, viewport end line not within layout size.
+
+   17            Viewport BACKWARDS Lines 5 Through 4 Columns 90 Through 99 End Viewport    { ! ENDLINGTR, VIEBEGCOL, VIEENDCOL }
+                                    ^
+%FORMS-E-ENDLINGTR, ending viewport line must be greater than beginning viewport line.
+
+   17            Viewport BACKWARDS Lines 5 Through 4 Columns 90 Through 99 End Viewport    { ! ENDLINGTR, VIEBEGCOL, VIEENDCOL }
+                                                      ^
+%FORMS-E-VIEBEGCOL, viewport begin column not within layout size.
+
+   17            Viewport BACKWARDS Lines 5 Through 4 Columns 90 Through 99 End Viewport    { ! ENDLINGTR, VIEBEGCOL, VIEENDCOL }
+                                                      ^
+%FORMS-E-VIEENDCOL, viewport end column not within layout size.
+
+   18            Internal Response LOOP_A
+                                   ^
+%FORMS-E-RECURLOOP, recursion or looping in internal response LOOP_A in layout VT.
+
+   21            Internal Response LOOP_B
+                                   ^
+%FORMS-E-RECURLOOP, recursion or looping in internal response LOOP_B in layout VT.
+
+   25                Include NO_SUCH_RESPONSE            { ! NOINTERNAL }
+                             ^
+%FORMS-E-NOINTERNAL, internal response NO_SUCH_RESPONSE does not exist.
+
+   26                Return "TOOLONG"                    { ! CTRLTXTLEN }
+                            ^
+%FORMS-E-CTRLTXTLEN, invalid CONTROL TEXT string length; must be 3-5 characters.
+
+   28            Send Response NO_REC                    { ! NOSENDREC }
+                               ^
+%FORMS-E-NOSENDREC, record or record list NO_REC has not been created.
+
+   30            Receive Response NO_REC                 { ! NORECVREC }
+                                  ^
+%FORMS-E-NORECVREC, record or record list NO_REC has not been created.
+
+   32            Transceive Response NO_REC REC          { ! NOTRANSEND }
+                                     ^
+%FORMS-E-NOTRANSEND, record or record list NO_REC has not been created.
+
+   34            Control Text Response "AB"              { ! CTRLTXTLEN }
+                                       ^
+%FORMS-E-CTRLTXTLEN, invalid CONTROL TEXT string length; must be 3-5 characters.
+
+   35                Remove NO_VIEWPORT                  { ! NOVIEWPRT }
+                            ^
+%FORMS-E-NOVIEWPRT, viewport NO_VIEWPORT has not been declared.
+
+   37            Function Response NO_FUNCTION           { ! NOFUNCTION }
+                                   ^
+%FORMS-E-NOFUNCTION, no FUNCTION declaration for FUNCTION RESPONSE NO_FUNCTION.
+
+   39            Use Help Panel MAIN                     { ! NOTHELPPANEL }
+                                ^
+%FORMS-E-NOTHELPPANEL, MAIN is not declared as a help panel.
+
+   41                Viewport NOT_DECLARED               { ! NOVIEWPRT }
+                              ^
+%FORMS-E-NOVIEWPRT, viewport NOT_DECLARED has not been declared.
+
+   44                    Search NO_LIST                  { ! NOLIST }
+                                ^
+%FORMS-E-NOLIST, LIST NO_LIST has not been declared.
+
+   45                    Display SHOUTING                { ! NOATTRIB }
+                                 ^
+%FORMS-E-NOATTRIB, attribute SHOUTING not declared.
+
+   46                    Scale 200                       { ! SCALEVALU }
+                               ^
+%FORMS-E-SCALEVALU, SCALE value must be an integer within the range of -128 to 127.
+
+   47                    Range 10 Through 1              { ! HIGHRANGELESS }
+                               ^
+%FORMS-E-HIGHRANGELESS, high range is less than low range.
+
+   49                Field NOT_DATA                      { ! NODATITEM }
+                           ^
+%FORMS-E-NODATITEM, form data item NOT_DATA has not been declared.
+
+   52                Group NOT_A_GROUP                   { ! NODATGRP }
+                           ^
+%FORMS-E-NODATGRP, form data group NOT_A_GROUP has not been declared.

@@ -13,7 +13,8 @@
 //! its CDU, and HELP, TCPIP, AUTHORIZE and RTPAD with sysexe/help/*.mar, which describes
 //! command tables, and CREATE, CONVERT and ANALYZRMS with sysexe/rms/*.mar,
 //! FDL and their output; TPU, from sysexe/tpu/*.b64 and its I/O module
-//! sysexe/tpu/fio.mar (PRD-0006), and in [SYSLIB] EVE's section file,
+//! sysexe/tpu/fio.mar (PRD-0006); FORMS, DECforms's translator, from
+//! sysexe/forms/*.b64 and the same I/O module; and in [SYSLIB] EVE's section file,
 //! sysexe/tpu/eve/eve.section; CDEMO, the BLISS-64 program that calls a C
 //! library, from crosstools/vtools/examples/c, its C compiled by the cross
 //! gcc and converted by velf; CRTLTEST and SSL3$CLIENT, C programs, from
@@ -176,6 +177,18 @@ fn main() {
     modules.push(stb.clone());
     let image = link("TPU", vlink::DEFAULT_BASE, None, &modules);
     files.push(("[SYSEXE]TPU.EXE".into(), image.image.write()));
+    // FORMS, DECforms's FORMS TRANSLATE and BACK_TRANSLATE: its BLISS-64,
+    // with TPU's I/O module, which has the routines it needs.
+    let mut modules: Vec<_> = sources("sysexe/forms", &["b64"])
+        .iter()
+        .map(|s| bliss(s))
+        .collect();
+    modules.extend(compile(&[PathBuf::from("sysexe/tpu/fio.mar")]));
+    modules.extend(libs.iter().cloned());
+    modules.push(librtl_exe.clone());
+    modules.push(stb.clone());
+    let image = link("FORMS", vlink::DEFAULT_BASE, None, &modules);
+    files.push(("[SYSEXE]FORMS.EXE".into(), image.image.write()));
     // CDEMO: MAIN, the C library and the library's BLISS-64 adapter.
     let cdemo = Path::new(CDEMO);
     let c = cdemo.join("lib/cdemo.c");

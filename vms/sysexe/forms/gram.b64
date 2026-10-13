@@ -1,0 +1,739 @@
+MODULE GRAM (IDENT = 'V0.1') =
+%TITLE 'FORMS: the grammar of IFDL'
+BEGIN
+!
+! IFDL's syntax, as the VSI DECforms IFDL Reference Manual's diagrams
+! give it, written as rules that GR_INIT compiles into the tables in
+! forms.r64 when FORMS starts. A rule is
+!
+!   [@]name = elements ;
+!
+! where an element is a KEYWORD (in capitals, or %NAME), a "punctuation"
+! keyword in double quotes, a rule's name (in lower case), a terminal
+! ($name, $xname, $qname, $str, $int, $num, $sint, $snum, $pic, $imp:
+! forms.r64's TM_ codes say what each matches), [ optional ], { a group },
+! a | b for the first of them that matches, and x... for one or more.
+! "~(" is an opening parenthesis printed with no space before it. A rule
+! with @ starts a line of its own when the back translator prints it,
+! indented under the line rule it is in. The rule "reserved" lists the
+! reserved words (the manual's Appendix C), which are never a $name; the
+! rule "stop" the keywords that start what may follow a list of names,
+! which are never an $xname either.
+!
+! The parser (parse.b64) tries the alternatives in order and takes the
+! first that matches; it doesn't go back into one that matched. Where a
+! name may be a keyword that follows, the grammar says the alternatives
+! itself: TERMINAL {$name terminal-type | terminal-type}.
+!
+REQUIRE 'FORMS';
+REQUIRE 'FIO';
+
+LITERAL
+    HASHSIZE = 2048,
+    MAXKIDS = 128;                      ! the alternatives or elements of one group
+
+UNDECLARE
+    KWADDR, KWLEN, KWFLAGS, KWBASE, NKW, RNAME, RNLEN, RBODY, RFLAGS, NRULE, GKIND, GA, GB, GLIST;
+
+GLOBAL
+    KWADDR : VECTOR[MAXKW],
+    KWLEN : VECTOR[MAXKW],
+    KWFLAGS : VECTOR[MAXKW],
+    KWBASE : VECTOR[MAXKW],
+    NKW,
+    RNAME : VECTOR[MAXRULE],
+    RNLEN : VECTOR[MAXRULE],
+    RBODY : VECTOR[MAXRULE],
+    RFLAGS : VECTOR[MAXRULE],
+    NRULE,
+    GKIND : VECTOR[MAXG],
+    GA : VECTOR[MAXG],
+    GB : VECTOR[MAXG],
+    GLIST : VECTOR[MAXL];
+
+OWN
+    HASH : VECTOR[HASHSIZE],            ! keywords by their text, but ~ ones
+    RSTART : VECTOR[MAXRULE],           ! where each rule's elements start
+    NG,                                 ! elements used
+    NL,                                 ! GLIST entries used
+    ! The grammar's text, being read: where, and the token there.
+    TEXT,
+    AT,
+    DK,                                 ! its kind, a DK_
+    DA,                                 ! its text
+    DL;
+
+LITERAL
+    DK_END = 0,
+    DK_SYM = 1,                         ! @ = ; | [ ] { }: DA's first character
+    DK_DOTS = 2,                        ! ...
+    DK_PUNCT = 3,                       ! "punctuation"
+    DK_TERM = 4,                        ! $terminal
+    DK_KW = 5,                          ! KEYWORD
+    DK_RULE = 6;                        ! rule-name
+
+! The grammar. Each line ends with a blank: the strings are run together.
+BIND
+    GRAMMAR = UPLIT BYTE (
+        'reserved = ACTIVATE ACTIVE ALL ATTRIBUTE AUTOSKIP BACKGROUND BY CALL CHARACTER ',
+        'CHARACTERS COLUMN COLUMNS CONCEALED CONSTANT COPY CURRENCY DATA DEACTIVATE DECIMAL ',
+        'DEFAULT DELETE DEVICE DISABLE DISPLAY DISPLAYS ELSE ENABLE END ENTER ENTRY EXIT FIELD ',
+        'FIELDS FOREGROUND FORM FUNCTION GROUP HELP HIGHLIGHT ICON IF INCLUDE INITIAL INPUT ',
+        'INSERT INTEGER INTERNAL INVALID IS JUSTIFICATION LABEL LAYOUT LENGTH LET LINE LINES ',
+        'LIST LITERAL LOCATOR LOWERCASE MESSAGE MINIMUM MIXED NEXT NO NOT OCCURS OF ON OUTPUT ',
+        'PANEL PIC PICTURE POSITION PREVIOUS PRINT PROTECTED RANGE RECEIVE RECORD RECORDS ',
+        'REFRESH REMOVE REPLACE REPLACING REQUEST REQUIRE REQUIRED RESET RESPONSE RETAIN RETURN ',
+        'SCALE SEARCH SEND SIGN SIGNAL TABLE TEXT THEN THROUGH THRU TIMEOUT TRANSCEIVE ',
+        'TRANSLATE TRANSMIT UNTIL UPPERCASE USE USING VALIDATE VALIDATION VALUE VIEWPORT WAIT ; ',
+        'stop = APPLY ARROW GIVING LIMITS MAXIMUM PUSH ROWS SCROLLBAR SHOW SLIDER TEXTFIELD WHEN ',
+        '    WORD ; ',
+
+        ! The form, its data and its records.
+        '@form = FORM $qname [form-data]... [form-record]... [record-list]... layout... ',
+        '    END FORM ; ',
+        '@form-data = FORM DATA [track] [data-declaration]... END DATA ; ',
+        'track = TRACKED | UNTRACKED ; ',
+        'data-declaration = data-group | for-current | builtin-item | data-item | copy-dictionary ; ',
+        '@data-item = $name data-type [VALUE value-literal] [track] ; ',
+        'data-type = text-data | atomic | datetime-data ; ',
+        'value-literal = $str | $snum ; ',
+        '@builtin-item = $name CHARACTER "~(" $int ")" [VARYING | NULL TERMINATED] BUILTIN ',
+        '    | FIELDVALUE BUILTIN ; ',
+        '@data-group = GROUP $name [track] [occurs] [data-declaration]... END GROUP ; ',
+        '@occurs = OCCURS $int [BASE $sint] [CURRENT data-ref] [LOCATOR CURRENT data-ref] ; ',
+        '@for-current = FOR data-ref [LOCATOR] CURRENT data-ref ; ',
+        'text-data = CHARACTER "~(" $int ")" [VARYING | NULL TERMINATED] ',
+        '    | INTEGER "~(" $int ")" [PACKED] | DECIMAL "~(" $int "," $int ")" [PACKED] ',
+        '    | FLOAT "~(" $int ["," $int] ")" ; ',
+        'atomic = BYTE INTEGER | WORD INTEGER | LONGWORD INTEGER | QUADWORD INTEGER ',
+        '    | UNSIGNED BYTE | UNSIGNED WORD | UNSIGNED LONGWORD | FFLOATING | DFLOATING ',
+        '    | GFLOATING | HFLOATING | SFLOATING | TFLOATING | XFLOATING | SHORT FLOAT | LONG FLOAT ; ',
+        'datetime-data = ADT [CURRENT] | DATE [CURRENT] | TIME [CURRENT] | DATETIME "~(" $int ")" ; ',
+        '@copy-dictionary = COPY cdd-path [FIELD [IS] $name] FROM DICTIONARY ',
+        '    [%NULL_TERMINATED {BYTES | CHARACTERS}] END COPY ; ',
+        'cdd-path = $str | $name ["." $name]... ; ',
+        '@form-record = FORM RECORD $name [USING {NATURAL | BYTE} ALIGNMENT] record-declaration... ',
+        '    END RECORD ; ',
+        'record-declaration = record-group | transfer | copy-dictionary | record-field ; ',
+        '@record-field = $name field-type [data-transfer] ; ',
+        'field-type = text-field-type | atomic | datetime-field ; ',
+        'text-field-type = CHARACTER [REVERSED] "~(" $int ")" [VARYING | NULL TERMINATED] ',
+        '    | INTEGER "~(" $int ")" [PACKED | record-sign] ',
+        '    | DECIMAL "~(" $int "," $int ")" [PACKED] [record-sign] [record-decimal] ',
+        '    | FLOAT "~(" $int ["," $int] ")" [record-sign] [record-decimal] ; ',
+        'record-sign = EXPLICIT SIGN [{LEFT | RIGHT} {SEPARATE | OVERPUNCHED} | ZONED] ',
+        '    | IMPLICIT SIGN ; ',
+        'record-decimal = EXPLICIT DECIMAL [PERIOD | COMMA] | IMPLICIT DECIMAL ; ',
+        'datetime-field = ADT | DATE | TIME | DATETIME "~(" $int ")" | TM ; ',
+        '@data-transfer = USING data-ref | transfer-part... ; ',
+        'transfer-part = SOURCE data-ref | DESTINATION data-ref ; ',
+        '@record-group = GROUP $name [OCCURS $int] record-declaration... END GROUP ; ',
+        '@transfer = TRANSFER {$str | $name ["." $name]...} data-transfer ; ',
+        '@record-list = RECORD LIST $name [$name]... END LIST ; ',
+
+        ! Layouts, and what is declared in them.
+        '@layout = LAYOUT $name device [frame] [language] [layout-selection] [units] size ',
+        '    [layout-item]... [layout-panel]... END LAYOUT ; ',
+        '@device = DEVICE device-entry... END DEVICE ; ',
+        'device-entry = terminal-entry | pixel-entry ; ',
+        '@terminal-entry = TERMINAL {$name terminal-type | terminal-type} ; ',
+        '@terminal-type = TYPE {%VT100_HEBREW | %VT100_NO_AVO | %VT100 ',
+        '    | %VT200_HEBREW [device-color] | %VT200 [device-color] ',
+        '    | %VT300_HEBREW [device-color] | %VT300 [device-color] | %VT400_HEBREW | %VT400 ',
+        '    | %VT500_HEBREW | %VT500 | %BLOCKMODE | %3270_BASIC} ; ',
+        'device-color = COLOR | NOCOLOR | COLOUR | NOCOLOUR ; ',
+        '@pixel-entry = PIXEL {$name pixel-type | pixel-type} ; ',
+        '@pixel-type = TYPE {%MOTIF [PLANES $int] [device-color] | %PRINTER | %WINDOWS [device-color]} ; ',
+        '@frame = FRAME [display-viewport] END FRAME ; ',
+        '@language = LANGUAGE $str ; ',
+        '@layout-selection = LAYOUT SELECTION $str ; ',
+        '@units = UNITS {CHARACTERS | INCHES | MILLIMETERS | PIXELS | POINTS | BMUS} ; ',
+        '@size = SIZE {$num LINES BY $num COLUMNS | paper {PORTRAIT | LANDSCAPE}} ; ',
+        'paper = A3 | A4 | A5 | A | B3 | B4 | B5 | B | C | D | E | F ; ',
+        'layout-item = list-declaration | attribute-declaration | display-viewport ',
+        '    | viewport-declaration | function-response | builtin-function-response ',
+        '    | function-declaration | external-response | internal-response | help-use ',
+        '    | field-default-declaration | literal-default-declaration | default-application ; ',
+        'layout-panel = message-panel | help-panel | panel ; ',
+        '@list-declaration = LIST $name [EXACTCASE] list-element... END LIST ; ',
+        '@list-element = value-literal | data-ref ; ',
+        '@attribute-declaration = ATTRIBUTE $name {attribute-for... [attribute-is] | attribute-is} ',
+        '    END ATTRIBUTE ; ',
+        '@attribute-for = FOR $name... attribute-is ; ',
+        '@attribute-is = IS {elementary-attribute | implementor-attribute}... ; ',
+        '@display-viewport = DISPLAY VIEWPORT display-viewport-entry... ; ',
+        'display-viewport-entry = BACKGROUND color | FOREGROUND color | BOLD FOREGROUND color ',
+        '    | REVERSE FOREGROUND color | %TERMINAL_WIDTH_80 | %TERMINAL_WIDTH_132 ',
+        '    | %TERMINAL_WIDTH_UNCHANGED | FILL pattern | NOFILL | TITLE {$str | data-ref} ',
+        '    | DECORATIONS | NODECORATIONS | ICONLABEL {$str | data-ref} ; ',
+        'color = {COLOR | COLOUR} {$num "," $num "," $num | UNCHANGED | BLACK | BLUE | GREEN ',
+        '    | CYAN | RED | MAGENTA | YELLOW | WHITE | $str} ; ',
+        'pattern = PATTERN BUILTIN {BACKGROUND | FOREGROUND | SHADE {LIGHT | MEDIUM | DARK}} ; ',
+        '@viewport-declaration = VIEWPORT $name [FOR PRINTING] viewport-lines viewport-columns ',
+        '    [display-viewport] END VIEWPORT ; ',
+        '@viewport-lines = LINES $num through $num ; ',
+        '@viewport-columns = COLUMNS $num through $num ; ',
+        'through = THROUGH | THRU ; ',
+        '@function-declaration = FUNCTION {builtin-function | $name} ',
+        '    {function-for... [function-is] | function-is} END FUNCTION ; ',
+        '@function-for = FOR $name... function-is ; ',
+        '@function-is = IS {NONE | key-entry...} ; ',
+        'key-entry = "(" key key ")" | "(" key ")" | key ; ',
+        'key = [key-modifier "+"]... $imp ; ',
+        'key-modifier = %ALT | %CONTROL | %SHIFT ; ',
+        'builtin-function = BOUNDARY CURSOR {DOWN | LEFT | RIGHT | UP} | BOUNDARY DELETE LEFT ',
+        '    | BUILTIN FUNCTION | CURSOR {DOWN | LEFT | RIGHT | UP} | DELETE CHARACTER ',
+        '    | DOWN ITEM | DOWN OCCURRENCE | ERASE FIELD | EXIT GROUP {NEXT | PREVIOUS} ',
+        '    | FOCUS CHANGE | INSERT LINE | INSERT OVERSTRIKE | LEFT ITEM | LEFT OCCURRENCE ',
+        '    | NEXT HELP | NEXT ITEM | NEXT PANEL | PREVIOUS ITEM | PREVIOUS PANEL ',
+        '    | REFRESH DISPLAY | RIGHT ITEM | RIGHT OCCURRENCE | TERMINATE HELP | TRANSMIT ',
+        '    | TRIGGER OBJECT | UNDEFINED FUNCTION | UP ITEM | UP OCCURRENCE | USER FUNCTION ',
+        '    | VALUE CHANGED ; ',
+
+        ! Responses and their steps.
+        'external-response = enable-response | disable-response | send-response ',
+        '    | receive-response | transceive-response | control-text-response ; ',
+        '@enable-response = ENABLE RESPONSE [step]... [request]... END RESPONSE ; ',
+        '@disable-response = DISABLE RESPONSE [step]... [request]... END RESPONSE ; ',
+        '@send-response = SEND RESPONSE $name [step]... [request]... END RESPONSE ; ',
+        '@receive-response = RECEIVE RESPONSE $name [step]... [request]... END RESPONSE ; ',
+        '@transceive-response = TRANSCEIVE RESPONSE $name $name [step]... [request]... ',
+        '    END RESPONSE ; ',
+        '@control-text-response = CONTROL TEXT RESPONSE $str [step]... END RESPONSE ; ',
+        '@request = REQUEST {EXIT | VALIDATION} RESPONSE [step]... END RESPONSE ; ',
+        '@internal-response = INTERNAL RESPONSE $name [step]... END RESPONSE ; ',
+        '@function-response = FUNCTION RESPONSE {builtin-function | $name} [step]... ',
+        '    END RESPONSE ; ',
+        '@builtin-function-response = BUILTIN FUNCTION RESPONSE builtin-function ; ',
+        '@entry-response = ENTRY RESPONSE [step]... END RESPONSE ; ',
+        '@exit-response = EXIT RESPONSE [step]... END RESPONSE ; ',
+        '@validation-response = VALIDATION RESPONSE [step]... END RESPONSE ; ',
+        'accept-response = entry-response | exit-response | function-response ',
+        '    | builtin-function-response | validation-response | no-response ; ',
+        '@no-response = NO {ENTRY | EXIT | FUNCTION | VALIDATION} RESPONSE ; ',
+        'step = activate | call | deactivate | display-step | enter-help | exit-help | if-step ',
+        '    | include | invalid | let | message-step | position | print | refresh | remove ',
+        '    | reset | return | signal | validate ; ',
+        '@activate = ACTIVATE {ALL | activate-item...} [TIMEOUT $int] ; ',
+        '@activate-item = object-on | PANEL $name | WAIT [ON $name] | CORRESPONDING RECEIVE ALL ',
+        '    | CORRESPONDING SEND PANELS ; ',
+        'object-on = {BUTTON | FIELD | GROUP | ICON} data-ref ON $name ; ',
+        '@deactivate = DEACTIVATE {ALL | activate-item...} ; ',
+        '@call = CALL $str [USING call-argument...] [GIVING data-ref] ; ',
+        '@call-argument = [BY {REFERENCE | DESCRIPTOR | VALUE | DEFAULT}] {$str | xdata-ref}... ; ',
+        '@display-step = DISPLAY [IMMEDIATE] {$name [ON $name]}... ; ',
+        '@enter-help = ENTER HELP ; ',
+        '@exit-help = EXIT HELP [IMMEDIATE] ; ',
+        '@if-step = IF condition THEN [step]... [ELSE [step]...] END IF ; ',
+        '@include = INCLUDE $name ; ',
+        '@invalid = INVALID ; ',
+        '@let = LET data-ref "=" {%REV "~(" $str ")" | expression} ; ',
+        '@message-step = MESSAGE HELP | message ; ',
+        'message = MESSAGE [$imp | $str | xdata-ref]... ; ',
+        '@position = POSITION [IMMEDIATE] TO position-target ; ',
+        'position-target = object-on | PANEL $name | CURRENT ITEM | FIRST ITEM | FIRST PANEL ',
+        '    | LAST ITEM | LAST PANEL | NEXT ITEM | NEXT PANEL | PREVIOUS ITEM | PREVIOUS PANEL ',
+        '    | {UP | DOWN | LEFT | RIGHT} {ITEM | OCCURRENCE [UNSEEN]} ',
+        '    | EXIT GROUP {NEXT | PREVIOUS} | FOCUS CHANGE | WAIT [ON $name] ; ',
+        '@print = PRINT [IMMEDIATE] [$name [ON $name]]... ; ',
+        '@refresh = REFRESH {ALL | $name...} ; ',
+        '@remove = REMOVE {ALL | HELP | $name...} ; ',
+        '@reset = RESET {ALL | data-ref...} ; ',
+        '@return = RETURN [IMMEDIATE] [$str] ; ',
+        '@signal = SIGNAL [%BELL | %REVERSE] ; ',
+        '@validate = VALIDATE {ALL | object-on | PANEL [ON] $name | WAIT ON $name} ; ',
+
+        ! Expressions and conditions.
+        'expression = ["+" | "-"] term [{"+" | "-" | "*" | "/"} term]... ; ',
+        'term = $num | $str | data-ref | "(" expression ")" ; ',
+        'condition = condition-term [{AND | OR | XOR} condition-term]... ; ',
+        'condition-term = [NOT] {relation | elementary-condition | "(" condition ")"} ; ',
+        'relation = expression {"<=" | ">=" | "<>" | "<" | ">" | "="} expression ; ',
+        'elementary-condition = ACCEPT PHASE | CONVERTED | EMPTY FIELD ',
+        '    | FIRST DISPLAYED {HORIZONTAL | VERTICAL} | FIRST ITEM ',
+        '    | FIRST OCCURRENCE {HORIZONTAL | VERTICAL} | FULL FIELD ',
+        '    | GROUP {FIRST | LAST | OTHER} ITEM | HELP ACTIVE | HELP MESSAGE {AVAILABLE | EXISTS} ',
+        '    | HELP PANEL EXISTS | IMMEDIATE | LAST DISPLAYED {HORIZONTAL | VERTICAL} | LAST ITEM ',
+        '    | LAST OCCURRENCE {HORIZONTAL | VERTICAL} | LEFTMOST ITEM | LOWERMOST ITEM ',
+        '    | OTHER DISPLAYED {HORIZONTAL | VERTICAL} | OTHER ITEM ',
+        '    | OTHER OCCURRENCE {HORIZONTAL | VERTICAL} | PANEL {FIRST | LAST | OTHER} ITEM ',
+        '    | RIGHTMOST ITEM | UPPERMOST ITEM | VALIDATED | VALIDATION STARTED ; ',
+        'data-ref = $name [subscripts] ["." $name [subscripts]]... ; ',
+        'xdata-ref = $xname [subscripts] ["." $name [subscripts]]... ; ',
+        'subscripts = "~(" subscript ["," subscript]... ")" ; ',
+        'subscript = "**" | "*" | subscript-value [":" subscript-value] ; ',
+        'subscript-value = $sint | "(" expression ")" | data-ref ; ',
+
+        ! Panels and what is on them.
+        'layout-panel-body = [panel-property]... [default-application]... [panel-item]... ; ',
+        '@panel = PANEL $name layout-panel-body END PANEL ; ',
+        '@help-panel = HELP PANEL $name layout-panel-body END PANEL ; ',
+        '@message-panel = MESSAGE PANEL $name [message-panel-property]... END PANEL ; ',
+        'message-panel-property = viewport-use | display-viewport | display-clause | displays ',
+        '    | retains ; ',
+        '@displays = DISPLAYS $int ; ',
+        '@retains = RETAINS $int ; ',
+        'panel-property = viewport-use | display-viewport | display-clause | postdisplay ',
+        '    | scroll-bar | accept-response | help-use ; ',
+        '@viewport-use = VIEWPORT $name ; ',
+        '@postdisplay = REMOVE | RETAIN ; ',
+        '@help-use = USE HELP PANEL $name | NO HELP PANEL | USE HELP message | NO HELP MESSAGE ; ',
+        'panel-item = panel-group | field | textfield | slider | push-button | icon | literal ; ',
+        '@field = FIELD data-ref [location] [extent] [field-default-application] [field-entry]... ',
+        '    [copy-dictionary] END FIELD ; ',
+        'field-entry = item-description | field-validation | autoskip | output-picture ',
+        '    | output-when | input-picture | scale | sign | replace | decimal-point | currency ',
+        '    | justification | case | minimum-length | erase-on-entry ; ',
+        '@autoskip = AUTOSKIP | NO AUTOSKIP ; ',
+        '@erase-on-entry = ERASE ON ENTRY | NO ERASE ON ENTRY ; ',
+        '@output-picture = OUTPUT PICTURE {FOR DATE $pic | $pic} ; ',
+        '@input-picture = INPUT PICTURE {FOR DATE $pic | $pic} ; ',
+        '@output-when = OUTPUT $str WHEN condition | NO OUTPUT WHEN ; ',
+        '@scale = SCALE $sint ; ',
+        '@sign = SIGN {PLUS | MINUS | PARENTHESES | sign-string...} ; ',
+        'sign-string = POSITIVE $str | NEGATIVE $str | ZERO $str ; ',
+        '@replace = REPLACE {LEADING | TRAILING} $str ; ',
+        '@decimal-point = DECIMAL POINT IS {PERIOD | COMMA} ; ',
+        '@currency = CURRENCY SIGN IS $str ; ',
+        '@justification = JUSTIFICATION {LEFT | RIGHT | DECIMAL} ; ',
+        '@case = UPPERCASE | MIXED CASE ; ',
+        '@minimum-length = MINIMUM LENGTH $int [message] | NO MINIMUM LENGTH ; ',
+        'item-description = accept-response | active-highlight | concealed | display-clause ',
+        '    | no-display | data-input | help-use | highlight | protected | timeout ; ',
+        '@active-highlight = ACTIVE HIGHLIGHT display-attribute... | NO ACTIVE HIGHLIGHT ; ',
+        '@concealed = CONCEALED [WHEN condition] | NOT CONCEALED ; ',
+        '@display-clause = DISPLAY display-attribute... ; ',
+        '@no-display = NO DISPLAY ; ',
+        'display-attribute = elementary-attribute | implementor-attribute | $xname ; ',
+        'implementor-attribute = %KEYPAD_NUMERIC | %KEYPAD_APPLICATION | %KEYPAD_UNCHANGED ; ',
+        '@data-input = DATA INPUT | NO DATA INPUT [message] ; ',
+        '@highlight = HIGHLIGHT display-attribute... WHEN condition | NO HIGHLIGHT ; ',
+        '@protected = PROTECTED [WHEN condition] | NOT PROTECTED ; ',
+        '@timeout = TIMEOUT $int | NO TIMEOUT ; ',
+        'elementary-attribute = area-attribute | line-attribute | text-attribute ; ',
+        'area-attribute = BACKGROUND color | BORDER WIDTH IS $num | NOFILL | FILL pattern ',
+        '    | FOREGROUND color | REVERSE | NOREVERSE | NEGATIVE | NONEGATIVE | SHADOW | NOSHADOW ; ',
+        'line-attribute = LINE STYLE {SOLID | DASHED | DOTTED | DASHEDDOTTED} ',
+        '    | LINE WIDTH {IS $num | SINGLE | NORMAL | DOUBLE HIGH | DOUBLE WIDE} ',
+        '    | LINE MARKER {DOT | PLUS | ASTERISK | CIRCLE | CROSS} ',
+        '    | CAP {START | END} {BUTT | ROUND | SQUARE | ARROW} | JOIN {MITER | ROUND | BEVEL} ; ',
+        'text-attribute = BLINKING | NOBLINKING | BOLD | NOBOLD | NORMAL INTENSITY | CROSSOUT ',
+        '    | NOCROSSOUT | ENCLOSED {BOX | ENCIRCLE} | NOENCLOSED | OVERLINED | NOOVERLINED ',
+        '    | UNDERLINED DOUBLE | UNDERLINED | NOUNDERLINED | font | TEXT PATH {RIGHT | HEBREW} ',
+        '    | CHARACTER SET character-set ; ',
+        'font = FONT font-part... ; ',
+        'font-part = FAMILY {COURIER | HELVETICA | MENU | SYMBOLS SET | TERMINAL | TIMES ',
+        '    | GOTHIC | GOTIC | HEITI | HEI | KMENU | MINCHO | MYUNGCHO | SCREEN | SONGTI | SUNG ',
+        '    | DAVID | FRANKRUHL | GAM | MIRIAMFIXED | MIRIAM | NARKISSTAM | $str} ',
+        '    | STYLE {ROMAN | ITALIC | OBLIQUE} | WEIGHT {MEDIUM | BOLD} ',
+        '    | SIZE {DOUBLE HIGH | DOUBLE WIDE | SINGLE | NORMAL | $num [SINGLE | NORMAL]} ; ',
+        'character-set = ISO_8859_1 | ISO_8859_9 | PRIVATE_ASCII | PRIVATE_DEC_ARABIC ',
+        '    | PRIVATE_DEC_HANGUL | PRIVATE_DEC_HANYU | PRIVATE_DEC_HANZI | PRIVATE_DEC_HEBREW ',
+        '    | PRIVATE_DEC_KANJI | PRIVATE_DEC_KATAKANA | PRIVATE_DEC_TURKISH | PRIVATE_LATIN_1 ',
+        '    | PRIVATE_LATIN_5 | PRIVATE_MIA_KANJI | PRIVATE_RULE | PRIVATE_THAI | PRIVATE_UK ',
+        '    | PRIVATE_USER_PREFERENCE | PRIVATE_VT100_SET1 | PRIVATE_VT100_SET2 ; ',
+        'field-validation = input-required | range | require | search ; ',
+        '@input-required = INPUT REQUIRED [message] | NO INPUT REQUIRED ; ',
+        '@range = RANGE range-pair... [message] | NO RANGE ; ',
+        'range-pair = range-value through range-value ; ',
+        'range-value = $str | $snum | data-ref ; ',
+        '@require = REQUIRE condition [message] | NO REQUIRE ; ',
+        '@search = SEARCH [NOT] $name [message] | NO SEARCH ; ',
+        '@location = location-part [location-part] ; ',
+        '@full-location = location-part location-part ; ',
+        'location-part = LINE $num | {SAME | NEXT} LINE [{"+" | "-"} $num] | COLUMN $num ',
+        '    | {SAME | NEXT} COLUMN [{"+" | "-"} $num] ; ',
+        '@extent = WIDTH $num [HEIGHT $num] | HEIGHT $num [WIDTH $num] ; ',
+        '@textfield = TEXTFIELD data-ref [location] [extent] [copy-dictionary] ',
+        '    [field-default-application] [textfield-entry]... END FIELD ; ',
+        'textfield-entry = item-description | field-validation | autoskip | case | scroll-bar ',
+        '    | rows | columns | word-wrap | erase-on-entry ; ',
+        '@rows = ROWS $int ; ',
+        '@columns = COLUMNS $int ; ',
+        '@word-wrap = NO WORD WRAP | WORD WRAP ; ',
+        '@slider = SLIDER FIELD data-ref full-location [extent] [copy-dictionary] ',
+        '    [field-default-application] [slider-entry]... [label] limits END FIELD ; ',
+        'slider-entry = item-description | field-validation | maximum | show-value | scale ; ',
+        '@maximum = MAXIMUM {UP | DOWN | LEFT | RIGHT} ; ',
+        '@show-value = NO SHOW VALUE | SHOW VALUE ; ',
+        '@label = LABEL {$str | data-ref} ; ',
+        '@limits = LIMITS $snum through $snum ; ',
+        '@push-button = PUSH BUTTON $name full-location [extent] [field-default-application] ',
+        '    [item-description]... {arrow | label} END BUTTON ; ',
+        '@arrow = ARROW {UP | DOWN | LEFT | RIGHT} ; ',
+        '@icon = ICON $name [default-application]... [item-description]... literal... END ICON ; ',
+        '@literal = LITERAL literal-body [literal-default-application] [display-clause | no-display] ',
+        '    END LITERAL ; ',
+        'literal-body = TEXT [location] literal-value | POINT full-location ',
+        '    | POLYLINE full-location full-location [full-location]... ',
+        '    | RECTANGLE full-location full-location ; ',
+        '@literal-value = VALUE $str ; ',
+        '@panel-group = GROUP data-ref [group-arrangement] [location] [extent] [group-property]... ',
+        '    [default-application]... [panel-item]... END GROUP ; ',
+        '@group-arrangement = {HORIZONTAL | VERTICAL} [DISPLAYS $int] [FIRST {$int | data-ref}] ',
+        '    [SCROLL BY PAGE] ; ',
+        'group-property = scroll-bar | accept-response | help-use ; ',
+        '@scroll-bar = NO SCROLLBARS | scroll-bar-part... ; ',
+        'scroll-bar-part = SCROLLBAR {TOP | BOTTOM | RIGHT | LEFT} [DYNAMIC | STATIC] ; ',
+        '@field-default-declaration = FIELD DEFAULT $name [field-default-entry]... END DEFAULT ; ',
+        'field-default-entry = location | field-entry | textfield-entry | slider-entry ; ',
+        '@literal-default-declaration = LITERAL DEFAULT $name [location] [display-clause] ',
+        '    END DEFAULT ; ',
+        'default-application = field-default-application | literal-default-application ; ',
+        '@field-default-application = APPLY {NO FIELD DEFAULT ',
+        '    | FIELD DEFAULT OF [field-default-entry]... END DEFAULT | FIELD DEFAULT $name} ; ',
+        '@literal-default-application = APPLY {NO LITERAL DEFAULT ',
+        '    | LITERAL DEFAULT OF [location] [display-clause] END DEFAULT ',
+        '    | LITERAL DEFAULT $name} ; ',
+        0);
+
+! ---- Reading the grammar's text
+
+! GERR text, length: a mistake in the grammar; FORMS can't go on.
+ROUTINE GERR (S, L) : NOVALUE =
+    BEGIN
+    LOCAL
+        LINE : VECTOR[160, BYTE],
+        N;
+    MS_MSG(FORMS$_FATINTERR, -1, 0);
+    N = MIN(.L, 60);
+    CH$MOVE(.N, .S, LINE);
+    CH$MOVE(4, UPLIT BYTE (' at '), LINE[.N]);
+    N = .N + 4;
+    INCR I FROM 0 TO 39 DO
+        IF GETB(.TEXT + .AT + .I) NEQ 0 THEN (LINE[.N] = GETB(.TEXT + .AT + .I); N = .N + 1)
+        ELSE EXITLOOP;
+    FIO$PUT_LINE(LINE, .N);
+    FIO$EXIT(FORMS$_FATINTERR OR %X'10000000')
+    END;
+
+ROUTINE WORDCHAR (C) =
+    (.C GEQU %C'A' AND .C LEQU %C'Z') OR (.C GEQU %C'a' AND .C LEQU %C'z')
+    OR (.C GEQU %C'0' AND .C LEQU %C'9') OR .C EQL %C'$' OR .C EQL %C'_' OR .C EQL %C'%'
+    OR .C EQL %C'-';
+
+! DNEXT: the next token of the grammar's text, in DK, DA and DL.
+ROUTINE DNEXT : NOVALUE =
+    BEGIN
+    LOCAL
+        C;
+    WHILE GETB(.TEXT + .AT) EQL %C' ' DO AT = .AT + 1;
+    DA = .TEXT + .AT;
+    C = GETB(.DA);
+    IF .C EQL 0 THEN (DK = DK_END; DL = 0; RETURN);
+    IF .C EQL %C'.'
+    THEN
+        BEGIN
+        IF GETB(.DA + 1) NEQ %C'.' OR GETB(.DA + 2) NEQ %C'.' THEN GERR(T('a lone .'));
+        DK = DK_DOTS;
+        DL = 3;
+        AT = .AT + 3;
+        RETURN
+        END;
+    IF .C EQL %C'"'
+    THEN
+        BEGIN
+        DL = 0;
+        DA = .DA + 1;
+        WHILE GETB(.DA + .DL) NEQ %C'"' DO
+            BEGIN
+            IF GETB(.DA + .DL) EQL 0 THEN GERR(T('no end quote'));
+            DL = .DL + 1
+            END;
+        DK = DK_PUNCT;
+        AT = .AT + .DL + 2;
+        RETURN
+        END;
+    IF NOT WORDCHAR(.C)
+    THEN
+        BEGIN
+        DK = DK_SYM;
+        DL = 1;
+        AT = .AT + 1;
+        RETURN
+        END;
+    DL = 0;
+    WHILE WORDCHAR(GETB(.DA + .DL)) DO DL = .DL + 1;
+    AT = .AT + .DL;
+    DK = (IF .C EQL %C'$' THEN DK_TERM
+          ELSE IF .C GEQU %C'a' AND .C LEQU %C'z' THEN DK_RULE
+          ELSE DK_KW)
+    END;
+
+! SYM character: whether the token is that symbol.
+ROUTINE SYM (C) =
+    .DK EQL DK_SYM AND GETB(.DA) EQL .C;
+
+! EXPECTSYM character: steps past the symbol, which must be there.
+ROUTINE EXPECTSYM (C) : NOVALUE =
+    BEGIN
+    IF NOT SYM(.C) THEN GERR(T('a missing symbol'));
+    DNEXT()
+    END;
+
+! SAME a, length, b, length: whether the texts are the same, in any case.
+ROUTINE SAME (A, AL, B, BL) =
+    BEGIN
+    IF .AL NEQ .BL THEN RETURN FALSE;
+    INCR I FROM 0 TO .AL - 1 DO
+        IF UPPER(GETB(.A + .I)) NEQ UPPER(GETB(.B + .I)) THEN RETURN FALSE;
+    TRUE
+    END;
+
+ROUTINE HASHOF (A, L) =
+    BEGIN
+    LOCAL
+        H;
+    H = 0;
+    INCR I FROM 0 TO .L - 1 DO
+        H = (.H * 31 + UPPER(GETB(.A + .I))) AND %X'FFFFFF';
+    .H MOD HASHSIZE
+    END;
+
+! GR_KWFIND address, length: the keyword a token's text is, in any case,
+! or 0.
+GLOBAL ROUTINE GR_KWFIND (A, L) =
+    BEGIN
+    LOCAL
+        H;
+    H = HASHOF(.A, .L);
+    WHILE .HASH[.H] NEQ 0 DO
+        BEGIN
+        IF SAME(.A, .L, .KWADDR[.HASH[.H]], .KWLEN[.HASH[.H]]) THEN RETURN .HASH[.H];
+        H = (.H + 1) MOD HASHSIZE
+        END;
+    0
+    END;
+
+! INTERN address, length: the keyword with that text, made if it is new.
+ROUTINE INTERN (A, L) =
+    BEGIN
+    LOCAL
+        K;
+    INCR I FROM 1 TO .NKW DO
+        IF CH$EQL(.L, .A, .KWLEN[.I], .KWADDR[.I]) THEN RETURN .I;
+    IF .NKW GEQ MAXKW - 1 THEN GERR(T('too many keywords'));
+    NKW = .NKW + 1;
+    K = .NKW;
+    KWADDR[.K] = .A;
+    KWLEN[.K] = .L;
+    KWFLAGS[.K] = 0;
+    IF GETB(.A) EQL %C'~'
+    THEN
+        BEGIN
+        KWFLAGS[.K] = KF_ATTACH;
+        KWBASE[.K] = INTERN(.A + 1, .L - 1)
+        END
+    ELSE
+        BEGIN
+        LOCAL
+            H;
+        KWBASE[.K] = .K;
+        H = HASHOF(.A, .L);
+        WHILE .HASH[.H] NEQ 0 DO H = (.H + 1) MOD HASHSIZE;
+        HASH[.H] = .K
+        END;
+    .K
+    END;
+
+! GR_RULE address, length: the rule of that name, or 0.
+GLOBAL ROUTINE GR_RULE (A, L) =
+    BEGIN
+    INCR R FROM 1 TO .NRULE DO
+        IF CH$EQL(.L, .A, .RNLEN[.R], .RNAME[.R]) THEN RETURN .R;
+    0
+    END;
+
+! ---- Compiling the rules
+
+ROUTINE NEWG (KIND, A, B) =
+    BEGIN
+    IF .NG GEQ MAXG - 1 THEN GERR(T('too many elements'));
+    NG = .NG + 1;
+    GKIND[.NG] = .KIND;
+    GA[.NG] = .A;
+    GB[.NG] = .B;
+    .NG
+    END;
+
+! LISTG kind, elements, count: an element of kind GK_SEQ or GK_ALT.
+ROUTINE LISTG (KIND, KIDS : REF VECTOR, N) =
+    BEGIN
+    LOCAL
+        FIRST;
+    IF .NL + .N GEQ MAXL THEN GERR(T('too many lists'));
+    FIRST = .NL;
+    INCR I FROM 0 TO .N - 1 DO GLIST[.FIRST + .I] = .KIDS[.I];
+    NL = .NL + .N;
+    NEWG(.KIND, .FIRST, .N)
+    END;
+
+FORWARD ROUTINE
+    EXPR;
+
+! TERMKIND: the TM_ code of the terminal DA names.
+ROUTINE TERMKIND =
+    BEGIN
+    BIND
+        NAMES = UPLIT (
+            UPLIT BYTE ('$name'), 5, TM_NAME,
+            UPLIT BYTE ('$xname'), 6, TM_XNAME,
+            UPLIT BYTE ('$qname'), 6, TM_QNAME,
+            UPLIT BYTE ('$str'), 4, TM_STR,
+            UPLIT BYTE ('$int'), 4, TM_INT,
+            UPLIT BYTE ('$num'), 4, TM_NUM,
+            UPLIT BYTE ('$sint'), 5, TM_SINT,
+            UPLIT BYTE ('$snum'), 5, TM_SNUM,
+            UPLIT BYTE ('$pic'), 4, TM_PIC,
+            UPLIT BYTE ('$imp'), 4, TM_IMP) : VECTOR;
+    INCR I FROM 0 TO 9 DO
+        IF CH$EQL(.DL, .DA, .NAMES[.I * 3 + 1], .NAMES[.I * 3]) THEN RETURN .NAMES[.I * 3 + 2];
+    GERR(T('an unknown terminal'));
+    0
+    END;
+
+ROUTINE ATOM =
+    BEGIN
+    LOCAL
+        G;
+    IF SYM(%C'[')
+    THEN
+        BEGIN
+        DNEXT();
+        G = EXPR();
+        EXPECTSYM(%C']');
+        RETURN NEWG(GK_OPT, .G, 0)
+        END;
+    IF SYM(%C'{')
+    THEN
+        BEGIN
+        DNEXT();
+        G = EXPR();
+        EXPECTSYM(%C'}');
+        RETURN .G
+        END;
+    SELECTONE .DK OF
+        SET
+        [DK_KW, DK_PUNCT]:
+            G = NEWG(GK_KW, INTERN(.DA, .DL), 0);
+        [DK_TERM]:
+            G = NEWG(GK_TERM, TERMKIND(), 0);
+        [DK_RULE]:
+            BEGIN
+            LOCAL
+                R;
+            R = GR_RULE(.DA, .DL);
+            IF .R EQL 0 THEN GERR(T('an undefined rule'));
+            G = NEWG(GK_RULE, .R, 0)
+            END;
+        [OTHERWISE]:
+            GERR(T('a misplaced symbol'));
+        TES;
+    DNEXT();
+    .G
+    END;
+
+ROUTINE ITEM =
+    BEGIN
+    LOCAL
+        G;
+    G = ATOM();
+    IF .DK EQL DK_DOTS THEN (DNEXT(); G = NEWG(GK_REP, .G, 0));
+    .G
+    END;
+
+ROUTINE SEQ =
+    BEGIN
+    LOCAL
+        KIDS : VECTOR[MAXKIDS],
+        N;
+    N = 0;
+    UNTIL .DK EQL DK_END OR SYM(%C'|') OR SYM(%C']') OR SYM(%C'}') OR SYM(%C';') DO
+        BEGIN
+        IF .N GEQ MAXKIDS THEN GERR(T('too many elements in a row'));
+        KIDS[.N] = ITEM();
+        N = .N + 1
+        END;
+    IF .N EQL 0 THEN GERR(T('nothing to match'));
+    IF .N EQL 1 THEN .KIDS[0] ELSE LISTG(GK_SEQ, KIDS, .N)
+    END;
+
+ROUTINE EXPR =
+    BEGIN
+    LOCAL
+        KIDS : VECTOR[MAXKIDS],
+        N;
+    KIDS[0] = SEQ();
+    N = 1;
+    WHILE SYM(%C'|') DO
+        BEGIN
+        DNEXT();
+        IF .N GEQ MAXKIDS THEN GERR(T('too many alternatives'));
+        KIDS[.N] = SEQ();
+        N = .N + 1
+        END;
+    IF .N EQL 1 THEN .KIDS[0] ELSE LISTG(GK_ALT, KIDS, .N)
+    END;
+
+! GR_INIT: compiles the grammar. The rules are named first, so that one
+! may use a rule defined after it, then their elements are compiled.
+GLOBAL ROUTINE GR_INIT : NOVALUE =
+    BEGIN
+    TEXT = GRAMMAR;
+    AT = 0;
+    DNEXT();
+    UNTIL .DK EQL DK_END DO
+        BEGIN
+        LOCAL
+            FLAGS;
+        FLAGS = 0;
+        IF SYM(%C'@') THEN (FLAGS = RF_LINE; DNEXT());
+        IF .DK NEQ DK_RULE THEN GERR(T('a rule without a name'));
+        IF CH$EQL(.DL, .DA, 8, UPLIT BYTE ('reserved')) OR CH$EQL(.DL, .DA, 4, UPLIT BYTE ('stop'))
+        THEN
+            BEGIN
+            LOCAL
+                F;
+            F = (IF .DL EQL 4 THEN KF_STOP ELSE KF_RESERVED);
+            DNEXT();
+            EXPECTSYM(%C'=');
+            UNTIL SYM(%C';') DO
+                BEGIN
+                LOCAL
+                    K;
+                IF .DK NEQ DK_KW THEN GERR(T('a reserved word that is not a keyword'));
+                K = INTERN(.DA, .DL);
+                KWFLAGS[.K] = .KWFLAGS[.K] OR .F;
+                DNEXT()
+                END
+            END
+        ELSE
+            BEGIN
+            IF .NRULE GEQ MAXRULE - 1 THEN GERR(T('too many rules'));
+            IF GR_RULE(.DA, .DL) NEQ 0 THEN GERR(T('a rule defined twice'));
+            NRULE = .NRULE + 1;
+            RNAME[.NRULE] = .DA;
+            RNLEN[.NRULE] = .DL;
+            RFLAGS[.NRULE] = .FLAGS;
+            DNEXT();
+            RSTART[.NRULE] = .AT;
+            EXPECTSYM(%C'=');
+            UNTIL SYM(%C';') DO
+                BEGIN
+                IF .DK EQL DK_END THEN GERR(T('a rule without its ;'));
+                DNEXT()
+                END
+            END;
+        DNEXT()
+        END;
+    INCR R FROM 1 TO .NRULE DO
+        BEGIN
+        AT = .RSTART[.R];
+        DNEXT();
+        RBODY[.R] = EXPR();
+        IF NOT SYM(%C';') THEN GERR(T('more after a rule'))
+        END
+    END;
+
+END
+ELUDOM

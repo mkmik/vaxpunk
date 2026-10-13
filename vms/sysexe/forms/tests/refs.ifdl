@@ -1,0 +1,56 @@
+/* What FORMS TRANSLATE checks in a layout: each line marked ! draws an
+   error, and no form is written. */
+Form REFS_TEST
+    Form Data
+        NAME Character(20)
+    End Data
+
+    Form Record REC
+        NAME Character(20)
+    End Record
+
+    Layout VT
+        Device Terminal Type %VT100 End Device
+        Size 24 Lines By 80 Columns
+        List CODES "A" "B" End List
+        Viewport TOO_LOW Lines 20 Through 30 Columns 1 Through 80 End Viewport    { ! VIEENDLIN }
+        Viewport BACKWARDS Lines 5 Through 4 Columns 90 Through 99 End Viewport    { ! ENDLINGTR, VIEBEGCOL, VIEENDCOL }
+        Internal Response LOOP_A
+            Include LOOP_B
+        End Response
+        Internal Response LOOP_B
+            Include LOOP_A                      { ! RECURLOOP, twice }
+        End Response
+        Internal Response LOOSE
+            Include NO_SUCH_RESPONSE            { ! NOINTERNAL }
+            Return "TOOLONG"                    { ! CTRLTXTLEN }
+        End Response
+        Send Response NO_REC                    { ! NOSENDREC }
+        End Response
+        Receive Response NO_REC                 { ! NORECVREC }
+        End Response
+        Transceive Response NO_REC REC          { ! NOTRANSEND }
+        End Response
+        Control Text Response "AB"              { ! CTRLTXTLEN }
+            Remove NO_VIEWPORT                  { ! NOVIEWPRT }
+        End Response
+        Function Response NO_FUNCTION           { ! NOFUNCTION }
+        End Response
+        Use Help Panel MAIN                     { ! NOTHELPPANEL }
+        Panel MAIN
+            Viewport NOT_DECLARED               { ! NOVIEWPRT }
+            Field NAME
+                Line 1 Column 1
+                Search NO_LIST                  { ! NOLIST }
+                Display SHOUTING                { ! NOATTRIB }
+                Scale 200                       { ! SCALEVALU }
+                Range 10 Through 1              { ! HIGHRANGELESS }
+            End Field
+            Field NOT_DATA                      { ! NODATITEM }
+                Line 2 Column 1
+            End Field
+            Group NOT_A_GROUP                   { ! NODATGRP }
+            End Group
+        End Panel
+    End Layout
+End Form

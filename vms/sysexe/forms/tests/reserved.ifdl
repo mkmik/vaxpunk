@@ -1,0 +1,6 @@
+/* A reserved word is never a name: only one thing could come next. */
+Form RESERVED_TEST
+    Form Data
+        VALUE Character(20)
+    End Data
+End Form

@@ -1,0 +1,5 @@
+
+    4            VALUE Character(20)
+                 ^
+%FORMS-E-SYNTAXERR, syntax error; an expected keyword, name or literal is missing or misspelled.
+-FORMS-I-EXPECTED, one of the following was expected: TRACKED, UNTRACKED, GROUP, FOR, <name>, FIELDVALUE, COPY, END.

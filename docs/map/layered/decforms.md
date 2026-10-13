@@ -1,16 +1,30 @@
 +++
 title = "DECforms"
 summary = "Forms on VT terminals and Motif, described in IFDL, run by the Form Manager"
-aka = ["DECforms", "IFDL", "FIMS", "Form Manager", "FDE", "FORMS TRANSLATE", "FORMS EXTRACT", ".IFDL", ".FORM", "DECforms Web Connector"]
+aka = ["DECforms", "IFDL", "FIMS", "Form Manager", "FDE", "FORMS TRANSLATE", "FORMS BACK_TRANSLATE", "FORMS EXTRACT", ".IFDL", ".FORM", "DECforms Web Connector"]
 kind = "layered"
 intent = "aspiration"
 research = "outline"
-refs = ["https://zx.net.nz/mirror/www.compaq.com/info/SP2990/SP2990PF.PDF", "https://docs.vmssoftware.com/vsi-decforms-for-openvms-ifdl-reference-manual/", "https://docs.vmssoftware.com/vsi-decforms-for-openvms-programmer-s-reference-manual/", "http://neilrieck.net/misc/pdf/vms-docs/DecForms/5616GD_COMM_UTIL.PDF", "https://h41379.www4.hpe.com/doc/721final/6609/6609pro_007.html", "https://ksi.cpsc.ucalgary.ca/archives/HTML-WG/html-wg-95q2.messages/0680.html"]
+refs = ["vms/sysexe/forms/README.md", "docs/adr/0034-forms-grammar-as-data-and-form-files-as-trees.md", "https://zx.net.nz/mirror/www.compaq.com/info/SP2990/SP2990PF.PDF", "https://docs.vmssoftware.com/vsi-decforms-for-openvms-ifdl-reference-manual/", "https://docs.vmssoftware.com/vsi-decforms-for-openvms-programmer-s-reference-manual/", "http://neilrieck.net/misc/pdf/vms-docs/DecForms/5616GD_COMM_UTIL.PDF", "https://h41379.www4.hpe.com/doc/721final/6609/6609pro_007.html", "https://ksi.cpsc.ucalgary.ca/archives/HTML-WG/html-wg-95q2.messages/0680.html"]
 
 [[feature]]
 id = "ifdl"
 title = "IFDL and its translator: .IFDL source to binary .FORM files, and back"
+status = "done"
+note = "FORMS TRANSLATE and FORMS BACK_TRANSLATE, FORMS.EXE in BLISS-64; DECforms's sample and demo forms translate and come back the same"
+
+[[feature]]
+id = "copy"
+title = "IFDL COPY of other files and of text library modules"
 status = "todo"
+needs = ["#ifdl", "/rtl/lbr"]
+
+[[feature]]
+id = "checks"
+title = "The rest of the translator's checks: fields in their viewports, pictures, VALUEs, keys"
+status = "todo"
+needs = ["#ifdl"]
+note = "FORMS checks names, declarations, references and numbers; vms/sysexe/forms/check.b64 lists what it doesn't"
 
 [[feature]]
 id = "character-cell"
@@ -107,6 +121,11 @@ with other layouts, on DECwindows Motif. It replaced FMS and TDMS, and
 ACMS uses it for its exchange steps. VSI sells it today.
 
 On vaxpunk it is an aspiration, needed by ACMS and by Marko's
-home-office inventory idea. Nothing is built. The character-cell side
+home-office inventory idea. The translator is built: `FORMS TRANSLATE`
+and `FORMS BACK_TRANSLATE`, `FORMS.EXE` in BLISS-64
+([vms/sysexe/forms](../../../vms/sysexe/forms/README.md)), with
+DECforms's messages, and a `.FORM` file of vaxpunk's own, the parse tree
+([ADR-0034](../../adr/0034-forms-grammar-as-data-and-form-files-as-trees.md)).
+The Form Manager isn't, so no form runs yet. The character-cell side
 needs only the terminal driver and the calling standard; the Motif side
 needs the DECwindows work in [t8y:/gui](../gui/AREA.md).

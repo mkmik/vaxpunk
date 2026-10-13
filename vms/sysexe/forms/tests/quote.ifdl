@@ -1,0 +1,12 @@
+/* A string must end on its line, or be continued with "-. */
+Form QUOTE_TEST
+    Layout VT
+        Device Terminal Type %VT100 End Device
+        Size 24 Lines By 80 Columns
+        Panel MAIN
+            Literal Text Line 1 Column 1
+                Value "No end
+            End Literal
+        End Panel
+    End Layout
+End Form

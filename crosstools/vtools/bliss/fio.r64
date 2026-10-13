@@ -1,8 +1,9 @@
-! FIO.R64: the I/O module's routines (fio.mar), for BLISS.EXE and VASM.EXE.
+! FIO.R64: the I/O module's routines (fio.mar), for BLISS.EXE, VASM.EXE, TPU and FORMS.
 
 LITERAL
     FIO$K_READ = 0,                     ! FIO$OPEN's modes
     FIO$K_WRITE = 1,
+    FIO$K_BINARY = 2,                   ! with either: bytes as they are, not lines
     SS$_NORMAL = 1,                     ! the statuses the routines return
     SS$_ENDOFFILE = %X'870';
 

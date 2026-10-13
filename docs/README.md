@@ -65,6 +65,7 @@ same commit; `cargo run -p todography -- lint` checks it.
 | [ADR-0031](adr/0031-entropy-from-virtio-rng.md) | Random bytes come from VSI's $GET_ENTROPY, which the PAL serves from a virtio-rng device, and departures from VMS are marked in the sources | Proposed |
 | [ADR-0032](adr/0032-c-run-time-library-and-ssl3-on-mbed-tls.md) | C programs link a C run-time library with DEC C's names, and SSL3 is OpenSSL 3.0's API on Mbed TLS, which the build downloads into the user's cache with Mozilla's CAs | Proposed |
 | [ADR-0033](adr/0033-pseudo-terminals-are-a-port-of-the-terminal-driver.md) | A pseudo terminal, FTAn, is a third port of the terminal driver, cloned from FTA0:, and the PTD$ routines are $QIO calls in the vector | Proposed |
+| [ADR-0034](adr/0034-forms-grammar-as-data-and-form-files-as-trees.md) | FORMS has IFDL's grammar as data, and a .FORM file is the tree it parses, with the names of its rules | Proposed |
 
 ### PRDs
 

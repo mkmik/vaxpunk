@@ -1,0 +1,337 @@
+MODULE FORMS (MAIN = FORMS$MAIN, IDENT = 'V1.0') =
+%TITLE 'FORMS: DECforms''s FORMS TRANSLATE and FORMS BACK_TRANSLATE'
+BEGIN
+!
+! FORMS function file: the DECforms commands of t8y:/layered/decforms,
+! as the Guide to Commands and Utilities (chapter 1) has them. FORMS
+! TRANSLATE file.IFDL makes file.FORM; FORMS BACK_TRANSLATE file.FORM
+! makes file.IFDL again. They take DECforms's qualifiers: TRANSLATE's
+! /OUTPUT, /LOG, /LIST, /[NO]WARNINGS, /ERROR_LIMIT and /[NO]COMMENTS,
+! BACK_TRANSLATE's /OUTPUT and /LOG; the others are accepted and do
+! nothing. The other functions (CONVERT, DEVELOP, EDIT, EXTRACT, TEST)
+! say NOTYETIMP.
+!
+! The command line is what FORMS had after the verb, as FIO$ARGS gives
+! it: under vrun, vrun's arguments. FORMS reads the qualifiers itself,
+! as TPU does; DCL has checked them against cld/forms.cld.
+! ponytail: no /DIAGNOSTICS, /DEPENDENCY_DATA, /SHOW, /INCLUDE,
+! /MEMBER_ALIGNMENT, /FLOAT or /PAD_RECORDS: no COPY of files or text
+! libraries yet, and the records' layout is the Form Manager's.
+!
+REQUIRE 'FORMS';
+REQUIRE 'FIO';
+
+EXTERNAL
+    PR_COMMENTS,
+    CK_INCOMPLETE,
+    MS_NOWARN,
+    MS_LIMIT;
+
+OWN
+    CL,                                 ! the command line
+    CLLEN;
+
+! QUAL name, length, address of value, address of its length: whether
+! the qualifier is on the command line, as /NAME or /NAME=value; 0 if it
+! isn't, 1 if it is, -1 if /NONAME is.
+ROUTINE QUAL (NAME, NLEN, VALP, VLENP) =
+    BEGIN
+    LOCAL
+        I;
+    .VALP = 0;
+    .VLENP = 0;
+    I = 0;
+    WHILE .I LSS .CLLEN DO
+        BEGIN
+        IF GETB(.CL + .I) EQL %C'/'
+        THEN
+            BEGIN
+            LOCAL
+                J,
+                NEG,
+                L;
+            J = .I + 1;
+            NEG = FALSE;
+            IF .J + 1 LSS .CLLEN AND UPPER(GETB(.CL + .J)) EQL %C'N'
+               AND UPPER(GETB(.CL + .J + 1)) EQL %C'O'
+            THEN
+                (NEG = TRUE; J = .J + 2);
+            L = 0;
+            WHILE .J + .L LSS .CLLEN AND GETB(.CL + .J + .L) NEQ %C'/'
+                  AND GETB(.CL + .J + .L) NEQ %C'=' AND GETB(.CL + .J + .L) NEQ %C' ' DO
+                L = .L + 1;
+            ! An abbreviation of the name will do.
+            IF .L GTR 0 AND .L LEQ .NLEN
+            THEN
+                BEGIN
+                LOCAL
+                    SAME;
+                SAME = TRUE;
+                INCR K FROM 0 TO .L - 1 DO
+                    IF UPPER(GETB(.CL + .J + .K)) NEQ GETB(.NAME + .K) THEN SAME = FALSE;
+                IF .SAME
+                THEN
+                    BEGIN
+                    J = .J + .L;
+                    IF .J LSS .CLLEN AND GETB(.CL + .J) EQL %C'='
+                    THEN
+                        BEGIN
+                        L = 0;
+                        J = .J + 1;
+                        WHILE .J + .L LSS .CLLEN AND GETB(.CL + .J + .L) NEQ %C'/'
+                              AND GETB(.CL + .J + .L) NEQ %C' ' DO
+                            L = .L + 1;
+                        .VALP = .CL + .J;
+                        .VLENP = .L
+                        END;
+                    RETURN (IF .NEG THEN -1 ELSE 1)
+                    END
+                END
+            END;
+        I = .I + 1
+        END;
+    0
+    END;
+
+! WORD n, address of length: the nth word of the command line that is
+! not a qualifier, from 0: the function, then the file; or 0.
+ROUTINE WORD (N, LENP) =
+    BEGIN
+    LOCAL
+        I,
+        K;
+    I = 0;
+    K = 0;
+    WHILE .I LSS .CLLEN DO
+        BEGIN
+        LOCAL
+            C;
+        C = GETB(.CL + .I);
+        IF .C EQL %C'/'
+        THEN
+            BEGIN
+            I = .I + 1;
+            WHILE .I LSS .CLLEN AND GETB(.CL + .I) NEQ %C' ' AND GETB(.CL + .I) NEQ %C'/' DO
+                I = .I + 1
+            END
+        ELSE IF .C EQL %C' '
+        THEN
+            I = .I + 1
+        ELSE
+            BEGIN
+            LOCAL
+                L;
+            L = 0;
+            WHILE .I + .L LSS .CLLEN AND GETB(.CL + .I + .L) NEQ %C' '
+                  AND GETB(.CL + .I + .L) NEQ %C'/' DO
+                L = .L + 1;
+            IF .K EQL .N THEN (.LENP = .L; RETURN .CL + .I);
+            K = .K + 1;
+            I = .I + .L
+            END
+        END;
+    .LENP = 0;
+    0
+    END;
+
+! FILE_NAME name, length, default type, length, buffer: the name in
+! capitals, with the type if it has none; its length.
+ROUTINE FILE_NAME (NAME, LEN, TYPE, TLEN, BUF) =
+    BEGIN
+    LOCAL
+        DOT,
+        L;
+    DOT = FALSE;
+    L = MIN(.LEN, 250);
+    INCR I FROM 0 TO .L - 1 DO
+        BEGIN
+        LOCAL
+            C;
+        C = UPPER(GETB(.NAME + .I));
+        IF .C EQL %C'.' THEN DOT = TRUE;
+        IF .C EQL %C']' OR .C EQL %C':' OR .C EQL %C'>' THEN DOT = FALSE;
+        PUTB(.BUF + .I, .C)
+        END;
+    IF NOT .DOT THEN (CH$MOVE(.TLEN, .TYPE, .BUF + .L); L = .L + .TLEN);
+    .L
+    END;
+
+! OUT_NAME name, length, type, length, buffer: an output file's default
+! name: the name of the file, without its device, directory, type and
+! version, in the default directory, with the type; its length.
+ROUTINE OUT_NAME (NAME, LEN, TYPE, TLEN, BUF) =
+    BEGIN
+    LOCAL
+        S,
+        E;
+    S = 0;
+    INCR I FROM 0 TO .LEN - 1 DO
+        IF GETB(.NAME + .I) EQL %C']' OR GETB(.NAME + .I) EQL %C':' OR GETB(.NAME + .I) EQL %C'>'
+        THEN
+            S = .I + 1;
+    E = .S;
+    WHILE .E LSS .LEN AND GETB(.NAME + .E) NEQ %C'.' AND GETB(.NAME + .E) NEQ %C';' DO E = .E + 1;
+    E = MIN(.E - .S, 240);
+    CH$MOVE(.E, .NAME + .S, .BUF);
+    CH$MOVE(.TLEN, .TYPE, .BUF + .E);
+    .E + .TLEN
+    END;
+
+! READ_WHOLE name, length, address of length, mode: the file's bytes, in
+! memory MEM gave, with zeros after them for the lexer to look past the
+! end at, or 0 if it can't be read.
+GLOBAL ROUTINE READ_WHOLE (NAME, LEN, LENP, MODE) =
+    BEGIN
+    LOCAL
+        CHAN,
+        BUF,
+        CAP,
+        L;
+    IF NOT FIO$OPEN(.NAME, .LEN, .MODE, CHAN) THEN RETURN 0;
+    CAP = 65536;
+    BUF = MEM(.CAP);
+    L = 0;
+    WHILE TRUE DO
+        BEGIN
+        LOCAL
+            GOT,
+            S;
+        IF .L + 16 GEQ .CAP
+        THEN
+            BEGIN
+            LOCAL
+                NEW;
+            NEW = MEM(.CAP * 2);
+            CH$MOVE(.L, .BUF, .NEW);
+            BUF = .NEW;
+            CAP = .CAP * 2
+            END;
+        S = FIO$READ(.CHAN, .BUF + .L, .CAP - .L, GOT);
+        IF NOT .S OR .GOT EQL 0 THEN EXITLOOP;
+        L = .L + .GOT
+        END;
+    FIO$CLOSE(.CHAN);
+    .LENP = .L;
+    .BUF
+    END;
+
+! TRANSLATE: FORMS TRANSLATE file.IFDL.
+ROUTINE TRANSLATE : NOVALUE =
+    BEGIN
+    LOCAL
+        F,
+        FL,
+        NAME : VECTOR[256, BYTE],
+        NLEN,
+        TEXT,
+        TLEN,
+        V,
+        VL,
+        LIST,
+        LV,
+        LVL;
+    F = WORD(1, FL);
+    NLEN = FILE_NAME(.F, .FL, T('.IFDL'), NAME);
+    TEXT = READ_WHOLE(NAME, .NLEN, TLEN, FIO$K_READ);
+    IF .TEXT EQL 0 THEN (MS_MSG(FORMS$_OPENIN, -1, 0, NAME, .NLEN); RETURN);
+    LEX_INIT(.TEXT, .TLEN);
+    PR_COMMENTS = QUAL(T('COMMENTS'), V, VL) GEQ 0;
+    MS_NOWARN = QUAL(T('WARNINGS'), V, VL) LSS 0;
+    IF QUAL(T('ERROR_LIMIT'), V, VL) GTR 0 AND .VL GTR 0
+    THEN
+        BEGIN
+        MS_LIMIT = 0;
+        INCR I FROM 0 TO .VL - 1 DO
+            IF GETB(.V + .I) GEQU %C'0' AND GETB(.V + .I) LEQU %C'9'
+            THEN
+                MS_LIMIT = .MS_LIMIT * 10 + GETB(.V + .I) - %C'0'
+        END;
+    LIST = QUAL(T('LIST'), LV, LVL);
+    IF .LIST GTR 0 THEN MS_LOGGING();
+    IF PR_TRANSLATE(.TEXT, .TLEN) THEN CK_RUN();
+    IF MS_ERRORS() EQL 0 AND QUAL(T('OUTPUT'), V, VL) GEQ 0
+    THEN
+        BEGIN
+        LOCAL
+            OUT : VECTOR[256, BYTE],
+            OL;
+        OL = (IF .VL GTR 0 THEN FILE_NAME(.V, .VL, T('.FORM'), OUT)
+              ELSE OUT_NAME(NAME, .NLEN, T('.FORM'), OUT));
+        IF FF_WRITE(OUT, .OL, .CK_INCOMPLETE) AND QUAL(T('LOG'), V, VL) GTR 0
+        THEN
+            MS_MSG(FORMS$_TRANSLATED, -1, 0, NAME, .NLEN, OUT, .OL)
+        END;
+    IF .LIST GTR 0
+    THEN
+        BEGIN
+        LOCAL
+            LIS : VECTOR[256, BYTE],
+            LL,
+            CMD : VECTOR[600, BYTE];
+        LL = (IF .LVL GTR 0 THEN FILE_NAME(.LV, .LVL, T('.LIS'), LIS)
+              ELSE OUT_NAME(NAME, .NLEN, T('.LIS'), LIS));
+        ! FORMS and the command line, from its first word.
+        F = WORD(0, FL);
+        FL = MIN(.CL + .CLLEN - .F, 590);
+        CH$MOVE(6, UPLIT BYTE ('FORMS '), CMD);
+        CH$MOVE(.FL, .F, CMD[6]);
+        MS_LIST(LIS, .LL, NAME, .NLEN, .TEXT, .TLEN, CMD, .FL + 6)
+        END
+    END;
+
+! BACK_TRANSLATE: FORMS BACK_TRANSLATE file.FORM.
+ROUTINE BACK_TRANSLATE : NOVALUE =
+    BEGIN
+    LOCAL
+        F,
+        FL,
+        NAME : VECTOR[256, BYTE],
+        NLEN,
+        OUT : VECTOR[256, BYTE],
+        OL,
+        V,
+        VL;
+    F = WORD(1, FL);
+    NLEN = FILE_NAME(.F, .FL, T('.FORM'), NAME);
+    IF NOT FF_READ(NAME, .NLEN) THEN RETURN;
+    QUAL(T('OUTPUT'), V, VL);
+    OL = (IF .VL GTR 0 THEN FILE_NAME(.V, .VL, T('.IFDL'), OUT)
+          ELSE OUT_NAME(NAME, .NLEN, T('.IFDL'), OUT));
+    IF BT_WRITE(OUT, .OL) AND QUAL(T('LOG'), V, VL) GTR 0
+    THEN
+        MS_MSG(FORMS$_BACKXLATED, -1, 0, NAME, .NLEN, OUT, .OL)
+    END;
+
+ROUTINE FORMS$MAIN =
+    BEGIN
+    LOCAL
+        W,
+        WL,
+        FN : VECTOR[16, BYTE];
+    BIND
+        ! DECforms's functions, as its command table has them.
+        FUNCTIONS = UPLIT (
+            UPLIT BYTE ('TRANSLATE'), 9, UPLIT BYTE ('BACK_TRANSLATE'), 14,
+            UPLIT BYTE ('CONVERT'), 7, UPLIT BYTE ('DEVELOP'), 7, UPLIT BYTE ('EDIT'), 4,
+            UPLIT BYTE ('EXTRACT'), 7, UPLIT BYTE ('TEST'), 4) : VECTOR;
+    FIO$ARGS(CL, CLLEN);
+    GR_INIT();
+    W = WORD(0, WL);
+    INCR I FROM 0 TO MIN(.WL, 16) - 1 DO FN[.I] = UPPER(GETB(.W + .I));
+    INCR K FROM 0 TO 6 DO
+        IF .WL GTR 0 AND .WL LEQ .FUNCTIONS[.K * 2 + 1]
+           AND CH$EQL(.WL, FN, .WL, .FUNCTIONS[.K * 2])
+        THEN
+            BEGIN
+            IF .K EQL 0 THEN TRANSLATE()
+            ELSE IF .K EQL 1 THEN BACK_TRANSLATE()
+            ELSE MS_MSG(FORMS$_NOTYETIMP, -1, 0);
+            FIO$EXIT(MS_STATUS() OR %X'10000000')
+            END;
+    MS_MSG(FORMS$_NOTYETIMP, -1, 0);
+    FIO$EXIT(MS_STATUS() OR %X'10000000');
+    1
+    END;
+
+END
+ELUDOM
