@@ -361,8 +361,9 @@ server a node and the path in quotes: `COPY/HTTP 10.0.2.2::"/index.html"
 []`, or a whole URL after a node that is only a name, `COPY/HTTP
 URL::"http://10.0.2.2:8080/pub/notes.txt" DKB0:[000000]`. The page goes,
 byte for byte, binary or not, into a new STREAM_LF file, as VMS's
-ports of curl and wget write one, named after the path's last part
-where the output doesn't say (`NOTES.TXT`, `INDEX.HTML` for a path
+ports of curl and wget write one, or with `/BINARY` a FIX 512 one, as
+`COPY/FTP/BINARY` makes, named after the path's last part where the
+output doesn't say or says `*` (`NOTES.TXT`, `INDEX.HTML` for a path
 ending in `/`); 404 is `%RMS-E-FNF`, 401 and 403 `%RMS-E-PRV`, another
 error `%RMS-F-NETFAIL`. It follows redirects, ten at most, and takes
 chunked bodies. Names come from the hosts database or DNS. An

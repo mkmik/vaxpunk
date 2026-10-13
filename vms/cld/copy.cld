@@ -1,8 +1,10 @@
 ! COPY from to: COPY.EXE copies a file. COPY/HTTP node::"/path" to, or
-! URL::"http://host[:port]/path" to, fetches one from a web server.
+! URL::"http://host[:port]/path" to, fetches one from a web server;
+! /BINARY makes it FIX 512.
 define verb COPY
 	image COPY
 	parameter P1, label=FROM, prompt="From", value(required, type=$infile)
 	parameter P2, label=TO, prompt="To", value(required, type=$outfile)
+	qualifier BINARY
 	qualifier HTTP
 	qualifier LOG
