@@ -6,12 +6,14 @@ name: rust
 # boot.yml builds and boots them.
 # vrun's tests run CLITEST, the command parser's check, from vms/sysexe,
 # and CDU$COMPILE, SET COMMAND's compiler, on vms/cld's CLD.
+# It runs on every PR, with no paths filter: "test (ubuntu-latest)" is a
+# check the "CI must pass" ruleset requires, and a filtered-out workflow
+# never reports, which would hold a docs-only PR forever. boot.yml, which
+# runs on every PR too, takes longer, so this adds no wait.
 on:
   push:
     branches: [main]
-    paths: ["Cargo.toml", "Cargo.lock", "*/*.rs", "*/Cargo.toml", "pal/*/*.rs", "pal/*/Cargo.toml", "crosstools/**", "vms/**", ".github/workflows/rust.yml"]
   pull_request:
-    paths: ["Cargo.toml", "Cargo.lock", "*/*.rs", "*/Cargo.toml", "pal/*/*.rs", "pal/*/Cargo.toml", "crosstools/**", "vms/**", ".github/workflows/rust.yml"]
 
 jobs:
   test:
