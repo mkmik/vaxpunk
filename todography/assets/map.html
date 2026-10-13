@@ -268,6 +268,8 @@ a.node:hover { text-decoration: none; border-color: var(--ink); }
 .feat:first-child { border-top: 0; }
 .feat > .sq { margin-top: 4px; }
 .feat.hl { background: var(--accent-bg); }
+.feats .feat { cursor: pointer; }
+.feats .feat:not(.hl):hover { background: var(--bg); }
 .feat .fb { min-width: 0; flex: 1; }
 .feat .ft { overflow-wrap: anywhere; }
 .feat .fid { color: var(--muted); margin: 0 4px; }
@@ -1310,10 +1312,12 @@ function featureRow(c, f) {
       : n.met ? h("span", { class: "mk met" }, "met") : h("span", { class: "mk unmet" }, "not met");
     return h("span", null, compLink(l), mark ? [" ", mark] : null);
   });
-  return h("li", { class: "feat s-" + f.status, id: "f-" + f.id },
+  const pick = focusHref(featOf(state.focus || "") === f.id ? c.label : c.label + "#" + f.id);
+  // The whole row picks the feature; links inside it, and selecting text, keep working.
+  const row = h("li", { class: "feat s-" + f.status, id: "f-" + f.id },
     statusBox(f.status),
     h("div", { class: "fb" },
-      h("div", { class: "ft" }, h("span", null, f.title), h("a", { class: "fid", href: focusHref(featOf(state.focus || "") === f.id ? c.label : c.label + "#" + f.id),
+      h("div", { class: "ft" }, h("span", null, f.title), h("a", { class: "fid", href: pick,
           title: "Show only the needs of this feature; click again for all" }, h("code", null, "#" + f.id)),
         f.status === "wip" ? chip(null, "in progress", "s-wip") : null, " ",
         f.milestone ? chip(null, f.milestone, null, ms ? ms.title : null) : null),
@@ -1321,6 +1325,11 @@ function featureRow(c, f) {
       f.refs.length ? h("div", { class: "fnote" }, commas(f.refs.map(refEl))) : null,
       needs.length ? h("div", { class: "fneeds" }, "Needs ", commas(needs)) : null,
       f.status !== "done" && f.status !== "dropped" ? workState(w) : null));
+  row.addEventListener("click", e => {
+    if (e.target.closest("a, button, input") || String(window.getSelection())) return;
+    location.hash = pick;
+  });
+  return row;
 }
 
 function whySection(c) {
