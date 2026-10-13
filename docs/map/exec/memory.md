@@ -58,7 +58,8 @@ id = "more-memory"
 title = "More than 1,024 PFNs (4 MB) and 96 page tables: frame caps in a CNode of their own"
 status = "todo"
 needs = ["/platform/pal"]
-note = "PRD-0003 tier 4 #39; turns tier 1 when logged-in users and batch jobs run out of memory"
+milestone = "m1"
+note = "PRD-0003 tier 1 #39; t8y:/exec/capacity tracks this and the other fixed sizes"
 
 [[feature]]
 id = "page-faults"
@@ -101,5 +102,5 @@ PAL to map, unmap or protect a page and returns the old PTE
 mode's seL4 thread has an address space holding exactly what that mode
 may read. Pages are allocated and kept: no paging, swapping or sharing.
 The PAL has 1,024 PFNs, 4 MB, as many as the root CNode leaves room for
-(PRD-0003 tier 4 #39), and a page fault is an access violation, so image
+(PRD-0003 tier 1 #39), and a page fault is an access violation, so image
 sections are read in whole (tier 3 #21).

@@ -12,7 +12,7 @@ id = "m0-toolchain"
 title = "M0: the toolchain and system can hold it: FP, quadword built-ins, memory, mapped images"
 status = "todo"
 needs = ["/host/vmacro", "/host/vasm", "/platform/pal", "/exec/image-activator", "/exec/timers", "/exec/memory#more-memory"]
-note = "PRD-0007 M0 and Feasibility: FP in vasm and vmacro, IEEE built-ins, the 1,024-page limit (PRD-0003 tier 4 #39), image sections mapped page by page (tier 3 #21), $GETUTC, multi-module images in build.rs"
+note = "PRD-0007 M0 and Feasibility: FP in vasm and vmacro, IEEE built-ins, the 1,024-page limit (PRD-0003 tier 1 #39), image sections mapped page by page (tier 3 #21), $GETUTC, multi-module images in build.rs"
 
 [[feature]]
 id = "m1-loader"

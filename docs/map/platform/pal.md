@@ -94,7 +94,8 @@ note = "main.c load_image ponytail: link address only; relocate with the EIAF wh
 id = "frame-caps"
 title = "Frame caps in a CNode of their own: more than 1,024 PFNs, and more than 256 extra mappings of them"
 status = "todo"
-note = "PRD-0003 tier 4 #39 (4 MB, 96 page tables; turns tier 1 when users run out of memory); main.c ponytails on PFN_COUNT and XMAP_MAX"
+milestone = "m1"
+note = "PRD-0003 tier 1 #39 (4 MB, 96 page tables, 32 contexts); main.c ponytails on PFN_COUNT and XMAP_MAX; t8y:/exec/capacity needs it"
 
 [[feature]]
 id = "page-faults"
@@ -175,8 +176,8 @@ pending interrupts in software, ticks the interval timer from a thread
 of its own ([ADR-0004](../../adr/0004-interval-timer-is-a-pal-thread.md)),
 maps pages on `WRPTE` because the executive can't write seL4's page
 tables, and drives the virtio disks, the entropy device and the UART.
-Its limits are in PRD-0003's tier 4: 1,024 PFNs (4 MB) and 96 page
-tables, as much as the root CNode leaves room for; one mapping per PFN;
-polled devices at fixed addresses; a seL4 call per page on each process
-switch. A page fault is an access violation, so the executive can't page
+Its sizes, 1,024 PFNs (4 MB), 96 page tables and 32 contexts, as much as
+the root CNode leaves room for, are PRD-0003 tier 1 #39
+(`t8y:/exec/capacity`); its other limits are tier 4: polled devices at
+fixed addresses, a seL4 call per page on each process switch. A page fault is an access violation, so the executive can't page
 yet.
