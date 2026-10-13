@@ -1,7 +1,8 @@
 #!/bin/sh
 # Put the GitHub Pages site together in SITE: web/index.html at /, the API reference
-# (cargo run -p apidoc) at /docs/ and the demo at /demo/, with QEMU from QEMU (qemu-wasm.sh's
-# DIR) and the gzipped firmware and disks from IMAGES (boot.yml's demo-images). Needs npm.
+# (cargo run -p apidoc) at /docs/, the map (cargo run -p todography -- build) at /map/
+# and the demo at /demo/, with QEMU from QEMU (qemu-wasm.sh's DIR) and the gzipped
+# firmware and disks from IMAGES (boot.yml's demo-images). Needs npm.
 # Usage: mksite.sh SITE QEMU IMAGES
 set -eu
 
@@ -12,6 +13,7 @@ mkdir -p "$site/demo/vendor"
 site=$(cd "$site" && pwd)
 cp "$root/web/index.html" "$root/apidoc/page.css" "$site/"
 cp -R "$root/docs/api" "$site/docs"
+cp -R "$root/out/map" "$site/map"
 cp "$root/web/demo/index.html" "$root/web/demo/lan.js" "$qemu"/qemu-system-aarch64.* "$images"/*.gz "$site/demo/"
 
 # tailgate, the demo's gateway, with only the Tailscale features tailcat's own wasm build keeps.
