@@ -503,3 +503,104 @@ fn cli() {
     let (code, _) = todography(&["frobnicate"]);
     assert_eq!(code, 2);
 }
+
+#[test]
+fn tui() {
+    use ratatui::crossterm::event::{KeyCode, KeyModifiers, MouseButton, MouseEventKind};
+    use ratatui::{Terminal, backend::TestBackend};
+    use todography::tui::{App, View};
+
+    let mut app = App::new(&dir());
+    let mut term = Terminal::new(TestBackend::new(120, 40)).unwrap();
+    let mut screen = |app: &mut App| {
+        term.draw(|f| app.draw(f)).unwrap();
+        term.backend().to_string()
+    };
+    let key = |app: &mut App, k| app.key(k, KeyModifiers::NONE);
+
+    assert!(screen(&mut app).contains("Applications"));
+    for ch in "/qio".chars() {
+        key(&mut app, KeyCode::Char(ch));
+    }
+    key(&mut app, KeyCode::Enter);
+    assert_eq!(app.map.comps[app.sel].path, "exec/qio");
+    let s = screen(&mut app);
+    // A tile is its mark, its status glyph and its title.
+    let tile = |mark: char, title: &str| {
+        "○◌◔◑◕●×"
+            .chars()
+            .any(|g| s.contains(&format!("{mark}{g} {title} ")))
+    };
+    assert!(
+        tile(' ', "QIO") && tile('↓', "Timers") && tile('↑', "Editor"),
+        "{s}"
+    );
+
+    key(&mut app, KeyCode::Enter);
+    assert_eq!(app.view, View::Focus);
+    let s = screen(&mut app);
+    assert!(
+        s.contains("Needs (3)") && s.contains("Needed by (2)"),
+        "{s}"
+    );
+
+    key(&mut app, KeyCode::Char('3'));
+    assert!(screen(&mut app).contains("Ready now"));
+
+    // The mouse: a click picks, a second click opens, a drag copies.
+    let mut app = App::new(&dir());
+    let mut term = Terminal::new(TestBackend::new(120, 40)).unwrap();
+    let mut find = |app: &mut App, text: &str| {
+        term.draw(|f| app.draw(f)).unwrap();
+        let buf = term.backend().buffer();
+        (0..buf.area.height)
+            .find_map(|y| {
+                let row: String = (0..buf.area.width).map(|x| buf[(x, y)].symbol()).collect();
+                let at = row.find(text)?;
+                Some((row[..at].chars().count() as u16, y))
+            })
+            .unwrap_or_else(|| panic!("{text} isn't on screen"))
+    };
+    // Presses on the start of `text`, drags `dx` columns right, releases.
+    let mut mouse_on = |app: &mut App, text: &str, dx: u16| {
+        let (x, y) = find(app, text);
+        app.mouse(MouseEventKind::Down(MouseButton::Left), x, y);
+        if dx > 0 {
+            app.mouse(MouseEventKind::Drag(MouseButton::Left), x + dx, y);
+        }
+        app.mouse(MouseEventKind::Up(MouseButton::Left), x + dx, y);
+    };
+    mouse_on(&mut app, "Timers", 0);
+    assert_eq!(app.map.comps[app.sel].path, "exec/timers");
+    assert_eq!(app.view, View::Map);
+    mouse_on(&mut app, "Timers", 0);
+    assert_eq!(app.view, View::Focus);
+    mouse_on(&mut app, "t8y:/apps/mail", 0);
+    assert_eq!(app.map.comps[app.sel].path, "exec/timers");
+    mouse_on(&mut app, "t8y:/apps/mail", 0);
+    assert_eq!(app.map.comps[app.sel].path, "apps/mail");
+    mouse_on(&mut app, "Timers", 0);
+    assert_eq!(
+        app.map.comps[app.sel].path, "exec/timers",
+        "the trail goes back"
+    );
+    assert_eq!(app.copied, None);
+    mouse_on(&mut app, "t8y:/exec/timers", 15);
+    assert_eq!(app.copied.as_deref(), Some("t8y:/exec/timers"));
+    assert_eq!(
+        app.map.comps[app.sel].path, "exec/timers",
+        "a drag isn't a click"
+    );
+    mouse_on(&mut app, "3 Roadmap", 0);
+    assert_eq!(app.view, View::Roadmap);
+
+    let k = app
+        .map
+        .work
+        .iter()
+        .position(|w| w.label == "t8y:/apps/mail")
+        .unwrap();
+    assert!(app.prompt(k).contains(
+        "- Timers: Absolute timers, t8y:/exec/timers#abs (docs/map/exec/timers.md), ready now"
+    ));
+}

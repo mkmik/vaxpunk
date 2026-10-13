@@ -23,6 +23,12 @@ title = "build: one self-contained page with Map, Focus, Roadmap and Choose view
 status = "done"
 
 [[feature]]
+id = "tui"
+title = "tui: the Map, Focus and Roadmap views in a terminal"
+status = "wip"
+note = "A proof of concept: no Choose view and no previews"
+
+[[feature]]
 id = "content"
 title = "Every component of vaxpunk and of a whole OpenVMS on the map"
 status = "wip"

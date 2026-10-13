@@ -6,5 +6,6 @@ pub mod json;
 pub mod label;
 pub mod map;
 pub mod query;
+pub mod tui;
 
 pub use map::Map;
