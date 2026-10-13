@@ -26,7 +26,7 @@
 //! through guestfwd, a line each way, CTRL/] and CLOSE, and with /PORT to one there cannot be;
 //! then COPY/HTTP from web servers here, through guestfwd, to the data
 //! disk: by URL, by node and path, one that says 404, by URL with a
-//! host's name, an ftp URL, and https URLs, whose TLS servers here
+//! host's name, an ftp URL, one that redirects to a chunked body, and https URLs, whose TLS servers here
 //! have certificates a test CA signed: one before SSL_CERT_FILE names
 //! the CA, so the system's bundle doesn't trust it, and one after;
 //! then SSL3$CLIENT to TLS servers here, TLS 1.3 and 1.2, to one whose
@@ -156,6 +156,17 @@ impl Vax {
 /// A web server for one request, through guestfwd, whose host side
 /// connects once: it answers with status and body and returns the request.
 fn web_server(status: &'static str, body: Vec<u8>) -> (u16, thread::JoinHandle<String>) {
+    let mut response = format!(
+        "HTTP/1.0 {status}\r\nContent-Length: {}\r\nContent-Type: text/plain\r\n\r\n",
+        body.len()
+    )
+    .into_bytes();
+    response.extend(body);
+    web_response(response)
+}
+
+/// web_server, answering with the whole response.
+fn web_response(response: Vec<u8>) -> (u16, thread::JoinHandle<String>) {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let port = listener.local_addr().unwrap().port();
     let server = thread::spawn(move || {
@@ -167,13 +178,7 @@ fn web_server(status: &'static str, body: Vec<u8>) -> (u16, thread::JoinHandle<S
             assert!(n > 0, "the request ended early");
             request.extend_from_slice(&buf[..n]);
         }
-        write!(
-            c,
-            "HTTP/1.0 {status}\r\nContent-Length: {}\r\nContent-Type: text/plain\r\n\r\n",
-            body.len()
-        )
-        .unwrap();
-        c.write_all(&body).unwrap();
+        c.write_all(&response).unwrap();
         String::from_utf8_lossy(&request).into_owned()
     });
     (port, server)
@@ -390,6 +395,17 @@ fn network() {
     // Every byte value, LFs and CRs too, past one $WRITE's 32768.
     let blob: Vec<u8> = (0..40000u32).map(|i| (i * 7 % 256) as u8).collect();
     let (blob_port, blob_server) = web_server("200 OK", blob.clone());
+    // A redirect, by name to another server, whose body comes in chunks.
+    let (moved_port, moved) = web_response(
+        b"HTTP/1.1 302 Found\r\nLocation: http://web.example:7789/b/next\r\n\
+          Content-Length: 5\r\n\r\nnext\n"
+            .to_vec(),
+    );
+    let (chunked_port, chunked) = web_response(
+        b"HTTP/1.1 200 OK\r\nTransfer-Encoding: Chunked\r\n\r\n\
+          6\r\nchunk \r\ne;x=y\r\nacross chunks\n\r\nA\r\n0123456789\r\n0\r\n\r\n"
+            .to_vec(),
+    );
     let fwd = free_port();
     let ufwd = free_port();
     let dns = dns_server();
@@ -415,6 +431,8 @@ fn network() {
          guestfwd=tcp:10.0.2.100:7785-tcp:127.0.0.1:{wrong_port},\
          guestfwd=tcp:10.0.2.100:7786-tcp:127.0.0.1:{https_port},\
          guestfwd=tcp:10.0.2.100:7787-tcp:127.0.0.1:{untrusted_port},\
+         guestfwd=tcp:10.0.2.100:7788-tcp:127.0.0.1:{moved_port},\
+         guestfwd=tcp:10.0.2.100:7789-tcp:127.0.0.1:{chunked_port},\
          hostfwd=tcp:127.0.0.1:{fwd}-:7778,hostfwd=udp:127.0.0.1:{ufwd}-:7780"
     );
     let mut vax = Vax::boot(
@@ -565,6 +583,8 @@ fn network() {
     vax.command(r#"COPY/HTTP URL::"http://10.0.2.100:7781/nope" DKB0:[000000]"#);
     vax.command(r#"COPY/HTTP/LOG URL::"http://web.example:7782/kit/blob.bin" DKB0:[000000]"#);
     vax.command(r#"COPY/HTTP URL::"ftp://10.0.2.100/x" DKB0:[000000]"#);
+    vax.command(r#"COPY/HTTP/LOG URL::"http://10.0.2.100:7788/a/moved.txt" DKB0:[000000]"#);
+    vax.command("TYPE DKB0:[000000]MOVED.TXT");
     // https: the system's CAs, SSL3$CERTS:CERT.PEM, don't have the test CA,
     // which signed the server's certificate; SSL_CERT_FILE names it.
     vax.command(r#"COPY/HTTP URL::"https://tls.example.org:7787/x" DKB0:[000000]"#);
@@ -596,26 +616,34 @@ fn network() {
     assert_eq!(echoer.join().unwrap(), "netcat\r\n");
     assert_eq!(
         readme.join().unwrap(),
-        "GET /pub/Read.Me.txt HTTP/1.0\r\nHost: 10.0.2.100:7780\r\n\r\n"
+        "GET /pub/Read.Me.txt HTTP/1.1\r\nHost: 10.0.2.100:7780\r\nConnection: close\r\n\r\n"
     );
     assert_eq!(
         index.join().unwrap(),
-        "GET / HTTP/1.0\r\nHost: 10.0.2.100\r\n\r\n"
+        "GET / HTTP/1.1\r\nHost: 10.0.2.100\r\nConnection: close\r\n\r\n"
     );
     assert_eq!(
         missing.join().unwrap(),
-        "GET /nope HTTP/1.0\r\nHost: 10.0.2.100:7781\r\n\r\n"
+        "GET /nope HTTP/1.1\r\nHost: 10.0.2.100:7781\r\nConnection: close\r\n\r\n"
     );
     assert!(
         blob_server
             .join()
             .unwrap()
-            .starts_with("GET /kit/blob.bin HTTP/1.0\r\n")
+            .starts_with("GET /kit/blob.bin HTTP/1.1\r\n")
+    );
+    assert_eq!(
+        moved.join().unwrap(),
+        "GET /a/moved.txt HTTP/1.1\r\nHost: 10.0.2.100:7788\r\nConnection: close\r\n\r\n"
+    );
+    assert_eq!(
+        chunked.join().unwrap(),
+        "GET /b/next HTTP/1.1\r\nHost: web.example:7789\r\nConnection: close\r\n\r\n"
     );
     assert_eq!(tls.join().unwrap(), "ping\r\n");
     assert_eq!(tls12.join().unwrap(), "twelve\r\n");
     assert!(wrong.join().unwrap().contains("BadCertificate"));
-    assert_eq!(https.join().unwrap(), "GET /hello.txt HTTP/1.0\r\n");
+    assert_eq!(https.join().unwrap(), "GET /hello.txt HTTP/1.1\r\n");
     assert!(untrusted.join().unwrap().contains("UnknownCA"));
     for line in [
         "%TCPIP-I-SET, WE0: 10.0.2.15        255.255.255.0    10.0.2.2",
@@ -686,6 +714,8 @@ fn network() {
         "BLOB.BIN;1 (79 blocks)",
         "%RMS-E-FNF, file not found",
         "%RMS-F-SUPPORT, network operation not supported",
+        r#"%COPY-S-COPIED, URL::"http://10.0.2.100:7788/a/moved.txt" copied to DKB0:[000000]MOVED.TXT;1 (1 blocks)"#,
+        "TYPE DKB0:[000000]MOVED.TXT\nchunk across chunks\n0123456789\n",
         "verify error:num=20:unable to get local issuer certificate\n\
          error:0A000086:SSL routines::certificate verify failed\n\
          %RMS-F-NETFAIL, network operation failed at remote node\n",

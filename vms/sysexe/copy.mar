@@ -12,8 +12,8 @@
 ; its structure and all, into a file made with the same attributes.
 ; ponytail: one file, no wildcards; records up to RECSIZE.
 ;
-; COPY/HTTP fetches from from a web server instead, with an HTTP/1.0
-; GET on a TCP socket on TCPIP$DEVICE:: from is node::"/path", the node the server's address, or
+; COPY/HTTP fetches from from a web server instead, with an HTTP/1.1
+; GET, Connection: close, on a TCP socket on TCPIP$DEVICE:: from is node::"/path", the node the server's address, or
 ; node::"http://host[:port]/path", where the node, URL by custom, is
 ; only a name; a host is an address or a name in the hosts database
 ; or DNS (HOST_ADDR). With https://, the GET and the response go through
@@ -25,11 +25,15 @@
 ; STREAM_LF file, as VMS's C ports of curl and wget write one, binary or
 ; not, which ends where the body does; it is named, where to doesn't
 ; say, by the path's last part, as Files-11 takes names, INDEX.HTML for none. The
-; body ends where Content-Length says, or when the server closes. 404 and
+; body ends where Content-Length says, where a chunked one's last chunk
+; does, or when the server closes. A redirect, 301, 302, 303, 307 or 308,
+; to an http or https URL or a /path on the same server, is a GET of its
+; Location on a new connection, ten at most, as curl -L's; the file is
+; still named by the first URL's path, as curl's and wget's. 404 and
 ; 410 are RMS$_FNF, 401 and 403 RMS$_PRV, other statuses but 2xx
 ; RMS$_NETFAIL, another scheme RMS$_SUPPORT.
-; ponytail: no redirects or chunked bodies; no /BINARY, which SET
-; FILE/ATTRIBUTE would do.
+; ponytail: no /BINARY, which SET FILE/ATTRIBUTE would do; a chunk's
+; trailers are ignored.
 ;
         .LIBRARY "starlet.mlb"
         .LIBRARY "sysexe.mlb"
@@ -97,7 +101,7 @@ NCHAN:  .LONG   0                       ; the connection's channel
 ADDR:   .LONG   0                       ; the server's address
 PORT:   .LONG   0                       ; and port
 IOSB:   .BLKQ   1
-STATE:  .LONG   0                       ; 0 before the status line, 1 in the headers, 2 in the body
+STATE:  .LONG   0                       ; 0 before the status line, 1 in the headers, 2 in the body, 3 redirected
 HSTATUS:                                ; the status line's code, 200
         .LONG   0
 LEFT:   .LONG   0                       ; the body's bytes to come, -1 until the server closes
@@ -108,15 +112,27 @@ TLS:    .LONG   0                       ; 1 for https://
 HOSTLEN:                                ; the host's name's length
         .LONG   0
 HOSTZ:  .BLKB   256                     ; and the name, with a NUL, as C wants
+HOSTB:  .BLKB   256                     ; host[:port], as the URL has it
+HOPS:   .LONG   0                       ; redirects so far
+LOCLEN: .LONG   0                       ; Location's length, 0 for none
+LOC:    .BLKB   255                     ; and the URL
+CHUNKED:                                ; 1 for Transfer-Encoding: chunked
+        .LONG   0
+CSTATE: .LONG   0                       ; 0 in a chunk's size, 1 in its data, 2 after it, 3 past the size
+CSIZE:  .LONG   0                       ; the size, in hex
+CLEFT:  .LONG   0                       ; the chunk's bytes to come
 SSLP:   .LONG   0                       ; SSL3's SSL, the TLS connection, or 0
 VERIFYF:                                ; why the certificate failed, as s_client says
         .ASCII  "verify error:num=%ld:%s"<10><0>
-CLEN:   .ASCII  "content-length:"
+CLEN:   .ASCIC  "content-length:"
+LOCH:   .ASCIC  "location:"
+TENC:   .ASCIC  "transfer-encoding:"
+CHUNKV: .ASCII  "chunked"
 DEFIDX: .ASCII  "INDEX.HTML"            ; the name for a path ending in /
 SLASH:  .ASCII  "/"
 REQGET: .ASCIC  "GET "
-REQVER: .ASCIC  " HTTP/1.0"<13><10>"Host: "
-REQEND: .ASCIC  <13><10><13><10>
+REQVER: .ASCIC  " HTTP/1.1"<13><10>"Host: "
+REQEND: .ASCIC  <13><10>"Connection: close"<13><10><13><10>
 DFN:    .BLKB   80                      ; to's default name
 NBUF:   .BLKB   BUFSIZE                 ; the request, then what comes
 
@@ -217,7 +233,7 @@ HTTP:   MOVZWL  DESC, R2
         MOVB    #^A/"/, INRES[R0]
         INCL    R0
         MOVB    R0, INNAM+NAM$B_RSL
-        CMPL    R8, #8                  ; https://, in any case?
+URL:    CMPL    R8, #8                  ; https://, in any case?
         BLSSU   23$
         CLRL    R0
 21$:    BISB3   #^X20, (R9)[R0], R1
@@ -247,14 +263,16 @@ HTTP:   MOVZWL  DESC, R2
         BRB     27$
 28$:    ADDL2   R11, R9
         SUBL2   R11, R8
-        BRB     40$
+        BRB     HOST
 30$:    TSTL    R8                      ; /path, the node the host
         BEQL    35$
         CMPB    (R9), #^A"/"
         BNEQ    UNSUPPORTED
 35$:    MOVAB   INRES, R10
         MOVL    R6, R11
-40$:    MOVL    #80, PORT               ; R10, R11: host[:port]
+HOST:   MOVC3   R11, (R10), HOSTB       ; R10, R11: host[:port]
+        MOVAB   HOSTB, R10
+        MOVL    #80, PORT
         BLBC    TLS, 41$
         MOVL    #443, PORT
 41$:    CLRL    R5                      ; the host's length, to a colon
@@ -278,7 +296,9 @@ HTTP:   MOVZWL  DESC, R2
         CALLS   #3, G^HOST_ADDR
         BLBS    R0, 50$
         RET
-50$:    CLRL    R3                      ; R9, R8: the path; its end, to a ? or #
+50$:    TSTL    HOPS                    ; R9, R8: the path
+        BNEQ    59$
+        CLRL    R3                      ; its end, to a ? or #
 52$:    CMPL    R3, R8
         BGEQU   54$
         CMPB    (R9)[R3], #^A/?/
@@ -297,7 +317,7 @@ HTTP:   MOVZWL  DESC, R2
 58$:    ADDL3   R9, R4, R1
         SUBL3   R4, R3, R2
         BSBW    DEFNAME
-        MOVL    ADDR, SIN+SIN$L_ADDR
+59$:    MOVL    ADDR, SIN+SIN$L_ADDR
         ROTL    #-8, PORT, R0           ; the port, high byte first
         MOVB    R0, SIN+SIN$W_PORT
         MOVB    PORT, SIN+SIN$W_PORT+1
@@ -338,13 +358,15 @@ HTTP:   MOVZWL  DESC, R2
         BRB     68$
 67$:    BSBW    TLSWRITE
 68$:    BLBC    R0, 62$
+        MNEGL   #1, LEFT
+        TSTL    HOPS                    ; to, once: CLI has no more values
+        BNEQ    70$
         MOVL    #255, DESC
         GETVALUE "TO", DESC, DESC
         MOVAB   SPEC, OUTFAB+FAB$L_FNA
         MOVB    DESC, OUTFAB+FAB$B_FNS
         MOVB    #FAB$C_STMLF, OUTFAB+FAB$B_RFM
         MOVB    #FAB$M_CR, OUTFAB+FAB$B_RAT
-        MNEGL   #1, LEFT
 70$:    BLBC    TLS, 71$
         BSBW    TLSREAD
         BRB     72$
@@ -362,6 +384,8 @@ HTTP:   MOVZWL  DESC, R2
         MOVZBL  (R6)+, R0
         BSBW    BYTE
         BLBC    R0, HANGUP
+        CMPL    STATE, #3
+        BEQL    REDIRECT
         CMPL    STATE, #2
         BNEQ    74$
         TSTL    LEFT                    ; Content-Length's bytes all came
@@ -389,6 +413,30 @@ HANGUP: MOVL    R0, R6
         MOVL    R0, R6
 90$:    MOVL    R6, R0
         RET
+REDIRECT:                               ; to LOC: the next GET, on a new connection
+        MOVL    #RMS$_NETFAIL, R0
+        AOBLEQ  #10, HOPS, 92$
+        BRW     HANGUP
+92$:    TSTL    SSLP
+        BEQL    93$
+        PUSHL   SSLP
+        CALLS   #1, G^SSL_SHUTDOWN
+        CLRL    SSLP
+93$:    $QIOW_S CHAN=NCHAN, FUNC=#IO$_DEACCESS, IOSB=IOSB
+        $DASSGN_S CHAN=NCHAN
+        CLRL    STATE
+        CLRL    RECLEN
+        CLRL    CHUNKED
+        CLRL    CSTATE
+        CLRL    CSIZE
+        MOVAB   LOC, R9
+        MOVL    LOCLEN, R8
+        CLRL    LOCLEN
+        CMPB    (R9), #^A"/"            ; a /path on the same server
+        BNEQ    94$
+        BRW     HOST
+94$:    CLRL    TLS                     ; a URL
+        BRW     URL
 SYNTAX: MOVL    #RMS$_SYN, R0           ; from has no node::
         RET
 UNSUPPORTED:                            ; nor /path nor http://
@@ -460,11 +508,19 @@ BYTE:
 20$:    TSTL    RECLEN
         BEQL    40$                     ; a blank line: the headers end
         BSBW    CLENGTH
+        BSBW    LOCATION
+        BSBW    TRANSFER
 25$:    CLRL    RECLEN
 30$:    MOVL    #SS$_NORMAL, R0
         RSB
 40$:    MOVL    HSTATUS, R1
-        CMPL    R1, #200
+        CMPL    R1, #100                ; 1xx: the response is still to come
+        BLSSU   42$
+        CMPL    R1, #199
+        BGTRU   41$
+        CLRL    STATE
+        BRB     30$
+41$:    CMPL    R1, #200
         BLSSU   42$
         CMPL    R1, #299
         BGTRU   42$
@@ -473,9 +529,23 @@ BYTE:
         BLBC    R0, 49$
         MOVL    #2, STATE
         MOVL    #1, OUTRAB+RAB$L_BKT    ; the first block's VBN
-        $CONNECT RAB=OUTRAB
+        BLBC    CHUNKED, 45$
+        MNEGL   #1, LEFT                ; chunked: the last chunk ends it
+45$:    $CONNECT RAB=OUTRAB
         RSB
-42$:    MOVL    #RMS$_FNF, R0
+42$:    TSTL    LOCLEN                  ; a redirect, with a Location
+        BEQL    44$
+        CMPL    R1, #301
+        BLSSU   44$
+        CMPL    R1, #303
+        BLEQU   43$
+        CMPL    R1, #307
+        BLSSU   44$
+        CMPL    R1, #308
+        BGTRU   44$
+43$:    MOVL    #3, STATE
+        BRB     30$
+44$:    MOVL    #RMS$_FNF, R0
         CMPL    R1, #404
         BEQL    49$
         CMPL    R1, #410
@@ -487,7 +557,11 @@ BYTE:
         BEQL    49$
         MOVL    #RMS$_NETFAIL, R0
 49$:    RSB
-50$:    TSTL    LEFT                    ; the body
+50$:    BLBC    CHUNKED, 51$            ; the body
+        BSBW    CHUNK
+        BLBS    R1, 52$
+        BRB     30$
+51$:    TSTL    LEFT
         BLSS    52$
         DECL    LEFT
 52$:    MOVL    RECLEN, R1
@@ -557,20 +631,10 @@ STATLINE:
 ; LEFT to n. Uses R0-R3.
 CLENGTH:
         .JSB_ENTRY  SCRATCH=<R2, R3>
-        CMPL    RECLEN, #15
-        BLSSU   90$
-        CLRL    R1
-10$:    BISB3   #^X20, REC[R1], R0
-        CMPB    R0, CLEN[R1]
-        BNEQ    90$
-        AOBLSS  #15, R1, 10$
-20$:    CMPL    R1, RECLEN              ; blanks
-        BGEQU   90$
-        CMPB    REC[R1], #^A/ /
-        BNEQ    30$
-        INCL    R1
-        BRB     20$
-30$:    CLRL    R2                      ; digits
+        MOVAB   CLEN, R2
+        BSBW    HEADER
+        BLBC    R0, 90$
+        CLRL    R2                      ; digits
         CLRL    R3
 35$:    CMPL    R1, RECLEN
         BGEQU   40$
@@ -586,6 +650,112 @@ CLENGTH:
 40$:    TSTL    R3
         BEQL    90$
         MOVL    R2, LEFT
+90$:    RSB
+
+; LOCATION: a header line in REC. Location: URL sets LOC and LOCLEN to
+; it, if it fits. Uses R0-R5.
+LOCATION:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5>
+        MOVAB   LOCH, R2
+        BSBW    HEADER
+        BLBC    R0, 90$
+        SUBL3   R1, RECLEN, R0
+        CMPL    R0, #255
+        BGTRU   90$
+        MOVL    R0, LOCLEN
+        MOVC3   R0, REC[R1], LOC
+90$:    RSB
+
+; TRANSFER: a header line in REC. Transfer-Encoding: chunked, in any
+; case, sets CHUNKED. Uses R0-R3.
+TRANSFER:
+        .JSB_ENTRY  SCRATCH=<R2, R3>
+        MOVAB   TENC, R2
+        BSBW    HEADER
+        BLBC    R0, 90$
+        ADDL3   #7, R1, R0
+        CMPL    R0, RECLEN
+        BGTRU   90$
+        CLRL    R2
+10$:    BISB3   #^X20, REC[R1], R0
+        CMPB    R0, CHUNKV[R2]
+        BNEQ    90$
+        INCL    R1
+        AOBLSS  #7, R2, 10$
+        MOVL    #1, CHUNKED
+90$:    RSB
+
+; HEADER: R2 = a header's name, .ASCIC, in lower case with its colon. R0
+; = 1 if REC's line is that header, in any case, with R1 = where its value
+; starts in REC, past blanks; else 0. Uses R0-R3.
+HEADER:
+        .JSB_ENTRY  SCRATCH=<R2, R3>
+        CLRL    R0
+        MOVZBL  (R2)+, R3
+        CMPL    RECLEN, R3
+        BLSSU   90$
+        CLRL    R1
+10$:    BISB3   #^X20, REC[R1], R0
+        CMPB    R0, (R2)[R1]
+        BNEQ    80$
+        AOBLSS  R3, R1, 10$
+20$:    CMPL    R1, RECLEN              ; blanks
+        BGEQU   30$
+        CMPB    REC[R1], #^A/ /
+        BNEQ    30$
+        INCL    R1
+        BRB     20$
+30$:    MOVL    #1, R0
+        RSB
+80$:    CLRL    R0
+90$:    RSB
+
+; CHUNK: R0 = a chunked body's next byte. Follows the chunks' sizes, in
+; hex, each on a line, extensions and all, and the CRLF after each one's
+; data: R1 = 1 if the byte is data, else 0. The last chunk, of size 0,
+; sets LEFT to 0, the body's end. Uses R0-R2.
+CHUNK:
+        .JSB_ENTRY  SCRATCH=<R2>
+        MOVL    CSTATE, R2
+        CMPL    R2, #1                  ; the chunk's data
+        BNEQ    10$
+        DECL    CLEFT
+        BNEQ    5$
+        MOVL    #2, CSTATE              ; then its CRLF
+5$:     MOVL    #1, R1
+        RSB
+10$:    CLRL    R1
+        CMPB    R0, #10                 ; a line's end
+        BEQL    40$
+        TSTL    R2                      ; 2, 3: the rest of a line
+        BNEQ    90$
+        CMPB    R0, #^A/0/              ; a hex digit of the size
+        BLSSU   30$
+        CMPB    R0, #^A/9/
+        BGTRU   15$
+        SUBL3   #^A/0/, R0, R2
+        BRB     20$
+15$:    BISB2   #^X20, R0
+        CMPB    R0, #^A/a/
+        BLSSU   30$
+        CMPB    R0, #^A/f/
+        BGTRU   30$
+        SUBL3   #^A/a/-10, R0, R2
+20$:    ASHL    #4, CSIZE, CSIZE
+        ADDL2   R2, CSIZE
+        RSB
+30$:    MOVL    #3, CSTATE              ; an extension, or the CR
+        RSB
+40$:    CMPL    R2, #2                  ; after the data: the next size
+        BNEQ    50$
+        CLRL    CSTATE
+        CLRL    CSIZE
+        RSB
+50$:    MOVL    CSIZE, CLEFT            ; the size line's end
+        BEQL    60$
+        MOVL    #1, CSTATE
+        RSB
+60$:    CLRL    LEFT                    ; the last chunk
 90$:    RSB
 
 ; DEFNAME: R1, R2 = the path's last part. Makes of it to's default name
