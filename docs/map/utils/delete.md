@@ -44,9 +44,8 @@ note = "PRD-0003 tier 1 #5 and step 7: $ERASE deletes an open file"
 
 [[feature]]
 id = "lists"
-title = "Lists of files, wildcard directories, block counts in /LOG"
+title = "Lists of files, block counts in /LOG"
 status = "todo"
-needs = ["/rms/wildcards#directories"]
 note = "PRD-0003 tier 3 #24; delete.mar ponytail"
 
 [[feature]]

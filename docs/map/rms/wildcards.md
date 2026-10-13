@@ -24,14 +24,14 @@ note = "PRs #119, #121; DESIGN-0002 Files"
 [[feature]]
 id = "directories"
 title = "Wildcard directories: [*], [A.*], [A...] and [...]"
-status = "todo"
-note = "PRD-0003 tier 3 #23 and #24; directory.mar ponytail"
+status = "done"
+note = "Depth first, a directory's files before those of the directories in it; boot test's wildcards phase"
 
 [[feature]]
 id = "context"
 title = "$SEARCH keeps its place in the directory, not by counting the matches it skips"
-status = "todo"
-note = "rms.mar ponytail: NAM$L_WCC counts them"
+status = "done"
+note = "It goes on after the resultant string's file, as VMS's XQP does with FIB$L_WCC"
 
 [[feature]]
 id = "spilled-versions"
@@ -39,13 +39,13 @@ title = "A name whose versions fill several directory records found once"
 status = "todo"
 milestone = "m1"
 needs = ["/files/ods2#spilled-versions"]
-note = "PRD-0003 tier 2 #15"
+note = "PRD-0003 tier 2 #15: FIL$SEARCHDIR goes on by name, so it should; untested until f11wrt.mar can make one"
 
 [[feature]]
 id = "streams"
 title = "Several searches at once in one image, as F$SEARCH's context argument needs"
-status = "todo"
-note = "PRD-0003 tier 1 #6: F$SEARCH has one stream (dcl/lexical.mar)"
+status = "done"
+note = "A search's place is all in its NAM block; F$SEARCH's streams in dcl/lexical.mar"
 
 [[needs]]
 on = "/rms/core"
@@ -67,9 +67,11 @@ searched string by string. `DIRECTORY`, `DELETE`, `COPY`, `PURGE`, DCL's
 services.
 
 vaxpunk's `$PARSE` and `$SEARCH` in `rms.mar` match `*` and `%` in names,
-types and versions with `f11.mar`'s `FIL$SEARCHDIR`, and step through
-search lists as OpenVMS does; `DIRECTORY` and `DELETE` use them. There
-are no wildcard directories, and `$SEARCH` finds its place again by
-counting the matches it skips. `COPY` and `TYPE` take one file
-(PRD-0003 tier 3 #23 and #24). WASMRUN's directory walks need wildcard
-directories (PRD-0007 M6).
+types and versions with `f11.mar`'s `FIL$SEARCHDIR`, walk wildcard
+directories depth first, each directory's own files before those of the
+directories in it, and step through search lists as OpenVMS does;
+`DIRECTORY`, `DELETE` and `F$SEARCH` use them. `$SEARCH` goes on after
+the file in the NAM block's resultant string, by name, so a file `DELETE`
+takes away doesn't make it skip one; a wildcard search therefore needs a
+resultant string area, where VMS's RMS keeps a copy of its own. `COPY`
+and `TYPE` take one file (PRD-0003 tier 3 #24).

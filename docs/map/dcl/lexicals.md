@@ -52,10 +52,10 @@ note = "PRD-0003 tier 1 #6"
 [[feature]]
 id = "search-streams"
 title = "F$SEARCH with a context argument, several streams at once"
-status = "todo"
+status = "done"
 needs = ["/rms/wildcards#streams"]
 milestone = "m1"
-note = "PRD-0003 tier 1 #6"
+note = "Eight at once (lexical.mar ponytail)"
 
 [[feature]]
 id = "parse-related"

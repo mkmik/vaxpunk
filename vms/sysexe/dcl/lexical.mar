@@ -16,16 +16,15 @@
 ;               say how DCL runs
 ;   F$TIME(), F$MESSAGE(status)
 ;               the time, a status's message
-;   F$TRNLNM(name[, table[, index]]), F$SEARCH(spec), F$PARSE(spec[,
-;   default[, related[, field]]])
+;   F$TRNLNM(name[, table[, index]]), F$SEARCH(spec[, stream]),
+;   F$PARSE(spec[, default[, related[, field]]])
 ;               translate logical names and file specifications
 ;   F$GETJPI(pid, item), F$GETSYI(item), F$GETDVI(device, item)
 ;               ask $GETJPI, $GETSYI and $GETDVI, an item at a time
 ;
-; ponytail: F$SEARCH has one stream and no context argument; F$PARSE
-; ignores related and SYNTAX_ONLY; F$FAO takes !AS, !UL, !SL, !ZL, !XL
-; and !OL with B, W or L, !%S, !/, !_, !!, !n*c and widths, not !#, !-,
-; !+, !%T or !%D. A process's username, node name and the
+; ponytail: F$PARSE ignores related and SYNTAX_ONLY; F$FAO takes !AS,
+; !UL, !SL, !ZL, !XL and !OL with B, W or L, !%S, !/, !_, !!, !n*c and
+; widths, not !#, !-, !+, !%T or !%D. A process's username, node name and the
 ; F$FILE_ATTRIBUTES, F$CVTIME and F$CONTEXT functions wait for LOGINOUT
 ; and the rest of PRD-0003.
 ; One of DCL's modules: ../dcl.mar says how they fit.
@@ -60,6 +59,14 @@
         .ADDRESS ROUTINE
         .ENDM   FUNC
 RAW = 255
+NSTREAM = 8                             ; F$SEARCH's streams at once, a power of 2
+S_ID = 0                                ; a stream's slot: its number,
+S_BUSY = 4                              ; 1 while it has more files to find,
+S_NAM = 8                               ; its NAM block,
+S_EXP = S_NAM+NAM$C_BLN                 ; expanded string,
+S_RES = S_EXP+256                       ; resultant string,
+S_SPEC = S_RES+256                      ; and specification, .ASCIC
+S_LEN = S_SPEC+256
 ; ITEM name, code, format: an entry of an item table: the name, .ASCIC,
 ; the item code and how its value is made into the function's (F_).
         .MACRO  ITEM    NAME, CODE, FORMAT
@@ -235,12 +242,11 @@ DIRLEN: .WORD   0
 DIRBUF: .BLKB   256
 TMP:    .BLKB   256                     ; a string being made
 KW:     .BLKB   32                      ; a keyword being matched
-SFAB:   $FAB    NAM=SNAM                ; F$SEARCH's stream
-SNAM:   $NAM    ESA=SEXP, ESS=255, RSA=SRES, RSS=255
-SEXP:   .BLKB   255
-SRES:   .BLKB   255
-SSPEC:  .BLKB   256                     ; its specification, .ASCIC
-SBUSY:  .LONG   0                       ; 1 while it has more files to find
+SFAB:   $FAB                            ; F$SEARCH's, with a stream's NAM block
+SNAM:   $NAM    ESS=255, RSS=255        ; each stream's NAM block, before its strings
+STREAMS:                                ; F$SEARCH's streams
+        .BLKB   NSTREAM*S_LEN
+NEXTS:  .LONG   0                       ; the one taken when all are busy
 PFAB:   $FAB    FNA=TMP, DNA=TABBUF, NAM=PNAM ; F$PARSE's
 PNAM:   $NAM    ESA=PEXP, ESS=255
 PEXP:   .BLKB   255
@@ -709,39 +715,84 @@ TRNLNM: .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5, R6, R8, R10>
         BSBW    RESSTR
         RSB
 
-; F$SEARCH(spec): the next file spec names, or "" past the last. A spec
-; with a wildcard goes on from the file before, if it is the same spec;
-; one without finds the file anew each time.
-SEARCH: .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5, R6, R8, R10>
+; F$SEARCH(spec[, stream]): the next file spec names, or "" past the
+; last. A spec with a wildcard goes on from the file before, if it is the
+; same spec as the stream's last; one without finds the file anew each
+; time. Each stream, an integer, 0 if it isn't given, searches on its
+; own, as on VMS, so one search can go on inside another.
+SEARCH: .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5, R6, R7, R8, R10>
         CLRL    R0
         BSBW    ARGSTR
         MOVL    R1, R6
-        TSTL    SBUSY
+        CLRL    R7
+        MOVL    #1, R0
+        BSBW    ARGGIVEN
+        BLBC    R0, 5$
+        MOVL    #1, R0
+        BSBW    ARGINT
+        MOVL    R0, R7
+5$:     BSBW    STREAM
+        MOVAB   S_NAM(R8), SFAB+FAB$L_NAM
+        TSTL    S_BUSY(R8)
         BEQL    10$
-        MOVAB   SSPEC, R2
+        MOVL    R6, R1
+        MOVAB   S_SPEC(R8), R2
         BSBW    DCL$SAMESTR
         BLBS    R0, 20$
 10$:    MOVZBL  (R6), R0
         INCL    R0
-        MOVC3   R0, (R6), SSPEC
-        MOVAB   SSPEC+1, SFAB+FAB$L_FNA
-        MOVB    SSPEC, SFAB+FAB$B_FNS
+        MOVC3   R0, (R6), S_SPEC(R8)
+        MOVAB   S_SPEC+1(R8), SFAB+FAB$L_FNA
+        MOVB    S_SPEC(R8), SFAB+FAB$B_FNS
+        MOVC3   #NAM$C_BLN, SNAM, S_NAM(R8)
+        MOVAB   S_EXP(R8), S_NAM+NAM$L_ESA(R8)
+        MOVAB   S_RES(R8), S_NAM+NAM$L_RSA(R8)
         $PARSE  FAB=SFAB
         BLBC    R0, 80$
-        MOVL    #1, SBUSY
-20$:    $SEARCH FAB=SFAB
+        MOVL    #1, S_BUSY(R8)
+20$:    MOVAB   S_SPEC+1(R8), SFAB+FAB$L_FNA    ; a search list's is parsed again
+        MOVB    S_SPEC(R8), SFAB+FAB$B_FNS
+        $SEARCH FAB=SFAB
         BLBC    R0, 80$
-        BITL    #NAM$M_WILDCARD, SNAM+NAM$L_FNB
+        BITL    #NAM$M_WILDCARD, S_NAM+NAM$L_FNB(R8)
         BNEQ    30$
-        CLRL    SBUSY
-30$:    MOVAB   SRES, R1
-        MOVZBL  SNAM+NAM$B_RSL, R2
+        CLRL    S_BUSY(R8)
+30$:    MOVAB   S_RES(R8), R1
+        MOVZBL  S_NAM+NAM$B_RSL(R8), R2
         BSBW    RESSTR
         RSB
-80$:    CLRL    SBUSY
+80$:    CLRL    S_BUSY(R8)
         CLRL    R2
         BSBW    RESSTR
         RSB
+
+; STREAM: R7 = an F$SEARCH stream. R8 = its slot in STREAMS: the busy one
+; with its number, else one not busy, else the next in turn, which then
+; starts again. Uses R0.
+; ponytail: NSTREAM searches at once; VMS's DCL has no limit.
+STREAM: .JSB_ENTRY  OUTPUT=<R8>
+        MOVAB   STREAMS, R8
+        CLRL    R0
+10$:    TSTL    S_BUSY(R8)
+        BEQL    15$
+        CMPL    S_ID(R8), R7
+        BEQL    80$
+15$:    ADDL2   #S_LEN, R8
+        AOBLSS  #NSTREAM, R0, 10$
+        MOVAB   STREAMS, R8             ; not busy: a free one
+        CLRL    R0
+20$:    TSTL    S_BUSY(R8)
+        BEQL    70$
+        ADDL2   #S_LEN, R8
+        AOBLSS  #NSTREAM, R0, 20$
+        MOVL    NEXTS, R0               ; all busy: the next in turn
+        INCL    NEXTS
+        BICL2   #^C<NSTREAM-1>, NEXTS
+        MULL3   #S_LEN, R0, R8
+        MOVAB   STREAMS[R8], R8
+        CLRL    S_BUSY(R8)
+70$:    MOVL    R7, S_ID(R8)
+80$:    RSB
 
 ; F$PARSE(spec[, default[, related[, field]]]): spec expanded, with
 ; default's parts where it has none, as $PARSE does, or only its field:

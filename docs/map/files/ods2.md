@@ -56,7 +56,7 @@ id = "spilled-versions"
 title = "A name whose versions fill more than one directory record"
 status = "todo"
 milestone = "m1"
-note = "PRD-0003 tier 2 #15: FIL$SEARCHDIR matches it twice"
+note = "PRD-0003 tier 2 #15: FIL$SEARCHDIR goes on by name and finds it once, but f11wrt.mar never splits a record"
 
 [[feature]]
 id = "dir-insert"

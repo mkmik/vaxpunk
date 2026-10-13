@@ -47,8 +47,9 @@
 ; lock, FIL$LOCK, which keeps its buffers and RMS's to one process; VMS's
 ; RMS runs in executive mode, in the process's own P1. One stream per
 ; file; no file sharing or locking or concealed devices, ASTs or
-; completion routines, and $SEARCH finds its place again by counting the
-; matches it skips, and the search list string it is in, in NAM$L_WCC.
+; completion routines. $SEARCH finds its place again from the resultant
+; string it made last, as VMS's XQP does with FIB$L_WCC, so a wildcard
+; $SEARCH needs one; VMS's RMS keeps its own copy.
 ;
         .LIBRARY "lib.mlb"
         .LIBRARY "starlet.mlb"
@@ -69,7 +70,7 @@
         $XABFHCDEF
 
         .EXTERNAL SCH$GL_CURPCB, EXE$ALONONPAGED, EXE$DEANONPGDSIZ, EXE$PROBER_DSC
-        .EXTERNAL FIL$READHDR, FIL$READVBN, FIL$SEARCHDIR, FIL$EOF, FIL$ISDIR
+        .EXTERNAL FIL$READHDR, FIL$READVBN, FIL$SEARCHDIR, FIL$MATCH, FIL$EOF, FIL$ISDIR
         .EXTERNAL FIL$SELECT, FIL$CREHDR, FIL$WRITEHDR, FIL$SETNAME, FIL$EXTEND
         .EXTERNAL FIL$ENTER, FIL$REMOVE, FIL$DELHDR, FIL$WRITEVBN, FIL$MKDIR
         .EXTERNAL FIL$LOCK, FIL$UNLOCK, FIL$CHKHDR, FIL$CHKPRO
@@ -91,7 +92,8 @@ RESFILES = 9                            ; the volume's own files, 1-9
 WCC_FOUND = ^X80000000                  ; in NAM$L_WCC: $SEARCH found a file,
 WCC_V_LIST = 19                         ; the search list string it is in,
 WCC_S_LIST = 12
-WCC_SKIP = ^X7FFFF                      ; and the matches it skips there
+WCC_AFTER = 1                           ; and goes on there after the resultant string's
+MAXKEY = 80                             ; NAME.TYPE, at most
 FAT$B_RTYPE = 20
 FAT$B_RATTRIB = 21
 FAT$W_RSIZE = 22
@@ -144,6 +146,18 @@ RMS$AB_DIRHDR::                         ; its directory's header
         .BLKB   BLOCK
 DIRFID: .BLKW   3                       ; and file ID
 DIRPAT: .BLKB   48                      ; a directory's name, NAME.DIR
+WPATHL: .LONG   0                       ; the directory $SEARCH is in: its names,
+WPATH:  .BLKB   256                     ; dots between, without 000000,
+WFIXL:  .LONG   0                       ; the first WFIXL of them those without wildcards
+WPATL:  .LONG   0                       ; the rest of the specification's directory,
+WPAT:   .BLKB   256                     ; ... as !, dots between: none if it has no wildcards
+WFLAGS: .LONG   0                       ; DMATCH's, of WPATH
+AFTER:  .WORD   0                       ; the entry $SEARCH goes on after: its version,
+        .BLKB   1+MAXKEY                ; its name, .ASCIC, none if empty
+SUBKEY: .WORD   1                       ; and the subdirectory, NAME.DIR;1
+        .BLKB   1+48
+DIRSTAR:
+        .ASCII  "*.DIR"
 RES:    .BLKB   512                     ; the resultant specification
 RESLEN: .LONG   0
 RESF:   .BLKQ   5                       ; its parts
@@ -161,6 +175,8 @@ HDRBUF: .BLKB   BLOCK                   ; the header of a file $ERASE deletes, $
 XABPRO: .LONG   0                       ; the FAB's protection XAB, or 0
 MFDNAME:
         .ASCII  "000000"
+ELLIPSIS:
+        .ASCII  "!"                     ; ... in WPAT
 DOTDIR: .ASCII  ".DIR"
 
         .PSECT  $CODE$
@@ -227,6 +243,15 @@ PARSEIDX:
         BLBC    R0, 90$
         BSBW    CHECK
         BLBC    R0, 90$
+        BSBW    WILDDIR
+        BLBC    R0, 90$
+        MOVL    #RMS$_WLD, R0           ; $CREATE_DIR's can't have wildcards
+        TSTL    CREDIR
+        BEQL    30$
+        TSTL    WPATL
+        BNEQ    90$
+30$:    MOVAB   WPATH, R10
+        ADDL3   R10, WPATHL, R11
         BSBW    DIRWALK
 90$:    POPR    #^M<R2, R3, R4, R5, R6, R7, R8, R9, R10, R11>
         RSB
@@ -551,7 +576,8 @@ RESOLVE:
 ; parts, R1 = the absolute one it is relative to, the same, R2 = a
 ; 256-byte buffer. If the part is relative, [] the same directory, [-]
 ; its parent, [--] the one above, [.dir] or [-.dir] a directory in one of
-; those, writes the absolute one in the buffer and points the part at it.
+; those, [...] or [-...] the tree under one of those, writes the absolute
+; one in the buffer and points the part at it.
 ; The MFD, [000000], has no parent. R0 = RMS$_NORMAL or RMS$_DIR. Uses
 ; R0-R9.
 RELDIR:
@@ -613,10 +639,15 @@ RELDIR:
         MOVB    #^A/./, (R3)+
         BRB     55$
 50$:    CMPL    R5, R6                  ; no names and no rest: the MFD
-        BLSSU   55$
-        MOVL    MFDNAME, (R3)+
+        BGEQU   52$
+        CMPB    (R5), #^A/./            ; and before ..., [000000...]
+        BNEQ    55$
+52$:    MOVL    MFDNAME, (R3)+
         MOVW    MFDNAME+4, (R3)+
-        BRB     60$
+        CMPL    R5, R6
+        BGEQU   60$
+        MOVB    #^A/./, (R3)+
+        BRB     55$
 55$:    CMPL    R5, R6
         BGEQU   60$
         CMPL    R3, R4
@@ -684,10 +715,11 @@ MERGE:
 ; CHECK: checks the parts in FIELDS: the device is DKA0: or MDA0:, with a
 ; volume mounted, which becomes F11$GL_VCB, the directory
 ; and the name and type are made of letters, digits, $, _ and -, with
-; dots between the directory's names, wildcards in the name, type and
-; version, and the version is a number up to 32767, * or nothing. Sets
-; WILD for a wildcard and RMS$L_VERSION. R0 = RMS$_NORMAL, RMS$_DEV,
-; RMS$_DNR, RMS$_DIR, RMS$_FNM or RMS$_VER. Uses R0-R4.
+; dots between the directory's names, wildcards in any of them (WILDDIR
+; checks the directory's dots), and the version is a number up to 32767,
+; * or nothing. Sets WILD for a wildcard and RMS$L_VERSION. R0 =
+; RMS$_NORMAL, RMS$_DEV, RMS$_DNR, RMS$_DIR, RMS$_FNM or RMS$_VER. Uses
+; R0-R4.
 CHECK:
         .JSB_ENTRY  SCRATCH=<R2, R3, R4>
         MOVL    FIELDS, R1              ; the device
@@ -701,7 +733,7 @@ CHECK:
 7$:     ADDL3   #1, FIELDS+8, R1        ; the directory, inside its brackets
         SUBL3   #2, FIELDS+12, R2
         BLEQ    85$
-        MOVL    #2, R3                  ; dots, no wildcards
+        MOVL    #3, R3                  ; dots and wildcards
         BSBW    CHARS
         BLBC    R0, 85$
         MOVL    FIELDS+16, R1           ; the name
@@ -792,8 +824,115 @@ CHARS:
 80$:    CLRL    R0
         RSB
 
-; DIRWALK: finds the directory in FIELDS, from the MFD down, each name
-; NAME.DIR;1 in the one before: [000000] is the MFD itself. Reads its
+; WILDDIR: splits the directory in FIELDS: its names up to the first with
+; a wildcard or ..., but 000000, into WPATH, and their length into
+; WFIXL; the rest into WPAT, ... as !. Sets WILD if there is a rest. R0
+; = RMS$_NORMAL, or RMS$_DIR if a name is empty or longer than 39
+; characters, or a dot is out of place. Uses R0-R6.
+WILDDIR:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5, R6>
+        CLRL    WPATHL
+        CLRL    WPATL
+        CLRL    R5                      ; 1 from the first wildcard on
+        ADDL3   #1, FIELDS+8, R1        ; the next name
+        ADDL3   FIELDS+8, FIELDS+12, R2
+        DECL    R2                      ; at the closing bracket
+10$:    CMPL    R1, R2
+        BGEQU   70$
+        CMPB    (R1), #^A/./            ; ...
+        BNEQ    20$
+        SUBL3   R1, R2, R0
+        CMPL    R0, #3
+        BLSSU   80$
+        CMPB    1(R1), #^A/./
+        BNEQ    80$
+        CMPB    2(R1), #^A/./
+        BNEQ    80$
+        ADDL2   #3, R1
+        MOVL    #1, R5
+        PUSHL   R1
+        MOVAB   ELLIPSIS, R1
+        MOVL    #1, R0
+        MOVAL   WPATL, R4
+        BSBW    APPNAME
+        MOVL    (SP)+, R1
+        BRB     10$
+20$:    MOVL    R1, R3                  ; a name, up to a dot
+25$:    CMPL    R1, R2
+        BGEQU   30$
+        CMPB    (R1), #^A/./
+        BEQL    30$
+        CMPB    (R1), #^A/*/
+        BEQL    27$
+        CMPB    (R1), #^A/%/
+        BNEQ    28$
+27$:    MOVL    #1, R5
+28$:    INCL    R1
+        BRB     25$
+30$:    SUBL3   R3, R1, R0
+        BEQL    80$
+        CMPL    R0, #39
+        BGTRU   80$
+        PUSHL   R1
+        MOVL    R3, R1
+        MOVAL   WPATL, R4
+        TSTL    R5
+        BNEQ    40$
+        MOVAL   WPATHL, R4
+        CMPL    R0, #6                  ; 000000: the MFD, where it starts
+        BNEQ    40$
+        CLRL    R6
+35$:    CMPB    (R1)[R6], MFDNAME[R6]
+        BNEQ    40$
+        AOBLSS  #6, R6, 35$
+        BRB     45$
+40$:    BSBW    APPNAME
+45$:    MOVL    (SP)+, R1
+        CMPL    R1, R2
+        BGEQU   70$
+        CMPB    1(R1), #^A/./           ; ... after it
+        BEQL    10$
+        INCL    R1                      ; or a dot, then a name
+        CMPL    R1, R2
+        BGEQU   80$
+        BRB     10$
+70$:    MOVL    WPATHL, WFIXL
+        TSTL    WPATL
+        BEQL    75$
+        MOVL    #1, WILD
+75$:    MOVL    #RMS$_NORMAL, R0
+        RSB
+80$:    MOVL    #RMS$_DIR, R0
+        RSB
+
+; APPNAME: R0 = a name's length, R1 = the name, R4 = WPATHL or WPATL.
+; Appends it to the names there, after a dot if there are some. R0 = 1,
+; or 0 if they would be longer than 255 characters. Uses R1.
+APPNAME:
+        .JSB_ENTRY
+        MOVL    (R4), R2
+        ADDL3   R0, R2, R3
+        TSTL    R2
+        BEQL    10$
+        INCL    R3
+10$:    CMPL    R3, #255
+        BGTRU   80$
+        MOVL    R3, (R4)
+        ADDL3   #4, R4, R3
+        ADDL2   R2, R3
+        TSTL    R2
+        BEQL    20$
+        MOVB    #^A/./, (R3)+
+20$:    MOVB    (R1)+, (R3)+
+        SOBGTR  R0, 20$
+        MOVL    #1, R0
+        RSB
+80$:    CLRL    R0
+        RSB
+
+; DIRWALK: R10 = names, dots between, R11 = past them. Finds the
+; directory they name, from the MFD down, each name
+; NAME.DIR;1 in the one before: 000000 is the MFD itself. Reads its
 ; header into RMS$AB_DIRHDR and its file ID into DIRFID. With CREDIR set,
 ; makes each one that isn't there, counting them in CREDIR. R0 =
 ; RMS$_NORMAL, RMS$_DNF, RMS$_DIR if a name isn't a directory, RMS$_WLK
@@ -806,9 +945,6 @@ DIRWALK:
         MOVAB   RMS$AB_DIRHDR, R1
         BSBW    FIL$READHDR
         BLBC    R0, 99$
-        ADDL3   #1, FIELDS+8, R10       ; the next name
-        ADDL3   FIELDS+8, FIELDS+12, R11
-        DECL    R11                     ; at the closing bracket
 10$:    CMPL    R10, R11
         BLSSU   15$
         BRW     80$
@@ -898,8 +1034,8 @@ RMS$FIND::
         TSTL    WILD
         BNEQ    80$
         PUSHL   R1
-        CLRL    R9
-        BSBB    SEARCH
+        CLRB    AFTER+2
+        BSBW    SEARCH
         MOVL    (SP)+, R1
         BLBS    R0, 10$
         CMPL    R0, #SS$_NOMOREFILES
@@ -936,35 +1072,258 @@ RMS$LOCATE::
 90$:    MOVL    R6, R0
         RSB
 
-; SEARCH: after RMS$PARSE, R9 = how many matches to skip. Finds the next
-; file the expanded specification names, and makes its resultant
-; specification. R5 = its file number, R0 = SS$_NORMAL, SS$_NOMOREFILES,
-; RMS$_PRV without execute access to the directory, or read access for a
-; wildcard, or the disk's error. Uses R0-R8.
+; SEARCH: after RMS$PARSE, WPATH = a directory and AFTER = an entry in
+; it, or none. Finds the next file the expanded specification names,
+; after AFTER's in that directory, then in each directory after it that
+; its wildcard directory names, depth first, each directory's own files
+; before those of the directories in it, in the directories' order, and
+; makes its resultant specification. R5 = its file number, R0 =
+; SS$_NORMAL, SS$_NOMOREFILES, RMS$_PRV without execute access to the
+; directory, or read access for a wildcard, or the disk's error. A
+; wildcard directory's directory that can't be looked in or read is
+; passed over, with those in it. Uses R0-R8.
 SEARCH:
         .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5, R6, R7, R8>
+10$:    BSBW    HERE
+        MOVL    R0, WFLAGS
+        BLBC    R0, 30$
+        BSBW    GODIR
+        BLBC    R0, 25$
         MOVL    #ARM$M_EXECUTE, R0
         TSTL    WILD
-        BEQL    5$
+        BEQL    15$
         MOVL    #ARM$M_READ, R0
-5$:     MOVAB   RMS$AB_DIRHDR, R1
+15$:    MOVAB   RMS$AB_DIRHDR, R1
         BSBW    CHKACC
-        BLBC    R0, 90$
+        BLBC    R0, 25$
         MOVAB   RMS$AB_DIRHDR, R3
         MOVL    FIELDS+16, R6           ; NAME.TYPE
         ADDL3   FIELDS+20, FIELDS+28, R7
         MOVL    RMS$L_VERSION, R8
-        BSBW    FIL$SEARCHDIR
-        BLBC    R0, 90$
-        PUSHL   R5
-        BSBB    MKRES
+        CLRL    R9
+        TSTB    AFTER+2
+        BEQL    20$
+        MOVAB   AFTER, R9
+20$:    BSBW    FIL$SEARCHDIR
+        BLBS    R0, 80$
+        CMPL    R0, #SS$_NOMOREFILES
+        BEQL    30$
+        RSB
+25$:    TSTL    WPATL                   ; a wildcard directory's: passed over
+        BNEQ    27$
+        RSB
+27$:    CLRB    AFTER+2
+        BRB     50$
+30$:    CLRB    AFTER+2                 ; the first directory in it
+        BBC     #1, WFLAGS, 50$
+        BLBS    WFLAGS, 35$
+        BSBW    GODIR
+        BLBC    R0, 50$
+        MOVL    #ARM$M_READ, R0
+        MOVAB   RMS$AB_DIRHDR, R1
+        BSBW    CHKACC
+        BLBC    R0, 50$
+35$:    CLRL    R9
+        BSBW    SUBDIR
+        BLBS    R0, 10$
+50$:    CMPL    WPATHL, WFIXL           ; the next one in the one above
+        BLEQ    85$
+        BSBW    UPDIR
+        BSBW    GODIR
+        BLBC    R0, 50$
+        MOVL    #ARM$M_READ, R0
+        MOVAB   RMS$AB_DIRHDR, R1
+        BSBW    CHKACC
+        BLBC    R0, 50$
+        MOVAB   SUBKEY, R9
+        BSBW    SUBDIR
+        BLBS    R0, 10$
+        BRB     50$
+80$:    PUSHL   R5
+        BSBW    MKRES
         MOVL    (SP)+, R5
         MOVL    #SS$_NORMAL, R0
+        RSB
+85$:    MOVL    #SS$_NOMOREFILES, R0
+        RSB
+
+; HERE: R0 = DMATCH's bits for WPATH, its names past the first WFIXL.
+; The MFD matches as none or as 000000, as in it it is 000000.DIR, so
+; [*] is [000000] too; but what is in it only as none. Keeps every other
+; register.
+HERE:
+        .JSB_ENTRY
+        MOVAB   WPATH, R8
+        ADDL3   R8, WPATHL, R9
+        ADDL2   WFIXL, R8
+        CMPL    R8, R9
+        BGEQU   10$
+        TSTL    WFIXL
+        BEQL    10$
+        INCL    R8                      ; past the dot
+10$:    MOVAB   WPAT, R10
+        ADDL3   R10, WPATL, R11
+        BSBW    DMATCH
+        TSTL    WPATHL
+        BNEQ    90$
+        BLBS    R0, 90$
+        PUSHL   R0
+        MOVAB   MFDNAME, R8
+        MOVAB   MFDNAME+6, R9
+        BSBW    DMATCH
+        BICL2   #^C<1>, R0
+        BISL2   (SP)+, R0
 90$:    RSB
+
+; DMATCH: R8 = names, dots between, R9 = past them, R10 = WPAT's, R11 =
+; past them. R0 = bit 0 set if the names match WPAT's, each name its
+; name, ! none or more of them; bit 1 if names after them could. Keeps
+; every other register.
+DMATCH:
+        .JSB_ENTRY
+        CMPL    R10, R11
+        BLSSU   20$
+        CLRL    R0                      ; no more of WPAT's: no more names
+        CMPL    R8, R9
+        BLSSU   90$
+        INCL    R0
+        BRB     90$
+20$:    MOVL    R10, R5                 ; WPAT's next: R6, R7 long
+        MOVL    R10, R2
+        MOVL    R11, R3
+        BSBW    NEXTNAME
+        MOVL    R1, R6
+        MOVL    R0, R7
+        MOVL    R2, R10
+        CMPB    (R6), #^A/!/
+        BEQL    50$
+        MOVL    #2, R0                  ; no more names: those after could
+        CMPL    R8, R9
+        BGEQU   90$
+        MOVL    R8, R2
+        MOVL    R9, R3
+        BSBW    NEXTNAME
+        MOVL    R2, R8
+        MOVL    R0, R2
+        BSBW    FIL$MATCH
+        BLBC    R0, 90$
+        BSBW    DMATCH
+        BRB     90$
+50$:    BSBW    DMATCH                  ; !: none of the names,
+        PUSHL   R0
+        CMPL    R8, R9
+        BLSSU   60$
+        BISL2   #2, (SP)                ; or those after,
+        BRB     70$
+60$:    MOVL    R8, R2                  ; or one more
+        MOVL    R9, R3
+        BSBW    NEXTNAME
+        MOVL    R2, R8
+        MOVL    R5, R10
+        BSBW    DMATCH
+        BISL2   R0, (SP)
+70$:    MOVL    (SP)+, R0
+90$:    RSB
+
+; NEXTNAME: R2 = names, dots between, R3 = past them. R1 = the first, R0
+; = its length, R2 = past it and its dot. Keeps every other register.
+NEXTNAME:
+        .JSB_ENTRY  OUTPUT=<R2>
+        MOVL    R2, R1
+10$:    CMPL    R2, R3
+        BGEQU   20$
+        CMPB    (R2), #^A/./
+        BEQL    20$
+        INCL    R2
+        BRB     10$
+20$:    SUBL3   R1, R2, R0
+        CMPL    R2, R3
+        BGEQU   30$
+        INCL    R2
+30$:    RSB
+
+; GODIR: reads the header of WPATH's directory into RMS$AB_DIRHDR, and
+; its file ID into DIRFID, if it is a wildcard directory's; RMS$PARSE
+; read the others'. R0 = DIRWALK's status. Uses R0-R11.
+GODIR:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5, R6, R7, R8, R9, R10, R11>
+        MOVL    #RMS$_NORMAL, R0
+        TSTL    WPATL
+        BEQL    90$
+        MOVAB   WPATH, R10
+        ADDL3   R10, WPATHL, R11
+        BSBW    DIRWALK
+90$:    RSB
+
+; SUBDIR: R9 = 0, or SUBKEY. Finds the first directory in RMS$AB_DIRHDR's,
+; after R9's, that the wildcard directory names, or names some in:
+; NAME.DIR;1 but the MFD's own. WPATH becomes it. R0 = 1, or 0 if there
+; is none. Uses R0-R9.
+SUBDIR:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5, R6, R7, R8, R9>
+10$:    MOVAB   RMS$AB_DIRHDR, R3
+        MOVAB   DIRSTAR, R6
+        MOVL    #5, R7
+        MOVL    #1, R8
+        BSBW    FIL$SEARCHDIR
+        BLBC    R0, 80$
+        CMPL    R2, #48
+        BGTRU   80$
+        MOVB    R2, SUBKEY+2            ; the one to go on after
+        MOVC3   R2, (R1), SUBKEY+3
+        MOVAB   SUBKEY, R9
+        MOVZBL  SUBKEY+2, R0            ; its name
+        SUBL2   #4, R0
+        MOVAB   SUBKEY+3, R1
+        TSTL    WPATHL                  ; in the MFD, 000000 is the MFD
+        BNEQ    20$
+        CMPL    R0, #6
+        BNEQ    20$
+        CLRL    R2
+15$:    CMPB    (R1)[R2], MFDNAME[R2]
+        BNEQ    20$
+        AOBLSS  #6, R2, 15$
+        BRB     10$
+20$:    PUSHL   WPATHL
+        MOVAL   WPATHL, R4
+        BSBW    APPNAME
+        BLBC    R0, 30$
+        BSBW    HERE
+        TSTL    R0
+        BNEQ    70$
+30$:    MOVL    (SP)+, WPATHL
+        BRB     10$
+70$:    TSTL    (SP)+
+        MOVL    #1, R0
+        RSB
+80$:    CLRL    R0
+        RSB
+
+; UPDIR: WPATH's last name, NAME.DIR, into SUBKEY, and WPATH the names
+; before it. Uses R0-R3.
+UPDIR:
+        .JSB_ENTRY  SCRATCH=<R2, R3>
+        MOVL    WPATHL, R0
+10$:    DECL    R0
+        BLSS    20$
+        CMPB    WPATH[R0], #^A/./
+        BNEQ    10$
+20$:    INCL    R0                      ; the name's first character
+        SUBL3   R0, WPATHL, R2
+        MOVAB   WPATH[R0], R1
+        DECL    R0                      ; its dot, or 0
+        BGEQ    30$
+        CLRL    R0
+30$:    MOVL    R0, WPATHL
+        ADDB3   #4, R2, SUBKEY+2
+        MOVC3   R2, (R1), SUBKEY+3
+        MOVL    DOTDIR, (R3)
+        RSB
 
 ; MKRES: R1 = a name, NAME.TYPE, R2 = its length, R4 = a version. Makes
 ; the resultant specification in RES, with the expanded one's device and
-; directory, and its parts in RESF. Uses R0-R6.
+; directory, or a wildcard directory's WPATH, and its parts in RESF.
+; Uses R0-R6.
 MKRES:
         .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5, R6>
         MOVL    R1, RESNAME
@@ -980,7 +1339,19 @@ MKRES:
         BSBB    APPEND
         SUBL3   (R3), R6, 4(R3)
         AOBLSS  #2, R5, 10$
-        MOVL    RESNAME, R1             ; the name, up to the dot
+        TSTL    WPATL                   ; a wildcard directory: the one it is in
+        BEQL    18$
+        MOVL    RESF+8, R6
+        MOVB    #91, (R6)+
+        MOVAB   WPATH, R1
+        MOVL    WPATHL, R2
+        BNEQ    15$
+        MOVAB   MFDNAME, R1
+        MOVL    #6, R2
+15$:    BSBB    APPEND
+        MOVB    #93, (R6)+
+        SUBL3   RESF+8, R6, RESF+12
+18$:    MOVL    RESNAME, R1             ; the name, up to the dot
         CLRL    R2
 20$:    CMPL    R2, RESNAME+4
         BGEQU   25$
@@ -1063,6 +1434,69 @@ PUTSTR:
         MOVL    #RMS$_NORMAL, R0
         RSB
 80$:    MOVL    #SS$_ACCVIO, R0
+        RSB
+
+; RESUME: R11 = a NAM block, after RMS$PARSE of its expanded string.
+; AFTER = the name, type and version of its resultant string, and for a
+; wildcard directory WPATH its directory. R0 = RMS$_NORMAL, RMS$_RSS if
+; there is none or it isn't one $SEARCH could have made, or SS$_ACCVIO.
+; Uses R0-R7.
+RESUME:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5, R6, R7>
+        MOVZBL  NAM$B_RSL(R11), R1
+        BEQL    80$
+        MOVL    NAM$L_RSA(R11), R0
+        IFNORD  R1, (R0), 85$
+        MOVAQ   EQUT, R2
+        BSBW    SPLIT
+        BLBC    R0, 80$
+        ADDL3   EQUT+20, EQUT+28, R0    ; NAME.TYPE
+        CMPL    R0, #MAXKEY
+        BGTRU   80$
+        MOVB    R0, AFTER+2
+        MOVC3   EQUT+20, @EQUT+16, AFTER+3
+        MOVC3   EQUT+28, @EQUT+24, (R3)
+        ADDL3   #1, EQUT+32, R1         ; the version, past its semicolon
+        SUBL3   #1, EQUT+36, R2
+        BLEQ    80$
+        CLRL    R0
+10$:    MOVZBL  (R1)+, R3
+        SUBL2   #^A/0/, R3
+        CMPL    R3, #9
+        BGTRU   80$
+        MULL2   #10, R0
+        ADDL2   R3, R0
+        CMPL    R0, #32767
+        BGTRU   80$
+        SOBGTR  R2, 10$
+        MOVW    R0, AFTER
+        TSTL    WPATL                   ; the directory, without 000000
+        BEQL    70$
+        CLRL    WPATHL
+        ADDL3   #1, EQUT+8, R2
+        ADDL3   EQUT+8, EQUT+12, R3
+        DECL    R3                      ; at the closing bracket
+        CMPL    R2, R3
+        BGEQU   80$
+20$:    BSBW    NEXTNAME
+        CMPL    R0, #6
+        BNEQ    30$
+        CLRL    R4
+25$:    CMPB    (R1)[R4], MFDNAME[R4]
+        BNEQ    30$
+        AOBLSS  #6, R4, 25$
+        BRB     40$
+30$:    TSTL    R0
+        BEQL    80$
+        MOVAL   WPATHL, R4
+        BSBW    APPNAME
+40$:    CMPL    R2, R3
+        BLSSU   20$
+70$:    MOVL    #RMS$_NORMAL, R0
+        RSB
+80$:    MOVL    #RMS$_RSS, R0
+        RSB
+85$:    MOVL    #SS$_ACCVIO, R0
         RSB
 
 ; PUTRES: R11 = a NAM block. Copies the resultant specification to its
@@ -1225,7 +1659,8 @@ L:      BSBW    FIL$UNLOCK
 ; into its NAM block: the expanded string, if the NAM block has an area
 ; for it, its parts, its directory's ID, NAM$M_WILDCARD, and
 ; NAM$M_SEARCH_LIST if its device is a search list, whose first string
-; it is expanded with. $SEARCH then finds the files it names. RMS$_DNF,
+; it is expanded with. A wildcard directory's ID is that of the
+; directory its names before the first wildcard name. $SEARCH then finds the files it names. RMS$_DNF,
 ; when the directory doesn't exist, still gives the expanded string and
 ; its parts; but not for a search list's first string with more after
 ; it.
@@ -1266,13 +1701,20 @@ L:      BSBW    FIL$UNLOCK
 90$:    FABDONE
 
 ; $SEARCH fab: finds the next file the expanded string $PARSE left in the
-; FAB's NAM block names, and puts its resultant string, its parts and its
-; file ID there. RMS$_FNF if there is none at all, then RMS$_NMF when
-; there are no more, and the next $SEARCH starts again. NAM$L_WCC counts
-; the matches to skip, and WCC_FOUND says one was found. With
-; NAM$M_SEARCH_LIST, it is the FAB's specification that is parsed again,
-; with each string of the search list in turn, which NAM$L_WCC holds
-; too: a string whose directory isn't there is passed over.
+; FAB's NAM block names, and puts its resultant string, its parts, its
+; file ID and its directory's there. RMS$_FNF if there is none at all,
+; then RMS$_NMF when there are no more, and the next $SEARCH starts
+; again. A wildcard directory, [*], [A.*], [A...] or [...], is searched
+; depth first, each directory's files before those of the directories
+; in it, as VMS's RMS does. Each $SEARCH goes on after the file in the
+; resultant string, which must be there for a wildcard, else RMS$_RSS;
+; so a file $ERASE takes away, or one made since, takes no file's place.
+; NAM$L_WCC says whether it found one, WCC_FOUND, and one in this string
+; of a search list, WCC_AFTER. With NAM$M_SEARCH_LIST, it is the FAB's
+; specification that is parsed again, with each string of the search
+; list in turn, which NAM$L_WCC holds too: a string whose directory
+; isn't there is passed over. The search's place is all in the NAM
+; block and its strings, so an image may search with any number at once.
         .ENTRY  EXE$SEARCH, ^M<R2, R3, R4, R5, R6, R7, R8, R9, R10, R11>
         BSBW    FIL$LOCK
         BSBW    FABNAM
@@ -1307,14 +1749,19 @@ L:      BSBW    FIL$UNLOCK
         TSTL    SLIDX
         BNEQ    10$
         BRB     90$
-7$:     BICL3   #^C<WCC_SKIP>, NAM$L_WCC(R11), R9
-        BSBW    SEARCH
+7$:     CLRB    AFTER+2
+        BLBC    NAM$L_WCC(R11), 9$              ; WCC_AFTER: after the file it found
+        TSTL    WILD
+        BEQL    6$                              ; the only one
+        BSBW    RESUME
+        BLBC    R0, 90$
+9$:     BSBW    SEARCH
         BLBS    R0, 20$
         CMPL    R0, #SS$_NOMOREFILES
         BNEQ    90$
-        TSTL    SLMORE
+6$:     TSTL    SLMORE
         BEQL    10$
-8$:     BICL2   #WCC_SKIP, NAM$L_WCC(R11)       ; the next string, from its first match
+8$:     BICL2   #WCC_AFTER, NAM$L_WCC(R11)      ; the next string, from its start
         ADDL2   #1@WCC_V_LIST, NAM$L_WCC(R11)
         BRB     3$
 10$:    MOVL    #RMS$_NMF, R0
@@ -1322,8 +1769,7 @@ L:      BSBW    FIL$UNLOCK
         MOVL    #RMS$_FNF, R0
 15$:    CLRL    NAM$L_WCC(R11)
         BRB     90$
-20$:    INCL    NAM$L_WCC(R11)
-        BISL2   #WCC_FOUND, NAM$L_WCC(R11)
+20$:    BISL2   #WCC_FOUND!WCC_AFTER, NAM$L_WCC(R11)
         BSBW    PUTRES
         BRB     90$
 85$:    MOVL    #SS$_ACCVIO, R0
@@ -2073,7 +2519,7 @@ CREPRO:
         MOVAB   RMS$AB_DIRHDR, R3
         MOVL    FIELDS+16, R6           ; NAME.TYPE
         ADDL3   FIELDS+20, FIELDS+28, R7
-        CLRQ    R8                      ; its highest version, none skipped
+        CLRQ    R8                      ; its highest version, from the first
         BSBW    FIL$SEARCHDIR
         MOVL    4(SP), R7
         BLBC    R0, 20$                 ; none: the default
@@ -2125,8 +2571,7 @@ CRENTER:
         BSBW    FIL$LOCK
         BSBW    FABNAM
         BLBC    R0, 90$
-        CLRL    R9                      ; 1: by the NAM block
-        TSTL    R11
+        TSTL    R11                     ; by the NAM block
         BEQL    10$
         BITL    #FAB$M_NAM, FAB$L_FOP(R10)
         BEQL    10$
@@ -2134,17 +2579,14 @@ CRENTER:
         BEQL    10$
         MOVL    NAM$L_RSA(R11), R0
         IFNORD  R1, (R0), 85$
-        MOVL    #1, R9
         CLRQ    R2
         BSBW    SYSDFLT
         BRB     15$
 10$:    BSBW    FABCHK
         BLBC    R0, 90$
         BSBW    FABSPEC
-15$:    PUSHL   R9
-        MOVAB   HDRBUF, R5
+15$:    MOVAB   HDRBUF, R5
         BSBW    RMS$LOCATE
-        MOVL    (SP)+, R9
         BLBC    R0, 90$
         MOVL    F11$GL_VCB, R1
         MOVL    #RMS$_WLK, R0
@@ -2183,11 +2625,7 @@ CRENTER:
         MOVAB   HDRBUF, R1
         BSBW    FIL$DELHDR
         BLBC    R0, 80$
-        BLBC    R9, 30$                 ; one match fewer to skip
-        BITL    #WCC_SKIP, NAM$L_WCC(R11)
-        BEQL    30$
-        DECL    NAM$L_WCC(R11)
-30$:    MOVL    #RMS$_NORMAL, R0
+        MOVL    #RMS$_NORMAL, R0
         BRB     90$
 80$:    MOVL    R0, FAB$L_STV(R10)
         MOVL    #RMS$_MKD, R0
@@ -2200,9 +2638,9 @@ CRENTER:
 ; directory, and each one above it that isn't there either: an empty
 ; NAME.DIR;1 in the one above it. SS$_CREATED if it made one, SS$_NORMAL
 ; if they were all there, SS$_ACCVIO if the caller can't read devdirspec,
-; RMS$_WLK on a volume that can't be written, RMS$_PRV without write
-; access to the one above, or RMS$PARSE's or the file system's error,
-; with the ones above made. Each is the current process's, with the one
+; RMS$_WLD if it has a wildcard, RMS$_WLK on a volume that can't be
+; written, RMS$_PRV without write access to the one above, or
+; RMS$PARSE's or the file system's error, with the ones above made. Each is the current process's, with the one
 ; above's protection, but delete (FIL$MKDIR).
 ; ponytail: a service; VMS's LIB$CREATE_DIR asks the XQP with $QIO
 ; IO$_CREATE, and there are no XQP functions on disk channels. No owner,

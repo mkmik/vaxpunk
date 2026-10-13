@@ -1101,8 +1101,9 @@ does:
 - **`FIL$SEARCHDIR`** reads a directory's blocks up to its end of file and
   finds the next record whose name, `NAME.TYPE`, matches a pattern with
   `*` and `%`, and the version asked for: any, the highest (the first of
-  the name's record) or one. It can skip matches, which is how `$SEARCH`
-  goes on from where it was.
+  the name's record) or one. It can go on after an entry, by its name and
+  version, which is how `$SEARCH` goes on from where it was, so a name
+  whose versions spill into a second record is found once.
 - **`FIL$OPENFILE`** finds an image and reads its header, the blocks
   `EIHD$L_HDRBLKCNT` says, into pool, with a copy of the file's header and
   its volume after them, for the image activator, which frees it once the
@@ -1217,11 +1218,19 @@ A relative directory is made absolute first, against the default
 specification's directory if it has one, else the process's: `[]` is
 that one, `[-]` its parent, `[--]` the one above, `[.SUB]` and `[-.SUB]`
 a directory in one of those. The MFD has no parent: `RMS$_DIR`.
+A directory may have wildcards: `*` and `%` in its names, and `...` for
+any number of them, so `[*]` is each directory in the MFD, `[000000]`
+too, as it is `000000.DIR` there, `[A.*]` each in `[A]`, `[A...]` `[A]`
+and every directory under it, and `[...]` the default directory and
+those under it. `$PARSE` walks the names before the first wildcard;
+`$SEARCH` walks the rest depth first, each directory's files before
+those of the directories in it, as OpenVMS does, and passes over a
+directory it may not read.
 
 | Service | Does |
 | --- | --- |
 | `$PARSE fab` | the expanded string, its parts and the directory's ID into the FAB's NAM block |
-| `$SEARCH fab` | the next file the NAM block's expanded string names: its resultant string, parts and file ID; `RMS$_FNF` if there is none, then `RMS$_NMF` |
+| `$SEARCH fab` | the next file the NAM block's expanded string names, in any directory a wildcard directory names: its resultant string, parts, file ID and directory ID; `RMS$_FNF` if there is none, then `RMS$_NMF` |
 | `$OPEN fab` | opens one file, the highest version unless the specification gives one, for reading, and with `FAB$M_PUT` in `FAB$B_FAC` for `$PUT` too: `RMS$_WLK` on a volume that can't be written, `DKA0:`, `RMS$_PRV` without write access or for the volume's own files and directories. Its IFI, record format, attributes, maximum record size and allocation into the FAB, its resultant string into the NAM block if there is one, its owner and protection into the protection XAB (`$XABPRODEF`) in `FAB$L_XAB`'s chain if there is one, and its longest record, allocation and end of file, `XAB$L_EBK` and `XAB$W_FFB`, into the file header characteristics XAB (`$XABFHCDEF`) if there is one |
 | `$CREATE fab` | makes a new file, one version above the highest unless the specification gives one (`RMS$_FEX` if it is there), with the FAB's organization, record format and attributes, maximum record size and `FAB$L_ALQ` blocks, and opens it for `$PUT`; `RMS$_WLK` on `DKA0:`, `RMS$_FUL` if the volume is full. It has the protection of the highest version there was, as VMS's does, else the default, unless a protection XAB gives one, and an owner, which takes the system's access if it isn't the caller's UIC |
 | `$CONNECT rab` | connects the RAB to the file its FAB opened, at its start, or at its end with `RAB$M_EOF` in `RAB$L_ROP` |
@@ -1245,15 +1254,20 @@ volume, the block `$GET` reads in or `$PUT` fills, and where it is. The PCB hold
 `PCB$A_IFAB`, a bit each in `PCB$L_FILES`; `$CONNECT` puts the IFI in
 `RAB$W_ISI` too. `RMS$RUNDOWN` closes a process's files at image exit
 and process deletion, writing those opened for `$PUT` as `$CLOSE` does.
-`NAM$L_WCC` counts the matches `$SEARCH` skips, and its top bit says it
-found one, so `RMS$_FNF` and `RMS$_NMF` stay apart when `$ERASE` takes a
-match away.
+`$SEARCH` goes on after the file in the NAM block's resultant string, by
+its directory, name and version, as VMS's XQP goes on from `FIB$L_WCC`
+and the name it returned last, so a file `$ERASE` takes away, or one
+made since, takes no other's place, and any number of NAM blocks search
+at once. `NAM$L_WCC`'s top bit says it found one, so `RMS$_FNF` and
+`RMS$_NMF` stay apart, and its bottom bit that it found one in the
+search list string it is in. ponytail: a wildcard `$SEARCH` needs a
+resultant string area, `RMS$_RSS` without; VMS's RMS keeps its own copy.
 
 The services, and `FIL$OPENFILE`, run in kernel mode at `IPL$_SYNCH`, one
 at a time, which keeps the file system's buffers theirs. They return
 VMS's `RMS$_` statuses (`$RMSDEF`) and put them in `FAB$L_STS` or
 `RAB$L_STS`. ponytail: VMS's RMS runs in executive mode; no ASTs,
-completion routines, logical names, wildcard directories, block I/O,
+completion routines, logical names, block I/O,
 file sharing or locking, and no `$UPDATE` or `$TRUNCATE`, so `$PUT` writes only at the end.
 
 ### Exceptions and condition handlers

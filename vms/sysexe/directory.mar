@@ -11,10 +11,12 @@
 ; owner's UIC and its protection, which $OPEN puts in a protection XAB.
 ; /FULL lists all VMS's does about each, from its XABs, and the blocks
 ; they use and have.
-; ponytail: no wildcard directories, which RMS hasn't. A file
-; the process may not read shows neither, where VMS's DIRECTORY asks the
-; XQP for them. /FULL's directories are contiguous, and the times
-; Files-11 doesn't keep, like the last access, are <None specified>.
+; A wildcard directory, [*], [A...] or [...], is many directories, each
+; with its heading and total, as a search list's are.
+; ponytail: a file the process may not read shows neither, where VMS's
+; DIRECTORY asks the XQP for them. /FULL's directories are contiguous,
+; and the times Files-11 doesn't keep, like the last access, are <None
+; specified>.
 ;
         .LIBRARY "starlet.mlb"
         .LIBRARY "sysexe.mlb"

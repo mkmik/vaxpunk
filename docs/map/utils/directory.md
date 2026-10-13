@@ -42,10 +42,15 @@ note = "PRD-0008 step 8; matches the oracle's report"
 
 [[feature]]
 id = "wildcard-dirs"
-title = "Wildcard directories, [...] and [*], and lists of files"
-status = "todo"
+title = "Wildcard directories, [...] and [*]"
+status = "done"
 needs = ["/rms/wildcards#directories"]
-note = "PRD-0003 tier 3 #23 and #24; directory.mar ponytail"
+
+[[feature]]
+id = "lists"
+title = "Lists of files, A.TXT,B.TXT"
+status = "todo"
+note = "PRD-0003 tier 3 #24"
 
 [[feature]]
 id = "xqp-attributes"
@@ -116,6 +121,6 @@ vaxpunk's is `vms/sysexe/directory.mar`, an image DCL runs with
 `*.*;*` for what it leaves out, finds files with `$SEARCH`, walks search
 lists such as `SYS$SYSTEM:`, and with `/OWNER`, `/PROTECTION` and
 `/FULL` opens each file for its XABs. `/FULL`'s report matched OpenVMS
-Alpha's on PRD-0008's fixtures. Missing: wildcard directories, which RMS
-lacks, one file spec only (PRD-0003 tier 3 #24), and the attributes of
-files the user can't read, which wait for the XQP's `$QIO` interface.
+Alpha's on PRD-0008's fixtures. Missing: one file spec only (PRD-0003
+tier 3 #24), and the attributes of files the user can't read, which wait
+for the XQP's `$QIO` interface.
