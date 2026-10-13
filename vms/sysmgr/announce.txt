@@ -1,1 +1,1 @@
-  vaxpunk, an OpenVMS clone for arm64
+  vaxpunk, an OpenVMS clone for arm64. Log in as SYSTEM, password MANAGER

@@ -81,7 +81,7 @@ tcpip: lwIP 2.2.1 on virtio-net, MAC 52:54:0:12:34:56
 %MOUNT-I-MOUNTED, VAXPUNK mounted on _DKA0:
 %SYSTEM-W-NOHOMEBLK, Files-11 home block not found on volume
   SYSTEM       job terminated at  9-OCT-2026 09:01:38.33
-  vaxpunk, an OpenVMS clone for arm64
+  vaxpunk, an OpenVMS clone for arm64. Log in as SYSTEM, password MANAGER
 
 Username: SYSTEM
 Password:
