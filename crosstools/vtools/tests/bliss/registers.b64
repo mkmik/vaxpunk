@@ -1,0 +1,82 @@
+MODULE REGISTERS (MAIN = MAIN) =
+BEGIN
+! Register data and the linkages that pass it (LRM 10.7-10.9, 13): register
+! parameters of JSB and CALL linkages, output parameters, and global
+! register segments that callees read and change.
+REQUIRE 'PRINT';
+
+LINKAGE
+    JSB_2 = JSB(REGISTER = 2, REGISTER = 3; REGISTER = 4, REGISTER = 5),
+    CALL_REG = CALL(STANDARD, REGISTER = 4),
+    JSB_G = JSB(REGISTER = 2) : GLOBAL(COUNTER = 6),
+    CALL_G = CALL : GLOBAL(COUNTER = 6);
+
+FORWARD ROUTINE
+    DIVIDE : JSB_2 NOVALUE,
+    SCALE : CALL_REG,
+    TALLY : JSB_G,
+    PEEK : CALL_G,
+    NEST : CALL_G;
+
+ROUTINE DIVIDE (A, B; Q, R) : JSB_2 NOVALUE =
+    BEGIN
+    Q = .A / .B;
+    R = .A MOD .B
+    END;
+
+ROUTINE SCALE (X, F) : CALL_REG =
+    .X * .F;
+
+ROUTINE TALLY (N) : JSB_G =
+    BEGIN
+    EXTERNAL REGISTER
+        COUNTER;
+    COUNTER = .COUNTER + .N;
+    .COUNTER
+    END;
+
+ROUTINE PEEK : CALL_G =
+    ! COUNTER isn't declared here: the caller's stays as it was.
+    BEGIN
+    REGISTER
+        LOCALREG;
+    LOCALREG = 99;
+    .LOCALREG
+    END;
+
+ROUTINE NEST : CALL_G =
+    BEGIN
+    EXTERNAL REGISTER
+        COUNTER = 6;
+    ! Passed on, and changed on the way.
+    TALLY(1000);
+    COUNTER = .COUNTER * 2;
+    .COUNTER
+    END;
+
+ROUTINE MAIN =
+    BEGIN
+    GLOBAL REGISTER
+        COUNTER = 6;
+    LOCAL
+        QUO,
+        REM;
+    DIVIDE(47, 5; QUO, REM);
+    PRINT(.QUO);
+    PRINT(.REM);
+    DIVIDE(9, 2; , REM);
+    PRINT(.REM);
+    PRINT(SCALE(6, 7));
+    COUNTER = 10;
+    PRINT(TALLY(5));
+    PRINT(TALLY(7));
+    PRINT(.COUNTER);
+    PRINT(PEEK());
+    PRINT(.COUNTER);
+    PRINT(NEST());
+    PRINT(.COUNTER);
+    1
+    END;
+
+END
+ELUDOM

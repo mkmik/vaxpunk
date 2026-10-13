@@ -272,6 +272,9 @@ form)
   `EXTERNAL`, routines, literals and `GLOBAL BIND`; the argument works
   like `%STRING`. Names without it are upper-cased, which `/NAMES` can
   change. (RN 2.14, 2.19.9)
+
+  vaxpunk: vbliss takes a quoted name on data and routines and upper-cases
+  it, as vasm has every name.
 - **Duplicates** of `VOLATILE`, `ALIAS`, `NOVALUE` and `WEAK` are allowed
   without a message. (RN 2.27)
 - **Routine attributes for the value.** A routine can say what it returns:
@@ -321,12 +324,20 @@ KIT)
   MACRO-32 states it. Numbers 12-30 are an error. This departs from
   BLISS-64, whose numbers are Alpha's: Alpha's R0-R11 are VAX R0-R11 under
   AMACRO, so linkages to MACRO-32 routines read the same, but one naming
-  Alpha's argument registers (16-21) won't port.
+  Alpha's argument registers (16-21) won't port. A `CALL` linkage's
+  register parameters and any linkage's `GLOBAL` registers can't be R0 or
+  R1, where the standard's arguments and result go: a register conflict,
+  which VAX BLISS-32 code passing `CALL (REGISTER = 1)` meets.
 - **Global registers.** A `GLOBAL` register in a linkage that the routine
   doesn't declare `EXTERNAL REGISTER` is preserved; one it declares
   `GLOBAL REGISTER` again is preserved and starts a new lifetime,
   BLISS-32's rules. `/CHECK=REDECLARE` points the second case out.
   (RN 2.8.3, 2.30)
+
+  vaxpunk: register data lives in the frame, and a register number says
+  where the value goes at a call and at a return (`docs/vbliss.md`
+  *Linkages and conditions*); `tests/bliss/registers.b64` behaves the
+  same under BLISSA64.
 - `PRESERVE`, `NOPRESERVE`, `NOTUSED` and output parameters are BLISS-32's
   (LRM 13.3). Under BLISS-32's CALL, R0 and R1 aren't preserved and R2-R11
   are (LRM 13.3.3); under DESIGN-0004 x0, x1 aren't and x19-x28 are, the
@@ -414,9 +425,12 @@ LRM's restriction says. (probe, `tests/bliss/builtins.b64` and
 `conditions.b64`)
 
 The list below is the compiler's own table (KIT), grouped. The last
-column says when vbliss needs each: **now**, in PRD-0004; **later**, when
-some code uses it; **no**, it means nothing on ARM64 (rejected, or
-accepted as a no-op where the row says so).
+column says whether vbliss has each: **yes**, or **no**, when it means
+nothing on ARM64 or vaxpunk's PAL hasn't the call (a compile error that
+says so); the machine-specific ones need a `BUILTIN` declaration, as in
+BLISSA64. `tests/bliss/machine.b64` runs them under vrun and BLISSA64
+alike, and `crates/vbliss/tests/asm.rs` checks the PAL calls, which only
+the executive can run.
 
 | Built-in | What it does | Source | vbliss |
 | --- | --- | --- | --- |
@@ -424,9 +438,9 @@ accepted as a no-op where the row says so).
 | `ACTUALPARAMETER(i)` | the i-th actual, from 1 | LRM 13.6 | now |
 | `NULLPARAMETER(i)` | the i-th actual is absent or 0 | LRM 13.6 | now |
 | `ARGPTR()` | a VAX-style copy of the argument list (*Linkage functions*) | RN 2.3.2 | now |
-| `RETURNADDRESS()` | the caller's return address | KIT | later |
+| `RETURNADDRESS()` | the caller's return address | KIT | yes: 8(FP) |
 | `SIGNAL`, `SIGNAL_STOP`, `SETUNWIND` | condition handling | LRM 17 | now |
-| `SIGNALREF`, `SIGNALREF_STOP` | the same, the condition a 64-bit value by reference | RN 2.33.3 | later |
+| `SIGNALREF`, `SIGNALREF_STOP` | the same, the condition a 64-bit value by reference | RN 2.33.3 | yes |
 | `ESTABLISH(rtn)`, `REVERT()` | set or clear the routine's handler at run time | RN 2.3.3 | now |
 | `MAX`, `MIN`, `MAXU`, `MINU`, `MAXA`, `MINA`, `ABS`, `SIGN` | common arithmetic | LRM 5.2 | now |
 | `%REF(e)` | the address of a temporary holding e, as an actual | LRM 5.2.2.3 | now |
@@ -435,29 +449,29 @@ accepted as a no-op where the row says so).
 | `CH$MOVE`, `CH$COPY`, `CH$FILL` | move, concatenate and pad, fill | LRM 20 | now |
 | `CH$EQL`, `CH$NEQ`, `CH$LSS`, `CH$LEQ`, `CH$GTR`, `CH$GEQ`, `CH$COMPARE` | string comparison with a fill character | LRM 20 | now |
 | `CH$FIND_CH`, `CH$FIND_NOT_CH`, `CH$FIND_SUB`, `CH$FAIL` | search | LRM 20 | now |
-| `CH$TRANSTABLE`, `CH$TRANSLATE` | translation | LRM 20 | later |
+| `CH$TRANSTABLE`, `CH$TRANSLATE` | translation | LRM 20 | yes |
 | `ROT(v, n)` | rotate | RN 2.9.6 | now: `ror` |
 | `SLL`, `SRL`, `SRA` | shift one way by 0 to 63 | RN 2.9.5 | now |
-| `UMULH(a, b)` | high half of the unsigned product | RN 2.9.6 | later: `umulh` |
-| `CMPBGE`, `ZAP`, `ZAPNOT` | Alpha's byte-mask operations | RN 2.9.6 | later, a few instructions each |
-| `TRAPB()`, `DRAINT()` | wait for pending arithmetic traps | RN 2.9.6; KIT | no: no-ops |
-| `RPCC()` | the cycle counter | RN 2.9.6 | later: `CNTVCT_EL0` |
+| `UMULH(a, b)` | high half of the unsigned product | RN 2.9.6 | yes: `umulh` |
+| `CMPBGE`, `ZAP`, `ZAPNOT` | Alpha's byte-mask operations | RN 2.9.6 | yes, a byte at a time |
+| `TRAPB()`, `DRAINT()` | wait for pending arithmetic traps | RN 2.9.6; KIT | no-ops |
+| `RPCC()` | the cycle counter | RN 2.9.6 | yes: `CNTVCT_EL0` |
 | `WRITE_MBX(a, v)` | store-conditional to an I/O mailbox | RN 2.9.6 | no |
 | `BARRIER()` | memory barrier | RN 2.13 | now: `dmb ish` |
-| `ADD_`, `AND_`, `OR_ATOMIC_LONG`/`_QUAD(p, e [, retries] [; old])` | atomic update, 1 if done within the retries; `p` naturally aligned | RN 2.9.3 | now: `ldxr`/`stxr` |
-| `CMP_SWAP_LONG`, `CMP_SWAP_QUAD` | compare and swap | KIT; VSI | now |
-| `CMP_STORE_LONG`, `CMP_STORE_QUAD(a, cmp, v, dest)` | compare at a, store v at dest if equal | RN 2.9.6 | later |
-| `TESTBITSS`, `TESTBITSC`, `TESTBITCS`, `TESTBITCC` | test a bit and set or clear it, atomic against ASTs | RN 2.9.4 | now |
-| `TESTBITSSI`, `TESTBITCCI` | the same, interlocked | RN 2.9.4 | now |
-| `ADAWI(a, n)` | interlocked word add, returns faked VAX condition codes | RN 2.9.4 | later |
-| `CALL_PAL(code, ...)` | any PAL call, code a compile-time constant | RN 2.9.2 | now |
-| `PAL_INSQHIL`, `PAL_INSQTIL`, `PAL_REMQHIL`, `PAL_REMQTIL`, their `Q` (quadword) and `R` (resident) forms | interlocked queues | RN 2.9.2 | now, those the PAL has |
-| `PAL_INSQUEL`, `PAL_INSQUEQ`, `PAL_REMQUEL`, `PAL_REMQUEQ`, their `_D` forms | non-interlocked queues | RN 2.9.2 | now, those the PAL has |
-| `PAL_PROBER`, `PAL_PROBEW` | probe access for a mode | RN 2.9.2 | now |
-| `PAL_MTPR_x`, `PAL_MFPR_x` (`IPL`, `ASTEN`, `ASTSR`, `SIRR`, `SISR`, `PCBB`, `WHAMI`, `TBIA`, `TBIS`...) | processor registers | RN 2.9.2; KIT | now, those the PAL has |
-| `PAL_CHMK`, `PAL_CHME`, `PAL_CHMS`, `PAL_CHMU` | change mode | RN 2.9.2 | later |
-| `PAL_HALT`, `PAL_BPT`, `PAL_BUGCHK`, `PAL_GENTRAP` | halt, breakpoint, bugcheck, software trap | RN 2.9.2 | later |
-| `PAL_RD_PS`, `PAL_WR_PS_SW`, `PAL_SWASTEN`, `PAL_SWPCTX`, `PAL_RSCC`, `PAL_READ_UNQ`, `PAL_WRITE_UNQ`, `PAL_IMB`, `PAL_CFLUSH`, `PAL_DRAINA`, `PAL_LDQP`, `PAL_STQP` | the rest of OpenVMS's PAL | RN 2.9.2 | later, as the PAL has them |
+| `ADD_`, `AND_`, `OR_ATOMIC_LONG`/`_QUAD(p, e [, retries] [; old])` | atomic update, 1 if done within the retries; `p` naturally aligned | RN 2.9.3 | yes: `ldaxr`/`stlxr` |
+| `CMP_SWAP_LONG`, `CMP_SWAP_QUAD(p, comparand, value)` | compare and swap, 1 if it stored | KIT; VSI; probe | yes, retrying a store-conditional that fails, which BLISSA64 reports as 0 |
+| `CMP_STORE_LONG`, `CMP_STORE_QUAD(a, cmp, v, dest)` | compare at a, store v at dest if equal | RN 2.9.6 | no: ARM64's store-exclusive must be to the address loaded |
+| `TESTBITSS`, `TESTBITSC`, `TESTBITCS`, `TESTBITCC(field [, retries] [; done])` | test a bit and set or clear it, atomic against ASTs | RN 2.9.4 | yes, interlocked |
+| `TESTBITSSI`, `TESTBITCCI` | the same, interlocked | RN 2.9.4 | yes |
+| `ADAWI(srcaddr, dstaddr)` | interlocked word add, returns faked VAX condition codes | UM 4.1; RN 2.9.4; probe | yes |
+| `CALL_PAL(code, ...)` | any PAL call, code a compile-time constant | RN 2.9.2 | yes, up to six arguments |
+| `PAL_INSQHIL`, `PAL_INSQTIL`, `PAL_REMQHIL`, `PAL_REMQTIL`, their `Q` (quadword) and `R` (resident) forms | interlocked queues | RN 2.9.2 | no: the PAL has none |
+| `PAL_INSQUEL`, `PAL_INSQUEQ(pred, entry)`, `PAL_REMQUEL`, `PAL_REMQUEQ(entry [; removed])`, their `_D` forms | non-interlocked queues | RN 2.9.2; probe | yes, inline, as vmacro's `INSQUE` |
+| `PAL_PROBER`, `PAL_PROBEW(base, len, mode)` | probe access for a mode | RN 2.9.2 | yes: a length, not Alpha's offset |
+| `PAL_MTPR_x`, `PAL_MFPR_x` (`IPL`, `ASTEN`, `ASTSR`, `SIRR`, `SISR`, `PCBB`, `WHAMI`, `TBIA`, `TBIS`...) | processor registers | RN 2.9.2; KIT | those the PAL has: `IPL`, `PCBB`, `SCBB`, `SIRR`, `SISR` |
+| `PAL_CHMK`, `PAL_CHME`, `PAL_CHMS`, `PAL_CHMU(code [, a0, ...])` | change mode | RN 2.9.2 | yes: the code in x7's bits 31:16, up to six arguments in x0-x5 |
+| `PAL_HALT`, `PAL_BPT`, `PAL_BUGCHK`, `PAL_GENTRAP` | halt, breakpoint, bugcheck, software trap | RN 2.9.2 | `HALT`; `BPT` as `brk`; the others no, as the PAL hasn't them |
+| `PAL_RD_PS`, `PAL_WR_PS_SW`, `PAL_SWASTEN`, `PAL_SWPCTX`, `PAL_RSCC`, `PAL_READ_UNQ`, `PAL_WRITE_UNQ`, `PAL_IMB`, `PAL_CFLUSH`, `PAL_DRAINA`, `PAL_LDQP`, `PAL_STQP` | the rest of OpenVMS's PAL | RN 2.9.2 | those the PAL has: `RD_PS`, `SWPCTX` |
 | `ADDx`, `SUBx`, `MULx`, `DIVx`, `CMPx`, `CVTxy`, `CVTRxy` (`F`, `D`, `G`, `S`, `T`, with `L`, `Q`, `I`) | floating point | RN 2.10.1 | no, until vasm has floating point |
 
 **PAL calls.** The `PAL_` prefix keeps them apart from the VAX built-ins
@@ -468,7 +482,21 @@ table differ at the edges: the table has `PAL_MFPR_ASN` where RN lists
 vaxpunk: the PAL keeps Alpha's numbers (DESIGN-0001), so each `PAL_x`
 built-in whose call vaxpunk implements is that call, and `CALL_PAL`
 reaches vaxpunk's own (0x40 and up). One the PAL doesn't implement is a
-compile error.
+compile error. The queue calls the PAL keeps but doesn't implement,
+since one thread runs at a time, are inline code, as vmacro's `INSQUE`
+and `REMQUE` are; their results are SIMH's VMS PALcode's: 1 if the entry
+inserted is the only one, and -1, 0 or 1 for a queue empty before, empty
+after, or not. `PAL_REMQUEx` gives the entry removed, Alpha's R1, as an
+output parameter (`PAL_REMQUEL(.HEAD; ENTRY)`), as BLISSA64 takes it.
+
+The atomic built-ins are loops of a plain load and one try at a
+compare-and-store by `ldaxr` and `stlxr`, until it stores or the retries
+run out. A `TESTBIT` works on the bit's aligned quadword, so the bit may
+be anywhere; `ADAWI` on the word's aligned longword. `ADAWI` takes the
+address of the addend, as BLISS-32's did (UM 4.1), where RN 2.9.4 says
+`ADAWI(address, addend)`, and its faked condition codes take the addend
+as signed, as BLISSA64's do: 5 + -2 sets no carry. (probe,
+`tests/bliss/machine.b64`)
 
 **Floating point** also brings `%S` and `%T` literals, `%FFLOAT` to
 `%TFLOAT` to pass and return floating values by value, and

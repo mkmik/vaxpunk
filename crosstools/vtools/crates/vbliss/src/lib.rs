@@ -166,17 +166,29 @@ pub fn compile_with(
 
 /// A require or library file's text: `name` in one of `dirs`, as given,
 /// or with one of `types` after it if it has no type (`.R64` or `.R32`,
-/// then `.REQ`), in upper or lower case. A device or directory before the
-/// name (`SYS$LIBRARY:STARLET`) stands for the directories searched; a
-/// library's `.L64` or `.L32` is its source.
+/// then `.REQ`), in upper or lower case. A device before the name
+/// (`SYS$LIBRARY:STARLET`) stands for the directories searched; a
+/// directory is a path under each of them, `[.SUB]` and `[A.B]` alike,
+/// with `-` the parent; a library's `.L64` or `.L32` is its source.
 fn require(dirs: &[std::path::PathBuf], name: &str, types: &[&str]) -> Result<String, String> {
-    // ponytail: [-] is the parent directory; any other directory is dropped.
-    let (up, name) = match name.strip_prefix("[-]") {
-        Some(rest) => ("../", rest),
+    let name = name.rsplit(':').next().unwrap_or(name);
+    let (dir, name) = match name.split_once([']', '>']) {
+        Some((d, rest)) => (d.trim_start_matches(['[', '<']), rest),
         None => ("", name),
     };
-    let base = name.rsplit([':', ']', '>']).next().unwrap_or(name);
-    let base = &format!("{up}{base}");
+    let up: String = dir
+        .split('.')
+        .filter(|p| !p.is_empty())
+        .flat_map(|p| {
+            // `[--]` is two levels up.
+            if p.chars().all(|c| c == '-') {
+                vec!["../".to_string(); p.len()]
+            } else {
+                vec![format!("{p}/")]
+            }
+        })
+        .collect();
+    let base = &format!("{up}{name}");
     let base = [".L64", ".l64", ".L32", ".l32"]
         .iter()
         .find_map(|t| base.strip_suffix(t))

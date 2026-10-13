@@ -11,7 +11,7 @@
 
 use std::fmt::Write;
 
-use crate::ir::{Func, Ins, Item, Module, Op, Term, Un, V};
+use crate::ir::{Func, Ins, Item, LinkCall, Module, Op, Term, Un, V};
 
 /// The registers temporaries live in.
 const POOL: std::ops::RangeInclusive<u8> = 19..=28;
@@ -58,9 +58,6 @@ pub fn module(m: &Module) -> String {
             }
         }
     }
-    for (g, v) in &m.globals {
-        let _ = writeln!(o, "{g} == {v}");
-    }
     // Each routine's frame descriptor goes in a psect named for its code's
     // with _FDSC after, as vmacro puts them.
     let mut fdscs: Vec<(String, String)> = Vec::new();
@@ -92,6 +89,14 @@ pub fn module(m: &Module) -> String {
     for (p, text) in &fdscs {
         let _ = writeln!(o, "\n        .PSECT  {p}, PIC, SHR, EXE, NOWRT, QUAD");
         o.push_str(text);
+    }
+    // After the labels they may name.
+    for (g, v) in &m.globals {
+        let v = match v {
+            V::Sym(s, off) => sym(s, *off),
+            v => v.to_string(),
+        };
+        let _ = writeln!(o, "{g} == {v}");
     }
     match &m.main {
         Some(main) => {
@@ -142,8 +147,20 @@ fn sym(s: &str, off: i64) -> String {
 }
 
 /// What an instruction defines and uses.
-fn operands(ins: &Ins) -> (Option<u32>, Vec<&V>) {
-    match ins {
+fn operands(ins: &Ins) -> (Vec<u32>, Vec<&V>) {
+    if let Ins::Link(c) = ins {
+        let defs = c
+            .dst
+            .into_iter()
+            .chain(c.outs.iter().map(|o| o.1))
+            .collect();
+        let uses = std::iter::once(&c.target)
+            .chain(&c.args)
+            .chain(c.ins.iter().map(|(a, _)| a))
+            .collect();
+        return (defs, uses);
+    }
+    let (d, u) = match ins {
         Ins::Bin(_, d, a, b) => (Some(*d), vec![a, b]),
         Ins::Un(_, d, a) => (Some(*d), vec![a]),
         Ins::Load(d, a, ..) => (Some(*d), vec![a]),
@@ -152,17 +169,17 @@ fn operands(ins: &Ins) -> (Option<u32>, Vec<&V>) {
         Ins::Insert(d, b, v, p, s) => (Some(*d), vec![b, v, p, s]),
         Ins::Arg(d, _) => (Some(*d), vec![]),
         Ins::Call(d, t, args) => (*d, std::iter::once(t).chain(args).collect()),
-        Ins::Jsb(d, t, args, _) => (
-            *d,
-            std::iter::once(t)
-                .chain(args.iter().map(|(a, _)| a))
-                .collect(),
-        ),
         Ins::RegArg(d, _) | Ins::ArgCount(d) | Ins::ArgPtr(d) => (Some(*d), vec![]),
         Ins::ArgN(d, i) => (Some(*d), vec![i]),
         Ins::SetHandler(v) | Ins::SetEnable(v) => (None, vec![v]),
-        Ins::Barrier => (None, vec![]),
-    }
+        Ins::Barrier | Ins::Bpt => (None, vec![]),
+        Ins::Cas(d, a, e, n, _) => (Some(*d), vec![a, e, n]),
+        Ins::Pal(d, func, args) => (Some(*d), std::iter::once(func).chain(args).collect()),
+        Ins::RetAddr(d) | Ins::Rpcc(d) => (Some(*d), vec![]),
+        Ins::SetReg(_, v) => (None, vec![v]),
+        Ins::Link(_) => unreachable!(),
+    };
+    (d.into_iter().collect(), u)
 }
 
 fn term_uses(t: &Term) -> Vec<&V> {
@@ -206,7 +223,7 @@ fn allocate(f: &Func) -> (Vec<Option<Loc>>, u8, u32) {
                     uses[b][t] = true;
                 }
             }
-            if let Some(d) = d {
+            for d in d {
                 defs[b][d as usize] = true;
             }
         }
@@ -254,7 +271,7 @@ fn allocate(f: &Func) -> (Vec<Option<Loc>>, u8, u32) {
             for t in temps(u) {
                 extend(t, pos);
             }
-            if let Some(d) = d {
+            for d in d {
                 extend(d as usize, pos);
             }
             pos += 1;
@@ -322,6 +339,8 @@ struct Routine<'a> {
     /// Each slot's offset from FP.
     slots: Vec<u32>,
     size: u32,
+    /// Labels past the blocks' and the prologue's, used so far.
+    extra: u32,
     out: String,
 }
 
@@ -332,7 +351,7 @@ impl<'a> Routine<'a> {
         // A JSB routine's register parameters are read from the save area,
         // where the prologue put them.
         for ins in all() {
-            if let Ins::RegArg(_, r) = ins
+            if let Ins::RegArg(_, r) | Ins::SetReg(r, _) = ins
                 && *r >= 2
             {
                 saved = saved.max(*r - 1);
@@ -369,6 +388,7 @@ impl<'a> Routine<'a> {
             args,
             slots,
             size: off.next_multiple_of(16),
+            extra: 0,
             out: String::new(),
         }
     }
@@ -381,6 +401,12 @@ impl<'a> Routine<'a> {
 
     fn label(&self, b: u32) -> String {
         format!("{}$", b + 1)
+    }
+
+    /// A label of its own for a branch inside an instruction's code.
+    fn extra_label(&mut self) -> String {
+        self.extra += 1;
+        self.label(self.f.blocks.len() as u32 + 2 + self.extra)
     }
 
     fn mov_imm(&mut self, r: &str, c: i64) {
@@ -675,7 +701,16 @@ impl<'a> Routine<'a> {
                 }
                 self.done(*d);
             }
-            Ins::Jsb(d, target, args, nopreserve) => self.jsb(*d, target, args, nopreserve),
+            Ins::Link(c) => self.link(c),
+            Ins::SetReg(r, v) => {
+                if *r < 2 {
+                    self.load_into(v, &format!("x{r}"));
+                } else {
+                    let v = self.src(v, "x10");
+                    let off = self.rsa + 8 * u32::from(r - 2);
+                    self.line(format!("str     {v}, [x29, #{off}]"));
+                }
+            }
             Ins::RegArg(d, r) => {
                 let rd = self.dst(*d);
                 if *r < 2 {
@@ -728,6 +763,50 @@ impl<'a> Routine<'a> {
                 self.done(*d);
             }
             Ins::Barrier => self.line("dmb     ish"),
+            Ins::Bpt => self.line("brk     #0"),
+            Ins::RetAddr(d) => {
+                let rd = self.dst(*d);
+                self.line(format!("ldr     {rd}, [x29, #8]"));
+                self.done(*d);
+            }
+            Ins::Rpcc(d) => {
+                let rd = self.dst(*d);
+                self.line(format!("mrs     {rd}, CNTVCT_EL0"));
+                self.done(*d);
+            }
+            Ins::Cas(d, a, e, n, size) => {
+                let a = self.src(a, "x16");
+                let e = self.src(e, "x11");
+                let n = self.src(n, "x12");
+                let w = |r: &str| {
+                    if *size == 4 {
+                        r.replacen('x', "w", 1)
+                    } else {
+                        r.to_string()
+                    }
+                };
+                let (t, e, n) = (w("x13"), w(&e), w(&n));
+                let l = self.extra_label();
+                self.line(format!("ldaxr   {t}, [{a}]"));
+                self.line(format!("cmp     {t}, {e}"));
+                self.line(format!("b.ne    {l}"));
+                self.line(format!("stlxr   w15, {n}, [{a}]"));
+                self.line("cmp     w15, #0");
+                self.out.push_str(&format!("{l}:\n"));
+                let rd = self.dst(*d);
+                self.line(format!("cset    {rd}, eq"));
+                self.done(*d);
+            }
+            Ins::Pal(d, func, args) => {
+                for (i, a) in args.iter().enumerate() {
+                    self.load_into(a, &format!("x{i}"));
+                }
+                self.load_into(func, "x7");
+                self.line("svc     #0");
+                let rd = self.dst(*d);
+                self.line(format!("mov     {rd}, x0"));
+                self.done(*d);
+            }
             Ins::Call(d, target, args) => {
                 let stack = (args.len().saturating_sub(8) as u32 * 8).next_multiple_of(16);
                 if stack > 0 {
@@ -760,55 +839,92 @@ impl<'a> Routine<'a> {
         }
     }
 
-    /// A JSB linkage's call: the arguments and the result go through the
-    /// stack, so that no register they share with a temporary is lost, and
-    /// the registers the callee may change are kept around it, with x18,
-    /// which is set to `sp` so that the callee's pushes go below this frame.
-    fn jsb(&mut self, d: Option<u32>, target: &V, args: &[(V, u8)], nopreserve: &[u8]) {
+    /// A call by a linkage with registers: the register arguments and the
+    /// results go through the stack, so that no register they share with
+    /// a temporary is lost, and the registers the callee may change are
+    /// kept around it. A JSB call also keeps x18, which it sets to `sp`
+    /// so that the callee's pushes go below this frame; a CALL passes its
+    /// standard arguments as `Ins::Call` does.
+    fn link(&mut self, c: &LinkCall) {
         let arm = |r: u8| if r < 2 { r } else { r + 17 };
-        let mut save: Vec<u8> = args
+        let mut save: Vec<u8> = c
+            .ins
             .iter()
             .map(|(_, r)| *r)
-            .chain(nopreserve.iter().copied())
+            .chain(c.outs.iter().map(|o| o.0))
+            .chain(c.nopreserve.iter().copied())
             .filter(|&r| r >= 2)
             .map(arm)
             .collect();
-        save.push(18);
+        if c.jsb {
+            save.push(18);
+        }
         save.sort_unstable();
         save.dedup();
-        let (ns, na) = (save.len(), args.len());
-        let area = (8 * (ns + na + 1) as u32).next_multiple_of(16);
+        let (ns, na, no) = (save.len(), c.ins.len(), c.outs.len());
+        // The saves, the register arguments, the result, the outputs.
+        let area = (8 * (ns + na + 1 + no) as u32).next_multiple_of(16);
         self.sub_sp(area);
         for (i, r) in save.iter().enumerate() {
             self.line(format!("str     x{r}, [sp, #{}]", 8 * i));
         }
-        for (j, (v, _)) in args.iter().enumerate() {
+        for (j, (v, _)) in c.ins.iter().enumerate() {
             let r = self.src(v, "x10");
             self.line(format!("str     {r}, [sp, #{}]", 8 * (ns + j)));
         }
-        if !matches!(target, V::Sym(_, 0)) {
-            self.load_into(target, "x17");
+        let stack = (c.args.len().saturating_sub(8) as u32 * 8).next_multiple_of(16);
+        if stack > 0 {
+            self.sub_sp(stack);
+            for (i, a) in c.args.iter().enumerate().skip(8) {
+                let r = self.src(a, "x10");
+                self.line(format!("str     {r}, [sp, #{}]", (i - 8) * 8));
+            }
         }
-        for (j, (_, r)) in args.iter().enumerate() {
-            self.line(format!("ldr     x{}, [sp, #{}]", arm(*r), 8 * (ns + j)));
+        for (i, a) in c.args.iter().enumerate().take(8) {
+            self.load_into(a, &format!("x{i}"));
         }
-        self.line("mov     x18, sp");
-        match target {
+        if !matches!(c.target, V::Sym(_, 0)) {
+            self.load_into(&c.target, "x17");
+        }
+        for (j, (_, r)) in c.ins.iter().enumerate() {
+            let off = stack as usize + 8 * (ns + j);
+            self.line(format!("ldr     x{}, [sp, #{off}]", arm(*r)));
+        }
+        if c.jsb {
+            self.line("mov     x18, sp");
+        } else {
+            self.line(format!("mov     x9, #{}", c.args.len()));
+        }
+        match &c.target {
             V::Sym(s, 0) => self.line(format!("bl      {s}")),
             _ => self.line("blr     x17"),
         }
-        self.line(format!("str     x0, [sp, #{}]", 8 * (ns + na)));
+        if stack > 0 {
+            self.add_sp(stack);
+        }
+        let res = 8 * (ns + na);
+        self.line(format!("str     x0, [sp, #{res}]"));
+        for (k, (r, _)) in c.outs.iter().enumerate() {
+            self.line(format!(
+                "str     x{}, [sp, #{}]",
+                arm(*r),
+                res + 8 * (1 + k)
+            ));
+        }
         for (i, r) in save.iter().enumerate() {
             self.line(format!("ldr     x{r}, [sp, #{}]", 8 * i));
         }
-        if let Some(d) = d {
+        if let Some(d) = c.dst {
             let r = self.dst(d);
-            self.line(format!("ldr     {r}, [sp, #{}]", 8 * (ns + na)));
-            self.add_sp(area);
+            self.line(format!("ldr     {r}, [sp, #{res}]"));
             self.done(d);
-        } else {
-            self.add_sp(area);
         }
+        for (k, (_, t)) in c.outs.iter().enumerate() {
+            let r = self.dst(*t);
+            self.line(format!("ldr     {r}, [sp, #{}]", res + 8 * (1 + k)));
+            self.done(*t);
+        }
+        self.add_sp(area);
     }
 
     fn binary(&mut self, op: Op, d: u32, a: &V, b: &V) {
@@ -873,6 +989,7 @@ impl<'a> Routine<'a> {
                 Op::Shr => self.line(three("lsr")),
                 Op::Sar => self.line(three("asr")),
                 Op::Ror => self.line(three("ror")),
+                Op::Umulh => self.line(three("umulh")),
                 Op::Ash => {
                     self.line(format!("neg     x12, {b}"));
                     self.line(format!("lsl     x13, {a}, {b}"));

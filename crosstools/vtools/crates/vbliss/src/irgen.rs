@@ -36,6 +36,8 @@ struct Gen<'a> {
     /// The PLITs allocated, by number, and the %ASCID descriptors, by text.
     plits: HashMap<u32, V>,
     ascids: HashMap<Vec<u8>, V>,
+    /// The registers the routine leaves values in when it returns.
+    exits: Vec<(u8, usize)>,
 }
 
 /// Generates the IR of a parsed module.
@@ -51,9 +53,20 @@ pub fn generate(m: &parse::Module) -> R<ir::Module> {
         lets: HashMap::new(),
         plits: HashMap::new(),
         ascids: HashMap::new(),
+        exits: Vec::new(),
     };
     for s in &m.statics {
         g.statics(s)?;
+    }
+    let mut globals = Vec::new();
+    for (name, e) in &m.global_literals {
+        let v = g
+            .constant(e)
+            .map_err(|e| format!("GLOBAL BIND {name}: {e}"))?;
+        if matches!(&v, V::Sym(s, _) if g.externals.contains(s)) {
+            return Err(format!("GLOBAL BIND {name} to an external name"));
+        }
+        globals.push((name.clone(), v));
     }
     let mut funcs = Vec::new();
     for r in &m.routines {
@@ -70,7 +83,7 @@ pub fn generate(m: &parse::Module) -> R<ir::Module> {
         data: g.data,
         funcs,
         psects: m.psect_attrs.clone(),
-        globals: m.global_literals.clone(),
+        globals,
     })
 }
 
@@ -266,25 +279,37 @@ impl Gen<'_> {
             ..Func::default()
         };
         self.cur = self.block();
-        let jsb = match &sym.kind {
+        let params = match &sym.kind {
             Kind::Routine {
                 linkage: Some(l), ..
-            } if l.jsb => Some(l.clone()),
-            _ => None,
+            } => l.params.clone(),
+            _ => Vec::new(),
         };
+        let mut standard = 0;
         for (i, &formal) in r.formals.iter().enumerate() {
             let t = self.temp();
-            match &jsb {
-                Some(l) => self.emit(Ins::RegArg(t, l.params[i])),
-                None => self.emit(Ins::Arg(t, i as u32)),
+            match params.get(i).copied().flatten() {
+                Some(reg) => self.emit(Ins::RegArg(t, reg)),
+                None => {
+                    self.emit(Ins::Arg(t, standard));
+                    standard += 1;
+                }
             }
             // A BLISS-32 routine sees the low 32 bits of what it is passed.
             let v = self.narrow(V::T(t));
             let addr = self.address(formal)?;
             self.emit(Ins::Store(v, addr, 8));
         }
+        // EXTERNAL REGISTER data starts as its register is.
+        for &(reg, id) in &r.externals {
+            let t = self.temp();
+            self.emit(Ins::RegArg(t, reg));
+            let addr = self.address(id)?;
+            self.emit(Ins::Store(V::T(t), addr, 8));
+        }
+        self.exits = r.externals.iter().chain(&r.outputs).copied().collect();
         let v = self.value(&r.body)?;
-        self.end(Term::Ret(if novalue { V::C(0) } else { v }));
+        self.ret(if novalue { V::C(0) } else { v })?;
         let mut f = std::mem::take(&mut self.f);
         prune(&mut f);
         Ok(f)
@@ -309,7 +334,7 @@ impl Gen<'_> {
             Expr::Plit(n, counted, items) => match self.plits.get(n) {
                 Some(v) => v.clone(),
                 None => {
-                    let v = self.plit(*counted, items)?;
+                    let v = self.plit(*n, *counted, items)?;
                     self.plits.insert(*n, v.clone());
                     v
                 }
@@ -325,6 +350,15 @@ impl Gen<'_> {
                 };
                 self.op(*op, a, b)
             }
+            Expr::Special(
+                s @ (Special::Atomic { .. }
+                | Special::CmpSwap(_)
+                | Special::TestBit { .. }
+                | Special::Adawi
+                | Special::Insque { .. }
+                | Special::Remque { .. }),
+                args,
+            ) => self.machine(*s, args)?,
             Expr::Special(s, args) => {
                 let mut vals = Vec::new();
                 for a in args {
@@ -357,6 +391,43 @@ impl Gen<'_> {
                     Special::Barrier => {
                         self.emit(Ins::Barrier);
                         V::C(0)
+                    }
+                    Special::Bpt => {
+                        self.emit(Ins::Bpt);
+                        V::C(0)
+                    }
+                    Special::RetAddr => {
+                        let d = self.temp();
+                        self.emit(Ins::RetAddr(d));
+                        V::T(d)
+                    }
+                    Special::Rpcc => {
+                        let d = self.temp();
+                        self.emit(Ins::Rpcc(d));
+                        V::T(d)
+                    }
+                    Special::Pal(code) => {
+                        let vals = vals.into_iter().map(|v| self.fix(v)).collect();
+                        let d = self.temp();
+                        self.emit(Ins::Pal(d, V::C((*code).into()), vals));
+                        V::T(d)
+                    }
+                    Special::Chm(code) => {
+                        // The change mode code goes in x7's bits 31:16.
+                        let chm = vals.remove(0);
+                        let func = match chm {
+                            V::C(c) => V::C((c & 0xFFFF) << 16 | i64::from(*code)),
+                            v => {
+                                let v = self.bin(Op::And, v, V::C(0xFFFF));
+                                let v = self.bin(Op::Shl, v, V::C(16));
+                                self.bin(Op::Or, v, V::C((*code).into()))
+                            }
+                        };
+                        let func = self.fix(func);
+                        let vals = vals.into_iter().map(|v| self.fix(v)).collect();
+                        let d = self.temp();
+                        self.emit(Ins::Pal(d, func, vals));
+                        V::T(d)
                     }
                     _ => {
                         let vals: Vec<V> = vals.into_iter().map(|v| self.fix(v)).collect();
@@ -412,34 +483,59 @@ impl Gen<'_> {
                 self.store(p, v.clone());
                 v
             }
-            Expr::Call(target, args) => {
+            Expr::Call(target, args, links) => {
                 let mut linkage = None;
                 let t = match **target {
                     Expr::Name(id) => match &self.m.syms[id].kind {
                         Kind::Routine { linkage: l, .. } => {
-                            linkage = l.clone().filter(|l| l.jsb);
+                            linkage = l.clone().filter(|l| l.jsb || !links.is_empty());
                             self.address(id)?
                         }
                         _ => return Err(format!("{} is not a routine", self.m.syms[id].name)),
                     },
                     ref t => self.value(t)?,
                 };
-                if let Some(l) = linkage {
-                    if args.len() > l.params.len() {
-                        return Err("more actuals than the JSB linkage has registers".into());
-                    }
-                    let mut vals = Vec::new();
-                    for (a, r) in args.iter().zip(&l.params) {
-                        let v = self.value(a)?;
-                        vals.push((self.fix(v), *r));
-                    }
-                    let d = self.temp();
-                    self.emit(Ins::Jsb(Some(d), t, vals, l.nopreserve.clone()));
-                    return Ok(self.narrow(V::T(d)));
-                }
                 let mut vals = Vec::new();
                 for a in args {
-                    vals.push(self.value(a)?);
+                    let v = self.value(a)?;
+                    vals.push(if linkage.is_some() { self.fix(v) } else { v });
+                }
+                if let Some(l) = linkage {
+                    let mut ins = Vec::new();
+                    for k in links {
+                        if let Some(a) = &k.input {
+                            let v = self.value(a)?;
+                            ins.push((self.fix(v), k.reg));
+                        }
+                    }
+                    let outs: Vec<(u8, u32)> = links
+                        .iter()
+                        .filter(|k| k.input.is_none() || k.output.is_some())
+                        .map(|k| (k.reg, self.temp()))
+                        .collect();
+                    let d = self.temp();
+                    self.emit(Ins::Link(Box::new(ir::LinkCall {
+                        dst: Some(d),
+                        target: t,
+                        jsb: l.jsb,
+                        args: vals,
+                        ins,
+                        outs: outs.clone(),
+                        nopreserve: l.nopreserve.clone(),
+                    })));
+                    // The outputs, stored where the call says.
+                    let results: Vec<&parse::Link> = links
+                        .iter()
+                        .filter(|k| k.input.is_none() || k.output.is_some())
+                        .collect();
+                    for (k, (_, t)) in results.into_iter().zip(&outs) {
+                        if let Some(place) = &k.output {
+                            let p = self.place(place)?;
+                            let v = self.narrow(V::T(*t));
+                            self.store(p, v);
+                        }
+                    }
+                    return Ok(self.narrow(V::T(d)));
                 }
                 if vals.len() > 255 {
                     return Err("more than 255 arguments".into());
@@ -590,10 +686,28 @@ impl Gen<'_> {
             }
             Expr::Return(v) => {
                 let v = self.optional(v)?;
-                self.end(Term::Ret(v));
+                self.ret(v)?;
                 V::C(0)
             }
         })
+    }
+
+    /// Returns v, with the routine's output parameters and EXTERNAL
+    /// REGISTER data in their registers; R0's is the value.
+    fn ret(&mut self, v: V) -> R<()> {
+        let v = self.fix(v);
+        let mut v = v;
+        for (reg, id) in self.exits.clone() {
+            let p = self.place(&Expr::Name(id))?;
+            let x = self.load(p);
+            if reg == 0 {
+                v = x;
+            } else {
+                self.emit(Ins::SetReg(reg, x));
+            }
+        }
+        self.end(Term::Ret(v));
+        Ok(())
     }
 
     /// A loop over i from 0 while i < n (unsigned): `body` makes the
@@ -763,6 +877,49 @@ impl Gen<'_> {
                 });
                 self.start(out);
             }
+            Special::ChTranslate => {
+                // Each source character through the table while both
+                // last, then the fill, untranslated.
+                let (tab, sn, sp, fill, dn, dp) = (
+                    a[0].clone(),
+                    a[1].clone(),
+                    a[2].clone(),
+                    a[3].clone(),
+                    a[4].clone(),
+                    a[5].clone(),
+                );
+                let (n, done) = (self.temp(), self.block());
+                let shorter = self.bin(Op::Cltu, sn.clone(), dn.clone());
+                let (yes, no, go) = (self.block(), self.block(), self.block());
+                self.end(Term::Jlbs(shorter, yes, no));
+                self.start(yes);
+                self.copy(n, sn);
+                self.jump(go);
+                self.start(no);
+                self.copy(n, dn.clone());
+                self.jump(go);
+                self.start(go);
+                self.count_loop(V::T(n), done, &mut |g, i| {
+                    let p = g.bin(Op::Add, sp.clone(), i.clone());
+                    let c = g.temp();
+                    g.emit(Ins::Load(c, p, 1, false));
+                    let t = g.bin(Op::Add, tab.clone(), V::T(c));
+                    let tc = g.temp();
+                    g.emit(Ins::Load(tc, t, 1, false));
+                    let q = g.bin(Op::Add, dp.clone(), i);
+                    g.emit(Ins::Store(V::T(tc), q, 1));
+                });
+                self.start(done);
+                let rest = self.bin(Op::Sub, dn.clone(), V::T(n));
+                let base = self.bin(Op::Add, dp.clone(), V::T(n));
+                self.count_loop(rest, out, &mut |g, i| {
+                    let q = g.bin(Op::Add, base.clone(), i);
+                    g.emit(Ins::Store(fill.clone(), q, 1));
+                });
+                self.start(out);
+                let end = self.bin(Op::Add, dp, dn);
+                self.copy(r, end);
+            }
             Special::ChFindSub => {
                 // Each place the pattern fits, compared a character at a time.
                 let (cn, cp, pn, pp) = (a[0].clone(), a[1].clone(), a[2].clone(), a[3].clone());
@@ -801,6 +958,290 @@ impl Gen<'_> {
             _ => unreachable!(),
         }
         V::T(r)
+    }
+
+    /// A loop that tries `attempt` until it gives 1, or, with a retry
+    /// count, until it has tried that many times: 1 if an attempt did.
+    fn retry(&mut self, retries: Option<V>, attempt: &mut dyn FnMut(&mut Self) -> V) -> V {
+        let ok = self.temp();
+        let n = retries.map(|r| {
+            let n = self.temp();
+            self.copy(n, r);
+            n
+        });
+        let (head, yes, no, out) = (self.block(), self.block(), self.block(), self.block());
+        self.jump(head);
+        self.start(head);
+        let c = attempt(self);
+        self.end(Term::Jlbs(c, yes, no));
+        self.start(no);
+        match n {
+            Some(n) => {
+                let left = self.bin(Op::Sub, V::T(n), V::C(1));
+                self.copy(n, left.clone());
+                let more = self.bin(Op::Cgt, left, V::C(0));
+                let fail = self.block();
+                self.end(Term::Jlbs(more, head, fail));
+                self.start(fail);
+                self.copy(ok, V::C(0));
+                self.jump(out);
+            }
+            None => self.jump(head),
+        }
+        self.start(yes);
+        self.copy(ok, V::C(1));
+        self.jump(out);
+        self.start(out);
+        V::T(ok)
+    }
+
+    /// The atomic built-ins and the queue PAL calls (`builtin.rs`): loops
+    /// of plain loads and `cas`, or loads and stores.
+    fn machine(&mut self, s: Special, args: &[Expr]) -> R<V> {
+        Ok(match s {
+            Special::Atomic {
+                op,
+                size,
+                retries,
+                old,
+            } => {
+                let p = self.value(&args[0])?;
+                let p = self.fix(p);
+                let e = self.value(&args[1])?;
+                let e = self.fix(e);
+                let r = match retries {
+                    true => Some(self.value(&args[2])?),
+                    false => None,
+                };
+                let was = self.temp();
+                let ok = self.retry(r, &mut |g| {
+                    let t = g.temp();
+                    g.emit(Ins::Load(t, p.clone(), size, size == 4));
+                    g.copy(was, V::T(t));
+                    let n = g.bin(op, V::T(t), e.clone());
+                    let c = g.temp();
+                    g.emit(Ins::Cas(c, p.clone(), V::T(t), n, size));
+                    V::T(c)
+                });
+                if old {
+                    let place = self.place(&args[args.len() - 1])?;
+                    self.store(place, V::T(was));
+                }
+                ok
+            }
+            Special::CmpSwap(size) => {
+                let mut v = Vec::new();
+                for a in args {
+                    let x = self.value(a)?;
+                    v.push(self.fix(x));
+                }
+                // A failed try is retried while the comparand still matches.
+                let (r, out) = (self.temp(), self.block());
+                let (head, again) = (self.block(), self.block());
+                self.jump(head);
+                self.start(head);
+                let c = self.temp();
+                self.emit(Ins::Cas(c, v[0].clone(), v[1].clone(), v[2].clone(), size));
+                let (yes, no) = (self.block(), self.block());
+                self.end(Term::Jlbs(V::T(c), yes, no));
+                self.start(yes);
+                self.copy(r, V::C(1));
+                self.jump(out);
+                self.start(no);
+                let t = self.temp();
+                self.emit(Ins::Load(t, v[0].clone(), size, false));
+                let cmp = if size == 4 {
+                    let d = self.temp();
+                    self.emit(Ins::Ext(d, v[1].clone(), V::C(0), V::C(32), false));
+                    V::T(d)
+                } else {
+                    v[1].clone()
+                };
+                let same = self.bin(Op::Ceq, V::T(t), cmp);
+                let fail = self.block();
+                self.end(Term::Jlbs(same, again, fail));
+                self.start(again);
+                self.jump(head);
+                self.start(fail);
+                self.copy(r, V::C(0));
+                self.jump(out);
+                self.start(out);
+                V::T(r)
+            }
+            Special::TestBit {
+                was_set,
+                set,
+                retries,
+                flag,
+            } => {
+                // The bit in its aligned quadword, which a cas changes.
+                let place = self.place(&args[0])?;
+                let byte = match &place.pos {
+                    V::C(p) => self.add(place.addr.clone(), p >> 3),
+                    p => {
+                        let b = self.bin(Op::Shr, p.clone(), V::C(3));
+                        self.bin(Op::Add, place.addr.clone(), b)
+                    }
+                };
+                let byte = self.fix(byte);
+                let low = self.bin(Op::And, place.pos.clone(), V::C(7));
+                let off = self.bin(Op::And, byte.clone(), V::C(7));
+                let off = self.bin(Op::Shl, off, V::C(3));
+                let bit = self.bin(Op::Add, off, low);
+                let bit = self.fix(bit);
+                let q = self.bin(Op::And, byte, V::C(!7));
+                let q = self.fix(q);
+                let mask = self.bin(Op::Shl, V::C(1), bit.clone());
+                let mask = self.fix(mask);
+                let r = match retries {
+                    true => Some(self.value(&args[1])?),
+                    false => None,
+                };
+                let was = self.temp();
+                let ok = self.retry(r, &mut |g| {
+                    let t = g.temp();
+                    g.emit(Ins::Load(t, q.clone(), 8, false));
+                    let b = g.bin(Op::Shr, V::T(t), bit.clone());
+                    let b = g.bin(Op::And, b, V::C(1));
+                    g.copy(was, b);
+                    let n = match set {
+                        true => g.bin(Op::Or, V::T(t), mask.clone()),
+                        false => {
+                            let m = g.temp();
+                            g.emit(Ins::Un(Un::Not, m, mask.clone()));
+                            g.bin(Op::And, V::T(t), V::T(m))
+                        }
+                    };
+                    let c = g.temp();
+                    g.emit(Ins::Cas(c, q.clone(), V::T(t), n, 8));
+                    V::T(c)
+                });
+                if flag {
+                    let place = self.place(&args[args.len() - 1])?;
+                    self.store(place, ok);
+                }
+                match was_set {
+                    true => V::T(was),
+                    false => self.bin(Op::Xor, V::T(was), V::C(1)),
+                }
+            }
+            Special::Adawi => {
+                // The word in its aligned longword.
+                let a = self.value(&args[1])?;
+                let a = self.fix(a);
+                let src = self.value(&args[0])?;
+                // Signed, so that the carry is BLISSA64's (the oracle).
+                let add = self.temp();
+                self.emit(Ins::Load(add, src, 2, true));
+                let add = V::T(add);
+                let add = self.fix(add);
+                let q = self.bin(Op::And, a.clone(), V::C(!3));
+                let q = self.fix(q);
+                let sh = self.bin(Op::And, a, V::C(3));
+                let sh = self.bin(Op::Shl, sh, V::C(3));
+                let sh = self.fix(sh);
+                let (w, sum) = (self.temp(), self.temp());
+                self.retry(None, &mut |g| {
+                    let t = g.temp();
+                    g.emit(Ins::Load(t, q.clone(), 4, false));
+                    let x = g.bin(Op::Shr, V::T(t), sh.clone());
+                    let x = g.bin(Op::And, x, V::C(0xFFFF));
+                    g.copy(w, x);
+                    let s = g.bin(Op::Add, V::T(w), add.clone());
+                    g.copy(sum, s.clone());
+                    let r = g.bin(Op::And, s, V::C(0xFFFF));
+                    let r = g.bin(Op::Shl, r, sh.clone());
+                    let m = g.bin(Op::Shl, V::C(0xFFFF), sh.clone());
+                    let keep = g.temp();
+                    g.emit(Ins::Un(Un::Not, keep, m));
+                    let n = g.bin(Op::And, V::T(t), V::T(keep));
+                    let n = g.bin(Op::Or, n, r);
+                    let c = g.temp();
+                    g.emit(Ins::Cas(c, q.clone(), V::T(t), n, 4));
+                    V::T(c)
+                });
+                // N, Z, V and C of the 16-bit sum, as PSL bits 3 to 0.
+                let r = self.bin(Op::And, V::T(sum), V::C(0xFFFF));
+                let n = self.bin(Op::Shr, r.clone(), V::C(15));
+                let n = self.bin(Op::Shl, n, V::C(3));
+                let z = self.bin(Op::Ceq, r.clone(), V::C(0));
+                let z = self.bin(Op::Shl, z, V::C(2));
+                let x1 = self.bin(Op::Xor, V::T(w), r.clone());
+                let x2 = self.bin(Op::Xor, add, r);
+                let v = self.bin(Op::And, x1, x2);
+                let v = self.bin(Op::Shr, v, V::C(15));
+                let v = self.bin(Op::And, v, V::C(1));
+                let v = self.bin(Op::Shl, v, V::C(1));
+                let c = self.bin(Op::Shr, V::T(sum), V::C(16));
+                let c = self.bin(Op::And, c, V::C(1));
+                let nz = self.bin(Op::Or, n, z);
+                let vc = self.bin(Op::Or, v, c);
+                self.bin(Op::Or, nz, vc)
+            }
+            Special::Insque { quad, deferred } => {
+                // As SIMH's VMS PALcode: S = (P); (E) = S; (E+n) = P;
+                // (S+n) = E; (P) = E; 1 if S was P, the queue empty.
+                let n: u8 = if quad { 8 } else { 4 };
+                let mut p = self.value(&args[0])?;
+                if deferred {
+                    let d = self.temp();
+                    self.emit(Ins::Load(d, p, n, n == 4));
+                    p = V::T(d);
+                }
+                let p = self.fix(p);
+                let e = self.value(&args[1])?;
+                let e = self.fix(e);
+                let s = self.temp();
+                self.emit(Ins::Load(s, p.clone(), n, n == 4));
+                self.emit(Ins::Store(V::T(s), e.clone(), n));
+                let e1 = self.add(e.clone(), n.into());
+                self.emit(Ins::Store(p.clone(), e1, n));
+                let s1 = self.add(V::T(s), n.into());
+                self.emit(Ins::Store(e.clone(), s1, n));
+                self.emit(Ins::Store(e, p.clone(), n));
+                self.bin(Op::Ceq, V::T(s), p)
+            }
+            Special::Remque {
+                quad,
+                deferred,
+                addr,
+            } => {
+                // S = (E), P = (E+n); -1 if P is E, the queue empty; else
+                // (P) = S, (S+n) = P, and 0 if S was P, now empty, or 1.
+                let n: u8 = if quad { 8 } else { 4 };
+                let mut e = self.value(&args[0])?;
+                if deferred {
+                    let d = self.temp();
+                    self.emit(Ins::Load(d, e, n, n == 4));
+                    e = V::T(d);
+                }
+                let e = self.fix(e);
+                if addr {
+                    let place = self.place(&args[1])?;
+                    self.store(place, e.clone());
+                }
+                let (s, p, r) = (self.temp(), self.temp(), self.temp());
+                self.emit(Ins::Load(s, e.clone(), n, n == 4));
+                let e1 = self.add(e.clone(), n.into());
+                self.emit(Ins::Load(p, e1, n, n == 4));
+                let empty = self.bin(Op::Ceq, V::T(p), e);
+                let (yes, no, out) = (self.block(), self.block(), self.block());
+                self.end(Term::Jlbs(empty, yes, no));
+                self.start(yes);
+                self.copy(r, V::C(-1));
+                self.jump(out);
+                self.start(no);
+                self.emit(Ins::Store(V::T(s), V::T(p), n));
+                let s1 = self.add(V::T(s), n.into());
+                self.emit(Ins::Store(V::T(p), s1, n));
+                let more = self.bin(Op::Cne, V::T(s), V::T(p));
+                self.copy(r, more);
+                self.jump(out);
+                self.start(out);
+                V::T(r)
+            }
+            _ => unreachable!(),
+        })
     }
 
     /// The fullword at addr: under BLISS-32 a longword, sign-extended.
@@ -1039,13 +1480,15 @@ impl Gen<'_> {
         self.emit(Ins::Store(V::T(n), addr, width));
     }
 
-    /// A PLIT: its items in $PLIT$, after their count in fullwords if it
+    /// A PLIT: its items in $PLIT$ or its PSECT's, after their count in fullwords if it
     /// is counted; its value is the first item's address.
-    fn plit(&mut self, counted: bool, items: &[Init]) -> R<V> {
+    fn plit(&mut self, number: u32, counted: bool, items: &[Init]) -> R<V> {
         let n = self.data.len();
         let name = format!("P.{n}");
+        let m = self.m;
+        let psect = m.plit_psects.get(&number).unwrap_or(&m.psects.plit);
         self.data.push(ir::Data {
-            psect: self.m.psects.plit.clone(),
+            psect: psect.clone(),
             name: name.clone(),
             global: false,
             align: 3,

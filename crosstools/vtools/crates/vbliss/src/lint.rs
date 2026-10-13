@@ -10,7 +10,16 @@
 //! 4. a system service or run-time library argument passed the wrong way
 //!    for its mechanism, by the table vdefs writes from the macro library:
 //!    a scalar's address where it takes a value, a constant where it
-//!    takes an address.
+//!    takes an address;
+//! 5. a scalar's address stored in a scalar the module uses as a value:
+//!    `Y = X`, then `.Y + 1`;
+//! 6. an argument passed the other way from how the routine, in the same
+//!    module, uses its formal: a scalar's address to a formal it uses as
+//!    a value (`PRINT(X)`), a constant other than 0 to one it uses as an
+//!    address. A formal is a value if the routine compares it,
+//!    multiplies or divides it or tests it, and an address if it fetches
+//!    through it, takes a field of it or maps it REF, but not both. Rules 5
+//!    and 6 are checked at the end of the module, when the uses are known.
 //!
 //! A line ending with `! LINT: ADDRESS` is left alone. Lint warnings are
 //! kept apart from the compiler's diagnostics and out of the listing.
@@ -51,6 +60,24 @@ pub fn parse_services(text: &str) -> HashMap<String, Vec<Mechanism>> {
         .collect()
 }
 
+/// What a call passes, as rule 6 sees it.
+#[derive(Clone, Debug)]
+pub enum Passed {
+    /// A scalar's address: its name.
+    Address(String),
+    /// A constant other than 0.
+    Constant(i64),
+    Other,
+}
+
+/// How a routine uses one of its formals, so far: as a value, as an
+/// address.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct Use {
+    pub value: bool,
+    pub address: bool,
+}
+
 impl Parser<'_> {
     /// Records a lint warning at `at`, unless its line says not to.
     pub(crate) fn lint(&mut self, at: &Lexeme, msg: String) {
@@ -70,6 +97,7 @@ impl Parser<'_> {
     }
 
     /// The scalar data `e` names, if it is a scalar's name: its address.
+    /// A BIND to a PLIT or a descriptor names no scalar.
     fn scalar(&self, e: &Expr) -> Option<&str> {
         let Expr::Name(id) = e else {
             return None;
@@ -78,6 +106,14 @@ impl Parser<'_> {
             return None;
         }
         let s = &self.m.syms[*id];
+        if let Kind::Data {
+            storage: Storage::Bind(i),
+            ..
+        } = s.kind
+            && matches!(self.m.binds[i as usize], Expr::Plit(..) | Expr::Ascid(_))
+        {
+            return None;
+        }
         match &s.kind {
             Kind::Data {
                 structure: None,
@@ -99,14 +135,108 @@ impl Parser<'_> {
         }
     }
 
+    /// Notes that the data `e` fetches, `.F`, is used as a value or an
+    /// address, for rule 6.
+    pub(crate) fn note_use(&mut self, e: &Expr, address: bool) {
+        let e = match e {
+            Expr::Bin(BOp::Add | BOp::Sub, a, _) if address => a,
+            e => e,
+        };
+        if let Expr::Fetch(inner) = e
+            && let Expr::Name(id) = **inner
+        {
+            let id = self.mapped.get(&id).copied().unwrap_or(id);
+            let u = self.uses.entry(id).or_default();
+            if address {
+                u.address = true;
+            } else {
+                u.value = true;
+            }
+        }
+    }
+
+    /// Rule 5: a scalar's address stored in a scalar, unless a macro's
+    /// body stores it, as `$FAOL(OUTLEN = X)` passes X by reference.
+    pub(crate) fn lint_store(&mut self, place: &Expr, v: &Expr, at: &Lexeme) {
+        if self.address_context > 0 || at.col == NOPOS || self.scalar(place).is_none() {
+            return;
+        }
+        if let (Some(n), Expr::Name(id)) = (self.scalar(v), place) {
+            let id = self.mapped.get(id).copied().unwrap_or(*id);
+            self.stores.push((id, n.to_string(), at.clone()));
+        }
+    }
+
+    /// Rule 6, at a call: records what it passes, checked once the module
+    /// has every routine's formals.
+    pub(crate) fn note_call(&mut self, target: &Expr, args: &[Expr], at: &Lexeme) {
+        let Expr::Name(id) = target else {
+            return;
+        };
+        if !matches!(self.m.syms[*id].kind, Kind::Routine { .. }) {
+            return;
+        }
+        let passed = args
+            .iter()
+            .map(|a| match (self.scalar(a), crate::parse::fold(a)) {
+                (Some(n), _) => Passed::Address(n.to_string()),
+                (None, Some(v)) if v != 0 => Passed::Constant(v),
+                _ => Passed::Other,
+            })
+            .collect();
+        self.calls.push((*id, passed, at.clone()));
+    }
+
+    /// Rules 5 and 6, once the module is parsed: each store of an address
+    /// and each call's arguments against how the data is used.
+    pub(crate) fn lint_formals(&mut self) {
+        for (id, n, at) in std::mem::take(&mut self.stores) {
+            let u = self.uses.get(&id).copied().unwrap_or_default();
+            if u.value && !u.address {
+                let msg = format!("stores the address of {n}, not its value: a missing dot?");
+                self.lint(&at, msg);
+            }
+        }
+        let formals: HashMap<usize, Vec<usize>> = self
+            .m
+            .routines
+            .iter()
+            .map(|r| (r.sym, r.formals.clone()))
+            .collect();
+        for (id, passed, at) in std::mem::take(&mut self.calls) {
+            let Some(fs) = formals.get(&id) else {
+                continue;
+            };
+            let routine = self.m.syms[id].name.clone();
+            for (i, (p, f)) in passed.iter().zip(fs).enumerate() {
+                let u = self.uses.get(f).copied().unwrap_or_default();
+                let formal = &self.m.syms[*f].name;
+                let msg = match p {
+                    Passed::Address(n) if u.value && !u.address => format!(
+                        "passes the address of {n} as argument {} of {routine}, which uses {formal} as a value: a missing dot?",
+                        i + 1
+                    ),
+                    Passed::Constant(v) if u.address && !u.value => format!(
+                        "passes {v} as argument {} of {routine}, which uses {formal} as an address",
+                        i + 1
+                    ),
+                    _ => continue,
+                };
+                self.lint(&at, msg);
+            }
+        }
+    }
+
     /// Rule 1: a test of a scalar's address.
     pub(crate) fn lint_test(&mut self, c: &Expr, at: &Lexeme) {
         let mut found = None;
+        let mut tested = Vec::new();
         let mut look = |e: &Expr, p: &Self| {
             let mut e = e;
             while let Expr::Not(inner) = e {
                 e = inner;
             }
+            tested.push(e.clone());
             if let Some(n) = p.scalar(e) {
                 found.get_or_insert(n.to_string());
             }
@@ -117,6 +247,9 @@ impl Parser<'_> {
                 look(b, self);
             }
             c => look(c, self),
+        }
+        for e in tested {
+            self.note_use(&e, false);
         }
         if let Some(n) = found {
             self.lint(
@@ -130,6 +263,12 @@ impl Parser<'_> {
     pub(crate) fn lint_operands(&mut self, op: BOp, a: &Expr, b: &Expr, at: &Lexeme) {
         if self.address_context > 0 || matches!(op, BOp::And | BOp::Or | BOp::Xor | BOp::Eqv) {
             return;
+        }
+        // An address is added to and subtracted from, but not compared,
+        // multiplied or divided.
+        if matches!(op, BOp::Rel(..) | BOp::Mul | BOp::Div | BOp::Mod) {
+            self.note_use(a, false);
+            self.note_use(b, false);
         }
         if let Some(n) = self.scalar(a).or_else(|| self.scalar(b)) {
             let what = if matches!(op, BOp::Rel(..)) {

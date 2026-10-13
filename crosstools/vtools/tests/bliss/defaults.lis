@@ -1,0 +1,121 @@
+                                Source Listing                  DD-MMM-YYYY HH:MM:SS  BLISS-64E V1.11-007-48G4L         Page 1
+                                                                DD-MMM-YYYY HH:MM:SS  SYS$SYSDEVICE:[ORACLE]DEFAULTS.B64;1
+
+    0	      1 MODULE DEFAULTS (MAIN = MAIN, STRUCTURE(VECTOR[4])) =
+    0	      2 BEGIN
+    1	      3 ! Default structure references (LRM 11.8): an address followed by
+    1	      4 ! access actuals takes the STRUCTURE switch's structure, the module's or
+    1	      5 ! a block's; and GLOBAL BIND.
+    1	      6 REQUIRE 'PRINT';
+ R  1	      7 ! PRINT: prints a value as a signed decimal and as 16 hex digits, on a line
+ R  1	      8 ! of its own, through LIB$PUT_OUTPUT. The behaviour tests print with it,
+ R  1	      9 ! here under vrun and on OpenVMS for the oracle.
+ R  1	     10 
+ R  1	     11 EXTERNAL ROUTINE
+ R  1	     12     LIB$PUT_OUTPUT;
+ R  1	     13 
+ R  1	     14 ROUTINE PRINT (V) : NOVALUE =
+ R  1	     15     BEGIN
+ R  2	     16     LOCAL
+ R  2	     17         BUF : VECTOR[48, BYTE],
+ R  2	     18         DESC : VECTOR[2, LONG],
+ R  2	     19         X,
+ R  2	     20         I;
+ R  2	     21     I = 48;
+ R  2	     22     X = .V;
+ R  2	     23     INCR K FROM 1 TO 16 DO
+ R  2	     24         BEGIN
+ R  3	     25         LOCAL D;
+ R  3	     26         D = .X AND 15;
+ R  3	     27         I = .I - 1;
+ R  3	     28         BUF[.I] = (IF .D LSS 10 THEN %C'0' + .D ELSE %C'A' + .D - 10);
+ R  3	     29         X = .X ^ -4 AND %X'0FFFFFFFFFFFFFFF'
+ R  3	     30         END;
+ R  2	     31     I = .I - 1;
+ R  2	     32     BUF[.I] = %C' ';
+ R  2	     33     ! Digits from the remainders, negative for a negative value, so that
+ R  2	     34     ! the most negative one prints too.
+ R  2	     35     X = .V;
+ R  2	     36     DO
+ R  2	     37         BEGIN
+ R  3	     38         LOCAL D;
+ R  3	     39         D = .X - (.X / 10) * 10;
+ R  3	     40         IF .D LSS 0 THEN D = -.D;
+ R  3	     41         I = .I - 1;
+ R  3	     42         BUF[.I] = %C'0' + .D;
+ R  3	     43         X = .X / 10
+ R  3	     44         END
+ R  3	     45     UNTIL .X EQL 0;
+ R  2	     46     IF .V LSS 0
+ R  2	     47     THEN
+ R  2	     48         BEGIN
+ R  3	     49         I = .I - 1;
+ R  3	     50         BUF[.I] = %C'-'
+ R  3	     51         END;
+ R  2	     52     DESC[0] = 48 - .I + %X'010E0000';
+ R  2	     53     DESC[1] = BUF[.I];
+ R  2	     54     LIB$PUT_OUTPUT(DESC)
+ R  2	     55     END;
+    1	     56 
+    1	     57 FIELD
+
+DEFAULTS                        Source Listing                  DD-MMM-YYYY HH:MM:SS  BLISS-64E V1.11-007-48G4L         Page 2
+                                                                DD-MMM-YYYY HH:MM:SS  SYS$SYSDEVICE:[ORACLE]DEFAULTS.B64;1
+
+    1	     58     FL = [0, 0, 32, 0],
+    1	     59     FR = [0, 32, 32, 1];
+    1	     60 
+    1	     61 OWN
+    1	     62     X : INITIAL(11),
+    1	     63     W : VECTOR[4] INITIAL(1, 2, 3, 4),
+    1	     64     N1 : VECTOR[3] INITIAL(100, 0, 0),
+    1	     65     N2 : VECTOR[3] INITIAL(200, 0, 0),
+    1	     66     TREE : VECTOR[3];
+    1	     67 
+    1	     68 GLOBAL BIND
+    1	     69     SECOND = W[1],
+    1	     70     BUMP = W + 16;
+    1	     71 
+    1	     72 GLOBAL BIND ROUTINE
+    1	     73     TELL = PRINT;
+    1	     74 
+    1	     75 ROUTINE MAIN =
+    1	     76     BEGIN
+    2	     77     ! The module's switch: X has no structure of its own.
+    2	     78     PRINT(.X[0]);
+    2	     79     X[0] = .W[3];
+    2	     80     PRINT(.X);
+    2	     81     ! An expression's address: (W)[I] is VECTOR[4] by default too.
+    2	     82     PRINT(.(W + 8)[1]);
+    2	     83         BEGIN
+    3	     84         SWITCHES STRUCTURE(BLOCK[1]);
+    3	     85         W[2] = -5;
+    3	     86         ! W has its own structure; W[2] is its third element, read
+    3	     87         ! through the default BLOCK as two halves.
+    3	     88         PRINT(.W[2][FL]);
+    3	     89         PRINT(.W[2][FR]);
+    3	     90         END;
+    2	     91         BEGIN
+    3	     92         SWITCHES STRUCTURE(REF VECTOR[3]);
+    3	     93         ! Pointers followed through REF: TREE[1] and TREE[2] point at N1
+    3	     94         ! and N2.
+    3	     95         TREE[1] = N1;
+    3	     96         TREE[2] = N2;
+    3	     97         PRINT(.TREE[1][0] + .TREE[2][0]);
+    3	     98         END;
+    2	     99     PRINT(.SECOND);
+    2	    100     PRINT(.BUMP);
+    2	    101     TELL(42);
+    2	    102     1
+    2	    103     END;
+    1	    104 
+    1	    105 END
+    1	    106 ELUDOM
+
+
+                                Source Listing                  DD-MMM-YYYY HH:MM:SS  BLISS-64E V1.11-007-48G4L         Page 3
+                                Source Listing                  DD-MMM-YYYY HH:MM:SS  SYS$SYSDEVICE:[ORACLE]DEFAULTS.B64;1
+
+COMMAND LINE:
+
+BLISS/A64/LIST/SOURCE_LIST=(EXPAND_MACROS,REQUIRE)/NOMACHINE_CODE DEFAULTS.B64

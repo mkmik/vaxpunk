@@ -20,7 +20,9 @@ The object file defaults to the source name with `.obj`. `--ir` prints the
 IR instead, `--asm` the vasm source. `/LIST` writes the listing, by default
 to the source name with `.lis`; `/VARIANT` sets `%VARIANT`, 1 if no value
 is given. `REQUIRE 'NAME'` reads `NAME`, or `NAME.R64` or `NAME.REQ`, in
-either case, from the source's directory. Diagnostics go to stderr as
+either case, from the source's directory, then the `/INCLUDE` ones. A
+device before the name stands for those directories; a VMS directory,
+`[.SUB]`, `[-.OTHER]` or `[A.B]`, is a path under each. Diagnostics go to stderr as
 BLISS writes them on a terminal: the line, a marker under the place, the
 message and where.
 
@@ -55,10 +57,16 @@ structure attributes on formals. Step 8: `LINKAGE` with `CALL` and
 `NULLPARAMETER`, `ARGPTR`, `MAX`, `MIN`, `MAXU`, `MINU`, `MAXA`, `MINA`,
 `ABS`, `SIGN`, `%REF`, `ROT`, `SLL`, `SRL`, `SRA` and `BARRIER`; and
 `ENABLE`, `SIGNAL`, `SIGNAL_STOP`, `SETUNWIND`, `ESTABLISH` and
-`REVERT`, and the `CH$` functions but `CH$TRANSTABLE` and
-`CH$TRANSLATE`, whose loops irgen writes out in IR. Not yet: `GLOBAL
-BIND`, default structure references, `GLOBAL` registers and output
-parameters, and the atomic and PAL built-ins. Step 10: the dot lint, and
+`REVERT`, and the `CH$` functions, whose loops irgen writes out in IR.
+Since: `GLOBAL BIND`, default structure references (the `STRUCTURE`
+switch), `REGISTER`, `GLOBAL REGISTER` and `EXTERNAL REGISTER` data,
+register parameters in `CALL` linkages, output parameters and `GLOBAL`
+linkage registers, the `PSECT` and `EXTERNAL_NAME` attributes, and the
+machine-specific built-ins of `docs/bliss64.md` *Built-ins*: the atomics,
+the `TESTBIT`s, `ADAWI`, the byte operations, the queue and other PAL
+calls the PAL has, `CALL_PAL`, `RETURNADDRESS`, `RPCC` and `SIGNALREF`
+(`tests/bliss/defaults.b64`, `machine.b64`, `registers.b64`, and
+`crates/vbliss/tests/asm.rs` for what only the executive runs). Step 10: the dot lint, and
 on the way `PSECT` declarations (each storage class's psect and its
 attributes), `SWITCHES`, `EXTERNAL LITERAL`, `GLOBAL LITERAL`,
 `UNDECLARE`, and undeclared names taken as external with a warning, as
@@ -122,6 +130,30 @@ vrun those come from `crosstools/vtools/lib/signal.mar`, the executive's conditi
 handling without access modes; `tests/bliss/interop` calls MACRO-32 both
 ways and handles conditions raised on each side.
 
+A `CALL` linkage may pass some parameters in registers too, R2 to R11:
+R0 and R1 are x0 and x1, where the standard arguments and the result go,
+so asking for them is a register conflict. The call then loads them as a
+JSB call does, and sets x9 to the count of the standard ones only.
+
+Output parameters (`LINKAGE L = JSB(REGISTER = 2; REGISTER = 4)`,
+`ROUTINE R (A; Q) : L`, `R(X; Y)`) come back in their registers: the
+callee leaves each output formal's value there when it returns, a
+register past R1 in its save area, which its epilogue reloads, R1 with a
+`mov` before `ret`, and R0 as its value. The caller stores each register
+after the call into its output actual, and keeps it like a NOPRESERVE
+register when the actual is left out.
+
+Register data, `REGISTER`, `GLOBAL REGISTER` and `EXTERNAL REGISTER`,
+lives in the routine's frame like `LOCAL` data: the register allocator
+pins nothing, so a register number says only where the value travels. A
+call whose linkage names `GLOBAL(NAME = n)` passes the `GLOBAL` or
+`EXTERNAL REGISTER` NAME in Rn and stores Rn back into it afterwards. A
+routine that declares it `EXTERNAL REGISTER` reads Rn at entry, from its
+save area, and leaves the value in Rn when it returns, as an output
+parameter; one that doesn't keeps Rn, as LRM 10.9 asks of a CALL
+routine. `tests/bliss/registers.b64` passes a counter down two levels and
+back, and gives the same results under BLISSA64.
+
 A routine that reads its argument list (`ACTUALCOUNT`, `ACTUALPARAMETER`,
 `ARGPTR`) gets a copy in its frame: the count from x9, then the arguments
 from x0-x7 and the caller's stack, a fullword each.
@@ -163,9 +195,20 @@ compiles silently (PRD-0004 *The dot lint*). vbliss warns, as
    constant other than 0 where it takes an address. The mechanisms are
    `crosstools/vtools/lib/services.txt`, which vdefs writes from the `$name_S` macros
    of `starlet.mlb` (`PUSHL` by value, `$PUSHADR` by reference), and a few
-   library routines it knows.
+   library routines it knows;
+5. a scalar's address stored in a scalar that the module uses as a value
+   and never as an address: `Y = X`, then `.Y + 1`;
+6. an argument passed the other way from how a routine of the same
+   module uses its formal: a scalar's address where it uses the formal
+   as a value, `PRINT(X)`, a constant other than 0 where it uses it as an
+   address. A formal (or data, for rule 5) is used as a value if it is
+   compared, multiplied, divided or tested, and as an address if it is
+   fetched through (`..P`), has a field taken (`.P<0, 8>`) or is `REF`;
+   one used both ways is left alone.
 
-A scalar is data without a structure; names used without a declaration
+Rules 5 and 6 wait for the end of the module, when every use is known.
+A scalar is data without a structure, and not a `BIND` to a `PLIT` or a
+descriptor; names used without a declaration
 (which vbliss, as BLISSA64, takes as external with a warning) aren't. A
 line with `! LINT: ADDRESS` on it is left alone. Lint warnings are not
 BLISS's diagnostics: they stay out of the listing, so the listings still
@@ -173,16 +216,19 @@ compare with the oracle's.
 
 **Measured** (the `lint` and `corpus` tests):
 
-- Recall: deleting each of the 287 dots in `tests/bliss` that leaves a
-  program that still compiles, the lint notices 108, 37%; the test fails
-  below 35%. The rest are mostly dots dropped from arguments,
-  `PRINT(X)`, which are rule 6's.
+- Recall: deleting each of the 356 dots in `tests/bliss` that leaves a
+  program that still compiles, the lint notices 169, 47%; the test fails
+  below 45%. With rules 1 to 4 alone it was 37% of 287. The rest are
+  mostly dots dropped from arguments of routines whose formals are used
+  both ways or only passed on, and from the right of assignments.
 - False positives: none in the test programs, which the test requires,
-  and none in the VAX/VMS V4.3 BLISS-32 sources, 1,127,266 lines in 1,260
-  modules, over the part vbliss parses: 16 modules compile to the end;
+  none in vaxpunk's own BLISS (`vms/build.rs` fails on any), and none in
+  the VAX/VMS V4.3 BLISS-32 sources, 1,127,266 lines in 1,260
+  modules, over the part vbliss parses: 19 modules compile to the end;
   the others stop where DEC's generated libraries (`RTLSTARLE`, `RMS`,
-  the `LIB$:` definitions) are missing from the sources, or at `GLOBAL`
-  registers, the `TESTBIT` built-ins and `CALLG`.
+  the `LIB$:` definitions) are missing from the sources, at the VAX
+  built-ins BLISS-64 dropped (`FFS`, `CHMU`, `CALLG`), or at `CALL`
+  linkages with a parameter in R0 or R1.
 
 ## Definitions
 
@@ -282,6 +328,7 @@ global routine $FIB {
 | `add sub mul div rem and or xor eqv` | arithmetic and logic; `div` truncates, `rem` has the dividend's sign |
 | `shl shr sar` | shifts by 0-63: left, logical right, arithmetic right |
 | `ash` | BLISS's `^`: left by a positive count, arithmetic right by a negative one |
+| `ror`, `umulh` | rotate right; the high half of the unsigned product |
 | `ceq cne clt cle cgt cge`, `cltu cleu cgtu cgeu` | comparisons, 1 or 0, signed or unsigned |
 | `copy neg not` | |
 | `loadNs`, `loadNu` | N bytes, sign- or zero-extended |
@@ -289,16 +336,22 @@ global routine $FIB {
 | `exts`, `extu value, pos, size` | a bit field of a value |
 | `ins base, value, pos, size` | base with a bit field replaced |
 | `arg n` | the routine's argument n |
-| `regarg rN` | a JSB routine's parameter, in VAX register N |
+| `regarg rN` | a register parameter or EXTERNAL REGISTER, VAX register N at entry |
 | `argcount`, `argn i`, `argptr` | the argument list the prologue copied: the count, argument i from 1, its address |
 | `call target(args)` | by the calling standard |
-| `jsb target(v rN, ...) nopreserve rN` | by a JSB linkage |
+| `jsb target(v rN, ...) -> rN %t nopreserve rN` | by a JSB linkage: arguments in VAX registers, registers read back into temporaries |
+| `call target(args; v rN, ...) -> rN %t` | by a CALL linkage with registers in it |
+| `setreg rN, v` | before `ret`: Rn holds v when the routine returns, an output or EXTERNAL REGISTER |
+| `casN addr, expected, new` | one try at storing new at addr if it holds expected, by exclusives; 1 if it did |
+| `pal func(args)` | a PAL call, `svc #0` with func in x7 and up to six arguments |
+| `retaddr`, `rpcc`, `bpt` | the return address, the cycle counter, a breakpoint |
 | `sethandler v`, `setenable v` | the handler at 16(FP), the enable vector's address at 32(FP) |
 | `barrier` | a memory barrier |
 | `jmp @n`, `jlbs v, @t, @f`, `ret v` | ends a block |
 
 Data prints as `data $NAME in PSECT align A { items }`, each item a size and
-a value (`4 $P.1`), a string, or `z N` zero bytes.
+a value (`4 $P.1`), a string, or `z N` zero bytes; a global literal or
+`GLOBAL BIND` as `global $NAME = value`.
 
 ## Code
 
@@ -313,7 +366,8 @@ at 16(FP), the descriptor's address at 24(FP), the registers it keeps from
 Temporaries live in x19-x28, which survive calls, chosen by a linear scan
 over their live ranges; those that don't fit go to the frame. x10-x17 are
 scratch. Data goes in BLISS's psects: `$OWN$`, `$GLOBAL$`, and `$PLIT$` for
-descriptors and their text; code in `$CODE$`.
+descriptors and their text; code in `$CODE$`; or where a `PSECT`
+declaration or attribute says, for data, a `PLIT` or a routine.
 
 ## Tests
 

@@ -56,14 +56,14 @@ note = "PRD-0004 steps 12-13"
 [[feature]]
 id = "missing-constructs"
 title = "GLOBAL BIND, GLOBAL registers, default structure references, PAL and atomic built-ins"
-status = "todo"
-note = "vbliss.md: not yet"
+status = "done"
+note = "vbliss.md; tests/bliss defaults, machine and registers, checked against BLISSA64"
 
 [[feature]]
 id = "lint-5-6"
 title = "Dot lint rules 5 and 6: stored addresses, formals passed the other way"
-status = "todo"
-note = "PRD-0004 The dot lint"
+status = "done"
+note = "PRD-0004 The dot lint; recall 47%, no false positives on the V4.3 sources"
 
 [[feature]]
 id = "stage1"
@@ -90,14 +90,14 @@ note = "PRD-0004 step 16"
 id = "libraries"
 title = "Precompiled libraries (.L64) for STARLET and LIB"
 status = "todo"
-note = "PRD-0004 open question"
+note = "PRD-0004 open question: LIBRARY reads the source today; only worth it if compile times hurt, likely under stage 1 on vaxpunk"
 
 [[feature]]
 id = "debug-symbols"
 title = "Debug symbol records for DEBUG"
 status = "todo"
 needs = ["/host/vms-obj#debug-symbols"]
-note = "PRD-0004 non-goal; the listing is the debugging aid"
+note = "PRD-0004 non-goal; the listing is the debugging aid until DEBUG (t8y:/utils/debugger) exists"
 
 [[needs]]
 on = "/host/vbliss"
@@ -129,7 +129,10 @@ and behaviour, reads require files that `vdefs` makes from the macro
 libraries, has the dot lint, and generates code through a QBE-style IR
 and a simple ARM64 back end, with no LLVM. It is the system's BLISS
 compiler: `numtim.b64` is in the executive, and TPU, NSLOOKUP and the
-DNS resolver are BLISS-64. VASM, vasm rewritten in BLISS-64, is done.
+DNS resolver are BLISS-64. VASM, vasm rewritten in BLISS-64, is done,
+and stage 0 takes the whole language: default structure references,
+register data and the linkages that pass it, the machine-specific and
+PAL built-ins, and the dot lint's six rules.
 Next come stage 1, `BLISS.EXE` in BLISS-64, then stages 2 and 3
 identical, then `BLISS` at the DCL prompt. Linking on vaxpunk is not
 this component's: `LINK` (`t8y:/utils/linker`) and `LIBRARY`

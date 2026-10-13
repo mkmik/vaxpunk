@@ -21,7 +21,7 @@ BEGIN
 LIBRARY 'SYS$LIBRARY:STARLET';
 LITERAL L = 5;
 OWN X, Y : VECTOR[2];
-EXTERNAL ROUTINE SYS$QIOW, SYS$ASSIGN;
+EXTERNAL ROUTINE SYS$QIOW, SYS$ASSIGN; FORWARD ROUTINE S;
 ROUTINE R (A) =
     BEGIN
     IF NOT X THEN 1;
@@ -36,7 +36,18 @@ ROUTINE R (A) =
     SYS$ASSIGN(0, 4, 0, 0);
     SYS$QIOW(0, .X, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
     IF X THEN 1;  ! LINT: ADDRESS
+    A = X;
+    A = .X;
+    S(X, 0);
+    S(.X, 0);
+    S(.X, 5);
+    S(.X, .A);
     .A
+    END;
+ROUTINE S (V, P) =
+    BEGIN
+    IF .V GTR 0 THEN 1;
+    ..P
     END;
 END
 ELUDOM
@@ -55,6 +66,15 @@ ELUDOM
         (16, "compares the address of X"),
         (17, "passes the address of X as argument 2 of SYS$QIOW"),
         (18, "passes 4 as argument 2 of SYS$ASSIGN"),
+        (21, "stores the address of X"),
+        (
+            23,
+            "passes the address of X as argument 1 of S, which uses V as a value",
+        ),
+        (
+            25,
+            "passes 5 as argument 2 of S, which uses P as an address",
+        ),
     ];
     assert_eq!(found.len(), want.len(), "{found:?}");
     for ((line, msg), (wl, wm)) in found.iter().zip(want) {
@@ -149,4 +169,4 @@ fn recall() {
     );
 }
 
-const RECALL_FLOOR: usize = 35;
+const RECALL_FLOOR: usize = 45;

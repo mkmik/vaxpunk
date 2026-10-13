@@ -228,7 +228,9 @@ and warns where they don't fit:
 6. A formal used as a value in the callee and passed as an address by a
    caller, or the reverse.
 
-Rules 1 to 4 come with the front end; 5 and 6 later. A line ending in
+Rules 1 to 4 came with the front end, 5 and 6 after it, within a
+module: a routine's formals are known from how its body uses them
+(`crosstools/vtools/docs/vbliss.md` *The dot lint*). A line ending in
 `! LINT: ADDRESS` silences it. CI compiles with warnings as errors.
 
 ## Self-hosting and bootstrap

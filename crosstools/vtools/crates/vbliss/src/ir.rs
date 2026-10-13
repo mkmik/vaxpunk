@@ -40,6 +40,8 @@ pub enum Op {
     Ash,
     /// Rotate right by 0-63.
     Ror,
+    /// The high 64 bits of the unsigned 128-bit product.
+    Umulh,
     /// Comparisons, 1 if true, else 0; `u` unsigned.
     Ceq,
     Cne,
@@ -78,10 +80,16 @@ pub enum Ins {
     Arg(u32, u32),
     /// `dst = call target(args)`, by the calling standard.
     Call(Option<u32>, V, Vec<V>),
-    /// `dst = jsb target(arg rN, ...) nopreserve rN...`: a JSB linkage's
-    /// call, each argument in a VAX register, R0 the result; R0, R1 and
-    /// the registers named after `nopreserve` aren't kept.
-    Jsb(Option<u32>, V, Vec<(V, u8)>, Vec<u8>),
+    /// `dst = jsb target(arg rN, ...) -> rN %t, ... nopreserve rN...`: a
+    /// call by a JSB linkage, or by a CALL linkage with registers in it
+    /// (`dst = call target(args; arg rN, ...) ...`): arguments in VAX
+    /// registers, standard ones for CALL, R0 the result, and registers
+    /// read into temporaries after it; R0, R1, the output registers and
+    /// those named after `nopreserve` aren't kept.
+    Link(Box<LinkCall>),
+    /// `setreg rN, v`: register N holds v when the routine returns, as an
+    /// output parameter or EXTERNAL REGISTER; just before `ret`.
+    SetReg(u8, V),
     /// `dst = regarg rN`: a JSB routine's parameter, in VAX register N.
     RegArg(u32, u8),
     /// `sethandler v`: the routine's condition handler, at 16(FP).
@@ -97,6 +105,33 @@ pub enum Ins {
     ArgPtr(u32),
     /// `barrier`: a memory barrier.
     Barrier,
+    /// `dst = casN addr, expected, new`: one try at storing new, N bytes,
+    /// at addr if what is there is expected, by load- and
+    /// store-exclusive with acquire and release; 1 if it stored. addr is
+    /// naturally aligned.
+    Cas(u32, V, V, V, u8),
+    /// `dst = pal func(args)`: a PAL call (DESIGN-0001), the function
+    /// code (x7) and up to six arguments (x0-x5); the result is x0.
+    Pal(u32, V, Vec<V>),
+    /// `dst = retaddr`: the routine's return address, in its frame.
+    RetAddr(u32),
+    /// `dst = rpcc`: the cycle counter, CNTVCT_EL0.
+    Rpcc(u32),
+    /// `bpt`: a breakpoint, `brk`.
+    Bpt,
+}
+
+/// A call by a linkage with registers (`Ins::Link`).
+#[derive(Clone, Debug, PartialEq)]
+pub struct LinkCall {
+    pub dst: Option<u32>,
+    pub target: V,
+    pub jsb: bool,
+    /// The standard arguments, for CALL.
+    pub args: Vec<V>,
+    pub ins: Vec<(V, u8)>,
+    pub outs: Vec<(u8, u32)>,
+    pub nopreserve: Vec<u8>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -169,6 +204,7 @@ impl Op {
             Sar => "sar",
             Ash => "ash",
             Ror => "ror",
+            Umulh => "umulh",
             Ceq => "ceq",
             Cne => "cne",
             Clt => "clt",
@@ -214,26 +250,41 @@ impl fmt::Display for Ins {
                 }
                 f.write_str(")")
             }
-            Ins::Jsb(d, t, args, nopreserve) => {
-                if let Some(d) = d {
+            Ins::Link(c) => {
+                if let Some(d) = c.dst {
                     write!(f, "%{d} =l ")?;
                 }
-                write!(f, "jsb {t}(")?;
-                for (i, (a, r)) in args.iter().enumerate() {
+                write!(f, "{} {}(", if c.jsb { "jsb" } else { "call" }, c.target)?;
+                for (i, a) in c.args.iter().enumerate() {
                     if i > 0 {
                         f.write_str(", ")?;
                     }
+                    write!(f, "{a}")?;
+                }
+                if !c.jsb {
+                    f.write_str(";")?;
+                }
+                for (i, (a, r)) in c.ins.iter().enumerate() {
+                    f.write_str(if i > 0 || !c.jsb { " " } else { "" })?;
                     write!(f, "{a} r{r}")?;
+                    if i + 1 < c.ins.len() {
+                        f.write_str(",")?;
+                    }
                 }
                 f.write_str(")")?;
-                if !nopreserve.is_empty() {
+                for (i, (r, t)) in c.outs.iter().enumerate() {
+                    f.write_str(if i > 0 { ", " } else { " -> " })?;
+                    write!(f, "r{r} %{t}")?;
+                }
+                if !c.nopreserve.is_empty() {
                     f.write_str(" nopreserve")?;
-                    for r in nopreserve {
+                    for r in &c.nopreserve {
                         write!(f, " r{r}")?;
                     }
                 }
                 Ok(())
             }
+            Ins::SetReg(r, v) => write!(f, "setreg r{r}, {v}"),
             Ins::RegArg(d, r) => write!(f, "%{d} =l regarg r{r}"),
             Ins::SetHandler(v) => write!(f, "sethandler {v}"),
             Ins::SetEnable(v) => write!(f, "setenable {v}"),
@@ -241,6 +292,20 @@ impl fmt::Display for Ins {
             Ins::ArgN(d, i) => write!(f, "%{d} =l argn {i}"),
             Ins::ArgPtr(d) => write!(f, "%{d} =l argptr"),
             Ins::Barrier => f.write_str("barrier"),
+            Ins::Cas(d, a, e, n, size) => write!(f, "%{d} =l cas{size} {a}, {e}, {n}"),
+            Ins::Pal(d, func, args) => {
+                write!(f, "%{d} =l pal {func}(")?;
+                for (i, a) in args.iter().enumerate() {
+                    if i > 0 {
+                        f.write_str(", ")?;
+                    }
+                    write!(f, "{a}")?;
+                }
+                f.write_str(")")
+            }
+            Ins::RetAddr(d) => write!(f, "%{d} =l retaddr"),
+            Ins::Rpcc(d) => write!(f, "%{d} =l rpcc"),
+            Ins::Bpt => f.write_str("bpt"),
         }
     }
 }
@@ -334,9 +399,9 @@ pub struct Module {
     pub data: Vec<Data>,
     pub funcs: Vec<Func>,
     /// Psects' attributes, as `.PSECT` takes them, for those not BLISS's
-    /// own; and global literals, `name == value`.
+    /// own; and global literals and GLOBAL BINDs, `name == value`.
     pub psects: Vec<(String, String)>,
-    pub globals: Vec<(String, i64)>,
+    pub globals: Vec<(String, V)>,
 }
 
 impl fmt::Display for Module {

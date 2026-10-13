@@ -84,6 +84,10 @@ pub(crate) struct Attrs {
     pub initial: Option<Vec<Init>>,
     pub preset: Option<Vec<(Vec<Option<Expr>>, Expr)>>,
     pub volatile: bool,
+    /// PSECT(name): the psect static data goes in.
+    pub psect: Option<String>,
+    /// EXTERNAL_NAME('name'): the linker's name for it.
+    pub external_name: Option<String>,
 }
 
 /// The size in bytes of an allocation unit, if `name` is one.
@@ -126,7 +130,18 @@ pub fn rewrite(e: &Expr, f: &mut dyn FnMut(&Expr) -> Option<Expr>) -> Expr {
         Expr::Not(a) => Expr::Not(b(a)),
         Expr::Bin(op, x, y) => Expr::Bin(*op, b(x), b(y)),
         Expr::Assign(x, y) => Expr::Assign(b(x), b(y)),
-        Expr::Call(t, args) => Expr::Call(b(t), args.iter().map(|a| *b(a)).collect()),
+        Expr::Call(t, args, links) => Expr::Call(
+            b(t),
+            args.iter().map(|a| *b(a)).collect(),
+            links
+                .iter()
+                .map(|k| crate::parse::Link {
+                    reg: k.reg,
+                    input: k.input.as_ref().map(|x| *b(x)),
+                    output: k.output.as_ref().map(|x| *b(x)),
+                })
+                .collect(),
+        ),
         Expr::Block(es, v) => Expr::Block(es.iter().map(|a| *b(a)).collect(), *v),
         Expr::If(c, t, x) => Expr::If(b(c), b(t), x.as_ref().map(|x| b(x))),
         Expr::Loop {
@@ -358,7 +373,7 @@ impl Parser<'_> {
 
     /// A structure attribute after its `REF`, if any: the structure's name
     /// and its allocation actuals.
-    fn struct_attr(&mut self, refr: bool) -> R<StructAttr> {
+    pub(crate) fn struct_attr(&mut self, refr: bool) -> R<StructAttr> {
         let name = self.name()?;
         let st = match self.lookup(&name).map(|id| &self.m.syms[id].kind) {
             Some(Kind::Structure(st)) => st.clone(),
@@ -488,9 +503,18 @@ impl Parser<'_> {
                         None => return self.err("FIELD without a structure attribute"),
                     }
                 }
-                "ALIGN" | "PSECT" | "EXTERNAL_NAME" | "ADDRESSING_MODE" => {
-                    // ponytail: accepted and ignored; PSECT and
-                    // EXTERNAL_NAME come with the pilot if it needs them.
+                "PSECT" => {
+                    self.pos += 1;
+                    self.expect_punct('(')?;
+                    a.psect = Some(self.name()?);
+                    self.expect_punct(')')?;
+                }
+                "EXTERNAL_NAME" => {
+                    self.pos += 1;
+                    a.external_name = Some(self.external_name()?);
+                }
+                "ALIGN" | "ADDRESSING_MODE" => {
+                    // Assumptions ARM64 doesn't need (docs/bliss64.md).
                     self.pos += 1;
                     self.expect_punct('(')?;
                     let mut depth = 1;
@@ -542,6 +566,17 @@ impl Parser<'_> {
                 _ => return Ok(a),
             }
         }
+    }
+
+    /// `('name')` after EXTERNAL_NAME: the name, upper case as vasm has
+    /// every name.
+    pub(crate) fn external_name(&mut self) -> R<String> {
+        self.expect_punct('(')?;
+        let Tok::Str(s) = self.next() else {
+            return self.err("expected a quoted name after EXTERNAL_NAME");
+        };
+        self.expect_punct(')')?;
+        Ok(String::from_utf8_lossy(&s).to_ascii_uppercase())
     }
 
     /// A data name's kind from its attributes: its storage, size and
@@ -603,6 +638,12 @@ impl Parser<'_> {
                 unreachable!()
             };
             let id = self.declare(name, kind)?;
+            if let Some(n) = a.external_name.take() {
+                if !matches!(storage, Storage::Global | Storage::External) {
+                    return self.err("EXTERNAL_NAME on data that isn't GLOBAL or EXTERNAL");
+                }
+                self.m.syms[id].asm = n;
+            }
             if a.volatile {
                 self.volatile.push(id);
             }
@@ -623,10 +664,10 @@ impl Parser<'_> {
             match storage {
                 Storage::Own | Storage::Global => {
                     let p = &self.m.psects;
-                    let psect = if storage == Storage::Own {
-                        p.own.clone()
-                    } else {
-                        p.global.clone()
+                    let psect = match a.psect.take() {
+                        Some(n) => n,
+                        None if storage == Storage::Own => p.own.clone(),
+                        None => p.global.clone(),
                     };
                     self.m.statics.push(Static {
                         sym: id,
@@ -807,19 +848,22 @@ impl Parser<'_> {
     /// `PLIT` or `UPLIT`, after the word.
     pub(crate) fn plit(&mut self, counted: bool) -> R<Expr> {
         let mut unit = self.m.dialect.unit();
+        let mut psect = None;
         loop {
             if let Some(u) = self.unit_word() {
                 unit = u;
             } else if self.eat("PSECT") {
-                // ponytail: PLITs go in $PLIT$ whatever PSECT says.
                 self.expect_punct('(')?;
-                self.name()?;
+                psect = Some(self.name()?);
                 self.expect_punct(')')?;
             } else {
                 break;
             }
         }
         let items = self.init_list(unit)?;
+        if let Some(p) = psect {
+            self.m.plit_psects.insert(self.lets, p);
+        }
         self.lets += 1;
         Ok(Expr::Plit(self.lets - 1, counted, items))
     }
@@ -941,8 +985,9 @@ impl Parser<'_> {
         Ok(self.instantiate(&st, seg, access, &alloc))
     }
 
-    /// `BIND` and `BIND ROUTINE` names, after the words.
-    pub(crate) fn binds(&mut self, routine: bool) -> R<()> {
+    /// `BIND` and `BIND ROUTINE` names, after the words; `GLOBAL BIND`
+    /// ones are also global symbols, which must be link-time constants.
+    pub(crate) fn binds(&mut self, routine: bool, global: bool) -> R<()> {
         loop {
             let name = self.name()?;
             self.expect_punct('=')?;
@@ -951,6 +996,14 @@ impl Parser<'_> {
             let e = self.expr();
             self.address_context -= 1;
             let e = e?;
+            if global {
+                if !self.ltce(&e) {
+                    return self.err(format!(
+                        "GLOBAL BIND {name} to an address not known by link time"
+                    ));
+                }
+                self.m.global_literals.push((name.clone(), e.clone()));
+            }
             if routine {
                 self.routine_attributes()?;
                 let Expr::Name(id) = e else {
@@ -1013,6 +1066,9 @@ impl Parser<'_> {
             };
             self.expect_punct(':')?;
             let mut a = self.attributes()?;
+            if a.structure.as_ref().is_some_and(|s| s.refr) {
+                self.uses.entry(id).or_default().address = true;
+            }
             let Kind::Data {
                 size,
                 signed,
@@ -1024,6 +1080,8 @@ impl Parser<'_> {
             };
             let asm = self.m.syms[id].asm.clone();
             let new = self.m.syms.len();
+            let original = self.mapped.get(&id).copied().unwrap_or(id);
+            self.mapped.insert(new, original);
             self.m.syms.push(Sym {
                 name: name.clone(),
                 asm,
