@@ -17,8 +17,8 @@ on = "/drivers/interrupt-io"
 why = "A rewind or a skip takes minutes; a polled driver would hold the CPU"
 
 [[needs]]
-fuzzy = "A tape device to drive: a virtual tape on a host file, or virtio-scsi to a tape"
-why = "QEMU's virt machine has no tape"
+on = "/drivers/object-tape"
+why = "QEMU's virt machine has no tape; PRD-0009 puts the cartridges in a bucket"
 +++
 
 VMS's tape drivers (`MKDRIVER` for SCSI tapes such as the TK50, DLT
@@ -30,5 +30,6 @@ finds for RMS, or `/FOREIGN` for programs that do their own I/O. BACKUP
 save sets on tape were how systems were backed up and how VMS itself
 was installed before CD-ROMs.
 
-vaxpunk has no tape. Its BACKUP writes save sets to disk files, which
+vaxpunk has no tape. [PRD-0009](../../prd/0009-object-storage-tapes.md)
+sketches one whose volumes are objects in S3, GCS or R2. Its BACKUP writes save sets to disk files, which
 VMS's BACKUP reads, so a tape is not needed to move files.

@@ -29,5 +29,7 @@ tapes kept an ancillary control process, `MTAACP`, after V4.
 `MOUNT/FOREIGN` gives a program the tape without labels, and `BACKUP`
 writes its save sets either way.
 
-vaxpunk has no tape drive and nothing planned for one; `BACKUP` writes
-its save sets to disk files.
+vaxpunk has no tape drive; `BACKUP` writes its save sets to disk files.
+[PRD-0009](../../prd/0009-object-storage-tapes.md) sketches a drive whose
+volumes are objects in a bucket, and puts MTAACP last: BACKUP writes its
+own labels, but `DIRECTORY` and `TYPE` of a file on a tape need it.
