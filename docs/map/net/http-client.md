@@ -35,8 +35,8 @@ note = "HTTP/1.1, Connection: close; ten redirects at most"
 [[feature]]
 id = "binary"
 title = "/BINARY, and wildcards"
-status = "todo"
-note = "copy.mar ponytail"
+status = "done"
+note = "/BINARY makes FIX 512; to's * fields come from the URL's name, as COPY's; HTTP has no listing for wildcards in from"
 
 [[needs]]
 on = "/utils/copy"
@@ -60,6 +60,7 @@ with VMS's remote file syntax, `COPY/HTTP node::"/path"` or
 `COPY/HTTP URL::"https://host/path"`. It sends an HTTP/1.1 GET on a TCP
 socket and writes the body, byte for byte, chunked or not, into a
 STREAM_LF file, following redirects as `curl -L` does; `https` goes
-through SSL3. 404 is `%RMS-E-FNF`, 401 and 403
+through SSL3; `/BINARY` makes the file FIX 512 instead, as
+`COPY/FTP/BINARY` does. 404 is `%RMS-E-FNF`, 401 and 403
 `%RMS-E-PRV`. It is the goal that pulled in SSL3, and through it the C
 run-time library and the C cross path.

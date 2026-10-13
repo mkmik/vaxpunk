@@ -581,7 +581,8 @@ fn network() {
     vax.command("DIRECTORY/FULL DKB0:[000000]READ_ME.TXT");
     vax.command(r#"COPY/HTTP/LOG 10.0.2.100::"/" DKB0:[000000]"#);
     vax.command(r#"COPY/HTTP URL::"http://10.0.2.100:7781/nope" DKB0:[000000]"#);
-    vax.command(r#"COPY/HTTP/LOG URL::"http://web.example:7782/kit/blob.bin" DKB0:[000000]"#);
+    vax.command(r#"COPY/HTTP/LOG/BINARY URL::"http://web.example:7782/kit/blob.bin" DKB0:[000000]*.*;*"#);
+    vax.command("DIRECTORY/FULL DKB0:[000000]BLOB.BIN");
     vax.command(r#"COPY/HTTP URL::"ftp://10.0.2.100/x" DKB0:[000000]"#);
     vax.command(r#"COPY/HTTP/LOG URL::"http://10.0.2.100:7788/a/moved.txt" DKB0:[000000]"#);
     vax.command("TYPE DKB0:[000000]MOVED.TXT");
@@ -712,6 +713,7 @@ fn network() {
         r#"%COPY-S-COPIED, 10.0.2.100::"/" copied to "#,
         "INDEX.HTML;1 (1 blocks)",
         "BLOB.BIN;1 (79 blocks)",
+        "Record format:      Fixed length 512 byte records",
         "%RMS-E-FNF, file not found",
         "%RMS-F-SUPPORT, network operation not supported",
         r#"%COPY-S-COPIED, URL::"http://10.0.2.100:7788/a/moved.txt" copied to DKB0:[000000]MOVED.TXT;1 (1 blocks)"#,

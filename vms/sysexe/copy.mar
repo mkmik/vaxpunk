@@ -10,7 +10,9 @@
 ; With /LOG, says what it copied where, as VMS's COPY and APPEND do. A
 ; relative or indexed file COPY copies a block at a time, as VMS's does,
 ; its structure and all, into a file made with the same attributes.
-; ponytail: one file, no wildcards; records up to RECSIZE.
+; A field of to that is only a wildcard, * or .* or ;*, is from's, as
+; VMS's COPY takes it: COPY A.TXT [.X]*.* makes [.X]A.TXT.
+; ponytail: one file, no wildcards in from; records up to RECSIZE.
 ;
 ; COPY/HTTP fetches from from a web server instead, with an HTTP/1.1
 ; GET, Connection: close, on a TCP socket on TCPIP$DEVICE:: from is node::"/path", the node the server's address, or
@@ -31,9 +33,10 @@
 ; Location on a new connection, ten at most, as curl -L's; the file is
 ; still named by the first URL's path, as curl's and wget's. 404 and
 ; 410 are RMS$_FNF, 401 and 403 RMS$_PRV, other statuses but 2xx
-; RMS$_NETFAIL, another scheme RMS$_SUPPORT.
-; ponytail: no /BINARY, which SET FILE/ATTRIBUTE would do; a chunk's
-; trailers are ignored.
+; RMS$_NETFAIL, another scheme RMS$_SUPPORT. With /BINARY, the file is
+; FIX 512, no carriage control, as COPY/FTP/BINARY makes one, the last
+; record short if the body isn't whole blocks.
+; ponytail: a chunk's trailers are ignored.
 ;
         .LIBRARY "starlet.mlb"
         .LIBRARY "sysexe.mlb"
@@ -155,6 +158,7 @@ NBUF:   .BLKB   BUFSIZE                 ; the request, then what comes
         RET
 10$:    MOVL    #255, DESC
         GETVALUE "TO", DESC, DESC
+        BSBW    NOWILD
         MOVAB   SPEC, OUTFAB+FAB$L_FNA
         MOVB    DESC, OUTFAB+FAB$B_FNS
         MOVL    INNAM+NAM$L_NAME, OUTFAB+FAB$L_DNA      ; from's NAME.TYPE
@@ -363,10 +367,16 @@ HOST:   MOVC3   R11, (R10), HOSTB       ; R10, R11: host[:port]
         BNEQ    70$
         MOVL    #255, DESC
         GETVALUE "TO", DESC, DESC
+        BSBW    NOWILD
         MOVAB   SPEC, OUTFAB+FAB$L_FNA
         MOVB    DESC, OUTFAB+FAB$B_FNS
         MOVB    #FAB$C_STMLF, OUTFAB+FAB$B_RFM
         MOVB    #FAB$M_CR, OUTFAB+FAB$B_RAT
+        PRESENT "BINARY"
+        BLBC    R0, 70$
+        MOVB    #FAB$C_FIX, OUTFAB+FAB$B_RFM
+        MOVW    #512, OUTFAB+FAB$W_MRS
+        CLRB    OUTFAB+FAB$B_RAT
 70$:    BLBC    TLS, 71$
         BSBW    TLSREAD
         BRB     72$
@@ -949,6 +959,49 @@ TLSERR:
 10$:    PUSHL   G^DECC$GA_STDERR
         CALLS   #1, G^ERR_PRINT_ERRORS_FP
         MOVL    #RMS$_NETFAIL, R0
+        RSB
+
+; NOWILD: drops from to, in SPEC, DESC its length, each field that is
+; only a wildcard, * for a name or .* or ;*, so that the default name
+; gives it. One that is part wildcard, A*, stays, for RMS$_WLD. Uses R0-R3.
+NOWILD:
+        .JSB_ENTRY  SCRATCH=<R2, R3>
+        MOVZWL  DESC, R2
+        CLRL    R0                      ; the next character in
+        CLRL    R1                      ; and out
+10$:    CMPL    R0, R2
+        BGEQU   90$
+        MOVZBL  SPEC[R0], R3
+        INCL    R0
+        CMPB    R3, #^A/*/
+        BNEQ    40$
+        CMPL    R0, R2                  ; a * a field ends
+        BGEQU   20$
+        CMPB    SPEC[R0], #^A/./
+        BEQL    20$
+        CMPB    SPEC[R0], #59           ; a semicolon
+        BNEQ    40$
+20$:    TSTL    R1                      ; and one starts
+        BEQL    10$
+        MOVZBL  SPEC-1[R1], R3
+        CMPB    R3, #^A/./              ; .* or ;*: the punctuation goes too
+        BEQL    30$
+        CMPB    R3, #59                 ; a semicolon
+        BEQL    30$
+        CMPB    R3, #^A/]/
+        BEQL    10$
+        CMPB    R3, #^A/>/
+        BEQL    10$
+        CMPB    R3, #^A/:/
+        BEQL    10$
+        MOVZBL  #^A/*/, R3
+        BRB     40$
+30$:    DECL    R1
+        BRB     10$
+40$:    MOVB    R3, SPEC[R1]
+        INCL    R1
+        BRB     10$
+90$:    MOVW    R1, DESC
         RSB
 
 ; STATUS: R0 = $QIOW's status. R0 = the IOSB's, if that was a success.
