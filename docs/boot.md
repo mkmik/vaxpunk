@@ -218,7 +218,9 @@ interpreter. It is linked high in P1, which tells the executive it is one
   which writes that line into `[SYSEXE]` on its copy of the system disk;
   then LOGINOUT logs the console in as `SYSTEM` without asking, and
   goes on from the welcome below. Without the file, or a line for the
-  terminal, LOGINOUT prints `Username:` and reads a name, then `Password:` and
+  terminal, LOGINOUT prints the system logical name `SYS$ANNOUNCE`,
+  which `SYSTARTUP_VMS.COM` defined as `@SYS$MANAGER:ANNOUNCE.TXT`, so
+  the lines of that file, then `Username:` and reads a name, then `Password:` and
   reads the password without echoing it. It finds the user's record in
   `SYS$SYSTEM:SYSUAF.DAT`, an indexed file keyed by username, with RMS,
   and has `$HASH_PASSWORD` hash the password with the record's salt
@@ -234,7 +236,8 @@ interpreter. It is linked high in P1, which tells the executive it is one
   and `=   DKA0:[SYSMGR]`, as on VMS. Then, with `$CMKRNL`, it calls
   `EXE$LOGIN` in the executive, which loads `DCL.EXE` into P1 and gives
   the process the record's UIC, privileges and priority. LOGINOUT prints
-  `Welcome to vaxpunk`, and how many failures there were since the last
+  `SYS$WELCOME`, or without one `Welcome to vaxpunk arm64 Operating
+  System, Version V0.1`, the version from `$GETSYI`'s `SYI$_VERSION`, and how many failures there were since the last
   login, and exits. The executive throws its pages away, as for any
   image that exits, and calls DCL.
 - DCL opens a channel to `SYS$INPUT`, the console, `OPA0:`. Its first

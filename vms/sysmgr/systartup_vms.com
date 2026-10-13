@@ -50,6 +50,10 @@ $ DEFINE/SYSTEM/NOLOG SYS$HELP SYS$SYSROOT:[SYSHLP]
 $ ! SSL3's certificates, as VSI's SSL3$STARTUP.COM names them: CERT.PEM,
 $ ! the CAs SSL3 trusts unless SSL_CERT_FILE names others.
 $ DEFINE/SYSTEM/NOLOG SSL3$CERTS SYS$COMMON:[SSL3.CERTS]
+$ ! LOGINOUT writes SYS$ANNOUNCE before Username:, here a file's lines,
+$ ! and SYS$WELCOME, if there is one, after the login, in place of its
+$ ! own welcome.
+$ DEFINE/SYSTEM/NOLOG SYS$ANNOUNCE "@SYS$MANAGER:ANNOUNCE.TXT"
 $ ! A process's default device, for one no one logged in to.
 $ DEFINE/SYSTEM/NOLOG SYS$DISK SYS$SYSROOT:
 $ ! The users, SYSUAF.DAT, which LOGINOUT reads, AUTHORIZE and SET

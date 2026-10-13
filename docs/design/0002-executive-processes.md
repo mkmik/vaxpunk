@@ -376,7 +376,7 @@ Three failures end the image, and with it the process. A right one:
    takes the record's username, `PCB$T_USERNAME`, its UIC, its base
    priority, `UAF$Q_PRIV` as its authorized privileges and
    `UAF$Q_DEF_PRIV` as its permanent and current ones.
-4. `LOGINOUT` writes `Welcome to vaxpunk` and the failures, and exits:
+4. `LOGINOUT` writes `SYS$WELCOME`, or `Welcome to vaxpunk arm64 Operating System, Version V0.1`, and the failures, and exits:
    the executive runs it down and calls DCL, as for any image.
 
 `SYSUAF.DAT` is `SYSUAF`, with the default `SYS$SYSTEM:.DAT`;
