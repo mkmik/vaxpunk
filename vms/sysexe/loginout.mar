@@ -18,6 +18,11 @@
 ; the user's UIC, privileges and priority, and the command interpreter
 ; the record names, DCL. The executive calls DCL when this image exits,
 ; and DCL runs SYLOGIN.COM and the user's LOGIN.COM.
+; The system logical name SYS$ANNOUNCE, if there is one, is written
+; before the first Username:, and SYS$WELCOME after the login, in place
+; of the system's own welcome, with its version from $GETSYI, unless the record says DISWELCOME. A value that
+; begins with @ names a file whose lines are written instead, as in
+; DEFINE/SYSTEM SYS$ANNOUNCE "@SYS$MANAGER:ANNOUNCE.TXT".
 ; A terminal the Automatic Login Facility's file, SYS$SYSTEM:SYSALF.DAT
 ; unless the logical name SYSALF says where, names is logged in at once
 ; as its user, without a username or a password. Each of its lines is a
@@ -37,6 +42,7 @@
         $RABDEF
         $UAFDEF
         $DVIDEF
+        $SYIDEF
 
         .EXTERNAL EXE$LOGIN, PUT_LINE, LIB$SIGNAL
 
@@ -102,6 +108,22 @@ DVIITEM:                                ; $GETDVI's items: the terminal's name
         .ADDRESS TERM, 0
         .LONG   0
 TERM:   .BLKB   6                       ; _DDCU:
+SYSTAB: .ASCID  "LNM$SYSTEM"
+ANNOUNCE:
+        .ASCID  "SYS$ANNOUNCE"
+WELCOMENAM:
+        .ASCID  "SYS$WELCOME"
+MSGITEM:.WORD   255, LNM$_STRING        ; $TRNLNM's items: the message
+        .ADDRESS TEXT+1, TEXTLEN
+        .LONG   0
+TEXTLEN:.LONG   0
+TEXT:   .BLKB   256                     ; the message, or a line of its file, .ASCIC
+SYIITEM:.WORD   8, SYI$_VERSION         ; $GETSYI's items: the system's version
+        .ADDRESS VERSION, 0
+        .LONG   0
+VERSION:.ASCII  "        "
+MSGFAB: $FAB    FNA=TEXT+2, FAC=GET
+MSGRAB: $RAB    FAB=MSGFAB, UBF=TEXT+1, USZ=255
 
         .PSECT  CODE, EXE, LONG
         .ENTRY  START, ^M<R2, R3, R4, R5, R6>
@@ -111,7 +133,9 @@ TERM:   .BLKB   6                       ; _DDCU:
         BLBC    R0, 5$
         BSBW    FIND
         BLBS    R0, LOGIN
-5$:     MOVL    #3, TRIES
+5$:     MOVAQ   ANNOUNCE, R1
+        BSBW    MESSAGE
+        MOVL    #3, TRIES
 10$:    BSBW    ASK
         BLBC    R0, 90$
         TSTL    NAMLEN
@@ -137,8 +161,10 @@ LOGIN:  MOVZWL  REC+UAF$W_LOGFAILS, FAILS
         $CMKRNL_S ROUTIN=G^EXE$LOGIN, ARGLST=KARGS
         BLBC    R0, 80$
         BBS     #UAF$V_DISWELCOM, REC+UAF$L_FLAGS, 10$
-        PUSHAB  WELCOME
-        CALLS   #1, G^PUT_LINE
+        MOVAQ   WELCOMENAM, R1
+        BSBW    MESSAGE
+        BLBS    R0, 10$
+        BSBW    GREET
 10$:    MOVL    FAILS, R1
         BEQL    20$
         BSBW    FAILURES
@@ -332,6 +358,59 @@ DEFAULTS:
 80$:    MOVL    #SS$_NORMAL, R0
 90$:    RSB
 
+; MESSAGE: R1 = a system logical name's descriptor. Writes its string,
+; or, if it begins with @, the lines of the file the rest names. R0 = 1,
+; or 0 if there is no such name. Uses R0-R5.
+MESSAGE:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5>
+        $TRNLNM_S TABNAM=SYSTAB, LOGNAM=(R1), ITMLST=MSGITEM
+        BLBC    R0, 90$
+        MOVZWL  TEXTLEN, R2
+        BEQL    80$
+        CMPB    TEXT+1, #^A/@/
+        BEQL    10$
+        MOVB    R2, TEXT
+        PUSHAB  TEXT
+        CALLS   #1, G^PUT_LINE
+        BRB     80$
+10$:    DECL    R2                      ; the file's name, after the @
+        MOVB    R2, MSGFAB+FAB$B_FNS
+        $OPEN   FAB=MSGFAB
+        BLBC    R0, 80$                 ; no file: no message
+        $CONNECT RAB=MSGRAB
+        BLBC    R0, 70$
+20$:    $GET    RAB=MSGRAB
+        BLBC    R0, 70$
+        MOVB    MSGRAB+RAB$W_RSZ, TEXT
+        PUSHAB  TEXT
+        CALLS   #1, G^PUT_LINE
+        BRB     20$
+70$:    $CLOSE  FAB=MSGFAB
+80$:    MOVL    #1, R0
+        RSB
+90$:    CLRL    R0
+        RSB
+
+; GREET: writes the system's own welcome, for no SYS$WELCOME, with the
+; version $GETSYI says, as VMS's Welcome to OpenVMS ... Version V8.4.
+; Uses R0-R5.
+GREET:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5>
+        $GETSYIW_S ITMLST=SYIITEM
+        MOVZBL  WELCOME, R2
+        MOVC3   R2, WELCOME+1, TEXT+1
+        MOVC3   #8, VERSION, (R3)
+10$:    CMPB    -1(R3), #^A/ /          ; without the version's blanks
+        BNEQ    20$
+        DECL    R3
+        BRB     10$
+20$:    MOVAB   TEXT+1, R0
+        SUBL3   R0, R3, R0
+        MOVB    R0, TEXT
+        PUSHAB  TEXT
+        CALLS   #1, G^PUT_LINE
+        RSB
+
 ; FAILURES: R1 = the login failures since the last login, 1 or more.
 ; Says how many, as VMS does. Uses R0-R5.
 FAILURES:
@@ -365,7 +444,7 @@ FAILURES:
 
         .PSECT  $LITERAL$
 WELCOME:
-        .ASCIC  <9>"Welcome to vaxpunk"
+        .ASCIC  <9>"Welcome to vaxpunk arm64 Operating System, Version "
 FAILURE:
         .ASCIC  " failure since last successful login"
 FAILURES2:

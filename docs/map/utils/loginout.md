@@ -111,8 +111,8 @@ note = "ADR-0029 follow-ups; loginout.mar ponytail"
 [[feature]]
 id = "announce"
 title = "SYS$ANNOUNCE before Username:, SYS$WELCOME after"
-status = "todo"
-note = "loginout.mar prints a fixed Welcome to vaxpunk"
+status = "done"
+note = "A string or @file; the system's own welcome, with SYI$_VERSION, without SYS$WELCOME"
 
 [[feature]]
 id = "intrusion"

@@ -32,7 +32,7 @@ struct Phase {
 /// The executive starts and mounts the system disk; STARTUP's
 /// SYSTARTUP_VMS.COM mounts the ramdisk, MDA0:, and can't mount the data
 /// disk, DKB0:, made afresh in out/check-datadisk.img, not the one you
-/// keep. Then LOGINOUT asks for a username: one that isn't there fails,
+/// keep, and defines SYS$ANNOUNCE. Then LOGINOUT writes ANNOUNCE.TXT and asks for a username: one that isn't there fails,
 /// SYSTEM with the wrong password too, and with the right one, in lower
 /// case, logs in, with a failure to report.
 const BOOT: Phase = Phase {
@@ -54,8 +54,8 @@ const BOOT: Phase = Phase {
         "%MOUNT-I-MOUNTED, RAM mounted on _MDA0:",
         "%SYSTEM-W-NOHOMEBLK, Files-11 home block not found on volume",
         "  SYSTEM       job terminated at ",
-        "Username: NOBODY\nPassword: \nUser authorization failure\n",
-        "\tWelcome to vaxpunk\n\t1 failure since last successful login\n",
+        "  vaxpunk, an OpenVMS clone for arm64\n\nUsername: NOBODY\nPassword: \nUser authorization failure\n",
+        "\tWelcome to vaxpunk arm64 Operating System, Version V0.1\n\t1 failure since last successful login\n",
     ],
 };
 
@@ -741,7 +741,8 @@ const STARTUP: Phase = Phase {
 /// AUTHORIZE adds JOE, in another UIC group, with a few privileges and
 /// his default directory on DKB0:, shows him, whole and on a line, and
 /// lists every user in SYSUAF.LIS; SYSTEM changes its password with SET
-/// PASSWORD, after getting the old one wrong, and logs out. JOE logs in,
+/// PASSWORD, after getting the old one wrong, defines SYS$WELCOME, which
+/// each login after says in place of Welcome to vaxpunk, and logs out. JOE logs in,
 /// with his UIC, privileges and directory, can't run AUTHORIZE or
 /// OPCCRASH, and logs out; SYSTEM logs in with its new password and shuts
 /// the system down.
@@ -769,13 +770,16 @@ const USERS: Phase = Phase {
         (
             "%UAF-I-LSTMSG2",
             1,
-            "SET PASSWORD\rwrongpw\rSET PASSWORD\rmanager\rnewpw\rnewpw\rLOGOUT\r",
+            concat!(
+                "SET PASSWORD\rwrongpw\rSET PASSWORD\rmanager\rnewpw\rnewpw\r",
+                "DEFINE/SYSTEM SYS$WELCOME \"Have a nice day\"\rLOGOUT\r",
+            ),
         ),
         ("Username:", 4, "JOE\r"),
         ("Password:", 4, "joespw\r"),
         ("\x1b[6n", 2, "\x1b[24;80R"),
         (
-            "\tWelcome to vaxpunk",
+            "Have a nice day",
             2,
             concat!(
                 "SHOW PROCESS/PRIVILEGES\rSHOW DEFAULT\rSHOW LOGICAL SYS$LOGIN\r",
@@ -786,7 +790,7 @@ const USERS: Phase = Phase {
         ("Password:", 5, "newpw\r"),
         ("\x1b[6n", 3, "\x1b[50;100R"),
         (
-            "\tWelcome to vaxpunk",
+            "Have a nice day",
             3,
             "SHOW PROCESS\rSHOW TERMINAL\rSHUTDOWN\r",
         ),
