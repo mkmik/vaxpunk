@@ -695,8 +695,8 @@ impl Gen<'_> {
     /// Returns v, with the routine's output parameters and EXTERNAL
     /// REGISTER data in their registers; R0's is the value.
     fn ret(&mut self, v: V) -> R<()> {
-        let v = self.fix(v);
-        let mut v = v;
+        // Kept from the loads below only when there are some.
+        let mut v = if self.exits.is_empty() { v } else { self.fix(v) };
         for (reg, id) in self.exits.clone() {
             let p = self.place(&Expr::Name(id))?;
             let x = self.load(p);
