@@ -16,7 +16,7 @@ on = "/drivers/network"
 why = "LAT runs straight on Ethernet"
 
 [[needs]]
-fuzzy = "Raw Ethernet frames through the port: LAT isn't IP, and the component passes only IP"
+on = "/drivers/lan"
 why = "LAT's frames, protocol type 0x6004"
 +++
 

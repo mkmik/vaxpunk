@@ -96,6 +96,11 @@ why = "The saved configuration, TCPIP$CONFIG.DAT"
 [[needs]]
 on = "/drivers/ramdisk"
 why = "Its files live on MDA0:, made afresh at each boot (ADR-0025)"
+
+[[needs]]
+on = "/net/aux-server"
+why = "The auxiliary server's commands"
+soft = true
 +++
 
 `TCPIP` is TCP/IP Services' management utility, a DCL verb whose image

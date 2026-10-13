@@ -18,7 +18,7 @@ why = "Shares its knowledge of image headers and sections"
 soft = true
 
 [[needs]]
-fuzzy = "vaxpunk's image format, from crosstools/vtools/docs/image-format.md"
+on = "/host/vms-obj"
 why = "Mapping virtual addresses to blocks of the image"
 +++
 

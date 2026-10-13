@@ -128,6 +128,11 @@ why = "Queues have an owner and a protection mask; jobs run under their user"
 on = "/exec/mailboxes#attention-asts"
 why = "Wakes on a request in its mailbox instead of polling"
 soft = true
+
+[[needs]]
+on = "/exec/cluster"
+why = "Queues shared across a cluster"
+soft = true
 +++
 
 VMS's batch and print system is a set of queues and the processes that

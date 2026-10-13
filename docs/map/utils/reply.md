@@ -58,6 +58,11 @@ why = "OPER to send to other users and to be an operator"
 on = "/utils/opcom"
 why = "Its operator functions talk to OPCOM, which must be running"
 soft = true
+
+[[needs]]
+on = "/drivers/tape"
+why = "REPLY/BLANK_TAPE and tape requests"
+soft = true
 +++
 
 `REPLY` does two jobs. For anyone with `OPER` it sends a message to the

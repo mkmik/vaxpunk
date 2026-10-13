@@ -85,6 +85,11 @@ note = "Their bits are in starlet.mlb's $PRVDEF; nothing checks them yet"
 on = "/exec/processes"
 why = "The masks live in the PCB"
 soft = true
+
+[[needs]]
+on = "/exec/installed-images"
+why = "Privileges from INSTALL/PRIVILEGED, not a fixed list"
+soft = true
 +++
 
 A VMS process holds privileges, the bits of `$PRVDEF`, each of which

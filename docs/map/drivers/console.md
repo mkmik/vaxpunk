@@ -53,6 +53,11 @@ why = "OPA0: is a terminal UCB, the first of TT$GL_UNITS"
 [[needs]]
 on = "/platform/console-uart"
 why = "The PAL reads and writes the UART behind RXDB and TXDB"
+
+[[needs]]
+on = "/utils/opcom"
+why = "OPA0: as an operator console"
+soft = true
 +++
 
 `OPA0:` is the console terminal of a VMS system: the one attached to

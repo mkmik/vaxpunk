@@ -37,6 +37,7 @@ note = "PRD-0003 tier 3 #20"
 id = "debug"
 title = "/DEBUG and /TRACEBACK: debug symbol records in the image"
 status = "todo"
+needs = ["/host/vms-obj#debug-symbols"]
 note = "PRD-0001 and PRD-0004 leave DST out: the link map is the debugging aid"
 
 [[feature]]
@@ -55,7 +56,7 @@ on = "/host/vlink"
 why = "The Rust linker it would be ported from, and which checks it"
 
 [[needs]]
-on = "/lang/bliss"
+on = "/lang/bliss#native"
 why = "Written in BLISS-64 and built on vaxpunk, as Marko wants the toolchain"
 
 [[needs]]

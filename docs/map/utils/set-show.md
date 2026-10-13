@@ -156,6 +156,11 @@ why = "Their keywords, parameters and qualifiers"
 [[needs]]
 on = "/rtl/librtl"
 why = "Writes their lines with LIB$PUT_OUTPUT"
+
+[[needs]]
+on = "/exec/acls"
+why = "SET and SHOW SECURITY with ACLs"
+soft = true
 +++
 
 `SET` and `SHOW` are two DCL verbs with dozens of options each, most of

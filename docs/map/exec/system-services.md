@@ -90,6 +90,11 @@ why = "CMKRNL and CMEXEC"
 on = "/exec/memory"
 why = "The vector's pages are made user readable at start"
 soft = true
+
+[[needs]]
+on = "/exec/installed-images"
+why = "User-written services live in privileged shareable images, installed /PROTECTED"
+soft = true
 +++
 
 A VMS program calls a system service like any routine, `SYS$QIOW`

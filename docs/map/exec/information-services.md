@@ -92,6 +92,11 @@ why = "GROUP and WORLD for another process's information"
 [[needs]]
 on = "/exec/event-flags"
 why = "Each sets its event flag when done"
+
+[[needs]]
+on = "/exec/cluster"
+why = "Cluster items of $GETSYI and $GETJPI"
+soft = true
 +++
 
 VMS answers questions through item-list services: a program passes a

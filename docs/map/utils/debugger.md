@@ -17,6 +17,7 @@ needs = ["/exec/condition-handling"]
 id = "dst"
 title = "Debug symbol records from vbliss, vmacro and vlink"
 status = "todo"
+needs = ["/host/vbliss#debug-symbols", "/host/vmacro#debug-symbols", "/host/vlink#debug-symbols"]
 note = "PRD-0001 and PRD-0004: no DST yet; the listing and the link map are the debugging aids"
 
 [[feature]]
@@ -69,7 +70,7 @@ on = "/host/vlink"
 why = "The image has to carry symbols and a traceback table"
 
 [[needs]]
-fuzzy = "A debug symbol table format (DST or DWARF-like) the compilers and linker write"
+on = "/host/vms-obj#debug-symbols"
 why = "PRD-0001 and PRD-0004 have no DST; the debugger needs names, types and line numbers"
 +++
 

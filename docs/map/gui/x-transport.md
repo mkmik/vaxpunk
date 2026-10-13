@@ -35,6 +35,7 @@ note = "Only for a local X server, which is dropped: no display drivers"
 id = "lat"
 title = "The LAT transport, for X terminals"
 status = "todo"
+needs = ["/net/lat"]
 note = "Needs LAT, t8y:/net/lat"
 
 [[feature]]

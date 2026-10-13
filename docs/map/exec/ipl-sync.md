@@ -57,11 +57,6 @@ note = "ADR-0003: a second CPU needs them; t8y:/platform/smp"
 [[needs]]
 on = "/platform/pal"
 why = "Delivers interrupts and software interrupts by IPL; MTPR #PR$_IPL"
-
-[[needs]]
-on = "/platform/smp"
-why = "Spinlocks only matter with a second CPU"
-soft = true
 +++
 
 VMS synchronizes inside the executive with interrupt priority levels:

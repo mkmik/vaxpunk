@@ -61,6 +61,16 @@ why = "With no printer, a terminal is the output device"
 on = "/drivers/printer"
 why = "A line printer, once there is one"
 soft = true
+
+[[needs]]
+on = "/net/lat"
+why = "LAT printers through LATSYM"
+soft = true
+
+[[needs]]
+on = "/net/lpd"
+why = "Network printers through LPD"
+soft = true
 +++
 
 A symbiont is the process that does a print queue's work. The job

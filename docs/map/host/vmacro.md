@@ -74,6 +74,13 @@ status = "todo"
 needs = ["/host/vasm#listing"]
 note = "macro32.md: not yet"
 
+[[feature]]
+id = "debug-symbols"
+title = "Debug symbol table records, for a future DEBUG"
+status = "todo"
+needs = ["/host/vms-obj#debug-symbols"]
+note = "PRD-0001 non-goal: the listing is the debugging aid"
+
 [[needs]]
 on = "/host/vasm"
 why = "It is vasm with a dialect: its output is vasm's input"

@@ -96,6 +96,11 @@ why = "SYSPRV, GRPPRV, READALL and BYPASS change the result"
 on = "/exec/processes"
 why = "The UIC is in the PCB"
 soft = true
+
+[[needs]]
+on = "/exec/rights-database"
+why = "UIC identifiers"
+soft = true
 +++
 
 Every VMS process has a user identification code, `[group,member]`,

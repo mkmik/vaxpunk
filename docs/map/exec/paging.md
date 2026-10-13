@@ -66,7 +66,7 @@ why = "A hard fault waits for its read while others run"
 soft = true
 
 [[needs]]
-fuzzy = "Pages the PAL marks invalid and a translation-not-valid fault sent to the executive, or page tables the executive keeps itself"
+on = "/platform/pal#page-faults"
 why = "Today the PAL owns the page tables and a missing page is an access violation"
 +++
 

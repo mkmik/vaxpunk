@@ -12,7 +12,7 @@ on = "/exec/calling-standard"
 why = "F, D, G and IEEE floating arguments by the standard"
 
 [[needs]]
-fuzzy = "Floating point in vmacro and vasm, which have none yet (PRD-0007 Feasibility)"
+on = "/host/vmacro#float"
 why = "A math library needs FP instructions or soft-float"
 +++
 

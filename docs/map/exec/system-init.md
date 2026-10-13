@@ -110,6 +110,16 @@ why = "STARTUP's DCL runs SYSTARTUP_VMS.COM"
 on = "/utils/startup-shutdown"
 why = "The startup and shutdown procedures it hands over to"
 soft = true
+
+[[needs]]
+on = "/exec/paging"
+why = "SYSINIT opens the page and swap files"
+soft = true
+
+[[needs]]
+on = "/platform/native-kernel"
+why = "Starting without seL4"
+soft = true
 +++
 
 On VMS the console firmware loads the primary bootstrap, which reads

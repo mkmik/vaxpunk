@@ -9,7 +9,7 @@ status = "dropped"
 refs = ["https://h41379.www4.hpe.com/doc/82final/6300/6300pro_002.html"]
 
 [[needs]]
-fuzzy = "Display, keyboard and mouse drivers for a framebuffer"
+on = "/drivers/graphics"
 why = "What a local server draws on and reads from"
 +++
 

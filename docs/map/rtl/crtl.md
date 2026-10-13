@@ -82,6 +82,7 @@ status = "todo"
 id = "processes"
 title = "system, vfork and exec, popen, signals"
 status = "todo"
+needs = ["/dcl/spawn"]
 note = "Over subprocesses, as DEC C's are (t8y:/dcl/spawn)"
 
 [[feature]]
