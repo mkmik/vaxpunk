@@ -84,6 +84,7 @@ LITERAL
     SS$_BADFILEHDR = 2064,
     SS$_BADFILEVER = 2080,  ! a version above 32767
     SS$_BADIRECTORY = 2088,
+    SS$_DATAOVERUN = 2104,  ! PTD$WRITE: the type-ahead buffer is full, and took only some
     SS$_DEVICEFULL = 2128,  ! no free blocks left
     SS$_DUPFILENAME = 2152,  ! that name and version is in the directory already
     SS$_ENDOFFILE = 2160,
