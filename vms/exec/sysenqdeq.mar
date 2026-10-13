@@ -1,0 +1,299 @@
+        .TITLE  SYSENQDEQ $ENQ and $DEQ: the lock manager's services
+        .IDENT  /V0.1/
+;
+; The lock manager's edges, as VMS's SYSENQDEQ (docs/adr/0030-lock-
+; manager-in-the-executive.md): the services check their caller's
+; arguments, qualify the resource name by access mode and UIC group, and
+; call the lock database's logic, locking.b64, at IPL$_SYNCH. Each request
+; completes through an AST control block made here, LCK$POST's: queued to
+; the lock's process as a kernel mode AST when the lock is granted, at
+; once or later from another process's $DEQ, it writes the status in the
+; lock status block, sets the event flag, and queues the caller's AST in
+; its mode. $ENQW waits for it, as $QIOW does. Image rundown dequeues the
+; user mode locks, and process rundown the rest (LCK$RUNDOWN).
+;
+        .LIBRARY "lib.mlb"
+        .LIBRARY "starlet.mlb"
+        $PALDEF
+        $PSLDEF
+        $IPLDEF
+        $PCBDEF
+        $PRVDEF
+        $ACBDEF
+        $LCKDEF
+        $SSDEF
+
+        .EXTERNAL SCH$GL_CURPCB, SCH$QAST, SCH$ASTBITS, SCH$GETEFC, SCH$POSTEF
+        .EXTERNAL EXE$PROBER_DSC, EXE$CLREF, EXE$WAITFR
+        .EXTERNAL EXE$ALONONPAGED, EXE$DEANONPGDSIZ
+        .EXTERNAL LCK$ENQ, LCK$DEQ, LCK$DEQALL
+
+; LCK$POST's ACB: an ACB, then what the request completes.
+LKA_L_LKSB = ACB$K_LENGTH               ; the lock status block
+LKA_L_EFN = ACB$K_LENGTH+4              ; the event flag
+LKA_L_STATUS = ACB$K_LENGTH+8           ; the status, LCK$QPOST's
+LKA_B_ACMODE = ACB$K_LENGTH+12          ; the lock's access mode, the AST's
+LKA_K_LENGTH = ACB$K_LENGTH+16
+
+ENQFLAGS = LCK$M_CONVERT ! LCK$M_NOQUEUE ! LCK$M_SYNCSTS ! LCK$M_SYSTEM
+DEQFLAGS = LCK$M_DEQALL ! LCK$M_INVVALBLK
+
+        .PSECT  $CODE$
+
+; ACMODE: R0 = an access mode argument. R0 = it, or the previous mode if
+; that is the outer one; R1 = the previous mode.
+ACMODE:
+        .JSB_ENTRY
+        BICL2   #^C3, R0
+        PUSHL   R0
+        CALL_PAL #PAL$_RD_PS
+        EXTZV   #PSL$V_PRVMOD, #2, R0, R1
+        MOVL    (SP)+, R0
+        CMPL    R0, R1
+        BGEQU   10$
+        MOVL    R1, R0
+10$:    RSB
+
+; $ENQ efn, lkmode, lksb, flags, resnam, parid, astadr, astprm, blkast,
+; acmode, rsdm_id: asks for a lock in mode lkmode, LCK$K_NLMODE to
+; EXMODE, on the resource resnam names, 1 to 31 bytes, in acmode or the
+; caller's mode, whichever is the outer one, and the caller's UIC group,
+; or the system's with LCK$M_SYSTEM, which needs SYSLCK in user and
+; supervisor mode. With LCK$M_CONVERT it converts the lock whose ID is in
+; lksb to lkmode instead. lksb's second longword gets a new lock's ID.
+; Once the lock is granted, now or later, lksb's first word gets the
+; status, efn is set, and astadr is called with astprm. R0 = SS$_NORMAL;
+; SS$_SYNCH with LCK$M_SYNCSTS if it was granted now, and then there is
+; no AST; SS$_NOTQUEUED with LCK$M_NOQUEUE if it can't be; SS$_BADPARAM,
+; SS$_ACCVIO, SS$_IVBUFLEN, SS$_NOSYSLCK, SS$_IVLOCKID, SS$_CVTUNGRANT,
+; SS$_INSFMEM, or an event flag's error. rsdm_id is ignored.
+;
+; vaxpunk: only the flags LCK$M_CONVERT, NOQUEUE, SYNCSTS and SYSTEM, and
+; no parent lock or blocking AST: SS$_BADPARAM for the others, until a
+; program needs them. No deadlock search and no ENQLM yet.
+EXE$ENQ::
+        .CALL_ENTRY HOME_ARGS=TRUE, MAX_ARGS=12
+        MOVL    SCH$GL_CURPCB, R4
+        MOVL    40(AP), R0
+        BSBW    ACMODE
+        MOVL    R0, R7                  ; the lock's access mode
+        MOVL    R1, R6                  ; the caller's
+        CMPL    8(AP), #LCK$K_EXMODE
+        BGTRU   70$
+        BITL    #^C<ENQFLAGS>, 16(AP)
+        BNEQ    70$
+        TSTL    24(AP)                  ; a parent lock
+        BNEQ    70$
+        TSTL    36(AP)                  ; a blocking AST
+        BNEQ    70$
+        IFNOWRT #8, @12(AP), 75$
+        CLRQ    R8                      ; no name for a conversion
+        CLRL    R10
+        BITL    #LCK$M_CONVERT, 16(AP)
+        BNEQ    20$
+        MOVL    20(AP), R1
+        BSBW    EXE$PROBER_DSC
+        BLBC    R0, 90$
+        MOVZWL  (R1), R8                ; its length
+        BEQL    80$
+        CMPL    R8, #31
+        BGTRU   80$
+        MOVL    4(R1), R9               ; and its address
+        EXTZV   #16, #16, PCB$L_UIC(R4), R10    ; the group
+        BITL    #LCK$M_SYSTEM, 16(AP)
+        BEQL    20$
+        MNEGL   #1, R10                 ; the system's
+        CMPL    R6, #PSL$C_EXEC
+        BLEQU   20$
+        IFNPRIV SYSLCK, 85$
+20$:    PUSHL   4(AP)
+        CALLS   #1, G^EXE$CLREF
+        BLBC    R0, 90$
+        MOVL    #LKA_K_LENGTH, R1
+        BSBW    EXE$ALONONPAGED
+        BLBC    R0, 90$
+        MOVL    R2, R5
+        MOVW    R1, ACB$W_SIZE(R5)
+        MOVB    #DYN$C_ACB, ACB$B_TYPE(R5)
+        CLRB    ACB$B_RMOD(R5)          ; LCK$POST's, in kernel mode
+        MOVL    PCB$L_PID(R4), ACB$L_PID(R5)
+        MOVL    28(AP), ACB$L_AST(R5)
+        MOVL    32(AP), ACB$L_ASTPRM(R5)
+        MOVAB   LCK$POST, ACB$L_KAST(R5)
+        MOVL    12(AP), LKA_L_LKSB(R5)
+        MOVL    4(AP), LKA_L_EFN(R5)
+        MOVB    R7, LKA_B_ACMODE(R5)
+        DSBINT  #IPL$_SYNCH
+        PUSHL   R5
+        PUSHL   R10
+        PUSHL   R7
+        PUSHL   R9
+        PUSHL   R8
+        PUSHL   16(AP)
+        PUSHL   12(AP)
+        PUSHL   8(AP)
+        PUSHL   PCB$L_PID(R4)
+        CALLS   #9, G^LCK$ENQ
+        CMPL    R0, #SS$_SYNCH
+        BNEQ    40$
+        MOVL    #SS$_NORMAL, R6         ; granted now
+        BITL    #LCK$M_SYNCSTS, 16(AP)
+        BEQL    30$
+        CLRL    ACB$L_AST(R5)
+        MOVL    #SS$_SYNCH, R6
+30$:    MOVL    #SS$_NORMAL, R2
+        BSBW    LCK$QPOST
+        MOVL    R6, R0
+        BRB     50$
+40$:    BLBS    R0, 50$                 ; it waits, and the lock has the ACB
+        PUSHL   R0
+        MOVL    R5, R0
+        MOVZWL  ACB$W_SIZE(R5), R1
+        BSBW    EXE$DEANONPGDSIZ
+        MOVL    (SP)+, R0
+50$:    ENBINT
+        RET
+70$:    MOVL    #SS$_BADPARAM, R0
+        RET
+75$:    MOVL    #SS$_ACCVIO, R0
+        RET
+80$:    MOVL    #SS$_IVBUFLEN, R0
+        RET
+85$:    MOVL    #SS$_NOSYSLCK, R0
+90$:    RET
+
+; $ENQW efn, lkmode, lksb, flags, resnam, parid, astadr, astprm, blkast,
+; acmode, rsdm_id: $ENQ, then, if it succeeded, waits for the event flag
+; until the status block's status isn't 0, as $QIOW does. R0 = $ENQ's
+; status; the request's is in lksb.
+EXE$ENQW::
+        .CALL_ENTRY MAX_ARGS=12
+        CALLG   (AP), G^EXE$ENQ
+        BLBC    R0, 90$
+        MOVL    R0, R6
+10$:    PUSHL   4(AP)
+        CALLS   #1, G^EXE$WAITFR
+        DSBINT  #IPL$_ASTDEL            ; LCK$POST, which sets both, waits
+        TSTW    @12(AP)
+        BNEQ    20$
+        MOVL    SCH$GL_CURPCB, R4
+        MOVL    4(AP), R3
+        BSBW    SCH$GETEFC
+        BLBC    R0, 20$
+        BBCC    R2, (R1), 20$
+20$:    ENBINT
+        TSTW    @12(AP)
+        BEQL    10$
+        MOVL    R6, R0
+90$:    RET
+
+; $DEQ lkid, valblk, acmode, flags: dequeues the lock lkid, of acmode or
+; an outer mode, the caller's at least; a request of it that waits ends
+; with SS$_ABORT in its status block. With LCK$M_DEQALL and lkid 0, all
+; the caller's locks of that mode and the outer ones. R0 = SS$_NORMAL,
+; SS$_IVLOCKID or SS$_BADPARAM.
+;
+; vaxpunk: no value blocks, so a valblk is SS$_BADPARAM and
+; LCK$M_INVVALBLK does nothing; LCK$M_CANCEL is SS$_BADPARAM, and DEQALL
+; with an lkid, which has no sublocks to dequeue, too.
+EXE$DEQ::
+        .CALL_ENTRY HOME_ARGS=TRUE, MAX_ARGS=4
+        MOVL    SCH$GL_CURPCB, R4
+        MOVL    12(AP), R0
+        BSBW    ACMODE
+        MOVL    R0, R7
+        TSTL    8(AP)                   ; a value block
+        BNEQ    70$
+        BITL    #^C<DEQFLAGS>, 16(AP)
+        BNEQ    70$
+        BITL    #LCK$M_DEQALL, 16(AP)
+        BEQL    20$
+        TSTL    4(AP)                   ; a parent's sublocks
+        BNEQ    70$
+        DSBINT  #IPL$_SYNCH
+        PUSHL   #1
+        PUSHL   R7
+        PUSHL   PCB$L_PID(R4)
+        CALLS   #3, G^LCK$DEQALL
+        ENBINT
+        MOVL    #SS$_NORMAL, R0
+        RET
+20$:    DSBINT  #IPL$_SYNCH
+        PUSHL   R7
+        PUSHL   4(AP)
+        PUSHL   PCB$L_PID(R4)
+        CALLS   #3, G^LCK$DEQ
+        ENBINT
+        RET
+70$:    MOVL    #SS$_BADPARAM, R0
+        RET
+
+; LCK$QPOST: R5 = a request's ACB, R2 = its status. Queues the ACB to its
+; process, where LCK$POST completes the request. IPL$_SYNCH. Uses R0-R3.
+LCK$QPOST::
+        .JSB_ENTRY  SCRATCH=<R2, R3>
+        MOVL    R2, LKA_L_STATUS(R5)
+        BRW     SCH$QAST
+
+; LCK$POST: a request's kernel mode AST, in the lock's process. R4 = the
+; PCB, R5 = the ACB. Writes the status in the status block's first word
+; and clears its second, sets the event flag, then queues the ACB for the
+; caller's AST, in the lock's access mode, or frees it if there is none.
+; IPL$_SYNCH. Uses R0-R3, R5 and R6.
+; ponytail: the status block isn't probed again, as IOC$POST's IOSB isn't.
+LCK$POST::
+        .JSB_ENTRY  SCRATCH=<R2, R3, R5, R6>
+        MOVL    R5, R6
+        MOVL    LKA_L_LKSB(R6), R0
+        MOVW    LKA_L_STATUS(R6), (R0)
+        CLRW    2(R0)
+        MOVL    LKA_L_EFN(R6), R3
+        BSBW    SCH$GETEFC
+        BLBC    R0, 30$
+        BBSS    R2, (R1), 25$
+25$:    BSBW    SCH$POSTEF
+30$:    MOVL    R6, R5
+        TSTL    ACB$L_AST(R5)
+        BEQL    40$
+        MOVB    LKA_B_ACMODE(R5), ACB$B_RMOD(R5)
+        CLRL    ACB$L_KAST(R5)
+        BRW     SCH$QAST
+40$:    MOVL    R5, R0
+        MOVZWL  ACB$W_SIZE(R5), R1
+        BRW     EXE$DEANONPGDSIZ
+
+; LCK$RUNDOWN: R4 = the current PCB, R0 = an access mode. Dequeues the
+; process's locks of that mode and the outer ones, completing none of
+; their requests, and frees the requests' ACBs on its AST queue that
+; LCK$POST hasn't run for: image rundown's, for user mode, whose status
+; blocks go with P0, and process rundown's. Uses R0-R3.
+LCK$RUNDOWN::
+        .JSB_ENTRY  SCRATCH=<R2, R3>
+        PUSHR   #^M<R5, R6>
+        MOVL    R0, R6
+        DSBINT  #IPL$_SYNCH
+        CLRL    -(SP)
+        PUSHL   R6
+        PUSHL   PCB$L_PID(R4)
+        CALLS   #3, G^LCK$DEQALL
+        MOVAQ   PCB$Q_ASTQFL(R4), R2
+        MOVL    (R2), R5
+10$:    CMPL    R5, R2
+        BEQL    20$
+        MOVL    R5, R0
+        MOVL    (R5), R5                ; the next, before this one goes
+        MOVAB   LCK$POST, R1
+        CMPL    ACB$L_KAST(R0), R1
+        BNEQ    10$
+        CMPB    LKA_B_ACMODE(R0), R6
+        BLSSU   10$
+        REMQUE  (R0), R0
+        MOVZWL  ACB$W_SIZE(R0), R1
+        BSBW    EXE$DEANONPGDSIZ
+        BRB     10$
+20$:    BSBW    SCH$ASTBITS
+        ENBINT
+        POPR    #^M<R5, R6>
+        RSB
+
+        .END

@@ -1894,7 +1894,7 @@ static void start_clock(void)
  * Starts [SYSEXE]EXEC.EXE from the system disk in a context of its own
  * whose HWPCB is the RPB's: kernel mode, IPL 31, R11 pointing at the RPB.
  */
-static uint8_t exe_file[256 * 1024];
+static uint8_t exe_file[512 * 1024];
 static seL4_Word port_pfn; /* the port's first page */
 
 static void start_exec(void)

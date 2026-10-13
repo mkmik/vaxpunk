@@ -1297,6 +1297,26 @@ MESSAGES:
         .ASCIC  "SYSTEM"
         .ASCIC  "NOLOGTAB"
         .ASCIC  "no logical name table matched the specified name"
+        .LONG   SS$_SYNCH
+        .ASCIC  "SYSTEM"
+        .ASCIC  "SYNCH"
+        .ASCIC  "synchronous successful completion"
+        .LONG   SS$_NOTQUEUED
+        .ASCIC  "SYSTEM"
+        .ASCIC  "NOTQUEUED"
+        .ASCIC  "request not queued"
+        .LONG   SS$_IVLOCKID
+        .ASCIC  "SYSTEM"
+        .ASCIC  "IVLOCKID"
+        .ASCIC  "invalid lock ID"
+        .LONG   SS$_CVTUNGRANT
+        .ASCIC  "SYSTEM"
+        .ASCIC  "CVTUNGRANT"
+        .ASCIC  "cannot convert an ungranted lock"
+        .LONG   SS$_NOSYSLCK
+        .ASCIC  "SYSTEM"
+        .ASCIC  "NOSYSLCK"
+        .ASCIC  "operation requires SYSLCK privilege"
 ; TCP/IP Services' (facility 0x764), whose hosts database TCPIP and
 ; HOST_ADDR (sysexe/lib/inet.mar) read.
         .LONG   ^X07648358

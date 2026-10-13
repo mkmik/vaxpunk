@@ -45,7 +45,7 @@
         .EXTERNAL SCH$SCHED, SCH$DACEFC_ALL, SGN$GW_QUANTUM
         .EXTERNAL EXE$ALONONPAGED, EXE$DEANONPGDSIZ, MMG$CREPAG, MMG$DELPAG
         .EXTERNAL MMG$SETPRT, EXE$RMVTIMQ, EXE$USRSTART, EXE$CLISTART
-        .EXTERNAL FIL$OPENFILE, FIL$OPENSHR, FIL$READIMG, RMS$RUNDOWN
+        .EXTERNAL FIL$OPENFILE, FIL$OPENSHR, FIL$READIMG, RMS$RUNDOWN, LCK$RUNDOWN
         .EXTERNAL EXE$OUTZSTRING, EXE$OUTCSTRING, EXE$OUTHEX, EXE$OUTCRLF
         .EXTERNAL LNM$CREATE, LNM$DELTBL, SCH$QAST, EXE$FLUSHAST, IOC$CANCEL, SYS$EXIT
         .EXTERNAL MB$FINDNUM, MB$SEND, EXE$GQ_SYSTIME, TT$OWNER
@@ -1059,9 +1059,9 @@ EXHLIST:
         RSB
 
 ; EXE$IMGRUNDOWN: R4 = the current PCB. Gives back what the image that ran
-; in it holds: its timer queue entries, its user mode ASTs, its pages in
-; P0, its common event flag clusters, its user mode exit handlers, and its
-; channels and files, all but the command interpreter's, PCB$L_CLICHANS
+; in it holds: its user mode locks, its timer queue entries, its user
+; mode ASTs, its pages in P0, its common event flag clusters, its user
+; mode exit handlers, and its channels and files, all but the command interpreter's, PCB$L_CLICHANS
 ; and PCB$L_CLIFILES, whose I/O is cancelled first, while P0 is still
 ; there, and the privileges it enabled: the current ones are the
 ; permanent ones again. An image CTRL/Y stopped can't be continued any
@@ -1076,6 +1076,8 @@ EXE$IMGRUNDOWN::
         CLRL    R1
         BSBW    IOC$CANCEL
         ENBINT
+        MOVL    #PSL$C_USER, R0
+        BSBW    LCK$RUNDOWN
         MOVL    PCB$L_PID(R4), R0
         MNEGL   #1, R1
         CLRL    R2
@@ -1107,14 +1109,16 @@ DELP0:
         RSB
 
 ; EXE$RUNDOWN: R4 = the current PCB. Gives back what its process holds:
-; what EXE$IMGRUNDOWN does, then its other ASTs, its logical names, its
-; pages in P1, its other channels and files, and its slot, unless
+; what EXE$IMGRUNDOWN does, then its other locks and ASTs, its logical
+; names, its pages in P1, its other channels and files, and its slot, unless
 ; $DELPRC gave that to another process already, and sends its termination
 ; message. Runs in the process's own context, since P0 and P1 are the
 ; current process's. Uses R0-R3.
 EXE$RUNDOWN::
         .JSB_ENTRY  SCRATCH=<R2, R3>
         BSBW    EXE$IMGRUNDOWN
+        CLRL    R0
+        BSBW    LCK$RUNDOWN
         DSBINT  #IPL$_SYNCH
         MOVL    PCB$L_CHANS(R4), R0
         CLRL    R1

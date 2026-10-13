@@ -815,6 +815,7 @@ const STARTUP: Phase = Phase {
         "MBXTEST: ok",
         "GBLTEST: ok",
         "PTDTEST: ok",
+        "LOCKTEST: ok",
         "%SYSTEM-W-NOSIGNAL, no signal currently active",
         "%SYSTEM-F-NOSIGNAL, no signal currently active",
         "CHFTEST: ok",

@@ -1,0 +1,141 @@
+        .TITLE  LOCKTEST Checks the lock manager
+        .IDENT  /V0.1/
+;
+; STARTUP starts it as LOCKTEST, which starts it again as LOCKTEST2; the
+; first to ask for an exclusive lock on LOCKTEST$ROLE gets it, and the
+; other, which can't, knows it is LOCKTEST2. In one process: two
+; protected reads are granted together; an exclusive lock and a
+; conversion to one aren't, with NOQUEUE; a request that waits is granted,
+; with its AST, once both reads are dequeued; a conversion down to null is
+; granted at once, SS$_SYNCH; a waiting lock can't be converted, and,
+; dequeued, ends with SS$_ABORT; its ID is stale then. In two:
+; LOCKTEST2 takes LOCKTEST$S and wakes LOCKTEST, which can't have it,
+; waits for LOCKTEST$R, which LOCKTEST holds, and exits once it gets it,
+; still holding both; its image rundown dequeues them, which grants
+; LOCKTEST the lock on LOCKTEST$S it waits for. A failed EXPECT exits
+; with 2 * N.
+;
+        .LIBRARY "starlet.mlb"
+        .LIBRARY "sysexe.mlb"
+        $SSDEF
+        $LCKDEF
+
+        .PSECT  DATA, NOEXE, WRT, LONG
+IMAGE:  .ASCID  "LOCKTEST.EXE"
+ME:     .ASCID  "LOCKTEST"
+OTHER:  .ASCID  "LOCKTEST2"
+ROLE:   .ASCID  "LOCKTEST$ROLE"
+ANAM:   .ASCID  "LOCKTEST$A"
+BNAM:   .ASCID  "LOCKTEST$B"
+RNAM:   .ASCID  "LOCKTEST$R"
+SNAM:   .ASCID  "LOCKTEST$S"
+COUNT:  .LONG   0                       ; ADD's parameters, summed
+; Lock status blocks: a status word, a reserved one, the lock ID.
+ROLELK: .QUAD   0
+LKA1:   .QUAD   0
+LKA2:   .QUAD   0
+LKA3:   .QUAD   0
+LKB1:   .QUAD   0
+LKB2:   .QUAD   0
+RLK:    .QUAD   0
+SLK:    .QUAD   0
+
+        .PSECT  CODE, EXE, LONG
+        .ENTRY  START, ^M<R2, R3, R4, R5, R6, R7, R8, R9, R10, R11>
+        $ENQW_S LKMODE=#LCK$K_EXMODE, LKSB=ROLELK, FLAGS=#LCK$M_NOQUEUE, RESNAM=ROLE
+        CMPL    R0, #SS$_NOTQUEUED
+        BNEQ    5$
+        BRW     SECOND
+5$:     EXPECT  #SS$_NORMAL, 1
+        MOVZWL  ROLELK, R0
+        EXPECT  #SS$_NORMAL, 2
+
+; Two protected reads at once, but not an exclusive lock, nor a
+; conversion to one.
+        $ENQW_S LKMODE=#LCK$K_PRMODE, LKSB=LKA1, RESNAM=ANAM
+        EXPECT  #SS$_NORMAL, 3
+        $ENQW_S LKMODE=#LCK$K_PRMODE, LKSB=LKA2, RESNAM=ANAM
+        EXPECT  #SS$_NORMAL, 4
+        MOVZWL  LKA2, R0
+        EXPECT  #SS$_NORMAL, 5
+        $ENQ_S  LKMODE=#LCK$K_EXMODE, LKSB=LKA3, FLAGS=#LCK$M_NOQUEUE, RESNAM=ANAM
+        EXPECT  #SS$_NOTQUEUED, 6
+        $ENQW_S LKMODE=#LCK$K_EXMODE, LKSB=LKA1, FLAGS=#<LCK$M_CONVERT!LCK$M_NOQUEUE>
+        EXPECT  #SS$_NOTQUEUED, 7
+
+; One that waits until both are dequeued.
+        $ENQ_S  EFN=#1, LKMODE=#LCK$K_EXMODE, LKSB=LKA3, RESNAM=ANAM, ASTADR=ADD, ASTPRM=#1
+        EXPECT  #SS$_NORMAL, 8
+        MOVZWL  LKA3, R0
+        EXPECT  #0, 9
+        $DEQ_S  LKID=LKA2+4
+        EXPECT  #SS$_NORMAL, 10
+        MOVZWL  LKA3, R0
+        EXPECT  #0, 11
+        $DEQ_S  LKID=LKA1+4
+        EXPECT  #SS$_NORMAL, 12
+        $WAITFR_S EFN=#1
+        EXPECT  #SS$_NORMAL, 13
+        MOVZWL  LKA3, R0
+        EXPECT  #SS$_NORMAL, 14
+        MOVL    COUNT, R0
+        EXPECT  #1, 15
+        $ENQ_S  LKMODE=#LCK$K_NLMODE, LKSB=LKA3, FLAGS=#<LCK$M_CONVERT!LCK$M_SYNCSTS>
+        EXPECT  #SS$_SYNCH, 16
+
+; A waiting lock: not converted, and dequeued.
+        $ENQW_S LKMODE=#LCK$K_EXMODE, LKSB=LKB1, RESNAM=BNAM
+        EXPECT  #SS$_NORMAL, 17
+        $ENQ_S  EFN=#2, LKMODE=#LCK$K_PRMODE, LKSB=LKB2, RESNAM=BNAM
+        EXPECT  #SS$_NORMAL, 18
+        $ENQ_S  LKMODE=#LCK$K_NLMODE, LKSB=LKB2, FLAGS=#LCK$M_CONVERT
+        EXPECT  #SS$_CVTUNGRANT, 19
+        $DEQ_S  LKID=LKB2+4
+        EXPECT  #SS$_NORMAL, 20
+        $WAITFR_S EFN=#2
+        MOVZWL  LKB2, R0
+        EXPECT  #SS$_ABORT, 21
+        $DEQ_S  LKID=LKB2+4
+        EXPECT  #SS$_IVLOCKID, 22
+        $DEQ_S  LKID=LKB1+4
+        EXPECT  #SS$_NORMAL, 23
+        $DEQ_S  LKID=LKA3+4
+        EXPECT  #SS$_NORMAL, 24
+
+; LOCKTEST2's locks, granted as its image goes.
+        $ENQW_S LKMODE=#LCK$K_EXMODE, LKSB=RLK, RESNAM=RNAM
+        EXPECT  #SS$_NORMAL, 25
+        $CREPRC_S IMAGE=IMAGE, PRCNAM=OTHER, BASPRI=#4
+        EXPECT  #SS$_NORMAL, 26
+        $HIBER_S
+        $ENQ_S  LKMODE=#LCK$K_EXMODE, LKSB=SLK, FLAGS=#LCK$M_NOQUEUE, RESNAM=SNAM
+        EXPECT  #SS$_NOTQUEUED, 27
+        $ENQ_S  EFN=#3, LKMODE=#LCK$K_EXMODE, LKSB=SLK, RESNAM=SNAM
+        EXPECT  #SS$_NORMAL, 28
+        $DEQ_S  LKID=RLK+4
+        EXPECT  #SS$_NORMAL, 29
+        $WAITFR_S EFN=#3
+        MOVZWL  SLK, R0
+        EXPECT  #SS$_NORMAL, 30
+        PRINT   "LOCKTEST: ok"
+        MOVL    #SS$_NORMAL, R0
+        RET
+
+; LOCKTEST2: takes LOCKTEST$S, wakes LOCKTEST, and waits for LOCKTEST$R.
+SECOND: $ENQW_S LKMODE=#LCK$K_EXMODE, LKSB=SLK, RESNAM=SNAM
+        EXPECT  #SS$_NORMAL, 31
+        $WAKE_S PRCNAM=ME
+        EXPECT  #SS$_NORMAL, 32
+        $ENQW_S LKMODE=#LCK$K_EXMODE, LKSB=RLK, RESNAM=RNAM
+        EXPECT  #SS$_NORMAL, 33
+        MOVZWL  RLK, R0
+        EXPECT  #SS$_NORMAL, 34
+        MOVL    #SS$_NORMAL, R0
+        RET
+
+; ADD: adds its parameter to COUNT.
+        .ENTRY  ADD, ^M<>
+        ADDL2   4(AP), COUNT
+        RET
+
+        .END    START

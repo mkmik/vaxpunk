@@ -1,0 +1,427 @@
+MODULE LOCKING (IDENT = 'V0.1') =
+%TITLE 'The lock manager: resources, locks, and the order they are granted in'
+BEGIN
+!
+! The lock database of one node, as VMS's LOCKING (docs/adr/0030-lock-
+! manager-in-the-executive.md). A resource block (RSB) is a name, 1 to 31
+! bytes, qualified by the access mode and the UIC group, or the system's
+! for LCK$M_SYSTEM, found through a hash table. It has three queues of
+! lock blocks (LKBs): granted, converting, which keep their granted mode
+! while they wait, and waiting. A queue is granted in order, up to the
+! first lock that can't be, and the waiting queue only once no conversion
+! is left. A lock ID is an index in the lock ID table, with a sequence
+! number above it, so that a stale ID fails.
+!
+! $ENQ, $DEQ and process rundown call here at IPL$_SYNCH from
+! sysenqdeq.mar, which checks the caller's arguments, waits, and owns the
+! AST control block each request completes through: LCK$ENQ takes it for
+! a request that waits, and LCK$QPOST queues it to the lock's process,
+! which writes the status block, sets the event flag and queues the AST.
+! The first BLISS-64 in kernel mode.
+!
+! ponytail: no value blocks, no blocking ASTs, no sublocks, no deadlock
+! search, no ENQLM: a request that waits for its own process's other
+! waiting request waits until one is dequeued (ADR-0030).
+! ponytail: 128 hash chains that never grow, and rundown scans the lock ID
+! table; a bigger table, and a list per process, if locks get many.
+!
+LIBRARY 'SYS$LIBRARY:STARLET';
+LIBRARY 'SYS$LIBRARY:LIB';
+
+LINKAGE
+    ALLOC = JSB(REGISTER = 1; REGISTER = 2) : NOPRESERVE(1),
+    DEALLOC = JSB(REGISTER = 0, REGISTER = 1),
+    QPOST = JSB(REGISTER = 5, REGISTER = 2) : NOPRESERVE(2, 3);
+
+EXTERNAL ROUTINE
+    EXE$ALONONPAGED : ALLOC,
+    EXE$DEANONPGDSIZ : DEALLOC NOVALUE,
+    LCK$QPOST : QPOST NOVALUE;
+
+FIELD
+    RSB_FIELDS =
+        SET
+        RSB_HASHL = [0, 0, 32, 1],      ! the next RSB on its hash chain
+        RSB_GRQ = [4, 0, 32, 1],        ! the first granted LKB
+        RSB_CVQ = [8, 0, 32, 1],        ! converting
+        RSB_WTQ = [12, 0, 32, 1],       ! waiting
+        RSB_GROUP = [16, 0, 32, 1],     ! the UIC group, or -1, the system's
+        RSB_ACMODE = [20, 0, 8, 0],
+        RSB_NAMLEN = [21, 0, 8, 0]      ! the name follows, RSB_NAME
+        TES,
+    LKB_FIELDS =
+        SET
+        LKB_NEXT = [0, 0, 32, 1],       ! the next LKB on its queue
+        LKB_RSB = [4, 0, 32, 1],
+        LKB_PID = [8, 0, 32, 1],        ! its process
+        LKB_ID = [12, 0, 32, 1],
+        LKB_ACB = [16, 0, 32, 1],       ! a waiting request's ACB, else 0
+        LKB_STATE = [20, 0, 8, 0],      ! GRANTED, CONVERTING or WAITING
+        LKB_GRMODE = [21, 0, 8, 0],     ! the mode granted
+        LKB_RQMODE = [22, 0, 8, 0],     ! the mode asked for
+        LKB_ACMODE = [23, 0, 8, 0]      ! the access mode it belongs to
+        TES;
+
+LITERAL
+    RSB_NAME = 22,
+    RSB_LENGTH = 56,
+    LKB_LENGTH = 24,
+    ! The queues' heads in an RSB. LKB_NEXT is at 0, so a head reads as an
+    ! LKB whose next is the queue's first.
+    GRQ = 4,
+    CVQ = 8,
+    WTQ = 12,
+    GRANTED = 1,
+    CONVERTING = 2,
+    WAITING = 3,
+    HASHSIZE = 128,
+    IDBITS = 24,                        ! the index in a lock ID; the sequence is above it
+    ! Byte m: the modes compatible with mode m, a bit each.
+    COMPAT = %X'01030B071F3F';
+
+OWN
+    HASH : VECTOR[HASHSIZE, LONG, SIGNED],      ! the RSBs' hash chains
+    IDTBL : REF VECTOR[, LONG, SIGNED],         ! the lock ID table: LKBs by index, or 0
+    IDMAX,                                      ! its entries; index 0 isn't used
+    IDNEXT,                                     ! where the search for a free one starts
+    IDSEQ;                                      ! the last lock ID's sequence number
+
+! GET size: size bytes of nonpaged pool, zeroed, or 0.
+ROUTINE GET (SIZE) =
+    BEGIN
+    LOCAL
+        P;
+    IF NOT EXE$ALONONPAGED(.SIZE; P) THEN RETURN 0;
+    CH$FILL(0, .SIZE, .P);
+    .P
+    END;
+
+! COMPATIBLE a, b: 1 if a lock in mode a may be granted while another
+! holds mode b.
+ROUTINE COMPATIBLE (A, B) =
+    (COMPAT ^ (-(.A * 8 + .B))) AND 1;
+
+! APPEND head, lkb: puts lkb at the end of the queue at head.
+ROUTINE APPEND (HEAD, L : REF BLOCK[, BYTE] FIELD(LKB_FIELDS)) : NOVALUE =
+    BEGIN
+    LOCAL
+        P : REF BLOCK[, BYTE] FIELD(LKB_FIELDS);
+    P = .HEAD;
+    WHILE .P[LKB_NEXT] NEQ 0 DO
+        P = .P[LKB_NEXT];
+    P[LKB_NEXT] = .L;
+    L[LKB_NEXT] = 0
+    END;
+
+! UNLINK head, lkb: takes lkb off the queue at head.
+ROUTINE UNLINK (HEAD, L : REF BLOCK[, BYTE] FIELD(LKB_FIELDS)) : NOVALUE =
+    BEGIN
+    LOCAL
+        P : REF BLOCK[, BYTE] FIELD(LKB_FIELDS);
+    P = .HEAD;
+    WHILE .P[LKB_NEXT] NEQ .L DO
+        P = .P[LKB_NEXT];
+    P[LKB_NEXT] = .L[LKB_NEXT]
+    END;
+
+! HOLDS head, lkb, mode: 1 if a lock on the queue at head, other than
+! lkb, holds a mode that mode isn't compatible with.
+ROUTINE HOLDS (HEAD, L, MODE) =
+    BEGIN
+    LOCAL
+        P : REF BLOCK[, BYTE] FIELD(LKB_FIELDS);
+    P = .HEAD;
+    WHILE (P = .P[LKB_NEXT]) NEQ 0 DO
+        IF .P NEQA .L AND NOT COMPATIBLE(.MODE, .P[LKB_GRMODE]) THEN RETURN 1;
+    0
+    END;
+
+! GRANTABLE rsb, lkb, mode: 1 if lkb, or a new lock for 0, may have mode
+! with the locks the resource's granted and converting locks hold.
+ROUTINE GRANTABLE (R, L, MODE) =
+    NOT HOLDS(.R + GRQ, .L, .MODE) AND NOT HOLDS(.R + CVQ, .L, .MODE);
+
+! GRANT rsb, lkb: grants lkb, waiting or converting and off its queue, the
+! mode it asked for, and completes its request.
+ROUTINE GRANT (R, L : REF BLOCK[, BYTE] FIELD(LKB_FIELDS)) : NOVALUE =
+    BEGIN
+    L[LKB_GRMODE] = .L[LKB_RQMODE];
+    L[LKB_STATE] = GRANTED;
+    APPEND(.R + GRQ, .L);
+    LCK$QPOST(.L[LKB_ACB], SS$_NORMAL);
+    L[LKB_ACB] = 0
+    END;
+
+! REGRANT rsb: grants the conversions that now can be, in order, up to
+! the first that can't, then, if none is left, the waiting requests so.
+ROUTINE REGRANT (R : REF BLOCK[, BYTE] FIELD(RSB_FIELDS)) : NOVALUE =
+    BEGIN
+    LOCAL
+        P : REF BLOCK[, BYTE] FIELD(LKB_FIELDS);
+    WHILE (P = .R[RSB_CVQ]) NEQ 0 DO
+        BEGIN
+        IF NOT GRANTABLE(.R, .P, .P[LKB_RQMODE]) THEN RETURN;
+        UNLINK(.R + CVQ, .P);
+        GRANT(.R, .P)
+        END;
+    WHILE (P = .R[RSB_WTQ]) NEQ 0 DO
+        BEGIN
+        IF NOT GRANTABLE(.R, .P, .P[LKB_RQMODE]) THEN RETURN;
+        UNLINK(.R + WTQ, .P);
+        GRANT(.R, .P)
+        END
+    END;
+
+! CHAIN namlen, namadr: the address of the name's hash chain.
+ROUTINE CHAIN (NAMLEN, NAMADR : REF VECTOR[, BYTE]) =
+    BEGIN
+    LOCAL
+        H;
+    H = .NAMLEN;
+    INCR I FROM 0 TO .NAMLEN - 1 DO
+        H = .H * 31 + .NAMADR[.I];
+    HASH[.H AND (HASHSIZE - 1)]
+    END;
+
+! FINDRSB namlen, namadr, acmode, group: the resource the qualified name
+! names, made if there isn't one, or 0 if there is no pool for it.
+ROUTINE FINDRSB (NAMLEN, NAMADR, ACMODE, GROUP) =
+    BEGIN
+    LOCAL
+        HEAD : REF BLOCK[, BYTE] FIELD(RSB_FIELDS),
+        R : REF BLOCK[, BYTE] FIELD(RSB_FIELDS);
+    HEAD = CHAIN(.NAMLEN, .NAMADR);
+    R = .HEAD;
+    WHILE (R = .R[RSB_HASHL]) NEQ 0 DO
+        IF .R[RSB_NAMLEN] EQL .NAMLEN AND .R[RSB_ACMODE] EQL .ACMODE AND .R[RSB_GROUP] EQL .GROUP
+            AND CH$EQL(.NAMLEN, .NAMADR, .NAMLEN, .R + RSB_NAME)
+        THEN
+            RETURN .R;
+    R = GET(RSB_LENGTH);
+    IF .R EQL 0 THEN RETURN 0;
+    R[RSB_GROUP] = .GROUP;
+    R[RSB_ACMODE] = .ACMODE;
+    R[RSB_NAMLEN] = .NAMLEN;
+    CH$MOVE(.NAMLEN, .NAMADR, .R + RSB_NAME);
+    R[RSB_HASHL] = .HEAD[RSB_HASHL];
+    HEAD[RSB_HASHL] = .R;
+    .R
+    END;
+
+! FREERSB rsb: deletes the resource if no lock is left on it.
+ROUTINE FREERSB (R : REF BLOCK[, BYTE] FIELD(RSB_FIELDS)) : NOVALUE =
+    BEGIN
+    LOCAL
+        P : REF BLOCK[, BYTE] FIELD(RSB_FIELDS);
+    IF .R[RSB_GRQ] NEQ 0 OR .R[RSB_CVQ] NEQ 0 OR .R[RSB_WTQ] NEQ 0 THEN RETURN;
+    P = CHAIN(.R[RSB_NAMLEN], .R + RSB_NAME);
+    WHILE .P[RSB_HASHL] NEQ .R DO
+        P = .P[RSB_HASHL];
+    P[RSB_HASHL] = .R[RSB_HASHL];
+    EXE$DEANONPGDSIZ(.R, RSB_LENGTH)
+    END;
+
+! NEWID lkb: a lock ID for lkb, from a free entry of the lock ID table,
+! which doubles when it is full, or 0 if there is no pool for that.
+ROUTINE NEWID (L) =
+    BEGIN
+    LOCAL
+        NEW : REF VECTOR[, LONG, SIGNED],
+        SIZE,
+        I;
+    I = 0;
+    INCR N FROM 2 TO .IDMAX DO
+        BEGIN
+        IF .IDNEXT LEQ 0 OR .IDNEXT GEQ .IDMAX THEN IDNEXT = 1;
+        IF .IDTBL[.IDNEXT] EQL 0
+        THEN
+            BEGIN
+            I = .IDNEXT;
+            EXITLOOP
+            END;
+        IDNEXT = .IDNEXT + 1
+        END;
+    IF .I EQL 0
+    THEN
+        BEGIN
+        SIZE = .IDMAX * 2;
+        IF .SIZE EQL 0 THEN SIZE = 64;
+        IF .SIZE GTR (1 ^ IDBITS) THEN RETURN 0;
+        NEW = GET(.SIZE * 4);
+        IF .NEW EQL 0 THEN RETURN 0;
+        I = 1;
+        IF .IDMAX NEQ 0
+        THEN
+            BEGIN
+            CH$MOVE(.IDMAX * 4, .IDTBL, .NEW);
+            EXE$DEANONPGDSIZ(.IDTBL, .IDMAX * 4);
+            I = .IDMAX
+            END;
+        IDTBL = .NEW;
+        IDMAX = .SIZE
+        END;
+    IDTBL[.I] = .L;
+    IDNEXT = .I + 1;
+    IDSEQ = (.IDSEQ + 1) AND 127;
+    .I OR (.IDSEQ ^ IDBITS)
+    END;
+
+! FINDLKB id: the lock with that ID, or 0.
+ROUTINE FINDLKB (ID) =
+    BEGIN
+    LOCAL
+        I,
+        L : REF BLOCK[, BYTE] FIELD(LKB_FIELDS);
+    I = .ID AND ((1 ^ IDBITS) - 1);
+    IF .I EQL 0 OR .I GEQ .IDMAX THEN RETURN 0;
+    L = .IDTBL[.I];
+    IF .L EQL 0 THEN RETURN 0;
+    IF .L[LKB_ID] NEQ .ID THEN RETURN 0;
+    .L
+    END;
+
+! DEQUEUE lkb, post: dequeues the lock. A request of it that waits ends
+! with SS$_ABORT, or, for post 0, as its process goes, not at all. Grants
+! what that lets be granted.
+ROUTINE DEQUEUE (L : REF BLOCK[, BYTE] FIELD(LKB_FIELDS), POST) : NOVALUE =
+    BEGIN
+    LOCAL
+        ACB : REF BLOCK[, BYTE],
+        R : REF BLOCK[, BYTE] FIELD(RSB_FIELDS);
+    R = .L[LKB_RSB];
+    CASE .L[LKB_STATE] FROM GRANTED TO WAITING OF
+        SET
+        [GRANTED] : UNLINK(.R + GRQ, .L);
+        [CONVERTING] : UNLINK(.R + CVQ, .L);
+        [WAITING] : UNLINK(.R + WTQ, .L);
+        TES;
+    ACB = .L[LKB_ACB];
+    IF .ACB NEQ 0
+    THEN
+        IF .POST
+        THEN LCK$QPOST(.ACB, SS$_ABORT)
+        ELSE EXE$DEANONPGDSIZ(.ACB, .ACB[ACB$W_SIZE]);
+    IDTBL[.L[LKB_ID] AND ((1 ^ IDBITS) - 1)] = 0;
+    EXE$DEANONPGDSIZ(.L, LKB_LENGTH);
+    REGRANT(.R);
+    FREERSB(.R)
+    END;
+
+! LCK$ENQ pid, lkmode, lksb, flags, namlen, namadr, acmode, group, acb:
+! process pid's $ENQ, its arguments checked: a new lock on the resource
+! namlen bytes at namadr name, in acmode and UIC group group (-1 for the
+! system's), or with LCK$M_CONVERT a conversion of the lock lksb's lock
+! ID names, to lkmode. A new lock's ID goes in lksb. R0 = SS$_SYNCH if it
+! is granted now, for the caller to complete with acb; SS$_NORMAL if it
+! waits, and acb is the lock's until it is granted; or SS$_NOTQUEUED,
+! with LCK$M_NOQUEUE, SS$_IVLOCKID, SS$_CVTUNGRANT or SS$_INSFMEM, and
+! acb is still the caller's. IPL$_SYNCH.
+GLOBAL ROUTINE LCK$ENQ (PID, LKMODE, LKSB : REF BLOCK[, BYTE], FLAGS, NAMLEN, NAMADR, ACMODE, GROUP,
+    ACB) =
+    BEGIN
+    LOCAL
+        ID,
+        NOW,
+        R : REF BLOCK[, BYTE] FIELD(RSB_FIELDS),
+        L : REF BLOCK[, BYTE] FIELD(LKB_FIELDS);
+    IF (.FLAGS AND LCK$M_CONVERT) NEQ 0
+    THEN
+        BEGIN
+        L = FINDLKB(.LKSB[4, 0, 32, 1]);
+        IF .L EQL 0 THEN RETURN SS$_IVLOCKID;
+        IF .L[LKB_PID] NEQ .PID OR .L[LKB_ACMODE] LSSU .ACMODE THEN RETURN SS$_IVLOCKID;
+        IF .L[LKB_STATE] NEQ GRANTED THEN RETURN SS$_CVTUNGRANT;
+        R = .L[LKB_RSB];
+        IF .R[RSB_CVQ] EQL 0 AND GRANTABLE(.R, .L, .LKMODE)
+        THEN
+            BEGIN
+            L[LKB_GRMODE] = .LKMODE;
+            L[LKB_RQMODE] = .LKMODE;
+            REGRANT(.R);
+            RETURN SS$_SYNCH
+            END;
+        IF (.FLAGS AND LCK$M_NOQUEUE) NEQ 0 THEN RETURN SS$_NOTQUEUED;
+        UNLINK(.R + GRQ, .L);
+        L[LKB_RQMODE] = .LKMODE;
+        L[LKB_STATE] = CONVERTING;
+        L[LKB_ACB] = .ACB;
+        APPEND(.R + CVQ, .L);
+        LKSB[0, 0, 16, 0] = 0;
+        RETURN SS$_NORMAL
+        END;
+    R = FINDRSB(.NAMLEN, .NAMADR, .ACMODE, .GROUP);
+    IF .R EQL 0 THEN RETURN SS$_INSFMEM;
+    NOW = .R[RSB_CVQ] EQL 0 AND .R[RSB_WTQ] EQL 0 AND GRANTABLE(.R, 0, .LKMODE);
+    IF NOT .NOW AND (.FLAGS AND LCK$M_NOQUEUE) NEQ 0 THEN RETURN SS$_NOTQUEUED;
+    L = GET(LKB_LENGTH);
+    IF .L NEQ 0
+    THEN
+        BEGIN
+        ID = NEWID(.L);
+        IF .ID EQL 0
+        THEN
+            BEGIN
+            EXE$DEANONPGDSIZ(.L, LKB_LENGTH);
+            L = 0
+            END
+        END;
+    IF .L EQL 0
+    THEN
+        BEGIN
+        FREERSB(.R);
+        RETURN SS$_INSFMEM
+        END;
+    L[LKB_RSB] = .R;
+    L[LKB_PID] = .PID;
+    L[LKB_ID] = .ID;
+    L[LKB_ACMODE] = .ACMODE;
+    L[LKB_RQMODE] = .LKMODE;
+    LKSB[0, 0, 16, 0] = 0;
+    LKSB[2, 0, 16, 0] = 0;
+    LKSB[4, 0, 32, 0] = .ID;
+    IF .NOW
+    THEN
+        BEGIN
+        L[LKB_GRMODE] = .LKMODE;
+        L[LKB_STATE] = GRANTED;
+        APPEND(.R + GRQ, .L);
+        RETURN SS$_SYNCH
+        END;
+    L[LKB_STATE] = WAITING;
+    L[LKB_ACB] = .ACB;
+    APPEND(.R + WTQ, .L);
+    SS$_NORMAL
+    END;
+
+! LCK$DEQ pid, lkid, acmode: process pid's $DEQ of the lock lkid, in
+! acmode or an inner mode. A request of it that waits ends with
+! SS$_ABORT. R0 = SS$_NORMAL or SS$_IVLOCKID. IPL$_SYNCH.
+GLOBAL ROUTINE LCK$DEQ (PID, LKID, ACMODE) =
+    BEGIN
+    LOCAL
+        L : REF BLOCK[, BYTE] FIELD(LKB_FIELDS);
+    L = FINDLKB(.LKID);
+    IF .L EQL 0 THEN RETURN SS$_IVLOCKID;
+    IF .L[LKB_PID] NEQ .PID OR .L[LKB_ACMODE] LSSU .ACMODE THEN RETURN SS$_IVLOCKID;
+    DEQUEUE(.L, 1);
+    SS$_NORMAL
+    END;
+
+! LCK$DEQALL pid, acmode, post: dequeues process pid's locks of acmode
+! and the outer modes: $DEQ with LCK$M_DEQALL, and, with post 0, which
+! completes none of their requests, rundown. IPL$_SYNCH.
+GLOBAL ROUTINE LCK$DEQALL (PID, ACMODE, POST) : NOVALUE =
+    BEGIN
+    LOCAL
+        L : REF BLOCK[, BYTE] FIELD(LKB_FIELDS);
+    INCR I FROM 1 TO .IDMAX - 1 DO
+        BEGIN
+        L = .IDTBL[.I];
+        IF .L NEQ 0
+        THEN
+            IF .L[LKB_PID] EQL .PID AND .L[LKB_ACMODE] GEQU .ACMODE THEN DEQUEUE(.L, .POST)
+        END
+    END;
+
+END
+ELUDOM

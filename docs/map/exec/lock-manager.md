@@ -6,14 +6,22 @@ kind = "core"
 intent = "goal"
 research = "done"
 milestone = "m1"
-refs = ["docs/adr/0030-lock-manager-in-the-executive.md", "docs/prd/0003-multi-user-vms.md", "docs/adr/0020-file-system-lock-below-ipl-synch.md"]
+refs = ["docs/adr/0030-lock-manager-in-the-executive.md", "docs/prd/0003-multi-user-vms.md", "docs/adr/0020-file-system-lock-below-ipl-synch.md", "vms/exec/sysenqdeq.mar", "vms/exec/locking.b64", "vms/sysexe/locktest.mar"]
 
 [[feature]]
 id = "enq-deq"
-title = "$ENQ, $ENQW and $DEQ: a resource tree, six modes, conversions, the three queues"
+title = "$ENQ, $ENQW and $DEQ: six modes, conversions, the three queues, CONVERT and DEQALL"
+status = "done"
+milestone = "m1"
+note = "PRD-0003 step 6, tier 1 #5; sysenqdeq.mar and locking.b64, LOCKTEST at boot"
+
+[[feature]]
+id = "sublocks"
+title = "Parent locks: a tree of resources; SS$_SUBLOCKS, SS$_PARNOTGRANT"
 status = "todo"
 milestone = "m1"
-note = "PRD-0003 step 6, tier 1 #5; ADR-0030 designs it, nothing built"
+needs = ["#enq-deq"]
+note = "ADR-0030: $ENQ's parid is SS$_BADPARAM until a program needs it"
 
 [[feature]]
 id = "value-blocks"
@@ -25,16 +33,24 @@ note = "ADR-0030"
 
 [[feature]]
 id = "asts"
-title = "Completion and blocking ASTs; NOQUEUE, SYNCSTS"
+title = "Completion ASTs and event flags; NOQUEUE, SYNCSTS"
+status = "done"
+milestone = "m1"
+needs = ["#enq-deq"]
+note = "ADR-0030 decision 4: LCK$POST, a kernel mode AST in the lock's process"
+
+[[feature]]
+id = "blocking-asts"
+title = "Blocking ASTs to the holder of a lock that blocks another request"
 status = "todo"
 milestone = "m1"
 needs = ["#enq-deq"]
-note = "ADR-0030 decision 4"
+note = "ADR-0030 decision 4; $ENQ's blkast is SS$_BADPARAM until then"
 
 [[feature]]
 id = "qualified-names"
 title = "Names qualified by access mode and UIC group; LCK$M_SYSTEM takes SYSLCK"
-status = "todo"
+status = "done"
 milestone = "m1"
 needs = ["#enq-deq", "/exec/privileges"]
 note = "PRD-0003 *Lock manager*"
@@ -58,7 +74,7 @@ note = "ADR-0030 decision 3"
 [[feature]]
 id = "rundown"
 title = "Image rundown dequeues user mode locks; process rundown all of them"
-status = "todo"
+status = "done"
 milestone = "m1"
 needs = ["#enq-deq"]
 note = "ADR-0030 decision 6: in EXE$IMGRUNDOWN and EXE$RUNDOWN"
@@ -130,12 +146,17 @@ mastered on other nodes over SCS, which makes it the distributed lock
 manager; deadlocks are searched for after `DEADLOCK_WAIT` seconds.
 SDA's `SHOW LOCKS` and `MONITOR LOCK` show them.
 
-vaxpunk has none yet.
-[ADR-0030](../../adr/0030-lock-manager-in-the-executive.md) designs
-it as executive code for one node, PRD-0003's step 6: VMS's services,
-status block, modes and order of granting, a subset of the flags, the
-lock database in pool at `IPL$_SYNCH`, a deadlock search when a request
-waits, and the logic in BLISS-64, `vms/exec/locking.b64`, named after
-VMS's `LOCKING` execlet. `LOCKTEST` is to check it. Step 7 then puts the
-file system (`t8y:/files/fs-locking`, replacing `FIL$LOCK`) and RMS sharing
+vaxpunk's is executive code for one node,
+[ADR-0030](../../adr/0030-lock-manager-in-the-executive.md), PRD-0003's
+step 6. `$ENQ`, `$ENQW` and `$DEQ` (`vms/exec/sysenqdeq.mar`) check their
+arguments and call the lock database's logic at `IPL$_SYNCH`, in BLISS-64,
+`vms/exec/locking.b64`, named after VMS's `LOCKING` execlet: VMS's six
+modes, three queues and order of granting, its status block, completion
+ASTs and event flags, names qualified by access mode and UIC group or the
+system's, and the flags `CONVERT`, `NOQUEUE`, `SYNCSTS`, `SYSTEM` and
+`DEQALL`. Image rundown dequeues the user mode locks, process rundown the
+rest. `LOCKTEST` checks it at boot, in two processes. Not yet: value
+blocks, blocking ASTs, parent locks, the deadlock search, `ENQLM` and
+`$GETLKI`. That is what PRD-0003's step 7 needs to put the file system
+(`t8y:/files/fs-locking`, replacing `FIL$LOCK`) and RMS sharing
 (`t8y:/rms/sharing`) on it. The remote side waits for a cluster.
