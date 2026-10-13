@@ -843,14 +843,15 @@ FIL$CHKHDR::
 
 ; FIL$SEARCHDIR: R3 = a directory's header, R6 = a pattern, "NAME.TYPE"
 ; with * and % wildcards, R7 = its length, R8 = a version: -1 any, 0 the
-; highest, else that one, R9 = how many matching entries to skip. Finds
-; the next entry that matches, in the directory's order: R1 = its name,
-; in F11$AB_DIRBLK, R2 = the name's length, R4 = its version, R5 = its
-; file number, and its file ID in F11$GW_FID. R0 = SS$_NORMAL,
-; SS$_NOMOREFILES if there is none, or the disk's error. Holding FIL$LOCK.
-; Keeps every other register.
-; ponytail: the highest version is the first of a name's first record;
-; a name whose versions spill into a second record matches twice.
+; highest, else that one, R9 = 0, or the entry to go on after: a word,
+; its version, then its name, .ASCIC. Finds the next entry that matches,
+; in the directory's order, after R9's: in a name after its name, or in
+; its name below its version, but for the highest, which it was. R1 =
+; its name, in F11$AB_DIRBLK, R2 = the name's length, R4 = its version,
+; R5 = its file number, and its file ID in F11$GW_FID. R0 = SS$_NORMAL,
+; SS$_NOMOREFILES if there is none, or the disk's error. A name whose
+; versions spill into a second record is found once, as R9 passes it.
+; Holding FIL$LOCK. Keeps every other register.
 FIL$SEARCHDIR::
         .JSB_ENTRY  OUTPUT=<R2, R4, R5>
         PUSHR   #^M<R3, R6, R7, R8, R9, R10, R11>
@@ -876,27 +877,35 @@ FIL$SEARCHDIR::
         MOVZBL  5(R11), R2
         BSBW    FIL$MATCH
         BLBC    R0, 50$
-        ADDL3   #1, R2, R4              ; the first entry, past the even name
+        MOVZWL  #^XFFFF, R0             ; the versions it may be, up to R0
+        TSTL    R9
+        BEQL    25$
+        BSBW    KEYCMP
+        TSTL    R0
+        BLSS    50$                     ; before R9's name
+        BGTR    23$
+        TSTL    R8                      ; R9's name: below its version
+        BEQL    50$
+        MOVZWL  (R9), R0
+        DECL    R0
+        BRB     25$
+23$:    MOVZWL  #^XFFFF, R0
+25$:    ADDL3   #1, R2, R4              ; the first entry, past the even name
         BICL2   #1, R4
         ADDL2   R1, R4
-        MOVL    R4, R0                  ; the first entry
         MOVZWL  (R11), R5               ; past the record
         ADDL2   R11, R5
         ADDL2   #2, R5
+        TSTL    R8                      ; the highest: the first
+        BEQL    70$
 30$:    CMPL    R4, R5
         BGEQU   50$
+        CMPW    (R4), R0
+        BGTRU   45$
         TSTL    R8
-        BLSS    40$                     ; any version
-        TSTL    R8
-        BGTR    35$
-        CMPL    R4, R0                  ; the highest: the first only
-        BNEQ    50$
-        BRB     40$
-35$:    CMPW    (R4), R8
-        BNEQ    45$
-40$:    TSTL    R9
+        BLSS    70$                     ; any version
+        CMPW    (R4), R8
         BEQL    70$
-        DECL    R9
 45$:    ADDL2   #8, R4
         BRB     30$
 50$:    MOVZWL  (R11), R0               ; the next record
@@ -915,6 +924,25 @@ FIL$SEARCHDIR::
         BRB     95$
 90$:    MOVL    #SS$_NOMOREFILES, R0
 95$:    POPR    #^M<R3, R6, R7, R8, R9, R10, R11>
+        RSB
+
+; KEYCMP: R1 = a name, R2 = its length, R9 = FIL$SEARCHDIR's entry to go
+; on after. R0 = -1, 0 or 1 as the name sorts before the entry's, is
+; it, or sorts after it: byte by byte, a shorter name first, as
+; directories are sorted. Keeps every other register.
+KEYCMP:
+        .JSB_ENTRY
+        PUSHR   #^M<R1, R2, R3>
+        MOVZBL  2(R9), R0
+        CMPC5   R2, (R1), #0, R0, 3(R9)
+        BEQL    20$
+        BLSSU   10$
+        MOVL    #1, R0
+        BRB     30$
+10$:    MNEGL   #1, R0
+        BRB     30$
+20$:    CLRL    R0
+30$:    POPR    #^M<R1, R2, R3>
         RSB
 
 ; FIL$MATCH: R1 = a name, R2 = its length, R6 = a pattern, R7 = its

@@ -710,6 +710,92 @@ const LBR: Phase = Phase {
     ],
 };
 
+/// Wildcard directories on DKB0:, in a tree made for them, [W] with
+/// [W.A], [W.A.X] and [W.B], a file in each: DIRECTORY of the tree,
+/// [W...], of the directories in [W], [W.*], of one anywhere under it,
+/// [W...X], of [*], which is [000000] too, of every directory, and of
+/// [...] from [W.A]; two F$SEARCH streams, one inside the other; and a
+/// DELETE/LOG of the tree's files, after which there are none.
+const WILDCARDS: Phase = Phase {
+    name: "wildcards",
+    secs: 30,
+    steps: &[
+        (
+            "LBRTEST: ok",
+            1,
+            concat!(
+                "CREATE/DIRECTORY DKB0:[W.A.X]\rCREATE/DIRECTORY DKB0:[W.B]\r",
+                "COPY SYS$SYSDEVICE:[SYSMGR]WELCOME.TXT DKB0:[W]TOP.TMP\r",
+                "COPY SYS$SYSDEVICE:[SYSMGR]WELCOME.TXT DKB0:[W.A]ONE.TMP\r",
+                "COPY SYS$SYSDEVICE:[SYSMGR]WELCOME.TXT DKB0:[W.A.X]DEEP.TMP\r",
+                "COPY SYS$SYSDEVICE:[SYSMGR]WELCOME.TXT DKB0:[W.B]TWO.TMP\r",
+                "DIR DKB0:[W...]*.TMP\r",
+            ),
+        ),
+        (
+            "Grand total of 4 directories, 4 files.",
+            1,
+            "DIR DKB0:[W.*]\rDIR DKB0:[W...X]\rDIR DKB0:[*]SUB.DIR\r",
+        ),
+        (
+            "$ DIR DKB0:[*]SUB.DIR",
+            1,
+            "DIR DKB0:[000000...]NOTE.TXT\rSET DEFAULT DKB0:[W.A]\rDIR [...]\r",
+        ),
+        (
+            "Grand total of 2 directories, 3 files.",
+            2,
+            concat!(
+                "A = F$SEARCH(\"DKB0:[W...]*.TMP\", 1)\r",
+                "B = F$SEARCH(\"DKB0:[W]*.DIR\", 2)\r",
+                "C = F$SEARCH(\"DKB0:[W...]*.TMP\", 1)\r",
+                "WRITE SYS$OUTPUT \"STREAMS: \", A, \" \", B, \" \", C\r",
+                "SET DEFAULT DKB0:[000000]\r",
+            ),
+        ),
+        (
+            "STREAMS: DKB0:",
+            1,
+            "DELETE/LOG DKB0:[W...]*.TMP;*\rDIR DKB0:[W...]*.TMP\r",
+        ),
+    ],
+    lines: &[
+        concat!(
+            "Directory DKB0:[W]\n\nTOP.TMP;1\n\nTotal of 1 file.\n\n",
+            "Directory DKB0:[W.A]\n\nONE.TMP;1\n\nTotal of 1 file.\n\n",
+            "Directory DKB0:[W.A.X]\n\nDEEP.TMP;1\n\nTotal of 1 file.\n\n",
+            "Directory DKB0:[W.B]\n\nTWO.TMP;1\n\nTotal of 1 file.\n\n",
+            "Grand total of 4 directories, 4 files.",
+        ),
+        concat!(
+            "$ DIR DKB0:[W.*]\n\n",
+            "Directory DKB0:[W.A]\n\nONE.TMP;1           X.DIR;1\n\nTotal of 2 files.\n\n",
+            "Directory DKB0:[W.B]\n\nTWO.TMP;1\n\nTotal of 1 file.\n\n",
+            "Grand total of 2 directories, 3 files.",
+        ),
+        "$ DIR DKB0:[W...X]\n\nDirectory DKB0:[W.A.X]\n\nDEEP.TMP;1\n\nTotal of 1 file.\n",
+        "$ DIR DKB0:[*]SUB.DIR\n\nDirectory DKB0:[000000]\n\nSUB.DIR;1\n\nTotal of 1 file.\n",
+        concat!(
+            "$ DIR DKB0:[000000...]NOTE.TXT\n\n",
+            "Directory DKB0:[SUB.DEEP]\n\nNOTE.TXT;1\n\nTotal of 1 file.\n",
+        ),
+        concat!(
+            "$ DIR [...]\n\n",
+            "Directory DKB0:[W.A]\n\nONE.TMP;1           X.DIR;1\n\nTotal of 2 files.\n\n",
+            "Directory DKB0:[W.A.X]\n\nDEEP.TMP;1\n\nTotal of 1 file.\n\n",
+            "Grand total of 2 directories, 3 files.",
+        ),
+        "STREAMS: DKB0:[W]TOP.TMP;1 DKB0:[W]A.DIR;1 DKB0:[W.A]ONE.TMP;1",
+        concat!(
+            "%DELETE-I-FILDEL, DKB0:[W]TOP.TMP;1 deleted\n",
+            "%DELETE-I-FILDEL, DKB0:[W.A]ONE.TMP;1 deleted\n",
+            "%DELETE-I-FILDEL, DKB0:[W.A.X]DEEP.TMP;1 deleted\n",
+            "%DELETE-I-FILDEL, DKB0:[W.B]TWO.TMP;1 deleted\n",
+        ),
+        "$ DIR DKB0:[W...]*.TMP\n%DIRECT-W-NOFILES, no files found",
+    ],
+};
+
 /// The processes STARTUP and SNOOP ran, which print as they go, done long
 /// before: STARTUP's SLEEPER and SVCTEST's NAPPER say they hibernate
 /// before SLEEPER does, and the CPU then idles, taking clock interrupts.
@@ -839,6 +925,7 @@ const PHASES: &[Phase] = &[
     TPU,
     C,
     LBR,
+    WILDCARDS,
     STARTUP,
     USERS,
 ];
