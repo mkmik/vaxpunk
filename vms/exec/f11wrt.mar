@@ -15,7 +15,7 @@
 ; ponytail: no process default protection, SET PROTECTION/DEFAULT. A cluster is a block, and the bitmaps are a block each, so a
 ; volume has at most 4096 blocks and 4096 files; the index file grows
 ; IDXEXT headers at a time, as its bitmap allows; map pointers are format 2, and a directory is rewritten whole on each
-; change, so a version is entered in the first record with its name.
+; change.
 ;
         .LIBRARY "lib.mlb"
         .LIBRARY "starlet.mlb"
@@ -93,7 +93,7 @@ BITBLK: .BLKB   BLOCK                   ; a bitmap block, or the home block
 SBNUM:  .LONG   0                       ; the storage bitmap's block in it
 NEWHDR: .BLKB   BLOCK                   ; a header FIL$INIT makes
 ZEROS:  .BLKB   BLOCK                   ; an index file block not yet used
-RECBUF: .BLKB   BLOCK                   ; a directory record being made
+RECBUF: .BLKB   BLOCK+8                 ; a directory record being made, one entry too long at most
 DU_MODE:                                ; DIRUPD's: 0 enter, 1 remove
         .LONG   0
 DU_NAME:                                ; the name, NAME.TYPE, and its length
@@ -101,6 +101,10 @@ DU_NAME:                                ; the name, NAME.TYPE, and its length
 DU_VER: .LONG   0                       ; the version
 DU_FID: .BLKW   4                       ; the file ID, after the version
 DU_DONE:                                ; 1 once the name's record is written
+        .LONG   0
+DU_PEND:                                ; 1 if the version is below the name's record's
+        .LONG   0
+DU_LAST:                                ; the record EMIT appended last
         .LONG   0
 DU_OUT: .LONG   0, 0                    ; the directory being made: pool, its size
 DU_POS: .LONG   0                       ; the next byte of it
@@ -693,14 +697,17 @@ FIL$MKDIR::
 ; DU_MODE, DU_VER and DU_FID. Copies the directory's records into a block
 ; of pool, entering or removing the entry on the way, packs them into
 ; blocks again, and writes them back, extending the directory if it grew,
-; and its header, with its new end of file. R0 = SS$_NORMAL, or the
-; error, and the directory as it was. Uses R0-R5.
+; and its header, with its new end of file. A record holds at most
+; BLOCK-2 bytes, as the block's end word is always there; a name whose
+; versions fill it continues in the records after it, with the same name.
+; R0 = SS$_NORMAL, or the error, and the directory as it was. Uses R0-R5.
 DIRUPD:
         .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5>
         PUSHR   #^M<R6, R7, R8, R9, R10, R11>
         MOVL    R6, DU_NAME
         MOVL    R7, DU_NAME+4
         CLRL    DU_DONE
+        CLRL    DU_PEND
         CLRL    DU_POS
         MOVL    R3, R9                  ; the header
         MOVL    R9, R1
@@ -708,7 +715,7 @@ DIRUPD:
         ADDL2   #BLOCK-1, R0
         DIVL2   #BLOCK, R0
         MOVL    R0, R10                 ; the blocks in use
-        ADDL3   #2, R10, R1             ; and one more for a new record
+        ADDL3   #3, R10, R1             ; and two more for new records
         MULL2   #BLOCK, R1
         BSBW    EXE$ALONONPAGED
         BLBS    R0, 5$
@@ -746,8 +753,7 @@ DIRUPD:
         MOVL    #SS$_NOSUCHFILE, R0
         TSTL    DU_MODE
         BNEQ    90$
-        BSBW    NEWREC
-        BSBW    EMIT
+        BSBW    NEWENT
         BLBC    R0, 90$
 60$:    BSBW    ENDBLK
         DIVL3   #BLOCK, DU_POS, R10     ; the blocks it takes now
@@ -778,8 +784,8 @@ DIRUPD:
         RSB
 
 ; ONEREC: R8 = a directory record, and DIRUPD's. Copies it, entering the
-; new record before it, or the entry in it, or removing the entry from it.
-; R0 = SS$_NORMAL, or the error. Uses R0-R6.
+; new entry before it, or in it, splitting it if it gets too long, or
+; removing the entry from it. R0 = SS$_NORMAL, or the error. Uses R0-R6.
 ONEREC:
         .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5, R6>
         TSTL    DU_DONE
@@ -793,6 +799,12 @@ ONEREC:
         TSTL    DU_MODE                 ; the name's record
         BNEQ    10$
         BSBW    ADDENTRY
+        TSTL    R0
+        BEQL    30$
+        BLBC    R0, 90$
+        CMPL    R2, #BLOCK-2
+        BLEQU   15$
+        BSBW    RECSPLIT
         BLBC    R0, 90$
         BRB     15$
 10$:    BSBW    DELENTRY
@@ -804,17 +816,71 @@ ONEREC:
 18$:    MOVL    #1, DU_DONE
         MOVL    #SS$_NORMAL, R0
         RSB
-20$:    TSTL    DU_MODE                 ; past it: a new record goes here
+20$:    TSTL    DU_MODE                 ; past it: a new entry goes here
         BNEQ    50$
-        BSBW    NEWREC
-        BSBW    EMIT
+        BSBW    NEWENT
         BLBC    R0, 90$
         MOVL    #1, DU_DONE
+        BRB     50$
+30$:    MOVL    #1, DU_PEND             ; below its versions: in the next
 50$:
         MOVL    R8, R1
         MOVZWL  (R8), R2
         ADDL2   #2, R2
         BRW     EMIT
+90$:    RSB
+
+; NEWENT: puts DU_VER's entry after the name's records, which end in the
+; record EMIT appended last if DU_PEND says so: in it, if its block has
+; room, else in a new record. R0 = SS$_NORMAL, or EMIT's error. Uses R0-R6.
+NEWENT:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5, R6>
+        TSTL    DU_PEND
+        BEQL    10$
+        BICL3   #^C<BLOCK-1>, DU_POS, R0
+        ADDL2   #8, R0
+        CMPL    R0, #BLOCK-2
+        BGTRU   10$
+        ADDL3   DU_OUT, DU_POS, R6
+        BSBB    PUTENTRY
+        ADDL2   #8, DU_POS
+        MOVL    DU_LAST, R1
+        ADDW2   #8, (R1)
+        MOVL    #SS$_NORMAL, R0
+        RSB
+10$:    BSBW    NEWREC
+        BRW     EMIT
+
+; RECSPLIT: R1 = RECBUF, a record ADDENTRY made, R2 = its length, too long.
+; Emits a record with the higher half of its entries: R1 = one with the
+; rest, at its end in RECBUF, R2 = its length. R0 = SS$_NORMAL, or EMIT's
+; error. Uses R0-R6.
+RECSPLIT:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5, R6>
+        MOVAB   RECBUF, R3
+        MOVZBL  5(R3), R4
+        INCL    R4
+        BICL2   #1, R4
+        ADDL2   #6, R4                  ; the head
+        SUBL3   R4, R2, R5              ; the entries
+        ADDL2   #8, R5
+        ASHL    #-4, R5, R5
+        ASHL    #3, R5, R5              ; the higher half of them
+        SUBL3   R5, R2, R6              ; the second record's length
+        ADDL3   R4, R5, R2              ; the first's
+        SUBW3   #2, R2, (R3)
+        PUSHR   #^M<R4, R5, R6>
+        MOVL    R3, R1
+        BSBW    EMIT
+        POPR    #^M<R4, R5, R6>
+        BLBC    R0, 90$
+        PUSHL   R6
+        MOVAB   RECBUF[R5], R6          ; the head again, before the rest
+        MOVC3   R4, RECBUF, (R6)
+        MOVL    R6, R1
+        MOVL    (SP)+, R2
+        SUBW3   #2, R2, (R1)
+        MOVL    #SS$_NORMAL, R0
 90$:    RSB
 
 ; COMPARE: R1 = a name, R2 = its length. R0 = -1, 0 or 1 as it sorts
@@ -905,7 +971,8 @@ RECHEAD:
 ; ADDENTRY: R8 = DU_NAME's record. Makes it in RECBUF with an entry for
 ; DU_FID, version DU_VER, or one above the record's first, the highest, if
 ; that is 0; versions go from highest to lowest. R1 = RECBUF, R2 = its
-; length, R0 = SS$_NORMAL, SS$_DUPFILENAME or SS$_BADFILEVER. Uses R0-R6.
+; length, R0 = SS$_NORMAL, SS$_DUPFILENAME, SS$_BADFILEVER, or 0 if
+; DU_VER is below all the record's versions. Uses R0-R6.
 ADDENTRY:
         .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5, R6>
         BSBB    RECHEAD
@@ -923,7 +990,9 @@ ADDENTRY:
         BEQL    80$
         MOVQ    (R4)+, (R6)+
         BRB     10$
-20$:    BSBB    PUTENTRY                ; the new one
+20$:    CMPL    R4, R5                  ; below them all: not here
+        BGEQU   87$
+        BSBB    PUTENTRY                ; the new one
 30$:    CMPL    R4, R5                  ; the lower ones
         BGEQU   40$
         MOVQ    (R4)+, (R6)+
@@ -934,6 +1003,8 @@ ADDENTRY:
 80$:    MOVL    #SS$_DUPFILENAME, R0
         RSB
 85$:    MOVL    #SS$_BADFILEVER, R0
+        RSB
+87$:    CLRL    R0
         RSB
 
 ; DELENTRY: R8 = DU_NAME's record. Makes it in RECBUF without the entry
@@ -963,21 +1034,22 @@ DELENTRY:
 40$:    RSB
 
 ; EMIT: R1 = a directory record, R2 = its length. Appends it to the
-; directory being made, in the next block if it doesn't fit in this one.
-; R0 = SS$_NORMAL, or SS$_BADIRECTORY if it doesn't fit in a block. Uses
-; R0-R5.
+; directory being made, in the next block if it doesn't fit in this one
+; before its end word, and DU_LAST. R0 = SS$_NORMAL, or SS$_BADIRECTORY if
+; it doesn't fit in a block. Uses R0-R5.
 EMIT:
         .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5>
-        CMPL    R2, #BLOCK
+        CMPL    R2, #BLOCK-2
         BGTRU   80$
         BICL3   #^C<BLOCK-1>, DU_POS, R0
         ADDL2   R2, R0
-        CMPL    R0, #BLOCK
+        CMPL    R0, #BLOCK-2
         BLEQU   10$
         PUSHR   #^M<R1, R2>
         BSBB    ENDBLK
         POPR    #^M<R1, R2>
 10$:    ADDL3   DU_OUT, DU_POS, R3
+        MOVL    R3, DU_LAST
         ADDL2   R2, DU_POS
         MOVC3   R2, (R1), (R3)
         MOVL    #SS$_NORMAL, R0
@@ -985,9 +1057,8 @@ EMIT:
 80$:    MOVL    #SS$_BADIRECTORY, R0
         RSB
 
-; ENDBLK: ends the block being made, with a record size of all ones if
-; there is room for it, and starts the next. The first block always has
-; one. Uses R0-R1.
+; ENDBLK: ends the block being made, with a record size of all ones, and
+; starts the next. The first block always has one. Uses R0-R1.
 ENDBLK:
         .JSB_ENTRY
         BICL3   #^C<BLOCK-1>, DU_POS, R0
@@ -1114,7 +1185,7 @@ FIL$INIT::
         MOVW    #HDRLBN+1, 20(R1)       ; backup index file header VBN
         MOVW    #HDRLBN, 22(R1)         ; index file bitmap VBN
         MOVL    #HDRLBN-1, 24(R1)       ; and LBN
-        MOVL    #HEADERS, 28(R1)        ; maximum files
+        MOVL    #BITS, 28(R1)           ; maximum files: what the bitmap holds, FIL$CREHDR's limit
         MOVW    #1, 32(R1)              ; index file bitmap blocks
         MOVW    #9, 34(R1)              ; reserved files
         MOVL    VOLOWNER, 44(R1)        ; volume owner

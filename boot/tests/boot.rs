@@ -587,17 +587,22 @@ const BACKUP: Phase = Phase {
     ],
 };
 
-/// RMSTEST in a directory of its own on DKB0:, whose output must be
-/// OpenVMS's, vms/sysexe/rmstest.out (checked after the session).
+/// SPILLTEST.COM, a name with more versions than one directory record
+/// holds, on DKB0:; then RMSTEST in a directory of its own there, whose
+/// output must be OpenVMS's, vms/sysexe/rmstest.out (checked after the
+/// session).
 const RMS: Phase = Phase {
     name: "rms",
-    secs: 60,
+    secs: 90,
     steps: &[(
         "NEW.TXT;2           [1,4]               (RWED,RWED,RE,RE)",
         1,
-        "CREATE/DIRECTORY DKB0:[RMS]\rSET DEFAULT DKB0:[RMS]\rRUN RMSTEST\rSET DEFAULT DKB0:[000000]\r",
+        concat!(
+            "@SYS$MANAGER:SPILLTEST\r",
+            "CREATE/DIRECTORY DKB0:[RMS]\rSET DEFAULT DKB0:[RMS]\rRUN RMSTEST\rSET DEFAULT DKB0:[000000]\r",
+        ),
     )],
-    lines: &["RMSTEST done"],
+    lines: &["SPILLTEST: ok", "RMSTEST done"],
 };
 
 /// EDIT/TPU/NODISPLAY runs a command file CREATE makes on DKB0:: TPU
@@ -1140,6 +1145,11 @@ fn boot() {
         let (saved, restored) = (bytes(&mut img, saved), bytes(&mut img, restored));
         assert_eq!(saved, restored, "[RESTORED]{name}");
     }
+    assert_eq!(
+        img.lookup("[SPILL]V.TXT").ok(),
+        img.lookup("[SPILL]V.TXT;69").ok()
+    );
+    assert!(img.lookup("[SPILL]V.TXT;1").is_ok() && img.lookup("[SPILL]V.TXT;70").is_err());
     for file in ["[RMS]REL.REL", "[RMS]RELF.REL"] {
         let fid = img.lookup(file).unwrap();
         let report = img.check_file(fid).unwrap();

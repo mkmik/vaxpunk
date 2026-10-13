@@ -54,9 +54,9 @@ note = "PRD-0003 tier 1 #8; rms.mar's $CREATE_DIR takes none"
 [[feature]]
 id = "spilled-versions"
 title = "A name whose versions fill more than one directory record"
-status = "todo"
+status = "done"
 milestone = "m1"
-note = "PRD-0003 tier 2 #15: FIL$SEARCHDIR goes on by name and finds it once, but f11wrt.mar never splits a record"
+note = "PRD-0003 tier 2 #15: f11wrt.mar splits a full record (RECSPLIT); FIL$SEARCHDIR goes on by name and finds it once"
 
 [[feature]]
 id = "dir-insert"

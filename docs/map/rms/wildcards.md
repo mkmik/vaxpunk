@@ -36,10 +36,10 @@ note = "It goes on after the resultant string's file, as VMS's XQP does with FIB
 [[feature]]
 id = "spilled-versions"
 title = "A name whose versions fill several directory records found once"
-status = "todo"
+status = "done"
 milestone = "m1"
 needs = ["/files/ods2#spilled-versions"]
-note = "PRD-0003 tier 2 #15: FIL$SEARCHDIR goes on by name, so it should; untested until f11wrt.mar can make one"
+note = "PRD-0003 tier 2 #15: SPILLTEST.COM, in the boot test, checks it"
 
 [[feature]]
 id = "streams"
