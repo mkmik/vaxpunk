@@ -103,6 +103,9 @@ lives in the URL after `#`, so back, forward and links work:
   met or not; soft needs dashed, needs on the map's missing labels and
   fuzzy needs in grey. On the right, what needs it. Curves join them to
   the card; on a narrow screen they stack without curves. Clicking a
+  feature's row keeps lit only the needs it has (its own and the whole
+  component's) and points their curves at its row; clicking it again
+  shows them all. Clicking a
   neighbour re-centres on it, and a trail shows where you've been.
   Wanted work, here and in the roadmap, has a copy button: it puts a
   prompt for an agent on the clipboard, with the work's title, label,

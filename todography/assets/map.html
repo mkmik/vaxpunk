@@ -236,6 +236,7 @@ a.node:hover { text-decoration: none; border-color: var(--ink); }
 .node.soft { border-style: dashed; }
 .node.unmet { border-left: 3px solid var(--accent); }
 .node.inactive, .node.nw { opacity: 0.62; }
+.node.dim { opacity: 0.3; }
 .node.fuzzy { background: transparent; border: 1px dotted var(--line-strong); color: var(--muted); }
 .node.missing { background: transparent; border-style: dashed; }
 .node .nh { display: flex; gap: 6px; align-items: baseline; }
@@ -267,6 +268,8 @@ a.node:hover { text-decoration: none; border-color: var(--ink); }
 .feat:first-child { border-top: 0; }
 .feat > .sq { margin-top: 4px; }
 .feat.hl { background: var(--accent-bg); }
+.feats .feat { cursor: pointer; }
+.feats .feat:not(.hl):hover { background: var(--bg); }
 .feat .fb { min-width: 0; flex: 1; }
 .feat .ft { overflow-wrap: anywhere; }
 .feat .fid { color: var(--muted); margin: 0 4px; }
@@ -1041,7 +1044,7 @@ function renderFocus(root) {
   }
   pushTrail(label);
   const wrap = h("div", { class: "focus", id: "focus" });
-  add(wrap, svg("svg", { class: "edges", "aria-hidden": "true" }), needsColumn(c), card(c), neededByColumn(c));
+  add(wrap, svg("svg", { class: "edges", "aria-hidden": "true" }), needsColumn(c, feat), card(c), neededByColumn(c));
   add(root, trailEl(), wrap);
   raf(drawFocusEdges);
   if (feat) {
@@ -1070,7 +1073,7 @@ function rankNeed(c, lines) {
   return hard.some(n => !n.met) ? 0 : 1;
 }
 
-function needsColumn(c) {
+function needsColumn(c, feat) {
   const groups = [], byKey = new Map(), fuzzy = [];
   for (const n of c.needs) {
     if (n.fuzzy) { fuzzy.push(n); continue; }
@@ -1084,9 +1087,15 @@ function needsColumn(c) {
   groups.sort((a, b) => a.rank - b.rank);
   const col = h("div", { class: "col col-needs" }, h("h3", { class: "col-h" }, "Needs (" + (groups.length + fuzzy.length) + ")"));
   if (!groups.length && !fuzzy.length) add(col, h("p", { class: "empty" }, "Needs nothing on the map."));
-  for (const g of groups) add(col, needNode(c, g));
+  // A need without a feature is the whole component's, so every feature has it.
+  const mine = n => !feat || !n.from_feature || n.from_feature === feat;
+  for (const g of groups) {
+    const node = needNode(c, g);
+    if (!g.lines.some(mine)) node.classList.add("dim");
+    add(col, node);
+  }
   for (const n of fuzzy) {
-    add(col, h("div", { class: "node fuzzy edge", "data-edge": "fuzzy" },
+    add(col, h("div", { class: "node fuzzy edge" + (mine(n) ? "" : " dim"), "data-edge": "fuzzy" },
       h("span", { class: "nh" }, h("span", { class: "nt" }, n.fuzzy)),
       h("span", { class: "nl" }, "not researched yet" + (n.soft ? ", soft" : "")),
       n.why ? h("span", { class: "why" }, n.why) : null));
@@ -1303,16 +1312,24 @@ function featureRow(c, f) {
       : n.met ? h("span", { class: "mk met" }, "met") : h("span", { class: "mk unmet" }, "not met");
     return h("span", null, compLink(l), mark ? [" ", mark] : null);
   });
-  return h("li", { class: "feat s-" + f.status, id: "f-" + f.id },
+  const pick = focusHref(featOf(state.focus || "") === f.id ? c.label : c.label + "#" + f.id);
+  // The whole row picks the feature; links inside it, and selecting text, keep working.
+  const row = h("li", { class: "feat s-" + f.status, id: "f-" + f.id },
     statusBox(f.status),
     h("div", { class: "fb" },
-      h("div", { class: "ft" }, h("span", null, f.title), h("code", { class: "fid" }, "#" + f.id),
+      h("div", { class: "ft" }, h("span", null, f.title), h("a", { class: "fid", href: pick,
+          title: "Show only the needs of this feature; click again for all" }, h("code", null, "#" + f.id)),
         f.status === "wip" ? chip(null, "in progress", "s-wip") : null, " ",
         f.milestone ? chip(null, f.milestone, null, ms ? ms.title : null) : null),
       f.note ? h("div", { class: "fnote" }, f.note) : null,
       f.refs.length ? h("div", { class: "fnote" }, commas(f.refs.map(refEl))) : null,
       needs.length ? h("div", { class: "fneeds" }, "Needs ", commas(needs)) : null,
       f.status !== "done" && f.status !== "dropped" ? workState(w) : null));
+  row.addEventListener("click", e => {
+    if (e.target.closest("a, button, input") || String(window.getSelection())) return;
+    location.hash = pick;
+  });
+  return row;
 }
 
 function whySection(c) {
@@ -1365,9 +1382,13 @@ function drawFocusEdges() {
     node.addEventListener("mouseenter", () => p.classList.add("hot"));
     node.addEventListener("mouseleave", () => p.classList.remove("hot"));
   };
-  for (const n of wrap.querySelectorAll(".col-needs .edge")) {
+  // With a feature picked, its needs point at its row instead of the card's top.
+  const row = featOf(state.focus || "") && document.getElementById("f-" + featOf(state.focus));
+  const rr = row && row.getBoundingClientRect();
+  const to = rr ? { x: L.x, y: rr.top - r0.top + 14 } : L;
+  for (const n of wrap.querySelectorAll(".col-needs .edge:not(.dim)")) {
     const r = n.getBoundingClientRect();
-    link(n, curve({ x: r.right - r0.left, y: r.top - r0.top + Math.min(16, r.height / 2) }, L));
+    link(n, curve({ x: r.right - r0.left, y: r.top - r0.top + Math.min(16, r.height / 2) }, to));
   }
   for (const n of wrap.querySelectorAll(".col-by .edge")) {
     const r = n.getBoundingClientRect();
