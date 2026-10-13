@@ -54,7 +54,7 @@ const BOOT: Phase = Phase {
         "%MOUNT-I-MOUNTED, RAM mounted on _MDA0:",
         "%SYSTEM-W-NOHOMEBLK, Files-11 home block not found on volume",
         "  SYSTEM       job terminated at ",
-        "  vaxpunk, an OpenVMS clone for arm64\n\nUsername: NOBODY\nPassword: \nUser authorization failure\n",
+        "  vaxpunk, an OpenVMS clone for arm64. Log in as SYSTEM, password MANAGER\n\nUsername: NOBODY\nPassword: \nUser authorization failure\n",
         "\tWelcome to vaxpunk arm64 Operating System, Version V0.1\n\t1 failure since last successful login\n",
     ],
 };
