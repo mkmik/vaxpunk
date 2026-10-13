@@ -1,0 +1,200 @@
+MODULE BACK (IDENT = 'V0.1') =
+%TITLE 'FORMS: the back translator, the tree as IFDL'
+BEGIN
+!
+! BT_WRITE prints the tree in ITEMS as IFDL, as BACK_TRANSLATE writes a
+! .FORM file's form: keywords with their first letter in capitals, as
+! DECforms's back translator writes them, names in capitals, strings in
+! double quotes. A rule the grammar marks with @ starts a line, indented
+! four more than the line rule it is in; what follows it in the rule
+! around it starts a line too, back at that rule's indentation, so that
+! END FORM lines up with its FORM. A comment is a line of its own,
+! before what it was before.
+! ponytail: a line is never folded, however long it is.
+!
+REQUIRE 'FORMS';
+REQUIRE 'FIO';
+
+LITERAL
+    LINEMAX = 4096;
+
+OWN
+    CHAN,                               ! the file being written
+    LINE : VECTOR[LINEMAX, BYTE],       ! the line being made
+    LLEN,
+    OPEN,                               ! something is on the line
+    NEWLINE,                            ! the next token starts a line
+    INDENT,                             ! indented this many levels
+    NOSPACE,                            ! no blank after the last token
+    WRITEOK;
+
+! PUT text, length: bytes for the file.
+ROUTINE PUT (S, L) : NOVALUE =
+    IF NOT FIO$WRITE(.CHAN, .S, .L) THEN WRITEOK = FALSE;
+
+! FLUSH: ends the line.
+ROUTINE FLUSH : NOVALUE =
+    BEGIN
+    LINE[.LLEN] = 10;
+    PUT(LINE, .LLEN + 1);
+    LLEN = 0;
+    OPEN = FALSE
+    END;
+
+! EMIT text, length, attached: puts a token on the line; attached, with
+! no blank before it. A token too long for the line goes out as it is.
+ROUTINE EMIT (S, L, ATTACH) : NOVALUE =
+    BEGIN
+    IF .NEWLINE
+    THEN
+        BEGIN
+        IF .OPEN THEN FLUSH();
+        INCR I FROM 1 TO .INDENT * 4 DO (LINE[.LLEN] = %C' '; LLEN = .LLEN + 1);
+        NEWLINE = FALSE
+        END
+    ELSE IF .OPEN AND NOT .ATTACH AND NOT .NOSPACE
+    THEN
+        (LINE[.LLEN] = %C' '; LLEN = .LLEN + 1);
+    IF .LLEN + .L GEQ LINEMAX - 1
+    THEN
+        BEGIN
+        PUT(LINE, .LLEN);
+        PUT(.S, .L);
+        LLEN = 0
+        END
+    ELSE
+        BEGIN
+        CH$MOVE(.L, .S, LINE[.LLEN]);
+        LLEN = .LLEN + .L
+        END;
+    OPEN = TRUE;
+    NOSPACE = FALSE
+    END;
+
+! KEYWORD keyword: puts it on the line, its first letter in capitals.
+ROUTINE KEYWORD (K) : NOVALUE =
+    BEGIN
+    LOCAL
+        A,
+        L,
+        W : VECTOR[64, BYTE],
+        C;
+    A = .KWADDR[.K];
+    L = .KWLEN[.K];
+    IF (.KWFLAGS[.K] AND KF_ATTACH) NEQ 0 THEN (A = .A + 1; L = .L - 1);
+    C = GETB(.A);
+    IF .C EQL %C')' OR .C EQL %C',' OR .C EQL %C'.'
+    THEN
+        EMIT(.A, .L, TRUE)
+    ELSE IF .C EQL %C'%' OR NOT (.C GEQU %C'A' AND .C LEQU %C'Z')
+    THEN
+        EMIT(.A, .L, (.KWFLAGS[.K] AND KF_ATTACH) NEQ 0)
+    ELSE
+        BEGIN
+        L = MIN(.L, 64);
+        INCR I FROM 0 TO .L - 1 DO
+            BEGIN
+            C = GETB(.A + .I);
+            IF .I GTR 0 AND .C GEQU %C'A' AND .C LEQU %C'Z' THEN C = .C + 32;
+            W[.I] = .C
+            END;
+        EMIT(W, .L, FALSE)
+        END;
+    ! Nothing after an opening parenthesis or a period.
+    C = GETB(.A);
+    IF .L EQL 1 AND (.C EQL %C'(' OR .C EQL %C'.') THEN NOSPACE = TRUE
+    END;
+
+! STRING item: a string leaf in double quotes, a quote in it doubled.
+ROUTINE STRING (I) : NOVALUE =
+    BEGIN
+    LOCAL
+        BUF,
+        N;
+    BUF = MEM(ILEN(.I) * 2 + 2);
+    PUTB(.BUF, %C'"');
+    N = 1;
+    INCR Q FROM 0 TO ILEN(.I) - 1 DO
+        BEGIN
+        LOCAL
+            C;
+        C = GETB(ITXT(.I) + .Q);
+        PUTB(.BUF + .N, .C);
+        N = .N + 1;
+        IF .C EQL %C'"' THEN (PUTB(.BUF + .N, .C); N = .N + 1)
+        END;
+    PUTB(.BUF + .N, %C'"');
+    EMIT(.BUF, .N + 1, FALSE)
+    END;
+
+! PRINT rule item, depth: the rule's tokens; depth is the indentation of
+! the line rule it is (or is in).
+ROUTINE PRINT (I, DEPTH) : NOVALUE =
+    BEGIN
+    LOCAL
+        J;
+    J = .I + 1;
+    WHILE .J LSS IEND(.I) DO
+        BEGIN
+        CASE IKIND(.J) FROM IT_RULE TO IT_COMMENT OF
+            SET
+            [IT_RULE]:
+                IF (.RFLAGS[IID(.J)] AND RF_LINE) NEQ 0
+                THEN
+                    BEGIN
+                    NEWLINE = TRUE;
+                    INDENT = .DEPTH + 1;
+                    PRINT(.J, .DEPTH + 1);
+                    NEWLINE = TRUE;
+                    INDENT = .DEPTH
+                    END
+                ELSE
+                    PRINT(.J, .DEPTH);
+            [IT_KW]:
+                KEYWORD(IID(.J));
+            [IT_STR]:
+                STRING(.J);
+            [IT_NAME, IT_IMP]:
+                BEGIN
+                LOCAL
+                    W : VECTOR[256, BYTE],
+                    L;
+                L = MIN(ILEN(.J), 256);
+                INCR Q FROM 0 TO .L - 1 DO W[.Q] = UPPER(GETB(ITXT(.J) + .Q));
+                EMIT(W, .L, FALSE)
+                END;
+            [IT_NUM, IT_PIC]:
+                EMIT(ITXT(.J), ILEN(.J), FALSE);
+            [IT_COMMENT]:
+                BEGIN
+                NEWLINE = TRUE;
+                EMIT(ITXT(.J), ILEN(.J), FALSE);
+                NEWLINE = TRUE
+                END;
+            TES;
+        J = INEXT(.J)
+        END
+    END;
+
+! BT_WRITE name, length: writes the tree as IFDL in the file; whether it
+! could (it said why not).
+GLOBAL ROUTINE BT_WRITE (NAME, NLEN) =
+    BEGIN
+    IF NOT FIO$OPEN(.NAME, .NLEN, FIO$K_WRITE, CHAN)
+    THEN
+        (MS_MSG(FORMS$_OPENOUT, -1, 0, .NAME, .NLEN); RETURN FALSE);
+    LLEN = 0;
+    OPEN = FALSE;
+    NEWLINE = TRUE;
+    INDENT = 0;
+    NOSPACE = FALSE;
+    WRITEOK = TRUE;
+    PRINT(0, 0);
+    IF .OPEN THEN FLUSH();
+    FIO$CLOSE(.CHAN);
+    IF NOT .WRITEOK THEN (MS_MSG(FORMS$_OPENOUT, -1, 0, .NAME, .NLEN); RETURN FALSE);
+    TRUE
+    END;
+
+END
+ELUDOM

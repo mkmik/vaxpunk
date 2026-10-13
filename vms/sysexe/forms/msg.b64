@@ -1,0 +1,465 @@
+MODULE MSG (IDENT = 'V0.1') =
+%TITLE 'FORMS: messages, the listing and memory'
+BEGIN
+!
+! Messages as DECforms's translator writes them: %FORMS-E-IDENT, text,
+! the text with its !AS parameters put in, after the source line it is
+! about, numbered as OUTPUTSRC numbers it, and a ^ under the place. A
+! message's condition value is DECforms's (forms.r64), and the worst
+! one is the status FORMS exits with. After /ERROR_LIMIT errors (30 by
+! default) the translation stops: ERRLIMREA, then TRANABORT. /LIST's
+! listing has the source, each message after its line, and then the
+! counts: Source Code Listing and Translation Statistics, as DECforms's
+! has them.
+! ponytail: the listing has no pages and no Structure Layout Listing,
+! which needs the records' layout (the Form Manager's work,
+! t8y:/layered/decforms#form-manager).
+!
+REQUIRE 'FORMS';
+REQUIRE 'FIO';
+
+BUILTIN
+    ACTUALCOUNT;
+
+GLOBAL
+    MS_NOWARN,                          ! /NOWARNINGS: no W or I messages but -FORMS- ones
+    MS_LIMIT : INITIAL (30);            ! /ERROR_LIMIT
+
+OWN
+    WORST,                              ! the worst message's value, or 0
+    NERR,                               ! how many messages of each severity
+    NWARN,
+    NINFO,
+    LOGGING,                            ! keep the messages for the listing
+    LOG : REF VECTOR,                   ! three quadwords a message: its line, text, length
+    NLOG,
+    LOGCAP,
+    HOLDING,                            ! MS_HOLD: messages kept until MS_RELEASE
+    HELD : REF VECTOR,                  ! eight quadwords a message: MS_MSG's arguments
+    NHELD,                              ! and how many it had
+    HELDCAP;
+
+MACRO
+    M(CODE, ID, TX) = CODE, UPLIT BYTE (ID), %CHARCOUNT(ID), UPLIT BYTE (TX), %CHARCOUNT(TX) %;
+
+BIND
+    MSGS = UPLIT (
+        M(FORMS$_OPENIN, 'OPENIN', 'error opening !AS as input.'),
+        M(FORMS$_OPENOUT, 'OPENOUT', 'error opening !AS as output.'),
+        M(FORMS$_WRITEFORM, 'WRITEFORM', 'error writing output form file !AS.'),
+        M(FORMS$_BADFORM, 'BADFORM', 'form file is invalid.'),
+        M(FORMS$_GETVM, 'GETVM', 'error allocating virtual memory.'),
+        M(FORMS$_FATINTERR, 'FATINTERR', 'fatal Internal Error.'),
+        M(FORMS$_TRANSLATED, 'TRANSLATED', 'file !AS translated to !AS.'),
+        M(FORMS$_BACKXLATED, 'BACKXLATED', 'file !AS back-translated to !AS'),
+        M(FORMS$_SYNTAXERR, 'SYNTAXERR',
+          'syntax error; an expected keyword, name or literal is missing or misspelled.'),
+        M(FORMS$_EXPECTED, 'EXPECTED', 'one of the following was expected: !AS.'),
+        M(FORMS$_ONEXPECTED, 'ONEXPECTED', 'the following was expected: !AS'),
+        M(FORMS$_TRNNOFORM, 'TRNNOFORM',
+          'the DECforms IFDL Translator did not recognize the input file as IFDL source.'),
+        M(FORMS$_ENDFORM, 'ENDFORM', 'end of form missing; partial IFDL source input.'),
+        M(FORMS$_NONCOMMENT, 'NONCOMMENT', 'non comment text after END FORM has been ignored.'),
+        M(FORMS$_ENDFILECOM, 'ENDFILECOM', 'end of !AS reached before comment terminated.'),
+        M(FORMS$_NOENDQUOTE, 'NOENDQUOTE', 'a quoted string has no end quote before end of line.'),
+        M(FORMS$_NOCONCAT, 'NOCONCAT',
+          'no items can follow the concatenator, nor precede the quote in next line.'),
+        M(FORMS$_ILLINPCHAR, 'ILLINPCHAR', 'invalid input character encountered.'),
+        M(FORMS$_NOTYETIMP, 'NOTYETIMP', 'feature not yet implemented.'),
+        M(FORMS$_NAMETRUNC, 'NAMETRUNC', 'name is too long and has been truncated to 31 characters.'),
+        M(FORMS$_FORMSRES, 'FORMSRES',
+          'Identifiers cannot begin with FORMS$ - it is reserved for DECforms.'),
+        M(FORMS$_BADNAME, 'BADNAME', '!AS is an illegal DECforms identifier.'),
+        M(FORMS$_DUPLITEM, 'DUPLITEM', '!AS already declared at this level.'),
+        M(FORMS$_NODATITEM, 'NODATITEM', 'form data item !AS has not been declared.'),
+        M(FORMS$_NODATGRP, 'NODATGRP', 'form data group !AS has not been declared.'),
+        M(FORMS$_NORECDEF, 'NORECDEF', 'record !AS has not been defined.'),
+        M(FORMS$_NOSENDREC, 'NOSENDREC', 'record or record list !AS has not been created.'),
+        M(FORMS$_NORECVREC, 'NORECVREC', 'record or record list !AS has not been created.'),
+        M(FORMS$_NOTRANSEND, 'NOTRANSEND', 'record or record list !AS has not been created.'),
+        M(FORMS$_NOTRANRECV, 'NOTRANRECV', 'record or record list !AS has not been created.'),
+        M(FORMS$_NOVIEWPRT, 'NOVIEWPRT', 'viewport !AS has not been declared.'),
+        M(FORMS$_NOLIST, 'NOLIST', 'LIST !AS has not been declared.'),
+        M(FORMS$_NOINTERNAL, 'NOINTERNAL', 'internal response !AS does not exist.'),
+        M(FORMS$_NOFUNCTION, 'NOFUNCTION', 'no FUNCTION declaration for FUNCTION RESPONSE !AS.'),
+        M(FORMS$_NOATTRIB, 'NOATTRIB', 'attribute !AS not declared.'),
+        M(FORMS$_NOTHELPPANEL, 'NOTHELPPANEL', '!AS is not declared as a help panel.'),
+        M(FORMS$_RECURLOOP, 'RECURLOOP', 'recursion or looping in internal response !AS in layout !AS.'),
+        M(FORMS$_OBJECTNOTFND, 'OBJECTNOTFND', '!AS does not exist!AS'),
+        M(FORMS$_INCOMPLET, 'INCOMPLET', 'form is incomplete.'),
+        M(FORMS$_INTGTRZER, 'INTGTRZER', 'number must be an integer greater than zero.'),
+        M(FORMS$_INVBLTINNAM, 'INVBLTINNAM', '!AS is an invalid name for a BUILTIN data item.'),
+        M(FORMS$_NOBLTINGRP, 'NOBLTINGRP', 'BUILTIN cannot be in a group.'),
+        M(FORMS$_NUMSTRSIZ, 'NUMSTRSIZ', 'numeric string LENGTH must be a total of 1 to 31 characters long.'),
+        M(FORMS$_BADSIGNIFLEN, 'BADSIGNIFLEN',
+          'Invalid significand length in FLOAT data type. Must be between 1-33.'),
+        M(FORMS$_BADEXRADLEN, 'BADEXRADLEN', 'Invalid exrad length in FLOAT data type. Must be between 1-4.'),
+        M(FORMS$_SCALEVALU, 'SCALEVALU', 'SCALE value must be an integer within the range of -128 to 127.'),
+        M(FORMS$_CTRLTXTLEN, 'CTRLTXTLEN', 'invalid CONTROL TEXT string length; must be 3-5 characters.'),
+        M(FORMS$_HIGHRANGELESS, 'HIGHRANGELESS', 'high range is less than low range.'),
+        M(FORMS$_MAXRECLIS, 'MAXRECLIS', 'maximum of 50 records per record list allowed.'),
+        M(FORMS$_VIEBEGLIN, 'VIEBEGLIN', 'viewport begin line not within layout size.'),
+        M(FORMS$_VIEENDLIN, 'VIEENDLIN', 'viewport end line not within layout size.'),
+        M(FORMS$_VIEBEGCOL, 'VIEBEGCOL', 'viewport begin column not within layout size.'),
+        M(FORMS$_VIEENDCOL, 'VIEENDCOL', 'viewport end column not within layout size.'),
+        M(FORMS$_ENDLINGTR, 'ENDLINGTR', 'ending viewport line must be greater than beginning viewport line.'),
+        M(FORMS$_ENDCOLGTR, 'ENDCOLGTR',
+          'ending column for this viewport must be greater than beginning column.'),
+        M(FORMS$_ERRLIMREA, 'ERRLIMREA', 'error limit of !AS has been reached.'),
+        M(FORMS$_TRANABORT, 'TRANABORT', 'translation terminated before completely processing the IFDL file.'),
+        0) : VECTOR;
+
+! MEM size: size bytes of zeroed memory; FORMS stops if there is none.
+GLOBAL ROUTINE MEM (SIZE) =
+    BEGIN
+    LOCAL
+        P;
+    P = FIO$ALLOC(MAX(.SIZE, 8));
+    IF .P EQL 0
+    THEN
+        BEGIN
+        FIO$PUT_LINE(T('%FORMS-F-GETVM, error allocating virtual memory.'));
+        FIO$EXIT(FORMS$_GETVM OR %X'10000000')
+        END;
+    .P
+    END;
+
+! MS_DEC value, buffer: the value in decimal in the buffer; its length.
+ROUTINE MS_DEC (V, BUF) =
+    BEGIN
+    LOCAL
+        D : VECTOR[24, BYTE],
+        N,
+        X,
+        L;
+    X = ABS(.V);
+    N = 0;
+    DO
+        (D[.N] = %C'0' + .X MOD 10; N = .N + 1; X = .X / 10)
+    UNTIL .X EQL 0;
+    L = 0;
+    IF .V LSS 0 THEN (PUTB(.BUF, %C'-'); L = 1);
+    DECR I FROM .N - 1 TO 0 DO (PUTB(.BUF + .L, .D[.I]); L = .L + 1);
+    .L
+    END;
+
+! RANK value: how bad a message of that severity is.
+ROUTINE RANK (V) =
+    BEGIN
+    BIND
+        R = UPLIT (2, 0, 3, 1, 4, 0, 0, 0) : VECTOR;
+    IF .V EQL 0 THEN -1 ELSE .R[.V AND 7]
+    END;
+
+! KEEP line, text, length: the message line, for the listing.
+ROUTINE KEEP (N, S, L) : NOVALUE =
+    BEGIN
+    LOCAL
+        COPY;
+    IF NOT .LOGGING THEN RETURN;
+    IF .NLOG GEQ .LOGCAP
+    THEN
+        BEGIN
+        LOCAL
+            NEW;
+        LOGCAP = MAX(.LOGCAP * 2, 64);
+        NEW = MEM(.LOGCAP * 24);
+        IF .NLOG GTR 0 THEN CH$MOVE(.NLOG * 24, .LOG, .NEW);
+        LOG = .NEW
+        END;
+    COPY = MEM(.L);
+    CH$MOVE(.L, .S, .COPY);
+    LOG[.NLOG * 3] = .N;
+    LOG[.NLOG * 3 + 1] = .COPY;
+    LOG[.NLOG * 3 + 2] = .L;
+    NLOG = .NLOG + 1
+    END;
+
+! MS_MSG value, position, flags, [text, length, [text, length]]: says the
+! message. The position is in the source, or -1; MF_CONT makes it one
+! about the message before.
+GLOBAL ROUTINE MS_MSG (CODE, POS, FLAGS, A1, L1, A2, L2) : NOVALUE =
+    BEGIN
+    LOCAL
+        SEV,
+        E,
+        LINE : VECTOR[1200, BYTE],
+        N,
+        LNUM,
+        ARG;
+    IF .HOLDING
+    THEN
+        BEGIN
+        LOCAL
+            H : REF VECTOR;
+        IF .NHELD GEQ .HELDCAP
+        THEN
+            BEGIN
+            LOCAL
+                NEW;
+            HELDCAP = MAX(.HELDCAP * 2, 32);
+            NEW = MEM(.HELDCAP * 64);
+            IF .NHELD GTR 0 THEN CH$MOVE(.NHELD * 64, .HELD, .NEW);
+            HELD = .NEW
+            END;
+        H = .HELD + .NHELD * 64;
+        H[0] = .CODE;
+        H[1] = .POS;
+        H[2] = .FLAGS;
+        H[7] = ACTUALCOUNT();
+        ! The names may be in a buffer used again: copies.
+        IF ACTUALCOUNT() GEQ 5 THEN (H[3] = MEM(.L1); CH$MOVE(.L1, .A1, .H[3]); H[4] = .L1);
+        IF ACTUALCOUNT() GEQ 7 THEN (H[5] = MEM(.L2); CH$MOVE(.L2, .A2, .H[5]); H[6] = .L2);
+        NHELD = .NHELD + 1;
+        RETURN
+        END;
+    SEV = .CODE AND 7;
+    IF .MS_NOWARN AND (.SEV EQL 0 OR .SEV EQL 3) AND (.FLAGS AND MF_CONT) EQL 0 THEN RETURN;
+    E = 0;
+    WHILE .MSGS[.E] NEQ 0 AND .MSGS[.E] NEQ .CODE DO E = .E + 5;
+    IF .MSGS[.E] EQL 0 THEN RETURN;
+    LNUM = 0;
+    IF .POS GEQ 0
+    THEN
+        BEGIN
+        LOCAL
+            SRC,
+            SLEN,
+            COL;
+        ! The line, numbered, and a ^ under the place.
+        LNUM = LEX_LINE(.POS);
+        SRC = LEX_LINETEXT(.POS, SLEN);
+        COL = .POS - LEX_LINESTART(.POS);
+        FIO$PUT_LINE(LINE, 0);
+        N = MS_DEC(.LNUM, LINE[5]);
+        CH$MOVE(.N, LINE[5], LINE[5 - MIN(.N, 5)]);
+        CH$FILL(%C' ', 5 - MIN(.N, 5), LINE);
+        CH$FILL(%C' ', 4, LINE[5]);
+        N = MIN(.SLEN, 1000);
+        CH$MOVE(.N, .SRC, LINE[9]);
+        FIO$PUT_LINE(LINE, .N + 9);
+        CH$FILL(%C' ', 9, LINE);
+        N = MIN(.COL, 1000);
+        INCR I FROM 0 TO .N - 1 DO LINE[9 + .I] = (IF GETB(.SRC + .I) EQL 9 THEN 9 ELSE %C' ');
+        LINE[9 + .N] = %C'^';
+        FIO$PUT_LINE(LINE, .N + 10)
+        END;
+    ! %FORMS-S-IDENT, text
+    LINE[0] = (IF (.FLAGS AND MF_CONT) NEQ 0 THEN %C'-' ELSE %C'%');
+    CH$MOVE(6, UPLIT BYTE ('FORMS-'), LINE[1]);
+    LINE[7] = GETB(UPLIT BYTE ('WSEIF???') + .SEV);
+    LINE[8] = %C'-';
+    N = 9;
+    CH$MOVE(.MSGS[.E + 2], .MSGS[.E + 1], LINE[.N]);
+    N = .N + .MSGS[.E + 2];
+    LINE[.N] = %C',';
+    LINE[.N + 1] = %C' ';
+    N = .N + 2;
+    ARG = 0;
+    BEGIN
+    LOCAL
+        TX,
+        TL,
+        I;
+    TX = .MSGS[.E + 3];
+    TL = .MSGS[.E + 4];
+    I = 0;
+    WHILE .I LSS .TL DO
+        BEGIN
+        IF .I + 2 LSS .TL AND GETB(.TX + .I) EQL %C'!' AND GETB(.TX + .I + 1) EQL %C'A'
+           AND GETB(.TX + .I + 2) EQL %C'S'
+        THEN
+            BEGIN
+            LOCAL
+                A,
+                L;
+            A = 0;
+            L = 0;
+            IF .ARG EQL 0 AND ACTUALCOUNT() GEQ 5 THEN (A = .A1; L = .L1);
+            IF .ARG EQL 1 AND ACTUALCOUNT() GEQ 7 THEN (A = .A2; L = .L2);
+            L = MIN(.L, 1150 - .N);
+            IF .L GTR 0 THEN CH$MOVE(.L, .A, LINE[.N]);
+            N = .N + MAX(.L, 0);
+            ARG = .ARG + 1;
+            I = .I + 3
+            END
+        ELSE
+            BEGIN
+            IF .N LSS 1190 THEN (LINE[.N] = GETB(.TX + .I); N = .N + 1);
+            I = .I + 1
+            END
+        END
+    END;
+    FIO$PUT_LINE(LINE, .N);
+    KEEP(.LNUM, LINE, .N);
+    SELECTONE .SEV OF
+        SET
+        [2, 4]: NERR = .NERR + 1;
+        [0]: NWARN = .NWARN + 1;
+        [3]: NINFO = .NINFO + 1;
+        TES;
+    IF RANK(.CODE) GTR RANK(.WORST) THEN WORST = .CODE;
+    IF .SEV EQL 2 AND .MS_LIMIT GTR 0 AND .NERR GEQ .MS_LIMIT
+    THEN
+        BEGIN
+        LOCAL
+            D : VECTOR[24, BYTE];
+        MS_LIMIT = 0;
+        MS_MSG(FORMS$_ERRLIMREA, -1, MF_CONT, D, MS_DEC(.NERR, D));
+        MS_MSG(FORMS$_TRANABORT, -1, 0);
+        FIO$EXIT(FORMS$_TRANABORT OR %X'10000000')
+        END
+    END;
+
+! MS_HOLD: keeps the messages from now on, for MS_RELEASE.
+GLOBAL ROUTINE MS_HOLD : NOVALUE =
+    BEGIN
+    HOLDING = TRUE;
+    NHELD = 0
+    END;
+
+! MS_RELEASE: says the messages MS_HOLD kept, in the order of where they
+! are in the source, those about no place last.
+GLOBAL ROUTINE MS_RELEASE : NOVALUE =
+    BEGIN
+    LOCAL
+        ORDER : REF VECTOR;
+    HOLDING = FALSE;
+    IF .NHELD EQL 0 THEN RETURN;
+    ! An insertion sort, which keeps the order of messages about one place.
+    ORDER = MEM(.NHELD * 8);
+    INCR I FROM 0 TO .NHELD - 1 DO
+        BEGIN
+        LOCAL
+            P,
+            J;
+        P = .(.HELD + .I * 64 + 8);
+        IF .P LSS 0 THEN P = %X'7FFFFFFF';
+        J = .I;
+        WHILE .J GTR 0 DO
+            BEGIN
+            LOCAL
+                Q;
+            Q = .(.HELD + .ORDER[.J - 1] * 64 + 8);
+            IF .Q LSS 0 THEN Q = %X'7FFFFFFF';
+            IF .Q LEQ .P THEN EXITLOOP;
+            ORDER[.J] = .ORDER[.J - 1];
+            J = .J - 1
+            END;
+        ORDER[.J] = .I
+        END;
+    INCR I FROM 0 TO .NHELD - 1 DO
+        BEGIN
+        LOCAL
+            H : REF VECTOR;
+        H = .HELD + .ORDER[.I] * 64;
+        IF .H[7] GEQ 7 THEN MS_MSG(.H[0], .H[1], .H[2], .H[3], .H[4], .H[5], .H[6])
+        ELSE IF .H[7] GEQ 5 THEN MS_MSG(.H[0], .H[1], .H[2], .H[3], .H[4])
+        ELSE MS_MSG(.H[0], .H[1], .H[2])
+        END
+    END;
+
+! MS_ERRORS: how many errors there were.
+GLOBAL ROUTINE MS_ERRORS =
+    .NERR;
+
+! MS_STATUS: the status to exit with, the worst message's value.
+GLOBAL ROUTINE MS_STATUS =
+    IF .WORST EQL 0 THEN FORMS$_NORMAL ELSE .WORST;
+
+! MS_LOGGING: keeps the messages from now on, for the listing.
+GLOBAL ROUTINE MS_LOGGING : NOVALUE =
+    LOGGING = TRUE;
+
+! PUTL channel, text, length: a line of the listing.
+ROUTINE PUTL (CHAN, S, L) : NOVALUE =
+    BEGIN
+    LOCAL
+        NL : VECTOR[1, BYTE];
+    NL[0] = 10;
+    IF .L GTR 0 THEN FIO$WRITE(.CHAN, .S, .L);
+    FIO$WRITE(.CHAN, NL, 1)
+    END;
+
+! HEADING channel, section, length, file, length: a page heading.
+ROUTINE HEADING (CHAN, S, L, F, FL) : NOVALUE =
+    BEGIN
+    LOCAL
+        H : VECTOR[200, BYTE],
+        N;
+    FIO$DATE(H);
+    CH$MOVE(39, UPLIT BYTE ('  vaxpunk FORMS V1.0 IFDL Translator   '), H[17]);
+    N = 56;
+    CH$MOVE(.L, .S, H[.N]);
+    PUTL(.CHAN, H, .N + .L);
+    PUTL(.CHAN, .F, MIN(.FL, 199));
+    PUTL(.CHAN, 0, 0)
+    END;
+
+! COUNTLINE channel, label, length, value: a line of the statistics.
+ROUTINE COUNTLINE (CHAN, S, L, V) : NOVALUE =
+    BEGIN
+    LOCAL
+        B : VECTOR[80, BYTE],
+        N;
+    CH$MOVE(.L, .S, B);
+    N = .L + MS_DEC(.V, B[.L]);
+    PUTL(.CHAN, B, .N)
+    END;
+
+! MS_LIST listing, length, source file, length, source, length, command,
+! length: writes the listing; whether it could.
+GLOBAL ROUTINE MS_LIST (NAME, NLEN, F, FL, SRC, SLEN, CMD, CL) =
+    BEGIN
+    LOCAL
+        CHAN,
+        P,
+        LNUM,
+        B : VECTOR[1100, BYTE],
+        N;
+    IF NOT FIO$OPEN(.NAME, .NLEN, FIO$K_WRITE, CHAN)
+    THEN
+        (MS_MSG(FORMS$_OPENOUT, -1, 0, .NAME, .NLEN); RETURN FALSE);
+    HEADING(.CHAN, T('Source Code Listing'), .F, .FL);
+    P = 0;
+    LNUM = 0;
+    WHILE .P LSS .SLEN DO
+        BEGIN
+        LOCAL
+            E;
+        E = .P;
+        WHILE .E LSS .SLEN AND GETB(.SRC + .E) NEQ 10 DO E = .E + 1;
+        LNUM = .LNUM + 1;
+        N = MS_DEC(.LNUM, B);
+        CH$MOVE(.N, B, B[5 - MIN(.N, 5)]);
+        CH$FILL(%C' ', 5 - MIN(.N, 5), B);
+        CH$FILL(%C' ', 4, B[5]);
+        N = MIN(.E - .P, 1000);
+        IF .N GTR 0 AND GETB(.SRC + .P + .N - 1) EQL 13 THEN N = .N - 1;
+        CH$MOVE(.N, .SRC + .P, B[9]);
+        PUTL(.CHAN, B, .N + 9);
+        INCR K FROM 0 TO .NLOG - 1 DO
+            IF .LOG[.K * 3] EQL .LNUM THEN PUTL(.CHAN, .LOG[.K * 3 + 1], .LOG[.K * 3 + 2]);
+        P = .E + 1
+        END;
+    INCR K FROM 0 TO .NLOG - 1 DO
+        IF .LOG[.K * 3] EQL 0 THEN PUTL(.CHAN, .LOG[.K * 3 + 1], .LOG[.K * 3 + 2]);
+    PUTL(.CHAN, 0, 0);
+    HEADING(.CHAN, T('Translation Statistics'), .F, .FL);
+    CH$MOVE(15, UPLIT BYTE (' COMMAND LINE: '), B);
+    N = MIN(.CL, 1000);
+    CH$MOVE(.N, .CMD, B[15]);
+    PUTL(.CHAN, B, .N + 15);
+    COUNTLINE(.CHAN, T(' LINES PARSED: '), .LNUM);
+    CH$MOVE(20, UPLIT BYTE (' TRANSLATION ENDED: '), B);
+    FIO$DATE(B[20]);
+    PUTL(.CHAN, B, 37);
+    COUNTLINE(.CHAN, T(' Information: '), .NINFO);
+    COUNTLINE(.CHAN, T('    Warnings: '), .NWARN);
+    COUNTLINE(.CHAN, T('      Errors: '), .NERR);
+    FIO$CLOSE(.CHAN);
+    TRUE
+    END;
+
+END
+ELUDOM

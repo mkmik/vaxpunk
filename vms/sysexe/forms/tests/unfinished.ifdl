@@ -1,0 +1,8 @@
+/* The source ends before END FORM. */
+Form UNFINISHED_TEST
+    Layout VT
+        Device Terminal Type %VT100 End Device
+        Size 24 Lines By 80 Columns
+        Panel MAIN
+        End Panel
+    End Layout

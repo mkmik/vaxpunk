@@ -1,0 +1,403 @@
+MODULE PARSE (IDENT = 'V0.1') =
+%TITLE 'FORMS: parsing IFDL into the tree'
+BEGIN
+!
+! PR_TRANSLATE matches the source against the grammar's rule "form" and
+! leaves its tree in ITEMS: a rule item for each rule matched, a leaf for
+! each token, and, unless /NOCOMMENTS, a comment leaf for each comment,
+! in the rule of the token after it. An alternative that fails takes its
+! items back. Where no alternative matches, the error is at the furthest
+! token any of them reached, and what they expected there is what
+! SYNTAXERR's EXPECTED lists, as DECforms's translator says it.
+! ponytail: a syntax error ends the translation; DECforms recovers and
+! goes on to the next.
+!
+REQUIRE 'FORMS';
+REQUIRE 'FIO';
+
+LITERAL
+    MAXEXP = 48;                        ! the most expected tokens kept
+
+UNDECLARE
+    ITEMS,
+    NITEMS;
+
+GLOBAL
+    ITEMS,
+    NITEMS,
+    PR_COMMENTS : INITIAL (TRUE);       ! keep comments, /COMMENTS
+
+OWN
+    ICAP,                               ! items there is room for
+    FARPOS,                             ! the furthest token a match failed at
+    NEXP,                               ! and what was expected there
+    EXPKIND : VECTOR[MAXEXP],
+    EXPID : VECTOR[MAXEXP],
+    TOK : VECTOR[TOK_SIZE],
+    SRCTEXT;                            ! the source, for the leaves' text
+
+FORWARD ROUTINE
+    MATCH;
+
+! PR_PUSH kind, id, position, second quadword: a new item; its index.
+GLOBAL ROUTINE PR_PUSH (KIND, ID, POS, Q1) =
+    BEGIN
+    LOCAL
+        I;
+    IF .NITEMS GEQ .ICAP
+    THEN
+        BEGIN
+        LOCAL
+            NEW;
+        ICAP = MAX(.ICAP * 2, 4096);
+        NEW = MEM(.ICAP * 16);
+        IF .NITEMS GTR 0 THEN CH$MOVE(.NITEMS * 16, .ITEMS, .NEW);
+        ITEMS = .NEW
+        END;
+    I = .NITEMS;
+    NITEMS = .NITEMS + 1;
+    (.ITEMS + .I * 16) = .KIND OR SLL(.ID, 8) OR SLL(.POS, 32);
+    (.ITEMS + .I * 16 + 8) = .Q1;
+    .I
+    END;
+
+! EXPECT position, kind, id: a match failed at the token there, which
+! wasn't the element (a GK_KW's or GK_TERM's).
+ROUTINE EXPECT (P, KIND, ID) : NOVALUE =
+    BEGIN
+    IF .P GTR .FARPOS THEN (FARPOS = .P; NEXP = 0);
+    IF .P LSS .FARPOS THEN RETURN;
+    INCR I FROM 0 TO .NEXP - 1 DO
+        IF .EXPKIND[.I] EQL .KIND AND .EXPID[.I] EQL .ID THEN RETURN;
+    IF .NEXP LSS MAXEXP
+    THEN
+        BEGIN
+        EXPKIND[.NEXP] = .KIND;
+        EXPID[.NEXP] = .ID;
+        NEXP = .NEXP + 1
+        END
+    END;
+
+! COMMENTS position, position: a comment leaf for each comment between
+! the two.
+ROUTINE COMMENTS (P0, P1) : NOVALUE =
+    BEGIN
+    LOCAL
+        Q;
+    IF NOT .PR_COMMENTS THEN RETURN;
+    Q = .P0;
+    WHILE .Q LSS .P1 DO
+        BEGIN
+        LOCAL
+            C,
+            E;
+        C = GETB(.SRCTEXT + .Q);
+        IF .C EQL %C'/' OR .C EQL %C'{'
+        THEN
+            BEGIN
+            E = LEX_COMMENT(.Q);
+            IF .E EQL 0 OR .E GTR .P1 THEN RETURN;
+            PR_PUSH(IT_COMMENT, 0, .Q, (.SRCTEXT + .Q) OR SLL(.E - .Q, 32));
+            Q = .E
+            END
+        ELSE
+            Q = .Q + 1
+        END
+    END;
+
+! LEAF kind, id, position, start, end: a leaf for the token from start
+! to end, after the comments since the position.
+ROUTINE LEAF (KIND, ID, P0, P, E) : NOVALUE =
+    BEGIN
+    COMMENTS(.P0, .P);
+    PR_PUSH(.KIND, .ID, .P, (.SRCTEXT + .P) OR SLL(.E - .P, 32))
+    END;
+
+ROUTINE ALLDIGITS (P, E) =
+    BEGIN
+    INCR Q FROM .P TO .E - 1 DO
+        IF GETB(.SRCTEXT + .Q) LSSU %C'0' OR GETB(.SRCTEXT + .Q) GTRU %C'9' THEN RETURN FALSE;
+    TRUE
+    END;
+
+! TERMINAL kind, position: matches a terminal; the position past it, or -1.
+ROUTINE TERMINAL (KIND, POS) =
+    BEGIN
+    LOCAL
+        P,
+        K;
+    P = LEX_SKIP(.POS);
+    LEX_TOKEN(.P, TOK);
+    K = .TOK[TOK_KIND];
+    CASE .KIND FROM TM_NAME TO TM_IMP OF
+        SET
+        [TM_NAME, TM_XNAME, TM_QNAME]:
+            BEGIN
+            IF .KIND EQL TM_QNAME AND .K EQL TK_STR THEN RETURN TERMINAL(TM_STR, .POS);
+            IF .K EQL TK_WORD
+               AND (.TOK[TOK_KW] EQL 0
+                    OR (.KWFLAGS[.TOK[TOK_KW]]
+                        AND (IF .KIND EQL TM_XNAME THEN KF_RESERVED OR KF_STOP ELSE KF_RESERVED)) EQL 0)
+            THEN
+                BEGIN
+                LEAF(IT_NAME, 0, .POS, .P, .TOK[TOK_END]);
+                RETURN .TOK[TOK_END]
+                END
+            END;
+        [TM_STR]:
+            IF .K EQL TK_STR
+            THEN
+                BEGIN
+                LOCAL
+                    BUF,
+                    N;
+                BUF = MEM(.TOK[TOK_END] - .P);
+                N = LEX_STRING(.P, .TOK[TOK_END], .BUF);
+                COMMENTS(.POS, .P);
+                PR_PUSH(IT_STR, 0, .P, .BUF OR SLL(.N, 32));
+                RETURN .TOK[TOK_END]
+                END;
+        [TM_INT, TM_NUM]:
+            IF .K EQL TK_NUM AND (.KIND EQL TM_NUM OR ALLDIGITS(.P, .TOK[TOK_END]))
+            THEN
+                BEGIN
+                LEAF(IT_NUM, 0, .POS, .P, .TOK[TOK_END]);
+                RETURN .TOK[TOK_END]
+                END;
+        [TM_SINT, TM_SNUM]:
+            BEGIN
+            LOCAL
+                S;
+            ! A sign, then the number right after it.
+            S = .P;
+            IF .K EQL TK_PUNCT AND .TOK[TOK_END] EQL .P + 1
+               AND (GETB(.SRCTEXT + .P) EQL %C'-' OR GETB(.SRCTEXT + .P) EQL %C'+')
+            THEN
+                BEGIN
+                LEX_TOKEN(.P + 1, TOK);
+                K = .TOK[TOK_KIND]
+                END;
+            IF .K EQL TK_NUM
+               AND (.KIND EQL TM_SNUM OR ALLDIGITS(.TOK[TOK_START], .TOK[TOK_END]))
+            THEN
+                BEGIN
+                LEAF(IT_NUM, 0, .POS, .S, .TOK[TOK_END]);
+                RETURN .TOK[TOK_END]
+                END
+            END;
+        [TM_PIC]:
+            IF .K NEQ TK_EOF
+            THEN
+                BEGIN
+                LOCAL
+                    E;
+                E = LEX_PICTURE(.P);
+                IF .E GTR .P THEN (LEAF(IT_PIC, 0, .POS, .P, .E); RETURN .E)
+                END;
+        [TM_IMP]:
+            IF .K EQL TK_IMP
+            THEN
+                BEGIN
+                LEAF(IT_IMP, 0, .POS, .P, .TOK[TOK_END]);
+                RETURN .TOK[TOK_END]
+                END;
+        TES;
+    EXPECT(.P, GK_TERM, .KIND);
+    -1
+    END;
+
+! RULE rule, position: matches a rule; the position past it, or -1.
+ROUTINE RULE (R, POS) =
+    BEGIN
+    LOCAL
+        I,
+        E;
+    I = PR_PUSH(IT_RULE, .R, LEX_SKIP(.POS), 0);
+    E = MATCH(.RBODY[.R], .POS);
+    IF .E LSS 0 THEN (NITEMS = .I; RETURN -1);
+    (.ITEMS + .I * 16 + 8) = .NITEMS;
+    .E
+    END;
+
+! MATCH element, position: matches an element of the grammar; the
+! position past it, or -1 with the items as they were.
+ROUTINE MATCH (G, POS) =
+    BEGIN
+    LOCAL
+        MARK;
+    MARK = .NITEMS;
+    CASE .GKIND[.G] FROM GK_KW TO GK_REP OF
+        SET
+        [GK_KW]:
+            BEGIN
+            LOCAL
+                P;
+            P = LEX_SKIP(.POS);
+            LEX_TOKEN(.P, TOK);
+            IF .TOK[TOK_KW] NEQ 0 AND .TOK[TOK_KW] EQL .KWBASE[.GA[.G]]
+               AND .TOK[TOK_KIND] NEQ TK_ERR
+            THEN
+                BEGIN
+                LEAF(IT_KW, .GA[.G], .POS, .P, .TOK[TOK_END]);
+                RETURN .TOK[TOK_END]
+                END;
+            EXPECT(.P, GK_KW, .KWBASE[.GA[.G]]);
+            RETURN -1
+            END;
+        [GK_TERM]:
+            RETURN TERMINAL(.GA[.G], .POS);
+        [GK_RULE]:
+            RETURN RULE(.GA[.G], .POS);
+        [GK_SEQ]:
+            BEGIN
+            LOCAL
+                P;
+            P = .POS;
+            INCR I FROM 0 TO .GB[.G] - 1 DO
+                BEGIN
+                P = MATCH(.GLIST[.GA[.G] + .I], .P);
+                IF .P LSS 0 THEN (NITEMS = .MARK; RETURN -1)
+                END;
+            RETURN .P
+            END;
+        [GK_ALT]:
+            BEGIN
+            INCR I FROM 0 TO .GB[.G] - 1 DO
+                BEGIN
+                LOCAL
+                    P;
+                P = MATCH(.GLIST[.GA[.G] + .I], .POS);
+                IF .P GEQ 0 THEN RETURN .P;
+                NITEMS = .MARK
+                END;
+            RETURN -1
+            END;
+        [GK_OPT]:
+            BEGIN
+            LOCAL
+                P;
+            P = MATCH(.GA[.G], .POS);
+            IF .P LSS 0 THEN (NITEMS = .MARK; RETURN .POS);
+            RETURN .P
+            END;
+        [GK_REP]:
+            BEGIN
+            LOCAL
+                P;
+            P = MATCH(.GA[.G], .POS);
+            IF .P LSS 0 THEN RETURN -1;
+            WHILE TRUE DO
+                BEGIN
+                LOCAL
+                    Q;
+                MARK = .NITEMS;
+                Q = MATCH(.GA[.G], .P);
+                IF .Q LSS 0 OR .Q EQL .P THEN (NITEMS = .MARK; RETURN .P);
+                P = .Q
+                END;
+            RETURN .P
+            END;
+        TES;
+    -1
+    END;
+
+! APPEND buffer, at, text, length: puts the text at, and returns past it.
+ROUTINE APPEND (BUF, AT, S, L) =
+    BEGIN
+    LOCAL
+        N;
+    N = MIN(.L, 1000 - .AT);
+    IF .N GTR 0 THEN CH$MOVE(.N, .S, .BUF + .AT);
+    .AT + MAX(.N, 0)
+    END;
+
+! SYNTAX: says what was wrong at FARPOS: the token there, or what was
+! expected instead of it.
+ROUTINE SYNTAX : NOVALUE =
+    BEGIN
+    LOCAL
+        BUF : VECTOR[1024, BYTE],
+        N;
+    LEX_TOKEN(.FARPOS, TOK);
+    IF .TOK[TOK_KIND] EQL TK_ERR
+    THEN
+        BEGIN
+        IF .TOK[TOK_ERR] EQL FORMS$_ENDFILECOM
+        THEN
+            MS_MSG(FORMS$_ENDFILECOM, .FARPOS, 0, T('file'))
+        ELSE
+            MS_MSG(.TOK[TOK_ERR], .FARPOS, 0);
+        RETURN
+        END;
+    IF .TOK[TOK_KIND] EQL TK_EOF THEN (MS_MSG(FORMS$_ENDFORM, -1, 0); RETURN);
+    MS_MSG(FORMS$_SYNTAXERR, .FARPOS, 0);
+    N = 0;
+    INCR I FROM 0 TO .NEXP - 1 DO
+        BEGIN
+        IF .I GTR 0 THEN N = APPEND(BUF, .N, T(', '));
+        IF .EXPKIND[.I] EQL GK_KW
+        THEN
+            N = APPEND(BUF, .N, .KWADDR[.EXPID[.I]], .KWLEN[.EXPID[.I]])
+        ELSE
+            BEGIN
+            BIND
+                WHAT = UPLIT (
+                    UPLIT BYTE ('<name>'), 6, UPLIT BYTE ('<name>'), 6, UPLIT BYTE ('<name>'), 6,
+                    UPLIT BYTE ('<string>'), 8, UPLIT BYTE ('<integer>'), 9,
+                    UPLIT BYTE ('<number>'), 8, UPLIT BYTE ('<integer>'), 9,
+                    UPLIT BYTE ('<number>'), 8, UPLIT BYTE ('<picture-string>'), 16,
+                    UPLIT BYTE ('<implementor-name>'), 18) : VECTOR;
+            N = APPEND(BUF, .N, .WHAT[(.EXPID[.I] - 1) * 2], .WHAT[(.EXPID[.I] - 1) * 2 + 1])
+            END
+        END;
+    IF .NEXP EQL 1
+    THEN
+        MS_MSG(FORMS$_ONEXPECTED, -1, MF_CONT, BUF, .N)
+    ELSE
+        MS_MSG(FORMS$_EXPECTED, -1, MF_CONT, BUF, .N)
+    END;
+
+! PR_TRANSLATE text: parses the form in the source (LEX_INIT's); whether
+! it could. The tree is ITEMS, the form its first item.
+GLOBAL ROUTINE PR_TRANSLATE (TEXT, LEN) =
+    BEGIN
+    LOCAL
+        E,
+        P;
+    SRCTEXT = .TEXT;
+    NITEMS = 0;
+    FARPOS = -1;
+    NEXP = 0;
+    P = LEX_SKIP(0);
+    LEX_TOKEN(.P, TOK);
+    IF .TOK[TOK_KW] EQL 0 OR .TOK[TOK_KW] NEQ GR_KWFIND(T('FORM'))
+    THEN
+        BEGIN
+        IF .TOK[TOK_KIND] EQL TK_ERR
+        THEN
+            (FARPOS = .P; SYNTAX())
+        ELSE
+            MS_MSG(FORMS$_TRNNOFORM, -1, 0);
+        RETURN FALSE
+        END;
+    E = RULE(GR_RULE(T('form')), 0);
+    IF .E LSS 0 THEN (SYNTAX(); RETURN FALSE);
+    ! Comments after END FORM are the form's last; anything else is ignored.
+    P = LEX_SKIP(.E);
+    COMMENTS(.E, .P);
+    (.ITEMS + 8) = .NITEMS;
+    IF .P LSS .LEN
+    THEN
+        BEGIN
+        LEX_TOKEN(.P, TOK);
+        IF .TOK[TOK_KIND] EQL TK_ERR AND .TOK[TOK_ERR] EQL FORMS$_ENDFILECOM
+        THEN
+            MS_MSG(FORMS$_ENDFILECOM, .P, 0, T('file'))
+        ELSE
+            MS_MSG(FORMS$_NONCOMMENT, .P, 0)
+        END;
+    TRUE
+    END;
+
+END
+ELUDOM

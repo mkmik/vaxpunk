@@ -1,0 +1,4 @@
+
+    8                    Value "One"- "Two"
+                               ^
+%FORMS-E-NOCONCAT, no items can follow the concatenator, nor precede the quote in next line.

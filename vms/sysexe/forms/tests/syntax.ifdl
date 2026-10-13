@@ -1,0 +1,18 @@
+/* A keyword misspelled: SYNTAXERR, and what FORMS expected there. */
+Form SYNTAX_TEST
+    Form Data
+        NAME Character(20)
+    End Data
+    Layout VT
+        Device
+            Terminal
+                Type %VT100
+        End Device
+        Size 24 Lines By 80 Columns
+        Panel MAIN
+            Field NAME
+                Line 1 Colum 10
+            End Field
+        End Panel
+    End Layout
+End Form

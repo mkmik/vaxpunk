@@ -1,0 +1,14 @@
+{ Only the first form is translated: what follows its END FORM is
+  ignored, with a warning, unless it is a comment. }
+Form TRAILING_TEST
+    Layout VT
+        Device Terminal Type %VT100 End Device
+        Size 24 Lines By 80 Columns
+        Panel MAIN
+            Retain
+        End Panel
+    End Layout
+End Form
+{ This is fine. }
+Form SECOND_TEST
+End Form

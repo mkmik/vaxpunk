@@ -1,0 +1,224 @@
+! FORMS.R64: what the modules of FORMS.EXE share (t8y:/layered/decforms#ifdl):
+! the tokens, the grammar, the parse tree and each module's global routines.
+!
+! The grammar of IFDL is data (gram.b64): rules made of elements, which
+! the parser (parse.b64) matches against the source to build the tree. A
+! .FORM file is that tree (README.md says how it is laid out), and the back
+! translator prints it as IFDL again.
+
+LITERAL
+    TRUE = 1,
+    FALSE = 0;
+
+BUILTIN
+    SLL,
+    SRL;
+
+MACRO
+    ! A byte at an address, and storing one.
+    GETB(A) = .(A)<0, 8, 0> %,
+    PUTB(A, V) = (A)<0, 8, 0> = (V) %,
+    ! A string literal as its address and length.
+    T(S) = UPLIT BYTE (S), %CHARCOUNT(S) %,
+    ! A character in capitals.
+    UPPER(C) = (IF (C) GEQU %C'a' AND (C) LEQU %C'z' THEN (C) - 32 ELSE (C)) %;
+
+! A token, as LEX_TOKEN finds it: TOK[TOK_KIND] and the rest.
+LITERAL
+    TOK_KIND = 0,
+    TOK_START = 1,                      ! its first character
+    TOK_END = 2,                        ! past its last
+    TOK_KW = 3,                         ! the keyword it is, or 0
+    TOK_ERR = 4,                        ! for TK_ERR, the message
+    TOK_SIZE = 5;
+
+LITERAL
+    TK_EOF = 0,
+    TK_WORD = 1,                        ! a name or keyword
+    TK_IMP = 2,                         ! an implementor name, %NAME
+    TK_STR = 3,                         ! a quoted string
+    TK_NUM = 4,                         ! a number, without its sign
+    TK_PUNCT = 5,                       ! ( ) , . = + - * / < > <= >= <> ** :
+    TK_ERR = 6;                         ! a character or string IFDL hasn't
+
+! The grammar's elements (gram.b64): an element is GKIND[g], GA[g], GB[g].
+LITERAL
+    GK_KW = 1,                          ! the keyword GA
+    GK_TERM = 2,                        ! a terminal of kind GA, a TM_
+    GK_RULE = 3,                        ! the rule GA
+    GK_SEQ = 4,                         ! GB elements in a row, from GLIST[GA]
+    GK_ALT = 5,                         ! the first of GB elements that matches
+    GK_OPT = 6,                         ! the element GA, or nothing
+    GK_REP = 7;                         ! the element GA, once or more
+
+LITERAL
+    TM_NAME = 1,                        ! $name: a name, not a reserved word
+    TM_XNAME = 2,                       ! $xname: a $name, and not a stop word
+    TM_QNAME = 3,                       ! $qname: a name or a quoted string
+    TM_STR = 4,                         ! $str: a quoted string
+    TM_INT = 5,                         ! $int: digits
+    TM_NUM = 6,                         ! $num: a number
+    TM_SINT = 7,                        ! $sint: digits after a sign or none
+    TM_SNUM = 8,                        ! $snum: a number after a sign or none
+    TM_PIC = 9,                         ! $pic: a picture string
+    TM_IMP = 10;                        ! $imp: an implementor name
+
+LITERAL
+    MAXKW = 1024,                       ! keywords (453)
+    MAXRULE = 512,                      ! rules (203)
+    MAXG = 4096,                        ! elements (the grammar has 2348)
+    MAXL = 4096;                        ! entries of GLIST (1891)
+
+LITERAL
+    KF_RESERVED = 1,                    ! a reserved word: never a $name
+    KF_ATTACH = 2,                      ! printed with no space before it
+    KF_STOP = 4,                        ! a stop word: never an $xname
+    RF_LINE = 1;                        ! the rule starts a line when printed
+
+EXTERNAL
+    KWADDR : VECTOR[MAXKW],             ! a keyword's text, as the grammar has it
+    KWLEN : VECTOR[MAXKW],
+    KWFLAGS : VECTOR[MAXKW],
+    KWBASE : VECTOR[MAXKW],             ! the keyword a token matches: ~( is (
+    NKW,
+    RNAME : VECTOR[MAXRULE],            ! a rule's name
+    RNLEN : VECTOR[MAXRULE],
+    RBODY : VECTOR[MAXRULE],            ! its element
+    RFLAGS : VECTOR[MAXRULE],
+    NRULE,
+    GKIND : VECTOR[MAXG],
+    GA : VECTOR[MAXG],
+    GB : VECTOR[MAXG],
+    GLIST : VECTOR[MAXL];
+
+! The parse tree, ITEMS: two quadwords an item, in preorder. The first
+! has the kind, its id (a rule's or a keyword's) and where it starts in
+! the source; the second, for a rule, the index past its last item, and
+! for a leaf, the address and length of its text.
+LITERAL
+    IT_RULE = 1,
+    IT_KW = 2,
+    IT_NAME = 3,
+    IT_STR = 4,                         ! the string's characters, unquoted
+    IT_NUM = 5,
+    IT_PIC = 6,
+    IT_IMP = 7,
+    IT_COMMENT = 8;                     ! a comment, as written
+
+MACRO
+    IKIND(I) = .(.ITEMS + (I) * 16)<0, 8, 0> %,
+    IID(I) = .(.ITEMS + (I) * 16)<8, 16, 0> %,
+    IPOS(I) = .(.ITEMS + (I) * 16)<32, 32, 0> %,
+    IEND(I) = .(.ITEMS + (I) * 16 + 8) %,
+    ITXT(I) = .(.ITEMS + (I) * 16 + 8)<0, 32, 0> %,
+    ILEN(I) = .(.ITEMS + (I) * 16 + 8)<32, 32, 0> %,
+    ! The item after I and all of its own.
+    INEXT(I) = (IF IKIND(I) EQL IT_RULE THEN IEND(I) ELSE (I) + 1) %;
+
+EXTERNAL
+    ITEMS,                              ! the tree's first item
+    NITEMS;                             ! how many
+
+! The messages: their condition values, FORMS's (facility 213), as
+! DECforms numbers them, with their severity.
+LITERAL
+    FORMS$_NORMAL = %X'00D58001',
+    FORMS$_OPENIN = %X'00D5811C',
+    FORMS$_OPENOUT = %X'00D58124',
+    FORMS$_WRITEFORM = %X'00D58134',
+    FORMS$_BADFORM = %X'00D5813C',
+    FORMS$_TRANSLATED = %X'00D588C1',
+    FORMS$_EXPECTED = %X'00D588FB',
+    FORMS$_ONEXPECTED = %X'00D58913',
+    FORMS$_INCOMPLET = %X'00D589A8',
+    FORMS$_NONCOMMENT = %X'00D589B0',
+    FORMS$_NOTYETIMP = %X'00D589BA',
+    FORMS$_BADEXRADLEN = %X'00D58A3A',
+    FORMS$_BADSIGNIFLEN = %X'00D58A52',
+    FORMS$_CTRLTXTLEN = %X'00D58B02',
+    FORMS$_DUPLITEM = %X'00D58C0A',
+    FORMS$_ENDCOLGTR = %X'00D58C2A',
+    FORMS$_ENDFILECOM = %X'00D58C32',
+    FORMS$_ENDFORM = %X'00D58C3A',
+    FORMS$_ENDLINGTR = %X'00D58C42',
+    FORMS$_FORMSRES = %X'00D58C8A',
+    FORMS$_HIGHRANGELESS = %X'00D58CDA',
+    FORMS$_ILLINPCHAR = %X'00D58D52',
+    FORMS$_INTGTRZER = %X'00D58DB2',
+    FORMS$_INVBLTINNAM = %X'00D58DC2',
+    FORMS$_NOBLTINGRP = %X'00D58EFA',
+    FORMS$_MAXRECLIS = %X'00D58EA2',
+    FORMS$_NAMETRUNC = %X'00D58EE2',
+    FORMS$_NOATTRIB = %X'00D58F0A',
+    FORMS$_NOCONCAT = %X'00D58F1A',
+    FORMS$_NODATGRP = %X'00D58F2A',
+    FORMS$_NODATITEM = %X'00D58F32',
+    FORMS$_NOENDQUOTE = %X'00D58F3A',
+    FORMS$_NOFUNCTION = %X'00D58F6A',
+    FORMS$_NOINTERNAL = %X'00D58F7A',
+    FORMS$_NOLIST = %X'00D58F82',
+    FORMS$_NORECDEF = %X'00D58FCA',
+    FORMS$_NORECVREC = %X'00D58FD2',
+    FORMS$_NOSENDREC = %X'00D58FE2',
+    FORMS$_NOTHELPPANEL = %X'00D58FEA',
+    FORMS$_NOTRANRECV = %X'00D58FFA',
+    FORMS$_NOTRANSEND = %X'00D59002',
+    FORMS$_NOVIEWPRT = %X'00D5900A',
+    FORMS$_NUMSTRSIZ = %X'00D5902A',
+    FORMS$_RECURLOOP = %X'00D590F2',
+    FORMS$_SCALEVALU = %X'00D5912A',
+    FORMS$_SYNTAXERR = %X'00D59162',
+    FORMS$_TRNNOFORM = %X'00D5916A',
+    FORMS$_VIEBEGCOL = %X'00D591AA',
+    FORMS$_VIEBEGLIN = %X'00D591B2',
+    FORMS$_VIEENDCOL = %X'00D591BA',
+    FORMS$_VIEENDLIN = %X'00D591C2',
+    FORMS$_TRANABORT = %X'00D591FC',
+    FORMS$_BACKXLATED = %X'00D59261',
+    FORMS$_OBJECTNOTFND = %X'00D59B20',
+    FORMS$_ERRLIMREA = %X'00D59B33',
+    FORMS$_FATINTERR = %X'00D5810C',
+    FORMS$_GETVM = %X'00D5829C',
+    FORMS$_BADNAME = %X'00D580DA';
+
+! MS_MSG's flags.
+LITERAL
+    MF_CONT = 1;                        ! -FORMS-, a message about the one before
+
+! Each module's global routines.
+EXTERNAL ROUTINE
+    ! main.b64
+    READ_WHOLE,
+    ! gram.b64
+    GR_INIT : NOVALUE,
+    GR_KWFIND,
+    GR_RULE,
+    ! lex.b64
+    LEX_INIT : NOVALUE,
+    LEX_SKIP,
+    LEX_TOKEN : NOVALUE,
+    LEX_PICTURE,
+    LEX_COMMENT,
+    LEX_STRING,
+    LEX_LINE,
+    LEX_LINESTART,
+    LEX_LINETEXT,
+    ! parse.b64
+    PR_TRANSLATE,
+    PR_PUSH,
+    ! check.b64
+    CK_RUN : NOVALUE,
+    ! formfile.b64
+    FF_WRITE,
+    FF_READ,
+    ! back.b64
+    BT_WRITE,
+    ! msg.b64
+    MEM,
+    MS_MSG : NOVALUE,
+    MS_LIST,
+    MS_LOGGING : NOVALUE,
+    MS_HOLD : NOVALUE,
+    MS_RELEASE : NOVALUE,
+    MS_ERRORS,
+    MS_STATUS;

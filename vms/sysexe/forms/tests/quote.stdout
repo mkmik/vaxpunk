@@ -1,0 +1,4 @@
+
+    8                    Value "No end
+                               ^
+%FORMS-E-NOENDQUOTE, a quoted string has no end quote before end of line.

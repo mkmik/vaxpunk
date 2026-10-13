@@ -1,0 +1,48 @@
+! FORMS function file: FORMS.EXE, DECforms's development commands
+! (t8y:/layered/decforms). TRANSLATE makes a .FORM file of an IFDL
+! source, BACK_TRANSLATE IFDL of a .FORM file; the other functions say
+! %FORMS-E-NOTYETIMP. The qualifiers are DECforms's; FORMS reads them
+! itself from $LINE, as TPU does, and does nothing with some (main.b64).
+define verb FORMS
+	image FORMS
+	parameter P1, label=PRIMARY, prompt="Function", value(required, type=FORMS_FUNCTIONS)
+	parameter P2, label=INPUT_FILE, prompt="File", value(type=$file)
+
+define type FORMS_FUNCTIONS
+	keyword BACK_TRANSLATE, syntax=FORMS_BACK_TRANSLATE
+	keyword CONVERT
+	keyword DEVELOP
+	keyword EDIT
+	keyword EXTRACT
+	keyword TEST
+	keyword TRANSLATE, syntax=FORMS_TRANSLATE
+
+define syntax FORMS_TRANSLATE
+	image FORMS
+	parameter P1, label=PRIMARY, value(required, type=FORMS_FUNCTIONS)
+	parameter P2, label=INPUT_FILE, prompt="IFDL_File", value(required, type=$file)
+	qualifier OUTPUT, default, value(type=$file)
+	qualifier LOG
+	qualifier DIAGNOSTICS, value(type=$file)
+	qualifier LIST, batch, value(type=$file)
+	qualifier SHOW, default, value(required, list, type=FORMS_SHOW)
+	qualifier WARNINGS, default
+	qualifier ERROR_LIMIT, nonnegatable, value(type=$number)
+	qualifier DEPENDENCY_DATA
+	qualifier COMMENTS, default
+	qualifier INCLUDE, value(list)
+	qualifier MEMBER_ALIGNMENT, default, value(list)
+	qualifier FLOAT, default, nonnegatable, value
+	qualifier PAD_RECORDS, default
+
+define syntax FORMS_BACK_TRANSLATE
+	image FORMS
+	parameter P1, label=PRIMARY, value(required, type=FORMS_FUNCTIONS)
+	parameter P2, label=INPUT_FILE, prompt="Form_File", value(required, type=$file)
+	qualifier OUTPUT, default, nonnegatable, value(type=$file)
+	qualifier LOG
+	qualifier SHOW, default, value(required, list, type=FORMS_SHOW)
+
+define type FORMS_SHOW
+	keyword COPY
+	keyword NOCOPY

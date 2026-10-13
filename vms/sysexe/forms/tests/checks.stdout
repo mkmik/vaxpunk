@@ -1,0 +1,56 @@
+
+    7            NAME Character(10)                      { ! DUPLITEM }
+                 ^
+%FORMS-E-DUPLITEM, NAME already declared at this level.
+
+    8            A_VERY_LONG_NAME_THAT_IS_TOO_LONG_TO_BE Character(1)    { ! NAMETRUNC }
+                 ^
+%FORMS-E-NAMETRUNC, name is too long and has been truncated to 31 characters.
+
+    9            FORMS$NAME Character(1)                 { ! FORMSRES }
+                 ^
+%FORMS-E-FORMSRES, Identifiers cannot begin with FORMS$ - it is reserved for DECforms.
+
+   10            TRAILING_ Character(1)                  { ! BADNAME }
+                 ^
+%FORMS-E-BADNAME, TRAILING_ is an illegal DECforms identifier.
+
+   11            EMPTY Character(0)                      { ! INTGTRZER }
+                                 ^
+%FORMS-E-INTGTRZER, number must be an integer greater than zero.
+
+   12            HUGE Integer(32)                        { ! NUMSTRSIZ }
+                              ^
+%FORMS-E-NUMSTRSIZ, numeric string LENGTH must be a total of 1 to 31 characters long.
+
+   13            MONEY Decimal(20, 12)                   { ! NUMSTRSIZ }
+                               ^
+%FORMS-E-NUMSTRSIZ, numeric string LENGTH must be a total of 1 to 31 characters long.
+
+   14            REAL Float(34, 5)                       { ! BADSIGNIFLEN, BADEXRADLEN }
+                            ^
+%FORMS-E-BADSIGNIFLEN, Invalid significand length in FLOAT data type. Must be between 1-33.
+
+   14            REAL Float(34, 5)                       { ! BADSIGNIFLEN, BADEXRADLEN }
+                                ^
+%FORMS-E-BADEXRADLEN, Invalid exrad length in FLOAT data type. Must be between 1-4.
+
+   15            NOWHERE Character(31) Builtin           { ! INVBLTINNAM }
+                 ^
+%FORMS-E-INVBLTINNAM, NOWHERE is an invalid name for a BUILTIN data item.
+
+   16            Group NONE Occurs 0                     { ! INTGTRZER }
+                                   ^
+%FORMS-E-INTGTRZER, number must be an integer greater than zero.
+
+   18                FORMNAME Character(31) Builtin      { ! NOBLTINGRP }
+                     ^
+%FORMS-E-NOBLTINGRP, BUILTIN cannot be in a group.
+
+   20            Copy CDD$TOP.PERSONNEL.EMPLOYEE From Dictionary End Copy    { ! NOTYETIMP }
+                 ^
+%FORMS-E-NOTYETIMP, feature not yet implemented.
+
+   27        Record List ALL_RECORDS REC MISSING_REC End List    { ! NORECDEF }
+                                         ^
+%FORMS-E-NORECDEF, record MISSING_REC has not been defined.

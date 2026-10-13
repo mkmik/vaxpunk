@@ -1,0 +1,36 @@
+/* What FORMS TRANSLATE checks in form data and records: each line
+   marked ! draws an error, and no form is written. Its listing, of
+   FORMS TRANSLATE/LIST, is checks.lis. */
+Form CHECKS_TEST
+    Form Data
+        NAME Character(20)
+        NAME Character(10)                      { ! DUPLITEM }
+        A_VERY_LONG_NAME_THAT_IS_TOO_LONG_TO_BE Character(1)    { ! NAMETRUNC }
+        FORMS$NAME Character(1)                 { ! FORMSRES }
+        TRAILING_ Character(1)                  { ! BADNAME }
+        EMPTY Character(0)                      { ! INTGTRZER }
+        HUGE Integer(32)                        { ! NUMSTRSIZ }
+        MONEY Decimal(20, 12)                   { ! NUMSTRSIZ }
+        REAL Float(34, 5)                       { ! BADSIGNIFLEN, BADEXRADLEN }
+        NOWHERE Character(31) Builtin           { ! INVBLTINNAM }
+        Group NONE Occurs 0                     { ! INTGTRZER }
+            ITEM Character(1)
+            FORMNAME Character(31) Builtin      { ! NOBLTINGRP }
+        End Group
+        Copy CDD$TOP.PERSONNEL.EMPLOYEE From Dictionary End Copy    { ! NOTYETIMP }
+    End Data
+
+    Form Record REC
+        NAME Character(20)
+    End Record
+
+    Record List ALL_RECORDS REC MISSING_REC End List    { ! NORECDEF }
+
+    Layout VT
+        Device Terminal Type %VT100 End Device
+        Size 24 Lines By 80 Columns
+        Panel MAIN
+            Field NAME Line 1 Column 1 End Field
+        End Panel
+    End Layout
+End Form

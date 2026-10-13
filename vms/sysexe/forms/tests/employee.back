@@ -1,0 +1,324 @@
+/* A form for keeping employees: much of IFDL in one place, for FORMS's
+   tests. FORMS TRANSLATE must take it with nothing to say, and FORMS
+   BACK_TRANSLATE give employee.back. */
+Form EMPLOYEE_FORM
+    Form Data
+        NAME Character(30)
+        BADGE Integer(6)
+        SALARY Decimal(7, 2)
+        RATE Float(6, 2)
+        HIRED Date
+        TODAY Date Current
+        STAMP Datetime(16)
+        GRADE Unsigned Byte Value 3
+        TITLE Character(20) Value "Engineer"
+        N Unsigned Longword
+        CURRENTITEM Character(31) Builtin
+        Fieldvalue Builtin
+        Group SKILL Tracked
+            Occurs 5 Current N
+            SKILL_NAME Character(15)
+            YEARS Word Integer
+        End Group
+        { the totals, which the program works out }
+        TOTAL Longword Integer
+        TAX Quadword Integer
+    End Data
+    Form Data Untracked
+        CHOICE Character(1)
+        STATUS_LINE Character(80) Value "Ready"
+    End Data
+    Form Record EMPLOYEE_REC Using Natural Alignment
+        NAME Character(30)
+        BADGE Integer(6) Explicit Sign Left Separate
+        SALARY Decimal(7, 2) Packed
+        RATE Float(6, 2) Implicit Sign
+        HIRED Adt
+        STAMP Tm
+        Group SKILL Occurs 5
+            SKILL_NAME Character(15)
+            YEARS Word Integer
+        End Group
+        DEPARTMENT Character(10)
+            Using TITLE
+    End Record
+    Form Record TOTALS_REC
+        TOTAL Longword Integer
+            Source TOTAL Destination TAX
+        TAX Quadword Integer
+        Transfer TAX
+            Using TAX
+    End Record
+    Record List EVERYTHING EMPLOYEE_REC TOTALS_REC End List
+    Layout VT_LAYOUT
+        Device
+            Terminal OFFICE_VT
+                Type %VT200 Color
+            Terminal
+                Type %VT100
+        End Device
+        Language "English"
+        Units Characters
+        Size 24 Lines By 80 Columns
+        List GRADES
+            1
+            2
+            3
+            4
+            5
+        End List
+        List PLACES Exactcase
+            "Maynard"
+            "Nashua"
+            "Reading"
+        End List
+        Attribute LOUD
+            For OFFICE_VT
+                Is Bold Reverse
+            Is Bold
+        End Attribute
+        Viewport MAIN_VP
+            Lines 1 Through 21
+            Columns 1 Thru 80
+        End Viewport
+        Viewport MESSAGE_VP
+            Lines 22 Through 24
+            Columns 1 Through 80
+        End Viewport
+        Function SAVE
+            Is %DO (%PF1 %KP_PERIOD)
+        End Function
+        Function QUIT
+            For OFFICE_VT
+                Is %F10
+            Is (%PF1 %KP_9)
+        End Function
+        Function Next Item
+            Is %TAB %CARRIAGE_RETURN
+        End Function
+        Internal Response CHECK_GRADE
+            If (GRADE < 1) Or (GRADE > 5) Then
+                Message "Grade must be 1 to 5, not " GRADE "."
+                Signal %BELL
+                Invalid
+            Else
+                Let TOTAL = (SALARY * 12) / 100 + 1
+            End If
+        End Response
+        Internal Response FINISH
+            Include CHECK_GRADE
+            Call "EMP_SAVE" Using
+                By Reference EMPLOYEE_REC
+                By Descriptor NAME
+                By Value GRADE
+            Giving N
+            Return Immediate "EFSAV"
+        End Response
+        Enable Response
+            Remove All
+            Display MAIN_PANEL On MAIN_VP
+        End Response
+        Disable Response
+            Remove MAIN_VP MESSAGE_VP
+        End Response
+        Receive Response EMPLOYEE_REC
+            Activate
+                Panel MAIN_PANEL
+                Group SKILL On MAIN_PANEL
+            Position To Field NAME On MAIN_PANEL
+            Request Exit Response
+                Validate All
+            End Response
+        End Response
+        Send Response EVERYTHING
+            Reset SKILL(*).YEARS TOTAL
+        End Response
+        Transceive Response EMPLOYEE_REC TOTALS_REC
+            Activate
+                Corresponding Receive All
+            Timeout 60
+        End Response
+        Control Text Response " FCLR"
+            Refresh All
+            Let STATUS_LINE = %REV("ydaeR")
+        End Response
+        Function Response SAVE
+            Include FINISH
+        End Response
+        Function Response QUIT
+            Return " FQUT"
+        End Response
+        Function Response Next Item
+            If Last Item Then
+                Position To First Item
+            Else
+                Position Immediate To Next Item
+            End If
+        End Response
+        Use Help Panel MAIN_HELP
+        Field Default ENTRY_FIELD
+            Same Line Next Column + 2
+            Autoskip
+            Active Highlight Reverse
+        End Default
+        Literal Default CAPTION
+            Next Line
+            Display Bold
+        End Default
+        Message Panel MESSAGES
+            Viewport MESSAGE_VP
+            Displays 2
+        End Panel
+        Panel MAIN_PANEL
+            Viewport MAIN_VP
+            Display %KEYPAD_APPLICATION
+            Retain
+            Entry Response
+                Message "Enter an employee."
+            End Response
+            Literal Text
+                Line 1 Column 30
+                Value "Employee Record"
+                Display Font Size Double Wide Underlined
+            End Literal
+            Literal Polyline
+                Line 2 Column 1
+                Line 2 Column 80
+            End Literal
+            Literal Rectangle
+                Line 3 Column 1
+                Line 20 Column 80
+            End Literal
+            Literal Text
+                Line 4 Column 3
+                Value "Name:"
+            End Literal
+            Field NAME
+                Same Line Next Column + 1
+                Apply Field Default ENTRY_FIELD
+                Input Required Message "A name, please."
+                Uppercase
+                Minimum Length 2
+                Use Help Message "The employee's name, as on the badge."
+            End Field
+            Literal Text
+                Line 5 Column 3
+                Value "Badge:"
+                Apply Literal Default CAPTION
+            End Literal
+            Field BADGE
+                Line 5 Column 10
+                Output Picture 999'-'999
+                Justification Right
+                Protected When BADGE > 0
+            End Field
+            Field SALARY
+                Line 6 Column 10
+                Output Picture W9(5).99
+                Currency Sign Is "$"
+                Sign Parentheses
+                Replace Leading "*"
+                Range 0 Through 99999.99 Message "Out of range."
+            End Field
+            Field RATE
+                Line 7 Column 10
+                Scale -2
+                Decimal Point Is Comma
+                No Autoskip
+            End Field
+            Field HIRED
+                Line 8 Column 10
+                Output Picture For Date DD-AAA-YYYY
+                Input Picture For Date DD-NN-YYYY
+            End Field
+            Field TODAY
+                Line 8 Column 40
+                No Data Input
+            End Field
+            Field GRADE
+                Line 9 Column 10
+                Search GRADES Message "No such grade."
+                Exit Response
+                    Include CHECK_GRADE
+                End Response
+            End Field
+            Field TITLE
+                Line 9 Column 40
+                Search Not PLACES
+                Highlight Bold When TITLE = "Boss"
+                Concealed When GRADE = 5
+                Output "(none)" When TITLE = ""
+                Timeout 30
+                Mixed Case
+            End Field
+            Group SKILL
+                Vertical Displays 3 First 1
+                Line 11 Column 3
+                Field SKILL_NAME
+                    Same Line
+                    Require SKILL(**).YEARS >= 0 Message "Years can't be less than none."
+                End Field
+                Field YEARS
+                    Same Line Next Column
+                    Output Picture 99
+                    Display LOUD
+                End Field
+            End Group
+            Textfield STATUS_LINE
+                Line 16 Column 3
+                Rows 2
+                Columns 60
+                Word Wrap
+                Erase On Entry
+            End Field
+            Icon OK_ICON
+                Literal Text
+                    Line 18 Column 70
+                    Value "[ OK ]"
+                End Literal
+            End Icon
+        End Panel
+        Help Panel MAIN_HELP
+            Viewport MAIN_VP
+            Literal Text
+                Line 2 Column 2
+                Value "Type the employee's data; Do saves it, F10 quits. Tab moves to the next field."
+            End Literal
+        End Panel
+    End Layout
+    Layout WINDOW_LAYOUT
+        Device
+            Pixel DESKTOP
+                Type %MOTIF Planes 8 Color
+        End Device
+        Units Millimeters
+        Size 100.0 Lines By 150.0 Columns
+        Display Viewport Title "Employees" Decorations
+        Viewport WHOLE
+            Lines 1 Through 100
+            Columns 1 Through 150
+            Display Viewport Background Color 0.9, 0.9, 0.9
+        End Viewport
+        Panel WINDOW_PANEL
+            Viewport WHOLE
+            Slider Field GRADE
+                Line 10 Column 10
+                Width 60
+                Maximum Right
+                Show Value
+                Label "Grade"
+                Limits 1 Through 5
+            End Field
+            Push Button SAVE_BUTTON
+                Line 30 Column 10
+                Label "Save"
+            End Button
+            Literal Text
+                Line 50 Column 10
+                Value "Pixels"
+                Display Font Family Helvetica Weight Bold Size 12
+            End Literal
+        End Panel
+    End Layout
+End Form
+/* The end: comments after END FORM are kept. */

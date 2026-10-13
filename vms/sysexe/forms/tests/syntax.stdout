@@ -1,0 +1,5 @@
+
+   14                    Line 1 Colum 10
+                                ^
+%FORMS-E-SYNTAXERR, syntax error; an expected keyword, name or literal is missing or misspelled.
+-FORMS-I-EXPECTED, one of the following was expected: LINE, SAME, NEXT, COLUMN, WIDTH, HEIGHT, APPLY, ENTRY, EXIT, FUNCTION, BUILTIN, VALIDATION, NO, ACTIVE, CONCEALED, NOT, DISPLAY, DATA, USE, HIGHLIGHT, PROTECTED, TIMEOUT, INPUT, RANGE, REQUIRE, SEARCH, AUTOSKIP, OUTPUT, SCALE, SIGN, REPLACE, DECIMAL, CURRENCY, JUSTIFICATION, UPPERCASE, MIXED, MINIMUM, ERASE, COPY, END.

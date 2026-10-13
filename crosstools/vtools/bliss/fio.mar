@@ -14,8 +14,10 @@ INFO = ^X7FF00000                       ; the runner info block
 ; FIO$OPEN name, length, mode, channel: opens the host file named by length
 ; bytes at name, in the directory vrun --files gives, to read (mode 0) or to
 ; write (mode 1, created or emptied). Stores the channel at channel.
-; Returns a condition value.
+; Returns a condition value. FIO$K_BINARY (2) in the mode changes nothing:
+; a host file is bytes either way.
 FIO$OPEN::
+        and     x2, x2, #1
         svc     #4
         str     x1, [x3]
         ret

@@ -1,0 +1,12 @@
+/* Nothing may follow the hyphen that continues a string. */
+Form CONCAT_TEST
+    Layout VT
+        Device Terminal Type %VT100 End Device
+        Size 24 Lines By 80 Columns
+        Panel MAIN
+            Literal Text Line 1 Column 1
+                Value "One"- "Two"
+            End Literal
+        End Panel
+    End Layout
+End Form

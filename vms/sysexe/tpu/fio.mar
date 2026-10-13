@@ -1,14 +1,16 @@
-        .TITLE  FIO     The I/O module of TPU.EXE on vaxpunk
-        .IDENT  /V0.1/
+        .TITLE  FIO     The I/O module of TPU.EXE and FORMS.EXE on vaxpunk
+        .IDENT  /V0.2/
 ;
-; What TPU needs from the system, the routines crosstools/vtools/bliss/
-; fio.r64 declares (PRD-0006 "Two I/O modules"), on vaxpunk: files through
+; What TPU and FORMS need from the system, the routines crosstools/vtools/
+; bliss/fio.r64 declares (PRD-0006 "Two I/O modules"), on vaxpunk: files through
 ; RMS, memory from $EXPREG, lines through LIB$PUT_OUTPUT, the command line
 ; from CLI$GET_VALUE's $LINE, the time from $ASCTIM, and $EXIT. Under
 ; vrun, crosstools/vtools/bliss/fio.mar serves the same routines. A file
 ; is read and written as a stream of bytes, each record a line ended by a
 ; line feed, as under vrun: variable length records with carriage return
-; control, as EDIT writes them. The TT$ routines are the terminal, SYS$INPUT,
+; control, as EDIT writes them. Opened with FIO$K_BINARY, a file is its
+; bytes as they are, in FIX 512 records, the last padded with zeros, as
+; COPY/BINARY makes one. The TT$ routines are the terminal, SYS$INPUT,
 ; a key at a time, which vrun/tt.b64 has under vrun.
 ; ponytail: two files open at once; a record past RECMAX bytes is cut.
 ;
@@ -29,7 +31,7 @@ S_FAB = 0
 S_RAB = FAB$C_BLN
 S_LEN = S_RAB + RAB$C_BLN               ; the record's bytes, with its line feed
 S_AT = S_LEN + 4                        ; the next to read, or the bytes written
-S_MODE = S_AT + 4                       ; 0 closed, 1 reading, 2 writing
+S_MODE = S_AT + 4                       ; 0 closed, 1 reading, 2 writing; 4 more: binary
 S_REC = S_MODE + 4
 S_SIZE = S_REC + RECMAX + 4
 
@@ -75,8 +77,9 @@ CHAN:
 20$:    RSB
 
 ; FIO$OPEN name, length, mode, channel: opens the file to read (mode 0) or
-; makes a new version of it to write (mode 1), and stores its channel.
-; Returns RMS's status, or SS$_NOIOCHAN with every slot in use.
+; makes a new version of it to write (mode 1), as bytes with FIO$K_BINARY
+; (2) in the mode, and stores its channel. Returns RMS's status, or
+; SS$_NOIOCHAN with every slot in use.
         .ENTRY  FIO$OPEN, ^M<R2, R3, R4, R5, R6, R7>
         CLRL    R7
 10$:    CMPL    R7, #SLOTS
@@ -99,19 +102,25 @@ CHAN:
         MOVW    #RECMAX, S_RAB+RAB$W_USZ(R6)
         CLRL    S_LEN(R6)
         CLRL    S_AT(R6)
-        TSTL    12(AP)
-        BNEQ    40$
+        BLBS    12(AP), 40$
         MOVB    #FAB$M_GET, S_FAB+FAB$B_FAC(R6)
         $OPEN   FAB=S_FAB(R6)
         MOVL    #1, R2
         BRB     50$
 40$:    MOVB    #FAB$M_PUT, S_FAB+FAB$B_FAC(R6)
+        BBS     #1, 12(AP), 45$
         MOVB    #FAB$C_VAR, S_FAB+FAB$B_RFM(R6)
         MOVB    #FAB$M_CR, S_FAB+FAB$B_RAT(R6)
-        $CREATE FAB=S_FAB(R6)
+        BRB     47$
+45$:    MOVB    #FAB$C_FIX, S_FAB+FAB$B_RFM(R6)
+        MOVW    #512, S_FAB+FAB$W_MRS(R6)
+        CLRB    S_FAB+FAB$B_RAT(R6)
+47$:    $CREATE FAB=S_FAB(R6)
         MOVL    #2, R2
 50$:    BLBC    R0, 90$
-        $CONNECT RAB=S_RAB(R6)
+        BBC     #1, 12(AP), 55$
+        BISL2   #4, R2                  ; bytes, not lines
+55$:    $CONNECT RAB=S_RAB(R6)
         BLBC    R0, 80$
         MOVL    R2, S_MODE(R6)
         ADDL3   #1, R7, @16(AP)
@@ -122,8 +131,8 @@ CHAN:
 90$:    RET
 
 ; FIO$READ channel, buffer, length, count: reads at most length bytes,
-; the rest of a record and its line feed, and stores how many at count.
-; SS$_ENDOFFILE at the end.
+; the rest of a record and its line feed (none in binary), and stores how
+; many at count. SS$_ENDOFFILE at the end.
         .ENTRY  FIO$READ, ^M<R2, R3, R4, R5, R6>
         CLRL    @16(AP)
         MOVL    4(AP), R0
@@ -143,8 +152,10 @@ CHAN:
         MOVL    #SS$_ENDOFFILE, R0
         RET
 15$:    MOVZWL  S_RAB+RAB$W_RSZ(R6), R0
+        BBS     #2, S_MODE(R6), 16$
         MOVB    #10, S_REC(R6)[R0]      ; the line feed after it
-        ADDL3   #1, R0, S_LEN(R6)
+        INCL    R0
+16$:    MOVL    R0, S_LEN(R6)
         CLRL    S_AT(R6)
 20$:    SUBL3   S_AT(R6), S_LEN(R6), R2 ; what is left of it, as much as fits
         CMPL    R2, 12(AP)
@@ -167,7 +178,7 @@ PUTREC:
         RSB
 
 ; FIO$WRITE channel, buffer, length: writes the bytes, a record at each
-; line feed.
+; line feed, or in binary at each 512 bytes.
         .ENTRY  FIO$WRITE, ^M<R2, R3, R4, R5, R6>
         MOVL    4(AP), R0
         BSBW    CHAN
@@ -180,14 +191,17 @@ PUTREC:
 20$:    DECL    R3
         BLSS    80$
         MOVZBL  (R2)+, R1
+        BBS     #2, S_MODE(R6), 30$
         CMPB    R1, #10
         BEQL    40$
         CMPL    S_AT(R6), #RECMAX
         BGEQU   20$                     ; too long: cut
-        ADDL3   S_AT(R6), R6, R0
+30$:    ADDL3   S_AT(R6), R6, R0
         MOVB    R1, S_REC(R0)
         INCL    S_AT(R6)
-        BRB     20$
+        BBC     #2, S_MODE(R6), 20$
+        CMPL    S_AT(R6), #512
+        BLSSU   20$
 40$:    PUSHR   #^M<R2, R3>
         BSBW    PUTREC
         POPR    #^M<R2, R3>
@@ -196,8 +210,8 @@ PUTREC:
 80$:    MOVL    #SS$_NORMAL, R0
         RET
 
-; FIO$CLOSE channel: writes what is gathered if it is being written, and
-; closes it.
+; FIO$CLOSE channel: writes what is gathered if it is being written, in
+; binary with zeros to 512 bytes, and closes it.
         .ENTRY  FIO$CLOSE, ^M<R2, R3, R4, R5, R6>
         MOVL    4(AP), R0
         BSBW    CHAN
@@ -205,11 +219,17 @@ PUTREC:
         BNEQ    10$
         MOVL    #SS$_IVCHAN, R0
         RET
-10$:    CMPL    S_MODE(R6), #2
-        BNEQ    20$
+10$:    BBC     #1, S_MODE(R6), 20$
         TSTL    S_AT(R6)
         BEQL    20$
-        BSBW    PUTREC
+        BBC     #2, S_MODE(R6), 15$
+12$:    CMPL    S_AT(R6), #512
+        BGEQU   15$
+        ADDL3   S_AT(R6), R6, R0
+        CLRB    S_REC(R0)
+        INCL    S_AT(R6)
+        BRB     12$
+15$:    BSBW    PUTREC
 20$:    CLRL    S_MODE(R6)
         $CLOSE  FAB=S_FAB(R6)
         RET

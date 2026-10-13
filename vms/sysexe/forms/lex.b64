@@ -1,0 +1,325 @@
+MODULE LEX (IDENT = 'V0.1') =
+%TITLE 'FORMS: the tokens of IFDL'
+BEGIN
+!
+! IFDL's words, as the IFDL Reference Manual (1.1) has them: names and
+! keywords in either case, implementor names (%VT100), numbers, strings
+! in " or ', a quote in one doubled, and a string continued on the next
+! line after "-; comments in /* */ or { }, which are blanks. There is no
+! token for a picture string: its characters mean something else in a
+! picture, so the parser asks LEX_PICTURE for one where the grammar
+! wants it. The parser finds tokens where it needs them, from a position
+! in the source, as many times as it backs up.
+!
+REQUIRE 'FORMS';
+
+OWN
+    SRC,                                ! the source
+    SLEN;
+
+GLOBAL ROUTINE LEX_INIT (S, L) : NOVALUE =
+    BEGIN
+    SRC = .S;
+    SLEN = .L
+    END;
+
+MACRO
+    CH(P) = GETB(.SRC + (P)) %;
+
+ROUTINE LETTER (C) =
+    (.C GEQU %C'A' AND .C LEQU %C'Z') OR (.C GEQU %C'a' AND .C LEQU %C'z');
+
+ROUTINE DIGIT (C) =
+    .C GEQU %C'0' AND .C LEQU %C'9';
+
+ROUTINE NAMECHAR (C) =
+    LETTER(.C) OR DIGIT(.C) OR .C EQL %C'$' OR .C EQL %C'_';
+
+! BLANK character: a space, tab, line end or form feed.
+ROUTINE BLANK (C) =
+    .C EQL %C' ' OR .C EQL 9 OR .C EQL 10 OR .C EQL 11 OR .C EQL 12 OR .C EQL 13;
+
+! LEX_COMMENT position: past the comment that starts there, or 0 if
+! none does, or it has no end.
+GLOBAL ROUTINE LEX_COMMENT (P) =
+    BEGIN
+    IF .P + 1 LSS .SLEN AND CH(.P) EQL %C'/' AND CH(.P + 1) EQL %C'*'
+    THEN
+        BEGIN
+        INCR Q FROM .P + 2 TO .SLEN - 2 DO
+            IF CH(.Q) EQL %C'*' AND CH(.Q + 1) EQL %C'/' THEN RETURN .Q + 2;
+        RETURN 0
+        END;
+    IF .P LSS .SLEN AND CH(.P) EQL %C'{'
+    THEN
+        BEGIN
+        INCR Q FROM .P + 1 TO .SLEN - 1 DO
+            IF CH(.Q) EQL %C'}' THEN RETURN .Q + 1;
+        RETURN 0
+        END;
+    0
+    END;
+
+! LEX_SKIP position: where the next token starts, past blanks and
+! comments; at a comment with no end, that comment.
+GLOBAL ROUTINE LEX_SKIP (P) =
+    BEGIN
+    LOCAL
+        Q;
+    Q = .P;
+    WHILE .Q LSS .SLEN DO
+        BEGIN
+        IF BLANK(CH(.Q))
+        THEN
+            Q = .Q + 1
+        ELSE
+            BEGIN
+            LOCAL
+                E;
+            E = LEX_COMMENT(.Q);
+            IF .E EQL 0 THEN EXITLOOP;
+            Q = .E
+            END
+        END;
+    .Q
+    END;
+
+! STRINGEND position: past the string that starts there, a piece after
+! a piece continued with "-; or -1 with its message at ERRP.
+ROUTINE STRINGEND (P, ERRP) =
+    BEGIN
+    LOCAL
+        Q;
+    Q = .P;
+    WHILE TRUE DO
+        BEGIN
+        LOCAL
+            QUOTE;
+        QUOTE = CH(.Q);
+        Q = .Q + 1;
+        WHILE TRUE DO
+            BEGIN
+            IF .Q GEQ .SLEN OR CH(.Q) EQL 10 OR CH(.Q) EQL 13
+            THEN
+                (.ERRP = FORMS$_NOENDQUOTE; RETURN -1);
+            IF CH(.Q) EQL .QUOTE
+            THEN
+                BEGIN
+                IF .Q + 1 LSS .SLEN AND CH(.Q + 1) EQL .QUOTE
+                THEN
+                    Q = .Q + 2
+                ELSE
+                    EXITLOOP
+                END
+            ELSE
+                Q = .Q + 1
+            END;
+        Q = .Q + 1;
+        ! A hyphen right after it continues it on the next line.
+        IF .Q GEQ .SLEN OR CH(.Q) NEQ %C'-' THEN RETURN .Q;
+        BEGIN
+        LOCAL
+            R;
+        R = .Q + 1;
+        WHILE .R LSS .SLEN AND (CH(.R) EQL %C' ' OR CH(.R) EQL 9 OR CH(.R) EQL 13) DO R = .R + 1;
+        IF .R GEQ .SLEN OR CH(.R) NEQ 10 THEN (.ERRP = FORMS$_NOCONCAT; RETURN -1);
+        WHILE .R LSS .SLEN AND BLANK(CH(.R)) DO R = .R + 1;
+        IF .R GEQ .SLEN OR (CH(.R) NEQ %C'"' AND CH(.R) NEQ %C'''')
+        THEN
+            (.ERRP = FORMS$_NOCONCAT; RETURN -1);
+        Q = .R
+        END
+        END;
+    .Q
+    END;
+
+! LEX_STRING start, end, buffer: the characters of the string token
+! there, quotes undoubled and pieces joined, into the buffer; how many.
+GLOBAL ROUTINE LEX_STRING (P, E, BUF) =
+    BEGIN
+    LOCAL
+        Q,
+        N;
+    Q = .P;
+    N = 0;
+    WHILE .Q LSS .E DO
+        BEGIN
+        LOCAL
+            QUOTE;
+        QUOTE = CH(.Q);
+        Q = .Q + 1;
+        WHILE TRUE DO
+            BEGIN
+            IF CH(.Q) EQL .QUOTE
+            THEN
+                BEGIN
+                IF .Q + 1 LSS .E AND CH(.Q + 1) EQL .QUOTE
+                THEN
+                    Q = .Q + 1
+                ELSE
+                    EXITLOOP
+                END;
+            PUTB(.BUF + .N, CH(.Q));
+            N = .N + 1;
+            Q = .Q + 1
+            END;
+        Q = .Q + 1;
+        ! Past the hyphen and the blanks to the next piece's quote.
+        IF .Q LSS .E
+        THEN
+            BEGIN
+            Q = .Q + 1;
+            WHILE .Q LSS .E AND BLANK(CH(.Q)) DO Q = .Q + 1
+            END
+        END;
+    .N
+    END;
+
+! LEX_TOKEN position, token: the token that starts there (LEX_SKIP's).
+GLOBAL ROUTINE LEX_TOKEN (P, TOK : REF VECTOR) : NOVALUE =
+    BEGIN
+    LOCAL
+        C,
+        Q;
+    TOK[TOK_START] = .P;
+    TOK[TOK_KW] = 0;
+    TOK[TOK_END] = .P;
+    IF .P GEQ .SLEN THEN (TOK[TOK_KIND] = TK_EOF; RETURN);
+    C = CH(.P);
+    Q = .P + 1;
+    IF LETTER(.C) OR .C EQL %C'%' AND .Q LSS .SLEN AND NAMECHAR(CH(.Q))
+    THEN
+        BEGIN
+        WHILE .Q LSS .SLEN AND NAMECHAR(CH(.Q)) DO Q = .Q + 1;
+        TOK[TOK_KIND] = (IF .C EQL %C'%' THEN TK_IMP ELSE TK_WORD);
+        TOK[TOK_KW] = GR_KWFIND(.SRC + .P, .Q - .P)
+        END
+    ELSE IF DIGIT(.C) OR .C EQL %C'.' AND .Q LSS .SLEN AND DIGIT(CH(.Q))
+    THEN
+        BEGIN
+        Q = .P;
+        WHILE .Q LSS .SLEN AND DIGIT(CH(.Q)) DO Q = .Q + 1;
+        IF .Q + 1 LSS .SLEN AND CH(.Q) EQL %C'.' AND DIGIT(CH(.Q + 1))
+        THEN
+            BEGIN
+            Q = .Q + 1;
+            WHILE .Q LSS .SLEN AND DIGIT(CH(.Q)) DO Q = .Q + 1
+            END;
+        IF .Q + 1 LSS .SLEN AND UPPER(CH(.Q)) EQL %C'E'
+        THEN
+            BEGIN
+            LOCAL
+                R;
+            R = .Q + 1;
+            IF CH(.R) EQL %C'+' OR CH(.R) EQL %C'-' THEN R = .R + 1;
+            IF .R LSS .SLEN AND DIGIT(CH(.R))
+            THEN
+                BEGIN
+                Q = .R;
+                WHILE .Q LSS .SLEN AND DIGIT(CH(.Q)) DO Q = .Q + 1
+                END
+            END;
+        TOK[TOK_KIND] = TK_NUM
+        END
+    ELSE IF .C EQL %C'"' OR .C EQL %C''''
+    THEN
+        BEGIN
+        Q = STRINGEND(.P, TOK[TOK_ERR]);
+        IF .Q LSS 0
+        THEN
+            BEGIN
+            TOK[TOK_KIND] = TK_ERR;
+            Q = .P + 1
+            END
+        ELSE
+            TOK[TOK_KIND] = TK_STR
+        END
+    ELSE IF .C EQL %C'{' OR .C EQL %C'/' AND .Q LSS .SLEN AND CH(.Q) EQL %C'*'
+    THEN
+        BEGIN
+        ! LEX_SKIP stopped at a comment with no end.
+        TOK[TOK_KIND] = TK_ERR;
+        TOK[TOK_ERR] = FORMS$_ENDFILECOM
+        END
+    ELSE
+        BEGIN
+        LOCAL
+            D;
+        D = (IF .Q LSS .SLEN THEN CH(.Q) ELSE 0);
+        IF .C EQL %C'<' AND (.D EQL %C'=' OR .D EQL %C'>') OR .C EQL %C'>' AND .D EQL %C'='
+           OR .C EQL %C'*' AND .D EQL %C'*'
+        THEN
+            Q = .Q + 1;
+        TOK[TOK_KW] = GR_KWFIND(.SRC + .P, .Q - .P);
+        IF .TOK[TOK_KW] NEQ 0
+        THEN
+            TOK[TOK_KIND] = TK_PUNCT
+        ELSE
+            BEGIN
+            TOK[TOK_KIND] = TK_ERR;
+            TOK[TOK_ERR] = FORMS$_ILLINPCHAR
+            END
+        END;
+    TOK[TOK_END] = .Q
+    END;
+
+! LEX_PICTURE position: past the picture string that starts there: its
+! characters up to a blank, a literal in ' in it with its blanks.
+GLOBAL ROUTINE LEX_PICTURE (P) =
+    BEGIN
+    LOCAL
+        Q;
+    Q = .P;
+    WHILE .Q LSS .SLEN AND NOT BLANK(CH(.Q)) DO
+        BEGIN
+        IF CH(.Q) EQL %C''''
+        THEN
+            BEGIN
+            Q = .Q + 1;
+            WHILE .Q LSS .SLEN AND CH(.Q) NEQ %C'''' AND CH(.Q) NEQ 10 DO Q = .Q + 1;
+            IF .Q LSS .SLEN AND CH(.Q) EQL %C'''' THEN Q = .Q + 1
+            END
+        ELSE
+            Q = .Q + 1
+        END;
+    .Q
+    END;
+
+! LEX_LINE position: the number of its line, from 1.
+GLOBAL ROUTINE LEX_LINE (P) =
+    BEGIN
+    LOCAL
+        N;
+    N = 1;
+    INCR Q FROM 0 TO MIN(.P, .SLEN) - 1 DO
+        IF CH(.Q) EQL 10 THEN N = .N + 1;
+    .N
+    END;
+
+! LEX_LINESTART position: where its line starts.
+GLOBAL ROUTINE LEX_LINESTART (P) =
+    BEGIN
+    LOCAL
+        Q;
+    Q = MIN(.P, .SLEN);
+    WHILE .Q GTR 0 AND CH(.Q - 1) NEQ 10 DO Q = .Q - 1;
+    .Q
+    END;
+
+! LEX_LINETEXT position, address of the length: the line it is on,
+! without its line end.
+GLOBAL ROUTINE LEX_LINETEXT (P, LENP) =
+    BEGIN
+    LOCAL
+        S,
+        E;
+    S = LEX_LINESTART(.P);
+    E = .S;
+    WHILE .E LSS .SLEN AND CH(.E) NEQ 10 DO E = .E + 1;
+    IF .E GTR .S AND CH(.E - 1) EQL 13 THEN E = .E - 1;
+    .LENP = .E - .S;
+    .SRC + .S
+    END;
+
+END
+ELUDOM

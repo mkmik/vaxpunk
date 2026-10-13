@@ -1,0 +1,13 @@
+
+   13                    Panel NO_SUCH_PANEL
+                               ^
+%FORMS-W-OBJECTNOTFND, panel NO_SUCH_PANEL does not exist
+
+   15                    Field CITY On MAIN
+                               ^
+%FORMS-W-OBJECTNOTFND, field CITY does not exist on panel MAIN
+
+   17                Display LATER
+                             ^
+%FORMS-W-OBJECTNOTFND, panel LATER does not exist
+%FORMS-W-INCOMPLET, form is incomplete.

@@ -1,0 +1,906 @@
+MODULE CHECK (IDENT = 'V0.1') =
+%TITLE 'FORMS: what the translator checks in a form'
+BEGIN
+!
+! CK_RUN checks what the grammar can't, with the IFDL Reference Manual's
+! rules and DECforms's messages: names (NAMETRUNC, FORMSRES, BADNAME),
+! that what is declared at one level is declared once (DUPLITEM), that
+! a BUILTIN data item is one of DECforms's, at the top (INVBLTINNAM,
+! NOBLTINGRP), that a name refers to something declared (NODATITEM,
+! NODATGRP, NORECDEF,
+! NOSENDREC, NORECVREC, NOTRANSEND, NOTRANRECV, NOVIEWPRT, NOLIST,
+! NOINTERNAL, NOFUNCTION, NOATTRIB, NOTHELPPANEL), that an internal
+! response doesn't include itself (RECURLOOP), and numbers in their
+! range (INTGTRZER, NUMSTRSIZ, BADSIGNIFLEN, BADEXRADLEN, SCALEVALU,
+! CTRLTXTLEN, HIGHRANGELESS, MAXRECLIS, and a viewport in its layout's
+! size: VIEBEGLIN...). A panel, field, group, icon or button a step
+! refers to that doesn't exist is only a warning, OBJECTNOTFND, and makes
+! the form incomplete, as DECforms's translator has it.
+! ponytail: no check that fields and literals fit their viewport, which
+! needs their widths from pictures and data types (the character-cell
+! feature, t8y:/layered/decforms#character-cell, works those out); none
+! of field description entries that conflict, pictures, VALUE against the
+! data type, or key names. COPY FROM DICTIONARY is NOTYETIMP: vaxpunk has
+! no CDD (t8y:/layered/decforms#cdd-records).
+!
+REQUIRE 'FORMS';
+REQUIRE 'FIO';
+
+GLOBAL
+    CK_INCOMPLETE;                      ! a warning made the form incomplete
+
+OWN
+    ! The rules and keywords the checks look for.
+    R_DATA_ITEM, R_BUILTIN_ITEM, R_DATA_GROUP, R_OCCURS, R_TEXT_DATA,
+    R_DATETIME_DATA, R_COPY_DICTIONARY, R_FORM_RECORD, R_RECORD_FIELD, R_TEXT_FIELD_TYPE,
+    R_DATETIME_FIELD, R_RECORD_GROUP, R_RECORD_LIST, R_LAYOUT, R_SIZE, R_UNITS,
+    R_VIEWPORT_DECLARATION, R_VIEWPORT_LINES, R_VIEWPORT_COLUMNS, R_LIST_DECLARATION,
+    R_ATTRIBUTE_DECLARATION, R_FUNCTION_DECLARATION, R_FUNCTION_RESPONSE,
+    R_INTERNAL_RESPONSE, R_SEND_RESPONSE, R_RECEIVE_RESPONSE, R_TRANSCEIVE_RESPONSE,
+    R_CONTROL_TEXT_RESPONSE, R_PANEL, R_HELP_PANEL, R_MESSAGE_PANEL, R_VIEWPORT_USE,
+    R_HELP_USE, R_FIELD, R_TEXTFIELD, R_SLIDER, R_PANEL_GROUP, R_ICON, R_PUSH_BUTTON,
+    R_ACTIVATE_ITEM, R_POSITION, R_VALIDATE, R_DISPLAY_STEP, R_PRINT, R_REFRESH,
+    R_REMOVE, R_INCLUDE, R_RETURN, R_SEARCH, R_SCALE, R_RANGE_PAIR, R_DISPLAY_ATTRIBUTE,
+    R_DATA_REF, R_XDATA_REF, R_FIELD_DEFAULT_DECLARATION, R_LITERAL_DEFAULT_DECLARATION,
+    K_ON, K_PANEL, K_FIELD, K_GROUP, K_ICON, K_BUTTON, K_USE, K_PRINTING, K_CHARACTER,
+    K_INTEGER, K_DECIMAL, K_FLOAT, K_DATETIME, K_CHARACTERS, K_LINES,
+    ! Names for messages, in capitals.
+    NB1 : VECTOR[80, BYTE],
+    NB2 : VECTOR[80, BYTE];
+
+! RID name: the rule; there must be one.
+ROUTINE RID (S, L) =
+    BEGIN
+    LOCAL
+        R;
+    R = GR_RULE(.S, .L);
+    IF .R EQL 0
+    THEN
+        BEGIN
+        MS_MSG(FORMS$_FATINTERR, -1, 0);
+        FIO$PUT_LINE(.S, .L);
+        FIO$EXIT(FORMS$_FATINTERR OR %X'10000000')
+        END;
+    .R
+    END;
+
+MACRO
+    RULEID(S) = RID(T(S)) %,
+    KWID(S) = GR_KWFIND(T(S)) %;
+
+ROUTINE INIT : NOVALUE =
+    BEGIN
+    R_DATA_ITEM = RULEID('data-item');
+    R_BUILTIN_ITEM = RULEID('builtin-item');
+    R_DATA_GROUP = RULEID('data-group');
+    R_OCCURS = RULEID('occurs');
+    R_TEXT_DATA = RULEID('text-data');
+    R_DATETIME_DATA = RULEID('datetime-data');
+    R_COPY_DICTIONARY = RULEID('copy-dictionary');
+    R_FORM_RECORD = RULEID('form-record');
+    R_RECORD_FIELD = RULEID('record-field');
+    R_TEXT_FIELD_TYPE = RULEID('text-field-type');
+    R_DATETIME_FIELD = RULEID('datetime-field');
+    R_RECORD_GROUP = RULEID('record-group');
+    R_RECORD_LIST = RULEID('record-list');
+    R_LAYOUT = RULEID('layout');
+    R_SIZE = RULEID('size');
+    R_UNITS = RULEID('units');
+    R_VIEWPORT_DECLARATION = RULEID('viewport-declaration');
+    R_VIEWPORT_LINES = RULEID('viewport-lines');
+    R_VIEWPORT_COLUMNS = RULEID('viewport-columns');
+    R_LIST_DECLARATION = RULEID('list-declaration');
+    R_ATTRIBUTE_DECLARATION = RULEID('attribute-declaration');
+    R_FUNCTION_DECLARATION = RULEID('function-declaration');
+    R_FUNCTION_RESPONSE = RULEID('function-response');
+    R_INTERNAL_RESPONSE = RULEID('internal-response');
+    R_SEND_RESPONSE = RULEID('send-response');
+    R_RECEIVE_RESPONSE = RULEID('receive-response');
+    R_TRANSCEIVE_RESPONSE = RULEID('transceive-response');
+    R_CONTROL_TEXT_RESPONSE = RULEID('control-text-response');
+    R_PANEL = RULEID('panel');
+    R_HELP_PANEL = RULEID('help-panel');
+    R_MESSAGE_PANEL = RULEID('message-panel');
+    R_VIEWPORT_USE = RULEID('viewport-use');
+    R_HELP_USE = RULEID('help-use');
+    R_FIELD = RULEID('field');
+    R_TEXTFIELD = RULEID('textfield');
+    R_SLIDER = RULEID('slider');
+    R_PANEL_GROUP = RULEID('panel-group');
+    R_ICON = RULEID('icon');
+    R_PUSH_BUTTON = RULEID('push-button');
+    R_ACTIVATE_ITEM = RULEID('activate-item');
+    R_POSITION = RULEID('position');
+    R_VALIDATE = RULEID('validate');
+    R_DISPLAY_STEP = RULEID('display-step');
+    R_PRINT = RULEID('print');
+    R_REFRESH = RULEID('refresh');
+    R_REMOVE = RULEID('remove');
+    R_INCLUDE = RULEID('include');
+    R_RETURN = RULEID('return');
+    R_SEARCH = RULEID('search');
+    R_SCALE = RULEID('scale');
+    R_RANGE_PAIR = RULEID('range-pair');
+    R_DISPLAY_ATTRIBUTE = RULEID('display-attribute');
+    R_DATA_REF = RULEID('data-ref');
+    R_XDATA_REF = RULEID('xdata-ref');
+    R_FIELD_DEFAULT_DECLARATION = RULEID('field-default-declaration');
+    R_LITERAL_DEFAULT_DECLARATION = RULEID('literal-default-declaration');
+    K_ON = KWID('ON');
+    K_PANEL = KWID('PANEL');
+    K_FIELD = KWID('FIELD');
+    K_GROUP = KWID('GROUP');
+    K_ICON = KWID('ICON');
+    K_BUTTON = KWID('BUTTON');
+    K_USE = KWID('USE');
+    K_PRINTING = KWID('PRINTING');
+    K_CHARACTER = KWID('CHARACTER');
+    K_INTEGER = KWID('INTEGER');
+    K_DECIMAL = KWID('DECIMAL');
+    K_FLOAT = KWID('FLOAT');
+    K_DATETIME = KWID('DATETIME');
+    K_CHARACTERS = KWID('CHARACTERS');
+    K_LINES = KWID('LINES')
+    END;
+
+! ---- The tree
+
+! CK_NAMEEQL item, item: whether two names are the same, in any case;
+! not if either is -1, no name.
+ROUTINE CK_NAMEEQL (I, J) =
+    BEGIN
+    LOCAL
+        A,
+        B;
+    IF .I LSS 0 OR .J LSS 0 THEN RETURN FALSE;
+    IF ILEN(.I) NEQ ILEN(.J) THEN RETURN FALSE;
+    A = ITXT(.I);
+    B = ITXT(.J);
+    INCR Q FROM 0 TO ILEN(.I) - 1 DO
+        IF UPPER(GETB(.A + .Q)) NEQ UPPER(GETB(.B + .Q)) THEN RETURN FALSE;
+    TRUE
+    END;
+
+! UPNAME item, buffer: the name in capitals in the buffer; its length.
+ROUTINE UPNAME (I, BUF) =
+    BEGIN
+    LOCAL
+        N;
+    N = MIN(ILEN(.I), 79);
+    INCR Q FROM 0 TO .N - 1 DO PUTB(.BUF + .Q, UPPER(GETB(ITXT(.I) + .Q)));
+    .N
+    END;
+
+! LINERULE item: whether the item is a rule that starts a line.
+ROUTINE LINERULE (I) =
+    IKIND(.I) EQL IT_RULE AND (.RFLAGS[IID(.I)] AND RF_LINE) NEQ 0;
+
+! HEADNAME item: the first name in a rule's own line, in the rules in it
+! but not in those that start lines of their own; or -1.
+ROUTINE HEADNAME (I) =
+    BEGIN
+    LOCAL
+        J;
+    J = .I + 1;
+    WHILE .J LSS IEND(.I) DO
+        BEGIN
+        IF IKIND(.J) EQL IT_NAME OR IKIND(.J) EQL IT_STR THEN RETURN .J;
+        IF LINERULE(.J) THEN J = IEND(.J) ELSE J = .J + 1
+        END;
+    -1
+    END;
+
+! LASTNAME data reference: its last name, the item in a group it names.
+ROUTINE LASTNAME (I) =
+    BEGIN
+    LOCAL
+        J,
+        N;
+    N = -1;
+    J = .I + 1;
+    WHILE .J LSS IEND(.I) DO
+        BEGIN
+        IF IKIND(.J) EQL IT_NAME THEN N = .J;
+        J = INEXT(.J)
+        END;
+    .N
+    END;
+
+! DREFNAME item: the last name of the first data reference in a rule's
+! own line, what a FIELD or GROUP on a panel names; or -1.
+ROUTINE DREFNAME (I) =
+    BEGIN
+    LOCAL
+        J;
+    J = .I + 1;
+    WHILE .J LSS IEND(.I) DO
+        BEGIN
+        IF IKIND(.J) EQL IT_RULE AND IID(.J) EQL .R_DATA_REF THEN RETURN LASTNAME(.J);
+        IF LINERULE(.J) THEN J = IEND(.J) ELSE J = .J + 1
+        END;
+    -1
+    END;
+
+! NAMES item, names, keywords: the names in a rule's own line, a data
+! reference's last, with the keyword right before each (or 0); how many.
+ROUTINE NAMES (I, OUT : REF VECTOR, PREV : REF VECTOR) =
+    BEGIN
+    LOCAL
+        J,
+        N,
+        LAST;
+    J = .I + 1;
+    N = 0;
+    LAST = 0;
+    WHILE .J LSS IEND(.I) AND .N LSS 64 DO
+        BEGIN
+        IF IKIND(.J) EQL IT_KW
+        THEN
+            (LAST = .KWBASE[IID(.J)]; J = .J + 1)
+        ELSE IF IKIND(.J) EQL IT_NAME
+        THEN
+            BEGIN
+            OUT[.N] = .J;
+            PREV[.N] = .LAST;
+            N = .N + 1;
+            LAST = 0;
+            J = .J + 1
+            END
+        ELSE IF IKIND(.J) EQL IT_RULE AND (IID(.J) EQL .R_DATA_REF OR IID(.J) EQL .R_XDATA_REF)
+        THEN
+            BEGIN
+            OUT[.N] = LASTNAME(.J);
+            PREV[.N] = .LAST;
+            N = .N + 1;
+            LAST = 0;
+            J = IEND(.J)
+            END
+        ELSE IF LINERULE(.J)
+        THEN
+            J = IEND(.J)
+        ELSE
+            BEGIN
+            IF IKIND(.J) NEQ IT_RULE AND IKIND(.J) NEQ IT_COMMENT THEN LAST = 0;
+            J = .J + 1
+            END
+        END;
+    .N
+    END;
+
+! LEAFN item, kind, n: the nth leaf of that kind in the rule, from 0; or -1.
+ROUTINE LEAFN (I, KIND, N) =
+    BEGIN
+    LOCAL
+        C;
+    C = 0;
+    INCR J FROM .I + 1 TO IEND(.I) - 1 DO
+        IF IKIND(.J) EQL .KIND
+        THEN
+            BEGIN
+            IF .C EQL .N THEN RETURN .J;
+            C = .C + 1
+            END;
+    -1
+    END;
+
+! HASKW item, keyword: whether the rule has the keyword in it.
+ROUTINE HASKW (I, KW) =
+    BEGIN
+    INCR J FROM .I + 1 TO IEND(.I) - 1 DO
+        IF IKIND(.J) EQL IT_KW AND .KWBASE[IID(.J)] EQL .KW THEN RETURN TRUE;
+    FALSE
+    END;
+
+! FIRSTKW item: the rule's first keyword, or 0.
+ROUTINE FIRSTKW (I) =
+    BEGIN
+    LOCAL
+        J;
+    J = LEAFN(.I, IT_KW, 0);
+    IF .J LSS 0 THEN 0 ELSE .KWBASE[IID(.J)]
+    END;
+
+! NUMVAL item: a number leaf's integer part.
+ROUTINE NUMVAL (I) =
+    BEGIN
+    LOCAL
+        A,
+        V,
+        NEG,
+        Q;
+    A = ITXT(.I);
+    V = 0;
+    NEG = FALSE;
+    Q = 0;
+    IF GETB(.A) EQL %C'-' OR GETB(.A) EQL %C'+' THEN (NEG = GETB(.A) EQL %C'-'; Q = 1);
+    WHILE .Q LSS ILEN(.I) AND GETB(.A + .Q) GEQU %C'0' AND GETB(.A + .Q) LEQU %C'9' DO
+        BEGIN
+        IF .V LSS 100000000 THEN V = .V * 10 + GETB(.A + .Q) - %C'0';
+        Q = .Q + 1
+        END;
+    IF .NEG THEN -.V ELSE .V
+    END;
+
+! ---- Sets of names: a count, then the name items.
+
+! COLLECT container, rules: the names of the declarations of those rules
+! in the container (a declaration's own not looked in), saying DUPLITEM
+! for one there already if DUPS.
+ROUTINE COLLECT (C, DUPS, R1, R2, R3) =
+    BEGIN
+    LOCAL
+        NS : REF VECTOR,
+        J;
+    NS = MEM((IEND(.C) - .C + 2) * 8);
+    J = .C + 1;
+    WHILE .J LSS IEND(.C) DO
+        BEGIN
+        IF IKIND(.J) EQL IT_RULE AND (IID(.J) EQL .R1 OR IID(.J) EQL .R2 OR IID(.J) EQL .R3)
+        THEN
+            BEGIN
+            LOCAL
+                N;
+            N = HEADNAME(.J);
+            IF .N GEQ 0
+            THEN
+                BEGIN
+                IF .DUPS
+                THEN
+                    INCR K FROM 1 TO .NS[0] DO
+                        IF CK_NAMEEQL(.NS[.K], .N)
+                        THEN
+                            (MS_MSG(FORMS$_DUPLITEM, IPOS(.N), 0, NB1, UPNAME(.N, NB1)); EXITLOOP);
+                NS[0] = .NS[0] + 1;
+                NS[.NS[0]] = .N
+                END;
+            J = IEND(.J)
+            END
+        ELSE
+            J = .J + 1
+        END;
+    .NS
+    END;
+
+! ALLNAMES container, rule, rule: the names of every declaration of
+! those rules in the container, at any depth.
+ROUTINE ALLNAMES (C, R1, R2) =
+    BEGIN
+    LOCAL
+        NS : REF VECTOR;
+    NS = MEM((IEND(.C) - .C + 2) * 8);
+    INCR J FROM .C + 1 TO IEND(.C) - 1 DO
+        IF IKIND(.J) EQL IT_RULE AND (IID(.J) EQL .R1 OR IID(.J) EQL .R2)
+        THEN
+            BEGIN
+            LOCAL
+                N;
+            N = HEADNAME(.J);
+            IF .N GEQ 0 THEN (NS[0] = .NS[0] + 1; NS[.NS[0]] = .N)
+            END;
+    .NS
+    END;
+
+ROUTINE HAS (NS : REF VECTOR, N) =
+    BEGIN
+    INCR K FROM 1 TO .NS[0] DO
+        IF CK_NAMEEQL(.NS[.K], .N) THEN RETURN TRUE;
+    FALSE
+    END;
+
+! NEED set, name item, message: says the message about the name unless
+! it is in the set.
+ROUTINE NEED (NS, N, CODE) : NOVALUE =
+    BEGIN
+    IF .N LSS 0 THEN RETURN;
+    IF NOT HAS(.NS, .N) THEN MS_MSG(.CODE, IPOS(.N), 0, NB1, UPNAME(.N, NB1))
+    END;
+
+! MISSING what, length, name item, where, length: OBJECTNOTFND, and the
+! form is incomplete.
+ROUTINE MISSING (W, WL, N, P, PL) : NOVALUE =
+    BEGIN
+    LOCAL
+        L;
+    CH$MOVE(.WL, .W, NB1);
+    L = .WL + UPNAME(.N, NB1[.WL]);
+    MS_MSG(FORMS$_OBJECTNOTFND, IPOS(.N), 0, NB1, .L, .P, .PL);
+    CK_INCOMPLETE = TRUE
+    END;
+
+! ---- The checks
+
+! NAMECHECK: every name's length and characters.
+ROUTINE NAMECHECK : NOVALUE =
+    BEGIN
+    INCR J FROM 0 TO .NITEMS - 1 DO
+        IF IKIND(.J) EQL IT_NAME
+        THEN
+            BEGIN
+            LOCAL
+                A,
+                L;
+            A = ITXT(.J);
+            L = ILEN(.J);
+            IF .L GTR 31 THEN MS_MSG(FORMS$_NAMETRUNC, IPOS(.J), 0);
+            IF .L GEQ 6
+            THEN
+                BEGIN
+                LOCAL
+                    S;
+                S = TRUE;
+                INCR Q FROM 0 TO 5 DO
+                    IF UPPER(GETB(.A + .Q)) NEQ GETB(UPLIT BYTE ('FORMS$') + .Q) THEN S = FALSE;
+                IF .S THEN MS_MSG(FORMS$_FORMSRES, IPOS(.J), 0)
+                END;
+            IF GETB(.A + .L - 1) EQL %C'_' THEN MS_MSG(FORMS$_BADNAME, IPOS(.J), 0, NB1, UPNAME(.J, NB1))
+            END
+    END;
+
+! SIZES item: the numbers in a data type: CHARACTER(n), INTEGER(n),
+! DECIMAL(i, f), FLOAT(m[, e]), DATETIME(n).
+ROUTINE SIZES (I) : NOVALUE =
+    BEGIN
+    LOCAL
+        KW,
+        A,
+        B,
+        V;
+    KW = FIRSTKW(.I);
+    A = LEAFN(.I, IT_NUM, 0);
+    IF .A LSS 0 THEN RETURN;
+    B = LEAFN(.I, IT_NUM, 1);
+    V = NUMVAL(.A);
+    SELECTONE .KW OF
+        SET
+        [.K_CHARACTER, .K_DATETIME]:
+            IF .V LSS 1 THEN MS_MSG(FORMS$_INTGTRZER, IPOS(.A), 0);
+        [.K_INTEGER]:
+            IF .V LSS 1 OR .V GTR 31 THEN MS_MSG(FORMS$_NUMSTRSIZ, IPOS(.A), 0);
+        [.K_DECIMAL]:
+            IF .B GEQ 0 THEN
+                IF .V + NUMVAL(.B) LSS 1 OR .V + NUMVAL(.B) GTR 31
+                THEN
+                    MS_MSG(FORMS$_NUMSTRSIZ, IPOS(.A), 0);
+        [.K_FLOAT]:
+            BEGIN
+            IF .V LSS 1 OR .V GTR 33 THEN MS_MSG(FORMS$_BADSIGNIFLEN, IPOS(.A), 0);
+            IF .B GEQ 0 THEN
+                IF NUMVAL(.B) LSS 1 OR NUMVAL(.B) GTR 4 THEN MS_MSG(FORMS$_BADEXRADLEN, IPOS(.B), 0)
+            END;
+        TES
+    END;
+
+! BUILTINCHECK item: a BUILTIN data item's name must be one of DECforms's.
+ROUTINE BUILTINCHECK (I) : NOVALUE =
+    BEGIN
+    BIND
+        BUILTINS = UPLIT (
+            UPLIT BYTE ('CURRENTITEM'), 11, UPLIT BYTE ('CURRENTITEMHELPED'), 17,
+            UPLIT BYTE ('CURRENTPANEL'), 12, UPLIT BYTE ('CURRENTPANELHELPED'), 18,
+            UPLIT BYTE ('FIELDIMAGE'), 10, UPLIT BYTE ('FORMNAME'), 8,
+            UPLIT BYTE ('FUNCTIONNAME'), 12, UPLIT BYTE ('SESSION'), 7,
+            UPLIT BYTE ('TERMINAL'), 8, UPLIT BYTE ('PARENTREQUESTID'), 15,
+            UPLIT BYTE ('LOCATORITEM'), 11, UPLIT BYTE ('LOCATORPANEL'), 12) : VECTOR;
+    LOCAL
+        N,
+        L;
+    N = HEADNAME(.I);
+    IF .N LSS 0 THEN RETURN;            ! FIELDVALUE
+    L = UPNAME(.N, NB1);
+    INCR K FROM 0 TO 11 DO
+        IF CH$EQL(.L, NB1, .BUILTINS[.K * 2 + 1], .BUILTINS[.K * 2]) THEN RETURN;
+    MS_MSG(FORMS$_INVBLTINNAM, IPOS(.N), 0, NB1, .L)
+    END;
+
+! DATACHECK: the form data and records.
+ROUTINE DATACHECK : NOVALUE =
+    BEGIN
+    LOCAL
+        DATA,
+        GROUPS,
+        RECS,
+        LISTS;
+    COLLECT(0, TRUE, .R_DATA_ITEM, .R_BUILTIN_ITEM, .R_DATA_GROUP);
+    COLLECT(0, TRUE, .R_FORM_RECORD, .R_RECORD_LIST, 0);
+    COLLECT(0, TRUE, .R_LAYOUT, 0, 0);
+    DATA = ALLNAMES(0, .R_DATA_ITEM, .R_BUILTIN_ITEM);
+    GROUPS = ALLNAMES(0, .R_DATA_GROUP, 0);
+    RECS = ALLNAMES(0, .R_FORM_RECORD, 0);
+    LISTS = ALLNAMES(0, .R_RECORD_LIST, 0);
+    INCR J FROM 0 TO .NITEMS - 1 DO
+        IF IKIND(.J) EQL IT_RULE
+        THEN
+            BEGIN
+            LOCAL
+                ID,
+                NM : VECTOR[64],
+                KW : VECTOR[64],
+                N;
+            ID = IID(.J);
+            IF .ID EQL .R_DATA_GROUP
+            THEN
+                BEGIN
+                COLLECT(.J, TRUE, .R_DATA_ITEM, .R_BUILTIN_ITEM, .R_DATA_GROUP);
+                INCR Q FROM .J + 1 TO IEND(.J) - 1 DO
+                    IF IKIND(.Q) EQL IT_RULE AND IID(.Q) EQL .R_BUILTIN_ITEM
+                    THEN
+                        MS_MSG(FORMS$_NOBLTINGRP, IPOS(.Q), 0)
+                END
+            ELSE IF .ID EQL .R_BUILTIN_ITEM
+            THEN
+                BUILTINCHECK(.J)
+            ELSE IF .ID EQL .R_FORM_RECORD OR .ID EQL .R_RECORD_GROUP
+            THEN
+                BEGIN
+                COLLECT(.J, TRUE, .R_RECORD_FIELD, .R_RECORD_GROUP, 0);
+                IF .ID EQL .R_RECORD_GROUP
+                THEN
+                    BEGIN
+                    LOCAL
+                        O;
+                    ! GROUP name OCCURS n: the number right after OCCURS.
+                    O = HEADNAME(.J) + 1;
+                    IF IKIND(.O) EQL IT_KW AND IKIND(.O + 1) EQL IT_NUM THEN
+                        IF NUMVAL(.O + 1) LSS 1 THEN MS_MSG(FORMS$_INTGTRZER, IPOS(.O + 1), 0)
+                    END
+                END
+            ELSE IF .ID EQL .R_OCCURS
+            THEN
+                BEGIN
+                LOCAL
+                    O;
+                O = LEAFN(.J, IT_NUM, 0);
+                IF NUMVAL(.O) LSS 1 THEN MS_MSG(FORMS$_INTGTRZER, IPOS(.O), 0)
+                END
+            ELSE IF .ID EQL .R_TEXT_DATA OR .ID EQL .R_TEXT_FIELD_TYPE OR .ID EQL .R_DATETIME_DATA
+                    OR .ID EQL .R_DATETIME_FIELD
+            THEN
+                SIZES(.J)
+            ELSE IF .ID EQL .R_COPY_DICTIONARY
+            THEN
+                MS_MSG(FORMS$_NOTYETIMP, IPOS(.J), 0)
+            ELSE IF .ID EQL .R_FIELD OR .ID EQL .R_TEXTFIELD OR .ID EQL .R_SLIDER
+            THEN
+                NEED(.DATA, DREFNAME(.J), FORMS$_NODATITEM)
+            ELSE IF .ID EQL .R_PANEL_GROUP
+            THEN
+                NEED(.GROUPS, DREFNAME(.J), FORMS$_NODATGRP)
+            ELSE IF .ID EQL .R_RECORD_LIST
+            THEN
+                BEGIN
+                N = NAMES(.J, NM, KW);
+                INCR K FROM 1 TO .N - 1 DO NEED(.RECS, .NM[.K], FORMS$_NORECDEF);
+                IF .N GTR 51 THEN MS_MSG(FORMS$_MAXRECLIS, IPOS(.NM[51]), 0)
+                END
+            ELSE IF .ID EQL .R_SEND_RESPONSE OR .ID EQL .R_RECEIVE_RESPONSE
+                    OR .ID EQL .R_TRANSCEIVE_RESPONSE
+            THEN
+                BEGIN
+                N = NAMES(.J, NM, KW);
+                INCR K FROM 0 TO .N - 1 DO
+                    IF NOT HAS(.RECS, .NM[.K]) AND NOT HAS(.LISTS, .NM[.K])
+                    THEN
+                        MS_MSG((IF .ID EQL .R_SEND_RESPONSE THEN FORMS$_NOSENDREC
+                                ELSE IF .ID EQL .R_RECEIVE_RESPONSE THEN FORMS$_NORECVREC
+                                ELSE IF .K EQL 0 THEN FORMS$_NOTRANSEND
+                                ELSE FORMS$_NOTRANRECV),
+                               IPOS(.NM[.K]), 0, NB1, UPNAME(.NM[.K], NB1))
+                END
+            END
+    END;
+
+! ONPANEL layout, panel name, kind keyword, object name: whether the
+! panel of that name has the object.
+ROUTINE ONPANEL (L, P, KW, O) =
+    BEGIN
+    INCR J FROM .L + 1 TO IEND(.L) - 1 DO
+        IF IKIND(.J) EQL IT_RULE AND (IID(.J) EQL .R_PANEL OR IID(.J) EQL .R_HELP_PANEL)
+        THEN
+            IF CK_NAMEEQL(HEADNAME(.J), .P)
+            THEN
+                INCR Q FROM .J + 1 TO IEND(.J) - 1 DO
+                    IF IKIND(.Q) EQL IT_RULE
+                    THEN
+                        BEGIN
+                        LOCAL
+                            ID;
+                        ID = IID(.Q);
+                        IF (.KW EQL .K_FIELD AND (.ID EQL .R_FIELD OR .ID EQL .R_TEXTFIELD
+                                                  OR .ID EQL .R_SLIDER)
+                            OR .KW EQL .K_GROUP AND .ID EQL .R_PANEL_GROUP
+                            OR .KW EQL .K_ICON AND .ID EQL .R_ICON
+                            OR .KW EQL .K_BUTTON AND .ID EQL .R_PUSH_BUTTON)
+                           AND CK_NAMEEQL((IF .ID EQL .R_ICON OR .ID EQL .R_PUSH_BUTTON
+                                           THEN HEADNAME(.Q) ELSE DREFNAME(.Q)), .O)
+                        THEN
+                            RETURN TRUE
+                        END;
+    FALSE
+    END;
+
+! REACHES layout's internal responses, source, destination, depth:
+! whether the internal response source includes destination, at last.
+ROUTINE REACHES (IR : REF VECTOR, SRC, DST, DEPTH) =
+    BEGIN
+    IF .DEPTH GTR .IR[0] THEN RETURN FALSE;
+    INCR J FROM .SRC + 1 TO IEND(.SRC) - 1 DO
+        IF IKIND(.J) EQL IT_RULE AND IID(.J) EQL .R_INCLUDE
+        THEN
+            BEGIN
+            LOCAL
+                N;
+            N = HEADNAME(.J);
+            IF CK_NAMEEQL(.N, HEADNAME(.DST)) THEN RETURN TRUE;
+            INCR K FROM 1 TO .IR[0] DO
+                IF CK_NAMEEQL(HEADNAME(.IR[.K]), .N) THEN
+                    IF REACHES(.IR, .IR[.K], .DST, .DEPTH + 1) THEN RETURN TRUE
+            END;
+    FALSE
+    END;
+
+! PANELREF layout, panels, name: a panel a step names must be there.
+ROUTINE PANELREF (PANELS, N) : NOVALUE =
+    BEGIN
+    IF .N GEQ 0 THEN
+        IF NOT HAS(.PANELS, .N) THEN MISSING(T('panel '), .N, 0, 0)
+    END;
+
+! STEPREFS layout, panels, step: the panels and objects on them a step
+! (ACTIVATE's, DEACTIVATE's, POSITION, VALIDATE) names.
+ROUTINE STEPREFS (L, PANELS, I) : NOVALUE =
+    BEGIN
+    LOCAL
+        NM : VECTOR[64],
+        KW : VECTOR[64],
+        N,
+        K;
+    N = NAMES(.I, NM, KW);
+    K = 0;
+    WHILE .K LSS .N DO
+        BEGIN
+        IF (.KW[.K] EQL .K_FIELD OR .KW[.K] EQL .K_GROUP OR .KW[.K] EQL .K_ICON
+            OR .KW[.K] EQL .K_BUTTON) AND .K + 1 LSS .N
+        THEN
+            BEGIN
+            ! An object on a panel.
+            IF NOT HAS(.PANELS, .NM[.K + 1])
+            THEN
+                MISSING(T('panel '), .NM[.K + 1], 0, 0)
+            ELSE IF NOT ONPANEL(.L, .NM[.K + 1], .KW[.K], .NM[.K])
+            THEN
+                BEGIN
+                LOCAL
+                    W,
+                    WL,
+                    PL;
+                W = (SELECTONE .KW[.K] OF
+                     SET
+                     [.K_FIELD]: UPLIT BYTE ('field ');
+                     [.K_GROUP]: UPLIT BYTE ('group ');
+                     [.K_ICON]: UPLIT BYTE ('icon  ');
+                     [OTHERWISE]: UPLIT BYTE ('button ');
+                     TES);
+                WL = (IF .KW[.K] EQL .K_FIELD OR .KW[.K] EQL .K_GROUP THEN 6
+                      ELSE IF .KW[.K] EQL .K_ICON THEN 5 ELSE 7);
+                CH$MOVE(10, UPLIT BYTE (' on panel '), NB2);
+                PL = 10 + UPNAME(.NM[.K + 1], NB2[10]);
+                MISSING(.W, .WL, .NM[.K], NB2, .PL)
+                END;
+            K = .K + 2
+            END
+        ELSE
+            BEGIN
+            IF .KW[.K] EQL .K_PANEL OR .KW[.K] EQL .K_ON THEN PANELREF(.PANELS, .NM[.K]);
+            K = .K + 1
+            END
+        END
+    END;
+
+! LAYOUTCHECK layout: what is declared in a layout, and named in it.
+ROUTINE LAYOUTCHECK (L) : NOVALUE =
+    BEGIN
+    LOCAL
+        VPS,
+        LISTS,
+        IRN : REF VECTOR,
+        IR : REF VECTOR,
+        PANELS,
+        HELPS,
+        ATTRS,
+        FUNCS,
+        LINES,
+        COLUMNS;
+    VPS = COLLECT(.L, TRUE, .R_VIEWPORT_DECLARATION, 0, 0);
+    LISTS = COLLECT(.L, TRUE, .R_LIST_DECLARATION, 0, 0);
+    IRN = COLLECT(.L, TRUE, .R_INTERNAL_RESPONSE, 0, 0);
+    PANELS = COLLECT(.L, TRUE, .R_PANEL, .R_HELP_PANEL, .R_MESSAGE_PANEL);
+    HELPS = COLLECT(.L, FALSE, .R_HELP_PANEL, 0, 0);
+    ATTRS = COLLECT(.L, TRUE, .R_ATTRIBUTE_DECLARATION, 0, 0);
+    FUNCS = COLLECT(.L, TRUE, .R_FUNCTION_DECLARATION, 0, 0);
+    COLLECT(.L, TRUE, .R_FIELD_DEFAULT_DECLARATION, 0, 0);
+    COLLECT(.L, TRUE, .R_LITERAL_DEFAULT_DECLARATION, 0, 0);
+    ! The internal responses: the rules, not their names.
+    IR = MEM((.IRN[0] + 1) * 8);
+    IR[0] = .IRN[0];
+    INCR K FROM 1 TO .IR[0] DO
+        BEGIN
+        LOCAL
+            J;
+        J = .IRN[.K];
+        WHILE IKIND(.J) NEQ IT_RULE OR IID(.J) NEQ .R_INTERNAL_RESPONSE DO J = .J - 1;
+        IR[.K] = .J
+        END;
+    ! The layout's size, in characters.
+    LINES = 0;
+    COLUMNS = 0;
+    INCR J FROM .L + 1 TO IEND(.L) - 1 DO
+        IF IKIND(.J) EQL IT_RULE
+        THEN
+            BEGIN
+            IF IID(.J) EQL .R_UNITS AND NOT HASKW(.J, .K_CHARACTERS) THEN EXITLOOP;
+            IF IID(.J) EQL .R_SIZE AND HASKW(.J, .K_LINES)
+            THEN
+                BEGIN
+                LINES = NUMVAL(LEAFN(.J, IT_NUM, 0));
+                COLUMNS = NUMVAL(LEAFN(.J, IT_NUM, 1));
+                EXITLOOP
+                END
+            END;
+    INCR J FROM .L + 1 TO IEND(.L) - 1 DO
+        IF IKIND(.J) EQL IT_RULE
+        THEN
+            BEGIN
+            LOCAL
+                ID,
+                NM : VECTOR[64],
+                KW : VECTOR[64],
+                N;
+            ID = IID(.J);
+            IF .ID EQL .R_VIEWPORT_USE
+            THEN
+                NEED(.VPS, HEADNAME(.J), FORMS$_NOVIEWPRT)
+            ELSE IF .ID EQL .R_DISPLAY_STEP OR .ID EQL .R_PRINT
+            THEN
+                BEGIN
+                N = NAMES(.J, NM, KW);
+                INCR K FROM 0 TO .N - 1 DO
+                    IF .KW[.K] EQL .K_ON
+                    THEN
+                        NEED(.VPS, .NM[.K], FORMS$_NOVIEWPRT)
+                    ELSE
+                        PANELREF(.PANELS, .NM[.K])
+                END
+            ELSE IF .ID EQL .R_REMOVE OR .ID EQL .R_REFRESH
+            THEN
+                BEGIN
+                N = NAMES(.J, NM, KW);
+                INCR K FROM 0 TO .N - 1 DO NEED(.VPS, .NM[.K], FORMS$_NOVIEWPRT)
+                END
+            ELSE IF .ID EQL .R_SEARCH
+            THEN
+                NEED(.LISTS, HEADNAME(.J), FORMS$_NOLIST)
+            ELSE IF .ID EQL .R_INCLUDE
+            THEN
+                NEED(.IRN, HEADNAME(.J), FORMS$_NOINTERNAL)
+            ELSE IF .ID EQL .R_FUNCTION_RESPONSE
+            THEN
+                NEED(.FUNCS, HEADNAME(.J), FORMS$_NOFUNCTION)
+            ELSE IF .ID EQL .R_HELP_USE
+            THEN
+                BEGIN
+                IF HASKW(.J, .K_USE) AND HASKW(.J, .K_PANEL)
+                THEN
+                    NEED(.HELPS, HEADNAME(.J), FORMS$_NOTHELPPANEL)
+                END
+            ELSE IF .ID EQL .R_DISPLAY_ATTRIBUTE
+            THEN
+                BEGIN
+                IF IKIND(.J + 1) EQL IT_NAME THEN NEED(.ATTRS, .J + 1, FORMS$_NOATTRIB)
+                END
+            ELSE IF .ID EQL .R_ACTIVATE_ITEM OR .ID EQL .R_POSITION OR .ID EQL .R_VALIDATE
+            THEN
+                STEPREFS(.L, .PANELS, .J)
+            ELSE IF .ID EQL .R_VIEWPORT_DECLARATION AND .LINES GTR 0 AND NOT HASKW(.J, .K_PRINTING)
+            THEN
+                BEGIN
+                LOCAL
+                    A,
+                    B;
+                INCR Q FROM .J + 1 TO IEND(.J) - 1 DO
+                    IF IKIND(.Q) EQL IT_RULE
+                       AND (IID(.Q) EQL .R_VIEWPORT_LINES OR IID(.Q) EQL .R_VIEWPORT_COLUMNS)
+                    THEN
+                        BEGIN
+                        LOCAL
+                            MAX,
+                            ISLINES;
+                        ISLINES = IID(.Q) EQL .R_VIEWPORT_LINES;
+                        MAX = (IF .ISLINES THEN .LINES ELSE .COLUMNS);
+                        A = NUMVAL(LEAFN(.Q, IT_NUM, 0));
+                        B = NUMVAL(LEAFN(.Q, IT_NUM, 1));
+                        IF .A LSS 1 OR .A GTR .MAX
+                        THEN
+                            MS_MSG((IF .ISLINES THEN FORMS$_VIEBEGLIN ELSE FORMS$_VIEBEGCOL),
+                                   IPOS(.Q), 0);
+                        IF .B LSS 1 OR .B GTR .MAX
+                        THEN
+                            MS_MSG((IF .ISLINES THEN FORMS$_VIEENDLIN ELSE FORMS$_VIEENDCOL),
+                                   IPOS(.Q), 0);
+                        IF .B LSS .A
+                        THEN
+                            MS_MSG((IF .ISLINES THEN FORMS$_ENDLINGTR ELSE FORMS$_ENDCOLGTR),
+                                   IPOS(.Q), 0)
+                        END
+                END
+            END;
+    ! An internal response that includes itself, at last.
+    INCR K FROM 1 TO .IR[0] DO
+        IF REACHES(.IR, .IR[.K], .IR[.K], 0)
+        THEN
+            BEGIN
+            LOCAL
+                N;
+            N = HEADNAME(.IR[.K]);
+            MS_MSG(FORMS$_RECURLOOP, IPOS(.N), 0, NB1, UPNAME(.N, NB1), NB2,
+                   UPNAME(HEADNAME(.L), NB2))
+            END
+    END;
+
+! VALUECHECK: numbers and strings in their ranges.
+ROUTINE VALUECHECK : NOVALUE =
+    BEGIN
+    INCR J FROM 0 TO .NITEMS - 1 DO
+        IF IKIND(.J) EQL IT_RULE
+        THEN
+            BEGIN
+            LOCAL
+                ID,
+                S;
+            ID = IID(.J);
+            IF .ID EQL .R_CONTROL_TEXT_RESPONSE OR .ID EQL .R_RETURN
+            THEN
+                BEGIN
+                S = LEAFN(.J, IT_STR, 0);
+                IF .S GEQ 0 THEN
+                    IF ILEN(.S) LSS 3 OR ILEN(.S) GTR 5 THEN MS_MSG(FORMS$_CTRLTXTLEN, IPOS(.S), 0)
+                END
+            ELSE IF .ID EQL .R_SCALE
+            THEN
+                BEGIN
+                S = LEAFN(.J, IT_NUM, 0);
+                IF NUMVAL(.S) LSS -128 OR NUMVAL(.S) GTR 127 THEN MS_MSG(FORMS$_SCALEVALU, IPOS(.S), 0)
+                END
+            ELSE IF .ID EQL .R_RANGE_PAIR
+            THEN
+                BEGIN
+                LOCAL
+                    A,
+                    B;
+                ! range-value through range-value: two numbers, low first.
+                A = .J + 2;
+                B = INEXT(.J + 1);
+                B = INEXT(.B) + 1;
+                IF IKIND(.A) EQL IT_NUM AND IKIND(.B) EQL IT_NUM THEN
+                    IF NUMVAL(.A) GTR NUMVAL(.B) THEN MS_MSG(FORMS$_HIGHRANGELESS, IPOS(.A), 0)
+                END
+            END
+    END;
+
+! CK_RUN: checks the form in ITEMS, and says what it found in the order
+! of the source.
+GLOBAL ROUTINE CK_RUN : NOVALUE =
+    BEGIN
+    INIT();
+    MS_HOLD();
+    CK_INCOMPLETE = FALSE;
+    NAMECHECK();
+    DATACHECK();
+    INCR J FROM 0 TO .NITEMS - 1 DO
+        IF IKIND(.J) EQL IT_RULE AND IID(.J) EQL .R_LAYOUT THEN LAYOUTCHECK(.J);
+    VALUECHECK();
+    IF .CK_INCOMPLETE THEN MS_MSG(FORMS$_INCOMPLET, -1, 0);
+    MS_RELEASE()
+    END;
+
+END
+ELUDOM

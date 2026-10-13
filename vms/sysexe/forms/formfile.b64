@@ -1,0 +1,274 @@
+MODULE FORMFILE (IDENT = 'V0.1') =
+%TITLE 'FORMS: .FORM files'
+BEGIN
+!
+! A .FORM file is the tree a translation made, as README.md lays it out:
+! a header, the names of the rules and keywords the tree has, then its
+! items in preorder. A rule or keyword is its number in the file's
+! tables, so that a file still reads when the grammar has rules it didn't.
+! The file is FIX 512 records, the last padded with zeros.
+!
+REQUIRE 'FORMS';
+REQUIRE 'FIO';
+
+LITERAL
+    VERSION = 1,
+    FL_INCOMPLETE = 1;
+
+GLOBAL
+    FF_FLAGS;                           ! the file's FL_ flags, after FF_READ
+
+OWN
+    BUF,                                ! the file's bytes, being made
+    BLEN,
+    BCAP;
+
+BIND
+    MAGIC = UPLIT BYTE ('VAXPUNK FORM'),
+    PRODUCER = UPLIT BYTE ('vaxpunk FORMS V1.0');
+
+ROUTINE PUTBYTES (S, L) : NOVALUE =
+    BEGIN
+    IF .BLEN + .L GTR .BCAP
+    THEN
+        BEGIN
+        LOCAL
+            NEW;
+        BCAP = MAX(.BCAP * 2, .BLEN + .L + 65536);
+        NEW = MEM(.BCAP);
+        IF .BLEN GTR 0 THEN CH$MOVE(.BLEN, .BUF, .NEW);
+        BUF = .NEW
+        END;
+    CH$MOVE(.L, .S, .BUF + .BLEN);
+    BLEN = .BLEN + .L
+    END;
+
+! PUTN value, bytes: an integer, little-endian.
+ROUTINE PUTN (V, N) : NOVALUE =
+    BEGIN
+    LOCAL
+        B : VECTOR[8, BYTE];
+    INCR I FROM 0 TO .N - 1 DO B[.I] = SRL(.V, .I * 8) AND 255;
+    PUTBYTES(B, .N)
+    END;
+
+! PUTC text, length: a counted string.
+ROUTINE PUTC (S, L) : NOVALUE =
+    BEGIN
+    PUTN(.L, 1);
+    PUTBYTES(.S, .L)
+    END;
+
+! FF_WRITE name, length, incomplete: writes the tree as a .FORM file;
+! whether it could (it said why not).
+GLOBAL ROUTINE FF_WRITE (NAME, NLEN, INCOMPLETE) =
+    BEGIN
+    LOCAL
+        RMAP : REF VECTOR,              ! the grammar's rule, keyword: its number in the file
+        KMAP : REF VECTOR,
+        NR,
+        NK,
+        DATE : VECTOR[17, BYTE],
+        FORMNAME,
+        CHAN,
+        S;
+    RMAP = MEM(MAXRULE * 8);
+    KMAP = MEM(MAXKW * 8);
+    INCR I FROM 0 TO .NITEMS - 1 DO
+        IF IKIND(.I) EQL IT_RULE THEN RMAP[IID(.I)] = 1
+        ELSE IF IKIND(.I) EQL IT_KW THEN KMAP[IID(.I)] = 1;
+    BUF = 0;
+    BLEN = 0;
+    BCAP = 0;
+    PUTBYTES(MAGIC, 12);
+    PUTN(VERSION, 2);
+    PUTN((IF .INCOMPLETE THEN FL_INCOMPLETE ELSE 0), 2);
+    PUTN(0, 4);                         ! the length, when it is known
+    PUTC(PRODUCER, 18);
+    FIO$DATE(DATE);
+    PUTC(DATE, 17);
+    ! The form's name: its first name or string.
+    FORMNAME = 1;
+    WHILE IKIND(.FORMNAME) NEQ IT_NAME AND IKIND(.FORMNAME) NEQ IT_STR DO FORMNAME = .FORMNAME + 1;
+    BEGIN
+    LOCAL
+        UP : VECTOR[256, BYTE],
+        L;
+    L = MIN(ILEN(.FORMNAME), 255);
+    INCR Q FROM 0 TO .L - 1 DO UP[.Q] = UPPER(GETB(ITXT(.FORMNAME) + .Q));
+    PUTC(UP, .L)
+    END;
+    NR = 0;
+    INCR R FROM 1 TO .NRULE DO IF .RMAP[.R] NEQ 0 THEN (NR = .NR + 1; RMAP[.R] = .NR);
+    PUTN(.NR, 2);
+    INCR R FROM 1 TO .NRULE DO IF .RMAP[.R] NEQ 0 THEN PUTC(.RNAME[.R], .RNLEN[.R]);
+    NK = 0;
+    INCR K FROM 1 TO .NKW DO IF .KMAP[.K] NEQ 0 THEN (NK = .NK + 1; KMAP[.K] = .NK);
+    PUTN(.NK, 2);
+    INCR K FROM 1 TO .NKW DO IF .KMAP[.K] NEQ 0 THEN PUTC(.KWADDR[.K], .KWLEN[.K]);
+    PUTN(.NITEMS, 4);
+    INCR I FROM 0 TO .NITEMS - 1 DO
+        BEGIN
+        PUTN(IKIND(.I), 1);
+        CASE IKIND(.I) FROM IT_RULE TO IT_COMMENT OF
+            SET
+            [IT_RULE]:
+                BEGIN
+                PUTN(.RMAP[IID(.I)], 2);
+                PUTN(IEND(.I) - .I - 1, 4)
+                END;
+            [IT_KW]:
+                PUTN(.KMAP[IID(.I)], 2);
+            [IT_NAME, IT_IMP]:
+                BEGIN
+                ! Names in capitals.
+                PUTN(ILEN(.I), 2);
+                INCR Q FROM 0 TO ILEN(.I) - 1 DO PUTN(UPPER(GETB(ITXT(.I) + .Q)), 1)
+                END;
+            [IT_STR, IT_NUM, IT_PIC, IT_COMMENT]:
+                BEGIN
+                PUTN(MIN(ILEN(.I), 65535), 2);
+                PUTBYTES(ITXT(.I), MIN(ILEN(.I), 65535))
+                END;
+            TES
+        END;
+    ! The length, then zeros to the end of the last record.
+    INCR Q FROM 0 TO 3 DO PUTB(.BUF + 16 + .Q, SRL(.BLEN, .Q * 8) AND 255);
+    WHILE (.BLEN AND 511) NEQ 0 DO PUTN(0, 1);
+    S = FIO$OPEN(.NAME, .NLEN, FIO$K_WRITE OR FIO$K_BINARY, CHAN);
+    IF NOT .S THEN (MS_MSG(FORMS$_OPENOUT, -1, 0, .NAME, .NLEN); RETURN FALSE);
+    S = FIO$WRITE(.CHAN, .BUF, .BLEN);
+    FIO$CLOSE(.CHAN);
+    IF NOT .S THEN (MS_MSG(FORMS$_WRITEFORM, -1, 0, .NAME, .NLEN); RETURN FALSE);
+    TRUE
+    END;
+
+OWN
+    RD,                                 ! the file being read: its bytes,
+    RLEN,                               ! how many of them are the form's,
+    RAT,                                ! the next to read
+    BAD;                                ! and whether one was missing
+
+ROUTINE GETN (N) =
+    BEGIN
+    LOCAL
+        V;
+    IF .RAT + .N GTR .RLEN THEN (BAD = TRUE; RETURN 0);
+    V = 0;
+    DECR I FROM .N - 1 TO 0 DO V = SLL(.V, 8) OR GETB(.RD + .RAT + .I);
+    RAT = .RAT + .N;
+    .V
+    END;
+
+! GETC address of the length: a counted string's address.
+ROUTINE GETC (LENP) =
+    BEGIN
+    LOCAL
+        A;
+    .LENP = GETN(1);
+    A = .RD + .RAT;
+    IF .RAT + ..LENP GTR .RLEN THEN (BAD = TRUE; .LENP = 0);
+    RAT = .RAT + ..LENP;
+    .A
+    END;
+
+! FF_READ name, length: reads a .FORM file into ITEMS; whether it could
+! (it said why not).
+GLOBAL ROUTINE FF_READ (NAME, NLEN) =
+    BEGIN
+    LOCAL
+        SIZE,
+        RMAP : REF VECTOR,
+        KMAP : REF VECTOR,
+        NR,
+        NK,
+        N,
+        L;
+    RD = READ_WHOLE(.NAME, .NLEN, SIZE, FIO$K_READ OR FIO$K_BINARY);
+    IF .RD EQL 0 THEN (MS_MSG(FORMS$_OPENIN, -1, 0, .NAME, .NLEN); RETURN FALSE);
+    BAD = FALSE;
+    RLEN = .SIZE;
+    RAT = 12;
+    IF .SIZE LSS 20 OR NOT CH$EQL(12, .RD, 12, MAGIC) THEN BAD = TRUE;
+    IF NOT .BAD
+    THEN
+        BEGIN
+        IF GETN(2) NEQ VERSION THEN BAD = TRUE;
+        FF_FLAGS = GETN(2);
+        RLEN = GETN(4);
+        IF .RLEN GTR .SIZE THEN BAD = TRUE
+        END;
+    IF NOT .BAD
+    THEN
+        BEGIN
+        GETC(L);                        ! the producer,
+        GETC(L);                        ! the date,
+        GETC(L);                        ! and the form's name
+        NR = GETN(2);
+        RMAP = MEM((.NR + 1) * 8);
+        INCR I FROM 1 TO .NR DO
+            BEGIN
+            LOCAL
+                A;
+            A = GETC(L);
+            RMAP[.I] = GR_RULE(.A, .L);
+            IF .RMAP[.I] EQL 0 THEN BAD = TRUE
+            END;
+        NK = GETN(2);
+        KMAP = MEM((.NK + 1) * 8);
+        INCR I FROM 1 TO .NK DO
+            BEGIN
+            LOCAL
+                A;
+            A = GETC(L);
+            KMAP[.I] = 0;
+            INCR K FROM 1 TO .NKW DO
+                IF CH$EQL(.L, .A, .KWLEN[.K], .KWADDR[.K]) THEN (KMAP[.I] = .K; EXITLOOP);
+            IF .KMAP[.I] EQL 0 THEN BAD = TRUE
+            END;
+        N = GETN(4);
+        NITEMS = 0;
+        WHILE NOT .BAD AND .NITEMS LSS .N DO
+            BEGIN
+            LOCAL
+                KIND,
+                ID,
+                Q1;
+            KIND = GETN(1);
+            ID = 0;
+            Q1 = 0;
+            SELECTONE .KIND OF
+                SET
+                [IT_RULE]:
+                    BEGIN
+                    ID = GETN(2);
+                    IF .ID LSS 1 OR .ID GTR .NR THEN BAD = TRUE ELSE ID = .RMAP[.ID];
+                    Q1 = .NITEMS + 1 + GETN(4);
+                    IF .Q1 GTR .N THEN BAD = TRUE
+                    END;
+                [IT_KW]:
+                    BEGIN
+                    ID = GETN(2);
+                    IF .ID LSS 1 OR .ID GTR .NK THEN BAD = TRUE ELSE ID = .KMAP[.ID]
+                    END;
+                [IT_NAME, IT_STR, IT_NUM, IT_PIC, IT_IMP, IT_COMMENT]:
+                    BEGIN
+                    L = GETN(2);
+                    Q1 = (.RD + .RAT) OR SLL(.L, 32);
+                    IF .RAT + .L GTR .RLEN THEN BAD = TRUE;
+                    RAT = .RAT + .L
+                    END;
+                [OTHERWISE]:
+                    BAD = TRUE;
+                TES;
+            IF NOT .BAD THEN PR_PUSH(.KIND, .ID, 0, .Q1)
+            END
+        END;
+    ! BLISS's OR evaluates both sides: no IKIND(0) without an item.
+    IF NOT .BAD AND .NITEMS GTR 0 THEN IF IKIND(0) EQL IT_RULE THEN RETURN TRUE;
+    MS_MSG(FORMS$_BADFORM, -1, 0);
+    FALSE
+    END;
+
+END
+ELUDOM

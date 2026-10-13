@@ -1,0 +1,28 @@
+/* Responses name panels and fields that don't exist: warnings, and the
+   form is incomplete, but it is written. */
+Form INCOMPLETE_TEST
+    Form Data
+        NAME Character(20)
+        CITY Character(20)
+    End Data
+    Layout VT
+        Device
+            Terminal
+                Type %VT100
+        End Device
+        Size 24 Lines By 80 Columns
+        Enable Response
+            Activate
+                Panel NO_SUCH_PANEL
+                Field NAME On MAIN
+                Field CITY On MAIN
+            Position To Panel MAIN
+            Display LATER
+        End Response
+        Panel MAIN
+            Field NAME
+                Line 2 Column 2
+            End Field
+        End Panel
+    End Layout
+End Form
