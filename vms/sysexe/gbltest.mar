@@ -1,0 +1,213 @@
+        .TITLE  GBLTEST Checks global sections
+        .IDENT  /V0.1/
+;
+; STARTUP starts it. It makes a global page file section of two pages in
+; its UIC group, and maps it twice more, whole and from its second page:
+; what one mapping writes, the others read. Idents match as $SECDEF's
+; controls say. It makes two system sections, one the world may only
+; read, and starts GBLCHILD, this image in a process of UIC [200,1] with
+; no privileges, which can't see the group's section, maps the system
+; one and writes there, maps the other but not writable, and can't make
+; a system section; GBLTEST reads what it wrote once its termination
+; message comes. A temporary section goes with its last mapping, a
+; permanent one only after $DGBLSC too, and one $DGBLSC deletes while it
+; is mapped stays mapped. Each EXPECT checks a status or a value; a failed
+; one exits with 2 * N, which the executive reports.
+;
+        .LIBRARY "starlet.mlb"
+        .LIBRARY "sysexe.mlb"
+        $SSDEF
+        $IODEF
+        $DVIDEF
+        $JPIDEF
+        $ACCDEF
+        $SECDEF
+
+OUTSIDER = ^X00800001                   ; [200,1]
+GBL = SEC$M_GBL!SEC$M_PAGFIL!SEC$M_EXPREG
+WORLD_R = ^XE000                        ; the world may only read
+
+        .PSECT  DATA, NOEXE, WRT, LONG
+CHILD_IMAGE:
+        .ASCID  "GBLTEST.EXE"
+CHILD_NAME:
+        .ASCID  "GBLCHILD"
+GRPNAM: .ASCID  "GBLTEST"
+SYSNAM: .ASCID  "GBLTEST_SYS"
+RONAM:  .ASCID  "GBLTEST_RO"
+PRMNAM: .ASCID  "GBLTEST_PRM"
+LONGNAM:
+        .ASCID  "GBLTEST_A_NAME_LONGER_THAN_FORTY_THREE_CHARS"
+NOPRIVS:                                ; GBLCHILD's privileges: none
+        .LONG   0, 0
+P0:     .LONG   ^X10000, ^X10000        ; inadr for SEC$M_EXPREG: in P0
+VERSION:                                ; the group section's ident: 1.5
+        .LONG   SEC$K_MATALL, ^X01000005
+OLDER:  .LONG   SEC$K_MATEQU, ^X01000004
+LEQ:    .LONG   SEC$K_MATLEQ, ^X01000004
+NEWER:  .LONG   SEC$K_MATLEQ, ^X02000000
+BADCTL: .LONG   7, 0
+CHAN:   .LONG   0
+UNIT:   .LONG   0
+UIC:    .LONG   0
+A:      .BLKL   2                       ; retadrs: the first mapping
+B:      .BLKL   2                       ; the second
+C:      .BLKL   2                       ; the third, from page 1
+D:      .BLKL   2
+IOSB:   .BLKQ   1
+BUF:    .BLKB   ACC$K_TERMLEN
+DVI_ITEMS:                              ; the mailbox's unit
+        .WORD   4, DVI$_UNIT
+        .ADDRESS UNIT
+        .LONG   0
+        .LONG   0
+JPI_ITEMS:                              ; my UIC
+        .WORD   4, JPI$_UIC
+        .ADDRESS UIC
+        .LONG   0
+        .LONG   0
+
+        .PSECT  CODE, EXE, LONG
+        .ENTRY  START, ^M<R2>
+        $GETJPIW_S ITMLST=JPI_ITEMS
+        EXPECT  #SS$_NORMAL, 1
+        CMPL    UIC, #OUTSIDER
+        BNEQ    10$
+        BRW     CHILD
+
+; The group's section, made, then mapped again whole and from its
+; second page, read only: each sees what the others write.
+10$:    $CRMPSC_S INADR=P0, RETADR=A, FLAGS=#GBL, GSDNAM=GRPNAM, IDENT=VERSION, PAGCNT=#2
+        EXPECT  #SS$_CREATED, 2
+        SUBL3   A, A+4, R0
+        EXPECT  #8191, 3
+        MOVL    A, R2
+        MOVL    (R2), R0                ; zeroed
+        EXPECT  #0, 4
+        MOVL    #^X12345678, (R2)
+        MOVL    #^X22222222, 4096(R2)
+        $CRMPSC_S INADR=P0, RETADR=B, FLAGS=#GBL, GSDNAM=GRPNAM, PAGCNT=#2
+        EXPECT  #SS$_NORMAL, 5
+        MOVL    B, R1
+        MOVL    (R1), R0
+        EXPECT  #^X12345678, 6
+        MOVL    B, R1
+        MOVL    #^X87654321, (R1)
+        MOVL    A, R1
+        MOVL    (R1), R0
+        EXPECT  #^X87654321, 7
+        $MGBLSC_S INADR=P0, RETADR=C, FLAGS=#SEC$M_EXPREG, GSDNAM=GRPNAM, RELPAG=#1
+        EXPECT  #SS$_NORMAL, 8
+        SUBL3   C, C+4, R0
+        EXPECT  #4095, 9
+        MOVL    C, R1
+        MOVL    (R1), R0
+        EXPECT  #^X22222222, 10
+        $MGBLSC_S INADR=P0, FLAGS=#SEC$M_EXPREG, GSDNAM=GRPNAM, RELPAG=#2
+        EXPECT  #SS$_ENDOFFILE, 11
+
+; Idents: 1.4 isn't 1.5, but 1.5 is at least 1.4; 2.0 isn't 1.anything.
+        $MGBLSC_S INADR=P0, FLAGS=#SEC$M_EXPREG, GSDNAM=GRPNAM, IDENT=OLDER
+        EXPECT  #SS$_NOSUCHSEC, 12
+        $MGBLSC_S INADR=P0, RETADR=D, FLAGS=#SEC$M_EXPREG, GSDNAM=GRPNAM, IDENT=LEQ
+        EXPECT  #SS$_NORMAL, 13
+        $DELTVA_S INADR=D
+        $MGBLSC_S INADR=P0, FLAGS=#SEC$M_EXPREG, GSDNAM=GRPNAM, IDENT=NEWER
+        EXPECT  #SS$_NOSUCHSEC, 14
+        $MGBLSC_S INADR=P0, FLAGS=#SEC$M_EXPREG, GSDNAM=GRPNAM, IDENT=BADCTL
+        EXPECT  #SS$_IVSECIDCTL, 15
+
+; What isn't here, or isn't allowed.
+        $CRMPSC_S INADR=P0, FLAGS=#SEC$M_GBL!SEC$M_EXPREG, GSDNAM=GRPNAM, PAGCNT=#1
+        EXPECT  #SS$_IVCHAN, 16
+        $CRMPSC_S INADR=P0, FLAGS=#GBL, GSDNAM=GRPNAM, CHAN=#1, PAGCNT=#1
+        EXPECT  #SS$_IVCHNLSEC, 17
+        $CRMPSC_S INADR=P0, FLAGS=#GBL, GSDNAM=LONGNAM, PAGCNT=#1
+        EXPECT  #SS$_IVGSDNAM, 18
+        $CRMPSC_S INADR=P0, FLAGS=#SEC$M_PAGFIL!SEC$M_EXPREG, GSDNAM=GRPNAM, PAGCNT=#1
+        EXPECT  #SS$_IVSECFLG, 19
+
+; The system's sections, and GBLCHILD, in another group, to use them.
+        $CRMPSC_S INADR=P0, RETADR=D, FLAGS=#GBL!SEC$M_SYSGBL, GSDNAM=SYSNAM, PAGCNT=#1
+        EXPECT  #SS$_CREATED, 20
+        MOVL    D, R1
+        MOVL    #^X5157, (R1)
+        $CRMPSC_S INADR=P0, FLAGS=#GBL!SEC$M_SYSGBL, GSDNAM=RONAM, PAGCNT=#1, PROT=#WORLD_R
+        EXPECT  #SS$_CREATED, 21
+        $CREMBX_S CHAN=CHAN, MAXMSG=#ACC$K_TERMLEN, BUFQUO=#ACC$K_TERMLEN
+        EXPECT  #SS$_NORMAL, 22
+        $GETDVIW_S CHAN=CHAN, ITMLST=DVI_ITEMS
+        EXPECT  #SS$_NORMAL, 23
+        $CREPRC_S IMAGE=CHILD_IMAGE, PRCNAM=CHILD_NAME, PRVADR=NOPRIVS, BASPRI=#4, UIC=#OUTSIDER, MBXUNT=UNIT
+        EXPECT  #SS$_NORMAL, 24
+        $QIOW_S CHAN=CHAN, FUNC=#IO$_READVBLK, IOSB=IOSB, P1=BUF, P2=#ACC$K_TERMLEN
+        EXPECT  #SS$_NORMAL, 25
+        MOVL    BUF+ACC$L_FINALSTS, R0
+        EXPECT  #SS$_NORMAL, 26
+        MOVL    D, R1                  ; what GBLCHILD wrote
+        MOVL    (R1), R0
+        EXPECT  #^X0C41D, 27
+
+; The group's section goes with its last mapping.
+        $DELTVA_S INADR=A
+        $DELTVA_S INADR=B
+        $MGBLSC_S INADR=P0, RETADR=A, FLAGS=#SEC$M_EXPREG, GSDNAM=GRPNAM
+        EXPECT  #SS$_NORMAL, 28
+        $DELTVA_S INADR=A
+        $DELTVA_S INADR=C
+        $MGBLSC_S INADR=P0, FLAGS=#SEC$M_EXPREG, GSDNAM=GRPNAM
+        EXPECT  #SS$_NOSUCHSEC, 29
+
+; A permanent one stays, until $DGBLSC.
+        $CRMPSC_S INADR=P0, RETADR=A, FLAGS=#GBL!SEC$M_PERM, GSDNAM=PRMNAM, PAGCNT=#1
+        EXPECT  #SS$_CREATED, 30
+        MOVL    A, R1
+        MOVL    #^X7E7, (R1)
+        $DELTVA_S INADR=A
+        $MGBLSC_S INADR=P0, RETADR=A, FLAGS=#SEC$M_EXPREG, GSDNAM=PRMNAM
+        EXPECT  #SS$_NORMAL, 31
+        MOVL    A, R1
+        MOVL    (R1), R0
+        EXPECT  #^X7E7, 32
+        $DELTVA_S INADR=A
+        $DGBLSC_S GSDNAM=PRMNAM
+        EXPECT  #SS$_NORMAL, 33
+        $MGBLSC_S INADR=P0, FLAGS=#SEC$M_EXPREG, GSDNAM=PRMNAM
+        EXPECT  #SS$_NOSUCHSEC, 34
+
+; One $DGBLSC deletes stays mapped, but no one finds it.
+        $DGBLSC_S FLAGS=#SEC$M_SYSGBL, GSDNAM=SYSNAM
+        EXPECT  #SS$_NORMAL, 35
+        $MGBLSC_S INADR=P0, FLAGS=#SEC$M_SYSGBL!SEC$M_EXPREG, GSDNAM=SYSNAM
+        EXPECT  #SS$_NOSUCHSEC, 36
+        MOVL    D, R1
+        MOVL    (R1), R0
+        EXPECT  #^X0C41D, 37
+        $DGBLSC_S FLAGS=#SEC$M_SYSGBL, GSDNAM=RONAM
+        EXPECT  #SS$_NORMAL, 38
+        PRINT   "GBLTEST: ok"
+        MOVL    #SS$_NORMAL, R0
+        RET
+
+; CHILD: GBLCHILD's, in [200,1] with no privileges: the group's section
+; is another group's; the system one is there to read and write; the
+; one the world may only read is there to read; it may not make one.
+CHILD:  $MGBLSC_S INADR=P0, FLAGS=#SEC$M_EXPREG, GSDNAM=GRPNAM
+        EXPECT  #SS$_NOSUCHSEC, 50
+        $MGBLSC_S INADR=P0, RETADR=D, FLAGS=#SEC$M_SYSGBL!SEC$M_EXPREG!SEC$M_WRT, GSDNAM=SYSNAM
+        EXPECT  #SS$_NORMAL, 51
+        MOVL    D, R1
+        MOVL    (R1), R0
+        EXPECT  #^X5157, 52
+        MOVL    D, R1
+        MOVL    #^X0C41D, (R1)
+        $MGBLSC_S INADR=P0, FLAGS=#SEC$M_SYSGBL!SEC$M_EXPREG!SEC$M_WRT, GSDNAM=RONAM
+        EXPECT  #SS$_NOPRIV, 53
+        $MGBLSC_S INADR=P0, FLAGS=#SEC$M_SYSGBL!SEC$M_EXPREG, GSDNAM=RONAM
+        EXPECT  #SS$_NORMAL, 54
+        $CRMPSC_S INADR=P0, FLAGS=#GBL!SEC$M_SYSGBL, GSDNAM=PRMNAM, PAGCNT=#1
+        EXPECT  #SS$_NOPRIV, 55
+        MOVL    #SS$_NORMAL, R0
+        RET
+
+        .END    START

@@ -84,6 +84,13 @@ status = "todo"
 note = "rms.mar ponytail: BRO on them is BIO"
 
 [[feature]]
+id = "ufo"
+title = "User file open, FAB$V_UFO: a channel to the file in FAB$L_STV, for $CRMPSC"
+status = "todo"
+needs = ["/files/ods2#qio-interface"]
+note = "RMS has no channels to files; t8y:/exec/global-sections#file-sections needs one"
+
+[[feature]]
 id = "devices"
 title = "$OPEN of terminals, mailboxes and NL:; records as $QIO reads and writes"
 status = "todo"

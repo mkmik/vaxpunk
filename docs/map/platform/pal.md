@@ -92,9 +92,9 @@ note = "main.c load_image ponytail: link address only; relocate with the EIAF wh
 
 [[feature]]
 id = "frame-caps"
-title = "Frame caps in a CNode of their own: more than 1,024 PFNs, and a PFN mapped twice"
+title = "Frame caps in a CNode of their own: more than 1,024 PFNs, and more than 256 extra mappings of them"
 status = "todo"
-note = "PRD-0003 tier 4 #39 (4 MB, 96 page tables; turns tier 1 when users run out of memory) and tier 3 #20 (one mapping per PFN); main.c ponytails"
+note = "PRD-0003 tier 4 #39 (4 MB, 96 page tables; turns tier 1 when users run out of memory); main.c ponytails on PFN_COUNT and XMAP_MAX"
 
 [[feature]]
 id = "page-faults"

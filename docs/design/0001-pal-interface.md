@@ -184,9 +184,12 @@ A PTE is the VAX's longword (`$PTEDEF`), with one change:
 
 A valid PTE with protection `NA` maps nothing. `WRPTE` maps, unmaps or
 changes protection at once, and returns the PTE the page had, so the
-executive learns which PFN it freed. A PFN maps at one address at a time,
-in one process if it is in P0 or P1. ponytail: a frame capability per extra
-mapping, for shared pages.
+executive learns which PFN it freed. A PFN may map at any number of
+addresses, in any number of processes, as a global section's pages do.
+seL4 maps a frame capability at one address, so the PAL keeps one for each
+mapping, and each mode's address space: a PFN's first mapping's stay for
+its next, and the others' are deleted with them. ponytail: 256 mappings
+beyond each PFN's first, their capabilities in the root CNode's slots.
 
 What each mode sees of a page is its protection code's (`$PRTDEF`): a mode
 may read a page whose code lets it or an outer mode read, and write one

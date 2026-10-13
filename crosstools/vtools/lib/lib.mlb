@@ -310,6 +310,23 @@ CEB$T_EFCNAM = 24                       ; name, .ASCIC, 15 characters
 CEB$K_LENGTH = 48
         .ENDM   $CEBDEF
 
+; $GSDDEF: a global section descriptor, from pool: a named global
+; section's pages, and who may map them.
+        .MACRO  $GSDDEF
+GSD$L_GSDFL = 0                         ; MMG$GQ_GSDHD's queue, or 0 once $DGBLSC took it off
+GSD$L_GSDBL = 4
+GSD$L_SIZE = 8                          ; its size, as allocated
+GSD$L_REFCNT = 12                       ; PTEs that map its pages
+GSD$L_FLAGS = 16                        ; SEC$M_WRT, SEC$M_PERM and SEC$M_SYSGBL
+GSD$L_UIC = 20                          ; its owner, who made it: a group section is that group's
+GSD$L_PROT = 24                         ; its protection mask, a file's
+GSD$L_IDENT = 28                        ; its version, as $SECDEF's ident has it
+GSD$L_PAGCNT = 32                       ; its pages
+GSD$T_GSDNAM = 36                       ; its name, .ASCIC, 43 characters
+GSD$AL_PFN = 80                         ; its pages' PFNs, PAGCNT longwords
+GSD$K_LENGTH = 80                       ; without them
+        .ENDM   $GSDDEF
+
 ; $LNMBDEF: a logical name block, from pool, on its table's queue: a
 ; logical name and its equivalence strings, more than one for a search
 ; list.

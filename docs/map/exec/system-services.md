@@ -53,7 +53,7 @@ note = "starlet.mlb; starlet.req and starlet.r64 from vdefs"
 id = "all-services"
 title = "Every OpenVMS Alpha service in the vector, not SS$_ILLSER"
 status = "todo"
-note = "Stubs now: $DLCEFC, $CNTREG, $SETPRT, $LKWSET, $ULWSET, $LCKPAG, $ULKPAG, $CRMPSC, $MGBLSC; most others are missing"
+note = "Stubs now: $DLCEFC, $CNTREG, $SETPRT, $LKWSET, $ULWSET, $LCKPAG, $ULKPAG; most others are missing"
 
 [[feature]]
 id = "executive-mode"

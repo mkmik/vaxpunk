@@ -34,6 +34,10 @@ SS$_INSFRAME = 300                      ; $UNWIND: fewer frames than its depth
 SS$_IVCHAN = 316
 SS$_IVDEVNAM = 324                      ; no device name, or a bad one
 SS$_IVLOGNAM = 340
+SS$_IVGSDNAM = 332                      ; no global section name, or one longer than 43 characters
+SS$_IVSECFLG = 364                      ; section flags that aren't allowed together, or here
+SS$_IVCHNLSEC = 620                     ; the channel isn't to a file open for mapping
+SS$_IVSECIDCTL = 740                    ; a section ident's match control isn't SEC$K_MAT*
 SS$_IVLOGTAB = 348
 SS$_IVSSRQ = 372
 SS$_MEDOFL = 420                        ; the medium is offline: a ramdisk not made yet
@@ -75,6 +79,7 @@ SS$_ARG_GTR_32_BITS = 9916              ; an argument isn't a sign-extended long
 SS$_NOMOREPROC = 2472                   ; a wildcard $GETJPI is past the last process
 SS$_NOSUCHDEV = 2312
 SS$_NOSUCHFILE = 2320
+SS$_NOSUCHSEC = 2424                    ; no global section by that name, or its ident doesn't match
 SS$_BADCHKSUM = 2056
 SS$_BADFILEHDR = 2064
 SS$_BADFILEVER = 2080                   ; a version above 32767
@@ -1737,6 +1742,24 @@ PRT$C_URKW = 14
 PRT$C_UR = 15
         .ENDM   $PRTDEF
 
+; $SECDEF: the flags of $CRMPSC, $MGBLSC and $DGBLSC, and the match
+; controls of a section's ident, a quadword: the control, then the
+; version, its major number in bits 31:24 and its minor in 23:0.
+        .MACRO  $SECDEF
+SEC$M_GBL = ^X1                         ; a global section, by name
+SEC$M_CRF = ^X2                         ; copy on reference
+SEC$M_DZRO = ^X4                        ; demand zero
+SEC$M_WRT = ^X8                         ; writable
+SEC$M_PERM = ^X4000                     ; permanent: there until $DGBLSC
+SEC$M_SYSGBL = ^X8000                   ; a system global section, else the creator's group's
+SEC$M_PFNMAP = ^X10000                  ; physical pages, by PFN
+SEC$M_EXPREG = ^X20000                  ; mapped at the region's first free page
+SEC$M_PAGFIL = ^X80000                  ; a global page file section: no file behind it
+SEC$K_MATALL = 0                        ; any version
+SEC$K_MATEQU = 1                        ; the same version
+SEC$K_MATLEQ = 2                        ; the same major, the section's minor at least the one asked for
+        .ENDM   $SECDEF
+
 ; The _S forms of the system services: each pushes its arguments, last
 ; first, and calls SYS$name. A value argument is pushed as written
 ; (EFN=#65); an address argument is pushed as an address (PIDADR=PID), or
@@ -1982,6 +2005,43 @@ PRT$C_UR = 15
         .EXTERNAL SYS$DELTVA
         CALLS   #3, G^SYS$DELTVA
         .ENDM   $DELTVA_S
+
+        .MACRO  $CRMPSC_S INADR=0, RETADR=0, ACMODE=#0, FLAGS=#0, GSDNAM=0, IDENT=0, RELPAG=#0, CHAN=#0, PAGCNT=#0, VBN=#0, PROT=#0, PFC=#0
+        PUSHL   PFC
+        PUSHL   PROT
+        PUSHL   VBN
+        PUSHL   PAGCNT
+        PUSHL   CHAN
+        PUSHL   RELPAG
+        $PUSHADR IDENT
+        $PUSHADR GSDNAM
+        PUSHL   FLAGS
+        PUSHL   ACMODE
+        $PUSHADR RETADR
+        $PUSHADR INADR
+        .EXTERNAL SYS$CRMPSC
+        CALLS   #12, G^SYS$CRMPSC
+        .ENDM   $CRMPSC_S
+
+        .MACRO  $MGBLSC_S INADR, RETADR=0, ACMODE=#0, FLAGS=#0, GSDNAM, IDENT=0, RELPAG=#0
+        PUSHL   RELPAG
+        $PUSHADR IDENT
+        $PUSHADR GSDNAM
+        PUSHL   FLAGS
+        PUSHL   ACMODE
+        $PUSHADR RETADR
+        $PUSHADR INADR
+        .EXTERNAL SYS$MGBLSC
+        CALLS   #7, G^SYS$MGBLSC
+        .ENDM   $MGBLSC_S
+
+        .MACRO  $DGBLSC_S FLAGS=#0, GSDNAM, IDENT=0
+        $PUSHADR IDENT
+        $PUSHADR GSDNAM
+        PUSHL   FLAGS
+        .EXTERNAL SYS$DGBLSC
+        CALLS   #3, G^SYS$DGBLSC
+        .ENDM   $DGBLSC_S
 
         .MACRO  $EXPREG_S PAGCNT, RETADR=0, ACMODE=#0, REGION=#0
         PUSHL   REGION
