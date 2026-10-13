@@ -1372,3 +1372,76 @@ LITERAL
     PRT$C_UREW = 13,
     PRT$C_URKW = 14,
     PRT$C_UR = 15;
+
+! $LBRDEF
+LITERAL
+    LBR$C_TYP_UNK = 0,  ! any type, when opening
+    LBR$C_TYP_OBJ = 1,  ! object modules, VAX's
+    LBR$C_TYP_MLB = 2,  ! macros
+    LBR$C_TYP_HLP = 3,  ! help text
+    LBR$C_TYP_TXT = 4,  ! text modules
+    LBR$C_TYP_SHSTB = 5,  ! shareable image symbol tables, VAX's
+    LBR$C_TYP_NCS = 6,  ! character set definitions
+    LBR$C_TYP_EOBJ = 7,  ! object modules, Alpha's and vaxpunk's
+    LBR$C_TYP_ESHSTB = 8,  ! shareable image symbol tables, Alpha's
+    LBR$C_CREATE = 0,  ! LBR$INI_CONTROL's function: make a new library
+    LBR$C_READ = 1,  ! read one
+    LBR$C_UPDATE = 2,  ! change one
+    LBR$C_MAXKEYLEN = 128,  ! the longest key
+    LBR$C_MAXCTL = 16;  ! libraries open at once
+
+! $CREDEF
+LITERAL
+    CRE$C_VMSV2 = 2,
+    CRE$C_VMSV3 = 3,
+    CRE$M_NOCASECMP = 1,  ! don't upper-case a key looked for
+    CRE$M_NOCASENTR = 2,  ! don't upper-case the index's keys to compare
+    CRE$M_UPCASNTRY = 4,  ! upper-case a key put in the index
+    CRE$C_HLPCASING = 6,  ! help libraries' options
+    CRE$C_OBJCASING = 3,  ! object libraries'
+    CRE$C_MACTXTCAS = 0,  ! macro and text libraries'
+    CRE$K_LENGTH = 80;
+MACRO
+    CRE$L_TYPE = 0, 0, 32, 0 %,  ! its type, LBR$C_TYP_x
+    CRE$L_KEYLEN = 4, 0, 32, 0 %,  ! its keys' longest length
+    CRE$L_ALLOC = 8, 0, 32, 0 %,  ! blocks to allocate
+    CRE$L_IDXMAX = 12, 0, 32, 0 %,  ! its indexes, 1 to 8
+    CRE$L_UHDMAX = 16, 0, 32, 0 %,  ! bytes past a module header's 16 the user keeps there
+    CRE$L_ENTALL = 20, 0, 32, 0 %,  ! index entries to allocate
+    CRE$L_LUHMAX = 24, 0, 32, 0 %,  ! update history records to keep
+    CRE$L_VERTYP = 28, 0, 32, 0 %,  ! format: CRE$C_VMSV3
+    CRE$L_IDXOPT = 32, 0, 32, 0 %;  ! index options: CRE$M_x
+
+! $LHIDEF
+MACRO
+    LHI$L_TYPE = 0, 0, 32, 0 %,  ! LBR$C_TYP_x
+    LHI$L_NINDEX = 4, 0, 32, 0 %,  ! indexes
+    LHI$L_MAJORID = 8, 0, 32, 0 %,  ! format, 3
+    LHI$L_MINORID = 12, 0, 32, 0 %,
+    LHI$T_LBRVER = 16, 0, 0, 0 %,  ! who made it, .ASCIC in 32 bytes
+    LHI$L_CREDAT = 48, 0, 32, 0 %,  ! when, VMS time
+    LHI$L_UPDTIM = 56, 0, 32, 0 %,  ! last changed
+    LHI$L_UPDHIS = 64, 0, 32, 0 %,  ! update history's VBN
+    LHI$L_FREEVBN = 68, 0, 32, 0 %,  ! first deleted block
+    LHI$L_FREEBLK = 72, 0, 32, 0 %,  ! deleted blocks
+    LHI$B_NEXTRFA = 76, 0, 8, 0 %,  ! the end of the library, an RFA
+    LHI$L_NEXTVBN = 84, 0, 32, 0 %,  ! the next block to allocate
+    LHI$L_FREIDXBLK = 88, 0, 32, 0 %,
+    LHI$L_FREEIDX = 92, 0, 32, 0 %,
+    LHI$L_HIPREAL = 96, 0, 32, 0 %,  ! the last index block
+    LHI$L_IDXBLKS = 100, 0, 32, 0 %,  ! index blocks
+    LHI$L_IDXCNT = 104, 0, 32, 0 %,  ! index entries, all indexes'
+    LHI$L_MODCNT = 108, 0, 32, 0 %,  ! modules: index 1's entries
+    LHI$L_MHDUSZ = 112, 0, 32, 0 %,  ! CRE$L_UHDMAX
+    LHI$L_MAXLUHREC = 116, 0, 32, 0 %,
+    LHI$L_NUMLUHREC = 120, 0, 32, 0 %,
+    LHI$L_LIBSTATUS = 124, 0, 32, 0 %;  ! 0 if a write to it failed
+
+! $HLPDEF
+LITERAL
+    HLP$M_PROMPT = 1,  ! prompt for topics and subtopics
+    HLP$M_PROCESS = 2,  ! search HLP$LIBRARY in the process table
+    HLP$M_GROUP = 4,  ! the group table
+    HLP$M_SYSTEM = 8,  ! the system table
+    HLP$M_LIBLIST = 16,  ! list the libraries
+    HLP$M_HELP = 32;  ! help on HELP before the topics

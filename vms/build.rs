@@ -18,7 +18,8 @@
 //! library, from crosstools/vtools/examples/c, its C compiled by the cross
 //! gcc and converted by velf; CRTLTEST and SSL3$CLIENT, C programs, from
 //! crtl/test/crtltest.c and ssl3/ssl3$client.c, with SSL3 and Mbed TLS's
-//! library and the C run-time library (c.rs); in [SSL3.CERTS], CERT.PEM,
+//! library and the C run-time library (c.rs), which goes in [SYSLIB] as
+//! DECC$CRTL.OLB too; in [SSL3.CERTS], CERT.PEM,
 //! the CA bundle SSL3 trusts (c.rs); in [SYSMGR], the files in sysmgr/,
 //! as text, and in [SYSEXE] sysexe/*.com; and in [SYSEXE], SYSUAF.DAT, the users, SYSTEM and DEFAULT.
 
@@ -105,6 +106,9 @@ fn main() {
     // SSL3 on Mbed TLS, and the C run-time library, object libraries a
     // program takes from what it calls: COPY, for https://, and the C ones.
     let (transfer, crtl) = crtl(&out);
+    // The C run-time library in SYS$LIBRARY too, as on VMS: LBRTEST reads
+    // it, a library vlib wrote.
+    files.push(("[SYSLIB]DECC$CRTL.OLB".into(), crtl.1.clone()));
     let ssl3 = ssl3(&out);
     let mut programs = sources("sysexe", &["mar", "b64"]);
     programs.dedup_by(|a, b| a.file_stem() == b.file_stem());

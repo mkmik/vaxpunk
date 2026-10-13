@@ -399,6 +399,23 @@ B_CNT:  .LONG   0                       ; and the entries of the leaves
         MOVL    #LBR$_NORMAL, R0
 90$:    RET
 
+; LBR$FIND library_index, txtrfa: readies LBR$GET_RECORD to read the
+; module at the RFA in the quadword txtrfa, one LBR$LOOKUP_KEY or
+; LBR$GET_INDEX gave, from its first record. R0 = LBR$_NORMAL,
+; LBR$_INVRFA, LBR$_ILLFMT, LBR$_LIBNOTOPN or RMS's status.
+        .ENTRY  LBR$FIND, ^M<R2, R3, R4, R5, R6, R7, R8, R9, R10, R11>
+        MOVL    4(AP), R1
+        BSBW    OPENSLOT
+        BLBC    R0, 90$
+        CLRL    S_LKP(R11)
+        MOVL    8(AP), R6
+        MOVL    (R6), R1
+        MOVZWL  4(R6), R2
+        BSBW    SEEK
+        BLBC    R0, 90$
+        MOVL    #LBR$_NORMAL, R0
+90$:    RET
+
 ; LBR$GET_RECORD library_index, inbufdes [, outbufdes]: copies the next
 ; record of the module LBR$LOOKUP_KEY found into the buffer inbufdes
 ; describes, as much of it as fits, and sets outbufdes, if there, to

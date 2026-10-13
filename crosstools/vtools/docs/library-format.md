@@ -10,6 +10,13 @@ On vaxpunk itself the `LBR$` routines (`vms/sysexe/lbrshr/`) read and write
 the same format, and its other library types too: help, text and macro
 libraries have one index, module names, and as many bytes past a module
 header's first 16 as `LHD$B_MHDUSZ` says, which the creator chooses.
+An index descriptor's flags say how its keys are cased: `LBR$OPEN`'s create
+option `CRE$L_IDXOPT` shifted left 3 and or'ed with 5, an object library's
+0x1D, keys compared as they are, and a help library's 0x35, keys upper-cased
+as they go in and when looked up. `LBR$CLOSE` writes the indexes of a library
+it changed anew from the first block not used (`NEXTVBN`), so its index blocks
+may follow its modules, and blocks no index reaches; readers go by the index
+descriptors' roots and the RFAs, as vlink does, so neither matters.
 
 Status: work order step 9. Only object libraries, and only what the librarian
 and the linker need: no update history, no free block lists, no compression.
