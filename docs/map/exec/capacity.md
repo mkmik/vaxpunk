@@ -14,7 +14,7 @@ title = "Every page of RAM QEMU gives is a PFN, not 1,024 (4 MB)"
 status = "done"
 milestone = "m1"
 needs = ["/platform/pal#frame-caps"]
-note = "ADR-0037 decision 2: all RAM but the PAL's share, 1/32"
+note = "ADR-0037 decision 2: all RAM but the PAL's share, 1/16 once measured: all of RAM mapped in two address spaces fits"
 
 [[feature]]
 id = "page-tables"

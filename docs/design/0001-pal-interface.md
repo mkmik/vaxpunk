@@ -156,7 +156,7 @@ the way (*Interrupts and exceptions*), or the call is `REI`, a `CHMx` or
 The executive owns physical memory as VMS does, by page frame number, and
 keeps the PFN database: which PFNs are free, which hold what. A PFN is a
 4 KB page the PAL makes the first time a PTE names it. They are all the
-RAM seL4 gives the PAL but its share, a thirty-second, for its own
+RAM seL4 gives the PAL but its share, a sixteenth, for its own
 objects: CNodes, page tables, threads and its own tables
 ([ADR-0037](../adr/0037-all-ram-and-address-spaces-filled-on-faults.md)).
 The PAL's capabilities are in a CSpace of two levels, a PFN's frame at an
@@ -198,10 +198,10 @@ over the PFN. `WRPTE` maps, unmaps or
 changes protection at once, and returns the PTE the page had, so the
 executive learns which PFN it freed. A PFN may map at any number of
 addresses, in any number of processes, as a global section's pages do.
-seL4 maps a frame capability at one address, so the PAL keeps one for each
-mapping, and each mode's address space, made as needed and deleted with
-the mapping; a protection change keeps them. A `WRPTE` that maps a page
-fails when the PAL's share has less than 1 MB left.
+seL4 maps a frame capability at one address, so the PAL keeps a copy for
+each address space a page is mapped in (*Filled on faults*). A `WRPTE`
+that maps a page when the PAL's share has no room returns -1 and changes
+nothing; `MMG$CREPAG` then returns `SS$_INSFMEM`.
 
 What each mode sees of a page is what its enables let it, as on the VAX
 what its protection code did. Each mode of each process, kernel mode
@@ -221,9 +221,13 @@ which caches that, as Alpha's TLB cached the page tables
   it.
 - **Nothing on `SWPCTX`.** Each process's address spaces keep what they
   map, so a switch maps and unmaps nothing.
-- **Dropped when short.** When the PAL's share runs low, the other
-  processes' address spaces lose what they map, and fault it in again.
-  ponytail: all of them at once, not the least used.
+- **Dropped when short.** Once an eighth of the PAL's share is left, a
+  new mapping takes the record and capability slot of one that goes: the
+  other processes' address spaces lose what they map, or if they have
+  nothing, the current process's kernel mode its P0 and P1 pages, which it
+  maps to zero them and seldom uses after. They fault them in again.
+  ponytail: all of them at once, not the least used; their page tables
+  stay.
 
 The PAL sees every PFN at an address of its own, the way Alpha PALcode read
 memory physically. It reads and writes the executive's memory there to push
@@ -469,7 +473,7 @@ unused.
 | 0x19 | `MFPR_SISR` | Alpha | | v0 = summary | bit n: level n pending |
 | 0x3E | `WTINT` | Alpha | | v0 = 0 | waits for an interrupt; the clock's comes within 10 ms |
 | 0x40 | `MTPR_TXDB` | vaxpunk | a0 = character | | writes a0's low byte on the console |
-| 0x41 | `WRPTE` | vaxpunk | a0 = address, a1 = PTE | v0 = old PTE | maps, unmaps or protects a page |
+| 0x41 | `WRPTE` | vaxpunk | a0 = address, a1 = PTE | v0 = old PTE, or -1 with no room | maps, unmaps or protects a page |
 | 0x42 | `DELCTX` | vaxpunk | a0 = HWPCB | | deletes a context that isn't current |
 | 0x43 | `MTPR_RXCS` | vaxpunk | a0 = RXCS | | sets IE, bit 6: interrupt when a character waits |
 | 0x44 | `MFPR_RXCS` | vaxpunk | | v0 = RXCS | DONE, bit 7, if a character waits, and IE |

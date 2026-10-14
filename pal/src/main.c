@@ -181,17 +181,21 @@ static uint64_t u64(const uint8_t *p)
  * the largest untyped at boot, and the rest is the executive's PFNs. Retype
  * carves an untyped in order, each object aligned to its size, and the PAL
  * counts the same way, so it knows what each has left.
- * ponytail: 1/32 of RAM, at least 16 MB, ADR-0037's estimate; tune it when
- * measured.
+ * A sixteenth of RAM, at least 16 MB: measured, each PFN costs it about 48
+ * bytes (its frame's slot, its list, the PAL's page tables), each page
+ * mapped 24 for page tables and 88 for each address space that has it, so
+ * all of RAM mapped in two fits. ADR-0037's first guess, a thirty-second,
+ * didn't.
  */
-#define SHARE_DIV 32
+#define SHARE_DIV 16
 #define SHARE_MIN (16UL << 20)
-#define SHARE_SLACK (1UL << 20) /* what a WRPTE may take of it at most */
+#define SHARE_SLACK (1UL << 20) /* what room() keeps of it, for page tables */
 struct ut {
 	seL4_CPtr cap;
 	seL4_Word size, used; /* in bytes */
 };
 static struct ut share[64], frames[CONFIG_MAX_NUM_BOOTINFO_UNTYPED_CAPS];
+static seL4_Word share_size;
 static unsigned nshare, nframes, iframes;
 
 /*
@@ -206,7 +210,7 @@ static unsigned nshare, nframes, iframes;
 #define L2_BITS 12
 #define L2_MASK ((1UL << L2_BITS) - 1)
 static seL4_CPtr cspace; /* the root CNode, to the CNode calls; 0 until made */
-static seL4_Word l1_bits, next_slot, nfree_slot;
+static seL4_Word l1_bits, next_slot;
 
 static seL4_CPtr croot(void)
 {
@@ -285,13 +289,11 @@ static void share_retype(seL4_Word type, seL4_Word bits, seL4_CPtr root, seL4_Wo
 }
 
 static void *table(int t, seL4_Word bytes);
-enum { T_PFN, T_MADE, T_FRAMECN, T_SLOTS, T_CTX, T_PAGES, T_EXE, T_COUNT };
+enum { T_PFN, T_MADE, T_FRAMECN, T_CTX, T_PAGES, T_EXE, T_COUNT };
 
-/* An empty slot: a freed one, or the next. */
+/* An empty slot, the next. Mappings keep theirs for the next mapping. */
 static seL4_CPtr slot(void)
 {
-	if (nfree_slot)
-		return ((seL4_CPtr *)table(T_SLOTS, 0))[--nfree_slot];
 	if (!cspace)
 		return next_slot++;
 	if (!(next_slot & L2_MASK)) {
@@ -300,15 +302,6 @@ static seL4_CPtr slot(void)
 		share_retype(seL4_CapTableObject, L2_BITS, cspace, 0, 0, next_slot >> L2_BITS);
 	}
 	return next_slot++;
-}
-
-/* Deletes the capability in s and keeps the slot for slot(). */
-static void free_slot(seL4_CPtr s)
-{
-	if (seL4_CNode_Delete(croot(), s, seL4_WordBits))
-		die("seL4_CNode_Delete failed", s);
-	seL4_CPtr *st = table(T_SLOTS, (nfree_slot + 1) * sizeof *st);
-	st[nfree_slot++] = s;
 }
 
 /* A new object of the PAL's, from its share. */
@@ -323,16 +316,20 @@ static seL4_CPtr alloc(seL4_Word type, seL4_Word size_bits)
 	return s;
 }
 
-/* A copy of cap, with a badge if it is an endpoint or notification and
- * badge isn't 0. */
-static seL4_CPtr mint(seL4_CPtr cap, seL4_Word badge)
+/* A copy of cap in slot s, with a badge if it is an endpoint or
+ * notification and badge isn't 0. */
+static seL4_CPtr mint_to(seL4_CPtr s, seL4_CPtr cap, seL4_Word badge)
 {
-	seL4_CPtr s = slot();
 	seL4_Error err = seL4_CNode_Mint(croot(), s, seL4_WordBits, croot(), cap, seL4_WordBits,
 					 seL4_AllRights, badge);
 	if (err)
 		die("seL4_CNode_Mint failed", err);
 	return s;
+}
+
+static seL4_CPtr mint(seL4_CPtr cap, seL4_Word badge)
+{
+	return mint_to(slot(), cap, badge);
 }
 
 /* Maps frame at va in vspace, with page tables as needed. */
@@ -867,10 +864,12 @@ static uint64_t *pte_at(seL4_Word va, int make)
 	return *t ? &(*t)[va >> seL4_PageBits & 511] : 0;
 }
 
-/* Forgets p, and so unmaps it: its capability goes. */
+/* Forgets p, and so unmaps it: its capability goes, and the record keeps
+ * the empty slot for the next mapping. */
 static void uncache_one(struct pmap *p)
 {
-	free_slot(p->cap);
+	if (seL4_CNode_Delete(croot(), p->cap, seL4_WordBits))
+		die("seL4_CNode_Delete failed", p->cap);
 	if ((*p->prev = p->next))
 		p->next->prev = p->prev;
 	if ((*p->cprev = p->cnext))
@@ -890,28 +889,33 @@ static void uncache(unsigned pfn, struct ctx *c, seL4_Word va)
 }
 
 /*
- * When the share runs low, the other contexts' address spaces lose what
- * they map: they fill it again on faults, and their records and slots go to
- * those that need them.
- * ponytail: all of them, not the least used; their page tables stay.
+ * Whether the share has room for another mapping. Once an eighth of it is
+ * left, a mapping takes the record and slot of one that goes: the other
+ * contexts' address spaces lose what they map, and if they have nothing,
+ * the current one's kernel mode its P0 and P1 pages, which it seldom uses
+ * but to zero them. They fill them again on faults. What is left of the
+ * share goes to page tables.
+ * ponytail: all of them at once, not the least used; their page tables stay.
  */
-static int evicting;
-
-static void evict_others(void)
+static int room(void)
 {
-	evicting = 1;
-	for (struct ctx *c = ctx; c < ctx + nctx; c++)
-		while (c != cur && c->maps)
-			uncache_one(c->maps);
-	evicting = 0;
+	if (!pmap_free && share_free() < share_size / 8) {
+		for (struct ctx *c = ctx; c < ctx + nctx; c++)
+			while (c != cur && c->maps)
+				uncache_one(c->maps);
+		for (struct pmap *p = pmap_free || !cur ? 0 : cur->maps, *n; p; p = n) {
+			n = p->cnext;
+			if (!(p->va & 3) && !is_s0(p->va))
+				uncache_one(p);
+		}
+	}
+	return share_free() >= SHARE_SLACK;
 }
 
 /* Maps va's page as pte says in mode m's address space of c, with what m
  * may do with it, and records it. */
 static void cache(struct ctx *c, int m, seL4_Word va, uint64_t pte)
 {
-	if (!pmap_free && share_free() < SHARE_SLACK && !evicting)
-		evict_others();
 	if (!pmap_free) {
 		struct pmap *p = page();
 		for (unsigned i = 0; i < PAGE_SIZE / sizeof *p; i++) {
@@ -921,8 +925,8 @@ static void cache(struct ctx *c, int m, seL4_Word va, uint64_t pte)
 	}
 	struct pmap *p = pmap_free, **head = pfn_maps(pte_pfn(pte));
 	pmap_free = p->next;
-	*p = (struct pmap){ va | m, c, mint(frame_cap(pte_pfn(pte)), 0), *head, head, c->maps,
-			    &c->maps };
+	seL4_CPtr cap = mint_to(p->cap ? p->cap : slot(), frame_cap(pte_pfn(pte)), 0);
+	*p = (struct pmap){ va | m, c, cap, *head, head, c->maps, &c->maps };
 	if (*head)
 		(*head)->prev = &p->next;
 	*head = p;
@@ -951,6 +955,8 @@ static int fill(int m, seL4_Word va, int write, int exec)
 	for (struct pmap *p = *pfn_maps(pte_pfn(*pte)); p; p = p->next)
 		if (p->va == (va | m) && p->c == cur)
 			return 0; /* there, so it is a fault of another kind */
+	if (!room())
+		return 0;
 	cache(cur, m, va, *pte);
 	return 1;
 }
@@ -964,7 +970,8 @@ static int fill(int m, seL4_Word va, int write, int exec)
  * the new one goes in the current process's at once for each mode that
  * may read it and has run, since it is about to be used. Fails, returning
  * 0, for an address outside the executive's space, enables no protection
- * code gives, a PFN out of range, or too little left of the PAL's share.
+ * code gives or a PFN out of range, and -1, changing nothing, if the PAL's
+ * share has no room for the mapping.
  */
 static int wrpte(seL4_Word va, uint64_t pte, uint64_t *old)
 {
@@ -972,9 +979,10 @@ static int wrpte(seL4_Word va, uint64_t pte, uint64_t *old)
 	int s0 = is_s0(va);
 	if (va % PAGE_SIZE || va < PAGE_SIZE || va >= SPACE_END || (!s0 && !cur))
 		return 0;
-	if (mapped(pte) &&
-	    (!well_formed(pte) || pfn >= pfn_count || share_free() < SHARE_SLACK / 2))
+	if (mapped(pte) && (!well_formed(pte) || pfn >= pfn_count))
 		return 0;
+	if (mapped(pte) && !room())
+		return -1;
 	uint64_t none = 0, *slot = pte_at(va, mapped(pte));
 	if (!slot)
 		slot = &none; /* unmapping a page in no table: nothing there */
@@ -1136,7 +1144,7 @@ static void boot_pages(seL4_Word va, const uint8_t *src, seL4_Word size, uint64_
 		if (src)
 			memcpy(pfn_ptr(boot_pfn), src + off, n);
 		uint64_t old;
-		if (!wrpte(va + off, PTE_VALID | pte | boot_pfn++ << 32, &old))
+		if (wrpte(va + off, PTE_VALID | pte | boot_pfn++ << 32, &old) != 1)
 			die("boot pages: bad address", va + off);
 	}
 }
@@ -1894,7 +1902,7 @@ static int serve_one(seL4_MessageInfo_t msg)
 	case GETENTROPY:
 		return ret(getentropy(a0 & 0xffffffff, a1 & 0xffffffff));
 	case WRPTE: {
-		uint64_t old;
+		uint64_t old = ~0UL; /* -1: no room */
 		if (!wrpte(a0 & 0xffffffff, a1, &old))
 			break;
 		return ret(old);
@@ -2208,6 +2216,7 @@ static void memory_init(seL4_BootInfo *bi)
 	struct ut top = { bi->untyped.start + big, 1UL << bi->untypedList[big].sizeBits, 0 };
 	if (want >= top.size)
 		die("the RAM is in pieces smaller than the PAL's share", want);
+	share_size = want;
 	for (int bit = bi->untypedList[big].sizeBits - 1; bit >= seL4_PageBits; bit--)
 		if (want >> bit & 1) {
 			share[nshare] = (struct ut){ slot(), 1UL << bit, 0 };
