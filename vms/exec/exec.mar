@@ -36,7 +36,7 @@
         .EXTERNAL NET$INIT, NET$INTERRUPT, NET$FORK
         .EXTERNAL LNM$CREATE, LNM$GQ_SYSTEM
 
-UREXEC = PTE$M_VALID ! <PRT$C_UR @ PTE$V_PROT> ! PTE$M_EXEC
+UREXEC = PTE$M_VALID ! PTE$C_UR
 
         .PSECT  EXEC$DATA, NOEXE, WRT, QUAD
 EXE$GL_RPB::                            ; the restart parameter block

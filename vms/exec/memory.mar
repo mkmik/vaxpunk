@@ -57,9 +57,9 @@ POOL_VA = ^X48000000
 POOL_PAGES = 128                        ; 512 KB
 ZEROVA = ^X4FFE0000
 GSDNAMMAX = 43                          ; a global section name's characters, at most
-KW = PTE$M_VALID ! <PRT$C_KW @ PTE$V_PROT>
-UW = PTE$M_VALID ! <PRT$C_UW @ PTE$V_PROT>
-UR = PTE$M_VALID ! <PRT$C_UR @ PTE$V_PROT>
+KW = PTE$M_VALID ! PTE$M_FOE ! PTE$C_KW
+UW = PTE$M_VALID ! PTE$M_FOE ! PTE$C_UW
+UR = PTE$M_VALID ! PTE$M_FOE ! PTE$C_UR
 
         .PSECT  EXEC$DATA, NOEXE, WRT, QUAD
 MMG$GL_FREECNT::                        ; free PFNs: on the free stack, and from MMG$GL_HIGHPFN up
@@ -160,7 +160,7 @@ MMG$DEALLOCPFN::
         RSB
 
 ; MMG$CREPAG: R0 = a page's address, R1 = a page count, R2 = the PTE's
-; valid bit, protection and execute bit. Makes those pages, zeroed, with
+; low longword: its valid bit, enables and fault on execute bit. Makes those pages, zeroed, with
 ; that protection, replacing any there. R0 = SS$_NORMAL, or SS$_INSFMEM
 ; when the PFNs run out, with the pages made so far left. Uses R0-R2.
 MMG$CREPAG::
@@ -175,8 +175,8 @@ MMG$CREPAG::
         BSBW    MMG$ALLOCPFN
         TSTL    R0
         BEQL    50$
-        MOVL    R0, R6
-        BISL3   #KW, R6, R1             ; writable first, to zero it
+        EVAX_SLL R0, #PTE$V_PFN, R6     ; its PTE, but the protection
+        EVAX_OR R6, #KW, R1             ; writable first, to zero it
         MOVL    R3, R0
         CALL_PAL #PAL$_WRPTE
         BSBB    FREEOLD
@@ -186,7 +186,7 @@ MMG$CREPAG::
         SOBGTR  R2, 20$
         CMPL    R5, #KW                 ; then the protection it gets
         BEQL    30$
-        BISL3   R5, R6, R1
+        EVAX_OR R6, R5, R1
         MOVL    R3, R0
         CALL_PAL #PAL$_WRPTE
 30$:    ADDL2   #MMG$C_PAGESIZE, R3
@@ -204,8 +204,9 @@ MMG$CREPAG::
 ; IPL$_SYNCH.
 FREEOLD:
         .JSB_ENTRY
-        BBC     #PTE$V_VALID, R0, 10$
-        BICL2   #^C<PTE$M_PFN>, R0
+        EVAX_AND R0, #PTE$M_VALID, R1
+        EVAX_BEQ R1, 10$
+        EVAX_SRL R0, #PTE$V_PFN, R0
         MOVL    MMG$GL_PFNGSD, R1
         MOVL    (R1)[R0], R1
         BNEQ    20$
@@ -244,7 +245,8 @@ CHKGSD:
 ; IPL$_SYNCH. Uses R0-R2.
 ZEROPFN:
         .JSB_ENTRY  SCRATCH=<R2>
-        BISL3   #KW, R0, R1
+        EVAX_SLL R0, #PTE$V_PFN, R1
+        EVAX_OR R1, #KW, R1
         MOVL    #ZEROVA, R0
         CALL_PAL #PAL$_WRPTE
         MOVL    #ZEROVA, R1
@@ -276,7 +278,7 @@ MMG$DELPAG::
         RSB
 
 ; MMG$SETPRT: R0 = a page's address, R1 = a page count, R2 = the PTE's
-; new valid bit, protection and execute bit. Changes the protection of
+; new low longword: its valid bit, enables and fault on execute bit. Changes the protection of
 ; pages that exist. Uses R0-R2.
 MMG$SETPRT::
         .JSB_ENTRY  SCRATCH=<R2>
@@ -288,9 +290,11 @@ MMG$SETPRT::
 10$:    MOVL    R3, R0
         CLRL    R1
         CALL_PAL #PAL$_WRPTE            ; R0 = the PTE, with the PFN
-        BBC     #PTE$V_VALID, R0, 15$
-        BICL3   #^C<PTE$M_PFN>, R0, R1
-        BISL2   R2, R1
+        EVAX_AND R0, #PTE$M_VALID, R1
+        EVAX_BEQ R1, 15$
+        EVAX_SRL R0, #PTE$V_PFN, R1
+        EVAX_SLL R1, #PTE$V_PFN, R1     ; the PFN alone
+        EVAX_OR R1, R2, R1
         MOVL    R3, R0
         CALL_PAL #PAL$_WRPTE
 15$:    ADDL2   #MMG$C_PAGESIZE, R3
@@ -643,7 +647,9 @@ MAPGSD:
         MOVL    R3, R11
         MOVAL   GSD$AL_PFN(R8)[R9], R6
 50$:    INCL    GSD$L_REFCNT(R8)        ; first, so the page it replaces can't take it to 0
-        BISL3   (R6)+, R7, R1
+        MOVL    (R6)+, R1
+        EVAX_SLL R1, #PTE$V_PFN, R1
+        EVAX_OR R1, R7, R1
         MOVL    R10, R0
         CALL_PAL #PAL$_WRPTE
         BSBW    FREEOLD
