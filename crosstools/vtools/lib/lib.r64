@@ -493,7 +493,8 @@ LITERAL
     IFB$V_BRO = 4,  ! block and record I/O
     IFB$V_PLG = 5,  ! relative: the prologue's end of file changed
     IFB$V_FOUND = 6,  ! the last record service was a $FIND: a sequential $GET reads the record it found
-    IFB$V_DATA = 7;  ! indexed: a bucket was written, the end of file goes past the last block
+    IFB$V_DATA = 7,  ! indexed: a bucket was written, the end of file goes past the last block
+    IFB$V_MARKDEL = 8;  ! $ERASE deleted it while open: the last to close it deletes its header
 MACRO
     IFB$L_POS = 0, 0, 32, 0 %,  ! sequential: the next byte; relative: the next record number
     IFB$L_EOF = 4, 0, 32, 0 %,  ! sequential: the bytes in the file; relative: the VBN after the last bucket
@@ -519,6 +520,7 @@ MACRO
     IFB$L_IDX = 64, 0, 32, 0 %,  ! indexed: its state, past the buffers
     IFB$L_RAB = 68, 0, 32, 0 %,  ! the RAB connected, or 0
     IFB$L_BUFSZ = 72, 0, 32, 0 %,  ! the buffer's size, to give it back
+    IFB$L_LKID = 76, 0, 32, 0 %,  ! the file's access arbitration lock, or 0
     IFB$AB_HDR = 80, 0, 0, 0 %;  ! the file's header
 
 ! $PLGDEF

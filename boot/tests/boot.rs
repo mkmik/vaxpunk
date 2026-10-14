@@ -505,6 +505,48 @@ const PROTECTION: Phase = Phase {
     ],
 };
 
+/// While DCL has SHARE.TXT open for writing, TYPE and OPEN/READ can't open
+/// it: %RMS-E-FLK. Once it is closed, two readers can; DELETE takes its
+/// directory entry, but the second reader still reads it, and the last
+/// CLOSE deletes it, which the data disk's check finds no lost file of.
+const SHARING: Phase = Phase {
+    name: "sharing",
+    secs: 20,
+    steps: &[
+        (
+            "NEW.TXT;2           (RWED,RWED,RE,RE)",
+            1,
+            concat!(
+                "OPEN/WRITE OUT DKB0:[000000]SHARE.TXT\rWRITE OUT \"shared line\"\r",
+                "TYPE DKB0:[000000]SHARE.TXT\r",
+            ),
+        ),
+        ("RMS-E-FLK", 1, "OPEN/READ IN DKB0:[000000]SHARE.TXT\r"),
+        (
+            "RMS-E-FLK",
+            2,
+            concat!(
+                "CLOSE OUT\rOPEN/READ IN DKB0:[000000]SHARE.TXT\r",
+                "OPEN/READ IN2 DKB0:[000000]SHARE.TXT\rDELETE DKB0:[000000]SHARE.TXT;1\r",
+                "WRITE SYS$OUTPUT \"SHARING: \", \"deleted\"\r",
+            ),
+        ),
+        (
+            "SHARING: deleted",
+            1,
+            concat!(
+                "DIRECTORY DKB0:[000000]SHARE.TXT\rREAD IN2 LINE\r",
+                "WRITE SYS$OUTPUT \"SHARING: \", LINE\rCLOSE IN\rCLOSE IN2\r",
+            ),
+        ),
+    ],
+    lines: &[
+        "%RMS-E-FLK, file currently locked by another user",
+        "%DCL-E-OPENIN, error opening DKB0:[000000]SHARE.TXT as input\n-RMS-E-FLK, file currently locked by another user",
+        "SHARING: shared line",
+    ],
+};
+
 /// SET TERMINAL changes the console's width, page, BROADCAST and PASTHRU,
 /// which SHOW TERMINAL shows, refuses a width of 600, and after /NOECHO
 /// the command typed next isn't echoed; then it puts them back. TTTEST
@@ -515,7 +557,7 @@ const TERMINAL: Phase = Phase {
     secs: 20,
     steps: &[
         (
-            "NEW.TXT;2           (RWED,RWED,RE,RE)",
+            "SHARING: shared line",
             1,
             concat!(
                 "SET TERMINAL/WIDTH=132/PAGE=48/NOBROADCAST/PASTHRU\rSHOW TERMINAL\r",
@@ -956,6 +998,7 @@ const PHASES: &[Phase] = &[
     STOP_ID,
     PRIVILEGES,
     PROTECTION,
+    SHARING,
     TERMINAL,
     BACKUP,
     RMS,
@@ -1170,6 +1213,7 @@ fn boot() {
     assert!(data.contains("and the rest of what INITIALIZE made."));
     assert_eq!(data.matches("Welcome to vaxpunk",).count(), 2, "{data}");
     assert!(img.lookup("[SUB.DEEP]DEEP.TXT").is_ok());
+    assert!(img.lookup("[000000]SHARE.TXT").is_err(), "SHARE.TXT deleted");
     let fid = img.lookup("[SUB.DEEP]NOTE.TXT").unwrap();
     let mut note = Vec::new();
     img.copy_out(fid, &mut note, Conversion::RecordsToLines)

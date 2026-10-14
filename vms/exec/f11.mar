@@ -24,7 +24,8 @@
 ; IPL$_SYNCH.
 ; ponytail: no extension headers, so a file's map is what its one header
 ; holds; one lock for every volume, where the XQP $ENQs one per volume and
-; one per file; DKA0:'s and DKB0:'s I/O waits for the device, at
+; one per file header (RMS takes the access arbitration lock, as the
+; XQP's); DKA0:'s and DKB0:'s I/O waits for the device, at
 ; IPL$_SYNCH, and the file system waits for none: its IRP is done when the
 ; driver returns. A driver that queues it needs FIL$READLBLK to wait for
 ; it, as the lock lets it.

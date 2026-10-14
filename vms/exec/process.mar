@@ -1109,14 +1109,17 @@ DELP0:
         RSB
 
 ; EXE$RUNDOWN: R4 = the current PCB. Gives back what its process holds:
-; what EXE$IMGRUNDOWN does, then its other locks and ASTs, its logical
-; names, its pages in P1, its other channels and files, and its slot, unless
+; what EXE$IMGRUNDOWN does, then its other files, before its other locks,
+; among them their access arbitration locks, and ASTs, its logical
+; names, its pages in P1, its other channels, and its slot, unless
 ; $DELPRC gave that to another process already, and sends its termination
 ; message. Runs in the process's own context, since P0 and P1 are the
 ; current process's. Uses R0-R3.
 EXE$RUNDOWN::
         .JSB_ENTRY  SCRATCH=<R2, R3>
         BSBW    EXE$IMGRUNDOWN
+        CLRL    R0
+        BSBW    RMS$RUNDOWN
         CLRL    R0
         BSBW    LCK$RUNDOWN
         DSBINT  #IPL$_SYNCH
@@ -1135,8 +1138,6 @@ EXE$RUNDOWN::
         BSBW    MMG$DELPAG
 20$:    MOVL    #VA$C_P1END, PCB$L_FREP1VA(R4)
         CLRL    PCB$L_CHANS(R4)
-        CLRL    R0
-        BSBW    RMS$RUNDOWN
         BSBB    TERMMSG
         DSBINT  #IPL$_SYNCH
         MOVZWL  PCB$L_PID(R4), R0

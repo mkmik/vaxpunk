@@ -600,6 +600,7 @@ IFB$L_CELLSZ = 60                       ; relative: a cell's size
 IFB$L_IDX = 64                          ; indexed: its state, past the buffers
 IFB$L_RAB = 68                          ; the RAB connected, or 0
 IFB$L_BUFSZ = 72                        ; the buffer's size, to give it back
+IFB$L_LKID = 76                         ; the file's access arbitration lock, or 0
 IFB$AB_HDR = 80                         ; the file's header
 IFB$K_LENGTH = 592                      ; the fixed part
 IFB$V_WRITE = 0                         ; it may be written: $CREATE made it or $OPEN opened it for that
@@ -610,6 +611,7 @@ IFB$V_BRO = 4                           ; block and record I/O
 IFB$V_PLG = 5                           ; relative: the prologue's end of file changed
 IFB$V_FOUND = 6                         ; the last record service was a $FIND: a sequential $GET reads the record it found
 IFB$V_DATA = 7                          ; indexed: a bucket was written, the end of file goes past the last block
+IFB$V_MARKDEL = 8                       ; $ERASE deleted it while open: the last to close it deletes its header
         .ENDM   $IFBDEF
 
 ; $PLGDEF, $KEYDEF, $AREADEF, $BKTDEF, $IRCDEF, $DLCDEF: relative and

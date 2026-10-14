@@ -41,13 +41,20 @@
 ; takes control access, and the system's for a new owner. Without one, a
 ; new version has the protection of the highest there was.
 ;
+; Each open of a file holds its access arbitration lock, through the lock
+; manager, in a mode that FAB$B_FAC and FAB$B_SHR decide, as VMS's XQP's
+; (docs/adr/0036-file-access-arbitration-locks.md): an open another's
+; lock blocks fails with RMS$_FLK. $ERASE of a file that is open takes its
+; directory entry and marks it for delete, and the last stream to close it
+; deletes it.
+;
 ; ponytail: SET PROTECTION, which opens the file,
 ; needs read access to it, where VMS's asks the XQP with IO$_MODIFY. The
 ; services run in kernel mode holding the file system's
 ; lock, FIL$LOCK, which keeps its buffers and RMS's to one process; VMS's
 ; RMS runs in executive mode, in the process's own P1. One stream per
-; file; no file sharing or locking or concealed devices, ASTs or
-; completion routines. $SEARCH finds its place again from the resultant
+; file, and one writer: no bucket or record locks; no concealed devices,
+; ASTs or completion routines. $SEARCH finds its place again from the resultant
 ; string it made last, as VMS's XQP does with FIB$L_WCC, so a wildcard
 ; $SEARCH needs one; VMS's RMS keeps its own copy.
 ;
@@ -68,6 +75,7 @@
         $XABPRODEF
         $IFBDEF
         $XABFHCDEF
+        $LCKDEF
 
         .EXTERNAL SCH$GL_CURPCB, EXE$ALONONPAGED, EXE$DEANONPGDSIZ, EXE$PROBER_DSC
         .EXTERNAL FIL$READHDR, FIL$READVBN, FIL$SEARCHDIR, FIL$MATCH, FIL$EOF, FIL$ISDIR
@@ -75,7 +83,7 @@
         .EXTERNAL FIL$ENTER, FIL$REMOVE, FIL$DELHDR, FIL$WRITEVBN, FIL$MKDIR
         .EXTERNAL FIL$LOCK, FIL$UNLOCK, FIL$CHKHDR, FIL$CHKPRO
         .EXTERNAL F11$GW_FID, F11$GL_VCB, F11$AB_DIRBLK, LNM$TRNLOG, LNM$EQUIV
-        .EXTERNAL SCH$GL_PCBVEC
+        .EXTERNAL SCH$GL_PCBVEC, LCK$ENQ, LCK$DEQ
         .EXTERNAL EXE$GQ_SYSTIME, RMS$XABOUT, RMS$FINDXAB
         .EXTERNAL SEQ$OPEN, SEQ$CONNECT, SEQ$GET, SEQ$FIND, SEQ$PUT, SEQ$UPDATE
         .EXTERNAL SEQ$TRUNCATE, SEQ$REWIND, SEQ$FLUSH
@@ -109,6 +117,8 @@ FH2$B_IDOFFSET = 0                      ; the ident area, in words
 FH2$W_FID = 8
 FH2$W_FID_SEQ = 10
 FH2$B_FID_NMX = 13
+FH2$L_FILECHAR = 52
+FCH$V_MARKDEL = 15                      ; in it: marked for delete
 FH2$L_FILEOWNER = 60
 FH2$W_FILEPROT = 64
 FH2$W_BACKLINK = 66
@@ -171,6 +181,7 @@ SYSDEF: .BYTE   0                       ; the system's default: SYS$DISK: and
 SYSDISK:                                ; the process's default directory, .ASCIC
         .ASCII  "SYS$DISK:"
         .BLKB   63
+ARBNAM: .ASCII  "F11B$a"                ; an access arbitration lock's name starts so
 HDRBUF: .BLKB   BLOCK                   ; the header of a file $ERASE deletes, $CLOSE changes, or $CREATE follows
 XABPRO: .LONG   0                       ; the FAB's protection XAB, or 0
 MFDNAME:
@@ -1838,7 +1849,9 @@ L:      BSBW    FIL$UNLOCK
         MOVL    #RMS$_PRV, R0
         BLBS    R1, 80$
         BISL2   #1@IFB$V_WRITE, IFB$L_FLAGS(R7)
-20$:    TSTL    R11
+20$:    BSBW    ARBLOCK
+        BLBC    R0, 80$
+        TSTL    R11
         BEQL    30$
         BSBW    PUTRES
         BLBC    R0, 80$
@@ -1976,11 +1989,13 @@ RMS$ALLOCBUF::
         MOVL    #RMS$_DME, R0
         RSB
 
-; FREEIFAB: R7 = an IFAB. Gives it and its buffer back to the pool, and
-; R0 as it was. Uses R1-R3.
+; FREEIFAB: R7 = an IFAB. Gives back its access arbitration lock, and it
+; and its buffer to the pool, and R0 as it was. Uses R1-R3.
 FREEIFAB:
         .JSB_ENTRY  SCRATCH=<R2, R3>
         PUSHL   R0
+        MOVL    IFB$L_LKID(R7), R1
+        BSBW    UNLOCKFILE
         MOVL    IFB$L_BUF(R7), R0
         BEQL    10$
         MOVL    IFB$L_BUFSZ(R7), R1
@@ -1989,6 +2004,173 @@ FREEIFAB:
         MOVL    IFB$L_SIZE(R7), R1
         BSBW    EXE$DEANONPGDSIZ
         MOVL    (SP)+, R0
+        RSB
+
+; ARBLOCK: R7 = an IFAB with its file's header and access, on
+; F11$GL_VCB's volume, R10 = its FAB. Takes the file's access
+; arbitration lock, in the mode that access and the sharing FAB$B_SHR
+; allows others call for, as VMS's XQP does: EX with FAB$M_NIL, or for
+; writing that shares nothing; PW for writing that others may read; PR for
+; reading that others may only read, FAB$M_SHRGET or no sharing at all;
+; CR for reading that others may write. Its ID goes in IFB$L_LKID. R0 =
+; RMS$_NORMAL, RMS$_FLK if another open of the file's lock blocks it, or
+; RMS$_DME. Uses R0-R3.
+; ponytail: writing that others may write too is PW as well, not CW, and
+; so a second writer gets RMS$_FLK, until RMS has bucket and record locks
+; and the writers share the file's header (PRD-0008's step 9); no
+; FAB$M_UPI or FAB$M_MSE.
+ARBLOCK:
+        .JSB_ENTRY  SCRATCH=<R2, R3>
+        MOVZBL  FAB$B_SHR(R10), R0
+        MOVL    #LCK$K_EXMODE, R1
+        BBS     #FAB$V_NIL, R0, 30$
+        BITB    #FAB$M_PUT!FAB$M_DEL!FAB$M_UPD!FAB$M_TRN, IFB$B_FAC(R7)
+        BEQL    10$
+        BITB    #FAB$M_SHRGET!FAB$M_SHRPUT!FAB$M_SHRDEL!FAB$M_SHRUPD, R0
+        BEQL    30$
+        MOVL    #LCK$K_PWMODE, R1
+        BRB     30$
+10$:    MOVL    #LCK$K_CRMODE, R1
+        BITB    #FAB$M_SHRPUT!FAB$M_SHRDEL!FAB$M_SHRUPD, R0
+        BNEQ    30$
+        MOVL    #LCK$K_PRMODE, R1
+30$:    MOVAB   IFB$AB_HDR(R7), R2
+        BSBW    LOCKFILE
+        BLBC    R0, 90$
+        MOVL    R1, IFB$L_LKID(R7)
+90$:    RSB
+
+; LOCKFILE: R1 = a lock mode, R2 = a file's header, on F11$GL_VCB's
+; volume. Takes the file's access arbitration lock in that mode, if no
+; other lock on it blocks that: a kernel mode lock of the system's on
+; F11B$a, the device's name and the file ID, which is never queued. R0 =
+; RMS$_NORMAL and R1 = its ID; RMS$_FLK if another lock blocks it;
+; RMS$_DME if the pool has no room. Uses R0-R3.
+; vaxpunk: VMS's XQP names the lock after the volume, not the device,
+; under a lock for the volume; no program looks at either.
+LOCKFILE:
+        .JSB_ENTRY  SCRATCH=<R2, R3>
+        SUBL2   #32, SP                 ; the status block, then the name
+        MOVL    SP, R3
+        MOVL    ARBNAM, 8(R3)
+        MOVW    ARBNAM+4, 12(R3)
+        MOVL    F11$GL_VCB, R0
+        MOVL    VCB$T_DEVNAM(R0), 14(R3)
+        MOVB    VCB$T_DEVNAM+4(R0), 18(R3)
+        MOVL    FH2$W_FID(R2), 19(R3)
+        MOVW    FH2$W_FID+4(R2), 23(R3)
+        MOVL    SCH$GL_CURPCB, R0
+        DSBINT  #IPL$_SYNCH
+        CLRL    -(SP)                   ; no blocking AST,
+        CLRL    -(SP)                   ; parent
+        CLRL    -(SP)                   ; or ACB: it completes now or not at all
+        MNEGL   #1, -(SP)               ; the system's
+        CLRL    -(SP)                   ; kernel mode
+        PUSHAB  8(R3)
+        PUSHL   #17                     ; F11B$a, DDCU:, the file ID
+        PUSHL   #LCK$M_NOQUEUE
+        PUSHL   R3
+        PUSHL   R1
+        PUSHL   PCB$L_PID(R0)
+        CALLS   #11, G^LCK$ENQ
+        ENBINT
+        MOVL    4(R3), R1
+        CMPL    R0, #SS$_SYNCH
+        BNEQ    10$
+        MOVL    #RMS$_NORMAL, R0
+        BRB     90$
+10$:    CMPL    R0, #SS$_NOTQUEUED
+        BNEQ    20$
+        MOVL    #RMS$_FLK, R0
+        BRB     90$
+20$:    MOVL    #RMS$_DME, R0
+90$:    ADDL2   #32, SP
+        RSB
+
+; UNLOCKFILE: R1 = an access arbitration lock's ID, or 0. Gives it back.
+; Keeps every register.
+UNLOCKFILE:
+        .JSB_ENTRY
+        TSTL    R1
+        BEQL    90$
+        PUSHR   #^M<R0, R1, R2, R3>
+        MOVL    SCH$GL_CURPCB, R0
+        DSBINT  #IPL$_SYNCH
+        CLRL    -(SP)                   ; no value block
+        CLRL    -(SP)                   ; or flags
+        CLRL    -(SP)                   ; kernel mode
+        PUSHL   R1
+        PUSHL   PCB$L_PID(R0)
+        CALLS   #5, G^LCK$DEQ
+        ENBINT
+        POPR    #^M<R0, R1, R2, R3>
+90$:    RSB
+
+; FILEBUSY: R2 = a file's header, on F11$GL_VCB's volume. R0 =
+; RMS$_NORMAL if no stream has it open, RMS$_FLK if one has, or RMS$_DME.
+; Uses R0-R3.
+FILEBUSY:
+        .JSB_ENTRY  SCRATCH=<R2, R3>
+        MOVL    #LCK$K_EXMODE, R1
+        BSBW    LOCKFILE
+        BLBC    R0, 90$
+        BSBW    UNLOCKFILE
+90$:    RSB
+
+; MARKDEL: R2 = the header of a file open in some stream, on
+; F11$GL_VCB's volume, its directory entry gone. Marks it for delete, on
+; the disk and in each IFAB that has it open, in every process: the last
+; to close it deletes it (DELLAST). R0 = SS$_NORMAL or the disk's error.
+; Uses R0-R5.
+MARKDEL:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5>
+        BISL2   #1@FCH$V_MARKDEL, FH2$L_FILECHAR(R2)
+        MOVL    R2, R1
+        BSBW    FIL$WRITEHDR
+        DSBINT  #IPL$_SYNCH             ; their PCBs
+        MOVL    #SCH$C_MAXPIX-1, R3
+10$:    MOVL    SCH$GL_PCBVEC[R3], R4
+        BEQL    40$
+        MOVL    #1, R5
+20$:    BBC     R5, PCB$L_FILES(R4), 30$
+        MOVL    PCB$A_IFAB(R4)[R5], R1
+        CMPL    IFB$L_VCB(R1), F11$GL_VCB
+        BNEQ    30$
+        CMPL    IFB$AB_HDR+FH2$W_FID(R1), FH2$W_FID(R2)
+        BNEQ    30$
+        CMPW    IFB$AB_HDR+FH2$W_FID+4(R1), FH2$W_FID+4(R2)
+        BNEQ    30$
+        BISL2   #1@IFB$V_MARKDEL, IFB$L_FLAGS(R1)
+        BISL2   #1@FCH$V_MARKDEL, IFB$AB_HDR+FH2$L_FILECHAR(R1)
+30$:    AOBLEQ  #MAXIFI, R5, 20$
+40$:    SOBGTR  R3, 10$
+        ENBINT
+        RSB
+
+; DELLAST: R7 = an IFAB of a file marked for delete. Gives back its access
+; arbitration lock, and, if no other stream has the file open, deletes
+; it, with its header as the disk has it now. Holding FIL$LOCK. Keeps
+; every register.
+; ponytail: an error deleting it isn't reported; the file is lost, as on
+; VMS after a crash, with no directory entry and marked for delete.
+DELLAST:
+        .JSB_ENTRY
+        PUSHR   #^M<R0, R1, R2, R3, R4, R5>
+        MOVL    IFB$L_LKID(R7), R1
+        BSBW    UNLOCKFILE
+        CLRL    IFB$L_LKID(R7)
+        MOVL    IFB$L_VCB(R7), F11$GL_VCB
+        MOVAB   IFB$AB_HDR(R7), R2
+        BSBW    FILEBUSY
+        BLBC    R0, 90$
+        MOVZBL  IFB$AB_HDR+FH2$B_FID_NMX(R7), R0
+        ASHL    #16, R0, R0
+        MOVW    IFB$AB_HDR+FH2$W_FID(R7), R0
+        MOVAB   IFB$AB_HDR(R7), R1
+        BSBW    FIL$READHDR
+        BLBC    R0, 90$
+        BSBW    FIL$DELHDR
+90$:    POPR    #^M<R0, R1, R2, R3, R4, R5>
         RSB
 
 ; INSTALL: R7 = an IFAB, R8 = its IFI, R9 = the current PCB, R10 = a FAB.
@@ -2020,8 +2202,9 @@ GETIFAB:
 ; CLOSEIFI: R8 = an IFI, R7 = its IFAB, R9 = the current PCB. Closes it:
 ; a file opened for writing gets what its buffers hold and its header
 ; written, with the revision date and count of a file that changed
-; (ORGFLUSH). R0 = RMS$_NORMAL, or RMS$_WER if they couldn't be. Holding
-; FIL$LOCK. Uses R0 and R1.
+; (ORGFLUSH), and the last stream to close a file $ERASE marked for
+; delete deletes it (DELLAST). R0 = RMS$_NORMAL, or RMS$_WER if they
+; couldn't be. Holding FIL$LOCK. Uses R0 and R1.
 CLOSEIFI:
         .JSB_ENTRY
         PUSHL   #RMS$_NORMAL
@@ -2037,7 +2220,9 @@ CLOSEIFI:
         POPR    #^M<R2, R3, R4, R5, R6, R8, R9, R10, R11>
         BLBS    R0, 20$
         MOVL    #RMS$_WER, (SP)
-20$:    CLRL    PCB$A_IFAB(R9)[R8]
+20$:    BBC     #IFB$V_MARKDEL, IFB$L_FLAGS(R7), 30$
+        BSBW    DELLAST
+30$:    CLRL    PCB$A_IFAB(R9)[R8]
         ASHL    R8, #1, R0
         BICL2   R0, PCB$L_FILES(R9)
         PUSHR   #^M<R2, R3>
@@ -2422,6 +2607,8 @@ FLUSH:
         BEQL    30$
         BSBW    PUTRES
 30$:    BISL2   #<1@IFB$V_WRITE>!<1@IFB$V_HDR>, IFB$L_FLAGS(R7)
+        BSBW    ARBLOCK
+        BLBC    R0, 50$
         BSBW    ATTRS
         PUSHR   #^M<R8, R9>
         BSBW    ORGCREATE
@@ -2566,7 +2753,8 @@ CRENTER:
 ; the volume's own files, or without delete access to the file and write
 ; access to its directory, RMS$_MKD if the file system fails, with its
 ; error in FAB$L_STV: SS$_DIRNOTEMPTY for a directory with files in it.
-; ponytail: an open file is deleted all the same.
+; A file open in some stream loses its entry now and is marked for
+; delete; the last stream to close it deletes it, as on VMS.
         .ENTRY  EXE$ERASE, ^M<R2, R3, R4, R5, R6, R7, R8, R9, R10, R11>
         BSBW    FIL$LOCK
         BSBW    FABNAM
@@ -2616,16 +2804,27 @@ CRENTER:
         MOVL    #SS$_DIRNOTEMPTY, R0
         CMPW    F11$AB_DIRBLK, #^XFFFF
         BNEQ    80$
-25$:    MOVAB   RMS$AB_DIRHDR, R3
+25$:    MOVAB   HDRBUF, R2
+        BSBW    FILEBUSY
+        CMPL    R0, #RMS$_DME
+        BEQL    90$
+        PUSHL   R0                      ; RMS$_FLK while it is open
+        MOVAB   RMS$AB_DIRHDR, R3
         MOVL    FIELDS+16, R6           ; NAME.TYPE
         ADDL3   FIELDS+20, FIELDS+28, R7
         MOVL    RESVER, R8
         BSBW    FIL$REMOVE
+        MOVL    (SP)+, R1
         BLBC    R0, 80$
-        MOVAB   HDRBUF, R1
+        BLBS    R1, 30$
+        MOVAB   HDRBUF, R2
+        BSBW    MARKDEL
+        BLBC    R0, 80$
+        BRB     40$
+30$:    MOVAB   HDRBUF, R1
         BSBW    FIL$DELHDR
         BLBC    R0, 80$
-        MOVL    #RMS$_NORMAL, R0
+40$:    MOVL    #RMS$_NORMAL, R0
         BRB     90$
 80$:    MOVL    R0, FAB$L_STV(R10)
         MOVL    #RMS$_MKD, R0

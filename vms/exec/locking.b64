@@ -229,10 +229,12 @@ ROUTINE NOTIFY (R) : NOVALUE =
 
 ! POST rsb, lkb: completes lkb's granted request through its ACB, with the
 ! resource's value block if the request returns it, and SS$_VALNOTVALID
-! for one that isn't valid.
+! for one that isn't valid. A request with no ACB, the file system's,
+! which never waits, has nothing to complete.
 ROUTINE POST (R : REF BLOCK[, BYTE] FIELD(RSB_FIELDS), L : REF BLOCK[, BYTE] FIELD(LKB_FIELDS)) :
     NOVALUE =
     BEGIN
+    IF .L[LKB_ACB] EQL 0 THEN RETURN;
     IF NOT .L[LKB_VALRET]
     THEN
         LCK$QPOST(.L[LKB_ACB], SS$_NORMAL, 0)
@@ -464,7 +466,8 @@ ROUTINE UNDER (L : REF BLOCK[, BYTE] FIELD(LKB_FIELDS), PARENT) =
 ! writes lksb's value block to the resource's; anything else returns the
 ! resource's when it is granted, but a conversion to a lower mode. blkacb,
 ! if it isn't 0, is the lock's blocking AST from now on. R0 = SS$_SYNCH if
-! it was granted now, completed through acb; SS$_NORMAL if it waits, and
+! it was granted now, completed through acb, or with none if acb is 0,
+! which only a LCK$M_NOQUEUE request may be; SS$_NORMAL if it waits, and
 ! acb is the lock's until it is granted; or SS$_NOTQUEUED, with
 ! LCK$M_NOQUEUE, SS$_IVLOCKID, SS$_CVTUNGRANT, SS$_PARNOTGRANT or
 ! SS$_INSFMEM, and acb and blkacb are still the caller's. IPL$_SYNCH.
