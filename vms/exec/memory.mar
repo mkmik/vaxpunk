@@ -8,7 +8,7 @@
 ; process's own; a PTE written there is the current process's:
 ;
 ;   ^X00010000  P0: the process's image, then its $EXPREG pages
-;   ^X40010000  S0, every process's: EXEC.EXE
+;   ^X40010000  S0, every process's: EXEC.EXE, then the PFN database
 ;   ^X48000000  nonpaged pool: PCBs, kernel stacks, common event blocks,
 ;               timer queue entries, logical names
 ;   ^X4FFE0000  a page MMG$CRMPSC maps a global section's pages at to zero them
@@ -53,7 +53,6 @@
 
         .EXTERNAL EXE$GL_RPB, SCH$GL_CURPCB, EXE$PROBER_DSC, EXE$MATCHNAME, FIL$CHKPRO
 
-MMG$C_MAXPFN = 4096
 POOL_VA = ^X48000000
 POOL_PAGES = 128                        ; 512 KB
 ZEROVA = ^X4FFE0000
@@ -63,39 +62,59 @@ UW = PTE$M_VALID ! <PRT$C_UW @ PTE$V_PROT>
 UR = PTE$M_VALID ! <PRT$C_UR @ PTE$V_PROT>
 
         .PSECT  EXEC$DATA, NOEXE, WRT, QUAD
-MMG$GL_FREECNT::                        ; free PFNs, a stack
+MMG$GL_FREECNT::                        ; free PFNs: on the free stack, and from MMG$GL_HIGHPFN up
         .LONG   0
 EXE$GL_NONPAGED::                       ; free pool blocks by address:
         .LONG   0                       ; each a link and a size
-MMG$AL_FREEPFN:
-        .BLKL   MMG$C_MAXPFN
+MMG$GL_MAXPFN::                         ; PFNs 0 to this one less are the executive's
+        .LONG   0
+MMG$GL_HIGHPFN::                        ; PFNs from this one to MMG$GL_MAXPFN were never used: free
+        .LONG   0
+MMG$GL_FREEPFN::                        ; S0: the free stack, PFNs freed, a longword each
+        .LONG   0
+FREESP: .LONG   0                       ; how many PFNs are on it
+MMG$GL_FRESVA::                         ; the first S0 address past EXEC.EXE and the PFN database
+        .LONG   0
 MMG$GQ_GSDHD::                          ; global sections by name: GSDs
         .BLKQ   1
-MMG$GL_PFNGSD::                         ; pool, by PFN: the GSD of the global section it is a page of, or 0
+MMG$GL_PFNGSD::                         ; S0, by PFN: the GSD of the global section it is a page of, or 0
         .LONG   0
 
         .PSECT  $CODE$
 
-; MMG$INIT: puts the PFNs the boot left free on the free list, makes
-; the pool, and MMG$GL_PFNGSD's table in it. Uses R0-R5.
+; MMG$INIT: makes the PFN database in S0 from RPB$L_FRESVA, past
+; EXEC.EXE, for RPB$L_PFNCNT PFNs, or as many as fit below the pool at 8
+; bytes each: the free stack, empty, and MMG$GL_PFNGSD's table. The PFNs
+; the boot left free are free from MMG$GL_HIGHPFN up, without a walk.
+; Then makes the pool. Uses R0-R5.
 MMG$INIT::
         .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5>
         MOVAQ   MMG$GQ_GSDHD, R0
         MOVL    R0, (R0)
         MOVL    R0, 4(R0)
         MOVL    EXE$GL_RPB, R5
+        MOVL    RPB$L_FRESVA(R5), R4    ; the database
+        SUBL3   R4, #POOL_VA, R0
+        ASHL    #-3, R0, R0             ; how many PFNs it has room for
         MOVL    RPB$L_PFNCNT(R5), R2
-        CMPL    R2, #MMG$C_MAXPFN
+        CMPL    R2, R0
         BLEQU   10$
-        MOVL    #MMG$C_MAXPFN, R2
-10$:    CLRL    R1                      ; the high PFNs go in first,
-20$:    DECL    R2                      ; so the low ones come out first
-        CMPL    R2, RPB$L_FREEPFN(R5)
-        BLSSU   30$
-        MOVL    R2, MMG$AL_FREEPFN[R1]
-        INCL    R1
-        BRB     20$
-30$:    MOVL    R1, MMG$GL_FREECNT
+        MOVL    R0, R2
+10$:    MOVL    R2, MMG$GL_MAXPFN
+        MOVL    RPB$L_FREEPFN(R5), R0
+        MOVL    R0, MMG$GL_HIGHPFN
+        SUBL3   R0, R2, MMG$GL_FREECNT
+        MOVL    R4, MMG$GL_FREEPFN
+        MOVAL   (R4)[R2], MMG$GL_PFNGSD
+        ASHL    #3, R2, R3              ; both tables' bytes
+        ADDL2   #MMG$C_PAGESIZE-1, R3
+        ASHL    #-MMG$C_VPCTX, R3, R3   ; and pages, zeroed
+        MOVL    R4, R0
+        MOVL    R3, R1
+        MOVL    #KW, R2
+        BSBW    MMG$CREPAG
+        ASHL    #MMG$C_VPCTX, R3, R3
+        ADDL3   R3, R4, MMG$GL_FRESVA
         MOVL    #POOL_VA, R0
         MOVL    #POOL_PAGES, R1
         MOVL    #KW, R2
@@ -104,33 +123,40 @@ MMG$INIT::
         MOVL    R0, EXE$GL_NONPAGED
         CLRL    (R0)
         MOVL    #POOL_PAGES*MMG$C_PAGESIZE, 4(R0)
-        MOVL    RPB$L_PFNCNT(R5), R3
-        ASHL    #2, R3, R1
-        BSBW    EXE$ALONONPAGED
-        MOVL    R2, MMG$GL_PFNGSD
-40$:    CLRL    (R2)+
-        SOBGTR  R3, 40$
         RSB
 
 ; MMG$ALLOCPFN: R0 = a free PFN, or 0 if there is none: PFN 0 is the
-; boot's. IPL$_SYNCH.
+; boot's. One freed before, from the free stack, else one never used.
+; IPL$_SYNCH.
 MMG$ALLOCPFN::
         .JSB_ENTRY
-        MOVL    MMG$GL_FREECNT, R0
+        CLRL    R0
+        TSTL    MMG$GL_FREECNT
+        BEQL    20$
+        DECL    MMG$GL_FREECNT
+        MOVL    FREESP, R0
         BEQL    10$
         DECL    R0
-        MOVL    R0, MMG$GL_FREECNT
-        MOVL    MMG$AL_FREEPFN[R0], R0
-10$:    RSB
+        MOVL    R0, FREESP
+        ASHL    #2, R0, R0
+        ADDL2   MMG$GL_FREEPFN, R0
+        MOVL    (R0), R0
+        RSB
+10$:    MOVL    MMG$GL_HIGHPFN, R0
+        INCL    MMG$GL_HIGHPFN
+20$:    RSB
 
-; MMG$DEALLOCPFN: R0 = a PFN to free. IPL$_SYNCH. Keeps every register.
+; MMG$DEALLOCPFN: R0 = a PFN to free, onto the free stack. IPL$_SYNCH.
+; Keeps every register.
 MMG$DEALLOCPFN::
         .JSB_ENTRY
-        PUSHL   R1
-        MOVL    MMG$GL_FREECNT, R1
-        MOVL    R0, MMG$AL_FREEPFN[R1]
+        PUSHR   #^M<R1, R2>
+        MOVL    MMG$GL_FREEPFN, R1
+        MOVL    FREESP, R2
+        MOVL    R0, (R1)[R2]
+        INCL    FREESP
         INCL    MMG$GL_FREECNT
-        MOVL    (SP)+, R1
+        POPR    #^M<R1, R2>
         RSB
 
 ; MMG$CREPAG: R0 = a page's address, R1 = a page count, R2 = the PTE's
@@ -674,7 +700,7 @@ MAPGSD:
         IFNPRIV SYSGBL, 90$
 15$:    MOVL    36(AP), R10             ; pagcnt
         BEQL    84$
-        CMPL    R10, #MMG$C_MAXPFN
+        CMPL    R10, MMG$GL_MAXPFN
         BGTRU   86$
         MOVL    20(AP), R1
         MOVL    24(AP), R2

@@ -51,6 +51,11 @@ The root task ([pal/src/main.c](../pal/src/main.c), `main`) plays
 the role PALcode played on an Alpha: it's the "hardware" layer underneath VMS
 ([ADR-0002](adr/0002-root-task-is-the-pal.md)).
 
+- It divides the RAM seL4 gave it (`memory_init`), as
+  [ADR-0037](adr/0037-all-ram-and-address-spaces-filled-on-faults.md) decides: a share, a thirty-second of it, for
+  its own objects, and the rest for VMS as page frames, numbered from 0,
+  PFNs. To hold a capability for each of them, it moves to a CSpace
+  of two levels, with the CNode seL4 made it at the top's slot 0.
 - It maps the serial port and the real-time clock, and reads the clock once
   to get the boot time. Then it prints `hello from the root task`.
 - It reads the startup parameters (`fwcfg_init`): the SYSGEN parameters
@@ -60,7 +65,8 @@ the role PALcode played on an Alpha: it's the "hardware" layer underneath VMS
   `opt/vaxpunk/startup`. The root task finds that file in the device's
   directory and prints `STARTUP_P1-8: "MIN                             "`.
   Parameters not given are blank.
-- It prints a list of the free memory blocks seL4 gave it.
+- It prints a list of the free memory blocks seL4 gave it, and
+  `RAM: 8186 MB, 2030156 PFNs for the executive, 255 MB for the PAL`.
 - It starts a clock thread that wakes up every 10 ms. Each wakeup becomes
   VMS's timer interrupt ([ADR-0004](adr/0004-interval-timer-is-a-pal-thread.md)).
   On each wakeup the PAL also checks the serial port for typed
@@ -78,8 +84,9 @@ the role PALcode played on an Alpha: it's the "hardware" layer underneath VMS
 - `start_exec` reads `EXEC.EXE` from the system disk, as VMS's first
   bootstrap did: the home block, the index file, the top directory,
   `[SYSEXE]`, then the file (`f11_boot_file`). It loads it, and creates
-  the restart parameter block (RPB), a page describing memory, the
-  boot time and the startup parameters. With a network device it also makes the port's 17 pages
+  the restart parameter block (RPB), a page describing memory (how many
+  PFNs there are, the first one free, and the first S0 page past
+  `EXEC.EXE`), the boot time and the startup parameters. With a network device it also makes the port's 17 pages
   for the executive, at `0x4FF00000`, and puts their address in the RPB.
   It then starts EXEC in kernel mode at IPL 31, with R11 pointing at the
   RPB.
@@ -108,8 +115,9 @@ compiles.
 
 - fills in the system control block (handlers for traps, mode changes and
   software interrupts, plus the timer and the console receive interrupt)
-- starts memory management (`MMG$INIT`) and lets user-mode code use the
-  system service vector
+- starts memory management (`MMG$INIT`): the PFN database, in S0 past
+  `EXEC.EXE`, 8 bytes for each PFN, and the pool; then lets user-mode code
+  use the system service vector
 - starts the scheduler (`SCH$INIT`) and the system time (`EXE$INITTIM`)
 - makes the console's unit control block, `OPA0:`, the first terminal,
   with its characteristics, a VT100's 80 by 24, and an empty type-ahead

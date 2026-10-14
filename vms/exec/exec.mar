@@ -29,6 +29,7 @@
         .EXTERNAL EXE$OUTZSTRING, EXE$OUTHEX, EXE$OUTCRLF
         .EXTERNAL EXE$CMODKRNL, EXE$CMODEXEC, EXE$ACVIOLAT, EXE$OPCDEC
         .EXTERNAL SCH$ASTDEL, SCH$RESCHED, MMG$INIT, SCH$INIT, MMG$GL_FREECNT, MMG$SETPRT
+        .EXTERNAL MMG$GL_MAXPFN
         .EXTERNAL EXE$HWCLKINT, EXE$SWTIMINT, EXE$INITTIM
         .EXTERNAL SCH$GQ_DELQ, EXE$DELETEPCB, EXE$VECTOR, EXE$VECTOREND
         .EXTERNAL TTY$INIT, TTY$RCVINT, TTY$IOPOST, FIL$MOUNT
@@ -57,6 +58,8 @@ CONSOLE_DEVICE:                         ; its SYS$INPUT, SYS$OUTPUT and SYS$ERRO
 CONSOLE_PID:                            ; STARTUP's PID, then the console's process's
         .LONG   0
 BANNER: .ASCIZ  "%EXEC-I-START, vaxpunk executive, free pages: "
+PFNLIMIT:
+        .ASCIZ  "%EXEC-W-PFNLIMIT, the PFN database in S0 indexes only PFNs below "
 NOSTART:
         .ASCIZ  "%EXEC-F-NOSTART, can't create STARTUP or the console's process, status "
 NOMOUNT:
@@ -117,6 +120,15 @@ EXEC$START::
         MOVL    MMG$GL_FREECNT, R1
         JSB     G^EXE$OUTHEX
         JSB     G^EXE$OUTCRLF
+        MOVL    EXE$GL_RPB, R0
+        CMPL    MMG$GL_MAXPFN, RPB$L_PFNCNT(R0)
+        BEQL    5$
+        MOVAB   PFNLIMIT, R1
+        JSB     G^EXE$OUTZSTRING
+        MOVL    MMG$GL_MAXPFN, R1
+        JSB     G^EXE$OUTHEX
+        JSB     G^EXE$OUTCRLF
+5$:
         CLRL    R1                      ; DKA0:, whatever its label
         JSB     G^FIL$MOUNT
         BLBS    R0, 10$

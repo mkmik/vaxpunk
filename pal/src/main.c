@@ -152,6 +152,14 @@ int memcmp(const void *a, const void *b, seL4_Word n)
 	return 0;
 }
 
+/* libsel4's bitfield constructors check their fields' widths with it. */
+void __assert_fail(const char *expr, const char *file, int line, const char *function)
+{
+	(void)file, (void)function;
+	print("root task: assertion failed: %s\n", expr);
+	die("at line", line);
+}
+
 static uint32_t u32(const uint8_t *p)
 {
 	uint32_t v;
@@ -166,28 +174,165 @@ static uint64_t u64(const uint8_t *p)
 	return v;
 }
 
-/* Where retype puts new objects: an untyped cap and the next empty slot. */
-static seL4_CPtr untyped, next_slot;
+/*
+ * The PAL's memory (docs/adr/0037-all-ram-and-address-spaces-filled-on-faults.md):
+ * seL4 gives the root task the RAM its kernel doesn't use as untyped
+ * capabilities. The PAL keeps a share of it for its own objects, cut from
+ * the largest untyped at boot, and the rest is the executive's PFNs. Retype
+ * carves an untyped in order, each object aligned to its size, and the PAL
+ * counts the same way, so it knows what each has left.
+ * ponytail: 1/32 of RAM, at least 16 MB, ADR-0037's estimate; tune it when
+ * measured.
+ */
+#define SHARE_DIV 32
+#define SHARE_MIN (16UL << 20)
+#define SHARE_SLACK (1UL << 20) /* what a WRPTE may take of it at most */
+struct ut {
+	seL4_CPtr cap;
+	seL4_Word size, used; /* in bytes */
+};
+static struct ut share[64], frames[CONFIG_MAX_NUM_BOOTINFO_UNTYPED_CAPS];
+static unsigned nshare, nframes, iframes;
 
-static seL4_CPtr alloc(seL4_Word type, seL4_Word size_bits)
+/*
+ * The PAL's CSpace: a root CNode of 2^l1_bits CNodes of 2^L2_BITS slots
+ * each, and a capability's address is its CNode's number, then its slot.
+ * CNode 0 is the one seL4 made for the root task, with the boot info's
+ * capabilities, so their addresses still work; CNodes 1 on hold the PFNs'
+ * frames, one for each 2^L2_BITS PFNs, and the others what the PAL makes,
+ * each made when the last fills. Until the root CNode is made, at boot,
+ * capabilities go in seL4's, from next_slot.
+ */
+#define L2_BITS 12
+#define L2_MASK ((1UL << L2_BITS) - 1)
+static seL4_CPtr cspace; /* the root CNode, to the CNode calls; 0 until made */
+static seL4_Word l1_bits, next_slot, nfree_slot;
+
+static seL4_CPtr croot(void)
 {
-	seL4_Error err = seL4_Untyped_Retype(untyped, type, size_bits, seL4_CapInitThreadCNode, 0,
-					     0, next_slot, 1);
+	return cspace ? cspace : seL4_CapInitThreadCNode;
+}
+
+/* The size of an object of type, in bits, as retype takes bits for it. */
+static seL4_Word obj_bits(seL4_Word type, seL4_Word bits)
+{
+	switch (type) {
+	case seL4_TCBObject:
+		return seL4_TCBBits;
+	case seL4_EndpointObject:
+		return seL4_EndpointBits;
+	case seL4_NotificationObject:
+		return seL4_NotificationBits;
+	case seL4_ReplyObject:
+		return seL4_ReplyBits;
+	case seL4_CapTableObject:
+		return bits + seL4_SlotBits;
+	case seL4_ARM_SmallPageObject:
+		return seL4_PageBits;
+	case seL4_ARM_LargePageObject:
+		return seL4_LargePageBits;
+	case seL4_ARM_PageTableObject:
+		return seL4_PageTableBits;
+	case seL4_ARM_VSpaceObject:
+		return seL4_VSpaceBits;
+	default: /* an untyped, a scheduling context */
+		return bits;
+	}
+}
+
+/* Makes an object of type from u, if u has room for it, in the CNode that
+ * root, index and depth name, at offset; returns 0 if u has no room. */
+static int retype_at(struct ut *u, seL4_Word type, seL4_Word bits, seL4_CPtr root,
+		     seL4_Word index, seL4_Word depth, seL4_Word offset)
+{
+	seL4_Word size = 1UL << obj_bits(type, bits), at = (u->used + size - 1) & ~(size - 1);
+	if (at + size > u->size)
+		return 0;
+	seL4_Error err = seL4_Untyped_Retype(u->cap, type, bits, root, index, depth, offset, 1);
 	if (err)
 		die("seL4_Untyped_Retype failed", err);
+	u->used = at + size;
+	return 1;
+}
+
+/* The same, in slot. */
+static int retype(struct ut *u, seL4_Word type, seL4_Word bits, seL4_CPtr slot)
+{
+	if (!cspace)
+		return retype_at(u, type, bits, seL4_CapInitThreadCNode, 0, 0, slot);
+	return retype_at(u, type, bits, cspace, slot >> L2_BITS, seL4_WordBits - L2_BITS,
+			 slot & L2_MASK);
+}
+
+/* What the share has left, in bytes. */
+static seL4_Word share_free(void)
+{
+	seL4_Word n = 0;
+	for (unsigned i = 0; i < nshare; i++)
+		n += share[i].size - share[i].used;
+	return n;
+}
+
+/* The first piece of the share with room for an object of type: makes it
+ * at root, index, depth and offset. */
+static void share_retype(seL4_Word type, seL4_Word bits, seL4_CPtr root, seL4_Word index,
+			 seL4_Word depth, seL4_Word offset)
+{
+	for (unsigned i = 0; i < nshare; i++)
+		if (retype_at(&share[i], type, bits, root, index, depth, offset))
+			return;
+	die("the PAL's share of memory is used up", share_free());
+}
+
+static void *table(int t, seL4_Word bytes);
+enum { T_PFN, T_MADE, T_FRAMECN, T_SLOTS, T_CTX, T_PAGES, T_EXE, T_COUNT };
+
+/* An empty slot: a freed one, or the next. */
+static seL4_CPtr slot(void)
+{
+	if (nfree_slot)
+		return ((seL4_CPtr *)table(T_SLOTS, 0))[--nfree_slot];
+	if (!cspace)
+		return next_slot++;
+	if (!(next_slot & L2_MASK)) {
+		if (next_slot >> L2_BITS >> l1_bits)
+			die("the PAL's CSpace is full", next_slot);
+		share_retype(seL4_CapTableObject, L2_BITS, cspace, 0, 0, next_slot >> L2_BITS);
+	}
 	return next_slot++;
+}
+
+/* Deletes the capability in s and keeps the slot for slot(). */
+static void free_slot(seL4_CPtr s)
+{
+	if (seL4_CNode_Delete(croot(), s, seL4_WordBits))
+		die("seL4_CNode_Delete failed", s);
+	seL4_CPtr *st = table(T_SLOTS, (nfree_slot + 1) * sizeof *st);
+	st[nfree_slot++] = s;
+}
+
+/* A new object of the PAL's, from its share. */
+static seL4_CPtr alloc(seL4_Word type, seL4_Word size_bits)
+{
+	seL4_CPtr s = slot();
+	if (!cspace)
+		share_retype(type, size_bits, seL4_CapInitThreadCNode, 0, 0, s);
+	else
+		share_retype(type, size_bits, cspace, s >> L2_BITS, seL4_WordBits - L2_BITS,
+			     s & L2_MASK);
+	return s;
 }
 
 /* A copy of cap, with a badge if it is an endpoint or notification and
  * badge isn't 0. */
 static seL4_CPtr mint(seL4_CPtr cap, seL4_Word badge)
 {
-	seL4_Error err = seL4_CNode_Mint(seL4_CapInitThreadCNode, next_slot, seL4_WordBits,
-					 seL4_CapInitThreadCNode, cap, seL4_WordBits,
+	seL4_CPtr s = slot();
+	seL4_Error err = seL4_CNode_Mint(croot(), s, seL4_WordBits, croot(), cap, seL4_WordBits,
 					 seL4_AllRights, badge);
 	if (err)
 		die("seL4_CNode_Mint failed", err);
-	return next_slot++;
+	return s;
 }
 
 /* Maps frame at va in vspace, with page tables as needed. */
@@ -206,6 +351,52 @@ static void map(seL4_CPtr frame, seL4_CPtr vspace, seL4_Word va, seL4_CapRights_
 }
 
 /*
+ * The PAL's own tables that grow: the PFNs', the free slots, the process
+ * contexts, the pages its PTE tables and mappings are made of. Each has a
+ * region of the PAL's address space and gets a page of the share at a time,
+ * zeroed.
+ */
+#define TABLES 0x10000000000UL /* 1 TB */
+#define TABLE_SPAN (1UL << 36) /* 64 GB a table */
+static seL4_Word table_end[T_COUNT];
+
+/* Table t, with at least its first bytes there. */
+static void *table(int t, seL4_Word bytes)
+{
+	seL4_Word base = TABLES + t * TABLE_SPAN;
+	if (bytes > TABLE_SPAN)
+		die("a table of the PAL's outgrew its region", t);
+	while (table_end[t] < bytes) {
+		map(alloc(seL4_ARM_SmallPageObject, 0), seL4_CapInitThreadVSpace,
+		    base + table_end[t], seL4_ReadWrite,
+		    seL4_ARM_Default_VMAttributes | seL4_ARM_ExecuteNever);
+		table_end[t] += PAGE_SIZE;
+	}
+	return (void *)base;
+}
+
+/* A zeroed page of the PAL's, and back. */
+static void *page_free;
+
+static void *page(void)
+{
+	void *p = page_free;
+	if (!p) {
+		seL4_Word n = table_end[T_PAGES];
+		return (char *)table(T_PAGES, n + PAGE_SIZE) + n;
+	}
+	page_free = *(void **)p;
+	memset(p, 0, PAGE_SIZE);
+	return p;
+}
+
+static void free_page(void *p)
+{
+	*(void **)p = page_free;
+	page_free = p;
+}
+
+/*
  * A frame for the device page at paddr, from the device untyped that holds
  * it, or 0 if none does. Retype carves an untyped in order, from where it
  * last stopped, so untypeds, each aligned and as large as fits, take up
@@ -216,27 +407,44 @@ static seL4_CPtr device_frame(seL4_BootInfo *bi, seL4_Word paddr)
 {
 	static seL4_Word carved[CONFIG_MAX_NUM_BOOTINFO_UNTYPED_CAPS];
 	for (seL4_Word i = 0; i < bi->untyped.end - bi->untyped.start; i++) {
-		seL4_UntypedDesc *u = &bi->untypedList[i];
-		seL4_Word off = paddr - u->paddr;
-		if (!u->isDevice || paddr < u->paddr || off >> u->sizeBits)
+		seL4_UntypedDesc *d = &bi->untypedList[i];
+		seL4_Word off = paddr - d->paddr;
+		if (!d->isDevice || paddr < d->paddr || off >> d->sizeBits)
 			continue;
 		if (off < carved[i])
 			die("device pages out of order", paddr);
-		seL4_CPtr ram = untyped;
-		untyped = bi->untyped.start + i;
-		while (carved[i] < off) {
+		struct ut u = { bi->untyped.start + i, 1UL << d->sizeBits, carved[i] };
+		while (u.used < off) {
 			int bit = seL4_PageBits;
-			while (!(carved[i] & ((2UL << bit) - 1)) && carved[i] + (2UL << bit) <= off)
+			while (!(u.used & ((2UL << bit) - 1)) && u.used + (2UL << bit) <= off)
 				bit++;
-			alloc(seL4_UntypedObject, bit);
-			carved[i] += 1UL << bit;
+			retype(&u, seL4_UntypedObject, bit, slot());
 		}
-		seL4_CPtr frame = alloc(seL4_ARM_SmallPageObject, 0);
-		carved[i] += PAGE_SIZE;
-		untyped = ram;
+		seL4_CPtr frame = slot();
+		retype(&u, seL4_ARM_SmallPageObject, 0, frame);
+		carved[i] = u.used;
 		return frame;
 	}
 	return 0;
+}
+
+/* An address space number for vspace: one of a pool's, and a new pool of
+ * the share's when it is full. */
+static seL4_CPtr asid_pool = seL4_CapInitThreadASIDPool;
+
+static void assign_asid(seL4_CPtr vspace)
+{
+	seL4_Error err = seL4_ARM_ASIDPool_Assign(asid_pool, vspace);
+	if (err == seL4_DeleteFirst) {
+		seL4_CPtr ut = alloc(seL4_UntypedObject, seL4_ASIDPoolBits);
+		asid_pool = slot();
+		err = seL4_ARM_ASIDControl_MakePool(seL4_CapASIDControl, ut, croot(), asid_pool,
+						    seL4_WordBits);
+		if (!err)
+			err = seL4_ARM_ASIDPool_Assign(asid_pool, vspace);
+	}
+	if (err)
+		die("seL4_ARM_ASIDPool_Assign failed", err);
 }
 
 /* Maps the UART's page, then the RTC's, and reads the RTC. */
@@ -517,119 +725,119 @@ static int disk_read(uint64_t lbn, uint8_t *dst, seL4_Word n)
 
 /*
  * Physical memory, as the executive sees it: page frames numbered from 0,
- * PFNs. The executive owns them all and keeps its own PFN database; the PAL
- * makes each frame the first time a PTE names it, and maps it at
- * PHYS + PFN pages in its own address space, the way Alpha PALcode reached
- * memory by physical address, and wherever the executive's PTEs say.
- * ponytail: 4 MB, as much as the root CNode's 4096 slots leave room for;
- * frame caps in a CNode of their own for more.
+ * PFNs, all the RAM outside the PAL's share. The executive owns them all
+ * and keeps its own PFN database; the PAL makes each frame the first time
+ * a PTE names it, from the next untyped with room, and maps it at PHYS +
+ * PFN pages in its own address space, the way Alpha PALcode reached memory
+ * by physical address, and wherever the executive's PTEs say. Its
+ * capability is at an address its PFN gives, in CNodes 1 on.
  */
-#define PFN_COUNT 1024
-#define PHYS 0x100000000UL
-static seL4_CPtr pfn_frame[PFN_COUNT]; /* mapped at PHYS */
+#define PHYS 0x100000000000UL /* 16 TB */
+static seL4_Word pfn_count;
+
+static seL4_CPtr frame_cap(seL4_Word pfn)
+{
+	return (1UL << L2_BITS) + pfn;
+}
+
+/* Whether bit i of table t's bitmap is set, and sets it. */
+static int test_set(int t, seL4_Word i)
+{
+	uint8_t *b = (uint8_t *)table(t, i / 8 + 1) + i / 8;
+	int was = *b >> i % 8 & 1;
+	*b |= 1 << i % 8;
+	return was;
+}
 
 static uint8_t *pfn_ptr(seL4_Word pfn)
 {
-	if (!pfn_frame[pfn]) {
-		pfn_frame[pfn] = alloc(seL4_ARM_SmallPageObject, 0);
-		map(pfn_frame[pfn], seL4_CapInitThreadVSpace, PHYS + pfn * PAGE_SIZE,
-		    seL4_ReadWrite, seL4_ARM_Default_VMAttributes | seL4_ARM_ExecuteNever);
+	if (!test_set(T_MADE, pfn)) {
+		seL4_Word cn = frame_cap(pfn) >> L2_BITS;
+		if (!test_set(T_FRAMECN, cn))
+			share_retype(seL4_CapTableObject, L2_BITS, cspace, 0, 0, cn);
+		while (!retype(&frames[iframes], seL4_ARM_SmallPageObject, 0, frame_cap(pfn)))
+			if (++iframes == nframes)
+				die("no frame for PFN", pfn);
+		map(frame_cap(pfn), seL4_CapInitThreadVSpace, PHYS + pfn * PAGE_SIZE, seL4_ReadWrite,
+		    seL4_ARM_Default_VMAttributes | seL4_ARM_ExecuteNever);
 	}
 	return (uint8_t *)(PHYS + pfn * PAGE_SIZE);
 }
 
 /*
- * A PTE that maps a PFN: where, and the frame cap that maps it in each
- * mode's address space, made as needed, since seL4 maps a cap at one
- * address. A PFN's first mapping is in pfn_map, and the caps stay for its
- * next one; any more, a global section's pages mapped by many processes,
- * come from xmap, and give their caps' slots back when they go.
- * ponytail: 256 more mappings; the slots come out of the root CNode's.
+ * A PTE that maps a PFN: where, and a copy of the frame's capability for
+ * each mode's address space, made as needed, since seL4 maps a capability
+ * at one address. Each PFN has a list of its mappings, a global section's
+ * pages more than one.
  */
-#define XMAP_MAX 256
-static struct pmap {
-	seL4_Word va;	   /* 0: unused */
+struct pmap {
+	seL4_Word va;
 	struct ctx *c;	   /* whose P0 or P1, 0 for S0 */
 	seL4_CPtr cap[4];  /* in kernel mode's address space, and modes 1-3's */
 	struct pmap *next; /* the PFN's other mappings */
-} pfn_map[PFN_COUNT], xmap[XMAP_MAX], *xmap_free;
-static unsigned xmap_used;
-static seL4_CPtr spare_slot[XMAP_MAX * 4];
-static unsigned nspare;
+};
+static struct pmap *pmap_free;
+
+static struct pmap **pfn_maps(seL4_Word pfn)
+{
+	return (struct pmap **)table(T_PFN, (pfn + 1) * sizeof(struct pmap *)) + pfn;
+}
 
 /* The cap that maps p, a mapping of pfn, in mode m's address space. */
 static seL4_CPtr map_cap(struct pmap *p, unsigned pfn, int m)
 {
-	if (!p->cap[m]) {
-		if (!nspare)
-			p->cap[m] = mint(pfn_frame[pfn], 0);
-		else if (seL4_CNode_Copy(seL4_CapInitThreadCNode, spare_slot[--nspare],
-					 seL4_WordBits, seL4_CapInitThreadCNode, pfn_frame[pfn],
-					 seL4_WordBits, seL4_AllRights))
-			die("seL4_CNode_Copy failed", pfn);
-		else
-			p->cap[m] = spare_slot[nspare];
-	}
+	if (!p->cap[m])
+		p->cap[m] = mint(frame_cap(pfn), 0);
 	return p->cap[m];
 }
 
 /* pfn's mapping at va in c's P0 or P1, or in S0 if c is 0. */
 static struct pmap *find_map(unsigned pfn, struct ctx *c, seL4_Word va)
 {
-	for (struct pmap *p = &pfn_map[pfn]; p; p = p->next)
+	for (struct pmap *p = *pfn_maps(pfn); p; p = p->next)
 		if (p->va == va && p->c == c)
 			return p;
 	die("no such mapping", va);
 }
 
-/* A new mapping of pfn at va, or 0 if there is no room for one. */
+/* A new mapping of pfn at va. */
 static struct pmap *add_map(unsigned pfn, struct ctx *c, seL4_Word va)
 {
-	struct pmap *p = &pfn_map[pfn];
-	if (p->va) {
-		if (xmap_free)
-			xmap_free = (p = xmap_free)->next;
-		else if (xmap_used < XMAP_MAX)
-			p = &xmap[xmap_used++];
-		else
-			return 0;
-		p->next = pfn_map[pfn].next;
-		pfn_map[pfn].next = p;
+	if (!pmap_free) {
+		struct pmap *p = page();
+		for (unsigned i = 0; i < PAGE_SIZE / sizeof *p; i++) {
+			p[i].next = pmap_free;
+			pmap_free = &p[i];
+		}
 	}
-	p->va = va;
-	p->c = c;
+	struct pmap *p = pmap_free, **head = pfn_maps(pfn);
+	pmap_free = p->next;
+	*p = (struct pmap){ va, c, { 0 }, *head };
+	*head = p;
 	return p;
 }
 
 /* Forgets p, a mapping of pfn its caps no longer map anywhere. */
 static void drop_map(unsigned pfn, struct pmap *p)
 {
-	p->va = 0;
-	p->c = 0;
-	if (p == &pfn_map[pfn])
-		return;
 	for (int m = 0; m < 4; m++)
-		if (p->cap[m]) {
-			if (seL4_CNode_Delete(seL4_CapInitThreadCNode, p->cap[m], seL4_WordBits))
-				die("seL4_CNode_Delete failed", pfn);
-			spare_slot[nspare++] = p->cap[m];
-			p->cap[m] = 0;
-		}
-	struct pmap **l = &pfn_map[pfn].next;
+		if (p->cap[m])
+			free_slot(p->cap[m]);
+	struct pmap **l = pfn_maps(pfn);
 	while (*l != p)
 		l = &(*l)->next;
 	*l = p->next;
-	p->next = xmap_free;
-	xmap_free = p;
+	p->next = pmap_free;
+	pmap_free = p;
 }
 
 /*
  * The executive's address space, below 2 GB, where MACRO-32's longwords
  * reach, in the VAX's three regions: P0 and P1, each process's own, and
  * between them S0, the system space every process shares. The PAL keeps the
- * PTE it was last given for each page, 4 MB of them to a table: S0's in one
- * directory, each process's P0 and P1 in its context's.
- * ponytail: 96 tables, enough for S0 and two per process; more if needed.
+ * PTE it was last given for each page, 4 MB of them to a table, a page of
+ * the PAL's made as needed: S0's in one directory, each process's P0 and P1
+ * in its context's.
  */
 #define P0_END 0x40000000UL
 #define S0_END 0x60000000UL
@@ -643,9 +851,6 @@ static const signed char may_read[16] = { -1, -1, 0, 0, 3, 1, 1, 1, 2, 2, 2, 2, 
 static const signed char may_write[16] = { -1, -1, 0, -1, 3, 1, 0, -1, 2, 1, 0, -1, 2, 1, 0, -1 };
 static seL4_CPtr exec_vspace;
 static uint32_t *s0_dir[SPACE_END >> 22];
-static uint32_t pte_pool[96][1024];
-static uint32_t *pte_free[96];
-static unsigned pte_used, pte_nfree;
 
 static int is_s0(seL4_Word va)
 {
@@ -665,9 +870,9 @@ static int mapped(uint32_t pte)
 /*
  * A process context: the threads that run one executive process, made the
  * first time the executive switches to its hardware PCB, and its P0 and P1.
- * Its seL4 objects outlive it, for the next context in the slot.
+ * Its seL4 objects outlive it, for the next context in the slot. The slots
+ * are a table of the PAL's, nctx of them.
  */
-#define CTX_MAX 32
 static struct ctx {
 	seL4_Word hwpcb; /* the executive's HWPCB address; 0: a free slot */
 	/* A thread for each mode it has entered, and the mode's address space:
@@ -677,8 +882,8 @@ static struct ctx {
 	uint32_t *dir[SPACE_END >> 22]; /* its P0 and P1 PTE tables */
 	/* Its PAL call's message while it waits in one: x0-x7, the svc's PC. */
 	seL4_Word mr[seL4_UnknownSyscall_FaultIP + 1];
-} ctx[CTX_MAX];
-static struct ctx *cur;
+} *ctx, *cur;
+static unsigned nctx;
 
 /* The PTE of va's page: in S0's directory, or the current process's. */
 static uint32_t *pte_at(seL4_Word va, int make)
@@ -686,14 +891,8 @@ static uint32_t *pte_at(seL4_Word va, int make)
 	uint32_t **t = is_s0(va) ? &s0_dir[va >> 22] : cur ? &cur->dir[va >> 22] : 0;
 	if (!t)
 		return 0;
-	if (!*t && make) {
-		if (pte_nfree)
-			*t = pte_free[--pte_nfree];
-		else if (pte_used < sizeof pte_pool / sizeof pte_pool[0])
-			*t = pte_pool[pte_used++];
-		else
-			die("out of PTE tables", va);
-	}
+	if (!*t && make)
+		*t = page();
 	return *t ? &(*t)[va >> seL4_PageBits & 1023] : 0;
 }
 
@@ -756,8 +955,8 @@ static int outer(uint32_t pte)
  * current process's. A PFN may be mapped at any number of addresses, in
  * any number of processes: a global section's pages are. Fails, returning
  * 0, for an address outside the executive's space, a reserved protection
- * code, a PFN out of range, no room for another mapping of the PFN, or an
- * S0 page outer modes may read once one of them runs.
+ * code, a PFN out of range, too little left of the PAL's share for the
+ * mapping, or an S0 page outer modes may read once one of them runs.
  */
 static int wrpte(seL4_Word va, uint32_t pte, uint32_t *old)
 {
@@ -766,7 +965,7 @@ static int wrpte(seL4_Word va, uint32_t pte, uint32_t *old)
 	struct ctx *owner = s0 ? 0 : cur;
 	if (va % PAGE_SIZE || va < PAGE_SIZE || va >= SPACE_END || (!s0 && !cur))
 		return 0;
-	if (mapped(pte) && (prot(pte) == 1 || pfn >= PFN_COUNT))
+	if (mapped(pte) && (prot(pte) == 1 || pfn >= pfn_count || share_free() < SHARE_SLACK))
 		return 0;
 	uint32_t none = 0, *slot = pte_at(va, mapped(pte));
 	if (!slot)
@@ -774,19 +973,19 @@ static int wrpte(seL4_Word va, uint32_t pte, uint32_t *old)
 	if (s0 && (outer(pte) || outer(*slot)) &&
 	    (outer_started || (!outer(*slot) && nshared == sizeof shared / sizeof shared[0])))
 		return 0;
-	/* Another mapping of the PFN needs room, unless it replaces one of it. */
-	if (mapped(pte) && pfn_map[pfn].va && !xmap_free && xmap_used == XMAP_MAX &&
-	    !(mapped(*slot) && (*slot & PTE_PFN) == pfn))
-		return 0;
 	*old = *slot;
+	struct pmap *p = 0;
 	if (mapped(*old)) {
 		unsigned o = *old & PTE_PFN;
-		struct pmap *p = find_map(o, owner, va);
+		p = find_map(o, owner, va);
 		if (s0)
 			unmap(p->cap[0]);
 		else
 			map_page(cur, p, *old, 0);
-		drop_map(o, p);
+		if (!mapped(pte) || o != pfn) { /* the same PFN keeps its mapping's caps */
+			drop_map(o, p);
+			p = 0;
+		}
 	}
 	*slot = pte;
 	if (s0) {
@@ -804,7 +1003,8 @@ static int wrpte(seL4_Word va, uint32_t pte, uint32_t *old)
 	if (!mapped(pte))
 		return 1;
 	pfn_ptr(pfn);
-	struct pmap *p = add_map(pfn, owner, va);
+	if (!p)
+		p = add_map(pfn, owner, va);
 	if (s0)
 		map_pte(map_cap(p, pfn, 0), exec_vspace, va, pte, 0);
 	else
@@ -856,8 +1056,7 @@ static void free_space(struct ctx *c)
 				map_page(c, p, t[j], 0);
 				drop_map(pfn, p);
 			}
-		memset(t, 0, 1024 * sizeof *t);
-		pte_free[pte_nfree++] = t;
+		free_page(t);
 		c->dir[i] = 0;
 	}
 }
@@ -983,7 +1182,7 @@ static seL4_Word boot_pfn;
 static void boot_pages(seL4_Word va, const uint8_t *src, seL4_Word size, uint32_t pte)
 {
 	for (seL4_Word off = 0; off < size; off += PAGE_SIZE) {
-		if (boot_pfn == PFN_COUNT)
+		if (boot_pfn == pfn_count)
 			die("the boot needs more memory than the PAL has", size);
 		seL4_Word n = size - off < PAGE_SIZE ? size - off : PAGE_SIZE;
 		if (src)
@@ -997,10 +1196,12 @@ static void boot_pages(seL4_Word va, const uint8_t *src, seL4_Word size, uint32_
 /*
  * Maps the sections of an executable image (crosstools/vtools/docs/image-format.md) at
  * their link addresses, with their protection, and returns the transfer
- * address.
+ * address. exec_end is past the highest of them.
  * ponytail: link address only, no fixups; relocate with the EIAF when an
  * image has to move.
  */
+static seL4_Word exec_end;
+
 static seL4_Word load_image(const uint8_t *file, seL4_Word size)
 {
 	enum { BLOCK = 512, EISD_SIZE = 36, GBL = 0x1, DZRO = 0x4, WRT = 0x8, EXE = 0x800 };
@@ -1037,6 +1238,8 @@ static seL4_Word load_image(const uint8_t *file, seL4_Word size)
 		}
 		uint32_t pte = (flags & WRT ? PRT_KW : PRT_KR) << 27;
 		boot_pages(va, src, secsize, flags & EXE ? pte | PTE_EXEC : pte);
+		if (va + secsize > exec_end)
+			exec_end = va + secsize;
 	}
 	return u64(file + activ + 8);
 }
@@ -1145,9 +1348,9 @@ static uint32_t f11_lookup(uint32_t dir, const char *name)
 	return 0;
 }
 
-/* Mounts the system disk and reads [SYSEXE]EXEC.EXE into buf, at most size
- * bytes. Returns its size, or 0. */
-static seL4_Word f11_boot_file(uint8_t *buf, seL4_Word size)
+/* Mounts the system disk and reads [SYSEXE]EXEC.EXE into a table of the
+ * PAL's as large as the file. Returns it, its size in *size, or 0. */
+static const uint8_t *f11_boot_file(seL4_Word *size)
 {
 	enum { HM2_IBMAPVBN = 22, HM2_IBMAPLBN = 24, HM2_IBMAPSIZE = 32, HM2_FORMAT = 496, MFD = 4 };
 	uint8_t *home = f11_blk, hdr[DISK_BLOCK];
@@ -1161,10 +1364,15 @@ static seL4_Word f11_boot_file(uint8_t *buf, seL4_Word size)
 	if (!file || !f11_header(file, hdr))
 		return 0;
 	eof = f11_eof(hdr, &ff);
-	seL4_Word bytes = (seL4_Word)(eof - 1) * DISK_BLOCK + ff;
-	if (!eof || bytes > size || !f11_read(hdr, 1, buf, (bytes + DISK_BLOCK - 1) / DISK_BLOCK))
+	if (!eof)
 		return 0;
-	return bytes;
+	seL4_Word bytes = (seL4_Word)(eof - 1) * DISK_BLOCK + ff;
+	seL4_Word blocks = (bytes + DISK_BLOCK - 1) / DISK_BLOCK;
+	uint8_t *buf = table(T_EXE, blocks * DISK_BLOCK);
+	if (!f11_read(hdr, 1, buf, blocks))
+		return 0;
+	*size = bytes;
+	return buf;
 }
 
 /*
@@ -1177,8 +1385,7 @@ static seL4_Word f11_boot_file(uint8_t *buf, seL4_Word size)
 #define EXEC_STACK_TOP 0x5fff0000UL
 #define EXEC_STACK_PAGES 4
 enum { RPB_BASE = 0, RPB_PFNCNT = 4, RPB_FREEPFN = 8, RPB_BOOTTIME = 12, RPB_PORT = 16,
-       RPB_HWPCB = 64, RPB_STARTUP = 192,
-       RPB_LENGTH = 224 };
+       RPB_FRESVA = 20, RPB_HWPCB = 64, RPB_STARTUP = 192, RPB_LENGTH = 224 };
 
 static seL4_CPtr fault_ep, sched_control;
 static seL4_Time slice;
@@ -1196,16 +1403,17 @@ static seL4_CPtr idle_reply;
 
 static struct ctx *find_ctx(seL4_Word hwpcb)
 {
-	for (struct ctx *c = ctx; c < ctx + CTX_MAX; c++)
+	for (struct ctx *c = ctx; c < ctx + nctx; c++)
 		if (c->hwpcb == hwpcb)
 			return c;
 	return 0;
 }
 
-/* What the PAL's endpoint tells a context's threads by: its slot and mode. */
+/* What the PAL's endpoint tells a context's threads by: its slot and mode,
+ * below the clock's and the port's badges. */
 static seL4_Word ctx_badge(struct ctx *c, int m)
 {
-	return (seL4_Word)(c - ctx + 1) | (seL4_Word)m << 8;
+	return (seL4_Word)(c - ctx + 1) << 2 | m;
 }
 
 /*
@@ -1235,8 +1443,10 @@ static seL4_CPtr new_thread(seL4_CPtr vspace, seL4_Word badge)
 static struct ctx *new_ctx(seL4_Word hwpcb)
 {
 	struct ctx *c = find_ctx(0);
-	if (!c)
-		return 0;
+	if (!c) {
+		ctx = table(T_CTX, (nctx + 1) * sizeof *ctx);
+		c = &ctx[nctx++];
+	}
 	if (!c->tcb[0]) {
 		c->vspace[0] = exec_vspace;
 		c->tcb[0] = new_thread(exec_vspace, ctx_badge(c, 0));
@@ -1257,14 +1467,12 @@ static void mode_thread(struct ctx *c, int m)
 	if (c->tcb[m])
 		return;
 	c->vspace[m] = alloc(seL4_ARM_VSpaceObject, 0);
-	seL4_Error err = seL4_ARM_ASIDPool_Assign(seL4_CapInitThreadASIDPool, c->vspace[m]);
-	if (err)
-		die("seL4_ARM_ASIDPool_Assign failed", err);
+	assign_asid(c->vspace[m]);
 	c->tcb[m] = new_thread(c->vspace[m], ctx_badge(c, m));
 	outer_started = 1;
 	for (unsigned i = 0; i < nshared; i++)
 		if (m <= may_read[prot(shared[i].pte)])
-			map_pte(mint(pfn_frame[shared[i].pte & PTE_PFN], 0), c->vspace[m],
+			map_pte(mint(frame_cap(shared[i].pte & PTE_PFN), 0), c->vspace[m],
 				shared[i].va, shared[i].pte, m);
 	for (seL4_Word i = 0; i < SPACE_END >> 22; i++)
 		for (unsigned j = 0; c->dir[i] && j < 1024; j++) {
@@ -1875,7 +2083,7 @@ static void start_clock(void)
 	idle_reply = alloc(seL4_ReplyObject, 0);
 	seL4_Error err = seL4_TCB_BindNotification(seL4_CapInitThreadTCB, ntfn);
 	if (!err)
-		err = seL4_TCB_Configure(tcb, seL4_CapInitThreadCNode, 0, seL4_CapInitThreadVSpace,
+		err = seL4_TCB_Configure(tcb, cspace, 0, seL4_CapInitThreadVSpace,
 					 0, 0, seL4_CapNull);
 	if (!err)
 		err = seL4_SchedControl_Configure(sched_control, sc, TICK_US / 10, TICK_US, 0, 0);
@@ -1894,18 +2102,16 @@ static void start_clock(void)
  * Starts [SYSEXE]EXEC.EXE from the system disk in a context of its own
  * whose HWPCB is the RPB's: kernel mode, IPL 31, R11 pointing at the RPB.
  */
-static uint8_t exe_file[512 * 1024];
 static seL4_Word port_pfn; /* the port's first page */
 
 static void start_exec(void)
 {
 	exec_vspace = alloc(seL4_ARM_VSpaceObject, 0);
-	seL4_Error err = seL4_ARM_ASIDPool_Assign(seL4_CapInitThreadASIDPool, exec_vspace);
-	if (err)
-		die("seL4_ARM_ASIDPool_Assign failed", err);
-	seL4_Word exe_size = f11_boot_file(exe_file, sizeof exe_file);
-	if (!exe_size)
-		die("no [SYSEXE]EXEC.EXE on the system disk", sizeof exe_file);
+	assign_asid(exec_vspace);
+	seL4_Word exe_size;
+	const uint8_t *exe_file = f11_boot_file(&exe_size);
+	if (!exe_file)
+		die("no [SYSEXE]EXEC.EXE on the system disk", 0);
 	seL4_Word entry = load_image(exe_file, exe_size);
 	boot_pages(EXEC_STACK_TOP - EXEC_STACK_PAGES * PAGE_SIZE, 0, EXEC_STACK_PAGES * PAGE_SIZE,
 		   PRT_KW << 27);
@@ -1915,9 +2121,10 @@ static void start_exec(void)
 		boot_pages(PORT_VA, 0, PORT_PAGES * PAGE_SIZE, PRT_KW << 27);
 	}
 	uint8_t *rpb = (uint8_t *)quad(RPB_VA);
-	uint32_t fields[] = { [RPB_BASE / 4] = RPB_VA, [RPB_PFNCNT / 4] = PFN_COUNT,
+	uint32_t fields[] = { [RPB_BASE / 4] = RPB_VA, [RPB_PFNCNT / 4] = pfn_count,
 			      [RPB_FREEPFN / 4] = boot_pfn, [RPB_BOOTTIME / 4] = boot_time,
-			      [RPB_PORT / 4] = net_slot >= 0 ? PORT_VA : 0 };
+			      [RPB_PORT / 4] = net_slot >= 0 ? PORT_VA : 0,
+			      [RPB_FRESVA / 4] = (exec_end + PAGE_SIZE - 1) & ~(PAGE_SIZE - 1) };
 	memcpy(rpb, fields, sizeof fields);
 	memcpy(rpb + RPB_STARTUP, startup_p, 32);
 
@@ -1926,7 +2133,7 @@ static void start_exec(void)
 	regs = (seL4_UserContext){ .pc = entry, .sp = EXEC_STACK_TOP, .x18 = EXEC_STACK_TOP,
 				   .x28 = RPB_VA }; /* R11 */
 	write_regs(1);
-	print("EXEC.EXE: started at 0x%lx, %lu of %u pages in use\n", entry, boot_pfn, PFN_COUNT);
+	print("EXEC.EXE: started at 0x%lx, %lu of %lu pages in use\n", entry, boot_pfn, pfn_count);
 }
 
 /*
@@ -1975,15 +2182,13 @@ static void start_tcpip(void)
 	unmap(page);
 
 	seL4_CPtr vspace = alloc(seL4_ARM_VSpaceObject, 0);
-	seL4_Error err = seL4_ARM_ASIDPool_Assign(seL4_CapInitThreadASIDPool, vspace);
-	if (err)
-		die("seL4_ARM_ASIDPool_Assign failed", err);
+	assign_asid(vspace);
 	map(page, vspace, TCPIP_BASE, seL4_ReadWrite, seL4_ARM_Default_VMAttributes);
-	err = seL4_ARM_Page_Unify_Instruction(page, 0, 1UL << seL4_LargePageBits);
+	seL4_Error err = seL4_ARM_Page_Unify_Instruction(page, 0, 1UL << seL4_LargePageBits);
 	if (err)
 		die("seL4_ARM_Page_Unify_Instruction failed", err);
 	for (seL4_Word i = 0; i < PORT_PAGES; i++)
-		map(mint(pfn_frame[port_pfn + i], 0), vspace, TCPIP_PORT_VA + i * PAGE_SIZE,
+		map(mint(frame_cap(port_pfn + i), 0), vspace, TCPIP_PORT_VA + i * PAGE_SIZE,
 		    seL4_ReadWrite, seL4_ARM_Default_VMAttributes | seL4_ARM_ExecuteNever);
 	seL4_Word transport = net_slot * 0x200;
 	map(mint(vio_frame[transport / PAGE_SIZE], 0), vspace, TCPIP_MMIO_VA, seL4_ReadWrite,
@@ -1997,9 +2202,9 @@ static void start_tcpip(void)
 	 * virt's virtio-mmio transport n interrupts on SPI 16 + n. */
 	seL4_CPtr cnode = alloc(seL4_CapTableObject, TCPIP_CNODE_BITS);
 	seL4_CPtr ntfn = alloc(seL4_NotificationObject, 0);
-	seL4_CPtr irq = next_slot++;
-	err = seL4_IRQControl_Get(seL4_CapIRQControl, 32 + 16 + net_slot, seL4_CapInitThreadCNode,
-				  irq, seL4_WordBits);
+	seL4_CPtr irq = slot();
+	err = seL4_IRQControl_Get(seL4_CapIRQControl, 32 + 16 + net_slot, cspace, irq,
+				  seL4_WordBits);
 	if (!err)
 		err = seL4_IRQHandler_SetNotification(irq, mint(ntfn, TCPIP_IRQ));
 	struct {
@@ -2008,8 +2213,8 @@ static void start_tcpip(void)
 	} caps[] = { [TCPIP_CAP_NTFN] = { ntfn, 0 }, [TCPIP_CAP_EXEC] = { pal_ntfn, PORT_BADGE },
 		     [TCPIP_CAP_IRQ] = { irq, 0 } };
 	for (unsigned i = 1; !err && i < sizeof caps / sizeof caps[0]; i++)
-		err = seL4_CNode_Mint(cnode, i, TCPIP_CNODE_BITS, seL4_CapInitThreadCNode,
-				      caps[i].cap, seL4_WordBits, seL4_AllRights, caps[i].badge);
+		err = seL4_CNode_Mint(cnode, i, TCPIP_CNODE_BITS, cspace, caps[i].cap,
+				      seL4_WordBits, seL4_AllRights, caps[i].badge);
 	if (err)
 		die("the TCP/IP component's capabilities", err);
 	tcpip_tick = mint(ntfn, TCPIP_TICK);
@@ -2034,31 +2239,95 @@ static void start_tcpip(void)
 		die("starting the TCP/IP component failed", err);
 }
 
+#if CONFIG_ROOT_CNODE_SIZE_BITS != L2_BITS
+#error "seL4's CNode for the root task becomes the PAL's CNode 0: make it 2^L2_BITS slots"
+#endif
+
+/*
+ * Divides the RAM untypeds: the PAL's share, pieces of the largest,
+ * largest first so that each is aligned, and the PFNs' frames, the rest of
+ * it and the others. Then moves the PAL to a CSpace of two levels, sized
+ * for the PFNs, with seL4's CNode as CNode 0, so the boot info's
+ * capabilities keep their addresses. Empty slots follow them until then.
+ */
+static seL4_Word ram;
+
+static void memory_init(seL4_BootInfo *bi)
+{
+	seL4_Word n = bi->untyped.end - bi->untyped.start, big = n;
+	next_slot = bi->empty.start;
+	for (seL4_Word i = 0; i < n; i++) {
+		seL4_UntypedDesc *d = &bi->untypedList[i];
+		if (d->isDevice || d->sizeBits < seL4_PageBits)
+			continue;
+		ram += 1UL << d->sizeBits;
+		if (big == n || d->sizeBits > bi->untypedList[big].sizeBits)
+			big = i;
+	}
+	if (big == n)
+		die("no RAM untyped", n);
+	seL4_Word want = ram / SHARE_DIV > SHARE_MIN ? ram / SHARE_DIV : SHARE_MIN;
+	want = (want + PAGE_SIZE - 1) & ~(PAGE_SIZE - 1);
+	struct ut top = { bi->untyped.start + big, 1UL << bi->untypedList[big].sizeBits, 0 };
+	if (want >= top.size)
+		die("the RAM is in pieces smaller than the PAL's share", want);
+	for (int bit = bi->untypedList[big].sizeBits - 1; bit >= seL4_PageBits; bit--)
+		if (want >> bit & 1) {
+			share[nshare] = (struct ut){ slot(), 1UL << bit, 0 };
+			retype(&top, seL4_UntypedObject, bit, share[nshare++].cap);
+		}
+	frames[nframes++] = top;
+	for (seL4_Word i = 0; i < n; i++) {
+		seL4_UntypedDesc *d = &bi->untypedList[i];
+		if (i != big && !d->isDevice && d->sizeBits >= seL4_PageBits)
+			frames[nframes++] = (struct ut){ bi->untyped.start + i, 1UL << d->sizeBits, 0 };
+	}
+	for (unsigned i = 0; i < nframes; i++)
+		pfn_count += (frames[i].size - frames[i].used) >> seL4_PageBits;
+	/* ponytail: the PTE's 21-bit PFN, 8 GB, until it is Alpha's quadword
+	 * (ADR-0037 decision 6). */
+	if (pfn_count > PTE_PFN + 1)
+		pfn_count = PTE_PFN + 1;
+
+	seL4_Word cnodes = 1 + ((pfn_count + L2_MASK) >> L2_BITS); /* seL4's and the frames' */
+	for (l1_bits = 8; 1UL << l1_bits < 4 * cnodes; l1_bits++)
+		;
+	seL4_CPtr l1 = alloc(seL4_CapTableObject, l1_bits), root = slot();
+	seL4_Error err = seL4_CNode_Mint(
+		seL4_CapInitThreadCNode, root, seL4_WordBits, seL4_CapInitThreadCNode, l1,
+		seL4_WordBits, seL4_AllRights,
+		seL4_CNode_CapData_new(0, seL4_WordBits - l1_bits - L2_BITS).words[0]);
+	if (!err)
+		err = seL4_CNode_Mint(l1, 0, l1_bits, seL4_CapInitThreadCNode,
+				      seL4_CapInitThreadCNode, seL4_WordBits, seL4_AllRights,
+				      seL4_CNode_CapData_new(0, 0).words[0]);
+	if (!err)
+		err = seL4_TCB_SetSpace(seL4_CapInitThreadTCB, seL4_CapNull, root, 0,
+					seL4_CapInitThreadVSpace, 0);
+	if (err)
+		die("making the PAL's CSpace failed", err);
+	cspace = root;
+	next_slot = cnodes << L2_BITS;
+	ctx = table(T_CTX, 0);
+}
+
 int main(seL4_BootInfo *bi)
 {
 	seL4_SetIPCBuffer(bi->ipcBuffer);
-
-	/* The largest RAM untyped; empty slots follow the boot info's caps. */
-	seL4_Word n = bi->untyped.end - bi->untyped.start;
-	seL4_Word best = n;
-	for (seL4_Word i = 0; i < n; i++)
-		if (!bi->untypedList[i].isDevice &&
-		    (best == n || bi->untypedList[i].sizeBits > bi->untypedList[best].sizeBits))
-			best = i;
-	if (best == n)
-		die("no RAM untyped", n);
-	untyped = bi->untyped.start + best;
-	next_slot = bi->empty.start;
+	memory_init(bi);
 	uart_init(bi);
 	print("hello from the root task\n");
 	fwcfg_init(bi);
 
+	seL4_Word n = bi->untyped.end - bi->untyped.start;
 	print("boot info: node %lu of %lu, %lu untyped caps\n", bi->nodeID, bi->numNodes, n);
 	for (seL4_Word i = 0; i < n; i++) {
 		seL4_UntypedDesc *u = &bi->untypedList[i];
 		print("  untyped %lu: paddr 0x%lx size 2^%u%s\n", i, u->paddr, u->sizeBits,
 		      u->isDevice ? " device" : "");
 	}
+	print("RAM: %lu MB, %lu PFNs for the executive, %lu MB for the PAL\n", ram >> 20,
+	      pfn_count, (ram - (pfn_count << seL4_PageBits)) >> 20);
 
 	/*
 	 * seL4 starts the root task on seL4_CapInitThreadSC with a round-robin
@@ -2087,7 +2356,7 @@ int main(seL4_BootInfo *bi)
 	start_tcpip();
 	serve();
 
-	print("root task done, %lu of %u slots used\n", next_slot, 1u << CONFIG_ROOT_CNODE_SIZE_BITS);
+	print("root task done, %lu KB of the PAL's share left\n", share_free() >> 10);
 	/* run-qemu.sh's serial-filter.py powers QEMU off on this line (ADR-0008):
 	 * EL0 can't make the PSCI call, HVC. */
 	if (halted)

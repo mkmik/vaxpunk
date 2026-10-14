@@ -56,10 +56,10 @@ note = "PRD-0003 tier 3 #30"
 [[feature]]
 id = "more-memory"
 title = "More than 1,024 PFNs (4 MB) and 96 page tables: frame caps in a CNode of their own"
-status = "todo"
+status = "done"
 needs = ["/platform/pal"]
 milestone = "m1"
-note = "PRD-0003 tier 1 #39; t8y:/exec/capacity tracks this and the other fixed sizes"
+note = "ADR-0037: all of RAM but the PAL's share, the PFN database sized at boot; t8y:/exec/capacity tracks the other fixed sizes"
 
 [[feature]]
 id = "page-faults"
@@ -96,11 +96,12 @@ build on this.
 vaxpunk's is in `vms/exec/memory.mar`, with 4 KB pages, in VAX's layout
 below 2 GB, where MACRO-32's sign-extended longwords reach
 ([ADR-0005](../../adr/0005-access-modes-are-threads.md)). The
-executive keeps a free list of PFNs and no page tables: `WRPTE` asks the
+executive keeps a PFN database, sized at boot, and no page tables: `WRPTE` asks the
 PAL to map, unmap or protect a page and returns the old PTE
 ([DESIGN-0001](../../design/0001-pal-interface.md)). Each outer
 mode's seL4 thread has an address space holding exactly what that mode
 may read. Pages are allocated and kept: no paging, swapping or sharing.
-The PAL has 1,024 PFNs, 4 MB, as many as the root CNode leaves room for
-(PRD-0003 tier 1 #39), and a page fault is an access violation, so image
-sections are read in whole (tier 3 #21).
+The PAL gives it all the RAM but a share of its own
+([ADR-0037](../../adr/0037-all-ram-and-address-spaces-filled-on-faults.md)),
+and a page fault is an access violation, so image sections are read in
+whole (PRD-0003 tier 3 #21).

@@ -11,18 +11,18 @@ refs = ["docs/adr/0037-all-ram-and-address-spaces-filled-on-faults.md", "docs/pr
 [[feature]]
 id = "all-ram"
 title = "Every page of RAM QEMU gives is a PFN, not 1,024 (4 MB)"
-status = "todo"
+status = "done"
 milestone = "m1"
 needs = ["/platform/pal#frame-caps"]
-note = "PRD-0003 tier 1 #39; main.c PFN_COUNT"
+note = "ADR-0037 decision 2: all RAM but the PAL's share, 1/32; at most 2^21 PFNs, 8 GB, until #pte-pfn"
 
 [[feature]]
 id = "page-tables"
 title = "Page tables made as a process needs them, not 96 for the whole system"
-status = "todo"
+status = "done"
 milestone = "m1"
 needs = ["/platform/pal#frame-caps"]
-note = "PRD-0003 tier 1 #39; main.c pte_pool: S0 and two 4 MB tables per process"
+note = "The PAL's PTE tables are pages of its share, made as needed"
 
 [[feature]]
 id = "address-space-32"
@@ -38,15 +38,15 @@ title = "Processes up to MAXPROCESSCNT, not 32 contexts"
 status = "todo"
 milestone = "m1"
 needs = ["/platform/pal#frame-caps"]
-note = "main.c CTX_MAX; each context's threads and address spaces take root CNode slots"
+note = "The PAL's contexts are a table that grows, with ASID pools made as needed; the executive's process table is SCH$C_MAXPIX, 32 slots (lib.mlb $STATEDEF)"
 
 [[feature]]
 id = "shared-mappings"
 title = "A page mapped by any number of processes, not 256 extra mappings"
-status = "todo"
+status = "done"
 milestone = "m1"
 needs = ["/platform/pal#frame-caps"]
-note = "main.c XMAP_MAX; global sections and, later, installed images need it"
+note = "A mapping's capabilities come from the PAL's CSpace of two levels, made as needed"
 
 [[feature]]
 id = "pool"
@@ -58,9 +58,9 @@ needs = ["/exec/pool#sizing", "#all-ram"]
 [[feature]]
 id = "exec-image"
 title = "EXEC.EXE of any size, not 512 KB"
-status = "todo"
+status = "done"
 milestone = "m1"
-note = "main.c exe_file: the PAL's load buffer, raised from 256 KB once already; 'no [SYSEXE]EXEC.EXE ... (524288)' when it outgrows it"
+note = "The PAL reads EXEC.EXE into a table of its own as large as the file"
 
 [[feature]]
 id = "per-process-tables"
@@ -72,9 +72,9 @@ note = "rms.mar MAXIFI 15 files a process, f11.mar MAXHDR 16 header blocks, ttdr
 [[feature]]
 id = "ram-size"
 title = "As much RAM as QEMU is given: one setting, from the seL4 build to the PAL's untypeds"
-status = "todo"
+status = "done"
 milestone = "m1"
-note = "ADR-0037 decisions 1 and 2: QEMU_MEM 8,192 MB. seL4 compiles QEMU's memory map in (pal/kernel/qemu.env QEMU_MEM=1024); the PAL retypes from the largest RAM untyped only. QEMU commits host pages only as they are touched, so a large default costs nothing"
+note = "ADR-0037 decision 1: QEMU_MEM 8,192 MB in qemu.env, overridden by QEMU_MEM in the environment; the browser demo's kernel is built for 1 GB"
 
 [[feature]]
 id = "pte-pfn"
@@ -86,10 +86,10 @@ note = "ADR-0037 decision 6: Alpha's quadword PTE, the PFN in bits 63:32; lib.ml
 [[feature]]
 id = "pfn-database"
 title = "The PFN database sized from RPB$L_PFNCNT at boot, not 4,096 longwords in EXEC.EXE"
-status = "todo"
+status = "done"
 milestone = "m1"
 needs = ["#ram-size"]
-note = "memory.mar MMG$C_MAXPFN, MMG$AL_FREEPFN; MMG$GL_PFNGSD is in pool. 8 bytes a PFN is 2 MB of S0 a GB of RAM; VMS's entry for paging is larger. ADR-0037 decision 7: at most 128 MB of S0, 64 GB of RAM, until it moves to S2"
+note = "MMG$INIT makes it in S0 from RPB$L_FRESVA, 8 bytes a PFN, at most 127 MB, 64 GB of RAM; %EXEC-W-PFNLIMIT past that, until it moves to S2"
 
 [[feature]]
 id = "switch-cost"
@@ -102,10 +102,10 @@ note = "main.c kernel_space: SWPCTX unmaps and maps every P0 and P1 page of both
 [[feature]]
 id = "pal-tables"
 title = "The PAL's PTE tables, mappings and contexts made from memory as needed, not static arrays"
-status = "todo"
+status = "done"
 milestone = "m1"
 needs = ["/platform/pal#frame-caps"]
-note = "main.c pte_pool[96], pfn_map[PFN_COUNT], xmap[XMAP_MAX], ctx[CTX_MAX], exe_file[512 KB]; sched.mar SCH$C_MAXPIX"
+note = "main.c: the PFNs' mappings, PTE tables, contexts and EXEC.EXE's buffer are tables and pages of the PAL's share"
 
 [[needs]]
 on = "/platform/pal"
@@ -127,14 +127,17 @@ can use its whole P0 and P1, the system as many processes as
 the process's quotas. Real programs (compilers, editors, databases)
 expect that.
 
-vaxpunk started as a demo and still has its sizes: 1,024 PFNs (4 MB) and
-96 page tables, as much as the PAL's root CNode leaves room for; 32
-process contexts; 256 extra mappings of a page; 512 KB of pool; a 256 KB
-buffer for `EXEC.EXE`; 15 open files a process. This component tracks
-lifting them, so that no component is held back by one. Most need the
-PAL's frame capabilities in a CNode of their own
-(`t8y:/platform/pal#frame-caps`). Each limit lifted becomes a SYSGEN
-parameter or a quota where VMS has one.
+vaxpunk started as a demo, with 1,024 PFNs (4 MB), 96 page tables, 32
+process contexts and 256 extra mappings of a page, as much as the PAL's
+root CNode left room for.
+[ADR-0037](../../adr/0037-all-ram-and-address-spaces-filled-on-faults.md)
+lifted those: the PAL takes all the RAM seL4 gives it, keeps a share for
+its own objects in a CSpace of two levels, and the executive sizes its
+PFN database at boot. What is left: a PFN field of 21 bits, 8 GB; a
+process switch that costs a seL4 call per page; 32 process slots; 512 KB
+of pool; 15 open files a process. This component tracks lifting them, so
+that no component is held back by one. Each limit lifted becomes a
+SYSGEN parameter or a quota where VMS has one.
 
 This is the 32-bit space, VAX's regions as OpenVMS Alpha kept them. The
 64-bit space above it, P2 and S2, is a goal of its own,

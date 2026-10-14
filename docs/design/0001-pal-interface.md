@@ -75,6 +75,7 @@ from 0 up for these. Nothing else is mapped. The boot context starts with:
 | 8 | `RPB$L_FREEPFN` | the PFNs below this one hold what the PAL set up |
 | 12 | `RPB$L_BOOTTIME` | seconds since 1970 at boot, from QEMU virt's PL031 RTC, which the PAL maps after the UART and reads once |
 | 16 | `RPB$L_PORT` | port 0's pages, `0x4FF00000`, or 0 without a network device |
+| 20 | `RPB$L_FRESVA` | **new:** the first S0 page past `EXEC.EXE`'s sections, where the executive puts its PFN database |
 | 64 | `RPB$Q_HWPCB` | the boot context's HWPCB, 128 bytes |
 | 192 | `RPB$T_STARTUP` | the SYSGEN parameters `STARTUP_P1` to `STARTUP_P8`, 4 characters each, blank-padded, from QEMU's fw_cfg file `opt/vaxpunk/startup`, which `run-qemu.sh` makes from `--p1` to `--p8` |
 
@@ -154,9 +155,13 @@ the way (*Interrupts and exceptions*), or the call is `REI`, a `CHMx` or
 
 The executive owns physical memory as VMS does, by page frame number, and
 keeps the PFN database: which PFNs are free, which hold what. A PFN is a
-4 KB page the PAL makes the first time a PTE names it, from the largest RAM
-untyped. ponytail: 1024 PFNs, 4 MB, as many as the root CNode's 4096 slots
-leave room for.
+4 KB page the PAL makes the first time a PTE names it. They are all the
+RAM seL4 gives the PAL but its share, a thirty-second, for its own
+objects: CNodes, page tables, threads and its own tables
+([ADR-0037](../adr/0037-all-ram-and-address-spaces-filled-on-faults.md)).
+The PAL's capabilities are in a CSpace of two levels, a PFN's frame at an
+address the PFN gives. ponytail: at most 2^21 PFNs, 8 GB, what the PTE's
+field holds, until it is Alpha's quadword (ADR-0037 decision 6).
 
 The address space is the VAX's three regions, below 2 GB, where MACRO-32's
 sign-extended longwords reach (ADR-0005):
@@ -187,9 +192,9 @@ changes protection at once, and returns the PTE the page had, so the
 executive learns which PFN it freed. A PFN may map at any number of
 addresses, in any number of processes, as a global section's pages do.
 seL4 maps a frame capability at one address, so the PAL keeps one for each
-mapping, and each mode's address space: a PFN's first mapping's stay for
-its next, and the others' are deleted with them. ponytail: 256 mappings
-beyond each PFN's first, their capabilities in the root CNode's slots.
+mapping, and each mode's address space, made as needed and deleted with
+the mapping; a protection change keeps them. A `WRPTE` that maps a page
+fails when the PAL's share has less than 1 MB left.
 
 What each mode sees of a page is its protection code's (`$PRTDEF`): a mode
 may read a page whose code lets it or an outer mode read, and write one

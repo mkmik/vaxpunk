@@ -8,14 +8,17 @@
 #   --uart1  serve the second UART on telnet localhost:PORT (default 4444)
 #   --p1=VALUE ... --p8=VALUE  the SYSGEN parameters STARTUP_P1 to STARTUP_P8,
 #            up to 4 characters each, which SYSTARTUP_VMS.COM reads as P1 to P8
-# EDK2_FW overrides the firmware image, DATADISK the data disk's, LOG the
-# console log's, NETDEV the network's QEMU -netdev (QEMU's user network,
-# slirp, by default) and MAC the network device's address: a second
-# vaxpunk on the same network needs its own of the last four.
+# QEMU_MEM overrides qemu.env's RAM size, which the kernel must have been
+# built with. EDK2_FW overrides the firmware image, DATADISK the data
+# disk's, LOG the console log's, NETDEV the network's QEMU -netdev (QEMU's
+# user network, slirp, by default) and MAC the network device's address: a
+# second vaxpunk on the same network needs its own of the last four.
 set -eu
 
 root=$(cd "$(dirname "$0")/.." && pwd)
+mem=${QEMU_MEM:-}
 . "$root/pal/kernel/qemu.env"
+QEMU_MEM=${mem:-$QEMU_MEM} # as the kernel was built: QEMU_MEM overrides qemu.env
 
 cpu="-cpu $QEMU_CPU"
 gdb=""
