@@ -19,6 +19,11 @@ soft = true
 [[needs]]
 fuzzy = "A lease database and the server's configuration files"
 why = "Remembers which machine has which address"
+
+[[needs]]
+on = "/net/aux-server"
+why = "BOOTP and the DHCP server are started as services"
+soft = true
 +++
 
 TCP/IP Services includes a DHCP server, which hands out addresses,

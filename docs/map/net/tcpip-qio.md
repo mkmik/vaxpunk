@@ -93,6 +93,12 @@ title = "More than one interface (WE0 only today)"
 status = "todo"
 note = "PRD-0003 tier 3 #35"
 
+[[feature]]
+id = "auxs"
+title = "IO$_SETMODE with af TCPIP$C_AUXS on SYS$NET: take over a socket another process accepted"
+status = "todo"
+note = "For the auxiliary server (t8y:/net/aux-server#sys-net). A second process can $ASSIGN a BGnn unit already; SOCKMODE refuses a p1 on a unit with a socket (SS$_BADPARAM), starlet.mlb has no TCPIP$C_AUXS (127), and a unit has no owner or protection, so any process can assign any BGnn"
+
 [[needs]]
 on = "/drivers/network"
 why = "BGA0: and its BGnn units carry the requests (netdriver.mar)"

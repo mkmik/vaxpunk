@@ -18,6 +18,11 @@ why = "rlogin's server gives each login a terminal"
 [[needs]]
 on = "/utils/loginout"
 why = "Logins and proxies checked against the UAF"
+
+[[needs]]
+on = "/net/aux-server"
+why = "The REXEC and RSH servers are started for each connection, as the proxy says"
+soft = true
 +++
 
 TCP/IP Services has BSD's remote commands: rlogin, rsh and rexec, as

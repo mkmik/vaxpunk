@@ -84,6 +84,12 @@ title = "More than 31 processes: MAXPROCESSCNT instead of SCH$C_MAXPIX"
 status = "todo"
 note = "lib.mlb: 32 slots, index 0 unused"
 
+[[feature]]
+id = "modes"
+title = "A process's mode, interactive, batch or network: $CREPRC's PRC$M_BATCH and PRC$M_NETWRK, $GETJPI's JPI$_MODE"
+status = "todo"
+note = "getjpi.mar has no JPI$_MODE; F$MODE() guesses from SYS$INPUT (t8y:/dcl/lexicals#mode)"
+
 [[needs]]
 on = "/exec/scheduler"
 why = "Its states, queues and priority"

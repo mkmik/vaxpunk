@@ -32,6 +32,13 @@ status = "todo"
 needs = ["/net/tcpip-qio#options"]
 
 [[feature]]
+id = "auxs"
+title = "socket(TCPIP$C_AUXS, SOCK_STREAM, 0): the connection the auxiliary server hands a service"
+status = "todo"
+needs = ["/net/tcpip-qio#auxs"]
+note = "For t8y:/net/aux-server#sys-net; socket.c refuses an af other than AF_INET. netperf's netserver and CERN httpd call it"
+
+[[feature]]
 id = "acp-lookups"
 title = "gethostbyname through the network ACP, as on VMS"
 status = "todo"

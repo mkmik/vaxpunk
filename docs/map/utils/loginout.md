@@ -103,6 +103,13 @@ milestone = "m1"
 note = "PRD-0003 step 9: JOB_CONTROL starts it (t8y:/utils/job-controller)"
 
 [[feature]]
+id = "network"
+title = "Network jobs: a network process logged in as the user its creator names, without a password, its procedure's output to a log file"
+status = "todo"
+needs = ["/exec/processes#modes", "/rms/ppf#log-file"]
+note = "The auxiliary server's processes (t8y:/net/aux-server#network-process); DECnet's objects were too. The account needs network access (#restrictions)"
+
+[[feature]]
 id = "restrictions"
 title = "Account restrictions, password expiry, last login times, LGICMD"
 status = "todo"

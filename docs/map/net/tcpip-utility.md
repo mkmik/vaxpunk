@@ -59,9 +59,15 @@ note = "ADR-0025 keeps TCPIP$CONFIG.DAT on the ramdisk, so each branch boots its
 
 [[feature]]
 id = "services"
-title = "SET SERVICE, ENABLE SERVICE, SHOW SERVICE"
+title = "SET [NO]SERVICE, ENABLE and DISABLE SERVICE, SHOW SERVICE /FULL /PERMANENT, SET CONFIGURATION ENABLE SERVICE"
 status = "todo"
-note = "The auxiliary server's commands (t8y:/net/aux-server)"
+note = "The auxiliary server's commands (t8y:/net/aux-server): SET SERVICE writes TCPIP$SERVICE.DAT, ENABLE and DISABLE the running server, which a change reaches only through them"
+
+[[feature]]
+id = "proxies"
+title = "ADD PROXY, REMOVE PROXY, SHOW PROXY: TCPIP$PROXY.DAT, remote users and NFS UIDs mapped to VMS accounts"
+status = "todo"
+note = "For RSH, RLOGIN, LPD and NFS, through the auxiliary server (t8y:/net/aux-server#proxy); not DECnet's NETPROXY.DAT (t8y:/utils/authorize#proxies)"
 
 [[feature]]
 id = "show-sockets"

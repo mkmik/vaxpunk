@@ -23,6 +23,11 @@ why = "Users log in with their UAF passwords"
 on = "/net/ssl"
 why = "POP and IMAP over TLS"
 soft = true
+
+[[needs]]
+on = "/net/aux-server"
+why = "The POP and IMAP servers are started for each connection"
+soft = true
 +++
 
 TCP/IP Services has a POP3 server and, in later releases, an IMAP
