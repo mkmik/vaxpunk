@@ -9,9 +9,9 @@ boot:
 wasm-demo port="8765":
     #!/bin/sh
     set -eu
-    cargo run -p boot -- --images
+    # The kernel for web/demo/index.html's -m, as boot.yml builds it.
+    QEMU_MEM=1024 cargo run -p boot -- --images
     web/demo-images.sh out/demo
-    cargo run -p apidoc
     cache={{ if os() == "macos" { "$HOME/Library/Caches" } else { "${XDG_CACHE_HOME:-$HOME/.cache}" } }}/vaxpunk
     qemu=$cache/qemu-wasm-$(git hash-object web/qemu-wasm.sh)
     [ -f "$qemu/qemu-system-aarch64.wasm" ] || web/qemu-wasm.sh "$qemu"

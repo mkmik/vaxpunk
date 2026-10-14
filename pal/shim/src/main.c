@@ -182,6 +182,23 @@ void shim_main(void)
 	if (!memmap_req.response || !hhdm_req.response)
 		panic("no memory map or HHDM from Limine");
 
+	/*
+	 * seL4 trusts the RAM it was built for: on a machine with less, it
+	 * takes an external abort the first time it touches the missing top.
+	 */
+	uint64_t ram_end = 0, sel4_end = 0;
+	for (uint64_t i = 0; i < memmap_req.response->entry_count; i++) {
+		struct limine_memmap_entry *e = memmap_req.response->entries[i];
+		if (e->base + e->length > ram_end)
+			ram_end = e->base + e->length;
+	}
+	for (size_t i = 0; i < sizeof(sel4_ram) / sizeof(sel4_ram[0]); i++)
+		if (sel4_ram[i].end > sel4_end)
+			sel4_end = sel4_ram[i].end;
+	if (ram_end < sel4_end)
+		panic("RAM ends at 0x%lx, the kernel was built for RAM to 0x%lx: run QEMU with the "
+		      "QEMU_MEM it was built with (pal/kernel/qemu.env)", ram_end, sel4_end);
+
 	struct elf kernel, user;
 	const struct limine_file *kf = find_module("kernel"), *uf = find_module("roottask");
 	elf_parse(&kernel, "kernel", kf->address, kf->size);
