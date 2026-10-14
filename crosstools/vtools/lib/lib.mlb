@@ -268,7 +268,6 @@ SCH$C_HIB = 7                           ; hibernating
 SCH$C_SUSP = 9                          ; suspended
 SCH$C_COM = 12                          ; computable
 SCH$C_CUR = 14                          ; current
-SCH$C_MAXPIX = 32                       ; process slots: index 0 unused, 1 the swapper
         .ENDM   $STATEDEF
 
 ; $PCBDEF: the software process control block.

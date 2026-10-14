@@ -8,9 +8,11 @@
 ; process's own; a PTE written there is the current process's:
 ;
 ;   ^X00010000  P0: the process's image, then its $EXPREG pages
-;   ^X40010000  S0, every process's: EXEC.EXE, then the PFN database
-;   ^X48000000  nonpaged pool: PCBs, kernel stacks, common event blocks,
-;               timer queue entries, logical names
+;   ^X40010000  S0, every process's: EXEC.EXE, then the PFN database,
+;               then nonpaged pool: PCBs, kernel stacks, common event
+;               blocks, timer queue entries, logical names; it grows, up
+;               to NPAGEVIR or the port's pages
+;   ^X4FF00000  the port's pages, with a network device
 ;   ^X4FFE0000  a page MMG$CRMPSC maps a global section's pages at to zero them
 ;   ^X4FFF0000  the RPB
 ;   ^X50000000  MDA0:'s blocks, the ramdisk's, once INITIALIZE makes them
@@ -53,8 +55,9 @@
 
         .EXTERNAL EXE$GL_RPB, SCH$GL_CURPCB, EXE$PROBER_DSC, EXE$MATCHNAME, FIL$CHKPRO
 
-POOL_VA = ^X48000000
-POOL_PAGES = 128                        ; 512 KB
+POOL_END = ^X4FF00000                   ; past pool: the port's pages
+PFNDB_MAX = 128*1024*1024               ; the PFN database's most bytes: 64 GB of RAM
+POOL_GROW = 256*1024                    ; what pool grows by, at least
 ZEROVA = ^X4FFE0000
 GSDNAMMAX = 43                          ; a global section name's characters, at most
 KW = PTE$M_VALID ! PTE$M_FOE ! PTE$C_KW
@@ -79,14 +82,23 @@ MMG$GQ_GSDHD::                          ; global sections by name: GSDs
         .BLKQ   1
 MMG$GL_PFNGSD::                         ; S0, by PFN: the GSD of the global section it is a page of, or 0
         .LONG   0
+MMG$GL_NPAGEDYN::                       ; nonpaged pool's first address
+        .LONG   0
+MMG$GL_NPAGNEXT::                       ; and where it grows next
+        .LONG   0
+SGN$GL_NPAGEDYN::                       ; SYSGEN's NPAGEDYN: pool's bytes at boot
+        .LONG   1024*1024
+SGN$GL_NPAGEVIR::                       ; and NPAGEVIR: the most it grows to; 0, as far as S0 goes
+        .LONG   0
 
         .PSECT  $CODE$
 
 ; MMG$INIT: makes the PFN database in S0 from RPB$L_FRESVA, past
-; EXEC.EXE, for RPB$L_PFNCNT PFNs, or as many as fit below the pool at 8
+; EXEC.EXE, for RPB$L_PFNCNT PFNs, or as many as PFNDB_MAX holds at 8
 ; bytes each: the free stack, empty, and MMG$GL_PFNGSD's table. The PFNs
 ; the boot left free are free from MMG$GL_HIGHPFN up, without a walk.
-; Then makes the pool. Uses R0-R5.
+; Then makes the pool past it, NPAGEDYN bytes, and the most it may grow
+; to, NPAGEVIR, no further than POOL_END. Uses R0-R5.
 MMG$INIT::
         .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5>
         MOVAQ   MMG$GQ_GSDHD, R0
@@ -94,12 +106,10 @@ MMG$INIT::
         MOVL    R0, 4(R0)
         MOVL    EXE$GL_RPB, R5
         MOVL    RPB$L_FRESVA(R5), R4    ; the database
-        SUBL3   R4, #POOL_VA, R0
-        ASHL    #-3, R0, R0             ; how many PFNs it has room for
         MOVL    RPB$L_PFNCNT(R5), R2
-        CMPL    R2, R0
+        CMPL    R2, #PFNDB_MAX/8
         BLEQU   10$
-        MOVL    R0, R2
+        MOVL    #PFNDB_MAX/8, R2
 10$:    MOVL    R2, MMG$GL_MAXPFN
         MOVL    RPB$L_FREEPFN(R5), R0
         MOVL    R0, MMG$GL_HIGHPFN
@@ -114,16 +124,47 @@ MMG$INIT::
         MOVL    #KW, R2
         BSBW    MMG$CREPAG
         ASHL    #MMG$C_VPCTX, R3, R3
-        ADDL3   R3, R4, MMG$GL_FRESVA
-        MOVL    #POOL_VA, R0
-        MOVL    #POOL_PAGES, R1
+        ADDL3   R3, R4, R0
+        MOVL    R0, MMG$GL_FRESVA
+        MOVL    R0, MMG$GL_NPAGEDYN     ; the pool
+        MOVL    R0, MMG$GL_NPAGNEXT
+        SUBL3   R0, #POOL_END, R1
+        TSTL    SGN$GL_NPAGEVIR
+        BEQL    20$
+        CMPL    SGN$GL_NPAGEVIR, R1
+        BLEQU   30$
+20$:    MOVL    R1, SGN$GL_NPAGEVIR
+30$:    MOVL    SGN$GL_NPAGEDYN, R1
+        BSBW    GROWPOOL
+        RSB
+
+; GROWPOOL: R1 = bytes. Makes that much more pool, whole pages, at its
+; end, if NPAGEVIR lets it, and puts it on the free list. R0 =
+; SS$_NORMAL or SS$_INSFMEM. IPL$_SYNCH. Uses R0-R2.
+GROWPOOL:
+        .JSB_ENTRY  SCRATCH=<R2>
+        PUSHR   #^M<R3>
+        ADDL2   #MMG$C_PAGESIZE-1, R1
+        BICL2   #MMG$C_PAGESIZE-1, R1
+        MOVL    R1, R3
+        ADDL3   MMG$GL_NPAGNEXT, R3, R0
+        SUBL2   MMG$GL_NPAGEDYN, R0     ; pool's size, grown
+        CMPL    R0, SGN$GL_NPAGEVIR
+        BGTRU   90$
+        MOVL    MMG$GL_NPAGNEXT, R0
+        ASHL    #-MMG$C_VPCTX, R3, R1
         MOVL    #KW, R2
         BSBW    MMG$CREPAG
-        MOVL    #POOL_VA, R0
-        MOVL    R0, EXE$GL_NONPAGED
-        CLRL    (R0)
-        MOVL    #POOL_PAGES*MMG$C_PAGESIZE, 4(R0)
+        BLBC    R0, 80$                 ; no PFNs: what it made is made again next time
+        MOVL    MMG$GL_NPAGNEXT, R0
+        MOVL    R3, R1
+        ADDL2   R3, MMG$GL_NPAGNEXT
+        BSBW    EXE$DEANONPGDSIZ
+        MOVL    #SS$_NORMAL, R0
+80$:    POPR    #^M<R3>
         RSB
+90$:    MOVL    #SS$_INSFMEM, R0
+        BRB     80$
 
 ; MMG$ALLOCPFN: R0 = a free PFN, or 0 if there is none: PFN 0 is the
 ; boot's. One freed before, from the free stack, else one never used.
@@ -317,18 +358,20 @@ MMG$SETPRT::
         RSB
 
 ; EXE$ALONONPAGED: R1 = a size in bytes. Allocates a block of nonpaged
-; pool, 16-byte aligned, first fit: R2 = its address, R1 = the size it
-; got, R0 = SS$_NORMAL or SS$_INSFMEM. The block isn't zeroed.
+; pool, 16-byte aligned, first fit, growing the pool when none fits: R2 =
+; its address, R1 = the size it got, R0 = SS$_NORMAL or SS$_INSFMEM. The
+; block isn't zeroed.
 EXE$ALONONPAGED::
         .JSB_ENTRY  SCRATCH=<R2>
-        PUSHR   #^M<R3, R4>
+        PUSHR   #^M<R3, R4, R5>
         DSBINT  #IPL$_SYNCH
         ADDL2   #15, R1
         BICL2   #15, R1
         BEQL    90$
-        MOVAL   EXE$GL_NONPAGED, R3     ; the link to the block
+        CLRL    R5                      ; not grown yet
+5$:     MOVAL   EXE$GL_NONPAGED, R3     ; the link to the block
 10$:    MOVL    (R3), R2
-        BEQL    90$
+        BEQL    60$
         CMPL    4(R2), R1
         BGEQU   20$
         MOVL    R2, R3
@@ -341,8 +384,18 @@ EXE$ALONONPAGED::
 30$:    MOVL    (R2), (R3)              ; all of it
 40$:    MOVL    #SS$_NORMAL, R0
 50$:    ENBINT
-        POPR    #^M<R3, R4>
+        POPR    #^M<R3, R4, R5>
         RSB
+60$:    TSTL    R5                      ; none fits: grow once, by the block
+        BNEQ    90$                     ; or POOL_GROW, whichever is more
+        INCL    R5
+        MOVL    R1, R4
+        CMPL    R1, #POOL_GROW
+        BGEQU   65$
+        MOVL    #POOL_GROW, R1
+65$:    BSBW    GROWPOOL
+        MOVL    R4, R1
+        BLBS    R0, 5$
 90$:    CLRL    R2
         MOVL    #SS$_INSFMEM, R0
         BRB     50$

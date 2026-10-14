@@ -29,7 +29,7 @@
         $ACBDEF
         $SSDEF
 
-        .EXTERNAL SCH$GL_CURPCB, SCH$GL_PCBVEC, SCH$QEND, SCH$WAKE, SCH$GETEFC, SCH$POSTEF, SCH$QAST
+        .EXTERNAL SCH$GL_CURPCB, SCH$GL_PCBVEC, SCH$GL_MAXPIX, SCH$QEND, SCH$WAKE, SCH$GETEFC, SCH$POSTEF, SCH$QAST
         .EXTERNAL EXE$NAMPID, EXE$ALONONPAGED, EXE$DEANONPGDSIZ, EXE$GL_RPB
 
 TICK = 100000                           ; 10 ms, the PAL's TICK_US, in 100 ns units
@@ -144,9 +144,9 @@ TQEXPIRE:
         JSB     @TQE$L_AST(R6)
         RSB
 5$:     MOVZWL  TQE$L_PID(R6), R1       ; R1 = its PCB
-        CMPL    R1, #SCH$C_MAXPIX
+        CMPL    R1, SCH$GL_MAXPIX
         BGEQU   80$
-        MOVL    SCH$GL_PCBVEC[R1], R1
+        MOVL    @SCH$GL_PCBVEC[R1], R1
         BEQL    80$
         CMPL    PCB$L_PID(R1), TQE$L_PID(R6)
         BNEQ    80$

@@ -35,10 +35,10 @@ note = "P0 1 GB, S0 and P1 512 MB each below 2 GB (ADR-0005); Alpha has P0 and P
 [[feature]]
 id = "processes"
 title = "Processes up to MAXPROCESSCNT, not 32 contexts"
-status = "todo"
+status = "done"
 milestone = "m1"
 needs = ["/platform/pal#frame-caps"]
-note = "The PAL's contexts are a table that grows, with ASID pools made as needed; the executive's process table is SCH$C_MAXPIX, 32 slots (lib.mlb $STATEDEF)"
+note = "sched.mar: the PCB vector in pool, SGN$GW_MAXPRCCT, 1,024, slots; the PAL's contexts and ASID pools grow as needed"
 
 [[feature]]
 id = "shared-mappings"
@@ -51,9 +51,10 @@ note = "A mapping's capabilities come from the PAL's CSpace of two levels, made 
 [[feature]]
 id = "pool"
 title = "Pool sized from memory and SYSGEN, not 512 KB"
-status = "todo"
+status = "done"
 milestone = "m1"
 needs = ["/exec/pool#sizing", "#all-ram"]
+note = "memory.mar: NPAGEDYN, 1 MB, at boot, past the PFN database, growing by 256 KB or the block up to NPAGEVIR, by default 0x4FF00000"
 
 [[feature]]
 id = "exec-image"
@@ -135,8 +136,10 @@ lifted those: the PAL takes all the RAM seL4 gives it, keeps a share for
 its own objects in a CSpace of two levels, and the executive sizes its
 PFN database at boot, a PTE is Alpha's quadword, its PFN 32 bits, and the
 address spaces are caches filled on faults, so a process switch costs the
-same whatever the processes' sizes. What is left: 32 process slots; 512
-KB of pool; 15 open files a process. This component tracks lifting them, so
+same whatever the processes' sizes. Pool grows from `NPAGEDYN` to
+`NPAGEVIR`, and the processes are `MAXPROCESSCNT`'s. What is left: P1
+that grows with `$EXPREG`; 15 open files a process and the other
+per-process tables. This component tracks lifting them, so
 that no component is held back by one. Each limit lifted becomes a
 SYSGEN parameter or a quota where VMS has one.
 

@@ -10,15 +10,15 @@ refs = ["docs/design/0002-executive-processes.md", "vms/exec/memory.mar"]
 
 [[feature]]
 id = "nonpaged"
-title = "Nonpaged pool, 512 KB in S0, first fit in 16-byte units"
+title = "Nonpaged pool in S0, first fit in 16-byte units"
 status = "done"
 milestone = "m0"
 
 [[feature]]
 id = "sizing"
 title = "Pool sized at boot from NPAGEDYN and grown up to NPAGEVIR"
-status = "todo"
-note = "memory.mar: POOL_PAGES, a constant"
+status = "done"
+note = "memory.mar GROWPOOL: NPAGEDYN at boot, grown by 256 KB or the block, up to NPAGEVIR (ADR-0037)"
 
 [[feature]]
 id = "lookaside"
@@ -57,7 +57,8 @@ list. Lookaside lists serve the common sizes quickly. SYSGEN's
 `NPAGEDYN` and `NPAGEVIR` size nonpaged pool and `PAGEDYN` paged pool,
 and process quotas (`BYTLM` and others) keep one user from taking it all.
 
-vaxpunk has nonpaged pool only: 512 KB at `0x48000000`, first fit from a
+vaxpunk has nonpaged pool only, past the PFN database in S0: 1 MB,
+`NPAGEDYN`, at boot, grown when no block fits up to `NPAGEVIR`, first fit from a
 list of free blocks sorted by address, in 16-byte units, at
 `IPL$_SYNCH` (`EXE$ALONONPAGED` and `EXE$DEANONPGDSIZ` in
 `vms/exec/memory.mar`). Everything comes from it: PCBs and kernel

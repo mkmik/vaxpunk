@@ -111,8 +111,9 @@ P1 are each process's own, S0 every process's:
 | Address | What |
 | --- | --- |
 | `0x00010000` | P0: the process's image, linked there (`build.rs`), then its `$EXPREG` pages |
-| `0x40010000` | S0: `EXEC.EXE`, then the PFN database, from `RPB$L_FRESVA`: the free stack, then `MMG$GL_PFNGSD`'s table, a longword a PFN each |
-| `0x48000000` | nonpaged pool, 512 KB: PCBs, kernel stacks, common event blocks, timer queue entries, logical names, open files, images being activated |
+| `0x40010000` | S0: `EXEC.EXE`, then the PFN database, from `RPB$L_FRESVA`: the free stack, then `MMG$GL_PFNGSD`'s table, a longword a PFN each, 128 MB at most |
+| `MMG$GL_NPAGEDYN` | then nonpaged pool, `NPAGEDYN` at boot, 1 MB, and growing up to `NPAGEVIR`, by default to `0x4FF00000`: PCBs, kernel stacks, common event blocks, timer queue entries, logical names, open files, images being activated |
+| `0x4FF00000` | the port's pages, with a network device |
 | `0x4FFF0000` | the RPB |
 | `0x50000000` | `MDA0:`'s blocks, 512 KB, once `INITIALIZE` makes them |
 | `0x5FFF0000` | the boot stack's top |
@@ -136,7 +137,12 @@ P1 are each process's own, S0 every process's:
   current process's.
 - **Pool.** `EXE$ALONONPAGED` allocates first fit from a list of free
   blocks sorted by address, in 16-byte units; `EXE$DEANONPGDSIZ` frees,
-  merging neighbours.
+  merging neighbours. When no block fits, the pool grows at its end by
+  the block or 256 KB, whichever is more, up to `NPAGEVIR`
+  (`SGN$GL_NPAGEDYN`, `SGN$GL_NPAGEVIR`).
+- **Processes.** `SCH$INIT` makes the PCB vector, `SCH$GL_PCBVEC`, in
+  pool, a slot for each of `MAXPROCESSCNT` processes (`SGN$GW_MAXPRCCT`,
+  1,024) and index 0, which is unused.
 - **Services.** `$CRETVA` and `$DELTVA` make and delete the pages of a range
   of the process's own: all in P0, or all in P1 below `VA$C_CLI`;
   anything else is `SS$_PAGOWNVIO`. `$EXPREG` makes pages past the end of

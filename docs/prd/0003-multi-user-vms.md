@@ -217,7 +217,7 @@ until the hardware or size changes; leave it.
 | 7 | `$ASCTIM`, `$NUMTIM` (PRD-0004's pilot, `numtim.b64`) and the date in `SHOW PROCESS` and `SHOW SYSTEM` done; left: `$BINTIM`, `SHOW TIME` | *Batch and print* |
 | 8 | Owners and protection done (step 2); left: a new file has the default protection, not the process's (`f11wrt.mar`), which `LOGINOUT` sets from the UAF; no version limit (`rms.mar`'s `$CREATE_DIR`) | *Privileges, UICs and protection* |
 | 9 | Terminals, `TNAn:` too, listed from their UCBs (step 3); left: `BGA0:` and its units aren't seen by `$DEVICE_SCAN` and `$GETDVI`; a VCB stands for a disk in `$GETDVI` rather than its UCB (`netdriver.mar`, `getdvi.mar`, DESIGN-0002 *Devices*) | Every device listed from its UCB |
-| 39 | Sized for the demo: 32 process slots (`$STATEDEF`); 512 KB of pool (`memory.mar`); 15 open files a process (`rms.mar`). All of RAM is PFNs now. Tracked in `t8y:/exec/capacity` | *Capacity*: ADR-0037 |
+| 39 | Sized for the demo: 15 open files a process (`rms.mar`) and the other per-process tables; P1 doesn't grow with `$EXPREG`. All of RAM is PFNs, pool grows to `NPAGEVIR`, and the processes are `MAXPROCESSCNT`'s now. Tracked in `t8y:/exec/capacity` | *Capacity*: ADR-0037 |
 
 ### Tier 2: can crash or lose data
 
@@ -362,8 +362,9 @@ Each step ends in something `cargo test -p boot` checks.
     needed, address spaces filled on faults with one per process for
     kernel mode, Alpha's quadword PTE, and the executive sized at boot,
     as [ADR-0037](../adr/0037-all-ram-and-address-spaces-filled-on-faults.md)
-    decides; S0 keeps ADR-0005's place. *Visible:* `MEMTEST: ok`, a
-    program that `$EXPREG`s P0 to its end and touches every page, and
-    processes that together take more than 4 GB.
+    decides; S0 keeps ADR-0005's place. *Visible:* `MEMTEST: ok` in the
+    boot test, a program that `$EXPREG`s P0 to its end and checks every
+    page; `MT 4`, with `MT :== $MEMTEST`, five processes holding 5 GB at
+    once, which takes too long for every PR's boot test.
 12. **Tier 2 sweep.** Whatever of tier 2 the steps above didn't touch.
     *Visible:* the backlog's tier 2 is empty.

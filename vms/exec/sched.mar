@@ -29,7 +29,7 @@
         $HWPCBDEF
         $PSLDEF
 
-        .EXTERNAL EXE$GL_RPB, EXE$ASTDEL
+        .EXTERNAL EXE$GL_RPB, EXE$ASTDEL, EXE$ALONONPAGED
 
         .PSECT  EXEC$DATA, NOEXE, WRT, QUAD
 SCH$GL_CURPCB::                         ; the current process
@@ -52,10 +52,15 @@ SCH$GQ_DELQ::                           ; deleted, for the swapper to reap
 SCH$GQ_CEBHD::                          ; common event blocks
         .BLKQ   1
 QUEUES = 32 + 5
-; Processes by index, the low word of their PID; the high word counts
-; processes made, so a PID isn't reused soon.
+; Processes by index, the low word of their PID, in a vector of pool,
+; SCH$GL_MAXPIX of them; the high word counts processes made, so a PID
+; isn't reused soon.
 SCH$GL_PCBVEC::
-        .BLKL   SCH$C_MAXPIX
+        .LONG   0
+SCH$GL_MAXPIX::                         ; the vector's slots: MAXPROCESSCNT, and index 0 unused
+        .LONG   0
+SGN$GW_MAXPRCCT::                       ; SYSGEN's MAXPROCESSCNT: how many processes there may be
+        .WORD   1024
 SCH$GL_SEQ::
         .LONG   1
 SGN$GW_QUANTUM::                        ; ticks of 10 ms in a quantum, as SYSGEN's QUANTUM
@@ -67,8 +72,9 @@ SWAPPER:
 
         .PSECT  $CODE$
 
-; SCH$INIT: makes the queues empty and the boot context the swapper, the
-; current process. Uses R0-R2.
+; SCH$INIT: makes the queues empty, the PCB vector, MAXPROCESSCNT slots
+; of pool, and the boot context the swapper, the current process, after
+; MMG$INIT. Uses R0-R2.
 SCH$INIT::
         .JSB_ENTRY  SCRATCH=<R2>
         MOVAQ   SCH$AQ_COMH, R0
@@ -77,10 +83,20 @@ SCH$INIT::
         MOVL    R0, 4(R0)
         ADDL2   #8, R0
         SOBGTR  R1, 10$
+        MOVZWL  SGN$GW_MAXPRCCT, R1     ; the PCB vector
+        INCL    R1
+        MOVL    R1, SCH$GL_MAXPIX
+        ASHL    #2, R1, R1
+        JSB     G^EXE$ALONONPAGED
+        MOVL    R2, SCH$GL_PCBVEC
+        MOVL    SCH$GL_MAXPIX, R1
+15$:    CLRL    (R2)+
+        SOBGTR  R1, 15$
         MOVAB   SWAPPER, R0
         MOVL    R0, SCH$GL_SWPPCB
         MOVL    R0, SCH$GL_CURPCB
-        MOVL    R0, SCH$GL_PCBVEC+4     ; index 1
+        MOVL    SCH$GL_PCBVEC, R1
+        MOVL    R0, 4(R1)               ; index 1
         MOVW    #PCB$K_LENGTH, PCB$W_SIZE(R0)
         MOVB    #DYN$C_PCB, PCB$B_TYPE(R0)
         MOVAQ   PCB$Q_LNMHD(R0), R1     ; no logical names
