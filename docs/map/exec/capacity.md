@@ -27,10 +27,10 @@ note = "The PAL's PTE tables are pages of its share, made as needed"
 [[feature]]
 id = "address-space-32"
 title = "All of the 32-bit space: a program's P0 and P1 grow to their regions' ends"
-status = "todo"
+status = "done"
 milestone = "m1"
 needs = ["#page-tables", "/exec/memory#p1-expreg"]
-note = "P0 1 GB, S0 and P1 512 MB each below 2 GB (ADR-0005); Alpha has P0 and P1 1 GB each and S0/S1 at the sign-extended top, seL4's half: ADR-0037 keeps ADR-0005's layout"
+note = "MEMTEST: P0 to its end, 1,008 MB, and P1 down to its start below DCL, with $EXPREG region 1. P0 1 GB, S0 and P1 512 MB each below 2 GB (ADR-0005); ADR-0037 keeps that layout"
 
 [[feature]]
 id = "processes"
@@ -137,8 +137,8 @@ its own objects in a CSpace of two levels, and the executive sizes its
 PFN database at boot, a PTE is Alpha's quadword, its PFN 32 bits, and the
 address spaces are caches filled on faults, so a process switch costs the
 same whatever the processes' sizes. Pool grows from `NPAGEDYN` to
-`NPAGEVIR`, and the processes are `MAXPROCESSCNT`'s. What is left: P1
-that grows with `$EXPREG`; 15 open files a process and the other
+`NPAGEVIR`, the processes are `MAXPROCESSCNT`'s, and P0 and P1 grow to
+their ends. What is left: 15 open files a process and the other
 per-process tables. This component tracks lifting them, so
 that no component is held back by one. Each limit lifted becomes a
 SYSGEN parameter or a quota where VMS has one.

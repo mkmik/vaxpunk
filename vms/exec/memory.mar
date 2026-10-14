@@ -542,15 +542,18 @@ GROW:
 90$:    RET
 
 ; $EXPREG pagcnt, retadr, acmode, region: makes pagcnt pages, zeroed and
-; writable, past the end of the process's P0.
-; ponytail: P0 only, whatever the region; P1 grows down with $CRETVA.
-        .ENTRY  EXE$EXPREG, ^M<R2, R3, R4>
+; writable, past the end of the process's P0 for region 0, or, for region
+; 1, below the start of its P1, which grows down, as VMS's control region
+; does. retadr gets the range's first and last bytes in the order the
+; pages are made: for P1, the highest first.
+        .ENTRY  EXE$EXPREG, ^M<R2, R3, R4, R5>
         MOVL    4(AP), R3
         BEQL    85$
         MOVL    8(AP), R2
         BEQL    10$
         IFNOWRT #8, (R2), 95$
 10$:    MOVL    SCH$GL_CURPCB, R4
+        BLBS    16(AP), 50$
         CMPL    R3, #<VA$C_S0BASE-VA$C_P0BASE>/MMG$C_PAGESIZE
         BGTRU   90$
         MOVL    PCB$L_FREP0VA(R4), R0   ; the first new page
@@ -570,6 +573,25 @@ GROW:
         BSBB    RETADR
         MOVL    #SS$_NORMAL, R0
 70$:    RET
+50$:    CMPL    R3, #<VA$C_P1END-VA$C_P1BASE>/MMG$C_PAGESIZE    ; P1
+        BGTRU   90$
+        MOVL    PCB$L_FREP1VA(R4), R5   ; past the last new page
+        ASHL    #MMG$C_VPCTX, R3, R1
+        SUBL3   R1, R5, R0              ; the first, the lowest
+        CMPL    R0, #VA$C_P1BASE
+        BLSSU   90$
+        MOVL    R0, PCB$L_FREP1VA(R4)
+        MOVL    R0, R4
+        MOVL    R3, R1
+        MOVL    #UW, R2
+        BSBW    MMG$CREPAG
+        BLBC    R0, 70$
+        MOVL    8(AP), R2
+        BEQL    60$
+        SUBL3   #1, R5, (R2)
+        MOVL    R4, 4(R2)
+60$:    MOVL    #SS$_NORMAL, R0
+        RET
 85$:    MOVL    #SS$_ILLPAGCNT, R0
         RET
 90$:    MOVL    #SS$_VASFULL, R0

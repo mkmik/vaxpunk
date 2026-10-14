@@ -146,9 +146,13 @@ P1 are each process's own, S0 every process's:
 - **Services.** `$CRETVA` and `$DELTVA` make and delete the pages of a range
   of the process's own: all in P0, or all in P1 below `VA$C_CLI`;
   anything else is `SS$_PAGOWNVIO`. `$EXPREG` makes pages past the end of
-  P0. Pages they make are user writable. The PCB keeps how far P0 and P1
-  reach (`PCB$L_FREP0VA`, `PCB$L_FREP1VA`), and rundown deletes every page
-  in between.
+  P0, or, for region 1, below the start of P1, which grows down. Pages
+  they make are user writable. The PCB keeps how far P0 and P1 reach
+  (`PCB$L_FREP0VA`, `PCB$L_FREP1VA`) and where P1's part that outlives an
+  image starts (`PCB$L_CTLBASVA`, VMS's `CTL$GL_CTLBASVA`): the mode
+  stacks, and the command interpreter, if the process has one. Image
+  rundown deletes every page of P0 and of P1 below that; process rundown,
+  all of P1 too.
 
 The PFN list and the pool are synchronized at `IPL$_SYNCH`.
 
