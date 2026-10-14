@@ -2,7 +2,8 @@
 
 Oct 1, 2026 · @Marko Mikulicic
 
-Accepted. A process runs each outer access mode, executive, supervisor
+Accepted; decision 3 superseded by [ADR-0037](0037-all-ram-and-address-spaces-filled-on-faults.md).
+A process runs each outer access mode, executive, supervisor
 and user, in a seL4 thread of its own, made the first time the process
 enters that mode. Each of these threads has an address space holding the
 pages that mode may read. Kernel mode stays the thread of
