@@ -22,9 +22,9 @@ note = "sched.mar; fixed at build time"
 
 [[feature]]
 id = "constants"
-title = "Parameters kept as constants: MAXSYSGROUP, DEFMBXMXMSG, DEFMBXBUFQUO, MAXPROCESSCNT"
+title = "Parameters kept as constants: MAXSYSGROUP, DEFMBXMXMSG, DEFMBXBUFQUO"
 status = "done"
-note = "f11.mar, mbdriver.mar, getjpi.mar; named as VMS's SYSGEN names them"
+note = "f11.mar, mbdriver.mar; named as VMS's SYSGEN names them; MAXPROCESSCNT, NPAGEDYN and NPAGEVIR are cells now (SGN$GW_MAXPRCCT, SGN$GL_NPAGEDYN, SGN$GL_NPAGEVIR)"
 
 [[feature]]
 id = "cells"

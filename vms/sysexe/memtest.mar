@@ -1,0 +1,145 @@
+        .TITLE  MEMTEST Fills P0 with pages and checks every one
+        .IDENT  /V0.1/
+;
+; The boot test runs it (ADR-0037). It grows P0 with $EXPREG, 16 MB at a
+; time, to its end, 1 GB, writes each page's address in its first
+; longword, and reads them all back. As a foreign command, MT :==
+; $MEMTEST, MT n then starts n processes, MEMCHILD1 to MEMCHILDn, this
+; image, which each do the same and say so through the mailbox
+; MEMTEST_MBX, so that all of them hold their pages at once, then deletes
+; them: MT 4 holds 5 GB. A failed check exits with 2 * N, N its number.
+;
+        .LIBRARY "starlet.mlb"
+        .LIBRARY "sysexe.mlb"
+        $SSDEF
+        $IODEF
+        $JPIDEF
+        .EXTERNAL LIB$GET_FOREIGN
+
+CHUNK = 4096                            ; pages an $EXPREG asks for
+MAXCHILD = 9
+ARGMAX = 16
+
+        .PSECT  DATA, NOEXE, WRT, LONG
+RETADR: .BLKL   2
+FIRST:  .LONG   0                       ; the first page $EXPREG made
+PAGES:  .LONG   0                       ; how many
+TOTAL:  .LONG   0                       ; and the children's
+CHAN:   .LONG   0
+NCHILD: .LONG   0
+PIDS:   .BLKL   MAXCHILD
+IOSB:   .BLKQ   1
+MBXNAME:
+        .ASCID  "MEMTEST_MBX"
+CHILD_IMAGE:
+        .ASCID  "MEMTEST.EXE"
+CHILD_NAME:                             ; MEMCHILDn, n from 1
+        .WORD   9, 0
+        .ADDRESS CHILD_TEXT
+CHILD_TEXT:
+        .ASCII  "MEMCHILD0"
+ARGLEN: .WORD   0
+ARG:    .LONG   ARGMAX, ARGTEXT         ; the foreign command's words
+ARGTEXT:
+        .BLKB   ARGMAX
+NAME:   .BLKB   15                      ; this process's name
+NAMELEN:
+        .LONG   0
+JPI_ITEMS:
+        .WORD   15, JPI$_PRCNAM
+        .ADDRESS NAME, NAMELEN
+        .LONG   0
+
+        .PSECT  CODE, EXE, LONG
+        .ENTRY  START, ^M<R2, R3, R4>
+        $GETJPIW_S ITMLST=JPI_ITEMS
+        EXPECT  #SS$_NORMAL, 1
+        BSBW    FILL
+        CMPC3   #8, NAME, CHILD_TEXT
+        BNEQ    10$
+        BRW     CHILD
+10$:    PRINTHEX "MEMTEST: P0 pages ", PAGES
+        PUSHAW  ARGLEN
+        CLRL    -(SP)
+        PUSHAQ  ARG
+        CALLS   #3, G^LIB$GET_FOREIGN
+        MOVZWL  ARGLEN, R2              ; n, in decimal
+        MOVAB   ARGTEXT, R3
+20$:    DECL    R2
+        BLSS    30$
+        MOVZBL  (R3)+, R0
+        SUBL2   #^A"0", R0
+        CMPL    R0, #9
+        BGTRU   20$                     ; not a digit
+        MULL2   #10, NCHILD
+        ADDL2   R0, NCHILD
+        BRB     20$
+30$:    TSTL    NCHILD
+        BEQL    90$
+        CMPL    NCHILD, #MAXCHILD
+        BLEQU   35$
+        MOVL    #MAXCHILD, NCHILD
+35$:    $CREMBX_S CHAN=CHAN, MAXMSG=#4, BUFQUO=#<4*MAXCHILD>, LOGNAM=MBXNAME
+        EXPECT  #SS$_NORMAL, 3
+        MOVL    PAGES, TOTAL
+        CLRL    R2                      ; the children
+40$:    ADDB3   #^A"1", R2, CHILD_TEXT+8
+        MOVAL   PIDS[R2], R4
+        $CREPRC_S PIDADR=(R4), IMAGE=CHILD_IMAGE, PRCNAM=CHILD_NAME, BASPRI=#4
+        EXPECT  #SS$_NORMAL, 4
+        AOBLSS  NCHILD, R2, 40$
+        MOVL    NCHILD, R2              ; each says it holds its pages
+50$:    $QIOW_S CHAN=CHAN, FUNC=#IO$_READVBLK, IOSB=IOSB, P1=PAGES, P2=#4
+        EXPECT  #SS$_NORMAL, 5
+        ADDL2   PAGES, TOTAL
+        SOBGTR  R2, 50$
+        PRINTHEX "MEMTEST: processes ", NCHILD
+        PRINTHEX "MEMTEST: pages held at once ", TOTAL
+        CLRL    R2
+60$:    MOVAL   PIDS[R2], R4
+        $DELPRC_S PIDADR=(R4)
+        EXPECT  #SS$_NORMAL, 6
+        AOBLSS  NCHILD, R2, 60$
+90$:    PRINT   "MEMTEST: ok"
+        MOVL    #SS$_NORMAL, R0
+        RET
+
+; A child: says how many pages it holds, and waits to be deleted.
+CHILD:  $ASSIGN_S DEVNAM=MBXNAME, CHAN=CHAN
+        EXPECT  #SS$_NORMAL, 7
+        $QIOW_S CHAN=CHAN, FUNC=#IO$_WRITEVBLK, IOSB=IOSB, P1=PAGES, P2=#4
+        EXPECT  #SS$_NORMAL, 8
+10$:    $HIBER_S
+        BRB     10$
+
+; FILL: grows P0 to its end and checks each page. PAGES = how many.
+; Uses R0-R3.
+FILL:
+        .JSB_ENTRY  SCRATCH=<R2, R3>
+10$:    $EXPREG_S PAGCNT=#CHUNK, RETADR=RETADR
+        CMPL    R0, #SS$_VASFULL
+        BEQL    20$
+        CMPL    R0, #SS$_NORMAL
+        BNEQ    90$
+        TSTL    FIRST
+        BNEQ    15$
+        MOVL    RETADR, FIRST
+15$:    ADDL2   #CHUNK, PAGES
+        BRB     10$
+20$:    MOVL    FIRST, R2               ; each page's address in it
+        MOVL    PAGES, R3
+        BEQL    40$
+30$:    MOVL    R2, (R2)
+        ADDL2   #4096, R2
+        SOBGTR  R3, 30$
+        MOVL    FIRST, R2               ; and back
+        MOVL    PAGES, R3
+35$:    CMPL    (R2), R2
+        BNEQ    95$
+        ADDL2   #4096, R2
+        SOBGTR  R3, 35$
+40$:    RSB
+90$:    $EXIT_S CODE=#<2 * 2>           ; $EXPREG failed: no memory
+95$:    $EXIT_S CODE=#<2 * 9>           ; a page doesn't hold what was written
+
+        .END    START

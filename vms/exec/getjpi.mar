@@ -22,7 +22,7 @@
         $SYIDEF
 
         .EXTERNAL EXE$NAMPID, EXE$PRCPRIV, EXE$SETEF, EXE$CLREF, EXE$GQ_BOOTTIME
-        .EXTERNAL SCH$GL_CURPCB, SCH$GL_PCBVEC, SGN$GW_QUANTUM
+        .EXTERNAL SCH$GL_CURPCB, SCH$GL_PCBVEC, SCH$GL_MAXPIX, SGN$GW_QUANTUM, SGN$GW_MAXPRCCT
         .EXTERNAL SGN$GB_STARTUP_P1
 
 ; ITMENT code, size, at: a table's entry. size is 1, 2 or 4 for a byte, word
@@ -51,7 +51,7 @@ JPITAB: ITMENT  JPI$_PID, 4, PCB$L_PID  ; at an offset in the PCB
         ITMENT  JPI$_AUTHPRIV, 8, PCB$Q_AUTHPRIV
         .LONG   0
 SYITAB: ITMENT  SYI$_VERSION, 8, VERSION ; at an address
-        ITMENT  SYI$_MAXPROCESSCNT, 4, MAXPRC
+        ITMENT  SYI$_MAXPROCESSCNT, 2, SGN$GW_MAXPRCCT
         ITMENT  SYI$_QUANTUM, 2, SGN$GW_QUANTUM
         ITMENT  SYI$_BOOTTIME, 8, EXE$GQ_BOOTTIME
         ITMENT  SYI$_STARTUP_P1, 4, SGN$GB_STARTUP_P1
@@ -65,7 +65,6 @@ SYITAB: ITMENT  SYI$_VERSION, 8, VERSION ; at an address
         .LONG   0
 VERSION:
         .ASCII  "V0.1    "
-MAXPRC: .LONG   SCH$C_MAXPIX-1          ; the slots, but index 0
 VALUE:  .LONG   0                       ; a byte or word item's, made a longword
 
         .PSECT  $CODE$
@@ -88,9 +87,9 @@ VALUE:  .LONG   0                       ; a byte or word item's, made a longword
         IFNOWRT #4, (R2), 84$
         MNEGL   (R2), R1                ; the scan's next index
         BLEQ    20$                     ; a PID, or 0
-10$:    CMPL    R1, #SCH$C_MAXPIX
+10$:    CMPL    R1, SCH$GL_MAXPIX
         BGEQU   82$
-        MOVL    SCH$GL_PCBVEC[R1], R5
+        MOVL    @SCH$GL_PCBVEC[R1], R5
         INCL    R1
         TSTL    R5
         BEQL    10$

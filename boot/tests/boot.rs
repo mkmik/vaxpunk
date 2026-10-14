@@ -874,6 +874,16 @@ const FORMS: Phase = Phase {
     ],
 };
 
+/// MEMTEST grows P0 to its end, 1 GB, and checks every page (ADR-0037).
+/// `MT 4`, with `MT :== $SYS$SYSTEM:MEMTEST`, makes four more processes do
+/// it at once, 5 GB, too long for here.
+const MEMORY: Phase = Phase {
+    name: "memory",
+    secs: 120,
+    steps: &[("%FORMS-F-OPENIN", 1, "RUN SYS$SYSTEM:MEMTEST\r")],
+    lines: &["MEMTEST: P0 pages 0003F000", "MEMTEST: ok"],
+};
+
 /// The processes STARTUP and SNOOP ran, which print as they go, done long
 /// before: STARTUP's SLEEPER and SVCTEST's NAPPER say they hibernate
 /// before SLEEPER does, and the CPU then idles, taking clock interrupts.
@@ -1007,6 +1017,7 @@ const PHASES: &[Phase] = &[
     LBR,
     WILDCARDS,
     FORMS,
+    MEMORY,
     STARTUP,
     USERS,
 ];

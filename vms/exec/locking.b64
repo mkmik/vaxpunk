@@ -46,7 +46,8 @@ EXTERNAL ROUTINE
     SCH$QAST : QAST NOVALUE;
 
 EXTERNAL
-    LCK$GL_WAITTIME : LONG;             ! DEADLOCK_WAIT, in seconds
+    LCK$GL_WAITTIME : LONG,             ! DEADLOCK_WAIT, in seconds
+    SCH$GL_MAXPIX : LONG;               ! process slots, MAXPROCESSCNT and index 0
 
 FIELD
     RSB_FIELDS =
@@ -104,7 +105,7 @@ OWN
     IDNEXT,                                     ! where the search for a free one starts
     IDSEQ,                                      ! the last lock ID's sequence number
     ORIGIN,                                     ! the process a deadlock search started from
-    VISITED : BITVECTOR[SCH$C_MAXPIX];          ! the processes it went through, by index
+    VISITED : BITVECTOR[65536];                 ! the processes it went through, by index
 
 ! GET size: size bytes of nonpaged pool, zeroed, or 0.
 ROUTINE GET (SIZE) =
@@ -731,7 +732,7 @@ GLOBAL ROUTINE LCK$SEARCH =
                 ELSE
                     BEGIN
                     ORIGIN = .L[LKB_PID];
-                    INCR P FROM 0 TO SCH$C_MAXPIX - 1 DO
+                    INCR P FROM 0 TO .SCH$GL_MAXPIX - 1 DO
                         VISITED[.P] = 0;
                     IF REACHES(.L) THEN FAIL(.L)
                     END

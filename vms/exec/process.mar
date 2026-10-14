@@ -39,7 +39,7 @@
         $SSDEF
         $UAFDEF
 
-        .EXTERNAL SCH$GL_CURPCB, SCH$GL_SWPPCB, SCH$GL_PCBVEC, SCH$GL_SEQ
+        .EXTERNAL SCH$GL_CURPCB, SCH$GL_SWPPCB, SCH$GL_PCBVEC, SCH$GL_MAXPIX, SCH$GL_SEQ
         .EXTERNAL SCH$GQ_HIBWQ, SCH$GQ_SUSPWQ, SCH$GQ_DELQ
         .EXTERNAL SCH$REMCOM, SCH$MAKECOM, SCH$WAKEPCB, SCH$WAKE, SCH$WAIT
         .EXTERNAL SCH$SCHED, SCH$DACEFC_ALL, SGN$GW_QUANTUM
@@ -180,9 +180,9 @@ EXE$NAMPID::
         MOVL    (R2), R0
         BEQL    20$
         MOVZWL  R0, R1                  ; the PID's index
-        CMPL    R1, #SCH$C_MAXPIX
+        CMPL    R1, SCH$GL_MAXPIX
         BGEQU   80$
-        MOVL    SCH$GL_PCBVEC[R1], R1
+        MOVL    @SCH$GL_PCBVEC[R1], R1
         BEQL    80$
         CMPL    PCB$L_PID(R1), R0
         BNEQ    80$
@@ -198,8 +198,8 @@ EXE$NAMPID::
         CMPL    R7, #15
         BGTRU   85$
         MOVL    4(R3), R6
-        MOVL    #SCH$C_MAXPIX-1, R5
-40$:    MOVL    SCH$GL_PCBVEC[R5], R1
+        SUBL3   #1, SCH$GL_MAXPIX, R5
+40$:    MOVL    @SCH$GL_PCBVEC[R5], R1
         BEQL    50$
         CMPW    PCB$L_UIC+2(R1), PCB$L_UIC+2(R4)
         BNEQ    50$
@@ -384,11 +384,11 @@ EXE$PRCPRIV::
         CMPL    R0, #SS$_NONEXPR
         BNEQ    75$
 30$:    MOVL    #2, R5
-35$:    TSTL    SCH$GL_PCBVEC[R5]
+35$:    TSTL    @SCH$GL_PCBVEC[R5]
         BEQL    40$
-        AOBLSS  #SCH$C_MAXPIX, R5, 35$
+        AOBLSS  SCH$GL_MAXPIX, R5, 35$
         BRB     76$
-40$:    MOVL    R8, SCH$GL_PCBVEC[R5]
+40$:    MOVL    R8, @SCH$GL_PCBVEC[R5]
         INCL    SCH$GL_SEQ
         MOVZWL  SCH$GL_SEQ, R0
         ASHL    #16, R0, R0
@@ -1141,9 +1141,9 @@ EXE$RUNDOWN::
         BSBB    TERMMSG
         DSBINT  #IPL$_SYNCH
         MOVZWL  PCB$L_PID(R4), R0
-        CMPL    SCH$GL_PCBVEC[R0], R4
+        CMPL    @SCH$GL_PCBVEC[R0], R4
         BNEQ    30$
-        CLRL    SCH$GL_PCBVEC[R0]
+        CLRL    @SCH$GL_PCBVEC[R0]
 30$:    ENBINT
         RSB
 
@@ -1240,9 +1240,9 @@ EXE$DELETEPCB::
 EXE$DELPID::
         .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5>
         MOVZWL  R0, R1
-        CMPL    R1, #SCH$C_MAXPIX
+        CMPL    R1, SCH$GL_MAXPIX
         BGEQU   90$
-        MOVL    SCH$GL_PCBVEC[R1], R4
+        MOVL    @SCH$GL_PCBVEC[R1], R4
         BEQL    90$
         CMPL    PCB$L_PID(R4), R0
         BNEQ    90$
@@ -1270,7 +1270,7 @@ DELOTHER:
         BSBW    SCH$WAKEPCB
 30$:    BSBW    SCH$QAST                ; and it ends a wait
         MOVZWL  PCB$L_PID(R4), R0
-        CLRL    SCH$GL_PCBVEC[R0]
+        CLRL    @SCH$GL_PCBVEC[R0]
         MOVL    #SS$_NORMAL, R0
 90$:    RSB
 
