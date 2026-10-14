@@ -216,6 +216,8 @@ CODE = 0
         SERVICE ENQ, 10
         SERVICE ENQW, 10
         SERVICE DEQ, 4
+        SERVICE GETLKI, 7
+        SERVICE GETLKIW, 7
 
 ; ARGSIN: keeps a call's arguments where the dispatcher's code leaves
 ; them alone, in registers REI restores from the PAL's frame: the first

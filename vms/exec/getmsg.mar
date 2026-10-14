@@ -1317,6 +1317,30 @@ MESSAGES:
         .ASCIC  "SYSTEM"
         .ASCIC  "NOSYSLCK"
         .ASCIC  "operation requires SYSLCK privilege"
+        .LONG   SS$_SUBLOCKS
+        .ASCIC  "SYSTEM"
+        .ASCIC  "SUBLOCKS"
+        .ASCIC  "cannot dequeue a lock with sublocks"
+        .LONG   SS$_PARNOTGRANT
+        .ASCIC  "SYSTEM"
+        .ASCIC  "PARNOTGRANT"
+        .ASCIC  "parent lock must be granted"
+        .LONG   SS$_VALNOTVALID
+        .ASCIC  "SYSTEM"
+        .ASCIC  "VALNOTVALID"
+        .ASCIC  "value block is not valid"
+        .LONG   SS$_NOMORELOCK
+        .ASCIC  "SYSTEM"
+        .ASCIC  "NOMORELOCK"
+        .ASCIC  "no more locks"
+        .LONG   SS$_DEADLOCK
+        .ASCIC  "SYSTEM"
+        .ASCIC  "DEADLOCK"
+        .ASCIC  "deadlock detected"
+        .LONG   SS$_NOWORLD
+        .ASCIC  "SYSTEM"
+        .ASCIC  "NOWORLD"
+        .ASCIC  "operation requires WORLD privilege"
 ; TCP/IP Services' (facility 0x764), whose hosts database TCPIP and
 ; HOST_ADDR (sysexe/lib/inet.mar) read.
         .LONG   ^X07648358

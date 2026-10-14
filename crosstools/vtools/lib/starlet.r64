@@ -104,7 +104,13 @@ LITERAL
     SS$_NOTQUEUED = 2488,  ! a warning: the lock can't be granted at once, with LCK$M_NOQUEUE
     SS$_IVLOCKID = 8484,  ! no such lock, or not the caller's
     SS$_CVTUNGRANT = 8508,  ! a conversion of a lock that isn't granted
-    SS$_NOSYSLCK = 10484;  ! LCK$M_SYSTEM needs SYSLCK in user or supervisor mode
+    SS$_NOSYSLCK = 10484,  ! LCK$M_SYSTEM needs SYSLCK in user or supervisor mode
+    SS$_SUBLOCKS = 8492,  ! a lock to dequeue has sublocks
+    SS$_PARNOTGRANT = 8500,  ! a sublock's parent lock isn't granted
+    SS$_VALNOTVALID = 2544,  ! a warning: the lock value block returned isn't valid
+    SS$_NOMORELOCK = 2568,  ! a wildcard $GETLKI is past the last lock
+    SS$_DEADLOCK = 3594,  ! the lock request closed a deadlock, and was refused
+    SS$_NOWORLD = 10372;  ! another group's lock needs WORLD
 
 ! $CLIMSGDEF
 LITERAL
@@ -1415,6 +1421,35 @@ LITERAL
     LCK$M_DEQALL = 1,  ! $DEQ: all of the caller's locks
     LCK$M_CANCEL = 2,  ! $DEQ: cancel a waiting conversion
     LCK$M_INVVALBLK = 4;  ! $DEQ: mark the value block not valid
+
+! $LKIDEF
+LITERAL
+    LKI$_PID = 256,  ! the lock's process
+    LKI$_STATE = 257,  ! 3 bytes: the mode asked for, the mode granted, the queue
+    LKI$_PARENT = 258,  ! the parent lock's ID, or 0
+    LKI$_LCKREFCNT = 259,  ! a word: the lock's sublocks
+    LKI$_LOCKID = 260,
+    LKI$_NAMSPACE = 512,  ! the resource's UIC group, a word, its access mode, a byte, and LKI$M_SYSNAM
+    LKI$_RESNAM = 513,  ! the resource's name
+    LKI$_VALBLK = 515,  ! its value block, 16 bytes
+    LKI$_LCKCOUNT = 517,  ! the locks granted on it
+    LKI$_BLOCKEDBY = 518,  ! a list: the locks the lock blocks
+    LKI$_BLOCKING = 519,  ! a list: the locks that block it
+    LKI$_LOCKS = 520,  ! a list: every lock on the resource
+    LKI$M_SYSNAM = 2147483648,  ! LKI$_NAMSPACE: a resource of the system's
+    LKI$C_GRANTED = 1,  ! LKI$B_QUEUE's
+    LKI$C_CONVERT = 0,
+    LKI$C_WAITING = -1,
+    LKI$C_LENGTH = 24;
+MACRO
+    LKI$L_LOCKID = 0, 0, 32, 0 %,  ! a list's entry
+    LKI$L_PID = 4, 0, 32, 0 %,
+    LKI$L_SYSID = 8, 0, 32, 0 %,  ! 0: one node
+    LKI$B_RQMODE = 12, 0, 8, 0 %,
+    LKI$B_GRMODE = 13, 0, 8, 0 %,
+    LKI$B_QUEUE = 14, 0, 8, 0 %,
+    LKI$L_REMLKID = 16, 0, 32, 0 %,  ! 0
+    LKI$L_REMSYSID = 20, 0, 32, 0 %;  ! 0
 
 ! $LBRDEF
 LITERAL

@@ -61,11 +61,12 @@ same commit; `cargo run -p todography -- lint` checks it.
 | [ADR-0027](adr/0027-terminals-are-ucbs-and-telnet-is-in-the-driver.md) | Each terminal is a UCB of its own, and a remote login is a TELNET terminal, TNAn, that the terminal driver drives over the TCP connection | Proposed |
 | [ADR-0028](adr/0028-shareable-images.md) | Shareable images are Alpha's, linked against their symbol vector and called through linker veneers; the image activator maps a copy into each process, and LIBRTL.EXE holds the LIB$ routines | Proposed |
 | [ADR-0029](adr/0029-loginout-and-sysuaf.md) | LOGINOUT logs a terminal's process in from SYSUAF.DAT, whose passwords are salted, iterated SHA-256, and gives it its command interpreter in kernel mode | Proposed |
-| [ADR-0030](adr/0030-lock-manager-in-the-executive.md) | The lock manager is part of the executive, for one node, with VMS's $ENQ, $DEQ and $GETLKI, and its logic is BLISS-64 | Accepted |
+| [ADR-0030](adr/0030-lock-manager-in-the-executive.md) | The lock manager is part of the executive, for one node, with VMS's $ENQ, $DEQ and $GETLKI, and its logic is BLISS-64 | Accepted; decision 5 superseded by ADR-0035 |
 | [ADR-0031](adr/0031-entropy-from-virtio-rng.md) | Random bytes come from VSI's $GET_ENTROPY, which the PAL serves from a virtio-rng device, and departures from VMS are marked in the sources | Proposed |
 | [ADR-0032](adr/0032-c-run-time-library-and-ssl3-on-mbed-tls.md) | C programs link a C run-time library with DEC C's names, and SSL3 is OpenSSL 3.0's API on Mbed TLS, which the build downloads into the user's cache with Mozilla's CAs | Proposed |
 | [ADR-0033](adr/0033-pseudo-terminals-are-a-port-of-the-terminal-driver.md) | A pseudo terminal, FTAn, is a third port of the terminal driver, cloned from FTA0:, and the PTD$ routines are $QIO calls in the vector | Proposed |
 | [ADR-0034](adr/0034-forms-grammar-as-data-and-form-files-as-trees.md) | FORMS has IFDL's grammar as data, and a .FORM file is the tree it parses, with the names of its rules | Proposed |
+| [ADR-0035](adr/0035-deadlock-search-after-deadlock-wait.md) | A lock request is searched for a deadlock once it has waited DEADLOCK_WAIT seconds, as on VMS | Accepted |
 
 ### PRDs
 
