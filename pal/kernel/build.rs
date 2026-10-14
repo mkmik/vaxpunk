@@ -1,6 +1,7 @@
 //! Builds seL4 through its own CMake into OUT_DIR, for the QEMU machine in
-//! qemu.env. Reruns only when config.cmake, qemu.env, requirements.txt,
-//! CROSS_COMPILE or the seL4 tree change. Dependents' build scripts get, as
+//! qemu.env, its RAM from QEMU_MEM in the environment if set. Reruns only
+//! when config.cmake, qemu.env, requirements.txt, CROSS_COMPILE, QEMU_MEM or
+//! the seL4 tree change. Dependents' build scripts get, as
 //! DEP_SEL4_*: INCLUDE (libsel4's headers), PLATFORM (platform_gen.json) and
 //! CROSS_COMPILE, the toolchain prefix the whole system builds with.
 
@@ -14,6 +15,7 @@ fn main() {
         println!("cargo::rerun-if-changed={path}");
     }
     println!("cargo::rerun-if-env-changed=CROSS_COMPILE");
+    println!("cargo::rerun-if-env-changed=QEMU_MEM");
     // Fresh clones and worktrees leave submodules empty.
     // Worktrees borrow objects from the main checkout's copy instead of
     // downloading seL4 again; --dissociate copies them so nothing breaks
@@ -91,7 +93,10 @@ fn main() {
         .arg(format!("-DCROSS_COMPILER_PREFIX={cross}"))
         .arg(format!("-DCMAKE_INSTALL_PREFIX={}", install.display()))
         .arg(format!("-DARM_CPU={}", qemu("QEMU_CPU")))
-        .arg(format!("-DQEMU_MEMORY={}", qemu("QEMU_MEM")))
+        .arg(format!(
+            "-DQEMU_MEMORY={}",
+            env::var("QEMU_MEM").unwrap_or_else(|_| qemu("QEMU_MEM"))
+        ))
         .arg(format!("-DQEMU_GIC_VERSION={}", qemu("QEMU_GIC"))));
     run(tool("ninja").arg("-C").arg(&build).arg("install"));
 

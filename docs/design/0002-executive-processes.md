@@ -111,7 +111,7 @@ P1 are each process's own, S0 every process's:
 | Address | What |
 | --- | --- |
 | `0x00010000` | P0: the process's image, linked there (`build.rs`), then its `$EXPREG` pages |
-| `0x40010000` | S0: `EXEC.EXE` |
+| `0x40010000` | S0: `EXEC.EXE`, then the PFN database, from `RPB$L_FRESVA`: the free stack, then `MMG$GL_PFNGSD`'s table, a longword a PFN each |
 | `0x48000000` | nonpaged pool, 512 KB: PCBs, kernel stacks, common event blocks, timer queue entries, logical names, open files, images being activated |
 | `0x4FFF0000` | the RPB |
 | `0x50000000` | `MDA0:`'s blocks, 512 KB, once `INITIALIZE` makes them |
@@ -121,8 +121,12 @@ P1 are each process's own, S0 every process's:
 | `0x7FFE4000` | its executive stack, 16 KB, executive write; above it its supervisor stack, supervisor write, and its user stack, each 16 KB, to `0x7FFF0000` |
 | `0x7FFEF800` | `VA$C_CLI_RESULT`, at the user stack's top: the parse of the image's command, up to 2 KB, which `$IMGACT` puts there (*The command interpreter*) |
 
-- **PFNs.** `MMG$INIT` puts the PFNs from `RPB$L_FREEPFN` up on a free list,
-  a stack. `MMG$ALLOCPFN` and `MMG$DEALLOCPFN` take and give back one.
+- **PFNs.** `MMG$INIT` makes the PFN database for `RPB$L_PFNCNT` PFNs, or
+  as many as fit below the pool, and says `%EXEC-W-PFNLIMIT` if that is
+  fewer: 127 MB of S0, 16 million PFNs, 64 GB. The PFNs from
+  `RPB$L_FREEPFN` up are free past `MMG$GL_HIGHPFN`, so boot does no work
+  for each. `MMG$ALLOCPFN` takes one from the free stack, or the next
+  never used; `MMG$DEALLOCPFN` puts one on the stack.
 - **Pages.** `MMG$CREPAG` makes pages at an address: for each, a PFN, a
   `WRPTE` with kernel write to zero it, and another with the protection
   asked for. A page that was there goes back to the free list.

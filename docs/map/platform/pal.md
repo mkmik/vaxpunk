@@ -93,9 +93,9 @@ note = "main.c load_image ponytail: link address only; relocate with the EIAF wh
 [[feature]]
 id = "frame-caps"
 title = "Frame caps in a CNode of their own: more than 1,024 PFNs, and more than 256 extra mappings of them"
-status = "todo"
+status = "done"
 milestone = "m1"
-note = "ADR-0037 decisions 2 and 3: a share of RAM for the PAL's objects, a CSpace of two levels; PRD-0003 tier 1 #39; main.c ponytails on PFN_COUNT and XMAP_MAX; t8y:/exec/capacity needs it"
+note = "ADR-0037 decisions 2 and 3: a share of RAM for the PAL's objects, a CSpace of two levels whose CNode n + 1 holds PFNs from n * 4096; t8y:/exec/capacity"
 
 [[feature]]
 id = "tlb-fill"
@@ -184,8 +184,10 @@ pending interrupts in software, ticks the interval timer from a thread
 of its own ([ADR-0004](../../adr/0004-interval-timer-is-a-pal-thread.md)),
 maps pages on `WRPTE` because the executive can't write seL4's page
 tables, and drives the virtio disks, the entropy device and the UART.
-Its sizes, 1,024 PFNs (4 MB), 96 page tables and 32 contexts, as much as
-the root CNode leaves room for, are PRD-0003 tier 1 #39
-(`t8y:/exec/capacity`); its other limits are tier 4: polled devices at
-fixed addresses, a seL4 call per page on each process switch. A page fault is an access violation, so the executive can't page
-yet.
+It takes all the RAM seL4 gives it, keeps a share for its own objects and
+gives the rest to the executive as PFNs
+([ADR-0037](../../adr/0037-all-ram-and-address-spaces-filled-on-faults.md));
+a seL4 call per page on each process switch is `t8y:/exec/capacity`'s,
+and its other limits are PRD-0003 tier 4: polled devices at fixed
+addresses. A page fault is an access violation, so the executive can't
+page yet.

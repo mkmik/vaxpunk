@@ -47,9 +47,13 @@ jobs:
         with:
           submodules: true
       - run: cargo test --release -p boot
+      # The browser's QEMU is 32-bit wasm with 2.3 GB: the demo's kernel is
+      # built for 1 GB, web/demo/index.html's -m.
       - if: github.event_name != 'pull_request'
         name: Gzip the demo's firmware and disks
-        run: web/demo-images.sh out/demo
+        run: |
+          QEMU_MEM=1024 cargo run --release -p boot -- --images
+          web/demo-images.sh out/demo
       - if: github.event_name != 'pull_request'
         uses: actions/upload-artifact@v4
         with:
