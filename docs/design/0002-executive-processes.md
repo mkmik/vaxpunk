@@ -517,7 +517,9 @@ States and queues, as VMS's `$STATEDEF`:
   `SCH$SCHED`. It returns when the wait is over and the CPU is back. An
   AST ends the wait early, so its callers look again at what they wait
   for. It delivers the ASTs the mode that called the service
-  waiting lets through (*ASTs*).
+  waiting lets through (*ASTs*). One already queued, as the service's own
+  work may queue it (a blocking AST to the caller's own lock in `$ENQW`),
+  ends the wait before it starts.
 - **`SCH$WAKEPCB`** takes a process off its wait queue and makes it
   computable, or suspended if a `$SUSPND` came while it waited.
 - **`SCH$MAKECOM`** puts a process on its COM queue and, if it outranks the
@@ -1379,7 +1381,7 @@ condition handling routines, with the symbol vector `librtl.opt` gives
 | `HELP` | describes DCL's verbs, from `DCL$TABLES`, which `build.rs` links into it as into DCL: with no topic, each verb and its parameters, then what DCL does without a verb; with one, each verb whose name starts with it, its parameters, the keywords a parameter may be and the qualifiers, then each syntax a qualifier or keyword leads to that has parameters or qualifiers of its own. ponytail: no text, which VMS's HELP reads from a help library |
 | `CLITEST` | parses commands with its own tables, `CLITEST.CLD`, and `CLI$DCL_PARSE`, and checks what `CLI$PRESENT` and `CLI$GET_VALUE` say of them: lists, concatenation, quoted strings, default values, negation, keywords and their values, a syntax switched to, abbreviations, each error, qualifiers given after a parameter's value, a `ROUTINE` `CLI$DISPATCH` calls, tables looked in first, and `LIB$GET_FOREIGN`'s line; run as a foreign command, or as a verb with an image, it writes the words after the verb |
 | `ASTTEST` | checks that `$DCLAST`'s AST is delivered as the service returns, or when `$SETAST` enables ASTs again; that one declared in an AST routine waits until it returns; that a `$SETIMR` AST's `$WAKE` ends a `$HIBER`; and that one delivered while it computes in user mode leaves every register as it was |
-| `LOCKTEST` | checks `$ENQ`, `$ENQW` and `$DEQ`: compatible and incompatible modes, `NOQUEUE`, a request that waits and its AST, `SYNCSTS`, a conversion of a waiting lock, a waiting lock dequeued; then, with `LOCKTEST2`, the same image, that a lock another process's `$DEQ` releases is granted, and that image rundown dequeues a process's locks |
+| `LOCKTEST` | checks `$ENQ`, `$ENQW`, `$DEQ` and `$GETLKI`: compatible and incompatible modes, `NOQUEUE`, a request that waits and its AST, `SYNCSTS`, a conversion of a waiting lock, a waiting lock dequeued, what blocks it; value blocks, a blocking AST, sublocks; then, with `LOCKTEST2`, the same image, a deadlock between the two, that a lock another process's `$DEQ` releases is granted, and that image rundown dequeues a process's locks |
 | `CHFTEST` | checks condition handlers: a `LIB$SIGNAL` its handler continues with its own R0, at depth 0; one an inner routine's resignals, at depth 1; an access violation `LIB$SIG_TO_RET` makes its routine's status, its caller's registers as they were; a `BPT` its handler continues at another PC, its registers as they were; `$UNWIND` outside a handler; a warning no handler takes, written; and `LIB$STOP`, which exits through its exit handler, which says it is ok |
 
 When every process but the swapper waits, the CPU idles in `WTINT`,

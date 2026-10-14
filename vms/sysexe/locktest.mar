@@ -1,5 +1,5 @@
         .TITLE  LOCKTEST Checks the lock manager
-        .IDENT  /V0.1/
+        .IDENT  /V0.2/
 ;
 ; STARTUP starts it as LOCKTEST, which starts it again as LOCKTEST2; the
 ; first to ask for an exclusive lock on LOCKTEST$ROLE gets it, and the
@@ -7,18 +7,32 @@
 ; protected reads are granted together; an exclusive lock and a
 ; conversion to one aren't, with NOQUEUE; a request that waits is granted,
 ; with its AST, once both reads are dequeued; a conversion down to null is
-; granted at once, SS$_SYNCH; a waiting lock can't be converted, and,
-; dequeued, ends with SS$_ABORT; its ID is stale then. In two:
-; LOCKTEST2 takes LOCKTEST$S and wakes LOCKTEST, which can't have it,
-; waits for LOCKTEST$R, which LOCKTEST holds, and exits once it gets it,
-; still holding both; its image rundown dequeues them, which grants
-; LOCKTEST the lock on LOCKTEST$S it waits for. A failed EXPECT exits
-; with 2 * N.
+; granted at once, SS$_SYNCH; a waiting lock can't be converted, nor have
+; a sublock, and, dequeued, ends with SS$_ABORT; its ID is stale then.
+; $GETLKI lists the lock that blocks a waiting one, and the other way
+; round. A value block written by a conversion down from EX is read by a
+; new lock and by a conversion up, and $DEQ's LCK$M_INVVALBLK makes the
+; next one read get SS$_VALNOTVALID. A lock's blocking AST comes once a
+; request waits for it, not for a NOQUEUE one, and dequeues it. A sublock
+; is another resource than a lock of the same name with no parent; its
+; parent can't be dequeued before it, and $DEQ's DEQALL of the parent
+; dequeues it.
+;
+; In two: LOCKTEST2 takes LOCKTEST$D2, wakes LOCKTEST, which holds
+; LOCKTEST$D1, and asks for it; LOCKTEST asks for LOCKTEST$D2: a
+; deadlock, which DEADLOCK_WAIT seconds later fails one of the two
+; requests with SS$_DEADLOCK, whose process gives up its lock so the
+; other gets it. Then LOCKTEST2 takes LOCKTEST$S and wakes LOCKTEST,
+; which can't have it, waits for LOCKTEST$R, which LOCKTEST holds, and
+; exits once it gets it, still holding both; its image rundown dequeues
+; them, which grants LOCKTEST the lock on LOCKTEST$S it waits for. A
+; failed EXPECT exits with 2 * N.
 ;
         .LIBRARY "starlet.mlb"
         .LIBRARY "sysexe.mlb"
         $SSDEF
         $LCKDEF
+        $LKIDEF
 
         .PSECT  DATA, NOEXE, WRT, LONG
 IMAGE:  .ASCID  "LOCKTEST.EXE"
@@ -29,16 +43,59 @@ ANAM:   .ASCID  "LOCKTEST$A"
 BNAM:   .ASCID  "LOCKTEST$B"
 RNAM:   .ASCID  "LOCKTEST$R"
 SNAM:   .ASCID  "LOCKTEST$S"
-COUNT:  .LONG   0                       ; ADD's parameters, summed
-; Lock status blocks: a status word, a reserved one, the lock ID.
+VNAM:   .ASCID  "LOCKTEST$V"
+KNAM:   .ASCID  "LOCKTEST$K"
+PNAM:   .ASCID  "LOCKTEST$P"
+CNAM:   .ASCID  "LOCKTEST$C"
+D1NAM:  .ASCID  "LOCKTEST$D1"
+D2NAM:  .ASCID  "LOCKTEST$D2"
+COUNT:  .LONG   0                       ; ADD's and BLOCKED's parameters, summed
+; Lock status blocks: a status word, a reserved one, the lock ID, and a
+; value block for those that have one.
 ROLELK: .QUAD   0
 LKA1:   .QUAD   0
 LKA2:   .QUAD   0
 LKA3:   .QUAD   0
 LKB1:   .QUAD   0
 LKB2:   .QUAD   0
+LKB3:   .QUAD   0
 RLK:    .QUAD   0
 SLK:    .QUAD   0
+VLK1:   .BLKB   24
+VLK2:   .BLKB   24
+KLK1:   .QUAD   0
+KLK2:   .QUAD   0
+PLK:    .QUAD   0
+CLK1:   .QUAD   0
+CLK2:   .QUAD   0
+D1LK:   .QUAD   0
+D2LK:   .QUAD   0
+; $GETLKI's item lists and what they return.
+LKID:   .LONG   0
+BLKITM: .WORD   48, LKI$_BLOCKING
+        .ADDRESS LIST
+        .ADDRESS LISTLEN
+        .LONG   0
+BYITM:  .WORD   48, LKI$_BLOCKEDBY
+        .ADDRESS LIST
+        .ADDRESS LISTLEN
+        .LONG   0
+SUBITM: .WORD   4, LKI$_PARENT
+        .ADDRESS PARENT
+        .LONG   0
+        .WORD   4, LKI$_STATE
+        .ADDRESS STATE
+        .LONG   0
+        .WORD   31, LKI$_RESNAM
+        .ADDRESS NAME
+        .ADDRESS NAMELEN
+        .LONG   0
+LIST:   .BLKB   48
+LISTLEN: .LONG  0
+PARENT: .LONG   0
+STATE:  .LONG   0
+NAME:   .BLKB   31
+NAMELEN: .WORD  0
 
         .PSECT  CODE, EXE, LONG
         .ENTRY  START, ^M<R2, R3, R4, R5, R6, R7, R8, R9, R10, R11>
@@ -83,13 +140,27 @@ SLK:    .QUAD   0
         $ENQ_S  LKMODE=#LCK$K_NLMODE, LKSB=LKA3, FLAGS=#<LCK$M_CONVERT!LCK$M_SYNCSTS>
         EXPECT  #SS$_SYNCH, 16
 
-; A waiting lock: not converted, and dequeued.
+; A waiting lock: not converted, no sublock under it, what blocks it and
+; what it blocks, and dequeued.
         $ENQW_S LKMODE=#LCK$K_EXMODE, LKSB=LKB1, RESNAM=BNAM
         EXPECT  #SS$_NORMAL, 17
         $ENQ_S  EFN=#2, LKMODE=#LCK$K_PRMODE, LKSB=LKB2, RESNAM=BNAM
         EXPECT  #SS$_NORMAL, 18
         $ENQ_S  LKMODE=#LCK$K_NLMODE, LKSB=LKB2, FLAGS=#LCK$M_CONVERT
         EXPECT  #SS$_CVTUNGRANT, 19
+        $ENQW_S LKMODE=#LCK$K_NLMODE, LKSB=LKB3, RESNAM=CNAM, PARID=LKB2+4
+        EXPECT  #SS$_PARNOTGRANT, 35
+        MOVL    LKB2+4, LKID
+        $GETLKIW_S LKIDADR=LKID, ITMLST=BLKITM
+        EXPECT  #SS$_NORMAL, 36
+        MOVL    LISTLEN, R0
+        EXPECT  #<LKI$C_LENGTH@16+LKI$C_LENGTH>, 37
+        MOVL    LIST+LKI$L_LOCKID, R0
+        EXPECT  LKB1+4, 38
+        MOVL    LKB1+4, LKID
+        $GETLKIW_S LKIDADR=LKID, ITMLST=BYITM
+        MOVL    LIST+LKI$L_LOCKID, R0
+        EXPECT  LKB2+4, 39
         $DEQ_S  LKID=LKB2+4
         EXPECT  #SS$_NORMAL, 20
         $WAITFR_S EFN=#2
@@ -102,12 +173,98 @@ SLK:    .QUAD   0
         $DEQ_S  LKID=LKA3+4
         EXPECT  #SS$_NORMAL, 24
 
-; LOCKTEST2's locks, granted as its image goes.
+; A value block: written by a conversion down from EX, read by a new lock
+; and by a conversion up, and not valid once an EX lock goes with
+; LCK$M_INVVALBLK.
+        $ENQW_S LKMODE=#LCK$K_EXMODE, LKSB=VLK1, FLAGS=#LCK$M_VALBLK, RESNAM=VNAM
+        EXPECT  #SS$_NORMAL, 40
+        MOVL    VLK1+8, R0
+        EXPECT  #0, 41
+        MOVL    #^X4B434F4C, VLK1+8     ; LOCK
+        $ENQW_S LKMODE=#LCK$K_NLMODE, LKSB=VLK1, FLAGS=#<LCK$M_CONVERT!LCK$M_VALBLK>
+        EXPECT  #SS$_NORMAL, 42
+        $ENQW_S LKMODE=#LCK$K_PRMODE, LKSB=VLK2, FLAGS=#LCK$M_VALBLK, RESNAM=VNAM
+        EXPECT  #SS$_NORMAL, 43
+        MOVL    VLK2+8, R0
+        EXPECT  #^X4B434F4C, 44
+        $ENQW_S LKMODE=#LCK$K_NLMODE, LKSB=VLK2, FLAGS=#LCK$M_CONVERT
+        CLRL    VLK1+8
+        $ENQW_S LKMODE=#LCK$K_EXMODE, LKSB=VLK1, FLAGS=#<LCK$M_CONVERT!LCK$M_VALBLK>
+        MOVL    VLK1+8, R0
+        EXPECT  #^X4B434F4C, 45
+        $DEQ_S  LKID=VLK1+4, FLAGS=#LCK$M_INVVALBLK
+        EXPECT  #SS$_NORMAL, 46
+        $ENQW_S LKMODE=#LCK$K_PRMODE, LKSB=VLK2, FLAGS=#<LCK$M_CONVERT!LCK$M_VALBLK>
+        MOVZWL  VLK2, R0
+        EXPECT  #SS$_VALNOTVALID, 47
+        $DEQ_S  LKID=VLK2+4
+        EXPECT  #SS$_NORMAL, 48
+
+; A blocking AST: not for a request that isn't queued, then once one
+; waits, which BLOCKED's dequeue lets be granted.
+        $ENQW_S LKMODE=#LCK$K_EXMODE, LKSB=KLK1, RESNAM=KNAM, BLKAST=BLOCKED, ASTPRM=#10
+        EXPECT  #SS$_NORMAL, 49
+        $ENQW_S LKMODE=#LCK$K_PRMODE, LKSB=KLK2, FLAGS=#LCK$M_NOQUEUE, RESNAM=KNAM
+        EXPECT  #SS$_NOTQUEUED, 50
+        MOVL    COUNT, R0
+        EXPECT  #1, 51
+        $ENQW_S LKMODE=#LCK$K_PRMODE, LKSB=KLK2, RESNAM=KNAM
+        MOVZWL  KLK2, R0
+        EXPECT  #SS$_NORMAL, 52
+        MOVL    COUNT, R0
+        EXPECT  #11, 53
+        $DEQ_S  LKID=KLK2+4
+
+; A sublock: another resource than the same name with no parent, which
+; keeps its parent, until DEQALL of the parent dequeues it.
+        $ENQW_S LKMODE=#LCK$K_EXMODE, LKSB=PLK, RESNAM=PNAM
+        EXPECT  #SS$_NORMAL, 54
+        $ENQW_S LKMODE=#LCK$K_EXMODE, LKSB=CLK1, RESNAM=CNAM, PARID=PLK+4
+        EXPECT  #SS$_NORMAL, 55
+        $ENQW_S LKMODE=#LCK$K_EXMODE, LKSB=CLK2, FLAGS=#LCK$M_NOQUEUE, RESNAM=CNAM
+        EXPECT  #SS$_NORMAL, 56
+        MOVL    CLK1+4, LKID
+        $GETLKIW_S LKIDADR=LKID, ITMLST=SUBITM
+        EXPECT  #SS$_NORMAL, 57
+        MOVL    PARENT, R0
+        EXPECT  PLK+4, 58
+        MOVL    STATE, R0
+        EXPECT  #<LKI$C_GRANTED@16+<LCK$K_EXMODE@8>+LCK$K_EXMODE>, 59
+        MOVZWL  NAMELEN, R0
+        EXPECT  #10, 60
+        CMPC3   #10, NAME, @CNAM+4
+        EXPECT  #0, 61
+        $DEQ_S  LKID=PLK+4
+        EXPECT  #SS$_SUBLOCKS, 62
+        $DEQ_S  LKID=PLK+4, FLAGS=#LCK$M_DEQALL
+        EXPECT  #SS$_NORMAL, 63
+        $DEQ_S  LKID=CLK1+4
+        EXPECT  #SS$_IVLOCKID, 64
+        $DEQ_S  LKID=PLK+4
+        EXPECT  #SS$_NORMAL, 65
+        $DEQ_S  LKID=CLK2+4
+        EXPECT  #SS$_NORMAL, 66
+
+; A deadlock with LOCKTEST2: one of the two requests fails, and its
+; process lets the other have the lock.
+        $ENQW_S LKMODE=#LCK$K_EXMODE, LKSB=D1LK, RESNAM=D1NAM
+        EXPECT  #SS$_NORMAL, 67
         $ENQW_S LKMODE=#LCK$K_EXMODE, LKSB=RLK, RESNAM=RNAM
         EXPECT  #SS$_NORMAL, 25
         $CREPRC_S IMAGE=IMAGE, PRCNAM=OTHER, BASPRI=#4
         EXPECT  #SS$_NORMAL, 26
         $HIBER_S
+        $ENQW_S LKMODE=#LCK$K_EXMODE, LKSB=D2LK, RESNAM=D2NAM
+        EXPECT  #SS$_NORMAL, 68
+        MOVZWL  D2LK, R0
+        CMPL    R0, #SS$_NORMAL
+        BEQL    10$
+        EXPECT  #SS$_DEADLOCK, 69
+        $DEQ_S  LKID=D1LK+4
+        EXPECT  #SS$_NORMAL, 70
+
+; LOCKTEST2's locks, granted as its image goes.
+10$:    $HIBER_S
         $ENQ_S  LKMODE=#LCK$K_EXMODE, LKSB=SLK, FLAGS=#LCK$M_NOQUEUE, RESNAM=SNAM
         EXPECT  #SS$_NOTQUEUED, 27
         $ENQ_S  EFN=#3, LKMODE=#LCK$K_EXMODE, LKSB=SLK, RESNAM=SNAM
@@ -121,8 +278,22 @@ SLK:    .QUAD   0
         MOVL    #SS$_NORMAL, R0
         RET
 
-; LOCKTEST2: takes LOCKTEST$S, wakes LOCKTEST, and waits for LOCKTEST$R.
-SECOND: $ENQW_S LKMODE=#LCK$K_EXMODE, LKSB=SLK, RESNAM=SNAM
+; LOCKTEST2: takes LOCKTEST$D2, wakes LOCKTEST and waits for LOCKTEST$D1,
+; which it gives up if its request is the one that fails; then takes
+; LOCKTEST$S, wakes LOCKTEST, and waits for LOCKTEST$R.
+SECOND: $ENQW_S LKMODE=#LCK$K_EXMODE, LKSB=D2LK, RESNAM=D2NAM
+        EXPECT  #SS$_NORMAL, 71
+        $WAKE_S PRCNAM=ME
+        EXPECT  #SS$_NORMAL, 72
+        $ENQW_S LKMODE=#LCK$K_EXMODE, LKSB=D1LK, RESNAM=D1NAM
+        EXPECT  #SS$_NORMAL, 73
+        MOVZWL  D1LK, R0
+        CMPL    R0, #SS$_NORMAL
+        BEQL    10$
+        EXPECT  #SS$_DEADLOCK, 74
+        $DEQ_S  LKID=D2LK+4
+        EXPECT  #SS$_NORMAL, 75
+10$:    $ENQW_S LKMODE=#LCK$K_EXMODE, LKSB=SLK, RESNAM=SNAM
         EXPECT  #SS$_NORMAL, 31
         $WAKE_S PRCNAM=ME
         EXPECT  #SS$_NORMAL, 32
@@ -136,6 +307,13 @@ SECOND: $ENQW_S LKMODE=#LCK$K_EXMODE, LKSB=SLK, RESNAM=SNAM
 ; ADD: adds its parameter to COUNT.
         .ENTRY  ADD, ^M<>
         ADDL2   4(AP), COUNT
+        RET
+
+; BLOCKED: KLK1's blocking AST: adds its parameter to COUNT and dequeues
+; the lock.
+        .ENTRY  BLOCKED, ^M<>
+        ADDL2   4(AP), COUNT
+        $DEQ_S  LKID=KLK1+4
         RET
 
         .END    START

@@ -2,7 +2,7 @@
 
 Oct 9, 2026 · @Marko Mikulicic
 
-Accepted. `$ENQ`, `$ENQW`, `$DEQ` and `$GETLKI` are system services like
+Accepted; decision 5 superseded by [ADR-0035](0035-deadlock-search-after-deadlock-wait.md). `$ENQ`, `$ENQW`, `$DEQ` and `$GETLKI` are system services like
 the others: `SYS$name` changes mode to kernel, and the executive keeps the
 lock database, a resource block per resource and a lock block per lock,
 in nonpaged pool, and changes it at `IPL$_SYNCH`. Names, modes, flags,

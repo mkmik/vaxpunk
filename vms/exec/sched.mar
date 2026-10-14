@@ -190,16 +190,29 @@ SCH$WAKE::
 ; when the wait is over and the CPU is back. An AST ends a wait early,
 ; and is delivered here if it is for the mode that called the service
 ; waiting, or an inner one; the caller must look again at what it waited
-; for. IPL$_SYNCH. Keeps every register.
+; for. One already queued, as the service's own work may queue it, ends
+; the wait before it starts. IPL$_SYNCH. Keeps every register.
 SCH$WAIT::
         .JSB_ENTRY
+        PUSHR   #^M<R0, R1, R2>
+        CALL_PAL #PAL$_RD_PS
+        EXTZV   #PSL$V_PRVMOD, #2, R0, R2
+        MOVL    PCB$L_HWPCB(R4), R1
+        MCOMB   HWPCB$B_ASTEN(R1), R0
+        BICB3   R0, HWPCB$B_ASTSR(R1), R0       ; the modes with an AST to deliver
+        ASHL    R2, #2, R1
+        DECL    R1                              ; that mode and the inner ones
+        BITL    R1, R0
+        BEQL    10$
+        MOVL    #SCH$C_CUR, PCB$L_STATE(R4)
+        MOVL    R2, R0
+        BRB     20$
+10$:    MOVL    (SP), R0
         INSQUE  (R4), @4(R0)
         BSBW    SCH$SCHED
-        PUSHL   R0
-        CALL_PAL #PAL$_RD_PS
-        EXTZV   #PSL$V_PRVMOD, #2, R0, R0
-        JSB     G^EXE$ASTDEL
-        MOVL    (SP)+, R0
+        MOVL    R2, R0
+20$:    JSB     G^EXE$ASTDEL
+        POPR    #^M<R0, R1, R2>
         RSB
 
 ; SCH$SCHED: gives the CPU to the highest computable process. The current

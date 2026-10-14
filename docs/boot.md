@@ -500,18 +500,28 @@ executive feature:
   read, and `PTD$READW` reads their echo; a write there waits until
   `PTD$READW` reads it. `PTD$DELETE` hangs the terminal up, and the read
   waiting there ends with `SS$_HANGUP`.
-- **LOCKTEST** checks the lock manager, `$ENQ`, `$ENQW` and `$DEQ`
-  ([ADR-0030](adr/0030-lock-manager-in-the-executive.md)): two protected
-  reads of one resource are granted together, but not an exclusive lock
-  nor a conversion to one with `LCK$M_NOQUEUE` (`SS$_NOTQUEUED`); an
-  exclusive request waits, and is granted, with its AST, once both reads
-  are dequeued; a conversion down to null is granted at once
-  (`SS$_SYNCH`); a waiting lock can't be converted, and ends with
-  `SS$_ABORT` when it is dequeued. Then it starts **LOCKTEST2**, the same
-  image, which finds itself the second because it can't have the lock on
-  `LOCKTEST$ROLE` that LOCKTEST holds. LOCKTEST2 takes `LOCKTEST$S`, wakes
-  LOCKTEST, waits for `LOCKTEST$R`, which LOCKTEST holds, and exits as
-  soon as it gets it, still holding both. Its image rundown dequeues them,
+- **LOCKTEST** checks the lock manager, `$ENQ`, `$ENQW`, `$DEQ` and
+  `$GETLKI` ([ADR-0030](adr/0030-lock-manager-in-the-executive.md)): two
+  protected reads of one resource are granted together, but not an
+  exclusive lock nor a conversion to one with `LCK$M_NOQUEUE`
+  (`SS$_NOTQUEUED`); an exclusive request waits, and is granted, with its
+  AST, once both reads are dequeued; a conversion down to null is granted
+  at once (`SS$_SYNCH`); a waiting lock can't be converted nor have a
+  sublock, `$GETLKI` names the lock that blocks it, and it ends with
+  `SS$_ABORT` when it is dequeued. A value block an exclusive lock writes
+  as it converts down is read by the next lock, and once an exclusive lock
+  is dequeued with `LCK$M_INVVALBLK` the next read gets `SS$_VALNOTVALID`.
+  A lock's blocking AST runs once another request waits for it, and
+  dequeues it. A sublock is another resource than the same name without a
+  parent, and its parent can't be dequeued before it. Then it starts
+  **LOCKTEST2**, the same image, which finds itself the second because it
+  can't have the lock on `LOCKTEST$ROLE` that LOCKTEST holds. Each takes
+  a lock and asks for the other's, a deadlock: about ten seconds later
+  (`DEADLOCK_WAIT`, [ADR-0035](adr/0035-deadlock-search-after-deadlock-wait.md))
+  the lock manager's search, `LCK$SEARCH`, fails one of the two requests
+  with `SS$_DEADLOCK`, and that process gives up its lock. LOCKTEST2 then
+  takes `LOCKTEST$S`, wakes LOCKTEST, waits for `LOCKTEST$R`, which
+  LOCKTEST holds, and exits as soon as it gets it, still holding both. Its image rundown dequeues them,
   which grants LOCKTEST the lock on `LOCKTEST$S` it waits for, and
   LOCKTEST prints `LOCKTEST: ok`.
 - **FSTEST1** and **FSTEST2** each count the files in `SYS$SYSTEM:` 50

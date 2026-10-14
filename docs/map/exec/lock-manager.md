@@ -6,7 +6,7 @@ kind = "core"
 intent = "goal"
 research = "done"
 milestone = "m1"
-refs = ["docs/adr/0030-lock-manager-in-the-executive.md", "docs/prd/0003-multi-user-vms.md", "docs/adr/0020-file-system-lock-below-ipl-synch.md", "vms/exec/sysenqdeq.mar", "vms/exec/locking.b64", "vms/sysexe/locktest.mar"]
+refs = ["docs/adr/0030-lock-manager-in-the-executive.md", "docs/adr/0035-deadlock-search-after-deadlock-wait.md", "docs/prd/0003-multi-user-vms.md", "docs/adr/0020-file-system-lock-below-ipl-synch.md", "vms/exec/sysenqdeq.mar", "vms/exec/locking.b64", "vms/sysexe/locktest.mar"]
 
 [[feature]]
 id = "enq-deq"
@@ -17,19 +17,19 @@ note = "PRD-0003 step 6, tier 1 #5; sysenqdeq.mar and locking.b64, LOCKTEST at b
 
 [[feature]]
 id = "sublocks"
-title = "Parent locks: a tree of resources; SS$_SUBLOCKS, SS$_PARNOTGRANT"
-status = "todo"
+title = "Parent locks: a tree of resources; SS$_SUBLOCKS, SS$_PARNOTGRANT, $DEQ's DEQALL of a parent"
+status = "done"
 milestone = "m1"
 needs = ["#enq-deq"]
-note = "ADR-0030: $ENQ's parid is SS$_BADPARAM until a program needs it"
+note = "locking.b64; no resource tree depth limit, SS$_EXDEPTH"
 
 [[feature]]
 id = "value-blocks"
-title = "16-byte lock value blocks, LCK$M_VALBLK"
-status = "todo"
+title = "16-byte lock value blocks, LCK$M_VALBLK, $DEQ's valblk and LCK$M_INVVALBLK"
+status = "done"
 milestone = "m1"
 needs = ["#enq-deq"]
-note = "ADR-0030"
+note = "Written and read as VMS's SYSENQDEQ does; rundown invalidates a PW or EX holder's"
 
 [[feature]]
 id = "asts"
@@ -42,10 +42,10 @@ note = "ADR-0030 decision 4: LCK$POST, a kernel mode AST in the lock's process"
 [[feature]]
 id = "blocking-asts"
 title = "Blocking ASTs to the holder of a lock that blocks another request"
-status = "todo"
+status = "done"
 milestone = "m1"
 needs = ["#enq-deq"]
-note = "ADR-0030 decision 4; $ENQ's blkast is SS$_BADPARAM until then"
+note = "ADR-0030 decision 4: once each time a conversion arms it; an ACB of its own, made by $ENQ"
 
 [[feature]]
 id = "qualified-names"
@@ -57,19 +57,19 @@ note = "PRD-0003 *Lock manager*"
 
 [[feature]]
 id = "deadlock"
-title = "Deadlock detection when a request waits: SS$_DEADLOCK to the one that closed the cycle"
-status = "todo"
+title = "Deadlock detection after DEADLOCK_WAIT seconds: SS$_DEADLOCK to the request searched from"
+status = "done"
 milestone = "m1"
-needs = ["#enq-deq"]
-note = "ADR-0030 decision 5; VMS searches after DEADLOCK_WAIT"
+needs = ["#enq-deq", "/exec/timers#timer-queue"]
+note = "ADR-0035, which replaces ADR-0030 decision 5; LCK$SEARCH once a second; DEADLOCK_WAIT is a cell until SYSGEN"
 
 [[feature]]
 id = "getlki"
 title = "$GETLKI with the items LOCKTEST and a lock display need"
-status = "todo"
+status = "done"
 milestone = "m1"
 needs = ["#enq-deq"]
-note = "ADR-0030 decision 3"
+note = "ADR-0030 decision 3; wildcard by lock ID, WORLD and SYSLCK checks; done at once, no AST, as $GETJPI"
 
 [[feature]]
 id = "rundown"
@@ -89,7 +89,7 @@ note = "PRD-0003 step 5; ADR-0030 ponytail; with t8y:/exec/quotas#enqlm, which n
 
 [[feature]]
 id = "more-flags"
-title = "The other flags: EXPEDITE, QUECVT, NODLCKWT, CVTSYS, XVALBLK's 64-byte value blocks"
+title = "The other flags: EXPEDITE, QUECVT, NODLCKWT, CVTSYS, $DEQ's CANCEL, XVALBLK's 64-byte value blocks"
 status = "todo"
 note = "ADR-0030: SS$_BADPARAM until a program needs one"
 
@@ -155,8 +155,11 @@ modes, three queues and order of granting, its status block, completion
 ASTs and event flags, names qualified by access mode and UIC group or the
 system's, and the flags `CONVERT`, `NOQUEUE`, `SYNCSTS`, `SYSTEM` and
 `DEQALL`. Image rundown dequeues the user mode locks, process rundown the
-rest. `LOCKTEST` checks it at boot, in two processes. Not yet: value
-blocks, blocking ASTs, parent locks, the deadlock search, `ENQLM` and
-`$GETLKI`. That is what PRD-0003's step 7 needs to put the file system
+rest. Value blocks, blocking ASTs, sublocks and `$GETLKI` are VMS's, and
+a request that has waited `DEADLOCK_WAIT` seconds is searched for a
+deadlock once, from the timer queue
+([ADR-0035](../../adr/0035-deadlock-search-after-deadlock-wait.md)).
+`LOCKTEST` checks it at boot, in two processes. Not yet: `ENQLM`, with
+PRD-0003's step 5. That is what PRD-0003's step 7 needs to put the file system
 (`t8y:/files/fs-locking`, replacing `FIL$LOCK`) and RMS sharing
 (`t8y:/rms/sharing`) on it. The remote side waits for a cluster.

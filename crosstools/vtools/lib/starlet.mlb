@@ -105,6 +105,12 @@ SS$_NOTQUEUED = 2488                    ; a warning: the lock can't be granted a
 SS$_IVLOCKID = 8484                     ; no such lock, or not the caller's
 SS$_CVTUNGRANT = 8508                   ; a conversion of a lock that isn't granted
 SS$_NOSYSLCK = 10484                    ; LCK$M_SYSTEM needs SYSLCK in user or supervisor mode
+SS$_SUBLOCKS = 8492                     ; a lock to dequeue has sublocks
+SS$_PARNOTGRANT = 8500                  ; a sublock's parent lock isn't granted
+SS$_VALNOTVALID = 2544                  ; a warning: the lock value block returned isn't valid
+SS$_NOMORELOCK = 2568                   ; a wildcard $GETLKI is past the last lock
+SS$_DEADLOCK = 3594                     ; the lock request closed a deadlock, and was refused
+SS$_NOWORLD = 10372                     ; another group's lock needs WORLD
         .ENDM   $SSDEF
 
 ; $CLIMSGDEF: the command language interpreter's status codes, facility
@@ -1785,6 +1791,35 @@ LCK$M_CANCEL = ^X2                      ; $DEQ: cancel a waiting conversion
 LCK$M_INVVALBLK = ^X4                   ; $DEQ: mark the value block not valid
         .ENDM   $LCKDEF
 
+; $LKIDEF: $GETLKI's item codes, and what its lists and LKI$_STATE hold.
+        .MACRO  $LKIDEF
+LKI$_PID = ^X100                        ; the lock's process
+LKI$_STATE = ^X101                      ; 3 bytes: the mode asked for, the mode granted, the queue
+LKI$_PARENT = ^X102                     ; the parent lock's ID, or 0
+LKI$_LCKREFCNT = ^X103                  ; a word: the lock's sublocks
+LKI$_LOCKID = ^X104
+LKI$_NAMSPACE = ^X200                   ; the resource's UIC group, a word, its access mode, a byte, and LKI$M_SYSNAM
+LKI$_RESNAM = ^X201                     ; the resource's name
+LKI$_VALBLK = ^X203                     ; its value block, 16 bytes
+LKI$_LCKCOUNT = ^X205                   ; the locks granted on it
+LKI$_BLOCKEDBY = ^X206                  ; a list: the locks the lock blocks
+LKI$_BLOCKING = ^X207                   ; a list: the locks that block it
+LKI$_LOCKS = ^X208                      ; a list: every lock on the resource
+LKI$M_SYSNAM = ^X80000000               ; LKI$_NAMSPACE: a resource of the system's
+LKI$C_GRANTED = 1                       ; LKI$B_QUEUE's
+LKI$C_CONVERT = 0
+LKI$C_WAITING = -1
+LKI$L_LOCKID = 0                        ; a list's entry
+LKI$L_PID = 4
+LKI$L_SYSID = 8                         ; 0: one node
+LKI$B_RQMODE = 12
+LKI$B_GRMODE = 13
+LKI$B_QUEUE = 14
+LKI$L_REMLKID = 16                      ; 0
+LKI$L_REMSYSID = 20                     ; 0
+LKI$C_LENGTH = 24
+        .ENDM   $LKIDEF
+
 ; The _S forms of the system services: each pushes its arguments, last
 ; first, and calls SYS$name. A value argument is pushed as written
 ; (EFN=#65); an address argument is pushed as an address (PIDADR=PID), or
@@ -2214,6 +2249,30 @@ LCK$M_INVVALBLK = ^X4                   ; $DEQ: mark the value block not valid
         .EXTERNAL SYS$DEQ
         CALLS   #4, G^SYS$DEQ
         .ENDM   $DEQ_S
+
+        .MACRO  $GETLKI_S EFN=#0, LKIDADR, ITMLST, IOSB=0, ASTADR=0, ASTPRM=#0, NULLARG=#0
+        PUSHL   NULLARG
+        PUSHL   ASTPRM
+        $PUSHADR ASTADR
+        $PUSHADR IOSB
+        $PUSHADR ITMLST
+        $PUSHADR LKIDADR
+        PUSHL   EFN
+        .EXTERNAL SYS$GETLKI
+        CALLS   #7, G^SYS$GETLKI
+        .ENDM   $GETLKI_S
+
+        .MACRO  $GETLKIW_S EFN=#0, LKIDADR, ITMLST, IOSB=0, ASTADR=0, ASTPRM=#0, NULLARG=#0
+        PUSHL   NULLARG
+        PUSHL   ASTPRM
+        $PUSHADR ASTADR
+        $PUSHADR IOSB
+        $PUSHADR ITMLST
+        $PUSHADR LKIDADR
+        PUSHL   EFN
+        .EXTERNAL SYS$GETLKIW
+        CALLS   #7, G^SYS$GETLKIW
+        .ENDM   $GETLKIW_S
 
         .MACRO  $DCLAST_S ASTADR, ASTPRM=#0, ACMODE=#0
         PUSHL   ACMODE
