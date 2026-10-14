@@ -156,7 +156,7 @@ the way (*Interrupts and exceptions*), or the call is `REI`, a `CHMx` or
 The executive owns physical memory as VMS does, by page frame number, and
 keeps the PFN database: which PFNs are free, which hold what. A PFN is a
 4 KB page the PAL makes the first time a PTE names it. They are all the
-RAM seL4 gives the PAL but its share, a thirty-second, for its own
+RAM seL4 gives the PAL but its share, a sixteenth, for its own
 objects: CNodes, page tables, threads and its own tables
 ([ADR-0037](../adr/0037-all-ram-and-address-spaces-filled-on-faults.md)).
 The PAL's capabilities are in a CSpace of two levels, a PFN's frame at an
@@ -198,23 +198,36 @@ over the PFN. `WRPTE` maps, unmaps or
 changes protection at once, and returns the PTE the page had, so the
 executive learns which PFN it freed. A PFN may map at any number of
 addresses, in any number of processes, as a global section's pages do.
-seL4 maps a frame capability at one address, so the PAL keeps one for each
-mapping, and each mode's address space, made as needed and deleted with
-the mapping; a protection change keeps them. A `WRPTE` that maps a page
-fails when the PAL's share has less than 1 MB left.
+seL4 maps a frame capability at one address, so the PAL keeps a copy for
+each address space a page is mapped in (*Filled on faults*). A `WRPTE`
+that maps a page when the PAL's share has no room returns -1 and changes
+nothing; `MMG$CREPAG` then returns `SS$_INSFMEM`.
 
 What each mode sees of a page is what its enables let it, as on the VAX
-what its protection code did. Each mode's thread has an address space of
-its own (*Process contexts*) holding exactly that:
-- **Kernel mode** shares the executive's address space. It holds S0 and
-  the current process's P0 and P1: on `SWPCTX` the PAL unmaps the old
-  process's pages there and maps the new one's.
-- **An outer mode**'s holds its process's P0 and P1 pages that mode may
-  read, writable if it may write them, and the S0 pages it may read. Those
-  S0 pages, such as the executive's system service vector, are the same in
-  every process, and their protection is set before any outer mode runs:
-  a `WRPTE` that changes an outer mode's access to an S0 page after that
-  fails.
+what its protection code did. Each mode of each process, kernel mode
+too, has a thread in an address space of its own (*Process contexts*),
+which caches that, as Alpha's TLB cached the page tables
+([ADR-0037](../adr/0037-all-ram-and-address-spaces-filled-on-faults.md)):
+- **Filled on faults.** A thread that faults on a page whose PTE lets its
+  mode make the access gets the page in its address space, writable if
+  the mode may write it, and goes on; the executive sees nothing, as
+  PALcode's TLB misses went unseen. Any other fault is an access
+  violation (*Exceptions*).
+- **Emptied by `WRPTE`.** `WRPTE` unmaps the page it changes from every
+  address space that has it, as `TBIS` did from the TLB: an S0 page from
+  every process's, a P0 or P1 page from the current process's. It maps
+  the new page at once in the current process's address spaces of the
+  modes that may read it and have run, since the executive is about to use
+  it.
+- **Nothing on `SWPCTX`.** Each process's address spaces keep what they
+  map, so a switch maps and unmaps nothing.
+- **Dropped when short.** Once an eighth of the PAL's share is left, a
+  new mapping takes the record and capability slot of one that goes: the
+  other processes' address spaces lose what they map, or if they have
+  nothing, the current process's kernel mode its P0 and P1 pages, which it
+  maps to zero them and seldom uses after. They fault them in again.
+  ponytail: all of them at once, not the least used; their page tables
+  stay.
 
 The PAL sees every PFN at an address of its own, the way Alpha PALcode read
 memory physically. It reads and writes the executive's memory there to push
@@ -222,10 +235,11 @@ and pop interrupt frames and to read HWPCBs and the SCB.
 
 ## Process contexts
 
-A process context is a thread in the executive's address space
-([ADR-0003](../adr/0003-one-cpu-many-threads.md)), for kernel mode, and a
-thread for each outer mode the process has entered, each in an address
-space of its own ([ADR-0005](../adr/0005-access-modes-are-threads.md)). The
+A process context is a thread for each mode the process has entered,
+kernel mode first, each in an address space of its own
+([ADR-0003](../adr/0003-one-cpu-many-threads.md),
+[ADR-0005](../adr/0005-access-modes-are-threads.md),
+[ADR-0037](../adr/0037-all-ram-and-address-spaces-filled-on-faults.md)). The
 executive names it by its hardware PCB: a 128-byte, quadword-aligned block
 (`$HWPCBDEF`) whose first four quadwords are the stack pointers of kernel,
 executive, supervisor and user mode, followed by Alpha's ASTEN and ASTSR, a
@@ -248,8 +262,9 @@ the current mode runs; `MFPR #PR$_PCBB` returns its HWPCB.
   had.
 
 `DELCTX` (a0 = a HWPCB) deletes the context of a process that isn't
-current, and stops its threads. The PAL unmaps any pages its P0 and P1
-still have; the executive frees their PFNs first, from the process itself.
+current, and stops its threads. The PAL empties its address spaces and
+forgets its P0 and P1 PTEs; the executive frees their PFNs first, from the
+process itself.
 The executive then frees the HWPCB and the kernel stack. A HWPCB the PAL
 has no context for is fine.
 
@@ -365,7 +380,7 @@ took it.
 | Event | Vector | Parameters, below the frame |
 | --- | --- | --- |
 | Undefined instruction, `brk`, a privileged or unimplemented PAL call, a `CHMx` with no vector, a bad `REI` | 0x10, reserved instruction | none |
-| Page fault | 0x20, access violation | a mask, bit 2 set for a write, then the address |
+| Page fault the PTE doesn't allow (*Memory*) | 0x20, access violation | a mask, bit 2 set for a write, then the address |
 
 ### Faults and HALT
 
@@ -375,7 +390,7 @@ instruction naming the HWPCB of the process that took it:
 
 | Event | The PAL prints |
 | --- | --- |
-| Page fault | `%PAL-F-ACCVIO` with the address and PC |
+| Page fault the PTE doesn't allow | `%PAL-F-ACCVIO` with the address and PC |
 | Undefined instruction, `brk` (`BPT`) | `%PAL-F-OPCDEC` with the PC |
 | Reserved PAL call, bad `WRPTE` | `%PAL-F-OPCDEC` with the code, PC, R0 and R1 |
 | Delivery with no vector or stack | `%PAL-F-NOVEC` |
@@ -458,7 +473,7 @@ unused.
 | 0x19 | `MFPR_SISR` | Alpha | | v0 = summary | bit n: level n pending |
 | 0x3E | `WTINT` | Alpha | | v0 = 0 | waits for an interrupt; the clock's comes within 10 ms |
 | 0x40 | `MTPR_TXDB` | vaxpunk | a0 = character | | writes a0's low byte on the console |
-| 0x41 | `WRPTE` | vaxpunk | a0 = address, a1 = PTE | v0 = old PTE | maps, unmaps or protects a page |
+| 0x41 | `WRPTE` | vaxpunk | a0 = address, a1 = PTE | v0 = old PTE, or -1 with no room | maps, unmaps or protects a page |
 | 0x42 | `DELCTX` | vaxpunk | a0 = HWPCB | | deletes a context that isn't current |
 | 0x43 | `MTPR_RXCS` | vaxpunk | a0 = RXCS | | sets IE, bit 6: interrupt when a character waits |
 | 0x44 | `MFPR_RXCS` | vaxpunk | | v0 = RXCS | DONE, bit 7, if a character waits, and IE |

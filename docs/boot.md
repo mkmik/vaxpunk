@@ -52,9 +52,9 @@ the role PALcode played on an Alpha: it's the "hardware" layer underneath VMS
 ([ADR-0002](adr/0002-root-task-is-the-pal.md)).
 
 - It divides the RAM seL4 gave it (`memory_init`), as
-  [ADR-0037](adr/0037-all-ram-and-address-spaces-filled-on-faults.md) decides: a share, a thirty-second of it, for
-  its own objects, and the rest for VMS as page frames, numbered from 0,
-  PFNs. To hold a capability for each of them, it moves to a CSpace
+  [ADR-0037](adr/0037-all-ram-and-address-spaces-filled-on-faults.md)
+  decides: a share, a sixteenth of it, for its own objects, and the rest
+  for VMS as page frames, numbered from 0, PFNs. To hold a capability for each of them, it moves to a CSpace
   of two levels, with the CNode seL4 made it at the top's slot 0.
 - It maps the serial port and the real-time clock, and reads the clock once
   to get the boot time. Then it prints `hello from the root task`.
@@ -66,7 +66,7 @@ the role PALcode played on an Alpha: it's the "hardware" layer underneath VMS
   directory and prints `STARTUP_P1-8: "MIN                             "`.
   Parameters not given are blank.
 - It prints a list of the free memory blocks seL4 gave it, and
-  `RAM: 8186 MB, 2030156 PFNs for the executive, 255 MB for the PAL`.
+  `RAM: 8186 MB, 1964667 PFNs for the executive, 511 MB for the PAL`.
 - It starts a clock thread that wakes up every 10 ms. Each wakeup becomes
   VMS's timer interrupt ([ADR-0004](adr/0004-interval-timer-is-a-pal-thread.md)).
   On each wakeup the PAL also checks the serial port for typed

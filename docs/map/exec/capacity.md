@@ -14,7 +14,7 @@ title = "Every page of RAM QEMU gives is a PFN, not 1,024 (4 MB)"
 status = "done"
 milestone = "m1"
 needs = ["/platform/pal#frame-caps"]
-note = "ADR-0037 decision 2: all RAM but the PAL's share, 1/32"
+note = "ADR-0037 decision 2: all RAM but the PAL's share, 1/16 once measured: all of RAM mapped in two address spaces fits"
 
 [[feature]]
 id = "page-tables"
@@ -94,10 +94,10 @@ note = "MMG$INIT makes it in S0 from RPB$L_FRESVA, 8 bytes a PFN, at most 127 MB
 [[feature]]
 id = "switch-cost"
 title = "A process switch that costs the same whatever the processes' sizes"
-status = "todo"
+status = "done"
 milestone = "m1"
 needs = ["/platform/pal#tlb-fill"]
-note = "main.c kernel_space: SWPCTX unmaps and maps every P0 and P1 page of both processes, a seL4 call each: 500,000 calls for two 1 GB programs. ADR-0037 decision 5: a kernel address space per process"
+note = "ADR-0037 decision 5: each process's kernel mode has an address space of its own, filled on faults; SWPCTX maps nothing"
 
 [[feature]]
 id = "pal-tables"
@@ -133,9 +133,10 @@ root CNode left room for.
 [ADR-0037](../../adr/0037-all-ram-and-address-spaces-filled-on-faults.md)
 lifted those: the PAL takes all the RAM seL4 gives it, keeps a share for
 its own objects in a CSpace of two levels, and the executive sizes its
-PFN database at boot, and a PTE is Alpha's quadword, its PFN 32 bits.
-What is left: a process switch that costs a seL4 call per page; 32
-process slots; 512 KB of pool; 15 open files a process. This component tracks lifting them, so
+PFN database at boot, a PTE is Alpha's quadword, its PFN 32 bits, and the
+address spaces are caches filled on faults, so a process switch costs the
+same whatever the processes' sizes. What is left: 32 process slots; 512
+KB of pool; 15 open files a process. This component tracks lifting them, so
 that no component is held back by one. Each limit lifted becomes a
 SYSGEN parameter or a quota where VMS has one.
 

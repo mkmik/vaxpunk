@@ -99,8 +99,8 @@ below 2 GB, where MACRO-32's sign-extended longwords reach
 executive keeps a PFN database, sized at boot, and no page tables: `WRPTE` asks the
 PAL to map, unmap or protect a page and returns the old PTE
 ([DESIGN-0001](../../design/0001-pal-interface.md)). Each outer
-mode's seL4 thread has an address space holding exactly what that mode
-may read. Pages are allocated and kept: no paging, swapping or sharing.
+mode's seL4 thread, kernel mode's too, has an address space that caches
+what that mode may read, filled on faults. Pages are allocated and kept: no paging, swapping or sharing.
 The PAL gives it all the RAM but a share of its own
 ([ADR-0037](../../adr/0037-all-ram-and-address-spaces-filled-on-faults.md)),
 and a page fault is an access violation, so image sections are read in

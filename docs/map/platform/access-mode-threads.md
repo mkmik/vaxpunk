@@ -6,14 +6,14 @@ kind = "platform"
 intent = "goal"
 research = "done"
 milestone = "m0"
-refs = ["docs/adr/0005-access-modes-are-threads.md", "docs/adr/0003-one-cpu-many-threads.md", "docs/design/0001-pal-interface.md", "pal/src/main.c"]
+refs = ["docs/adr/0005-access-modes-are-threads.md", "docs/adr/0037-all-ram-and-address-spaces-filled-on-faults.md", "docs/adr/0003-one-cpu-many-threads.md", "docs/design/0001-pal-interface.md", "pal/src/main.c"]
 
 [[feature]]
 id = "kernel-threads"
-title = "Kernel mode: a thread per process in the executive's address space"
+title = "Kernel mode: a thread per process, in an address space of its own since ADR-0037"
 status = "done"
 milestone = "m0"
-note = "ADR-0003"
+note = "ADR-0003; ADR-0037 decision 5 replaced the executive's one address space, remapped on each SWPCTX"
 
 [[feature]]
 id = "vax-layout"
@@ -75,13 +75,11 @@ programs in user mode.
 
 ARM64 gives an OS only EL0 and EL1, and seL4 runs every thread at EL0,
 where its address space is its only protection. So vaxpunk gives each
-outer mode of a process a seL4 thread with an address space of its own,
-holding exactly the pages that mode may read
-([ADR-0005](../../adr/0005-access-modes-are-threads.md)). Kernel
-mode is the process's thread in the executive's address space
-([ADR-0003](../../adr/0003-one-cpu-many-threads.md)); on `SWPCTX` the
-PAL unmaps the old process's P0 and P1 pages there and maps the new
-one's, since seL4 clears a page table when it is unmapped. The PAL copies
-registers from one mode's thread to the other on `CHMx`, `REI`,
-interrupts and exceptions. A switch costs a seL4 call per page, and S0's
-outer-mode protection is fixed once outer modes run.
+mode of a process a seL4 thread with an address space of its own
+([ADR-0005](../../adr/0005-access-modes-are-threads.md)), kernel mode
+too ([ADR-0037](../../adr/0037-all-ram-and-address-spaces-filled-on-faults.md)).
+Each address space caches the pages that mode may read, filled on faults
+from the executive's PTEs as Alpha PALcode filled the TLB, and `WRPTE`
+unmaps a page wherever it is cached, so a process switch maps nothing.
+The PAL copies registers from one mode's thread to the other on `CHMx`,
+`REI`, interrupts and exceptions.

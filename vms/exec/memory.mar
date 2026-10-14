@@ -160,9 +160,11 @@ MMG$DEALLOCPFN::
         RSB
 
 ; MMG$CREPAG: R0 = a page's address, R1 = a page count, R2 = the PTE's
-; low longword: its valid bit, enables and fault on execute bit. Makes those pages, zeroed, with
-; that protection, replacing any there. R0 = SS$_NORMAL, or SS$_INSFMEM
-; when the PFNs run out, with the pages made so far left. Uses R0-R2.
+; low longword: its valid bit, enables and fault on execute bit. Makes
+; those pages, zeroed, with that protection, replacing any there. R0 =
+; SS$_NORMAL, or SS$_INSFMEM when the PFNs run out or the PAL has no room
+; for another mapping (WRPTE returns -1), with the pages made so far left.
+; Uses R0-R2.
 MMG$CREPAG::
         .JSB_ENTRY  SCRATCH=<R2>
         PUSHR   #^M<R3, R4, R5, R6>
@@ -176,19 +178,26 @@ MMG$CREPAG::
         TSTL    R0
         BEQL    50$
         EVAX_SLL R0, #PTE$V_PFN, R6     ; its PTE, but the protection
-        EVAX_OR R6, #KW, R1             ; writable first, to zero it
-        MOVL    R3, R0
+        EVAX_OR R6, #KW, R1             ; writable first, to zero it,
+        BITL    #PTE$M_KWE, R5          ; unless its protection lets kernel
+        BEQL    15$                     ; mode write already
+        EVAX_OR R6, R5, R1
+15$:    MOVL    R3, R0
         CALL_PAL #PAL$_WRPTE
+        EVAX_ADDQ R0, #1, R1            ; -1: the PAL has no room for it
+        EVAX_BEQ R1, 55$
         BSBB    FREEOLD
         MOVL    R3, R1
         MOVL    #MMG$C_PAGESIZE/8, R2
 20$:    CLRQ    (R1)+
         SOBGTR  R2, 20$
-        CMPL    R5, #KW                 ; then the protection it gets
-        BEQL    30$
+        BITL    #PTE$M_KWE, R5          ; then the protection it gets
+        BNEQ    30$
         EVAX_OR R6, R5, R1
         MOVL    R3, R0
         CALL_PAL #PAL$_WRPTE
+        EVAX_ADDQ R0, #1, R1            ; no room: the page stays kernel write
+        EVAX_BEQ R1, 50$
 30$:    ADDL2   #MMG$C_PAGESIZE, R3
         DECL    R4
         BRB     10$
@@ -196,6 +205,8 @@ MMG$CREPAG::
 45$:    ENBINT
         POPR    #^M<R3, R4, R5, R6>
         RSB
+55$:    EVAX_SRL R6, #PTE$V_PFN, R0     ; the PFN goes back
+        BSBW    MMG$DEALLOCPFN
 50$:    MOVL    #SS$_INSFMEM, R0
         BRB     45$
 
@@ -204,6 +215,8 @@ MMG$CREPAG::
 ; IPL$_SYNCH.
 FREEOLD:
         .JSB_ENTRY
+        EVAX_ADDQ R0, #1, R1            ; -1: WRPTE made no change
+        EVAX_BEQ R1, 10$
         EVAX_AND R0, #PTE$M_VALID, R1
         EVAX_BEQ R1, 10$
         EVAX_SRL R0, #PTE$V_PFN, R0
