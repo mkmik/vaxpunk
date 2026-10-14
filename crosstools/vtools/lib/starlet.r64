@@ -59,6 +59,7 @@ LITERAL
     SS$_VASFULL = 580,
     SS$_WRITLCK = 604,  ! the device is write locked
     SS$_IVMODE = 852,
+    SS$_QFNOTACT = 980,  ! the volume has no disk quotas
     SS$_MBTOOSML = 412,  ! the message is longer than the mailbox takes
     SS$_OPCDEC = 1084,
     SS$_NOTALLPRIV = 1665,  ! success: $SETPRV enabled only the privileges it may
@@ -1289,7 +1290,13 @@ LITERAL
     JPI$_GRP = 776,
     JPI$_PROCPRIV = 516,  ! its privileges, quadwords: permanent,
     JPI$_CURPRIV = 1024,  ! current,
-    JPI$_AUTHPRIV = 1042;  ! and authorized
+    JPI$_AUTHPRIV = 1042,  ! and authorized
+    JPI$_TERMINAL = 797,  ! an interactive process's terminal, DDCU:, else empty
+    JPI$_MODE = 802,  ! its mode, a JPI$K_ value
+    JPI$K_OTHER = 0,  ! a detached process's mode
+    JPI$K_NETWORK = 1,
+    JPI$K_BATCH = 2,
+    JPI$K_INTERACTIVE = 3;  ! one logged in at a terminal
 
 ! $SYIDEF
 LITERAL
@@ -1304,7 +1311,19 @@ LITERAL
     SYI$_STARTUP_P5 = 4293,  ! STARTUP_P5
     SYI$_STARTUP_P6 = 4294,  ! STARTUP_P6
     SYI$_STARTUP_P7 = 4295,  ! STARTUP_P7
-    SYI$_STARTUP_P8 = 4296;  ! STARTUP_P8
+    SYI$_STARTUP_P8 = 4296,  ! STARTUP_P8
+    SYI$_HW_NAME = 4362,  ! the machine's model, a string
+    SYI$_ACTIVECPU_CNT = 4382,  ! the CPUs running
+    SYI$_AVAILCPU_CNT = 4381,  ! the CPUs there are
+    SYI$_PAGE_SIZE = 4452,  ! a page's bytes
+    SYI$_MEMSIZE = 4459,  ! the pages of memory the executive has
+    SYI$_PRIMARY_CPUID = 4528,  ! the primary CPU's ID
+    SYI$_FREE_PAGES = 32512,  ! the free pages
+    SYI$_NPAGED_TOTAL = 32513,  ! nonpaged pool's bytes,
+    SYI$_NPAGED_FREE = 32514,  ! those free,
+    SYI$_NPAGED_INUSE = 32515,  ! those in use,
+    SYI$_NPAGED_LARGEST = 32516,  ! and its largest free block's
+    SYI$_PROCESS_CNT = 32517;  ! the processes there are
 
 ! $UAIDEF
 LITERAL

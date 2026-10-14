@@ -38,6 +38,8 @@
         $MSGDEF
         $SSDEF
         $UAFDEF
+        $UCBDEF
+        $JPIDEF
 
         .EXTERNAL SCH$GL_CURPCB, SCH$GL_SWPPCB, SCH$GL_PCBVEC, SCH$GL_MAXPIX, SCH$GL_SEQ
         .EXTERNAL SCH$GQ_HIBWQ, SCH$GQ_SUSPWQ, SCH$GQ_DELQ
@@ -48,7 +50,7 @@
         .EXTERNAL FIL$OPENFILE, FIL$OPENSHR, FIL$READIMG, RMS$RUNDOWN, LCK$RUNDOWN
         .EXTERNAL EXE$OUTZSTRING, EXE$OUTCSTRING, EXE$OUTHEX, EXE$OUTCRLF
         .EXTERNAL LNM$CREATE, LNM$DELTBL, SCH$QAST, EXE$FLUSHAST, IOC$CANCEL, SYS$EXIT
-        .EXTERNAL MB$FINDNUM, MB$SEND, EXE$GQ_SYSTIME, TT$OWNER
+        .EXTERNAL MB$FINDNUM, MB$SEND, EXE$GQ_SYSTIME, TT$OWNER, TT$FDT
 
 KSTACK = 16384                          ; a process's kernel stack
 BLOCK = 512                             ; an image's blocks
@@ -1550,6 +1552,8 @@ SUSPEND:
 ; TELNET terminal stays open. Then the process takes the record's
 ; username, UIC and base priority, its privileges UAF$Q_PRIV as the
 ; authorized ones and UAF$Q_DEF_PRIV as the permanent and current ones.
+; A process with a channel to a terminal, LOGINOUT's, becomes interactive,
+; JPI$K_INTERACTIVE, at that terminal, which $GETJPI's JPI$_TERMINAL says.
 ; R0 = SS$_NORMAL, SS$_ACCVIO if the record can't be read, SS$_IVLOGNAM
 ; for a name longer than 35, or IMG$ACTIVATE's error: SS$_BADIMGHDR for an
 ; image that isn't a command interpreter.
@@ -1584,7 +1588,19 @@ SUSPEND:
         MOVQ    UAF$Q_DEF_PRIV(R8), PCB$Q_PRIV(R4)
         BICB3   #^C31, UAF$B_PRI(R8), PCB$B_PRIB(R4)
         MOVB    PCB$B_PRIB(R4), PCB$B_PRI(R4)
-        MOVL    #SS$_NORMAL, R0
+        MOVL    #PCB$C_MAXCHAN, R0      ; its terminal: a channel's
+20$:    BBC     R0, PCB$L_CHANS(R4), 25$
+        MOVL    PCB$AL_CCB(R4)[R0], R1
+        MOVAB   G^TT$FDT, R2
+        CMPL    UCB$L_FDT(R1), R2
+        BEQL    30$
+25$:    SOBGTR  R0, 20$
+        BRB     40$
+30$:    MOVB    #5, PCB$T_TERMINAL(R4)
+        MOVL    UCB$T_NAME(R1), PCB$T_TERMINAL+1(R4)
+        MOVB    #^A/:/, PCB$T_TERMINAL+5(R4)
+        MOVL    #JPI$K_INTERACTIVE, PCB$L_MODE(R4)
+40$:    MOVL    #SS$_NORMAL, R0
         RET
 85$:    MOVL    #SS$_ACCVIO, R0
         RET

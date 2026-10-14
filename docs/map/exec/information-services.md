@@ -10,14 +10,14 @@ refs = ["docs/prd/0003-multi-user-vms.md", "docs/design/0002-executive-processes
 
 [[feature]]
 id = "getjpi"
-title = "$GETJPI on one process or a wildcard scan: PID, names, state, priorities, UIC, privileges"
+title = "$GETJPI on one process or a wildcard scan: PID, names, state, priorities, UIC, privileges, terminal, mode"
 status = "done"
 milestone = "m0"
 note = "getjpi.mar; SHOW SYSTEM lists processes with it. Privileges and UIC from PRD-0003 step 1"
 
 [[feature]]
 id = "getsyi"
-title = "$GETSYI: version, process slots, quantum, boot time, STARTUP_P1 to P8"
+title = "$GETSYI: version, process slots, quantum, boot time, STARTUP_P1 to P8, memory, pool, CPUs"
 status = "done"
 milestone = "m0"
 note = "getjpi.mar; STARTUP_Pn from commit 6e5df3f"

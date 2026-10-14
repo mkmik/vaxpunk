@@ -204,13 +204,18 @@ define verb SHOW
 	parameter P1, label=OPTION, prompt="What", value(required, type=SHOW_OPTIONS)
 
 define type SHOW_OPTIONS
+	keyword CPU, syntax=SHOW_CPU
 	keyword DEFAULT
 	keyword DEVICES, syntax=SHOW_DEVICES
+	keyword ERROR, syntax=SHOW_ERROR
 	keyword LOGICAL, syntax=SHOW_LOGICAL
+	keyword MEMORY, syntax=SHOW_MEMORY
 	keyword PROCESS, syntax=SHOW_IMAGE
+	keyword QUOTA, syntax=SHOW_QUOTA
 	keyword SYMBOL, syntax=SHOW_SYMBOL
 	keyword SYSTEM, syntax=SHOW_IMAGE
 	keyword TERMINAL, syntax=SHOW_TERMINAL
+	keyword USERS, syntax=SHOW_USERS
 
 define syntax SHOW_DEVICES
 	parameter P1, label=OPTION, value(required, type=SHOW_OPTIONS)
@@ -238,6 +243,39 @@ define syntax SHOW_SYMBOL
 define syntax SHOW_IMAGE
 	image SHOW
 	qualifier PRIVILEGES
+
+! SHOW USERS [username] [/FULL]: SHOW.EXE.
+define syntax SHOW_USERS
+	image SHOW
+	parameter P1, label=OPTION, value(required, type=SHOW_OPTIONS)
+	parameter P2, label=USERNAME
+	qualifier FULL
+
+! SHOW MEMORY [/PHYSICAL_PAGES] [/SLOTS] [/POOL] [/ALL]: SHOW.EXE.
+define syntax SHOW_MEMORY
+	image SHOW
+	qualifier ALL
+	qualifier PHYSICAL_PAGES
+	qualifier POOL
+	qualifier SLOTS
+
+! SHOW ERROR [/FULL]: SHOW.EXE.
+define syntax SHOW_ERROR
+	image SHOW
+	qualifier FULL
+
+! SHOW QUOTA [/USER=uic] [/DISK=device]: SHOW.EXE.
+define syntax SHOW_QUOTA
+	image SHOW
+	qualifier USER, value(required)
+	qualifier DISK, value
+
+! SHOW CPU [/BRIEF] [/FULL]: SHOW.EXE.
+define syntax SHOW_CPU
+	image SHOW
+	qualifier BRIEF
+	qualifier FULL
+	disallow BRIEF and FULL
 
 ! SHOW TERMINAL [device]: SHOW.EXE.
 define syntax SHOW_TERMINAL

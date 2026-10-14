@@ -7,7 +7,10 @@
 ; starts a wildcard scan: each call returns the next process, keeping
 ; where the scan is in that longword, until SS$_NOMOREPROC; SHOW SYSTEM
 ; lists the processes so. A table says, for each item code, how big the
-; value is and where: at an offset in the PCB, or at an address.
+; value is and where: at an offset in the PCB, or at an address, or, for
+; what $GETSYI must count, the routine that counts it: SHOW MEMORY's pool
+; and processes. A process's JPI$_TERMINAL and JPI$_MODE are what LOGINOUT's
+; EXE$LOGIN set; SHOW USERS lists the interactive ones.
 ; ponytail: done at once, no AST; no CPU times, quotas or counts, as
 ; nothing keeps them, and no cluster, so $GETSYI's csidadr and nodename
 ; are ignored.
@@ -20,14 +23,17 @@
         $SSDEF
         $JPIDEF
         $SYIDEF
+        $PTEDEF
 
         .EXTERNAL EXE$NAMPID, EXE$PRCPRIV, EXE$SETEF, EXE$CLREF, EXE$GQ_BOOTTIME
         .EXTERNAL SCH$GL_CURPCB, SCH$GL_PCBVEC, SCH$GL_MAXPIX, SGN$GW_QUANTUM, SGN$GW_MAXPRCCT
-        .EXTERNAL SGN$GB_STARTUP_P1
+        .EXTERNAL SGN$GB_STARTUP_P1, MMG$GL_MAXPFN, MMG$GL_FREECNT
+        .EXTERNAL EXE$GL_NONPAGED, MMG$GL_NPAGEDYN, MMG$GL_NPAGNEXT
 
 ; ITMENT code, size, at: a table's entry. size is 1, 2 or 4 for a byte, word
-; or longword, returned as a longword, 8 for a quadword, or 0 for a
-; .ASCIC string, returned without its count.
+; or longword, returned as a longword, 8 for a quadword, 0 for a
+; .ASCIC string, returned without its count, or 3 for a longword the
+; routine at at returns in R0, using R1-R3.
         .MACRO  ITMENT  CODE, SIZE, AT
         .WORD   CODE, SIZE
         .LONG   AT
@@ -49,6 +55,8 @@ JPITAB: ITMENT  JPI$_PID, 4, PCB$L_PID  ; at an offset in the PCB
         ITMENT  JPI$_CURPRIV, 8, PCB$Q_PRIV
         ITMENT  JPI$_PROCPRIV, 8, PCB$Q_PROCPRIV
         ITMENT  JPI$_AUTHPRIV, 8, PCB$Q_AUTHPRIV
+        ITMENT  JPI$_TERMINAL, 0, PCB$T_TERMINAL
+        ITMENT  JPI$_MODE, 4, PCB$L_MODE
         .LONG   0
 SYITAB: ITMENT  SYI$_VERSION, 8, VERSION ; at an address
         ITMENT  SYI$_MAXPROCESSCNT, 2, SGN$GW_MAXPRCCT
@@ -62,12 +70,88 @@ SYITAB: ITMENT  SYI$_VERSION, 8, VERSION ; at an address
         ITMENT  SYI$_STARTUP_P6, 4, SGN$GB_STARTUP_P1+20
         ITMENT  SYI$_STARTUP_P7, 4, SGN$GB_STARTUP_P1+24
         ITMENT  SYI$_STARTUP_P8, 4, SGN$GB_STARTUP_P1+28
+        ITMENT  SYI$_MEMSIZE, 4, MMG$GL_MAXPFN
+        ITMENT  SYI$_FREE_PAGES, 4, MMG$GL_FREECNT
+        ITMENT  SYI$_PAGE_SIZE, 4, PAGESIZE
+        ITMENT  SYI$_HW_NAME, 0, HWNAME
+        ITMENT  SYI$_ACTIVECPU_CNT, 4, CPUCNT
+        ITMENT  SYI$_AVAILCPU_CNT, 4, CPUCNT
+        ITMENT  SYI$_PRIMARY_CPUID, 4, CPUID
+        ITMENT  SYI$_PROCESS_CNT, 3, PRCCNT
+        ITMENT  SYI$_NPAGED_TOTAL, 3, NPGTOTAL
+        ITMENT  SYI$_NPAGED_FREE, 3, NPGFREE
+        ITMENT  SYI$_NPAGED_INUSE, 3, NPGINUSE
+        ITMENT  SYI$_NPAGED_LARGEST, 3, NPGLARGEST
         .LONG   0
 VERSION:
         .ASCII  "V0.1    "
+PAGESIZE:                               ; SYI$_PAGE_SIZE
+        .LONG   MMG$C_PAGESIZE
+CPUCNT: .LONG   1                       ; SYI$_ACTIVECPU_CNT and AVAILCPU_CNT: one CPU,
+CPUID:  .LONG   0                       ; the primary, CPU 0
+; SYI$_HW_NAME, the machine's model. ponytail: QEMU virt's, which the PAL
+; runs on (pal/src/main.c); read the DTB's model for other boards.
+HWNAME: .ASCIC  "QEMU virt arm64"
 VALUE:  .LONG   0                       ; a byte or word item's, made a longword
 
         .PSECT  $CODE$
+
+; PRCCNT: R0 = how many processes there are. IPL$_SYNCH. Uses R0-R1.
+PRCCNT:
+        .JSB_ENTRY
+        CLRL    R0
+        MOVL    SCH$GL_MAXPIX, R1
+10$:    DECL    R1
+        BLEQ    20$                     ; index 0 is unused
+        TSTL    @SCH$GL_PCBVEC[R1]
+        BEQL    10$
+        INCL    R0
+        BRB     10$
+20$:    RSB
+
+; NPGTOTAL: R0 = nonpaged pool's bytes, as far as it has grown. IPL$_SYNCH.
+NPGTOTAL:
+        .JSB_ENTRY
+        SUBL3   MMG$GL_NPAGEDYN, MMG$GL_NPAGNEXT, R0
+        RSB
+
+; NPGFREE: R0 = nonpaged pool's free bytes. NPGLARGEST: R0 = its largest
+; free block's. IPL$_SYNCH. Use R0-R3.
+NPGFREE:
+        .JSB_ENTRY  SCRATCH=<R2, R3>
+        BSBB    WALKPOOL
+        MOVL    R2, R0
+        RSB
+NPGLARGEST:
+        .JSB_ENTRY  SCRATCH=<R2, R3>
+        BSBB    WALKPOOL
+        MOVL    R3, R0
+        RSB
+
+; NPGINUSE: R0 = nonpaged pool's bytes in use. IPL$_SYNCH. Uses R0-R3.
+NPGINUSE:
+        .JSB_ENTRY  SCRATCH=<R2, R3>
+        BSBB    WALKPOOL
+        SUBL3   MMG$GL_NPAGEDYN, MMG$GL_NPAGNEXT, R0
+        SUBL2   R2, R0
+        RSB
+
+; WALKPOOL: R2 = nonpaged pool's free bytes, R3 = its largest free
+; block's, from its free list, each block a link and a size. IPL$_SYNCH.
+; Uses R1.
+WALKPOOL:
+        .JSB_ENTRY  OUTPUT=<R2, R3>
+        CLRL    R2
+        CLRL    R3
+        MOVL    EXE$GL_NONPAGED, R1
+10$:    BEQL    30$
+        ADDL2   4(R1), R2
+        CMPL    4(R1), R3
+        BLEQU   20$
+        MOVL    4(R1), R3
+20$:    MOVL    (R1), R1
+        BRB     10$
+30$:    RSB
 
 ; $GETJPI efn, pidadr, prcnam, itmlst, iosb, astadr, astprm: returns what
 ; the item list asks about a process: the one pidadr or prcnam names, as
@@ -156,6 +240,14 @@ RETITEMS:
         BRB     30$
 40$:    ADDL3   4(R7), R5, R1           ; the value
         MOVZWL  2(R7), R2
+        CMPL    R2, #3
+        BNEQ    41$
+        JSB     @4(R7)                  ; counted
+        MOVL    R0, VALUE
+        MOVAB   VALUE, R1
+        MOVL    #4, R2
+        BRB     50$
+41$:    TSTL    R2
         BNEQ    42$
         MOVZBL  (R1)+, R2               ; .ASCIC
         BRB     50$

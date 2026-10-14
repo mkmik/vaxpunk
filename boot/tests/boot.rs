@@ -274,8 +274,9 @@ const RAMDISK: Phase = Phase {
 /// one to the system disk that fails, SHOW DEVICES, a DISMOUNT of DKA0:
 /// that fails and one of DKB0: that doesn't, a DIRECTORY there that fails,
 /// a MOUNT without a label, a DIRECTORY of the new directory and a DELETE
-/// of the one above it, which has a file in it and stays, SHOW PROCESS and
-/// SHOW SYSTEM.
+/// of the one above it, which has a file in it and stays, SHOW PROCESS,
+/// SHOW SYSTEM, SHOW USERS, of a user who isn't logged in too, SHOW MEMORY,
+/// SHOW ERROR, SHOW QUOTA and SHOW CPU.
 const DATA_DISK: Phase = Phase {
     name: "data disk",
     secs: 20,
@@ -309,6 +310,14 @@ const DATA_DISK: Phase = Phase {
                 "SHOW PROCESS\rSHOW SYSTEM\r",
             ),
         ),
+        (
+            "CUR     4 SHOW.EXE",
+            1,
+            concat!(
+                "SHOW USERS/FULL\rSHOW USERS NOBODY\rSHOW MEMORY/SLOTS\r",
+                "SHOW ERROR\rSHOW QUOTA\rSHOW CPU/BRIEF\r",
+            ),
+        ),
     ],
     lines: &[
         "%MOUNT-I-MOUNTED, DATA mounted on _DKB0:",
@@ -334,6 +343,12 @@ const DATA_DISK: Phase = Phase {
         "UIC:                [1,4]",
         "00010001 SWAPPER",
         "SYSTEM          CUR     4 SHOW.EXE",
+        "    Total number of users = 1,  number of processes = 1\n\n Username    Process Name    PID       Terminal\n SYSTEM      SYSTEM          ",
+        "%SHOW-I-NOSUCHUSER, no processes found for user NOBODY",
+        " Process Entry Slots               1024",
+        "%SHOW-S-NOERRORS, no device errors found",
+        "%SYSTEM-F-QFNOTACT, disk quotas not enabled on this volume",
+        "System: QEMU virt arm64\nCPU 0    State: RUN\n       Process: SYSTEM",
     ],
 };
 
