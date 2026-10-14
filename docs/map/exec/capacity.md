@@ -14,7 +14,7 @@ title = "Every page of RAM QEMU gives is a PFN, not 1,024 (4 MB)"
 status = "done"
 milestone = "m1"
 needs = ["/platform/pal#frame-caps"]
-note = "ADR-0037 decision 2: all RAM but the PAL's share, 1/32; at most 2^21 PFNs, 8 GB, until #pte-pfn"
+note = "ADR-0037 decision 2: all RAM but the PAL's share, 1/32"
 
 [[feature]]
 id = "page-tables"
@@ -79,9 +79,9 @@ note = "ADR-0037 decision 1: QEMU_MEM 8,192 MB in qemu.env, overridden by QEMU_M
 [[feature]]
 id = "pte-pfn"
 title = "A PFN wider than the PTE's 21 bits, which stop at 8 GB of 4 KB pages"
-status = "todo"
+status = "done"
 milestone = "m1"
-note = "ADR-0037 decision 6: Alpha's quadword PTE, the PFN in bits 63:32; lib.mlb $PTEDEF PTE$M_PFN ^X001FFFFF today, used in memory.mar, process.mar and main.c only"
+note = "ADR-0037 decision 6: Alpha's quadword PTE, the PFN in bits 63:32, 16 TB; lib.mlb $PTEDEF, memory.mar, process.mar, main.c"
 
 [[feature]]
 id = "pfn-database"
@@ -133,9 +133,9 @@ root CNode left room for.
 [ADR-0037](../../adr/0037-all-ram-and-address-spaces-filled-on-faults.md)
 lifted those: the PAL takes all the RAM seL4 gives it, keeps a share for
 its own objects in a CSpace of two levels, and the executive sizes its
-PFN database at boot. What is left: a PFN field of 21 bits, 8 GB; a
-process switch that costs a seL4 call per page; 32 process slots; 512 KB
-of pool; 15 open files a process. This component tracks lifting them, so
+PFN database at boot, and a PTE is Alpha's quadword, its PFN 32 bits.
+What is left: a process switch that costs a seL4 call per page; 32
+process slots; 512 KB of pool; 15 open files a process. This component tracks lifting them, so
 that no component is held back by one. Each limit lifted becomes a
 SYSGEN parameter or a quota where VMS has one.
 

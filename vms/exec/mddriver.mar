@@ -22,7 +22,7 @@
 BLOCK = 512
 MD_VA = ^X50000000                      ; in S0, past the RPB
 MD$C_BLOCKS = 1024                      ; 512 KB
-KW = PTE$M_VALID ! <PRT$C_KW @ PTE$V_PROT>
+KW = PTE$M_VALID ! PTE$M_FOE ! PTE$C_KW
 
         .PSECT  EXEC$DATA, NOEXE, WRT, QUAD
 MD$GL_BASE::                            ; the ramdisk's first block, or 0: offline

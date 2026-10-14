@@ -835,36 +835,56 @@ static void drop_map(unsigned pfn, struct pmap *p)
  * The executive's address space, below 2 GB, where MACRO-32's longwords
  * reach, in the VAX's three regions: P0 and P1, each process's own, and
  * between them S0, the system space every process shares. The PAL keeps the
- * PTE it was last given for each page, 4 MB of them to a table, a page of
- * the PAL's made as needed: S0's in one directory, each process's P0 and P1
- * in its context's.
+ * PTE it was last given for each page, 512 of them, 2 MB, to a table, a
+ * page of the PAL's made as needed: S0's in one directory, each process's
+ * P0 and P1 in its context's.
  */
 #define P0_END 0x40000000UL
 #define S0_END 0x60000000UL
 #define SPACE_END 0x80000000UL
-enum { PTE_VALID = 1u << 31, PTE_EXEC = 1u << 25, PTE_PFN = 0x1fffff, PRT_NA = 0, PRT_KW = 2,
-       PRT_KR = 3 };
-/* By VAX protection code ($PRTDEF), the outermost mode that may read and
- * the outermost that may write: 0 kernel, 1 executive, 2 supervisor, 3 user,
- * -1 none. Code 1 is reserved. */
-static const signed char may_read[16] = { -1, -1, 0, 0, 3, 1, 1, 1, 2, 2, 2, 2, 3, 3, 3, 3 };
-static const signed char may_write[16] = { -1, -1, 0, -1, 3, 1, 0, -1, 2, 1, 0, -1, 2, 1, 0, -1 };
+#define TABLE_BITS 21 /* the addresses a table of PTEs maps */
+/*
+ * A PTE is Alpha's quadword ($PTEDEF, ADR-0037): valid, fault on execute,
+ * mode m's read and write enables in bits 8 + m and 12 + m, and the PFN in
+ * the high longword. The enables are what a VAX protection code ($PRTDEF)
+ * gives: a mode may do what an outer one may, and write only what it may
+ * read.
+ */
+enum { PTE_VALID = 1, PTE_FOE = 8, PTE_KR = 0x100, PTE_KW = 0x1100, PTE_RE = 0xf00,
+       PTE_OUTER_RE = 0xe00 };
 static seL4_CPtr exec_vspace;
-static uint32_t *s0_dir[SPACE_END >> 22];
+static uint64_t *s0_dir[SPACE_END >> TABLE_BITS];
 
 static int is_s0(seL4_Word va)
 {
 	return va >= P0_END && va < S0_END;
 }
 
-static unsigned prot(uint32_t pte)
+static unsigned pte_pfn(uint64_t pte)
 {
-	return pte >> 27 & 15;
+	return pte >> 32;
 }
 
-static int mapped(uint32_t pte)
+static int can_read(uint64_t pte, int m)
 {
-	return pte & PTE_VALID && prot(pte) != PRT_NA;
+	return pte >> (8 + m) & 1;
+}
+
+static int can_write(uint64_t pte, int m)
+{
+	return pte >> (12 + m) & 1;
+}
+
+static int mapped(uint64_t pte)
+{
+	return pte & PTE_VALID && pte & PTE_RE;
+}
+
+/* Whether pte's enables are ones a VAX protection code gives. */
+static int well_formed(uint64_t pte)
+{
+	unsigned re = pte >> 8 & 15, we = pte >> 12 & 15;
+	return !(re & (re + 1)) && !(we & (we + 1)) && !(we & ~re);
 }
 
 /*
@@ -879,29 +899,29 @@ static struct ctx {
 	 * the executive's for kernel mode, one of its own for each other. */
 	seL4_CPtr tcb[4], vspace[4], reply;
 	int started, mode, prvmode; /* the PSL's current and previous modes */
-	uint32_t *dir[SPACE_END >> 22]; /* its P0 and P1 PTE tables */
+	uint64_t *dir[SPACE_END >> TABLE_BITS]; /* its P0 and P1 PTE tables */
 	/* Its PAL call's message while it waits in one: x0-x7, the svc's PC. */
 	seL4_Word mr[seL4_UnknownSyscall_FaultIP + 1];
 } *ctx, *cur;
 static unsigned nctx;
 
 /* The PTE of va's page: in S0's directory, or the current process's. */
-static uint32_t *pte_at(seL4_Word va, int make)
+static uint64_t *pte_at(seL4_Word va, int make)
 {
-	uint32_t **t = is_s0(va) ? &s0_dir[va >> 22] : cur ? &cur->dir[va >> 22] : 0;
+	uint64_t **t = is_s0(va) ? &s0_dir[va >> TABLE_BITS] : cur ? &cur->dir[va >> TABLE_BITS] : 0;
 	if (!t)
 		return 0;
 	if (!*t && make)
 		*t = page();
-	return *t ? &(*t)[va >> seL4_PageBits & 1023] : 0;
+	return *t ? &(*t)[va >> seL4_PageBits & 511] : 0;
 }
 
 /* Maps a page as pte says in vspace, with what mode m may do with it. */
-static void map_pte(seL4_CPtr frame, seL4_CPtr vspace, seL4_Word va, uint32_t pte, int m)
+static void map_pte(seL4_CPtr frame, seL4_CPtr vspace, seL4_Word va, uint64_t pte, int m)
 {
-	seL4_CapRights_t rights = m <= may_write[prot(pte)] ? seL4_ReadWrite : seL4_CanRead;
+	seL4_CapRights_t rights = can_write(pte, m) ? seL4_ReadWrite : seL4_CanRead;
 	seL4_ARM_VMAttributes attr = seL4_ARM_Default_VMAttributes;
-	if (!(pte & PTE_EXEC))
+	if (pte & PTE_FOE)
 		attr |= seL4_ARM_ExecuteNever;
 	map(frame, vspace, va, rights, attr);
 }
@@ -918,15 +938,15 @@ static void unmap(seL4_CPtr frame)
  * has entered that may read it, or unmaps it from all of them. Kernel
  * mode's is the executive's, which holds only the current process's pages.
  */
-static void map_page(struct ctx *c, struct pmap *p, uint32_t pte, int on)
+static void map_page(struct ctx *c, struct pmap *p, uint64_t pte, int on)
 {
-	unsigned pfn = pte & PTE_PFN;
+	unsigned pfn = pte_pfn(pte);
 	for (int m = 0; m < 4; m++) {
 		if (!on) {
 			unmap(p->cap[m]);
 			continue;
 		}
-		if (!c->tcb[m] || m > may_read[prot(pte)] || (!m && c != cur))
+		if (!c->tcb[m] || !can_read(pte, m) || (!m && c != cur))
 			continue;
 		map_pte(map_cap(p, pfn, m), c->vspace[m], p->va, pte, m);
 	}
@@ -939,14 +959,14 @@ static void map_page(struct ctx *c, struct pmap *p, uint32_t pte, int on)
  */
 static struct {
 	seL4_Word va;
-	uint32_t pte;
+	uint64_t pte;
 } shared[8];
 static unsigned nshared;
 static int outer_started;
 
-static int outer(uint32_t pte)
+static int outer(uint64_t pte)
 {
-	return mapped(pte) && may_read[prot(pte)] > 0;
+	return mapped(pte) && pte & PTE_OUTER_RE;
 }
 
 /*
@@ -954,20 +974,20 @@ static int outer(uint32_t pte)
  * protection, and puts the PTE it had in *old. A page in P0 or P1 is the
  * current process's. A PFN may be mapped at any number of addresses, in
  * any number of processes: a global section's pages are. Fails, returning
- * 0, for an address outside the executive's space, a reserved protection
- * code, a PFN out of range, too little left of the PAL's share for the
+ * 0, for an address outside the executive's space, enables no protection
+ * code gives, a PFN out of range, too little left of the PAL's share for the
  * mapping, or an S0 page outer modes may read once one of them runs.
  */
-static int wrpte(seL4_Word va, uint32_t pte, uint32_t *old)
+static int wrpte(seL4_Word va, uint64_t pte, uint64_t *old)
 {
-	unsigned pfn = pte & PTE_PFN;
+	unsigned pfn = pte_pfn(pte);
 	int s0 = is_s0(va);
 	struct ctx *owner = s0 ? 0 : cur;
 	if (va % PAGE_SIZE || va < PAGE_SIZE || va >= SPACE_END || (!s0 && !cur))
 		return 0;
-	if (mapped(pte) && (prot(pte) == 1 || pfn >= pfn_count || share_free() < SHARE_SLACK))
+	if (mapped(pte) && (!well_formed(pte) || pfn >= pfn_count || share_free() < SHARE_SLACK))
 		return 0;
-	uint32_t none = 0, *slot = pte_at(va, mapped(pte));
+	uint64_t none = 0, *slot = pte_at(va, mapped(pte));
 	if (!slot)
 		slot = &none; /* unmapping a page in no table: nothing there */
 	if (s0 && (outer(pte) || outer(*slot)) &&
@@ -976,7 +996,7 @@ static int wrpte(seL4_Word va, uint32_t pte, uint32_t *old)
 	*old = *slot;
 	struct pmap *p = 0;
 	if (mapped(*old)) {
-		unsigned o = *old & PTE_PFN;
+		unsigned o = pte_pfn(*old);
 		p = find_map(o, owner, va);
 		if (s0)
 			unmap(p->cap[0]);
@@ -1009,7 +1029,7 @@ static int wrpte(seL4_Word va, uint32_t pte, uint32_t *old)
 		map_pte(map_cap(p, pfn, 0), exec_vspace, va, pte, 0);
 	else
 		map_page(cur, p, pte, 1);
-	if (pte & PTE_EXEC) {
+	if (!(pte & PTE_FOE)) {
 		seL4_Error err = seL4_ARM_Page_Unify_Instruction(p->cap[0], 0, PAGE_SIZE);
 		if (err)
 			die("seL4_ARM_Page_Unify_Instruction failed", err);
@@ -1027,15 +1047,15 @@ static int wrpte(seL4_Word va, uint32_t pte, uint32_t *old)
  */
 static void kernel_space(struct ctx *c, int on)
 {
-	for (seL4_Word i = 0; i < SPACE_END >> 22; i++)
-		for (unsigned j = 0; c->dir[i] && j < 1024; j++) {
-			uint32_t pte = c->dir[i][j];
-			seL4_Word va = i << 22 | j << seL4_PageBits;
+	for (seL4_Word i = 0; i < SPACE_END >> TABLE_BITS; i++)
+		for (unsigned j = 0; c->dir[i] && j < 512; j++) {
+			uint64_t pte = c->dir[i][j];
+			seL4_Word va = i << TABLE_BITS | j << seL4_PageBits;
 			if (!mapped(pte))
 				continue;
-			struct pmap *p = find_map(pte & PTE_PFN, c, va);
+			struct pmap *p = find_map(pte_pfn(pte), c, va);
 			if (on)
-				map_pte(map_cap(p, pte & PTE_PFN, 0), exec_vspace, va, pte, 0);
+				map_pte(map_cap(p, pte_pfn(pte), 0), exec_vspace, va, pte, 0);
 			else
 				unmap(p->cap[0]);
 		}
@@ -1045,14 +1065,14 @@ static void kernel_space(struct ctx *c, int on)
  * executive left there, and the tables. */
 static void free_space(struct ctx *c)
 {
-	for (seL4_Word i = 0; i < SPACE_END >> 22; i++) {
-		uint32_t *t = c->dir[i];
+	for (seL4_Word i = 0; i < SPACE_END >> TABLE_BITS; i++) {
+		uint64_t *t = c->dir[i];
 		if (!t)
 			continue;
-		for (unsigned j = 0; j < 1024; j++)
+		for (unsigned j = 0; j < 512; j++)
 			if (mapped(t[j])) {
-				unsigned pfn = t[j] & PTE_PFN;
-				struct pmap *p = find_map(pfn, c, i << 22 | j << seL4_PageBits);
+				unsigned pfn = pte_pfn(t[j]);
+				struct pmap *p = find_map(pfn, c, i << TABLE_BITS | j << seL4_PageBits);
 				map_page(c, p, t[j], 0);
 				drop_map(pfn, p);
 			}
@@ -1064,10 +1084,10 @@ static void free_space(struct ctx *c)
 /* The executive's quadword at va, which must be 8-byte aligned and mapped. */
 static uint64_t *quad(seL4_Word va)
 {
-	uint32_t *pte = va % 8 || va >= SPACE_END ? 0 : pte_at(va, 0);
+	uint64_t *pte = va % 8 || va >= SPACE_END ? 0 : pte_at(va, 0);
 	if (!pte || !mapped(*pte))
 		return 0;
-	return (uint64_t *)(PHYS + (*pte & PTE_PFN) * PAGE_SIZE + va % PAGE_SIZE);
+	return (uint64_t *)(PHYS + (seL4_Word)pte_pfn(*pte) * PAGE_SIZE + va % PAGE_SIZE);
 }
 
 /*
@@ -1087,10 +1107,10 @@ enum { SS_NORMAL = 1, SS_ACCVIO = 12, SS_BADPARAM = 20, SS_DRVERR = 140, SS_ILLB
 static int kbuf(seL4_Word va, seL4_Word len, int out, uint8_t **at)
 {
 	for (seL4_Word p = va & ~(PAGE_SIZE - 1), i = 0; p < va + len; p += PAGE_SIZE, i++) {
-		uint32_t *pte = p < SPACE_END ? pte_at(p, 0) : 0;
-		if (!pte || !mapped(*pte) || (out && may_write[prot(*pte)] < 0))
+		uint64_t *pte = p < SPACE_END ? pte_at(p, 0) : 0;
+		if (!pte || !mapped(*pte) || (out && !can_write(*pte, 0)))
 			return 0;
-		at[i] = (uint8_t *)(PHYS + (*pte & PTE_PFN) * PAGE_SIZE);
+		at[i] = (uint8_t *)(PHYS + (seL4_Word)pte_pfn(*pte) * PAGE_SIZE);
 	}
 	return 1;
 }
@@ -1168,8 +1188,8 @@ static int probe(seL4_Word base, seL4_Word len, int m, int write)
 		m = cur->prvmode;
 	seL4_Word at[2] = { base, base + (len ? len - 1 : 0) };
 	for (int i = 0; i < 2; i++) {
-		uint32_t *pte = at[i] < SPACE_END ? pte_at(at[i], 0) : 0;
-		if (!pte || !mapped(*pte) || m > (write ? may_write : may_read)[prot(*pte)])
+		uint64_t *pte = at[i] < SPACE_END ? pte_at(at[i], 0) : 0;
+		if (!pte || !mapped(*pte) || !(write ? can_write : can_read)(*pte, m))
 			return 0;
 	}
 	return 1;
@@ -1179,7 +1199,7 @@ static int probe(seL4_Word base, seL4_Word len, int m, int write)
 static seL4_Word boot_pfn;
 
 /* Makes pages from va to va + size, filled from src unless it is 0. */
-static void boot_pages(seL4_Word va, const uint8_t *src, seL4_Word size, uint32_t pte)
+static void boot_pages(seL4_Word va, const uint8_t *src, seL4_Word size, uint64_t pte)
 {
 	for (seL4_Word off = 0; off < size; off += PAGE_SIZE) {
 		if (boot_pfn == pfn_count)
@@ -1187,8 +1207,8 @@ static void boot_pages(seL4_Word va, const uint8_t *src, seL4_Word size, uint32_
 		seL4_Word n = size - off < PAGE_SIZE ? size - off : PAGE_SIZE;
 		if (src)
 			memcpy(pfn_ptr(boot_pfn), src + off, n);
-		uint32_t old;
-		if (!wrpte(va + off, PTE_VALID | pte | boot_pfn++, &old))
+		uint64_t old;
+		if (!wrpte(va + off, PTE_VALID | pte | boot_pfn++ << 32, &old))
 			die("boot pages: bad address", va + off);
 	}
 }
@@ -1236,8 +1256,8 @@ static seL4_Word load_image(const uint8_t *file, seL4_Word size)
 				die("EXEC.EXE: section outside the file", at);
 			src = file + (seL4_Word)(vbn - 1) * BLOCK;
 		}
-		uint32_t pte = (flags & WRT ? PRT_KW : PRT_KR) << 27;
-		boot_pages(va, src, secsize, flags & EXE ? pte | PTE_EXEC : pte);
+		uint64_t pte = flags & WRT ? PTE_KW : PTE_KR;
+		boot_pages(va, src, secsize, flags & EXE ? pte : pte | PTE_FOE);
 		if (va + secsize > exec_end)
 			exec_end = va + secsize;
 	}
@@ -1471,15 +1491,15 @@ static void mode_thread(struct ctx *c, int m)
 	c->tcb[m] = new_thread(c->vspace[m], ctx_badge(c, m));
 	outer_started = 1;
 	for (unsigned i = 0; i < nshared; i++)
-		if (m <= may_read[prot(shared[i].pte)])
-			map_pte(mint(frame_cap(shared[i].pte & PTE_PFN), 0), c->vspace[m],
+		if (can_read(shared[i].pte, m))
+			map_pte(mint(frame_cap(pte_pfn(shared[i].pte)), 0), c->vspace[m],
 				shared[i].va, shared[i].pte, m);
-	for (seL4_Word i = 0; i < SPACE_END >> 22; i++)
-		for (unsigned j = 0; c->dir[i] && j < 1024; j++) {
-			uint32_t pte = c->dir[i][j];
-			seL4_Word va = i << 22 | j << seL4_PageBits;
-			if (mapped(pte) && m <= may_read[prot(pte)])
-				map_pte(map_cap(find_map(pte & PTE_PFN, c, va), pte & PTE_PFN, m),
+	for (seL4_Word i = 0; i < SPACE_END >> TABLE_BITS; i++)
+		for (unsigned j = 0; c->dir[i] && j < 512; j++) {
+			uint64_t pte = c->dir[i][j];
+			seL4_Word va = i << TABLE_BITS | j << seL4_PageBits;
+			if (mapped(pte) && can_read(pte, m))
+				map_pte(map_cap(find_map(pte_pfn(pte), c, va), pte_pfn(pte), m),
 					c->vspace[m], va, pte, m);
 		}
 }
@@ -1957,7 +1977,7 @@ static int serve_one(seL4_MessageInfo_t msg)
 	case GETENTROPY:
 		return ret(getentropy(a0 & 0xffffffff, a1 & 0xffffffff));
 	case WRPTE: {
-		uint32_t old;
+		uint64_t old;
 		if (!wrpte(a0 & 0xffffffff, a1, &old))
 			break;
 		return ret(old);
@@ -2114,11 +2134,11 @@ static void start_exec(void)
 		die("no [SYSEXE]EXEC.EXE on the system disk", 0);
 	seL4_Word entry = load_image(exe_file, exe_size);
 	boot_pages(EXEC_STACK_TOP - EXEC_STACK_PAGES * PAGE_SIZE, 0, EXEC_STACK_PAGES * PAGE_SIZE,
-		   PRT_KW << 27);
-	boot_pages(RPB_VA, 0, PAGE_SIZE, PRT_KW << 27);
+		   PTE_KW | PTE_FOE);
+	boot_pages(RPB_VA, 0, PAGE_SIZE, PTE_KW | PTE_FOE);
 	if (net_slot >= 0) {
 		port_pfn = boot_pfn;
-		boot_pages(PORT_VA, 0, PORT_PAGES * PAGE_SIZE, PRT_KW << 27);
+		boot_pages(PORT_VA, 0, PORT_PAGES * PAGE_SIZE, PTE_KW | PTE_FOE);
 	}
 	uint8_t *rpb = (uint8_t *)quad(RPB_VA);
 	uint32_t fields[] = { [RPB_BASE / 4] = RPB_VA, [RPB_PFNCNT / 4] = pfn_count,
@@ -2284,10 +2304,8 @@ static void memory_init(seL4_BootInfo *bi)
 	}
 	for (unsigned i = 0; i < nframes; i++)
 		pfn_count += (frames[i].size - frames[i].used) >> seL4_PageBits;
-	/* ponytail: the PTE's 21-bit PFN, 8 GB, until it is Alpha's quadword
-	 * (ADR-0037 decision 6). */
-	if (pfn_count > PTE_PFN + 1)
-		pfn_count = PTE_PFN + 1;
+	if (pfn_count >> 32) /* the PTE's PFN field, 16 TB */
+		pfn_count = 0xffffffff;
 
 	seL4_Word cnodes = 1 + ((pfn_count + L2_MASK) >> L2_BITS); /* seL4's and the frames' */
 	for (l1_bits = 8; 1UL << l1_bits < 4 * cnodes; l1_bits++)

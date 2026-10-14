@@ -160,8 +160,7 @@ RAM seL4 gives the PAL but its share, a thirty-second, for its own
 objects: CNodes, page tables, threads and its own tables
 ([ADR-0037](../adr/0037-all-ram-and-address-spaces-filled-on-faults.md)).
 The PAL's capabilities are in a CSpace of two levels, a PFN's frame at an
-address the PFN gives. ponytail: at most 2^21 PFNs, 8 GB, what the PTE's
-field holds, until it is Alpha's quadword (ADR-0037 decision 6).
+address the PFN gives.
 
 The address space is the VAX's three regions, below 2 GB, where MACRO-32's
 sign-extended longwords reach (ADR-0005):
@@ -178,16 +177,24 @@ The executive maps a page by writing its PTE with `WRPTE`, which takes the
 place of the VAX's writing a PTE in memory and then `MTPR #PR$_TBIS`
 (ADR-0001: explicit calls instead of a page table the PAL walks). A PTE in
 P0 or P1 is the current process's, as the VAX's P0 and P1 page tables are.
-A PTE is the VAX's longword (`$PTEDEF`), with one change:
+A PTE is Alpha's quadword (`$PTEDEF`,
+[ADR-0037](../adr/0037-all-ram-and-address-spaces-filled-on-faults.md)):
 
 | Bits | Field | Meaning |
 | --- | --- | --- |
-| 31 | `V` | valid: the page is mapped |
-| 30:27 | `PROT` | the VAX protection code (`$PRTDEF`): who may read and write |
-| 25 | `EXEC` | **new:** instructions may run from the page; ARM64 has the permission, the VAX had none |
-| 20:0 | `PFN` | the page frame |
+| 0 | `V` | valid: the page is mapped |
+| 3 | `FOE` | fault on execute: no instructions run from the page |
+| 11:8 | `KRE`, `ERE`, `SRE`, `URE` | kernel, executive, supervisor and user mode may read |
+| 15:12 | `KWE`, `EWE`, `SWE`, `UWE` | and write |
+| 63:32 | `PFN` | the page frame |
 
-A valid PTE with protection `NA` maps nothing. `WRPTE` maps, unmaps or
+The other bits are 0. The enables are those of a VAX protection code
+(`$PRTDEF`): a mode may read and write what an outer one may, and write
+only what it may read. `$PTEDEF`'s `PTE$C_` names them after the codes,
+`PTE$C_UW` for `PRT$C_UW`. A valid PTE no mode may read maps nothing; one
+whose enables no code gives is refused. MACRO-32 builds a PTE with
+`EVAX_SLL` and `EVAX_OR`, since a longword instruction would sign-extend
+over the PFN. `WRPTE` maps, unmaps or
 changes protection at once, and returns the PTE the page had, so the
 executive learns which PFN it freed. A PFN may map at any number of
 addresses, in any number of processes, as a global section's pages do.
@@ -196,11 +203,9 @@ mapping, and each mode's address space, made as needed and deleted with
 the mapping; a protection change keeps them. A `WRPTE` that maps a page
 fails when the PAL's share has less than 1 MB left.
 
-What each mode sees of a page is its protection code's (`$PRTDEF`): a mode
-may read a page whose code lets it or an outer mode read, and write one
-whose code lets it or an outer mode write, as on the VAX. Each mode's
-thread has an address space of its own (*Process contexts*) holding
-exactly that:
+What each mode sees of a page is what its enables let it, as on the VAX
+what its protection code did. Each mode's thread has an address space of
+its own (*Process contexts*) holding exactly that:
 - **Kernel mode** shares the executive's address space. It holds S0 and
   the current process's P0 and P1: on `SWPCTX` the PAL unmaps the old
   process's pages there and maps the new one's.

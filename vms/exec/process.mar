@@ -52,12 +52,12 @@
 
 KSTACK = 16384                          ; a process's kernel stack
 BLOCK = 512                             ; an image's blocks
-KW = PTE$M_VALID ! <PRT$C_KW @ PTE$V_PROT>
-UR = PTE$M_VALID ! <PRT$C_UR @ PTE$V_PROT>
-UW = PTE$M_VALID ! <PRT$C_UW @ PTE$V_PROT>
-SR = PTE$M_VALID ! <PRT$C_SR @ PTE$V_PROT>
-SW = PTE$M_VALID ! <PRT$C_SW @ PTE$V_PROT>
-EW = PTE$M_VALID ! <PRT$C_EW @ PTE$V_PROT>
+KW = PTE$M_VALID ! PTE$M_FOE ! PTE$C_KW
+UR = PTE$M_VALID ! PTE$M_FOE ! PTE$C_UR
+UW = PTE$M_VALID ! PTE$M_FOE ! PTE$C_UW
+SR = PTE$M_VALID ! PTE$M_FOE ! PTE$C_SR
+SW = PTE$M_VALID ! PTE$M_FOE ! PTE$C_SW
+EW = PTE$M_VALID ! PTE$M_FOE ! PTE$C_EW
 ; Image header fields (crosstools/vtools/docs/image-format.md).
 EIHD$L_SIZE = 8
 EIHD$L_ISDOFF = 12
@@ -782,7 +782,7 @@ PROTECT:
         BBS     #EISD$V_WRT, EISD$L_FLAGS(R3), 20$
         MOVL    R7, R2
         BBC     #EISD$V_EXE, EISD$L_FLAGS(R3), 20$
-        BISL2   #PTE$M_EXEC, R2
+        BICL2   #PTE$M_FOE, R2
 20$:    BSBW    MMG$SETPRT
         BRB     10$
 90$:    POPR    #^M<R3, R4, R10>

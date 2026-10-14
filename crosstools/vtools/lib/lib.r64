@@ -125,12 +125,36 @@ MACRO
 
 ! $PTEDEF
 LITERAL
-    PTE$V_VALID = 31,
-    PTE$M_VALID = 2147483648,
-    PTE$V_PROT = 27,  ! 4 bits, PRT$C_ codes
-    PTE$V_EXEC = 25,
-    PTE$M_EXEC = 33554432,
-    PTE$M_PFN = 2097151,
+    PTE$V_VALID = 0,
+    PTE$M_VALID = 1,
+    PTE$V_FOE = 3,  ! fault on execute: no instructions run from the page
+    PTE$M_FOE = 8,
+    PTE$V_KRE = 8,  ! kernel read enable; ERE, SRE, URE in 9-11
+    PTE$M_KRE = 256,
+    PTE$M_ERE = 512,
+    PTE$M_SRE = 1024,
+    PTE$M_URE = 2048,
+    PTE$V_KWE = 12,  ! kernel write enable; EWE, SWE, UWE in 13-15
+    PTE$M_KWE = 4096,
+    PTE$M_EWE = 8192,
+    PTE$M_SWE = 16384,
+    PTE$M_UWE = 32768,
+    PTE$V_PFN = 32,  ! the page frame, 32 bits
+    PTE$C_NA = 0,  ! vaxpunk: PRT$C_NA as enables, and so on
+    PTE$C_KW = 4352,
+    PTE$C_KR = 256,
+    PTE$C_UW = 65280,
+    PTE$C_EW = 13056,
+    PTE$C_ERKW = 4864,
+    PTE$C_ER = 768,
+    PTE$C_SW = 30464,
+    PTE$C_SREW = 14080,
+    PTE$C_SRKW = 5888,
+    PTE$C_SR = 1792,
+    PTE$C_URSW = 32512,
+    PTE$C_UREW = 16128,
+    PTE$C_URKW = 7936,
+    PTE$C_UR = 3840,
     MMG$C_PAGESIZE = 4096,
     MMG$C_VPCTX = 12;  ! address bits in a page
 

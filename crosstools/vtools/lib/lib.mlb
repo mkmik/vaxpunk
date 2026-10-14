@@ -189,15 +189,42 @@ HWPCB$B_ASTSR = 33                      ; bit n: an AST for mode n is queued
 HWPCB$K_LENGTH = 128
         .ENDM   $HWPCBDEF
 
-; $PTEDEF: a page table entry, as WRPTE takes it: the VAX's, with an
-; execute bit, which ARM64 has and the VAX didn't. Pages are 4 KB.
+; $PTEDEF: a page table entry, as WRPTE takes it: Alpha's quadword, the
+; PFN in the high longword (ADR-0037). Each mode's read and write enable
+; is a bit; PTE$C_ codes are the VAX's protection codes ($PRTDEF) as
+; enables. Build one with EVAX_SLL and EVAX_OR, which keep all 64 bits.
+; Pages are 4 KB.
         .MACRO  $PTEDEF
-PTE$V_VALID = 31
-PTE$M_VALID = ^X80000000
-PTE$V_PROT = 27                         ; 4 bits, PRT$C_ codes
-PTE$V_EXEC = 25
-PTE$M_EXEC = ^X02000000
-PTE$M_PFN = ^X001FFFFF
+PTE$V_VALID = 0
+PTE$M_VALID = ^X1
+PTE$V_FOE = 3                           ; fault on execute: no instructions run from the page
+PTE$M_FOE = ^X8
+PTE$V_KRE = 8                           ; kernel read enable; ERE, SRE, URE in 9-11
+PTE$M_KRE = ^X100
+PTE$M_ERE = ^X200
+PTE$M_SRE = ^X400
+PTE$M_URE = ^X800
+PTE$V_KWE = 12                          ; kernel write enable; EWE, SWE, UWE in 13-15
+PTE$M_KWE = ^X1000
+PTE$M_EWE = ^X2000
+PTE$M_SWE = ^X4000
+PTE$M_UWE = ^X8000
+PTE$V_PFN = 32                          ; the page frame, 32 bits
+PTE$C_NA = 0                            ; vaxpunk: PRT$C_NA as enables, and so on
+PTE$C_KW = ^X1100
+PTE$C_KR = ^X0100
+PTE$C_UW = ^XFF00
+PTE$C_EW = ^X3300
+PTE$C_ERKW = ^X1300
+PTE$C_ER = ^X0300
+PTE$C_SW = ^X7700
+PTE$C_SREW = ^X3700
+PTE$C_SRKW = ^X1700
+PTE$C_SR = ^X0700
+PTE$C_URSW = ^X7F00
+PTE$C_UREW = ^X3F00
+PTE$C_URKW = ^X1F00
+PTE$C_UR = ^X0F00
 MMG$C_PAGESIZE = 4096
 MMG$C_VPCTX = 12                        ; address bits in a page
         .ENDM   $PTEDEF
