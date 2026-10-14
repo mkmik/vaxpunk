@@ -38,6 +38,7 @@ id = "s2-pool"
 title = "S2 space and 64-bit pool for the executive"
 status = "todo"
 needs = ["#p2-space"]
+note = "ADR-0037: the PFN database moves here, past the 64 GB of RAM S0 can index"
 
 [[needs]]
 on = "/exec/memory"

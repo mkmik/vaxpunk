@@ -6,7 +6,7 @@ kind = "platform"
 intent = "goal"
 research = "done"
 milestone = "m0"
-refs = ["pal/README.md", "pal/src/main.c", "docs/design/0001-pal-interface.md", "docs/adr/0001-pal-interface-vms-vocabulary.md", "docs/adr/0002-root-task-is-the-pal.md", "docs/adr/0003-one-cpu-many-threads.md", "docs/adr/0004-interval-timer-is-a-pal-thread.md", "docs/adr/0005-access-modes-are-threads.md", "docs/adr/0031-entropy-from-virtio-rng.md", "docs/boot.md", "docs/prd/0003-multi-user-vms.md"]
+refs = ["pal/README.md", "docs/adr/0037-all-ram-and-address-spaces-filled-on-faults.md", "pal/src/main.c", "docs/design/0001-pal-interface.md", "docs/adr/0001-pal-interface-vms-vocabulary.md", "docs/adr/0002-root-task-is-the-pal.md", "docs/adr/0003-one-cpu-many-threads.md", "docs/adr/0004-interval-timer-is-a-pal-thread.md", "docs/adr/0005-access-modes-are-threads.md", "docs/adr/0031-entropy-from-virtio-rng.md", "docs/boot.md", "docs/prd/0003-multi-user-vms.md"]
 
 [[feature]]
 id = "pal-calls"
@@ -95,7 +95,15 @@ id = "frame-caps"
 title = "Frame caps in a CNode of their own: more than 1,024 PFNs, and more than 256 extra mappings of them"
 status = "todo"
 milestone = "m1"
-note = "PRD-0003 tier 1 #39 (4 MB, 96 page tables, 32 contexts); main.c ponytails on PFN_COUNT and XMAP_MAX; t8y:/exec/capacity needs it"
+note = "ADR-0037 decisions 2 and 3: a share of RAM for the PAL's objects, a CSpace of two levels; PRD-0003 tier 1 #39; main.c ponytails on PFN_COUNT and XMAP_MAX; t8y:/exec/capacity needs it"
+
+[[feature]]
+id = "tlb-fill"
+title = "Address spaces filled on a fault from the PAL's PTEs, as Alpha PALcode filled the TLB"
+status = "todo"
+milestone = "m1"
+needs = ["#frame-caps"]
+note = "ADR-0037 decisions 4 and 5. A mode's fault on a page its PTE lets it reach is mapped and the thread resumes; WRPTE unmaps a page wherever it is cached. SWPCTX then maps nothing, and kernel mode can have a space per process; t8y:/exec/capacity#switch-cost"
 
 [[feature]]
 id = "page-faults"

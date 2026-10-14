@@ -4,9 +4,9 @@ summary = "A real-size system: all of the 32-bit space and all the RAM, no table
 aka = ["limits", "PFN_COUNT", "CTX_MAX", "XMAP_MAX", "POOL_PAGES", "MAXPROCESSCNT", "CHANNELCNT", "FILLM", "32-bit address space", "very large programs"]
 kind = "core"
 intent = "goal"
-research = "outline"
+research = "done"
 milestone = "m1"
-refs = ["docs/prd/0003-multi-user-vms.md", "docs/design/0001-pal-interface.md", "docs/adr/0005-access-modes-are-threads.md", "pal/src/main.c", "vms/exec/memory.mar"]
+refs = ["docs/adr/0037-all-ram-and-address-spaces-filled-on-faults.md", "docs/prd/0003-multi-user-vms.md", "docs/design/0001-pal-interface.md", "docs/adr/0005-access-modes-are-threads.md", "pal/src/main.c", "vms/exec/memory.mar"]
 
 [[feature]]
 id = "all-ram"
@@ -30,7 +30,7 @@ title = "All of the 32-bit space: a program's P0 and P1 grow to their regions' e
 status = "todo"
 milestone = "m1"
 needs = ["#page-tables", "/exec/memory#p1-expreg"]
-note = "P0 1 GB, S0 and P1 512 MB each below 2 GB (ADR-0005); Alpha has P0 and P1 1 GB each and S0/S1 at the sign-extended top, seL4's half: an ADR decides whether to follow it"
+note = "P0 1 GB, S0 and P1 512 MB each below 2 GB (ADR-0005); Alpha has P0 and P1 1 GB each and S0/S1 at the sign-extended top, seL4's half: ADR-0037 keeps ADR-0005's layout"
 
 [[feature]]
 id = "processes"
@@ -57,10 +57,10 @@ needs = ["/exec/pool#sizing", "#all-ram"]
 
 [[feature]]
 id = "exec-image"
-title = "EXEC.EXE of any size, not 256 KB"
+title = "EXEC.EXE of any size, not 512 KB"
 status = "todo"
 milestone = "m1"
-note = "main.c exe_file: the PAL's load buffer; 'no [SYSEXE]EXEC.EXE ... (262144)' when it outgrows it"
+note = "main.c exe_file: the PAL's load buffer, raised from 256 KB once already; 'no [SYSEXE]EXEC.EXE ... (524288)' when it outgrows it"
 
 [[feature]]
 id = "per-process-tables"
@@ -68,6 +68,44 @@ title = "Open files, image headers and terminals limited by quotas and SYSGEN, n
 status = "todo"
 milestone = "m1"
 note = "rms.mar MAXIFI 15 files a process, f11.mar MAXHDR 16 header blocks, ttdriver.mar MAXUNIT 9 TNAn: units, mddriver.mar MD$GL_BLOCKS"
+
+[[feature]]
+id = "ram-size"
+title = "As much RAM as QEMU is given: one setting, from the seL4 build to the PAL's untypeds"
+status = "todo"
+milestone = "m1"
+note = "ADR-0037 decisions 1 and 2: QEMU_MEM 8,192 MB. seL4 compiles QEMU's memory map in (pal/kernel/qemu.env QEMU_MEM=1024); the PAL retypes from the largest RAM untyped only. QEMU commits host pages only as they are touched, so a large default costs nothing"
+
+[[feature]]
+id = "pte-pfn"
+title = "A PFN wider than the PTE's 21 bits, which stop at 8 GB of 4 KB pages"
+status = "todo"
+milestone = "m1"
+note = "ADR-0037 decision 6: Alpha's quadword PTE, the PFN in bits 63:32; lib.mlb $PTEDEF PTE$M_PFN ^X001FFFFF today, used in memory.mar, process.mar and main.c only"
+
+[[feature]]
+id = "pfn-database"
+title = "The PFN database sized from RPB$L_PFNCNT at boot, not 4,096 longwords in EXEC.EXE"
+status = "todo"
+milestone = "m1"
+needs = ["#ram-size"]
+note = "memory.mar MMG$C_MAXPFN, MMG$AL_FREEPFN; MMG$GL_PFNGSD is in pool. 8 bytes a PFN is 2 MB of S0 a GB of RAM; VMS's entry for paging is larger. ADR-0037 decision 7: at most 128 MB of S0, 64 GB of RAM, until it moves to S2"
+
+[[feature]]
+id = "switch-cost"
+title = "A process switch that costs the same whatever the processes' sizes"
+status = "todo"
+milestone = "m1"
+needs = ["/platform/pal#tlb-fill"]
+note = "main.c kernel_space: SWPCTX unmaps and maps every P0 and P1 page of both processes, a seL4 call each: 500,000 calls for two 1 GB programs. ADR-0037 decision 5: a kernel address space per process"
+
+[[feature]]
+id = "pal-tables"
+title = "The PAL's PTE tables, mappings and contexts made from memory as needed, not static arrays"
+status = "todo"
+milestone = "m1"
+needs = ["/platform/pal#frame-caps"]
+note = "main.c pte_pool[96], pfn_map[PFN_COUNT], xmap[XMAP_MAX], ctx[CTX_MAX], exe_file[512 KB]; sched.mar SCH$C_MAXPIX"
 
 [[needs]]
 on = "/platform/pal"
