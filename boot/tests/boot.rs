@@ -1213,7 +1213,10 @@ fn boot() {
     assert!(data.contains("and the rest of what INITIALIZE made."));
     assert_eq!(data.matches("Welcome to vaxpunk",).count(), 2, "{data}");
     assert!(img.lookup("[SUB.DEEP]DEEP.TXT").is_ok());
-    assert!(img.lookup("[000000]SHARE.TXT").is_err(), "SHARE.TXT deleted");
+    assert!(
+        img.lookup("[000000]SHARE.TXT").is_err(),
+        "SHARE.TXT deleted"
+    );
     let fid = img.lookup("[SUB.DEEP]NOTE.TXT").unwrap();
     let mut note = Vec::new();
     img.copy_out(fid, &mut note, Conversion::RecordsToLines)
