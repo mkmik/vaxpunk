@@ -49,7 +49,13 @@ note = "stubs; PRD-0003 tier 2 #10 could lock a pending read's pages with $LCKPA
 
 [[feature]]
 id = "p1-expreg"
-title = "$EXPREG of P1, and rundown freeing only the pages a process has"
+title = "$EXPREG of P1, and image rundown of the P1 pages an image made"
+status = "done"
+note = "memory.mar EXE$EXPREG region 1; process.mar DELP1, below PCB$L_CTLBASVA, as VMS's MMG$IMGRESET"
+
+[[feature]]
+id = "rundown-pages"
+title = "Rundown that frees only the pages a process has, not every page of its ranges"
 status = "todo"
 note = "PRD-0003 tier 3 #30"
 

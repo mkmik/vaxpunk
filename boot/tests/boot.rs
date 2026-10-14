@@ -874,14 +874,21 @@ const FORMS: Phase = Phase {
     ],
 };
 
-/// MEMTEST grows P0 to its end, 1 GB, and checks every page (ADR-0037).
-/// `MT 4`, with `MT :== $SYS$SYSTEM:MEMTEST`, makes four more processes do
-/// it at once, 5 GB, too long for here.
+/// MEMTEST grows P0 to its end, 1 GB, and P1 to its start, below DCL, and
+/// checks every page (ADR-0037); `MT P1`, with `MT :== $SYS$SYSTEM:MEMTEST`,
+/// finds as much P1 again, since image rundown deleted the first run's.
+/// `MT 4` makes four more processes do P0 at once, 5 GB, too long for here.
 const MEMORY: Phase = Phase {
     name: "memory",
     secs: 120,
-    steps: &[("%FORMS-F-OPENIN", 1, "RUN SYS$SYSTEM:MEMTEST\r")],
-    lines: &["MEMTEST: P0 pages 0003F000", "MEMTEST: ok"],
+    steps: &[
+        ("%FORMS-F-OPENIN", 1, "RUN SYS$SYSTEM:MEMTEST\r"),
+        ("MEMTEST: ok", 1, "MT :== $SYS$SYSTEM:MEMTEST\rMT P1\r"),
+    ],
+    lines: &[
+        "MEMTEST: P0 pages 0003F000\nMEMTEST: P1 pages 0001F000\nMEMTEST: ok",
+        "$ MT P1\nMEMTEST: P1 pages 0001F000\nMEMTEST: ok",
+    ],
 };
 
 /// The processes STARTUP and SNOOP ran, which print as they go, done long

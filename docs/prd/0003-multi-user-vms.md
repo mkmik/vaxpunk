@@ -217,7 +217,7 @@ until the hardware or size changes; leave it.
 | 7 | `$ASCTIM`, `$NUMTIM` (PRD-0004's pilot, `numtim.b64`) and the date in `SHOW PROCESS` and `SHOW SYSTEM` done; left: `$BINTIM`, `SHOW TIME` | *Batch and print* |
 | 8 | Owners and protection done (step 2); left: a new file has the default protection, not the process's (`f11wrt.mar`), which `LOGINOUT` sets from the UAF; no version limit (`rms.mar`'s `$CREATE_DIR`) | *Privileges, UICs and protection* |
 | 9 | Terminals, `TNAn:` too, listed from their UCBs (step 3); left: `BGA0:` and its units aren't seen by `$DEVICE_SCAN` and `$GETDVI`; a VCB stands for a disk in `$GETDVI` rather than its UCB (`netdriver.mar`, `getdvi.mar`, DESIGN-0002 *Devices*) | Every device listed from its UCB |
-| 39 | Sized for the demo: 15 open files a process (`rms.mar`) and the other per-process tables; P1 doesn't grow with `$EXPREG`. All of RAM is PFNs, pool grows to `NPAGEVIR`, and the processes are `MAXPROCESSCNT`'s now. Tracked in `t8y:/exec/capacity` | *Capacity*: ADR-0037 |
+| 39 | Sized for the demo: 15 open files a process (`rms.mar`) and the other per-process tables. All of RAM is PFNs, pool grows to `NPAGEVIR`, and the processes are `MAXPROCESSCNT`'s now. Tracked in `t8y:/exec/capacity` | *Capacity*: ADR-0037 |
 
 ### Tier 2: can crash or lose data
 
@@ -248,7 +248,7 @@ until the hardware or size changes; leave it.
 | 27 | `HELP` has no text (`help.mar`) | A help library, `HELPLIB.HLB` |
 | 28 | `IO$_WRITEOF` done; left: mailbox writes never wait, no attention ASTs (`mbdriver.mar`) | When a program needs them; the job controller may |
 | 29 | Terminal editing and `SET HOST` done (step 3); left: the recall buffer is the terminal's, not DCL's, and there's no `RECALL`; no CTRL/O, CTRL/T, XON and XOFF or formatted writes (`ttdriver.mar`, DESIGN-0002); EDIT/EDT lacks several commands (`edit.mar`); `EDIT` is TPU and EVE (PRD-0006) | DCL's own recall buffer with `RECALL`; the rest when a user misses it |
-| 30 | `$EXPREG` grows P0 only (`memory.mar`); image rundown frees every P0 page, mapped or not (`process.mar`) | When a program grows P1 or the walk shows in a profile |
+| 30 | Image and process rundown delete every page of P0's and P1's ranges, mapped or not (`process.mar`) | When the walk shows in a profile |
 | 31 | The scheduler has no priority boosts or decay (`sched.mar`, DESIGN-0002) | Boosts on I/O completion and wakes, with decay; worth it once interactive users share the CPU with batch jobs |
 | 32 | The CLI: parse limits of 128 entities, 1 KB of values, a 512-byte line; the parse copied to a fixed address; the first `SET COMMAND` error ends the compile; at most 8 `SET COMMAND` files; a qualifier the syntax lacks is an error, not ignored; an entity present by default doesn't count; `$IMGACT` calls the image (ADR-0017, ADR-0018, `cli.mar`, `cdu.mar`, `process.mar`, DESIGN-0002) | When a command or a CLD file runs into one |
 | 33 | `$GETDVI`, `$GETJPI` and `$GETLKI` are done at once with no AST (`getdvi.mar`, `getjpi.mar`, `sysenqdeq.mar`) | Fine on one node; the `W` and non-`W` forms behave the same |

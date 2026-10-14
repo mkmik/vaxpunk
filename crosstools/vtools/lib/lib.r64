@@ -248,7 +248,8 @@ MACRO
     PCB$Q_AUTHPRIV = 600, 0, 64, 0 %,  ! authorized: what $SETPRV may enable without SETPRV
     PCB$Q_PROCPRIV = 608, 0, 64, 0 %,  ! permanent: what the current ones go back to when an image exits
     PCB$L_UIC = 616, 0, 32, 0 %,  ! its UIC: the group in the high word, the member in the low
-    PCB$T_USERNAME = 620, 0, 0, 0 %;  ! its user's name, .ASCIC, 12 characters padded with blanks
+    PCB$T_USERNAME = 620, 0, 0, 0 %,  ! its user's name, .ASCIC, 12 characters padded with blanks
+    PCB$L_CTLBASVA = 636, 0, 32, 0 %;  ! vaxpunk: VMS's CTL$GL_CTLBASVA, P1's part that outlives an image: from here up
 
 ! $CEBDEF
 LITERAL

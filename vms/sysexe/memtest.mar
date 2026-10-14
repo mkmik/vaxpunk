@@ -1,11 +1,13 @@
-        .TITLE  MEMTEST Fills P0 with pages and checks every one
+        .TITLE  MEMTEST Fills P0 and P1 with pages and checks every one
         .IDENT  /V0.1/
 ;
 ; The boot test runs it (ADR-0037). It grows P0 with $EXPREG, 16 MB at a
-; time, to its end, 1 GB, writes each page's address in its first
-; longword, and reads them all back. As a foreign command, MT :==
-; $MEMTEST, MT n then starts n processes, MEMCHILD1 to MEMCHILDn, this
-; image, which each do the same and say so through the mailbox
+; time, to its end, 1 GB, then P1, region 1, down to its start, writes
+; each page's address in its first longword, and reads them all back. As
+; a foreign command, MT :== $MEMTEST, MT P1 does P1 only: run again after
+; MEMTEST, it finds as much P1 as before only if image rundown deleted the
+; P1 pages the first run made. MT n starts n processes, MEMCHILD1 to
+; MEMCHILDn, this image, which each do P0 and say so through the mailbox
 ; MEMTEST_MBX, so that all of them hold their pages at once, then deletes
 ; them: MT 4 holds 5 GB. A failed check exits with 2 * N, N its number.
 ;
@@ -54,15 +56,25 @@ JPI_ITEMS:
         .ENTRY  START, ^M<R2, R3, R4>
         $GETJPIW_S ITMLST=JPI_ITEMS
         EXPECT  #SS$_NORMAL, 1
-        BSBW    FILL
         CMPC3   #8, NAME, CHILD_TEXT
-        BNEQ    10$
+        BNEQ    5$
+        CLRL    R4                      ; a child: P0
+        BSBW    FILL
         BRW     CHILD
-10$:    PRINTHEX "MEMTEST: P0 pages ", PAGES
-        PUSHAW  ARGLEN
+5$:     PUSHAW  ARGLEN
         CLRL    -(SP)
         PUSHAQ  ARG
         CALLS   #3, G^LIB$GET_FOREIGN
+        CMPB    ARGTEXT, #^A"P"         ; MT P1: P1 only
+        BEQL    8$
+        CLRL    R4
+        BSBW    FILL
+        PRINTHEX "MEMTEST: P0 pages ", PAGES
+8$:     MOVL    #1, R4
+        BSBW    FILL
+        PRINTHEX "MEMTEST: P1 pages ", PAGES
+        CMPB    ARGTEXT, #^A"P"
+        BEQL    90$
         MOVZWL  ARGLEN, R2              ; n, in decimal
         MOVAB   ARGTEXT, R3
 20$:    DECL    R2
@@ -112,18 +124,26 @@ CHILD:  $ASSIGN_S DEVNAM=MBXNAME, CHAN=CHAN
 10$:    $HIBER_S
         BRB     10$
 
-; FILL: grows P0 to its end and checks each page. PAGES = how many.
-; Uses R0-R3.
+; FILL: R4 = a region, 0 for P0 or 1 for P1. Grows it to its end and
+; checks each page. FIRST = the lowest page, PAGES = how many. Uses R0-R3.
 FILL:
         .JSB_ENTRY  SCRATCH=<R2, R3>
-10$:    $EXPREG_S PAGCNT=#CHUNK, RETADR=RETADR
+        CLRL    FIRST
+        CLRL    PAGES
+10$:    $EXPREG_S PAGCNT=#CHUNK, RETADR=RETADR, REGION=R4
         CMPL    R0, #SS$_VASFULL
         BEQL    20$
         CMPL    R0, #SS$_NORMAL
         BNEQ    90$
-        TSTL    FIRST
-        BNEQ    15$
-        MOVL    RETADR, FIRST
+        MOVL    RETADR, R0              ; the range's lowest address: P1's
+        CMPL    R0, RETADR+4            ; comes second
+        BLEQU   12$
+        MOVL    RETADR+4, R0
+12$:    TSTL    FIRST
+        BEQL    14$
+        CMPL    R0, FIRST
+        BGEQU   15$
+14$:    MOVL    R0, FIRST
 15$:    ADDL2   #CHUNK, PAGES
         BRB     10$
 20$:    MOVL    FIRST, R2               ; each page's address in it

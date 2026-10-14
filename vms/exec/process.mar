@@ -349,6 +349,7 @@ EXE$PRCPRIV::
         MOVAB   PCB$Q_HWPCB(R8), PCB$L_HWPCB(R8)
         MOVL    #VA$C_P0BASE, PCB$L_FREP0VA(R8) ; no pages yet, should it be deleted first
         MOVL    #VA$C_P1END, PCB$L_FREP1VA(R8)
+        MOVL    #VA$C_P1END, PCB$L_CTLBASVA(R8)
         MOVAQ   PCB$Q_ASTQFL(R8), R0    ; no ASTs, all of them enabled
         MOVL    R0, (R0)
         MOVL    R0, 4(R0)
@@ -480,6 +481,7 @@ EXE$PROCSTRT::
         .EXCEPTION_ENTRY
         MOVL    SCH$GL_CURPCB, R4
         MOVL    #VA$C_STACKS, PCB$L_FREP1VA(R4)
+        MOVL    #VA$C_STACKS, PCB$L_CTLBASVA(R4)
         MOVL    #VA$C_STACKS, R0
         MOVL    #<VA$C_ESP-VA$C_STACKS>/MMG$C_PAGESIZE, R1
         MOVL    #EW, R2
@@ -628,7 +630,8 @@ IMG$ACTIVATE::
         BLSSU   95$
         CMPL    R11, #VA$C_STACKS
         BGTRU   95$
-        MOVL    R9, PCB$L_FREP1VA(R4)
+        MOVL    R9, PCB$L_FREP1VA(R4)       ; P1 outlives the images from here up
+        MOVL    R9, PCB$L_CTLBASVA(R4)
         MOVL    #SW, R6
         MOVL    #SR, R7
 35$:    CLRL    R2                      ; where it is linked
@@ -1060,7 +1063,8 @@ EXHLIST:
 
 ; EXE$IMGRUNDOWN: R4 = the current PCB. Gives back what the image that ran
 ; in it holds: its user mode locks, its timer queue entries, its user
-; mode ASTs, its pages in P0, its common event flag clusters, its user
+; mode ASTs, its pages in P0 and those it made in P1, below the part
+; of P1 that outlives it, its common event flag clusters, its user
 ; mode exit handlers, and its channels and files, all but the command interpreter's, PCB$L_CLICHANS
 ; and PCB$L_CLIFILES, whose I/O is cancelled first, while P0 is still
 ; there, and the privileges it enabled: the current ones are the
@@ -1083,6 +1087,7 @@ EXE$IMGRUNDOWN::
         CLRL    R2
         BSBW    EXE$RMVTIMQ
         BSBB    DELP0
+        BSBB    DELP1
         DSBINT  #IPL$_SYNCH
         MOVL    #PSL$C_USER, R0
         BSBW    EXE$FLUSHAST
@@ -1107,6 +1112,19 @@ DELP0:
         BSBW    MMG$DELPAG
 10$:    MOVL    #VA$C_P0BASE, PCB$L_FREP0VA(R4)
         RSB
+
+; DELP1: R4 = the current PCB. Deletes the pages its image made in P1,
+; below PCB$L_CTLBASVA, where the stacks and the command interpreter
+; start, as VMS's MMG$IMGRESET does below CTL$GL_CTLBASVA. Uses R0-R3.
+DELP1:
+        .JSB_ENTRY  SCRATCH=<R2, R3>
+        MOVL    PCB$L_FREP1VA(R4), R0
+        SUBL3   R0, PCB$L_CTLBASVA(R4), R1
+        BLEQ    10$
+        ASHL    #-MMG$C_VPCTX, R1, R1
+        BSBW    MMG$DELPAG
+        MOVL    PCB$L_CTLBASVA(R4), PCB$L_FREP1VA(R4)
+10$:    RSB
 
 ; EXE$RUNDOWN: R4 = the current PCB. Gives back what its process holds:
 ; what EXE$IMGRUNDOWN does, then its other files, before its other locks,
