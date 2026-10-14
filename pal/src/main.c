@@ -14,12 +14,12 @@
  * VAX's interval timer interrupt, preempting the current thread
  * (docs/adr/0004-interval-timer-is-a-pal-thread.md).
  *
- * A process also has a thread for each outer access mode it enters,
- * executive, supervisor and user, each in an address space of its own that
- * holds the pages that mode may read; CHMx, REI, interrupts and exceptions
- * move the CPU between a process's threads
- * (docs/adr/0005-access-modes-are-threads.md). The kernel-mode threads share
- * the executive's address space, whose P0 and P1 are the current process's.
+ * A process has a thread for each access mode it enters, each in an
+ * address space of its own that caches the pages that mode may read, filled
+ * on faults from the executive's PTEs as Alpha PALcode filled the TLB; CHMx,
+ * REI, interrupts and exceptions move the CPU between a process's threads
+ * (docs/adr/0005-access-modes-are-threads.md,
+ * docs/adr/0037-all-ram-and-address-spaces-filled-on-faults.md).
  *
  * The kernel is built with the MCS API (KernelIsMCS in kernel/config.cmake):
  * a thread runs only while it holds a scheduling context with budget left,
@@ -765,70 +765,23 @@ static uint8_t *pfn_ptr(seL4_Word pfn)
 }
 
 /*
- * A PTE that maps a PFN: where, and a copy of the frame's capability for
- * each mode's address space, made as needed, since seL4 maps a capability
- * at one address. Each PFN has a list of its mappings, a global section's
- * pages more than one.
+ * A page mapped in an address space: a copy of its frame's capability,
+ * since seL4 maps a capability at one address, on its PFN's list and on
+ * its context's. The address spaces are a cache of the executive's PTEs,
+ * as Alpha's TLB was (ADR-0037).
  */
 struct pmap {
-	seL4_Word va;
-	struct ctx *c;	   /* whose P0 or P1, 0 for S0 */
-	seL4_CPtr cap[4];  /* in kernel mode's address space, and modes 1-3's */
-	struct pmap *next; /* the PFN's other mappings */
+	seL4_Word va;	/* and the mode whose address space, in its low bits */
+	struct ctx *c;	/* whose address space */
+	seL4_CPtr cap;
+	struct pmap *next, **prev;   /* on its PFN's list */
+	struct pmap *cnext, **cprev; /* on its context's */
 };
 static struct pmap *pmap_free;
 
 static struct pmap **pfn_maps(seL4_Word pfn)
 {
 	return (struct pmap **)table(T_PFN, (pfn + 1) * sizeof(struct pmap *)) + pfn;
-}
-
-/* The cap that maps p, a mapping of pfn, in mode m's address space. */
-static seL4_CPtr map_cap(struct pmap *p, unsigned pfn, int m)
-{
-	if (!p->cap[m])
-		p->cap[m] = mint(frame_cap(pfn), 0);
-	return p->cap[m];
-}
-
-/* pfn's mapping at va in c's P0 or P1, or in S0 if c is 0. */
-static struct pmap *find_map(unsigned pfn, struct ctx *c, seL4_Word va)
-{
-	for (struct pmap *p = *pfn_maps(pfn); p; p = p->next)
-		if (p->va == va && p->c == c)
-			return p;
-	die("no such mapping", va);
-}
-
-/* A new mapping of pfn at va. */
-static struct pmap *add_map(unsigned pfn, struct ctx *c, seL4_Word va)
-{
-	if (!pmap_free) {
-		struct pmap *p = page();
-		for (unsigned i = 0; i < PAGE_SIZE / sizeof *p; i++) {
-			p[i].next = pmap_free;
-			pmap_free = &p[i];
-		}
-	}
-	struct pmap *p = pmap_free, **head = pfn_maps(pfn);
-	pmap_free = p->next;
-	*p = (struct pmap){ va, c, { 0 }, *head };
-	*head = p;
-	return p;
-}
-
-/* Forgets p, a mapping of pfn its caps no longer map anywhere. */
-static void drop_map(unsigned pfn, struct pmap *p)
-{
-	for (int m = 0; m < 4; m++)
-		if (p->cap[m])
-			free_slot(p->cap[m]);
-	struct pmap **l = pfn_maps(pfn);
-	while (*l != p)
-		l = &(*l)->next;
-	*l = p->next;
-	p->next = pmap_free;
-	pmap_free = p;
 }
 
 /*
@@ -850,9 +803,7 @@ static void drop_map(unsigned pfn, struct pmap *p)
  * gives: a mode may do what an outer one may, and write only what it may
  * read.
  */
-enum { PTE_VALID = 1, PTE_FOE = 8, PTE_KR = 0x100, PTE_KW = 0x1100, PTE_RE = 0xf00,
-       PTE_OUTER_RE = 0xe00 };
-static seL4_CPtr exec_vspace;
+enum { PTE_VALID = 1, PTE_FOE = 8, PTE_KR = 0x100, PTE_KW = 0x1100, PTE_RE = 0xf00 };
 static uint64_t *s0_dir[SPACE_END >> TABLE_BITS];
 
 static int is_s0(seL4_Word va)
@@ -895,11 +846,11 @@ static int well_formed(uint64_t pte)
  */
 static struct ctx {
 	seL4_Word hwpcb; /* the executive's HWPCB address; 0: a free slot */
-	/* A thread for each mode it has entered, and the mode's address space:
-	 * the executive's for kernel mode, one of its own for each other. */
+	/* A thread for each mode it has entered, and the mode's address space. */
 	seL4_CPtr tcb[4], vspace[4], reply;
 	int started, mode, prvmode; /* the PSL's current and previous modes */
 	uint64_t *dir[SPACE_END >> TABLE_BITS]; /* its P0 and P1 PTE tables */
+	struct pmap *maps;			/* what its address spaces map */
 	/* Its PAL call's message while it waits in one: x0-x7, the svc's PC. */
 	seL4_Word mr[seL4_UnknownSyscall_FaultIP + 1];
 } *ctx, *cur;
@@ -916,169 +867,146 @@ static uint64_t *pte_at(seL4_Word va, int make)
 	return *t ? &(*t)[va >> seL4_PageBits & 511] : 0;
 }
 
-/* Maps a page as pte says in vspace, with what mode m may do with it. */
-static void map_pte(seL4_CPtr frame, seL4_CPtr vspace, seL4_Word va, uint64_t pte, int m)
+/* Forgets p, and so unmaps it: its capability goes. */
+static void uncache_one(struct pmap *p)
 {
-	seL4_CapRights_t rights = can_write(pte, m) ? seL4_ReadWrite : seL4_CanRead;
-	seL4_ARM_VMAttributes attr = seL4_ARM_Default_VMAttributes;
-	if (pte & PTE_FOE)
-		attr |= seL4_ARM_ExecuteNever;
-	map(frame, vspace, va, rights, attr);
+	free_slot(p->cap);
+	if ((*p->prev = p->next))
+		p->next->prev = p->prev;
+	if ((*p->cprev = p->cnext))
+		p->cnext->cprev = p->cprev;
+	p->next = pmap_free;
+	pmap_free = p;
 }
 
-static void unmap(seL4_CPtr frame)
+/* Unmaps pfn at va from c's address spaces, or every context's if c is 0. */
+static void uncache(unsigned pfn, struct ctx *c, seL4_Word va)
 {
-	seL4_Error err = frame ? seL4_ARM_Page_Unmap(frame) : seL4_NoError;
-	if (err)
-		die("seL4_ARM_Page_Unmap failed", err);
-}
-
-/*
- * Maps a P0 or P1 page of c's, p, in the address spaces of each mode it
- * has entered that may read it, or unmaps it from all of them. Kernel
- * mode's is the executive's, which holds only the current process's pages.
- */
-static void map_page(struct ctx *c, struct pmap *p, uint64_t pte, int on)
-{
-	unsigned pfn = pte_pfn(pte);
-	for (int m = 0; m < 4; m++) {
-		if (!on) {
-			unmap(p->cap[m]);
-			continue;
-		}
-		if (!c->tcb[m] || !can_read(pte, m) || (!m && c != cur))
-			continue;
-		map_pte(map_cap(p, pfn, m), c->vspace[m], p->va, pte, m);
+	for (struct pmap *p = *pfn_maps(pfn), *n; p; p = n) {
+		n = p->next;
+		if ((p->va & ~3UL) == va && (!c || p->c == c))
+			uncache_one(p);
 	}
 }
 
 /*
- * The S0 pages an outer mode may read, such as the system service vector:
- * each mode's address space of each process maps them when it is made.
- * ponytail: their protection is set before any outer mode runs, and stays.
+ * When the share runs low, the other contexts' address spaces lose what
+ * they map: they fill it again on faults, and their records and slots go to
+ * those that need them.
+ * ponytail: all of them, not the least used; their page tables stay.
  */
-static struct {
-	seL4_Word va;
-	uint64_t pte;
-} shared[8];
-static unsigned nshared;
-static int outer_started;
+static int evicting;
 
-static int outer(uint64_t pte)
+static void evict_others(void)
 {
-	return mapped(pte) && pte & PTE_OUTER_RE;
+	evicting = 1;
+	for (struct ctx *c = ctx; c < ctx + nctx; c++)
+		while (c != cur && c->maps)
+			uncache_one(c->maps);
+	evicting = 0;
+}
+
+/* Maps va's page as pte says in mode m's address space of c, with what m
+ * may do with it, and records it. */
+static void cache(struct ctx *c, int m, seL4_Word va, uint64_t pte)
+{
+	if (!pmap_free && share_free() < SHARE_SLACK && !evicting)
+		evict_others();
+	if (!pmap_free) {
+		struct pmap *p = page();
+		for (unsigned i = 0; i < PAGE_SIZE / sizeof *p; i++) {
+			p[i].next = pmap_free;
+			pmap_free = &p[i];
+		}
+	}
+	struct pmap *p = pmap_free, **head = pfn_maps(pte_pfn(pte));
+	pmap_free = p->next;
+	*p = (struct pmap){ va | m, c, mint(frame_cap(pte_pfn(pte)), 0), *head, head, c->maps,
+			    &c->maps };
+	if (*head)
+		(*head)->prev = &p->next;
+	*head = p;
+	if (c->maps)
+		c->maps->cprev = &p->cnext;
+	c->maps = p;
+	seL4_ARM_VMAttributes attr = seL4_ARM_Default_VMAttributes;
+	if (pte & PTE_FOE)
+		attr |= seL4_ARM_ExecuteNever;
+	map(p->cap, c->vspace[m], va, can_write(pte, m) ? seL4_ReadWrite : seL4_CanRead, attr);
+}
+
+/*
+ * A fault of mode m of the current context at va: if its PTE lets m make
+ * the access, and the page isn't in m's address space already, it is now,
+ * and fill returns 1 for the thread to go on. The PAL fills the address
+ * spaces on faults as Alpha PALcode filled the TLB on a miss.
+ */
+static int fill(int m, seL4_Word va, int write, int exec)
+{
+	va &= ~(PAGE_SIZE - 1);
+	uint64_t *pte = va < SPACE_END ? pte_at(va, 0) : 0;
+	if (!pte || !mapped(*pte) || !can_read(*pte, m) || (write && !can_write(*pte, m)) ||
+	    (exec && *pte & PTE_FOE))
+		return 0;
+	for (struct pmap *p = *pfn_maps(pte_pfn(*pte)); p; p = p->next)
+		if (p->va == (va | m) && p->c == cur)
+			return 0; /* there, so it is a fault of another kind */
+	cache(cur, m, va, *pte);
+	return 1;
 }
 
 /*
  * WRPTE: makes va's page what pte says, mapped, unmapped or with a new
  * protection, and puts the PTE it had in *old. A page in P0 or P1 is the
  * current process's. A PFN may be mapped at any number of addresses, in
- * any number of processes: a global section's pages are. Fails, returning
+ * any number of processes: a global section's pages are. The old page
+ * leaves every address space that has it, as TBIS took it out of the TLB;
+ * the new one goes in the current process's at once for each mode that
+ * may read it and has run, since it is about to be used. Fails, returning
  * 0, for an address outside the executive's space, enables no protection
- * code gives, a PFN out of range, too little left of the PAL's share for the
- * mapping, or an S0 page outer modes may read once one of them runs.
+ * code gives, a PFN out of range, or too little left of the PAL's share.
  */
 static int wrpte(seL4_Word va, uint64_t pte, uint64_t *old)
 {
 	unsigned pfn = pte_pfn(pte);
 	int s0 = is_s0(va);
-	struct ctx *owner = s0 ? 0 : cur;
 	if (va % PAGE_SIZE || va < PAGE_SIZE || va >= SPACE_END || (!s0 && !cur))
 		return 0;
-	if (mapped(pte) && (!well_formed(pte) || pfn >= pfn_count || share_free() < SHARE_SLACK))
+	if (mapped(pte) &&
+	    (!well_formed(pte) || pfn >= pfn_count || share_free() < SHARE_SLACK / 2))
 		return 0;
 	uint64_t none = 0, *slot = pte_at(va, mapped(pte));
 	if (!slot)
 		slot = &none; /* unmapping a page in no table: nothing there */
-	if (s0 && (outer(pte) || outer(*slot)) &&
-	    (outer_started || (!outer(*slot) && nshared == sizeof shared / sizeof shared[0])))
-		return 0;
 	*old = *slot;
-	struct pmap *p = 0;
-	if (mapped(*old)) {
-		unsigned o = pte_pfn(*old);
-		p = find_map(o, owner, va);
-		if (s0)
-			unmap(p->cap[0]);
-		else
-			map_page(cur, p, *old, 0);
-		if (!mapped(pte) || o != pfn) { /* the same PFN keeps its mapping's caps */
-			drop_map(o, p);
-			p = 0;
-		}
-	}
+	if (mapped(*old))
+		uncache(pte_pfn(*old), s0 ? 0 : cur, va);
 	*slot = pte;
-	if (s0) {
-		unsigned i = 0;
-		while (i < nshared && shared[i].va != va)
-			i++;
-		if (outer(pte)) {
-			shared[i].va = va;
-			shared[i].pte = pte;
-			nshared += i == nshared;
-		} else if (i < nshared) {
-			shared[i] = shared[--nshared];
-		}
-	}
 	if (!mapped(pte))
 		return 1;
 	pfn_ptr(pfn);
-	if (!p)
-		p = add_map(pfn, owner, va);
-	if (s0)
-		map_pte(map_cap(p, pfn, 0), exec_vspace, va, pte, 0);
-	else
-		map_page(cur, p, pte, 1);
 	if (!(pte & PTE_FOE)) {
-		seL4_Error err = seL4_ARM_Page_Unify_Instruction(p->cap[0], 0, PAGE_SIZE);
+		seL4_Error err = seL4_ARM_Page_Unify_Instruction(frame_cap(pfn), 0, PAGE_SIZE);
 		if (err)
 			die("seL4_ARM_Page_Unify_Instruction failed", err);
 	}
+	for (int m = 0; cur && m < 4; m++)
+		if (cur->tcb[m] && can_read(pte, m))
+			cache(cur, m, va, pte);
 	return 1;
 }
 
-/*
- * The executive's kernel mode sees the current process's P0 and P1: on a
- * switch, the PAL unmaps the old one's pages there (on = 0) and maps the new
- * one's. seL4 can't swap a page table in and out, since unmapping one clears
- * it (ADR-0005).
- * ponytail: a seL4 call per page of the two processes; an address space of
- * its own per process, with S0 in each, when switches cost too much.
- */
-static void kernel_space(struct ctx *c, int on)
-{
-	for (seL4_Word i = 0; i < SPACE_END >> TABLE_BITS; i++)
-		for (unsigned j = 0; c->dir[i] && j < 512; j++) {
-			uint64_t pte = c->dir[i][j];
-			seL4_Word va = i << TABLE_BITS | j << seL4_PageBits;
-			if (!mapped(pte))
-				continue;
-			struct pmap *p = find_map(pte_pfn(pte), c, va);
-			if (on)
-				map_pte(map_cap(p, pte_pfn(pte), 0), exec_vspace, va, pte, 0);
-			else
-				unmap(p->cap[0]);
-		}
-}
-
-/* Takes back c's P0 and P1 when its context is deleted: the pages the
- * executive left there, and the tables. */
+/* Takes back c's address spaces and its P0 and P1 when its context is
+ * deleted: the pages they map, and the tables. */
 static void free_space(struct ctx *c)
 {
-	for (seL4_Word i = 0; i < SPACE_END >> TABLE_BITS; i++) {
-		uint64_t *t = c->dir[i];
-		if (!t)
-			continue;
-		for (unsigned j = 0; j < 512; j++)
-			if (mapped(t[j])) {
-				unsigned pfn = pte_pfn(t[j]);
-				struct pmap *p = find_map(pfn, c, i << TABLE_BITS | j << seL4_PageBits);
-				map_page(c, p, t[j], 0);
-				drop_map(pfn, p);
-			}
-		free_page(t);
-		c->dir[i] = 0;
-	}
+	while (c->maps)
+		uncache_one(c->maps);
+	for (seL4_Word i = 0; i < SPACE_END >> TABLE_BITS; i++)
+		if (c->dir[i]) {
+			free_page(c->dir[i]);
+			c->dir[i] = 0;
+		}
 }
 
 /* The executive's quadword at va, which must be 8-byte aligned and mapped. */
@@ -1458,29 +1386,10 @@ static seL4_CPtr new_thread(seL4_CPtr vspace, seL4_Word badge)
 	return tcb;
 }
 
-/* A free slot for hwpcb, whose kernel-mode thread runs in the executive's
- * address space. */
-static struct ctx *new_ctx(seL4_Word hwpcb)
-{
-	struct ctx *c = find_ctx(0);
-	if (!c) {
-		ctx = table(T_CTX, (nctx + 1) * sizeof *ctx);
-		c = &ctx[nctx++];
-	}
-	if (!c->tcb[0]) {
-		c->vspace[0] = exec_vspace;
-		c->tcb[0] = new_thread(exec_vspace, ctx_badge(c, 0));
-		c->reply = alloc(seL4_ReplyObject, 0);
-	}
-	c->hwpcb = hwpcb;
-	c->started = c->mode = c->prvmode = 0;
-	return c;
-}
-
 /*
- * The context's thread for outer mode m, made the first time it enters
- * that mode, in an address space of its own: the process's pages m may
- * read, and the shared S0 ones.
+ * The context's thread for mode m, made the first time it enters that
+ * mode, in an address space of its own, which fills on faults: its
+ * process's pages and S0's that m may read (ADR-0037).
  */
 static void mode_thread(struct ctx *c, int m)
 {
@@ -1489,19 +1398,23 @@ static void mode_thread(struct ctx *c, int m)
 	c->vspace[m] = alloc(seL4_ARM_VSpaceObject, 0);
 	assign_asid(c->vspace[m]);
 	c->tcb[m] = new_thread(c->vspace[m], ctx_badge(c, m));
-	outer_started = 1;
-	for (unsigned i = 0; i < nshared; i++)
-		if (can_read(shared[i].pte, m))
-			map_pte(mint(frame_cap(pte_pfn(shared[i].pte)), 0), c->vspace[m],
-				shared[i].va, shared[i].pte, m);
-	for (seL4_Word i = 0; i < SPACE_END >> TABLE_BITS; i++)
-		for (unsigned j = 0; c->dir[i] && j < 512; j++) {
-			uint64_t pte = c->dir[i][j];
-			seL4_Word va = i << TABLE_BITS | j << seL4_PageBits;
-			if (mapped(pte) && can_read(pte, m))
-				map_pte(map_cap(find_map(pte_pfn(pte), c, va), pte_pfn(pte), m),
-					c->vspace[m], va, pte, m);
-		}
+}
+
+/* A free slot for hwpcb, and its kernel-mode thread. */
+static struct ctx *new_ctx(seL4_Word hwpcb)
+{
+	struct ctx *c = find_ctx(0);
+	if (!c) {
+		ctx = table(T_CTX, (nctx + 1) * sizeof *ctx);
+		c = &ctx[nctx++];
+	}
+	if (!c->tcb[0]) {
+		mode_thread(c, 0);
+		c->reply = alloc(seL4_ReplyObject, 0);
+	}
+	c->hwpcb = hwpcb;
+	c->started = c->mode = c->prvmode = 0;
+	return c;
 }
 
 /* PAL function codes (docs/design/0001-pal-interface.md). */
@@ -1787,9 +1700,7 @@ static int swpctx(seL4_Word hwpcb)
 		print("%%PAL-F-SWPCTX, no context for HWPCB 0x%lx\n", hwpcb);
 		return 0;
 	}
-	kernel_space(from, 0);
 	cur = to;
-	kernel_space(to, 1);
 	if (to->started) {
 		/* Blocked in its own SWPCTX: ret() replies to it. */
 		return ret(from->hwpcb);
@@ -1881,11 +1792,17 @@ static int serve_one(seL4_MessageInfo_t msg)
 	case seL4_Fault_UnknownSyscall:
 		break;
 	case seL4_Fault_VMFault: {
-		/* The VAX's access violation parameters: a mask, bit 2 for a
-		 * write, then the address. ESR's WnR, bit 6, is a data abort's. */
+		/* A page the address space hasn't cached yet goes in, and the
+		 * thread goes on. Else the VAX's access violation parameters: a
+		 * mask, bit 2 for a write, then the address. ESR's WnR, bit 6, is a
+		 * data abort's. */
 		seL4_Word addr = seL4_GetMR(seL4_VMFault_Addr), pc = seL4_GetMR(seL4_VMFault_IP);
-		seL4_Word write = !seL4_GetMR(seL4_VMFault_PrefetchFault) &&
-				  seL4_GetMR(seL4_VMFault_FSR) >> 6 & 1;
+		seL4_Word exec = seL4_GetMR(seL4_VMFault_PrefetchFault);
+		seL4_Word write = !exec && seL4_GetMR(seL4_VMFault_FSR) >> 6 & 1;
+		if (fill(cur->mode, addr, write, exec)) {
+			seL4_Send(cur->reply, seL4_MessageInfo_new(0, 0, 0, 0));
+			return 1;
+		}
 		seL4_Word param[2] = { write << 2, addr };
 		if (exception(SCB_ACCVIO, pc, param, 2))
 			return 1;
@@ -2126,8 +2043,6 @@ static seL4_Word port_pfn; /* the port's first page */
 
 static void start_exec(void)
 {
-	exec_vspace = alloc(seL4_ARM_VSpaceObject, 0);
-	assign_asid(exec_vspace);
 	seL4_Word exe_size;
 	const uint8_t *exe_file = f11_boot_file(&exe_size);
 	if (!exe_file)
@@ -2199,12 +2114,14 @@ static void start_tcpip(void)
 		memcpy((uint8_t *)(TCPIP_PAL_VA + va - TCPIP_BASE), elf + off, filesz);
 	}
 	seL4_ARM_Page_GetAddress_t pa = seL4_ARM_Page_GetAddress(page);
-	unmap(page);
+	seL4_Error err = seL4_ARM_Page_Unmap(page);
+	if (err)
+		die("seL4_ARM_Page_Unmap failed", err);
 
 	seL4_CPtr vspace = alloc(seL4_ARM_VSpaceObject, 0);
 	assign_asid(vspace);
 	map(page, vspace, TCPIP_BASE, seL4_ReadWrite, seL4_ARM_Default_VMAttributes);
-	seL4_Error err = seL4_ARM_Page_Unify_Instruction(page, 0, 1UL << seL4_LargePageBits);
+	err = seL4_ARM_Page_Unify_Instruction(page, 0, 1UL << seL4_LargePageBits);
 	if (err)
 		die("seL4_ARM_Page_Unify_Instruction failed", err);
 	for (seL4_Word i = 0; i < PORT_PAGES; i++)

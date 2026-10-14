@@ -100,10 +100,10 @@ note = "ADR-0037 decisions 2 and 3: a share of RAM for the PAL's objects, a CSpa
 [[feature]]
 id = "tlb-fill"
 title = "Address spaces filled on a fault from the PAL's PTEs, as Alpha PALcode filled the TLB"
-status = "todo"
+status = "done"
 milestone = "m1"
 needs = ["#frame-caps"]
-note = "ADR-0037 decisions 4 and 5. A mode's fault on a page its PTE lets it reach is mapped and the thread resumes; WRPTE unmaps a page wherever it is cached. SWPCTX then maps nothing, and kernel mode can have a space per process; t8y:/exec/capacity#switch-cost"
+note = "ADR-0037 decisions 4 and 5: fill() on a fault the PTE allows; WRPTE unmaps a page wherever it is cached; other processes' caches go when the share runs low"
 
 [[feature]]
 id = "page-faults"
@@ -185,9 +185,9 @@ of its own ([ADR-0004](../../adr/0004-interval-timer-is-a-pal-thread.md)),
 maps pages on `WRPTE` because the executive can't write seL4's page
 tables, and drives the virtio disks, the entropy device and the UART.
 It takes all the RAM seL4 gives it, keeps a share for its own objects and
-gives the rest to the executive as PFNs
-([ADR-0037](../../adr/0037-all-ram-and-address-spaces-filled-on-faults.md));
-a seL4 call per page on each process switch is `t8y:/exec/capacity`'s,
-and its other limits are PRD-0003 tier 4: polled devices at fixed
-addresses. A page fault is an access violation, so the executive can't
-page yet.
+gives the rest to the executive as PFNs, and fills each thread's address
+space on faults from the executive's PTEs, as PALcode filled the TLB
+([ADR-0037](../../adr/0037-all-ram-and-address-spaces-filled-on-faults.md)).
+Its other limits are PRD-0003 tier 4: polled devices at fixed addresses.
+A fault on a page whose PTE isn't valid is an access violation, so the
+executive can't page yet.

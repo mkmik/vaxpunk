@@ -217,7 +217,7 @@ until the hardware or size changes; leave it.
 | 7 | `$ASCTIM`, `$NUMTIM` (PRD-0004's pilot, `numtim.b64`) and the date in `SHOW PROCESS` and `SHOW SYSTEM` done; left: `$BINTIM`, `SHOW TIME` | *Batch and print* |
 | 8 | Owners and protection done (step 2); left: a new file has the default protection, not the process's (`f11wrt.mar`), which `LOGINOUT` sets from the UAF; no version limit (`rms.mar`'s `$CREATE_DIR`) | *Privileges, UICs and protection* |
 | 9 | Terminals, `TNAn:` too, listed from their UCBs (step 3); left: `BGA0:` and its units aren't seen by `$DEVICE_SCAN` and `$GETDVI`; a VCB stands for a disk in `$GETDVI` rather than its UCB (`netdriver.mar`, `getdvi.mar`, DESIGN-0002 *Devices*) | Every device listed from its UCB |
-| 39 | Sized for the demo: a seL4 call per page on a process switch (`main.c`); 32 process slots (`$STATEDEF`); 512 KB of pool (`memory.mar`); 15 open files a process (`rms.mar`). All of RAM is PFNs now. Tracked in `t8y:/exec/capacity` | *Capacity*: ADR-0037 |
+| 39 | Sized for the demo: 32 process slots (`$STATEDEF`); 512 KB of pool (`memory.mar`); 15 open files a process (`rms.mar`). All of RAM is PFNs now. Tracked in `t8y:/exec/capacity` | *Capacity*: ADR-0037 |
 
 ### Tier 2: can crash or lose data
 
@@ -265,7 +265,7 @@ says what replaces it; this PRD doesn't schedule them.
 | --- | --- |
 | 37 | Disk I/O polled and synchronous, the CPU waits for each request; the file system doesn't wait on a queued IRP (ADR-0007, ADR-0015, DESIGN-0001, DESIGN-0002, `main.c`) |
 | 38 | The console UART polled each 10 ms tick, at QEMU virt's fixed address; device addresses not from the DTB (DESIGN-0001, `main.c`) |
-| 40 | A seL4 call per page to switch the kernel's view of two processes; page protection set once; the tick a PAL thread (ADR-0004, ADR-0005, `main.c`) |
+| 40 | The tick a PAL thread (ADR-0004, `main.c`) |
 | 41 | The TCP/IP component's page mapped writable and executable; frames copied, no offloads (`main.c`, `pal/tcpip/src/main.c`) |
 | 42 | Power off works under TCG only; with HVF the `HLT` is a fault (`main.c`, ADR-0008) |
 | 43 | `EMUL` is signed, so the clock's seconds fit until 2038 (`timeschdl.mar`, DESIGN-0002) |
