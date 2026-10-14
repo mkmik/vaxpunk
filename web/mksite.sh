@@ -1,8 +1,8 @@
 #!/bin/sh
 # Put the GitHub Pages site together in SITE: web/index.html at /, the API reference
-# (cargo run -p apidoc) at /docs/, the map (cargo run -p todography -- build) at /map/
-# and the demo at /demo/, with QEMU from QEMU (qemu-wasm.sh's DIR) and the gzipped
-# firmware and disks from IMAGES (boot.yml's demo-images). Needs npm.
+# at /docs/ and the map at /map/, both built here, and the demo at /demo/, with QEMU
+# from QEMU (qemu-wasm.sh's DIR) and the gzipped firmware and disks from IMAGES
+# (boot.yml's demo-images). Needs cargo, go and npm.
 # Usage: mksite.sh SITE QEMU IMAGES
 set -eu
 
@@ -11,6 +11,7 @@ site=$1 qemu=$2 images=$3
 rm -rf "$site"
 mkdir -p "$site/demo/vendor"
 site=$(cd "$site" && pwd)
+(cd "$root" && cargo run -p apidoc && cargo run -p todography -- build)
 cp "$root/web/index.html" "$root/apidoc/page.css" "$site/"
 cp -R "$root/docs/api" "$site/docs"
 cp -R "$root/out/map" "$site/map"
