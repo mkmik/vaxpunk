@@ -1,12 +1,12 @@
 +++
 title = "File system locking"
-summary = "How the XQP serializes: one mutex, FIL$LOCK; locks per volume and file next"
+summary = "One mutex, FIL$LOCK, and an access arbitration lock per open file; per-volume locks next"
 aka = ["FIL$LOCK", "FIL$UNLOCK", "XQP locks", "access arbitration", "volume allocation lock", "file serialization lock"]
 kind = "core"
 intent = "goal"
 research = "outline"
 milestone = "m1"
-refs = ["docs/adr/0020-file-system-lock-below-ipl-synch.md", "docs/adr/0030-lock-manager-in-the-executive.md", "docs/prd/0003-multi-user-vms.md", "docs/design/0002-executive-processes.md", "vms/exec/f11.mar", "vms/sysexe/fstest.mar"]
+refs = ["docs/adr/0020-file-system-lock-below-ipl-synch.md", "docs/adr/0030-lock-manager-in-the-executive.md", "docs/adr/0036-file-access-arbitration-locks.md", "vms/exec/rms.mar", "docs/prd/0003-multi-user-vms.md", "docs/design/0002-executive-processes.md", "vms/exec/f11.mar", "vms/sysexe/fstest.mar"]
 
 [[feature]]
 id = "mutex"
@@ -24,19 +24,19 @@ note = "ADR-0030 follow-up: per-volume locks need them; F11$AB_IRP and F11$GL_VC
 
 [[feature]]
 id = "per-volume"
-title = "A lock per volume and per file on the lock manager, in place of FIL$LOCK"
+title = "A lock per volume and per file header on the lock manager, in place of FIL$LOCK"
 status = "todo"
 milestone = "m1"
 needs = ["/exec/lock-manager#enq-deq", "#per-volume-state"]
-note = "PRD-0003 step 7 and tier 1 #5, in an ADR that supersedes ADR-0020"
+note = "ADR-0036 kept FIL$LOCK; an ADR that supersedes ADR-0020 once the state is per volume"
 
 [[feature]]
 id = "arbitration"
-title = "Access arbitration: a writer excludes other opens; an open file isn't deleted"
-status = "todo"
+title = "Access arbitration: a lock per open file, its mode from FAB$B_FAC and FAB$B_SHR; an open file deleted at its last close"
+status = "done"
 milestone = "m1"
-needs = ["#per-volume"]
-note = "PRD-0003 step 7 and tier 1 #5; rms.mar: $ERASE deletes an open file"
+refs = ["docs/adr/0036-file-access-arbitration-locks.md"]
+note = "PRD-0003 step 7; ponytail: a writer that shares writing is PW, not CW"
 
 [[feature]]
 id = "holder-checks"
@@ -69,9 +69,14 @@ is in the file system
 ([ADR-0020](../../adr/0020-file-system-lock-below-ipl-synch.md));
 `FSTEST` checks two processes waiting for each other's lock at boot. One
 lock means one volume's work waits for another's, and a low-priority
-holder can delay a high-priority waiter. PRD-0003's step 7 replaces it
-with locks per volume and per file on the lock manager
-([ADR-0030](../../adr/0030-lock-manager-in-the-executive.md), not
-built yet), which first needs the file system's buffers split per volume.
-The same step adds access arbitration, which RMS's file sharing
-(`t8y:/rms/sharing`) stands on.
+holder can delay a high-priority waiter. Locks per volume and per
+header on the lock manager would replace it, once the file system's
+buffers are split per volume.
+
+Access arbitration is on the lock manager already
+([ADR-0036](../../adr/0036-file-access-arbitration-locks.md)): each RMS
+open holds a kernel mode lock on `F11B$a`, the device and the file ID,
+in a mode from `FAB$B_FAC` and `FAB$B_SHR`, never queued, so a
+conflicting open fails with `RMS$_FLK`. `$ERASE` of an open file takes
+its directory entry and marks it for delete, and the last to close it
+deletes it. RMS's file sharing (`t8y:/rms/sharing`) stands on it.

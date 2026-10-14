@@ -67,6 +67,7 @@ same commit; `cargo run -p todography -- lint` checks it.
 | [ADR-0033](adr/0033-pseudo-terminals-are-a-port-of-the-terminal-driver.md) | A pseudo terminal, FTAn, is a third port of the terminal driver, cloned from FTA0:, and the PTD$ routines are $QIO calls in the vector | Proposed |
 | [ADR-0034](adr/0034-forms-grammar-as-data-and-form-files-as-trees.md) | FORMS has IFDL's grammar as data, and a .FORM file is the tree it parses, with the names of its rules | Proposed |
 | [ADR-0035](adr/0035-deadlock-search-after-deadlock-wait.md) | A lock request is searched for a deadlock once it has waited DEADLOCK_WAIT seconds, as on VMS | Accepted |
+| [ADR-0036](adr/0036-file-access-arbitration-locks.md) | Each open of a file holds an access arbitration lock on the lock manager, and an open file that is deleted goes at its last close | Proposed |
 
 ### PRDs
 

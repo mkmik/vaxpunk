@@ -143,12 +143,12 @@ In the executive, for one node: [ADR-0030](../adr/0030-lock-manager-in-the-execu
   `SYSTEM` and `VALBLK` flags, completion and blocking ASTs, and
   deadlock detection that fails one request with `SS$_DEADLOCK`.
 - Resource names are qualified by access mode and UIC group, as on VMS.
-- The file system takes a lock per volume and per file, in place of
-  `FIL$LOCK` (closing ADR-0020's notes), and the holder's priority is no
-  longer a problem because two volumes no longer wait on each other.
-- RMS shares a file between processes: `FAB$B_SHR` with `SHRGET`,
-  `SHRPUT`, `UPI`; `RMS$_FLK` when it can't. `$ERASE` of an open file
-  says so (closing `rms.mar`'s note).
+- Each open of a file holds its access arbitration lock, so RMS shares a
+  file between processes as `FAB$B_FAC` and `FAB$B_SHR` say, with
+  `RMS$_FLK` when it can't; `$ERASE` of an open file deletes it at its
+  last close, as on VMS (done, [ADR-0036](../adr/0036-file-access-arbitration-locks.md)).
+  The file system takes a lock per volume in place of `FIL$LOCK`
+  (closing ADR-0020's notes) once its state is per volume.
 - `SHOW PROCESS/QUOTAS` shows the enqueue quota left. No DCL command
   lists locks on VMS; SDA's `SHOW LOCKS` does, and there is no SDA yet.
 
@@ -212,7 +212,7 @@ until the hardware or size changes; leave it.
 | 2 | Done (step 4, [ADR-0029](../adr/0029-loginout-and-sysuaf.md)): `LOGINOUT` on the console and `TELNETD`'s terminals, the UAF picks the command interpreter, `STARTUP` runs `SYSTARTUP_VMS.COM`; left: the console asks for a username again at once, not at a key (`exec.mar`); `SET PASSWORD`'s privilege is a fixed list of known images until `INSTALL` (`process.mar`) | *Login* |
 | 3 | Terminals per UCB done, with `TNAn:` for `SET HOST` (step 3, ADR-0027); a hangup deletes the terminal's process; left: no `$BRKTHRU`; at most 9 `TNAn:` units (`ttdriver.mar`, DESIGN-0002 *I/O*) | *Terminals*, and `LOGINOUT` for the hangup |
 | 4 | No quotas: `BIOLM`, `DIOLM`, `BYTLM` (ADR-0013), `BUFQUO` (ADR-0019), ASTs (DESIGN-0002 *ASTs*); `$GETJPI` has no CPU times, quotas or counts (`getjpi.mar`, `show.mar`) | *Quotas* |
-| 5 | The lock manager done (step 6, [ADR-0030](../adr/0030-lock-manager-in-the-executive.md), [ADR-0035](../adr/0035-deadlock-search-after-deadlock-wait.md)); left: `ENQLM` (step 5), the `$ENQ` and `$DEQ` flags no program uses yet, `DEADLOCK_WAIT` a cell for want of SYSGEN (`locking.b64`, `sysenqdeq.mar`); one file system lock for every volume, no per-file lock, no priority boost (ADR-0020, `f11.mar`, DESIGN-0002 *Files*); no file sharing or locking, `$ERASE` deletes an open file (ADR-0009, `rms.mar`) | *Lock manager* |
+| 5 | The lock manager done (step 6, [ADR-0030](../adr/0030-lock-manager-in-the-executive.md), [ADR-0035](../adr/0035-deadlock-search-after-deadlock-wait.md)), and files' access arbitration on it, `$ERASE` of an open file deleting it at its last close (step 7, [ADR-0036](../adr/0036-file-access-arbitration-locks.md)); left: `ENQLM` (step 5), the `$ENQ` and `$DEQ` flags no program uses yet, `DEADLOCK_WAIT` a cell for want of SYSGEN (`locking.b64`, `sysenqdeq.mar`); one file system lock for every volume, its state global, no priority boost (ADR-0020, `f11.mar`, DESIGN-0002 *Files*); one writer a file, no bucket or record locks, until PRD-0008's step 9 (`rms.mar`) | *Lock manager* |
 | 6 | Block `IF`, `ON`, `SET [NO]ON`, `SET VERIFY`, the lexical functions, `OPEN`/`READ`/`WRITE`/`CLOSE` and data lines as `SYS$INPUT` done (step 8); left: an image's data lines go through a mailbox that replaces `SYS$INPUT`, for want of logical names' access modes and RMS on process-permanent files (`dcl/proc.mar`); `F$FAO` has some directives (`dcl/lexical.mar`) | *Command language* |
 | 7 | `$ASCTIM`, `$NUMTIM` (PRD-0004's pilot, `numtim.b64`) and the date in `SHOW PROCESS` and `SHOW SYSTEM` done; left: `$BINTIM`, `SHOW TIME` | *Batch and print* |
 | 8 | Owners and protection done (step 2); left: a new file has the default protection, not the process's (`f11wrt.mar`), which `LOGINOUT` sets from the UAF; no version limit (`rms.mar`'s `$CREATE_DIR`) | *Privileges, UICs and protection* |
@@ -340,10 +340,14 @@ Each step ends in something `cargo test -p boot` checks.
    `LOCKTEST`, as [ADR-0030](../adr/0030-lock-manager-in-the-executive.md)
    decides. *Visible:* `LOCKTEST: ok`. Done, with the deadlock search
    after `DEADLOCK_WAIT` ([ADR-0035](../adr/0035-deadlock-search-after-deadlock-wait.md)).
-7. **File system and RMS on locks.** A lock per volume and per file in
-   place of `FIL$LOCK`, in an ADR that supersedes ADR-0020; RMS sharing
-   (PRD-0008's step 9); `$ERASE` of an open file refused.
-   *Visible:* two sessions, `%RMS-E-FLK` on the second open for write.
+7. **File system and RMS on locks.** An access arbitration lock per open
+   file, which decides which opens may share it; `$ERASE` of an open file
+   marks it for delete, as VMS's does, rather than refusing it. Done
+   ([ADR-0036](../adr/0036-file-access-arbitration-locks.md)), keeping
+   ADR-0020's one lock until the file system's state is per volume; RMS's
+   record locks are PRD-0008's step 9.
+   *Visible:* while DCL has a file open for writing, `TYPE` of it says
+   `%RMS-E-FLK`; a file deleted while open is read to its end.
 8. **Command language.** Block `IF`, `ON`, `$STATUS`, `OPEN`/`READ`/`WRITE`/
    `CLOSE`, the lexical functions, image input from the procedure (done,
    in `dcl/proc.mar`, `lexical.mar` and `file.mar`).
