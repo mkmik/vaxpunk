@@ -907,10 +907,10 @@ EXECUTE:
         BEQL    40$                     ; no verb: a username
         CMPL    R4, R0
         BGTR    15$
-        PUSHL   R0
+        MOVL    R0, R7
         CMPC3   R4, WORK[R11], 1(R6)
-        MOVL    (SP)+, R0
         BEQL    20$
+        MOVL    R7, R0
 15$:    ADDL2   R0, R6
         INCL    R6
         INCL    R10

@@ -20,7 +20,7 @@
         $DVIDEF
         $JPIDEF
 
-        .EXTERNAL PTD$CREATE, PTD$READW, PTD$WRITE, PTD$DELETE
+        .EXTERNAL PTD$CREATE, PTD$READ, PTD$WRITE, PTD$DELETE, LIB$PUT_OUTPUT
 
 ; WAITFOR "text": reads the terminal until it has written text.
         .MACRO  WAITFOR TEXT, ?L
@@ -78,6 +78,11 @@ INADR:  .LONG   0, 0
 RDBUF:  .BLKB   4+256                   ; PTD$READ's: a status longword, then the data
 WRBUF:  .LONG   0                       ; PTD$WRITE's
         .BLKB   64
+SECS30: .LONG   -300000000, -1          ; how long a read may wait
+EFSTATE:.LONG   0
+DUMPDSC:.LONG   0                       ; what the terminal wrote last
+        .ADDRESS DUMP
+DUMP:   .BLKB   200
 ESCST:  .LONG   0                       ; 1 after ESC, 2 in a control sequence
 BUFLEN: .LONG   0
 BUF:    .BLKB   2048                    ; what the terminal wrote, not yet waited for
@@ -148,17 +153,31 @@ WAIT:
         MOVC3   R2, BUF[R4], BUF
         RSB
 
-; READ: PTD$READW what the terminal wrote, and appends it to BUF, but
-; escape sequences. BUF keeps its last half when it fills.
+; READ: PTD$READ what the terminal wrote, and appends it to BUF, but
+; escape sequences. BUF keeps its last half when it fills. If nothing
+; comes in 30 seconds, it writes the end of BUF on the console and exits
+; with 16.
 READ:
         .JSB_ENTRY
+        CLRL    RDBUF
         PUSHL   #256
         PUSHAB  RDBUF
         CLRQ    -(SP)
         PUSHL   CHAN
         PUSHL   #2
-        CALLS   #6, G^PTD$READW
+        CALLS   #6, G^PTD$READ
         BLBC    R0, 4$
+        $SETIMR_S EFN=#3, DAYTIM=SECS30
+1$:     $WFLOR_S EFN=#2, MASK=#^XC
+        TSTW    RDBUF
+        BNEQ    3$
+        $READEF_S EFN=#3, STATE=EFSTATE
+        CMPL    R0, #SS$_WASSET
+        BNEQ    2$
+        BSBW    TIMEOUT
+2$:     $CLREF_S EFN=#2                 ; set for something else
+        BRB     1$
+3$:     $CANTIM_S
         BLBS    RDBUF, 5$
 4$:     $EXIT_S #12                     ; hung up
 5$:     MOVZWL  RDBUF+2, R6
@@ -192,6 +211,33 @@ READ:
         MOVB    R0, BUF[R1]
         INCL    BUFLEN
         BRB     10$
+
+; TIMEOUT: writes the end of BUF, its control characters as dots, and
+; exits with 16.
+TIMEOUT:
+        .JSB_ENTRY
+        PRINT   "PHNTEST: timed out; JOE's terminal wrote last:"
+        MOVL    BUFLEN, R2
+        CMPL    R2, #200
+        BLEQ    10$
+        MOVL    #200, R2
+10$:    MOVL    R2, DUMPDSC
+        SUBL3   R2, BUFLEN, R3
+        CLRL    R4
+20$:    CMPL    R4, R2
+        BGEQ    40$
+        MOVZBL  BUF[R3], R0
+        CMPL    R0, #^A/ /
+        BGEQ    30$
+        MOVL    #^A/./, R0
+30$:    MOVB    R0, DUMP[R4]
+        INCL    R3
+        INCL    R4
+        BRB     20$
+40$:    PUSHAQ  DUMPDSC
+        CALLS   #1, G^LIB$PUT_OUTPUT
+        $EXIT_S #16
+        RSB
 
 ; TYPEIT: R1 = text, .ASCIC. Types it on the terminal.
 TYPEIT:
