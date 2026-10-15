@@ -19,4 +19,6 @@ can run over TCP/IP through TCP/IP Services' PWIP driver.
 Dropped in PRD-0002: "Not interesting to rebuild; for DECnet
 archaeology, run a real copy of VMS". vaxpunk does TCP/IP only, and
 takes DECnet's applications, remote login, remote files, mail and chat,
-over to TCP/IP.
+over to TCP/IP. DECnet's programming model, task-to-task links that
+programs open as `NODE::"TASK=name"`, could come back over WebSocket
+(t8y:/net/task-to-task).

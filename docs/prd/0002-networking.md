@@ -17,7 +17,7 @@ Decisions this PRD rests on:
 
 | Decision | Reason |
 | --- | --- |
-| No DECnet (Phase IV or V) | Not interesting to rebuild; for DECnet archaeology, run a real copy of VMS |
+| No DECnet (Phase IV or V) | Not interesting to rebuild; for DECnet archaeology, run a real copy of VMS. Its programming model may come back over WebSocket, an aspiration (t8y:/net/task-to-task) |
 | TCP/IP only | Historically fine: late VMS shipped TCP/IP Services alongside DECnet |
 | lwIP as the bootstrap stack | C, small, very widely deployed, already used in the seL4 driver framework |
 | Not gVisor netstack | Needs the Go runtime |
