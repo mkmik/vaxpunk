@@ -1,0 +1,215 @@
+        .TITLE  PHNTEST Answers a PHONE call as JOE
+        .IDENT  /V0.1/
+;
+; The boot test runs it at the console, as SYSTEM, once AUTHORIZE has
+; added JOE: it starts itself again as the process PHNTEST, and returns.
+; That one is JOE's other end: it makes a pseudo terminal, creates a
+; process there that runs LOGINOUT, as TELNETD does for a TELNET
+; terminal, and logs in as JOE, typing on the terminal with PTD$WRITE and
+; reading what it writes with PTD$READW, escape sequences left out. It
+; says so on the console; SYSTEM then dials JOE with PHONE. It waits for
+; the ring, answers it with PHONE ANSWER, waits for SYSTEM's hello in
+; SYSTEM's viewport, types hi there, waits for SYSTEM to hang up, leaves
+; PHONE with CTRL/Z, and deletes the terminal, which deletes JOE's
+; process. Each EXPECT checks a status; a failed one exits with 2 * N, and
+; a terminal that can't be read or typed on with 12 or 14.
+;
+        .LIBRARY "starlet.mlb"
+        .LIBRARY "sysexe.mlb"
+        $SSDEF
+        $DVIDEF
+        $JPIDEF
+
+        .EXTERNAL PTD$CREATE, PTD$READW, PTD$WRITE, PTD$DELETE
+
+; WAITFOR "text": reads the terminal until it has written text.
+        .MACRO  WAITFOR TEXT, ?L
+        .SAVE_PSECT LOCAL_BLOCK
+        .PSECT  $LITERAL$
+L:      .ASCIC  TEXT
+        .RESTORE_PSECT
+        MOVAB   L, R1
+        BSBW    WAIT
+        .ENDM   WAITFOR
+
+; TYPE "text": types text on the terminal; TYPELN "text" and RETURN.
+        .MACRO  TYPE    TEXT, ?L
+        .SAVE_PSECT LOCAL_BLOCK
+        .PSECT  $LITERAL$
+L:      .ASCIC  TEXT
+        .RESTORE_PSECT
+        MOVAB   L, R1
+        BSBW    TYPEIT
+        .ENDM   TYPE
+        .MACRO  TYPELN  TEXT, ?L
+        .SAVE_PSECT LOCAL_BLOCK
+        .PSECT  $LITERAL$
+L:      .ASCIC  TEXT<13>
+        .RESTORE_PSECT
+        MOVAB   L, R1
+        BSBW    TYPEIT
+        .ENDM   TYPELN
+
+        .PSECT  DATA, NOEXE, WRT, LONG
+SELF:   .ASCID  "PHNTEST.EXE"
+ROBOT:  .ASCID  "PHNTEST"
+ROBOTNAM:
+        .ASCII  "PHNTEST"
+CTRLZ:  .ASCIC  <26>
+LOGINOUT:
+        .ASCID  "LOGINOUT.EXE"
+MYNAME: .BLKB   16
+MYLEN:  .WORD   0
+NAMITEM:.WORD   15, JPI$_PRCNAM
+        .ADDRESS MYNAME
+        .ADDRESS MYLEN
+        .LONG   0
+CHAN:   .LONG   0                       ; the control connection
+NAMLEN: .LONG   0
+NAME:   .BLKB   16
+NAMDSC: .LONG   0
+        .ADDRESS NAME
+DVI_ITEMS:
+        .WORD   16, DVI$_DEVNAM
+        .ADDRESS NAME
+        .ADDRESS NAMLEN
+        .LONG   0
+INADR:  .LONG   0, 0
+RDBUF:  .BLKB   4+256                   ; PTD$READ's: a status longword, then the data
+WRBUF:  .LONG   0                       ; PTD$WRITE's
+        .BLKB   64
+ESCST:  .LONG   0                       ; 1 after ESC, 2 in a control sequence
+BUFLEN: .LONG   0
+BUF:    .BLKB   2048                    ; what the terminal wrote, not yet waited for
+
+        .PSECT  CODE, EXE, LONG
+        .ENTRY  START, ^M<R2, R3, R4, R5, R6, R7>
+        $GETJPIW_S ITMLST=NAMITEM
+        EXPECT  #SS$_NORMAL, 1
+        CMPW    MYLEN, #7
+        BNEQ    5$
+        CMPC3   #7, MYNAME, ROBOTNAM
+        BEQL    10$
+5$:     $CREPRC_S IMAGE=SELF, PRCNAM=ROBOT, BASPRI=#4
+        RET
+
+10$:    PUSHAQ  INADR
+        CLRQ    -(SP)
+        CLRQ    -(SP)
+        CLRQ    -(SP)
+        PUSHAL  CHAN
+        CALLS   #8, G^PTD$CREATE
+        EXPECT  #SS$_NORMAL, 2
+        $GETDVIW_S CHAN=CHAN, ITMLST=DVI_ITEMS
+        EXPECT  #SS$_NORMAL, 3
+        MOVL    NAMLEN, NAMDSC
+        $CREPRC_S IMAGE=LOGINOUT, INPUT=NAMDSC, OUTPUT=NAMDSC, ERROR=NAMDSC, PRCNAM=NAMDSC, BASPRI=#4
+        EXPECT  #SS$_NORMAL, 4
+        WAITFOR "Username:"
+        TYPELN  "JOE"
+        WAITFOR "Password:"
+        TYPELN  "joespw"
+        WAITFOR "$ "
+        PRINT   "PHNTEST: JOE logged in"
+        WAITFOR "SYSTEM is phoning you"
+        TYPELN  "PHONE ANSWER"
+        WAITFOR "hello"
+        TYPE    "hi there"
+        WAITFOR "SYSTEM just hung up the phone."
+        MOVAB   CTRLZ, R1
+        BSBW    TYPEIT
+        WAITFOR "$ "
+        PUSHL   CHAN
+        CALLS   #1, G^PTD$DELETE
+        EXPECT  #SS$_NORMAL, 5
+        PRINT   "PHNTEST: ok"
+        MOVL    #SS$_NORMAL, R0
+        RET
+
+; WAIT: R1 = text, .ASCIC. Reads the terminal until BUF holds it, then
+; drops BUF up to its end.
+WAIT:
+        .JSB_ENTRY
+        MOVL    R1, R6
+10$:    MOVZBL  (R6), R7                ; where it could start: 0 to R5
+        SUBL3   R7, BUFLEN, R5
+        BLSS    30$
+        CLRL    R4
+20$:    CMPC3   R7, BUF[R4], 1(R6)
+        BEQL    40$
+        INCL    R4
+        CMPL    R4, R5
+        BLEQ    20$
+30$:    BSBW    READ
+        BRB     10$
+40$:    ADDL2   R7, R4                  ; past it
+        SUBL3   R4, BUFLEN, R2
+        MOVL    R2, BUFLEN
+        MOVC3   R2, BUF[R4], BUF
+        RSB
+
+; READ: PTD$READW what the terminal wrote, and appends it to BUF, but
+; escape sequences. BUF keeps its last half when it fills.
+READ:
+        .JSB_ENTRY
+        PUSHL   #256
+        PUSHAB  RDBUF
+        CLRQ    -(SP)
+        PUSHL   CHAN
+        PUSHL   #2
+        CALLS   #6, G^PTD$READW
+        BLBC    R0, 4$
+        BLBS    RDBUF, 5$
+4$:     $EXIT_S #12                     ; hung up
+5$:     MOVZWL  RDBUF+2, R6
+        MOVAB   RDBUF+4, R7
+10$:    SOBGEQ  R6, 20$
+        RSB
+20$:    MOVZBL  (R7)+, R0
+        CMPL    ESCST, #1
+        BLSS    40$
+        BGTR    30$
+        MOVL    #2, ESCST               ; after ESC: [ starts a sequence,
+        CMPL    R0, #^A/[/
+        BEQL    10$
+        CLRL    ESCST                   ; anything else is the whole of it
+        BRB     10$
+30$:    CMPL    R0, #^A/@/              ; a letter ends a sequence
+        BLSS    10$
+        CLRL    ESCST
+        BRB     10$
+40$:    CMPL    R0, #27
+        BNEQ    50$
+        MOVL    #1, ESCST
+        BRB     10$
+50$:    CMPL    BUFLEN, #2048
+        BLSS    60$
+        PUSHL   R0
+        MOVC3   #1024, BUF+1024, BUF
+        MOVL    (SP)+, R0
+        MOVL    #1024, BUFLEN
+60$:    MOVL    BUFLEN, R1
+        MOVB    R0, BUF[R1]
+        INCL    BUFLEN
+        BRB     10$
+
+; TYPEIT: R1 = text, .ASCIC. Types it on the terminal.
+TYPEIT:
+        .JSB_ENTRY
+        MOVZBL  (R1)+, R2
+        MOVL    R2, R7
+        MOVC3   R2, (R1), WRBUF+4
+        PUSHL   #0                      ; no echo buffer
+        PUSHL   #0
+        PUSHL   R7
+        PUSHAL  WRBUF
+        PUSHL   #0
+        PUSHL   #0
+        PUSHL   CHAN
+        CALLS   #7, G^PTD$WRITE
+        BLBS    R0, 10$
+        $EXIT_S #14
+10$:    $WAITFR_S EFN=#0
+        RSB
+
+        .END    START

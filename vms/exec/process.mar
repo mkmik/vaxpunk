@@ -113,6 +113,9 @@ DCLNAME:                                ; the command interpreter of a record th
 KNOWN:  .ASCIC  "SETPWD.EXE"            ; SET PASSWORD writes SYSUAF.DAT
         .ASCIC  "_DKA0:[SYSEXE]SETPWD.EXE"
         .LONG   PRV$M_SYSPRV, 0
+        .ASCIC  "PHONE.EXE"             ; PHONE rings others, through their mailboxes
+        .ASCIC  "_DKA0:[SYSEXE]PHONE.EXE"
+        .LONG   PRV$M_OPER!PRV$M_PRMMBX!PRV$M_SYSNAM!PRV$M_WORLD, 0
         .BYTE   0
 CMDNAME:
         .ASCIC  "SYS$COMMAND"

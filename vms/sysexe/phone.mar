@@ -1,0 +1,1622 @@
+        .TITLE  PHONE   Talks with other users, a character at a time
+        .IDENT  /V0.1/
+;
+; DCL's PHONE [command] runs this (t8y:/utils/phone): VMS's PHONE, between
+; the users of one system. It splits the screen into a viewport for each
+; person in the call, the user's own first, and sends each character as
+; it is typed. A command is typed after the switch hook, %, or without
+; it when no one is in the call: DIAL user, or just user, rings the
+; user; ANSWER takes the call ringing here, REJECT turns it down; HANGUP
+; and CTRL/Z hang up; DIRECTORY lists who can be called; EXIT and CTRL/Z
+; outside a call leave. HELP says the help library is missing.
+;
+; As VMS's, each user has a mailbox, PHN$username, which whoever needs it
+; first makes, permanent and then marked for deletion with $DELMBX, so it
+; goes with its last channel. A message there is its type, the sender's
+; username, a 0 byte and its text. A ring is a broadcast on each terminal
+; the user is logged in at, with $BRKTHRU, and a ring message in the
+; mailbox the first time, or each time once the user runs PHONE, every
+; 10 seconds until an answer, a rejection or a key here. PHONE is
+; installed with the privileges that takes, OPER, PRMMBX, SYSNAM and
+; WORLD (process.mar's KNOWN). The texts and the screen are VMS's.
+; vaxpunk: there is no network, so no NODE:: and no NETMBX; the
+; messages are this program's own text, not a message file's
+; (t8y:/utils/message).
+; ponytail: no HOLD, UNHOLD, FACSIMILE, MAIL, conference calls among
+; the parties (each sees only those it called or answered), /NOSCROLL,
+; or word wrap; a 24 by 80 screen, as VMS's; DIRECTORY lists at most 15.
+;
+        .LIBRARY "starlet.mlb"
+        .LIBRARY "sysexe.mlb"
+        $SSDEF
+        $IODEF
+        $DCDEF
+        $DVIDEF
+        $JPIDEF
+        $TTDEF
+        $BRKDEF
+
+INHIB = ^X10000000                      ; STS$M_INHIB_MSG: said already
+MAXSLOT = 6                             ; viewports: the user's and 5 others
+NLINES = 8                              ; lines a viewport keeps
+WIDTH = 80                              ; a line's room; 79 are typed
+SLOTSZ = 688                            ; a slot: a party, or the user (0)
+S_SPEC = 0                              ; username, .ASCIC, 15 at most
+S_CHAN = 16                             ; channel to its mailbox
+S_STATE = 20                            ; FREE, RINGING or TALKING
+S_ROW = 24                              ; its heading's row, 0 if not shown
+S_TL = 28                               ; text lines shown
+S_NL = 32                               ; lines kept, 1 to NLINES
+S_LENS = 36                             ; each line's length, a byte
+S_TEXT = 44                             ; the lines, WIDTH each
+FREE = 0
+RINGING = 1
+TALKING = 2
+T_RING = 8                              ; VMS's message types: rang in,
+T_HUNGUP = 9                            ; hung up,
+T_BUSY = 10                             ; busy,
+T_ANSWERED = 11                         ; answered,
+T_REJECTED = 12                         ; rejected,
+T_LISTEN = 14                           ; a fragment of conversation
+OUTSIZE = 4096
+
+; MSG "text": shows text on the message line. Uses R0-R2.
+        .MACRO  MSG     TEXT, ?L
+        .SAVE_PSECT LOCAL_BLOCK
+        .PSECT  $LITERAL$
+L:      .ASCIC  TEXT
+        .RESTORE_PSECT
+        MOVAB   L, R1
+        BSBW    SHOWCIC
+        .ENDM   MSG
+
+; MTXT "text": appends text to the message being made. Uses R0-R2.
+        .MACRO  MTXT    TEXT, ?L
+        .SAVE_PSECT LOCAL_BLOCK
+        .PSECT  $LITERAL$
+L:      .ASCIC  TEXT
+        .RESTORE_PSECT
+        MOVAB   L, R1
+        BSBW    MADDCIC
+        .ENDM   MTXT
+
+; TXT "text": writes text on the screen. Uses R0-R2.
+        .MACRO  TXT     TEXT, ?L
+        .SAVE_PSECT LOCAL_BLOCK
+        .PSECT  $LITERAL$
+L:      .ASCIC  TEXT
+        .RESTORE_PSECT
+        MOVAB   L, R1
+        MOVZBL  (R1)+, R2
+        BSBW    PUTS
+        .ENDM   TXT
+
+; ESC "sequence": writes ESC [ and sequence, which doesn't move the
+; cursor the screen model keeps. Uses R0-R2.
+        .MACRO  ESC     SEQ, ?L
+        .SAVE_PSECT LOCAL_BLOCK
+        .PSECT  $LITERAL$
+L:      .ASCIC  SEQ
+        .RESTORE_PSECT
+        MOVL    #27, R0
+        BSBW    RAWC
+        MOVL    #91, R0                 ; [
+        BSBW    RAWC
+        MOVAB   L, R1
+        MOVZBL  (R1)+, R2
+        BSBW    RAWS
+        .ENDM   ESC
+
+        .PSECT  DATA, NOEXE, WRT, LONG
+TTNAME: .ASCID  "SYS$COMMAND"
+TTCHAN: .LONG   0
+MBCHAN: .LONG   0                       ; the user's mailbox, read
+NEWCHAN:.LONG   0                       ; $CREMBX's
+CLASS:  .LONG   0
+CLSITEM:.WORD   4, DVI$_DEVCLASS
+        .ADDRESS CLASS
+        .LONG   0
+        .LONG   0
+DEPEND: .LONG   0
+DEPITEM:.WORD   4, DVI$_DEVDEPEND       ; a terminal's NOBRDCST
+        .ADDRESS DEPEND
+        .LONG   0
+        .LONG   0
+EXITBLK:.LONG   0                       ; the exit handler's
+        .ADDRESS EXITH
+        .LONG   1
+        .ADDRESS EXITST
+EXITST: .LONG   0
+EXITING:.LONG   0
+TEN:    .LONG   -100000000, -1          ; 10 seconds
+EFSTATE:.LONG   0
+HOOK:   .LONG   ^A/%/                   ; the switch hook
+VPSIZE: .LONG   10                      ; /VIEWPORT_SIZE
+VALDSC: .LONG   32                      ; a qualifier's value
+        .ADDRESS VAL
+VALLEN: .WORD   0
+VAL:    .BLKB   32
+INITDSC:.LONG   77                      ; COMMAND, the parameter
+        .ADDRESS INIT
+INITLEN:.WORD   0
+INIT:   .BLKB   77
+TTIOSB: .BLKQ   1
+TTBUF:  .BLKB   4
+TERMMASK:                               ; every control character ends a read
+        .LONG   0, -1
+MBIOSB: .BLKQ   1
+MBUF:   .BLKB   256
+WIOSB:  .BLKQ   1
+MOUT:   .BLKB   256                     ; a message sent
+KEYCHR: .BLKB   4
+RFLAG:  .BLKB   4                       ; a ring's text: 1 the first time
+CMDMODE:.LONG   0                       ; a command is being typed
+CMDLEN: .LONG   0
+CMD:    .BLKB   80
+WORK:   .BLKB   80
+MSGSHOWN:
+        .LONG   0
+DIRSHOWN:
+        .LONG   0
+MSGLEN: .LONG   0
+MSGBUF: .BLKB   80
+MYSPEC: .BLKB   16                      ; the user's username, .ASCIC
+RINGER: .BLKB   16                      ; who rings here, .ASCIC, or 0
+MSPEC:  .BLKB   16                      ; a message's sender
+TMPSPEC:.BLKB   16
+PADUSER:.BLKB   12
+LOGDSC: .LONG   0                       ; PHN$username
+        .ADDRESS LOGNAM
+LOGNAM: .ASCII  "PHN$"
+        .BLKB   16
+TMPSLOT:.BLKB   SLOTSZ                  ; SENDTO's
+SLOTS:  .BLKB   MAXSLOT*SLOTSZ
+; A wildcard $GETJPI's items.
+CTX:    .LONG   0
+JPIITEMS:
+        .WORD   12, JPI$_USERNAME
+        .ADDRESS USER
+        .LONG   0
+        .WORD   7, JPI$_TERMINAL
+        .ADDRESS TERM
+        .ADDRESS TERMLEN
+        .WORD   39, JPI$_IMAGNAME
+        .ADDRESS IMAGE
+        .ADDRESS IMGLEN
+        .WORD   15, JPI$_PRCNAM
+        .ADDRESS PRCNAM
+        .ADDRESS NAMLEN
+        .WORD   4, JPI$_MODE
+        .ADDRESS MODE
+        .LONG   0
+        .LONG   0
+ME:     .WORD   12, JPI$_USERNAME       ; this process's username
+        .ADDRESS USER
+        .LONG   0
+        .LONG   0
+USER:   .BLKB   12
+TERMDSC:.LONG   0
+        .ADDRESS TERM
+TERM:   .BLKB   8
+TERMLEN:.WORD   0
+IMGLEN: .WORD   0
+IMAGE:  .BLKB   40
+NAMLEN: .WORD   0
+PRCNAM: .BLKB   16
+MODE:   .LONG   0
+PHONEEXE:
+        .ASCII  "PHONE.EXE"
+CAND:   .LONG   0                       ; RING's: the user's processes,
+TOOK:   .LONG   0                       ; the broadcasts they took,
+ACTIVE: .LONG   0                       ; and if one runs PHONE
+BRKIOSB:.BLKQ   1
+RTDSC:  .LONG   0                       ; a ring's text
+        .ADDRESS RTXT
+RTXT:   .BLKB   64
+DATEDSC:.LONG   23
+        .ADDRESS DATE
+DATE:   .BLKB   23
+OUTLEN: .LONG   0
+OUT:    .BLKB   OUTSIZE
+CURROW: .LONG   0                       ; where the cursor is, 0 if unknown
+CURCOL: .LONG   0
+DIGITS: .BLKB   12
+M_LOGGEDOFF:
+        .ASCIC  "That person just now logged off the system."
+M_UNPLUGGED:
+        .ASCIC  "That person's phone is unplugged (/NOBROADCAST)."
+; DCL's words, in the order an abbreviation picks them.
+VERBS:  .ASCIC  "ANSWER"                ; 0
+        .ASCIC  "DIAL"                  ; 1
+        .ASCIC  "DIRECTORY"             ; 2
+        .ASCIC  "EXIT"                  ; 3
+        .ASCIC  "FACSIMILE"             ; 4
+        .ASCIC  "HANGUP"                ; 5
+        .ASCIC  "HELP"                  ; 6
+        .ASCIC  "HOLD"                  ; 7
+        .ASCIC  "MAIL"                  ; 8
+        .ASCIC  "PHONE"                 ; 9
+        .ASCIC  "REJECT"                ; 10
+        .ASCIC  "UNHOLD"                ; 11
+        .BYTE   0
+
+        .PSECT  CODE, EXE, LONG
+        .ENTRY  START, ^M<R2, R3, R4, R5, R6, R7, R8, R9, R10, R11>
+        $GETDVIW_S DEVNAM=TTNAME, ITMLST=CLSITEM
+        BLBC    R0, 5$
+        CMPL    CLASS, #DC$_TERM
+        BEQL    10$
+5$:     PRINT   "%PHONE-F-INPUTTERM, Phone can accept input only from a terminal."
+        MOVL    #<SS$_IVDEVNAM!INHIB>, R0
+        RET
+10$:    $ASSIGN_S DEVNAM=TTNAME, CHAN=TTCHAN
+        BLBS    R0, 12$
+        RET
+12$:    GETVALUE "SWITCH_HOOK", VALDSC, VALLEN
+        BLBC    R0, 15$
+        MOVZBL  VAL, R0
+        CMPB    R0, #^A/"/
+        BNEQ    14$
+        MOVZBL  VAL+1, R0
+14$:    MOVL    R0, HOOK
+15$:    GETVALUE "VIEWPORT_SIZE", VALDSC, VALLEN
+        BLBC    R0, 18$
+        BSBW    NUMBER
+        CMPL    R1, #3
+        BLSS    18$
+        CMPL    R1, #10
+        BGTR    18$
+        MOVL    R1, VPSIZE
+18$:    GETVALUE "COMMAND", INITDSC, INITLEN
+        BLBS    R0, 19$
+        CLRW    INITLEN
+19$:    $GETJPIW_S ITMLST=ME
+        BLBC    R0, 99$
+        MOVAB   USER, R1
+        MOVAB   MYSPEC, R3
+        BSBW    TRIM
+        MOVAB   MYSPEC, R1
+        BSBW    OPENMBX
+        BLBC    R0, 99$
+        MOVL    R1, MBCHAN
+        $DCLEXH_S DESBLK=EXITBLK
+        MOVAB   SLOTS, R6               ; the user's own viewport
+        MOVC3   #16, MYSPEC, S_SPEC(R6)
+        MOVL    #TALKING, S_STATE(R6)
+        MOVL    #1, S_NL(R6)
+        CLRB    S_LENS(R6)
+        BSBW    REFRESH
+; What came before PHONE ran: a ring, if someone calls.
+20$:    $QIOW_S EFN=#2, CHAN=MBCHAN, FUNC=#IO$_READVBLK!IO$M_NOW, IOSB=MBIOSB, P1=MBUF, P2=#256
+        BLBC    R0, 25$
+        BLBC    MBIOSB, 25$
+        BSBW    MBMSG
+        BRB     20$
+25$:    MOVZWL  INITLEN, R0
+        BEQL    30$
+        MOVL    R0, CMDLEN
+        MOVC3   R0, INIT, CMD
+        BSBW    EXECUTE
+30$:    BSBW    FLUSH
+        BSBW    TTREAD
+        BSBW    MBREAD
+        $SETIMR_S EFN=#3, DAYTIM=TEN
+; Each key, message and tick, until EXIT.
+40$:    TSTL    EXITING
+        BNEQ    90$
+        $WFLOR_S EFN=#1, MASK=#^XE
+        TSTW    TTIOSB
+        BEQL    50$
+        BLBS    TTIOSB, 45$
+        CMPW    TTIOSB, #SS$_CONTROLY
+        BEQL    48$
+        MOVL    #1, EXITING             ; hung up
+        BRB     50$
+45$:    BSBW    GETKEY
+        BSBW    KEY
+48$:    BSBW    TTREAD
+50$:    TSTW    MBIOSB
+        BEQL    60$
+        BLBC    MBIOSB, 55$
+        BSBW    MBMSG
+55$:    BSBW    MBREAD
+60$:    $READEF_S EFN=#3, STATE=EFSTATE
+        CMPL    R0, #SS$_WASSET
+        BNEQ    70$
+        $CLREF_S EFN=#3
+        $SETIMR_S EFN=#3, DAYTIM=TEN
+        BSBW    TICK
+70$:    BSBW    FLUSH
+        BRB     40$
+90$:    BSBW    HANGALL
+        ESC     "H"
+        ESC     "2J"
+        BSBW    FLUSHRAW
+        MOVL    #SS$_NORMAL, R0
+99$:    RET
+
+; EXITH: the exit handler, for CTRL/Y too: hangs up on everyone.
+        .ENTRY  EXITH, ^M<>
+        BSBW    HANGALL
+        RET
+
+; TTREAD: reads a key, into TTBUF or the IOSB's terminator, with event
+; flag 1.
+TTREAD:
+        .JSB_ENTRY
+        CLRQ    TTIOSB
+        $QIO_S  EFN=#1, CHAN=TTCHAN, FUNC=#IO$_READVBLK!IO$M_NOECHO!IO$M_NOFILTR, IOSB=TTIOSB, P1=TTBUF, P2=#1, P4=#TERMMASK
+        RSB
+
+; MBREAD: reads the user's mailbox into MBUF, with event flag 2.
+MBREAD:
+        .JSB_ENTRY
+        CLRQ    MBIOSB
+        $QIO_S  EFN=#2, CHAN=MBCHAN, FUNC=#IO$_READVBLK, IOSB=MBIOSB, P1=MBUF, P2=#256
+        RSB
+
+; GETKEY: R0 = the key TTREAD read.
+GETKEY:
+        .JSB_ENTRY
+        MOVZBL  TTBUF, R0
+        TSTW    TTIOSB+2
+        BNEQ    10$
+        MOVZBL  TTIOSB+4, R0            ; a control character
+10$:    RSB
+
+; NUMBER: VAL, VALLEN = digits. R1 = their value.
+NUMBER:
+        .JSB_ENTRY
+        CLRL    R1
+        CLRL    R2
+10$:    CMPW    R2, VALLEN
+        BGEQU   90$
+        MOVZBL  VAL[R2], R0
+        SUBL2   #^A/0/, R0
+        MULL2   #10, R1
+        ADDL2   R0, R1
+        INCL    R2
+        BRB     10$
+90$:    RSB
+
+; TRIM: R1 = a 12-character username, blank padded. Writes it without
+; the blanks, .ASCIC, at R3.
+TRIM:
+        .JSB_ENTRY
+        MOVL    #12, R2
+10$:    TSTL    R2
+        BEQL    20$
+        CMPB    -1(R1)[R2], #^A/ /
+        BNEQ    20$
+        DECL    R2
+        BRB     10$
+20$:    MOVB    R2, (R3)+
+        MOVC3   R2, (R1), (R3)
+        RSB
+
+; OPENMBX: R1 = a username, .ASCIC. Assigns a channel to its mailbox,
+; PHN$username, which it makes if there is none, and marks it to go with
+; its last channel. R0 = SS$_NORMAL, R1 = the channel, or $CREMBX's
+; failure.
+OPENMBX:
+        .JSB_ENTRY
+        MOVZBL  (R1)+, R2
+        ADDL3   #4, R2, LOGDSC
+        MOVC3   R2, (R1), LOGNAM+4
+        CLRL    NEWCHAN
+        $CREMBX_S PRMFLG=#1, CHAN=NEWCHAN, MAXMSG=#256, LOGNAM=LOGDSC
+        BLBC    R0, 90$
+        $DELMBX_S CHAN=NEWCHAN
+        MOVL    NEWCHAN, R1
+        MOVL    #SS$_NORMAL, R0
+90$:    RSB
+
+; SEND: R6 = a slot, R0 = a message type, R1 and R2 its text. Writes the
+; message in the slot's mailbox; one that has no room loses it.
+SEND:
+        .JSB_ENTRY
+        MOVL    R1, R7
+        MOVL    R2, R8
+        MOVB    R0, MOUT
+        MOVZBL  MYSPEC, R0
+        MOVC3   R0, MYSPEC+1, MOUT+1
+        CLRB    (R3)+
+        MOVC3   R8, (R7), (R3)
+        MOVAB   MOUT, R0
+        SUBL3   R0, R3, R9
+        $QIOW_S EFN=#4, CHAN=S_CHAN(R6), FUNC=#IO$_WRITEVBLK!IO$M_NOW, IOSB=WIOSB, P1=MOUT, P2=R9
+        RSB
+
+; SENDTO: R1 = a username, .ASCIC, R0 = a message type. Sends it a
+; message with no text.
+SENDTO:
+        .JSB_ENTRY
+        MOVL    R0, R7
+        BSBW    OPENMBX
+        BLBC    R0, 90$
+        MOVAB   TMPSLOT, R6
+        MOVL    R1, S_CHAN(R6)
+        MOVL    R7, R0
+        CLRL    R2
+        BSBW    SEND
+        $DASSGN_S CHAN=S_CHAN(R6)
+90$:    RSB
+
+; FINDSLOT: R1 = a username, .ASCIC. R6 = the slot of the party it
+; names, or 0.
+FINDSLOT:
+        .JSB_ENTRY  OUTPUT=<R6>
+        MOVL    R1, R7
+        MOVAB   SLOTS+SLOTSZ, R6
+        MOVL    #MAXSLOT-1, R8
+10$:    TSTL    S_STATE(R6)
+        BEQL    20$
+        MOVZBL  (R7), R0
+        INCL    R0
+        CMPC3   R0, (R7), S_SPEC(R6)
+        BEQL    90$
+20$:    ADDL2   #SLOTSZ, R6
+        SOBGTR  R8, 10$
+        CLRL    R6
+90$:    RSB
+
+; NEWSLOT: R6 = a free slot, emptied, or 0 if there is none. The caller
+; gives it its username and channel, then its state.
+NEWSLOT:
+        .JSB_ENTRY  OUTPUT=<R6>
+        MOVAB   SLOTS+SLOTSZ, R6
+        MOVL    #MAXSLOT-1, R8
+10$:    TSTL    S_STATE(R6)
+        BEQL    20$
+        ADDL2   #SLOTSZ, R6
+        SOBGTR  R8, 10$
+        CLRL    R6
+        RSB
+20$:    CLRL    S_ROW(R6)
+        MOVL    #1, S_NL(R6)
+        CLRB    S_LENS(R6)
+        RSB
+
+; FREESLOT: R6 = a party's slot. Deassigns its channel and frees it; the
+; screen is drawn again without a viewport that goes.
+FREESLOT:
+        .JSB_ENTRY
+        MOVL    S_STATE(R6), R7
+        CLRL    S_STATE(R6)
+        $DASSGN_S CHAN=S_CHAN(R6)
+        CMPL    R7, #TALKING
+        BNEQ    90$
+        BSBW    REFRESH
+90$:    RSB
+
+; HANGALL: sends each party a hang up, and frees its slot.
+HANGALL:
+        .JSB_ENTRY
+        MOVAB   SLOTS+SLOTSZ, R6
+        MOVL    #MAXSLOT-1, R8
+10$:    TSTL    S_STATE(R6)
+        BEQL    20$
+        MOVL    #T_HUNGUP, R0
+        CLRL    R2
+        BSBW    SEND
+        CLRL    S_STATE(R6)
+        $DASSGN_S CHAN=S_CHAN(R6)
+20$:    ADDL2   #SLOTSZ, R6
+        SOBGTR  R8, 10$
+        RSB
+
+; COUNT: R0 = how many parties are in state R1.
+COUNT:
+        .JSB_ENTRY
+        CLRL    R0
+        MOVAB   SLOTS+SLOTSZ, R2
+        MOVL    #MAXSLOT-1, R3
+10$:    CMPL    S_STATE(R2), R1
+        BNEQ    20$
+        INCL    R0
+20$:    ADDL2   #SLOTSZ, R2
+        SOBGTR  R3, 10$
+        RSB
+
+; RINGTEXT: R1 = a username, .ASCIC. Makes RTXT, RTDSC, the ring:
+; "user is phoning you      (hh:mm:ss)".
+RINGTEXT:
+        .JSB_ENTRY
+        MOVZBL  (R1)+, R0
+        MOVC3   R0, (R1), RTXT
+        MOVAB   PHONING, R1
+        MOVZBL  (R1)+, R0
+        MOVC3   R0, (R1), (R3)
+        PUSHL   R3
+        $ASCTIM_S TIMBUF=DATEDSC
+        MOVL    (SP)+, R3
+        MOVC3   #8, DATE+12, (R3)
+        MOVB    #41, (R3)+              ; )
+        MOVAB   RTXT, R0
+        SUBL3   R0, R3, RTDSC
+        RSB
+        .SAVE_PSECT
+        .PSECT  $LITERAL$
+PHONING:.ASCIC  " is phoning you      ("
+        .RESTORE_PSECT
+
+; RING: R6 = a party's slot, R7 = 1 for the first ring. Rings each
+; terminal its user is logged in at, with a broadcast, unless PHONE runs
+; there, and sends a ring message the first time, or each time once PHONE
+; runs there. R0 = 0, or why it can't ring, .ASCIC.
+RING:
+        .JSB_ENTRY
+        CLRL    CAND
+        CLRL    TOOK
+        CLRL    ACTIVE
+        MNEGL   #1, CTX
+        MOVZBL  S_SPEC(R6), R0
+        MOVC5   R0, S_SPEC+1(R6), #^A/ /, #12, PADUSER
+        MOVAB   MYSPEC, R1
+        BSBW    RINGTEXT
+10$:    $GETJPIW_S PIDADR=CTX, ITMLST=JPIITEMS
+        BLBC    R0, 50$                 ; SS$_NOMOREPROC
+        CMPL    MODE, #JPI$K_INTERACTIVE
+        BNEQ    10$
+        CMPC3   #12, USER, PADUSER
+        BNEQ    10$
+        INCL    CAND
+        MOVAB   IMAGE, R1
+        MOVZWL  IMGLEN, R2
+        MOVAB   PHONEEXE, R3
+        MOVL    #9, R4
+        BSBW    FIND
+        BLBC    R0, 20$
+        MOVL    #1, ACTIVE
+        BRB     10$
+20$:    MOVZWL  TERMLEN, TERMDSC
+        $BRKTHRUW_S MSGBUF=RTDSC, SENDTO=TERMDSC, SNDTYP=#BRK$C_DEVICE, IOSB=BRKIOSB, REQID=#BRK$C_PHONE
+        BLBC    R0, 10$
+        MOVZWL  BRKIOSB+2, R0
+        ADDL2   R0, TOOK
+        BRB     10$
+50$:    MOVAB   M_LOGGEDOFF, R0
+        TSTL    CAND
+        BEQL    90$
+        BLBS    R7, 60$
+        TSTL    ACTIVE
+        BEQL    70$
+60$:    MOVB    R7, RFLAG
+        MOVL    #T_RING, R0
+        MOVAB   RFLAG, R1
+        MOVL    #1, R2
+        BSBW    SEND
+70$:    CLRL    R0
+        TSTL    TOOK
+        BNEQ    90$
+        TSTL    ACTIVE
+        BNEQ    90$
+        MOVAB   M_UNPLUGGED, R0
+90$:    RSB
+
+; FIND: R0 = 1 if the R2 bytes at R1 hold the R4 bytes at R3, else 0.
+FIND:
+        .JSB_ENTRY
+        MOVL    R1, R5
+        MOVL    R3, R7
+        SUBL3   R4, R2, R6              ; the last place it may start
+        BLSS    80$
+10$:    CMPC3   R4, (R5), (R7)
+        BEQL    90$
+        INCL    R5
+        SOBGEQ  R6, 10$
+80$:    CLRL    R0
+        RSB
+90$:    MOVL    #1, R0
+        RSB
+
+; TICK: every 10 seconds, rings again those not answering yet.
+TICK:
+        .JSB_ENTRY
+        MOVAB   SLOTS+SLOTSZ, R6
+        MOVL    #MAXSLOT-1, R8
+10$:    CMPL    S_STATE(R6), #RINGING
+        BNEQ    20$
+        CLRL    R7
+        BSBW    RING
+        TSTL    R0
+        BEQL    20$
+        PUSHL   R0
+        BSBW    FREESLOT
+        MOVL    (SP)+, R1
+        BSBW    SHOWCIC
+20$:    ADDL2   #SLOTSZ, R6
+        SOBGTR  R8, 10$
+        RSB
+
+; MBMSG: a message has come in MBUF: does what it says.
+MBMSG:
+        .JSB_ENTRY
+        MOVZWL  MBIOSB+2, R8            ; its size
+        CMPL    R8, #2
+        BLSS    5$
+        MOVZBL  MBUF, R9                ; its type
+        SUBL3   #1, R8, R0              ; the username, up to a 0
+        LOCC    #0, R0, MBUF+1
+        BEQL    5$
+        MOVAB   MBUF+1, R2
+        SUBL3   R2, R1, R0
+        CMPL    R0, #15
+        BLEQ    7$
+5$:     RSB
+7$:     MOVB    R0, MSPEC
+        ADDL3   #1, R1, R10             ; its text,
+        MOVAB   MBUF, R11
+        ADDL2   R8, R11
+        SUBL2   R10, R11                ; and how long
+        MOVC3   R0, MBUF+1, MSPEC+1
+        MOVAB   MSPEC, R1
+        BSBW    FINDSLOT
+        CMPL    R9, #T_RING
+        BNEQ    20$
+; A ring: from a party, the user's own, which is answered; else it rings here.
+        TSTL    R6
+        BEQL    12$
+        MOVZBL  MSPEC, R0
+        INCL    R0
+        CMPC3   R0, MSPEC, MYSPEC
+        BNEQ    5$
+        MOVL    #T_ANSWERED, R0
+        CLRL    R2
+        BSBW     SEND
+        RSB
+12$:    TSTB    RINGER
+        BEQL    15$
+        MOVZBL  RINGER, R0
+        INCL    R0
+        CMPC3   R0, RINGER, MSPEC
+        BEQL    15$
+        MOVAB   MSPEC, R1               ; another rings already
+        MOVL    #T_BUSY, R0
+        BSBW     SENDTO
+        RSB
+15$:    MOVC3   #16, MSPEC, RINGER
+        MOVAB   MSPEC, R1
+        BSBW    RINGTEXT
+        MOVAB   RTXT, R1
+        MOVL    RTDSC, R2
+        BSBW     SHOWMSG
+        RSB
+20$:    CMPL    R9, #T_HUNGUP
+        BNEQ    30$
+        TSTL    R6
+        BEQL    25$
+        BSBW    FREESLOT
+        BSBW    MCLR
+        MOVAB   MSPEC, R1
+        BSBW    MADDCIC
+        MTXT    " just hung up the phone."
+        BSBW     MSHOW
+        RSB
+25$:    TSTB    RINGER
+        BEQL    29$
+        MOVZBL  RINGER, R0
+        INCL    R0
+        CMPC3   R0, RINGER, MSPEC
+        BNEQ    29$
+        CLRB    RINGER
+        MSG     "That person just cancelled the call."
+29$:    RSB
+30$:    TSTL    R6                      ; the rest are from a party
+        BEQL    29$
+        CMPL    R9, #T_BUSY
+        BNEQ    40$
+        BSBW    FREESLOT
+        MSG     "That person's phone is busy right now.  Try again later."
+        RSB
+40$:    CMPL    R9, #T_ANSWERED
+        BNEQ    50$
+        CMPL    S_STATE(R6), #RINGING
+        BNEQ    29$
+        MOVL    #TALKING, S_STATE(R6)
+        MSG     "That person has answered your call."
+        BSBW     REFRESH
+        RSB
+50$:    CMPL    R9, #T_REJECTED
+        BNEQ    60$
+        BSBW    FREESLOT
+        MSG     "That person has rejected your call at this time."
+        RSB
+60$:    CMPL    R9, #T_LISTEN
+        BNEQ    29$
+        CMPL    S_STATE(R6), #TALKING
+        BNEQ    29$
+65$:    SOBGEQ  R11, 66$
+        RSB
+66$:    MOVZBL  (R10)+, R0
+        BSBW    APPLY
+        BRB     65$
+
+; KEY: R0 = a key typed. Any key cancels a call ringing, ends the
+; directory listing and clears the message line; then it goes in the
+; command being typed, or to the parties.
+KEY:
+        .JSB_ENTRY
+        MOVL    R0, R7
+        TSTL    DIRSHOWN
+        BEQL    10$
+        CLRL    DIRSHOWN
+        CLRL    MSGSHOWN
+        BSBW     REFRESH
+        RSB
+10$:    BSBW    CLEARMSG
+        CLRL    R9                      ; calls cancelled
+        MOVAB   SLOTS+SLOTSZ, R6
+        MOVL    #MAXSLOT-1, R8
+12$:    CMPL    S_STATE(R6), #RINGING
+        BNEQ    14$
+        MOVL    #T_HUNGUP, R0
+        CLRL    R2
+        BSBW    SEND
+        BSBW    FREESLOT
+        INCL    R9
+14$:    ADDL2   #SLOTSZ, R6
+        SOBGTR  R8, 12$
+        TSTL    R9
+        BNEQ    90$
+        TSTL    CMDMODE
+        BNEQ    20$
+        MOVL    #TALKING, R1
+        BSBW    COUNT
+        TSTL    R0
+        BEQL    20$
+        MOVL    R7, R0
+        BSBW     CONVKEY
+        RSB
+20$:    MOVL    R7, R0
+        BSBW     CMDKEY
+        RSB
+90$:    RSB
+
+; CMDKEY: R0 = a key typed in a command, on the second line.
+CMDKEY:
+        .JSB_ENTRY
+        MOVL    R0, R7
+        CMPL    R7, #26                 ; CTRL/Z
+        BNEQ    10$
+        BSBW     DOEXIT
+        RSB
+10$:    CMPL    R7, #23                 ; CTRL/W
+        BNEQ    15$
+        BSBW     REFRESH
+        RSB
+15$:    CMPL    R7, #13
+        BNEQ    20$
+        BSBW     EXECUTE
+        RSB
+20$:    CMPL    R7, HOOK
+        BNEQ    30$
+        TSTL    CMDLEN
+        BEQL    25$
+        BSBW     EXECUTE
+        RSB
+25$:    MOVL    #1, CMDMODE
+        RSB
+30$:    CMPL    R7, #127                ; DEL
+        BNEQ    40$
+        TSTL    CMDLEN
+        BEQL    90$
+        DECL    CMDLEN
+        MOVL    #2, R0
+        ADDL3   #2, CMDLEN, R1
+        BSBW    GOTO
+        MOVL    #^A/ /, R0
+        BSBW     PUTC
+        RSB
+40$:    CMPL    R7, #21                 ; CTRL/U
+        BNEQ    50$
+        CLRL    CMDLEN
+        MOVL    #2, R0
+        MOVL    #2, R1
+        BSBW    GOTO
+        ESC     "K"
+        RSB
+50$:    CMPL    R7, #^A/ /
+        BLSS    90$
+        CMPL    R7, #126
+        BGTR    90$
+        CMPL    CMDLEN, #77
+        BGEQ    90$
+        MOVL    CMDLEN, R1
+        MOVB    R7, CMD[R1]
+        INCL    CMDLEN
+        MOVL    #1, CMDMODE
+        MOVL    #2, R0
+        ADDL3   #1, CMDLEN, R1
+        BSBW    GOTO
+        MOVL    R7, R0
+        BSBW     PUTC
+        RSB
+90$:    RSB
+
+; CONVKEY: R0 = a key typed in a call: the switch hook starts a command,
+; CTRL/Z hangs up, CTRL/W draws the screen again; the rest go to each
+; party and in the user's viewport.
+CONVKEY:
+        .JSB_ENTRY
+        MOVL    R0, R7
+        CMPL    R7, HOOK
+        BNEQ    10$
+        MOVL    #1, CMDMODE
+        RSB
+10$:    CMPL    R7, #26
+        BNEQ    20$
+        BSBW     HANGUP
+        RSB
+20$:    CMPL    R7, #23
+        BNEQ    30$
+        BSBW     REFRESH
+        RSB
+30$:    MOVB    R7, KEYCHR
+        MOVAB   SLOTS+SLOTSZ, R6
+        MOVL    #MAXSLOT-1, R8
+40$:    CMPL    S_STATE(R6), #TALKING
+        BNEQ    50$
+        MOVL    #T_LISTEN, R0
+        MOVAB   KEYCHR, R1
+        MOVL    #1, R2
+        BSBW    SEND
+50$:    ADDL2   #SLOTSZ, R6
+        SOBGTR  R8, 40$
+        MOVAB   SLOTS, R6
+        MOVL    R7, R0
+        BSBW     APPLY
+        RSB
+
+; EXECUTE: does the command typed, CMD, in capitals: its first word, a
+; verb or an abbreviation of one, or a username to dial.
+EXECUTE:
+        .JSB_ENTRY
+        MOVL    CMDLEN, R8
+        CLRL    CMDLEN
+        CLRL    CMDMODE
+        MOVL    #2, R0
+        MOVL    #2, R1
+        BSBW    GOTO
+        ESC     "K"
+        CLRL    R2
+5$:     CMPL    R2, R8
+        BGEQ    8$
+        MOVZBL  CMD[R2], R0
+        CMPL    R0, #^A/a/
+        BLSS    6$
+        CMPL    R0, #^A/z/
+        BGTR    6$
+        SUBL2   #^A/a/-^A/A/, R0
+6$:     MOVB    R0, WORK[R2]
+        INCL    R2
+        BRB     5$
+8$:     CLRL    R2                      ; R11, R4: the first word
+        BSBW    WORD
+        MOVL    R0, R11
+        MOVL    R1, R4
+        BSBW    WORD                    ; R5, R9: the next
+        MOVL    R0, R5
+        MOVL    R1, R9
+        TSTL    R4
+        BNEQ    10$
+        RSB
+10$:    MOVAB   VERBS, R6
+        CLRL    R10
+12$:    MOVZBL  (R6), R0
+        BEQL    40$                     ; no verb: a username
+        CMPL    R4, R0
+        BGTR    15$
+        PUSHL   R0
+        CMPC3   R4, WORK[R11], 1(R6)
+        MOVL    (SP)+, R0
+        BEQL    20$
+15$:    ADDL2   R0, R6
+        INCL    R6
+        INCL    R10
+        BRB     12$
+20$:    MOVAB   WORK[R5], R1
+        MOVL    R9, R2
+        CMPL    R10, #0
+        BNEQ    21$
+        BSBW     ANSWER
+        RSB
+21$:    CMPL    R10, #1
+        BEQL    41$
+        CMPL    R10, #9
+        BEQL    41$
+        CMPL    R10, #2
+        BNEQ    22$
+        BSBW     DIRECT
+        RSB
+22$:    CMPL    R10, #3
+        BNEQ    23$
+        BSBW     DOEXIT
+        RSB
+23$:    CMPL    R10, #5
+        BNEQ    24$
+        BSBW     HANGUP
+        RSB
+24$:    CMPL    R10, #6
+        BNEQ    25$
+        MSG     "Help library is missing.  Please inform your system manager."
+        RSB
+25$:    CMPL    R10, #10
+        BNEQ    26$
+        BSBW     REJECT
+        RSB
+26$:    MSG     "Invalid command entered.  Try again."
+        RSB
+40$:    MOVAB   WORK[R11], R1
+        MOVL    R4, R2
+41$:    BSBW     DIAL
+        RSB
+
+; WORD: R2 = where to start in WORK, R8 = its length. R0 = where the
+; next word starts, R1 = its length, 0 if there is none, R2 = past it.
+WORD:
+        .JSB_ENTRY  OUTPUT=<R2>
+10$:    CMPL    R2, R8
+        BGEQ    20$
+        CMPB    WORK[R2], #^A/ /
+        BNEQ    20$
+        INCL    R2
+        BRB     10$
+20$:    MOVL    R2, R0
+30$:    CMPL    R2, R8
+        BGEQ    40$
+        CMPB    WORK[R2], #^A/ /
+        BEQL    40$
+        INCL    R2
+        BRB     30$
+40$:    SUBL3   R0, R2, R1
+        RSB
+
+; DIAL: R1 and R2 = a username. Rings the user.
+DIAL:
+        .JSB_ENTRY
+        TSTL    R2
+        BNEQ    5$
+        MSG     "You did not specify a person to call.  Try again."
+        RSB
+5$:     MOVL    R1, R7
+        MOVL    R2, R8
+        CMPL    R8, #12
+        BGTR    7$
+        LOCC    #^A/:/, R8, (R7)        ; NODE::USER
+        BEQL    10$
+7$:     MSG     "Invalid specification of node or person.  Try again."
+        RSB
+10$:    TSTB    RINGER
+        BEQL    12$
+        MSG     "Your phone is ringing; you cannot place an outgoing call."
+        RSB
+12$:    MOVB    R8, TMPSPEC
+        MOVC3   R8, (R7), TMPSPEC+1
+        MOVAB   TMPSPEC, R1
+        BSBW    FINDSLOT
+        TSTL    R6
+        BEQL    15$
+        MSG     "You cannot place redundant calls."
+        RSB
+15$:    BSBW    NEWSLOT
+        TSTL    R6
+        BNEQ    20$
+        MSG     "There is no room on the screen for another person."
+        RSB
+20$:    MOVC3   #16, TMPSPEC, S_SPEC(R6)
+        MOVAB   TMPSPEC, R1
+        BSBW    OPENMBX
+        BLBS    R0, 25$
+        MSG     "That person cannot be reached at the moment.  Try again."
+        RSB
+25$:    MOVL    R1, S_CHAN(R6)
+        MOVL    #RINGING, S_STATE(R6)
+        MOVL    #1, R7
+        BSBW    RING
+        TSTL    R0
+        BEQL    30$
+        PUSHL   R0
+        BSBW    FREESLOT
+        MOVL    (SP)+, R1
+        BSBW     SHOWCIC
+        RSB
+30$:    BSBW    MCLR
+        MTXT    "Ringing "
+        MOVAB   S_SPEC(R6), R1
+        BSBW    MADDCIC
+        MTXT    "..."
+40$:    CMPL    MSGLEN, #32
+        BGEQ    50$
+        MTXT    " "
+        BRB     40$
+50$:    MTXT    "(Press any key to cancel call and continue.)"
+        BSBW     MSHOW
+        RSB
+
+; ANSWER: answers the call ringing here.
+ANSWER:
+        .JSB_ENTRY
+        TSTB    RINGER
+        BNEQ    10$
+        MSG     "No one is calling you now."
+        RSB
+10$:    MOVAB   RINGER, R1
+        BSBW    FINDSLOT
+        TSTL    R6
+        BEQL    20$
+        MSG     "By answering the phone you will create a redundant call."
+        RSB
+20$:    BSBW    NEWSLOT
+        TSTL    R6
+        BNEQ    30$
+        MSG     "There is no room on the screen for another person."
+        RSB
+30$:    MOVC3   #16, RINGER, S_SPEC(R6)
+        CLRB    RINGER
+        MOVAB   S_SPEC(R6), R1
+        BSBW    OPENMBX
+        BLBS    R0, 40$
+        MSG     "That person cannot be reached at the moment.  Try again."
+        RSB
+40$:    MOVL    R1, S_CHAN(R6)
+        MOVL    #TALKING, S_STATE(R6)
+        MOVL    #T_ANSWERED, R0
+        CLRL    R2
+        BSBW    SEND
+        BSBW     REFRESH
+        RSB
+
+; REJECT: turns down the call ringing here.
+REJECT:
+        .JSB_ENTRY
+        TSTB    RINGER
+        BNEQ    10$
+        MSG     "No one is calling you now."
+        RSB
+10$:    MOVAB   RINGER, R1
+        MOVL    #T_REJECTED, R0
+        BSBW    SENDTO
+        CLRB    RINGER
+        RSB
+
+; HANGUP: hangs up on every party.
+HANGUP:
+        .JSB_ENTRY
+        MOVL    #RINGING, R1
+        BSBW    COUNT
+        MOVL    R0, R2
+        MOVL    #TALKING, R1
+        BSBW    COUNT
+        ADDL2   R2, R0
+        BNEQ    10$
+        MSG     "You are not conversing with anyone now."
+        RSB
+10$:    BSBW    HANGALL
+        BSBW     REFRESH
+        RSB
+
+; DOEXIT: hangs up and leaves PHONE.
+DOEXIT:
+        .JSB_ENTRY
+        BSBW    HANGALL
+        MOVL    #1, EXITING
+        RSB
+
+; DIRECT: DIRECTORY lists the users logged in at terminals, below the
+; second line, until a key is typed.
+DIRECT:
+        .JSB_ENTRY
+        MOVL    #1, DIRSHOWN
+        MOVL    #5, R0
+        MOVL    #1, R1
+        BSBW    GOTO
+        ESC     "J"
+        TXT     "Process Name    User Name       Terminal        Phone Status"
+        MOVL    #7, R9                  ; the row
+        CLRL    R10                     ; those listed
+        MNEGL   #1, CTX
+10$:    $GETJPIW_S PIDADR=CTX, ITMLST=JPIITEMS
+        BLBC    R0, 50$
+        CMPL    MODE, #JPI$K_INTERACTIVE
+        BNEQ    10$
+        CMPL    R9, #22
+        BGEQ    10$
+        MOVL    R9, R0
+        MOVL    #1, R1
+        BSBW    GOTO
+        MOVAB   PRCNAM, R1
+        MOVZWL  NAMLEN, R2
+        BSBW    PUTS
+        MOVL    R9, R0
+        MOVL    #17, R1
+        BSBW    GOTO
+        MOVAB   USER, R1
+        MOVAB   TMPSPEC, R3
+        BSBW    TRIM
+        MOVAB   TMPSPEC, R1
+        MOVZBL  (R1)+, R2
+        BSBW    PUTS
+        MOVL    R9, R0
+        MOVL    #33, R1
+        BSBW    GOTO
+        MOVAB   TERM, R1
+        MOVZWL  TERMLEN, R2
+        BSBW    PUTS
+        MOVL    R9, R0
+        MOVL    #49, R1
+        BSBW    GOTO
+        MOVZWL  TERMLEN, TERMDSC
+        CLRL    DEPEND
+        $GETDVIW_S DEVNAM=TERMDSC, ITMLST=DEPITEM
+        BITL    #TT$M_NOBRDCST, DEPEND
+        BEQL    20$
+        TXT     "/nobroadcast"
+        BRB     30$
+20$:    TXT     "available"
+30$:    INCL    R9
+        INCL    R10
+        BRB     10$
+50$:    INCL    R9
+        MOVL    R9, R0
+        MOVL    #1, R1
+        BSBW    GOTO
+        MOVL    R10, R0
+        BSBW    PUTDEC
+        TXT     " person"
+        CMPL    R10, #1
+        BEQL    60$
+        TXT     "s"
+60$:    TXT     " listed."
+        MSG     "Press any key to cancel the directory listing and continue."
+        RSB
+
+; APPLY: R6 = a viewport's slot, R0 = a character typed there. Puts it
+; in its line, or edits the line as VMS's PHONE does: RETURN starts a new
+; one, DEL deletes a character, LF a word, CTRL/U the line, CTRL/L the
+; viewport, TAB goes to the next tab stop, CTRL/G rings the bell. A line
+; full at 79 goes on on the next.
+APPLY:
+        .JSB_ENTRY
+        MOVL    R0, R7
+        BSBW    CURLINE
+        CMPL    R7, #13
+        BNEQ    10$
+        BSBW     NEWLINE
+        RSB
+10$:    CMPL    R7, #127
+        BNEQ    20$
+        TSTB    (R9)
+        BEQL    15$
+        DECB    (R9)
+        TSTL    S_ROW(R6)
+        BEQL    15$
+        BSBW    LINEROW
+        MOVZBL  (R9), R1
+        INCL    R1
+        BSBW    GOTO
+        MOVL    #^A/ /, R0
+        BSBW    PUTC
+15$:    RSB
+20$:    CMPL    R7, #21
+        BNEQ    30$
+        CLRB    (R9)
+        MOVL    #1, R1
+        BRB     45$
+30$:    CMPL    R7, #12
+        BNEQ    35$
+        MOVL    #1, S_NL(R6)
+        CLRB    S_LENS(R6)
+        TSTL    S_ROW(R6)
+        BEQL    15$
+        BSBW     DRAWTEXT
+        RSB
+35$:    CMPL    R7, #10                 ; LF: the word before
+        BNEQ    50$
+        MOVZBL  (R9), R2
+40$:    TSTL    R2
+        BEQL    44$
+        CMPB    -1(R10)[R2], #^A/ /
+        BNEQ    42$
+        DECL    R2
+        BRB     40$
+42$:    TSTL    R2
+        BEQL    44$
+        CMPB    -1(R10)[R2], #^A/ /
+        BEQL    44$
+        DECL    R2
+        BRB     42$
+44$:    MOVB    R2, (R9)
+        ADDL3   #1, R2, R1
+45$:    TSTL    S_ROW(R6)
+        BEQL    15$
+        PUSHL   R1
+        BSBW    LINEROW
+        MOVL    (SP)+, R1
+        BSBW    GOTO
+        ESC     "K"
+        RSB
+50$:    CMPL    R7, #9
+        BNEQ    60$
+55$:    MOVL    #^A/ /, R0
+        BSBW    APPLY
+        BSBW    CURLINE
+        BITB    #7, (R9)
+        BNEQ    55$
+        RSB
+60$:    CMPL    R7, #7
+        BNEQ    70$
+        MOVL    R7, R0
+        BSBW     RAWC
+        RSB
+70$:    CMPL    R7, #^A/ /
+        BLSS    90$
+        CMPL    R7, #126
+        BGTR    90$
+        CMPB    (R9), #WIDTH-1
+        BLSSU   80$
+        BSBW    NEWLINE
+        BSBW    CURLINE
+80$:    MOVZBL  (R9), R2
+        MOVB    R7, (R10)[R2]
+        INCB    (R9)
+        TSTL    S_ROW(R6)
+        BEQL    90$
+        BSBW    LINEROW
+        ADDL3   #1, R2, R1
+        BSBW    GOTO
+        MOVL    R7, R0
+        BSBW     PUTC
+        RSB
+90$:    RSB
+
+; CURLINE: R6 = a slot. R9 = its last line's length, a byte, R10 = the
+; line.
+CURLINE:
+        .JSB_ENTRY  OUTPUT=<R9, R10>
+        SUBL3   #1, S_NL(R6), R0
+        MOVAB   S_LENS(R6), R9
+        ADDL2   R0, R9
+        MULL3   #WIDTH, R0, R10
+        ADDL2   R6, R10
+        ADDL2   #S_TEXT, R10
+        RSB
+
+; NEWLINE: R6 = a slot. Starts a line, the oldest going when NLINES are
+; kept.
+NEWLINE:
+        .JSB_ENTRY
+        CLRL    R7                      ; 1 if the lines moved up
+        CMPL    S_NL(R6), #NLINES
+        BGEQ    10$
+        INCL    S_NL(R6)
+        BRB     20$
+10$:    MOVC3   #<NLINES-1>*WIDTH, S_TEXT+WIDTH(R6), S_TEXT(R6)
+        MOVC3   #NLINES-1, S_LENS+1(R6), S_LENS(R6)
+        MOVL    #1, R7
+20$:    BSBW    CURLINE
+        CLRB    (R9)
+        TSTL    S_ROW(R6)
+        BEQL    90$
+        BLBS    R7, 30$
+        CMPL    S_NL(R6), S_TL(R6)
+        BLEQ    90$
+30$:    BSBW     DRAWTEXT
+        RSB
+90$:    RSB
+
+; FIRST: R6 = a shown slot. R0 = the first line kept that is shown.
+FIRST:
+        .JSB_ENTRY
+        SUBL3   S_TL(R6), S_NL(R6), R0
+        BGEQ    10$
+        CLRL    R0
+10$:    RSB
+
+; LINEROW: R6 = a shown slot. R0 = the row of its last line.
+LINEROW:
+        .JSB_ENTRY
+        BSBW    FIRST
+        SUBL3   R0, S_NL(R6), R0
+        ADDL2   S_ROW(R6), R0
+        RSB
+
+; DRAWTEXT: R6 = a shown slot. Draws its text lines.
+DRAWTEXT:
+        .JSB_ENTRY
+        BSBW    FIRST
+        MOVL    R0, R7                  ; the line,
+        ADDL3   #1, S_ROW(R6), R8       ; its row,
+        MOVL    S_TL(R6), R9            ; the rows left
+10$:    MOVL    R8, R0
+        MOVL    #1, R1
+        BSBW    GOTO
+        ESC     "K"
+        CMPL    R7, S_NL(R6)
+        BGEQ    20$
+        MULL3   #WIDTH, R7, R1
+        ADDL2   R6, R1
+        ADDL2   #S_TEXT, R1
+        MOVAB   S_LENS(R6), R2
+        MOVZBL  (R2)[R7], R2
+        BSBW    PUTS
+20$:    INCL    R7
+        INCL    R8
+        SOBGTR  R9, 10$
+        RSB
+
+; REFRESH: draws the screen: the title and date, the command line, the
+; message line, a line of dashes, and the viewports, the user's first,
+; each its heading, its text and dashes, as many lines each as 20 divided
+; among them gives, up to /VIEWPORT_SIZE.
+REFRESH:
+        .JSB_ENTRY
+        ESC     "H"
+        ESC     "2J"
+        MOVL    #1, CURROW
+        MOVL    #1, CURCOL
+        MOVL    #1, R0
+        MOVL    #28, R1
+        BSBW    GOTO
+        ESC     "7m"
+        TXT     " vaxpunk Phone Facility "
+        ESC     "m"
+        MOVL    #1, R0
+        MOVL    #69, R1
+        BSBW    GOTO
+        $ASCTIM_S TIMBUF=DATEDSC
+        MOVAB   DATE, R1
+        MOVL    #11, R2
+        BSBW    PUTS
+        MOVL    #2, R0
+        MOVL    #1, R1
+        BSBW    GOTO
+        MOVL    HOOK, R0
+        BSBW    PUTC
+        MOVAB   CMD, R1
+        MOVL    CMDLEN, R2
+        BSBW    PUTS
+        TSTL    MSGSHOWN
+        BEQL    10$
+        MOVL    #3, R0
+        MOVL    #1, R1
+        BSBW    GOTO
+        MOVAB   MSGBUF, R1
+        MOVL    MSGLEN, R2
+        BSBW    PUTS
+10$:    MOVL    #4, R0
+        BSBW    DASHES
+; The viewports: R2 those shown, R3 the lines each.
+        MOVL    #TALKING, R1
+        BSBW    COUNT
+        ADDL3   #1, R0, R2
+        DIVL3   R2, #20, R3
+        CMPL    R3, VPSIZE
+        BLEQ    20$
+        MOVL    VPSIZE, R3
+20$:    MOVL    #5, R4
+        MOVAB   SLOTS, R6
+        MOVL    #MAXSLOT, R8
+30$:    CLRL    S_ROW(R6)
+        CMPL    S_STATE(R6), #TALKING
+        BNEQ    40$
+        MOVL    R4, S_ROW(R6)
+        SUBL3   #2, R3, S_TL(R6)
+        ADDL2   R3, R4
+        BSBW    DRAWVP
+40$:    ADDL2   #SLOTSZ, R6
+        SOBGTR  R8, 30$
+        RSB
+
+; DRAWVP: R6 = a shown slot. Draws its viewport.
+DRAWVP:
+        .JSB_ENTRY
+        MOVZBL  S_SPEC(R6), R2          ; the heading, centred, bold
+        SUBL3   R2, #81, R1
+        DIVL2   #2, R1
+        MOVL    S_ROW(R6), R0
+        BSBW    GOTO
+        ESC     "1m"
+        MOVAB   S_SPEC+1(R6), R1
+        MOVZBL  S_SPEC(R6), R2
+        BSBW    PUTS
+        ESC     "m"
+        BSBW    DRAWTEXT
+        ADDL3   S_ROW(R6), S_TL(R6), R0
+        INCL    R0
+        BSBW     DASHES
+        RSB
+
+; DASHES: R0 = a row. Writes 79 dashes on it.
+DASHES:
+        .JSB_ENTRY
+        MOVL    #1, R1
+        BSBW    GOTO
+        MOVL    #79, R2
+10$:    MOVL    #^A/-/, R0
+        BSBW    PUTC
+        SOBGTR  R2, 10$
+        RSB
+
+; SHOWCIC: R1 = a message, .ASCIC. SHOWMSG: R1 and R2 = a message. Shows
+; it on the third line, the message line, until a key is typed.
+SHOWCIC:
+        .JSB_ENTRY
+        MOVZBL  (R1)+, R2
+        BSBW     SHOWMSG
+        RSB
+SHOWMSG:
+        .JSB_ENTRY
+        CMPL    R2, #79
+        BLEQ    10$
+        MOVL    #79, R2
+10$:    MOVL    R2, MSGLEN
+        MOVC3   R2, (R1), MSGBUF
+        MOVL    #1, MSGSHOWN
+        MOVL    #3, R0
+        MOVL    #1, R1
+        BSBW    GOTO
+        ESC     "K"
+        MOVAB   MSGBUF, R1
+        MOVL    MSGLEN, R2
+        BSBW     PUTS
+        RSB
+
+; CLEARMSG: clears the message line.
+CLEARMSG:
+        .JSB_ENTRY
+        TSTL    MSGSHOWN
+        BEQL    90$
+        CLRL    MSGSHOWN
+        MOVL    #3, R0
+        MOVL    #1, R1
+        BSBW    GOTO
+        ESC     "K"
+90$:    RSB
+
+; MCLR, MADDCIC and MSHOW make a message in MSGBUF: MCLR starts it,
+; MADDCIC appends the .ASCIC string at R1, MSHOW shows it.
+MCLR:
+        .JSB_ENTRY
+        CLRL    MSGLEN
+        RSB
+MADDCIC:
+        .JSB_ENTRY
+        MOVZBL  (R1)+, R2
+        ADDL3   R2, MSGLEN, R0
+        CMPL    R0, #79
+        BGTR    90$
+        MOVAB   MSGBUF, R3
+        ADDL2   MSGLEN, R3
+        MOVL    R0, MSGLEN
+        MOVC3   R2, (R1), (R3)
+90$:    RSB
+MSHOW:
+        .JSB_ENTRY
+        MOVAB   MSGBUF, R1
+        MOVL    MSGLEN, R2
+        BSBW     SHOWMSG
+        RSB
+
+; GOTO: R0 = a row, R1 = a column, from 1. Moves the cursor there, unless
+; it is there already.
+GOTO:
+        .JSB_ENTRY
+        CMPL    R0, CURROW
+        BNEQ    10$
+        CMPL    R1, CURCOL
+        BNEQ    10$
+        RSB
+10$:    MOVL    R0, CURROW
+        MOVL    R1, CURCOL
+        PUSHL   R1
+        PUSHL   R0
+        MOVL    #27, R0
+        BSBW    RAWC
+        MOVL    #91, R0                 ; [
+        BSBW    RAWC
+        MOVL    (SP)+, R0
+        BSBW    RAWDEC
+        MOVL    #59, R0                 ; ;
+        BSBW    RAWC
+        MOVL    (SP)+, R0
+        BSBW    RAWDEC
+        MOVL    #^A/H/, R0
+        BSBW     RAWC
+        RSB
+
+; PUTDEC: R0 = a number, written in decimal.
+PUTDEC:
+        .JSB_ENTRY
+        BSBW    RAWDEC
+        CLRL    CURCOL                  ; where, no longer known
+        RSB
+
+; RAWDEC: R0 = a number. Writes it in decimal, not moving the cursor
+; the screen model keeps.
+RAWDEC:
+        .JSB_ENTRY
+        MOVL    R0, R4
+        CLRL    R3                      ; the digits, backwards
+10$:    CLRL    R5
+        EDIV    #10, R4, R4, R2
+        ADDB3   #^A/0/, R2, DIGITS[R3]
+        INCL    R3
+        TSTL    R4
+        BNEQ    10$
+20$:    DECL    R3
+        MOVZBL  DIGITS[R3], R0
+        BSBW    RAWC
+        TSTL    R3
+        BNEQ    20$
+        RSB
+
+; PUTC: R0 = a character, written where the cursor is, which moves on.
+PUTC:
+        .JSB_ENTRY
+        INCL    CURCOL
+        BSBW     RAWC
+        RSB
+
+; PUTS: R1 and R2 = characters, written where the cursor is.
+PUTS:
+        .JSB_ENTRY
+        ADDL2   R2, CURCOL
+        BSBW     RAWS
+        RSB
+
+; RAWS: R1 and R2 = bytes to write. RAWC: R0 = one. Neither moves the
+; cursor the screen model keeps.
+RAWS:
+        .JSB_ENTRY
+        MOVL    R1, R3
+10$:    SOBGEQ  R2, 20$
+        RSB
+20$:    MOVZBL  (R3)+, R0
+        BSBW    RAWC
+        BRB     10$
+RAWC:
+        .JSB_ENTRY
+        CMPL    OUTLEN, #OUTSIZE
+        BLSS    10$
+        PUSHL   R0
+        BSBW    FLUSHRAW
+        MOVL    (SP)+, R0
+10$:    MOVL    OUTLEN, R1
+        MOVB    R0, OUT[R1]
+        INCL    OUTLEN
+        RSB
+
+; FLUSH: puts the cursor where the user types, the command line or the
+; user's viewport, and writes what is waiting. FLUSHRAW only writes it.
+FLUSH:
+        .JSB_ENTRY
+        TSTL    DIRSHOWN
+        BNEQ    20$
+        TSTL    CMDMODE
+        BNEQ    10$
+        MOVL    #TALKING, R1
+        BSBW    COUNT
+        TSTL    R0
+        BEQL    10$
+        MOVAB   SLOTS, R6
+        BSBW    CURLINE
+        BSBW    LINEROW
+        MOVZBL  (R9), R1
+        INCL    R1
+        BSBW    GOTO
+        BRB     20$
+10$:    MOVL    #2, R0
+        ADDL3   #2, CMDLEN, R1
+        BSBW    GOTO
+20$:    BSBW     FLUSHRAW
+        RSB
+FLUSHRAW:
+        .JSB_ENTRY
+        TSTL    OUTLEN
+        BEQL    90$
+        $QIOW_S EFN=#4, CHAN=TTCHAN, FUNC=#IO$_WRITEVBLK, IOSB=WIOSB, P1=OUT, P2=OUTLEN
+        CLRL    OUTLEN
+90$:    RSB
+
+        .END    START
