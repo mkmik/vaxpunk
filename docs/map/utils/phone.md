@@ -4,32 +4,34 @@ summary = "Live split-screen chat between users, on one system or between system
 aka = ["PHONE", "PHONE.EXE", "DIAL", "ANSWER", "HANGUP", "FACSIMILE", "switch hook", "chat", "talk"]
 kind = "core"
 intent = "aspiration"
-research = "deferred"
-refs = ["docs/prd/0002-networking.md", "https://typewritten.org/Manual/DEC/VMS/5.4/helplib.hlb/PHONE.html"]
+research = "outline"
+refs = ["docs/prd/0002-networking.md", "vms/sysexe/phone.mar", "vms/cld/phone.cld", "https://typewritten.org/Manual/DEC/VMS/5.4/helplib.hlb/PHONE.html"]
 
 [[feature]]
 id = "local"
 title = "PHONE user: ring, ANSWER, a window per caller, HANGUP, on one system"
-status = "todo"
+status = "done"
+note = "PHN$username mailboxes, as VMS's; PHONE is in process.mar's KNOWN list with OPER, PRMMBX, SYSNAM and WORLD"
 needs = ["/exec/mailboxes", "/drivers/terminal"]
 
 [[feature]]
 id = "ring"
 title = "The ring: a broadcast on the callee's terminal, repeated until answered"
-status = "todo"
+status = "done"
 needs = ["#local", "/drivers/terminal#brkthru"]
-note = "$BRKTHRU with BRK$C_USERNAME and BRK$C_PHONE; PHONE needs OPER to ring another user, as VMS installs it"
+note = "$BRKTHRU of each of the user's terminals, BRK$C_DEVICE and BRK$C_PHONE, every 10 seconds, as VMS's"
 
 [[feature]]
 id = "directory"
 title = "DIRECTORY: who is logged in and can be called"
-status = "todo"
+status = "done"
 needs = ["#local", "/exec/information-services"]
 
 [[feature]]
 id = "commands"
-title = "HOLD, UNHOLD, REJECT, FACSIMILE of a file, MAIL to an absent user, conference calls"
+title = "HOLD, UNHOLD, FACSIMILE of a file, MAIL to an absent user, conference calls, HELP"
 status = "todo"
+note = "REJECT is done; HELP says the help library is missing, as VMS's does without PHONEHELP.HLB"
 needs = ["#local"]
 
 [[feature]]
@@ -72,7 +74,14 @@ sends a file's text into the conversation, and `MAIL` leaves a message
 for someone who isn't there. With DECnet, `PHONE NODE::USER` called
 users on other systems.
 
-vaxpunk has no PHONE. It is one of the era-appropriate office
+vaxpunk's PHONE does calls on one system, as VMS's does: each user has
+a mailbox, `PHN$username`, which whoever needs it first makes; a ring is
+a message there and a broadcast on the user's terminals every 10
+seconds; the screen, the commands and the messages are VMS's. PHNTEST,
+in the boot test, logs JOE in on a pseudo terminal and answers SYSTEM's
+call. HOLD, FACSIMILE, MAIL and conference calls are still missing.
+
+PHONE between systems is one of the era-appropriate office
 applications Marko wants between VMS boxes, which PRD-0002 names as a
 goal for TCP/IP to unblock ("chat between office VMS boxes") while
 leaving the protocol open. DECnet is dropped, so the call between

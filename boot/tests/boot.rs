@@ -942,11 +942,14 @@ const STARTUP: Phase = Phase {
 /// PASSWORD, after getting the old one wrong, defines SYS$WELCOME, which
 /// each login after says in place of Welcome to vaxpunk, and logs out. JOE logs in,
 /// with his UIC, privileges and directory, can't run AUTHORIZE or
-/// OPCCRASH, and logs out; SYSTEM logs in with its new password and shuts
-/// the system down.
+/// OPCCRASH, and logs out; SYSTEM logs in with its new password, and
+/// PHNTEST logs JOE in on a pseudo terminal: SYSTEM's PHONE rings him, he
+/// answers, each says something, SYSTEM lists who can be called with
+/// %DIRECTORY, hangs up and leaves PHONE, and JOE's PHONE sees the hang
+/// up; then SYSTEM shuts the system down.
 const USERS: Phase = Phase {
     name: "users",
-    secs: 60,
+    secs: 90,
     steps: &[
         (
             "process USURP exited with status 1000043C",
@@ -990,8 +993,14 @@ const USERS: Phase = Phase {
         (
             "Have a nice day",
             3,
-            "SHOW PROCESS\rSHOW TERMINAL\rSHUTDOWN\r",
+            "SHOW PROCESS\rSHOW TERMINAL\rRUN PHNTEST\r",
         ),
+        ("PHNTEST: JOE logged in", 1, "PHONE JOE\r"),
+        ("That person has answered your call.", 1, "hello\r"),
+        ("hi there", 1, "%DIRECTORY\r"),
+        // A key ends the listing, CTRL/Z hangs up, and again leaves PHONE.
+        ("2 persons listed.", 1, "x\x1a\x1a"),
+        ("PHNTEST: ok", 1, "SHUTDOWN\r"),
     ],
     lines: &[
         "%UAF-I-ADDMSG, user record successfully added",
@@ -1016,6 +1025,9 @@ const USERS: Phase = Phase {
         // TTSIZE's, from the size the console said.
         "   Input:    9600     LFfill:  0      Width: 100      Parity: None",
         "   Output:   9600     CRfill:  0      Page:   50",
+        " vaxpunk Phone Facility ",
+        "Ringing JOE...",
+        "Process Name    User Name       Terminal        Phone Status",
         "SHUTDOWN -- Perform an Orderly System Shutdown",
         "%PAL-I-POWEROFF",
     ],
@@ -1095,6 +1107,26 @@ fn telnet_pid(text: &str) -> &str {
         .expect("TCPIP$TELNET in SHOW SYSTEM")[0]
 }
 
+/// The log without its escape sequences, as a screen program such as PHONE
+/// shows it: what it writes a character at a time, moving the cursor
+/// between, reads as a whole.
+fn screen_text(text: &str) -> String {
+    let mut out = String::new();
+    let mut chars = text.chars();
+    while let Some(c) = chars.next() {
+        if c != '\x1b' {
+            out.push(c);
+        } else if chars.next() == Some('[') {
+            for c in chars.by_ref() {
+                if c.is_ascii_alphabetic() {
+                    break;
+                }
+            }
+        }
+    }
+    out
+}
+
 /// How many times its `secs` a phase may take. CI's x86 runners emulate
 /// the arm64 guest, and a phase there can take twice as long as on another
 /// run: the system disk took 18 to 28 s of its 30 there, or ran out. A hang
@@ -1108,8 +1140,13 @@ fn session(log: impl Fn() -> String, mut type_: impl FnMut(&str)) -> Result<(), 
         let mut step = 0;
         loop {
             let text = log();
+            let plain = screen_text(&text);
+            let seen = |line: &str| {
+                let count = |t: &str| t.lines().filter(|l| l.contains(line)).count();
+                count(&text).max(count(&plain))
+            };
             if let Some(&(line, times, keys)) = phase.steps.get(step)
-                && text.lines().filter(|l| l.contains(line)).count() >= times
+                && seen(line) >= times
             {
                 if keys.contains("{TELNET}") {
                     type_(&keys.replace("{TELNET}", telnet_pid(&text)));
@@ -1119,7 +1156,11 @@ fn session(log: impl Fn() -> String, mut type_: impl FnMut(&str)) -> Result<(), 
                 step += 1;
                 continue;
             }
-            let missing: Vec<_> = phase.lines.iter().filter(|l| !text.contains(*l)).collect();
+            let missing: Vec<_> = phase
+                .lines
+                .iter()
+                .filter(|l| !text.contains(*l) && !plain.contains(*l))
+                .collect();
             if step == phase.steps.len() && missing.is_empty() {
                 println!("{}: {:?}", phase.name, start.elapsed());
                 break;

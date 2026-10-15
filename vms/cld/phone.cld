@@ -1,0 +1,9 @@
+! PHONE [phone-command]: PHONE.EXE, a call between users of the system,
+! which does the command first, as VMS's PHONE does.
+! ponytail: /SCROLL is taken, as it is the default; /NOSCROLL scrolls too.
+define verb PHONE
+	image PHONE
+	parameter P1, label=COMMAND, value(type=$rest_of_line)
+	qualifier SCROLL, default
+	qualifier SWITCH_HOOK, value(required)
+	qualifier VIEWPORT_SIZE, value(required, type=$number)

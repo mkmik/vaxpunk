@@ -199,8 +199,8 @@ NEWMBX:
 90$:    RSB
 
 ; $DELMBX chan: marks the mailbox chan is assigned to for deletion: it is
-; temporary now, and goes when its last channel does, and the logical
-; names that name it go at once. SS$_IVCHAN for a channel that isn't
+; temporary now, and goes when its last channel does, with the logical
+; names that name it, as on VMS. SS$_IVCHAN for a channel that isn't
 ; assigned, SS$_DEVNOTMBX for one that isn't a mailbox's, SS$_NOPRIV
 ; without PRMMBX.
         .ENTRY  EXE$DELMBX, ^M<R2, R3, R4, R5, R6, R7>
@@ -217,7 +217,6 @@ NEWMBX:
         IFNPRIV PRMMBX, 90$
         DSBINT  #IPL$_SYNCH
         BICL2   #UCB$M_PRMMBX, UCB$L_MBSTS(R5)
-        BSBW    UNNAME
         ENBINT
         MOVL    #SS$_NORMAL, R0
         RET
