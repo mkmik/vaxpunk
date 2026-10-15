@@ -1177,6 +1177,10 @@ MESSAGES:
         .ASCIC  "SYSTEM"
         .ASCIC  "WRITLCK"
         .ASCIC  "write-locked"
+        .LONG   SS$_QFNOTACT
+        .ASCIC  "SYSTEM"
+        .ASCIC  "QFNOTACT"
+        .ASCIC  "disk quotas not enabled on this volume"
         .LONG   SS$_NOSUCHDEV
         .ASCIC  "SYSTEM"
         .ASCIC  "NOSUCHDEV"

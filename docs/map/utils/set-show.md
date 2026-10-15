@@ -1,7 +1,7 @@
 +++
 title = "SET and SHOW"
 summary = "Change and display the process, terminal, files, devices and system"
-aka = ["SET", "SHOW", "SET.EXE", "SHOW.EXE", "SET PROCESS", "SHOW PROCESS", "SHOW SYSTEM", "SET TERMINAL", "SHOW TERMINAL", "SET PROTECTION", "SET FILE", "SHOW DEVICES", "SHOW TIME", "SHOW USERS", "SHOW MEMORY", "SET SECURITY"]
+aka = ["SET", "SHOW", "SET.EXE", "SHOW.EXE", "SET PROCESS", "SHOW PROCESS", "SHOW SYSTEM", "SET TERMINAL", "SHOW TERMINAL", "SET PROTECTION", "SET FILE", "SHOW DEVICES", "SHOW TIME", "SHOW USERS", "SHOW MEMORY", "SHOW ERROR", "SHOW QUOTA", "SHOW CPU", "SET SECURITY"]
 kind = "core"
 intent = "goal"
 research = "done"
@@ -109,8 +109,9 @@ note = "dcl.cld and show.mar ponytails"
 [[feature]]
 id = "system-views"
 title = "SHOW USERS, SHOW MEMORY, SHOW ERROR, SHOW QUOTA, SHOW CPU"
-status = "todo"
+status = "done"
 needs = ["/exec/information-services"]
+note = "From $GETJPI's JPI$_MODE and JPI$_TERMINAL, which EXE$LOGIN sets, $GETSYI's memory, pool and CPU items, and DVI$_ERRCNT; SHOW QUOTA says SS$_QFNOTACT until t8y:/files/disk-quotas"
 
 [[feature]]
 id = "set-time"
@@ -174,8 +175,9 @@ names and symbols. Others belong to their own facilities: `SET HOST`,
 
 vaxpunk's `SET.EXE` is `vms/sysexe/set.mar`: `SET PROCESS/PRIVILEGES`,
 `SET PROTECTION`, `SET FILE/OWNER_UIC` and `SET TERMINAL`.
-`SHOW.EXE` is `show.mar`: `SHOW PROCESS`, `SHOW SYSTEM` and
-`SHOW TERMINAL`. `SET DEFAULT`, `SHOW DEFAULT`, `SHOW DEVICES`,
+`SHOW.EXE` is `show.mar`: `SHOW PROCESS`, `SHOW SYSTEM`,
+`SHOW TERMINAL`, `SHOW USERS`, `SHOW MEMORY`, `SHOW ERROR`, `SHOW QUOTA`
+and `SHOW CPU`. `SET DEFAULT`, `SHOW DEFAULT`, `SHOW DEVICES`,
 `SHOW LOGICAL` and `SHOW SYMBOL` are DCL's own code
 (`dcl/setshow.mar`). PRD-0003 still wants `SHOW TIME`, quotas and
 accounting figures, and every device listed from its UCB.

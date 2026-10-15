@@ -10,8 +10,24 @@
 ; name, state, priority and image.
 ; SHOW TERMINAL shows the terminal's characteristics (lib/term.mar), under
 ; VMS's headings and names, four to a line.
+; SHOW USERS lists the users logged in at terminals, the interactive
+; processes, from a wildcard $GETJPI, sorted by username: how many each
+; has, or with /FULL each process and its terminal; with a username,
+; only the users whose names start so. SHOW MEMORY shows the physical
+; pages, the process slots and nonpaged pool, from $GETSYI; /PHYSICAL_PAGES,
+; /SLOTS and /POOL choose among them. SHOW ERROR lists the devices that
+; have had errors, $DEVICE_SCAN's with $GETDVI's DVI$_ERRCNT, or with
+; /FULL every device, the CPU's and memory's too. SHOW QUOTA says the
+; disk, /DISK's or SYS$DISK's, has no disk quotas, which none has
+; (t8y:/files/disk-quotas). SHOW CPU shows the machine and its CPU sets,
+; or with /BRIEF the CPU and the process it runs, with /FULL its page
+; size too.
 ; ponytail: no node, CPU time, I/O or page counts: the counters don't
-; exist yet. A terminal has no speed, parity or fill,
+; exist yet. No SCSNODE, so no Node column or node name; no subprocesses
+; or batch jobs, so SHOW USERS counts interactive processes only; no
+; paged pool, balance set, page or swap files for SHOW MEMORY; no machine
+; check or memory error counts for SHOW ERROR, which shows 0; SHOW
+; QUOTA's /USER is taken and ignored, as no volume has a quota file. A terminal has no speed, parity or fill,
 ; so SHOW TERMINAL shows a VT100's on a 9600 baud line; and it has no
 ; TT3$ characteristics, so no DEC_CRT5, Ansi_Color or VMS Style Input.
 ;
@@ -24,6 +40,7 @@
         $DCDEF
         $TTDEF
         $TT2DEF
+        $DVSDEF
 
         .EXTERNAL PUT_LINE, PRV_NAMES, TERM_SENSE
 
@@ -41,6 +58,14 @@ L:      .ASCIC  TEXT
         MOVZBL  (R1)+, R2
         BSBW    ADD
         .ENDM   ADDTEXT
+
+REC = 48                                ; SHOW USERS's table: a process each,
+R_USER = 0                              ; its username,
+R_PID = 12                              ; PID,
+R_NAMLEN = 16                           ; process name's length,
+R_TERMLEN = 18                          ; terminal's length,
+R_NAME = 20                             ; process name
+R_TERM = 36                             ; and terminal
 
         .PSECT  DATA, NOEXE, WRT, LONG
 DESC:   .LONG   8                       ; OPTION, the keyword
@@ -75,6 +100,15 @@ JPIITEMS:                               ; what $GETJPIW returns of a process
         .WORD   8, JPI$_AUTHPRIV
         .ADDRESS AUTHPRIV
         .LONG   0
+        .WORD   12, JPI$_USERNAME
+        .ADDRESS USER
+        .LONG   0
+        .WORD   7, JPI$_TERMINAL
+        .ADDRESS TERM
+        .ADDRESS TERMLEN
+        .WORD   4, JPI$_MODE
+        .ADDRESS MODE
+        .LONG   0
         .LONG   0
 SYIITEMS:                               ; and $GETSYIW of the system
         .WORD   8, SYI$_VERSION
@@ -82,6 +116,88 @@ SYIITEMS:                               ; and $GETSYIW of the system
         .LONG   0
         .WORD   8, SYI$_BOOTTIME
         .ADDRESS BOOTTIME
+        .LONG   0
+        .LONG   0
+SYSITEMS:                               ; SHOW MEMORY's and SHOW CPU's $GETSYIW
+        .WORD   4, SYI$_MEMSIZE
+        .ADDRESS MEMSIZE
+        .LONG   0
+        .WORD   4, SYI$_FREE_PAGES
+        .ADDRESS FREEPG
+        .LONG   0
+        .WORD   4, SYI$_PAGE_SIZE
+        .ADDRESS PAGSIZ
+        .LONG   0
+        .WORD   4, SYI$_MAXPROCESSCNT
+        .ADDRESS MAXPRC
+        .LONG   0
+        .WORD   4, SYI$_PROCESS_CNT
+        .ADDRESS PRCCNT
+        .LONG   0
+        .WORD   4, SYI$_NPAGED_TOTAL
+        .ADDRESS NPGTOT
+        .LONG   0
+        .WORD   4, SYI$_NPAGED_FREE
+        .ADDRESS NPGFREE
+        .LONG   0
+        .WORD   4, SYI$_NPAGED_INUSE
+        .ADDRESS NPGUSE
+        .LONG   0
+        .WORD   4, SYI$_NPAGED_LARGEST
+        .ADDRESS NPGBIG
+        .LONG   0
+        .WORD   31, SYI$_HW_NAME
+        .ADDRESS HWNAME
+        .ADDRESS HWNAMLEN
+        .WORD   4, SYI$_ACTIVECPU_CNT
+        .ADDRESS ACTCPU
+        .LONG   0
+        .WORD   4, SYI$_AVAILCPU_CNT
+        .ADDRESS AVLCPU
+        .LONG   0
+        .WORD   4, SYI$_PRIMARY_CPUID
+        .ADDRESS PRICPU
+        .LONG   0
+        .LONG   0
+MEMSIZE:.LONG   0                       ; pages of memory,
+FREEPG: .LONG   0                       ; those free,
+PAGSIZ: .LONG   0                       ; a page's bytes,
+MAXPRC: .LONG   0                       ; the processes there may be,
+PRCCNT: .LONG   0                       ; and are,
+NPGTOT: .LONG   0                       ; nonpaged pool's bytes,
+NPGFREE:.LONG   0                       ; free,
+NPGUSE: .LONG   0                       ; in use,
+NPGBIG: .LONG   0                       ; and its largest free block's,
+ACTCPU: .LONG   0                       ; the CPUs running,
+AVLCPU: .LONG   0                       ; those there are,
+PRICPU: .LONG   0                       ; the primary's ID,
+HWNAMLEN:                               ; and the machine's name
+        .WORD   0
+HWNAME: .BLKB   31
+USRDSC: .LONG   12                      ; SHOW USERS's username, its start
+        .ADDRESS USRPAT
+USRPAT: .BLKB   12
+RANGE:  .BLKQ   1                       ; its table's pages, $EXPREG's
+SCANCTX:                                ; SHOW ERROR's $DEVICE_SCAN's context
+        .BLKQ   1
+DEVDSC: .LONG   16                      ; the device it found, _DDCU:
+        .ADDRESS DEVNAM
+DEVRET: .LONG   0                       ; and its length, a descriptor of it
+        .ADDRESS DEVNAM
+DEVNAM: .BLKB   16
+ERRITEMS:                               ; what $GETDVIW returns of it
+        .WORD   4, DVI$_ERRCNT
+        .ADDRESS ERRCNT
+        .LONG   0
+        .LONG   0
+ERRCNT: .LONG   0
+QDSC:   .LONG   64                      ; SHOW QUOTA's disk
+        .ADDRESS QDISK
+QDISK:  .BLKB   64
+SYSDISK:.ASCID  "SYS$DISK"
+CLSITEMS:                               ; what $GETDVIW returns of it
+        .WORD   4, DVI$_DEVCLASS
+        .ADDRESS ERRCNT
         .LONG   0
         .LONG   0
 PID:    .LONG   0
@@ -93,6 +209,10 @@ CURPRIV:
         .BLKQ   1
 AUTHPRIV:
         .BLKQ   1
+USER:   .BLKB   12
+TERMLEN:.WORD   0
+TERM:   .BLKB   7
+MODE:   .LONG   0
 NAMLEN: .WORD   0
 IMGLEN: .WORD   0
 NAME:   .BLKB   15
@@ -229,14 +349,32 @@ CHARS:  .BYTE   TT$V_PASSALL, NOT!ALT
         .PSECT  CODE, EXE, LONG
         .ENTRY  START, ^M<R2, R3, R4, R5, R6, R7, R8, R9>
         GETVALUE "OPTION", DESC, DESC
-        BLBC    R0, SYSTEM
-        CMPB    WHAT, #^A/T/
-        BNEQ    5$
-        BRW     SHOWTERM
-5$:     CMPB    WHAT, #^A/P/
-        BNEQ    SYSTEM
+        BLBC    R0, 4$
+        MOVZBL  WHAT, R0
+        CMPB    R0, #^A/T/
+        BEQL    5$
+        CMPB    R0, #^A/U/
+        BEQL    6$
+        CMPB    R0, #^A/M/
+        BEQL    7$
+        CMPB    R0, #^A/E/
+        BEQL    8$
+        CMPB    R0, #^A/Q/
+        BEQL    9$
+        CMPB    R0, #^A/C/
+        BEQL    3$
+        CMPB    R0, #^A/P/
+        BEQL    PROCESS
+4$:     BRW     SYSTEM
+3$:     BRW     SHOWCPU
+5$:     BRW     SHOWTERM
+6$:     BRW     SHOWUSERS
+7$:     BRW     SHOWMEM
+8$:     BRW     SHOWERR
+9$:     BRW     SHOWQUOTA
 
 ; SHOW PROCESS
+PROCESS:
         $GETJPIW_S ITMLST=JPIITEMS
         BLBC    R0, 90$
         PRINT   ""
@@ -429,6 +567,458 @@ SHOWTERM:
         BSBW    SAY
 80$:    MOVL    #SS$_NORMAL, R0
         RET
+
+; SHOW USERS [username]
+SHOWUSERS:
+        GETVALUE "USERNAME", USRDSC, USRDSC
+        BLBS    R0, 2$
+        CLRW    USRDSC
+2$:     $GETSYIW_S ITMLST=SYSITEMS
+        BLBC    R0, 5$
+        MULL3   #REC, MAXPRC, R0        ; a table with room for every process
+        ADDL2   PAGSIZ, R0
+        DECL    R0
+        DIVL2   PAGSIZ, R0
+        $EXPREG_S PAGCNT=R0, RETADR=RANGE
+        BLBS    R0, 6$
+5$:     RET
+6$:     MOVL    RANGE, R8               ; the table
+        CLRL    R9                      ; its processes
+10$:    $GETJPIW_S PIDADR=CTX, ITMLST=JPIITEMS
+        CMPL    R0, #SS$_NOMOREPROC
+        BEQL    40$
+        BLBC    R0, 5$
+        CMPL    MODE, #JPI$K_INTERACTIVE
+        BNEQ    10$
+        MOVZWL  USRDSC, R0
+        BEQL    15$
+        CMPC3   R0, USRPAT, USER        ; a username that starts so
+        BNEQ    10$
+15$:    CLRL    R6                      ; where it goes, by username
+16$:    CMPL    R6, R9
+        BGEQ    20$
+        MULL3   #REC, R6, R7
+        ADDL2   R8, R7
+        CMPC3   #12, USER, (R7)
+        BLSSU   20$
+        INCL    R6
+        BRB     16$
+20$:    MOVL    R9, R7                  ; those after it move down
+22$:    CMPL    R7, R6
+        BLEQ    25$
+        MULL3   #REC, R7, R1
+        ADDL2   R8, R1
+        SUBL3   #REC, R1, R0
+        MOVC3   #REC, (R0), (R1)
+        DECL    R7
+        BRB     22$
+25$:    MULL3   #REC, R6, R7
+        ADDL2   R8, R7
+        MOVC3   #12, USER, R_USER(R7)
+        MOVL    PID, R_PID(R7)
+        MOVW    NAMLEN, R_NAMLEN(R7)
+        MOVW    TERMLEN, R_TERMLEN(R7)
+        MOVC3   #15, NAME, R_NAME(R7)
+        MOVC3   #7, TERM, R_TERM(R7)
+        INCL    R9
+        BRW     10$
+40$:    TSTL    R9
+        BNEQ    45$
+        MOVZWL  USRDSC, R0
+        BEQL    45$
+        ADDTEXT "%SHOW-I-NOSUCHUSER, no processes found for user "
+        MOVAB   USRPAT, R1
+        MOVZWL  USRDSC, R2
+        BSBW    ADD
+        BSBW    SAY
+        BRW     90$
+45$:    CLRL    R6                      ; the users: each name unlike the one before
+        CLRL    R7
+        MOVL    R8, R5
+46$:    CMPL    R7, R9
+        BGEQ    48$
+        TSTL    R7
+        BEQL    47$
+        CMPC3   #12, -REC(R5), (R5)
+        BEQL    44$
+47$:    INCL    R6
+44$:    INCL    R7
+        ADDL2   #REC, R5
+        BRB     46$
+48$:    ADDTEXT "      vaxpunk User Processes at "
+        BSBW    ADDSHORT
+        BSBW    SAY
+        ADDTEXT "    Total number of users = "
+        MOVL    R6, R1
+        BSBW    ADDDEC
+        ADDTEXT ",  number of processes = "
+        MOVL    R9, R1
+        BSBW    ADDDEC
+        BSBW    SAY
+        PRINT   ""
+        PRESENT "FULL"
+        BLBS    R0, 60$
+        PRINT   " Username     Interactive  Subprocess   Batch"
+        CLRL    R7                      ; a line per user
+        MOVL    R8, R6
+50$:    CMPL    R7, R9
+        BGEQ    90$
+        CLRL    R4                      ; its processes
+52$:    INCL    R4
+        INCL    R7
+        ADDL2   #REC, R6
+        CMPL    R7, R9
+        BGEQ    54$
+        CMPC3   #12, -REC(R6), (R6)
+        BEQL    52$
+54$:    ADDTEXT " "
+        SUBL3   #REC, R6, R1
+        MOVL    #12, R2
+        BSBW    ADD
+        MOVL    R4, R1
+        MOVL    #23, R3
+        BSBW    RIGHT
+        BSBW    SAY
+        BRB     50$
+60$:    PRINT   " Username    Process Name    PID       Terminal"
+        CLRL    R7                      ; a line per process
+        MOVL    R8, R6
+62$:    CMPL    R7, R9
+        BGEQ    90$
+        ADDTEXT " "
+        MOVAB   R_USER(R6), R1
+        MOVL    #12, R2
+        BSBW    ADD
+        MOVAB   R_NAME(R6), R1
+        MOVZWL  R_NAMLEN(R6), R2
+        BSBW    ADD
+        MOVL    #29, R3
+        BSBW    PADTO
+        MOVL    R_PID(R6), R1
+        BSBW    ADDHEX
+        MOVL    #39, R3
+        BSBW    PADTO
+        MOVAB   R_TERM(R6), R1
+        MOVZWL  R_TERMLEN(R6), R2
+        BSBW    ADD
+        BSBW    SAY
+        INCL    R7
+        ADDL2   #REC, R6
+        BRB     62$
+90$:    MOVL    #SS$_NORMAL, R0
+        RET
+
+; SHOW MEMORY
+SHOWMEM:
+        $GETSYIW_S ITMLST=SYSITEMS
+        BLBS    R0, 2$
+        RET
+2$:     CLRL    R6                      ; what to show: 1 the pages, 2 the
+        PRESENT "PHYSICAL_PAGES"        ; slots, 4 pool
+        BLBC    R0, 4$
+        BISL2   #1, R6
+4$:     PRESENT "SLOTS"
+        BLBC    R0, 6$
+        BISL2   #2, R6
+6$:     PRESENT "POOL"
+        BLBC    R0, 8$
+        BISL2   #4, R6
+8$:     PRESENT "ALL"
+        BLBS    R0, 9$
+        TSTL    R6
+        BNEQ    10$
+9$:     MOVL    #7, R6
+10$:    ADDTEXT "              System Memory Resources on "
+        BSBW    ADDDATE
+        BSBW    SAY
+        BBC     #0, R6, 20$
+        PRINT   ""
+        PRINT   "Physical Memory Usage (pages):   Total      Free     In Use  Modified"
+        ADDTEXT " Main Memory ("
+        MULL3   #100, PAGSIZ, R0        ; in hundredths of a Mb
+        EMUL    MEMSIZE, R0, #0, R2
+        EDIV    #1024*1024, R2, R1, R0
+        CMPL    R1, #1024*100
+        BGEQU   12$
+        BSBW    ADDFIX
+        ADDTEXT "Mb)"
+        BRB     14$
+12$:    DIVL2   #1024, R1               ; or a Gb
+        BSBW    ADDFIX
+        ADDTEXT "Gb)"
+14$:    MOVL    MEMSIZE, R1
+        MOVL    #38, R3
+        BSBW    RIGHT
+        MOVL    FREEPG, R1
+        MOVL    #48, R3
+        BSBW    RIGHT
+        SUBL3   FREEPG, MEMSIZE, R1
+        MOVL    #59, R3
+        BSBW    RIGHT
+        CLRL    R1
+        MOVL    #69, R3
+        BSBW    RIGHT
+        BSBW    SAY
+20$:    BBC     #1, R6, 30$
+        PRINT   ""
+        PRINT   "Slot Usage (slots):               Total    Free   Resident    Swapped"
+        ADDTEXT " Process Entry Slots"
+        MOVL    MAXPRC, R1
+        MOVL    #39, R3
+        BSBW    RIGHT
+        SUBL3   PRCCNT, MAXPRC, R1
+        MOVL    #47, R3
+        BSBW    RIGHT
+        MOVL    PRCCNT, R1
+        MOVL    #58, R3
+        BSBW    RIGHT
+        CLRL    R1
+        MOVL    #69, R3
+        BSBW    RIGHT
+        BSBW    SAY
+30$:    BBC     #2, R6, 90$
+        PRINT   ""
+        PRINT   "Dynamic Memory Usage:             Total    Free     In Use    Largest"
+        ADDTEXT " Nonpaged Dynamic Memory (Mb)"
+        MOVL    NPGTOT, R1
+        MOVL    #39, R3
+        BSBW    RIGHTMB
+        MOVL    NPGFREE, R1
+        MOVL    #47, R3
+        BSBW    RIGHTMB
+        MOVL    NPGUSE, R1
+        MOVL    #58, R3
+        BSBW    RIGHTMB
+        MOVL    NPGBIG, R1
+        MOVL    #69, R3
+        BSBW    RIGHTMB
+        BSBW    SAY
+90$:    MOVL    #SS$_NORMAL, R0
+        RET
+
+; SHOW ERROR
+SHOWERR:
+        PRESENT "FULL"
+        BICL3   #^C1, R0, R6
+        CLRL    R7                      ; 1 once the heading is out
+        CLRQ    SCANCTX
+        TSTL    R6
+        BEQL    10$
+        BSBW    ERRHEAD
+        ADDTEXT "CPU"
+        CLRL    R1
+        MOVL    #41, R3
+        BSBW    RIGHT
+        BSBW    SAY
+        ADDTEXT "MEMORY"
+        CLRL    R1
+        MOVL    #41, R3
+        BSBW    RIGHT
+        BSBW    SAY
+10$:    $DEVICE_SCAN_S RETURN_DEVNAM=DEVDSC, RETLEN=DEVRET, CONTXT=SCANCTX
+        BLBC    R0, 50$
+        $GETDVIW_S DEVNAM=DEVRET, ITMLST=ERRITEMS
+        BLBC    R0, 10$
+        TSTL    R6
+        BNEQ    20$
+        TSTL    ERRCNT
+        BEQL    10$
+20$:    BSBW    ERRHEAD
+        MOVAB   DEVNAM+1, R1            ; without its underscore
+        MOVZWL  DEVRET, R2
+        DECL    R2
+        BSBW    ADD
+        MOVL    ERRCNT, R1
+        MOVL    #41, R3
+        BSBW    RIGHT
+        BSBW    SAY
+        BRB     10$
+50$:    TSTL    R7
+        BNEQ    60$
+        PRINT   "%SHOW-S-NOERRORS, no device errors found"
+60$:    MOVL    #SS$_NORMAL, R0
+        RET
+
+; SHOW QUOTA
+SHOWQUOTA:
+        GETVALUE "DISK", QDSC, QDSC
+        MOVAQ   QDSC, R6
+        BLBS    R0, 10$
+        MOVAQ   SYSDISK, R6
+10$:    $GETDVIW_S DEVNAM=(R6), ITMLST=CLSITEMS
+        BLBC    R0, 20$
+        MOVL    #SS$_QFNOTACT, R0       ; there is the disk, with no quotas
+20$:    RET
+
+; SHOW CPU
+SHOWCPU:
+        $GETSYIW_S ITMLST=SYSITEMS
+        BLBS    R0, 5$
+        RET
+5$:     ADDTEXT "System: "
+        MOVAB   HWNAME, R1
+        MOVZWL  HWNAMLEN, R2
+        BSBW    ADD
+        BSBW    SAY
+        PRESENT "BRIEF"
+        BLBS    R0, 50$
+        PRESENT "FULL"
+        BLBS    R0, 40$
+        PRINT   "CPU ownership sets:"
+        ADDTEXT "   Active               "
+        MOVL    ACTCPU, R1
+        BSBW    CPUSET
+        ADDTEXT "   Configure            "
+        MOVL    ACTCPU, R1
+        BSBW    CPUSET
+        PRINT   "CPU state sets:"
+        ADDTEXT "   Potential            "
+        MOVL    AVLCPU, R1
+        BSBW    CPUSET
+        ADDTEXT "   Autostart            "
+        MOVL    AVLCPU, R1
+        BSBW    CPUSET
+        PRINT   "   Powered Down         None"
+        PRINT   "   Not Present          None"
+        PRINT   "   Hard Excluded        None"
+        PRINT   "   Failover             None"
+        BRB     90$
+40$:    ADDTEXT "  Primary CPU   = "
+        MOVL    PRICPU, R1
+        BSBW    ADDDEC
+        BSBW    SAY
+        ADDTEXT "  Page Size     = "
+        MOVL    PAGSIZ, R1
+        BSBW    ADDDEC
+        BSBW    SAY
+50$:    $GETJPIW_S ITMLST=JPIITEMS      ; the process it runs: this one
+        BLBC    R0, 95$
+        ADDTEXT "CPU "
+        MOVL    PRICPU, R1
+        BSBW    ADDDEC
+        MOVL    #9, R3
+        BSBW    PADTO
+        ADDTEXT "State: RUN"
+        BSBW    SAY
+        ADDTEXT "       Process: "
+        BSBW    ADDNAME
+        MOVL    #40, R3
+        BSBW    PADTO
+        ADDTEXT "PID: "
+        MOVL    PID, R1
+        BSBW    ADDHEX
+        BSBW    SAY
+90$:    MOVL    #SS$_NORMAL, R0
+95$:    RET
+
+; ERRHEAD: writes SHOW ERROR's heading, unless R7 says it is out, and sets
+; R7. Uses R0-R1.
+ERRHEAD:
+        .JSB_ENTRY  OUTPUT=<R7>
+        BLBS    R7, 10$
+        PRINT   "Device                          Error Count"
+        MOVL    #1, R7
+10$:    RSB
+
+; CPUSET: R1 = how many CPUs. Writes the line, with their IDs, from 0,
+; after commas. Uses R0-R5.
+CPUSET:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5>
+        PUSHL   R1                      ; how many,
+        CLRL    -(SP)                   ; the next
+10$:    MOVL    (SP), R1
+        BSBW    ADDDEC
+        INCL    (SP)
+        CMPL    (SP), 4(SP)
+        BGEQ    20$
+        ADDTEXT ","
+        BRB     10$
+20$:    ADDL2   #8, SP
+        BRW     SAY
+
+; RIGHTMB: appends R1 bytes in Mb, with 2 decimals, to LINE, ending at
+; column R3. Uses R0-R5.
+RIGHTMB:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5>
+        EMUL    R1, #100, #0, R4
+        EDIV    #1024*1024, R4, R1, R0
+        SUBL2   #3, R3
+        PUSHL   R1
+        DIVL2   #100, R1
+        BSBW    RIGHT
+        MOVL    (SP)+, R1
+        BRB     ADDFRAC
+
+; ADDFIX: appends R1, hundredths, to LINE, with 2 decimals. Uses R0-R5.
+ADDFIX:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5>
+        PUSHL   R1
+        DIVL2   #100, R1
+        BSBW    ADDDEC
+        MOVL    (SP)+, R1
+        BRB     ADDFRAC                 ; a tail call, not a fall-through
+; ADDFRAC: appends a point and R1's last 2 decimal digits to LINE. Uses
+; R0-R5.
+ADDFRAC:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5>
+        DIVL3   #100, R1, R0
+        MULL2   #100, R0
+        SUBL2   R0, R1
+        PUSHL   R1
+        ADDTEXT "."
+        MOVL    (SP)+, R1
+        BRW     ADD2
+
+; RIGHT: appends R1 in decimal to LINE, ending at column R3. Uses R0-R3,
+; R5.
+RIGHT:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R5>
+        MOVL    R1, R2                  ; its digits
+10$:    DIVL2   #10, R2
+        BEQL    20$
+        DECL    R3
+        BRB     10$
+20$:    DECL    R3
+        PUSHL   R1
+        BSBW    PADTO
+        MOVL    (SP)+, R1
+        BRW     ADDDEC
+
+; ADDSHORT: appends the date and time, as SHOW USERS writes them, to LINE:
+; 15-OCT-2026 02:23 PM. Uses R0-R5.
+ADDSHORT:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5>
+        $ASCTIM_S TIMLEN=DATELEN, TIMBUF=DATEDSC
+        MOVAB   DATE, R1                ; the date and a blank,
+        MOVL    #12, R2
+        CMPB    (R1), #^A/ /
+        BNEQ    10$
+        INCL    R1
+        DECL    R2
+10$:    BSBW    ADD
+        MOVZBL  DATE+12, R1             ; the hour, of 12,
+        SUBL2   #^A/0/, R1
+        MULL2   #10, R1
+        MOVZBL  DATE+13, R0
+        SUBL2   #^A/0/, R0
+        ADDL2   R0, R1
+        PUSHL   #^A/A/
+        CMPL    R1, #12
+        BLSS    20$
+        MOVL    #^A/P/, (SP)
+        SUBL2   #12, R1
+20$:    TSTL    R1
+        BNEQ    30$
+        MOVL    #12, R1
+30$:    BSBW    ADD2
+        MOVAB   DATE+14, R1             ; the minutes,
+        MOVL    #3, R2
+        BSBW    ADD
+        ADDTEXT " "                     ; and AM or PM
+        MOVL    (SP)+, R0
+        BSBW    ADDCHAR
+        ADDTEXT "M"
+        RSB
 
 ; ADDCIC: appends the .ASCIC string at R6 to LINE, and moves R6 past it.
 ; SKIPCIC moves R6 past it only. Uses R0-R2.

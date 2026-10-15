@@ -140,7 +140,8 @@ on the screen),
 `DEFINE name equivalence`, `DEASSIGN name` and `SHOW LOGICAL name` make,
 delete and translate logical names (`SHOW LOGICAL SYS$INPUT`, or `SHOW
 LOGICAL` alone to list them all), `SHOW PROCESS` and `SHOW SYSTEM` show
-the process and list them all, `TCPIP` sets and shows the network's
+the process and list them all, `SHOW USERS`, `SHOW MEMORY`, `SHOW ERROR`
+and `SHOW CPU` the users, memory, device errors and CPU, `TCPIP` sets and shows the network's
 settings and the hosts it knows by name (*Networking*), `SET HOST
 host` logs in to another vaxpunk, on a terminal of its own there, where
 EDIT's keypad mode works too (CTRL/] comes back), `COPY` and `DELETE` copy and delete
@@ -219,7 +220,8 @@ name's `DEFINE`, `SHOW LOGICAL` and `DEASSIGN`, `SHOW LOGICAL` alone, and
 `SET DEFAULT` and `SHOW DEFAULT`, a round trip through the ramdisk with
 a keypad-mode `EDIT` on it, a
 `COPY` to the data disk, made afresh, which `ods` then checks on the host,
-`SHOW PROCESS` and `SHOW SYSTEM`, `SET TERMINAL` and `SHOW TERMINAL`,
+`SHOW PROCESS` and `SHOW SYSTEM`, `SHOW USERS`, `MEMORY`, `ERROR`, `QUOTA` and `CPU`,
+`SET TERMINAL` and `SHOW TERMINAL`,
 stops `SPIN` and `SLEEPER` with CTRL/Y and continues them, prints the
 executive's part and fails unless the processes ran to the end.
 
