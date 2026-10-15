@@ -39,8 +39,13 @@ on = "/rms/core"
 why = "Record formats seen as byte streams"
 
 [[needs]]
-fuzzy = "A proxy database of UNIX UIDs and GIDs to VMS users"
-why = "Maps NFS's identities to UICs"
+on = "/net/tcpip-utility#proxies"
+why = "TCPIP$PROXY.DAT maps NFS's UIDs and GIDs to VMS users"
+
+[[needs]]
+on = "/net/aux-server"
+why = "The NFS server is started at a client's first request"
+soft = true
 +++
 
 TCP/IP Services exports VMS directories to UNIX systems with an NFS

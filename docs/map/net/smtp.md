@@ -23,6 +23,11 @@ why = "MX records find a domain's mail server"
 [[needs]]
 on = "/utils/job-controller"
 why = "Outgoing mail waits in a generic queue, as TCP/IP Services' does"
+
+[[needs]]
+on = "/net/aux-server"
+why = "The SMTP receiver is started for each connection to port 25"
+soft = true
 +++
 
 TCP/IP Services connects VMS MAIL to Internet mail. Mail sent to

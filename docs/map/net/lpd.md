@@ -18,6 +18,11 @@ why = "The LPD client is a print symbiont"
 [[needs]]
 on = "/net/tcpip-qio"
 why = "Port 515"
+
+[[needs]]
+on = "/net/aux-server"
+why = "The LPD receiver is a service, its account from the proxy database"
+soft = true
 +++
 
 TCP/IP Services' LPD client is a print symbiont that sends a VMS

@@ -23,6 +23,13 @@ milestone = "m1"
 note = "PRD-0003 step 8"
 
 [[feature]]
+id = "mode"
+title = "F$MODE() from the process's mode, NETWORK too, not from what SYS$INPUT is"
+status = "todo"
+needs = ["/exec/processes#modes"]
+note = "lexical.mar: INTERACTIVE for a terminal, BATCH for a file, else OTHER; a network process's input is a file too"
+
+[[feature]]
 id = "names-files"
 title = "F$TRNLNM, F$SEARCH, F$PARSE"
 status = "done"
