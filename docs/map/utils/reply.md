@@ -13,7 +13,7 @@ title = "REPLY/ALL, /USERNAME, /TERMINAL: a message on users' terminals, with $B
 status = "todo"
 milestone = "m1"
 needs = ["/drivers/terminal#brkthru", "/exec/privileges"]
-note = "PRD-0003 Terminals and tier 1 #3: no $BRKTHRU yet (ttdriver.mar)"
+note = "PRD-0003 Terminals: $BRKTHRU is there (ttdriver.mar); REPLY isn't"
 
 [[feature]]
 id = "urgent"
@@ -77,6 +77,6 @@ and `/ABORT` answer a user's `REQUEST/REPLY` or a `MOUNT` waiting for a
 tape, and `REPLY/LOG` starts a new `OPERATOR.LOG`.
 
 vaxpunk has neither. PRD-0003 names `$BRKTHRU`, "for `REPLY` and the
-job controller's messages", among Milestone 1's terminal requirements,
-and its tier 1 #3 says it is still missing from `ttdriver.mar`. The
-operator side waits for OPCOM, which is not planned.
+job controller's messages", among Milestone 1's terminal requirements;
+`ttdriver.mar` has it, so `REPLY/ALL`, `/USERNAME` and `/TERMINAL` are a
+small program. The operator side waits for OPCOM, which is not planned.

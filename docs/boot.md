@@ -506,8 +506,10 @@ executive feature:
   would. A read with a prompt there writes the prompt, which `PTD$READW`
   reads; `PTD$WRITE` types `hi` and a carriage return, which end the
   read, and `PTD$READW` reads their echo; a write there waits until
-  `PTD$READW` reads it. `PTD$DELETE` hangs the terminal up, and the read
-  waiting there ends with `SS$_HANGUP`.
+  `PTD$READW` reads it. `$BRKTHRU` writes a message there through a
+  read with `ab` typed, and the read writes its prompt and `ab` again
+  after it. `PTD$DELETE` hangs the terminal up, and the read waiting
+  there ends with `SS$_HANGUP`.
 - **LOCKTEST** checks the lock manager, `$ENQ`, `$ENQW`, `$DEQ` and
   `$GETLKI` ([ADR-0030](adr/0030-lock-manager-in-the-executive.md)): two
   protected reads of one resource are granted together, but not an

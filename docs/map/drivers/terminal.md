@@ -46,10 +46,10 @@ note = "PRD-0003 step 3, ADR-0027"
 [[feature]]
 id = "brkthru"
 title = "$BRKTHRU: broadcast messages to terminals, for REPLY and the job controller"
-status = "todo"
+status = "done"
 milestone = "m1"
 needs = ["/exec/system-services"]
-note = "PRD-0003 tier 1 #3, step 9 (/NOTIFY)"
+note = "PRD-0003 tier 1 #3; done at once, no timeout, no SET BROADCAST classes (ttdriver.mar)"
 
 [[feature]]
 id = "hangup"
@@ -164,7 +164,9 @@ and a pseudo terminal, `FTA1:` to `FTA9:`, that a program drives with
 the PTD$ routines (t8y:/drivers/pseudo-terminal, [ADR-0033](../../adr/0033-pseudo-terminals-are-a-port-of-the-terminal-driver.md)).
 Reads have VMS's modifiers, terminator masks, line editing and a
 16-line recall buffer; CTRL/C and CTRL/Y are ASTs
-([ADR-0014](../../adr/0014-ctrlc-ctrly-asts.md)). What's left for
-Milestone 1 is PRD-0003 tier 1 #3: `$BRKTHRU`, more than 9 TELNET
+([ADR-0014](../../adr/0014-ctrlc-ctrly-asts.md)). `$BRKTHRU` writes
+a message on a terminal, a user's or all of them, through a read in
+progress, then writes the read's prompt and line again. What's left for
+Milestone 1 is PRD-0003 tier 1 #3: more than 9 TELNET
 terminals. CTRL/O, CTRL/T, XON/XOFF and
 formatted writes are tier 3 #29.

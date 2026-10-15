@@ -36,8 +36,10 @@
 ; prompts on top of the image (ADR-0014). CTRL/C that no AST is enabled
 ; for is CTRL/Y. In PASSALL and PASTHRU they are characters like the
 ; others.
+; $BRKTHRU writes a message on terminals through the reads in progress
+; there, then writes their prompts and lines again, as CTRL/R does.
 ; ponytail: no CTRL/O, CTRL/T, XON and XOFF, or formatted writes: a
-; write goes out as it is, as with IO$M_NOFORMAT; no $BRKTHRU. The
+; write goes out as it is, as with IO$M_NOFORMAT. The
 ; console's output waits for it at IPL$_SYNCH; a TELNET terminal's echo
 ; and prompts past UCB$K_TT_OUTSIZE bytes not yet sent are lost; a
 ; hangup deletes the terminal's owner, but not the processes it created.
@@ -60,12 +62,16 @@
         $DCDEF
         $TTDEF
         $TT2DEF
+        $BRKDEF
+        $PRVDEF
 
         .EXTERNAL SCH$QAST, EXE$ALONONPAGED, EXE$DEANONPGDSIZ
         .EXTERNAL EXE$OUTCHAR, EXE$GQ_SYSTIME, EXE$INSTIMQ, EXE$RMVTQE
         .EXTERNAL IOC$ALLOCIRP, IOC$REQCOM, IOC$CANCELQ
         .EXTERNAL NET$TTIO, NET$TTCLOSE, NET$FREEUNIT, EXE$DELPID, IOC$TRNDEVNAM
         .EXTERNAL SYS$DASSGN, SYS$CANCEL
+        .EXTERNAL EXE$PROBER_DSC, EXE$CLREF, EXE$SETEF, EXE$DCLAST
+        .EXTERNAL SCH$GL_CURPCB, SCH$GL_PCBVEC, SCH$GL_MAXPIX
 
 TYPEAHEAD = UCB$K_TT_TYPEAHEAD
 RXCS$V_DONE = 7                         ; RXCS: a character is waiting
@@ -1468,6 +1474,256 @@ TT$OWNER::
         MOVL    (SP), UCB$L_TT_PID(R5)
 90$:    MOVL    (SP)+, R0
         RSB
+
+; $BRKTHRU efn, msgbuf, sendto, sndtyp, iosb, carcon, flags, reqid,
+; timout, astadr, astprm: writes the message msgbuf describes on
+; terminals, through the reads in progress there (BRKTHRU): for sndtyp
+; BRK$C_DEVICE the terminal sendto names, translated as $ASSIGN does,
+; for BRK$C_USERNAME those of the processes logged in with the username
+; sendto, for BRK$C_ALLUSERS those of every process logged in, for
+; BRK$C_ALLTERMS every terminal. A terminal that is NOBRDCST or PASSALL
+; is skipped. carcon 0 writes the message as it is, any other on a line
+; of its own; with BRK$M_NOREFRESH in flags a read's prompt and line
+; aren't written again after it. Clears the event flag, then sets it,
+; writes the IOSB: SS$_NORMAL, or SS$_DEVOFFLINE if no terminal took the
+; message, then words of how many terminals took it, timed out and
+; couldn't, and queues astadr with astprm, if there is one. A process
+; without OPER may write only on its own terminal, the one it is logged
+; in at or was created on, or to its own username. R0 = SS$_NORMAL,
+; SS$_NOOPER, SS$_BADPARAM for a sndtyp it doesn't know or a username
+; longer than 12, SS$_NOSUCHDEV for a sendto that isn't a terminal, or
+; SS$_ACCVIO.
+; vaxpunk: it is done when it returns: reqid and timout are taken but
+; not used, and BRK$M_SCREEN, BRK$M_BOTTOM and BRK$M_CLUSTER do nothing.
+; A TELNET or pseudo terminal whose output, sent or read, is behind by
+; more than the message's room couldn't take it, rather than waiting:
+; none times out.
+        .ENTRY  EXE$BRKTHRU, ^M<R2, R3, R4, R5, R6, R7, R8, R9, R10, R11>
+        SUBL2   #12, SP                 ; a username, padded with blanks
+        MOVL    SP, R9
+        MOVL    20(AP), R0              ; the IOSB
+        BEQL    5$
+        IFNOWRT #8, (R0), 85$
+5$:     PUSHL   4(AP)
+        CALLS   #1, G^EXE$CLREF
+        BLBC    R0, 90$
+        MOVL    8(AP), R1               ; the message
+        BSBW    EXE$PROBER_DSC
+        BLBC    R0, 90$
+        MOVL    SCH$GL_CURPCB, R4
+        MOVL    16(AP), R10             ; the send type
+        CMPL    R10, #BRK$C_DEVICE
+        BLSSU   87$
+        CMPL    R10, #BRK$C_ALLTERMS
+        BGTRU   87$
+        CMPL    R10, #BRK$C_ALLUSERS
+        BGEQU   20$
+        MOVL    12(AP), R1              ; sendto
+        BSBW    EXE$PROBER_DSC
+        BLBC    R0, 90$
+        CMPL    R10, #BRK$C_USERNAME
+        BNEQ    40$
+        MOVZWL  (R1), R2
+        CMPL    R2, #12
+        BGTRU   87$
+        MOVL    4(R1), R3
+        PUSHL   R4
+        MOVC5   R2, (R3), #^A/ /, #12, (R9)
+        MOVL    (SP)+, R4
+        CMPL    (R9), PCB$T_USERNAME+1(R4)
+        BNEQ    20$
+        CMPL    4(R9), PCB$T_USERNAME+5(R4)
+        BNEQ    20$
+        CMPL    8(R9), PCB$T_USERNAME+9(R4)
+        BEQL    40$                     ; its own
+20$:    IFPRIV  OPER, 40$
+        MOVZWL  #SS$_NOOPER, R0
+        RET
+40$:    CLRL    R11                     ; how many took it, and couldn't
+        DSBINT  #IPL$_SYNCH             ; the terminals stay
+        CMPL    R10, #BRK$C_DEVICE
+        BNEQ    60$
+        MOVZWL  (R1), R2
+        MOVL    4(R1), R3
+        BSBW    IOC$TRNDEVNAM
+        CMPL    R2, #4                  ; DDCU, or DDCU:
+        BEQL    45$
+        CMPL    R2, #5
+        BNEQ    80$
+        CMPB    4(R3), #^A/:/
+        BNEQ    80$
+45$:    BSBW    TT$FINDUNIT
+        TSTL    R5
+        BEQL    80$
+        CMPL    UCB$L_TT_PID(R5), PCB$L_PID(R4)
+        BEQL    50$
+        TSTB    PCB$T_TERMINAL(R4)
+        BEQL    48$
+        CMPL    PCB$T_TERMINAL+1(R4), UCB$T_NAME(R5)
+        BEQL    50$
+48$:    IFPRIV  OPER, 50$
+        ENBINT
+        MOVZWL  #SS$_NOOPER, R0
+        RET
+50$:    BSBW    ONE
+        BRB     70$
+60$:    CMPL    R10, #BRK$C_ALLUSERS
+        BNEQ    62$
+        CLRL    R9                      ; any username
+62$:    MOVL    TT$GL_UNITS, R5
+64$:    TSTL    R5
+        BEQL    70$
+        CMPL    R10, #BRK$C_ALLTERMS
+        BEQL    66$
+        BSBW    USERAT
+        BLBC    R0, 68$
+66$:    BSBW    ONE
+68$:    MOVL    UCB$L_LINK(R5), R5
+        BRB     64$
+70$:    ENBINT
+        MOVL    20(AP), R0
+        BEQL    75$
+        MOVZWL  #SS$_NORMAL, R1
+        TSTW    R11
+        BNEQ    72$
+        MOVZWL  #SS$_DEVOFFLINE, R1
+72$:    INSV    R11, #16, #16, R1       ; status, how many took it,
+        MOVL    R1, (R0)
+        BICL3   #^XFFFF, R11, 4(R0)     ; none timed out, how many couldn't
+75$:    PUSHL   4(AP)
+        CALLS   #1, G^EXE$SETEF
+        MOVL    40(AP), R0
+        BEQL    78$
+        PUSHL   #0                      ; the caller's mode
+        PUSHL   44(AP)
+        PUSHL   R0
+        CALLS   #3, G^EXE$DCLAST
+78$:    MOVL    #SS$_NORMAL, R0
+        RET
+80$:    ENBINT
+        MOVZWL  #SS$_NOSUCHDEV, R0
+        RET
+85$:    MOVL    #SS$_ACCVIO, R0
+        RET
+87$:    MOVL    #SS$_BADPARAM, R0
+90$:    RET
+
+; $BRKTHRUW efn, msgbuf, sendto, sndtyp, iosb, carcon, flags, reqid,
+; timout, astadr, astprm: as $BRKTHRU, which is done when it returns, so
+; has nothing to wait for.
+; It passes its argument list on, all 11.
+EXE$BRKTHRUW::
+        .CALL_ENTRY MAX_ARGS=11
+        CALLG   (AP), EXE$BRKTHRU
+        RET
+
+; USERAT: R5 = a terminal's UCB, R9 = the address of a username, 12
+; characters padded with blanks, or 0. R0 = 1 if a process logged in at
+; the terminal has that username, or any for 0, else 0. IPL$_SYNCH.
+; Uses R1-R2.
+USERAT:
+        .JSB_ENTRY  SCRATCH=<R2>
+        SUBL3   #1, SCH$GL_MAXPIX, R2
+10$:    MOVL    @SCH$GL_PCBVEC[R2], R1
+        BEQL    30$
+        TSTB    PCB$T_TERMINAL(R1)
+        BEQL    30$
+        CMPL    PCB$T_TERMINAL+1(R1), UCB$T_NAME(R5)
+        BNEQ    30$
+        TSTL    R9
+        BEQL    80$
+        CMPL    (R9), PCB$T_USERNAME+1(R1)
+        BNEQ    30$
+        CMPL    4(R9), PCB$T_USERNAME+5(R1)
+        BNEQ    30$
+        CMPL    8(R9), PCB$T_USERNAME+9(R1)
+        BEQL    80$
+30$:    SOBGTR  R2, 10$
+        CLRL    R0
+        RSB
+80$:    MOVL    #1, R0
+        RSB
+
+; ONE: R5 = a terminal, AP = $BRKTHRU's arguments. Writes the message on
+; it (BRKTHRU), and counts it in R11: one more in the low word if it
+; took it, in the high word if it couldn't. IPL$_SYNCH. Uses R0-R3,
+; R6-R8.
+ONE:
+        .JSB_ENTRY  OUTPUT=<R11>, SCRATCH=<R2, R3, R6, R7, R8>
+        PUSHR   #^M<R4, R9>
+        MOVL    8(AP), R1
+        MOVZWL  (R1), R2
+        MOVL    4(R1), R1
+        MOVL    24(AP), R3
+        MOVL    28(AP), R4
+        BSBW    BRKTHRU
+        POPR    #^M<R4, R9>
+        BLBC    R0, 10$
+        INCL    R11
+        RSB
+10$:    TSTL    R0
+        BEQL    20$
+        ADDL2   #^X10000, R11
+20$:    RSB
+
+; BRKTHRU: R5 = a terminal's UCB, R1 = a message's address, R2 its
+; length, R3 = $BRKTHRU's carcon, R4 = its flags. Writes the message on
+; the terminal, with carcon on a line of its own; then, unless flags have
+; BRK$M_NOREFRESH, a read in progress there, echoing, writes its prompt
+; and line again on the next line, as CTRL/R does (RETYPE). R0 = 1 if it
+; is written, 0 if the terminal takes no broadcasts, NOBRDCST or
+; PASSALL, 2 if it can't: hung up, or a TELNET or pseudo terminal with
+; no room for it in what it has to send. IPL$_SYNCH. Uses R0-R4, R6-R9.
+BRKTHRU:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R6, R7, R8, R9>
+        CLRL    R0
+        BITL    #TT$M_NOBRDCST!TT$M_PASSALL, UCB$A_TT_CHAR+4(R5)
+        BNEQ    90$
+        MOVL    R3, R7                  ; carcon
+        MOVL    R4, R8                  ; flags
+        BBS     #UCB$V_TT_HANGUP, UCB$L_TT_STS(R5), 85$
+        BITL    #PORTS, UCB$L_TT_STS(R5)
+        BEQL    10$
+        PUSHR   #^M<R1, R2>
+        BSBW    KICK                    ; room for it, if it can
+        POPR    #^M<R1, R2>
+        SUBL3   UCB$L_TT_OUTLEN(R5), #UCB$K_TT_OUTSIZE-4, R0
+        CMPL    R2, R0
+        BGTR    85$
+10$:    TSTL    R7
+        BEQL    20$
+        BSBW    CRLF
+20$:    BSBW    TTPUTSTR
+        MOVL    UCB$L_IOQFL(R5), R4     ; a read in progress
+        CMPL    R4, R5
+        BEQL    40$
+        BBC     #IRP$V_STARTED, IRP$L_STS(R4), 40$
+        BBS     #BRK$V_NOREFRESH, R8, 40$
+        BSBW    FLAGS
+        BBS     #IO$V_NOECHO, R6, 40$
+        MOVL    UCB$L_TT_LEN(R5), R1
+        MOVL    UCB$L_TT_CURSOR(R5), R9
+        ADDL3   #IRP$K_LENGTH, IRP$L_PROMPT(R4), R2
+        ADDL2   R4, R2
+        BSBW    RETYPE
+        BRB     50$
+40$:    TSTL    R7
+        BEQL    50$
+        BSBW    CRLF
+50$:    BSBW    KICK
+        MOVL    #1, R0
+        RSB
+85$:    MOVL    #2, R0
+90$:    RSB
+
+; CRLF: writes a carriage return and a line feed on the terminal R5.
+; Uses R0.
+CRLF:
+        .JSB_ENTRY
+        MOVZBL  #CR, R0
+        BSBW    TTPUTC
+        MOVZBL  #10, R0
+        BRW     TTPUTC
 
 ; TIMER: R4 = a read's IRP, R5 = its terminal's UCB. For a timed read of
 ; some seconds, starts its timer again: the read ends that long after the

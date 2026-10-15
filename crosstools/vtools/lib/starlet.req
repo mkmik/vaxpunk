@@ -111,7 +111,8 @@ LITERAL
     SS$_VALNOTVALID = 2544,  ! a warning: the lock value block returned isn't valid
     SS$_NOMORELOCK = 2568,  ! a wildcard $GETLKI is past the last lock
     SS$_DEADLOCK = 3594,  ! the lock request closed a deadlock, and was refused
-    SS$_NOWORLD = 10372;  ! another group's lock needs WORLD
+    SS$_NOWORLD = 10372,  ! another group's lock needs WORLD
+    SS$_NOOPER = 10388;  ! $BRKTHRU to another's terminals needs OPER
 
 ! $CLIMSGDEF
 LITERAL
@@ -727,6 +728,32 @@ LITERAL
     DVI$_MNT = 100,
     DVI$_SWL = 112,
     DVI$_STS = 226;  ! the UCB$ status bits: UCB$M_ONLINE
+
+! $BRKDEF
+LITERAL
+    BRK$C_DEVICE = 1,  ! the terminal sendto names
+    BRK$C_USERNAME = 2,  ! the terminals of the processes logged in as sendto
+    BRK$C_ALLUSERS = 3,  ! the terminals of every process logged in
+    BRK$C_ALLTERMS = 4,  ! every terminal
+    BRK$C_GENERAL = 0,  ! requester IDs, SET BROADCAST's classes
+    BRK$C_PHONE = 1,
+    BRK$C_MAIL = 2,
+    BRK$C_QUEUE = 3,
+    BRK$C_SHUTDOWN = 4,
+    BRK$C_URGENT = 5,
+    BRK$C_DCL = 6,
+    BRK$C_OPCOM = 7,
+    BRK$C_USER1 = 32,  ! the customer's, to BRK$C_USER1+15
+    BRK$V_ERASE_LINES = 0,  ! flags: lines to erase, 8 bits, with SCREEN
+    BRK$S_ERASE_LINES = 8,
+    BRK$V_SCREEN = 8,  ! a screen formatted write
+    BRK$M_SCREEN = 256,
+    BRK$V_BOTTOM = 9,  ! with SCREEN, at the bottom
+    BRK$M_BOTTOM = 512,
+    BRK$V_NOREFRESH = 10,  ! don't write an interrupted read's prompt and line again
+    BRK$M_NOREFRESH = 1024,
+    BRK$V_CLUSTER = 11,  ! to the cluster's terminals too
+    BRK$M_CLUSTER = 2048;
 
 ! $DVSDEF
 LITERAL

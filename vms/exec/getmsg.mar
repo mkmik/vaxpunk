@@ -1345,6 +1345,10 @@ MESSAGES:
         .ASCIC  "SYSTEM"
         .ASCIC  "NOWORLD"
         .ASCIC  "operation requires WORLD privilege"
+        .LONG   SS$_NOOPER
+        .ASCIC  "SYSTEM"
+        .ASCIC  "NOOPER"
+        .ASCIC  "operation requires OPER privilege"
 ; TCP/IP Services' (facility 0x764), whose hosts database TCPIP and
 ; HOST_ADDR (sysexe/lib/inet.mar) read.
         .LONG   ^X07648358
