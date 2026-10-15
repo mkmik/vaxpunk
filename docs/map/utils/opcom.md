@@ -106,6 +106,6 @@ enabled as operators for that class (`REPLY/ENABLE=TAPES`, `CENTRAL`,
 In a cluster one OPCOM per node shares the messages.
 
 vaxpunk has no OPCOM. The executive writes its events, such as
-`%MOUNT-I-MOUNTED`, straight on the console. PRD-0003 wants `$BRKTHRU`
-for `REPLY` and the job controller's notices, which OPCOM would also
-use, but doesn't name OPCOM.
+`%MOUNT-I-MOUNTED`, straight on the console. PRD-0003 wanted `$BRKTHRU`
+for `REPLY` and the job controller's notices, and `ttdriver.mar` has it
+now; OPCOM would use it too, but PRD-0003 doesn't name OPCOM.

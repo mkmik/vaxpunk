@@ -60,7 +60,7 @@ title = "/NOTIFY: a broadcast to the submitter when the job ends"
 status = "todo"
 milestone = "m1"
 needs = ["/drivers/terminal#brkthru"]
-note = "PRD-0003 step 9 and tier 1 #3: $BRKTHRU, which the terminal driver lacks"
+note = "PRD-0003 step 9: $BRKTHRU with BRK$C_QUEUE"
 
 [[feature]]
 id = "print-queues"

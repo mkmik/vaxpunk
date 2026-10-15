@@ -18,7 +18,7 @@ id = "ring"
 title = "The ring: a broadcast on the callee's terminal, repeated until answered"
 status = "todo"
 needs = ["#local", "/drivers/terminal#brkthru"]
-note = "$BRKTHRU, PRD-0003 tier 1 #3"
+note = "$BRKTHRU with BRK$C_USERNAME and BRK$C_PHONE; PHONE needs OPER to ring another user, as VMS installs it"
 
 [[feature]]
 id = "directory"

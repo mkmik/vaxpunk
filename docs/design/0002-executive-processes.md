@@ -1008,7 +1008,9 @@ write in the middle of a line being read doesn't redisplay it; a
 TELNET terminal's echo and prompts past its 1 KB buffer, while a send
 is on the port, are lost. The recall buffer is the terminal's, shared
 by its readers, where VMS has DCL's own, with `RECALL`. No CTRL/O,
-CTRL/T, XON and XOFF, formatted writes, `$BRKTHRU` or quotas; a hangup
+CTRL/T, XON and XOFF, formatted writes or quotas; `$BRKTHRU` is done
+when it returns, and doesn't wait for a TELNET terminal behind on its
+output, nor keep `SET BROADCAST`'s classes; a hangup
 deletes the process `$CREPRC` created on the terminal, its owner, but
 not the processes that one created. Of the characteristics,
 `NOECHO`, `PASSALL`, `ESCAPE`, `EDITING`, `INSERT` and `PASTHRU` change

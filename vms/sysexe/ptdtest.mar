@@ -6,9 +6,11 @@
 ; a prompt there writes the prompt, which PTD$READW reads; PTD$WRITE
 ; types a line, which ends the read and is echoed, and PTD$READW reads
 ; the echo; a write there is read with PTD$READW too, and is done then.
-; PTD$DELETE hangs the terminal up: the read waiting there ends with
-; SS$_HANGUP. Each EXPECT checks a status or a value; a failed one exits
-; with 2 * N, which the executive reports.
+; $BRKTHRU writes a message there through a read with ab typed, which
+; writes its prompt and ab again after it. PTD$DELETE hangs the terminal
+; up: the read waiting there ends with SS$_HANGUP. Each EXPECT checks a
+; status or a value; a failed one exits with 2 * N, which the executive
+; reports.
 ;
         .LIBRARY "starlet.mlb"
         .LIBRARY "sysexe.mlb"
@@ -16,6 +18,7 @@
         $IODEF
         $DVIDEF
         $DCDEF
+        $BRKDEF
 
         .EXTERNAL PTD$CREATE, PTD$READW, PTD$WRITE, PTD$DELETE
 
@@ -35,6 +38,10 @@ LINE:   .BLKB   80
 RDBUF:  .BLKB   4+128                   ; PTD$READ's: a status longword, then the data
 WRBUF:  .LONG   0                       ; PTD$WRITE's
         .ASCII  "hi"<13>
+MSG:    .ASCID  "msg"
+BRKIOSB:.BLKQ   1
+BRKOUT: .ASCII  <13><10>"msg"<13><10>"> ab"     ; what the broadcast writes
+BRKOUTLEN = .-BRKOUT
 DVI_ITEMS:                              ; the terminal's name and class
         .WORD   16, DVI$_DEVNAM
         .ADDRESS NAME
@@ -45,7 +52,7 @@ DVI_ITEMS:                              ; the terminal's name and class
         .LONG   0
 
         .PSECT  CODE, EXE, LONG
-        .ENTRY  START, ^M<>
+        .ENTRY  START, ^M<R2, R3>
         PUSHAQ  INADR
         CLRQ    -(SP)                   ; no AST, no characteristics
         CLRQ    -(SP)
@@ -105,17 +112,44 @@ DVI_ITEMS:                              ; the terminal's name and class
         MOVL    IOSB, R0
         EXPECT  #<3@16>!SS$_NORMAL, 18
 
-; PTD$DELETE hangs it up.
-        $QIO_S  EFN=#1, CHAN=TCHAN, FUNC=#IO$_READVBLK, IOSB=IOSB, P1=LINE, P2=#80
+; A broadcast goes through a read with ab typed, and the read's prompt
+; and line are written again after it.
+        $QIO_S  EFN=#1, CHAN=TCHAN, FUNC=#IO$_READPROMPT, IOSB=IOSB, P1=LINE, P2=#80, P5=#PROMPT, P6=#2
         EXPECT  #SS$_NORMAL, 19
+        BSBW    READ
+        EXPECT  #<2@16>!SS$_NORMAL, 20
+        MOVW    #^A/ab/, WRBUF+4
+        PUSHL   #0
+        PUSHL   #0
+        PUSHL   #2
+        PUSHAL  WRBUF
+        PUSHL   #0
+        PUSHL   #0
+        PUSHL   CHAN
+        CALLS   #7, G^PTD$WRITE
+        EXPECT  #SS$_NORMAL, 21
+        BSBW    READ
+        EXPECT  #<2@16>!SS$_NORMAL, 22
+        $BRKTHRUW_S MSGBUF=MSG, SENDTO=NAMDSC, SNDTYP=#BRK$C_DEVICE, IOSB=BRKIOSB
+        EXPECT  #SS$_NORMAL, 23
+        MOVL    BRKIOSB, R0
+        EXPECT  #<1@16>!SS$_NORMAL, 24  ; one terminal took it
+        BSBW    READ
+        EXPECT  #<BRKOUTLEN@16>!SS$_NORMAL, 25
+        CMPC3   #BRKOUTLEN, RDBUF+4, BRKOUT
+        EXPECT  #0, 26
+        $BRKTHRUW_S MSGBUF=MSG, SNDTYP=#5
+        EXPECT  #SS$_BADPARAM, 27
+
+; PTD$DELETE hangs it up: the read waiting there ends with SS$_HANGUP.
         PUSHL   CHAN
         CALLS   #1, G^PTD$DELETE
-        EXPECT  #SS$_NORMAL, 20
+        EXPECT  #SS$_NORMAL, 28
         $WAITFR_S EFN=#1
         MOVZWL  IOSB, R0
-        EXPECT  #SS$_HANGUP, 21
+        EXPECT  #SS$_HANGUP, 29
         $DASSGN_S CHAN=TCHAN
-        EXPECT  #SS$_NORMAL, 22
+        EXPECT  #SS$_NORMAL, 30
         PRINT   "PTDTEST: ok"
         MOVL    #SS$_NORMAL, R0
         RET

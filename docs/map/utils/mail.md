@@ -24,7 +24,7 @@ id = "notify"
 title = "New mail on node from user: a broadcast on the recipient's terminal, and the count at login"
 status = "todo"
 needs = ["#local", "/drivers/terminal#brkthru"]
-note = "$BRKTHRU, PRD-0003 tier 1 #3"
+note = "$BRKTHRU with BRK$C_USERNAME and BRK$C_MAIL"
 
 [[feature]]
 id = "delivery"
@@ -119,6 +119,6 @@ include "mail and chat between office VMS boxes" and whose open
 question asks which protocol carries them; DECnet is dropped. What it
 needs is mostly built or in Milestone 1: indexed files (PRD-0008), users
 and their directories (`LOGINOUT`, `AUTHORIZE`), a CLD-based prompt
-(ADR-0017 names `MAIL` as the example). Missing are `$BRKTHRU` for the
-new mail message, a way for `MAIL.EXE` to write into other users' files
+(ADR-0017 names `MAIL` as the example), and `$BRKTHRU` for the new
+mail message. Missing are a way for `MAIL.EXE` to write into other users' files
 without giving everyone `SYSPRV`, and the protocol between systems.
