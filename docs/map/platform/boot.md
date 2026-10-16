@@ -38,7 +38,8 @@ note = "ADR-0008; only when QEMU runs through run-qemu.sh"
 id = "boot-flags"
 title = "Boot flags, a system root and SYSBOOT> before the executive starts"
 status = "todo"
-note = "VMS's R5 boot flags and conversational boot; only STARTUP_P1-8 pass today"
+needs = ["/platform/srm-console#flags"]
+note = "VMS's R5 boot flags and conversational boot; only STARTUP_P1-8 pass today; PRD-0010 passes them from the console's boot -flags"
 
 [[needs]]
 on = "/platform/sel4"
