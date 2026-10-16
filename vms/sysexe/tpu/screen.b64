@@ -870,28 +870,17 @@ GLOBAL ROUTINE SCR_MESSAGE (TEXT, LEN) : NOVALUE =
     END
     END;
 
-! READ_LINE [(prompt [, count])]: a line typed after the prompt, in the
-! prompt area, or the screen's last row; Return, CTRL/Z or count keys
-! end it.
-ROUTINE BX_READ_LINE (ARGS : REF VECTOR, N, R) =
+! SCR_READ_LINE prompt, length, count, answer: a line typed after the
+! prompt, in the prompt area, or the screen's last row, into answer;
+! Return, CTRL/Z or count keys end it, and KEY_LAST is the key that did.
+! Its length, or -1 without a screen.
+GLOBAL ROUTINE SCR_READ_LINE (P, PL, MAX, ANS : REF VECTOR[, BYTE]) =
     BEGIN
     LOCAL
         ROW,
         V,
-        P,
-        PL,
-        MAX,
-        ANS : VECTOR[256, BYTE],
         AL;
-    ARGCOUNT(0, 2);
-    P = 0;
-    PL = 0;
-    IF .N GTR 0 THEN (IF VTYPE(.ARGS[0]) NEQ TY_STRING THEN RETURN ARGMISMATCH(1, .ARGS[0]);
-                      P = SADDR(.ARGS[0]); PL = MIN(SLEN(.ARGS[0]), 255));
-    MAX = 255;
-    IF .N GTR 1 THEN (IF VTYPE(.ARGS[1]) NEQ TY_INTEGER THEN RETURN ARGMISMATCH(2, .ARGS[1]);
-                      MAX = MIN(VINT(.ARGS[1]), 255));
-    IF NOT .ON THEN (.R = STR_MAKE(0, 0); RETURN BI_ERR(TPU$_REQUIRESTERM));
+    IF NOT .ON THEN RETURN -1;
     IF NOT TT$WAITING() THEN SCR_UPDATE();
     ROW = (IF .PROMPTROW GTR 0 THEN .PROMPTROW - 1 ELSE .SCR_H - 1);
     V = .PROMPTVIDEO;
@@ -935,6 +924,28 @@ ROUTINE BX_READ_LINE (ARGS : REF VECTOR, N, R) =
             END
         END;
     VIDEO(0);
+    .AL
+    END;
+
+! READ_LINE [(prompt [, count])]: SCR_READ_LINE's line.
+ROUTINE BX_READ_LINE (ARGS : REF VECTOR, N, R) =
+    BEGIN
+    LOCAL
+        P,
+        PL,
+        MAX,
+        ANS : VECTOR[256, BYTE],
+        AL;
+    ARGCOUNT(0, 2);
+    P = 0;
+    PL = 0;
+    IF .N GTR 0 THEN (IF VTYPE(.ARGS[0]) NEQ TY_STRING THEN RETURN ARGMISMATCH(1, .ARGS[0]);
+                      P = SADDR(.ARGS[0]); PL = MIN(SLEN(.ARGS[0]), 255));
+    MAX = 255;
+    IF .N GTR 1 THEN (IF VTYPE(.ARGS[1]) NEQ TY_INTEGER THEN RETURN ARGMISMATCH(2, .ARGS[1]);
+                      MAX = MIN(VINT(.ARGS[1]), 255));
+    AL = SCR_READ_LINE(.P, .PL, .MAX, ANS);
+    IF .AL LSS 0 THEN (.R = STR_MAKE(0, 0); RETURN BI_ERR(TPU$_REQUIRESTERM));
     .R = STR_MAKE(ANS, .AL);
     SS_NORMAL
     END;

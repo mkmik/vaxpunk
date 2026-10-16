@@ -16,5 +16,5 @@ EXTERNAL ROUTINE
     FIO$PUT_LINE : NOVALUE,             ! (text, length): a line on the terminal
     FIO$ARGS : NOVALUE,                 ! (address, length): the command line
     FIO$DATE : NOVALUE,                 ! (buffer): the time, dd-mmm-yyyy hh:mm
-    FIO$HELP,                           ! (library, length, topic, length, routine): a status
+    FIO$HELP,                           ! (library, length, topic, length, routine, prompt, input): a status
     FIO$EXIT : NOVALUE;                 ! (status): ends the program

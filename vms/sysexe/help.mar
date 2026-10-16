@@ -1,15 +1,35 @@
-        .TITLE  HELP    DCL's HELP, from a help library
-        .IDENT  /V0.3/
+        .TITLE  HELP    DCL's HELP, from help libraries
+        .IDENT  /V0.4/
 ;
-; DCL's HELP [topic ...] runs this: LBR$OUTPUT_HELP writes the topic from
-; SYS$HELP:HELPLIB.HLB, or the library /LIBRARY names, and then prompts
-; for more, "Topic?" and "COPY Subtopic?", unless /NOPROMPT. Return goes
-; up a level and out, ? lists the topics again.
-; vaxpunk: no /OUTPUT, /PAGE, /USERLIBRARY or /INSTRUCTIONS.
+; DCL's HELP [@library] [topic ...] runs this: LBR$OUTPUT_HELP writes the
+; topic from SYS$HELP:HELPLIB.HLB, or the library /LIBRARY names, or a
+; user library, HLP$LIBRARY and on, and then prompts for more, "Topic?"
+; and "COPY Subtopic?", unless /NOPROMPT. Return goes up a level and
+; out, ? shows the topic again. As VMS's:
+;   /OUTPUT=file        writes the help to file, HELP.LIS by default, and
+;                       doesn't prompt, unless /PROMPT; /NOOUTPUT nowhere
+;   /PAGE               on a screen, clears it before each topic and,
+;                       when it is full, asks "Press RETURN to continue
+;                       ... ": a topic typed there is the next one, ?
+;                       ends the topic, CTRL/Z HELP
+;   /USERLIBRARY=(ALL, NONE, PROCESS, GROUP, SYSTEM)
+;                       the tables the user libraries are looked for in,
+;                       all by default; /NOUSERLIBRARY none
+;   /INSTRUCTIONS       with no topic, the topic HELP's text first
+;   /LIBLIST            after the list of topics, the user libraries'
 ;
         .LIBRARY "starlet.mlb"
         .LIBRARY "sysexe.mlb"
+        $SSDEF
+        $RMSDEF
+        $FABDEF
+        $RABDEF
+        $IODEF
+        $DCDEF
+        $DVIDEF
+        $TTDEF
         $HLPDEF
+        $LBRMSG
         $CLIMSGDEF
 
         .EXTERNAL LBR$OUTPUT_HELP, LIB$PUT_OUTPUT, LIB$GET_INPUT
@@ -22,34 +42,250 @@ TOPIC:  .BLKB   256
 LIBDSC: .LONG   256                     ; /LIBRARY's value
         .ADDRESS LIBBUF
 LIBLEN: .WORD   0
-LIBBUF:
-        .BLKB   256
+LIBBUF: .BLKB   256
 WIDTH:  .LONG   80
-FLAGS:  .LONG   HLP$M_PROMPT
+FLAGS:  .LONG   0                       ; LBR$OUTPUT_HELP's HLP$M_x
+WHERE:  .LONG   0                       ; the output: 0 SYS$OUTPUT, 1 a file,
+                                        ; 2 nowhere
+PAGE:   .LONG   0                       ; a screen's rows, 0 not paging
+CUR:    .LONG   0                       ; the rows written since it was cleared
+PENDING:.LONG   0                       ; a topic typed at the page prompt
+PENDBUF:.BLKB   256
+PAGEDSC:.LONG   256                     ; what the page prompt reads
+        .ADDRESS PAGEBUF
+PAGELEN:.WORD   0
+PAGEBUF:.BLKB   256
+PAGEPRM:.ASCID  "Press RETURN to continue ... "
+BLANK:  .QUAD   0
+OUTNAME:.ASCID  "SYS$OUTPUT"
+OUTCHAN:.LONG   0
+CLEAR:  .ASCII  <27>"[H"<27>"[J"
+CLEARLEN = .-CLEAR
+CLASS:  .LONG   0
+DEPEND: .LONG   0
+BUFSIZ: .LONG   0
+DVIITEMS:
+        .WORD   4, DVI$_DEVCLASS
+        .ADDRESS CLASS
+        .LONG   0
+        .WORD   4, DVI$_DEVDEPEND
+        .ADDRESS DEPEND
+        .LONG   0
+        .WORD   4, DVI$_DEVBUFSIZ
+        .ADDRESS BUFSIZ
+        .LONG   0
+        .LONG   0
+OUTDSC: .LONG   256                     ; /OUTPUT's value
+        .ADDRESS OUTBUF
+OUTLEN: .WORD   0
+OUTBUF: .BLKB   256
+DEFLIS: .ASCII  "HELP.LIS"               ; /OUTPUT's default
+FAB:    $FAB    FAC=PUT, RFM=VAR, RAT=CR, DNA=DEFLIS, DNS=8
+RAB:    $RAB    FAB=FAB
 
         .PSECT  CODE, EXE, LONG
         .ENTRY  START, ^M<R2>
         CLRW    TOPLEN
         GETVALUE "TOPIC", TOPDSC, TOPLEN
         MOVZWL  TOPLEN, TOPDSC
+        BSBW    QUALS
+        BLBC    R0, 90$
         CLRL    R2                      ; R2 = the library, 0 HELPLIB
         PRESENT "LIBRARY"
         BLBC    R0, 10$
         GETVALUE "LIBRARY", LIBDSC, LIBLEN
         MOVZWL  LIBLEN, LIBDSC
         MOVAQ   LIBDSC, R2
-10$:    PRESENT "PROMPT"
-        BLBS    R0, 20$
-        CMPL    R0, #CLI$_NEGATED
-        BNEQ    20$
-        CLRL    FLAGS
-20$:    PUSHAB  G^LIB$GET_INPUT
+10$:    PUSHAB  GETLINE
         PUSHAL  FLAGS
         PUSHL   R2
         PUSHAQ  TOPDSC
         PUSHAL  WIDTH
-        PUSHAB  G^LIB$PUT_OUTPUT
+        PUSHAB  PUTLINE
         CALLS   #6, G^LBR$OUTPUT_HELP
+        CMPL    WHERE, #1
+        BNEQ    90$
+        PUSHL   R0
+        $CLOSE  FAB=FAB
+        MOVL    (SP)+, R0
+90$:    RET
+
+; QUALS: FLAGS, WHERE and PAGE from the qualifiers, and the file
+; /OUTPUT names made. R0 = SS$_NORMAL or $CREATE's status.
+QUALS:
+        .JSB_ENTRY  SCRATCH=<R2>
+        CLRL    FLAGS
+        PRESENT "INSTRUCTIONS"
+        BLBC    R0, 2$
+        BISL2   #HLP$M_HELP, FLAGS
+2$:     PRESENT "LIBLIST"
+        BLBC    R0, 4$
+        BISL2   #HLP$M_LIBLIST, FLAGS
+4$:     PRESENT "USERLIBRARY"           ; the tables, all unless it says
+        BLBC    R0, 20$
+        BSBW    LEVELS
+20$:    CLRL    WHERE                   ; the output
+        PRESENT "OUTPUT"
+        MOVL    R0, R2                  ; R2 = /OUTPUT's
+        CMPL    R2, #CLI$_NEGATED
+        BNEQ    22$
+        MOVL    #2, WHERE
+        BRB     30$
+22$:    BLBC    R2, 30$
+        CLRW    OUTLEN
+        GETVALUE "OUTPUT", OUTDSC, OUTLEN
+        BLBC    R0, 30$
+        MOVZWL  OUTLEN, R0
+        BEQL    30$
+        MOVB    R0, FAB+FAB$B_FNS
+        MOVAB   OUTBUF, FAB+FAB$L_FNA
+        $CREATE FAB=FAB
+        BLBC    R0, 90$
+        $CONNECT RAB=RAB
+        BLBC    R0, 90$
+        MOVL    #1, WHERE
+30$:    PRESENT "PROMPT"                ; prompts, unless /NOPROMPT, or
+        BLBC    R0, 40$                 ; /OUTPUT without /PROMPT
+        CMPL    R0, #CLI$_DEFAULTED
+        BNEQ    35$
+        CMPL    R2, #CLI$_PRESENT
+        BEQL    40$
+        CMPL    R2, #CLI$_NEGATED
+        BEQL    40$
+35$:    BISL2   #HLP$M_PROMPT, FLAGS
+40$:    CLRL    PAGE                    ; pages on a screen
+        TSTL    WHERE
+        BNEQ    80$
+        $GETDVIW_S DEVNAM=OUTNAME, ITMLST=DVIITEMS
+        BLBC    R0, 80$
+        CMPL    CLASS, #DC$_TERM
+        BNEQ    80$
+        MOVL    BUFSIZ, WIDTH
+        BNEQ    45$
+        MOVL    #80, WIDTH
+45$:    PRESENT "PAGE"
+        BLBC    R0, 80$
+        BITL    #TT$M_SCOPE, DEPEND
+        BEQL    80$
+        EXTZV   #24, #8, DEPEND, R0
+        CMPL    R0, #8
+        BLSSU   80$
+        MOVL    R0, PAGE
+        SUBL3   #3, R0, CUR             ; clears before the first line
+        $ASSIGN_S DEVNAM=OUTNAME, CHAN=OUTCHAN
+        BLBS    R0, 80$
+        CLRL    PAGE
+80$:    MOVL    #SS$_NORMAL, R0
+90$:    RSB
+
+; LEVELS: /USERLIBRARY's keywords in FLAGS: ALL and NONE first, then
+; PROCESS, GROUP and SYSTEM; ALL if there are none.
+LEVELS:
+        .JSB_ENTRY  SCRATCH=<R2>
+        CLRL    R2                      ; R2 = 1 if a keyword was given
+        PRESENT "USERLIBRARY.ALL"
+        BLBC    R0, 10$
+        BISL2   #HLP$M_PROCESS!HLP$M_GROUP!HLP$M_SYSTEM, FLAGS
+        MOVL    #1, R2
+10$:    PRESENT "USERLIBRARY.NONE"
+        BLBC    R0, 20$
+        BICL2   #HLP$M_PROCESS!HLP$M_GROUP!HLP$M_SYSTEM, FLAGS
+        MOVL    #1, R2
+20$:    PRESENT "USERLIBRARY.PROCESS"
+        BLBC    R0, 30$
+        BISL2   #HLP$M_PROCESS, FLAGS
+        MOVL    #1, R2
+30$:    PRESENT "USERLIBRARY.GROUP"
+        BLBC    R0, 40$
+        BISL2   #HLP$M_GROUP, FLAGS
+        MOVL    #1, R2
+40$:    PRESENT "USERLIBRARY.SYSTEM"
+        BLBC    R0, 50$
+        BISL2   #HLP$M_SYSTEM, FLAGS
+        MOVL    #1, R2
+50$:    BLBS    R2, 90$
+        BISL2   #HLP$M_PROCESS!HLP$M_GROUP!HLP$M_SYSTEM, FLAGS
+90$:    RSB
+
+; PUTLINE line: LBR$OUTPUT_HELP's output routine. Writes line, by
+; descriptor, where /OUTPUT says, after a page break if the screen is
+; full. R0 = SS$_NORMAL, or LBR$_ENDTOPIC if the page prompt ended the
+; topic.
+        .ENTRY  PUTLINE, ^M<R2>
+        TSTL    PAGE
+        BEQL    20$
+        SUBL3   #4, PAGE, R2            ; R2 = the rows before a break
+        CMPL    CUR, R2
+        BGEQ    5$
+        INCL    CUR
+        BRB     20$
+5$:     BNEQ    10$                     ; a break in the topic: ask
+        BSBW    PAGEBRK
+        BLBS    R0, 10$
+        RET
+10$:    $QIOW_S CHAN=OUTCHAN, FUNC=#IO$_WRITEVBLK, P1=CLEAR, P2=#CLEARLEN
+        MOVL    #1, CUR
+20$:    MOVL    4(AP), R1
+        CMPL    WHERE, #1
+        BEQL    40$
+        BGTR    50$
+        PUSHL   R1
+        CALLS   #1, G^LIB$PUT_OUTPUT
+        RET
+40$:    MOVW    (R1), RAB+RAB$W_RSZ
+        MOVL    4(R1), RAB+RAB$L_RBF
+        $PUT    RAB=RAB
+        RET
+50$:    MOVL    #SS$_NORMAL, R0
+        RET
+
+; PAGEBRK: a blank line and "Press RETURN to continue ... ". R0 =
+; SS$_NORMAL to go on, LBR$_ENDTOPIC for ? or a topic typed, which
+; PENDING keeps for GETLINE; CTRL/Z ends HELP.
+PAGEBRK:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5>
+        PUSHAQ  BLANK
+        CALLS   #1, G^LIB$PUT_OUTPUT
+        PUSHAW  PAGELEN
+        PUSHAQ  PAGEPRM
+        PUSHAQ  PAGEDSC
+        CALLS   #3, G^LIB$GET_INPUT
+        BLBS    R0, 10$
+        $EXIT_S CODE=#SS$_NORMAL
+10$:    MOVZWL  PAGELEN, R0
+        MOVAB   PAGEBUF, R1
+        SKPC    #^A/ /, R0, (R1)
+        BEQL    80$
+        CMPB    (R1), #^A/?/
+        BEQL    70$
+        MOVZWL  PAGELEN, PENDING
+        MOVC3   PENDING, PAGEBUF, PENDBUF
+70$:    MOVL    #LBR$_ENDTOPIC, R0
+        RSB
+80$:    MOVL    #SS$_NORMAL, R0
+        RSB
+
+; GETLINE get_str, prompt, out_len: LBR$OUTPUT_HELP's input routine:
+; the topic typed at the page prompt, if there was one, else
+; LIB$GET_INPUT's line. The next topic starts a screen.
+        .ENTRY  GETLINE, ^M<R2, R3, R4, R5>
+        SUBL3   #3, PAGE, CUR
+        MOVL    PENDING, R2
+        BNEQ    10$
+        PUSHL   12(AP)
+        PUSHL   8(AP)
+        PUSHL   4(AP)
+        CALLS   #3, G^LIB$GET_INPUT
+        RET
+10$:    CLRL    PENDING
+        MOVL    4(AP), R3
+        MOVZWL  (R3), R0                ; as much as fits
+        CMPL    R2, R0
+        BLEQ    20$
+        MOVL    R0, R2
+20$:    MOVC3   R2, PENDBUF, @4(R3)
+        MOVW    R2, @12(AP)
+        MOVL    #SS$_NORMAL, R0
         RET
 
         .END    START

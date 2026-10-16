@@ -92,8 +92,8 @@ FIO$DATE::
 FIO$EXIT::
         svc     #1
 
-; FIO$HELP library, length, topic, length, routine: there are no help
-; libraries under vrun, so RMS$_FNF.
+; FIO$HELP library, length, topic, length, routine, prompt, input: there
+; are no help libraries under vrun, so RMS$_FNF.
 FIO$HELP::
         movz    x0, #0x8292
         movk    x0, #1, lsl #16

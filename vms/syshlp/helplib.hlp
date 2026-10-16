@@ -675,39 +675,89 @@
 
   The label to go to.
 1 HELP
-  Describes commands and other topics, from a help library: DCL's,
-  SYS$HELP:HELPLIB.HLB, or another.
+  Describes commands and other topics, from help libraries. At the
+  "Topic?" prompt you can:
+
+    Type the name of a command or topic, or the start of it.
+    Type @name to look in a user help library: the list of them, if
+    there are any, is after the topics.
+    Type ? to see the last text again.
+    Press Return to leave HELP, or to go back to the main library from
+    another.
+
+  At "Subtopic?", Return goes back up a level. CTRL/Z ends HELP.
 
   Format
 
-    HELP [topic [subtopic ...]]
-
-  With no topic HELP lists the topics. With one it writes its text and
-  lists its subtopics. Then it asks for another: type a subtopic's name
-  at "Subtopic?", ? to list them again, or Return to go back up a
-  level. Return at "Topic?" ends HELP. A name may be cut short, and
-  matches every topic that starts with it.
+    HELP [@library] [topic [subtopic ...]]
 2 Parameters
+
+ @library
+
+  A user help library, by the start of its name, or a file, in SYS$HELP:
+  with type .HLB unless you say otherwise. The topics after it are its.
 
  topic
 
-  What to describe, followed by subtopics to go down to.
+  What to describe, followed by subtopics to go down to. A topic the
+  library has not is looked for in the main library, then in the user
+  libraries, and the library that has it is used until you press Return
+  at its "@name Topic?".
 2 Qualifiers
+/INSTRUCTIONS
+  /INSTRUCTIONS (default)
+  /NOINSTRUCTIONS
+
+  With no topic, writes this text before the list of topics.
+/LIBLIST
+  /LIBLIST (default)
+  /NOLIBLIST
+
+  After the list of topics, writes the user libraries that are there.
 /LIBRARY
   /LIBRARY=file-spec
 
-  The help library to read instead of HELPLIB, in SYS$HELP: with type
+  The main help library, read instead of HELPLIB, in SYS$HELP: with type
   .HLB unless you say otherwise.
+/OUTPUT
+  /OUTPUT=file-spec
+  /NOOUTPUT
+
+  Writes the help to the file, HELP.LIS by default, instead of the
+  terminal, and doesn't prompt unless you give /PROMPT. /NOOUTPUT writes
+  it nowhere.
+/PAGE
+  /PAGE (default)
+  /NOPAGE
+
+  On a screen, clears it before each topic and stops when it is full,
+  at "Press RETURN to continue ...". Typing a topic there goes to it,
+  and ? stops the text.
 /PROMPT
   /PROMPT (default)
   /NOPROMPT
 
   /NOPROMPT writes the help asked for and ends, without asking for more.
+/USERLIBRARY
+  /USERLIBRARY[=(level[,...])]
+  /NOUSERLIBRARY
+
+  Where the user help libraries are looked for: the libraries the
+  logical names HLP$LIBRARY, HLP$LIBRARY_1, HLP$LIBRARY_2 and on name.
+
+    PROCESS   in the process's logical name table
+    GROUP     in the group's (vaxpunk has no group table)
+    SYSTEM    in the system's
+    ALL       in all of them, the default
+    NONE      nowhere, as /NOUSERLIBRARY
 2 Examples
 
   $ HELP COPY /LOG
   $ HELP/NOPROMPT SHOW LOGICAL
   $ HELP/LIBRARY=PHONEHELP
+  $ DEFINE HLP$LIBRARY SYS$HELP:EDTHELP
+  $ HELP @EDTHELP KEYPAD
+  $ HELP/OUTPUT=COPY.TXT COPY
 1 IF
   Does a command, or a block of them, only if an expression is true.
 

@@ -45,13 +45,26 @@ define verb GOTO
 	cliroutine GOTO
 	parameter P1, label=LABEL, prompt="Label", value(required)
 
-! HELP [topic ...]: HELP.EXE writes it from SYS$HELP:HELPLIB.HLB, or the
-! help library /LIBRARY names, and prompts for more unless /NOPROMPT.
+! HELP [@library] [topic ...]: HELP.EXE writes it from SYS$HELP:HELPLIB.HLB,
+! the help library /LIBRARY names, or the user libraries, HLP$LIBRARY and
+! on, and prompts for more unless /NOPROMPT.
 define verb HELP
 	image HELP
 	parameter P1, label=TOPIC, value(type=$rest_of_line)
+	qualifier INSTRUCTIONS, default
+	qualifier LIBLIST, default
 	qualifier LIBRARY, value(required, type=$infile)
+	qualifier OUTPUT, value(type=$outfile)
+	qualifier PAGE, default
 	qualifier PROMPT, default
+	qualifier USERLIBRARY, default, value(list, type=HELP_LEVELS)
+
+define type HELP_LEVELS
+	keyword ALL
+	keyword NONE
+	keyword PROCESS
+	keyword GROUP
+	keyword SYSTEM
 
 define verb IF
 	cliroutine IF

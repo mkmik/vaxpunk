@@ -16,9 +16,21 @@
 ;   COPY /LOG Subtopic?         a subtopic of it, ? the list again, or
 ;                               Return for the level above
 ;
-; ponytail: one library, library_name or HELPLIB: no HLP$LIBRARY search
-; list, @library, wildcards, "..." or HLP$M_HELP's help on HELP; a topic
-; matches one module's first lines, not more.
+; A topic not in the library open is looked for in the main library,
+; library_name or HELPLIB, and then in the user libraries, as VMS's: the
+; files the logical names HLP$LIBRARY, HLP$LIBRARY_1, HLP$LIBRARY_2 and
+; on name, in the process's table with HLP$M_PROCESS and then the
+; system's with HLP$M_SYSTEM. The library it is found in becomes the one
+; open, and the prompts say its name, "@MYHELP Topic? ", until Return
+; there goes back to the main one. @name at the start of a line opens
+; the user library whose name starts with name, or the file name names.
+; HLP$M_HELP, with no topic, writes the topic HELP's text before the list
+; of topics; HLP$M_LIBLIST, after the list, the user libraries'
+; names. An output routine that returns LBR$_ENDTOPIC ends the topic
+; written, and the prompting goes on.
+; vaxpunk: no group table, so HLP$M_GROUP finds nothing.
+; ponytail: no wildcards or "..."; a topic matches one module's first
+; lines, not more; at most MAXLIB user libraries.
 ;
         .LIBRARY "starlet.mlb"
         $SSDEF
@@ -26,11 +38,14 @@
         $LBRDEF
         $HLPDEF
         $LBRMSG
+        $LNMDEF
 
         .EXTERNAL LBR$INI_CONTROL, LBR$OPEN, LBR$CLOSE, LBR$GET_INDEX
         .EXTERNAL LBR$LOOKUP_KEY, LBR$GET_RECORD
 
 MAXW = 8                                ; levels of a topic followed
+MAXLIB = 16                             ; user libraries
+LIBSIZE = 128                           ; a library's specification, .ASCIC
 WSIZE = 64                              ; a word: .ASCIC, its room
 LISTSIZE = 8192
 
@@ -63,9 +78,44 @@ FLAGS:  .LONG   0                       ; and its HLP$M_ flags
 READ:   .LONG   LBR$C_READ
 HLP:    .LONG   LBR$C_TYP_HLP
 ONE:    .LONG   1
+CTL2:   .LONG   0                       ; a library being opened
+CTLOPEN:.LONG   0                       ; 1 while CTL is open
 HELPLIB:
         .ASCID  "HELPLIB"
 DEFNAM: .ASCID  "SYS$HELP:.HLB"
+MAINDSC:.QUAD   0                       ; the main library's specification
+SPECDSC:.QUAD   0                       ; a library's, LIBSPEC's
+NLIBS:  .LONG   0                       ; the user libraries,
+LIBS:   .BLKB   LIBSIZE*MAXLIB          ; their specifications
+CURLIB: .LONG   0                       ; the one open: 0 the main, n user
+                                        ; library n, -1 one @ named,
+EXTSPEC:.BLKB   LIBSIZE                 ; that one's specification,
+CURNAME:.BLKB   40                      ; and its name for the prompts, .ASCIC,
+                                        ; empty for the main
+QUIET:  .LONG   0                       ; 1: OUT writes nothing
+TOPLIST:.LONG   0                       ; SHOW listed the topics, none matching
+NOSUBS: .LONG   0                       ; FLUSH lists no subtopics
+ADDINFO:.LONG   0                       ; TOPICS says "Additional information"
+SAVENW: .LONG   0                       ; TRY's copy of NW and WORDS
+SAVEW:  .BLKB   WSIZE*MAXW
+LNMSTR: .BLKB   LIBSIZE                 ; a translation
+LNMLEN: .LONG   0
+LNMITEM:.WORD   LIBSIZE-1, LNM$_STRING
+        .ADDRESS LNMSTR, LNMLEN
+        .LONG   0
+LNMDSC: .LONG   0                       ; HLP$LIBRARY or HLP$LIBRARY_n
+        .ADDRESS LNMBUF
+LNMBUF: .ASCII  "HLP$LIBRARY_"
+LNMNUM: .BLKB   4
+PROCTAB:.ASCID  "LNM$PROCESS"
+SYSTAB: .ASCID  "LNM$SYSTEM"
+HELPKEY:.ASCII  "HELP"
+SRCHI:  .LONG   0                       ; SEARCH's library,
+OLDCTL: .LONG   0                       ; and the one open before
+ATLINE: .QUAD   0                       ; ATLIB's line,
+ATNAME: .LONG   0                       ; the name after @,
+ATLEN:  .LONG   0                       ; its length,
+ATI:    .LONG   0                       ; and each user library
 NW:     .LONG   0                       ; the words of the topic asked for,
 WORDS:  .BLKB   WSIZE*MAXW              ; each .ASCIC, in capitals
 PATH:   .BLKB   WSIZE*MAXW              ; the names they matched
@@ -110,12 +160,14 @@ MODS:   .LONG   0, 0                    ; the modules the topic matched
 ; LBR$OUTPUT_HELP output_routine [, output_width] [, line_desc]
 ; [, library_name] [, flags] [, input_routine]: writes the help that
 ; line_desc, by descriptor, asks for, from the help library library_name,
-; by descriptor, HELPLIB by default in SYS$HELP:, a line at a time by
-; calling output_routine with its descriptor, in output_width columns, by
-; reference, 80 by default. flags, by reference, HLP$M_PROMPT, then
-; prompts for topics and subtopics with input_routine, called as
-; LIB$GET_INPUT. R0 = LBR$_NORMAL, LBR$_ILLOUTROU, LBR$_ILLINROU,
-; LBR$_USRINPERR, or the library's open's status.
+; by descriptor, HELPLIB by default in SYS$HELP:, or the user libraries,
+; a line at a time by calling output_routine with its descriptor, in
+; output_width columns, by reference, 80 by default. flags, by
+; reference, HLP$M_x, are HLP$M_PROMPT, HLP$M_PROCESS, HLP$M_GROUP and
+; HLP$M_SYSTEM without it; with HLP$M_PROMPT it prompts for topics and
+; subtopics with input_routine, called as LIB$GET_INPUT. R0 =
+; LBR$_NORMAL, LBR$_ILLOUTROU, LBR$_ILLINROU, LBR$_USRINPERR, the output
+; routine's error, or the main library's open's status.
         .ENTRY  LBR$OUTPUT_HELP, ^M<R2, R3, R4, R5, R6, R7, R8, R9, R10, R11>
         MOVL    #LBR$_ILLOUTROU, R0
         MOVL    4(AP), OUTRTN
@@ -128,7 +180,7 @@ MODS:   .LONG   0, 0                    ; the modules the topic matched
         MOVL    8(AP), R0
         BEQL    2$
         MOVL    (R0), WIDTH
-2$:     CLRL    FLAGS
+2$:     MOVL    #HLP$M_PROMPT!HLP$M_PROCESS!HLP$M_GROUP!HLP$M_SYSTEM, FLAGS
         CMPL    R6, #5
         BLSSU   3$
         MOVL    20(AP), R0
@@ -143,38 +195,35 @@ MODS:   .LONG   0, 0                    ; the modules the topic matched
         TSTL    INRTN
         BNEQ    5$
         RET
-5$:     PUSHAL  HLP
-        PUSHAL  READ
-        PUSHAL  CTL
-        CALLS   #3, G^LBR$INI_CONTROL
-        BLBC    R0, 99$
-        MOVAQ   HELPLIB, R1             ; the library
+5$:     MOVAQ   HELPLIB, R1             ; the main library
         CMPL    R6, #4
         BLSSU   6$
         TSTL    16(AP)
         BEQL    6$
         MOVL    16(AP), R1
-6$:     PUSHAQ  DEFNAM
-        PUSHL   #0
-        PUSHL   R1
-        PUSHAL  CTL
-        CALLS   #4, G^LBR$OPEN
-        BLBS    R0, 7$
-        PUSHL   R0
-        PUSHAL  CTL
-        CALLS   #1, G^LBR$CLOSE
-        MOVL    (SP)+, R0
-99$:    RET
-7$:     CLRL    NW
+6$:     MOVQ    (R1), MAINDSC
+        CLRL    CTLOPEN
+        CLRL    CURLIB
+        CLRB    CURNAME
+        MOVAQ   MAINDSC, R1
+        BSBW    OPENLIB
+        BLBS    R0, 61$
+        RET
+61$:    BSBW    USERLIBS
+        CLRL    NW
+        MOVZBL  (AP), R6
         CMPL    R6, #3
         BLSSU   10$
         MOVL    12(AP), R0
         BEQL    10$
         MOVL    4(R0), R1
         MOVZWL  (R0), R2
+        BSBW    ATLIB
         BSBW    PARSE
-10$:    BSBW    SHOW
-        BLBC    R0, 85$
+10$:    BSBW    SEARCH
+        BLBS    R0, 20$
+        CMPL    R0, #LBR$_ENDTOPIC      ; the output routine ended it
+        BNEQ    85$
 20$:    BBC     #0, FLAGS, 80$
         BSBW    PROMPT
         PUSHAW  INLEN
@@ -193,21 +242,405 @@ MODS:   .LONG   0, 0                    ; the modules the topic matched
         SKPC    #^A/ /, R2, (R1)
         BNEQ    40$
         TSTL    NW
-        BEQL    80$
+        BEQL    35$
         DECL    NW
+        BRB     20$
+35$:    TSTL    CURLIB                  ; at Topic?: back to the main
+        BEQL    80$                     ; library, or out
+        MOVAQ   MAINDSC, R1
+        BSBW    OPENLIB
+        BLBC    R0, 80$
+        CLRL    CURLIB
+        CLRB    CURNAME
         BRB     20$
 40$:    CMPB    (R1), #^A/?/            ; ?: again
         BEQL    10$
         MOVAB   INBUF, R1
         MOVZWL  INLEN, R2
-        BSBW    PARSE
-        BRB     10$
+        TSTL    NW
+        BNEQ    45$
+        BSBW    ATLIB
+45$:    BSBW    PARSE
+        BRW     10$
 80$:    MOVL    #LBR$_NORMAL, R0
 85$:    PUSHL   R0
         PUSHAL  CTL
         CALLS   #1, G^LBR$CLOSE
         MOVL    (SP)+, R0
         RET
+
+; OPENLIB: R1 = a library's specification, by descriptor. Opens it, in
+; SYS$HELP: and .HLB unless it says, and makes it the one CTL is, closing
+; the one before; if it can't, CTL is as it was. R0 = the open's status.
+OPENLIB:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5>
+        PUSHL   R1
+        PUSHAL  HLP
+        PUSHAL  READ
+        PUSHAL  CTL2
+        CALLS   #3, G^LBR$INI_CONTROL
+        MOVL    (SP)+, R1
+        BLBC    R0, 90$
+        PUSHAQ  DEFNAM
+        PUSHL   #0
+        PUSHL   R1
+        PUSHAL  CTL2
+        CALLS   #4, G^LBR$OPEN
+        BLBS    R0, 10$
+        PUSHL   R0
+        PUSHAL  CTL2
+        CALLS   #1, G^LBR$CLOSE
+        MOVL    (SP)+, R0
+        RSB
+10$:    BLBC    CTLOPEN, 20$
+        PUSHAL  CTL
+        CALLS   #1, G^LBR$CLOSE
+20$:    MOVL    CTL2, CTL
+        MOVL    #1, CTLOPEN
+        MOVL    #SS$_NORMAL, R0
+90$:    RSB
+
+; USERLIBS: puts in LIBS the user libraries FLAGS asks for: the strings
+; of HLP$LIBRARY, HLP$LIBRARY_1 and on up to the first that isn't there,
+; in the process's table, then the system's.
+USERLIBS:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5, R6, R7>
+        CLRL    NLIBS
+        BBC     #1, FLAGS, 10$          ; HLP$M_PROCESS
+        MOVAQ   PROCTAB, R7
+        BSBW    USERTAB
+10$:    BBC     #3, FLAGS, 15$          ; HLP$M_SYSTEM
+        MOVAQ   SYSTAB, R7
+        BSBW    USERTAB
+15$:    RSB
+
+; USERTAB: R7 = a table, by descriptor: USERLIBS's names in it.
+USERTAB:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5, R6>
+        CLRL    R6                      ; R6 = the name's number
+25$:    CMPL    NLIBS, #MAXLIB
+        BGEQU   90$
+        MOVL    #11, LNMDSC             ; HLP$LIBRARY,
+        TSTL    R6
+        BEQL    30$
+        MOVL    R6, R0                  ; or HLP$LIBRARY_n, n < 100
+        CLRL    R1
+        EDIV    #10, R0, R2, R3
+        MOVL    #13, LNMDSC
+        TSTL    R2
+        BEQL    28$
+        ADDB3   #^A/0/, R2, LNMNUM
+        ADDB3   #^A/0/, R3, LNMNUM+1
+        MOVL    #14, LNMDSC
+        BRB     30$
+28$:    ADDB3   #^A/0/, R3, LNMNUM
+30$:    CLRL    LNMLEN
+        $TRNLNM_S TABNAM=(R7), LOGNAM=LNMDSC, ITMLST=LNMITEM
+        BLBC    R0, 90$
+        MOVZWL  LNMLEN, R0
+        BEQL    90$
+        MULL3   #LIBSIZE, NLIBS, R1
+        MOVAB   LIBS[R1], R1
+        MOVB    R0, (R1)+
+        MOVC3   R0, LNMSTR, (R1)
+        INCL    NLIBS
+        INCL    R6
+        BRB     25$
+90$:    RSB
+
+; LIBSPEC: R1 = a library's number, as CURLIB has it. R1 = its
+; specification, by descriptor.
+LIBSPEC:
+        .JSB_ENTRY
+        TSTL    R1
+        BNEQ    10$
+        MOVAQ   MAINDSC, R1
+        RSB
+10$:    BGTR    20$
+        MOVAB   EXTSPEC, R1
+        BRB     30$
+20$:    DECL    R1
+        MULL2   #LIBSIZE, R1
+        MOVAB   LIBS[R1], R1
+30$:    MOVZBL  (R1)+, SPECDSC
+        MOVL    R1, SPECDSC+4
+        MOVAQ   SPECDSC, R1
+        RSB
+
+; LIBNAME: R1 = a library's specification, by descriptor. Puts its file
+; name, in capitals, at R3, .ASCIC, 39 characters at most.
+LIBNAME:
+        .JSB_ENTRY
+        PUSHR   #^M<R2, R4, R5>
+        MOVZWL  (R1), R2
+        MOVL    4(R1), R1
+        ADDL3   R1, R2, R4              ; R4 = its end
+        MOVL    R1, R5                  ; R5 = past the last : or ]
+10$:    CMPL    R1, R4
+        BGEQU   20$
+        CMPB    (R1), #^A/:/
+        BEQL    15$
+        CMPB    (R1), #^A/]/
+        BEQL    15$
+        CMPB    (R1), #^A/>/
+        BNEQ    18$
+15$:    ADDL3   #1, R1, R5
+18$:    INCL    R1
+        BRB     10$
+20$:    CLRB    (R3)
+30$:    CMPL    R5, R4
+        BGEQU   90$
+        MOVZBL  (R5)+, R0
+        CMPB    R0, #^A/./
+        BEQL    90$
+        CMPB    R0, #59                 ; ;
+        BEQL    90$
+        CMPB    (R3), #39
+        BGEQU   90$
+        UPCASE  R0
+        MOVZBL  (R3), R1
+        MOVB    R0, 1(R3)[R1]
+        INCB    (R3)
+        BRB     30$
+90$:    POPR    #^M<R2, R4, R5>
+        RSB
+
+; ATLIB: R1, R2 = a line. If it starts with @name, opens the user library
+; whose name starts with name, or else the file name names, for the
+; topics after it, and R1, R2 = the rest of the line; an @name that opens
+; nothing stays, a topic no library has.
+ATLIB:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5, R6>
+        MOVQ    R1, ATLINE              ; the line, as it was
+        SKPC    #^A/ /, R2, (R1)
+        BEQL    5$
+        CMPB    (R1), #^A/@/
+        BEQL    10$
+5$:     MOVQ    ATLINE, R1
+        RSB
+10$:    INCL    R1                      ; the name: to a blank or /
+        DECL    R0
+        MOVL    R1, ATNAME
+        MOVL    R0, R2
+        LOCC    #^A/ /, R2, (R1)
+        SUBL3   R0, R2, R2
+        MOVL    ATNAME, R1
+        LOCC    #^A"/", R2, (R1)
+        SUBL3   R0, R2, ATLEN
+        BEQL    5$
+        MOVL    #1, ATI                 ; each user library
+20$:    CMPL    ATI, NLIBS
+        BGTRU   40$
+        MOVL    ATI, R1
+        BSBW    LIBSPEC
+        MOVAB   PRMBUF, R3
+        BSBW    LIBNAME
+        MOVL    ATNAME, R1
+        MOVL    ATLEN, R2
+        MOVAB   PRMBUF, R3
+        BSBW    ATMATCH
+        BLBC    R0, 30$
+        MOVL    ATI, R1
+        BSBW    LIBSPEC
+        BSBW    OPENLIB
+        BLBC    R0, 30$
+        MOVL    ATI, CURLIB
+        BRB     60$
+30$:    INCL    ATI
+        BRB     20$
+40$:    CMPL    ATLEN, #LIBSIZE-1       ; a file
+        BGEQU   5$
+        MOVB    ATLEN, EXTSPEC
+        MOVC3   ATLEN, @ATNAME, EXTSPEC+1
+        MNEGL   #1, R1
+        BSBW    LIBSPEC
+        BSBW    OPENLIB
+        BLBC    R0, 5$
+        MNEGL   #1, CURLIB
+60$:    MOVL    CURLIB, R1
+        BSBW    LIBSPEC
+        MOVAB   CURNAME, R3
+        BSBW    LIBNAME
+        ADDL3   ATNAME, ATLEN, R1       ; the rest
+        ADDL3   ATLINE+4, ATLINE, R2
+        SUBL2   R1, R2
+        RSB
+
+; ATMATCH: R1, R2 = a name typed, R3 = a library's name, .ASCIC. R0 = 1
+; if that starts with this, in either case.
+ATMATCH:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5>
+        CLRL    R0
+        MOVZBL  (R3)+, R4
+        CMPL    R2, R4
+        BGTRU   90$
+        CLRL    R5
+10$:    CMPL    R5, R2
+        BGEQU   80$
+        MOVZBL  (R1)[R5], R4
+        UPCASE  R4
+        CMPB    R4, (R3)[R5]
+        BNEQ    90$
+        INCL    R5
+        BRB     10$
+80$:    MOVL    #1, R0
+90$:    RSB
+
+; SEARCH: writes the help the NW words ask for, as SHOW does, from the
+; library open if it has the topic, else from the main library or a user
+; library that has it, which becomes the one open; with no words, the
+; topic HELP's text first if FLAGS says, and the user libraries' names
+; after the topics if FLAGS says. R0 = SHOW's status.
+SEARCH:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5, R6, R7, R8, R9, R10, R11>
+        CLRL    TOPLIST
+        TSTL    NW
+        BNEQ    20$
+        CLRL    ADDINFO                 ; no words: the topics
+        BBC     #5, FLAGS, 10$          ; HLP$M_HELP
+        BSBW    HELPHELP
+        BLBC    R0, 90$
+10$:    BSBW    TOPICS
+        BLBC    R0, 90$
+        BSBW    LIBLIST
+        RSB
+20$:    BSBW    TRY                     ; the library open
+        BLBC    FOUND, 30$
+        BSBW    SHOW
+        RSB
+30$:    CLRL    SRCHI                   ; each other library
+40$:    CMPL    SRCHI, NLIBS
+        BGTR    80$
+        CMPL    SRCHI, CURLIB
+        BEQL    70$
+        MOVL    CTL, OLDCTL             ; open it beside the one open
+        CLRL    CTLOPEN
+        MOVL    SRCHI, R1
+        BSBW    LIBSPEC
+        BSBW    OPENLIB
+        BLBC    R0, 65$
+        BSBW    TRY
+        BLBC    FOUND, 60$
+        PUSHAL  OLDCTL                  ; found: it is the one open
+        CALLS   #1, G^LBR$CLOSE
+        MOVL    SRCHI, CURLIB
+        CLRB    CURNAME
+        TSTL    SRCHI
+        BEQL    50$
+        MOVL    SRCHI, R1
+        BSBW    LIBSPEC
+        MOVAB   CURNAME, R3
+        BSBW    LIBNAME
+50$:    BSBW    SHOW
+        RSB
+60$:    PUSHAL  CTL
+        CALLS   #1, G^LBR$CLOSE
+65$:    MOVL    OLDCTL, CTL
+        MOVL    #1, CTLOPEN
+70$:    INCL    SRCHI
+        BRB     40$
+80$:    BSBW    SHOW                    ; nowhere: as the one open says
+        BLBC    R0, 90$
+        BLBC    TOPLIST, 90$
+        BSBW    LIBLIST
+90$:    RSB
+
+; TRY: SHOW, writing nothing and leaving NW and WORDS as they were: FOUND
+; says if the library open has the topic.
+TRY:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5, R6, R7, R8, R9, R10, R11>
+        MOVL    NW, SAVENW
+        MOVC3   #WSIZE*MAXW, WORDS, SAVEW
+        MOVL    #1, QUIET
+        BSBW    SHOW
+        CLRL    QUIET
+        MOVL    SAVENW, NW
+        MOVC3   #WSIZE*MAXW, SAVEW, WORDS
+        CLRL    TOPLIST
+        RSB
+
+; HELPHELP: writes the topic HELP's text, if the library has it, and sets
+; ADDINFO for TOPICS. R0 = the output's status.
+HELPHELP:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5, R6, R7, R8, R9, R10, R11>
+        MOVL    #4, KEYDSC
+        MOVAB   HELPKEY, KEYDSC+4
+        MOVL    #1, N
+        MOVL    #1, MODE
+        CLRL    FOUND
+        CLRL    BEST
+        MOVL    #1, NOSUBS
+        BSBW    SCAN
+        CLRL    NOSUBS
+        MOVL    FOUND, ADDINFO
+        RSB
+
+; LIBLIST: if FLAGS says, writes the user libraries' names, those that
+; open. R0 = the output's status.
+LIBLIST:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5, R6, R7, R8, R9, R10, R11>
+        MOVL    #SS$_NORMAL, R0
+        BBC     #4, FLAGS, 90$          ; HLP$M_LIBLIST
+        CLRQ    NAMES
+        MOVL    #1, R10
+10$:    CMPL    R10, NLIBS
+        BGTR    30$
+        MOVL    R10, R1
+        BSBW    LIBSPEC
+        MOVL    R1, R9
+        PUSHAL  HLP
+        PUSHAL  READ
+        PUSHAL  CTL2
+        CALLS   #3, G^LBR$INI_CONTROL
+        BLBC    R0, 25$
+        PUSHAQ  DEFNAM
+        PUSHL   #0
+        PUSHL   R9
+        PUSHAL  CTL2
+        CALLS   #4, G^LBR$OPEN
+        MOVL    R0, R8
+        PUSHAL  CTL2
+        CALLS   #1, G^LBR$CLOSE
+        BLBC    R8, 25$
+        MOVL    R9, R1
+        MOVAB   PRMBUF, R3
+        BSBW    LIBNAME
+        MOVAB   PRMBUF+1, R1
+        MOVZBL  PRMBUF, R2
+        MOVAB   NAMES, R3
+        BSBW    ADDNAME
+25$:    INCL    R10
+        BRB     10$
+30$:    MOVL    #SS$_NORMAL, R0
+        TSTL    NAMES
+        BEQL    90$
+        CLRL    LINELEN
+        BSBW    OUT
+        BLBC    R0, 90$
+        TEXT    "  Additional help libraries available (type @name for topics):"
+        BSBW    OUT
+        BLBC    R0, 90$
+        BSBW    OUT
+        BLBC    R0, 90$
+        MOVL    NAMES, R8               ; the names, two blanks apart
+        MOVAB   NAMES+8, R9
+40$:    MOVZBL  (R9), R2
+        ADDL3   LINELEN, R2, R0
+        ADDL2   #2, R0
+        CMPL    R0, WIDTH
+        BLEQ    50$
+        BSBW    OUT
+        BLBC    R0, 90$
+50$:    MOVL    #2, R1
+        BSBW    LSPACES
+        MOVAB   1(R9), R1
+        MOVZBL  (R9), R2
+        BSBW    LADD
+        MOVZBL  (R9), R0
+        MOVAB   1(R9)[R0], R9
+        SOBGTR  R8, 40$
+        BSBW    OUT
+90$:    RSB
 
 ; COLLECT key_desc, txtrfa: LBR$GET_INDEX's routine that adds each key to
 ; the list LIST points at. R0 = SS$_NORMAL.
@@ -282,6 +715,8 @@ SHOW:
         BRB     80$
 60$:    BSBW    SORRY                   ; no topic: list them
         BLBC    R0, 90$
+        MOVL    #1, TOPLIST
+        CLRL    ADDINFO
         CLRL    NW
         BSBW    TOPICS
         RSB
@@ -317,14 +752,18 @@ SORRY:
         BSBW    OUT
 90$:    RSB
 
-; TOPICS: lists the library's topics. R0 = the output's status.
+; TOPICS: lists the library's topics, "Additional information" if
+; ADDINFO. R0 = the output's status.
 TOPICS:
         .JSB_ENTRY
         CLRL    LINELEN
         BSBW    OUT
         BLBC    R0, 90$
+        BLBS    ADDINFO, 5$
         TEXT    "  Information available:"
-        BSBW    OUT
+        BRB     8$
+5$:     TEXT    "  Additional information available:"
+8$:     BSBW    OUT
         BLBC    R0, 90$
         CLRQ    NAMES
         MOVAB   NAMES, LIST
@@ -500,12 +939,13 @@ TARGET:
 90$:    RSB
 
 ; FLUSH: SCAN leaves the topic: writes "Additional information
-; available:" and its subtopics' names, if it has any. R0 = the output's
-; status.
+; available:" and its subtopics' names, if it has any and not NOSUBS. R0
+; = the output's status.
 FLUSH:
         .JSB_ENTRY
         MOVL    NAMES, LASTNSUB
         MOVL    #SS$_NORMAL, R0
+        BLBS    NOSUBS, 90$
         TSTL    NAMES
         BEQL    90$
         CLRL    LINELEN
@@ -573,11 +1013,19 @@ COLUMNS:
         BSBW    OUT
 90$:    RSB
 
-; PROMPT: makes PRMDSC "Topic? ", or the words and "Subtopic? ".
+; PROMPT: makes PRMDSC "Topic? ", or the words and "Subtopic? ", after
+; "@NAME " outside the main library.
 PROMPT:
         .JSB_ENTRY
         CLRL    LINELEN
-        TSTL    NW
+        TSTB    CURNAME                 ; @NAME, outside the main library
+        BEQL    5$
+        TEXT    "@"
+        MOVAB   CURNAME, R1
+        BSBW    LASCIC
+        MOVL    #1, R1
+        BSBW    LSPACES
+5$:     TSTL    NW
         BNEQ    10$
         TEXT    "Topic? "
         BRB     20$
@@ -717,7 +1165,7 @@ LSPACES:
         RSB
 
 ; OUT: writes LINE, without its trailing blanks, through the output
-; routine, and empties it. R0 = the routine's status.
+; routine, unless QUIET, and empties it. R0 = the routine's status.
 OUT:
         .JSB_ENTRY
         MOVL    LINELEN, R2
@@ -729,8 +1177,10 @@ OUT:
         BRB     10$
 20$:    MOVL    R2, LINEDSC
         CLRL    LINELEN
+        MOVL    #SS$_NORMAL, R0
+        BLBS    QUIET, 90$
         PUSHAQ  LINEDSC
         CALLS   #1, @OUTRTN
-        RSB
+90$:    RSB
 
         .END
