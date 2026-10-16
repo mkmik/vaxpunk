@@ -8,7 +8,8 @@
 ; it when no one is in the call: DIAL user, or just user, rings the
 ; user; ANSWER takes the call ringing here, REJECT turns it down; HANGUP
 ; and CTRL/Z hang up; DIRECTORY lists who can be called; EXIT and CTRL/Z
-; outside a call leave. HELP says the help library is missing.
+; outside a call leave. HELP [topic] scrolls the topic from
+; SYS$HELP:PHONEHELP.HLB in below the heading, until a key.
 ;
 ; As VMS's, each user has a mailbox, PHN$username, which whoever needs it
 ; first makes, permanent and then marked for deletion with $DELMBX, so it
@@ -35,6 +36,9 @@
         $JPIDEF
         $TTDEF
         $BRKDEF
+        $HLPDEF
+
+        .EXTERNAL LBR$OUTPUT_HELP
 
 INHIB = ^X10000000                      ; STS$M_INHIB_MSG: said already
 MAXSLOT = 6                             ; viewports: the user's and 5 others
@@ -156,8 +160,13 @@ CMD:    .BLKB   80
 WORK:   .BLKB   80
 MSGSHOWN:
         .LONG   0
-DIRSHOWN:
-        .LONG   0
+DIRSHOWN:                               ; a listing, DIRECTORY's or HELP's,
+        .LONG   0                       ; covers the viewports
+HLPDSC: .LONG   0                       ; HELP's topic
+        .ADDRESS 0
+HLPWID: .LONG   WIDTH
+PHONEHELP:
+        .ASCID  "PHONEHELP"
 MSGLEN: .LONG   0
 MSGBUF: .BLKB   80
 MYSPEC: .BLKB   16                      ; the user's username, .ASCIC
@@ -939,7 +948,7 @@ EXECUTE:
         RSB
 24$:    CMPL    R10, #6
         BNEQ    25$
-        MSG     "Help library is missing.  Please inform your system manager."
+        BSBW    SHOWHELP
         RSB
 25$:    CMPL    R10, #10
         BNEQ    26$
@@ -1170,6 +1179,50 @@ DIRECT:
 60$:    TXT     " listed."
         MSG     "Press any key to cancel the directory listing and continue."
         RSB
+
+; SHOWHELP: R1 and R2 = the topic. Scrolls its help from PHONEHELP.HLB
+; into the screen below the heading, as VMS's PHONE does, and leaves it
+; there until a key.
+; vaxpunk: the whole topic at once, not a line at a time.
+SHOWHELP:
+        .JSB_ENTRY
+        MOVL    R2, HLPDSC
+        MOVL    R1, HLPDSC+4
+        BSBW    FLUSHRAW                ; so OUT has only the help
+        ESC     "5;24r"                 ; scroll rows 5 to 24, which homes
+        CLRL    CURROW
+        MOVL    #5, R0
+        MOVL    #1, R1
+        BSBW    GOTO
+        ESC     "J"
+        PUSHAQ  PHONEHELP
+        PUSHAQ  HLPDSC
+        PUSHAL  HLPWID
+        PUSHAB  HLPLINE
+        CALLS   #4, G^LBR$OUTPUT_HELP
+        BLBS    R0, 10$
+        CLRL    OUTLEN                  ; none of it
+        MSG     "Help library is missing.  Please inform your system manager."
+        RSB
+10$:    ESC     "r"                     ; the whole screen scrolls again
+        CLRL    CURROW
+        MOVL    #1, DIRSHOWN
+        MSG     "Press any key to cancel the help information and continue."
+        RSB
+
+; HLPLINE line: LBR$OUTPUT_HELP's output routine. Writes line, by
+; descriptor, and goes to the next. R0 = SS$_NORMAL.
+        .ENTRY  HLPLINE, ^M<R2, R3>
+        MOVL    4(AP), R0
+        MOVZWL  (R0), R2
+        MOVL    4(R0), R1
+        BSBW    RAWS
+        MOVL    #13, R0
+        BSBW    RAWC
+        MOVL    #10, R0
+        BSBW    RAWC
+        MOVL    #SS$_NORMAL, R0
+        RET
 
 ; APPLY: R6 = a viewport's slot, R0 = a character typed there. Puts it
 ; in its line, or edits the line as VMS's PHONE does: RETURN starts a new

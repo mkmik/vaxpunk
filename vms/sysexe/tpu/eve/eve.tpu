@@ -13,8 +13,10 @@
 ! Commands are eve_ procedures, as DEC's EVE has them, so an
 ! initialization file can call them.
 !
+! HELP [topic] and the Help key show EVE's help library, EVE$HELP.HLB.
+!
 ! ponytail: no word wrap while typing, no command recall, no box
-! selection, no help library (HELP lists the commands).
+! selection.
 
 VARIABLE
     eve$x_bottom_window,
@@ -24,7 +26,6 @@ VARIABLE
     eve$x_cmd_prompt,
     eve$x_cmd_words,
     eve$x_found,
-    eve$x_help,
     eve$x_main_window,
     eve$x_marks,
     eve$x_ncommands,
@@ -1014,8 +1015,28 @@ LOOP
 ENDLOOP;
 ENDPROCEDURE;
 
-PROCEDURE eve_help
-MESSAGE ("Commands: " + eve$x_help);
+PROCEDURE eve_help (topic)
+! HELP [topic]: the topic from SYS$HELP:EVE$HELP.HLB, or the list of
+! topics, in the window until a key.
+LOCAL b, old;
+b := eve$find_buffer ("HELP");
+IF b = 0 THEN
+    b := CREATE_BUFFER ("HELP");
+    SET (SYSTEM, b);
+    SET (NO_WRITE, b);
+    SET (EOB_TEXT, b, "");
+ENDIF;
+HELP_TEXT ("EVE$HELP", topic, OFF, b);
+IF GET_INFO (b, "record_count") = 0 THEN RETURN; ENDIF;
+old := CURRENT_BUFFER;
+MAP (CURRENT_WINDOW, b);
+eve$status (CURRENT_WINDOW);
+MESSAGE ("Press any key to go back to the text.");
+UPDATE (CURRENT_WINDOW);
+UPDATE (message_window);
+READ_KEY;
+MESSAGE ("");
+eve$show_buffer (old);
 ENDPROCEDURE;
 
 ! ---- Ending
@@ -1095,11 +1116,6 @@ eve$x_cmd_count {eve$x_ncommands} := n;
 eve$x_cmd_name {eve$x_ncommands} := name;
 eve$x_cmd_kind {eve$x_ncommands} := kind;
 eve$x_cmd_prompt {eve$x_ncommands} := prompt;
-IF eve$x_help = "" THEN
-    eve$x_help := EDIT (name, UPPER, NOT_IN_PLACE);
-ELSE
-    eve$x_help := eve$x_help + ", " + EDIT (name, UPPER, NOT_IN_PLACE);
-ENDIF;
 ENDPROCEDURE;
 
 PROCEDURE eve$matches (c, words, n)
@@ -1229,7 +1245,7 @@ eve$def ("forward", "", "");
 eve$def ("get file", "s", "");
 eve$def ("global replace", "s", "");
 eve$def ("go to", "s", "Mark name: ");
-eve$def ("help", "", "");
+eve$def ("help", "s", "");
 eve$def ("include file", "s", "");
 eve$def ("insert here", "", "");
 eve$def ("insert mode", "", "");
@@ -1293,7 +1309,7 @@ DEFINE_KEY ("eve_select", E4, "select");
 DEFINE_KEY ("eve_previous_screen", E5, "previous screen");
 DEFINE_KEY ("eve_next_screen", E6, "next screen");
 DEFINE_KEY ("eve_do", DO, "do");
-DEFINE_KEY ("eve_help", HELP, "help");
+DEFINE_KEY ("eve_help ('keys')", HELP, "help");
 DEFINE_KEY ("eve_exit", F10, "exit");
 DEFINE_KEY ("eve_start_of_line", F12, "start of line");
 DEFINE_KEY ("eve_erase_previous_word", F13, "erase previous word");
@@ -1322,7 +1338,6 @@ ENDPROCEDURE;
 PROCEDURE tpu$init_procedure
 LOCAL file, rows, b;
 eve$x_ncommands := 0;
-eve$x_help := "";
 eve$x_cmd_words := CREATE_ARRAY;
 eve$x_cmd_count := CREATE_ARRAY;
 eve$x_cmd_name := CREATE_ARRAY;

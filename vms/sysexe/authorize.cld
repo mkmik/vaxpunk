@@ -73,7 +73,7 @@ define verb LIST
 define verb EXIT
 	routine EXIT
 
-! HELP [command]: describes the commands, from these tables.
+! HELP [topic ...]: the topic from SYS$HELP:UAFHELP.HLB.
 define verb HELP
 	routine HELP
 	parameter P1, label=TOPIC, value(type=$rest_of_line)

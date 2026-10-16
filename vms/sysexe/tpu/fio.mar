@@ -4,7 +4,8 @@
 ; What TPU and FORMS need from the system, the routines crosstools/vtools/
 ; bliss/fio.r64 declares (PRD-0006 "Two I/O modules"), on vaxpunk: files through
 ; RMS, memory from $EXPREG, lines through LIB$PUT_OUTPUT, the command line
-; from CLI$GET_VALUE's $LINE, the time from $ASCTIM, and $EXIT. Under
+; from CLI$GET_VALUE's $LINE, the time from $ASCTIM, $EXIT, and help
+; text from LBR$OUTPUT_HELP. Under
 ; vrun, crosstools/vtools/bliss/fio.mar serves the same routines. A file
 ; is read and written as a stream of bytes, each record a line ended by a
 ; line feed, as under vrun: variable length records with carriage return
@@ -21,7 +22,7 @@
         $RABDEF
         $IODEF
 
-        .EXTERNAL LIB$PUT_OUTPUT, CLI$GET_VALUE
+        .EXTERNAL LIB$PUT_OUTPUT, CLI$GET_VALUE, LBR$OUTPUT_HELP
 
 SLOTS = 2
 RECMAX = 8192
@@ -49,6 +50,11 @@ TIMDSC: .LONG   23
 TIMBUF: .BLKB   23
 OUTDSC: .LONG   0                       ; FIO$PUT_LINE's line
         .ADDRESS 0
+HLPLIB: .LONG   0                       ; FIO$HELP's library,
+        .ADDRESS 0
+HLPTOP: .LONG   0                       ; its topic,
+        .ADDRESS 0
+HLPRTN: .LONG   0                       ; and its routine
 NEXT:   .LONG   0                       ; FIO$ALLOC's next free byte
 LIMIT:  .LONG   0                       ; and its end
 RETADR: .BLKL   2
@@ -297,6 +303,32 @@ PUTREC:
 ; FIO$EXIT status: ends the image with status, a condition value.
         .ENTRY  FIO$EXIT, ^M<>
         $EXIT_S CODE=4(AP)
+        RET
+
+; FIO$HELP library, length, topic, length, routine: LBR$OUTPUT_HELP's
+; help on the topic from the help library, in SYS$HELP: unless it says
+; where, calling routine with each line's address and length. R0 =
+; LBR$OUTPUT_HELP's status, the library's open's if it fails.
+        .ENTRY  FIO$HELP, ^M<>
+        MOVL    8(AP), HLPLIB
+        MOVL    4(AP), HLPLIB+4
+        MOVL    16(AP), HLPTOP
+        MOVL    12(AP), HLPTOP+4
+        MOVL    20(AP), HLPRTN
+        PUSHAQ  HLPLIB
+        PUSHAQ  HLPTOP
+        PUSHL   #0
+        PUSHAB  HLPLINE
+        CALLS   #4, G^LBR$OUTPUT_HELP
+        RET
+
+; HLPLINE line: FIO$HELP's output routine: gives line, by descriptor, to
+; FIO$HELP's routine. R0 = its status.
+        .ENTRY  HLPLINE, ^M<>
+        MOVL    4(AP), R0
+        MOVZWL  (R0), -(SP)
+        PUSHL   4(R0)
+        CALLS   #2, @HLPRTN
         RET
 
 ; TT$OPEN width, page: whether SYS$INPUT is a terminal; its width and page.

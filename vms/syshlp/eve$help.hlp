@@ -1,0 +1,269 @@
+! EVE$HELP.HLP: help for EVE's commands and keys. vaxpunk's own text.
+! A command of several words is a topic of its first word, with a
+! subtopic for each word after it, so HELP ERASE START OF LINE finds it.
+1 DO
+  Press Do to give EVE a command. EVE asks "Command:" at the bottom of
+  the screen; type the command and press Return.
+
+  Each word of a command can be cut short, as long as what you type
+  starts only one command: MO D is MOVE DOWN. Whatever follows the
+  command's words is its parameter, as in FIND hello or LINE 20. A
+  command that needs a parameter you didn't give asks for it.
+
+  HELP KEYS shows what the keys do.
+1 KEYS
+  The editing keypad, above the arrows:
+
+    +---------+---------+---------+
+    |  Find   | Insert  | Remove  |     Do      a command
+    |         |  Here   |         |     Help    help
+    +---------+---------+---------+     F10     EXIT
+    | Select  |  Prev   |  Next   |     F12     START OF LINE
+    |         | Screen  | Screen  |     F13     ERASE PREVIOUS WORD
+    +---------+---------+---------+     F14     CHANGE MODE
+
+  The arrow keys are MOVE UP, MOVE DOWN, MOVE LEFT and MOVE RIGHT.
+  Return breaks the line, Tab puts in a tab and Delete is DELETE.
+
+    Ctrl/A   CHANGE MODE            Ctrl/R   REMEMBER
+    Ctrl/E   END OF LINE            Ctrl/U   ERASE START OF LINE
+    Ctrl/H   START OF LINE (BS)     Ctrl/V   QUOTE
+    Ctrl/J   ERASE WORD (LF)        Ctrl/W   REFRESH
+    Ctrl/L   INSERT PAGE BREAK      Ctrl/Z   EXIT
+
+  DEFINE KEY and LEARN put commands on keys of your own.
+1 BOTTOM
+  Moves the cursor to the end of the buffer.
+1 BUFFER
+  Makes a buffer the one in the window: BUFFER name. EVE makes the
+  buffer, empty, if there is none of that name.
+1 CAPITALIZE
+2 WORD
+  Makes the first letter of the word at the cursor a capital and the
+  rest small letters, then moves past the word.
+1 CENTER
+2 LINE
+  Puts the text of the current line half way between the left and right
+  margins. The cursor goes to the start of the text.
+1 CHANGE
+2 DIRECTION
+  Turns the buffer's direction around, forward to reverse or reverse to
+  forward. The status line shows the direction.
+2 MODE
+  Switches the buffer between insert and overstrike mode. The status
+  line shows the mode. Ctrl/A and F14 do it too.
+1 DEFINE
+2 KEY
+  Puts a command on a key: DEFINE KEY command. EVE asks you to press the
+  key; from then on the key does the command.
+1 DELETE
+  Deletes the character before the cursor. At the start of a line, the
+  line joins the one before it. The Delete key does it.
+2 BUFFER
+  Deletes a buffer: DELETE BUFFER name, the current buffer if you give
+  no name. EVE asks first if the buffer was changed and not written.
+  The only buffer can't be deleted.
+1 END
+2 OF
+3 LINE
+  Moves the cursor to the end of the line. Ctrl/E does it too.
+1 ERASE
+2 CHARACTER
+  Erases the character at the cursor. RESTORE CHARACTER puts it back.
+2 LINE
+  Erases the current line, its line end too. RESTORE LINE or RESTORE
+  puts it back.
+2 PREVIOUS
+3 WORD
+  Erases the word before the cursor; at the start of a word, the one
+  before it. At the start of a line it joins the line to the one
+  before. RESTORE WORD puts the word back. F13 does it.
+2 START
+3 OF
+4 LINE
+  Erases from the start of the line up to the cursor. Ctrl/U does it.
+2 WORD
+  Erases the word at the cursor and the spaces after it. At the end of
+  a line, the next line joins this one after a space. RESTORE WORD puts
+  the word back. Ctrl/J does it.
+1 EXIT
+  Ends the session, writing each buffer you changed to its file. F10
+  and Ctrl/Z do it too.
+1 FILL
+2 PARAGRAPH
+  Fills the paragraph the cursor is in, the lines between blank lines,
+  so that its words fit between the left and right margins.
+1 FIND
+  Finds text: FIND text. EVE looks from the cursor in the buffer's
+  direction, and puts the cursor on what it finds. Text in small letters
+  finds either case; with a capital in it, only that case. If the text
+  is only the other way, EVE asks whether to go there.
+
+  The Find key asks for the text.
+2 NEXT
+  Finds the text the last FIND looked for, again.
+1 FORWARD
+  Makes the buffer's direction forward, toward its end.
+1 GET
+2 FILE
+  Edits a file: GET FILE name. The file goes in a buffer of its own,
+  which the window then shows; if a buffer has the file already, EVE
+  shows that one.
+1 GLOBAL
+2 REPLACE
+  Replaces text everywhere in the buffer without asking: GLOBAL REPLACE
+  old. EVE asks for the new text, and tells how many it replaced. The
+  cursor stays where it was.
+1 GO
+2 TO
+  Moves the cursor to a mark that MARK made: GO TO name.
+1 HELP
+  Shows help on a command or topic: HELP topic. The Help key shows help
+  too. HELP KEYS shows the keys, HELP DO how to give commands.
+1 INCLUDE
+2 FILE
+  Puts a file's text in the buffer at the cursor: INCLUDE FILE name.
+1 INSERT
+2 HERE
+  Puts the text that REMOVE or STORE TEXT saved in at the cursor. The
+  Insert Here key does it.
+2 MODE
+  Makes typing put characters in, pushing the rest of the line right.
+2 PAGE
+3 BREAK
+  Puts a form feed, a page break, on a line of its own at the cursor.
+  Ctrl/L does it.
+1 LEARN
+  Starts learning keys: what you press next, up to Ctrl/R, EVE then
+  puts on a key of your choice. See REMEMBER.
+1 LINE
+  Moves the cursor to the start of a line by its number: LINE n.
+1 LOWERCASE
+2 WORD
+  Makes the word at the cursor small letters, then moves past it.
+1 MARK
+  Marks the cursor's place with a name: MARK name. GO TO name comes back
+  to it.
+1 MOVE
+2 BY
+3 LINE
+  Moves to the end of the line, or of the next one if the cursor is
+  there already, when the direction is forward; to the start of the
+  line, or of the one before, when it is reverse.
+3 WORD
+  Moves to the next word when the direction is forward, the one before
+  when it is reverse.
+2 DOWN
+  Moves the cursor down a line. The down arrow does it.
+2 LEFT
+  Moves the cursor left a character. The left arrow does it.
+2 RIGHT
+  Moves the cursor right a character, past the end of the line too. The
+  right arrow does it.
+2 UP
+  Moves the cursor up a line. The up arrow does it.
+1 NEXT
+2 BUFFER
+  Shows the next buffer in the window.
+2 SCREEN
+  Moves a screen on, toward the end of the buffer. The Next Screen key
+  does it.
+2 WINDOW
+  With two windows, moves the cursor to the other one.
+1 ONE
+2 WINDOW
+  Goes back to one window, showing the current buffer.
+1 OTHER
+2 WINDOW
+  With two windows, moves the cursor to the other one.
+1 OVERSTRIKE
+2 MODE
+  Makes typing replace the characters at the cursor.
+1 PREVIOUS
+2 BUFFER
+  Shows the buffer before the current one in the window.
+2 SCREEN
+  Moves a screen back, toward the start of the buffer. The Prev Screen
+  key does it.
+2 WINDOW
+  With two windows, moves the cursor to the other one.
+1 QUIT
+  Ends the session without writing the buffers. If you changed one, EVE
+  asks first.
+1 QUOTE
+  Puts the next character you type in the buffer as it is, a control
+  character too. Ctrl/V does it.
+1 REFRESH
+  Draws the screen again. Ctrl/W does it.
+1 REMEMBER
+  Ends LEARN: EVE asks you to press a key, which from then on does the
+  keys learned. Ctrl/R does it.
+1 REMOVE
+  Moves the text selected, or found, into the insert-here buffer. INSERT
+  HERE puts it back somewhere else. The Remove key does it.
+1 REPEAT
+  Does a key more than once: REPEAT n. EVE asks you to press the key,
+  and does what it does n times.
+1 REPLACE
+  Replaces text, asking each time: REPLACE old. EVE asks for the new
+  text, then at each place from the cursor on asks Yes, No, All (the
+  rest without asking), Last (this one, then stop) or Quit.
+1 RESET
+  Cancels the selection.
+1 RESTORE
+  Puts back the line ERASE LINE erased, as RESTORE LINE does.
+2 CHARACTER
+  Puts back the characters ERASE CHARACTER or ERASE START OF LINE
+  erased last.
+2 LINE
+  Puts back the line ERASE LINE erased last, above the current line.
+2 WORD
+  Puts back the word ERASE WORD or ERASE PREVIOUS WORD erased last.
+1 REVERSE
+  Makes the buffer's direction reverse, toward its start.
+1 SAVE
+2 FILE
+  Writes the current buffer to its file.
+3 AS
+  Writes the current buffer to another file, SAVE FILE AS name, which
+  becomes the buffer's file.
+1 SELECT
+  Starts a selection at the cursor. Move the cursor, and the text in
+  between is selected, for REMOVE or STORE TEXT. The Select key does it.
+2 ALL
+  Selects the whole buffer.
+1 SET
+2 LEFT
+3 MARGIN
+  Sets the buffer's left margin, a column: SET LEFT MARGIN n.
+2 RIGHT
+3 MARGIN
+  Sets the buffer's right margin, a column: SET RIGHT MARGIN n.
+2 TABS
+  Puts tab stops every n columns: SET TABS n.
+1 SHOW
+2 BUFFERS
+  Lists the buffers, with their lines and files, in a buffer of its own.
+1 START
+2 OF
+3 LINE
+  Moves the cursor to the start of the line. F12 and Backspace do it.
+1 STORE
+2 TEXT
+  Copies the text selected, or found, into the insert-here buffer,
+  leaving it where it is. INSERT HERE puts a copy in elsewhere.
+1 TOP
+  Moves the cursor to the start of the buffer.
+1 TPU
+  Does a TPU statement: TPU statement, such as TPU POSITION (END_OF
+  (CURRENT_BUFFER)).
+1 TWO
+2 WINDOWS
+  Splits the screen into two windows, both showing the current buffer.
+1 UPPERCASE
+2 WORD
+  Makes the word at the cursor capitals, then moves past it.
+1 WRITE
+2 FILE
+  Writes the current buffer: WRITE FILE name, to its own file if you
+  give no name.

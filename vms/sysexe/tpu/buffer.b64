@@ -1327,6 +1327,40 @@ ROUTINE BX_FILE_SEARCH (ARGS : REF VECTOR, N, R) =
     SS_NORMAL
     END;
 
+! HELP_TEXT (library, topic, ON | OFF, buffer): erases the buffer and
+! puts in it the help on topic, from the help library, in SYS$HELP:
+! unless it says where, as LBR$OUTPUT_HELP writes it (FIO$HELP).
+! ponytail: ON, which would prompt for more topics, is taken as OFF.
+OWN
+    HELPBUF : REF VECTOR;               ! the buffer HELP_LINE fills
+
+ROUTINE HELP_LINE (TEXT, LEN) =
+    BEGIN
+    LINK(.HELPBUF, LINE_NEW(.TEXT, .LEN), 0);
+    SS_NORMAL
+    END;
+
+ROUTINE BX_HELP_TEXT (ARGS : REF VECTOR, N) =
+    BEGIN
+    LOCAL
+        S;
+    ARGCOUNT(4, 4);
+    IF VTYPE(.ARGS[0]) NEQ TY_STRING THEN RETURN ARGMISMATCH(1, .ARGS[0]);
+    IF VTYPE(.ARGS[1]) NEQ TY_STRING THEN RETURN ARGMISMATCH(2, .ARGS[1]);
+    IF VTYPE(.ARGS[2]) NEQ TY_KEYWORD THEN RETURN ARGMISMATCH(3, .ARGS[2]);
+    IF VTYPE(.ARGS[3]) NEQ TY_BUFFER THEN RETURN ARGMISMATCH(4, .ARGS[3]);
+    HELPBUF = BUFP(.ARGS[3]);
+    IF NOT MODIFY(.HELPBUF)
+    THEN
+        (VREF(.HELPBUF[B_NAME]); RETURN BI_ERR(TPU$_NOTMODIFIABLE, .HELPBUF[B_NAME]));
+    WHILE .HELPBUF[B_FIRST] NEQ 0 DO DELLINE(.HELPBUF, .HELPBUF[B_FIRST]);
+    S = FIO$HELP(SADDR(.ARGS[0]), SLEN(.ARGS[0]), SADDR(.ARGS[1]), SLEN(.ARGS[1]), HELP_LINE);
+    HELPBUF[B_LINE] = .HELPBUF[B_FIRST];
+    HELPBUF[B_OFF] = 0;
+    IF NOT .S THEN (VREF(.ARGS[0]); RETURN BI_ERR(TPU$_OPENIN, .ARGS[0]));
+    SS_NORMAL
+    END;
+
 ! WRITE_FILE (buffer | range [, file]): returns the file's name.
 ROUTINE BX_WRITE_FILE (ARGS : REF VECTOR, N, R) =
     BEGIN
@@ -2016,6 +2050,7 @@ GLOBAL ROUTINE BUF_CALL (B, ARGS : REF VECTOR, N, R) =
         [B_READ_FILE] : BX_READ_FILE(.ARGS, .N, .R);
         [B_WRITE_FILE] : BX_WRITE_FILE(.ARGS, .N, .R);
         [B_FILE_SEARCH] : BX_FILE_SEARCH(.ARGS, .N, .R);
+        [B_HELP_TEXT] : BX_HELP_TEXT(.ARGS, .N);
         [B_CURRENT_LINE, B_CURRENT_CHARACTER, B_CURRENT_OFFSET, B_CURRENT_BUFFER] :
             BX_CURRENT(.B, .ARGS, .N, .R);
         [B_CURRENT_DIRECTION] :

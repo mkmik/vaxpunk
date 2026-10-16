@@ -57,3 +57,21 @@ fn bad_objects() {
     let err = vlib::replace(&mut lib, "l.obj", &object("L", &long), 0).unwrap_err();
     assert!(err.contains("is longer than 128 characters"), "{err}");
 }
+
+#[test]
+fn help_topics() {
+    let mut lib = vlib::new_help(0);
+    let text = "! a comment\n\n1 dial\n  Calls someone.\n2 /LOG\n  Logs.\n1 HELP \n  Help.\n";
+    assert_eq!(vlib::replace_help(&mut lib, "p.hlp", text, 0), Ok(()));
+    let names: Vec<_> = lib.topics.iter().map(|t| t.name.as_str()).collect();
+    assert_eq!(names, ["DIAL", "HELP"]);
+    assert_eq!(
+        lib.topics[0].lines,
+        ["1 dial", "  Calls someone.", "2 /LOG", "  Logs."]
+    );
+    let again = "1 DIAL\n  Rings.\n";
+    assert_eq!(vlib::replace_help(&mut lib, "q.hlp", again, 1), Ok(()));
+    assert_eq!(lib.topics.len(), 2);
+    let err = vlib::replace_help(&mut lib, "r.hlp", "text\n1 X\n", 0).unwrap_err();
+    assert!(err.starts_with("%VLIB-F-BADHLP, r.hlp:1:"), "{err}");
+}

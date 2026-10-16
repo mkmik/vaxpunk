@@ -1,30 +1,55 @@
-        .TITLE  HELP    Describes DCL's commands, from its command tables
-        .IDENT  /V0.2/
+        .TITLE  HELP    DCL's HELP, from a help library
+        .IDENT  /V0.3/
 ;
-; DCL's HELP [topic] runs this, which build.rs links with DCL$TABLES,
-; DCL's command tables, and help/describe.mar, which describes them. With
-; no topic it lists the verbs, then what DCL does with no verb: symbols,
-; labels, procedures.
+; DCL's HELP [topic ...] runs this: LBR$OUTPUT_HELP writes the topic from
+; SYS$HELP:HELPLIB.HLB, or the library /LIBRARY names, and then prompts
+; for more, "Topic?" and "COPY Subtopic?", unless /NOPROMPT. Return goes
+; up a level and out, ? lists the topics again.
+; vaxpunk: no /OUTPUT, /PAGE, /USERLIBRARY or /INSTRUCTIONS.
 ;
         .LIBRARY "starlet.mlb"
         .LIBRARY "sysexe.mlb"
+        $HLPDEF
+        $CLIMSGDEF
 
-        .EXTERNAL HELP$TOPIC, DCL$TABLES
+        .EXTERNAL LBR$OUTPUT_HELP, LIB$PUT_OUTPUT, LIB$GET_INPUT
+
+        .PSECT  DATA, NOEXE, WRT, LONG
+TOPDSC: .LONG   256                     ; TOPIC, the parameter
+        .ADDRESS TOPIC
+TOPLEN: .WORD   0
+TOPIC:  .BLKB   256
+LIBDSC: .LONG   256                     ; /LIBRARY's value
+        .ADDRESS LIBBUF
+LIBLEN: .WORD   0
+LIBBUF:
+        .BLKB   256
+WIDTH:  .LONG   80
+FLAGS:  .LONG   HLP$M_PROMPT
 
         .PSECT  CODE, EXE, LONG
-        .ENTRY  START, ^M<>
-        PUSHAB  G^DCL$TABLES
-        CALLS   #1, G^HELP$TOPIC
-        BLBC    R1, 90$
-        PRINT   ""
-        PRINT   "  @file [p1 ... p8]     runs the command procedure file, file.COM"
-        PRINT   "  name = expression     sets a local symbol, == a global one"
-        PRINT   "  name := string        the same with a string, :== a global one"
-        PRINT   "  'name'                stands for the symbol's value in a command"
-        PRINT   "  label:                a label in a procedure, for GOTO"
-        PRINT   ""
-        PRINT   "  HELP verb describes a verb, its parameters and qualifiers."
-        MOVL    #1, R0
-90$:    RET
+        .ENTRY  START, ^M<R2>
+        CLRW    TOPLEN
+        GETVALUE "TOPIC", TOPDSC, TOPLEN
+        MOVZWL  TOPLEN, TOPDSC
+        CLRL    R2                      ; R2 = the library, 0 HELPLIB
+        PRESENT "LIBRARY"
+        BLBC    R0, 10$
+        GETVALUE "LIBRARY", LIBDSC, LIBLEN
+        MOVZWL  LIBLEN, LIBDSC
+        MOVAQ   LIBDSC, R2
+10$:    PRESENT "PROMPT"
+        BLBS    R0, 20$
+        CMPL    R0, #CLI$_NEGATED
+        BNEQ    20$
+        CLRL    FLAGS
+20$:    PUSHAB  G^LIB$GET_INPUT
+        PUSHAL  FLAGS
+        PUSHL   R2
+        PUSHAQ  TOPDSC
+        PUSHAL  WIDTH
+        PUSHAB  G^LIB$PUT_OUTPUT
+        CALLS   #6, G^LBR$OUTPUT_HELP
+        RET
 
         .END    START

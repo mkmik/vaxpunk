@@ -20,7 +20,9 @@
 ;   EXIT        writes the buffer to a new version of the file, and ends
 ;               the session
 ;   QUIT        ends the session without writing
-;   HELP        lists the commands
+;   HELP [topic [subtopic]]
+;               writes the topic from SYS$HELP:EDTHELP.HLB, or lists
+;               the topics
 ;
 ; A range is a line, or two with a colon between them: a number, . the
 ; current line, BEGIN the first, END the end of the buffer, "text" or
@@ -41,7 +43,8 @@
 ; PF1-PF4, is EDT's: PF1 GOLD, PF2 HELP, PF3 FINDNXT, GOLD PF3 FIND, PF4
 ; DEL L, comma DEL C, 0 LINE, 2 EOL, 3 CHAR, 4 ADVANCE, 5 BACKUP, GOLD 4
 ; BOTTOM, GOLD 5 TOP, 8 SECT, and PREV and NEXT SCREEN a section back and
-; on.
+; on. HELP shows EDTHELP's KEYPAD topic, the keypad, and then the help on
+; each key pressed, until the space bar or a key without help.
 ; Keypad mode's screen is the terminal's page by its width, as SET
 ; TERMINAL sets them, read with IO$_SENSEMODE.
 ; ponytail: lines of at most LINESIZE characters, MAXLINES of them,
@@ -61,7 +64,7 @@
         $RABDEF
         $NAMDEF
 
-        .EXTERNAL PUT_LINE
+        .EXTERNAL PUT_LINE, LBR$OUTPUT_HELP, LIB$PUT_OUTPUT
 
 LINESIZE = 255
 MAXLINES = 2000
@@ -127,7 +130,48 @@ E_FULL: .ASCIC  "Buffer is full"
 E_LONG: .ASCIC  "Line too long"
 E_NOSTR:
         .ASCIC  "No search string"
-E_KEYS: .ASCIC  "PF1 GOLD PF3 FINDNXT G-PF3 FIND PF4 DEL L , DEL C 4/5 ADV/BACK G-4/5 BOT/TOP"
+E_HKEY: .ASCIC  "Press a key for help on it, or the space bar to resume editing"
+E_NOHELP:
+        .ASCIC  "No help library, SYS$HELP:EDTHELP.HLB"
+EDTHELP:.ASCID  "SYS$HELP:EDTHELP.HLB"
+HLPDSC: .LONG   0                       ; a help topic
+        .ADDRESS 0
+H_MORE: .ASCII  "  Additional information"   ; where a key's help ends
+H_MORELEN = .-H_MORE
+S_HOME: .ASCIC  <ESC>"[H"<ESC>"[J"      ; the top, a clear screen
+; HKEY code, "topic": the help on the key keypad mode reads as code.
+        .MACRO  HKEY    CODE, TOPIC, ?L
+        .SAVE_PSECT LOCAL_BLOCK
+        .PSECT  $LITERAL$
+L:      .ASCIC  TOPIC
+        .RESTORE_PSECT
+        .LONG   CODE
+        .ADDRESS L
+        .ENDM   HKEY
+HKEYS:  HKEY    K_PF1, "KEYPAD PF1"
+        HKEY    K_PF1+1, "KEYPAD PF2"
+        HKEY    K_PF1+2, "KEYPAD PF3"
+        HKEY    K_PF1+3, "KEYPAD PF4"
+        HKEY    K_COMMA, "KEYPAD COMMA"
+        HKEY    K_KP0, "KEYPAD KP0"
+        HKEY    K_KP0+2, "KEYPAD KP2"
+        HKEY    K_KP0+3, "KEYPAD KP3"
+        HKEY    K_KP0+4, "KEYPAD KP4"
+        HKEY    K_KP0+5, "KEYPAD KP5"
+        HKEY    K_KP0+8, "KEYPAD KP8"
+        HKEY    K_UP, "KEYPAD ARROWS"
+        HKEY    K_UP+1, "KEYPAD ARROWS"
+        HKEY    K_UP+2, "KEYPAD ARROWS"
+        HKEY    K_UP+3, "KEYPAD ARROWS"
+        HKEY    K_PREV, "KEYPAD PREV_SCREEN"
+        HKEY    K_NEXT, "KEYPAD NEXT_SCREEN"
+        HKEY    127, "KEYPAD DELETE"
+        HKEY    8, "KEYPAD BACKSPACE"
+        HKEY    13, "KEYPAD RETURN"
+        HKEY    9, "KEYPAD TAB"
+        HKEY    23, "KEYPAD CTRL_W"
+        HKEY    26, "KEYPAD CTRL_Z"
+        .LONG   0
 S_ENTER:
         .ASCIC  <ESC>"="<ESC>"[2J"     ; keypad application mode, a clear screen
 S_LEAVE:
@@ -250,24 +294,17 @@ ERROR:  PUSHL   R1
         CALLS   #1, G^PUT_LINE
         BRW     NEXT
 
-HELP:   PRINT   "  range       types the lines range names"
-        PRINT   "  TYPE [range]"
-        PRINT   "              the same, the current line if there is no range"
-        PRINT   "  (RETURN)    moves to the next line and types it"
-        PRINT   "  INSERT [range]"
-        PRINT   "              inserts lines, up to a CTRL/Z, before the range"
-        PRINT   "  DELETE [range]"
-        PRINT   "              deletes the lines"
-        PRINT   "  REPLACE [range]"
-        PRINT   "              deletes the lines, then inserts"
-        PRINT   "  CHANGE      edits on the screen until CTRL/Z, PF2 there lists keys"
-        PRINT   "  EXIT        writes a new version of the file, and ends"
-        PRINT   "  QUIT        ends without writing"
-        PRINT   "  HELP        lists the commands"
-        PRINT   "A range is a line, or two with a colon between them: a number,"
-        PRINT   ". the current line, BEGIN, END, 'text' the next line with text"
-        PRINT   "in it, -'text' the last one before; or WHOLE, or REST."
-        BRW     NEXT
+HELP:   SUBL3   R6, R7, HLPDSC          ; the rest of the line, the topic
+        MOVL    R6, HLPDSC+4
+        PUSHAQ  EDTHELP
+        PUSHAQ  HLPDSC
+        PUSHL   #0
+        PUSHAB  G^LIB$PUT_OUTPUT
+        CALLS   #4, G^LBR$OUTPUT_HELP
+        BLBS    R0, 10$
+        PUSHAB  E_NOHELP
+        CALLS   #1, G^PUT_LINE
+10$:    BRW     NEXT
 
 ; LOAD: reads the file the command line names into the buffer, a record a
 ; line, up to MAXLINES of them and TEXTSIZE bytes. A file that doesn't
@@ -1224,10 +1261,75 @@ REFRESH:
         MOVL    #2, PAINT
         RSB
 
+; HELPKEY: PF2, as EDT's: the keypad, from EDTHELP's KEYPAD topic, then
+; the help on each key pressed, until the space bar or a key without
+; help, and the screen painted again.
 HELPKEY:
         .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5, R6, R7>
-        MOVAB   E_KEYS, R1
-        BRW     MSG
+        MOVL    HKEYS+4, R1             ; the keypad: "KEYPAD", of the
+        MOVZBL  #6, R2                  ; first key's topic
+10$:    INCL    R1
+        MOVL    R2, HLPDSC
+        MOVL    R1, HLPDSC+4
+        MOVAB   S_HOME, R1
+        BSBW    PUTS
+        PUSHAQ  EDTHELP
+        PUSHAQ  HLPDSC
+        PUSHAL  COLS
+        PUSHAB  HELPLINE
+        CALLS   #4, G^LBR$OUTPUT_HELP
+        BLBS    R0, 20$
+        TSTL    R0                      ; HELPLINE's stop
+        BEQL    20$
+        MOVAB   E_NOHELP, R1
+        BRB     40$
+20$:    MOVAB   E_HKEY, R1
+        BSBW    MSG
+        BSBW    FLUSH
+        BSBW    GETKEY
+        MOVAL   HKEYS, R6
+30$:    TSTL    (R6)
+        BEQL    50$
+        CMPL    R0, (R6)
+        BEQL    35$
+        ADDL2   #8, R6
+        BRB     30$
+35$:    MOVL    4(R6), R1
+        MOVZBL  (R1), R2
+        BRB     10$
+40$:    BSBW    MSG
+        BRB     60$
+50$:    CLRL    MSGON
+        BSBW    CLRMSG
+60$:    MOVL    #2, PAINT
+        RSB
+
+; HELPLINE line: LBR$OUTPUT_HELP's output routine for HELPKEY. Writes
+; line, by descriptor, and goes to the next; stops before a topic's list
+; of subtopics, R0 = 0, else R0 = SS$_NORMAL.
+        .ENTRY  HELPLINE, ^M<R2, R3, R4>
+        MOVL    4(AP), R4
+        MOVZWL  (R4), R2
+        MOVL    4(R4), R3
+        CMPL    R2, #H_MORELEN
+        BLSSU   10$
+        CMPC3   #H_MORELEN, (R3), H_MORE
+        BNEQ    5$
+        CLRL    R0
+        RET
+5$:     MOVZWL  (R4), R2
+        MOVL    4(R4), R3
+10$:    TSTL    R2
+        BEQL    20$
+15$:    MOVZBL  (R3)+, R0
+        BSBW    PUTC
+        SOBGTR  R2, 15$
+20$:    MOVZBL  #13, R0
+        BSBW    PUTC
+        MOVZBL  #10, R0
+        BSBW    PUTC
+        MOVL    #SS$_NORMAL, R0
+        RET
 
 ; FIND: reads what to look for on MSGROW, and finds it as FINDNXT does.
 FIND:

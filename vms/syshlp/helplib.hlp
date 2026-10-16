@@ -1,0 +1,1603 @@
+! HELPLIB.HLP: DCL's help, which build.rs puts in SYS$HELP:HELPLIB.HLB.
+! A topic for each verb in vms/cld/*.cld and each DCL does itself, and a
+! few on how DCL reads a command. Written for vaxpunk, from what its DCL
+! and programs do: describe only what they take.
+1 @
+  Runs a command procedure: a file of DCL commands, each line starting
+  with a dollar sign.
+
+  Format
+
+    @file-spec [p1 [p2 [... p8]]]
+
+  The file's type is .COM unless you give one. The procedure runs one
+  level deeper than the command that called it; its parameters become
+  the local symbols P1 to P8, and those you leave out are empty
+  strings. The lines after a command that runs an image, up to the next
+  line that starts with $, are that image's input.
+
+  An error or a fatal error ends the procedure, unless ON or SET NOON
+  says otherwise, and the @ command takes its status. EXIT ends it
+  early. SYS$MANAGER:SYLOGIN.COM and your SYS$LOGIN:LOGIN.COM run this
+  way when you log in.
+2 Parameters
+
+ file-spec
+
+  The command procedure to run.
+
+ p1 ... p8
+
+  Up to eight parameters, separated by blanks. Put one in quotes to keep
+  its blanks and its lowercase letters.
+2 Examples
+
+  $ @DCLTEST 3 "Two words"
+
+  Runs DCLTEST.COM with P1 "3" and P2 "Two words".
+1 =
+  Gives a symbol a value: an integer or a string.
+
+  Format
+
+    symbol-name = expression
+    symbol-name == expression
+
+  One equals sign makes a local symbol, the procedure's that made it,
+  which the procedures it calls see too. Two make a global symbol,
+  which every procedure sees. The expression is worked out first; see
+  the topic Expressions.
+2 Examples
+
+  $ X = 6 * 7
+  $ GREETING == "Hello, " + F$TRNLNM("SYS$NODE")
+1 :=
+  Gives a symbol the rest of the line as a string, without working it
+  out as an expression.
+
+  Format
+
+    symbol-name := string
+    symbol-name :== string
+
+  The string is made capitals and its blanks compressed, but where it is
+  in quotes. := makes a local symbol, :== a global one.
+
+  A string that is a dollar sign and an image's name makes the symbol a
+  foreign command: typing the symbol and some arguments runs the image,
+  SYS$SYSTEM:image.EXE unless you say where, and the image reads the
+  arguments with LIB$GET_FOREIGN.
+2 Examples
+
+  $ HOME :== SET DEFAULT SYS$LOGIN
+  $ HOME
+
+  $ DUMP :== $SYS$SYSTEM:RMSDUMP
+  $ DUMP MYFILE.DAT
+1 ANALYZE
+  Analyzes the structure of RMS files.
+
+  Format
+
+    ANALYZE/RMS_FILE file-spec[,...]
+2 /RMS_FILE
+  Reports on each file's RMS structure: its header, attributes and,
+  for a relative or indexed file, its prologue, areas and keys. The
+  report goes in pages under a heading, on SYS$OUTPUT unless /OUTPUT
+  names a file.
+
+  The status says how it went: all well, errors found, or the file so
+  damaged the check could not go on.
+3 Parameters
+
+ file-spec[,...]
+
+  The files to analyze, separated by commas.
+3 Qualifiers
+/CHECK
+  /CHECK
+
+  Walks each key's index and data buckets and reports what is wrong
+  with them. This is the default.
+/FDL
+  /FDL
+
+  Writes an FDL file that describes the file, instead of a report, to
+  /OUTPUT's file, or to file-name.FDL. CREATE/FDL or CONVERT/FDL can
+  make the file again from it.
+/OUTPUT
+  /OUTPUT[=file-spec]
+
+  Writes the report, or the FDL file, there instead.
+/STATISTICS
+  /STATISTICS
+
+  Reports each area's and key's figures as well as checking.
+/SUMMARY
+  /SUMMARY
+
+  Reports the file's attributes and keys without walking its buckets.
+1 APPEND
+  Adds the records of one file to the end of another.
+
+  Format
+
+    APPEND input-file-spec output-file-spec
+2 Parameters
+
+ input-file-spec
+
+  The file whose records are added.
+
+ output-file-spec
+
+  The file they go at the end of. It must exist.
+2 Qualifiers
+/LOG
+  /LOG
+  /NOLOG (default)
+
+  Says which file was appended to which.
+1 BACKUP
+  Saves files in a save set, a single file in BACKUP's format, or
+  restores or lists the files of one. VMS's BACKUP can read the save
+  sets it writes.
+
+  Format
+
+    BACKUP input-spec output-save-set/SAVE_SET
+    BACKUP input-save-set/SAVE_SET output-directory
+    BACKUP/LIST input-save-set/SAVE_SET
+2 Parameters
+
+ input-spec
+
+  The files to save, or the save set to read. Wildcards are allowed in
+  the files to save; what the specification leaves out is *.*;*.
+
+ output-spec
+
+  The save set to write, or the directory to restore the files into.
+  With /LIST you may leave it out, and the save set is only listed.
+2 Qualifiers
+/LIST
+  /LIST
+
+  Lists the save set's files as it reads it.
+/LOG
+  /LOG
+
+  Says what each file saved or restored was.
+/SAVE_SET
+  /SAVE_SET
+
+  Put after the parameter that is the save set: the output when saving,
+  the input when restoring or listing.
+2 Examples
+
+  $ BACKUP [SYSMGR]*.COM DKB0:[000000]MGR.BCK/SAVE_SET
+  $ BACKUP/LIST DKB0:[000000]MGR.BCK/SAVE_SET
+  $ BACKUP DKB0:[000000]MGR.BCK/SAVE_SET DKB0:[RESTORED]
+1 CLOSE
+  Closes a file OPEN opened.
+
+  Format
+
+    CLOSE logical-name
+2 Parameters
+
+ logical-name
+
+  The name OPEN gave the file.
+2 Qualifiers
+/ERROR
+  /ERROR=label
+
+  Goes to the label in the command procedure if the file can't be
+  closed, or wasn't opened.
+/LOG
+  /LOG (default)
+  /NOLOG
+
+  Says so when the name isn't of a file OPEN opened. /NOLOG says
+  nothing.
+1 CONTINUE
+  Goes on with the image CTRL/Y stopped, from where it stopped.
+
+  Format
+
+    CONTINUE
+
+  A command that runs another image ends the stopped one instead.
+1 CONVERT
+  Copies the records of one or more files into a new file, which can
+  have another organization, other record attributes or other keys.
+
+  Format
+
+    CONVERT input-file-spec[,...] output-file-spec
+
+  The output file is made as /FDL's file describes it, or like the
+  first input file. An indexed output gets the records in the order of
+  its primary key. A record the output can't take is an exception, and
+  CONVERT says why.
+2 Parameters
+
+ input-file-spec[,...]
+
+  The files whose records are copied, in order, separated by commas.
+
+ output-file-spec
+
+  The file made.
+2 Qualifiers
+/APPEND
+  /APPEND
+
+  Adds the records to an existing sequential output file.
+/EXCEPTIONS_FILE
+  /EXCEPTIONS_FILE[=file-spec]
+
+  Writes the records the output can't take to that file.
+/FDL
+  /FDL=fdl-file-spec
+
+  Makes the output file as the FDL file describes it.
+/KEY
+  /KEY=n
+
+  Reads an indexed input along key n, 0 the primary key.
+/MERGE
+  /MERGE
+
+  Adds the records to an existing indexed output file, each where its
+  key puts it.
+/PAD
+  /PAD[=character]
+
+  Pads a record too short for a fixed-length output, with zeros or the
+  character given.
+/SORT
+  /SORT (default)
+  /NOSORT
+
+  Sorts the records by the output's primary key before loading an
+  indexed file. /NOSORT puts them in as they come.
+/STATISTICS
+  /STATISTICS
+
+  Reports how many records were read and written, and how long it took.
+/TRUNCATE
+  /TRUNCATE
+
+  Cuts a record too long for the output to the size it takes.
+2 Examples
+
+  $ CONVERT/FDL=CUSTOMERS.FDL CUSTOMERS.TXT CUSTOMERS.DAT
+1 COPY
+  Copies a file. COPY/HTTP fetches one from a web server.
+
+  Format
+
+    COPY input-file-spec output-file-spec
+    COPY/HTTP node::"/path" output-file-spec
+    COPY/HTTP URL::"http://host[:port]/path" output-file-spec
+
+  The new file has the input's organization, record attributes and
+  size. What the output specification leaves out comes from the
+  input's: COPY A.TXT [.X]*.* makes [.X]A.TXT. The new file is the next
+  version unless the output gives one. A relative or indexed file is
+  copied whole, its structure and all.
+2 Parameters
+
+ input-file-spec
+
+  The file to copy.
+
+ output-file-spec
+
+  The file to make.
+2 Qualifiers
+/BINARY
+  /BINARY
+
+  With /HTTP, makes the file fixed-length records of 512 bytes, rather
+  than a stream file.
+/HTTP
+  /HTTP
+
+  Fetches the input from a web server with an HTTP GET. The node is the
+  server's address or name, and the path in quotes is the page; or the
+  quoted string is a whole URL, http:// or https://, and the node any
+  name, URL by custom. https:// goes through TLS and checks the
+  server's certificate. The file is named after the path's last part
+  where the output leaves its name out. Redirects are followed.
+/LOG
+  /LOG
+  /NOLOG (default)
+
+  Says what was copied where, and how many records.
+2 Examples
+
+  $ COPY/LOG SYS$SYSDEVICE:[SYSMGR]WELCOME.TXT RAM.TXT
+
+  $ COPY/HTTP URL::"https://example.com/" []
+1 CREATE
+  Makes a file of the lines you type, a directory, or an empty file
+  that an FDL file describes.
+
+  Format
+
+    CREATE file-spec
+    CREATE/DIRECTORY directory-spec
+    CREATE/FDL=fdl-file-spec [file-spec]
+
+  Without a qualifier CREATE reads lines from SYS$INPUT up to CTRL/Z
+  and writes them to a new version of the file, as text.
+2 Parameters
+
+ file-spec
+
+  The file or directory to make. With /FDL it may be left out, and the
+  FDL's FILE NAME names it.
+2 Qualifiers
+/DIRECTORY
+  /DIRECTORY
+
+  Makes the directory, [dir] or [dir.sub...], and those above it that
+  aren't there.
+/FDL
+  /FDL=fdl-file-spec
+
+  Makes an empty file as the FDL file describes it: its organization,
+  record attributes, areas and keys.
+/LOG
+  /LOG
+
+  Says the file was created.
+2 Examples
+
+  $ CREATE/DIRECTORY DKB0:[PROJECT.SOURCES]
+  $ CREATE/FDL=CUSTOMERS.FDL
+1 DEASSIGN
+  Deletes a logical name.
+
+  Format
+
+    DEASSIGN logical-name
+2 Parameters
+
+ logical-name
+
+  The logical name to delete.
+2 Qualifiers
+/PROCESS
+  /PROCESS (default)
+
+  Deletes it from the process's table, LNM$PROCESS.
+/SYSTEM
+  /SYSTEM
+
+  Deletes it from the system's table, LNM$SYSTEM. You need SYSNAM.
+/TABLE
+  /TABLE=table-name
+
+  Deletes it from that table.
+1 DEFINE
+  Makes a logical name, which stands for its equivalence name wherever
+  a file or device is named.
+
+  Format
+
+    DEFINE logical-name equivalence-name[,...]
+
+  More than one equivalence name makes a search list: a file is looked
+  for in each in turn.
+2 Parameters
+
+ logical-name
+
+  The name to define.
+
+ equivalence-name[,...]
+
+  What it stands for: a device, a directory, a file, or another logical
+  name.
+2 Qualifiers
+/LOG
+  /LOG (default)
+  /NOLOG
+
+  Says so when the name replaces one already defined.
+/PROCESS
+  /PROCESS (default)
+
+  Puts the name in the process's table, LNM$PROCESS.
+/SYSTEM
+  /SYSTEM
+
+  Puts it in the system's table, LNM$SYSTEM, for every process. You
+  need SYSNAM.
+/TABLE
+  /TABLE=table-name
+
+  Puts it in that table.
+2 Examples
+
+  $ DEFINE HOME MDA0:[000000],SYS$MANAGER
+  $ DIRECTORY HOME:
+1 DELETE
+  Deletes files. DELETE/SYMBOL deletes symbols.
+
+  Format
+
+    DELETE file-spec
+    DELETE/SYMBOL symbol-name
+    DELETE/SYMBOL/ALL
+2 Parameters
+
+ file-spec
+
+  The files to delete. It must give a version number, or ;* for every
+  version. Wildcards are allowed.
+2 Qualifiers
+/LOG
+  /LOG
+  /NOLOG (default)
+
+  Says which files were deleted.
+2 /SYMBOL
+  Deletes a symbol: the local one, unless /GLOBAL says otherwise.
+
+    DELETE/SYMBOL symbol-name
+    DELETE/SYMBOL/ALL
+3 Qualifiers
+/ALL
+  /ALL
+
+  Deletes every symbol of the level, in place of a name: the local
+  ones, or with /GLOBAL the global ones.
+/GLOBAL
+  /GLOBAL
+
+  Deletes the global symbol.
+/LOCAL
+  /LOCAL (default)
+
+  Deletes the local symbol.
+2 Examples
+
+  $ DELETE/LOG RAM.TXT;1
+  $ DELETE *.TMP;*
+  $ DELETE/SYMBOL/GLOBAL HOME
+1 DIRECTORY
+  Lists files.
+
+  Format
+
+    DIRECTORY [file-spec]
+
+  It lists each directory's files under a heading, four names to a
+  line, then how many there are. A search list, or a wildcard
+  directory, is several directories, and a grand total ends the list.
+2 Parameters
+
+ file-spec
+
+  The files to list. What it leaves out is *.*;* in the default
+  directory. * matches any characters and % one; [*], [dir...] and
+  [...] are wildcard directories.
+2 Qualifiers
+/FULL
+  /FULL
+
+  Lists everything about each file: its size, owner, protection, file
+  organization, record attributes and the rest.
+/OWNER
+  /OWNER
+
+  Lists a file a line, with its owner's UIC.
+/PROTECTION
+  /PROTECTION
+
+  Lists a file a line, with its protection.
+2 Examples
+
+  $ DIRECTORY
+  $ DIRECTORY/OWNER/PROTECTION SYS$SYSTEM:*.EXE
+  $ DIRECTORY DKB0:[W...]*.TMP
+1 DISMOUNT
+  Dismounts a volume. Its files can't be named again until it is
+  mounted.
+
+  Format
+
+    DISMOUNT device-name
+2 Parameters
+
+ device-name
+
+  The device whose volume is dismounted, as DKB0:.
+1 EDIT
+  Edits a file. EDIT starts EVE, the editor of the Text Processing
+  Utility, TPU; EDIT/EDT starts EDT.
+
+  Format
+
+    EDIT [file-spec]
+    EDIT/EDT file-spec
+
+  In EVE, press Help or type HELP after Do for its commands.
+2 Parameters
+
+ file-spec
+
+  The file to edit. EVE makes it if it isn't there.
+2 Qualifiers
+/COMMAND
+  /COMMAND=file-spec
+
+  The TPU command file to run after the section, TPU$COMMAND.TPU by
+  default.
+/DISPLAY
+  /DISPLAY (default)
+  /NODISPLAY
+
+  /NODISPLAY runs TPU without the screen, for a command file that
+  edits on its own.
+/EDT
+  /EDT
+
+  Starts EDT, line mode first: type CHANGE for keypad mode, and HELP for
+  its commands.
+/SECTION
+  /SECTION=file-spec
+
+  The section file TPU loads, SYS$SHARE:EVE$SECTION by default: a
+  .TPU$SECTION file, or TPU source compiled as it starts.
+/TPU
+  /TPU (default)
+
+  Starts TPU and EVE.
+2 Examples
+
+  $ EDIT LOGIN.COM
+  $ EDIT/EDT NOTES.TXT
+1 ELSE
+  Starts the commands a block IF does when its expression is false.
+  See IF.
+1 ENDIF
+  Ends a block IF. See IF.
+1 EXIT
+  Ends the command procedure, going back to the one that called it.
+
+  Format
+
+    EXIT [status]
+
+  The status, the value of $STATUS if you leave it out, becomes the
+  status of the @ command. Typed after CTRL/Y, outside a procedure,
+  EXIT makes the stopped image exit, through its exit handlers.
+2 Parameters
+
+ status
+
+  An expression, the status to return.
+1 Expressions
+  DCL works out an expression wherever a command takes one: after = and
+  ==, IF and WRITE, and in a lexical function's arguments.
+
+  Its values are integers and strings. An operand is a number,
+  "a string" in quotes, a symbol's name or a lexical function. A number
+  can be decimal, %X hexadecimal, %O octal or %D decimal.
+
+  The operators, from the first done to the last:
+
+    -  .NOT.       before an operand
+    *  /           multiply, divide
+    +  -           add, subtract; + joins two strings
+    .EQ. .NE. .LT. .LE. .GT. .GE.
+                   compare integers
+    .EQS. .NES. .LTS. .LES. .GTS. .GES.
+                   compare strings
+    .AND.          and, bit by bit
+    .OR.           or, bit by bit
+
+  Parentheses change the order. Where an integer is needed a string
+  is its number, or 1 if it starts with T or Y, else 0. A comparison is
+  1 when true, 0 when false; IF takes an odd value as true.
+2 Substitution
+  Before a command is done, 'name' becomes the value of symbol name. In
+  quotes, write ''name' instead. An exclamation mark outside quotes
+  starts a comment, which DCL drops.
+1 FORMS
+  The DECforms development commands. TRANSLATE makes a form file of an
+  IFDL source; BACK_TRANSLATE makes IFDL of a form file.
+
+  Format
+
+    FORMS TRANSLATE ifdl-file-spec
+    FORMS BACK_TRANSLATE form-file-spec
+2 TRANSLATE
+  Translates an IFDL source, file.IFDL, into a binary form file,
+  file.FORM.
+3 Qualifiers
+/COMMENTS
+  /COMMENTS (default)
+  /NOCOMMENTS
+
+  Keeps the source's comments in the form, for BACK_TRANSLATE.
+/ERROR_LIMIT
+  /ERROR_LIMIT=n
+
+  Stops after n errors.
+/LIST
+  /LIST[=file-spec]
+
+  Writes a listing of the source and its messages.
+/LOG
+  /LOG
+
+  Says what file was made.
+/OUTPUT
+  /OUTPUT=file-spec (default)
+  /NOOUTPUT
+
+  Names the form file, or with /NOOUTPUT only checks the source.
+/WARNINGS
+  /WARNINGS (default)
+  /NOWARNINGS
+
+  /NOWARNINGS leaves out the warnings.
+2 BACK_TRANSLATE
+  Makes the IFDL source of a form file, file.IFDL.
+3 Qualifiers
+/LOG
+  /LOG
+
+  Says what file was made.
+/OUTPUT
+  /OUTPUT=file-spec
+
+  Names the IFDL file.
+1 GOTO
+  Goes on from a label in the command procedure.
+
+  Format
+
+    GOTO label
+
+  A label is a name followed by a colon at the start of a procedure's
+  line, $ NAME:. GOTO can go back or forward.
+2 Parameters
+
+ label
+
+  The label to go to.
+1 HELP
+  Describes commands and other topics, from a help library: DCL's,
+  SYS$HELP:HELPLIB.HLB, or another.
+
+  Format
+
+    HELP [topic [subtopic ...]]
+
+  With no topic HELP lists the topics. With one it writes its text and
+  lists its subtopics. Then it asks for another: type a subtopic's name
+  at "Subtopic?", ? to list them again, or Return to go back up a
+  level. Return at "Topic?" ends HELP. A name may be cut short, and
+  matches every topic that starts with it.
+2 Parameters
+
+ topic
+
+  What to describe, followed by subtopics to go down to.
+2 Qualifiers
+/LIBRARY
+  /LIBRARY=file-spec
+
+  The help library to read instead of HELPLIB, in SYS$HELP: with type
+  .HLB unless you say otherwise.
+/PROMPT
+  /PROMPT (default)
+  /NOPROMPT
+
+  /NOPROMPT writes the help asked for and ends, without asking for more.
+2 Examples
+
+  $ HELP COPY /LOG
+  $ HELP/NOPROMPT SHOW LOGICAL
+  $ HELP/LIBRARY=PHONEHELP
+1 IF
+  Does a command, or a block of them, only if an expression is true.
+
+  Format
+
+    IF expression THEN [$] command
+
+    IF expression
+    $ THEN
+    $   command
+    $   ...
+    $ ELSE
+    $   command
+    $   ...
+    $ ENDIF
+
+  An expression is true when its value is odd. In the block form, THEN
+  starts the commands done when it is true, ELSE those done when it is
+  false, and ENDIF ends the block. ELSE and its commands can be left
+  out, and a command can follow THEN or ELSE on the same line.
+2 Parameters
+
+ expression
+
+  See the topic Expressions.
+
+ command
+
+  Any DCL command.
+2 Examples
+
+  $ IF P1 .EQS. "" THEN EXIT
+  $ IF F$SEARCH("LOGIN.COM") .NES. ""
+  $ THEN
+  $   WRITE SYS$OUTPUT "There is a LOGIN.COM"
+  $ ELSE
+  $   WRITE SYS$OUTPUT "No LOGIN.COM"
+  $ ENDIF
+1 INITIALIZE
+  Writes an empty Files-11 ODS-2 volume on a disk, which MOUNT then
+  mounts. Whatever was on the disk is lost.
+
+  Format
+
+    INITIALIZE device-name volume-label
+2 Parameters
+
+ device-name
+
+  The disk, which must not be mounted: DKB0:, the data disk, or MDA0:,
+  the ramdisk.
+
+ volume-label
+
+  The volume's label, up to 12 characters.
+2 Qualifiers
+/OWNER_UIC
+  /OWNER_UIC=uic
+
+  Makes the volume that UIC's instead of yours.
+/PROTECTION
+  /PROTECTION=(code[,...])
+
+  The volume's protection. See Specify Protection.
+2 Examples
+
+  $ INITIALIZE DKB0: DATA
+  $ MOUNT DKB0: DATA
+1 Lexicals
+  Lexical functions return information about strings, symbols, files,
+  devices, processes and the system. Use one in an expression:
+
+    F$name(argument[,...])
+
+  Each argument is an expression of its own. The parentheses are
+  needed even when there are no arguments.
+2 F$EDIT
+  Returns a string edited.
+
+    F$EDIT(string, edit-list)
+
+  The edits, separated by commas in one string: COLLAPSE takes out
+  every blank and tab, COMPRESS makes each run of them one blank, TRIM
+  takes them off both ends, UPCASE and LOWERCASE change the letters, and
+  UNCOMMENT drops an exclamation mark and what follows. Text in quotes
+  is left alone.
+2 F$ELEMENT
+  Returns one element of a list.
+
+    F$ELEMENT(n, delimiter, string)
+
+  The elements are the parts of string the delimiter separates, the
+  first numbered 0. Past the last element it returns the delimiter.
+2 F$ENVIRONMENT
+  Returns information about DCL as it runs.
+
+    F$ENVIRONMENT(item)
+
+  The items: DEPTH, the procedure's depth; MAX_DEPTH; DEFAULT, the
+  default device and directory; PROCEDURE, the procedure's file;
+  ON_SEVERITY and ON_CONTROL_Y, what ON says; VERIFY_PROCEDURE and
+  VERIFY_IMAGE; INTERACTIVE; and PROMPT.
+2 F$EXTRACT
+  Returns part of a string.
+
+    F$EXTRACT(start, length, string)
+
+  Returns length characters from start, the first numbered 0, or as
+  many as there are.
+2 F$FAO
+  Returns a string formatted as the $FAO system service formats one.
+
+    F$FAO(control-string[, argument[,...]])
+
+  The directives it takes: !AS a string; !UB, !UW, !UL unsigned
+  decimal; !SB, !SW, !SL signed; !ZB, !ZW, !ZL decimal with leading
+  zeros; !XB, !XW, !XL hexadecimal; !OB, !OW, !OL octal; !%S an S when
+  the last number wasn't 1; !/ a new line; !_ a tab; !! an exclamation
+  mark; !n*c n copies of c. A width goes after the !, as !10AS.
+2 F$GETDVI
+  Returns an item of information about a device.
+
+    F$GETDVI(device-name, item)
+
+  The items: DEVNAM, VOLNAM, DEVCHAR, DEVCLASS, DEVTYPE, DEVBUFSIZ,
+  DEVDEPEND, DEVDEPEND2, UNIT, ERRCNT, REFCNT, FREEBLOCKS, MOUNTCNT,
+  CLUSTER, STS, AVL, MNT and SWL, and EXISTS, TRUE if there is such a
+  device.
+2 F$GETJPI
+  Returns an item of information about a process.
+
+    F$GETJPI(pid, item)
+
+  The pid is the process's identification in hexadecimal, or "" for
+  your own. The items: PID, OWNER, PRCNAM, IMAGNAME, UIC, GRP, MEM, PRI,
+  PRIB, STATE, STS, CURPRIV, PROCPRIV, AUTHPRIV, TERMINAL and MODE.
+2 F$GETSYI
+  Returns an item of information about the system.
+
+    F$GETSYI(item)
+
+  The items: VERSION, HW_NAME, BOOTTIME, MAXPROCESSCNT, QUANTUM,
+  ACTIVECPU_CNT, AVAILCPU_CNT, PRIMARY_CPUID, PAGE_SIZE, MEMSIZE,
+  FREE_PAGES, NPAGED_TOTAL, NPAGED_FREE, NPAGED_INUSE, NPAGED_LARGEST,
+  and STARTUP_P1 to STARTUP_P8.
+2 F$INTEGER
+  Returns its argument as an integer.
+
+    F$INTEGER(expression)
+2 F$LENGTH
+  Returns the length of a string.
+
+    F$LENGTH(string)
+2 F$LOCATE
+  Returns where a string is first found in another, counting from 0,
+  or the other's length if it isn't there.
+
+    F$LOCATE(substring, string)
+2 F$MESSAGE
+  Returns the message text of a status.
+
+    F$MESSAGE(status-code)
+2 F$MODE
+  Returns how the process runs: INTERACTIVE when SYS$INPUT is a
+  terminal, BATCH when it is a file, else OTHER.
+
+    F$MODE()
+2 F$PARSE
+  Returns a file specification made whole, with the default's parts
+  where it leaves them out, or one field of it.
+
+    F$PARSE(file-spec[, default-spec[, related-spec[, field]]])
+
+  The fields: NODE, DEVICE, DIRECTORY, NAME, TYPE and VERSION. It
+  returns "" if the specification can't be parsed.
+2 F$SEARCH
+  Returns the next file a specification names, or "" when there are no
+  more.
+
+    F$SEARCH(file-spec[, stream-id])
+
+  With a wildcard, each call with the same specification returns the
+  next file. Each stream, an integer, searches on its own, so one
+  search can run inside another.
+2 F$STRING
+  Returns its argument as a string.
+
+    F$STRING(expression)
+2 F$TIME
+  Returns the date and time now, as dd-mmm-yyyy hh:mm:ss.cc.
+
+    F$TIME()
+2 F$TRNLNM
+  Returns a logical name's equivalence string, or "" if it has none.
+
+    F$TRNLNM(logical-name[, table[, index]])
+
+  The table is LNM$FILE_DEV unless given; index picks one of a search
+  list's names, the first numbered 0.
+2 F$TYPE
+  Returns what a symbol holds: INTEGER, STRING, or "" if there is no
+  such symbol. A string of digits counts as an integer.
+
+    F$TYPE(symbol-name)
+2 F$VERIFY
+  Returns 1 if SET VERIFY is on, else 0, and with an argument turns it
+  on or off, as the argument is true or false.
+
+    F$VERIFY([procedure-value])
+1 Line_editing
+  As you type a command line, these keys edit it:
+
+    Delete          erases the character before the cursor
+    Left, Right     move the cursor; also CTRL/D and CTRL/F
+    CTRL/H          goes to the start of the line
+    CTRL/E          goes to the end of the line
+    CTRL/J          erases the word before the cursor
+    CTRL/U          erases everything before the cursor
+    CTRL/A          changes between insert and overstrike
+    CTRL/R          writes the line again
+    Up, CTRL/B      recall the line typed before, and before that
+    Down            goes back down the recalled lines
+    Return          ends the line
+    CTRL/Z          ends the line, and the input
+
+  CTRL/Y stops the image that runs, and DCL prompts; CONTINUE goes on
+  with it. SET TERMINAL/NOLINE_EDITING turns the editing keys off, and
+  /INSERT and /OVERSTRIKE choose the mode a line starts in.
+1 LOGOUT
+  Ends your session: says you logged out, and ends the process.
+
+  Format
+
+    LOGOUT
+1 MCR
+  Runs an image from SYS$SYSTEM and hands it the rest of the line.
+
+  Format
+
+    MCR image-name [command]
+
+  The image, SYS$SYSTEM:image-name.EXE, reads the command with
+  LIB$GET_FOREIGN.
+1 MOUNT
+  Mounts a disk's volume, so its files can be named.
+
+  Format
+
+    MOUNT device-name [volume-label]
+2 Parameters
+
+ device-name
+
+  The disk to mount.
+
+ volume-label
+
+  The label the volume must have. Without one, the volume is mounted
+  whatever its label.
+2 Qualifiers
+/OWNER_UIC
+  /OWNER_UIC=uic
+
+  The owner the volume has while it is mounted, in place of its own.
+/PROTECTION
+  /PROTECTION=(code[,...])
+
+  The protection the volume has while it is mounted. See Specify
+  Protection.
+1 ON
+  Says what a command procedure does when a command fails, or when you
+  press CTRL/Y.
+
+  Format
+
+    ON condition THEN [$] command
+
+  The conditions: WARNING, ERROR and SEVERE_ERROR, a command whose
+  status is that bad or worse; and CONTROL_Y. Without an ON a procedure
+  ends at an error or a fatal error. An ON for an error is done once,
+  and the procedure is back on ON ERROR THEN EXIT after it. SET NOON
+  turns the checks off.
+2 Examples
+
+  $ ON ERROR THEN GOTO CLEANUP
+  $ ON CONTROL_Y THEN EXIT
+1 OPEN
+  Opens a file for READ and WRITE, under a logical name.
+
+  Format
+
+    OPEN logical-name file-spec
+
+  The file stays open until CLOSE or the end of the process. It can be
+  sequential, relative or indexed.
+2 Parameters
+
+ logical-name
+
+  The name READ, WRITE and CLOSE will know the file by.
+
+ file-spec
+
+  The file to open.
+2 Qualifiers
+/APPEND
+  /APPEND
+
+  Opens an existing file to write records after its last one.
+/ERROR
+  /ERROR=label
+
+  Goes to the label if the file can't be opened.
+/READ
+  /READ (default)
+
+  Opens the file for reading.
+/SHARE
+  /SHARE[=READ|WRITE]
+
+  Taken for VMS's procedures; it changes nothing.
+/WRITE
+  /WRITE
+
+  Alone, makes a new sequential file to write. With /READ, opens an
+  existing file for both.
+2 Examples
+
+  $ OPEN/WRITE OUT LIST.TXT
+  $ WRITE OUT "First line"
+  $ CLOSE OUT
+1 PHONE
+  Talks with another user of the system, a character at a time, each
+  in a window of the screen.
+
+  Format
+
+    PHONE [phone-command]
+
+  Type a command after the switch hook, %, or straight away when no one
+  is in the call. PHONE's HELP describes its commands.
+2 Parameters
+
+ phone-command
+
+  A command PHONE does first, as DIAL user.
+2 Qualifiers
+/SWITCH_HOOK
+  /SWITCH_HOOK="c"
+
+  The character that starts a command, % by default.
+/VIEWPORT_SIZE
+  /VIEWPORT_SIZE=n
+
+  The most lines a person's window has, 10 by default.
+2 Examples
+
+  $ PHONE JOE
+1 PIPE
+  Does several commands on one line.
+
+  Format
+
+    PIPE command1 ; command2
+    PIPE command1 && command2
+    PIPE command1 || command2
+
+  ; does the next command anyway, && only if the one before succeeded,
+  || only if it failed. They are taken from left to right. A separator
+  in quotes is part of the command.
+2 Examples
+
+  $ PIPE SET DEFAULT [WORK] && DIRECTORY
+  $ PIPE TYPE NOTES.TXT || WRITE SYS$OUTPUT "No notes"
+1 READ
+  Reads a record of a file OPEN opened into a symbol.
+
+  Format
+
+    READ logical-name symbol-name
+
+  It reads the next record, or with /KEY the one with that key. The
+  symbol is local. READ SYS$INPUT reads a procedure's next data line,
+  or a line from the terminal.
+2 Parameters
+
+ logical-name
+
+  The name OPEN gave the file, or SYS$INPUT or SYS$COMMAND.
+
+ symbol-name
+
+  The symbol the record goes in.
+2 Qualifiers
+/DELETE
+  /DELETE
+
+  Deletes the record after reading it, in an indexed file.
+/END_OF_FILE
+  /END_OF_FILE=label
+
+  Goes to the label when there are no more records.
+/ERROR
+  /ERROR=label
+
+  Goes to the label if the read fails.
+/INDEX
+  /INDEX=n
+
+  The key /KEY looks along, 0 the primary key.
+/KEY
+  /KEY=string
+
+  Reads the record with this key. The next READ without /KEY reads on
+  from it along the same key.
+/MATCH
+  /MATCH=option
+
+  How /KEY matches: EQ, the default, the first record whose key starts
+  with the string; GE, the first equal or greater; GT, the first greater.
+/PROMPT
+  /PROMPT=string
+
+  The prompt READ SYS$INPUT writes on the terminal.
+2 Examples
+
+  $ READ/PROMPT="Name: " SYS$INPUT NAME
+  $ LOOP:
+  $ READ/END_OF_FILE=DONE IN LINE
+  $ WRITE SYS$OUTPUT LINE
+  $ GOTO LOOP
+  $ DONE:
+1 RUN
+  Runs an image in the process.
+
+  Format
+
+    RUN file-spec
+
+  The type is .EXE unless you give one. The image ends with a status,
+  which becomes $STATUS.
+2 Parameters
+
+ file-spec
+
+  The image to run.
+1 SET
+  Sets characteristics of the process, the terminal, files and DCL.
+
+  Format
+
+    SET option
+2 COMMAND
+  Adds the verbs a command definition file defines to your process's
+  commands.
+
+    SET COMMAND file-spec
+
+  The file's type is .CLD unless you give one.
+2 CONTROL
+  Turns CTRL/Y, and CTRL/C where no image takes it, on or off.
+
+    SET CONTROL[=Y]
+    SET NOCONTROL[=Y]
+2 DEFAULT
+  Sets the default device and directory, where files are looked for
+  when their specification doesn't say.
+
+    SET DEFAULT [device:][directory]
+
+  A logical name will do, with or without its colon. [-] goes up a
+  level.
+3 Examples
+
+  $ SET DEFAULT DKB0:[PROJECT]
+  $ SET DEFAULT [-]
+2 FILE
+  Changes a file's owner.
+
+    SET FILE/OWNER_UIC=uic file-spec
+3 Qualifiers
+/OWNER_UIC
+  /OWNER_UIC=uic
+
+  The file's new owner. See Specify UIC.
+2 HOST
+  Logs in on another system over the network, with Telnet.
+
+    SET HOST node
+
+  The node is an address or a host's name. CTRL/] gives the TELNET>
+  prompt: CONNECT or Return goes back, CLOSE or EXIT ends the session.
+  See TELNET.
+2 ON
+  Turns a procedure's error checks on or off.
+
+    SET ON
+    SET NOON
+
+  With SET NOON a procedure goes on after a failed command. See ON.
+2 PASSWORD
+  Changes your password. It asks for the old one, then the new one
+  twice, without echoing them.
+
+    SET PASSWORD
+2 PROCESS
+  Enables or disables your process's privileges.
+
+    SET PROCESS/PRIVILEGES=(privilege[,...])
+3 Qualifiers
+/PRIVILEGES
+  /PRIVILEGES=(privilege[,...])
+
+  Each privilege named is enabled, and each named NOprivilege disabled.
+  ALL and NOALL name every one. You only get those you are authorized
+  for.
+2 PROTECTION
+  Changes a file's protection.
+
+    SET PROTECTION=(code[,...]) file-spec
+
+  See Specify Protection.
+3 Examples
+
+  $ SET PROTECTION=(S:RWED,O:RWED,G:RE,W) REPORT.TXT
+2 TERMINAL
+  Sets your terminal's characteristics.
+
+    SET TERMINAL [device-name]
+3 Qualifiers
+/BROADCAST
+  /BROADCAST
+  /NOBROADCAST
+
+  Whether messages, such as a PHONE call's ring, are written on the
+  terminal.
+/ECHO
+  /ECHO
+  /NOECHO
+
+  Whether what you type is echoed.
+/EIGHTBIT
+  /EIGHTBIT
+  /NOEIGHTBIT
+
+  Whether the terminal takes 8-bit characters.
+/ESCAPE
+  /ESCAPE
+  /NOESCAPE
+
+  Whether escape sequences end a read.
+/INSERT
+  /INSERT
+
+  Line editing starts each line in insert mode.
+/LINE_EDITING
+  /LINE_EDITING
+  /NOLINE_EDITING
+
+  Whether the line editing keys work. See Line_editing.
+/LOWERCASE
+  /LOWERCASE
+  /NOLOWERCASE
+
+  Whether lowercase letters are kept, or made capitals.
+/OVERSTRIKE
+  /OVERSTRIKE
+
+  Line editing starts each line in overstrike mode.
+/PAGE
+  /PAGE=n
+
+  The terminal's lines, up to 255.
+/PASTHRU
+  /PASTHRU
+  /NOPASTHRU
+
+  Passes every character to the program, CTRL/Y and CTRL/C too.
+/TAB
+  /TAB
+  /NOTAB
+
+  Whether the terminal handles tabs itself.
+/WIDTH
+  /WIDTH=n
+
+  The terminal's columns, from 1 to 511.
+/WRAP
+  /WRAP
+  /NOWRAP
+
+  Whether a line longer than the width goes on to the next.
+2 VERIFY
+  Writes a procedure's commands as they are done, or stops.
+
+    SET VERIFY
+    SET NOVERIFY
+1 SHOW
+  Shows information about the process, the system, DCL and the
+  devices.
+
+  Format
+
+    SHOW option
+2 CPU
+  Shows the machine and its CPUs.
+3 Qualifiers
+/BRIEF
+  /BRIEF
+
+  Shows each CPU and the process it runs.
+/FULL
+  /FULL
+
+  Shows the page size as well.
+2 DEFAULT
+  Shows the default device and directory. A search list's names follow,
+  one a line.
+2 DEVICES
+  Lists the devices.
+
+    SHOW DEVICES [device-name]
+
+  With a name, the devices whose names start with it.
+3 Qualifiers
+/MOUNTED
+  /MOUNTED
+
+  Lists only the devices with a volume mounted.
+2 ERROR
+  Lists the devices that have had errors, and how many.
+3 Qualifiers
+/FULL
+  /FULL
+
+  Lists every device, with or without errors.
+2 LOGICAL
+  Shows a logical name's equivalence names, or all of them.
+
+    SHOW LOGICAL [logical-name]
+
+  With no name, or *, it lists every logical name.
+3 Qualifiers
+/PROCESS
+  /PROCESS
+
+  Looks only in the process's table.
+/SYSTEM
+  /SYSTEM
+
+  Looks only in the system's table.
+/TABLE
+  /TABLE=table-name
+
+  Looks only in that table.
+2 MEMORY
+  Shows the physical memory, the process slots and nonpaged pool.
+3 Qualifiers
+/ALL
+  /ALL
+
+  Shows them all. This is the default.
+/PHYSICAL_PAGES
+  /PHYSICAL_PAGES
+
+  Shows the physical pages.
+/POOL
+  /POOL
+
+  Shows nonpaged pool.
+/SLOTS
+  /SLOTS
+
+  Shows the process slots.
+2 PROCESS
+  Shows the date, your process's name, UIC, terminal, priority and
+  image.
+3 Qualifiers
+/PRIVILEGES
+  /PRIVILEGES
+
+  Shows your authorized and current privileges as well.
+2 QUOTA
+  Shows your disk quota. No volume has disk quotas, and it says so.
+3 Qualifiers
+/DISK
+  /DISK[=device-name]
+
+  The disk to ask about, SYS$DISK by default.
+/USER
+  /USER=uic
+
+  The user to ask about.
+2 SYMBOL
+  Shows a symbol's value.
+
+    SHOW SYMBOL symbol-name
+    SHOW SYMBOL/ALL
+
+  It shows the nearest symbol of that name: local, then global.
+3 Qualifiers
+/ALL
+  /ALL
+
+  Shows every symbol of the level, local unless /GLOBAL.
+/GLOBAL
+  /GLOBAL
+
+  Shows the global symbol.
+/LOCAL
+  /LOCAL
+
+  Shows the local symbol.
+2 SYSTEM
+  Shows the version, the date and how long the system has been up,
+  then a line for each process: its PID, name, state, priority and
+  image.
+2 TERMINAL
+  Shows a terminal's characteristics, yours unless you name another.
+
+    SHOW TERMINAL [device-name]
+2 USERS
+  Lists the users logged in at terminals, and how many processes each
+  has.
+
+    SHOW USERS [username]
+
+  With a username, only the users whose names start with it.
+3 Qualifiers
+/FULL
+  /FULL
+
+  Lists each process and its terminal.
+1 Specify
+  How to write the values commands take.
+2 File_spec
+  A file specification names a file:
+
+    device:[directory]name.type;version
+
+  The device is a disk, as DKA0:, or a logical name for one; the
+  directory is [name], with subdirectories as [name.sub]; the name and
+  type are up to 39 characters each; the version is a number. What you
+  leave out comes from the default device and directory, SET DEFAULT's,
+  and the newest version.
+
+  A logical name may stand for the device, or for the whole
+  specification. A search list, a logical name with more than one
+  equivalence, is looked through in order.
+
+  Where a command takes wildcards, * matches any characters and % one,
+  and in the directory [*] is any directory, [dir...] dir and every
+  directory under it, and [...] the default one and those under it.
+2 Protection
+  A protection code says what each category of user may do with a file
+  or volume:
+
+    (category:access[,...])
+
+  The categories are SYSTEM, OWNER, GROUP and WORLD, or their first
+  letters. The access is any of R, read, W, write, E, execute, and D,
+  delete, after a colon or an equals sign; a category with no letters
+  gets no access. A category you leave out keeps what it had with SET
+  PROTECTION, and gets all with INITIALIZE and MOUNT.
+3 Example
+
+  (S:RWED,O:RWED,G:RE,W)
+2 UIC
+  A user identification code, a UIC, is a group and a member number, in
+  octal, in brackets:
+
+    [group,member]
+1 STOP
+  Deletes a process, or ends the image CTRL/Y stopped.
+
+  Format
+
+    STOP [process-name]
+    STOP/IDENTIFICATION=pid
+
+  With no name or /IDENTIFICATION, ends the image stopped by CTRL/Y,
+  without its exit handlers, and every command procedure.
+2 Parameters
+
+ process-name
+
+  The name of the process to delete.
+2 Qualifiers
+/IDENTIFICATION
+  /IDENTIFICATION=pid
+
+  The process to delete, by its identification in hexadecimal.
+1 Symbol_Assign
+  A symbol is a name for an integer or a string. Make one with = or ==,
+  := or :==; see the topics = and :=. Show one with SHOW SYMBOL, and
+  delete it with DELETE/SYMBOL.
+
+  Local symbols belong to the command procedure that made them, and the
+  procedures it calls see them. Global symbols are everyone's. DCL sets
+  $STATUS to each command's status and $SEVERITY to its severity.
+
+  A symbol at the start of a command stands for its value: HOME ==
+  "SET DEFAULT SYS$LOGIN" makes HOME a command.
+1 TCPIP
+  TCP/IP Services' management commands.
+
+  Format
+
+    TCPIP [command]
+
+  With no command it prompts TCPIP> for them until EXIT or CTRL/Z. The
+  commands are PING, SET and SHOW HOST, INTERFACE, NAME_SERVICE and
+  ROUTE, SET CONFIGURATION INTERFACE, SET NOHOST and START
+  COMMUNICATION; HELP at TCPIP> describes them.
+2 Examples
+
+  $ TCPIP SHOW INTERFACE
+  $ TCPIP PING 10.0.2.2
+1 TELNET
+  Logs in on another system with Telnet, or connects to a TCP port and
+  talks to what listens there a line at a time.
+
+  Format
+
+    TELNET node [port]
+    TELNET node /PORT=n
+
+  The node is an address or a host's name. CTRL/] gives the TELNET>
+  prompt: CONNECT or Return goes back to the session, CLOSE, EXIT or
+  QUIT ends it.
+2 Parameters
+
+ node
+
+  The system to connect to.
+
+ port
+
+  The TCP port, 23, Telnet's, by default.
+2 Qualifiers
+/PORT
+  /PORT=n
+
+  The TCP port to connect to.
+1 TYPE
+  Writes a file's records on the terminal, a line each.
+
+  Format
+
+    TYPE file-spec
+2 Parameters
+
+ file-spec
+
+  The file to type.
+2 Qualifiers
+/HEAD
+  /HEAD[=n]
+
+  Types only the first n lines, 10 if you don't say.
+/TAIL
+  /TAIL[=n]
+
+  Types only the last n lines, 10 if you don't say.
+1 WRITE
+  Writes a record to a file OPEN opened, or a line on SYS$OUTPUT.
+
+  Format
+
+    WRITE logical-name expression[,...]
+
+  The expressions' values are joined into one record.
+2 Parameters
+
+ logical-name
+
+  The name OPEN gave the file, or SYS$OUTPUT or SYS$ERROR.
+
+ expression[,...]
+
+  What to write. See Expressions.
+2 Qualifiers
+/ERROR
+  /ERROR=label
+
+  Goes to the label if the write fails.
+/UPDATE
+  /UPDATE
+
+  Rewrites the record READ read last, in place.
+2 Examples
+
+  $ WRITE SYS$OUTPUT "X is ", X

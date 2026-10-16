@@ -153,9 +153,10 @@ const SYSTEM_DISK: Phase = Phase {
 /// SYS$SYSDEVICE:, which prompts for its parameters, an EDIT in line mode
 /// and keypad mode that writes a second version, DIRECTORY, a DELETE/LOG,
 /// CLITEST's checks of the command parser, a qualifier DIRECTORY doesn't
-/// have, HELP SHOW, a logical name in the system table, and a line edited
-/// and one recalled with the up arrow. Then a search list, HOME, of the
-/// ramdisk and SYS$MANAGER: SET DEFAULT to it, which keeps the default
+/// have, HELP/NOPROMPT SHOW LOGICAL from HELPLIB.HLB, a logical name in
+/// the system table, and a line edited and one recalled with the up
+/// arrow. Then a search list, HOME, of the ramdisk and SYS$MANAGER: SET
+/// DEFAULT to it, which keeps the default
 /// directory, a COPY that makes the file in the first, a DIRECTORY that
 /// finds it in both, a TYPE that finds a file in the second, SET DEFAULT
 /// to it without a colon, a DIRECTORY of a search list with one inside it,
@@ -186,7 +187,7 @@ const RAMDISK: Phase = Phase {
             1,
             concat!(
                 "DIR *.TXT\rDELETE/LOG RAM.TXT;1\rDELETE RAM.TXT;2\rDIR *.TXT\r",
-                "RUN CLITEST\rDIR/BRIEFLY\rHELP SHOW\r",
+                "RUN CLITEST\rDIR/BRIEFLY\rHELP/NOPROMPT SHOW LOGICAL\r",
                 "DEFINE/SYSTEM/NOLOG ZZZ YYY\rSHOW LOGICAL/SYSTEM ZZZ\r",
                 // Line editing: the up arrow recalls DEFINE, three DELs and TWO
                 // change it, and the arrows, CTRL/H and CTRL/E make SHOW LOGICAL ZOO.
@@ -237,8 +238,8 @@ const RAMDISK: Phase = Phase {
         "CLITEST: ok",
         "%DCL-W-IVQUAL, unrecognized qualifier - check validity, spelling, and placement",
         " \\BRIEFLY\\",
-        "  SHOW LOGICAL [logical_name]",
-        "    /[NO]MOUNTED",
+        "    SHOW LOGICAL [logical-name]",
+        "  With no name, or *, it lists every logical name.",
         "   \"ZZZ\" = \"YYY\" (LNM$SYSTEM_TABLE)",
         "\"ZOO\" = \"TWO\" (LNM$PROCESS_TABLE)",
         "   \"HOME\" = \"MDA0:[000000]\" (LNM$PROCESS_TABLE)\n        = \"SYS$MANAGER\"",
@@ -381,11 +382,8 @@ const CONTROL_KEYS: Phase = Phase {
         ("*INTERRUPT*", 4, "CONTINUE\r"),
         ("CONTINUE", 3, "\x19"),
         ("*INTERRUPT*", 5, "HELP\r"),
-        (
-            "HELP verb describes a verb",
-            1,
-            "EDIT/EDT SYS$MANAGER:WELCOME.TXT\r",
-        ),
+        // HELP lists HELPLIB's topics and asks for one: Return leaves.
+        ("Topic?", 1, "\rEDIT/EDT SYS$MANAGER:WELCOME.TXT\r"),
         ("    1\t", 3, "\x19"),
         ("*INTERRUPT*", 6, "SHOW DEFAULT\rCONTINUE\r"),
         (
@@ -415,7 +413,7 @@ const CONTROL_KEYS: Phase = Phase {
     lines: &[
         "*CANCEL*",
         "CTRLC: ok",
-        "  INITIALIZE device label",
+        "  INITIALIZE    LEXICALS      LINE_EDITING  LOGOUT        MCR",
         "    2\t        Welcome to vaxpunk, an OpenVMS clone for arm64",
         "$STATUS == 268435500   Hex = 1000002C",
         "%SYSTEM-W-NONEXPR, nonexistent process",
@@ -752,10 +750,11 @@ const LBR: Phase = Phase {
             1,
             "CREATE/DIRECTORY DKB0:[LBR]\rDEFINE LBRTEST DKB0:[LBR]\rRUN LBRTEST\r",
         ),
-        ("Topic?", 1, "COPY\r"),
+        // The first Topic? was HELP's, in CONTROL_KEYS.
+        ("Topic?", 2, "COPY\r"),
         ("COPY Subtopic?", 1, "/LOG\r"),
         ("COPY Subtopic?", 2, "\r"),
-        ("Topic?", 2, "\r"),
+        ("Topic?", 3, "\r"),
     ],
     lines: &[
         "LBRTEST: modules 00000002",
@@ -937,7 +936,8 @@ const STARTUP: Phase = Phase {
 };
 
 /// AUTHORIZE adds JOE, in another UIC group, with a few privileges and
-/// his default directory on DKB0:, shows him, whole and on a line, and
+/// his default directory on DKB0:, gives HELP SHOW from UAFHELP.HLB, and
+/// Return twice, shows him, whole and on a line, and
 /// lists every user in SYSUAF.LIS; SYSTEM changes its password with SET
 /// PASSWORD, after getting the old one wrong, defines SYS$WELCOME, which
 /// each login after says in place of Welcome to vaxpunk, and logs out. JOE logs in,
@@ -945,7 +945,8 @@ const STARTUP: Phase = Phase {
 /// OPCCRASH, and logs out; SYSTEM logs in with its new password, and
 /// PHNTEST logs JOE in on a pseudo terminal: SYSTEM's PHONE rings him, he
 /// answers, each says something, SYSTEM lists who can be called with
-/// %DIRECTORY, hangs up and leaves PHONE, and JOE's PHONE sees the hang
+/// %DIRECTORY, reads %HELP DIAL from PHONEHELP.HLB, hangs up and leaves
+/// PHONE, and JOE's PHONE sees the hang
 /// up; then SYSTEM shuts the system down.
 const USERS: Phase = Phase {
     name: "users",
@@ -960,11 +961,14 @@ const USERS: Phase = Phase {
                 "MCR AUTHORIZE ADD JOE\r",
             ),
         ),
+        ("%UAF-W-UAEERR", 1, "MCR AUTHORIZE\rHELP SHOW\r"),
+        ("SHOW Subtopic?", 1, "\r"),
+        // The first three were HELP's in CONTROL_KEYS and LBRTEST's.
         (
-            "%UAF-W-UAEERR",
-            1,
+            "Topic?",
+            4,
             concat!(
-                "MCR AUTHORIZE\rSHOW JOE\rMODIFY JOE /DEFPRIVILEGES=(NOALL,TMPMBX,OPER)\r",
+                "\rSHOW JOE\rMODIFY JOE /DEFPRIVILEGES=(NOALL,TMPMBX,OPER)\r",
                 "SHOW/BRIEF *\rLIST\rEXIT\rTYPE SYSUAF.LIS\r",
             ),
         ),
@@ -998,12 +1002,16 @@ const USERS: Phase = Phase {
         ("PHNTEST: JOE logged in", 1, "PHONE JOE\r"),
         ("That person has answered your call.", 1, "hello\r"),
         ("hi there", 1, "%DIRECTORY\r"),
-        // A key ends the listing, CTRL/Z hangs up, and again leaves PHONE.
-        ("2 persons listed.", 1, "x\x1a\x1a"),
+        // A key ends the listing, and the help; CTRL/Z hangs up, and
+        // again leaves PHONE.
+        ("2 persons listed.", 1, "x%HELP DIAL\r"),
+        ("a node name, as in NODE::USER, is refused", 1, "x\x1a\x1a"),
         ("PHNTEST: ok", 1, "SHUTDOWN\r"),
     ],
     lines: &[
         "%UAF-I-ADDMSG, user record successfully added",
+        "  Shows a user's record from the system authorization file, or a line",
+        "SHOW Subtopic?",
         "%UAF-W-UAEERR, invalid user name, user name already exists",
         "Username: JOE                              Owner:  JOE",
         "Account:  USERS                            UIC:    [200,1]",

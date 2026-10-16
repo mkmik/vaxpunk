@@ -16,7 +16,8 @@ instructions, which vmacro compiles into PAL calls
 | `ssl3/` | SSL3, OpenSSL 3.0's API for a TLS 1.2 and 1.3 client, on Mbed TLS, which `build.rs` downloads into the user's cache with Mozilla's CA bundle; `config/` configures Mbed TLS; and SSL3$CLIENT, a C program that uses it. COPY calls it for `https` | `[SYSEXE]SSL3$CLIENT.EXE`, `[SSL3.CERTS]CERT.PEM` |
 | `sysexe/librtl/` | The run-time library's `LIB$` routines, a shareable image every program but DCL calls ([ADR-0028](../docs/adr/0028-shareable-images.md)); its symbol vector is `librtl.opt` | `[SYSLIB]LIBRTL.EXE` |
 | `sysexe/lbrshr/` | The librarian's `LBR$` routines, which read and write object, macro, text and help libraries, and `LBR$OUTPUT_HELP`, all of HELP, a shareable image every program but DCL may call; its symbol vector is `lbrshr.opt` | `[SYSLIB]LBRSHR.EXE` |
-| `cld/` | DCL's verbs, as CLD that vcdu compiles into DCL$TABLES ([ADR-0017](../docs/adr/0017-command-tables-from-cld-with-vcdu.md)) | in `DCL.EXE` and `HELP.EXE` |
+| `cld/` | DCL's verbs, as CLD that vcdu compiles into DCL$TABLES ([ADR-0017](../docs/adr/0017-command-tables-from-cld-with-vcdu.md)) | in `DCL.EXE` |
+| `syshlp/` | The help libraries' text, `.HLP` files that vlib makes help libraries of: `HELPLIB` for DCL's `HELP`, `PHONEHELP`, `UAFHELP` for AUTHORIZE, `EDTHELP` and `EVE$HELP` | `[SYSHLP]*.HLB` |
 | `sysmgr/` | SYSTEM's text files: SYSTARTUP_VMS.COM, SYLOGIN.COM, WELCOME.TXT | `[SYSMGR]` |
 | `sysuaf.fdl`, `uafhash.rs` | SYSUAF.DAT's layout, and the password hash `build.rs` writes SYSTEM's with ([ADR-0029](../docs/adr/0029-loginout-and-sysuaf.md)) | `[SYSEXE]SYSUAF.DAT` |
 

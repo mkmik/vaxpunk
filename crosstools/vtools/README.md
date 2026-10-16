@@ -14,7 +14,7 @@ plan.
 | `crates/velf` | Turns a C compiler's ELF object into an object module, so C goes into libraries and images ([docs/velf.md](docs/velf.md)) |
 | `crates/vcdu` | Compiles CLD into command tables, like SET COMMAND/OBJECT ([docs/command-tables.md](docs/command-tables.md)) |
 | `crates/vlink` | Links object modules into an executable image ([docs/linker.md](docs/linker.md)) |
-| `crates/vlib` | Puts object modules into object libraries, like LIBRARY/OBJECT |
+| `crates/vlib` | Puts object modules into object libraries, like LIBRARY/OBJECT, and help text into help libraries, like LIBRARY/HELP |
 | `crates/vdump` | Decoded dump of objects, libraries and images, like ANALYZE/OBJECT and ANALYZE/IMAGE |
 | `crates/vms-obj` | The object, library and image formats ([docs/object-format.md](docs/object-format.md), [docs/library-format.md](docs/library-format.md), [docs/image-format.md](docs/image-format.md)); `no_std` with `alloc` |
 | `crates/vrun` | Runs an image at EL0 in a bare-metal QEMU machine, for quick checks of compiler output without booting vaxpunk ([docs/runner-abi.md](docs/runner-abi.md)) |

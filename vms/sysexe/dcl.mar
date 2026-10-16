@@ -69,7 +69,7 @@
 ;   STOP [process-name], STOP/IDENTIFICATION=pid
 ;               deletes the process; with no name, ends the image CTRL/Y
 ;               stopped, without its exit handlers, and the procedures
-;   HELP [verb] runs HELP.EXE, which lists the commands from DCL$TABLES
+;   HELP [topic] runs HELP.EXE, which writes it from SYS$HELP:HELPLIB.HLB
 ;   MCR image [command]
 ;               runs SYS$SYSTEM:image.EXE, which takes command with
 ;               LIB$GET_FOREIGN

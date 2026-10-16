@@ -2,9 +2,9 @@
         .IDENT  /V0.2/
 ;
 ; HELP$TOPIC describes the commands of a command table (ADR-0017,
-; crosstools/vtools/docs/command-tables.md) for a HELP [topic] command: DCL's HELP,
-; in HELP.EXE, with DCL$TABLES, and the TCPIP> prompt's, in TCPIP.EXE,
-; which build.rs link this module into. With no topic it lists each verb
+; crosstools/vtools/docs/command-tables.md) for a HELP [topic] command:
+; the TCPIP> prompt's, in TCPIP.EXE, and TELNET>'s, in RTPAD.EXE, which
+; build.rs link this module into. With no topic it lists each verb
 ; with its parameters. HELP verb describes each verb whose name starts
 ; with the topic:
 ;
@@ -18,8 +18,8 @@
 ; A parameter whose value is a keyword lists the keywords. Topics are
 ; matched in capitals; one that no verb starts with is "Sorry, no
 ; documentation on TOPIC".
-; ponytail: the tables have no text, so neither has HELP: VMS's HELP
-; reads it from a help library, HELPLIB.HLB.
+; ponytail: the tables have no text, so neither has this HELP; DCL's,
+; AUTHORIZE's and the rest read theirs from help libraries.
 ;
         .LIBRARY "starlet.mlb"
         .LIBRARY "../sysexe.mlb"

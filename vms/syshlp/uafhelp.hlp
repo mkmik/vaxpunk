@@ -1,0 +1,151 @@
+1 ADD
+  Adds a user to the system authorization file, SYSUAF.DAT. The new
+  record starts as a copy of the DEFAULT record, without its flags;
+  the qualifiers change what they name.
+
+    ADD username
+
+  A username has at most 12 characters. Without /PASSWORD, the
+  password is USER.
+2 Qualifiers
+/ACCOUNT
+    /ACCOUNT=account-name
+
+  The account name.
+/ASTLM
+    /ASTLM=n
+
+  How many ASTs the user's process may have queued at once.
+/BIOLM
+    /BIOLM=n
+
+  How many buffered I/O requests the process may have outstanding.
+/BYTLM
+    /BYTLM=n
+
+  How many bytes of buffer space the process may use for buffered I/O.
+/CLI
+    /CLI=name
+
+  The command interpreter the user gets at login, DCL.
+/DEFPRIVILEGES
+    /DEFPRIVILEGES=(privilege[,...])
+
+  The privileges the user's process starts with. Each name sets that
+  privilege, NOname clears it; ALL sets every one and NOALL clears
+  every one.
+/DEVICE
+    /DEVICE=device-name[:]
+
+  The user's default device at login.
+/DIOLM
+    /DIOLM=n
+
+  How many direct I/O requests the process may have outstanding.
+/DIRECTORY
+    /DIRECTORY=directory-name
+
+  The user's default directory at login, as [NAME].
+/ENQLM
+    /ENQLM=n
+
+  How many locks the process may hold.
+/FILLM
+    /FILLM=n
+
+  How many files the process may have open at once.
+/OWNER
+    /OWNER=owner-name
+
+  The name of the user who owns the account. Quote it to keep blanks
+  and lowercase letters.
+/PASSWORD
+    /PASSWORD=password
+
+  The user's password. It is kept only as a hash.
+/PRCLM
+    /PRCLM=n
+
+  How many subprocesses the process may have at once.
+/PRIORITY
+    /PRIORITY=n
+
+  The base priority of the user's process, 0 to 31.
+/PRIVILEGES
+    /PRIVILEGES=(privilege[,...])
+
+  The privileges the user may enable. Each name sets that privilege,
+  NOname clears it; ALL sets every one and NOALL clears every one.
+/TQELM
+    /TQELM=n
+
+  How many timer queue entries the process may have at once.
+/UIC
+    /UIC=[group,member]
+
+  The user's user identification code, group and member in octal.
+2 Example
+    UAF> ADD JOE /PASSWORD=SECRET /UIC=[200,201] /DIRECTORY=[JOE]
+    %UAF-I-ADDMSG, user record successfully added
+1 EXIT
+  Leaves AUTHORIZE. CTRL/Z does the same.
+
+    EXIT
+1 HELP
+  Describes AUTHORIZE's commands.
+
+    HELP [command]
+1 LIST
+  Writes the records of the system authorization file to the file
+  SYSUAF.LIS in your default directory: one line for each user, or
+  each whole record with /FULL.
+
+    LIST [username]
+
+  With no username, or *, it lists every user.
+2 Qualifiers
+/FULL
+    /FULL
+
+  Writes each record whole, as SHOW does, not a line of it.
+1 MODIFY
+  Changes a user's record in the system authorization file: the
+  qualifiers give the new values, and the rest stay as they are.
+
+    MODIFY username
+2 Qualifiers
+  MODIFY takes the qualifiers ADD does: /ACCOUNT, /ASTLM, /BIOLM,
+  /BYTLM, /CLI, /DEFPRIVILEGES, /DEVICE, /DIOLM, /DIRECTORY, /ENQLM,
+  /FILLM, /OWNER, /PASSWORD, /PRCLM, /PRIORITY, /PRIVILEGES, /TQELM
+  and /UIC. See HELP ADD Qualifiers.
+2 Example
+    UAF> MODIFY JOE /PRIVILEGES=(TMPMBX,NETMBX,NOOPER)
+    %UAF-I-MDFYMSG, user record(s) updated
+1 REMOVE
+  Takes a user out of the system authorization file.
+
+    REMOVE username
+1 SHOW
+  Shows a user's record from the system authorization file, or a line
+  of it with /BRIEF.
+
+    SHOW username
+
+  SHOW * shows every user.
+2 Qualifiers
+/BRIEF
+    /BRIEF
+
+  Shows a line for the user: the owner, the username, the UIC, the
+  account, Normal or All privileges, the priority, and the default
+  device and directory.
+1 SYSUAF
+  AUTHORIZE keeps the users in SYS$SYSTEM:SYSUAF.DAT, or in the file the
+  logical name SYSUAF names. Only SYSTEM may change it.
+
+  Run it with MCR AUTHORIZE, or RUN SYS$SYSTEM:AUTHORIZE, and type
+  commands at the UAF> prompt; or give one command after MCR AUTHORIZE.
+
+  A record has the username, password, UIC, owner, account, default
+  device and directory, command interpreter, priority, privileges and
+  quotas. The DEFAULT record holds the values ADD starts from.

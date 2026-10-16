@@ -184,9 +184,8 @@ does, and types it.
 
 ## Open questions
 
-- **Help.** EVE's `HELP` reads a help library; whether `LBR` and the `HELP`
-  utility have text by then (PRD-0003 backlog item 27), or EVE's help is
-  a buffer of its own.
+- **Help.** Settled: EVE's `HELP` and the Help key read
+  `SYS$HELP:EVE$HELP.HLB` with `HELP_TEXT`, into a buffer of its own.
 - **Section file size.** Whether `EDIT/TPU` reads EVE's section file
   into `$EXPREG` pages at each start or maps it, once global sections
   exist.

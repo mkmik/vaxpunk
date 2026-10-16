@@ -36,10 +36,12 @@
         $CLIMSGDEF
         $UAFDEF
         $UAIDEF
+        $HLPDEF
 
         .EXTERNAL PUT_LINE, PRV_NAMES, PRV_LOOKUP, GET_UIC, LIB$SIGNAL
         .EXTERNAL LIB$GET_FOREIGN, LIB$GET_INPUT, CLI$GET_VALUE, CLI$PRESENT
-        .EXTERNAL CLI$DCL_PARSE, CLI$DISPATCH, AUTHORIZE_TABLES, HELP$TOPIC
+        .EXTERNAL CLI$DCL_PARSE, CLI$DISPATCH, AUTHORIZE_TABLES
+        .EXTERNAL LBR$OUTPUT_HELP, LIB$PUT_OUTPUT, LIB$GET_INPUT
 
 NAMESIZE = 32                           ; a username, padded: the key
 INHIB = ^X10000000                      ; STS$M_INHIB_MSG: reported
@@ -89,6 +91,16 @@ L:      .ASCIC  STR
         .ENDM   TEXT
 
         .PSECT  DATA, NOEXE, WRT, LONG
+HLPBUF: .LONG   256                     ; HELP's topic
+        .ADDRESS HLPTXT
+HLPDSC: .LONG   0                       ; and its length
+        .ADDRESS HLPTXT
+HLPLEN: .WORD   0
+HLPTXT: .BLKB   256
+HLPFLAGS:
+        .LONG   HLP$M_PROMPT
+UAFHELP:
+        .ASCID  "SYS$HELP:UAFHELP.HLB"
 LINDSC: .LONG   255                     ; a command, after AUTHORIZE or UAF>
         .ADDRESS LINBUF
 LINLEN: .WORD   0
@@ -262,11 +274,19 @@ DO:
         MOVL    #SS$_NORMAL, R0
         RET
 
-; HELP: HELP [command]: describes the commands, from AUTHORIZE_TABLES
-; (help/describe.mar).
+; HELP: HELP [topic ...]: the topic from SYS$HELP:UAFHELP.HLB, then
+; prompts for more, as VMS's.
         .ENTRY  HELP, ^M<>
-        PUSHAB  G^AUTHORIZE_TABLES
-        CALLS   #1, G^HELP$TOPIC
+        CLRW    HLPLEN
+        GETVALUE "TOPIC", HLPBUF, HLPLEN
+        MOVZWL  HLPLEN, HLPDSC
+        PUSHAB  G^LIB$GET_INPUT
+        PUSHAL  HLPFLAGS
+        PUSHAQ  UAFHELP
+        PUSHAQ  HLPDSC
+        PUSHL   #0
+        PUSHAB  G^LIB$PUT_OUTPUT
+        CALLS   #6, G^LBR$OUTPUT_HELP
         MOVL    #SS$_NORMAL, R0
         RET
 

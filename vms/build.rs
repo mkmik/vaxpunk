@@ -8,10 +8,9 @@
 //! in [SYSLIB], LIBRTL.EXE, the shareable image of sysexe/librtl/*.mar,
 //! with the symbol vector librtl.opt gives, which DCL links in instead, and
 //! LBRSHR.EXE, the LBR$ routines of sysexe/lbrshr/*.mar, as lbrshr.opt
-//! gives them, which the other programs link against too; DCL and
-//! HELP with DCL$TABLES, from cld/*.cld, and DCL with sysexe/dcl/*.mar,
-//! its CDU, and HELP, TCPIP, AUTHORIZE and RTPAD with sysexe/help/*.mar, which describes
-//! command tables, and CREATE, CONVERT and ANALYZRMS with sysexe/rms/*.mar,
+//! gives them, which the other programs link against too; DCL with
+//! DCL$TABLES, from cld/*.cld, and sysexe/dcl/*.mar, its CDU, and TCPIP
+//! and RTPAD with sysexe/help/*.mar, which describes command tables, and CREATE, CONVERT and ANALYZRMS with sysexe/rms/*.mar,
 //! FDL and their output; TPU, from sysexe/tpu/*.b64 and its I/O module
 //! sysexe/tpu/fio.mar (PRD-0006); FORMS, DECforms's translator, from
 //! sysexe/forms/*.b64 and the same I/O module; and in [SYSLIB] EVE's section file,
@@ -22,7 +21,9 @@
 //! library and the C run-time library (c.rs), which goes in [SYSLIB] as
 //! DECC$CRTL.OLB too; in [SSL3.CERTS], CERT.PEM,
 //! the CA bundle SSL3 trusts (c.rs); in [SYSMGR], the files in sysmgr/,
-//! as text, and in [SYSEXE] sysexe/*.com; and in [SYSEXE], SYSUAF.DAT, the users, SYSTEM and DEFAULT.
+//! as text, and in [SYSEXE] sysexe/*.com; in [SYSHLP], a help library
+//! NAME.HLB for each syshlp/NAME.hlp, which vlib makes; and in [SYSEXE],
+//! SYSUAF.DAT, the users, SYSTEM and DEFAULT.
 
 use std::collections::HashMap;
 use std::env;
@@ -35,6 +36,7 @@ fn main() {
         "exec",
         "sysexe",
         "sysmgr",
+        "syshlp",
         "cld",
         LIB,
         "sysuaf.fdl",
@@ -133,13 +135,13 @@ fn main() {
         if m64.exists() {
             modules.push(assemble(&m64));
         }
-        if name == "DCL" || name == "HELP" {
+        if name == "DCL" {
             modules.push(tables("DCL$TABLES", &sources("cld", &["cld"])));
         }
         if name == "DCL" {
             modules.extend(sources("sysexe/dcl", &["mar"]).iter().map(module));
         }
-        if ["HELP", "TCPIP", "AUTHORIZE", "RTPAD"].contains(&name.as_str()) {
+        if ["TCPIP", "RTPAD"].contains(&name.as_str()) {
             modules.extend(sources("sysexe/help", &["mar"]).iter().map(module));
         }
         if ["CREATE", "CONVERT", "ANALYZRMS"].contains(&name.as_str()) {
@@ -173,7 +175,7 @@ fn main() {
         .collect();
     modules.extend(compile(&sources("sysexe/tpu", &["mar"])));
     modules.extend(libs.iter().cloned());
-    modules.push(librtl_exe.clone());
+    modules.extend([librtl_exe.clone(), lbrshr_exe.clone()]);
     modules.push(stb.clone());
     let image = link("TPU", vlink::DEFAULT_BASE, None, &modules);
     files.push(("[SYSEXE]TPU.EXE".into(), image.image.write()));
@@ -185,7 +187,7 @@ fn main() {
         .collect();
     modules.extend(compile(&[PathBuf::from("sysexe/tpu/fio.mar")]));
     modules.extend(libs.iter().cloned());
-    modules.push(librtl_exe.clone());
+    modules.extend([librtl_exe.clone(), lbrshr_exe.clone()]);
     modules.push(stb.clone());
     let image = link("FORMS", vlink::DEFAULT_BASE, None, &modules);
     files.push(("[SYSEXE]FORMS.EXE".into(), image.image.write()));
@@ -220,6 +222,15 @@ fn main() {
         modules.extend([ssl3.clone(), crtl.clone(), librtl_exe.clone(), stb.clone()]);
         let image = link(&name, vlink::DEFAULT_BASE, None, &modules);
         files.push((format!("[SYSEXE]{name}.EXE"), image.image.write()));
+    }
+    // The help libraries, SYS$HELP's.
+    for source in sources("syshlp", &["hlp"]) {
+        let name = source.file_stem().unwrap().to_str().unwrap().to_uppercase();
+        let text = fs::read_to_string(&source).unwrap();
+        let mut lib = vlib::new_help(0);
+        vlib::replace_help(&mut lib, &source.display().to_string(), &text, 0)
+            .unwrap_or_else(|e| panic!("{e}"));
+        files.push((format!("[SYSHLP]{name}.HLB"), lib.write()));
     }
     disk(&out.join("sysdisk.img"), &files);
 }
@@ -465,6 +476,7 @@ fn disk(path: &Path, images: &[(String, Vec<u8>)]) {
     ok(vol.mkdir("[SYSEXE]"));
     ok(vol.mkdir("[SYSLIB]"));
     ok(vol.mkdir("[SYSMGR]"));
+    ok(vol.mkdir("[SYSHLP]"));
     let image = RecordAttrs {
         rtype: rfm::FIX,
         rsize: 512,
