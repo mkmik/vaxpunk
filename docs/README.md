@@ -83,6 +83,7 @@ same commit; `cargo run -p todography -- lint` checks it.
 | [PRD-0007](prd/0007-wasmrun.md) | WASMRUN, a WebAssembly interpreter for VMS written in MACRO-32 |
 | [PRD-0008](prd/0008-rms-record-and-indexed-files.md) | RMS: every record format, relative files and indexed files |
 | [PRD-0009](prd/0009-object-storage-tapes.md) | Tapes on cloud object storage |
+| [PRD-0010](prd/0010-srm-console.md) | An SRM console: the `>>>` prompt before VMS |
 
 ### Design documents
 

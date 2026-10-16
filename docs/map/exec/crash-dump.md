@@ -59,6 +59,7 @@ needs = ["#sda"]
 id = "reboot"
 title = "Reboot after the dump, instead of powering off"
 status = "todo"
+note = "PRD-0010: the console's auto_action restart; t8y:/platform/srm-console#restart"
 
 [[needs]]
 on = "/platform/pal"
