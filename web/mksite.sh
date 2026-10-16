@@ -11,7 +11,7 @@ site=$1 qemu=$2 images=$3
 rm -rf "$site"
 mkdir -p "$site/demo/vendor"
 site=$(cd "$site" && pwd)
-(cd "$root" && cargo run -p apidoc && cargo run -p todography -- build)
+(cd "$root" && cargo run -p apidoc && todography build)
 cp "$root/web/index.html" "$root/apidoc/page.css" "$site/"
 cp -R "$root/docs/api" "$site/docs"
 cp -R "$root/out/map" "$site/map"

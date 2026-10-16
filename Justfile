@@ -25,5 +25,5 @@ defs:
 
 # Builds the interactive map of components (docs/map) into out/map/index.html and opens it.
 todography:
-    cargo run -p todography -- build
+    todography build
     {{ if os() == "macos" { "open" } else { "xdg-open" } }} out/map/index.html

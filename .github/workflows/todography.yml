@@ -13,5 +13,6 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - run: cargo run -p todography -- lint --strict
-      - run: cargo run -p todography -- build
+      - run: cargo install --locked todography@0.2.0
+      - run: todography lint --strict
+      - run: todography build

@@ -1,11 +1,11 @@
 +++
 title = "todography (this map)"
 summary = "Checks the map's files, answers questions about them, and draws the map page"
-aka = ["todography", "cargo run -p todography", "docs/map/", "MAP.toml", "t8y:", "out/map/index.html"]
+aka = ["todography", "docs/map/", "todography.toml", "t8y:", "out/map/index.html"]
 kind = "tool"
 intent = "goal"
 research = "done"
-refs = ["todography/README.md", "docs/map/README.md", "todography/src", "todography/assets/map.html"]
+refs = ["https://github.com/mkmik/todography", "docs/map/README.md", "docs/map/todography.toml"]
 
 [[feature]]
 id = "lint"
@@ -49,3 +49,5 @@ and their status, and what it needs. `todography` checks every label, works
 out what is wanted, ready and blocked, and writes one page with the map,
 a focus view per component, a roadmap and a page for choosing
 aspirations. Coding sessions edit the map next to the code they change.
+The tool lives in its own repository, github.com/mkmik/todography; CI
+installs the release from crates.io.

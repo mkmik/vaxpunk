@@ -3,15 +3,15 @@
 The map says what vaxpunk is made of, what a whole OpenVMS is made of, how
 the pieces depend on each other, and how far along each one is. It is data:
 one Markdown file per component, which coding sessions edit next to the
-code they change. `todography` (in [todography/](../todography/)) checks it and draws it.
+code they change. [todography](https://github.com/mkmik/todography) (`brew install mkmik/tap/todography`) checks it and draws it.
 
 ```sh
-cargo run -p todography -- lint                # check every label; CI runs it with --strict
-cargo run -p todography -- build               # write out/map/index.html, the interactive map
-cargo run -p todography -- show exec/mailboxes  # one component, its needs and who needs it
-cargo run -p todography -- why rtl/crtl         # the chain from a component up to the goals that pull it in
-cargo run -p todography -- next                # the work whose dependencies are done
-cargo run -p todography -- debt                # wanted components whose dependencies aren't researched yet
+todography lint                 # check every label; CI runs it with --strict
+todography build                # write out/map/index.html, the interactive map
+todography show exec/mailboxes  # one component, its needs and who needs it
+todography why rtl/crtl         # the chain from a component up to the goals that pull it in
+todography next                 # the work whose dependencies are done
+todography debt                 # wanted components whose dependencies aren't researched yet
 ```
 
 ## Files
@@ -81,11 +81,11 @@ The fields between the `+++` lines are TOML:
 | `title` | The short name the map shows: `OPCOM`, `Mailboxes` |
 | `summary` | One line: what it is |
 | `aka` | Other names it goes by, for search |
-| `kind` | What it is in a VMS: `core` (part of the base OS), `layered` (a layered product DEC or a partner sold), `glue` (something vaxpunk needs that isn't a VMS piece, such as the OpenSSL API on Mbed TLS), `platform` (below the executive: seL4, the PAL, boot), `tool` (host tools that build vaxpunk) |
+| `kind` | What it is in a VMS, one of the kinds `docs/map/todography.toml` lists: `core` (part of the base OS), `layered` (a layered product DEC or a partner sold), `glue` (something vaxpunk needs that isn't a VMS piece, such as the OpenSSL API on Mbed TLS), `platform` (below the executive: seL4, the PAL, boot), `tool` (host tools that build vaxpunk) |
 | `intent` | Why it is on the map: `goal` (we want it), `aspiration` (we might want it some day; not chosen), `induced` (no one wants it for itself; it's here because something else needs it) |
 | `status` | `done`, `partial`, `wip`, `todo` or `dropped`, for a component with no features. With features, the status comes from them |
 | `research` | How well its own dependencies are known: `done`, `outline` (the big ones are known), `deferred` (not looked into; its needs are guesses) |
-| `milestone` | The milestone it belongs to, from `docs/map/MAP.toml` |
+| `milestone` | The milestone it belongs to, from `docs/map/todography.toml` |
 | `refs` | Repository paths or URLs that say more: PRDs, ADRs, sources, manuals |
 
 `[[feature]]` entries list what the component does, in the order it
@@ -127,4 +127,4 @@ a feature's `needs` (a list of labels) both count.
   were working.
 - A new piece appears because something needed it: add a component with
   `intent = "induced"`, and the `needs` that pulled it in.
-- `cargo run -p todography -- lint` before you commit.
+- `todography lint` before you commit.

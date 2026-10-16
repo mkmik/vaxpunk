@@ -1,4 +1,0 @@
-+++
-title = "Misc"
-band = "nowhere"
-+++
