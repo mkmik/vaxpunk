@@ -154,8 +154,9 @@ const SYSTEM_DISK: Phase = Phase {
 /// and keypad mode that writes a second version, DIRECTORY, a DELETE/LOG,
 /// CLITEST's checks of the command parser, a qualifier DIRECTORY doesn't
 /// have, HELP/NOPROMPT SHOW LOGICAL from HELPLIB.HLB, and with
-/// HLP$LIBRARY PHONEHELP, HELP REJECT, which only it has, the topics and
-/// the user libraries after them, HELP @PHONE ANSWER and HELP/OUTPUT to a
+/// HLP$LIBRARY PHONEHELP, HELP REJECT, which only it has, UAFHELP's
+/// topics and the user libraries after them (not HELPLIB's, whose
+/// CONTINUE the steps below count), HELP @PHONE ANSWER and HELP/OUTPUT to a
 /// file, a logical name in the system table, and a line edited and one recalled with the up
 /// arrow. Then a search list, HOME, of the ramdisk and SYS$MANAGER: SET
 /// DEFAULT to it, which keeps the default
@@ -191,7 +192,7 @@ const RAMDISK: Phase = Phase {
                 "DIR *.TXT\rDELETE/LOG RAM.TXT;1\rDELETE RAM.TXT;2\rDIR *.TXT\r",
                 "RUN CLITEST\rDIR/BRIEFLY\rHELP/NOPROMPT SHOW LOGICAL\r",
                 "DEFINE HLP$LIBRARY SYS$HELP:PHONEHELP\rHELP/NOPROMPT REJECT\r",
-                "HELP/NOPROMPT/NOPAGE/NOINSTRUCTIONS\rHELP/NOPROMPT @PHONE ANSWER\r",
+                "HELP/NOPROMPT/NOINSTRUCTIONS/LIBRARY=UAFHELP\rHELP/NOPROMPT @PHONE ANSWER\r",
                 "HELP/OUTPUT=HELP.LIS TYPE\rTYPE HELP.LIS\rDEASSIGN HLP$LIBRARY\r",
                 "DEFINE/SYSTEM/NOLOG ZZZ YYY\rSHOW LOGICAL/SYSTEM ZZZ\r",
                 // Line editing: the up arrow recalls DEFINE, three DELs and TWO
