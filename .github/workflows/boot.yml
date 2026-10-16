@@ -101,6 +101,7 @@ jobs:
         with:
           name: qemu-wasm
           path: qemu-wasm
+      - run: cargo install --locked todography@0.2.0
       - run: web/mksite.sh site qemu-wasm demo-images
       - uses: actions/upload-pages-artifact@v3
         with:

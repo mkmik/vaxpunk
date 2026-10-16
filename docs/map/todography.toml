@@ -45,3 +45,23 @@ id = "m1"
 title = "Milestone 1: a multi-user VMS you log in to"
 summary = "Users, UICs and privileges, file protection, quotas, a lock manager, batch"
 refs = ["docs/prd/0003-multi-user-vms.md"]
+
+[[kind]]
+id = "core"
+summary = "Part of the base OS"
+
+[[kind]]
+id = "layered"
+summary = "A layered product DEC or a partner sold"
+
+[[kind]]
+id = "glue"
+summary = "Something vaxpunk needs that isn't a VMS piece"
+
+[[kind]]
+id = "platform"
+summary = "Below the executive"
+
+[[kind]]
+id = "tool"
+summary = "Host tools that build vaxpunk"

@@ -21,7 +21,7 @@ kept current, like a design document.
 OpenVMS are made of, how the pieces depend on each other and how far along
 each one is, one Markdown file per component, labelled `t8y:/area/component`.
 A change that finishes a feature or finds a missing one updates it in the
-same commit; `cargo run -p todography -- lint` checks it.
+same commit; `todography lint` checks it.
 
 `api/index.html`, the API reference, is generated from the sources by
 `cargo run -p apidoc`: don't edit it, regenerate it (see AGENTS.md).
