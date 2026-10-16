@@ -120,6 +120,10 @@
 1 HELP
   Shows help on a command or topic: HELP topic. The Help key shows help
   too. HELP KEYS shows the keys, HELP DO how to give commands.
+
+  The help takes the window's place, and EVE asks for another topic at
+  "Topic?" and for a subtopic at "Subtopic?". Return there goes back up
+  a level, and from "Topic?" back to your text; so does CTRL/Z.
 1 INCLUDE
 2 FILE
   Puts a file's text in the buffer at the cursor: INCLUDE FILE name.

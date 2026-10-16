@@ -153,8 +153,10 @@ const SYSTEM_DISK: Phase = Phase {
 /// SYS$SYSDEVICE:, which prompts for its parameters, an EDIT in line mode
 /// and keypad mode that writes a second version, DIRECTORY, a DELETE/LOG,
 /// CLITEST's checks of the command parser, a qualifier DIRECTORY doesn't
-/// have, HELP/NOPROMPT SHOW LOGICAL from HELPLIB.HLB, a logical name in
-/// the system table, and a line edited and one recalled with the up
+/// have, HELP/NOPROMPT SHOW LOGICAL from HELPLIB.HLB, and with
+/// HLP$LIBRARY PHONEHELP, HELP REJECT, which only it has, the topics and
+/// the user libraries after them, HELP @PHONE ANSWER and HELP/OUTPUT to a
+/// file, a logical name in the system table, and a line edited and one recalled with the up
 /// arrow. Then a search list, HOME, of the ramdisk and SYS$MANAGER: SET
 /// DEFAULT to it, which keeps the default
 /// directory, a COPY that makes the file in the first, a DIRECTORY that
@@ -188,6 +190,9 @@ const RAMDISK: Phase = Phase {
             concat!(
                 "DIR *.TXT\rDELETE/LOG RAM.TXT;1\rDELETE RAM.TXT;2\rDIR *.TXT\r",
                 "RUN CLITEST\rDIR/BRIEFLY\rHELP/NOPROMPT SHOW LOGICAL\r",
+                "DEFINE HLP$LIBRARY SYS$HELP:PHONEHELP\rHELP/NOPROMPT REJECT\r",
+                "HELP/NOPROMPT/NOPAGE/NOINSTRUCTIONS\rHELP/NOPROMPT @PHONE ANSWER\r",
+                "HELP/OUTPUT=HELP.LIS TYPE\rTYPE HELP.LIS\rDEASSIGN HLP$LIBRARY\r",
                 "DEFINE/SYSTEM/NOLOG ZZZ YYY\rSHOW LOGICAL/SYSTEM ZZZ\r",
                 // Line editing: the up arrow recalls DEFINE, three DELs and TWO
                 // change it, and the arrows, CTRL/H and CTRL/E make SHOW LOGICAL ZOO.
@@ -240,6 +245,10 @@ const RAMDISK: Phase = Phase {
         " \\BRIEFLY\\",
         "    SHOW LOGICAL [logical-name]",
         "  With no name, or *, it lists every logical name.",
+        "  Turns down the call ringing your phone. The caller is told.",
+        "  Additional help libraries available (type @name for topics):\n\n  PHONEHELP",
+        "  Picks up the call ringing your phone, and adds a viewport for the",
+        "$ TYPE HELP.LIS\n\nTYPE\n",
         "   \"ZZZ\" = \"YYY\" (LNM$SYSTEM_TABLE)",
         "\"ZOO\" = \"TWO\" (LNM$PROCESS_TABLE)",
         "   \"HOME\" = \"MDA0:[000000]\" (LNM$PROCESS_TABLE)\n        = \"SYS$MANAGER\"",
@@ -382,7 +391,9 @@ const CONTROL_KEYS: Phase = Phase {
         ("*INTERRUPT*", 4, "CONTINUE\r"),
         ("CONTINUE", 3, "\x19"),
         ("*INTERRUPT*", 5, "HELP\r"),
-        // HELP lists HELPLIB's topics and asks for one: Return leaves.
+        // HELP's own text and HELPLIB's topics fill the screen, then it
+        // asks for a topic: Return leaves.
+        ("Press RETURN to continue ...", 1, "\r"),
         ("Topic?", 1, "\rEDIT/EDT SYS$MANAGER:WELCOME.TXT\r"),
         ("    1\t", 3, "\x19"),
         ("*INTERRUPT*", 6, "SHOW DEFAULT\rCONTINUE\r"),

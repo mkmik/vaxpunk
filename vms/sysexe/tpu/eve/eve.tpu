@@ -1017,7 +1017,8 @@ ENDPROCEDURE;
 
 PROCEDURE eve_help (topic)
 ! HELP [topic]: the topic from SYS$HELP:EVE$HELP.HLB, or the list of
-! topics, in the window until a key.
+! topics, in the window, and more as they are asked for at Topic?, until
+! Return there or CTRL/Z.
 LOCAL b, old;
 b := eve$find_buffer ("HELP");
 IF b = 0 THEN
@@ -1026,16 +1027,10 @@ IF b = 0 THEN
     SET (NO_WRITE, b);
     SET (EOB_TEXT, b, "");
 ENDIF;
-HELP_TEXT ("EVE$HELP", topic, OFF, b);
-IF GET_INFO (b, "record_count") = 0 THEN RETURN; ENDIF;
 old := CURRENT_BUFFER;
 MAP (CURRENT_WINDOW, b);
 eve$status (CURRENT_WINDOW);
-MESSAGE ("Press any key to go back to the text.");
-UPDATE (CURRENT_WINDOW);
-UPDATE (message_window);
-READ_KEY;
-MESSAGE ("");
+HELP_TEXT ("EVE$HELP", topic, ON, b);
 eve$show_buffer (old);
 ENDPROCEDURE;
 

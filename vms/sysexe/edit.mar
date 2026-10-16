@@ -136,6 +136,7 @@ E_NOHELP:
 EDTHELP:.ASCID  "SYS$HELP:EDTHELP.HLB"
 HLPDSC: .LONG   0                       ; a help topic
         .ADDRESS 0
+NOFLAGS:.LONG   0                       ; LBR$OUTPUT_HELP's: no prompts
 H_MORE: .ASCII  "  Additional information"   ; where a key's help ends
 H_MORELEN = .-H_MORE
 S_HOME: .ASCIC  <ESC>"[H"<ESC>"[J"      ; the top, a clear screen
@@ -296,11 +297,12 @@ ERROR:  PUSHL   R1
 
 HELP:   SUBL3   R6, R7, HLPDSC          ; the rest of the line, the topic
         MOVL    R6, HLPDSC+4
+        PUSHAL  NOFLAGS
         PUSHAQ  EDTHELP
         PUSHAQ  HLPDSC
         PUSHL   #0
         PUSHAB  G^LIB$PUT_OUTPUT
-        CALLS   #4, G^LBR$OUTPUT_HELP
+        CALLS   #5, G^LBR$OUTPUT_HELP
         BLBS    R0, 10$
         PUSHAB  E_NOHELP
         CALLS   #1, G^PUT_LINE
@@ -1273,11 +1275,12 @@ HELPKEY:
         MOVL    R1, HLPDSC+4
         MOVAB   S_HOME, R1
         BSBW    PUTS
+        PUSHAL  NOFLAGS
         PUSHAQ  EDTHELP
         PUSHAQ  HLPDSC
         PUSHAL  COLS
         PUSHAB  HELPLINE
-        CALLS   #4, G^LBR$OUTPUT_HELP
+        CALLS   #5, G^LBR$OUTPUT_HELP
         BLBS    R0, 20$
         TSTL    R0                      ; HELPLINE's stop
         BEQL    20$

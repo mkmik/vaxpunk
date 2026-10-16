@@ -21,6 +21,7 @@
         $FABDEF
         $RABDEF
         $IODEF
+        $HLPDEF
 
         .EXTERNAL LIB$PUT_OUTPUT, CLI$GET_VALUE, LBR$OUTPUT_HELP
 
@@ -54,7 +55,9 @@ HLPLIB: .LONG   0                       ; FIO$HELP's library,
         .ADDRESS 0
 HLPTOP: .LONG   0                       ; its topic,
         .ADDRESS 0
-HLPRTN: .LONG   0                       ; and its routine
+HLPRTN: .LONG   0                       ; its routine,
+HLPINR: .LONG   0                       ; its input routine,
+HLPFLG: .LONG   0                       ; and LBR$OUTPUT_HELP's flags
 NEXT:   .LONG   0                       ; FIO$ALLOC's next free byte
 LIMIT:  .LONG   0                       ; and its end
 RETADR: .BLKL   2
@@ -305,21 +308,30 @@ PUTREC:
         $EXIT_S CODE=4(AP)
         RET
 
-; FIO$HELP library, length, topic, length, routine: LBR$OUTPUT_HELP's
-; help on the topic from the help library, in SYS$HELP: unless it says
-; where, calling routine with each line's address and length. R0 =
-; LBR$OUTPUT_HELP's status, the library's open's if it fails.
+; FIO$HELP library, length, topic, length, routine, prompt, input:
+; LBR$OUTPUT_HELP's help on the topic from the help library, in SYS$HELP:
+; unless it says where, calling routine with each line's address and
+; length; if prompt is 1, it then prompts for more, calling input with
+; the prompt's address and length and a buffer's address and size, which
+; returns the length typed or -1 to end. R0 = LBR$OUTPUT_HELP's status,
+; the library's open's if it fails.
         .ENTRY  FIO$HELP, ^M<>
         MOVL    8(AP), HLPLIB
         MOVL    4(AP), HLPLIB+4
         MOVL    16(AP), HLPTOP
         MOVL    12(AP), HLPTOP+4
         MOVL    20(AP), HLPRTN
+        MOVL    28(AP), HLPINR
+        CLRL    HLPFLG
+        BLBC    24(AP), 10$
+        MOVL    #HLP$M_PROMPT, HLPFLG
+10$:    PUSHAB  HLPIN
+        PUSHAL  HLPFLG
         PUSHAQ  HLPLIB
         PUSHAQ  HLPTOP
         PUSHL   #0
         PUSHAB  HLPLINE
-        CALLS   #4, G^LBR$OUTPUT_HELP
+        CALLS   #6, G^LBR$OUTPUT_HELP
         RET
 
 ; HLPLINE line: FIO$HELP's output routine: gives line, by descriptor, to
@@ -329,6 +341,25 @@ PUTREC:
         MOVZWL  (R0), -(SP)
         PUSHL   4(R0)
         CALLS   #2, @HLPRTN
+        RET
+
+; HLPIN get_str, prompt, out_len: FIO$HELP's input routine: gives
+; FIO$HELP's the prompt and get_str's buffer, by address and length. R0 =
+; SS$_NORMAL, the length in out_len, or RMS$_EOF if it returned -1.
+        .ENTRY  HLPIN, ^M<R2>
+        MOVL    4(AP), R2
+        MOVZWL  (R2), -(SP)
+        PUSHL   4(R2)
+        MOVL    8(AP), R0
+        MOVZWL  (R0), -(SP)
+        PUSHL   4(R0)
+        CALLS   #4, @HLPINR
+        TSTL    R0
+        BLSS    10$
+        MOVW    R0, @12(AP)
+        MOVL    #SS$_NORMAL, R0
+        RET
+10$:    MOVL    #RMS$_EOF, R0
         RET
 
 ; TT$OPEN width, page: whether SYS$INPUT is a terminal; its width and page.

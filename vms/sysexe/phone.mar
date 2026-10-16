@@ -165,6 +165,7 @@ DIRSHOWN:                               ; a listing, DIRECTORY's or HELP's,
 HLPDSC: .LONG   0                       ; HELP's topic
         .ADDRESS 0
 HLPWID: .LONG   WIDTH
+NOFLAGS:.LONG   0                       ; LBR$OUTPUT_HELP's: no prompts
 PHONEHELP:
         .ASCID  "PHONEHELP"
 MSGLEN: .LONG   0
@@ -1195,11 +1196,12 @@ SHOWHELP:
         MOVL    #1, R1
         BSBW    GOTO
         ESC     "J"
+        PUSHAL  NOFLAGS
         PUSHAQ  PHONEHELP
         PUSHAQ  HLPDSC
         PUSHAL  HLPWID
         PUSHAB  HLPLINE
-        CALLS   #4, G^LBR$OUTPUT_HELP
+        CALLS   #5, G^LBR$OUTPUT_HELP
         BLBS    R0, 10$
         CLRL    OUTLEN                  ; none of it
         MSG     "Help library is missing.  Please inform your system manager."

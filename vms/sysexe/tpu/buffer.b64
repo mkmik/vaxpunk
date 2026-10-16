@@ -34,7 +34,8 @@ OWN
     BUF_LAST;
 
 EXTERNAL
-    MSG_FLAGS;
+    MSG_FLAGS,
+    KEY_LAST;                           ! the key that ended SCR_READ_LINE
 
 EXTERNAL ROUTINE
     BI_ERR,
@@ -44,6 +45,7 @@ EXTERNAL ROUTINE
     SCR_DELETE : NOVALUE,
     KEY_SET,
     SCR_SET,
+    SCR_READ_LINE,                      ! (prompt, length, count, answer): its length, or -1
     MSG_OUT : NOVALUE,
     FILE_NAME,
     READ_WHOLE,
@@ -1329,15 +1331,39 @@ ROUTINE BX_FILE_SEARCH (ARGS : REF VECTOR, N, R) =
 
 ! HELP_TEXT (library, topic, ON | OFF, buffer): erases the buffer and
 ! puts in it the help on topic, from the help library, in SYS$HELP:
-! unless it says where, as LBR$OUTPUT_HELP writes it (FIO$HELP).
-! ponytail: ON, which would prompt for more topics, is taken as OFF.
+! unless it says where, as LBR$OUTPUT_HELP writes it (FIO$HELP). With
+! ON it then prompts for more in the prompt area, "Topic? " and "FIND
+! Subtopic? ", and each topic typed takes the buffer's place, on the
+! screen if a window shows it, until Return at Topic? or CTRL/Z.
 OWN
-    HELPBUF : REF VECTOR;               ! the buffer HELP_LINE fills
+    HELPBUF : REF VECTOR,               ! the buffer HELP_LINE fills,
+    HELPNEW;                            ! to be erased before the next line
 
 ROUTINE HELP_LINE (TEXT, LEN) =
     BEGIN
+    IF .HELPNEW
+    THEN
+        BEGIN
+        WHILE .HELPBUF[B_FIRST] NEQ 0 DO DELLINE(.HELPBUF, .HELPBUF[B_FIRST]);
+        HELPNEW = FALSE
+        END;
     LINK(.HELPBUF, LINE_NEW(.TEXT, .LEN), 0);
     SS_NORMAL
+    END;
+
+! HELP_INPUT prompt, length, answer, size: FIO$HELP's input routine: the
+! topic typed after the prompt, SCR_READ_LINE's, its length, or -1 for
+! CTRL/Z or no screen.
+ROUTINE HELP_INPUT (P, PL, ANS, SIZE) =
+    BEGIN
+    LOCAL
+        AL;
+    HELPBUF[B_LINE] = .HELPBUF[B_FIRST];
+    HELPBUF[B_OFF] = 0;
+    AL = SCR_READ_LINE(.P, .PL, MIN(.SIZE, 255), .ANS);
+    IF .AL LSS 0 OR .KEY_LAST EQL K_CTRL_Z_KEY THEN RETURN -1;
+    HELPNEW = TRUE;
+    .AL
     END;
 
 ROUTINE BX_HELP_TEXT (ARGS : REF VECTOR, N) =
@@ -1354,7 +1380,9 @@ ROUTINE BX_HELP_TEXT (ARGS : REF VECTOR, N) =
     THEN
         (VREF(.HELPBUF[B_NAME]); RETURN BI_ERR(TPU$_NOTMODIFIABLE, .HELPBUF[B_NAME]));
     WHILE .HELPBUF[B_FIRST] NEQ 0 DO DELLINE(.HELPBUF, .HELPBUF[B_FIRST]);
-    S = FIO$HELP(SADDR(.ARGS[0]), SLEN(.ARGS[0]), SADDR(.ARGS[1]), SLEN(.ARGS[1]), HELP_LINE);
+    HELPNEW = FALSE;
+    S = FIO$HELP(SADDR(.ARGS[0]), SLEN(.ARGS[0]), SADDR(.ARGS[1]), SLEN(.ARGS[1]), HELP_LINE,
+                 ISKW(.ARGS[2], K_ON), HELP_INPUT);
     HELPBUF[B_LINE] = .HELPBUF[B_FIRST];
     HELPBUF[B_OFF] = 0;
     IF NOT .S THEN (VREF(.ARGS[0]); RETURN BI_ERR(TPU$_OPENIN, .ARGS[0]));
