@@ -1,0 +1,219 @@
+! EDTHELP.HLP: help for EDIT/EDT, its line mode commands and its keypad.
+! vaxpunk's own text; the topics follow VMS's EDTHELP.
+1 CHANGE
+  Leaves line mode for keypad mode, where you edit the buffer on the
+  screen with the keypad, the arrow keys and the characters you type.
+  CTRL/Z there brings you back to line mode, at the * prompt.
+
+  Format:
+
+    CHANGE
+
+  The screen shows the lines around the current line, and the cursor
+  starts on it. In keypad mode, PF2 shows the keypad.
+2 Keys
+  See the topic KEYPAD for what each key does.
+1 DELETE
+  Deletes the lines of a range from the buffer. The line after the
+  last one deleted becomes the current line.
+
+  Format:
+
+    DELETE [range]
+
+  With no range, DELETE deletes the current line. The end of the
+  buffer, [EOB], is never deleted.
+2 Examples
+    *DELETE           deletes the current line
+    *DELETE 3:5       deletes lines 3, 4 and 5
+    *D REST           deletes the current line and every line after it
+1 EXIT
+  Writes the buffer to a new version of the file and ends the session.
+  EDT types the name of the file it wrote.
+
+  Format:
+
+    EXIT
+
+  The file gets variable length records with carriage return control.
+  If the file can't be written, EDT types the status and the session
+  goes on, with the buffer as it was.
+1 HELP
+  Shows help on EDT's commands and keys.
+
+  Format:
+
+    HELP [topic [subtopic]]
+
+  With no topic, HELP lists the topics. In keypad mode, PF2 shows the
+  topic KEYPAD.
+1 INSERT
+  Inserts lines before the first line of a range. Type the lines one
+  after another; each is prompted with a tab. CTRL/Z ends the insert.
+
+  Format:
+
+    INSERT [range]
+
+  With no range, the lines go before the current line. Afterwards the
+  current line is the one the new lines went in front of. A line holds
+  at most 255 characters.
+2 Example
+    *INSERT END
+            The last line.
+            ^Z
+1 KEYPAD
+  +--------+--------+--------+--------+   Normal function on top, the
+  |  PF1   |  PF2   |  PF3   |  PF4   |   GOLD function below it: press
+  |  GOLD  |  HELP  |FINDNXT | DEL L  |   PF1, then the key.
+  |        |        |  FIND  |        |
+  +--------+--------+--------+--------+   F1-F4 work as PF1-PF4.
+  |   7    |   8    |   9    |   -    |
+  |        |  SECT  |        |        |   Arrow keys      move the cursor
+  |        |        |        |        |   PREV SCREEN     16 lines back
+  +--------+--------+--------+--------+   NEXT SCREEN     16 lines on
+  |   4    |   5    |   6    |   ,    |   DELETE          delete the
+  |ADVANCE | BACKUP |        | DEL C  |                   character before
+  | BOTTOM |  TOP   |        |        |   BACKSPACE       start of line
+  +--------+--------+--------+--------+   RETURN          break the line
+  |   1    |   2    |   3    |        |   TAB             insert a tab
+  |        |  EOL   |  CHAR  |        |   CTRL/W          redraw the screen
+  |        |        |        | ENTER  |   CTRL/Z          back to line mode
+  +--------+--------+--------+        |
+  |       0         |   .    |        |   Press a key for help on it,
+  |      LINE       |        |        |   the space bar to go back.
+  +-----------------+--------+--------+
+2 PF1
+  GOLD. Press it before another key to give that key its second
+  function, the one shown below it on the keypad.
+2 PF2
+  HELP. Shows the keypad, this topic's diagram. Then each key you
+  press shows its help, until the space bar, or a key without help,
+  takes you back to the text. In line mode, HELP KEYPAD shows the same.
+2 PF3
+  FINDNXT. Moves the cursor to the next place the string you last
+  searched for appears, in the current direction. Case is ignored.
+
+  GOLD PF3 is FIND: it asks "Search for:", then finds what you type,
+  after the cursor if the direction is ADVANCE, on a line before it if
+  it is BACKUP.
+2 PF4
+  DEL L. Deletes from the cursor to the start of the next line, line
+  end included.
+2 Comma
+  DEL C. Deletes the character at the cursor. At the end of a line it
+  joins the next line to this one.
+2 KP0
+  LINE. Moves the cursor to the start of the next line when the
+  direction is ADVANCE, or to the start of this line, or of the one
+  before if it is there already, when it is BACKUP.
+2 KP2
+  EOL. Moves the cursor to the end of this line, or of the next one if
+  it is there already, when the direction is ADVANCE; to the end of the
+  line before when it is BACKUP.
+2 KP3
+  CHAR. Moves the cursor one character, right when the direction is
+  ADVANCE, left when it is BACKUP.
+2 KP4
+  ADVANCE. Makes the direction forward, toward the end of the buffer,
+  for the keys that move and for FINDNXT.
+
+  GOLD KP4 is BOTTOM: it moves to the end of the buffer, [EOB].
+2 KP5
+  BACKUP. Makes the direction backward, toward the start of the buffer,
+  for the keys that move and for FINDNXT.
+
+  GOLD KP5 is TOP: it moves to the start of the first line.
+2 KP8
+  SECT. Moves 16 lines in the current direction, to the start of the
+  line, stopping at the first line or at [EOB].
+2 Arrows
+  The up and down arrows move the cursor a line, the right and left
+  arrows a character.
+2 Prev_Screen
+  Moves 16 lines toward the start of the buffer.
+2 Next_Screen
+  Moves 16 lines toward the end of the buffer.
+2 Delete
+  Deletes the character before the cursor. At the start of a line it
+  joins this line to the one before.
+2 Backspace
+  Moves the cursor to the start of the line, or to the start of the line
+  before if it is there already.
+2 Return
+  Breaks the line at the cursor. The cursor goes to the start of the
+  new line.
+2 Tab
+  Puts a tab in at the cursor.
+2 CTRL_W
+  Draws the screen again.
+2 CTRL_Z
+  Leaves keypad mode for line mode, at the * prompt.
+1 QUIT
+  Ends the session without writing the buffer. The file stays as it
+  was.
+
+  Format:
+
+    QUIT
+1 RANGE
+  Most commands take a range: the lines they work on. With no range a
+  command works on the current line. A range is one line, two lines
+  with a colon between them for those lines and the ones in between,
+  or one of the words WHOLE and REST.
+
+    n          the n-th line of the buffer, or [EOB] past the last
+    .          the current line
+    BEGIN      the first line
+    END        the end of the buffer, [EOB]
+    "text"     the next line after the current one with text in it;
+    'text'     case is ignored
+    -"text"    the last line before the current one with text in it
+    -'text'
+    WHOLE      every line
+    REST       the current line and every line after it
+
+  Typing just a range types those lines, as TYPE does.
+2 Examples
+    *3:7              types lines 3 to 7
+    *DELETE .:"end"   deletes from the current line to the next line
+                      with "end" in it
+    *TYPE WHOLE       types the buffer
+1 REPLACE
+  Deletes the lines of a range, then inserts the lines you type in their
+  place, as INSERT does, up to a CTRL/Z.
+
+  Format:
+
+    REPLACE [range]
+
+  With no range, REPLACE replaces the current line.
+1 TYPE
+  Types the lines of a range, each after its number; the end of the
+  buffer is typed as [EOB]. The last line typed becomes the current
+  line.
+
+  Format:
+
+    TYPE [range]
+    range
+
+  With no range, TYPE types the current line. A range on its own is a
+  TYPE command. Pressing RETURN alone moves to the next line and types
+  it.
+1 COMMANDS
+  At the * prompt EDT takes these commands. A command may be shortened
+  to its first letters, down to one; the first command that matches in
+  the order TYPE, INSERT, DELETE, REPLACE, EXIT, QUIT, HELP, CHANGE is
+  the one done.
+
+    CHANGE      edit on the screen, in keypad mode
+    DELETE      delete lines
+    EXIT        write the file and end the session
+    HELP        show help
+    INSERT      insert lines
+    QUIT        end the session without writing
+    REPLACE     replace lines
+    TYPE        type lines
+
+  See RANGE for the lines a command works on.

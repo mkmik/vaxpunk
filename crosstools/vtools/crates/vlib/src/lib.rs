@@ -1,17 +1,71 @@
 //! vlib: the librarian. Puts object modules into object libraries
-//! (`docs/library-format.md`), as `LIBRARY/OBJECT/REPLACE` does.
+//! (`docs/library-format.md`), as `LIBRARY/OBJECT/REPLACE` does, and help
+//! text into help libraries, as `LIBRARY/HELP/REPLACE` does.
 
 use vms_obj::obj::{self, Gsd, Record, sym};
-use vms_obj::olb::{Library, MAX_KEY, Module};
+use vms_obj::olb::{HelpLibrary, Library, MAX_HELP_KEY, MAX_KEY, Module, Topic};
+
+const CREATOR: &str = concat!("vlib ", env!("CARGO_PKG_VERSION"));
 
 /// An empty library, created at `time` (VMS format).
 pub fn new(time: u64) -> Library {
     Library {
-        creator: concat!("vlib ", env!("CARGO_PKG_VERSION")).into(),
+        creator: CREATOR.into(),
         created: time,
         updated: time,
         modules: Vec::new(),
     }
+}
+
+/// An empty help library, created at `time` (VMS format).
+pub fn new_help(time: u64) -> HelpLibrary {
+    HelpLibrary {
+        creator: CREATOR.into(),
+        created: time,
+        updated: time,
+        topics: Vec::new(),
+    }
+}
+
+/// Puts the topics of help file `file`, its text `text`, into `lib`,
+/// replacing topics of the same name. A line `1 NAME` starts a topic, named
+/// NAME in capitals; its lines, that one first, go up to the next. The
+/// error, if any, is a VMS message.
+pub fn replace_help(
+    lib: &mut HelpLibrary,
+    file: &str,
+    text: &str,
+    time: u64,
+) -> Result<(), String> {
+    let mut topics: Vec<Topic> = Vec::new();
+    for (n, line) in text.lines().enumerate() {
+        let bad = |msg: &str| format!("%VLIB-F-BADHLP, {file}:{}: {msg}", n + 1);
+        let line = line.trim_end();
+        if line.len() > 255 {
+            return Err(bad("line longer than 255 characters"));
+        }
+        if let Some(name) = line.strip_prefix("1 ").or_else(|| line.strip_prefix("1\t")) {
+            let name = name.trim().to_ascii_uppercase();
+            if name.is_empty() || name.len() > MAX_HELP_KEY || !name.is_ascii() {
+                return Err(bad("a topic needs an ASCII name of 1 to 31 characters"));
+            }
+            topics.push(Topic {
+                name,
+                inserted: time,
+                lines: Vec::new(),
+            });
+        }
+        match topics.last_mut() {
+            Some(t) => t.lines.push(line.into()),
+            None if line.is_empty() || line.starts_with('!') => {}
+            None => return Err(bad("text before the first topic, a line \"1 name\"")),
+        }
+    }
+    for t in topics {
+        lib.topics.retain(|o| o.name != t.name);
+        lib.topics.push(t);
+    }
+    Ok(())
 }
 
 /// Puts the modules of object file `file` into `lib`, replacing modules of the

@@ -1,7 +1,8 @@
 //! Object libraries (OLB), laid out as OpenVMS Alpha object libraries, library
 //! format 3.0: a header block, two index B-trees (module names and global
 //! symbols), then each module's records in a chain of data blocks. See
-//! `docs/library-format.md`.
+//! `docs/library-format.md`. Help libraries (HLB) are the same with one
+//! index, of topics, and lines of text for records.
 
 use alloc::collections::{BTreeMap, BTreeSet};
 use alloc::string::String;
@@ -244,7 +245,8 @@ impl Library {
             if at.insert(rfa, modules.len()).is_some() {
                 return Err(Error::Invalid("module index"));
             }
-            let (mhd, object) = module_data(file, rfa)?;
+            let (mhd, records) = module_records(file, rfa, Mhd::SIZE)?;
+            let object = records.concat();
             modules.push(Module {
                 name,
                 ident: from_ascic(&mhd.objid),
@@ -268,29 +270,9 @@ impl Library {
 
 impl Module {
     /// Appends the module's data blocks, the first being block `vbn`: its
-    /// header, its object records, then the end marker. Each is a record: a
-    /// length word, the bytes, and a pad byte if the length is odd.
+    /// header, its object records, then the end marker.
     fn write_data(&self, vbn: usize, out: &mut Vec<u8>) {
-        let mut stream = Vec::new();
-        let mut starts = Vec::new();
-        let mut record = |bytes: &[u8]| {
-            starts.push(stream.len());
-            (bytes.len() as u16).put(&mut stream);
-            stream.extend_from_slice(bytes);
-            stream.resize(stream.len().next_multiple_of(2), 0);
-        };
-        let mhd = Mhd {
-            lbrflag: 0,
-            id: MHD_ID,
-            fill_1: [0; 2],
-            refcnt: 1 + self.symbols.len() as u32,
-            datim: self.inserted,
-            objstat: 0,
-            objid: ascic(&self.ident),
-        };
-        let mut header = Vec::new();
-        mhd.write(&mut header);
-        record(&header);
+        let mut records = Vec::new();
         let mut rest = &self.object[..];
         while !rest.is_empty() {
             let size = rest
@@ -301,22 +283,200 @@ impl Module {
                 "module {}: not a sequence of object records",
                 self.name
             );
-            record(&rest[..size]);
+            records.push(&rest[..size]);
             rest = &rest[size..];
         }
-        record(&EOT);
+        let mhd = header(1 + self.symbols.len() as u32, self.inserted, &self.ident);
+        write_data(&mhd, &records, vbn, out);
+    }
+}
 
-        let chunk = BLOCK - DATA_DATA;
-        let blocks = stream.len().div_ceil(chunk);
-        for (i, data) in stream.chunks(chunk).enumerate() {
-            let range = i * chunk..(i + 1) * chunk;
-            let recs = starts.iter().filter(|s| range.contains(s)).count();
-            let link = if i + 1 < blocks { vbn + i + 1 } else { 0 };
-            out.extend([recs as u8, 0]);
-            (link as u32).put(out);
-            out.extend_from_slice(data);
-            out.resize(out.len().next_multiple_of(BLOCK), 0);
+/// A module header: `refcnt` index entries point at it.
+fn header(refcnt: u32, datim: u64, ident: &str) -> Mhd {
+    Mhd {
+        lbrflag: 0,
+        id: MHD_ID,
+        fill_1: [0; 2],
+        refcnt,
+        datim,
+        objstat: 0,
+        objid: ascic(ident),
+    }
+}
+
+/// Appends a module's data blocks, the first being block `vbn`: its header,
+/// `records`, then the end marker. Each is a record: a length word, the
+/// bytes, and a pad byte if the length is odd.
+fn write_data(mhd: &Mhd, records: &[&[u8]], vbn: usize, out: &mut Vec<u8>) {
+    let mut stream = Vec::new();
+    let mut starts = Vec::new();
+    let mut record = |bytes: &[u8]| {
+        starts.push(stream.len());
+        (bytes.len() as u16).put(&mut stream);
+        stream.extend_from_slice(bytes);
+        stream.resize(stream.len().next_multiple_of(2), 0);
+    };
+    let mut header = Vec::new();
+    mhd.write(&mut header);
+    record(&header);
+    for r in records {
+        record(r);
+    }
+    record(&EOT);
+
+    let chunk = BLOCK - DATA_DATA;
+    let blocks = stream.len().div_ceil(chunk);
+    for (i, data) in stream.chunks(chunk).enumerate() {
+        let range = i * chunk..(i + 1) * chunk;
+        let recs = starts.iter().filter(|s| range.contains(s)).count();
+        let link = if i + 1 < blocks { vbn + i + 1 } else { 0 };
+        out.extend([recs as u8, 0]);
+        (link as u32).put(out);
+        out.extend_from_slice(data);
+        out.resize(out.len().next_multiple_of(BLOCK), 0);
+    }
+}
+
+/// A help library (HLB): one index, of topics, each a module whose records
+/// are the lines of a `.HLP` file's topic, its `1 NAME` line first, as
+/// `LIBRARY/HELP` makes it. `LBR$OUTPUT_HELP` reads it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct HelpLibrary {
+    /// The librarian that created it, up to 31 characters.
+    pub creator: String,
+    /// Creation and last update times, in VMS format.
+    pub created: u64,
+    pub updated: u64,
+    pub topics: Vec<Topic>,
+}
+
+/// A help library's topic.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Topic {
+    /// Its key: the name on its `1` line, in capitals.
+    pub name: String,
+    /// Insertion time, in VMS format.
+    pub inserted: u64,
+    /// Its lines, each at most 255 bytes.
+    pub lines: Vec<String>,
+}
+
+/// `LHD$B_TYPE` of a help library (`LBR$C_TYP_HLP`).
+pub const TYP_HLP: u8 = 3;
+/// The longest topic name.
+pub const MAX_HELP_KEY: usize = 31;
+/// A help library's index: ASCII keys of variable length, in capitals and
+/// compared so (`CRE$C_HLPCASING`, 3 bits up).
+const HLP_IDD_FLAGS: u16 = 1 | 4 | (6 << 3);
+
+impl HelpLibrary {
+    /// Serializes the library, with the topics in name order.
+    ///
+    /// Panics if a name is longer than [`MAX_HELP_KEY`], not ASCII
+    /// capitals, or appears twice, or a line is longer than 255 bytes.
+    pub fn write(&self) -> Vec<u8> {
+        let mut topics: Vec<&Topic> = self.topics.iter().collect();
+        topics.sort_by(|a, b| a.name.cmp(&b.name));
+        let names: Vec<(&str, usize)> = topics
+            .iter()
+            .enumerate()
+            .map(|(i, t)| (t.name.as_str(), i))
+            .collect();
+        if let Some(w) = names.windows(2).find(|w| w[0].0 == w[1].0) {
+            panic!("{} is in the library twice", w[0].0);
         }
+        for t in &topics {
+            assert!(
+                t.name.len() <= MAX_HELP_KEY && t.name == t.name.to_ascii_uppercase(),
+                "bad topic name {}",
+                t.name
+            );
+            if let Some(l) = t.lines.iter().find(|l| l.len() > 255) {
+                panic!("topic {}: line too long: {l}", t.name);
+            }
+        }
+        let nowhere = [(0, 0)].repeat(topics.len());
+        let name_blocks = index(&names, &nowhere, 0).0.len() / BLOCK;
+        let first_data = 2 + name_blocks;
+        let mut data = Vec::new();
+        let mut rfas = Vec::new();
+        for t in &topics {
+            let vbn = first_data + data.len() / BLOCK;
+            rfas.push((vbn as u32, DATA_DATA as u16));
+            let lines: Vec<&[u8]> = t.lines.iter().map(|l| l.as_bytes()).collect();
+            write_data(&header(1, t.inserted, ""), &lines, vbn, &mut data);
+        }
+        let (name_index, root) = index(&names, &rfas, 2);
+        let next = (first_data + data.len() / BLOCK) as u32;
+        let lhd = Lhd {
+            kind: TYP_HLP,
+            nindex: 1,
+            fill_1: [0; 2],
+            sanity: SANEID3,
+            majorid: MAJORID,
+            minorid: 0,
+            lbrver: ascic(&self.creator),
+            credat: self.created,
+            updtim: self.updated,
+            mhdusz: (Mhd::SIZE - 16) as u8,
+            fill_2: [0; 15],
+            nextrfa_vbn: next,
+            nextrfa_offset: 0,
+            nextvbn: next,
+            fill_3: [0; 8],
+            hipreal: (first_data - 1) as u32,
+            hiprusd: (first_data - 1) as u32,
+            idxblks: name_blocks as u32,
+            idxcnt: names.len() as u32,
+            modcnt: topics.len() as u32,
+            fill_4: [0; 2],
+            modhdrs: topics.len() as u32,
+            fill_5: [0; 76],
+        };
+        let mut file = Vec::new();
+        lhd.write(&mut file);
+        let idd = Idd {
+            flags: HLP_IDD_FLAGS,
+            keylen: MAX_HELP_KEY as u16,
+            vbn: root,
+        };
+        idd.write(&mut file);
+        file.resize(BLOCK, 0);
+        file.extend(name_index);
+        file.extend(data);
+        file
+    }
+
+    /// Parses a help library. Topics come in name order.
+    pub fn parse(file: &[u8]) -> Result<HelpLibrary, Error> {
+        let lhd = Lhd::parse(file)?;
+        if lhd.kind != TYP_HLP || lhd.nindex != 1 || lhd.sanity != SANEID3 {
+            return Err(Error::Invalid("library type"));
+        }
+        if lhd.majorid != MAJORID {
+            return Err(Error::Invalid("library format"));
+        }
+        let mut r = Reader(file.get(Lhd::SIZE..).ok_or(Error::Truncated)?);
+        let idd = Idd::read(&mut r)?;
+        let mut topics = Vec::new();
+        for (name, rfa) in entries(file, idd.vbn, &mut BTreeSet::new())? {
+            let (mhd, records) = module_records(file, rfa, 16 + usize::from(lhd.mhdusz))?;
+            let lines = records
+                .into_iter()
+                .map(|r| String::from_utf8(r).map_err(|_| Error::Invalid("help text")))
+                .collect::<Result<_, _>>()?;
+            topics.push(Topic {
+                name,
+                inserted: mhd.datim,
+                lines,
+            });
+        }
+        Ok(HelpLibrary {
+            creator: from_ascic(&lhd.lbrver),
+            created: lhd.credat,
+            updated: lhd.updtim,
+            topics,
+        })
     }
 }
 
@@ -429,8 +589,13 @@ fn block(file: &[u8], vbn: u32) -> Result<&[u8], Error> {
     file.get(start..start + BLOCK).ok_or(Error::Truncated)
 }
 
-/// A module's header and records, from its data starting at `rfa`.
-fn module_data(file: &[u8], (vbn, offset): Rfa) -> Result<(Mhd, Vec<u8>), Error> {
+/// A module's header and records, from its data starting at `rfa`; the
+/// header is `size` bytes.
+fn module_records(
+    file: &[u8],
+    (vbn, offset): Rfa,
+    size: usize,
+) -> Result<(Mhd, Vec<Vec<u8>>), Error> {
     if !(DATA_DATA..BLOCK).contains(&usize::from(offset)) {
         return Err(Error::Invalid("module address"));
     }
@@ -440,21 +605,22 @@ fn module_data(file: &[u8], (vbn, offset): Rfa) -> Result<(Mhd, Vec<u8>), Error>
         at: offset.into(),
         hops: 0,
     };
-    let header = d.record()?;
-    if header.len() != Mhd::SIZE {
+    let mut header = d.record()?;
+    if header.len() != size || size < 16 {
         return Err(Error::Invalid("module header size"));
     }
+    header.resize(header.len().max(Mhd::SIZE), 0);
     let mhd = Mhd::parse(&header)?;
     if mhd.id != MHD_ID {
         return Err(Error::Invalid("module header"));
     }
-    let mut object = Vec::new();
+    let mut records = Vec::new();
     loop {
         let record = d.record()?;
         if record == EOT {
-            return Ok((mhd, object));
+            return Ok((mhd, records));
         }
-        object.extend(record);
+        records.push(record);
     }
 }
 
@@ -587,6 +753,32 @@ mod tests {
         assert_eq!(word(data + 6), 49, "MHD length");
         assert_eq!(bytes[data + 9], MHD_ID);
         assert_eq!(long(data + 12), 3, "MHD$L_REFCNT: name and 2 symbols");
+    }
+
+    #[test]
+    fn help_round_trip() {
+        let topic = |name: &str, n| Topic {
+            name: name.into(),
+            inserted: 7,
+            lines: (0..n).map(|i| format!("{i} {name} line")).collect(),
+        };
+        let lib = HelpLibrary {
+            creator: "vlib test".into(),
+            created: 1,
+            updated: 2,
+            // Enough lines to span data blocks, and an empty one.
+            topics: vec![topic("COPY", 300), topic("DIAL", 1), topic("E", 0)],
+        };
+        let bytes = lib.write();
+        assert_eq!((bytes[0], bytes[1]), (TYP_HLP, 1), "LHD$B_TYPE, NINDEX");
+        assert_eq!(
+            &bytes[196..200],
+            &[0x35, 0, 31, 0],
+            "IDD flags and key length"
+        );
+        assert_eq!(HelpLibrary::parse(&bytes).unwrap(), lib);
+        assert!(!is_library(&bytes));
+        assert_eq!(Library::parse(&bytes), Err(Error::Invalid("library type")));
     }
 
     #[test]

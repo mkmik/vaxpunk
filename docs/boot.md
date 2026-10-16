@@ -338,7 +338,8 @@ interpreter. It is linked high in P1, which tells the executive it is one
   PROTECTION=(W:R) file` and `SET FILE/OWNER_UIC=[200,1] file` run
   `SET.EXE` too, which changes the protection and the owner in the
   file's header, and `DIRECTORY/OWNER/PROTECTION` shows them. `HELP` runs
-  `HELP.EXE`, which lists the commands from DCL's command tables.
+  `HELP.EXE`, which writes the topic asked for from
+  `SYS$HELP:HELPLIB.HLB` and prompts for more, `Topic?`.
   `MCR AUTHORIZE` runs `AUTHORIZE.EXE`, which reads `SYSUAF.DAT` and
   does the command after it, or each one after its `UAF>` prompt:
   `ADD JOE /PASSWORD=secret /UIC=[200,1]` makes a user from the `DEFAULT`

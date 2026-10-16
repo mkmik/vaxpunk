@@ -1,0 +1,75 @@
+1 ANSWER
+  Picks up the call ringing your phone, and adds a viewport for the
+  caller below yours.
+
+    ANSWER
+
+  If no one is calling, PHONE says so.
+1 Characters
+  In a call, each character you type goes to everyone you are talking
+  with as you type it, and shows in your own viewport. These keys edit
+  the line being typed, in every viewport:
+
+    RETURN    starts a new line
+    DELETE    rubs out the last character
+    LINEFEED  rubs out the last word
+    CTRL/U    rubs out the line
+    CTRL/L    clears the viewport
+    TAB       moves to the next tab stop
+    CTRL/G    rings the bell
+1 Control_keys
+  Keys that PHONE itself takes:
+
+    CTRL/Z    hangs up a call; while a command is typed, or with no
+              one on the line, hangs up and leaves PHONE
+    CTRL/W    draws the screen again
+    CTRL/U    while a command is typed, rubs it out
+
+  Any key cancels the calls still ringing, and ends a directory
+  listing.
+1 DIAL
+  Rings another user of this system, every 10 seconds until the user
+  answers or rejects the call, or you press a key.
+
+    DIAL username
+
+  With no one on the line, typing just the username does the same.
+  PHONE is an abbreviation for DIAL.
+
+  The user must be logged in at a terminal that takes broadcasts.
+  vaxpunk has no network: a node name, as in NODE::USER, is refused.
+1 DIRECTORY
+  Lists the users logged in at terminals on this system, and whether
+  each one's phone is available or unplugged (/NOBROADCAST).
+
+    DIRECTORY
+
+  Press any key to end the listing.
+1 EXIT
+  Hangs up on everyone and leaves PHONE.
+
+    EXIT
+
+  CTRL/Z does the same when no one is on the line.
+1 HANGUP
+  Ends the call with everyone you are talking with.
+
+    HANGUP
+
+  CTRL/Z does the same during a call.
+1 HELP
+  Describes PHONE's commands.
+
+    HELP [topic]
+1 REJECT
+  Turns down the call ringing your phone. The caller is told.
+
+    REJECT
+1 Switch_hook
+  During a call, the switch hook character, % unless the PHONE command's
+  /SWITCH_HOOK qualifier picks another, starts a command: type it, then
+  the command, then RETURN. With no one on the line, you can type the
+  command without it.
+
+  A command may be abbreviated: the abbreviation picks the first
+  command, in alphabetical order, that starts with it.

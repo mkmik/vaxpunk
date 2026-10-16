@@ -75,6 +75,8 @@ show the library as their file in the map.
 ```
 vlib [/CREATE] LIBRARY.OLB FILE.OBJ...
 vlib /LIST [/NAMES] LIBRARY.OLB
+vlib /HELP [/CREATE] LIBRARY.HLB FILE.HLP...
+vlib /HELP /LIST LIBRARY.HLB
 ```
 
 (`--create`, `--list` and `--names` work too.) Each module of each object file
@@ -82,7 +84,10 @@ goes in, replacing a module of the same name, as `LIBRARY/REPLACE` does.
 `/CREATE` starts a new library instead of updating one. The symbol index gets
 each module's strong global definitions; a symbol already there for another
 module stays with that module, with a warning. `/LIST` prints the module
-names, and with `/NAMES` the symbols of each.
+names, and with `/NAMES` the symbols of each. With `/HELP` the library is a
+help library and the files are help text, as `LIBRARY/HELP` takes them: each
+topic, a line `1 NAME` and the lines up to the next, goes in, replacing a
+topic of the same name (`docs/library-format.md`).
 
 ## Shareable images
 

@@ -5,11 +5,13 @@ use std::process::ExitCode;
 use std::time::{SystemTime, UNIX_EPOCH};
 use std::{env, fs};
 
-use vms_obj::olb::Library;
+use vms_obj::olb::{HelpLibrary, Library};
 
 const USAGE: &str = "usage: vlib [/CREATE] LIBRARY.OLB FILE.OBJ...
+       vlib /HELP [/CREATE] LIBRARY.HLB FILE.HLP...
        vlib /LIST [/NAMES] LIBRARY.OLB
-       (or --create, --list, --names)";
+       vlib /HELP /LIST LIBRARY.HLB
+       (or --create, --help, --list, --names)";
 
 fn main() -> ExitCode {
     match run() {
@@ -24,11 +26,13 @@ fn main() -> ExitCode {
 fn run() -> Result<(), String> {
     let usage = || format!("%VLIB-F-USAGE, {USAGE}");
     let (mut create, mut list, mut names, mut files) = (false, false, false, Vec::new());
+    let mut help = false;
     for arg in env::args().skip(1) {
         match arg.to_ascii_uppercase().as_str() {
             "/CREATE" | "--CREATE" => create = true,
             "/LIST" | "--LIST" => list = true,
             "/NAMES" | "--NAMES" => names = true,
+            "/HELP" | "--HELP" => help = true,
             _ if arg.starts_with('-') => return Err(usage()),
             _ => files.push(PathBuf::from(arg)),
         }
@@ -47,6 +51,9 @@ fn run() -> Result<(), String> {
         })
     };
 
+    if help {
+        return run_help(path, objects, create, list, names, read);
+    }
     if list {
         if create || !objects.is_empty() {
             return Err(usage());
@@ -76,6 +83,44 @@ fn run() -> Result<(), String> {
         for w in vlib::replace(&mut lib, &file, &read(object)?, time)? {
             eprintln!("{w}");
         }
+    }
+    fs::write(path, lib.write()).map_err(|e| format!("%VLIB-F-WRITEERR, {}: {e}", path.display()))
+}
+
+/// vlib /HELP: lists a help library's topics, or puts help files' topics in it.
+fn run_help(
+    path: &PathBuf,
+    files: &[PathBuf],
+    create: bool,
+    list: bool,
+    names: bool,
+    read: impl Fn(&PathBuf) -> Result<Vec<u8>, String>,
+) -> Result<(), String> {
+    let usage = || format!("%VLIB-F-USAGE, {USAGE}");
+    let parse = |p: &PathBuf| {
+        HelpLibrary::parse(&read(p)?)
+            .map_err(|e| format!("%VLIB-F-NOTLIB, {} is not a help library: {e}", p.display()))
+    };
+    if names || (list && (create || !files.is_empty())) || (!list && files.is_empty()) {
+        return Err(usage());
+    }
+    if list {
+        for t in parse(path)?.topics {
+            println!("{}", t.name);
+        }
+        return Ok(());
+    }
+    let time = now();
+    let mut lib = if create {
+        vlib::new_help(time)
+    } else {
+        parse(path)?
+    };
+    lib.updated = time;
+    for file in files {
+        let text = String::from_utf8(read(file)?)
+            .map_err(|_| format!("%VLIB-F-BADHLP, {}: not text", file.display()))?;
+        vlib::replace_help(&mut lib, &file.display().to_string(), &text, time)?;
     }
     fs::write(path, lib.write()).map_err(|e| format!("%VLIB-F-WRITEERR, {}: {e}", path.display()))
 }

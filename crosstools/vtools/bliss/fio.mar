@@ -92,6 +92,13 @@ FIO$DATE::
 FIO$EXIT::
         svc     #1
 
+; FIO$HELP library, length, topic, length, routine: there are no help
+; libraries under vrun, so RMS$_FNF.
+FIO$HELP::
+        movz    x0, #0x8292
+        movk    x0, #1, lsl #16
+        ret
+
 newline:
         .ASCII  <10>
 epoch:  .ASCII  "17-NOV-1858 00:00"
