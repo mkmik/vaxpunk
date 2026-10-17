@@ -1,10 +1,10 @@
 module github.com/mkmik/vaxpunk/web/tailgate
 
-go 1.27.1
+go 1.27.2
 
 require (
 	github.com/tailscale/tailcat v0.7.0
-	gvisor.dev/gvisor v0.0.0-20260915211658-a6f909f08a72
+	gvisor.dev/gvisor v0.0.0-20261017120855-9e9495997e29
 	tailscale.com v1.103.0-pre.0.20260916030321-a2263542f260
 )
 
