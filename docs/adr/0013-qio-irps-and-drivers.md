@@ -108,8 +108,8 @@ wait for the device, and the ramdisk is a copy.
 
 **What gets harder.**
 - Every `$QIO` takes pool: `SS$_INSFMEM` when there is none, and
-  `SS$_EXQUOTA` for a request over 64 KB. ponytail: no `BIOLM`, `DIOLM`
-  or `BYTLM` quotas, so one process can take the pool with reads.
+  `SS$_EXQUOTA` for a request over 64 KB, or past the process's `BIOLM`,
+  `DIOLM` or `BYTLM` ([ADR-0038](0038-io-quotas-charged-with-the-irp.md)).
 - A buffered read is copied twice, into the IRP and then to the caller.
 - `IOC$POST` writes the caller's buffer and IOSB without probing them
   again: a program that deletes their pages while a read is pending takes

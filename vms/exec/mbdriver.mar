@@ -30,7 +30,7 @@
         $SSDEF
 
         .EXTERNAL SCH$GL_CURPCB, EXE$PROBER_DSC, EXE$ALONONPAGED, EXE$DEANONPGDSIZ
-        .EXTERNAL IOC$ALLOCIRP, IOC$REQCOM, IOC$ASSIGN, IOC$CANCELQ, IOC$TRNDEVNAM
+        .EXTERNAL IOC$ALLOCIRP, IOC$RETQUOTA, IOC$REQCOM, IOC$ASSIGN, IOC$CANCELQ, IOC$TRNDEVNAM
         .EXTERNAL LNM$GQ_SYSTEM, LNM$CREATE, LNM$DELEQV
 
 DEFMBXMXMSG = 256                       ; a mailbox's longest message, by default, as VMS's SYSGEN has it
@@ -287,6 +287,7 @@ MBWRITE:
         BRW     IOC$REQCOM
 80$:    PUSHL   R0                      ; it failed: the IRP goes
         MOVL    R8, R0
+        BSBW    IOC$RETQUOTA
         MOVZWL  IRP$W_SIZE(R0), R1
         BSBW    EXE$DEANONPGDSIZ
         MOVL    (SP)+, R0

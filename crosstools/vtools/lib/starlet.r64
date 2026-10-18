@@ -1320,6 +1320,14 @@ LITERAL
     JPI$_AUTHPRIV = 1042,  ! and authorized
     JPI$_TERMINAL = 797,  ! an interactive process's terminal, DDCU:, else empty
     JPI$_MODE = 802,  ! its mode, a JPI$K_ value
+    JPI$_BIOCNT = 783,  ! buffered I/O requests it may still make
+    JPI$_BIOLM = 784,  ! and its limit
+    JPI$_BYTCNT = 785,  ! bytes of buffered I/O it may still take
+    JPI$_BYTLM = 794,  ! and its limit
+    JPI$_DIOCNT = 786,  ! direct I/O requests it may still make
+    JPI$_DIOLM = 787,  ! and its limit
+    JPI$_BUFIO = 1036,  ! buffered I/O requests it has made
+    JPI$_DIRIO = 1035,  ! direct I/O requests it has made
     JPI$K_OTHER = 0,  ! a detached process's mode
     JPI$K_NETWORK = 1,
     JPI$K_BATCH = 2,

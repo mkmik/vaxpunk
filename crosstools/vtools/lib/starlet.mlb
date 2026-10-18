@@ -1676,6 +1676,14 @@ JPI$_CURPRIV = ^X400                    ; current,
 JPI$_AUTHPRIV = ^X412                   ; and authorized
 JPI$_TERMINAL = ^X31D                   ; an interactive process's terminal, DDCU:, else empty
 JPI$_MODE = ^X322                       ; its mode, a JPI$K_ value
+JPI$_BIOCNT = ^X30F                     ; buffered I/O requests it may still make
+JPI$_BIOLM = ^X310                      ; and its limit
+JPI$_BYTCNT = ^X311                     ; bytes of buffered I/O it may still take
+JPI$_BYTLM = ^X31A                      ; and its limit
+JPI$_DIOCNT = ^X312                     ; direct I/O requests it may still make
+JPI$_DIOLM = ^X313                      ; and its limit
+JPI$_BUFIO = ^X40C                      ; buffered I/O requests it has made
+JPI$_DIRIO = ^X40B                      ; direct I/O requests it has made
 JPI$K_OTHER = 0                         ; a detached process's mode
 JPI$K_NETWORK = 1
 JPI$K_BATCH = 2
@@ -2336,6 +2344,13 @@ LKI$C_LENGTH = 24
         .EXTERNAL SYS$SETAST
         CALLS   #1, G^SYS$SETAST
         .ENDM   $SETAST_S
+
+; $SETRWM_S [WATFLG]: resource wait on, 0, or off, 1.
+        .MACRO  $SETRWM_S WATFLG=#0
+        PUSHL   WATFLG
+        .EXTERNAL SYS$SETRWM
+        CALLS   #1, G^SYS$SETRWM
+        .ENDM   $SETRWM_S
 
 ; $ASCTIM_S [TIMLEN], TIMBUF, [TIMADR], [CVTFLG]: a time as text.
         .MACRO  $ASCTIM_S TIMLEN=0, TIMBUF, TIMADR=0, CVTFLG=#0

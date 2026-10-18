@@ -211,7 +211,7 @@ until the hardware or size changes; leave it.
 | 1 | Privileges done (step 1), files' and volumes' protection (step 2); left: mailboxes with no protection mask (ADR-0019, `mbdriver.mar`); a `$CREMBX` logical name takes `SYSNAM` until `LNM$JOB` (`mbdriver.mar`) | *Privileges, UICs and protection* |
 | 2 | Done (step 4, [ADR-0029](../adr/0029-loginout-and-sysuaf.md)): `LOGINOUT` on the console and `TELNETD`'s terminals, the UAF picks the command interpreter, `STARTUP` runs `SYSTARTUP_VMS.COM`; left: the console asks for a username again at once, not at a key (`exec.mar`); `SET PASSWORD`'s privilege is a fixed list of known images until `INSTALL` (`process.mar`) | *Login* |
 | 3 | Terminals per UCB done, with `TNAn:` for `SET HOST` (step 3, ADR-0027); a hangup deletes the terminal's process; `$BRKTHRU`; left: at most 9 `TNAn:` units (`ttdriver.mar`, DESIGN-0002 *I/O*) | *Terminals*, and `LOGINOUT` for the hangup |
-| 4 | No quotas: `BIOLM`, `DIOLM`, `BYTLM` (ADR-0013), `BUFQUO` (ADR-0019), ASTs (DESIGN-0002 *ASTs*); `$GETJPI` has no CPU times, quotas or counts (`getjpi.mar`, `show.mar`) | *Quotas* |
+| 4 | `BIOLM`, `DIOLM` and `BYTLM` charged, resource wait and `$SETRWM`, the I/O counts, `$GETJPI`'s and `SHOW PROCESS/QUOTAS` done ([ADR-0038](../adr/0038-io-quotas-charged-with-the-irp.md)); left: `BUFQUO` (ADR-0019), `ASTLM` (DESIGN-0002 *ASTs*), `TQELM`, `FILLM`, `PRCLM`; requests done before their IRP don't wait for `BIOCNT` (`qio.mar`); no CPU times (`getjpi.mar`, `show.mar`) | *Quotas* |
 | 5 | The lock manager done (step 6, [ADR-0030](../adr/0030-lock-manager-in-the-executive.md), [ADR-0035](../adr/0035-deadlock-search-after-deadlock-wait.md)), and files' access arbitration on it, `$ERASE` of an open file deleting it at its last close (step 7, [ADR-0036](../adr/0036-file-access-arbitration-locks.md)); left: `ENQLM` (step 5), the `$ENQ` and `$DEQ` flags no program uses yet, `DEADLOCK_WAIT` a cell for want of SYSGEN (`locking.b64`, `sysenqdeq.mar`); one file system lock for every volume, its state global, no priority boost (ADR-0020, `f11.mar`, DESIGN-0002 *Files*); one writer a file, no bucket or record locks, until PRD-0008's step 9 (`rms.mar`) | *Lock manager* |
 | 6 | Block `IF`, `ON`, `SET [NO]ON`, `SET VERIFY`, the lexical functions, `OPEN`/`READ`/`WRITE`/`CLOSE` and data lines as `SYS$INPUT` done (step 8); left: an image's data lines go through a mailbox that replaces `SYS$INPUT`, for want of logical names' access modes and RMS on process-permanent files (`dcl/proc.mar`); `F$FAO` has some directives (`dcl/lexical.mar`) | *Command language* |
 | 7 | `$ASCTIM`, `$NUMTIM` (PRD-0004's pilot, `numtim.b64`) and the date in `SHOW PROCESS` and `SHOW SYSTEM` done; left: `$BINTIM`, `SHOW TIME` | *Batch and print* |
@@ -335,7 +335,9 @@ Each step ends in something `cargo test -p boot` checks.
 5. **Quotas and accounting.** Quotas charged and checked; CPU time and I/O
    counts kept; `$ASCTIM`, `$BINTIM`, `SHOW TIME`. *Visible:* `SHOW
    PROCESS/QUOTAS/ACCOUNTING`; a process that queues reads past `BIOLM`
-   waits instead of taking the pool.
+   waits instead of taking the pool. The I/O quotas and counts done
+   ([ADR-0038](../adr/0038-io-quotas-charged-with-the-irp.md)), with
+   `QUOTATEST: ok`.
 6. **Lock manager.** `$ENQ`, `$DEQ`, `$GETLKI`, deadlock detection,
    `LOCKTEST`, as [ADR-0030](../adr/0030-lock-manager-in-the-executive.md)
    decides. *Visible:* `LOCKTEST: ok`. Done, with the deadlock search

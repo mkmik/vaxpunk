@@ -10,6 +10,12 @@
 ; as a kernel mode AST, IOC$POST: there the data, the I/O status block
 ; and the event flag are written, and the caller's AST queued. $QIOW waits
 ; for that.
+; Each IRP of a $QIO is charged to its process's quotas, as on VMS: a
+; disk's is a direct I/O, DIOCNT, the others' a buffered one, BIOCNT, and
+; their size, BYTCNT; IOC$POST gives them back. A request past what is
+; left waits, in resource wait (SCH$C_MWAIT), until one of the process's
+; requests is done, or with $SETRWM's resource wait off fails with
+; SS$_EXQUOTA.
 ; The drivers: the terminals', ttdriver.mar, the disks', DK$FDT in
 ; f11.mar, whose start I/O routine, DK$STARTIO, the file system's own
 ; reads and writes go through too, the network's, netdriver.mar, and the
@@ -22,6 +28,7 @@
         $PSLDEF
         $IPLDEF
         $PCBDEF
+        $STATEDEF
         $UCBDEF
         $IRPDEF
         $LNMBDEF
@@ -29,6 +36,7 @@
         $SSDEF
 
         .EXTERNAL SCH$GL_CURPCB, SCH$QAST, SCH$ASTBITS, SCH$GETEFC, SCH$POSTEF
+        .EXTERNAL SCH$WAIT, SCH$GL_PCBVEC, SCH$GL_MAXPIX
         .EXTERNAL EXE$PROBER_DSC, EXE$CLREF, EXE$WAITFR
         .EXTERNAL EXE$ALONONPAGED, EXE$DEANONPGDSIZ
         .EXTERNAL LNM$TRNLOG, DK$FDT, DK$STARTIO, TT$FINDUNIT, TT$CANCEL, FT$FDT
@@ -63,6 +71,7 @@ IOC$AB_FTA0::                           ; the pseudo terminals' template device 
         .ASCII  /FTA0/
         .LONG   0, 0
 IOC$A_UCBEND::                          ; past the last UCB
+RWAITQ: .ADDRESS RWAITQ, RWAITQ         ; the processes waiting for I/O quota, SCH$C_MWAIT
 
         .PSECT  $CODE$
 
@@ -219,6 +228,10 @@ IOC$TRNDEVNAM::
 ; bytes at p1, or reads a line into them, after the prompt in p5 and p6
 ; for IO$_READPROMPT; the disks' (DK$FDT) reads or writes them at LBN p3.
 ; The FDT routines read the arguments through AP, so it homes them all.
+; A request IOC$ALLOCIRP finds past the process's quotas waits for them
+; in resource wait, SCH$C_MWAIT, until an AST, its I/O done, ends the
+; wait, and then the FDT routine is called again: it must change nothing
+; before its IOC$ALLOCIRP. SS$_EXQUOTA with $SETRWM's resource wait off.
 EXE$QIO::
         .CALL_ENTRY HOME_ARGS=TRUE, MAX_ARGS=12
         MOVL    SCH$GL_CURPCB, R4
@@ -227,7 +240,6 @@ EXE$QIO::
         CMPL    R0, #PCB$C_MAXCHAN
         BGTRU   75$
         BBC     R0, PCB$L_CHANS(R4), 75$
-        MOVL    PCB$AL_CCB(R4)[R0], R5
         MOVL    16(AP), R0
         BEQL    10$
         IFNOWRT #8, (R0), 85$
@@ -235,10 +247,22 @@ EXE$QIO::
         CALLS   #1, G^EXE$CLREF
         BLBC    R0, 90$
         DSBINT  #IPL$_SYNCH
+20$:    MOVL    SCH$GL_CURPCB, R4
+        MOVZWL  8(AP), R0
+        BBC     R0, PCB$L_CHANS(R4), 70$        ; an AST in the wait may deassign it
+        MOVL    PCB$AL_CCB(R4)[R0], R5
         MOVL    UCB$L_FDT(R5), R0
         JSB     (R0)
-        ENBINT
+        MOVL    SCH$GL_CURPCB, R4
+        BBCC    #PCB$V_QUOWAIT, PCB$L_STS(R4), 30$
+        BLBS    R0, 30$
+        MOVL    #SCH$C_MWAIT, PCB$L_STATE(R4)
+        MOVAQ   RWAITQ, R0
+        BSBW    SCH$WAIT
+        BRB     20$
+30$:    ENBINT
         RET
+70$:    ENBINT
 75$:    MOVL    #SS$_IVCHAN, R0
         RET
 85$:    MOVL    #SS$_ACCVIO, R0
@@ -272,16 +296,85 @@ EXE$QIOW::
 
 ; IOC$ALLOCIRP: R1 = how many bytes the driver needs past the packet, R4 =
 ; the current PCB, R5 = a UCB, AP = $QIO's arguments. Makes an IRP for the
-; request: R3 = it, R0 = SS$_NORMAL, or SS$_INSFMEM, or SS$_EXQUOTA if it
-; would be 64 KB or more. Uses R1 and R2.
+; request and charges it to the process: on a disk a direct I/O, DIOCNT,
+; else a buffered one, BIOCNT, and its size, BYTCNT. R3 = it, R0 =
+; SS$_NORMAL, or SS$_INSFMEM, or SS$_EXQUOTA if it would be 64 KB or more
+; or over BYTLM, or the process has no I/O of the kind left. Then with
+; resource wait on, as it is unless $SETRWM turned it off, it sets
+; PCB$V_QUOWAIT, and $QIO waits for the quota and calls the FDT routine
+; again. Uses R1 and R2.
 IOC$ALLOCIRP::
         .JSB_ENTRY  INPUT=<AP>, OUTPUT=<R3>, SCRATCH=<R2>
         ADDL2   #IRP$K_LENGTH, R1
         CMPL    R1, #^XFFF0
         BGTRU   80$
+        MOVAB   G^DK$FDT, R0
+        CMPL    UCB$L_FDT(R5), R0
+        BNEQ    10$
+        MOVL    #IRP$K_DIO, R2          ; a disk's
+        TSTW    PCB$W_DIOLM(R4)
+        BLEQ    80$
+        TSTW    PCB$W_DIOCNT(R4)
+        BLEQ    70$
+        BRW     ALLOC
+10$:    MOVL    #IRP$K_BIO, R2
+        TSTW    PCB$W_BIOLM(R4)
+        BLEQ    80$
+        CMPL    R1, PCB$L_BYTLM(R4)
+        BGTR    80$
+        TSTW    PCB$W_BIOCNT(R4)
+        BLEQ    70$
+        CMPL    R1, PCB$L_BYTCNT(R4)
+        BGTR    70$
+        BRW     ALLOC
+70$:    BBS     #PCB$V_SSRWAIT, PCB$L_STS(R4), 80$
+        BBSS    #PCB$V_QUOWAIT, PCB$L_STS(R4), 80$
+80$:    MOVL    #SS$_EXQUOTA, R0
+        RSB
+
+; IOC$ALLOCDONE: IOC$ALLOCIRP's IRP for a request its FDT routine has done
+; already, or an AST's packet, which charges nothing: what was done can't
+; wait for quota and be done again. R1, R4, R5, AP and the results as
+; IOC$ALLOCIRP has them, but SS$_EXQUOTA only for 64 KB. Uses R1 and R2.
+; ponytail: VMS charges a request before its FDT routine, which waits for
+; BIOCNT before the console's writes and SET MODE too.
+IOC$ALLOCDONE::
+        .JSB_ENTRY  INPUT=<AP>, OUTPUT=<R3>, SCRATCH=<R2>
+        ADDL2   #IRP$K_LENGTH, R1
+        CMPL    R1, #^XFFF0
+        BGTRU   80$
+        CLRL    R2
+        BRW     ALLOC
+80$:    MOVL    #SS$_EXQUOTA, R0
+        RSB
+
+; ALLOC: IOC$ALLOCIRP's and IOC$ALLOCDONE's work once the quotas are
+; checked: R1 = the IRP's size, R2 = what to charge it to, an IRP$K_ value
+; or 0, R4, R5 and AP as theirs have them. R3 = it, R0 = SS$_NORMAL or
+; SS$_INSFMEM. Uses R1 and R2.
+ALLOC:
+        .JSB_ENTRY  INPUT=<AP>, OUTPUT=<R3>, SCRATCH=<R2>
+        PUSHL   R2
         BSBW    EXE$ALONONPAGED
-        BLBC    R0, 90$
-        MOVL    R2, R3
+        BLBS    R0, 10$
+        ADDL2   #4, SP
+        RSB
+10$:    MOVL    R2, R3
+        MOVL    (SP)+, R2
+        MOVB    R2, IRP$B_QUOTA(R3)
+        CLRL    IRP$L_BOFF(R3)
+        CMPL    R2, #IRP$K_DIO
+        BNEQ    20$
+        DECW    PCB$W_DIOCNT(R4)
+        INCL    PCB$L_DIRIO(R4)
+        BRB     30$
+20$:    CMPL    R2, #IRP$K_BIO
+        BNEQ    30$
+        DECW    PCB$W_BIOCNT(R4)
+        SUBL2   R1, PCB$L_BYTCNT(R4)
+        MOVL    R1, IRP$L_BOFF(R3)
+        INCL    PCB$L_BUFIO(R4)
+30$:
         MOVW    R1, IRP$W_SIZE(R3)
         MOVB    #DYN$C_IRP, IRP$B_TYPE(R3)
         MOVL    PCB$L_PID(R4), IRP$L_PID(R3)
@@ -305,8 +398,46 @@ IOC$ALLOCIRP::
         CLRL    IRP$L_POST(R3)
         MOVL    #SS$_NORMAL, R0
         RSB
-80$:    MOVL    #SS$_EXQUOTA, R0
+
+; IOC$RETQUOTA: R0 = an IRP. Gives back what IOC$ALLOCIRP charged it to its
+; process, if it is still there, and marks it charged no more: IOC$POST
+; does, and whoever frees one that isn't posted. IPL$_SYNCH. Keeps every
+; register.
+IOC$RETQUOTA::
+        .JSB_ENTRY
+        TSTB    IRP$B_QUOTA(R0)
+        BEQL    90$
+        PUSHL   R1
+        MOVZWL  IRP$L_PID(R0), R1       ; its process, by index
+        CMPL    R1, SCH$GL_MAXPIX
+        BGEQU   80$
+        MOVL    @SCH$GL_PCBVEC[R1], R1
+        BEQL    80$
+        CMPL    PCB$L_PID(R1), IRP$L_PID(R0)
+        BNEQ    80$
+        CMPB    IRP$B_QUOTA(R0), #IRP$K_DIO
+        BNEQ    10$
+        INCW    PCB$W_DIOCNT(R1)
+        BRB     80$
+10$:    INCW    PCB$W_BIOCNT(R1)
+        ADDL2   IRP$L_BOFF(R0), PCB$L_BYTCNT(R1)
+80$:    CLRB    IRP$B_QUOTA(R0)
+        MOVL    (SP)+, R1
 90$:    RSB
+
+; $SETRWM watflg: turns resource wait on, for watflg's low bit clear, or
+; off: a request past the process's quotas then fails with SS$_EXQUOTA
+; instead of waiting. SS$_WASSET if it was off, else SS$_WASCLR.
+        .ENTRY  EXE$SETRWM, ^M<R4>
+        MOVL    SCH$GL_CURPCB, R4
+        DSBINT  #IPL$_SYNCH
+        MOVL    #SS$_WASCLR, R0
+        BBCC    #PCB$V_SSRWAIT, PCB$L_STS(R4), 10$
+        MOVL    #SS$_WASSET, R0
+10$:    BLBC    4(AP), 20$
+        BBSS    #PCB$V_SSRWAIT, PCB$L_STS(R4), 20$
+20$:    ENBINT
+        RET
 
 ; IOC$REQCOM: R3 = an IRP, done, R0 = its IOSB's first longword, a status
 ; and a byte count in the high word, R1 = its second. Queues it to its
@@ -334,11 +465,13 @@ IOC$REQCOM::
 ; copies a buffered read's data to the caller's buffer, writes the IOSB
 ; and sets the event flag, then queues the IRP as an ACB for the caller's
 ; AST, in the caller's mode, or frees it if there is none. IPL$_SYNCH.
-; Uses R0-R3, R5 and R6.
+; Gives back the quota the request took first. Uses R0-R3, R5 and R6.
 ; ponytail: the buffer and the IOSB aren't probed again; VMS's are, or
 ; locked.
 IOC$POST::
         .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5, R6>
+        MOVL    R5, R0
+        BSBW    IOC$RETQUOTA
         MOVL    R5, R6
         MOVL    IRP$L_POST(R6), R0
         BEQL    5$
@@ -422,6 +555,7 @@ IOC$CANCELQ::
         REMQUE  (R0), R0
         TSTL    R7
         BNEQ    20$
+        BSBW    IOC$RETQUOTA
         MOVZWL  IRP$W_SIZE(R0), R1
         BSBW    EXE$DEANONPGDSIZ
         BRB     10$

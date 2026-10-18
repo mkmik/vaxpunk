@@ -69,6 +69,7 @@ same commit; `todography lint` checks it.
 | [ADR-0035](adr/0035-deadlock-search-after-deadlock-wait.md) | A lock request is searched for a deadlock once it has waited DEADLOCK_WAIT seconds, as on VMS | Accepted |
 | [ADR-0036](adr/0036-file-access-arbitration-locks.md) | Each open of a file holds an access arbitration lock on the lock manager, and an open file that is deleted goes at its last close | Proposed |
 | [ADR-0037](adr/0037-all-ram-and-address-spaces-filled-on-faults.md) | Every page of RAM is a PFN, address spaces are filled on faults as a TLB is, and a PTE is Alpha's quadword | Accepted |
+| [ADR-0038](adr/0038-io-quotas-charged-with-the-irp.md) | A $QIO's IRP is charged to its process's I/O quotas, and a request past them waits in $QIO and calls the FDT routine again | Proposed |
 
 ### PRDs
 

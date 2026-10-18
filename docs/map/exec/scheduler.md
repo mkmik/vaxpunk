@@ -44,8 +44,8 @@ note = "PRD-0003 tier 3 #31; sched.mar"
 [[feature]]
 id = "resource-wait"
 title = "Resource waits (RWAST, RWMBX, RWNPG) and $SETRWM"
-status = "todo"
-note = "ADR-0019: no resource waits, so a full mailbox fails a write with SS$_MBFULL"
+status = "wip"
+note = "ADR-0038: $SETRWM, and a $QIO past its I/O quotas waits in MWAIT for an AST, as RWAST; ADR-0019: a full mailbox still fails a write with SS$_MBFULL"
 
 [[feature]]
 id = "class-scheduler"

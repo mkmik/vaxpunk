@@ -1,0 +1,126 @@
+        .TITLE  QUOTATEST Checks the buffered I/O quotas
+        .IDENT  /V0.1/
+;
+; STARTUP starts it. It queues reads on a mailbox, which wait for a
+; message, until it has no buffered I/O left of BIOLM, each read taking
+; BIOCNT and its IRP's bytes of BYTCNT. With resource wait off, $SETRWM,
+; one more read fails with SS$_EXQUOTA; with it on, one more waits, in
+; resource wait, until a timer's AST cancels the reads, which gives the
+; quota back. Deassigning the channel gives back the last read's. Each
+; EXPECT checks a status or a value; a failed one exits with 2 * N, which
+; the executive reports.
+;
+        .LIBRARY "starlet.mlb"
+        .LIBRARY "sysexe.mlb"
+        $SSDEF
+        $IODEF
+        $JPIDEF
+
+MAXMSG = 16                             ; the mailbox's, each read's size
+IRPSIZE = <88 + MAXMSG + 15> & ^C15     ; what a read's IRP takes of BYTCNT: IRP$K_LENGTH and the data, in pool's 16-byte blocks
+
+        .PSECT  DATA, NOEXE, WRT, LONG
+CHAN:   .LONG   0
+DONE:   .LONG   0                       ; CANCELER ran
+SEC1:   .LONG   -10000000, -1           ; a delta: 1 s
+BIOLM:  .LONG   0
+BIOCNT: .LONG   0
+BYTLM:  .LONG   0
+BYTCNT: .LONG   0
+DIOLM:  .LONG   0
+DIOCNT: .LONG   0
+BUF:    .BLKB   MAXMSG
+JPI_ITEMS:                              ; the quotas, and what is left
+        .WORD   4, JPI$_BIOLM
+        .ADDRESS BIOLM
+        .LONG   0
+        .WORD   4, JPI$_BIOCNT
+        .ADDRESS BIOCNT
+        .LONG   0
+        .WORD   4, JPI$_BYTLM
+        .ADDRESS BYTLM
+        .LONG   0
+        .WORD   4, JPI$_BYTCNT
+        .ADDRESS BYTCNT
+        .LONG   0
+        .WORD   4, JPI$_DIOLM
+        .ADDRESS DIOLM
+        .LONG   0
+        .WORD   4, JPI$_DIOCNT
+        .ADDRESS DIOCNT
+        .LONG   0
+        .LONG   0
+
+        .PSECT  CODE, EXE, LONG
+        .ENTRY  START, ^M<R2>
+; Nothing outstanding: all of each is left.
+        $GETJPIW_S ITMLST=JPI_ITEMS
+        EXPECT  #SS$_NORMAL, 1
+        MOVL    BIOCNT, R0
+        EXPECT  BIOLM, 2
+        MOVL    BYTCNT, R0
+        EXPECT  BYTLM, 3
+        MOVL    DIOCNT, R0
+        EXPECT  DIOLM, 4
+        TSTL    BIOLM
+        BNEQ    5$
+        MOVL    #10, R0
+        RET
+
+; BIOLM reads, which wait for a message: no buffered I/O left.
+5$:     $CREMBX_S CHAN=CHAN, MAXMSG=#MAXMSG
+        EXPECT  #SS$_NORMAL, 6
+        MOVL    BIOLM, R2
+10$:    $QIO_S  CHAN=CHAN, FUNC=#IO$_READVBLK, P1=BUF, P2=#MAXMSG
+        EXPECT  #SS$_NORMAL, 7
+        SOBGTR  R2, 10$
+        $GETJPIW_S ITMLST=JPI_ITEMS
+        EXPECT  #SS$_NORMAL, 8
+        MOVL    BIOCNT, R0
+        EXPECT  #0, 9
+        MULL3   #IRPSIZE, BIOLM, R0
+        ADDL2   BYTCNT, R0
+        EXPECT  BYTLM, 11
+
+; Without resource wait, one more fails.
+        $SETRWM_S WATFLG=#1
+        EXPECT  #SS$_WASCLR, 12
+        $QIO_S  CHAN=CHAN, FUNC=#IO$_READVBLK, P1=BUF, P2=#MAXMSG
+        EXPECT  #SS$_EXQUOTA, 13
+        $SETRWM_S WATFLG=#0
+        EXPECT  #SS$_WASSET, 14
+
+; With it, one more waits until CANCELER ends the others.
+        $SETIMR_S DAYTIM=SEC1, ASTADR=CANCELER
+        EXPECT  #SS$_NORMAL, 15
+        $QIO_S  CHAN=CHAN, FUNC=#IO$_READVBLK, P1=BUF, P2=#MAXMSG
+        EXPECT  #SS$_NORMAL, 16
+        MOVL    DONE, R0
+        EXPECT  #1, 17
+        PRINT   "QUOTATEST: a read past BIOLM waited for the quota"
+        $GETJPIW_S ITMLST=JPI_ITEMS
+        EXPECT  #SS$_NORMAL, 18
+        ADDL3   #1, BIOCNT, R0          ; that read's
+        EXPECT  BIOLM, 19
+
+; Deassigning the channel frees that read, and its quota comes back.
+        $DASSGN_S CHAN=CHAN
+        EXPECT  #SS$_NORMAL, 20
+        $GETJPIW_S ITMLST=JPI_ITEMS
+        EXPECT  #SS$_NORMAL, 21
+        MOVL    BIOCNT, R0
+        EXPECT  BIOLM, 22
+        MOVL    BYTCNT, R0
+        EXPECT  BYTLM, 23
+        PRINT   "QUOTATEST: ok"
+        MOVL    #SS$_NORMAL, R0
+        RET
+
+; CANCELER: the timer's AST, while the read waits for quota. Cancels the
+; mailbox's reads, which end with SS$_ABORT and give theirs back.
+        .ENTRY  CANCELER, ^M<>
+        $CANCEL_S CHAN=CHAN
+        MOVL    #1, DONE
+        RET
+
+        .END    START

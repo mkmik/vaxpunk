@@ -256,10 +256,11 @@ define syntax SHOW_SYMBOL
 	disallow GLOBAL and LOCAL
 	disallow P2 and ALL
 
-! SHOW PROCESS [/PRIVILEGES] and SHOW SYSTEM: SHOW.EXE.
+! SHOW PROCESS [/PRIVILEGES] [/QUOTAS] and SHOW SYSTEM: SHOW.EXE.
 define syntax SHOW_IMAGE
 	image SHOW
 	qualifier PRIVILEGES
+	qualifier QUOTAS
 
 ! SHOW USERS [username] [/FULL]: SHOW.EXE.
 define syntax SHOW_USERS

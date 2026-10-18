@@ -197,11 +197,13 @@ LITERAL
 
 ! $PCBDEF
 LITERAL
-    PCB$K_LENGTH = 656,
+    PCB$K_LENGTH = 680,
     PCB$C_MAXCHAN = 31,  ! channels 1-31, a bit each in PCB$L_CHANS
     PCB$V_WAKEPEN = 0,  ! a $WAKE came that $HIBER hasn't seen
     PCB$V_WALL = 1,  ! the wait is for all of EFWM
     PCB$V_SUSPEN = 2,  ! suspend when the wait ends
+    PCB$V_SSRWAIT = 3,  ! $SETRWM turned resource wait off: a request past a quota fails with SS$_EXQUOTA
+    PCB$V_QUOWAIT = 4,  ! vaxpunk: IOC$ALLOCIRP found a quota short, which $QIO waits for
     DYN$C_PCB = 1;  ! PCB$B_TYPE
 MACRO
     PCB$L_SQFL = 0, 0, 32, 0 %,  ! state queue: COM queue or a wait queue
@@ -251,7 +253,15 @@ MACRO
     PCB$T_USERNAME = 620, 0, 0, 0 %,  ! its user's name, .ASCIC, 12 characters padded with blanks
     PCB$L_CTLBASVA = 636, 0, 32, 0 %,  ! vaxpunk: VMS's CTL$GL_CTLBASVA, P1's part that outlives an image: from here up
     PCB$T_TERMINAL = 640, 0, 0, 0 %,  ! its terminal, DDCU:, .ASCIC, 7 characters: an interactive process's, else empty
-    PCB$L_MODE = 648, 0, 32, 0 %;  ! JPI$K_INTERACTIVE for a process logged in at a terminal, else JPI$K_OTHER
+    PCB$L_MODE = 648, 0, 32, 0 %,  ! JPI$K_INTERACTIVE for a process logged in at a terminal, else JPI$K_OTHER
+    PCB$W_BIOCNT = 656, 0, 16, 0 %,  ! buffered I/O requests it may still make: BIOLM less those outstanding
+    PCB$W_BIOLM = 658, 0, 16, 0 %,  ! its buffered I/O limit
+    PCB$W_DIOCNT = 660, 0, 16, 0 %,  ! direct I/O requests it may still make, a disk's
+    PCB$W_DIOLM = 662, 0, 16, 0 %,  ! its direct I/O limit
+    PCB$L_BYTCNT = 664, 0, 32, 0 %,  ! bytes of pool its buffered I/O may still take: BYTLM less those taken
+    PCB$L_BYTLM = 668, 0, 32, 0 %,  ! its buffered I/O byte limit
+    PCB$L_BUFIO = 672, 0, 32, 0 %,  ! buffered I/O requests it has made
+    PCB$L_DIRIO = 676, 0, 32, 0 %;  ! direct I/O requests it has made
 
 ! $CEBDEF
 LITERAL
@@ -416,7 +426,9 @@ MACRO
 
 ! $IRPDEF
 LITERAL
-    IRP$K_LENGTH = 80,
+    IRP$K_LENGTH = 88,
+    IRP$K_BIO = 1,  ! a buffered I/O: BIOCNT, and BYTCNT
+    IRP$K_DIO = 2,  ! a direct I/O, a disk's: DIOCNT
     IRP$V_BUFIO = 0,  ! a read whose data IOC$POST copies to the caller's buffer
     IRP$M_BUFIO = 1,
     IRP$V_STARTED = 1,  ! the terminal has written its prompt
@@ -444,7 +456,9 @@ MACRO
     IRP$L_BCNT = 64, 0, 32, 0 %,  ! its size, p2
     IRP$L_PROMPT = 68, 0, 32, 0 %,  ! a read's prompt's size: it is past IRP$K_LENGTH, and the data past it
     IRP$L_MEDIA = 72, 0, 32, 0 %,  ! a disk's LBN, p3
-    IRP$L_POST = 76, 0, 32, 0 %;  ! a routine IOC$POST JSBs, R6 the IRP, in its process, or 0
+    IRP$L_POST = 76, 0, 32, 0 %,  ! a routine IOC$POST JSBs, R6 the IRP, in its process, or 0
+    IRP$L_BOFF = 80, 0, 32, 0 %,  ! the bytes charged to its process's BYTCNT
+    IRP$B_QUOTA = 84, 0, 8, 0 %;  ! what it is charged to: IRP$K_BIO, IRP$K_DIO, or 0 for nothing
 
 ! $PORTDEF
 LITERAL

@@ -29,8 +29,9 @@
 ; terminal and a username, as SYSMAN's ALF ADD takes them: OPA0: SYSTEM.
 ; ponytail: VMS's SYSALF.DAT is an indexed file SYSMAN writes; ours is
 ; text, which boot --autologin writes, until there is a SYSMAN.
-; ponytail: no quotas, account restrictions, password expiry or last
-; login times (PRD-0003's later steps).
+; ponytail: of the quotas, EXE$LOGIN sets the I/O ones, BIOLM, DIOLM and
+; BYTLM; no others, account restrictions, password expiry or last login
+; times (PRD-0003's later steps).
 ;
         .LIBRARY "lib.mlb"
         .LIBRARY "starlet.mlb"

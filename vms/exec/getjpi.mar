@@ -11,7 +11,9 @@
 ; what $GETSYI must count, the routine that counts it: SHOW MEMORY's pool
 ; and processes. A process's JPI$_TERMINAL and JPI$_MODE are what LOGINOUT's
 ; EXE$LOGIN set; SHOW USERS lists the interactive ones.
-; ponytail: done at once, no AST; no CPU times, quotas or counts, as
+; Of the quotas, the I/O ones, BIOLM, DIOLM and BYTLM, and what is left of
+; them, and the I/O counts, JPI$_BUFIO and JPI$_DIRIO.
+; ponytail: done at once, no AST; no CPU times or the other quotas, as
 ; nothing keeps them, and no cluster, so $GETSYI's csidadr and nodename
 ; are ignored.
 ;
@@ -57,6 +59,14 @@ JPITAB: ITMENT  JPI$_PID, 4, PCB$L_PID  ; at an offset in the PCB
         ITMENT  JPI$_AUTHPRIV, 8, PCB$Q_AUTHPRIV
         ITMENT  JPI$_TERMINAL, 0, PCB$T_TERMINAL
         ITMENT  JPI$_MODE, 4, PCB$L_MODE
+        ITMENT  JPI$_BIOCNT, 2, PCB$W_BIOCNT
+        ITMENT  JPI$_BIOLM, 2, PCB$W_BIOLM
+        ITMENT  JPI$_DIOCNT, 2, PCB$W_DIOCNT
+        ITMENT  JPI$_DIOLM, 2, PCB$W_DIOLM
+        ITMENT  JPI$_BYTCNT, 4, PCB$L_BYTCNT
+        ITMENT  JPI$_BYTLM, 4, PCB$L_BYTLM
+        ITMENT  JPI$_BUFIO, 4, PCB$L_BUFIO
+        ITMENT  JPI$_DIRIO, 4, PCB$L_DIRIO
         .LONG   0
 SYITAB: ITMENT  SYI$_VERSION, 8, VERSION ; at an address
         ITMENT  SYI$_MAXPROCESSCNT, 2, SGN$GW_MAXPRCCT
