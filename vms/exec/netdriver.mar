@@ -58,7 +58,7 @@
         $SIOCDEF
 
         .EXTERNAL EXE$GL_RPB, EXE$ALONONPAGED, EXE$DEANONPGDSIZ
-        .EXTERNAL IOC$AB_BGA0, IOC$ALLOCIRP, IOC$REQCOM, TT$NETDONE, TT$TNPORT
+        .EXTERNAL IOC$AB_BGA0, IOC$ALLOCIRP, IOC$RETQUOTA, IOC$REQCOM, TT$NETDONE, TT$TNPORT
 
 ; An IRP of this driver's holds, after the packet, the command, then where
 ; to write a socket name, the local one or a datagram's sender or a new
@@ -416,6 +416,7 @@ ACCVIO: MOVL    #SS$_ACCVIO, R0
 ; the failure, for the FDT routine.
 FREE:   PUSHL   R0
         MOVL    R3, R0
+        BSBW    IOC$RETQUOTA
         MOVZWL  IRP$W_SIZE(R0), R1
         BSBW    EXE$DEANONPGDSIZ
         MOVL    (SP)+, R0
@@ -1117,6 +1118,7 @@ NET$CANCEL::
         TSTL    R7
         BNEQ    20$
         MOVL    R3, R0                  ; the channel is going
+        BSBW    IOC$RETQUOTA
         MOVZWL  IRP$W_SIZE(R0), R1
         BSBW    EXE$DEANONPGDSIZ
         BRB     40$

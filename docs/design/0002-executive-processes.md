@@ -396,8 +396,10 @@ Three failures end the image, and with it the process. A right one:
 `SYSUAF.DAT` is `SYSUAF`, with the default `SYS$SYSTEM:.DAT`;
 `SYSTARTUP_VMS.COM` copies `build.rs`'s from the system disk to the
 ramdisk, which `SYS$SYSTEM` looks in first, where `AUTHORIZE` and `SET
-PASSWORD` change it. ponytail: no quotas, account restrictions, password
-expiry or last login times.
+PASSWORD` change it. ponytail: of the quotas only the I/O ones, `BIOLM`,
+`DIOLM` and `BYTLM`
+([ADR-0038](../adr/0038-io-quotas-charged-with-the-irp.md)); no account
+restrictions, password expiry or last login times.
 
 ### Commands
 
@@ -727,7 +729,7 @@ can't reach them.
 
 | Group | Implemented | Stubs: `SS$_ILLSER` |
 | --- | --- | --- |
-| Process control | `$CREPRC`, `$DELPRC`, `$EXIT`, `$FORCEX`, `$HIBER`, `$WAKE`, `$SUSPND`, `$RESUME`, `$SETPRI`, `$SETPRN`, `$GETJPI`, `$GETJPIW`, `$SETPRV`, `$CMKRNL`, `$CMEXEC`, `$DCLEXH`, `$CANEXH` | |
+| Process control | `$CREPRC`, `$DELPRC`, `$EXIT`, `$FORCEX`, `$HIBER`, `$WAKE`, `$SUSPND`, `$RESUME`, `$SETPRI`, `$SETPRN`, `$GETJPI`, `$GETJPIW`, `$SETPRV`, `$CMKRNL`, `$CMEXEC`, `$DCLEXH`, `$CANEXH`, `$SETRWM` | |
 | Event flags | `$ASCEFC`, `$DACEFC`, `$SETEF`, `$CLREF`, `$READEF`, `$WAITFR`, `$WFLOR`, `$WFLAND` | `$DLCEFC` |
 | Memory | `$CRETVA`, `$DELTVA`, `$EXPREG` | `$CNTREG`, `$SETPRT`, `$LKWSET`, `$ULWSET`, `$LCKPAG`, `$ULKPAG`, `$CRMPSC`, `$MGBLSC` |
 | Time | `$GETTIM`, `$SETIMR`, `$CANTIM` | |
@@ -743,7 +745,7 @@ can't reach them.
 | Security, VSI's | `$GET_ENTROPY` | not on VAX or Alpha VMS: VSI's, at most 256 bytes a call, from the PAL's virtio-rng ([ADR-0031](../adr/0031-entropy-from-virtio-rng.md)) |
 
 Arguments the implemented services take but ignore: `$CREPRC`'s
-quotas and status flags, `$ASSIGN`'s mailbox,
+quotas, the process taking its creator's I/O quotas, and status flags, `$ASSIGN`'s mailbox,
 `$CREMBX`'s protection, access mode and flags, the logical name
 services' attributes, `$ASCEFC`'s protection
 and permanence (every cluster is temporary), the access modes.
@@ -877,7 +879,12 @@ as a kernel mode AST.
   its arguments. That checks the function and its parameters, a failure
   being `$QIO`'s status, makes the IRP (`$IRPDEF`, `IOC$ALLOCIRP`, from
   pool, up to 64 KB with a buffered read's prompt and data), and does
-  the I/O or queues it.
+  the I/O or queues it. The IRP is charged to the process's I/O quotas,
+  `DIOLM` for a disk's, else `BIOLM` and its size of `BYTLM`, which
+  `IOC$POST` gives back; a request past them waits in `SCH$C_MWAIT`
+  until one of the process's ends, and `$QIO` calls the FDT routine
+  again, or with `$SETRWM`'s resource wait off fails with `SS$_EXQUOTA`
+  ([ADR-0038](../adr/0038-io-quotas-charged-with-the-irp.md)).
 - **Completion.** A driver ends a request with `IOC$REQCOM`, which puts
   the IOSB's two longwords in the IRP and queues it, whose head is an
   ACB's, to the process as a kernel mode AST, `IOC$POST`. In the process,
@@ -1008,7 +1015,7 @@ write in the middle of a line being read doesn't redisplay it; a
 TELNET terminal's echo and prompts past its 1 KB buffer, while a send
 is on the port, are lost. The recall buffer is the terminal's, shared
 by its readers, where VMS has DCL's own, with `RECALL`. No CTRL/O,
-CTRL/T, XON and XOFF, formatted writes or quotas; `$BRKTHRU` is done
+CTRL/T, XON and XOFF or formatted writes; `$BRKTHRU` is done
 when it returns, and doesn't wait for a TELNET terminal behind on its
 output, nor keep `SET BROADCAST`'s classes; a hangup
 deletes the process `$CREPRC` created on the terminal, its owner, but

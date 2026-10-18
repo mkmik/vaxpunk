@@ -115,6 +115,12 @@ SCH$INIT::
         MOVQ    PCB$Q_PRIV(R0), PCB$Q_AUTHPRIV(R0)
         MOVQ    PCB$Q_PRIV(R0), PCB$Q_PROCPRIV(R0)
         MOVL    #^X00010004, PCB$L_UIC(R0)      ; [1,4], SYSTEM's
+        MOVW    #150, PCB$W_BIOLM(R0)   ; SYSTEM's I/O quotas, which its processes inherit
+        MOVW    #150, PCB$W_BIOCNT(R0)
+        MOVW    #150, PCB$W_DIOLM(R0)
+        MOVW    #150, PCB$W_DIOCNT(R0)
+        MOVL    #128000, PCB$L_BYTLM(R0)
+        MOVL    #128000, PCB$L_BYTCNT(R0)
         MOVL    EXE$GL_RPB, R1
         MOVAB   RPB$Q_HWPCB(R1), PCB$L_HWPCB(R0)
         MOVAB   PCB$T_LNAME(R0), R1

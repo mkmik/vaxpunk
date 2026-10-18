@@ -39,9 +39,9 @@ note = "PRD-0003 tier 1 #9; netdriver.mar, getdvi.mar"
 [[feature]]
 id = "jpi-quotas"
 title = "$GETJPI's CPU time, I/O counts, quotas and what is left of them"
-status = "todo"
+status = "wip"
 milestone = "m1"
-note = "PRD-0003 tier 1 #4, step 5; WASMRUN's clocks want JPI$_CPUTIM (PRD-0007 M4)"
+note = "PRD-0003 tier 1 #4, step 5; the I/O quotas and counts done (ADR-0038), no CPU time; WASMRUN's clocks want JPI$_CPUTIM (PRD-0007 M4)"
 
 [[feature]]
 id = "async"

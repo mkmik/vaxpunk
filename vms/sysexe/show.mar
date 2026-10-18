@@ -4,7 +4,8 @@
 ; DCL's SHOW PROCESS and SHOW SYSTEM run this, as VMS's DCL runs SHOW.EXE
 ; for them; OPTION, the parameter, says which. SHOW PROCESS
 ; shows the date, $ASCTIM's, and this process, what $GETJPI says of it,
-; and with /PRIVILEGES its authorized and current privileges. SHOW SYSTEM
+; and with /PRIVILEGES its authorized and current privileges, with /QUOTAS
+; what is left of its I/O quotas, as VMS's shows them. SHOW SYSTEM
 ; shows the version, the date and how long the system has been up, from
 ; $GETSYI, then a line for each process, from a wildcard $GETJPI: its PID,
 ; name, state, priority and image.
@@ -109,6 +110,15 @@ JPIITEMS:                               ; what $GETJPIW returns of a process
         .WORD   4, JPI$_MODE
         .ADDRESS MODE
         .LONG   0
+        .WORD   4, JPI$_BIOCNT
+        .ADDRESS BIOCNT
+        .LONG   0
+        .WORD   4, JPI$_DIOCNT
+        .ADDRESS DIOCNT
+        .LONG   0
+        .WORD   4, JPI$_BYTCNT
+        .ADDRESS BYTCNT
+        .LONG   0
         .LONG   0
 SYIITEMS:                               ; and $GETSYIW of the system
         .WORD   8, SYI$_VERSION
@@ -205,6 +215,9 @@ STATE:  .LONG   0
 PRI:    .LONG   0
 PRIB:   .LONG   0
 UIC:    .LONG   0
+BIOCNT: .LONG   0                       ; what is left of its I/O quotas
+DIOCNT: .LONG   0
+BYTCNT: .LONG   0
 CURPRIV:
         .BLKQ   1
 AUTHPRIV:
@@ -417,7 +430,25 @@ PROCESS:
         PRINT   "Process privileges:"
         MOVAQ   CURPRIV, R6
         BSBW    PRIVS
-80$:    MOVL    #SS$_NORMAL, R0
+80$:    PRESENT "QUOTAS"
+        BLBC    R0, 85$
+        PRINT   ""
+        PRINT   "Process Quotas:"
+        ADDTEXT " CPU limit:                      Infinite  Direct I/O limit:"
+        MOVL    DIOCNT, R1
+        MOVL    #71, R3
+        BSBW    RIGHT
+        BSBW    SAY
+        ADDTEXT " Buffered I/O byte count quota:"
+        MOVL    BYTCNT, R1
+        MOVL    #41, R3
+        BSBW    RIGHT
+        ADDTEXT "  Buffered I/O limit:"
+        MOVL    BIOCNT, R1
+        MOVL    #71, R3
+        BSBW    RIGHT
+        BSBW    SAY
+85$:    MOVL    #SS$_NORMAL, R0
 90$:    RET
 
 ; SHOW SYSTEM

@@ -26,10 +26,10 @@ note = "PRD-0003 tier 1 #4, step 5"
 [[feature]]
 id = "io-counts"
 title = "Buffered and direct I/O counts kept by $QIO"
-status = "todo"
+status = "done"
 milestone = "m1"
 needs = ["/exec/qio"]
-note = "PRD-0003 tier 1 #4, step 5"
+note = "ADR-0038: PCB$L_BUFIO and PCB$L_DIRIO, counted by IOC$ALLOCIRP; $GETJPI's JPI$_BUFIO and JPI$_DIRIO"
 
 [[feature]]
 id = "show"

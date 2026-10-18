@@ -548,6 +548,13 @@ executive feature:
   PC with its registers as they were. With no handler, a warning is
   printed and the program goes on; `LIB$STOP` prints its condition and
   exits, through the exit handler that prints `CHFTEST: ok`.
+- **QUOTATEST** checks the buffered I/O quotas: it queues reads on a
+  mailbox, which wait for a message, until it has none of its `BIOLM`
+  left, each read taking one of `BIOCNT` and its IRP's bytes of
+  `BYTCNT`, as `$GETJPI` shows. With resource wait off (`$SETRWM`) one
+  more read fails with `SS$_EXQUOTA`; with it on, one more waits until a
+  timer's AST cancels the others, which gives their quota back. It prints
+  `QUOTATEST: ok` once deassigning the channel has given back the last.
 - STARTUP prints `STARTUP: done` and exits, and DCL prompts again while
   the others finish.
 

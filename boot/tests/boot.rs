@@ -285,7 +285,7 @@ const RAMDISK: Phase = Phase {
 /// one to the system disk that fails, SHOW DEVICES, a DISMOUNT of DKA0:
 /// that fails and one of DKB0: that doesn't, a DIRECTORY there that fails,
 /// a MOUNT without a label, a DIRECTORY of the new directory and a DELETE
-/// of the one above it, which has a file in it and stays, SHOW PROCESS,
+/// of the one above it, which has a file in it and stays, SHOW PROCESS/QUOTAS,
 /// SHOW SYSTEM, SHOW USERS, of a user who isn't logged in too, SHOW MEMORY,
 /// SHOW ERROR, SHOW QUOTA and SHOW CPU.
 const DATA_DISK: Phase = Phase {
@@ -318,7 +318,7 @@ const DATA_DISK: Phase = Phase {
             concat!(
                 "DIR DKB0:[000000]\rSHOW DEVICES\rDISMOUNT DKA0:\rDISMOUNT DKB0:\r",
                 "DIR DKB0:[000000]\rMOUNT DKB0:\rDIR DKB0:[SUB.DEEP]\rDELETE DKB0:[000000]SUB.DIR;1\r",
-                "SHOW PROCESS\rSHOW SYSTEM\r",
+                "SHOW PROCESS/QUOTAS\rSHOW SYSTEM\r",
             ),
         ),
         (
@@ -352,6 +352,7 @@ const DATA_DISK: Phase = Phase {
         "%RMS-E-MKD, ACP could not mark file for deletion",
         "Process name:       \"SYSTEM\"",
         "UIC:                [1,4]",
+        " CPU limit:                      Infinite  Direct I/O limit:        150\n Buffered I/O byte count quota:    128000  Buffered I/O limit:      150",
         "00010001 SWAPPER",
         "SYSTEM          CUR     4 SHOW.EXE",
         "    Total number of users = 1,  number of processes = 1\n\n Username    Process Name    PID       Terminal\n SYSTEM      SYSTEM          ",
@@ -940,6 +941,8 @@ const STARTUP: Phase = Phase {
         "%SYSTEM-W-NOSIGNAL, no signal currently active",
         "%SYSTEM-F-NOSIGNAL, no signal currently active",
         "CHFTEST: ok",
+        "QUOTATEST: a read past BIOLM waited for the quota",
+        "QUOTATEST: ok",
         "%SYSTEM-F-ACCVIO, access violation, reason mask=00, virtual address=40010000, PC=",
         "%SYSTEM-F-OPCDEC, opcode reserved to DIGITAL fault at PC=",
         "process SNOOP exited with status 1000000C",

@@ -258,8 +258,10 @@ EXE$PRCPRIV::
 ; DETACH, else SS$_NOPRIV. It has its creator's username. Its privileges, current and permanent, are those
 ; in the quadword prvadr points at that its creator has, or its creator's
 ; for 0; a creator with SETPRV gives any, and authorizes them too.
-; Otherwise it has its creator's authorized privileges. quota and stsflg
+; Otherwise it has its creator's authorized privileges, and its I/O
+; quotas, BIOLM, DIOLM and BYTLM, none of them used yet. quota and stsflg
 ; are ignored.
+; ponytail: VMS takes the quotas from quota, or SYSGEN's PQL_D defaults.
         .ENTRY  EXE$CREPRC, ^M<R2, R3, R4, R5, R6, R7, R8, R9, R10>
         MOVL    SCH$GL_CURPCB, R4
         MOVL    4(AP), R1
@@ -343,6 +345,12 @@ EXE$PRCPRIV::
         BISL2   R1, PCB$Q_AUTHPRIV+4(R8)
 23$:    MOVQ    R0, PCB$Q_PRIV(R8)
         MOVQ    R0, PCB$Q_PROCPRIV(R8)
+        MOVW    PCB$W_BIOLM(R4), PCB$W_BIOLM(R8)        ; its creator's quotas
+        MOVW    PCB$W_BIOLM(R4), PCB$W_BIOCNT(R8)
+        MOVW    PCB$W_DIOLM(R4), PCB$W_DIOLM(R8)
+        MOVW    PCB$W_DIOLM(R4), PCB$W_DIOCNT(R8)
+        MOVL    PCB$L_BYTLM(R4), PCB$L_BYTLM(R8)
+        MOVL    PCB$L_BYTLM(R4), PCB$L_BYTCNT(R8)
         MNEGW   SGN$GW_QUANTUM, PCB$W_QUANT(R8)
         MOVL    PCB$L_PID(R4), PCB$L_OWNER(R8)
         MOVZWL  44(AP), PCB$L_TMBU(R8)
@@ -1554,7 +1562,9 @@ SUSPEND:
 ; exits, and LOGINOUT's channels, to the terminal, stay for it, so that a
 ; TELNET terminal stays open. Then the process takes the record's
 ; username, UIC and base priority, its privileges UAF$Q_PRIV as the
-; authorized ones and UAF$Q_DEF_PRIV as the permanent and current ones.
+; authorized ones and UAF$Q_DEF_PRIV as the permanent and current ones,
+; and its I/O quotas, BIOLM, DIOLM and BYTLM, less what LOGINOUT's I/O
+; still has of them.
 ; A process with a channel to a terminal, LOGINOUT's, becomes interactive,
 ; JPI$K_INTERACTIVE, at that terminal, which $GETJPI's JPI$_TERMINAL says.
 ; R0 = SS$_NORMAL, SS$_ACCVIO if the record can't be read, SS$_IVLOGNAM
@@ -1591,6 +1601,17 @@ SUSPEND:
         MOVQ    UAF$Q_DEF_PRIV(R8), PCB$Q_PRIV(R4)
         BICB3   #^C31, UAF$B_PRI(R8), PCB$B_PRIB(R4)
         MOVB    PCB$B_PRIB(R4), PCB$B_PRI(R4)
+        DSBINT  #IPL$_SYNCH             ; the quotas, which IOC$POST gives back
+        SUBW3   PCB$W_BIOLM(R4), UAF$W_BIOLM(R8), R0
+        ADDW2   R0, PCB$W_BIOCNT(R4)
+        MOVW    UAF$W_BIOLM(R8), PCB$W_BIOLM(R4)
+        SUBW3   PCB$W_DIOLM(R4), UAF$W_DIOLM(R8), R0
+        ADDW2   R0, PCB$W_DIOCNT(R4)
+        MOVW    UAF$W_DIOLM(R8), PCB$W_DIOLM(R4)
+        SUBL3   PCB$L_BYTLM(R4), UAF$L_BYTLM(R8), R0
+        ADDL2   R0, PCB$L_BYTCNT(R4)
+        MOVL    UAF$L_BYTLM(R8), PCB$L_BYTLM(R4)
+        ENBINT
         MOVL    #PCB$C_MAXCHAN, R0      ; its terminal: a channel's
 20$:    BBC     R0, PCB$L_CHANS(R4), 25$
         MOVL    PCB$AL_CCB(R4)[R0], R1

@@ -67,7 +67,7 @@
 
         .EXTERNAL SCH$QAST, EXE$ALONONPAGED, EXE$DEANONPGDSIZ
         .EXTERNAL EXE$OUTCHAR, EXE$GQ_SYSTIME, EXE$INSTIMQ, EXE$RMVTQE
-        .EXTERNAL IOC$ALLOCIRP, IOC$REQCOM, IOC$CANCELQ
+        .EXTERNAL IOC$ALLOCIRP, IOC$ALLOCDONE, IOC$RETQUOTA, IOC$REQCOM, IOC$CANCELQ
         .EXTERNAL NET$TTIO, NET$TTCLOSE, NET$FREEUNIT, EXE$DELPID, IOC$TRNDEVNAM
         .EXTERNAL SYS$DASSGN, SYS$CANCEL
         .EXTERNAL EXE$PROBER_DSC, EXE$CLREF, EXE$SETEF, EXE$DCLAST
@@ -257,6 +257,7 @@ TT$FDT::
         RSB
 80$:    PUSHL   R0                      ; its terminators can't be read
         MOVL    R3, R0
+        BSBW    IOC$RETQUOTA
         MOVZWL  IRP$W_SIZE(R0), R1
         BSBW    EXE$DEANONPGDSIZ
         MOVL    (SP)+, R0
@@ -314,7 +315,7 @@ SETMODE:
         BBS     #IO$V_CTRLYAST, 12(AP), 10$
         BRW     TTSET
 10$:    CLRL    R1                      ; the AST's, then the request's
-        BSBW    IOC$ALLOCIRP
+        BSBW    IOC$ALLOCDONE
         BLBC    R0, 90$
         MOVL    R3, R6
         CLRL    R1
@@ -434,13 +435,14 @@ TERMINATORS:
         RSB
 
 ; FDTDONE: R0 = the IOSB's first longword. Completes TT$FDT's request at
-; once, in an IRP of its own. R4 = the current PCB, R5 = the UCB, AP =
-; $QIO's arguments. R0 = SS$_NORMAL or IOC$ALLOCIRP's failure. Uses R0-R3.
+; once, in an IRP of its own, which charges no quota: it is done
+; (IOC$ALLOCDONE). R4 = the current PCB, R5 = the UCB, AP = $QIO's
+; arguments. R0 = SS$_NORMAL or IOC$ALLOCDONE's failure. Uses R0-R3.
 FDTDONE:
         .JSB_ENTRY  INPUT=<AP>, SCRATCH=<R2, R3>
         PUSHL   R0
         CLRL    R1
-        BSBW    IOC$ALLOCIRP
+        BSBW    IOC$ALLOCDONE
         BLBC    R0, 90$
         MOVL    (SP)+, R0
         CLRL    R1

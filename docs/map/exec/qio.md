@@ -66,9 +66,9 @@ note = "PRD-0003 tier 1 #9: BGA0: isn't seen by $DEVICE_SCAN; a VCB stands for a
 [[feature]]
 id = "quotas"
 title = "BIOLM, DIOLM and BYTLM charged and checked; I/O counts kept"
-status = "todo"
+status = "done"
 milestone = "m1"
-note = "PRD-0003 tier 1 #4 (ADR-0013); the limits and the charging are t8y:/exec/quotas#pool-io, which needs this component, so no need back"
+note = "ADR-0038; the limits and the charging are t8y:/exec/quotas#pool-io, which needs this component, so no need back"
 
 [[feature]]
 id = "allocate"

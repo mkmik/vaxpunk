@@ -6,7 +6,7 @@ kind = "core"
 intent = "goal"
 research = "done"
 milestone = "m1"
-refs = ["docs/prd/0003-multi-user-vms.md", "docs/adr/0013-qio-irps-and-drivers.md", "docs/adr/0019-mailboxes.md", "docs/design/0002-executive-processes.md", "vms/exec/qio.mar", "vms/exec/mbdriver.mar", "vms/exec/process.mar", "vms/sysexe/authorize.mar", "vms/sysexe/loginout.mar"]
+refs = ["docs/prd/0003-multi-user-vms.md", "docs/adr/0038-io-quotas-charged-with-the-irp.md", "docs/adr/0013-qio-irps-and-drivers.md", "docs/adr/0019-mailboxes.md", "docs/design/0002-executive-processes.md", "vms/exec/qio.mar", "vms/exec/mbdriver.mar", "vms/exec/process.mar", "vms/sysexe/authorize.mar", "vms/sysexe/loginout.mar"]
 
 [[feature]]
 id = "uaf-fields"
@@ -18,17 +18,17 @@ note = "PRD-0003 step 4; authorize.mar, $UAFDEF in lib.mlb"
 [[feature]]
 id = "login"
 title = "LOGINOUT gives the process the UAF's quotas"
-status = "todo"
+status = "wip"
 milestone = "m1"
-note = "PRD-0003 step 5; loginout.mar ponytail: no quotas. t8y:/utils/loginout's work, on this component"
+note = "PRD-0003 step 5; EXE$LOGIN sets BIOLM, DIOLM and BYTLM (ADR-0038), not the others yet. t8y:/utils/loginout's work, on this component"
 
 [[feature]]
 id = "pool-io"
 title = "BYTLM, BIOLM and DIOLM charged per I/O request; a request past BIOLM waits"
-status = "todo"
+status = "done"
 milestone = "m1"
 needs = ["/exec/qio"]
-note = "PRD-0003 tier 1 #4, step 5; ADR-0013: only a 64 KB cap per IRP now"
+note = "ADR-0038: charged with the IRP, IOC$ALLOCIRP; QUOTATEST in the boot test"
 
 [[feature]]
 id = "asts-timers"
@@ -64,16 +64,16 @@ note = "PRD-0003 Quotas and Lock manager"
 [[feature]]
 id = "getjpi"
 title = "$GETJPI returns them and what is left; SHOW PROCESS/QUOTAS"
-status = "todo"
+status = "wip"
 milestone = "m1"
 needs = ["/exec/information-services#jpi-quotas"]
-note = "PRD-0003 tier 1 #4, step 5"
+note = "PRD-0003 tier 1 #4, step 5; the I/O ones done (ADR-0038)"
 
 [[feature]]
 id = "creprc"
 title = "$CREPRC's quota list, a subprocess's taken from its creator's"
 status = "todo"
-note = "DESIGN-0002: $CREPRC ignores its quota argument"
+note = "DESIGN-0002: $CREPRC ignores its quota argument, and gives the process its creator's I/O quotas"
 
 [[feature]]
 id = "job-pooled"
@@ -84,7 +84,8 @@ note = "VMS keeps BYTLM, FILLM, PRCLM, TQELM, ENQLM in the JIB"
 [[feature]]
 id = "resource-wait"
 title = "Resource wait mode, $SETRWM: wait for quota or fail with SS$_EXQUOTA"
-status = "todo"
+status = "done"
+note = "ADR-0038, for the I/O quotas"
 
 [[feature]]
 id = "memory-quotas"
@@ -129,12 +130,14 @@ or fails with `SS$_EXQUOTA`; `EXQUOTA` lets a process ignore them.
 `SHOW PROCESS/QUOTAS` shows what is left. Disk quotas are a different
 thing, per volume (`t8y:/files/disk-quotas`).
 
-vaxpunk has none in force yet. The UAF holds them and `AUTHORIZE`
-sets them (PRD-0003 step 4), but `LOGINOUT` ignores them and nothing
-charges them: an IRP is only capped at 64 KB
-([ADR-0013](../../adr/0013-qio-irps-and-drivers.md)), a mailbox's
-`bufquo` is its own
-([ADR-0019](../../adr/0019-mailboxes.md)), and `$CREPRC` ignores
-its quota list. PRD-0003 step 5 charges and checks the UAF's eight, so
-a process that queues reads past `BIOLM` waits instead of taking the
-pool, and makes `$GETJPI` and `SHOW PROCESS/QUOTAS` report them.
+vaxpunk has the I/O ones in force
+([ADR-0038](../../adr/0038-io-quotas-charged-with-the-irp.md)): each
+IRP a `$QIO` makes is charged to `BIOLM` and `BYTLM`, or a disk's to
+`DIOLM`, and a request past them waits in resource wait, or with
+`$SETRWM` fails, so a process that queues reads past `BIOLM` waits
+instead of taking the pool. `EXE$LOGIN` sets them from the UAF,
+`$CREPRC` gives a process its creator's, and `$GETJPI` and `SHOW
+PROCESS/QUOTAS` report them. The others are the UAF's, which `AUTHORIZE`
+sets (PRD-0003 step 4), and nothing charges them yet: a mailbox's
+`bufquo` is its own ([ADR-0019](../../adr/0019-mailboxes.md)), and
+`$CREPRC` ignores its quota list.
