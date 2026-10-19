@@ -727,7 +727,8 @@ LITERAL
     DVI$_AVL = 98,  ! DEVCHAR's bits, each 1 or 0
     DVI$_MNT = 100,
     DVI$_SWL = 112,
-    DVI$_STS = 226;  ! the UCB$ status bits: UCB$M_ONLINE
+    DVI$_STS = 226,  ! the UCB$ status bits: UCB$M_ONLINE
+    DVI$_DEVDEPEND3 = 292;  ! a terminal's TT3$ bits
 
 ! $BRKDEF
 LITERAL
@@ -764,7 +765,14 @@ LITERAL
     DC$_DISK = 1,
     DC$_TERM = 66,
     DC$_MAILBOX = 160,
-    DT$_VT100 = 96;  ! a terminal's type: a VT100
+    DT$_TTYUNKN = 0,  ! a terminal's type: unknown
+    DT$_VT52 = 64,
+    DT$_VT100 = 96,
+    DT$_VT102 = 98,
+    DT$_VT200_SERIES = 110,
+    DT$_VT300_SERIES = 112,
+    DT$_VT400_SERIES = 113,
+    DT$_VT500_SERIES = 114;
 
 ! $TTDEF
 LITERAL
@@ -786,6 +794,26 @@ LITERAL
     TT$V_HALFDUP = 20,
     TT$V_MODEM = 21,
     TT$V_PAGE = 24,  ! the page length, a byte
+    TT$C_BAUD_50 = 1,  ! speeds, IO$_SETMODE's p3 and IO$_SENSEMODE's IOSB
+    TT$C_BAUD_75 = 2,
+    TT$C_BAUD_110 = 3,
+    TT$C_BAUD_134 = 4,
+    TT$C_BAUD_150 = 5,
+    TT$C_BAUD_300 = 6,
+    TT$C_BAUD_600 = 7,
+    TT$C_BAUD_1200 = 8,
+    TT$C_BAUD_1800 = 9,
+    TT$C_BAUD_2000 = 10,
+    TT$C_BAUD_2400 = 11,
+    TT$C_BAUD_3600 = 12,
+    TT$C_BAUD_4800 = 13,
+    TT$C_BAUD_7200 = 14,
+    TT$C_BAUD_9600 = 15,
+    TT$C_BAUD_19200 = 16,
+    TT$C_BAUD_38400 = 17,
+    TT$C_BAUD_57600 = 18,
+    TT$C_BAUD_76800 = 19,
+    TT$C_BAUD_115200 = 20,
     TT$M_PASSALL = 1,
     TT$M_NOECHO = 2,
     TT$M_ESCAPE = 8,
@@ -796,7 +824,8 @@ LITERAL
     TT$M_SCOPE = 4096,
     TT$M_REMOTE = 8192,  ! a TELNET terminal's
     TT$M_EIGHTBIT = 32768,
-    TT$M_NOBRDCST = 131072;
+    TT$M_NOBRDCST = 131072,
+    TT$M_MECHFORM = 524288;
 
 ! $TT2DEF
 LITERAL
@@ -835,7 +864,28 @@ LITERAL
     TT2$M_ANSICRT = 16777216,
     TT2$M_AVO = 134217728,
     TT2$M_EDIT = 268435456,
-    TT2$M_DECCRT = 536870912;
+    TT2$M_DECCRT = 536870912,
+    TT2$M_DECCRT4 = 1024,
+    TT2$M_SIXEL = 1048576,
+    TT2$M_DRCS = 2097152,
+    TT2$M_PRINTER = 4194304,
+    TT2$M_REGIS = 33554432,
+    TT2$M_BLOCK = 67108864,
+    TT2$M_DECCRT2 = 1073741824,
+    TT2$M_DECCRT3 = 2147483648;
+
+! $TT3DEF
+LITERAL
+    TT3$V_POSIX = 0,  ! POSIX style input, not VMS's
+    TT3$V_ANSI_COLOR = 1,  ! ANSI colour escape sequences
+    TT3$V_DECCRT5 = 2,
+    TT3$V_RTS_FLOW = 3,
+    TT3$V_BS = 4,  ! CTRL/H deletes, not back to the line's start
+    TT3$M_POSIX = 1,
+    TT3$M_ANSI_COLOR = 2,
+    TT3$M_DECCRT5 = 4,
+    TT3$M_RTS_FLOW = 8,
+    TT3$M_BS = 16;
 
 ! $DEVDEF
 LITERAL
@@ -1189,8 +1239,8 @@ LITERAL
     IO$M_NOFORMAT = 256,
     IO$V_NOW = 6,  ! a mailbox's read doesn't wait for a message
     IO$M_NOW = 64,
-    IO$_SETCHAR = 26,  ! a socket: as IO$_SETMODE, which is the same function there
-    IO$_SENSECHAR = 27,  ! a socket: as IO$_SENSEMODE
+    IO$_SETCHAR = 26,  ! a terminal: its permanent characteristics and its current ones; a socket: as IO$_SETMODE
+    IO$_SENSECHAR = 27,  ! a terminal: its permanent characteristics; a socket: as IO$_SENSEMODE
     IO$_ACCESS = 50,  ! a socket: connects, or accepts; a datagram socket's peer
     IO$_DEACCESS = 52,  ! a socket: closes it
     IO$_SENSEMODE = 39,  ! a terminal: its characteristics; a socket: its names, ioctls

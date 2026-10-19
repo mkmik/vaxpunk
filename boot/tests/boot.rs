@@ -711,6 +711,64 @@ const TERMINAL: Phase = Phase {
     ],
 };
 
+/// SET TERMINAL/DEVICE_TYPE gives the console a VT200's characteristics,
+/// /SPEED its speeds and /COLOR ANSI colour, which SHOW TERMINAL and
+/// F$GETDVI show; it refuses a type and a speed VMS doesn't know, as VMS
+/// does. /INQUIRE asks what the terminal is, here a VT400 with a printer
+/// port, sixel graphics and colour, then its size; asked again, no answer
+/// comes, and it says so after 3 seconds. /PERMANENT sets the permanent
+/// characteristics, VT100's, which SHOW TERMINAL/PERMANENT shows, then
+/// puts them back as they were.
+const TERMINAL_TYPES: Phase = Phase {
+    name: "terminal types",
+    secs: 20,
+    steps: &[
+        (
+            "TYPE/PAGE done",
+            1,
+            concat!(
+                "SET TERMINAL/DEVICE_TYPE=VT200/SPEED=(1200,300)/COLOR\rSHOW TERMINAL\r",
+                "WRITE SYS$OUTPUT \"DEPEND3=\", F$GETDVI(\"SYS$COMMAND\",\"DEVDEPEND3\")\r",
+                "SET TERMINAL/DEVICE_TYPE=FOO\rSET TERMINAL/SPEED=1234\rSET TERMINAL/INQUIRE\r",
+            ),
+        ),
+        ("\x1b[c", 1, "\x1b[?64;1;2;4;22c"),
+        (
+            "\x1b[255;255H",
+            1,
+            "\x1b[40;100RSHOW TERMINAL\rSET TERMINAL/INQUIRE\r",
+        ),
+        (
+            "-SET-I-UNKTERM",
+            1,
+            concat!(
+                "SET TERMINAL/PERMANENT/WIDTH=90/SPEED=4800\rSHOW TERMINAL/PERMANENT\r",
+                "SET TERMINAL/PERMANENT/DEVICE_TYPE=VT100/SPEED=9600/NOCOLOR/EIGHTBIT\r",
+                "WRITE SYS$OUTPUT \"TERMINAL\", \" types done\"\r",
+            ),
+        ),
+    ],
+    lines: &[
+        "Terminal: _OPA0:      Device_Type: VT200_Series  Owner: SYSTEM",
+        "   Input:    1200     LFfill:  0      Width:  80      Parity: None",
+        "   Output:    300     CRfill:  0      Page:   24",
+        "   No DEC_CRT3        No DEC_CRT4        No DEC_CRT5        Ansi_Color",
+        "   VMS Style Input    <CTRL-H> Backspace",
+        "DEPEND3=2",
+        "%SET-W-NOTSET, error modifying OPA0:",
+        "-SET-E-INVQUAVAL, value 'FOO' invalid for /DEVICE_TYPE qualifier",
+        "%SET-E-INVQUAVAL, value '1234' invalid for /SPEED qualifier",
+        "Terminal: _OPA0:      Device_Type: VT400_Series  Owner: SYSTEM",
+        "   Input:    1200     LFfill:  0      Width: 100      Parity: None",
+        "   Output:    300     CRfill:  0      Page:   40",
+        "   No Syspassword     SIXEL Graphics     No Soft Characters Printer port",
+        "   DEC_CRT3           DEC_CRT4           No DEC_CRT5        Ansi_Color",
+        "-SET-I-UNKTERM, unknown terminal type",
+        "   Input:    4800     LFfill:  0      Width:  90      Parity: None",
+        "TERMINAL types done",
+    ],
+};
+
 /// BACKUP saves DKB0:[000000]'s text files in a save set, lists it, and
 /// restores them into [RESTORED], each with its version, owner and
 /// protection: DATA.TXT is [200,1]'s now, with (W).
@@ -1207,7 +1265,8 @@ const USERS: Phase = Phase {
         ),
         ("Username:", 4, "JOE\r"),
         ("Password:", 4, "joespw\r"),
-        ("\x1b[6n", 2, "\x1b[24;80R"),
+        // The first two were TTSIZE's at SYSTEM's login and SET TERMINAL/INQUIRE's.
+        ("\x1b[6n", 3, "\x1b[24;80R"),
         (
             "Have a nice day",
             2,
@@ -1218,7 +1277,7 @@ const USERS: Phase = Phase {
         ),
         ("Username:", 5, "SYSTEM\r"),
         ("Password:", 5, "newpw\r"),
-        ("\x1b[6n", 3, "\x1b[50;100R"),
+        ("\x1b[6n", 4, "\x1b[50;100R"),
         (
             "Have a nice day",
             3,
@@ -1277,6 +1336,7 @@ const PHASES: &[Phase] = &[
     PROTECTION,
     SHARING,
     TERMINAL,
+    TERMINAL_TYPES,
     BACKUP,
     RMS,
     TPU,

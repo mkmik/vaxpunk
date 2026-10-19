@@ -40,7 +40,8 @@ TERM = DEV$M_REC!DEV$M_CCL!DEV$M_TRM!DEV$M_AVL!DEV$M_IDV!DEV$M_ODV
 TTNAME: .BLKB   4                       ; the terminal a VCB of 0 stands for: its name,
 TTUNIT: .LONG   0                       ; its unit,
 TTREFC: .LONG   0                       ; its channels,
-TTCHAR: .BLKB   12                      ; and its characteristics, IO$_SENSEMODE's
+TTCHAR: .BLKB   12                      ; and its characteristics, IO$_SENSEMODE's,
+TTCHAR3:.LONG   0                       ; and TT3$ bits
 NAMBUF: .BLKB   6                       ; a device's name, _DDCU:
 VALUE:  .LONG   0                       ; a value item's
 
@@ -76,7 +77,8 @@ DEVICE:
         RSB
 
 ; COPYTT: R0 = a terminal's UCB. Copies what $GETDVI returns of it to
-; TTNAME, TTUNIT, TTREFC and TTCHAR. IPL$_SYNCH. Keeps every register.
+; TTNAME, TTUNIT, TTREFC, TTCHAR and TTCHAR3. IPL$_SYNCH. Keeps every
+; register.
 COPYTT:
         .JSB_ENTRY
         MOVL    UCB$T_NAME(R0), TTNAME
@@ -84,6 +86,7 @@ COPYTT:
         MOVL    UCB$L_REFC(R0), TTREFC
         MOVL    UCB$A_TT_CHAR(R0), TTCHAR
         MOVQ    UCB$A_TT_CHAR+4(R0), TTCHAR+4
+        MOVL    UCB$L_TT_CHAR3(R0), TTCHAR3
         RSB
 
 ; DEVNAME: R5 = a device's VCB, or 0. Makes its name, _DDCU:, in NAMBUF.
@@ -153,8 +156,8 @@ ONLINE:
 ; one. SS$_NOSUCHDEV for a device that isn't there, SS$_IVCHAN for a
 ; channel that isn't assigned, SS$_BADPARAM for an item code it doesn't
 ; know, or the disk's error for DVI$_FREEBLOCKS. A terminal's
-; DVI$_DEVTYPE, DVI$_DEVBUFSIZ, DVI$_DEVDEPEND and DVI$_DEVDEPEND2 are
-; its characteristics, as IO$_SENSEMODE gives them; it has a DVI$_UNIT
+; DVI$_DEVTYPE, DVI$_DEVBUFSIZ, DVI$_DEVDEPEND, DVI$_DEVDEPEND2 and
+; DVI$_DEVDEPEND3 are its characteristics, as IO$_SENSEMODE gives them; it has a DVI$_UNIT
 ; and DVI$_REFCNT, a disk 0. A mailbox or a
 ; network unit, by its channel, has DVI$_DEVNAM, DVI$_DEVCLASS, DVI$_UNIT
 ; and DVI$_REFCNT, and 0 for any other item.
@@ -388,10 +391,16 @@ ITEM:
         MOVL    TTCHAR+4, R0
         BRB     62$
 68$:    CMPL    R10, #DVI$_DEVDEPEND2
-        BNEQ    80$
+        BNEQ    70$
         TSTL    R5
         BNEQ    62$
         MOVL    TTCHAR+8, R0
+        BRB     62$
+70$:    CMPL    R10, #DVI$_DEVDEPEND3
+        BNEQ    80$
+        TSTL    R5
+        BNEQ    62$
+        MOVL    TTCHAR3, R0
         BRB     62$
 80$:    MOVL    #SS$_BADPARAM, R0
         RSB

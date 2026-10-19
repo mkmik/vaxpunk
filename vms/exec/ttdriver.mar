@@ -62,6 +62,7 @@
         $DCDEF
         $TTDEF
         $TT2DEF
+        $TT3DEF
         $BRKDEF
         $PRVDEF
 
@@ -172,15 +173,24 @@ EXIT:   .ASCIZ  "*EXIT*"<13><10>
 ;                  p1 is its routine, or 0 to disable it, p2 its parameter
 ;                  and p3 its mode, or the caller's if that is an outer
 ;                  one; without them sets the characteristics from the p2
-;                  bytes at p1, 8 or 12, as UCB$A_TT_CHAR has them, its
-;                  class aside
-;   IO$_SENSEMODE  writes the characteristics to p1, p2 bytes; with
+;                  bytes at p1, 8, 12 or 16, as UCB$A_TT_CHAR has them,
+;                  its class aside, then the TT3$ bits, of which it keeps
+;                  DECCRT5 and ANSI_COLOR; and the speeds from p3, unless
+;                  0: TT$C_BAUD_, the transmit speed in the low byte, the
+;                  receive speed in the next, or 0 for the same
+;   IO$_SENSEMODE  writes the characteristics to p1, p2 bytes, and the
+;                  speeds to the IOSB's third and fourth bytes; with
 ;                  IO$M_TYPEAHDCNT, what the type-ahead buffer holds, 8
 ;                  bytes: a word its count, a byte its first character
+;   IO$_SETCHAR    as IO$_SETMODE, to the permanent characteristics and
+;                  the current ones; with LOG_IO or PHY_IO
+;   IO$_SENSECHAR  as IO$_SENSEMODE, of the permanent characteristics,
+;                  which the terminal goes back to once no channel has
+;                  it; with LOG_IO or PHY_IO
 ; A pseudo terminal's reads and writes on its controller's channel are
 ; PTD$READ's and PTD$WRITE's (PTDFDT).
-; R0 = SS$_NORMAL, SS$_ILLIOFUNC, SS$_ACCVIO, SS$_BADPARAM, or
-; IOC$ALLOCIRP's failure; a request on a TELNET or pseudo terminal whose
+; R0 = SS$_NORMAL, SS$_ILLIOFUNC, SS$_ACCVIO, SS$_BADPARAM, SS$_NOPRIV,
+; or IOC$ALLOCIRP's failure; a request on a TELNET or pseudo terminal whose
 ; line is gone ends with SS$_HANGUP. IPL$_SYNCH. Uses R0-R8.
 TT$FDT::
         .JSB_ENTRY  INPUT=<AP>, SCRATCH=<R2, R3, R4, R5, R6, R7, R8>
@@ -189,8 +199,13 @@ TT$FDT::
         BNEQ    3$
         BRW     SETMODE
 3$:     CMPL    R0, #IO$_SENSEMODE
-        BNEQ    5$
+        BNEQ    4$
         BRW     TTSENSE
+4$:     CMPL    R0, #IO$_SETCHAR
+        BEQL    40$
+        CMPL    R0, #IO$_SENSECHAR
+        BNEQ    5$
+40$:    BRW     PERMCHAR
 5$:     BBC     #UCB$V_TT_FT, UCB$L_TT_STS(R5), 6$
         CMPL    PCB$L_PID(R4), UCB$L_TT_CTLPID(R5)
         BNEQ    6$
@@ -358,33 +373,88 @@ SETMODE:
 90$:    RSB
 
 ; TTSET: TT$FDT's IO$_SETMODE of the characteristics: copies the p2
-; bytes at p1, past the class, to UCB$A_TT_CHAR, and completes the
-; request.
+; bytes at p1, past the class, to UCB$A_TT_CHAR, a fourth longword's
+; DECCRT5 and ANSI_COLOR to UCB$L_TT_CHAR3, and p3's speeds, unless 0,
+; to UCB$W_TT_SPEED, and completes the request. SS$_BADPARAM for a
+; speed that isn't a TT$C_BAUD_ one, and nothing is set.
 TTSET:
         BSBW    TTBUF
         BLBC    R0, 90$
-        MOVL    #1, R1                  ; past the class
+        MOVZWL  36(AP), R6              ; the speeds
+        BEQL    7$
+        MOVL    #SS$_BADPARAM, R0
+        MOVZBL  R6, R1                  ; transmit
+        BEQL    90$
+        CMPL    R1, #TT$C_BAUD_115200
+        BGTRU   90$
+        EXTZV   #8, #8, R6, R1          ; receive
+        BNEQ    5$
+        INSV    R6, #8, #8, R6          ; 0: the same
+        BRB     6$
+5$:     CMPL    R1, #TT$C_BAUD_115200
+        BGTRU   90$
+6$:     MOVW    R6, UCB$W_TT_SPEED(R5)
+7$:     MOVL    #1, R1                  ; past the class
+        CMPL    R3, #12
+        BLEQU   10$
+        BICL3   #^C<TT3$M_DECCRT5!TT3$M_ANSI_COLOR>, 12(R2), UCB$L_TT_CHAR3(R5)
+        MOVL    #12, R3
 10$:    MOVB    (R2)[R1], UCB$A_TT_CHAR(R5)[R1]
         AOBLSS  R3, R1, 10$
-        MOVL    #SS$_NORMAL, R0
+        BICL3   #^C63, 12(AP), R0
+        CMPL    R0, #IO$_SETCHAR
+        BNEQ    20$
+        BSBW    TTKEEP
+20$:    MOVL    #SS$_NORMAL, R0
         BRW     FDTDONE
 90$:    RSB
 
-; TTSENSE: TT$FDT's IO$_SENSEMODE: copies UCB$A_TT_CHAR to the p2 bytes
-; at p1, or with IO$M_TYPEAHDCNT what the type-ahead buffer holds, and
-; completes the request.
+; PERMCHAR: TT$FDT's IO$_SETCHAR and IO$_SENSECHAR, with LOG_IO or
+; PHY_IO, else SS$_NOPRIV. IO$_SETCHAR sets the current characteristics,
+; as TTSET, and makes them the permanent ones too; IO$_SENSECHAR gives
+; the permanent ones, as TTSENSE.
+PERMCHAR:
+        IFPRIV  LOG_IO, 10$
+        IFPRIV  PHY_IO, 10$
+        MOVL    #SS$_NOPRIV, R0
+        RSB
+10$:    CMPL    R0, #IO$_SENSECHAR
+        BNEQ    20$
+        MOVAB   UCB$A_TT_PRMCHAR(R5), R7
+        BRB     SENSE
+20$:    BRW     TTSET
+
+; TTSENSE: TT$FDT's IO$_SENSEMODE: copies UCB$A_TT_CHAR, and for 16
+; bytes UCB$L_TT_CHAR3, to the p2 bytes at p1, or with IO$M_TYPEAHDCNT
+; what the type-ahead buffer holds, and completes the request; the
+; IOSB has the speeds. SENSE: the same from R7's characteristics,
+; UCB$A_TT_CHAR or UCB$A_TT_PRMCHAR, with their TT3$ bits and speeds.
 TTSENSE:
-        BBS     #IO$V_TYPEAHDCNT, 12(AP), 50$
-        BSBW    TTBUF
+        BBS     #IO$V_TYPEAHDCNT, 12(AP), TTCOUNT
+        MOVAB   UCB$A_TT_CHAR(R5), R7
+SENSE:  BSBW    TTBUF
         BLBC    R0, 90$
         MOVL    #SS$_ACCVIO, R0
         IFNOWRT R3, (R2), 90$
         CLRL    R1
-10$:    MOVB    UCB$A_TT_CHAR(R5)[R1], (R2)[R1]
+        MOVZWL  UCB$W_TT_SPEED(R5), R6
+        MOVL    UCB$L_TT_CHAR3(R5), R8
+        MOVAB   UCB$A_TT_CHAR(R5), R0
+        CMPL    R7, R0
+        BEQL    5$
+        MOVZWL  UCB$W_TT_PRMSPEED(R5), R6
+        MOVL    UCB$L_TT_PRMCHAR3(R5), R8
+5$:     CMPL    R3, #12
+        BLEQU   10$
+        MOVL    R8, 12(R2)
+        MOVL    #12, R3
+10$:    MOVB    (R7)[R1], (R2)[R1]
         AOBLSS  R3, R1, 10$
-        MOVL    #SS$_NORMAL, R0
+        ASHL    #16, R6, R0
+        BISL2   #SS$_NORMAL, R0
         BRW     FDTDONE
-50$:    MOVL    28(AP), R2
+90$:    RSB
+TTCOUNT:MOVL    28(AP), R2
         MOVL    #SS$_ACCVIO, R0
         IFNOWRT #8, (R2), 90$
         CLRQ    (R2)
@@ -399,6 +469,26 @@ TTSENSE:
         MOVL    #SS$_NORMAL, R0
         BRW     FDTDONE
 90$:    RSB
+
+; TTKEEP: R5 = a terminal. Makes its current characteristics and speeds
+; its permanent ones. Keeps every register.
+TTKEEP:
+        .JSB_ENTRY
+        MOVL    UCB$A_TT_CHAR(R5), UCB$A_TT_PRMCHAR(R5)
+        MOVQ    UCB$A_TT_CHAR+4(R5), UCB$A_TT_PRMCHAR+4(R5)
+        MOVL    UCB$L_TT_CHAR3(R5), UCB$L_TT_PRMCHAR3(R5)
+        MOVW    UCB$W_TT_SPEED(R5), UCB$W_TT_PRMSPEED(R5)
+        RSB
+
+; TTRESET: R5 = a terminal. Gives it its permanent characteristics and
+; speeds back. Keeps every register.
+TTRESET:
+        .JSB_ENTRY
+        MOVL    UCB$A_TT_PRMCHAR(R5), UCB$A_TT_CHAR(R5)
+        MOVQ    UCB$A_TT_PRMCHAR+4(R5), UCB$A_TT_CHAR+4(R5)
+        MOVL    UCB$L_TT_PRMCHAR3(R5), UCB$L_TT_CHAR3(R5)
+        MOVW    UCB$W_TT_PRMSPEED(R5), UCB$W_TT_SPEED(R5)
+        RSB
 
 ; TERMINATORS: R3 = a read's IRP, AP = $QIO's arguments. Puts its
 ; terminators, p4's or the default ones, in the IRP. R0 = SS$_NORMAL, or
@@ -450,8 +540,8 @@ FDTDONE:
 90$:    ADDL2   #4, SP
         RSB
 
-; TTBUF: R2 = p1, R3 = p2, as a characteristics buffer: up to 12 bytes
-; of it. R0 = SS$_NORMAL, SS$_BADPARAM if it is shorter than 8, or
+; TTBUF: R2 = p1, R3 = p2, as a characteristics buffer: up to 16 bytes
+; of it; R3 = 8, 12 or 16, rounded down, or less than 8. R0 = SS$_NORMAL, SS$_BADPARAM if it is shorter than 8, or
 ; SS$_ACCVIO if the caller can't read it.
 TTBUF:
         .JSB_ENTRY  INPUT=<AP>, OUTPUT=<R2, R3>
@@ -460,10 +550,16 @@ TTBUF:
         MOVL    #SS$_BADPARAM, R0
         CMPL    R3, #8
         BLSSU   90$
-        CMPL    R3, #12
+        CMPL    R3, #16
         BLEQU   10$
-        MOVL    #12, R3
-10$:    MOVL    #SS$_ACCVIO, R0
+        MOVL    #16, R3
+10$:    CMPL    R3, #12
+        BGEQU   20$
+        MOVL    #8, R3
+20$:    CMPL    R3, #16
+        BGEQU   30$
+        BICL2   #3, R3                  ; whole longwords: 12 for 13 to 15
+30$:    MOVL    #SS$_ACCVIO, R0
         IFNORD  R3, (R2), 90$
         MOVL    #SS$_NORMAL, R0
 90$:    RSB
@@ -1791,7 +1887,8 @@ TT$TIMEOUT::
 90$:    RSB
 
 ; INITUCB: R5 = a terminal's UCB, UCB$K_TTLENGTH bytes. Makes it an
-; empty one, of no unit yet, with DEFCHAR's characteristics. Uses R0-R3.
+; empty one, of no unit yet, with DEFCHAR's characteristics at 9600
+; baud, its permanent ones too. Uses R0-R3.
 INITUCB:
         .JSB_ENTRY  SCRATCH=<R2, R3>
         PUSHL   R5
@@ -1814,6 +1911,8 @@ INITUCB:
         MOVL    R0, 4(R0)
         MOVL    DEFCHAR, UCB$A_TT_CHAR(R5)
         MOVQ    DEFCHAR+4, UCB$A_TT_CHAR+4(R5)
+        MOVW    #<TT$C_BAUD_9600@8>!TT$C_BAUD_9600, UCB$W_TT_SPEED(R5)
+        BSBW    TTKEEP
         RSB
 
 ; TTY$INIT: makes the console's UCB, the first terminal, and enables its
@@ -2152,7 +2251,8 @@ FTKICK:
 ; CTRL/C and CTRL/Y ASTs, and a pseudo terminal's controller's reads.
 ; For 0, the channels are going: a pseudo terminal whose controller's
 ; channel goes hangs up (HANGUP), and a TELNET or pseudo terminal is
-; closed and freed once its last channel goes. Then the others go on
+; closed and freed once its last channel goes, and the console gets its
+; permanent characteristics back (TTRESET). Then the others go on
 ; (STARTIO). IPL$_SYNCH. Uses R0-R3.
 TT$CANCEL::
         .JSB_ENTRY  INPUT=<R4, R6, R7>, SCRATCH=<R2, R3>
@@ -2195,11 +2295,13 @@ TT$CANCEL::
         BSBW    HANGUP
         MOVL    (SP)+, R0
 30$:    AOBLEQ  #PCB$C_MAXCHAN, R0, 25$
-        BITL    #PORTS, UCB$L_TT_STS(R5)
-        BEQL    40$
         TSTL    UCB$L_REFC(R5)
         BNEQ    40$
-        BSBW    TEARDOWN
+        BITL    #PORTS, UCB$L_TT_STS(R5)
+        BNEQ    35$
+        BSBW    TTRESET                 ; the console: back to its permanent characteristics
+        BRB     40$
+35$:    BSBW    TEARDOWN
         BRB     50$
 40$:    PUSHR   #^M<R4, R6, R7>
         BSBW    STARTIO

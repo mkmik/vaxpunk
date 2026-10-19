@@ -1,22 +1,85 @@
         .TITLE  TERM    The terminal SET and SHOW TERMINAL work on
-        .IDENT  /V0.1/
+        .IDENT  /V0.2/
 ;
 ; SET TERMINAL and SHOW TERMINAL work on the terminal their DEVICE_NAME
 ; names, or else on SYS$COMMAND's, as VMS's do. They read
-; its characteristics with IO$_SENSEMODE, as VMS's do, in a buffer laid
-; out as a terminal's UCB$A_TT_CHAR (ttdriver.mar).
+; its characteristics with IO$_SENSEMODE, or with /PERMANENT its
+; permanent ones with IO$_SENSECHAR, as VMS's do, in a buffer laid out
+; as a terminal's UCB$A_TT_CHAR, then its TT3$ bits (ttdriver.mar).
+; TERM_TYPES are the terminal types SET TERMINAL/DEVICE_TYPE knows, and
+; the characteristics each gives, OpenVMS Alpha V8.4's;
+; TERM_SPEEDS the speeds, by TT$C_BAUD_ value.
 ;
         .LIBRARY "starlet.mlb"
         $SSDEF
         $IODEF
         $DCDEF
         $DVIDEF
+        $TTDEF
+        $TT2DEF
+        $TT3DEF
 
-        .EXTERNAL CLI$GET_VALUE
+        .EXTERNAL CLI$GET_VALUE, CLI$PRESENT
+
+; The characteristics every type changes, which TERM_TYPE clears first.
+TT2CRT = TT2$M_ANSICRT!TT2$M_AVO!TT2$M_EDIT!TT2$M_PRINTER!TT2$M_REGIS!TT2$M_SIXEL
+TT2CRT = TT2CRT!TT2$M_DRCS!TT2$M_BLOCK!TT2$M_DECCRT!TT2$M_DECCRT2!TT2$M_DECCRT3
+TT2CRT = TT2CRT!TT2$M_DECCRT4!TT2$M_EDITING
+TT3CRT = TT3$M_DECCRT5!TT3$M_ANSI_COLOR
+; A type's flag: it has a size, 80 by 24, and TT$ bits.
+SIZED = 1
+
+; TTYPE name, show, type, flags, set1, clear1, set2, set3: a terminal
+; type, /DEVICE_TYPE=name, which SHOW TERMINAL calls show, whose
+; characteristics are set1, set2 and set3 set and clear1 clear, besides
+; TT2CRT and TT3CRT; with SIZED its size too, else its TT$ bits stay.
+        .MACRO  TTYPE   NAME, SHOW, TYPE, FLAGS=0, SET1=0, CLEAR1=0, SET2=0, SET3=0
+        .BYTE   TYPE, FLAGS
+        .LONG   SET1, CLEAR1, SET2, SET3
+        .ASCIC  NAME
+        .ASCIC  SHOW
+        .ENDM   TTYPE
+T_TYPE = 0                              ; an entry's type,
+T_FLAGS = 1                             ; flags,
+T_SET1 = 2                              ; masks,
+T_CLEAR1 = 6
+T_SET2 = 10
+T_SET3 = 14
+T_NAME = 18                             ; and names, .ASCIC
+END = 255                               ; past the last
+
+VT1 = TT$M_MECHTAB!TT$M_SCOPE!TT$M_LOWER
+NOTVT1 = TT$M_MECHFORM!TT$M_EIGHTBIT
+VT8 = VT1!TT$M_EIGHTBIT
+CRT = TT2$M_DECCRT!TT2$M_ANSICRT!TT2$M_AVO!TT2$M_EDITING
+VT2 = CRT!TT2$M_DECCRT2!TT2$M_EDIT
+VT3 = VT2!TT2$M_DECCRT3
+VT4 = VT3!TT2$M_DECCRT4
+
+        .PSECT  TERM_RODATA, NOEXE, NOWRT, LONG
+; TERM_TYPES: the types, a byte END past the last. UNKNOWN changes no size
+; or TT$ bit. ponytail: the CRTs real VMS was seen to set; no LA, LN,
+; LQP02, VT05, VT55, VT101, VT105, VT125, VT131, VT132, VT173,
+; PRO_SERIES, FT1 to FT8 or TERMTABLE.EXE types.
+TERM_TYPES::
+        TTYPE   "UNKNOWN", "Unknown", DT$_TTYUNKN
+        TTYPE   "VT52", "VT52", DT$_VT52, SIZED, VT1, TT$M_MECHFORM
+        TTYPE   "VT100", "VT100", DT$_VT100, SIZED, VT1, NOTVT1, CRT
+        TTYPE   "VT102", "VT102", DT$_VT102, SIZED, VT1, NOTVT1, CRT!TT2$M_EDIT!TT2$M_PRINTER
+        TTYPE   "VT200", "VT200_Series", DT$_VT200_SERIES, SIZED, VT8, TT$M_MECHFORM, VT2
+        TTYPE   "VT300", "VT300_Series", DT$_VT300_SERIES, SIZED, VT8, TT$M_MECHFORM, VT3
+        TTYPE   "VT400", "VT400_Series", DT$_VT400_SERIES, SIZED, VT8, TT$M_MECHFORM, VT4
+        TTYPE   "VT500", "VT500_Series", DT$_VT500_SERIES, SIZED, VT8, TT$M_MECHFORM, VT4, TT3$M_DECCRT5
+        .BYTE   END
+; TERM_SPEEDS: the speeds in baud, by TT$C_BAUD_ value, from 0.
+TERM_SPEEDS::
+        .LONG   0, 50, 75, 110, 134, 150, 300, 600, 1200, 1800, 2000, 2400
+        .LONG   3600, 4800, 7200, 9600, 19200, 38400, 57600, 76800, 115200
 
         .PSECT  TERM_DATA, NOEXE, WRT, LONG
 INPUT:  .ASCID  "SYS$COMMAND"
 DEVICE: .ASCID  "DEVICE_NAME"
+PERM:   .ASCID  "PERMANENT"
 NAMDSC: .LONG   64                      ; DEVICE_NAME, the parameter
         .ADDRESS NAME
 NAME:   .BLKB   64
@@ -25,15 +88,16 @@ ITEMS:  .WORD   4, DVI$_DEVCLASS        ; what $GETDVIW returns of the device
         .ADDRESS CLASS
         .LONG   0
         .LONG   0
-IOSB:   .BLKQ   1
 
         .PSECT  TERM_CODE, EXE, LONG
-; TERM_SENSE chan, char: assigns a channel to the terminal DEVICE_NAME
-; names, or to SYS$COMMAND's, writes it to the word at chan, and reads the
-; terminal's characteristics into char, 12 bytes. R0 = SS$_NORMAL,
-; SS$_IVDEVNAM if the device isn't a terminal, or a system service's or
-; IO$_SENSEMODE's failure.
-        .ENTRY  TERM_SENSE, ^M<R2>
+; TERM_SENSE chan, char, iosb: assigns a channel to the terminal
+; DEVICE_NAME names, or to SYS$COMMAND's, writes it to the word at chan,
+; and reads the terminal's characteristics into char, 16 bytes, with
+; IO$_SENSEMODE, or with /PERMANENT IO$_SENSECHAR, into the quadword
+; iosb too, whose third and fourth bytes are the speeds. R0 =
+; SS$_NORMAL, SS$_IVDEVNAM if the device isn't a terminal, or a system
+; service's or the read's failure.
+        .ENTRY  TERM_SENSE, ^M<R2, R3>
         MOVAQ   NAMDSC, R2
         PUSHAW  NAMDSC
         PUSHAQ  NAMDSC
@@ -48,10 +112,76 @@ IOSB:   .BLKQ   1
         BNEQ    90$
         $ASSIGN_S DEVNAM=(R2), CHAN=@4(AP)
         BLBC    R0, 90$
-        MOVZWL  @4(AP), R0
-        $QIOW_S CHAN=R0, FUNC=#IO$_SENSEMODE, IOSB=IOSB, P1=@8(AP), P2=#12
+        MOVL    #IO$_SENSEMODE, R3
+        PUSHAQ  PERM
+        CALLS   #1, G^CLI$PRESENT
+        BLBC    R0, 20$
+        MOVL    #IO$_SENSECHAR, R3
+20$:    MOVZWL  @4(AP), R0
+        $QIOW_S CHAN=R0, FUNC=R3, IOSB=@12(AP), P1=@8(AP), P2=#16
         BLBC    R0, 90$
-        MOVZWL  IOSB, R0
+        MOVZWL  @12(AP), R0
 90$:    RET
+
+; TERM_FIND name: R0 = the entry of TERM_TYPES whose /DEVICE_TYPE name
+; is the string name describes, or 0.
+        .ENTRY  TERM_FIND, ^M<R2, R3, R4, R5, R6>
+        MOVL    4(AP), R6
+        MOVAB   TERM_TYPES, R4
+10$:    CMPB    (R4), #END
+        BEQL    80$
+        MOVZBL  T_NAME(R4), R2
+        CMPC5   (R6), @4(R6), #0, R2, T_NAME+1(R4)
+        BEQL    90$
+        MOVL    R4, R1
+        BSBB    NEXT
+        MOVL    R1, R4
+        BRB     10$
+80$:    CLRL    R4
+90$:    MOVL    R4, R0
+        RET
+
+; TERM_NAME type: R0 = the name SHOW TERMINAL gives the type, .ASCIC:
+; TERM_TYPES's, or "Unknown".
+        .ENTRY  TERM_NAME, ^M<>
+        MOVAB   TERM_TYPES, R1
+10$:    CMPB    (R1), #END
+        BEQL    15$
+        CMPB    (R1), 4(AP)
+        BEQL    20$
+        BSBB    NEXT
+        BRB     10$
+15$:    MOVAB   TERM_TYPES, R1          ; UNKNOWN's
+20$:    MOVAB   T_NAME(R1), R0
+        MOVZBL  (R0), R1                ; past the /DEVICE_TYPE name
+        ADDL2   R1, R0
+        INCL    R0
+        RET
+
+; TERM_TYPE char, entry: gives the characteristics at char, 16 bytes,
+; the type of the entry of TERM_TYPES.
+        .ENTRY  TERM_TYPE, ^M<R2>
+        MOVL    4(AP), R0
+        MOVL    8(AP), R1
+        MOVB    T_TYPE(R1), 1(R0)
+        BICL2   #TT2CRT, 8(R0)
+        BISL2   T_SET2(R1), 8(R0)
+        BICL2   #TT3CRT, 12(R0)
+        BISL2   T_SET3(R1), 12(R0)
+        BLBC    T_FLAGS(R1), 90$        ; SIZED
+        MOVW    #80, 2(R0)
+        INSV    #24, #TT$V_PAGE, #8, 4(R0)
+        BICL2   T_CLEAR1(R1), 4(R0)
+        BISL2   T_SET1(R1), 4(R0)
+90$:    RET
+
+; NEXT: R1 = an entry of TERM_TYPES. R1 = the next. Uses R0.
+NEXT:   .JSB_ENTRY
+        ADDL2   #T_NAME, R1
+        MOVZBL  (R1)+, R0               ; past the names
+        ADDL2   R0, R1
+        MOVZBL  (R1)+, R0
+        ADDL2   R0, R1
+        RSB
 
         .END

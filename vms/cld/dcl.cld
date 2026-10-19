@@ -196,15 +196,20 @@ define syntax SET_FILE
 	disallow not OWNER_UIC
 
 ! SET TERMINAL [device]: SET.EXE sets the terminal's characteristics.
-! ponytail: the ones a terminal keeps that a program may care about;
-! no /INQUIRE, /DEVICE_TYPE, /SPEED or /PERMANENT.
+! ponytail: the ones a terminal keeps that a program may care about; no
+! /INQUIRE=OLD, /BACKSPACE, /PARITY, fill, modem or hardware ones.
 define syntax SET_TERMINAL
 	image SET
 	parameter P1, label=OPTION, value(required, type=SET_OPTIONS)
 	parameter P2, label=DEVICE_NAME
 	qualifier WIDTH, nonnegatable, value(required, type=$number)
 	qualifier PAGE, nonnegatable, value(required, type=$number)
+	qualifier DEVICE_TYPE, nonnegatable, value(required)
+	qualifier INQUIRE, nonnegatable
+	qualifier PERMANENT, nonnegatable
+	qualifier SPEED, nonnegatable, value(required, list)
 	qualifier BROADCAST
+	qualifier COLOR
 	qualifier ECHO
 	qualifier EIGHTBIT
 	qualifier ESCAPE
@@ -297,11 +302,12 @@ define syntax SHOW_CPU
 	qualifier FULL
 	disallow BRIEF and FULL
 
-! SHOW TERMINAL [device]: SHOW.EXE.
+! SHOW TERMINAL [device] [/PERMANENT]: SHOW.EXE.
 define syntax SHOW_TERMINAL
 	image SHOW
 	parameter P1, label=OPTION, value(required, type=SHOW_OPTIONS)
 	parameter P2, label=DEVICE_NAME
+	qualifier PERMANENT, nonnegatable
 
 define verb STOP
 	cliroutine STOP
