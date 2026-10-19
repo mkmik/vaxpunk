@@ -882,8 +882,8 @@ const LBR: Phase = Phase {
 /// [...] from [W.A]; two F$SEARCH streams, one inside the other;
 /// DIRECTORY's layouts (t8y:/utils/directory#columns), as OpenVMS Alpha's:
 /// a name two columns wide, /COLUMNS, /VERSIONS, /SIZE=ALL with /OWNER and
-/// /PROTECTION, /TOTAL, /DATE's dates Files-11 has none of, and a
-/// /VERSIONS it can't parse; and a DELETE/LOG of the tree's files, after
+/// /PROTECTION, /TOTAL, /DATE's dates Files-11 has none of, lists of
+/// files (t8y:/utils/directory#lists), and a /VERSIONS it can't parse; and a DELETE/LOG of the tree's files, after
 /// which there are none.
 const WILDCARDS: Phase = Phase {
     name: "wildcards",
@@ -930,7 +930,9 @@ const WILDCARDS: Phase = Phase {
                 "COPY SYS$SYSDEVICE:[SYSMGR]WELCOME.TXT DKB0:[W]A_RATHER_LONG_NAME.TMP\r",
                 "DIR DKB0:[W]\rDIR/COLUMNS=2 DKB0:[W]\rDIR/VERSIONS=1/COLUMNS=1 DKB0:[W]\r",
                 "DIR/SIZE=ALL/OWNER/PROTECTION DKB0:[W]*.TMP\rDIR/TOTAL/SIZE DKB0:[W...]*.TMP\r",
-                "DIR/DATE=(BACKUP,EXPIRED)/SIZE=ALLOCATION DKB0:[W]TOP.TMP;1\rDIR/VERSIONS=0\r",
+                "DIR/DATE=(BACKUP,EXPIRED)/SIZE=ALLOCATION DKB0:[W]TOP.TMP;1\r",
+                "DIR DKB0:[W]TOP.TMP;1,A.DIR\rDIR DKB0:[W.A]ONE.TMP,[W.B]TWO.TMP,NONE.TMP\r",
+                "DIR DKB0:[W]NONE.TMP,NONE.DIR\rDIR/VERSIONS=0\r",
             ),
         ),
         (
@@ -989,6 +991,17 @@ const WILDCARDS: Phase = Phase {
         ),
         "Grand total of 4 directories, 6 files, 6 blocks.",
         "TOP.TMP;1                     1   <None specified>   <No backup recorded>",
+        concat!(
+            "$ DIR DKB0:[W]TOP.TMP;1,A.DIR\n\nDirectory DKB0:[W]\n\n",
+            "TOP.TMP;1           A.DIR;1\n\nTotal of 2 files.\n",
+        ),
+        concat!(
+            "$ DIR DKB0:[W.A]ONE.TMP,[W.B]TWO.TMP,NONE.TMP\n\n",
+            "Directory DKB0:[W.A]\n\nONE.TMP;1\n\nTotal of 1 file.\n\n",
+            "Directory DKB0:[W.B]\n\nTWO.TMP;1\n\nTotal of 1 file.\n\n",
+            "Grand total of 2 directories, 2 files.",
+        ),
+        "$ DIR DKB0:[W]NONE.TMP,NONE.DIR\n%DIRECT-W-NOFILES, no files found",
         "$ DIR/VERSIONS=0\n%DIRECT-F-SYNTAX, error parsing '0'",
         concat!(
             "%DELETE-I-FILDEL, DKB0:[W]TOP.TMP;1 deleted\n",

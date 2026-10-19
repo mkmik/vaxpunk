@@ -1,9 +1,14 @@
         .TITLE  DIRECTORY Lists files
-        .IDENT  /V0.4/
+        .IDENT  /V0.5/
 ;
 ; DCL's DIRECTORY [spec] runs this. Lists the files spec names, as VMS's DIRECTORY
 ; does: the directory, then their names, four to a line or /COLUMNS's,
 ; then how many. A name too long for its column takes two.
+; spec is a list, by commas or plus signs. Each takes the device and
+; directory it leaves out from the one before; one that finds nothing is
+; passed over, and only none at all is %DIRECT-W-NOFILES. Files of the
+; same directory share a heading, unless a specification names a device
+; or a directory, which starts one of its own, as VMS's does.
 ; A search list's files are in more than one: each has its heading and
 ; total, and a grand total follows.
 ; RMS's $PARSE expands spec, what it leaves out taken from *.*;*, and the
@@ -20,7 +25,8 @@
 ; ponytail: a file the process may not read shows neither, where VMS's
 ; DIRECTORY asks the XQP for them. /FULL's directories are contiguous,
 ; and the times Files-11 doesn't keep, like the last access, are <None
-; specified>. Lines are 80 characters, not the terminal's width, and
+; specified>. An error but no file ends the list, where VMS's says
+; %DIRECT-E-OPENIN and goes on. Lines are 80 characters, not the terminal's width, and
 ; /COLUMNS lists more than one file a line only without /SIZE, /DATE,
 ; /OWNER and /PROTECTION, where VMS's cuts names to fit.
 ;
@@ -30,6 +36,7 @@
         $RMSDEF
         $FABDEF
         $NAMDEF
+        $CLIMSGDEF
         $XABPRODEF
         $XABDATDEF
         $XABFHCDEF
@@ -81,6 +88,10 @@ SPECDSC:                                ; FILE, the parameter, if given
         .LONG   255
         .ADDRESS SPEC
 SPEC:   .BLKB   255
+MORE:   .LONG   0                       ; CLI$GET_VALUE's: CLI$_COMMA or CLI$_CONCAT if more follow
+STICKY: .BLKB   260                     ; the next one's default: the last one's device and directory, *.*;*
+STICKLEN:                               ; its length
+        .BLKB   1
 NAM:    $NAM    ESA=EXP, ESS=255, RSA=RES, RSS=255
 EXP:    .BLKB   255
 RES:    .BLKB   255
@@ -185,11 +196,13 @@ DIRTYPE:
         BSBW    SYNTAX                  ; 0 isn't a number of versions
         BRB     90$
 45$:    GETVALUE "FILE", SPECDSC, SPECDSC
+        MOVL    R0, MORE
         BLBS    R0, 5$
         CLRL    SPECDSC
 5$:     MOVB    SPECDSC, FAB+FAB$B_FNS
         $PARSE  FAB=FAB
         BLBC    R0, 90$
+        BSBW    STICK
 10$:    $SEARCH FAB=FAB
         BLBC    R0, 50$
         BSBW    NEWVER
@@ -213,9 +226,14 @@ DIRTYPE:
 30$:    BSBW    BRIEF
         BRB     10$
 50$:    CMPL    R0, #RMS$_NMF
-        BEQL    60$
+        BEQL    55$
         CMPL    R0, #RMS$_FNF
         BNEQ    90$
+55$:    BSBW    NEXTSPEC
+        BLBC    R0, 57$
+        BRW     5$
+57$:    TSTL    FILES
+        BNEQ    60$
         PRINT   "%DIRECT-W-NOFILES, no files found"
         BRB     80$
 60$:    BSBW    TOTAL
@@ -233,6 +251,51 @@ DIRTYPE:
         BSBW    SAY
 80$:    MOVL    #SS$_NORMAL, R0
 90$:    RET
+
+; STICK: after $PARSE, the next specification's default: the device
+; and directory of the expanded string, then *.*;*, in STICKY. Uses
+; R0-R5.
+STICK:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5>
+        MOVZBL  NAM+NAM$B_DEV, R2
+        MOVZBL  NAM+NAM$B_DIR, R0
+        ADDL2   R0, R2
+        PUSHL   R2
+        MOVC3   R2, @NAM+NAM$L_DEV, STICKY
+        MOVL    (SP)+, R2
+        ADDB3   #DEFLEN, R2, STICKLEN
+        MOVC3   #DEFLEN, DEFSPEC, STICKY[R2]
+        RSB
+
+; NEXTSPEC: the next specification of FILE's list into SPEC, if MORE
+; says one follows, and STICKY FAB's default. One that names a device
+; or a directory empties CURDIR, for a heading of its own. R0 = 1 if
+; there is one, 0 if not. Uses R0-R5.
+NEXTSPEC:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5>
+        CMPL    MORE, #CLI$_COMMA
+        BEQL    10$
+        CMPL    MORE, #CLI$_CONCAT
+        BEQL    10$
+        CLRL    R0
+        RSB
+10$:    MOVB    STICKLEN, FAB+FAB$B_DNS
+        MOVAB   STICKY, FAB+FAB$L_DNA
+        MOVL    #255, SPECDSC
+        GETVALUE "FILE", SPECDSC, SPECDSC
+        MOVL    R0, MORE
+        MOVZWL  SPECDSC, R2
+20$:    DECL    R2
+        BLSS    40$
+        CMPB    SPEC[R2], #58           ; :
+        BEQL    30$
+        CMPB    SPEC[R2], #91           ; [
+        BEQL    30$
+        CMPB    SPEC[R2], #60           ; <
+        BNEQ    20$
+30$:    CLRB    CURDIR
+40$:    MOVL    #1, R0
+        RSB
 
 ; NUMBER: NUMDSC = a qualifier's value. R1 = it, if it is decimal
 ; digits, and R0 = 1; or, as VMS's DIRECTORY, it says it can't parse it,
