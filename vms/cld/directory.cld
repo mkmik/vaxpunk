@@ -1,7 +1,33 @@
-! DIRECTORY [spec] [/OWNER] [/PROTECTION] [/FULL]: DIRECTORY.EXE lists files.
+! DIRECTORY [spec] [/BRIEF] [/COLUMNS=n] [/DATE[=(keyword,...)]] [/FULL]
+! [/OWNER] [/PROTECTION] [/SIZE[=keyword]] [/TOTAL] [/VERSIONS=n]:
+! DIRECTORY.EXE lists files. /COLUMNS and /VERSIONS have no type: it
+! checks their numbers itself, as VMS's says %DIRECT-F-SYNTAX.
 define verb DIRECTORY
 	image DIRECTORY
 	parameter P1, label=FILE, value(type=$infile)
+	qualifier BRIEF, default
+	qualifier COLUMNS, value(required)
+	qualifier DATE, value(list, type=DATE_KEYWORDS)
+	qualifier FULL
 	qualifier OWNER
 	qualifier PROTECTION
-	qualifier FULL
+	qualifier SIZE, value(type=SIZE_KEYWORDS)
+	qualifier TOTAL
+	qualifier VERSIONS, value(required)
+
+define type DATE_KEYWORDS
+	keyword ACCESSED
+	keyword ALL
+	keyword ATTRIBUTES
+	keyword BACKUP
+	keyword CREATED
+	keyword DATA_MODIFIED
+	keyword EFFECTIVE
+	keyword EXPIRED
+	keyword MODIFIED
+	keyword RECORDING
+
+define type SIZE_KEYWORDS
+	keyword ALL
+	keyword ALLOCATION
+	keyword USED

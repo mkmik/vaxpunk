@@ -1,7 +1,7 @@
 +++
 title = "DIRECTORY"
 summary = "Lists files: names, sizes, dates, owners and protection"
-aka = ["DIR", "DIRECTORY.EXE", "DIRECTORY/FULL", "DIRECTORY/OWNER", "DIRECTORY/PROTECTION"]
+aka = ["DIR", "DIRECTORY.EXE", "DIRECTORY/FULL", "DIRECTORY/OWNER", "DIRECTORY/PROTECTION", "DIRECTORY/SIZE", "DIRECTORY/DATE"]
 kind = "core"
 intent = "goal"
 research = "done"
@@ -62,7 +62,8 @@ note = "PRD-0003 tier 3 #23; directory.mar ponytail"
 [[feature]]
 id = "columns"
 title = "/SIZE, /DATE, /COLUMNS, /BRIEF, /TOTAL, /VERSIONS"
-status = "todo"
+status = "done"
+note = "Layouts as OpenVMS Alpha's; lines 80 wide, and /COLUMNS doesn't put more than one file a line with /SIZE"
 
 [[feature]]
 id = "selection"
@@ -120,7 +121,11 @@ vaxpunk's is `vms/sysexe/directory.mar`, an image DCL runs with
 `directory.cld`'s table. It expands the specification with `$PARSE`,
 `*.*;*` for what it leaves out, finds files with `$SEARCH`, walks search
 lists such as `SYS$SYSTEM:`, and with `/OWNER`, `/PROTECTION` and
-`/FULL` opens each file for its XABs. `/FULL`'s report matched OpenVMS
-Alpha's on PRD-0008's fixtures. Missing: one file spec only (PRD-0003
-tier 3 #24), and the attributes of files the user can't read, which wait
-for the XQP's `$QIO` interface.
+`/FULL` opens each file for its XABs, as do `/SIZE` and `/DATE`.
+`/FULL`'s report matched OpenVMS Alpha's on PRD-0008's fixtures, and the
+other qualifiers' columns match what OpenVMS Alpha's DIRECTORY wrote in
+the oracle: with `/SIZE` a name of 19 or more characters has a line of
+its own, and in a list of names one of 20 or more takes two columns. Missing: one file spec only (PRD-0003
+tier 3 #24), the attributes of files the user can't read, which wait
+for the XQP's `$QIO` interface, and the terminal's width: lines are 80
+characters.

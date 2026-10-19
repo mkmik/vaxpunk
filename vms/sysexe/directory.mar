@@ -1,14 +1,18 @@
         .TITLE  DIRECTORY Lists files
-        .IDENT  /V0.3/
+        .IDENT  /V0.4/
 ;
 ; DCL's DIRECTORY [spec] runs this. Lists the files spec names, as VMS's DIRECTORY
-; does: the directory, then their names, four to a line, then how many.
+; does: the directory, then their names, four to a line or /COLUMNS's,
+; then how many. A name too long for its column takes two.
 ; A search list's files are in more than one: each has its heading and
 ; total, and a grand total follows.
 ; RMS's $PARSE expands spec, what it leaves out taken from *.*;*, and the
 ; directory from the default one; $SEARCH finds each file. * matches any
-; characters, % one. /OWNER and /PROTECTION list a file a line, with its
-; owner's UIC and its protection, which $OPEN puts in a protection XAB.
+; characters, % one. /VERSIONS=n lists each name's n highest versions.
+; /SIZE, /DATE, /OWNER and /PROTECTION list a file a line, with its
+; blocks, dates, owner's UIC and protection, which $OPEN puts in XABs; a
+; name too long for its column has a line of its own. /TOTAL lists only
+; the totals.
 ; /FULL lists all VMS's does about each, from its XABs, and the blocks
 ; they use and have.
 ; A wildcard directory, [*], [A...] or [...], is many directories, each
@@ -16,7 +20,9 @@
 ; ponytail: a file the process may not read shows neither, where VMS's
 ; DIRECTORY asks the XQP for them. /FULL's directories are contiguous,
 ; and the times Files-11 doesn't keep, like the last access, are <None
-; specified>.
+; specified>. Lines are 80 characters, not the terminal's width, and
+; /COLUMNS lists more than one file a line only without /SIZE, /DATE,
+; /OWNER and /PROTECTION, where VMS's cuts names to fit.
 ;
         .LIBRARY "starlet.mlb"
         .LIBRARY "sysexe.mlb"
@@ -33,6 +39,17 @@
 
 COLUMN = 20                             ; a name and its blanks
 LINEMAX = 80
+NAMEMAX = 18                            ; with /SIZE..., longer: a line of its own
+DIRECT_SYNTAX = ^X107910FC              ; %DIRECT-F-SYNTAX, inhibited, as VMS's
+D_OWNER = 0                             ; DETAIL's bits
+D_PROT = 1
+D_FULL = 2
+D_USED = 3                              ; /SIZE=USED
+D_ALLOC = 4                             ; /SIZE=ALLOCATION
+D_TOTAL = 5
+M_SIZE = <1@D_USED>!<1@D_ALLOC>         ; /SIZE=ALL
+M_LINE = <1@D_OWNER>!<1@D_PROT>!M_SIZE  ; a file a line
+DATEMAX = 9                             ; /DATE's dates, DATES's bits
 
 ; ADDTEXT "text": appends text to LINE. Uses R0-R2.
         .MACRO  ADDTEXT TEXT, ?L
@@ -44,6 +61,15 @@ L:      .ASCIC  TEXT
         MOVZBL  (R1)+, R2
         BSBW    ADD
         .ENDM   ADDTEXT
+
+; IFPRESENT "name", mask, cell: sets mask's bits in cell if the command
+; has name. Uses R0 and R1.
+        .MACRO  IFPRESENT NAME, MASK, CELL, ?L
+        PRESENT NAME
+        BLBC    R0, L
+        BISL2   #MASK, CELL
+L:
+        .ENDM   IFPRESENT
 
         .PSECT  DATA, NOEXE, WRT, LONG
 DEFSPEC:                                ; what spec leaves out
@@ -59,24 +85,45 @@ NAM:    $NAM    ESA=EXP, ESS=255, RSA=RES, RSS=255
 EXP:    .BLKB   255
 RES:    .BLKB   255
 LINE:   .BLKB   256                     ; a line being made, .ASCIC
+SLOT:   .LONG   0                       ; the columns its names take
 FILES:  .LONG   0                       ; in this directory
 DIRS:   .LONG   0                       ; the directories before it,
 GFILES: .LONG   0                       ; their files
-GUSED:  .LONG   0                       ; and /FULL's blocks
+GUSED:  .LONG   0                       ; and blocks
 GALLOC: .LONG   0
 CURDIR: .BLKB   256                     ; its device and directory, .ASCIC
-DETAIL: .LONG   0                       ; bit 0 /OWNER, bit 1 /PROTECTION, 2 /FULL
+DETAIL: .LONG   0                       ; D_x bits: what to list
+DATES:  .LONG   0                       ; bit n: DATEADR's nth date
+COLUMNS:                                ; names to a line
+        .LONG   4
+VERSIONS:                               ; of each name
+        .LONG   -1
+VERSION:                                ; this name's, so far
+        .LONG   0
+LASTNAME:                               ; the last file's, up to its version, .ASCIC
+        .BLKB   256
+NUMDSC:                                 ; /COLUMNS's or /VERSIONS's value
+        .LONG   10
+        .ADDRESS NUM
+NUM:    .BLKB   10
 FAB2:   $FAB    FNA=RES, XAB=XAB        ; $OPEN's, of the file $SEARCH found
 XAB:    $XABPRO NXT=DAT
 DAT:    $XABDAT NXT=FHC
 FHC:    $XABFHC
 SUM:    $XABSUM                         ; an indexed file's keys
-USED:   .LONG   0                       ; /FULL's blocks: used
+FUSED:  .LONG   0                       ; the file's blocks used
+USED:   .LONG   0                       ; the directory's: used
 ALLOC:  .LONG   0                       ; and allocated
 TIME:   .BLKB   23                      ; a time, as $ASCTIM writes it
 TIMEDSC:
         .LONG   23
         .ADDRESS TIME
+DATEADR:                                ; /DATE's, in VMS's order: CREATED,
+        .ADDRESS DAT+XAB$Q_CDT          ; MODIFIED, EXPIRED, BACKUP, then
+        .ADDRESS DAT+XAB$Q_RDT          ; EFFECTIVE, RECORDING, ACCESSED,
+        .ADDRESS DAT+XAB$Q_EDT          ; ATTRIBUTES and DATA_MODIFIED,
+        .ADDRESS DAT+XAB$Q_BDT          ; which Files-11 doesn't keep
+        .LONG   0, 0, 0, 0, 0
 LETTERS:                                ; the access a protection's bits deny
         .ASCII  "RWED"
 CATS:   .BYTE   0, 8, 15, 22            ; each category's name in CATNAMES
@@ -89,17 +136,55 @@ DIRTYPE:
         .ASCII  ".DIR"
 
         .PSECT  CODE, EXE, LONG
-        .ENTRY  START, ^M<R2, R3, R4, R5, R6>
-        PRESENT "OWNER"
+        .ENTRY  START, ^M<R2, R3, R4, R5, R6, R7, R8>
+        IFPRESENT "OWNER", <1@D_OWNER>, DETAIL
+        IFPRESENT "PROTECTION", <1@D_PROT>, DETAIL
+        IFPRESENT "FULL", <<1@D_FULL>!M_SIZE>, DETAIL
+        IFPRESENT "TOTAL", <1@D_TOTAL>, DETAIL
+        PRESENT "SIZE"
         BLBC    R0, 2$
-        BISL2   #1, DETAIL
-2$:     PRESENT "PROTECTION"
+        IFPRESENT "SIZE.ALL", M_SIZE, DETAIL
+        IFPRESENT "SIZE.ALLOCATION", <1@D_ALLOC>, DETAIL
+        BITL    #M_SIZE, DETAIL
+        BNEQ    2$
+        BISL2   #1@D_USED, DETAIL       ; USED, unless it says
+2$:     PRESENT "DATE"
         BLBC    R0, 3$
-        BISL2   #2, DETAIL
-3$:     PRESENT "FULL"
+        IFPRESENT "DATE.CREATED", 1, DATES
+        IFPRESENT "DATE.MODIFIED", 2, DATES
+        IFPRESENT "DATE.EXPIRED", 4, DATES
+        IFPRESENT "DATE.BACKUP", 8, DATES
+        IFPRESENT "DATE.EFFECTIVE", 16, DATES
+        IFPRESENT "DATE.RECORDING", 32, DATES
+        IFPRESENT "DATE.ACCESSED", 64, DATES
+        IFPRESENT "DATE.ATTRIBUTES", 128, DATES
+        IFPRESENT "DATE.DATA_MODIFIED", 256, DATES
+        IFPRESENT "DATE.ALL", <<1@DATEMAX>-1>, DATES
+        TSTL    DATES
+        BNEQ    3$
+        INCL    DATES                   ; CREATED, unless it says
+3$:     PRESENT "COLUMNS"
         BLBC    R0, 4$
-        BISL2   #4, DETAIL
-4$:     GETVALUE "FILE", SPECDSC, SPECDSC
+        GETVALUE "COLUMNS", NUMDSC, NUMDSC
+        BSBW    NUMBER
+        BLBC    R0, 90$
+        MOVL    R1, COLUMNS
+        BNEQ    35$
+        INCL    COLUMNS                 ; 0 is 1
+35$:    CMPL    COLUMNS, #LINEMAX/COLUMN
+        BLEQU   4$
+        MOVL    #LINEMAX/COLUMN, COLUMNS ; as many as fit
+4$:     PRESENT "VERSIONS"
+        BLBC    R0, 45$
+        MOVL    #10, NUMDSC
+        GETVALUE "VERSIONS", NUMDSC, NUMDSC
+        BSBW    NUMBER
+        BLBC    R0, 90$
+        MOVL    R1, VERSIONS
+        BNEQ    45$
+        BSBW    SYNTAX                  ; 0 isn't a number of versions
+        BRB     90$
+45$:    GETVALUE "FILE", SPECDSC, SPECDSC
         BLBS    R0, 5$
         CLRL    SPECDSC
 5$:     MOVB    SPECDSC, FAB+FAB$B_FNS
@@ -107,32 +192,25 @@ DIRTYPE:
         BLBC    R0, 90$
 10$:    $SEARCH FAB=FAB
         BLBC    R0, 50$
+        BSBW    NEWVER
+        BLBC    R0, 10$
         BSBW    NEWDIR
         INCL    FILES
-        BBC     #2, DETAIL, 22$
+        BBC     #D_TOTAL, DETAIL, 20$
+        BITL    #M_SIZE, DETAIL
+        BEQL    10$
+        BSBW    OPEN                    ; /TOTAL: only its blocks
+        BRB     10$
+20$:    BBC     #D_FULL, DETAIL, 22$
         BSBW    FULL
-        BRW     10$
-22$:    TSTL    DETAIL
-        BEQL    25$
-        BSBW    DETAILS
-        BRW     10$
-25$:    TSTB    LINE
-        BEQL    40$
-30$:    MOVZBL  #^A/ /, R0              ; to the next column
-        BSBW    ADDCHAR
-        CLRL    R1
-        MOVZBL  LINE, R0
-        EDIV    #COLUMN, R0, R0, R1
-        TSTL    R1
-        BNEQ    30$
-40$:    MOVZBL  NAM+NAM$B_NAME, R2      ; NAME.TYPE;VERSION
-        ADDB2   NAM+NAM$B_TYPE, R2
-        ADDB2   NAM+NAM$B_VER, R2
-        MOVL    NAM+NAM$L_NAME, R1
-        BSBW    ADD
-        CMPB    LINE, #LINEMAX-COLUMN   ; four to a line
-        BLSSU   10$
-        BSBW    SAY
+        BRB     10$
+22$:    BITL    #M_LINE, DETAIL
+        BNEQ    25$
+        TSTL    DATES
+        BEQL    30$
+25$:    BSBW    DETAILS
+        BRB     10$
+30$:    BSBW    BRIEF
         BRB     10$
 50$:    CMPL    R0, #RMS$_NMF
         BEQL    60$
@@ -155,6 +233,85 @@ DIRTYPE:
         BSBW    SAY
 80$:    MOVL    #SS$_NORMAL, R0
 90$:    RET
+
+; NUMBER: NUMDSC = a qualifier's value. R1 = it, if it is decimal
+; digits, and R0 = 1; or, as VMS's DIRECTORY, it says it can't parse it,
+; and R0 = DIRECT_SYNTAX. Uses R0-R5.
+NUMBER:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5>
+        CLRL    R1
+        CLRL    R2
+        MOVZWL  NUMDSC, R3
+        BEQL    SYNTAX
+10$:    MOVZBL  NUM[R2], R0
+        SUBL2   #^A/0/, R0
+        CMPL    R0, #9
+        BGTRU   SYNTAX
+        MULL2   #10, R1
+        ADDL2   R0, R1
+        AOBLSS  R3, R2, 10$
+        MOVL    #1, R0
+        RSB
+; SYNTAX: says NUMDSC's value can't be parsed. R0 = DIRECT_SYNTAX. Uses
+; R0-R5.
+SYNTAX:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5>
+        ADDTEXT "%DIRECT-F-SYNTAX, error parsing '"
+        MOVAB   NUM, R1
+        MOVZWL  NUMDSC, R2
+        BSBW    ADD
+        ADDTEXT "'"
+        BSBW    SAY
+        MOVL    #DIRECT_SYNTAX, R0
+        RSB
+
+; NEWVER: R0 = 1 if the file $SEARCH found is one of the VERSIONS highest
+; of its name, which $SEARCH finds highest first; 0 if not. Uses R0-R5.
+NEWVER:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5>
+        SUBL3   #RES, NAM+NAM$L_VER, R2 ; up to its version
+        MOVZBL  LASTNAME, R0
+        CMPC5   R2, RES, #0, R0, LASTNAME+1
+        BEQL    10$
+        SUBL3   #RES, NAM+NAM$L_VER, R2 ; another name
+        MOVB    R2, LASTNAME
+        MOVC3   R2, RES, LASTNAME+1
+        CLRL    VERSION
+10$:    INCL    VERSION
+        CLRL    R0
+        CMPL    VERSION, VERSIONS
+        BGTRU   90$
+        INCL    R0
+90$:    RSB
+
+; BRIEF: adds the name of the file $SEARCH found to the line of names,
+; in the next column, or the next line's first if the line has COLUMNS
+; names or no room. Uses R0-R5.
+BRIEF:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5>
+        MOVZBL  NAM+NAM$B_NAME, R2      ; NAME.TYPE;VERSION
+        ADDB2   NAM+NAM$B_TYPE, R2
+        ADDB2   NAM+NAM$B_VER, R2
+        DIVL3   #COLUMN, R2, R5         ; R5 = the columns it takes
+        INCL    R5
+        TSTL    SLOT
+        BEQL    20$
+        CMPL    SLOT, COLUMNS
+        BGEQU   10$
+        ADDL3   SLOT, R5, R0
+        CMPL    R0, #LINEMAX/COLUMN
+        BLEQU   15$
+10$:    BSBW    SAY
+        BRB     20$
+15$:    MULL3   #COLUMN, SLOT, R3
+        BSBW    PADTO
+20$:    MOVZBL  NAM+NAM$B_NAME, R2
+        ADDB2   NAM+NAM$B_TYPE, R2
+        ADDB2   NAM+NAM$B_VER, R2
+        MOVL    NAM+NAM$L_NAME, R1
+        BSBW    ADD
+        ADDL2   R5, SLOT
+        RSB
 
 ; NEWDIR: before the file $SEARCH found, if its directory isn't the last
 ; one's: that one's total, then its heading. Uses R0-R5.
@@ -192,8 +349,9 @@ TOTAL:
         TSTB    LINE
         BEQL    10$
         BSBW    SAY
-10$:    PRINT   ""
-        ADDTEXT "Total of "
+10$:    BBS     #D_TOTAL, DETAIL, 20$   ; under its heading
+        PRINT   ""
+20$:    ADDTEXT "Total of "
         MOVL    FILES, R1
         MOVL    USED, R2
         MOVL    ALLOC, R3
@@ -207,8 +365,9 @@ TOTAL:
         CLRL    FILES
         RSB
 
-; COUNTS: appends "R1 files.", or "file" for one, and with /FULL ", R2/R3
-; blocks", to LINE. Uses R0-R5.
+; COUNTS: appends "R1 files.", or "file" for one, and with /SIZE or
+; /FULL ", R2 blocks", or R3 with /SIZE=ALLOCATION, or "R2/R3 blocks" for
+; both, to LINE. Uses R0-R5.
 COUNTS:
         .JSB_ENTRY  SCRATCH=<R4, R5>
         PUSHR   #^M<R1, R2, R3>
@@ -218,85 +377,127 @@ COUNTS:
         ADDTEXT " files"
         BRB     20$
 10$:    ADDTEXT " file"
-20$:    BBC     #2, DETAIL, 30$         ; /FULL: and their blocks
+20$:    BITL    #M_SIZE, DETAIL
+        BEQL    30$                     ; and their blocks
         ADDTEXT ", "
         MOVL    4(SP), R1
+        BBC     #D_ALLOC, DETAIL, 25$
+        MOVL    8(SP), R1
+        BBC     #D_USED, DETAIL, 25$
+        MOVL    4(SP), R1               ; both
         BSBW    ADDDEC
         ADDTEXT "/"
         MOVL    8(SP), R1
         BSBW    ADDDEC
-        ADDTEXT " blocks"
+        BRB     27$
+25$:    PUSHL   R1
+        BSBW    ADDDEC
+        CMPL    (SP)+, #1
+        BNEQ    27$
+        ADDTEXT " block"
+        BRB     30$
+27$:    ADDTEXT " blocks"
 30$:    ADDTEXT "."
         POPR    #^M<R1, R2, R3>
         RSB
 
-; DETAILS: writes a line for the file $SEARCH found: its name, then its
-; owner and protection, as DETAIL asks, or, if the process may not read
-; it, VMS's words for that. Uses R0-R5.
+; DETAILS: writes a line for the file $SEARCH found: its name, then, as
+; DETAIL and DATES ask, its blocks, dates, owner and protection, in VMS's
+; columns, or, if the process may not read it, VMS's words for that.
+; Uses R0-R8.
 DETAILS:
-        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5>
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5, R6, R7, R8>
         MOVZBL  NAM+NAM$B_NAME, R2      ; NAME.TYPE;VERSION
         ADDB2   NAM+NAM$B_TYPE, R2
         ADDB2   NAM+NAM$B_VER, R2
         MOVL    NAM+NAM$L_NAME, R1
         BSBW    ADD
-        MOVL    #COLUMN, R3
-        MOVB    NAM+NAM$B_RSL, FAB2+FAB$B_FNS
-        $OPEN   FAB=FAB2
+        CMPB    LINE, #NAMEMAX
+        BLEQU   5$
+        BSBW    SAY                     ; too long: a line of its own
+5$:     MOVL    #NAMEMAX+1, R6          ; R6 = where the next column starts
+        BSBW    OPEN
         BLBS    R0, 10$
         CMPL    R0, #RMS$_PRV
         BNEQ    80$
+        MOVL    R6, R3
         BSBW    PADTO
-        ADDTEXT "No privilege for attempted operation"
+        ADDTEXT "  No privilege for attempted operation"
         BRB     80$
-10$:    $CLOSE  FAB=FAB2
-        MOVL    #COLUMN, R3
-        BLBC    DETAIL, 20$
-        BSBW    PADTO                   ; [group,member], in octal
-        ADDTEXT "["
+10$:    BITL    #M_SIZE, DETAIL
+        BEQL    20$
+        MOVL    FUSED, R1               ; blocks: used, ending in column 31,
+        BBS     #D_USED, DETAIL, 12$
+        MOVL    FAB2+FAB$L_ALQ, R1      ; or allocated
+12$:    MOVL    #31, R3
+        BSBW    RIGHT
+        MOVL    #31, R6
+        BBC     #D_USED, DETAIL, 20$
+        BBC     #D_ALLOC, DETAIL, 20$
+        ADDTEXT "/"                     ; or both
+        MOVL    FAB2+FAB$L_ALQ, R1
+        BSBW    ADDDEC
+        MOVL    #42, R6
+20$:    CLRL    R7                      ; each date asked for
+22$:    BBC     R7, DATES, 28$
+        MOVL    R6, R3
+        BSBW    PADTO
+        MOVL    DATEADR[R7], R8
+        BEQL    24$
+        TSTL    (R8)
+        BNEQ    23$
+        TSTL    4(R8)
+        BEQL    24$
+23$:    ADDTEXT "  "
+        MOVL    R8, R0
+        BSBW    ADDTIME
+        BRB     27$
+24$:    CMPL    R7, #3
+        BNEQ    25$
+        ADDTEXT "   <No backup recorded>"
+        BRB     27$
+25$:    ADDTEXT "   <None specified>"
+27$:    MOVZBL  LINE, R6
+28$:    AOBLSS  #DATEMAX, R7, 22$
+        BBC     #D_OWNER, DETAIL, 40$
+        MOVL    R6, R3                  ; [group,member], in octal, and
+        BSBW    PADTO                   ; room for an identifier's
+        ADDL2   #33, R6
+        ADDTEXT "  ["
         MOVZWL  XAB+XAB$L_UIC+2, R1
         BSBW    ADDOCT
         ADDTEXT ","
         MOVZWL  XAB+XAB$L_UIC, R1
         BSBW    ADDOCT
         ADDTEXT "]"
-        MOVL    #2*COLUMN, R3
-20$:    BBC     #1, DETAIL, 80$
-        BSBW    PADTO                   ; (RWED,RWED,RE,): what each may do
-        ADDTEXT "("
+40$:    BBC     #D_PROT, DETAIL, 80$
+        MOVL    R6, R3                  ; (RWED,RWED,RE,): what each may do
+        BSBW    PADTO
+        ADDTEXT "  ("
         MOVZWL  XAB+XAB$W_PRO, R4
         CLRL    R5                      ; the category
-30$:    CLRL    R3                      ; the bit
-35$:    BBS     R3, R4, 37$
+50$:    CLRL    R3                      ; the bit
+55$:    BBS     R3, R4, 57$
         MOVZBL  LETTERS[R3], R0
         BSBW    ADDCHAR
-37$:    AOBLSS  #4, R3, 35$
+57$:    AOBLSS  #4, R3, 55$
         ASHL    #-4, R4, R4
-        AOBLSS  #4, R5, 40$
+        AOBLSS  #4, R5, 60$
         ADDTEXT ")"
 80$:    BRW     SAY
-40$:    MOVZBL  #44, R0
+60$:    MOVZBL  #44, R0
         BSBW    ADDCHAR
-        BRB     30$
+        BRB     50$
 
-; FULL: writes what VMS's DIRECTORY/FULL does about the file $SEARCH
-; found, from $OPEN's XABs, and adds its blocks to USED and ALLOC. Uses
-; R0-R6.
-FULL:
-        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5, R6>
-        MOVZBL  NAM+NAM$B_NAME, R2      ; NAME.TYPE;VERSION
-        ADDB2   NAM+NAM$B_TYPE, R2
-        ADDB2   NAM+NAM$B_VER, R2
-        MOVL    NAM+NAM$L_NAME, R1
-        BSBW    ADD
-        MOVL    #30, R3
-        BSBW    PADTO
+; OPEN: opens and closes the file $SEARCH found, for its XABs, and an
+; indexed file's keys in SUM; FUSED = the blocks it uses, which, and the
+; blocks it has, it adds to USED and ALLOC. R0 = $OPEN's status. Uses
+; R0-R5.
+OPEN:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5>
         MOVB    NAM+NAM$B_RSL, FAB2+FAB$B_FNS
         $OPEN   FAB=FAB2
         BLBS    R0, 5$
-        ADDTEXT "No privilege for attempted operation"
-        BSBW    SAY
-        PRINT   ""
         RSB
 5$:     MOVAB   SUM, FAB2+FAB$L_XAB     ; an indexed file's keys
         CMPB    FAB2+FAB$B_ORG, #FAB$C_IDX
@@ -304,7 +505,39 @@ FULL:
         $DISPLAY FAB=FAB2
 7$:     MOVAB   XAB, FAB2+FAB$L_XAB
         $CLOSE  FAB=FAB2
-        ADDTEXT "File ID:  ("
+        MOVL    FHC+XAB$L_EBK, R1       ; used: up to the end of file, or
+        BEQL    10$                     ; all of an indexed file's that
+        DECL    R1                      ; has none
+        TSTW    FHC+XAB$W_FFB
+        BEQL    12$
+        INCL    R1
+        BRB     12$
+10$:    MOVL    FAB2+FAB$L_ALQ, R1
+12$:    MOVL    R1, FUSED
+        ADDL2   R1, USED
+        ADDL2   FAB2+FAB$L_ALQ, ALLOC
+        MOVL    #1, R0
+        RSB
+
+; FULL: writes what VMS's DIRECTORY/FULL does about the file $SEARCH
+; found, from $OPEN's XABs, and adds its blocks to USED and ALLOC. Uses
+; R0-R5.
+FULL:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5>
+        MOVZBL  NAM+NAM$B_NAME, R2      ; NAME.TYPE;VERSION
+        ADDB2   NAM+NAM$B_TYPE, R2
+        ADDB2   NAM+NAM$B_VER, R2
+        MOVL    NAM+NAM$L_NAME, R1
+        BSBW    ADD
+        MOVL    #30, R3
+        BSBW    PADTO
+        BSBW    OPEN
+        BLBS    R0, 5$
+        ADDTEXT "No privilege for attempted operation"
+        BSBW    SAY
+        PRINT   ""
+        RSB
+5$:     ADDTEXT "File ID:  ("
         MOVZWL  NAM+NAM$W_FID, R1
         BSBW    ADDDEC
         ADDTEXT ","
@@ -317,18 +550,8 @@ FULL:
         MOVL    #62, R3
         BSBW    PADTO
         BSBW    SAY
-        MOVL    FHC+XAB$L_EBK, R6       ; R6 = the blocks used: up to the
-        BEQL    10$                     ; end of file, or all of an indexed
-        DECL    R6                      ; file's that has none
-        TSTW    FHC+XAB$W_FFB
-        BEQL    12$
-        INCL    R6
-        BRB     12$
-10$:    MOVL    FAB2+FAB$L_ALQ, R6
-12$:    ADDL2   R6, USED
-        ADDL2   FAB2+FAB$L_ALQ, ALLOC
         ADDTEXT "Size:"
-        MOVL    R6, R1
+        MOVL    FUSED, R1
         MOVL    #18, R3
         BSBW    RIGHT
         ADDTEXT "/"
@@ -604,6 +827,7 @@ SAY:
         PUSHAB  LINE
         CALLS   #1, G^PUT_LINE
         CLRB    LINE
+        CLRL    SLOT
         RSB
 
 ; ADDCHAR: appends the character in R0 to LINE. Uses R0-R2.
