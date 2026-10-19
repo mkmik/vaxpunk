@@ -30,6 +30,12 @@ milestone = "m1"
 note = "ADR-0029 decision 4"
 
 [[feature]]
+id = "rights-list"
+title = "The rights list: the identifiers the user holds, INTERACTIVE, and LOCAL or REMOTE"
+status = "done"
+note = "ADR-0040; $FIND_HELD, given to EXE$LOGIN"
+
+[[feature]]
 id = "failures"
 title = "Three failures end it; only a wrong password counts, reported at the next login"
 status = "done"
@@ -208,7 +214,8 @@ vaxpunk's is `vms/sysexe/loginout.mar`
 starts once `STARTUP` has run `SYSTARTUP_VMS.COM`, and on each TELNET
 terminal, which `TELNETD` starts. It reads the user's record by key,
 checks the hash with `$HASH_PASSWORD`, counts wrong passwords, defines
-`SYS$LOGIN`, `SYS$SCRATCH` and `SYS$DISK`, and calls `EXE$LOGIN` in
-kernel mode, which makes the process the user's. `--autologin` writes a
+`SYS$LOGIN`, `SYS$SCRATCH` and `SYS$DISK`, builds the rights list from
+`RIGHTSLIST.DAT`, and calls `EXE$LOGIN` in kernel mode, which makes the
+process the user's. `--autologin` writes a
 text `SYSALF.DAT` for the console. Missing for Milestone 1: quotas,
 `LNM$JOB`, login at a key, and batch jobs.

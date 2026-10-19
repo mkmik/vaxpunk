@@ -890,7 +890,7 @@ impl Api {
             (r.args, r.doc, r.regs, r.ipl) = (args, doc, regs, ipl);
             for (i, insn) in r.body.iter().enumerate() {
                 r.status.extend(
-                    re!(r"SS\$_\w+")
+                    re!(r"\bSS\$_\w+")
                         .find_iter(insn)
                         .map(|m| m.as_str().to_string()),
                 );
@@ -1715,7 +1715,7 @@ impl Page<'_> {
     }
 
     fn link_intro(&self, text: &str) -> String {
-        re!(r"SS\$_\w+")
+        re!(r"\bSS\$_\w+")
             .replace_all(text, |m: &Captures| match self.api.syms.get(&m[0]) {
                 Some(a) => format!(r##"<a href="#{a}">{}</a>"##, &m[0]),
                 None => m[0].to_string(),

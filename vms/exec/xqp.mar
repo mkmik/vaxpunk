@@ -28,6 +28,16 @@
 ; where here that is SS$_ACCONFLICT, since RMS writes its own copy of
 ; the header back. VMS's SET FILE opens the file first, for itself
 ; alone, and gets the same.
+; The ACL attributes change the file's ACL (f11acl.mar), in order, at
+; the position FIB$L_ACLCTX holds, the number of an ACE from 1, which
+; they move on and the FIB brings back: ADDACLENT puts ACEs before the
+; one there, each in place of one that matches it (ACLMATCH), unless that
+; one comes before, DELACLENT deletes the one that matches, FNDACLENT
+; finds it, DELETEACL deletes all but the PROTECTED ones and DELETE_ALL
+; all of them; READACL reads the whole ACEs from the position, READACE
+; the next one, and ACLLENGTH the ACL's bytes. Their status, the first
+; failure's, goes in FIB$L_ACL_STATUS, and the IOSB's is SS$_NORMAL, as
+; on VMS. Changing the ACL takes control access.
 ; ponytail: no IO$M_ACCESS, files opened on the channel, IO$_DEACCESS,
 ; IO$_CREATE, IO$_DELETE or IO$_ACPCONTROL; a name with wildcards finds
 ; its first match, with no FIB$L_WCC to go on from, and no result
@@ -46,10 +56,12 @@
         $ARMDEF
         $FIBDEF
         $ATRDEF
+        $ACEDEF
 
         .EXTERNAL F11$GL_VCB, F11$GW_FID, EXE$GQ_SYSTIME, EXE$PROBER_DSC
         .EXTERNAL FIL$LOCK, FIL$UNLOCK, FIL$READHDR, FIL$WRITEHDR, FIL$ISDIR
         .EXTERNAL FIL$SEARCHDIR, FIL$CHKHDR, FIL$SETLIMIT, IOC$REQCOM, RMS$FILEBUSY
+        .EXTERNAL FIL$ACLGET, FIL$ACLPUT
 
 BLOCK = 512
 MAXATR = 30                             ; descriptors in a list, at most
@@ -68,6 +80,9 @@ RO = 1                                  ; read only: a write leaves it
 CTL = 2                                 ; a write takes control access
 WRT = 4                                 ; a write takes write access
 IDENT = 8                               ; its offset is in the ident area
+ACL = 16                                ; ACLOP does it, at the offset in ACLOPS
+OUT = 32                                ; an ACL attribute that writes its buffer
+ACLMAX = 512                            ; an ACL's bytes, at most
 
         .PSECT  EXEC$DATA, NOEXE, WRT, QUAD
 XQP$GL_IRP::                            ; the IRP DK$FDT made, for $QIO to hand XQP$PERFORM, or 0
@@ -93,6 +108,22 @@ ATRS:   .BYTE   ATR$C_UCHAR, WRT
         .WORD   ATR$S_FPRO, 64
         .BYTE   ATR$C_UIC_RO, RO
         .WORD   ATR$S_UIC_RO, FH2$L_FILEOWNER
+        .BYTE   ATR$C_ADDACLENT, ACL!CTL
+        .WORD   ATR$S_ADDACLENT, ADDACE-ACLOPS
+        .BYTE   ATR$C_DELACLENT, ACL!CTL
+        .WORD   ATR$S_DELACLENT, DELACE-ACLOPS
+        .BYTE   ATR$C_FNDACLENT, ACL!RO
+        .WORD   ATR$S_FNDACLENT, FNDACE-ACLOPS
+        .BYTE   ATR$C_DELETEACL, ACL!CTL
+        .WORD   ATR$S_DELETEACL, DELACL-ACLOPS
+        .BYTE   ATR$C_DELETE_ALL, ACL!CTL
+        .WORD   ATR$S_DELETE_ALL, DELALL-ACLOPS
+        .BYTE   ATR$C_READACL, ACL!RO!OUT
+        .WORD   ATR$S_READACL, READACL-ACLOPS
+        .BYTE   ATR$C_ACLLENGTH, ACL!RO!OUT
+        .WORD   ATR$S_ACLLENGTH, ACLLEN-ACLOPS
+        .BYTE   ATR$C_READACE, ACL!RO!OUT
+        .WORD   ATR$S_READACE, READACE-ACLOPS
         .BYTE   0
 FIB:    .BLKB   FIB$C_LENGTH            ; the caller's, made whole with 0s
 FIBLEN: .LONG   0                       ; its length, up to FIB$C_LENGTH
@@ -105,6 +136,11 @@ ENTNAME:                                ; the name of the entry FINDFILE found, 
         .BLKB   80
 ENTLEN: .LONG   0                       ; and its length, 0 if it found none
 NEWLIM: .LONG   0                       ; IO$_MODIFY's FIB$W_VERLIMIT: the name's new version limit, or 0
+ACLBUF: .BLKB   ACLMAX                  ; the file's ACL, while the ACL attributes work on it
+ACLBYTES:                               ; its bytes
+        .LONG   0
+ACLDIRTY:                               ; 1 once they change it
+        .LONG   0
 
         .PSECT  $CODE$
 
@@ -130,6 +166,7 @@ XQP$PERFORM::
 10$:    MOVL    R0, F11$GL_VCB
         BSBW    GETFIB
         BLBC    R0, 80$
+        MOVL    #SS$_NORMAL, FIB+FIB$L_ACL_STATUS
         MOVZWL  FIB+FIB$W_VERLIMIT, NEWLIM
         BSBW    FINDFILE
         BLBC    R0, 80$
@@ -330,8 +367,9 @@ GETNAME:
 
 ; READATTR: AP = $QIO's arguments, HDR = the file's header. Copies each
 ; attribute p5's list asks for where it says, after a check that the
-; process may read the file, or control it. R0 = SS$_NORMAL,
-; SS$_NOPRIV, SS$_BADATTRIB, or SS$_ACCVIO. Uses R0-R10.
+; process may read the file, or control it; of the ACL attributes, those
+; that read. R0 = SS$_NORMAL, SS$_NOPRIV, SS$_BADATTRIB, or SS$_ACCVIO.
+; Uses R0-R10.
 READATTR:
         .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5, R6, R7, R8, R9, R10>
         MOVL    44(AP), R6
@@ -343,12 +381,19 @@ READATTR:
         MOVL    #ARM$M_CONTROL, R0
         BSBW    FIL$CHKHDR
         BLBC    R0, 90$
-5$:     MOVL    #MAXATR+1, R7
+5$:     BSBW    LOADACL
+        MOVL    #MAXATR+1, R7
 10$:    BSBW    NEXTATR
         BLBC    R0, 90$
         TSTL    R8
         BEQL    80$
-        IFNOWRT R10, @ATR$L_ADDR(R6), 85$
+        BBC     #4, 1(R8), 20$          ; ACL
+        BBC     #0, 1(R8), 15$          ; one that changes it: not here
+        BSBW    ACLOP
+        BLBC    R0, 90$
+15$:    ADDL2   #8, R6
+        BRB     10$
+20$:    IFNOWRT R10, @ATR$L_ADDR(R6), 85$
         MOVC3   R10, (R9), @ATR$L_ADDR(R6)
         ADDL2   #8, R6
         BRB     10$
@@ -416,6 +461,7 @@ WRITEATTR:
         MOVAW   HDR[R0], R0
         MOVQ    EXE$GQ_SYSTIME, FI2$Q_REVDATE(R0)
         INCW    FI2$W_REVISION(R0)
+        BSBW    LOADACL
         PUSHL   HDR+FH2$L_FILECHAR      ; what it keeps
         PUSHL   HDR+FH2$W_RECATTR+FAT$L_HIBLK
         MOVL    44(AP), R6
@@ -423,7 +469,12 @@ WRITEATTR:
 50$:    BSBW    NEXTATR
         TSTL    R8
         BEQL    60$
-        BBS     #0, 1(R8), 55$          ; RO
+        BBC     #4, 1(R8), 52$          ; ACL
+        BSBW    ACLOP
+        BLBS    R0, 55$
+        ADDL2   #8, SP
+        RSB
+52$:    BBS     #0, 1(R8), 55$          ; RO
         MOVC3   R10, @ATR$L_ADDR(R6), (R9)
 55$:    ADDL2   #8, R6
         BRB     50$
@@ -432,7 +483,13 @@ WRITEATTR:
         BICL2   #FCH$M_KEEP, HDR+FH2$L_FILECHAR
         BICL2   #^C<FCH$M_KEEP>, R0
         BISL2   R0, HDR+FH2$L_FILECHAR
+        BLBC    ACLDIRTY, 70$           ; the ACL, if it changed
         MOVAB   HDR, R1
+        MOVAB   ACLBUF, R2
+        MOVL    ACLBYTES, R3
+        BSBW    FIL$ACLPUT
+        BSBW    ACLSTATUS
+70$:    MOVAB   HDR, R1
         BSBW    FIL$WRITEHDR
         RSB
 80$:    MOVL    #SS$_NORMAL, R0
@@ -467,6 +524,401 @@ SETLIMIT:
         BLBC    R0, 90$
         MOVW    NEWLIM, FIB+FIB$W_VERLIMIT
 90$:    RSB
+
+; LOADACL: HDR = the file's header. Copies its ACL into ACLBUF, its bytes
+; into ACLBYTES, for the ACL attributes, which haven't changed it yet.
+; Uses R0.
+LOADACL:
+        .JSB_ENTRY
+        PUSHR   #^M<R1, R2>
+        MOVAB   HDR, R1
+        MOVAB   ACLBUF, R2
+        BSBW    FIL$ACLGET
+        MOVL    R0, ACLBYTES
+        CLRL    ACLDIRTY
+        POPR    #^M<R1, R2>
+        RSB
+
+; ACLOP: R6 = an ACL attribute's descriptor, R8 = its entry in ATRS, R10
+; = its size. Checks that the process may read its buffer, and write it
+; if the attribute writes it, and calls its routine in ACLOPS with R1
+; = the buffer, R2 = its size, which works on ACLBUF and FIB$L_ACLCTX,
+; sets ACLDIRTY if it changes the ACL, and returns its status, which
+; ACLSTATUS keeps. One that changes the ACL is skipped once one has
+; failed. R0 = SS$_NORMAL, or SS$_ACCVIO. Uses R0-R5.
+ACLOP:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5>
+        MOVL    ATR$L_ADDR(R6), R1
+        IFNORD  R10, (R1), 85$
+        BBC     #5, 1(R8), 10$          ; OUT: it writes its buffer
+        IFNOWRT R10, (R1), 85$
+10$:    BBC     #1, 1(R8), 20$          ; CTL: it changes the ACL
+        BLBC    FIB+FIB$L_ACL_STATUS, 80$
+20$:    MOVL    R10, R2
+        MOVZWL  4(R8), R0
+        MOVAB   ACLOPS[R0], R0
+        JSB     (R0)
+        BSBB    ACLSTATUS
+80$:    MOVL    #SS$_NORMAL, R0
+        RSB
+85$:    MOVL    #SS$_ACCVIO, R0
+        RSB
+
+; ACLSTATUS: R0 = an ACL attribute's status. Puts it in FIB$L_ACL_STATUS
+; if it is a failure and the first. Keeps every register.
+ACLSTATUS:
+        .JSB_ENTRY
+        BLBS    R0, 10$
+        BLBC    FIB+FIB$L_ACL_STATUS, 10$
+        MOVL    R0, FIB+FIB$L_ACL_STATUS
+10$:    RSB
+
+; The ACL attributes' routines: R1 = the attribute's buffer, R2 = its
+; size, ACLBUF = the ACL, ACLBYTES its bytes, FIB$L_ACLCTX's bits 23:0
+; the position, an ACE's number from 1, 0 the first. Each returns its
+; status in R0, and uses R0-R5.
+ACLOPS:
+
+; ADDACE: puts each ACE in the buffer, up to one of size 0, before the
+; one at the position, which then is past it; one that matches an ACE
+; already there takes its place, unless that one comes before the
+; position, when it is dropped. SS$_NORMAL, SS$_IVACL for an ACE that
+; runs past the buffer or has no ACE's size, SS$_ACLFULL.
+ADDACE:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5>
+        PUSHR   #^M<R6, R7>
+        MOVL    R1, R6                  ; the next ACE
+        ADDL3   R1, R2, R7              ; past the buffer
+10$:    SUBL3   R6, R7, R0              ; the bytes left
+        CMPL    R0, #4
+        BLSSU   80$
+        MOVZBL  (R6), R3
+        BEQL    80$
+        CMPL    R3, #4
+        BLSSU   85$
+        CMPL    R3, R0
+        BGTRU   85$
+        MOVL    R6, R1
+        BSBW    ACLFIND                 ; one that matches?
+        BSBW    ACLPOS                  ; and the position
+        TSTL    R4
+        BEQL    20$
+        CMPL    R4, R5
+        BLSSU   30$                     ; before: this one goes
+        BSBW    ACLREMOVE
+20$:    MOVL    R6, R1
+        BSBW    ACLINSERT
+        BLBC    R0, 90$
+        ADDL3   #1, R5, FIB+FIB$L_ACLCTX        ; past it
+30$:    MOVZBL  (R6), R0
+        ADDL2   R0, R6
+        BRB     10$
+80$:    MOVL    #SS$_NORMAL, R0
+        BRB     90$
+85$:    MOVL    #SS$_IVACL, R0
+90$:    POPR    #^M<R6, R7>
+        RSB
+
+; DELACE: deletes the ACE that matches the buffer's; the position is the
+; one after it. SS$_NORMAL, SS$_ACLEMPTY, SS$_NOENTRY.
+DELACE:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5>
+        BSBW    ACEOK
+        BLBC    R0, 90$
+        MOVL    #SS$_ACLEMPTY, R0
+        TSTL    ACLBYTES
+        BEQL    90$
+        BSBW    ACLFIND
+        MOVL    #SS$_NOENTRY, R0
+        TSTL    R4
+        BEQL    90$
+        BSBW    ACLREMOVE
+        MOVL    R4, FIB+FIB$L_ACLCTX
+        MOVL    #SS$_NORMAL, R0
+90$:    RSB
+
+; FNDACE: the position becomes the ACE's that matches the buffer's, its
+; type in FIB$L_ACLCTX's bits 31:24, else 0. SS$_NORMAL, SS$_ACLEMPTY,
+; SS$_NOENTRY.
+FNDACE:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5>
+        CLRL    FIB+FIB$L_ACLCTX
+        BSBW    ACEOK
+        BLBC    R0, 90$
+        MOVL    #SS$_ACLEMPTY, R0
+        TSTL    ACLBYTES
+        BEQL    90$
+        BSBW    ACLFIND
+        MOVL    #SS$_NOENTRY, R0
+        TSTL    R4
+        BEQL    90$
+        MOVL    R4, FIB+FIB$L_ACLCTX
+        MOVB    ACE$B_TYPE(R2), FIB+FIB$L_ACLCTX+3
+        MOVL    #SS$_NORMAL, R0
+90$:    RSB
+
+; ACEOK: R1 = a buffer, R2 = its size. R0 = SS$_NORMAL if it holds an
+; ACE, SS$_BADPARAM if it is shorter than 4 bytes, SS$_IVACL if the ACE
+; is shorter, or runs past it. Keeps every other register.
+ACEOK:
+        .JSB_ENTRY
+        MOVL    #SS$_BADPARAM, R0
+        CMPL    R2, #4
+        BLSSU   90$
+        MOVL    #SS$_IVACL, R0
+        CMPB    (R1), #4
+        BLSSU   90$
+        CMPB    (R1), R2
+        BGTRU   90$
+        MOVL    #SS$_NORMAL, R0
+90$:    RSB
+
+; DELACL: deletes every ACE but the PROTECTED ones; the position is the
+; first. SS$_NORMAL.
+DELACL:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5>
+        MOVAB   ACLBUF, R2
+10$:    MOVAB   ACLBUF, R0
+        ADDL2   ACLBYTES, R0
+        CMPL    R2, R0
+        BGEQU   80$
+        BBS     #ACE$V_PROTECTED, ACE$W_FLAGS(R2), 20$
+        BSBW    ACLREMOVE
+        BRB     10$
+20$:    MOVZBL  (R2), R0
+        ADDL2   R0, R2
+        BRB     10$
+80$:    CLRL    FIB+FIB$L_ACLCTX
+        MOVL    #SS$_NORMAL, R0
+        RSB
+
+; DELALL: deletes every ACE. SS$_NORMAL.
+DELALL:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5>
+        TSTL    ACLBYTES
+        BEQL    10$
+        CLRL    ACLBYTES
+        MOVL    #1, ACLDIRTY
+10$:    CLRL    FIB+FIB$L_ACLCTX
+        MOVL    #SS$_NORMAL, R0
+        RSB
+
+; READACL: copies the whole ACEs from the one after the position that
+; fit into the buffer, 0s after them; the position becomes the last's.
+; SS$_NORMAL, SS$_ACLEMPTY, SS$_NOMOREACE past the last, SS$_BUFFEROVF
+; if the first doesn't fit.
+READACL:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5>
+        PUSHR   #^M<R6, R7, R8>
+        MOVL    R1, R6
+        MOVL    R2, R7
+        MOVL    #SS$_ACLEMPTY, R0
+        TSTL    ACLBYTES
+        BEQL    90$
+        EXTZV   #0, #24, FIB+FIB$L_ACLCTX, R0
+        INCL    R0
+        BSBW    ACLNTH
+        MOVL    #SS$_NOMOREACE, R0
+        TSTL    R4
+        BEQL    90$
+        MOVAB   ACLBUF, R3              ; past the ACL
+        ADDL2   ACLBYTES, R3
+        MOVL    R1, R2                  ; the first
+        DECL    R4                      ; the last copied
+10$:    CMPL    R2, R3
+        BGEQU   20$
+        MOVZBL  (R2), R0
+        ADDL2   R2, R0
+        SUBL3   R1, R0, R8              ; the bytes, with this one
+        CMPL    R8, R7
+        BGTRU   20$
+        MOVL    R0, R2
+        INCL    R4
+        BRB     10$
+20$:    SUBL3   R1, R2, R8
+        BNEQ    30$
+        MOVL    #SS$_BUFFEROVF, R0
+        BRB     90$
+30$:    MOVL    R4, FIB+FIB$L_ACLCTX
+        MOVC5   R8, (R1), #0, R7, (R6)
+        MOVL    #SS$_NORMAL, R0
+90$:    POPR    #^M<R6, R7, R8>
+        RSB
+
+; ACLLEN: the ACL's bytes, a longword, as much of it as the buffer has
+; room for. SS$_NORMAL.
+ACLLEN:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5>
+        MOVC5   #4, ACLBYTES, #0, R2, (R1)
+        MOVL    #SS$_NORMAL, R0
+        RSB
+
+; READACE: copies the ACE after the position into the buffer, 0s after
+; it, and makes the position its. SS$_NORMAL, SS$_ACLEMPTY, SS$_NOMOREACE
+; past the last, SS$_BUFFEROVF if it doesn't fit.
+READACE:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5>
+        PUSHR   #^M<R6, R7>
+        MOVL    R1, R6
+        MOVL    R2, R7
+        MOVL    #SS$_ACLEMPTY, R0
+        TSTL    ACLBYTES
+        BEQL    90$
+        EXTZV   #0, #24, FIB+FIB$L_ACLCTX, R0
+        INCL    R0
+        BSBW    ACLNTH
+        MOVL    #SS$_NOMOREACE, R0
+        TSTL    R4
+        BEQL    90$
+        MOVZBL  (R1), R2
+        MOVL    #SS$_BUFFEROVF, R0
+        CMPL    R2, R7
+        BGTRU   90$
+        MOVL    R4, FIB+FIB$L_ACLCTX
+        MOVC5   R2, (R1), #0, R7, (R6)
+        MOVL    #SS$_NORMAL, R0
+90$:    POPR    #^M<R6, R7>
+        RSB
+
+; ACLNTH: R0 = an ACE's number, from 1. R1 = its address in ACLBUF, R4 =
+; the number, or R1 = past the last and R4 = 0 if the ACL has fewer.
+; Keeps every other register.
+ACLNTH:
+        .JSB_ENTRY  OUTPUT=<R4>
+        PUSHR   #^M<R2, R3>
+        MOVAB   ACLBUF, R1
+        ADDL3   R1, ACLBYTES, R2
+        MOVL    #1, R4
+10$:    CMPL    R1, R2
+        BGEQU   80$
+        CMPL    R4, R0
+        BGEQU   90$
+        MOVZBL  (R1), R3
+        ADDL2   R3, R1
+        INCL    R4
+        BRB     10$
+80$:    CLRL    R4
+90$:    POPR    #^M<R2, R3>
+        RSB
+
+; ACLPOS: FIB$L_ACLCTX's position, R5 = the ACE's number before which an
+; ACE goes: 1 for 0, one past the last for one past it. Uses R0.
+ACLPOS:
+        .JSB_ENTRY  OUTPUT=<R5>
+        PUSHR   #^M<R1, R2>
+        EXTZV   #0, #24, FIB+FIB$L_ACLCTX, R5
+        BNEQ    10$
+        MOVL    #1, R5
+10$:    MOVAB   ACLBUF, R1              ; how many there are
+        ADDL3   R1, ACLBYTES, R2
+        MOVL    #1, R0
+20$:    CMPL    R1, R2
+        BGEQU   30$
+        MOVZBL  (R1), -(SP)
+        ADDL2   (SP)+, R1
+        INCL    R0
+        BRB     20$
+30$:    CMPL    R5, R0
+        BLEQU   40$
+        MOVL    R0, R5
+40$:    POPR    #^M<R1, R2>
+        RSB
+
+; ACLFIND: R1 = an ACE. Looks in ACLBUF for one that matches it: the same
+; type and, for a default protection ACE, nothing else; for an identifier
+; ACE, the same identifiers, size and DEFAULT option, whatever its
+; access and other options; any other the same bytes. R4 = its number,
+; R2 = its address, or R4 = 0. Uses R0, R3.
+ACLFIND:
+        .JSB_ENTRY  OUTPUT=<R2, R4>, SCRATCH=<R3>
+        MOVAB   ACLBUF, R2
+        ADDL3   R2, ACLBYTES, R3
+        MOVL    #1, R4
+10$:    CMPL    R2, R3
+        BGEQU   80$
+        BSBB    ACLMATCH
+        BLBS    R0, 90$
+        MOVZBL  (R2), R0
+        ADDL2   R0, R2
+        INCL    R4
+        BRB     10$
+80$:    CLRL    R4
+90$:    RSB
+
+; ACLMATCH: R1 and R2 = two ACEs. R0 = 1 if they match, as ACLFIND says,
+; else 0. Keeps every other register.
+ACLMATCH:
+        .JSB_ENTRY
+        PUSHR   #^M<R1, R2, R3, R4, R5>
+        CLRL    R5                      ; no match
+        CMPB    ACE$B_TYPE(R1), ACE$B_TYPE(R2)
+        BNEQ    90$
+        CMPB    ACE$B_TYPE(R1), #ACE$C_DIRDEF
+        BEQL    80$
+        CMPB    (R1), (R2)
+        BNEQ    90$
+        MOVZBL  (R1), R0
+        CMPB    ACE$B_TYPE(R1), #ACE$C_KEYID
+        BNEQ    50$
+        CMPL    R0, #ACE$L_KEY
+        BLSSU   50$
+        XORW3   ACE$W_FLAGS(R1), ACE$W_FLAGS(R2), R3
+        BITW    #ACE$M_DEFAULT!^XF, R3
+        BNEQ    90$
+        SUBL2   #ACE$L_KEY, R0          ; the identifiers
+        CMPC3   R0, ACE$L_KEY(R1), ACE$L_KEY(R2)
+        BNEQ    90$
+        BRB     80$
+50$:    CMPC3   R0, (R1), (R2)
+        BNEQ    90$
+80$:    MOVL    #1, R5
+90$:    MOVL    R5, R0
+        POPR    #^M<R1, R2, R3, R4, R5>
+        RSB
+
+; ACLREMOVE: R2 = an ACE in ACLBUF. Takes it out. Keeps every register.
+ACLREMOVE:
+        .JSB_ENTRY
+        PUSHR   #^M<R0, R1, R2, R3, R4, R5>
+        MOVZBL  (R2), R4
+        ADDL3   R2, R4, R1              ; what follows it
+        MOVAB   ACLBUF, R0
+        ADDL2   ACLBYTES, R0
+        SUBL2   R1, R0
+        SUBL2   R4, ACLBYTES
+        MOVC3   R0, (R1), (R2)
+        MOVL    #1, ACLDIRTY
+        POPR    #^M<R0, R1, R2, R3, R4, R5>
+        RSB
+
+; ACLINSERT: R1 = an ACE, R5 = the number of the one it goes before, at
+; most one past the last. Puts it there. R0 = SS$_NORMAL, or SS$_ACLFULL
+; if ACLBUF has no room. Keeps every other register.
+ACLINSERT:
+        .JSB_ENTRY
+        PUSHR   #^M<R1, R2, R3, R4, R5, R6, R7>
+        MOVL    R1, R6
+        MOVZBL  (R6), R7                ; its size
+        ADDL3   ACLBYTES, R7, R0
+        CMPL    R0, #ACLMAX
+        BGTRU   80$
+        MOVL    R5, R0
+        BSBW    ACLNTH                  ; where: R1, or the end
+        MOVAB   ACLBUF, R0              ; what moves up
+        ADDL2   ACLBYTES, R0
+        SUBL2   R1, R0
+        ADDL3   R1, R7, R2
+        PUSHL   R1
+        MOVC3   R0, (R1), (R2)
+        MOVL    (SP)+, R1
+        MOVC3   R7, (R6), (R1)
+        ADDL2   R7, ACLBYTES
+        MOVL    #1, ACLDIRTY
+        MOVL    #SS$_NORMAL, R0
+        BRB     90$
+80$:    MOVL    #SS$_ACLFULL, R0
+90$:    POPR    #^M<R1, R2, R3, R4, R5, R6, R7>
+        RSB
 
 ; NEXTATR: R6 = a descriptor in an attribute list, R7 = how many more
 ; may follow, plus one. R8 = its entry in ATRS, or 0 past the last; R9 =

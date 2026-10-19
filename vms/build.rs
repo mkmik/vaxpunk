@@ -23,7 +23,8 @@
 //! the CA bundle SSL3 trusts (c.rs); in [SYSMGR], the files in sysmgr/,
 //! as text, and in [SYSEXE] sysexe/*.com; in [SYSHLP], a help library
 //! NAME.HLB for each syshlp/NAME.hlp, which vlib makes; and in [SYSEXE],
-//! SYSUAF.DAT, the users, SYSTEM and DEFAULT.
+//! SYSUAF.DAT, the users, SYSTEM and DEFAULT, and RIGHTSLIST.DAT, the
+//! rights database: their UIC identifiers and the environmental ones.
 
 use std::collections::HashMap;
 use std::env;
@@ -40,6 +41,7 @@ fn main() {
         "cld",
         LIB,
         "sysuaf.fdl",
+        "rightslist.fdl",
         "uafhash.rs",
         "../crosstools/vtools/bliss",
         CDEMO,
@@ -545,13 +547,53 @@ fn disk(path: &Path, images: &[(String, Vec<u8>)]) {
             privileges: 1 << 15 | 1 << 20,
             password: b"",
         },
-    ]
-    .map(|u| u.record());
-    let (fid, _) = ok(vol.load_indexed(&fdl.spec, &users, "[SYSEXE]SYSUAF.DAT"));
+    ];
+    let records = users.each_ref().map(|u| u.record());
+    let (fid, _) = ok(vol.load_indexed(&fdl.spec, &records, "[SYSEXE]SYSUAF.DAT"));
     let mut attrs = ok(vol.attributes(fid));
     attrs.protection = 0xff88; // (S:RWE,O:RWE,G,W): SYSTEM's alone
     ok(vol.set_attributes(fid, &attrs));
+    // RIGHTSLIST.DAT, VMS's rights database (ADR-0040): the maintenance
+    // record, with the next general identifier, the environmental
+    // identifiers, and a UIC identifier for each user. Anyone may read it.
+    let fdl = ods_image::rms::fdl::parse(include_str!("rightslist.fdl"))
+        .unwrap_or_else(|e| panic!("rightslist.fdl: {e:?}"));
+    let mut rights = vec![identifier(0, b"$$MAINTENANCE_RECORD")];
+    rights[0].resize(64, 0);
+    rights[0][48..50].copy_from_slice(&0x0101u16.to_le_bytes()); // KGB$K_LEVEL1
+    rights[0][60..64].copy_from_slice(&0x8001_0000u32.to_le_bytes()); // KGB$L_NEXT_ID
+    for u in &users {
+        rights.push(identifier(
+            (u.uic[0] as u32) << 16 | u.uic[1] as u32,
+            u.name,
+        ));
+    }
+    let environmental = [
+        &b"BATCH"[..],
+        b"DIALUP",
+        b"INTERACTIVE",
+        b"LOCAL",
+        b"NETWORK",
+        b"REMOTE",
+    ];
+    for (i, name) in environmental.into_iter().enumerate() {
+        rights.push(identifier(0x8000_0001 + i as u32, name));
+    }
+    let (fid, _) = ok(vol.load_indexed(&fdl.spec, &rights, "[SYSEXE]RIGHTSLIST.DAT"));
+    let mut attrs = ok(vol.attributes(fid));
+    attrs.protection = 0xee00; // (S:RWED,O:RWED,G:R,W:R)
+    ok(vol.set_attributes(fid, &attrs));
     ok(vol.flush());
+}
+
+/// An identifier's record in RIGHTSLIST.DAT, $KGBDEF's: its value, no
+/// attributes, a holder of 0 and its name, padded with blanks.
+fn identifier(id: u32, name: &[u8]) -> Vec<u8> {
+    let mut r = vec![0u8; 48];
+    r[0..4].copy_from_slice(&id.to_le_bytes());
+    r[16..48].fill(b' ');
+    r[16..16 + name.len()].copy_from_slice(name);
+    r
 }
 
 include!("uafhash.rs");

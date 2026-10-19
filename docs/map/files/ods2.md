@@ -178,5 +178,7 @@ I/O routine in an IRP of its own
 ([ADR-0015](../../adr/0015-file-system-io-through-the-disk-driver.md)).
 The corners cut are in PRD-0003's backlog: a cluster is a block and each
 bitmap one block, so a volume holds at most 4,096 blocks and files; no
-extension headers; directories rewritten whole; no version limits. ACLs
-in headers wait for `t8y:/exec/acls`, a non-goal of Milestone 1.
+extension headers; directories rewritten whole; no version limits. A
+header keeps an ACL between its ident and map areas, as ODS-2's, which
+the XQP checks and changes (`t8y:/exec/acls`); one too long for the
+header is `SS$_ACLFULL`.

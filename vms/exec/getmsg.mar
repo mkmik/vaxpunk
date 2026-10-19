@@ -1257,6 +1257,82 @@ MESSAGES:
         .ASCIC  "SYSTEM"
         .ASCIC  "NOPRIV"
         .ASCIC  "insufficient privilege or object protection violation"
+        .LONG   SS$_ACEIDMATCH
+        .ASCIC  "SYSTEM"
+        .ASCIC  "ACEIDMATCH"
+        .ASCIC  "ACE identifier match"
+        .LONG   SS$_NOMOREITEMS
+        .ASCIC  "SYSTEM"
+        .ASCIC  "NOMOREITEMS"
+        .ASCIC  "no more items to be returned"
+        .LONG   SS$_ACLEMPTY
+        .ASCIC  "SYSTEM"
+        .ASCIC  "ACLEMPTY"
+        .ASCIC  "access control list is empty"
+        .LONG   SS$_NOENTRY
+        .ASCIC  "SYSTEM"
+        .ASCIC  "NOENTRY"
+        .ASCIC  "access control entry not found"
+        .LONG   SS$_NOMOREACE
+        .ASCIC  "SYSTEM"
+        .ASCIC  "NOMOREACE"
+        .ASCIC  "access control list is exhausted"
+        .LONG   SS$_RIGHTSFULL
+        .ASCIC  "SYSTEM"
+        .ASCIC  "RIGHTSFULL"
+        .ASCIC  "rights list is full"
+        .LONG   SS$_ACLFULL
+        .ASCIC  "SYSTEM"
+        .ASCIC  "ACLFULL"
+        .ASCIC  "ACL is full"
+        .LONG   SS$_NOSUCHOBJECT
+        .ASCIC  "SYSTEM"
+        .ASCIC  "NOSUCHOBJECT"
+        .ASCIC  "specified object does not exist"
+        .LONG   SS$_BADACL
+        .ASCIC  "SYSTEM"
+        .ASCIC  "BADACL"
+        .ASCIC  "ACL is corrupt"
+        .LONG   SS$_ACEEXISTS
+        .ASCIC  "SYSTEM"
+        .ASCIC  "ACEEXISTS"
+        .ASCIC  "ACE already exists in ACL"
+        .LONG   SS$_NORIGHTSDB
+        .ASCIC  "SYSTEM"
+        .ASCIC  "NORIGHTSDB"
+        .ASCIC  "rights database file not found"
+        .LONG   SS$_NOCLASSSUPPORT
+        .ASCIC  "SYSTEM"
+        .ASCIC  "NOCLASSSUPPORT"
+        .ASCIC  "classification not supported on the selected object"
+        .LONG   SS$_BADACLCTX
+        .ASCIC  "SYSTEM"
+        .ASCIC  "BADACLCTX"
+        .ASCIC  "ACL context has been corrupted"
+        .LONG   SS$_IVACL
+        .ASCIC  "SYSTEM"
+        .ASCIC  "IVACL"
+        .ASCIC  "invalid access control list entry syntax"
+        .LONG   SS$_NOSUCHID
+        .ASCIC  "SYSTEM"
+        .ASCIC  "NOSUCHID"
+        .ASCIC  "unknown rights identifier"
+        .LONG   SS$_IVIDENT
+        .ASCIC  "SYSTEM"
+        .ASCIC  "IVIDENT"
+        .ASCIC  "invalid identifier format"
+        .LONG   SS$_DUPIDENT
+        .ASCIC  "SYSTEM"
+        .ASCIC  "DUPIDENT"
+        .ASCIC  "duplicate identifier"
+        .LONG   SS$_NOACLSUPPORT
+        .ASCIC  "SYSTEM"
+        .ASCIC  "NOACLSUPPORT"
+        .ASCIC  "ACLs not supported on selected object"
+        .LONG   SS$_NOCLASS
+        .ASCIC  "SYSTEM"
+        .ASCIC  "NOCLASS"
+        .ASCIC  "no matching object class was located"
         .LONG   SS$_NOTALLPRIV
         .ASCIC  "SYSTEM"
         .ASCIC  "NOTALLPRIV"

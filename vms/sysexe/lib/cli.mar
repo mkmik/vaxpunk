@@ -72,6 +72,7 @@ TYP_REST = 3
 TYP_QUOTED = 4
 TYP_KEYWORD = 5
 TYP_UIC = 7                             ; a word, [g,m] with its comma
+TYP_ACL = 8                             ; (ace) or ((ace),...), each ACE a value, as typed
 OP_NAME = 1                             ; DISALLOW's operators
 OP_NEG = 2
 OP_NOT = 3
@@ -957,11 +958,15 @@ GIVE:
 40$:    RSB
 
 ; VALUES: R9 = a slot. Takes a value, or a list of them in parentheses,
-; with R6 past.
+; with R6 past. A $ACL's is (ace), a value, or ((ace),...), each one.
 VALUES: CMPL    R6, R7
         BLSSU   5$
         ERROR0  CLI$_VALREQ
-5$:     CMPB    (R6), #^A"("
+5$:     MOVL    SLT$L_ENT(R9), R1
+        CMPB    ENT$B_TYPE(R1), #TYP_ACL
+        BNEQ    7$
+        BRW     ACLS
+7$:     CMPB    (R6), #^A"("
         BEQL    10$
         BSBW    VALUE
         RSB
@@ -985,6 +990,69 @@ VALUES: CMPL    R6, R7
         INCL    R6
         BRB     20$
 50$:    ERROR0  CLI$_NOPAREN
+
+; ACLS: R9 = a $ACL's slot, R6 = its value: (ace) or ((ace),...).
+; Takes each ACE, with its parentheses, as a value, with R6 past.
+ACLS:   BSBW    SKIP
+        CMPL    R6, R7
+        BGEQU   80$
+        CMPB    (R6), #^A"("
+        BNEQ    80$
+        MOVL    R6, R1                  ; a list?
+        INCL    R1
+10$:    CMPL    R1, R7
+        BGEQU   80$
+        CMPB    (R1), #^A" "
+        BNEQ    15$
+        INCL    R1
+        BRB     10$
+15$:    CMPB    (R1), #^A"("
+        BEQL    20$
+        BSBW    PARENS                  ; one ACE
+        RSB
+20$:    INCL    R6
+30$:    BSBW    SKIP
+        BSBW    PARENS
+        BSBW    SKIP
+        CMPL    R6, R7
+        BGEQU   80$
+        CMPB    (R6), #^A")"
+        BNEQ    40$
+        INCL    R6
+        RSB
+40$:    CMPB    (R6), #44
+        BNEQ    80$
+        MOVL    SLT$L_ENT(R9), R1
+        BBS     #ENT_V_LIST, ENT$B_FLAGS(R1), 50$
+        ERROR0  CLI$_ONEVAL
+50$:    MOVZBL  #44, R0
+        BSBW    SETSEP
+        INCL    R6
+        BRB     30$
+80$:    ERROR0  CLI$_NOPAREN
+
+; PARENS: R6 = a (, R9 = a slot. Takes the text up to the ) that closes
+; it as a value, with R6 past it. Uses R0-R3.
+PARENS:
+        .JSB_ENTRY  OUTPUT=<R6>, SCRATCH=<R2, R3>
+        CMPL    R6, R7
+        BGEQU   80$
+        CMPB    (R6), #^A"("
+        BNEQ    80$
+        MOVL    R6, R1                  ; its start
+        CLRL    R3                      ; how deep
+10$:    CMPL    R6, R7
+        BGEQU   80$
+        CMPB    (R6), #^A"("
+        BNEQ    20$
+        INCL    R3
+20$:    CMPB    (R6)+, #^A")"
+        BNEQ    10$
+        SOBGTR  R3, 10$
+        SUBL3   R1, R6, R2
+        BSBW    ADDVAL
+        RSB
+80$:    ERROR0  CLI$_NOPAREN
 
 ; VALUE: R9 = a slot. Takes one value for it, as its type says, with R6
 ; past. Keeps R9.

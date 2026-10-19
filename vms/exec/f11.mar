@@ -16,7 +16,7 @@
 ; blocks through the header's map, and a directory's records, with
 ; wildcards. f11wrt.mar writes them. FIL$CHKPRO checks a process's
 ; access to a file or a volume by its owner and protection, as the XQP
-; does. RMS (rms.mar), the image activator
+; does, and FIL$CHKHDR a file's by its ACL first (f11acl.mar). RMS (rms.mar), the image activator
 ; and the services here call them holding the file system's lock,
 ; FIL$LOCK, as the XQP holds its volume's: it keeps their buffers,
 ; F11$AB_IRP, and F11$GL_VCB, the volume they work on, to one process at a
@@ -51,7 +51,7 @@
         .EXTERNAL EXE$ALONONPAGED, EXE$DEANONPGDSIZ, RMS$LOCATE, MD$IO
         .EXTERNAL IOC$ALLOCIRP, IOC$REQCOM, IOC$AB_DKA0, IOC$AB_DKB0, IOC$AB_MDA0
         .EXTERNAL EXE$PROBER_DSC, RMS$VOLIDLE, SCH$GL_CURPCB, SCH$WAIT, SCH$WAKEPCB
-        .EXTERNAL XQP$GL_IRP
+        .EXTERNAL XQP$GL_IRP, FIL$ACLCHK
 
 BLOCK = 512
 MAXREAD = 127                           ; blocks a READLBLK reads, below 64 KB
@@ -833,11 +833,16 @@ FIL$CHKPRO::
 
 ; FIL$CHKHDR: R0 = the access wanted, $ARMDEF's bits, R1 = a file header
 ; on F11$GL_VCB's volume. FIL$CHKPRO with the volume's owner and
-; protection, for the access alone, then with the file's. R0 = SS$_NORMAL
-; or SS$_NOPRIV. Keeps every other register.
+; protection, for the access alone, then the file's ACL (FIL$ACLCHK), as
+; VMS's XQP: an identifier ACE that matches and grants the access gives
+; it; one that doesn't leaves only the system and owner categories of the
+; file's protection, and the privileges; with none, FIL$CHKPRO with the
+; file's owner and protection. A damaged ACL gives access only to BYPASS,
+; and READALL's reads. R0 = SS$_NORMAL or SS$_NOPRIV. Keeps every other
+; register.
 FIL$CHKHDR::
         .JSB_ENTRY
-        PUSHR   #^M<R1, R2, R3>
+        PUSHR   #^M<R1, R2, R3, R4>
         MOVL    R0, R3
         PUSHL   R1
         MOVL    F11$GL_VCB, R2
@@ -848,10 +853,25 @@ FIL$CHKHDR::
         MOVL    (SP)+, R1
         BLBC    R0, 90$
         MOVL    R3, R0
+        BSBW    FIL$ACLCHK
         MOVZWL  FH2$W_FILEPROT(R1), R2
+        CASEL   R0, #0, #3
+10$:    .WORD   40$-10$, 20$-10$, 30$-10$, 50$-10$
+20$:    MOVL    #SS$_NORMAL, R0         ; the ACE grants it
+        BRB     90$
+30$:    BISW2   #^XFF00, R2             ; the ACE doesn't: the group and the world may not
+40$:    MOVL    R3, R0
         MOVL    FH2$L_FILEOWNER(R1), R1
         BSBW    FIL$CHKPRO
-90$:    POPR    #^M<R1, R2, R3>
+        BRB     90$
+50$:    MOVL    SCH$GL_CURPCB, R4       ; damaged
+        MOVL    #SS$_NORMAL, R0
+        IFPRIV  BYPASS, 90$
+        BITL    #^C<ARM$M_READ>, R3
+        BNEQ    60$
+        IFPRIV  READALL, 90$
+60$:    MOVL    #SS$_NOPRIV, R0
+90$:    POPR    #^M<R1, R2, R3, R4>
         RSB
 
 ; FIL$SEARCHDIR: R3 = a directory's header, R6 = a pattern, "NAME.TYPE"

@@ -1,0 +1,44 @@
+        .TITLE  IDENT   An identifier's text
+        .IDENT  /V0.1/
+;
+; SHOW SECURITY, DIRECTORY and SET show an owner or an identifier as VMS
+; does, as $FORMAT_ACL writes one in an ACE: the name of a general
+; identifier, [name] for a UIC whose identifier has one, else [g,m] in
+; octal or %X and hex. ID_TEXT has $FORMAT_ACL write an ACE of that one
+; identifier and takes it from the text. build.rs links this module into
+; each image, as it does lib/print.mar.
+; vaxpunk: VMS's programs have $FAO's !%I.
+;
+        .LIBRARY "starlet.mlb"
+        $SSDEF
+        $ACEDEF
+
+PREFIX = 12                             ; (IDENTIFIER=
+SUFFIX = 13                             ; ,ACCESS=NONE)
+
+        .PSECT  IDENT_DATA, NOEXE, WRT, LONG
+ACE:    .BYTE   12, ACE$C_KEYID         ; an identifier ACE of it
+        .WORD   0
+        .LONG   0
+ID:     .LONG   0
+ACEDSC: .LONG   12
+        .ADDRESS ACE
+TEXTDSC:.LONG   64                      ; its text
+        .ADDRESS FMTTEXT
+TEXTLEN:.WORD   0
+FMTTEXT:   .BLKB   64
+
+        .PSECT  IDENT_CODE, EXE, LONG
+; ID_TEXT id, buffer: writes the identifier id's text in the buffer,
+; 48 bytes at most. R0 = its length.
+        .ENTRY  ID_TEXT, ^M<R2, R3, R4, R5>
+        MOVL    4(AP), ID
+        $FORMAT_ACL_S ACLENT=ACEDSC, ACLLEN=TEXTLEN, ACLSTR=TEXTDSC
+        MOVZWL  TEXTLEN, R0
+        SUBL2   #PREFIX+SUFFIX, R0      ; between them
+        PUSHL   R0
+        MOVC3   R0, FMTTEXT+PREFIX, @8(AP)
+        MOVL    (SP)+, R0
+        RET
+
+        .END

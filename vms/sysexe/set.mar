@@ -20,6 +20,16 @@
 ; - SET VOLUME device with /LABEL=label, /OWNER_UIC=uic, /PROTECTION and
 ;   /FILE_PROTECTION=(code[,...]), which FIL$SETVOLUME writes in the
 ;   volume's home blocks, in kernel mode, which takes CMKRNL.
+; - SET SECURITY object[,...], with wildcards: each file's owner,
+;   /OWNER=uic or identifier, protection, /PROTECTION=(code[,...]), and
+;   ACL, through $SET_SECURITY (docs/adr/0040-acls-in-file-headers-and-
+;   rights-identifiers.md): /ACL=(ace[,...]) adds the ACEs at its top,
+;   with /AFTER=ace after that one, with /DELETE deletes them, or all but
+;   the protected ones without ACEs, all with /DELETE=ALL, with
+;   /REPLACE=(ace[,...]) puts those in their place; /LIKE=NAME=file gives
+;   it that one's owner, protection and ACL, /DEFAULT the default
+;   protection and an ACL of the protected ACEs alone; /LOG says so. The
+;   ACEs' text is $PARSE_ACL's; a hidden one may not be given.
 ; - SET TERMINAL [device], which reads the terminal's characteristics
 ;   (lib/term.mar), changes those its qualifiers name, and sets them with
 ;   IO$_SETMODE, or with /PERMANENT the permanent ones, which it reads,
@@ -30,7 +40,9 @@
 ;   ESCAPE, LINE_EDITING, LOWERCASE, PASTHRU, TAB and WRAP, /INSERT or
 ;   /OVERSTRIKE, the line editing's mode, and /SPEED=rate or
 ;   /SPEED=(input,output), each one of TERM_SPEEDS.
-; ponytail: one file, the first a wildcard finds, one directory, one
+; ponytail: SET SECURITY's class FILE alone, its /DEFAULT gives no
+; directory's default ACEs or protection, and an owner the file keeps;
+; one file, the first a wildcard finds, for the others, one directory, one
 ; volume; no /LOG or /CONFIRM; /ATTRIBUTE has no dates or HBK; a time is
 ; absolute, TODAY+1- and the like aren't; SET VOLUME has no
 ; /[NO]ERASE_ON_DELETE, /[NO]HIGHWATER_MARKING or the qualifiers VMS's
@@ -42,6 +54,7 @@
         .LIBRARY "starlet.mlb"
         .LIBRARY "sysexe.mlb"
         $SSDEF
+        $RMSDEF
         $CLIMSGDEF
         $FABDEF
         $NAMDEF
@@ -53,6 +66,8 @@
         $TT2DEF
         $TT3DEF
         $DVIDEF
+        $ACEDEF
+        $OSSDEF
 
         .EXTERNAL PRV_LOOKUP, LIB$SIGNAL, PUT_LINE, GET_PROT, GET_UIC
         .EXTERNAL TERM_SENSE, TERM_FIND, TERM_TYPE, TERM_SPEEDS
@@ -280,6 +295,106 @@ NOTSETTXT:
 INVTXT: .ASCII  "%SET-E-INVQUAVAL, value '"     ; 25
         .ASCII  "' invalid for /"               ; 15
         .ASCII  " qualifier"                    ; 10
+; SET SECURITY's
+SECCLS: .LONG   16                      ; /CLASS, FILE by default
+        .ADDRESS SECCLSBUF
+SECCLSBUF:
+        .BLKB   16
+FILECLS:.ASCID  "FILE"
+NACE = 64                               ; ACEs /ACL or /REPLACE take, at most
+ACEBUF: .BLKB   NACE*256                ; /ACL's ACEs, 256 bytes each
+NACES:  .LONG   0
+REPBUF: .BLKB   NACE*256                ; /REPLACE's
+NREPS:  .LONG   0
+AFTERACE:                               ; /AFTER's
+        .BLKB   256
+SECWHAT:.LONG   0                       ; S_ bits: what it changes
+NEWOWNER:                               ; /OWNER's
+        .LONG   0
+NEWPROT:.WORD   0, 0                    ; /PROTECTION's: the bits it sets, and those it keeps
+CURPROT:.LONG   0                       ; a file's protection
+LIKEOWNER:                              ; /LIKE's file's owner,
+        .LONG   0
+LIKEPROT:                               ; protection,
+        .LONG   0
+LIKELEN:.WORD   0                       ; and ACL
+LIKEACL:.BLKB   512
+LIKEITEMS:                              ; what $GET_SECURITY reads of it
+        .WORD   4, OSS$_OWNER
+        .ADDRESS LIKEOWNER, 0
+        .WORD   4, OSS$_PROTECTION
+        .ADDRESS LIKEPROT, 0
+        .WORD   512, OSS$_ACL_READ
+        .ADDRESS LIKEACL, LIKELEN
+        .LONG   0
+PROTITEMS:                              ; and of a file's protection
+        .WORD   4, OSS$_PROTECTION
+        .ADDRESS CURPROT, 0
+        .LONG   0
+SECITEMS:                               ; $SET_SECURITY's items, made for a file
+        .BLKB   <<NACE*2>+8>*12+4
+SECCTX: .LONG   0                       ; the ACL's position
+ACETXT: .LONG   255                     ; an ACE's text, a value
+        .ADDRESS ACETXTBUF
+ACETXTBUF:
+        .BLKB   255
+ACEDSC: .LONG   256                     ; an ACE's slot
+        .ADDRESS 0
+ERRPOS: .WORD   0                       ; where $PARSE_ACL stopped
+OBJDSC: .LONG   0                       ; the object's name, the file's resultant string
+        .ADDRESS RES
+FMTDSC: .LONG   255                     ; an ACE's text, $FORMAT_ACL's
+        .ADDRESS FMTBUF
+FMTLEN: .WORD   0
+FMTBUF: .BLKB   255
+FMTWIDTH:
+        .WORD   80
+FMTINDENT:
+        .WORD   4
+NEWLINE:.ASCID  <10>
+DEFPROT = ^XFA00                        ; (S:RWED,O:RWED,G:RE,W): VMS's default
+S_OWNER = 0                             ; SECWHAT's bits
+S_PROT = 1
+S_ACL = 2                               ; ACEs given
+S_DELETE = 3
+S_ALL = 4                               ; /DELETE=ALL
+S_REPLACE = 5
+S_AFTER = 6
+S_LIKE = 7
+S_DEFAULT = 8
+S_LOG = 9
+ACLNAME:.ASCID  "ACL"                   ; the qualifiers whose values are ACEs
+REPNAME:.ASCID  "REPLACE"
+AFTERNAME:
+        .ASCID  "AFTER"
+OWNERDSC:                               ; (IDENTIFIER=owner), or /LIKE's file
+        .LONG   0
+        .ADDRESS FMTBUF
+IDPREFIX:
+        .ASCII  "(IDENTIFIER="
+OPENOUTTXT:
+        .ASCIC  "%SET-E-OPENOUT, error opening "
+ASOUTPUT:
+        .ASCIC  " as output"
+SYNTAXTXT:
+        .ASCIC  "%SET-F-SYNTAX, error parsing '"
+QUOTE:  .ASCIC  "'"
+MODIFIEDTXT:
+        .ASCIC  "%SET-I-MODIFIED, "
+MODIFIED2TXT:
+        .ASCIC  " modified"
+WRITEERRTXT:
+        .ASCIC  "%SET-F-WRITEERR, error writing "
+OPENINTXT:
+        .ASCIC  "%SET-E-OPENIN, error opening "
+ASINPUT:
+        .ASCIC  " as input"
+NOSUCHTXT:
+        .ASCIC  "%SET-W-NOSUCHACE, ACE for object "
+NOSUCH2TXT:
+        .ASCIC  ", does not exist"
+SECFAILED:                              ; the worst status, for the image's exit
+        .LONG   SS$_NORMAL
 VT100:  .ASCID  "VT100"
 VT102:  .ASCID  "VT102"
 VT200:  .ASCID  "VT200"                 ; to VT500, 2 to 5 after
@@ -287,8 +402,12 @@ VT200:  .ASCID  "VT200"                 ; to VT500, 2 to 5 after
         .PSECT  CODE, EXE, LONG
         .ENTRY  START, ^M<R2, R3, R4, R5, R6>
         PRESENT "OPTION.TERMINAL"
-        BLBC    R0, 5$
+        BLBC    R0, 4$
         BRW     SETTERM
+4$:     PRESENT "OPTION.SECURITY"
+        BLBC    R0, 5$
+        CALLS   #0, SETSEC
+        RET
 5$:     PRESENT "OPTION.PROCESS"
         BLBS    R0, 10$
         BRW     FILE
@@ -1046,5 +1165,560 @@ VOLPROT:
         MOVW    PROT0, (R3)
         XORW3   PROT0, PROTF, 2(R3)
 90$:    RSB
+
+; SETSEC: SET SECURITY: takes the qualifiers, then changes each file
+; the parameter's values name, wildcards too. R0 = the worst status,
+; with STS$M_INHIB_MSG once written.
+        .ENTRY  SETSEC, ^M<R2, R3, R4, R5, R6>
+        GETVALUE "CLASS", SECCLS, SECCLS
+        BLBC    R0, 10$
+        MOVL    #SS$_NOCLASS, R0
+        CMPW    SECCLS, #4
+        BNEQ    5$
+        CMPL    SECCLSBUF, #^A/FILE/
+        BEQL    10$
+5$:     RET
+10$:    BSBW    SECQUALS
+        BLBS    R0, 20$
+        RET
+20$:    GETVALUE "OBJECT", SPECDSC, SPECDSC
+        BLBC    R0, 80$
+        MOVB    SPECDSC, FAB+FAB$B_FNS
+        MOVW    #255, SPECDSC
+        $PARSE  FAB=FAB
+        BLBC    R0, 60$
+30$:    $SEARCH FAB=FAB
+        BLBC    R0, 50$
+        BSBW    SECONE
+        BRB     30$
+50$:    CMPL    R0, #RMS$_NMF
+        BEQL    20$
+60$:    PUSHL   R0                      ; %SET-E-OPENOUT
+        BSBW    SAYSTART
+        MOVAB   OPENOUTTXT, R1
+        BSBW    SAYC
+        MOVZBL  NAM+NAM$B_ESL, R2
+        MOVAB   EXP, R1
+        BSBW    SAYS
+        MOVAB   ASOUTPUT, R1
+        BSBW    SAYC
+        BSBW    SAYEND
+        MOVL    (SP)+, R0
+        BSBW    SAYMSG
+        MOVL    #SS$_ABORT!INHIB, SECFAILED
+        BRB     20$
+80$:    MOVL    SECFAILED, R0
+        RET
+
+; SECQUALS: takes SET SECURITY's qualifiers into SECWHAT and the ACEs,
+; owner and protection they give. R0 = SS$_NORMAL, or an error, written.
+; Uses R0-R6.
+SECQUALS:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5, R6>
+        CLRL    SECWHAT
+        PRESENT "LOG"
+        BLBC    R0, 2$
+        BISL2   #1@S_LOG, SECWHAT
+2$:     PRESENT "OWNER"
+        BLBC    R0, 10$
+        BISL2   #1@S_OWNER, SECWHAT
+        MOVW    #255, ACETXT
+        GETVALUE "OWNER", ACETXT, ACETXT
+        BLBC    R0, 90$
+        BSBW    OWNERID
+        BLBC    R0, 90$
+10$:    PRESENT "PROTECTION"
+        BLBC    R0, 20$
+        BISL2   #1@S_PROT, SECWHAT
+        MOVAQ   VPROTECTION, R2
+        MOVAL   NEWPROT, R3
+        BSBW    VOLPROT
+        BLBC    R0, 90$
+20$:    PRESENT "DEFAULT"
+        BLBC    R0, 25$
+        BISL2   #1@S_DEFAULT, SECWHAT
+25$:    PRESENT "DELETE"
+        BLBC    R0, 30$
+        BISL2   #1@S_DELETE, SECWHAT
+        PRESENT "DELETE.ALL"
+        BLBC    R0, 30$
+        BISL2   #1@S_ALL, SECWHAT
+30$:    MOVAB   ACEBUF, R6              ; /ACL's ACEs
+        MOVAQ   ACLNAME, R5
+        BSBW    ACES
+        BLBC    R0, 90$
+        MOVL    R1, NACES
+        BEQL    35$
+        BISL2   #1@S_ACL, SECWHAT
+        BRB     40$
+35$:    PRESENT "ACL"                   ; /ACL alone: with /DELETE only
+        BLBC    R0, 40$
+        BBS     #S_DELETE, SECWHAT, 40$
+        PRINT   "%CLI-W-VALREQ, missing qualifier or keyword value - supply all required values"
+        MOVL    #CLI$_VALREQ!INHIB, R0
+        RSB
+40$:    MOVAB   REPBUF, R6              ; /REPLACE's
+        MOVAQ   REPNAME, R5
+        BSBW    ACES
+        BLBC    R0, 90$
+        MOVL    R1, NREPS
+        BEQL    45$
+        BISL2   #1@S_REPLACE, SECWHAT
+45$:    MOVAB   AFTERACE, R6            ; /AFTER's
+        MOVAQ   AFTERNAME, R5
+        BSBW    ACES
+        BLBC    R0, 90$
+        TSTL    R1
+        BEQL    50$
+        BISL2   #1@S_AFTER, SECWHAT
+50$:    PRESENT "LIKE"
+        BLBC    R0, 80$
+        BISL2   #1@S_LIKE, SECWHAT
+        BSBW    LIKE
+        RSB
+80$:    MOVL    #SS$_NORMAL, R0
+90$:    RSB
+
+; ACES: R5 = a qualifier's name, a descriptor, R6 = where its ACEs go,
+; 256 bytes each. Parses each of its values with $PARSE_ACL. R1 = how
+; many. R0 = SS$_NORMAL, or an error, written as VMS's SET writes it:
+; %SET-F-SYNTAX with the text from where $PARSE_ACL stopped, then why.
+; A hidden ACE is %SET-E-NOHIDDEN. Uses R0-R6.
+ACES:
+        .JSB_ENTRY  OUTPUT=<R1>, SCRATCH=<R2, R3, R4, R5, R6>
+        PUSHL   #0                      ; how many
+10$:    MOVW    #255, ACETXT
+        PUSHAW  ACETXT
+        PUSHAQ  ACETXT
+        PUSHL   R5
+        CALLS   #3, G^CLI$GET_VALUE
+        BLBC    R0, 80$
+        CMPL    (SP), #NACE
+        BGEQU   10$
+        MOVL    R6, ACEDSC+4
+        $PARSE_ACL_S ACLSTR=ACETXT, ACLENT=ACEDSC, ERRPOS=ERRPOS
+        BLBC    R0, 50$
+        BBC     #ACE$V_HIDDEN, ACE$W_FLAGS(R6), 20$
+        PRINT   "%SET-E-NOHIDDEN, cannot modify hidden ACEs"
+        MOVL    #SS$_ABORT!INHIB, R0
+        BRB     90$
+20$:    ADDL2   #256, R6
+        INCL    (SP)
+        BRB     10$
+50$:    PUSHL   R0                      ; %SET-F-SYNTAX
+        BSBW    SAYSTART
+        MOVAB   SYNTAXTXT, R1
+        BSBW    SAYC
+        MOVZWL  ERRPOS, R0
+        MOVZWL  ACETXT, R2
+        SUBL2   R0, R2
+        MOVAB   ACETXTBUF[R0], R1
+        BSBW    SAYS
+        MOVAB   QUOTE, R1
+        BSBW    SAYC
+        BSBW    SAYEND
+        MOVL    (SP)+, R0
+        BSBW    SAYMSG
+        MOVL    #SS$_ABORT!INHIB, R0
+        BRB     90$
+80$:    MOVL    #SS$_NORMAL, R0
+90$:    MOVL    (SP)+, R1
+        RSB
+
+; OWNERID: ACETXT = /OWNER's value: a UIC, [g,m], an identifier's name,
+; or [name]. Puts its identifier in NEWOWNER, by $PARSE_ACL. R0 =
+; SS$_NORMAL, or %SET-F-SYNTAX, written. Uses R0-R5.
+OWNERID:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5>
+        MOVAB   FMTBUF, R3              ; (IDENTIFIER=value)
+        MOVC3   #12, IDPREFIX, (R3)
+        MOVZWL  ACETXT, R0
+        MOVC3   R0, ACETXTBUF, (R3)
+        MOVB    #41, (R3)+              ; )
+        MOVAB   FMTBUF, R1
+        SUBL3   R1, R3, R0
+        MOVL    R0, OWNERDSC
+        MOVAB   AFTERACE, ACEDSC+4      ; scratch, until /AFTER's
+        $PARSE_ACL_S ACLSTR=OWNERDSC, ACLENT=ACEDSC
+        BLBC    R0, 50$
+        MOVL    AFTERACE+ACE$L_KEY, R0
+        CMPL    R0, #-1                 ; not *
+        BEQL    50$
+        MOVL    R0, NEWOWNER
+        MOVL    #SS$_NORMAL, R0
+        RSB
+50$:    BSBW    SAYSTART
+        MOVAB   SYNTAXTXT, R1
+        BSBW    SAYC
+        MOVZWL  ACETXT, R2
+        MOVAB   ACETXTBUF, R1
+        BSBW    SAYS
+        MOVAB   QUOTE, R1
+        BSBW    SAYC
+        BSBW    SAYEND
+        MOVL    #SS$_ABORT!INHIB, R0
+        RSB
+
+; LIKE: /LIKE's keywords: NAME=file, the file whose owner, protection and
+; ACL the files get, which $GET_SECURITY reads, and CLASS=FILE. R0 =
+; SS$_NORMAL, or an error, written. Uses R0-R5.
+LIKE:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5>
+        MOVW    #255, ACETXT
+        GETVALUE "LIKE.CLASS", ACETXT, ACETXT
+        BLBC    R0, 10$
+        MOVL    #SS$_NOCLASS, R0
+        CMPW    ACETXT, #4
+        BNEQ    90$
+        CMPL    ACETXTBUF, #^A/FILE/
+        BNEQ    90$
+10$:    MOVW    #255, ACETXT
+        GETVALUE "LIKE.NAME", ACETXT, ACETXT
+        BLBS    R0, 20$
+        PRINT   "%CLI-W-VALREQ, missing qualifier or keyword value - supply all required values"
+        MOVL    #CLI$_VALREQ!INHIB, R0
+        RSB
+20$:    MOVZWL  ACETXT, OWNERDSC        ; the file's name
+        MOVAB   ACETXTBUF, OWNERDSC+4
+        CLRW    LIKELEN
+        $GET_SECURITY_S CLSNAM=FILECLS, OBJNAM=OWNERDSC, ITMLST=LIKEITEMS
+        BLBS    R0, 80$
+        CMPL    R0, #SS$_ACLEMPTY
+        BEQL    80$
+        PUSHL   R0                      ; %SET-E-OPENIN
+        BSBW    SAYSTART
+        MOVAB   OPENINTXT, R1
+        BSBW    SAYC
+        MOVZWL  OWNERDSC, R2
+        MOVL    OWNERDSC+4, R1
+        BSBW    SAYS
+        MOVAB   ASINPUT, R1
+        BSBW    SAYC
+        BSBW    SAYEND
+        MOVL    (SP)+, R0
+        BSBW    SAYMSG
+        MOVL    #SS$_ABORT!INHIB, R0
+        RSB
+80$:    MOVL    #SS$_NORMAL, R0
+90$:    RSB
+
+; SECONE: RES = a file's resultant string, NAM's. Changes it, as
+; SECWHAT says: its owner and protection with one $SET_SECURITY, its
+; ACL with another, and /LOG says so. Uses R0-R6.
+SECONE:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5, R6>
+        MOVZBL  NAM+NAM$B_RSL, OBJDSC
+        MOVAB   SECITEMS, R6
+        BBC     #S_OWNER, SECWHAT, 10$
+        MOVL    #OSS$_OWNER, R0
+        MOVAL   NEWOWNER, R1
+        MOVL    #4, R2
+        BSBW    ADDITEM
+10$:    BBC     #S_PROT, SECWHAT, 20$
+        $GET_SECURITY_S CLSNAM=FILECLS, OBJNAM=OBJDSC, ITMLST=PROTITEMS
+        BLBC    R0, 85$
+        BICW3   NEWPROT+2, #^XFFFF, R0  ; what it keeps, and sets
+        BICW2   R0, CURPROT
+        BISW2   NEWPROT, CURPROT
+        MOVL    #OSS$_PROTECTION, R0
+        MOVAL   CURPROT, R1
+        MOVL    #2, R2
+        BSBW    ADDITEM
+20$:    BBC     #S_DEFAULT, SECWHAT, 25$
+        MOVL    #DEFPROT, CURPROT
+        MOVL    #OSS$_PROTECTION, R0
+        MOVAL   CURPROT, R1
+        MOVL    #2, R2
+        BSBW    ADDITEM
+25$:    BBC     #S_LIKE, SECWHAT, 30$
+        MOVL    #OSS$_OWNER, R0
+        MOVAL   LIKEOWNER, R1
+        MOVL    #4, R2
+        BSBW    ADDITEM
+        MOVL    #OSS$_PROTECTION, R0
+        MOVAL   LIKEPROT, R1
+        MOVL    #2, R2
+        BSBW    ADDITEM
+30$:    MOVAB   SECITEMS, R0
+        CMPL    R6, R0
+        BEQL    40$
+        BSBW    SECSET
+        BLBC    R0, 85$
+40$:    BSBW    SECACL
+        BLBC    R0, 90$
+        BBC     #S_LOG, SECWHAT, 90$
+        BSBW    SAYSTART                ; %SET-I-MODIFIED
+        MOVAB   MODIFIEDTXT, R1
+        BSBW    SAYC
+        MOVZBL  NAM+NAM$B_RSL, R2
+        MOVAB   RES, R1
+        BSBW    SAYS
+        MOVAB   MODIFIED2TXT, R1
+        BSBW    SAYC
+        BSBW    SAYEND
+        RSB
+85$:    BSBW    WRITEERR
+90$:    RSB
+
+; SECACL: changes the file's ACL as SECWHAT says, by /LIKE or /DEFAULT,
+; /DELETE, /REPLACE, /AFTER or /ACL, in that order of choice. R0 =
+; SS$_NORMAL or an error, written. Uses R0-R6.
+SECACL:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5, R6>
+        CLRL    SECCTX
+        MOVAB   SECITEMS, R6
+        BITL    #<1@S_LIKE>!<1@S_DEFAULT>, SECWHAT
+        BEQL    20$
+        MOVL    #OSS$_ACL_DELETE, R0    ; the protected ones stay
+        BSBW    ADDNONE
+        BBC     #S_LIKE, SECWHAT, 15$
+        MOVL    #OSS$_ACL_POSITION_BOTTOM, R0
+        BSBW    ADDNONE
+        MOVAB   LIKEACL, R5             ; and the other's ACEs, after them
+        MOVZWL  LIKELEN, R4
+        ADDL2   R5, R4
+10$:    CMPL    R5, R4
+        BGEQU   15$
+        MOVZBL  (R5), R2
+        BEQL    15$
+        BITW    #ACE$M_HIDDEN!ACE$M_NOPROPAGATE, ACE$W_FLAGS(R5)
+        BNEQ    12$
+        MOVL    #OSS$_ACL_ADD_ENTRY, R0
+        MOVL    R5, R1
+        BSBW    ADDITEM
+12$:    ADDL2   R2, R5
+        BRB     10$
+15$:    BRW     SECSET
+20$:    BBC     #S_DELETE, SECWHAT, 50$
+        MOVL    #OSS$_ACL_DELETE_ALL, R0
+        BBS     #S_ALL, SECWHAT, 25$
+        TSTL    NACES
+        BNEQ    30$
+        MOVL    #OSS$_ACL_DELETE, R0
+25$:    BSBW    ADDNONE
+        BRW     SECSET
+30$:    MOVL    #OSS$_ACL_DELETE_ENTRY, R3
+        BRW     EACHACE
+50$:    BBC     #S_REPLACE, SECWHAT, 60$
+        TSTL    NACES                   ; /REPLACE: each must be there,
+        BEQL    90$
+        MOVL    #OSS$_ACL_FIND_ENTRY, R3
+        BSBW    EACHACE
+        BLBC    R0, 95$
+        MOVAB   SECITEMS, R6
+        MOVAB   ACEBUF, R5
+        MOVL    NACES, R4               ; then each goes, in their order,
+52$:    MOVL    #OSS$_ACL_DELETE_ENTRY, R0
+        MOVL    R5, R1
+        MOVZBL  (R5), R2
+        BSBW    ADDITEM
+        ADDL2   #256, R5
+        SOBGTR  R4, 52$
+        MOVAB   REPBUF, R5              ; and the new ones go where the last was
+        MOVL    NREPS, R4
+        BRB     70$
+60$:    MOVAB   ACEBUF, R5
+        BBC     #S_AFTER, SECWHAT, 65$
+        MOVL    #OSS$_ACL_FIND_ENTRY, R0        ; /AFTER: past that one
+        MOVAB   AFTERACE, R1
+        MOVZBL  AFTERACE, R2
+        BSBW    ADDITEM
+        BSBW    SECSET1
+        BLBC    R0, 85$
+        EXTZV   #0, #24, SECCTX, R0
+        ADDL3   #1, R0, SECCTX
+        MOVAB   SECITEMS, R6
+65$:    MOVL    NACES, R4
+        BEQL    90$
+70$:    TSTL    R4
+        BEQL    80$
+72$:    MOVL    #OSS$_ACL_ADD_ENTRY, R0
+        MOVL    R5, R1
+        MOVZBL  (R5), R2
+        BSBW    ADDITEM
+        ADDL2   #256, R5
+        SOBGTR  R4, 72$
+80$:    BRW     SECSET
+85$:    BSBW    WRITEERR
+        RSB
+90$:    MOVL    #SS$_NORMAL, R0
+95$:    RSB
+
+; EACHACE: R3 = OSS$_ACL_DELETE_ENTRY or OSS$_ACL_FIND_ENTRY. Does it for
+; each of /ACL's ACEs, with a $SET_SECURITY each, and says those that
+; aren't there: %SET-W-NOSUCHACE each, then %SET-F-WRITEERR alone, as
+; VMS's SET does. R0 = SS$_NORMAL, or an error, written. Uses R0-R6.
+EACHACE:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5, R6>
+        CLRL    R4
+        MOVAB   ACEBUF, R5
+        PUSHL   #SS$_NORMAL
+10$:    MOVAB   SECITEMS, R6
+        MOVL    R3, R0
+        MOVL    R5, R1
+        MOVZBL  (R5), R2
+        BSBW    ADDITEM
+        BSBW    SECSET1
+        BLBS    R0, 40$
+        CMPL    R0, #SS$_NOENTRY
+        BEQL    30$
+        CMPL    R0, #SS$_ACLEMPTY
+        BNEQ    80$
+30$:    PUSHL   R3
+        BSBW    NOSUCHACE
+        MOVL    (SP)+, R3
+        MOVL    #SS$_NOENTRY, (SP)
+40$:    ADDL2   #256, R5
+        AOBLSS  NACES, R4, 10$
+        MOVL    (SP)+, R0
+        BLBS    R0, 90$
+        BSBW    SAYSTART                ; %SET-F-WRITEERR, alone
+        MOVAB   WRITEERRTXT, R1
+        BSBW    SAYC
+        MOVZBL  NAM+NAM$B_RSL, R2
+        MOVAB   RES, R1
+        BSBW    SAYS
+        BSBW    SAYEND
+        MOVL    #SS$_ABORT!INHIB, R0
+        MOVL    R0, SECFAILED
+        RSB
+80$:    TSTL    (SP)+
+        BSBW    WRITEERR
+90$:    RSB
+
+; NOSUCHACE: R5 = an ACE. Writes %SET-W-NOSUCHACE for it, and the ACE,
+; as $FORMAT_ACL writes it, 4 blanks in. Uses R0-R3.
+NOSUCHACE:
+        .JSB_ENTRY  SCRATCH=<R2, R3>
+        MOVZBL  (R5), ACEDSC
+        MOVL    R5, ACEDSC+4
+        MOVW    #255, FMTDSC
+        $FORMAT_ACL_S ACLENT=ACEDSC, ACLLEN=FMTLEN, ACLSTR=FMTDSC, WIDTH=FMTWIDTH, TRMDSC=NEWLINE, INDENT=FMTINDENT
+        MOVW    #256, ACEDSC
+        BSBW    SAYSTART
+        MOVAB   NOSUCHTXT, R1
+        BSBW    SAYC
+        MOVZBL  NAM+NAM$B_RSL, R2
+        MOVAB   RES, R1
+        BSBW    SAYS
+        MOVAB   NOSUCH2TXT, R1
+        BSBW    SAYC
+        BSBW    SAYEND
+        MOVAB   FMTBUF, R1              ; a line each
+        MOVZWL  FMTLEN, R3
+        ADDL2   R1, R3
+10$:    MOVL    R1, R2
+20$:    CMPL    R2, R3
+        BGEQU   30$
+        CMPB    (R2), #10
+        BEQL    30$
+        INCL    R2
+        BRB     20$
+30$:    PUSHL   R2
+        PUSHL   R3
+        SUBL2   R1, R2
+        BSBW    SAYSTART
+        BSBW    SAYS
+        BSBW    SAYEND
+        MOVL    (SP)+, R3
+        MOVL    (SP)+, R1
+        INCL    R1
+        CMPL    R1, R3
+        BLEQU   10$
+        RSB
+
+; ADDITEM: R0 = an OSS$_ item, R1 = its buffer, R2 = its size, R6 = the
+; next item in SECITEMS. Puts it there, a longword of 0 after it, R6
+; past it. ADDNONE: the same for an item with no buffer. Keeps R0-R5.
+ADDNONE:
+        .JSB_ENTRY  OUTPUT=<R6>
+        CLRW    (R6)+
+        MOVW    R0, (R6)+
+        MOVAB   SECCTX, (R6)+           ; a buffer it doesn't read
+        CLRL    (R6)+
+        CLRL    (R6)
+        RSB
+ADDITEM:
+        .JSB_ENTRY  OUTPUT=<R6>
+        MOVW    R2, (R6)+
+        MOVW    R0, (R6)+
+        MOVL    R1, (R6)+
+        CLRL    (R6)+
+        CLRL    (R6)
+        RSB
+
+; SECSET: $SET_SECURITY of the items in SECITEMS on the file, at
+; SECCTX's position. R0 = its status, an error written, %SET-F-WRITEERR
+; and why. SECSET1: the same, the error not written. Uses R0-R5.
+SECSET:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5>
+        BSBB    SECSET1
+        BLBS    R0, 10$
+        BSBW    WRITEERR
+10$:    RSB
+SECSET1:
+        .JSB_ENTRY
+        $SET_SECURITY_S CLSNAM=FILECLS, OBJNAM=OBJDSC, ITMLST=SECITEMS, CONTXT=SECCTX
+        RSB
+
+; WRITEERR: R0 = why a file couldn't be changed. Writes %SET-F-WRITEERR
+; and it. R0 = it, with STS$M_INHIB_MSG. Uses R0-R5.
+WRITEERR:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5>
+        PUSHL   R0
+        BSBW    SAYSTART
+        MOVAB   WRITEERRTXT, R1
+        BSBW    SAYC
+        MOVZBL  NAM+NAM$B_RSL, R2
+        MOVAB   RES, R1
+        BSBW    SAYS
+        BSBW    SAYEND
+        MOVL    (SP)+, R0
+        BSBW    SAYMSG
+        BISL2   #INHIB, R0
+        MOVL    R0, SECFAILED
+        RSB
+
+; SAYSTART: starts a line in LINE. SAYC: R1 = text, .ASCIC; SAYS: R1 =
+; text, R2 = its length: appends it, as much as fits. SAYEND: writes the
+; line. Use R0-R5.
+SAYSTART:
+        .JSB_ENTRY
+        CLRB    LINE
+        RSB
+SAYC:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5>
+        MOVZBL  (R1)+, R2
+        BSBB    SAYS
+        RSB
+SAYS:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5>
+        MOVZBL  LINE, R3
+        ADDL3   R3, R2, R0
+        CMPL    R0, #255
+        BLEQU   10$
+        SUBL3   R3, #255, R2
+10$:    ADDB2   R2, LINE
+        MOVAB   LINE+1[R3], R3
+        MOVC3   R2, (R1), (R3)
+        RSB
+SAYEND:
+        .JSB_ENTRY
+        PUSHAB  LINE
+        CALLS   #1, G^PUT_LINE
+        RSB
+
+; SAYMSG: R0 = a status. Writes its message, -FACILITY-S-NAME, text, as
+; a secondary one. Keeps R0. Uses R1-R5.
+SAYMSG:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5>
+        PUSHL   R0
+        $GETMSG_S MSGID=R0, MSGLEN=MSGLEN, BUFADR=MSGDSC
+        MOVB    MSGLEN, LINE
+        MOVB    #^A/-/, LINE+1
+        PUSHAB  LINE
+        CALLS   #1, G^PUT_LINE
+        MOVL    (SP)+, R0
+        RSB
 
         .END    START

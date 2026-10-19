@@ -63,6 +63,11 @@ $ ! next, copy it to the data disk once, and define SYSUAF here instead:
 $ !   DEFINE/SYSTEM/NOLOG SYSUAF DKB0:[000000]SYSUAF.DAT
 $ COPY SYS$COMMON:[SYSEXE]SYSUAF.DAT SYS$SPECIFIC:[SYSEXE]SYSUAF.DAT
 $ SET PROTECTION=(S:RWE,O:RWE,G,W) SYS$SPECIFIC:[SYSEXE]SYSUAF.DAT
+$ ! The rights database, RIGHTSLIST.DAT, the identifiers AUTHORIZE adds
+$ ! and grants, which LOGINOUT gives a process: the same way, and
+$ ! DEFINE/SYSTEM/NOLOG RIGHTSLIST to keep it.
+$ COPY SYS$COMMON:[SYSEXE]RIGHTSLIST.DAT SYS$SPECIFIC:[SYSEXE]RIGHTSLIST.DAT
+$ SET PROTECTION=(S:RWED,O:RWED,G:R,W:R) SYS$SPECIFIC:[SYSEXE]RIGHTSLIST.DAT
 $ ! The BIND resolver asks Google's public DNS server, for a host the
 $ ! hosts database hasn't: PING, TELNET and nslookup. When DHCP sets the
 $ ! interface, below, the DNS server the DHCP server offers takes its

@@ -145,6 +145,7 @@ define type SET_OPTIONS
 	keyword PROCESS, syntax=SET_PROCESS
 	keyword PROMPT, value
 	keyword PROTECTION, value(list), syntax=SET_PROTECTION
+	keyword SECURITY, syntax=SET_SECURITY
 	keyword TERMINAL, syntax=SET_TERMINAL
 	keyword VERIFY, negatable
 	keyword VOLUME, syntax=SET_VOLUME
@@ -188,6 +189,37 @@ define syntax SET_PROTECTION
 	image SET
 	parameter P1, label=OPTION, value(required, type=SET_OPTIONS)
 	parameter P2, label=FILE, prompt="File", value(required, type=$infile)
+
+! SET SECURITY object[,...]: SET.EXE changes each object's owner,
+! protection and ACL with $SET_SECURITY: /ACL's ACEs are added at the
+! top, after /AFTER's, deleted with /DELETE, all but the protected ones
+! without ACEs, all with /DELETE=ALL, or put in place of /REPLACE's;
+! /LIKE=NAME=object copies another's, /DEFAULT gives the default ones.
+! ponytail: the class FILE; no /CONFIRM, or the qualifiers that pick
+! files by date or owner.
+define syntax SET_SECURITY
+	image SET
+	parameter P1, label=OPTION, value(required, type=SET_OPTIONS)
+	parameter P2, label=OBJECT, prompt="Object", value(required, list, type=$infile)
+	qualifier ACL, value(list, type=$acl)
+	qualifier AFTER, nonnegatable, value(required, type=$acl)
+	qualifier REPLACE, nonnegatable, value(required, list, type=$acl)
+	qualifier DELETE, nonnegatable, value(type=DELETE_OPTIONS)
+	qualifier LIKE, nonnegatable, value(required, list, type=LIKE_OPTIONS)
+	qualifier DEFAULT, nonnegatable
+	qualifier CLASS, nonnegatable, value(required)
+	qualifier OWNER, nonnegatable, value(required, type=$uic)
+	qualifier PROTECTION, nonnegatable, value(required, list)
+	qualifier LOG
+	disallow REPLACE and DELETE
+	disallow AFTER and (DELETE or REPLACE)
+
+define type DELETE_OPTIONS
+	keyword ALL
+
+define type LIKE_OPTIONS
+	keyword NAME, value(required)
+	keyword CLASS, value(required)
 
 ! SET FILE file: SET.EXE gives the file the owner, record attributes,
 ! expiration date and version limit its qualifiers say.
@@ -261,6 +293,7 @@ define type SHOW_OPTIONS
 	keyword MEMORY, syntax=SHOW_MEMORY
 	keyword PROCESS, syntax=SHOW_IMAGE
 	keyword QUOTA, syntax=SHOW_QUOTA
+	keyword SECURITY, syntax=SHOW_SECURITY
 	keyword SYMBOL, syntax=SHOW_SYMBOL
 	keyword SYSTEM, syntax=SHOW_IMAGE
 	keyword TERMINAL, syntax=SHOW_TERMINAL
@@ -289,11 +322,20 @@ define syntax SHOW_SYMBOL
 	disallow GLOBAL and LOCAL
 	disallow P2 and ALL
 
-! SHOW PROCESS [/PRIVILEGES] [/QUOTAS] and SHOW SYSTEM: SHOW.EXE.
+! SHOW PROCESS [/PRIVILEGES] [/QUOTAS] [/RIGHTS] and SHOW SYSTEM: SHOW.EXE.
 define syntax SHOW_IMAGE
 	image SHOW
 	qualifier PRIVILEGES
 	qualifier QUOTAS
+	qualifier RIGHTS
+
+! SHOW SECURITY object [/CLASS=class]: SHOW.EXE shows the owner,
+! protection and ACL of each object, $GET_SECURITY's.
+define syntax SHOW_SECURITY
+	image SHOW
+	parameter P1, label=OPTION, value(required, type=SHOW_OPTIONS)
+	parameter P2, label=OBJECT, prompt="Object", value(required, type=$infile)
+	qualifier CLASS, nonnegatable, value(required)
 
 ! SHOW USERS [username] [/FULL]: SHOW.EXE.
 define syntax SHOW_USERS

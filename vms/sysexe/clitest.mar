@@ -100,6 +100,8 @@ LIST:   .ASCID  "SEND A,B+c"
 QUALS:  .ASCID  |se/log/copies=%X1F x "Hi ""there"""|
 KEYWD:  .ASCID  "SEND/NOLOG/MODE=(SLOW=7) X"
 KEEP:   .ASCID  "SEND/KEEP F"
+ACLS:   .ASCID  "SEND/ACL=( (ID=A,ACC=R), (ID=[1,4]+B) ) X"
+ACL1:   .ASCID  "SEND/ACL=(ID=A,ACC=R+W) X"
 SHOWUS: .ASCID  "SHOW USE"
 INSF:   .ASCID  "SEND"
 CONFL:  .ASCID  "SEND/LOG/CONFIRM X"
@@ -145,6 +147,9 @@ T_FOO:  .ASCIC  "FOO"
 T_X1F:  .ASCIC  "%X1F"
 T_DFLT: .ASCIC  "DFLT"
 T_SEND: .ASCIC  "SEND"
+T_ACE1: .ASCIC  "(ID=A,ACC=R)"
+T_ACE2: .ASCIC  "(ID=[1,4]+B)"
+T_ACE3: .ASCIC  "(ID=A,ACC=R+W)"
 T_SLOW: .ASCIC  "SLOW"
 T_USERS:
         .ASCIC  "USERS"
@@ -211,6 +216,13 @@ T_HI:   .ASCIC  /"Hi ""there"""/
         OKAY    KEEP
         IS      "KEEP", CLI$_PRESENT
         VALUE   "FILE", T_F, SS$_NORMAL
+; $ACL values: ACEs, as typed, each a value.
+        OKAY    ACLS
+        VALUE   "ACL", T_ACE1, CLI$_COMMA
+        VALUE   "ACL", T_ACE2, SS$_NORMAL
+        VALUE   "TO", T_X, SS$_NORMAL
+        OKAY    ACL1
+        VALUE   "ACL", T_ACE3, SS$_NORMAL
         OKAY    SHOWUS
         VALUE   "P1", T_USERS, SS$_NORMAL
         IS      "P1.USERS", CLI$_PRESENT

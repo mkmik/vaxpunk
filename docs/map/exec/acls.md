@@ -1,23 +1,29 @@
 +++
 title = "Access control lists"
 summary = "Entries naming identifiers on an object, checked before its UIC protection"
-aka = ["ACL", "ACE", "EDIT/ACL", "ACL editor", "SET ACL", "SHOW ACL", "SET SECURITY/ACL", "DIRECTORY/ACL", "$CHANGE_ACL", "$FORMAT_ACL", "$PARSE_ACL", "identifier ACE", "default protection ACE", "alarm ACE", "subsystem ACE", "protected subsystem"]
+aka = ["ACL", "ACE", "EDIT/ACL", "ACL editor", "SET ACL", "SHOW ACL", "SET SECURITY/ACL", "DIRECTORY/ACL", "$CHANGE_ACL", "$FORMAT_ACL", "$PARSE_ACL", "identifier ACE", "default protection ACE", "alarm ACE", "subsystem ACE", "protected subsystem", "ATR$C_ADDACLENT", "FIB$L_ACLCTX"]
 kind = "core"
-intent = "aspiration"
-research = "outline"
-refs = ["docs/prd/0003-multi-user-vms.md", "docs/design/0002-executive-processes.md"]
+intent = "goal"
+research = "done"
+refs = ["docs/adr/0040-acls-in-file-headers-and-rights-identifiers.md", "vms/exec/f11acl.mar", "vms/exec/xqp.mar", "vms/exec/vecacl.mar", "docs/prd/0003-multi-user-vms.md"]
 
 [[feature]]
 id = "identifier-aces"
 title = "Identifier ACEs on files, checked before the protection mask"
-status = "todo"
-needs = ["/exec/rights-database#process-rights"]
+status = "done"
+note = "ADR-0040; FIL$CHKHDR and FIL$ACLCHK, with UIC wildcards and the rights list"
+
+[[feature]]
+id = "xqp"
+title = "The XQP's ACL attributes: ADDACLENT, DELACLENT, FNDACLENT, DELETEACL, READACL, ACLLENGTH, READACE"
+status = "done"
+note = "xqp.mar, with FIB$L_ACLCTX and FIB$L_ACL_STATUS; no MODACLENT, FNDACETYP or the ACL locks"
 
 [[feature]]
 id = "dcl"
 title = "SET SECURITY/ACL, SHOW SECURITY and DIRECTORY/ACL"
-status = "todo"
-needs = ["#identifier-aces"]
+status = "done"
+note = "ADR-0040"
 
 [[feature]]
 id = "editor"
@@ -28,8 +34,21 @@ needs = ["#identifier-aces"]
 [[feature]]
 id = "inheritance"
 title = "Default protection ACEs and DEFAULT entries: what a directory gives new files"
+status = "done"
+note = "FIL$ACLINHERIT at $CREATE; a new version gets its predecessor's ACL but NOPROPAGATE ACEs"
+
+[[feature]]
+id = "directory-inheritance"
+title = "A new directory's own DEFAULT ACEs from its parent's"
 status = "todo"
-needs = ["#identifier-aces"]
+note = "f11acl.mar: a new file only"
+
+[[feature]]
+id = "long-acls"
+title = "ACLs longer than the header's room, in extension headers"
+status = "todo"
+needs = ["/files/ods2#extension-headers"]
+note = "f11acl.mar ponytail: SS$_ACLFULL"
 
 [[feature]]
 id = "other-objects"
@@ -41,7 +60,6 @@ needs = ["/exec/uic-protection#object-classes"]
 id = "alarm-aces"
 title = "Security alarm and audit ACEs"
 status = "todo"
-needs = ["/exec/security-audit"]
 
 [[feature]]
 id = "subsystems"
@@ -50,8 +68,15 @@ status = "todo"
 
 [[feature]]
 id = "services"
-title = "$CHANGE_ACL, $FORMAT_ACL, $PARSE_ACL; ACLs in $CHKPRO and $CHECK_ACCESS"
+title = "$PARSE_ACL and $FORMAT_ACL"
+status = "done"
+note = "vecacl.mar, in the caller's mode; the file access names only"
+
+[[feature]]
+id = "change-acl"
+title = "$CHANGE_ACL; ACLs in $CHKPRO and $CHECK_ACCESS"
 status = "todo"
+needs = ["/exec/uic-protection#check-services"]
 
 [[needs]]
 on = "/exec/rights-database"
@@ -64,6 +89,11 @@ why = "The protection mask decides when no ACE matches"
 [[needs]]
 on = "/files/ods2"
 why = "A file's ACL is stored in its header"
+
+[[needs]]
+on = "/exec/security-audit"
+why = "Alarm and audit ACEs"
+soft = true
 +++
 
 An access control list is a list of access control entries on an
@@ -80,6 +110,13 @@ objects in memory, with templates in `VMS$OBJECTS.DAT`. They are edited
 with `EDIT/ACL`, set with `SET SECURITY/ACL`, and shown with `SHOW
 SECURITY` and `DIRECTORY/ACL`.
 
-vaxpunk has none: ACLs are a non-goal of PRD-0003, which asks as an
-open question whether they come in Milestone 1 after all; `SYSPRV` and
-groups cover its cases. They need the rights database first.
+vaxpunk has them on files, as ODS-2 keeps them
+([ADR-0040](../../adr/0040-acls-in-file-headers-and-rights-identifiers.md)):
+the XQP's ACL attributes change them, `FIL$CHKHDR` looks at the first
+identifier ACE that matches before the protection mask, and new files
+get their directory's default ACEs and protection, or their previous
+version's ACL. `SET SECURITY`, `SHOW SECURITY` and `DIRECTORY/ACL` and
+`/SECURITY` work as OpenVMS's, through `$PARSE_ACL`, `$FORMAT_ACL`,
+`$GET_SECURITY` and `$SET_SECURITY`. Missing: the ACL editor, alarm and
+subsystem ACEs, ACLs on other objects, and ACLs longer than a header has
+room for.

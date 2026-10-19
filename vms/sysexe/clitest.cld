@@ -12,6 +12,7 @@ define verb SEND
 	qualifier MODE, default, value(type=MODE_TYPE)
 	qualifier CONFIRM, nonnegatable
 	qualifier KEEP, nonnegatable, syntax=SEND_KEEP
+	qualifier ACL, value(list, type=$acl)
 	disallow LOG and CONFIRM
 
 define type MODE_TYPE

@@ -24,12 +24,20 @@
 ; (t8y:/files/disk-quotas). SHOW CPU shows the machine and its CPU sets,
 ; or with /BRIEF the CPU and the process it runs, with /FULL its page
 ; size too.
+; SHOW PROCESS/RIGHTS lists the process's rights, $GETJPI's
+; JPI$_PROCESS_RIGHTS: its UIC's identifier and those it holds, with their
+; attributes. SHOW SECURITY shows each file a specification names, with
+; wildcards, its owner, protection and ACL, $GET_SECURITY's, the ACEs as
+; $FORMAT_ACL writes them (docs/adr/0040-acls-in-file-headers-and-rights-
+; identifiers.md).
 ; ponytail: no node, CPU time, I/O or page counts: the counters don't
 ; exist yet. No SCSNODE, so no Node column or node name; no subprocesses
 ; or batch jobs, so SHOW USERS counts interactive processes only; no
 ; paged pool, balance set, page or swap files for SHOW MEMORY; no machine
 ; check or memory error counts for SHOW ERROR, which shows 0; SHOW
-; QUOTA's /USER is taken and ignored, as no volume has a quota file. A
+; QUOTA's /USER is taken and ignored, as no volume has a quota file. No
+; system rights for SHOW PROCESS/RIGHTS, and SHOW SECURITY's class is
+; FILE; lines are 80 characters, not the terminal's width. A
 ; terminal has no parity or fill, and its input is VMS style, CTRL/H
 ; back to the line's start.
 ;
@@ -44,8 +52,12 @@
         $TT2DEF
         $TT3DEF
         $DVSDEF
+        $RMSDEF
+        $FABDEF
+        $NAMDEF
+        $OSSDEF
 
-        .EXTERNAL PUT_LINE, PRV_NAMES, TERM_SENSE, TERM_NAME, TERM_SPEEDS
+        .EXTERNAL PUT_LINE, PRV_NAMES, TERM_SENSE, TERM_NAME, TERM_SPEEDS, ID_TEXT
 
 TT2 = 1                                 ; CHARS: a TT2$ bit, not a TT$ one,
 NOT = 2                                 ; on when it is clear,
@@ -249,6 +261,70 @@ STATES: .ASCII  "     COLPGMWAITCEF  PFW  LEF  LEFO HIB  "
         .ASCII  "HIBO SUSP SUSPOFPG  COM  COMO CUR  "
 MAXSTATE = 14
 HEX:    .ASCII  "0123456789ABCDEF"
+NRIGHTS = 1025                          ; SHOW PROCESS/RIGHTS's: its UIC and the identifiers a process may hold
+RIGHTSITEMS:
+        .WORD   NRIGHTS*8, JPI$_PROCESS_RIGHTS
+        .ADDRESS RIGHTS, RIGHTSLEN
+        .LONG   0
+RIGHTSLEN:
+        .WORD   0
+RIGHTS: .BLKQ   NRIGHTS
+IDNAME: .LONG   32                      ; an identifier's name
+        .ADDRESS IDBUF
+IDLEN:  .WORD   0
+IDBUF:  .BLKB   48
+SECCLS: .LONG   16                      ; SHOW SECURITY's /CLASS
+        .ADDRESS SECCLSBUF
+SECCLSBUF:
+        .BLKB   16
+FILECLS:.ASCID  "FILE"
+MSGDSC: .LONG   255                     ; a message, $GETMSG's
+        .ADDRESS LINE+1
+MSGLEN: .WORD   0
+SPECDSC:.LONG   255                     ; its object, the parameter
+        .ADDRESS SPEC
+SPEC:   .BLKB   255
+FAB:    $FAB    FNA=SPEC, NAM=NAM
+NAM:    $NAM    ESA=EXP, ESS=255, RSA=RES, RSS=255
+EXP:    .BLKB   255
+RES:    .BLKB   255
+        .ALIGN  LONG
+OBJDSC: .LONG   0                       ; a file's resultant string
+        .ADDRESS RES
+OWNER:  .LONG   0                       ; what $GET_SECURITY reads of it
+PROT:   .LONG   0
+ACLLEN: .LONG   0
+SECITEMS:
+        .WORD   4, OSS$_OWNER
+        .ADDRESS OWNER, 0
+        .WORD   4, OSS$_PROTECTION
+        .ADDRESS PROT, 0
+        .WORD   4, OSS$_ACL_LENGTH
+        .ADDRESS ACLLEN, 0
+        .LONG   0
+ACEITEMS:                               ; and of its ACEs, one at a time
+        .WORD   256, OSS$_ACL_READ_ENTRY
+        .ADDRESS ACE, 0
+        .LONG   0
+SECCTX: .LONG   0
+ACE:    .BLKB   256
+ACEDSC: .LONG   256
+        .ADDRESS ACE
+FMTDSC: .LONG   1024                    ; an ACE's text
+        .ADDRESS FMTBUF
+FMTLEN: .WORD   0
+FMTBUF: .BLKB   1024
+FMTWIDTH:
+        .WORD   80
+FMTINDENT:
+        .WORD   10
+NEWLINE:.ASCID  <10>
+CATNAMES:                               ; the protection's categories
+        .ASCIC  "System"
+        .ASCIC  "Owner"
+        .ASCIC  "Group"
+        .ASCIC  "World"
+LETTERS:.ASCII  "RWED"
 LINE:   .BLKB   256                     ; a line being made, .ASCIC
 CHAR:   .BLKB   1
 TTCHAN: .LONG   0                       ; the terminal's
@@ -387,6 +463,10 @@ CHARS:  .BYTE   TT$V_PASSALL, NOT!ALT
         BEQL    3$
         CMPB    R0, #^A/P/
         BEQL    PROCESS
+        CMPW    WHAT, #^A/SE/
+        BNEQ    4$
+        CALLS   #0, SECURITY
+        RET
 4$:     BRW     SYSTEM
 3$:     BRW     SHOWCPU
 5$:     BRW     SHOWTERM
@@ -457,7 +537,10 @@ PROCESS:
         MOVL    #71, R3
         BSBW    RIGHT
         BSBW    SAY
-85$:    MOVL    #SS$_NORMAL, R0
+85$:    PRESENT "RIGHTS"
+        BLBC    R0, 87$
+        BSBW    SHOWRIGHTS
+87$:    MOVL    #SS$_NORMAL, R0
 90$:    RET
 
 ; SHOW SYSTEM
@@ -1248,6 +1331,172 @@ ADD:
         DECL    R2
         BRB     10$
 20$:    MOVB    R0, LINE
+        RSB
+
+; SHOWRIGHTS: SHOW PROCESS/RIGHTS's list: each identifier the process
+; holds, by its name, and its attributes. Uses R0-R6.
+SHOWRIGHTS:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5, R6>
+        $GETJPIW_S ITMLST=RIGHTSITEMS
+        BLBC    R0, 90$
+        PRINT   " "
+        PRINT   "Process rights:"
+        MOVAQ   RIGHTS, R6
+        MOVZWL  RIGHTSLEN, R5
+        ADDL2   R6, R5
+10$:    CMPL    R6, R5
+        BGEQU   80$
+        ADDTEXT " "
+        MOVW    #32, IDNAME
+        $IDTOASC_S ID=(R6), NAMLEN=IDLEN, NAMBUF=IDNAME
+        BLBS    R0, 20$
+        PUSHAB  IDBUF                   ; one with no name: [g,m] or %X
+        PUSHL   (R6)
+        CALLS   #2, G^ID_TEXT
+        MOVW    R0, IDLEN
+20$:    MOVAB   IDBUF, R1
+        MOVZWL  IDLEN, R2
+        BSBW    ADD
+        MOVL    #35, R3
+        BSBW    PADTO
+        BBC     #0, 4(R6), 30$          ; KGB$M_RESOURCE
+        ADDTEXT "resource"
+30$:    BBC     #1, 4(R6), 40$          ; KGB$M_DYNAMIC
+        BBC     #0, 4(R6), 35$
+        ADDTEXT " "
+35$:    ADDTEXT "dynamic"
+40$:    BSBW    SAY
+        ADDL2   #8, R6
+        BRB     10$
+80$:    MOVL    #SS$_NORMAL, R0
+90$:    RSB
+
+; SHOW SECURITY: each file the specification names: its name, owner,
+; protection and ACL, as VMS's shows them. %SHOW-F-READERR for one it
+; can't find.
+        .ENTRY  SECURITY, ^M<R2, R3, R4, R5, R6>
+        GETVALUE "CLASS", SECCLS, SECCLS
+        BLBC    R0, 5$
+        MOVL    #SS$_NOCLASS, R0
+        CMPW    SECCLS, #4
+        BNEQ    2$
+        CMPL    SECCLSBUF, #^A/FILE/
+        BEQL    5$
+2$:     RET
+5$:     GETVALUE "OBJECT", SPECDSC, SPECDSC
+        BLBC    R0, 90$
+        MOVB    SPECDSC, FAB+FAB$B_FNS
+        $PARSE  FAB=FAB
+        BLBC    R0, 60$
+        CLRL    R6                      ; files shown
+10$:    $SEARCH FAB=FAB
+        BLBC    R0, 50$
+        INCL    R6
+        BSBW    SECFILE
+        BLBS    R0, 10$
+        BRB     65$
+50$:    CMPL    R0, #RMS$_NMF
+        BNEQ    60$
+        TSTL    R6
+        BNEQ    80$
+        MOVL    #RMS$_FNF, R0
+60$:    PUSHL   R0                      ; %SHOW-F-READERR
+        ADDTEXT "%SHOW-F-READERR, error reading "
+        MOVAB   EXP, R1
+        MOVZBL  NAM+NAM$B_ESL, R2
+        BSBW    ADD
+        BSBW    SAY
+        MOVL    (SP)+, R0
+65$:    PUSHL   R0
+        $GETMSG_S MSGID=R0, MSGLEN=MSGLEN, BUFADR=MSGDSC
+        MOVB    MSGLEN, LINE
+        MOVB    #^A/-/, LINE+1
+        BSBW    SAY
+        BISL3   #^X10000000, (SP)+, R0  ; STS$M_INHIB_MSG: said
+        RET
+80$:    MOVL    #SS$_NORMAL, R0
+90$:    RET
+
+; SECFILE: RES = a file's resultant string, NAM's. Shows its owner,
+; protection and ACL. R0 = SS$_NORMAL or $GET_SECURITY's failure. Uses
+; R0-R5.
+SECFILE:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5>
+        MOVZBL  NAM+NAM$B_RSL, OBJDSC
+        $GET_SECURITY_S CLSNAM=FILECLS, OBJNAM=OBJDSC, ITMLST=SECITEMS
+        BLBS    R0, 5$
+        RSB
+5$:     PRINT   ""
+        MOVAB   RES, R1
+        MOVZBL  NAM+NAM$B_RSL, R2
+        BSBW    ADD
+        ADDTEXT " object of class FILE"
+        BSBW    SAY
+        ADDTEXT "     Owner: "
+        PUSHAB  IDBUF
+        PUSHL   OWNER
+        CALLS   #2, G^ID_TEXT
+        MOVL    R0, R2
+        MOVAB   IDBUF, R1
+        BSBW    ADD
+        BSBW    SAY
+        ADDTEXT "     Protection: ("
+        CLRL    R4                      ; the category
+        MOVAB   CATNAMES, R5
+10$:    MOVZBL  (R5)+, R2               ; Category: letters, or Category
+        MOVL    R5, R1
+        ADDL2   R2, R5
+        BSBW    ADD
+        MULL3   #4, R4, R0
+        EXTZV   R0, #4, PROT, R3        ; what it may not do
+        CMPL    R3, #^XF
+        BEQL    20$
+        ADDTEXT ": "
+        CLRL    R2
+15$:    BBS     R2, R3, 17$
+        MOVZBL  LETTERS[R2], R0
+        PUSHL   R2
+        BSBW    ADDCHAR
+        MOVL    (SP)+, R2
+17$:    AOBLSS  #4, R2, 15$
+20$:    CMPL    R4, #3
+        BEQL    25$
+        ADDTEXT ", "
+25$:    AOBLSS  #4, R4, 10$
+        ADDTEXT ")"
+        BSBW    SAY
+        TSTL    ACLLEN
+        BNEQ    30$
+        PRINT   "     Access Control List: <empty>"
+        BRB     80$
+30$:    PRINT   "     Access Control List:"
+        CLRL    SECCTX
+40$:    $GET_SECURITY_S CLSNAM=FILECLS, OBJNAM=OBJDSC, ITMLST=ACEITEMS, CONTXT=SECCTX
+        BLBC    R0, 80$
+        MOVW    #1024, FMTDSC
+        $FORMAT_ACL_S ACLENT=ACEDSC, ACLLEN=FMTLEN, ACLSTR=FMTDSC, WIDTH=FMTWIDTH, TRMDSC=NEWLINE, INDENT=FMTINDENT
+        MOVAB   FMTBUF, R1              ; a line each
+        MOVZWL  FMTLEN, R3
+        ADDL2   R1, R3
+50$:    MOVL    R1, R2
+55$:    CMPL    R2, R3
+        BGEQU   60$
+        CMPB    (R2), #10
+        BEQL    60$
+        INCL    R2
+        BRB     55$
+60$:    PUSHL   R2
+        PUSHL   R3
+        SUBL2   R1, R2
+        BSBW    ADD
+        BSBW    SAY
+        MOVL    (SP)+, R3
+        MOVL    (SP)+, R1
+        INCL    R1
+        CMPL    R1, R3
+        BLEQU   50$
+        BRB     40$
+80$:    MOVL    #SS$_NORMAL, R0
         RSB
 
         .END    START
