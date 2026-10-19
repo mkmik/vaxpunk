@@ -2633,6 +2633,9 @@ FLUSH:
         MOVAB   IFB$AB_HDR(R7), R1
         BSBW    FIL$DELHDR
         MOVL    (SP)+, R0
+        CMPL    R0, #SS$_DUPFILENAME    ; that version is in the directory
+        BNEQ    75$
+        MOVL    #RMS$_FEX, R0
         BRB     75$
 70$:    MOVL    R0, FAB$L_STV(R10)
         MOVL    R0, R1

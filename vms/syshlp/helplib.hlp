@@ -133,6 +133,13 @@
 
   The file they go at the end of. It must exist.
 2 Qualifiers
+/CONFIRM
+  /CONFIRM
+  /NOCONFIRM (default)
+
+  Asks before appending each file. YES, TRUE or 1 appends it; NO,
+  FALSE, 0 or Return doesn't; ALL appends it and the rest without
+  asking; QUIT or CTRL/Z stops.
 /LOG
   /LOG
   /NOLOG (default)
@@ -300,6 +307,11 @@
 
   The file to make.
 2 Qualifiers
+/ALLOCATION
+  /ALLOCATION=number-of-blocks
+
+  Makes each new file that many blocks to start with, rather than the
+  input's size.
 /BINARY
   /BINARY
 
@@ -312,6 +324,13 @@
   Makes one file of all the inputs, where the output gives its name
   and type: the first copied, the others appended. An output that
   leaves out its name or type, or /NOCONCATENATE, makes a file for each.
+/CONFIRM
+  /CONFIRM
+  /NOCONFIRM (default)
+
+  Asks before copying each file. YES, TRUE or 1 copies it; NO, FALSE,
+  0 or Return doesn't; ALL copies it and the rest without asking; QUIT
+  or CTRL/Z stops.
 /HTTP
   /HTTP
 
@@ -325,12 +344,35 @@
   /LOG
   /NOLOG (default)
 
-  Says what was copied where, and how many records.
+  Says what was copied where, and how many records, and which file was
+  replaced or overwritten.
+/OVERLAY
+  /OVERLAY
+  /NOOVERLAY (default)
+
+  Writes the records into the output file, if it is there, in place of
+  its own, rather than making a new version. The file keeps its
+  attributes. Only a sequential file can be overwritten.
+/PROTECTION
+  /PROTECTION=(category[:access][,...])
+
+  Gives the new file's categories, SYSTEM, OWNER, GROUP or WORLD, that
+  access, R, W, E and D. The ones it doesn't name keep the protection
+  the file would have had.
+/REPLACE
+  /REPLACE
+  /NOREPLACE (default)
+
+  Deletes the version the output names, if it is there, and makes the
+  file in its place. Without it, copying to a version that is there
+  fails.
 2 Examples
 
   $ COPY/LOG SYS$SYSDEVICE:[SYSMGR]WELCOME.TXT RAM.TXT
 
   $ COPY *.TXT ALL.TXT
+
+  $ COPY/REPLACE/PROTECTION=(W:R) A.TXT B.TXT;1
 
   $ COPY/HTTP URL::"https://example.com/" []
 1 CREATE

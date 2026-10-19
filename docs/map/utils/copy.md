@@ -68,7 +68,19 @@ note = "The first copied, the others appended, %COPY-S-APPENDED; to found by fro
 
 [[feature]]
 id = "qualifiers"
-title = "/CONFIRM, /REPLACE, /OVERLAY, /ALLOCATION, /CONTIGUOUS, /PROTECTION, selection"
+title = "/CONFIRM, /REPLACE, /OVERLAY, /ALLOCATION, /PROTECTION"
+status = "done"
+note = "COPY does /REPLACE and /OVERLAY with $ERASE and $OPEN: RMS has no FAB$M_SUP or FAB$M_CIF; /OVERLAY only into a sequential file"
+
+[[feature]]
+id = "contiguous"
+title = "/CONTIGUOUS: the new file in one run of blocks"
+status = "todo"
+note = "needs FAB$M_CTG in $CREATE, and the XQP to look for a run long enough"
+
+[[feature]]
+id = "selection"
+title = "/BEFORE, /SINCE, /BY_OWNER, /EXCLUDE and the other file selection qualifiers"
 status = "todo"
 
 [[feature]]
@@ -140,5 +152,6 @@ is vaxpunk's own, a poor man's curl with VMS's remote file syntax:
 the body into a STREAM_LF file. Wanting `https` here is what brought in
 SSL3 on Mbed TLS, and through it the C run-time library and the C cross
 path ([ADR-0032](../../adr/0032-c-run-time-library-and-ssl3-on-mbed-tls.md)).
-Missing: records longer than its buffer, and going on to the next file
-after an error.
+`/CONFIRM`, `/REPLACE`, `/OVERLAY`, `/ALLOCATION` and `/PROTECTION` are
+VMS's. Missing: the selection qualifiers, `/CONTIGUOUS`, records longer
+than its buffer, and going on to the next file after an error.

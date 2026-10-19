@@ -532,8 +532,55 @@ const PROTECTION: Phase = Phase {
                 "DIRECTORY/PROTECTION DKB0:[000000]NEW.TXT;2\r",
             ),
         ),
+        // COPY's qualifiers, in a directory of BACKUP's *.TXT's way.
+        (
+            "NEW.TXT;2            (RWED,RWED,RE,RE)",
+            1,
+            concat!(
+                "CREATE/DIRECTORY DKB0:[CQ]\r",
+                "COPY/PROTECTION=(W:R)/ALLOCATION=20 SYS$SYSDEVICE:[SYSMGR]WELCOME.TXT DKB0:[CQ]Q.TXT\r",
+                "DIRECTORY/FULL DKB0:[CQ]Q.TXT\r",
+                "COPY SYS$SYSDEVICE:[SYSMGR]WELCOME.TXT DKB0:[CQ]Q.TXT;1\r",
+                "COPY/REPLACE/LOG SYS$SYSDEVICE:[SYSMGR]WELCOME.TXT DKB0:[CQ]Q.TXT;1\r",
+                "COPY/OVERLAY/LOG DKB0:[SUB.DEEP]NOTE.TXT DKB0:[CQ]Q.TXT\r",
+                "TYPE DKB0:[CQ]Q.TXT\r",
+                "COPY/CONFIRM SYS$SYSDEVICE:[SYSMGR]WELCOME.TXT DKB0:[CQ]C.TXT\r",
+            ),
+        ),
+        ("? [N]: ", 1, "maybe\r"),
+        (
+            "? [N]: ",
+            2,
+            "n\rCOPY/CONFIRM/LOG SYS$SYSDEVICE:[SYSMGR]WELCOME.TXT DKB0:[CQ]C.TXT\r",
+        ),
+        (
+            "? [N]: ",
+            3,
+            "Y\rCOPY/CONFIRM/LOG DKB0:[CQ]*.TXT DKB0:[CQ]*.NEW\r",
+        ),
+        (
+            "? [N]: ",
+            4,
+            "all\rCOPY/CONFIRM DKB0:[CQ]*.TXT DKB0:[CQ]*.OLD\r",
+        ),
+        (
+            "? [N]: ",
+            5,
+            "q\rDIRECTORY DKB0:[CQ]\rWRITE SYS$OUTPUT \"COPYQ: \", \"done\"\r",
+        ),
     ],
     lines: &[
+        "%RMS-E-FEX, file already exists, not superseded",
+        "%COPY-I-REPLACED, DKB0:[CQ]Q.TXT;1 being replaced",
+        "%COPY-S-COPIED, DKA0:[SYSMGR]WELCOME.TXT;1 copied to DKB0:[CQ]Q.TXT;1 (10 records)",
+        "%COPY-I-OVERLAY, DKB0:[CQ]Q.TXT;1 being overwritten",
+        "%COPY-S-COPIED, DKB0:[SUB.DEEP]NOTE.TXT;1 copied to DKB0:[CQ]Q.TXT;1 (2 records)",
+        "Copy DKA0:[SYSMGR]WELCOME.TXT;1 to DKB0:[CQ]C.TXT;? [N]: ",
+        "%COPY-S-COPIED, DKA0:[SYSMGR]WELCOME.TXT;1 copied to DKB0:[CQ]C.TXT;1 (10 records)",
+        "%COPY-S-COPIED, DKB0:[CQ]C.TXT;1 copied to DKB0:[CQ]C.NEW;1 (10 records)",
+        "%COPY-S-COPIED, DKB0:[CQ]Q.TXT;1 copied to DKB0:[CQ]Q.NEW;1 (2 records)",
+        "Total of 4 files.",
+        "COPYQ: done",
         "%RMS-E-PRV, insufficient privilege or file protection violation",
         "PROTTEST: [200,1] read DATA.TXT, and may not give it away, delete it or make a file there",
         "DATA.TXT;1           [1,4]                            (RWED,RWED,RE,R)",
@@ -551,7 +598,7 @@ const SHARING: Phase = Phase {
     secs: 20,
     steps: &[
         (
-            "NEW.TXT;2            (RWED,RWED,RE,RE)",
+            "COPYQ: done",
             1,
             concat!(
                 "OPEN/WRITE OUT DKB0:[000000]SHARE.TXT\rWRITE OUT \"shared line\"\r",
@@ -1369,6 +1416,12 @@ fn boot() {
     img.copy_out(fid, &mut note, Conversion::RecordsToLines)
         .unwrap();
     assert_eq!(String::from_utf8_lossy(&note), "First line\nSecond line\n");
+    // COPY/OVERLAY cut WELCOME.TXT's records from Q.TXT;1 and wrote NOTE.TXT's.
+    let fid = img.lookup("[CQ]Q.TXT;1").unwrap();
+    let mut q = Vec::new();
+    img.copy_out(fid, &mut q, Conversion::RecordsToLines)
+        .unwrap();
+    assert_eq!(q, note);
     for name in ["DATA.TXT;1", "NEW.TXT;1", "NEW.TXT;2"] {
         let saved = img.lookup(&format!("[000000]{name}")).unwrap();
         let restored = img.lookup(&format!("[RESTORED]{name}")).unwrap();
