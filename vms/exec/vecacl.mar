@@ -521,10 +521,20 @@ UICPART:
         MOVL    #UIC$K_WILD_MEMBER, R1
         MOVL    #2, R2
         BRB     80$
-10$:    SUBB2   #^A/0/, R0
+10$:    MOVL    R6, R3                  ; octal if its word is all octal digits
+15$:    CMPL    R3, R7
+        BGEQU   18$
+        MOVZBL  (R3), R0
+        BSBW    WORDCHAR
+        BLBC    R0, 18$
+        MOVZBL  (R3)+, R0
+        SUBB2   #^A/0/, R0
         CMPB    R0, #7
-        BGTRU   40$
-        CLRL    R1                      ; octal
+        BLEQU   15$
+        BRB     40$                     ; else a name
+18$:    CMPL    R3, R6
+        BEQL    40$
+        CLRL    R1
 20$:    CMPL    R6, R7
         BGEQU   30$
         MOVZBL  (R6), R0
@@ -1216,12 +1226,14 @@ ATRLIST:
         BGEQU   30$
         MOVL    #SS$_BADPARAM, R0
         BRB     90$
-28$:    MOVZWL  (R6), R0                ; the buffer's, at most 255 for an ACE
+28$:    MOVZWL  (R6), R0                ; the buffer's, at most an ACE's or an ACL's
+        MOVL    #ACEMAX, R2
         CMPB    (R1), #OSS$_ACL_READ
-        BEQL    30$
-        CMPL    R0, #ACEMAX
+        BNEQ    29$
+        MOVL    #ATR$S_READACL, R2
+29$:    CMPL    R0, R2
         BLEQU   30$
-        MOVL    #ACEMAX, R0
+        MOVL    R2, R0
 30$:    MOVW    R0, ATR$W_SIZE(R7)
         MOVL    4(R6), ATR$L_ADDR(R7)
         BNEQ    35$
@@ -1295,7 +1307,10 @@ LENGTHS:
         BRB     50$
 35$:    MOVL    4(R6), R3               ; ACEs': up to one of size 0
         MOVZWL  (R6), R4
-        ADDL2   R3, R4
+        CMPL    R4, #ATR$S_READACL             ; in what the file system wrote
+        BLEQU   38$
+        MOVL    #ATR$S_READACL, R4
+38$:    ADDL2   R3, R4
         MOVL    R3, R2
 40$:    CMPL    R2, R4
         BGEQU   45$
