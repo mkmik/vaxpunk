@@ -385,8 +385,10 @@ MODIFIED2TXT:
         .ASCIC  " modified"
 WRITEERRTXT:
         .ASCIC  "%SET-F-WRITEERR, error writing "
-READERRTXT:
-        .ASCIC  "%SET-F-READERR, error reading "
+OPENINTXT:
+        .ASCIC  "%SET-E-OPENIN, error opening "
+ASINPUT:
+        .ASCIC  " as input"
 NOSUCHTXT:
         .ASCIC  "%SET-W-NOSUCHACE, ACE for object "
 NOSUCH2TXT:
@@ -1357,41 +1359,48 @@ OWNERID:
         MOVL    #SS$_ABORT!INHIB, R0
         RSB
 
-; LIKE: /LIKE's values: NAME=file, the file whose owner, protection and
+; LIKE: /LIKE's keywords: NAME=file, the file whose owner, protection and
 ; ACL the files get, which $GET_SECURITY reads, and CLASS=FILE. R0 =
 ; SS$_NORMAL, or an error, written. Uses R0-R5.
 LIKE:
         .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5>
+        MOVW    #255, ACETXT
+        GETVALUE "LIKE.CLASS", ACETXT, ACETXT
+        BLBC    R0, 10$
+        MOVL    #SS$_NOCLASS, R0
+        CMPW    ACETXT, #4
+        BNEQ    90$
+        CMPL    ACETXTBUF, #^A/FILE/
+        BNEQ    90$
 10$:    MOVW    #255, ACETXT
-        GETVALUE "LIKE", ACETXT, ACETXT
-        BLBC    R0, 80$
-        CMPW    ACETXT, #5
-        BLEQU   10$
-        CMPL    ACETXTBUF, #^A/NAME/
-        BNEQ    10$
-        CMPB    ACETXTBUF+4, #^A/=/
-        BNEQ    10$
-        SUBW3   #5, ACETXT, OWNERDSC    ; the file's name
-        MOVAB   ACETXTBUF+5, OWNERDSC+4
+        GETVALUE "LIKE.NAME", ACETXT, ACETXT
+        BLBS    R0, 20$
+        PRINT   "%CLI-W-VALREQ, missing qualifier or keyword value - supply all required values"
+        MOVL    #CLI$_VALREQ!INHIB, R0
+        RSB
+20$:    MOVZWL  ACETXT, OWNERDSC        ; the file's name
+        MOVAB   ACETXTBUF, OWNERDSC+4
         CLRW    LIKELEN
         $GET_SECURITY_S CLSNAM=FILECLS, OBJNAM=OWNERDSC, ITMLST=LIKEITEMS
-        BLBS    R0, 10$
+        BLBS    R0, 80$
         CMPL    R0, #SS$_ACLEMPTY
-        BEQL    10$
-        PUSHL   R0                      ; %SET-F-READERR
+        BEQL    80$
+        PUSHL   R0                      ; %SET-E-OPENIN
         BSBW    SAYSTART
-        MOVAB   READERRTXT, R1
+        MOVAB   OPENINTXT, R1
         BSBW    SAYC
         MOVZWL  OWNERDSC, R2
         MOVL    OWNERDSC+4, R1
         BSBW    SAYS
+        MOVAB   ASINPUT, R1
+        BSBW    SAYC
         BSBW    SAYEND
         MOVL    (SP)+, R0
         BSBW    SAYMSG
         MOVL    #SS$_ABORT!INHIB, R0
         RSB
 80$:    MOVL    #SS$_NORMAL, R0
-        RSB
+90$:    RSB
 
 ; SECONE: RES = a file's resultant string, NAM's. Changes it, as
 ; SECWHAT says: its owner and protection with one $SET_SECURITY, its

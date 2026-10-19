@@ -601,13 +601,14 @@ const PROTECTION: Phase = Phase {
 /// world, ACEs (ADR-0040): one for PROTCHILD's UIC, [200,1], lets PROTTEST
 /// read it; one denying its group, put before it, doesn't; then one for
 /// anyone, *, does. SHOW SECURITY and DIRECTORY/SECURITY show them, and the
-/// owner by name. A directory's default ACEs and protection go to a new
-/// file in it, and a new version gets the one before's ACL, but its
-/// NOPROPAGATE ACEs. A name that isn't an identifier, an ACE that isn't
-/// there to delete, /AFTER, /REPLACE of two ACEs, where the last was, and
-/// of one that isn't there, which changes nothing, and /LIKE, which keeps
-/// a PROTECTED ACE first; then DATA.TXT goes back to [200,1], and DKB0:
-/// to /PROTECTION=(W).
+/// owner by name. A directory's default ACEs and its PROTECTED default
+/// protection go to a new file in it, and a new version gets the one
+/// before's ACL, but its NOPROPAGATE ACEs. A name that isn't an
+/// identifier, ACCESS before IDENTIFIER, /LIKE without NAME, an ACE that
+/// isn't there to delete, /AFTER, /REPLACE of two ACEs, where the last
+/// was, and of one that isn't there, which changes nothing, and /LIKE,
+/// which keeps a PROTECTED ACE first; then DATA.TXT goes back to [200,1],
+/// and DKB0: to /PROTECTION=(W).
 const ACLS: Phase = Phase {
     name: "acls",
     secs: 30,
@@ -645,7 +646,7 @@ const ACLS: Phase = Phase {
             concat!(
                 "DIRECTORY/SECURITY DKB0:[000000]DATA.TXT\r",
                 "CREATE/DIRECTORY DKB0:[ACL]\r",
-                "SET SECURITY/ACL=((ID=[200,*],OPT=DEFAULT,ACC=R+W),(DEFAULT_PROTECTION,S:RWED,O:RWED,G:RE,W:R)) DKB0:[000000]ACL.DIR\r",
+                "SET SECURITY/ACL=((ID=[200,*],OPT=DEFAULT,ACC=R+W),(DEFAULT_PROTECTION,OPT=PROTECTED,S:RWED,O:RWED,G:RE,W:R)) DKB0:[000000]ACL.DIR\r",
                 "COPY SYS$SYSDEVICE:[SYSMGR]WELCOME.TXT DKB0:[ACL]A.TXT\r",
                 "SET SECURITY/ACL=((ID=INTERACTIVE,ACC=R+W,OPT=NOPROPAGATE),(ID=[200,2],ACC=R)) DKB0:[ACL]A.TXT\r",
                 "COPY SYS$SYSDEVICE:[SYSMGR]WELCOME.TXT DKB0:[ACL]A.TXT\r",
@@ -653,6 +654,8 @@ const ACLS: Phase = Phase {
                 "SHOW SECURITY DKB0:[ACL]A.TXT;2\r",
                 "SET SECURITY/ACL=(IDENTIFIER=NOSUCH,ACCESS=READ) DKB0:[ACL]A.TXT\r",
                 "SET SECURITY/ACL=(IDENTIFIER=LOCAL,ACCESS=FOO) DKB0:[ACL]A.TXT\r",
+                "SET SECURITY/ACL=(ACCESS=READ,IDENTIFIER=LOCAL) DKB0:[ACL]A.TXT\r",
+                "SET SECURITY/LIKE=CLASS=FILE DKB0:[ACL]A.TXT\r",
                 "SET SECURITY/ACL=(IDENTIFIER=LOCAL,ACCESS=READ)/DELETE DKB0:[ACL]A.TXT;2\r",
                 "SET SECURITY/ACL=(ID=LOCAL,ACC=R)/AFTER=(ID=[200,2]) DKB0:[ACL]A.TXT;2\r",
                 "SET SECURITY/ACL=((ID=[200,*]),(ID=[200,2]))/REPLACE=(ID=REMOTE,ACC=E) DKB0:[ACL]A.TXT;2\r",
@@ -675,6 +678,8 @@ const ACLS: Phase = Phase {
         "     Protection: (System: RWED, Owner: RWED, Group: RE, World: R)",
         "%SET-F-SYNTAX, error parsing 'NOSUCH,ACCESS=READ)'\n-SYSTEM-F-NOSUCHID, unknown rights identifier",
         "%SET-F-SYNTAX, error parsing 'ACCESS=FOO)'\n-SYSTEM-F-IVACL, invalid access control list entry syntax",
+        "%SET-F-SYNTAX, error parsing 'ACCESS=READ,IDENTIFIER=LOCAL)'\n-SYSTEM-F-IVACL, invalid access control list entry syntax",
+        "$ SET SECURITY/LIKE=CLASS=FILE DKB0:[ACL]A.TXT\n%CLI-W-VALREQ, missing qualifier or keyword value - supply all required values\n$ ",
         "%SET-W-NOSUCHACE, ACE for object DKB0:[ACL]A.TXT;2, does not exist\n    (IDENTIFIER=LOCAL,ACCESS=READ)\n%SET-F-WRITEERR, error writing DKB0:[ACL]A.TXT;2",
         "%SET-W-NOSUCHACE, ACE for object DKB0:[ACL]A.TXT;2, does not exist\n    (IDENTIFIER=NETWORK,ACCESS=NONE)\n%SET-F-WRITEERR, error writing DKB0:[ACL]A.TXT;2\n$ ",
         "%SET-I-MODIFIED, DKB0:[ACL]A.TXT;1 modified",

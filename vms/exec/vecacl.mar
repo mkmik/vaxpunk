@@ -185,7 +185,12 @@ OSSITEMS:  .BYTE   OSS$_OWNER, ATR$C_UIC, 4, 1
         BNEQ    80$
 10$:    BSBW    BLANKS                  ; a clause
         MOVL    R6, P_CLAUSE(R11)
-        BSBW    TOKEN
+        CMPL    P_TYPE(R11), #ACE$C_DIRDEF      ; a category, in a default protection ACE
+        BNEQ    12$
+        BSBW    CATEGORY
+        BLBS    R0, 60$
+        MOVL    P_CLAUSE(R11), R6
+12$:    BSBW    TOKEN
         MOVAB   KEYWORDS, R4
         BSBW    KWMATCH
         CASEL   R0, #1, #3
@@ -193,9 +198,13 @@ OSSITEMS:  .BYTE   OSS$_OWNER, ATR$C_UIC, 4, 1
         BRB     80$
 20$:    BSBW    IDENTS                  ; IDENTIFIER=
         BRB     60$
-30$:    BSBW    ACCESS                  ; ACCESS=
+30$:    TSTL    P_TYPE(R11)             ; ACCESS=, after IDENTIFIER=
+        BEQL    80$
+        BSBW    ACCESS
         BRB     60$
-40$:    BSBW    OPTS                    ; OPTIONS=
+40$:    TSTL    P_TYPE(R11)             ; OPTIONS=, after the type's clause
+        BEQL    80$
+        BSBW    OPTS
         BRB     60$
 50$:    BSBW    DEFPROT                 ; DEFAULT_PROTECTION
 60$:    BLBC    R0, 85$
@@ -595,33 +604,32 @@ OPTS:
 85$:    MOVL    #SS$_IVACL, R0
 90$:    RSB
 
-; DEFPROT: R6 = the text after DEFAULT_PROTECTION, R11 = $PARSE_ACL's
-; frame. The ACE becomes a default protection ACE; takes each ,cat[:rwedc]
-; after it, SYSTEM, OWNER, GROUP or WORLD, which may do what its letters
-; say, and leaves R6 at a , before what isn't one. R0 = SS$_NORMAL or
-; SS$_IVACL. Uses R0-R5.
+; DEFPROT: R11 = $PARSE_ACL's frame. The ACE becomes a default
+; protection ACE, whose other clauses may be categories (CATEGORY). R0 =
+; SS$_NORMAL, or SS$_IVACL if it already has a type. Keeps every other
+; register.
 DEFPROT:
-        .JSB_ENTRY  OUTPUT=<R6>, SCRATCH=<R2, R3, R4, R5>
+        .JSB_ENTRY
         MOVL    #SS$_IVACL, R0
         TSTL    P_TYPE(R11)
         BNEQ    90$
         MOVL    #ACE$C_DIRDEF, P_TYPE(R11)
-10$:    BSBW    BLANKS
-        CMPL    R6, R7
-        BGEQU   80$
-        CMPB    (R6), #COMMA
-        BNEQ    80$
-        PUSHL   R6
-        INCL    R6
+        MOVL    #SS$_NORMAL, R0
+90$:    RSB
+
+; CATEGORY: R6 = a clause, R11 = $PARSE_ACL's frame. Takes cat[:rwedc],
+; SYSTEM, OWNER, GROUP or WORLD, which may do what its letters say, R6
+; past it. R0 = 1, or 0 if the clause isn't one. Uses R0-R5.
+CATEGORY:
+        .JSB_ENTRY  OUTPUT=<R6>, SCRATCH=<R2, R3, R4, R5>
         BSBW    TOKEN
         MOVAB   CLASSES, R4
         BSBW    KWMATCH
         DECL    R0
         BGEQ    20$
-        MOVL    (SP)+, R6               ; another clause's
-        BRB     80$
-20$:    TSTL    (SP)+
-        MOVAL   P_PROT(R11)[R0], R5
+        CLRL    R0
+        RSB
+20$:    MOVAL   P_PROT(R11)[R0], R5
         MOVL    #^X1F, (R5)             ; nothing, unless its letters say
         BSBW    BLANKS
         CMPL    R6, R7
@@ -629,20 +637,20 @@ DEFPROT:
         CMPB    (R6), #COLON
         BEQL    30$
         CMPB    (R6), #EQUAL
-        BNEQ    10$
+        BNEQ    80$
 30$:    INCL    R6
 40$:    CMPL    R6, R7
         BGEQU   80$
         MOVZBL  (R6), R0
         BICB2   #^X20, R0
         LOCC    R0, #5, LETTERS
-        BEQL    10$
+        BEQL    80$
         SUBL3   R0, #5, R0
         BBCC    R0, (R5), 45$
 45$:    INCL    R6
         BRB     40$
-80$:    MOVL    #SS$_NORMAL, R0
-90$:    RSB
+80$:    MOVL    #1, R0
+        RSB
 
 ; MAKEACE: R11 = $PARSE_ACL's frame. Makes the ACE from what the text
 ; gave: an identifier ACE needs an identifier, and at most one UIC; a
@@ -677,7 +685,7 @@ MAKEACE:
 ; $FORMAT_ACL aclent, acllen, aclstr, width, trmdsc, indent, accnam,
 ; routin: writes the text of the ACE at the buffer aclent describes into
 ; the string aclstr describes, 0s after it, and its length into the word
-; at acllen, if it is given. The text starts after indent blanks, the
+; at acllen, if it is given, as much as fit. The text starts after indent blanks, the
 ; word at indent, 0 without it; with a width, the word at width, a line
 ; doesn't go past it: before a part that would, it writes the string
 ; trmdsc describes, if there is one, and indent blanks again. A part is
@@ -778,19 +786,22 @@ MAKEACE:
         BRB     36$
 70$:    MOVB    #RPAR, R0              ; the last + or , ends it
         BSBW    LASTCHAR
-        MOVL    8(AP), R0
-        BEQL    85$
-        MOVW    F_LEN(R11), (R0)
-85$:    MOVL    12(AP), R1              ; as much as fits
+        MOVL    12(AP), R1              ; as much as fits
         MOVL    #SS$_NORMAL, R6
-        CMPW    F_LEN(R11), (R1)
-        BLEQU   90$
-        MOVL    #SS$_BUFFEROVF, R6
-90$:    MOVL    F_LEN(R11), R2
+        MOVL    F_LEN(R11), R2
         CMPL    R2, #OUTMAX
-        BLEQU   92$
+        BLEQU   80$
         MOVL    #OUTMAX, R2
-92$:    MOVC5   R2, F_TEXT(R11), #0, (R1), @4(R1)
+        MOVL    #SS$_BUFFEROVF, R6
+80$:    MOVZWL  (R1), R0
+        CMPL    R2, R0
+        BLEQU   85$
+        MOVL    R0, R2
+        MOVL    #SS$_BUFFEROVF, R6
+85$:    MOVL    8(AP), R0               ; its length
+        BEQL    90$
+        MOVW    R2, (R0)
+90$:    MOVC5   R2, F_TEXT(R11), #0, (R1), @4(R1)
         MOVL    R6, R0
 95$:    RET
 

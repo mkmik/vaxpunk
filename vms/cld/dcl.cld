@@ -205,7 +205,7 @@ define syntax SET_SECURITY
 	qualifier AFTER, nonnegatable, value(required, type=$acl)
 	qualifier REPLACE, nonnegatable, value(required, list, type=$acl)
 	qualifier DELETE, nonnegatable, value(type=DELETE_OPTIONS)
-	qualifier LIKE, nonnegatable, value(required, list)
+	qualifier LIKE, nonnegatable, value(required, list, type=LIKE_OPTIONS)
 	qualifier DEFAULT, nonnegatable
 	qualifier CLASS, nonnegatable, value(required)
 	qualifier OWNER, nonnegatable, value(required, type=$uic)
@@ -216,6 +216,10 @@ define syntax SET_SECURITY
 
 define type DELETE_OPTIONS
 	keyword ALL
+
+define type LIKE_OPTIONS
+	keyword NAME, value(required)
+	keyword CLASS, value(required)
 
 ! SET FILE file: SET.EXE gives the file the owner, record attributes,
 ! expiration date and version limit its qualifiers say.
