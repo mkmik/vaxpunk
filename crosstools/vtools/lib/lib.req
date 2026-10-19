@@ -531,7 +531,7 @@ MACRO
 
 ! $IFBDEF
 LITERAL
-    IFB$K_LENGTH = 592,  ! the fixed part
+    IFB$K_LENGTH = 596,  ! the fixed part
     IFB$V_WRITE = 0,  ! it may be written: $CREATE made it or $OPEN opened it for that
     IFB$V_DIRTY = 1,  ! the buffer holds what the file hasn't yet
     IFB$V_HDR = 2,  ! the header changed: its end of file
@@ -567,7 +567,8 @@ MACRO
     IFB$L_RAB = 68, 0, 32, 0 %,  ! the RAB connected, or 0
     IFB$L_BUFSZ = 72, 0, 32, 0 %,  ! the buffer's size, to give it back
     IFB$L_LKID = 76, 0, 32, 0 %,  ! the file's access arbitration lock, or 0
-    IFB$AB_HDR = 80, 0, 0, 0 %;  ! the file's header
+    IFB$AB_HDR = 80, 0, 0, 0 %,  ! the file's header
+    IFB$W_VERLIMIT = 592, 0, 16, 0 %;  ! its name's version limit, in its directory
 
 ! $PLGDEF
 LITERAL

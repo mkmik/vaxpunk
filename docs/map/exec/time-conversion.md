@@ -25,9 +25,9 @@ note = "PRD-0004 step 11, the first BLISS-64 in the system"
 [[feature]]
 id = "bintim"
 title = "$BINTIM: text to a time, absolute or delta, with fields left out"
-status = "todo"
+status = "done"
 milestone = "m1"
-note = "PRD-0003 tier 1 #7: SUBMIT/AFTER needs it; SHOW TIME is left too"
+note = "numtim.b64, BLISS-64; SVCTEST checks it. PRD-0003 tier 1 #7: SUBMIT/AFTER needs it; SHOW TIME is left"
 
 [[feature]]
 id = "utc-forms"

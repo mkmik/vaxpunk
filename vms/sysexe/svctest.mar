@@ -185,6 +185,11 @@ FNFEND:
 Y2K:    .LONG   ^X13161CC0, ^X009E37DD  ; 1-JAN-2000 12:34:56.78
 DELTA:  .LONG   ^XA459A2E0, ^XFFFFFF25  ; 1 02:03:04.05, a delta time
 NUMBUF: .BLKW   7                       ; $NUMTIM's
+Y2KTXT: .ASCID  "1-jan-2000 12:34:56.78"        ; $BINTIM's: Y2K's
+DELTXT: .ASCID  "1 02:3:04.05"          ; DELTA's
+BADTXT: .ASCID  "29-FEB-1900"           ; not a leap year
+        .ALIGN  QUAD
+BINBUF: .BLKQ   1
 
         .PSECT  CODE, EXE, LONG
         .ENTRY  START, ^M<R2, R3>
@@ -458,7 +463,8 @@ NUMBUF: .BLKW   7                       ; $NUMTIM's
         EXPECT  #SS$_BUFFEROVF, 72
         CMPW    MSGLEN, #4
         BNEQ    80$
-; $ASCTIM and $NUMTIM, of fixed times; $NUMTIM is BLISS-64.
+; $ASCTIM, $NUMTIM and $BINTIM, of fixed times; $NUMTIM and $BINTIM are
+; BLISS-64.
         $ASCTIM_S TIMLEN=MSGLEN, TIMBUF=MSGDSC, TIMADR=Y2K
         EXPECT  #SS$_NORMAL, 96
         CMPW    MSGLEN, #23
@@ -491,6 +497,20 @@ NUMBUF: .BLKW   7                       ; $NUMTIM's
         BNEQ    80$
         CMPW    NUMBUF+12, #78          ; the hundredths
         BNEQ    80$
+        $BINTIM_S TIMBUF=Y2KTXT, TIMADR=BINBUF
+        EXPECT  #SS$_NORMAL, 104
+        CMPL    BINBUF, Y2K
+        BNEQ    80$
+        CMPL    BINBUF+4, Y2K+4
+        BNEQ    80$
+        $BINTIM_S TIMBUF=DELTXT, TIMADR=BINBUF
+        EXPECT  #SS$_NORMAL, 105
+        CMPL    BINBUF, DELTA
+        BNEQ    80$
+        CMPL    BINBUF+4, DELTA+4
+        BNEQ    80$
+        $BINTIM_S TIMBUF=BADTXT, TIMADR=BINBUF
+        EXPECT  #SS$_IVTIME, 106
         BRB     81$
 80$:    BRW     90$
 81$:

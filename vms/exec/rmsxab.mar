@@ -23,7 +23,7 @@
         $XABKEYDEF
         $XABALLDEF
 
-        .EXTERNAL IDX$XABSUM, IDX$XABKEY, IDX$XABALL
+        .EXTERNAL IDX$XABSUM, IDX$XABKEY, IDX$XABALL, FIL$ISDIR
 
 BLOCK = 512
 MAXXAB = 16                             ; XABs in a chain, at most
@@ -38,6 +38,7 @@ FAT$B_VFCSIZE = 35
 FAT$W_MAXREC = 36
 FAT$W_DEFEXT = 38
 FAT$W_GBC = 40
+FAT$W_VERSIONS = 50                     ; a directory's default version limit
 FH2$B_IDOFFSET = 0                      ; the ident area, in words
 FH2$L_FILEOWNER = 60
 FH2$W_FILEPROT = 64
@@ -123,7 +124,12 @@ RMS$XABOUT::
         MOVW    IFB$AB_HDR+FAT$W_MAXREC(R7), XAB$W_MRZ(R6)
         MOVW    IFB$AB_HDR+FAT$W_DEFEXT(R7), XAB$W_DXQ(R6)
         MOVW    IFB$AB_HDR+FAT$W_GBC(R7), XAB$W_GBC(R6)
-        CLRW    XAB$W_VERLIMIT(R6)
+        MOVW    IFB$W_VERLIMIT(R7), XAB$W_VERLIMIT(R6)  ; its name's, or a directory's default
+        MOVAB   IFB$AB_HDR(R7), R1
+        BSBW    FIL$ISDIR
+        BLBC    R0, 105$
+        MOVW    IFB$AB_HDR+FAT$W_VERSIONS(R7), XAB$W_VERLIMIT(R6)
+105$:
         CLRL    XAB$L_SBN(R6)
         BRW     70$
 ; DAT, RDT: the dates in the header's ident area.

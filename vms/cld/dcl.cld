@@ -137,6 +137,7 @@ define type SET_OPTIONS
 	keyword COMMAND, syntax=SET_COMMAND
 	keyword CONTROL, negatable, value(list, type=CONTROL_OPTIONS)
 	keyword DEFAULT, syntax=SET_DEFAULT
+	keyword DIRECTORY, syntax=SET_DIRECTORY
 	keyword FILE, syntax=SET_FILE
 	keyword HOST, syntax=SET_HOST
 	keyword PASSWORD, syntax=SET_PASSWORD
@@ -146,6 +147,7 @@ define type SET_OPTIONS
 	keyword PROTECTION, value(list), syntax=SET_PROTECTION
 	keyword TERMINAL, syntax=SET_TERMINAL
 	keyword VERIFY, negatable
+	keyword VOLUME, syntax=SET_VOLUME
 
 ! SET [NO]CONTROL[=Y]: CTRL/Y, and CTRL/C no image takes, on or off.
 ! ponytail: no T, CTRL/T has no status line to show.
@@ -187,13 +189,37 @@ define syntax SET_PROTECTION
 	parameter P1, label=OPTION, value(required, type=SET_OPTIONS)
 	parameter P2, label=FILE, prompt="File", value(required, type=$infile)
 
-! SET FILE/OWNER_UIC=uic file: SET.EXE gives the file that owner.
+! SET FILE file: SET.EXE gives the file the owner, record attributes,
+! expiration date and version limit its qualifiers say.
 define syntax SET_FILE
 	image SET
 	parameter P1, label=OPTION, value(required, type=SET_OPTIONS)
 	parameter P2, label=FILE, prompt="File", value(required, type=$infile)
-	qualifier OWNER_UIC, value(required, type=$uic)
-	disallow not OWNER_UIC
+	qualifier ATTRIBUTE, nonnegatable, value(required, list)
+	qualifier EXPIRATION_DATE, value(required, type=$datetime)
+	qualifier OWNER_UIC, nonnegatable, value(required, type=$uic)
+	qualifier VERSION_LIMIT, nonnegatable, value(type=$number)
+	disallow not (ATTRIBUTE or EXPIRATION_DATE or neg EXPIRATION_DATE or OWNER_UIC or VERSION_LIMIT)
+
+! SET DIRECTORY/VERSION_LIMIT[=n] directory: SET.EXE gives the directory
+! the default version limit its new names get.
+define syntax SET_DIRECTORY
+	image SET
+	parameter P1, label=OPTION, value(required, type=SET_OPTIONS)
+	parameter P2, label=DIRECTORY, prompt="Directory", value(required, type=$infile)
+	qualifier VERSION_LIMIT, nonnegatable, value(type=$number)
+	disallow not VERSION_LIMIT
+
+! SET VOLUME device: SET.EXE changes the label, owner, protection and
+! default file protection of the volume mounted there.
+define syntax SET_VOLUME
+	image SET
+	parameter P1, label=OPTION, value(required, type=SET_OPTIONS)
+	parameter P2, label=DEVICE, prompt="Device", value(required)
+	qualifier FILE_PROTECTION, nonnegatable, value(required, list)
+	qualifier LABEL, nonnegatable, value(required)
+	qualifier OWNER_UIC, nonnegatable, value(required, type=$uic)
+	qualifier PROTECTION, nonnegatable, value(required, list)
 
 ! SET TERMINAL [device]: SET.EXE sets the terminal's characteristics.
 ! ponytail: the ones a terminal keeps that a program may care about; no

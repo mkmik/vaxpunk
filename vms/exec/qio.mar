@@ -41,7 +41,7 @@
         .EXTERNAL EXE$ALONONPAGED, EXE$DEANONPGDSIZ
         .EXTERNAL LNM$TRNLOG, DK$FDT, DK$STARTIO, TT$FINDUNIT, TT$CANCEL, FT$FDT
         .EXTERNAL NET$FDT, NET$CANCEL, NET$FINDUNIT, MB$CANCEL, MB$FINDUNIT
-        .EXTERNAL F11$AB_DKA0, F11$AB_DKB0, F11$AB_MDA0
+        .EXTERNAL F11$AB_DKA0, F11$AB_DKB0, F11$AB_MDA0, XQP$GL_IRP, XQP$PERFORM
 
         .PSECT  EXEC$DATA, NOEXE, WRT, QUAD
 IOC$AB_UCB::                            ; the devices' UCBs, which $ASSIGN looks through
@@ -226,7 +226,9 @@ IOC$TRNDEVNAM::
 ; driver puts in the second longword, sets the flag and calls astadr with
 ; astprm in the caller's mode. A terminal's driver (TT$FDT) writes p2
 ; bytes at p1, or reads a line into them, after the prompt in p5 and p6
-; for IO$_READPROMPT; the disks' (DK$FDT) reads or writes them at LBN p3.
+; for IO$_READPROMPT; the disks' (DK$FDT) reads or writes them at LBN p3,
+; and for IO$_ACCESS and IO$_MODIFY makes an IRP that XQP$PERFORM does
+; here, once IPL is back where it was, as VMS's XQP does in the process.
 ; The FDT routines read the arguments through AP, so it homes them all.
 ; A request IOC$ALLOCIRP finds past the process's quotas waits for them
 ; in resource wait, SCH$C_MWAIT, until an AST, its I/O done, ends the
@@ -260,7 +262,14 @@ EXE$QIO::
         MOVAQ   RWAITQ, R0
         BSBW    SCH$WAIT
         BRB     20$
-30$:    ENBINT
+30$:    MOVL    XQP$GL_IRP, R3          ; the file system's function: do it here
+        BEQL    35$
+        CLRL    XQP$GL_IRP
+        ENBINT
+        BSBW    XQP$PERFORM
+        MOVL    #SS$_NORMAL, R0
+        RET
+35$:    ENBINT
         RET
 70$:    ENBINT
 75$:    MOVL    #SS$_IVCHAN, R0

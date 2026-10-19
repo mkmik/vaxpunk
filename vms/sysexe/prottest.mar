@@ -10,7 +10,9 @@
 ; no privileges, which runs this image too, and waits for its termination
 ; message. PROTCHILD reads the file's first record; then it may not give
 ; the file another owner, which takes the system's access, delete it or
-; make a file in [000000], whose world may only look in it, else it exits
+; make a file in [000000], whose world may only look in it; and the file
+; system's $QIO, IO$_ACCESS, must find it in [000000] by its name and
+; read its owner, and IO$_MODIFY not give it another, else it exits
 ; with SS$_ABORT. PROTTEST says the file could be read,
 ; or returns the status that stopped PROTCHILD: RMS$_PRV for a file, or a
 ; volume, the world may not read.
@@ -25,6 +27,8 @@
         $ACCDEF
         $FABDEF
         $XABPRODEF
+        $FIBDEF
+        $ATRDEF
 
 OUTSIDER = ^X00800001                   ; [200,1]
 NEIGHBOUR = ^X00800002                  ; [200,2]
@@ -65,6 +69,16 @@ FAB:    $FAB    FNA=DATA, FNS=DATALEN, XAB=XAB
 XAB:    $XABPRO
 RAB:    $RAB    FAB=FAB, UBF=RECORD, USZ=80
 NEWFAB: $FAB    FNA=NEW, FNS=NEWLEN
+DKB0:   .ASCID  "DKB0:"
+NAMEDSC:
+        .ASCID  "DATA.TXT"
+FIBDSC: .LONG   FIB$C_LENGTH
+        .ADDRESS FIB
+FIB:    .BLKB   FIB$C_LENGTH
+OWNATR: .WORD   ATR$S_UIC, ATR$C_UIC    ; IO$_ACCESS's and IO$_MODIFY's
+        .ADDRESS OWNER
+        .LONG   0
+OWNER:  .LONG   0
 
         .PSECT  CODE, EXE, LONG
         .ENTRY  START, ^M<>
@@ -95,6 +109,8 @@ CHILD:  $OPEN   FAB=FAB
         BLBC    R0, 90$
         $GET    RAB=RAB
         BLBC    R0, 90$
+        BSBW    XQP
+        BLBC    R0, 90$
         MOVL    #NEIGHBOUR, XAB+XAB$L_UIC
         $CLOSE  FAB=FAB
         CMPL    R0, #RMS$_PRV
@@ -109,6 +125,34 @@ CHILD:  $OPEN   FAB=FAB
         RET
 80$:    MOVL    #SS$_ABORT, R0
 90$:    RET
+
+; XQP: looks DATA.TXT up in DKB0:[000000], the MFD, file 4, with
+; IO$_ACCESS, which must give the owner $OPEN put in XAB, then tries to
+; give it to [200,2] with IO$_MODIFY, by the file ID that gave, which must be SS$_NOPRIV. R0 =
+; SS$_NORMAL, SS$_ABORT if not, or a $QIOW's error.
+XQP:
+        .JSB_ENTRY
+        $ASSIGN_S DEVNAM=DKB0, CHAN=CHAN
+        BLBC    R0, 90$
+        MOVW    #4, FIB+FIB$W_DID_NUM
+        MOVW    #4, FIB+FIB$W_DID_SEQ
+        $QIOW_S CHAN=CHAN, FUNC=#IO$_ACCESS, IOSB=IOSB, P1=FIBDSC, P2=#NAMEDSC, P5=#OWNATR
+        BLBC    R0, 90$
+        MOVZWL  IOSB, R0
+        BLBC    R0, 90$
+        CMPL    OWNER, XAB+XAB$L_UIC
+        BNEQ    80$
+        MOVL    #NEIGHBOUR, OWNER
+        CLRL    FIB+FIB$W_DID           ; by the file ID IO$_ACCESS gave
+        CLRW    FIB+FIB$W_DID+4
+        $QIOW_S CHAN=CHAN, FUNC=#IO$_MODIFY, IOSB=IOSB, P1=FIBDSC, P5=#OWNATR
+        BLBC    R0, 90$
+        CMPW    IOSB, #SS$_NOPRIV
+        BNEQ    80$
+        MOVL    #SS$_NORMAL, R0
+        RSB
+80$:    MOVL    #SS$_ABORT, R0
+90$:    RSB
 
 ; CREATED: makes GIVEN.TXT with GXAB's owner and protection, checks
 ; that $OPEN gets them, and deletes it. R0 = SS$_NORMAL, SS$_ABORT if

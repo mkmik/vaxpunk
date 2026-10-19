@@ -878,10 +878,28 @@ FULL:
         BSBW    ADDDEC
 30$:    ADDTEXT ", Global buffer count: 0"
         BSBW    ISDIR
+        MOVZWL  FHC+XAB$W_VERLIMIT, R1  ; 0 and 32767 are none
         BLBS    R0, 32$
-        ADDTEXT ", No version limit"
+        TSTL    R1
+        BEQL    31$
+        CMPL    R1, #32767
+        BEQL    31$
+        ADDTEXT ", Version limit: "
+        MOVZWL  FHC+XAB$W_VERLIMIT, R1
+        BSBW    ADDDEC
         BRB     34$
-32$:    ADDTEXT ", No default version limit, Contiguous, Directory file"
+31$:    ADDTEXT ", No version limit"
+        BRB     34$
+32$:    TSTL    R1
+        BEQL    33$
+        CMPL    R1, #32767
+        BEQL    33$
+        ADDTEXT ", Default version limit: "
+        MOVZWL  FHC+XAB$W_VERLIMIT, R1
+        BSBW    ADDDEC
+        ADDTEXT ", Contiguous, Directory file"
+        BRB     34$
+33$:    ADDTEXT ", No default version limit, Contiguous, Directory file"
 34$:    BSBW    SAY
         ADDTEXT "Record format:      "
         BSBW    RECFMT

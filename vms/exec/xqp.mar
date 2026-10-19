@@ -1,0 +1,511 @@
+        .TITLE  XQP     The file system's $QIO functions on disk channels
+        .IDENT  /V0.1/
+;
+; A program asks the file system for a file's attributes, or changes
+; them, as VMS's asks its XQP (docs/adr/0039-xqp-qio-functions.md): a
+; $QIO on a channel to the disk, IO$_ACCESS to read them, IO$_MODIFY to
+; write them. p1 is a FIB's descriptor ($FIBDEF), which names the file
+; by its ID, FIB$W_FID, or by a name in a directory, FIB$W_DID: p2's
+; name, NAME.TYPE;VER, the highest version without one, or with
+; FIB$M_FINDFID the entry for FIB$W_FID itself. p5 is an attribute list
+; ($ATRDEF), descriptors of the attributes to read or write, a longword
+; of 0 after the last. IO$_MODIFY of a file named in a directory with
+; FIB$W_VERLIMIT not 0 gives its name that version limit, in the
+; directory, which takes write access to it. The FIB comes back with the
+; file's ID and its name's version limit. DK$FDT makes the IRP; $QIO calls XQP$PERFORM
+; once IPL is back below IPL$_SYNCH, in the process, as VMS's XQP runs
+; in the process that asked, and it completes the IRP: the IOSB gets the
+; status.
+; Reading needs read or control access to the file, looking a name up
+; execute access to its directory. Writing an owner, protection or date
+; needs control access, a new owner the system's, and the
+; characteristics or record attributes write access. A write marks the
+; file revised, now, as the XQP does; the size the file is allocated
+; and the characteristics the file system keeps, contiguous, directory,
+; marked for delete, stay as they are.
+; vaxpunk: VMS's IO$_MODIFY of the characteristics or the record
+; attributes checks no access; and it writes a file that is open,
+; where here that is SS$_ACCONFLICT, since RMS writes its own copy of
+; the header back. VMS's SET FILE opens the file first, for itself
+; alone, and gets the same.
+; ponytail: no IO$M_ACCESS, files opened on the channel, IO$_DEACCESS,
+; IO$_CREATE, IO$_DELETE or IO$_ACPCONTROL; a name with wildcards finds
+; its first match, with no FIB$L_WCC to go on from, and no result
+; string, p3 and p4. The attributes are those of $ATRDEF; others are
+; SS$_BADATTRIB.
+;
+        .LIBRARY "lib.mlb"
+        .LIBRARY "starlet.mlb"
+        $IPLDEF
+        $SSDEF
+        $RMSDEF
+        $VCBDEF
+        $UCBDEF
+        $IRPDEF
+        $IODEF
+        $ARMDEF
+        $FIBDEF
+        $ATRDEF
+
+        .EXTERNAL F11$GL_VCB, F11$GW_FID, EXE$GQ_SYSTIME, EXE$PROBER_DSC
+        .EXTERNAL FIL$LOCK, FIL$UNLOCK, FIL$READHDR, FIL$WRITEHDR, FIL$ISDIR
+        .EXTERNAL FIL$SEARCHDIR, FIL$CHKHDR, FIL$SETLIMIT, IOC$REQCOM, RMS$FILEBUSY
+
+BLOCK = 512
+MAXATR = 30                             ; descriptors in a list, at most
+FH2$B_IDOFFSET = 0                      ; a file header: the ident area, in words
+FH2$W_FID_SEQ = 10
+FH2$W_RECATTR = 20
+FAT$L_HIBLK = 4                         ; in it: the blocks allocated
+FH2$L_FILECHAR = 52
+FH2$L_FILEOWNER = 60
+FI2$W_REVISION = 20                     ; in the ident area
+FI2$Q_REVDATE = 30
+FCH$M_KEEP = ^X1F080                    ; the characteristics the file system keeps:
+                                        ; CONTIG, SPOOL, DIRECTORY, BADBLOCK, MARKDEL, NOCHARGE
+; An attribute's class, in ATRS.
+RO = 1                                  ; read only: a write leaves it
+CTL = 2                                 ; a write takes control access
+WRT = 4                                 ; a write takes write access
+IDENT = 8                               ; its offset is in the ident area
+
+        .PSECT  EXEC$DATA, NOEXE, WRT, QUAD
+XQP$GL_IRP::                            ; the IRP DK$FDT made, for $QIO to hand XQP$PERFORM, or 0
+        .LONG   0
+; Each attribute: its code, class, size and offset in the header.
+ATRS:   .BYTE   ATR$C_UCHAR, WRT
+        .WORD   ATR$S_UCHAR, FH2$L_FILECHAR
+        .BYTE   ATR$C_RECATTR, WRT
+        .WORD   ATR$S_RECATTR, FH2$W_RECATTR
+        .BYTE   ATR$C_HEADER, RO
+        .WORD   ATR$S_HEADER, 0
+        .BYTE   ATR$C_CREDATE, CTL!IDENT
+        .WORD   ATR$S_CREDATE, 22
+        .BYTE   ATR$C_REVDATE, CTL!IDENT
+        .WORD   ATR$S_REVDATE, FI2$Q_REVDATE
+        .BYTE   ATR$C_EXPDATE, CTL!IDENT
+        .WORD   ATR$S_EXPDATE, 38
+        .BYTE   ATR$C_BAKDATE, CTL!IDENT
+        .WORD   ATR$S_BAKDATE, 46
+        .BYTE   ATR$C_UIC, CTL
+        .WORD   ATR$S_UIC, FH2$L_FILEOWNER
+        .BYTE   ATR$C_FPRO, CTL
+        .WORD   ATR$S_FPRO, 64
+        .BYTE   ATR$C_UIC_RO, RO
+        .WORD   ATR$S_UIC_RO, FH2$L_FILEOWNER
+        .BYTE   0
+FIB:    .BLKB   FIB$C_LENGTH            ; the caller's, made whole with 0s
+FIBLEN: .LONG   0                       ; its length, up to FIB$C_LENGTH
+DIRHDR: .BLKB   BLOCK                   ; the directory's header
+HDR:    .BLKB   BLOCK                   ; the file's
+AFTER:  .WORD   0                       ; FIL$SEARCHDIR's entry to go on after: its version,
+        .BLKB   1+80                    ; its name, .ASCIC
+NAME:   .BLKB   80                      ; p2's name, without its version
+ENTNAME:                                ; the name of the entry FINDFILE found, NAME.TYPE,
+        .BLKB   80
+ENTLEN: .LONG   0                       ; and its length, 0 if it found none
+NEWLIM: .LONG   0                       ; IO$_MODIFY's FIB$W_VERLIMIT: the name's new version limit, or 0
+
+        .PSECT  $CODE$
+
+; XQP$PERFORM: R3 = an IRP DK$FDT made for IO$_ACCESS or IO$_MODIFY, R5
+; = the disk's UCB, AP = $QIO's arguments. Does it, holding FIL$LOCK,
+; writes the FIB back, and completes the IRP with the status:
+; SS$_NORMAL; SS$_DEVNOTMOUNT; SS$_INSFARG for a FIB shorter than
+; FIB$C_ACCDATA; SS$_ACCVIO; SS$_NOSUCHFILE; SS$_BADIRECTORY if FIB$W_DID
+; isn't a directory; SS$_BADATTRIB; SS$_BADPARAM for a bad name or a
+; version limit above 32767;
+; SS$_NOPRIV; SS$_WRITLCK; SS$_ACCONFLICT; or the disk's error. Below
+; IPL$_SYNCH. Keeps every register but R0.
+XQP$PERFORM::
+        .JSB_ENTRY  INPUT=<R3, R5, AP>
+        PUSHR   #^M<R1, R2, R3, R4, R5, R6, R7, R8, R9, R10, R11>
+        MOVL    R3, R11
+        BSBW    FIL$LOCK
+        MOVL    UCB$L_VCB(R5), R0
+        BEQL    5$
+        BBS     #VCB$V_MOUNTED, VCB$L_STATUS(R0), 10$
+5$:     MOVL    #SS$_DEVNOTMOUNT, R0
+        BRB     80$
+10$:    MOVL    R0, F11$GL_VCB
+        BSBW    GETFIB
+        BLBC    R0, 80$
+        MOVZWL  FIB+FIB$W_VERLIMIT, NEWLIM
+        BSBW    FINDFILE
+        BLBC    R0, 80$
+        BICL3   #^C63, IRP$L_FUNC(R11), R0
+        CMPL    R0, #IO$_MODIFY
+        BEQL    20$
+        BSBW    READATTR
+        BRB     70$
+20$:    MOVL    #SS$_BADPARAM, R0
+        CMPL    NEWLIM, #32767
+        BGTRU   80$
+        BSBW    WRITEATTR
+        BLBC    R0, 80$
+        BSBW    SETLIMIT
+70$:    BLBC    R0, 80$
+        MOVL    FIBLEN, R1              ; the FIB back
+        MOVL    28(AP), R2
+        MOVL    4(R2), R2
+        IFNOWRT R1, (R2), 75$
+        MOVC3   R1, FIB, (R2)
+        MOVL    #SS$_NORMAL, R0
+        BRB     80$
+75$:    MOVL    #SS$_ACCVIO, R0
+80$:    BSBW    FIL$UNLOCK
+        DSBINT  #IPL$_SYNCH
+        CLRL    R1
+        MOVL    R11, R3
+        BSBW    IOC$REQCOM
+        ENBINT
+        POPR    #^M<R1, R2, R3, R4, R5, R6, R7, R8, R9, R10, R11>
+        RSB
+
+; GETFIB: AP = $QIO's arguments. Copies p1's FIB into FIB, the bytes
+; past its end 0, and its length, up to FIB$C_LENGTH, into FIBLEN. R0 =
+; SS$_NORMAL, SS$_INSFARG, or SS$_ACCVIO. Uses R0-R5.
+GETFIB:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5>
+        MOVL    28(AP), R1
+        BSBW    EXE$PROBER_DSC
+        BLBC    R0, 90$
+        MOVZWL  (R1), R0
+        CMPL    R0, #FIB$C_LENGTH
+        BLEQU   10$
+        MOVL    #FIB$C_LENGTH, R0
+10$:    MOVL    R0, FIBLEN
+        MOVL    #SS$_INSFARG, R0
+        CMPL    FIBLEN, #FIB$C_ACCDATA
+        BLSSU   90$
+        MOVC5   FIBLEN, @4(R1), #0, #FIB$C_LENGTH, FIB
+        MOVL    #SS$_NORMAL, R0
+90$:    RSB
+
+; FINDFILE: FIB names a file. With a directory, FIB$W_DID, looks its entry
+; up there, by p2's name or, with FIB$M_FINDFID, by FIB$W_FID, and puts
+; its ID in FIB$W_FID, its version limit in FIB$W_VERLIMIT and its name in
+; ENTNAME. Reads its header into HDR. R0 = SS$_NORMAL, SS$_NOSUCHFILE, SS$_BADIRECTORY,
+; SS$_BADPARAM, SS$_NOPRIV, SS$_ACCVIO, or the disk's error. Uses R0-R10.
+FINDFILE:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5, R6, R7, R8, R9, R10>
+        CLRL    ENTLEN
+        TSTW    FIB+FIB$W_DID_NUM
+        BNEQ    10$
+        TSTB    FIB+FIB$B_DID_NMX
+        BNEQ    10$
+        BRW     60$
+10$:    MOVZBL  FIB+FIB$B_DID_NMX, R0   ; the directory
+        ASHL    #16, R0, R0
+        MOVW    FIB+FIB$W_DID_NUM, R0
+        MOVZWL  FIB+FIB$W_DID_SEQ, R2
+        MOVAB   DIRHDR, R1
+        BSBW    READFID
+        BLBC    R0, 95$
+        MOVL    #SS$_BADIRECTORY, R0
+        MOVAB   DIRHDR, R1
+        BSBW    FIL$ISDIR
+        BLBC    R0, 95$
+        MOVL    #ARM$M_EXECUTE, R0
+        MOVAB   DIRHDR, R1
+        BSBW    FIL$CHKHDR
+        BLBC    R0, 95$
+        MOVAB   DIRHDR, R3
+        CLRL    R9
+        BBS     #FIB$V_FINDFID, FIB+FIB$W_NMCTL, 30$
+        BSBW    GETNAME
+        BLBC    R0, 95$
+        MOVAB   DIRHDR, R3
+        BSBW    FIL$SEARCHDIR
+        BLBC    R0, 80$
+        BRB     50$
+30$:    MOVAB   STAR, R6                ; FINDFID: every entry, until its
+        MOVL    #1, R7
+        MNEGL   #1, R8
+40$:    BSBW    FIL$SEARCHDIR
+        BLBC    R0, 80$
+        CMPL    F11$GW_FID, FIB+FIB$W_FID
+        BNEQ    45$
+        CMPW    F11$GW_FID+4, FIB+FIB$W_FID+4
+        BEQL    50$
+45$:    MOVAB   AFTER, R9               ; on after this one
+        MOVW    R4, (R9)
+        MOVB    R2, 2(R9)
+        MOVC3   R2, (R1), 3(R9)
+        MOVAB   DIRHDR, R3
+        BRB     40$
+50$:    MOVW    -4(R1), FIB+FIB$W_VERLIMIT      ; its record's DIR$W_VERLIMIT
+        MOVL    F11$GW_FID, FIB+FIB$W_FID
+        MOVW    F11$GW_FID+4, FIB+FIB$W_FID+4
+        MOVL    R2, ENTLEN
+        MOVC3   R2, (R1), ENTNAME
+60$:    MOVZBL  FIB+FIB$B_FID_NMX, R0   ; the file
+        ASHL    #16, R0, R0
+        MOVW    FIB+FIB$W_FID_NUM, R0
+        MOVZWL  FIB+FIB$W_FID_SEQ, R2
+        MOVAB   HDR, R1
+        BSBW    READFID
+        BRB     95$
+80$:    CMPL    R0, #SS$_NOMOREFILES
+        BNEQ    95$
+        MOVL    #SS$_NOSUCHFILE, R0
+95$:    RSB
+
+STAR:   .ASCII  "*"
+
+; READFID: R0 = a file number, R1 = a buffer, R2 = the sequence number
+; the FIB gives the file. Reads its header there. R0 = SS$_NORMAL,
+; SS$_NOSUCHFILE if it is another file's, or FIL$READHDR's error. Uses R0.
+READFID:
+        .JSB_ENTRY
+        BSBW    FIL$READHDR
+        BLBC    R0, 90$
+        CMPW    FH2$W_FID_SEQ(R1), R2
+        BEQL    90$
+        MOVL    #SS$_NOSUCHFILE, R0
+90$:    RSB
+
+; GETNAME: AP = $QIO's arguments. Takes p2's name, NAME.TYPE;VER or
+; NAME.TYPE.VER, the version absent or empty for the highest, * for any:
+; R6 = the name, in capitals, in NAME, R7 = its length, R8 = the version,
+; 0 the highest, -1 any. R0 = SS$_NORMAL, SS$_BADPARAM, or SS$_ACCVIO.
+; Uses R0-R8.
+GETNAME:
+        .JSB_ENTRY  OUTPUT=<R6, R7, R8>, SCRATCH=<R2, R3, R4, R5>
+        MOVL    32(AP), R1
+        BSBW    EXE$PROBER_DSC
+        BLBC    R0, 90$
+        MOVZWL  (R1), R2                ; what is left of it
+        MOVL    4(R1), R3
+        MOVAB   NAME, R6
+        CLRL    R7
+        CLRL    R4                      ; the dots
+10$:    TSTL    R2
+        BEQL    50$
+        MOVZBL  (R3)+, R0
+        DECL    R2
+        CMPB    R0, #^A";"
+        BEQL    30$
+        CMPB    R0, #^A/./
+        BNEQ    20$
+        INCL    R4
+        CMPL    R4, #2
+        BEQL    30$
+20$:    CMPB    R0, #^A/a/
+        BLSSU   25$
+        CMPB    R0, #^A/z/
+        BGTRU   25$
+        SUBB2   #^A/a/-^A/A/, R0
+25$:    CMPL    R7, #80
+        BGEQU   80$
+        MOVB    R0, (R6)[R7]
+        INCL    R7
+        BRB     10$
+30$:    CLRL    R8                      ; the version
+        TSTL    R2
+        BEQL    60$
+        CMPL    R2, #1
+        BNEQ    40$
+        CMPB    (R3), #^A/*/
+        BNEQ    40$
+        MNEGL   #1, R8
+        BRB     60$
+40$:    MOVZBL  (R3)+, R0
+        SUBL2   #^A/0/, R0
+        CMPL    R0, #9
+        BGTRU   80$
+        MULL2   #10, R8
+        ADDL2   R0, R8
+        CMPL    R8, #32767
+        BGTRU   80$
+        SOBGTR  R2, 40$
+        BRB     60$
+50$:    CLRL    R8
+60$:    TSTL    R7
+        BEQL    80$
+        MOVL    #SS$_NORMAL, R0
+        RSB
+80$:    MOVL    #SS$_BADPARAM, R0
+90$:    RSB
+
+; READATTR: AP = $QIO's arguments, HDR = the file's header. Copies each
+; attribute p5's list asks for where it says, after a check that the
+; process may read the file, or control it. R0 = SS$_NORMAL,
+; SS$_NOPRIV, SS$_BADATTRIB, or SS$_ACCVIO. Uses R0-R10.
+READATTR:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5, R6, R7, R8, R9, R10>
+        MOVL    44(AP), R6
+        BEQL    80$
+        MOVL    #ARM$M_READ, R0
+        MOVAB   HDR, R1
+        BSBW    FIL$CHKHDR
+        BLBS    R0, 5$
+        MOVL    #ARM$M_CONTROL, R0
+        BSBW    FIL$CHKHDR
+        BLBC    R0, 90$
+5$:     MOVL    #MAXATR+1, R7
+10$:    BSBW    NEXTATR
+        BLBC    R0, 90$
+        TSTL    R8
+        BEQL    80$
+        IFNOWRT R10, @ATR$L_ADDR(R6), 85$
+        MOVC3   R10, (R9), @ATR$L_ADDR(R6)
+        ADDL2   #8, R6
+        BRB     10$
+80$:    MOVL    #SS$_NORMAL, R0
+        RSB
+85$:    MOVL    #SS$_ACCVIO, R0
+90$:    RSB
+
+; WRITEATTR: AP = $QIO's arguments, HDR = the file's header. Checks the
+; attributes in p5's list, the volume, that no stream has the file open
+; and the access the process needs, then gives the file each of them,
+; marks it revised and writes its header. R0 = SS$_NORMAL, SS$_BADATTRIB,
+; SS$_ACCVIO, SS$_WRITLCK, SS$_ACCONFLICT, SS$_INSFMEM, SS$_NOPRIV, or
+; the disk's error. Uses R0-R10.
+WRITEATTR:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5, R6, R7, R8, R9, R10>
+        CLRL    R5                      ; the access it takes
+        MOVL    44(AP), R6
+        BNEQ    5$
+        BRW     80$
+5$:     MOVL    #MAXATR+1, R7
+10$:    PUSHL   R5
+        BSBW    NEXTATR
+        MOVL    (SP)+, R5
+        BLBC    R0, 15$
+        TSTL    R8
+        BEQL    30$
+        IFNORD  R10, @ATR$L_ADDR(R6), 85$
+        BBS     #0, 1(R8), 25$          ; RO
+        BBC     #1, 1(R8), 20$          ; CTL
+        BISL2   #ARM$M_CONTROL, R5
+20$:    BBC     #2, 1(R8), 22$          ; WRT
+        BISL2   #ARM$M_WRITE, R5
+22$:    CMPB    (R8), #ATR$C_UIC        ; another owner: the system's
+        BNEQ    25$
+        CMPL    R10, #ATR$S_UIC
+        BNEQ    25$
+        CMPL    @ATR$L_ADDR(R6), HDR+FH2$L_FILEOWNER
+        BEQL    25$
+        BISL2   #ARM$M_SYSTEM, R5
+25$:    ADDL2   #8, R6
+        BRB     10$
+15$:    RSB
+30$:    TSTL    R5
+        BNEQ    35$
+        BRW     80$                     ; nothing to write
+35$:    MOVL    F11$GL_VCB, R1
+        MOVL    #SS$_WRITLCK, R0
+        BBC     #VCB$V_WRITE, VCB$L_STATUS(R1), 90$
+        MOVL    R5, R0
+        MOVAB   HDR, R1
+        BSBW    FIL$CHKHDR
+        BLBC    R0, 90$
+        MOVAB   HDR, R2
+        BSBW    RMS$FILEBUSY
+        BLBS    R0, 40$
+        CMPL    R0, #RMS$_FLK
+        BNEQ    38$
+        MOVL    #SS$_ACCONFLICT, R0
+        RSB
+38$:    MOVL    #SS$_INSFMEM, R0
+        RSB
+40$:
+        MOVZBL  HDR+FH2$B_IDOFFSET, R0  ; revised now
+        MOVAW   HDR[R0], R0
+        MOVQ    EXE$GQ_SYSTIME, FI2$Q_REVDATE(R0)
+        INCW    FI2$W_REVISION(R0)
+        PUSHL   HDR+FH2$L_FILECHAR      ; what it keeps
+        PUSHL   HDR+FH2$W_RECATTR+FAT$L_HIBLK
+        MOVL    44(AP), R6
+        MOVL    #MAXATR+1, R7
+50$:    BSBW    NEXTATR
+        TSTL    R8
+        BEQL    60$
+        BBS     #0, 1(R8), 55$          ; RO
+        MOVC3   R10, @ATR$L_ADDR(R6), (R9)
+55$:    ADDL2   #8, R6
+        BRB     50$
+60$:    MOVL    (SP)+, HDR+FH2$W_RECATTR+FAT$L_HIBLK
+        MOVL    (SP)+, R0
+        BICL2   #FCH$M_KEEP, HDR+FH2$L_FILECHAR
+        BICL2   #^C<FCH$M_KEEP>, R0
+        BISL2   R0, HDR+FH2$L_FILECHAR
+        MOVAB   HDR, R1
+        BSBW    FIL$WRITEHDR
+        RSB
+80$:    MOVL    #SS$_NORMAL, R0
+        RSB
+85$:    MOVL    #SS$_ACCVIO, R0
+90$:    RSB
+
+; SETLIMIT: NEWLIM = IO$_MODIFY's version limit, ENTNAME the name
+; FINDFILE found in DIRHDR's directory. Gives the name that limit, which
+; takes write access to the directory, and puts it in FIB$W_VERLIMIT.
+; Nothing without a limit or a name. R0 = SS$_NORMAL, SS$_WRITLCK,
+; SS$_NOPRIV, or FIL$SETLIMIT's error. Uses R0-R8.
+SETLIMIT:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5, R6, R7, R8>
+        MOVL    #SS$_NORMAL, R0
+        TSTL    NEWLIM
+        BEQL    90$
+        TSTL    ENTLEN
+        BEQL    90$
+        MOVL    F11$GL_VCB, R1
+        MOVL    #SS$_WRITLCK, R0
+        BBC     #VCB$V_WRITE, VCB$L_STATUS(R1), 90$
+        MOVL    #ARM$M_WRITE, R0
+        MOVAB   DIRHDR, R1
+        BSBW    FIL$CHKHDR
+        BLBC    R0, 90$
+        MOVAB   DIRHDR, R3
+        MOVAB   ENTNAME, R6
+        MOVL    ENTLEN, R7
+        MOVL    NEWLIM, R8
+        BSBW    FIL$SETLIMIT
+        BLBC    R0, 90$
+        MOVW    NEWLIM, FIB+FIB$W_VERLIMIT
+90$:    RSB
+
+; NEXTATR: R6 = a descriptor in an attribute list, R7 = how many more
+; may follow, plus one. R8 = its entry in ATRS, or 0 past the last; R9 =
+; where the attribute is in HDR; R10 = its size. R0 = SS$_NORMAL,
+; SS$_BADATTRIB for an attribute it doesn't know, one longer than it is,
+; or more than MAXATR of them, or SS$_ACCVIO. Uses R0-R2, R7-R10.
+NEXTATR:
+        .JSB_ENTRY  OUTPUT=<R7, R8, R9, R10>, SCRATCH=<R2>
+        CLRL    R8
+        IFNORD  #4, (R6), 85$
+        TSTL    (R6)
+        BEQL    80$
+        IFNORD  #8, (R6), 85$
+        MOVL    #SS$_BADATTRIB, R0
+        SOBGTR  R7, 10$
+        RSB
+10$:    MOVAB   ATRS, R8
+20$:    TSTB    (R8)
+        BEQL    70$
+        MOVZBL  (R8), R0
+        CMPW    R0, ATR$W_TYPE(R6)
+        BEQL    30$
+        ADDL2   #6, R8
+        BRB     20$
+30$:    MOVZWL  ATR$W_SIZE(R6), R10
+        CMPW    R10, 2(R8)
+        BGTRU   70$
+        MOVAB   HDR, R9
+        BBC     #3, 1(R8), 40$          ; IDENT
+        MOVZBL  HDR+FH2$B_IDOFFSET, R0
+        MOVAW   HDR[R0], R9
+40$:    MOVZWL  4(R8), R0
+        ADDL2   R0, R9
+80$:    MOVL    #SS$_NORMAL, R0
+        RSB
+70$:    CLRL    R8
+        MOVL    #SS$_BADATTRIB, R0
+        RSB
+85$:    MOVL    #SS$_ACCVIO, R0
+        RSB
+
+        .END

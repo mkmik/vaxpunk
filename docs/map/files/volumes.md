@@ -84,7 +84,13 @@ needs = ["/drivers/interrupt-io"]
 
 [[feature]]
 id = "set-volume"
-title = "SET VOLUME: label, owner, protection, erase on delete, high-water marking"
+title = "SET VOLUME: label, owner, protection, default file protection"
+status = "done"
+note = "FIL$SETVOLUME, in kernel mode through $CMKRNL, rewrites each home block (ADR-0039); SET.EXE has no CMKRNL of its own, as VMS's is installed with"
+
+[[feature]]
+id = "volume-characteristics"
+title = "SET VOLUME/[NO]ERASE_ON_DELETE and /[NO]HIGHWATER_MARKING, and what they do"
 status = "todo"
 
 [[feature]]

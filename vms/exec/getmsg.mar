@@ -1189,6 +1189,18 @@ MESSAGES:
         .ASCIC  "SYSTEM"
         .ASCIC  "NOSUCHFILE"
         .ASCIC  "no such file"
+        .LONG   SS$_BADATTRIB
+        .ASCIC  "SYSTEM"
+        .ASCIC  "BADATTRIB"
+        .ASCIC  "bad attribute control list"
+        .LONG   SS$_ACCONFLICT
+        .ASCIC  "SYSTEM"
+        .ASCIC  "ACCONFLICT"
+        .ASCIC  "file access conflict"
+        .LONG   SS$_IVTIME
+        .ASCIC  "SYSTEM"
+        .ASCIC  "IVTIME"
+        .ASCIC  "invalid time"
         .LONG   SS$_TIMEOUT
         .ASCIC  "SYSTEM"
         .ASCIC  "TIMEOUT"

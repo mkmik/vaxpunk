@@ -22,7 +22,8 @@
 ; process's PCB holds by IFI, the index $OPEN puts in FAB$W_IFI; $CONNECT
 ; puts the same index in RAB$W_ISI. $CREATE makes a new file, a version
 ; above the highest there is unless the specification gives one, with
-; the FAB's record attributes and allocation, and opens it. The record
+; the FAB's record attributes and allocation, and opens it; past its
+; name's version limit, the lowest version goes. The record
 ; services, $GET, $FIND, $PUT, $UPDATE, $DELETE, $TRUNCATE, $REWIND and
 ; $FLUSH, go to the file's organization: rmsseq.mar for sequential files,
 ; and block I/O, $READ, $WRITE and $SPACE, for any; rmsrel.mar for
@@ -48,9 +49,7 @@
 ; directory entry and marks it for delete, and the last stream to close it
 ; deletes it.
 ;
-; ponytail: SET PROTECTION, which opens the file,
-; needs read access to it, where VMS's asks the XQP with IO$_MODIFY. The
-; services run in kernel mode holding the file system's
+; ponytail: the services run in kernel mode holding the file system's
 ; lock, FIL$LOCK, which keeps its buffers and RMS's to one process; VMS's
 ; RMS runs in executive mode, in the process's own P1. One stream per
 ; file, and one writer: no bucket or record locks; no concealed devices,
@@ -182,7 +181,11 @@ SYSDISK:                                ; the process's default directory, .ASCI
         .ASCII  "SYS$DISK:"
         .BLKB   63
 ARBNAM: .ASCII  "F11B$a"                ; an access arbitration lock's name starts so
-HDRBUF: .BLKB   BLOCK                   ; the header of a file $ERASE deletes, $CLOSE changes, or $CREATE follows
+HDRBUF: .BLKB   BLOCK                   ; the header of a file $ERASE deletes, $CLOSE changes, $CREATE follows or purges
+VERLIM: .LONG   0                       ; the version limit of the name SEARCH found last
+PURGEAT:                                ; PURGEVER's entry to go on after: its version, its name, .ASCIC
+        .WORD   0
+        .BLKB   1+MAXKEY
 XABPRO: .LONG   0                       ; the FAB's protection XAB, or 0
 MFDNAME:
         .ASCII  "000000"
@@ -1152,7 +1155,8 @@ SEARCH:
         BSBW    SUBDIR
         BLBS    R0, 10$
         BRB     50$
-80$:    PUSHL   R5
+80$:    MOVZWL  -4(R1), VERLIM          ; its record's DIR$W_VERLIMIT
+        PUSHL   R5
         BSBW    MKRES
         MOVL    (SP)+, R5
         MOVL    #SS$_NORMAL, R0
@@ -1832,6 +1836,7 @@ L:      BSBW    FIL$UNLOCK
         POPR    #^M<R7, R8, R9>
         BLBC    R0, 80$
         MOVL    F11$GL_VCB, IFB$L_VCB(R7)       ; the volume it was found on
+        MOVW    VERLIM, IFB$W_VERLIMIT(R7)
         MOVZBL  FAB$B_FAC(R10), R6      ; the access: $GET's if it gives none
         BNEQ    7$
         MOVL    #FAB$M_GET, R6
@@ -2118,10 +2123,10 @@ UNLOCKFILE:
         POPR    #^M<R0, R1, R2, R3>
 90$:    RSB
 
-; FILEBUSY: R2 = a file's header, on F11$GL_VCB's volume. R0 =
+; RMS$FILEBUSY: R2 = a file's header, on F11$GL_VCB's volume. R0 =
 ; RMS$_NORMAL if no stream has it open, RMS$_FLK if one has, or RMS$_DME.
 ; Uses R0-R3.
-FILEBUSY:
+RMS$FILEBUSY::
         .JSB_ENTRY  SCRATCH=<R2, R3>
         MOVL    #LCK$K_EXMODE, R1
         BSBW    LOCKFILE
@@ -2173,7 +2178,7 @@ DELLAST:
         CLRL    IFB$L_LKID(R7)
         MOVL    IFB$L_VCB(R7), F11$GL_VCB
         MOVAB   IFB$AB_HDR(R7), R2
-        BSBW    FILEBUSY
+        BSBW    RMS$FILEBUSY
         BLBC    R0, 90$
         MOVZBL  IFB$AB_HDR+FH2$B_FID_NMX(R7), R0
         ASHL    #16, R0, R0
@@ -2544,7 +2549,8 @@ FLUSH:
 ; string and file ID. A relative file gets its prologue, with FAB$L_MRN
 ; (REL$CREATE); an indexed one its prologue, keys and areas from the
 ; FAB's XABKEYs and XABALLs (IDX$CREATE). Its version is one above the
-; highest there is, unless the specification gives one. The file is the
+; highest there is, unless the specification gives one; a name past its
+; version limit then loses its lowest version (PURGEVER). The file is the
 ; current process's, with the protection of the highest version there
 ; is, or the default (f11wrt.mar), unless the FAB's protection XAB gives
 ; one, and an owner, not 0, which takes the system's access if it isn't
@@ -2630,6 +2636,7 @@ FLUSH:
         BLBC    R0, 50$
         BSBW    INSTALL
         BSBW    FABATTRS
+        BSBW    PURGEVER
         MOVL    #RMS$_NORMAL, R0
         BRB     90$
 50$:    PUSHL   R0                      ; it goes, entry and all
@@ -2739,9 +2746,61 @@ CREPRO:
 90$:    POPR    #^M<R6, R7, R8, R9>
         RSB
 
+; PURGEVER: $CREATE's new version is in RMS$AB_DIRHDR's directory, by the
+; name FIELDS gives. If the name now has more versions than its version
+; limit, takes the lowest out of the directory and deletes it, or marks it
+; for delete if a stream has it open, as VMS's XQP does at create: one
+; each time. One that fails stays. Keeps every register.
+PURGEVER:
+        .JSB_ENTRY
+        PUSHR   #^M<R0, R1, R2, R3, R4, R5, R6, R7, R8, R9, R10, R11>
+        MOVAB   RMS$AB_DIRHDR, R3
+        MOVL    FIELDS+16, R6           ; NAME.TYPE
+        ADDL3   FIELDS+20, FIELDS+28, R7
+        MNEGL   #1, R8                  ; every version, highest first
+        CLRL    R9
+        CLRL    R10                     ; how many
+10$:    BSBW    FIL$SEARCHDIR
+        BLBC    R0, 30$
+        TSTL    R10
+        BNEQ    20$
+        MOVZWL  -4(R1), R11             ; its record's DIR$W_VERLIMIT
+20$:    INCL    R10
+        MOVAB   PURGEAT, R9             ; on after it
+        MOVW    R4, (R9)
+        MOVB    R2, 2(R9)
+        PUSHL   R3
+        MOVC3   R2, (R1), 3(R9)
+        MOVL    (SP)+, R3
+        BRB     10$
+30$:    TSTL    R11
+        BEQL    90$
+        CMPL    R10, R11
+        BLEQU   90$
+        MOVZWL  PURGEAT, R8             ; the lowest
+        BSBW    FIL$REMOVE
+        BLBC    R0, 90$
+        MOVL    R5, R0
+        MOVAB   HDRBUF, R1
+        BSBW    FIL$READHDR
+        BLBC    R0, 90$
+        MOVAB   HDRBUF, R2
+        BSBW    RMS$FILEBUSY
+        BLBS    R0, 40$
+        CMPL    R0, #RMS$_FLK
+        BNEQ    90$
+        MOVAB   HDRBUF, R2
+        BSBW    MARKDEL
+        BRB     90$
+40$:    MOVAB   HDRBUF, R1
+        BSBW    FIL$DELHDR
+90$:    POPR    #^M<R0, R1, R2, R3, R4, R5, R6, R7, R8, R9, R10, R11>
+        RSB
+
 ; CRENTER: R7 = an IFAB with a new file's header. Enters the file in the
 ; directory RMS$PARSE found, with the expanded specification's name and
-; version, and puts the name in the header: R4 = the version. R0 =
+; version, and puts the name in the header, and the name's version limit
+; in the IFAB: R4 = the version. R0 =
 ; SS$_NORMAL or FIL$ENTER's error. Uses R0-R6.
 CRENTER:
         .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5, R6>
@@ -2754,6 +2813,7 @@ CRENTER:
         BSBW    FIL$ENTER
         BLBC    R0, 90$
         MOVL    (SP), R1
+        MOVW    R5, IFB$W_VERLIMIT(R1)
         MOVAB   IFB$AB_HDR(R1), R1
         BSBW    FIL$SETNAME
 90$:    POPR    #^M<R7, R8>
@@ -2820,7 +2880,7 @@ CRENTER:
         CMPW    F11$AB_DIRBLK, #^XFFFF
         BNEQ    80$
 25$:    MOVAB   HDRBUF, R2
-        BSBW    FILEBUSY
+        BSBW    RMS$FILEBUSY
         CMPL    R0, #RMS$_DME
         BEQL    90$
         PUSHL   R0                      ; RMS$_FLK while it is open
@@ -2857,7 +2917,7 @@ CRENTER:
 ; RMS$PARSE's or the file system's error, with the ones above made. Each is the current process's, with the one
 ; above's protection, but delete (FIL$MKDIR).
 ; ponytail: a service; VMS's LIB$CREATE_DIR asks the XQP with $QIO
-; IO$_CREATE, and there are no XQP functions on disk channels. No owner,
+; IO$_CREATE, which the disks' XQP functions haven't yet. No owner,
 ; protection or version limit arguments.
         .ENTRY  EXE$CREATE_DIR, ^M<R2, R3, R4, R5, R6, R7, R8, R9, R10, R11>
         MOVL    4(AP), R1
