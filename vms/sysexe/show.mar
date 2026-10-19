@@ -9,8 +9,9 @@
 ; shows the version, the date and how long the system has been up, from
 ; $GETSYI, then a line for each process, from a wildcard $GETJPI: its PID,
 ; name, state, priority and image.
-; SHOW TERMINAL shows the terminal's characteristics (lib/term.mar), under
-; VMS's headings and names, four to a line.
+; SHOW TERMINAL shows the terminal's characteristics (lib/term.mar), or
+; with /PERMANENT its permanent ones, under VMS's headings and names,
+; four to a line.
 ; SHOW USERS lists the users logged in at terminals, the interactive
 ; processes, from a wildcard $GETJPI, sorted by username: how many each
 ; has, or with /FULL each process and its terminal; with a username,
@@ -28,9 +29,9 @@
 ; or batch jobs, so SHOW USERS counts interactive processes only; no
 ; paged pool, balance set, page or swap files for SHOW MEMORY; no machine
 ; check or memory error counts for SHOW ERROR, which shows 0; SHOW
-; QUOTA's /USER is taken and ignored, as no volume has a quota file. A terminal has no speed, parity or fill,
-; so SHOW TERMINAL shows a VT100's on a 9600 baud line; and it has no
-; TT3$ characteristics, so no DEC_CRT5, Ansi_Color or VMS Style Input.
+; QUOTA's /USER is taken and ignored, as no volume has a quota file. A
+; terminal has no parity or fill, and its input is VMS style, CTRL/H
+; back to the line's start.
 ;
         .LIBRARY "starlet.mlb"
         .LIBRARY "sysexe.mlb"
@@ -41,13 +42,15 @@
         $DCDEF
         $TTDEF
         $TT2DEF
+        $TT3DEF
         $DVSDEF
 
-        .EXTERNAL PUT_LINE, PRV_NAMES, TERM_SENSE
+        .EXTERNAL PUT_LINE, PRV_NAMES, TERM_SENSE, TERM_NAME, TERM_SPEEDS
 
 TT2 = 1                                 ; CHARS: a TT2$ bit, not a TT$ one,
 NOT = 2                                 ; on when it is clear,
-ALT = 4                                 ; with a name for off, not No and the name
+ALT = 4                                 ; with a name for off, not No and the name,
+TT3 = 8                                 ; a TT3$ bit
 
 ; ADDTEXT "text": appends text to LINE. Uses R0-R2.
         .MACRO  ADDTEXT TEXT, ?L
@@ -249,7 +252,8 @@ HEX:    .ASCII  "0123456789ABCDEF"
 LINE:   .BLKB   256                     ; a line being made, .ASCIC
 CHAR:   .BLKB   1
 TTCHAN: .LONG   0                       ; the terminal's
-TTCHAR: .BLKB   12                      ; its characteristics
+TTCHAR: .BLKB   16                      ; its characteristics,
+TTIOSB: .BLKQ   1                       ; and speeds
 DVIITEMS:                               ; what $GETDVIW returns of it
         .WORD   64, DVI$_DEVNAM
         .ADDRESS TTNAME
@@ -334,8 +338,9 @@ CHARS:  .BYTE   TT$V_PASSALL, NOT!ALT
         .ASCIC  "SIXEL Graphics"
         .BYTE   TT2$V_DRCS, TT2
         .ASCIC  "Soft Characters"
-        .BYTE   TT2$V_PRINTER, TT2
-        .ASCIC  "Printer Port"
+        .BYTE   TT2$V_PRINTER, TT2!ALT
+        .ASCIC  "Printer port"
+        .ASCIC  "No Printer Port"
         .BYTE   TT2$V_APP_KEYPAD, TT2!NOT!ALT
         .ASCIC  "Numeric Keypad"
         .ASCIC  "Application keypad"
@@ -357,6 +362,10 @@ CHARS:  .BYTE   TT$V_PASSALL, NOT!ALT
         .ASCIC  "DEC_CRT3"
         .BYTE   TT2$V_DECCRT4, TT2
         .ASCIC  "DEC_CRT4"
+        .BYTE   TT3$V_DECCRT5, TT3
+        .ASCIC  "DEC_CRT5"
+        .BYTE   TT3$V_ANSI_COLOR, TT3
+        .ASCIC  "Ansi_Color"
         .BYTE   255
 
         .PSECT  CODE, EXE, LONG
@@ -523,9 +532,10 @@ SYSTEM: $GETSYIW_S ITMLST=SYIITEMS
 
 ; SHOW TERMINAL
 SHOWTERM:
+        PUSHAQ  TTIOSB
         PUSHAB  TTCHAR
         PUSHAW  TTCHAN
-        CALLS   #2, G^TERM_SENSE
+        CALLS   #3, G^TERM_SENSE
         BLBC    R0, 5$
         $GETDVIW_S CHAN=TTCHAN, ITMLST=DVIITEMS
         BLBC    R0, 5$
@@ -539,25 +549,30 @@ SHOWTERM:
         MOVL    #22, R3
         BSBW    PADTO
         ADDTEXT "Device_Type: "
-        CMPB    TTCHAR+1, #DT$_VT100
-        BNEQ    15$
-        ADDTEXT "VT100"
-        BRB     20$
-15$:    ADDTEXT "Unknown"
-20$:    MOVL    #49, R3
+        MOVZBL  TTCHAR+1, -(SP)
+        CALLS   #1, G^TERM_NAME
+        MOVL    R0, R6
+        BSBW    ADDCIC
+        MOVL    #49, R3
         BSBW    PADTO
         ADDTEXT "Owner: "
         BSBW    ADDNAME
         BSBW    SAY
         PRINT   ""
-        ADDTEXT "   Input:    9600     LFfill:  0      Width: "
+        ADDTEXT "   Input:"
+        MOVZBL  TTIOSB+3, R1            ; receive
+        BSBW    SPEED
+        ADDTEXT "     LFfill:  0      Width: "
         MOVZWL  TTCHAR+2, R1
         BSBW    ADD3
         MOVL    #54, R3
         BSBW    PADTO
         ADDTEXT "Parity: None"
         BSBW    SAY
-        ADDTEXT "   Output:   9600     CRfill:  0      Page:  "
+        ADDTEXT "   Output:"
+        MOVZBL  TTIOSB+2, R1            ; transmit
+        BSBW    SPEED
+        ADDTEXT "     CRfill:  0      Page:  "
         MOVZBL  TTCHAR+7, R1
         BSBW    ADD3
         BSBW    SAY
@@ -573,8 +588,10 @@ SHOWTERM:
         ADDL2   #3, R3
         BSBW    PADTO
         MOVL    TTCHAR+4, R0
-        BBC     #0, R9, 35$             ; TT2
+        BBC     #0, R9, 34$             ; TT2
         MOVL    TTCHAR+8, R0
+34$:    BBC     #3, R9, 35$             ; TT3
+        MOVL    TTCHAR+12, R0
 35$:    EXTZV   R8, #1, R0, R0
         BBC     #1, R9, 40$             ; NOT
         XORL2   #1, R0
@@ -596,7 +613,8 @@ SHOWTERM:
 70$:    TSTL    R7
         BEQL    80$
         BSBW    SAY
-80$:    MOVL    #SS$_NORMAL, R0
+80$:    PRINT   "   VMS Style Input    <CTRL-H> Backspace"
+        MOVL    #SS$_NORMAL, R0
         RET
 
 ; SHOW USERS [username]
@@ -1184,6 +1202,15 @@ ADDDEC:
         BSBB    ADDCHAR
         SOBGTR  R3, 30$
         RSB
+
+; SPEED: R1 = a speed, TT$C_BAUD_. Appends it in baud to LINE, ending at
+; column 17, as SHOW TERMINAL's Input and Output. Uses R0-R3, R5.
+SPEED:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R5>
+        MOVAL   G^TERM_SPEEDS, R0
+        MOVL    (R0)[R1], R1
+        MOVL    #17, R3
+        BRW     RIGHT                   ; a tail call
 
 ; SAY: writes the line in LINE, and empties it. Uses R0 and R1.
 SAY:

@@ -37,6 +37,12 @@ milestone = "m1"
 note = "PRD-0003 step 3"
 
 [[feature]]
+id = "permanent-speed"
+title = "IO$_SETCHAR and IO$_SENSECHAR permanent characteristics; speeds in p3 and the IOSB; TT3$ bits in a 16-byte buffer"
+status = "done"
+note = "The console goes back to its permanent characteristics once no channel has it; speeds are only kept"
+
+[[feature]]
 id = "per-ucb"
 title = "Each terminal a UCB of its own; TNAn: for TELNET, which the driver speaks"
 status = "done"

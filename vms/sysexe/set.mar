@@ -1,5 +1,5 @@
         .TITLE  SET     Sets the process's privileges, a file's protection or owner, the terminal
-        .IDENT  /V0.3/
+        .IDENT  /V0.4/
 ;
 ; DCL runs this, as VMS's DCL runs SET.EXE, for
 ; - SET PROCESS/PRIVILEGES=(priv[,...]). Each priv enables that
@@ -13,11 +13,19 @@
 ;   which gets its owner and protection, changes them in the XAB, and
 ;   $CLOSE gives them to the file.
 ; - SET TERMINAL [device], which reads the terminal's characteristics
-;   (lib/term.mar), changes those its qualifiers name, /WIDTH=n from 1 to
-;   511, /PAGE=n up to 255, /[NO]BROADCAST, ECHO, EIGHTBIT, ESCAPE,
-;   LINE_EDITING, LOWERCASE, PASTHRU, TAB and WRAP, and /INSERT or
-;   /OVERSTRIKE, the line editing's mode, and sets them with IO$_SETMODE.
-; ponytail: one file, no wildcards, no /LOG.
+;   (lib/term.mar), changes those its qualifiers name, and sets them with
+;   IO$_SETMODE, or with /PERMANENT the permanent ones, which it reads,
+;   and the current ones with IO$_SETCHAR, as VMS's does. /INQUIRE asks
+;   the terminal its type (INQUIRE), or /DEVICE_TYPE=type names it, one
+;   of TERM_TYPES, which gives its characteristics; then /WIDTH=n from 1
+;   to 511, /PAGE=n up to 255, /[NO]BROADCAST, COLOR, ECHO, EIGHTBIT,
+;   ESCAPE, LINE_EDITING, LOWERCASE, PASTHRU, TAB and WRAP, /INSERT or
+;   /OVERSTRIKE, the line editing's mode, and /SPEED=rate or
+;   /SPEED=(input,output), each one of TERM_SPEEDS.
+; ponytail: one file, no wildcards, no /LOG. SET TERMINAL/INQUIRE
+; doesn't put a VT200 or later in 7-bit mode, as VMS's does, nor the
+; keypad in numeric mode, and /WIDTH no DEC CRT in 132 columns;
+; /DEVICE_TYPE knows TERM_TYPES's types only.
 ;
         .LIBRARY "starlet.mlb"
         .LIBRARY "sysexe.mlb"
@@ -28,8 +36,11 @@
         $IODEF
         $TTDEF
         $TT2DEF
+        $TT3DEF
+        $DVIDEF
 
-        .EXTERNAL PRV_LOOKUP, LIB$SIGNAL, PUT_LINE, GET_PROT, GET_UIC, TERM_SENSE
+        .EXTERNAL PRV_LOOKUP, LIB$SIGNAL, PUT_LINE, GET_PROT, GET_UIC
+        .EXTERNAL TERM_SENSE, TERM_FIND, TERM_TYPE, TERM_SPEEDS
 
 ; TTBIT "name", bit, base, ON=BBSS, OFF=BBCC: sets the bit at base for
 ; the qualifier /name, and clears it for /NOname; ON=BBCC, OFF=BBSS the
@@ -63,6 +74,26 @@ L2:
 
 INHIB = ^X10000000                      ; STS$M_INHIB_MSG
 
+; INVALID "name", desc, c: writes %SET-E-INVQUAVAL for desc's value of
+; the qualifier /name, with c, PERCENT, or DASH after another message, as
+; its first character. Uses R0-R5.
+        .MACRO  INVALID NAME, DESC, C, ?L
+        .SAVE_PSECT LOCAL_BLOCK
+        .PSECT  $LITERAL$
+L:      .ASCIC  NAME
+        .RESTORE_PSECT
+        MOVAB   L, R0
+        MOVAQ   DESC, R1
+        MOVZBL  #C, R2
+        BSBW    INVQUAVAL
+        .ENDM   INVALID
+ASKREAD = IO$_READPROMPT!IO$M_TIMED!IO$M_PURGE!IO$M_NOFILTR!IO$M_NOECHO
+SEMI = 59                               ; ;
+PERCENT = 37                            ; %
+DASH = 45                               ; -
+WARNING = INHIB                         ; what a warning or an error SET TERMINAL
+ERROR = INHIB!2                         ; has already written returns
+
         .PSECT  DATA, NOEXE, WRT, LONG
 DESC:   .LONG   31                      ; a value of PRIVILEGES
         .ADDRESS NAME
@@ -70,7 +101,7 @@ LEN:    .WORD   0
 NAME:   .BLKB   31
 MASK:   .BLKQ   1                       ; $SETPRV's
 STATUS: .LONG   SS$_NORMAL              ; or SS$_NOTALLPRIV once one stays off
-LINE:   .BLKB   40                      ; " \name\", .ASCIC
+LINE:   .BLKB   256                     ; " \name\", or a message, .ASCIC
 FAB:    $FAB    FNA=SPEC, XAB=XAB
 XAB:    $XABPRO
 SPECDSC:                                ; FILE, the parameter
@@ -86,8 +117,41 @@ NUMDSC: .LONG   16                      ; /WIDTH's or /PAGE's value
         .ADDRESS NUMBUF
 NUMBUF: .BLKB   16
 CHAN:   .LONG   0                       ; the terminal's
-CHAR:   .BLKB   12                      ; its characteristics (lib/term.mar)
+CHAR:   .BLKB   16                      ; its characteristics (lib/term.mar)
 IOSB:   .BLKQ   1
+FUNC:   .LONG   0                       ; IO$_SETMODE, or IO$_SETCHAR
+SPEED:  .LONG   0                       ; IO$_SETMODE's p3, or 0
+VALDSC: .LONG   16                      ; DEVICE_TYPE's value
+        .ADDRESS VALBUF
+VALBUF: .BLKB   16
+MSGDSC: .LONG   255                     ; a message, $GETMSG's
+        .ADDRESS LINE+1
+MSGLEN: .WORD   0
+DVIITEMS:                               ; what $GETDVIW returns of the terminal
+        .WORD   16, DVI$_DEVNAM
+        .ADDRESS DEVNAM
+        .ADDRESS DEVLEN
+        .LONG   0
+DEVLEN: .WORD   0
+DEVNAM: .BLKB   16
+REPLY:  .BLKB   64                      ; the terminal's answer to INQUIRE
+NUMS:   .BLKL   8                       ; its numbers
+NNUMS = 8
+TERM:   .WORD   16, 0                   ; the terminators: c and R alone, the
+        .ADDRESS TERMASK                ; long form, so the answer's ESC
+TERMASK:.LONG   0, 0, <1@<^A/R/-64>>, <1@<^A/c/-96>> ; doesn't end the read
+DA:     .ASCII  <27>"[c"                ; what are you?
+DALEN = .-DA
+CPR:    .ASCII  <27>"7"<27>"[255;255H"<27>"[6n"<27>"8"  ; where is the cursor at 255;255?
+CPRLEN = .-CPR
+NOTSETTXT:
+        .ASCII  "%SET-W-NOTSET, error modifying "
+INVTXT: .ASCII  "%SET-E-INVQUAVAL, value '"     ; 25
+        .ASCII  "' invalid for /"               ; 15
+        .ASCII  " qualifier"                    ; 10
+VT100:  .ASCID  "VT100"
+VT102:  .ASCID  "VT102"
+VT200:  .ASCID  "VT200"                 ; to VT500, 2 to 5 after
 
         .PSECT  CODE, EXE, LONG
         .ENTRY  START, ^M<R2, R3, R4, R5, R6>
@@ -166,13 +230,41 @@ FILE:   GETVALUE "FILE", SPECDSC, SPECDSC
 90$:    RET
 
 ; SETTERM: SET TERMINAL: changes the characteristics the qualifiers
-; name, and sets them. R0 = the first failure, or SS$_NORMAL.
+; name, and sets them. R0 = the first failure, or SS$_NORMAL; one SET
+; has written already has STS$M_INHIB_MSG.
 SETTERM:
+        PUSHAQ  IOSB
         PUSHAB  CHAR
         PUSHAW  CHAN
-        CALLS   #2, G^TERM_SENSE
+        CALLS   #3, G^TERM_SENSE
+        BLBS    R0, 2$
+        TSTW    CHAN
+        BEQL    1$                      ; not a terminal
+        BSBW    NOTSET
+1$:     RET
+2$:     MOVL    #IO$_SETMODE, FUNC
+        PRESENT "PERMANENT"
+        BLBC    R0, 3$
+        MOVL    #IO$_SETCHAR, FUNC
+3$:     PRESENT "INQUIRE"
+        BLBC    R0, 4$
+        BSBW    INQUIRE
         BLBS    R0, 5$
         RET
+4$:     MOVW    #16, VALDSC
+        GETVALUE "DEVICE_TYPE", VALDSC, VALDSC
+        BLBC    R0, 5$
+        PUSHAQ  VALDSC
+        CALLS   #1, G^TERM_FIND
+        TSTL    R0
+        BNEQ    45$
+        BSBW    HEAD
+        INVALID "DEVICE_TYPE", VALDSC, DASH
+        MOVL    #ERROR, R0
+        RET
+45$:    PUSHL   R0
+        PUSHAB  CHAR
+        CALLS   #2, G^TERM_TYPE
 5$:     PRESENT "WIDTH"
         BLBC    R0, 10$
         TTNUM   "WIDTH", 1, 511
@@ -192,10 +284,245 @@ SETTERM:
         TTBIT   "LINE_EDITING", TT2$V_EDITING, CHAR+8
         TTBIT   "INSERT", TT2$V_INSERT, CHAR+8
         TTBIT   "OVERSTRIKE", TT2$V_INSERT, CHAR+8, ON=BBCC
-        $QIOW_S CHAN=CHAN, FUNC=#IO$_SETMODE, IOSB=IOSB, P1=CHAR, P2=#12
+        TTBIT   "COLOR", TT3$V_ANSI_COLOR, CHAR+12
+        CLRL    SPEED
+        PRESENT "SPEED"
+        BLBC    R0, 40$
+30$:    MOVW    #16, NUMDSC             ; each rate: the last in the low byte
+        GETVALUE "SPEED", NUMDSC, NUMDSC
+        BLBC    R0, 40$
+        MOVL    #1, R2
+        MOVL    #115200, R3
+        BSBW    DECIMAL
+        BLBC    R0, 38$
+        MOVAL   G^TERM_SPEEDS, R2
+        MOVL    #1, R3
+35$:    CMPL    R1, (R2)[R3]
+        BEQL    37$
+        AOBLEQ  #TT$C_BAUD_115200, R3, 35$
+        BRB     38$
+37$:    ASHL    #8, SPEED, SPEED
+        BISL2   R3, SPEED
+        BRB     30$
+38$:    INVALID "SPEED", NUMDSC, PERCENT
+        MOVL    #ERROR, R0
+        RET
+40$:    $QIOW_S CHAN=CHAN, FUNC=FUNC, IOSB=IOSB, P1=CHAR, P2=#16, P3=SPEED
+        BLBC    R0, 80$
+        MOVZWL  IOSB, R0
+        BLBC    R0, 80$
+        RET
+80$:    BSBW    NOTSET
+        RET
+
+; INQUIRE: SET TERMINAL/INQUIRE: asks the terminal what it is, DA's
+; ESC [ c, and gives CHAR the type its answer, ESC [ ? n ; ... c, says
+; (TERM_TYPE), as VMS's does: n 1 a VT100, whose advanced video is bit 1
+; of the next number; 6 or 61 a VT102; 62 to 65 a VT200 to a VT500, whose
+; next numbers 2, 3, 4 and 22 say it has a printer port, ReGIS, sixel
+; graphics and ANSI colour. Then it asks the terminal where the cursor
+; lands at row and column 255, ESC [ row ; column R, its page and width.
+; R0 = SS$_NORMAL, or with STS$M_INHIB_MSG a failure SET has written:
+; %SET-I-UNKTERM if the terminal doesn't answer within 3 seconds, or
+; answers so. Uses R0-R7.
+INQUIRE:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5, R6, R7>
+        MOVAB   DA, R6
+        MOVL    #DALEN, R7
+        BSBW    ASK
+        BLBS    R0, 5$
+        CMPW    R0, #SS$_TIMEOUT
+        BEQL    80$
+        BRW     NOTSET                  ; a tail call
+5$:     CMPB    (R1)+, #^A/[/
+        BNEQ    80$
+        CMPB    (R1)+, #^A/?/
+        BNEQ    80$
+        BSBW    NUMBERS
+        CMPB    -1(R1), #^A/c/
+        BNEQ    80$
+        MOVL    NUMS, R0                ; the class
+        MOVAQ   VT100, R6
+        CMPL    R0, #1
+        BEQL    20$
+        MOVAQ   VT102, R6
+        CMPL    R0, #6
+        BEQL    20$
+        CMPL    R0, #61
+        BEQL    20$
+        SUBL2   #62, R0
+        CMPL    R0, #3
+        BGTRU   80$
+        ADDB3   #^A/2/, R0, VT200+10    ; VT200 to VT500: its third character
+        MOVAQ   VT200, R6
+20$:    PUSHL   R6
+        CALLS   #1, G^TERM_FIND
+        PUSHL   R0
+        PUSHAB  CHAR
+        CALLS   #2, G^TERM_TYPE
+        CMPL    NUMS, #60
+        BGTRU   40$
+        CMPL    NUMS, #1
+        BNEQ    50$
+        CMPL    R7, #2                  ; a VT100's advanced video
+        BLSSU   35$
+        BBS     #1, NUMS+4, 50$
+35$:    BICL2   #TT2$M_AVO, CHAR+8
+        BRB     50$
+40$:    MOVL    #1, R2                  ; a VT200's options
+45$:    CMPL    R2, R7
+        BGEQU   50$
+        MOVL    NUMS[R2], R0
+        CMPL    R0, #2
+        BNEQ    46$
+        BISL2   #TT2$M_PRINTER, CHAR+8
+46$:    CMPL    R0, #3
+        BNEQ    47$
+        BISL2   #TT2$M_REGIS, CHAR+8
+47$:    CMPL    R0, #4
+        BNEQ    48$
+        BISL2   #TT2$M_SIXEL, CHAR+8
+48$:    CMPL    R0, #22
+        BNEQ    49$
+        BISL2   #TT3$M_ANSI_COLOR, CHAR+12
+49$:    AOBLSS  R7, R2, 45$
+50$:    MOVAB   CPR, R6                 ; its size
+        MOVL    #CPRLEN, R7
+        BSBW    ASK
+        BLBC    R0, 70$
+        CMPB    (R1)+, #^A/[/
+        BNEQ    70$
+        BSBW    NUMBERS
+        CMPB    -1(R1), #^A/R/
+        BNEQ    70$
+        CMPL    R7, #2
+        BNEQ    70$
+        MOVL    NUMS, R0                ; the row
+        BEQL    70$
+        CMPL    R0, #255
+        BGTRU   70$
+        MOVL    NUMS+4, R1              ; and the column
+        BEQL    70$
+        CMPL    R1, #511
+        BGTRU   70$
+        MOVW    R1, CHAR+2
+        MOVB    R0, CHAR+7
+70$:    MOVL    #SS$_NORMAL, R0
+        RSB
+80$:    BSBW    HEAD
+        PRINT   "-SET-I-UNKTERM, unknown terminal type"
+        MOVL    #WARNING, R0
+        RSB
+
+; ASK: R6 = a question for the terminal, R7 its length. Writes it and
+; reads the answer, an escape sequence that ends in c or R, waiting 3
+; seconds for it; NOFILTR keeps line editing from taking it for a key's.
+; R0 = SS$_NORMAL, and R1 = the sequence's first byte past ESC; or the
+; failure, SS$_TIMEOUT if none came. Uses R0-R3.
+ASK:
+        .JSB_ENTRY  SCRATCH=<R2, R3>
+        CLRB    REPLY+63                ; NUMBERS stops there
+        $QIOW_S CHAN=CHAN, FUNC=#ASKREAD, IOSB=IOSB, P1=REPLY, P2=#62, P3=#3, P4=#TERM, P5=R6, P6=R7
         BLBC    R0, 90$
         MOVZWL  IOSB, R0
-90$:    RET
+        BLBC    R0, 90$
+        MOVZWL  IOSB+2, R2              ; the answer's ESC, past what was typed ahead
+        MOVAB   REPLY, R1
+        LOCC    #27, R2, (R1)
+        BEQL    80$
+        INCL    R1                      ; past it
+        MOVB    IOSB+4, REPLY[R2]       ; and the terminator after it
+        CLRB    REPLY+1[R2]
+        MOVL    #SS$_NORMAL, R0
+        RSB
+80$:    MOVZWL  #SS$_TIMEOUT, R0        ; no escape sequence
+90$:    RSB
+
+; NUMBERS: R1 = decimal numbers, each ended by ; or another character.
+; Puts the first NNUMS of them in NUMS. R7 = how many, R1 = past the
+; character that ended the last. Uses R0, R2.
+NUMBERS:
+        .JSB_ENTRY  OUTPUT=<R1, R7>, SCRATCH=<R2>
+        CLRL    R7
+10$:    CLRL    R2
+20$:    MOVZBL  (R1)+, R0
+        SUBL2   #^A/0/, R0
+        CMPL    R0, #9
+        BGTRU   30$
+        MULL2   #10, R2
+        ADDL2   R0, R2
+        BRB     20$
+30$:    CMPL    R7, #NNUMS
+        BGEQU   40$
+        MOVL    R2, NUMS[R7]
+        INCL    R7
+40$:    CMPB    -1(R1), #SEMI
+        BEQL    10$
+        RSB
+
+; NOTSET: R0 = why SET TERMINAL failed. Writes it as VMS's SET does,
+; %SET-W-NOTSET with the terminal's name, then its own message. R0 = it,
+; with STS$M_INHIB_MSG. Uses R0-R5.
+NOTSET:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5>
+        PUSHL   R0
+        BSBW    HEAD
+        MOVL    (SP), R0
+        $GETMSG_S MSGID=R0, MSGLEN=MSGLEN, BUFADR=MSGDSC
+        MOVB    MSGLEN, LINE
+        MOVB    #^A/-/, LINE+1
+        PUSHAB  LINE
+        CALLS   #1, G^PUT_LINE
+        BISL3   #INHIB, (SP)+, R0
+        RSB
+
+; INVQUAVAL: R0 = a qualifier's name, .ASCIC, R1 = its value's
+; descriptor, R2 = % or -. Writes %SET-E-INVQUAVAL for them. Uses R0-R5.
+INVQUAVAL:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5>
+        PUSHL   R0
+        PUSHL   R1
+        PUSHL   R2
+        MOVAB   LINE+1, R3
+        MOVC3   #25, INVTXT, (R3)
+        MOVL    4(SP), R1
+        MOVC3   (R1), @4(R1), (R3)
+        MOVC3   #15, INVTXT+25, (R3)
+        MOVL    8(SP), R1
+        MOVZBL  (R1)+, R0
+        MOVC3   R0, (R1), (R3)
+        MOVC3   #10, INVTXT+40, (R3)
+        MOVAB   LINE+1, R1
+        SUBL3   R1, R3, R0
+        MOVB    R0, LINE
+        MOVL    (SP)+, R0
+        MOVB    R0, LINE+1
+        ADDL2   #8, SP
+        PUSHAB  LINE
+        CALLS   #1, G^PUT_LINE
+        RSB
+
+; HEAD: writes %SET-W-NOTSET, error modifying, and the terminal's name,
+; as VMS's SET TERMINAL's error messages begin. Uses R0-R5.
+HEAD:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5>
+        CLRW    DEVLEN
+        $GETDVIW_S CHAN=CHAN, ITMLST=DVIITEMS
+        MOVAB   LINE+1, R3
+        MOVC3   #31, NOTSETTXT, (R3)
+        MOVAB   DEVNAM, R1
+        MOVZWL  DEVLEN, R0
+        CMPB    (R1), #^A/_/
+        BNEQ    10$
+        INCL    R1                      ; _OPA0: is OPA0:
+        DECL    R0
+10$:    MOVC3   R0, (R1), (R3)
+        MOVAB   LINE+1, R1
+        SUBL3   R1, R3, R0
+        MOVB    R0, LINE
+        PUSHAB  LINE
+        CALLS   #1, G^PUT_LINE
+        RSB
 
 ; DECIMAL: NUMDSC = a decimal number, R2 = the least it may be, R3 = the
 ; most. R1 = it, R0 = SS$_NORMAL, or SS$_BADPARAM if it isn't one of

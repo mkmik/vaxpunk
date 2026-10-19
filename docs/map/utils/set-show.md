@@ -102,9 +102,9 @@ status = "todo"
 
 [[feature]]
 id = "terminal-more"
-title = "SET TERMINAL/INQUIRE, /DEVICE_TYPE, /SPEED, /PERMANENT; TT3$ characteristics"
-status = "todo"
-note = "dcl.cld and show.mar ponytails"
+title = "SET TERMINAL/INQUIRE, /DEVICE_TYPE, /SPEED, /PERMANENT, /COLOR; SHOW TERMINAL/PERMANENT; TT3$ characteristics"
+status = "done"
+note = "The VT52, VT100, VT102, VT200 to VT500 and UNKNOWN types, as OpenVMS Alpha V8.4's set them; set.mar ponytail: no LA or other types, /BACKSPACE, /PARITY or fill"
 
 [[feature]]
 id = "system-views"
@@ -181,7 +181,10 @@ names and symbols. Others belong to their own facilities: `SET HOST`,
 `SET COMMAND`, `SET PASSWORD`, `SHOW QUEUE`, `SHOW CLUSTER`.
 
 vaxpunk's `SET.EXE` is `vms/sysexe/set.mar`: `SET PROCESS/PRIVILEGES`,
-`SET PROTECTION`, `SET FILE/OWNER_UIC` and `SET TERMINAL`.
+`SET PROTECTION`, `SET FILE/OWNER_UIC` and `SET TERMINAL`, which asks
+the terminal its type with `/INQUIRE` or takes it from `/DEVICE_TYPE`,
+and sets its speeds and, with `/PERMANENT`, its permanent
+characteristics.
 `SHOW.EXE` is `show.mar`: `SHOW PROCESS`, `SHOW SYSTEM`,
 `SHOW TERMINAL`, `SHOW USERS`, `SHOW MEMORY`, `SHOW ERROR`, `SHOW QUOTA`
 and `SHOW CPU`. `SET DEFAULT`, `SHOW DEFAULT`, `SHOW DEVICES`,

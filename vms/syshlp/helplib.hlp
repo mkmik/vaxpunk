@@ -969,9 +969,9 @@
     F$GETDVI(device-name, item)
 
   The items: DEVNAM, VOLNAM, DEVCHAR, DEVCLASS, DEVTYPE, DEVBUFSIZ,
-  DEVDEPEND, DEVDEPEND2, UNIT, ERRCNT, REFCNT, FREEBLOCKS, MOUNTCNT,
-  CLUSTER, STS, AVL, MNT and SWL, and EXISTS, TRUE if there is such a
-  device.
+  DEVDEPEND, DEVDEPEND2, DEVDEPEND3, UNIT, ERRCNT, REFCNT, FREEBLOCKS,
+  MOUNTCNT, CLUSTER, STS, AVL, MNT and SWL, and EXISTS, TRUE if there is
+  such a device.
 2 F$GETJPI
   Returns an item of information about a process.
 
@@ -1380,6 +1380,16 @@
 
   Whether messages, such as a PHONE call's ring, are written on the
   terminal.
+/COLOR
+  /COLOR
+  /NOCOLOR
+
+  Whether the terminal takes ANSI colour escape sequences.
+/DEVICE_TYPE
+  /DEVICE_TYPE=terminal-type
+
+  Says what the terminal is, and gives it that type's characteristics:
+  UNKNOWN, VT52, VT100, VT102, VT200, VT300, VT400 or VT500.
 /ECHO
   /ECHO
   /NOECHO
@@ -1395,6 +1405,13 @@
   /NOESCAPE
 
   Whether escape sequences end a read.
+/INQUIRE
+  /INQUIRE
+
+  Asks the terminal what it is, and gives it that type's
+  characteristics, as /DEVICE_TYPE does, then asks a DEC terminal its
+  size, its page and width. A terminal that doesn't answer within 3
+  seconds keeps its characteristics: %SET-I-UNKTERM.
 /INSERT
   /INSERT
 
@@ -1417,6 +1434,12 @@
   /PAGE=n
 
   The terminal's lines, up to 255.
+/PERMANENT
+  /PERMANENT
+
+  Sets the permanent characteristics, and the current ones: the
+  terminal goes back to them once no process has it. Takes LOG_IO or
+  PHY_IO.
 /PASTHRU
   /PASTHRU
   /NOPASTHRU
@@ -1427,6 +1450,13 @@
   /NOTAB
 
   Whether the terminal handles tabs itself.
+/SPEED
+  /SPEED=rate
+  /SPEED=(input-rate,output-rate)
+
+  The speeds at which the terminal receives and sends, in baud: 50, 75,
+  110, 134, 150, 300, 600, 1200, 1800, 2000, 2400, 3600, 4800, 7200,
+  9600, 19200, 38400, 57600, 76800 or 115200.
 /WIDTH
   /WIDTH=n
 
@@ -1570,6 +1600,12 @@
   Shows a terminal's characteristics, yours unless you name another.
 
     SHOW TERMINAL [device-name]
+3 Qualifiers
+/PERMANENT
+  /PERMANENT
+
+  Shows the permanent characteristics, which the terminal goes back to
+  once no process has it. Takes LOG_IO or PHY_IO.
 2 USERS
   Lists the users logged in at terminals, and how many processes each
   has.

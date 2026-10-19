@@ -740,6 +740,7 @@ DVI$_AVL = 98                           ; DEVCHAR's bits, each 1 or 0
 DVI$_MNT = 100
 DVI$_SWL = 112
 DVI$_STS = 226                          ; the UCB$ status bits: UCB$M_ONLINE
+DVI$_DEVDEPEND3 = 292                   ; a terminal's TT3$ bits
         .ENDM   $DVIDEF
 
 ; $BRKDEF: $BRKTHRU's send types, requester IDs and flags.
@@ -779,7 +780,14 @@ DVS$_DEVCLASS = 1                       ; only devices of this class, a longword
 DC$_DISK = 1
 DC$_TERM = 66
 DC$_MAILBOX = 160
-DT$_VT100 = 96                          ; a terminal's type: a VT100
+DT$_TTYUNKN = 0                         ; a terminal's type: unknown
+DT$_VT52 = 64
+DT$_VT100 = 96
+DT$_VT102 = 98
+DT$_VT200_SERIES = 110
+DT$_VT300_SERIES = 112
+DT$_VT400_SERIES = 113
+DT$_VT500_SERIES = 114
         .ENDM   $DCDEF
 
 ; $TTDEF: a terminal's characteristics, the second longword of what
@@ -804,6 +812,26 @@ TT$V_MECHFORM = 19
 TT$V_HALFDUP = 20
 TT$V_MODEM = 21
 TT$V_PAGE = 24                          ; the page length, a byte
+TT$C_BAUD_50 = 1                        ; speeds, IO$_SETMODE's p3 and IO$_SENSEMODE's IOSB
+TT$C_BAUD_75 = 2
+TT$C_BAUD_110 = 3
+TT$C_BAUD_134 = 4
+TT$C_BAUD_150 = 5
+TT$C_BAUD_300 = 6
+TT$C_BAUD_600 = 7
+TT$C_BAUD_1200 = 8
+TT$C_BAUD_1800 = 9
+TT$C_BAUD_2000 = 10
+TT$C_BAUD_2400 = 11
+TT$C_BAUD_3600 = 12
+TT$C_BAUD_4800 = 13
+TT$C_BAUD_7200 = 14
+TT$C_BAUD_9600 = 15
+TT$C_BAUD_19200 = 16
+TT$C_BAUD_38400 = 17
+TT$C_BAUD_57600 = 18
+TT$C_BAUD_76800 = 19
+TT$C_BAUD_115200 = 20
 TT$M_PASSALL = ^X1
 TT$M_NOECHO = ^X2
 TT$M_ESCAPE = ^X8
@@ -815,6 +843,7 @@ TT$M_SCOPE = ^X1000
 TT$M_REMOTE = ^X2000                    ; a TELNET terminal's
 TT$M_EIGHTBIT = ^X8000
 TT$M_NOBRDCST = ^X20000
+TT$M_MECHFORM = ^X80000
         .ENDM   $TTDEF
 
 ; $TT2DEF: a terminal's extended characteristics, the third longword of
@@ -856,7 +885,30 @@ TT2$M_ANSICRT = ^X1000000
 TT2$M_AVO = ^X8000000
 TT2$M_EDIT = ^X10000000
 TT2$M_DECCRT = ^X20000000
+TT2$M_DECCRT4 = ^X400
+TT2$M_SIXEL = ^X100000
+TT2$M_DRCS = ^X200000
+TT2$M_PRINTER = ^X400000
+TT2$M_REGIS = ^X2000000
+TT2$M_BLOCK = ^X4000000
+TT2$M_DECCRT2 = ^X40000000
+TT2$M_DECCRT3 = ^X80000000
         .ENDM   $TT2DEF
+
+; $TT3DEF: a terminal's third characteristics, the fourth longword of
+; IO$_SETMODE's and IO$_SENSEMODE's buffer, 16 bytes, and DVI$_DEVDEPEND3.
+        .MACRO  $TT3DEF
+TT3$V_POSIX = 0                         ; POSIX style input, not VMS's
+TT3$V_ANSI_COLOR = 1                    ; ANSI colour escape sequences
+TT3$V_DECCRT5 = 2
+TT3$V_RTS_FLOW = 3
+TT3$V_BS = 4                            ; CTRL/H deletes, not back to the line's start
+TT3$M_POSIX = ^X1
+TT3$M_ANSI_COLOR = ^X2
+TT3$M_DECCRT5 = ^X4
+TT3$M_RTS_FLOW = ^X8
+TT3$M_BS = ^X10
+        .ENDM   $TT3DEF
 
 ; $DEVDEF: device characteristics, DVI$_DEVCHAR's bits.
         .MACRO  $DEVDEF
@@ -1527,8 +1579,8 @@ IO$V_NOFORMAT = 8                       ; a terminal write: as it is, which ever
 IO$M_NOFORMAT = ^X100
 IO$V_NOW = 6                            ; a mailbox's read doesn't wait for a message
 IO$M_NOW = ^X40
-IO$_SETCHAR = 26                        ; a socket: as IO$_SETMODE, which is the same function there
-IO$_SENSECHAR = 27                      ; a socket: as IO$_SENSEMODE
+IO$_SETCHAR = 26                        ; a terminal: its permanent characteristics and its current ones; a socket: as IO$_SETMODE
+IO$_SENSECHAR = 27                      ; a terminal: its permanent characteristics; a socket: as IO$_SENSEMODE
 IO$_ACCESS = 50                         ; a socket: connects, or accepts; a datagram socket's peer
 IO$_DEACCESS = 52                       ; a socket: closes it
 IO$_SENSEMODE = 39                      ; a terminal: its characteristics; a socket: its names, ioctls

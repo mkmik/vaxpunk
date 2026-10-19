@@ -363,7 +363,7 @@ LITERAL
     UCB$K_LENGTH = 28,
     UCB$K_NETLENGTH = 48,  ! a network unit, which BGA0: clones
     UCB$K_MBLENGTH = 60,  ! a mailbox
-    UCB$K_TTLENGTH = 5580,  ! a terminal
+    UCB$K_TTLENGTH = 5604,  ! a terminal
     UCB$K_TT_TYPEAHEAD = 256,
     UCB$K_TT_RECALL = 16,  ! a power of 2
     UCB$K_TT_OUTSIZE = 1024,
@@ -422,7 +422,12 @@ MACRO
     UCB$L_TT_PID = 5560, 0, 32, 0 %,  ! its owner: the process created on it, which a hangup deletes, or 0
     UCB$Q_TT_PTDRD = 5564, 0, 64, 0 %,  ! a pseudo terminal's: its controller's reads, PTD$READ's IRPs
     UCB$L_TT_CTLPID = 5572, 0, 32, 0 %,  ! its controller, the process that made it with PTD$CREATE, or 0 once it is gone
-    UCB$L_TT_CTLCHAN = 5576, 0, 32, 0 %;  ! and that process's channel to it
+    UCB$L_TT_CTLCHAN = 5576, 0, 32, 0 %,  ! and that process's channel to it
+    UCB$L_TT_CHAR3 = 5580, 0, 32, 0 %,  ! its TT3$ bits, the fourth longword of IO$_SENSEMODE's 16 bytes
+    UCB$W_TT_SPEED = 5584, 0, 16, 0 %,  ! its speeds, TT$C_BAUD_: transmit in the low byte, receive in the high
+    UCB$W_TT_PRMSPEED = 5586, 0, 16, 0 %,  ! and its permanent ones, which IO$_SETCHAR sets
+    UCB$A_TT_PRMCHAR = 5588, 0, 32, 1 %,  ! its permanent characteristics, IO$_SENSECHAR's 12 bytes, as UCB$A_TT_CHAR
+    UCB$L_TT_PRMCHAR3 = 5600, 0, 32, 0 %;  ! and TT3$ bits: what it goes back to once no channel has it
 
 ! $IRPDEF
 LITERAL
