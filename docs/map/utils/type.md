@@ -36,9 +36,16 @@ note = "type.mar ponytail: cut at 255"
 
 [[feature]]
 id = "page"
-title = "/PAGE: a screen at a time, with the keys to move and search"
-status = "todo"
+title = "/PAGE, /PAGE=SCROLL and CLEAR_SCREEN: a screen at a time, RETURN for more"
+status = "done"
 needs = ["/drivers/terminal"]
+note = "As OpenVMS Alpha V8.4's, checked in AXPbox"
+
+[[feature]]
+id = "page-save"
+title = "/PAGE=SAVE: the screens kept, keys to scroll back, pan and search"
+status = "todo"
+note = "type.mar ponytail: pages as /PAGE. VMS's is an SMG$ screen (t8y:/rtl/smg)"
 
 [[feature]]
 id = "search-output"
@@ -73,5 +80,8 @@ time, with keys to go back and search; `/OUTPUT` sends it to a file;
 vaxpunk's is `vms/sysexe/type.mar`: it opens one file with RMS, the
 default directory unless the spec says where, and writes each record a
 line at a time, or `/HEAD`'s first and `/TAIL`'s last n, rewinding and
-skipping for `/TAIL`. It takes one file, no wildcards (PRD-0003 tier 3
-#24), and cuts records at 255 characters.
+skipping for `/TAIL`. `/PAGE` clears the screen, keeps the last row out
+of the scrolling region for its prompt, and reads RETURN or CTRL/Z there,
+with escape sequences of its own, as VMS's output looks; `/PAGE=SAVE`, whose
+keys go back and search, pages as `/PAGE` does. It takes one file, no wildcards
+(PRD-0003 tier 3 #24), and cuts records at 255 characters.

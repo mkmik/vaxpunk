@@ -1706,6 +1706,18 @@
   /HEAD[=n]
 
   Types only the first n lines, 10 if you don't say.
+/PAGE
+  /PAGE[=keyword]
+  /NOPAGE (default)
+
+  On a video terminal, writes a screen at a time and asks "Press
+  RETURN to continue" on its last line. RETURN shows more, CTRL/Z
+  stops. The keywords:
+
+  CLEAR_SCREEN  Clears the screen before each page.
+  SCROLL        Scrolls on, the last line written staying at the
+                top (the default).
+  SAVE[=n]      As SCROLL here: there are no keys to go back.
 /TAIL
   /TAIL[=n]
 

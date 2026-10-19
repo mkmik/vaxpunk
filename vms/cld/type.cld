@@ -3,4 +3,10 @@ define verb TYPE
 	image TYPE
 	parameter P1, label=FILE, prompt="File", value(required, type=$infile)
 	qualifier HEAD, value(type=$number)
+	qualifier PAGE, value(type=PAGE_KEYWORDS)
 	qualifier TAIL, value(type=$number)
+
+define type PAGE_KEYWORDS
+	keyword CLEAR_SCREEN
+	keyword SAVE, value(type=$number)
+	keyword SCROLL
