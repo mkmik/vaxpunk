@@ -377,6 +377,7 @@ DO:
         RET
 10$:    PRINT   "%UAF-I-ADDMSG, user record successfully added"
         MOVL    REC+UAF$L_UIC, IDVAL    ; and its UIC identifier
+        CLRQ    SETATTR                 ; with no attributes
         BSBW    USERID
         BSBW    ADDID
         MOVL    #SS$_NORMAL, R0
