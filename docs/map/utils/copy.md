@@ -50,9 +50,9 @@ note = "ADR-0032, PR #143: COPY calls SSL3's C routines from MACRO-32"
 [[feature]]
 id = "wildcards"
 title = "Wildcards and lists of input files"
-status = "todo"
+status = "done"
 needs = ["/rms/wildcards#directories"]
-note = "PRD-0003 tier 3 #24; copy.mar ponytail"
+note = "A file each where to leaves out its name or type, or with /NOCONCATENATE; the first error ends it"
 
 [[feature]]
 id = "long-records"
@@ -63,7 +63,8 @@ note = "copy.mar ponytail"
 [[feature]]
 id = "concatenate"
 title = "/CONCATENATE: several inputs into one output"
-status = "todo"
+status = "done"
+note = "The first copied, the others appended, %COPY-S-APPENDED; to found by from's wildcard is passed over"
 
 [[feature]]
 id = "qualifiers"
@@ -129,7 +130,8 @@ format and keys. `APPEND` adds a file's records to the end of another.
 Over DECnet both take `node::file` on either side. TCP/IP Services added
 `COPY/FTP` and `COPY/RCP` for remote copies over TCP/IP.
 
-vaxpunk's `COPY` and `APPEND` are `vms/sysexe/copy.mar`. A sequential
+vaxpunk's `COPY` and `APPEND` are `vms/sysexe/copy.mar`. Each input
+of the list is found with `$PARSE` and `$SEARCH`. A sequential
 file is copied a `$GET` and a `$PUT` per record; a relative or indexed
 file a block at a time, into a file made with the same attributes. The
 new file takes the next version unless the output names one. `COPY/HTTP`
@@ -138,5 +140,5 @@ is vaxpunk's own, a poor man's curl with VMS's remote file syntax:
 the body into a STREAM_LF file. Wanting `https` here is what brought in
 SSL3 on Mbed TLS, and through it the C run-time library and the C cross
 path ([ADR-0032](../../adr/0032-c-run-time-library-and-ssl3-on-mbed-tls.md)).
-Missing: wildcards and lists (PRD-0003 tier 3 #24), `/CONCATENATE`, and
-records longer than its buffer.
+Missing: records longer than its buffer, and going on to the next file
+after an error.

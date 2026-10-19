@@ -282,7 +282,9 @@ const RAMDISK: Phase = Phase {
 /// INITIALIZE, MOUNT and COPY on DKB0:, a CREATE/DIRECTORY two levels deep
 /// there and a COPY into it, a CREATE/LOG of a text file there from two
 /// lines and CTRL/Z, an APPEND/LOG to the file copied there and
-/// one to the system disk that fails, SHOW DEVICES, a DISMOUNT of DKA0:
+/// one to the system disk that fails, COPY of a list into one file, of a
+/// wildcard into a file each, and of a wildcard into one file that it
+/// finds too, which it passes over, SHOW DEVICES, a DISMOUNT of DKA0:
 /// that fails and one of DKB0: that doesn't, a DIRECTORY there that fails,
 /// a MOUNT without a label, a DIRECTORY of the new directory and a DELETE
 /// of the one above it, which has a file in it and stays, SHOW PROCESS/QUOTAS,
@@ -310,6 +312,9 @@ const DATA_DISK: Phase = Phase {
                 "CREATE/LOG DKB0:[SUB.DEEP]NOTE.TXT\rFirst line\rSecond line\r\x1a",
                 "APPEND/LOG SYS$SYSDEVICE:[SYSMGR]WELCOME.TXT DKB0:[000000]DATA.TXT\r",
                 "APPEND DKB0:[000000]DATA.TXT SYS$SYSDEVICE:[SYSMGR]WELCOME.TXT\r",
+                "COPY/LOG DKB0:[SUB.DEEP]DEEP.TXT,NOTE.TXT DKB0:[SUB.DEEP]BOTH.TXT\r",
+                "COPY/LOG DKB0:[SUB.DEEP]*.TXT DKB0:[SUB]*.OLD\r",
+                "COPY/LOG DKB0:[SUB.DEEP]*.TXT DKB0:[SUB.DEEP]ZALL.TXT\r",
             ),
         ),
         (
@@ -337,6 +342,12 @@ const DATA_DISK: Phase = Phase {
         "%CREATE-I-CREATED, DKB0:[SUB.DEEP]NOTE.TXT;1 created",
         "%APPEND-S-APPENDED, DKA0:[SYSMGR]WELCOME.TXT;1 appended to DKB0:[000000]DATA.TXT;1 (10 records)",
         "%RMS-E-WLK, device currently write locked",
+        "%COPY-S-COPIED, DKB0:[SUB.DEEP]DEEP.TXT;1 copied to DKB0:[SUB.DEEP]BOTH.TXT;1 (10 records)",
+        "%COPY-S-APPENDED, DKB0:[SUB.DEEP]NOTE.TXT;1 appended to DKB0:[SUB.DEEP]BOTH.TXT;1 (2 records)",
+        "%COPY-S-COPIED, DKB0:[SUB.DEEP]BOTH.TXT;1 copied to DKB0:[SUB]BOTH.OLD;1 (12 records)",
+        "%COPY-S-COPIED, DKB0:[SUB.DEEP]NOTE.TXT;1 copied to DKB0:[SUB]NOTE.OLD;1 (2 records)",
+        "%COPY-S-COPIED, DKB0:[SUB.DEEP]BOTH.TXT;1 copied to DKB0:[SUB.DEEP]ZALL.TXT;1 (12 records)",
+        "%COPY-S-APPENDED, DKB0:[SUB.DEEP]NOTE.TXT;1 appended to DKB0:[SUB.DEEP]ZALL.TXT;1 (2 records)",
         "Directory DKB0:[000000]",
         "DATA.TXT;1",
         "SUB.DIR;1",

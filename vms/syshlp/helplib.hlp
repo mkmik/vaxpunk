@@ -118,16 +118,16 @@
 
   Reports the file's attributes and keys without walking its buckets.
 1 APPEND
-  Adds the records of one file to the end of another.
+  Adds the records of files to the end of another.
 
   Format
 
-    APPEND input-file-spec output-file-spec
+    APPEND input-file-spec[,...] output-file-spec
 2 Parameters
 
- input-file-spec
+ input-file-spec[,...]
 
-  The file whose records are added.
+  The files whose records are added: a list, each with wildcards or not.
 
  output-file-spec
 
@@ -275,11 +275,11 @@
 
   $ CONVERT/FDL=CUSTOMERS.FDL CUSTOMERS.TXT CUSTOMERS.DAT
 1 COPY
-  Copies a file. COPY/HTTP fetches one from a web server.
+  Copies files. COPY/HTTP fetches one from a web server.
 
   Format
 
-    COPY input-file-spec output-file-spec
+    COPY input-file-spec[,...] output-file-spec
     COPY/HTTP node::"/path" output-file-spec
     COPY/HTTP URL::"http://host[:port]/path" output-file-spec
 
@@ -290,9 +290,11 @@
   copied whole, its structure and all.
 2 Parameters
 
- input-file-spec
+ input-file-spec[,...]
 
-  The file to copy.
+  The files to copy: a list, by commas or plus signs, each with
+  wildcards or not. One that leaves out its device and directory takes
+  those of the one before.
 
  output-file-spec
 
@@ -303,6 +305,13 @@
 
   With /HTTP, makes the file fixed-length records of 512 bytes, rather
   than a stream file.
+/CONCATENATE
+  /CONCATENATE (default)
+  /NOCONCATENATE
+
+  Makes one file of all the inputs, where the output gives its name
+  and type: the first copied, the others appended. An output that
+  leaves out its name or type, or /NOCONCATENATE, makes a file for each.
 /HTTP
   /HTTP
 
@@ -320,6 +329,8 @@
 2 Examples
 
   $ COPY/LOG SYS$SYSDEVICE:[SYSMGR]WELCOME.TXT RAM.TXT
+
+  $ COPY *.TXT ALL.TXT
 
   $ COPY/HTTP URL::"https://example.com/" []
 1 CREATE

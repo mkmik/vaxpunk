@@ -1,18 +1,27 @@
         .TITLE  COPY    Copies a file, or appends it to another
         .IDENT  /V0.2/
 ;
-; DCL's COPY from to and APPEND from to run this. Opens
-; from with RMS, creates to with its organization, record attributes and
-; size, what to leaves out of its name taken from from's name and type,
-; and copies its records, a $GET and a $PUT each. The new file is the
-; next version unless to gives one. APPEND opens to instead, for $PUT,
-; and connects at its end, where the records go. Returns RMS's status if it can't.
-; With /LOG, says what it copied where, as VMS's COPY and APPEND do. A
+; DCL's COPY from to and APPEND from to run this. from is a list, by
+; commas or plus signs, of specifications, each with wildcards or not,
+; which $PARSE and $SEARCH find; one without names the first file found,
+; through a search list too. Each takes the device and directory it
+; leaves out from the one before, as VMS's lists do. For each file, opens it with RMS, creates to
+; with its organization, record attributes and size, what to leaves out
+; of its name taken from the file's name and type, and copies its
+; records, a $GET and a $PUT each. The new file is the next version
+; unless to gives one. APPEND opens to instead, for $PUT, and connects at
+; its end, where the records go. Returns RMS's status if it can't. With
+; /LOG, says what it copied where, as VMS's COPY and APPEND do. A
 ; relative or indexed file COPY copies a block at a time, as VMS's does,
 ; its structure and all, into a file made with the same attributes.
 ; A field of to that is only a wildcard, * or .* or ;*, is from's, as
 ; VMS's COPY takes it: COPY A.TXT [.X]*.* makes [.X]A.TXT.
-; ponytail: one file, no wildcards in from; records up to RECSIZE.
+; With /CONCATENATE, the default, and a to that gives its name and type,
+; COPY makes one file of them all, as VMS's does: the first file's copy,
+; with the others appended, %COPY-S-APPENDED for each. A to that leaves
+; either out, or /NOCONCATENATE, makes a file for each.
+; ponytail: records up to RECSIZE; the first error ends it, where VMS's
+; COPY goes on to the next file.
 ;
 ; COPY/HTTP fetches from from a web server instead, with an HTTP/1.1
 ; GET, Connection: close, on a TCP socket on TCPIP$DEVICE:: from is node::"/path", the node the server's address, or
@@ -44,6 +53,7 @@
         $IODEF
         $RMSDEF
         $FABDEF
+        $CLIMSGDEF
         $RABDEF
         $NAMDEF
         $INETSYMDEF
@@ -65,15 +75,25 @@ RECSIZE = 32768                         ; 64 blocks, and more than a VAR record 
 BUFSIZE = 1024
 
         .PSECT  DATA, NOEXE, WRT, LONG
+SFAB:   $FAB    FNA=SPEC, DNA=STICKY, NAM=SNAM ; finds from's files
+SNAM:   $NAM    ESA=SEXP, ESS=255, RSA=SRES, RSS=255
 INFAB:  $FAB    NAM=INNAM
 INNAM:  $NAM    RSA=INRES, RSS=255
 INRAB:  $RAB    FAB=INFAB, UBF=REC, USZ=RECSIZE
 OUTFAB: $FAB    NAM=OUTNAM
 OUTNAM: $NAM    RSA=OUTRES, RSS=255
 OUTRAB: $RAB    FAB=OUTFAB
-DESC:   .LONG   255                     ; a parameter's descriptor
+DESC:   .LONG   255                     ; FROM's descriptor
         .ADDRESS SPEC
-SPEC:   .BLKB   255
+SPEC:   .BLKB   255                     ; a specification from FROM's list
+MORE:   .LONG   0                       ; CLI$GET_VALUE's: CLI$_COMMA or CLI$_CONCAT if more follow
+TODESC: .LONG   255                     ; TO's
+        .ADDRESS TOSPEC
+TOSPEC: .BLKB   255
+MANY:   .LONG   0                       ; 1: a file for each, not one of them all
+FILES:  .LONG   0                       ; how many it copied
+APPENDING:                              ; 1: this one goes on the end of to
+        .LONG   0
 RECORDS:                                ; how many it copied
         .LONG   0
 MSG:    .BLKB   256                     ; /LOG's message, .ASCIC
@@ -83,6 +103,8 @@ COPIED: .ASCIC  "%COPY-S-COPIED, "
 TO:     .ASCIC  " copied to "
 APPENDED:
         .ASCIC  "%APPEND-S-APPENDED, "
+CAPPENDED:
+        .ASCIC  "%COPY-S-APPENDED, "
 APTO:   .ASCIC  " appended to "
 OPEN:   .ASCIC  " ("
 CLOSE:  .ASCIC  " records)"
@@ -91,6 +113,9 @@ BLOCKMODE:
         .LONG   0                       ; 1: blocks, not records"
 INRES:  .BLKB   255
 OUTRES: .BLKB   255
+SEXP:   .BLKB   255
+SRES:   .BLKB   255
+STICKY: .BLKB   255                     ; the last one's device and directory
 REC:    .BLKB   RECSIZE
 ; COPY/HTTP's.
 DEVICE: .ASCID  "TCPIP$DEVICE:"
@@ -147,66 +172,44 @@ NBUF:   .BLKB   BUFSIZE                 ; the request, then what comes
         INCL    APPEND
 5$:     MOVL    #255, DESC
         GETVALUE "FROM", DESC, DESC
+        MOVL    R0, MORE
         BLBS    APPEND, 7$
         PRESENT "HTTP"
         BLBC    R0, 7$
         BRW     HTTP
-7$:     MOVAB   SPEC, INFAB+FAB$L_FNA
-        MOVB    DESC, INFAB+FAB$B_FNS
-        $OPEN   FAB=INFAB
+7$:     BSBW    GETTO
+        BSBW    NAMED
+        BLBS    APPEND, 10$
+        PRESENT "CONCATENATE"
         BLBS    R0, 10$
-        RET
-10$:    MOVL    #255, DESC
-        GETVALUE "TO", DESC, DESC
-        BSBW    NOWILD
-        MOVAB   SPEC, OUTFAB+FAB$L_FNA
-        MOVB    DESC, OUTFAB+FAB$B_FNS
-        MOVL    INNAM+NAM$L_NAME, OUTFAB+FAB$L_DNA      ; from's NAME.TYPE
-        ADDB3   INNAM+NAM$B_NAME, INNAM+NAM$B_TYPE, OUTFAB+FAB$B_DNS
-        MOVB    INFAB+FAB$B_ORG, OUTFAB+FAB$B_ORG
-        MOVB    INFAB+FAB$B_RFM, OUTFAB+FAB$B_RFM
-        MOVB    INFAB+FAB$B_RAT, OUTFAB+FAB$B_RAT
-        MOVW    INFAB+FAB$W_MRS, OUTFAB+FAB$W_MRS
-        MOVB    INFAB+FAB$B_FSZ, OUTFAB+FAB$B_FSZ
-        MOVL    INFAB+FAB$L_ALQ, OUTFAB+FAB$L_ALQ
-        MOVB    INFAB+FAB$B_BKS, OUTFAB+FAB$B_BKS
-        MOVW    INFAB+FAB$W_DEQ, OUTFAB+FAB$W_DEQ
-        BLBS    APPEND, 15$
-        TSTB    INFAB+FAB$B_ORG         ; relative or indexed: by blocks
-        BEQL    12$
-        BSBW    BLOCKCOPY
-        BRW     70$
-12$:
-        $CREATE FAB=OUTFAB
-        BRB     17$
-15$:    MOVB    #FAB$M_PUT, OUTFAB+FAB$B_FAC
-        MOVL    #RAB$M_EOF, OUTRAB+RAB$L_ROP
-        $OPEN   FAB=OUTFAB
-17$:    MOVL    R0, R2
-        BLBC    R0, 80$
-        $CONNECT RAB=INRAB
-        BLBC    R0, 70$
-        $CONNECT RAB=OUTRAB
-        BLBC    R0, 70$
-20$:    $GET    RAB=INRAB
+        MOVL    #1, MANY
+10$:    MOVB    DESC, SFAB+FAB$B_FNS    ; SPEC: the next specification
+        $PARSE  FAB=SFAB
         BLBC    R0, 30$
-        MOVL    INRAB+RAB$L_RBF, OUTRAB+RAB$L_RBF
-        MOVW    INRAB+RAB$W_RSZ, OUTRAB+RAB$W_RSZ
-        $PUT    RAB=OUTRAB
-        BLBC    R0, 70$
-        INCL    RECORDS
-        BRB     20$
-30$:    CMPL    R0, #RMS$_EOF
-        BNEQ    70$
-        BSBB    LOG
-        MOVL    #SS$_NORMAL, R0
-70$:    MOVL    R0, R2
-        $CLOSE  FAB=OUTFAB
-        BLBC    R2, 80$                 ; the first error is the one
-        MOVL    R0, R2
-80$:    $CLOSE  FAB=INFAB
-        MOVL    R2, R0
-        RET
+20$:    $SEARCH FAB=SFAB
+        BLBC    R0, 25$
+        BSBW    COPYONE
+        BLBC    R0, 30$
+        INCL    FILES
+        BITL    #NAM$M_WILDCARD, SNAM+NAM$L_FNB
+        BNEQ    20$
+25$:    CMPL    R0, #RMS$_FNF           ; none at all is an error
+        BEQL    30$
+        CMPL    MORE, #CLI$_COMMA
+        BEQL    27$
+        CMPL    MORE, #CLI$_CONCAT
+        BNEQ    28$
+27$:    MOVZBL  SNAM+NAM$B_DEV, R0      ; the next one's, by default
+        MOVZBL  SNAM+NAM$B_DIR, R1
+        ADDL2   R1, R0
+        MOVB    R0, SFAB+FAB$B_DNS
+        MOVC3   R0, @SNAM+NAM$L_DEV, STICKY
+        MOVL    #255, DESC
+        GETVALUE "FROM", DESC, DESC
+        MOVL    R0, MORE
+        BRB     10$
+28$:    MOVL    #SS$_NORMAL, R0
+30$:    RET
 
 ; HTTP: COPY/HTTP, from in SPEC, DESC its length: node::"rest", without
 ; the quotes. Writes it, quotes and all, in INRES, for /LOG. The rest is
@@ -365,11 +368,7 @@ HOST:   MOVC3   R11, (R10), HOSTB       ; R10, R11: host[:port]
         MNEGL   #1, LEFT
         TSTL    HOPS                    ; to, once: CLI has no more values
         BNEQ    70$
-        MOVL    #255, DESC
-        GETVALUE "TO", DESC, DESC
-        BSBW    NOWILD
-        MOVAB   SPEC, OUTFAB+FAB$L_FNA
-        MOVB    DESC, OUTFAB+FAB$B_FNS
+        BSBW    GETTO
         MOVB    #FAB$C_STMLF, OUTFAB+FAB$B_RFM
         MOVB    #FAB$M_CR, OUTFAB+FAB$B_RAT
         PRESENT "BINARY"
@@ -452,6 +451,82 @@ SYNTAX: MOVL    #RMS$_SYN, R0           ; from has no node::
 UNSUPPORTED:                            ; nor /path nor http://
         MOVL    #RMS$_SUPPORT, R0
         RET
+
+; COPYONE: copies, or appends, the file SFAB's $SEARCH found to to, as
+; the header says, and logs it. R0 = SS$_NORMAL or RMS's error. Uses
+; R0-R5.
+COPYONE:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5>
+        CLRL    RECORDS
+        CLRL    BLOCKMODE
+        CLRB    OUTFAB+FAB$B_FAC
+        CLRL    OUTRAB+RAB$L_ROP
+        MOVL    APPEND, APPENDING       ; APPEND, or not COPY's first of one file
+        BLBS    MANY, 5$
+        TSTL    FILES
+        BEQL    5$
+        MOVL    #1, APPENDING
+5$:     TSTL    FILES                   ; to, which from's wildcard found: not into itself
+        BEQL    7$
+        CMPB    SNAM+NAM$B_RSL, OUTNAM+NAM$B_RSL
+        BNEQ    7$
+        MOVZBL  SNAM+NAM$B_RSL, R0
+        CMPC3   R0, SRES, OUTRES
+        BNEQ    7$
+        MOVL    #SS$_NORMAL, R0
+        RSB
+7$:     MOVAB   SRES, INFAB+FAB$L_FNA
+        MOVB    SNAM+NAM$B_RSL, INFAB+FAB$B_FNS
+        MOVB    #FAB$M_GET, INFAB+FAB$B_FAC
+        $OPEN   FAB=INFAB
+        BLBS    R0, 10$
+        RSB
+10$:    MOVL    INNAM+NAM$L_NAME, OUTFAB+FAB$L_DNA      ; from's NAME.TYPE
+        ADDB3   INNAM+NAM$B_NAME, INNAM+NAM$B_TYPE, OUTFAB+FAB$B_DNS
+        MOVB    INFAB+FAB$B_ORG, OUTFAB+FAB$B_ORG
+        MOVB    INFAB+FAB$B_RFM, OUTFAB+FAB$B_RFM
+        MOVB    INFAB+FAB$B_RAT, OUTFAB+FAB$B_RAT
+        MOVW    INFAB+FAB$W_MRS, OUTFAB+FAB$W_MRS
+        MOVB    INFAB+FAB$B_FSZ, OUTFAB+FAB$B_FSZ
+        MOVL    INFAB+FAB$L_ALQ, OUTFAB+FAB$L_ALQ
+        MOVB    INFAB+FAB$B_BKS, OUTFAB+FAB$B_BKS
+        MOVW    INFAB+FAB$W_DEQ, OUTFAB+FAB$W_DEQ
+        BLBS    APPENDING, 15$
+        TSTB    INFAB+FAB$B_ORG         ; relative or indexed: by blocks
+        BEQL    12$
+        BSBW    BLOCKCOPY
+        BRW     70$
+12$:
+        $CREATE FAB=OUTFAB
+        BRB     17$
+15$:    MOVB    #FAB$M_PUT, OUTFAB+FAB$B_FAC
+        MOVL    #RAB$M_EOF, OUTRAB+RAB$L_ROP
+        $OPEN   FAB=OUTFAB
+17$:    MOVL    R0, R2
+        BLBC    R0, 80$
+        $CONNECT RAB=INRAB
+        BLBC    R0, 70$
+        $CONNECT RAB=OUTRAB
+        BLBC    R0, 70$
+20$:    $GET    RAB=INRAB
+        BLBC    R0, 30$
+        MOVL    INRAB+RAB$L_RBF, OUTRAB+RAB$L_RBF
+        MOVW    INRAB+RAB$W_RSZ, OUTRAB+RAB$W_RSZ
+        $PUT    RAB=OUTRAB
+        BLBC    R0, 70$
+        INCL    RECORDS
+        BRB     20$
+30$:    CMPL    R0, #RMS$_EOF
+        BNEQ    70$
+        BSBB    LOG
+        MOVL    #SS$_NORMAL, R0
+70$:    MOVL    R0, R2
+        $CLOSE  FAB=OUTFAB
+        BLBC    R2, 80$                 ; the first error is the one
+        MOVL    R0, R2
+80$:    $CLOSE  FAB=INFAB
+        MOVL    R2, R0
+        RSB
 
 ; BLOCKCOPY: INFAB = a relative or indexed file, open, and OUTFAB set up
 ; like it. Opens it again for block I/O, makes OUTFAB's file for block I/O
@@ -961,29 +1036,76 @@ TLSERR:
         MOVL    #RMS$_NETFAIL, R0
         RSB
 
-; NOWILD: drops from to, in SPEC, DESC its length, each field that is
+; GETTO: to, TO's value, into TOSPEC, without what NOWILD drops, and
+; OUTFAB's file name. Uses R0-R3.
+GETTO:
+        .JSB_ENTRY  SCRATCH=<R2, R3>
+        MOVL    #255, TODESC
+        GETVALUE "TO", TODESC, TODESC
+        BSBB    NOWILD
+        MOVAB   TOSPEC, OUTFAB+FAB$L_FNA
+        MOVB    TODESC, OUTFAB+FAB$B_FNS
+        RSB
+
+; NAMED: MANY = 1 if to, in TOSPEC, leaves out its name or its type,
+; which the files then give, each its own. Uses R0-R2.
+NAMED:
+        .JSB_ENTRY  SCRATCH=<R2>
+        MOVZWL  TODESC, R2
+        MOVL    R2, R0                  ; the name, past the device and directory
+10$:    DECL    R0
+        BLSS    20$
+        CMPB    TOSPEC[R0], #^A/]/
+        BEQL    20$
+        CMPB    TOSPEC[R0], #^A/>/
+        BEQL    20$
+        CMPB    TOSPEC[R0], #^A/:/
+        BNEQ    10$
+20$:    INCL    R0
+        CLRL    R1                      ; its length
+30$:    ADDL3   R0, R1, R2
+        CMPW    R2, TODESC
+        BGEQU   80$
+        CMPB    TOSPEC[R2], #^A/./
+        BEQL    40$
+        CMPB    TOSPEC[R2], #59         ; a semicolon
+        BEQL    80$
+        INCL    R1
+        BRB     30$
+40$:    TSTL    R1
+        BEQL    80$
+        INCL    R2                      ; the type, past its dot
+        CMPW    R2, TODESC
+        BGEQU   80$
+        CMPB    TOSPEC[R2], #59
+        BEQL    80$
+        RSB
+80$:    MOVL    #1, MANY
+        RSB
+
+; NOWILD: drops from to, in TOSPEC, TODESC its length, each field that is
 ; only a wildcard, * for a name or .* or ;*, so that the default name
 ; gives it. One that is part wildcard, A*, stays, for RMS$_WLD. Uses R0-R3.
 NOWILD:
         .JSB_ENTRY  SCRATCH=<R2, R3>
-        MOVZWL  DESC, R2
+        MOVZWL  TODESC, R2
         CLRL    R0                      ; the next character in
         CLRL    R1                      ; and out
 10$:    CMPL    R0, R2
         BGEQU   90$
-        MOVZBL  SPEC[R0], R3
+        MOVZBL  TOSPEC[R0], R3
         INCL    R0
         CMPB    R3, #^A/*/
         BNEQ    40$
         CMPL    R0, R2                  ; a * a field ends
         BGEQU   20$
-        CMPB    SPEC[R0], #^A/./
+        CMPB    TOSPEC[R0], #^A/./
         BEQL    20$
-        CMPB    SPEC[R0], #59           ; a semicolon
+        CMPB    TOSPEC[R0], #59           ; a semicolon
         BNEQ    40$
 20$:    TSTL    R1                      ; and one starts
         BEQL    10$
-        MOVZBL  SPEC-1[R1], R3
+        MOVZBL  TOSPEC-1[R1], R3
         CMPB    R3, #^A/./              ; .* or ;*: the punctuation goes too
         BEQL    30$
         CMPB    R3, #59                 ; a semicolon
@@ -998,10 +1120,10 @@ NOWILD:
         BRB     40$
 30$:    DECL    R1
         BRB     10$
-40$:    MOVB    R3, SPEC[R1]
+40$:    MOVB    R3, TOSPEC[R1]
         INCL    R1
         BRB     10$
-90$:    MOVW    R1, DESC
+90$:    MOVW    R1, TODESC
         RSB
 
 ; STATUS: R0 = $QIOW's status. R0 = the IOSB's, if that was a success.
@@ -1032,14 +1154,17 @@ LOG:
         .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5>
         PRESENT "LOG"
         BLBC    R0, 90$
+        CLRB    MSG
         MOVAB   COPIED, R1
+        BLBC    APPENDING, 5$
+        MOVAB   CAPPENDED, R1
         BLBC    APPEND, 5$
         MOVAB   APPENDED, R1
 5$:     BSBB    ADDTEXT
         MOVAB   INNAM, R1
         BSBB    ADDNAM
         MOVAB   TO, R1
-        BLBC    APPEND, 7$
+        BLBC    APPENDING, 7$
         MOVAB   APTO, R1
 7$:     BSBB    ADDTEXT
         MOVAB   OUTNAM, R1
@@ -1056,11 +1181,10 @@ LOG:
         INCL    R4
         MOVL    R5, R3
         BNEQ    10$
-20$:    MOVL    (SP)+, R0
-        MOVB    R0, SPEC
-        MOVAB   SPEC, R1
+20$:    MOVL    SP, R1                  ; the digit, its longword's low byte
         MOVL    #1, R2
         BSBB    ADD
+        TSTL    (SP)+
         SOBGTR  R4, 20$
         MOVAB   CLOSE, R1
         BLBC    BLOCKMODE, 30$
