@@ -23,6 +23,20 @@
 ; ponytail: records up to RECSIZE; the first error ends it, where VMS's
 ; COPY goes on to the next file.
 ;
+; COPY's qualifiers, as VMS's: /ALLOCATION=n makes to n blocks to start
+; with, not from's size. /PROTECTION=(code[,...]) changes to's
+; protection, its predecessor's or the default, in the categories it
+; names (lib/protect.mar). /REPLACE deletes the version to names, if it
+; is there, rather than fail with RMS$_FEX; /OVERLAY writes into to, if
+; it is there, its records cut and its attributes kept, rather than make
+; a new version; /LOG says so, %COPY-I-REPLACED or %COPY-I-OVERLAY.
+; /CONFIRM, COPY's and APPEND's, asks Copy from to to? [N], or Append,
+; before each file, until ALL or QUIT.
+; vaxpunk: RMS has no FAB$M_SUP or FAB$M_CIF, which VMS's COPY sets for
+; /REPLACE and /OVERLAY: COPY does what they would with $ERASE and $OPEN.
+; ponytail: /OVERLAY copies records, so only into a sequential file;
+; COPY/HTTP takes none of them.
+;
 ; COPY/HTTP fetches from from a web server instead, with an HTTP/1.1
 ; GET, Connection: close, on a TCP socket on TCPIP$DEVICE:: from is node::"/path", the node the server's address, or
 ; node::"http://host[:port]/path", where the node, URL by custom, is
@@ -58,8 +72,9 @@
         $NAMDEF
         $INETSYMDEF
         $SOCKADDRINDEF
+        $XABPRODEF
 
-        .EXTERNAL PUT_LINE, HOST_ADDR
+        .EXTERNAL PUT_LINE, HOST_ADDR, GET_PROT, LIB$GET_INPUT
         .EXTERNAL TLS_CLIENT_METHOD, SSL_CTX_NEW, SSL_CTX_SET_DEFAULT_VERIFY_PATHS
         .EXTERNAL SSL_CTX_SET_VERIFY, SSL_CTX_SET_OPTIONS, SSL_NEW, SSL_SET_FD, SSL_SET1_HOST, SSL_CONNECT
         .EXTERNAL SSL_READ, SSL_WRITE, SSL_GET_ERROR, SSL_SHUTDOWN
@@ -81,8 +96,52 @@ INFAB:  $FAB    NAM=INNAM
 INNAM:  $NAM    RSA=INRES, RSS=255
 INRAB:  $RAB    FAB=INFAB, UBF=REC, USZ=RECSIZE
 OUTFAB: $FAB    NAM=OUTNAM
-OUTNAM: $NAM    RSA=OUTRES, RSS=255
+OUTNAM: $NAM    RSA=OUTRES, RSS=255, ESA=OUTEXP, ESS=255
 OUTRAB: $RAB    FAB=OUTFAB
+PROXAB: $XABPRO                         ; /PROTECTION's, for $CLOSE
+PROTECTION:                             ; the qualifier, for GET_PROT
+        .ASCID  "PROTECTION"
+PROT:   .WORD   0                       ; GET_PROT's, to check the codes first
+ALLOC:  .LONG   0                       ; /ALLOCATION's, or 0
+REPLACED:
+        .ASCIC  "%COPY-I-REPLACED, "
+BEINGR: .ASCIC  " being replaced"
+OVERLAY:
+        .ASCIC  "%COPY-I-OVERLAY, "
+BEINGO: .ASCIC  " being overwritten"
+COPYQ:  .ASCIC  "Copy "                 ; /CONFIRM's question
+APPENDQ:
+        .ASCIC  "Append "
+TOQ:    .ASCIC  " to "
+ASK:    .ASCIC  "? [N]: "
+PROMPT: .LONG   0                       ; its descriptor
+        .ADDRESS MSG+1
+ANSWER: .LONG   16                      ; and the answer's
+        .ADDRESS ANSBUF
+ANSBUF: .BLKB   16
+ANSLEN: .WORD   0
+ALLYES: .LONG   0                       ; 1 once /CONFIRM's answer is ALL
+QUIT:   .LONG   0                       ; and once it is QUIT
+SKIPPED:                                ; 1: the answer for this file was no
+        .LONG   0
+WORDS:  .ASCIC  "YES"                   ; the answers: 1 to copy, 0 not, 2 QUIT, 3 ALL
+        .BYTE   1
+        .ASCIC  "NO"
+        .BYTE   0
+        .ASCIC  "QUIT"
+        .BYTE   2
+        .ASCIC  "ALL"
+        .BYTE   3
+        .ASCIC  "TRUE"
+        .BYTE   1
+        .ASCIC  "FALSE"
+        .BYTE   0
+        .ASCIC  "1"
+        .BYTE   1
+        .ASCIC  "0"
+        .BYTE   0
+        .BYTE   0
+OUTEXP: .BLKB   255
 DESC:   .LONG   255                     ; FROM's descriptor
         .ADDRESS SPEC
 SPEC:   .BLKB   255                     ; a specification from FROM's list
@@ -168,8 +227,12 @@ NBUF:   .BLKB   BUFSIZE                 ; the request, then what comes
         .ENTRY  START, ^M<R2, R3, R4, R5, R6, R7, R8, R9, R10, R11>
         GETVALUE "$VERB", DESC, DESC
         CMPL    SPEC, APPE
-        BNEQ    5$
+        BNEQ    3$
         INCL    APPEND
+        BRB     5$
+3$:     BSBW    QUALS
+        BLBS    R0, 5$
+        RET
 5$:     MOVL    #255, DESC
         GETVALUE "FROM", DESC, DESC
         MOVL    R0, MORE
@@ -190,7 +253,10 @@ NBUF:   .BLKB   BUFSIZE                 ; the request, then what comes
         BLBC    R0, 25$
         BSBW    COPYONE
         BLBC    R0, 30$
+        BLBS    QUIT, 28$
+        BLBS    SKIPPED, 22$
         INCL    FILES
+22$:
         BITL    #NAM$M_WILDCARD, SNAM+NAM$L_FNB
         BNEQ    20$
 25$:    CMPL    R0, #RMS$_FNF           ; none at all is an error
@@ -459,6 +525,8 @@ COPYONE:
         .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5>
         CLRL    RECORDS
         CLRL    BLOCKMODE
+        CLRL    SKIPPED
+        CLRL    OUTFAB+FAB$L_XAB        ; /PROTECTION's, the last file's
         CLRB    OUTFAB+FAB$B_FAC
         CLRL    OUTRAB+RAB$L_ROP
         MOVL    APPEND, APPENDING       ; APPEND, or not COPY's first of one file
@@ -491,22 +559,30 @@ COPYONE:
         MOVL    INFAB+FAB$L_ALQ, OUTFAB+FAB$L_ALQ
         MOVB    INFAB+FAB$B_BKS, OUTFAB+FAB$B_BKS
         MOVW    INFAB+FAB$W_DEQ, OUTFAB+FAB$W_DEQ
-        BLBS    APPENDING, 15$
+        MOVL    ALLOC, R0
+        BEQL    11$
+        MOVL    R0, OUTFAB+FAB$L_ALQ
+11$:    BSBW    CONFIRM
+        MOVL    #SS$_NORMAL, R2         ; not wanted: nothing to do
+        BLBS    R0, 13$
+        MOVL    #1, SKIPPED
+        BRW     80$
+13$:    BLBS    APPENDING, 15$
         TSTB    INFAB+FAB$B_ORG         ; relative or indexed: by blocks
         BEQL    12$
         BSBW    BLOCKCOPY
         BRW     70$
-12$:
-        $CREATE FAB=OUTFAB
+12$:    BSBW    MAKE
+        BLBC    R0, 70$
         BRB     17$
 15$:    MOVB    #FAB$M_PUT, OUTFAB+FAB$B_FAC
         MOVL    #RAB$M_EOF, OUTRAB+RAB$L_ROP
         $OPEN   FAB=OUTFAB
-17$:    MOVL    R0, R2
+        MOVL    R0, R2
         BLBC    R0, 80$
-        $CONNECT RAB=INRAB
-        BLBC    R0, 70$
         $CONNECT RAB=OUTRAB
+        BLBC    R0, 70$
+17$:    $CONNECT RAB=INRAB
         BLBC    R0, 70$
 20$:    $GET    RAB=INRAB
         BLBC    R0, 30$
@@ -541,11 +617,9 @@ BLOCKCOPY:
         $OPEN   FAB=INFAB
         BLBC    R0, 90$
         MOVB    #FAB$M_BIO, OUTFAB+FAB$B_FAC
-        $CREATE FAB=OUTFAB
+        BSBW    MAKE
         BLBC    R0, 90$
         $CONNECT RAB=INRAB
-        BLBC    R0, 90$
-        $CONNECT RAB=OUTRAB
         BLBC    R0, 90$
         MOVL    #1, INRAB+RAB$L_BKT     ; the next VBN
 10$:    $READ   RAB=INRAB
@@ -566,6 +640,191 @@ BLOCKCOPY:
         MOVL    #1, BLOCKMODE
         BSBW    LOG
         MOVL    #SS$_NORMAL, R0
+90$:    RSB
+
+; QUALS: COPY's /PROTECTION's codes checked, and /ALLOCATION's blocks
+; in ALLOC, before anything is copied. R0 = SS$_NORMAL, or GET_PROT's or
+; DECIMAL's error. Uses R0-R5.
+QUALS:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5>
+        PRESENT "PROTECTION"
+        BLBC    R0, 10$
+        PUSHAW  PROT
+        PUSHAQ  PROTECTION
+        CALLS   #2, G^GET_PROT
+        BLBC    R0, 90$
+10$:    MOVL    #255, DESC
+        GETVALUE "ALLOCATION", DESC, DESC
+        BLBS    R0, 20$
+        MOVL    #SS$_NORMAL, R0         ; none
+        RSB
+20$:
+        MOVAB   SPEC, R1
+        MOVZWL  DESC, R2
+        BSBW    DECIMAL
+        MOVL    R3, ALLOC
+90$:    RSB
+
+; MAKE: OUTFAB set up like INFAB, with the access the copy wants, and
+; OUTRAB. Makes to and connects OUTRAB to it. With /REPLACE, the version
+; to names, if it is there, goes first, as FAB$M_SUP would have it;
+; with /OVERLAY, to, if it is there, is opened instead and its records
+; cut, as FAB$M_CIF would, for a copy by records. With /PROTECTION,
+; PROXAB gets to's protection, changed as it says, which $CLOSE gives
+; the file. R0 = RMS$_NORMAL, RMS$_ORG for /OVERLAY by blocks, or RMS's
+; or GET_PROT's error. Uses R0-R5.
+MAKE:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5>
+        PRESENT "OVERLAY"
+        BLBC    R0, 20$
+        MOVL    #RMS$_ORG, R0
+        BITB    #FAB$M_BIO, OUTFAB+FAB$B_FAC
+        BNEQ    90$
+        MOVB    #FAB$M_GET!FAB$M_PUT!FAB$M_TRN, OUTFAB+FAB$B_FAC
+        $OPEN   FAB=OUTFAB
+        BLBS    R0, 10$
+        CMPL    R0, #RMS$_FNF           ; not there: made
+        BNEQ    90$
+        CLRB    OUTFAB+FAB$B_FAC
+        BRB     20$
+10$:    $CONNECT RAB=OUTRAB
+        BLBC    R0, 90$
+        $FIND   RAB=OUTRAB              ; the first record, and those after it, go
+        BLBS    R0, 12$
+        CMPL    R0, #RMS$_EOF
+        BNEQ    90$
+        BRB     15$
+12$:    $TRUNCATE RAB=OUTRAB
+        BLBC    R0, 90$
+15$:    MOVAB   OVERLAY, R1
+        MOVAB   BEINGO, R3
+        BSBW    NOTE
+        BRB     50$
+20$:    $CREATE FAB=OUTFAB
+        BLBS    R0, 30$
+        CMPL    R0, #RMS$_FEX
+        BNEQ    90$
+        PRESENT "REPLACE"
+        BLBS    R0, 25$
+        MOVL    #RMS$_FEX, R0
+        RSB
+25$:    $ERASE  FAB=OUTFAB
+        BLBC    R0, 90$
+        $CREATE FAB=OUTFAB
+        BLBC    R0, 90$
+        MOVAB   REPLACED, R1
+        MOVAB   BEINGR, R3
+        BSBW    NOTE
+30$:    $CONNECT RAB=OUTRAB
+        BLBC    R0, 90$
+50$:    PRESENT "PROTECTION"
+        BLBC    R0, 60$
+        MOVAB   PROXAB, OUTFAB+FAB$L_XAB
+        $DISPLAY FAB=OUTFAB
+        BLBC    R0, 90$
+        PUSHAW  PROXAB+XAB$W_PRO
+        PUSHAQ  PROTECTION
+        CALLS   #2, G^GET_PROT
+        BLBC    R0, 90$
+60$:    MOVL    #RMS$_NORMAL, R0
+90$:    RSB
+
+; NOTE: with /LOG, writes the .ASCIC string at R1, to's resultant name
+; and the .ASCIC string at R3. Uses R0-R5.
+NOTE:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5>
+        MOVL    R1, R4
+        PRESENT "LOG"
+        BLBC    R0, 90$
+        CLRB    MSG
+        MOVL    R4, R1
+        BSBW    ADDTEXT
+        MOVAB   OUTNAM, R1
+        BSBW    ADDNAM
+        MOVL    R3, R1
+        BSBW    ADDTEXT
+        PUSHAB  MSG
+        CALLS   #1, G^PUT_LINE
+90$:    RSB
+
+; CONFIRM: with /CONFIRM, asks Copy from to to? [N], or Append when it
+; goes on the end of to, from by its resultant name, to by its own, or
+; its expanded one before it is made, until the answer is YES, NO,
+; QUIT, ALL, TRUE, FALSE, 1 or 0, or the start of one, in any case, as
+; VMS's COPY does. R0 = 1 to copy: without /CONFIRM, after ALL, or for
+; YES, TRUE, 1 or ALL; else 0, for the others or Return. QUIT and CTRL/Z
+; set QUIT, ALL ALLYES. Uses R0-R5.
+CONFIRM:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5>
+        BLBS    ALLYES, 2$
+        PRESENT "CONFIRM"
+        BLBS    R0, 5$
+2$:     MOVL    #1, R0
+        RSB
+5$:     CLRB    MSG
+        MOVAB   COPYQ, R1
+        BLBC    APPENDING, 7$
+        MOVAB   APPENDQ, R1
+7$:     BSBW    ADDTEXT
+        MOVAB   INNAM, R1
+        BSBW    ADDNAM
+        MOVAB   TOQ, R1
+        BSBW    ADDTEXT
+        BLBC    APPENDING, 8$           ; to, open already
+        TSTB    OUTNAM+NAM$B_RSL
+        BEQL    8$
+        MOVAB   OUTNAM, R1
+        BSBW    ADDNAM
+        BRB     9$
+8$:     $PARSE  FAB=OUTFAB
+        MOVZBL  OUTNAM+NAM$B_ESL, R2    ; to as it was typed, if it won't parse
+        MOVAB   OUTEXP, R1
+        TSTL    R2
+        BNEQ    85$
+        MOVZWL  TODESC, R2
+        MOVAB   TOSPEC, R1
+85$:    BSBW    ADD
+9$:     MOVAB   ASK, R1
+        BSBW    ADDTEXT
+        MOVZBL  MSG, PROMPT
+10$:    PUSHAW  ANSLEN
+        PUSHAQ  PROMPT
+        PUSHAQ  ANSWER
+        CALLS   #3, G^LIB$GET_INPUT
+        BLBS    R0, 12$
+        MOVL    #2, R0                  ; CTRL/Z: QUIT
+        BRB     40$
+12$:    MOVZWL  ANSLEN, R2
+        BEQL    80$                     ; Return
+        CLRL    R1                      ; in capitals
+15$:    CMPB    ANSBUF[R1], #^A/a/
+        BLSSU   17$
+        CMPB    ANSBUF[R1], #^A/z/
+        BGTRU   17$
+        SUBB2   #^A/a/-^A/A/, ANSBUF[R1]
+17$:    AOBLSS  R2, R1, 15$
+        MOVAB   WORDS, R5
+20$:    MOVZBL  (R5)+, R4               ; the next word
+        BEQL    10$                     ; none: ask again
+        CMPW    ANSLEN, R4
+        BGTRU   30$
+        CMPC3   ANSLEN, ANSBUF, (R5)
+        BNEQ    30$
+        MOVZBL  (R5)[R4], R0
+        BRB     40$
+30$:    ADDL2   R4, R5
+        INCL    R5
+        BRB     20$
+40$:    CMPL    R0, #2                  ; QUIT
+        BNEQ    50$
+        MOVL    #1, QUIT
+        BRB     80$
+50$:    CMPL    R0, #3                  ; ALL
+        BNEQ    90$
+        MOVL    #1, ALLYES
+        MOVL    #1, R0
+        RSB
+80$:    CLRL    R0
 90$:    RSB
 
 ; BYTE: R0 = the response's next byte. A header line, to its LF, goes in
@@ -911,23 +1170,36 @@ PART:
 90$:    RSB
 
 ; GETPORT: R1, R2 = a port, in decimal, into PORT. R0 = SS$_NORMAL, or
-; SS$_BADPARAM for one that isn't a number from 1 to 65535. Uses R0-R2.
+; SS$_BADPARAM for one that isn't a number from 1 to 65535. Uses R0-R3.
 GETPORT:
-        .JSB_ENTRY  SCRATCH=<R2>
-        CLRL    PORT
+        .JSB_ENTRY  SCRATCH=<R2, R3>
+        BSBB    DECIMAL
+        MOVL    R3, PORT
+        BLBC    R0, 90$
+        TSTL    R3
+        BEQL    80$
+        CMPL    R3, #65535
+        BLEQU   90$
+80$:    MOVL    #SS$_BADPARAM, R0
+90$:    RSB
+
+; DECIMAL: R1, R2 = a number, in decimal. R3 = it, R0 = SS$_NORMAL, or
+; SS$_BADPARAM for none or one more than a longword holds. Uses R0-R3.
+DECIMAL:
+        .JSB_ENTRY  OUTPUT=<R3>, SCRATCH=<R2>
+        CLRL    R3
         TSTL    R2
         BLEQ    80$
 10$:    SUBB3   #^A/0/, (R1)+, R0
         CMPB    R0, #9
         BGTRU   80$
         MOVZBL  R0, R0
-        MULL2   #10, PORT
-        ADDL2   R0, PORT
-        CMPL    PORT, #65535
+        CMPL    R3, #429496729          ; ten times it still fits
         BGTRU   80$
+        MULL2   #10, R3
+        ADDL2   R0, R3
+        BCS     80$
         SOBGTR  R2, 10$
-        TSTL    PORT
-        BEQL    80$
         MOVL    #SS$_NORMAL, R0
         RSB
 80$:    MOVL    #SS$_BADPARAM, R0
