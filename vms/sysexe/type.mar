@@ -1,12 +1,20 @@
         .TITLE  TYPE    Writes a file on the console
-        .IDENT  /V0.1/
+        .IDENT  /V0.2/
 ;
 ; DCL's TYPE spec runs this. Opens the file spec names, in the default directory
 ; unless it says where, with RMS, and writes each of its records on the console, a
 ; line each, or /HEAD's first n or /TAIL's last n, 10 if it doesn't say. Returns
 ; RMS's status if it can't.
+; /PAGE on a video terminal (SCOPE, a page of 8 rows or more) writes a
+; screen at a time, as OpenVMS Alpha V8.4 does: it clears the screen,
+; makes every row but the last scroll, and when they are full asks
+; "Press RETURN to continue" on the last, in reverse video. RETURN
+; scrolls on, the last line written staying at the top, or with
+; /PAGE=CLEAR_SCREEN clears the screen first; CTRL/Z stops. A file that
+; fits on the screen doesn't ask.
 ; ponytail: one file, no wildcards; a record past 255 characters is cut
-; there.
+; there. /PAGE=SAVE pages as /PAGE does, without its keys to go back and
+; search (t8y:/utils/type#page-save).
 ;
         .LIBRARY "starlet.mlb"
         .LIBRARY "sysexe.mlb"
@@ -14,6 +22,10 @@
         $RMSDEF
         $FABDEF
         $RABDEF
+        $IODEF
+        $DCDEF
+        $DVIDEF
+        $TTDEF
 
         .EXTERNAL PUT_LINE
 
@@ -29,6 +41,39 @@ NUMDSC:                                 ; /HEAD's value
         .LONG   10
         .ADDRESS NUM
 NUM:    .BLKB   10
+PAGE:   .LONG   0                       ; the screen's rows, 0 not paging
+WIDTH:  .LONG   0                       ; its columns
+CLRPG:  .LONG   0                       ; 1 with /PAGE=CLEAR_SCREEN
+LEFT:   .LONG   0                       ; the lines that still fit
+TOP:    .LONG   0                       ; 1 at the top of a clear screen
+OUTNAME:.ASCID  "SYS$OUTPUT"
+OUTCHAN:.LONG   0
+IOSB:   .BLKQ   1
+CLASS:  .LONG   0
+DEPEND: .LONG   0
+DVIITEMS:
+        .WORD   4, DVI$_DEVCLASS
+        .ADDRESS CLASS
+        .LONG   0
+        .WORD   4, DVI$_DEVDEPEND
+        .ADDRESS DEPEND
+        .LONG   0
+        .WORD   4, DVI$_DEVBUFSIZ
+        .ADDRESS WIDTH
+        .LONG   0
+        .LONG   0
+OUT:    .BLKB   300                     ; a write: escape sequences, a line
+ANSWER: .BLKB   80                      ; what is typed at the prompt
+CLEAR:  .ASCII  <27>"[H"<27>"[J"
+CLEARLEN = .-CLEAR
+SAVE:   .ASCII  <27>"7"<27>"[1;"        ; then the rows that scroll, r
+SAVELEN = .-SAVE
+RESET:  .ASCII  <27>"7"<27>"[r"<27>"8"  ; every row scrolls again
+RESETLEN = .-RESET
+REVERSE:.ASCII  <27>"[7m"
+MORE:   .ASCII  "Press RETURN to continue"<27>"[0m"
+MORELEN = .-MORE-4                      ; the words alone
+ERASE:  .ASCII  <27>"[K"
 
         .PSECT  CODE, EXE, LONG
         .ENTRY  START, ^M<R2, R3, R4, R5>
@@ -55,6 +100,7 @@ NUM:    .BLKB   10
         BLBC    R0, 90$
         $CONNECT RAB=RAB
         BLBC    R0, 80$
+        BSBW    PAGING
         CLRL    R4                      ; R4 = the lines left to skip
         CMPL    R5, #-1
         BEQL    10$
@@ -83,12 +129,13 @@ NUM:    .BLKB   10
         BRB     10$
 25$:    DECL    R3
         MOVB    RAB+RAB$W_RSZ, REC
-        PUSHAB  REC
-        CALLS   #1, G^PUT_LINE
-        BRB     10$
+        BSBW    SHOW
+        BLBS    R0, 10$
+        BRB     45$                     ; CTRL/Z at the prompt
 30$:    CMPL    R0, #RMS$_EOF
         BNEQ    80$
-40$:    MOVL    #SS$_NORMAL, R0
+40$:    BSBW    UNPAGE
+45$:    MOVL    #SS$_NORMAL, R0
 80$:    MOVL    R0, R2
         $CLOSE  FAB=FAB
         MOVL    R2, R0
@@ -108,5 +155,175 @@ NUMBER:
         INCL    R2
         BRB     10$
 90$:    RSB
+
+; PAGING: with /PAGE, and SYS$OUTPUT a video terminal of 8 rows or more,
+; PAGE its rows, WIDTH its columns and OUTCHAN a channel to it; clears
+; the screen and makes every row but the last scroll. PAGE = 0 otherwise.
+; Uses R0-R1.
+PAGING:
+        .JSB_ENTRY
+        CLRL    PAGE
+        PRESENT "PAGE"
+        BLBC    R0, 90$
+        CLRL    CLRPG
+        PRESENT "PAGE.CLEAR_SCREEN"
+        BLBC    R0, 10$
+        INCL    CLRPG
+10$:    $GETDVIW_S DEVNAM=OUTNAME, ITMLST=DVIITEMS
+        BLBC    R0, 90$
+        CMPL    CLASS, #DC$_TERM
+        BNEQ    90$
+        BITL    #TT$M_SCOPE, DEPEND
+        BEQL    90$
+        EXTZV   #24, #8, DEPEND, R2
+        CMPL    R2, #8
+        BLSSU   90$
+        $ASSIGN_S DEVNAM=OUTNAME, CHAN=OUTCHAN
+        BLBC    R0, 90$
+        MOVL    R2, PAGE
+        MOVAB   OUT, R3
+        BSBW    CLS
+        MOVC3   #SAVELEN, SAVE, (R3)
+        SUBL3   #1, PAGE, R0
+        BSBW    DIGITS
+        MOVB    #^A/r/, (R3)+
+        MOVB    #27, (R3)+
+        MOVB    #^A/8/, (R3)+
+        BSBW    SEND
+90$:    RSB
+
+; CLS: at R3, the escape sequences that clear the screen; R3 past them.
+; LEFT = the rows that scroll, TOP = 1. Uses R0-R5.
+CLS:
+        .JSB_ENTRY  OUTPUT=<R3>, SCRATCH=<R2, R4, R5>
+        MOVC3   #CLEARLEN, CLEAR, (R3)
+        SUBL3   #1, PAGE, LEFT
+        MOVL    #1, TOP
+        RSB
+
+; SHOW: writes REC on SYS$OUTPUT, a screen at a time with /PAGE. R0 =
+; SS$_NORMAL, or 0 if CTRL/Z at the prompt stopped it. Uses R0-R1.
+SHOW:
+        .JSB_ENTRY
+        TSTL    PAGE
+        BNEQ    10$
+        PUSHAB  REC
+        CALLS   #1, G^PUT_LINE
+        MOVL    #SS$_NORMAL, R0
+        RSB
+10$:    TSTL    LEFT
+        BNEQ    20$
+        BSBW    ASK
+        BLBS    R0, 20$
+        RSB
+20$:    DECL    LEFT
+        MOVAB   OUT, R3                 ; LF, the record, CR, as VMS does
+        TSTL    TOP
+        BNEQ    30$
+        MOVB    #10, (R3)+
+30$:    CLRL    TOP
+        MOVZBL  REC, R0
+        MOVC3   R0, REC+1, (R3)
+        MOVB    #13, (R3)+
+        BSBW    SEND
+        MOVL    #SS$_NORMAL, R0
+        RSB
+
+; ASK: "Press RETURN to continue" on the last row, and reads the answer.
+; Then erases it, and scrolls on, or clears the screen. R0 = SS$_NORMAL
+; to go on, or 0 for CTRL/Z, which also makes every row scroll again.
+; Uses R0-R5.
+ASK:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5>
+        MOVAB   OUT, R3
+        MOVC3   #4, REVERSE, (R3)
+        BSBW    ATMORE
+        MOVC3   #MORELEN+4, MORE, (R3)
+        MOVAB   OUT, R0
+        SUBL2   R0, R3
+        CLRQ    IOSB
+        $QIOW_S CHAN=OUTCHAN, FUNC=#IO$_READPROMPT, IOSB=IOSB, P1=ANSWER, P2=#80, P5=#OUT, P6=R3
+        MOVAB   OUT, R3
+        BSBW    ATMORE
+        MOVC3   #3, ERASE, (R3)
+        BLBC    IOSB, 10$               ; CTRL/Y, a hangup: stop too
+        CMPB    IOSB+4, #26
+        BNEQ    20$
+10$:    MOVC3   #RESETLEN, RESET, (R3)
+        MOVB    #13, (R3)+
+        BSBW    SEND
+        CLRL    R0
+        RSB
+20$:    TSTL    CLRPG
+        BEQL    30$
+        BSBW    CLS
+        BRB     40$
+30$:    SUBL3   #1, PAGE, R0            ; the row above, its last line
+        CLRL    R1                      ; staying as the next scroll up
+        BSBW    AT
+        SUBL3   #2, PAGE, LEFT
+40$:    BSBW    SEND
+        MOVL    #SS$_NORMAL, R0
+        RSB
+
+; UNPAGE: with /PAGE, makes every row scroll again, and a new line.
+; Uses R0-R1.
+UNPAGE:
+        .JSB_ENTRY
+        TSTL    PAGE
+        BEQL    90$
+        MOVAB   OUT, R3
+        MOVC3   #RESETLEN, RESET, (R3)
+        MOVW    #^X0A0D, (R3)+
+        BSBW    SEND
+90$:    RSB
+
+; ATMORE: at R3, the escape sequence that moves the cursor to where the
+; prompt starts, the last row, centred; R3 past it. Uses R0-R2.
+ATMORE:
+        .JSB_ENTRY  OUTPUT=<R3>, SCRATCH=<R2>
+        SUBL3   #MORELEN, WIDTH, R1
+        BGEQ    10$
+        CLRL    R1
+10$:    DIVL2   #2, R1
+        MOVL    PAGE, R0
+        BSBW    AT
+        RSB
+
+; AT: at R3, the escape sequence that moves the cursor to row R0, column
+; R1 + 1; R3 past it. Uses R0-R2.
+AT:
+        .JSB_ENTRY  OUTPUT=<R3>, SCRATCH=<R2>
+        MOVL    R1, R2
+        MOVW    #^X5B1B, (R3)+          ; ESC [
+        BSBW    DIGITS
+        MOVB    #^X3B, (R3)+            ; ;
+        ADDL3   #1, R2, R0
+        BSBW    DIGITS
+        MOVB    #^A/f/, (R3)+
+        RSB
+
+; DIGITS: at R3, R0 in decimal; R3 past it. Uses R0-R1.
+DIGITS:
+        .JSB_ENTRY  OUTPUT=<R3>
+        DIVL3   #10, R0, R1
+        BEQL    10$
+        PUSHL   R0
+        MOVL    R1, R0
+        BSBW    DIGITS
+        MOVL    (SP)+, R0
+        DIVL3   #10, R0, R1
+10$:    MULL2   #10, R1
+        SUBL2   R1, R0
+        ADDB3   #^A/0/, R0, (R3)+
+        RSB
+
+; SEND: writes OUT up to R3 on OUTCHAN. Uses R0-R1.
+SEND:
+        .JSB_ENTRY
+        MOVAB   OUT, R1
+        SUBL3   R1, R3, R0
+        $QIOW_S CHAN=OUTCHAN, FUNC=#IO$_WRITEVBLK, P1=OUT, P2=R0
+        RSB
 
         .END    START

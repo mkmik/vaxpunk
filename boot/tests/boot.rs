@@ -641,6 +641,9 @@ const SHARING: Phase = Phase {
 /// the command typed next isn't echoed; then it puts them back. TTTEST
 /// checks timed reads, the type-ahead count of the keys typed for it, a
 /// read an escape sequence ends and one with terminators of its own.
+/// TYPE/PAGE writes WELCOME.TXT on a page of 8 rows, 7 lines, asks, and
+/// on RETURN scrolls on to its end; with /PAGE=CLEAR_SCREEN CTRL/Z at
+/// the prompt stops it.
 const TERMINAL: Phase = Phase {
     name: "terminal",
     secs: 20,
@@ -665,6 +668,22 @@ const TERMINAL: Phase = Phase {
             "RUN TTTEST\r",
         ),
         ("TTTEST: keys", 1, "ab\x1b[Ahellox"),
+        (
+            "TTTEST: ok",
+            1,
+            "SET TERMINAL/PAGE=8\rTYPE/PAGE SYS$MANAGER:WELCOME.TXT\r",
+        ),
+        // HELP's "Press RETURN to continue ..." was the first.
+        (
+            "Press RETURN to continue",
+            2,
+            "\rTYPE/PAGE=CLEAR_SCREEN SYS$MANAGER:WELCOME.TXT\r",
+        ),
+        (
+            "Press RETURN to continue",
+            3,
+            "\x1aSET TERMINAL/PAGE=24\rWRITE SYS$OUTPUT \"TYPE/PAGE\", \" done\"\r",
+        ),
     ],
     lines: &[
         "Terminal: _OPA0:      Device_Type: VT100         Owner: SYSTEM",
@@ -677,6 +696,15 @@ const TERMINAL: Phase = Phase {
         "   Interactive        Echo               Type_ahead         No Escape",
         "   Broadcast          No Readsync        No Form            Fulldup",
         "TTTEST: ok",
+        // Rows 1 to 7 scroll; the prompt is on row 8, centred.
+        "\x1b7\x1b[1;7r\x1b8",
+        "\x1b[7m\x1b[8;29fPress RETURN to continue\x1b[0m",
+        // RETURN: the prompt erased, back to row 7 to scroll on.
+        "\x1b[8;29f\x1b[K\x1b[7;1f\nDIRECTORY lists the files",
+        "and the rest of what INITIALIZE made.\x1b7\x1b[r\x1b8\n$ ",
+        // CTRL/Z: the prompt erased, and every row scrolls again.
+        "*EXIT*\n\x1b[8;29f\x1b[K\x1b7\x1b[r\x1b8$ SET TERMINAL/PAGE=24",
+        "TYPE/PAGE done",
     ],
 };
 
@@ -1368,16 +1396,17 @@ fn boot() {
     );
     assert_eq!(
         text.matches("This file is SYS$MANAGER:WELCOME.TXT").count(),
-        1,
-        "TYPE WELCOME.TXT, and not TYPE/HEAD=3's 4th line"
+        3,
+        "TYPE WELCOME.TXT and the two TYPE/PAGE, and not TYPE/HEAD=3's 4th line"
     );
     assert_eq!(
         (
             text.matches("DIRECTORY lists the files in").count(),
             text.matches("and DIRECTORY [000000] the volume").count()
         ),
-        (1, 3),
-        "TYPE/TAIL=2 WELCOME.TXT: its 9th line, not its 8th"
+        (2, 4),
+        "TYPE/TAIL=2 WELCOME.TXT: its 9th line, not its 8th; TYPE/PAGE's \
+         RETURN wrote both, its CTRL/Z neither"
     );
     assert!(
         !text.contains("SPIN: a register changed"),
