@@ -604,8 +604,10 @@ const PROTECTION: Phase = Phase {
 /// owner by name. A directory's default ACEs and protection go to a new
 /// file in it, and a new version gets the one before's ACL, but its
 /// NOPROPAGATE ACEs. A name that isn't an identifier, an ACE that isn't
-/// there to delete, /AFTER, /REPLACE and /LIKE; then DATA.TXT goes back
-/// to [200,1], and DKB0: to /PROTECTION=(W).
+/// there to delete, /AFTER, /REPLACE of two ACEs, where the last was, and
+/// of one that isn't there, which changes nothing, and /LIKE, which keeps
+/// a PROTECTED ACE first; then DATA.TXT goes back to [200,1], and DKB0:
+/// to /PROTECTION=(W).
 const ACLS: Phase = Phase {
     name: "acls",
     secs: 30,
@@ -653,7 +655,9 @@ const ACLS: Phase = Phase {
                 "SET SECURITY/ACL=(IDENTIFIER=LOCAL,ACCESS=FOO) DKB0:[ACL]A.TXT\r",
                 "SET SECURITY/ACL=(IDENTIFIER=LOCAL,ACCESS=READ)/DELETE DKB0:[ACL]A.TXT;2\r",
                 "SET SECURITY/ACL=(ID=LOCAL,ACC=R)/AFTER=(ID=[200,2]) DKB0:[ACL]A.TXT;2\r",
-                "SET SECURITY/ACL=(ID=[200,*])/REPLACE=(ID=REMOTE,ACC=E) DKB0:[ACL]A.TXT;2\r",
+                "SET SECURITY/ACL=((ID=[200,*]),(ID=[200,2]))/REPLACE=(ID=REMOTE,ACC=E) DKB0:[ACL]A.TXT;2\r",
+                "SET SECURITY/ACL=((ID=LOCAL),(ID=NETWORK))/REPLACE=(ID=BATCH,ACC=R) DKB0:[ACL]A.TXT;2\r",
+                "SET SECURITY/ACL=(ID=BATCH,ACC=NONE,OPT=PROTECTED) DKB0:[ACL]A.TXT;1\r",
                 "SET SECURITY/LIKE=NAME=DKB0:[ACL]A.TXT;2/LOG DKB0:[ACL]A.TXT;1\r",
                 "SHOW SECURITY DKB0:[ACL]A.TXT;1\r",
                 "SET SECURITY/ACL/DELETE DKB0:[000000]DATA.TXT\r",
@@ -672,8 +676,9 @@ const ACLS: Phase = Phase {
         "%SET-F-SYNTAX, error parsing 'NOSUCH,ACCESS=READ)'\n-SYSTEM-F-NOSUCHID, unknown rights identifier",
         "%SET-F-SYNTAX, error parsing 'ACCESS=FOO)'\n-SYSTEM-F-IVACL, invalid access control list entry syntax",
         "%SET-W-NOSUCHACE, ACE for object DKB0:[ACL]A.TXT;2, does not exist\n    (IDENTIFIER=LOCAL,ACCESS=READ)\n%SET-F-WRITEERR, error writing DKB0:[ACL]A.TXT;2",
+        "%SET-W-NOSUCHACE, ACE for object DKB0:[ACL]A.TXT;2, does not exist\n    (IDENTIFIER=NETWORK,ACCESS=NONE)\n%SET-F-WRITEERR, error writing DKB0:[ACL]A.TXT;2\n$ ",
         "%SET-I-MODIFIED, DKB0:[ACL]A.TXT;1 modified",
-        "\nDKB0:[ACL]A.TXT;1 object of class FILE\n     Owner: [SYSTEM]\n     Protection: (System: RWED, Owner: RWED, Group: RE, World: R)\n     Access Control List:\n          (IDENTIFIER=[200,2],ACCESS=READ)\n          (IDENTIFIER=LOCAL,ACCESS=READ)\n          (IDENTIFIER=REMOTE,ACCESS=EXECUTE)\n",
+        "\nDKB0:[ACL]A.TXT;1 object of class FILE\n     Owner: [SYSTEM]\n     Protection: (System: RWED, Owner: RWED, Group: RE, World: R)\n     Access Control List:\n          (IDENTIFIER=BATCH,OPTIONS=PROTECTED,ACCESS=NONE)\n          (IDENTIFIER=REMOTE,ACCESS=EXECUTE)\n          (IDENTIFIER=LOCAL,ACCESS=READ)\n",
         "ACLS: done",
     ],
 };

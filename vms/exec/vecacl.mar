@@ -1046,7 +1046,8 @@ OCTTEXT:
 ; in as in $GETJPI's list. The longword at contxt, if it is given, is the
 ; ACL's position, as the file system's FIB$L_ACLCTX, before and after.
 ; R0 = SS$_NORMAL, SS$_NOCLASS for a class it doesn't know, SS$_BADPARAM
-; for an item it doesn't know, RMS's error finding the file, the file
+; for an item it doesn't know or a buffer too short for an owner, a
+; protection or a length, RMS's error finding the file, the file
 ; system's, such as SS$_NOPRIV, or an ACL item's, such as SS$_ACLEMPTY
 ; or SS$_NOMOREACE.
         .ENTRY  SYS$GET_SECURITY, ^M<R2, R3, R4, R5, R6, R7, R8, R9, R10, R11>
@@ -1059,7 +1060,7 @@ OCTTEXT:
 ; OSS$_PROTECTION, OSS$_ACL_ADD_ENTRY, OSS$_ACL_DELETE_ENTRY,
 ; OSS$_ACL_DELETE, OSS$_ACL_DELETE_ALL and OSS$_ACL_FIND_ENTRY, in their
 ; order; OSS$_ACL_POSITION_TOP and OSS$_ACL_POSITION_BOTTOM put the
-; position at the ACL's top or bottom first, where the ACEs added go,
+; position at the ACL's top or bottom, where the ACEs added after them go,
 ; the top without either or contxt. R0 as $GET_SECURITY's, or SS$_ACLFULL.
         .ENTRY  SYS$SET_SECURITY, ^M<R2, R3, R4, R5, R6, R7, R8, R9, R10, R11>
         MOVL    #IO$_MODIFY, R10
@@ -1067,13 +1068,15 @@ OCTTEXT:
         RET
 
 ; SECURITY: AP = $GET_SECURITY's or $SET_SECURITY's arguments, R10 = the
-; file system's function, IO$_ACCESS or IO$_MODIFY. Does it. R0 = its
-; status. Uses R0-R11.
+; file system's function, IO$_ACCESS or IO$_MODIFY. Does it, with a $QIO
+; for each run of items ATRLIST makes, until one fails. R0 = its status.
+; Uses R0-R11.
 SECURITY:
         .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5, R6, R7, R8, R9, R10, R11>
         SUBL2   #S_SIZE, SP
         MOVL    SP, R11
         MOVC5   #0, (SP), #0, #S_SIZE, (R11)
+        MOVL    R10, R9                 ; the function asked for
         MOVL    #SS$_NOCLASS, R0        ; FILE, the class
         MOVL    4(AP), R1
         BEQL    90$
@@ -1085,7 +1088,8 @@ SECURITY:
         BNEQ    90$
         BSBW    OBJFILE
         BLBC    R0, 90$
-        BSBW    ATRLIST
+        MOVL    20(AP), R6              ; the items
+50$:    BSBW    ATRLIST
         BLBC    R0, 80$
         MOVAB   S_ATR(R11), R2
         $QIOW_S CHAN=S_CHAN(R11), FUNC=R10, IOSB=S_IOSB(R11), P1=S_FIBDSC(R11), P5=R2
@@ -1093,9 +1097,13 @@ SECURITY:
         MOVZWL  S_IOSB(R11), R0
         BLBC    R0, 80$
         MOVL    S_FIB+FIB$L_ACL_STATUS(R11), R0
-        BLBS    R0, 70$
+        BLBS    R0, 60$
         BSBW    CONTEXT
         BRB     80$
+60$:    TSTL    R6                      ; more?
+        BEQL    70$
+        TSTL    (R6)
+        BNEQ    50$
 70$:    BSBW    CONTEXT
         BSBW    LENGTHS
         MOVL    #SS$_NORMAL, R0
@@ -1141,39 +1149,44 @@ OBJFILE:
         MOVL    (R1), S_FIB+FIB$L_ACLCTX(R11)
 90$:    RSB
 
-; ATRLIST: AP = the service's arguments, R11 = SECURITY's frame. Makes the
-; attribute list from the item list, by OSSITEMS: each item's buffer, and
-; its size, the buffer's if OSSITEMS says 0. OSS$_ACL_POSITION_TOP and
-; OSS$_ACL_POSITION_BOTTOM set the position instead. With no item that
-; changes the file, R10 becomes IO$_ACCESS. R0 = SS$_NORMAL, or
-; SS$_BADPARAM for an item it doesn't know, or more than MAXATR. Uses
-; R0-R7, R10.
+; ATRLIST: R6 = the next item, or 0, R9 = the function asked for, R11 =
+; SECURITY's frame. Makes the attribute list for one $QIO from the items,
+; by OSSITEMS: each item's buffer, and its size, the buffer's if OSSITEMS
+; says 0, up to MAXATR of them. OSS$_ACL_POSITION_TOP and
+; OSS$_ACL_POSITION_BOTTOM set the position instead, once the items before
+; them are done. R6 = the item the next $QIO starts at, or the list's end;
+; R10 = R9, or IO$_ACCESS with no item that changes the file. R0 =
+; SS$_NORMAL, or SS$_BADPARAM for an item it doesn't know or a buffer
+; shorter than OSSITEMS's size. Uses R0-R7, R10.
 ATRLIST:
-        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5, R6, R7, R10>
+        .JSB_ENTRY  OUTPUT=<R6, R10>, SCRATCH=<R2, R3, R4, R5, R7>
         CLRL    R5                      ; items that change the file
-        MOVL    20(AP), R6              ; the items
-        BEQL    80$
+        MOVL    R9, R10
         MOVAB   S_ATR(R11), R7          ; the attributes
+        TSTL    R6
+        BEQL    80$
 10$:    TSTL    (R6)
         BEQL    80$
+        MOVAB   S_ATR+<MAXATR*8>(R11), R0       ; as many as a $QIO takes
+        CMPL    R7, R0
+        BGEQU   80$
         CMPW    2(R6), #OSS$_ACL_POSITION_TOP
-        BNEQ    15$
-        CLRL    S_FIB+FIB$L_ACLCTX(R11)
-        BRB     60$
-15$:    CMPW    2(R6), #OSS$_ACL_POSITION_BOTTOM
+        BEQL    15$
+        CMPW    2(R6), #OSS$_ACL_POSITION_BOTTOM
         BNEQ    20$
+15$:    MOVAB   S_ATR(R11), R0          ; the items before it first
+        CMPL    R7, R0
+        BNEQ    80$
+        CLRL    S_FIB+FIB$L_ACLCTX(R11)
+        CMPW    2(R6), #OSS$_ACL_POSITION_TOP
+        BEQL    60$
         MOVL    #^XFFFFFF, S_FIB+FIB$L_ACLCTX(R11)
         BRB     60$
 20$:    BSBW    OSSITEM
         MOVL    #SS$_BADPARAM, R0
         TSTL    R1
         BEQL    90$
-        MOVAB   S_ATR+<MAXATR*8>(R11), R0
-        CMPL    R7, R0
-        BLSSU   25$
-        MOVL    #SS$_BADPARAM, R0
-        BRB     90$
-25$:    CMPB    (R1), #OSS$_ACL_FIND_ENTRY      ; one that changes it?
+        CMPB    (R1), #OSS$_ACL_FIND_ENTRY      ; one that changes it?
         BEQL    27$
         CMPB    (R1), #OSS$_ACL_LENGTH
         BEQL    27$
@@ -1185,8 +1198,14 @@ ATRLIST:
 27$:    MOVZBL  1(R1), R0               ; the attribute's code
         MOVW    R0, ATR$W_TYPE(R7)
         MOVZBL  2(R1), R0               ; its size
-        BNEQ    30$
-        MOVZWL  (R6), R0                ; the buffer's, at most 255 for an ACE
+        BEQL    28$
+        TSTL    4(R6)                   ; and a buffer that has room for it
+        BEQL    30$
+        CMPW    (R6), R0
+        BGEQU   30$
+        MOVL    #SS$_BADPARAM, R0
+        BRB     90$
+28$:    MOVZWL  (R6), R0                ; the buffer's, at most 255 for an ACE
         CMPB    (R1), #OSS$_ACL_READ
         BEQL    30$
         CMPL    R0, #ACEMAX
@@ -1207,7 +1226,8 @@ ATRLIST:
 40$:    ADDL2   #8, R7
 60$:    ADDL2   #12, R6
         BRB     10$
-80$:    TSTL    R5                      ; none: only reads, which IO$_MODIFY skips
+80$:    CLRL    (R7)                    ; the list's end
+        TSTL    R5                      ; none: only reads, which IO$_MODIFY skips
         BNEQ    85$
         MOVL    #IO$_ACCESS, R10
 85$:    MOVL    #SS$_NORMAL, R0

@@ -1488,58 +1488,28 @@ SECACL:
         MOVL    #OSS$_ACL_DELETE, R0
 25$:    BSBW    ADDNONE
         BRW     SECSET
-30$:    CLRL    R4                      ; each one, apart: those not there are said
-        MOVAB   ACEBUF, R5
-        PUSHL   #SS$_NORMAL
-35$:    MOVAB   SECITEMS, R6
-        MOVL    #OSS$_ACL_DELETE_ENTRY, R0
-        MOVL    R5, R1
-        MOVZBL  (R5), R2
-        BSBW    ADDITEM
-        BSBW    SECSET1
-        BLBS    R0, 40$
-        CMPL    R0, #SS$_NOENTRY
-        BEQL    37$
-        CMPL    R0, #SS$_ACLEMPTY
-        BNEQ    45$
-37$:    BSBW    NOSUCHACE
-        MOVL    #SS$_NOENTRY, (SP)
-40$:    ADDL2   #256, R5
-        AOBLSS  NACES, R4, 35$
-        MOVL    (SP)+, R0
-        BLBS    R0, 48$
-        BSBW    SAYSTART                ; %SET-F-WRITEERR, alone
-        MOVAB   WRITEERRTXT, R1
-        BSBW    SAYC
-        MOVZBL  NAM+NAM$B_RSL, R2
-        MOVAB   RES, R1
-        BSBW    SAYS
-        BSBW    SAYEND
-        MOVL    #SS$_ABORT!INHIB, R0
-        MOVL    R0, SECFAILED
-48$:    RSB
-45$:    TSTL    (SP)+
-        BSBW    WRITEERR
-        RSB
-50$:    MOVAB   ACEBUF, R5
-        BBC     #S_REPLACE, SECWHAT, 60$
-        TSTL    NACES                   ; /REPLACE: the first's place
+30$:    MOVL    #OSS$_ACL_DELETE_ENTRY, R3
+        BRW     EACHACE
+50$:    BBC     #S_REPLACE, SECWHAT, 60$
+        TSTL    NACES                   ; /REPLACE: each must be there,
         BEQL    90$
-        MOVL    #OSS$_ACL_FIND_ENTRY, R0
-        MOVL    R5, R1
-        MOVZBL  (R5), R2
-        BSBW    ADDITEM
-        MOVL    NACES, R4               ; then each goes
+        MOVL    #OSS$_ACL_FIND_ENTRY, R3
+        BSBW    EACHACE
+        BLBC    R0, 95$
+        MOVAB   SECITEMS, R6
+        MOVAB   ACEBUF, R5
+        MOVL    NACES, R4               ; then each goes, in their order,
 52$:    MOVL    #OSS$_ACL_DELETE_ENTRY, R0
         MOVL    R5, R1
         MOVZBL  (R5), R2
         BSBW    ADDITEM
         ADDL2   #256, R5
         SOBGTR  R4, 52$
-        MOVAB   REPBUF, R5              ; and the new ones go there
+        MOVAB   REPBUF, R5              ; and the new ones go where the last was
         MOVL    NREPS, R4
         BRB     70$
-60$:    BBC     #S_AFTER, SECWHAT, 65$
+60$:    MOVAB   ACEBUF, R5
+        BBC     #S_AFTER, SECWHAT, 65$
         MOVL    #OSS$_ACL_FIND_ENTRY, R0        ; /AFTER: past that one
         MOVAB   AFTERACE, R1
         MOVZBL  AFTERACE, R2
@@ -1563,7 +1533,49 @@ SECACL:
 85$:    BSBW    WRITEERR
         RSB
 90$:    MOVL    #SS$_NORMAL, R0
+95$:    RSB
+
+; EACHACE: R3 = OSS$_ACL_DELETE_ENTRY or OSS$_ACL_FIND_ENTRY. Does it for
+; each of /ACL's ACEs, with a $SET_SECURITY each, and says those that
+; aren't there: %SET-W-NOSUCHACE each, then %SET-F-WRITEERR alone, as
+; VMS's SET does. R0 = SS$_NORMAL, or an error, written. Uses R0-R6.
+EACHACE:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5, R6>
+        CLRL    R4
+        MOVAB   ACEBUF, R5
+        PUSHL   #SS$_NORMAL
+10$:    MOVAB   SECITEMS, R6
+        MOVL    R3, R0
+        MOVL    R5, R1
+        MOVZBL  (R5), R2
+        BSBW    ADDITEM
+        BSBW    SECSET1
+        BLBS    R0, 40$
+        CMPL    R0, #SS$_NOENTRY
+        BEQL    30$
+        CMPL    R0, #SS$_ACLEMPTY
+        BNEQ    80$
+30$:    PUSHL   R3
+        BSBW    NOSUCHACE
+        MOVL    (SP)+, R3
+        MOVL    #SS$_NOENTRY, (SP)
+40$:    ADDL2   #256, R5
+        AOBLSS  NACES, R4, 10$
+        MOVL    (SP)+, R0
+        BLBS    R0, 90$
+        BSBW    SAYSTART                ; %SET-F-WRITEERR, alone
+        MOVAB   WRITEERRTXT, R1
+        BSBW    SAYC
+        MOVZBL  NAM+NAM$B_RSL, R2
+        MOVAB   RES, R1
+        BSBW    SAYS
+        BSBW    SAYEND
+        MOVL    #SS$_ABORT!INHIB, R0
+        MOVL    R0, SECFAILED
         RSB
+80$:    TSTL    (SP)+
+        BSBW    WRITEERR
+90$:    RSB
 
 ; NOSUCHACE: R5 = an ACE. Writes %SET-W-NOSUCHACE for it, and the ACE,
 ; as $FORMAT_ACL writes it, 4 blanks in. Uses R0-R3.

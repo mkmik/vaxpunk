@@ -35,6 +35,7 @@ FH2$W_FILEPROT = 64
 MAPROOM = 3                             ; words a map pointer takes, kept free in an empty map
 ACLMAX = 512                            ; the bytes an ACL may have
 ACEMIN = 4                              ; the smallest ACE
+ACEACCESS = ARM$M_READ!ARM$M_WRITE!ARM$M_EXECUTE!ARM$M_DELETE!ARM$M_CONTROL     ; what an ACE grants
 
         .PSECT  $CODE$
 
@@ -124,7 +125,9 @@ FIL$ACLPUT::
 ; Looks for the first identifier ACE in its ACL that isn't a DEFAULT one
 ; and whose identifiers the current process all holds (HELD). R0 = 0 if
 ; there is none, 1 if it grants all the access wanted, 2 if it doesn't,
-; or 3 if the ACL is damaged: an identifier ACE without identifiers.
+; or 3 if the ACL is damaged: an identifier ACE without identifiers. An
+; ACE grants read, write, execute, delete and control, never
+; ARM$M_SYSTEM.
 ; Keeps every other register.
 FIL$ACLCHK::
         .JSB_ENTRY
@@ -156,7 +159,8 @@ FIL$ACLCHK::
         BLBS    R0, 20$
 40$:    ADDL2   R5, R4
         BRB     10$
-50$:    BICL3   ACE$L_ACCESS(R4), R7, R0
+50$:    BICL3   #^C<ACEACCESS>, ACE$L_ACCESS(R4), R0
+        BICL3   R0, R7, R0
         BEQL    55$
         MOVL    #2, R0
         BRB     90$
