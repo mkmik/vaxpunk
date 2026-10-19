@@ -72,7 +72,8 @@ note = "dcl.mar ponytail"
 [[feature]]
 id = "set-prompt"
 title = "SET PROMPT"
-status = "todo"
+status = "done"
+note = "dcl.mar ponytail: no /CARRIAGE_CONTROL"
 
 [[feature]]
 id = "ctrl-t"

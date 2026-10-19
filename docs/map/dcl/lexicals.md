@@ -74,6 +74,7 @@ note = "lexical.mar ponytail"
 id = "user-node"
 title = "F$USER, F$GETJPI USERNAME, node names"
 status = "todo"
+needs = ["/exec/sysgen-parameters#scsnode"]
 note = "lexical.mar ponytail: waits for LOGINOUT and the rest of PRD-0003"
 
 [[feature]]

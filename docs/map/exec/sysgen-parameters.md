@@ -63,6 +63,12 @@ title = "AUTOGEN: parameters computed from the machine, MODPARAMS.DAT and feedba
 status = "todo"
 needs = ["#parameter-file"]
 
+[[feature]]
+id = "scsnode"
+title = "SCSNODE, the node name: up to 6 letters and digits, a default such as VAXPNK, cargo run -p boot -- --node=NAME; $GETSYI's NODENAME and SCSNODE"
+status = "todo"
+note = "From the host through the RPB, as STARTUP_Pn; then from #parameter-file, changed with MODPARAMS.DAT and AUTOGEN or SYSGEN. 6 characters as VMS's, from DECnet Phase IV; a longer Internet name is TCPIP$INET_HOST's"
+
 [[needs]]
 on = "/platform/pal"
 why = "Passes the startup parameters in the RPB"

@@ -40,6 +40,8 @@
 ;               runs TCPIP.EXE, which parses command with its own tables
 ;   SET [NO]CONTROL[=Y]
 ;               turns CTRL/Y, and CTRL/C no image takes, on or off
+;   SET PROMPT[=string]
+;               prompts with string, "$ " without one
 ;   SET HOST address
 ;               runs RTPAD.EXE, a remote login to address
 ;   TELNET address [port], TELNET address /PORT=n
@@ -217,7 +219,9 @@ DCL$NAMDSC::                            ; a logical name: its length
         .ADDRESS DCL$NAME
 DCL$NAME::                              ; and its text
         .BLKB   LINESIZE
-PROMPT: .ASCII  "$ "
+DCL$PROMPT::                            ; the prompt, .ASCIC, as SET PROMPT made it
+        .ASCIC  "$ "
+        .BLKB   PROMPTSIZE-2
 IOSB:   .BLKQ   1
 DCL$LINE::                              ; the command line
         .BLKB   LINESIZE
@@ -245,6 +249,8 @@ V_CONTROL:
 V_VERIFY:
         .ASCID  "OPTION.VERIFY"
 V_ON:   .ASCID  "OPTION.ON"
+V_PROMPT:
+        .ASCID  "OPTION.PROMPT"
 VALDSC: .LONG   LINESIZE                ; DCL$GETVAL's: DCL$TOKEN
         .ADDRESS DCL$TOKEN
 VALLEN: .WORD   0
@@ -412,7 +418,8 @@ PROMPT1:
         MOVL    #1, DCL$QUIET
         BRB     GOTLINE
 20$:    CLRL    DCL$QUIET
-        $QIOW_S CHAN=CHAN, FUNC=#IO$_READPROMPT, IOSB=IOSB, P1=DCL$LINE, P2=#LINESIZE, P5=#PROMPT, P6=#2
+        MOVZBL  DCL$PROMPT, R0
+        $QIOW_S CHAN=CHAN, FUNC=#IO$_READPROMPT, IOSB=IOSB, P1=DCL$LINE, P2=#LINESIZE, P5=#DCL$PROMPT+1, P6=R0
         BLBC    R0, QUIT
         CMPW    IOSB, #SS$_HANGUP       ; a TELNET terminal's line is gone
         BEQL    QUIT
@@ -781,7 +788,15 @@ DCL$OK::
 ; CTRL/Y, and CTRL/C no image has an AST for, do nothing. SET [NO]VERIFY:
 ; writes a procedure's command lines as it does them, or not. SET [NO]ON:
 ; the procedure running acts on errors as its ON says, or goes on.
-SET:    MOVAB   V_VERIFY, R1
+; SET PROMPT[=string]: DCL prompts with string, its first PROMPTSIZE
+; characters, or with "$ " again.
+; ponytail: no /[NO]CARRIAGE_CONTROL; add it when a prompt wants its own.
+SET:    MOVAB   V_PROMPT, R1
+        BSBW    DCL$ISPRES
+        CMPL    R0, #CLI$_ABSENT
+        BEQL    1$
+        BRW     SETPROMPT
+1$:     MOVAB   V_VERIFY, R1
         BSBW    DCL$ISPRES
         CMPL    R0, #CLI$_ABSENT
         BEQL    3$
@@ -807,6 +822,21 @@ SET:    MOVAB   V_VERIFY, R1
         BNEQ    10$
         MOVL    #1, NOCTRLY
 10$:    BSBW    CTRLYON
+        BRW     DCL$OK
+
+SETPROMPT:
+        MOVAB   V_PROMPT, R1
+        BSBW    DCL$GETVAL
+        TSTL    R8
+        BNEQ    5$
+        MOVB    #^A/$/, DCL$TOKEN
+        MOVB    #^A/ /, DCL$TOKEN+1
+        MOVL    #2, R8
+5$:     CMPL    R8, #PROMPTSIZE
+        BLEQU   10$
+        MOVL    #PROMPTSIZE, R8
+10$:    MOVB    R8, DCL$PROMPT
+        MOVC3   R8, DCL$TOKEN, DCL$PROMPT+1
         BRW     DCL$OK
 
 ; ISNEG: R0 = CLI$PRESENT's status for a keyword that is there. R0 = 0

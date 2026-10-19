@@ -4,6 +4,7 @@
 ; $DCLDEF: DCL's constants.
         .MACRO  $DCLDEF
 LINESIZE = 255
+PROMPTSIZE = 32                         ; SET PROMPT's longest, as VMS's
 INHIB_MSG = 28                          ; STS$V_INHIB_MSG
 INHIB = ^X10000000                      ; STS$M_INHIB_MSG
 CLIWARN = ^X10038000                    ; $STATUS after a warning of DCL's own

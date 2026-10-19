@@ -142,6 +142,7 @@ define type SET_OPTIONS
 	keyword PASSWORD, syntax=SET_PASSWORD
 	keyword ON, negatable
 	keyword PROCESS, syntax=SET_PROCESS
+	keyword PROMPT, value
 	keyword PROTECTION, value(list), syntax=SET_PROTECTION
 	keyword TERMINAL, syntax=SET_TERMINAL
 	keyword VERIFY, negatable

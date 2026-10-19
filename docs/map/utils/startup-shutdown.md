@@ -75,6 +75,12 @@ id = "minimum-boot"
 title = "STARTUP_P1 MIN: a minimum startup, as VMS's STARTUP.COM does it"
 status = "todo"
 
+[[feature]]
+id = "sys-node"
+title = "SYS$NODE, NODE::, in the system table from SCSNODE"
+status = "todo"
+needs = ["/exec/sysgen-parameters#scsnode"]
+
 [[needs]]
 on = "/exec/system-init"
 why = "EXEC$START creates the STARTUP process at the end of system initialization"

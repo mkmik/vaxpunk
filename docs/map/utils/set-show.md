@@ -130,6 +130,13 @@ title = "SET SECURITY and SHOW SECURITY: owners, protection and ACLs of any obje
 status = "todo"
 note = "ACLs (t8y:/exec/acls) are a non-goal of Milestone 1"
 
+[[feature]]
+id = "node-name"
+title = "SHOW SYSTEM's header: on node NAME, as VMS's"
+status = "todo"
+needs = ["/exec/sysgen-parameters#scsnode"]
+note = "show.mar ponytail: no SCSNODE, so no node name"
+
 [[needs]]
 on = "/exec/information-services"
 why = "SHOW reads $GETJPI, $GETSYI and $GETDVI"
