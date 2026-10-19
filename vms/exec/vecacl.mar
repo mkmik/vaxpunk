@@ -398,21 +398,24 @@ ONEID:
         CMPB    R0, #^A/X/
         BNEQ    90$
         ADDL2   #2, R6
-        CLRL    R1
+        CLRL    R5                      ; the value
         CLRL    R3                      ; digits
 30$:    CMPL    R6, R7
         BGEQU   35$
         MOVZBL  (R6), R0
+        CMPB    R0, #^A/a/
+        BLSSU   32$
         BICB2   #^X20, R0
-        LOCC    R0, #16, HEXDIGITS
+32$:    LOCC    R0, #16, HEXDIGITS
         BEQL    35$
         SUBL3   R0, #16, R0
-        ASHL    #4, R1, R1
-        BISL2   R0, R1
+        ASHL    #4, R5, R5
+        BISL2   R0, R5
         INCL    R6
         INCL    R3
         BRB     30$
-35$:    MOVL    #SS$_IVACL, R0
+35$:    MOVL    R5, R1
+        MOVL    #SS$_IVACL, R0
         TSTL    R3
         BEQL    90$
         CMPL    R3, #8

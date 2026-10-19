@@ -885,8 +885,8 @@ ACLREMOVE:
         MOVAB   ACLBUF, R0
         ADDL2   ACLBYTES, R0
         SUBL2   R1, R0
-        MOVC3   R0, (R1), (R2)
         SUBL2   R4, ACLBYTES
+        MOVC3   R0, (R1), (R2)
         MOVL    #1, ACLDIRTY
         POPR    #^M<R0, R1, R2, R3, R4, R5>
         RSB

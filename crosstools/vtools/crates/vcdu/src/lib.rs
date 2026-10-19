@@ -52,7 +52,7 @@ const TYPES: &[(&str, u8)] = &[
     ("$QUOTED_STRING", 4),
     ("$DATETIME", 6),
     ("$DELTATIME", 6),
-    ("$ACL", 6),
+    ("$ACL", 8),
     ("$EXPRESSION", 6),
     ("$PARENTHESIZED_VALUE", 6),
     ("$UIC", 7),

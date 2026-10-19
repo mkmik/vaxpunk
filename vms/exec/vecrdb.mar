@@ -595,7 +595,9 @@ CHKNAME:
         BEQL    90$
         CMPL    R2, #KGB$S_NAME
         BGTRU   90$
+        PUSHL   R1
         MOVC5   #0, (R3), #^A/ /, #KGB$S_NAME, F_KEY(R11)
+        MOVL    (SP)+, R1
         MOVZWL  (R1), R2
         MOVL    4(R1), R3
         MOVAB   F_KEY(R11), R4

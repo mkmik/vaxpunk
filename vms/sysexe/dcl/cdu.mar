@@ -235,7 +235,7 @@ TYPES:  .ASCIC  "$FILE"
         .ASCIC  "$DELTATIME"
         .BYTE   6
         .ASCIC  "$ACL"
-        .BYTE   6
+        .BYTE   8
         .ASCIC  "$EXPRESSION"
         .BYTE   6
         .ASCIC  "$PARENTHESIZED_VALUE"
