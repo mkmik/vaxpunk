@@ -1,6 +1,7 @@
-! APPEND from to: COPY.EXE appends a file's records to another's.
+! APPEND from to: COPY.EXE appends files' records, from a list, with
+! wildcards, to another's.
 define verb APPEND
 	image COPY
-	parameter P1, label=FROM, prompt="From", value(required, type=$infile)
+	parameter P1, label=FROM, prompt="From", value(required, list, type=$infile)
 	parameter P2, label=TO, prompt="To", value(required, type=$outfile)
 	qualifier LOG
