@@ -1,7 +1,7 @@
 +++
 title = "SET and SHOW"
 summary = "Change and display the process, terminal, files, devices and system"
-aka = ["SET", "SHOW", "SET.EXE", "SHOW.EXE", "SET PROCESS", "SHOW PROCESS", "SHOW SYSTEM", "SET TERMINAL", "SHOW TERMINAL", "SET PROTECTION", "SET FILE", "SHOW DEVICES", "SHOW TIME", "SHOW USERS", "SHOW MEMORY", "SHOW ERROR", "SHOW QUOTA", "SHOW CPU", "SET SECURITY"]
+aka = ["SET", "SHOW", "SET.EXE", "SHOW.EXE", "SET PROCESS", "SHOW PROCESS", "SHOW SYSTEM", "SET TERMINAL", "SHOW TERMINAL", "SET PROTECTION", "SET FILE", "SET DIRECTORY", "SET VOLUME", "SHOW DEVICES", "SHOW TIME", "SHOW USERS", "SHOW MEMORY", "SHOW ERROR", "SHOW QUOTA", "SHOW CPU", "SET SECURITY"]
 kind = "core"
 intent = "goal"
 research = "done"
@@ -78,9 +78,9 @@ note = "PRD-0003 tier 1 #8"
 [[feature]]
 id = "xqp-protection"
 title = "SET PROTECTION without read access to the file, through the XQP"
-status = "todo"
-needs = ["/files/ods2#qio-interface"]
-note = "PRD-0003 tier 3 #23; set.mar opens the file"
+status = "done"
+needs = ["/files/ods2#acp-attributes"]
+note = "PRD-0003 tier 3 #23; set.mar's IO$_ACCESS and IO$_MODIFY (ADR-0039)"
 
 [[feature]]
 id = "wildcards"
@@ -91,9 +91,10 @@ note = "PRD-0003 tier 3 #24; set.mar ponytail"
 
 [[feature]]
 id = "set-file"
-title = "SET FILE/ATTRIBUTES, /VERSION_LIMIT, /EXPIRATION_DATE; SET DIRECTORY; SET VOLUME"
-status = "todo"
-note = "copy.mar ponytail: /BINARY would use SET FILE/ATTRIBUTES"
+title = "SET FILE/ATTRIBUTE, /VERSION_LIMIT, /EXPIRATION_DATE; SET DIRECTORY; SET VOLUME"
+status = "done"
+needs = ["/files/ods2#acp-attributes", "/files/ods2#version-limits", "/files/volumes#set-volume", "/exec/time-conversion#bintim"]
+note = "set.mar, through IO$_ACCESS and IO$_MODIFY; docs/research/files-11-acp-qio.md. ponytail: no /LOG, /CONFIRM, wildcards or dates in /ATTRIBUTE"
 
 [[feature]]
 id = "set-process"
@@ -181,10 +182,12 @@ names and symbols. Others belong to their own facilities: `SET HOST`,
 `SET COMMAND`, `SET PASSWORD`, `SHOW QUEUE`, `SHOW CLUSTER`.
 
 vaxpunk's `SET.EXE` is `vms/sysexe/set.mar`: `SET PROCESS/PRIVILEGES`,
-`SET PROTECTION`, `SET FILE/OWNER_UIC` and `SET TERMINAL`, which asks
-the terminal its type with `/INQUIRE` or takes it from `/DEVICE_TYPE`,
-and sets its speeds and, with `/PERMANENT`, its permanent
-characteristics.
+`SET PROTECTION`, `SET FILE` (`/OWNER_UIC`, `/ATTRIBUTE`,
+`/EXPIRATION_DATE`, `/VERSION_LIMIT`) and `SET DIRECTORY/VERSION_LIMIT`,
+which ask the file system with `IO$_ACCESS` and `IO$_MODIFY`, `SET
+VOLUME`, and `SET TERMINAL`, which asks the terminal its type with
+`/INQUIRE` or takes it from `/DEVICE_TYPE`, and sets its speeds and,
+with `/PERMANENT`, its permanent characteristics.
 `SHOW.EXE` is `show.mar`: `SHOW PROCESS`, `SHOW SYSTEM`,
 `SHOW TERMINAL`, `SHOW USERS`, `SHOW MEMORY`, `SHOW ERROR`, `SHOW QUOTA`
 and `SHOW CPU`. `SET DEFAULT`, `SHOW DEFAULT`, `SHOW DEVICES`,

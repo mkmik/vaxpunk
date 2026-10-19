@@ -51,6 +51,7 @@
         .EXTERNAL EXE$ALONONPAGED, EXE$DEANONPGDSIZ, RMS$LOCATE, MD$IO
         .EXTERNAL IOC$ALLOCIRP, IOC$REQCOM, IOC$AB_DKA0, IOC$AB_DKB0, IOC$AB_MDA0
         .EXTERNAL EXE$PROBER_DSC, RMS$VOLIDLE, SCH$GL_CURPCB, SCH$WAIT, SCH$WAKEPCB
+        .EXTERNAL XQP$GL_IRP
 
 BLOCK = 512
 MAXREAD = 127                           ; blocks a READLBLK reads, below 64 KB
@@ -253,12 +254,23 @@ DISKIO:
 ; p1, and IO$_WRITELBLK and IO$_WRITEPBLK, which write those bytes there,
 ; checks the buffer and makes the IRP, which DK$STARTIO does at once.
 ; The logical functions take LOG_IO or PHY_IO, the physical ones PHY_IO,
-; as on VMS. R0 = SS$_NORMAL, SS$_ILLIOFUNC, SS$_NOPRIV, SS$_ACCVIO,
-; SS$_BADPARAM, or IOC$ALLOCIRP's failure. IPL$_SYNCH. Uses R0-R3.
+; as on VMS. For the file system's, IO$_ACCESS and IO$_MODIFY, makes the
+; IRP and leaves it in XQP$GL_IRP, for $QIO to hand XQP$PERFORM. R0 =
+; SS$_NORMAL, SS$_ILLIOFUNC, SS$_NOPRIV, SS$_ACCVIO, SS$_BADPARAM, or
+; IOC$ALLOCIRP's failure. IPL$_SYNCH. Uses R0-R3.
 DK$FDT::
         .JSB_ENTRY  INPUT=<AP>, SCRATCH=<R2, R3, R4>
         BICL3   #^C63, 12(AP), R0       ; the function, without modifiers
-        MOVL    28(AP), R2
+        CMPL    R0, #IO$_ACCESS
+        BEQL    1$
+        CMPL    R0, #IO$_MODIFY
+        BNEQ    2$
+1$:     CLRL    R1
+        BSBW    IOC$ALLOCIRP
+        BLBC    R0, 90$
+        MOVL    R3, XQP$GL_IRP
+        RSB
+2$:     MOVL    28(AP), R2
         MOVL    32(AP), R3
         CMPL    R3, #65535
         BGTRU   87$

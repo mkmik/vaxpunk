@@ -1,12 +1,12 @@
 +++
 title = "Files-11 ODS-2 (XQP)"
 summary = "The disk structure, and the XQP that reads and writes it in the executive"
-aka = ["XQP", "F11BXQP", "F11BACP", "ACP", "Files-11 structure level 2", "f11.mar", "f11wrt.mar"]
+aka = ["XQP", "F11BXQP", "F11BACP", "ACP", "Files-11 structure level 2", "f11.mar", "f11wrt.mar", "IO$_ACCESS", "IO$_MODIFY", "FIB", "$FIBDEF", "$ATRDEF"]
 kind = "core"
 intent = "goal"
 research = "done"
 milestone = "m0"
-refs = ["docs/adr/0007-system-disk-files-11-and-rms.md", "docs/adr/0009-ramdisk-writable-files-11.md", "docs/adr/0012-data-disk-writable-files-11.md", "docs/adr/0015-file-system-io-through-the-disk-driver.md", "docs/adr/0020-file-system-lock-below-ipl-synch.md", "docs/design/0002-executive-processes.md", "vms/exec/f11.mar", "vms/exec/f11wrt.mar", "crosstools/ods/docs/", "docs/prd/0003-multi-user-vms.md"]
+refs = ["docs/adr/0007-system-disk-files-11-and-rms.md", "docs/adr/0009-ramdisk-writable-files-11.md", "docs/adr/0012-data-disk-writable-files-11.md", "docs/adr/0015-file-system-io-through-the-disk-driver.md", "docs/adr/0020-file-system-lock-below-ipl-synch.md", "docs/design/0002-executive-processes.md", "vms/exec/f11.mar", "vms/exec/f11wrt.mar", "vms/exec/xqp.mar", "docs/adr/0039-xqp-qio-functions.md", "crosstools/ods/docs/", "docs/prd/0003-multi-user-vms.md"]
 
 [[feature]]
 id = "read"
@@ -47,9 +47,10 @@ needs = ["/exec/uic-protection"]
 [[feature]]
 id = "version-limits"
 title = "Version limits on directories and files"
-status = "todo"
+status = "done"
 milestone = "m1"
-note = "PRD-0003 tier 1 #8; rms.mar's $CREATE_DIR takes none"
+needs = ["#acp-attributes"]
+note = "PRD-0003 tier 1 #8: a new name gets its directory's FAT$W_VERSIONS, $CREATE purges the lowest version past the limit, one each time (rms.mar's PURGE), IO$_MODIFY's FIB$W_VERLIMIT sets a name's; $CREATE_DIR takes none"
 
 [[feature]]
 id = "spilled-versions"
@@ -84,10 +85,17 @@ status = "todo"
 note = "PRD-0003 tier 3 #22; FIL$FREEBLOCKS"
 
 [[feature]]
+id = "acp-attributes"
+title = "IO$_ACCESS and IO$_MODIFY with a FIB and an attribute list: a file's attributes read and written"
+status = "done"
+note = "ADR-0039; xqp.mar, which $QIO calls after DK$FDT. PRD-0003 tier 3 #23: SET PROTECTION asks the XQP"
+
+[[feature]]
 id = "qio-interface"
-title = "IO$_ACCESS, IO$_CREATE, IO$_MODIFY, IO$_DELETE with a FIB on disk channels"
+title = "IO$M_ACCESS, IO$_DEACCESS, IO$_CREATE, IO$_DELETE, IO$_ACPCONTROL; wildcard lookups with FIB$L_WCC"
 status = "todo"
-note = "ADR-0007 follow-up; PRD-0003 tier 3 #23 (SET PROTECTION should ask the XQP)"
+needs = ["#acp-attributes"]
+note = "ADR-0007 and ADR-0039 follow-up: a file open on the channel, read and written by VBN"
 
 [[feature]]
 id = "queued-io"

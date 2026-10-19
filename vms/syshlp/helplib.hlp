@@ -1291,7 +1291,8 @@
 
   The image to run.
 1 SET
-  Sets characteristics of the process, the terminal, files and DCL.
+  Sets characteristics of the process, the terminal, files,
+  directories, volumes and DCL.
 
   Format
 
@@ -1320,15 +1321,53 @@
 
   $ SET DEFAULT DKB0:[PROJECT]
   $ SET DEFAULT [-]
-2 FILE
-  Changes a file's owner.
+2 DIRECTORY
+  Sets a directory's default version limit: the most versions a name
+  made in it later may have.
 
-    SET FILE/OWNER_UIC=uic file-spec
+    SET DIRECTORY/VERSION_LIMIT[=n] directory-spec
 3 Qualifiers
+/VERSION_LIMIT
+  /VERSION_LIMIT[=n]
+
+  The limit, up to 32767; 0, or no value, is none. Names already in
+  the directory keep theirs.
+3 Examples
+
+  $ SET DIRECTORY/VERSION_LIMIT=3 [PROJECT]
+2 FILE
+  Changes a file's owner, record attributes, expiration date or version
+  limit.
+
+    SET FILE file-spec
+3 Qualifiers
+/ATTRIBUTE
+  /ATTRIBUTE=(keyword:value[,...])
+
+  Changes the file's record attributes: BKS, DEQ, EBK, FFB, FSZ, GBC,
+  LRL, MRS and VRS take a number; ORG takes SEQ, REL or IDX; RFM takes
+  UDF, FIX, VAR, VFC, STM, STMLF or STMCR; RAT takes NONE, FTN, CR, PRN,
+  BLK or MSB, the first RAT replacing them, any more adding to them.
+/EXPIRATION_DATE
+  /EXPIRATION_DATE=time
+  /NOEXPIRATION_DATE
+
+  When the file expires, or none. A time is dd-mmm-yyyy:hh:mm:ss.cc,
+  the parts left out today's, or TODAY, TOMORROW or YESTERDAY.
 /OWNER_UIC
   /OWNER_UIC=uic
 
   The file's new owner. See Specify UIC.
+/VERSION_LIMIT
+  /VERSION_LIMIT[=n]
+
+  The most versions the file's name may have in its directory, up to
+  32767; 0, or no value, is none. A version made past it deletes the
+  lowest.
+3 Examples
+
+  $ SET FILE/ATTRIBUTE=(RFM:FIX,MRS:80,RAT:NONE) DATA.BIN
+  $ SET FILE/VERSION_LIMIT=2 LOGIN.COM
 2 HOST
   Logs in on another system over the network, with Telnet.
 
@@ -1369,6 +1408,29 @@
 3 Examples
 
   $ SET PROTECTION=(S:RWED,O:RWED,G:RE,W) REPORT.TXT
+2 VOLUME
+  Changes a mounted volume's label, owner and protection, on the
+  volume. It takes the CMKRNL privilege.
+
+    SET VOLUME device-name[:]
+3 Qualifiers
+/FILE_PROTECTION
+  /FILE_PROTECTION=(code[,...])
+
+  The volume's default file protection. See Specify Protection.
+/LABEL
+  /LABEL=volume-label
+
+  The volume's new label, 1 to 12 characters.
+/OWNER_UIC
+  /OWNER_UIC=uic
+
+  The volume's new owner. See Specify UIC.
+/PROTECTION
+  /PROTECTION=(code[,...])
+
+  The volume's protection: the categories named get that access, the
+  others keep theirs. See Specify Protection.
 2 TERMINAL
   Sets your terminal's characteristics.
 

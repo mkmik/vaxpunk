@@ -25,11 +25,12 @@
         $PCBDEF
         $PRVDEF
         $INITDEF
+        $ARMDEF
 
         .EXTERNAL F11$GL_VCB, F11$AB_DIRBLK, EXE$GQ_SYSTIME, MD$GL_BLOCKS
         .EXTERNAL FIL$READLBLK, FIL$WRITELBLK, FIL$READVBN, FIL$WRITEVBN
         .EXTERNAL FIL$READHDR, FIL$MAPVBN, FIL$EOF, FIL$SELECT, MD$CREATE
-        .EXTERNAL FIL$LOCK, FIL$UNLOCK, SCH$GL_CURPCB
+        .EXTERNAL FIL$LOCK, FIL$UNLOCK, FIL$CHKPRO, SCH$GL_CURPCB
         .EXTERNAL EXE$ALONONPAGED, EXE$DEANONPGDSIZ
 
 BLOCK = 512
@@ -74,6 +75,7 @@ FAT$L_EFBLK = FH2$W_RECATTR+8           ; high word first
 FH2$L_HIGHWATER = 76                    ; VBN + 1 of the highest block written
 FAT$W_FFBYTE = FH2$W_RECATTR+12
 FAT$W_MAXREC = FH2$W_RECATTR+16
+FAT$W_VERSIONS = FH2$W_RECATTR+30       ; a directory's default version limit
 ; What INITIALIZE writes: the boot block at LBN 0, the home block at 1,
 ; the index file bitmap at 2, HEADERS headers from 3, then BITMAP.SYS,
 ; its SCB and the storage bitmap, then the MFD's first block.
@@ -83,9 +85,15 @@ SCBLBN = HDRLBN+HEADERS
 MFDLBN = SCBLBN+2
 FILEPROT = ^XFA00                       ; S:RWED,O:RWED,G:RE,W:
 MFDPROT = ^XAA88                        ; S:RWE,O:RWE,G:RE,W:RE
+HM2$W_ALTIDXVBN = 20                    ; the home block: the backup index file header's VBN
+HM2$W_IBMAPVBN = 22
 HM2$L_VOLOWNER = 44
 HM2$W_PROTECT = 52
+HM2$W_FILEPROT = 54
+HM2$W_CHECKSUM1 = 58                    ; the sum of the words before it
+HM2$T_VOLNAME = 472
 HM2$T_FORMAT = 496
+HM2$W_CHECKSUM2 = 510
 RECSIZE = 20                            ; a RESFILES row
 
         .PSECT  EXEC$DATA, NOEXE, WRT, QUAD
@@ -94,7 +102,9 @@ SBNUM:  .LONG   0                       ; the storage bitmap's block in it
 NEWHDR: .BLKB   BLOCK                   ; a header FIL$INIT makes
 ZEROS:  .BLKB   BLOCK                   ; an index file block not yet used
 RECBUF: .BLKB   BLOCK+8                 ; a directory record being made, one entry too long at most
-DU_MODE:                                ; DIRUPD's: 0 enter, 1 remove
+DU_MODE:                                ; DIRUPD's: 0 enter, 1 remove, 2 set the version limit
+        .LONG   0
+DU_LIMIT:                               ; a new record's version limit: its name's, or the directory's default
         .LONG   0
 DU_NAME:                                ; the name, NAME.TYPE, and its length
         .LONG   0, 0
@@ -611,17 +621,24 @@ FIL$DELHDR::
 ; FIL$ENTER: R3 = a directory's header, R6 = a name, NAME.TYPE, R7 = its
 ; length, R8 = a version, or 0 for one above the highest the directory
 ; has, R5 = a file ID's address. Enters the file in the directory: R4 =
-; its version. R0 = SS$_NORMAL, SS$_DUPFILENAME if that version is there,
-; SS$_BADFILEVER if it would be above 32767, SS$_INSFMEM, or the disk's
-; error. Holding FIL$LOCK. Uses R0-R5.
+; its version, R5 = its name's version limit, which a new name gets from
+; the directory's default, FAT$W_VERSIONS, or 32767 if it has none. R0 = SS$_NORMAL,
+; SS$_DUPFILENAME if that version is there, SS$_BADFILEVER if it would
+; be above 32767, SS$_INSFMEM, or the disk's error. Holding FIL$LOCK.
+; Uses R0-R5.
 FIL$ENTER::
         .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5>
         CLRL    DU_MODE
         MOVL    R8, DU_VER
+        MOVZWL  FAT$W_VERSIONS(R3), DU_LIMIT
+        BNEQ    10$
+        MOVL    #MAXVER, DU_LIMIT
+10$:
         MOVL    (R5), DU_FID
         MOVW    4(R5), DU_FID+4
         BSBB    DIRUPD
         MOVL    DU_VER, R4
+        MOVL    DU_LIMIT, R5
         RSB
 
 ; FIL$REMOVE: R3 = a directory's header, R6 = a name, NAME.TYPE, R7 = its
@@ -636,6 +653,18 @@ FIL$REMOVE::
         MOVZBL  DU_FID+5, R5
         ASHL    #16, R5, R5
         MOVW    DU_FID, R5
+        RSB
+
+; FIL$SETLIMIT: R3 = a directory's header, R6 = a name, NAME.TYPE, R7 =
+; its length, R8 = a version limit, 1 to 32767. Gives the name that
+; limit, in each of its records. R0 = SS$_NORMAL, SS$_NOSUCHFILE if the
+; directory hasn't the name, SS$_INSFMEM, or the disk's error. Holding
+; FIL$LOCK. Uses R0-R5.
+FIL$SETLIMIT::
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5>
+        MOVL    #2, DU_MODE
+        MOVL    R8, DU_VER
+        BSBW    DIRUPD
         RSB
 
 ; FIL$MKDIR: R3 = a directory's header, R6 = a name, NAME.DIR, R7 = its
@@ -695,7 +724,8 @@ FIL$MKDIR::
 
 ; DIRUPD: R3 = a directory's header, R6 = a name, R7 = its length, and
 ; DU_MODE, DU_VER and DU_FID. Copies the directory's records into a block
-; of pool, entering or removing the entry on the way, packs them into
+; of pool, entering or removing the entry, or setting the name's version
+; limit, on the way, packs them into
 ; blocks again, and writes them back, extending the directory if it grew,
 ; and its header, with its new end of file. A record holds at most
 ; BLOCK-2 bytes, as the block's end word is always there; a name whose
@@ -784,11 +814,21 @@ DIRUPD:
         RSB
 
 ; ONEREC: R8 = a directory record, and DIRUPD's. Copies it, entering the
-; new entry before it, or in it, splitting it if it gets too long, or
-; removing the entry from it. R0 = SS$_NORMAL, or the error. Uses R0-R6.
+; new entry before it, or in it, splitting it if it gets too long,
+; removing the entry from it, or giving it the version limit. R0 = SS$_NORMAL, or the error. Uses R0-R6.
 ONEREC:
         .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5, R6>
-        TSTL    DU_DONE
+        CMPL    DU_MODE, #2
+        BNEQ    5$
+        MOVAB   6(R8), R1               ; a version limit: each of the name's records
+        MOVZBL  5(R8), R2
+        BSBW    COMPARE
+        TSTL    R0
+        BNEQ    50$
+        MOVW    DU_VER, 2(R8)
+        MOVL    #1, DU_DONE
+        BRB     50$
+5$:     TSTL    DU_DONE
         BNEQ    50$
         MOVAB   6(R8), R1
         MOVZBL  5(R8), R2
@@ -796,7 +836,8 @@ ONEREC:
         TSTL    R0
         BLSS    50$                     ; before the name
         BGTR    20$
-        TSTL    DU_MODE                 ; the name's record
+        MOVZWL  2(R8), DU_LIMIT         ; the name's record: its limit, for a record after it
+        TSTL    DU_MODE
         BNEQ    10$
         BSBW    ADDENTRY
         TSTL    R0
@@ -913,7 +954,7 @@ COMPARE:
 NEWREC:
         .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5, R6>
         MOVAB   RECBUF, R3
-        MOVW    #MAXVER, 2(R3)          ; the version limit
+        MOVW    DU_LIMIT, 2(R3)         ; the version limit
         CLRB    4(R3)                   ; the flags
         MOVB    DU_NAME+4, 5(R3)
         MOVC3   DU_NAME+4, @DU_NAME, 6(R3)
@@ -1211,6 +1252,131 @@ FIL$INIT::
         MOVL    #1, R2
         BSBW    FIL$WRITELBLK
 90$:    RSB
+
+; FIL$SETVOLUME devnam, what, label, owner, prot, fileprot: SET VOLUME's
+; work, in kernel mode, which $CMKRNL gives it. Changes the volume mounted
+; on the disk the descriptor devnam names, _DKB0: or DKB0:, as the bits
+; of what say: 1 its label, to the text label's descriptor gives, 1 to 12
+; characters; 2 its owner, to the UIC owner; 4 its protection and 8 its
+; default file protection, each a longword: the bits of the mask to keep
+; in its high word, those to set in its low one. Rewrites each copy of
+; the home block, INDEXF.SYS's VBNs from 2 up to the backup index file
+; header's, with its checksums, and the label, owner and protection in
+; the VCB. Takes control access to the volume. R0 = SS$_NORMAL,
+; SS$_NOSUCHDEV, SS$_DEVNOTMOUNT, SS$_WRITLCK, SS$_NOPRIV, SS$_BADPARAM
+; for a label of no characters or more than 12, SS$_NOHOMEBLK, or the
+; disk's error.
+; vaxpunk: VMS's SET VOLUME, installed with CMKRNL, rewrites the home
+; blocks itself with $QIOs through INDEXF.SYS, and changes the VCB in
+; kernel mode; SET.EXE here has no privileges of its own, so a volume's
+; owner without CMKRNL can't.
+        .ENTRY  FIL$SETVOLUME, ^M<R2, R3, R4, R5, R6, R7, R8, R9, R10, R11>
+        BSBW    FIL$LOCK
+        MOVL    #SS$_BADPARAM, R0
+        BBC     #0, 8(AP), 5$
+        MOVZWL  @12(AP), R1
+        BEQL    90$
+        CMPL    R1, #12
+        BGTRU   90$
+5$:     MOVL    4(AP), R0
+        MOVZWL  (R0), R2
+        MOVL    4(R0), R1
+        BSBW    FIL$SELECT
+        BLBC    R0, 90$
+        MOVL    F11$GL_VCB, R11
+        MOVL    #SS$_DEVNOTMOUNT, R0
+        BBC     #VCB$V_MOUNTED, VCB$L_STATUS(R11), 90$
+        MOVL    #SS$_WRITLCK, R0
+        BBC     #VCB$V_WRITE, VCB$L_STATUS(R11), 90$
+        MOVL    #ARM$M_CONTROL, R0
+        MOVL    VCB$L_OWNER(R11), R1
+        MOVZWL  VCB$W_PROT(R11), R2
+        BSBW    FIL$CHKPRO
+        BLBC    R0, 90$
+        MOVL    #2, R10                 ; the VBN
+        MOVL    #3, R9                  ; past the last copy, as the first says
+        CLRL    R8                      ; the copies written
+10$:    MOVL    R10, R0
+        MOVL    #1, R1
+        MOVAB   BITBLK, R2
+        MOVAB   VCB$AB_INDEXF(R11), R3
+        BSBW    FIL$READVBN
+        BLBC    R0, 90$
+        BSBW    ISHOME
+        BLBC    R0, 30$
+        TSTL    R8
+        BNEQ    20$
+        MOVZWL  BITBLK+HM2$W_ALTIDXVBN, R9
+        CMPW    BITBLK+HM2$W_IBMAPVBN, R9
+        BGEQU   20$
+        MOVZWL  BITBLK+HM2$W_IBMAPVBN, R9
+20$:    BSBW    NEWHOME
+        MOVL    R10, R0
+        MOVL    #1, R1
+        MOVAB   BITBLK, R2
+        MOVAB   VCB$AB_INDEXF(R11), R3
+        BSBW    FIL$WRITEVBN
+        BLBC    R0, 90$
+        INCL    R8
+30$:    INCL    R10
+        CMPL    R10, R9
+        BLSSU   10$
+        MOVL    #SS$_NOHOMEBLK, R0
+        TSTL    R8
+        BEQL    90$
+        BBC     #1, 8(AP), 40$          ; the VCB, as the last copy has them
+        MOVL    BITBLK+HM2$L_VOLOWNER, VCB$L_OWNER(R11)
+40$:    BBC     #2, 8(AP), 50$
+        MOVW    BITBLK+HM2$W_PROTECT, VCB$W_PROT(R11)
+50$:    BBC     #0, 8(AP), 80$
+        MOVL    #12, R0                 ; the label, without its trailing blanks
+55$:    CMPB    BITBLK+HM2$T_VOLNAME-1[R0], #^A/ /
+        BNEQ    60$
+        SOBGTR  R0, 55$
+60$:    MOVB    R0, VCB$T_VOLNAME(R11)
+        MOVC3   R0, BITBLK+HM2$T_VOLNAME, VCB$T_VOLNAME+1(R11)
+80$:    MOVL    #SS$_NORMAL, R0
+90$:    BSBW    FIL$UNLOCK
+        RET
+
+; ISHOME: BITBLK = a block. R0 = 1 if it is a Files-11 ODS-2 home block,
+; by its format, else 0. Uses R1.
+ISHOME:
+        .JSB_ENTRY
+        CLRL    R1
+10$:    CMPB    BITBLK+HM2$T_FORMAT[R1], FORMAT[R1]
+        BNEQ    80$
+        AOBLSS  #10, R1, 10$
+        MOVL    #1, R0
+        RSB
+80$:    CLRL    R0
+        RSB
+
+; NEWHOME: BITBLK = a home block, AP = FIL$SETVOLUME's arguments. Gives
+; it what they say, and its checksums. Uses R0-R5.
+NEWHOME:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5>
+        BBC     #0, 8(AP), 10$
+        MOVL    12(AP), R0
+        MOVC5   (R0), @4(R0), #^A/ /, #12, BITBLK+HM2$T_VOLNAME
+10$:    BBC     #1, 8(AP), 20$
+        MOVL    16(AP), BITBLK+HM2$L_VOLOWNER
+20$:    BBC     #2, 8(AP), 30$
+        MCOMW   22(AP), R0
+        BICW2   R0, BITBLK+HM2$W_PROTECT
+        BISW2   20(AP), BITBLK+HM2$W_PROTECT
+30$:    BBC     #3, 8(AP), 40$
+        MCOMW   26(AP), R0
+        BICW2   R0, BITBLK+HM2$W_FILEPROT
+        BISW2   24(AP), BITBLK+HM2$W_FILEPROT
+40$:    MOVAB   BITBLK, R1
+        MOVL    #29, R2
+        BSBW    CHECKSUM
+        MOVW    R0, BITBLK+HM2$W_CHECKSUM1
+        MOVL    #255, R2
+        BSBW    CHECKSUM
+        MOVW    R0, BITBLK+HM2$W_CHECKSUM2
+        RSB
 
 ; RESHDR: R1 = a reserved file's empty header, R10 = its RESFILES row.
 ; Gives it its name, version 1, record attributes and blocks, the

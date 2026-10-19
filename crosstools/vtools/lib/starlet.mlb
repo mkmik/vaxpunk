@@ -13,6 +13,7 @@ SS$_DEVOFFLINE = 132                    ; the device isn't there: no network
 SS$_EXQUOTA = 28
 SS$_NOPRIV = 36
 SS$_ABORT = 44
+SS$_BADATTRIB = 52                      ; an attribute descriptor's code or size is wrong
 SS$_DEVMOUNT = 108                      ; the device is already mounted
 SS$_DEVNOTMOUNT = 124                   ; no volume is mounted on the device
 SS$_BADIMGHDR = 68
@@ -29,6 +30,7 @@ SS$_ILLSER = 260
 SS$_IVADDR = 308                        ; a bad network address
 SS$_INCVOLLABEL = 268                   ; the volume's label isn't the one asked for
 SS$_INSFARG = 276
+SS$_IVTIME = 388                        ; text that isn't a time, or one out of range
 SS$_INSFMEM = 292
 SS$_INSFRAME = 300                      ; $UNWIND: fewer frames than its depth
 SS$_IVCHAN = 316
@@ -69,6 +71,7 @@ SS$_CONTROLC = 1617                     ; CTRL/C, which no CTRL/C AST took, stop
 SS$_CREATED = 1561                      ; success: it wasn't there, and was made
 SS$_MSGNOTFND = 1569                    ; success: $GETMSG has no text for the status
 SS$_SUPERSEDE = 1585                    ; success: a name by that name was replaced
+SS$_FILEPURGED = 1657                   ; success: the name's oldest version was deleted, past its version limit
 SS$_NONEXPR = 2280
 SS$_NOHANDLER = 2296                    ; no such exit handler
 SS$_NOSIGNAL = 2304                     ; $UNWIND outside a condition handler
@@ -81,6 +84,7 @@ SS$_NOMOREPROC = 2472                   ; a wildcard $GETJPI is past the last pr
 SS$_NOSUCHDEV = 2312
 SS$_NOSUCHFILE = 2320
 SS$_NOSUCHSEC = 2424                    ; no global section by that name, or its ident doesn't match
+SS$_ACCONFLICT = 2048                   ; the file is open, in a way the request conflicts with
 SS$_BADCHKSUM = 2056
 SS$_BADFILEHDR = 2064
 SS$_BADFILEVER = 2080                   ; a version above 32767
@@ -1581,7 +1585,8 @@ IO$V_NOW = 6                            ; a mailbox's read doesn't wait for a me
 IO$M_NOW = ^X40
 IO$_SETCHAR = 26                        ; a terminal: its permanent characteristics and its current ones; a socket: as IO$_SETMODE
 IO$_SENSECHAR = 27                      ; a terminal: its permanent characteristics; a socket: as IO$_SENSEMODE
-IO$_ACCESS = 50                         ; a socket: connects, or accepts; a datagram socket's peer
+IO$_ACCESS = 50                         ; a disk: looks a file up, reads its attributes; a socket: connects, or accepts
+IO$_MODIFY = 54                         ; a disk: writes a file's attributes
 IO$_DEACCESS = 52                       ; a socket: closes it
 IO$_SENSEMODE = 39                      ; a terminal: its characteristics; a socket: its names, ioctls
 IO$V_ACCEPT = 7                         ; a socket's ACCESS: accepts a connection
@@ -1599,6 +1604,92 @@ IO$M_OUTBAND = ^X400
 IO$V_EXTEND = 15                        ; a socket name written is BSD 4.4's
 IO$M_EXTEND = ^X8000
         .ENDM   $IODEF
+
+; $FIBDEF: the file information block, p1 of a disk's IO$_ACCESS and
+; IO$_MODIFY, which names the file: by its ID, or by a name, p2, in the
+; directory whose ID is FIB$W_DID.
+        .MACRO  $FIBDEF
+FIB$L_ACCTL = 0                         ; how the file is accessed
+FIB$W_FID = 4                           ; the file's ID, 3 words: number, sequence, RVN and its number's high byte
+FIB$W_FID_NUM = 4
+FIB$W_FID_SEQ = 6
+FIB$B_FID_NMX = 9
+FIB$W_DID = 10                          ; its directory's ID, 3 words, 0 for none
+FIB$W_DID_NUM = 10
+FIB$W_DID_SEQ = 12
+FIB$B_DID_NMX = 15
+FIB$L_WCC = 16                          ; a wildcard lookup's context
+FIB$W_NMCTL = 20                        ; FIB$M_ bits: how the name is looked up
+FIB$V_FINDFID = 11                      ; find the entry for FIB$W_FID in the directory, not p2's name
+FIB$M_FINDFID = ^X800
+FIB$W_VERLIMIT = 44                     ; the name's version limit
+FIB$C_ACCDATA = 10                      ; the shortest FIB a request takes
+FIB$C_LENGTH = 64
+        .ENDM   $FIBDEF
+
+; $FATDEF: a file's record attributes, ATR$C_RECATTR's 32 bytes.
+        .MACRO  $FATDEF
+FAT$B_RTYPE = 0                         ; the record format, FAT$V_RTYPE, and the organization, FAT$V_FILEORG
+FAT$V_RTYPE = 0
+FAT$S_RTYPE = 4
+FAT$C_UNDEFINED = 0
+FAT$C_FIXED = 1
+FAT$C_VARIABLE = 2
+FAT$C_VFC = 3
+FAT$C_STREAM = 4
+FAT$C_STREAMLF = 5
+FAT$C_STREAMCR = 6
+FAT$V_FILEORG = 4
+FAT$S_FILEORG = 4
+FAT$C_SEQUENTIAL = 0
+FAT$C_RELATIVE = 1
+FAT$C_INDEXED = 2
+FAT$B_RATTRIB = 1                       ; the record attributes: carriage control, records across blocks
+FAT$V_FORTRANCC = 0
+FAT$V_IMPLIEDCC = 1
+FAT$V_PRINTCC = 2
+FAT$V_NOSPAN = 3
+FAT$V_MSBRCW = 4
+FAT$W_RSIZE = 2                         ; the record size, a fixed record's, or the longest
+FAT$L_HIBLK = 4                         ; the blocks allocated, high word first
+FAT$L_EFBLK = 8                         ; the end of file's block, high word first
+FAT$W_FFBYTE = 12                       ; and the first free byte in it
+FAT$B_BKTSIZE = 14                      ; a bucket's blocks
+FAT$B_VFCSIZE = 15                      ; a VFC record's fixed part
+FAT$W_MAXREC = 16                       ; the longest record allowed
+FAT$W_DEFEXT = 18                       ; the blocks an extend takes by default
+FAT$W_GBC = 20                          ; the global buffers
+FAT$W_VERSIONS = 30                     ; a directory's default version limit
+        .ENDM   $FATDEF
+
+; $ATRDEF: the attribute list, p5 of a disk's IO$_ACCESS, which reads
+; them, and IO$_MODIFY, which writes them: descriptors, a longword of 0
+; after the last.
+        .MACRO  $ATRDEF
+ATR$W_SIZE = 0                          ; the bytes at ATR$L_ADDR
+ATR$W_TYPE = 2                          ; which attribute, ATR$C_
+ATR$L_ADDR = 4
+ATR$C_UCHAR = 3                         ; the file's characteristics, FH2$L_FILECHAR
+ATR$S_UCHAR = 4
+ATR$C_RECATTR = 4                       ; its record attributes, 32 bytes, $FATDEF's
+ATR$S_RECATTR = 32
+ATR$C_HEADER = 10                       ; its header, read only
+ATR$S_HEADER = 512
+ATR$C_CREDATE = 17                      ; when it was created
+ATR$S_CREDATE = 8
+ATR$C_REVDATE = 18                      ; when it was last changed
+ATR$S_REVDATE = 8
+ATR$C_EXPDATE = 19                      ; when it expires, 0 never
+ATR$S_EXPDATE = 8
+ATR$C_BAKDATE = 20                      ; when it was last backed up
+ATR$S_BAKDATE = 8
+ATR$C_UIC = 21                          ; its owner
+ATR$S_UIC = 4
+ATR$C_FPRO = 22                         ; its protection mask
+ATR$S_FPRO = 2
+ATR$C_UIC_RO = 26                       ; its owner, read only
+ATR$S_UIC_RO = 4
+        .ENDM   $ATRDEF
 
 ; $INETSYMDEF, $SOCKADDRINDEF, $IFREQDEF, $ORTENTRYDEF and $SIOCDEF: TCP/IP
 ; Services' TCPIP$INETDEF, the modules and the values a program uses with
@@ -2428,6 +2519,15 @@ LKI$C_LENGTH = 24
         .EXTERNAL SYS$NUMTIM
         CALLS   #2, G^SYS$NUMTIM
         .ENDM   $NUMTIM_S
+
+; $BINTIM_S TIMBUF, TIMADR: the time the text TIMBUF's descriptor gives,
+; dd-MMM-yyyy hh:mm:ss.cc or dddd hh:mm:ss.cc, into the quadword at TIMADR.
+        .MACRO  $BINTIM_S TIMBUF, TIMADR
+        $PUSHADR TIMADR
+        $PUSHADR TIMBUF
+        .EXTERNAL SYS$BINTIM
+        CALLS   #2, G^SYS$BINTIM
+        .ENDM   $BINTIM_S
 
         .MACRO  $SETIMR_S EFN=#0, DAYTIM, ASTADR=0, REQIDT=#0
         PUSHL   REQIDT

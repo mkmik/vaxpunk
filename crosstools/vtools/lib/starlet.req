@@ -13,6 +13,7 @@ LITERAL
     SS$_EXQUOTA = 28,
     SS$_NOPRIV = 36,
     SS$_ABORT = 44,
+    SS$_BADATTRIB = 52,  ! an attribute descriptor's code or size is wrong
     SS$_DEVMOUNT = 108,  ! the device is already mounted
     SS$_DEVNOTMOUNT = 124,  ! no volume is mounted on the device
     SS$_BADIMGHDR = 68,
@@ -29,6 +30,7 @@ LITERAL
     SS$_IVADDR = 308,  ! a bad network address
     SS$_INCVOLLABEL = 268,  ! the volume's label isn't the one asked for
     SS$_INSFARG = 276,
+    SS$_IVTIME = 388,  ! text that isn't a time, or one out of range
     SS$_INSFMEM = 292,
     SS$_INSFRAME = 300,  ! $UNWIND: fewer frames than its depth
     SS$_IVCHAN = 316,
@@ -69,6 +71,7 @@ LITERAL
     SS$_CREATED = 1561,  ! success: it wasn't there, and was made
     SS$_MSGNOTFND = 1569,  ! success: $GETMSG has no text for the status
     SS$_SUPERSEDE = 1585,  ! success: a name by that name was replaced
+    SS$_FILEPURGED = 1657,  ! success: the name's oldest version was deleted, past its version limit
     SS$_NONEXPR = 2280,
     SS$_NOHANDLER = 2296,  ! no such exit handler
     SS$_NOSIGNAL = 2304,  ! $UNWIND outside a condition handler
@@ -81,6 +84,7 @@ LITERAL
     SS$_NOSUCHDEV = 2312,
     SS$_NOSUCHFILE = 2320,
     SS$_NOSUCHSEC = 2424,  ! no global section by that name, or its ident doesn't match
+    SS$_ACCONFLICT = 2048,  ! the file is open, in a way the request conflicts with
     SS$_BADCHKSUM = 2056,
     SS$_BADFILEHDR = 2064,
     SS$_BADFILEVER = 2080,  ! a version above 32767
@@ -1241,7 +1245,8 @@ LITERAL
     IO$M_NOW = 64,
     IO$_SETCHAR = 26,  ! a terminal: its permanent characteristics and its current ones; a socket: as IO$_SETMODE
     IO$_SENSECHAR = 27,  ! a terminal: its permanent characteristics; a socket: as IO$_SENSEMODE
-    IO$_ACCESS = 50,  ! a socket: connects, or accepts; a datagram socket's peer
+    IO$_ACCESS = 50,  ! a disk: looks a file up, reads its attributes; a socket: connects, or accepts
+    IO$_MODIFY = 54,  ! a disk: writes a file's attributes
     IO$_DEACCESS = 52,  ! a socket: closes it
     IO$_SENSEMODE = 39,  ! a terminal: its characteristics; a socket: its names, ioctls
     IO$V_ACCEPT = 7,  ! a socket's ACCESS: accepts a connection
@@ -1258,6 +1263,88 @@ LITERAL
     IO$M_OUTBAND = 1024,
     IO$V_EXTEND = 15,  ! a socket name written is BSD 4.4's
     IO$M_EXTEND = 32768;
+
+! $FIBDEF
+LITERAL
+    FIB$V_FINDFID = 11,  ! find the entry for FIB$W_FID in the directory, not p2's name
+    FIB$M_FINDFID = 2048,
+    FIB$C_ACCDATA = 10,  ! the shortest FIB a request takes
+    FIB$C_LENGTH = 64;
+MACRO
+    FIB$L_ACCTL = 0, 0, 32, 0 %,  ! how the file is accessed
+    FIB$W_FID = 4, 0, 16, 0 %,  ! the file's ID, 3 words: number, sequence, RVN and its number's high byte
+    FIB$W_FID_NUM = 4, 0, 16, 0 %,
+    FIB$W_FID_SEQ = 6, 0, 16, 0 %,
+    FIB$B_FID_NMX = 9, 0, 8, 0 %,
+    FIB$W_DID = 10, 0, 16, 0 %,  ! its directory's ID, 3 words, 0 for none
+    FIB$W_DID_NUM = 10, 0, 16, 0 %,
+    FIB$W_DID_SEQ = 12, 0, 16, 0 %,
+    FIB$B_DID_NMX = 15, 0, 8, 0 %,
+    FIB$L_WCC = 16, 0, 32, 0 %,  ! a wildcard lookup's context
+    FIB$W_NMCTL = 20, 0, 16, 0 %,  ! FIB$M_ bits: how the name is looked up
+    FIB$W_VERLIMIT = 44, 0, 16, 0 %;  ! the name's version limit
+
+! $FATDEF
+LITERAL
+    FAT$V_RTYPE = 0,
+    FAT$S_RTYPE = 4,
+    FAT$C_UNDEFINED = 0,
+    FAT$C_FIXED = 1,
+    FAT$C_VARIABLE = 2,
+    FAT$C_VFC = 3,
+    FAT$C_STREAM = 4,
+    FAT$C_STREAMLF = 5,
+    FAT$C_STREAMCR = 6,
+    FAT$V_FILEORG = 4,
+    FAT$S_FILEORG = 4,
+    FAT$C_SEQUENTIAL = 0,
+    FAT$C_RELATIVE = 1,
+    FAT$C_INDEXED = 2,
+    FAT$V_FORTRANCC = 0,
+    FAT$V_IMPLIEDCC = 1,
+    FAT$V_PRINTCC = 2,
+    FAT$V_NOSPAN = 3,
+    FAT$V_MSBRCW = 4;
+MACRO
+    FAT$B_RTYPE = 0, 0, 8, 0 %,  ! the record format, FAT$V_RTYPE, and the organization, FAT$V_FILEORG
+    FAT$B_RATTRIB = 1, 0, 8, 0 %,  ! the record attributes: carriage control, records across blocks
+    FAT$W_RSIZE = 2, 0, 16, 0 %,  ! the record size, a fixed record's, or the longest
+    FAT$L_HIBLK = 4, 0, 32, 0 %,  ! the blocks allocated, high word first
+    FAT$L_EFBLK = 8, 0, 32, 0 %,  ! the end of file's block, high word first
+    FAT$W_FFBYTE = 12, 0, 16, 0 %,  ! and the first free byte in it
+    FAT$B_BKTSIZE = 14, 0, 8, 0 %,  ! a bucket's blocks
+    FAT$B_VFCSIZE = 15, 0, 8, 0 %,  ! a VFC record's fixed part
+    FAT$W_MAXREC = 16, 0, 16, 0 %,  ! the longest record allowed
+    FAT$W_DEFEXT = 18, 0, 16, 0 %,  ! the blocks an extend takes by default
+    FAT$W_GBC = 20, 0, 16, 0 %,  ! the global buffers
+    FAT$W_VERSIONS = 30, 0, 16, 0 %;  ! a directory's default version limit
+
+! $ATRDEF
+LITERAL
+    ATR$C_UCHAR = 3,  ! the file's characteristics, FH2$L_FILECHAR
+    ATR$S_UCHAR = 4,
+    ATR$C_RECATTR = 4,  ! its record attributes, 32 bytes, $FATDEF's
+    ATR$S_RECATTR = 32,
+    ATR$C_HEADER = 10,  ! its header, read only
+    ATR$S_HEADER = 512,
+    ATR$C_CREDATE = 17,  ! when it was created
+    ATR$S_CREDATE = 8,
+    ATR$C_REVDATE = 18,  ! when it was last changed
+    ATR$S_REVDATE = 8,
+    ATR$C_EXPDATE = 19,  ! when it expires, 0 never
+    ATR$S_EXPDATE = 8,
+    ATR$C_BAKDATE = 20,  ! when it was last backed up
+    ATR$S_BAKDATE = 8,
+    ATR$C_UIC = 21,  ! its owner
+    ATR$S_UIC = 4,
+    ATR$C_FPRO = 22,  ! its protection mask
+    ATR$S_FPRO = 2,
+    ATR$C_UIC_RO = 26,  ! its owner, read only
+    ATR$S_UIC_RO = 4;
+MACRO
+    ATR$W_SIZE = 0, 0, 16, 0 %,  ! the bytes at ATR$L_ADDR
+    ATR$W_TYPE = 2, 0, 16, 0 %,  ! which attribute, ATR$C_
+    ATR$L_ADDR = 4, 0, 32, 0 %;
 
 ! $INETSYMDEF
 LITERAL

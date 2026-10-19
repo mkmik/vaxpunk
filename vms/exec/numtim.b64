@@ -1,10 +1,11 @@
-MODULE NUMTIM (IDENT = 'V1.0') =
-%TITLE 'Time as numbers: $NUMTIM'
+MODULE NUMTIM (IDENT = 'V1.1') =
+%TITLE 'Time as numbers and from text: $NUMTIM, $BINTIM'
 BEGIN
 !
 ! $NUMTIM: a time, the system's or one given, as numbers, VMS's: 100 ns
 ! units since 17-NOV-1858 00:00 for an absolute time, minus their count
-! for a delta time. Like $PUTMSG it runs in the caller's mode, so its code
+! for a delta time. $BINTIM: text, as $ASCTIM writes it, as a time. Like
+! $PUTMSG it runs in the caller's mode, so its code
 ! is in the vector, EXEC$VECTOR, which programs in outer modes can run
 ! (vms/exec/syssrv.mar). The first BLISS-64 in the system (PRD-0004
 ! step 11), compiled by vbliss.
@@ -12,7 +13,8 @@ BEGIN
 LIBRARY 'SYS$LIBRARY:STARLET';
 
 PSECT
-    CODE = EXEC$VECTOR(EXECUTE, NOWRITE);
+    CODE = EXEC$VECTOR(EXECUTE, NOWRITE),
+    PLIT = EXEC$VECTOR(EXECUTE, NOWRITE);     ! $BINTIM's month names, which outer modes read
 
 EXTERNAL ROUTINE
     SYS$GETTIM;
@@ -86,6 +88,196 @@ ROUTINE NUMBERS (TIME, BUF : REF VECTOR[7, WORD]) : NOVALUE =
     BUF[MONTH] = .M;
     BUF[DAY] = .DOY - (153 * .MP + 2) / 5 + 1
     END
+    END;
+
+! AT s, n, i: the character at s[i], or 0 past the n.
+ROUTINE AT (S, N, I) =
+    (IF .I LSS .N THEN CH$RCHAR(CH$PLUS(.S, .I)) ELSE 0);
+
+! DIGITS s, n, ip, most: the decimal number of up to `most` digits at
+! s[.ip], or -1 if there is no digit there; moves .ip past them.
+ROUTINE DIGITS (S, N, IP, MOST) =
+    BEGIN
+    LOCAL
+        V,
+        C;
+    V = -1;
+    INCR K FROM 1 TO .MOST DO
+        BEGIN
+        C = AT(.S, .N, ..IP);
+        IF .C LSS %C'0' OR .C GTR %C'9' THEN EXITLOOP;
+        IF .V LSS 0 THEN V = 0;
+        V = .V * 10 + .C - %C'0';
+        .IP = ..IP + 1
+        END;
+    .V
+    END;
+
+! CLOCK s, n, ip, f, cur: hh:mm:ss.cc at s[.ip] into f's last four
+! numbers: a field left empty takes cur's, one past the text's end 0.
+! Moves .ip past it.
+ROUTINE CLOCK (S, N, IP, F : REF VECTOR, CUR : REF VECTOR[7, WORD]) : NOVALUE =
+    BEGIN
+    LOCAL
+        V;
+    INCR K FROM HOUR TO HUNDREDTH DO
+        BEGIN
+        V = DIGITS(.S, .N, .IP, 2);
+        F[.K] = (IF .V GEQ 0 THEN .V ELSE IF ..IP GEQ .N THEN 0 ELSE .CUR[.K]);
+        IF .K EQL HUNDREDTH THEN EXITLOOP;
+        IF AT(.S, .N, ..IP) NEQ (IF .K EQL SECOND THEN %C'.' ELSE %C':')
+        THEN
+            BEGIN
+            INCR J FROM .K + 1 TO HUNDREDTH DO F[.J] = 0;
+            EXITLOOP
+            END;
+        .IP = ..IP + 1
+        END
+    END;
+
+! SYS$BINTIM timbuf, timadr: the time the text timbuf's descriptor gives,
+! as VMS's $BINTIM takes it, into the quadword at timadr. An absolute
+! time is dd-MMM-yyyy hh:mm:ss.cc, the month's name in either case; a
+! delta time dddd hh:mm:ss.cc, its days up to 9999, written negative. A
+! field left empty, -- 12:00 for one, takes the current date's or time's,
+! and those past the text's end are 0, a delta's empty ones too. R0 =
+! SS$_NORMAL, or SS$_IVTIME for text that isn't a time, or one out of
+! range.
+GLOBAL ROUTINE SYS$BINTIM (TIMBUF : REF BLOCK[, BYTE], TIMADR) =
+    BEGIN
+    BIND
+        MONTHS = UPLIT('JANFEBMARAPRMAYJUNJULAUGSEPOCTNOVDEC');
+    LOCAL
+        S,
+        N,
+        I,
+        V,
+        C,
+        CUR : VECTOR[7, WORD],
+        ZERO : VECTOR[7, WORD],
+        F : VECTOR[7],
+        DAYS,
+        DELTA,
+        T;
+    S = .TIMBUF[DSC$A_POINTER];
+    N = .TIMBUF[DSC$W_LENGTH];
+    I = 0;
+    WHILE AT(.S, .N, .I) EQL %C' ' DO I = .I + 1;
+    NUMBERS(TIMEOF(0), CUR);
+    INCR K FROM 0 TO 6 DO ZERO[.K] = 0;
+    V = DIGITS(.S, .N, I, 4);
+    IF AT(.S, .N, .I) EQL %C'-'
+    THEN
+        BEGIN
+        ! An absolute time: the day, the month's name, the year.
+        DELTA = 0;
+        F[DAY] = (IF .V GEQ 0 THEN .V ELSE .CUR[DAY]);
+        I = .I + 1;
+        F[MONTH] = .CUR[MONTH];
+        C = AT(.S, .N, .I);
+        IF .C NEQ %C'-' AND .C NEQ %C' ' AND .C NEQ 0
+        THEN
+            BEGIN
+            F[MONTH] = 0;
+            INCR M FROM 0 TO 11 DO
+                BEGIN
+                F[MONTH] = .M + 1;
+                INCR J FROM 0 TO 2 DO
+                    BEGIN
+                    C = AT(.S, .N, .I + .J);
+                    IF .C GEQ %C'a' AND .C LEQ %C'z' THEN C = .C - %C'a' + %C'A';
+                    IF .C NEQ CH$RCHAR(CH$PTR(MONTHS, 3 * .M + .J))
+                    THEN
+                        BEGIN
+                        F[MONTH] = 0;
+                        EXITLOOP
+                        END
+                    END;
+                IF .F[MONTH] NEQ 0 THEN EXITLOOP
+                END;
+            IF .F[MONTH] EQL 0 THEN RETURN SS$_IVTIME;
+            I = .I + 3
+            END;
+        F[YEAR] = .CUR[YEAR];
+        IF AT(.S, .N, .I) EQL %C'-'
+        THEN
+            BEGIN
+            I = .I + 1;
+            V = DIGITS(.S, .N, I, 4);
+            IF .V GEQ 0 THEN F[YEAR] = .V
+            END;
+        IF AT(.S, .N, .I) EQL %C' '
+        THEN
+            BEGIN
+            I = .I + 1;
+            CLOCK(.S, .N, I, F, CUR)
+            END
+        ELSE
+            INCR K FROM HOUR TO HUNDREDTH DO F[.K] = 0;
+        IF .F[YEAR] LSS 1858 OR .F[YEAR] GTR 9999 OR .F[MONTH] LSS 1 OR .F[DAY] LSS 1
+        THEN
+            RETURN SS$_IVTIME;
+        ! The days in its month, then the day count from 17-NOV-1858, by
+        ! eras of 400 years from 1-MAR-0000, as NUMBERS's backwards.
+        BEGIN
+        LOCAL
+            Y,
+            ERA,
+            YOE,
+            MP,
+            DOE,
+            LAST;
+        Y = .F[YEAR];
+        LAST = (CASE .F[MONTH] FROM 1 TO 12 OF
+            SET
+            [2]: (IF (.Y MOD 4 EQL 0 AND .Y MOD 100 NEQ 0) OR .Y MOD 400 EQL 0 THEN 29 ELSE 28);
+            [4, 6, 9, 11]: 30;
+            [INRANGE]: 31;
+            TES);
+        IF .F[DAY] GTR .LAST THEN RETURN SS$_IVTIME;
+        IF .F[MONTH] LEQ 2 THEN Y = .Y - 1;
+        ERA = .Y / 400;
+        YOE = .Y - .ERA * 400;
+        MP = (IF .F[MONTH] GTR 2 THEN .F[MONTH] - 3 ELSE .F[MONTH] + 9);
+        DOE = .YOE * 365 + .YOE / 4 - .YOE / 100 + (153 * .MP + 2) / 5 + .F[DAY] - 1;
+        DAYS = .ERA * 146097 + .DOE - 678881;
+        IF .DAYS LSS 0 THEN RETURN SS$_IVTIME
+        END
+        END
+    ELSE
+        BEGIN
+        ! A delta time: its days, or none before the hours.
+        DELTA = 1;
+        DAYS = 0;
+        IF AT(.S, .N, .I) EQL %C':'
+        THEN
+            BEGIN
+            I = 0;
+            WHILE AT(.S, .N, .I) EQL %C' ' DO I = .I + 1;
+            CLOCK(.S, .N, I, F, ZERO)
+            END
+        ELSE
+            BEGIN
+            IF .V GTR 0 THEN DAYS = .V;
+            IF AT(.S, .N, .I) EQL %C' '
+            THEN
+                BEGIN
+                I = .I + 1;
+                CLOCK(.S, .N, I, F, ZERO)
+                END
+            ELSE
+                INCR K FROM HOUR TO HUNDREDTH DO F[.K] = 0
+            END
+        END;
+    WHILE AT(.S, .N, .I) EQL %C' ' DO I = .I + 1;
+    IF .I LSS .N OR .F[HOUR] GTR 23 OR .F[MINUTE] GTR 59 OR .F[SECOND] GTR 59
+    THEN
+        RETURN SS$_IVTIME;
+    T = .DAYS * UNITS_PER_DAY
+        + (((.F[HOUR] * 60 + .F[MINUTE]) * 60 + .F[SECOND]) * 100 + .F[HUNDREDTH]) * UNITS_PER_CS;
+    IF .DELTA THEN T = -.T;
+    .TIMADR = .T;
+    SS$_NORMAL
     END;
 
 ! SYS$NUMTIM timbuf [,timadr]: the numbers of the time at timadr, or of

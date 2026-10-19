@@ -639,6 +639,81 @@ const SHARING: Phase = Phase {
     ],
 };
 
+/// SET DIRECTORY/VERSION_LIMIT=2 gives DKB0:[VL] a default limit, so
+/// the third COPY of A.TXT purges ;1; SET FILE/VERSION_LIMIT=1 gives A.TXT
+/// its own, which DIRECTORY/FULL shows, and the next COPY purges one more.
+/// SET FILE/ATTRIBUTE and /EXPIRATION_DATE change its record format and
+/// expiration date, the time through $BINTIM, which refuses 31-FEB.
+/// SET VOLUME/LABEL relabels DKB0:'s volume, on the disk, as MOUNT finds,
+/// and back.
+const SET_FILE: Phase = Phase {
+    name: "set file",
+    secs: 30,
+    steps: &[
+        (
+            "SHARING: shared line",
+            1,
+            concat!(
+                "CREATE/DIRECTORY DKB0:[VL]\rSET DIRECTORY/VERSION_LIMIT=2 DKB0:[VL]\r",
+                "COPY SYS$SYSDEVICE:[SYSMGR]WELCOME.TXT DKB0:[VL]A.TXT\r",
+                "COPY SYS$SYSDEVICE:[SYSMGR]WELCOME.TXT DKB0:[VL]A.TXT\r",
+                "COPY SYS$SYSDEVICE:[SYSMGR]WELCOME.TXT DKB0:[VL]A.TXT\r",
+                "WRITE SYS$OUTPUT \"SETFILE: \", \"three\"\r",
+            ),
+        ),
+        (
+            "SETFILE: three",
+            1,
+            concat!(
+                "DIRECTORY DKB0:[VL]\rDIRECTORY/FULL DKB0:[000000]VL.DIR\r",
+                "SET FILE/VERSION_LIMIT=1 DKB0:[VL]A.TXT\r",
+                "COPY SYS$SYSDEVICE:[SYSMGR]WELCOME.TXT DKB0:[VL]A.TXT\r",
+                "WRITE SYS$OUTPUT \"SETFILE: \", \"four\"\r",
+            ),
+        ),
+        (
+            "SETFILE: four",
+            1,
+            concat!(
+                "DIRECTORY DKB0:[VL]\r",
+                "SET FILE/ATTRIBUTE=(RFM:FIX,LRL:80,MRS:80,RAT:NONE) DKB0:[VL]A.TXT\r",
+                "SET FILE/EXPIRATION_DATE=1-JAN-2030:12:00 DKB0:[VL]A.TXT\r",
+                "DIRECTORY/FULL DKB0:[VL]A.TXT;4\r",
+                "WRITE SYS$OUTPUT \"SETFILE: \", \"full\"\r",
+            ),
+        ),
+        (
+            "SETFILE: full",
+            1,
+            concat!(
+                "SET FILE/EXPIRATION_DATE=31-FEB-2030 DKB0:[VL]A.TXT\r",
+                "SET FILE/ATTRIBUTE=(RFM:ODD) DKB0:[VL]A.TXT\r",
+                "SET VOLUME/LABEL=SCRATCH DKB0:\rDISMOUNT DKB0:\rMOUNT DKB0:\r",
+                "WRITE SYS$OUTPUT \"SETFILE: \", \"label\"\r",
+            ),
+        ),
+        (
+            "SETFILE: label",
+            1,
+            concat!(
+                "SET VOLUME/LABEL=DATA DKB0:\rDISMOUNT DKB0:\rMOUNT/PROTECTION=(W) DKB0:\r",
+                "WRITE SYS$OUTPUT \"SETFILE: \", \"done\"\r",
+            ),
+        ),
+    ],
+    lines: &[
+        "\nA.TXT;3             A.TXT;2\n",
+        "Global buffer count: 0, Default version limit: 2, Contiguous, Directory file",
+        "\nA.TXT;4             A.TXT;3\n",
+        "Expires:     1-JAN-2030 12:00:00.00",
+        "Global buffer count: 0, Version limit: 1\nRecord format:      Fixed length 80 byte records\nRecord attributes:  No carriage control",
+        "$ SET FILE/EXPIRATION_DATE=31-FEB-2030 DKB0:[VL]A.TXT\n%SYSTEM-F-IVTIME, invalid time",
+        "$ SET FILE/ATTRIBUTE=(RFM:ODD) DKB0:[VL]A.TXT\n%SYSTEM-F-BADPARAM, bad parameter value",
+        "%MOUNT-I-MOUNTED, SCRATCH mounted on _DKB0:",
+        "SETFILE: done",
+    ],
+};
+
 /// SET TERMINAL changes the console's width, page, BROADCAST and PASTHRU,
 /// which SHOW TERMINAL shows, refuses a width of 600, and after /NOECHO
 /// the command typed next isn't echoed; then it puts them back. TTTEST
@@ -652,7 +727,7 @@ const TERMINAL: Phase = Phase {
     secs: 20,
     steps: &[
         (
-            "SHARING: shared line",
+            "SETFILE: done",
             1,
             concat!(
                 "SET TERMINAL/WIDTH=132/PAGE=48/NOBROADCAST/PASTHRU\rSHOW TERMINAL\r",
@@ -1335,6 +1410,7 @@ const PHASES: &[Phase] = &[
     PRIVILEGES,
     PROTECTION,
     SHARING,
+    SET_FILE,
     TERMINAL,
     TERMINAL_TYPES,
     BACKUP,

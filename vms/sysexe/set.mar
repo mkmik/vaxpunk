@@ -1,5 +1,5 @@
-        .TITLE  SET     Sets the process's privileges, a file's protection or owner, the terminal
-        .IDENT  /V0.4/
+        .TITLE  SET     Sets the process's privileges, files, directories, volumes and the terminal
+        .IDENT  /V0.5/
 ;
 ; DCL runs this, as VMS's DCL runs SET.EXE, for
 ; - SET PROCESS/PRIVILEGES=(priv[,...]). Each priv enables that
@@ -8,10 +8,18 @@
 ;   process isn't authorized for stays off, with %SYSTEM-S-NOTALLPRIV; a
 ;   name it doesn't know is %DCL-W-IVKEYW, and ends the list there.
 ; - SET PROTECTION=(code[,...]) file, which gives the file's categories
-;   the codes' access (lib/protect.mar), and SET FILE/OWNER_UIC=uic file,
-;   which gives it that owner. It $OPENs the file with a protection XAB,
-;   which gets its owner and protection, changes them in the XAB, and
-;   $CLOSE gives them to the file.
+;   the codes' access (lib/protect.mar), and SET FILE file with
+;   /OWNER_UIC=uic, /ATTRIBUTE=(kw:value[,...]), its record attributes,
+;   /[NO]EXPIRATION_DATE[=time] and /VERSION_LIMIT[=n], its name's in
+;   its directory, 0 or none for none. It finds the file with $PARSE and
+;   $SEARCH, reads its attributes with a $QIO to its disk, IO$_ACCESS,
+;   changes them, and writes them back with IO$_MODIFY, as VMS's SET
+;   does through the XQP: no read access to the file is needed.
+; - SET DIRECTORY/VERSION_LIMIT[=n] directory, the default version limit
+;   of the names made in it later, the same way.
+; - SET VOLUME device with /LABEL=label, /OWNER_UIC=uic, /PROTECTION and
+;   /FILE_PROTECTION=(code[,...]), which FIL$SETVOLUME writes in the
+;   volume's home blocks, in kernel mode, which takes CMKRNL.
 ; - SET TERMINAL [device], which reads the terminal's characteristics
 ;   (lib/term.mar), changes those its qualifiers name, and sets them with
 ;   IO$_SETMODE, or with /PERMANENT the permanent ones, which it reads,
@@ -22,17 +30,24 @@
 ;   ESCAPE, LINE_EDITING, LOWERCASE, PASTHRU, TAB and WRAP, /INSERT or
 ;   /OVERSTRIKE, the line editing's mode, and /SPEED=rate or
 ;   /SPEED=(input,output), each one of TERM_SPEEDS.
-; ponytail: one file, no wildcards, no /LOG. SET TERMINAL/INQUIRE
-; doesn't put a VT200 or later in 7-bit mode, as VMS's does, nor the
-; keypad in numeric mode, and /WIDTH no DEC CRT in 132 columns;
-; /DEVICE_TYPE knows TERM_TYPES's types only.
+; ponytail: one file, the first a wildcard finds, one directory, one
+; volume; no /LOG or /CONFIRM; /ATTRIBUTE has no dates or HBK; a time is
+; absolute, TODAY+1- and the like aren't; SET VOLUME has no
+; /[NO]ERASE_ON_DELETE, /[NO]HIGHWATER_MARKING or the qualifiers VMS's
+; mount and cache take. SET TERMINAL/INQUIRE doesn't put a VT200 or
+; later in 7-bit mode, as VMS's does, nor the keypad in numeric mode,
+; and /WIDTH no DEC CRT in 132 columns; /DEVICE_TYPE knows TERM_TYPES's
+; types only.
 ;
         .LIBRARY "starlet.mlb"
         .LIBRARY "sysexe.mlb"
         $SSDEF
         $CLIMSGDEF
         $FABDEF
-        $XABPRODEF
+        $NAMDEF
+        $FIBDEF
+        $ATRDEF
+        $FATDEF
         $IODEF
         $TTDEF
         $TT2DEF
@@ -41,6 +56,7 @@
 
         .EXTERNAL PRV_LOOKUP, LIB$SIGNAL, PUT_LINE, GET_PROT, GET_UIC
         .EXTERNAL TERM_SENSE, TERM_FIND, TERM_TYPE, TERM_SPEEDS
+        .EXTERNAL FIL$SETVOLUME
 
 ; TTBIT "name", bit, base, ON=BBSS, OFF=BBCC: sets the bit at base for
 ; the qualifier /name, and clears it for /NOname; ON=BBCC, OFF=BBSS the
@@ -102,8 +118,123 @@ NAME:   .BLKB   31
 MASK:   .BLKQ   1                       ; $SETPRV's
 STATUS: .LONG   SS$_NORMAL              ; or SS$_NOTALLPRIV once one stays off
 LINE:   .BLKB   256                     ; " \name\", or a message, .ASCIC
-FAB:    $FAB    FNA=SPEC, XAB=XAB
-XAB:    $XABPRO
+FAB:    $FAB    FNA=SPEC, NAM=NAM
+NAM:    $NAM    ESA=EXP, ESS=255, RSA=RES, RSS=255
+EXP:    .BLKB   255                     ; $PARSE's expanded specification
+RES:    .BLKB   255                     ; the file's specification, which $SEARCH found
+        .ALIGN  LONG
+DEVDSC: .LONG   0                       ; its device
+        .ADDRESS 0
+FCHAN:  .LONG   0                       ; a channel to it
+FIBDSC: .LONG   FIB$C_LENGTH
+        .ADDRESS FIB
+FIB:    .BLKB   FIB$C_LENGTH            ; the file, by its ID
+GETATR: .WORD   ATR$S_FPRO, ATR$C_FPRO  ; what IO$_ACCESS reads: its protection,
+        .ADDRESS PRO
+        .WORD   ATR$S_UIC, ATR$C_UIC    ; owner,
+        .ADDRESS UIC
+        .WORD   ATR$S_RECATTR, ATR$C_RECATTR    ; record attributes
+        .ADDRESS FAT
+        .WORD   ATR$S_EXPDATE, ATR$C_EXPDATE    ; and expiration date
+        .ADDRESS EXPDAT
+        .LONG   0
+PUTATR: .BLKB   4*8+4                   ; what IO$_MODIFY writes: those the command changes
+DIRATR: .WORD   ATR$S_RECATTR, ATR$C_RECATTR    ; a directory's record attributes
+        .ADDRESS FAT
+        .LONG   0
+PRO:    .WORD   0
+        .ALIGN  QUAD
+EXPDAT: .BLKQ   1
+ONEDAY: .LONG   ^X2A69C000, ^XC9        ; a day, in 100 ns units
+UIC:    .LONG   0
+FAT:    .BLKB   ATR$S_RECATTR
+RATSET: .LONG   0                       ; 1 once a RAT has replaced the record attributes
+ATTDSC: .LONG   64                      ; a value of ATTRIBUTE or EXPIRATION_DATE
+        .ADDRESS ATTBUF
+ATTBUF: .BLKB   64
+TIMDSC: .LONG   0                       ; EXPIRATION_DATE's, as $BINTIM takes it
+        .ADDRESS TIMBUF
+TIMBUF: .BLKB   68
+MIDNIGHT:                               ; today's
+        .ASCID  "-- 00:00"
+DAYWORDS:                               ; KWINDEX's: midnight of today, today, tomorrow, yesterday
+        .ASCIC  "TODAY"
+        .ASCIC  "0"
+        .ASCIC  "TOMORROW"
+        .ASCIC  "YESTERDAY"
+        .BYTE   0
+; /ATTRIBUTE's keywords: each, the size of its number, or 5, 6 or 7 for
+; ORG, RFM or RAT, and where it goes in FAT.
+ATTKW:  .ASCII  "BKS"
+        .BYTE   1, FAT$B_BKTSIZE
+        .ASCII  "DEQ"
+        .BYTE   2, FAT$W_DEFEXT
+        .ASCII  "EBK"
+        .BYTE   4, FAT$L_EFBLK
+        .ASCII  "FFB"
+        .BYTE   2, FAT$W_FFBYTE
+        .ASCII  "FSZ"
+        .BYTE   1, FAT$B_VFCSIZE
+        .ASCII  "GBC"
+        .BYTE   2, FAT$W_GBC
+        .ASCII  "LRL"
+        .BYTE   2, FAT$W_RSIZE
+        .ASCII  "MRS"
+        .BYTE   2, FAT$W_MAXREC
+        .ASCII  "VRS"
+        .BYTE   2, FAT$W_VERSIONS
+        .ASCII  "ORG"
+        .BYTE   5, 0
+        .ASCII  "RFM"
+        .BYTE   6, 0
+        .ASCII  "RAT"
+        .BYTE   7, 0
+        .BYTE   0
+ORGS:   .ASCIC  "SEQ"                   ; FAT$C_SEQUENTIAL, RELATIVE, INDEXED
+        .ASCIC  "REL"
+        .ASCIC  "IDX"
+        .BYTE   0
+RFMS:   .ASCIC  "UDF"                   ; FAT$C_UNDEFINED, FIXED, VARIABLE, ...
+        .ASCIC  "FIX"
+        .ASCIC  "VAR"
+        .ASCIC  "VFC"
+        .ASCIC  "STM"
+        .ASCIC  "STMLF"
+        .ASCIC  "STMCR"
+        .BYTE   0
+RATS:   .ASCIC  "NONE"                  ; then FAT$V_FORTRANCC's bit, IMPLIEDCC's, ...
+        .ASCIC  "FTN"
+        .ASCIC  "CR"
+        .ASCIC  "PRN"
+        .ASCIC  "BLK"
+        .ASCIC  "MSB"
+        .BYTE   0
+PROT0:  .WORD   0                       ; VOLPROT's: GET_PROT of none
+PROTF:  .WORD   0                       ; and of all
+        .ALIGN  LONG
+VARGS:  .LONG   6                       ; FIL$SETVOLUME's arguments
+        .ADDRESS PHYSDSC                ; the device
+VWHAT:  .LONG   0                       ; what to change: 1 the label, 2 owner, 4 protection, 8 file protection
+        .ADDRESS LBLDSC
+VOWNER: .LONG   0
+VPROT:  .LONG   0                       ; VOLPROT's
+VFPROT: .LONG   0
+PHYSDSC:                                ; the device's name, _DDCU:
+        .LONG   16
+        .ADDRESS PHYS
+PHYS:   .BLKB   16
+VOLITEMS:
+        .WORD   16, DVI$_DEVNAM
+        .ADDRESS PHYS
+        .ADDRESS PHYSDSC                ; its length, in the descriptor
+        .LONG   0
+LBLDSC: .LONG   64                      ; /LABEL's
+        .ADDRESS LBLBUF
+LBLBUF: .BLKB   64
+VPROTECTION:
+        .ASCID  "PROTECTION"
+FILE_PROTECTION:
+        .ASCID  "FILE_PROTECTION"
 SPECDSC:                                ; FILE, the parameter
         .LONG   255
         .ADDRESS SPEC
@@ -203,30 +334,155 @@ VT200:  .ASCID  "VT200"                 ; to VT500, 2 to 5 after
         MOVL    #<CLI$_IVKEYW!INHIB>, R0
 90$:    RET
 
-; FILE: SET PROTECTION or SET FILE: opens the file, changes the owner or
-; protection $OPEN put in the XAB, and closes it. R0 = the first failure,
-; or $CLOSE's status.
-FILE:   GETVALUE "FILE", SPECDSC, SPECDSC
-        BLBC    R0, 90$
+; FILE: SET PROTECTION, SET FILE, or SET DIRECTORY or SET VOLUME:
+; finds the file, reads its attributes, changes those the command
+; names, and writes them back. R0 = the first failure, or SS$_NORMAL.
+FILE:   PRESENT "OPTION.DIRECTORY"
+        BLBC    R0, 1$
+        BRW     SETDIR
+1$:     PRESENT "OPTION.VOLUME"
+        BLBC    R0, 2$
+        BRW     SETVOL
+2$:     GETVALUE "FILE", SPECDSC, SPECDSC
+        BLBC    R0, 5$
         MOVB    SPECDSC, FAB+FAB$B_FNS
-        $OPEN   FAB=FAB
-        BLBC    R0, 90$
+        $PARSE  FAB=FAB
+        BLBC    R0, 5$
+        $SEARCH FAB=FAB
+        BLBC    R0, 5$
+        MOVL    NAM+NAM$W_FID, FIB+FIB$W_FID
+        MOVW    NAM+NAM$W_FID+4, FIB+FIB$W_FID+4
+        BSBW    ASSIGN
+        BLBS    R0, 6$
+5$:     RET
+6$:     $QIOW_S CHAN=FCHAN, FUNC=#IO$_ACCESS, IOSB=IOSB, P1=FIBDSC, P5=#GETATR
+        BSBW    IOSTAT
+        BLBS    R0, 7$
+        BRW     80$
+7$:     MOVAB   PUTATR, R6              ; what it changes
         PRESENT "OPTION.PROTECTION"
         BLBC    R0, 10$
-        PUSHAW  XAB+XAB$W_PRO
+        PUSHAW  PRO
         PUSHAQ  PROTECTION
         CALLS   #2, G^GET_PROT
-        BRB     20$
-10$:    PUSHAL  XAB+XAB$L_UIC
+        BLBC    R0, 80$
+        MOVW    #ATR$S_FPRO, (R6)+
+        MOVW    #ATR$C_FPRO, (R6)+
+        MOVAW   PRO, (R6)+
+        CLRL    (R6)
+        BRW     50$                     ; SET PROTECTION has no qualifiers
+10$:    PRESENT "OWNER_UIC"
+        BLBC    R0, 20$
+        PUSHAL  UIC
         PUSHAQ  OWNER_UIC
         CALLS   #2, G^GET_UIC
-20$:    MOVL    R0, R2
-        BLBS    R0, 30$
-        CLRL    FAB+FAB$L_XAB           ; closed as it is
-30$:    $CLOSE  FAB=FAB
-        BLBC    R2, 80$
+        BLBC    R0, 80$
+        MOVW    #ATR$S_UIC, (R6)+
+        MOVW    #ATR$C_UIC, (R6)+
+        MOVAL   UIC, (R6)+
+20$:    PRESENT "ATTRIBUTE"
+        BLBC    R0, 30$
+        PUSHL   R6
+        BSBW    ATTRIB
+        MOVL    (SP)+, R6
+        BLBC    R0, 80$
+        MOVW    #ATR$S_RECATTR, (R6)+
+        MOVW    #ATR$C_RECATTR, (R6)+
+        MOVAB   FAT, (R6)+
+30$:    PRESENT "EXPIRATION_DATE"
+        BLBS    R0, 32$
+        CMPL    R0, #CLI$_NEGATED
+        BNEQ    40$
+        CLRQ    EXPDAT                  ; /NOEXPIRATION_DATE: none
+        BRB     35$
+32$:    PUSHL   R6
+        BSBW    EXPIRES
+        MOVL    (SP)+, R6
+        BLBC    R0, 80$
+35$:    MOVW    #ATR$S_EXPDATE, (R6)+
+        MOVW    #ATR$C_EXPDATE, (R6)+
+        MOVAQ   EXPDAT, (R6)+
+40$:    CLRL    (R6)
+        PRESENT "VERSION_LIMIT"
+        BLBC    R0, 50$
+        BSBW    LIMIT                   ; the name's, in its directory's entry
+        BLBC    R0, 80$
+        TSTL    R1
+        BNEQ    45$
+        MOVL    #32767, R1              ; 0 is none, which in the FIB leaves it
+45$:    MOVW    R1, FIB+FIB$W_VERLIMIT
+        MOVL    NAM+NAM$W_DID, FIB+FIB$W_DID
+        MOVW    NAM+NAM$W_DID+4, FIB+FIB$W_DID+4
+        MOVW    #FIB$M_FINDFID, FIB+FIB$W_NMCTL
+50$:    $QIOW_S CHAN=FCHAN, FUNC=#IO$_MODIFY, IOSB=IOSB, P1=FIBDSC, P5=#PUTATR
+        BSBW    IOSTAT
+80$:    MOVL    R0, R2
+        $DASSGN_S CHAN=FCHAN
+        MOVL    R2, R0
         RET
-80$:    MOVL    R2, R0
+
+; SETDIR: SET DIRECTORY/VERSION_LIMIT[=n]: the directory's default
+; version limit, FAT$W_VERSIONS, which the names made in it later get, 0
+; for none. R0 = the first failure, or SS$_NORMAL.
+SETDIR: GETVALUE "DIRECTORY", SPECDSC, SPECDSC
+        BLBC    R0, 90$
+        MOVB    SPECDSC, FAB+FAB$B_FNS
+        $PARSE  FAB=FAB                 ; whose NAM$W_DID is its .DIR file
+        BLBC    R0, 90$
+        MOVL    NAM+NAM$W_DID, FIB+FIB$W_FID
+        MOVW    NAM+NAM$W_DID+4, FIB+FIB$W_FID+4
+        BSBW    ASSIGN
+        BLBC    R0, 90$
+        $QIOW_S CHAN=FCHAN, FUNC=#IO$_ACCESS, IOSB=IOSB, P1=FIBDSC, P5=#DIRATR
+        BSBW    IOSTAT
+        BLBC    R0, 80$
+        BSBW    LIMIT
+        BLBC    R0, 80$
+        MOVW    R1, FAT+FAT$W_VERSIONS
+        $QIOW_S CHAN=FCHAN, FUNC=#IO$_MODIFY, IOSB=IOSB, P1=FIBDSC, P5=#DIRATR
+        BSBW    IOSTAT
+80$:    MOVL    R0, R2
+        $DASSGN_S CHAN=FCHAN
+        MOVL    R2, R0
+90$:    RET
+
+; SETVOL: SET VOLUME device: the label, owner, protection and default file
+; protection of the volume mounted there, which FIL$SETVOLUME, in kernel
+; mode, writes in its home blocks. R0 = its status, $GETDVI's, or the
+; CLI's.
+SETVOL: GETVALUE "DEVICE", SPECDSC, SPECDSC
+        BLBC    R0, 90$
+        $GETDVIW_S DEVNAM=SPECDSC, ITMLST=VOLITEMS
+        BLBC    R0, 90$
+        CLRL    VWHAT
+        PRESENT "LABEL"
+        BLBC    R0, 10$
+        MOVW    #64, LBLDSC
+        GETVALUE "LABEL", LBLDSC, LBLDSC
+        BLBC    R0, 90$
+        BISL2   #1, VWHAT
+10$:    PRESENT "OWNER_UIC"
+        BLBC    R0, 20$
+        PUSHAL  VOWNER
+        PUSHAQ  OWNER_UIC
+        CALLS   #2, G^GET_UIC
+        BLBC    R0, 90$
+        BISL2   #2, VWHAT
+20$:    PRESENT "PROTECTION"
+        BLBC    R0, 30$
+        MOVAQ   VPROTECTION, R2
+        MOVAL   VPROT, R3
+        BSBW    VOLPROT
+        BLBC    R0, 90$
+        BISL2   #4, VWHAT
+30$:    PRESENT "FILE_PROTECTION"
+        BLBC    R0, 40$
+        MOVAQ   FILE_PROTECTION, R2
+        MOVAL   VFPROT, R3
+        BSBW    VOLPROT
+        BLBC    R0, 90$
+        BISL2   #8, VWHAT
+40$:    $CMKRNL_S ROUTIN=G^FIL$SETVOLUME, ARGLST=VARGS
 90$:    RET
 
 ; SETTERM: SET TERMINAL: changes the characteristics the qualifiers
@@ -559,5 +815,236 @@ LOOKUP:
         PUSHL   R5
         CALLS   #3, G^PRV_LOOKUP
         RSB
+
+; IOSTAT: R0 = a $QIOW's status. R0 = it, if it failed, else IOSB's.
+IOSTAT:
+        .JSB_ENTRY
+        BLBC    R0, 90$
+        MOVZWL  IOSB, R0
+90$:    RSB
+
+; ASSIGN: NAM = the file's, from $PARSE. Assigns FCHAN to its device. R0
+; = $ASSIGN's status.
+ASSIGN:
+        .JSB_ENTRY
+        MOVZBL  NAM+NAM$B_DEV, DEVDSC
+        MOVL    NAM+NAM$L_DEV, DEVDSC+4
+        $ASSIGN_S DEVNAM=DEVDSC, CHAN=FCHAN
+        RSB
+
+; LIMIT: R1 = /VERSION_LIMIT's value, from 0 to 32767, 0 if it has none.
+; R0 = SS$_NORMAL, or SS$_BADPARAM. Uses R0-R5.
+LIMIT:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5>
+        MOVW    #16, NUMDSC
+        GETVALUE "VERSION_LIMIT", NUMDSC, NUMDSC
+        CLRL    R1
+        BLBC    R0, 10$
+        CLRL    R2
+        MOVL    #32767, R3
+        BSBW    DECIMAL
+        RSB
+10$:    MOVL    #SS$_NORMAL, R0
+        RSB
+
+; EXPIRES: EXPDAT = /EXPIRATION_DATE's time, as DCL writes times:
+; dd-MMM-yyyy:hh:mm:ss.cc, the parts left out as $BINTIM leaves them, a
+; time alone today's; or TODAY, or 0, TOMORROW or YESTERDAY, that day's
+; midnight. R0 = SS$_NORMAL, $BINTIM's SS$_IVTIME, or the CLI's error.
+; Uses R0-R6.
+EXPIRES:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5, R6>
+        MOVW    #64, ATTDSC
+        GETVALUE "EXPIRATION_DATE", ATTDSC, ATTDSC
+        BLBC    R0, 90$
+        MOVAB   ATTBUF, R1
+        MOVZWL  ATTDSC, R2
+        MOVAB   DAYWORDS, R3
+        BSBW    KWINDEX
+        MOVL    R0, R6
+        BLSS    20$
+        $BINTIM_S TIMBUF=MIDNIGHT, TIMADR=EXPDAT
+        BLBC    R0, 90$
+        CMPL    R6, #2
+        BLSSU   80$
+        EVAX_LDQ R0, EXPDAT
+        EVAX_LDQ R1, ONEDAY
+        CMPL    R6, #2
+        BNEQ    15$
+        EVAX_ADDQ R0, R1, R0
+        BRB     17$
+15$:    EVAX_SUBQ R0, R1, R0
+17$:    EVAX_STQ R0, EXPDAT
+        BRB     80$
+20$:    MOVZWL  ATTDSC, R6              ; DCL's time as $BINTIM's: has it a date?
+        CLRL    R5
+        CLRL    R4
+21$:    CMPL    R4, R6
+        BGEQU   23$
+        CMPB    ATTBUF[R4], #^A/-/
+        BNEQ    22$
+        MOVL    #1, R5
+22$:    INCL    R4
+        BRB     21$
+23$:    MOVAB   TIMBUF, R3
+        TSTL    R5
+        BNEQ    24$
+        MOVB    #^A/-/, (R3)+           ; a time alone: today's
+        MOVB    #^A/-/, (R3)+
+        MOVB    #^A/ /, (R3)+
+24$:    CLRL    R4
+25$:    CMPL    R4, R6
+        BGEQU   28$
+        MOVB    ATTBUF[R4], R0
+        CMPB    R0, #^A/:/
+        BNEQ    26$
+        BLBC    R5, 26$
+        CLRL    R5                      ; the colon after the date: a blank
+        MOVB    #^A/ /, R0
+26$:    MOVB    R0, (R3)+
+        INCL    R4
+        BRB     25$
+28$:    MOVAB   TIMBUF, R0
+        SUBL3   R0, R3, R0
+        MOVW    R0, TIMDSC
+        $BINTIM_S TIMBUF=TIMDSC, TIMADR=EXPDAT
+        RSB
+80$:    MOVL    #SS$_NORMAL, R0
+90$:    RSB
+
+; ATTRIB: changes FAT, the record attributes, as /ATTRIBUTE's values
+; say: BKS, DEQ, EBK, FFB, FSZ, GBC, LRL, MRS and VRS:n, a number, and
+; ORG:{SEQ|REL|IDX}, RFM:{UDF|FIX|VAR|VFC|STM|STMLF|STMCR} and
+; RAT:{NONE|FTN|CR|PRN|BLK|MSB}, the first RAT replacing the record
+; attributes, any more adding to them; = for the colon too. R0 =
+; SS$_NORMAL, SS$_BADPARAM for a value it doesn't know, or the CLI's
+; error. Uses R0-R7.
+ATTRIB:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5, R6, R7>
+        CLRL    RATSET
+10$:    MOVW    #64, ATTDSC
+        GETVALUE "ATTRIBUTE", ATTDSC, ATTDSC
+        BLBS    R0, 15$
+        MOVL    #SS$_NORMAL, R0         ; past the last
+        RSB
+15$:    MOVZWL  ATTDSC, R7
+        SUBL2   #4, R7                  ; the value's length, past KW:
+        BLEQ    80$
+        CMPB    ATTBUF+3, #^A/:/
+        BEQL    20$
+        CMPB    ATTBUF+3, #^A/=/
+        BNEQ    80$
+20$:    MOVAB   ATTKW, R6
+25$:    TSTB    (R6)
+        BEQL    80$
+        CMPC3   #3, (R6), ATTBUF
+        BEQL    30$
+        ADDL2   #5, R6
+        BRB     25$
+30$:    CMPB    3(R6), #4
+        BGTRU   50$
+        CMPL    R7, #16                 ; a number, of 3(R6) bytes
+        BGTRU   80$
+        MOVW    R7, NUMDSC
+        MOVC3   R7, ATTBUF+4, NUMBUF
+        CLRL    R2
+        MOVL    #255, R3
+        CMPB    3(R6), #1
+        BEQL    35$
+        MOVZWL  #65535, R3
+        CMPB    3(R6), #2
+        BEQL    35$
+        MOVL    #^X7FFFFFFF, R3
+35$:    BSBW    DECIMAL
+        BLBC    R0, 90$
+        MOVZBL  4(R6), R4
+        MOVAB   FAT[R4], R4
+        CMPB    3(R6), #2
+        BLSSU   40$
+        BEQL    42$
+        ROTL    #16, R1, (R4)           ; high word first
+        BRB     10$
+40$:    MOVB    R1, (R4)
+        BRB     10$
+42$:    MOVW    R1, (R4)
+        BRB     10$
+50$:    MOVAB   ORGS, R3                ; a keyword
+        CMPB    3(R6), #5
+        BEQL    52$
+        MOVAB   RFMS, R3
+        CMPB    3(R6), #6
+        BEQL    52$
+        MOVAB   RATS, R3
+52$:    MOVAB   ATTBUF+4, R1
+        MOVL    R7, R2
+        BSBW    KWINDEX
+        TSTL    R0
+        BLSS    80$
+        CMPB    3(R6), #6
+        BLSSU   55$
+        BEQL    57$
+        TSTL    RATSET                  ; RAT
+        BNEQ    53$
+        CLRB    FAT+FAT$B_RATTRIB
+        MOVL    #1, RATSET
+53$:    TSTL    R0
+        BEQL    59$                     ; NONE
+        DECL    R0
+        BBSS    R0, FAT+FAT$B_RATTRIB, 59$
+59$:    BRW     10$
+55$:    BICB2   #^XF0, FAT+FAT$B_RTYPE  ; ORG
+        ASHL    #FAT$V_FILEORG, R0, R0
+        BISB2   R0, FAT+FAT$B_RTYPE
+        BRW     10$
+57$:    BICB2   #^X0F, FAT+FAT$B_RTYPE  ; RFM
+        BISB2   R0, FAT+FAT$B_RTYPE
+        BRW     10$
+80$:    MOVL    #SS$_BADPARAM, R0
+90$:    RSB
+
+; KWINDEX: R1 = a word, R2 = its length, R3 = words, each .ASCIC, a 0
+; after the last. R0 = its index among them, or -1. Uses R0-R5.
+KWINDEX:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5>
+        PUSHR   #^M<R6, R7, R8>
+        MOVL    R1, R6
+        MOVL    R2, R7
+        MOVL    R3, R8
+        CLRL    R4
+10$:    MOVZBL  (R8)+, R5
+        BEQL    80$
+        CMPL    R5, R7
+        BNEQ    20$
+        CMPC3   R7, (R6), (R8)
+        BEQL    70$
+20$:    ADDL2   R5, R8
+        INCL    R4
+        BRB     10$
+70$:    MOVL    R4, R0
+        BRB     90$
+80$:    MNEGL   #1, R0
+90$:    POPR    #^M<R6, R7, R8>
+        RSB
+
+; VOLPROT: R2 = an entity's name, a descriptor, R3 = a longword. Puts in
+; its low word the protection codes the entity gives, and in its high
+; word the bits of the mask they leave as they were, those of the
+; categories it doesn't name: GET_PROT of none and of all differ there.
+; R0 = GET_PROT's status. Uses R0-R1.
+VOLPROT:
+        .JSB_ENTRY
+        CLRW    PROT0
+        MOVW    #^XFFFF, PROTF
+        PUSHAW  PROT0
+        PUSHL   R2
+        CALLS   #2, G^GET_PROT
+        BLBC    R0, 90$
+        PUSHAW  PROTF
+        PUSHL   R2
+        CALLS   #2, G^GET_PROT
+        BLBC    R0, 90$
+        MOVW    PROT0, (R3)
+        XORW3   PROT0, PROTF, 2(R3)
+90$:    RSB
 
         .END    START
