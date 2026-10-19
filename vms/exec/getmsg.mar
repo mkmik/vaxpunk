@@ -1185,6 +1185,10 @@ MESSAGES:
         .ASCIC  "SYSTEM"
         .ASCIC  "NOSUCHDEV"
         .ASCIC  "no such device available"
+        .LONG   SS$_NOSUCHFILE
+        .ASCIC  "SYSTEM"
+        .ASCIC  "NOSUCHFILE"
+        .ASCIC  "no such file"
         .LONG   SS$_TIMEOUT
         .ASCIC  "SYSTEM"
         .ASCIC  "TIMEOUT"

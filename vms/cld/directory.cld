@@ -1,10 +1,10 @@
-! DIRECTORY [spec] [/BRIEF] [/COLUMNS=n] [/DATE[=(keyword,...)]] [/FULL]
+! DIRECTORY [spec[,...]] [/BRIEF] [/COLUMNS=n] [/DATE[=(keyword,...)]] [/FULL]
 ! [/OWNER] [/PROTECTION] [/SIZE[=keyword]] [/TOTAL] [/VERSIONS=n]:
 ! DIRECTORY.EXE lists files. /COLUMNS and /VERSIONS have no type: it
 ! checks their numbers itself, as VMS's says %DIRECT-F-SYNTAX.
 define verb DIRECTORY
 	image DIRECTORY
-	parameter P1, label=FILE, value(type=$infile)
+	parameter P1, label=FILE, value(list, type=$infile)
 	qualifier BRIEF, default
 	qualifier COLUMNS, value(required)
 	qualifier DATE, value(list, type=DATE_KEYWORDS)

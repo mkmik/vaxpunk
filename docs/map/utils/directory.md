@@ -49,8 +49,14 @@ needs = ["/rms/wildcards#directories"]
 [[feature]]
 id = "lists"
 title = "Lists of files, A.TXT,B.TXT"
+status = "done"
+note = "As OpenVMS Alpha 8.4-2L1's: what each leaves out from the one before, by hand in NEXTSPEC; %DIRECT-E-OPENIN for one that fails, and the list goes on"
+
+[[feature]]
+id = "file-scan"
+title = "Lists through LIB$FILE_SCAN and RMS's related names, as VMS's, not NEXTSPEC's copy of them"
 status = "todo"
-note = "PRD-0003 tier 3 #24"
+needs = ["/rtl/librtl#file-scan"]
 
 [[feature]]
 id = "xqp-attributes"
@@ -125,7 +131,9 @@ lists such as `SYS$SYSTEM:`, and with `/OWNER`, `/PROTECTION` and
 `/FULL`'s report matched OpenVMS Alpha's on PRD-0008's fixtures, and the
 other qualifiers' columns match what OpenVMS Alpha's DIRECTORY wrote in
 the oracle: with `/SIZE` a name of 19 or more characters has a line of
-its own, and in a list of names one of 20 or more takes two columns. Missing: one file spec only (PRD-0003
-tier 3 #24), the attributes of files the user can't read, which wait
+its own, and in a list of names one of 20 or more takes two columns.
+A list, `A.TXT,[X]B.TXT`, takes what each leaves out from the one
+before, as LIB$FILE_SCAN and RMS's related names make it on VMS;
+`NEXTSPEC` does that itself until they exist. Missing: the attributes of files the user can't read, which wait
 for the XQP's `$QIO` interface, and the terminal's width: lines are 80
 characters.

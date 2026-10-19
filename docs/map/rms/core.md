@@ -99,9 +99,21 @@ note = "FIL$SELECT knows disks only; LIB$PUT_OUTPUT and the C library write SYS$
 
 [[feature]]
 id = "related-names"
-title = "Related file names, NAM$L_RLF, for an output specification's defaults"
+title = "Related file names, NAM$L_RLF, for an output specification's defaults and an input list's"
 status = "todo"
-note = "PRD-0003 tier 3 #24: COPY and RENAME with wildcards"
+note = "PRD-0003 tier 3 #24: COPY and RENAME with wildcards; LIB$FILE_SCAN chains a list's names through it. VMS's: a relative directory is the default directory's, not the related name's"
+
+[[feature]]
+id = "search-list-esa"
+title = "$SEARCH rewrites the expanded string with each search list string it moves to, as VMS's"
+status = "todo"
+note = "rms.mar keeps the first string's; DIRECTORY's lists take the device from the file found instead"
+
+[[feature]]
+id = "big-versions"
+title = "Versions over 32767: $PARSE takes them, $SEARCH says RMS$_FND with SS$_BADFILEVER, as VMS's"
+status = "todo"
+note = "rms.mar's $PARSE says RMS$_VER; seen on OpenVMS Alpha 8.4-2L1 with DIRECTORY X.TXT;99999"
 
 [[feature]]
 id = "concealed"
