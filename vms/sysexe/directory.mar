@@ -17,8 +17,11 @@
 ; directory from the default one; $SEARCH finds each file. * matches any
 ; characters, % one. /VERSIONS=n lists each name's n highest versions.
 ; /SIZE, /DATE, /OWNER and /PROTECTION list a file a line, with its
-; blocks, dates, owner's UIC and protection, which $OPEN puts in XABs; a
-; name too long for its column has a line of its own. /TOTAL lists only
+; blocks, dates, owner and protection, which $OPEN puts in XABs, the
+; owner by its identifier's name, as SHOW SECURITY shows it; a name too
+; long for its column has a line of its own. /ACL lists a file's ACEs
+; after its line, as $FORMAT_ACL writes them, from $GET_SECURITY;
+; /SECURITY is /OWNER, /PROTECTION and /ACL. /TOTAL lists only
 ; the totals.
 ; /FULL lists all VMS's does about each, from its XABs, and the blocks
 ; they use and have.
@@ -42,8 +45,9 @@
         $XABDATDEF
         $XABFHCDEF
         $XABSUMDEF
+        $OSSDEF
 
-        .EXTERNAL PUT_LINE
+        .EXTERNAL PUT_LINE, ID_TEXT
 
 COLUMN = 20                             ; a name and its blanks
 LINEMAX = 80
@@ -57,8 +61,9 @@ D_FULL = 2
 D_USED = 3                              ; /SIZE=USED
 D_ALLOC = 4                             ; /SIZE=ALLOCATION
 D_TOTAL = 5
+D_ACL = 6
 M_SIZE = <1@D_USED>!<1@D_ALLOC>         ; /SIZE=ALL
-M_LINE = <1@D_OWNER>!<1@D_PROT>!M_SIZE  ; a file a line
+M_LINE = <1@D_OWNER>!<1@D_PROT>!<1@D_ACL>!M_SIZE        ; a file a line
 DATEMAX = 9                             ; /DATE's dates, DATES's bits
 
 ; ADDTEXT "text": appends text to LINE. Uses R0-R2.
@@ -154,11 +159,35 @@ CATNAMES:
         .ASCIC  "World:"
 DIRTYPE:
         .ASCII  ".DIR"
+IDBUF:  .BLKB   48                      ; an owner's text, ID_TEXT's
+FILECLS:.ASCID  "FILE"
+OBJDSC: .LONG   0                       ; the file's name, NAM's resultant string
+        .ADDRESS RES
+ACEITEMS:                               ; what $GET_SECURITY reads: an ACE
+        .WORD   256, OSS$_ACL_READ_ENTRY
+        .ADDRESS ACE, 0
+        .LONG   0
+ACECTX: .LONG   0
+ACE:    .BLKB   256
+ACEDSC: .LONG   256
+        .ADDRESS ACE
+FMTDSC: .LONG   1024                    ; its text
+        .ADDRESS FMTBUF
+FMTLEN: .WORD   0
+FMTBUF: .BLKB   1024
+FMTWIDTH:
+        .WORD   80
+ACEINDENT:
+        .WORD   10
+NEWLINE:.ASCID  <10>
+ACLHEAD:.ASCIC  "Access Cntrl List:  "
 
         .PSECT  CODE, EXE, LONG
         .ENTRY  START, ^M<R2, R3, R4, R5, R6, R7, R8>
         IFPRESENT "OWNER", <1@D_OWNER>, DETAIL
         IFPRESENT "PROTECTION", <1@D_PROT>, DETAIL
+        IFPRESENT "ACL", <1@D_ACL>, DETAIL
+        IFPRESENT "SECURITY", <<1@D_OWNER>!<1@D_PROT>!<1@D_ACL>>, DETAIL
         IFPRESENT "FULL", <<1@D_FULL>!M_SIZE>, DETAIL
         IFPRESENT "TOTAL", <1@D_TOTAL>, DETAIL
         PRESENT "SIZE"
@@ -684,16 +713,11 @@ DETAILS:
 27$:    MOVZBL  LINE, R6
 28$:    AOBLSS  #DATEMAX, R7, 22$
         BBC     #D_OWNER, DETAIL, 40$
-        MOVL    R6, R3                  ; [group,member], in octal, and
+        MOVL    R6, R3                  ; [NAME] or [group,member], in
         BSBW    PADTO                   ; room for an identifier's
         ADDL2   #33, R6
-        ADDTEXT "  ["
-        MOVZWL  XAB+XAB$L_UIC+2, R1
-        BSBW    ADDOCT
-        ADDTEXT ","
-        MOVZWL  XAB+XAB$L_UIC, R1
-        BSBW    ADDOCT
-        ADDTEXT "]"
+        ADDTEXT "  "
+        BSBW    ADDOWNER
 40$:    BBC     #D_PROT, DETAIL, 80$
         MOVL    R6, R3                  ; (RWED,RWED,RE,): what each may do
         BSBW    PADTO
@@ -708,7 +732,11 @@ DETAILS:
         ASHL    #-4, R4, R4
         AOBLSS  #4, R5, 60$
         ADDTEXT ")"
-80$:    BRW     SAY
+80$:    BSBW    SAY
+        BBC     #D_ACL, DETAIL, 90$
+        CLRL    R2                      ; its ACEs, 10 in
+        BSBW    ACES
+90$:    RSB
 60$:    MOVZBL  #44, R0
         BSBW    ADDCHAR
         BRB     50$
@@ -783,13 +811,8 @@ FULL:
         BSBW    ADDDEC
         MOVL    #30, R3
         BSBW    PADTO
-        ADDTEXT "Owner:    ["
-        MOVZWL  XAB+XAB$L_UIC+2, R1
-        BSBW    ADDOCT
-        ADDTEXT ","
-        MOVZWL  XAB+XAB$L_UIC, R1
-        BSBW    ADDOCT
-        ADDTEXT "]"
+        ADDTEXT "Owner:    "
+        BSBW    ADDOWNER
         BSBW    SAY
         ADDTEXT "Created:    "
         MOVAB   DAT+XAB$Q_CDT, R0
@@ -939,10 +962,84 @@ FULL:
         ADDTEXT ", "
         BRB     50$
 56$:    BSBW    SAY
+        MOVAB   ACLHEAD, R2             ; its ACEs, after the heading
+        BSBW    ACES
+        BLBS    R0, 58$
         PRINT   "Access Cntrl List:  None"
-        PRINT   "Client attributes:  None"
+58$:    PRINT   "Client attributes:  None"
         PRINT   ""
         RSB
+
+; ADDOWNER: appends the file's owner, XAB's, as ID_TEXT writes it. Uses
+; R0-R2.
+ADDOWNER:
+        .JSB_ENTRY  SCRATCH=<R2>
+        PUSHAB  IDBUF
+        PUSHL   XAB+XAB$L_UIC
+        CALLS   #2, G^ID_TEXT
+        MOVL    R0, R2
+        MOVAB   IDBUF, R1
+        BSBW    ADD
+        RSB
+
+; ACES: R2 = 0 for 10 blanks before each line of the file's ACEs, else a
+; heading, .ASCIC, which the first starts with, and as many blanks
+; before the others. Writes them, as $FORMAT_ACL does, read one at a
+; time with $GET_SECURITY of the file $SEARCH found. R0 = 1 if it has
+; any, else 0. Uses R0-R5.
+ACES:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5>
+        MOVL    R2, R4                  ; the heading
+        MOVW    #10, ACEINDENT
+        TSTL    R4
+        BEQL    5$
+        MOVZBW  (R4), ACEINDENT
+5$:     MOVZBL  NAM+NAM$B_RSL, OBJDSC
+        CLRL    ACECTX
+        CLRL    R5                      ; ACEs shown
+10$:    $GET_SECURITY_S CLSNAM=FILECLS, OBJNAM=OBJDSC, ITMLST=ACEITEMS, CONTXT=ACECTX
+        BLBC    R0, 80$
+        MOVW    #1024, FMTDSC
+        $FORMAT_ACL_S ACLENT=ACEDSC, ACLLEN=FMTLEN, ACLSTR=FMTDSC, WIDTH=FMTWIDTH, TRMDSC=NEWLINE, INDENT=ACEINDENT
+        MOVAB   FMTBUF, R1              ; a line each
+        MOVZWL  FMTLEN, R3
+        ADDL2   R1, R3
+20$:    MOVL    R1, R2
+25$:    CMPL    R2, R3
+        BGEQU   30$
+        CMPB    (R2), #10
+        BEQL    30$
+        INCL    R2
+        BRB     25$
+30$:    PUSHL   R2
+        PUSHL   R3
+        SUBL2   R1, R2
+        TSTL    R5                      ; the first line: the heading's
+        BNEQ    35$
+        TSTL    R4
+        BEQL    35$
+        PUSHR   #^M<R1, R2>
+        MOVZBL  (R4), R2
+        MOVAB   1(R4), R1
+        BSBW    ADD
+        POPR    #^M<R1, R2>
+        MOVZBL  (R4), R0
+        ADDL2   R0, R1
+        SUBL2   R0, R2
+35$:    INCL    R5
+        BSBW    ADD
+        BSBW    SAY
+        MOVL    (SP)+, R3
+        MOVL    (SP)+, R1
+        INCL    R1
+        CMPL    R1, R3
+        BLEQU   20$
+        BRB     10$
+80$:    CLRL    R0
+        TSTL    R5
+        BEQL    90$
+        INCL    R0
+90$:    RSB
 
 ; RECFMT: appends FAB2's record format, as DIRECTORY/FULL words it.
 ; Uses R0-R5.

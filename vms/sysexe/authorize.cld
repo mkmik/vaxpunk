@@ -1,15 +1,19 @@
 ! AUTHORIZE.CLD: the commands of AUTHORIZE, which AUTHORIZE.EXE parses
 ! with CLI$DCL_PARSE, after MCR AUTHORIZE or at its UAF> prompt, as VMS's
 ! does, and which build.rs links into AUTHORIZE.EXE as AUTHORIZE_TABLES.
+! The rights database's commands are the verbs with /IDENTIFIER, and
+! SHOW/RIGHTS (ADR-0040).
 ! ponytail: the qualifiers PRD-0003 asks for, and the quotas; no /FLAGS,
-! access times, rights identifiers or /LGICMD.
+! access times or /LGICMD.
 module AUTHORIZE_TABLES
 
 ! ADD username: a new user, with the DEFAULT record's values but those
-! its qualifiers give, and the password USER without /PASSWORD.
+! its qualifiers give, and the password USER without /PASSWORD, and a
+! UIC identifier of its name.
 define verb ADD
 	routine ADD
 	parameter P1, label=USERNAME, prompt="Username", value(required)
+	qualifier IDENTIFIER, nonnegatable, syntax=ADD_IDENTIFIER
 	qualifier PASSWORD, nonnegatable, value(required)
 	qualifier UIC, nonnegatable, value(required, type=$uic)
 	qualifier PRIVILEGES, nonnegatable, value(required, list)
@@ -33,6 +37,7 @@ define verb ADD
 define verb MODIFY
 	routine MODIFY
 	parameter P1, label=USERNAME, prompt="Username", value(required)
+	qualifier IDENTIFIER, nonnegatable, syntax=MODIFY_IDENTIFIER
 	qualifier PASSWORD, nonnegatable, value(required)
 	qualifier UIC, nonnegatable, value(required, type=$uic)
 	qualifier PRIVILEGES, nonnegatable, value(required, list)
@@ -52,16 +57,87 @@ define verb MODIFY
 	qualifier PRCLM, nonnegatable, value(required, type=$number)
 	qualifier TQELM, nonnegatable, value(required, type=$number)
 
-! REMOVE username: takes the user out of SYSUAF.DAT.
+! REMOVE username: takes the user out of SYSUAF.DAT, and its UIC
+! identifier out of the rights database.
 define verb REMOVE
 	routine REMOVE
 	parameter P1, label=USERNAME, prompt="Username", value(required)
+	qualifier IDENTIFIER, nonnegatable, syntax=REMOVE_IDENTIFIER
 
 ! SHOW username, or *: the user's record, or a line of it with /BRIEF.
 define verb SHOW
 	routine SHOW
 	parameter P1, label=USERNAME, prompt="Username", value(required)
 	qualifier BRIEF
+	qualifier IDENTIFIER, nonnegatable, syntax=SHOW_IDENTIFIER
+	qualifier RIGHTS, nonnegatable, syntax=SHOW_RIGHTS
+
+! ADD/IDENTIFIER name: a new identifier, of the next general value, or
+! /VALUE's, with /ATTRIBUTES's.
+define syntax ADD_IDENTIFIER
+	routine ADD_IDENT
+	parameter P1, label=ID_NAME, prompt="Identifier", value(required)
+	qualifier IDENTIFIER, nonnegatable
+	qualifier VALUE, nonnegatable, value(required, type=ID_VALUES)
+	qualifier ATTRIBUTES, nonnegatable, value(required, list)
+
+define type ID_VALUES
+	keyword IDENTIFIER, value(required, type=$number)
+	keyword UIC, value(required, type=$uic)
+
+! MODIFY/IDENTIFIER name: its /NAME, /VALUE or /ATTRIBUTES.
+define syntax MODIFY_IDENTIFIER
+	routine MODIFY_IDENT
+	parameter P1, label=ID_NAME, prompt="Identifier", value(required)
+	qualifier IDENTIFIER, nonnegatable
+	qualifier NAME, nonnegatable, value(required)
+	qualifier VALUE, nonnegatable, value(required, type=ID_VALUES)
+	qualifier ATTRIBUTES, nonnegatable, value(required, list)
+
+! REMOVE/IDENTIFIER name: the identifier, and who holds it.
+define syntax REMOVE_IDENTIFIER
+	routine REMOVE_IDENT
+	parameter P1, label=ID_NAME, prompt="Identifier", value(required)
+	qualifier IDENTIFIER, nonnegatable
+
+! SHOW/IDENTIFIER [name or *]: identifiers, a line each, with their
+! holders with /FULL; or the one /VALUE gives, or /USER's UIC.
+define syntax SHOW_IDENTIFIER
+	routine SHOW_IDENT
+	parameter P1, label=ID_NAME
+	qualifier IDENTIFIER, nonnegatable
+	qualifier FULL
+	qualifier VALUE, nonnegatable, value(required, type=ID_VALUES)
+	qualifier USER, nonnegatable, value(required)
+
+! SHOW/RIGHTS username: the identifiers the user holds.
+define syntax SHOW_RIGHTS
+	routine SHOW_RIGHTS
+	parameter P1, label=USERNAME
+	qualifier RIGHTS, nonnegatable
+
+! GRANT/IDENTIFIER name user: user holds the identifier, with
+! /ATTRIBUTES's of its.
+define verb GRANT
+	routine GRANT
+	parameter P1, label=ID_NAME, prompt="Identifier", value(required)
+	parameter P2, label=USER, prompt="User", value(required)
+	qualifier IDENTIFIER, nonnegatable
+	qualifier ATTRIBUTES, nonnegatable, value(required, list)
+
+! REVOKE/IDENTIFIER name user: user holds it no more.
+define verb REVOKE
+	routine REVOKE
+	parameter P1, label=ID_NAME, prompt="Identifier", value(required)
+	parameter P2, label=USER, prompt="User", value(required)
+	qualifier IDENTIFIER, nonnegatable
+
+! RENAME/IDENTIFIER old new: the identifier's new name.
+define verb RENAME
+	routine RENAME
+	parameter P1, label=ID_NAME, prompt="Identifier", value(required)
+	parameter P2, label=NEW_NAME, prompt="New name", value(required)
+	qualifier IDENTIFIER, nonnegatable
 
 ! LIST [username]: writes the records, a line each, or all of them with
 ! /FULL, to SYSUAF.LIS.

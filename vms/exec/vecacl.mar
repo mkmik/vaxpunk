@@ -1144,11 +1144,13 @@ FINDFILE:
 ; ATTRS: AP = the service's arguments, R11 = SECURITY's frame. Makes the
 ; attribute list from the item list, by ITEMS: each item's buffer, and
 ; its size, the buffer's if ITEMS says 0. OSS$_ACL_POSITION_TOP and
-; OSS$_ACL_POSITION_BOTTOM set the position instead. R0 = SS$_NORMAL,
-; or SS$_BADPARAM for an item it doesn't know, or more than MAXATR.
-; Uses R0-R7.
+; OSS$_ACL_POSITION_BOTTOM set the position instead. With no item that
+; changes the file, R10 becomes IO$_ACCESS. R0 = SS$_NORMAL, or
+; SS$_BADPARAM for an item it doesn't know, or more than MAXATR. Uses
+; R0-R7, R10.
 ATTRS:
-        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5, R6, R7>
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5, R6, R7, R10>
+        CLRL    R5                      ; items that change the file
         MOVL    20(AP), R6              ; the items
         BEQL    80$
         MOVAB   S_ATR(R11), R7          ; the attributes
@@ -1171,7 +1173,16 @@ ATTRS:
         BLSSU   25$
         MOVL    #SS$_BADPARAM, R0
         BRB     90$
-25$:    MOVZBL  1(R1), R0               ; the attribute's code
+25$:    CMPB    (R1), #OSS$_ACL_FIND_ENTRY      ; one that changes it?
+        BEQL    27$
+        CMPB    (R1), #OSS$_ACL_LENGTH
+        BEQL    27$
+        CMPB    (R1), #OSS$_ACL_READ_ENTRY
+        BEQL    27$
+        CMPB    (R1), #OSS$_ACL_READ
+        BEQL    27$
+        INCL    R5
+27$:    MOVZBL  1(R1), R0               ; the attribute's code
         MOVW    R0, ATR$W_TYPE(R7)
         MOVZBL  2(R1), R0               ; its size
         BNEQ    30$
@@ -1196,7 +1207,10 @@ ATTRS:
 40$:    ADDL2   #8, R7
 60$:    ADDL2   #12, R6
         BRB     10$
-80$:    MOVL    #SS$_NORMAL, R0
+80$:    TSTL    R5                      ; none: only reads, which IO$_MODIFY skips
+        BNEQ    85$
+        MOVL    #IO$_ACCESS, R10
+85$:    MOVL    #SS$_NORMAL, R0
 90$:    RSB
 
 ; ITEM: R6 = an item. R1 = its entry in ITEMS, or 0. Uses R0.

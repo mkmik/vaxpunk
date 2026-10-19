@@ -18,13 +18,26 @@
 ;   LIST [username]
 ;                  writes them so, a line each, or all of them with
 ;                  /FULL, to SYSUAF.LIS in the default directory
+; and the rights database's, RIGHTSLIST.DAT, through its services
+; (ADR-0040): ADD and REMOVE add and remove a user's UIC identifier, of
+; its username, too, and
+;   ADD/IDENTIFIER name [/VALUE=IDENTIFIER=n or UIC=uic] [/ATTRIBUTES]
+;                  a new identifier, of the next general value
+;                  without /VALUE
+;   REMOVE/IDENTIFIER name, RENAME/IDENTIFIER name new,
+;   MODIFY/IDENTIFIER name [/NAME] [/VALUE] [/ATTRIBUTES]
+;   GRANT/IDENTIFIER name user [/ATTRIBUTES], REVOKE/IDENTIFIER name user
+;   SHOW/IDENTIFIER [name or *] [/FULL] [/VALUE] [/USER=user]
+;                  a line for each, its holders after with /FULL
+;   SHOW/RIGHTS user
+;                  the identifiers the user holds
 ; The qualifiers: /PASSWORD, hashed with $HASH_PASSWORD and a new salt,
 ; /UIC, /PRIVILEGES and /DEFPRIVILEGES, each a list of privileges, NOname
 ; taking one away, ALL and NOALL all of them, /DEVICE, /DIRECTORY,
 ; /OWNER, /ACCOUNT, /CLI, /PRIORITY and the quotas, /ASTLM, /BIOLM,
 ; /BYTLM, /DIOLM, /ENQLM, /FILLM, /PRCLM and /TQELM.
-; ponytail: no rights database, wildcards but *, /FLAGS, access times,
-; or COPY and RENAME.
+; ponytail: wildcards but *, /FLAGS, access times, or COPY and RENAME
+; of a user; MODIFY/UIC leaves the user's UIC identifier as it was.
 ;
         .LIBRARY "lib.mlb"
         .LIBRARY "starlet.mlb"
@@ -37,11 +50,12 @@
         $UAFDEF
         $UAIDEF
         $HLPDEF
+        $KGBDEF
 
         .EXTERNAL PUT_LINE, PRV_NAMES, PRV_LOOKUP, GET_UIC, LIB$SIGNAL
         .EXTERNAL LIB$GET_FOREIGN, LIB$GET_INPUT, CLI$GET_VALUE, CLI$PRESENT
         .EXTERNAL CLI$DCL_PARSE, CLI$DISPATCH, AUTHORIZE_TABLES
-        .EXTERNAL LBR$OUTPUT_HELP, LIB$PUT_OUTPUT, LIB$GET_INPUT
+        .EXTERNAL LBR$OUTPUT_HELP, LIB$PUT_OUTPUT, LIB$GET_INPUT, SYS$MOD_IDENT
 
 NAMESIZE = 32                           ; a username, padded: the key
 INHIB = ^X10000000                      ; STS$M_INHIB_MSG: reported
@@ -136,6 +150,48 @@ NOW:    .BLKQ   1
 MASK:   .BLKQ   1                       ; a privilege's bit
 LINE:   .BLKB   256                     ; a line being made, .ASCIC
 PBIT:   .LONG   0                       ; PRIVLIST's privilege
+IDDSC:  .LONG   32                      ; an identifier's name, a parameter's value
+        .ADDRESS IDBUF
+IDLEN:  .WORD   0
+IDBUF:  .BLKB   32
+USERDSC:.LONG   32                      ; a user's, or a new name
+        .ADDRESS USERBUF
+USERLEN:.WORD   0
+USERBUF:.BLKB   32
+IDVAL:  .LONG   0                       ; an identifier
+IDATTR: .LONG   0                       ; its attributes
+HOLDER: .QUAD   0                       ; a holder: a UIC and 0
+RDBCTX: .LONG   0                       ; a search's context
+RDBCTX2:.LONG   0
+SETATTR:.LONG   0                       ; /ATTRIBUTES's: those set
+CLRATTR:.LONG   0                       ; and cleared
+NAMEDSC:.LONG   32                      ; a name $IDTOASC returns
+        .ADDRESS NAMEBUF
+NAMELEN:.WORD   0
+NAMEBUF:.BLKB   32
+MSGDSC: .LONG   255                     ; a message, $GETMSG's
+        .ADDRESS LINE+1
+MSGLEN: .WORD   0
+ATTRNAMES:                              ; the attributes, by bit
+        .ASCIC  "RESOURCE"
+        .ASCIC  "DYNAMIC"
+        .ASCIC  "NOACCESS"
+        .ASCIC  "SUBSYSTEM"
+        .ASCIC  "IMPERSONATE"
+        .ASCIC  "HOLDER_HIDDEN"
+        .ASCIC  "NAME_HIDDEN"
+        .BYTE   0
+P_IDNAME:
+        .ASCID  "ID_NAME"
+P_USER: .ASCID  "USER"
+P_NEWNAME:
+        .ASCID  "NEW_NAME"
+P_NAME: .ASCID  "NAME"
+P_ATTRS:.ASCID  "ATTRIBUTES"
+P_VALID:.ASCID  "VALUE.IDENTIFIER"
+P_VALUIC:
+        .ASCID  "VALUE.UIC"
+P_USERQ:.ASCID  "USER"
 P_USERNAME:
         .ASCID  "USERNAME"
 P_UIC:  .ASCID  "UIC"
@@ -320,6 +376,10 @@ DO:
         MOVL    #RMS$_DUP!INHIB, R0
         RET
 10$:    PRINT   "%UAF-I-ADDMSG, user record successfully added"
+        MOVL    REC+UAF$L_UIC, IDVAL    ; and its UIC identifier
+        BSBW    USERID
+        BSBW    ADDID
+        MOVL    #SS$_NORMAL, R0
 90$:    RET
 
 ; MODIFY username: the record, with the qualifiers' values.
@@ -349,6 +409,13 @@ DO:
         $DELETE RAB=UAFRAB
         BLBC    R0, 90$
         PRINT   "%UAF-I-REMMSG, record removed from system authorization file"
+        BSBW    USERID                  ; and its UIC identifier, if it has it
+        $ASCTOID_S NAME=IDDSC, ID=IDVAL
+        BLBC    R0, 80$
+        CMPL    IDVAL, REC+UAF$L_UIC
+        BNEQ    80$
+        BSBW    REMID
+80$:    MOVL    #SS$_NORMAL, R0
 90$:    RET
 
 ; SHOW username, or *: writes the record, or each one, whole, or a line
@@ -955,7 +1022,643 @@ PRIVLIST:
         BSBW    OUT
 90$:    RSB
 
+; USERID: KEY = a username, padded. Makes it IDDSC's name, without the
+; blanks. Uses R0-R5.
+USERID:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5>
+        LOCC    #^A/ /, #12, KEY
+        SUBL3   R0, #12, R0
+        MOVW    R0, IDDSC
+        MOVC3   R0, KEY, IDBUF
+        RSB
+
+; ADDID: IDDSC = a name, IDVAL its value, 0 for the next, SETATTR its
+; attributes. Adds the identifier, and says so, or why not. R0 = the
+; status, said. Uses R0-R5.
+ADDID:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5>
+        $ADD_IDENT_S NAME=IDDSC, ID=IDVAL, ATTRIB=SETATTR, RESID=IDVAL
+        BLBC    R0, 50$
+        TSTL    IDVAL
+        BLSS    10$
+        TEXT    "%UAF-I-RDBADDMSGU, identifier "
+        BRB     20$
+10$:    TEXT    "%UAF-I-RDBADDMSG, identifier "
+20$:    BSBW    ADDIDNAME
+        TEXT    " value "
+        BSBW    ADDVALUE
+        TEXT    " added to rights database"
+        BSBW    OUT
+        MOVL    #SS$_NORMAL, R0
+        RSB
+50$:    PUSHL   R0
+        TSTL    IDVAL
+        BLSS    60$
+        TEXT    "%UAF-E-RDBADDERRU, unable to add "
+        BRB     70$
+60$:    TEXT    "%UAF-E-RDBADDERR, unable to add "
+70$:    BSBW    ADDIDNAME
+        TEXT    " value "
+        BSBW    ADDVALUE
+        TEXT    " to rights database"
+        MOVL    (SP)+, R0
+        BSBW    FAILED
+        RSB
+
+; REMID: IDDSC = a name, IDVAL its value. Removes the identifier, and
+; says so, or why not. R0 = the status, said. Uses R0-R5.
+REMID:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5>
+        $REM_IDENT_S ID=IDVAL
+        BLBC    R0, 50$
+        TSTL    IDVAL
+        BLSS    10$
+        TEXT    "%UAF-I-RDBREMMSGU, identifier "
+        BRB     20$
+10$:    TEXT    "%UAF-I-RDBREMMSG, identifier "
+20$:    BSBW    ADDIDNAME
+        TEXT    " value "
+        BSBW    ADDVALUE
+        TEXT    " removed from rights database"
+        BSBW    OUT
+        MOVL    #SS$_NORMAL, R0
+        RSB
+50$:    PUSHL   R0
+        TEXT    "%UAF-E-RDBREMERR, unable to remove "
+        BSBW    ADDIDNAME
+        TEXT    " from rights database"
+        MOVL    (SP)+, R0
+        BSBW    FAILED
+        RSB
+
+; FAILED: LINE = an error, R0 = why. Writes both, the second as
+; -FACILITY-S-NAME, text. R0 = why, with STS$M_INHIB_MSG. Uses R0-R5.
+FAILED:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5>
+        PUSHL   R0
+        BSBW    OUT
+        MOVL    (SP)+, R0
+        BSBW    SECONDARY
+        BISL2   #INHIB, R0
+        RSB
+
+; SECONDARY: R0 = a status. Writes its message as a secondary one,
+; -FACILITY-S-NAME, text. Keeps R0. Uses R1-R5.
+SECONDARY:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5>
+        PUSHL   R0
+        $GETMSG_S MSGID=R0, MSGLEN=MSGLEN, BUFADR=MSGDSC
+        MOVB    MSGLEN, LINE
+        MOVB    #^A/-/, LINE+1
+        BSBW    OUT
+        MOVL    (SP)+, R0
+        RSB
+
+; ADDIDNAME: appends IDDSC's name to LINE. ADDVALUE: IDVAL, as AUTHORIZE
+; shows one: %X and 8 hex digits, or a UIC, [gggggg,mmmmmm] in octal.
+; Use R0-R5.
+ADDIDNAME:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5>
+        MOVAB   IDBUF, R1
+        MOVZWL  IDDSC, R2
+        BSBW    ADDSTR
+        RSB
+ADDVALUE:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5>
+        TSTL    IDVAL
+        BLSS    10$
+        TEXT    "["
+        EXTZV   #16, #16, IDVAL, R1
+        BSBW    ADDOCT6
+        TEXT    ","
+        MOVZWL  IDVAL, R1
+        BSBW    ADDOCT6
+        TEXT    "]"
+        RSB
+10$:    TEXT    "%X"
+        MOVL    IDVAL, R4
+        MOVL    #8, R5
+20$:    ROTL    #4, R4, R4
+        EXTZV   #0, #4, R4, R1
+        MOVZBL  HEXDIGITS[R1], R1
+        MOVZBL  LINE, R0
+        INCB    LINE
+        MOVB    R1, LINE+1[R0]
+        SOBGTR  R5, 20$
+        RSB
+
+; ADDOCT6: appends R1 in 6 octal digits to LINE. Uses R0-R3.
+ADDOCT6:
+        .JSB_ENTRY  SCRATCH=<R2, R3>
+        MOVL    #15, R3                 ; the first digit's bit
+10$:    EXTZV   R3, #3, R1, R2
+        ADDL2   #^A/0/, R2
+        MOVZBL  LINE, R0
+        INCB    LINE
+        MOVB    R2, LINE+1[R0]
+        SUBL2   #3, R3
+        BGEQ    10$
+        RSB
+
+; GETID: R1 = a parameter's name, .ASCID. Its value into IDDSC, in
+; capitals. R0 = CLI$GET_VALUE's status. Uses R0-R2.
+GETID:
+        .JSB_ENTRY  SCRATCH=<R2>
+        MOVW    #32, IDDSC
+        PUSHAW  IDDSC
+        PUSHAQ  IDDSC
+        PUSHL   R1
+        CALLS   #3, G^CLI$GET_VALUE
+        PUSHL   R0
+        MOVAB   IDBUF, R1
+        MOVZWL  IDDSC, R2
+        BSBW    UPCASE
+        MOVL    (SP)+, R0
+        RSB
+
+; ATTRS: /ATTRIBUTES's keywords into SETATTR, and, NOname, CLRATTR. R0 =
+; SS$_NORMAL, or SS$_BADPARAM for one it doesn't know, which it says.
+; Uses R0-R6.
+ATTRS:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5, R6>
+        CLRQ    SETATTR                 ; and CLRATTR
+10$:    MOVAQ   P_ATTRS, R1
+        BSBW    VALUE
+        BLBC    R0, 80$
+        MOVAB   VALBUF, R1
+        MOVZWL  VALLEN, R2
+        BSBW    UPCASE
+        MOVAB   VALBUF, R4
+        MOVZWL  VALLEN, R5
+        MOVAL   SETATTR, R6
+        CMPL    R5, #2
+        BLEQ    20$
+        CMPW    (R4), #^A/NO/
+        BNEQ    20$
+        CMPL    R5, #8                  ; NOACCESS is one
+        BNEQ    15$
+        CMPL    2(R4), #^A/ACCE/
+        BEQL    20$
+15$:    ADDL2   #2, R4
+        SUBL2   #2, R5
+        MOVAL   CLRATTR, R6
+20$:    MOVAB   ATTRNAMES, R3
+        CLRL    R2                      ; the bit
+30$:    MOVZBL  (R3)+, R0
+        BEQL    85$
+        CMPL    R0, R5
+        BNEQ    40$
+        PUSHR   #^M<R0, R2, R3, R4, R5>
+        CMPC3   R0, (R3), (R4)
+        POPR    #^M<R0, R2, R3, R4, R5>
+        BEQL    50$
+40$:    ADDL2   R0, R3
+        INCL    R2
+        BRB     30$
+50$:    BBSS    R2, (R6), 10$
+        BRB     10$
+80$:    MOVL    #SS$_NORMAL, R0
+        RSB
+85$:    TEXT    "%UAF-E-BADVALUE, error in value specification \"
+        MOVAB   VALBUF, R1
+        MOVZWL  VALLEN, R2
+        BSBW    ADDSTR
+        TEXT    "\"
+        BSBW    OUT
+        MOVL    #SS$_BADPARAM!INHIB, R0
+        RSB
+
+; IDVALUE: /VALUE's identifier into IDVAL: IDENTIFIER=n, %X80000000 and
+; n, n from %X10000 to %XFFFFFFF, or UIC=[g,m]; 0 without it. R0 =
+; SS$_NORMAL, or SS$_BADPARAM, which it says. Uses R0-R5.
+IDVALUE:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5>
+        CLRL    IDVAL
+        PUSHAL  IDVAL
+        PUSHAQ  P_VALUIC
+        CALLS   #2, G^GET_UIC
+        BLBS    R0, 80$
+        CMPL    R0, #CLI$_ABSENT
+        BNEQ    85$
+        MOVAQ   P_VALID, R1
+        BSBW    VALUE
+        BLBC    R0, 80$
+        BSBW    NUMBER
+        BLBC    R0, 85$
+        CMPL    R3, #^X10000
+        BLSSU   85$
+        CMPL    R3, #^XFFFFFFF
+        BGTRU   85$
+        BISL3   #^X80000000, R3, IDVAL
+80$:    MOVL    #SS$_NORMAL, R0
+        RSB
+85$:    TEXT    "%UAF-E-BADVALUE, error in value specification \"
+        MOVAB   VALBUF, R1
+        MOVZWL  VALLEN, R2
+        BSBW    ADDSTR
+        TEXT    "\"
+        BSBW    OUT
+        MOVL    #SS$_BADPARAM!INHIB, R0
+        RSB
+
+; NUMBER: VALBUF, VALLEN long, a number: decimal, %X hex or %O octal. R3
+; = its value. R0 = 1, or 0 if it isn't one. Uses R0-R5.
+NUMBER:
+        .JSB_ENTRY  SCRATCH=<R2, R4, R5>, OUTPUT=<R3>
+        MOVAB   VALBUF, R1
+        MOVZWL  VALLEN, R2
+        MOVL    #10, R4                 ; the base
+        CMPL    R2, #2
+        BLEQ    10$
+        CMPB    (R1), #^A/%/
+        BNEQ    10$
+        MOVL    #16, R4
+        CMPB    1(R1), #^A/X/
+        BEQL    5$
+        MOVL    #8, R4
+        CMPB    1(R1), #^A/O/
+        BNEQ    80$
+5$:     ADDL2   #2, R1
+        SUBL2   #2, R2
+10$:    CLRL    R3
+        TSTL    R2
+        BEQL    80$
+20$:    MOVZBL  (R1)+, R0
+        LOCC    R0, #16, HEXDIGITS
+        BEQL    80$
+        SUBL3   R0, #16, R0
+        CMPL    R0, R4
+        BGEQU   80$
+        MULL2   R4, R3
+        ADDL2   R0, R3
+        SOBGTR  R2, 20$
+        MOVL    #1, R0
+        RSB
+80$:    CLRL    R0
+        RSB
+
+; ADD/IDENTIFIER name: a new identifier.
+        .ENTRY  ADD_IDENT, ^M<R2, R3, R4, R5, R6>
+        MOVAQ   P_IDNAME, R1
+        BSBW    GETID
+        BLBC    R0, 90$
+        BSBW    ATTRS
+        BLBC    R0, 90$
+        BSBW    IDVALUE
+        BLBC    R0, 90$
+        BSBW    ADDID
+90$:    RET
+
+; REMOVE/IDENTIFIER name: removes it, and who holds it.
+        .ENTRY  REMOVE_IDENT, ^M<R2, R3, R4, R5, R6>
+        MOVAQ   P_IDNAME, R1
+        BSBW    GETID
+        BLBC    R0, 90$
+        $ASCTOID_S NAME=IDDSC, ID=IDVAL
+        BLBS    R0, 10$
+        PUSHL   R0
+        TEXT    "%UAF-E-RDBREMERR, unable to remove "
+        BSBW    ADDIDNAME
+        TEXT    " from rights database"
+        MOVL    (SP)+, R0
+        BSBW    FAILED
+        RET
+10$:    BSBW    REMID
+90$:    RET
+
+; GRANT/IDENTIFIER name user: the user, by its UIC identifier, holds it.
+        .ENTRY  GRANT, ^M<R2, R3, R4, R5, R6>
+        BSBW    TWOIDS
+        BLBC    R0, 90$
+        BSBW    ATTRS
+        BLBC    R0, 90$
+        $ASCTOID_S NAME=USERDSC, ID=HOLDER
+        BLBS    R0, 10$
+        PUSHL   R0
+        TEXT    "%UAF-E-GRANTUSR, user identifier "
+        BSBW    ADDUSER
+        TEXT    " does not exist; "
+        BSBW    ADDIDNAME
+        TEXT    " could not be granted"
+        MOVL    (SP)+, R0
+        BSBW    FAILED
+        RET
+10$:    $ASCTOID_S NAME=IDDSC, ID=IDVAL
+        BLBC    R0, 20$
+        $ADD_HOLDER_S ID=IDVAL, HOLDER=HOLDER, ATTRIB=SETATTR
+        BLBC    R0, 20$
+        TEXT    "%UAF-I-GRANTMSG, identifier "
+        BSBW    ADDIDNAME
+        TEXT    " granted to "
+        BSBW    ADDUSER
+        BSBW    OUT
+        MOVL    #SS$_NORMAL, R0
+        RET
+20$:    PUSHL   R0
+        TEXT    "%UAF-E-GRANTERR, unable to grant identifier "
+        BSBW    ADDIDNAME
+        TEXT    " to "
+        BSBW    ADDUSER
+        MOVL    (SP)+, R0
+        BSBW    FAILED
+90$:    RET
+
+; REVOKE/IDENTIFIER name user: the user holds it no more.
+        .ENTRY  REVOKE, ^M<R2, R3, R4, R5, R6>
+        BSBW    TWOIDS
+        BLBC    R0, 90$
+        $ASCTOID_S NAME=USERDSC, ID=HOLDER
+        BLBC    R0, 20$
+        $ASCTOID_S NAME=IDDSC, ID=IDVAL
+        BLBC    R0, 20$
+        $REM_HOLDER_S ID=IDVAL, HOLDER=HOLDER
+        BLBC    R0, 20$
+        TEXT    "%UAF-I-REVOKEMSG, identifier "
+        BSBW    ADDIDNAME
+        TEXT    " revoked from "
+        BSBW    ADDUSER
+        BSBW    OUT
+        MOVL    #SS$_NORMAL, R0
+        RET
+20$:    PUSHL   R0
+        TEXT    "%UAF-E-REVOKEERR, unable to revoke identifier "
+        BSBW    ADDIDNAME
+        TEXT    " from "
+        BSBW    ADDUSER
+        MOVL    (SP)+, R0
+        BSBW    FAILED
+90$:    RET
+
+; TWOIDS: the identifier's name into IDDSC, and the user's into USERDSC.
+; R0 = CLI$GET_VALUE's status. Uses R0-R5.
+TWOIDS:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5>
+        MOVAQ   P_IDNAME, R1
+        BSBW    GETID
+        BLBC    R0, 90$
+        MOVW    #32, USERDSC
+        PUSHAW  USERDSC
+        PUSHAQ  USERDSC
+        PUSHAQ  P_USER
+        CALLS   #3, G^CLI$GET_VALUE
+        BLBC    R0, 90$
+        MOVAB   USERBUF, R1
+        MOVZWL  USERDSC, R2
+        BSBW    UPCASE
+        MOVL    #SS$_NORMAL, R0
+90$:    RSB
+
+; ADDUSER: appends USERDSC's name to LINE. Uses R0-R5.
+ADDUSER:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5>
+        MOVAB   USERBUF, R1
+        MOVZWL  USERDSC, R2
+        BSBW    ADDSTR
+        RSB
+
+; RENAME/IDENTIFIER name new: the identifier's new name.
+        .ENTRY  RENAME, ^M<R2, R3, R4, R5, R6>
+        MOVAQ   P_IDNAME, R1
+        BSBW    GETID
+        BLBC    R0, 90$
+        MOVW    #32, USERDSC
+        PUSHAW  USERDSC
+        PUSHAQ  USERDSC
+        PUSHAQ  P_NEWNAME
+        CALLS   #3, G^CLI$GET_VALUE
+        BLBC    R0, 90$
+        CLRQ    SETATTR
+        CLRL    IDATTR                  ; no new value
+        BSBW    MODID
+90$:    RET
+
+; MODIFY/IDENTIFIER name: its new /NAME, /VALUE, /ATTRIBUTES.
+        .ENTRY  MODIFY_IDENT, ^M<R2, R3, R4, R5, R6>
+        MOVAQ   P_IDNAME, R1
+        BSBW    GETID
+        BLBC    R0, 90$
+        BSBW    ATTRS
+        BLBC    R0, 90$
+        BSBW    IDVALUE
+        BLBC    R0, 90$
+        MOVL    IDVAL, IDATTR           ; the new value
+        CLRW    USERDSC
+        MOVW    #32, USERDSC
+        PUSHAW  USERDSC
+        PUSHAQ  USERDSC
+        PUSHAQ  P_NAME
+        CALLS   #3, G^CLI$GET_VALUE
+        BLBS    R0, 10$
+        CLRW    USERDSC                 ; none
+10$:    BSBW    MODID
+90$:    RET
+
+; MODID: IDDSC = an identifier's name, USERDSC its new name, if it isn't
+; empty, IDATTR its new value, if it isn't 0, SETATTR and CLRATTR the
+; attributes to set and clear. Changes it, and says so, or why not. R0 =
+; the status, said. Uses R0-R5.
+MODID:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5>
+        $ASCTOID_S NAME=IDDSC, ID=IDVAL
+        BLBC    R0, 50$
+        MOVAQ   USERDSC, R1
+        TSTW    USERDSC
+        BNEQ    10$
+        CLRL    R1
+10$:    MOVAB   USERBUF, R2
+        MOVZWL  USERDSC, R3
+        PUSHR   #^M<R1>
+        MOVL    R2, R1
+        MOVL    R3, R2
+        BSBW    UPCASE
+        POPR    #^M<R1>
+        PUSHL   IDATTR
+        PUSHL   R1
+        PUSHL   CLRATTR
+        PUSHL   SETATTR
+        PUSHL   IDVAL
+        CALLS   #5, G^SYS$MOD_IDENT
+        BLBC    R0, 50$
+        TEXT    "%UAF-I-RDBMDFYMSG, identifier "
+        BSBW    ADDIDNAME
+        TEXT    " modified"
+        BSBW    OUT
+        MOVL    #SS$_NORMAL, R0
+        RSB
+50$:    PUSHL   R0
+        TEXT    "%UAF-E-RDBMDFYERR, unable to modify identifier "
+        BSBW    ADDIDNAME
+        MOVL    (SP)+, R0
+        BSBW    FAILED
+        RSB
+
+; SHOW/IDENTIFIER [name or *]: a line for each identifier, the holders
+; of each after it with /FULL; /VALUE's or /USER's alone.
+        .ENTRY  SHOW_IDENT, ^M<R2, R3, R4, R5, R6, R7>
+        BSBW    IDVALUE
+        BLBC    R0, 95$
+        PRESENT "FULL"
+        MOVL    R0, R7
+        TSTL    IDVAL
+        BNEQ    20$
+        MOVAQ   P_USERQ, R1             ; /USER: its UIC identifier
+        PUSHL   R1
+        BSBW    GETID
+        TSTL    (SP)+
+        BLBS    R0, 10$
+        MOVAQ   P_IDNAME, R1
+        BSBW    GETID
+        BLBS    R0, 5$
+        MOVW    #1, IDDSC               ; none: all of them
+        MOVB    #^A/*/, IDBUF
+5$:     CMPW    IDDSC, #1
+        BNEQ    10$
+        CMPB    IDBUF, #^A/*/
+        BEQL    30$
+10$:    $ASCTOID_S NAME=IDDSC, ID=IDVAL
+        BLBC    R0, 80$
+20$:    MOVL    IDVAL, R0
+        $IDTOASC_S ID=R0, NAMLEN=NAMELEN, NAMBUF=NAMEDSC, RESID=IDVAL, ATTRIB=IDATTR
+        BLBC    R0, 80$
+        BSBW    IDHEADER
+        BSBW    IDLINE
+        BRB     90$
+30$:    BSBW    IDHEADER                ; each one, by its name
+        CLRL    RDBCTX
+40$:    $IDTOASC_S ID=#-1, NAMLEN=NAMELEN, NAMBUF=NAMEDSC, RESID=IDVAL, ATTRIB=IDATTR, CONTXT=RDBCTX
+        BLBC    R0, 90$
+        BSBW    IDLINE
+        BRB     40$
+80$:    PUSHL   R0
+        TEXT    "%UAF-E-SHOWERR, unable to complete SHOW command"
+        MOVL    (SP)+, R0
+        BSBW    FAILED
+        RET
+90$:    MOVL    #SS$_NORMAL, R0
+95$:    RET
+
+; IDHEADER: SHOW/IDENTIFIER's heading. IDLINE: the identifier NAMEBUF
+; names, IDVAL, with IDATTR: its line, and its holders' with /FULL, R7's
+; low bit. Use R0-R6.
+IDHEADER:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5>
+        TEXT    "  Name                             Value           Attributes"
+        BSBW    OUT
+        RSB
+IDLINE:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5, R6>
+        TEXT    "  "
+        MOVAB   NAMEBUF, R1
+        MOVZWL  NAMELEN, R2
+        BSBW    ADDSTR
+        MOVL    #35, R3
+        BSBW    PAD
+        BSBW    ADDVALUE
+        MOVL    #51, R3
+        BSBW    PAD
+        MOVL    IDATTR, R6
+        BSBW    ADDATTRS
+        BSBW    OUT
+        BLBC    R7, 90$
+        CLRL    RDBCTX2                 ; the holders
+        CLRL    R6                      ; how many
+10$:    $FIND_HOLDER_S ID=IDVAL, HOLDER=HOLDER, ATTRIB=IDATTR, CONTXT=RDBCTX2
+        BLBC    R0, 90$
+        TSTL    R6
+        BNEQ    20$
+        TEXT    "    Holder                           Attributes"
+        BSBW    OUT
+20$:    INCL    R6
+        TEXT    "    "
+        MOVW    #32, NAMEDSC
+        $IDTOASC_S ID=HOLDER, NAMLEN=NAMELEN, NAMBUF=NAMEDSC
+        BLBC    R0, 30$
+        MOVAB   NAMEBUF, R1
+        MOVZWL  NAMELEN, R2
+        BSBW    ADDSTR
+        BRB     40$
+30$:    PUSHL   IDVAL                   ; a UIC with no name
+        MOVL    HOLDER, IDVAL
+        BSBW    ADDVALUE
+        MOVL    (SP)+, IDVAL
+40$:    MOVL    #37, R3
+        BSBW    PAD
+        PUSHL   R6
+        MOVL    IDATTR, R6
+        BSBW    ADDATTRS
+        MOVL    (SP)+, R6
+        BSBW    OUT
+        BRB     10$
+90$:    MOVW    #32, NAMEDSC
+        RSB
+
+; ADDATTRS: R6 = attributes. Appends their names, each with a blank after
+; it. Uses R0-R5.
+ADDATTRS:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5>
+        MOVAB   ATTRNAMES, R4
+        CLRL    R5
+10$:    MOVZBL  (R4), R0
+        BEQL    90$
+        BBC     R5, R6, 20$
+        MOVL    R4, R1
+        PUSHR   #^M<R4, R5>
+        BSBW    ADDCSTR
+        TEXT    " "
+        POPR    #^M<R4, R5>
+20$:    MOVZBL  (R4)+, R0
+        ADDL2   R0, R4
+        INCL    R5
+        BRB     10$
+90$:    RSB
+
+; SHOW/RIGHTS user: the identifiers the user holds, a line each.
+        .ENTRY  SHOW_RIGHTS, ^M<R2, R3, R4, R5, R6, R7>
+        MOVW    #32, USERDSC
+        PUSHAW  USERDSC
+        PUSHAQ  USERDSC
+        PUSHAQ  P_USERNAME
+        CALLS   #3, G^CLI$GET_VALUE
+        BLBS    R0, 10$
+        PRINT   "%UAF-I-NOIDNAME, no ID name was specified"
+        MOVL    #SS$_NORMAL, R0
+        RET
+10$:    MOVAB   USERBUF, R1
+        MOVZWL  USERDSC, R2
+        BSBW    UPCASE
+        $ASCTOID_S NAME=USERDSC, ID=HOLDER
+        BLBC    R0, 80$
+        CLRL    HOLDER+4
+        CLRL    RDBCTX
+        CLRL    R7                      ; how many
+20$:    $FIND_HELD_S HOLDER=HOLDER, ID=IDVAL, ATTRIB=IDATTR, CONTXT=RDBCTX
+        BLBC    R0, 90$
+        TSTL    R7
+        BNEQ    30$
+        TEXT    "Identifier                         Value           Attributes"
+        BSBW    OUT
+30$:    INCL    R7
+        MOVW    #32, NAMEDSC
+        $IDTOASC_S ID=IDVAL, NAMLEN=NAMELEN, NAMBUF=NAMEDSC
+        BLBC    R0, 20$
+        MOVL    IDATTR, R6
+        PUSHL   R7
+        CLRL    R7                      ; no holders shown
+        MOVL    R6, IDATTR
+        BSBW    IDLINE
+        MOVL    (SP)+, R7
+        BRB     20$
+80$:    PUSHL   R0
+        TEXT    "%UAF-E-SHOWERR, unable to complete SHOW command"
+        MOVL    (SP)+, R0
+        BSBW    FAILED
+        RET
+90$:    MOVL    #SS$_NORMAL, R0
+        RET
+
         .PSECT  $LITERAL$
 STAR:   .ASCII  "*"
+HEXDIGITS:
+        .ASCII  "0123456789ABCDEF"
 
         .END    START
