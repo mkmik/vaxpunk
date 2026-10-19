@@ -361,7 +361,10 @@ const DATA_DISK: Phase = Phase {
         "\nTerminal OPA0:, device type VT100, is online, record-oriented device, carriage\n    control.\n\n    Error count                    0\n    Reference count",
         "    Default buffer size                  80\n\n$ ",
         "%SYSTEM-F-DEVACTIVE, device is active",
-        "%RMS-E-DNR, device not ready, not mounted, or unavailable",
+        concat!(
+            "%DIRECT-E-OPENIN, error opening DKB0:[000000]*.*;* as input\n",
+            "-RMS-E-DNR, device not ready, not mounted, or unavailable",
+        ),
         "Directory DKB0:[SUB.DEEP]",
         "DEEP.TXT;1",
         "NOTE.TXT;1",
@@ -887,7 +890,7 @@ const LBR: Phase = Phase {
 /// which there are none.
 const WILDCARDS: Phase = Phase {
     name: "wildcards",
-    secs: 30,
+    secs: 60,
     steps: &[
         (
             "LBRTEST: ok",
@@ -932,7 +935,13 @@ const WILDCARDS: Phase = Phase {
                 "DIR/SIZE=ALL/OWNER/PROTECTION DKB0:[W]*.TMP\rDIR/TOTAL/SIZE DKB0:[W...]*.TMP\r",
                 "DIR/DATE=(BACKUP,EXPIRED)/SIZE=ALLOCATION DKB0:[W]TOP.TMP;1\r",
                 "DIR DKB0:[W]TOP.TMP;1,A.DIR\rDIR DKB0:[W.A]ONE.TMP,[W.B]TWO.TMP,NONE.TMP\r",
-                "DIR DKB0:[W]NONE.TMP,NONE.DIR\rDIR/VERSIONS=0\r",
+                "DIR DKB0:[W]NONE.TMP,NONE.DIR\rSHOW SYMBOL $STATUS\r",
+                "DIR DKB0:[W]TOP.TMP,[W]TOP.TMP;1\rDIR DKB0:[W]A.DIR;1,TOP.TMP\r",
+                "DIR DKB0:[W]TOP.TMP;1,[W.B],*.TMP\rDIR DKB0:[W...]ONE.TMP,TWO.TMP\r",
+                "DIR DKB0:[W.A]ONE.TMP,[.W.B]*.TMP\rDIR/VERSIONS=1 DKB0:[W]TOP.TMP,[W]TOP.TMP\r",
+                "DIR DKB0:[W]A.DIR,[NOSUCH]Y.TMP,TOP.TMP\rSHOW SYMBOL $STATUS\r",
+                "DIR DKB0:[W]A.DIR,Y.TXT;ABC,TOP.TMP\rDIR DKB0:[W]A.DIR,NOSUCHDEV:Y\r",
+                "DIR/VERSIONS=0\r",
             ),
         ),
         (
@@ -1002,6 +1011,64 @@ const WILDCARDS: Phase = Phase {
             "Grand total of 2 directories, 2 files.",
         ),
         "$ DIR DKB0:[W]NONE.TMP,NONE.DIR\n%DIRECT-W-NOFILES, no files found",
+        "Hex = 10018290",
+        concat!(
+            "$ DIR DKB0:[W]TOP.TMP,[W]TOP.TMP;1\n\nDirectory DKB0:[W]\n\n",
+            "TOP.TMP;2           TOP.TMP;1\n\nTotal of 2 files.\n\n",
+            "Directory DKB0:[W]\n\nTOP.TMP;1\n\nTotal of 1 file.\n\n",
+            "Grand total of 2 directories, 3 files.",
+        ),
+        concat!(
+            "$ DIR DKB0:[W]A.DIR;1,TOP.TMP\n\nDirectory DKB0:[W]\n\n",
+            "A.DIR;1             TOP.TMP;2\n\nTotal of 2 files.\n",
+        ),
+        concat!(
+            "$ DIR DKB0:[W]TOP.TMP;1,[W.B],*.TMP\n\nDirectory DKB0:[W]\n\n",
+            "TOP.TMP;1\n\nTotal of 1 file.\n\n",
+            "Directory DKB0:[W.B]\n\nTWO.TMP;1\n\nTotal of 1 file.\n\n",
+            "Grand total of 2 directories, 2 files.",
+        ),
+        concat!(
+            "$ DIR DKB0:[W...]ONE.TMP,TWO.TMP\n\n",
+            "Directory DKB0:[W.A]\n\nONE.TMP;1\n\nTotal of 1 file.\n\n",
+            "Directory DKB0:[W.B]\n\nTWO.TMP;1\n\nTotal of 1 file.\n\n",
+            "Grand total of 2 directories, 2 files.",
+        ),
+        concat!(
+            "$ DIR DKB0:[W.A]ONE.TMP,[.W.B]*.TMP\n\n",
+            "Directory DKB0:[W.A]\n\nONE.TMP;1\n\nTotal of 1 file.\n\n",
+            "Directory DKB0:[W.B]\n\nTWO.TMP;1\n\nTotal of 1 file.\n\n",
+            "Grand total of 2 directories, 2 files.",
+        ),
+        concat!(
+            "$ DIR/VERSIONS=1 DKB0:[W]TOP.TMP,[W]TOP.TMP\n\n",
+            "Directory DKB0:[W]\n\nTOP.TMP;2\n\nTotal of 1 file.\n\n",
+            "Directory DKB0:[W]\n\nTOP.TMP;2\n\nTotal of 1 file.\n\n",
+            "Grand total of 2 directories, 2 files.",
+        ),
+        concat!(
+            "$ DIR DKB0:[W]A.DIR,[NOSUCH]Y.TMP,TOP.TMP\n\n",
+            "Directory DKB0:[W]\n\nA.DIR;1\n\nTotal of 1 file.\n",
+            "%DIRECT-E-OPENIN, error opening DKB0:[NOSUCH]Y.TMP;* as input\n",
+            "-RMS-E-DNF, directory not found\n-SYSTEM-W-NOSUCHFILE, no such file\n",
+            "%DIRECT-E-OPENIN, error opening DKB0:[NOSUCH]TOP.TMP;* as input\n",
+            "-RMS-E-DNF, directory not found\n-SYSTEM-W-NOSUCHFILE, no such file\n",
+        ),
+        "Hex = 1001C04A",
+        concat!(
+            "$ DIR DKB0:[W]A.DIR,Y.TXT;ABC,TOP.TMP\n\nDirectory DKB0:[W]\n\n",
+            "%DIRECT-E-OPENIN, error opening Y.TXT;ABC as input\n",
+            "-RMS-F-SYN, file specification syntax error\n",
+            "%DIRECT-E-OPENIN, error opening TOP.TMP as input\n",
+            "-RMS-F-SYN, file specification syntax error\n",
+            "A.DIR;1\n\nTotal of 1 file.\n",
+        ),
+        concat!(
+            "$ DIR DKB0:[W]A.DIR,NOSUCHDEV:Y\n\nDirectory DKB0:[W]\n\n",
+            "A.DIR;1\n\nTotal of 1 file.\n",
+            "%DIRECT-E-OPENIN, error opening NOSUCHDEV:[W]Y.DIR;* as input\n",
+            "-RMS-F-DEV, error in device name or inappropriate device type for operation\n",
+        ),
         "$ DIR/VERSIONS=0\n%DIRECT-F-SYNTAX, error parsing '0'",
         concat!(
             "%DELETE-I-FILDEL, DKB0:[W]TOP.TMP;1 deleted\n",

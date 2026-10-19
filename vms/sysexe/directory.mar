@@ -1,14 +1,16 @@
         .TITLE  DIRECTORY Lists files
-        .IDENT  /V0.5/
+        .IDENT  /V0.6/
 ;
 ; DCL's DIRECTORY [spec] runs this. Lists the files spec names, as VMS's DIRECTORY
 ; does: the directory, then their names, four to a line or /COLUMNS's,
 ; then how many. A name too long for its column takes two.
-; spec is a list, by commas or plus signs. Each takes the device and
-; directory it leaves out from the one before; one that finds nothing is
-; passed over, and only none at all is %DIRECT-W-NOFILES. Files of the
-; same directory share a heading, unless a specification names a device
-; or a directory, which starts one of its own, as VMS's does.
+; spec is a list, by commas or plus signs. Each takes what it leaves out
+; from the one before, as VMS's LIB$FILE_SCAN and RMS's related names
+; do (NEXTSPEC). One that finds nothing is passed over; one that fails
+; is %DIRECT-E-OPENIN, and the list goes on. Only none found at all, and
+; no error, is %DIRECT-W-NOFILES. Files of the same directory share a
+; heading, unless a specification names a device or a directory, which
+; starts one of its own, as VMS's does.
 ; A search list's files are in more than one: each has its heading and
 ; total, and a grand total follows.
 ; RMS's $PARSE expands spec, what it leaves out taken from *.*;*, and the
@@ -25,8 +27,7 @@
 ; ponytail: a file the process may not read shows neither, where VMS's
 ; DIRECTORY asks the XQP for them. /FULL's directories are contiguous,
 ; and the times Files-11 doesn't keep, like the last access, are <None
-; specified>. An error but no file ends the list, where VMS's says
-; %DIRECT-E-OPENIN and goes on. Lines are 80 characters, not the terminal's width, and
+; specified>. Lines are 80 characters, not the terminal's width, and
 ; /COLUMNS lists more than one file a line only without /SIZE, /DATE,
 ; /OWNER and /PROTECTION, where VMS's cuts names to fit.
 ;
@@ -48,6 +49,8 @@ COLUMN = 20                             ; a name and its blanks
 LINEMAX = 80
 NAMEMAX = 18                            ; with /SIZE..., longer: a line of its own
 DIRECT_SYNTAX = ^X107910FC              ; %DIRECT-F-SYNTAX, inhibited, as VMS's
+DIRECT_NOFILES = ^X10018290             ; no files: RMS$_FNF, a warning, inhibited, as VMS's
+INHIB = ^X10000000                      ; STS$M_INHIB_MSG: DCL says nothing more
 D_OWNER = 0                             ; DETAIL's bits
 D_PROT = 1
 D_FULL = 2
@@ -89,9 +92,15 @@ SPECDSC:                                ; FILE, the parameter, if given
         .ADDRESS SPEC
 SPEC:   .BLKB   255
 MORE:   .LONG   0                       ; CLI$GET_VALUE's: CLI$_COMMA or CLI$_CONCAT if more follow
-STICKY: .BLKB   260                     ; the next one's default: the last one's device and directory, *.*;*
-STICKLEN:                               ; its length
-        .BLKB   1
+STICKY: .BLKB   300                     ; the next one's default, NEXTSPEC's
+DEVSAV: .BLKB   256                     ; the device this one's last file is on, .ASCIC
+STARVER:                                ; 1: this one's version is ;*, and the next one's
+        .LONG   1
+POISON: .LONG   0                       ; RMS$_SYN once one has no expanded string
+WORST:  .LONG   0                       ; the first error, inhibited
+SAVED:  .BLKB   256                     ; LINE, while OPENIN says one
+MSGDSC: .LONG   255                     ; a message's descriptor
+        .ADDRESS LINE+1
 NAM:    $NAM    ESA=EXP, ESS=255, RSA=RES, RSS=255
 EXP:    .BLKB   255
 RES:    .BLKB   255
@@ -199,12 +208,60 @@ DIRTYPE:
         MOVL    R0, MORE
         BLBS    R0, 5$
         CLRL    SPECDSC
-5$:     MOVB    SPECDSC, FAB+FAB$B_FNS
-        $PARSE  FAB=FAB
-        BLBC    R0, 90$
-        BSBW    STICK
+5$:     BSBW    ONESPEC
+        BSBW    NEXTSPEC
+        BLBS    R0, 5$
+        TSTL    FILES
+        BEQL    60$
+        BSBW    TOTAL
+60$:    CMPL    DIRS, #1
+        BLEQ    70$
+        PRINT   ""
+        ADDTEXT "Grand total of "
+        MOVL    DIRS, R1
+        BSBW    ADDDEC
+        ADDTEXT " directories, "
+        MOVL    GFILES, R1
+        MOVL    GUSED, R2
+        MOVL    GALLOC, R3
+        BSBW    COUNTS
+        BSBW    SAY
+70$:    MOVL    WORST, R0               ; an error's, else
+        BNEQ    90$
+        MOVL    #SS$_NORMAL, R0
+        TSTL    DIRS
+        BNEQ    90$
+        PRINT   "%DIRECT-W-NOFILES, no files found"
+        MOVL    #DIRECT_NOFILES, R0
+90$:    RET
+
+; ONESPEC: lists the files SPEC names, or says why it can't, OPENIN.
+; One whose $PARSE gives no expanded string spoils those after it, which
+; are RMS$_SYN, as VMS's. Uses R0-R8.
+ONESPEC:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5, R6, R7, R8>
+        CLRB    NAM+NAM$B_ESL
+        CLRB    NAM+NAM$B_RSL
+        CLRB    DEVSAV
+        MOVB    SPECDSC, FAB+FAB$B_FNS
+        MOVL    POISON, R0
+        BEQL    5$
+        CLRL    FAB+FAB$L_STV
+        BRB     80$
+5$:     $PARSE  FAB=FAB
+        BLBC    R0, 70$
+        CLRL    STARVER                 ; ;* goes on to the next one
+        CMPB    NAM+NAM$B_VER, #2
+        BNEQ    10$
+        MOVL    NAM+NAM$L_VER, R1
+        CMPB    1(R1), #^A/*/
+        BNEQ    10$
+        INCL    STARVER
 10$:    $SEARCH FAB=FAB
-        BLBC    R0, 50$
+        BLBC    R0, 60$
+        MOVZBL  NAM+NAM$B_DEV, R2       ; its device, for the next one's
+        MOVB    R2, DEVSAV
+        MOVC3   R2, @NAM+NAM$L_DEV, DEVSAV+1
         BSBW    NEWVER
         BLBC    R0, 10$
         BSBW    NEWDIR
@@ -225,77 +282,181 @@ DIRTYPE:
         BRB     10$
 30$:    BSBW    BRIEF
         BRB     10$
-50$:    CMPL    R0, #RMS$_NMF
-        BEQL    55$
+60$:    CMPL    R0, #RMS$_NMF           ; none, or no more
+        BEQL    90$
         CMPL    R0, #RMS$_FNF
-        BNEQ    90$
-55$:    BSBW    NEXTSPEC
-        BLBC    R0, 57$
-        BRW     5$
-57$:    TSTL    FILES
-        BNEQ    60$
-        PRINT   "%DIRECT-W-NOFILES, no files found"
+        BEQL    90$
         BRB     80$
-60$:    BSBW    TOTAL
-        CMPL    DIRS, #1
-        BLEQ    80$
-        PRINT   ""
-        ADDTEXT "Grand total of "
-        MOVL    DIRS, R1
-        BSBW    ADDDEC
-        ADDTEXT " directories, "
-        MOVL    GFILES, R1
-        MOVL    GUSED, R2
-        MOVL    GALLOC, R3
-        BSBW    COUNTS
-        BSBW    SAY
-80$:    MOVL    #SS$_NORMAL, R0
-90$:    RET
+70$:    TSTB    NAM+NAM$B_ESL
+        BNEQ    80$
+        MOVL    #RMS$_SYN, POISON
+80$:    BSBW    OPENIN
+90$:    RSB
 
-; STICK: after $PARSE, the next specification's default: the device
-; and directory of the expanded string, then *.*;*, in STICKY. Uses
-; R0-R5.
-STICK:
+; OPENIN: R0 = an error. Says, as VMS's DIRECTORY, %DIRECT-E-OPENIN,
+; error opening the file's resultant name, or expanded, or SPEC, as
+; input, then R0's message and FAB$L_STV's, if it has one, and leaves the
+; line of names being made as it was. The first error is the one
+; DIRECTORY returns. Uses R0-R5.
+OPENIN:
         .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5>
-        MOVZBL  NAM+NAM$B_DEV, R2
-        MOVZBL  NAM+NAM$B_DIR, R0
-        ADDL2   R0, R2
-        PUSHL   R2
-        MOVC3   R2, @NAM+NAM$L_DEV, STICKY
-        MOVL    (SP)+, R2
-        ADDB3   #DEFLEN, R2, STICKLEN
-        MOVC3   #DEFLEN, DEFSPEC, STICKY[R2]
+        PUSHL   R0
+        TSTL    WORST
+        BNEQ    5$
+        BISL3   #INHIB, R0, WORST
+5$:     MOVC3   #256, LINE, SAVED       ; and SLOT
+        PUSHL   SLOT
+        CLRB    LINE
+        ADDTEXT "%DIRECT-E-OPENIN, error opening "
+        MOVAB   RES, R1
+        MOVZBL  NAM+NAM$B_RSL, R2
+        BNEQ    10$
+        MOVAB   EXP, R1
+        MOVZBL  NAM+NAM$B_ESL, R2
+        BNEQ    10$
+        MOVAB   SPEC, R1
+        MOVZWL  SPECDSC, R2
+10$:    BSBW    ADD
+        ADDTEXT " as input"
+        BSBW    SAY
+        MOVL    4(SP), R0
+        BSBW    SAYMSG
+        MOVL    FAB+FAB$L_STV, R0
+        BEQL    20$
+        BSBW    SAYMSG
+20$:    MOVL    (SP)+, SLOT
+        MOVC3   #256, SAVED, LINE
+        TSTL    (SP)+
+        RSB
+
+; SAYMSG: R0 = a status. Writes its message, as one that follows another,
+; -FAC-S-NAME, text. Uses R0-R5.
+SAYMSG:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5>
+        MOVL    #255, MSGDSC
+        $GETMSG_S MSGID=R0, MSGLEN=MSGDSC, BUFADR=MSGDSC
+        MOVB    #^A/-/, LINE+1
+        MOVB    MSGDSC, LINE
+        BSBW    SAY
         RSB
 
 ; NEXTSPEC: the next specification of FILE's list into SPEC, if MORE
-; says one follows, and STICKY FAB's default. One that names a device
-; or a directory empties CURDIR, for a heading of its own. R0 = 1 if
-; there is one, 0 if not. Uses R0-R5.
+; says one follows, and its default, STICKY, as LIB$FILE_SCAN and RMS's
+; related names make it on VMS: what the last one's expanded string has,
+; its device the one its last file was found on, but the version, which
+; is ;* only if the last one that parsed had ;*, and the directory if this
+; one's is relative, which is the default directory's. One that names a
+; device or a directory ends the directory before it, its total, and
+; has a heading of its own, and its versions are counted anew. R0 = 1 if
+; there is one, 0 if not. Uses R0-R8.
 NEXTSPEC:
-        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5>
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5, R6, R7, R8>
         CMPL    MORE, #CLI$_COMMA
         BEQL    10$
         CMPL    MORE, #CLI$_CONCAT
         BEQL    10$
         CLRL    R0
         RSB
-10$:    MOVB    STICKLEN, FAB+FAB$B_DNS
-        MOVAB   STICKY, FAB+FAB$L_DNA
-        MOVL    #255, SPECDSC
+10$:    MOVL    #255, SPECDSC
         GETVALUE "FILE", SPECDSC, SPECDSC
         MOVL    R0, MORE
-        MOVZWL  SPECDSC, R2
-20$:    DECL    R2
-        BLSS    40$
-        CMPB    SPEC[R2], #58           ; :
-        BEQL    30$
-        CMPB    SPEC[R2], #91           ; [
-        BEQL    30$
-        CMPB    SPEC[R2], #60           ; <
+        CLRL    R7                      ; R7 = 1 if its directory is relative
+        CLRL    R8                      ; R8 = 1 if it names a device or directory
+        MOVZWL  SPECDSC, R6
+        CLRL    R2
+20$:    CMPL    R2, R6
+        BGEQU   30$
+        MOVZBL  SPEC[R2], R0
+        INCL    R2
+        CMPB    R0, #58                 ; :
+        BNEQ    22$
+        MOVL    #1, R8
+        BRB     20$
+22$:    CMPB    R0, #91                 ; [
+        BEQL    25$
+        CMPB    R0, #60                 ; <
         BNEQ    20$
-30$:    CLRB    CURDIR
-40$:    MOVL    #1, R0
+25$:    MOVL    #1, R8
+        CMPL    R2, R6                  ; [. [- [] or <. <- <>: relative
+        BGEQU   30$
+        MOVZBL  SPEC[R2], R0
+        CMPB    R0, #^A/./
+        BEQL    27$
+        CMPB    R0, #^A/-/
+        BEQL    27$
+        CMPB    R0, #93                 ; ]
+        BEQL    27$
+        CMPB    R0, #62                 ; >
+        BNEQ    30$
+27$:    INCL    R7
+30$:    TSTL    R8
+        BEQL    40$
+        TSTL    FILES
+        BEQL    35$
+        BSBW    TOTAL
+35$:    CLRB    CURDIR
+        CLRB    LASTNAME
+40$:    BSBW    STICK
+        MOVL    #1, R0
         RSB
+
+; STICK: R7 = 1 to leave out the directory. Makes STICKY, the default
+; NEXTSPEC says, from EXP, ESL long, DEVSAV and STARVER, and points FAB
+; at it. Uses R0-R6.
+STICK:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5, R6>
+        MOVZBL  NAM+NAM$B_ESL, R6       ; R6: its length up to the version
+        BEQL    80$                     ; none: the next one is RMS$_SYN anyway
+5$:     DECL    R6
+        BLSS    80$
+        CMPB    EXP[R6], #59            ; a semicolon
+        BNEQ    5$
+        CLRL    R4                      ; R4: past the device
+10$:    CMPL    R4, R6
+        BGEQU   80$
+        CMPB    EXP[R4], #58            ; :
+        BEQL    12$
+        INCL    R4
+        BRB     10$
+12$:    INCL    R4
+        MOVL    R4, R5                  ; R5: past the directory
+        CMPB    EXP[R5], #91            ; [
+        BEQL    15$
+        CMPB    EXP[R5], #60            ; <
+        BNEQ    20$
+15$:    INCL    R5
+        CMPL    R5, R6
+        BGEQU   80$
+        CMPB    EXP-1[R5], #93          ; ]
+        BEQL    20$
+        CMPB    EXP-1[R5], #62          ; >
+        BNEQ    15$
+20$:    PUSHL   R5                      ; 4(SP): past the directory
+        PUSHL   R4                      ; (SP): past the device
+        MOVAB   STICKY, R3              ; the device
+        MOVZBL  DEVSAV, R0
+        BEQL    22$
+        MOVC3   R0, DEVSAV+1, (R3)
+        BRB     24$
+22$:    MOVC3   (SP), EXP, (R3)
+24$:    TSTL    R7                      ; the directory
+        BNEQ    26$
+        SUBL3   (SP), 4(SP), R0
+        MOVAB   EXP, R1
+        ADDL2   (SP), R1
+        MOVC3   R0, (R1), (R3)
+26$:    SUBL3   4(SP), R6, R0           ; NAME.TYPE
+        MOVAB   EXP, R1
+        ADDL2   4(SP), R1
+        MOVC3   R0, (R1), (R3)
+        ADDL2   #8, SP
+        BLBC    STARVER, 28$
+        MOVW    #^X2A3B, (R3)+          ; ;*
+28$:    MOVAB   STICKY, R0
+        SUBL3   R0, R3, R0
+        MOVB    R0, FAB+FAB$B_DNS
+        MOVAB   STICKY, FAB+FAB$L_DNA
+80$:    RSB
 
 ; NUMBER: NUMDSC = a qualifier's value. R1 = it, if it is decimal
 ; digits, and R0 = 1; or, as VMS's DIRECTORY, it says it can't parse it,

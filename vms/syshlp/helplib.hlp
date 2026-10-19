@@ -539,9 +539,10 @@
 
   The files to list. What it leaves out is *.*;* in the default
   directory. * matches any characters and % one; [*], [dir...] and
-  [...] are wildcard directories. A list, by commas, takes each
-  one's device and directory, if it leaves them out, from the one
-  before.
+  [...] are wildcard directories. In a list, by commas, each one
+  takes what it leaves out from the one before: DIRECTORY [X]A.TXT,B
+  lists [X]A.TXT and [X]B.TXT. One that can't be read is an error,
+  and the list goes on.
 2 Qualifiers
 /BRIEF
   /BRIEF (default)

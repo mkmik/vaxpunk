@@ -77,6 +77,13 @@ status = "todo"
 note = "PRD-0007's WASI layer uses them"
 
 [[feature]]
+id = "file-scan"
+title = "LIB$FILE_SCAN and LIB$FILE_SCAN_END: a list's files, each name's defaults from the ones before"
+status = "todo"
+needs = ["/rms/core#related-names"]
+note = "DIRECTORY's NEXTSPEC does it by hand for now; COPY, DELETE and TYPE want it too"
+
+[[feature]]
 id = "data-vector"
 title = "DATA entries in the symbol vector"
 status = "done"
