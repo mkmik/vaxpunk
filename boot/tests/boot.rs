@@ -591,9 +591,90 @@ const PROTECTION: Phase = Phase {
         "COPYQ: done",
         "%RMS-E-PRV, insufficient privilege or file protection violation",
         "PROTTEST: [200,1] read DATA.TXT, and may not give it away, delete it or make a file there",
-        "DATA.TXT;1           [1,4]                            (RWED,RWED,RE,R)",
+        "DATA.TXT;1           [SYSTEM]                         (RWED,RWED,RE,R)",
         "DATA.TXT;1           [200,1]                          (RWED,RWED,RE,)",
         "NEW.TXT;2            (RWED,RWED,RE,RE)",
+    ],
+};
+
+/// SET SECURITY gives DATA.TXT, SYSTEM's again, with no access for the
+/// world, ACEs (ADR-0040): one for PROTCHILD's UIC, [200,1], lets PROTTEST
+/// read it; one denying its group, put before it, doesn't; then one for
+/// anyone, *, does. SHOW SECURITY and DIRECTORY/SECURITY show them, and the
+/// owner by name. A directory's default ACEs and protection go to a new
+/// file in it, and a new version gets the one before's ACL, but its
+/// NOPROPAGATE ACEs. A name that isn't an identifier, an ACE that isn't
+/// there to delete, /AFTER, /REPLACE and /LIKE; then DATA.TXT goes back
+/// to [200,1], and DKB0: to /PROTECTION=(W).
+const ACLS: Phase = Phase {
+    name: "acls",
+    secs: 30,
+    steps: &[
+        (
+            "COPYQ: done",
+            1,
+            concat!(
+                "DISMOUNT DKB0:\rMOUNT DKB0:\rSET SECURITY/OWNER=[1,4] DKB0:[000000]DATA.TXT\r",
+                "RUN PROTTEST\r",
+                "SET SECURITY/ACL=(IDENTIFIER=[200,1],ACCESS=READ) DKB0:[000000]DATA.TXT\r",
+                "RUN PROTTEST\r",
+            ),
+        ),
+        (
+            "PROTTEST: [200,1] read",
+            3,
+            concat!(
+                "SET SECURITY/ACL=(ID=[200,*],ACC=NONE) DKB0:[000000]DATA.TXT\r",
+                "SHOW SECURITY DKB0:[000000]DATA.TXT\rRUN PROTTEST\r",
+            ),
+        ),
+        (
+            "%RMS-E-PRV",
+            4,
+            concat!(
+                "SET SECURITY/ACL/DELETE/LOG DKB0:[000000]DATA.TXT\r",
+                "SET SECURITY/ACL=(IDENTIFIER=*,ACCESS=READ) DKB0:[000000]DATA.TXT\r",
+                "RUN PROTTEST\r",
+            ),
+        ),
+        (
+            "PROTTEST: [200,1] read",
+            4,
+            concat!(
+                "DIRECTORY/SECURITY DKB0:[000000]DATA.TXT\r",
+                "CREATE/DIRECTORY DKB0:[ACL]\r",
+                "SET SECURITY/ACL=((ID=[200,*],OPT=DEFAULT,ACC=R+W),(DEFAULT_PROTECTION,S:RWED,O:RWED,G:RE,W:R)) DKB0:[000000]ACL.DIR\r",
+                "COPY SYS$SYSDEVICE:[SYSMGR]WELCOME.TXT DKB0:[ACL]A.TXT\r",
+                "SET SECURITY/ACL=((ID=INTERACTIVE,ACC=R+W,OPT=NOPROPAGATE),(ID=[200,2],ACC=R)) DKB0:[ACL]A.TXT\r",
+                "COPY SYS$SYSDEVICE:[SYSMGR]WELCOME.TXT DKB0:[ACL]A.TXT\r",
+                "DIRECTORY/ACL DKB0:[ACL]\r",
+                "SHOW SECURITY DKB0:[ACL]A.TXT;2\r",
+                "SET SECURITY/ACL=(IDENTIFIER=NOSUCH,ACCESS=READ) DKB0:[ACL]A.TXT\r",
+                "SET SECURITY/ACL=(IDENTIFIER=LOCAL,ACCESS=FOO) DKB0:[ACL]A.TXT\r",
+                "SET SECURITY/ACL=(IDENTIFIER=LOCAL,ACCESS=READ)/DELETE DKB0:[ACL]A.TXT;2\r",
+                "SET SECURITY/ACL=(ID=LOCAL,ACC=R)/AFTER=(ID=[200,2]) DKB0:[ACL]A.TXT;2\r",
+                "SET SECURITY/ACL=(ID=[200,*])/REPLACE=(ID=REMOTE,ACC=E) DKB0:[ACL]A.TXT;2\r",
+                "SET SECURITY/LIKE=NAME=DKB0:[ACL]A.TXT;2/LOG DKB0:[ACL]A.TXT;1\r",
+                "SHOW SECURITY DKB0:[ACL]A.TXT;1\r",
+                "SET SECURITY/ACL/DELETE DKB0:[000000]DATA.TXT\r",
+                "SET SECURITY/OWNER=[200,1] DKB0:[000000]DATA.TXT\r",
+                "DISMOUNT DKB0:\rMOUNT/PROTECTION=(W) DKB0:\r",
+                "WRITE SYS$OUTPUT \"ACLS: \", \"done\"\r",
+            ),
+        ),
+    ],
+    lines: &[
+        "\nDKB0:[000000]DATA.TXT;1 object of class FILE\n     Owner: [SYSTEM]\n     Protection: (System: RWED, Owner: RWED, Group: RE, World)\n     Access Control List:\n          (IDENTIFIER=[200,*],ACCESS=NONE)\n          (IDENTIFIER=[200,1],ACCESS=READ)\n",
+        "%SET-I-MODIFIED, DKB0:[000000]DATA.TXT;1 modified",
+        "DATA.TXT;1           [SYSTEM]                         (RWED,RWED,RE,)\n          (IDENTIFIER=*,ACCESS=READ)\n",
+        "A.TXT;2\n          (IDENTIFIER=[200,2],ACCESS=READ)\n          (IDENTIFIER=[200,*],ACCESS=READ+WRITE)\nA.TXT;1\n          (IDENTIFIER=INTERACTIVE,OPTIONS=NOPROPAGATE,ACCESS=READ+WRITE)\n",
+        "     Protection: (System: RWED, Owner: RWED, Group: RE, World: R)",
+        "%SET-F-SYNTAX, error parsing 'NOSUCH,ACCESS=READ)'\n-SYSTEM-F-NOSUCHID, unknown rights identifier",
+        "%SET-F-SYNTAX, error parsing 'ACCESS=FOO)'\n-SYSTEM-F-IVACL, invalid access control list entry syntax",
+        "%SET-W-NOSUCHACE, ACE for object DKB0:[ACL]A.TXT;2, does not exist\n    (IDENTIFIER=LOCAL,ACCESS=READ)\n%SET-F-WRITEERR, error writing DKB0:[ACL]A.TXT;2",
+        "%SET-I-MODIFIED, DKB0:[ACL]A.TXT;1 modified",
+        "\nDKB0:[ACL]A.TXT;1 object of class FILE\n     Owner: [SYSTEM]\n     Protection: (System: RWED, Owner: RWED, Group: RE, World: R)\n     Access Control List:\n          (IDENTIFIER=[200,2],ACCESS=READ)\n          (IDENTIFIER=LOCAL,ACCESS=READ)\n          (IDENTIFIER=REMOTE,ACCESS=EXECUTE)\n",
+        "ACLS: done",
     ],
 };
 
@@ -606,7 +687,7 @@ const SHARING: Phase = Phase {
     secs: 20,
     steps: &[
         (
-            "COPYQ: done",
+            "ACLS: done",
             1,
             concat!(
                 "OPEN/WRITE OUT DKB0:[000000]SHARE.TXT\rWRITE OUT \"shared line\"\r",
@@ -878,7 +959,7 @@ const BACKUP: Phase = Phase {
         "%BACKUP-S-CREATED, created DKB0:[RESTORED]NEW.TXT;1",
         "Directory DKB0:[RESTORED]",
         "DATA.TXT;1           [200,1]                          (RWED,RWED,RE,)",
-        "NEW.TXT;2            [1,4]                            (RWED,RWED,RE,RE)",
+        "NEW.TXT;2            [SYSTEM]                         (RWED,RWED,RE,RE)",
     ],
 };
 
@@ -890,7 +971,7 @@ const RMS: Phase = Phase {
     name: "rms",
     secs: 90,
     steps: &[(
-        "NEW.TXT;2            [1,4]                            (RWED,RWED,RE,RE)",
+        "NEW.TXT;2            [SYSTEM]                         (RWED,RWED,RE,RE)",
         1,
         concat!(
             "@SYS$MANAGER:SPILLTEST\r",
@@ -1122,9 +1203,9 @@ const WILDCARDS: Phase = Phase {
         "A.DIR;1\nA_RATHER_LONG_NAME.TMP;1\nB.DIR;1\nTOP.TMP;2\n\nTotal of 4 files.",
         concat!(
             "A_RATHER_LONG_NAME.TMP;1\n",
-            "                              1/1           [1,4]                            (RWED,RWED,RE,)\n",
-            "TOP.TMP;2                     1/1           [1,4]                            (RWED,RWED,RE,)\n",
-            "TOP.TMP;1                     1/1           [1,4]                            (RWED,RWED,RE,)\n",
+            "                              1/1           [SYSTEM]                         (RWED,RWED,RE,)\n",
+            "TOP.TMP;2                     1/1           [SYSTEM]                         (RWED,RWED,RE,)\n",
+            "TOP.TMP;1                     1/1           [SYSTEM]                         (RWED,RWED,RE,)\n",
             "\nTotal of 3 files, 3/3 blocks.",
         ),
         concat!(
@@ -1296,10 +1377,13 @@ const STARTUP: Phase = Phase {
 /// AUTHORIZE adds JOE, in another UIC group, with a few privileges and
 /// his default directory on DKB0:, gives HELP SHOW from UAFHELP.HLB, and
 /// Return twice, shows him, whole and on a line, and
-/// lists every user in SYSUAF.LIS; SYSTEM changes its password with SET
+/// lists every user in SYSUAF.LIS; SYSTEM adds the identifier PAYROLL,
+/// grants it to JOE and gives a file an ACE that lets PAYROLL read it,
+/// which the world may not; SYSTEM changes its password with SET
 /// PASSWORD, after getting the old one wrong, defines SYS$WELCOME, which
 /// each login after says in place of Welcome to vaxpunk, and logs out. JOE logs in,
-/// with his UIC, privileges and directory, can't run AUTHORIZE or
+/// with his UIC, privileges, directory and rights, PAYROLL among them,
+/// reads the file, can't run AUTHORIZE or
 /// OPCCRASH, and logs out; SYSTEM logs in with its new password, and
 /// PHNTEST logs JOE in on a pseudo terminal: SYSTEM's PHONE rings him, he
 /// answers, each says something, SYSTEM lists who can be called with
@@ -1334,6 +1418,11 @@ const USERS: Phase = Phase {
             "%UAF-I-LSTMSG2",
             1,
             concat!(
+                "MCR AUTHORIZE ADD/IDENTIFIER PAYROLL\rMCR AUTHORIZE GRANT/IDENTIFIER PAYROLL JOE\r",
+                "MCR AUTHORIZE SHOW/IDENTIFIER/FULL PAYROLL\rMCR AUTHORIZE SHOW/RIGHTS JOE\r",
+                "OPEN/WRITE F DKB0:[000000]PAY.TXT\rWRITE F \"PAYROLL: \", \"readable\"\rCLOSE F\r",
+                "SET SECURITY/PROTECTION=(W)/ACL=(IDENTIFIER=PAYROLL,ACCESS=READ) DKB0:[000000]PAY.TXT\r",
+                "DISMOUNT DKB0:\rMOUNT DKB0:\r",
                 "SET PASSWORD\rwrongpw\rSET PASSWORD\rmanager\rnewpw\rnewpw\r",
                 "DEFINE/SYSTEM SYS$WELCOME \"Have a nice day\"\rLOGOUT\r",
             ),
@@ -1347,6 +1436,7 @@ const USERS: Phase = Phase {
             2,
             concat!(
                 "SHOW PROCESS/PRIVILEGES\rSHOW DEFAULT\rSHOW LOGICAL SYS$LOGIN\r",
+                "SHOW PROCESS/RIGHTS\rTYPE DKB0:[000000]PAY.TXT\r",
                 "MCR AUTHORIZE SHOW JOE\rMCR OPCCRASH\rLOGOUT\r",
             ),
         ),
@@ -1377,6 +1467,14 @@ const USERS: Phase = Phase {
         "Default:  DKB0:[000000]",
         "Authorized Privileges: \n  TMPMBX       OPER         NETMBX",
         "%UAF-I-MDFYMSG, user record(s) updated",
+        "%UAF-I-RDBADDMSGU, identifier JOE value [000200,000001] added to rights database",
+        "%UAF-I-RDBADDMSG, identifier PAYROLL value %X80010000 added to rights database",
+        "%UAF-I-GRANTMSG, identifier PAYROLL granted to JOE",
+        "  PAYROLL                          %X80010000      \n    Holder                           Attributes\n    JOE",
+        "Identifier                         Value           Attributes\n  PAYROLL                          %X80010000",
+        "Process rights:\n JOE                               resource\n INTERACTIVE",
+        " LOCAL                             \n PAYROLL",
+        "PAYROLL: readable",
         " JOE                   JOE             [200,1]       USERS      Normal   4 DKB0:[000000]",
         " SYSTEM MANAGER        SYSTEM          [1,4]         SYSTEM     All      4 SYS$SYSROOT:[SYSMGR]",
         "%UAF-I-LSTMSG2, listing file SYSUAF.LIS complete",
@@ -1409,6 +1507,7 @@ const PHASES: &[Phase] = &[
     STOP_ID,
     PRIVILEGES,
     PROTECTION,
+    ACLS,
     SHARING,
     SET_FILE,
     TERMINAL,
@@ -1597,13 +1696,14 @@ fn boot() {
     );
     assert_eq!(
         text.matches("%RMS-E-PRV").count(),
-        3,
-        "PROTTEST before SET PROTECTION=(W:R) and after MOUNT/PROTECTION=(W), JOE's AUTHORIZE"
+        5,
+        "PROTTEST before SET PROTECTION=(W:R), after MOUNT/PROTECTION=(W), with no ACE \
+         and with one denying its group, JOE's AUTHORIZE"
     );
     assert_eq!(
         text.matches("PROTTEST: [200,1] read").count(),
-        2,
-        "PROTTEST by the world's access and by the owner's"
+        4,
+        "PROTTEST by the world's access, the owner's, its UIC's ACE and *'s"
     );
     assert_eq!(
         text.matches("*INTERRUPT*").count(),

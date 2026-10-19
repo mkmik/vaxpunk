@@ -1360,9 +1360,11 @@ SHOWRIGHTS:
         MOVL    #35, R3
         BSBW    PADTO
         BBC     #0, 4(R6), 30$          ; KGB$M_RESOURCE
-        ADDTEXT "resource "
+        ADDTEXT "resource"
 30$:    BBC     #1, 4(R6), 40$          ; KGB$M_DYNAMIC
-        ADDTEXT "dynamic "
+        BBC     #0, 4(R6), 35$
+        ADDTEXT " "
+35$:    ADDTEXT "dynamic"
 40$:    BSBW    SAY
         ADDL2   #8, R6
         BRB     10$

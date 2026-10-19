@@ -107,7 +107,7 @@ MAINTNAME:                              ; the maintenance record's name
         BSBW    RDBOPEN
         BLBC    R0, 90$
         MOVL    4(AP), R0
-        BSBW    IDENT
+        BSBW    IDREC
         BLBC    R0, 80$
         BRB     50$
 20$:    MOVL    #SS$_INSFARG, R0        ; each in turn, from the context's
@@ -216,7 +216,7 @@ MAINTNAME:                              ; the maintenance record's name
         BSBW    RDBOPEN
         BLBC    R0, 90$
         MOVL    4(AP), R0
-        BSBW    IDENT
+        BSBW    IDREC
         BLBC    R0, 70$
 20$:    BSBW    SEQGET                  ; its holders' records follow it
         BSBW    NOTFOUND
@@ -298,7 +298,7 @@ MAINTNAME:                              ; the maintenance record's name
         BLEQU   30$
 25$:    MOVL    #FIRSTID, R9
 30$:    MOVL    R9, R0                  ; one that is free
-        BSBW    IDENT
+        BSBW    IDREC
         BLBC    R0, 35$
         INCL    R9
         BRB     20$
@@ -309,7 +309,7 @@ MAINTNAME:                              ; the maintenance record's name
         BLBC    R0, 80$
         BRB     50$
 40$:    MOVL    R9, R0
-        BSBW    IDENT
+        BSBW    IDREC
         BLBC    R0, 45$
         MOVL    #SS$_DUPIDENT, R0
         BRB     80$
@@ -339,7 +339,7 @@ MAINTNAME:                              ; the maintenance record's name
         BSBW    RDBOPEN
         BLBC    R0, 90$
         MOVL    4(AP), R0
-        BSBW    IDENT
+        BSBW    IDREC
         BLBC    R0, 80$
 10$:    MOVL    4(AP), F_KEY(R11)       ; what it holds
         CLRL    F_KEY+4(R11)
@@ -387,7 +387,7 @@ MAINTNAME:                              ; the maintenance record's name
         BSBW    RDBOPEN
         BLBC    R0, 90$
         MOVL    @8(AP), R0              ; the holder's identifier
-        BSBW    IDENT
+        BSBW    IDREC
         BLBC    R0, 80$
         BSBW    HOLDER                  ; holds it already?
         BLBC    R0, 10$
@@ -396,7 +396,7 @@ MAINTNAME:                              ; the maintenance record's name
 10$:    CMPL    R0, #SS$_NOSUCHID
         BNEQ    80$
         MOVL    4(AP), R0               ; the identifier, and its attributes
-        BSBW    IDENT
+        BSBW    IDREC
         BLBC    R0, 80$
         MOVL    4(AP), F_TMP+KGB$L_IDENTIFIER(R11)
         MCOML   F_REC+KGB$L_ATTRIBUTES(R11), R0
@@ -451,7 +451,7 @@ MAINTNAME:                              ; the maintenance record's name
         BSBW    RDBOPEN
         BLBC    R0, 90$
         MOVL    4(AP), R0               ; the identifier's attributes
-        BSBW    IDENT
+        BSBW    IDREC
         BLBC    R0, 80$
         MCOML   F_REC+KGB$L_ATTRIBUTES(R11), R9
         BICL3   R9, 12(AP), R9          ; those to set it has
@@ -493,7 +493,7 @@ MAINTNAME:                              ; the maintenance record's name
         BSBW    RDBOPEN
         BLBC    R0, 5$
         MOVL    4(AP), R0
-        BSBW    IDENT
+        BSBW    IDREC
         BLBC    R0, 80$
         MOVL    16(AP), R1              ; its name
         BEQL    20$
@@ -507,7 +507,7 @@ MAINTNAME:                              ; the maintenance record's name
         BRB     80$
 10$:    MOVC3   #KGB$S_NAME, F_KEY(R11), F_TMP(R11)
         MOVL    4(AP), R0
-        BSBW    IDENT
+        BSBW    IDREC
         BLBC    R0, 80$
         MOVC3   #KGB$S_NAME, F_TMP(R11), F_REC+KGB$T_NAME(R11)
         BSBW    UPDATE
@@ -515,7 +515,7 @@ MAINTNAME:                              ; the maintenance record's name
 20$:    TSTL    12(AP)                  ; its holders lose clr_attrib's
         BEQL    30$
         MOVL    4(AP), R0
-        BSBW    IDENT
+        BSBW    IDREC
         BLBC    R0, 80$
 25$:    BSBW    SEQGET
         BLBC    R0, 30$
@@ -526,7 +526,7 @@ MAINTNAME:                              ; the maintenance record's name
         BLBC    R0, 80$
         BRB     25$
 30$:    MOVL    4(AP), R0               ; and it, set_attrib's too
-        BSBW    IDENT
+        BSBW    IDREC
         BLBC    R0, 80$
         BICL2   12(AP), F_REC+KGB$L_ATTRIBUTES(R11)
         BISL2   8(AP), F_REC+KGB$L_ATTRIBUTES(R11)
@@ -549,7 +549,7 @@ MAINTNAME:                              ; the maintenance record's name
 RENUMBER:
         .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5, R6, R7, R8, R9, R10>
         MOVL    20(AP), R0
-        BSBW    IDENT
+        BSBW    IDREC
         BLBC    R0, 10$
         MOVL    #SS$_DUPLNAM, R0
         RSB
@@ -734,10 +734,10 @@ NOTFOUND:
 10$:    MOVL    #SS$_NOSUCHID, R0
 90$:    RSB
 
-; IDENT: R0 = an identifier, R11 = a frame. Reads its record, of its
+; IDREC: R0 = an identifier, R11 = a frame. Reads its record, of its
 ; name, into the frame's record. R0 = SS$_NORMAL, SS$_NOSUCHID, or RMS's
 ; error. Uses R0-R1.
-IDENT:
+IDREC:
         .JSB_ENTRY
         MOVL    R0, F_KEY(R11)
         CLRL    R0
@@ -761,7 +761,7 @@ IDENT:
 HOLDER:
         .JSB_ENTRY
         MOVL    4(AP), R0
-        BSBB    IDENT
+        BSBB    IDREC
         BLBC    R0, 90$
 10$:    BSBB    SEQGET
         BSBB    NOTFOUND
@@ -801,7 +801,7 @@ MAINT:
         ADDL3   #1, R9, F_REC+KGB$L_NEXT_ID(R11)
         MOVL    #KGB$K_MAINT_RECORD, R0
         MOVAB   F_REC(R11), R1
-        BSBB    PUT
+        BSBB    PUTREC
         RSB
 20$:    BLBC    (SP)+, 70$
         ADDL3   #1, R9, F_REC+KGB$L_NEXT_ID(R11)
@@ -817,12 +817,12 @@ MAINT:
 PUTTMP:
         .JSB_ENTRY
         MOVAB   F_TMP(R11), R1
-        BSBB    PUT
+        BSBB    PUTREC
         RSB
 
-; PUT: R0 = a record's size, R1 = the record, R11 = a frame. Writes it.
+; PUTREC: R0 = a record's size, R1 = the record, R11 = a frame. Writes it.
 ; R0 = SS$_NORMAL or RMS's error. Uses R0-R1.
-PUT:
+PUTREC:
         .JSB_ENTRY
         MOVW    R0, F_RAB+RAB$W_RSZ(R11)
         MOVL    R1, F_RAB+RAB$L_RBF(R11)

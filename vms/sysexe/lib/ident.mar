@@ -24,9 +24,9 @@ ID:     .LONG   0
 ACEDSC: .LONG   12
         .ADDRESS ACE
 TEXTDSC:.LONG   64                      ; its text
-        .ADDRESS TEXT
+        .ADDRESS FMTTEXT
 TEXTLEN:.WORD   0
-TEXT:   .BLKB   64
+FMTTEXT:   .BLKB   64
 
         .PSECT  IDENT_CODE, EXE, LONG
 ; ID_TEXT id, buffer: writes the identifier id's text in the buffer,
@@ -37,7 +37,7 @@ TEXT:   .BLKB   64
         MOVZWL  TEXTLEN, R0
         SUBL2   #PREFIX+SUFFIX, R0      ; between them
         PUSHL   R0
-        MOVC3   R0, TEXT+PREFIX, @8(AP)
+        MOVC3   R0, FMTTEXT+PREFIX, @8(AP)
         MOVL    (SP)+, R0
         RET
 

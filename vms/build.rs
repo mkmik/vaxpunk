@@ -547,8 +547,7 @@ fn disk(path: &Path, images: &[(String, Vec<u8>)]) {
             privileges: 1 << 15 | 1 << 20,
             password: b"",
         },
-    ]
-    ;
+    ];
     let records = users.each_ref().map(|u| u.record());
     let (fid, _) = ok(vol.load_indexed(&fdl.spec, &records, "[SYSEXE]SYSUAF.DAT"));
     let mut attrs = ok(vol.attributes(fid));
@@ -564,9 +563,19 @@ fn disk(path: &Path, images: &[(String, Vec<u8>)]) {
     rights[0][48..50].copy_from_slice(&0x0101u16.to_le_bytes()); // KGB$K_LEVEL1
     rights[0][60..64].copy_from_slice(&0x8001_0000u32.to_le_bytes()); // KGB$L_NEXT_ID
     for u in &users {
-        rights.push(identifier((u.uic[0] as u32) << 16 | u.uic[1] as u32, u.name));
+        rights.push(identifier(
+            (u.uic[0] as u32) << 16 | u.uic[1] as u32,
+            u.name,
+        ));
     }
-    let environmental = [&b"BATCH"[..], b"DIALUP", b"INTERACTIVE", b"LOCAL", b"NETWORK", b"REMOTE"];
+    let environmental = [
+        &b"BATCH"[..],
+        b"DIALUP",
+        b"INTERACTIVE",
+        b"LOCAL",
+        b"NETWORK",
+        b"REMOTE",
+    ];
     for (i, name) in environmental.into_iter().enumerate() {
         rights.push(identifier(0x8000_0001 + i as u32, name));
     }

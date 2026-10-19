@@ -1265,25 +1265,25 @@ IDVALUE:
 ; = its value. R0 = 1, or 0 if it isn't one. Uses R0-R5.
 NUMBER:
         .JSB_ENTRY  SCRATCH=<R2, R4, R5>, OUTPUT=<R3>
-        MOVAB   VALBUF, R1
+        MOVAB   VALBUF, R5
         MOVZWL  VALLEN, R2
         MOVL    #10, R4                 ; the base
         CMPL    R2, #2
         BLEQ    10$
-        CMPB    (R1), #^A/%/
+        CMPB    (R5), #^A/%/
         BNEQ    10$
         MOVL    #16, R4
-        CMPB    1(R1), #^A/X/
+        CMPB    1(R5), #^A/X/
         BEQL    5$
         MOVL    #8, R4
-        CMPB    1(R1), #^A/O/
+        CMPB    1(R5), #^A/O/
         BNEQ    80$
-5$:     ADDL2   #2, R1
+5$:     ADDL2   #2, R5
         SUBL2   #2, R2
 10$:    CLRL    R3
         TSTL    R2
         BEQL    80$
-20$:    MOVZBL  (R1)+, R0
+20$:    MOVZBL  (R5)+, R0
         LOCC    R0, #16, HEXDIGITS
         BEQL    80$
         SUBL3   R0, #16, R0
