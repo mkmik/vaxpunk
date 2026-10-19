@@ -48,7 +48,7 @@
         .EXTERNAL DCL$NAMESCAN, DCL$NOON, DCL$ONSEV, DCL$PROCNAM, DCL$SAMESTR
         .EXTERNAL DCL$SAVESP, DCL$SKIP, DCL$SYMNAM, DCL$TOINT, DCL$TOSTR
         .EXTERNAL DCL$VERIFY, DCL$VSTKEND, DCL$WARN, DCL$DONE, DCL$MSG
-        .EXTERNAL DCL$ADD, DCL$ADDCSTR, DCL$SAY, PRV_NAMES
+        .EXTERNAL DCL$ADD, DCL$ADDCSTR, DCL$SAY, DCL$PROMPT, PRV_NAMES
 
 ; FUNC name, min, max, routine: an entry of FUNCS: the name, .ASCIC, the
 ; fewest and most arguments, and the routine; RAW for min, a routine that
@@ -214,8 +214,6 @@ S_OTHER:
         .ASCIC  "OTHER"
 S_INT:  .ASCIC  "INTEGER"
 S_STR:  .ASCIC  "STRING"
-S_PROMPT:
-        .ASCIC  "$ "
 HEX:    .ASCII  "0123456789ABCDEF"
 INPUT:  .ASCID  "SYS$INPUT"
 DISK:   .ASCID  "SYS$DISK"
@@ -909,7 +907,7 @@ ENVIRON:
         MOVAB   S_INTER, R2
         BSBW    DCL$SAMESTR
         BRB     75$
-95$:    MOVAB   S_PROMPT, R1
+95$:    MOVAB   DCL$PROMPT, R1
 99$:    BSBW    RESCSTR
         RSB
 
