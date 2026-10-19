@@ -84,9 +84,9 @@ needs = ["/net/remote-files"]
 
 [[feature]]
 id = "security"
-title = "/SECURITY: a file's ACL"
-status = "todo"
-note = "ACLs (t8y:/exec/acls) are a non-goal of Milestone 1"
+title = "/ACL and /SECURITY: a file's ACL"
+status = "done"
+note = "ADR-0040; and the ACL in /FULL"
 
 [[needs]]
 on = "/rms/core"
@@ -128,6 +128,8 @@ vaxpunk's is `vms/sysexe/directory.mar`, an image DCL runs with
 `*.*;*` for what it leaves out, finds files with `$SEARCH`, walks search
 lists such as `SYS$SYSTEM:`, and with `/OWNER`, `/PROTECTION` and
 `/FULL` opens each file for its XABs, as do `/SIZE` and `/DATE`.
+`/ACL`, `/SECURITY` and `/FULL` read the ACL with `$GET_SECURITY` and
+show owners by name, `[SYSTEM]`.
 `/FULL`'s report matched OpenVMS Alpha's on PRD-0008's fixtures, and the
 other qualifiers' columns match what OpenVMS Alpha's DIRECTORY wrote in
 the oracle: with `/SIZE` a name of 19 or more characters has a line of

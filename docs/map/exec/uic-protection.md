@@ -74,7 +74,13 @@ note = "DESIGN-0002 Files ponytail"
 
 [[feature]]
 id = "security-services"
-title = "$CHKPRO, $CHECK_ACCESS, $GET_SECURITY and $SET_SECURITY; SET and SHOW SECURITY"
+title = "$GET_SECURITY and $SET_SECURITY; SET and SHOW SECURITY"
+status = "done"
+note = "ADR-0040; the class FILE only, SS$_NOCLASS for the others"
+
+[[feature]]
+id = "check-services"
+title = "$CHKPRO and $CHECK_ACCESS"
 status = "todo"
 
 [[feature]]
@@ -85,8 +91,8 @@ status = "todo"
 [[feature]]
 id = "named-uics"
 title = "Named UICs, [JOE] for [200,1], from UIC identifiers"
-status = "todo"
-note = "UIC identifiers come with t8y:/exec/rights-database"
+status = "done"
+note = "t8y:/exec/rights-database; $PARSE_ACL and $FORMAT_ACL"
 
 [[needs]]
 on = "/exec/privileges"
@@ -125,5 +131,9 @@ header's owner and mask after its volume's; RMS checks on `$OPEN`,
 `$CREATE` and `$ERASE` and for each directory a lookup reads, and the
 image activator wants execute access. `PROTTEST` checks it from a
 process of another UIC. Left for Milestone 1: mailboxes' masks and the
-process's default protection. The other object classes, the security
-services and named UICs are not planned yet.
+process's default protection. `$GET_SECURITY`, `$SET_SECURITY`, `SET
+SECURITY` and `SHOW SECURITY` take the class `FILE`, and owners show by
+name, `[SYSTEM]`
+([ADR-0040](../../adr/0040-acls-in-file-headers-and-rights-identifiers.md));
+the other object classes, `$CHKPRO` and `$CHECK_ACCESS` are not planned
+yet.

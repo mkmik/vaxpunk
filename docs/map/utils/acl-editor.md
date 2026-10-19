@@ -36,6 +36,6 @@ deletes or replaces entries from the command line, and `SHOW SECURITY`
 lists them. Default ACEs on a directory propagate to files created in
 it.
 
-vaxpunk has no ACLs. They are a non-goal of PRD-0003, whose open
-question asks whether they come in Milestone 1 after all; `SYSPRV` and
-UIC groups cover the cases it lists.
+vaxpunk has ACLs on files and `SET SECURITY/ACL`
+([ADR-0040](../../adr/0040-acls-in-file-headers-and-rights-identifiers.md)),
+but no `EDIT/ACL`.

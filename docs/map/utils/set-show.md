@@ -128,8 +128,8 @@ status = "todo"
 [[feature]]
 id = "security"
 title = "SET SECURITY and SHOW SECURITY: owners, protection and ACLs of any object"
-status = "todo"
-note = "ACLs (t8y:/exec/acls) are a non-goal of Milestone 1"
+status = "done"
+note = "ADR-0040; the class FILE only, as the services"
 
 [[feature]]
 id = "node-name"
@@ -185,12 +185,14 @@ vaxpunk's `SET.EXE` is `vms/sysexe/set.mar`: `SET PROCESS/PRIVILEGES`,
 `SET PROTECTION`, `SET FILE` (`/OWNER_UIC`, `/ATTRIBUTE`,
 `/EXPIRATION_DATE`, `/VERSION_LIMIT`) and `SET DIRECTORY/VERSION_LIMIT`,
 which ask the file system with `IO$_ACCESS` and `IO$_MODIFY`, `SET
-VOLUME`, and `SET TERMINAL`, which asks the terminal its type with
+SECURITY`, a file's owner, protection and ACL through `$SET_SECURITY`
+([ADR-0040](../../adr/0040-acls-in-file-headers-and-rights-identifiers.md)),
+`SET VOLUME`, and `SET TERMINAL`, which asks the terminal its type with
 `/INQUIRE` or takes it from `/DEVICE_TYPE`, and sets its speeds and,
 with `/PERMANENT`, its permanent characteristics.
-`SHOW.EXE` is `show.mar`: `SHOW PROCESS`, `SHOW SYSTEM`,
-`SHOW TERMINAL`, `SHOW USERS`, `SHOW MEMORY`, `SHOW ERROR`, `SHOW QUOTA`
-and `SHOW CPU`. `SET DEFAULT`, `SHOW DEFAULT`, `SHOW DEVICES`,
+`SHOW.EXE` is `show.mar`: `SHOW PROCESS`, with `/RIGHTS`, `SHOW SYSTEM`,
+`SHOW TERMINAL`, `SHOW USERS`, `SHOW MEMORY`, `SHOW ERROR`, `SHOW QUOTA`,
+`SHOW CPU` and `SHOW SECURITY`. `SET DEFAULT`, `SHOW DEFAULT`, `SHOW DEVICES`,
 `SHOW LOGICAL` and `SHOW SYMBOL` are DCL's own code
 (`dcl/setshow.mar`). PRD-0003 still wants `SHOW TIME`, quotas and
 accounting figures, and every device listed from its UCB.

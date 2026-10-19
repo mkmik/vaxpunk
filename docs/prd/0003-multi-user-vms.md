@@ -54,7 +54,8 @@ Decisions this PRD rests on:
 - Clusters, the distributed lock manager's remote side, SMP.
 - Paging to a page file, swapping, working set trimming. Memory is
   allocated and kept, as now.
-- Access control lists, security auditing, `SET AUDIT`. UIC protection only.
+- Security auditing, `SET AUDIT`. (Access control lists were a non-goal
+  too; they came anyway, [ADR-0040](../adr/0040-acls-in-file-headers-and-rights-identifiers.md).)
 - Installed images, `INSTALL`, and processes sharing a shareable image's
   pages. They come after Milestone 1 (*Backlog*, tier 3); shareable
   images themselves are there, a copy in each process
@@ -303,8 +304,9 @@ says what replaces it; this PRD doesn't schedule them.
   a sequential file of fixed records that `AUTHORIZE` rewrites? Indexed,
   as on OpenVMS Alpha V8.4 (VAX/VMS V1.0's was 184-byte fixed records).
   PRD-0008's steps 1 to 6, which step 4 needs, are done.
-- [ ] Do access control lists come in Milestone 1 after all? Nothing in
-  ordinary use needs them; `SYSPRV` and groups cover the cases above.
+- [x] Do access control lists come in Milestone 1 after all? Yes, on
+  files, with rights identifiers and `SET SECURITY`
+  ([ADR-0040](../adr/0040-acls-in-file-headers-and-rights-identifiers.md)).
 - [x] Is the lock manager in the executive, as on VMS, or a process? In the
   executive, for one node, with its logic in BLISS-64: [ADR-0030](../adr/0030-lock-manager-in-the-executive.md).
 - [ ] Is `PRINT` worth doing without a printer, or only batch queues?

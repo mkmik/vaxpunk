@@ -72,8 +72,8 @@ note = "authorize.mar ponytail"
 [[feature]]
 id = "rights"
 title = "Identifiers: ADD/IDENTIFIER, GRANT/IDENTIFIER, RIGHTSLIST.DAT"
-status = "todo"
-note = "PRD-0003: a rights list of the UIC alone"
+status = "done"
+note = "ADR-0040; and MODIFY, REMOVE, RENAME, REVOKE, SHOW/IDENTIFIER, SHOW/RIGHTS"
 
 [[feature]]
 id = "proxies"
@@ -132,5 +132,10 @@ salted, iterated SHA-256, not Purdy's polynomial. The build writes a UAF
 with `SYSTEM` and `DEFAULT`; `SYSTARTUP_VMS.COM` copies it to the
 ramdisk, where it can change until the system stops. `SET PASSWORD` is
 `SETPWD.EXE`, which the executive gives `SYSPRV` from a fixed list
-until there is `INSTALL`. Missing: flags, restrictions, identifiers and
-proxies.
+until there is `INSTALL`. The identifier commands, `ADD`, `MODIFY`,
+`REMOVE`, `RENAME`, `GRANT`, `REVOKE` and `SHOW` with `/IDENTIFIER` and
+`SHOW/RIGHTS`, change `RIGHTSLIST.DAT` through the rights database
+services, and `ADD` and `REMOVE` of a user add and remove its UIC
+identifier
+([ADR-0040](../../adr/0040-acls-in-file-headers-and-rights-identifiers.md)).
+Missing: flags, restrictions and proxies.

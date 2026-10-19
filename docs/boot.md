@@ -189,7 +189,10 @@ interpreter. It is linked high in P1, which tells the executive it is one
   name until the system stops. So `COPY` puts a copy of `SYSUAF.DAT`,
   the users, which the build wrote in `DKA0:[SYSEXE]`, in `MDA0:[SYSEXE]`,
   where `AUTHORIZE` and `SET PASSWORD` can change it, and `SET
-  PROTECTION` lets only SYSTEM read it. The ramdisk also holds TCP/IP's two
+  PROTECTION` lets only SYSTEM read it; and a copy of `RIGHTSLIST.DAT`,
+  the rights database: the identifiers, a name each, and who holds them,
+  which `AUTHORIZE` can change there and anyone may read
+  ([ADR-0040](adr/0040-acls-in-file-headers-and-rights-identifiers.md)). The ramdisk also holds TCP/IP's two
   files: the hosts database, `TCPIP$HOST.DAT`, which the first `TCPIP
   SET HOST` or `SHOW HOST` makes, and the saved network configuration,
   `TCPIP$CONFIG.DAT`. So the only hosts a boot knows, and its fixed
@@ -241,9 +244,13 @@ interpreter. It is linked high in P1, which tells the executive it is one
   record's default directory the process's, `[SYSMGR]` for SYSTEM, and
   defines `SYS$DISK`, `SYS$LOGIN` and `SYS$SCRATCH` from it, so
   SYSTEM's `SHOW DEFAULT` says `SYS$SYSROOT:[SYSMGR]`, `=   MDA0:[SYSMGR]`
-  and `=   DKA0:[SYSMGR]`, as on VMS. Then, with `$CMKRNL`, it calls
+  and `=   DKA0:[SYSMGR]`, as on VMS. It makes the process's rights list:
+  `INTERACTIVE`, `LOCAL`, or `REMOTE` on a TELNET terminal, and each
+  identifier `RIGHTSLIST.DAT` says the user's UIC holds, with
+  `$FIND_HELD`. Then, with `$CMKRNL`, it calls
   `EXE$LOGIN` in the executive, which loads `DCL.EXE` into P1 and gives
-  the process the record's UIC, privileges and priority. LOGINOUT prints
+  the process the record's UIC, privileges and priority, and the rights
+  list. LOGINOUT prints
   `SYS$WELCOME`, or without one `Welcome to vaxpunk arm64 Operating
   System, Version V0.1`, the version from `$GETSYI`'s `SYI$_VERSION`, and how many failures there were since the last
   login, and exits. The executive throws its pages away, as for any
@@ -604,10 +611,14 @@ say `%SYSTEM-F-NOPRIV`, gives them back, runs PROTTEST, which can't read
 `DATA.TXT` on `DKB0:` until `SET PROTECTION=(W:R)`, then can as its
 owner after `SET FILE/OWNER_UIC=[200,1]` and `SET PROTECTION=(W)`, with
 `DIRECTORY/OWNER/PROTECTION` after each, and can't once `DKB0:` is
-mounted `/PROTECTION=(W)`, adds JOE, of UIC `[200,1]`, with `MCR
-AUTHORIZE`, shows him and lists the users in `SYSUAF.LIS`, changes
+mounted `/PROTECTION=(W)`; with `SET SECURITY` it gives `DATA.TXT` ACEs
+that let PROTTEST read it, or not, which `SHOW SECURITY` shows, and a
+directory default ACEs its new files get; adds JOE, of UIC `[200,1]`, with `MCR
+AUTHORIZE`, shows him and lists the users in `SYSUAF.LIS`, adds the
+identifier `PAYROLL` and grants it to him, changes
 SYSTEM's password with `SET PASSWORD`, logs out and in as JOE, who has
-his UIC, privileges and default directory and may not run AUTHORIZE or
+his UIC, privileges, default directory and `PAYROLL`, which lets him read
+a file the world may not, and may not run AUTHORIZE or
 OPCCRASH, logs out again and in as SYSTEM with the new password, and
 looks for the success lines in `out/serial.log`. The passwords typed
 are nowhere in it. Once QEMU is gone, `ods-image` checks

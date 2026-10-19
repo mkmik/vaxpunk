@@ -3,33 +3,35 @@ title = "Rights identifiers"
 summary = "RIGHTSLIST.DAT: identifiers users hold, and each process's rights list"
 aka = ["RIGHTSLIST.DAT", "identifier", "rights list", "ADD/IDENTIFIER", "GRANT/IDENTIFIER", "REVOKE/IDENTIFIER", "SET RIGHTS_LIST", "SHOW PROCESS/RIGHTS", "$ASCTOID", "$IDTOASC", "$FIND_HELD", "$FIND_HOLDER", "$GRANTID", "$REVOKID", "INTERACTIVE", "BATCH", "NETWORK", "resource identifier"]
 kind = "core"
-intent = "aspiration"
-research = "outline"
-refs = ["docs/prd/0003-multi-user-vms.md", "vms/sysexe/authorize.mar"]
+intent = "goal"
+research = "done"
+refs = ["docs/adr/0040-acls-in-file-headers-and-rights-identifiers.md", "vms/exec/vecrdb.mar", "vms/rightslist.fdl", "vms/sysexe/authorize.mar", "vms/sysexe/loginout.mar", "docs/prd/0003-multi-user-vms.md"]
 
 [[feature]]
 id = "database"
 title = "RIGHTSLIST.DAT, an indexed file of identifiers and their holders"
-status = "todo"
+status = "done"
+note = "build.rs writes it, SYSTARTUP_VMS.COM copies it to the ramdisk"
 
 [[feature]]
 id = "authorize"
 title = "AUTHORIZE's ADD/IDENTIFIER, GRANT/IDENTIFIER, REVOKE/IDENTIFIER, SHOW/IDENTIFIER"
-status = "todo"
+status = "done"
+note = "authorize.mar: and RENAME, MODIFY/IDENTIFIER, SHOW/RIGHTS"
 needs = ["#database", "/utils/authorize"]
-note = "authorize.mar ponytail: no rights database"
 
 [[feature]]
 id = "process-rights"
 title = "Each process's rights list, built at login from the identifiers its user holds"
-status = "todo"
+status = "done"
+note = "LOGINOUT, EXE$LOGIN: PCB$L_RIGHTS; $CREPRC copies it to a process of the same UIC"
 needs = ["#database", "/utils/loginout"]
-note = "PRD-0003 gives a process only its UIC"
 
 [[feature]]
 id = "environmental"
 title = "INTERACTIVE, BATCH, NETWORK, LOCAL, DIALUP and REMOTE, by how the process logged in"
-status = "todo"
+status = "wip"
+note = "LOGINOUT gives INTERACTIVE and LOCAL or REMOTE; no batch, network or dialup logins yet"
 needs = ["#process-rights"]
 
 [[feature]]
@@ -39,19 +41,28 @@ status = "todo"
 
 [[feature]]
 id = "services"
-title = "$ASCTOID, $IDTOASC, $FIND_HELD, $FIND_HOLDER, $ADD_IDENT, $GRANTID, $REVOKID"
-status = "todo"
+title = "$ASCTOID, $IDTOASC, $FIND_HELD, $FIND_HOLDER, $ADD_IDENT, $ADD_HOLDER and the rest"
+status = "done"
+note = "vecrdb.mar, in the caller's mode; and $MOD_IDENT, $MOD_HOLDER, $FINISH_RDB"
 needs = ["#database"]
+
+[[feature]]
+id = "dynamic"
+title = "$GRANTID and $REVOKID; SET RIGHTS_LIST for a process's own list"
+status = "todo"
+needs = ["#process-rights"]
 
 [[feature]]
 id = "attributes"
 title = "Identifier attributes: RESOURCE, DYNAMIC, SUBSYSTEM, NOACCESS, HOLDER_HIDDEN"
 status = "todo"
+note = "Kept in the records, which AUTHORIZE sets and shows; nothing acts on them"
 
 [[feature]]
 id = "named-uics"
 title = "UIC identifiers, so [JOE] stands for [200,1]"
-status = "todo"
+status = "done"
+note = "$IDTOASC; SHOW SECURITY and DIRECTORY show [SYSTEM]"
 needs = ["#database"]
 
 [[feature]]
@@ -89,7 +100,11 @@ resource identifier lets its holders charge disk space to it, a dynamic
 one can be turned off and on with `SET RIGHTS_LIST`, a subsystem one
 marks a protected subsystem.
 
-vaxpunk has none. PRD-0003 gives a process "a rights list of its UIC
-alone", which is just its UIC, and `AUTHORIZE` has no identifier
-commands. Nothing needs identifiers until ACLs (`t8y:/exec/acls`) or a
-server that maps foreign users onto VMS ones (`t8y:/net/cifs`).
+vaxpunk has VMS's `RIGHTSLIST.DAT`, which `build.rs` writes with the
+environmental identifiers and a UIC identifier for each user, and the
+services that read and change it, in their caller's mode, through RMS
+([ADR-0040](../../adr/0040-acls-in-file-headers-and-rights-identifiers.md)).
+`AUTHORIZE`'s identifier commands use them; `LOGINOUT` gives each
+process its rights list, which ACLs (`t8y:/exec/acls`) check and `SHOW
+PROCESS/RIGHTS` shows. Missing: `SET RIGHTS_LIST`, system rights, and
+anything that acts on identifier attributes.

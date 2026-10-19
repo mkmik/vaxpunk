@@ -373,10 +373,10 @@ EXE$PRCPRIV::
         BNEQ    24$
         MOVL    PCB$L_RIGHTS(R4), R1
         BEQL    24$
-        PUSHL   R4
+        PUSHR   #^M<R3, R4>                     ; R3, the name, for EXE$NAMPID
         MOVL    R8, R4
         BSBW    EXE$SETRIGHTS
-        MOVL    (SP)+, R4
+        POPR    #^M<R3, R4>
         BLBC    R0, 80$
 24$:    BSBW    PPNAMES
         BLBC    R0, 80$
