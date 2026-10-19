@@ -1466,6 +1466,11 @@
 
   With a name, the devices whose names start with it.
 3 Qualifiers
+/FULL
+  /FULL
+
+  Describes each device in a paragraph: what it is, its counts and its
+  volume's.
 /MOUNTED
   /MOUNTED
 

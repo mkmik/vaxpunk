@@ -284,7 +284,8 @@ const RAMDISK: Phase = Phase {
 /// lines and CTRL/Z, an APPEND/LOG to the file copied there and
 /// one to the system disk that fails, COPY of a list into one file, of a
 /// wildcard into a file each, and of a wildcard into one file that it
-/// finds too, which it passes over, SHOW DEVICES, a DISMOUNT of DKA0:
+/// finds too, which it passes over, SHOW DEVICES, SHOW DEVICES/FULL of
+/// DKB0: and of OPA0:, a DISMOUNT of DKA0:
 /// that fails and one of DKB0: that doesn't, a DIRECTORY there that fails,
 /// a MOUNT without a label, a DIRECTORY of the new directory and a DELETE
 /// of the one above it, which has a file in it and stays, SHOW PROCESS/QUOTAS,
@@ -321,7 +322,8 @@ const DATA_DISK: Phase = Phase {
             "%RMS-E-WLK",
             1,
             concat!(
-                "DIR DKB0:[000000]\rSHOW DEVICES\rDISMOUNT DKA0:\rDISMOUNT DKB0:\r",
+                "DIR DKB0:[000000]\rSHOW DEVICES\rSHOW DEVICES/FULL DKB0\rSHOW DEVICES/FULL OPA0:\r",
+                "DISMOUNT DKA0:\rDISMOUNT DKB0:\r",
                 "DIR DKB0:[000000]\rMOUNT DKB0:\rDIR DKB0:[SUB.DEEP]\rDELETE DKB0:[000000]SUB.DIR;1\r",
                 "SHOW PROCESS/QUOTAS\rSHOW SYSTEM\r",
             ),
@@ -355,6 +357,9 @@ const DATA_DISK: Phase = Phase {
         "DKB0:                   Mounted              0  DATA",
         "MDA0:                   Mounted              0  RAM",
         "OPA0:                   Online               0",
+        "\nDisk DKB0:, device type unknown, is online, mounted, file-oriented device,\n    shareable.\n\n    Error count                    0    Default buffer size                 512\n\n    Volume label              \"DATA\"    Cluster size                          1\n    Free blocks ",
+        "\nTerminal OPA0:, device type VT100, is online, record-oriented device, carriage\n    control.\n\n    Error count                    0\n    Reference count",
+        "    Default buffer size                  80\n\n$ ",
         "%SYSTEM-F-DEVACTIVE, device is active",
         "%RMS-E-DNR, device not ready, not mounted, or unavailable",
         "Directory DKB0:[SUB.DEEP]",

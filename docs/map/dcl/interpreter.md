@@ -53,8 +53,8 @@ note = "PRD-0003 tier 3 #25: access modes first; LNM$JOB and LNM$GROUP are tier 
 [[feature]]
 id = "show-devices-full"
 title = "SHOW DEVICES/FULL"
-status = "todo"
-note = "PRD-0003 tier 3 #24; setshow.mar ponytail"
+status = "done"
+note = "PRD-0003 tier 3 #24; setshow.mar ponytail: only what $GETDVI knows, no operation counts, owners or a disk's geometry"
 
 [[feature]]
 id = "from-uaf"
