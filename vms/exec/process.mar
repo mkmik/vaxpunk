@@ -53,6 +53,7 @@
         .EXTERNAL MB$FINDNUM, MB$SEND, EXE$GQ_SYSTIME, TT$OWNER, TT$FDT
 
 KSTACK = 16384                          ; a process's kernel stack
+MAXRIGHTS = 1024                        ; identifiers a rights list holds, at most
 BLOCK = 512                             ; an image's blocks
 KW = PTE$M_VALID ! PTE$M_FOE ! PTE$C_KW
 UR = PTE$M_VALID ! PTE$M_FOE ! PTE$C_UR
@@ -368,7 +369,16 @@ EXE$PRCPRIV::
         MOVL    R0, 4(R0)
         MOVB    #^XF, PCB$B_ASTEN(R8)
         MOVB    #^XF, PCB$Q_HWPCB+HWPCB$B_ASTEN(R8)
-        BSBW    PPNAMES
+        CMPL    PCB$L_UIC(R8), PCB$L_UIC(R4)    ; its creator's rights, as the same user
+        BNEQ    24$
+        MOVL    PCB$L_RIGHTS(R4), R1
+        BEQL    24$
+        PUSHL   R4
+        MOVL    R8, R4
+        BSBW    EXE$SETRIGHTS
+        MOVL    (SP)+, R4
+        BLBC    R0, 80$
+24$:    BSBW    PPNAMES
         BLBC    R0, 80$
 ; The kernel stack, and on it the frame the PAL pops, as REI does, when
 ; the process first runs: PC EXE$PROCSTRT, PSL kernel mode at IPL 0.
@@ -433,6 +443,8 @@ EXE$PRCPRIV::
 80$:    PUSHL   R0
         MOVAQ   PCB$Q_LNMHD(R8), R2
         BSBW    LNM$DELTBL
+        MOVL    R8, R4
+        BSBW    FREERIGHTS
         MOVL    R8, R0
         MOVL    #PCB$K_LENGTH, R1
         BSBW    EXE$DEANONPGDSIZ
@@ -1226,7 +1238,7 @@ EXE$DELSELF::
         HALT                            ; the CPU never comes back
 
 ; EXE$DELETEPCB: R4 = the PCB of a deleted process that isn't running.
-; Deletes its context, kernel stack and PCB. Uses R0 and R1.
+; Deletes its context, kernel stack, rights list and PCB. Uses R0 and R1.
 EXE$DELETEPCB::
         .JSB_ENTRY
         MOVL    PCB$L_HWPCB(R4), R0
@@ -1234,6 +1246,7 @@ EXE$DELETEPCB::
         MOVL    PCB$L_KSTACK(R4), R0
         MOVL    #KSTACK, R1
         BSBW    EXE$DEANONPGDSIZ
+        BSBW    FREERIGHTS
         MOVL    R4, R0
         MOVL    #PCB$K_LENGTH, R1
         BSBW    EXE$DEANONPGDSIZ
@@ -1567,12 +1580,29 @@ SUSPEND:
 ; still has of them.
 ; A process with a channel to a terminal, LOGINOUT's, becomes interactive,
 ; JPI$K_INTERACTIVE, at that terminal, which $GETJPI's JPI$_TERMINAL says.
-; R0 = SS$_NORMAL, SS$_ACCVIO if the record can't be read, SS$_IVLOGNAM
-; for a name longer than 35, or IMG$ACTIVATE's error: SS$_BADIMGHDR for an
-; image that isn't a command interpreter.
+; rights, if it is given, is the process's rights list: a longword count,
+; then that many quadwords, an identifier and its attributes each, which
+; it gets a copy of (EXE$SETRIGHTS).
+; R0 = SS$_NORMAL, SS$_ACCVIO if the record or the list can't be read,
+; SS$_IVLOGNAM for a name longer than 35, SS$_INSFMEM, or IMG$ACTIVATE's
+; error: SS$_BADIMGHDR for an image that isn't a command interpreter.
+; vaxpunk: VMS's LOGINOUT gives the process its rights itself, in its
+; persona.
         .ENTRY  EXE$LOGIN, ^M<R2, R3, R4, R5, R6, R7, R8>
         MOVL    4(AP), R8
         IFNORD  #UAF$C_FIXED, (R8), 85$
+        CMPB    (AP), #2
+        BLSSU   5$
+        MOVL    8(AP), R1
+        BEQL    5$
+        IFNORD  #4, (R1), 85$
+        MULL3   #8, (R1), R0
+        ADDL2   #4, R0
+        IFNORD  R0, (R1), 85$
+        MOVL    SCH$GL_CURPCB, R4
+        BSBW    EXE$SETRIGHTS
+        BLBC    R0, 90$
+5$:
         MOVAB   UAF$T_DEFCLI(R8), R6
         MOVZBL  (R6)+, R7
         BNEQ    10$
@@ -1630,6 +1660,47 @@ SUSPEND:
         RET
 87$:    MOVL    #SS$_IVLOGNAM, R0
 90$:    RET
+
+; EXE$SETRIGHTS: R1 = a rights list, a longword count, then that many
+; quadwords, R4 = a PCB. Gives the process a copy of it, in a block of
+; pool PCB$L_RIGHTS points at, the count, its size, then the quadwords,
+; in place of the one it had. R0 = SS$_NORMAL, or SS$_INSFMEM and the
+; list as it was. Uses R0-R3.
+EXE$SETRIGHTS::
+        .JSB_ENTRY  SCRATCH=<R2, R3>
+        PUSHR   #^M<R4, R5>
+        MOVL    R1, R5
+        MOVL    (R5), R0
+        CMPL    R0, #MAXRIGHTS
+        BGTRU   80$
+        MULL3   #8, R0, R1
+        ADDL2   #8, R1
+        BSBW    EXE$ALONONPAGED
+        BLBC    R0, 90$
+        MOVL    (R5)+, (R2)
+        MOVL    R1, 4(R2)
+        MULL3   #8, (R2), R0
+        PUSHR   #^M<R2, R4>
+        MOVC3   R0, (R5), 8(R2)
+        POPR    #^M<R2, R4>
+        BSBB    FREERIGHTS
+        MOVL    R2, PCB$L_RIGHTS(R4)
+        MOVL    #SS$_NORMAL, R0
+        BRB     90$
+80$:    MOVL    #SS$_INSFMEM, R0
+90$:    POPR    #^M<R4, R5>
+        RSB
+
+; FREERIGHTS: R4 = a PCB. Gives its rights list's block back to pool, if
+; it has one. Uses R0 and R1.
+FREERIGHTS:
+        .JSB_ENTRY
+        MOVL    PCB$L_RIGHTS(R4), R0
+        BEQL    10$
+        CLRL    PCB$L_RIGHTS(R4)
+        MOVL    4(R0), R1
+        BSBW    EXE$DEANONPGDSIZ
+10$:    RSB
 
 ; $IMGACT image, cmdlin: runs image in the current process, as a command
 ; interpreter does: runs down the image there was, keeping the channels

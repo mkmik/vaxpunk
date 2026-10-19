@@ -80,7 +80,7 @@
         .EXTERNAL FIL$READHDR, FIL$READVBN, FIL$SEARCHDIR, FIL$MATCH, FIL$EOF, FIL$ISDIR
         .EXTERNAL FIL$SELECT, FIL$CREHDR, FIL$WRITEHDR, FIL$SETNAME, FIL$EXTEND
         .EXTERNAL FIL$ENTER, FIL$REMOVE, FIL$DELHDR, FIL$WRITEVBN, FIL$MKDIR
-        .EXTERNAL FIL$LOCK, FIL$UNLOCK, FIL$CHKHDR, FIL$CHKPRO
+        .EXTERNAL FIL$LOCK, FIL$UNLOCK, FIL$CHKHDR, FIL$CHKPRO, FIL$ACLINHERIT
         .EXTERNAL F11$GW_FID, F11$GL_VCB, F11$AB_DIRBLK, LNM$TRNLOG, LNM$EQUIV
         .EXTERNAL SCH$GL_PCBVEC, SCH$GL_MAXPIX, LCK$ENQ, LCK$DEQ
         .EXTERNAL EXE$GQ_SYSTIME, RMS$XABOUT, RMS$FINDXAB
@@ -2718,10 +2718,11 @@ ORGCREATE:
         RSB
 
 ; CREPRO: R7 = an IFAB with a new file's header, XABPRO = the FAB's
-; protection XAB, or 0. Gives the header the protection of the highest
-; version of the name in the directory RMS$PARSE found, if there is one,
-; as VMS's XQP does, then the XAB's protection, and its owner unless it
-; is 0. Holding FIL$LOCK. Uses R0-R5.
+; protection XAB, or 0. Gives the header the protection and the ACL of
+; the highest version of the name in the directory RMS$PARSE found, if
+; there is one, as VMS's XQP does, or else the directory's default ACEs
+; and protection (FIL$ACLINHERIT), then the XAB's protection, and its
+; owner unless it is 0. Holding FIL$LOCK. Uses R0-R5.
 CREPRO:
         .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5>
         PUSHR   #^M<R6, R7, R8, R9>
@@ -2731,12 +2732,19 @@ CREPRO:
         CLRQ    R8                      ; its highest version, from the first
         BSBW    FIL$SEARCHDIR
         MOVL    4(SP), R7
-        BLBC    R0, 20$                 ; none: the default
+        BLBC    R0, 10$                 ; none: the directory's
         MOVL    R5, R0
         MOVAB   HDRBUF, R1
         BSBW    FIL$READHDR
-        BLBC    R0, 20$
+        BLBC    R0, 10$
         MOVW    HDRBUF+FH2$W_FILEPROT, IFB$AB_HDR+FH2$W_FILEPROT(R7)
+        MOVAB   HDRBUF, R2
+        CLRL    R3
+        BRB     15$
+10$:    MOVAB   RMS$AB_DIRHDR, R2
+        MOVL    #1, R3
+15$:    MOVAB   IFB$AB_HDR(R7), R1
+        BSBW    FIL$ACLINHERIT
 20$:    MOVL    XABPRO, R1
         BEQL    90$
         MOVW    XAB$W_PRO(R1), IFB$AB_HDR+FH2$W_FILEPROT(R7)

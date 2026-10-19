@@ -117,6 +117,25 @@ SS$_NOMORELOCK = 2568                   ; a wildcard $GETLKI is past the last lo
 SS$_DEADLOCK = 3594                     ; the lock request closed a deadlock, and was refused
 SS$_NOWORLD = 10372                     ; another group's lock needs WORLD
 SS$_NOOPER = 10388                      ; $BRKTHRU to another's terminals needs OPER
+SS$_ACEIDMATCH = 1721                   ; success: an ACE's identifiers matched
+SS$_NOMOREITEMS = 1777                  ; success: no more items to return
+SS$_ACLEMPTY = 2512                     ; a warning: the object has no ACL
+SS$_NOENTRY = 2520                      ; a warning: no ACE matches the one given
+SS$_NOMOREACE = 2528                    ; a warning: past the ACL's last ACE
+SS$_RIGHTSFULL = 2536                   ; a warning: the rights list has no room
+SS$_ACLFULL = 2552                      ; a warning: no room for the ACE in the ACL
+SS$_NOSUCHOBJECT = 2696                 ; a warning: no such object
+SS$_BADACL = 3642                       ; the ACL is damaged
+SS$_ACEEXISTS = 3650                    ; the ACE is in the ACL already
+SS$_NORIGHTSDB = 3666                   ; no rights database, RIGHTSLIST.DAT
+SS$_NOCLASSSUPPORT = 3906
+SS$_BADACLCTX = 8652                    ; an ACL context that isn't one
+SS$_IVACL = 8676                        ; an ACE's text or bytes are wrong
+SS$_NOSUCHID = 8684                     ; no such identifier, or past the last
+SS$_IVIDENT = 8740                      ; an identifier's name or value isn't one
+SS$_DUPIDENT = 8748                     ; that identifier is there already
+SS$_NOACLSUPPORT = 8892                 ; the object can't have an ACL
+SS$_NOCLASS = 9436                      ; no security class by that name
         .ENDM   $SSDEF
 
 ; $CLIMSGDEF: the command language interpreter's status codes, facility
@@ -1623,6 +1642,8 @@ FIB$W_NMCTL = 20                        ; FIB$M_ bits: how the name is looked up
 FIB$V_FINDFID = 11                      ; find the entry for FIB$W_FID in the directory, not p2's name
 FIB$M_FINDFID = ^X800
 FIB$W_VERLIMIT = 44                     ; the name's version limit
+FIB$L_ACLCTX = 48                       ; the ACL attributes' position: an ACE's number, from 1
+FIB$L_ACL_STATUS = 52                   ; and their status, the first failure's
 FIB$C_ACCDATA = 10                      ; the shortest FIB a request takes
 FIB$C_LENGTH = 64
         .ENDM   $FIBDEF
@@ -1689,7 +1710,121 @@ ATR$C_FPRO = 22                         ; its protection mask
 ATR$S_FPRO = 2
 ATR$C_UIC_RO = 26                       ; its owner, read only
 ATR$S_UIC_RO = 4
+ATR$C_ADDACLENT = 31                    ; adds the ACEs at ATR$L_ADDR before the one at FIB$L_ACLCTX
+ATR$S_ADDACLENT = 255
+ATR$C_DELACLENT = 32                    ; deletes the ACE that matches the one there
+ATR$S_DELACLENT = 255
+ATR$C_FNDACLENT = 34                    ; puts the position of the ACE that matches it in FIB$L_ACLCTX
+ATR$S_FNDACLENT = 255
+ATR$C_DELETEACL = 36                    ; deletes the ACL but its PROTECTED ACEs
+ATR$S_DELETEACL = 255
+ATR$C_READACL = 37                      ; the whole ACEs from FIB$L_ACLCTX's, 0s after
+ATR$S_READACL = 512
+ATR$C_ACLLENGTH = 38                    ; the ACL's bytes, a longword
+ATR$S_ACLLENGTH = 4
+ATR$C_READACE = 39                      ; the ACE after FIB$L_ACLCTX's, which it moves on
+ATR$S_READACE = 255
+ATR$C_DELETE_ALL = 52                   ; deletes the whole ACL
+ATR$S_DELETE_ALL = 255
         .ENDM   $ATRDEF
+
+; $ACEDEF: an access control entry, an ACL's element: its size and type,
+; its options, the access it grants, then the identifiers a process must
+; all hold for it to match, or, for a default protection ACE, the
+; protection a directory gives its new files.
+        .MACRO  $ACEDEF
+ACE$B_SIZE = 0                          ; its bytes
+ACE$B_TYPE = 1                          ; ACE$C_
+ACE$W_FLAGS = 2                         ; its options, ACE$M_; bits 3:0 the reserved longwords before the identifiers
+ACE$L_ACCESS = 4                        ; ACE$M_ READ to CONTROL, the access it grants
+ACE$L_KEY = 8                           ; its identifiers
+ACE$C_LENGTH = 8                        ; the bytes before them
+ACE$C_KEYID = 1                         ; an identifier ACE
+ACE$C_DIRDEF = 9                        ; a default protection ACE
+ACE$L_SYS_PROT = 8                      ; its protection, a longword each, a set bit denying
+ACE$L_OWN_PROT = 12
+ACE$L_GRP_PROT = 16
+ACE$L_WOR_PROT = 20
+ACE$K_DIRDEF_LENGTH = 24                ; vaxpunk's name: a default protection ACE's size
+ACE$S_RESERVED = 4
+ACE$V_DEFAULT = 8                       ; a directory's: given to its new files, not checked
+ACE$V_PROTECTED = 9                     ; kept when the ACL is deleted
+ACE$V_HIDDEN = 10
+ACE$V_NOPROPAGATE = 11                  ; not given to the file's next version
+ACE$M_DEFAULT = ^X100
+ACE$M_PROTECTED = ^X200
+ACE$M_HIDDEN = ^X400
+ACE$M_NOPROPAGATE = ^X800
+ACE$M_READ = 1
+ACE$M_WRITE = 2
+ACE$M_EXECUTE = 4
+ACE$M_DELETE = 8
+ACE$M_CONTROL = 16
+        .ENDM   $ACEDEF
+
+; $UICDEF: identifiers' formats. Bits 31:30 0 is a UIC, [group,member],
+; the group in bits 29:16; 2 a general identifier, a name for a set of
+; users; -1 matches anyone.
+        .MACRO  $UICDEF
+UIC$V_FORMAT = 30
+UIC$S_FORMAT = 2
+UIC$K_UIC_FORMAT = 0
+UIC$K_ID_FORMAT = 2
+UIC$V_GROUP = 16
+UIC$S_GROUP = 14
+UIC$K_WILD_GROUP = ^X3FFF               ; [*,m]
+UIC$K_WILD_MEMBER = ^XFFFF              ; [g,*]
+UIC$K_MAX_UIC = ^X3FFFFFFF
+UIC$K_MATCH_ALL = -1                    ; *: anyone
+UIC$K_FIRST_ID = ^X80010000             ; the first general identifier AUTHORIZE gives
+        .ENDM   $UICDEF
+
+; $KGBDEF: a record of the rights database, RIGHTSLIST.DAT: an
+; identifier's, with its name, or a holder's, which says who holds it,
+; or the maintenance record, which says what identifier comes next.
+        .MACRO  $KGBDEF
+KGB$L_IDENTIFIER = 0                    ; the identifier: key 0
+KGB$L_ATTRIBUTES = 4                    ; KGB$M_
+KGB$Q_HOLDER = 8                        ; a holder's UIC and a longword of 0, else 0: key 1
+KGB$T_NAME = 16                         ; the identifier's name, padded with blanks: key 2
+KGB$S_NAME = 32
+KGB$W_LEVEL = 48                        ; the maintenance record's: KGB$K_LEVEL1
+KGB$Q_SYS_ID = 52
+KGB$L_NEXT_ID = 60                      ; the next general identifier
+KGB$K_HOLD_RECORD = 16                  ; a holder's record's bytes,
+KGB$K_IDENT_RECORD = 48                 ; an identifier's,
+KGB$K_MAINT_RECORD = 64                 ; the maintenance record's
+KGB$K_LEVEL1 = 257
+KGB$M_RESOURCE = 1                      ; its holders may charge disk space to it
+KGB$M_DYNAMIC = 2                       ; its holders may turn it off and on
+KGB$M_NOACCESS = 4
+KGB$M_SUBSYSTEM = 8
+KGB$M_IMPERSONATE = 16
+KGB$M_HOLDER_HIDDEN = 32
+KGB$M_NAME_HIDDEN = 64
+KGB$K_BATCH_ID = ^X80000001             ; the environmental identifiers, by how the process logged in
+KGB$K_DIALUP_ID = ^X80000002
+KGB$K_INTERACTIVE_ID = ^X80000003
+KGB$K_LOCAL_ID = ^X80000004
+KGB$K_NETWORK_ID = ^X80000005
+KGB$K_REMOTE_ID = ^X80000006
+        .ENDM   $KGBDEF
+
+; $OSSDEF: the item codes of $GET_SECURITY and $SET_SECURITY.
+        .MACRO  $OSSDEF
+OSS$_ACL_ADD_ENTRY = 3                  ; add an ACE, at the context's position
+OSS$_ACL_DELETE_ENTRY = 4               ; delete the ACE that matches this one
+OSS$_ACL_DELETE = 5                     ; delete the ACL but its PROTECTED ACEs
+OSS$_ACL_DELETE_ALL = 6                 ; delete the whole ACL
+OSS$_ACL_FIND_ENTRY = 7                 ; move the context to the ACE that matches this one
+OSS$_ACL_LENGTH = 11                    ; the ACL's bytes, a longword
+OSS$_ACL_POSITION_TOP = 14              ; the context to the ACL's top
+OSS$_ACL_POSITION_BOTTOM = 15           ; and past its end
+OSS$_ACL_READ_ENTRY = 16                ; the ACE after the context's, which moves on
+OSS$_ACL_READ = 17                      ; the ACEs from the context's
+OSS$_OWNER = 21                         ; the owner, a longword
+OSS$_PROTECTION = 22                    ; the protection mask, a word or a longword
+        .ENDM   $OSSDEF
 
 ; $INETSYMDEF, $SOCKADDRINDEF, $IFREQDEF, $ORTENTRYDEF and $SIOCDEF: TCP/IP
 ; Services' TCPIP$INETDEF, the modules and the values a program uses with
@@ -1827,6 +1962,10 @@ JPI$_DIOCNT = ^X312                     ; direct I/O requests it may still make
 JPI$_DIOLM = ^X313                      ; and its limit
 JPI$_BUFIO = ^X40C                      ; buffered I/O requests it has made
 JPI$_DIRIO = ^X40B                      ; direct I/O requests it has made
+JPI$_RIGHTSLIST = ^X326                 ; its rights, quadwords: an identifier, its attributes
+JPI$_PROCESS_RIGHTS = ^X32E             ; its own: its UIC, then those its user holds
+JPI$_SYSTEM_RIGHTS = ^X32F              ; the system's, which every process holds
+JPI$_RIGHTS_SIZE = ^X331                ; the bytes JPI$_RIGHTSLIST returns
 JPI$K_OTHER = 0                         ; a detached process's mode
 JPI$K_NETWORK = 1
 JPI$K_BATCH = 2
@@ -2716,6 +2855,151 @@ LKI$C_LENGTH = 24
         .EXTERNAL SYS$GET_ENTROPY
         CALLS   #2, G^SYS$GET_ENTROPY
         .ENDM   $GET_ENTROPY_S
+
+; The rights database's services, which read and change RIGHTSLIST.DAT
+; (ADR-0040): a name's identifier and back, who holds what, and adding,
+; removing and changing identifiers and holders.
+        .MACRO  $ASCTOID_S NAME, ID=0, ATTRIB=0
+        $PUSHADR ATTRIB
+        $PUSHADR ID
+        $PUSHADR NAME
+        .EXTERNAL SYS$ASCTOID
+        CALLS   #3, G^SYS$ASCTOID
+        .ENDM   $ASCTOID_S
+
+        .MACRO  $IDTOASC_S ID, NAMLEN=0, NAMBUF=0, RESID=0, ATTRIB=0, CONTXT=0
+        $PUSHADR CONTXT
+        $PUSHADR ATTRIB
+        $PUSHADR RESID
+        $PUSHADR NAMBUF
+        $PUSHADR NAMLEN
+        PUSHL   ID
+        .EXTERNAL SYS$IDTOASC
+        CALLS   #6, G^SYS$IDTOASC
+        .ENDM   $IDTOASC_S
+
+        .MACRO  $FIND_HELD_S HOLDER, ID=0, ATTRIB=0, CONTXT=0
+        $PUSHADR CONTXT
+        $PUSHADR ATTRIB
+        $PUSHADR ID
+        $PUSHADR HOLDER
+        .EXTERNAL SYS$FIND_HELD
+        CALLS   #4, G^SYS$FIND_HELD
+        .ENDM   $FIND_HELD_S
+
+        .MACRO  $FIND_HOLDER_S ID, HOLDER=0, ATTRIB=0, CONTXT=0
+        $PUSHADR CONTXT
+        $PUSHADR ATTRIB
+        $PUSHADR HOLDER
+        PUSHL   ID
+        .EXTERNAL SYS$FIND_HOLDER
+        CALLS   #4, G^SYS$FIND_HOLDER
+        .ENDM   $FIND_HOLDER_S
+
+        .MACRO  $FINISH_RDB_S CONTXT
+        $PUSHADR CONTXT
+        .EXTERNAL SYS$FINISH_RDB
+        CALLS   #1, G^SYS$FINISH_RDB
+        .ENDM   $FINISH_RDB_S
+
+        .MACRO  $ADD_IDENT_S NAME, ID=#0, ATTRIB=#0, RESID=0
+        $PUSHADR RESID
+        PUSHL   ATTRIB
+        PUSHL   ID
+        $PUSHADR NAME
+        .EXTERNAL SYS$ADD_IDENT
+        CALLS   #4, G^SYS$ADD_IDENT
+        .ENDM   $ADD_IDENT_S
+
+        .MACRO  $REM_IDENT_S ID
+        PUSHL   ID
+        .EXTERNAL SYS$REM_IDENT
+        CALLS   #1, G^SYS$REM_IDENT
+        .ENDM   $REM_IDENT_S
+
+        .MACRO  $ADD_HOLDER_S ID, HOLDER, ATTRIB=#0
+        PUSHL   ATTRIB
+        $PUSHADR HOLDER
+        PUSHL   ID
+        .EXTERNAL SYS$ADD_HOLDER
+        CALLS   #3, G^SYS$ADD_HOLDER
+        .ENDM   $ADD_HOLDER_S
+
+        .MACRO  $REM_HOLDER_S ID, HOLDER
+        $PUSHADR HOLDER
+        PUSHL   ID
+        .EXTERNAL SYS$REM_HOLDER
+        CALLS   #2, G^SYS$REM_HOLDER
+        .ENDM   $REM_HOLDER_S
+
+        .MACRO  $MOD_IDENT_S ID, SET_ATTRIB=#0, CLR_ATTRIB=#0, NEW_NAME=0, NEW_VALUE=#0
+        PUSHL   NEW_VALUE
+        $PUSHADR NEW_NAME
+        PUSHL   CLR_ATTRIB
+        PUSHL   SET_ATTRIB
+        PUSHL   ID
+        .EXTERNAL SYS$MOD_IDENT
+        CALLS   #5, G^SYS$MOD_IDENT
+        .ENDM   $MOD_IDENT_S
+
+        .MACRO  $MOD_HOLDER_S ID, HOLDER, SET_ATTRIB=#0, CLR_ATTRIB=#0
+        PUSHL   CLR_ATTRIB
+        PUSHL   SET_ATTRIB
+        $PUSHADR HOLDER
+        PUSHL   ID
+        .EXTERNAL SYS$MOD_HOLDER
+        CALLS   #4, G^SYS$MOD_HOLDER
+        .ENDM   $MOD_HOLDER_S
+
+; The ACL services: an ACE's text into its bytes and back, and an
+; object's owner, protection and ACL, read and changed by its class and
+; name (ADR-0040). WIDTH and INDENT are words, by reference.
+        .MACRO  $PARSE_ACL_S ACLSTR, ACLENT, ERRPOS=0, ACCNAM=0, ROUTIN=0
+        $PUSHADR ROUTIN
+        $PUSHADR ACCNAM
+        $PUSHADR ERRPOS
+        $PUSHADR ACLENT
+        $PUSHADR ACLSTR
+        .EXTERNAL SYS$PARSE_ACL
+        CALLS   #5, G^SYS$PARSE_ACL
+        .ENDM   $PARSE_ACL_S
+
+        .MACRO  $FORMAT_ACL_S ACLENT, ACLLEN=0, ACLSTR, WIDTH=0, TRMDSC=0, INDENT=0, ACCNAM=0, ROUTIN=0
+        $PUSHADR ROUTIN
+        $PUSHADR ACCNAM
+        $PUSHADR INDENT
+        $PUSHADR TRMDSC
+        $PUSHADR WIDTH
+        $PUSHADR ACLSTR
+        $PUSHADR ACLLEN
+        $PUSHADR ACLENT
+        .EXTERNAL SYS$FORMAT_ACL
+        CALLS   #8, G^SYS$FORMAT_ACL
+        .ENDM   $FORMAT_ACL_S
+
+        .MACRO  $GET_SECURITY_S CLSNAM=0, OBJNAM=0, OBJHAN=0, FLAGS=#0, ITMLST=0, CONTXT=0, ACMODE=0
+        $PUSHADR ACMODE
+        $PUSHADR CONTXT
+        $PUSHADR ITMLST
+        PUSHL   FLAGS
+        $PUSHADR OBJHAN
+        $PUSHADR OBJNAM
+        $PUSHADR CLSNAM
+        .EXTERNAL SYS$GET_SECURITY
+        CALLS   #7, G^SYS$GET_SECURITY
+        .ENDM   $GET_SECURITY_S
+
+        .MACRO  $SET_SECURITY_S CLSNAM=0, OBJNAM=0, OBJHAN=0, FLAGS=#0, ITMLST=0, CONTXT=0, ACMODE=0
+        $PUSHADR ACMODE
+        $PUSHADR CONTXT
+        $PUSHADR ITMLST
+        PUSHL   FLAGS
+        $PUSHADR OBJHAN
+        $PUSHADR OBJNAM
+        $PUSHADR CLSNAM
+        .EXTERNAL SYS$SET_SECURITY
+        CALLS   #7, G^SYS$SET_SECURITY
+        .ENDM   $SET_SECURITY_S
 
 
 ; $LBRDEF: the LBR$ routines' library types and functions, as VMS's.

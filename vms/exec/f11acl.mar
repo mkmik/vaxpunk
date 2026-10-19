@@ -1,0 +1,312 @@
+        .TITLE  F11ACL  Files-11 access control lists: in headers, checked, inherited
+        .IDENT  /V0.1/
+;
+; A file's access control list is ODS-2's (docs/adr/0040-acls-in-file-
+; headers-and-rights-identifiers.md): its ACEs, $ACEDEF's, one after the
+; other in the header's ACL area, from FH2$B_ACOFFSET up to
+; FH2$B_RSOFFSET, in words, which the last one ends at; a size of 0 ends
+; them before. The map's area, below it, gives it its room, and the map
+; can't grow into it.
+; FIL$ACLGET and FIL$ACLPUT copy an ACL out of a header and back, for the
+; XQP, which changes it (xqp.mar); FIL$ACLCHK looks for the identifier
+; ACE that decides a process's access, for FIL$CHKHDR (f11.mar), as VMS's
+; XQP does before it looks at the protection mask; FIL$ACLINHERIT gives a
+; new file its ACEs and protection, from the version before it or its
+; directory, for RMS's $CREATE.
+; ponytail: no extension headers, so an ACL must fit beside the map,
+; else SS$_ACLFULL.
+;
+        .LIBRARY "lib.mlb"
+        .LIBRARY "starlet.mlb"
+        $SSDEF
+        $PCBDEF
+        $PRVDEF
+        $ARMDEF
+        $ACEDEF
+        $UICDEF
+
+        .EXTERNAL SCH$GL_CURPCB
+
+FH2$B_MPOFFSET = 1                      ; a file header, in words
+FH2$B_ACOFFSET = 2
+FH2$B_RSOFFSET = 3
+FH2$B_MAP_INUSE = 58
+FH2$W_FILEPROT = 64
+MAPROOM = 3                             ; words a map pointer takes, kept free in an empty map
+ACLMAX = 512                            ; the bytes an ACL may have
+ACEMIN = 4                              ; the smallest ACE
+
+        .PSECT  $CODE$
+
+; AREA: R1 = a file header. R2 = its ACL area's first byte, R3 = past
+; its last, the same if it has none. Keeps every other register.
+AREA:
+        .JSB_ENTRY  OUTPUT=<R2, R3>
+        MOVZBL  FH2$B_ACOFFSET(R1), R2
+        MOVZBL  FH2$B_RSOFFSET(R1), R3
+        CMPL    R2, R3
+        BLSSU   10$
+        MOVL    R3, R2
+10$:    MOVAW   (R1)[R2], R2
+        MOVAW   (R1)[R3], R3
+        RSB
+
+; FIL$ACLGET: R1 = a file header, R2 = a buffer of 512 bytes. Copies the
+; header's ACEs there, up to the first of size 0, or one that runs past
+; the area. R0 = their bytes, 0 for none. Keeps every other register.
+FIL$ACLGET::
+        .JSB_ENTRY
+        PUSHR   #^M<R1, R2, R3, R4, R5, R6>
+        MOVL    R2, R6
+        BSBB    AREA
+        MOVL    R2, R4                  ; the next ACE
+10$:    SUBL3   R4, R3, R0              ; the bytes left
+        CMPL    R0, #ACEMIN
+        BLSSU   20$
+        MOVZBL  (R4), R1
+        CMPL    R1, #ACEMIN
+        BLSSU   20$
+        CMPL    R1, R0
+        BGTRU   20$
+        ADDL2   R1, R4
+        BRB     10$
+20$:    SUBL3   R2, R4, R0
+        PUSHL   R0
+        MOVC3   R0, (R2), (R6)
+        POPR    #^M<R0>
+        POPR    #^M<R1, R2, R3, R4, R5, R6>
+        RSB
+
+; FIL$ACLPUT: R1 = a file header, R2 = ACEs, R3 = their bytes. Makes them
+; the header's ACL: they end at FH2$B_RSOFFSET, with a byte of 0 after
+; them if they are odd, and FH2$B_ACOFFSET moves to where they start; the
+; rest of the map's area is cleared. The map keeps the words it uses,
+; and room for a pointer if it has none. R0 = SS$_NORMAL, or SS$_ACLFULL
+; and the header as it was. Keeps every other register.
+FIL$ACLPUT::
+        .JSB_ENTRY
+        PUSHR   #^M<R1, R2, R3, R4, R5, R6, R7>
+        MOVL    R1, R7
+        MOVL    R2, R6
+        MOVZBL  FH2$B_MPOFFSET(R7), R4  ; where the map ends, in words
+        MOVZBL  FH2$B_MAP_INUSE(R7), R0
+        BNEQ    10$
+        MOVL    #MAPROOM, R0
+10$:    ADDL2   R0, R4
+        ADDL3   #1, R3, R5              ; the ACL's words
+        ASHL    #-1, R5, R5
+        MOVZBL  FH2$B_RSOFFSET(R7), R0
+        SUBL2   R5, R0                  ; its offset
+        CMPL    R0, R4
+        BLSS    80$
+        CMPL    R3, #ACLMAX
+        BGTRU   80$
+        MOVB    R0, FH2$B_ACOFFSET(R7)
+        PUSHL   R3
+        PUSHAW  (R7)[R0]                ; where they go
+        MOVZBL  FH2$B_MPOFFSET(R7), R1  ; the map's words not in use, cleared
+        MOVZBL  FH2$B_MAP_INUSE(R7), R0
+        ADDL2   R0, R1
+        MOVZBL  FH2$B_RSOFFSET(R7), R0
+        SUBL2   R1, R0
+        ASHL    #1, R0, R0
+        MOVAW   (R7)[R1], R1
+        MOVC5   #0, (R1), #0, R0, (R1)
+        POPR    #^M<R1, R3>
+        MOVC3   R3, (R6), (R1)
+        MOVL    #SS$_NORMAL, R0
+        BRB     90$
+80$:    MOVL    #SS$_ACLFULL, R0
+90$:    POPR    #^M<R1, R2, R3, R4, R5, R6, R7>
+        RSB
+
+; FIL$ACLCHK: R0 = the access wanted, $ARMDEF's bits, R1 = a file header.
+; Looks for the first identifier ACE in its ACL that isn't a DEFAULT one
+; and whose identifiers the current process all holds (HELD). R0 = 0 if
+; there is none, 1 if it grants all the access wanted, 2 if it doesn't,
+; or 3 if the ACL is damaged: an identifier ACE without identifiers.
+; Keeps every other register.
+FIL$ACLCHK::
+        .JSB_ENTRY
+        PUSHR   #^M<R1, R2, R3, R4, R5, R6, R7>
+        MOVL    R0, R7
+        BSBW    AREA
+        MOVL    R2, R4                  ; the next ACE
+10$:    SUBL3   R4, R3, R0
+        CMPL    R0, #ACEMIN
+        BLSSU   70$
+        MOVZBL  (R4), R5                ; its size
+        CMPL    R5, #ACEMIN
+        BLSSU   70$
+        CMPL    R5, R0
+        BGTRU   70$
+        CMPB    ACE$B_TYPE(R4), #ACE$C_KEYID
+        BNEQ    40$
+        BBS     #ACE$V_DEFAULT, ACE$W_FLAGS(R4), 40$
+        EXTZV   #0, #ACE$S_RESERVED, ACE$W_FLAGS(R4), R6
+        MOVAL   ACE$L_KEY(R4)[R6], R6   ; its first identifier
+        ADDL3   R4, R5, R2              ; past its last
+        SUBL3   R6, R2, R0
+        CMPL    R0, #4
+        BLSS    60$                     ; none
+20$:    CMPL    R6, R2
+        BGEQU   50$                     ; all held
+        MOVL    (R6)+, R0
+        BSBB    HELD
+        BLBS    R0, 20$
+40$:    ADDL2   R5, R4
+        BRB     10$
+50$:    BICL3   ACE$L_ACCESS(R4), R7, R0
+        BEQL    55$
+        MOVL    #2, R0
+        BRB     90$
+55$:    MOVL    #1, R0
+        BRB     90$
+60$:    MOVL    #3, R0
+        BRB     90$
+70$:    CLRL    R0
+90$:    POPR    #^M<R1, R2, R3, R4, R5, R6, R7>
+        RSB
+
+; HELD: R0 = an identifier. R0 = 1 if the current process holds it, else
+; 0: UIC$K_MATCH_ALL anyone; a general identifier if its rights list has
+; it; a UIC, [g,m], if its UIC is it, or one in its rights list, but for
+; the parts that are wildcards, UIC$K_WILD_GROUP and UIC$K_WILD_MEMBER.
+; Keeps every other register.
+HELD:
+        .JSB_ENTRY
+        PUSHR   #^M<R1, R2, R3, R4>
+        MOVL    R0, R1
+        CMPL    R1, #UIC$K_MATCH_ALL
+        BEQL    80$
+        EXTZV   #UIC$V_FORMAT, #UIC$S_FORMAT, R1, R0
+        BEQL    20$
+        CMPL    R0, #UIC$K_ID_FORMAT
+        BNEQ    85$
+        MOVL    SCH$GL_CURPCB, R4       ; a general identifier: in the list
+        MOVL    PCB$L_RIGHTS(R4), R2
+        BEQL    85$
+        MOVL    (R2), R3
+        ADDL2   #8, R2
+10$:    DECL    R3
+        BLSS    85$
+        CMPL    (R2), R1
+        BEQL    80$
+        ADDL2   #8, R2
+        BRB     10$
+20$:    MNEGL   #1, R3                  ; a UIC: the parts that count
+        EXTZV   #UIC$V_GROUP, #UIC$S_GROUP, R1, R0
+        CMPL    R0, #UIC$K_WILD_GROUP
+        BNEQ    25$
+        BICL2   #^X3FFF0000, R3
+25$:    CMPW    R1, #UIC$K_WILD_MEMBER
+        BNEQ    30$
+        BICL2   #^XFFFF, R3
+30$:    BICL3   R3, #-1, R3             ; the bits that don't count
+        BICL2   R3, R1
+        MOVL    SCH$GL_CURPCB, R4
+        BICL3   R3, PCB$L_UIC(R4), R0
+        CMPL    R0, R1
+        BEQL    80$
+        MOVL    PCB$L_RIGHTS(R4), R2    ; or a UIC it holds
+        BEQL    85$
+        MOVL    (R2), R4
+        ADDL2   #8, R2
+40$:    DECL    R4
+        BLSS    85$
+        MOVL    (R2), R0
+        ADDL2   #8, R2
+        BITL    #^XC0000000, R0
+        BNEQ    40$
+        BICL2   R3, R0
+        CMPL    R0, R1
+        BNEQ    40$
+80$:    MOVL    #1, R0
+        BRB     90$
+85$:    CLRL    R0
+90$:    POPR    #^M<R1, R2, R3, R4>
+        RSB
+
+; FIL$ACLINHERIT: R1 = a new file's header, R2 = the header it inherits
+; from, R3 = 0 if that is its previous version, 1 if its directory. Gives
+; the new file the ACEs a new version or a new name gets, as VMS's XQP
+; does: the previous version's, but those with NOPROPAGATE; or the
+; directory's DEFAULT ones, without the option, and the protection of
+; its default protection ACE, if it has one. ACEs that don't fit are
+; left out. Uses R0, R2 and R3.
+FIL$ACLINHERIT::
+        .JSB_ENTRY  SCRATCH=<R2, R3>
+        PUSHR   #^M<R1, R4, R5, R6, R7, R8, R9>
+        SUBL2   #ACLMAX, SP
+        MOVL    R1, R9
+        MOVL    R3, R8
+        MOVL    R2, R1
+        BSBW    AREA
+        MOVL    R2, R4                  ; the source's next ACE
+        MOVL    SP, R6                  ; and the new ACL's
+10$:    SUBL3   R4, R3, R0
+        CMPL    R0, #ACEMIN
+        BLSSU   60$
+        MOVZBL  (R4), R5
+        CMPL    R5, #ACEMIN
+        BLSSU   60$
+        CMPL    R5, R0
+        BGTRU   60$
+        TSTL    R8
+        BNEQ    20$
+        BBS     #ACE$V_NOPROPAGATE, ACE$W_FLAGS(R4), 50$
+        BRB     40$
+20$:    CMPB    ACE$B_TYPE(R4), #ACE$C_DIRDEF
+        BNEQ    30$
+        CMPL    R5, #ACE$K_DIRDEF_LENGTH
+        BLSSU   50$
+        EXTZV   #0, #4, ACE$L_SYS_PROT(R4), R0  ; its protection, the file's
+        INSV    ACE$L_OWN_PROT(R4), #4, #4, R0
+        INSV    ACE$L_GRP_PROT(R4), #8, #4, R0
+        INSV    ACE$L_WOR_PROT(R4), #12, #4, R0
+        MOVW    R0, FH2$W_FILEPROT(R9)
+        BRB     50$
+30$:    BBC     #ACE$V_DEFAULT, ACE$W_FLAGS(R4), 50$
+40$:    SUBL3   SP, R6, R0              ; room for it?
+        ADDL2   R5, R0
+        CMPL    R0, #ACLMAX
+        BGTRU   50$
+        PUSHR   #^M<R3, R4, R5>
+        MOVC3   R5, (R4), (R6)
+        POPR    #^M<R3, R4, R5>
+        TSTL    R8
+        BEQL    45$
+        BICW2   #ACE$M_DEFAULT, ACE$W_FLAGS(R6)
+45$:    ADDL2   R5, R6
+50$:    ADDL2   R5, R4
+        BRB     10$
+60$:    MOVL    R9, R1                  ; theirs, as much as fits
+        MOVL    SP, R2
+        SUBL3   SP, R6, R3
+70$:    BSBW    FIL$ACLPUT
+        BLBS    R0, 80$
+        TSTL    R3                      ; less: the last goes
+        BEQL    80$
+        BSBB    LASTACE
+        BRB     70$
+80$:    ADDL2   #ACLMAX, SP
+        POPR    #^M<R1, R4, R5, R6, R7, R8, R9>
+        RSB
+
+; LASTACE: R2 = ACEs, R3 = their bytes, more than 0. R3 = the bytes
+; before the last of them. Keeps every other register.
+LASTACE:
+        .JSB_ENTRY  OUTPUT=<R3>
+        PUSHR   #^M<R0, R1>
+        CLRL    R0                      ; the last's offset
+10$:    MOVZBL  (R2)[R0], R1
+        ADDL2   R0, R1
+        CMPL    R1, R3
+        BGEQU   20$
+        MOVL    R1, R0
+        BRB     10$
+20$:    MOVL    R0, R3
+        POPR    #^M<R0, R1>
+        RSB
+
+        .END

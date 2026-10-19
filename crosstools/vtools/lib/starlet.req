@@ -116,7 +116,26 @@ LITERAL
     SS$_NOMORELOCK = 2568,  ! a wildcard $GETLKI is past the last lock
     SS$_DEADLOCK = 3594,  ! the lock request closed a deadlock, and was refused
     SS$_NOWORLD = 10372,  ! another group's lock needs WORLD
-    SS$_NOOPER = 10388;  ! $BRKTHRU to another's terminals needs OPER
+    SS$_NOOPER = 10388,  ! $BRKTHRU to another's terminals needs OPER
+    SS$_ACEIDMATCH = 1721,  ! success: an ACE's identifiers matched
+    SS$_NOMOREITEMS = 1777,  ! success: no more items to return
+    SS$_ACLEMPTY = 2512,  ! a warning: the object has no ACL
+    SS$_NOENTRY = 2520,  ! a warning: no ACE matches the one given
+    SS$_NOMOREACE = 2528,  ! a warning: past the ACL's last ACE
+    SS$_RIGHTSFULL = 2536,  ! a warning: the rights list has no room
+    SS$_ACLFULL = 2552,  ! a warning: no room for the ACE in the ACL
+    SS$_NOSUCHOBJECT = 2696,  ! a warning: no such object
+    SS$_BADACL = 3642,  ! the ACL is damaged
+    SS$_ACEEXISTS = 3650,  ! the ACE is in the ACL already
+    SS$_NORIGHTSDB = 3666,  ! no rights database, RIGHTSLIST.DAT
+    SS$_NOCLASSSUPPORT = 3906,
+    SS$_BADACLCTX = 8652,  ! an ACL context that isn't one
+    SS$_IVACL = 8676,  ! an ACE's text or bytes are wrong
+    SS$_NOSUCHID = 8684,  ! no such identifier, or past the last
+    SS$_IVIDENT = 8740,  ! an identifier's name or value isn't one
+    SS$_DUPIDENT = 8748,  ! that identifier is there already
+    SS$_NOACLSUPPORT = 8892,  ! the object can't have an ACL
+    SS$_NOCLASS = 9436;  ! no security class by that name
 
 ! $CLIMSGDEF
 LITERAL
@@ -1282,7 +1301,9 @@ MACRO
     FIB$B_DID_NMX = 15, 0, 8, 0 %,
     FIB$L_WCC = 16, 0, 32, 0 %,  ! a wildcard lookup's context
     FIB$W_NMCTL = 20, 0, 16, 0 %,  ! FIB$M_ bits: how the name is looked up
-    FIB$W_VERLIMIT = 44, 0, 16, 0 %;  ! the name's version limit
+    FIB$W_VERLIMIT = 44, 0, 16, 0 %,  ! the name's version limit
+    FIB$L_ACLCTX = 48, 0, 32, 0 %,  ! the ACL attributes' position: an ACE's number, from 1
+    FIB$L_ACL_STATUS = 52, 0, 32, 0 %;  ! and their status, the first failure's
 
 ! $FATDEF
 LITERAL
@@ -1340,11 +1361,116 @@ LITERAL
     ATR$C_FPRO = 22,  ! its protection mask
     ATR$S_FPRO = 2,
     ATR$C_UIC_RO = 26,  ! its owner, read only
-    ATR$S_UIC_RO = 4;
+    ATR$S_UIC_RO = 4,
+    ATR$C_ADDACLENT = 31,  ! adds the ACEs at ATR$L_ADDR before the one at FIB$L_ACLCTX
+    ATR$S_ADDACLENT = 255,
+    ATR$C_DELACLENT = 32,  ! deletes the ACE that matches the one there
+    ATR$S_DELACLENT = 255,
+    ATR$C_FNDACLENT = 34,  ! puts the position of the ACE that matches it in FIB$L_ACLCTX
+    ATR$S_FNDACLENT = 255,
+    ATR$C_DELETEACL = 36,  ! deletes the ACL but its PROTECTED ACEs
+    ATR$S_DELETEACL = 255,
+    ATR$C_READACL = 37,  ! the whole ACEs from FIB$L_ACLCTX's, 0s after
+    ATR$S_READACL = 512,
+    ATR$C_ACLLENGTH = 38,  ! the ACL's bytes, a longword
+    ATR$S_ACLLENGTH = 4,
+    ATR$C_READACE = 39,  ! the ACE after FIB$L_ACLCTX's, which it moves on
+    ATR$S_READACE = 255,
+    ATR$C_DELETE_ALL = 52,  ! deletes the whole ACL
+    ATR$S_DELETE_ALL = 255;
 MACRO
     ATR$W_SIZE = 0, 0, 16, 0 %,  ! the bytes at ATR$L_ADDR
     ATR$W_TYPE = 2, 0, 16, 0 %,  ! which attribute, ATR$C_
     ATR$L_ADDR = 4, 0, 32, 0 %;
+
+! $ACEDEF
+LITERAL
+    ACE$C_LENGTH = 8,  ! the bytes before them
+    ACE$C_KEYID = 1,  ! an identifier ACE
+    ACE$C_DIRDEF = 9,  ! a default protection ACE
+    ACE$K_DIRDEF_LENGTH = 24,  ! vaxpunk's name: a default protection ACE's size
+    ACE$S_RESERVED = 4,
+    ACE$V_DEFAULT = 8,  ! a directory's: given to its new files, not checked
+    ACE$V_PROTECTED = 9,  ! kept when the ACL is deleted
+    ACE$V_HIDDEN = 10,
+    ACE$V_NOPROPAGATE = 11,  ! not given to the file's next version
+    ACE$M_DEFAULT = 256,
+    ACE$M_PROTECTED = 512,
+    ACE$M_HIDDEN = 1024,
+    ACE$M_NOPROPAGATE = 2048,
+    ACE$M_READ = 1,
+    ACE$M_WRITE = 2,
+    ACE$M_EXECUTE = 4,
+    ACE$M_DELETE = 8,
+    ACE$M_CONTROL = 16;
+MACRO
+    ACE$B_SIZE = 0, 0, 8, 0 %,  ! its bytes
+    ACE$B_TYPE = 1, 0, 8, 0 %,  ! ACE$C_
+    ACE$W_FLAGS = 2, 0, 16, 0 %,  ! its options, ACE$M_; bits 3:0 the reserved longwords before the identifiers
+    ACE$L_ACCESS = 4, 0, 32, 0 %,  ! ACE$M_ READ to CONTROL, the access it grants
+    ACE$L_KEY = 8, 0, 32, 0 %,  ! its identifiers
+    ACE$L_SYS_PROT = 8, 0, 32, 0 %,  ! its protection, a longword each, a set bit denying
+    ACE$L_OWN_PROT = 12, 0, 32, 0 %,
+    ACE$L_GRP_PROT = 16, 0, 32, 0 %,
+    ACE$L_WOR_PROT = 20, 0, 32, 0 %;
+
+! $UICDEF
+LITERAL
+    UIC$V_FORMAT = 30,
+    UIC$S_FORMAT = 2,
+    UIC$K_UIC_FORMAT = 0,
+    UIC$K_ID_FORMAT = 2,
+    UIC$V_GROUP = 16,
+    UIC$S_GROUP = 14,
+    UIC$K_WILD_GROUP = 16383,  ! [*,m]
+    UIC$K_WILD_MEMBER = 65535,  ! [g,*]
+    UIC$K_MAX_UIC = 1073741823,
+    UIC$K_MATCH_ALL = -1,  ! *: anyone
+    UIC$K_FIRST_ID = 2147549184;  ! the first general identifier AUTHORIZE gives
+
+! $KGBDEF
+LITERAL
+    KGB$S_NAME = 32,
+    KGB$K_HOLD_RECORD = 16,  ! a holder's record's bytes,
+    KGB$K_IDENT_RECORD = 48,  ! an identifier's,
+    KGB$K_MAINT_RECORD = 64,  ! the maintenance record's
+    KGB$K_LEVEL1 = 257,
+    KGB$M_RESOURCE = 1,  ! its holders may charge disk space to it
+    KGB$M_DYNAMIC = 2,  ! its holders may turn it off and on
+    KGB$M_NOACCESS = 4,
+    KGB$M_SUBSYSTEM = 8,
+    KGB$M_IMPERSONATE = 16,
+    KGB$M_HOLDER_HIDDEN = 32,
+    KGB$M_NAME_HIDDEN = 64,
+    KGB$K_BATCH_ID = 2147483649,  ! the environmental identifiers, by how the process logged in
+    KGB$K_DIALUP_ID = 2147483650,
+    KGB$K_INTERACTIVE_ID = 2147483651,
+    KGB$K_LOCAL_ID = 2147483652,
+    KGB$K_NETWORK_ID = 2147483653,
+    KGB$K_REMOTE_ID = 2147483654;
+MACRO
+    KGB$L_IDENTIFIER = 0, 0, 32, 0 %,  ! the identifier: key 0
+    KGB$L_ATTRIBUTES = 4, 0, 32, 0 %,  ! KGB$M_
+    KGB$Q_HOLDER = 8, 0, 0, 0 %,  ! a holder's UIC and a longword of 0, else 0: key 1
+    KGB$T_NAME = 16, 0, 0, 0 %,  ! the identifier's name, padded with blanks: key 2
+    KGB$W_LEVEL = 48, 0, 16, 0 %,  ! the maintenance record's: KGB$K_LEVEL1
+    KGB$Q_SYS_ID = 52, 0, 0, 0 %,
+    KGB$L_NEXT_ID = 60, 0, 32, 0 %;  ! the next general identifier
+
+! $OSSDEF
+LITERAL
+    OSS$_ACL_ADD_ENTRY = 3,  ! add an ACE, at the context's position
+    OSS$_ACL_DELETE_ENTRY = 4,  ! delete the ACE that matches this one
+    OSS$_ACL_DELETE = 5,  ! delete the ACL but its PROTECTED ACEs
+    OSS$_ACL_DELETE_ALL = 6,  ! delete the whole ACL
+    OSS$_ACL_FIND_ENTRY = 7,  ! move the context to the ACE that matches this one
+    OSS$_ACL_LENGTH = 11,  ! the ACL's bytes, a longword
+    OSS$_ACL_POSITION_TOP = 14,  ! the context to the ACL's top
+    OSS$_ACL_POSITION_BOTTOM = 15,  ! and past its end
+    OSS$_ACL_READ_ENTRY = 16,  ! the ACE after the context's, which moves on
+    OSS$_ACL_READ = 17,  ! the ACEs from the context's
+    OSS$_OWNER = 21,  ! the owner, a longword
+    OSS$_PROTECTION = 22;  ! the protection mask, a word or a longword
 
 ! $INETSYMDEF
 LITERAL
@@ -1465,6 +1591,10 @@ LITERAL
     JPI$_DIOLM = 787,  ! and its limit
     JPI$_BUFIO = 1036,  ! buffered I/O requests it has made
     JPI$_DIRIO = 1035,  ! direct I/O requests it has made
+    JPI$_RIGHTSLIST = 806,  ! its rights, quadwords: an identifier, its attributes
+    JPI$_PROCESS_RIGHTS = 814,  ! its own: its UIC, then those its user holds
+    JPI$_SYSTEM_RIGHTS = 815,  ! the system's, which every process holds
+    JPI$_RIGHTS_SIZE = 817,  ! the bytes JPI$_RIGHTSLIST returns
     JPI$K_OTHER = 0,  ! a detached process's mode
     JPI$K_NETWORK = 1,
     JPI$K_BATCH = 2,

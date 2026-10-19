@@ -1,0 +1,851 @@
+        .TITLE  VECRDB  The rights database's services
+        .IDENT  /V0.1/
+;
+; The rights database, RIGHTSLIST.DAT, says which identifiers there are
+; and who holds them (docs/adr/0040-acls-in-file-headers-and-rights-
+; identifiers.md): an indexed file of $KGBDEF records, VMS's, keyed by
+; the identifier (key 0), the holder (key 1) and the name (key 2). An
+; identifier's record has its name; a holder's record says a UIC holds
+; it; the maintenance record, of identifier 0, the next general
+; identifier $ADD_IDENT gives. It is found as RIGHTSLIST, the default
+; SYS$SYSTEM:.DAT.
+; These services run in their caller's mode, in the vector, and read and
+; write it with RMS as any program would, so changing it takes write
+; access to it; anyone may read it. Each opens the file, does its work
+; and closes it again. A context, a longword the caller keeps, is how
+; many records a search has returned; $FINISH_RDB clears it.
+; vaxpunk: VMS's run in executive mode and keep their streams open
+; between calls, in the process's own block of P1; a search here reads
+; the records it returned before again.
+; ponytail: no locks, so two processes changing it at once can lose a
+; change, as SYSUAF.DAT can (ADR-0029); no $CREATE_RDB, build.rs makes
+; it.
+;
+        .LIBRARY "lib.mlb"
+        .LIBRARY "starlet.mlb"
+        $SSDEF
+        $RMSDEF
+        $FABDEF
+        $RABDEF
+        $KGBDEF
+        $UICDEF
+
+F_FAB = 0                               ; a service's frame: its FAB,
+F_RAB = F_FAB+FAB$C_BLN                 ; RAB,
+F_REC = F_RAB+RAB$C_BLN                 ; the record,
+F_KEY = F_REC+KGB$K_MAINT_RECORD        ; the key,
+F_TMP = F_KEY+KGB$S_NAME                ; a record being moved
+F_SIZE = <F_TMP+KGB$K_MAINT_RECORD+15>&^C15
+ATTRIBS = ^X7F                          ; the attributes there are, KGB$M_
+FIRSTID = ^X80010000                    ; and the general identifiers AUTHORIZE gives
+LASTID = ^X8FFFFFFF
+
+        .PSECT  EXEC$VECTOR, EXE, NOWRT, LONG
+RDBFAB: $FAB    FNA=RDBNAM, FNS=RDBNAMLEN, DNA=RDBDEF, DNS=RDBDEFLEN, FAC=GET, SHR=<GET,PUT,UPD,DEL>
+RDBRAB: $RAB    RAC=KEY
+RDBNAM: .ASCII  "RIGHTSLIST"
+RDBNAMLEN = .-RDBNAM
+RDBDEF: .ASCII  "SYS$SYSTEM:.DAT"
+RDBDEFLEN = .-RDBDEF
+MAINTNAME:                              ; the maintenance record's name
+        .ASCII  "$$MAINTENANCE_RECORD            "
+
+; FRAME: makes room for a service's frame on the stack, R11 its base.
+        .MACRO  FRAME
+        SUBL2   #F_SIZE, SP
+        MOVL    SP, R11
+        .ENDM   FRAME
+
+; $ASCTOID name, id, attrib: the identifier whose name the string name
+; describes is, in capitals, into the longword at id, and its attributes
+; into the one at attrib, either 0 for none. R0 = SS$_NORMAL,
+; SS$_IVIDENT for a name that isn't one, SS$_NOSUCHID, SS$_NORIGHTSDB,
+; or RMS's error.
+        .ENTRY  SYS$ASCTOID, ^M<R2, R3, R4, R5, R6, R7, R8, R9, R10, R11>
+        FRAME
+        MOVL    4(AP), R1
+        BSBW    CHKNAME
+        BLBC    R0, 90$
+        CLRQ    R0                      ; read, along the identifiers
+        BSBW    RDBOPEN
+        BLBC    R0, 90$
+        MOVL    #2, R0
+        MOVL    #KGB$S_NAME, R1
+        BSBW    KEYGET
+        BSBW    NOTFOUND
+        BLBC    R0, 80$
+        MOVL    #SS$_NOSUCHID, R0
+        TSTL    F_REC+KGB$L_IDENTIFIER(R11)     ; the maintenance record
+        BEQL    80$
+        MOVL    8(AP), R1
+        BEQL    10$
+        MOVL    F_REC+KGB$L_IDENTIFIER(R11), (R1)
+10$:    MOVL    12(AP), R1
+        BEQL    20$
+        MOVL    F_REC+KGB$L_ATTRIBUTES(R11), (R1)
+20$:    MOVL    #SS$_NORMAL, R0
+80$:    BSBW    RDBCLOSE
+90$:    RET
+
+; $IDTOASC id, namlen, nambuf, resid, attrib, contxt: the name of the
+; identifier id into the string nambuf describes, padded with blanks or
+; cut, its length without them into the word at namlen, the identifier
+; into the longword at resid and its attributes into attrib, each 0 for
+; none. id -1 is each identifier in turn, in the order of their names,
+; one a call, as many as the longword at contxt says it has given; it
+; needs contxt. R0 = SS$_NORMAL; SS$_NOSUCHID, and contxt 0, for one
+; that isn't there, or past the last; SS$_IVIDENT for an identifier
+; that isn't one, SS$_INSFARG, SS$_NORIGHTSDB, or RMS's error.
+        .ENTRY  SYS$IDTOASC, ^M<R2, R3, R4, R5, R6, R7, R8, R9, R10, R11>
+        FRAME
+        MOVL    4(AP), R0
+        CMPL    R0, #-1
+        BEQL    20$
+        BSBW    CHKID
+        BLBC    R0, 90$
+        CLRQ    R0
+        BSBW    RDBOPEN
+        BLBC    R0, 90$
+        MOVL    4(AP), R0
+        BSBW    IDENT
+        BLBC    R0, 80$
+        BRB     50$
+20$:    MOVL    #SS$_INSFARG, R0        ; each in turn, from the context's
+        MOVL    24(AP), R10
+        BEQL    90$
+        CLRL    R0
+        MOVL    #2, R1                  ; along the names
+        BSBW    RDBOPEN
+        BLBC    R0, 90$
+        MOVL    (R10), R9               ; those given already
+30$:    BSBW    SEQGET
+        BSBW    NOTFOUND
+        BLBC    R0, 70$
+        TSTL    F_REC+KGB$L_IDENTIFIER(R11)     ; the maintenance record
+        BEQL    30$
+        SOBGEQ  R9, 30$
+        INCL    (R10)
+50$:    LOCC    #^A/ /, #KGB$S_NAME, F_REC+KGB$T_NAME(R11)
+        SUBL3   R0, #KGB$S_NAME, R0     ; the name's length
+        MOVL    8(AP), R1
+        BEQL    55$
+        MOVW    R0, (R1)
+55$:    MOVL    12(AP), R1              ; the name
+        BEQL    60$
+        MOVC5   #KGB$S_NAME, F_REC+KGB$T_NAME(R11), #^A/ /, (R1), @4(R1)
+60$:    MOVL    16(AP), R1
+        BEQL    65$
+        MOVL    F_REC+KGB$L_IDENTIFIER(R11), (R1)
+65$:    MOVL    20(AP), R1
+        BEQL    68$
+        MOVL    F_REC+KGB$L_ATTRIBUTES(R11), (R1)
+68$:    MOVL    #SS$_NORMAL, R0
+        BRB     80$
+70$:    CLRL    (R10)                   ; past the last
+80$:    BSBW    RDBCLOSE
+90$:    RET
+
+; $FIND_HELD holder, id, attrib, contxt: an identifier the holder, the
+; quadword at holder, a UIC and 0, holds, into the longword at id, and
+; its attributes, as the holder's record gives them, into attrib, each 0
+; for none: with contxt, the one after the many it says it has given,
+; else the first. R0 = SS$_NORMAL; SS$_NOSUCHID, and contxt 0, past the
+; last; SS$_IVIDENT for a holder that isn't a UIC, SS$_NORIGHTSDB, or
+; RMS's error.
+        .ENTRY  SYS$FIND_HELD, ^M<R2, R3, R4, R5, R6, R7, R8, R9, R10, R11>
+        FRAME
+        MOVL    4(AP), R1
+        BSBW    CHKHOLDER
+        BLBC    R0, 90$
+        CLRL    R9                      ; the ones to pass
+        MOVL    16(AP), R10
+        BEQL    10$
+        MOVL    (R10), R9
+10$:    CLRQ    R0
+        BSBW    RDBOPEN
+        BLBC    R0, 90$
+        MOVL    4(AP), R1
+        MOVQ    (R1), F_KEY(R11)
+        MOVL    #1, R0
+        MOVL    #8, R1
+        BSBW    KEYGET
+20$:    BSBW    NOTFOUND
+        BLBC    R0, 70$
+        MOVL    #SS$_NOSUCHID, R0
+        CMPL    F_REC+KGB$Q_HOLDER(R11), F_KEY(R11)
+        BNEQ    70$
+        CMPL    F_REC+KGB$Q_HOLDER+4(R11), F_KEY+4(R11)
+        BNEQ    70$
+        SOBGEQ  R9, 30$
+        TSTL    R10
+        BEQL    40$
+        INCL    (R10)
+40$:    MOVL    8(AP), R1
+        BEQL    45$
+        MOVL    F_REC+KGB$L_IDENTIFIER(R11), (R1)
+45$:    MOVL    12(AP), R1
+        BEQL    50$
+        MOVL    F_REC+KGB$L_ATTRIBUTES(R11), (R1)
+50$:    MOVL    #SS$_NORMAL, R0
+        BRB     80$
+30$:    BSBW    SEQGET
+        BRB     20$
+70$:    TSTL    R10
+        BEQL    80$
+        CLRL    (R10)
+80$:    BSBW    RDBCLOSE
+90$:    RET
+
+; $FIND_HOLDER id, holder, attrib, contxt: a holder of the identifier id
+; into the quadword at holder, its UIC and 0, and the attributes it holds
+; it with into the longword at attrib, each 0 for none: with contxt, the
+; one after the many it says it has given, else the first. R0 =
+; SS$_NORMAL; SS$_NOSUCHID, and contxt 0, for an identifier that isn't
+; there, or past its last holder; SS$_IVIDENT, SS$_NORIGHTSDB, or RMS's
+; error.
+        .ENTRY  SYS$FIND_HOLDER, ^M<R2, R3, R4, R5, R6, R7, R8, R9, R10, R11>
+        FRAME
+        MOVL    4(AP), R0
+        BSBW    CHKID
+        BLBC    R0, 90$
+        CLRL    R9
+        MOVL    16(AP), R10
+        BEQL    10$
+        MOVL    (R10), R9
+10$:    CLRQ    R0
+        BSBW    RDBOPEN
+        BLBC    R0, 90$
+        MOVL    4(AP), R0
+        BSBW    IDENT
+        BLBC    R0, 70$
+20$:    BSBW    SEQGET                  ; its holders' records follow it
+        BSBW    NOTFOUND
+        BLBC    R0, 70$
+        MOVL    #SS$_NOSUCHID, R0
+        CMPL    F_REC+KGB$L_IDENTIFIER(R11), 4(AP)
+        BNEQ    70$
+        CMPW    F_RAB+RAB$W_RSZ(R11), #KGB$K_HOLD_RECORD
+        BNEQ    20$
+        SOBGEQ  R9, 20$
+        TSTL    R10
+        BEQL    40$
+        INCL    (R10)
+40$:    MOVL    8(AP), R1
+        BEQL    45$
+        MOVQ    F_REC+KGB$Q_HOLDER(R11), (R1)
+45$:    MOVL    12(AP), R1
+        BEQL    50$
+        MOVL    F_REC+KGB$L_ATTRIBUTES(R11), (R1)
+50$:    MOVL    #SS$_NORMAL, R0
+        BRB     80$
+70$:    TSTL    R10
+        BEQL    80$
+        CLRL    (R10)
+80$:    BSBW    RDBCLOSE
+90$:    RET
+
+; $FINISH_RDB contxt: ends a search: clears the longword at contxt. R0 =
+; SS$_NORMAL, or SS$_INSFARG without one.
+        .ENTRY  SYS$FINISH_RDB, ^M<>
+        MOVL    #SS$_INSFARG, R0
+        MOVL    4(AP), R1
+        BEQL    90$
+        CLRL    (R1)
+        MOVL    #SS$_NORMAL, R0
+90$:    RET
+
+; $ADD_IDENT name, id, attrib, resid: adds the identifier id, named as
+; the string name describes, in capitals, with the attributes attrib,
+; KGB$M_'s. id 0 is the next general identifier, KGB$L_NEXT_ID of the
+; maintenance record, or the first after it that is free, from
+; %X80010000; the identifier added goes into the longword at resid, 0
+; for none. R0 = SS$_NORMAL, SS$_DUPLNAM for a name there is,
+; SS$_DUPIDENT for an identifier there is, SS$_IVIDENT, SS$_BADPARAM
+; for attributes there aren't, SS$_NORIGHTSDB, or RMS's error, such as
+; RMS$_PRV without write access to the file.
+        .ENTRY  SYS$ADD_IDENT, ^M<R2, R3, R4, R5, R6, R7, R8, R9, R10, R11>
+        FRAME
+        MOVL    #SS$_BADPARAM, R0
+        BITL    #^C<ATTRIBS>, 12(AP)
+        BNEQ    90$
+        MOVL    8(AP), R0
+        BEQL    5$
+        BSBW    CHKID
+        BLBC    R0, 90$
+5$:     MOVL    4(AP), R1
+        BSBW    CHKNAME
+        BLBC    R0, 90$
+        MOVC3   #KGB$S_NAME, F_KEY(R11), F_TMP+KGB$T_NAME(R11)  ; the new record
+        MOVL    #1, R0
+        CLRL    R1
+        BSBW    RDBOPEN
+        BLBC    R0, 90$
+        MOVL    #2, R0                  ; its name
+        MOVL    #KGB$S_NAME, R1
+        BSBW    KEYGET
+        BLBC    R0, 10$
+        MOVL    #SS$_DUPLNAM, R0
+        BRW     80$
+10$:    MOVL    8(AP), R9               ; its identifier
+        BNEQ    40$
+        CLRL    R0                      ; the next one: the maintenance record's
+        BSBW    MAINT
+        BLBC    R0, 80$
+        MOVL    F_REC+KGB$L_NEXT_ID(R11), R9
+20$:    CMPL    R9, #FIRSTID
+        BLSSU   25$
+        CMPL    R9, #LASTID
+        BLEQU   30$
+25$:    MOVL    #FIRSTID, R9
+30$:    MOVL    R9, R0                  ; one that is free
+        BSBW    IDENT
+        BLBC    R0, 35$
+        INCL    R9
+        BRB     20$
+35$:    CMPL    R0, #SS$_NOSUCHID
+        BNEQ    80$
+        MOVL    #1, R0                  ; past it, in the maintenance record
+        BSBW    MAINT
+        BLBC    R0, 80$
+        BRB     50$
+40$:    MOVL    R9, R0
+        BSBW    IDENT
+        BLBC    R0, 45$
+        MOVL    #SS$_DUPIDENT, R0
+        BRB     80$
+45$:    CMPL    R0, #SS$_NOSUCHID
+        BNEQ    80$
+50$:    MOVL    16(AP), R1
+        BEQL    55$
+        MOVL    R9, (R1)
+55$:    MOVL    R9, F_TMP+KGB$L_IDENTIFIER(R11)
+        MOVL    12(AP), F_TMP+KGB$L_ATTRIBUTES(R11)
+        CLRQ    F_TMP+KGB$Q_HOLDER(R11)
+        MOVL    #KGB$K_IDENT_RECORD, R0
+        BSBW    PUTTMP
+80$:    BSBW    RDBCLOSE
+90$:    RET
+
+; $REM_IDENT id: removes the identifier id, the records of those who hold
+; it, and, for a UIC, those of what it holds. R0 = SS$_NORMAL,
+; SS$_NOSUCHID, SS$_IVIDENT, SS$_NORIGHTSDB, or RMS's error.
+        .ENTRY  SYS$REM_IDENT, ^M<R2, R3, R4, R5, R6, R7, R8, R9, R10, R11>
+        FRAME
+        MOVL    4(AP), R0
+        BSBW    CHKID
+        BLBC    R0, 90$
+        MOVL    #1, R0
+        CLRL    R1
+        BSBW    RDBOPEN
+        BLBC    R0, 90$
+        MOVL    4(AP), R0
+        BSBW    IDENT
+        BLBC    R0, 80$
+10$:    MOVL    4(AP), F_KEY(R11)       ; what it holds
+        CLRL    F_KEY+4(R11)
+        MOVL    #1, R0
+        MOVL    #8, R1
+        BSBW    KEYGET
+        BLBC    R0, 20$
+        BSBW    DELETE
+        BLBC    R0, 80$
+        BRB     10$
+20$:    MOVL    4(AP), F_KEY(R11)       ; it, and who holds it
+        CLRL    R0
+        MOVL    #4, R1
+        BSBW    KEYGET
+        BLBC    R0, 70$
+        BSBW    DELETE
+        BLBC    R0, 80$
+        BRB     20$
+70$:    MOVL    #SS$_NORMAL, R0
+80$:    BSBW    RDBCLOSE
+90$:    RET
+
+; $ADD_HOLDER id, holder, attrib: records that the UIC in the quadword at
+; holder, a UIC identifier there is, holds the identifier id, with the
+; attributes attrib, those of id's that it has. R0 = SS$_NORMAL,
+; SS$_NOSUCHID for an identifier or a holder there isn't, SS$_DUPIDENT
+; if it holds it already, SS$_IVIDENT, SS$_BADPARAM, SS$_NORIGHTSDB, or
+; RMS's error.
+        .ENTRY  SYS$ADD_HOLDER, ^M<R2, R3, R4, R5, R6, R7, R8, R9, R10, R11>
+        FRAME
+        MOVL    #SS$_BADPARAM, R0
+        BITL    #^C<ATTRIBS>, 12(AP)
+        BNEQ    90$
+        MOVL    4(AP), R0
+        BSBW    CHKID
+        BLBC    R0, 90$
+        MOVL    8(AP), R1
+        BSBW    CHKHOLDER
+        BLBC    R0, 90$
+        MOVL    #SS$_IVIDENT, R0
+        CMPL    @8(AP), 4(AP)
+        BEQL    90$
+        MOVL    #1, R0
+        CLRL    R1
+        BSBW    RDBOPEN
+        BLBC    R0, 90$
+        MOVL    @8(AP), R0              ; the holder's identifier
+        BSBW    IDENT
+        BLBC    R0, 80$
+        BSBW    HOLDER                  ; holds it already?
+        BLBC    R0, 10$
+        MOVL    #SS$_DUPIDENT, R0
+        BRB     80$
+10$:    CMPL    R0, #SS$_NOSUCHID
+        BNEQ    80$
+        MOVL    4(AP), R0               ; the identifier, and its attributes
+        BSBW    IDENT
+        BLBC    R0, 80$
+        MOVL    4(AP), F_TMP+KGB$L_IDENTIFIER(R11)
+        MCOML   F_REC+KGB$L_ATTRIBUTES(R11), R0
+        BICL3   R0, 12(AP), F_TMP+KGB$L_ATTRIBUTES(R11)
+        MOVQ    @8(AP), F_TMP+KGB$Q_HOLDER(R11)
+        MOVL    #KGB$K_HOLD_RECORD, R0
+        BSBW    PUTTMP
+80$:    BSBW    RDBCLOSE
+90$:    RET
+
+; $REM_HOLDER id, holder: removes the record that the UIC in the quadword
+; at holder holds the identifier id. R0 = SS$_NORMAL, SS$_NOSUCHID if it
+; doesn't, or there is no such identifier, SS$_IVIDENT, SS$_NORIGHTSDB,
+; or RMS's error.
+        .ENTRY  SYS$REM_HOLDER, ^M<R2, R3, R4, R5, R6, R7, R8, R9, R10, R11>
+        FRAME
+        MOVL    4(AP), R0
+        BSBW    CHKID
+        BLBC    R0, 90$
+        MOVL    8(AP), R1
+        BSBW    CHKHOLDER
+        BLBC    R0, 90$
+        MOVL    #1, R0
+        CLRL    R1
+        BSBW    RDBOPEN
+        BLBC    R0, 90$
+        BSBW    HOLDER
+        BLBC    R0, 80$
+        BSBW    DELETE
+80$:    BSBW    RDBCLOSE
+90$:    RET
+
+; $MOD_HOLDER id, holder, set_attrib, clr_attrib: changes the attributes
+; the UIC in the quadword at holder holds the identifier id with: clears
+; clr_attrib's, then sets set_attrib's that id has. R0 = SS$_NORMAL,
+; SS$_NOSUCHID, SS$_IVIDENT, SS$_BADPARAM, SS$_NORIGHTSDB, or RMS's
+; error.
+        .ENTRY  SYS$MOD_HOLDER, ^M<R2, R3, R4, R5, R6, R7, R8, R9, R10, R11>
+        FRAME
+        MOVL    #SS$_BADPARAM, R0
+        BISL3   12(AP), 16(AP), R1
+        BITL    #^C<ATTRIBS>, R1
+        BNEQ    90$
+        MOVL    4(AP), R0
+        BSBW    CHKID
+        BLBC    R0, 90$
+        MOVL    8(AP), R1
+        BSBW    CHKHOLDER
+        BLBC    R0, 90$
+        MOVL    #1, R0
+        CLRL    R1
+        BSBW    RDBOPEN
+        BLBC    R0, 90$
+        MOVL    4(AP), R0               ; the identifier's attributes
+        BSBW    IDENT
+        BLBC    R0, 80$
+        MCOML   F_REC+KGB$L_ATTRIBUTES(R11), R9
+        BICL3   R9, 12(AP), R9          ; those to set it has
+        BSBW    HOLDER
+        BLBC    R0, 80$
+        BICL2   16(AP), F_REC+KGB$L_ATTRIBUTES(R11)
+        BISL2   R9, F_REC+KGB$L_ATTRIBUTES(R11)
+        BSBW    UPDATE
+80$:    BSBW    RDBCLOSE
+90$:    RET
+
+; $MOD_IDENT id, set_attrib, clr_attrib, new_name, new_value: changes the
+; identifier id: its name to the string new_name describes, if it is
+; given, its attributes, clearing clr_attrib's, in its holders' records
+; too, and setting set_attrib's, and its value to new_value, if it isn't
+; 0, of the same format, in its holders' records and, for a UIC, in the
+; records of what it holds. R0 = SS$_NORMAL, SS$_NOSUCHID, SS$_DUPLNAM
+; for a name or a value there is, SS$_IVIDENT, SS$_BADPARAM,
+; SS$_NORIGHTSDB, or RMS's error.
+        .ENTRY  SYS$MOD_IDENT, ^M<R2, R3, R4, R5, R6, R7, R8, R9, R10, R11>
+        FRAME
+        MOVL    #SS$_BADPARAM, R0
+        BISL3   8(AP), 12(AP), R1
+        BITL    #^C<ATTRIBS>, R1
+        BNEQ    5$
+        MOVL    4(AP), R0
+        BSBW    CHKID
+        BLBC    R0, 5$
+        MOVL    20(AP), R0              ; the new value, the same format
+        BEQL    2$
+        BSBW    CHKID
+        BLBC    R0, 5$
+        XORL3   4(AP), 20(AP), R0
+        BBC     #31, R0, 2$
+        MOVL    #SS$_IVIDENT, R0
+5$:     RET
+2$:     MOVL    #1, R0
+        CLRL    R1
+        BSBW    RDBOPEN
+        BLBC    R0, 5$
+        MOVL    4(AP), R0
+        BSBW    IDENT
+        BLBC    R0, 80$
+        MOVL    16(AP), R1              ; its name
+        BEQL    20$
+        BSBW    CHKNAME
+        BLBC    R0, 80$
+        MOVL    #2, R0
+        MOVL    #KGB$S_NAME, R1
+        BSBW    KEYGET
+        BLBC    R0, 10$
+        MOVL    #SS$_DUPLNAM, R0
+        BRB     80$
+10$:    MOVC3   #KGB$S_NAME, F_KEY(R11), F_TMP(R11)
+        MOVL    4(AP), R0
+        BSBW    IDENT
+        BLBC    R0, 80$
+        MOVC3   #KGB$S_NAME, F_TMP(R11), F_REC+KGB$T_NAME(R11)
+        BSBW    UPDATE
+        BLBC    R0, 80$
+20$:    TSTL    12(AP)                  ; its holders lose clr_attrib's
+        BEQL    30$
+        MOVL    4(AP), R0
+        BSBW    IDENT
+        BLBC    R0, 80$
+25$:    BSBW    SEQGET
+        BLBC    R0, 30$
+        CMPL    F_REC+KGB$L_IDENTIFIER(R11), 4(AP)
+        BNEQ    30$
+        BICL2   12(AP), F_REC+KGB$L_ATTRIBUTES(R11)
+        BSBW    UPDATE
+        BLBC    R0, 80$
+        BRB     25$
+30$:    MOVL    4(AP), R0               ; and it, set_attrib's too
+        BSBW    IDENT
+        BLBC    R0, 80$
+        BICL2   12(AP), F_REC+KGB$L_ATTRIBUTES(R11)
+        BISL2   8(AP), F_REC+KGB$L_ATTRIBUTES(R11)
+        BSBW    UPDATE
+        BLBC    R0, 80$
+        MOVL    20(AP), R0
+        BEQL    70$
+        BSBW    RENUMBER
+        BRB     80$
+70$:    MOVL    #SS$_NORMAL, R0
+80$:    BSBW    RDBCLOSE
+        RET
+
+; RENUMBER: AP = $MOD_IDENT's arguments, R11 = its frame, the file open
+; for write. Gives the identifier its new value, new_value, in its
+; record, its holders' and, for a UIC, those of what it holds: the first
+; two change their primary key, so each goes and comes back. R0 =
+; SS$_NORMAL, SS$_DUPLNAM if the new value is there, or RMS's error.
+; Uses R0-R10.
+RENUMBER:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5, R6, R7, R8, R9, R10>
+        MOVL    20(AP), R0
+        BSBW    IDENT
+        BLBC    R0, 10$
+        MOVL    #SS$_DUPLNAM, R0
+        RSB
+10$:    CMPL    R0, #SS$_NOSUCHID
+        BNEQ    90$
+20$:    MOVL    4(AP), F_KEY(R11)       ; its records, and its holders'
+        CLRL    R0
+        MOVL    #4, R1
+        BSBW    KEYGET
+        BLBC    R0, 40$
+        MOVZWL  F_RAB+RAB$W_RSZ(R11), R10
+        MOVC3   R10, F_REC(R11), F_TMP(R11)
+        BSBW    DELETE
+        BLBC    R0, 90$
+        MOVL    20(AP), F_TMP+KGB$L_IDENTIFIER(R11)
+        MOVL    R10, R0
+        BSBW    PUTTMP
+        BLBC    R0, 90$
+        BRB     20$
+40$:    MOVL    4(AP), F_KEY(R11)       ; what it holds, by key 1, which changes
+        CLRL    F_KEY+4(R11)
+        MOVL    #1, R0
+        MOVL    #8, R1
+        BSBW    KEYGET
+        BLBC    R0, 80$
+        MOVL    20(AP), F_REC+KGB$Q_HOLDER(R11)
+        BSBW    UPDATE
+        BLBC    R0, 90$
+        BRB     40$
+80$:    MOVL    #SS$_NORMAL, R0
+90$:    RSB
+
+; CHKNAME: R1 = a name's descriptor, R11 = a frame. Puts the name, in
+; capitals, padded with blanks, in the frame's key. R0 = SS$_NORMAL, or
+; SS$_IVIDENT if it isn't 1 to 32 letters, digits, $ and _, or is all
+; digits. Uses R0-R5.
+CHKNAME:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5>
+        MOVZWL  (R1), R2
+        MOVL    4(R1), R3
+        MOVL    #SS$_IVIDENT, R0
+        TSTL    R2
+        BEQL    90$
+        CMPL    R2, #KGB$S_NAME
+        BGTRU   90$
+        MOVC5   #0, (R3), #^A/ /, #KGB$S_NAME, F_KEY(R11)
+        MOVZWL  (R1), R2
+        MOVL    4(R1), R3
+        MOVAB   F_KEY(R11), R4
+        CLRL    R5                      ; a character not a digit?
+10$:    MOVZBL  (R3)+, R0
+        CMPB    R0, #^A/a/
+        BLSSU   20$
+        CMPB    R0, #^A/z/
+        BGTRU   20$
+        SUBB2   #^A/a/-^A/A/, R0
+20$:    MOVB    R0, (R4)+
+        CMPB    R0, #^A/0/
+        BLSSU   30$
+        CMPB    R0, #^A/9/
+        BLEQU   40$
+30$:    INCL    R5
+        CMPB    R0, #^A/A/
+        BLSSU   35$
+        CMPB    R0, #^A/Z/
+        BLEQU   40$
+35$:    CMPB    R0, #^A/$/
+        BEQL    40$
+        CMPB    R0, #^A/_/
+        BNEQ    80$
+40$:    SOBGTR  R2, 10$
+        TSTL    R5
+        BEQL    80$
+        MOVL    #SS$_NORMAL, R0
+        RSB
+80$:    MOVL    #SS$_IVIDENT, R0
+90$:    RSB
+
+; CHKID: R0 = an identifier. R0 = SS$_NORMAL if it is a UIC, 1 to
+; %X3FFFFFFF, or a general identifier, %X80000000 to %X8FFFFFFF, else
+; SS$_IVIDENT. Keeps every other register.
+CHKID:
+        .JSB_ENTRY
+        TSTL    R0
+        BEQL    80$
+        BLSS    10$
+        CMPL    R0, #UIC$K_MAX_UIC
+        BGTRU   80$
+        BRB     70$
+10$:    CMPL    R0, #LASTID
+        BGTRU   80$
+70$:    MOVL    #SS$_NORMAL, R0
+        RSB
+80$:    MOVL    #SS$_IVIDENT, R0
+        RSB
+
+; CHKHOLDER: R1 = a holder's quadword. R0 = SS$_NORMAL if it is a UIC
+; and 0, else SS$_IVIDENT. Keeps every other register.
+CHKHOLDER:
+        .JSB_ENTRY
+        MOVL    #SS$_IVIDENT, R0
+        TSTL    4(R1)
+        BNEQ    90$
+        TSTL    (R1)
+        BEQL    90$
+        CMPL    (R1), #UIC$K_MAX_UIC
+        BGTRU   90$
+        MOVL    #SS$_NORMAL, R0
+90$:    RSB
+
+; RDBOPEN: R0 = 1 to write the file, 0 to read it, R1 = a key, R11 = a
+; frame. Opens RIGHTSLIST.DAT with the frame's FAB and connects its RAB,
+; along that key, to read records into the frame's record; anyone may
+; read it meanwhile. R0 = SS$_NORMAL, SS$_NORIGHTSDB if it isn't there,
+; or RMS's error. Uses R0-R5.
+RDBOPEN:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5>
+        PUSHR   #^M<R0, R1>
+        MOVC3   #FAB$C_BLN, RDBFAB, F_FAB(R11)
+        MOVC3   #RAB$C_BLN, RDBRAB, F_RAB(R11)
+        POPR    #^M<R0, R1>
+        MOVAB   F_FAB(R11), F_RAB+RAB$L_FAB(R11)
+        MOVAB   F_REC(R11), F_RAB+RAB$L_UBF(R11)
+        MOVW    #KGB$K_MAINT_RECORD, F_RAB+RAB$W_USZ(R11)
+        MOVAB   F_KEY(R11), F_RAB+RAB$L_KBF(R11)
+        MOVB    R1, F_RAB+RAB$B_KRF(R11)
+        BLBC    R0, 10$
+        MOVB    #FAB$M_GET!FAB$M_PUT!FAB$M_UPD!FAB$M_DEL, F_FAB+FAB$B_FAC(R11)
+        MOVB    #FAB$M_SHRGET, F_FAB+FAB$B_SHR(R11)
+10$:    $OPEN   FAB=F_FAB(R11)
+        BLBC    R0, 80$
+        $CONNECT RAB=F_RAB(R11)
+        BLBS    R0, 90$
+        PUSHL   R0
+        $CLOSE  FAB=F_FAB(R11)
+        MOVL    (SP)+, R0
+        RSB
+80$:    CMPL    R0, #RMS$_FNF
+        BNEQ    90$
+        MOVL    #SS$_NORIGHTSDB, R0
+90$:    RSB
+
+; RDBCLOSE: R11 = a frame whose file is open. Closes it. Keeps every
+; register.
+RDBCLOSE:
+        .JSB_ENTRY
+        PUSHR   #^M<R0, R1>
+        $CLOSE  FAB=F_FAB(R11)
+        POPR    #^M<R0, R1>
+        RSB
+
+; KEYGET: R0 = a key, R1 = its size, R11 = a frame, its key the value.
+; Reads the first record whose key is that into the frame's record. R0 =
+; RMS's status. Uses R0-R1.
+KEYGET:
+        .JSB_ENTRY
+        MOVB    R0, F_RAB+RAB$B_KRF(R11)
+        MOVB    R1, F_RAB+RAB$B_KSZ(R11)
+        MOVB    #RAB$C_KEY, F_RAB+RAB$B_RAC(R11)
+        CLRL    F_RAB+RAB$L_ROP(R11)
+        $GET    RAB=F_RAB(R11)
+        RSB
+
+; SEQGET: R11 = a frame. Reads the next record along the key of the last
+; read into the frame's record. R0 = RMS's status. Uses R0-R1.
+SEQGET:
+        .JSB_ENTRY
+        MOVB    #RAB$C_SEQ, F_RAB+RAB$B_RAC(R11)
+        $GET    RAB=F_RAB(R11)
+        RSB
+
+; NOTFOUND: R0 = a read's status. R0 = SS$_NOSUCHID for RMS$_RNF or
+; RMS$_EOF, else the same. Keeps every other register.
+NOTFOUND:
+        .JSB_ENTRY
+        CMPL    R0, #RMS$_RNF
+        BEQL    10$
+        CMPL    R0, #RMS$_EOF
+        BNEQ    90$
+10$:    MOVL    #SS$_NOSUCHID, R0
+90$:    RSB
+
+; IDENT: R0 = an identifier, R11 = a frame. Reads its record, of its
+; name, into the frame's record. R0 = SS$_NORMAL, SS$_NOSUCHID, or RMS's
+; error. Uses R0-R1.
+IDENT:
+        .JSB_ENTRY
+        MOVL    R0, F_KEY(R11)
+        CLRL    R0
+        MOVL    #4, R1
+        BSBB    KEYGET
+10$:    BSBB    NOTFOUND
+        BLBC    R0, 90$
+        MOVL    #SS$_NOSUCHID, R0
+        CMPL    F_REC+KGB$L_IDENTIFIER(R11), F_KEY(R11)
+        BNEQ    90$
+        MOVL    #SS$_NORMAL, R0
+        CMPW    F_RAB+RAB$W_RSZ(R11), #KGB$K_IDENT_RECORD
+        BGEQU   90$
+        BSBB    SEQGET                  ; a holder's before it
+        BRB     10$
+90$:    RSB
+
+; HOLDER: AP = a service's id and holder, R11 = its frame. Reads the
+; record that the holder holds the identifier into the frame's record.
+; R0 = SS$_NORMAL, SS$_NOSUCHID, or RMS's error. Uses R0-R1.
+HOLDER:
+        .JSB_ENTRY
+        MOVL    4(AP), R0
+        BSBB    IDENT
+        BLBC    R0, 90$
+10$:    BSBB    SEQGET
+        BSBB    NOTFOUND
+        BLBC    R0, 90$
+        MOVL    #SS$_NOSUCHID, R0
+        CMPL    F_REC+KGB$L_IDENTIFIER(R11), 4(AP)
+        BNEQ    90$
+        CMPW    F_RAB+RAB$W_RSZ(R11), #KGB$K_HOLD_RECORD
+        BNEQ    10$
+        MOVL    8(AP), R1
+        CMPL    F_REC+KGB$Q_HOLDER(R11), (R1)
+        BNEQ    10$
+        CMPL    F_REC+KGB$Q_HOLDER+4(R11), 4(R1)
+        BNEQ    10$
+        MOVL    #SS$_NORMAL, R0
+90$:    RSB
+
+; MAINT: R0 = 0 to read the maintenance record into the frame's record,
+; 1 to write it back with KGB$L_NEXT_ID one past R9, R11 = a frame, the
+; file open for write. With none, reading it gives KGB$L_NEXT_ID 0, and
+; writing makes it. R0 = SS$_NORMAL or RMS's error. Uses R0-R5.
+MAINT:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5>
+        PUSHL   R0
+        MOVC3   #KGB$S_NAME, MAINTNAME, F_KEY(R11)
+        MOVL    #2, R0
+        MOVL    #KGB$S_NAME, R1
+        BSBW    KEYGET
+        BLBS    R0, 20$
+        BSBW    NOTFOUND
+        CMPL    R0, #SS$_NOSUCHID
+        BNEQ    80$
+        MOVC5   #0, (SP), #0, #KGB$K_MAINT_RECORD, F_REC(R11)   ; none yet
+        MOVC3   #KGB$S_NAME, MAINTNAME, F_REC+KGB$T_NAME(R11)
+        MOVW    #KGB$K_LEVEL1, F_REC+KGB$W_LEVEL(R11)
+        BLBC    (SP)+, 70$
+        ADDL3   #1, R9, F_REC+KGB$L_NEXT_ID(R11)
+        MOVL    #KGB$K_MAINT_RECORD, R0
+        MOVAB   F_REC(R11), R1
+        BSBB    PUT
+        RSB
+20$:    BLBC    (SP)+, 70$
+        ADDL3   #1, R9, F_REC+KGB$L_NEXT_ID(R11)
+        BSBB    UPDATE
+        RSB
+70$:    MOVL    #SS$_NORMAL, R0
+        RSB
+80$:    TSTL    (SP)+
+        RSB
+
+; PUTTMP: R0 = a record's size, R11 = a frame, the record in its F_TMP.
+; Writes it. R0 = SS$_NORMAL or RMS's error. Uses R0-R1.
+PUTTMP:
+        .JSB_ENTRY
+        MOVAB   F_TMP(R11), R1
+        BSBB    PUT
+        RSB
+
+; PUT: R0 = a record's size, R1 = the record, R11 = a frame. Writes it.
+; R0 = SS$_NORMAL or RMS's error. Uses R0-R1.
+PUT:
+        .JSB_ENTRY
+        MOVW    R0, F_RAB+RAB$W_RSZ(R11)
+        MOVL    R1, F_RAB+RAB$L_RBF(R11)
+        $PUT    RAB=F_RAB(R11)
+        BLBC    R0, 10$
+        MOVL    #SS$_NORMAL, R0
+10$:    RSB
+
+; UPDATE: R11 = a frame, the record read last in its F_REC, changed.
+; Writes it back. R0 = SS$_NORMAL or RMS's error. Uses R0-R1.
+UPDATE:
+        .JSB_ENTRY
+        MOVAB   F_REC(R11), F_RAB+RAB$L_RBF(R11)
+        $UPDATE RAB=F_RAB(R11)
+        BLBC    R0, 10$
+        MOVL    #SS$_NORMAL, R0
+10$:    RSB
+
+; DELETE: R11 = a frame. Deletes the record read last. R0 = SS$_NORMAL
+; or RMS's error. Uses R0-R1.
+DELETE:
+        .JSB_ENTRY
+        $DELETE RAB=F_RAB(R11)
+        BLBC    R0, 10$
+        MOVL    #SS$_NORMAL, R0
+10$:    RSB
+
+        .END

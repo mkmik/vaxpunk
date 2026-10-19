@@ -16,8 +16,11 @@
 ; record's default device and directory, which it makes the default
 ; directory, and calls EXE$LOGIN in kernel mode, which gives the process
 ; the user's UIC, privileges and priority, and the command interpreter
-; the record names, DCL. The executive calls DCL when this image exits,
-; and DCL runs SYLOGIN.COM and the user's LOGIN.COM.
+; the record names, DCL, and the rights list it builds: the identifiers
+; the rights database, RIGHTSLIST.DAT, says the user's UIC holds
+; ($FIND_HELD), then INTERACTIVE, and REMOTE on a TELNET terminal,
+; TNAn:, or LOCAL on another (ADR-0040). The executive calls DCL when
+; this image exits, and DCL runs SYLOGIN.COM and the user's LOGIN.COM.
 ; The system logical name SYS$ANNOUNCE, if there is one, is written
 ; before the first Username:, and SYS$WELCOME after the login, in place
 ; of the system's own welcome, with its version from $GETSYI, unless the record says DISWELCOME. A value that
@@ -44,10 +47,12 @@
         $UAFDEF
         $DVIDEF
         $SYIDEF
+        $KGBDEF
 
         .EXTERNAL EXE$LOGIN, PUT_LINE, LIB$SIGNAL
 
 NAMESIZE = 32                           ; the longest username, and password
+MAXRIGHTS = 1024                        ; identifiers a rights list holds, as EXE$SETRIGHTS takes
 
         .PSECT  DATA, NOEXE, WRT, LONG
 INPUT:  .ASCID  "SYS$INPUT"
@@ -76,8 +81,15 @@ UAFDEF: .ASCII  "SYS$SYSTEM:.DAT"
 UAFDEFLEN = .-UAFDEF
 REC:    .BLKB   UAF$C_LENGTH            ; the user's record
 FAILS:  .LONG   0                       ; its failures, before this login
-KARGS:  .LONG   1                       ; EXE$LOGIN's arguments: the record
+KARGS:  .LONG   2                       ; EXE$LOGIN's arguments: the record
         .ADDRESS REC
+        .ADDRESS RLIST                  ; and the rights list
+RLIST:  .LONG   0                       ; its identifiers, a quadword each:
+        .BLKQ   MAXRIGHTS               ; the value and its attributes
+HOLDER: .BLKQ   1                       ; $FIND_HELD's: the user's UIC
+HELDID: .LONG   0                       ; an identifier it holds
+HELDATR:.LONG   0                       ; and its attributes
+RDBCTX: .LONG   0                       ; the search's context
 PROCTAB:
         .ASCID  "LNM$PROCESS_TABLE"
 LNMDSC: .LONG   0                       ; a logical name being defined
@@ -159,6 +171,7 @@ LOGIN:  MOVZWL  REC+UAF$W_LOGFAILS, FAILS
         $SETPRN_S PRCNAM=NAMDSC         ; one that has it already: keep the terminal's
         BSBW    DEFAULTS
         BLBC    R0, 80$
+        BSBW    RIGHTS
         $CMKRNL_S ROUTIN=G^EXE$LOGIN, ARGLST=KARGS
         BLBC    R0, 80$
         BBS     #UAF$V_DISWELCOM, REC+UAF$L_FLAGS, 10$
@@ -175,6 +188,39 @@ LOGIN:  MOVZWL  REC+UAF$W_LOGFAILS, FAILS
         CALLS   #1, G^LIB$SIGNAL
         $EXIT_S #SS$_NORMAL
         RET
+
+; RIGHTS: REC = the user's record, TERM = the terminal's name. Makes the
+; process's rights list in RLIST: the identifiers $FIND_HELD finds for
+; the user's UIC, as many as fit, then INTERACTIVE and REMOTE or LOCAL.
+; With no rights database, only those two. Uses R0-R5.
+RIGHTS:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5>
+        MOVL    REC+UAF$L_UIC, HOLDER
+        CLRL    HOLDER+4
+        CLRL    RDBCTX
+        CLRL    RLIST
+10$:    $FIND_HELD_S HOLDER=HOLDER, ID=HELDID, ATTRIB=HELDATR, CONTXT=RDBCTX
+        BLBC    R0, 30$
+        MOVL    RLIST, R1
+        CMPL    R1, #MAXRIGHTS-2        ; room for the two after them
+        BGEQU   10$
+        MOVAQ   RLIST+4[R1], R1
+        MOVL    HELDID, (R1)+
+        MOVL    HELDATR, (R1)
+        INCL    RLIST
+        BRB     10$
+30$:    $FINISH_RDB_S CONTXT=RDBCTX
+        MOVL    RLIST, R1
+        MOVAQ   RLIST+4[R1], R1
+        MOVL    #KGB$K_INTERACTIVE_ID, (R1)+
+        CLRL    (R1)+
+        MOVL    #KGB$K_LOCAL_ID, (R1)
+        CMPW    TERM+1, #^A/TN/         ; _TNAn:, a TELNET terminal
+        BNEQ    40$
+        MOVL    #KGB$K_REMOTE_ID, (R1)
+40$:    CLRL    4(R1)
+        ADDL2   #2, RLIST
+        RSB
 
 ; ASK: reads the username and the password, without echoing it, into
 ; NAME and PWD, in capitals. R0 = SS$_NORMAL, or the read's error, such

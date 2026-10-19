@@ -12,7 +12,10 @@
 ; and processes. A process's JPI$_TERMINAL and JPI$_MODE are what LOGINOUT's
 ; EXE$LOGIN set; SHOW USERS lists the interactive ones.
 ; Of the quotas, the I/O ones, BIOLM, DIOLM and BYTLM, and what is left of
-; them, and the I/O counts, JPI$_BUFIO and JPI$_DIRIO.
+; them, and the I/O counts, JPI$_BUFIO and JPI$_DIRIO. Its rights list,
+; JPI$_PROCESS_RIGHTS and JPI$_RIGHTSLIST, is its UIC, a RESOURCE
+; identifier, then the identifiers in the block of pool PCB$L_RIGHTS
+; points at, a quadword each; there are no system rights.
 ; ponytail: done at once, no AST; no CPU times or the other quotas, as
 ; nothing keeps them, and no cluster, so $GETSYI's csidadr and nodename
 ; are ignored.
@@ -26,6 +29,7 @@
         $JPIDEF
         $SYIDEF
         $PTEDEF
+        $KGBDEF
 
         .EXTERNAL EXE$NAMPID, EXE$PRCPRIV, EXE$SETEF, EXE$CLREF, EXE$GQ_BOOTTIME
         .EXTERNAL SCH$GL_CURPCB, SCH$GL_PCBVEC, SCH$GL_MAXPIX, SGN$GW_QUANTUM, SGN$GW_MAXPRCCT
@@ -34,8 +38,10 @@
 
 ; ITMENT code, size, at: a table's entry. size is 1, 2 or 4 for a byte, word
 ; or longword, returned as a longword, 8 for a quadword, 0 for a
-; .ASCIC string, returned without its count, or 3 for a longword the
-; routine at at returns in R0, using R1-R3.
+; .ASCIC string, returned without its count, 3 for a longword the
+; routine at at returns in R0, using R1-R3, or 7 for a value the routine
+; at at writes in the buffer itself, R11, R9 bytes at most, R2 = the
+; bytes it wrote, using R0-R4.
         .MACRO  ITMENT  CODE, SIZE, AT
         .WORD   CODE, SIZE
         .LONG   AT
@@ -67,6 +73,10 @@ JPITAB: ITMENT  JPI$_PID, 4, PCB$L_PID  ; at an offset in the PCB
         ITMENT  JPI$_BYTLM, 4, PCB$L_BYTLM
         ITMENT  JPI$_BUFIO, 4, PCB$L_BUFIO
         ITMENT  JPI$_DIRIO, 4, PCB$L_DIRIO
+        ITMENT  JPI$_PROCESS_RIGHTS, 7, RIGHTS
+        ITMENT  JPI$_RIGHTSLIST, 7, RIGHTS
+        ITMENT  JPI$_SYSTEM_RIGHTS, 7, NORIGHTS
+        ITMENT  JPI$_RIGHTS_SIZE, 3, RIGHTSSIZE
         .LONG   0
 SYITAB: ITMENT  SYI$_VERSION, 8, VERSION ; at an address
         ITMENT  SYI$_MAXPROCESSCNT, 2, SGN$GW_MAXPRCCT
@@ -118,6 +128,50 @@ PRCCNT:
         INCL    R0
         BRB     10$
 20$:    RSB
+
+; RIGHTS: R5 = a PCB, R11 = a buffer, R9 = its bytes. Writes the
+; process's rights list there, as many quadwords as fit: its UIC, with
+; KGB$M_RESOURCE, then its identifiers. R2 = the bytes written.
+; IPL$_SYNCH. Uses R0-R4.
+RIGHTS:
+        .JSB_ENTRY  OUTPUT=<R2>, SCRATCH=<R3, R4>
+        CLRL    R2
+        CMPL    R9, #8
+        BLSSU   90$
+        MOVL    PCB$L_UIC(R5), (R11)
+        MOVL    #KGB$M_RESOURCE, 4(R11)
+        MOVL    #8, R2
+        MOVL    PCB$L_RIGHTS(R5), R3
+        BEQL    90$
+        MOVL    (R3), R4                ; the quadwords
+        ADDL2   #8, R3
+10$:    DECL    R4
+        BLSS    90$
+        ADDL3   #8, R2, R0
+        CMPL    R0, R9
+        BGTRU   90$
+        ADDL3   R11, R2, R1
+        MOVQ    (R3)+, (R1)
+        MOVL    R0, R2
+        BRB     10$
+90$:    RSB
+
+; NORIGHTS: the system's rights, which are none: R2 = 0. IPL$_SYNCH.
+NORIGHTS:
+        .JSB_ENTRY  OUTPUT=<R2>
+        CLRL    R2
+        RSB
+
+; RIGHTSSIZE: R5 = a PCB. R0 = the bytes RIGHTS writes of it, at most.
+; IPL$_SYNCH. Uses R0-R1.
+RIGHTSSIZE:
+        .JSB_ENTRY
+        MOVL    #8, R0
+        MOVL    PCB$L_RIGHTS(R5), R1
+        BEQL    10$
+        MULL3   #8, (R1), R1
+        ADDL2   R1, R0
+10$:    RSB
 
 ; NPGTOTAL: R0 = nonpaged pool's bytes, as far as it has grown. IPL$_SYNCH.
 NPGTOTAL:
@@ -250,7 +304,11 @@ RETITEMS:
         BRB     30$
 40$:    ADDL3   4(R7), R5, R1           ; the value
         MOVZWL  2(R7), R2
-        CMPL    R2, #3
+        CMPL    R2, #7
+        BNEQ    39$
+        JSB     @4(R7)                  ; written by the routine
+        BRB     58$
+39$:    CMPL    R2, #3
         BNEQ    41$
         JSB     @4(R7)                  ; counted
         MOVL    R0, VALUE
