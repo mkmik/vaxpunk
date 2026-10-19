@@ -17,7 +17,7 @@ note = "The date in both since PRD-0003 tier 1 #7"
 
 [[feature]]
 id = "show-devices"
-title = "SHOW DEVICES [name] [/MOUNTED]: disks, volumes, free blocks, terminals"
+title = "SHOW DEVICES [name] [/MOUNTED] [/FULL]: disks, volumes, free blocks, terminals"
 status = "done"
 milestone = "m0"
 note = "DCL's own, in dcl/setshow.mar, where VMS's DCL runs SHOW.EXE"

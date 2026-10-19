@@ -20,9 +20,9 @@
         $UCBDEF
         $DCLDEF
 
-        .EXTERNAL CDU$COMPILE, DCL$ADD, DCL$ADDCSTR, DCL$ADDDEC, DCL$DONE
+        .EXTERNAL CDU$COMPILE, DCL$ADD, DCL$ADDCSTR, DCL$ADDDEC, DCL$DONE, DCL$MSG
         .EXTERNAL DCL$GETVAL, DCL$INSFPRM, DCL$ISPRES, DCL$OK, DCL$PADTO
-        .EXTERNAL DCL$PTABVEC, DCL$SAY, DCL$TOKEN, DCL$V_FILE, DCL$WARN
+        .EXTERNAL DCL$PTABVEC, DCL$QUOTE, DCL$SAY, DCL$TOKEN, DCL$V_FILE, DCL$WARN
 
         .PSECT  DATA, NOEXE, WRT, LONG
 DCL$PROCESS::                           ; the process's logical name table
@@ -35,6 +35,8 @@ V_MOUNTED:
 MOUNTED:                                ; SHOW DEVICES/MOUNTED: 1 for mounted volumes only
         .JSB32_ENTRY
         .LONG   0
+V_FULL: .ASCID  "FULL"
+FULL:   .LONG   0                       ; SHOW DEVICES/FULL: 1 for a paragraph a device
 SCANCTX:                                ; $DEVICE_SCAN's context
         .BLKQ   1
 PATDSC: .LONG   0                       ; its search name, in DCL$TOKEN
@@ -71,6 +73,18 @@ DVIITEMS:                               ; what $GETDVIW returns of it
         .WORD   4, DVI$_FREEBLOCKS
         .ADDRESS DEVFREE
         .LONG   0
+        .WORD   4, DVI$_DEVTYPE
+        .ADDRESS V_TYPE
+        .LONG   0
+        .WORD   4, DVI$_DEVBUFSIZ
+        .ADDRESS V_BUFSIZ
+        .LONG   0
+        .WORD   4, DVI$_REFCNT
+        .ADDRESS V_REFCNT
+        .LONG   0
+        .WORD   4, DVI$_CLUSTER
+        .ADDRESS V_CLUSTER
+        .LONG   0
         .LONG   0
 V_MNT:  .LONG   0                       ; 1 if a volume is mounted,
 V_SWL:  .LONG   0                       ; 1 if it is read only,
@@ -82,6 +96,44 @@ DEVLABEL:                               ; the volume's label, after a byte,
 LABLEN: .WORD   0                       ; its length,
 DEVFREE:                                ; and its free blocks
         .LONG   0
+V_TYPE: .LONG   0                       ; a terminal's DT$ type, a disk's 0,
+V_BUFSIZ:                               ; its width or block,
+        .LONG   0
+V_REFCNT:                               ; a terminal's channels,
+        .LONG   0
+V_CLUSTER:                              ; and the volume's cluster, for /FULL
+        .LONG   0
+W_DISK: .ASCIC  "Disk "                 ; /FULL's words
+W_TERM: .ASCIC  "Terminal "
+W_VT100:
+        .ASCIC  "device type VT100,"
+W_UNKNOWN:
+        .ASCIC  "device type unknown,"
+W_ONLINE:
+        .ASCIC  "is online,"
+W_OFFLINE:
+        .ASCIC  "is offline,"
+W_MOUNTED:
+        .ASCIC  "mounted,"
+W_WRTLCK:
+        .ASCIC  "software write-locked,"
+W_DISKTAIL:
+        .ASCIC  "file-oriented device, shareable."
+W_TERMTAIL:
+        .ASCIC  "record-oriented device, carriage control."
+L_ERRCNT:
+        .ASCIC  "    Error count"
+L_REFCNT:
+        .ASCIC  "    Reference count"
+L_BUFSIZ:
+        .ASCIC  "    Default buffer size"
+L_LABEL:
+        .ASCIC  "    Volume label"
+L_CLUSTER:
+        .ASCIC  "    Cluster size"
+L_FREE: .ASCIC  "    Free blocks"
+L_MNTCNT:
+        .ASCIC  "    Mount count"
 S_MOUNTED:
         .ASCIC  "Mounted"
 S_WRTLCK:
@@ -590,13 +642,19 @@ STRDEV:
 ; with name, with * and % wildcards: SHOW DEVICES DK. It finds them with
 ; $DEVICE_SCAN, a class at a time, and asks each about itself with
 ; $GETDVIW. SS$_NOSUCHDEV if none matches. With /MOUNTED, only the
-; devices with a volume mounted. ponytail: no transactions or mount
-; counts, which nothing keeps; no /FULL.
+; devices with a volume mounted. With /FULL, a paragraph a device, as
+; VMS's, of what $GETDVIW knows. ponytail: no transactions or mount
+; counts, which nothing keeps; /FULL leaves out what nothing keeps
+; either: operation counts, owners, device protection, a disk's type
+; and geometry, the volume's limits, caches and status.
 DCL$SHOWDEV::
         .EXCEPTION_ENTRY
         MOVAB   V_MOUNTED, R1
         BSBW    DCL$ISPRES
         BICL3   #^C1, R0, MOUNTED
+        MOVAB   V_FULL, R1
+        BSBW    DCL$ISPRES
+        BICL3   #^C1, R0, FULL
         MOVAB   V_DEVNAM, R1
         BSBW    DCL$GETVAL
         TSTL    R8                      ; name*, without its colon
@@ -612,10 +670,13 @@ DCL$SHOWDEV::
         BSBB    SCAN
         MOVL    #DC$_TERM, DEVCLASS
         BSBB    SCAN
-        MOVL    #SS$_NORMAL, R0
-        TSTL    R7
-        BNEQ    10$
         MOVL    #SS$_NOSUCHDEV, R0
+        TSTL    R7
+        BEQL    10$
+        TSTL    FULL
+        BEQL    8$
+        PRINT   ""
+8$:     MOVL    #SS$_NORMAL, R0
 10$:    BRW     DCL$DONE
 
 ; SCAN: lists the devices of DEVCLASS's class whose names match PATDSC's,
@@ -633,7 +694,12 @@ SCAN:
         BEQL    12$
         TSTL    V_MNT
         BEQL    10$
-12$:    TSTL    R6
+12$:    TSTL    FULL
+        BEQL    13$
+        INCL    R7
+        BSBW    FULLDEV
+        BRW     10$
+13$:    TSTL    R6
         BNEQ    20$
         INCL    R6
         PRINT   ""
@@ -681,6 +747,134 @@ SCAN:
 40$:    BSBW    DCL$SAY
         BRW     10$
 90$:    RSB
+
+; FULLDEV: writes SHOW DEVICES/FULL's paragraph of the device $GETDVIW
+; described, as VMS's: a blank line, what the device is, a blank line,
+; its counts, and its volume's if one is mounted. Uses R0-R6.
+FULLDEV:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5, R6>
+        PRINT   ""
+        MOVAB   W_DISK, R1
+        CMPL    DEVCLASS, #DC$_DISK
+        BEQL    5$
+        MOVAB   W_TERM, R1
+5$:     BSBW    DCL$ADDCSTR
+        MOVAB   DEVNAME+1, R1           ; without its underscore
+        MOVZWL  DVINAM, R2
+        DECL    R2
+        BSBW    DCL$ADD
+        ADDTEXT ","
+        MOVAB   W_UNKNOWN, R1
+        CMPL    V_TYPE, #DT$_VT100
+        BNEQ    10$
+        MOVAB   W_VT100, R1
+10$:    BSBW    WRAP
+        MOVAB   W_OFFLINE, R1
+        BITL    #UCB$M_ONLINE, V_STS
+        BEQL    15$
+        MOVAB   W_ONLINE, R1
+15$:    BSBW    WRAP
+        TSTL    V_MNT
+        BEQL    20$
+        MOVAB   W_MOUNTED, R1
+        BSBW    WRAP
+        TSTL    V_SWL
+        BEQL    20$
+        MOVAB   W_WRTLCK, R1
+        BSBW    WRAP
+20$:    MOVAB   W_DISKTAIL, R1
+        CMPL    DEVCLASS, #DC$_DISK
+        BEQL    25$
+        MOVAB   W_TERMTAIL, R1
+25$:    BSBW    WRAP
+        BSBW    DCL$SAY
+        PRINT   ""
+        MOVAB   L_ERRCNT, R1
+        MOVL    V_ERRCNT, R4
+        MOVL    #36, R5
+        BSBW    FIELD
+        CMPL    DEVCLASS, #DC$_DISK     ; a disk's $GETDVI doesn't count
+        BEQL    30$
+        BSBW    DCL$SAY
+        MOVAB   L_REFCNT, R1
+        MOVL    V_REFCNT, R4
+        MOVL    #36, R5
+        BSBW    FIELD
+30$:    MOVAB   L_BUFSIZ, R1
+        MOVL    V_BUFSIZ, R4
+        MOVL    #79, R5
+        BSBW    FIELD
+        BSBW    DCL$SAY
+        TSTL    V_MNT
+        BEQL    90$
+        PRINT   ""
+        MOVAB   L_LABEL, R1             ; "label", ending at 36 too
+        BSBW    DCL$ADDCSTR
+        MOVZWL  LABLEN, R0
+        SUBL3   R0, #34, R3
+        BSBW    DCL$PADTO
+        BSBW    DCL$QUOTE
+        MOVAB   DEVLABEL+1, R1
+        MOVZWL  LABLEN, R2
+        BSBW    DCL$ADD
+        BSBW    DCL$QUOTE
+        MOVAB   L_CLUSTER, R1
+        MOVL    V_CLUSTER, R4
+        MOVL    #79, R5
+        BSBW    FIELD
+        BSBW    DCL$SAY
+        MOVAB   L_FREE, R1
+        MOVL    DEVFREE, R4
+        MOVL    #36, R5
+        BSBW    FIELD
+        MOVAB   L_MNTCNT, R1
+        MOVL    V_MNT, R4
+        MOVL    #79, R5
+        BSBW    FIELD
+        BSBW    DCL$SAY
+90$:    RSB
+
+; WRAP: appends the words of the .ASCIC string at R1 to DCL$MSG, a blank
+; before each, as VMS fills a paragraph: a word that would end past
+; column 80 goes on a new line, four blanks in. Uses R0-R6.
+WRAP:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5, R6>
+        MOVZBL  (R1)+, R5               ; what is left of the string
+        MOVL    R1, R6
+10$:    CLRL    R4                      ; the next word's length
+20$:    CMPL    R4, R5
+        BGEQ    30$
+        CMPB    (R6)[R4], #^A/ /
+        BEQL    30$
+        INCL    R4
+        BRB     20$
+30$:    MOVZBL  DCL$MSG, R0
+        ADDL2   R4, R0
+        CMPL    R0, #80                 ; its blank and it past 80
+        BLSS    40$
+        BSBW    DCL$SAY
+        ADDTEXT "   "
+40$:    ADDTEXT " "
+        MOVL    R6, R1
+        MOVL    R4, R2
+        BSBW    DCL$ADD
+        SUBL2   R4, R5
+        BEQL    90$
+        ADDL2   R4, R6                  ; past the word and its blank
+        INCL    R6
+        DECL    R5
+        BRB     10$
+90$:    RSB
+
+; FIELD: appends the label at R1, .ASCIC, to DCL$MSG, and R4 in decimal
+; ending at column R5. Uses R0-R5.
+FIELD:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5>
+        BSBW    DCL$ADDCSTR
+        MOVZBL  DCL$MSG, R0
+        SUBL3   R0, R5, R3
+        MOVL    R4, R1
+        BRW     DCL$ADDDEC
 
 ; ADDDEF: appends the device and directory $PARSE left in DEFNAM to
 ; DCL$MSG. Uses R0-R2.

@@ -1058,7 +1058,8 @@ bits (`$DVIDEF`, `$DVSDEF`, `$DCDEF`, `$DEVDEF` in `starlet.mlb`):
 
 DCL's `SHOW DEVICES` scans the disks, then the terminals, and asks
 `$GETDVIW` about each; with `/MOUNTED` it lists only the devices with a
-volume mounted. ponytail: a VCB, or none for a terminal, stands
+volume mounted, and with `/FULL` it writes a paragraph about each, as
+VMS's, of what `$GETDVIW` returns. ponytail: a VCB, or none for a terminal, stands
 for the device rather than its UCB, which has no operation counts,
 device type or `MAXBLOCK` yet; no ASTs.
 

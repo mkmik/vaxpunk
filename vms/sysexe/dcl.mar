@@ -30,7 +30,8 @@
 ;               shows it, with the device
 ;   SHOW DEVICES [name]
 ;               lists the devices, those whose names start with name;
-;               /MOUNTED those with a volume mounted
+;               /MOUNTED those with a volume mounted, /FULL a
+;               paragraph each
 ;   SHOW PROCESS[/PRIVILEGES], SHOW SYSTEM
 ;               run SHOW.EXE
 ;   SET PROCESS/PRIVILEGES=(priv[,...])

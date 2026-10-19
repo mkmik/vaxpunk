@@ -237,6 +237,7 @@ define type SHOW_OPTIONS
 define syntax SHOW_DEVICES
 	parameter P1, label=OPTION, value(required, type=SHOW_OPTIONS)
 	parameter P2, label=DEVICE_NAME
+	qualifier FULL
 	qualifier MOUNTED
 
 define syntax SHOW_LOGICAL
