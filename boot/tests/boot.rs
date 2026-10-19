@@ -190,7 +190,7 @@ const RAMDISK: Phase = Phase {
             1,
             concat!(
                 "DIR *.TXT\rDELETE/LOG RAM.TXT;1\rDELETE RAM.TXT;2\rDIR *.TXT\r",
-                "RUN CLITEST\rDIR/BRIEFLY\rHELP/NOPROMPT SHOW LOGICAL\r",
+                "RUN CLITEST\rDIR/XYZZY\rHELP/NOPROMPT SHOW LOGICAL\r",
                 "DEFINE HLP$LIBRARY SYS$HELP:PHONEHELP\rHELP/NOPROMPT REJECT\r",
                 "HELP/NOPROMPT/NOINSTRUCTIONS/LIBRARY=UAFHELP\rHELP/NOPROMPT @PHONE ANSWER\r",
                 "HELP/OUTPUT=HELP.LIS TYPE\rTYPE HELP.LIS\rDEASSIGN HLP$LIBRARY\r",
@@ -243,7 +243,7 @@ const RAMDISK: Phase = Phase {
         "%DIRECT-W-NOFILES, no files found",
         "CLITEST: ok",
         "%DCL-W-IVQUAL, unrecognized qualifier - check validity, spelling, and placement",
-        " \\BRIEFLY\\",
+        " \\XYZZY\\",
         "    SHOW LOGICAL [logical-name]",
         "  With no name, or *, it lists every logical name.",
         "  Turns down the call ringing your phone. The caller is told.",
@@ -536,9 +536,9 @@ const PROTECTION: Phase = Phase {
     lines: &[
         "%RMS-E-PRV, insufficient privilege or file protection violation",
         "PROTTEST: [200,1] read DATA.TXT, and may not give it away, delete it or make a file there",
-        "DATA.TXT;1          [1,4]               (RWED,RWED,RE,R)",
-        "DATA.TXT;1          [200,1]             (RWED,RWED,RE,)",
-        "NEW.TXT;2           (RWED,RWED,RE,RE)",
+        "DATA.TXT;1           [1,4]                            (RWED,RWED,RE,R)",
+        "DATA.TXT;1           [200,1]                          (RWED,RWED,RE,)",
+        "NEW.TXT;2            (RWED,RWED,RE,RE)",
     ],
 };
 
@@ -551,7 +551,7 @@ const SHARING: Phase = Phase {
     secs: 20,
     steps: &[
         (
-            "NEW.TXT;2           (RWED,RWED,RE,RE)",
+            "NEW.TXT;2            (RWED,RWED,RE,RE)",
             1,
             concat!(
                 "OPEN/WRITE OUT DKB0:[000000]SHARE.TXT\rWRITE OUT \"shared line\"\r",
@@ -661,8 +661,8 @@ const BACKUP: Phase = Phase {
         "Total of 3 files",
         "%BACKUP-S-CREATED, created DKB0:[RESTORED]NEW.TXT;1",
         "Directory DKB0:[RESTORED]",
-        "DATA.TXT;1          [200,1]             (RWED,RWED,RE,)",
-        "NEW.TXT;2           [1,4]               (RWED,RWED,RE,RE)",
+        "DATA.TXT;1           [200,1]                          (RWED,RWED,RE,)",
+        "NEW.TXT;2            [1,4]                            (RWED,RWED,RE,RE)",
     ],
 };
 
@@ -674,7 +674,7 @@ const RMS: Phase = Phase {
     name: "rms",
     secs: 90,
     steps: &[(
-        "NEW.TXT;2           [1,4]               (RWED,RWED,RE,RE)",
+        "NEW.TXT;2            [1,4]                            (RWED,RWED,RE,RE)",
         1,
         concat!(
             "@SYS$MANAGER:SPILLTEST\r",
@@ -799,8 +799,12 @@ const LBR: Phase = Phase {
 /// [W.A], [W.A.X] and [W.B], a file in each: DIRECTORY of the tree,
 /// [W...], of the directories in [W], [W.*], of one anywhere under it,
 /// [W...X], of [*], which is [000000] too, of every directory, and of
-/// [...] from [W.A]; two F$SEARCH streams, one inside the other; and a
-/// DELETE/LOG of the tree's files, after which there are none.
+/// [...] from [W.A]; two F$SEARCH streams, one inside the other;
+/// DIRECTORY's layouts (t8y:/utils/directory#columns), as OpenVMS Alpha's:
+/// a name two columns wide, /COLUMNS, /VERSIONS, /SIZE=ALL with /OWNER and
+/// /PROTECTION, /TOTAL, /DATE's dates Files-11 has none of, and a
+/// /VERSIONS it can't parse; and a DELETE/LOG of the tree's files, after
+/// which there are none.
 const WILDCARDS: Phase = Phase {
     name: "wildcards",
     secs: 30,
@@ -841,6 +845,17 @@ const WILDCARDS: Phase = Phase {
         (
             "STREAMS: DKB0:",
             1,
+            concat!(
+                "COPY SYS$SYSDEVICE:[SYSMGR]WELCOME.TXT DKB0:[W]TOP.TMP\r",
+                "COPY SYS$SYSDEVICE:[SYSMGR]WELCOME.TXT DKB0:[W]A_RATHER_LONG_NAME.TMP\r",
+                "DIR DKB0:[W]\rDIR/COLUMNS=2 DKB0:[W]\rDIR/VERSIONS=1/COLUMNS=1 DKB0:[W]\r",
+                "DIR/SIZE=ALL/OWNER/PROTECTION DKB0:[W]*.TMP\rDIR/TOTAL/SIZE DKB0:[W...]*.TMP\r",
+                "DIR/DATE=(BACKUP,EXPIRED)/SIZE=ALLOCATION DKB0:[W]TOP.TMP;1\rDIR/VERSIONS=0\r",
+            ),
+        ),
+        (
+            "error parsing '0'",
+            1,
             "DELETE/LOG DKB0:[W...]*.TMP;*\rDIR DKB0:[W...]*.TMP\r",
         ),
     ],
@@ -871,6 +886,30 @@ const WILDCARDS: Phase = Phase {
             "Grand total of 2 directories, 3 files.",
         ),
         "STREAMS: DKB0:[W]TOP.TMP;1 DKB0:[W]A.DIR;1 DKB0:[W.A]ONE.TMP;1",
+        concat!(
+            "A.DIR;1             A_RATHER_LONG_NAME.TMP;1                B.DIR;1\n",
+            "TOP.TMP;2           TOP.TMP;1\n\nTotal of 5 files.",
+        ),
+        concat!(
+            "$ DIR/COLUMNS=2 DKB0:[W]\n\nDirectory DKB0:[W]\n\n",
+            "A.DIR;1             A_RATHER_LONG_NAME.TMP;1\n",
+            "B.DIR;1             TOP.TMP;2\nTOP.TMP;1\n",
+        ),
+        "A.DIR;1\nA_RATHER_LONG_NAME.TMP;1\nB.DIR;1\nTOP.TMP;2\n\nTotal of 4 files.",
+        concat!(
+            "A_RATHER_LONG_NAME.TMP;1\n",
+            "                              1/1           [1,4]                            (RWED,RWED,RE,)\n",
+            "TOP.TMP;2                     1/1           [1,4]                            (RWED,RWED,RE,)\n",
+            "TOP.TMP;1                     1/1           [1,4]                            (RWED,RWED,RE,)\n",
+            "\nTotal of 3 files, 3/3 blocks.",
+        ),
+        concat!(
+            "$ DIR/TOTAL/SIZE DKB0:[W...]*.TMP\n\nDirectory DKB0:[W]\n\nTotal of 3 files, 3 blocks.\n\n",
+            "Directory DKB0:[W.A]\n\nTotal of 1 file, 1 block.\n",
+        ),
+        "Grand total of 4 directories, 6 files, 6 blocks.",
+        "TOP.TMP;1                     1   <None specified>   <No backup recorded>",
+        "$ DIR/VERSIONS=0\n%DIRECT-F-SYNTAX, error parsing '0'",
         concat!(
             "%DELETE-I-FILDEL, DKB0:[W]TOP.TMP;1 deleted\n",
             "%DELETE-I-FILDEL, DKB0:[W.A]ONE.TMP;1 deleted\n",

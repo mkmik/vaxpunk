@@ -499,6 +499,22 @@
   directory. * matches any characters and % one; [*], [dir...] and
   [...] are wildcard directories.
 2 Qualifiers
+/BRIEF
+  /BRIEF (default)
+
+  Lists only the names. /SIZE, /DATE, /OWNER, /PROTECTION and /FULL
+  override it.
+/COLUMNS
+  /COLUMNS=n
+
+  Lists n names to a line, 4 if it doesn't say, as many as fit in 80
+  characters.
+/DATE
+  /DATE[=(keyword[,...])]
+
+  Lists a file a line, with its dates: CREATED (the default), MODIFIED,
+  EXPIRED, BACKUP, EFFECTIVE, RECORDING, ACCESSED, ATTRIBUTES,
+  DATA_MODIFIED, or ALL of them.
 /FULL
   /FULL
 
@@ -512,10 +528,24 @@
   /PROTECTION
 
   Lists a file a line, with its protection.
+/SIZE
+  /SIZE[=keyword]
+
+  Lists a file a line, with the blocks it uses, USED (the default), it
+  has, ALLOCATION, or ALL, both; the totals add them up.
+/TOTAL
+  /TOTAL
+
+  Lists only each directory's heading and total.
+/VERSIONS
+  /VERSIONS=n
+
+  Lists only the n highest versions of each file.
 2 Examples
 
   $ DIRECTORY
   $ DIRECTORY/OWNER/PROTECTION SYS$SYSTEM:*.EXE
+  $ DIRECTORY/SIZE=ALL/DATE/VERSIONS=1
   $ DIRECTORY DKB0:[W...]*.TMP
 1 DISMOUNT
   Dismounts a volume. Its files can't be named again until it is
