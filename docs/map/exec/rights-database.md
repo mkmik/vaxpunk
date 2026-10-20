@@ -72,6 +72,13 @@ status = "todo"
 needs = ["#attributes"]
 note = "Charged by t8y:/files/disk-quotas"
 
+[[feature]]
+id = "shared-updates"
+title = "Two changes to RIGHTSLIST.DAT at once don't lose one"
+status = "todo"
+needs = ["/rms/sharing#record-locks"]
+note = "vecrdb.mar ponytail: no locks, as SYSUAF.DAT's t8y:/utils/authorize#shared-updates"
+
 [[needs]]
 on = "/rms/indexed"
 why = "RIGHTSLIST.DAT is an indexed file"
@@ -106,5 +113,6 @@ services that read and change it, in their caller's mode, through RMS
 ([ADR-0040](../../adr/0040-acls-in-file-headers-and-rights-identifiers.md)).
 `AUTHORIZE`'s identifier commands use them; `LOGINOUT` gives each
 process its rights list, which ACLs (`t8y:/exec/acls`) check and `SHOW
-PROCESS/RIGHTS` shows. Missing: `SET RIGHTS_LIST`, system rights, and
-anything that acts on identifier attributes.
+PROCESS/RIGHTS` shows. Missing: `SET RIGHTS_LIST`, system rights,
+anything that acts on identifier attributes, and locks, so two changes
+at once can lose one.
