@@ -1,5 +1,5 @@
         .TITLE  DELETE  Deletes files
-        .IDENT  /V0.1/
+        .IDENT  /V0.2/
 ;
 ; DCL's DELETE spec runs this. Deletes
 ; each file spec names, which must give a version, or * for every
@@ -7,6 +7,14 @@
 ; deletes each one $SEARCH found, by its NAM block. Returns RMS's status
 ; if it can't, RMS$_FNF if there are none. With /LOG, says which it
 ; deleted, as VMS's DELETE does.
+;
+; DCL's PURGE spec /KEEP=n runs it too, as VMS's: it deletes all but the
+; n highest versions of each file spec names, 1 without /KEEP, *.* in
+; the default directory without spec. spec gives no version, as
+; %PURGE-E-PURGEVER says. $SEARCH finds each name's versions highest
+; first, so the first n of each are kept. With /LOG, it says which it
+; deleted, how many when there are more than one, and that there are
+; none when it purged none.
 ; ponytail: one specification; no block counts in /LOG's messages.
 ;
         .LIBRARY "starlet.mlb"
@@ -23,18 +31,41 @@ INHIB_MSG = ^X10000000                  ; STS$M_INHIB_MSG: reported already
         .PSECT  DATA, NOEXE, WRT, LONG
 FAB:    $FAB    NAM=NAM
 NAM:    $NAM    ESA=EXP, ESS=255, RSA=RES, RSS=255
-DESC:   .LONG   255                     ; FILE, the parameter
+DESC:   .LONG   255                     ; FILE, the parameter, or $VERB or /KEEP
         .ADDRESS SPEC
 SPEC:   .BLKB   255
 MSG:    .BLKB   256                     ; /LOG's message, .ASCIC
 FILDEL: .ASCIC  "%DELETE-I-FILDEL, "
+FILPURG:
+        .ASCIC  "%PURGE-I-FILPURG, "
 DELETED:
         .ASCIC  " deleted"
+BADVALUE:
+        .ASCIC  "%PURGE-F-BADVALUE, '"
+INVALID:
+        .ASCIC  "' is an invalid keyword value"
+TOTAL:  .ASCIC  "%PURGE-I-TOTAL, "
+FILES:  .ASCIC  " files deleted"
+PURG:   .ASCII  "PURG"                  ; its $VERB
+ALL:    .ASCII  "*.*;*"                 ; PURGE's default without spec
+ANYVER: .ASCII  ";*"                    ; its default: every version
+KEEP:   .LONG   1                       ; /KEEP's versions of each name
+VERSION:                                ; this name's, so far
+        .LONG   0
+PURGED: .LONG   0                       ; how many PURGE deleted
+LASTNAME:                               ; the last file's, up to its version, .ASCIC
+        .BLKB   256
+NUM:    .BLKB   10                      ; ADDDEC's digits
 EXP:    .BLKB   255
 RES:    .BLKB   255
 
         .PSECT  CODE, EXE, LONG
-        .ENTRY  START, ^M<R2>
+        .ENTRY  START, ^M<R2, R3, R4, R5>
+        GETVALUE "$VERB", DESC, DESC
+        CMPL    SPEC, PURG
+        BNEQ    5$
+        BRW     PURGE
+5$:     MOVL    #255, DESC
         GETVALUE "FILE", DESC, DESC
         MOVAB   SPEC, FAB+FAB$L_FNA
         MOVB    DESC, FAB+FAB$B_FNS
@@ -53,6 +84,127 @@ RES:    .BLKB   255
         PRESENT "LOG"
         BLBC    R0, 10$
         MOVAB   FILDEL, R1              ; %DELETE-I-FILDEL, name deleted
+        BSBW    LOGDEL
+        BRB     10$
+20$:    CMPL    R0, #RMS$_NMF
+        BNEQ    90$
+        MOVL    #SS$_NORMAL, R0
+90$:    RET
+
+; PURGE: START's, for PURGE. R0 = SS$_NORMAL, or RMS's status, or an
+; error it has reported.
+PURGE:  PRESENT "KEEP"
+        BLBC    R0, 10$
+        MOVL    #255, DESC
+        GETVALUE "KEEP", DESC, DESC
+        BSBW    NUMBER
+        MOVL    R1, KEEP
+        BNEQ    10$
+        MOVAB   BADVALUE, R1            ; 0 or no number: as VMS's
+        BSBW    ADDTEXT
+        MOVAB   SPEC, R1
+        MOVZWL  DESC, R2
+        BSBW    ADDSTR
+        MOVAB   INVALID, R1
+        BSBW    ADDTEXT
+        PUSHAB  MSG
+        CALLS   #1, G^PUT_LINE
+        MOVL    #SS$_BADPARAM!INHIB_MSG, R0
+        RET
+10$:    MOVAB   ANYVER, FAB+FAB$L_DNA
+        MOVB    #2, FAB+FAB$B_DNS
+        MOVL    #255, DESC
+        GETVALUE "FILE", DESC, DESC
+        BLBS    R0, 15$
+        CLRW    DESC                    ; none: *.*;*
+        MOVAB   ALL, FAB+FAB$L_DNA
+        MOVB    #5, FAB+FAB$B_DNS
+15$:    MOVAB   SPEC, FAB+FAB$L_FNA
+        MOVB    DESC, FAB+FAB$B_FNS
+        MOVL    #FAB$M_NAM, FAB+FAB$L_FOP
+        LOCC    #59, DESC, SPEC     ; a semicolon
+        BEQL    17$
+        PRINT   "%PURGE-E-PURGEVER, version numbers not permitted"
+        MOVL    #RMS$_VER!INHIB_MSG, R4
+        BRB     70$
+17$:    $PARSE  FAB=FAB
+        BLBC    R0, 90$
+20$:    $SEARCH FAB=FAB
+        BLBC    R0, 60$
+        BSBW    NEWVER
+        BLBS    R0, 20$
+        $ERASE  FAB=FAB
+        BLBC    R0, 90$
+        INCL    PURGED
+        PRESENT "LOG"
+        BLBC    R0, 20$
+        MOVAB   FILPURG, R1             ; %PURGE-I-FILPURG, name deleted
+        BSBW    LOGDEL
+        BRB     20$
+60$:    CMPL    R0, #RMS$_NMF
+        BNEQ    90$
+        MOVL    #SS$_NORMAL, R4
+70$:    PRESENT "LOG"
+        BLBC    R0, 80$
+        TSTL    PURGED
+        BNEQ    75$
+        PRINT   "%PURGE-I-NOFILPURG, no files purged"
+        BRB     80$
+75$:    CMPL    PURGED, #1
+        BEQL    80$
+        MOVAB   TOTAL, R1               ; %PURGE-I-TOTAL, n files deleted
+        BSBW    ADDTEXT
+        MOVL    PURGED, R1
+        BSBW    ADDDEC
+        MOVAB   FILES, R1
+        BSBW    ADDTEXT
+        PUSHAB  MSG
+        CALLS   #1, G^PUT_LINE
+80$:    MOVL    R4, R0
+90$:    RET
+
+; NUMBER: DESC = /KEEP's value. R1 = it, or 0 if it isn't decimal digits.
+; Uses R0-R2.
+NUMBER:
+        .JSB_ENTRY  SCRATCH=<R2>
+        CLRL    R1
+        CLRL    R2
+10$:    CMPW    R2, DESC
+        BGEQU   90$
+        MOVZBL  SPEC[R2], R0
+        SUBL2   #^A/0/, R0
+        CMPL    R0, #9
+        BGTRU   80$
+        MULL2   #10, R1
+        ADDL2   R0, R1
+        INCL    R2
+        BRB     10$
+80$:    CLRL    R1
+90$:    RSB
+
+; NEWVER: R0 = 1 if the file $SEARCH found is one of the KEEP highest of
+; its name, which $SEARCH finds highest first; 0 if not. Uses R0-R5.
+NEWVER:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5>
+        SUBL3   #RES, NAM+NAM$L_VER, R2 ; up to its version
+        MOVZBL  LASTNAME, R0
+        CMPC5   R2, RES, #0, R0, LASTNAME+1
+        BEQL    10$
+        SUBL3   #RES, NAM+NAM$L_VER, R2 ; another name
+        MOVB    R2, LASTNAME
+        MOVC3   R2, RES, LASTNAME+1
+        CLRL    VERSION
+10$:    INCL    VERSION
+        CLRL    R0
+        CMPL    VERSION, KEEP
+        BGTRU   90$
+        INCL    R0
+90$:    RSB
+
+; LOGDEL: R1 = a message's .ASCIC start. Writes it, the name of the file
+; $SEARCH found, and " deleted". Uses R0-R2.
+LOGDEL:
+        .JSB_ENTRY  SCRATCH=<R2>
         BSBB    ADDTEXT
         MOVAB   NAM, R1
         BSBB    ADDNAM
@@ -61,15 +213,30 @@ RES:    .BLKB   255
         PUSHAB  MSG
         CALLS   #1, G^PUT_LINE
         CLRB    MSG
-        BRB     10$
-20$:    CMPL    R0, #RMS$_NMF
-        BNEQ    90$
-        MOVL    #SS$_NORMAL, R0
-90$:    RET
+        RSB
 
-; ADDNAM: R1 = a NAM block. Appends its resultant name to MSG. ADD:
-; appends the R2 characters at R1, as many as fit. ADDTEXT: the .ASCIC
-; string at R1. Use R0-R2.
+; ADDDEC: appends R1 in decimal to MSG. Uses R0-R3.
+ADDDEC:
+        .JSB_ENTRY  SCRATCH=<R2, R3>
+        MOVAB   NUM+10, R3              ; its digits, from the last
+10$:    DIVL3   #10, R1, R2
+        MULL3   #10, R2, R0
+        SUBL3   R0, R1, R0
+        ADDL2   #^A/0/, R0
+        MOVB    R0, -(R3)
+        MOVL    R2, R1
+        BNEQ    10$
+        MOVAB   NUM+10, R2
+        SUBL2   R3, R2
+        MOVL    R3, R1
+        BRB     ADD
+
+; ADDNAM: R1 = a NAM block. Appends its resultant name to MSG. ADDSTR
+; and ADD: appends the R2 characters at R1, as many as fit. ADDTEXT: the
+; .ASCIC string at R1. Use R0-R2.
+ADDSTR:
+        .JSB_ENTRY  SCRATCH=<R2>
+        BRB     ADD
 ADDNAM:
         .JSB_ENTRY  SCRATCH=<R2>
         MOVZBL  NAM$B_RSL(R1), R2

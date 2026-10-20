@@ -1110,8 +1110,10 @@ const LBR: Phase = Phase {
 /// DIRECTORY's layouts (t8y:/utils/directory#columns), as OpenVMS Alpha's:
 /// a name two columns wide, /COLUMNS, /VERSIONS, /SIZE=ALL with /OWNER and
 /// /PROTECTION, /TOTAL, /DATE's dates Files-11 has none of, lists of
-/// files (t8y:/utils/directory#lists), and a /VERSIONS it can't parse; and a DELETE/LOG of the tree's files, after
-/// which there are none.
+/// files (t8y:/utils/directory#lists), and a /VERSIONS it can't parse; PURGE
+/// (t8y:/utils/delete#purge) of two more versions, /KEEP=2 then 1, with a
+/// /KEEP and a version it won't take; and a DELETE/LOG of the tree's files,
+/// after which there are none.
 const WILDCARDS: Phase = Phase {
     name: "wildcards",
     secs: 60,
@@ -1170,6 +1172,17 @@ const WILDCARDS: Phase = Phase {
         ),
         (
             "error parsing '0'",
+            1,
+            concat!(
+                "COPY SYS$SYSDEVICE:[SYSMGR]WELCOME.TXT DKB0:[W]TOP.TMP\r",
+                "COPY SYS$SYSDEVICE:[SYSMGR]WELCOME.TXT DKB0:[W]TOP.TMP\r",
+                "PURGE/KEEP=0 DKB0:[W]\rPURGE DKB0:[W]*.TMP;*\r",
+                "PURGE/LOG/KEEP=2 DKB0:[W...]*.TMP\rPURGE/LOG DKB0:[W...]*.TMP\r",
+                "PURGE/LOG DKB0:[W...]*.TMP\r",
+            ),
+        ),
+        (
+            "no files purged",
             1,
             "DELETE/LOG DKB0:[W...]*.TMP;*\rDIR DKB0:[W...]*.TMP\r",
         ),
@@ -1294,8 +1307,18 @@ const WILDCARDS: Phase = Phase {
             "-RMS-F-DEV, error in device name or inappropriate device type for operation\n",
         ),
         "$ DIR/VERSIONS=0\n%DIRECT-F-SYNTAX, error parsing '0'",
+        "$ PURGE/KEEP=0 DKB0:[W]\n%PURGE-F-BADVALUE, '0' is an invalid keyword value",
+        "$ PURGE DKB0:[W]*.TMP;*\n%PURGE-E-PURGEVER, version numbers not permitted",
         concat!(
-            "%DELETE-I-FILDEL, DKB0:[W]TOP.TMP;1 deleted\n",
+            "$ PURGE/LOG/KEEP=2 DKB0:[W...]*.TMP\n",
+            "%PURGE-I-FILPURG, DKB0:[W]TOP.TMP;2 deleted\n",
+            "%PURGE-I-FILPURG, DKB0:[W]TOP.TMP;1 deleted\n",
+            "%PURGE-I-TOTAL, 2 files deleted\n",
+        ),
+        "$ PURGE/LOG DKB0:[W...]*.TMP\n%PURGE-I-FILPURG, DKB0:[W]TOP.TMP;3 deleted\n$",
+        "$ PURGE/LOG DKB0:[W...]*.TMP\n%PURGE-I-NOFILPURG, no files purged",
+        concat!(
+            "%DELETE-I-FILDEL, DKB0:[W]TOP.TMP;4 deleted\n",
             "%DELETE-I-FILDEL, DKB0:[W.A]ONE.TMP;1 deleted\n",
             "%DELETE-I-FILDEL, DKB0:[W.A.X]DEEP.TMP;1 deleted\n",
             "%DELETE-I-FILDEL, DKB0:[W.B]TWO.TMP;1 deleted\n",

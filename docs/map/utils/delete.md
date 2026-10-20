@@ -51,7 +51,7 @@ note = "PRD-0003 tier 3 #24; delete.mar ponytail"
 [[feature]]
 id = "purge"
 title = "PURGE [spec] /KEEP=n: all but the highest versions"
-status = "todo"
+status = "done"
 needs = ["/rms/wildcards"]
 
 [[feature]]
@@ -95,5 +95,7 @@ vaxpunk's `DELETE` is `vms/sysexe/delete.mar`. It requires a version,
 `%DELETE-E-DELVER` otherwise, finds the files with `$PARSE` and
 `$SEARCH`, and `$ERASE`s each by its NAM block; RMS checks delete access
 to the file and write access to its directory. `DELETE/SYMBOL` is DCL's
-own. There is no `PURGE`, and `$ERASE` deletes a file someone has open
+own. `PURGE` runs the same image, as on VMS: it `$SEARCH`es every
+version of the names, which come highest first, and `$ERASE`s all but
+the first `/KEEP` of each. `$ERASE` deletes a file someone has open
 until RMS shares files through the lock manager (PRD-0003 step 7).

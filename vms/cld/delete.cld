@@ -17,3 +17,12 @@ define syntax DELETE_SYMBOL
 
 define syntax DELETE_SYMBOL_ALL
 	noparameters
+
+! PURGE [spec]: DELETE.EXE deletes all but the highest version of each
+! file, or the highest n with /KEEP=n. It checks n itself, as VMS's says
+! %PURGE-F-BADVALUE.
+define verb PURGE
+	image DELETE
+	parameter P1, label=FILE, value(type=$infile)
+	qualifier KEEP, nonnegatable, value(required)
+	qualifier LOG
