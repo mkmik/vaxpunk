@@ -1218,6 +1218,33 @@
 
   $ PIPE SET DEFAULT [WORK] && DIRECTORY
   $ PIPE TYPE NOTES.TXT || WRITE SYS$OUTPUT "No notes"
+1 PURGE
+  Deletes all but the highest version of each file, or the highest n
+  with /KEEP=n.
+
+  Format
+
+    PURGE [file-spec]
+2 Parameters
+
+ file-spec
+
+  The files to purge, *.* in the default directory if it is left out.
+  It gives no version number. Wildcards are allowed.
+2 Qualifiers
+/KEEP
+  /KEEP=n
+
+  How many versions of each file to keep, 1 if it is left out.
+/LOG
+  /LOG
+  /NOLOG (default)
+
+  Says which files were deleted, and how many.
+2 Examples
+
+  $ PURGE
+  $ PURGE/KEEP=2/LOG [WORK]*.TXT
 1 READ
   Reads a record of a file OPEN opened into a symbol.
 
