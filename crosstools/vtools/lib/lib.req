@@ -364,7 +364,7 @@ LITERAL
     UCB$K_LENGTH = 28,
     UCB$K_NETLENGTH = 48,  ! a network unit, which BGA0: clones
     UCB$K_MBLENGTH = 60,  ! a mailbox
-    UCB$K_TTLENGTH = 5604,  ! a terminal
+    UCB$K_TTLENGTH = 5612,  ! a terminal
     UCB$K_TT_TYPEAHEAD = 256,
     UCB$K_TT_RECALL = 16,  ! a power of 2
     UCB$K_TT_OUTSIZE = 1024,
@@ -376,6 +376,9 @@ LITERAL
     UCB$V_TT_RECV = 5,  ! a TELNET terminal's receive is on the port
     UCB$V_TT_TN = 6,  ! a TELNET terminal, TNAn, not the console
     UCB$V_TT_FT = 7,  ! a pseudo terminal, FTAn, which a program drives with the PTD$ routines
+    UCB$V_TT_VT = 8,  ! a virtual terminal, VTAn: a session that outlives its line
+    UCB$V_TT_DET = 9,  ! a virtual terminal disconnected from its line: its I/O waits
+    UCB$V_TT_RED = 10,  ! a physical terminal redirected to a virtual one, UCB$L_TT_LOG
     UCB$V_PRMMBX = 0,  ! UCB$L_MBSTS: permanent, until $DELMBX
     UCB$M_PRMMBX = 1,
     UCB$V_ONLINE = 4,  ! the device is online
@@ -428,7 +431,9 @@ MACRO
     UCB$W_TT_SPEED = 5584, 0, 16, 0 %,  ! its speeds, TT$C_BAUD_: transmit in the low byte, receive in the high
     UCB$W_TT_PRMSPEED = 5586, 0, 16, 0 %,  ! and its permanent ones, which IO$_SETCHAR sets
     UCB$A_TT_PRMCHAR = 5588, 0, 32, 1 %,  ! its permanent characteristics, IO$_SENSECHAR's 12 bytes, as UCB$A_TT_CHAR
-    UCB$L_TT_PRMCHAR3 = 5600, 0, 32, 0 %;  ! and TT3$ bits: what it goes back to once no channel has it
+    UCB$L_TT_PRMCHAR3 = 5600, 0, 32, 0 %,  ! and TT3$ bits: what it goes back to once no channel has it
+    UCB$L_TT_PHY = 5604, 0, 32, 0 %,  ! a virtual terminal's physical one, a TNAn, or 0 while disconnected
+    UCB$L_TT_LOG = 5608, 0, 32, 0 %;  ! a physical terminal's virtual one, which has its line
 
 ! $IRPDEF
 LITERAL
@@ -776,7 +781,8 @@ LITERAL
     UAF$V_LOCKPWD = 2,  ! no SET PASSWORD
     UAF$V_CAPTIVE = 3,
     UAF$V_DISACNT = 4,  ! no login
-    UAF$V_DISWELCOM = 5;  ! no welcome message
+    UAF$V_DISWELCOM = 5,  ! no welcome message
+    UAF$V_DISRECONNECT = 13;  ! no reconnection to a disconnected process at login
 MACRO
     UAF$B_RTYPE = 0, 0, 8, 0 %,  ! the record's type: UAF$C_USER_ID
     UAF$B_VERSION = 1, 0, 8, 0 %,  ! its format: UAF$C_VERSION1

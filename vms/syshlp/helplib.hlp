@@ -208,6 +208,43 @@
 
   Says so when the name isn't of a file OPEN opened. /NOLOG says
   nothing.
+1 CONNECT
+  Connects your terminal's line to a virtual terminal of yours that is
+  disconnected, VTAn:, whose process then goes on there. SHOW
+  USERS/FULL shows which ones are disconnected.
+
+  Format
+
+    CONNECT virtual-terminal-name
+
+  Your own terminal must be a virtual one too: a TELNET login has one
+  while the system logical name TCPIP$TELNET_VTA is TRUE. LOGINOUT
+  offers the same when you log in and have a disconnected process.
+2 Parameters
+
+ virtual-terminal-name
+
+  The virtual terminal to connect to, VTAn:.
+2 Qualifiers
+/CONTINUE
+  /CONTINUE
+  /NOCONTINUE (default)
+
+  Continues the image CTRL/Y stopped in this process, which keeps
+  running, disconnected, as with /NOLOGOUT.
+/LOGOUT
+  /LOGOUT (default)
+  /NOLOGOUT
+
+  Logs this process out once its line is connected to the other.
+  /NOLOGOUT keeps it, disconnected, for a CONNECT back to it later.
+2 Example
+
+  $ SHOW USERS/FULL
+  $ CONNECT VTA1:
+
+  Connects to the process on VTA1:, which was disconnected when its
+  connection closed, and logs this one out.
 1 CONTINUE
   Goes on with the image CTRL/Y stopped, from where it stopped.
 
@@ -592,6 +629,24 @@
   $ DIRECTORY/OWNER/PROTECTION SYS$SYSTEM:*.EXE
   $ DIRECTORY/SIZE=ALL/DATE/VERSIONS=1
   $ DIRECTORY DKB0:[W...]*.TMP
+1 DISCONNECT
+  Disconnects your virtual terminal from its line, which closes: the
+  process stays, and waits for its terminal, until you log in again
+  and connect to it, or for TTY_TIMEOUT, 15 minutes, after which it is
+  logged out.
+
+  Format
+
+    DISCONNECT
+
+  Only a virtual terminal, VTAn:, can be disconnected.
+2 Qualifiers
+/CONTINUE
+  /CONTINUE
+  /NOCONTINUE (default)
+
+  Continues the image CTRL/Y stopped, which runs on while the terminal
+  is disconnected, until it reads or writes there.
 1 DISMOUNT
   Dismounts a volume. Its files can't be named again until it is
   mounted.

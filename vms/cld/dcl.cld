@@ -9,8 +9,25 @@ define verb CLOSE
 	qualifier ERROR, value(required)
 	qualifier LOG, default
 
+! CONNECT virtual-terminal: connects the terminal's line to the user's
+! disconnected virtual terminal, VTAn:, and logs this process out, or
+! with /NOLOGOUT or /CONTINUE disconnects it; /CONTINUE continues the
+! image CTRL/Y stopped first.
+define verb CONNECT
+	cliroutine CONNECT
+	parameter P1, label=VIRTUAL_TERMINAL, prompt="Virtual terminal", value(required)
+	qualifier CONTINUE
+	qualifier LOGOUT, default
+
 define verb CONTINUE
 	cliroutine CONTINUE
+
+! DISCONNECT: disconnects the virtual terminal from its line, which
+! closes, and the process waits to be connected to again; /CONTINUE
+! continues the image CTRL/Y stopped.
+define verb DISCONNECT
+	cliroutine DISCONNECT
+	qualifier CONTINUE
 
 define verb DEASSIGN
 	cliroutine DEASSIGN

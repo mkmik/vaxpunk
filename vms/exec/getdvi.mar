@@ -41,7 +41,9 @@ TTNAME: .BLKB   4                       ; the terminal a VCB of 0 stands for: it
 TTUNIT: .LONG   0                       ; its unit,
 TTREFC: .LONG   0                       ; its channels,
 TTCHAR: .BLKB   12                      ; and its characteristics, IO$_SENSEMODE's,
-TTCHAR3:.LONG   0                       ; and TT3$ bits
+TTCHAR3:.LONG   0                       ; and TT3$ bits,
+TTSTS:  .LONG   0                       ; its UCB$V_TT_ bits,
+TTPHY:  .LONG   0                       ; and its physical terminal's name, 0 for none
 NAMBUF: .BLKB   6                       ; a device's name, _DDCU:
 VALUE:  .LONG   0                       ; a value item's
 
@@ -77,16 +79,26 @@ DEVICE:
         RSB
 
 ; COPYTT: R0 = a terminal's UCB. Copies what $GETDVI returns of it to
-; TTNAME, TTUNIT, TTREFC, TTCHAR and TTCHAR3. IPL$_SYNCH. Keeps every
+; TTNAME, TTUNIT, TTREFC, TTCHAR, TTCHAR3, TTSTS and TTPHY: its own name,
+; or a virtual terminal's physical one's. IPL$_SYNCH. Keeps every
 ; register.
 COPYTT:
         .JSB_ENTRY
+        PUSHL   R1
         MOVL    UCB$T_NAME(R0), TTNAME
         MOVL    UCB$L_UNIT(R0), TTUNIT
         MOVL    UCB$L_REFC(R0), TTREFC
         MOVL    UCB$A_TT_CHAR(R0), TTCHAR
         MOVQ    UCB$A_TT_CHAR+4(R0), TTCHAR+4
         MOVL    UCB$L_TT_CHAR3(R0), TTCHAR3
+        MOVL    UCB$L_TT_STS(R0), TTSTS
+        MOVL    UCB$T_NAME(R0), TTPHY
+        BBC     #UCB$V_TT_VT, TTSTS, 10$
+        CLRL    TTPHY                   ; disconnected
+        MOVL    UCB$L_TT_PHY(R0), R1
+        BEQL    10$
+        MOVL    UCB$T_NAME(R1), TTPHY
+10$:    MOVL    (SP)+, R1
         RSB
 
 ; DEVNAME: R5 = a device's VCB, or 0. Makes its name, _DDCU:, in NAMBUF.
@@ -158,7 +170,10 @@ ONLINE:
 ; know, or the disk's error for DVI$_FREEBLOCKS. A terminal's
 ; DVI$_DEVTYPE, DVI$_DEVBUFSIZ, DVI$_DEVDEPEND, DVI$_DEVDEPEND2 and
 ; DVI$_DEVDEPEND3 are its characteristics, as IO$_SENSEMODE gives them; it has a DVI$_UNIT
-; and DVI$_REFCNT, a disk 0. A mailbox or a
+; and DVI$_REFCNT, a disk 0. A virtual terminal's DVI$_DEVCHAR2 has
+; DEV$M_DET while it is disconnected, its physical terminal's DEV$M_RED,
+; and DVI$_TT_PHYDEVNAM is its physical terminal, none while
+; disconnected; any other terminal's is itself. A mailbox or a
 ; network unit, by its channel, has DVI$_DEVNAM, DVI$_DEVCLASS, DVI$_UNIT
 ; and DVI$_REFCNT, and 0 for any other item.
 ; ponytail: done at once, no AST; the items $DVIDEF lists.
@@ -402,7 +417,29 @@ ITEM:
         BNEQ    62$
         MOVL    TTCHAR3, R0
         BRB     62$
-80$:    MOVL    #SS$_BADPARAM, R0
+80$:    CMPL    R10, #DVI$_DEVCHAR2
+        BNEQ    84$
+        TSTL    R5
+        BNEQ    62$
+        BBC     #UCB$V_TT_DET, TTSTS, 82$
+        BISL2   #DEV$M_DET, R0
+82$:    BBC     #UCB$V_TT_RED, TTSTS, 62$
+        BISL2   #DEV$M_RED, R0
+        BRB     62$
+84$:    CMPL    R10, #DVI$_TT_PHYDEVNAM
+        BNEQ    88$
+        CLRL    R2                      ; a disk's, a disconnected terminal's: none
+        TSTL    R5
+        BNEQ    86$
+        MOVL    TTPHY, R1
+        BEQL    86$
+        MOVB    #^A/_/, NAMBUF
+        MOVL    R1, NAMBUF+1
+        MOVB    #^A/:/, NAMBUF+5
+        MOVAB   NAMBUF, R1
+        MOVL    #6, R2
+86$:    BRW     STRING
+88$:    MOVL    #SS$_BADPARAM, R0
         RSB
 ; MBXITEM: ITEM for a mailbox or a network unit, R6: its name, _MBnn: or
 ; _BGnn:, its class, its unit, its channels, and 0 for other items.

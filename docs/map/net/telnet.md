@@ -48,6 +48,12 @@ milestone = "m1"
 note = "PRD-0003 tier 1 #3"
 
 [[feature]]
+id = "virtual-terminals"
+title = "TCPIP$TELNET_VTA: a login on a virtual terminal, VTAn, which a hangup disconnects"
+status = "done"
+note = "ADR-0041; t8y:/drivers/terminal#virtual-terminals"
+
+[[feature]]
 id = "more-terminals"
 title = "More than 9 TNA units"
 status = "todo"
@@ -116,5 +122,9 @@ line at a time and goes a character at a time when the other end offers
 to echo, so EDIT and EVE work in a remote session; CTRL/] gives its
 `TELNET>` prompt, where `CLOSE` ends the session and a blank line or
 `CONNECT` goes back to it. A hangup, the connection closing, deletes the
-process created on the terminal, as VMS's does. Left: more than 9
-terminals.
+process created on the terminal, as VMS's does, unless the system
+logical name `TCPIP$TELNET_VTA` is TRUE: then the login is on a virtual
+terminal, `VTAn:`, which the hangup disconnects, and the user's next
+login connects to it again
+([ADR-0041](../../adr/0041-virtual-terminals-take-the-telnet-line.md)).
+Left: more than 9 terminals.

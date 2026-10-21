@@ -17,10 +17,14 @@
 ; directory, and calls EXE$LOGIN in kernel mode, which gives the process
 ; the user's UIC, privileges and priority, and the command interpreter
 ; the record names, DCL, and the rights list it builds: INTERACTIVE,
-; and REMOTE on a TELNET terminal, TNAn:, or LOCAL on another, then the
+; and REMOTE on a TELNET terminal, TNAn: or VTAn:, or LOCAL on another, then the
 ; identifiers the rights database, RIGHTSLIST.DAT, says the user's UIC
 ; holds ($FIND_HELD) (ADR-0040). The executive calls DCL when this
 ; image exits, and DCL runs SYLOGIN.COM and the user's LOGIN.COM.
+; Before that, on a virtual terminal, it lists the user's processes on
+; disconnected ones and asks which to connect to, as VMS's LOGINOUT
+; does: the terminal's line goes to that one, and this process goes
+; (docs/adr/0041-virtual-terminals-take-the-telnet-line.md).
 ; The system logical name SYS$ANNOUNCE, if there is one, is written
 ; before the first Username:, and SYS$WELCOME after the login, in place
 ; of the system's own welcome, with its version from $GETSYI, unless the record says DISWELCOME. A value that
@@ -48,6 +52,9 @@
         $DVIDEF
         $SYIDEF
         $KGBDEF
+        $JPIDEF
+        $DEVDEF
+        $TT2DEF
 
         .EXTERNAL EXE$LOGIN, PUT_LINE, LIB$SIGNAL
 
@@ -137,6 +144,58 @@ SYIITEM:.WORD   8, SYI$_VERSION         ; $GETSYI's items: the system's version
 VERSION:.ASCII  "        "
 MSGFAB: $FAB    FNA=TEXT+2, FAC=GET
 MSGRAB: $RAB    FAB=MSGFAB, UBF=TEXT+1, USZ=255
+MAXDET = 16                             ; the disconnected processes it lists, at most
+MYITEM: .WORD   4, DVI$_DEVDEPEND2      ; $GETDVI's items: the terminal's TT2$ bits
+        .ADDRESS MYCHAR2, 0
+        .LONG   0
+MYCHAR2:.LONG   0
+JPICTX: .LONG   0                       ; a wildcard $GETJPI's context
+FINDITEMS:                              ; and its items: a process's username,
+        .WORD   12, JPI$_USERNAME
+        .ADDRESS JUSER, 0
+        .WORD   15, JPI$_TERMINAL       ; terminal,
+        .ADDRESS JTERM+1, JTERMLEN
+        .WORD   4, JPI$_UIC             ; UIC
+        .ADDRESS JUIC, 0
+        .WORD   4, JPI$_PID             ; and PID
+        .ADDRESS JPID, 0
+        .LONG   0
+LISTITEMS:                              ; a disconnected one's terminal,
+        .WORD   15, JPI$_TERMINAL
+        .ADDRESS JTERM+1, JTERMLEN
+        .WORD   15, JPI$_PRCNAM         ; process name
+        .ADDRESS JPRC, JPRCLEN
+        .WORD   64, JPI$_IMAGNAME       ; and image
+        .ADDRESS JIMG, JIMGLEN
+        .LONG   0
+DETITEM:.WORD   4, DVI$_DEVCHAR2        ; $GETDVI's: a terminal's DEV$ bits of DEVCHAR2
+        .ADDRESS JCHAR2, 0
+        .LONG   0
+JUSER:  .BLKB   12
+JTDSC:  .LONG   0                       ; the terminal, _DDCU:
+        .ADDRESS JTERM
+JTERM:  .ASCII  "_"
+        .BLKB   15
+JTERMLEN:
+        .WORD   0
+JUIC:   .LONG   0
+JPID:   .LONG   0
+JCHAR2: .LONG   0
+JPRC:   .BLKB   15
+JPRCLEN:.WORD   0
+JIMG:   .BLKB   64
+JIMGLEN:.WORD   0
+NPIDS:  .LONG   0                       ; those found
+PIDS:   .BLKL   MAXDET
+FIRST:  .BLKB   16                      ; the first one's terminal, _DDCU:
+FIRSTLEN:
+        .LONG   0
+PROMPT: .BLKB   64                      ; the question
+ANSWER: .BLKB   32
+CONNDSC:.LONG   0, 0                    ; the terminal to connect to
+MSGDSC: .LONG   255                     ; a status's message
+        .ADDRESS TEXT+1
+MSGLEN: .WORD   0
 
         .PSECT  CODE, EXE, LONG
         .ENTRY  START, ^M<R2, R3, R4, R5, R6>
@@ -174,6 +233,7 @@ LOGIN:  MOVZWL  REC+UAF$W_LOGFAILS, FAILS
         BSBW    RIGHTS
         $CMKRNL_S ROUTIN=G^EXE$LOGIN, ARGLST=KARGS
         BLBC    R0, 80$
+        BSBW    RECONNECT
         BBS     #UAF$V_DISWELCOM, REC+UAF$L_FLAGS, 10$
         MOVAQ   WELCOMENAM, R1
         BSBW    MESSAGE
@@ -200,8 +260,10 @@ RIGHTS:
         CLRL    (R1)+
         MOVL    #KGB$K_LOCAL_ID, (R1)
         CMPW    TERM+1, #^A/TN/         ; _TNAn:, a TELNET terminal
+        BEQL    3$
+        CMPW    TERM+1, #^A/VT/         ; _VTAn:, TELNET's virtual one
         BNEQ    5$
-        MOVL    #KGB$K_REMOTE_ID, (R1)
+3$:     MOVL    #KGB$K_REMOTE_ID, (R1)
 5$:     CLRL    4(R1)
         MOVL    #2, RLIST
         MOVL    REC+UAF$L_UIC, HOLDER
@@ -218,6 +280,171 @@ RIGHTS:
         INCL    RLIST
         BRB     10$
 30$:    $FINISH_RDB_S CONTXT=RDBCTX
+        RSB
+
+; RECONNECT: REC = the user's record, the process the user's. Unless the
+; record says DISRECONNECT, or the terminal isn't a virtual one, lists
+; the processes of the user's name and UIC on disconnected virtual
+; terminals, up to MAXDET, as VMS's LOGINOUT does, and asks which to
+; connect to: for one, Connect to above listed process [YES]:, for more
+; a terminal's name, the first's by default; NONE, or N, connects to
+; none. Once the terminal's line is connected to it, the process goes;
+; if it can't be, it says why, and the login goes on. Uses R0-R6.
+RECONNECT:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5, R6>
+        BBC     #UAF$V_DISRECONNECT, REC+UAF$L_FLAGS, 2$
+        RSB
+2$:     $GETDVIW_S CHAN=CHAN, ITMLST=MYITEM
+        BLBC    R0, 5$
+        BITL    #TT2$M_DISCONNECT, MYCHAR2
+        BNEQ    7$
+5$:     RSB
+7$:     CLRL    NPIDS
+        MNEGL   #1, JPICTX
+10$:    CLRW    JTERMLEN
+        $GETJPIW_S PIDADR=JPICTX, ITMLST=FINDITEMS
+        BLBC    R0, 30$                 ; past the last
+        MOVZWL  JTERMLEN, R6
+        BEQL    10$                     ; not interactive
+        CMPC3   #12, JUSER, REC+UAF$T_USERNAME
+        BNEQ    10$
+        CMPL    JUIC, REC+UAF$L_UIC
+        BNEQ    10$
+        ADDL3   #1, R6, JTDSC
+        $GETDVIW_S DEVNAM=JTDSC, ITMLST=DETITEM
+        BLBC    R0, 10$
+        BBC     #DEV$V_DET, JCHAR2, 10$
+        MOVL    NPIDS, R0
+        MOVL    JPID, PIDS[R0]
+        AOBLSS  #MAXDET, NPIDS, 10$
+30$:    TSTL    NPIDS
+        BEQL    5$
+        CLRL    R6                      ; listed
+        CLRL    FIRSTLEN
+40$:    MOVL    PIDS[R6], JPID
+        CLRW    JTERMLEN
+        CLRW    JPRCLEN
+        CLRW    JIMGLEN
+        $GETJPIW_S PIDADR=JPID, ITMLST=LISTITEMS
+        BLBC    R0, 60$                 ; gone since
+        TSTL    FIRSTLEN
+        BNEQ    50$
+        MOVZWL  JTERMLEN, R0
+        ADDL3   #1, R0, FIRSTLEN
+        MOVC3   FIRSTLEN, JTERM, FIRST
+        CMPL    NPIDS, #1
+        BNEQ    45$
+        PRINT   "    You have the following disconnected process:"
+        BRB     47$
+45$:    PRINT   "    You have the following disconnected processes:"
+47$:    PRINT   "Terminal   Process name    Image name"
+50$:    CLRB    TEXT                    ; !10AF !15AF !AF
+        MOVAB   JTERM+1, R1
+        MOVZWL  JTERMLEN, R2
+        MOVL    #11, R3
+        BSBW    COLUMN
+        MOVAB   JPRC, R1
+        MOVZWL  JPRCLEN, R2
+        MOVL    #27, R3
+        BSBW    COLUMN
+        MOVAB   JIMG, R1
+        MOVZWL  JIMGLEN, R2
+        BNEQ    55$
+        MOVAB   NONE, R1
+        MOVL    #6, R2
+55$:    CLRL    R3
+        BSBW    COLUMN
+        PUSHAB  TEXT
+        CALLS   #1, G^PUT_LINE
+60$:    AOBLSS  NPIDS, R6, 40$
+        TSTL    FIRSTLEN
+        BEQL    5$                      ; all gone
+        MOVW    #<10@8>!13, PROMPT
+        CMPL    NPIDS, #1
+        BNEQ    62$
+        MOVC3   #CONNECTQLEN, CONNECTQ, PROMPT+2
+        BRB     64$
+62$:    MOVC3   #ENTERQLEN, ENTERQ, PROMPT+2
+        SUBL3   #1, FIRSTLEN, R0
+        MOVC3   R0, FIRST+1, (R3)
+        MOVB    #^X5D, (R3)+            ; ]: after it
+        MOVB    #^A/:/, (R3)+
+        MOVB    #^A/ /, (R3)+
+64$:    MOVAB   PROMPT, R0
+        SUBL3   R0, R3, R0
+        $QIOW_S CHAN=CHAN, FUNC=#IO$_READPROMPT, IOSB=IOSB, P1=ANSWER, P2=#32, P5=#PROMPT, P6=R0
+        BSBW    STATUS
+        BLBC    R0, 5$
+        MOVZWL  IOSB+2, R2
+        MOVL    R2, CONNDSC
+        MOVAB   ANSWER, CONNDSC+4
+        MOVAB   ANSWER, R1
+        BSBW    UPCASE
+        MOVL    CONNDSC, R2
+        BEQL    70$                     ; the first
+        CMPL    R2, #4
+        BGTRU   80$
+        CMPC3   R2, ANSWER, NONEWORD
+        BNEQ    66$
+        RSB
+66$:    CMPL    CONNDSC, #3
+        BGTRU   80$
+        CMPC3   CONNDSC, ANSWER, YESWORD
+        BNEQ    80$
+70$:    MOVL    FIRSTLEN, CONNDSC
+        MOVAB   FIRST, CONNDSC+4
+80$:    CLRB    TEXT
+        MOVAB   CONNECTING, R1
+        MOVZBL  (R1)+, R2
+        CLRL    R3
+        BSBW    COLUMN
+        MOVL    CONNDSC+4, R1
+        MOVL    CONNDSC, R2
+        CLRL    R3
+        BSBW    COLUMN
+        PUSHAB  TEXT
+        CALLS   #1, G^PUT_LINE
+        $QIOW_S CHAN=CHAN, FUNC=#IO$_SETMODE!IO$M_TT_CONNECT, IOSB=IOSB, P1=CONNDSC
+        BSBW    STATUS
+        BLBC    R0, 90$
+        $DELPRC_S                       ; the line is the other's: this process goes
+        RSB
+90$:    PUSHL   R0                      ; %LOGIN-E-CONNERR, then why
+        CLRB    TEXT
+        MOVAB   CONNERR, R1
+        MOVZBL  (R1)+, R2
+        CLRL    R3
+        BSBW    COLUMN
+        MOVL    CONNDSC+4, R1
+        MOVL    CONNDSC, R2
+        CLRL    R3
+        BSBW    COLUMN
+        PUSHAB  TEXT
+        CALLS   #1, G^PUT_LINE
+        MOVL    (SP)+, R0
+        $GETMSG_S MSGID=R0, MSGLEN=MSGLEN, BUFADR=MSGDSC
+        MOVB    MSGLEN, TEXT
+        MOVB    #^A/-/, TEXT+1
+        PUSHAB  TEXT
+        CALLS   #1, G^PUT_LINE
+        RSB
+
+; COLUMN: appends the R2 characters at R1 to TEXT, .ASCIC, then blanks
+; up to column R3, if it is short of it. Uses R0-R5.
+COLUMN:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5>
+        PUSHL   R3
+        MOVZBL  TEXT, R3
+        ADDB2   R2, TEXT
+        MOVC3   R2, (R1), TEXT+1[R3]
+        MOVL    (SP)+, R0
+        MOVZBL  TEXT, R1
+10$:    CMPL    R1, R0
+        BGEQ    90$
+        MOVB    #^A/ /, TEXT+1[R1]
+        INCL    R1
+        BRB     10$
+90$:    MOVB    R1, TEXT
         RSB
 
 ; ASK: reads the username and the password, without echoing it, into
@@ -494,5 +721,17 @@ FAILURE:
         .ASCIC  " failure since last successful login"
 FAILURES2:
         .ASCIC  " failures since last successful login"
+NONE:   .ASCII  "(none)"
+NONEWORD:
+        .ASCII  "NONE"
+YESWORD:.ASCII  "YES"
+CONNECTQ:
+        .ASCII  "Connect to above listed process [YES]: "
+CONNECTQLEN = .-CONNECTQ
+ENTERQ: .ASCII  "Enter terminal to connect to ["
+ENTERQLEN = .-ENTERQ
+CONNECTING:
+        .ASCIC  "Connecting to terminal "
+CONNERR:.ASCIC  "%LOGIN-E-CONNERR, error connecting to "
 
         .END    START

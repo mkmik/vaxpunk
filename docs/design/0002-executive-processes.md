@@ -997,6 +997,16 @@ console, `OPA0:`, which `TTY$INIT` makes at boot, and a TELNET terminal,
   quits at. Once its last channel goes, `TT$CANCEL` closes the
   connection, forgetting what the terminal has on the port
   (`NET$TTCLOSE`), and frees the UCB.
+- **Virtual terminals.** With `TT2$M_DISCONNECT` in `IO$_TTY_PORT`'s
+  p1, which TELNETD passes while `TCPIP$TELNET_VTA` is TRUE, `VIRTUAL`
+  makes a `VTAn` too, which takes the connection and the channel, and
+  `TNAn` is redirected to it. When its connection goes and its owner is
+  logged in, `DETACH` disconnects it instead of hanging it up: its read
+  waits to start again, its writes wait, and `TTY$GL_TIMEOUT` seconds
+  later it hangs up. `IO$M_TT_CONNECT` moves a connected one's line to a
+  disconnected one, `NET$TTMOVE` giving the other UCB its requests on
+  the port, and `IO$M_TT_DISCON` disconnects one
+  ([ADR-0041](../adr/0041-virtual-terminals-take-the-telnet-line.md)).
 
 The disks' driver, in `f11.mar`, reads the blocks from LBN p3 into the
 p2 bytes at p1, for `IO$_READLBLK` and `IO$_READPBLK`, or writes them

@@ -1,12 +1,12 @@
 +++
 title = "Terminal driver"
-summary = "TTDRIVER: OPA0:, TNAn: and FTAn:, line editing, CTRL/C and CTRL/Y, characteristics"
-aka = ["TTDRIVER", "ttdriver.mar", "OPA0:", "TNA", "TT", "TX", "terminal", "IO$_READPROMPT", "IO$_SETMODE", "SET TERMINAL", "SHOW TERMINAL", "$BRKTHRU", "CTRL/O", "CTRL/T", "XON", "XOFF", "class driver", "port driver"]
+summary = "TTDRIVER: OPA0:, TNAn:, VTAn: and FTAn:, line editing, CTRL/C and CTRL/Y, characteristics"
+aka = ["TTDRIVER", "ttdriver.mar", "OPA0:", "TNA", "VTA", "CONNECT", "DISCONNECT", "TTY_TIMEOUT", "TT", "TX", "terminal", "IO$_READPROMPT", "IO$_SETMODE", "SET TERMINAL", "SHOW TERMINAL", "$BRKTHRU", "CTRL/O", "CTRL/T", "XON", "XOFF", "class driver", "port driver"]
 kind = "core"
 intent = "goal"
 research = "done"
 milestone = "m0"
-refs = ["docs/adr/0013-qio-irps-and-drivers.md", "docs/adr/0014-ctrlc-ctrly-asts.md", "docs/adr/0027-terminals-are-ucbs-and-telnet-is-in-the-driver.md", "docs/design/0002-executive-processes.md", "docs/prd/0003-multi-user-vms.md", "vms/exec/ttdriver.mar", "vms/sysexe/set.mar", "vms/sysexe/show.mar"]
+refs = ["docs/adr/0013-qio-irps-and-drivers.md", "docs/adr/0014-ctrlc-ctrly-asts.md", "docs/adr/0027-terminals-are-ucbs-and-telnet-is-in-the-driver.md", "docs/adr/0041-virtual-terminals-take-the-telnet-line.md", "docs/design/0002-executive-processes.md", "docs/prd/0003-multi-user-vms.md", "vms/exec/ttdriver.mar", "vms/sysexe/set.mar", "vms/sysexe/show.mar"]
 
 [[feature]]
 id = "reads-writes"
@@ -113,7 +113,8 @@ status = "todo"
 [[feature]]
 id = "virtual-terminals"
 title = "Virtual terminals (VTA): a session survives a disconnect, and reconnects"
-status = "todo"
+status = "done"
+note = "ADR-0041; TELNET's, while TCPIP$TELNET_VTA is TRUE; LOGINOUT's reconnection, CONNECT, DISCONNECT"
 
 [[feature]]
 id = "serial-lines"
@@ -168,6 +169,11 @@ for each remote login, whose Telnet protocol the driver speaks over the
 TCP connection ([ADR-0027](../../adr/0027-terminals-are-ucbs-and-telnet-is-in-the-driver.md)),
 and a pseudo terminal, `FTA1:` to `FTA9:`, that a program drives with
 the PTD$ routines (t8y:/drivers/pseudo-terminal, [ADR-0033](../../adr/0033-pseudo-terminals-are-a-port-of-the-terminal-driver.md)).
+While `TCPIP$TELNET_VTA` is TRUE, a TELNET login runs on a virtual
+terminal, `VTA1:` to `VTA9:`, which holds the connection, with `TNAn:`
+its physical terminal; when the connection goes, the session waits,
+disconnected, for 15 minutes, and the user's next login, or `CONNECT`,
+connects to it again ([ADR-0041](../../adr/0041-virtual-terminals-take-the-telnet-line.md)).
 Reads have VMS's modifiers, terminator masks, line editing and a
 16-line recall buffer; CTRL/C and CTRL/Y are ASTs
 ([ADR-0014](../../adr/0014-ctrlc-ctrly-asts.md)). `$BRKTHRU` writes

@@ -69,6 +69,9 @@
 ;   ANALYZE/RMS_FILE file[,...]
 ;               runs ANALYZRMS.EXE
 ;   CONTINUE    goes back to the image CTRL/Y stopped
+;   CONNECT[/NOLOGOUT][/CONTINUE] virtual-terminal, DISCONNECT[/CONTINUE]
+;               moves the terminal's line to the user's disconnected
+;               virtual terminal and logs out, or disconnects this one
 ;   STOP [process-name], STOP/IDENTIFICATION=pid
 ;               deletes the process; with no name, ends the image CTRL/Y
 ;               stopped, without its exit handlers, and the procedures
@@ -195,6 +198,7 @@
         $DVIDEF
         $DCDEF
         $JPIDEF
+        $TT2DEF
         $DCLDEF
 
         .EXTERNAL DCL$TABLES, CLI$$DCL_PARSE, CLI$$RESULT, CLI$$IMAGE
@@ -251,6 +255,10 @@ V_VERIFY:
 V_ON:   .ASCID  "OPTION.ON"
 V_PROMPT:
         .ASCID  "OPTION.PROMPT"
+V_VTERM:.ASCID  "VIRTUAL_TERMINAL"
+V_CONT: .ASCID  "CONTINUE"
+V_LOGOUT:
+        .ASCID  "LOGOUT"
 VALDSC: .LONG   LINESIZE                ; DCL$GETVAL's: DCL$TOKEN
         .ADDRESS DCL$TOKEN
 VALLEN: .WORD   0
@@ -259,6 +267,8 @@ VALLEN: .WORD   0
 ROUTINES:
         .ASCIC  "CLOSE"
         .ADDRESS DCL$CLOSE
+        .ASCIC  "CONNECT"
+        .ADDRESS CONNECT
         .ASCIC  "CONTINUE"
         .ADDRESS DCL$CONTINUE
         .ASCIC  "DEASSIGN"
@@ -267,6 +277,8 @@ ROUTINES:
         .ADDRESS DCL$DEFINE
         .ASCIC  "DELSYM"
         .ADDRESS DCL$DELSYM
+        .ASCIC  "DISCONNECT"
+        .ADDRESS DISCONNECT
         .ASCIC  "ELSE"
         .ADDRESS DCL$ELSE
         .ASCIC  "ENDIF"
@@ -312,6 +324,10 @@ CLASSITEM:                              ; $GETDVI's item: SYS$INPUT's class
         .LONG   0
 DEVCLASS:
         .LONG   0
+D2ITEM: .WORD   4, DVI$_DEVDEPEND2      ; and its TT2$ bits
+        .ADDRESS DEVDEP2, 0
+        .LONG   0
+DEVDEP2:.LONG   0
 USERITEM:                               ; $GETJPI's: the username
         .WORD   12, JPI$_USERNAME
         .ADDRESS USERNAME, 0
@@ -585,6 +601,59 @@ DCL$CONTINUE::
         RET
 10$:    BRW     DCL$OK
 
+; CONNECT virtual-terminal: connects SYS$INPUT's line to the user's
+; disconnected virtual terminal, IO$_SETMODE!IO$M_TT_CONNECT, as VMS's
+; DCL does, which writes its read's prompt again there. With
+; IO$M_TT_DISCON too, /LOGOUT, the default, the terminal driver hangs
+; this one up, which deletes the process; /NOLOGOUT keeps it,
+; disconnected, if it can be (DISCONNECTABLE), as does /CONTINUE, which
+; then continues the image CTRL/Y stopped.
+CONNECT:
+        MOVL    #IO$_SETMODE!IO$M_TT_CONNECT!IO$M_TT_DISCON, R10
+        CLRL    R11                     ; 1: /CONTINUE
+        MOVAB   V_CONT, R1
+        BSBW    DCL$ISPRES
+        BLBC    R0, 10$
+        INCL    R11
+        BICL2   #IO$M_TT_DISCON, R10
+10$:    MOVAB   V_LOGOUT, R1
+        BSBW    DCL$ISPRES
+        CMPL    R0, #CLI$_NEGATED
+        BNEQ    20$
+        BICL2   #IO$M_TT_DISCON, R10
+20$:    BBS     #IO$V_TT_DISCON, R10, 30$
+        BSBW    DISCONNECTABLE
+        BLBC    R0, 80$
+30$:    MOVAB   V_VTERM, R1
+        BSBW    DCL$GETVAL
+        MOVL    R8, TOKDSC
+        $QIOW_S CHAN=CHAN, FUNC=R10, IOSB=IOSB, P1=TOKDSC
+        BLBC    R0, 80$
+        MOVZWL  IOSB, R0
+        BLBC    R0, 80$
+        BLBC    R11, 70$
+        BRW     DCL$CONTINUE
+70$:    BRW     DCL$OK
+80$:    BRW     DCL$DONE
+
+; DISCONNECT: disconnects SYS$INPUT, a virtual terminal, from its line,
+; IO$_SETMODE!IO$M_TT_DISCON: the connection closes, and the next prompt
+; waits until a login, or a CONNECT, connects a line to it again.
+; /CONTINUE continues the image CTRL/Y stopped.
+DISCONNECT:
+        BSBW    DISCONNECTABLE
+        BLBC    R0, 80$
+        $QIOW_S CHAN=CHAN, FUNC=#IO$_SETMODE!IO$M_TT_DISCON, IOSB=IOSB
+        BLBC    R0, 80$
+        MOVZWL  IOSB, R0
+        BLBC    R0, 80$
+        MOVAB   V_CONT, R1
+        BSBW    DCL$ISPRES
+        BLBC    R0, 70$
+        BRW     DCL$CONTINUE
+70$:    BRW     DCL$OK
+80$:    BRW     DCL$DONE
+
 ; STOP [process-name], STOP/IDENTIFICATION=pid: deletes the process with
 ; $DELPRC, pid in hex. With neither, ends the procedures running, and
 ; the image CTRL/Y stopped, if there is one, with $EXIT from here, which
@@ -838,6 +907,21 @@ SETPROMPT:
 10$:    MOVB    R8, DCL$PROMPT
         MOVC3   R8, DCL$TOKEN, DCL$PROMPT+1
         BRW     DCL$OK
+
+; DISCONNECTABLE: R0 = SS$_NORMAL if SYS$INPUT is a terminal that can be
+; disconnected, TT2$M_DISCONNECT, a virtual one, else CLI$_NOTDISCON,
+; reported. Uses R0, R1.
+DISCONNECTABLE:
+        .JSB_ENTRY
+        $GETDVIW_S CHAN=CHAN, ITMLST=D2ITEM
+        BLBC    R0, 10$
+        BITL    #TT2$M_DISCONNECT, DEVDEP2
+        BEQL    10$
+        MOVL    #SS$_NORMAL, R0
+        RSB
+10$:    PRINT   "%DCL-E-NOTDISCON, terminal is not disconnectable - explicitly specify LOGOUT"
+        MOVL    #CLI$_NOTDISCON!INHIB, R0
+        RSB
 
 ; ISNEG: R0 = CLI$PRESENT's status for a keyword that is there. R0 = 0
 ; if it was negated, NO..., else 1.

@@ -38,6 +38,17 @@
 ; others.
 ; $BRKTHRU writes a message on terminals through the reads in progress
 ; there, then writes their prompts and lines again, as CTRL/R does.
+; A TELNET login TELNETD asks a virtual terminal for, IO$_TTY_PORT with
+; TT2$M_DISCONNECT in p1, runs on VTAn, which takes the connection, and
+; TNAn stays, its physical terminal, redirected to it: $ASSIGN of TNAn
+; assigns VTAn (docs/adr/0041-virtual-terminals-take-the-telnet-line.md).
+; When its line goes, a virtual terminal a user is logged in on is
+; disconnected, not hung up: TNAn goes, the read in progress waits to
+; start again, writes wait, and TTY$GL_TIMEOUT seconds later it hangs
+; up. IO$_SETMODE!IO$M_TT_CONNECT, LOGINOUT's and DCL CONNECT's, moves
+; the line to another one, disconnected, of the same UIC, whose read
+; then writes its prompt again; IO$M_TT_DISCON, DCL DISCONNECT's,
+; disconnects one, closing its connection.
 ; ponytail: no CTRL/O, CTRL/T, XON and XOFF, or formatted writes: a
 ; write goes out as it is, as with IO$M_NOFORMAT. The
 ; console's output waits for it at IPL$_SYNCH; a TELNET terminal's echo
@@ -47,6 +58,9 @@
 ; device's name has 4 characters. A pseudo terminal's events, XON, XOFF,
 ; the bell, changed characteristics, aren't told to its controller, and
 ; PTD$WRITE echoes in what PTD$READ reads, not in its echo buffer.
+; Only a virtual terminal connects to another, by moving its TELNET
+; connection: VMS's connects any physical terminal, the console's too.
+; TTY$GL_TIMEOUT is VMS's TTY_TIMEOUT, 900, which no SYSGEN changes.
 ;
         .LIBRARY "lib.mlb"
         .LIBRARY "starlet.mlb"
@@ -65,11 +79,13 @@
         $TT3DEF
         $BRKDEF
         $PRVDEF
+        $JPIDEF
+        $DEVDEF
 
         .EXTERNAL SCH$QAST, EXE$ALONONPAGED, EXE$DEANONPGDSIZ
         .EXTERNAL EXE$OUTCHAR, EXE$GQ_SYSTIME, EXE$INSTIMQ, EXE$RMVTQE
         .EXTERNAL IOC$ALLOCIRP, IOC$ALLOCDONE, IOC$RETQUOTA, IOC$REQCOM, IOC$CANCELQ
-        .EXTERNAL NET$TTIO, NET$TTCLOSE, NET$FREEUNIT, EXE$DELPID, IOC$TRNDEVNAM
+        .EXTERNAL NET$TTIO, NET$TTCLOSE, NET$TTMOVE, NET$FREEUNIT, EXE$DELPID, IOC$TRNDEVNAM
         .EXTERNAL SYS$DASSGN, SYS$CANCEL
         .EXTERNAL EXE$PROBER_DSC, EXE$CLREF, EXE$SETEF, EXE$DCLAST
         .EXTERNAL SCH$GL_CURPCB, SCH$GL_PCBVEC, SCH$GL_MAXPIX
@@ -134,6 +150,8 @@ TN_SBIAC = 6                            ; and after IAC in it
         .PSECT  EXEC$DATA, NOEXE, WRT, QUAD
 TT$GL_UNITS::                           ; the terminals, linked by UCB$L_LINK: the console, then TELNET's
         .LONG   0
+TTY$GL_TIMEOUT::                        ; seconds a virtual terminal stays disconnected, then hangs up: TTY_TIMEOUT
+        .LONG   900
 IOC$AB_OPA0::                           ; the console's UCB, which TTY$INIT makes
         .BLKB   UCB$K_TTLENGTH
 DEFCHAR:                                ; a terminal's characteristics at first: a VT100's
@@ -177,7 +195,12 @@ EXIT:   .ASCIZ  "*EXIT*"<13><10>
 ;                  its class aside, then the TT3$ bits, of which it keeps
 ;                  DECCRT5 and ANSI_COLOR; and the speeds from p3, unless
 ;                  0: TT$C_BAUD_, the transmit speed in the low byte, the
-;                  receive speed in the next, or 0 for the same
+;                  receive speed in the next, or 0 for the same; with
+;                  IO$M_TT_CONNECT, on a virtual terminal, connects its
+;                  line to the disconnected one the descriptor at p1
+;                  names, of the caller's UIC, and disconnects it, or
+;                  with IO$M_TT_DISCON too hangs it up (VTCONNECT); with
+;                  IO$M_TT_DISCON alone disconnects it (VTDISCON)
 ;   IO$_SENSEMODE  writes the characteristics to p1, p2 bytes, and the
 ;                  speeds to the IOSB's third and fourth bytes; with
 ;                  IO$M_TYPEAHDCNT, what the type-ahead buffer holds, 8
@@ -190,7 +213,7 @@ EXIT:   .ASCIZ  "*EXIT*"<13><10>
 ; A pseudo terminal's reads and writes on its controller's channel are
 ; PTD$READ's and PTD$WRITE's (PTDFDT).
 ; R0 = SS$_NORMAL, SS$_ILLIOFUNC, SS$_ACCVIO, SS$_BADPARAM, SS$_NOPRIV,
-; or IOC$ALLOCIRP's failure; a request on a TELNET or pseudo terminal whose
+; VTCONNECT's and VTDISCON's failures, or IOC$ALLOCIRP's; a request on a TELNET or pseudo terminal whose
 ; line is gone ends with SS$_HANGUP. IPL$_SYNCH. Uses R0-R8.
 TT$FDT::
         .JSB_ENTRY  INPUT=<AP>, SCRATCH=<R2, R3, R4, R5, R6, R7, R8>
@@ -322,13 +345,18 @@ TNWRITE:
 ; SETMODE: TT$FDT's IO$_SETMODE. Takes the channel's AST off the queue,
 ; CTRL/C's or CTRL/Y's, and puts the one p1 names at its tail, in an IRP,
 ; the request's, which is completed with a second.
-; Without either modifier it sets the characteristics, TTSET.
+; With IO$M_TT_CONNECT it is VTCONNECT, with IO$M_TT_DISCON VTDISCON;
+; without a modifier it sets the characteristics, TTSET.
 SETMODE:
         MOVAQ   UCB$Q_TT_CTRLC(R5), R8
         BBS     #IO$V_CTRLCAST, 12(AP), 10$
         MOVAQ   UCB$Q_TT_CTRLY(R5), R8
         BBS     #IO$V_CTRLYAST, 12(AP), 10$
-        BRW     TTSET
+        BBC     #IO$V_TT_CONNECT, 12(AP), 5$
+        BRW     VTCONNECT
+5$:     BBC     #IO$V_TT_DISCON, 12(AP), 7$
+        BRW     VTDISCON
+7$:     BRW     TTSET
 10$:    CLRL    R1                      ; the AST's, then the request's
         BSBW    IOC$ALLOCDONE
         BLBC    R0, 90$
@@ -470,6 +498,106 @@ TTCOUNT:MOVL    28(AP), R2
         BRW     FDTDONE
 90$:    RSB
 
+; VTCONNECT: TT$FDT's IO$_SETMODE!IO$M_TT_CONNECT on a virtual terminal,
+; R5, with its line. p1 = the descriptor of another's name, translated
+; as $ASSIGN does, which must be disconnected, and its owner of the
+; caller's UIC. That one gets this one's line: its TELNET connection,
+; what it has to send, the window's size, and the physical terminal,
+; redirected to it; its read writes its prompt again. Then this one is
+; disconnected (DETSTATE), or with IO$M_TT_DISCON hung up, which deletes
+; its owner. R0 = SS$_NORMAL, SS$_ACCVIO, SS$_NOSUCHDEV, SS$_IVDEVNAM if
+; either isn't a virtual terminal, SS$_NOPRIV for another UIC's, or
+; SS$_DEVALLOC if this one has no line or the other has.
+VTCONNECT:
+        PUSHL   R5
+        MOVL    28(AP), R1
+        BSBW    EXE$PROBER_DSC
+        BLBC    R0, 80$
+        MOVZWL  (R1), R2
+        MOVL    4(R1), R3
+        BSBW    IOC$TRNDEVNAM
+        MOVZWL  #SS$_NOSUCHDEV, R0
+        CMPL    R2, #4                  ; DDCU, or DDCU:
+        BEQL    10$
+        CMPL    R2, #5
+        BNEQ    80$
+        CMPB    4(R3), #^A/:/
+        BNEQ    80$
+10$:    BSBW    TT$FINDUNIT
+        MOVL    R5, R7                  ; the other
+        BEQL    80$
+        MOVL    (SP)+, R6               ; this one
+        MOVZWL  #SS$_IVDEVNAM, R0
+        BBC     #UCB$V_TT_VT, UCB$L_TT_STS(R6), 90$
+        BBC     #UCB$V_TT_VT, UCB$L_TT_STS(R7), 90$
+        MOVZWL  #SS$_DEVALLOC, R0
+        BITL    #<1@UCB$V_TT_DET>!<1@UCB$V_TT_HANGUP>, UCB$L_TT_STS(R6)
+        BNEQ    90$
+        BBC     #UCB$V_TT_DET, UCB$L_TT_STS(R7), 90$
+        BBS     #UCB$V_TT_HANGUP, UCB$L_TT_STS(R7), 90$
+        MOVZWL  #SS$_NOPRIV, R0
+        MOVL    R7, R5
+        BSBW    OWNERPCB
+        TSTL    R1
+        BEQL    90$
+        CMPL    PCB$L_UIC(R1), PCB$L_UIC(R4)
+        BNEQ    90$
+        MOVL    UCB$L_CONN(R6), UCB$L_CONN(R7)  ; the line moves
+        CLRL    UCB$L_CONN(R6)
+        MOVL    UCB$L_TT_SEND(R6), UCB$L_TT_SEND(R7)
+        CLRL    UCB$L_TT_SEND(R6)
+        BBCC    #UCB$V_TT_RECV, UCB$L_TT_STS(R6), 20$
+        BISL2   #<1@UCB$V_TT_RECV>, UCB$L_TT_STS(R7)
+20$:    MOVL    UCB$L_TT_TELNET(R6), UCB$L_TT_TELNET(R7)
+        MOVL    UCB$L_TT_SB(R6), UCB$L_TT_SB(R7)
+        MOVW    UCB$A_TT_CHAR+2(R6), UCB$A_TT_CHAR+2(R7)        ; NAWS's width
+        MOVB    UCB$A_TT_CHAR+7(R6), UCB$A_TT_CHAR+7(R7)        ; and page
+        MOVL    UCB$L_TT_PHY(R6), R0
+        MOVL    R0, UCB$L_TT_PHY(R7)
+        CLRL    UCB$L_TT_PHY(R6)
+        MOVL    R7, UCB$L_TT_LOG(R0)
+        BICL2   #<1@UCB$V_TT_DET>, UCB$L_TT_STS(R7)
+        MOVL    UCB$L_TT_OUTLEN(R6), R0
+        MOVL    R0, UCB$L_TT_OUTLEN(R7)
+        CLRL    UCB$L_TT_OUTLEN(R6)
+        PUSHR   #^M<R4, R6, R7>
+        MOVC3   R0, UCB$A_TT_OUT(R6), UCB$A_TT_OUT(R7)
+        POPR    #^M<R4, R6, R7>
+        MOVL    R6, R5
+        MOVL    R7, R1
+        JSB     G^NET$TTMOVE            ; its sends and receives on the port
+        MOVL    R7, R5
+        BSBW    DISARM                  ; its time disconnected is up
+        MOVL    R6, R5
+        BBS     #IO$V_TT_DISCON, 12(AP), 30$
+        BSBW    DETSTATE
+        BRB     40$
+30$:    BSBW    HANGUP
+40$:    PUSHR   #^M<R4, R6>
+        MOVL    R7, R5
+        BSBW    STARTIO                 ; its read, then what it has to send
+        POPR    #^M<R4, R5>
+        MOVL    #SS$_NORMAL, R0
+        BRW     FDTDONE
+80$:    ADDL2   #4, SP
+90$:    RSB
+
+; VTDISCON: TT$FDT's IO$_SETMODE!IO$M_TT_DISCON on a virtual terminal,
+; R5: disconnects it (DETACH), closing its connection. R0 = SS$_NORMAL,
+; SS$_IVDEVNAM if it isn't one, or SS$_DEVALLOC if it has no line.
+VTDISCON:
+        MOVZWL  #SS$_IVDEVNAM, R0
+        BBC     #UCB$V_TT_VT, UCB$L_TT_STS(R5), 90$
+        MOVZWL  #SS$_DEVALLOC, R0
+        BITL    #<1@UCB$V_TT_DET>!<1@UCB$V_TT_HANGUP>, UCB$L_TT_STS(R5)
+        BNEQ    90$
+        PUSHR   #^M<R4, R5>
+        BSBW    DETACH
+        POPR    #^M<R4, R5>
+        MOVL    #SS$_NORMAL, R0
+        BRW     FDTDONE
+90$:    RSB
+
 ; TTKEEP: R5 = a terminal. Makes its current characteristics and speeds
 ; its permanent ones. Keeps every register.
 TTKEEP:
@@ -582,10 +710,13 @@ WRITE:
 ; prompt, if it hasn't, and takes the characters in the type-ahead
 ; buffer, editing the line in its IRP, until the buffer is empty or the
 ; line ends. Then it is completed, and the next one goes on. Last, a
-; TELNET terminal sends what it has to (KICK). IPL$_SYNCH. Uses R0-R4,
+; TELNET terminal sends what it has to (KICK). A disconnected virtual
+; terminal's reads wait. IPL$_SYNCH. Uses R0-R4,
 ; R6-R8.
 STARTIO:
         .JSB_ENTRY  INPUT=<R5>, SCRATCH=<R2, R3, R4, R6, R7, R8>
+        BBC     #UCB$V_TT_DET, UCB$L_TT_STS(R5), 10$
+        RSB                             ; disconnected: its reads wait
 10$:    MOVL    UCB$L_IOQFL(R5), R4     ; the read at the head
         CMPL    R4, R5
         BNEQ    12$
@@ -1204,14 +1335,16 @@ PUTZ:
 ; receive is on the port, receives as many characters as its type-ahead
 ; buffer has room for, if that is 64 or more. Without pool for them, they
 ; wait for the next KICK. Once the line is gone, it drops what it has to
-; send. A pseudo terminal's is FTKICK. IPL$_SYNCH. Uses R0-R3.
+; send; a disconnected virtual terminal keeps it, and its writes wait. A
+; pseudo terminal's is FTKICK. IPL$_SYNCH. Uses R0-R3.
 KICK:
         .JSB_ENTRY  SCRATCH=<R2, R3>
         BBS     #UCB$V_TT_TN, UCB$L_TT_STS(R5), 5$
         BBC     #UCB$V_TT_FT, UCB$L_TT_STS(R5), 3$
         BRW     FTKICK
 3$:     RSB
-5$:     BBC     #UCB$V_TT_HANGUP, UCB$L_TT_STS(R5), 8$
+5$:     BBS     #UCB$V_TT_DET, UCB$L_TT_STS(R5), 3$
+        BBC     #UCB$V_TT_HANGUP, UCB$L_TT_STS(R5), 8$
         CLRL    UCB$L_TT_OUTLEN(R5)
         RSB
 8$:     TSTL    UCB$L_TT_SEND(R5)
@@ -1262,7 +1395,8 @@ KICK:
 ; received. A send that was a write's last part completes the write; a
 ; receive's characters go to the terminal, Telnet's commands taken out
 ; of them (TNIN). A failure, or a receive of nothing, the peer gone,
-; hangs the terminal up. Then the terminal goes on (SERVICE).
+; hangs the terminal up, or disconnects it (LINEGONE). Then the terminal
+; goes on (SERVICE).
 ; IPL$_SYNCH. Uses R0 and R1.
 TT$NETDONE::
         .JSB_ENTRY  INPUT=<R1, R3, R6>
@@ -1295,7 +1429,7 @@ TT$NETDONE::
         BSBW    TNIN
         SOBGTR  R8, 60$
         BRB     90$
-80$:    BSBW    HANGUP
+80$:    BSBW    LINEGONE
 90$:    BSBW    SERVICE
         RSB
 
@@ -1546,6 +1680,79 @@ HANGUP:
         POPR    #^M<R4, R5>
 90$:    RSB
 
+; LINEGONE: R5 = a TELNET terminal whose connection failed or closed. A
+; virtual terminal whose owner is logged in is disconnected (DETACH), any
+; other terminal hung up (HANGUP). IPL$_SYNCH. Uses R0-R3.
+LINEGONE:
+        .JSB_ENTRY  SCRATCH=<R2, R3>
+        BBC     #UCB$V_TT_VT, UCB$L_TT_STS(R5), 80$
+        BSBW    OWNERPCB
+        TSTL    R1
+        BEQL    80$
+        CMPL    PCB$L_MODE(R1), #JPI$K_INTERACTIVE
+        BNEQ    80$
+        BRW     DETACH
+80$:    BRW     HANGUP
+
+; DETACH: R5 = a virtual terminal with its line. Disconnects it: closes
+; its connection, frees its physical terminal (FREEPHY), and DETSTATE.
+; IPL$_SYNCH. Uses R0-R3.
+DETACH:
+        .JSB_ENTRY  SCRATCH=<R2, R3>
+        JSB     G^NET$TTCLOSE
+        BSBW    FREEPHY
+        BRW     DETSTATE
+
+; DETSTATE: R5 = a virtual terminal whose line is gone or another's.
+; Makes it disconnected, as VMS's: what it had to send is dropped, its
+; writes are done, and its read in progress waits to start again,
+; writing its prompt again, but a timed one, which ends with SS$_HANGUP;
+; its timer hangs it up in TTY$GL_TIMEOUT seconds (TT$TIMEOUT).
+; IPL$_SYNCH. Uses R0-R3.
+DETSTATE:
+        .JSB_ENTRY  SCRATCH=<R2, R3>
+        BISL2   #<1@UCB$V_TT_DET>, UCB$L_TT_STS(R5)
+        BICL2   #<1@UCB$V_TT_RECV>, UCB$L_TT_STS(R5)
+        CLRL    UCB$L_CONN(R5)
+        CLRL    UCB$L_TT_SEND(R5)
+        CLRL    UCB$L_TT_OUTLEN(R5)
+        CLRL    UCB$L_TT_TELNET(R5)
+10$:    REMQUE  @UCB$Q_TT_WRTQ(R5), R3
+        BVS     20$
+        ASHL    #16, IRP$L_BCNT(R3), R0
+        BISL2   #SS$_NORMAL, R0
+        CLRL    R1
+        BSBW    IOC$REQCOM
+        BRB     10$
+20$:    BSBW    DISARM
+        MOVL    UCB$L_IOQFL(R5), R3     ; the read in progress
+        CMPL    R3, R5
+        BEQL    40$
+        BBCC    #IRP$V_STARTED, IRP$L_STS(R3), 40$
+        BBC     #IO$V_TIMED, IRP$L_FUNC(R3), 40$
+        REMQUE  (R3), R3
+        MOVZWL  #SS$_HANGUP, R0
+        CLRL    R1
+        BSBW    IOC$REQCOM
+40$:    MOVL    TTY$GL_TIMEOUT, R0
+        BRW     ARM
+
+; OWNERPCB: R5 = a terminal. R1 = its owner's PCB, or 0 if it has none
+; or that is gone. IPL$_SYNCH. Uses R0.
+OWNERPCB:
+        .JSB_ENTRY  OUTPUT=<R1>
+        MOVL    UCB$L_TT_PID(R5), R0
+        BEQL    80$
+        MOVZWL  R0, R1
+        CMPL    R1, SCH$GL_MAXPIX
+        BGEQU   80$
+        MOVL    @SCH$GL_PCBVEC[R1], R1
+        BEQL    90$
+        CMPL    PCB$L_PID(R1), R0
+        BEQL    90$
+80$:    CLRL    R1
+90$:    RSB
+
 ; TT$OWNER: R1 = a device name's descriptor, $CREPRC's input, R0 = the
 ; PID of the process it creates; R4 = the current PCB. If the name,
 ; translated as $ASSIGN does (IOC$TRNDEVNAM), is a terminal's that has
@@ -1770,11 +1977,14 @@ ONE:
 ; BRK$M_NOREFRESH, a read in progress there, echoing, writes its prompt
 ; and line again on the next line, as CTRL/R does (RETYPE). R0 = 1 if it
 ; is written, 0 if the terminal takes no broadcasts, NOBRDCST or
-; PASSALL, 2 if it can't: hung up, or a TELNET or pseudo terminal with
+; PASSALL, a disconnected virtual terminal or a physical one redirected
+; to a virtual one, 2 if it can't: hung up, or a TELNET or pseudo terminal with
 ; no room for it in what it has to send. IPL$_SYNCH. Uses R0-R4, R6-R9.
 BRKTHRU:
         .JSB_ENTRY  SCRATCH=<R2, R3, R4, R6, R7, R8, R9>
         CLRL    R0
+        BITL    #<1@UCB$V_TT_DET>!<1@UCB$V_TT_RED>, UCB$L_TT_STS(R5)
+        BNEQ    90$
         BITL    #TT$M_NOBRDCST!TT$M_PASSALL, UCB$A_TT_CHAR+4(R5)
         BNEQ    90$
         MOVL    R3, R7                  ; carcon
@@ -1831,15 +2041,25 @@ TIMER:
         .JSB_ENTRY
         PUSHR   #^M<R0, R1, R2, R3>
         BBC     #IO$V_TIMED, IRP$L_FUNC(R4), 90$
-        TSTL    IRP$L_MEDIA(R4)
+        MOVL    IRP$L_MEDIA(R4), R0
         BEQL    90$
+        BSBB    ARM
+90$:    POPR    #^M<R0, R1, R2, R3>
+        RSB
+
+; ARM: R0 = seconds, R5 = a terminal's UCB. Starts its timer, again if
+; it is on the timer queue, to go off that long from now (TT$TIMEOUT).
+; IPL$_SYNCH. Uses R0-R3.
+ARM:
+        .JSB_ENTRY  SCRATCH=<R2, R3>
+        PUSHL   R0
         BSBB    DISARM
         MOVAB   UCB$A_TT_TQE(R5), R2
         MOVB    #DYN$C_TQE, TQE$B_TYPE(R2)
         MOVB    #TQE$C_SSSNGL, TQE$B_RQTYPE(R2)
         CLRL    TQE$L_PID(R2)
         MOVAB   TT$TIMEOUT, TQE$L_AST(R2)
-        EMUL    IRP$L_MEDIA(R4), #10000000, #0, R0      ; the seconds, in 100 ns
+        EMUL    (SP)+, #10000000, #0, R0        ; the seconds, in 100 ns
         DSBINT  #IPL$_HWCLK
         ADDL2   G^EXE$GQ_SYSTIME, R0
         BCC     10$
@@ -1852,7 +2072,6 @@ TIMER:
         JSB     G^EXE$INSTIMQ
         MOVL    (SP)+, R5
         BISL2   #<1@UCB$V_TT_TIMER>, UCB$L_TT_STS(R5)
-90$:    POPR    #^M<R0, R1, R2, R3>
         RSB
 
 ; DISARM: R5 = a terminal's UCB. Takes its timer off the timer queue, if
@@ -1868,11 +2087,15 @@ DISARM:
 
 ; TT$TIMEOUT: a terminal's timer, R5 = its UCB$A_TT_TQE, from the timer
 ; queue: the timed read at the head of its queue ends with SS$_TIMEOUT,
-; and the next goes on. IPL$_SYNCH. Uses R0-R5.
+; and the next goes on; a virtual terminal disconnected that long hangs
+; up (HANGUP). IPL$_SYNCH. Uses R0-R5.
 TT$TIMEOUT::
         .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5>
         SUBL2   #UCB$A_TT_TQE, R5
         BICL2   #<1@UCB$V_TT_TIMER>, UCB$L_TT_STS(R5)
+        BBC     #UCB$V_TT_DET, UCB$L_TT_STS(R5), 5$
+        BRW     HANGUP
+5$:
         MOVL    UCB$L_IOQFL(R5), R3
         CMPL    R3, R5
         BEQL    90$
@@ -1968,16 +2191,19 @@ TTY$IOPOST::
         REI
 
 ; TT$FINDUNIT: R3 = a device name's four characters, DDCU. R5 = the
-; terminal by that name, or 0. Keeps every other register.
+; terminal by that name, the virtual one for a physical terminal
+; redirected to it, or 0. Keeps every other register.
 TT$FINDUNIT::
         .JSB_ENTRY  OUTPUT=<R5>
         MOVL    TT$GL_UNITS, R5
 10$:    TSTL    R5
         BEQL    90$
         CMPL    (R3), UCB$T_NAME(R5)
-        BEQL    90$
+        BEQL    80$
         MOVL    UCB$L_LINK(R5), R5
         BRB     10$
+80$:    BBC     #UCB$V_TT_RED, UCB$L_TT_STS(R5), 90$
+        MOVL    UCB$L_TT_LOG(R5), R5
 90$:    RSB
 
 ; TT$TNPORT: IO$_TTY_PORT on a network unit, R5, with a TCP connection;
@@ -1986,7 +2212,9 @@ TT$FINDUNIT::
 ; connection from the unit, and moves the channel to it; the unit is
 ; freed once no channel has it. The terminal offers the client to echo
 ; and suppress go ahead, and asks for its window size (RFC 857, 858,
-; 1073), then receives. R0 = SS$_NORMAL, or SS$_INSFMEM without pool or
+; 1073), then receives. With TT2$M_DISCONNECT in p1 a virtual terminal,
+; VTAn, takes the connection and the channel, and TNAn is its physical
+; terminal (VIRTUAL). R0 = SS$_NORMAL, or SS$_INSFMEM without pool or
 ; a free unit number. IPL$_SYNCH. Uses R0-R8.
 TT$TNPORT::
         .JSB_ENTRY  INPUT=<AP>, SCRATCH=<R2, R3, R4, R5, R6, R7, R8>
@@ -1998,7 +2226,10 @@ TT$TNPORT::
         BISL2   #TT$M_REMOTE, UCB$A_TT_CHAR+4(R5)
         MOVL    UCB$L_CONN(R8), UCB$L_CONN(R5)
         CLRL    UCB$L_CONN(R8)
-        MOVZWL  8(AP), R0               ; the channel
+        BITL    #TT2$M_DISCONNECT, 28(AP)
+        BEQL    30$
+        BSBW    VIRTUAL
+30$:    MOVZWL  8(AP), R0               ; the channel
         MOVL    R5, PCB$AL_CCB(R4)[R0]
         MOVL    #1, UCB$L_REFC(R5)
         DECL    UCB$L_REFC(R8)
@@ -2015,6 +2246,30 @@ TT$TNPORT::
         BSBW    KICK
         MOVL    #SS$_NORMAL, R0
         BRW     FDTDONE
+90$:    RSB
+
+; VIRTUAL: R5 = a new TELNET terminal, TNAn, with its connection. Makes
+; a virtual terminal, VTAn (NEWTERM), which takes the connection, with
+; TT2$M_DISCONNECT, and redirects TNAn to it: R5 = it. Without pool or a
+; free unit number R5 stays TNAn, a terminal of its own. IPL$_SYNCH.
+; Uses R0-R3, R6, R7.
+VIRTUAL:
+        .JSB_ENTRY  OUTPUT=<R5>, SCRATCH=<R2, R3, R6, R7>
+        PUSHL   R5
+        MOVL    #^A/VTA/, R6
+        BSBW    NEWTERM
+        MOVL    (SP)+, R1               ; TNAn
+        BLBC    R0, 90$
+        BISL2   #<1@UCB$V_TT_TN>!<1@UCB$V_TT_VT>, UCB$L_TT_STS(R5)
+        BISL2   #TT$M_REMOTE, UCB$A_TT_CHAR+4(R5)
+        BISL2   #TT2$M_DISCONNECT, UCB$A_TT_CHAR+8(R5)
+        BSBW    TTKEEP
+        BISL2   #TT2$M_DISCONNECT, UCB$A_TT_CHAR+8(R1)
+        BISL2   #<1@UCB$V_TT_RED>!<1@UCB$V_TT_HANGUP>, UCB$L_TT_STS(R1)
+        MOVL    UCB$L_CONN(R1), UCB$L_CONN(R5)
+        CLRL    UCB$L_CONN(R1)
+        MOVL    R5, UCB$L_TT_LOG(R1)
+        MOVL    R1, UCB$L_TT_PHY(R5)
 90$:    RSB
 
 ; NEWTERM: R6 = a terminal's name's first three characters, DDC. Makes a
@@ -2251,7 +2506,8 @@ FTKICK:
 ; CTRL/C and CTRL/Y ASTs, and a pseudo terminal's controller's reads.
 ; For 0, the channels are going: a pseudo terminal whose controller's
 ; channel goes hangs up (HANGUP), and a TELNET or pseudo terminal is
-; closed and freed once its last channel goes, and the console gets its
+; closed and freed once its last channel goes, with its physical
+; terminal if it is a virtual one, and the console gets its
 ; permanent characteristics back (TTRESET). Then the others go on
 ; (STARTIO). IPL$_SYNCH. Uses R0-R3.
 TT$CANCEL::
@@ -2301,7 +2557,13 @@ TT$CANCEL::
         BNEQ    35$
         BSBW    TTRESET                 ; the console: back to its permanent characteristics
         BRB     40$
-35$:    BSBW    TEARDOWN
+35$:    BBS     #UCB$V_TT_RED, UCB$L_TT_STS(R5), 40$  ; a virtual one's line: it goes with that
+        MOVL    UCB$L_TT_PHY(R5), R0
+        BEQL    37$
+        CMPL    R0, (SP)
+        BNEQ    37$
+        MOVL    UCB$L_LINK(R0), (SP)    ; its physical one goes too: the next is after it
+37$:    BSBW    TEARDOWN
         BRB     50$
 40$:    PUSHR   #^M<R4, R6, R7>
         BSBW    STARTIO
@@ -2311,13 +2573,34 @@ TT$CANCEL::
 
 ; TEARDOWN: R5 = a TELNET or pseudo terminal no channel has. Closes a
 ; TELNET terminal's connection, forgetting what it has on the port
-; (NET$TTCLOSE), and frees it. IPL$_SYNCH. Uses R0-R3.
+; (NET$TTCLOSE), and frees it, and a virtual one's physical terminal
+; (FREEPHY). IPL$_SYNCH. Uses R0-R3.
 TEARDOWN:
         .JSB_ENTRY  SCRATCH=<R2, R3>
         BSBW    DISARM
         BBC     #UCB$V_TT_TN, UCB$L_TT_STS(R5), 5$
         JSB     G^NET$TTCLOSE
-5$:     MOVAL   TT$GL_UNITS, R0         ; off the list
+5$:     BSBW    FREEPHY
+        BRW     FREEUCB
+
+; FREEPHY: R5 = a virtual terminal. Frees its physical terminal, if it
+; has one (FREEUCB). IPL$_SYNCH. Uses R0-R3.
+FREEPHY:
+        .JSB_ENTRY  SCRATCH=<R2, R3>
+        MOVL    UCB$L_TT_PHY(R5), R0
+        BEQL    90$
+        CLRL    UCB$L_TT_PHY(R5)
+        PUSHL   R5
+        MOVL    R0, R5
+        BSBW    FREEUCB
+        MOVL    (SP)+, R5
+90$:    RSB
+
+; FREEUCB: R5 = a terminal's UCB. Takes it off TT$GL_UNITS and frees it.
+; IPL$_SYNCH. Uses R0-R3.
+FREEUCB:
+        .JSB_ENTRY  SCRATCH=<R2, R3>
+        MOVAL   TT$GL_UNITS, R0         ; off the list
 10$:    CMPL    (R0), R5
         BEQL    20$
         MOVL    (R0), R0
