@@ -1,0 +1,127 @@
+        .TITLE  REQUEST Sends a message to the operators
+        .IDENT  /V0.1/
+;
+; DCL's REQUEST "text" runs this, as VMS's: it sends the text to OPCOM
+; with $SNDOPR, after the name of the terminal it was typed at,
+; SYS$COMMAND, or of the process if that isn't a terminal, "_OPA0:,
+; text", for the operators of every class, or with /TO=(class,...) of
+; those. OPCOM writes it on their terminals. Returns $SNDOPR's status,
+; OPC$_NOPERATOR, a success, if OPCOM isn't running.
+; vaxpunk: DCL checks /TO's classes, %DCL-W-IVKEYW, where VMS's REQUEST
+; says %OPCOM-F-VALUERR.
+; ponytail: no /REPLY, as OPCOM takes no replies yet
+; (t8y:/utils/opcom#requests).
+;
+        .LIBRARY "starlet.mlb"
+        .LIBRARY "sysexe.mlb"
+        $DVIDEF
+        $DCDEF
+        $JPIDEF
+        $OPCDEF
+
+        .EXTERNAL CLI$PRESENT
+
+        .PSECT  DATA, NOEXE, WRT, LONG
+COMMAND:.ASCID  "SYS$COMMAND"
+DVIITEMS:                               ; SYS$COMMAND's class and name
+        .WORD   4, DVI$_DEVCLASS
+        .ADDRESS DEVCLASS, 0
+        .WORD   64, DVI$_DEVNAM
+        .ADDRESS MSG+OPC$L_MS_TEXT, NAMELEN
+        .LONG   0
+JPIITEM:                                ; or the process's name
+        .WORD   15, JPI$_PRCNAM
+        .ADDRESS MSG+OPC$L_MS_TEXT, NAMELEN
+        .LONG   0
+DEVCLASS:
+        .LONG   0
+NAMELEN:.LONG   0
+TEXT:   .LONG   255                     ; TEXT, the parameter
+        .ADDRESS TEXTBUF
+TEXTBUF:.BLKB   255
+TEXTLEN:.WORD   0
+; /TO's classes, OPC$M_NM_'s bits in order, or empty for the two REQUEST
+; doesn't take, REPLY and SOFTWARE.
+CLASSES:.ASCIC  "CENTRAL"
+        .ASCIC  "PRINTER"
+        .ASCIC  "TAPES"
+        .ASCIC  "DISKS"
+        .ASCIC  "DEVICES"
+        .ASCIC  "CARDS"
+        .ASCIC  "NETWORK"
+        .ASCIC  "CLUSTER"
+        .ASCIC  "SECURITY"
+        .BYTE   0, 0
+        .ASCIC  "LICENSE"
+        .ASCIC  "OPER1"
+        .ASCIC  "OPER2"
+        .ASCIC  "OPER3"
+        .ASCIC  "OPER4"
+        .ASCIC  "OPER5"
+        .ASCIC  "OPER6"
+        .ASCIC  "OPER7"
+        .ASCIC  "OPER8"
+        .ASCIC  "OPER9"
+        .ASCIC  "OPER10"
+        .ASCIC  "OPER11"
+        .ASCIC  "OPER12"
+ENTITY: .LONG   0                       ; TO.class, for CLI$PRESENT
+        .ADDRESS ENTBUF
+ENTBUF: .ASCII  "TO."
+        .BLKB   16
+MSGDSC: .LONG   0                       ; $SNDOPR's message
+        .ADDRESS MSG
+MSG:    .BYTE   OPC$_RQ_RQST
+        .BLKB   3                       ; the classes
+        .LONG   0                       ; no request ID
+        .BLKB   64+2+255                ; the terminal, a comma and a blank, the text
+
+        .PSECT  CODE, EXE, LONG
+        .ENTRY  START, ^M<R2, R3, R4, R5, R6, R7>
+        GETVALUE "TEXT", TEXT, TEXTLEN
+        $GETDVIW_S DEVNAM=COMMAND, ITMLST=DVIITEMS
+        BLBC    R0, 10$
+        CMPL    DEVCLASS, #DC$_TERM
+        BEQL    20$
+10$:    $GETJPIW_S ITMLST=JPIITEM
+        BLBC    R0, 90$
+20$:    MOVAB   MSG+OPC$L_MS_TEXT, R3
+        ADDL2   NAMELEN, R3
+        MOVW    #^X202C, (R3)+          ; a comma and a blank
+        MOVZWL  TEXTLEN, R0
+        MOVC3   R0, TEXTBUF, (R3)
+        MOVAB   MSG, R0
+        SUBL3   R0, R3, MSGDSC
+        BSBW    TO
+        INSV    R6, #0, #24, MSG+OPC$B_MS_TARGET
+        $SNDOPR_S MSGBUF=MSGDSC
+90$:    RET
+
+; TO: R6 = the classes /TO names, OPC$M_NM_'s bits, or every one without
+; it. Uses R0-R5, R7.
+TO:
+        .JSB_ENTRY  OUTPUT=<R6>, SCRATCH=<R2, R3, R4, R5, R7>
+        MOVL    #^XFFFFFF, R6
+        PRESENT "TO"
+        BLBC    R0, 90$
+        CLRL    R6
+        MOVAB   CLASSES, R7
+        CLRL    R2                      ; its bit
+10$:    MOVZBL  (R7)+, R0
+        BEQL    20$
+        PUSHL   R2
+        ADDL3   #3, R0, ENTITY
+        MOVC3   R0, (R7), ENTBUF+3
+        MOVL    (SP)+, R2
+        MOVZBL  -1(R7), R0
+        ADDL2   R0, R7
+        PUSHL   R2
+        PUSHAQ  ENTITY
+        CALLS   #1, G^CLI$PRESENT
+        MOVL    (SP)+, R2
+        BLBC    R0, 20$
+        BBSS    R2, R6, 20$
+20$:    AOBLSS  #24, R2, 10$
+90$:    RSB
+
+        .END    START

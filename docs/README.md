@@ -73,6 +73,7 @@ same commit; `todography lint` checks it.
 | [ADR-0039](adr/0039-xqp-qio-functions.md) | A disk channel takes the XQP's IO$_ACCESS and IO$_MODIFY, which $QIO does in the process once IPL is back down | Proposed |
 | [ADR-0040](adr/0040-acls-in-file-headers-and-rights-identifiers.md) | Files keep ACLs in their headers, which the file system checks before the protection mask, and identifiers come from RIGHTSLIST.DAT through services that run in their caller's mode | Proposed |
 | [ADR-0041](adr/0041-virtual-terminals-take-the-telnet-line.md) | A virtual terminal, VTAn, takes its TELNET terminal's connection, which moves to another one when the user connects to it | Proposed |
+| [ADR-0042](adr/0042-opcom-reads-the-operators-mailbox.md) | OPCOM is a process that reads the operator's mailbox, MBA2:, which the executive makes at boot and $SNDOPR writes, and it writes on the console with $BRKTHRU | Proposed |
 
 ### PRDs
 

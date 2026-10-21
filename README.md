@@ -141,7 +141,8 @@ on the screen),
 delete and translate logical names (`SHOW LOGICAL SYS$INPUT`, or `SHOW
 LOGICAL` alone to list them all), `SHOW PROCESS` and `SHOW SYSTEM` show
 the process and list them all, `SHOW USERS`, `SHOW MEMORY`, `SHOW ERROR`
-and `SHOW CPU` the users, memory, device errors and CPU, `TCPIP` sets and shows the network's
+and `SHOW CPU` the users, memory, device errors and CPU, `REQUEST
+"text"` writes a message for the operator on the console, through OPCOM, `TCPIP` sets and shows the network's
 settings and the hosts it knows by name (*Networking*), `SET HOST
 host` logs in to another vaxpunk, on a terminal of its own there, where
 EDIT's keypad mode works too (CTRL/] comes back), `COPY` and `DELETE` copy and delete

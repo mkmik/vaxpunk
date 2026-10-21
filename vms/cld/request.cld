@@ -1,0 +1,33 @@
+! REQUEST "text": REQUEST.EXE sends the text to the operators, with
+! $SNDOPR, for OPCOM to write on their terminals: those of every class,
+! or with /TO of the classes it names.
+! ponytail: no /REPLY, as OPCOM takes no replies yet
+! (t8y:/utils/opcom#requests).
+define verb REQUEST
+	image REQUEST
+	parameter P1, label=TEXT, prompt="Message", value(required)
+	qualifier TO, value(required, list, type=OPERATOR_CLASSES)
+
+define type OPERATOR_CLASSES
+	keyword CARDS
+	keyword CENTRAL
+	keyword CLUSTER
+	keyword DEVICES
+	keyword DISKS
+	keyword LICENSE
+	keyword NETWORK
+	keyword OPER1
+	keyword OPER2
+	keyword OPER3
+	keyword OPER4
+	keyword OPER5
+	keyword OPER6
+	keyword OPER7
+	keyword OPER8
+	keyword OPER9
+	keyword OPER10
+	keyword OPER11
+	keyword OPER12
+	keyword PRINTER
+	keyword SECURITY
+	keyword TAPES

@@ -783,6 +783,45 @@ LITERAL
     BRK$V_CLUSTER = 11,  ! to the cluster's terminals too
     BRK$M_CLUSTER = 2048;
 
+! $OPCDEF
+LITERAL
+    OPC$_RQ_TERME = 1,  ! enable a terminal as an operator's
+    OPC$_RQ_LOGI = 2,  ! initialize the log
+    OPC$_RQ_RQST = 3,  ! a message for operators
+    OPC$_RQ_REPLY = 4,
+    OPC$_RQ_CANCEL = 5,
+    OPC$_RQ_STATUS = 6,
+    OPC$_RQ_SECURITY = 7,
+    OPC$M_NM_CENTRL = 1,  ! the operator classes, REPLY/ENABLE's and REQUEST/TO's
+    OPC$M_NM_PRINT = 2,
+    OPC$M_NM_TAPES = 4,
+    OPC$M_NM_DISKS = 8,
+    OPC$M_NM_DEVICE = 16,
+    OPC$M_NM_CARDS = 32,
+    OPC$M_NM_NTWORK = 64,
+    OPC$M_NM_CLUSTER = 128,
+    OPC$M_NM_SECURITY = 256,
+    OPC$M_NM_REPLY = 512,
+    OPC$M_NM_SOFTWARE = 1024,
+    OPC$M_NM_LICENSE = 2048,
+    OPC$M_NM_OPER1 = 4096,
+    OPC$M_NM_OPER2 = 8192,
+    OPC$M_NM_OPER3 = 16384,
+    OPC$M_NM_OPER4 = 32768,
+    OPC$M_NM_OPER5 = 65536,
+    OPC$M_NM_OPER6 = 131072,
+    OPC$M_NM_OPER7 = 262144,
+    OPC$M_NM_OPER8 = 524288,
+    OPC$M_NM_OPER9 = 1048576,
+    OPC$M_NM_OPER10 = 2097152,
+    OPC$M_NM_OPER11 = 4194304,
+    OPC$M_NM_OPER12 = 8388608;
+MACRO
+    OPC$B_MS_TYPE = 0, 0, 8, 0 %,  ! OPC$_RQ_
+    OPC$B_MS_TARGET = 1, 0, 8, 0 %,  ! OPC$M_NM_ bits, 3 bytes
+    OPC$L_MS_RQSTID = 4, 0, 32, 0 %,  ! the requester's, for itself
+    OPC$L_MS_TEXT = 8, 0, 32, 0 %;  ! the text, to the end
+
 ! $DVSDEF
 LITERAL
     DVS$_DEVCLASS = 1;  ! only devices of this class, a longword
@@ -939,7 +978,8 @@ LITERAL
 
 ! $MSGDEF
 LITERAL
-    MSG$_DELPROC = 3;  ! a process was deleted: its termination message, $ACCDEF
+    MSG$_DELPROC = 3,  ! a process was deleted: its termination message, $ACCDEF
+    MSG$_OPRQST = 8;  ! $SNDOPR's, to OPCOM
 
 ! $ACCDEF
 LITERAL

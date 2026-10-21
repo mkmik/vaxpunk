@@ -56,6 +56,11 @@ $ ! own welcome.
 $ DEFINE/SYSTEM/NOLOG SYS$ANNOUNCE "@SYS$MANAGER:ANNOUNCE.TXT"
 $ ! A process's default device, for one no one logged in to.
 $ DEFINE/SYSTEM/NOLOG SYS$DISK SYS$SYSROOT:
+$ ! OPCOM, the operator communication manager, as VMS's STARTUP starts
+$ ! it, at priority 6: a process of its own that writes the operators'
+$ ! messages, from REQUEST and the system, on the console, which it
+$ ! enables as an operator terminal.
+$ RUN/DETACHED/PRIORITY=6/PROCESS_NAME=OPCOM SYS$SYSTEM:OPCOM
 $ ! The users, SYSUAF.DAT, which LOGINOUT reads, AUTHORIZE and SET
 $ ! PASSWORD change: a copy on the ramdisk, which they can write, SYSTEM's
 $ ! alone, until the system stops. To keep the users from one boot to the

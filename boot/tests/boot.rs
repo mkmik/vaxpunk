@@ -30,7 +30,8 @@ struct Phase {
 }
 
 /// The executive starts and mounts the system disk; STARTUP's
-/// SYSTARTUP_VMS.COM mounts the ramdisk, MDA0:, and can't mount the data
+/// SYSTARTUP_VMS.COM mounts the ramdisk, MDA0:, starts OPCOM, which
+/// enables the console as an operator terminal, and can't mount the data
 /// disk, DKB0:, made afresh in out/check-datadisk.img, not the one you
 /// keep, and defines SYS$ANNOUNCE. Then LOGINOUT writes ANNOUNCE.TXT and asks for a username: one that isn't there fails,
 /// SYSTEM with the wrong password too, and with the right one, in lower
@@ -52,6 +53,10 @@ const BOOT: Phase = Phase {
         "%EXEC-I-START",
         "%MOUNT-I-MOUNTED, VAXPUNK mounted on _DKA0:",
         "%MOUNT-I-MOUNTED, RAM mounted on _MDA0:",
+        "%RUN-S-PROC_ID, identification of created process is ",
+        "%%%%%%%%%%%  OPCOM  ",
+        "\nOperator _OPA0: has been enabled, username SYSTEM\n",
+        "Operator status for operator _OPA0:\nCENTRAL, PRINTER, TAPES, DISKS, DEVICES, CARDS, NETWORK, CLUSTER, SECURITY,\n",
         "%SYSTEM-W-NOHOMEBLK, Files-11 home block not found on volume",
         "  SYSTEM       job terminated at ",
         "  vaxpunk, an OpenVMS clone for arm64. Log in as SYSTEM, password MANAGER\n\nUsername: NOBODY\nPassword: \nUser authorization failure\n",
@@ -470,6 +475,27 @@ const STOP_ID: Phase = Phase {
     ],
 };
 
+/// A second OPCOM can't start, its name taken; REQUEST's messages come
+/// on the console through the first, for every class and for OPER12 only,
+/// after the console's name.
+const OPERATOR: Phase = Phase {
+    name: "operator",
+    secs: 20,
+    steps: &[(
+        "%DCL-W-IVCHAR",
+        1,
+        concat!(
+            "RUN/DETACHED/PROCESS_NAME=OPCOM SYS$SYSTEM:OPCOM\r",
+            "REQUEST \"Disk full, please help\"\rREQUEST/TO=OPER12 \"Twelve only\"\r",
+        ),
+    )],
+    lines: &[
+        "%RUN-F-CREPRC, process creation failed\n-SYSTEM-F-DUPLNAM, duplicate name\n",
+        "\nMessage from user SYSTEM\n_OPA0:, Disk full, please help\n",
+        "\nMessage from user SYSTEM\n_OPA0:, Twelve only\n",
+    ],
+};
+
 /// SET PROCESS/PRIVILEGES takes CMKRNL and SYSNAM away, which SHOW
 /// PROCESS/PRIVILEGES shows, so SHOW LOGICAL, which needs $CMKRNL, and
 /// DEFINE/SYSTEM fail with NOPRIV, a privilege it doesn't know fails, and
@@ -478,7 +504,7 @@ const PRIVILEGES: Phase = Phase {
     name: "privileges",
     secs: 20,
     steps: &[(
-        "%DCL-W-IVCHAR",
+        "_OPA0:, Twelve only",
         1,
         concat!(
             "SET PROCESS/PRIVILEGES=(NOCMKRNL,NOSYSNAM)\rSHOW PROCESS/PRIVILEGES\r",
@@ -1538,6 +1564,7 @@ const PHASES: &[Phase] = &[
     DATA_DISK,
     CONTROL_KEYS,
     STOP_ID,
+    OPERATOR,
     PRIVILEGES,
     PROTECTION,
     ACLS,

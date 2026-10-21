@@ -1,0 +1,168 @@
+        .TITLE  OPCOM   The operator communication manager
+        .IDENT  /V0.1/
+;
+; OPCOM, the process that writes the operators' messages, as VMS's.
+; SYSTARTUP_VMS.COM starts it with RUN/DETACHED, as the process OPCOM. It
+; assigns a channel to the operator's mailbox, MBA2:, which the executive
+; made at boot, and reads the messages $SNDOPR writes there, each after a
+; header that says who sent it. It writes each on the operator terminals
+; enabled for one of the classes it is for, with $BRKTHRU, under a banner
+; with the time, as VMS's does:
+;
+;   %%%%%%%%%%%  OPCOM  21-OCT-2026 10:15:22.34  %%%%%%%%%%%
+;   Message from user SYSTEM
+;   _OPA0:, the text
+;
+; The console, OPA0:, is enabled when OPCOM starts, for VMS's classes,
+; every one but REPLY and SOFTWARE, and says so
+; (docs/adr/0042-opcom-reads-the-operators-mailbox.md).
+; ponytail: the console is the one operator terminal, for those classes;
+; OPCOM takes OPC$_RQ_RQST's messages, and shows them as messages, not
+; requests to answer; no REPLY/ENABLE, REPLY/TO, OPERATOR.LOG or node
+; name yet (t8y:/utils/opcom).
+;
+        .LIBRARY "starlet.mlb"
+        $SSDEF
+        $IODEF
+        $BRKDEF
+        $OPCDEF
+        $MSGDEF
+        $JPIDEF
+
+HDR = 38                                ; $SNDOPR's header, before the sender's message
+HDR_USERNAME = 16                       ; its username, 12 characters padded with blanks
+MAXMSG = 1024                           ; MBA2:'s longest message
+CLASSES = ^XFFF9FF                      ; the console's: all but OPC$M_NM_REPLY and OPC$M_NM_SOFTWARE
+
+; APPEND "text": appends text to OUT at R3. Uses R0-R5.
+        .MACRO  APPEND  TEXT, ?L
+        .SAVE_PSECT LOCAL_BLOCK
+        .PSECT  $LITERAL$
+L:      .ASCIC  TEXT
+        .RESTORE_PSECT
+        MOVAB   L, R1
+        BSBW    ADDC
+        .ENDM   APPEND
+
+        .PSECT  DATA, NOEXE, WRT, LONG
+MBX:    .ASCID  "_MBA2:"
+CONSOLE:.ASCID  "_OPA0:"
+CHAN:   .LONG   0
+IOSB:   .BLKQ   1
+USERNAME:                               ; OPCOM's own, who enabled the console
+        .BLKB   12
+USERITEM:
+        .WORD   12, JPI$_USERNAME
+        .ADDRESS USERNAME, 0
+        .LONG   0
+TIMDSC: .LONG   23                      ; the banner's time, in OUT
+        .ADDRESS 0
+OUTDSC: .LONG   0                       ; what goes on the terminals
+        .ADDRESS OUT
+OUT:    .BLKB   MAXMSG+128
+BUF:    .BLKB   MAXMSG                  ; a message from MBA2:
+
+        .PSECT  CODE, EXE, LONG
+        .ENTRY  START, ^M<R2, R3, R4, R5, R6>
+        $ASSIGN_S DEVNAM=MBX, CHAN=CHAN
+        BLBC    R0, 90$
+        $GETJPIW_S ITMLST=USERITEM
+        BSBW    ENABLE
+10$:    $QIOW_S CHAN=CHAN, FUNC=#IO$_READVBLK, IOSB=IOSB, P1=BUF, P2=#MAXMSG
+        BLBC    R0, 90$
+        BLBC    IOSB, 10$
+        MOVZWL  IOSB+2, R6
+        BSBW    MESSAGE
+        BRB     10$
+90$:    RET
+
+; ENABLE: writes on the console that it is an operator terminal, whose,
+; and for which classes, as VMS's OPCOM does when it starts. Uses R0-R5.
+ENABLE:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5>
+        BSBW    BANNER
+        APPEND  "Operator _OPA0: has been enabled, username "
+        MOVAB   USERNAME, R1
+        BSBW    ADDNAME
+        MOVB    #10, (R3)+
+        BSBW    SEND
+        BSBW    BANNER
+        APPEND  "Operator status for operator _OPA0:"
+        MOVW    #^X0A0D, (R3)+
+        APPEND  "CENTRAL, PRINTER, TAPES, DISKS, DEVICES, CARDS, NETWORK, CLUSTER, SECURITY,"
+        MOVW    #^X0A0D, (R3)+
+        APPEND  "LICENSE, OPER1, OPER2, OPER3, OPER4, OPER5, OPER6, OPER7, OPER8, OPER9, OPER10,"
+        MOVW    #^X0A0D, (R3)+
+        APPEND  "OPER11, OPER12"
+        MOVB    #10, (R3)+
+        BRW     SEND
+
+; MESSAGE: R6 = the size of the message in BUF. Writes it on the
+; console if it is $SNDOPR's, an OPC$_RQ_RQST for one of the console's
+; classes: who sent it, then its text. Uses R0-R5.
+MESSAGE:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5>
+        CMPL    R6, #HDR+OPC$L_MS_TEXT
+        BLSSU   90$
+        CMPW    BUF, #MSG$_OPRQST
+        BNEQ    90$
+        CMPB    BUF+HDR+OPC$B_MS_TYPE, #OPC$_RQ_RQST
+        BNEQ    90$
+        EXTZV   #0, #24, BUF+HDR+OPC$B_MS_TARGET, R0
+        BITL    #CLASSES, R0
+        BEQL    90$
+        BSBW    BANNER
+        APPEND  "Message from user "
+        MOVAB   BUF+HDR_USERNAME, R1
+        BSBW    ADDNAME
+        MOVW    #^X0A0D, (R3)+
+        SUBL3   #HDR+OPC$L_MS_TEXT, R6, R0
+        MOVC3   R0, BUF+HDR+OPC$L_MS_TEXT, (R3)
+        MOVB    #10, (R3)+
+        BRW     SEND
+90$:    RSB
+
+; BANNER: starts OUT with a bell and OPCOM's banner, the time in it,
+; and a CR LF. R3 = past it. Uses R0-R5.
+BANNER:
+        .JSB_ENTRY  OUTPUT=<R3>, SCRATCH=<R2, R4, R5>
+        MOVAB   OUT, R3
+        MOVB    #7, (R3)+
+        APPEND  "%%%%%%%%%%%  OPCOM  "
+        MOVL    R3, TIMDSC+4
+        $ASCTIM_S TIMBUF=TIMDSC
+        ADDL2   #23, R3
+        APPEND  "  %%%%%%%%%%%"
+        MOVW    #^X0A0D, (R3)+
+        RSB
+
+; ADDNAME: R1 = a username, 12 characters padded with blanks, R3 = where
+; in OUT. Appends it without the blanks. R3 = past it. Uses R0-R5.
+ADDNAME:
+        .JSB_ENTRY  OUTPUT=<R3>, SCRATCH=<R2, R4, R5>
+        MOVL    #12, R2
+10$:    ADDL3   R1, R2, R0
+        CMPB    -1(R0), #^A/ /
+        BNEQ    20$
+        SOBGTR  R2, 10$
+20$:    MOVC3   R2, (R1), (R3)
+        RSB
+
+; ADDC: R1 = an .ASCIC string, R3 = where in OUT. Appends it. R3 = past
+; it. Uses R0-R5.
+ADDC:
+        .JSB_ENTRY  OUTPUT=<R3>, SCRATCH=<R2, R4, R5>
+        MOVZBL  (R1)+, R0
+        MOVC3   R0, (R1), (R3)
+        RSB
+
+; SEND: R3 = past what is in OUT. Writes it on the console, with
+; $BRKTHRU, on lines of its own. Uses R0-R1.
+SEND:
+        .JSB_ENTRY
+        MOVAB   OUT, R0
+        SUBL3   R0, R3, OUTDSC
+        $BRKTHRUW_S MSGBUF=OUTDSC, SENDTO=CONSOLE, SNDTYP=#BRK$C_DEVICE, REQID=#BRK$C_OPCOM
+        RSB
+
+        .END    START

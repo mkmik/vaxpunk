@@ -9,7 +9,7 @@ refs = ["docs/boot.md", "docs/adr/0029-loginout-and-sysuaf.md", "docs/design/000
 
 [[feature]]
 id = "systartup"
-title = "SYSTARTUP_VMS.COM at boot: the ramdisk, SYS$SYSROOT, TCP/IP, the data disk"
+title = "SYSTARTUP_VMS.COM at boot: the ramdisk, SYS$SYSROOT, OPCOM, TCP/IP, the data disk"
 status = "done"
 milestone = "m0"
 note = "boot.md section 6"

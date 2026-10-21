@@ -92,9 +92,16 @@ note = "PRD-0003 tier 3 #26; dcl.mar ponytail: texts for a few statuses only"
 [[feature]]
 id = "run-detach"
 title = "RUN/DETACH and RUN/PROCESS_NAME: an image in a new process"
-status = "todo"
+status = "done"
 needs = ["/exec/processes"]
-note = "ADR-0019 follow-up"
+note = "dcl.mar ponytail: /PROCESS_NAME alone is detached too, not a subprocess (t8y:/dcl/spawn)"
+
+[[feature]]
+id = "run-process-qualifiers"
+title = "RUN's other qualifiers for the new process: /INPUT, /OUTPUT, /ERROR, /PRIVILEGES, /UIC, quotas"
+status = "todo"
+needs = ["#run-detach"]
+note = "dcl.mar ponytail: none of them yet, and an image that isn't there fails in the process, not with %RUN-F-PARSEFAIL"
 
 [[feature]]
 id = "limits"

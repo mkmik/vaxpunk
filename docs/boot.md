@@ -123,6 +123,10 @@ compiles.
   with its characteristics, a VT100's 80 by 24, and an empty type-ahead
   buffer, where typed characters wait until a program reads them, and
   turns on the console receive interrupt (`TTY$INIT`)
+- makes the operator's mailbox, `MBA2:`, a permanent one, which OPCOM
+  will read and where `$SNDOPR` writes the messages for the operators
+  (`MB$INIT`,
+  [ADR-0042](adr/0042-opcom-reads-the-operators-mailbox.md))
 - finds the port in the RPB (`NET$INIT`); its interrupt, at IPL 21, and
   the software interrupt it requests, at IPL 6, are in the SCB too
 - prints `%EXEC-I-START … free pages`
@@ -192,7 +196,17 @@ interpreter. It is linked high in P1, which tells the executive it is one
   PROTECTION` lets only SYSTEM read it; and a copy of `RIGHTSLIST.DAT`,
   the rights database: the identifiers, a name each, and who holds them,
   which `AUTHORIZE` can change there and anyone may read
-  ([ADR-0040](adr/0040-acls-in-file-headers-and-rights-identifiers.md)). The ramdisk also holds TCP/IP's two
+  ([ADR-0040](adr/0040-acls-in-file-headers-and-rights-identifiers.md)).
+  Before those copies, `RUN/DETACHED/PRIORITY=6/PROCESS_NAME=OPCOM
+  SYS$SYSTEM:OPCOM` creates the process `OPCOM`, which runs `OPCOM.EXE`
+  at priority 6, above STARTUP's 4, and prints `%RUN-S-PROC_ID,
+  identification of created process is` and its PID, as VMS's
+  `STARTUP.COM` starts it. OPCOM assigns a channel
+  to `MBA2:` and writes on the console, with `$BRKTHRU`, that it is an
+  operator terminal, `Operator _OPA0: has been enabled, username SYSTEM`,
+  and for which classes of messages, each under OPCOM's banner,
+  `%%%%%%%%%%%  OPCOM  21-OCT-2026 10:00:00.00  %%%%%%%%%%%`. Then it
+  waits for a message in its mailbox. The ramdisk also holds TCP/IP's two
   files: the hosts database, `TCPIP$HOST.DAT`, which the first `TCPIP
   SET HOST` or `SHOW HOST` makes, and the saved network configuration,
   `TCPIP$CONFIG.DAT`. So the only hosts a boot knows, and its fixed
@@ -397,6 +411,15 @@ interpreter. It is linked high in P1, which tells the executive it is one
   `$GETDVIW` about each, which counts the free blocks in the volume's
   storage bitmap (`FIL$FREEBLOCKS`). `SHOW DEVICES DK` lists only the
   devices whose names start with `DK`.
+- `REQUEST "text"` runs `REQUEST.EXE`, which sends the text, after the
+  terminal's name, `_OPA0:, text`, to OPCOM with `$SNDOPR`. The
+  executive writes it to `MBA2:` after a header that says who sent it,
+  and OPCOM writes it on the console under its banner, after `Message
+  from user SYSTEM`. `/TO=(DISKS,OPER12)` sends it to those classes of
+  operators only; the console is one of every class but `REPLY` and
+  `SOFTWARE`, as on VMS. `RUN/DETACHED` and `/PROCESS_NAME` run any
+  image in a process of its own, at the base priority `/PRIORITY` gives,
+  as `SYSTARTUP_VMS.COM` runs OPCOM.
 - A command that fails prints VMS's message for the status, when DCL
   knows it: `DIR DKB0:` looks in `DKB0:[SYSMGR]`, the default directory
   on that disk, and prints `%RMS-E-DNF, directory not found`.

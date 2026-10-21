@@ -1391,8 +1391,32 @@
   $ WRITE SYS$OUTPUT LINE
   $ GOTO LOOP
   $ DONE:
+1 REQUEST
+  Writes a message on the operators' terminals, through OPCOM, after
+  the name of your terminal.
+
+  Format
+
+    REQUEST message-text
+2 Parameters
+
+ message-text
+
+  The message. Put it in quotation marks if it has more than one word,
+  or lower case letters to keep.
+2 Qualifiers
+/TO
+  /TO=(operator[,...])
+
+  The operators the message is for: CARDS, CENTRAL, CLUSTER, DEVICES,
+  DISKS, LICENSE, NETWORK, OPER1 to OPER12, PRINTER, SECURITY or TAPES.
+  Without it, it is for all of them.
+2 Examples
+
+  $ REQUEST "Please mount the backup disk on DKB0:"
+  $ REQUEST/TO=DISKS "DKB0: is full"
 1 RUN
-  Runs an image in the process.
+  Runs an image in the process, or in a process of its own.
 
   Format
 
@@ -1405,6 +1429,25 @@
  file-spec
 
   The image to run.
+2 Qualifiers
+/DETACHED
+  /DETACHED
+
+  Runs the image in a new process, detached from yours, which goes on
+  after you log out, and says its identification. It has your username,
+  UIC, privileges and default directory, and no SYS$INPUT or
+  SYS$OUTPUT.
+/PRIORITY
+  /PRIORITY=n
+
+  The new process's base priority, 0 to 31; 4 if it is left out.
+/PROCESS_NAME
+  /PROCESS_NAME=name
+
+  The new process's name, up to 15 characters; it implies /DETACHED.
+2 Examples
+
+  $ RUN/DETACHED/PRIORITY=6/PROCESS_NAME=OPCOM SYS$SYSTEM:OPCOM
 1 SET
   Sets characteristics of the process, the terminal, files,
   directories, volumes and DCL.
