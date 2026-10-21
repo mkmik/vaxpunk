@@ -6,7 +6,7 @@ kind = "core"
 intent = "goal"
 research = "done"
 milestone = "m0"
-refs = ["docs/design/0001-pal-interface.md", "docs/adr/0013-qio-irps-and-drivers.md", "docs/adr/0027-terminals-are-ucbs-and-telnet-is-in-the-driver.md", "vms/exec/ttdriver.mar", "pal/src/main.c"]
+refs = ["docs/design/0001-pal-interface.md", "docs/adr/0013-qio-irps-and-drivers.md", "docs/adr/0027-terminals-are-ucbs-and-telnet-is-in-the-driver.md", "docs/adr/0042-opcom-reads-the-operators-mailbox.md", "vms/exec/ttdriver.mar", "vms/sysexe/opcom.mar", "pal/src/main.c"]
 
 [[feature]]
 id = "port"
@@ -36,8 +36,9 @@ note = "ttdriver.mar ponytail: a CTRL/Y typed then waits until a read takes a ch
 [[feature]]
 id = "opcom"
 title = "OPCOM's messages on the console: it is an operator terminal"
-status = "todo"
-note = "Needs t8y:/utils/opcom"
+status = "done"
+needs = ["/utils/opcom#process"]
+note = "ADR-0042; vms/sysexe/opcom.mar. For VMS's default classes; REPLY/ENABLE and /DISABLE are t8y:/utils/opcom#operator-terminals"
 
 [[feature]]
 id = "interrupt-uart"
@@ -73,4 +74,6 @@ reads and writes behind the VAX's console registers: `RXCS`, `RXDB` and
 `vms/exec/ttdriver.mar` its receive interrupt, `TTY$RCVINT`, fills the
 UCB's type-ahead buffer, and its output is written a character at a time
 and waited for. The PAL looks at the UART on each tick (PRD-0003 tier 4
-#38).
+#38). OPCOM enables it as an operator terminal when it starts, and
+writes the operators' messages there with `$BRKTHRU`
+([ADR-0042](../../adr/0042-opcom-reads-the-operators-mailbox.md)).

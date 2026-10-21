@@ -221,6 +221,8 @@ CODE = 0
 ; Terminals
         SERVICE BRKTHRU, 11
         SERVICE BRKTHRUW, 11
+; Operators
+        SERVICE SNDOPR, 2
 ; Quotas
         SERVICE SETRWM, 1
 

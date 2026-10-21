@@ -215,7 +215,7 @@
         .EXTERNAL DCL$SAMESTR, DCL$SAY, DCL$SETCOMMAND, DCL$SETDEF, DCL$SHOW
         .EXTERNAL DCL$SKIP, DCL$STATUS, DCL$STRASSIGN, DCL$SUBST, DCL$SYMNAM
         .EXTERNAL DCL$TOSTR, DCL$VSTACK, DCL$WRITE, DCL$ELSE, DCL$ENDIF
-        .EXTERNAL DCL$DATAIN, DCL$DATAEND, DCL$DECK
+        .EXTERNAL DCL$DATAIN, DCL$DATAEND, DCL$DECK, DCL$ADDHEX
         .EXTERNAL DCL$ON, DCL$ONACT, DCL$CYACT, DCL$HASCY, DCL$NOON
 
         .PSECT  DATA, NOEXE, WRT, LONG
@@ -250,6 +250,10 @@ DCL$V_EXPR::                            ; an expression
         .ASCID  "EXPRESSION"
 V_PRCNAM:
         .ASCID  "PROCESS_NAME"
+V_DETACHED:
+        .ASCID  "DETACHED"
+V_PRIORITY:
+        .ASCID  "PRIORITY"
 V_IDENT:
         .ASCID  "IDENTIFICATION"
 V_CONTROL:
@@ -367,6 +371,7 @@ VECHO:  .LONG   0                       ; 1: the line read is to be written
 PENDCY: .LONG   0                       ; 1: CTRL/Y ran an image down for ON CONTROL_Y
 STOPPID:                                ; STOP/IDENTIFICATION's PID
         .LONG   0
+NEWPID: .LONG   0                       ; RUN/DETACHED's process's
 DCL$LASTSTAT::                          ; $STATUS
         .LONG   SS$_NORMAL
 DCL$DEPTH::                             ; the procedure running, 0 for none
@@ -708,10 +713,61 @@ STOPID: CLRL    STOPPID
         BRW     DCL$WARN
 
 ; RUN image: runs it with $IMGACT, which returns only if it can't.
-RUN:    MOVAB   DCL$V_FILE, R1
+; RUN/DETACHED image, or with /PROCESS_NAME=name, runs it in a process
+; of its own instead, named so, at base priority /PRIORITY=n, 4 without,
+; which $CREPRC creates, with its PID in %RUN-S-PROC_ID, as VMS's RUN
+; does.
+; ponytail: /PROCESS_NAME alone makes a detached process too, not a
+; subprocess (t8y:/dcl/spawn); RUN's other qualifiers for a process,
+; /INPUT, /OUTPUT, /UIC and the rest, aren't there yet, and an image
+; that isn't there fails in the process, not here.
+RUN:    MOVAB   V_DETACHED, R1
+        BSBW    DCL$ISPRES
+        BLBS    R0, DETACH
+        MOVAB   V_PRCNAM, R1
+        BSBW    DCL$ISPRES
+        BLBS    R0, DETACH
+        MOVAB   DCL$V_FILE, R1
         BSBW    DCL$GETVAL
         CLRL    R9                      ; no command line
         BRB     IMAGE
+
+; DETACH: RUN's, for a process of its own.
+DETACH: MOVL    #4, R7                  ; its priority
+        MOVAB   V_PRIORITY, R1
+        BSBW    DCL$GETVAL
+        TSTL    R8
+        BEQL    5$
+        CLRL    R7
+        MOVAB   DCL$TOKEN, R2
+3$:     MOVZBL  (R2)+, R0
+        SUBL2   #^A/0/, R0
+        MULL2   #10, R7
+        ADDL2   R0, R7
+        SOBGTR  R8, 3$
+5$:     MOVAB   V_PRCNAM, R1
+        BSBW    DCL$NAMEVAL
+        MOVAB   DCL$V_FILE, R1
+        BSBW    DCL$GETVAL
+        BSBW    EXETYPE
+        MOVAB   DCL$NAMDSC, R2
+        TSTL    (R2)
+        BNEQ    10$
+        CLRL    R2                      ; no name
+10$:    $CREPRC_S PIDADR=NEWPID, IMAGE=TOKDSC, PRCNAM=(R2), BASPRI=R7
+        BLBC    R0, 20$
+        ADDTEXT "%RUN-S-PROC_ID, identification of created process is "
+        MOVL    NEWPID, R1
+        BSBW    DCL$ADDHEX
+        BSBW    DCL$SAY
+        BRW     DCL$OK
+20$:    PUSHL   R0
+        PRINT   "%RUN-F-CREPRC, process creation failed"
+        MOVZBL  #^A/-/, R0
+        MOVL    (SP), R1
+        BSBW    DCL$STATUS
+        BISL3   #INHIB, (SP)+, R0
+        BRW     DCL$DONE
 
 ; MCR image [command]: runs image as a foreign command, with a parse
 ; whose $LINE is image command, as VMS's MCR does.
@@ -773,14 +829,7 @@ WITHPARSE:
         MOVAB   RESDSC, R9
 ; IMAGE: DCL$TOKEN = an image's name, R8 = its length, R9 = the parse's
 ; descriptor, or 0. Runs it, IMAGE.EXE if it has no type.
-IMAGE:  CLRL    R0                      ; a type?
-15$:    CMPB    DCL$TOKEN[R0], #^A/./
-        BEQL    20$
-        AOBLSS  R8, R0, 15$
-        MOVAB   DCL$TOKEN[R8], R0
-        MOVL    DOTEXE, (R0)
-        ADDL2   #4, R8
-20$:    MOVL    R8, TOKDSC
+IMAGE:  BSBW    EXETYPE
         BSBW    DCL$DATAIN
         BSBW    RUNNING
         $IMGACT_S IMAGE=TOKDSC, CMDLIN=(R9)
@@ -1057,6 +1106,20 @@ DCL$VERB::
         BEQL    90$
         MOVL    #SS$_ABORT, R0
 90$:    RET
+
+; EXETYPE: DCL$TOKEN = an image's name, R8 = its length. Adds .EXE to
+; it if it has no type, and makes TOKDSC describe it. Uses R0.
+EXETYPE:
+        .JSB_ENTRY  OUTPUT=<R8>
+        CLRL    R0                      ; a type?
+10$:    CMPB    DCL$TOKEN[R0], #^A/./
+        BEQL    20$
+        AOBLSS  R8, R0, 10$
+        MOVAB   DCL$TOKEN[R8], R0
+        MOVL    DOTEXE, (R0)
+        ADDL2   #4, R8
+20$:    MOVL    R8, TOKDSC
+        RSB
 
 ; RUNNING: before $IMGACT. Enables CTRL/Y for the image, which CTRL/Y's
 ; AST may not have, and says an image runs. Uses R0 and R1.

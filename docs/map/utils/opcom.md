@@ -3,21 +3,30 @@ title = "OPCOM"
 summary = "The operator communication process: requests, replies, OPERATOR.LOG"
 aka = ["OPCOM", "OPCOM.EXE", "$SNDOPR", "OPERATOR.LOG", "REQUEST", "REPLY/ENABLE", "operator terminal", "%%%%%%%%%%%  OPCOM"]
 kind = "core"
-intent = "aspiration"
+intent = "goal"
 research = "outline"
-refs = ["docs/prd/0003-multi-user-vms.md", "vms/exec/f11.mar", "https://docs.vmssoftware.com/vsi-openvms-system-manager-s-manual-volume-1-essentials/", "https://wasd.vsm.com.au/htbin/helpgate/HELP/REQUEST", "https://wasd.vsm.com.au/htbin/helpgate/HELP/REPLY"]
+refs = ["docs/adr/0042-opcom-reads-the-operators-mailbox.md", "vms/sysexe/opcom.mar", "vms/sysexe/request.mar", "vms/exec/mbdriver.mar", "docs/prd/0003-multi-user-vms.md", "vms/exec/f11.mar", "https://docs.vmssoftware.com/vsi-openvms-system-manager-s-manual-volume-1-essentials/", "https://wasd.vsm.com.au/htbin/helpgate/HELP/REQUEST", "https://wasd.vsm.com.au/htbin/helpgate/HELP/REPLY"]
 
 [[feature]]
 id = "process"
 title = "The OPCOM process, its mailbox, and $SNDOPR to reach it"
-status = "todo"
-needs = ["/exec/mailboxes"]
+status = "done"
+needs = ["/exec/mailboxes", "/dcl/interpreter#run-detach"]
+note = "ADR-0042: MBA2:, which the executive makes; OPC$_RQ_RQST's messages on the console"
+
+[[feature]]
+id = "request"
+title = "REQUEST \"text\" [/TO=(class,...)]: a user's message to the operators"
+status = "done"
+needs = ["#process"]
+note = "request.mar; DCL checks /TO's classes, %DCL-W-IVKEYW where VMS says %OPCOM-F-VALUERR"
 
 [[feature]]
 id = "operator-terminals"
 title = "Operator terminals and classes: REPLY/ENABLE=(CENTRAL, DISKS, TAPES, SECURITY, ...)"
 status = "todo"
 needs = ["#process", "/drivers/terminal#brkthru"]
+note = "opcom.mar ponytail: the console is the one, for VMS's default classes"
 
 [[feature]]
 id = "log"
@@ -30,6 +39,7 @@ id = "requests"
 title = "REQUEST/REPLY from users, REPLY/TO and /ABORT from operators"
 status = "todo"
 needs = ["#operator-terminals"]
+note = "opcom.mar ponytail: a request with a reply mailbox shows as a message, and gets no answer"
 
 [[feature]]
 id = "system-messages"
@@ -69,9 +79,6 @@ why = "A detached process started at boot"
 on = "/drivers/terminal#brkthru"
 why = "Broadcasts to operator terminals with $BRKTHRU"
 
-[[needs]]
-fuzzy = "$SNDOPR, the system service that sends a message to OPCOM"
-why = "How MOUNT, the job controller and REQUEST reach it"
 
 [[needs]]
 on = "/utils/audit-server"
@@ -105,7 +112,12 @@ enabled as operators for that class (`REPLY/ENABLE=TAPES`, `CENTRAL`,
 `REPLY/TO=n` or `REPLY/ABORT=n`, which wakes the program waiting for it.
 In a cluster one OPCOM per node shares the messages.
 
-vaxpunk has no OPCOM. The executive writes its events, such as
-`%MOUNT-I-MOUNTED`, straight on the console. PRD-0003 wanted `$BRKTHRU`
-for `REPLY` and the job controller's notices, and `ttdriver.mar` has it
-now; OPCOM would use it too, but PRD-0003 doesn't name OPCOM.
+vaxpunk's OPCOM ([ADR-0042](../../adr/0042-opcom-reads-the-operators-mailbox.md))
+is `OPCOM.EXE`, which `SYSTARTUP_VMS.COM` starts with `RUN/DETACHED`. It
+reads `MBA2:`, the operator's mailbox the executive makes at boot, where
+`$SNDOPR` writes, and writes each message on the console with
+`$BRKTHRU`, under VMS's banner; the console is enabled for VMS's default
+classes when it starts, and is the only operator terminal. `REQUEST`
+sends it a user's message. The executive still writes its own events,
+such as `%MOUNT-I-MOUNTED`, straight on the console, and there is no
+`OPERATOR.LOG` or `REPLY/ENABLE` yet.

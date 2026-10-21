@@ -797,6 +797,51 @@ BRK$V_CLUSTER = 11                      ; to the cluster's terminals too
 BRK$M_CLUSTER = ^X800
         .ENDM   $BRKDEF
 
+; $OPCDEF: $SNDOPR's message, as VMS lays it out: a request type, the
+; operators it is for, a request ID, then the text.
+        .MACRO  $OPCDEF
+OPC$B_MS_TYPE = 0                       ; OPC$_RQ_
+OPC$B_MS_TARGET = 1                     ; OPC$M_NM_ bits, 3 bytes
+OPC$L_MS_RQSTID = 4                     ; the requester's, for itself
+OPC$L_MS_TEXT = 8                       ; the text, to the end
+OPC$_RQ_TERME = 1                       ; enable a terminal as an operator's
+OPC$_RQ_LOGI = 2                        ; initialize the log
+OPC$_RQ_RQST = 3                        ; a message for operators
+OPC$_RQ_REPLY = 4
+OPC$_RQ_CANCEL = 5
+OPC$_RQ_STATUS = 6
+OPC$_RQ_SECURITY = 7
+OPC$M_NM_CENTRL = ^X1                   ; the operator classes, REPLY/ENABLE's and REQUEST/TO's
+OPC$M_NM_PRINT = ^X2
+OPC$M_NM_TAPES = ^X4
+OPC$M_NM_DISKS = ^X8
+OPC$M_NM_DEVICE = ^X10
+OPC$M_NM_CARDS = ^X20
+OPC$M_NM_NTWORK = ^X40
+OPC$M_NM_CLUSTER = ^X80
+OPC$M_NM_SECURITY = ^X100
+OPC$M_NM_REPLY = ^X200
+OPC$M_NM_SOFTWARE = ^X400
+OPC$M_NM_LICENSE = ^X800
+OPC$M_NM_OPER1 = ^X1000
+OPC$M_NM_OPER2 = ^X2000
+OPC$M_NM_OPER3 = ^X4000
+OPC$M_NM_OPER4 = ^X8000
+OPC$M_NM_OPER5 = ^X10000
+OPC$M_NM_OPER6 = ^X20000
+OPC$M_NM_OPER7 = ^X40000
+OPC$M_NM_OPER8 = ^X80000
+OPC$M_NM_OPER9 = ^X100000
+OPC$M_NM_OPER10 = ^X200000
+OPC$M_NM_OPER11 = ^X400000
+OPC$M_NM_OPER12 = ^X800000
+        .ENDM   $OPCDEF
+
+; $OPCMSG: OPCOM's status codes, facility OPCOM, as VMS numbers them.
+        .MACRO  $OPCMSG
+OPC$_NOPERATOR = ^X58061                ; no operator coverage: OPCOM isn't there, a success
+        .ENDM   $OPCMSG
+
 ; $DVSDEF: $DEVICE_SCAN's item codes.
         .MACRO  $DVSDEF
 DVS$_DEVCLASS = 1                       ; only devices of this class, a longword
@@ -964,6 +1009,7 @@ DEV$M_RED = ^X100
 ; $MSGDEF: the types of the messages the system writes to mailboxes.
         .MACRO  $MSGDEF
 MSG$_DELPROC = 3                        ; a process was deleted: its termination message, $ACCDEF
+MSG$_OPRQST = 8                         ; $SNDOPR's, to OPCOM
         .ENDM   $MSGDEF
 
 ; $ACCDEF: a process's termination message, which the mailbox whose unit
@@ -2831,6 +2877,15 @@ LKI$C_LENGTH = 24
         .EXTERNAL SYS$BRKTHRUW
         CALLS   #11, G^SYS$BRKTHRUW
         .ENDM   $BRKTHRUW_S
+
+; $SNDOPR_S MSGBUF, CHAN: sends the message MSGBUF describes, $OPCDEF's,
+; to OPCOM; CHAN, a mailbox's channel, for its reply.
+        .MACRO  $SNDOPR_S MSGBUF, CHAN=#0
+        PUSHL   CHAN
+        $PUSHADR MSGBUF
+        .EXTERNAL SYS$SNDOPR
+        CALLS   #2, G^SYS$SNDOPR
+        .ENDM   $SNDOPR_S
 
         .MACRO  $MOUNT_S ITMLST
         $PUSHADR ITMLST

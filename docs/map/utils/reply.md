@@ -25,7 +25,7 @@ needs = ["#broadcast"]
 id = "operator"
 title = "REPLY/ENABLE and /DISABLE: a terminal becomes an operator's, for some classes"
 status = "todo"
-note = "Needs OPCOM running (t8y:/utils/opcom)"
+needs = ["/utils/opcom#operator-terminals"]
 
 [[feature]]
 id = "requests"
@@ -79,4 +79,6 @@ tape, and `REPLY/LOG` starts a new `OPERATOR.LOG`.
 vaxpunk has neither. PRD-0003 names `$BRKTHRU`, "for `REPLY` and the
 job controller's messages", among Milestone 1's terminal requirements;
 `ttdriver.mar` has it, so `REPLY/ALL`, `/USERNAME` and `/TERMINAL` are a
-small program. The operator side waits for OPCOM, which is not planned.
+small program. OPCOM runs now, with the console its one operator
+terminal ([ADR-0042](../../adr/0042-opcom-reads-the-operators-mailbox.md)),
+so the operator side is `REPLY/ENABLE` and the requests OPCOM keeps.

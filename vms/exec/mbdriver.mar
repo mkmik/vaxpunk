@@ -1,4 +1,4 @@
-        .TITLE  MBDRIVER Mailboxes, $CREMBX and $DELMBX
+        .TITLE  MBDRIVER Mailboxes, $CREMBX, $DELMBX and $SNDOPR
         .IDENT  /V0.1/
 ;
 ; A mailbox is a device that holds messages, as on VMS
@@ -14,6 +14,9 @@
 ; UCB's queue, in an IRP that holds what it reads, until a message is
 ; there to give it. MB$SEND writes for the executive: process rundown
 ; sends a process's termination message so (process.mar).
+; The executive makes one mailbox at boot, the operator's, MBA2:, which
+; OPCOM reads and $SNDOPR writes, as VMS's has it
+; (docs/adr/0042-opcom-reads-the-operators-mailbox.md).
 ; ponytail: a write is done at once, as VMS's with IO$M_NOW, and fails
 ; with SS$_MBFULL when there's no room, rather than waiting for a reader
 ; or for room; no attention ASTs or protection mask.
@@ -28,6 +31,8 @@
         $IODEF
         $LNMDEF
         $SSDEF
+        $MSGDEF
+        $OPCMSG
 
         .EXTERNAL SCH$GL_CURPCB, EXE$PROBER_DSC, EXE$ALONONPAGED, EXE$DEANONPGDSIZ
         .EXTERNAL IOC$ALLOCIRP, IOC$RETQUOTA, IOC$REQCOM, IOC$ASSIGN, IOC$CANCELQ, IOC$TRNDEVNAM
@@ -43,12 +48,19 @@ MBM$L_PID = 12                          ; who wrote it
 MBM$L_LEN = 16                          ; its size
 MBM$K_LENGTH = 20
 EOF = -1                                ; MBM$L_LEN of IO$_WRITEOF's, an end of file
+COMHDR = 38                             ; $SNDOPR's header, before the sender's message
+OPRMAXMSG = 1024                        ; MBA2:'s longest message, the header with it, as VMS's
+OPRBUFQUO = 8192                        ; and the bytes it holds: OPCOM may be behind at boot
 
         .PSECT  EXEC$DATA, NOEXE, WRT, QUAD
 MB$GL_UNITS::                           ; the mailboxes, linked by UCB$L_LINK
         .LONG   0
 MB$GL_UNIT::                            ; the last unit number given, 1-99 then again
         .LONG   0
+SYS$GL_OPRMBX::                         ; the operator's mailbox, MBA2:: its UCB's address, or 0
+        .LONG   0
+OPRARGS:                                ; $CREMBX's arguments for it, which NEWMBX takes:
+        .LONG   4, 1, 0, OPRMAXMSG, OPRBUFQUO   ; permanent, no channel, maxmsg, bufquo
 
         .PSECT  $CODE$
 
@@ -197,6 +209,92 @@ NEWMBX:
         MOVL    R5, MB$GL_UNITS
         MOVL    #SS$_NORMAL, R0
 90$:    RSB
+
+; MB$INIT: makes the operator's mailbox, MBA2:, as VMS's executive
+; has it: permanent, with no channel until OPCOM assigns one, and its
+; UCB's address in SYS$GL_OPRMBX, where $SNDOPR finds it. Without pool
+; for it, SYS$GL_OPRMBX stays 0, and $SNDOPR says no operator is there.
+; Uses R0-R5.
+MB$INIT::
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5>
+        CALLG   OPRARGS, OPRMBX
+        RSB
+
+; OPRMBX: MB$INIT's, with AP = OPRARGS, for NEWMBX.
+        .ENTRY  OPRMBX, ^M<R2, R5>
+        MOVL    #1, MB$GL_UNIT          ; NEWMBX gives the next, 2
+        BSBW    NEWMBX
+        BLBC    R0, 90$
+        MOVL    #^A/MBA2/, UCB$T_NAME(R5)
+        MOVL    R5, SYS$GL_OPRMBX
+90$:    RET
+
+; $SNDOPR msgbuf, chan: sends OPCOM the message msgbuf describes,
+; $OPCDEF's, in the operator's mailbox, MBA2:, after a header of 38
+; bytes that says who sent it, as VMS's: MSG$_OPRQST, a word; the unit
+; number of the mailbox chan is assigned to, for OPCOM's reply, or 0 for
+; chan 0; the sender's current privileges, a quadword; its UIC; its
+; username, 12 characters, and account, 8, padded with blanks; its base
+; priority, a byte; and a spare byte. R0 = SS$_NORMAL, or OPC$_NOPERATOR,
+; a success too, when no process has a channel to MBA2:, as before OPCOM
+; starts; SS$_BADPARAM for a message that is empty or longer than 986
+; bytes; SS$_IVCHAN, SS$_DEVNOTMBX for a chan that isn't a mailbox's;
+; SS$_ACCVIO; or MB$SEND's SS$_MBFULL or SS$_INSFMEM.
+; vaxpunk: the account is blanks, as a process has none yet, and a full
+; MBA2: fails rather than waiting for room.
+; ponytail: the reply mailbox's protection isn't checked, as VMS checks
+; it: OPCOM doesn't reply yet (t8y:/utils/opcom#requests).
+        .ENTRY  EXE$SNDOPR, ^M<R2, R3, R4, R5, R6, R7>
+        MOVL    4(AP), R1
+        BEQL    85$
+        BSBW    EXE$PROBER_DSC
+        BLBC    R0, 90$
+        MOVZWL  (R1), R6                ; the message's size
+        BEQL    85$
+        CMPL    R6, #OPRMAXMSG-COMHDR
+        BGTRU   85$
+        MOVL    4(R1), R7               ; and address
+        MOVL    SCH$GL_CURPCB, R4
+        CLRL    R3                      ; the reply mailbox's unit
+        MOVZWL  8(AP), R0
+        BEQL    10$
+        CMPL    R0, #PCB$C_MAXCHAN
+        BGTRU   80$
+        BBC     R0, PCB$L_CHANS(R4), 80$
+        MOVL    PCB$AL_CCB(R4)[R0], R5
+        BSBW    MAILBOX
+        BLBC    R0, 82$
+        MOVL    UCB$L_UNIT(R5), R3
+10$:    SUBL2   #OPRMAXMSG, SP          ; the header, then the message
+        MOVW    #MSG$_OPRQST, (SP)
+        MOVW    R3, 2(SP)
+        MOVQ    PCB$Q_PRIV(R4), 4(SP)
+        MOVL    PCB$L_UIC(R4), 12(SP)
+        MOVB    PCB$B_PRIB(R4), 36(SP)
+        CLRB    37(SP)
+        MOVC5   #12, PCB$T_USERNAME+1(R4), #^A/ /, #20, 16(SP)  ; and blanks for the account
+        MOVC3   R6, (R7), COMHDR(SP)
+        MOVL    SP, R7
+        ADDL2   #COMHDR, R6
+        MOVL    SCH$GL_CURPCB, R4
+        DSBINT  #IPL$_SYNCH
+        MOVL    #OPC$_NOPERATOR, R0
+        MOVL    SYS$GL_OPRMBX, R5
+        BEQL    20$
+        TSTL    UCB$L_REFC(R5)          ; OPCOM's channel
+        BEQL    20$
+        MOVL    R7, R1
+        MOVL    R6, R2
+        MOVL    PCB$L_PID(R4), R3
+        BSBW    MB$SEND
+20$:    ENBINT
+        RET
+80$:    MOVL    #SS$_IVCHAN, R0
+        RET
+82$:    MOVL    #SS$_DEVNOTMBX, R0
+        RET
+85$:    MOVL    #SS$_BADPARAM, R0
+90$:    RET
 
 ; $DELMBX chan: marks the mailbox chan is assigned to for deletion: it is
 ; temporary now, and goes when its last channel does, with the logical

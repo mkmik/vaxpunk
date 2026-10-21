@@ -154,6 +154,9 @@ define type MATCH_OPTIONS
 define verb RUN
 	cliroutine RUN
 	parameter P1, label=FILE, prompt="File", value(required, type=$infile)
+	qualifier DETACHED
+	qualifier PRIORITY, value(required, type=$number)
+	qualifier PROCESS_NAME, value(required)
 
 define verb SET
 	cliroutine SET

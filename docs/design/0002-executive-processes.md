@@ -54,7 +54,7 @@ its code.
 | `entropy.mar` | `$GET_ENTROPY`, random bytes from the PAL's entropy device |
 | `lnm.mar` | logical name tables, `$CRELNM`, `$DELLNM`, `$TRNLNM` |
 | `qio.mar` | the devices' UCBs, `$ASSIGN`, `$DASSGN`, `$CANCEL`, `$QIO`, `$QIOW`; IRPs, their completion and cancelling |
-| `mbdriver.mar` | mailboxes: `$CREMBX`, `$DELMBX`, their driver, and `MB$SEND`, which writes the termination message |
+| `mbdriver.mar` | mailboxes: `$CREMBX`, `$DELMBX`, their driver, and `MB$SEND`, which writes the termination message; the operator's mailbox, `MBA2:`, and `$SNDOPR`, which writes OPCOM's messages there ([ADR-0042](../adr/0042-opcom-reads-the-operators-mailbox.md)) |
 | `ttdriver.mar` | the terminal driver, a UCB per terminal, the console's and TELNET's: writes, queued reads, their terminators, editing and timers, the console receive interrupt and the type-ahead buffers, CTRL/C and CTRL/Y ASTs, Telnet on a TCP connection |
 | `getdvi.mar` | `$GETDVI`, `$GETDVIW`, `$DEVICE_SCAN`: what the devices are |
 | `syssrv.mar` | the system service vector, the `CHMK` and `CHME` dispatchers, `$CMEXEC`, where processes enter user and supervisor mode, and the stubs |
