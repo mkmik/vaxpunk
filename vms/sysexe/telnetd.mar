@@ -14,6 +14,11 @@
 ; the line going, deletes the process, and the terminal's last channel
 ; closes the connection. The server keeps its channel until LOGINOUT has
 ; assigned its own, which $GETDVI's DVI$_REFCNT shows.
+; As TCP/IP Services', it gives a login a virtual terminal, _VTAn:, whose
+; physical terminal is _TNAn:, while the system logical name
+; TCPIP$TELNET_VTA is TRUE: a session that outlives the connection,
+; which the user connects to again at the next login
+; (docs/adr/0041-virtual-terminals-take-the-telnet-line.md).
 ;
         .LIBRARY "starlet.mlb"
         .LIBRARY "sysexe.mlb"
@@ -22,6 +27,8 @@
         $DVIDEF
         $INETSYMDEF
         $SOCKADDRINDEF
+        $LNMDEF
+        $TT2DEF
 
         .PSECT  DATA, NOEXE, WRT, LONG
 DEVICE: .ASCID  "TCPIP$DEVICE:"
@@ -43,6 +50,15 @@ UNIT:   .LONG   6                       ; the terminal's name, _TNAn:
 UNITNAME:
         .BLKB   6
 REFCNT: .LONG   0                       ; the terminal's channels
+SYSTAB: .ASCID  "LNM$SYSTEM"
+VTANAME:.ASCID  "TCPIP$TELNET_VTA"
+VTAITEM:.WORD   1, LNM$_STRING          ; $TRNLNM's item: its first character
+        .ADDRESS VTAVALUE, 0
+        .LONG   0
+VTAVALUE:
+        .BLKB   1
+PORTCHAR:                               ; IO$_TTY_PORT's p1: TT2$M_DISCONNECT for a virtual terminal
+        .LONG   0
 NAMEITEM:                               ; $GETDVI's items: the name
         .WORD   6, DVI$_DEVNAM
         .ADDRESS UNITNAME, 0
@@ -64,7 +80,8 @@ REFITEM:                                ; the channels
         $QIOW_S CHAN=LCHAN, FUNC=#IO$_ACCESS!IO$M_ACCEPT, IOSB=IOSB, P4=#CHAN
         BSBW    STATUS
         BLBC    R0, 80$
-        $QIOW_S CHAN=CHAN, FUNC=#IO$_TTY_PORT, IOSB=IOSB
+        BSBW    VTA
+        $QIOW_S CHAN=CHAN, FUNC=#IO$_TTY_PORT, IOSB=IOSB, P1=@PORTCHAR
         BSBW    STATUS
         BLBC    R0, 80$
         BSBW    LOGIN
@@ -87,6 +104,25 @@ LOGIN:
         CMPL    REFCNT, #2              ; its channel and ours
         BGEQ    90$
         SOBGTR  R2, 10$
+90$:    RSB
+
+; VTA: PORTCHAR = TT2$M_DISCONNECT if TCPIP$TELNET_VTA is TRUE, its
+; value starting with T, Y or 1, as DCL takes a string for true, else 0.
+; Uses R0, R1.
+VTA:
+        .JSB_ENTRY
+        CLRL    PORTCHAR
+        CLRB    VTAVALUE
+        $TRNLNM_S TABNAM=SYSTAB, LOGNAM=VTANAME, ITMLST=VTAITEM
+        BLBC    R0, 90$
+        BICB3   #^X20, VTAVALUE, R0     ; in capitals
+        CMPB    R0, #^A/T/
+        BEQL    10$
+        CMPB    R0, #^A/Y/
+        BEQL    10$
+        CMPB    VTAVALUE, #^A/1/
+        BNEQ    90$
+10$:    MOVL    #TT2$M_DISCONNECT, PORTCHAR
 90$:    RSB
 
 ; STATUS: R0 = $QIOW's status. R0 = the IOSB's, if that was a success.

@@ -22,7 +22,10 @@
 //! TNA1:, which has the console's width and page, as Telnet's NAWS gives them: SHOW TERMINAL,
 //! EDIT's keypad mode there, SHOW SYSTEM, CTRL/] and the TELNET> prompt, and LOGOUT; SET HOST again, and
 //! CTRL/] and CLOSE while a procedure spins there, which deletes its process, so
-//! SHOW SYSTEM no longer lists _TNA1:; then TELNET, by a name DNS knows, to a port here,
+//! SHOW SYSTEM no longer lists _TNA1:; with TCPIP$TELNET_VTA TRUE, a login
+//! on a virtual terminal, VTA1:, that CLOSE disconnects, SHOW USERS shows
+//! Disconnected and the next login connects to again, DISCONNECT, a login
+//! that answers NO, CONNECT/NOLOGOUT and CONNECT; then TELNET, by a name DNS knows, to a port here,
 //! through guestfwd, a line each way, CTRL/] and CLOSE, and with /PORT to one there cannot be;
 //! then COPY/HTTP from web servers here, through guestfwd, to the data
 //! disk: by URL, by node and path, one that says 404, by URL with a
@@ -566,6 +569,44 @@ fn network() {
         sleep(Duration::from_secs(1));
     }
     assert!(hung_up, "the hangup left the process on _TNA1:");
+    // Virtual terminals: with TCPIP$TELNET_VTA TRUE a remote login is on
+    // VTA1:, whose physical terminal is TNA1:. CTRL/] and CLOSE while READ
+    // waits disconnect it, as SHOW USERS says; the next login connects to
+    // it, where READ's prompt is written again; DISCONNECT disconnects it
+    // again; a login that answers NO is on VTA2:, CONNECT/NOLOGOUT goes
+    // to VTA1:, keeping VTA2:, and CONNECT back to VTA2: logs VTA1: out.
+    vax.command("DEFINE/SYSTEM TCPIP$TELNET_VTA TRUE");
+    vax.reply("SET HOST 10.0.2.15", "Username: ");
+    vax.login("SYSTEM", "MANAGER");
+    vax.command("SHOW TERMINAL");
+    let at = vax.reply(r#"READ/PROMPT="Who? " SYS$INPUT WHO"#, "Who? ");
+    vax.console.write_all(b"\x1d").unwrap();
+    vax.wait_for("TELNET> ", at, 60);
+    vax.command("CLOSE");
+    vax.command("SHOW USERS/FULL");
+    vax.reply("SET HOST 10.0.2.15", "Username: ");
+    let at = vax.reply("SYSTEM", "Password: ");
+    vax.console.write_all(b"MANAGER\r").unwrap();
+    vax.wait_for("[YES]: ", at, 60);
+    vax.reply("", "Who? ");
+    vax.command("ME");
+    vax.command("WRITE SYS$OUTPUT \"I am \", WHO");
+    vax.command("SHOW TERMINAL");
+    vax.command("DISCONNECT");
+    vax.command("SHOW USERS/FULL");
+    vax.reply("SET HOST 10.0.2.15", "Username: ");
+    let at = vax.reply("SYSTEM", "Password: ");
+    vax.console.write_all(b"MANAGER\r").unwrap();
+    vax.wait_for("[YES]: ", at, 60);
+    vax.command("NO");
+    vax.command("SHOW TERMINAL");
+    vax.command("CONNECT VTA9");
+    vax.command("CONNECT/NOLOGOUT VTA1");
+    vax.command("CONNECT VTA2");
+    vax.command("SHOW TERMINAL");
+    vax.command("LOGOUT");
+    vax.command("DEASSIGN/SYSTEM TCPIP$TELNET_VTA");
+    vax.command("SHOW USERS/FULL");
     vax.command("SET TERMINAL/WIDTH=80/PAGE=24");
     vax.reply("TELNET ECHO 7779", "hello from port 7779");
     vax.reply("netcat", "echo: netcat");
@@ -697,6 +738,19 @@ fn network() {
         "TCPTEST: ok",
         "TCPIP$TELNET    LEF     4 TELNETD.EXE",
         "Terminal: _TNA1:",
+        "Terminal: _VTA1:      Device_Type: VT100         Owner: _VTA1:\nPhysical Terminal: _TNA1:\n",
+        "VTA1:          Disconnected\n$ SET HOST",
+        "    You have the following disconnected process:\n\
+         Terminal   Process name    Image name\n\
+         VTA1:      _VTA1:          ",
+        "Connect to above listed process [YES]: \nConnecting to terminal _VTA1:\nWho? ME\n",
+        "I am ME",
+        "$ DISCONNECT\n%REM-S-END",
+        "[YES]: NO\n",
+        "Terminal: _VTA2:      Device_Type: VT100         Owner: _VTA2:\nPhysical Terminal: _TNA1:\n",
+        "CONNECT VTA9\n%SYSTEM-W-NOSUCHDEV",
+        "$ CONNECT/NOLOGOUT VTA1\n$ CONNECT VTA2\n$ SHOW TERMINAL\nTerminal: _VTA2:",
+        "    Total number of users = 1,  number of processes = 1\n",
         "   Input:    9600     LFfill:  0      Width: 100      Parity: None",
         "   Output:   9600     CRfill:  0      Page:   30",
         "   Wrap               Scope              Remote             Eightbit",

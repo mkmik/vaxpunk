@@ -1169,6 +1169,10 @@ MESSAGES:
         .ASCIC  "SYSTEM"
         .ASCIC  "IVDEVNAM"
         .ASCIC  "invalid device name"
+        .LONG   SS$_DEVALLOC
+        .ASCIC  "SYSTEM"
+        .ASCIC  "DEVALLOC"
+        .ASCIC  "device already allocated to another user"
         .LONG   SS$_MEDOFL
         .ASCIC  "SYSTEM"
         .ASCIC  "MEDOFL"

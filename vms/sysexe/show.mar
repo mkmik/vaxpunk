@@ -11,10 +11,11 @@
 ; name, state, priority and image.
 ; SHOW TERMINAL shows the terminal's characteristics (lib/term.mar), or
 ; with /PERMANENT its permanent ones, under VMS's headings and names,
-; four to a line.
+; four to a line, and a virtual terminal's physical one.
 ; SHOW USERS lists the users logged in at terminals, the interactive
 ; processes, from a wildcard $GETJPI, sorted by username: how many each
-; has, or with /FULL each process and its terminal; with a username,
+; has, or with /FULL each process and its terminal, and a virtual
+; terminal's physical one, or Disconnected; with a username,
 ; only the users whose names start so. SHOW MEMORY shows the physical
 ; pages, the process slots and nonpaged pool, from $GETSYI; /PHYSICAL_PAGES,
 ; /SLOTS and /POOL choose among them. SHOW ERROR lists the devices that
@@ -47,6 +48,7 @@
         $JPIDEF
         $SYIDEF
         $DVIDEF
+        $DEVDEF
         $DCDEF
         $TTDEF
         $TT2DEF
@@ -334,10 +336,21 @@ DVIITEMS:                               ; what $GETDVIW returns of it
         .WORD   64, DVI$_DEVNAM
         .ADDRESS TTNAME
         .ADDRESS TTNAMLEN
+PHYITEMS:                               ; its physical terminal, and DEVCHAR2,
+        .WORD   64, DVI$_TT_PHYDEVNAM   ; SHOW USERS's of each terminal
+        .ADDRESS PHYNAME
+        .ADDRESS PHYLEN
+        .WORD   4, DVI$_DEVCHAR2
+        .ADDRESS CHAR2, 0
         .LONG   0
 TTNAMLEN:
         .WORD   0
 TTNAME: .BLKB   64
+PHYLEN: .WORD   0
+PHYNAME:.BLKB   64
+CHAR2:  .LONG   0
+TERMDSC:.LONG   0                       ; a process's terminal, for $GETDVI
+        .ADDRESS 0
 ; The characteristics SHOW TERMINAL shows, in VMS's order: each a bit,
 ; its flags, TT2, NOT and ALT, and its name, .ASCIC, then for ALT the
 ; name for off; a 255 ends them.
@@ -641,7 +654,16 @@ SHOWTERM:
         ADDTEXT "Owner: "
         BSBW    ADDNAME
         BSBW    SAY
-        PRINT   ""
+        MOVZWL  PHYLEN, R0              ; a virtual terminal's physical one
+        BEQL    20$
+        CMPC5   R0, PHYNAME, #0, TTNAMLEN, TTNAME
+        BEQL    20$
+        ADDTEXT "Physical Terminal: "
+        MOVAB   PHYNAME, R1
+        MOVZWL  PHYLEN, R2
+        BSBW    ADD
+        BSBW    SAY
+20$:    PRINT   ""
         ADDTEXT "   Input:"
         MOVZBL  TTIOSB+3, R1            ; receive
         BSBW    SPEED
@@ -833,6 +855,7 @@ SHOWUSERS:
         MOVAB   R_TERM(R6), R1
         MOVZWL  R_TERMLEN(R6), R2
         BSBW    ADD
+        BSBW    PHYSICAL
         BSBW    SAY
         INCL    R7
         ADDL2   #REC, R6
@@ -1235,6 +1258,34 @@ ADDNAME:
         MOVAB   NAME, R1
         MOVZWL  NAMLEN, R2
         BRB     ADD
+
+; PHYSICAL: R6 = SHOW USERS's record of a process. For a virtual
+; terminal, appends its physical terminal, without the underscore, or
+; Disconnected, in a column after the terminal's, as VMS's SHOW USERS
+; does. Uses R0-R5.
+PHYSICAL:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5>
+        MOVZWL  R_TERMLEN(R6), TERMDSC
+        MOVAB   R_TERM(R6), TERMDSC+4
+        CLRW    PHYLEN
+        $GETDVIW_S DEVNAM=TERMDSC, ITMLST=PHYITEMS
+        BLBC    R0, 90$
+        BBS     #DEV$V_DET, CHAR2, 20$
+        MOVZWL  PHYLEN, R0
+        BEQL    90$
+        DECL    R0                      ; past the underscore
+        CMPC5   R0, PHYNAME+1, #0, R_TERMLEN(R6), R_TERM(R6)
+        BEQL    90$                     ; its own
+        MOVL    #54, R3
+        BSBW    PADTO
+        MOVAB   PHYNAME+1, R1
+        MOVZWL  PHYLEN, R2
+        DECL    R2
+        BRW     ADD
+20$:    MOVL    #54, R3
+        BSBW    PADTO
+        ADDTEXT "Disconnected"
+90$:    RSB
 
 ; PADTO: appends blanks to LINE until it is R3 characters long. Uses R0-R2.
 PADTO:
