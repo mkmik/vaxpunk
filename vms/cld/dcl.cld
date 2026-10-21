@@ -37,6 +37,12 @@ define verb DEASSIGN
 	qualifier TABLE, value(required)
 	disallow any2(PROCESS, SYSTEM, TABLE)
 
+! DECK and EOD: RMS's, as an image reads a procedure's data; DCL gets
+! them only when none does (dcl/proc.mar).
+define verb DECK
+	cliroutine DECK
+	qualifier DOLLARS, value
+
 define verb DEFINE
 	cliroutine DEFINE
 	parameter P1, label=LOGICAL_NAME, prompt="Log_name", value(required)
@@ -52,6 +58,9 @@ define verb ELSE
 	parameter P1, label=COMMAND, value(type=$rest_of_line)
 
 define verb ENDIF
+	cliroutine ENDIF
+
+define verb EOD
 	cliroutine ENDIF
 
 define verb EXIT

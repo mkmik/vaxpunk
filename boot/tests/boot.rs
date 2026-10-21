@@ -445,7 +445,7 @@ const CONTROL_KEYS: Phase = Phase {
     lines: &[
         "*CANCEL*",
         "CTRLC: ok",
-        "  HELP          IF            INITIALIZE    LEXICALS      LINE_EDITING",
+        "  LEXICALS      LINE_EDITING  LOGOUT        MCR           MOUNT",
         "    2\t        Welcome to vaxpunk, an OpenVMS clone for arm64",
         "$STATUS == 268435500   Hex = 1000002C",
         "%SYSTEM-W-NONEXPR, nonexistent process",
