@@ -101,6 +101,10 @@
 ;   ELSE [command], ..., ENDIF
 ;               a block: the lines up to ELSE if it is true, else those
 ;               after, up to ENDIF
+;   DECK[/DOLLARS[=string]], EOD
+;               data lines that start with $: those after DECK, up to
+;               EOD or to the line string starts; what reads the data,
+;               not DCL, sees to it
 ;   GOTO label  goes on from the procedure's line label: starts
 ;   EXIT [status]
 ;               ends the procedure, with $STATUS or status; outside
@@ -211,7 +215,7 @@
         .EXTERNAL DCL$SAMESTR, DCL$SAY, DCL$SETCOMMAND, DCL$SETDEF, DCL$SHOW
         .EXTERNAL DCL$SKIP, DCL$STATUS, DCL$STRASSIGN, DCL$SUBST, DCL$SYMNAM
         .EXTERNAL DCL$TOSTR, DCL$VSTACK, DCL$WRITE, DCL$ELSE, DCL$ENDIF
-        .EXTERNAL DCL$DATAIN, DCL$DATAEND
+        .EXTERNAL DCL$DATAIN, DCL$DATAEND, DCL$DECK
         .EXTERNAL DCL$ON, DCL$ONACT, DCL$CYACT, DCL$HASCY, DCL$NOON
 
         .PSECT  DATA, NOEXE, WRT, LONG
@@ -273,6 +277,8 @@ ROUTINES:
         .ADDRESS DCL$CONTINUE
         .ASCIC  "DEASSIGN"
         .ADDRESS DCL$DEASSIGN
+        .ASCIC  "DECK"
+        .ADDRESS DCL$DECK
         .ASCIC  "DEFINE"
         .ADDRESS DCL$DEFINE
         .ASCIC  "DELSYM"

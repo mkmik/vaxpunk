@@ -50,21 +50,35 @@ $ ! ON: TYPE's error, RMS-E-FNF, runs the ON command, once.
 $ ON ERROR THEN ST = $STATUS
 $ TYPE NOSUCH.TXT
 $ IF ST .NE. %X10018292 .OR. F$ENVIRONMENT("ON_SEVERITY") .NES. "ERROR" THEN GOTO BAD
-$ ! A file on the ramdisk: CREATE's data line, a record WRITE adds, then
-$ ! read to its end; and READ's data line.
+$ ! A file on the ramdisk: CREATE's data lines, one DECK lets start with
+$ ! $, a record WRITE adds, then read to its end; and READ's data line.
 $ CREATE DCLTEST.TMP
 one
+$ DECK
+$ two
+$ EOD
 $ OPEN/APPEND OUT DCLTEST.TMP
-$ WRITE OUT "two ", N
+$ WRITE OUT "three ", N
 $ CLOSE OUT
 $ OPEN IN DCLTEST.TMP
 $ READ IN L
 $ READ IN L2
-$ READ/END_OF_FILE=EOF IN L3
+$ READ IN L3
+$ READ/END_OF_FILE=EOF IN L4
 $ GOTO BAD
 $ EOF:
 $ CLOSE IN
-$ IF L .NES. "one" .OR. L2 .NES. "two 3" .OR. F$TRNLNM("IN") .NES. "" THEN GOTO BAD
+$ IF L .NES. "one" .OR. L2 .NES. "$ two" .OR. L3 .NES. "three 3" THEN GOTO BAD
+$ IF F$TRNLNM("IN") .NES. "" THEN GOTO BAD
+$ ! DECK/DOLLARS: $ EOD is data, the string ends it.
+$ CREATE DCLTEST.TMP
+$ DECK/DOLLARS="$ END"
+$ EOD
+$ END
+$ OPEN IN DCLTEST.TMP
+$ READ IN L
+$ CLOSE IN
+$ IF L .NES. "$ EOD" THEN GOTO BAD
 $ DELETE DCLTEST.TMP;*
 $ READ SYS$INPUT L
 data

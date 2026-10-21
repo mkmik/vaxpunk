@@ -54,6 +54,14 @@ CREITEMS:                               ; SYS$INPUT, the mailbox
 DCHAN:  .LONG   0                       ; DCL's channel to it
 DATAMBX:                                ; 1 while it is SYS$INPUT
         .LONG   0
+DECKEOD:                                ; 1 after DECK: only $ EOD ends the data
+        .LONG   0
+ENDSTR: .ASCIC  "$"                     ; what ends it, RMS's PIO$GT_ENDSTR: $, or DECK/DOLLARS's string
+        .BLKB   14
+V_EOD:  .ASCIC  "EOD"
+V_DECK: .ASCIC  "DECK"
+V_DOLL: .ASCIC  "/DOLL"
+DELIMS: .ASCII  " !=:/"                 ; what ends a word for SCAN
 V_STATUS:
         .ASCID  "STATUS"
 V_THEN: .ASCIC  "THEN"
@@ -193,39 +201,197 @@ DCL$GETPROC::
         MOVL    #1, R0
         RSB
 
-; DCL$DATALINE: if the procedure running's next line is data, not a
-; command, which starts with $, copies it to DCL$LINE and goes past it:
-; R0 = 1, R7 = its length. Else R0 = 0. Uses R0-R5.
+; DCL$DATALINE: the procedure running's next line, if it is data, as RMS
+; reads a procedure as an image's SYS$INPUT (RM1INPSCN): a line that
+; doesn't start with $, or after DECK one that isn't $ EOD, or after
+; DECK/DOLLARS=string one that doesn't start with string. R0 = 1, the
+; line in DCL$LINE, R7 = its length, and goes past it. At the end of a
+; set of data, $ EOD or that string, R0 = 2, and goes past it, back to $
+; ending the data: more may follow, a set of its own. At a command, or
+; past the last line, R0 = 0. Goes past a DECK line, and on to the next.
+; Uses R0-R5.
 DCL$DATALINE::
         .JSB_ENTRY  OUTPUT=<R7>, SCRATCH=<R2, R3, R4, R5>
-        MOVL    DCL$DEPTH, R1
+5$:     MOVL    DCL$DEPTH, R1
         BEQL    80$
-        MOVL    PNEXT[R1], R2
-        CMPL    R2, PEND[R1]
+        MOVL    PNEXT[R1], R4
+        CMPL    R4, PEND[R1]
         BGEQU   80$
-        MOVZBL  (R2), R7
-        MOVAB   1(R2), R3
-        ADDL3   R3, R7, R4              ; past it
-10$:    CMPL    R3, R4
-        BGEQU   20$
-        CMPB    (R3), #^A/ /
-        BNEQ    15$
-        INCL    R3
-        BRB     10$
-15$:    CMPB    (R3), #^A/$/
-        BEQL    80$
-20$:    MOVL    R4, PNEXT[R1]
-        MOVC3   R7, 1(R2), DCL$LINE
+        MOVZBL  (R4), R7
+        MOVAB   1(R4), R6
+        ADDL2   R6, R7                  ; past it
+        BSBW    DCL$SKIP
+        MOVZBL  ENDSTR, R0
+        SUBL3   R6, R7, R1
+        CMPL    R1, R0
+        BLSSU   50$
+        CMPC3   R0, (R6), ENDSTR+1
+        BNEQ    50$
+        MOVL    R1, R6                  ; past it
+        CMPW    ENDSTR, #^X2401         ; $ alone?
+        BEQL    10$
+        MOVW    #^X2401, ENDSTR         ; DECK/DOLLARS's string: back to $
+        BRB     60$
+10$:    MOVAB   V_EOD, R1
+        BSBW    SCAN
+        BLBC    R0, 20$
+        CLRL    DECKEOD
+        BSBW    ENDED
+        BLBC    R0, 80$                 ; EOD with more: DCL's error
+        BRB     60$
+20$:    BLBS    DECKEOD, 50$            ; after DECK, $ lines are data
+        MOVAB   V_DECK, R1
+        BSBW    SCAN
+        BLBC    R0, 80$                 ; a command
+        BSBW    GOTDECK
+        BLBC    R0, 80$                 ; one DCL says is wrong
+        MOVL    DCL$DEPTH, R1
+        MOVL    R7, PNEXT[R1]
+        BRB     5$
+50$:    MOVL    DCL$DEPTH, R1
+        MOVL    R7, PNEXT[R1]
+        SUBL2   R4, R7
+        DECL    R7
+        MOVC3   R7, 1(R4), DCL$LINE
         MOVL    #1, R0
         RSB
+60$:    MOVL    DCL$DEPTH, R1
+        MOVL    R7, PNEXT[R1]
+        MOVL    #2, R0
+        RSB
+80$:    CLRL    DECKEOD                 ; a deck ends with its procedure
+        MOVW    #^X2401, ENDSTR
+        CLRL    R0
+        RSB
+
+; GOTDECK: R6 = what follows DECK in a line, R7 = past it. What ends the
+; data after it: $ EOD, or /DOLLARS=string's string, 1 to 15 characters,
+; in capitals but in quotes, where "" is one ". R0 = 1, or 0 if the line
+; is something else. Uses R0-R3, R5, R6.
+GOTDECK:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R5, R6>
+        MOVAB   V_DOLL, R1
+        BSBW    SCAN
+        BLBS    R0, 10$
+        BSBW    ENDED
+        BLBS    R0, 70$
+        RSB
+10$:    BSBW    ENDED
+        BLBS    R0, 70$
+        CMPB    (R6), #^A/=/
+        BEQL    20$
+        CMPB    (R6), #^A/:/
+        BNEQ    80$
+20$:    INCL    R6
+        BSBW    DCL$SKIP
+        BSBW    ENDED
+        BLBS    R0, 70$
+        MOVAB   ENDSTR+1, R3
+        CLRL    R5                      ; its length
+        CLRL    R2                      ; 1 in quotes
+        CMPB    (R6), #^A/"/
+        BNEQ    30$
+        INCL    R2
+        INCL    R6
+30$:    CMPL    R6, R7
+        BGEQU   60$
+        MOVZBL  (R6)+, R0
+        BLBC    R2, 40$
+        CMPB    R0, #^A/"/
+        BNEQ    50$
+        CMPL    R6, R7
+        BGEQU   60$
+; two quotes are one
+        CMPB    (R6), #^A/"/
+        BNEQ    55$
+        INCL    R6
+        BRB     50$
+40$:    CMPB    R0, #^A/ /
+        BEQL    54$
+        CMPB    R0, #^A/!/
+        BEQL    54$
+        CMPB    R0, #^A/a/
+        BLSSU   50$
+        CMPB    R0, #^A/z/
+        BGTRU   50$
+        SUBB2   #^A/a/-^A/A/, R0
+50$:    CMPL    R5, #15
+        BGEQU   80$
+        MOVB    R0, (R3)+
+        INCL    R5
+        BRB     30$
+54$:    DECL    R6
+55$:    BSBW    DCL$SKIP
+        BSBW    ENDED
+        BLBC    R0, 80$
+60$:    TSTL    R5
+        BEQL    70$
+        MOVB    R5, ENDSTR
+        MOVL    #1, R0
+        RSB
+70$:    MOVL    #1, DECKEOD
+        MOVL    #1, R0
+        RSB
+80$:    MOVW    #^X2401, ENDSTR
+        CLRL    R0
+        RSB
+
+; SCAN: R1 = a word in capitals, .ASCIC, R6 = the next character of a
+; line, R7 = past its last. Skips blanks, and R0 = 1 if the line goes on
+; with the word, in any case, R6 past it, past the rest of a word longer
+; than one character, up to a blank, !, =, : or /, and past the blanks
+; after, as RMS's DCL_SCAN; else R0 = 0, R6 past the blanks. Uses R0-R3.
+SCAN:
+        .JSB_ENTRY  OUTPUT=<R6>, SCRATCH=<R2, R3>
+        BSBW    DCL$SKIP
+        MOVZBL  (R1)+, R0
+        ADDL3   R6, R0, R2              ; past it, if it is there
+        CMPL    R2, R7
+        BGTRU   80$
+        MOVL    R6, R3
+10$:    CMPL    R3, R2
+        BGEQU   30$
+        MOVZBL  (R3)+, R0
+        CMPB    R0, #^A/a/
+        BLSSU   20$
+        CMPB    R0, #^A/z/
+        BGTRU   20$
+        SUBB2   #^A/a/-^A/A/, R0
+20$:    CMPB    R0, (R1)+
+        BEQL    10$
 80$:    CLRL    R0
         RSB
+30$:    SUBL3   R6, R2, R3
+        MOVL    R2, R6
+        CMPL    R3, #1
+        BEQL    50$
+40$:    CMPL    R6, R7
+        BGEQU   50$
+        LOCC    (R6), #5, DELIMS
+        BNEQ    50$
+        INCL    R6
+        BRB     40$
+50$:    BSBW    DCL$SKIP
+        MOVL    #1, R0
+        RSB
+
+; ENDED: R6 = the next character of a line, R7 = past its last. R0 = 1
+; if nothing is left but a comment, else 0.
+ENDED:
+        .JSB_ENTRY
+        MOVL    #1, R0
+        CMPL    R6, R7
+        BGEQU   10$
+        CMPB    (R6), #^A/!/
+        BEQL    10$
+        CLRL    R0
+10$:    RSB
 
 ; DCL$DATAIN: before an image runs. In a procedure, SYS$INPUT becomes a
 ; mailbox that holds the data lines after the command, up to the next
-; command, and an end of file, as VMS gives an image the procedure as its
-; SYS$INPUT: LIB$GET_INPUT, CREATE and the rest read them, and nothing
-; after. Uses R0-R5.
+; command, and an end of file, after each set DCL$DATALINE ends too, as
+; VMS gives an image the procedure as its SYS$INPUT: LIB$GET_INPUT,
+; CREATE and the rest read them, and nothing after. Uses R0-R5.
 ; ponytail: SYS$INPUT replaced in the process's table, and put back after,
 ; for want of access modes; up to PBUFSIZE bytes of lines, the mailbox's
 ; buffer quota; a mailbox takes TMPMBX. A procedure is a file on VMS,
@@ -245,7 +411,10 @@ DCL$DATAIN::
         BLBC    R0, 20$
         $QIOW_S CHAN=DCHAN, FUNC=#IO$_WRITEVBLK, P1=DCL$LINE, P2=R7
         BRB     10$
-20$:    $QIOW_S CHAN=DCHAN, FUNC=#IO$_WRITEOF
+20$:    PUSHL   R0
+        $QIOW_S CHAN=DCHAN, FUNC=#IO$_WRITEOF
+        CMPL    (SP)+, #2               ; a set's end: another may follow
+        BEQL    10$
         $GETDVIW_S CHAN=DCHAN, ITMLST=MBXITEMS
         BLBC    R0, 70$
         MOVW    MBXLEN, CREITEMS
@@ -339,10 +508,20 @@ DCL$ELSE::
         BSBW    SKIPBLK
         BRW     DCL$NEXT
 
-; DCL$ENDIF, ENDIF: the end of a block. Nothing to do.
+; DCL$ENDIF, ENDIF: the end of a block. Nothing to do; nor for EOD,
+; when an image didn't read the data it ends.
 DCL$ENDIF::
         .EXCEPTION_ENTRY
         BRW     DCL$NEXT
+
+; DCL$DECK, DECK[/DOLLARS[=string]]: RMS's, not DCL's, as on VMS:
+; DCL$DATALINE goes past it as an image or READ reads the data after it.
+; One DCL gets, typed, after a command that reads no data, or with a
+; qualifier RMS doesn't take, is an error.
+DCL$DECK::
+        .EXCEPTION_ENTRY
+        PRINT   "%DCL-W-IVVALU, invalid value syntax - see command documentation"
+        BRW     DCL$WARN
 
 ; NEXTTHEN: after an IF without THEN. Reads the procedure's next line,
 ; which must be $ THEN [command]: R0 = 1 and R6 = the command, R7 = past

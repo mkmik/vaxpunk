@@ -56,8 +56,9 @@ status = "todo"
 
 [[feature]]
 id = "deck"
-title = "DECK and EOD: data lines that start with $"
-status = "todo"
+title = "DECK[/DOLLARS] and EOD: data lines that start with $"
+status = "done"
+note = "As RMS's RM1INPSCN, in DCL$DATALINE"
 
 [[feature]]
 id = "wait"
@@ -111,7 +112,11 @@ vaxpunk's are in `vms/sysexe/dcl/proc.mar`. `@` reads the whole file
 into a 16 KB buffer shared by the levels running. A procedure's data
 lines go to the image through a mailbox that replaces `SYS$INPUT` while
 it runs, since logical names have no access modes and RMS has no
-process-permanent files yet (PRD-0003 tier 1 #6). `STARTUP` runs
+process-permanent files yet (PRD-0003 tier 1 #6). Which lines are data
+is decided as VMS's RMS decides it for an image reading the procedure:
+a `$` line ends them, but after `DECK` only `$ EOD` does, or the
+string `DECK/DOLLARS=string` gives; each `EOD` ends one set and is an
+end of file in the mailbox, and the next set may follow. `STARTUP` runs
 `SYSTARTUP_VMS.COM` as its `SYS$INPUT`, as a batch job would run
 ([ADR-0029](../../adr/0029-loginout-and-sysuaf.md)).
 `vms/sysmgr/dcltest.com` checks procedures in the boot test.

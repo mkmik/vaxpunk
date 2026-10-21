@@ -473,6 +473,31 @@
   /TABLE=table-name
 
   Deletes it from that table.
+1 DECK
+  Marks the start of data lines in a command procedure that may start
+  with $, for the command or program before it to read.
+
+  Format
+
+    DECK
+
+  Without DECK a line that starts with $ ends the data. After it, only
+  EOD does, or with /DOLLARS=string a line that starts with string. Each
+  ends one set of data; the next ends at a $ again.
+2 Qualifiers
+/DOLLARS
+  /DOLLARS[=string]
+
+  Ends the data at a line that starts with string, 1 to 15 characters,
+  in capitals unless in quotes. Use it when the data has $ EOD lines.
+  Without a string, EOD ends it.
+2 Examples
+
+  $ CREATE WEATHER.COM
+  $ DECK
+  $ WRITE SYS$OUTPUT "Sunny"
+  $ EOD
+  $ @WEATHER
 1 DEFINE
   Makes a logical name, which stands for its equivalence name wherever
   a file or device is named.
@@ -709,6 +734,14 @@
   See IF.
 1 ENDIF
   Ends a block IF. See IF.
+1 EOD
+  Ends the data lines DECK started, or any data lines, in a command
+  procedure. The command or program reading them sees the end of the
+  file there. See DECK.
+
+  Format
+
+    EOD
 1 EXIT
   Ends the command procedure, going back to the one that called it.
 
