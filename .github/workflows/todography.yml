@@ -13,6 +13,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - run: cargo install --locked todography@0.2.0
-      - run: todography lint --strict
+      - uses: mkmik/todography@v0.12.0
+        with:
+          args: --strict
       - run: todography build
