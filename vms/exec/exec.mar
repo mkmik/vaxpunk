@@ -130,7 +130,7 @@ EXEC$START::
         JSB     G^EXE$OUTHEX
         JSB     G^EXE$OUTCRLF
 5$:
-        CLRL    R1                      ; DKA0:, whatever its label
+        CLRQ    R1                      ; DKA0:, whatever its label, as DISK$label
         JSB     G^FIL$MOUNT
         BLBS    R0, 10$
         MOVAB   NOMOUNT, R1

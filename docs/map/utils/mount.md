@@ -17,7 +17,7 @@ note = "ADR-0009, ADR-0012"
 
 [[feature]]
 id = "mount"
-title = "MOUNT device [label], seen by every process"
+title = "MOUNT device [label [logical-name]], seen by every process, as DISK$label without a name"
 status = "done"
 milestone = "m0"
 note = "ADR-0009; mounted at boot by SYSTARTUP_VMS.COM"
@@ -59,7 +59,7 @@ note = "PRD-0003 tier 2 #11"
 
 [[feature]]
 id = "mount-qualifiers"
-title = "MOUNT/SYSTEM, /GROUP, private mounts, /NOWRITE, /OVERRIDE, a logical name for the volume"
+title = "MOUNT/SYSTEM, /GROUP, private mounts, /NOWRITE, /OVERRIDE"
 status = "todo"
 note = "PRD-0003 tier 3 #24; f11.mar ponytail: every mount is /SYSTEM"
 
@@ -158,4 +158,5 @@ work on the data disk, `DKB0:`, and the ramdisk, `MDA0:`, which
 `SYSTARTUP_VMS.COM` initializes and mounts at each boot; `DKA0:` is
 mounted by the executive, write locked. `/OWNER_UIC` and `/PROTECTION`
 are the only qualifiers (PRD-0003 tier 3 #24). Every mount is a system
-mount, and a volume is at most 4,096 blocks.
+mount, whose logical name, `DISK$label` or `MOUNT`'s third parameter,
+goes in the system table, and a volume is at most 4,096 blocks.

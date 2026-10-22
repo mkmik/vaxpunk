@@ -51,7 +51,7 @@
         .EXTERNAL EXE$ALONONPAGED, EXE$DEANONPGDSIZ, RMS$LOCATE, MD$IO
         .EXTERNAL IOC$ALLOCIRP, IOC$REQCOM, IOC$AB_DKA0, IOC$AB_DKB0, IOC$AB_MDA0
         .EXTERNAL EXE$PROBER_DSC, RMS$VOLIDLE, SCH$GL_CURPCB, SCH$WAIT, SCH$WAKEPCB
-        .EXTERNAL XQP$GL_IRP, FIL$ACLCHK
+        .EXTERNAL XQP$GL_IRP, FIL$ACLCHK, LNM$GQ_SYSTEM, LNM$CREATE, LNM$DELETE
 
 BLOCK = 512
 MAXREAD = 127                           ; blocks a READLBLK reads, below 64 KB
@@ -100,6 +100,7 @@ F11$AB_DKA0::                           ; DKA0:'s VCB, the system disk's
         .BLKB   VCB$L_UCB-VCB$T_DEVNAM-5
         .ADDRESS IOC$AB_DKA0
         .LONG   0, 0, 0                 ; OWNER, PROT, SBMAPBLKS
+        .BLKB   VCB$K_LENGTH-VCB$T_LOGNAM
 F11$AB_DKB0::                           ; DKB0:'s, the data disk's
         .LONG   1@VCB$V_WRITE, 0, 0, 0
         .ASCII  "DKB0:"
@@ -107,12 +108,14 @@ F11$AB_DKB0::                           ; DKB0:'s, the data disk's
         .BLKB   VCB$L_UCB-VCB$T_DEVNAM-6
         .ADDRESS IOC$AB_DKB0
         .LONG   0, 0, 0                 ; OWNER, PROT, SBMAPBLKS
+        .BLKB   VCB$K_LENGTH-VCB$T_LOGNAM
 F11$AB_MDA0::                           ; MDA0:'s, the ramdisk's
         .LONG   <1@VCB$V_WRITE>!<1@VCB$V_RAMDISK>, 0, 0, 0
         .ASCII  "MDA0:"
         .BLKB   VCB$L_UCB-VCB$T_DEVNAM-5
         .ADDRESS IOC$AB_MDA0
         .LONG   0, 0, 0                 ; OWNER, PROT, SBMAPBLKS
+        .BLKB   VCB$K_LENGTH-VCB$T_LOGNAM
 F11$A_VCBEND::                          ; past the last VCB
 F11$AB_DIRBLK::                         ; the directory block FIL$SEARCHDIR reads
         .BLKB   BLOCK
@@ -137,7 +140,9 @@ IMAGEDEF:                               ; where images are
         .ASCIC  "SYS$SYSTEM:"
 SHAREDEF:                               ; and shareable images
         .ASCIC  "SYS$SHARE:.EXE"
+DISK:   .ASCII  "DISK$"                 ; a volume's logical name's start, then its label
 LABEL:  .BLKB   13                      ; the label $MOUNT asks for, .ASCIC
+LOGNAM: .BLKB   256                     ; and the logical name it gives the device, .ASCIC
         .ALIGN  LONG
 MNTSET: .LONG   0                       ; bit 0: $MOUNT has MNTOWNER, bit 1 MNTPROT
 MNTOWNER:                               ; the owner and protection it gives the volume
@@ -368,10 +373,12 @@ FIL$SELECT::
         MOVL    #SS$_NORMAL, R0
         RSB
 
-; FIL$MOUNT: R1 = the label the volume must have, .ASCIC, or 0 for any.
+; FIL$MOUNT: R1 = the label the volume must have, .ASCIC, or 0 for any,
+; R2 = a logical name for the device, .ASCIC, or 0 for DISK$label.
 ; Mounts F11$GL_VCB's volume: reads its home block and INDEXF.SYS's
 ; header, which maps the others, and its owner and protection, and, if
-; the disk can be written, finds the storage bitmap, and reports it on
+; the disk can be written, finds the storage bitmap, defines the logical
+; name in the system table as the device, _DDCU:, and reports it on
 ; the console. R0 = SS$_NORMAL,
 ; SS$_NOHOMEBLK if there is no ODS-2 home block, SS$_INCVOLLABEL if the
 ; label isn't R1's, or the disk's error. Holding FIL$LOCK, but at boot,
@@ -380,7 +387,15 @@ FIL$MOUNT::
         .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5>
         MOVL    F11$GL_VCB, R5
         MOVL    R1, R4
-        MOVAB   VCB$AB_INDEXF(R5), R3   ; the home block, for now
+        CLRB    VCB$T_LOGNAM(R5)        ; DISK$label, unless R2 is a name
+        TSTL    R2
+        BEQL    5$
+        PUSHR   #^M<R4, R5>
+        MOVZBL  (R2), R0
+        INCL    R0
+        MOVC3   R0, (R2), VCB$T_LOGNAM(R5)
+        POPR    #^M<R4, R5>
+5$:     MOVAB   VCB$AB_INDEXF(R5), R3   ; the home block, for now
         MOVL    R3, R0
         MOVL    #1, R1
         MOVL    #1, R2
@@ -439,6 +454,7 @@ FIL$MOUNT::
         DECL    R0
         MOVL    R0, VCB$L_SBMAPBLKS(R5)
 30$:    BISL2   #1@VCB$V_MOUNTED, VCB$L_STATUS(R5)
+        BSBB    MNTLNM
         DSBINT  #IPL$_SYNCH             ; the console, a line at a time
         MOVAB   MOUNTED, R1
         JSB     G^EXE$OUTZSTRING
@@ -459,21 +475,55 @@ FIL$MOUNT::
 85$:    MOVL    #SS$_INCVOLLABEL, R0
 90$:    RSB
 
+; MNTLNM: R5 = a VCB FIL$MOUNT mounted a volume on. Makes its
+; VCB$T_LOGNAM, unless it has one, DISK$ and the label, and defines it in
+; the system table as the device, _DDCU:. Uses R0-R4.
+; ponytail: a name LNM$CREATE can't make, for want of pool, is left out,
+; and the volume mounted all the same; VMS's MOUNT fails.
+MNTLNM:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4>
+        PUSHR   #^M<R5, R6, R7, R8, R9>
+        TSTB    VCB$T_LOGNAM(R5)
+        BNEQ    10$
+        MOVAB   VCB$T_LOGNAM+1(R5), R3
+        MOVL    DISK, (R3)+
+        MOVB    DISK+4, (R3)+
+        MOVZBL  VCB$T_VOLNAME(R5), R0
+        ADDB3   #5, R0, VCB$T_LOGNAM(R5)
+        MOVC3   R0, VCB$T_VOLNAME+1(R5), (R3)
+        MOVL    (SP), R5
+10$:    SUBL2   #8, SP                  ; the device's name, the equivalence
+        MOVB    #^A/_/, (SP)
+        MOVL    VCB$T_DEVNAM(R5), 1(SP)
+        MOVB    #^A/:/, 5(SP)
+        MOVL    SP, R8
+        MOVL    #6, R9
+        MOVZBL  VCB$T_LOGNAM(R5), R7
+        MOVAB   VCB$T_LOGNAM+1(R5), R6
+        MOVAQ   G^LNM$GQ_SYSTEM, R5
+        BSBW    LNM$CREATE
+        ADDL2   #8, SP
+        POPR    #^M<R5, R6, R7, R8, R9>
+        RSB
+
 ; $MOUNT itmlst: mounts the Files-11 volume on the disk the item list's
 ; MNT$_DEVNAM names, DKA0:, DKB0: or MDA0:, if its label is MNT$_VOLNAM's.
 ; MNT$_OWNER and MNT$_VPROT, a UIC and a protection mask, stand for the
-; volume's own while it is mounted, and take VOLPRO. SS$_DEVMOUNT if one
-; is mounted there already, SS$_BADPARAM for an item too short. Every
-; process sees it, as VMS's MOUNT/SYSTEM, which takes SYSNAM: SS$_NOPRIV
-; without.
-; ponytail: no other items, flags or logical name; VMS lets the volume's
-; owner give MNT$_OWNER and MNT$_VPROT without VOLPRO.
+; volume's own while it is mounted, and take VOLPRO. MNT$_LOGNAM is a
+; logical name for the device, DISK$label without one, which goes in the
+; system table. SS$_DEVMOUNT if one is mounted there already,
+; SS$_BADPARAM for an item too short, SS$_IVLOGNAM for a logical name
+; longer than 255. Every process sees it, as VMS's MOUNT/SYSTEM, which
+; takes SYSNAM: SS$_NOPRIV without.
+; ponytail: no other items or flags; VMS lets the volume's owner give
+; MNT$_OWNER and MNT$_VPROT without VOLPRO.
         .ENTRY  EXE$MOUNT, ^M<R2, R3, R4, R5, R6, R7, R8>
         MOVL    SCH$GL_CURPCB, R1
         MOVL    #SS$_NOPRIV, R0
         IFNPRIV SYSNAM, 90$, R1
         CLRQ    R6                      ; the device name: its address, length
         CLRB    LABEL
+        CLRB    LOGNAM
         CLRL    MNTSET
         MOVL    4(AP), R8
 10$:    IFNORD  #4, (R8), 85$
@@ -489,11 +539,20 @@ FIL$MOUNT::
         MOVL    R2, R7
         BRB     30$
 20$:    CMPW    2(R8), #MNT$_VOLNAM
-        BNEQ    25$
+        BNEQ    23$
         CMPL    R2, #12
         BGTRU   88$
         MOVB    R2, LABEL
         MOVC3   R2, (R1), LABEL+1
+        BRB     30$
+23$:    CMPW    2(R8), #MNT$_LOGNAM
+        BNEQ    25$
+        TSTL    R2
+        BEQL    89$
+        CMPL    R2, #255
+        BGTRU   87$
+        MOVB    R2, LOGNAM
+        MOVC3   R2, (R1), LOGNAM+1
         BRB     30$
 25$:    CMPW    2(R8), #MNT$_OWNER
         BNEQ    27$
@@ -530,7 +589,11 @@ FIL$MOUNT::
         TSTB    (R1)
         BNEQ    50$
         CLRL    R1
-50$:    BSBW    FIL$MOUNT
+50$:    MOVAB   LOGNAM, R2
+        TSTB    (R2)
+        BNEQ    55$
+        CLRL    R2
+55$:    BSBW    FIL$MOUNT
         BLBC    R0, 80$
         MOVL    F11$GL_VCB, R1
         BBC     #0, MNTSET, 60$
@@ -541,19 +604,21 @@ FIL$MOUNT::
         RET
 85$:    MOVL    #SS$_ACCVIO, R0
         RET
+87$:    MOVL    #SS$_IVLOGNAM, R0
+        RET
 88$:    MOVL    #SS$_INCVOLLABEL, R0
         RET
 89$:    MOVL    #SS$_BADPARAM, R0
 90$:    RET
 
 ; $DISMOU devnam, flags: dismounts the volume on the disk devnam names,
-; DKB0: or MDA0:: the file system forgets it, and $MOUNT may mount it
-; again, or $INIT_VOL write another there. SS$_DEVNOTMOUNT if none is
-; mounted there, SS$_DEVACTIVE for the system disk, DKA0:, or while a
-; process has a file on the volume open. SYSNAM, as $MOUNT, or
-; SS$_NOPRIV.
+; DKB0: or MDA0:: the file system forgets it, and the logical name
+; $MOUNT defined for it goes, and $MOUNT may mount it again, or
+; $INIT_VOL write another there. SS$_DEVNOTMOUNT if none is mounted
+; there, SS$_DEVACTIVE for the system disk, DKA0:, or while a process has
+; a file on the volume open. SYSNAM, as $MOUNT, or SS$_NOPRIV.
 ; ponytail: no flags.
-        .ENTRY  EXE$DISMOU, ^M<R2, R3, R4>
+        .ENTRY  EXE$DISMOU, ^M<R2, R3, R4, R6, R7>
         MOVL    SCH$GL_CURPCB, R1
         MOVL    #SS$_NOPRIV, R0
         IFNPRIV SYSNAM, 90$, R1
@@ -575,6 +640,11 @@ FIL$MOUNT::
         BSBW    RMS$VOLIDLE
         BLBC    R0, 80$
         BICL2   #1@VCB$V_MOUNTED, VCB$L_STATUS(R1)
+        MOVZBL  VCB$T_LOGNAM(R1), R7    ; and its logical name goes
+        MOVAB   VCB$T_LOGNAM+1(R1), R6
+        MOVAQ   G^LNM$GQ_SYSTEM, R2
+        BSBW    LNM$DELETE
+        MOVL    #SS$_NORMAL, R0
 80$:    BSBW    FIL$UNLOCK
 90$:    RET
 

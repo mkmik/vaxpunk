@@ -1,10 +1,11 @@
         .TITLE  MOUNT   Mounts a Files-11 volume
-        .IDENT  /V0.2/
+        .IDENT  /V0.3/
 ;
-; DCL's MOUNT device [label] runs this: $MOUNT mounts the volume on the
-; device if its label is that one, or whatever it is without one, as
-; /OVERRIDE=IDENTIFICATION does on VMS, and the executive reports it on
-; the console. /OWNER_UIC=uic and /PROTECTION=(code[,...]) stand for the
+; DCL's MOUNT device [label [logical-name]] runs this: $MOUNT mounts the
+; volume on the device if its label is that one, or whatever it is
+; without one, as /OVERRIDE=IDENTIFICATION does on VMS, defines the
+; logical name, with no colon, or DISK$label without one, as the device
+; in the system table, and the executive reports it on the console. /OWNER_UIC=uic and /PROTECTION=(code[,...]) stand for the
 ; volume's own owner and protection while it is mounted, a protection's
 ; categories given that access, the others all (lib/protect.mar).
 ; Returns $MOUNT's status.
@@ -19,11 +20,14 @@
 ITEMS:  .WORD   64, MNT$_DEVNAM         ; each a descriptor too, which GETVALUE fills
         .ADDRESS DEVBUF
         .LONG   0
-        .BLKL   3*3+1                   ; the rest: those given
+        .BLKL   3*4+1                   ; the rest: those given
 LABEL:  .LONG   64                      ; a descriptor of the label
         .ADDRESS LABBUF
+LOGNAM: .LONG   255                     ; and of the logical name
+        .ADDRESS LOGBUF
 DEVBUF: .BLKB   64
 LABBUF: .BLKB   64
+LOGBUF: .BLKB   255
 OWNER:  .LONG   0
 PROT:   .LONG   0
 OWNER_UIC:                              ; the qualifiers, for GET_UIC and GET_PROT
@@ -40,6 +44,16 @@ PROTECTION:
         MOVW    LABEL, (R2)+
         MOVW    #MNT$_VOLNAM, (R2)+
         MOVAB   LABBUF, (R2)+
+        CLRL    (R2)+
+        GETVALUE "LOGNAM", LOGNAM, LOGNAM
+        BLBC    R0, 10$                 ; no logical name
+        MOVZWL  LOGNAM, R0              ; WORK: is WORK, as on VMS
+        CMPB    LOGBUF-1[R0], #^A/:/
+        BNEQ    5$
+        DECW    LOGNAM
+5$:     MOVW    LOGNAM, (R2)+
+        MOVW    #MNT$_LOGNAM, (R2)+
+        MOVAB   LOGBUF, (R2)+
         CLRL    (R2)+
 10$:    PRESENT "OWNER_UIC"
         BLBC    R0, 20$

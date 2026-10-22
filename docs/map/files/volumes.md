@@ -66,9 +66,8 @@ note = "PRD-0003 tier 3 #24; f11.mar: $MOUNT and $DISMOU take no flags"
 [[feature]]
 id = "logical-names"
 title = "MOUNT defines DISK$label, or the logical name it is given"
-status = "todo"
-needs = ["/exec/logical-names"]
-note = "f11.mar ponytail: no other items, flags or logical name"
+status = "done"
+note = "MNT$_LOGNAM, in the system table as MOUNT/SYSTEM's; the system disk's DISK$label at boot; $DISMOU deletes it"
 
 [[feature]]
 id = "foreign"
@@ -115,6 +114,10 @@ on = "/files/fs-locking"
 why = "$MOUNT, $DISMOU and $INIT_VOL take the file system's lock"
 
 [[needs]]
+on = "/exec/logical-names"
+why = "MOUNT defines DISK$label, and DISMOUNT deletes it"
+
+[[needs]]
 on = "/exec/privileges"
 why = "SYSNAM to mount for everyone, VOLPRO for another's volume"
 
@@ -149,6 +152,9 @@ ramdisk ([ADR-0007](../../adr/0007-system-disk-files-11-and-rms.md),
 [ADR-0012](../../adr/0012-data-disk-writable-files-11.md)).
 `$MOUNT`, `$DISMOU` and `$INIT_VOL` are system services, which
 `MOUNT.EXE`, `INIT.EXE` and `DISMOUNT.EXE` (`t8y:/utils/mount`) call, and
-`SYSTARTUP_VMS.COM` mounts the ramdisk and the data disk. A volume has at
-most 4,096 blocks whatever the disk's size, and the only qualifiers are
-`/OWNER_UIC` and `/PROTECTION` (PRD-0003 tier 3 #24 and #36).
+`SYSTARTUP_VMS.COM` mounts the ramdisk and the data disk. Each mount
+defines `DISK$label` in the system table, or the logical name `MOUNT`'s
+third parameter gives, as the device, `_DKB0:`, and `DISMOUNT` deletes
+it. A volume has at most 4,096 blocks whatever the disk's size, and the
+only qualifiers are `/OWNER_UIC` and `/PROTECTION` (PRD-0003 tier 3 #24
+and #36).

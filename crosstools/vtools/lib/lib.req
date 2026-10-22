@@ -340,7 +340,7 @@ MACRO
 
 ! $VCBDEF
 LITERAL
-    VCB$K_LENGTH = 576,
+    VCB$K_LENGTH = 832,
     VCB$V_MOUNTED = 0,  ! a volume is mounted on it
     VCB$V_WRITE = 1,  ! the device can be written
     VCB$V_RAMDISK = 2;  ! the device is the ramdisk, MDA0:, not one of the PAL's disks
@@ -357,7 +357,8 @@ MACRO
     VCB$L_UCB = 560, 0, 32, 0 %,  ! the disk's UCB, whose driver the file system's I/O goes through
     VCB$L_OWNER = 564, 0, 32, 0 %,  ! the volume's owner, a UIC
     VCB$W_PROT = 568, 0, 16, 0 %,  ! and protection, a file header's mask: who may use its files
-    VCB$L_SBMAPBLKS = 572, 0, 32, 0 %;  ! the storage bitmap's blocks, past its SCB
+    VCB$L_SBMAPBLKS = 572, 0, 32, 0 %,  ! the storage bitmap's blocks, past its SCB
+    VCB$T_LOGNAM = 576, 0, 0, 0 %;  ! the logical name $MOUNT defined for it, .ASCIC, which $DISMOU deletes
 
 ! $UCBDEF
 LITERAL
