@@ -1,8 +1,9 @@
-! MOUNT device [label] [/OWNER_UIC=uic] [/PROTECTION=(code[,...])]:
+! MOUNT device [label [logical-name]] [/OWNER_UIC=uic] [/PROTECTION=(code[,...])]:
 ! MOUNT.EXE mounts a volume.
 define verb MOUNT
 	image MOUNT
 	parameter P1, label=DEVICE, prompt="Device", value(required)
 	parameter P2, label=LABEL
+	parameter P3, label=LOGNAM
 	qualifier OWNER_UIC, value(required, type=$uic)
 	qualifier PROTECTION, value(required, list)

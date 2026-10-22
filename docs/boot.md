@@ -133,7 +133,9 @@ compiles.
 - mounts the system disk, `DKA0:`: it reads the volume's home block and
   the index file's header, which says where every other file's header is
   (`FIL$MOUNT`), handing each read to the disk's driver (`DK$STARTIO`) in
-  an I/O request packet, as the file system always does, and prints `%MOUNT-I-MOUNTED, VAXPUNK mounted on _DKA0:`
+  an I/O request packet, as the file system always does, defines
+  `DISK$VAXPUNK`, the volume's label after `DISK$`, as `_DKA0:` in
+  `LNM$SYSTEM_TABLE`, and prints `%MOUNT-I-MOUNTED, VAXPUNK mounted on _DKA0:`
 - defines the system's logical names for it, in `LNM$SYSTEM_TABLE`:
   `SYS$SYSDEVICE` is `DKA0:`, `SYS$DISK`, the default device, is
   `SYS$SYSDEVICE:`, `SYS$SYSTEM`, where the images are, is
@@ -378,7 +380,9 @@ interpreter. It is linked high in P1, which tells the executive it is one
   SYSTEM's, `[1,4]`, unless `/OWNER_UIC` says otherwise. Each file made
   there is its maker's, which may do anything with it; its group may read
   and run it, the world nothing, unless `SET PROTECTION` says otherwise.
-  `MOUNT MDA0: label` runs `MOUNT.EXE`, whose `$MOUNT` mounts it and prints
+  `MOUNT MDA0: label` runs `MOUNT.EXE`, whose `$MOUNT` mounts it, defines
+  `DISK$label` as `_MDA0:` in the system table, or the logical name
+  given after the label, and prints
   `%MOUNT-I-MOUNTED, label mounted on _MDA0:`. Then `COPY` makes files
   there (`COPY WELCOME.TXT MDA0:[000000]`, from `[SYSMGR]`, the default), `DELETE` deletes them
   (`DELETE MDA0:[000000]WELCOME.TXT;1`), and `DIRECTORY`, `TYPE` and `RUN`
@@ -401,8 +405,9 @@ interpreter. It is linked high in P1, which tells the executive it is one
   records with carriage return carriage control, then reads lines from
   `SYS$INPUT` and `$PUT`s each, until CTRL/Z, echoed as `*EXIT*`.
 - `DISMOUNT DKB0:` runs `DISMOUNT.EXE`, whose `$DISMOU` makes the file
-  system forget the volume, unless a process has a file on it open, so
-  it can be mounted again, or initialized afresh. The system disk can't
+  system forget the volume, and deletes the logical name `MOUNT`
+  defined, unless a process has a file on it open, so it can be mounted
+  again, or initialized afresh. The system disk can't
   be dismounted (`%SYSTEM-F-DEVACTIVE`).
 - `SHOW DEVICES` (`SHO DEV`) lists the disks, mounted or not, with the
   errors the disk's driver counted in its UCB, and their volumes' labels

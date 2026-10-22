@@ -1180,7 +1180,7 @@
 
   Format
 
-    MOUNT device-name [volume-label]
+    MOUNT device-name [volume-label [logical-name]]
 2 Parameters
 
  device-name
@@ -1191,6 +1191,11 @@
 
   The label the volume must have. Without one, the volume is mounted
   whatever its label.
+
+ logical-name
+
+  A logical name for the disk, which MOUNT defines in the system table
+  and DISMOUNT deletes. Without one, it is DISK$volume-label.
 2 Qualifiers
 /OWNER_UIC
   /OWNER_UIC=uic

@@ -129,6 +129,14 @@ EMPTY:  .BYTE   0                       ; the equivalence past a name's last, .A
         MOVL    8(AP), R1
         BSBW    NAME
         BLBC    R0, 90$
+        BSBB    LNM$DELETE
+90$:    RET
+
+; LNM$DELETE: R2 = a table's queue head, R6 = a name, R7 = its length.
+; Deletes the name from the table. R0 = SS$_NORMAL, or SS$_NOLOGNAM if
+; it isn't there. Uses R0 and R1.
+LNM$DELETE::
+        .JSB_ENTRY
         DSBINT  #IPL$_SYNCH
         BSBW    FIND
         MOVL    #SS$_NOLOGNAM, R0
@@ -139,7 +147,7 @@ EMPTY:  .BYTE   0                       ; the equivalence past a name's last, .A
         BSBW    EXE$DEANONPGDSIZ
         MOVL    #SS$_NORMAL, R0
 80$:    ENBINT
-90$:    RET
+        RSB
 
 ; $TRNLNM attr, tabnam, lognam, acmode, itmlst: translates lognam, looked
 ; up in the table tabnam names, or for LNM$FILE_DEV the process's and then

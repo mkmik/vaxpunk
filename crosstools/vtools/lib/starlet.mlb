@@ -1040,6 +1040,7 @@ ACC$K_TERMLEN = 84                      ; the message's size
         .MACRO  $MNTDEF
 MNT$_DEVNAM = 1                         ; the device
 MNT$_VOLNAM = 2                         ; the volume's label
+MNT$_LOGNAM = 3                         ; the logical name for the device, in place of DISK$label
 MNT$_OWNER = 13                         ; the volume's owner, a UIC, for this mount
 MNT$_VPROT = 14                         ; and protection, a word
         .ENDM   $MNTDEF

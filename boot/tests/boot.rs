@@ -284,15 +284,17 @@ const RAMDISK: Phase = Phase {
     ],
 };
 
-/// INITIALIZE, MOUNT and COPY on DKB0:, a CREATE/DIRECTORY two levels deep
+/// INITIALIZE, MOUNT and COPY on DKB0:, MOUNT's DISK$DATA and the system
+/// disk's DISK$VAXPUNK, a CREATE/DIRECTORY two levels deep
 /// there and a COPY into it, a CREATE/LOG of a text file there from two
 /// lines and CTRL/Z, an APPEND/LOG to the file copied there and
 /// one to the system disk that fails, COPY of a list into one file, of a
 /// wildcard into a file each, and of a wildcard into one file that it
 /// finds too, which it passes over, SHOW DEVICES, SHOW DEVICES/FULL of
 /// DKB0: and of OPA0:, a DISMOUNT of DKA0:
-/// that fails and one of DKB0: that doesn't, a DIRECTORY there that fails,
-/// a MOUNT without a label, a DIRECTORY of the new directory and a DELETE
+/// that fails and one of DKB0: that doesn't, which deletes DISK$DATA, a
+/// DIRECTORY there that fails, a MOUNT that names its logical name WORK:,
+/// a DIRECTORY of the new directory and a DELETE
 /// of the one above it, which has a file in it and stays, SHOW PROCESS/QUOTAS,
 /// SHOW SYSTEM, SHOW USERS, of a user who isn't logged in too, SHOW MEMORY,
 /// SHOW ERROR, SHOW QUOTA and SHOW CPU.
@@ -306,6 +308,7 @@ const DATA_DISK: Phase = Phase {
             1,
             concat!(
                 "INIT/PROTECTION=(S:RWED,O:RWED,G:RWED,W:RWED) DKB0: DATA\rMOUNT DKB0: DATA\r",
+                "SHOW LOGICAL DISK$DATA\rSHOW LOGICAL DISK$VAXPUNK\r",
                 "COPY SYS$SYSDEVICE:[SYSMGR]WELCOME.TXT DKB0:[000000]DATA.TXT\r",
                 "CREATE/DIRECTORY DKB0:[SUB.DEEP]\r",
                 "COPY SYS$SYSDEVICE:[SYSMGR]WELCOME.TXT DKB0:[SUB.DEEP]DEEP.TXT\rDIR DKB0:[SUB]\r",
@@ -328,8 +331,9 @@ const DATA_DISK: Phase = Phase {
             1,
             concat!(
                 "DIR DKB0:[000000]\rSHOW DEVICES\rSHOW DEVICES/FULL DKB0\rSHOW DEVICES/FULL OPA0:\r",
-                "DISMOUNT DKA0:\rDISMOUNT DKB0:\r",
-                "DIR DKB0:[000000]\rMOUNT DKB0:\rDIR DKB0:[SUB.DEEP]\rDELETE DKB0:[000000]SUB.DIR;1\r",
+                "DISMOUNT DKA0:\rDISMOUNT DKB0:\rSHOW LOGICAL DISK$DATA\r",
+                "DIR DKB0:[000000]\rMOUNT DKB0: DATA WORK:\rSHOW LOGICAL WORK\r",
+                "DIR DKB0:[SUB.DEEP]\rDELETE DKB0:[000000]SUB.DIR;1\r",
                 "SHOW PROCESS/QUOTAS\rSHOW SYSTEM\r",
             ),
         ),
@@ -344,6 +348,8 @@ const DATA_DISK: Phase = Phase {
     ],
     lines: &[
         "%MOUNT-I-MOUNTED, DATA mounted on _DKB0:",
+        "\"DISK$DATA\" = \"_DKB0:\" (LNM$SYSTEM_TABLE)",
+        "\"DISK$VAXPUNK\" = \"_DKA0:\" (LNM$SYSTEM_TABLE)",
         "Directory DKB0:[SUB]",
         "DEEP.DIR;1",
         "%CREATE-I-CREATED, DKB0:[SUB.DEEP]NOTE.TXT;1 created",
@@ -366,10 +372,12 @@ const DATA_DISK: Phase = Phase {
         "\nTerminal OPA0:, device type VT100, is online, record-oriented device, carriage\n    control.\n\n    Error count                    0\n    Reference count",
         "    Default buffer size                  80\n\n$ ",
         "%SYSTEM-F-DEVACTIVE, device is active",
+        "no translation for logical name DISK$DATA",
         concat!(
             "%DIRECT-E-OPENIN, error opening DKB0:[000000]*.*;* as input\n",
             "-RMS-E-DNR, device not ready, not mounted, or unavailable",
         ),
+        "\"WORK\" = \"_DKB0:\" (LNM$SYSTEM_TABLE)",
         "Directory DKB0:[SUB.DEEP]",
         "DEEP.TXT;1",
         "NOTE.TXT;1",
