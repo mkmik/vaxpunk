@@ -25,9 +25,9 @@ note = "ADR-0014: DCL's supervisor mode AST"
 [[feature]]
 id = "ctrl-y-privileges"
 title = "At CTRL/Y, a privileged image's privileges put away until CONTINUE, as VMS's DCL$SAVE_PRIVS"
-status = "todo"
+status = "done"
 needs = ["/exec/installed-images#fixed-list"]
-note = "VMS V4.3 DCL IMAGECTRL.MAR: the process's permanent privileges at the prompt. vaxpunk keeps a known image's in PCB$Q_PRIV until rundown (process.mar), so PHONE's SYSNAM, WORLD and OPER, and SETPWD's SYSPRV, stay on at the CTRL/Y prompt; needed before more images get privileges"
+note = "VMS V4.3 DCL IMAGECTRL.MAR: the process's permanent privileges at the prompt. dcl.mar PRMPRIVS and IMGPRIVS; CONTINUE enables a known image's again with $SETPRV, which takes PCB$Q_IMAGPRIV as VMS's takes PHD$Q_IMAGPRIV"
 
 [[feature]]
 id = "messages"

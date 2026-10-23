@@ -609,7 +609,8 @@ NEXTISD:
 ; interpreter, 2 if it must be one, else 0. Activates the image the PCB
 ; names, which FIL$OPENFILE reads from SYS$SYSTEM: unless its name says
 ; where, or from the system disk for a known image, which KNOWN gives
-; privileges, enabled until the image exits: maps its
+; privileges, enabled until the image exits, and kept in PCB$Q_IMAGPRIV,
+; which $SETPRV may enable again: maps its
 ; sections at their addresses, with their contents and protection. An
 ; image in P0 is user readable and, where it is writable, user writable,
 ; and the end of P0 goes past it, and past each shareable image it calls,
@@ -695,6 +696,7 @@ IMG$ACTIVATE::
         TSTL    R2
         BEQL    97$
         MOVL    SCH$GL_CURPCB, R3
+        MOVQ    (R2), PCB$Q_IMAGPRIV(R3)
         BISL2   (R2), PCB$Q_PRIV(R3)
         BISL2   4(R2), PCB$Q_PRIV+4(R3)
 97$:    POPR    #^M<R2, R3, R4, R5, R6, R7, R8, R9, R10, R11>
@@ -1095,8 +1097,8 @@ EXHLIST:
 ; mode exit handlers, and its channels and files, all but the command interpreter's, PCB$L_CLICHANS
 ; and PCB$L_CLIFILES, whose I/O is cancelled first, while P0 is still
 ; there, and the privileges it enabled: the current ones are the
-; permanent ones again. An image CTRL/Y stopped can't be continued any
-; more, nor AST routines that ran.
+; permanent ones again, and it has no known image's. An image CTRL/Y
+; stopped can't be continued any more, nor AST routines that ran.
 ; Uses R0-R3.
 ; ponytail: what the command interpreter holds too, but its channels; it
 ; uses nothing else yet.
@@ -1122,6 +1124,7 @@ EXE$IMGRUNDOWN::
         BSBW    SCH$DACEFC_ALL
         CLRL    PCB$AL_EXH+<4*PSL$C_USER>(R4)
         MOVQ    PCB$Q_PROCPRIV(R4), PCB$Q_PRIV(R4)
+        CLRQ    PCB$Q_IMAGPRIV(R4)
         MCOML   PCB$L_CLICHANS(R4), R0
         BICL2   R0, PCB$L_CHANS(R4)
         MOVL    PCB$L_CLIFILES(R4), R0
@@ -1524,9 +1527,10 @@ SUSPEND:
 ; quadword prvadr points at, for enbflg 1, or disables them, for 0: the
 ; current ones, which go back to the permanent ones when the image exits,
 ; and the permanent ones too for prmflg 1. Without SETPRV it enables only
-; those authorized, and says SS$_NOTALLPRIV if that is fewer. prvprv, if
-; given, gets the privileges there were: the permanent ones for prmflg 1,
-; else the current ones.
+; those authorized, and, for prmflg 0, those its known image gives it,
+; PCB$Q_IMAGPRIV, which DCL enables again at CONTINUE, and says
+; SS$_NOTALLPRIV if that is fewer. prvprv, if given, gets the privileges
+; there were: the permanent ones for prmflg 1, else the current ones.
         .ENTRY  EXE$SETPRV, ^M<R2, R3, R4, R5>
         MOVL    SCH$GL_CURPCB, R4
         CLRQ    R2                      ; the mask
@@ -1550,8 +1554,12 @@ SUSPEND:
         BICL2   R3, PCB$Q_PROCPRIV+4(R4)
         BRB     90$
 20$:    IFPRIV  SETPRV, 30$
-        MCOML   PCB$Q_AUTHPRIV(R4), R0  ; those not authorized
-        MCOML   PCB$Q_AUTHPRIV+4(R4), R1
+        MOVQ    PCB$Q_AUTHPRIV(R4), R0
+        BLBS    12(AP), 22$
+        BISL2   PCB$Q_IMAGPRIV(R4), R0
+        BISL2   PCB$Q_IMAGPRIV+4(R4), R1
+22$:    MCOML   R0, R0                  ; those it may not enable
+        MCOML   R1, R1
         BITL    R0, R2
         BNEQ    25$
         BITL    R1, R3

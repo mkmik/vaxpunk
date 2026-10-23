@@ -157,8 +157,10 @@
 ;
 ; CTRL/Y is DCL's supervisor mode AST, which it enables on the console
 ; with IO$_SETMODE (ADR-0014). It stops the image DCL runs, where it is,
-; and DCL prompts on top of it: CONTINUE returns from the AST, and the
-; image goes on; a command that runs an image runs the stopped one down.
+; and DCL prompts on top of it, with the process's permanent privileges,
+; not the image's: CONTINUE enables the image's again and
+; returns from the AST, and the image goes on; a command that runs an
+; image runs the stopped one down.
 ; With no image, CTRL/Y ends the line being typed.
 ;
 ; Before a command is done, ! outside quotes starts a comment, and
@@ -369,6 +371,12 @@ DCL$VERIFY::                            ; 1 after SET VERIFY: a procedure's line
         .LONG   0
 VECHO:  .LONG   0                       ; 1: the line read is to be written
 PENDCY: .LONG   0                       ; 1: CTRL/Y ran an image down for ON CONTROL_Y
+ALLPRIV:                                ; every privilege, for $SETPRV to disable
+        .LONG   -1, -1
+IMGPRIV:                                ; the privileges of the image CTRL/Y stopped, for CONTINUE
+        .BLKQ   1
+PRMPRIV:                                ; the permanent ones, the CTRL/Y prompt's
+        .BLKQ   1
 STOPPID:                                ; STOP/IDENTIFICATION's PID
         .LONG   0
 NEWPID: .LONG   0                       ; RUN/DETACHED's process's
@@ -607,6 +615,7 @@ DCL$CONTINUE::
         TSTL    DCL$CTRLYFP
         BEQL    10$
         BSBW    CTRLYON
+        BSBW    IMGPRIVS
         MOVL    DCL$CTRLYFP, FP
         CLRL    DCL$CTRLYFP
         RET
@@ -1139,6 +1148,25 @@ CTRLYON:
 10$:    $QIOW_S CHAN=CHAN, FUNC=#IO$_SETMODE!IO$M_CTRLYAST, P1=(R0)
 20$:    RSB
 
+; PRMPRIVS: at CTRL/Y, keeps the stopped image's privileges in IMGPRIV
+; and makes the current ones the permanent ones, as VMS's DCL does, so
+; that the commands at the prompt have none of a known image's. Uses R0
+; and R1.
+PRMPRIVS:
+        .JSB_ENTRY
+        $SETPRV_S PRMFLG=#1, PRVPRV=PRMPRIV
+        $SETPRV_S ENBFLG=#0, PRVADR=ALLPRIV, PRVPRV=IMGPRIV
+        $SETPRV_S ENBFLG=#1, PRVADR=PRMPRIV
+        RSB
+
+; IMGPRIVS: at CONTINUE, makes the current privileges the image's again,
+; IMGPRIV, which $SETPRV enables: a known image's too. Uses R0 and R1.
+IMGPRIVS:
+        .JSB_ENTRY
+        $SETPRV_S ENBFLG=#0, PRVADR=ALLPRIV
+        $SETPRV_S ENBFLG=#1, PRVADR=IMGPRIV
+        RSB
+
 ; CTRLY: DCL's CTRL/Y AST, in supervisor mode, on top of what CTRL/Y
 ; stopped. Drops what is left of PIPE's line. With an image running, ends the procedures running and does
 ; commands, until CONTINUE returns from here, or a command runs another
@@ -1159,6 +1187,7 @@ CTRLYON:
         $EXIT_S #<SS$_ABORT!INHIB>
 20$:    MOVL    FP, DCL$CTRLYFP
         MOVL    SP, DCL$SAVESP
+        BSBW    PRMPRIVS
         BSBW    DCL$DATAEND
         BSBW    DCL$ENDPROCS
         BRW     DCL$NEXT

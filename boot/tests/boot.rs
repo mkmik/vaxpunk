@@ -1450,6 +1450,8 @@ const STARTUP: Phase = Phase {
 /// which the world may not; SYSTEM changes its password with SET
 /// PASSWORD, after getting the old one wrong, defines SYS$WELCOME, which
 /// each login after says in place of Welcome to vaxpunk, and logs out. JOE logs in,
+/// stops SET PASSWORD with CTRL/Y, where the privileges are JOE's
+/// permanent ones, not SETPWD's SYSPRV, and continues it, is shown
 /// with his UIC, privileges, directory and rights, PAYROLL among them,
 /// reads the file, can't run AUTHORIZE or
 /// OPCCRASH, and logs out; SYSTEM logs in with its new password, and
@@ -1499,10 +1501,14 @@ const USERS: Phase = Phase {
         ("Password:", 4, "joespw\r"),
         // The first two were TTSIZE's at SYSTEM's login and SET TERMINAL/INQUIRE's.
         ("\x1b[6n", 3, "\x1b[24;80R"),
+        ("Have a nice day", 2, "SET PASSWORD\r"),
+        ("Old password:", 3, "\x19"),
+        // The first nine were CONTROL_KEYS'.
         (
-            "Have a nice day",
-            2,
+            "*INTERRUPT*",
+            10,
             concat!(
+                "WRITE SYS$OUTPUT \"At CTRL/Y: \", F$GETJPI(\"\", \"CURPRIV\")\rCONTINUE\r",
                 "SHOW PROCESS/PRIVILEGES\rSHOW DEFAULT\rSHOW LOGICAL SYS$LOGIN\r",
                 "SHOW PROCESS/RIGHTS\rTYPE DKB0:[000000]PAY.TXT\r",
                 "MCR AUTHORIZE SHOW JOE\rMCR OPCCRASH\rLOGOUT\r",
@@ -1548,6 +1554,7 @@ const USERS: Phase = Phase {
         "%UAF-I-LSTMSG2, listing file SYSUAF.LIS complete",
         "%SET-E-PWDNOTVAL, old password validation error - password not changed",
         "  SYSTEM       logged out at ",
+        "At CTRL/Y: TMPMBX,OPER\n",
         "Process privileges:\n TMPMBX       OPER\n",
         "UIC:                [200,1]",
         "\n  DKB0:[000000]\n",
@@ -1776,7 +1783,7 @@ fn boot() {
     );
     assert_eq!(
         text.matches("*INTERRUPT*").count(),
-        9,
+        10,
         "CTRL/Y or CTRL/C interrupted after SET NOCONTROL"
     );
     assert_eq!(
