@@ -23,6 +23,13 @@ milestone = "m0"
 note = "ADR-0014: DCL's supervisor mode AST"
 
 [[feature]]
+id = "ctrl-y-privileges"
+title = "At CTRL/Y, a privileged image's privileges put away until CONTINUE, as VMS's DCL$SAVE_PRIVS"
+status = "todo"
+needs = ["/exec/installed-images#fixed-list"]
+note = "VMS V4.3 DCL IMAGECTRL.MAR: the process's permanent privileges at the prompt. vaxpunk keeps a known image's in PCB$Q_PRIV until rundown (process.mar), so PHONE's SYSNAM, WORLD and OPER, and SETPWD's SYSPRV, stay on at the CTRL/Y prompt; needed before more images get privileges"
+
+[[feature]]
 id = "messages"
 title = "A failed status's message, from $GETMSG"
 status = "done"
@@ -34,14 +41,7 @@ id = "builtins"
 title = "Done by DCL itself: SET and SHOW DEFAULT, SHOW DEVICES, DEFINE, DEASSIGN, SHOW LOGICAL"
 status = "done"
 milestone = "m0"
-note = "dcl/setshow.mar, dcl/logical.mar"
-
-[[feature]]
-id = "show-logical-services"
-title = "SHOW LOGICAL asks the executive's logical name services, sorted, without CMKRNL"
-status = "todo"
-needs = ["/exec/logical-names"]
-note = "PRD-0003 tier 3 #25; logical.mar ponytail"
+note = "dcl/setshow.mar, dcl/logical.mar; VMS's SHOW DEVICES and SHOW LOGICAL are SHOW.EXE's: t8y:/utils/set-show#show-logical"
 
 [[feature]]
 id = "logical-modes"

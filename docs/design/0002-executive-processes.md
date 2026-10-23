@@ -311,7 +311,7 @@ those of `DCL$TABLES` (*Commands*); a verb with an image runs it with
 | `DEFINE name equivalence` | `$CRELNM` in `LNM$PROCESS`, and `%DCL-I-SUPERSEDE` if it replaced one, unless `/NOLOG`; `/SYSTEM`, `/PROCESS` or `/TABLE=table` names the table, one of those `lnm.mar` knows, else `SS$_NOLOGTAB` |
 | `DEASSIGN name` | `$DELLNM` from `LNM$PROCESS`, or the table the same qualifiers name |
 | `SHOW LOGICAL name` | `$TRNLNM` in `LNM$FILE_DEV`, or the table the same qualifiers name: `"name" = "equivalence" (table)`, or `%SHOW-S-NOTRAN` |
-| `SHOW LOGICAL [*]` | lists every name, the process's table's and then the system's, or only that table's, in the order they were made, under each table's name; it copies them one at a time with `$CMKRNL`, so it takes CMKRNL. ponytail: VMS's DCL asks the executive's logical name routines, and sorts them |
+| `SHOW LOGICAL [*]` | lists every name, the process's table's and then the system's, or only that table's, in the order they were made, under each table's name; it copies them one at a time with `$CMKRNL`, so it takes CMKRNL. ponytail: VMS's is `SHOW.EXE`'s, installed with CMKRNL, which reads the tables in kernel mode and sorts them (t8y:/utils/set-show#show-logical) |
 | `SET DEFAULT [dev:][dir]` | `$PARSE`s it, which must name no file, `$SETDDIR` with the directory it expands to, and `$CRELNM` of `SYS$DISK` in `LNM$PROCESS` with its device; one that doesn't exist is still set |
 | `SHOW DEFAULT` | the device and directory `$PARSE` expands an empty specification to, then `%DCL-I-INVDEF` if it doesn't exist; for a search list, each directory it takes that to which exists, after `=` |
 | `EDIT spec` | `EDIT.EXE` |

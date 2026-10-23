@@ -1,7 +1,7 @@
 +++
 title = "SET and SHOW"
 summary = "Change and display the process, terminal, files, devices and system"
-aka = ["SET", "SHOW", "SET.EXE", "SHOW.EXE", "SET PROCESS", "SHOW PROCESS", "SHOW SYSTEM", "SET TERMINAL", "SHOW TERMINAL", "SET PROTECTION", "SET FILE", "SET DIRECTORY", "SET VOLUME", "SHOW DEVICES", "SHOW TIME", "SHOW USERS", "SHOW MEMORY", "SHOW ERROR", "SHOW QUOTA", "SHOW CPU", "SET SECURITY"]
+aka = ["SET", "SHOW", "SET.EXE", "SHOW.EXE", "SET PROCESS", "SHOW PROCESS", "SHOW SYSTEM", "SET TERMINAL", "SHOW TERMINAL", "SET PROTECTION", "SET FILE", "SET DIRECTORY", "SET VOLUME", "SHOW DEVICES", "SHOW LOGICAL", "SHOWLOG", "SHOW TIME", "SHOW USERS", "SHOW MEMORY", "SHOW ERROR", "SHOW QUOTA", "SHOW CPU", "SET SECURITY"]
 kind = "core"
 intent = "goal"
 research = "done"
@@ -138,6 +138,38 @@ status = "todo"
 needs = ["/exec/sysgen-parameters#scsnode"]
 note = "show.mar ponytail: no SCSNODE, so no node name"
 
+[[feature]]
+id = "show-logical"
+title = "SHOW LOGICAL in SHOW.EXE, installed with CMKRNL, NETMBX and WORLD: names sorted, no CMKRNL of the user's"
+status = "todo"
+needs = ["/exec/installed-images#fixed-list", "/dcl/interpreter#ctrl-y-privileges"]
+note = "VMS's SHOWLOG reads the tables in kernel mode and sorts them (V4.3 CLIUTL SHOWLOG.B32, SYSMGR VMSIMAGES.DAT). vaxpunk's is DCL's own, dcl/logical.mar: it takes the user's CMKRNL and lists names as they were made. PRD-0003 tier 3 #25"
+
+[[feature]]
+id = "show-logical-translations"
+title = "SHOW LOGICAL name's iterative translations, 1 to LNM$C_MAXDEPTH deep"
+status = "todo"
+needs = ["#show-logical"]
+
+[[feature]]
+id = "show-logical-modes"
+title = "SHOW LOGICAL's access modes and attributes, [super], [exec], [concealed,terminal]; /ACCESS_MODE"
+status = "todo"
+needs = ["#show-logical", "/exec/logical-names#access-modes", "/exec/logical-names#attributes"]
+
+[[feature]]
+id = "show-logical-tables"
+title = "SHOW LOGICAL of the tables LNM$DCL_LOGICAL lists; /JOB, /GROUP, /TABLE=*, /STRUCTURE, /FULL"
+status = "todo"
+needs = ["#show-logical", "/exec/logical-names#directories", "/exec/logical-names#job-group"]
+
+[[feature]]
+id = "set-privileged"
+title = "SET.EXE installed with CMKRNL, SYSPRV and TMPMBX: SET VOLUME by a volume's owner without CMKRNL"
+status = "todo"
+needs = ["/exec/installed-images#fixed-list", "/dcl/interpreter#ctrl-y-privileges"]
+note = "As VMS V4.3's VMSIMAGES.DAT installs it; vaxpunk's SET.EXE has no privileges of its own (f11wrt.mar FIL$SETVOLUME)"
+
 [[needs]]
 on = "/exec/information-services"
 why = "SHOW reads $GETJPI, $GETSYI and $GETDVI"
@@ -194,5 +226,8 @@ with `/PERMANENT`, its permanent characteristics.
 `SHOW TERMINAL`, `SHOW USERS`, `SHOW MEMORY`, `SHOW ERROR`, `SHOW QUOTA`,
 `SHOW CPU` and `SHOW SECURITY`. `SET DEFAULT`, `SHOW DEFAULT`, `SHOW DEVICES`,
 `SHOW LOGICAL` and `SHOW SYMBOL` are DCL's own code
-(`dcl/setshow.mar`). PRD-0003 still wants `SHOW TIME`, quotas and
+(`dcl/setshow.mar`). VMS's `SHOW LOGICAL` is `SHOW.EXE`'s, installed with
+`CMKRNL` to read the logical name tables in kernel mode, so any user can
+list them; vaxpunk's takes the user's `CMKRNL`. `SET.EXE` is installed
+with privileges on VMS too, and has none of its own here. PRD-0003 still wants `SHOW TIME`, quotas and
 accounting figures, and every device listed from its UCB.
