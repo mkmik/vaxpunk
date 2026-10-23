@@ -56,7 +56,7 @@ id = "quotas"
 title = "Process quotas from $CREPRC and the UAF; PRCLM on subprocesses"
 status = "todo"
 milestone = "m1"
-note = "PRD-0003 tier 1 #4, step 5; $CREPRC ignores its quota list (process.mar); with t8y:/exec/quotas#login, :creprc and :fillm-prclm; t8y:/exec/quotas needs this component, so no need back"
+note = "PRD-0003 tier 1 #4, step 5; $CREPRC takes the I/O ones from its quota list (process.mar); with t8y:/exec/quotas#login, :creprc and :fillm-prclm; t8y:/exec/quotas needs this component, so no need back"
 
 [[feature]]
 id = "jobs"

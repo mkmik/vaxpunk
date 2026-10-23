@@ -1481,6 +1481,38 @@ const MAILBOXES: Phase = Phase {
     ],
 };
 
+/// RUN's qualifiers for a process of its own are RUNDET's: an image that
+/// isn't there, a privilege or a UIC it doesn't know, fail before
+/// $CREPRC; then DCL in a new process, with a name, a priority, the UIC
+/// [1,5], no privileges but two and its own I/O quotas, IO_DIRECT's
+/// raised to the least $CREPRC gives, runs a procedure CREATE made, on
+/// the console, and logs out.
+const DETACHED: Phase = Phase {
+    name: "detached",
+    secs: 20,
+    steps: &[(
+        "\"PRM_MBX\" = \"_MB",
+        1,
+        concat!(
+            "RUN/DETACHED NOSUCH\rRUN/PRIVILEGES=XYZZY SYS$SYSTEM:HOG\r",
+            "RUN/UIC=[1,9] SYS$SYSTEM:HOG\r",
+            "CREATE MDA0:[000000]DETACH.COM\r",
+            "$ WRITE SYS$OUTPUT \"DETACH: \", F$GETJPI(\"\",\"PRCNAM\"), \" \", F$GETJPI(\"\",\"UIC\"), \" \", F$GETJPI(\"\",\"PRIB\"), \" \", F$GETJPI(\"\",\"CURPRIV\")\r",
+            "$ SHOW PROCESS/QUOTAS\r$ WRITE SYS$OUTPUT \"DETACH: done\"\r\x1a",
+            "RUN/PROCESS_NAME=DETACHER/PRIORITY=3/UIC=[1,5]/PRIVILEGES=(NOSAME,NETMBX,TMPMBX)",
+            "/INPUT=MDA0:[000000]DETACH.COM/OUTPUT=OPA0:/ERROR=OPA0:",
+            "/IO_BUFFERED=7/IO_DIRECT=2/BUFFER_LIMIT=%X10000 SYS$SYSTEM:DCL\r",
+        ),
+    )],
+    lines: &[
+        "%RUN-F-PARSEFAIL, error parsing NOSUCH\n-RMS-E-FNF, file not found\n",
+        "%RUN-E-INVQUAVAL, value 'XYZZY' invalid for /PRIVILEGES qualifier\n",
+        "%RUN-F-INVUIC, [1,9] is an invalid UIC specification\n",
+        "DETACH: DETACHER [1,5] 3 TMPMBX,NETMBX\n",
+        "Direct I/O limit:          4\n Buffered I/O byte count quota:     65536  Buffered I/O limit:        7\nDETACH: done",
+    ],
+};
+
 /// The processes STARTUP and SNOOP ran, which print as they go, done long
 /// before: STARTUP's SLEEPER and SVCTEST's NAPPER say they hibernate
 /// before SLEEPER does, and the CPU then idles, taking clock interrupts.
@@ -1683,6 +1715,7 @@ const PHASES: &[Phase] = &[
     FORMS,
     MEMORY,
     MAILBOXES,
+    DETACHED,
     STARTUP,
     USERS,
 ];

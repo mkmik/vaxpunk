@@ -1510,17 +1510,103 @@
   /DETACHED
 
   Runs the image in a new process, detached from yours, which goes on
-  after you log out, and says its identification. It has your username,
-  UIC, privileges and default directory, and no SYS$INPUT or
-  SYS$OUTPUT.
+  after you log out, and says its identification. It has your username
+  and default directory, and, unless the qualifiers below say otherwise,
+  your UIC, base priority, permanent privileges and I/O quotas, no
+  name, and no SYS$INPUT, SYS$OUTPUT or SYS$ERROR. Each of the
+  qualifiers below implies /DETACHED. Of the quotas, only those of
+  /BUFFER_LIMIT, /IO_BUFFERED and /IO_DIRECT are kept yet, raised to
+  1024, 4 and 4 if they are less.
+/ERROR
+  /ERROR=file-spec
+
+  The new process's SYS$ERROR.
+/INPUT
+  /INPUT=file-spec
+
+  The new process's SYS$INPUT. Its DCL, if it runs SYS$SYSTEM:DCL, runs
+  the file as a command procedure, and logs out at its end.
+/MAILBOX
+  /MAILBOX=unit
+
+  The unit number of a mailbox that gets the new process's termination
+  message when it is deleted.
+/OUTPUT
+  /OUTPUT=file-spec
+
+  The new process's SYS$OUTPUT.
 /PRIORITY
   /PRIORITY=n
 
-  The new process's base priority, 0 to 31; 4 if it is left out.
+  The new process's base priority, 0 to 31; yours if it is left out.
+/PRIVILEGES
+  /PRIVILEGES=(privilege[,...])
+
+  The new process's privileges: your permanent ones, or none if the list
+  has NOSAME, with each privilege named added and each NOprivilege taken
+  away; ALL is every one. It gets only those you have, unless you have
+  SETPRV.
 /PROCESS_NAME
   /PROCESS_NAME=name
 
-  The new process's name, up to 15 characters; it implies /DETACHED.
+  The new process's name, up to 15 characters.
+/UIC
+  /UIC=[group,member]
+
+  The new process's UIC, in octal; one other than yours takes the
+  DETACH privilege.
+/AST_LIMIT
+  /AST_LIMIT=n
+
+  The new process's quota of ASTs it may have queued, ASTLM.
+/BUFFER_LIMIT
+  /BUFFER_LIMIT=n
+
+  The new process's quota of bytes of buffered I/O it may have at once, BYTLM.
+/ENQUEUE_LIMIT
+  /ENQUEUE_LIMIT=n
+
+  The new process's quota of locks it may hold, ENQLM.
+/EXTENT
+  /EXTENT=n
+
+  The new process's quota of pages its working set may grow to, WSEXTENT.
+/FILE_LIMIT
+  /FILE_LIMIT=n
+
+  The new process's quota of files it may have open, FILLM.
+/IO_BUFFERED
+  /IO_BUFFERED=n
+
+  The new process's quota of buffered I/O requests it may have at once, BIOLM.
+/IO_DIRECT
+  /IO_DIRECT=n
+
+  The new process's quota of direct I/O requests it may have at once, DIOLM.
+/JOB_TABLE_QUOTA
+  /JOB_TABLE_QUOTA=n
+
+  The new process's quota of bytes its job logical name table may hold, JTQUOTA.
+/MAXIMUM_WORKING_SET
+  /MAXIMUM_WORKING_SET=n
+
+  The new process's quota of pages of its working set quota, WSQUOTA.
+/PAGE_FILE
+  /PAGE_FILE=n
+
+  The new process's quota of pages of the paging file it may use, PGFLQUOTA.
+/QUEUE_LIMIT
+  /QUEUE_LIMIT=n
+
+  The new process's quota of timer queue entries it may have, TQELM.
+/SUBPROCESS_LIMIT
+  /SUBPROCESS_LIMIT=n
+
+  The new process's quota of subprocesses it may have, PRCLM.
+/WORKING_SET
+  /WORKING_SET=n
+
+  The new process's quota of pages of its default working set, WSDEFAULT.
 2 Examples
 
   $ RUN/DETACHED/PRIORITY=6/PROCESS_NAME=OPCOM SYS$SYSTEM:OPCOM

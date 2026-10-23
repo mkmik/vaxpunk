@@ -40,6 +40,7 @@
         $UAFDEF
         $UCBDEF
         $JPIDEF
+        $PQLDEF
 
         .EXTERNAL SCH$GL_CURPCB, SCH$GL_SWPPCB, SCH$GL_PCBVEC, SCH$GL_MAXPIX, SCH$GL_SEQ
         .EXTERNAL SCH$GQ_HIBWQ, SCH$GQ_SUSPWQ, SCH$GQ_DELQ
@@ -55,6 +56,8 @@
 KSTACK = 16384                          ; a process's kernel stack
 MAXRIGHTS = 1024                        ; identifiers a rights list holds, at most
 BLOCK = 512                             ; an image's blocks
+PQL_MIOLM = 4                           ; SYSGEN's PQL_MBIOLM and PQL_MDIOLM: the least BIOLM and DIOLM $CREPRC gives
+PQL_MBYTLM = 1024                       ; and PQL_MBYTLM, BYTLM's
 KW = PTE$M_VALID ! PTE$M_FOE ! PTE$C_KW
 UR = PTE$M_VALID ! PTE$M_FOE ! PTE$C_UR
 UW = PTE$M_VALID ! PTE$M_FOE ! PTE$C_UW
@@ -259,10 +262,13 @@ EXE$PRCPRIV::
 ; DETACH, else SS$_NOPRIV. It has its creator's username. Its privileges, current and permanent, are those
 ; in the quadword prvadr points at that its creator has, or its creator's
 ; for 0; a creator with SETPRV gives any, and authorizes them too.
-; Otherwise it has its creator's authorized privileges, and its I/O
-; quotas, BIOLM, DIOLM and BYTLM, none of them used yet. quota and stsflg
-; are ignored.
-; ponytail: VMS takes the quotas from quota, or SYSGEN's PQL_D defaults.
+; Otherwise it has its creator's authorized privileges. Its I/O quotas,
+; BIOLM, DIOLM and BYTLM, are those in quota, a list of PQL$_ codes, a
+; byte, each followed by its value, a longword, up to PQL$_LISTEND, each
+; raised to SYSGEN's minimum, PQL_MBIOLM and the rest, if it is below,
+; or its creator's for one quota doesn't have. stsflg is ignored.
+; ponytail: quota's other quotas are ignored, as nothing charges them
+; yet; VMS gives a quota the list doesn't have SYSGEN's PQL_D default.
         .ENTRY  EXE$CREPRC, ^M<R2, R3, R4, R5, R6, R7, R8, R9, R10>
         MOVL    SCH$GL_CURPCB, R4
         MOVL    4(AP), R1
@@ -281,8 +287,16 @@ EXE$PRCPRIV::
         CMPL    R0, #24
         BLSSU   4$
         MOVL    24(AP), R1              ; prvadr
-        BEQL    6$
+        BEQL    51$
         IFNORD  #8, (R1), 95$
+51$:    MOVL    28(AP), R1              ; quota, up to its PQL$_LISTEND
+        BEQL    6$
+52$:    IFNORD  #1, (R1), 95$
+        TSTB    (R1)
+        BEQL    6$
+        IFNORD  #5, (R1), 95$
+        ADDL2   #5, R1
+        BRB     52$
 6$:     MOVL    40(AP), R0              ; uic: another one takes DETACH
         BEQL    7$
         CMPL    R0, PCB$L_UIC(R4)
@@ -352,7 +366,35 @@ EXE$PRCPRIV::
         MOVW    PCB$W_DIOLM(R4), PCB$W_DIOCNT(R8)
         MOVL    PCB$L_BYTLM(R4), PCB$L_BYTLM(R8)
         MOVL    PCB$L_BYTLM(R4), PCB$L_BYTCNT(R8)
-        MNEGW   SGN$GW_QUANTUM, PCB$W_QUANT(R8)
+        MOVL    28(AP), R2              ; or quota's
+        BEQL    29$
+26$:    MOVZBL  (R2)+, R0
+        BEQL    29$
+        MOVL    (R2)+, R1
+        CMPL    R0, #PQL$_BYTLM
+        BNEQ    27$
+        MOVL    #PQL_MBYTLM, R5
+        MOVL    #^X7FFFFFFF, R0
+        BSBW    PQLVAL
+        MOVL    R1, PCB$L_BYTLM(R8)
+        MOVL    R1, PCB$L_BYTCNT(R8)
+        BRB     26$
+27$:    MOVL    #PQL_MIOLM, R5
+        CMPL    R0, #PQL$_BIOLM
+        BNEQ    28$
+        MOVZWL  #^X7FFF, R0
+        BSBW    PQLVAL
+        MOVW    R1, PCB$W_BIOLM(R8)
+        MOVW    R1, PCB$W_BIOCNT(R8)
+        BRB     26$
+28$:    CMPL    R0, #PQL$_DIOLM
+        BNEQ    26$
+        MOVZWL  #^X7FFF, R0
+        BSBW    PQLVAL
+        MOVW    R1, PCB$W_DIOLM(R8)
+        MOVW    R1, PCB$W_DIOCNT(R8)
+        BRB     26$
+29$:    MNEGW   SGN$GW_QUANTUM, PCB$W_QUANT(R8)
         MOVL    PCB$L_PID(R4), PCB$L_OWNER(R8)
         MOVZWL  44(AP), PCB$L_TMBU(R8)
         PUSHR   #^M<R3, R4>                     ; the creator's default directory
@@ -459,6 +501,18 @@ EXE$PRCPRIV::
         RET
 96$:    MOVL    #SS$_NOPRIV, R0
         RET
+
+; PQLVAL: R1 = a quota's value, R5 = the least it may be, R0 = the most.
+; R1 = it, raised or lowered to them.
+PQLVAL:
+        .JSB_ENTRY
+        CMPL    R1, R5
+        BGEQ    10$
+        MOVL    R5, R1
+10$:    CMPL    R1, R0
+        BLEQ    20$
+        MOVL    R0, R1
+20$:    RSB
 
 ; PPNAMES: R8 = a new PCB, AP = $CREPRC's arguments, checked. Makes its
 ; logical name directory and table (LNM$CREPRC), with its
