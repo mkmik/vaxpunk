@@ -1,7 +1,7 @@
 +++
 title = "Logical names"
-summary = "Names that stand for strings: tables, search lists, $CRELNM and $TRNLNM"
-aka = ["$CRELNM", "$DELLNM", "$TRNLNM", "$CRELNT", "LNM$PROCESS", "LNM$JOB", "LNM$GROUP", "LNM$SYSTEM", "LNM$FILE_DEV", "LNM$CLUSTER", "search list", "concealed device", "rooted directory", "SYS$SYSROOT", "lnm.mar"]
+summary = "Names that stand for strings: tables, directories, search lists, $CRELNM and $TRNLNM"
+aka = ["$CRELNM", "$DELLNM", "$TRNLNM", "$CRELNT", "LNM$PROCESS_DIRECTORY", "LNM$SYSTEM_DIRECTORY", "CREATE/NAME_TABLE", "LNM$PROCESS", "LNM$JOB", "LNM$GROUP", "LNM$SYSTEM", "LNM$FILE_DEV", "LNM$CLUSTER", "search list", "concealed device", "rooted directory", "SYS$SYSROOT", "lnm.mar"]
 kind = "core"
 intent = "goal"
 research = "done"
@@ -55,9 +55,9 @@ note = "PRD-0003 tier 3 #25"
 
 [[feature]]
 id = "directories"
-title = "Logical name directories, tables of one's own ($CRELNT), table search lists"
-status = "todo"
-note = "PRD-0003 tier 3 #25; also $DELLNM without a name"
+title = "Logical name directories, tables of one's own ($CRELNT, CREATE/NAME_TABLE), table search lists; $DELLNM without a name"
+status = "done"
+note = "PRD-0003 tier 3 #25, checked against OpenVMS V8.4-2L1: names in directories, protection of shareable tables, SS$_ status values and DCL's messages"
 
 [[feature]]
 id = "cluster-table"
@@ -95,10 +95,14 @@ device name such as `SYS$SYSROOT`, `DKA0:[SYS0.]`, gives each node its
 own system directories. `$ASSIGN`, RMS, `DEFINE`, `ASSIGN` and the C
 library's `getenv` all translate them.
 
-vaxpunk's are in `vms/exec/lnm.mar`: the process's table and the
-system's, queues of blocks from pool, `$CRELNM`, `$DELLNM` and `$TRNLNM`
-with VMS's item lists, and search lists, which behave as on OpenVMS
-V8.4-2L1. `SYS$SYSROOT` is a search list of `MDA0:` and `DKA0:`, whole
-volumes, not rooted directories. The system table takes `SYSNAM` (PRD-0003
-step 1). Missing: `LNM$JOB` and `LNM$GROUP` (tier 1 #1), and access
-modes, attributes, rooted names and directories (tier 3 #25).
+vaxpunk's are in `vms/exec/lnm.mar`: queues of blocks from pool,
+`$CRELNM`, `$DELLNM` and `$TRNLNM` with VMS's item lists, and search
+lists, which behave as on OpenVMS V8.4-2L1. The tables are names in two
+directories, the process's and the system's, which `$CRELNT` and DCL's
+`CREATE/NAME_TABLE` add to; a table's name is translated there into the
+tables it stands for, so a process may have an `LNM$FILE_DEV` of its
+own. Shareable tables have VMS's owner and protection; the system table
+takes `SYSNAM` too (PRD-0003 step 1). `SYS$SYSROOT` is a search list of
+`MDA0:` and `DKA0:`, whole volumes, not rooted directories. Missing:
+`LNM$JOB` and `LNM$GROUP` (tier 1 #1), and access modes, attributes and
+rooted names (tier 3 #25).

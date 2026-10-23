@@ -52,7 +52,7 @@ its code.
 | `process.mar` | `$CREPRC`, process start, image activation, `$IMGACT`, `$EXIT`, image rundown, deletion, `$FORCEX`, `$HIBER`, `$WAKE`, `$SUSPND`, `$RESUME`, `$SETPRI`, `$SETPRN`, `$CMKRNL`, `$SETPRV`, `EXE$LOGIN` |
 | `hashpwd.mar` | `$HASH_PASSWORD`, salted, iterated SHA-256 |
 | `entropy.mar` | `$GET_ENTROPY`, random bytes from the PAL's entropy device |
-| `lnm.mar` | logical name tables, `$CRELNM`, `$DELLNM`, `$TRNLNM` |
+| `lnm.mar` | logical name directories and tables, `$CRELNT`, `$CRELNM`, `$DELLNM`, `$TRNLNM` |
 | `qio.mar` | the devices' UCBs, `$ASSIGN`, `$DASSGN`, `$CANCEL`, `$QIO`, `$QIOW`; IRPs, their completion and cancelling |
 | `mbdriver.mar` | mailboxes: `$CREMBX`, `$DELMBX`, their driver, and `MB$SEND`, which writes the termination message; the operator's mailbox, `MBA2:`, and `$SNDOPR`, which writes OPCOM's messages there ([ADR-0042](../adr/0042-opcom-reads-the-operators-mailbox.md)) |
 | `ttdriver.mar` | the terminal driver, a UCB per terminal, the console's and TELNET's: writes, queued reads, their terminators, editing and timers, the console receive interrupt and the type-ahead buffers, CTRL/C and CTRL/Y ASTs, Telnet on a TCP connection |
@@ -84,7 +84,8 @@ blocks and `$OPEN`... calls, `$MNTDEF`).
 3. `MMG$INIT`: the PFN list and the pool. Then makes the vector's pages
    user readable (*System services*), before any outer mode runs.
 4. `SCH$INIT`: empty queues, and the boot context becomes the swapper,
-   process 1, current, at priority 16.
+   process 1, current, at priority 16. `LNM$INIT`: the system's logical
+   name directory and table (*Logical names*).
 5. `EXE$INITTIM`: an empty timer queue, and the system time from
    `RPB$L_BOOTTIME`. `TTY$INIT`: an empty type-ahead buffer, and the
    console receive interrupt enabled.
@@ -169,7 +170,7 @@ sequence number in the high word and the index in the low.
 `$CREPRC` (in the creator's context):
 
 1. Copies the image and process names into a new PCB, the priority, the
-   UIC and the privileges (*Privileges*), and makes its logical name table, with `SYS$INPUT`, `SYS$OUTPUT` and
+   UIC and the privileges (*Privileges*), and makes its logical name directory and table, with `SYS$INPUT`, `SYS$OUTPUT` and
    `SYS$ERROR` for its `input`, `output` and `error` arguments, those it
    was given (*Logical names*).
 2. Allocates the kernel stack and builds at its top the frame the PAL pops
@@ -313,9 +314,10 @@ those of `DCL$TABLES` (*Commands*); a verb with an image runs it with
 | `RUN image` | `$IMGACT`, with `.EXE` if the name has no type, and no parse |
 | `DIRECTORY [spec]` | `DIRECTORY.EXE` |
 | `TYPE spec` | `TYPE.EXE` |
-| `DEFINE name equivalence` | `$CRELNM` in `LNM$PROCESS`, and `%DCL-I-SUPERSEDE` if it replaced one, unless `/NOLOG`; `/SYSTEM`, `/PROCESS` or `/TABLE=table` names the table, one of those `lnm.mar` knows, else `SS$_NOLOGTAB` |
+| `DEFINE name equivalence` | `$CRELNM` in `LNM$PROCESS`, and `%DCL-I-SUPERSEDE` if it replaced one, unless `/NOLOG`; `/SYSTEM`, `/PROCESS` or `/TABLE=table` names the table |
+| `CREATE/NAME_TABLE table` | `$CRELNT` under `LNM$PROCESS_DIRECTORY`, or `/PARENT_TABLE`'s, with `LNM$M_CREATE_IF`: `%DCL-I-TABEXIST` if there is one, unless `/NOLOG`; `/ATTRIBUTES=SUPERSEDE` replaces it, `%DCL-I-TABSUPER`, or tells there was none, `%DCL-I-TABNOTFND` |
 | `DEASSIGN name` | `$DELLNM` from `LNM$PROCESS`, or the table the same qualifiers name |
-| `SHOW LOGICAL name` | `$TRNLNM` in `LNM$FILE_DEV`, or the table the same qualifiers name: `"name" = "equivalence" (table)`, or `%SHOW-S-NOTRAN` |
+| `SHOW LOGICAL name` | `$TRNLNM` in `LNM$FILE_DEV`, or the table the same qualifiers name: `"name" = "equivalence" (table)`, `"name" [table] = ""` for a table, or `%SHOW-S-NOTRAN`; with no name, each table's names under its name, from `LNM$NAMES` in kernel mode |
 | `SHOW LOGICAL [*]` | lists every name, the process's table's and then the system's, or only that table's, in the order they were made, under each table's name; it copies them one at a time with `$CMKRNL`, so it takes CMKRNL. ponytail: VMS's is `SHOW.EXE`'s, installed with CMKRNL, which reads the tables in kernel mode and sorts them (t8y:/utils/set-show#show-logical) |
 | `SET DEFAULT [dev:][dir]` | `$PARSE`s it, which must name no file, `$SETDDIR` with the directory it expands to, and `$CRELNM` of `SYS$DISK` in `LNM$PROCESS` with its device; one that doesn't exist is still set |
 | `SHOW DEFAULT` | the device and directory `$PARSE` expands an empty specification to, then `%DCL-I-INVDEF` if it doesn't exist; for a search list, each directory it takes that to which exists, after `=` |
@@ -739,7 +741,7 @@ can't reach them.
 | Memory | `$CRETVA`, `$DELTVA`, `$EXPREG` | `$CNTREG`, `$SETPRT`, `$LKWSET`, `$ULWSET`, `$LCKPAG`, `$ULKPAG`, `$CRMPSC`, `$MGBLSC` |
 | Time | `$GETTIM`, `$SETIMR`, `$CANTIM` | |
 | I/O | `$ASSIGN`, `$DASSGN`, `$CANCEL`, `$QIO`, `$QIOW`, `$CREMBX`, `$DELMBX` | |
-| Logical names | `$CRELNM`, `$DELLNM`, `$TRNLNM` | |
+| Logical names | `$CRELNT`, `$CRELNM`, `$DELLNM`, `$TRNLNM` | |
 | Images | `$IMGACT` | |
 | Conditions, in the caller's mode | `$UNWIND`, `$PUTMSG` | |
 | RMS | `$PARSE`, `$SEARCH`, `$OPEN`, `$CREATE`, `$CONNECT`, `$GET`, `$PUT`, `$DISCONNECT`, `$CLOSE`, `$ERASE`, `$SETDDIR`, `$CREATE_DIR` | |
@@ -775,7 +777,7 @@ service checks with `IFPRIV` and `IFNPRIV` from `lib.mlb`, and says
 | `SETPRV` | `$SETPRV` enabling what isn't authorized: without, it enables what is and says `SS$_NOTALLPRIV` |
 | `GROUP`, `WORLD` | another process, in `EXE$NAMPID`, for `$DELPRC`, `$FORCEX`, `$GETJPI`, `$SUSPND`, `$RESUME`, `$WAKE`, `$SETPRI`, `$SCHDWK` and `$CANWAK`: none for one with the caller's UIC, `GROUP` for another in its group, `WORLD` for any. A wildcard `$GETJPI` skips the others. A name is looked for in the caller's group only, as names are a group's |
 | `DETACH` | `$CREPRC` of a process with another UIC |
-| `SYSNAM` | `$CRELNM` and `$DELLNM` in `LNM$SYSTEM_TABLE`, a `$CREMBX` logical name, and `$MOUNT` and `$DISMOU`, whose volumes every process sees |
+| `SYSNAM` | `$CRELNM` and `$DELLNM` in `LNM$SYSTEM_TABLE`, which the system's UIC groups and `SYSPRV` may write too, by its protection, a `$CREMBX` logical name, and `$MOUNT` and `$DISMOU`, whose volumes every process sees |
 | `PRMMBX`, `TMPMBX` | `$CREMBX` of a permanent mailbox, or a temporary one; `$DELMBX` |
 | `LOG_IO`, `PHY_IO` | the disks' `IO$_READLBLK` and `IO$_WRITELBLK`, with either; `IO$_READPBLK` and `IO$_WRITEPBLK`, with `PHY_IO` |
 | `VOLPRO` | `$INIT_VOL` of a volume someone else owns, and `$MOUNT`'s `MNT$_OWNER` and `MNT$_VPROT`. ponytail: VMS lets a volume's owner give those too |
@@ -805,31 +807,52 @@ only, and `CONTINUE` enables the image's again. `SETPWD.EXE` gets
 
 A logical name stands for a string, its equivalence, as on VMS: a
 program opens `SYS$OUTPUT`, and the process says what that is. `lnm.mar`
-keeps two logical name tables, queues of logical name blocks (`$LNMBDEF`,
-from pool) holding a name and its equivalence, each up to 255 characters,
-case sensitive:
+keeps logical name tables, each a header (`$LNMTHDEF`) with a queue of
+logical name blocks (`$LNMBDEF`, from pool) holding a name and its
+equivalence, each up to 255 characters, case sensitive. The tables are
+names too, with no equivalence, in two directories, tables of tables:
 
-| Table | Queue | Whose |
-| --- | --- | --- |
-| `LNM$PROCESS_TABLE` | `PCB$Q_LNMHD` | the process's; process rundown deletes its names |
-| `LNM$SYSTEM_TABLE` | `LNM$GQ_SYSTEM` | every process's |
+| Directory | Header | Whose | Holds at first |
+| --- | --- | --- | --- |
+| `LNM$PROCESS_DIRECTORY` | `PCB$L_LNMDIR` | the process's; process rundown deletes it, and all in it | itself, `LNM$PROCESS_TABLE` (`PCB$L_LNMTAB`), and `LNM$PROCESS`, which stands for that |
+| `LNM$SYSTEM_DIRECTORY` | `LNM$GL_SYSDIR` | every process's | itself, `LNM$SYSTEM_TABLE` (`LNM$GL_SYSTEM`), `LNM$SYSTEM`, `LNM$FILE_DEV` (`LNM$PROCESS`, `LNM$JOB`, `LNM$GROUP`, `LNM$SYSTEM`), `LNM$DCL_LOGICAL` (`LNM$FILE_DEV`) and `LNM$DIRECTORIES` |
 
-A service's `tabnam` is one of those, `LNM$PROCESS` or `LNM$SYSTEM` for
-them, or `LNM$FILE_DEV`, the process's table and then the system's; any
-other is `SS$_NOLOGTAB`. An item list is VMS's: 12-byte items, each a
-buffer length and item code, words, a buffer address and the address of a
-word for the length returned, and a longword 0 at the end (`$LNMDEF`).
+A service's `tabnam` is a name in a directory, the process's first, then
+the system's: a table, or a name whose equivalence strings are such
+names, each translated in turn, `LNM$C_MAXDEPTH`, 10, times at most, as
+VMS's `LNM$TABLE` does. So `LNM$FILE_DEV` is the process's table, then
+the system's; `LNM$JOB` and `LNM$GROUP` aren't there yet and are passed
+over. A process may define an `LNM$FILE_DEV` of its own in its directory,
+which comes first. None is `SS$_NOLOGTAB`. An item list is VMS's: 12-byte
+items, each a buffer length and item code, words, a buffer address and
+the address of a word for the length returned, and a longword 0 at the
+end (`$LNMDEF`).
 
-- **`$CRELNM`** makes a name, in the process's table for `LNM$FILE_DEV`,
-  with the equivalence of the `LNM$_STRING` item, the one item it takes.
-  A name already there by that name goes: `SS$_SUPERSEDE`.
-- **`$DELLNM`** deletes a name, from the process's table for
-  `LNM$FILE_DEV`; `SS$_NOLOGNAM` if it isn't there.
-- **`$TRNLNM`** looks a name up and fills in its items, as much of each
-  as fits: `LNM$_STRING`, the equivalence; `LNM$_TABLE`, the table it was
-  found in; `LNM$_LENGTH`, the equivalence's length. `SS$_NOLOGNAM` if no
-  table has it. One level, as on VMS: the equivalence may be a logical
-  name too.
+- **`$CRELNT`** makes a table under another, its parent: in the
+  process's directory under one of the process's, else in the system's,
+  shareable, owned by the process's UIC with a protection mask, by
+  default `S:RW, O:RW, G:R, W:R`, as on OpenVMS. It takes create access
+  to a shareable parent and write access to `LNM$SYSTEM_DIRECTORY`, whose
+  and `LNM$SYSTEM_TABLE`'s owner is `[1,4]`, protection `S:RWC, O:RWC,
+  G:R, W:R`. A name in a directory is at most 31 letters, digits, `$`
+  and `_`. One already there is replaced, `SS$_SUPERSEDE`, with the
+  tables under it, unless `LNM$M_CREATE_IF` keeps it, `SS$_NORMAL`; a new
+  one is `SS$_LNMCREATED`.
+- **`$CRELNM`** makes a name in the first table `tabnam` names, the
+  process's for `LNM$FILE_DEV`, with the equivalence of the
+  `LNM$_STRING` item, the one item it takes. A name already there by
+  that name goes, a table with the tables under it: `SS$_SUPERSEDE`. A
+  shareable table takes write access, or `SYSNAM` for the system's.
+- **`$DELLNM`** deletes a name from the first of `tabnam`'s tables that
+  has it, `SS$_NOLOGNAM` if none; a table's name in a directory deletes
+  the table, its names and the tables under it. With no name, it deletes
+  every name in the first table.
+- **`$TRNLNM`** looks a name up in `tabnam`'s tables, in turn, and fills
+  in its items, as much of each as fits: `LNM$_STRING`, the equivalence;
+  `LNM$_TABLE`, the table it was found in; `LNM$_LENGTH`, the
+  equivalence's length; `LNM$_ATTRIBUTES`, `LNM$M_TABLE` for a table.
+  `SS$_NOLOGNAM` if no table has it. One level, as on VMS: the
+  equivalence may be a logical name too.
 - **Process-permanent names.** `$CREPRC`'s `input`, `output` and `error`
   are the equivalences of the new process's `SYS$INPUT`, `SYS$OUTPUT` and
   `SYS$ERROR`, those it was given. The swapper gives the console's
@@ -855,9 +878,11 @@ it always was.
 
 ponytail: no access
 modes, so no user-mode names that image rundown deletes and no names an
-outer mode can't delete; no `LNM$JOB` or `LNM$GROUP`, no tables of one's
-own, no directory tables, and `$DELLNM` without a name doesn't empty the
-table. VMS's logical name directories, hash table and mutex replace this.
+outer mode can't delete: the names made at boot and with a process,
+executive mode ones on VMS, are `LNMB$M_NODELETE` instead, which
+`$DELLNM` doesn't find and `$CRELNM` and `$CRELNT` can't replace,
+`SS$_DUPLNAM`. No `LNM$JOB` or `LNM$GROUP`, no table quotas, and no
+attributes. VMS's hash table and mutex replace the queues and IPL.
 
 ### I/O
 

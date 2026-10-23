@@ -171,6 +171,11 @@ const SYSTEM_DISK: Phase = Phase {
 /// a TYPE of a logical name that is a file's specification, as on
 /// OpenVMS, and a COPY to SYS$MANAGER:, which SYS$SYSROOT puts in the
 /// ramdisk's [SYSMGR], and a DIRECTORY that finds it there and on DKA0:.
+/// Then logical name tables: CREATE/NAME_TABLE of MYTAB, twice, a name in
+/// it that SHOW LOGICAL finds once the process has an LNM$FILE_DEV of its
+/// own that lists MYTAB, the process's directory, a table under MYTAB
+/// that goes when /ATTRIBUTES=SUPERSEDE replaces MYTAB, and DEASSIGN of
+/// the tables.
 const RAMDISK: Phase = Phase {
     name: "ramdisk",
     secs: 30,
@@ -235,6 +240,35 @@ const RAMDISK: Phase = Phase {
                 "DEASSIGN HOME\rSHOW LOGICAL HOME\r",
             ),
         ),
+        (
+            "no translation for logical name HOME",
+            1,
+            concat!(
+                "CREATE/NAME_TABLE MYTAB\rCREATE/NAME_TABLE MYTAB\rDEFINE/TABLE=MYTAB FOO BAR\r",
+                "SHOW LOGICAL FOO\r",
+                "DEFINE/TABLE=LNM$PROCESS_DIRECTORY LNM$FILE_DEV LNM$PROCESS,MYTAB,LNM$SYSTEM\r",
+                "SHOW LOGICAL FOO\r",
+            ),
+        ),
+        (
+            "\"FOO\" = \"BAR\" (MYTAB)",
+            1,
+            concat!(
+                "SHOW LOGICAL/TABLE=LNM$PROCESS_DIRECTORY\r",
+                "DEASSIGN/TABLE=LNM$PROCESS_DIRECTORY LNM$FILE_DEV\r",
+                "CREATE/NAME_TABLE/PARENT=MYTAB SUB\rDEFINE/TABLE=SUB X Y\r",
+                "CREATE/NAME_TABLE/ATTRIBUTES=SUPERSEDE MYTAB\rSHOW LOGICAL/TABLE=SUB X\r",
+            ),
+        ),
+        (
+            "previous table MYTAB has been superseded",
+            1,
+            concat!(
+                "CREATE/NAME_TABLE/ATTRIBUTES=SUPERSEDE NEWTAB\r",
+                "DEASSIGN/TABLE=LNM$PROCESS_DIRECTORY MYTAB\r",
+                "DEASSIGN/TABLE=LNM$PROCESS_DIRECTORY NEWTAB\rSHOW LOGICAL/TABLE=MYTAB FOO\r",
+            ),
+        ),
     ],
     lines: &[
         "  MDA0:[000000]",
@@ -281,6 +315,20 @@ const RAMDISK: Phase = Phase {
             "Grand total of 2 directories, 2 files.",
         ),
         "no translation for logical name HOME",
+        "%DCL-I-TABEXIST, MYTAB already exists - not superseded",
+        "$ SHOW LOGICAL FOO\n%SHOW-S-NOTRAN, no translation for logical name FOO",
+        "$ SHOW LOGICAL FOO\n   \"FOO\" = \"BAR\" (MYTAB)",
+        concat!(
+            "(LNM$PROCESS_DIRECTORY)\n\n",
+            "  \"LNM$PROCESS_DIRECTORY\" [table] = \"\"\n",
+            "  \"LNM$PROCESS_TABLE\" [table] = \"\"\n",
+            "  \"LNM$PROCESS\" = \"LNM$PROCESS_TABLE\"\n",
+            "  \"MYTAB\" [table] = \"\"\n",
+            "  \"LNM$FILE_DEV\" = \"LNM$PROCESS\"\n        = \"MYTAB\"\n        = \"LNM$SYSTEM\"\n",
+        ),
+        "$ SHOW LOGICAL/TABLE=SUB X\n%SYSTEM-W-IVLOGTAB, invalid logical name table\n%SHOW-S-NOTRAN, no translation for logical name X",
+        "%DCL-I-TABNOTFND, previous table NEWTAB was not found - new table created",
+        "$ SHOW LOGICAL/TABLE=MYTAB FOO\n%SYSTEM-W-IVLOGTAB",
     ],
 };
 
@@ -507,9 +555,10 @@ const OPERATOR: Phase = Phase {
 };
 
 /// SET PROCESS/PRIVILEGES takes CMKRNL and SYSNAM away, which SHOW
-/// PROCESS/PRIVILEGES shows, so SHOW LOGICAL, which needs $CMKRNL, and
-/// DEFINE/SYSTEM fail with NOPRIV, a privilege it doesn't know fails, and
-/// ALL gives them back.
+/// PROCESS/PRIVILEGES shows, so SHOW LOGICAL, which needs $CMKRNL, fails
+/// with NOPRIV, but not DEFINE/SYSTEM, which the system table's protection
+/// lets SYSTEM's UIC group, a system one, do, as on OpenVMS; a privilege it
+/// doesn't know fails, and ALL gives them back.
 const PRIVILEGES: Phase = Phase {
     name: "privileges",
     secs: 20,
@@ -1476,7 +1525,8 @@ const STARTUP: Phase = Phase {
 /// permanent ones, not SETPWD's SYSPRV, and continues it, is shown
 /// with his UIC, privileges, directory and rights, PAYROLL among them,
 /// reads the file, can't run AUTHORIZE or
-/// OPCCRASH, and logs out; SYSTEM logs in with its new password, and
+/// OPCCRASH, nor DEFINE/SYSTEM or make a table in the system's directory,
+/// but can in his own, and logs out; SYSTEM logs in with its new password, and
 /// PHNTEST logs JOE in on a pseudo terminal: SYSTEM's PHONE rings him, he
 /// answers, each says something, SYSTEM lists who can be called with
 /// %DIRECTORY, reads %HELP DIAL from PHONEHELP.HLB, hangs up and leaves
@@ -1533,7 +1583,18 @@ const USERS: Phase = Phase {
                 "WRITE SYS$OUTPUT \"At CTRL/Y: \", F$GETJPI(\"\", \"CURPRIV\")\rCONTINUE\r",
                 "SHOW PROCESS/PRIVILEGES\rSHOW DEFAULT\rSHOW LOGICAL SYS$LOGIN\r",
                 "SHOW PROCESS/RIGHTS\rTYPE DKB0:[000000]PAY.TXT\r",
-                "MCR AUTHORIZE SHOW JOE\rMCR OPCCRASH\rLOGOUT\r",
+                "MCR AUTHORIZE SHOW JOE\rMCR OPCCRASH\r",
+            ),
+        ),
+        // The first was SHOW LOGICAL's in PRIVILEGES.
+        (
+            "%SYSTEM-F-NOPRIV",
+            2,
+            concat!(
+                "DEFINE/SYSTEM/NOLOG QQQ JOE\r",
+                "CREATE/NAME_TABLE/PARENT=LNM$SYSTEM_DIRECTORY JOETAB\r",
+                "CREATE/NAME_TABLE JOETAB\rDEFINE/TABLE=JOETAB A B\rSHOW LOGICAL/TABLE=JOETAB A\r",
+                "LOGOUT\r",
             ),
         ),
         ("Username:", 5, "SYSTEM\r"),
@@ -1582,6 +1643,9 @@ const USERS: Phase = Phase {
         "\n  DKB0:[000000]\n",
         "\"SYS$LOGIN\" = \"DKB0:[000000]\" (LNM$PROCESS_TABLE)",
         "%UAF-E-NAOFIL, unable to open system authorization file (SYSUAF.DAT)",
+        "$ DEFINE/SYSTEM/NOLOG QQQ JOE\n%SYSTEM-F-NOPRIV",
+        "$ CREATE/NAME_TABLE/PARENT=LNM$SYSTEM_DIRECTORY JOETAB\n%SYSTEM-F-NOPRIV",
+        "   \"A\" = \"B\" (JOETAB)",
         "  JOE          logged out at ",
         "Process name:       \"SYSTEM\"",
         // TTSIZE's, from the size the console said.
@@ -1790,8 +1854,8 @@ fn boot() {
     assert!(present.is_empty(), "{present:?}");
     assert_eq!(
         text.matches("%SYSTEM-F-NOPRIV").count(),
-        3,
-        "SHOW LOGICAL and DEFINE/SYSTEM without CMKRNL and SYSNAM, JOE's OPCCRASH"
+        4,
+        "SHOW LOGICAL without CMKRNL, JOE's OPCCRASH, DEFINE/SYSTEM and table in LNM$SYSTEM_DIRECTORY"
     );
     assert_eq!(
         text.matches("%RMS-E-PRV").count(),

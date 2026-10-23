@@ -99,10 +99,7 @@ SCH$INIT::
         MOVL    R0, 4(R1)               ; index 1
         MOVW    #PCB$K_LENGTH, PCB$W_SIZE(R0)
         MOVB    #DYN$C_PCB, PCB$B_TYPE(R0)
-        MOVAQ   PCB$Q_LNMHD(R0), R1     ; no logical names
-        MOVL    R1, (R1)
-        MOVL    R1, 4(R1)
-        MOVAQ   PCB$Q_ASTQFL(R0), R1    ; nor ASTs
+        MOVAQ   PCB$Q_ASTQFL(R0), R1    ; no ASTs
         MOVL    R1, (R1)
         MOVL    R1, 4(R1)
         MOVB    #16, PCB$B_PRI(R0)

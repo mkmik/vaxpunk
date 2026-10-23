@@ -303,7 +303,8 @@ PCB$L_CLICHANS = 264                    ; the channels it keeps when an image ex
 PCB$A_IFAB = 272                        ; its open files' IFABs, by IFI 1-15, or 0
 PCB$L_FILES = 336                       ; bit n: IFI n is open
 PCB$L_CLIFILES = 340                    ; the files it keeps open when an image exits
-PCB$Q_LNMHD = 344                       ; its logical name table, LNM$PROCESS_TABLE: LNMBs
+PCB$L_LNMDIR = 344                      ; its logical name directory, LNM$PROCESS_DIRECTORY: an LNMTH, or 0
+PCB$L_LNMTAB = 348                      ; its logical name table, LNM$PROCESS_TABLE: an LNMTH
 PCB$T_DEFDIR = 352                      ; default directory, .ASCIC, 63 characters: $SETDDIR's
 PCB$Q_ASTQFL = 424                      ; its ACBs, by access mode, kernel's first
 PCB$L_ASTSP = 432                       ; while an AST routine runs, where on the kernel stack what it interrupted is, else 0
@@ -372,14 +373,34 @@ GSD$K_LENGTH = 80                       ; without them
 
 ; $LNMBDEF: a logical name block, from pool, on its table's queue: a
 ; logical name and its equivalence strings, more than one for a search
-; list.
+; list. A table's is in a directory, with no strings, and its header,
+; an LNMTH, in the same block.
         .MACRO  $LNMBDEF
 LNMB$L_FLINK = 0                        ; the table
 LNMB$L_BLINK = 4
 LNMB$W_SIZE = 8                         ; its size, as allocated
-LNMB$T_NAME = 10                        ; the name, .ASCIC, then each equivalence, .ASCIC, then a 0
-LNMB$K_LENGTH = 10                      ; past that, the strings
+LNMB$B_FLAGS = 10                       ; LNMB$M_
+LNMB$L_LNMTH = 12                       ; a table's header, else 0
+LNMB$T_NAME = 16                        ; the name, .ASCIC, then each equivalence, .ASCIC, then a 0
+LNMB$K_LENGTH = 16                      ; past that, the strings
+LNMB$M_NODELETE = 1                     ; $DELLNM can't delete it, $CRELNM and $CRELNT can't replace it
         .ENDM   $LNMBDEF
+
+; $LNMTHDEF: a logical name table's header: the queue of its LNMBs, and
+; where it hangs in the tree of tables. A directory, LNM$PROCESS_DIRECTORY
+; or LNM$SYSTEM_DIRECTORY, holds the tables, its own LNMB too.
+        .MACRO  $LNMTHDEF
+LNMTH$L_FLINK = 0                       ; its names: LNMBs
+LNMTH$L_BLINK = 4
+LNMTH$L_NAME = 8                        ; its LNMB, in a directory
+LNMTH$L_PARENT = 12                     ; its parent table's header, 0 for a directory
+LNMTH$L_OWNER = 16                      ; a shareable table's owner, a UIC
+LNMTH$W_PROT = 20                       ; and its protection mask, as a file's: R, W, C (make a table under it), D
+LNMTH$B_FLAGS = 22                      ; LNMTH$M_
+LNMTH$K_LENGTH = 24
+LNMTH$M_SHAREABLE = 1                   ; in LNM$SYSTEM_DIRECTORY: every process's
+LNMTH$M_DIRECTORY = 2
+        .ENDM   $LNMTHDEF
 
 ; $TQEDEF: a timer queue entry, from pool, on EXE$GQ_TQFL in the order it
 ; is due. Times are VMS's: 100 ns units since 17-Nov-1858. A $SETIMR

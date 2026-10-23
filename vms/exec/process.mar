@@ -49,7 +49,7 @@
         .EXTERNAL MMG$SETPRT, EXE$RMVTIMQ, EXE$USRSTART, EXE$CLISTART
         .EXTERNAL FIL$OPENFILE, FIL$OPENSHR, FIL$READIMG, RMS$RUNDOWN, LCK$RUNDOWN
         .EXTERNAL EXE$OUTZSTRING, EXE$OUTCSTRING, EXE$OUTHEX, EXE$OUTCRLF
-        .EXTERNAL LNM$CREATE, LNM$DELTBL, SCH$QAST, EXE$FLUSHAST, IOC$CANCEL, SYS$EXIT
+        .EXTERNAL LNM$CREATE, LNM$CREPRC, LNM$DELPROC, SCH$QAST, EXE$FLUSHAST, IOC$CANCEL, SYS$EXIT
         .EXTERNAL MB$FINDNUM, MB$SEND, EXE$GQ_SYSTIME, TT$OWNER, TT$FDT
 
 KSTACK = 16384                          ; a process's kernel stack
@@ -443,9 +443,8 @@ EXE$PRCPRIV::
         BSBW    EXE$DEANONPGDSIZ
         MOVL    (SP)+, R0
 80$:    PUSHL   R0
-        MOVAQ   PCB$Q_LNMHD(R8), R2
-        BSBW    LNM$DELTBL
         MOVL    R8, R4
+        BSBW    LNM$DELPROC
         BSBW    FREERIGHTS
         MOVL    R8, R0
         MOVL    #PCB$K_LENGTH, R1
@@ -462,7 +461,8 @@ EXE$PRCPRIV::
         RET
 
 ; PPNAMES: R8 = a new PCB, AP = $CREPRC's arguments, checked. Makes its
-; logical name table, with its process-permanent names: SYS$INPUT,
+; logical name directory and table (LNM$CREPRC), with its
+; process-permanent names in the table: SYS$INPUT,
 ; SYS$OUTPUT and SYS$ERROR, those of input, output and error it was given,
 ; and SYS$COMMAND, input's too, where DCL reads its commands, while
 ; SYS$INPUT may be a procedure's data lines.
@@ -470,9 +470,10 @@ EXE$PRCPRIV::
 PPNAMES:
         .JSB_ENTRY  SCRATCH=<R2, R5, R6, R7, R9, R10>
         PUSHR   #^M<R3, R8>
-        MOVAQ   PCB$Q_LNMHD(R8), R5
-        MOVL    R5, (R5)
-        MOVL    R5, 4(R5)
+        MOVL    R8, R4
+        BSBW    LNM$CREPRC
+        BLBC    R0, 80$
+        MOVL    PCB$L_LNMTAB(R8), R5
         MOVAL   12(AP), R2              ; input, output, error
         MOVAB   STDNAMES, R10           ; SYS$INPUT, SYS$OUTPUT, SYS$ERROR
 10$:    MOVZBL  (R10)+, R7
@@ -1177,8 +1178,7 @@ EXE$RUNDOWN::
         CLRL    R0
         BSBW    EXE$FLUSHAST
         ENBINT
-        MOVAQ   PCB$Q_LNMHD(R4), R2
-        BSBW    LNM$DELTBL
+        BSBW    LNM$DELPROC
         MOVL    PCB$L_FREP1VA(R4), R0
         SUBL3   R0, #VA$C_P1END, R1
         BLEQ    20$

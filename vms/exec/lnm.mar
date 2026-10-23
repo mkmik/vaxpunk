@@ -1,21 +1,31 @@
         .TITLE  LNM     Logical names
-        .IDENT  /V0.1/
+        .IDENT  /V0.2/
 ;
 ; A logical name stands for a string, its equivalence: SYS$INPUT for
 ; _OPA0:. $CRELNM makes one in a logical name table, $DELLNM deletes it,
 ; and $TRNLNM translates it; $ASSIGN translates a device name with
-; LNM$TRNLOG (docs/design/0002-executive-processes.md). There are two
-; tables: each process's own, LNM$PROCESS_TABLE, a queue in its PCB, which
-; goes with the process, and every process's, LNM$SYSTEM_TABLE. Services
-; name a table by that name, or LNM$PROCESS or LNM$SYSTEM, or LNM$FILE_DEV:
-; for $TRNLNM the process's table and then the system's, for the others
-; the process's. Each name is a logical name block from pool, and the
-; tables are synchronized at IPL$_SYNCH. A name with more than one
-; equivalence string is a search list, which RMS looks in for a file one
-; string after another.
-; ponytail: no access modes, attributes, job or group tables, or tables
-; of one's own; VMS's logical name directories, hash table and mutex
-; replace this.
+; LNM$TRNLOG (docs/design/0002-executive-processes.md). A name with more
+; than one equivalence string is a search list, which RMS looks in for a
+; file one string after another. Each name is a logical name block from
+; pool, on its table's queue, and the tables are synchronized at
+; IPL$_SYNCH.
+;
+; The tables are names too, in two directories: each process's,
+; LNM$PROCESS_DIRECTORY, which goes with the process, holds its
+; LNM$PROCESS_TABLE, and every process's, LNM$SYSTEM_DIRECTORY, holds
+; LNM$SYSTEM_TABLE. A service is given a table's name, or another name in
+; a directory, which it translates, LNM$C_MAXDEPTH times at most, into
+; the tables it stands for: LNM$FILE_DEV is LNM$PROCESS, LNM$JOB,
+; LNM$GROUP and LNM$SYSTEM, which name the process's table and the
+; system's. A name is looked up in the process's directory first, so a
+; process may have an LNM$FILE_DEV of its own. $CRELNT makes a table
+; under another: under one of the process's, in its directory, else in
+; the system's, shareable, with an owner and a protection mask that say
+; who may change it, as on VMS. Deleting a table deletes those under it.
+; ponytail: no access modes, attributes or quotas, and no LNM$JOB or
+; LNM$GROUP tables yet. The names made at boot and with a process, which
+; are in executive mode on VMS, are LNMB$M_NODELETE instead. VMS's hash
+; table and mutex replace the queues and IPL$_SYNCH.
 ;
         .LIBRARY "lib.mlb"
         .LIBRARY "starlet.mlb"
@@ -23,52 +33,330 @@
         $PCBDEF
         $PRVDEF
         $LNMBDEF
+        $LNMTHDEF
         $LNMDEF
         $SSDEF
+        $ARMDEF
 
-        .EXTERNAL SCH$GL_CURPCB, EXE$MATCHNAME, EXE$PROBER_DSC
+        .EXTERNAL SCH$GL_CURPCB, EXE$MATCHNAME, EXE$PROBER_DSC, FIL$CHKPRO
         .EXTERNAL EXE$ALONONPAGED, EXE$DEANONPGDSIZ
 
-PROCESS = 1                             ; a table name's tables: the process's,
-SYSTEM = 2                              ; the system's, or both, in that order
 MAXINDEX = 127                          ; a search list's last index, at most
+SYSUIC = ^X10004                        ; [1,4], SYSTEM: the system's tables' owner
+SYSPROT = ^XEE88                        ; and their protection: S:RWC, O:RWC, G:R, W:R
+DEFPROT = ^XEECC                        ; a new shareable table's: S:RW, O:RW, G:R, W:R
+CRELNTATTR = LNM$M_NO_ALIAS!LNM$M_CONFINE!LNM$M_CREATE_IF       ; $CRELNT's attributes
 
         .PSECT  EXEC$DATA, NOEXE, WRT, QUAD
-LNM$GQ_SYSTEM::                         ; LNM$SYSTEM_TABLE: LNMBs
-        .ADDRESS LNM$GQ_SYSTEM, LNM$GQ_SYSTEM
-; The table names a service knows, each .ASCIC and a byte of its tables.
-TABNAMES:
-PROCNAM:
+LNM$GL_SYSDIR::                         ; LNM$SYSTEM_DIRECTORY: its LNMTH
+        .LONG   0
+LNM$GL_SYSTEM::                         ; LNM$SYSTEM_TABLE: its LNMTH
+        .LONG   0
+SYSDIRNAM:
+        .ASCIC  "LNM$SYSTEM_DIRECTORY"
+SYSTABNAM:
+        .ASCIC  "LNM$SYSTEM_TABLE"
+PROCDIRNAM:
+        .ASCIC  "LNM$PROCESS_DIRECTORY"
+PROCTABNAM:
         .ASCIC  "LNM$PROCESS_TABLE"
-        .BYTE   PROCESS
-SYSNAM: .ASCIC  "LNM$SYSTEM_TABLE"
-        .BYTE   SYSTEM
-        .ASCIC  "LNM$PROCESS"
-        .BYTE   PROCESS
-        .ASCIC  "LNM$SYSTEM"
-        .BYTE   SYSTEM
+FILE_DEV:
         .ASCIC  "LNM$FILE_DEV"
-        .BYTE   PROCESS ! SYSTEM
+; The names in the system's directory that stand for tables, after the
+; tables: each a name, .ASCIC, its equivalence strings, .ASCIC, and a 0,
+; as in an LNMB, until a 0.
+SYSNAMES:
+        .ASCIC  "LNM$SYSTEM"
+        .ASCIC  "LNM$SYSTEM_TABLE"
         .BYTE   0
+        .ASCIC  "LNM$FILE_DEV"          ; where file and device names are
+        .ASCIC  "LNM$PROCESS"
+        .ASCIC  "LNM$JOB"
+        .ASCIC  "LNM$GROUP"
+        .ASCIC  "LNM$SYSTEM"
+        .BYTE   0
+        .ASCIC  "LNM$DCL_LOGICAL"       ; those DCL shows
+        .ASCIC  "LNM$FILE_DEV"
+        .BYTE   0
+        .ASCIC  "LNM$DIRECTORIES"
+        .ASCIC  "LNM$PROCESS_DIRECTORY"
+        .ASCIC  "LNM$SYSTEM_DIRECTORY"
+        .BYTE   0
+        .BYTE   0
+PROCNAMES:                              ; and in each process's
+        .ASCIC  "LNM$PROCESS"
+        .ASCIC  "LNM$PROCESS_TABLE"
+        .BYTE   0
+        .BYTE   0
+NONAME: .ASCIC  "LNM$00000000"          ; $CRELNT's table without a name: its header's address
+HEX:    .ASCII  "0123456789ABCDEF"
 EMPTY:  .BYTE   0                       ; the equivalence past a name's last, .ASCIC
 
         .PSECT  $CODE$
 
+; LNM$INIT: makes LNM$SYSTEM_DIRECTORY and LNM$SYSTEM_TABLE, owned by
+; [1,4] with the protection S:RWC, O:RWC, G:R, W:R, and the names in the
+; directory that stand for tables, LNM$SYSTEM, LNM$FILE_DEV,
+; LNM$DCL_LOGICAL and LNM$DIRECTORIES. R0 = SS$_NORMAL or SS$_INSFMEM.
+LNM$INIT::
+        .JSB_ENTRY
+        MOVZBL  SYSDIRNAM, R7
+        MOVAB   SYSDIRNAM+1, R6
+        CLRL    R8
+        MOVL    #LNMTH$M_SHAREABLE!LNMTH$M_DIRECTORY, R9
+        BSBW    NEWTAB
+        BLBC    R0, 90$
+        MOVB    #LNMB$M_NODELETE, LNMB$B_FLAGS(R2)
+        MOVL    #SYSUIC, LNMTH$L_OWNER(R3)
+        MOVW    #SYSPROT, LNMTH$W_PROT(R3)
+        INSQUE  (R2), (R3)              ; in itself
+        MOVL    R3, LNM$GL_SYSDIR
+        MOVL    R3, R5
+        MOVZBL  SYSTABNAM, R7
+        MOVAB   SYSTABNAM+1, R6
+        MOVL    R3, R8
+        MOVL    #LNMTH$M_SHAREABLE, R9
+        BSBW    NEWTAB
+        BLBC    R0, 90$
+        MOVB    #LNMB$M_NODELETE, LNMB$B_FLAGS(R2)
+        MOVL    #SYSUIC, LNMTH$L_OWNER(R3)
+        MOVW    #SYSPROT, LNMTH$W_PROT(R3)
+        INSQUE  (R2), @LNMTH$L_BLINK(R5)
+        MOVL    R3, LNM$GL_SYSTEM
+        MOVAB   SYSNAMES, R6
+        BSBW    NAMES
+90$:    RSB
+
+; LNM$CREPRC: R4 = a new PCB. Makes its LNM$PROCESS_DIRECTORY, with
+; LNM$PROCESS_TABLE in it and LNM$PROCESS, which stands for that. R0 =
+; SS$_NORMAL, or SS$_INSFMEM, and LNM$DELPROC gives back what it made.
+LNM$CREPRC::
+        .JSB_ENTRY
+        MOVZBL  PROCDIRNAM, R7
+        MOVAB   PROCDIRNAM+1, R6
+        CLRL    R8
+        MOVL    #LNMTH$M_DIRECTORY, R9
+        BSBW    NEWTAB
+        BLBC    R0, 90$
+        MOVB    #LNMB$M_NODELETE, LNMB$B_FLAGS(R2)
+        INSQUE  (R2), (R3)              ; in itself
+        MOVL    R3, PCB$L_LNMDIR(R4)
+        MOVL    R3, R5
+        MOVZBL  PROCTABNAM, R7
+        MOVAB   PROCTABNAM+1, R6
+        MOVL    R3, R8
+        CLRL    R9
+        BSBW    NEWTAB
+        BLBC    R0, 90$
+        MOVB    #LNMB$M_NODELETE, LNMB$B_FLAGS(R2)
+        INSQUE  (R2), @LNMTH$L_BLINK(R5)
+        MOVL    R3, PCB$L_LNMTAB(R4)
+        MOVAB   PROCNAMES, R6
+        BSBW    NAMES
+90$:    RSB
+
+; LNM$DELPROC: R4 = a PCB. Deletes its logical name directory, if it has
+; one, and every table and name in it. Uses R0-R3.
+LNM$DELPROC::
+        .JSB_ENTRY  SCRATCH=<R2, R3>
+        MOVL    PCB$L_LNMDIR(R4), R2
+        BEQL    90$
+        DSBINT  #IPL$_SYNCH
+        CLRL    PCB$L_LNMDIR(R4)
+        CLRL    PCB$L_LNMTAB(R4)
+10$:    MOVL    (R2), R1                ; a name, but its own
+        CMPL    R1, LNMTH$L_NAME(R2)
+        BNEQ    20$
+        MOVL    (R1), R1
+20$:    CMPL    R1, R2
+        BEQL    30$
+        BSBW    DELNAME
+        BRB     10$
+30$:    MOVL    LNMTH$L_NAME(R2), R0
+        MOVZWL  LNMB$W_SIZE(R0), R1
+        BSBW    EXE$DEANONPGDSIZ
+        ENBINT
+90$:    RSB
+
+; $CRELNT attr, resnam, reslen, quota, promsk, tabnam, partab, acmode:
+; makes a logical name table, tabnam, under the one partab names: in the
+; process's directory if that is the process's, else in the system's,
+; shareable, owned by the process's UIC, with the protection promsk, a
+; longword's low word, S:RW, O:RW, G:R, W:R without it. Without tabnam its
+; name is LNM$ and 8 hex digits. Writes the name to the descriptor
+; resnam's buffer, as much as fits, and its length to the word reslen.
+; A name there already goes, and the tables under it: SS$_SUPERSEDE;
+; with LNM$M_CREATE_IF in the longword attr it stays, and it is its name
+; that is written: SS$_NORMAL. Else SS$_LNMCREATED. A shareable table
+; takes create access to the parent, and write access to
+; LNM$SYSTEM_DIRECTORY if it has tabnam: SS$_NOPRIV. SS$_NOLOGTAB if
+; partab names no table, SS$_IVLOGNAM for a name longer than 31, or
+; with other than letters, digits, $ and _, SS$_DUPLNAM for one that
+; can't go, SS$_PARENT_DEL for the parent's or one above it,
+; SS$_RESULTOVF if resnam is too short, SS$_BADPARAM for another
+; attribute, SS$_ACCVIO. quota and acmode are ignored, and LNM$M_CONFINE
+; and LNM$M_NO_ALIAS.
+        .ENTRY  EXE$CRELNT, ^M<R2, R3, R4, R5, R6, R7, R8, R9, R10, R11>
+        CLRL    R11                     ; the attributes
+        MOVL    4(AP), R0
+        BEQL    10$
+        IFNORD  #4, (R0), 95$
+        MOVL    (R0), R11
+        BICL3   #CRELNTATTR, R11, R0
+        BNEQ    96$
+10$:    MOVL    8(AP), R1               ; resnam and reslen, written at the end
+        BEQL    12$
+        IFNORD  #8, (R1), 95$
+        MOVZWL  (R1), R0
+        MOVL    4(R1), R2
+        IFNOWRT R0, (R2), 95$
+12$:    MOVL    12(AP), R1
+        BEQL    14$
+        IFNOWRT #2, (R1), 95$
+14$:    MOVZWL  #DEFPROT, R10           ; the protection
+        MOVL    20(AP), R0
+        BEQL    16$
+        IFNORD  #4, (R0), 95$
+        MOVZWL  (R0), R10
+16$:    MOVZBL  NONAME, R7
+        MOVAB   NONAME+1, R6
+        MOVL    24(AP), R1
+        BEQL    18$
+        BSBW    NAME
+        BLBC    R0, 90$
+        CMPL    R7, #LNM$C_TABNAMLEN
+        BGTRU   97$
+18$:    CLRL    R8
+        CLRL    R9
+        BSBW    NEWTAB
+        BLBC    R0, 90$
+        MOVL    R2, R4                  ; the new table's LNMB
+        MOVL    R3, R5                  ; and header
+        TSTL    24(AP)
+        BNEQ    20$
+        MOVAB   LNMB$T_NAME+13(R4), R1  ; no name: its header's address, in hex
+        MOVL    R5, R0
+        MOVL    #8, R2
+19$:    BICL3   #^C15, R0, R3
+        MOVB    HEX[R3], -(R1)
+        EXTZV   #4, #28, R0, R0
+        SOBGTR  R2, 19$
+20$:    MOVL    R4, R1
+        MOVL    LNM$GL_SYSDIR, R2       ; a valid name in a directory?
+        BSBW    DIRNAME
+        BLBC    R0, 85$
+        MOVL    28(AP), R1
+        BEQL    84$
+        MOVAB   FIRSTTAB, R10
+        DSBINT  #IPL$_SYNCH
+        BSBW    TABLES                  ; R8 = the parent
+        BLBC    R0, 80$
+        MOVL    R8, LNMTH$L_PARENT(R5)
+        MOVL    SCH$GL_CURPCB, R0
+        MOVL    PCB$L_LNMDIR(R0), R9    ; the directory: the process's,
+        BITB    #LNMTH$M_SHAREABLE, LNMTH$B_FLAGS(R8)
+        BEQL    30$
+        MOVB    #LNMTH$M_SHAREABLE, LNMTH$B_FLAGS(R5)   ; or the system's
+        MOVW    R10, LNMTH$W_PROT(R5)
+        MOVL    LNM$GL_SYSDIR, R9
+        MOVL    R8, R2
+        MOVL    #ARM$M_CREATE, R0
+        BSBW    TABACCESS
+        BLBC    R0, 80$
+        TSTL    24(AP)
+        BEQL    30$
+        MOVL    R9, R2
+        MOVL    #ARM$M_WRITE, R0
+        BSBW    TABACCESS
+        BLBC    R0, 80$
+30$:    MOVZBL  LNMB$T_NAME(R4), R7
+        MOVAB   LNMB$T_NAME+1(R4), R6
+        MOVL    R9, R2
+        BSBW    FIND                    ; R1 = the one there, or 0
+        TSTL    R1
+        BEQL    50$
+        MOVL    #SS$_NORMAL, R0
+        BITL    #LNM$M_CREATE_IF, R11
+        BNEQ    75$
+        MOVL    LNMB$L_LNMTH(R1), R0    ; a table above the parent?
+        BEQL    50$
+        MOVL    R8, R2
+40$:    CMPL    R2, R0
+        BEQL    83$
+        MOVL    LNMTH$L_PARENT(R2), R2
+        BNEQ    40$
+50$:    MOVL    R4, R2
+        MOVL    R9, R5
+        BSBW    INSERT
+        BLBC    R0, 82$
+        CMPL    R0, #SS$_SUPERSEDE
+        BEQL    60$
+        MOVL    #SS$_LNMCREATED, R0
+60$:    MOVL    8(AP), R2
+        MOVL    12(AP), R3
+        BSBW    RESNAM
+        BRB     82$
+75$:    MOVL    8(AP), R2               ; kept: the same name
+        MOVL    12(AP), R3
+        BSBW    RESNAM
+80$:    PUSHL   R0                      ; not made: back to pool
+        MOVL    R4, R0
+        MOVZWL  LNMB$W_SIZE(R0), R1
+        BSBW    EXE$DEANONPGDSIZ
+        MOVL    (SP)+, R0
+82$:    ENBINT
+        RET
+83$:    MOVL    #SS$_PARENT_DEL, R0
+        BRB     80$
+84$:    MOVL    #SS$_BADPARAM, R0       ; no partab
+85$:    DSBINT  #IPL$_SYNCH
+        BRB     80$
+90$:    RET
+95$:    MOVL    #SS$_ACCVIO, R0
+        RET
+96$:    MOVL    #SS$_BADPARAM, R0
+        RET
+97$:    MOVL    #SS$_IVLOGNAM, R0
+        RET
+
+; RESNAM: R4 = a table's LNMB, R0 = $CRELNT's status, R2 = its resnam,
+; R3 = its reslen. Writes the table's name to resnam's buffer, as much as
+; fits, and the length written to reslen. R0 = the status, or
+; SS$_RESULTOVF if it didn't all fit. Uses R1.
+RESNAM:
+        .JSB_ENTRY
+        MOVL    R0, R5
+        MOVZBL  LNMB$T_NAME(R4), R6     ; its length
+        TSTL    R2
+        BEQL    10$
+        CMPW    R6, (R2)
+        BLEQU   5$
+        MOVZWL  (R2), R6
+        MOVL    #SS$_RESULTOVF, R5
+5$:     PUSHL   R3
+        MOVL    4(R2), R3
+        MOVL    R6, R0
+        MOVAB   LNMB$T_NAME+1(R4), R1
+        BSBW    COPY
+        MOVL    (SP)+, R3
+10$:    TSTL    R3
+        BEQL    20$
+        MOVW    R6, (R3)
+20$:    MOVL    R5, R0
+        RSB
+
 ; $CRELNM attr, tabnam, lognam, acmode, itmlst: makes lognam a logical name
-; in the table tabnam names, the process's for LNM$FILE_DEV, with the
-; equivalence string of each LNM$_STRING item in itmlst, in order: more
-; than one makes a search list. One by that name there goes:
-; SS$_SUPERSEDE. SS$_BADPARAM without such an item, with another, with
-; an empty string or one longer than 255, or with more than 128;
-; SS$_IVLOGNAM for a name longer than 255; SS$_NOPRIV in the system table
-; without SYSNAM. attr and acmode are ignored.
-        .ENTRY  EXE$CRELNM, ^M<R2, R3, R4, R5, R6, R7, R8, R9>
-        MOVL    8(AP), R1
-        BSBW    TABLE
-        BLBC    R0, 90$
-        BSBW    WRITABLE
-        BLBC    R0, 90$
-        MOVL    R2, R5
+; in the first table tabnam names, with the equivalence string of each
+; LNM$_STRING item in itmlst, in order: more than one makes a search
+; list. One by that name there goes, and the tables under it if it is a
+; table: SS$_SUPERSEDE, or SS$_DUPLNAM if it can't (LNMB$M_NODELETE).
+; SS$_BADPARAM without such an item, with another, with an empty string
+; or one longer than 255, or with more than 128; SS$_IVLOGNAM for a name
+; longer than 255, or in a directory longer than 31 or with other than
+; letters, digits, $ and _; SS$_NOLOGTAB if tabnam names no table;
+; SS$_NOPRIV in a shareable table without write access, or SYSNAM for
+; the system's. attr and acmode are ignored.
+        .ENTRY  EXE$CRELNM, ^M<R2, R3, R4, R5, R6, R7, R8, R9, R10, R11>
         MOVL    12(AP), R1
         BSBW    NAME
         BLBC    R0, 90$
@@ -99,6 +387,7 @@ EMPTY:  .BYTE   0                       ; the equivalence past a name's last, .A
         ADDL2   #LNMB$K_LENGTH+2, R1
         BSBW    NEWLNMB
         BLBC    R0, 90$
+        MOVL    R2, R11                 ; the new block
         MOVL    20(AP), R4
 30$:    TSTL    (R4)
         BEQL    40$
@@ -109,30 +398,83 @@ EMPTY:  .BYTE   0                       ; the equivalence past a name's last, .A
         ADDL2   #12, R4
         BRB     30$
 40$:    CLRB    (R3)
+        MOVL    8(AP), R1
+        MOVAB   FIRSTTAB, R10
+        DSBINT  #IPL$_SYNCH
+        BSBW    TABLES                  ; R8 = the table
+        BLBC    R0, 70$
+        MOVL    R8, R2
+        BSBW    WRITABLE
+        BLBC    R0, 70$
+        MOVL    R11, R1
+        BSBW    DIRNAME
+        BLBC    R0, 70$
+        MOVZBL  LNMB$T_NAME(R11), R7
+        MOVAB   LNMB$T_NAME+1(R11), R6
+        MOVL    R11, R2
+        MOVL    R8, R5
         BSBW    INSERT
+        BRB     75$
+70$:    PUSHL   R0                      ; not made: back to pool
+        MOVL    R11, R0
+        MOVZWL  LNMB$W_SIZE(R0), R1
+        BSBW    EXE$DEANONPGDSIZ
+        MOVL    (SP)+, R0
+75$:    ENBINT
 90$:    RET
 80$:    MOVL    #SS$_ACCVIO, R0
         RET
 85$:    MOVL    #SS$_BADPARAM, R0
         RET
 
-; $DELLNM tabnam, lognam, acmode: deletes lognam from the table tabnam
-; names, the process's for LNM$FILE_DEV. SS$_NOLOGNAM if it isn't there,
-; SS$_NOPRIV in the system table without SYSNAM. acmode is ignored.
-; ponytail: VMS deletes every name in the table when there is no lognam.
-        .ENTRY  EXE$DELLNM, ^M<R2, R3, R6, R7>
-        MOVL    4(AP), R1
-        BSBW    TABLE
-        BLBC    R0, 90$
-        BSBW    WRITABLE
-        BLBC    R0, 90$
+; $DELLNM tabnam, lognam, acmode: deletes lognam from the first table
+; tabnam names that has it: a table's name in a directory deletes the
+; table, its names and the tables under it. Without lognam, deletes every
+; name in the first table tabnam names. SS$_NOLOGNAM if no table has it,
+; or it is LNMB$M_NODELETE, which are left too; SS$_NOLOGTAB if tabnam
+; names no table; SS$_NOPRIV in a shareable table without write access,
+; or SYSNAM for the system's, unless it is a table one has delete access
+; to. acmode is ignored.
+        .ENTRY  EXE$DELLNM, ^M<R2, R3, R4, R5, R6, R7, R8, R9, R10, R11>
         MOVL    8(AP), R1
+        BEQL    50$
         BSBW    NAME
         BLBC    R0, 90$
-        BSBB    LNM$DELETE
+        MOVL    4(AP), R1
+        MOVAB   FINDNAME, R10
+        DSBINT  #IPL$_SYNCH
+        BSBW    TABLES                  ; R8 = the name, R9 = its table
+        BLBC    R0, 80$
+        MOVL    #SS$_NOLOGNAM, R0
+        BITB    #LNMB$M_NODELETE, LNMB$B_FLAGS(R8)
+        BNEQ    80$
+        MOVL    R9, R2
+        BSBW    WRITABLE
+        BLBS    R0, 40$
+        MOVL    LNMB$L_LNMTH(R8), R2    ; a table: or delete access to it
+        BEQL    80$
+        MOVL    #ARM$M_DELETE, R0
+        BSBW    TABACCESS
+        BLBC    R0, 80$
+40$:    MOVL    R8, R1
+        MOVL    R9, R2
+        BSBW    DELNAME
+        MOVL    #SS$_NORMAL, R0
+        BRB     80$
+50$:    MOVL    4(AP), R1
+        MOVAB   FIRSTTAB, R10
+        DSBINT  #IPL$_SYNCH
+        BSBW    TABLES                  ; R8 = the table
+        BLBC    R0, 80$
+        MOVL    R8, R2
+        BSBW    WRITABLE
+        BLBC    R0, 80$
+        BSBW    DELNAMES
+        MOVL    #SS$_NORMAL, R0
+80$:    ENBINT
 90$:    RET
 
-; LNM$DELETE: R2 = a table's queue head, R6 = a name, R7 = its length.
+; LNM$DELETE: R2 = a table's header, R6 = a name, R7 = its length.
 ; Deletes the name from the table. R0 = SS$_NORMAL, or SS$_NOLOGNAM if
 ; it isn't there. Uses R0 and R1.
 LNM$DELETE::
@@ -142,51 +484,46 @@ LNM$DELETE::
         MOVL    #SS$_NOLOGNAM, R0
         TSTL    R1
         BEQL    80$
-        REMQUE  (R1), R0
-        MOVZWL  LNMB$W_SIZE(R0), R1
-        BSBW    EXE$DEANONPGDSIZ
+        BSBW    DELNAME
         MOVL    #SS$_NORMAL, R0
 80$:    ENBINT
         RSB
 
 ; $TRNLNM attr, tabnam, lognam, acmode, itmlst: translates lognam, looked
-; up in the table tabnam names, or for LNM$FILE_DEV the process's and then
-; the system's. For each item of itmlst, writes in its buffer, as much as
-; fits, and the length written in its return length word: LNM$_STRING,
-; the equivalence string; LNM$_TABLE, the name of the table it was in;
-; LNM$_LENGTH, the string's length, a longword; LNM$_MAX_INDEX, the last
-; string's index, a longword, 0 unless it is a search list. An
-; LNM$_INDEX item's longword says which string the items after it are
-; about, 0 the first: past the last, the string is empty. SS$_NOLOGNAM
-; if no table has it, SS$_BADPARAM for another item code. attr and
-; acmode are ignored.
-        .ENTRY  EXE$TRNLNM, ^M<R2, R3, R4, R5, R6, R7, R8>
-        MOVL    8(AP), R1
-        BSBW    TABLE
-        BLBC    R0, 90$
+; up in each table tabnam names in turn. For each item of itmlst, writes
+; in its buffer, as much as fits, and the length written in its return
+; length word: LNM$_STRING, the equivalence string; LNM$_TABLE, the name
+; of the table it was in; LNM$_LENGTH, the string's length, a longword;
+; LNM$_MAX_INDEX, the last string's index, a longword, 0 unless it is a
+; search list, -1 for a table; LNM$_ATTRIBUTES, a longword,
+; LNM$M_EXISTS if there is a string at that index and LNM$M_TABLE for a
+; table. An LNM$_INDEX item's longword says which string the items after
+; it are about, 0 the first: past the last, the string is empty.
+; SS$_NOLOGNAM if no table has it, SS$_NOLOGTAB if tabnam names no table,
+; SS$_BADPARAM for another item code. attr and acmode are ignored.
+        .ENTRY  EXE$TRNLNM, ^M<R2, R3, R4, R5, R6, R7, R8, R9, R10, R11>
         MOVL    12(AP), R1
         BSBW    NAME
         BLBC    R0, 90$
+        MOVL    8(AP), R1
+        MOVAB   FINDNAME, R10
         DSBINT  #IPL$_SYNCH
-        BSBW    LOOKUP
-        MOVL    #SS$_NOLOGNAM, R0
-        TSTL    R1
-        BEQL    80$
-        MOVAB   PROCNAM, R8             ; which table it was in
-        MOVAQ   LNM$GQ_SYSTEM, R0
-        CMPL    R2, R0
-        BNEQ    10$
-        MOVAB   SYSNAM, R8
-10$:    MOVL    20(AP), R4
+        BSBW    TABLES                  ; R8 = the name, R9 = its table
+        BLBC    R0, 80$
+        MOVL    R8, R1
+        MOVL    LNMTH$L_NAME(R9), R8
+        MOVAB   LNMB$T_NAME(R8), R8     ; the table's name
+        MOVL    20(AP), R4
         BSBB    ITEMS
 80$:    ENBINT
 90$:    RET
 
 ; ITEMS: R1 = a logical name block, R8 = its table's name, .ASCIC, R4 = a
 ; $TRNLNM item list. Fills in each item. R0 = SS$_NORMAL, SS$_ACCVIO or
-; SS$_BADPARAM. Uses R2-R7.
+; SS$_BADPARAM. Uses R2-R7 and R9.
 ITEMS:
-        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5, R6, R7>
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5, R6, R7, R9>
+        CLRL    R9                      ; the index
         CLRL    R0
         BSBW    EQUIV                   ; R7 = the equivalence string
 10$:    IFNORD  #4, (R4), 80$
@@ -200,7 +537,8 @@ ITEMS:
         CMPL    R2, #4                  ; which string: a longword
         BLSSU   85$
         IFNORD  #4, (R3), 80$
-        MOVL    (R3), R0
+        MOVL    (R3), R9
+        MOVL    R9, R0
         BSBW    EQUIV
         BRB     60$
 15$:    IFNOWRT R2, (R3), 80$
@@ -208,6 +546,8 @@ ITEMS:
         BEQL    40$
         CMPW    2(R4), #LNM$_MAX_INDEX
         BEQL    45$
+        CMPW    2(R4), #LNM$_ATTRIBUTES
+        BEQL    46$
         MOVL    R7, R5
         CMPW    2(R4), #LNM$_STRING
         BEQL    20$
@@ -234,6 +574,22 @@ ITEMS:
         BSBW    LNM$EQUIV
         MOVL    R1, (R3)
         MOVL    (SP)+, R1
+        BRB     48$
+46$:    CMPL    R2, #4                  ; the attributes: a longword
+        BLSSU   85$
+        PUSHL   R1
+        BSBW    LNM$EQUIV               ; R1 = the last index
+        CLRL    R0
+        TSTL    R9
+        BLSS    47$
+        CMPL    R9, R1
+        BGTR    47$
+        MOVL    #LNM$M_EXISTS, R0
+47$:    MOVL    (SP)+, R1
+        TSTL    LNMB$L_LNMTH(R1)
+        BEQL    49$
+        BISL2   #LNM$M_TABLE, R0
+49$:    MOVL    R0, (R3)
 48$:    MOVL    #4, R6
 50$:    MOVL    8(R4), R0               ; the length written
         BEQL    60$
@@ -260,8 +616,8 @@ EQUIV:
 
 ; LNM$EQUIV: R1 = a logical name block, R0 = an index, 0 the first. R0 =
 ; its index'th equivalence string, .ASCIC, an empty one past the last,
-; R1 = the last's index, more than 0 for a search list. Keeps every other
-; register.
+; R1 = the last's index, more than 0 for a search list, -1 for a table.
+; Keeps every other register.
 LNM$EQUIV::
         .JSB_ENTRY
         PUSHR   #^M<R2, R3, R4>
@@ -284,96 +640,146 @@ LNM$EQUIV::
         POPR    #^M<R2, R3, R4>
         RSB
 
-; TABLE: R1 = the address of a table name's descriptor, from a caller. R2 =
-; the queue head of the table it names, R3 = the one to look in after it,
-; or 0. R0 = SS$_NORMAL, SS$_ACCVIO, or SS$_NOLOGTAB if there is no such
-; table. Uses R1, R6 and R7.
-TABLE:
-        .JSB_ENTRY  OUTPUT=<R2, R3>, SCRATCH=<R6, R7>
-        BSBW    EXE$PROBER_DSC
-        BLBC    R0, 90$
-        MOVZWL  (R1), R7
-        MOVL    4(R1), R6
-        MOVAB   TABNAMES, R3
-10$:    MOVZBL  (R3), R2
-        BEQL    80$
-        MOVL    R3, R0
-        BSBW    EXE$MATCHNAME
-        ADDL2   R2, R3
-        INCL    R3                      ; its tables
-        BLBS    R0, 20$
-        INCL    R3
-        BRB     10$
-20$:    MOVZBL  (R3), R1
-        MOVL    SCH$GL_CURPCB, R2
-        MOVAQ   PCB$Q_LNMHD(R2), R2
-        MOVAQ   LNM$GQ_SYSTEM, R3
-        BBS     #1, R1, 30$             ; the system's, alone or after
-        CLRL    R3
-        BRB     70$
-30$:    BLBS    R1, 70$
-        MOVL    R3, R2
-        CLRL    R3
-70$:    MOVL    #SS$_NORMAL, R0
-        RSB
-80$:    MOVL    #SS$_NOLOGTAB, R0
-90$:    RSB
-
-; WRITABLE: R2 = a table TABLE found. R0 = SS$_NORMAL if the current
-; process may change it: its own, or the system's with SYSNAM; else
-; SS$_NOPRIV. Uses R1.
-WRITABLE:
-        .JSB_ENTRY
+; LNM$NAMES tabnam, tabidx, namidx, name, table: SHOW LOGICAL's, in kernel
+; mode, for a caller with CMKRNL. Copies the name of the namidx'th logical
+; name, 0 the first, in the tabidx'th table tabnam names to the buffer
+; the descriptor name describes, and that table's name to table's, each
+; a 255-byte buffer, and sets their lengths. SS$_NOLOGNAM past the
+; table's last name, with its name copied; SS$_NOLOGTAB past the last
+; table. A name made or deleted between calls may be missed or shown
+; twice.
+; vaxpunk: VMS's SHOW.EXE reads the tables itself, with routines of LNMSUB
+; that VMS makes global for it.
+        .ENTRY  LNM$NAMES, ^M<R2, R3, R4, R5, R6, R7, R8, R9, R10, R11>
+        MOVL    4(AP), R1
+        MOVL    8(AP), R6               ; which table
+        MOVAB   NTH, R10
+        DSBINT  #IPL$_SYNCH
+        BSBW    TABLES                  ; R8 = it
+        BLBC    R0, 70$
+        MOVL    LNMTH$L_NAME(R8), R1
+        MOVL    20(AP), R2
+        BSBB    NAMECOPY
+        MOVL    12(AP), R0              ; which name
+        MOVL    R8, R1
+10$:    MOVL    (R1), R1
+        CMPL    R1, R8
+        BEQL    60$
+        SOBGEQ  R0, 10$
+        MOVL    16(AP), R2
+        BSBB    NAMECOPY
         MOVL    #SS$_NORMAL, R0
-        MOVAQ   LNM$GQ_SYSTEM, R1
-        CMPL    R2, R1
-        BNEQ    90$
-        MOVL    SCH$GL_CURPCB, R1
-        IFPRIV  SYSNAM, 90$, R1
-        MOVL    #SS$_NOPRIV, R0
-90$:    RSB
+        BRB     80$
+60$:    MOVL    #SS$_NOLOGNAM, R0
+        BRB     80$
+70$:    MOVL    #SS$_NOLOGTAB, R0
+80$:    ENBINT
+        RET
 
-; NAME: R1 = the address of a logical name's descriptor, from a caller. R6
-; = the name, R7 = its length. R0 = SS$_NORMAL, SS$_ACCVIO, or
-; SS$_IVLOGNAM if it is empty or longer than 255.
-NAME:
-        .JSB_ENTRY  SCRATCH=<R6, R7>
-        BSBW    EXE$PROBER_DSC
-        BLBC    R0, 90$
-        MOVZWL  (R1), R7
-        BEQL    80$
-        CMPL    R7, #LNM$C_NAMLENGTH
-        BGTRU   80$
-        MOVL    4(R1), R6
+; NAMECOPY: R1 = a logical name block, R2 = a descriptor. Copies the name
+; to its buffer and sets its length. Uses R0 and R1.
+NAMECOPY:
+        .JSB_ENTRY
+        MOVZBL  LNMB$T_NAME(R1), R0
+        MOVW    R0, (R2)
+        MOVL    4(R2), R3
+        MOVAB   LNMB$T_NAME+1(R1), R1
+        BSBW    COPY
         RSB
-80$:    MOVL    #SS$_IVLOGNAM, R0
-90$:    RSB
 
-; LNM$TRNLOG: R6 = a name, R7 = its length. Looks it up in LNM$FILE_DEV:
-; the current process's table, then the system's. R1 = its logical name
-; block, or 0. IPL$_SYNCH. Uses R0, R2 and R3.
+; LNM$TRNLOG: R6 = a name, R7 = its length. Looks it up in the tables
+; LNM$FILE_DEV names, the current process's and the system's, as
+; $TRNLNM would. R1 = its logical name block, or 0. IPL$_SYNCH. Uses R0,
+; R2 and R3.
 LNM$TRNLOG::
         .JSB_ENTRY  SCRATCH=<R2, R3>
-        MOVL    SCH$GL_CURPCB, R2
-        MOVAQ   PCB$Q_LNMHD(R2), R2
-        MOVAQ   LNM$GQ_SYSTEM, R3
-; LOOKUP: R2 = a table's queue head, R3 = the next one's, or 0, R6 = a
-; name, R7 = its length. Looks it up in the first table, then in the next.
-; R1 = its logical name block, or 0, R2 = the table it is in. IPL$_SYNCH.
-; Uses R0.
-LOOKUP:
-        .JSB_ENTRY  OUTPUT=<R2>
-        BSBB    FIND
+        MOVZBL  FILE_DEV, R5
+        MOVAB   FILE_DEV+1, R4
+        MOVAB   FINDNAME, R10
+        MOVL    #LNM$C_MAXDEPTH, R11
+        CLRL    R3
+        CLRL    R8
+        BSBW    WALK
+        MOVL    R8, R1
+        RSB
+
+; TABLES: R1 = the address of a table name's descriptor, from a caller,
+; R10 = an action, as WALK's. WALKs the tables it names until the action
+; stops. R0 = SS$_NORMAL if it did, SS$_ACCVIO, SS$_NOLOGTAB if the name
+; names no table, else SS$_NOLOGNAM. IPL$_SYNCH. Uses R3.
+TABLES:
+        .JSB_ENTRY  OUTPUT=<R2, R6, R7, R8, R9>, SCRATCH=<R3>
+        BSBW    EXE$PROBER_DSC
+        BLBC    R0, 90$
+        MOVZWL  (R1), R5
+        MOVL    4(R1), R4
+        MOVL    #LNM$C_MAXDEPTH, R11
+        CLRL    R3
+        BSBW    WALK
+        BLBS    R0, 80$
+        MOVL    #SS$_NOLOGTAB, R0
+        TSTL    R3
+        BEQL    90$
+        MOVL    #SS$_NOLOGNAM, R0
+        RSB
+80$:    MOVL    #SS$_NORMAL, R0
+90$:    RSB
+
+; WALK: R4 = a table's name, R5 = its length, R10 = an action, R11 = how
+; many more names it may translate, R3 = the tables found so far. Looks
+; the name up in the process's directory, else the system's: a table it
+; counts in R3 and JSBs the action for, with R2 = its header; another
+; name it WALKs each equivalence string of, in turn, until the action
+; returns with R0's low bit set, which stops it. An action may change R6-R9, the
+; results it gives. R0 = the action's, or 0. IPL$_SYNCH.
+WALK:
+        .JSB_ENTRY  OUTPUT=<R2, R3, R6, R7, R8, R9>
+        CLRL    R0
+        TSTL    R11
+        BEQL    90$
+        BSBB    DIRFIND
         TSTL    R1
-        BNEQ    10$
-        MOVL    R3, R2
+        BEQL    90$
+        MOVL    LNMB$L_LNMTH(R1), R2
+        BEQL    10$
+        INCL    R3
+        JSB     (R10)
+        RSB
+10$:    DECL    R11                     ; its strings
+        MOVZBL  LNMB$T_NAME(R1), R0
+        MOVAB   LNMB$T_NAME+1(R1)[R0], R4
+20$:    MOVZBL  (R4)+, R5
+        BEQL    80$
+        BSBW    WALK
+        BLBS    R0, 90$
+        ADDL2   R5, R4
+        BRB     20$
+80$:    CLRL    R0
+90$:    RSB
+
+; DIRFIND: R4 = a name, R5 = its length. R1 = its logical name block in
+; the process's directory, else in the system's, or 0. IPL$_SYNCH. Uses
+; R0.
+DIRFIND:
+        .JSB_ENTRY
+        CLRL    R1
+        CMPL    R5, #LNM$C_TABNAMLEN
+        BGTRU   90$
+        MOVL    R4, R6
+        MOVL    R5, R7
+        MOVL    SCH$GL_CURPCB, R2
+        MOVL    PCB$L_LNMDIR(R2), R2
         BEQL    10$
         BSBB    FIND
-10$:    RSB
+        TSTL    R1
+        BNEQ    90$
+10$:    MOVL    LNM$GL_SYSDIR, R2
+        BSBB    FIND
+90$:    RSB
 
-; FIND: R2 = a table's queue head, R6 = a name, R7 = its length. R1 = the
-; name's logical name block, or 0 if the table hasn't it. IPL$_SYNCH. Uses
-; R0.
+; FIND: R2 = a table's header, R6 = a name, R7 = its length. R1 = the
+; name's logical name block, or 0 if the table hasn't it. IPL$_SYNCH.
+; Uses R0.
 FIND:
         .JSB_ENTRY
         MOVL    R2, R1
@@ -389,10 +795,122 @@ FIND:
 80$:    CLRL    R1
         RSB
 
-; LNM$CREATE: R5 = a table's queue head, R6 = a name, R7 = its length, R8
+; WALK's actions: R2 = a table's header. Each returns with R0's low bit
+; set to stop the walk.
+; FIRSTTAB: R8 = the table: the first one.
+FIRSTTAB:
+        .JSB_ENTRY  OUTPUT=<R8>
+        MOVL    R2, R8
+        MOVL    #1, R0
+        RSB
+
+; FINDNAME: R6 = a name, R7 = its length. The first table that has it: R8
+; = its logical name block, R9 = the table.
+FINDNAME:
+        .JSB_ENTRY  OUTPUT=<R8, R9>
+        BSBB    FIND
+        CLRL    R0
+        TSTL    R1
+        BEQL    90$
+        MOVL    R1, R8
+        MOVL    R2, R9
+        INCL    R0
+90$:    RSB
+
+; NTH: R6 = n. The n'th table, 0 the first: R8 = it, R6 = -1.
+NTH:
+        .JSB_ENTRY  OUTPUT=<R6, R8>
+        MOVL    R2, R8
+        CLRL    R0
+        SOBGEQ  R6, 90$
+        INCL    R0
+90$:    RSB
+
+; TABACCESS: R0 = the access wanted, $ARMDEF's bits, R2 = a table's
+; header. R0 = SS$_NORMAL if the current process may, by FIL$CHKPRO with
+; the table's owner and protection, or if the table is the process's
+; own; else SS$_NOPRIV. Uses R1.
+TABACCESS:
+        .JSB_ENTRY
+        BITB    #LNMTH$M_SHAREABLE, LNMTH$B_FLAGS(R2)
+        BEQL    80$
+        MOVL    LNMTH$L_OWNER(R2), R1
+        MOVZWL  LNMTH$W_PROT(R2), R2
+        BSBW    FIL$CHKPRO
+        RSB
+80$:    MOVL    #SS$_NORMAL, R0
+        RSB
+
+; WRITABLE: R2 = a table's header. R0 = SS$_NORMAL if the current process
+; may change it: with write access (TABACCESS), or SYSNAM for the
+; system's; else SS$_NOPRIV. Uses R1.
+WRITABLE:
+        .JSB_ENTRY
+        CMPL    R2, LNM$GL_SYSTEM
+        BNEQ    10$
+        MOVL    #SS$_NORMAL, R0
+        MOVL    SCH$GL_CURPCB, R1
+        IFPRIV  SYSNAM, 90$, R1
+10$:    MOVL    #ARM$M_WRITE, R0
+        BSBB    TABACCESS
+90$:    RSB
+
+; DIRNAME: R1 = a logical name block, R2 = the header of a table for it.
+; R0 = SS$_NORMAL, or SS$_IVLOGNAM if the table is a directory and the
+; name is longer than LNM$C_TABNAMLEN or has a character other than a
+; letter, a digit, $ and _. Uses R1.
+DIRNAME:
+        .JSB_ENTRY
+        MOVL    #SS$_NORMAL, R0
+        BITB    #LNMTH$M_DIRECTORY, LNMTH$B_FLAGS(R2)
+        BEQL    90$
+        MOVZBL  LNMB$T_NAME(R1), R3
+        CMPL    R3, #LNM$C_TABNAMLEN
+        BGTRU   80$
+        MOVAB   LNMB$T_NAME+1(R1), R1
+10$:    MOVZBL  (R1)+, R0
+        CMPB    R0, #^A/0/
+        BLSSU   15$
+        CMPB    R0, #^A/9/
+        BLEQU   20$
+15$:    CMPB    R0, #^A/$/
+        BEQL    20$
+        CMPB    R0, #^A/_/
+        BEQL    20$
+        CMPB    R0, #192                ; DEC Multinational's letters
+        BGEQU   20$
+        BICB2   #^X20, R0               ; a lower case letter as a capital
+        CMPB    R0, #^A/A/
+        BLSSU   80$
+        CMPB    R0, #^A/Z/
+        BGTRU   80$
+20$:    SOBGTR  R3, 10$
+        MOVL    #SS$_NORMAL, R0
+        RSB
+80$:    MOVL    #SS$_IVLOGNAM, R0
+90$:    RSB
+
+; NAME: R1 = the address of a logical name's descriptor, from a caller. R6
+; = the name, R7 = its length. R0 = SS$_NORMAL, SS$_ACCVIO, or
+; SS$_IVLOGNAM if it is empty or longer than 255.
+NAME:
+        .JSB_ENTRY  OUTPUT=<R6, R7>
+        BSBW    EXE$PROBER_DSC
+        BLBC    R0, 90$
+        MOVZWL  (R1), R7
+        BEQL    80$
+        CMPL    R7, #LNM$C_NAMLENGTH
+        BGTRU   80$
+        MOVL    4(R1), R6
+        RSB
+80$:    MOVL    #SS$_IVLOGNAM, R0
+90$:    RSB
+
+; LNM$CREATE: R5 = a table's header, R6 = a name, R7 = its length, R8
 ; = an equivalence string, R9 = its length, each 1-255 bytes the caller
 ; may read. Makes the name in the table, in place of one by that name
-; there. R0 = SS$_NORMAL, SS$_SUPERSEDE or SS$_INSFMEM. Uses R1-R3.
+; there. R0 = SS$_NORMAL, SS$_SUPERSEDE, SS$_DUPLNAM or SS$_INSFMEM. Uses
+; R1-R3.
 LNM$CREATE::
         .JSB_ENTRY  SCRATCH=<R2, R3>
         ADDL3   R7, R9, R1
@@ -402,52 +920,154 @@ LNM$CREATE::
         MOVB    R9, (R3)+
         MOVL    R9, R0
         MOVL    R8, R1
-        BSBB    COPY
+        BSBW    COPY
         CLRB    (R3)
         BRB     INSERT
 90$:    RSB
 
 ; NEWLNMB: R1 = the size of a logical name block, R6 = its name, R7 = the
-; name's length. Makes one from pool with the name: R2 = it, R3 = past
-; the name, where its equivalence strings go. R0 = SS$_NORMAL or
-; SS$_INSFMEM. Uses R1.
+; name's length. Makes one from pool with the name, not a table's: R2 =
+; it, R3 = past the name, where its equivalence strings go. R0 =
+; SS$_NORMAL or SS$_INSFMEM. Uses R1.
 NEWLNMB:
         .JSB_ENTRY  OUTPUT=<R2, R3>
         BSBW    EXE$ALONONPAGED
         BLBC    R0, 90$
         MOVW    R1, LNMB$W_SIZE(R2)
+        CLRB    LNMB$B_FLAGS(R2)
+        CLRL    LNMB$L_LNMTH(R2)
         MOVAB   LNMB$T_NAME(R2), R3
         MOVB    R7, (R3)+
         MOVL    R7, R0
         MOVL    R6, R1
-        BSBB    COPY
+        BSBW    COPY
         MOVL    #SS$_NORMAL, R0
 90$:    RSB
 
-; INSERT: R2 = a logical name block NEWLNMB made, R5 = a table's queue
-; head, R6 = its name, R7 = the name's length. Puts it in the table, in
-; place of one by that name there. R0 = SS$_NORMAL or SS$_SUPERSEDE.
-; Uses R1-R3.
+; NEWTAB: R6 = a table's name, R7 = its length, R8 = its parent's header,
+; or 0 for a directory, R9 = its LNMTH$M_ flags. Makes it from pool, an
+; LNMB with no strings and its LNMTH, empty, in the same block, owned by
+; the current process's UIC with the protection S:RW, O:RW, G:R, W:R: R2
+; = the LNMB, R3 = the LNMTH. R0 = SS$_NORMAL or SS$_INSFMEM. Uses R1.
+NEWTAB:
+        .JSB_ENTRY  OUTPUT=<R2, R3>
+        ADDL3   #LNMB$K_LENGTH+2+3+LNMTH$K_LENGTH, R7, R1
+        BSBB    NEWLNMB
+        BLBC    R0, 90$
+        CLRB    (R3)+                   ; no strings
+        ADDL2   #3, R3                  ; then its header, aligned
+        BICL2   #3, R3
+        MOVL    R3, LNMB$L_LNMTH(R2)
+        MOVL    R3, LNMTH$L_FLINK(R3)
+        MOVL    R3, LNMTH$L_BLINK(R3)
+        MOVL    R2, LNMTH$L_NAME(R3)
+        MOVL    R8, LNMTH$L_PARENT(R3)
+        MOVL    SCH$GL_CURPCB, R0
+        MOVL    PCB$L_UIC(R0), LNMTH$L_OWNER(R3)
+        MOVW    #DEFPROT, LNMTH$W_PROT(R3)
+        MOVB    R9, LNMTH$B_FLAGS(R3)
+        MOVL    #SS$_NORMAL, R0
+90$:    RSB
+
+; NAMES: R6 = a list of names, as SYSNAMES, R5 = a directory's header.
+; Makes each, LNMB$M_NODELETE, in the directory. R0 = SS$_NORMAL or
+; SS$_INSFMEM. Uses R1-R3.
+NAMES:
+        .JSB_ENTRY  SCRATCH=<R2, R3>
+10$:    TSTB    (R6)
+        BEQL    80$
+        MOVL    R6, R1                  ; past its strings' 0
+20$:    MOVZBL  (R1)+, R0
+        ADDL2   R0, R1
+        TSTL    R0
+        BNEQ    20$
+        SUBL3   R6, R1, R7              ; the bytes LNMB$T_NAME has
+        ADDL3   #LNMB$K_LENGTH, R7, R1
+        BSBW    EXE$ALONONPAGED
+        BLBC    R0, 90$
+        MOVW    R1, LNMB$W_SIZE(R2)
+        MOVB    #LNMB$M_NODELETE, LNMB$B_FLAGS(R2)
+        CLRL    LNMB$L_LNMTH(R2)
+        MOVAB   LNMB$T_NAME(R2), R3
+        MOVL    R7, R0
+        MOVL    R6, R1
+        BSBW    COPY
+        MOVL    R1, R6                  ; the next
+        INSQUE  (R2), @LNMTH$L_BLINK(R5)
+        BRB     10$
+80$:    MOVL    #SS$_NORMAL, R0
+90$:    RSB
+
+; INSERT: R2 = a logical name block NEWLNMB made, R5 = a table's header,
+; R6 = its name, R7 = the name's length. Puts it in the table, in place
+; of one by that name there, which DELNAME deletes. R0 = SS$_NORMAL,
+; SS$_SUPERSEDE, or SS$_DUPLNAM, and the block goes back to pool, if
+; the one there is LNMB$M_NODELETE. Uses R1-R3.
 INSERT:
         .JSB_ENTRY  SCRATCH=<R2, R3>
         MOVL    R2, R3                  ; the new block
         DSBINT  #IPL$_SYNCH
         MOVL    R5, R2
-        BSBB    FIND
-        INSQUE  (R3), @4(R5)
+        BSBW    FIND
         MOVL    #SS$_NORMAL, R0
         TSTL    R1
-        BEQL    80$
-        REMQUE  (R1), R0                ; the old one
+        BEQL    70$
+        BITB    #LNMB$M_NODELETE, LNMB$B_FLAGS(R1)
+        BNEQ    80$
+        BSBW    DELNAME                 ; the old one
+        MOVL    #SS$_SUPERSEDE, R0
+70$:    INSQUE  (R3), @LNMTH$L_BLINK(R5)
+        BRB     90$
+80$:    MOVL    R3, R0
         MOVZWL  LNMB$W_SIZE(R0), R1
         BSBW    EXE$DEANONPGDSIZ
-        MOVL    #SS$_SUPERSEDE, R0
-80$:    ENBINT
+        MOVL    #SS$_DUPLNAM, R0
+90$:    ENBINT
+        RSB
+
+; DELNAME: R1 = a logical name block, R2 = the header of the table it is
+; in. Takes it out and gives it back to pool. A table's goes after the
+; tables under it, which are in the same directory, and its names.
+; IPL$_SYNCH. Uses R0 and R1.
+DELNAME:
+        .JSB_ENTRY
+        MOVL    R1, R4
+        MOVL    LNMB$L_LNMTH(R4), R3
+        BEQL    40$
+10$:    MOVL    R2, R1                  ; a table under it?
+20$:    MOVL    (R1), R1
+        CMPL    R1, R2
+        BEQL    30$
+        MOVL    LNMB$L_LNMTH(R1), R0
+        BEQL    20$
+        CMPL    LNMTH$L_PARENT(R0), R3
+        BNEQ    20$
+        BSBW    DELNAME
+        BRB     10$
+30$:    MOVL    R3, R2                  ; its names, none of them tables
+        BSBB    DELTBL
+40$:    REMQUE  (R4), R0
+        MOVZWL  LNMB$W_SIZE(R0), R1
+        BSBW    EXE$DEANONPGDSIZ
+        RSB
+
+; DELNAMES: R2 = a table's header. Deletes every name in it but those
+; LNMB$M_NODELETE, with DELNAME. IPL$_SYNCH. Uses R0 and R1.
+DELNAMES:
+        .JSB_ENTRY
+10$:    MOVL    R2, R1
+20$:    MOVL    (R1), R1
+        CMPL    R1, R2
+        BEQL    90$
+        BITB    #LNMB$M_NODELETE, LNMB$B_FLAGS(R1)
+        BNEQ    20$
+        BSBW    DELNAME
+        BRB     10$
 90$:    RSB
 
-; LNM$DELTBL: R2 = a table's queue head. Deletes every name in it. Uses
-; R0 and R1.
-LNM$DELTBL::
+; DELTBL: R2 = a table's header. Deletes every name in it, none of them
+; a table. Uses R0 and R1.
+DELTBL:
         .JSB_ENTRY
         DSBINT  #IPL$_SYNCH
 10$:    MOVL    (R2), R0
@@ -460,7 +1080,7 @@ LNM$DELTBL::
 20$:    ENBINT
         RSB
 
-; LNM$DELEQV: R2 = a table's queue head, R6 = a string, R7 = its length.
+; LNM$DELEQV: R2 = a table's header, R6 = a string, R7 = its length.
 ; Deletes every name in the table whose equivalence it is: a mailbox's,
 ; which goes. IPL$_SYNCH. Uses R0, R1 and R3.
 LNM$DELEQV::
@@ -482,7 +1102,8 @@ LNM$DELEQV::
         BRB     10$
 90$:    RSB
 
-; COPY: copies R0 bytes from R1 to R3, with R3 past them. Uses R0 and R1.
+; COPY: copies R0 bytes from R1 to R3, with R1 and R3 past them. Uses R0
+; and R1.
 COPY:
         .JSB_ENTRY  OUTPUT=<R3>
         TSTL    R0

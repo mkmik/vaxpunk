@@ -6,13 +6,14 @@ usage: run-vms.py [--system IMG] CMDFILE [LOG]
        run-vms.py --selftest       (checks the console filter)
 
 CMDFILE (UTF-8, Latin-1 characters only): one line is typed per DCL prompt.
-After `CREATE file` (not /DIRECTORY) the following lines are typed as the
-file's text, up to a line starting with @@CTRLZ, which sends Ctrl-Z. For
-a program that reads keys, as an editor does: `@@START command` types a
-command and doesn't wait for the prompt, `@@KEYS text` types text, its
-\\r and \\x1b escapes decoded as Python's, then waits a second for the
-screen to settle, and `@@PROMPT` waits for the DCL prompt. Everything the
-console sends, carriage returns and NULs too, goes to LOG.raw as well.
+After `CREATE file` (not /DIRECTORY or /NAME_TABLE) the following lines
+are typed as the file's text, up to a line starting with @@CTRLZ, which
+sends Ctrl-Z. For a program that reads keys, as an editor does:
+`@@START command` types a command and doesn't wait for the prompt,
+`@@KEYS text` types text, its \\r and \\x1b escapes decoded as
+Python's, then waits a second for the screen to settle, and `@@PROMPT`
+waits for the DCL prompt. Everything the console sends, carriage returns
+and NULs too, goes to LOG.raw as well.
 
 Flow: SRM `boot dka400` -> the date prompt -> menu option 8 (DCL) -> `$$$`
 -> SET TERMINAL/EIGHTBIT/WIDTH=132 -> CMDFILE -> LOGOUT -> option 9
@@ -39,7 +40,7 @@ BOOT = os.environ.get("AXPBOX_BOOT", "dka400")  # SRM name of the CD
 PROMPT = "$$$ "
 CMD_TIMEOUT = 3600                 # per DCL command, seconds
 ECHO_TIMEOUT = 60                  # for the echo of a line typed: AXPbox's console hangs
-CREATE_FILE = re.compile(r"\s*\$?\s*CREA(T|TE)?\b(?!.*/DIR)", re.I)
+CREATE_FILE = re.compile(r"\s*\$?\s*CREA(T|TE)?\b(?!.*/(DIR|NAM))", re.I)
 MONTHS = "JAN FEB MAR APR MAY JUN JUL AUG SEP OCT NOV DEC".split()
 
 
@@ -278,6 +279,7 @@ def selftest():
     assert c.clean(b"\xff") == "" and c.clean(b"\xfb") == "" and c.clean(b"\x01E") == "E"
     assert CREATE_FILE.match("CREATE a.txt") and CREATE_FILE.match("$ create/log x")
     assert not CREATE_FILE.match("CREATE/DIRECTORY [.x]") and not CREATE_FILE.match("CREATED")
+    assert not CREATE_FILE.match("CREATE/NAME_TABLE T")
     print("selftest ok")
 
 
