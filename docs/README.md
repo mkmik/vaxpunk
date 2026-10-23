@@ -43,7 +43,7 @@ same commit; `todography lint` checks it.
 | [ADR-0009](adr/0009-ramdisk-writable-files-11.md) | MDA0:, a ramdisk the executive drives, holds a Files-11 volume the file system writes | Proposed |
 | [ADR-0010](adr/0010-ctrly-calls-the-cli-on-top-of-the-image.md) | CTRL/Y calls the command interpreter on top of the stopped image, and $CONTINUE goes back to it | Superseded by ADR-0014 |
 | [ADR-0011](adr/0011-asts-on-the-kernel-stack.md) | The PAL requests AST delivery from bits in the HWPCB, and the executive calls AST routines on top of the kernel stack | Proposed |
-| [ADR-0012](adr/0012-data-disk-writable-files-11.md) | DKB0:, a second virtio disk the PAL writes, holds a Files-11 volume that outlives the system | Proposed |
+| [ADR-0012](adr/0012-data-disk-writable-files-11.md) | DKB0:, a second virtio disk the PAL writes, holds a Files-11 volume that outlives the system | Proposed; decision 4 superseded by ADR-0043 |
 | [ADR-0013](adr/0013-qio-irps-and-drivers.md) | $QIO queues an I/O request packet to the device's driver, and its completion is a kernel mode AST | Proposed |
 | [ADR-0014](adr/0014-ctrlc-ctrly-asts.md) | CTRL/C and CTRL/Y are ASTs enabled with IO$_SETMODE, and DCL's CTRL/Y AST stops the image | Proposed |
 | [ADR-0015](adr/0015-file-system-io-through-the-disk-driver.md) | The file system hands its block I/O to the disk's start I/O routine in an IRP of its own | Proposed |
@@ -74,6 +74,7 @@ same commit; `todography lint` checks it.
 | [ADR-0040](adr/0040-acls-in-file-headers-and-rights-identifiers.md) | Files keep ACLs in their headers, which the file system checks before the protection mask, and identifiers come from RIGHTSLIST.DAT through services that run in their caller's mode | Proposed |
 | [ADR-0041](adr/0041-virtual-terminals-take-the-telnet-line.md) | A virtual terminal, VTAn, takes its TELNET terminal's connection, which moves to another one when the user connects to it | Proposed |
 | [ADR-0042](adr/0042-opcom-reads-the-operators-mailbox.md) | OPCOM is a process that reads the operator's mailbox, MBA2:, which the executive makes at boot and $SNDOPR writes, and it writes on the console with $BRKTHRU | Proposed |
+| [ADR-0043](adr/0043-volumes-the-size-of-their-disk.md) | A volume is the size of its disk, in VMS's clusters, with bitmaps of as many blocks as it needs, and the PAL tells the executive the disk's size | Proposed |
 
 ### PRDs
 

@@ -1431,7 +1431,7 @@ enum {
 	MFPR_SCBB = 0x16, MTPR_SCBB = 0x17, MTPR_SIRR = 0x18, MFPR_SISR = 0x19, WTINT = 0x3e,
 	MTPR_TXDB = 0x40, WRPTE = 0x41, DELCTX = 0x42, MTPR_RXCS = 0x43, MFPR_RXCS = 0x44,
 	MFPR_RXDB = 0x45, READLBLK = 0x46, WRITELBLK = 0x47, MTPR_DOORBELL = 0x48,
-	GETENTROPY = 0x49, CHME = 0x82, CHMU = 0x85, PROBER = 0x8f,
+	GETENTROPY = 0x49, GETMAXBLOCK = 0x4a, CHME = 0x82, CHMU = 0x85, PROBER = 0x8f,
 	PROBEW = 0x90, RD_PS = 0x91, REI = 0x92
 };
 
@@ -1901,6 +1901,8 @@ static int serve_one(seL4_MessageInfo_t msg)
 				mr[seL4_UnknownSyscall_X3] & 0xffffffff, code == WRITELBLK));
 	case GETENTROPY:
 		return ret(getentropy(a0 & 0xffffffff, a1 & 0xffffffff));
+	case GETMAXBLOCK: /* a disk's blocks, as READ CAPACITY gave a driver */
+		return ret(a0 < DISK_UNITS && disks[a0].vio ? disks[a0].blocks : 0);
 	case WRPTE: {
 		uint64_t old = ~0UL; /* -1: no room */
 		if (!wrpte(a0 & 0xffffffff, a1, &old))

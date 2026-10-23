@@ -38,10 +38,10 @@ note = "PRD-0003 step 2"
 
 [[feature]]
 id = "init-size"
-title = "INITIALIZE/SIZE for the ramdisk, and volumes bigger than 4,096 blocks"
+title = "INITIALIZE/SIZE for the ramdisk"
 status = "todo"
 needs = ["/files/ods2#big-volumes"]
-note = "PRD-0003 tier 3 #22 and #36"
+note = "PRD-0003 tier 3 #36; a disk's volume is already its size (ADR-0043)"
 
 [[feature]]
 id = "init-qualifiers"
@@ -159,4 +159,5 @@ work on the data disk, `DKB0:`, and the ramdisk, `MDA0:`, which
 mounted by the executive, write locked. `/OWNER_UIC` and `/PROTECTION`
 are the only qualifiers (PRD-0003 tier 3 #24). Every mount is a system
 mount, whose logical name, `DISK$label` or `MOUNT`'s third parameter,
-goes in the system table, and a volume is at most 4,096 blocks.
+goes in the system table, and a volume on `DKB0:` is the disk's size
+([ADR-0043](../../adr/0043-volumes-the-size-of-their-disk.md)).

@@ -284,8 +284,9 @@ const RAMDISK: Phase = Phase {
     ],
 };
 
-/// INITIALIZE, MOUNT and COPY on DKB0:, MOUNT's DISK$DATA and the system
-/// disk's DISK$VAXPUNK, a CREATE/DIRECTORY two levels deep
+/// INITIALIZE of DKB0:'s 64 MB, three blocks a cluster, MOUNT and COPY
+/// there, MOUNT's DISK$DATA and the system disk's DISK$VAXPUNK, a
+/// CREATE/DIRECTORY two levels deep
 /// there and a COPY into it, a CREATE/LOG of a text file there from two
 /// lines and CTRL/Z, an APPEND/LOG to the file copied there and
 /// one to the system disk that fails, COPY of a list into one file, of a
@@ -368,7 +369,7 @@ const DATA_DISK: Phase = Phase {
         "DKB0:                   Mounted              0  DATA",
         "MDA0:                   Mounted              0  RAM",
         "OPA0:                   Online               0",
-        "\nDisk DKB0:, device type unknown, is online, mounted, file-oriented device,\n    shareable.\n\n    Error count                    0    Default buffer size                 512\n\n    Volume label              \"DATA\"    Cluster size                          1\n    Free blocks ",
+        "\nDisk DKB0:, device type unknown, is online, mounted, file-oriented device,\n    shareable.\n\n    Error count                    0    Default buffer size                 512\n\n    Volume label              \"DATA\"    Cluster size                          3\n    Free blocks ",
         "\nTerminal OPA0:, device type VT100, is online, record-oriented device, carriage\n    control.\n\n    Error count                    0\n    Reference count",
         "    Default buffer size                  80\n\n$ ",
         "%SYSTEM-F-DEVACTIVE, device is active",
@@ -1260,17 +1261,17 @@ const WILDCARDS: Phase = Phase {
         "A.DIR;1\nA_RATHER_LONG_NAME.TMP;1\nB.DIR;1\nTOP.TMP;2\n\nTotal of 4 files.",
         concat!(
             "A_RATHER_LONG_NAME.TMP;1\n",
-            "                              1/1           [SYSTEM]                         (RWED,RWED,RE,)\n",
-            "TOP.TMP;2                     1/1           [SYSTEM]                         (RWED,RWED,RE,)\n",
-            "TOP.TMP;1                     1/1           [SYSTEM]                         (RWED,RWED,RE,)\n",
-            "\nTotal of 3 files, 3/3 blocks.",
+            "                              1/3           [SYSTEM]                         (RWED,RWED,RE,)\n",
+            "TOP.TMP;2                     1/3           [SYSTEM]                         (RWED,RWED,RE,)\n",
+            "TOP.TMP;1                     1/3           [SYSTEM]                         (RWED,RWED,RE,)\n",
+            "\nTotal of 3 files, 3/9 blocks.",
         ),
         concat!(
             "$ DIR/TOTAL/SIZE DKB0:[W...]*.TMP\n\nDirectory DKB0:[W]\n\nTotal of 3 files, 3 blocks.\n\n",
             "Directory DKB0:[W.A]\n\nTotal of 1 file, 1 block.\n",
         ),
         "Grand total of 4 directories, 6 files, 6 blocks.",
-        "TOP.TMP;1                     1   <None specified>   <No backup recorded>",
+        "TOP.TMP;1                     3   <None specified>   <No backup recorded>",
         concat!(
             "$ DIR DKB0:[W]TOP.TMP;1,A.DIR\n\nDirectory DKB0:[W]\n\n",
             "TOP.TMP;1           A.DIR;1\n\nTotal of 2 files.\n",

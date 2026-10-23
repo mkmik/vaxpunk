@@ -12,10 +12,12 @@
 ; file is its creator's, with VMS's default protection, FILEPROT; a new
 ; directory takes its parent's, which no one may delete.
 ; RMS's $CREATE gives a new version its predecessor's instead.
-; ponytail: no process default protection, SET PROTECTION/DEFAULT. A cluster is a block, and the bitmaps are a block each, so a
-; volume has at most 4096 blocks and 4096 files; the index file grows
-; IDXEXT headers at a time, as its bitmap allows; map pointers are format 2, and a directory is rewritten whole on each
-; change.
+; ponytail: no process default protection, SET PROTECTION/DEFAULT. The
+; bitmaps are as many blocks as the home block and BITMAP.SYS say, each
+; contiguous, and a bit of the storage bitmap is a cluster; the index
+; file doubles when it fills, up to the volume's maximum files, as its
+; map allows; map pointers are format 2, and a directory is rewritten
+; whole on each change.
 ;
         .LIBRARY "lib.mlb"
         .LIBRARY "starlet.mlb"
@@ -26,6 +28,7 @@
         $PRVDEF
         $INITDEF
         $ARMDEF
+        $PALDEF
 
         .EXTERNAL F11$GL_VCB, F11$AB_DIRBLK, EXE$GQ_SYSTIME, MD$GL_BLOCKS
         .EXTERNAL FIL$READLBLK, FIL$WRITELBLK, FIL$READVBN, FIL$WRITEVBN
@@ -38,8 +41,8 @@ BITS = BLOCK*8                          ; in a bitmap block
 MFD = 4
 MAXVER = 32767
 MAXRUN = 16384                          ; blocks a format 2 pointer maps
-IDXEXT = 16                             ; headers the index file grows by
-DK$C_BLOCKS = BITS                      ; DKB0:'s volume: what one bitmap block maps
+HEADERS = 16                            ; headers INITIALIZE makes room for, VMS's /HEADERS
+MAXVOL = ^X7F000000                     ; blocks FIL$INIT uses at most
 ; A file header (crosstools/ods/docs/file-header.md).
 FH2$B_IDOFFSET = 0
 FH2$B_MPOFFSET = 1
@@ -76,13 +79,6 @@ FH2$L_HIGHWATER = 76                    ; VBN + 1 of the highest block written
 FAT$W_FFBYTE = FH2$W_RECATTR+12
 FAT$W_MAXREC = FH2$W_RECATTR+16
 FAT$W_VERSIONS = FH2$W_RECATTR+30       ; a directory's default version limit
-; What INITIALIZE writes: the boot block at LBN 0, the home block at 1,
-; the index file bitmap at 2, HEADERS headers from 3, then BITMAP.SYS,
-; its SCB and the storage bitmap, then the MFD's first block.
-HEADERS = 64
-HDRLBN = 3
-SCBLBN = HDRLBN+HEADERS
-MFDLBN = SCBLBN+2
 FILEPROT = ^XFA00                       ; S:RWED,O:RWED,G:RE,W:
 MFDPROT = ^XAA88                        ; S:RWE,O:RWE,G:RE,W:RE
 HM2$W_ALTIDXVBN = 20                    ; the home block: the backup index file header's VBN
@@ -99,6 +95,7 @@ RECSIZE = 20                            ; a RESFILES row
         .PSECT  EXEC$DATA, NOEXE, WRT, QUAD
 BITBLK: .BLKB   BLOCK                   ; a bitmap block, or the home block
 SBNUM:  .LONG   0                       ; the storage bitmap's block in it
+IBNUM:  .LONG   0                       ; or the index file bitmap's
 NEWHDR: .BLKB   BLOCK                   ; a header FIL$INIT makes
 ZEROS:  .BLKB   BLOCK                   ; an index file block not yet used
 RECBUF: .BLKB   BLOCK+8                 ; a directory record being made, one entry too long at most
@@ -121,25 +118,27 @@ DU_POS: .LONG   0                       ; the next byte of it
 LABEL:  .BLKB   12                      ; FIL$INIT's label, padded with blanks
 VOLSIZE:                                ; and the volume's size in blocks
         .LONG   0
+INDEXF: .LONG   0                       ; INDEXF.SYS's blocks
 VOLOWNER:                               ; its owner and protection
         .LONG   0
 VOLPROT:
         .LONG   0
 ; The reserved files: name, record type and attributes, record size,
-; characteristics, first LBN and blocks.
+; characteristics, first LBN and blocks, which FIL$INIT fills in for
+; INDEXF.SYS, BITMAP.SYS and the MFD.
 RESFILES:
         .ASCII  "INDEXF.SYS"
         .BYTE   1, 0
-        .WORD   512, 0, 0, HDRLBN+HEADERS
+        .WORD   512, 0, 0, 0
         .ASCII  "BITMAP.SYS"
         .BYTE   1, 0
-        .WORD   512, FCH$M_CONTIG, SCBLBN, 2
+        .WORD   512, FCH$M_CONTIG, 0, 0
         .ASCII  "BADBLK.SYS"
         .BYTE   1, 0
         .WORD   512, 0, 0, 0
         .ASCII  "000000.DIR"
         .BYTE   2, 8
-        .WORD   512, FCH$M_CONTIG!FCH$M_DIRECTORY, MFDLBN, 1
+        .WORD   512, FCH$M_CONTIG!FCH$M_DIRECTORY, 0, 0
         .ASCII  "CORIMG.SYS"
         .BYTE   1, 0
         .WORD   512, 0, 0, 0
@@ -200,15 +199,16 @@ HDRVBN:
         MOVAB   VCB$AB_INDEXF(R3), R3
         RSB
 
-; BITMAP: R0 = 0 to read the index file bitmap's block into BITBLK, 1 to
-; write it from there, 2 and 3 the same for the storage bitmap's block
-; SBNUM. R0 = SS$_NORMAL or the disk's error. Keeps every other register.
+; BITMAP: R0 = 0 to read the index file bitmap's block IBNUM into
+; BITBLK, 1 to write it from there, 2 and 3 the same for the storage
+; bitmap's block SBNUM. R0 = SS$_NORMAL or the disk's error. Keeps every
+; other register.
 BITMAP:
         .JSB_ENTRY
         PUSHR   #^M<R1, R2>
         MOVL    F11$GL_VCB, R2
         BBS     #1, R0, 10$
-        MOVL    VCB$L_IBMAPLBN(R2), R2
+        ADDL3   IBNUM, VCB$L_IBMAPLBN(R2), R2
         BRB     20$
 10$:    ADDL3   SBNUM, VCB$L_SBMAPLBN(R2), R2
 20$:    MOVL    #1, R1
@@ -304,22 +304,30 @@ PUTNAME:
 ; FIL$CREHDR: R1 = a buffer. Takes the first free file number from the
 ; index file bitmap, and makes an empty header for it in the buffer, with
 ; the next sequence number for its slot; FIL$WRITEHDR writes it. R0 =
-; SS$_NORMAL, SS$_IDXFILEFULL if every header the index file has room for
-; is in use, or the disk's error. Holding FIL$LOCK. Keeps every other
-; register.
+; SS$_NORMAL, SS$_IDXFILEFULL if the volume's maximum files are all in
+; use, or the disk's error. Holding FIL$LOCK. Keeps every other register.
 FIL$CREHDR::
         .JSB_ENTRY
         PUSHR   #^M<R1, R2, R3, R4, R5, R6>
         MOVL    R1, R6
-5$:     CLRL    R0
+        MOVL    F11$GL_VCB, R5
+        CLRL    IBNUM                   ; each bitmap block
+5$:     MOVL    #SS$_IDXFILEFULL, R0
+        CMPL    IBNUM, VCB$L_IBMAPBLKS(R5)
+        BGEQU   90$
+        CLRL    R0
         BSBB    BITMAP
         BLBC    R0, 90$
-        CLRL    R4                      ; the bit for file R4 + 1
-10$:    BBC     R4, BITBLK, 20$
-        AOBLSS  #BITS, R4, 10$
-        BRB     80$
-20$:    MOVL    F11$GL_VCB, R5          ; its slot, in the index file?
-        ADDL3   VCB$L_HDRVBN(R5), R4, R0
+        CLRL    R2                      ; its bit for file R4 + 1
+10$:    MULL3   #BITS, IBNUM, R4
+        ADDL2   R2, R4
+        CMPL    R4, VCB$L_MAXFILES(R5)
+        BGEQU   80$
+        BBC     R2, BITBLK, 20$
+        AOBLSS  #BITS, R2, 10$
+        INCL    IBNUM
+        BRB     5$
+20$:    ADDL3   VCB$L_HDRVBN(R5), R4, R0        ; its slot, in the index file?
         MOVAB   VCB$AB_INDEXF(R5), R1
         BSBW    FIL$MAPVBN
         TSTL    R1
@@ -327,8 +335,16 @@ FIL$CREHDR::
         BSBW    EXTINDEX                ; not yet: it grows, and the
         BLBC    R0, 90$                 ; storage bitmap took BITBLK
         BRB     5$
-25$:
-        ADDL3   VCB$L_HDRVBN(R5), R4, R0        ; what was in it
+25$:    ADDL3   VCB$L_HDRVBN(R5), R4, R0        ; past the end of file?
+        MOVAB   VCB$AB_INDEXF(R5), R3
+        ROTL    #16, FAT$L_EFBLK(R3), R1
+        CMPL    R0, R1
+        BLSSU   27$
+        ADDL3   #1, R0, R1              ; it moves past the slot
+        BSBW    SETEOF
+        BSBW    WRITEIDX
+        BLBC    R0, 90$
+27$:    ADDL3   VCB$L_HDRVBN(R5), R4, R0        ; what was in it
         MOVL    #1, R1
         MOVL    R6, R2
         MOVAB   VCB$AB_INDEXF(R5), R3
@@ -338,7 +354,9 @@ FIL$CREHDR::
         INCW    R3
         BNEQ    30$
         INCW    R3
-30$:    BBSS    R4, BITBLK, 35$
+30$:    MULL3   #BITS, IBNUM, R0
+        SUBL3   R0, R4, R0
+        BBSS    R0, BITBLK, 35$
 35$:    MOVL    #1, R0
         BSBW    BITMAP
         BLBC    R0, 90$
@@ -351,19 +369,30 @@ FIL$CREHDR::
 90$:    POPR    #^M<R1, R2, R3, R4, R5, R6>
         RSB
 
-; EXTINDEX: R5 = a VCB. Extends its index file by IDXEXT blocks, zeros,
-; headers no file has yet, and its end of file past them, and writes its
-; header and the header's backup. R0 = SS$_NORMAL, or FIL$EXTEND's or the disk's error. Holding
-; FIL$LOCK. Keeps every other register.
+; EXTINDEX: R5 = a VCB. Extends its index file by as many blocks as it
+; has, but not past the slot of the volume's last file, VCB$L_MAXFILES,
+; with zeros, headers no file has yet, and its end of file past them, and
+; writes its header and the header's backup. If the volume hasn't that
+; many blocks free, it takes those it has. R0 = SS$_NORMAL, or, if it
+; got none, FIL$EXTEND's error, or the disk's. Holding FIL$LOCK. Keeps
+; every other register.
 EXTINDEX:
         .JSB_ENTRY
         PUSHR   #^M<R1, R2, R3, R4>
         MOVAB   VCB$AB_INDEXF(R5), R3
         BSBW    GETHIBLK
         MOVL    R0, R4                  ; the blocks it has
-        MOVL    #IDXEXT, R1
-        BSBW    FIL$EXTEND
-        BLBC    R0, 90$
+        ADDL3   VCB$L_HDRVBN(R5), VCB$L_MAXFILES(R5), R1
+        DECL    R1                      ; the last file's slot
+        SUBL2   R0, R1
+        CMPL    R1, R0
+        BLEQU   5$
+        MOVL    R0, R1
+5$:     BSBW    FIL$EXTEND
+        PUSHL   R0                      ; how that went
+        BSBW    GETHIBLK
+        CMPL    R0, R4
+        BEQL    80$                     ; no blocks at all
 10$:    INCL    R4
         BSBW    GETHIBLK
         CMPL    R4, R0
@@ -372,22 +401,47 @@ EXTINDEX:
         MOVL    #1, R1
         MOVAB   ZEROS, R2
         BSBW    FIL$WRITEVBN
-        BLBC    R0, 90$
+        BLBC    R0, 85$
         BRB     10$
 20$:    ADDL3   #1, R0, R1              ; the end of file: past the last block
+        BSBW    SETEOF
+        BSBW    WRITEIDX
+        BLBC    R0, 85$
+        MOVL    #SS$_NORMAL, (SP)       ; some blocks: enough for now
+80$:    MOVL    (SP)+, R0
+        BRB     90$
+85$:    TSTL    (SP)+
+90$:    POPR    #^M<R1, R2, R3, R4>
+        RSB
+
+; SETEOF: R3 = the index file's header, R1 = a VBN. Makes it the end of
+; file, and the highwater mark if that is below. Keeps every register.
+SETEOF:
+        .JSB_ENTRY
         ROTL    #16, R1, FAT$L_EFBLK(R3)
         CLRW    FAT$W_FFBYTE(R3)
+        CMPL    FH2$L_HIGHWATER(R3), R1
+        BGEQU   10$
         MOVL    R1, FH2$L_HIGHWATER(R3)
-        MOVL    R3, R1
+10$:    RSB
+
+; WRITEIDX: R5 = a VCB. Writes its index file's header, and the header's
+; backup, at VBN 3v+1. R0 = SS$_NORMAL or the disk's error. Keeps every
+; other register.
+WRITEIDX:
+        .JSB_ENTRY
+        PUSHR   #^M<R1, R2, R3>
+        MOVAB   VCB$AB_INDEXF(R5), R1
         BSBW    FIL$WRITEHDR
         BLBC    R0, 90$
-        MOVZWL  VCB$W_CLUSTER(R5), R0   ; and its backup, at VBN 3v+1
+        MOVZWL  VCB$W_CLUSTER(R5), R0
         MULL2   #3, R0
         INCL    R0
         MOVL    #1, R1
-        MOVL    R3, R2
+        MOVAB   VCB$AB_INDEXF(R5), R2
+        MOVL    R2, R3
         BSBW    FIL$WRITEVBN
-90$:    POPR    #^M<R1, R2, R3, R4>
+90$:    POPR    #^M<R1, R2, R3>
         RSB
 
 ; ALLOCBLK: R1 = a block count. Takes the first run of free clusters from
@@ -608,10 +662,13 @@ FIL$DELHDR::
         MOVAB   VCB$AB_INDEXF(R3), R3
         BSBW    FIL$WRITEVBN
         BLBC    R0, 90$
+        DECL    R4                      ; its bit, in block IBNUM
+        DIVL3   #BITS, R4, IBNUM
+        MULL3   #BITS, IBNUM, R0
+        SUBL2   R0, R4
         CLRL    R0
         BSBW    BITMAP
         BLBC    R0, 90$
-        DECL    R4
         BBCC    R4, BITBLK, 30$
 30$:    MOVL    #1, R0
         BSBW    BITMAP
@@ -1113,67 +1170,146 @@ ENDBLK:
 20$:    RSB
 
 ; FIL$INIT: R1 = a label, R2 = its length, 1 to 12, R3 = the volume's
-; size in blocks, up to 4096, R4 = its owner, R5 = its protection.
-; Writes an empty Files-11 ODS-2 volume on F11$GL_VCB's disk: the home
-; block, the bitmaps, and the reserved files' headers, the owner's, as
-; INITIALIZE does, and the reserved files in the MFD, which all may look
-; in. The blocks past the bitmaps are free, whatever they hold. R0 =
-; SS$_NORMAL, or the disk's error. Holding FIL$LOCK. Uses R0-R11.
-; ponytail: no backup home block or index file header: the home block's
-; backup LBNs are the primary ones.
+; size in blocks, R4 = its owner, R5 = its protection. Writes an empty
+; Files-11 ODS-2 volume on F11$GL_VCB's disk, laid out as VMS's
+; INITIALIZE lays it out but from LBN 0 up: the index file, its first
+; clusters the boot block and the home block, the backup home block's
+; cluster, the backup index file header's, then its bitmap and HEADERS
+; headers, zeroed; BITMAP.SYS, the SCB and the storage bitmap; and the
+; MFD, which lists the reserved files, the owner's, and which all may
+; look in. The cluster is VMS's default: a block up to 50,000 blocks,
+; else 3, and more if the storage bitmap would take more than 255
+; blocks; the maximum files, size / ((cluster + 1) * 2), VMS's default
+; too. The blocks past the MFD are free, whatever they hold. R0 =
+; SS$_NORMAL, SS$_DEVICEFULL if the volume is too small, or the disk's
+; error. Holding FIL$LOCK. Uses R0-R11.
+; ponytail: MAXVOL blocks at most, and a last cluster in part is left
+; out of the volume, not put in BADBLK.SYS; the index file isn't in the
+; middle of the volume, as VMS's /INDEX=MIDDLE puts it.
 FIL$INIT::
         .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5, R6, R7, R8, R9, R10, R11>
-        MOVL    R3, VOLSIZE
         MOVL    R4, VOLOWNER
         MOVL    R5, VOLPROT
+        CMPL    R3, #MAXVOL
+        BLEQU   2$
+        MOVL    #MAXVOL, R3
+2$:     MOVL    R3, R6                  ; R6 = the blocks
         PUSHR   #^M<R1, R2>
         MOVC5   #0, (R1), #^A/ /, #12, LABEL
         POPR    #^M<R1, R2>
         MOVC3   R2, (R1), LABEL
         MOVL    F11$GL_VCB, R11
-        MOVL    #HDRLBN-1, VCB$L_IBMAPLBN(R11)
-        MOVL    #SCBLBN+1, VCB$L_SBMAPLBN(R11)
-        MOVL    #1, VCB$L_SBMAPBLKS(R11)
-        MOVL    #HDRLBN+1, VCB$L_HDRVBN(R11)    ; VBNs: boot, home, bitmap
+        MOVL    #1, R7                  ; R7 = the cluster
+        CMPL    R6, #50000
+        BLEQU   4$
+        MOVL    #3, R7
+4$:     ADDL3   #<255*BITS>-1, R6, R0
+        DIVL2   #255*BITS, R0
+        CMPL    R0, R7
+        BLEQU   6$
+        MOVL    R0, R7
+6$:     MOVW    R7, VCB$W_CLUSTER(R11)
+        DIVL3   R7, R6, R8              ; R8 = the clusters
+        MULL3   R7, R8, VOLSIZE
+        ADDL3   #1, R7, R0              ; the maximum files
+        ADDL2   R0, R0
+        DIVL3   R0, VOLSIZE, R0
+        CMPL    R0, #25                 ; the reserved files and 16
+        BGEQU   8$
+        MOVL    #25, R0
+8$:     CMPL    R0, #^XFFFFFF
+        BLEQU   10$
+        MOVL    #^XFFFFFF, R0
+10$:    MOVL    R0, VCB$L_MAXFILES(R11)
+        ADDL2   #BITS-1, R0
+        DIVL3   #BITS, R0, VCB$L_IBMAPBLKS(R11)
+        MULL3   #4, R7, R0              ; the index file bitmap, past
+        MOVL    R0, VCB$L_IBMAPLBN(R11) ; four clusters
+        ADDL2   VCB$L_IBMAPBLKS(R11), R0
+        ADDL3   #1, R0, VCB$L_HDRVBN(R11)
+        ADDL2   #HEADERS, R0
+        BSBW    CLUSTERS
+        MOVL    R0, INDEXF
+        MOVW    R0, RESFILES+18
+        MOVW    R0, RESFILES+RECSIZE+16 ; BITMAP.SYS, past it
+        ADDL3   #1, R0, VCB$L_SBMAPLBN(R11)
+        ADDL3   #BITS-1, R8, R0
+        DIVL2   #BITS, R0
+        INCL    R0                      ; with its SCB
+        BSBW    CLUSTERS
+        MOVW    R0, RESFILES+RECSIZE+18
+        SUBL3   #1, R0, VCB$L_SBMAPBLKS(R11)
+        ADDL2   INDEXF, R0              ; the MFD, past that
+        MOVW    R0, RESFILES+<3*RECSIZE>+16
+        MOVW    R7, RESFILES+<3*RECSIZE>+18
+        ADDL3   R7, R0, R10             ; R10 = the first free block
+        DIVL3   R7, R10, R9             ; R9 = its cluster
+        MOVL    #SS$_DEVICEFULL, R0
+        CMPL    R9, R8
+        BLSSU   12$
+        BRW     90$
+; Zeros up to there: no header of another volume's is left in a slot.
+12$:    DECL    R10
+        MOVAB   ZEROS, R0
+        MOVL    #1, R1
+        MOVL    R10, R2
+        BSBW    FIL$WRITELBLK
+        BLBS    R0, 14$
+        BRW     90$
+14$:    TSTL    R10
+        BNEQ    12$
 ; The index file bitmap: file 1, for now.
         MOVC5   #0, BITBLK, #0, #BLOCK, BITBLK
         MOVB    #1, BITBLK
+        CLRL    IBNUM
         MOVL    #1, R0
         BSBW    BITMAP
-        BLBS    R0, 5$
+        BLBS    R0, 15$
         BRW     90$
-; The storage bitmap: the blocks past the MFD's first are free.
-5$:     MOVC5   #0, BITBLK, #0, #BLOCK, BITBLK
-        MOVL    #MFDLBN+1, R2
-10$:    BBSS    R2, BITBLK, 15$
-15$:    AOBLSS  VOLSIZE, R2, 10$
-        CLRL    SBNUM
-        MOVL    #3, R0
-        BSBW    BITMAP
-        BLBS    R0, 20$
-        BRW     90$
-; The SCB, before it: the volume's size, and a made-up geometry.
+; The storage bitmap: the clusters from R9 to R8 are free.
+15$:    CLRL    SBNUM
 20$:    MOVC5   #0, BITBLK, #0, #BLOCK, BITBLK
+        MULL3   #BITS, SBNUM, R3        ; the block's first cluster
+        SUBL3   R3, R9, R2              ; the first free one in it
+        BGEQ    22$
+        CLRL    R2
+22$:    SUBL3   R3, R8, R4              ; and past the last
+        CMPL    R4, #BITS
+        BLEQ    24$
+        MOVL    #BITS, R4
+24$:    CMPL    R2, R4
+        BGEQ    28$
+26$:    BBSS    R2, BITBLK, 27$
+27$:    AOBLSS  R4, R2, 26$
+28$:    MOVL    #3, R0
+        BSBW    BITMAP
+        BLBS    R0, 29$
+        BRW     90$
+29$:    INCL    SBNUM
+        CMPL    SBNUM, VCB$L_SBMAPBLKS(R11)
+        BLSSU   20$
+; The SCB, before it: the volume's size, and a made-up geometry.
+        MOVC5   #0, BITBLK, #0, #BLOCK, BITBLK
         MOVAB   BITBLK, R1
         MOVW    #^X0201, (R1)           ; structure level
-        MOVW    #1, 2(R1)               ; cluster
-        MOVL    VOLSIZE, 4(R1)     ; volume size
+        MOVW    VCB$W_CLUSTER(R11), 2(R1)       ; cluster
+        MOVL    VOLSIZE, 4(R1)          ; volume size
         MOVL    #1, 8(R1)               ; block size
         MOVL    #1, 12(R1)              ; sectors
         MOVL    #1, 16(R1)              ; tracks
-        MOVL    VOLSIZE, 20(R1)    ; cylinders
+        MOVL    VOLSIZE, 20(R1)         ; cylinders
         MOVL    #255, R2
         BSBW    CHECKSUM
         MOVW    R0, BLOCK-2(R1)
         MOVAB   BITBLK, R0
         MOVL    #1, R1
-        MOVL    #SCBLBN, R2
+        MOVL    INDEXF, R2
         BSBW    FIL$WRITELBLK
-        BLBS    R0, 25$
+        BLBS    R0, 30$
         BRW     90$
 ; INDEXF.SYS's header, in the VCB, where FIL$WRITEHDR finds the index
 ; file's map, then the others', each in a slot FIL$CREHDR takes.
-25$:    MOVAB   VCB$AB_INDEXF(R11), R1
+30$:    MOVAB   VCB$AB_INDEXF(R11), R1
         MOVL    #1, R2
         MOVL    #1, R3
         BSBW    EMPTYHDR
@@ -1181,7 +1317,7 @@ FIL$INIT::
         MOVAB   RESFILES, R10
         BSBW    RESHDR
         BLBC    R0, 90$
-30$:    ADDL2   #RECSIZE, R10
+35$:    ADDL2   #RECSIZE, R10
         MOVAB   RESEND, R0
         CMPL    R10, R0
         BGEQU   40$
@@ -1191,9 +1327,16 @@ FIL$INIT::
         MOVW    FH2$W_FID(R1), FH2$W_FID_SEQ(R1)        ; (n,n)
         BSBW    RESHDR
         BLBC    R0, 90$
-        BRB     30$
+        BRB     35$
+; The backup index file header, a copy of INDEXF.SYS's.
+40$:    MOVAB   VCB$AB_INDEXF(R11), R0
+        MOVL    #1, R1
+        MOVZWL  VCB$W_CLUSTER(R11), R2  ; at LBN 3v
+        MULL2   #3, R2
+        BSBW    FIL$WRITELBLK
+        BLBC    R0, 90$
 ; The MFD lists them all, version 1.
-40$:    MOVL    #MFD, R0
+        MOVL    #MFD, R0
         MOVAB   NEWHDR, R1
         BSBW    FIL$READHDR
         BLBC    R0, 90$
@@ -1213,21 +1356,22 @@ FIL$INIT::
         INCL    R9
         CMPL    R9, #9
         BLEQU   50$
-; The home block, last, which makes it a volume.
+; The home block, last, which makes it a volume, and its backup.
+        MOVZWL  VCB$W_CLUSTER(R11), R7
         MOVC5   #0, BITBLK, #0, #BLOCK, BITBLK
         MOVAB   BITBLK, R1
         MOVL    #1, (R1)                ; home LBN
-        MOVL    #1, 4(R1)               ; backup home LBN
-        MOVL    #HDRLBN, 8(R1)          ; backup index file header LBN
+        MULL3   #2, R7, 4(R1)           ; backup home LBN
+        MULL3   #3, R7, 8(R1)           ; backup index file header LBN
         MOVW    #^X0201, 12(R1)         ; structure level
-        MOVW    #1, 14(R1)              ; cluster
+        MOVW    R7, 14(R1)              ; cluster
         MOVW    #2, 16(R1)              ; home VBN
-        MOVW    #2, 18(R1)              ; backup home VBN
-        MOVW    #HDRLBN+1, 20(R1)       ; backup index file header VBN
-        MOVW    #HDRLBN, 22(R1)         ; index file bitmap VBN
-        MOVL    #HDRLBN-1, 24(R1)       ; and LBN
-        MOVL    #BITS, 28(R1)           ; maximum files: what the bitmap holds, FIL$CREHDR's limit
-        MOVW    #1, 32(R1)              ; index file bitmap blocks
+        ADDW3   #1, 4(R1), 18(R1)       ; backup home VBN
+        ADDW3   #1, 8(R1), 20(R1)       ; backup index file header VBN
+        ADDW3   #1, VCB$L_IBMAPLBN(R11), 22(R1) ; index file bitmap VBN
+        MOVL    VCB$L_IBMAPLBN(R11), 24(R1)     ; and LBN
+        MOVL    VCB$L_MAXFILES(R11), 28(R1)     ; maximum files
+        MOVW    VCB$L_IBMAPBLKS(R11), 32(R1)    ; index file bitmap blocks
         MOVW    #9, 34(R1)              ; reserved files
         MOVL    VOLOWNER, 44(R1)        ; volume owner
         MOVW    VOLPROT, 52(R1)         ; volume protection
@@ -1249,9 +1393,24 @@ FIL$INIT::
         MOVW    R0, BLOCK-2(R1)
         MOVAB   BITBLK, R0
         MOVL    #1, R1
+        MOVL    BITBLK+4, R2
+        BSBW    FIL$WRITELBLK
+        BLBC    R0, 90$
+        MOVAB   BITBLK, R0
+        MOVL    #1, R1
         MOVL    #1, R2
         BSBW    FIL$WRITELBLK
 90$:    RSB
+
+; CLUSTERS: R0 = a block count, R7 = a cluster. R0 = the blocks of the
+; clusters they take. Keeps every other register.
+CLUSTERS:
+        .JSB_ENTRY
+        ADDL2   R7, R0
+        DECL    R0
+        DIVL2   R7, R0
+        MULL2   R7, R0
+        RSB
 
 ; FIL$SETVOLUME devnam, what, label, owner, prot, fileprot: SET VOLUME's
 ; work, in kernel mode, which $CMKRNL gives it. Changes the volume mounted
@@ -1415,15 +1574,16 @@ RESHDR:
 ; $INIT_VOL devnam, volnam, itmlst: writes an empty Files-11 ODS-2
 ; volume labelled volnam, up to 12 characters, on the disk devnam names,
 ; DKB0:, the data disk, or MDA0:, the ramdisk, which is made afresh
-; first, zeroed. The disk mustn't be mounted. The item list may give
+; first, zeroed. The volume is the disk's size, which the PAL gives
+; (GETMAXBLOCK). The disk mustn't be mounted. The item list may give
 ; INIT$_OWNER, the volume's owner, the caller's UIC by default, and
 ; INIT$_VOLPRO, its protection, 0 by default, which lets all use it.
 ; SS$_WRITLCK for DKA0:, SS$_DEVMOUNT if a volume is mounted there,
 ; SS$_BADPARAM for a label too long or empty, or an item too short,
 ; SS$_INSFMEM if there isn't the memory for the ramdisk, SS$_NOPRIV for a
-; volume someone else owns, without VOLPRO.
-; ponytail: no other items. DKB0:'s volume is 4096 blocks whatever the
-; disk's size, which one bitmap block maps.
+; volume someone else owns, without VOLPRO, SS$_MEDOFL without the disk,
+; SS$_DEVICEFULL if it is too small for a volume.
+; ponytail: no other items.
         .ENTRY  EXE$INIT_VOL, ^M<R2, R3, R4, R5, R6, R7, R8, R9, R10, R11>
         MOVL    4(AP), R6               ; devnam
         IFNORD  #8, (R6), 85$
@@ -1460,9 +1620,15 @@ RESHDR:
         BSBW    OWNVOL
         BLBC    R0, 80$
         MOVL    F11$GL_VCB, R1
-        MOVL    #DK$C_BLOCKS, R3
-        BBC     #VCB$V_RAMDISK, VCB$L_STATUS(R1), 50$
-        BSBW    MD$CREATE
+        BBS     #VCB$V_RAMDISK, VCB$L_STATUS(R1), 47$
+        MOVZBL  VCB$B_UNIT(R1), R0
+        CALL_PAL #PAL$_GETMAXBLOCK
+        MOVL    R0, R3
+        MOVL    #SS$_MEDOFL, R0
+        TSTL    R3
+        BEQL    80$
+        BRB     50$
+47$:    BSBW    MD$CREATE
         BLBC    R0, 80$
         MOVL    MD$GL_BLOCKS, R3
 50$:    MOVL    R8, R1

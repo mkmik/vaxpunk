@@ -1,7 +1,7 @@
 +++
 title = "PAL (root task)"
 summary = "The root task: VMS's PALcode on seL4, answering the executive's PAL calls"
-aka = ["PAL", "PALcode", "root task", "roottask.elf", "SWIS", "CALL_PAL", "WRPTE", "SWPCTX", "RPB", "restart parameter block", "READLBLK", "WRITELBLK", "pal/src/main.c"]
+aka = ["PAL", "PALcode", "root task", "roottask.elf", "SWIS", "CALL_PAL", "WRPTE", "SWPCTX", "RPB", "restart parameter block", "READLBLK", "WRITELBLK", "GETMAXBLOCK", "pal/src/main.c"]
 kind = "platform"
 intent = "goal"
 research = "done"
@@ -65,10 +65,11 @@ note = "DESIGN-0001 Exceptions, Faults and HALT"
 
 [[feature]]
 id = "disk-calls"
-title = "READLBLK and WRITELBLK on the virtio disks"
+title = "READLBLK and WRITELBLK on the virtio disks, and GETMAXBLOCK, call 0x4A, their size"
 status = "done"
 milestone = "m0"
 needs = ["/platform/virtio#blk"]
+note = "GETMAXBLOCK: ADR-0043"
 
 [[feature]]
 id = "getentropy"

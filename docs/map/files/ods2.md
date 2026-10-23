@@ -6,7 +6,7 @@ kind = "core"
 intent = "goal"
 research = "done"
 milestone = "m0"
-refs = ["docs/adr/0007-system-disk-files-11-and-rms.md", "docs/adr/0009-ramdisk-writable-files-11.md", "docs/adr/0012-data-disk-writable-files-11.md", "docs/adr/0015-file-system-io-through-the-disk-driver.md", "docs/adr/0020-file-system-lock-below-ipl-synch.md", "docs/design/0002-executive-processes.md", "vms/exec/f11.mar", "vms/exec/f11wrt.mar", "vms/exec/xqp.mar", "docs/adr/0039-xqp-qio-functions.md", "crosstools/ods/docs/", "docs/prd/0003-multi-user-vms.md"]
+refs = ["docs/adr/0007-system-disk-files-11-and-rms.md", "docs/adr/0009-ramdisk-writable-files-11.md", "docs/adr/0012-data-disk-writable-files-11.md", "docs/adr/0043-volumes-the-size-of-their-disk.md", "docs/adr/0015-file-system-io-through-the-disk-driver.md", "docs/adr/0020-file-system-lock-below-ipl-synch.md", "docs/design/0002-executive-processes.md", "vms/exec/f11.mar", "vms/exec/f11wrt.mar", "vms/exec/xqp.mar", "docs/adr/0039-xqp-qio-functions.md", "crosstools/ods/docs/", "docs/prd/0003-multi-user-vms.md"]
 
 [[feature]]
 id = "read"
@@ -69,8 +69,9 @@ note = "PRD-0003 tier 2 #15; f11wrt.mar rewrites the whole directory"
 [[feature]]
 id = "big-volumes"
 title = "Clusters, multi-block bitmaps: more than 4,096 blocks and files"
-status = "todo"
-note = "PRD-0003 tier 3 #22; ADR-0009, ADR-0012"
+status = "done"
+refs = ["docs/adr/0043-volumes-the-size-of-their-disk.md"]
+note = "ADR-0043: INITIALIZE makes a volume the disk's size, with VMS's default cluster and maximum files; the index file doubles when it fills"
 
 [[feature]]
 id = "extension-headers"
