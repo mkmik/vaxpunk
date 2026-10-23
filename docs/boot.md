@@ -118,7 +118,13 @@ compiles.
 - starts memory management (`MMG$INIT`): the PFN database, in S0 past
   `EXEC.EXE`, 8 bytes for each PFN, and the pool; then lets user-mode code
   use the system service vector
-- starts the scheduler (`SCH$INIT`) and the system time (`EXE$INITTIM`)
+- starts the scheduler (`SCH$INIT`)
+- makes the system's logical name directory, `LNM$SYSTEM_DIRECTORY`, a
+  table of tables, with the system's table, `LNM$SYSTEM_TABLE`, in it, and
+  the names that stand for tables: `LNM$SYSTEM`, and `LNM$FILE_DEV`, where
+  file and device names are looked up, the process's table and then the
+  system's (`LNM$INIT`)
+- starts the system time (`EXE$INITTIM`)
 - makes the console's unit control block, `OPA0:`, the first terminal,
   with its characteristics, a VT100's 80 by 24, and an empty type-ahead
   buffer, where typed characters wait until a program reads them, and
@@ -628,7 +634,11 @@ a second version, lists them,
 deletes them, the first with `DELETE/LOG`, and lists again, runs
 **CLITEST**, which checks the command parser on commands of its own,
 a `DIR/BRIEFLY`, a qualifier `DIRECTORY` doesn't have, `HELP SHOW`, and
-a `DEFINE/SYSTEM` it looks up with `SHOW LOGICAL/SYSTEM`, then
+a `DEFINE/SYSTEM` it looks up with `SHOW LOGICAL/SYSTEM`, makes a logical
+name table with `CREATE/NAME_TABLE`, a name in it that `SHOW LOGICAL`
+finds once the process has an `LNM$FILE_DEV` of its own, in its
+`LNM$PROCESS_DIRECTORY`, which `SHOW LOGICAL/TABLE` lists, and a table
+under it that goes when another replaces it, then
 initializes, with `/PROTECTION`, and mounts `DKB0:`, made afresh, which `SYSTARTUP_VMS.COM`
 couldn't mount at boot, copies a file there and lists
 it, makes `[SUB.DEEP]` there with `CREATE/DIRECTORY`, copies a file
@@ -638,8 +648,9 @@ into it and types another with `CREATE`, runs `SHOW DEVICES`, tries to dismount 
 CTRLC and types CTRL/C, types CTRL/Y at the prompt, stops SPIN, with a
 CTRL/C, and SLEEPER with CTRL/Y and continues them, and EDIT while it
 reads, so that DCL reads the next commands, takes CMKRNL and SYSNAM away
-with `SET PROCESS/PRIVILEGES`, so that `SHOW LOGICAL` and `DEFINE/SYSTEM`
-say `%SYSTEM-F-NOPRIV`, gives them back, runs PROTTEST, which can't read
+with `SET PROCESS/PRIVILEGES`, so that `SHOW LOGICAL` says
+`%SYSTEM-F-NOPRIV`, while `DEFINE/SYSTEM` still works, as SYSTEM's UIC
+group is a system one, gives them back, runs PROTTEST, which can't read
 `DATA.TXT` on `DKB0:` until `SET PROTECTION=(W:R)`, then can as its
 owner after `SET FILE/OWNER_UIC=[200,1]` and `SET PROTECTION=(W)`, with
 `DIRECTORY/OWNER/PROTECTION` after each, and can't once `DKB0:` is
@@ -651,7 +662,8 @@ identifier `PAYROLL` and grants it to him, changes
 SYSTEM's password with `SET PASSWORD`, logs out and in as JOE, who has
 his UIC, privileges, default directory and `PAYROLL`, which lets him read
 a file the world may not, and may not run AUTHORIZE or
-OPCCRASH, logs out again and in as SYSTEM with the new password, and
+OPCCRASH, `DEFINE/SYSTEM` or make a table in `LNM$SYSTEM_DIRECTORY`, but
+may in his own directory, logs out again and in as SYSTEM with the new password, and
 looks for the success lines in `out/serial.log`. The passwords typed
 are nowhere in it. Once QEMU is gone, `ods-image` checks
 the data disk's volume and finds the files on it, `[SUB.DEEP]`'s too. The test runs in

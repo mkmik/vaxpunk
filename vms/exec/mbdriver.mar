@@ -38,7 +38,7 @@
 
         .EXTERNAL SCH$GL_CURPCB, EXE$PROBER_DSC, EXE$ALONONPAGED, EXE$DEANONPGDSIZ
         .EXTERNAL IOC$ALLOCIRP, IOC$RETQUOTA, IOC$REQCOM, IOC$ASSIGN, IOC$CANCELQ, IOC$TRNDEVNAM
-        .EXTERNAL LNM$GQ_SYSTEM, LNM$CREATE, LNM$DELEQV
+        .EXTERNAL LNM$GL_SYSTEM, LNM$CREATE, LNM$DELEQV
 
 DEFMBXMXMSG = 256                       ; a mailbox's longest message, by default, as VMS's SYSGEN has it
 DEFMBXBUFQUO = 1056                     ; and the bytes it holds
@@ -136,7 +136,7 @@ OPRARGS:                                ; $CREMBX's arguments for it, which NEWM
         MOVL    SP, R8
         MOVL    #6, R9
         PUSHL   R5
-        MOVAQ   G^LNM$GQ_SYSTEM, R5
+        MOVL    G^LNM$GL_SYSTEM, R5
         BSBW    LNM$CREATE
         MOVL    (SP)+, R5
         ADDL2   #8, SP
@@ -579,7 +579,7 @@ UNNAME:
         MOVB    #^A/:/, 5(SP)
         MOVL    SP, R6
         MOVL    #6, R7
-        MOVAQ   G^LNM$GQ_SYSTEM, R2
+        MOVL    G^LNM$GL_SYSTEM, R2
         BSBW    LNM$DELEQV
         ADDL2   #8, SP
         RSB

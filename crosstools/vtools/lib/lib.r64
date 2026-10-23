@@ -237,7 +237,8 @@ MACRO
     PCB$A_IFAB = 272, 0, 32, 1 %,  ! its open files' IFABs, by IFI 1-15, or 0
     PCB$L_FILES = 336, 0, 32, 0 %,  ! bit n: IFI n is open
     PCB$L_CLIFILES = 340, 0, 32, 0 %,  ! the files it keeps open when an image exits
-    PCB$Q_LNMHD = 344, 0, 64, 0 %,  ! its logical name table, LNM$PROCESS_TABLE: LNMBs
+    PCB$L_LNMDIR = 344, 0, 32, 0 %,  ! its logical name directory, LNM$PROCESS_DIRECTORY: an LNMTH, or 0
+    PCB$L_LNMTAB = 348, 0, 32, 0 %,  ! its logical name table, LNM$PROCESS_TABLE: an LNMTH
     PCB$T_DEFDIR = 352, 0, 0, 0 %,  ! default directory, .ASCIC, 63 characters: $SETDDIR's
     PCB$Q_ASTQFL = 424, 0, 64, 0 %,  ! its ACBs, by access mode, kernel's first
     PCB$L_ASTSP = 432, 0, 32, 0 %,  ! while an AST routine runs, where on the kernel stack what it interrupted is, else 0
@@ -296,12 +297,29 @@ MACRO
 
 ! $LNMBDEF
 LITERAL
-    LNMB$K_LENGTH = 10;  ! past that, the strings
+    LNMB$K_LENGTH = 16,  ! past that, the strings
+    LNMB$M_NODELETE = 1;  ! $DELLNM can't delete it, $CRELNM and $CRELNT can't replace it
 MACRO
     LNMB$L_FLINK = 0, 0, 32, 0 %,  ! the table
     LNMB$L_BLINK = 4, 0, 32, 0 %,
     LNMB$W_SIZE = 8, 0, 16, 0 %,  ! its size, as allocated
-    LNMB$T_NAME = 10, 0, 0, 0 %;  ! the name, .ASCIC, then each equivalence, .ASCIC, then a 0
+    LNMB$B_FLAGS = 10, 0, 8, 0 %,  ! LNMB$M_
+    LNMB$L_LNMTH = 12, 0, 32, 0 %,  ! a table's header, else 0
+    LNMB$T_NAME = 16, 0, 0, 0 %;  ! the name, .ASCIC, then each equivalence, .ASCIC, then a 0
+
+! $LNMTHDEF
+LITERAL
+    LNMTH$K_LENGTH = 24,
+    LNMTH$M_SHAREABLE = 1,  ! in LNM$SYSTEM_DIRECTORY: every process's
+    LNMTH$M_DIRECTORY = 2;
+MACRO
+    LNMTH$L_FLINK = 0, 0, 32, 0 %,  ! its names: LNMBs
+    LNMTH$L_BLINK = 4, 0, 32, 0 %,
+    LNMTH$L_NAME = 8, 0, 32, 0 %,  ! its LNMB, in a directory
+    LNMTH$L_PARENT = 12, 0, 32, 0 %,  ! its parent table's header, 0 for a directory
+    LNMTH$L_OWNER = 16, 0, 32, 0 %,  ! a shareable table's owner, a UIC
+    LNMTH$W_PROT = 20, 0, 16, 0 %,  ! and its protection mask, as a file's: R, W, C (make a table under it), D
+    LNMTH$B_FLAGS = 22, 0, 8, 0 %;  ! LNMTH$M_
 
 ! $TQEDEF
 LITERAL

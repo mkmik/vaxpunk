@@ -19,6 +19,10 @@
 ;               of the one it replaced
 ;   DEASSIGN name
 ;               deletes it, with the same qualifiers
+;   CREATE/NAME_TABLE table
+;               makes a logical name table in the process's directory,
+;               or under /PARENT_TABLE's; /ATTRIBUTES=SUPERSEDE replaces
+;               one there by that name
 ;   SHOW LOGICAL [name]
 ;               translates a logical name, as $ASSIGN would; with no
 ;               name, or *, lists them all; /PROCESS, /SYSTEM and
@@ -210,7 +214,7 @@
         .EXTERNAL DCL$TABLES, CLI$$DCL_PARSE, CLI$$RESULT, CLI$$IMAGE
         .EXTERNAL CLI$$ROUTINE, CLI$GET_VALUE, CLI$PRESENT, CLI$$FOREIGN
         .EXTERNAL DCL$ADD, DCL$ADDCSTR, DCL$ASSIGN, DCL$CLOSE, DCL$DEASSIGN
-        .EXTERNAL DCL$DEFINE, DCL$OPEN, DCL$READ
+        .EXTERNAL DCL$DEFINE, DCL$OPEN, DCL$READ, DCL$CRETABLE
         .EXTERNAL DCL$DELSYM, DCL$DO, DCL$ENDPROCS, DCL$EXIT, DCL$EXITPROC
         .EXTERNAL DCL$FINDSYM, DCL$GETPROC, DCL$GOTO, DCL$IF, DCL$NAMESCAN
         .EXTERNAL DCL$PIPE, DCL$PIPEDEPTH, DCL$PIPEEND, DCL$PIPENEXT
@@ -281,6 +285,8 @@ ROUTINES:
         .ADDRESS CONNECT
         .ASCIC  "CONTINUE"
         .ADDRESS DCL$CONTINUE
+        .ASCIC  "CREATE_NAME_TABLE"
+        .ADDRESS DCL$CRETABLE
         .ASCIC  "DEASSIGN"
         .ADDRESS DCL$DEASSIGN
         .ASCIC  "DECK"

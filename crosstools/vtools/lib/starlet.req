@@ -41,6 +41,7 @@ LITERAL
     SS$_IVCHNLSEC = 620,  ! the channel isn't to a file open for mapping
     SS$_IVSECIDCTL = 740,  ! a section ident's match control isn't SEC$K_MAT*
     SS$_IVLOGTAB = 348,
+    SS$_RESULTOVF = 532,  ! a name doesn't fit in the buffer for it
     SS$_IVSSRQ = 372,
     SS$_MEDOFL = 420,  ! the medium is offline: a ramdisk not made yet
     SS$_NOIOCHAN = 436,
@@ -71,6 +72,7 @@ LITERAL
     SS$_CREATED = 1561,  ! success: it wasn't there, and was made
     SS$_MSGNOTFND = 1569,  ! success: $GETMSG has no text for the status
     SS$_SUPERSEDE = 1585,  ! success: a name by that name was replaced
+    SS$_LNMCREATED = 1713,  ! success: the logical name table wasn't there, and was made
     SS$_FILEPURGED = 1657,  ! success: the name's oldest version was deleted, past its version limit
     SS$_NONEXPR = 2280,
     SS$_NOHANDLER = 2296,  ! no such exit handler
@@ -106,6 +108,7 @@ LITERAL
     SS$_DIRNOTEMPTY = 8564,  ! a directory to delete has files in it
     SS$_FORCEDEXIT = 8572,  ! $FORCEX ended the image
     SS$_NOLOGTAB = 8852,
+    SS$_PARENT_DEL = 8788,  ! a new table would replace one it is under
     SS$_SYNCH = 1673,  ! success: the lock was granted at once, with LCK$M_SYNCSTS
     SS$_NOTQUEUED = 2488,  ! a warning: the lock can't be granted at once, with LCK$M_NOQUEUE
     SS$_IVLOCKID = 8484,  ! no such lock, or not the caller's
@@ -1020,6 +1023,7 @@ LITERAL
     ARM$M_READ = 1,
     ARM$M_WRITE = 2,
     ARM$M_EXECUTE = 4,  ! a file's; a directory's: look a name up in it
+    ARM$M_CREATE = 4,  ! a logical name table's: make a table under it
     ARM$M_DELETE = 8,
     ARM$M_CONTROL = 16,  ! change the protection: the owner's and the system's
     ARM$M_SYSTEM = 32;  ! vaxpunk's: change the owner, the system's only
@@ -1612,11 +1616,18 @@ LITERAL
 LITERAL
     LNM$_INDEX = 1,  ! which equivalence string the items after it are about, a longword
     LNM$_STRING = 2,  ! the equivalence string
+    LNM$_ATTRIBUTES = 3,  ! its LNM$M_ bits, a longword
     LNM$_TABLE = 4,  ! the name of the table it was found in
     LNM$_LENGTH = 5,  ! the equivalence string's length, a longword
     LNM$_MAX_INDEX = 7,  ! the last equivalence string's index, a longword
     LNM$C_NAMLENGTH = 255,  ! the longest name or equivalence string
-    LNM$C_MAXDEPTH = 10;  ! translations of a device name, at most
+    LNM$C_MAXDEPTH = 10,  ! translations of a device name, at most, and of a table's name
+    LNM$C_TABNAMLEN = 31,  ! the longest name in a directory: letters, digits, $ and _
+    LNM$M_NO_ALIAS = 1,  ! $CRELNT's attributes: ignored
+    LNM$M_CONFINE = 2,
+    LNM$M_TABLE = 8,  ! LNM$_ATTRIBUTES': it is a table
+    LNM$M_EXISTS = 1024,  ! and the string at that index is there
+    LNM$M_CREATE_IF = 16777216;  ! $CRELNT's: keep a name in the directory already there
 
 ! $JPIDEF
 LITERAL

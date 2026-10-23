@@ -1396,7 +1396,31 @@ MESSAGES:
         .LONG   SS$_NOLOGTAB
         .ASCIC  "SYSTEM"
         .ASCIC  "NOLOGTAB"
-        .ASCIC  "no logical name table matched the specified name"
+        .ASCIC  "no logical name table name match"
+        .LONG   SS$_NOLOGNAM
+        .ASCIC  "SYSTEM"
+        .ASCIC  "NOLOGNAM"
+        .ASCIC  "no logical name match"
+        .LONG   SS$_IVLOGNAM
+        .ASCIC  "SYSTEM"
+        .ASCIC  "IVLOGNAM"
+        .ASCIC  "invalid logical name"
+        .LONG   SS$_IVLOGTAB
+        .ASCIC  "SYSTEM"
+        .ASCIC  "IVLOGTAB"
+        .ASCIC  "invalid logical name table"
+        .LONG   SS$_PARENT_DEL
+        .ASCIC  "SYSTEM"
+        .ASCIC  "PARENT_DEL"
+        .ASCIC  "illegal attempt to delete parent logical name table"
+        .LONG   SS$_RESULTOVF
+        .ASCIC  "SYSTEM"
+        .ASCIC  "RESULTOVF"
+        .ASCIC  "resultant string overflow"
+        .LONG   SS$_LNMCREATED
+        .ASCIC  "SYSTEM"
+        .ASCIC  "LNMCREATED"
+        .ASCIC  "logical name table did not exist - was created"
         .LONG   SS$_SYNCH
         .ASCIC  "SYSTEM"
         .ASCIC  "SYNCH"

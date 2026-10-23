@@ -414,7 +414,7 @@
   $ COPY/HTTP URL::"https://example.com/" []
 1 CREATE
   Makes a file of the lines you type, a directory, an empty file that
-  an FDL file describes, or a mailbox.
+  an FDL file describes, a mailbox, or a logical name table.
 
   Format
 
@@ -422,6 +422,7 @@
     CREATE/DIRECTORY directory-spec
     CREATE/FDL=fdl-file-spec [file-spec]
     CREATE/MAILBOX logical-name
+    CREATE/NAME_TABLE table-name
 
   Without a qualifier CREATE reads lines from SYS$INPUT up to CTRL/Z
   and writes them to a new version of the file, as text.
@@ -485,6 +486,36 @@
 
   $ CREATE/MAILBOX/PERMANENT/MESSAGE_SIZE=512/LOG MY_MAILBOX
   %CREATE-I-CREATED, MB12: created
+2 /NAME_TABLE
+  Makes a logical name table, in the process's directory,
+  LNM$PROCESS_DIRECTORY, so that its names are the process's. Under one
+  of the system's tables it goes in LNM$SYSTEM_DIRECTORY, for every
+  process, which takes write access to that directory. A table by that
+  name stays, and DCL says so, unless /ATTRIBUTES=SUPERSEDE.
+
+  Format
+
+    CREATE/NAME_TABLE table-name
+3 Qualifiers
+/ATTRIBUTES
+  /ATTRIBUTES=(keyword[,...])
+
+  SUPERSEDE replaces a table by that name, and the tables under it.
+  CONFINE and NO_ALIAS are taken, and have no effect yet.
+/LOG
+  /LOG (default)
+  /NOLOG
+
+  Says when the table was there already, or was replaced.
+/PARENT_TABLE
+  /PARENT_TABLE=table-name
+
+  The table it goes under, LNM$PROCESS_DIRECTORY by default.
+3 Example
+
+  $ CREATE/NAME_TABLE MYTAB
+  $ DEFINE/TABLE=MYTAB FOO BAR
+  $ DEFINE/TABLE=LNM$PROCESS_DIRECTORY LNM$FILE_DEV LNM$PROCESS,MYTAB,LNM$SYSTEM
 1 DEASSIGN
   Deletes a logical name.
 
@@ -508,7 +539,9 @@
 /TABLE
   /TABLE=table-name
 
-  Deletes it from that table.
+  Deletes it from the first table that table-name stands for that has
+  it. A table's name in LNM$PROCESS_DIRECTORY or LNM$SYSTEM_DIRECTORY
+  deletes the table.
 1 DECK
   Marks the start of data lines in a command procedure that may start
   with $, for the command or program before it to read.
@@ -572,7 +605,9 @@
 /TABLE
   /TABLE=table-name
 
-  Puts it in that table.
+  Puts it in that table, or the first one table-name stands for: a name
+  in LNM$PROCESS_DIRECTORY or LNM$SYSTEM_DIRECTORY, such as LNM$FILE_DEV,
+  may stand for a list of tables.
 2 Examples
 
   $ DEFINE HOME MDA0:[000000],SYS$MANAGER

@@ -2,7 +2,7 @@
 ! [file]: it makes the file the FDL file describes, named file or as the
 ! FDL's FILE NAME says. CREATE file makes a text file of the lines on
 ! SYS$INPUT up to CTRL/Z; /LOG says it did. CREATE/MAILBOX name: it
-! makes a mailbox that name stands for.
+! makes a mailbox that name stands for. CREATE/NAME_TABLE is DCL's.
 define verb CREATE
 	image CREATE
 	parameter P1, label=FILE, prompt="File", value(required, type=$file)
@@ -10,6 +10,7 @@ define verb CREATE
 	qualifier LOG
 	qualifier FDL, value(required, type=$infile), syntax=CREATE_FDL
 	qualifier MAILBOX, nonnegatable, syntax=CREATE_MAILBOX
+	qualifier NAME_TABLE, syntax=CREATE_NAME_TABLE
 
 ! CREATE/FDL: the file is optional.
 define syntax CREATE_FDL
@@ -25,3 +26,18 @@ define syntax CREATE_MAILBOX
 	qualifier PERMANENT
 	qualifier TEMPORARY
 	qualifier LOG
+
+! CREATE/NAME_TABLE table: DCL makes a logical name table (dcl/logical.mar).
+! ponytail: no /PROTECTION, /QUOTA or access mode qualifiers.
+define syntax CREATE_NAME_TABLE
+	cliroutine CREATE_NAME_TABLE
+	parameter P1, label=TABLE_NAME, prompt="Table", value(required)
+	qualifier NAME_TABLE
+	qualifier PARENT_TABLE, value(required)
+	qualifier ATTRIBUTES, value(required, list, type=TABLE_ATTRIBUTES)
+	qualifier LOG, default
+
+define type TABLE_ATTRIBUTES
+	keyword CONFINE
+	keyword NO_ALIAS
+	keyword SUPERSEDE

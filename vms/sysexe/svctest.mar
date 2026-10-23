@@ -116,6 +116,35 @@ FILE_DEV:
         .ASCID  "LNM$FILE_DEV"
 LNM_JOB:
         .ASCID  "LNM$JOB"
+PROCDIR:
+        .ASCID  "LNM$PROCESS_DIRECTORY"
+PROCTAB_NAME:
+        .ASCID  "LNM$PROCESS_TABLE"
+TAB_NAME:
+        .ASCID  "SVCTEST_TAB"
+SUB_NAME:
+        .ASCID  "SVCTEST_SUB"
+LIST_NAME:
+        .ASCID  "SVCTEST_LIST"
+BAD_NAME:
+        .ASCID  "SVCTEST.TAB"
+CREATE_IF:
+        .LONG   LNM$M_CREATE_IF
+RESNAM: .LONG   31                      ; $CRELNT's: TABBUF
+        .ADDRESS TABBUF
+RESLEN: .WORD   0
+LIST_ITEMS:                             ; SVCTEST_LIST: SVCTEST_SUB, then SVCTEST_TAB
+        .WORD   11, LNM$_STRING
+        .ADDRESS SUB_NAME_TEXT
+        .LONG   0
+        .WORD   11, LNM$_STRING
+        .ADDRESS TAB_NAME_TEXT
+        .LONG   0
+        .LONG   0
+SUB_NAME_TEXT:
+        .ASCII  "SVCTEST_SUB"
+TAB_NAME_TEXT:
+        .ASCII  "SVCTEST_TAB"
 TERM_NAME:
         .ASCID  "SVCTEST_TERM"
 OUT_NAME:
@@ -355,6 +384,55 @@ BINBUF: .BLKQ   1
         EXPECT  #SS$_NORMAL, 48
         $DELLNM_S TABNAM=LNM_PROCESS, LOGNAM=OUT_NAME
         EXPECT  #SS$_NOLOGNAM, 49
+
+; Logical name tables: SVCTEST_TAB, in the process's directory, kept with
+; LNM$M_CREATE_IF and replaced without; a name in it, which $TRNLNM finds
+; through SVCTEST_LIST, a search list of tables whose first, SVCTEST_SUB,
+; is under SVCTEST_TAB, so can't be its parent. Deleting SVCTEST_TAB
+; deletes SVCTEST_SUB; LNM$PROCESS_TABLE can't go; a name in a directory
+; has letters, digits, $ and _ only. A table without a name is LNM$ and
+; 8 hex digits, and $DELLNM without a name empties it.
+        $CRELNT_S RESNAM=RESNAM, RESLEN=RESLEN, TABNAM=TAB_NAME, PARTAB=PROCDIR
+        EXPECT  #SS$_LNMCREATED, 107
+        CMPW    RESLEN, #11
+        BNEQ    90$
+        $CRELNT_S ATTR=CREATE_IF, TABNAM=TAB_NAME, PARTAB=PROCDIR
+        EXPECT  #SS$_NORMAL, 108
+        $CRELNT_S TABNAM=TAB_NAME, PARTAB=PROCDIR
+        EXPECT  #SS$_SUPERSEDE, 109
+        $CRELNM_S TABNAM=TAB_NAME, LOGNAM=TERM_NAME, ITMLST=TERM_ITEMS
+        EXPECT  #SS$_NORMAL, 110
+        $CRELNT_S TABNAM=SUB_NAME, PARTAB=TAB_NAME
+        EXPECT  #SS$_LNMCREATED, 111
+        $CRELNT_S TABNAM=TAB_NAME, PARTAB=SUB_NAME
+        EXPECT  #SS$_PARENT_DEL, 112
+        $CRELNM_S TABNAM=PROCDIR, LOGNAM=LIST_NAME, ITMLST=LIST_ITEMS
+        EXPECT  #SS$_NORMAL, 113
+        $TRNLNM_S TABNAM=LIST_NAME, LOGNAM=TERM_NAME, ITMLST=TRN_ITEMS
+        EXPECT  #SS$_NORMAL, 114
+        CMPW    TABLEN, #11             ; SVCTEST_TAB
+        BNEQ    90$
+        $DELLNM_S TABNAM=PROCDIR, LOGNAM=TAB_NAME
+        EXPECT  #SS$_NORMAL, 115
+        $TRNLNM_S TABNAM=SUB_NAME, LOGNAM=TERM_NAME, ITMLST=TRN_ITEMS
+        EXPECT  #SS$_NOLOGTAB, 116
+        $DELLNM_S TABNAM=PROCDIR, LOGNAM=PROCTAB_NAME
+        EXPECT  #SS$_NOLOGNAM, 117
+        $CRELNM_S TABNAM=PROCDIR, LOGNAM=BAD_NAME, ITMLST=TERM_ITEMS
+        EXPECT  #SS$_IVLOGNAM, 118
+        $CRELNT_S RESNAM=RESNAM, RESLEN=RESLEN, PARTAB=PROCDIR
+        EXPECT  #SS$_LNMCREATED, 119
+        CMPW    RESLEN, #12
+        BNEQ    90$
+        CMPL    TABBUF, #^A/LNM$/
+        BNEQ    90$
+        MOVW    RESLEN, RESNAM          ; RESNAM: the table's name
+        $CRELNM_S TABNAM=RESNAM, LOGNAM=TERM_NAME, ITMLST=TERM_ITEMS
+        EXPECT  #SS$_NORMAL, 120
+        $DELLNM_S TABNAM=RESNAM
+        EXPECT  #SS$_NORMAL, 121
+        $TRNLNM_S TABNAM=RESNAM, LOGNAM=TERM_NAME, ITMLST=TRN_ITEMS
+        EXPECT  #SS$_NOLOGNAM, 122
 
 ; The default directory: set [SYSEXE], keeping the old one; one with a
 ; wildcard isn't one, nor a relative one; read back as much as fits; set the old one again.

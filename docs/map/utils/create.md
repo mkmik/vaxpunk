@@ -56,10 +56,10 @@ note = "Checked against OpenVMS V8.4-2L1. The name goes in the system table, so 
 
 [[feature]]
 id = "name-table"
-title = "CREATE/NAME_TABLE: a logical name table of one's own"
-status = "todo"
+title = "CREATE/NAME_TABLE: a logical name table of one's own, DCL's, as on VMS"
+status = "done"
 needs = ["/exec/logical-names#directories"]
-note = "Needs $CRELNT, which needs logical name directories"
+note = "dcl/logical.mar; no /PROTECTION, /QUOTA or access modes yet"
 
 [[feature]]
 id = "terminal"
@@ -99,5 +99,6 @@ step 7); `CREATE file` reads `SYS$INPUT` into variable-length records
 with carriage-return control. A procedure's data lines reach it since
 PRD-0003 step 8. `CREATE/MAILBOX` calls `$CREMBX`, for a temporary
 mailbox in executive mode, so that its channel is DCL's and the mailbox
-outlives CREATE. Missing: directory qualifiers, a version limit, and
-the newer `/NAME_TABLE` and `/TERMINAL`.
+outlives CREATE. `CREATE/NAME_TABLE` is DCL's own, as on VMS
+(`dcl/logical.mar`). Missing: directory qualifiers, a version limit,
+and the newer `/TERMINAL`.
