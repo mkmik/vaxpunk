@@ -1,5 +1,5 @@
         .TITLE  CREATE  Makes directories and files
-        .IDENT  /V0.3/
+        .IDENT  /V0.4/
 ;
 ; DCL's CREATE/DIRECTORY spec runs this: $CREATE_DIR makes the
 ; directory, [dev:][dir.dir...], and those above it that aren't there.
@@ -13,8 +13,16 @@
 ; lines read from SYS$INPUT up to CTRL/Z, as VMS's CREATE does: variable
 ; length records with carriage return carriage control. With /LOG it says
 ; %CREATE-I-CREATED, name created. Returns RMS's status if it can't.
+; CREATE/MAILBOX name makes a mailbox, MBnn:, that the logical name name
+; stands for, as VMS's does; /MESSAGE_SIZE and /BUFFER_SIZE are $CREMBX's
+; maxmsg and bufquo. A temporary one, the default, outlives CREATE: it
+; is made in executive mode, which takes CMEXEC, on a supervisor mode
+; channel, DCL's, so it goes when the process does. /PERMANENT makes a
+; permanent one, which stays when CREATE's channel goes. With /LOG it says
+; %CREATE-I-CREATED, MBnn: created. Returns $CREMBX's status.
 ; ponytail: one directory or file; a command procedure's data lines are
-; skipped by DCL, so there CREATE makes an empty file.
+; skipped by DCL, so there CREATE makes an empty file. A mailbox's name
+; goes in the system table, so it takes SYSNAM (t8y:/exec/mailboxes#name-tables).
 ;
         .LIBRARY "starlet.mlb"
         .LIBRARY "sysexe.mlb"
@@ -24,6 +32,8 @@
         $RABDEF
         $NAMDEF
         $IODEF
+        $PSLDEF
+        $DVIDEF
 
         .EXTERNAL FDL$PARSE, FDL$T_NAME, FDL$GB_NAMELEN
         .EXTERNAL LIN$TEXT, LIN$STR, LIN$PUT, LIN$STATUS
@@ -61,10 +71,26 @@ IOSB:   .BLKQ   1                       ; a read's: its length, terminator
 LINESIZE = 1024
 LINE:   .BLKB   LINESIZE
 TRES:   .BLKB   255
+NUMDSC: .LONG   10                      ; /MESSAGE_SIZE's or /BUFFER_SIZE's digits
+        .ADDRESS NUMBUF
+NUMBUF: .BLKB   10
+PRMFLG: .LONG   0                       ; $CREMBX's arguments
+MAXMSG: .LONG   0
+BUFQUO: .LONG   0
+MCHAN:  .LONG   0
+DVIITEMS:                               ; the mailbox's name, _MBnn:
+        .WORD   16, DVI$_DEVNAM
+        .ADDRESS DEVNAM, DEVLEN
+        .LONG   0
+DEVNAM: .BLKB   16
+DEVLEN: .LONG   0
 
         .PSECT  CODE, EXE, LONG
         .ENTRY  START, ^M<R2, R3>
-        PRESENT "FDL"
+        PRESENT "MAILBOX"
+        BLBC    R0, 5$
+        BRW     MAILBOX
+5$:     PRESENT "FDL"
         BLBS    R0, 20$
         PRESENT "DIRECTORY"
         BLBS    R0, 10$
@@ -158,5 +184,65 @@ TEXT:   GETVALUE "FILE", SPEC, SPEC
         $CLOSE  FAB=TFAB
         MOVL    (SP)+, R0
 90$:    RET
+
+; MAILBOX: CREATE/MAILBOX name.
+MAILBOX:
+        GETVALUE "LOGICAL_NAME", SPEC, SPEC
+        PRESENT "MESSAGE_SIZE"
+        BLBC    R0, 10$
+        GETVALUE "MESSAGE_SIZE", NUMDSC, NUMDSC
+        BSBW    NUMBER
+        MOVL    R1, MAXMSG
+10$:    PRESENT "BUFFER_SIZE"
+        BLBC    R0, 20$
+        GETVALUE "BUFFER_SIZE", NUMDSC, NUMDSC
+        BSBW    NUMBER
+        MOVL    R1, BUFQUO
+20$:    PRESENT "PERMANENT"
+        BLBC    R0, 30$
+        MOVL    #1, PRMFLG
+        CALLS   #0, MKMBX
+        BRB     40$
+30$:    $CMEXEC_S ROUTIN=MKMBX
+40$:    BLBC    R0, 90$
+        PRESENT "LOG"
+        BLBC    R0, 80$
+        $GETDVIW_S CHAN=MCHAN, ITMLST=DVIITEMS
+        BLBC    R0, 90$
+        MOVAB   M_CREATED, R1           ; %CREATE-I-CREATED, MBnn: created
+        BSBW    LIN$TEXT
+        MOVAB   DEVNAM+1, R1            ; without its underscore
+        SUBL3   #1, DEVLEN, R2
+        BSBW    LIN$STR
+        MOVAB   M_SUFFIX, R1
+        BSBW    LIN$TEXT
+        BSBW    LIN$PUT
+80$:    MOVL    #SS$_NORMAL, R0
+90$:    RET
+
+; MKMBX: makes the mailbox, on a channel of supervisor mode or the
+; caller's, whichever is less privileged. R0 = $CREMBX's status.
+        .ENTRY  MKMBX, ^M<>
+        $CREMBX_S PRMFLG=PRMFLG, CHAN=MCHAN, MAXMSG=MAXMSG, BUFQUO=BUFQUO, ACMODE=#PSL$C_SUPER, LOGNAM=SPEC
+        RET
+
+; NUMBER: NUMDSC = a qualifier's digits. R1 = their value, 0 if one isn't
+; a digit. Uses R0-R2.
+NUMBER:
+        .JSB_ENTRY  SCRATCH=<R2>
+        CLRL    R1
+        CLRL    R2
+10$:    CMPW    R2, NUMDSC
+        BGEQU   90$
+        MOVZBL  NUMBUF[R2], R0
+        SUBL2   #^A/0/, R0
+        CMPL    R0, #9
+        BGTRU   80$
+        MULL2   #10, R1
+        ADDL2   R0, R1
+        INCL    R2
+        BRB     10$
+80$:    CLRL    R1
+90$:    RSB
 
         .END    START

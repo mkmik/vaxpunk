@@ -65,6 +65,13 @@ title = "/ERASE: overwrite the blocks before they are freed"
 status = "todo"
 needs = ["/files/ods2#highwater"]
 
+[[feature]]
+id = "mailbox"
+title = "DELETE/MAILBOX name: marks a permanent mailbox to go with its last channel, $DELMBX"
+status = "todo"
+needs = ["/exec/mailboxes"]
+note = "Until then a CREATE/MAILBOX/PERMANENT mailbox stays until the system stops"
+
 [[needs]]
 on = "/rms/core"
 why = "$PARSE, and $ERASE by the NAM block"

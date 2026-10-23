@@ -413,14 +413,15 @@
 
   $ COPY/HTTP URL::"https://example.com/" []
 1 CREATE
-  Makes a file of the lines you type, a directory, or an empty file
-  that an FDL file describes.
+  Makes a file of the lines you type, a directory, an empty file that
+  an FDL file describes, or a mailbox.
 
   Format
 
     CREATE file-spec
     CREATE/DIRECTORY directory-spec
     CREATE/FDL=fdl-file-spec [file-spec]
+    CREATE/MAILBOX logical-name
 
   Without a qualifier CREATE reads lines from SYS$INPUT up to CTRL/Z
   and writes them to a new version of the file, as text.
@@ -449,6 +450,41 @@
 
   $ CREATE/DIRECTORY DKB0:[PROJECT.SOURCES]
   $ CREATE/FDL=CUSTOMERS.FDL
+2 /MAILBOX
+  Makes a mailbox, MBnn:, that the logical name stands for, so that
+  processes can send each other messages through it. A temporary
+  mailbox, the default, takes TMPMBX and CMEXEC and goes when your
+  process does; a permanent one, /PERMANENT, takes PRMMBX and stays.
+  The logical name goes in the system table, which takes SYSNAM.
+
+  Format
+
+    CREATE/MAILBOX logical-name
+3 Qualifiers
+/BUFFER_SIZE
+  /BUFFER_SIZE=n
+
+  The bytes of messages the mailbox holds, 1056 by default.
+/LOG
+  /LOG
+
+  Says the mailbox was created, and its name.
+/MESSAGE_SIZE
+  /MESSAGE_SIZE=n
+
+  The longest message, up to 65535 bytes, 256 by default.
+/PERMANENT
+  /PERMANENT
+
+  Makes a permanent mailbox.
+/TEMPORARY
+  /TEMPORARY (default)
+
+  Makes a temporary mailbox.
+3 Example
+
+  $ CREATE/MAILBOX/PERMANENT/MESSAGE_SIZE=512/LOG MY_MAILBOX
+  %CREATE-I-CREATED, MB12: created
 1 DEASSIGN
   Deletes a logical name.
 

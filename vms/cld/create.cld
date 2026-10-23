@@ -1,14 +1,27 @@
 ! CREATE/DIRECTORY spec: CREATE.EXE makes a directory. CREATE/FDL=fdl
 ! [file]: it makes the file the FDL file describes, named file or as the
 ! FDL's FILE NAME says. CREATE file makes a text file of the lines on
-! SYS$INPUT up to CTRL/Z; /LOG says it did.
+! SYS$INPUT up to CTRL/Z; /LOG says it did. CREATE/MAILBOX name: it
+! makes a mailbox that name stands for.
 define verb CREATE
 	image CREATE
 	parameter P1, label=FILE, prompt="File", value(required, type=$file)
 	qualifier DIRECTORY
 	qualifier LOG
 	qualifier FDL, value(required, type=$infile), syntax=CREATE_FDL
+	qualifier MAILBOX, nonnegatable, syntax=CREATE_MAILBOX
 
 ! CREATE/FDL: the file is optional.
 define syntax CREATE_FDL
 	parameter P1, label=FILE, value(type=$outfile)
+
+! CREATE/MAILBOX: a logical name, not a file. ponytail: no /PROTECTION,
+! which $CREMBX doesn't check yet (t8y:/exec/mailboxes#protection).
+define syntax CREATE_MAILBOX
+	parameter P1, label=LOGICAL_NAME, prompt="Log name", value(required)
+	qualifier MAILBOX, nonnegatable
+	qualifier BUFFER_SIZE, value(required, type=$number)
+	qualifier MESSAGE_SIZE, value(required, type=$number)
+	qualifier PERMANENT
+	qualifier TEMPORARY
+	qualifier LOG

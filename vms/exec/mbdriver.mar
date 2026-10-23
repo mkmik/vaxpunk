@@ -23,6 +23,8 @@
 ;
         .LIBRARY "lib.mlb"
         .LIBRARY "starlet.mlb"
+        $PALDEF
+        $PSLDEF
         $IPLDEF
         $PCBDEF
         $PRVDEF
@@ -75,7 +77,10 @@ OPRARGS:                                ; $CREMBX's arguments for it, which NEWM
 ; than 255, SS$_NOIOCHAN, or SS$_INSFMEM, also when all 99 units are
 ; taken. SS$_NOPRIV for a permanent mailbox without PRMMBX, a temporary
 ; one without TMPMBX, or a lognam that names no mailbox yet without
-; SYSNAM. promsk, acmode and flags are ignored.
+; SYSNAM. The channel's access mode is acmode or the caller's, whichever
+; is less privileged: one not user mode's is one of PCB$L_CLICHANS, which
+; outlive the image, as $ASSIGN's from supervisor mode. promsk and flags
+; are ignored.
 ; ponytail: lognam goes in the system table, so it takes SYSNAM; a
 ; temporary mailbox's goes in LNM$JOB once there is one, as on VMS.
         .ENTRY  EXE$CREMBX, ^M<R2, R3, R4, R5, R6, R7, R8, R9>
@@ -140,7 +145,16 @@ OPRARGS:                                ; $CREMBX's arguments for it, which NEWM
         BLBC    R0, 60$
 50$:    BLBC    R0, 80$
         MOVW    R1, @8(AP)
-        MOVL    #SS$_NORMAL, R0
+        CALL_PAL #PAL$_RD_PS
+        EXTZV   #PSL$V_PRVMOD, #2, R0, R0
+        EXTZV   #0, #2, 24(AP), R2
+        CMPL    R2, R0
+        BLEQ    55$
+        MOVL    R2, R0
+55$:    CMPL    R0, #PSL$C_USER
+        BEQL    58$
+        BBSS    R1, PCB$L_CLICHANS(R4), 58$
+58$:    MOVL    #SS$_NORMAL, R0
         BRB     80$
 60$:    PUSHL   R0                      ; the new one goes
         BICL2   #UCB$M_PRMMBX, UCB$L_MBSTS(R5)
