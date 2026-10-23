@@ -219,9 +219,10 @@ LIST:   CLRL    R6                      ; the table: 0 the process's, 1 the syst
 ; GETLNM table, index: in kernel mode, copies the index'th logical name
 ; of a table, 0 the process's and 1 the system's, to DCL$NAME and
 ; DCL$NAMDSC. SS$_NOLOGNAM past the last. A name made or deleted between
-; calls may be missed or shown twice. ponytail: walks the executive's
-; tables itself, as DIRECTORY reads the boot volume; VMS's DCL asks the
-; executive's logical name routines.
+; calls may be missed or shown twice.
+; ponytail: DCL's, with the user's CMKRNL; VMS's SHOW LOGICAL is
+; SHOW.EXE's, installed with CMKRNL, which reads the tables in kernel mode
+; and sorts them (t8y:/utils/set-show#show-logical).
         .ENTRY  GETLNM, ^M<R2, R3, R4, R5>
         MOVL    G^SCH$GL_CURPCB, R2
         MOVAQ   PCB$Q_LNMHD(R2), R2

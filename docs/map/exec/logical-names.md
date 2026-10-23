@@ -57,7 +57,7 @@ note = "PRD-0003 tier 3 #25"
 id = "directories"
 title = "Logical name directories, tables of one's own ($CRELNT), table search lists"
 status = "todo"
-note = "PRD-0003 tier 3 #25; also $DELLNM without a name, and SHOW LOGICAL asking the executive"
+note = "PRD-0003 tier 3 #25; also $DELLNM without a name"
 
 [[feature]]
 id = "cluster-table"
