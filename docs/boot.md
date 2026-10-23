@@ -416,7 +416,8 @@ interpreter. It is linked high in P1, which tells the executive it is one
   errors the disk's driver counted in its UCB, and their volumes' labels
   and free blocks, then the console, `OPA0:`, as VMS
   does: it finds them with the `$DEVICE_SCAN` system service and asks
-  `$GETDVIW` about each, which counts the free blocks in the volume's
+  `$GETDVIW` about each. The free blocks are the count in the volume's
+  VCB, which the first `SHOW DEVICES` after `MOUNT` takes from the
   storage bitmap (`FIL$FREEBLOCKS`). `SHOW DEVICES DK` lists only the
   devices whose names start with `DK`.
 - `REQUEST "text"` runs `REQUEST.EXE`, which sends the text, after the

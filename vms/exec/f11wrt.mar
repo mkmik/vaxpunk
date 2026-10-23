@@ -447,8 +447,8 @@ WRITEIDX:
 ; ALLOCBLK: R1 = a block count. Takes the first run of free clusters from
 ; the storage bitmap, a set bit each, enough for R1 blocks at most, and
 ; no more than a map pointer maps: R2 = its first LBN, R1 = its blocks,
-; whole clusters. R0 = SS$_NORMAL, SS$_DEVICEFULL if none is free, or
-; the disk's error. Uses R3.
+; whole clusters, less VCB$L_FREE once counted. R0 = SS$_NORMAL,
+; SS$_DEVICEFULL if none is free, or the disk's error. Uses R3.
 ALLOCBLK:
         .JSB_ENTRY  OUTPUT=<R2>, SCRATCH=<R3>
         PUSHR   #^M<R4, R5, R6>
@@ -488,16 +488,23 @@ ALLOCBLK:
         ADDL2   R3, R2
         MULL2   R5, R2
         MULL2   R5, R1
+        BLBC    R0, 85$
+        TSTL    VCB$L_FREE(R6)
+        BLSS    90$
+        SUBL2   R1, VCB$L_FREE(R6)
+        BRB     90$
+85$:    MNEGL   #1, VCB$L_FREE(R6)      ; counted again next time
 90$:    POPR    #^M<R4, R5, R6>
         RSB
 
 ; FREEBLK: R1 = a block count, R2 = an LBN, whole clusters. Gives them
-; back to the storage bitmap. R0 = SS$_NORMAL or the disk's error. Uses
-; R1-R2.
+; back to the storage bitmap, and to VCB$L_FREE once counted. R0 =
+; SS$_NORMAL or the disk's error. Uses R1-R2.
 FREEBLK:
         .JSB_ENTRY  SCRATCH=<R2>
-        PUSHR   #^M<R3, R4>
+        PUSHR   #^M<R3, R4, R5>
         MOVL    #SS$_NORMAL, R0
+        CLRL    R5                      ; the clusters it frees
         MOVL    F11$GL_VCB, R3
         MOVZWL  VCB$W_CLUSTER(R3), R3
         DIVL2   R3, R2                  ; R2 = the first cluster,
@@ -514,22 +521,33 @@ FREEBLK:
         BLSS    15$
         MOVL    #3, R0
         BSBW    BITMAP
-        BLBC    R0, 90$
+        BLBC    R0, 87$
 15$:    MOVL    R3, SBNUM
         MOVL    #2, R0
         BSBW    BITMAP
-        BLBC    R0, 90$
+        BLBC    R0, 87$
 20$:    MULL3   #BITS, SBNUM, R4
         SUBL3   R4, R2, R4
         BBSS    R4, BITBLK, 30$
+        INCL    R5
 30$:    INCL    R2
         DECL    R1
         BRB     10$
 80$:    TSTL    SBNUM
-        BLSS    90$
+        BLSS    85$
         MOVL    #3, R0
         BSBW    BITMAP
-90$:    POPR    #^M<R3, R4>
+        BLBC    R0, 87$
+85$:    MOVL    F11$GL_VCB, R3
+        TSTL    VCB$L_FREE(R3)
+        BLSS    90$
+        MOVZWL  VCB$W_CLUSTER(R3), R4
+        MULL2   R4, R5
+        ADDL2   R5, VCB$L_FREE(R3)
+        BRB     90$
+87$:    MOVL    F11$GL_VCB, R3          ; partly written: counted again
+        MNEGL   #1, VCB$L_FREE(R3)      ; next time
+90$:    POPR    #^M<R3, R4, R5>
         RSB
 
 ; GETHIBLK: R3 = a file header. R0 = the blocks allocated to it. And

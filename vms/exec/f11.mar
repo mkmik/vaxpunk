@@ -456,7 +456,8 @@ FIL$MOUNT::
         DIVL2   #BLOCK, R0
         DECL    R0
         MOVL    R0, VCB$L_SBMAPBLKS(R5)
-30$:    BISL2   #1@VCB$V_MOUNTED, VCB$L_STATUS(R5)
+30$:    MNEGL   #1, VCB$L_FREE(R5)      ; not counted yet
+        BISL2   #1@VCB$V_MOUNTED, VCB$L_STATUS(R5)
         BSBB    MNTLNM
         DSBINT  #IPL$_SYNCH             ; the console, a line at a time
         MOVAB   MOUNTED, R1
@@ -652,14 +653,18 @@ MNTLNM:
 90$:    RET
 
 ; FIL$FREEBLOCKS: R0 = the free blocks on F11$GL_VCB's volume, which
-; must be mounted: a cluster for each set bit of BITMAP.SYS's storage
-; bitmap, the blocks past its SCB. R1 = SS$_NORMAL, or the disk's error
-; and R0 = 0. Holding FIL$LOCK. Uses R0-R1.
-; ponytail: counted each time, a bit at a time; VMS keeps the count in
-; the VCB, up to date as files grow and shrink.
+; must be mounted: VCB$L_FREE, which the first call after $MOUNT counts,
+; a cluster for each set bit of BITMAP.SYS's storage bitmap, the blocks
+; past its SCB, and allocation keeps up to date. R1 = SS$_NORMAL, or the
+; disk's error and R0 = 0. Holding FIL$LOCK. Uses R0-R1.
 FIL$FREEBLOCKS::
         .JSB_ENTRY
-        PUSHR   #^M<R2, R3, R4, R5, R6, R7>
+        MOVL    F11$GL_VCB, R1
+        MOVL    VCB$L_FREE(R1), R0
+        BLSS    5$
+        MOVL    #SS$_NORMAL, R1
+        RSB
+5$:     PUSHR   #^M<R2, R3, R4, R5, R6, R7>
         MOVL    #BITMAP, R0
         MOVAB   F11$AB_FILHDR, R1
         BSBW    FIL$READHDR
@@ -683,9 +688,10 @@ FIL$FREEBLOCKS::
 30$:    AOBLSS  #BLOCK*8, R4, 20$
         INCL    R5
         BRB     10$
-50$:    MOVL    F11$GL_VCB, R0
-        MOVZWL  VCB$W_CLUSTER(R0), R0
+50$:    MOVL    F11$GL_VCB, R1
+        MOVZWL  VCB$W_CLUSTER(R1), R0
         MULL2   R6, R0
+        MOVL    R0, VCB$L_FREE(R1)
         MOVL    #SS$_NORMAL, R1
         BRB     95$
 90$:    MOVL    R0, R1
