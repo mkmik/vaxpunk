@@ -1,6 +1,6 @@
 +++
 title = "CREATE"
-summary = "Makes a text file from the terminal, a directory, or a file from FDL"
+summary = "Makes a text file from the terminal, a directory, a file from FDL, or a mailbox"
 aka = ["CREATE", "CREATE.EXE", "CREATE/DIRECTORY", "CREATE/FDL", "CREATE/MAILBOX", "CREATE/NAME_TABLE", "CREATE/TERMINAL"]
 kind = "core"
 intent = "goal"
@@ -48,10 +48,18 @@ status = "todo"
 note = "create.mar ponytail"
 
 [[feature]]
-id = "mailbox-table"
-title = "CREATE/MAILBOX and CREATE/NAME_TABLE"
+id = "mailbox"
+title = "CREATE/MAILBOX name: a temporary mailbox on DCL's channel, or a /PERMANENT one; /MESSAGE_SIZE, /BUFFER_SIZE, /LOG"
+status = "done"
+needs = ["/exec/mailboxes"]
+note = "Checked against OpenVMS V8.4-2L1. The name goes in the system table, so it takes SYSNAM, not the job's (t8y:/exec/mailboxes#name-tables); no /PROTECTION (t8y:/exec/mailboxes#protection)"
+
+[[feature]]
+id = "name-table"
+title = "CREATE/NAME_TABLE: a logical name table of one's own"
 status = "todo"
-needs = ["/exec/mailboxes", "/exec/logical-names"]
+needs = ["/exec/logical-names#directories"]
+note = "Needs $CRELNT, which needs logical name directories"
 
 [[feature]]
 id = "terminal"
@@ -89,5 +97,7 @@ vaxpunk's is `vms/sysexe/create.mar`. `CREATE/DIRECTORY` calls
 `$CREATE_DIR`; `CREATE/FDL` calls `FDL$PARSE` in `rms/fdl.mar` (PRD-0008
 step 7); `CREATE file` reads `SYS$INPUT` into variable-length records
 with carriage-return control. A procedure's data lines reach it since
-PRD-0003 step 8. Missing: directory qualifiers, a version limit, and
-the newer `/MAILBOX`, `/NAME_TABLE` and `/TERMINAL`.
+PRD-0003 step 8. `CREATE/MAILBOX` calls `$CREMBX`, for a temporary
+mailbox in executive mode, so that its channel is DCL's and the mailbox
+outlives CREATE. Missing: directory qualifiers, a version limit, and
+the newer `/NAME_TABLE` and `/TERMINAL`.

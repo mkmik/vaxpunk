@@ -1411,6 +1411,27 @@ const MEMORY: Phase = Phase {
     ],
 };
 
+/// CREATE/MAILBOX/LOG makes a temporary mailbox, which outlives CREATE on
+/// DCL's channel: its logical name is there after, as is a permanent
+/// one's with /MESSAGE_SIZE.
+const MAILBOXES: Phase = Phase {
+    name: "mailboxes",
+    secs: 10,
+    steps: &[(
+        "MEMTEST: ok",
+        2,
+        concat!(
+            "CREATE/MAILBOX/LOG MY_MBX\rSHOW LOGICAL MY_MBX\r",
+            "CREATE/MAILBOX/PERMANENT/MESSAGE_SIZE=512 PRM_MBX\rSHOW LOGICAL PRM_MBX\r",
+        ),
+    )],
+    lines: &[
+        "$ CREATE/MAILBOX/LOG MY_MBX\n%CREATE-I-CREATED, MB",
+        "\"MY_MBX\" = \"_MB",
+        "\"PRM_MBX\" = \"_MB",
+    ],
+};
+
 /// The processes STARTUP and SNOOP ran, which print as they go, done long
 /// before: STARTUP's SLEEPER and SVCTEST's NAPPER say they hibernate
 /// before SLEEPER does, and the CPU then idles, taking clock interrupts.
@@ -1597,6 +1618,7 @@ const PHASES: &[Phase] = &[
     WILDCARDS,
     FORMS,
     MEMORY,
+    MAILBOXES,
     STARTUP,
     USERS,
 ];
