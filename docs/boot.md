@@ -389,7 +389,10 @@ interpreter. It is linked high in P1, which tells the executive it is one
   read them as they do the system disk's.
 - `INITIALIZE DKB0: label` and `MOUNT DKB0: label` do the same on the
   data disk, `DKB0:`, a disk image on the host which the PAL writes with
-  `WRITELBLK` ([ADR-0012](adr/0012-data-disk-writable-files-11.md)). What
+  `WRITELBLK` ([ADR-0012](adr/0012-data-disk-writable-files-11.md)), as
+  big as the disk: `run-qemu.sh` makes it 64 MB, and `$INIT_VOL` asks the
+  PAL its size with `GETMAXBLOCK`
+  ([ADR-0043](adr/0043-volumes-the-size-of-their-disk.md)). What
   `COPY` and `DELETE` do there is still there at the next boot, whose
   `SYSTARTUP_VMS.COM` mounts it, and `ods dir out/datadisk.img '[000000]'`
   lists it on the host.

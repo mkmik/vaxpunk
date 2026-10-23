@@ -71,9 +71,9 @@ if [ "$firmware" ]; then echo "$EDK2_FW"; exit; fi
 # The system disk, out/sysdisk.img, is a read-only virtio-blk on virt's
 # virtio-mmio transports, which the root task drives itself: modern virtio
 # (force-legacy=false), as it expects. The data disk, DKB0:, is another,
-# out/datadisk.img, which may be written: 2 MB of zeros the first time,
-# until INITIALIZE DKB0: writes a volume on it, then kept from boot to
-# boot. They are unit 0 and 1 in the order of their -device options. The
+# out/datadisk.img, which may be written: 64 MB of zeros the first time,
+# a sparse file, until INITIALIZE DKB0: writes a volume on it, then kept
+# from boot to boot. They are unit 0 and 1 in the order of their -device options. The
 # ESP stays on PCI, for EDK2. Its bootindex makes it the one device EDK2
 # connects: given a boot order it leaves the others alone, rather than
 # binding its own network stack to virtio-net, whose timer callbacks now
@@ -94,7 +94,7 @@ datadisk=${DATADISK:-$root/out/datadisk.img}
 pidfile=$(mktemp)
 startup=$(mktemp)
 printf '%-4s%-4s%-4s%-4s%-4s%-4s%-4s%-4s' "$p1" "$p2" "$p3" "$p4" "$p5" "$p6" "$p7" "$p8" >"$startup"
-[ -f "$datadisk" ] || dd if=/dev/zero of="$datadisk" bs=512 count=4096 2>/dev/null
+[ -f "$datadisk" ] || dd if=/dev/zero of="$datadisk" bs=512 count=0 seek=131072 2>/dev/null
 qemu-system-aarch64 -machine "virt,secure=off,gic-version=$QEMU_GIC,acpi=off" $cpu \
 	-smp 1 -m "$QEMU_MEM" -display none -bios "$EDK2_FW" \
 	-boot menu=on,splash-time=0 -drive "if=none,id=esp,format=raw,readonly=on,file=$root/out/esp.img" \

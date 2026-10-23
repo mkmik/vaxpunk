@@ -88,7 +88,9 @@ read only as a virtio-blk device on one of QEMU virt's 32 virtio-mmio
 transports, from `0x0a000000`, in modern (virtio 1) mode:
 `scripts/run-qemu.sh` sets `virtio-mmio.force-legacy=false`. Unit 1, the
 data disk, is `datadisk.img`, another, read-write, which the script makes,
-4,096 blocks of zeros, if it isn't there ([ADR-0012](../adr/0012-data-disk-writable-files-11.md)).
+64 MB of zeros, if it isn't there ([ADR-0012](../adr/0012-data-disk-writable-files-11.md)).
+`GETMAXBLOCK` gives a disk's size, the device's capacity
+([ADR-0043](../adr/0043-volumes-the-size-of-their-disk.md)).
 QEMU gives the first `-device` the highest transport, so the PAL numbers
 the block devices from there down.
 
@@ -482,6 +484,7 @@ unused.
 | 0x47 | `WRITELBLK` | vaxpunk | a0 = buffer, a1 = byte count, a2 = LBN, a3 = unit | v0 = status | writes the buffer, which kernel mode must be able to read, to a disk's blocks from the LBN |
 | 0x48 | `MTPR_DOORBELL` | vaxpunk | a0 = port | | signals the port's component; never waits |
 | 0x49 | `GETENTROPY` | vaxpunk | a0 = buffer, a1 = byte count | v0 = status | fills the buffer, at most 256 bytes, which kernel mode must be able to write, from the entropy device |
+| 0x4A | `GETMAXBLOCK` | vaxpunk | a0 = unit | v0 = blocks | a disk's size in blocks, the device's capacity, or 0 without the disk |
 | 0x82 | `CHME` | Alpha | the code in x7's bits 31:16 | | delivers through the SCB, to executive mode |
 | 0x83 | `CHMK` | Alpha | the code in x7's bits 31:16 | | delivers through the SCB, to kernel mode |
 | 0x84 | `CHMS` | Alpha | the code in x7's bits 31:16 | | delivers through the SCB, to supervisor mode |
@@ -582,3 +585,4 @@ vaxpunk's own, 0x40-0x7F:
 | 0x43-0x45 | `MTPR_RXCS`, `MFPR_RXCS`, `MFPR_RXDB` | the VAX console receive registers |
 | 0x46, 0x47 | `READLBLK`, `WRITELBLK` | Alpha's console `READ` and `WRITE` callbacks |
 | 0x48 | `MTPR_DOORBELL` | a smart peripheral's doorbell, as an MSCP port's polling register |
+| 0x4A | `GETMAXBLOCK` | what a disk driver learns from the device, as SCSI's READ CAPACITY, for `UCB$L_MAXBLOCK` |

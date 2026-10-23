@@ -1179,10 +1179,14 @@ does:
   access, as VMS's `CREATE/DIRECTORY` does, and one block holding only
   the end of block's -1, entered last.
 - **`FIL$INIT`**, for `$INIT_VOL devnam, volnam, itmlst`, writes an empty volume
-  on `DKB0:`, 4,096 blocks, or the ramdisk, 1,024, as `INITIALIZE` lays one out (`crosstools/ods/docs/initialize.md`):
-  the boot block, the home block, the index file bitmap, 64 header
-  slots, `BITMAP.SYS`'s SCB and bitmap and the MFD's first block, and the
-  nine reserved files, (1,1,0) to (9,9,0), in the MFD. The volume and its
+  on `DKB0:`, the disk's size, which the PAL's `GETMAXBLOCK` gives, or the
+  ramdisk, 1,024 blocks, as `INITIALIZE` lays one out (`crosstools/ods/docs/initialize.md`)
+  ([ADR-0043](../adr/0043-volumes-the-size-of-their-disk.md)): VMS's
+  default cluster and maximum files; from LBN 0, the index file, its
+  boot and home blocks' clusters, the backup home block's, the backup
+  index file header's, its bitmap and 16 header slots; `BITMAP.SYS`'s SCB
+  and bitmap; the MFD's first cluster; and the nine reserved files,
+  (1,1,0) to (9,9,0), in the MFD. The volume and its
   files are `INIT$_OWNER`'s, the caller's UIC by default, and the volume
   has `INIT$_VOLPRO`'s protection, none denied by default; the MFD has
   `(S:RWE,O:RWE,G:RE,W:RE)`, so that all may look in it. Another's volume
@@ -1205,9 +1209,11 @@ the file and write access to its directory, and the image activator
 execute access to the image. ponytail: no ACLs; a volume's bits mean
 what a file's do, where VMS's third is create.
 
-ponytail: a cluster is a block, each bitmap one block, the index file
-never extended, so a volume has at most 4,096 blocks and the 64 files
-`FIL$INIT` made room for; no backup home block or index file header.
+The bitmaps are as many blocks as the volume needs, a bit of the
+storage bitmap a cluster, and the index file doubles when its headers
+are all taken, up to the volume's maximum files. ponytail: free blocks
+are counted on each `DVI$_FREEBLOCKS`, and a new file's blocks are the
+first free ones from the bitmap's start.
 RMS (`rms.mar`) is a set of system services on VMS's FAB, RAB and NAM
 blocks. A file specification is `[dev:][[dir.dir]]name.type;version`,
 the device `DKA0:`, `DKB0:` or `MDA0:` with a volume mounted (`RMS$_DNR`).

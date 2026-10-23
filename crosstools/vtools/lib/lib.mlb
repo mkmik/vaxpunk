@@ -48,6 +48,7 @@ PAL$_READLBLK = ^X46                    ; R0 = buffer, R1 = byte count, R2 = LBN
 PAL$_WRITELBLK = ^X47                   ; the same, writing the buffer there
 PAL$_DOORBELL = ^X48                    ; R0 = a port: MTPR #n, #PR$_DOORBELL
 PAL$_GETENTROPY = ^X49                  ; R0 = buffer, R1 = byte count, at most 256; R0 = status
+PAL$_GETMAXBLOCK = ^X4A                 ; R0 = unit; R0 = the disk's blocks, 0 without it
 PAL$_RD_PS = ^X91                       ; R0 = the PSL: the modes and IPL
         .ENDM   $PALDEF
 
@@ -437,7 +438,9 @@ VCB$L_OWNER = 564                       ; the volume's owner, a UIC
 VCB$W_PROT = 568                        ; and protection, a file header's mask: who may use its files
 VCB$L_SBMAPBLKS = 572                   ; the storage bitmap's blocks, past its SCB
 VCB$T_LOGNAM = 576                      ; the logical name $MOUNT defined for it, .ASCIC, which $DISMOU deletes
-VCB$K_LENGTH = 832
+VCB$L_IBMAPBLKS = 832                   ; the index file bitmap's blocks
+VCB$L_MAXFILES = 836                    ; the files the volume may hold, the bits of that bitmap it uses
+VCB$K_LENGTH = 840
 VCB$V_MOUNTED = 0                       ; a volume is mounted on it
 VCB$V_WRITE = 1                         ; the device can be written
 VCB$V_RAMDISK = 2                       ; the device is the ramdisk, MDA0:, not one of the PAL's disks

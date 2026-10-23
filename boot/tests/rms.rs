@@ -11,7 +11,9 @@
 //! on OpenVMS, and must leave the same records.
 //! Then RMSRAND runs a long script of random operations on an indexed
 //! file, each of whose results a model here knows, and `ods` checks the
-//! file after.
+//! file after. Last, a volume bigger than one bitmap block maps, with more
+//! files than one index file bitmap block does, takes a new file and
+//! gives one back.
 
 use std::collections::BTreeMap;
 use std::fs;
@@ -23,7 +25,7 @@ use std::thread::sleep;
 use std::time::{Duration, Instant};
 
 use ods_image::rms::fdl;
-use ods_image::{Conversion, Image, InitParams, Mode};
+use ods_image::{Conversion, Image, InitParams, Mode, Severity};
 
 /// The fixtures: file, its keys.
 const FILES: &[(&str, usize)] = &[
@@ -530,4 +532,39 @@ fn random() {
     let fid = vol.lookup("[000000]RAND.IDX").unwrap();
     let report = vol.check_file(fid).unwrap();
     assert!(report.is_sound(), "RAND.IDX: {:?}", report.findings);
+}
+
+/// A volume of 100,000 blocks, three a cluster, which ods makes with 4,100
+/// files in [FILL] besides the reserved files: COPY makes a file there
+/// with a number past 4,096, on the index file bitmap's second block, in
+/// a slot the index file grows for, and DELETE gives one such back.
+#[test]
+fn big_volume() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
+    let disk = root.join("out/big-datadisk.img");
+    let _ = fs::remove_file(&disk);
+    let params = InitParams {
+        label: b"DATA".to_vec(),
+        ..Default::default()
+    };
+    let mut vol = Image::create(&disk, 100_000, &params).unwrap();
+    vol.mkdir("[FILL]").unwrap();
+    for n in 0..4100 {
+        let spec = format!("[FILL]F{n}.TXT");
+        vol.copy_in(&mut &b""[..], &spec, Conversion::Binary, Some(0), None)
+            .unwrap();
+    }
+    vol.flush().unwrap();
+    drop(vol);
+    {
+        let mut vax = Vax::boot(&disk, &root.join("out/big.log"));
+        vax.command("COPY SYS$MANAGER:WELCOME.TXT DKB0:[000000]NEW.TXT", "\n$ ");
+        vax.command("DELETE DKB0:[FILL]F4090.TXT;1", "\n$ ");
+    }
+    let mut img = Image::open(&disk, Mode::ReadOnly).unwrap();
+    let report = img.verify().unwrap();
+    assert_eq!(report.count(Severity::Error), 0, "{:?}", report.findings);
+    assert_eq!(report.count(Severity::Leak), 0, "{:?}", report.findings);
+    assert!(img.lookup("[000000]NEW.TXT").unwrap().num > 4096);
+    assert!(img.lookup("[FILL]F4090.TXT").is_err());
 }

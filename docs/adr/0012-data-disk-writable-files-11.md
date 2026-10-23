@@ -2,7 +2,7 @@
 
 Oct 2, 2026 · @Marko Mikulicic
 
-Proposed. A second disk, `DKB0:`, is a virtio block device on a disk
+Proposed; decision 4 superseded by [ADR-0043](0043-volumes-the-size-of-their-disk.md). A second disk, `DKB0:`, is a virtio block device on a disk
 image of the host's, `out/datadisk.img`, which QEMU attaches read-write.
 The PAL reads and writes it by LBN: `READLBLK` takes a unit, and a new
 call, `WRITELBLK`, writes. The executive writes Files-11 on it as it does
