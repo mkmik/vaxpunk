@@ -342,7 +342,7 @@ MACRO
 
 ! $VCBDEF
 LITERAL
-    VCB$K_LENGTH = 840,
+    VCB$K_LENGTH = 844,
     VCB$V_MOUNTED = 0,  ! a volume is mounted on it
     VCB$V_WRITE = 1,  ! the device can be written
     VCB$V_RAMDISK = 2;  ! the device is the ramdisk, MDA0:, not one of the PAL's disks
@@ -362,7 +362,8 @@ MACRO
     VCB$L_SBMAPBLKS = 572, 0, 32, 0 %,  ! the storage bitmap's blocks, past its SCB
     VCB$T_LOGNAM = 576, 0, 0, 0 %,  ! the logical name $MOUNT defined for it, .ASCIC, which $DISMOU deletes
     VCB$L_IBMAPBLKS = 832, 0, 32, 0 %,  ! the index file bitmap's blocks
-    VCB$L_MAXFILES = 836, 0, 32, 0 %;  ! the files the volume may hold, the bits of that bitmap it uses
+    VCB$L_MAXFILES = 836, 0, 32, 0 %,  ! the files the volume may hold, the bits of that bitmap it uses
+    VCB$L_FREE = 840, 0, 32, 0 %;  ! its free blocks, or -1 until FIL$FREEBLOCKS counts them
 
 ! $UCBDEF
 LITERAL

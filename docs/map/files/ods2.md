@@ -82,8 +82,8 @@ note = "PRD-0003 tier 3 #22; PRD-0008 open question"
 [[feature]]
 id = "free-count"
 title = "Free block count kept in the VCB, not counted each time"
-status = "todo"
-note = "PRD-0003 tier 3 #22; FIL$FREEBLOCKS"
+status = "done"
+note = "VCB$L_FREE: FIL$FREEBLOCKS counts it once after MOUNT, ALLOCBLK and FREEBLK keep it up to date"
 
 [[feature]]
 id = "acp-attributes"

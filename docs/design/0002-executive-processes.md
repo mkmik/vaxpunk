@@ -1138,10 +1138,11 @@ does:
   checksum and number. **`FIL$MAPVBN`** finds a VBN's LBN in a header's
   map, retrieval pointers of formats 1 to 3, and **`FIL$READVBN`** reads a
   file's blocks, an extent at a time. ponytail: no extension headers.
-- **`FIL$FREEBLOCKS`** counts a mounted volume's free blocks, the set
-  bits of its storage bitmap times its cluster, which `FIL$MOUNT` keeps
-  in the VCB, for `$GETDVI`'s `DVI$_FREEBLOCKS` (*Devices*). ponytail:
-  counted each time; VMS keeps the count in the VCB.
+- **`FIL$FREEBLOCKS`** gives a mounted volume's free blocks, for
+  `$GETDVI`'s `DVI$_FREEBLOCKS` (*Devices*), from `VCB$L_FREE`. The
+  first call after `MOUNT` counts them: the set bits of the storage
+  bitmap times the cluster. After that, allocation keeps the count up
+  to date, as VMS keeps it in its VCB.
 - **`FIL$SEARCHDIR`** reads a directory's blocks up to its end of file and
   finds the next record whose name, `NAME.TYPE`, matches a pattern with
   `*` and `%`, and the version asked for: any, the highest (the first of
@@ -1219,9 +1220,11 @@ what a file's do, where VMS's third is create.
 
 The bitmaps are as many blocks as the volume needs, a bit of the
 storage bitmap a cluster, and the index file doubles when its headers
-are all taken, up to the volume's maximum files. ponytail: free blocks
-are counted on each `DVI$_FREEBLOCKS`, and a new file's blocks are the
-first free ones from the bitmap's start.
+are all taken, up to the volume's maximum files. `ALLOCBLK` takes
+blocks from `VCB$L_FREE`, and `FREEBLK` gives them back; a bitmap write
+that fails sets it to -1, so the next `DVI$_FREEBLOCKS` counts again.
+ponytail: a new file's blocks are the first free ones from the bitmap's
+start.
 RMS (`rms.mar`) is a set of system services on VMS's FAB, RAB and NAM
 blocks. A file specification is `[dev:][[dir.dir]]name.type;version`,
 the device `DKA0:`, `DKB0:` or `MDA0:` with a volume mounted (`RMS$_DNR`).

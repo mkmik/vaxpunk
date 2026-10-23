@@ -295,7 +295,7 @@ const RAMDISK: Phase = Phase {
 /// DKB0: and of OPA0:, a DISMOUNT of DKA0:
 /// that fails and one of DKB0: that doesn't, which deletes DISK$DATA, a
 /// DIRECTORY there that fails, a MOUNT that names its logical name WORK:,
-/// a DIRECTORY of the new directory and a DELETE
+/// and a SHOW DEVICES of DKB0: after each MOUNT, a DIRECTORY of the new directory and a DELETE
 /// of the one above it, which has a file in it and stays, SHOW PROCESS/QUOTAS,
 /// SHOW SYSTEM, SHOW USERS, of a user who isn't logged in too, SHOW MEMORY,
 /// SHOW ERROR, SHOW QUOTA and SHOW CPU.
@@ -309,6 +309,7 @@ const DATA_DISK: Phase = Phase {
             1,
             concat!(
                 "INIT/PROTECTION=(S:RWED,O:RWED,G:RWED,W:RWED) DKB0: DATA\rMOUNT DKB0: DATA\r",
+                "SHOW DEVICES DKB0\r",
                 "SHOW LOGICAL DISK$DATA\rSHOW LOGICAL DISK$VAXPUNK\r",
                 "COPY SYS$SYSDEVICE:[SYSMGR]WELCOME.TXT DKB0:[000000]DATA.TXT\r",
                 "CREATE/DIRECTORY DKB0:[SUB.DEEP]\r",
@@ -333,7 +334,7 @@ const DATA_DISK: Phase = Phase {
             concat!(
                 "DIR DKB0:[000000]\rSHOW DEVICES\rSHOW DEVICES/FULL DKB0\rSHOW DEVICES/FULL OPA0:\r",
                 "DISMOUNT DKA0:\rDISMOUNT DKB0:\rSHOW LOGICAL DISK$DATA\r",
-                "DIR DKB0:[000000]\rMOUNT DKB0: DATA WORK:\rSHOW LOGICAL WORK\r",
+                "DIR DKB0:[000000]\rMOUNT DKB0: DATA WORK:\rSHOW DEVICES DKB0\rSHOW LOGICAL WORK\r",
                 "DIR DKB0:[SUB.DEEP]\rDELETE DKB0:[000000]SUB.DIR;1\r",
                 "SHOW PROCESS/QUOTAS\rSHOW SYSTEM\r",
             ),
@@ -1820,6 +1821,19 @@ fn boot() {
             assert_eq!(w, *g, "{program}'s line {} isn't {file}'s", n + 1);
         }
     }
+
+    // DKB0:'s free blocks: once the volume is new, then what the writes
+    // left in the VCB's count, then what the bitmap says after a MOUNT.
+    let free: Vec<u64> = text
+        .lines()
+        .filter(|l| l.starts_with("DKB0:") && l.contains(" DATA "))
+        .take(3)
+        .map(|l| l.split_whitespace().last().unwrap().parse().unwrap())
+        .collect();
+    assert!(
+        free.len() == 3 && free[1] < free[0] && free[1] == free[2],
+        "DKB0:'s free blocks {free:?}"
+    );
 
     let mut img = Image::open(&datadisk, Mode::ReadOnly).unwrap();
     let report = img.verify().unwrap();

@@ -44,7 +44,7 @@ through to the disk, and lets a file or a volume turn caching off
 (`MOUNT/CACHE`, `SET VOLUME/CACHE`, and a caching option in an RMS
 `XABITM`).
 
-vaxpunk caches nothing: `f11.mar` reads a header or a directory from the
-disk each time it is wanted, `FIL$FREEBLOCKS` counts the bitmap's bits on
-every `SHOW DEVICES`, and RMS reads an indexed file's buckets each time
+vaxpunk caches nothing but a volume's free block count, in its VCB:
+`f11.mar` reads a header or a directory from the disk each time it is
+wanted, and RMS reads an indexed file's buckets each time
 (`t8y:/rms/indexed`). QEMU and the host's page cache stand in for now.
