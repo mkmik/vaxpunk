@@ -286,7 +286,12 @@ there is. The image activator puts its transfer address in
   to the image. `$IMGACT` while one is stopped runs it down, which forgets
   the AST routine, and keeps `PCB$L_CLICHANS` and `PCB$L_CLIFILES` as they
   were when it ran; it empties the supervisor stack too, by setting the
-  HWPCB's `SSP` to its top.
+  HWPCB's `SSP` to its top. A channel `$ASSIGN` gives, or a file `$OPEN`
+  or `$CREATE` opens, for supervisor mode joins them, so what the command
+  interpreter opens at the CTRL/Y prompt outlives the image too, as on
+  VMS, where rundown closes only user mode's. At the prompt the process
+  has only its permanent privileges: DCL disables the image's with
+  `$SETPRV` and enables them again at `CONTINUE`.
 - **`$FORCEX pidadr, prcnam, code`** makes a process's image exit: it
   queues a user mode AST whose routine is `SYS$EXIT`, with code, or
   `SS$_FORCEDEXIT` for 0, which comes when the image next runs in user
@@ -790,8 +795,11 @@ privileges does on VMS: `KNOWN` in `process.mar` lists each by name, the
 file the image activator reads instead, on the system disk, by a
 specification with an underscore before the device, which no logical
 name redirects, and its privileges, which it enables after activating
-it, until the image exits. `SETPWD.EXE` gets `SYSPRV`, to write
-`SYSUAF.DAT`. ponytail: a fixed list until `INSTALL`.
+it, until the image exits. They stay in `PCB$Q_IMAGPRIV`, which
+`$SETPRV` may enable again, but not permanently, as VMS's
+`PHD$Q_IMAGPRIV`: at CTRL/Y DCL prompts with the permanent privileges
+only, and `CONTINUE` enables the image's again. `SETPWD.EXE` gets
+`SYSPRV`, to write `SYSUAF.DAT`. ponytail: a fixed list until `INSTALL`.
 
 ### Logical names
 

@@ -59,6 +59,8 @@
 ;
         .LIBRARY "lib.mlb"
         .LIBRARY "starlet.mlb"
+        $PALDEF
+        $PSLDEF
         $IPLDEF
         $PCBDEF
         $SSDEF
@@ -2191,14 +2193,21 @@ DELLAST:
         RSB
 
 ; INSTALL: R7 = an IFAB, R8 = its IFI, R9 = the current PCB, R10 = a FAB.
-; Gives the process the open file, and the FAB its IFI. Uses R0.
+; Gives the process the open file, and the FAB its IFI. One the command
+; interpreter opens, in supervisor mode, is one of PCB$L_CLIFILES, which
+; outlive the image, as VMS's process permanent files. Uses R0.
 INSTALL:
         .JSB_ENTRY
         MOVL    R7, PCB$A_IFAB(R9)[R8]
         ASHL    R8, #1, R0
         BISL2   R0, PCB$L_FILES(R9)
         MOVW    R8, FAB$W_IFI(R10)
-        RSB
+        CALL_PAL #PAL$_RD_PS
+        EXTZV   #PSL$V_PRVMOD, #2, R0, R0
+        CMPL    R0, #PSL$C_SUPER
+        BNEQ    10$
+        BBSS    R8, PCB$L_CLIFILES(R9), 10$
+10$:    RSB
 
 ; GETIFAB: R8 = an IFI. R7 = its IFAB, R9 = the current PCB, R0 =
 ; RMS$_NORMAL, or RMS$_IFI if the process has no such file open.
@@ -2242,6 +2251,7 @@ CLOSEIFI:
 30$:    CLRL    PCB$A_IFAB(R9)[R8]
         ASHL    R8, #1, R0
         BICL2   R0, PCB$L_FILES(R9)
+        BICL2   R0, PCB$L_CLIFILES(R9)
         PUSHR   #^M<R2, R3>
         BSBW    FREEIFAB
         POPR    #^M<R2, R3>
