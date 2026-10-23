@@ -72,8 +72,8 @@ note = "PRD-0003 tier 1 #4, step 5; the I/O ones done (ADR-0038)"
 [[feature]]
 id = "creprc"
 title = "$CREPRC's quota list, a subprocess's taken from its creator's"
-status = "todo"
-note = "DESIGN-0002: $CREPRC ignores its quota argument, and gives the process its creator's I/O quotas"
+status = "wip"
+note = "process.mar: BIOLM, DIOLM and BYTLM from the list, raised to SYSGEN's minimums, the creator's for the ones it lacks; the others ignored, no PQL_D defaults, no subprocesses (t8y:/exec/processes#subprocesses)"
 
 [[feature]]
 id = "job-pooled"
@@ -136,8 +136,9 @@ IRP a `$QIO` makes is charged to `BIOLM` and `BYTLM`, or a disk's to
 `DIOLM`, and a request past them waits in resource wait, or with
 `$SETRWM` fails, so a process that queues reads past `BIOLM` waits
 instead of taking the pool. `EXE$LOGIN` sets them from the UAF,
-`$CREPRC` gives a process its creator's, and `$GETJPI` and `SHOW
+`$CREPRC` from its quota list, which `RUN`'s qualifiers make, or gives a
+process its creator's, and `$GETJPI` and `SHOW
 PROCESS/QUOTAS` report them. The others are the UAF's, which `AUTHORIZE`
 sets (PRD-0003 step 4), and nothing charges them yet: a mailbox's
 `bufquo` is its own ([ADR-0019](../../adr/0019-mailboxes.md)), and
-`$CREPRC` ignores its quota list.
+`$CREPRC` ignores the rest of its quota list.

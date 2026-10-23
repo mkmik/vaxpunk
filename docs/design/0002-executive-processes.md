@@ -752,7 +752,8 @@ can't reach them.
 | Security, VSI's | `$GET_ENTROPY` | not on VAX or Alpha VMS: VSI's, at most 256 bytes a call, from the PAL's virtio-rng ([ADR-0031](../adr/0031-entropy-from-virtio-rng.md)) |
 
 Arguments the implemented services take but ignore: `$CREPRC`'s
-quotas, the process taking its creator's I/O quotas, and status flags, `$ASSIGN`'s mailbox,
+quotas but `BIOLM`, `DIOLM` and `BYTLM`, the process taking its creator's
+for one its list doesn't have, and status flags, `$ASSIGN`'s mailbox,
 `$CREMBX`'s protection, access mode and flags, the logical name
 services' attributes, `$ASCEFC`'s protection
 and permanence (every cluster is temporary), the access modes.

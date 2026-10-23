@@ -207,7 +207,9 @@ interpreter. It is linked high in P1, which tells the executive it is one
   ([ADR-0040](adr/0040-acls-in-file-headers-and-rights-identifiers.md)).
   Before those copies, `RUN/DETACHED/PRIORITY=6/PROCESS_NAME=OPCOM
   SYS$SYSTEM:OPCOM` creates the process `OPCOM`, which runs `OPCOM.EXE`
-  at priority 6, above STARTUP's 4, and prints `%RUN-S-PROC_ID,
+  at priority 6, above STARTUP's 4: DCL runs `RUNDET.EXE` for `RUN`'s
+  qualifiers for a new process, as VMS's does, which creates it with
+  `$CREPRC` and prints `%RUN-S-PROC_ID,
   identification of created process is` and its PID, as VMS's
   `STARTUP.COM` starts it. OPCOM assigns a channel
   to `MBA2:` and writes on the console, with `$BRKTHRU`, that it is an
@@ -432,9 +434,10 @@ interpreter. It is linked high in P1, which tells the executive it is one
   and OPCOM writes it on the console under its banner, after `Message
   from user SYSTEM`. `/TO=(DISKS,OPER12)` sends it to those classes of
   operators only; the console is one of every class but `REPLY` and
-  `SOFTWARE`, as on VMS. `RUN/DETACHED` and `/PROCESS_NAME` run any
-  image in a process of its own, at the base priority `/PRIORITY` gives,
-  as `SYSTARTUP_VMS.COM` runs OPCOM.
+  `SOFTWARE`, as on VMS. `RUN/DETACHED` runs any
+  image in a process of its own, as `SYSTARTUP_VMS.COM` runs OPCOM, with
+  the name, base priority, `SYS$INPUT`, `SYS$OUTPUT`, privileges, UIC
+  and I/O quotas its other qualifiers give.
 - A command that fails prints VMS's message for the status, when DCL
   knows it: `DIR DKB0:` looks in `DKB0:[SYSMGR]`, the default directory
   on that disk, and prints `%RMS-E-DNF, directory not found`.

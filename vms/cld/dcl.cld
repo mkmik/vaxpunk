@@ -151,12 +151,36 @@ define type MATCH_OPTIONS
 	keyword GE
 	keyword GT
 
+! RUN image: DCL runs it in the process. With a qualifier for a process
+! of its own, RUNDET.EXE runs it in a new one, as VMS's RUN does.
 define verb RUN
 	cliroutine RUN
 	parameter P1, label=FILE, prompt="File", value(required, type=$infile)
-	qualifier DETACHED
-	qualifier PRIORITY, value(required, type=$number)
-	qualifier PROCESS_NAME, value(required)
+	qualifier DETACHED, syntax=RUNDET
+	qualifier PROCESS_NAME, value(required), syntax=RUNDET
+	qualifier PRIORITY, value(required, type=$number), syntax=RUNDET
+	qualifier INPUT, value(required, type=$infile), syntax=RUNDET
+	qualifier OUTPUT, value(required, type=$outfile), syntax=RUNDET
+	qualifier ERROR, value(required, type=$outfile), syntax=RUNDET
+	qualifier PRIVILEGES, value(required, list), syntax=RUNDET
+	qualifier UIC, value(required, type=$uic), syntax=RUNDET
+	qualifier MAILBOX, value(required, type=$number), syntax=RUNDET
+	qualifier AST_LIMIT, value(required, type=$number), syntax=RUNDET
+	qualifier BUFFER_LIMIT, value(required, type=$number), syntax=RUNDET
+	qualifier ENQUEUE_LIMIT, value(required, type=$number), syntax=RUNDET
+	qualifier EXTENT, value(required, type=$number), syntax=RUNDET
+	qualifier FILE_LIMIT, value(required, type=$number), syntax=RUNDET
+	qualifier IO_BUFFERED, value(required, type=$number), syntax=RUNDET
+	qualifier IO_DIRECT, value(required, type=$number), syntax=RUNDET
+	qualifier JOB_TABLE_QUOTA, value(required, type=$number), syntax=RUNDET
+	qualifier MAXIMUM_WORKING_SET, value(required, type=$number), syntax=RUNDET
+	qualifier PAGE_FILE, value(required, type=$number), syntax=RUNDET
+	qualifier QUEUE_LIMIT, value(required, type=$number), syntax=RUNDET
+	qualifier SUBPROCESS_LIMIT, value(required, type=$number), syntax=RUNDET
+	qualifier WORKING_SET, value(required, type=$number), syntax=RUNDET
+
+define syntax RUNDET
+	image RUNDET
 
 define verb SET
 	cliroutine SET

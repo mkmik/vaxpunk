@@ -1,12 +1,12 @@
 +++
 title = "DCL interpreter"
 summary = "DCL.EXE: reads commands, parses them, runs images in the process"
-aka = ["DCL", "DCL.EXE", "CLI", "command interpreter", "DIGITAL Command Language", "CTRL/Y", "CONTINUE", "STOP", "RUN", "MCR", "SET PROMPT", "SET MESSAGE", "Extended DCL", "EDCL"]
+aka = ["DCL", "DCL.EXE", "CLI", "command interpreter", "DIGITAL Command Language", "CTRL/Y", "CONTINUE", "STOP", "RUN", "RUNDET", "MCR", "SET PROMPT", "SET MESSAGE", "Extended DCL", "EDCL"]
 kind = "core"
 intent = "goal"
 research = "done"
 milestone = "m0"
-refs = ["docs/adr/0006-cli-in-p1-runs-images-in-its-process.md", "docs/adr/0014-ctrlc-ctrly-asts.md", "docs/adr/0017-command-tables-from-cld-with-vcdu.md", "docs/adr/0029-loginout-and-sysuaf.md", "docs/design/0002-executive-processes.md", "vms/sysexe/dcl.mar", "vms/sysexe/dcl.mlb", "vms/sysexe/dcl/message.mar", "vms/sysexe/dcl/setshow.mar"]
+refs = ["docs/adr/0006-cli-in-p1-runs-images-in-its-process.md", "docs/adr/0014-ctrlc-ctrly-asts.md", "docs/adr/0017-command-tables-from-cld-with-vcdu.md", "docs/adr/0029-loginout-and-sysuaf.md", "docs/design/0002-executive-processes.md", "vms/sysexe/dcl.mar", "vms/sysexe/dcl.mlb", "vms/sysexe/dcl/message.mar", "vms/sysexe/dcl/setshow.mar", "vms/sysexe/rundet.mar"]
 
 [[feature]]
 id = "images"
@@ -94,14 +94,14 @@ id = "run-detach"
 title = "RUN/DETACH and RUN/PROCESS_NAME: an image in a new process"
 status = "done"
 needs = ["/exec/processes"]
-note = "dcl.mar ponytail: /PROCESS_NAME alone is detached too, not a subprocess (t8y:/dcl/spawn)"
+note = "RUNDET.EXE, as VMS's; rundet.mar ponytail: always detached, never a subprocess (t8y:/dcl/spawn)"
 
 [[feature]]
 id = "run-process-qualifiers"
 title = "RUN's other qualifiers for the new process: /INPUT, /OUTPUT, /ERROR, /PRIVILEGES, /UIC, quotas"
-status = "todo"
+status = "done"
 needs = ["#run-detach"]
-note = "dcl.mar ponytail: none of them yet, and an image that isn't there fails in the process, not with %RUN-F-PARSEFAIL"
+note = "rundet.mar, and /MAILBOX; %RUN-F-PARSEFAIL for an image that isn't there. ponytail: no /AUTHORIZE, /DELAY, /INTERVAL, /SCHEDULE, /TIME_LIMIT or status flags; $CREPRC keeps the I/O quotas alone (t8y:/exec/quotas#creprc)"
 
 [[feature]]
 id = "limits"

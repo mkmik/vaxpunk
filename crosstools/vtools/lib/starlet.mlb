@@ -2144,6 +2144,27 @@ PRV$M_SYSPRV = ^X10000000
 PRV$M_BYPASS = ^X20000000
         .ENDM   $PRVDEF
 
+; $PQLDEF: the codes of $CREPRC's quota list, each a byte, then the
+; quota's value, a longword, until PQL$_LISTEND.
+        .MACRO  $PQLDEF
+PQL$_LISTEND = 0
+PQL$_ASTLM = 1
+PQL$_BIOLM = 2                          ; buffered I/O requests at once
+PQL$_BYTLM = 3                          ; their bytes
+PQL$_CPULM = 4
+PQL$_DIOLM = 5                          ; direct I/O requests at once
+PQL$_FILLM = 6
+PQL$_PGFLQUOTA = 7
+PQL$_PRCLM = 8
+PQL$_TQELM = 9
+PQL$_WSQUOTA = 10
+PQL$_WSDEFAULT = 11
+PQL$_ENQLM = 12
+PQL$_WSEXTENT = 13
+PQL$_JTQUOTA = 14
+PQL$_LENGTH = 15                        ; how many there are, with LISTEND
+        .ENDM   $PQLDEF
+
 ; $PRTDEF: page protection codes, the VAX's: who may read (R) and write (W),
 ; from kernel (K) out to user (U) mode.
         .MACRO  $PRTDEF

@@ -1,0 +1,419 @@
+        .TITLE  RUNDET  Runs an image in a process of its own
+        .IDENT  /V0.1/
+;
+; DCL's RUN runs this, as VMS's DCL runs RUNDET.EXE, when the command
+; has a qualifier for a new process: it creates one with $CREPRC that
+; runs the image, and says its PID, %RUN-S-PROC_ID, or why it can't,
+; %RUN-F-CREPRC and $CREPRC's status. The image, .EXE unless its name
+; has a type, must be there, in SYS$SYSTEM: unless its name says where,
+; or it is %RUN-F-PARSEFAIL and RMS's status. The new process
+; - is named /PROCESS_NAME=name, or has no name;
+; - runs at base priority /PRIORITY=n, or this process's;
+; - has SYS$INPUT, SYS$OUTPUT and SYS$ERROR /INPUT=, /OUTPUT= and
+;   /ERROR=, or none;
+; - has the privileges /PRIVILEGES=(priv[,...]) leaves of this process's
+;   permanent ones, or of none with NOSAME: each priv added, NOpriv taken
+;   away, ALL every one, SAME none; a name it doesn't know is
+;   %RUN-E-INVQUAVAL. $CREPRC gives it those of them this process has;
+; - has the UIC /UIC=[g,m], %RUN-F-INVUIC if it isn't one, or this
+;   process's; another one takes DETACH;
+; - has the quotas /AST_LIMIT=n and the rest give, in $CREPRC's quota
+;   list, which takes /BUFFER_LIMIT, /IO_BUFFERED and /IO_DIRECT, its
+;   BYTLM, BIOLM and DIOLM, and ignores the others;
+; - sends its termination message to the mailbox whose unit /MAILBOX=n
+;   gives.
+; A number is decimal, or %X hex, %O octal or %D decimal.
+; ponytail: always a detached process, where VMS's makes a subprocess
+; without /DETACHED or /UIC (t8y:/dcl/spawn); no /AUTHORIZE, /DELAY,
+; /INTERVAL, /SCHEDULE, /TIME_LIMIT, or the status flags' /DUMP,
+; /RESOURCE_WAIT, /SWAPPING and the rest; and the image is looked for
+; where the image activator looks, SYS$SYSTEM:, not in the default
+; directory, as VMS's RUN does.
+;
+        .LIBRARY "starlet.mlb"
+        .LIBRARY "sysexe.mlb"
+        $SSDEF
+        $FABDEF
+        $NAMDEF
+        $JPIDEF
+        $PQLDEF
+
+        .EXTERNAL PRV_LOOKUP, GET_UIC, PUT_LINE, CLI$GET_VALUE
+
+INHIB = ^X10000000                      ; STS$M_INHIB_MSG: reported already
+RUN$_CREPRC = ^X00C0801C                ; process creation failed
+RUN$_INVUIC = ^X00C08034                ; !AS is an invalid UIC specification
+RUN$_INVQUAVAL = ^X00C0132A             ; value '!AS' invalid for /!AS qualifier
+RUN$_PARSEFAIL = ^X00C0124C             ; error parsing !AS
+
+; ADDTEXT "text": appends text to LINE. Uses R0-R2.
+        .MACRO  ADDTEXT TEXT, ?L
+        .SAVE_PSECT LOCAL_BLOCK
+        .PSECT  $LITERAL$
+L:      .ASCIC  TEXT
+        .RESTORE_PSECT
+        MOVAB   L, R1
+        MOVZBL  (R1)+, R2
+        BSBW    ADD
+        .ENDM   ADDTEXT
+
+; STRING "name", desc, cell: the command's entity name into the string
+; desc describes, and desc's address into cell, if it has one. Uses
+; R0-R1.
+        .MACRO  STRING  NAME, DESC, CELL, ?L
+        GETVALUE NAME, DESC, DESC
+        BLBC    R0, L
+        MOVAQ   DESC, CELL
+L:
+        .ENDM   STRING
+
+        .PSECT  DATA, NOEXE, WRT, LONG
+IMAGE:  .LONG   255                     ; FILE, the image, with room for .EXE
+        .ADDRESS IMGBUF
+IMGBUF: .BLKB   255+4
+DOTEXE: .ASCII  ".EXE"
+IMGDEF: .ASCII  "SYS$SYSTEM:.EXE"       ; what the image's name leaves out
+FAB:    $FAB    FNA=IMGBUF, DNA=IMGDEF, DNS=15, NAM=NAM
+NAM:    $NAM    ESA=EXP, ESS=255
+EXP:    .BLKB   255
+PRCNAM: .LONG   255                     ; PROCESS_NAME
+        .ADDRESS PRCBUF
+PRCBUF: .BLKB   255
+INPUT:  .LONG   255                     ; INPUT
+        .ADDRESS INPBUF
+INPBUF: .BLKB   255
+OUTPUT: .LONG   255                     ; OUTPUT
+        .ADDRESS OUTBUF
+OUTBUF: .BLKB   255
+ERROR:  .LONG   255                     ; ERROR
+        .ADDRESS ERRBUF
+ERRBUF: .BLKB   255
+PRCADR: .LONG   0                       ; PRCNAM, or 0 for none
+INPADR: .LONG   0                       ; INPUT
+OUTADR: .LONG   0                       ; OUTPUT
+ERRADR: .LONG   0                       ; ERROR
+PRVADR: .LONG   0                       ; PRIVS, or 0 for this process's
+VALUE:  .LONG   255                     ; a value of PRIVILEGES, UIC or a number
+        .ADDRESS VALBUF
+VALBUF: .BLKB   255
+VALLEN: .WORD   0                       ; its length
+        .ALIGN  LONG
+JPIITEMS:                               ; this process's base priority and permanent privileges
+        .WORD   1, JPI$_PRIB
+        .ADDRESS BASPRI, 0
+        .WORD   8, JPI$_PROCPRIV
+        .ADDRESS PRIVS, 0
+        .LONG   0
+BASPRI: .LONG   0                       ; the new process's
+PRIVS:  .BLKQ   1                       ; its privileges, before ADDPRV and REMPRV
+ADDPRV: .BLKQ   1                       ; those PRIVILEGES adds
+REMPRV: .BLKQ   1                       ; and takes away
+MASK:   .BLKQ   1                       ; PRV_LOOKUP's
+UIC:    .LONG   0                       ; its UIC, or 0 for this process's
+MBXUNT: .LONG   0                       ; MAILBOX's unit, or 0
+PID:    .LONG   0                       ; its PID
+UICNAM: .ASCID  "UIC"                   ; for GET_UIC
+QUOTAS:                                 ; each quota qualifier: its PQL$_ code, its name
+        .BYTE   PQL$_ASTLM
+        .ASCIC  "AST_LIMIT"
+        .BYTE   PQL$_BYTLM
+        .ASCIC  "BUFFER_LIMIT"
+        .BYTE   PQL$_ENQLM
+        .ASCIC  "ENQUEUE_LIMIT"
+        .BYTE   PQL$_WSEXTENT
+        .ASCIC  "EXTENT"
+        .BYTE   PQL$_FILLM
+        .ASCIC  "FILE_LIMIT"
+        .BYTE   PQL$_BIOLM
+        .ASCIC  "IO_BUFFERED"
+        .BYTE   PQL$_DIOLM
+        .ASCIC  "IO_DIRECT"
+        .BYTE   PQL$_JTQUOTA
+        .ASCIC  "JOB_TABLE_QUOTA"
+        .BYTE   PQL$_WSQUOTA
+        .ASCIC  "MAXIMUM_WORKING_SET"
+        .BYTE   PQL$_PGFLQUOTA
+        .ASCIC  "PAGE_FILE"
+        .BYTE   PQL$_TQELM
+        .ASCIC  "QUEUE_LIMIT"
+        .BYTE   PQL$_PRCLM
+        .ASCIC  "SUBPROCESS_LIMIT"
+        .BYTE   PQL$_WSDEFAULT
+        .ASCIC  "WORKING_SET"
+        .BYTE   PQL$_LISTEND
+ENTITY: .LONG   0                       ; a quota qualifier's name
+        .ADDRESS 0
+QLIST:  .BLKB   <PQL$_LENGTH*5>         ; $CREPRC's quota list
+LINE:   .BLKB   256                     ; a message, .ASCIC
+MSG:    .LONG   255                     ; a status's message, for $GETMSG
+        .ADDRESS LINE+1
+
+        .PSECT  CODE, EXE, LONG
+        .ENTRY  START, ^M<R2, R3, R4, R5, R6, R7>
+        $GETJPIW_S ITMLST=JPIITEMS
+        BLBC    R0, 90$
+        BSBW    FINDIMG
+        BLBC    R0, 90$
+        STRING  "PROCESS_NAME", PRCNAM, PRCADR
+        STRING  "INPUT", INPUT, INPADR
+        STRING  "OUTPUT", OUTPUT, OUTADR
+        STRING  "ERROR", ERROR, ERRADR
+        GETVALUE "PRIORITY", VALUE, VALLEN
+        BLBC    R0, 10$
+        BSBW    NUMBER
+        MOVL    R1, BASPRI
+10$:    GETVALUE "MAILBOX", VALUE, VALLEN
+        BLBC    R0, 20$
+        BSBW    NUMBER
+        MOVL    R1, MBXUNT
+20$:    BSBW    PRIVILEGES
+        BLBC    R0, 90$
+        BSBW    GETUIC
+        BLBC    R0, 90$
+        BSBW    QUOTA
+        $CREPRC_S PIDADR=PID, IMAGE=IMAGE, INPUT=@INPADR, OUTPUT=@OUTADR, ERROR=@ERRADR, PRVADR=@PRVADR, QUOTA=QLIST, PRCNAM=@PRCADR, BASPRI=BASPRI, UIC=UIC, MBXUNT=MBXUNT
+        BLBC    R0, 80$
+        PRINTHEX "%RUN-S-PROC_ID, identification of created process is ", PID
+        MOVL    #SS$_NORMAL, R0
+        RET
+80$:    PUSHL   R0
+        PRINT   "%RUN-F-CREPRC, process creation failed"
+        MOVL    (SP)+, R0
+        BSBW    SAYMSG
+        MOVL    #<RUN$_CREPRC!INHIB>, R0
+90$:    RET
+
+; FINDIMG: IMAGE = FILE, the image's name, ending in .EXE if it has no
+; type, after $PARSE and $SEARCH have found it. R0 = SS$_NORMAL, or
+; RUN$_PARSEFAIL, reported, if they didn't. Uses R0-R5.
+FINDIMG:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5>
+        GETVALUE "FILE", IMAGE, IMAGE
+        BLBC    R0, 90$
+        MOVB    IMAGE, FAB+FAB$B_FNS
+        $PARSE  FAB=FAB
+        BLBC    R0, 80$
+        $SEARCH FAB=FAB
+        BLBC    R0, 80$
+        MOVZWL  IMAGE, R0               ; a type, after its directory?
+10$:    DECL    R0
+        BLSS    20$
+        MOVZBL  IMGBUF[R0], R1
+        CMPB    R1, #^A/./
+        BEQL    30$
+        CMPB    R1, #^A/]/
+        BEQL    20$
+        CMPB    R1, #^A/>/
+        BEQL    20$
+        CMPB    R1, #^A/:/
+        BNEQ    10$
+20$:    MOVZWL  IMAGE, R0
+        MOVAB   IMGBUF[R0], R1
+        MOVL    DOTEXE, (R1)
+        ADDW2   #4, IMAGE
+30$:    MOVL    #SS$_NORMAL, R0
+        RSB
+80$:    PUSHL   R0
+        CLRB    LINE
+        ADDTEXT "%RUN-F-PARSEFAIL, error parsing "
+        MOVAB   IMGBUF, R1
+        MOVZWL  IMAGE, R2
+        BSBW    ADD
+        PUSHAB  LINE
+        CALLS   #1, G^PUT_LINE
+        MOVL    (SP)+, R0
+        BSBW    SAYMSG
+        MOVL    FAB+FAB$L_STV, R0
+        BEQL    85$
+        BSBW    SAYMSG
+85$:    MOVL    #<RUN$_PARSEFAIL!INHIB>, R0
+90$:    RSB
+
+; PRIVILEGES: PRVADR = PRIVS, if the command has /PRIVILEGES, with those
+; it adds and none it takes away; PRIVS starts as this process's
+; permanent ones, or none with NOSAME. R0 = SS$_NORMAL, or
+; RUN$_INVQUAVAL, reported, for a name it doesn't know. Uses R0-R6.
+PRIVILEGES:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5, R6>
+        PRESENT "PRIVILEGES"
+        BLBC    R0, 70$
+        MOVAQ   PRIVS, PRVADR
+10$:    GETVALUE "PRIVILEGES", VALUE, VALLEN
+        BLBC    R0, 60$                 ; past the last
+        MOVAB   VALBUF, R5
+        MOVZWL  VALLEN, R6
+        CMPL    R6, #4                  ; SAME: what PRIVS has
+        BNEQ    20$
+        CMPL    (R5), #^A/SAME/
+        BEQL    10$
+20$:    CMPL    R6, #6                  ; NOSAME: none
+        BNEQ    30$
+        CMPL    (R5), #^A/NOSA/
+        BNEQ    30$
+        CMPW    4(R5), #^A/ME/
+        BNEQ    30$
+        CLRQ    PRIVS
+        BRB     10$
+30$:    BSBW    LOOKUP
+        BLBC    R0, 40$
+        BISL2   MASK, ADDPRV
+        BISL2   MASK+4, ADDPRV+4
+        BICL2   MASK, REMPRV
+        BICL2   MASK+4, REMPRV+4
+        BRB     10$
+40$:    CMPL    R6, #2                  ; NOpriv: taken away
+        BLEQ    80$
+        CMPW    (R5), #^A/NO/
+        BNEQ    80$
+        ADDL2   #2, R5
+        SUBL2   #2, R6
+        BSBW    LOOKUP
+        BLBC    R0, 80$
+        BISL2   MASK, REMPRV
+        BISL2   MASK+4, REMPRV+4
+        BICL2   MASK, ADDPRV
+        BICL2   MASK+4, ADDPRV+4
+        BRB     10$
+60$:    BISL2   ADDPRV, PRIVS
+        BISL2   ADDPRV+4, PRIVS+4
+        BICL2   REMPRV, PRIVS
+        BICL2   REMPRV+4, PRIVS+4
+70$:    MOVL    #SS$_NORMAL, R0
+        RSB
+80$:    CLRB    LINE
+        ADDTEXT "%RUN-E-INVQUAVAL, value '"
+        MOVAB   VALBUF, R1
+        MOVZWL  VALLEN, R2
+        BSBW    ADD
+        ADDTEXT "' invalid for /PRIVILEGES qualifier"
+        PUSHAB  LINE
+        CALLS   #1, G^PUT_LINE
+        MOVL    #<RUN$_INVQUAVAL!INHIB>, R0
+        RSB
+
+; LOOKUP: R5 = a privilege's name, R6 = its length. Puts its bit in MASK,
+; or every bit for ALL. R0 = 1, or 0 for a name it doesn't know. Uses
+; R0-R1.
+LOOKUP:
+        .JSB_ENTRY
+        PUSHAQ  MASK
+        PUSHL   R6
+        PUSHL   R5
+        CALLS   #3, G^PRV_LOOKUP
+        RSB
+
+; GETUIC: UIC = /UIC's, if the command has it. R0 = SS$_NORMAL, or
+; RUN$_INVUIC, reported, if it isn't [g,m]. Uses R0-R5.
+GETUIC:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5>
+        PRESENT "UIC"
+        BLBC    R0, 10$
+        PUSHAL  UIC
+        PUSHAQ  UICNAM
+        CALLS   #2, G^GET_UIC
+        BLBC    R0, 20$
+10$:    MOVL    #SS$_NORMAL, R0
+        RSB
+20$:    GETVALUE "UIC", VALUE, VALLEN    ; past the value GET_UIC took,
+        BLBS    R0, 30$
+        GETVALUE "UIC", VALUE, VALLEN    ; then the first again
+30$:    CLRB    LINE
+        ADDTEXT "%RUN-F-INVUIC, "
+        MOVAB   VALBUF, R1
+        MOVZWL  VALLEN, R2
+        BSBW    ADD
+        ADDTEXT " is an invalid UIC specification"
+        PUSHAB  LINE
+        CALLS   #1, G^PUT_LINE
+        MOVL    #<RUN$_INVUIC!INHIB>, R0
+        RSB
+
+; QUOTA: QLIST = the quotas the command's quota qualifiers give, up to
+; PQL$_LISTEND. Uses R0-R7.
+QUOTA:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5, R6, R7>
+        MOVAB   QUOTAS, R6
+        MOVAB   QLIST, R7
+10$:    MOVZBL  (R6)+, R0               ; its code
+        BEQL    90$
+        MOVZBL  (R6)+, ENTITY           ; its name
+        MOVL    R6, ENTITY+4
+        ADDL2   ENTITY, R6
+        PUSHL   R0
+        PUSHAW  VALLEN
+        PUSHAQ  VALUE
+        PUSHAQ  ENTITY
+        CALLS   #3, G^CLI$GET_VALUE
+        BLBS    R0, 20$
+        TSTL    (SP)+
+        BRB     10$
+20$:    BSBW    NUMBER
+        MOVL    (SP)+, R0
+        MOVB    R0, (R7)+
+        MOVL    R1, (R7)+
+        BRB     10$
+90$:    CLRB    (R7)
+        RSB
+
+; NUMBER: VALBUF = a number, VALLEN bytes, as the command parser takes
+; them: digits, after %X for hex ones, %O octal or %D decimal. R1 = it,
+; or 0 for a negative one. Uses R0-R5.
+NUMBER:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5>
+        CLRL    R1
+        MOVAB   VALBUF, R2
+        MOVZWL  VALLEN, R3
+        MOVL    #10, R4                 ; the radix
+        CMPB    (R2), #^A/-/
+        BEQL    90$
+        CMPB    (R2), #^A/%/
+        BNEQ    20$
+        CMPB    1(R2), #^A/X/
+        BNEQ    5$
+        MOVL    #16, R4
+5$:     CMPB    1(R2), #^A/O/
+        BNEQ    10$
+        MOVL    #8, R4
+10$:    ADDL2   #2, R2
+        SUBL2   #2, R3
+20$:    TSTL    R3
+        BLEQ    90$
+        MOVZBL  (R2)+, R0
+        SUBL2   #^A/0/, R0
+        CMPL    R0, #9
+        BLEQU   30$
+        SUBL2   #<^A/A/-^A/0/-10>, R0
+30$:    MULL2   R4, R1
+        ADDL2   R0, R1
+        DECL    R3
+        BRB     20$
+90$:    RSB
+
+; SAYMSG: R0 = a status. Writes its message, as one that follows another,
+; -FAC-S-NAME, text. Uses R0-R1.
+SAYMSG:
+        .JSB_ENTRY
+        MOVL    #255, MSG
+        $GETMSG_S MSGID=R0, MSGLEN=MSG, BUFADR=MSG
+        MOVB    #^A/-/, LINE+1
+        MOVB    MSG, LINE
+        PUSHAB  LINE
+        CALLS   #1, G^PUT_LINE
+        RSB
+
+; ADD: appends the R2 bytes at R1 to LINE, as many as fit. Uses R0-R2.
+ADD:
+        .JSB_ENTRY  SCRATCH=<R2>
+        MOVZBL  LINE, R0
+10$:    TSTL    R2
+        BEQL    20$
+        CMPL    R0, #255
+        BGEQU   20$
+        INCL    R0
+        MOVB    (R1)+, LINE[R0]
+        DECL    R2
+        BRB     10$
+20$:    MOVB    R0, LINE
+        RSB
+
+        .END    START
