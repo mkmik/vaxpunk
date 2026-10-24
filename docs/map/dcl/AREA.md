@@ -19,4 +19,4 @@ with every verb in CLD under `vms/cld/`
 ([ADR-0017](../../adr/0017-command-tables-from-cld-with-vcdu.md),
 [ADR-0018](../../adr/0018-set-command-and-foreign-commands.md)).
 PRD-0003 step 8 added block `IF`, `ON`, the lexical functions and data
-lines. There is no `SPAWN` yet, so nothing runs in a subprocess.
+lines. There is no `SPAWN` yet; only `RUN` makes subprocesses.

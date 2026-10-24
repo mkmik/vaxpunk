@@ -4,8 +4,11 @@
 ; STARTUP starts it. It makes a mailbox with a logical name, writes to it
 ; and reads back, and fills it; reads it on a second channel, from
 ; $CREMBX by the same name, and a third, from $ASSIGN; starts MBXCHILD,
-; whose image isn't there, with the mailbox as its termination mailbox,
-; and reads the message its deletion sends. A permanent mailbox outlives
+; a subprocess whose image isn't there, with the mailbox as its
+; termination mailbox, and reads the message its deletion sends. Then
+; MBXPARENT, a detached process, this image again, makes MBXORPHAN, its
+; subprocess, this image a third time, which hibernates, and exits: its
+; message has no owner, and MBXORPHAN went with it. A permanent mailbox outlives
 ; its channel until $DELMBX, and the temporary one goes with its last
 ; channel, and its name with it. Each EXPECT checks a status or a value;
 ; a failed one exits with 2 * N, which the executive reports.
@@ -21,6 +24,7 @@
         $LNMDEF
         $MSGDEF
         $ACCDEF
+        $PRCDEF
 
         .PSECT  DATA, NOEXE, WRT, LONG
 MBXNAME:
@@ -33,6 +37,11 @@ CHILD_IMAGE:
         .ASCID  "NOSUCH.EXE"
 CHILD_NAME:
         .ASCID  "MBXCHILD"
+SELF:   .ASCID  "MBXTEST.EXE"
+PARENT_NAME:
+        .ASCID  "MBXPARENT"
+ORPHAN_NAME:
+        .ASCID  "MBXORPHAN"
 SYSTEM: .ASCID  "LNM$SYSTEM"
 HELLO:  .ASCII  "hello"
 CHAN:   .LONG   0
@@ -41,6 +50,8 @@ CHAN3:  .LONG   0
 UNIT:   .LONG   0
 CLASS:  .LONG   0
 MYPID:  .LONG   0
+MYNAME: .BLKB   16                      ; my name
+OWNER:  .LONG   0
 PID:    .LONG   0
 IOSB:   .BLKQ   1
 BUF:    .BLKB   128
@@ -52,9 +63,17 @@ DVI_ITEMS:                              ; the mailbox's unit and class
         .ADDRESS CLASS
         .LONG   0
         .LONG   0
-JPI_ITEMS:                              ; my PID
+JPI_ITEMS:                              ; my PID and name
         .WORD   4, JPI$_PID
         .ADDRESS MYPID
+        .LONG   0
+        .WORD   15, JPI$_PRCNAM
+        .ADDRESS MYNAME
+        .LONG   0
+        .LONG   0
+OWNER_ITEMS:                            ; a process's owner
+        .WORD   4, JPI$_OWNER
+        .ADDRESS OWNER
         .LONG   0
         .LONG   0
 TRN_ITEMS:
@@ -64,9 +83,20 @@ TRN_ITEMS:
         .LONG   0
 
         .PSECT  CODE, EXE, LONG
-        .ENTRY  START, ^M<>
+        .ENTRY  START, ^M<R2, R3>
         $GETJPIW_S ITMLST=JPI_ITEMS
         EXPECT  #SS$_NORMAL, 1
+        TSTB    MYNAME+9                ; MBXPARENT or MBXORPHAN, nine letters?
+        BNEQ    5$
+        MOVL    PARENT_NAME+4, R1
+        CMPC3   #9, MYNAME, (R1)
+        BNEQ    3$
+        BRW     PARENT
+3$:     MOVL    ORPHAN_NAME+4, R1
+        CMPC3   #9, MYNAME, (R1)
+        BNEQ    5$
+        BRW     ORPHAN
+5$:
 
 ; A temporary mailbox, for messages of up to 100 bytes, which holds 200.
         $CREMBX_S CHAN=CHAN, MAXMSG=#100, BUFQUO=#200, LOGNAM=MBXNAME
@@ -141,6 +171,19 @@ TRN_ITEMS:
         MOVL    BUF+ACC$L_OWNER, R0
         EXPECT  MYPID, 30
 
+; MBXPARENT, detached, with this mailbox for its termination message,
+; which has no owner; MBXORPHAN, its subprocess, went with it.
+        $CREPRC_S IMAGE=SELF, PRCNAM=PARENT_NAME, BASPRI=#4, MBXUNT=UNIT, STSFLG=#PRC$M_DETACH
+        EXPECT  #SS$_NORMAL, 38
+        $QIOW_S CHAN=CHAN, FUNC=#IO$_READVBLK, IOSB=IOSB, P1=BUF, P2=#128
+        EXPECT  #SS$_NORMAL, 39
+        MOVL    BUF+ACC$L_FINALSTS, R0
+        EXPECT  #SS$_NORMAL, 40
+        MOVL    BUF+ACC$L_OWNER, R0
+        EXPECT  #0, 41
+        $WAKE_S PRCNAM=ORPHAN_NAME
+        EXPECT  #SS$_NONEXPR, 42
+
 ; A permanent mailbox outlives its channel, until $DELMBX, which isn't
 ; for a terminal.
         $CREMBX_S PRMFLG=#1, CHAN=CHAN2, LOGNAM=PRMNAME
@@ -166,5 +209,19 @@ TRN_ITEMS:
         PRINT   "MBXTEST: ok"
         MOVL    #SS$_NORMAL, R0
         RET
+
+; PARENT: MBXPARENT makes MBXORPHAN, whose owner it is, and exits.
+PARENT: $CREPRC_S PIDADR=PID, IMAGE=SELF, PRCNAM=ORPHAN_NAME, BASPRI=#4
+        EXPECT  #SS$_NORMAL, 43
+        $GETJPIW_S PIDADR=PID, ITMLST=OWNER_ITEMS
+        EXPECT  #SS$_NORMAL, 44
+        MOVL    OWNER, R0
+        EXPECT  MYPID, 45
+        MOVL    #SS$_NORMAL, R0
+        RET
+
+; ORPHAN: MBXORPHAN hibernates until it is deleted, saying nothing.
+ORPHAN: $HIBER_S
+        BRB     ORPHAN
 
         .END    START

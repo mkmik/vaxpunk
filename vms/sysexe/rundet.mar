@@ -7,6 +7,8 @@
 ; %RUN-F-CREPRC and $CREPRC's status. The image, .EXE unless its name
 ; has a type, must be there, in SYS$SYSTEM: unless its name says where,
 ; or it is %RUN-F-PARSEFAIL and RMS's status. The new process
+; - is a subprocess of this one, which goes when this one does, or with
+;   /DETACHED or /UIC a detached process;
 ; - is named /PROCESS_NAME=name, or has no name;
 ; - runs at base priority /PRIORITY=n, or this process's;
 ; - has SYS$INPUT, SYS$OUTPUT and SYS$ERROR /INPUT=, /OUTPUT= and
@@ -23,12 +25,10 @@
 ; - sends its termination message to the mailbox whose unit /MAILBOX=n
 ;   gives.
 ; A number is decimal, or %X hex, %O octal or %D decimal.
-; ponytail: always a detached process, where VMS's makes a subprocess
-; without /DETACHED or /UIC (t8y:/dcl/spawn); no /AUTHORIZE, /DELAY,
-; /INTERVAL, /SCHEDULE, /TIME_LIMIT, or the status flags' /DUMP,
-; /RESOURCE_WAIT, /SWAPPING and the rest; and the image is looked for
-; where the image activator looks, SYS$SYSTEM:, not in the default
-; directory, as VMS's RUN does.
+; ponytail: no /AUTHORIZE, /DELAY, /INTERVAL, /SCHEDULE, /TIME_LIMIT,
+; or the status flags' /DUMP, /RESOURCE_WAIT, /SWAPPING and the rest; and
+; the image is looked for where the image activator looks, SYS$SYSTEM:,
+; not in the default directory, as VMS's RUN does.
 ;
         .LIBRARY "starlet.mlb"
         .LIBRARY "sysexe.mlb"
@@ -37,6 +37,7 @@
         $NAMDEF
         $JPIDEF
         $PQLDEF
+        $PRCDEF
 
         .EXTERNAL PRV_LOOKUP, GET_UIC, PUT_LINE, CLI$GET_VALUE
 
@@ -111,6 +112,7 @@ REMPRV: .BLKQ   1                       ; and takes away
 MASK:   .BLKQ   1                       ; PRV_LOOKUP's
 UIC:    .LONG   0                       ; its UIC, or 0 for this process's
 MBXUNT: .LONG   0                       ; MAILBOX's unit, or 0
+STSFLG: .LONG   0                       ; PRC$M_DETACH with DETACHED
 PID:    .LONG   0                       ; its PID
 UICNAM: .ASCID  "UIC"                   ; for GET_UIC
 QUOTAS:                                 ; each quota qualifier: its PQL$_ code, its name
@@ -171,7 +173,10 @@ MSG:    .LONG   255                     ; a status's message, for $GETMSG
         BSBW    GETUIC
         BLBC    R0, 90$
         BSBW    QUOTA
-        $CREPRC_S PIDADR=PID, IMAGE=IMAGE, INPUT=@INPADR, OUTPUT=@OUTADR, ERROR=@ERRADR, PRVADR=@PRVADR, QUOTA=QLIST, PRCNAM=@PRCADR, BASPRI=BASPRI, UIC=UIC, MBXUNT=MBXUNT
+        PRESENT "DETACHED"
+        BLBC    R0, 30$
+        MOVL    #PRC$M_DETACH, STSFLG
+30$:    $CREPRC_S PIDADR=PID, IMAGE=IMAGE, INPUT=@INPADR, OUTPUT=@OUTADR, ERROR=@ERRADR, PRVADR=@PRVADR, QUOTA=QLIST, PRCNAM=@PRCADR, BASPRI=BASPRI, UIC=UIC, MBXUNT=MBXUNT, STSFLG=STSFLG
         BLBC    R0, 80$
         PRINTHEX "%RUN-S-PROC_ID, identification of created process is ", PID
         MOVL    #SS$_NORMAL, R0

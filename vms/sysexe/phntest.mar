@@ -19,6 +19,7 @@
         $SSDEF
         $DVIDEF
         $JPIDEF
+        $PRCDEF
 
         .EXTERNAL PTD$CREATE, PTD$READ, PTD$WRITE, PTD$DELETE, LIB$PUT_OUTPUT
 
@@ -95,7 +96,7 @@ BUF:    .BLKB   2048                    ; what the terminal wrote, not yet waite
         BNEQ    5$
         CMPC3   #7, MYNAME, ROBOTNAM
         BEQL    10$
-5$:     $CREPRC_S IMAGE=SELF, PRCNAM=ROBOT, BASPRI=#4
+5$:     $CREPRC_S IMAGE=SELF, PRCNAM=ROBOT, BASPRI=#4, STSFLG=#PRC$M_DETACH
         RET
 
 10$:    PUSHAQ  INADR
@@ -108,7 +109,7 @@ BUF:    .BLKB   2048                    ; what the terminal wrote, not yet waite
         $GETDVIW_S CHAN=CHAN, ITMLST=DVI_ITEMS
         EXPECT  #SS$_NORMAL, 3
         MOVL    NAMLEN, NAMDSC
-        $CREPRC_S IMAGE=LOGINOUT, INPUT=NAMDSC, OUTPUT=NAMDSC, ERROR=NAMDSC, PRCNAM=NAMDSC, BASPRI=#4
+        $CREPRC_S IMAGE=LOGINOUT, INPUT=NAMDSC, OUTPUT=NAMDSC, ERROR=NAMDSC, PRCNAM=NAMDSC, BASPRI=#4, STSFLG=#PRC$M_DETACH
         EXPECT  #SS$_NORMAL, 4
         WAITFOR "Username:"
         TYPELN  "JOE"

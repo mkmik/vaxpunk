@@ -75,8 +75,8 @@ note = "process.mar's $SETPRI checks GROUP and WORLD only"
 [[feature]]
 id = "subprocesses"
 title = "Subprocesses and detached processes: PRC$M_DETACH, deleted with their owner"
-status = "todo"
-note = "$CREPRC ignores stsflg (process.mar); SPAWN and batch jobs need it"
+status = "done"
+note = "process.mar: $CREPRC's uic or PRC$M_DETACH, else PCB$L_OWNER; EXE$RUNDOWN deletes them. ponytail: doesn't wait for them to go; no JIB to share (#jobs), no PRCLM"
 
 [[feature]]
 id = "more-processes"
@@ -149,4 +149,4 @@ and 4 each process has a UIC, privileges and a username, which
 `LOGINOUT` sets ([ADR-0029](../../adr/0029-loginout-and-sysuaf.md)).
 Process 1 is the swapper, as on VMS, but it only reaps deleted processes
 and starts `LOGINOUT` on the console. Missing: quotas, jobs and the JIB,
-subprocesses that go with their owner, and more than 31 processes.
+and more than 31 processes.

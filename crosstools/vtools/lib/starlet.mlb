@@ -1035,7 +1035,7 @@ ACC$L_BIOCNT = 60
 ACC$L_DIOCNT = 64
 ACC$L_VOLUMES = 68
 ACC$Q_LOGIN = 72
-ACC$L_OWNER = 80                        ; its creator's PID
+ACC$L_OWNER = 80                        ; its owner's PID, 0 if detached
 ACC$K_TERMLEN = 84                      ; the message's size
         .ENDM   $ACCDEF
 
@@ -2009,7 +2009,7 @@ LNM$M_CREATE_IF = ^X1000000             ; $CRELNT's: keep a name in the director
 ; is as $LNMDEF says.
         .MACRO  $JPIDEF
 JPI$_PRI = ^X302                        ; the current priority, 0-31, a longword
-JPI$_OWNER = ^X303                      ; the creator's PID
+JPI$_OWNER = ^X303                      ; the owner's PID, 0 if detached
 JPI$_STS = ^X305                        ; the PCB$V_ bits
 JPI$_STATE = ^X306                      ; the scheduling state, SCH$C_
 JPI$_PRIB = ^X309                       ; the base priority
@@ -2164,6 +2164,12 @@ PQL$_WSEXTENT = 13
 PQL$_JTQUOTA = 14
 PQL$_LENGTH = 15                        ; how many there are, with LISTEND
         .ENDM   $PQLDEF
+
+; $PRCDEF: $CREPRC's status flags, stsflg.
+        .MACRO  $PRCDEF
+PRC$V_DETACH = 9                        ; a detached process, of the creator's UIC
+PRC$M_DETACH = ^X200
+        .ENDM   $PRCDEF
 
 ; $PRTDEF: page protection codes, the VAX's: who may read (R) and write (W),
 ; from kernel (K) out to user (U) mode.

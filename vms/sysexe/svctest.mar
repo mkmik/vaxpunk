@@ -17,6 +17,7 @@
         $DEVDEF
         $PRVDEF
         $JPIDEF
+        $PRCDEF
         .EXTERNAL SYS$DCLEXH, SYS$DLCEFC, SYS$EXIT, EXE$GL_RPB, WIDEQIOW
 
         .PSECT  DATA, NOEXE, WRT, LONG
@@ -607,9 +608,9 @@ BINBUF: .BLKQ   1
 ; Other processes: lower this one's priority below NAPPER's so it runs
 ; and hibernates; suspend it while it does, so that $WAKE leaves it
 ; suspended; resume it, and delete it.
-        $CREPRC_S IMAGE=SLEEPER_IMAGE, PRCNAM=NAPPER_NAME, BASPRI=#4
+        $CREPRC_S IMAGE=SLEEPER_IMAGE, PRCNAM=NAPPER_NAME, BASPRI=#4, STSFLG=#PRC$M_DETACH
         EXPECT  #SS$_NORMAL, 18
-        $CREPRC_S IMAGE=SLEEPER_IMAGE, PRCNAM=NAPPER_NAME, BASPRI=#4
+        $CREPRC_S IMAGE=SLEEPER_IMAGE, PRCNAM=NAPPER_NAME, BASPRI=#4, STSFLG=#PRC$M_DETACH
         EXPECT  #SS$_DUPLNAM, 19
         $SETPRI_S PRI=#2, PRVPRI=PRI
         EXPECT  #SS$_NORMAL, 20
@@ -629,7 +630,7 @@ BINBUF: .BLKQ   1
         EXPECT  #SS$_NONEXPR, 26
 ; Another NAPPER, whose image $FORCEX ends before it runs, with
 ; SS$_FORCEDEXIT, which the executive reports.
-        $CREPRC_S IMAGE=SLEEPER_IMAGE, PRCNAM=NAPPER_NAME, BASPRI=#4
+        $CREPRC_S IMAGE=SLEEPER_IMAGE, PRCNAM=NAPPER_NAME, BASPRI=#4, STSFLG=#PRC$M_DETACH
         EXPECT  #SS$_NORMAL, 66
         $FORCEX_S PRCNAM=NAPPER_NAME
         EXPECT  #SS$_NORMAL, 67
@@ -637,13 +638,13 @@ BINBUF: .BLKQ   1
         EXPECT  #SS$_NONEXPR, 68
 ; A process whose image isn't there: it exits with RMS$_FNF, which
 ; the executive reports.
-        $CREPRC_S IMAGE=NOSUCH_IMAGE, PRCNAM=NOSUCH_NAME, BASPRI=#4
+        $CREPRC_S IMAGE=NOSUCH_IMAGE, PRCNAM=NOSUCH_NAME, BASPRI=#4, STSFLG=#PRC$M_DETACH
         EXPECT  #SS$_NORMAL, 27
 ; Processes that break the rules of user mode: each exits with the
 ; exception's status, which the executive reports.
-        $CREPRC_S IMAGE=SNOOP_IMAGE, PRCNAM=SNOOP_NAME, BASPRI=#4
+        $CREPRC_S IMAGE=SNOOP_IMAGE, PRCNAM=SNOOP_NAME, BASPRI=#4, STSFLG=#PRC$M_DETACH
         EXPECT  #SS$_NORMAL, 34
-        $CREPRC_S IMAGE=USURP_IMAGE, PRCNAM=USURP_NAME, BASPRI=#4
+        $CREPRC_S IMAGE=USURP_IMAGE, PRCNAM=USURP_NAME, BASPRI=#4, STSFLG=#PRC$M_DETACH
         EXPECT  #SS$_NORMAL, 35
 ; Exit handlers: $CANEXH takes one off, and the image ends with
 ; $FORCEX's AST, whose $EXIT calls the other, EXH, which says ok.

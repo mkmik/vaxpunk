@@ -32,8 +32,8 @@
 ; $FORMAT_ACL writes them (docs/adr/0040-acls-in-file-headers-and-rights-
 ; identifiers.md).
 ; ponytail: no node, CPU time, I/O or page counts: the counters don't
-; exist yet. No SCSNODE, so no Node column or node name; no subprocesses
-; or batch jobs, so SHOW USERS counts interactive processes only; no
+; exist yet. No SCSNODE, so no Node column or node name; no batch jobs,
+; and SHOW USERS counts interactive processes only, not subprocesses; no
 ; paged pool, balance set, page or swap files for SHOW MEMORY; no machine
 ; check or memory error counts for SHOW ERROR, which shows 0; SHOW
 ; QUOTA's /USER is taken and ignored, as no volume has a quota file. No

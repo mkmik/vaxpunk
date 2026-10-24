@@ -435,9 +435,13 @@ interpreter. It is linked high in P1, which tells the executive it is one
   from user SYSTEM`. `/TO=(DISKS,OPER12)` sends it to those classes of
   operators only; the console is one of every class but `REPLY` and
   `SOFTWARE`, as on VMS. `RUN/DETACHED` runs any
-  image in a process of its own, as `SYSTARTUP_VMS.COM` runs OPCOM, with
-  the name, base priority, `SYS$INPUT`, `SYS$OUTPUT`, privileges, UIC
-  and I/O quotas its other qualifiers give.
+  image in a detached process, as `SYSTARTUP_VMS.COM` runs OPCOM; `RUN`
+  with any other qualifier for a new process, `/PROCESS_NAME` and the
+  rest, makes a subprocess instead, unless `/UIC` makes it detached. A
+  subprocess goes when the process that made it does: that process's
+  rundown, `EXE$RUNDOWN`, deletes it first. Either kind takes the name,
+  base priority, `SYS$INPUT`, `SYS$OUTPUT`, privileges, UIC and I/O
+  quotas the other qualifiers give.
 - A command that fails prints VMS's message for the status, when DCL
   knows it: `DIR DKB0:` looks in `DKB0:[SYSMGR]`, the default directory
   on that disk, and prints `%RMS-E-DNF, directory not found`.
@@ -535,11 +539,14 @@ executive feature:
   which its registers are as they were.
 - **MBXTEST** checks mailboxes: it makes one with a logical name, writes
   to it and reads back, fills it, reads it on channels from a second
-  `$CREMBX` and from `$ASSIGN` by that name, and starts **MBXCHILD**, whose
-  image isn't there, with the mailbox's unit for its termination mailbox:
-  it reads the message MBXCHILD's deletion writes there, with its PID and
-  its status, `RMS$_FNF`. A permanent mailbox outlives its channel until
-  `$DELMBX`.
+  `$CREMBX` and from `$ASSIGN` by that name, and starts **MBXCHILD**, a
+  subprocess whose image isn't there, with the mailbox's unit for its
+  termination mailbox: it reads the message MBXCHILD's deletion writes
+  there, with its PID, its status, `RMS$_FNF`, and its owner, MBXTEST.
+  Then it starts **MBXPARENT**, a detached process running MBXTEST.EXE
+  again, which starts its own subprocess, **MBXORPHAN**, and exits.
+  MBXPARENT's termination message has no owner, and MBXORPHAN is gone
+  with it. A permanent mailbox outlives its channel until `$DELMBX`.
 - **GBLTEST** checks global sections: it makes a global page file section
   of two pages with `$CRMPSC`, maps it twice more with `$CRMPSC` and
   `$MGBLSC`, and reads in each mapping what it wrote in another; `$MGBLSC`

@@ -41,6 +41,7 @@
         $UCBDEF
         $JPIDEF
         $PQLDEF
+        $PRCDEF
 
         .EXTERNAL SCH$GL_CURPCB, SCH$GL_SWPPCB, SCH$GL_PCBVEC, SCH$GL_MAXPIX, SCH$GL_SEQ
         .EXTERNAL SCH$GQ_HIBWQ, SCH$GQ_SUSPWQ, SCH$GQ_DELQ
@@ -259,16 +260,22 @@ EXE$PRCPRIV::
 ; its creator's default directory. mbxunt, if it isn't 0, is the unit number of a mailbox, MBnn,
 ; which gets the process's termination message when it is deleted. Its
 ; UIC is uic, or its creator's for 0; another one than the creator's takes
-; DETACH, else SS$_NOPRIV. It has its creator's username. Its privileges, current and permanent, are those
+; DETACH, else SS$_NOPRIV. With a uic, or PRC$M_DETACH in stsflg, it is a
+; detached process, owned by no one; else it is a subprocess of its
+; creator, its owner, and goes when that does (EXE$RUNDOWN). It has its
+; creator's username. Its privileges, current and permanent, are those
 ; in the quadword prvadr points at that its creator has, or its creator's
 ; for 0; a creator with SETPRV gives any, and authorizes them too.
 ; Otherwise it has its creator's authorized privileges. Its I/O quotas,
 ; BIOLM, DIOLM and BYTLM, are those in quota, a list of PQL$_ codes, a
 ; byte, each followed by its value, a longword, up to PQL$_LISTEND, each
 ; raised to SYSGEN's minimum, PQL_MBIOLM and the rest, if it is below,
-; or its creator's for one quota doesn't have. stsflg is ignored.
+; or its creator's for one quota doesn't have. stsflg's other flags are
+; ignored.
 ; ponytail: quota's other quotas are ignored, as nothing charges them
 ; yet; VMS gives a quota the list doesn't have SYSGEN's PQL_D default.
+; No jobs: a subprocess shares no JIB, LNM$JOB or quotas with its owner,
+; and PRCLM doesn't limit how many it has (t8y:/exec/processes#jobs).
         .ENTRY  EXE$CREPRC, ^M<R2, R3, R4, R5, R6, R7, R8, R9, R10>
         MOVL    SCH$GL_CURPCB, R4
         MOVL    4(AP), R1
@@ -395,7 +402,11 @@ EXE$PRCPRIV::
         MOVW    R1, PCB$W_DIOCNT(R8)
         BRB     26$
 29$:    MNEGW   SGN$GW_QUANTUM, PCB$W_QUANT(R8)
-        MOVL    PCB$L_PID(R4), PCB$L_OWNER(R8)
+        TSTL    40(AP)                  ; detached: no owner
+        BNEQ    31$
+        BBS     #PRC$V_DETACH, 48(AP), 31$
+        MOVL    PCB$L_PID(R4), PCB$L_OWNER(R8)  ; else a subprocess of its creator
+31$:
         MOVZWL  44(AP), PCB$L_TMBU(R8)
         PUSHR   #^M<R3, R4>                     ; the creator's default directory
         MOVC3   #64, PCB$T_DEFDIR(R4), PCB$T_DEFDIR(R8)
@@ -1211,15 +1222,32 @@ DELP1:
         MOVL    PCB$L_CTLBASVA(R4), PCB$L_FREP1VA(R4)
 10$:    RSB
 
-; EXE$RUNDOWN: R4 = the current PCB. Gives back what its process holds:
+; EXE$RUNDOWN: R4 = the current PCB. Deletes its process's subprocesses,
+; as $DELPRC deletes another process, then gives back what it holds:
 ; what EXE$IMGRUNDOWN does, then its other files, before its other locks,
 ; among them their access arbitration locks, and ASTs, its logical
 ; names, its pages in P1, its other channels, and its slot, unless
 ; $DELPRC gave that to another process already, and sends its termination
 ; message. Runs in the process's own context, since P0 and P1 are the
 ; current process's. Uses R0-R3.
+; ponytail: VMS waits until its subprocesses are gone; this doesn't, so
+; their termination messages may come after its own.
 EXE$RUNDOWN::
         .JSB_ENTRY  SCRATCH=<R2, R3>
+        PUSHR   #^M<R4, R5, R6>
+        MOVL    PCB$L_PID(R4), R6
+        DSBINT  #IPL$_SYNCH
+        MOVL    #1, R5
+5$:     MOVL    @SCH$GL_PCBVEC[R5], R4
+        BEQL    6$
+        CMPL    PCB$L_OWNER(R4), R6
+        BNEQ    6$
+        PUSHL   R5
+        BSBW    DELOTHER
+        MOVL    (SP)+, R5
+6$:     AOBLSS  SCH$GL_MAXPIX, R5, 5$
+        ENBINT
+        POPR    #^M<R4, R5, R6>
         BSBW    EXE$IMGRUNDOWN
         CLRL    R0
         BSBW    RMS$RUNDOWN
@@ -1252,7 +1280,8 @@ EXE$RUNDOWN::
 ; TERMMSG: R4 = the current PCB, of a process that goes. Writes its
 ; termination message, MSG$_DELPROC ($ACCDEF), to the mailbox whose unit
 ; $CREPRC's mbxunt named, if that is still there and has room for it:
-; its final status, its PID, the time, and its creator's PID. Uses R0-R3.
+; its final status, its PID, the time, and its owner's PID, 0 for a
+; detached process. Uses R0-R3.
 TERMMSG:
         .JSB_ENTRY  SCRATCH=<R2, R3>
         TSTL    PCB$L_TMBU(R4)
