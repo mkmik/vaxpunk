@@ -9,6 +9,7 @@
         .LIBRARY "starlet.mlb"
         .LIBRARY "sysexe.mlb"
         $SSDEF
+        $PRCDEF
 
         .PSECT  DATA, NOEXE, WRT, LONG
 NUDGE_IMAGE:
@@ -23,7 +24,7 @@ STATE:  .LONG   0
         .ENTRY  START, ^M<>
         $ASCEFC_S EFN=#64, NAME=CLUSTER
         BLBC    R0, 90$
-        $CREPRC_S IMAGE=NUDGE_IMAGE, PRCNAM=NUDGE_NAME, BASPRI=#4
+        $CREPRC_S IMAGE=NUDGE_IMAGE, PRCNAM=NUDGE_NAME, BASPRI=#4, STSFLG=#PRC$M_DETACH
         BLBC    R0, 90$
 10$:    $READEF_S EFN=#64, STATE=STATE
         CMPL    R0, #SS$_WASSET

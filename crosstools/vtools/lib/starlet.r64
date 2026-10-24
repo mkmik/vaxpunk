@@ -1003,7 +1003,7 @@ MACRO
     ACC$L_DIOCNT = 64, 0, 32, 0 %,
     ACC$L_VOLUMES = 68, 0, 32, 0 %,
     ACC$Q_LOGIN = 72, 0, 64, 0 %,
-    ACC$L_OWNER = 80, 0, 32, 0 %;  ! its creator's PID
+    ACC$L_OWNER = 80, 0, 32, 0 %;  ! its owner's PID, 0 if detached
 
 ! $MNTDEF
 LITERAL
@@ -1632,7 +1632,7 @@ LITERAL
 ! $JPIDEF
 LITERAL
     JPI$_PRI = 770,  ! the current priority, 0-31, a longword
-    JPI$_OWNER = 771,  ! the creator's PID
+    JPI$_OWNER = 771,  ! the owner's PID, 0 if detached
     JPI$_STS = 773,  ! the PCB$V_ bits
     JPI$_STATE = 774,  ! the scheduling state, SCH$C_
     JPI$_PRIB = 777,  ! the base priority
@@ -1776,6 +1776,11 @@ LITERAL
     PQL$_WSEXTENT = 13,
     PQL$_JTQUOTA = 14,
     PQL$_LENGTH = 15;  ! how many there are, with LISTEND
+
+! $PRCDEF
+LITERAL
+    PRC$V_DETACH = 9,  ! a detached process, of the creator's UIC
+    PRC$M_DETACH = 512;
 
 ! $PRTDEF
 LITERAL

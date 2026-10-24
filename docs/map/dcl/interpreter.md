@@ -94,7 +94,7 @@ id = "run-detach"
 title = "RUN/DETACH and RUN/PROCESS_NAME: an image in a new process"
 status = "done"
 needs = ["/exec/processes"]
-note = "RUNDET.EXE, as VMS's; rundet.mar ponytail: always detached, never a subprocess (t8y:/dcl/spawn)"
+note = "RUNDET.EXE, as VMS's: a subprocess, or with /DETACHED or /UIC a detached process (t8y:/exec/processes#subprocesses)"
 
 [[feature]]
 id = "run-process-qualifiers"

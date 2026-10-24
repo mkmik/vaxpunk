@@ -16,6 +16,7 @@
         $SSDEF
         $IODEF
         $JPIDEF
+        $PRCDEF
         .EXTERNAL LIB$GET_FOREIGN
 
 CHUNK = 4096                            ; pages an $EXPREG asks for
@@ -97,7 +98,7 @@ JPI_ITEMS:
         CLRL    R2                      ; the children
 40$:    ADDB3   #^A"1", R2, CHILD_TEXT+8
         MOVAL   PIDS[R2], R4
-        $CREPRC_S PIDADR=(R4), IMAGE=CHILD_IMAGE, PRCNAM=CHILD_NAME, BASPRI=#4
+        $CREPRC_S PIDADR=(R4), IMAGE=CHILD_IMAGE, PRCNAM=CHILD_NAME, BASPRI=#4, STSFLG=#PRC$M_DETACH
         EXPECT  #SS$_NORMAL, 4
         AOBLSS  NCHILD, R2, 40$
         MOVL    NCHILD, R2              ; each says it holds its pages

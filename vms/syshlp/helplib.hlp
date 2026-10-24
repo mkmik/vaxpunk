@@ -1492,7 +1492,8 @@
   $ REQUEST "Please mount the backup disk on DKB0:"
   $ REQUEST/TO=DISKS "DKB0: is full"
 1 RUN
-  Runs an image in the process, or in a process of its own.
+  Runs an image in the process, or in a new process: a subprocess of
+  yours, or with /DETACHED or /UIC a detached process.
 
   Format
 
@@ -1510,11 +1511,13 @@
   /DETACHED
 
   Runs the image in a new process, detached from yours, which goes on
-  after you log out, and says its identification. It has your username
-  and default directory, and, unless the qualifiers below say otherwise,
-  your UIC, base priority, permanent privileges and I/O quotas, no
-  name, and no SYS$INPUT, SYS$OUTPUT or SYS$ERROR. Each of the
-  qualifiers below implies /DETACHED. Of the quotas, only those of
+  after you log out. Without it, and without /UIC, the new process is
+  a subprocess of yours, which goes when your process does. Either way
+  RUN says its identification. It has your username and default
+  directory, and, unless the qualifiers below say otherwise, your UIC,
+  base priority, permanent privileges and I/O quotas, no name, and no
+  SYS$INPUT, SYS$OUTPUT or SYS$ERROR. Each of the qualifiers below runs
+  the image in a new process too. Of the quotas, only those of
   /BUFFER_LIMIT, /IO_BUFFERED and /IO_DIRECT are kept yet, raised to
   1024, 4 and 4 if they are less.
 /ERROR
@@ -1553,8 +1556,8 @@
 /UIC
   /UIC=[group,member]
 
-  The new process's UIC, in octal; one other than yours takes the
-  DETACH privilege.
+  The new process's UIC, in octal, which makes it a detached process;
+  one other than yours takes the DETACH privilege.
 /AST_LIMIT
   /AST_LIMIT=n
 

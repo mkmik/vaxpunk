@@ -172,7 +172,9 @@ sequence number in the high word and the index in the low.
 1. Copies the image and process names into a new PCB, the priority, the
    UIC and the privileges (*Privileges*), and makes its logical name directory and table, with `SYS$INPUT`, `SYS$OUTPUT` and
    `SYS$ERROR` for its `input`, `output` and `error` arguments, those it
-   was given (*Logical names*).
+   was given (*Logical names*). With a `uic`, or `PRC$M_DETACH` in
+   `stsflg`, it is a detached process, which has no owner; otherwise it
+   is a subprocess, and its creator, its owner, is in `PCB$L_OWNER`.
 2. Allocates the kernel stack and builds at its top the frame the PAL pops
    when the process first runs: PC `EXE$PROCSTRT`, PSL kernel mode at IPL 0,
    the stack top as SP. The HWPCB's KSP points at it.
@@ -222,11 +224,12 @@ a command interpreter would:
 ### Deletion
 
 - **Itself** (`$EXIT` without a command interpreter, or `$DELPRC` naming
-  itself): it runs itself down (timer queue entries, every page of its P0
+  itself): it deletes its subprocesses, as `$DELPRC` deletes another
+  process, then runs itself down (timer queue entries, every page of its P0
   and P1, common event flag clusters, logical names, channels, open files, slot),
   writes its termination message to the mailbox `$CREPRC`'s `mbxunt`
   named, if any: `MSG$_DELPROC`, the status of its last `$EXIT`, its PID,
-  the time and its creator's PID (`$ACCDEF`), goes on the
+  the time and its owner's PID, 0 for a detached process (`$ACCDEF`), goes on the
   swapper's queue, wakes it, and
   gives up the CPU for good. The swapper deletes its context with
   `DELCTX`, then frees its kernel stack and PCB, since a process can't free
@@ -753,7 +756,7 @@ can't reach them.
 
 Arguments the implemented services take but ignore: `$CREPRC`'s
 quotas but `BIOLM`, `DIOLM` and `BYTLM`, the process taking its creator's
-for one its list doesn't have, and status flags, `$ASSIGN`'s mailbox,
+for one its list doesn't have, and status flags but `PRC$M_DETACH`, `$ASSIGN`'s mailbox,
 `$CREMBX`'s protection, access mode and flags, the logical name
 services' attributes, `$ASCEFC`'s protection
 and permanence (every cluster is temporary), the access modes.

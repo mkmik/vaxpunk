@@ -227,7 +227,7 @@ MACRO
     PCB$L_FREP1VA = 60, 0, 32, 0 %,  ! its first P1 page
     PCB$B_PRIB = 64, 0, 8, 0 %,  ! base priority
     PCB$W_QUANT = 66, 0, 16, 0 %,  ! -ticks left of its quantum
-    PCB$L_OWNER = 68, 0, 32, 0 %,  ! creator's PID
+    PCB$L_OWNER = 68, 0, 32, 0 %,  ! owner's PID, 0 if detached
     PCB$T_LNAME = 72, 0, 0, 0 %,  ! process name, .ASCIC, 15 characters
     PCB$T_IMAGE = 88, 0, 0, 0 %,  ! image name, .ASCIC, 39 characters
     PCB$Q_HWPCB = 128, 0, 64, 0 %,  ! its HWPCB, if it isn't the boot one

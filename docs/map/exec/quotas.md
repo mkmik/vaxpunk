@@ -73,7 +73,7 @@ note = "PRD-0003 tier 1 #4, step 5; the I/O ones done (ADR-0038)"
 id = "creprc"
 title = "$CREPRC's quota list, a subprocess's taken from its creator's"
 status = "wip"
-note = "process.mar: BIOLM, DIOLM and BYTLM from the list, raised to SYSGEN's minimums, the creator's for the ones it lacks; the others ignored, no PQL_D defaults, no subprocesses (t8y:/exec/processes#subprocesses)"
+note = "process.mar: BIOLM, DIOLM and BYTLM from the list, raised to SYSGEN's minimums, the creator's for the ones it lacks; the others ignored, no PQL_D defaults; a subprocess has no job to share (t8y:/exec/processes#jobs)"
 
 [[feature]]
 id = "job-pooled"
