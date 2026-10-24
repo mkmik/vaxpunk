@@ -20,7 +20,7 @@ jobs:
     outputs:
       image: ${{ steps.tag.outputs.image }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - id: tag
         run: echo "image=ghcr.io/${GITHUB_REPOSITORY,,}-toolchain:${{ hashFiles('.github/toolchain.Dockerfile') }}" >> "$GITHUB_OUTPUT"
       - run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
@@ -43,7 +43,7 @@ jobs:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           submodules: true
       - run: cargo test --release -p boot
@@ -55,12 +55,12 @@ jobs:
           QEMU_MEM=1024 cargo run --release -p boot -- --images
           web/demo-images.sh out/demo
       - if: github.event_name != 'pull_request'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: demo-images
           path: out/demo
       - if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: serial.log
           path: out/serial.log
@@ -71,15 +71,15 @@ jobs:
     if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - id: cache
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: qemu-wasm
           key: qemu-wasm-${{ hashFiles('web/qemu-wasm.sh') }}
       - if: steps.cache.outputs.cache-hit != 'true'
         run: web/qemu-wasm.sh qemu-wasm
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: qemu-wasm
           path: qemu-wasm
@@ -88,23 +88,23 @@ jobs:
     needs: [boot, qemu-wasm]
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
         with:
           go-version-file: web/tailgate/go.mod
           cache-dependency-path: web/tailgate/go.sum
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: demo-images
           path: demo-images
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: qemu-wasm
           path: qemu-wasm
       # Lints the map and puts todography on PATH for mksite.sh's build.
-      - uses: mkmik/todography@v0.12.0
+      - uses: mkmik/todography@dad94ed9bcb73a01c4e462a365e5168fea9f4f98 # v0.12.0
       - run: web/mksite.sh site qemu-wasm demo-images
-      - uses: actions/upload-pages-artifact@v3
+      - uses: actions/upload-pages-artifact@56afc609e74202658d3ffba0e8f6dda462b719fa # v3
         with:
           path: site
 
@@ -123,4 +123,4 @@ jobs:
     concurrency: pages
     steps:
       - id: deployment
-        uses: actions/deploy-pages@v4
+        uses: actions/deploy-pages@d6db90164ac5ed86f2b6aed7e0febac5b3c0c03e # v4
