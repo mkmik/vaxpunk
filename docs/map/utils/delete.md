@@ -36,11 +36,12 @@ note = "PRD-0003 step 2, checked by RMS's $ERASE"
 
 [[feature]]
 id = "open-files"
-title = "An open file can't be deleted"
-status = "todo"
+title = "An open file: its entry goes, and the last to close it deletes it"
+status = "done"
 milestone = "m1"
-needs = ["/rms/sharing"]
-note = "PRD-0003 tier 1 #5 and step 7: $ERASE deletes an open file"
+needs = ["/rms/sharing#erase-open"]
+refs = ["docs/adr/0036-file-access-arbitration-locks.md"]
+note = "PRD-0003 step 7"
 
 [[feature]]
 id = "lists"
@@ -104,5 +105,6 @@ vaxpunk's `DELETE` is `vms/sysexe/delete.mar`. It requires a version,
 to the file and write access to its directory. `DELETE/SYMBOL` is DCL's
 own. `PURGE` runs the same image, as on VMS: it `$SEARCH`es every
 version of the names, which come highest first, and `$ERASE`s all but
-the first `/KEEP` of each. `$ERASE` deletes a file someone has open
-until RMS shares files through the lock manager (PRD-0003 step 7).
+the first `/KEEP` of each. A file someone has open loses its directory
+entry at once and is deleted when the last one closes it, as on VMS
+([ADR-0036](../../adr/0036-file-access-arbitration-locks.md)).
