@@ -508,7 +508,7 @@ const CONTROL_KEYS: Phase = Phase {
     lines: &[
         "*CANCEL*",
         "CTRLC: ok",
-        "  LEXICALS      LINE_EDITING  LOGOUT        MCR           MOUNT",
+        "  INQUIRE       LEXICALS      LINE_EDITING  LOGOUT        MCR",
         "    2\t        Welcome to vaxpunk, an OpenVMS clone for arm64",
         "$STATUS == 268435500   Hex = 1000002C",
         "%SYSTEM-W-NONEXPR, nonexistent process",
@@ -897,7 +897,7 @@ const SET_FILE: Phase = Phase {
 /// read an escape sequence ends and one with terminators of its own.
 /// TYPE/PAGE writes WELCOME.TXT on a page of 8 rows, 7 lines, asks, and
 /// on RETURN scrolls on to its end; with /PAGE=CLEAR_SCREEN CTRL/Z at
-/// the prompt stops it.
+/// the prompt stops it. INQUIRE asks for a global symbol's value.
 const TERMINAL: Phase = Phase {
     name: "terminal",
     secs: 20,
@@ -936,7 +936,12 @@ const TERMINAL: Phase = Phase {
         (
             "Press RETURN to continue",
             3,
-            "\x1aSET TERMINAL/PAGE=24\rWRITE SYS$OUTPUT \"TYPE/PAGE\", \" done\"\r",
+            "\x1aSET TERMINAL/PAGE=24\rIQS = \"ok\"\rINQUIRE/GLOBAL IQ say\r",
+        ),
+        (
+            "SAY: ",
+            1,
+            "  hi  'IQS'  \"Mixed  case\" ! not this\rSHOW SYMBOL IQ\rWRITE SYS$OUTPUT \"TYPE/PAGE\", \" done\"\r",
         ),
     ],
     lines: &[
@@ -958,6 +963,9 @@ const TERMINAL: Phase = Phase {
         "and the rest of what INITIALIZE made.\x1b7\x1b[r\x1b8\n$ ",
         // CTRL/Z: the prompt erased, and every row scrolls again.
         "*EXIT*\n\x1b[8;29f\x1b[K\x1b7\x1b[r\x1b8$ SET TERMINAL/PAGE=24",
+        // INQUIRE's answer, IQS substituted, as := makes a string.
+        "\nSAY: ",
+        "  IQ == \"HI OK Mixed  case\"",
         "TYPE/PAGE done",
     ],
 };

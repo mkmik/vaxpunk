@@ -96,6 +96,18 @@ define verb IF
 	cliroutine IF
 	parameter P1, label=EXPRESSION, prompt="Expression", value(required, type=$rest_of_line)
 
+! INQUIRE symbol [prompt]: asks the terminal for a local symbol's value,
+! or with /GLOBAL a global one's. ponytail: no symbol is CLI's INSFPRM,
+! a prompt of two words MAXPARM, where VMS's DCL says PARMDEL; and
+! qualifiers may follow the prompt, which VMS's don't.
+define verb INQUIRE
+	cliroutine INQUIRE
+	parameter P1, label=SYMBOL, value(required)
+	parameter P2, label=PROMPT
+	qualifier GLOBAL
+	qualifier LOCAL
+	qualifier PUNCTUATION, default
+
 define verb LOGOUT
 	cliroutine LOGOUT
 

@@ -6,7 +6,8 @@
 ; by key too, deletes them, writes and rewrites them. Each file is a FAB
 ; and a RAB in FILES, in DCL's P1, and stays open until CLOSE or the end
 ; of the process, as VMS's process-permanent files do: rms.mar closes the
-; command interpreter's files only then.
+; command interpreter's files only then. INQUIRE reads a symbol from
+; the terminal, as READ SYS$COMMAND does.
 ; ponytail: OPEN makes no logical name, VMS's ESC and IFI one in
 ; LNM$PROCESS, which only DCL's file commands find the file by; OPEN/WRITE
 ; makes VAR records with CR, not VFC with PRN; a record READ reads, and
@@ -37,6 +38,7 @@ FIL$K_LENGTH = FIL$R_RAB+RAB$C_BLN
         .EXTERNAL DCL$ISPRES, DCL$MSG, DCL$OK, DCL$SAY, DCL$SETSYM, DCL$STATUS
         .EXTERNAL DCL$TOKEN, DCL$VALNAME, DCL$VSTACK, DCL$V_FILE, DCL$V_LOGNAM
         .EXTERNAL DCL$WARN, DCL$CHAN, DCL$DATALINE, DCL$LINE
+        .EXTERNAL DCL$NEXT, DCL$QREST, DCL$SUBST, DCL$SYMNAM, DCL$TARGET
 
         .PSECT  DATA, NOEXE, WRT, LONG
 FABT:   $FAB    DNA=DOTDAT, DNS=4, RAT=CR       ; a file's FAB and RAB, before OPEN fills them in
@@ -66,6 +68,9 @@ V_WRITE:
         .ASCID  "WRITE"
 V_PROMPT:
         .ASCID  "PROMPT"
+V_GLOBAL:
+        .ASCID  "GLOBAL"
+V_PUNCT:.ASCID  "PUNCTUATION"
 S_INPUT:
         .ASCIC  "SYS$INPUT"
 S_COMMAND:
@@ -361,6 +366,64 @@ TERMREAD:
         MOVAB   DCL$VSTACK, R9
         BSBW    DCL$SETSYM
         BRW     DCL$OK
+
+; DCL$INQUIRE, INQUIRE symbol [prompt]: asks the terminal, SYS$COMMAND,
+; for the symbol's value, after the prompt, or the symbol's name, and
+; ": " but with /NOPUNCTUATION. The answer is the string := makes of
+; it: each 'name' the symbol's value, in capitals and a blank between
+; words but in quotes, which go. The symbol is local, or with /GLOBAL
+; global. CTRL/Z makes it the empty string, as an empty line does;
+; CTRL/Y leaves it as it was.
+; ponytail: a process with no terminal, a batch job's or STARTUP's,
+; gets IVCHAN, where VMS's reads the next line of its main procedure.
+DCL$INQUIRE::
+        .EXCEPTION_ENTRY
+        MOVAB   V_SYMBOL, R1
+        BSBW    DCL$VALNAME
+        MOVC3   #32, DCL$SYMNAM, DCL$TARGET    ; 'name' in the answer uses DCL$SYMNAM
+        MOVL    DCL$DEPTH, R10
+        MOVAB   V_GLOBAL, R1
+        BSBW    DCL$ISPRES
+        BLBC    R0, 5$
+        MOVL    #GLOBAL, R10
+5$:     PUSHL   R10
+        MOVAB   V_PROMPT, R1
+        BSBW    DCL$GETVAL
+        MOVAB   DCL$TOKEN, R1
+        MOVL    R8, R2
+        BNEQ    10$
+        MOVAB   DCL$TARGET, R1
+        MOVZBL  (R1)+, R2
+10$:    BSBW    DCL$ADD
+        MOVAB   V_PUNCT, R1
+        BSBW    DCL$ISPRES
+        BLBC    R0, 20$
+        ADDTEXT ": "
+20$:    MOVZBL  DCL$MSG, R0
+        $QIOW_S CHAN=DCL$CHAN, FUNC=#IO$_READPROMPT, IOSB=IOSB, P1=DCL$LINE, P2=#LINESIZE, P5=#DCL$MSG+1, P6=R0
+        CLRB    DCL$MSG
+        BLBC    R0, 30$
+        MOVZWL  IOSB, R0
+        CMPL    R0, #SS$_CONTROLY
+        BEQL    40$
+        CMPL    R0, #SS$_ENDOFFILE
+        BEQL    25$
+        BLBC    R0, 30$
+        MOVZWL  IOSB+2, R7
+        BRB     26$
+25$:    CLRL    R7
+26$:    MOVAB   DCL$LINE, R6
+        ADDL2   R6, R7
+        BSBW    DCL$SUBST
+        MOVAB   DCL$VSTACK, R9
+        BSBW    DCL$QREST
+        MOVC3   #32, DCL$TARGET, DCL$SYMNAM
+        MOVL    (SP)+, R10
+        MOVAB   DCL$VSTACK, R9
+        BSBW    DCL$SETSYM
+        BRW     DCL$OK
+30$:    BRW     DCL$DONE
+40$:    BRW     DCL$NEXT                ; CTRL/Y: DCL does what it says
 
 ; DCL$WRITEREC: R11 = a file OPEN opened, DCL$MSG = what WRITE made of
 ; its expressions. Writes it as a record, by key in an indexed file, or
