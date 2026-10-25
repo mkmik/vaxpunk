@@ -332,6 +332,8 @@ const RAMDISK: Phase = Phase {
     ],
 };
 
+/// INITIALIZE/SIZE of DKB0:, which only the ramdisk takes, and of MDA0:,
+/// SYSTARTUP_VMS.COM's, which made it 2,048 blocks, more than it has free;
 /// INITIALIZE of DKB0:'s 64 MB, three blocks a cluster, MOUNT and COPY
 /// there, MOUNT's DISK$DATA and the system disk's DISK$VAXPUNK, a
 /// CREATE/DIRECTORY two levels deep
@@ -356,8 +358,10 @@ const DATA_DISK: Phase = Phase {
             "no translation for logical name HOME",
             1,
             concat!(
+                "INIT/SIZE=100 DKB0: DATA\r",
                 "INIT/PROTECTION=(S:RWED,O:RWED,G:RWED,W:RWED) DKB0: DATA\rMOUNT/SYSTEM DKB0: DATA\r",
                 "SHOW DEVICES DKB0\r",
+                "WRITE SYS$OUTPUT \"RAM BIG \", F$GETDVI(\"MDA0\",\"FREEBLOCKS\") .GT. 1024\r",
                 "SHOW LOGICAL DISK$DATA\rSHOW LOGICAL DISK$VAXPUNK\r",
                 "COPY SYS$SYSDEVICE:[SYSMGR]WELCOME.TXT DKB0:[000000]DATA.TXT\r",
                 "CREATE/DIRECTORY DKB0:[SUB.DEEP]\r",
@@ -397,7 +401,9 @@ const DATA_DISK: Phase = Phase {
         ),
     ],
     lines: &[
+        "$ INIT/SIZE=100 DKB0: DATA\n%SYSTEM-F-BADPARAM, bad parameter value",
         "%MOUNT-I-MOUNTED, DATA mounted on _DKB0:",
+        "RAM BIG 1",
         "\"DISK$DATA\" = \"_DKB0:\" (LNM$SYSTEM_TABLE)",
         "\"DISK$VAXPUNK\" = \"_DKA0:\" (LNM$SYSTEM_TABLE)",
         "Directory DKB0:[SUB]",

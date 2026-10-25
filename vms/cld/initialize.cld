@@ -1,4 +1,4 @@
-! INITIALIZE device label [/OWNER_UIC=uic] [/PROTECTION=(code[,...])]:
+! INITIALIZE device label [/OWNER_UIC=uic] [/PROTECTION=(code[,...])] [/SIZE=n]:
 ! INIT.EXE writes an empty volume.
 define verb INITIALIZE
 	image INIT
@@ -6,3 +6,4 @@ define verb INITIALIZE
 	parameter P2, label=LABEL, prompt="Label", value(required)
 	qualifier OWNER_UIC, value(required, type=$uic)
 	qualifier PROTECTION, value(required, list)
+	qualifier SIZE, value(required, type=$number)
