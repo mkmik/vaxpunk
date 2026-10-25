@@ -361,11 +361,12 @@ interpreter. It is linked high in P1, which tells the executive it is one
   screen, reads a key at a time (`$QIO` with `IO$M_NOFILTR`) and changes
   the text, until CTRL/Z. `EXIT` writes the buffer to the file's next
   version with `$CREATE` and `$PUT`, which works on the ramdisk only, and
-  `QUIT` leaves without writing. `DEFINE`,
-  `DEASSIGN` and `SHOW LOGICAL` make, delete
-  and translate logical names (`$CRELNM`, `$DELLNM`, `$TRNLNM`), and
-  `SHOW LOGICAL` alone lists them. `SHOW PROCESS` and `SHOW SYSTEM` run
-  `SHOW.EXE`, which prints the date with `$ASCTIM`, asks `$GETJPI` about
+  `QUIT` leaves without writing. `DEFINE` and
+  `DEASSIGN` make and delete logical names (`$CRELNM`, `$DELLNM`).
+  `SHOW LOGICAL` runs `SHOW.EXE`, which translates one (`$TRNLNM`), or
+  alone lists them, sorted, reading the tables in kernel mode with the
+  `CMKRNL` it is installed with. `SHOW PROCESS` and `SHOW SYSTEM` run
+  `SHOW.EXE` too, which prints the date with `$ASCTIM`, asks `$GETJPI` about
   this process, and `$GETSYI` how long the system has been up, then `$GETJPI` with a wildcard for a line
   per process: its PID, name, state, priority and image. `SET
   PROCESS/PRIVILEGES` runs `SET.EXE`, which enables or disables them with
@@ -667,8 +668,8 @@ into it and types another with `CREATE`, runs `SHOW DEVICES`, tries to dismount 
 CTRLC and types CTRL/C, types CTRL/Y at the prompt, stops SPIN, with a
 CTRL/C, and SLEEPER with CTRL/Y and continues them, and EDIT while it
 reads, so that DCL reads the next commands, takes CMKRNL and SYSNAM away
-with `SET PROCESS/PRIVILEGES`, so that `SHOW LOGICAL` says
-`%SYSTEM-F-NOPRIV`, while `DEFINE/SYSTEM` still works, as SYSTEM's UIC
+with `SET PROCESS/PRIVILEGES`, while `SHOW LOGICAL` still lists the
+tables, with `SHOW.EXE`'s own `CMKRNL`, and `DEFINE/SYSTEM` still works, as SYSTEM's UIC
 group is a system one, gives them back, runs PROTTEST, which can't read
 `DATA.TXT` on `DKB0:` until `SET PROTECTION=(W:R)`, then can as its
 owner after `SET FILE/OWNER_UIC=[200,1]` and `SET PROTECTION=(W)`, with

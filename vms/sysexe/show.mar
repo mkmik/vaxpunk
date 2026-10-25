@@ -31,6 +31,10 @@
 ; wildcards, its owner, protection and ACL, $GET_SECURITY's, the ACEs as
 ; $FORMAT_ACL writes them (docs/adr/0040-acls-in-file-headers-and-rights-
 ; identifiers.md).
+; SHOW LOGICAL translates a logical name, or lists the names of each
+; table a table name names, sorted. VMS installs SHOW.EXE with CMKRNL,
+; NETMBX and WORLD so that it can read the tables in kernel mode, and
+; vaxpunk's KNOWN list (exec/process.mar) does too.
 ; ponytail: no node, CPU time, I/O or page counts: the counters don't
 ; exist yet. No SCSNODE, so no Node column or node name; no batch jobs,
 ; and SHOW USERS counts interactive processes only, not subprocesses; no
@@ -58,8 +62,10 @@
         $FABDEF
         $NAMDEF
         $OSSDEF
+        $LNMDEF
 
         .EXTERNAL PUT_LINE, PRV_NAMES, TERM_SENSE, TERM_NAME, TERM_SPEEDS, ID_TEXT
+        .EXTERNAL LNM$NAMES
 
 TT2 = 1                                 ; CHARS: a TT2$ bit, not a TT$ one,
 NOT = 2                                 ; on when it is clear,
@@ -84,6 +90,7 @@ R_NAMLEN = 16                           ; process name's length,
 R_TERMLEN = 18                          ; terminal's length,
 R_NAME = 20                             ; process name
 R_TERM = 36                             ; and terminal
+NAMREC = 256                            ; SHOW LOGICAL's list: a name each, .ASCIC
 
         .PSECT  DATA, NOEXE, WRT, LONG
 DESC:   .LONG   8                       ; OPTION, the keyword
@@ -112,8 +119,8 @@ JPIITEMS:                               ; what $GETJPIW returns of a process
         .WORD   4, JPI$_UIC
         .ADDRESS UIC
         .LONG   0
-        .WORD   8, JPI$_CURPRIV
-        .ADDRESS CURPRIV
+        .WORD   8, JPI$_PROCPRIV
+        .ADDRESS PROCPRIV
         .LONG   0
         .WORD   8, JPI$_AUTHPRIV
         .ADDRESS AUTHPRIV
@@ -235,7 +242,7 @@ UIC:    .LONG   0
 BIOCNT: .LONG   0                       ; what is left of its I/O quotas
 DIOCNT: .LONG   0
 BYTCNT: .LONG   0
-CURPRIV:
+PROCPRIV:                               ; not SHOW.EXE's own too
         .BLKQ   1
 AUTHPRIV:
         .BLKQ   1
@@ -327,6 +334,45 @@ CATNAMES:                               ; the protection's categories
         .ASCIC  "Group"
         .ASCIC  "World"
 LETTERS:.ASCII  "RWED"
+FILE_DEV:                               ; SHOW LOGICAL's tables
+        .ASCID  "LNM$FILE_DEV"
+PROCTAB:.ASCID  "LNM$PROCESS"
+SYSTAB: .ASCID  "LNM$SYSTEM"
+TABDSC: .LONG   0                       ; the one it looks in, a descriptor's address
+TABVAL: .LONG   255                     ; /TABLE's
+        .ADDRESS TABBUF
+TABBUF: .BLKB   255
+LNMDSC: .LONG   255                     ; a logical name
+        .ADDRESS LNMBUF
+LNMBUF: .BLKB   255
+CURTAB: .LONG   255                     ; the table LNM$NAMES found it in
+        .ADDRESS CURBUF
+CURBUF: .BLKB   255
+LNMARGS:                                ; LNM$NAMES's: TABDSC's tables, which one, which name, and where
+        .LONG   5, 0, 0, 0
+        .ADDRESS LNMDSC, CURTAB
+NAMES:  .LONG   0                       ; a table's names, sorted, NAMREC bytes each,
+ROOM:   .LONG   0                       ; and how many fit
+TRNITEMS:                               ; $TRNLNM's: an equivalence, its table, the last's index, and whether it is a table
+        .WORD   4, LNM$_INDEX
+        .ADDRESS EQVIDX, 0
+        .WORD   255, LNM$_STRING
+        .ADDRESS EQV, EQVLEN
+        .WORD   31, LNM$_TABLE
+        .ADDRESS EQVTAB, EQVTABLEN
+        .WORD   4, LNM$_MAX_INDEX
+        .ADDRESS EQVMAX, 0
+        .WORD   4, LNM$_ATTRIBUTES
+        .ADDRESS EQVATTR, 0
+        .LONG   0
+EQVIDX: .LONG   0
+EQVMAX: .LONG   0
+EQVATTR:.LONG   0
+EQVLEN: .WORD   0
+EQV:    .BLKB   255
+EQVTABLEN:
+        .WORD   0
+EQVTAB: .BLKB   31
 LINE:   .BLKB   256                     ; a line being made, .ASCIC
 CHAR:   .BLKB   1
 TTCHAN: .LONG   0                       ; the terminal's
@@ -476,11 +522,15 @@ CHARS:  .BYTE   TT$V_PASSALL, NOT!ALT
         BEQL    3$
         CMPB    R0, #^A/P/
         BEQL    PROCESS
+        CMPB    R0, #^A/L/
+        BEQL    2$
         CMPW    WHAT, #^A/SE/
         BNEQ    4$
         CALLS   #0, SECURITY
         RET
 4$:     BRW     SYSTEM
+2$:     CALLS   #0, SHOWLOG
+        RET
 3$:     BRW     SHOWCPU
 5$:     BRW     SHOWTERM
 6$:     BRW     SHOWUSERS
@@ -530,7 +580,7 @@ PROCESS:
         BSBW    PRIVS
         PRINT   ""
         PRINT   "Process privileges:"
-        MOVAQ   CURPRIV, R6
+        MOVAQ   PROCPRIV, R6
         BSBW    PRIVS
 80$:    PRESENT "QUOTAS"
         BLBC    R0, 85$
@@ -1549,5 +1599,219 @@ SECFILE:
         BRB     40$
 80$:    MOVL    #SS$_NORMAL, R0
         RSB
+
+; SHOW LOGICAL[/PROCESS|/SYSTEM|/TABLE=table] [name]: translates name in
+; the table, LNM$FILE_DEV by default, and shows the equivalence and the
+; table it is in. With no name, or *, lists the names of each table the
+; table name names, in turn, sorted, under the table's name, as VMS's
+; does.
+        .ENTRY  SHOWLOG, ^M<R2, R3, R4, R5, R6, R7, R8, R9, R10, R11>
+        MOVAB   FILE_DEV, TABDSC
+        PRESENT "PROCESS"
+        BLBC    R0, 10$
+        MOVAB   PROCTAB, TABDSC
+10$:    PRESENT "SYSTEM"
+        BLBC    R0, 20$
+        MOVAB   SYSTAB, TABDSC
+20$:    GETVALUE "TABLE", TABVAL, TABVAL
+        BLBC    R0, 30$
+        MOVAB   TABVAL, TABDSC
+30$:    GETVALUE "LOGICAL_NAME", LNMDSC, LNMDSC
+        BLBC    R0, LIST
+        CMPW    LNMDSC, #1
+        BNEQ    40$
+        CMPB    LNMBUF, #^A/*/
+        BEQL    LIST
+40$:    MOVL    TABDSC, R6
+        MOVL    #1, R7
+        BSBW    PAIRS
+        BLBS    R0, 80$
+        CMPL    R0, #SS$_NOLOGTAB
+        BNEQ    50$
+        PRINT   "%SYSTEM-W-IVLOGTAB, invalid logical name table"
+        BRB     60$
+50$:    CMPL    R0, #SS$_NOLOGNAM
+        BNEQ    90$
+60$:    ADDTEXT "%SHOW-S-NOTRAN, no translation for logical name "
+        BSBW    ADDLNM
+        BSBW    SAY
+80$:    MOVL    #SS$_NORMAL, R0
+90$:    RET
+
+; LIST: lists the names of each table TABDSC names, a table at a time:
+; counts them, makes room for them, reads them into it, sorted, then
+; shows each. A name made or deleted while it reads a table may be left
+; out.
+LIST:   $GETSYIW_S ITMLST=SYSITEMS      ; the page size
+        BLBC    R0, 25$
+        CLRL    R6                      ; the table's index
+10$:    CLRL    R8                      ; its names
+15$:    BSBW    GETLNM
+        BLBC    R0, 20$
+        INCL    R8
+        BRB     15$
+20$:    CMPL    R0, #SS$_NOLOGNAM
+        BEQL    30$
+        CMPL    R0, #SS$_NOLOGTAB       ; past the last table
+        BNEQ    25$
+        TSTL    R6
+        BEQL    25$
+        MOVL    #SS$_NORMAL, R0
+25$:    RET
+30$:    MOVL    R8, R9                  ; how many
+        CMPL    R9, ROOM
+        BLEQ    35$
+        MULL3   #NAMREC, R9, R0
+        ADDL2   PAGSIZ, R0
+        DECL    R0
+        DIVL2   PAGSIZ, R0
+        $EXPREG_S PAGCNT=R0, RETADR=RANGE
+        BLBC    R0, 25$
+        MOVL    RANGE, NAMES
+        MOVL    R9, ROOM
+35$:    MOVL    NAMES, R10
+        CLRL    R11                     ; those read
+        CLRL    R8
+40$:    CMPL    R8, R9
+        BGEQ    50$
+        BSBW    GETLNM
+        BLBC    R0, 50$
+        BSBW    INSERT
+        INCL    R8
+        BRB     40$
+50$:    PRINT   ""
+        ADDTEXT "("
+        MOVAB   CURBUF, R1
+        MOVZWL  CURTAB, R2
+        BSBW    ADD
+        ADDTEXT ")"
+        BSBW    SAY
+        PRINT   ""
+        CLRL    R8
+60$:    CMPL    R8, R11
+        BGEQ    70$
+        MOVZBL  (R10), R0
+        MOVW    R0, LNMDSC
+        MOVC3   R0, 1(R10), LNMBUF
+        PUSHL   R6
+        MOVAB   CURTAB, R6
+        CLRL    R7
+        BSBW    PAIRS
+        MOVL    (SP)+, R6
+        ADDL2   #NAMREC, R10
+        INCL    R8
+        BRB     60$
+70$:    INCL    R6
+        BRW     10$
+
+; GETLNM: R6 = a table's index, R8 = a name's. LNM$NAMES, in kernel mode,
+; of the tables TABDSC names: the name to LNMDSC, its table's to CURTAB.
+; Uses R0 and R1.
+GETLNM:
+        .JSB_ENTRY
+        MOVL    TABDSC, LNMARGS+4
+        MOVL    R6, LNMARGS+8
+        MOVL    R8, LNMARGS+12
+        $CMKRNL_S ROUTIN=G^LNM$NAMES, ARGLST=LNMARGS
+        RSB
+
+; INSERT: R10 = R11 names, sorted, NAMREC bytes each. Puts LNMDSC's in
+; its place among them, those after it moved up one, and counts it. Uses
+; R0-R5, R7.
+INSERT:
+        .JSB_ENTRY  OUTPUT=<R11>, SCRATCH=<R2, R3, R4, R5, R7>
+        CLRL    R7                      ; where it goes
+10$:    CMPL    R7, R11
+        BGEQ    20$
+        MULL3   #NAMREC, R7, R1
+        ADDL2   R10, R1
+        MOVZBL  (R1)+, R0
+        CMPC5   LNMDSC, LNMBUF, #0, R0, (R1)
+        BLSSU   20$
+        INCL    R7
+        BRB     10$
+20$:    MOVL    R11, R6                 ; those after it move up
+30$:    CMPL    R6, R7
+        BLEQ    40$
+        MULL3   #NAMREC, R6, R1
+        ADDL2   R10, R1
+        SUBL3   #NAMREC, R1, R0
+        MOVC3   #NAMREC, (R0), (R1)
+        DECL    R6
+        BRB     30$
+40$:    MULL3   #NAMREC, R7, R1
+        ADDL2   R10, R1
+        MOVB    LNMDSC, (R1)+
+        MOVC3   LNMDSC, LNMBUF, (R1)
+        INCL    R11
+        RSB
+
+; PAIRS: R6 = a table name's descriptor, R7 = 1 to say the table.
+; Translates LNMDSC's name in it and shows "name" = "equivalence", then
+; each further string of a search list on a line of its own, as VMS's
+; SHOW LOGICAL does. R0 = $TRNLNM's status. Uses R0-R5.
+PAIRS:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5>
+        CLRL    EQVIDX
+        BSBB    TRANS
+        BLBC    R0, 90$
+        ADDTEXT "  "
+        BLBC    R7, 10$
+        ADDTEXT " "
+10$:    BSBW    QUOTE
+        BSBW    ADDLNM
+        BSBW    QUOTE
+        BITL    #LNM$M_TABLE, EQVATTR
+        BEQL    15$
+        ADDTEXT " [table]"
+15$:    ADDTEXT " = "
+        BSBB    QUOTEQV
+        BLBC    R7, 20$
+        ADDTEXT " ("
+        MOVAB   EQVTAB, R1
+        MOVZWL  EQVTABLEN, R2
+        BSBW    ADD
+        ADDTEXT ")"
+20$:    BSBW    SAY
+30$:    CMPL    EQVIDX, EQVMAX
+        BGEQ    80$
+        INCL    EQVIDX
+        BSBB    TRANS
+        BLBC    R0, 90$
+        ADDTEXT "        = "
+        BSBB    QUOTEQV
+        BSBW    SAY
+        BRB     30$
+80$:    MOVL    #SS$_NORMAL, R0
+90$:    RSB
+
+; TRANS: R6 = a table name's descriptor. $TRNLNM of LNMDSC's name in it,
+; the equivalence EQVIDX says, into TRNITEMS's buffers. Uses R0-R5.
+TRANS:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5>
+        $TRNLNM_S TABNAM=(R6), LOGNAM=LNMDSC, ITMLST=TRNITEMS
+        RSB
+
+; QUOTEQV: appends "equivalence", EQV's, to LINE. Uses R0-R2.
+QUOTEQV:
+        .JSB_ENTRY  SCRATCH=<R2>
+        BSBB    QUOTE
+        MOVAB   EQV, R1
+        MOVZWL  EQVLEN, R2
+        BSBW    ADD
+        BRB     QUOTE                   ; a tail call
+
+; QUOTE: appends a quote to LINE. Uses R0-R2.
+QUOTE:
+        .JSB_ENTRY  SCRATCH=<R2>
+        MOVZBL  #34, R0
+        BRW     ADDCHAR                 ; a tail call
+
+; ADDLNM: appends LNMDSC's name to LINE. Uses R0-R2.
+ADDLNM:
+        .JSB_ENTRY  SCRATCH=<R2>
+        MOVAB   LNMBUF, R1
+        MOVZWL  LNMDSC, R2
+        BRW     ADD                     ; a tail call
 
         .END    START
