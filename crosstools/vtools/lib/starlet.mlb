@@ -1059,6 +1059,7 @@ MNT$M_SYSTEM = ^X4000                   ; for every process, else for the job al
         .MACRO  $INITDEF
 INIT$_OWNER = 1                         ; the volume's owner, a UIC: the caller's by default
 INIT$_VOLPRO = 2                        ; its protection, a word: 0, all may, by default
+INIT$_SIZE = 3                          ; the ramdisk's size in blocks, a longword: its last by default
         .ENDM   $INITDEF
 
 ; $ARMDEF: an access mask: what a process wants to do to a file or a

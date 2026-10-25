@@ -17,7 +17,7 @@ $ ! TCPIP$DEVICE names the network's template device, which a program
 $ ! assigns a channel to for a socket, as TCP/IP Services' TCPIP$STARTUP
 $ ! defines it.
 $ DEFINE/SYSTEM/NOLOG TCPIP$DEVICE _BGA0:
-$ ! It makes the ramdisk, MDA0:, afresh at each boot, and mounts it for
+$ ! It makes the ramdisk, MDA0:, afresh at each boot, 1 MB, and mounts it for
 $ ! every process, /SYSTEM: a MOUNT without is the job's, STARTUP's. It
 $ ! holds TCP/IP Services' files: the hosts database, TCPIP$HOST.DAT,
 $ ! which the first hosts command makes, with LOCALHOST, and the saved
@@ -27,7 +27,7 @@ $ ! for this boot go after the MOUNT, before the data disk's, as
 $ !   TCPIP SET HOST "name" /ADDRESS=a.b.c.d /ALIAS="other"
 $ !   TCPIP SET CONFIGURATION INTERFACE WE0 /HOST=a.b.c.d /NETWORK_MASK=m.m.m.m
 $ !   TCPIP SET ROUTE /DEFAULT /GATEWAY=g.g.g.g /PERMANENT
-$ INITIALIZE MDA0: RAM
+$ INITIALIZE/SIZE=2048 MDA0: RAM
 $ MOUNT/SYSTEM MDA0: RAM
 $ ! SYS$SYSROOT is a search list, as on a VMScluster's common system
 $ ! disk: this system's own root, SYS$SPECIFIC, on the ramdisk, then the

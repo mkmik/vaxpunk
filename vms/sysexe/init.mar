@@ -6,7 +6,9 @@
 ; the ramdisk, and not mounted; MOUNT then mounts it. /OWNER_UIC=uic
 ; makes the volume that UIC's, not the process's, and
 ; /PROTECTION=(code[,...]) gives its categories that access, where they
-; have all by default (lib/protect.mar). Returns $INIT_VOL's status.
+; have all by default (lib/protect.mar). /SIZE=n makes the ramdisk n
+; blocks, as DECram's INITIALIZE/SIZE does; without it, it is as big as
+; the last time. Returns $INIT_VOL's status.
 ;
         .LIBRARY "starlet.mlb"
         .LIBRARY "sysexe.mlb"
@@ -23,7 +25,11 @@ DEVBUF: .BLKB   64
 LABBUF: .BLKB   64
 OWNER:  .LONG   0
 PROT:   .LONG   0
-ITEMS:  .BLKL   3*2+1                   ; $INIT_VOL's: those given
+SIZE:   .LONG   0
+NUMDSC: .LONG   10                      ; /SIZE's digits
+        .ADDRESS NUMBUF
+NUMBUF: .BLKB   10
+ITEMS:  .BLKL   3*3+1                   ; $INIT_VOL's: those given
 OWNER_UIC:                              ; the qualifiers, for GET_UIC and GET_PROT
         .ASCID  "OWNER_UIC"
 PROTECTION:
@@ -54,7 +60,24 @@ PROTECTION:
         MOVW    #INIT$_VOLPRO, (R2)+
         MOVAL   PROT, (R2)+
         CLRL    (R2)+
-20$:    CLRL    (R2)
+20$:    PRESENT "SIZE"
+        BLBC    R0, 40$
+        GETVALUE "SIZE", NUMDSC, NUMDSC
+        CLRL    R1                      ; its digits' value, or 0, which
+30$:    MOVZBL  NUMBUF[R1], R0          ; $INIT_VOL refuses, for %X and -
+        SUBL2   #^A/0/, R0
+        CMPL    R0, #9
+        BGTRU   35$
+        MULL2   #10, SIZE
+        ADDL2   R0, SIZE
+        AOBLSS  NUMDSC, R1, 30$
+        BRB     37$
+35$:    CLRL    SIZE
+37$:    MOVW    #4, (R2)+
+        MOVW    #INIT$_SIZE, (R2)+
+        MOVAL   SIZE, (R2)+
+        CLRL    (R2)+
+40$:    CLRL    (R2)
         $INIT_VOL_S DEVNAM=DEVICE, VOLNAM=LABEL, ITMLST=ITEMS
 90$:    RET
 

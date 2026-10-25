@@ -255,7 +255,7 @@ until the hardware or size changes; leave it.
 | 33 | `$GETDVI`, `$GETJPI` and `$GETLKI` are done at once with no AST (`getdvi.mar`, `getjpi.mar`, `sysenqdeq.mar`) | Fine on one node; the `W` and non-`W` forms behave the same |
 | 34 | AST routines get their parameter only, not R0, R1, PC and PSL (DESIGN-0002) | When a program reads them |
 | 35 | One route and one interface; no buffer lists, socket options, read and write flags or `IO$M_NOW` on sockets (`tcpip.mar`, `netdriver.mar`, DESIGN-0003, ADR-0024) | PRD-0002's work order; the sockets library will want options and flags |
-| 36 | `LIB$GET_INPUT`'s fixed-length string isn't blank padded (`getinput.mar`); `MDA0:` has a fixed size (`mddriver.mar`) | When a caller notices; `INITIALIZE/SIZE` once DCL passes qualifiers to it |
+| 36 | `LIB$GET_INPUT`'s fixed-length string isn't blank padded (`getinput.mar`); `MDA0:`'s size is `INITIALIZE/SIZE`'s, done | When a caller notices |
 
 ### Tier 4: scaffolding
 

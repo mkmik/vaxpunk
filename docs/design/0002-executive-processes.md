@@ -116,7 +116,7 @@ P1 are each process's own, S0 every process's:
 | `MMG$GL_NPAGEDYN` | then nonpaged pool, `NPAGEDYN` at boot, 1 MB, and growing up to `NPAGEVIR`, by default to `0x4FF00000`: PCBs, kernel stacks, common event blocks, timer queue entries, logical names, open files, images being activated |
 | `0x4FF00000` | the port's pages, with a network device |
 | `0x4FFF0000` | the RPB |
-| `0x50000000` | `MDA0:`'s blocks, 512 KB, once `INITIALIZE` makes them |
+| `0x50000000` | `MDA0:`'s blocks, `INITIALIZE/SIZE`'s, once `INITIALIZE` makes them |
 | `0x5FFF0000` | the boot stack's top |
 | `0x60000000` | P1: the process's `$CRETVA` pages |
 | `0x7FF00000` | `VA$C_CLI`: its command interpreter, if it has one, `DCL.EXE` |
@@ -1117,8 +1117,9 @@ system disk, `DKA0:`, a Files-11 ODS-2 volume which the PAL reads a block
 at a time with `READLBLK` (DESIGN-0001, *The disks*); the data disk,
 `DKB0:`, a disk image of the host's, which the PAL also writes, with
 `WRITELBLK`, and which keeps its volume from boot to boot; and `MDA0:`, a
-ramdisk (`mddriver.mar`), as DECram's: 1,024 blocks in pages of S0, which
-`$INIT_VOL` makes, zeroed, and which last until the system stops.
+ramdisk (`mddriver.mar`), as DECram's: blocks in pages of S0, which
+`$INIT_VOL` makes, zeroed, `INIT$_SIZE` of them or as many as the last
+time, 1,024 at first, and which last until the system stops.
 `FIL$READLBLK` and `FIL$WRITELBLK` read and write `F11$GL_VCB`'s disk
 through its driver, as VMS's XQP does
 ([ADR-0015](../adr/0015-file-system-io-through-the-disk-driver.md)):
@@ -1218,7 +1219,7 @@ does:
   the end of block's -1, entered last.
 - **`FIL$INIT`**, for `$INIT_VOL devnam, volnam, itmlst`, writes an empty volume
   on `DKB0:`, the disk's size, which the PAL's `GETMAXBLOCK` gives, or the
-  ramdisk, 1,024 blocks, as `INITIALIZE` lays one out (`crosstools/ods/docs/initialize.md`)
+  ramdisk's, as `INITIALIZE` lays one out (`crosstools/ods/docs/initialize.md`)
   ([ADR-0043](../adr/0043-volumes-the-size-of-their-disk.md)): VMS's
   default cluster and maximum files; from LBN 0, the index file, its
   boot and home blocks' clusters, the backup home block's, the backup

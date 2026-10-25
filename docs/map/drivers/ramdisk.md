@@ -10,7 +10,7 @@ refs = ["docs/adr/0009-ramdisk-writable-files-11.md", "vms/exec/mddriver.mar", "
 
 [[feature]]
 id = "ramdisk"
-title = "MDA0:, 1,024 blocks of S0 pages, made afresh by each INITIALIZE"
+title = "MDA0:, blocks of S0 pages, made afresh by each INITIALIZE"
 status = "done"
 milestone = "m0"
 note = "ADR-0009"
@@ -25,8 +25,8 @@ note = "SYSTARTUP_VMS.COM"
 [[feature]]
 id = "size"
 title = "INITIALIZE/SIZE gives its size"
-status = "todo"
-note = "PRD-0003 tier 3 #36; mddriver.mar ponytail"
+status = "done"
+note = "INIT$_SIZE; up to 255 MB of S0, as the RAM allows"
 
 [[feature]]
 id = "units"
@@ -48,12 +48,13 @@ disk, and are lost at shutdown. It was a layered product until OpenVMS
 V8.2 made it part of the system. Sites used it for scratch files and for
 files read often.
 
-vaxpunk's is `vms/exec/mddriver.mar`: 1,024 blocks in pages of S0 from
-`0x50000000`, which the first `INITIALIZE MDA0:` makes, zeroed; until
+vaxpunk's is `vms/exec/mddriver.mar`: blocks in pages of S0 from
+`0x50000000`, which the first `INITIALIZE MDA0:` makes, zeroed;
+`INITIALIZE/SIZE=n` (`$INIT_VOL`'s `INIT$_SIZE`) gives how many, and
+without it there are as many as the last time, 1,024 at first. Until
 then the device is offline
 ([ADR-0009](../../adr/0009-ramdisk-writable-files-11.md)). The
 disks' start I/O routine copies blocks in and out. It was the first disk
 the file system could write. `SYSTARTUP_VMS.COM` makes and mounts it at
 each boot as `SYS$SPECIFIC`, where the UAF, TCP/IP's files and anything
-written to `SYS$SYSTEM` or `SYS$MANAGER` go. Its size is fixed until
-`INITIALIZE` takes `/SIZE` (PRD-0003 tier 3 #36).
+written to `SYS$SYSTEM` or `SYS$MANAGER` go; it makes it 2,048 blocks.

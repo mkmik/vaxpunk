@@ -1023,7 +1023,8 @@ LITERAL
 ! $INITDEF
 LITERAL
     INIT$_OWNER = 1,  ! the volume's owner, a UIC: the caller's by default
-    INIT$_VOLPRO = 2;  ! its protection, a word: 0, all may, by default
+    INIT$_VOLPRO = 2,  ! its protection, a word: 0, all may, by default
+    INIT$_SIZE = 3;  ! the ramdisk's size in blocks, a longword: its last by default
 
 ! $ARMDEF
 LITERAL

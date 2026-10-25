@@ -123,6 +123,8 @@ VOLOWNER:                               ; its owner and protection
         .LONG   0
 VOLPROT:
         .LONG   0
+RAMSIZE:                                ; INIT$_SIZE's, or 0
+        .LONG   0
 ; The reserved files: name, record type and attributes, record size,
 ; characteristics, first LBN and blocks, which FIL$INIT fills in for
 ; INDEXF.SYS, BITMAP.SYS and the MFD.
@@ -1593,11 +1595,13 @@ RESHDR:
 ; volume labelled volnam, up to 12 characters, on the disk devnam names,
 ; DKB0:, the data disk, or MDA0:, the ramdisk, which is made afresh
 ; first, zeroed. The volume is the disk's size, which the PAL gives
-; (GETMAXBLOCK). The disk mustn't be mounted. The item list may give
-; INIT$_OWNER, the volume's owner, the caller's UIC by default, and
-; INIT$_VOLPRO, its protection, 0 by default, which lets all use it.
-; SS$_WRITLCK for DKA0:, SS$_DEVMOUNT if a volume is mounted there,
-; SS$_BADPARAM for a label too long or empty, or an item too short,
+; (GETMAXBLOCK), or the ramdisk's. The disk mustn't be mounted. The item
+; list may give INIT$_OWNER, the volume's owner, the caller's UIC by
+; default, INIT$_VOLPRO, its protection, 0 by default, which lets all use
+; it, and INIT$_SIZE, the ramdisk's size in blocks, as many as the last
+; time by default. SS$_WRITLCK for DKA0:, SS$_DEVMOUNT if a volume is
+; mounted there, SS$_BADPARAM for a label too long or empty, an item too
+; short, or INIT$_SIZE of 0, too big (MD$CREATE) or not for the ramdisk,
 ; SS$_INSFMEM if there isn't the memory for the ramdisk, SS$_NOPRIV for a
 ; volume someone else owns, without VOLPRO, SS$_MEDOFL without the disk,
 ; SS$_DEVICEFULL if it is too small for a volume.
@@ -1622,6 +1626,7 @@ RESHDR:
         MOVL    SCH$GL_CURPCB, R1
         MOVL    PCB$L_UIC(R1), VOLOWNER
         CLRL    VOLPROT
+        CLRL    RAMSIZE
         MOVL    12(AP), R10             ; itmlst
         BEQL    45$
         BSBW    INITITEMS
@@ -1639,6 +1644,9 @@ RESHDR:
         BLBC    R0, 80$
         MOVL    F11$GL_VCB, R1
         BBS     #VCB$V_RAMDISK, VCB$L_STATUS(R1), 47$
+        MOVL    #SS$_BADPARAM, R0
+        TSTL    RAMSIZE
+        BNEQ    80$
         MOVZBL  VCB$B_UNIT(R1), R0
         CALL_PAL #PAL$_GETMAXBLOCK
         MOVL    R0, R3
@@ -1646,7 +1654,10 @@ RESHDR:
         TSTL    R3
         BEQL    80$
         BRB     50$
-47$:    BSBW    MD$CREATE
+47$:    MOVL    RAMSIZE, R1
+        BNEQ    48$
+        MOVL    MD$GL_BLOCKS, R1
+48$:    BSBW    MD$CREATE
         BLBC    R0, 80$
         MOVL    MD$GL_BLOCKS, R3
 50$:    MOVL    R8, R1
@@ -1659,8 +1670,9 @@ RESHDR:
 85$:    MOVL    #SS$_ACCVIO, R0
 90$:    RET
 
-; INITITEMS: R10 = $INIT_VOL's item list. Takes INIT$_OWNER into VOLOWNER
-; and INIT$_VOLPRO into VOLPROT, and skips the others. R0 = SS$_NORMAL,
+; INITITEMS: R10 = $INIT_VOL's item list. Takes INIT$_OWNER into VOLOWNER,
+; INIT$_VOLPRO into VOLPROT and INIT$_SIZE into RAMSIZE, and skips the
+; others. R0 = SS$_NORMAL,
 ; SS$_ACCVIO if the caller can't read it, or SS$_BADPARAM for an item
 ; too short. Uses R0-R2 and R10.
 INITITEMS:
@@ -1679,10 +1691,17 @@ INITITEMS:
         MOVL    (R1), VOLOWNER
         BRB     30$
 20$:    CMPW    2(R10), #INIT$_VOLPRO
-        BNEQ    30$
+        BNEQ    25$
         CMPL    R2, #2
         BLSSU   87$
         MOVZWL  (R1), VOLPROT
+        BRB     30$
+25$:    CMPW    2(R10), #INIT$_SIZE
+        BNEQ    30$
+        CMPL    R2, #4
+        BLSSU   87$
+        MOVL    (R1), RAMSIZE
+        BEQL    87$
 30$:    ADDL2   #12, R10
         BRB     10$
 70$:    MOVL    #SS$_NORMAL, R0

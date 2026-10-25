@@ -182,8 +182,8 @@ interpreter. It is linked high in P1, which tells the executive it is one
   `SGN$GB_STARTUP_P1`, where `$GETSYI` finds them. Next it defines the system
   logical name `TCPIP$DEVICE` as `_BGA0:`, the network's template device,
   which a program assigns a channel to for a socket, as TCP/IP Services'
-  `TCPIP$STARTUP.COM` defines it. Then `INITIALIZE MDA0: RAM` makes the
-  ramdisk, empty, and `MOUNT/SYSTEM MDA0: RAM` mounts it for every
+  `TCPIP$STARTUP.COM` defines it. Then `INITIALIZE/SIZE=2048 MDA0: RAM` makes the
+  ramdisk, 2,048 blocks, empty, and `MOUNT/SYSTEM MDA0: RAM` mounts it for every
   process and prints `%MOUNT-I-MOUNTED, RAM mounted on _MDA0:`. Next it makes
   `SYS$SYSROOT` a search list, as a VMScluster's common system disk has
   it: `SYS$SPECIFIC`, this system's own root, is the ramdisk, `MDA0:`,
@@ -387,8 +387,9 @@ interpreter. It is linked high in P1, which tells the executive it is one
   `  SYSTEM       logged out at`, the time, and deletes the process; the
   swapper then starts LOGINOUT on the console again, which asks for the
   next username.
-- `INITIALIZE MDA0: label`, which `SYSTARTUP_VMS.COM` runs at boot,
-  runs `INIT.EXE`, whose `$INIT_VOL` makes the ramdisk, `MDA0:`, 512 KB of memory, and writes an empty volume on it,
+- `INITIALIZE/SIZE=n MDA0: label`, which `SYSTARTUP_VMS.COM` runs at boot,
+  runs `INIT.EXE`, whose `$INIT_VOL` makes the ramdisk, `MDA0:`, n blocks of memory
+  (as many as the last time without `/SIZE`, 1,024 at first), and writes an empty volume on it,
   SYSTEM's, `[1,4]`, unless `/OWNER_UIC` says otherwise. Each file made
   there is its maker's, which may do anything with it; its group may read
   and run it, the world nothing, unless `SET PROTECTION` says otherwise.
