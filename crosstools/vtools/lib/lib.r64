@@ -360,9 +360,9 @@ MACRO
 
 ! $VCBDEF
 LITERAL
-    VCB$K_LENGTH = 844,
+    VCB$K_LENGTH = 868,
     VCB$V_MOUNTED = 0,  ! a volume is mounted on it
-    VCB$V_WRITE = 1,  ! the device can be written
+    VCB$V_WRITE = 1,  ! the volume can be written: the device can be, and it isn't mounted /NOWRITE
     VCB$V_RAMDISK = 2;  ! the device is the ramdisk, MDA0:, not one of the PAL's disks
 MACRO
     VCB$L_STATUS = 0, 0, 32, 0 %,  ! VCB$V_
@@ -378,10 +378,12 @@ MACRO
     VCB$L_OWNER = 564, 0, 32, 0 %,  ! the volume's owner, a UIC
     VCB$W_PROT = 568, 0, 16, 0 %,  ! and protection, a file header's mask: who may use its files
     VCB$L_SBMAPBLKS = 572, 0, 32, 0 %,  ! the storage bitmap's blocks, past its SCB
-    VCB$T_LOGNAM = 576, 0, 0, 0 %,  ! the logical name $MOUNT defined for it, .ASCIC, which $DISMOU deletes
+    VCB$T_LOGNAM = 576, 0, 0, 0 %,  ! the logical name $MOUNT was given for it, .ASCIC, or empty, which $DISMOU deletes
     VCB$L_IBMAPBLKS = 832, 0, 32, 0 %,  ! the index file bitmap's blocks
     VCB$L_MAXFILES = 836, 0, 32, 0 %,  ! the files the volume may hold, the bits of that bitmap it uses
-    VCB$L_FREE = 840, 0, 32, 0 %;  ! its free blocks, or -1 until FIL$FREEBLOCKS counts them
+    VCB$L_FREE = 840, 0, 32, 0 %,  ! its free blocks, or -1 until FIL$FREEBLOCKS counts them
+    VCB$L_PID = 844, 0, 32, 0 %,  ! a private mount's job, its master process's PID, to which the disk is allocated; 0 for a system mount
+    VCB$T_DISKNAM = 848, 0, 0, 0 %;  ! DISK$ and the label it was mounted with, .ASCIC, 17 characters, which $DISMOU deletes too
 
 ! $UCBDEF
 LITERAL

@@ -49,7 +49,7 @@
         .EXTERNAL SCH$SCHED, SCH$DACEFC_ALL, SGN$GW_QUANTUM
         .EXTERNAL EXE$ALONONPAGED, EXE$DEANONPGDSIZ, MMG$CREPAG, MMG$DELPAG
         .EXTERNAL MMG$SETPRT, EXE$RMVTIMQ, EXE$USRSTART, EXE$CLISTART
-        .EXTERNAL FIL$OPENFILE, FIL$OPENSHR, FIL$READIMG, RMS$RUNDOWN, LCK$RUNDOWN
+        .EXTERNAL FIL$OPENFILE, FIL$OPENSHR, FIL$READIMG, RMS$RUNDOWN, LCK$RUNDOWN, FIL$RUNDOWN
         .EXTERNAL EXE$OUTZSTRING, EXE$OUTCSTRING, EXE$OUTHEX, EXE$OUTCRLF
         .EXTERNAL LNM$CREATE, LNM$CREPRC, LNM$DELPROC, SCH$QAST, EXE$FLUSHAST, IOC$CANCEL, SYS$EXIT
         .EXTERNAL MB$FINDNUM, MB$SEND, EXE$GQ_SYSTIME, TT$OWNER, TT$FDT
@@ -1224,7 +1224,8 @@ DELP1:
 
 ; EXE$RUNDOWN: R4 = the current PCB. Deletes its process's subprocesses,
 ; as $DELPRC deletes another process, then gives back what it holds:
-; what EXE$IMGRUNDOWN does, then its other files, before its other locks,
+; what EXE$IMGRUNDOWN does, then its other files, and the volumes its
+; job mounted privately if it is the master (FIL$RUNDOWN), before its other locks,
 ; among them their access arbitration locks, and ASTs, its logical
 ; names, its pages in P1, its other channels, and its slot, unless
 ; $DELPRC gave that to another process already, and sends its termination
@@ -1251,6 +1252,7 @@ EXE$RUNDOWN::
         BSBW    EXE$IMGRUNDOWN
         CLRL    R0
         BSBW    RMS$RUNDOWN
+        BSBW    FIL$RUNDOWN
         CLRL    R0
         BSBW    LCK$RUNDOWN
         DSBINT  #IPL$_SYNCH

@@ -39,7 +39,7 @@ title = "LNM$JOB and LNM$GROUP: each job's table and each UIC group's; GRPNAM"
 status = "todo"
 milestone = "m1"
 needs = ["/exec/privileges"]
-note = "PRD-0003 tier 1 #1 and *Privileges, UICs and protection*"
+note = "PRD-0003 tier 1 #1 and *Privileges, UICs and protection*; a private MOUNT's names go in the master process's table until LNM$JOB (f11.mar MNTTAB)"
 
 [[feature]]
 id = "access-modes"

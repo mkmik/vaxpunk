@@ -745,7 +745,8 @@
   is disconnected, until it reads or writes there.
 1 DISMOUNT
   Dismounts a volume. Its files can't be named again until it is
-  mounted.
+  mounted. A volume mounted /SYSTEM requires SYSNAM; a private one, a
+  process of the job that mounted it.
 
   Format
 
@@ -1247,11 +1248,14 @@
   The image, SYS$SYSTEM:image-name.EXE, reads the command with
   LIB$GET_FOREIGN.
 1 MOUNT
-  Mounts a disk's volume, so its files can be named.
+  Mounts a disk's volume, so its files can be named. Without /SYSTEM
+  the volume is private: the disk is allocated to your job, which alone
+  may use it, its logical names are in your process table, and it is
+  dismounted when you log out.
 
   Format
 
-    MOUNT device-name [volume-label [logical-name]]
+    MOUNT device-name volume-label [logical-name]
 2 Parameters
 
  device-name
@@ -1260,14 +1264,18 @@
 
  volume-label
 
-  The label the volume must have. Without one, the volume is mounted
-  whatever its label.
+  The label the volume must have. With /OVERRIDE=IDENTIFICATION, any
+  or none.
 
  logical-name
 
-  A logical name for the disk, which MOUNT defines in the system table
-  and DISMOUNT deletes. Without one, it is DISK$volume-label.
+  A logical name for the disk, besides DISK$volume-label, which MOUNT
+  always defines. DISMOUNT deletes both.
 2 Qualifiers
+/OVERRIDE
+  /OVERRIDE=IDENTIFICATION
+
+  Mounts the volume whatever its label. Not with /SYSTEM.
 /OWNER_UIC
   /OWNER_UIC=uic
 
@@ -1277,6 +1285,20 @@
 
   The protection the volume has while it is mounted. See Specify
   Protection.
+/SYSTEM
+  /SYSTEM
+
+  Mounts the volume for every process, its logical names in the system
+  table. Requires SYSNAM.
+/WRITE
+  /WRITE (default)
+  /NOWRITE
+
+  /NOWRITE mounts the volume read only.
+2 Examples
+
+  $ MOUNT/SYSTEM DKB0: DATA
+  $ MOUNT/OVERRIDE=IDENTIFICATION DKB0:
 1 ON
   Says what a command procedure does when a command fails, or when you
   press CTRL/Y.

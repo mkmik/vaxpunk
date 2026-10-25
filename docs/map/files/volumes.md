@@ -59,15 +59,21 @@ note = "ADR-0012 follow-up; FIL$SELECT knows DKA0:, DKB0: and MDA0: only"
 
 [[feature]]
 id = "qualifiers"
-title = "MOUNT /SYSTEM, /GROUP, /NOWRITE; INITIALIZE /CLUSTER_SIZE, /HEADERS; DISMOUNT /ABORT"
+title = "MOUNT /GROUP, /SHARE; INITIALIZE /CLUSTER_SIZE, /HEADERS; DISMOUNT /ABORT"
 status = "todo"
-note = "PRD-0003 tier 3 #24; f11.mar: $MOUNT and $DISMOU take no flags"
+note = "PRD-0003 tier 3 #24; f11.mar: $MOUNT takes no MNT$M_GROUP or MNT$M_SHARE, $DISMOU no flags"
+
+[[feature]]
+id = "private"
+title = "Private mounts: the disk allocated to the job, dismounted when it ends; MNT$M_SYSTEM, MNT$M_NOWRITE, MNT$M_OVR_IDENT"
+status = "done"
+note = "VCB$L_PID, the job's master process, which FIL$CHKALLOC checks for $ASSIGN and RMS and FIL$RUNDOWN dismounts; VMS keeps it in UCB$L_PID (t8y:/exec/qio#allocate)"
 
 [[feature]]
 id = "logical-names"
-title = "MOUNT defines DISK$label, or the logical name it is given"
+title = "MOUNT defines DISK$label, and the logical name it is given"
 status = "done"
-note = "MNT$_LOGNAM, in the system table as MOUNT/SYSTEM's; the system disk's DISK$label at boot; $DISMOU deletes it"
+note = "MNT$_LOGNAM, both in the system table for MOUNT/SYSTEM, else the process's; the system disk's DISK$label at boot; $DISMOU deletes them"
 
 [[feature]]
 id = "foreign"
@@ -153,8 +159,11 @@ ramdisk ([ADR-0007](../../adr/0007-system-disk-files-11-and-rms.md),
 `$MOUNT`, `$DISMOU` and `$INIT_VOL` are system services, which
 `MOUNT.EXE`, `INIT.EXE` and `DISMOUNT.EXE` (`t8y:/utils/mount`) call, and
 `SYSTARTUP_VMS.COM` mounts the ramdisk and the data disk. Each mount
-defines `DISK$label` in the system table, or the logical name `MOUNT`'s
-third parameter gives, as the device, `_DKB0:`, and `DISMOUNT` deletes
-it. A volume has at most 4,096 blocks whatever the disk's size, and the
-only qualifiers are `/OWNER_UIC` and `/PROTECTION` (PRD-0003 tier 3 #24
-and #36).
+defines `DISK$label`, and the logical name `MOUNT`'s third parameter
+gives, as the device, `_DKB0:`, in the system table for `MOUNT/SYSTEM`,
+and `DISMOUNT` deletes them. A mount without `/SYSTEM` is private: the
+VCB holds the job's master process's PID, as VMS's UCB holds the
+allocating process's, another job can't assign a channel to the disk or
+open its files, the names go in that process's table, and process
+deletion dismounts it. `/GROUP` and `/SHARE` are still missing (PRD-0003
+tier 3 #24).

@@ -183,8 +183,8 @@ interpreter. It is linked high in P1, which tells the executive it is one
   logical name `TCPIP$DEVICE` as `_BGA0:`, the network's template device,
   which a program assigns a channel to for a socket, as TCP/IP Services'
   `TCPIP$STARTUP.COM` defines it. Then `INITIALIZE MDA0: RAM` makes the
-  ramdisk, empty, and `MOUNT MDA0: RAM` mounts it and prints
-  `%MOUNT-I-MOUNTED, RAM mounted on _MDA0:`. Next it makes
+  ramdisk, empty, and `MOUNT/SYSTEM MDA0: RAM` mounts it for every
+  process and prints `%MOUNT-I-MOUNTED, RAM mounted on _MDA0:`. Next it makes
   `SYS$SYSROOT` a search list, as a VMScluster's common system disk has
   it: `SYS$SPECIFIC`, this system's own root, is the ramdisk, `MDA0:`,
   and `SYS$COMMON`, the root every system shares, is the system disk.
@@ -235,11 +235,15 @@ interpreter. It is linked high in P1, which tells the executive it is one
   If the DHCP server offered a DNS server, as QEMU's offers `10.0.2.3`, it
   defines `TCPIP$BIND_SERVER000` as that one instead of `8.8.8.8`. It prints
   `%TCPIP-I-SET, WE0: ...`, and creates the process `TCPIP$TELNET`, which runs `TELNETD.EXE` and waits
-  on TCP port 23 for `SET HOST` from another vaxpunk. Then its `MOUNT DKB0:`
-  mounts the data disk, whatever its label, if an `INITIALIZE DKB0:`
-  wrote a volume there, at this boot or an earlier one, and prints
-  `%MOUNT-I-MOUNTED, label mounted on _DKB0:`. On a blank disk it prints
-  `%SYSTEM-W-NOHOMEBLK` instead, and the disk stays unmounted. Its last
+  on TCP port 23 for `SET HOST` from another vaxpunk. Then it mounts the
+  data disk, whatever its label, if an `INITIALIZE DKB0:` wrote a volume
+  there, at this boot or an earlier one: `MOUNT/OVERRIDE=IDENTIFICATION
+  DKB0:` mounts it for STARTUP alone, `F$GETDVI("DKB0:", "VOLNAM")` reads
+  its label, `DISMOUNT DKB0:` dismounts it, and `MOUNT/SYSTEM DKB0:
+  label`, which must be given the label, mounts it for every process.
+  Each `MOUNT` prints `%MOUNT-I-MOUNTED, label mounted on _DKB0:`. On a
+  blank disk the first prints `%SYSTEM-W-NOHOMEBLK` instead, and the
+  disk stays unmounted. Its last
   command is `LOGOUT`, which, with no terminal, prints
   `  SYSTEM       job terminated at  9-OCT-2026 10:00:00.00`, as VMS's STARTUP
   does, and deletes the process.
@@ -388,10 +392,14 @@ interpreter. It is linked high in P1, which tells the executive it is one
   SYSTEM's, `[1,4]`, unless `/OWNER_UIC` says otherwise. Each file made
   there is its maker's, which may do anything with it; its group may read
   and run it, the world nothing, unless `SET PROTECTION` says otherwise.
-  `MOUNT MDA0: label` runs `MOUNT.EXE`, whose `$MOUNT` mounts it, defines
-  `DISK$label` as `_MDA0:` in the system table, or the logical name
-  given after the label, and prints
-  `%MOUNT-I-MOUNTED, label mounted on _MDA0:`. Then `COPY` makes files
+  `MOUNT/SYSTEM MDA0: label` runs `MOUNT.EXE`, whose `$MOUNT` mounts it,
+  defines `DISK$label`, and the logical name given after the label if
+  there is one, as `_MDA0:` in the system table, and prints
+  `%MOUNT-I-MOUNTED, label mounted on _MDA0:`. Without `/SYSTEM` the
+  volume is the job's, as on VMS: the disk is allocated to the job's
+  master process, its names go in that process's table, another job's
+  `$ASSIGN` gets `%SYSTEM-W-DEVALLOC` and RMS `%RMS-E-DNR`, and
+  `FIL$RUNDOWN` dismounts it when the master process goes. Then `COPY` makes files
   there (`COPY WELCOME.TXT MDA0:[000000]`, from `[SYSMGR]`, the default), `DELETE` deletes them
   (`DELETE MDA0:[000000]WELCOME.TXT;1`), and `DIRECTORY`, `TYPE` and `RUN`
   read them as they do the system disk's.
@@ -416,7 +424,7 @@ interpreter. It is linked high in P1, which tells the executive it is one
   records with carriage return carriage control, then reads lines from
   `SYS$INPUT` and `$PUT`s each, until CTRL/Z, echoed as `*EXIT*`.
 - `DISMOUNT DKB0:` runs `DISMOUNT.EXE`, whose `$DISMOU` makes the file
-  system forget the volume, and deletes the logical name `MOUNT`
+  system forget the volume, and deletes the logical names `MOUNT`
   defined, unless a process has a file on it open, so it can be mounted
   again, or initialized afresh. The system disk can't
   be dismounted (`%SYSTEM-F-DEVACTIVE`).
@@ -653,7 +661,7 @@ initializes, with `/PROTECTION`, and mounts `DKB0:`, made afresh, which `SYSTART
 couldn't mount at boot, copies a file there and lists
 it, makes `[SUB.DEEP]` there with `CREATE/DIRECTORY`, copies a file
 into it and types another with `CREATE`, runs `SHOW DEVICES`, tries to dismount `DKA0:`, dismounts
-`DKB0:`, fails to list it, mounts it again, without a label, lists
+`DKB0:`, fails to list it, mounts it again, with the logical name `WORK`, lists
 `[SUB.DEEP]`, fails to delete `SUB.DIR`, runs `SHOW PROCESS` and `SHOW SYSTEM`, then runs
 CTRLC and types CTRL/C, types CTRL/Y at the prompt, stops SPIN, with a
 CTRL/C, and SLEEPER with CTRL/Y and continues them, and EDIT while it
@@ -666,7 +674,10 @@ owner after `SET FILE/OWNER_UIC=[200,1]` and `SET PROTECTION=(W)`, with
 `DIRECTORY/OWNER/PROTECTION` after each, and can't once `DKB0:` is
 mounted `/PROTECTION=(W)`; with `SET SECURITY` it gives `DATA.TXT` ACEs
 that let PROTTEST read it, or not, which `SHOW SECURITY` shows, and a
-directory default ACEs its new files get; adds JOE, of UIC `[200,1]`, with `MCR
+directory default ACEs its new files get; mounts `DKB0:` without
+`/SYSTEM`, for its job alone, which a process of another job can't list,
+dismount or mount, and with `/NOWRITE` and `/OVERRIDE=IDENTIFICATION`,
+and sees another job's private mount go with its process; adds JOE, of UIC `[200,1]`, with `MCR
 AUTHORIZE`, shows him and lists the users in `SYSUAF.LIS`, adds the
 identifier `PAYROLL` and grants it to him, changes
 SYSTEM's password with `SET PASSWORD`, logs out and in as JOE, who has

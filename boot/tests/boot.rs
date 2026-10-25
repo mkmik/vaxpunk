@@ -356,7 +356,7 @@ const DATA_DISK: Phase = Phase {
             "no translation for logical name HOME",
             1,
             concat!(
-                "INIT/PROTECTION=(S:RWED,O:RWED,G:RWED,W:RWED) DKB0: DATA\rMOUNT DKB0: DATA\r",
+                "INIT/PROTECTION=(S:RWED,O:RWED,G:RWED,W:RWED) DKB0: DATA\rMOUNT/SYSTEM DKB0: DATA\r",
                 "SHOW DEVICES DKB0\r",
                 "SHOW LOGICAL DISK$DATA\rSHOW LOGICAL DISK$VAXPUNK\r",
                 "COPY SYS$SYSDEVICE:[SYSMGR]WELCOME.TXT DKB0:[000000]DATA.TXT\r",
@@ -382,7 +382,7 @@ const DATA_DISK: Phase = Phase {
             concat!(
                 "DIR DKB0:[000000]\rSHOW DEVICES\rSHOW DEVICES/FULL DKB0\rSHOW DEVICES/FULL OPA0:\r",
                 "DISMOUNT DKA0:\rDISMOUNT DKB0:\rSHOW LOGICAL DISK$DATA\r",
-                "DIR DKB0:[000000]\rMOUNT DKB0: DATA WORK:\rSHOW DEVICES DKB0\rSHOW LOGICAL WORK\r",
+                "DIR DKB0:[000000]\rMOUNT/SYSTEM DKB0: DATA WORK:\rSHOW DEVICES DKB0\rSHOW LOGICAL WORK\r",
                 "DIR DKB0:[SUB.DEEP]\rDELETE DKB0:[000000]SUB.DIR;1\r",
                 "SHOW PROCESS/QUOTAS\rSHOW SYSTEM\r",
             ),
@@ -612,7 +612,7 @@ const PROTECTION: Phase = Phase {
         (
             "PROTTEST: [200,1] read",
             2,
-            "DISMOUNT DKB0:\rMOUNT/PROTECTION=(W) DKB0:\rRUN PROTTEST\r",
+            "DISMOUNT DKB0:\rMOUNT/SYSTEM/PROTECTION=(W) DKB0: DATA\rRUN PROTTEST\r",
         ),
         // A new version has its predecessor's protection.
         (
@@ -702,7 +702,7 @@ const ACLS: Phase = Phase {
             "COPYQ: done",
             1,
             concat!(
-                "DISMOUNT DKB0:\rMOUNT DKB0:\rSET SECURITY/OWNER=[1,4] DKB0:[000000]DATA.TXT\r",
+                "DISMOUNT DKB0:\rMOUNT/SYSTEM DKB0: DATA\rSET SECURITY/OWNER=[1,4] DKB0:[000000]DATA.TXT\r",
                 "RUN PROTTEST\r",
                 "SET SECURITY/ACL=(IDENTIFIER=[200,1],ACCESS=READ) DKB0:[000000]DATA.TXT\r",
                 "RUN PROTTEST\r",
@@ -750,7 +750,7 @@ const ACLS: Phase = Phase {
                 "SHOW SECURITY DKB0:[ACL]A.TXT;1\r",
                 "SET SECURITY/ACL/DELETE DKB0:[000000]DATA.TXT\r",
                 "SET SECURITY/OWNER=[200,1] DKB0:[000000]DATA.TXT\r",
-                "DISMOUNT DKB0:\rMOUNT/PROTECTION=(W) DKB0:\r",
+                "DISMOUNT DKB0:\rMOUNT/SYSTEM/PROTECTION=(W) DKB0: DATA\r",
                 "WRITE SYS$OUTPUT \"ACLS: \", \"done\"\r",
             ),
         ),
@@ -864,7 +864,7 @@ const SET_FILE: Phase = Phase {
             concat!(
                 "SET FILE/EXPIRATION_DATE=31-FEB-2030 DKB0:[VL]A.TXT\r",
                 "SET FILE/ATTRIBUTE=(RFM:ODD) DKB0:[VL]A.TXT\r",
-                "SET VOLUME/LABEL=SCRATCH DKB0:\rDISMOUNT DKB0:\rMOUNT DKB0:\r",
+                "SET VOLUME/LABEL=SCRATCH DKB0:\rDISMOUNT DKB0:\rMOUNT/SYSTEM DKB0: SCRATCH\r",
                 "WRITE SYS$OUTPUT \"SETFILE: \", \"label\"\r",
             ),
         ),
@@ -872,7 +872,7 @@ const SET_FILE: Phase = Phase {
             "SETFILE: label",
             1,
             concat!(
-                "SET VOLUME/LABEL=DATA DKB0:\rDISMOUNT DKB0:\rMOUNT/PROTECTION=(W) DKB0:\r",
+                "SET VOLUME/LABEL=DATA DKB0:\rDISMOUNT DKB0:\rMOUNT/SYSTEM/PROTECTION=(W) DKB0: DATA\r",
                 "WRITE SYS$OUTPUT \"SETFILE: \", \"done\"\r",
             ),
         ),
@@ -1513,6 +1513,79 @@ const DETACHED: Phase = Phase {
     ],
 };
 
+/// MOUNT/SYSTEM/OVERRIDE=IDENTIFICATION conflicts; MOUNT without a label
+/// asks for one, and without /SYSTEM mounts the volume for the job: the
+/// disk is allocated, DISK$DATA is in the process's table, and another
+/// job, a process RUN/UIC makes, can't list it, dismount it or mount it;
+/// DISMOUNT deletes the name. MOUNT/NOWRITE write-locks it, so a COPY
+/// there fails; MOUNT/OVERRIDE=IDENTIFICATION mounts it whatever label it
+/// is given, defining WORK as well as DISK$DATA. A process of its own that
+/// mounts it and goes leaves it dismounted. Then MOUNT/SYSTEM, for USERS.
+const MOUNTS: Phase = Phase {
+    name: "mounts",
+    secs: 30,
+    steps: &[
+        (
+            "DETACH: done",
+            1,
+            "DISMOUNT DKB0:\rMOUNT/SYSTEM/OVERRIDE=IDENTIFICATION DKB0:\rMOUNT DKB0:\r",
+        ),
+        (
+            "_Label: ",
+            1,
+            concat!(
+                "DATA\rSHOW DEVICES DKB0\rSHOW LOGICAL DISK$DATA\r",
+                "CREATE MDA0:[000000]OTHER.COM\r$ SET NOON\r",
+                "$ WRITE SYS$OUTPUT \"OTHER: \", \"dir\"\r$ DIRECTORY DKB0:[000000]\r",
+                "$ WRITE SYS$OUTPUT \"OTHER: \", \"dismount\"\r$ DISMOUNT DKB0:\r",
+                "$ WRITE SYS$OUTPUT \"OTHER: \", \"mount\"\r$ MOUNT DKB0: DATA\r",
+                "$ WRITE SYS$OUTPUT \"OTHER: \", \"done\"\r\x1a",
+                "RUN/UIC=[1,5]/INPUT=MDA0:[000000]OTHER.COM/OUTPUT=OPA0:/ERROR=OPA0: SYS$SYSTEM:DCL\r",
+            ),
+        ),
+        (
+            "OTHER: done",
+            1,
+            concat!(
+                "DISMOUNT DKB0:\rSHOW LOGICAL/PROCESS DISK$DATA\r",
+                "MOUNT/SYSTEM/NOWRITE DKB0: DATA\rSHOW DEVICES DKB0\r",
+                "COPY SYS$SYSDEVICE:[SYSMGR]WELCOME.TXT DKB0:[000000]RO.TXT\rDISMOUNT DKB0:\r",
+                "MOUNT/OVERRIDE=IDENTIFICATION DKB0: XYZ WORK\rSHOW LOGICAL WORK\rDISMOUNT DKB0:\r",
+                "WRITE SYS$OUTPUT \"MOUNTS: \", \"mounter\"\r",
+            ),
+        ),
+        (
+            "MOUNTS: mounter",
+            1,
+            concat!(
+                "CREATE MDA0:[000000]MOUNTER.COM\r$ MOUNT DKB0: DATA\r$ SHOW DEVICES DKB0\r\x1a",
+                "CREATE MDA0:[000000]GONE.COM\r$ AGAIN:\r$ IF F$GETDVI(\"DKB0:\", \"MNT\") THEN GOTO AGAIN\r",
+                "$ SHOW DEVICES DKB0\r\x1a",
+                "RUN/UIC=[1,5]/INPUT=MDA0:[000000]MOUNTER.COM/OUTPUT=OPA0:/ERROR=OPA0: SYS$SYSTEM:DCL\r",
+            ),
+        ),
+        // The first was SYSTEM's own SHOW DEVICES.
+        (
+            "Mounted alloc",
+            2,
+            "@MDA0:[000000]GONE\rMOUNT/SYSTEM DKB0: DATA\r",
+        ),
+    ],
+    lines: &[
+        "%MOUNT-F-CONFQUAL, conflicting qualifiers",
+        "DKB0:                   Mounted alloc        0  DATA",
+        "\"DISK$DATA\" = \"_DKB0:\" (LNM$PROCESS_TABLE)",
+        "OTHER: dir\n%DIRECT-E-OPENIN, error opening DKB0:[000000]*.*;* as input\n-RMS-E-DNR, device not ready, not mounted, or unavailable",
+        "OTHER: dismount\n%SYSTEM-W-DEVALLOC, device already allocated to another user",
+        "OTHER: mount\n%SYSTEM-W-DEVALLOC, device already allocated to another user",
+        "$ SHOW LOGICAL/PROCESS DISK$DATA\n%SHOW-S-NOTRAN, no translation for logical name DISK$DATA",
+        "DKB0:                   Mounted wrtlck       0  DATA",
+        "DKB0:[000000]RO.TXT\n%RMS-E-WLK, device currently write locked",
+        "\"WORK\" = \"_DKB0:\" (LNM$PROCESS_TABLE)",
+        "DKB0:                   Online               0",
+    ],
+};
+
 /// The processes STARTUP and SNOOP ran, which print as they go, done long
 /// before: STARTUP's SLEEPER and SVCTEST's NAPPER say they hibernate
 /// before SLEEPER does, and the CPU then idles, taking clock interrupts.
@@ -1596,7 +1669,7 @@ const USERS: Phase = Phase {
                 "MCR AUTHORIZE SHOW/IDENTIFIER/FULL PAYROLL\rMCR AUTHORIZE SHOW/RIGHTS JOE\r",
                 "OPEN/WRITE F DKB0:[000000]PAY.TXT\rWRITE F \"PAYROLL: \", \"readable\"\rCLOSE F\r",
                 "SET SECURITY/PROTECTION=(W)/ACL=(IDENTIFIER=PAYROLL,ACCESS=READ) DKB0:[000000]PAY.TXT\r",
-                "DISMOUNT DKB0:\rMOUNT DKB0:\r",
+                "DISMOUNT DKB0:\rMOUNT/SYSTEM DKB0: DATA\r",
                 "SET PASSWORD\rwrongpw\rSET PASSWORD\rmanager\rnewpw\rnewpw\r",
                 "DEFINE/SYSTEM SYS$WELCOME \"Have a nice day\"\rLOGOUT\r",
             ),
@@ -1716,6 +1789,7 @@ const PHASES: &[Phase] = &[
     MEMORY,
     MAILBOXES,
     DETACHED,
+    MOUNTS,
     STARTUP,
     USERS,
 ];
