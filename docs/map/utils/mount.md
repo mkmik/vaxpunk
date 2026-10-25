@@ -1,7 +1,7 @@
 +++
 title = "INITIALIZE, MOUNT, DISMOUNT"
 summary = "Write an empty volume on a disk, mount it for use, dismount it"
-aka = ["INITIALIZE", "INIT", "MOUNT", "DISMOUNT", "INIT.EXE", "MOUNT.EXE", "DISMOUNT.EXE", "$INIT_VOL", "$MOUNT", "$DISMOU", "MOUNT/SYSTEM", "MOUNT/FOREIGN"]
+aka = ["INITIALIZE", "INIT", "MOUNT", "DISMOUNT", "INIT.EXE", "MOUNT.EXE", "DISMOUNT.EXE", "$INIT_VOL", "$MOUNT", "$DISMOU", "MOUNT/SYSTEM", "MOUNT/NOWRITE", "MOUNT/OVERRIDE", "MOUNT/GROUP", "MOUNT/FOREIGN"]
 kind = "core"
 intent = "goal"
 research = "done"
@@ -59,9 +59,16 @@ note = "PRD-0003 tier 2 #11"
 
 [[feature]]
 id = "mount-qualifiers"
-title = "MOUNT/SYSTEM, /GROUP, private mounts, /NOWRITE, /OVERRIDE"
+title = "MOUNT/SYSTEM, private mounts, /NOWRITE, /OVERRIDE=IDENTIFICATION"
+status = "done"
+note = "PRD-0003 tier 3 #24, checked against OpenVMS V8.4-2L1: a private mount allocates the disk to the job (t8y:/files/volumes#private), its names in the process table where VMS has LNM$JOB; CONFQUAL for /SYSTEM/OVERRIDE=IDENTIFICATION, _Label: without a label"
+
+[[feature]]
+id = "group-share"
+title = "MOUNT/GROUP and /SHARE: a volume for the UIC group, or shared by those who mount it"
 status = "todo"
-note = "PRD-0003 tier 3 #24; f11.mar ponytail: every mount is /SYSTEM"
+needs = ["/exec/logical-names#job-group"]
+note = "PRD-0003 tier 3 #24; /GROUP's names go in LNM$GROUP, with GRPNAM; a private mount's names move to LNM$JOB then"
 
 [[feature]]
 id = "dismount-qualifiers"
@@ -155,9 +162,12 @@ images that call `$INIT_VOL`, `$MOUNT` and `$DISMOU` in the executive
 ([ADR-0009](../../adr/0009-ramdisk-writable-files-11.md),
 [ADR-0012](../../adr/0012-data-disk-writable-files-11.md)). They
 work on the data disk, `DKB0:`, and the ramdisk, `MDA0:`, which
-`SYSTARTUP_VMS.COM` initializes and mounts at each boot; `DKA0:` is
-mounted by the executive, write locked. `/OWNER_UIC` and `/PROTECTION`
-are the only qualifiers (PRD-0003 tier 3 #24). Every mount is a system
-mount, whose logical name, `DISK$label` or `MOUNT`'s third parameter,
-goes in the system table, and a volume on `DKB0:` is the disk's size
+`SYSTARTUP_VMS.COM` initializes and mounts `/SYSTEM` at each boot;
+`DKA0:` is mounted by the executive, write locked. `MOUNT` takes a label,
+or asks for one, unless `/OVERRIDE=IDENTIFICATION`; without `/SYSTEM`
+the volume is the job's, dismounted when its master process goes, and
+its logical names, `DISK$label` and `MOUNT`'s third parameter, go in that
+process's table, else in the system's. `/NOWRITE`, `/OWNER_UIC` and
+`/PROTECTION` are the other qualifiers (PRD-0003 tier 3 #24), and a
+volume on `DKB0:` is the disk's size
 ([ADR-0043](../../adr/0043-volumes-the-size-of-their-disk.md)).

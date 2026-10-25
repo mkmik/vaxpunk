@@ -80,7 +80,7 @@
 
         .EXTERNAL SCH$GL_CURPCB, EXE$ALONONPAGED, EXE$DEANONPGDSIZ, EXE$PROBER_DSC
         .EXTERNAL FIL$READHDR, FIL$READVBN, FIL$SEARCHDIR, FIL$MATCH, FIL$EOF, FIL$ISDIR
-        .EXTERNAL FIL$SELECT, FIL$CREHDR, FIL$WRITEHDR, FIL$SETNAME, FIL$EXTEND
+        .EXTERNAL FIL$SELECT, FIL$CHKALLOC, FIL$CREHDR, FIL$WRITEHDR, FIL$SETNAME, FIL$EXTEND
         .EXTERNAL FIL$ENTER, FIL$REMOVE, FIL$DELHDR, FIL$WRITEVBN, FIL$MKDIR
         .EXTERNAL FIL$LOCK, FIL$UNLOCK, FIL$CHKHDR, FIL$CHKPRO, FIL$ACLINHERIT
         .EXTERNAL F11$GW_FID, F11$GL_VCB, F11$AB_DIRBLK, LNM$TRNLOG, LNM$EQUIV
@@ -729,7 +729,8 @@ MERGE:
         RSB
 
 ; CHECK: checks the parts in FIELDS: the device is DKA0: or MDA0:, with a
-; volume mounted, which becomes F11$GL_VCB, the directory
+; volume mounted that isn't another job's private one, which becomes
+; F11$GL_VCB, the directory
 ; and the name and type are made of letters, digits, $, _ and -, with
 ; dots between the directory's names, wildcards in any of them (WILDDIR
 ; checks the directory's dots), and the version is a number up to 32767,
@@ -743,8 +744,10 @@ CHECK:
         BSBW    FIL$SELECT
         BLBC    R0, 80$
         MOVL    F11$GL_VCB, R1
-        BBS     #VCB$V_MOUNTED, VCB$L_STATUS(R1), 7$
-        MOVL    #RMS$_DNR, R0
+        BBC     #VCB$V_MOUNTED, VCB$L_STATUS(R1), 6$
+        BSBW    FIL$CHKALLOC
+        BLBS    R0, 7$
+6$:     MOVL    #RMS$_DNR, R0
         RSB
 7$:     ADDL3   #1, FIELDS+8, R1        ; the directory, inside its brackets
         SUBL3   #2, FIELDS+12, R2

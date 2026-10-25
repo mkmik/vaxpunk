@@ -11,7 +11,9 @@
 ; disk's UCB.
 ; FIL$MOUNT mounts a volume: it reads the home block and keeps the index
 ; file's header, through which every other file's header is found;
-; $DISMOU forgets it. The
+; $DISMOU forgets it. A volume $MOUNT mounts without MNT$M_SYSTEM is its
+; job's: the disk is allocated to the job's master process, which
+; FIL$CHKALLOC checks, and FIL$RUNDOWN dismounts it when that goes. The
 ; rest reads what VMS's XQP reads: a file's header by its number, its
 ; blocks through the header's map, and a directory's records, with
 ; wildcards. f11wrt.mar writes them. FIL$CHKPRO checks a process's
@@ -52,6 +54,7 @@
         .EXTERNAL IOC$ALLOCIRP, IOC$REQCOM, IOC$AB_DKA0, IOC$AB_DKB0, IOC$AB_MDA0
         .EXTERNAL EXE$PROBER_DSC, RMS$VOLIDLE, SCH$GL_CURPCB, SCH$WAIT, SCH$WAKEPCB
         .EXTERNAL XQP$GL_IRP, FIL$ACLCHK, LNM$GL_SYSTEM, LNM$CREATE, LNM$DELETE
+        .EXTERNAL SCH$GL_PCBVEC, SCH$GL_MAXPIX
 
 BLOCK = 512
 MAXREAD = 127                           ; blocks a READLBLK reads, below 64 KB
@@ -146,6 +149,8 @@ LABEL:  .BLKB   13                      ; the label $MOUNT asks for, .ASCIC
 LOGNAM: .BLKB   256                     ; and the logical name it gives the device, .ASCIC
         .ALIGN  LONG
 MNTSET: .LONG   0                       ; bit 0: $MOUNT has MNTOWNER, bit 1 MNTPROT
+MNTFLAGS:                               ; its MNT$_FLAGS
+        .LONG   0
 MNTOWNER:                               ; the owner and protection it gives the volume
         .LONG   0
 MNTPROT:
@@ -375,12 +380,13 @@ FIL$SELECT::
         RSB
 
 ; FIL$MOUNT: R1 = the label the volume must have, .ASCIC, or 0 for any,
-; R2 = a logical name for the device, .ASCIC, or 0 for DISK$label.
+; R2 = a logical name for the device besides DISK$label, .ASCIC, or 0.
 ; Mounts F11$GL_VCB's volume: reads its home block and INDEXF.SYS's
 ; header, which maps the others, and its owner and protection, and, if
-; the disk can be written, finds the storage bitmap, defines the logical
-; name in the system table as the device, _DDCU:, and reports it on
-; the console. R0 = SS$_NORMAL,
+; it can be written, finds the storage bitmap, defines DISK$label and
+; the logical name as the device, _DDCU:, in the system table, or, if
+; VCB$L_PID is a job's, that job's (MNTLNM), and reports it on the
+; console. R0 = SS$_NORMAL,
 ; SS$_NOHOMEBLK if there is no ODS-2 home block, SS$_INCVOLLABEL if the
 ; label isn't R1's, or the disk's error. Holding FIL$LOCK, but at boot,
 ; when no other process is there to want it. Uses R0-R5.
@@ -388,7 +394,7 @@ FIL$MOUNT::
         .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5>
         MOVL    F11$GL_VCB, R5
         MOVL    R1, R4
-        CLRB    VCB$T_LOGNAM(R5)        ; DISK$label, unless R2 is a name
+        CLRB    VCB$T_LOGNAM(R5)        ; none, unless R2 is a name
         TSTL    R2
         BEQL    5$
         PUSHR   #^M<R4, R5>
@@ -480,55 +486,149 @@ FIL$MOUNT::
 90$:    RSB
 
 ; MNTLNM: R5 = a VCB FIL$MOUNT mounted a volume on. Makes its
-; VCB$T_LOGNAM, unless it has one, DISK$ and the label, and defines it in
-; the system table as the device, _DDCU:. Uses R0-R4.
+; VCB$T_DISKNAM, DISK$ and the label, and defines it, and VCB$T_LOGNAM
+; if it has one, as the device, _DDCU:, in MNTTAB's table. Uses R0-R4.
 ; ponytail: a name LNM$CREATE can't make, for want of pool, is left out,
 ; and the volume mounted all the same; VMS's MOUNT fails.
 MNTLNM:
         .JSB_ENTRY  SCRATCH=<R2, R3, R4>
         PUSHR   #^M<R5, R6, R7, R8, R9>
-        TSTB    VCB$T_LOGNAM(R5)
-        BNEQ    10$
-        MOVAB   VCB$T_LOGNAM+1(R5), R3
+        MOVAB   VCB$T_DISKNAM+1(R5), R3
         MOVL    DISK, (R3)+
         MOVB    DISK+4, (R3)+
         MOVZBL  VCB$T_VOLNAME(R5), R0
-        ADDB3   #5, R0, VCB$T_LOGNAM(R5)
+        ADDB3   #5, R0, VCB$T_DISKNAM(R5)
         MOVC3   R0, VCB$T_VOLNAME+1(R5), (R3)
         MOVL    (SP), R5
-10$:    SUBL2   #8, SP                  ; the device's name, the equivalence
+        SUBL2   #8, SP                  ; the device's name, the equivalence
         MOVB    #^A/_/, (SP)
         MOVL    VCB$T_DEVNAM(R5), 1(SP)
         MOVB    #^A/:/, 5(SP)
         MOVL    SP, R8
         MOVL    #6, R9
-        MOVZBL  VCB$T_LOGNAM(R5), R7
-        MOVAB   VCB$T_LOGNAM+1(R5), R6
-        MOVL    G^LNM$GL_SYSTEM, R5
+        MOVL    R5, R1
+        BSBW    MNTTAB
+        MOVL    R2, R5
+        MOVL    8(SP), R1
+        MOVZBL  VCB$T_DISKNAM(R1), R7
+        MOVAB   VCB$T_DISKNAM+1(R1), R6
         BSBW    LNM$CREATE
-        ADDL2   #8, SP
+        MOVL    8(SP), R1
+        MOVZBL  VCB$T_LOGNAM(R1), R7
+        BEQL    10$
+        MOVAB   VCB$T_LOGNAM+1(R1), R6
+        BSBW    LNM$CREATE
+10$:    ADDL2   #8, SP
         POPR    #^M<R5, R6, R7, R8, R9>
         RSB
 
+; DMTLNM: R1 = a VCB with a volume mounted. Deletes the names MNTLNM
+; defined for it. Uses R0, R2, R6 and R7.
+DMTLNM:
+        .JSB_ENTRY  SCRATCH=<R2, R6, R7>
+        BSBB    MNTTAB
+        TSTL    R2
+        BEQL    90$
+        PUSHL   R1
+        MOVZBL  VCB$T_DISKNAM(R1), R7
+        BEQL    80$                     ; none: FIL$RUNDOWN's
+        MOVAB   VCB$T_DISKNAM+1(R1), R6
+        BSBW    LNM$DELETE
+        MOVL    (SP), R1
+        MOVZBL  VCB$T_LOGNAM(R1), R7
+        BEQL    80$
+        MOVAB   VCB$T_LOGNAM+1(R1), R6
+        BSBW    LNM$DELETE
+80$:    MOVL    (SP)+, R1
+90$:    RSB
+
+; MNTTAB: R1 = a VCB with a volume mounted. R2 = the table its logical
+; names are in: the system's, or a private mount's job's master
+; process's LNM$PROCESS_TABLE, or 0 once that process is gone. Uses R0.
+MNTTAB:
+        .JSB_ENTRY  OUTPUT=<R2>
+        MOVL    G^LNM$GL_SYSTEM, R2
+        MOVL    VCB$L_PID(R1), R0
+        BEQL    90$
+        MOVZWL  R0, R2                  ; the PID's index
+        MOVL    @SCH$GL_PCBVEC[R2], R2
+        BEQL    90$
+        CMPL    PCB$L_PID(R2), R0
+        BNEQ    80$
+        MOVL    PCB$L_LNMTAB(R2), R2
+        RSB
+80$:    CLRL    R2
+90$:    RSB
+
+; JOBPID: R4 = a PCB. R0 = the PID of its job's master process: its own,
+; or its owner's, or that one's owner's, up to a process with none.
+; Keeps every other register.
+JOBPID:
+        .JSB_ENTRY
+        PUSHR   #^M<R1, R4>
+        DSBINT  #IPL$_SYNCH             ; the PCBs
+10$:    MOVL    PCB$L_OWNER(R4), R0
+        BEQL    20$
+        MOVZWL  R0, R1
+        CMPL    R1, SCH$GL_MAXPIX
+        BGEQU   20$
+        MOVL    @SCH$GL_PCBVEC[R1], R1
+        BEQL    20$
+        CMPL    PCB$L_PID(R1), R0
+        BNEQ    20$
+        MOVL    R1, R4
+        BRB     10$
+20$:    MOVL    PCB$L_PID(R4), R0
+        ENBINT
+        POPR    #^M<R1, R4>
+        RSB
+
+; FIL$CHKALLOC: R1 = a disk's VCB. R0 = SS$_NORMAL if the current
+; process may use its volume: none or a system mount's, or one its own
+; job mounted privately; else SS$_DEVALLOC, the disk being allocated to
+; another job. Keeps every other register.
+FIL$CHKALLOC::
+        .JSB_ENTRY
+        TSTL    VCB$L_PID(R1)
+        BEQL    10$
+        PUSHL   R4
+        MOVL    SCH$GL_CURPCB, R4
+        BSBB    JOBPID
+        MOVL    (SP)+, R4
+        CMPL    R0, VCB$L_PID(R1)
+        BEQL    10$
+        MOVZWL  #SS$_DEVALLOC, R0
+        RSB
+10$:    MOVL    #SS$_NORMAL, R0
+        RSB
+
 ; $MOUNT itmlst: mounts the Files-11 volume on the disk the item list's
-; MNT$_DEVNAM names, DKA0:, DKB0: or MDA0:, if its label is MNT$_VOLNAM's.
-; MNT$_OWNER and MNT$_VPROT, a UIC and a protection mask, stand for the
-; volume's own while it is mounted, and take VOLPRO. MNT$_LOGNAM is a
-; logical name for the device, DISK$label without one, which goes in the
-; system table. SS$_DEVMOUNT if one is mounted there already,
-; SS$_BADPARAM for an item too short, SS$_IVLOGNAM for a logical name
-; longer than 255. Every process sees it, as VMS's MOUNT/SYSTEM, which
-; takes SYSNAM: SS$_NOPRIV without.
-; ponytail: no other items or flags; VMS lets the volume's owner give
-; MNT$_OWNER and MNT$_VPROT without VOLPRO.
+; MNT$_DEVNAM names, DKA0:, DKB0: or MDA0:, if its label is MNT$_VOLNAM's,
+; or whatever its label with MNT$M_OVR_IDENT in MNT$_FLAGS. With
+; MNT$M_SYSTEM every process may use it, which takes SYSNAM, and its
+; logical names, DISK$label and MNT$_LOGNAM's name if there is one, go in
+; the system table. Without, it is the job's: the disk is allocated to
+; the job's master process, its names go in that one's table, another
+; job's $ASSIGN and RMS fail with SS$_DEVALLOC and RMS$_DNR, and it is
+; dismounted when that process goes. MNT$M_NOWRITE write-locks it while
+; it is mounted. MNT$_OWNER and MNT$_VPROT, a UIC and a protection mask,
+; stand for the volume's own while it is mounted, and take VOLPRO.
+; SS$_DEVMOUNT if one is mounted there already, SS$_DEVALLOC if another
+; job's is, SS$_BADPARAM for an item too short, a flag it doesn't know,
+; no MNT$_VOLNAM without MNT$M_OVR_IDENT, or MNT$M_OVR_IDENT with
+; MNT$M_SYSTEM, which VMS's MOUNT refuses as CONFQUAL, SS$_IVLOGNAM for
+; a logical name longer than 255.
+; vaxpunk: a private mount's names go in LNM$PROCESS_TABLE, its job's
+; master process's, where VMS's go in LNM$JOB, which vaxpunk hasn't yet.
+; ponytail: no other items or flags, so no MNT$M_GROUP or MNT$M_SHARE;
+; VMS lets the volume's owner give MNT$_OWNER and MNT$_VPROT without
+; VOLPRO.
         .ENTRY  EXE$MOUNT, ^M<R2, R3, R4, R5, R6, R7, R8>
-        MOVL    SCH$GL_CURPCB, R1
-        MOVL    #SS$_NOPRIV, R0
-        IFNPRIV SYSNAM, 90$, R1
         CLRQ    R6                      ; the device name: its address, length
         CLRB    LABEL
         CLRB    LOGNAM
         CLRL    MNTSET
+        CLRL    MNTFLAGS
         MOVL    4(AP), R8
 10$:    IFNORD  #4, (R8), 85$
         TSTL    (R8)
@@ -566,30 +666,59 @@ MNTLNM:
         BISL2   #1, MNTSET
         BRB     30$
 27$:    CMPW    2(R8), #MNT$_VPROT
-        BNEQ    30$
+        BNEQ    28$
         CMPL    R2, #2
         BLSSU   89$
         MOVW    (R1), MNTPROT
         BISL2   #2, MNTSET
+        BRB     30$
+28$:    CMPW    2(R8), #MNT$_FLAGS
+        BNEQ    30$
+        CMPL    R2, #4
+        BLSSU   89$
+        MOVL    (R1), MNTFLAGS
 30$:    ADDL2   #12, R8
         BRB     10$
 40$:    MOVL    #SS$_IVDEVNAM, R0
         TSTL    R7
         BEQL    90$
-        TSTL    MNTSET
-        BEQL    45$
-        MOVL    SCH$GL_CURPCB, R1
+        MOVL    #SS$_BADPARAM, R0
+        BITL    #^C<MNT$M_NOWRITE!MNT$M_OVR_IDENT!MNT$M_SYSTEM>, MNTFLAGS
+        BNEQ    90$
+        BITL    #MNT$M_OVR_IDENT, MNTFLAGS
+        BEQL    41$
+        BITL    #MNT$M_SYSTEM, MNTFLAGS
+        BNEQ    90$
+        CLRB    LABEL                   ; any label
+        BRB     42$
+41$:    TSTB    LABEL
+        BEQL    90$
+42$:    MOVL    SCH$GL_CURPCB, R4
         MOVL    #SS$_NOPRIV, R0
-        IFNPRIV VOLPRO, 90$, R1
+        BITL    #MNT$M_SYSTEM, MNTFLAGS
+        BEQL    43$
+        IFNPRIV SYSNAM, 90$
+43$:    TSTL    MNTSET
+        BEQL    45$
+        IFNPRIV VOLPRO, 90$
 45$:    BSBW    FIL$LOCK
         MOVL    R6, R1
         MOVL    R7, R2
         BSBW    FIL$SELECT
         BLBC    R0, 80$
         MOVL    F11$GL_VCB, R1
+        BSBW    FIL$CHKALLOC
+        BLBC    R0, 80$
         MOVL    #SS$_DEVMOUNT, R0
         BBS     #VCB$V_MOUNTED, VCB$L_STATUS(R1), 80$
-        MOVAB   LABEL, R1
+        BITL    #MNT$M_SYSTEM, MNTFLAGS
+        BNEQ    46$
+        BSBW    JOBPID                  ; the job's, allocated to it
+        MOVL    R0, VCB$L_PID(R1)
+46$:    BITL    #MNT$M_NOWRITE, MNTFLAGS
+        BEQL    47$
+        BICL2   #1@VCB$V_WRITE, VCB$L_STATUS(R1)
+47$:    MOVAB   LABEL, R1
         TSTB    (R1)
         BNEQ    50$
         CLRL    R1
@@ -598,9 +727,12 @@ MNTLNM:
         BNEQ    55$
         CLRL    R2
 55$:    BSBW    FIL$MOUNT
-        BLBC    R0, 80$
         MOVL    F11$GL_VCB, R1
-        BBC     #0, MNTSET, 60$
+        BLBS    R0, 57$
+        CLRL    VCB$L_PID(R1)           ; not mounted: as it was
+        BISL2   #1@VCB$V_WRITE, VCB$L_STATUS(R1)
+        BRB     80$
+57$:    BBC     #0, MNTSET, 60$
         MOVL    MNTOWNER, VCB$L_OWNER(R1)
 60$:    BBC     #1, MNTSET, 80$
         MOVW    MNTPROT, VCB$W_PROT(R1)
@@ -616,16 +748,14 @@ MNTLNM:
 90$:    RET
 
 ; $DISMOU devnam, flags: dismounts the volume on the disk devnam names,
-; DKB0: or MDA0:: the file system forgets it, and the logical name
-; $MOUNT defined for it goes, and $MOUNT may mount it again, or
-; $INIT_VOL write another there. SS$_DEVNOTMOUNT if none is mounted
-; there, SS$_DEVACTIVE for the system disk, DKA0:, or while a process has
-; a file on the volume open. SYSNAM, as $MOUNT, or SS$_NOPRIV.
+; DKB0: or MDA0:, as DISMNT does, and $MOUNT may mount it again, or
+; $INIT_VOL write another there. A system mount's takes SYSNAM, as
+; $MOUNT, else SS$_NOPRIV; a private one's, a process of its job, else
+; SS$_DEVALLOC. SS$_DEVNOTMOUNT if none is mounted there, SS$_DEVACTIVE
+; for the system disk, DKA0:, or while a process has a file on the
+; volume open.
 ; ponytail: no flags.
         .ENTRY  EXE$DISMOU, ^M<R2, R3, R4, R6, R7>
-        MOVL    SCH$GL_CURPCB, R1
-        MOVL    #SS$_NOPRIV, R0
-        IFNPRIV SYSNAM, 90$, R1
         MOVL    4(AP), R1
         BSBW    EXE$PROBER_DSC
         BLBC    R0, 90$
@@ -641,16 +771,63 @@ MNTLNM:
         MOVAB   F11$AB_DKA0, R2
         CMPL    R1, R2
         BEQL    80$
-        BSBW    RMS$VOLIDLE
+        TSTL    VCB$L_PID(R1)
+        BEQL    10$
+        BSBW    FIL$CHKALLOC
         BLBC    R0, 80$
-        BICL2   #1@VCB$V_MOUNTED, VCB$L_STATUS(R1)
-        MOVZBL  VCB$T_LOGNAM(R1), R7    ; and its logical name goes
-        MOVAB   VCB$T_LOGNAM+1(R1), R6
-        MOVL    G^LNM$GL_SYSTEM, R2
-        BSBW    LNM$DELETE
-        MOVL    #SS$_NORMAL, R0
+        BRB     20$
+10$:    MOVL    SCH$GL_CURPCB, R4
+        MOVL    #SS$_NOPRIV, R0
+        IFNPRIV SYSNAM, 80$
+20$:    BSBB    DISMNT
 80$:    BSBW    FIL$UNLOCK
 90$:    RET
+
+; DISMNT: R1 = a VCB with a volume mounted, not DKA0:'s. Dismounts it,
+; unless a process has a file on it open: the file system forgets it,
+; its logical names go (DMTLNM), the disk is no longer allocated to the
+; job a private mount gave it to, and the volume can be written again,
+; as DKB0:'s and MDA0:'s can. R0 = SS$_NORMAL or SS$_DEVACTIVE. Holding
+; FIL$LOCK. Uses R0, R2-R4, R6 and R7.
+DISMNT:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R6, R7>
+        BSBW    RMS$VOLIDLE
+        BLBC    R0, 90$
+        BSBW    DMTLNM
+        BICL2   #1@VCB$V_MOUNTED, VCB$L_STATUS(R1)
+        BISL2   #1@VCB$V_WRITE, VCB$L_STATUS(R1)
+        CLRL    VCB$L_PID(R1)
+        MOVL    #SS$_NORMAL, R0
+90$:    RSB
+
+; FIL$RUNDOWN: R4 = the current PCB, of a process that goes, its files
+; closed. Dismounts the volumes mounted privately for its job, if it is
+; the job's master process, as VMS's process deletion does. Uses R0-R3.
+; ponytail: one a subprocess still has a file open on, since this
+; doesn't wait for the subprocesses to go, stays mounted, for every
+; process, without its names, until a DISMOUNT.
+FIL$RUNDOWN::
+        .JSB_ENTRY  SCRATCH=<R2, R3>
+        PUSHR   #^M<R4, R5, R6, R7>
+        MOVL    PCB$L_PID(R4), R5
+        BSBW    FIL$LOCK
+        MOVAB   F11$AB_DKA0, R1
+10$:    BBC     #VCB$V_MOUNTED, VCB$L_STATUS(R1), 20$
+        CMPL    VCB$L_PID(R1), R5
+        BNEQ    20$
+        BSBB    DISMNT
+        BLBS    R0, 20$
+        BSBW    DMTLNM                  ; still open: anyone's
+        CLRB    VCB$T_DISKNAM(R1)
+        CLRB    VCB$T_LOGNAM(R1)
+        CLRL    VCB$L_PID(R1)
+20$:    ADDL2   #VCB$K_LENGTH, R1
+        MOVAB   F11$A_VCBEND, R0
+        CMPL    R1, R0
+        BLSSU   10$
+        BSBW    FIL$UNLOCK
+        POPR    #^M<R4, R5, R6, R7>
+        RSB
 
 ; FIL$FREEBLOCKS: R0 = the free blocks on F11$GL_VCB's volume, which
 ; must be mounted: VCB$L_FREE, which the first call after $MOUNT counts,

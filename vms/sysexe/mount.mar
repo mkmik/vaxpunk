@@ -1,14 +1,18 @@
         .TITLE  MOUNT   Mounts a Files-11 volume
-        .IDENT  /V0.3/
+        .IDENT  /V0.4/
 ;
-; DCL's MOUNT device [label [logical-name]] runs this: $MOUNT mounts the
-; volume on the device if its label is that one, or whatever it is
-; without one, as /OVERRIDE=IDENTIFICATION does on VMS, defines the
-; logical name, with no colon, or DISK$label without one, as the device
-; in the system table, and the executive reports it on the console. /OWNER_UIC=uic and /PROTECTION=(code[,...]) stand for the
-; volume's own owner and protection while it is mounted, a protection's
-; categories given that access, the others all (lib/protect.mar).
-; Returns $MOUNT's status.
+; DCL's MOUNT device label [logical-name] runs this: $MOUNT mounts the
+; volume on the device if its label is that one, defines DISK$label and
+; the logical name, with no colon, as the device, and the executive
+; reports it on the console. Without /SYSTEM the volume is the job's,
+; its names in the process's table, and it is dismounted when the job
+; ends; /SYSTEM makes it every process's, its names in the system table.
+; /OVERRIDE=IDENTIFICATION mounts it whatever its label, which may be
+; left out, but not with /SYSTEM: %MOUNT-F-CONFQUAL, as on VMS.
+; /NOWRITE write-locks it while it is mounted. /OWNER_UIC=uic and
+; /PROTECTION=(code[,...]) stand for the volume's own owner and
+; protection while it is mounted, a protection's categories given that
+; access, the others all (lib/protect.mar). Returns $MOUNT's status.
 ;
         .LIBRARY "starlet.mlb"
         .LIBRARY "sysexe.mlb"
@@ -16,11 +20,14 @@
 
         .EXTERNAL GET_PROT, GET_UIC
 
+INHIB = ^X10000000                      ; STS$M_INHIB_MSG: reported already
+MOUNT$_CONFQUAL = ^X1072802C            ; conflicting qualifiers
+
         .PSECT  DATA, NOEXE, WRT, LONG
 ITEMS:  .WORD   64, MNT$_DEVNAM         ; each a descriptor too, which GETVALUE fills
         .ADDRESS DEVBUF
         .LONG   0
-        .BLKL   3*4+1                   ; the rest: those given
+        .BLKL   3*5+1                   ; the rest: those given
 LABEL:  .LONG   64                      ; a descriptor of the label
         .ADDRESS LABBUF
 LOGNAM: .LONG   255                     ; and of the logical name
@@ -30,6 +37,7 @@ LABBUF: .BLKB   64
 LOGBUF: .BLKB   255
 OWNER:  .LONG   0
 PROT:   .LONG   0
+FLAGS:  .LONG   0                       ; MNT$_FLAGS
 OWNER_UIC:                              ; the qualifiers, for GET_UIC and GET_PROT
         .ASCID  "OWNER_UIC"
 PROTECTION:
@@ -37,7 +45,21 @@ PROTECTION:
 
         .PSECT  CODE, EXE, LONG
         .ENTRY  START, ^M<R2>
-        GETVALUE "DEVICE", ITEMS, ITEMS
+        PRESENT "SYSTEM"
+        BLBC    R0, 2$
+        BISL2   #MNT$M_SYSTEM, FLAGS
+2$:     PRESENT "OVERRIDE.IDENTIFICATION"
+        BLBC    R0, 4$
+        BISL2   #MNT$M_OVR_IDENT, FLAGS
+        BITL    #MNT$M_SYSTEM, FLAGS
+        BEQL    4$
+        PRINT   "%MOUNT-F-CONFQUAL, conflicting qualifiers"
+        MOVL    #MOUNT$_CONFQUAL!INHIB, R0
+        RET
+4$:     PRESENT "WRITE"
+        BLBS    R0, 6$
+        BISL2   #MNT$M_NOWRITE, FLAGS
+6$:     GETVALUE "DEVICE", ITEMS, ITEMS
         MOVAB   ITEMS+12, R2
         GETVALUE "LABEL", LABEL, LABEL
         BLBC    R0, 10$                 ; no label
@@ -75,7 +97,11 @@ PROTECTION:
         MOVW    #MNT$_VPROT, (R2)+
         MOVAL   PROT, (R2)+
         CLRL    (R2)+
-30$:    CLRL    (R2)
+30$:    MOVW    #4, (R2)+
+        MOVW    #MNT$_FLAGS, (R2)+
+        MOVAL   FLAGS, (R2)+
+        CLRL    (R2)+
+        CLRL    (R2)
         $MOUNT_S ITMLST=ITEMS
 90$:    RET
 

@@ -61,6 +61,9 @@ DVIITEMS:                               ; what $GETDVIW returns of it
         .WORD   4, DVI$_SWL
         .ADDRESS V_SWL
         .LONG   0
+        .WORD   4, DVI$_ALL
+        .ADDRESS V_ALL
+        .LONG   0
         .WORD   4, DVI$_STS
         .ADDRESS V_STS
         .LONG   0
@@ -88,6 +91,7 @@ DVIITEMS:                               ; what $GETDVIW returns of it
         .LONG   0
 V_MNT:  .LONG   0                       ; 1 if a volume is mounted,
 V_SWL:  .LONG   0                       ; 1 if it is read only,
+V_ALL:  .LONG   0                       ; 1 if it is allocated, mounted privately,
 V_STS:  .LONG   0                       ; UCB$M_ONLINE if the device is there,
 V_ERRCNT:                               ; the errors it reported,
         .LONG   0
@@ -138,6 +142,8 @@ S_MOUNTED:
         .ASCIC  "Mounted"
 S_WRTLCK:
         .ASCIC  "Mounted wrtlck"
+S_ALLOC:
+        .ASCIC  "Mounted alloc"
 S_ONLINE:
         .ASCIC  "Online"
 S_OFFLINE:
@@ -723,6 +729,9 @@ SCAN:
         MOVAB   S_ONLINE, R1
 25$:    TSTL    V_MNT
         BEQL    30$
+        MOVAB   S_ALLOC, R1
+        TSTL    V_ALL
+        BNEQ    30$
         MOVAB   S_MOUNTED, R1
         TSTL    V_SWL
         BEQL    30$
@@ -745,7 +754,12 @@ SCAN:
         MOVL    #8, R3
         BSBW    DCL$ADDDEC
 40$:    BSBW    DCL$SAY
-        BRW     10$
+        TSTL    V_ALL                   ; allocated and write-locked: on a line of its own
+        BEQL    50$
+        TSTL    V_SWL
+        BEQL    50$
+        PRINT   "                        wrtlck"
+50$:    BRW     10$
 90$:    RSB
 
 ; FULLDEV: writes SHOW DEVICES/FULL's paragraph of the device $GETDVIW

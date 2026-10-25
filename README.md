@@ -98,7 +98,7 @@ disk, `DKB0:`, is another, `out/datadisk.img`, which QEMU attaches
 read-write and `run-qemu.sh` makes, blank, the first time
 ([ADR-0012](docs/adr/0012-data-disk-writable-files-11.md)). Once
 `INITIALIZE DKB0: label` has written a volume there, each boot mounts it,
-with the `MOUNT DKB0:` in `SYS$MANAGER:SYSTARTUP_VMS.COM`, which says
+whatever its label, with the `MOUNT`s in `SYS$MANAGER:SYSTARTUP_VMS.COM`, which say
 `NOHOMEBLK` until then, and what you put there stays; delete the file to
 start afresh. `SHOW
 DEVICES` lists the disks and what is mounted on them:

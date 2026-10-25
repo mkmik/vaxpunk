@@ -41,7 +41,7 @@
         .EXTERNAL EXE$ALONONPAGED, EXE$DEANONPGDSIZ
         .EXTERNAL LNM$TRNLOG, DK$FDT, DK$STARTIO, TT$FINDUNIT, TT$CANCEL, FT$FDT
         .EXTERNAL NET$FDT, NET$CANCEL, NET$FINDUNIT, MB$CANCEL, MB$FINDUNIT
-        .EXTERNAL F11$AB_DKA0, F11$AB_DKB0, F11$AB_MDA0, XQP$GL_IRP, XQP$PERFORM
+        .EXTERNAL F11$AB_DKA0, F11$AB_DKB0, F11$AB_MDA0, XQP$GL_IRP, XQP$PERFORM, FIL$CHKALLOC
 
         .PSECT  EXEC$DATA, NOEXE, WRT, QUAD
 IOC$AB_UCB::                            ; the devices' UCBs, which $ASSIGN looks through
@@ -82,6 +82,7 @@ RWAITQ: .ADDRESS RWAITQ, RWAITQ         ; the processes waiting for I/O quota, S
 ; underscore, which is dropped, or doesn't translate. That must be a
 ; device, DKA0, DKB0, MDA0, BGA0, FTA0, a terminal, OPA0, TNAn or FTAn,
 ; a network unit, BGnn, or a mailbox, MBnn, with a colon or without.
+; SS$_DEVALLOC for a disk another job mounted privately (FIL$CHKALLOC).
 ; A channel the command interpreter assigns, in supervisor mode, is one
 ; of PCB$L_CLICHANS, which outlive the image, as on VMS, where image
 ; rundown deassigns only user mode's: DCL's at the CTRL/Y prompt too.
@@ -117,7 +118,11 @@ RWAITQ: .ADDRESS RWAITQ, RWAITQ         ; the processes waiting for I/O quota, S
         BSBW    MB$FINDUNIT             ; a mailbox, MBnn?
         TSTL    R5
         BEQL    80$
-18$:    MOVL    SCH$GL_CURPCB, R4
+18$:    MOVL    UCB$L_VCB(R5), R1
+        BEQL    19$
+        BSBW    FIL$CHKALLOC
+        BLBC    R0, 80$
+19$:    MOVL    SCH$GL_CURPCB, R4
         BSBW    IOC$ASSIGN
         BLBC    R0, 80$
         MOVW    R1, @8(AP)

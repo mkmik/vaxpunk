@@ -766,6 +766,7 @@ DVI$_MOUNTCNT = 56                      ; 1 if a volume is mounted, else 0
 DVI$_CLUSTER = 58                       ; its cluster, in blocks
 DVI$_AVL = 98                           ; DEVCHAR's bits, each 1 or 0
 DVI$_MNT = 100
+DVI$_ALL = 108
 DVI$_SWL = 112
 DVI$_STS = 226                          ; the UCB$ status bits: UCB$M_ONLINE
 DVI$_DEVCHAR2 = 230                     ; the DEV$ bits of DEVCHAR2: DET, RED
@@ -998,6 +999,8 @@ DEV$M_AVL = ^X40000                     ; available
 DEV$V_AVL = 18
 DEV$M_MNT = ^X80000                     ; a volume is mounted
 DEV$V_MNT = 19
+DEV$M_ALL = ^X800000                    ; allocated to a process: a private mount's
+DEV$V_ALL = 23
 DEV$M_SWL = ^X2000000                   ; software write locked: the volume is read only
 DEV$V_SWL = 25
 DEV$M_IDV = ^X4000000                   ; input
@@ -1043,9 +1046,13 @@ ACC$K_TERMLEN = 84                      ; the message's size
         .MACRO  $MNTDEF
 MNT$_DEVNAM = 1                         ; the device
 MNT$_VOLNAM = 2                         ; the volume's label
-MNT$_LOGNAM = 3                         ; the logical name for the device, in place of DISK$label
+MNT$_LOGNAM = 3                         ; a logical name for the device, besides DISK$label
+MNT$_FLAGS = 4                          ; MNT$M_ bits, a longword
 MNT$_OWNER = 13                         ; the volume's owner, a UIC, for this mount
 MNT$_VPROT = 14                         ; and protection, a word
+MNT$M_NOWRITE = ^X40                    ; the volume can't be written while it is mounted
+MNT$M_OVR_IDENT = ^X200                 ; whatever its label: MNT$_VOLNAM is ignored
+MNT$M_SYSTEM = ^X4000                   ; for every process, else for the job alone
         .ENDM   $MNTDEF
 
 ; $INITDEF: $INIT_VOL's item codes, VMS's names; the codes are vaxpunk's.

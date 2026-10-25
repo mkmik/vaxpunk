@@ -117,8 +117,9 @@ DEVNAME:
         RSB
 
 ; DEVCHAR: R5 = a device's VCB, or 0. R0 = its DEV$ bits: a disk's, with
-; MNT if a volume is mounted, and SWL too if the disk can't be written,
-; or a terminal's. Keeps every other register.
+; MNT if a volume is mounted, SWL too if it can't be written, and ALL if
+; it is a job's, mounted privately; or a terminal's. Keeps every other
+; register.
 DEVCHAR:
         .JSB_ENTRY
         MOVL    #TERM, R0
@@ -127,8 +128,11 @@ DEVCHAR:
         MOVL    #DISK, R0
         BBC     #VCB$V_MOUNTED, VCB$L_STATUS(R5), 10$
         BISL2   #DEV$M_MNT, R0
-        BBS     #VCB$V_WRITE, VCB$L_STATUS(R5), 10$
+        BBS     #VCB$V_WRITE, VCB$L_STATUS(R5), 5$
         BISL2   #DEV$M_SWL, R0
+5$:     TSTL    VCB$L_PID(R5)
+        BEQL    10$
+        BISL2   #DEV$M_ALL, R0
 10$:    RSB
 
 ; ONLINE: R5 = a device's VCB, or 0. R0 = UCB$M_ONLINE if the device is
@@ -376,7 +380,12 @@ ITEM:
         BSBW    DEVCHAR
         EXTZV   #DEV$V_MNT, #1, R0, R0
         BRW     LONG
-54$:    CMPL    R10, #DVI$_SWL
+54$:    CMPL    R10, #DVI$_ALL
+        BNEQ    55$
+        BSBW    DEVCHAR
+        EXTZV   #DEV$V_ALL, #1, R0, R0
+        BRW     LONG
+55$:    CMPL    R10, #DVI$_SWL
         BNEQ    56$
         BSBW    DEVCHAR
         EXTZV   #DEV$V_SWL, #1, R0, R0

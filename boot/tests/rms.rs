@@ -70,7 +70,9 @@ impl Vax {
             log: log.to_path_buf(),
             _one: one,
         };
-        vax.wait_for("%MOUNT-I-MOUNTED, DATA mounted on _DKB0:", 0, 60);
+        // STARTUP's MOUNT/OVERRIDE=IDENTIFICATION, then its MOUNT/SYSTEM.
+        let at = vax.wait_for("%MOUNT-I-MOUNTED, DATA mounted on _DKB0:", 0, 60);
+        vax.wait_for("%MOUNT-I-MOUNTED, DATA mounted on _DKB0:", at, 60);
         let at = vax.wait_for("Username: ", 0, 60);
         vax.console.write_all(b"SYSTEM\r").unwrap();
         let at = vax.wait_for("Password: ", at, 20);

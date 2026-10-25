@@ -62,7 +62,7 @@
 ;               runs DELETE.EXE
 ;   INITIALIZE device label
 ;               runs INIT.EXE
-;   MOUNT device [label]
+;   MOUNT device label [logical-name]
 ;               runs MOUNT.EXE
 ;   DISMOUNT device
 ;               runs DISMOUNT.EXE

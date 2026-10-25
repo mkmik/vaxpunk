@@ -74,6 +74,7 @@ note = "ADR-0038; the limits and the charging are t8y:/exec/quotas#pool-io, whic
 id = "allocate"
 title = "$ALLOC and $DALLOC: a device allocated to one process"
 status = "todo"
+note = "A private mount allocates its disk already, in VCB$L_PID (t8y:/files/volumes#private), which $ASSIGN checks; UCB$L_PID would hold it here"
 
 [[feature]]
 id = "driver-structures"
