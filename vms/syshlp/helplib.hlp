@@ -1072,6 +1072,46 @@
 
   $ INITIALIZE DKB0: DATA
   $ MOUNT DKB0: DATA
+1 INQUIRE
+  Asks the terminal for a symbol's value.
+
+  Format
+
+    INQUIRE symbol-name [prompt-string]
+
+  It writes the prompt on a new line, followed by a colon and a space,
+  and reads a line. Each 'name' in the line becomes the symbol's value,
+  then the line is made a string as := makes one: in capitals, without
+  the blanks at its ends and with one blank between words, but for the
+  text in quotes, which is kept as it is, without the quotes.
+2 Parameters
+
+ symbol-name
+
+  The symbol to set.
+
+ prompt-string
+
+  The prompt, the symbol's name if there is none. It is in capitals
+  unless it is in quotes.
+2 Qualifiers
+/GLOBAL
+  /GLOBAL
+
+  Makes the symbol global.
+/LOCAL
+  /LOCAL (default)
+
+  Makes the symbol local to the procedure.
+/PUNCTUATION
+  /PUNCTUATION (default)
+  /NOPUNCTUATION
+
+  /NOPUNCTUATION leaves out the colon and the space after the prompt.
+2 Examples
+
+  $ INQUIRE CHECK "Enter Y[ES] to continue"
+  $ IF .NOT. CHECK THEN EXIT
 1 Lexicals
   Lexical functions return information about strings, symbols, files,
   devices, processes and the system. Use one in an expression:

@@ -133,6 +133,9 @@
 ;               the terminal, as SYS$COMMAND does, after /PROMPT's text
 ;   WRITE[/UPDATE] name expression[,...]
 ;               writes a record to it, or rewrites the one READ read
+;   INQUIRE[/GLOBAL][/NOPUNCTUATION] symbol [prompt]
+;               sets a local symbol, or a global one, to a line typed at
+;               the terminal after the prompt, as := makes a string
 ;   CLOSE name  closes it
 ;   SHOW SYMBOL name
 ;               shows a symbol's value: the nearest, or with /LOCAL or
@@ -194,9 +197,9 @@
 ; DEVICES and SET COMMAND, proc.mar @ and the commands that steer a
 ; procedure, IF and ON, pipe.mar PIPE, symbol.mar the symbols and their
 ; commands, expr.mar symbol substitution and expressions, lexical.mar the
-; lexical functions, file.mar OPEN, READ, WRITE and CLOSE, message.mar
-; the messages, and cdu.mar the CLD compiler. What they share is global,
-; named DCL$name, and dcl.mlb has their constants.
+; lexical functions, file.mar OPEN, READ, WRITE, CLOSE and INQUIRE,
+; message.mar the messages, and cdu.mar the CLD compiler. What they share
+; is global, named DCL$name, and dcl.mlb has their constants.
 ;
         .LIBRARY "lib.mlb"
         .LIBRARY "starlet.mlb"
@@ -221,7 +224,7 @@
         .EXTERNAL DCL$SAMESTR, DCL$SAY, DCL$SETCOMMAND, DCL$SETDEF, DCL$SHOW
         .EXTERNAL DCL$SKIP, DCL$STATUS, DCL$STRASSIGN, DCL$SUBST, DCL$SYMNAM
         .EXTERNAL DCL$TOSTR, DCL$VSTACK, DCL$WRITE, DCL$ELSE, DCL$ENDIF
-        .EXTERNAL DCL$DATAIN, DCL$DATAEND, DCL$DECK, DCL$ADDHEX
+        .EXTERNAL DCL$DATAIN, DCL$DATAEND, DCL$DECK, DCL$ADDHEX, DCL$INQUIRE
         .EXTERNAL DCL$ON, DCL$ONACT, DCL$CYACT, DCL$HASCY, DCL$NOON
 
         .PSECT  DATA, NOEXE, WRT, LONG
@@ -303,6 +306,8 @@ ROUTINES:
         .ADDRESS DCL$GOTO
         .ASCIC  "IF"
         .ADDRESS DCL$IF
+        .ASCIC  "INQUIRE"
+        .ADDRESS DCL$INQUIRE
         .ASCIC  "LOGOUT"
         .ADDRESS LOGOUT
         .ASCIC  "ON"

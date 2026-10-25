@@ -52,7 +52,8 @@ note = "dcl.mar ponytail: PBUF"
 [[feature]]
 id = "inquire"
 title = "INQUIRE symbol [prompt]"
-status = "todo"
+status = "done"
+note = "In dcl/file.mar; ponytail: no terminal, as in a batch job, is IVCHAN, VMS's reads its main procedure's next line"
 
 [[feature]]
 id = "deck"
