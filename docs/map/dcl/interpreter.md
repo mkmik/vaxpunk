@@ -38,10 +38,10 @@ note = "DESIGN-0002 The command interpreter; dcl/message.mar"
 
 [[feature]]
 id = "builtins"
-title = "Done by DCL itself: SET and SHOW DEFAULT, SHOW DEVICES, DEFINE, DEASSIGN, SHOW LOGICAL"
+title = "Done by DCL itself: SET and SHOW DEFAULT, SHOW DEVICES, DEFINE, DEASSIGN"
 status = "done"
 milestone = "m0"
-note = "dcl/setshow.mar, dcl/logical.mar; VMS's SHOW DEVICES and SHOW LOGICAL are SHOW.EXE's: t8y:/utils/set-show#show-logical"
+note = "dcl/setshow.mar, dcl/logical.mar; VMS's SHOW DEVICES is SHOW.EXE's. SHOW LOGICAL is SHOW.EXE's too since t8y:/utils/set-show#show-logical"
 
 [[feature]]
 id = "logical-modes"

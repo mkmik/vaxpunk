@@ -141,9 +141,9 @@ note = "show.mar ponytail: no SCSNODE, so no node name"
 [[feature]]
 id = "show-logical"
 title = "SHOW LOGICAL in SHOW.EXE, installed with CMKRNL, NETMBX and WORLD: names sorted, no CMKRNL of the user's"
-status = "todo"
+status = "done"
 needs = ["/exec/installed-images#fixed-list", "/dcl/interpreter#ctrl-y-privileges"]
-note = "VMS's SHOWLOG reads the tables in kernel mode and sorts them (V4.3 CLIUTL SHOWLOG.B32, SYSMGR VMSIMAGES.DAT). vaxpunk's is DCL's own, dcl/logical.mar: it takes the user's CMKRNL and lists names as they were made. PRD-0003 tier 3 #25"
+note = "As VMS's SHOWLOG reads the tables in kernel mode and sorts them (V4.3 CLIUTL SHOWLOG.B32, SYSMGR VMSIMAGES.DAT). show.mar, on process.mar's KNOWN list; SHOW PROCESS/PRIVILEGES shows JPI$_PROCPRIV, without SHOW.EXE's own. PRD-0003 tier 3 #25"
 
 [[feature]]
 id = "show-logical-translations"
@@ -224,10 +224,10 @@ SECURITY`, a file's owner, protection and ACL through `$SET_SECURITY`
 with `/PERMANENT`, its permanent characteristics.
 `SHOW.EXE` is `show.mar`: `SHOW PROCESS`, with `/RIGHTS`, `SHOW SYSTEM`,
 `SHOW TERMINAL`, `SHOW USERS`, `SHOW MEMORY`, `SHOW ERROR`, `SHOW QUOTA`,
-`SHOW CPU` and `SHOW SECURITY`. `SET DEFAULT`, `SHOW DEFAULT`, `SHOW DEVICES`,
-`SHOW LOGICAL` and `SHOW SYMBOL` are DCL's own code
-(`dcl/setshow.mar`). VMS's `SHOW LOGICAL` is `SHOW.EXE`'s, installed with
-`CMKRNL` to read the logical name tables in kernel mode, so any user can
-list them; vaxpunk's takes the user's `CMKRNL`. `SET.EXE` is installed
+`SHOW CPU`, `SHOW SECURITY` and `SHOW LOGICAL`, which, as VMS's, is
+installed with `CMKRNL` to read the logical name tables in kernel mode,
+so any user can list them, sorted. `SET DEFAULT`, `SHOW DEFAULT`,
+`SHOW DEVICES` and `SHOW SYMBOL` are DCL's own code
+(`dcl/setshow.mar`). `SET.EXE` is installed
 with privileges on VMS too, and has none of its own here. PRD-0003 still wants `SHOW TIME`, quotas and
 accounting figures, and every device listed from its UCB.

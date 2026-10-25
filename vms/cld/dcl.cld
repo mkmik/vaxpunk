@@ -370,7 +370,10 @@ define syntax SHOW_DEVICES
 	qualifier FULL
 	qualifier MOUNTED
 
+! SHOW LOGICAL [name] [/PROCESS|/SYSTEM|/TABLE=table]: SHOW.EXE, which
+! is installed with CMKRNL to list the tables.
 define syntax SHOW_LOGICAL
+	image SHOW
 	parameter P1, label=OPTION, value(required, type=SHOW_OPTIONS)
 	parameter P2, label=LOGICAL_NAME
 	qualifier PROCESS

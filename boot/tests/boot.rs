@@ -139,8 +139,10 @@ const SYSTEM_DISK: Phase = Phase {
         "no translation for logical name FOO",
         "(LNM$SYSTEM_TABLE)",
         "  \"SYS$ERROR\" = \"_OPA0:\"",
-        "  \"SYS$SYSTEM\" = \"SYS$SYSROOT:[SYSEXE]\"",
-        "  \"SYS$SYSROOT\" = \"SYS$SPECIFIC:\"\n        = \"SYS$COMMON:\"",
+        concat!(
+            "  \"SYS$SYSROOT\" = \"SYS$SPECIFIC:\"\n        = \"SYS$COMMON:\"\n",
+            "  \"SYS$SYSTEM\" = \"SYS$SYSROOT:[SYSEXE]\"\n",
+        ),
         "  SYS$SYSROOT:[SYSMGR]\n  =   MDA0:[SYSMGR]\n  =   DKA0:[SYSMGR]\n",
         "  DKA0:[SYSMGR]",
         "  DKA0:[SYSEXE]",
@@ -320,11 +322,11 @@ const RAMDISK: Phase = Phase {
         "$ SHOW LOGICAL FOO\n   \"FOO\" = \"BAR\" (MYTAB)",
         concat!(
             "(LNM$PROCESS_DIRECTORY)\n\n",
+            "  \"LNM$FILE_DEV\" = \"LNM$PROCESS\"\n        = \"MYTAB\"\n        = \"LNM$SYSTEM\"\n",
+            "  \"LNM$PROCESS\" = \"LNM$PROCESS_TABLE\"\n",
             "  \"LNM$PROCESS_DIRECTORY\" [table] = \"\"\n",
             "  \"LNM$PROCESS_TABLE\" [table] = \"\"\n",
-            "  \"LNM$PROCESS\" = \"LNM$PROCESS_TABLE\"\n",
             "  \"MYTAB\" [table] = \"\"\n",
-            "  \"LNM$FILE_DEV\" = \"LNM$PROCESS\"\n        = \"MYTAB\"\n        = \"LNM$SYSTEM\"\n",
         ),
         "$ SHOW LOGICAL/TABLE=SUB X\n%SYSTEM-W-IVLOGTAB, invalid logical name table\n%SHOW-S-NOTRAN, no translation for logical name X",
         "%DCL-I-TABNOTFND, previous table NEWTAB was not found - new table created",
@@ -555,10 +557,11 @@ const OPERATOR: Phase = Phase {
 };
 
 /// SET PROCESS/PRIVILEGES takes CMKRNL and SYSNAM away, which SHOW
-/// PROCESS/PRIVILEGES shows, so SHOW LOGICAL, which needs $CMKRNL, fails
-/// with NOPRIV, but not DEFINE/SYSTEM, which the system table's protection
-/// lets SYSTEM's UIC group, a system one, do, as on OpenVMS; a privilege it
-/// doesn't know fails, and ALL gives them back.
+/// PROCESS/PRIVILEGES shows, without SHOW.EXE's own; SHOW LOGICAL still
+/// lists the tables, sorted, with SHOW.EXE's CMKRNL, and DEFINE/SYSTEM
+/// works, as the system table's protection lets SYSTEM's UIC group, a
+/// system one, do, as on OpenVMS; a privilege it doesn't know fails, and
+/// ALL gives them back.
 const PRIVILEGES: Phase = Phase {
     name: "privileges",
     secs: 20,
@@ -575,7 +578,7 @@ const PRIVILEGES: Phase = Phase {
     lines: &[
         "Authorized privileges:\n CMKRNL       CMEXEC       SYSNAM       GRPNAM",
         "Process privileges:\n CMEXEC       GRPNAM       ALLSPOOL     DETACH",
-        "%SYSTEM-F-NOPRIV, insufficient privilege or object protection violation",
+        "  \"ZOO\" = \"TWO\"\n\n(LNM$SYSTEM_TABLE)\n\n  \"DISK$DATA\" = \"_DKB0:\"\n  \"DISK$RAM\"",
         " \\XYZZY\\",
         "   \"QQQ\" = \"RRR\" (LNM$SYSTEM_TABLE)",
     ],
@@ -1637,6 +1640,7 @@ const STARTUP: Phase = Phase {
 /// stops SET PASSWORD with CTRL/Y, where the privileges are JOE's
 /// permanent ones, not SETPWD's SYSPRV, and continues it, is shown
 /// with his UIC, privileges, directory and rights, PAYROLL among them,
+/// lists his process's logical names without CMKRNL,
 /// reads the file, can't run AUTHORIZE or
 /// OPCCRASH, nor DEFINE/SYSTEM or make a table in the system's directory,
 /// but can in his own, and logs out; SYSTEM logs in with its new password, and
@@ -1694,15 +1698,14 @@ const USERS: Phase = Phase {
             10,
             concat!(
                 "WRITE SYS$OUTPUT \"At CTRL/Y: \", F$GETJPI(\"\", \"CURPRIV\")\rCONTINUE\r",
-                "SHOW PROCESS/PRIVILEGES\rSHOW DEFAULT\rSHOW LOGICAL SYS$LOGIN\r",
+                "SHOW PROCESS/PRIVILEGES\rSHOW DEFAULT\rSHOW LOGICAL SYS$LOGIN\rSHOW LOGICAL/PROCESS\r",
                 "SHOW PROCESS/RIGHTS\rTYPE DKB0:[000000]PAY.TXT\r",
                 "MCR AUTHORIZE SHOW JOE\rMCR OPCCRASH\r",
             ),
         ),
-        // The first was SHOW LOGICAL's in PRIVILEGES.
         (
             "%SYSTEM-F-NOPRIV",
-            2,
+            1,
             concat!(
                 "DEFINE/SYSTEM/NOLOG QQQ JOE\r",
                 "CREATE/NAME_TABLE/PARENT=LNM$SYSTEM_DIRECTORY JOETAB\r",
@@ -1755,6 +1758,7 @@ const USERS: Phase = Phase {
         "UIC:                [200,1]",
         "\n  DKB0:[000000]\n",
         "\"SYS$LOGIN\" = \"DKB0:[000000]\" (LNM$PROCESS_TABLE)",
+        "  \"SYS$INPUT\" = \"_OPA0:\"\n  \"SYS$LOGIN\" = \"DKB0:[000000]\"\n  \"SYS$LOGIN_DEVICE\"",
         "%UAF-E-NAOFIL, unable to open system authorization file (SYSUAF.DAT)",
         "$ DEFINE/SYSTEM/NOLOG QQQ JOE\n%SYSTEM-F-NOPRIV",
         "$ CREATE/NAME_TABLE/PARENT=LNM$SYSTEM_DIRECTORY JOETAB\n%SYSTEM-F-NOPRIV",
@@ -1969,8 +1973,8 @@ fn boot() {
     assert!(present.is_empty(), "{present:?}");
     assert_eq!(
         text.matches("%SYSTEM-F-NOPRIV").count(),
-        4,
-        "SHOW LOGICAL without CMKRNL, JOE's OPCCRASH, DEFINE/SYSTEM and table in LNM$SYSTEM_DIRECTORY"
+        3,
+        "JOE's OPCCRASH, DEFINE/SYSTEM and table in LNM$SYSTEM_DIRECTORY"
     );
     assert_eq!(
         text.matches("%RMS-E-PRV").count(),

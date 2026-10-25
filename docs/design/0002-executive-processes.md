@@ -320,8 +320,8 @@ those of `DCL$TABLES` (*Commands*); a verb with an image runs it with
 | `DEFINE name equivalence` | `$CRELNM` in `LNM$PROCESS`, and `%DCL-I-SUPERSEDE` if it replaced one, unless `/NOLOG`; `/SYSTEM`, `/PROCESS` or `/TABLE=table` names the table |
 | `CREATE/NAME_TABLE table` | `$CRELNT` under `LNM$PROCESS_DIRECTORY`, or `/PARENT_TABLE`'s, with `LNM$M_CREATE_IF`: `%DCL-I-TABEXIST` if there is one, unless `/NOLOG`; `/ATTRIBUTES=SUPERSEDE` replaces it, `%DCL-I-TABSUPER`, or tells there was none, `%DCL-I-TABNOTFND` |
 | `DEASSIGN name` | `$DELLNM` from `LNM$PROCESS`, or the table the same qualifiers name |
-| `SHOW LOGICAL name` | `$TRNLNM` in `LNM$FILE_DEV`, or the table the same qualifiers name: `"name" = "equivalence" (table)`, `"name" [table] = ""` for a table, or `%SHOW-S-NOTRAN`; with no name, each table's names under its name, from `LNM$NAMES` in kernel mode |
-| `SHOW LOGICAL [*]` | lists every name, the process's table's and then the system's, or only that table's, in the order they were made, under each table's name; it copies them one at a time with `$CMKRNL`, so it takes CMKRNL. ponytail: VMS's is `SHOW.EXE`'s, installed with CMKRNL, which reads the tables in kernel mode and sorts them (t8y:/utils/set-show#show-logical) |
+| `SHOW LOGICAL name` | `SHOW.EXE`: `$TRNLNM` in `LNM$FILE_DEV`, or the table the same qualifiers name: `"name" = "equivalence" (table)`, `"name" [table] = ""` for a table, or `%SHOW-S-NOTRAN` |
+| `SHOW LOGICAL [*]` | `SHOW.EXE`: lists every name, the process's table's and then the system's, or only that table's, sorted, under each table's name; it copies them one at a time from `LNM$NAMES` with `$CMKRNL`, with the CMKRNL it is installed with, as VMS's is, so any user may list them |
 | `SET DEFAULT [dev:][dir]` | `$PARSE`s it, which must name no file, `$SETDDIR` with the directory it expands to, and `$CRELNM` of `SYS$DISK` in `LNM$PROCESS` with its device; one that doesn't exist is still set |
 | `SHOW DEFAULT` | the device and directory `$PARSE` expands an empty specification to, then `%DCL-I-INVDEF` if it doesn't exist; for a search list, each directory it takes that to which exists, after `=` |
 | `EDIT spec` | `EDIT.EXE` |
@@ -511,10 +511,10 @@ It passes a prompt routine at the console, which reads with
   capitals outside quotes.
 - `DELETE/SYMBOL` is the `DELETE_SYMBOL` syntax of `DELETE`, and
   `DELETE/SYMBOL/ALL` its `DELETE_SYMBOL_ALL`, which has no
-  parameters. `SHOW DEVICES`, `SHOW LOGICAL` and `SHOW SYMBOL` are
+  parameters. `SHOW DEVICES` and `SHOW SYMBOL` are
   syntaxes too, each with its parameter and its qualifiers.
   `SHOW PROCESS` and `SHOW SYSTEM` are `SHOW_IMAGE`, a syntax with
-  `IMAGE SHOW`.
+  `IMAGE SHOW`, and `SHOW LOGICAL` is `SHOW_LOGICAL`, which has it too.
 
 ## Scheduling
 
