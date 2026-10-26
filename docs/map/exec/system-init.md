@@ -46,9 +46,9 @@ note = "systartup_vms.com, commit 472e9c2"
 [[feature]]
 id = "login-at-key"
 title = "The console asks for a username at a key, not at once after a logout"
-status = "todo"
+status = "done"
 milestone = "m1"
-note = "PRD-0003 tier 1 #2; exec.mar"
+note = "PRD-0003 tier 1 #2; the swapper starts it, TTY$KEY"
 
 [[feature]]
 id = "rooted-directories"
@@ -146,7 +146,7 @@ clock, the console and the network port, mounts `DKA0:`, defines the
 system logical names, creates `STARTUP` and becomes the swapper.
 `STARTUP` runs `SYSTARTUP_VMS.COM`, which makes the ramdisk, makes
 `SYS$SYSROOT` a search list of it and the system disk, starts TCP/IP
-and `TELNETD`, and mounts the data disk; then the swapper starts
+and `TELNETD`, and mounts the data disk; then, at a key, the swapper starts
 `LOGINOUT` on the console
 ([ADR-0029](../../adr/0029-loginout-and-sysuaf.md)). The
 executive is one image, with no execlets, `SYSINIT` or parameter file.

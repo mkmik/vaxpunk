@@ -75,9 +75,9 @@ note = "ADR-0044: a name is its DDB's and its unit's number, TNA1 to TNA9999, cl
 [[feature]]
 id = "login-at-key"
 title = "Unsolicited input on an idle terminal starts LOGINOUT, not a login at once"
-status = "todo"
+status = "done"
 milestone = "m1"
-note = "PRD-0003 tier 1 #2; exec.mar. VMS's driver tells the job controller, which starts t8y:/utils/loginout"
+note = "PRD-0003 tier 1 #2; TTY$IOPOST wakes the swapper, which starts it, on the console only. VMS's driver tells the job controller, which starts t8y:/utils/loginout"
 
 [[feature]]
 id = "quotas"

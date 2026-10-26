@@ -88,7 +88,7 @@ note = "PRD-0003 tier 1 #1 and tier 3 #25"
 [[feature]]
 id = "login-at-key"
 title = "The console asks for a username at a key, not at once"
-status = "todo"
+status = "done"
 milestone = "m1"
 needs = ["/drivers/terminal#login-at-key"]
 note = "PRD-0003 tier 1 #2"

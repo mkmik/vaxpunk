@@ -56,7 +56,8 @@ passes through untouched: terminal handling there is the guest's business.
 Input is never filtered, and every key except `Ctrl-A` reaches the guest.
 QEMU also saves the unfiltered console
 in `out/serial.log`; read it with `less`, not `cat`. The serial console shows
-Limine, the shim's placement banner, seL4's boot messages, then the root task:
+Limine, the shim's placement banner, seL4's boot messages, then the root task;
+once `STARTUP` is done, press RETURN for `Username:`, as on a VMS console:
 
 ```
 vaxpunk shim: shim at 0x7fa68000, UART at 0x9000000
@@ -413,7 +414,7 @@ counter runs at 24 MHz instead of the 62.5 MHz it was built for.
 `just boot` adds `--hvf` on a Mac, and `--autologin`, which writes
 `[SYSEXE]SYSALF.DAT` on `out/sysdisk.img` so the console logs in as
 `SYSTEM` without a username or a password, as VMS's Automatic Login
-Facility does. After a `LOGOUT` it logs in again; `MCR OPCCRASH` stops it.
+Facility does, at the first key. After a `LOGOUT` a key logs it in again; `MCR OPCCRASH` stops it.
 
 `cargo run -p boot -- --uart1` serves the second serial port on telnet
 `localhost:4444` (`--uart1=PORT` picks another port, for QEMUs in parallel

@@ -94,7 +94,7 @@
         .EXTERNAL IOC$GL_DEVLIST
         .EXTERNAL SYS$DASSGN, SYS$CANCEL
         .EXTERNAL EXE$PROBER_DSC, EXE$CLREF, EXE$SETEF, EXE$DCLAST
-        .EXTERNAL SCH$GL_CURPCB, SCH$GL_PCBVEC, SCH$GL_MAXPIX
+        .EXTERNAL SCH$GL_CURPCB, SCH$GL_PCBVEC, SCH$GL_MAXPIX, SCH$GL_SWPPCB, SCH$WAKE
 
 TYPEAHEAD = UCB$K_TT_TYPEAHEAD
 RXCS$V_DONE = 7                         ; RXCS: a character is waiting
@@ -2193,15 +2193,42 @@ TTY$RCVINT::
 
 ; TTY$IOPOST: the IPL$_IOPOST software interrupt. Delivers the ASTs of a
 ; CTRL/C or CTRL/Y typed on the console, then gives what is in its
-; type-ahead buffer to its reads (SERVICE).
+; type-ahead buffer to its reads (SERVICE). What is left there on a
+; console without an owner, unsolicited input, wakes the swapper, which
+; starts LOGINOUT on it (TTY$KEY).
+; vaxpunk: VMS's driver tells the job controller, which starts LOGINOUT.
+; ponytail: CTRL/C and CTRL/Y empty the type-ahead buffer, so on an idle
+; console they start no LOGINOUT, as on VMS they do.
 TTY$IOPOST::
         .EXCEPTION_ENTRY
         SETIPL  #IPL$_SYNCH
         PUSHR   #^M<R0, R1, R2, R3, R4, R5, R6, R7, R8>
         MOVAB   IOC$AB_OPA0, R5
         BSBW    SERVICE
-        POPR    #^M<R0, R1, R2, R3, R4, R5, R6, R7, R8>
+        CMPL    UCB$L_TT_GET(R5), UCB$L_TT_PUT(R5)
+        BEQL    90$
+        BSBW    OWNERPCB
+        TSTL    R1
+        BNEQ    90$
+        MOVL    SCH$GL_SWPPCB, R1
+        BSBW    SCH$WAKE
+90$:    POPR    #^M<R0, R1, R2, R3, R4, R5, R6, R7, R8>
         REI
+
+; TTY$KEY: R0 = 1 if a key was typed on the console, and empties its
+; type-ahead buffer, so that LOGINOUT's Username: doesn't read it; else
+; 0. IPL$_SYNCH. Keeps every other register.
+TTY$KEY::
+        .JSB_ENTRY  OUTPUT=<R0>
+        PUSHL   R5
+        MOVAB   IOC$AB_OPA0, R5
+        CLRL    R0
+        CMPL    UCB$L_TT_GET(R5), UCB$L_TT_PUT(R5)
+        BEQL    90$
+        BSBW    PURGE
+        INCL    R0
+90$:    MOVL    (SP)+, R5
+        RSB
 
 ; TERMINAL: R1 = a device name's descriptor, which can be read. R5 =
 ; the terminal it names, translated as $ASSIGN translates it
