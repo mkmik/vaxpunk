@@ -1,19 +1,15 @@
         .TITLE  GETDVI  $GETDVI and $DEVICE_SCAN: what the devices are
-        .IDENT  /V0.1/
+        .IDENT  /V0.2/
 ;
 ; A program finds the devices with $DEVICE_SCAN and asks about each with
 ; $GETDVI, as on VMS, with VMS's item codes (starlet.mlb's $DVIDEF and
-; $DVSDEF). The devices are the disks, in f11.mar's order, each a VCB,
-; then the terminals, the console, OPA0:, and TELNET's, TNAn:, in
-; ttdriver.mar's TT$GL_UNITS: DEVICE numbers them so. What is returned
-; of a terminal is copied from its UCB at IPL$_SYNCH, since a TELNET
-; terminal can go once the IPL drops. A channel to a mailbox, or to a
-; socket, a network unit BGnn, has its name, class, unit and reference
-; count too.
-; ponytail: a VCB stands for a disk, and 0 for a terminal, not their
-; UCBs (qio.mar), which have no device types yet; a disk's error count is
-; its UCB's; a network unit's class is 0, until we know TCP/IP Services'.
-; $GETDVI is done when it returns, and takes no AST.
+; $DVSDEF). Both read the I/O database (qio.mar,
+; docs/adr/0044-the-io-database.md): $DEVICE_SCAN goes through its
+; units in order, IOC$SCAN_IODB's, each DDB's by number, and $GETDVI
+; answers from a device's UCB, and for its volume from a disk's VCB.
+; What it returns of a UCB is copied at IPL$_SYNCH, since a unit cloned
+; from a template can go once the IPL drops.
+; ponytail: $GETDVI is done when it returns, and takes no AST.
 ;
         .LIBRARY "lib.mlb"
         .LIBRARY "starlet.mlb"
@@ -25,161 +21,93 @@
         $DVSDEF
         $DCDEF
         $DEVDEF
+        $DDBDEF
         $UCBDEF
 
-        .EXTERNAL F11$GL_VCB, F11$AB_DKA0, F11$A_VCBEND, F11$AB_DIRBLK
-        .EXTERNAL FIL$FREEBLOCKS, FIL$READLBLK, FIL$MATCH, MD$GL_BASE
-        .EXTERNAL FIL$LOCK, FIL$UNLOCK
-        .EXTERNAL IOC$TRNDEVNAM, EXE$PROBER_DSC, EXE$SETEF, EXE$CLREF
-        .EXTERNAL SCH$GL_CURPCB, MB$FDT, NET$FDT, IOC$AB_BGA0, TT$FDT, TT$GL_UNITS
+        .EXTERNAL F11$GL_VCB, FIL$FREEBLOCKS, FIL$MATCH, FIL$LOCK, FIL$UNLOCK
+        .EXTERNAL IOC$SEARCHDEV, IOC$CVT_DEVNAM, IOC$SCAN_IODB, IOC$GL_DEVLIST
+        .EXTERNAL EXE$PROBER_DSC, EXE$SETEF, EXE$CLREF, SCH$GL_CURPCB
 
-DISK = DEV$M_FOD!DEV$M_DIR!DEV$M_SHR!DEV$M_AVL!DEV$M_IDV!DEV$M_ODV!DEV$M_RND
-TERM = DEV$M_REC!DEV$M_CCL!DEV$M_TRM!DEV$M_AVL!DEV$M_IDV!DEV$M_ODV
-
-        .PSECT  EXEC$DATA, NOEXE, WRT, QUAD
-TTNAME: .BLKB   4                       ; the terminal a VCB of 0 stands for: its name,
-TTUNIT: .LONG   0                       ; its unit,
-TTREFC: .LONG   0                       ; its channels,
-TTCHAR: .BLKB   12                      ; and its characteristics, IO$_SENSEMODE's,
-TTCHAR3:.LONG   0                       ; and TT3$ bits,
-TTSTS:  .LONG   0                       ; its UCB$V_TT_ bits,
-TTPHY:  .LONG   0                       ; and its physical terminal's name, 0 for none
-NAMBUF: .BLKB   6                       ; a device's name, _DDCU:
-VALUE:  .LONG   0                       ; a value item's
+; What $GETDVI copies of the device, on the kernel stack.
+DV_NAME = 0                             ; its name, _DDCU:, 24 bytes at most
+DV_NAMLEN = 24                          ; and its length
+DV_PHY = 28                             ; a terminal's physical terminal's name
+DV_PHYLEN = 52                          ; and its length, 0 for none
+DV_CHAR = 56                            ; UCB$L_DEVCHAR
+DV_CHAR2 = 60                           ; UCB$L_DEVCHAR2
+DV_CLASS = 64                           ; UCB$B_DEVCLASS, DEVTYPE, DEVBUFSIZ, DEVDEPEND and DEVDEPND2, as the UCB has them
+DV_TYPE = 65
+DV_BUFSIZ = 66
+DV_DEPEND = 68
+DV_DEPND2 = 72
+DV_DEPND3 = 76                          ; UCB$L_DEVDEPND3
+DV_STS = 80                             ; UCB$L_STS
+DV_UNIT = 84                            ; UCB$W_UNIT, REFC and ERRCNT, each a longword
+DV_REFC = 88
+DV_ERRCNT = 92
+DV_VCB = 96                             ; a disk's VCB, or 0
+DV_VALUE = 100                          ; a value item's, for ITEM to return
+DV_K_LENGTH = 104
+NAMSIZ = 24                             ; a name's room
 
         .PSECT  $CODE$
 
-; DEVICE: R4 = a device's number. R5 = its VCB, or 0 for a terminal,
-; which COPYTT copies. R0 = SS$_NORMAL, or SS$_NOMOREDEV past the last.
-; IPL$_SYNCH. Keeps every other register.
-DEVICE:
-        .JSB_ENTRY  OUTPUT=<R5>
-        CMPL    R4, #255            ; a caller's context, which may be anything
-        BGTRU   80$
-        MULL3   #VCB$K_LENGTH, R4, R5
-        MOVAB   F11$AB_DKA0, R0
-        ADDL2   R0, R5
-        MOVAB   F11$A_VCBEND, R0
-        CMPL    R5, R0
-        BLSSU   10$
-        SUBL2   R0, R5                  ; past the disks: the terminals
-        DIVL2   #VCB$K_LENGTH, R5
-        MOVL    G^TT$GL_UNITS, R0
-5$:     TSTL    R0
+; SNAP: R5 = a device's UCB, R6 = DV_K_LENGTH bytes. Copies there what
+; $GETDVI returns of the device. IPL$_SYNCH. Keeps every register.
+SNAP:
+        .JSB_ENTRY
+        PUSHR   #^M<R0, R1, R2>
+        MOVL    #NAMSIZ, R0
+        MOVAB   DV_NAME(R6), R1
+        BSBW    IOC$CVT_DEVNAM
+        MOVL    R1, DV_NAMLEN(R6)
+        MOVL    UCB$L_DEVCHAR(R5), DV_CHAR(R6)
+        MOVL    UCB$L_DEVCHAR2(R5), DV_CHAR2(R6)
+        MOVL    UCB$B_DEVCLASS(R5), DV_CLASS(R6)
+        MOVQ    UCB$L_DEVDEPEND(R5), DV_DEPEND(R6)
+        MOVL    UCB$L_DEVDEPND3(R5), DV_DEPND3(R6)
+        MOVL    UCB$L_STS(R5), DV_STS(R6)
+        MOVZWL  UCB$W_UNIT(R5), DV_UNIT(R6)
+        MOVZWL  UCB$W_REFC(R5), DV_REFC(R6)
+        MOVZWL  UCB$W_ERRCNT(R5), DV_ERRCNT(R6)
+        MOVL    UCB$L_VCB(R5), DV_VCB(R6)
+        CLRL    DV_PHYLEN(R6)           ; a terminal's physical one:
+        CMPB    UCB$B_DEVCLASS(R5), #DC$_TERM
+        BNEQ    90$
+        BBS     #DEV$V_DET, UCB$L_DEVCHAR2(R5), 90$     ; none while disconnected,
+        MOVL    R5, R2
+        BBC     #UCB$V_TT_VT, UCB$L_TT_STS(R5), 10$     ; a virtual one's line's,
+        MOVL    UCB$L_TT_PHY(R5), R5
         BEQL    80$
-        DECL    R5
-        BLSS    7$
-        MOVL    UCB$L_LINK(R0), R0
-        BRB     5$
-7$:     BSBB    COPYTT
-        CLRL    R5
-10$:    MOVL    #SS$_NORMAL, R0
-        RSB
-80$:    MOVL    #SS$_NOMOREDEV, R0
-        RSB
-
-; COPYTT: R0 = a terminal's UCB. Copies what $GETDVI returns of it to
-; TTNAME, TTUNIT, TTREFC, TTCHAR, TTCHAR3, TTSTS and TTPHY: its own name,
-; or a virtual terminal's physical one's. IPL$_SYNCH. Keeps every
-; register.
-COPYTT:
-        .JSB_ENTRY
-        PUSHL   R1
-        MOVL    UCB$T_NAME(R0), TTNAME
-        MOVL    UCB$L_UNIT(R0), TTUNIT
-        MOVL    UCB$L_REFC(R0), TTREFC
-        MOVL    UCB$A_TT_CHAR(R0), TTCHAR
-        MOVQ    UCB$A_TT_CHAR+4(R0), TTCHAR+4
-        MOVL    UCB$L_TT_CHAR3(R0), TTCHAR3
-        MOVL    UCB$L_TT_STS(R0), TTSTS
-        MOVL    UCB$T_NAME(R0), TTPHY
-        BBC     #UCB$V_TT_VT, TTSTS, 10$
-        CLRL    TTPHY                   ; disconnected
-        MOVL    UCB$L_TT_PHY(R0), R1
-        BEQL    10$
-        MOVL    UCB$T_NAME(R1), TTPHY
-10$:    MOVL    (SP)+, R1
-        RSB
-
-; DEVNAME: R5 = a device's VCB, or 0. Makes its name, _DDCU:, in NAMBUF.
-; R1 = NAMBUF, R2 = 6. Keeps every other register.
-DEVNAME:
-        .JSB_ENTRY  OUTPUT=<R2>
-        MOVAB   TTNAME, R1
-        TSTL    R5
-        BEQL    10$
-        MOVAB   VCB$T_DEVNAM(R5), R1
-10$:    MOVB    #^A/_/, NAMBUF
-        MOVL    (R1), NAMBUF+1
-        MOVB    #^A/:/, NAMBUF+5
-        MOVAB   NAMBUF, R1
-        MOVL    #6, R2
-        RSB
-
-; DEVCHAR: R5 = a device's VCB, or 0. R0 = its DEV$ bits: a disk's, with
-; MNT if a volume is mounted, SWL too if it can't be written, and ALL if
-; it is a job's, mounted privately; or a terminal's. Keeps every other
-; register.
-DEVCHAR:
-        .JSB_ENTRY
-        MOVL    #TERM, R0
-        TSTL    R5
-        BEQL    10$
-        MOVL    #DISK, R0
-        BBC     #VCB$V_MOUNTED, VCB$L_STATUS(R5), 10$
-        BISL2   #DEV$M_MNT, R0
-        BBS     #VCB$V_WRITE, VCB$L_STATUS(R5), 5$
-        BISL2   #DEV$M_SWL, R0
-5$:     TSTL    VCB$L_PID(R5)
-        BEQL    10$
-        BISL2   #DEV$M_ALL, R0
-10$:    RSB
-
-; ONLINE: R5 = a device's VCB, or 0. R0 = UCB$M_ONLINE if the device is
-; there: a terminal, a disk with a volume mounted, the ramdisk once
-; made, or a PAL disk whose first block reads; else 0. Holding FIL$LOCK.
-; Uses R1-R2.
-ONLINE:
-        .JSB_ENTRY  SCRATCH=<R2>
-        TSTL    R5
-        BEQL    70$
-        BBS     #VCB$V_MOUNTED, VCB$L_STATUS(R5), 70$
-        BBC     #VCB$V_RAMDISK, VCB$L_STATUS(R5), 10$
-        TSTL    MD$GL_BASE
-        BNEQ    70$
-        BRB     80$
-10$:    PUSHL   F11$GL_VCB
-        MOVL    R5, F11$GL_VCB
-        MOVAB   F11$AB_DIRBLK, R0
-        MOVL    #1, R1
-        CLRL    R2
-        BSBW    FIL$READLBLK
-        MOVL    (SP)+, F11$GL_VCB
-        BLBC    R0, 80$
-70$:    MOVL    #UCB$M_ONLINE, R0
-        RSB
-80$:    CLRL    R0
+10$:    MOVL    #NAMSIZ, R0             ; any other's itself
+        MOVAB   DV_PHY(R6), R1
+        BSBW    IOC$CVT_DEVNAM
+        MOVL    R1, DV_PHYLEN(R6)
+80$:    MOVL    R2, R5
+90$:    POPR    #^M<R0, R1, R2>
         RSB
 
 ; $GETDVI efn, chan, devnam, itmlst, iosb, astadr, astprm, nullarg:
 ; returns what the item list asks about a device: the one devnam names,
-; translated as $ASSIGN translates it, or else chan's. Each
-; item is a buffer length and an item code, words, then the buffer's
-; address and the address of a word for the length returned, or 0; a
-; longword of 0 ends the list. A value is a longword, a string as long
-; as it is; either is cut to fit the buffer. Clears the event flag, then
-; sets it, and writes SS$_NORMAL in the IOSB's first word, if there is
-; one. SS$_NOSUCHDEV for a device that isn't there, SS$_IVCHAN for a
-; channel that isn't assigned, SS$_BADPARAM for an item code it doesn't
-; know, or the disk's error for DVI$_FREEBLOCKS. A terminal's
-; DVI$_DEVTYPE, DVI$_DEVBUFSIZ, DVI$_DEVDEPEND, DVI$_DEVDEPEND2 and
-; DVI$_DEVDEPEND3 are its characteristics, as IO$_SENSEMODE gives them; it has a DVI$_UNIT
-; and DVI$_REFCNT, a disk 0. A virtual terminal's DVI$_DEVCHAR2 has
-; DEV$M_DET while it is disconnected, its physical terminal's DEV$M_RED,
-; and DVI$_TT_PHYDEVNAM is its physical terminal, none while
-; disconnected; any other terminal's is itself. A mailbox or a
-; network unit, by its channel, has DVI$_DEVNAM, DVI$_DEVCLASS, DVI$_UNIT
-; and DVI$_REFCNT, and 0 for any other item.
+; translated as $ASSIGN translates it (IOC$SEARCHDEV), or else chan's.
+; Each item is a buffer length and an item code, words, then the
+; buffer's address and the address of a word for the length returned, or
+; 0; a longword of 0 ends the list. A value is a longword, a string as
+; long as it is; either is cut to fit the buffer. Clears the event flag,
+; then sets it, and writes SS$_NORMAL in the IOSB's first word, if there
+; is one. SS$_NOSUCHDEV for a device that isn't there, SS$_IVDEVNAM for
+; a name that isn't a device's, SS$_IVCHAN for a channel that isn't
+; assigned, SS$_BADPARAM for an item code it doesn't know, or the disk's
+; error for DVI$_FREEBLOCKS. The items are the UCB's: DVI$_DEVCHAR,
+; DVI$_DEVCHAR2, DVI$_DEVCLASS, DVI$_DEVTYPE, DVI$_DEVBUFSIZ,
+; DVI$_DEVDEPEND, DVI$_DEVDEPEND2 and DVI$_DEVDEPEND3, which are a
+; terminal's characteristics, as IO$_SENSEMODE gives them, DVI$_UNIT,
+; DVI$_REFCNT, DVI$_ERRCNT, DVI$_STS, DEVCHAR's bits DVI$_AVL, DVI$_MNT,
+; DVI$_ALL and DVI$_SWL, and DVI$_DEVNAM, the device's name, _DDCU:; a
+; mounted volume's, from its VCB: DVI$_VOLNAM, DVI$_FREEBLOCKS
+; (FIL$FREEBLOCKS), DVI$_CLUSTER and DVI$_MOUNTCNT; and a terminal's
+; DVI$_TT_PHYDEVNAM, its physical terminal: a virtual one's line's, none
+; while it is disconnected, any other's itself.
 ; ponytail: done at once, no AST; the items $DVIDEF lists.
         .ENTRY  EXE$GETDVI, ^M<R2, R3, R4, R5, R6, R7, R8, R9, R10, R11>
         MOVL    20(AP), R0              ; the IOSB
@@ -188,63 +116,30 @@ ONLINE:
 5$:     PUSHL   4(AP)
         CALLS   #1, G^EXE$CLREF
         BLBC    R0, 90$
-        BSBW    FIL$LOCK                ; VCBs, the file system's buffers
-        DSBINT  #IPL$_SYNCH             ; logical names
+        SUBL2   #DV_K_LENGTH, SP        ; what it returns of the device
+        MOVL    SP, R6
+        BSBW    FIL$LOCK                ; the volumes, the file system's buffers
+        DSBINT  #IPL$_SYNCH             ; the logical names and the devices
         MOVL    12(AP), R1              ; the device's name
         BEQL    20$
         BSBW    EXE$PROBER_DSC
         BLBC    R0, 80$
-        MOVZWL  (R1), R2
-        MOVL    4(R1), R3
-        BSBW    IOC$TRNDEVNAM
-        CLRL    R6                      ; not a mailbox
-        MOVL    #SS$_NOSUCHDEV, R0
-        CMPL    R2, #5                  ; DDCU, with a colon or without
-        BNEQ    10$
-        CMPB    4(R3), #^A/:/
-        BNEQ    80$
-        DECL    R2
-10$:    CMPL    R2, #4
-        BNEQ    80$
-        CLRL    R4
-15$:    BSBW    DEVICE
-        BLBC    R0, 18$
-        BSBW    DEVNAME
-        CMPL    1(R1), (R3)
-        BEQL    30$
-        INCL    R4
-        BRB     15$
-18$:    MOVL    #SS$_NOSUCHDEV, R0
-        BRB     80$
+        BSBW    IOC$SEARCHDEV
+        BLBC    R0, 80$
+        MOVL    R1, R5
+        BRB     30$
 20$:    MOVZWL  8(AP), R0               ; else the channel's
         BEQL    25$
         CMPL    R0, #PCB$C_MAXCHAN
         BGTRU   25$
         MOVL    SCH$GL_CURPCB, R1
         BBC     R0, PCB$L_CHANS(R1), 25$
-        MOVL    PCB$AL_CCB(R1)[R0], R5  ; its UCB
-        CLRL    R6
-        MOVAB   MB$FDT, R0
-        CMPL    UCB$L_FDT(R5), R0
-        BEQL    21$
-        MOVAB   TT$FDT, R0
-        CMPL    UCB$L_FDT(R5), R0
-        BNEQ    19$
-        MOVL    R5, R0                  ; a terminal
-        BSBW    COPYTT
-        BRB     22$
-19$:    MOVAB   NET$FDT, R0
-        CMPL    UCB$L_FDT(R5), R0
-        BNEQ    22$
-        MOVAB   G^IOC$AB_BGA0, R0       ; a unit, not the template
-        CMPL    R5, R0
-        BEQL    22$
-21$:    MOVL    R5, R6                  ; a mailbox's or a network unit's
-22$:    MOVL    UCB$L_VCB(R5), R5
+        MOVL    PCB$AL_CCB(R1)[R0], R5
         BRB     30$
 25$:    MOVL    #SS$_IVCHAN, R0
         BRB     80$
-30$:    ENBINT
+30$:    BSBW    SNAP
+        ENBINT
         MOVL    16(AP), R8              ; the items
 40$:    IFNORD  #4, (R8), 84$
         TSTL    (R8)
@@ -296,187 +191,107 @@ ONLINE:
         CALLG   (AP), EXE$GETDVI
         RET
 
-; ITEM: R10 = an item code, R5 = the device's VCB, or 0, R6 = a
-; mailbox's or a network unit's UCB, or 0. R1 = what to return, R2 = its length. R0 =
-; SS$_NORMAL, SS$_BADPARAM for a code it doesn't know, or the disk's
-; error. Holding FIL$LOCK. Uses R0-R3.
+; ITEM: R10 = an item code, R6 = what SNAP copied of the device. R1 =
+; what to return, R2 = its length. R0 = SS$_NORMAL, SS$_BADPARAM for a
+; code it doesn't know, or the disk's error. Holding FIL$LOCK. Uses
+; R0-R3, R5.
 ITEM:
-        .JSB_ENTRY  SCRATCH=<R2, R3>
-        TSTL    R6
-        BEQL    5$
-        BRW     MBXITEM
-5$:     CMPL    R10, #DVI$_DEVNAM
+        .JSB_ENTRY  SCRATCH=<R2, R3, R5>
+        MOVL    DV_VCB(R6), R5
+        CMPL    R10, #DVI$_DEVNAM
         BNEQ    10$
-        BSBW    DEVNAME
+        MOVAB   DV_NAME(R6), R1
+        MOVL    DV_NAMLEN(R6), R2
         BRW     STRING
 10$:    CMPL    R10, #DVI$_VOLNAM
-        BNEQ    20$
+        BNEQ    15$
         CLRL    R2
         BSBW    MOUNTED
-        BLBC    R0, 15$
+        BLBC    R0, 12$
         MOVAB   VCB$T_VOLNAME+1(R5), R1
         MOVZBL  VCB$T_VOLNAME(R5), R2
-15$:    BRW     STRING
-20$:    CMPL    R10, #DVI$_DEVCHAR
-        BNEQ    25$
-        BSBW    DEVCHAR
-        BRW     LONG
-25$:    CMPL    R10, #DVI$_DEVCLASS
-        BNEQ    30$
-        MOVL    #DC$_TERM, R0
-        TSTL    R5
-        BEQL    27$
-        MOVL    #DC$_DISK, R0
-27$:    BRW     LONG
-30$:    CMPL    R10, #DVI$_UNIT
-        BNEQ    31$
-        MOVL    TTUNIT, R0
-        BRB     33$
-31$:    CMPL    R10, #DVI$_REFCNT
-        BNEQ    34$
-        MOVL    TTREFC, R0
-33$:    TSTL    R5                      ; a disk's are 0
-        BEQL    38$
-        BRB     32$
-34$:    CMPL    R10, #DVI$_ERRCNT
-        BNEQ    35$
-        TSTL    R5                      ; a terminal's is 0
-        BEQL    32$
-        MOVL    VCB$L_UCB(R5), R0
-        MOVL    UCB$L_ERRCNT(R0), R0
-        BRW     LONG
-32$:    CLRL    R0
-        BRW     LONG
-35$:    CMPL    R10, #DVI$_FREEBLOCKS
+12$:    BRW     STRING
+15$:    CMPL    R10, #DVI$_TT_PHYDEVNAM
+        BNEQ    20$
+        MOVAB   DV_PHY(R6), R1
+        MOVL    DV_PHYLEN(R6), R2
+        BRW     STRING
+20$:    MOVL    DV_CHAR(R6), R0
+        CMPL    R10, #DVI$_DEVCHAR
+        BEQL    LONG
+        MOVL    DV_CHAR2(R6), R0
+        CMPL    R10, #DVI$_DEVCHAR2
+        BEQL    LONG
+        MOVZBL  DV_CLASS(R6), R0
+        CMPL    R10, #DVI$_DEVCLASS
+        BEQL    LONG
+        MOVZBL  DV_TYPE(R6), R0
+        CMPL    R10, #DVI$_DEVTYPE
+        BEQL    LONG
+        MOVZWL  DV_BUFSIZ(R6), R0
+        CMPL    R10, #DVI$_DEVBUFSIZ
+        BEQL    LONG
+        MOVL    DV_DEPEND(R6), R0
+        CMPL    R10, #DVI$_DEVDEPEND
+        BEQL    LONG
+        MOVL    DV_DEPND2(R6), R0
+        CMPL    R10, #DVI$_DEVDEPEND2
+        BEQL    LONG
+        MOVL    DV_DEPND3(R6), R0
+        CMPL    R10, #DVI$_DEVDEPEND3
+        BEQL    LONG
+        MOVL    DV_UNIT(R6), R0
+        CMPL    R10, #DVI$_UNIT
+        BEQL    LONG
+        MOVL    DV_REFC(R6), R0
+        CMPL    R10, #DVI$_REFCNT
+        BEQL    LONG
+        MOVL    DV_ERRCNT(R6), R0
+        CMPL    R10, #DVI$_ERRCNT
+        BEQL    LONG
+        MOVL    DV_STS(R6), R0
+        CMPL    R10, #DVI$_STS
+        BEQL    LONG
+        MOVL    #DEV$V_AVL, R1          ; DEVCHAR's bits
+        CMPL    R10, #DVI$_AVL
+        BEQL    30$
+        MOVL    #DEV$V_MNT, R1
+        CMPL    R10, #DVI$_MNT
+        BEQL    30$
+        MOVL    #DEV$V_ALL, R1
+        CMPL    R10, #DVI$_ALL
+        BEQL    30$
+        MOVL    #DEV$V_SWL, R1
+        CMPL    R10, #DVI$_SWL
         BNEQ    40$
+30$:    EXTZV   R1, #1, DV_CHAR(R6), R0
+        BRB     LONG
+40$:    CMPL    R10, #DVI$_MOUNTCNT
+        BNEQ    45$
         BSBW    MOUNTED
-        BLBC    R0, 37$
+        BRB     LONG
+45$:    CMPL    R10, #DVI$_CLUSTER
+        BNEQ    50$
+        BSBW    MOUNTED
+        BLBC    R0, LONG
+        MOVZWL  VCB$W_CLUSTER(R5), R0
+        BRB     LONG
+50$:    CMPL    R10, #DVI$_FREEBLOCKS
+        BNEQ    80$
+        BSBW    MOUNTED
+        BLBC    R0, LONG
         PUSHL   F11$GL_VCB
         MOVL    R5, F11$GL_VCB
         BSBW    FIL$FREEBLOCKS
         MOVL    (SP)+, F11$GL_VCB
-        BLBS    R1, 38$
+        BLBS    R1, LONG
         MOVL    R1, R0
         RSB
-37$:    CLRL    R0
-38$:    BRW     LONG
-40$:    CMPL    R10, #DVI$_CLUSTER
-        BNEQ    45$
-        BSBW    MOUNTED
-        BLBC    R0, 42$
-        MOVZWL  VCB$W_CLUSTER(R5), R0
-42$:    BRW     LONG
-45$:    CMPL    R10, #DVI$_MOUNTCNT
-        BNEQ    50$
-        BSBW    MOUNTED
-        BRW     LONG
-50$:    CMPL    R10, #DVI$_AVL
-        BNEQ    52$
-        BSBW    DEVCHAR
-        EXTZV   #DEV$V_AVL, #1, R0, R0
-        BRW     LONG
-52$:    CMPL    R10, #DVI$_MNT
-        BNEQ    54$
-        BSBW    DEVCHAR
-        EXTZV   #DEV$V_MNT, #1, R0, R0
-        BRW     LONG
-54$:    CMPL    R10, #DVI$_ALL
-        BNEQ    55$
-        BSBW    DEVCHAR
-        EXTZV   #DEV$V_ALL, #1, R0, R0
-        BRW     LONG
-55$:    CMPL    R10, #DVI$_SWL
-        BNEQ    56$
-        BSBW    DEVCHAR
-        EXTZV   #DEV$V_SWL, #1, R0, R0
-        BRW     LONG
-56$:    CMPL    R10, #DVI$_STS
-        BNEQ    60$
-        BSBW    ONLINE
-        BRW     LONG
-60$:    CMPL    R10, #DVI$_DEVBUFSIZ
-        BNEQ    64$
-        MOVZWL  #512, R0                ; a disk's block
-        TSTL    R5
-        BNEQ    62$
-        MOVZWL  TTCHAR+2, R0            ; a terminal's width
-62$:    BRW     LONG
-64$:    CLRL    R0                      ; a disk's are 0
-        CMPL    R10, #DVI$_DEVTYPE
-        BNEQ    66$
-        TSTL    R5
-        BNEQ    62$
-        MOVZBL  TTCHAR+1, R0
-        BRB     62$
-66$:    CMPL    R10, #DVI$_DEVDEPEND
-        BNEQ    68$
-        TSTL    R5
-        BNEQ    62$
-        MOVL    TTCHAR+4, R0
-        BRB     62$
-68$:    CMPL    R10, #DVI$_DEVDEPEND2
-        BNEQ    70$
-        TSTL    R5
-        BNEQ    62$
-        MOVL    TTCHAR+8, R0
-        BRB     62$
-70$:    CMPL    R10, #DVI$_DEVDEPEND3
-        BNEQ    80$
-        TSTL    R5
-        BNEQ    62$
-        MOVL    TTCHAR3, R0
-        BRB     62$
-80$:    CMPL    R10, #DVI$_DEVCHAR2
-        BNEQ    84$
-        TSTL    R5
-        BNEQ    62$
-        BBC     #UCB$V_TT_DET, TTSTS, 82$
-        BISL2   #DEV$M_DET, R0
-82$:    BBC     #UCB$V_TT_RED, TTSTS, 62$
-        BISL2   #DEV$M_RED, R0
-        BRB     62$
-84$:    CMPL    R10, #DVI$_TT_PHYDEVNAM
-        BNEQ    88$
-        CLRL    R2                      ; a disk's, a disconnected terminal's: none
-        TSTL    R5
-        BNEQ    86$
-        MOVL    TTPHY, R1
-        BEQL    86$
-        MOVB    #^A/_/, NAMBUF
-        MOVL    R1, NAMBUF+1
-        MOVB    #^A/:/, NAMBUF+5
-        MOVAB   NAMBUF, R1
-        MOVL    #6, R2
-86$:    BRW     STRING
-88$:    MOVL    #SS$_BADPARAM, R0
+80$:    MOVL    #SS$_BADPARAM, R0
         RSB
-; MBXITEM: ITEM for a mailbox or a network unit, R6: its name, _MBnn: or
-; _BGnn:, its class, its unit, its channels, and 0 for other items.
-MBXITEM:
-        CMPL    R10, #DVI$_DEVNAM
-        BNEQ    10$
-        MOVB    #^A/_/, NAMBUF
-        MOVL    UCB$T_NAME(R6), NAMBUF+1
-        MOVB    #^A/:/, NAMBUF+5
-        MOVAB   NAMBUF, R1
-        MOVL    #6, R2
-        BRB     STRING
-10$:    MOVZWL  #DC$_MAILBOX, R0
-        MOVAB   MB$FDT, R1
-        CMPL    UCB$L_FDT(R6), R1       ; a network unit's class is 0
-        BNEQ    20$
-        CMPL    R10, #DVI$_DEVCLASS
-        BEQL    LONG
-20$:    MOVL    UCB$L_UNIT(R6), R0
-        CMPL    R10, #DVI$_UNIT
-        BEQL    LONG
-        MOVL    UCB$L_REFC(R6), R0
-        CMPL    R10, #DVI$_REFCNT
-        BEQL    LONG
-        CLRL    R0
 ; LONG: R0 = a value. Returns it as an item, a longword.
-LONG:   MOVL    R0, VALUE
-        MOVAB   VALUE, R1
+LONG:   MOVL    R0, DV_VALUE(R6)
+        MOVAB   DV_VALUE(R6), R1
         MOVL    #4, R2
 ; STRING: R1 and R2 = a string. Returns it as an item.
 STRING:
@@ -493,30 +308,54 @@ MOUNTED:
         EXTZV   #VCB$V_MOUNTED, #1, VCB$L_STATUS(R5), R0
 10$:    RSB
 
+; NEXTDEV: R4 = one of the I/O database's DDBs, or 0 to start, R5 = the
+; number of the unit of it to start with. R10 = the first unit of the
+; database there or past it, R11 = its DDB, R0 = 1; or R0 = 0 past the
+; last. IPL$_SYNCH. Keeps every other register.
+NEXTDEV:
+        .JSB_ENTRY  OUTPUT=<R10, R11>
+        CLRQ    R10
+        MOVL    R4, R11
+        BEQL    40$
+        MOVL    DDB$L_UCB(R11), R10     ; its unit, or the next
+30$:    TSTL    R10
+        BEQL    40$
+        CMPW    UCB$W_UNIT(R10), R5
+        BGEQU   50$
+        MOVL    UCB$L_LINK(R10), R10
+        BRB     30$
+40$:    BRW     IOC$SCAN_IODB           ; else the next DDB's first
+50$:    MOVL    #1, R0
+        RSB
+
 ; $DEVICE_SCAN return_devnam, retlen, search_devnam, itmlst, contxt:
-; finds the next device whose name matches search_devnam, with * and %
-; wildcards, without its underscore or colon, or any device without one
-; (or with an empty one), and of the class DVS$_DEVCLASS gives, if the
-; item list has it. Writes its name, _DDCU:, to return_devnam's buffer,
-; as much as fits, and its length to the word at retlen. contxt is a
-; quadword, 0 to start from the first device, which it keeps where the
-; scan is. SS$_NOMOREDEV after the last, SS$_BADPARAM for another item.
+; finds the next device, in the I/O database's order, whose name matches
+; search_devnam, with * and % wildcards, without its underscore or
+; colon, or any device without one (or with an empty one), and of the
+; class DVS$_DEVCLASS gives, if the item list has it. Writes its name,
+; _DDCU:, to return_devnam's buffer, as much as fits, and its length to
+; the word at retlen. contxt is a quadword, 0 to start from the first
+; device, which it keeps where the scan is: the device's DDB, and the
+; number past its unit's, so a unit that goes between calls loses no
+; other. SS$_NOMOREDEV after the last; SS$_BADPARAM for another item, a
+; search name longer than 64 or a context that isn't one.
         .ENTRY  EXE$DEVICE_SCAN, ^M<R2, R3, R4, R5, R6, R7, R8, R9, R10, R11>
+        SUBL2   #64+NAMSIZ, SP          ; the search name, in capitals, then a device's
         MOVL    4(AP), R1               ; the name's buffer
         IFNORD  #8, (R1), 85$
         MOVZWL  (R1), R9
-        MOVL    4(R1), R11
-        IFNOWRT R9, (R11), 85$
+        MOVL    4(R1), R8
+        IFNOWRT R9, (R8), 85$
         MOVL    8(AP), R0
         BEQL    5$
         IFNOWRT #2, (R0), 85$
-5$:     CLRL    R7                      ; the pattern: its length,
+5$:     CLRL    R7                      ; the pattern's length
         MOVL    12(AP), R1
         BEQL    15$
         BSBW    EXE$PROBER_DSC
         BLBC    R0, 90$
         MOVZWL  (R1), R7
-        MOVL    4(R1), R6               ; its address
+        MOVL    4(R1), R6
         TSTL    R7
         BEQL    15$
         CMPB    (R6), #^A/_/
@@ -526,65 +365,107 @@ MOUNTED:
 10$:    TSTL    R7
         BEQL    15$
         CMPB    -1(R6)[R7], #^A/:/
-        BNEQ    15$
+        BNEQ    12$
         DECL    R7
-15$:    MNEGL   #1, R10                 ; the class, -1 any
-        MOVL    16(AP), R8
+12$:    CMPL    R7, #64
+        BGTRU   87$
+        CLRL    R0
+13$:    CMPL    R0, R7
+        BGEQU   15$
+        MOVB    (R6)[R0], R1
+        CMPB    R1, #^A/a/
+        BLSSU   14$
+        CMPB    R1, #^A/z/
+        BGTRU   14$
+        BICB2   #^X20, R1
+14$:    MOVB    R1, (SP)[R0]
+        INCL    R0
+        BRB     13$
+15$:    MOVL    SP, R6
+        MOVAB   64(SP), R8              ; a device's name, made there
+        MNEGL   #1, R2                  ; the class, -1 any
+        MOVL    16(AP), R3
         BEQL    30$
-20$:    IFNORD  #4, (R8), 85$
-        TSTL    (R8)
+20$:    IFNORD  #4, (R3), 85$
+        TSTL    (R3)
         BEQL    30$
-        IFNORD  #12, (R8), 85$
-        MOVL    #SS$_BADPARAM, R0
-        CMPW    2(R8), #DVS$_DEVCLASS
-        BNEQ    90$
-        IFNORD  #4, @4(R8), 85$
-        MOVL    @4(R8), R10
-        ADDL2   #12, R8
+        IFNORD  #12, (R3), 85$
+        CMPW    2(R3), #DVS$_DEVCLASS
+        BNEQ    87$
+        IFNORD  #4, @4(R3), 85$
+        MOVL    @4(R3), R2
+        ADDL2   #12, R3
         BRB     20$
-30$:    CLRL    R4                      ; where the scan is
-        MOVL    20(AP), R8
-        BEQL    40$
-        IFNOWRT #8, (R8), 85$
-        MOVL    (R8), R4
-40$:    DSBINT  #IPL$_SYNCH             ; the terminals stay
-        BSBW    DEVICE
-        ENBINT
-        BLBC    R0, 90$
-        INCL    R4
-        TSTL    R10
+30$:    CLRQ    R4                      ; where the scan is
+        MOVL    20(AP), R3
+        BEQL    35$
+        IFNOWRT #8, (R3), 85$
+        MOVQ    (R3), R4
+35$:    DSBINT  #IPL$_SYNCH             ; the devices stay
+        TSTL    R4
+        BEQL    38$
+        MOVL    IOC$GL_DEVLIST, R0      ; the context's DDB must be one
+36$:    TSTL    R0
+        BEQL    82$
+        CMPL    R0, R4
+        BEQL    38$
+        MOVL    DDB$L_LINK(R0), R0
+        BRB     36$
+38$:    BSBW    NEXTDEV
+        BLBC    R0, 80$
+40$:    MOVL    R11, R4                 ; past it, next time
+        MOVZWL  UCB$W_UNIT(R10), R5
+        INCL    R5
+        TSTL    R2
         BLSS    45$
-        MOVL    #DC$_TERM, R0
-        TSTL    R5
-        BEQL    42$
-        MOVL    #DC$_DISK, R0
-42$:    CMPL    R0, R10
-        BNEQ    40$
-45$:    BSBW    DEVNAME
+        MOVZBL  UCB$B_DEVCLASS(R10), R0
+        CMPL    R0, R2
+        BNEQ    60$
+45$:    PUSHL   R5
+        MOVL    R10, R5
+        MOVL    #NAMSIZ, R0
+        MOVL    R8, R1
+        BSBW    IOC$CVT_DEVNAM
+        MOVL    (SP)+, R5
+        MOVL    R1, R3                  ; its length
         TSTL    R7
-        BEQL    50$
-        INCL    R1                      ; DDCU
-        MOVL    #4, R2
-        BSBW    FIL$MATCH
-        BLBC    R0, 40$
-        BSBW    DEVNAME
-50$:    CMPL    R2, R9
-        BLEQU   55$
-        MOVL    R9, R2
-55$:    CLRL    R3
-60$:    CMPL    R3, R2
-        BGEQU   65$
-        MOVB    (R1)[R3], (R11)[R3]
-        INCL    R3
-        BRB     60$
-65$:    MOVL    8(AP), R0
         BEQL    70$
-        MOVW    R2, (R0)
-70$:    TSTL    R8
-        BEQL    75$
-        MOVL    R4, (R8)
-        CLRL    4(R8)
-75$:    MOVL    #SS$_NORMAL, R0
+        PUSHL   R2
+        ADDL3   #1, R8, R1              ; DDCU
+        SUBL3   #2, R3, R2
+        BSBW    FIL$MATCH
+        MOVL    (SP)+, R2
+        BLBS    R0, 70$
+60$:    BSBW    NEXTDEV
+        BLBS    R0, 40$
+        BRB     80$
+70$:    ENBINT
+        MOVL    4(AP), R1               ; the caller's buffer: as much as fits
+        MOVZWL  (R1), R9
+        MOVL    4(R1), R2
+        IFNOWRT R9, (R2), 85$
+        CMPL    R3, R9
+        BLEQU   72$
+        MOVL    R9, R3
+72$:    CLRL    R0
+73$:    CMPL    R0, R3
+        BGEQU   75$
+        MOVB    (R8)[R0], (R2)[R0]
+        INCL    R0
+        BRB     73$
+75$:    MOVL    8(AP), R0
+        BEQL    76$
+        MOVW    R3, (R0)
+76$:    MOVL    20(AP), R0
+        BEQL    77$
+        MOVQ    R4, (R0)
+77$:    MOVL    #SS$_NORMAL, R0
+        RET
+80$:    ENBINT
+        MOVL    #SS$_NOMOREDEV, R0
+        RET
+82$:    ENBINT
+87$:    MOVL    #SS$_BADPARAM, R0
         RET
 85$:    MOVL    #SS$_ACCVIO, R0
 90$:    RET

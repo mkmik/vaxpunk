@@ -2,7 +2,7 @@
 
 Oct 5, 2026 · @Marko Mikulicic
 
-Proposed. `$CREMBX` makes a mailbox as a UCB from pool, `MBnn`, on a list
+Proposed; decision 1 superseded by [ADR-0044](0044-the-io-database.md). `$CREMBX` makes a mailbox as a UCB from pool, `MBnn`, on a list
 of its own, as `BGA0:` clones network units, and assigns a channel to it;
 a logical name for it goes in the system table. A write queues the
 message on the UCB and is done at once; a read takes the oldest message

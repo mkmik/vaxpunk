@@ -344,7 +344,8 @@ const RAMDISK: Phase = Phase {
 /// one to the system disk that fails, COPY of a list into one file, of a
 /// wildcard into a file each, and of a wildcard into one file that it
 /// finds too, which it passes over, SHOW DEVICES, SHOW DEVICES/FULL of
-/// DKB0: and of OPA0:, a DISMOUNT of DKA0:
+/// DKB0: and of OPA0:, the mailboxes, MBA2: and BG0:, the template, and
+/// F$GETDVI of devices named as VMS's search takes them, a DISMOUNT of DKA0:
 /// that fails and one of DKB0: that doesn't, which deletes DISK$DATA, a
 /// DIRECTORY there that fails, a MOUNT that names its logical name WORK:,
 /// and a SHOW DEVICES of DKB0: after each MOUNT, a DIRECTORY of the new directory and a DELETE
@@ -387,6 +388,8 @@ const DATA_DISK: Phase = Phase {
             1,
             concat!(
                 "DIR DKB0:[000000]\rSHOW DEVICES\rSHOW DEVICES/FULL DKB0\rSHOW DEVICES/FULL OPA0:\r",
+                "SHOW DEVICES MB\rSHOW DEVICES/FULL MBA2\rSHOW DEVICES/FULL BG0\r",
+                "WRITE SYS$OUTPUT F$GETDVI(\"OP0\",\"DEVNAM\"), F$GETDVI(\"DKB\",\"DEVNAM\"), F$GETDVI(\"MB2\",\"DEVCLASS\"), F$GETDVI(\"FOO_BAR\",\"EXISTS\")\r",
                 "DISMOUNT DKA0:\rDISMOUNT DKB0:\rSHOW LOGICAL DISK$DATA\r",
                 "DIR DKB0:[000000]\rMOUNT/SYSTEM DKB0: DATA WORK:\rSHOW DEVICES DKB0\rSHOW LOGICAL WORK\r",
                 "DIR DKB0:[SUB.DEEP]\rDELETE DKB0:[000000]SUB.DIR;1\r",
@@ -425,8 +428,13 @@ const DATA_DISK: Phase = Phase {
         "DKA0:                   Mounted wrtlck       0  VAXPUNK",
         "DKB0:                   Mounted              0  DATA",
         "MDA0:                   Mounted              0  RAM",
-        "OPA0:                   Online               0",
-        "\nDisk DKB0:, device type unknown, is online, mounted, file-oriented device,\n    shareable.\n\n    Error count                    0    Default buffer size                 512\n\n    Volume label              \"DATA\"    Cluster size                          3\n    Free blocks ",
+        "OPA0:                   Online               0\nFTA0:                   Offline              0\nTNA0:                   Online               0\nVTA0:                   Online               0\n$ ",
+        "MBA2:                   Online               0\n",
+        "\nDevice MBA2:, device type local memory mailbox, is online, record-oriented\n    device, shareable, mailbox device.\n",
+        "\nDevice BG0:, device type unknown, is online, record-oriented device, network\n    device, mailbox device, device is a template only.\n",
+        "_OPA0:_DKB0:160FALSE\n",
+        "\nDisk DKB0:, device type unknown, is online, mounted, file-oriented device,\n    shareable.\n\n    Error count                    0\n    Reference count",
+        "    Default buffer size                 512\n\n    Volume label              \"DATA\"    Cluster size                          3\n    Free blocks ",
         "\nTerminal OPA0:, device type VT100, is online, record-oriented device, carriage\n    control.\n\n    Error count                    0\n    Reference count",
         "    Default buffer size                  80\n\n$ ",
         "%SYSTEM-F-DEVACTIVE, device is active",

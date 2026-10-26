@@ -61,11 +61,11 @@ note = "PRD-0003 tier 1 #4, step 5; show.mar ponytail"
 
 [[feature]]
 id = "every-device"
-title = "SHOW DEVICES lists every device from its UCB, BGA0: too, and /FULL"
-status = "todo"
+title = "SHOW DEVICES lists every device from its UCB, BG0: too, and /FULL"
+status = "done"
 milestone = "m1"
 needs = ["/exec/information-services#devices-from-ucbs"]
-note = "PRD-0003 tier 1 #9 and tier 3 #24"
+note = "ADR-0044: the disks, the terminals, then the rest, mailboxes and DEV$M_MBX devices only when named, as VMS's; /FULL says the DEV$ bits"
 
 [[feature]]
 id = "default-protection"

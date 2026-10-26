@@ -1,12 +1,12 @@
 +++
 title = "Network device (BG)"
-summary = "BGA0: and its BGnn units: the port driver to the TCP/IP component"
-aka = ["BGA0:", "BGnn", "BG0:", "netdriver.mar", "NET$FDT", "port driver", "TCPIP$DEVICE", "IO$_TTY_PORT", "NET$TTIO"]
+summary = "BG0: and its BGn units: the port driver to the TCP/IP component"
+aka = ["BG0:", "BGn", "BGA0:", "netdriver.mar", "NET$FDT", "NET$DDT", "port driver", "TCPIP$DEVICE", "IO$_TTY_PORT", "NET$TTIO"]
 kind = "core"
 intent = "goal"
 research = "done"
 milestone = "m0"
-refs = ["docs/adr/0016-tcpip-component-and-bga0.md", "docs/adr/0024-sockets-have-tcpip-services-qio-interface.md", "docs/adr/0027-terminals-are-ucbs-and-telnet-is-in-the-driver.md", "docs/design/0003-tcpip-port.md", "docs/prd/0002-networking.md", "vms/exec/netdriver.mar"]
+refs = ["docs/adr/0016-tcpip-component-and-bga0.md", "docs/adr/0024-sockets-have-tcpip-services-qio-interface.md", "docs/adr/0027-terminals-are-ucbs-and-telnet-is-in-the-driver.md", "docs/adr/0044-the-io-database.md", "docs/design/0003-tcpip-port.md", "docs/prd/0002-networking.md", "vms/exec/netdriver.mar"]
 
 [[feature]]
 id = "port"
@@ -17,10 +17,10 @@ note = "PRD-0002, DESIGN-0003"
 
 [[feature]]
 id = "template"
-title = "BGA0:, a template whose IO$_SETMODE clones a BGnn unit per socket"
+title = "BG0:, a template a BGn unit is cloned from for each channel, whose IO$_SETMODE makes its socket"
 status = "done"
 milestone = "m0"
-note = "ADR-0016"
+note = "ADR-0016, ADR-0044"
 
 [[feature]]
 id = "tcpip-qio"
@@ -37,17 +37,17 @@ note = "ADR-0027"
 
 [[feature]]
 id = "device-scan"
-title = "BGA0: and its units seen by $DEVICE_SCAN and $GETDVI"
-status = "todo"
+title = "BG0: and its units seen by $DEVICE_SCAN and $GETDVI"
+status = "done"
 milestone = "m1"
-note = "PRD-0003 tier 1 #9"
+note = "ADR-0044: units of the I/O database, DEV$M_NET and DEV$M_MBX, class 0, as TCP/IP Services'"
 
 [[feature]]
 id = "close-pool"
-title = "A CLOSE that finds no pool still closes; unit numbers skip units in use"
+title = "A CLOSE that finds no pool still closes"
 status = "todo"
 milestone = "m1"
-note = "PRD-0003 tier 2 #14"
+note = "PRD-0003 tier 2 #14; unit numbers skip units in use since ADR-0044's IOC$CLONE_UCB"
 
 [[feature]]
 id = "flags-options"
@@ -58,8 +58,8 @@ note = "PRD-0003 tier 3 #35; netdriver.mar ponytail"
 [[feature]]
 id = "clone-at-assign"
 title = "A unit cloned at $ASSIGN, as TCP/IP Services does"
-status = "todo"
-note = "netdriver.mar ponytail"
+status = "done"
+note = "ADR-0044: NETMBX, as VMS's $ASSIGN of a network device; NET$CLONEDUCB"
 
 [[feature]]
 id = "more-ports"
@@ -100,8 +100,8 @@ soft = true
 +++
 
 On VMS with TCP/IP Services, `BG0:` is the device programs reach the
-network through: a channel assigned to it gets a socket with
-`IO$_SETMODE`, and from then on is a `BGnn` unit of its own. Under it
+network through, a template: a channel assigned to it goes to a `BGn`
+unit of its own, which gets a socket with `IO$_SETMODE`. Under it
 sits the stack, in the executive (`TCPIP$INTERNET_SERVICES`), and under
 that the LAN drivers. MultiNet and TCPware had their own devices. The
 socket functions themselves are t8y:/net/tcpip-qio.
@@ -112,8 +112,9 @@ port's pages with it. Each request is a command in the port's ring and
 a doorbell; the component answers in the response ring and interrupts
 at `IPL$_PORT`, and a fork completes the IRPs
 ([DESIGN-0003](../../design/0003-tcpip-port.md),
-[ADR-0016](../../adr/0016-tcpip-component-and-bga0.md)). `BGA0:`
-clones a unit per socket. It also sends and receives for the terminal
+[ADR-0016](../../adr/0016-tcpip-component-and-bga0.md)). `$ASSIGN`
+clones a unit of `BG0:`'s for each channel, as TCP/IP Services'
+([ADR-0044](../../adr/0044-the-io-database.md)). It also sends and receives for the terminal
 driver, which drives `TNAn` terminals over TCP connections
 ([ADR-0027](../../adr/0027-terminals-are-ucbs-and-telnet-is-in-the-driver.md)).
 The port is the seam PRD-0002 keeps: a native stack would take lwIP's

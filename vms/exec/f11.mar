@@ -5,10 +5,12 @@
 ; (crosstools/ods/docs/) that the PAL reads a block at a time with READLBLK; DKB0:,
 ; the data disk, which the PAL also writes, with WRITELBLK; and MDA0:,
 ; the ramdisk (mddriver.mar). The file system can write the last two.
-; DK$FDT is their driver, for $QIO's reads and writes by LBN, and its
-; start I/O routine, DK$STARTIO, does the file system's too: as VMS's XQP,
-; FIL$READLBLK and FIL$WRITELBLK hand the driver an IRP, through the
-; disk's UCB.
+; DK$DDT is their driver's dispatch table: its FDT routine, DK$FDT, for
+; $QIO's reads and writes by LBN, and its start I/O routine, DK$STARTIO,
+; which does the file system's too: as VMS's XQP, FIL$READLBLK and
+; FIL$WRITELBLK hand the driver an IRP, through the disk's UCB, a unit of
+; the I/O database (qio.mar), whose DEV$M_MNT, DEV$M_SWL and DEV$M_ALL
+; mounting sets, as VMS's MOUNT does.
 ; FIL$MOUNT mounts a volume: it reads the home block and keeps the index
 ; file's header, through which every other file's header is found;
 ; $DISMOU forgets it. A volume $MOUNT mounts without MNT$M_SYSTEM is its
@@ -44,14 +46,17 @@
         $RMSDEF
         $VCBDEF
         $MNTDEF
+        $DDTDEF
         $UCBDEF
         $IRPDEF
         $IODEF
         $ARMDEF
+        $DEVDEF
 
         .EXTERNAL EXE$OUTZSTRING, EXE$OUTCSTRING, EXE$OUTCRLF
         .EXTERNAL EXE$ALONONPAGED, EXE$DEANONPGDSIZ, RMS$LOCATE, MD$IO
         .EXTERNAL IOC$ALLOCIRP, IOC$REQCOM, IOC$AB_DKA0, IOC$AB_DKB0, IOC$AB_MDA0
+        .EXTERNAL IOC$SEARCHDEV, IOC$RETURN
         .EXTERNAL EXE$PROBER_DSC, RMS$VOLIDLE, SCH$GL_CURPCB, SCH$WAIT, SCH$WAKEPCB
         .EXTERNAL XQP$GL_IRP, FIL$ACLCHK, LNM$GL_SYSTEM, LNM$CREATE, LNM$DELETE
         .EXTERNAL SCH$GL_PCBVEC, SCH$GL_MAXPIX
@@ -96,6 +101,7 @@ FAT$W_MAXREC = 16
 MAXSYSGROUP = 8                         ; UIC groups up to this one are the system's
 
         .PSECT  EXEC$DATA, NOEXE, WRT, QUAD
+        DDT     DK$DDT, DK$FDT, START=DK$STARTIO, UNITINIT=DK$UNITINIT ; the disks' driver's
 F11$GL_VCB::                            ; the volume the routines here work on
         .ADDRESS F11$AB_DKA0
 F11$AB_DKA0::                           ; DKA0:'s VCB, the system disk's
@@ -228,7 +234,8 @@ LBLK:   .GLOBAL_LABEL                   ; FIL$READLBLK's too
         MOVL    F11$GL_VCB, R5
         MOVL    VCB$L_UCB(R5), R5
         MOVL    R5, IRP$L_UCB(R3)
-        MOVL    UCB$L_START(R5), R0
+        MOVL    UCB$L_DDT(R5), R0
+        MOVL    DDT$L_START(R0), R0
         DSBINT  #IPL$_SYNCH
         JSB     (R0)
         ENBINT
@@ -320,7 +327,7 @@ DK$FDT::
 ; UCB. Does the IRP's read or write of IRP$L_BCNT bytes at IRP$L_BUFADR,
 ; from or to LBN IRP$L_MEDIA, at once, and completes it (IOC$REQCOM) with
 ; the status, and the count if it is a success; SS$_DRVERR, the device's
-; own failure, counts in UCB$L_ERRCNT. R0 = SS$_NORMAL. IPL$_SYNCH. Uses
+; own failure, counts in UCB$W_ERRCNT. R0 = SS$_NORMAL. IPL$_SYNCH. Uses
 ; R0-R3.
 DK$STARTIO::
         .JSB_ENTRY  SCRATCH=<R2, R3, R4>
@@ -343,40 +350,64 @@ DK$STARTIO::
         BRB     30$
 20$:    CMPL    R0, #SS$_DRVERR
         BNEQ    30$
-        INCL    UCB$L_ERRCNT(R5)
+        INCW    UCB$W_ERRCNT(R5)
 30$:    CLRL    R1
         BRW     IOC$REQCOM
 
-; FIL$SELECT: R1 = a device name, R2 = its length: DKA0, DKB0 or MDA0, with a
-; colon after it or not, an underscore before it or not. Makes its VCB
-; F11$GL_VCB. R0 = SS$_NORMAL, or SS$_NOSUCHDEV and F11$GL_VCB as it was.
-; Uses R1-R3.
+; DK$UNITINIT: the disks' unit initialization, IOC$INIT's at boot. R5 =
+; a disk's UCB. Puts it online if the PAL has the disk, as its size,
+; GETMAXBLOCK's, says; the ramdisk is offline until it is made
+; (MD$CREATE). Uses R0.
+DK$UNITINIT::
+        .JSB_ENTRY
+        MOVL    UCB$L_VCB(R5), R0
+        BBS     #VCB$V_RAMDISK, VCB$L_STATUS(R0), 90$
+        MOVZBL  VCB$B_UNIT(R0), R0
+        CALL_PAL #PAL$_GETMAXBLOCK
+        TSTL    R0
+        BEQL    90$
+        BISL2   #UCB$M_ONLINE, UCB$L_STS(R5)
+90$:    RSB
+
+; FIL$SELECT: R1 = a device name, R2 = its length. Makes F11$GL_VCB the
+; VCB of the disk it names, translated as $ASSIGN translates it
+; (IOC$SEARCHDEV): DKA0:, DKB0: or MDA0:. R0 = SS$_NORMAL, or
+; SS$_NOSUCHDEV for one that isn't a disk, SS$_IVDEVNAM for one that
+; isn't a device's name, and F11$GL_VCB as it was. Uses R1-R3.
 FIL$SELECT::
         .JSB_ENTRY  SCRATCH=<R2, R3>
-        TSTL    R2
-        BEQL    80$
-        CMPB    (R1), #^A/_/
+        PUSHL   R1                      ; a descriptor of it
+        PUSHL   R2
+        MOVL    SP, R1
+        DSBINT  #IPL$_SYNCH             ; the logical names and the devices
+        BSBW    IOC$SEARCHDEV
+        BLBC    R0, 80$
+        MOVL    UCB$L_VCB(R1), R2
         BNEQ    10$
-        INCL    R1
-        DECL    R2
-10$:    CMPL    R2, #5
-        BNEQ    15$
-        CMPB    4(R1), #^A/:/
-        BNEQ    80$
-        DECL    R2
-15$:    CMPL    R2, #4
-        BNEQ    80$
-        MOVAB   F11$AB_DKA0, R3
-20$:    CMPL    (R1), VCB$T_DEVNAM(R3)
-        BEQL    30$
-        ADDL2   #VCB$K_LENGTH, R3
-        MOVAB   F11$A_VCBEND, R0
-        CMPL    R3, R0
-        BLSSU   20$
-80$:    MOVL    #SS$_NOSUCHDEV, R0
+        MOVL    #SS$_NOSUCHDEV, R0
+        BRB     80$
+10$:    MOVL    R2, F11$GL_VCB
+80$:    ENBINT
+        ADDL2   #8, SP
         RSB
-30$:    MOVL    R3, F11$GL_VCB
-        MOVL    #SS$_NORMAL, R0
+
+; SETCHAR: R1 = a disk's VCB. Gives the disk's UCB the DEV$ bits the
+; volume says, as VMS's MOUNT and DISMOUNT do: MNT while it is mounted,
+; SWL too while it can't be written, and ALL while it is a job's, mounted
+; privately. Keeps every register.
+SETCHAR:
+        .JSB_ENTRY
+        PUSHL   R0
+        MOVL    VCB$L_UCB(R1), R0
+        BICL2   #DEV$M_MNT!DEV$M_SWL!DEV$M_ALL, UCB$L_DEVCHAR(R0)
+        BBC     #VCB$V_MOUNTED, VCB$L_STATUS(R1), 90$
+        BISL2   #DEV$M_MNT, UCB$L_DEVCHAR(R0)
+        BBS     #VCB$V_WRITE, VCB$L_STATUS(R1), 10$
+        BISL2   #DEV$M_SWL, UCB$L_DEVCHAR(R0)
+10$:    TSTL    VCB$L_PID(R1)
+        BEQL    90$
+        BISL2   #DEV$M_ALL, UCB$L_DEVCHAR(R0)
+90$:    MOVL    (SP)+, R0
         RSB
 
 ; FIL$MOUNT: R1 = the label the volume must have, .ASCIC, or 0 for any,
@@ -464,6 +495,8 @@ FIL$MOUNT::
         MOVL    R0, VCB$L_SBMAPBLKS(R5)
 30$:    MNEGL   #1, VCB$L_FREE(R5)      ; not counted yet
         BISL2   #1@VCB$V_MOUNTED, VCB$L_STATUS(R5)
+        MOVL    R5, R1
+        BSBW    SETCHAR
         BSBB    MNTLNM
         DSBINT  #IPL$_SYNCH             ; the console, a line at a time
         MOVAB   MOUNTED, R1
@@ -797,6 +830,7 @@ DISMNT:
         BICL2   #1@VCB$V_MOUNTED, VCB$L_STATUS(R1)
         BISL2   #1@VCB$V_WRITE, VCB$L_STATUS(R1)
         CLRL    VCB$L_PID(R1)
+        BSBW    SETCHAR
         MOVL    #SS$_NORMAL, R0
 90$:    RSB
 
@@ -821,6 +855,7 @@ FIL$RUNDOWN::
         CLRB    VCB$T_DISKNAM(R1)
         CLRB    VCB$T_LOGNAM(R1)
         CLRL    VCB$L_PID(R1)
+        BSBW    SETCHAR
 20$:    ADDL2   #VCB$K_LENGTH, R1
         MOVAB   F11$A_VCBEND, R0
         CMPL    R1, R0

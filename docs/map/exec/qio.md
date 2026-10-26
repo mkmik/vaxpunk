@@ -1,12 +1,12 @@
 +++
 title = "$QIO, IRPs and drivers"
 summary = "Channels, $QIO, I/O request packets, UCBs and the driver interface"
-aka = ["$QIO", "$QIOW", "$ASSIGN", "$DASSGN", "$CANCEL", "$SYNCH", "IRP", "UCB", "DDB", "CRB", "IDB", "DDT", "FDT", "IOSB", "IOC$REQCOM", "IOC$POST", "I/O database", "BIOLM", "DIOLM", "BYTLM", "Fast I/O", "Fast Path", "qio.mar"]
+aka = ["$QIO", "$QIOW", "$ASSIGN", "$DASSGN", "$CANCEL", "$SYNCH", "IRP", "UCB", "DDB", "CRB", "IDB", "DDT", "FDT", "IOSB", "IOC$REQCOM", "IOC$POST", "I/O database", "IOC$GL_DEVLIST", "IOC$SEARCHDEV", "IOC$CLONE_UCB", "template device", "BIOLM", "DIOLM", "BYTLM", "Fast I/O", "Fast Path", "qio.mar"]
 kind = "core"
 intent = "goal"
 research = "done"
 milestone = "m0"
-refs = ["docs/adr/0013-qio-irps-and-drivers.md", "docs/adr/0015-file-system-io-through-the-disk-driver.md", "docs/adr/0016-tcpip-component-and-bga0.md", "docs/adr/0027-terminals-are-ucbs-and-telnet-is-in-the-driver.md", "docs/design/0002-executive-processes.md", "vms/exec/qio.mar", "docs/prd/0003-multi-user-vms.md"]
+refs = ["docs/adr/0013-qio-irps-and-drivers.md", "docs/adr/0015-file-system-io-through-the-disk-driver.md", "docs/adr/0016-tcpip-component-and-bga0.md", "docs/adr/0027-terminals-are-ucbs-and-telnet-is-in-the-driver.md", "docs/adr/0044-the-io-database.md", "docs/design/0002-executive-processes.md", "vms/exec/qio.mar", "docs/prd/0003-multi-user-vms.md"]
 
 [[feature]]
 id = "basic"
@@ -37,10 +37,11 @@ refs = ["docs/adr/0014-ctrlc-ctrly-asts.md"]
 
 [[feature]]
 id = "cloned-units"
-title = "Units cloned into pool: network sockets, mailboxes, TELNET terminals"
+title = "Units cloned into pool from a template: network sockets, mailboxes, TELNET, virtual and pseudo terminals"
 status = "done"
 milestone = "m0"
-refs = ["docs/adr/0016-tcpip-component-and-bga0.md", "docs/adr/0019-mailboxes.md", "docs/adr/0027-terminals-are-ucbs-and-telnet-is-in-the-driver.md"]
+refs = ["docs/adr/0016-tcpip-component-and-bga0.md", "docs/adr/0019-mailboxes.md", "docs/adr/0027-terminals-are-ucbs-and-telnet-is-in-the-driver.md", "docs/adr/0044-the-io-database.md"]
+note = "ADR-0044: IOC$CLONE_UCB numbers them 1 to 9999, the first free past the template's seed, as VMS's; $ASSIGN clones BG0:'s"
 
 [[feature]]
 id = "probe-post"
@@ -59,9 +60,10 @@ note = "PRD-0003 tier 2 #18; needed once a driver can't stop at once"
 [[feature]]
 id = "io-database"
 title = "Every device a UCB on one list, the network's and the disks' too"
-status = "todo"
+status = "done"
 milestone = "m1"
-note = "PRD-0003 tier 1 #9: BGA0: isn't seen by $DEVICE_SCAN; a VCB stands for a disk"
+refs = ["docs/adr/0044-the-io-database.md"]
+note = "ADR-0044: IOC$GL_DEVLIST's DDBs and their units' UCBs, a DDT per driver, VMS's IOC$SEARCHDEV and IOC$SCAN_IODB"
 
 [[feature]]
 id = "quotas"
@@ -78,9 +80,9 @@ note = "A private mount allocates its disk already, in VCB$L_PID (t8y:/files/vol
 
 [[feature]]
 id = "driver-structures"
-title = "VMS's DDB, CRB, IDB and DDT, and drivers loaded at run time"
+title = "VMS's CRB, IDB and FDT tables, and drivers loaded at run time"
 status = "todo"
-note = "ADR-0013 chose one UCB and an FDT routine per device"
+note = "ADR-0044 has the DDB and the DDT, whose FDT is one routine per driver, which checks the functions itself"
 
 [[feature]]
 id = "fast-io"
@@ -126,14 +128,18 @@ and the driver's dispatch table. RMS, the XQP, TCP/IP and DCL are all
 traffic.
 
 vaxpunk's is `vms/exec/qio.mar`
-([ADR-0013](../../adr/0013-qio-irps-and-drivers.md)). Each device
-is one UCB with an FDT routine; the FDT routine makes the IRP and does
-the I/O or queues it, and completion is a kernel mode AST, `IOC$POST`,
-which turns the IRP into the caller's AST. There is no I/O post queue,
-since drivers complete at `IPL$_SYNCH`. The drivers are the terminals',
-the disks' (whose start I/O routine the file system calls too,
+([ADR-0013](../../adr/0013-qio-irps-and-drivers.md)). The devices are
+VMS's I/O database
+([ADR-0044](../../adr/0044-the-io-database.md)): `IOC$GL_DEVLIST`'s
+DDBs, each with its units' UCBs by number and its driver's DDT, which
+`$ASSIGN`, `$GETDVI` and `$DEVICE_SCAN` search as VMS's do. The driver's
+FDT routine makes the IRP and does the I/O or queues it, and completion
+is a kernel mode AST, `IOC$POST`, which turns the IRP into the caller's
+AST. There is no I/O post queue, since drivers complete at
+`IPL$_SYNCH`. The drivers are the terminals', the disks' (whose start
+I/O routine the file system calls too,
 [ADR-0015](../../adr/0015-file-system-io-through-the-disk-driver.md)),
-the network's and the mailboxes'; network units, mailboxes and TELNET
-terminals are UCBs cloned into pool. Missing: probing in `IOC$POST`
-(PRD-0003 tier 2 #10), the I/O quotas (tier 1 #4), every device on one
-list (tier 1 #9), and VMS's full driver structures.
+the network's and the mailboxes'; network units, mailboxes and TELNET,
+virtual and pseudo terminals are units cloned into pool from a
+template. Missing: probing in `IOC$POST` (PRD-0003 tier 2 #10), CRBs,
+IDBs, FDT tables and loadable drivers.

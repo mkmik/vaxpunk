@@ -56,9 +56,9 @@ note = "ADR-0041; t8y:/drivers/terminal#virtual-terminals"
 [[feature]]
 id = "more-terminals"
 title = "More than 9 TNA units"
-status = "todo"
+status = "done"
 milestone = "m1"
-note = "PRD-0003 tier 1 #3: a device name has 4 characters"
+note = "ADR-0044: TNA1 to TNA9999"
 
 [[feature]]
 id = "command-mode"

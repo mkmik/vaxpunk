@@ -21,7 +21,10 @@
 //! - the system service vector, the SERVICE and STUB lines of syssrv.mar;
 //! - the macro libraries (crosstools/vtools/lib/*.mlb, vms/sysexe/*.mlb): the comment
 //!   block right above each `.MACRO`, and the `SYM = value ; meaning` lines of
-//!   the $xxxDEF macros;
+//!   the $xxxDEF macros; a library macro whose body starts with `NAME::`,
+//!   NAME its first argument, as lib.mlb's DDB, UCB and DDT, makes a global
+//!   data cell where a data psect calls it, with the comment above the call
+//!   or on its line;
 //! - the PAL calls: the tables of DESIGN-0001 (docs/design/0001-pal-interface.md).
 //!
 //! Run it to see the page locally; it isn't committed. CI runs it on every PR
@@ -303,6 +306,7 @@ fn parse_mar(
     root: &Path,
     path: &Path,
     mi: usize,
+    cells: &HashSet<String>,
     routines: &mut Vec<Routine>,
     data: &mut Vec<Data>,
 ) -> Module {
@@ -363,6 +367,27 @@ fn parse_mar(
                 global: true,
                 comment: block.clone(),
                 ..Default::default()
+            });
+            block.clear();
+            continue;
+        }
+        // a global data cell a library macro makes: `MACRO NAME, ...`
+        if !in_code
+            && let Some((mac, _)) = up.split_once(char::is_whitespace)
+            && cells.contains(mac)
+        {
+            let name = code(&s[mac.len()..]).trim_start().split([',', ' ']).next();
+            let mut b = block.clone();
+            if let Some((_, note)) = s.split_once(';')
+                && !note.trim().is_empty()
+            {
+                b.push(note.trim().to_string());
+            }
+            m.data.push(data.len());
+            data.push(Data {
+                name: name.unwrap_or("").to_string(),
+                doc: blocks(&b),
+                storage: mac.to_string(),
             });
             block.clear();
             continue;
@@ -731,12 +756,35 @@ fn calls(rs: &[Routine], r: usize, seen: &mut HashSet<usize>) -> Vec<usize> {
 impl Api {
     fn load(root: &Path) -> Api {
         let (mut routines, mut data, mut macros) = (vec![], vec![], vec![]);
+        let mut lib_paths = glob(&root.join("crosstools/vtools/lib"), "mlb");
+        lib_paths.extend(glob(&root.join("vms/sysexe"), "mlb"));
+        let libs: Vec<Lib> = lib_paths
+            .iter()
+            .enumerate()
+            .map(|(i, p)| parse_mlb(root, p, i, &mut macros))
+            .collect();
+        // The macros that make a global data cell: `NAME::` first, NAME
+        // their first argument.
+        let cells: HashSet<String> = macros
+            .iter()
+            .filter(|m| {
+                let first = m.params.split([',', ' ', '=']).next().unwrap_or("");
+                let label = format!("{}::", first.to_uppercase());
+                !first.is_empty()
+                    && m.body
+                        .iter()
+                        .map(|l| l.trim())
+                        .find(|l| !l.is_empty() && !l.starts_with(';'))
+                        .is_some_and(|l| l.to_uppercase().starts_with(&label))
+            })
+            .map(|m| m.name.to_uppercase())
+            .collect();
         let mut exec = glob(&root.join("vms/exec"), "mar");
         exec.push(root.join("crosstools/vtools/lib/consolio.mar"));
         let mut mods: Vec<Module> = exec
             .iter()
             .enumerate()
-            .map(|(i, p)| parse_mar(root, p, i, &mut routines, &mut data))
+            .map(|(i, p)| parse_mar(root, p, i, &cells, &mut routines, &mut data))
             .collect();
         for p in glob(&root.join("vms/exec"), "b64") {
             let m = parse_b64(root, &p, mods.len(), &mut routines);
@@ -744,16 +792,16 @@ impl Api {
         }
         // The images' libraries, and DCL's: their global routines and data
         // only, since their local names may be the executive's too.
-        let mut libs = glob(&root.join("vms/sysexe/lib"), "mar");
-        libs.extend(glob(&root.join("vms/sysexe/librtl"), "mar"));
-        libs.extend(glob(&root.join("vms/sysexe/lbrshr"), "mar"));
-        libs.push(root.join("vms/sysexe/dcl.mar"));
-        libs.extend(glob(&root.join("vms/sysexe/dcl"), "mar"));
-        libs.extend(glob(&root.join("vms/sysexe/rms"), "mar"));
-        libs.extend(glob(&root.join("vms/crtl"), "mar"));
-        for p in libs {
+        let mut lib_mars = glob(&root.join("vms/sysexe/lib"), "mar");
+        lib_mars.extend(glob(&root.join("vms/sysexe/librtl"), "mar"));
+        lib_mars.extend(glob(&root.join("vms/sysexe/lbrshr"), "mar"));
+        lib_mars.push(root.join("vms/sysexe/dcl.mar"));
+        lib_mars.extend(glob(&root.join("vms/sysexe/dcl"), "mar"));
+        lib_mars.extend(glob(&root.join("vms/sysexe/rms"), "mar"));
+        lib_mars.extend(glob(&root.join("vms/crtl"), "mar"));
+        for p in lib_mars {
             let (mut rs, mut ds) = (vec![], vec![]);
-            let mut m = parse_mar(root, &p, mods.len(), &mut rs, &mut ds);
+            let mut m = parse_mar(root, &p, mods.len(), &cells, &mut rs, &mut ds);
             m.image = true;
             m.routines.clear();
             m.data.clear();
@@ -772,13 +820,6 @@ impl Api {
             m.image = true;
             mods.push(m);
         }
-        let mut lib_paths = glob(&root.join("crosstools/vtools/lib"), "mlb");
-        lib_paths.extend(glob(&root.join("vms/sysexe"), "mlb"));
-        let libs: Vec<Lib> = lib_paths
-            .iter()
-            .enumerate()
-            .map(|(i, p)| parse_mlb(root, p, i, &mut macros))
-            .collect();
         let mut services = parse_sstab(&root.join("vms/exec/syssrv.mar"));
         let paldoc = read(&root.join(PAL_DOC));
 

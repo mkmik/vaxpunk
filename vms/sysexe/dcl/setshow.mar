@@ -17,6 +17,7 @@
         $DVIDEF
         $DVSDEF
         $DCDEF
+        $DEVDEF
         $UCBDEF
         $DCLDEF
 
@@ -46,15 +47,21 @@ DVSITEMS:                               ; its items: the class
         .ADDRESS DEVCLASS
         .LONG   0
         .LONG   0
-DEVCLASS:
+DEVCLASS:                               ; the class, or -1 for those of neither DISK's nor TERM's
         .LONG   0
-DEVDSC: .LONG   8                       ; the device's name it found, _DDCU:
+DEVDSC: .LONG   24                      ; the device's name it found, _DDCU:
         .ADDRESS DEVNAME
 DVINAM: .LONG   0                       ; and its length, a descriptor of it
         .ADDRESS DEVNAME
 DEVNAME:
-        .BLKB   8
+        .BLKB   24
 DVIITEMS:                               ; what $GETDVIW returns of it
+        .WORD   4, DVI$_DEVCLASS
+        .ADDRESS V_CLASS
+        .LONG   0
+        .WORD   4, DVI$_DEVCHAR
+        .ADDRESS V_CHAR
+        .LONG   0
         .WORD   4, DVI$_MNT
         .ADDRESS V_MNT
         .LONG   0
@@ -89,10 +96,12 @@ DVIITEMS:                               ; what $GETDVIW returns of it
         .ADDRESS V_CLUSTER
         .LONG   0
         .LONG   0
+V_CLASS:.LONG   0                       ; its class,
+V_CHAR: .LONG   0                       ; its DEV$ bits,
 V_MNT:  .LONG   0                       ; 1 if a volume is mounted,
 V_SWL:  .LONG   0                       ; 1 if it is read only,
 V_ALL:  .LONG   0                       ; 1 if it is allocated, mounted privately,
-V_STS:  .LONG   0                       ; UCB$M_ONLINE if the device is there,
+V_STS:  .LONG   0                       ; UCB$M_ONLINE if the device is there, UCB$M_TEMPLATE for a template,
 V_ERRCNT:                               ; the errors it reported,
         .LONG   0
 DEVLABEL:                               ; the volume's label, after a byte,
@@ -100,31 +109,57 @@ DEVLABEL:                               ; the volume's label, after a byte,
 LABLEN: .WORD   0                       ; its length,
 DEVFREE:                                ; and its free blocks
         .LONG   0
-V_TYPE: .LONG   0                       ; a terminal's DT$ type, a disk's 0,
+V_TYPE: .LONG   0                       ; its DT$ type, a disk's 0,
 V_BUFSIZ:                               ; its width or block,
         .LONG   0
-V_REFCNT:                               ; a terminal's channels,
+V_REFCNT:                               ; its channels,
         .LONG   0
 V_CLUSTER:                              ; and the volume's cluster, for /FULL
         .LONG   0
 W_DISK: .ASCIC  "Disk "                 ; /FULL's words
 W_TERM: .ASCIC  "Terminal "
+W_DEVICE:
+        .ASCIC  "Device "
 W_VT100:
-        .ASCIC  "device type VT100,"
+        .ASCIC  "device type VT100"
+W_MBX:  .ASCIC  "device type local memory mailbox"
 W_UNKNOWN:
-        .ASCIC  "device type unknown,"
+        .ASCIC  "device type unknown"
 W_ONLINE:
-        .ASCIC  "is online,"
+        .ASCIC  "is online"
 W_OFFLINE:
-        .ASCIC  "is offline,"
+        .ASCIC  "is offline"
 W_MOUNTED:
-        .ASCIC  "mounted,"
+        .ASCIC  "mounted"
 W_WRTLCK:
-        .ASCIC  "software write-locked,"
-W_DISKTAIL:
-        .ASCIC  "file-oriented device, shareable."
-W_TERMTAIL:
-        .ASCIC  "record-oriented device, carriage control."
+        .ASCIC  "software write-locked"
+W_NOAVL:.ASCIC  "device set /NOAVAILABLE"
+CHARS:                                  ; the DEV$ bits it says, and what it says, in order
+        .LONG   DEV$M_REC
+        .ADDRESS W_REC
+        .LONG   DEV$M_CCL
+        .ADDRESS W_CCL
+        .LONG   DEV$M_FOD
+        .ADDRESS W_FOD
+        .LONG   DEV$M_SHR
+        .ADDRESS W_SHR
+        .LONG   DEV$M_NET
+        .ADDRESS W_NET
+        .LONG   DEV$M_MBX
+        .ADDRESS W_MBXDEV
+        .LONG   0
+W_REC:  .ASCIC  "record-oriented device"
+W_CCL:  .ASCIC  "carriage control"
+W_FOD:  .ASCIC  "file-oriented device"
+W_SHR:  .ASCIC  "shareable"
+W_NET:  .ASCIC  "network device"
+W_MBXDEV:
+        .ASCIC  "mailbox device"
+W_TEMPLATE:
+        .ASCIC  "device is a template only"
+PHRASES:                                ; FULLDEV's, as many as it says
+        .BLKL   16
+PHRASE: .BLKB   64                      ; one, with its comma or full stop, .ASCIC
 L_ERRCNT:
         .ASCIC  "    Error count"
 L_REFCNT:
@@ -644,8 +679,10 @@ STRDEV:
 
 ; DCL$SHOWDEV, SHOW DEVICES [name]: lists the disks, with their status,
 ; error counts and their volumes' labels and free blocks, then the
-; terminal, under VMS's headings, or only the devices whose names start
-; with name, with * and % wildcards: SHOW DEVICES DK. It finds them with
+; terminals, then the other devices, but the mailboxes and the devices
+; that behave like one, DEV$M_MBX, as the network's, under VMS's
+; headings; or only the devices whose names start with name, with * and
+; % wildcards, mailboxes too: SHOW DEVICES DK. It finds them with
 ; $DEVICE_SCAN, a class at a time, and asks each about itself with
 ; $GETDVIW. SS$_NOSUCHDEV if none matches. With /MOUNTED, only the
 ; devices with a volume mounted. With /FULL, a paragraph a device, as
@@ -676,6 +713,8 @@ DCL$SHOWDEV::
         BSBB    SCAN
         MOVL    #DC$_TERM, DEVCLASS
         BSBB    SCAN
+        MNEGL   #1, DEVCLASS
+        BSBB    SCAN
         MOVL    #SS$_NOSUCHDEV, R0
         TSTL    R7
         BEQL    10$
@@ -686,17 +725,32 @@ DCL$SHOWDEV::
 10$:    BRW     DCL$DONE
 
 ; SCAN: lists the devices of DEVCLASS's class whose names match PATDSC's,
-; under their headings, if there are any. R7 = how many there were, and
-; as many more. Uses R0-R6.
+; or for -1 those of neither a disk's nor a terminal's, but mailboxes
+; unless PATDSC is a name, under their headings, if there are any. R7 =
+; how many there were, and as many more. Uses R0-R6.
 SCAN:
         .JSB_ENTRY  OUTPUT=<R7>, SCRATCH=<R2, R3, R4, R5, R6>
         CLRQ    SCANCTX
         CLRL    R6                      ; 1 once the headings are out
-10$:    $DEVICE_SCAN_S RETURN_DEVNAM=DEVDSC, RETLEN=DVINAM, SEARCH_DEVNAM=PATDSC, ITMLST=DVSITEMS, CONTXT=SCANCTX
+10$:    MOVAB   DVSITEMS, R0
+        TSTL    DEVCLASS
+        BGEQ    6$
+        CLRL    R0                      ; any class
+6$:     $DEVICE_SCAN_S RETURN_DEVNAM=DEVDSC, RETLEN=DVINAM, SEARCH_DEVNAM=PATDSC, ITMLST=(R0), CONTXT=SCANCTX
         BLBC    R0, 90$
         $GETDVIW_S DEVNAM=DVINAM, ITMLST=DVIITEMS
         BLBC    R0, 10$
-        TSTL    MOUNTED
+        TSTL    DEVCLASS
+        BGEQ    11$
+        CMPL    V_CLASS, #DC$_DISK      ; the others
+        BEQL    10$
+        CMPL    V_CLASS, #DC$_TERM
+        BEQL    10$
+        TSTL    PATDSC
+        BNEQ    11$
+        BITL    #DEV$M_MBX, V_CHAR
+        BNEQ    10$
+11$:    TSTL    MOUNTED
         BEQL    12$
         TSTL    V_MNT
         BEQL    10$
@@ -763,52 +817,90 @@ SCAN:
 90$:    RSB
 
 ; FULLDEV: writes SHOW DEVICES/FULL's paragraph of the device $GETDVIW
-; described, as VMS's: a blank line, what the device is, a blank line,
-; its counts, and its volume's if one is mounted. Uses R0-R6.
+; described, as VMS's: a blank line, what the device is, its kind and
+; its name, then its type, its state and its DEV$ bits, a phrase each,
+; and that it is a template, a blank line, its counts, and its volume's
+; if one is mounted. Uses R0-R6.
 FULLDEV:
         .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5, R6>
         PRINT   ""
         MOVAB   W_DISK, R1
-        CMPL    DEVCLASS, #DC$_DISK
+        CMPL    V_CLASS, #DC$_DISK
         BEQL    5$
         MOVAB   W_TERM, R1
+        CMPL    V_CLASS, #DC$_TERM
+        BEQL    5$
+        MOVAB   W_DEVICE, R1
 5$:     BSBW    DCL$ADDCSTR
         MOVAB   DEVNAME+1, R1           ; without its underscore
         MOVZWL  DVINAM, R2
         DECL    R2
         BSBW    DCL$ADD
         ADDTEXT ","
-        MOVAB   W_UNKNOWN, R1
+        MOVAL   PHRASES, R6             ; what it says, a phrase each
+        MOVAB   W_UNKNOWN, (R6)
+        CMPL    V_CLASS, #DC$_MAILBOX
+        BNEQ    7$
+        CMPL    V_TYPE, #DT$_MBX
+        BNEQ    7$
+        MOVAB   W_MBX, (R6)
+7$:     CMPL    V_CLASS, #DC$_TERM
+        BNEQ    10$
         CMPL    V_TYPE, #DT$_VT100
         BNEQ    10$
-        MOVAB   W_VT100, R1
-10$:    BSBW    WRAP
-        MOVAB   W_OFFLINE, R1
+        MOVAB   W_VT100, (R6)
+10$:    ADDL2   #4, R6
+        MOVAB   W_OFFLINE, (R6)
         BITL    #UCB$M_ONLINE, V_STS
         BEQL    15$
-        MOVAB   W_ONLINE, R1
-15$:    BSBW    WRAP
+        MOVAB   W_ONLINE, (R6)
+15$:    ADDL2   #4, R6
         TSTL    V_MNT
         BEQL    20$
-        MOVAB   W_MOUNTED, R1
-        BSBW    WRAP
+        MOVAB   W_MOUNTED, (R6)+
         TSTL    V_SWL
         BEQL    20$
-        MOVAB   W_WRTLCK, R1
-        BSBW    WRAP
-20$:    MOVAB   W_DISKTAIL, R1
-        CMPL    DEVCLASS, #DC$_DISK
+        MOVAB   W_WRTLCK, (R6)+
+20$:    BITL    #DEV$M_AVL, V_CHAR
+        BNEQ    22$
+        MOVAB   W_NOAVL, (R6)+
+22$:    MOVAL   CHARS, R1
+24$:    TSTL    (R1)
+        BEQL    26$
+        BITL    (R1)+, V_CHAR
         BEQL    25$
-        MOVAB   W_TERMTAIL, R1
-25$:    BSBW    WRAP
+        MOVL    (R1), (R6)+
+25$:    ADDL2   #4, R1
+        BRB     24$
+26$:    BITL    #UCB$M_TEMPLATE, V_STS
+        BEQL    28$
+        MOVAB   W_TEMPLATE, (R6)+
+28$:    MOVL    R6, R5                  ; past the last
+        MOVAL   PHRASES, R6
+40$:    MOVL    (R6)+, R1               ; each with its comma, the last its full stop
+        MOVZBL  (R1)+, R2
+        PUSHR   #^M<R5, R6>
+        MOVC3   R2, (R1), PHRASE+1
+        POPR    #^M<R5, R6>
+        MOVB    #44, (R3)               ; a comma
+        CMPL    R6, R5
+        BLSSU   42$
+        MOVB    #46, (R3)               ; a full stop
+42$:    MOVAB   PHRASE+1, R0
+        SUBL3   R0, R3, R0
+        ADDB3   #1, R0, PHRASE
+        MOVAB   PHRASE, R1
+        PUSHR   #^M<R5, R6>
+        BSBW    WRAP
+        POPR    #^M<R5, R6>
+        CMPL    R6, R5
+        BLSSU   40$
         BSBW    DCL$SAY
         PRINT   ""
         MOVAB   L_ERRCNT, R1
         MOVL    V_ERRCNT, R4
         MOVL    #36, R5
         BSBW    FIELD
-        CMPL    DEVCLASS, #DC$_DISK     ; a disk's $GETDVI doesn't count
-        BEQL    30$
         BSBW    DCL$SAY
         MOVAB   L_REFCNT, R1
         MOVL    V_REFCNT, R4

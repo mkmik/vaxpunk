@@ -2,7 +2,7 @@
 
 Oct 3, 2026 · @Marko Mikulicic
 
-Proposed. Each device has a unit control block (UCB) naming its driver,
+Proposed; decision 1 superseded by [ADR-0044](0044-the-io-database.md). Each device has a unit control block (UCB) naming its driver,
 and a channel holds its device's UCB. `$QIO` hands the request to the
 driver, which makes an I/O request packet (IRP) and either does the I/O
 at once or queues the IRP on the UCB and returns, so the caller goes on.

@@ -118,7 +118,7 @@ serve them.
 
 vaxpunk has none. Its one server, TELNETD, is a process of its own that
 `START COMMUNICATION` creates and that listens on port 23 itself. Half
-of the hand-over is there: a second process can `$ASSIGN` a `BGnn`
+of the hand-over is there: a second process can `$ASSIGN` a `BGn`
 unit by name, and the unit stays until its last channel goes
 (`netdriver.mar`). What's missing is the `TCPIP$C_AUXS` request
 (`t8y:/net/tcpip-qio#auxs`), network logins

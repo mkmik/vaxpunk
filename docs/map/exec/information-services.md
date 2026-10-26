@@ -27,14 +27,15 @@ id = "getdvi"
 title = "$GETDVI and $DEVICE_SCAN on disks, terminals, mailboxes and sockets"
 status = "done"
 milestone = "m0"
-note = "getdvi.mar; terminals from their UCBs since PRD-0003 step 3"
+note = "getdvi.mar; the I/O database's units since ADR-0044"
 
 [[feature]]
 id = "devices-from-ucbs"
-title = "Every device from its UCB: BGA0: and its units scanned, a disk's UCB rather than its VCB"
-status = "todo"
+title = "Every device from its UCB: BG0: and its units scanned, a disk's UCB rather than its VCB"
+status = "done"
 milestone = "m1"
-note = "PRD-0003 tier 1 #9; netdriver.mar, getdvi.mar"
+needs = ["/exec/qio#io-database"]
+note = "ADR-0044: $GETDVI copies the UCB at IPL$_SYNCH, the VCB only for the volume's items; $DEVICE_SCAN's context is a DDB and a unit number"
 
 [[feature]]
 id = "jpi-quotas"

@@ -5,7 +5,7 @@
 ; names, or else on SYS$COMMAND's, as VMS's do. They read
 ; its characteristics with IO$_SENSEMODE, or with /PERMANENT its
 ; permanent ones with IO$_SENSECHAR, as VMS's do, in a buffer laid out
-; as a terminal's UCB$A_TT_CHAR, then its TT3$ bits (ttdriver.mar).
+; as a terminal's UCB$B_DEVCLASS has them, then its TT3$ bits (ttdriver.mar).
 ; TERM_TYPES are the terminal types SET TERMINAL/DEVICE_TYPE knows, and
 ; the characteristics each gives, OpenVMS Alpha V8.4's;
 ; TERM_SPEEDS the speeds, by TT$C_BAUD_ value.

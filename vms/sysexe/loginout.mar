@@ -124,10 +124,11 @@ ALFRAB: $RAB    FAB=ALFFAB, UBF=LINE, USZ=64
 ALFNAM: .ASCII  "SYSALF"
 ALFNAMLEN = .-ALFNAM
 DVIITEM:                                ; $GETDVI's items: the terminal's name
-        .WORD   6, DVI$_DEVNAM
-        .ADDRESS TERM, 0
+        .WORD   16, DVI$_DEVNAM
+        .ADDRESS TERM, TERMLEN
         .LONG   0
-TERM:   .BLKB   6                       ; _DDCU:
+TERM:   .BLKB   16                      ; _DDCU:
+TERMLEN:.WORD   0                       ; and its length
 SYSTAB: .ASCID  "LNM$SYSTEM"
 ANNOUNCE:
         .ASCID  "SYS$ANNOUNCE"
@@ -495,14 +496,14 @@ ALF:
         BLBC    R0, 70$
 10$:    $GET    RAB=ALFRAB
         BLBC    R0, 70$
-        MOVZWL  ALFRAB+RAB$W_RSZ, R2
-        SUBL2   #5, R2                  ; after DDCU:
+        MOVZWL  TERMLEN, R3             ; DDCU:, without its underscore
+        DECL    R3
+        MOVZWL  ALFRAB+RAB$W_RSZ, R4
+        SUBL2   R3, R4                  ; after it
         BLEQ    10$
-        CMPL    LINE, TERM+1
+        CMPC3   R3, LINE, TERM+1        ; R1 = after it
         BNEQ    10$
-        CMPB    LINE+4, #^A/:/
-        BNEQ    10$
-        MOVAB   LINE+5, R1
+        MOVL    R4, R2
 20$:    CMPB    (R1), #^A/ /            ; the blanks before the username
         BNEQ    30$
         INCL    R1

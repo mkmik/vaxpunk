@@ -1469,6 +1469,10 @@ MESSAGES:
         .ASCIC  "SYSTEM"
         .ASCIC  "NOOPER"
         .ASCIC  "operation requires OPER privilege"
+        .LONG   SS$_NONETMBX
+        .ASCIC  "SYSTEM"
+        .ASCIC  "NONETMBX"
+        .ASCIC  "operation requires NETMBX privilege"
 ; TCP/IP Services' (facility 0x764), whose hosts database TCPIP and
 ; HOST_ADDR (sysexe/lib/inet.mar) read.
         .LONG   ^X07648358

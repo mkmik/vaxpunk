@@ -128,13 +128,26 @@ compiles.
 - makes the console's unit control block, `OPA0:`, the first terminal,
   with its characteristics, a VT100's 80 by 24, and an empty type-ahead
   buffer, where typed characters wait until a program reads them, and
-  turns on the console receive interrupt (`TTY$INIT`)
-- makes the operator's mailbox, `MBA2:`, a permanent one, which OPCOM
+  those of `FTA0:`, which makes pseudo terminals, and of `TNA0:` and
+  `VTA0:`, the templates TELNET's and virtual terminals are copied from;
+  adds the terminals' device data blocks, `OPA`, `FTA`, `TNA` and `VTA`,
+  to the list of devices, the I/O database, after the disks', `DKA`,
+  `DKB` and `MDA`, which are there from the start; and turns on the
+  console receive interrupt (`TTY$INIT`,
+  [ADR-0044](adr/0044-the-io-database.md))
+- adds the mailboxes' device data block, `MBA`, to the I/O database, and
+  makes the operator's mailbox, `MBA2:`, a permanent one, which OPCOM
   will read and where `$SNDOPR` writes the messages for the operators
   (`MB$INIT`,
   [ADR-0042](adr/0042-opcom-reads-the-operators-mailbox.md))
-- finds the port in the RPB (`NET$INIT`); its interrupt, at IPL 21, and
-  the software interrupt it requests, at IPL 6, are in the SCB too
+- finds the port in the RPB, and adds the network's device data block,
+  `BG`, with its template, `BG0:`, offline if there is no port
+  (`NET$INIT`); its interrupt, at IPL 21, and the software interrupt it
+  requests, at IPL 6, are in the SCB too
+- asks each disk's driver whether the PAL has the disk, and puts `DKA0:`
+  and `DKB0:` online if it does; `MDA0:` stays offline until the ramdisk
+  is made (`IOC$INIT`, which calls each unit's unit initialization,
+  `DK$UNITINIT` for the disks)
 - prints `%EXEC-I-START … free pages`
 - mounts the system disk, `DKA0:`: it reads the volume's home block and
   the index file's header, which says where every other file's header is
@@ -180,7 +193,7 @@ interpreter. It is linked high in P1, which tells the executive it is one
   to `F$GETSYI("STARTUP_P8")`, blanks trimmed and in upper case, so the
   rest of it can test them. `EXEC$START` copied them from the RPB to
   `SGN$GB_STARTUP_P1`, where `$GETSYI` finds them. Next it defines the system
-  logical name `TCPIP$DEVICE` as `_BGA0:`, the network's template device,
+  logical name `TCPIP$DEVICE` as `_BG0:`, the network's template device,
   which a program assigns a channel to for a socket, as TCP/IP Services'
   `TCPIP$STARTUP.COM` defines it. Then `INITIALIZE/SIZE=2048 MDA0: RAM` makes the
   ramdisk, 2,048 blocks, empty, and `MOUNT/SYSTEM MDA0: RAM` mounts it for every
@@ -432,9 +445,12 @@ interpreter. It is linked high in P1, which tells the executive it is one
   be dismounted (`%SYSTEM-F-DEVACTIVE`).
 - `SHOW DEVICES` (`SHO DEV`) lists the disks, mounted or not, with the
   errors the disk's driver counted in its UCB, and their volumes' labels
-  and free blocks, then the console, `OPA0:`, as VMS
-  does: it finds them with the `$DEVICE_SCAN` system service and asks
-  `$GETDVIW` about each. The free blocks are the count in the volume's
+  and free blocks, then the terminals, the console, `OPA0:`, `FTA0:`,
+  offline, and the templates `TNA0:` and `VTA0:`, as VMS does: it finds
+  them with the `$DEVICE_SCAN` system service, which goes through the I/O
+  database, and asks `$GETDVIW` about each. The mailboxes and the
+  network's devices, which behave like mailboxes, are listed only when
+  named: `SHOW DEVICES MB` lists `MBA2:`. The free blocks are the count in the volume's
   VCB, which the first `SHOW DEVICES` after `MOUNT` takes from the
   storage bitmap (`FIL$FREEBLOCKS`). `SHOW DEVICES DK` lists only the
   devices whose names start with `DK`.
