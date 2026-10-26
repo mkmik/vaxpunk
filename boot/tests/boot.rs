@@ -33,13 +33,15 @@ struct Phase {
 /// SYSTARTUP_VMS.COM mounts the ramdisk, MDA0:, starts OPCOM, which
 /// enables the console as an operator terminal, and can't mount the data
 /// disk, DKB0:, made afresh in out/check-datadisk.img, not the one you
-/// keep, and defines SYS$ANNOUNCE. Then LOGINOUT writes ANNOUNCE.TXT and asks for a username: one that isn't there fails,
+/// keep, and defines SYS$ANNOUNCE. Then, at a key, LOGINOUT writes ANNOUNCE.TXT and asks for a username: one that isn't there fails,
 /// SYSTEM with the wrong password too, and with the right one, in lower
 /// case, logs in, with a failure to report.
 const BOOT: Phase = Phase {
     name: "boot",
     secs: 60,
     steps: &[
+        // The console waits for a key once STARTUP is gone.
+        ("  SYSTEM       job terminated at ", 1, "\r"),
         ("Username:", 1, "NOBODY\r"),
         ("Password:", 1, "nobodys\r"),
         ("Username:", 2, "SYSTEM\r"),
@@ -1700,7 +1702,9 @@ const USERS: Phase = Phase {
                 "DEFINE/SYSTEM SYS$WELCOME \"Have a nice day\"\rLOGOUT\r",
             ),
         ),
-        ("Username:", 4, "JOE\r"),
+        ("  SYSTEM       logged out at ", 1, "\r"),
+        // AUTHORIZE's listings have Username: too: LOGINOUT's ANNOUNCE.TXT counts.
+        ("Log in as SYSTEM, password MANAGER", 2, "JOE\r"),
         ("Password:", 4, "joespw\r"),
         // The first two were TTSIZE's at SYSTEM's login and SET TERMINAL/INQUIRE's.
         ("\x1b[6n", 3, "\x1b[24;80R"),
@@ -1727,7 +1731,8 @@ const USERS: Phase = Phase {
                 "LOGOUT\r",
             ),
         ),
-        ("Username:", 5, "SYSTEM\r"),
+        ("  JOE          logged out at ", 1, "\r"),
+        ("Log in as SYSTEM, password MANAGER", 3, "SYSTEM\r"),
         ("Password:", 5, "newpw\r"),
         ("\x1b[6n", 4, "\x1b[50;100R"),
         (

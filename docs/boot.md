@@ -260,7 +260,12 @@ interpreter. It is linked high in P1, which tells the executive it is one
   command is `LOGOUT`, which, with no terminal, prints
   `  SYSTEM       job terminated at  9-OCT-2026 10:00:00.00`, as VMS's STARTUP
   does, and deletes the process.
-- The swapper then creates the console's process, named after the
+- The console then waits for a key, as VMS's does. The console's
+  receive interrupt puts the key in its type-ahead buffer; with no
+  process owning the console, `TTY$IOPOST` wakes the swapper, whose
+  `TTY$KEY` finds the key and throws it away
+  ([vms/exec/ttdriver.mar](../vms/exec/ttdriver.mar)). The swapper
+  then creates the console's process, named after the
   console, `_OPA0:`, which runs `LOGINOUT.EXE`
   ([vms/sysexe/loginout.mar](../vms/sysexe/loginout.mar)) in user mode,
   with every privilege ([ADR-0029](adr/0029-loginout-and-sysuaf.md)).
@@ -280,7 +285,8 @@ interpreter. It is linked high in P1, which tells the executive it is one
   in the record. The build wrote one user who may log in, `SYSTEM`, whose
   password is `MANAGER`. A wrong username or password prints `User
   authorization failure`, and a wrong password is counted in the record;
-  after three failures LOGINOUT exits and the swapper starts another.
+  after three failures LOGINOUT exits, and the console waits for a key
+  again, as it does after each `LOGOUT`.
   With both right, LOGINOUT names the process after the user, makes the
   record's default directory the process's, `[SYSMGR]` for SYSTEM, and
   defines `SYS$DISK`, `SYS$LOGIN` and `SYS$SCRATCH` from it, so

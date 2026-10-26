@@ -81,7 +81,9 @@ impl Vax {
             .unwrap();
         let console = qemu.stdin.take().unwrap();
         let mut vax = Vax { qemu, console, log };
-        vax.wait_for("Username: ", 0, 120);
+        vax.wait_for("  SYSTEM       job terminated at ", 0, 120);
+        vax.console.write_all(b"\r").unwrap(); // the console waits for a key
+        vax.wait_for("Username: ", 0, 60);
         // login's, but SYLOGIN.COM's TTSIZE asks the console for its size
         // (a TELNET terminal has NAWS's) before DCL's prompt.
         let at = vax.reply("SYSTEM", "Password: ");

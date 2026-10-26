@@ -9,11 +9,9 @@
 ; starts the STARTUP process, whose DCL runs SYSTARTUP_VMS.COM, and
 ; becomes the swapper, process 1, which deletes what deleted processes
 ; leave behind (docs/design/0002-executive-processes.md). Once STARTUP
-; is gone, the swapper starts LOGINOUT on the console, which asks for a
-; username and a password, and again each time the process there is
-; deleted, at LOGOUT.
-; ponytail: VMS's console waits for a key before Username:; this one
-; asks again at once.
+; is gone, a key typed on the console starts LOGINOUT there, which asks
+; for a username and a password; once the process there is deleted, at
+; LOGOUT, the console waits for a key again.
 ;
         .LIBRARY "lib.mlb"
         .LIBRARY "starlet.mlb"
@@ -33,7 +31,7 @@
         .EXTERNAL MMG$GL_MAXPFN
         .EXTERNAL EXE$HWCLKINT, EXE$SWTIMINT, EXE$INITTIM
         .EXTERNAL SCH$GQ_DELQ, EXE$DELETEPCB, EXE$VECTOR, EXE$VECTOREND
-        .EXTERNAL TTY$INIT, TTY$RCVINT, TTY$IOPOST, FIL$MOUNT, MB$INIT
+        .EXTERNAL TTY$INIT, TTY$RCVINT, TTY$IOPOST, TTY$KEY, FIL$MOUNT, MB$INIT
         .EXTERNAL NET$INIT, NET$INTERRUPT, NET$FORK, IOC$INIT
         .EXTERNAL LNM$CREATE, LNM$GL_SYSTEM, LNM$INIT
 
@@ -56,7 +54,7 @@ CONSOLE_IMAGE:
         .ASCID  "LOGINOUT.EXE"
 CONSOLE_DEVICE:                         ; its SYS$INPUT, SYS$OUTPUT and SYS$ERROR, and its name
         .ASCID  "_OPA0:"
-CONSOLE_PID:                            ; STARTUP's PID, then the console's process's
+CONSOLE_PID:                            ; STARTUP's PID, then the console's process's, 0 waiting for a key
         .LONG   0
 BANNER: .ASCIZ  "%EXEC-I-START, vaxpunk executive, free pages: "
 PFNLIMIT:
@@ -161,9 +159,10 @@ FAIL:   MOVL    R0, R2
         HALT
 
 ; The swapper: deletes the context, kernel stack and PCB of each process
-; that deleted itself, then hibernates until another does. Once STARTUP
-; has, or the console's process, it creates the console's next one,
-; LOGINOUT on _OPA0:, named so.
+; that deleted itself, then hibernates until another does, or a key is
+; typed on the console (TTY$IOPOST). Once STARTUP has gone, or the
+; console's process, a key creates the console's next one, LOGINOUT on
+; _OPA0:, named so.
 SWAPPER:
 10$:    SETIPL  #IPL$_SYNCH
         REMQUE  @SCH$GQ_DELQ, R4
@@ -172,6 +171,12 @@ SWAPPER:
         JSB     G^EXE$DELETEPCB
         CMPL    (SP)+, CONSOLE_PID
         BNEQ    10$
+        CLRL    CONSOLE_PID
+        BRB     10$
+20$:    TSTL    CONSOLE_PID
+        BNEQ    30$
+        JSB     G^TTY$KEY
+        BLBC    R0, 30$
         SETIPL  #0
         $CREPRC_S PIDADR=CONSOLE_PID, IMAGE=CONSOLE_IMAGE, INPUT=CONSOLE_DEVICE, OUTPUT=CONSOLE_DEVICE, ERROR=CONSOLE_DEVICE, PRCNAM=CONSOLE_DEVICE, BASPRI=#4, STSFLG=#PRC$M_DETACH
         BLBS    R0, 10$
@@ -182,7 +187,7 @@ SWAPPER:
         JSB     G^EXE$OUTHEX
         JSB     G^EXE$OUTCRLF
         BRB     10$
-20$:    SETIPL  #0
+30$:    SETIPL  #0
         $HIBER_S
         BRB     10$
 
