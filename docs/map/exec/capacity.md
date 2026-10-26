@@ -68,7 +68,7 @@ id = "per-process-tables"
 title = "Open files, image headers and terminals limited by quotas and SYSGEN, not small constants"
 status = "todo"
 milestone = "m1"
-note = "rms.mar MAXIFI 15 files a process, f11.mar MAXHDR 16 header blocks, ttdriver.mar MAXUNIT 9 TNAn: units, mddriver.mar MD$GL_BLOCKS"
+note = "rms.mar MAXIFI 15 files a process, f11.mar MAXHDR 16 header blocks, mddriver.mar MD$GL_BLOCKS; terminals and the other cloned units go to 9999 since ADR-0044"
 
 [[feature]]
 id = "ram-size"

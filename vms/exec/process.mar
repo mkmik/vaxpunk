@@ -39,6 +39,7 @@
         $SSDEF
         $UAFDEF
         $UCBDEF
+        $DCDEF
         $JPIDEF
         $PQLDEF
         $PRCDEF
@@ -52,7 +53,7 @@
         .EXTERNAL FIL$OPENFILE, FIL$OPENSHR, FIL$READIMG, RMS$RUNDOWN, LCK$RUNDOWN, FIL$RUNDOWN
         .EXTERNAL EXE$OUTZSTRING, EXE$OUTCSTRING, EXE$OUTHEX, EXE$OUTCRLF
         .EXTERNAL LNM$CREATE, LNM$CREPRC, LNM$DELPROC, SCH$QAST, EXE$FLUSHAST, IOC$CANCEL, SYS$EXIT
-        .EXTERNAL MB$FINDNUM, MB$SEND, EXE$GQ_SYSTIME, TT$OWNER, TT$FDT
+        .EXTERNAL MB$FINDNUM, MB$SEND, EXE$GQ_SYSTIME, TT$OWNER, IOC$CVT_DEVNAM
 
 KSTACK = 16384                          ; a process's kernel stack
 MAXRIGHTS = 1024                        ; identifiers a rights list holds, at most
@@ -260,7 +261,7 @@ EXE$PRCPRIV::
 ; logical names SYS$INPUT, SYS$OUTPUT and SYS$ERROR; SS$_BADPARAM for one
 ; that is empty or longer than 255. A terminal that input names and no
 ; process owns yet is its: a hangup deletes it (TT$OWNER). It starts in
-; its creator's default directory. mbxunt, if it isn't 0, is the unit number of a mailbox, MBnn,
+; its creator's default directory. mbxunt, if it isn't 0, is the unit number of a mailbox, MBAn,
 ; which gets the process's termination message when it is deleted. Its
 ; UIC is uic, or its creator's for 0; another one than the creator's takes
 ; DETACH, else SS$_NOPRIV. With a uic, or PRC$M_DETACH in stsflg, it is a
@@ -1743,15 +1744,23 @@ SUSPEND:
         ENBINT
         MOVL    #PCB$C_MAXCHAN, R0      ; its terminal: a channel's
 20$:    BBC     R0, PCB$L_CHANS(R4), 25$
-        MOVL    PCB$AL_CCB(R4)[R0], R1
-        MOVAB   G^TT$FDT, R2
-        CMPL    UCB$L_FDT(R1), R2
+        MOVL    PCB$AL_CCB(R4)[R0], R5
+        CMPB    UCB$B_DEVCLASS(R5), #DC$_TERM
         BEQL    30$
 25$:    SOBGTR  R0, 20$
         BRB     40$
-30$:    MOVB    #5, PCB$T_TERMINAL(R4)
-        MOVL    UCB$T_NAME(R1), PCB$T_TERMINAL+1(R4)
-        MOVB    #^A/:/, PCB$T_TERMINAL+5(R4)
+30$:    SUBL2   #24, SP                 ; its name, _DDCU:, then without its underscore
+        MOVL    #24, R0
+        MOVL    SP, R1
+        JSB     G^IOC$CVT_DEVNAM
+        DECL    R1
+        CMPL    R1, #7
+        BLEQU   35$
+        MOVL    #7, R1
+35$:    MOVB    R1, PCB$T_TERMINAL(R4)
+        MOVC3   R1, 1(SP), PCB$T_TERMINAL+1(R4)
+        ADDL2   #24, SP
+        MOVL    SCH$GL_CURPCB, R4
         MOVL    #JPI$K_INTERACTIVE, PCB$L_MODE(R4)
 40$:    MOVL    #SS$_NORMAL, R0
         RET

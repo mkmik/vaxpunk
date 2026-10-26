@@ -74,9 +74,9 @@ note = "PRD-0003 tier 3 #28; ADR-0019 alternatives"
 
 [[feature]]
 id = "assign-mbx"
-title = "$ASSIGN's mbxnam: a device's associated mailbox; mailboxes found by $DEVICE_SCAN"
+title = "$ASSIGN's mbxnam: a device's associated mailbox"
 status = "todo"
-note = "ADR-0019 follow-ups"
+note = "ADR-0019 follow-ups; $DEVICE_SCAN finds mailboxes since ADR-0044"
 
 [[feature]]
 id = "channel-checks"
@@ -86,8 +86,8 @@ status = "todo"
 [[feature]]
 id = "more-units"
 title = "More than 99 mailboxes, named MBAn"
-status = "todo"
-note = "ADR-0019: four-character device names, MBnn"
+status = "done"
+note = "ADR-0044: MBA1 to MBA9999, cloned from a template that isn't a unit, as VMS's"
 
 [[needs]]
 on = "/exec/qio"
@@ -121,7 +121,9 @@ charged to the creator's byte quota.
 
 vaxpunk's are in `vms/exec/mbdriver.mar`
 ([ADR-0019](../../adr/0019-mailboxes.md)): a UCB from pool per
-mailbox, `MBnn`, 1 to 99, with its messages in pool. Writes are done at
+mailbox, `MBAn`, cloned from a template
+([ADR-0044](../../adr/0044-the-io-database.md)), with its messages in
+pool. Writes are done at
 once, as VMS's with `IO$M_NOW`, and fail with `SS$_MBFULL` when it's
 full. Reads wait, and `IO$_WRITEOF` gives a reader an end of file.
 Process rundown sends the termination message with `MB$SEND`. Making one

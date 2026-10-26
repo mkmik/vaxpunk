@@ -13,13 +13,13 @@
 ; lines read from SYS$INPUT up to CTRL/Z, as VMS's CREATE does: variable
 ; length records with carriage return carriage control. With /LOG it says
 ; %CREATE-I-CREATED, name created. Returns RMS's status if it can't.
-; CREATE/MAILBOX name makes a mailbox, MBnn:, that the logical name name
+; CREATE/MAILBOX name makes a mailbox, MBAn:, that the logical name name
 ; stands for, as VMS's does; /MESSAGE_SIZE and /BUFFER_SIZE are $CREMBX's
 ; maxmsg and bufquo. A temporary one, the default, outlives CREATE: it
 ; is made in executive mode, which takes CMEXEC, on a supervisor mode
 ; channel, DCL's, so it goes when the process does. /PERMANENT makes a
 ; permanent one, which stays when CREATE's channel goes. With /LOG it says
-; %CREATE-I-CREATED, MBnn: created. Returns $CREMBX's status.
+; %CREATE-I-CREATED, MBAn: created. Returns $CREMBX's status.
 ; ponytail: one directory or file; a command procedure's data lines are
 ; skipped by DCL, so there CREATE makes an empty file. A mailbox's name
 ; goes in the system table, so it takes SYSNAM (t8y:/exec/mailboxes#name-tables).
@@ -78,7 +78,7 @@ PRMFLG: .LONG   0                       ; $CREMBX's arguments
 MAXMSG: .LONG   0
 BUFQUO: .LONG   0
 MCHAN:  .LONG   0
-DVIITEMS:                               ; the mailbox's name, _MBnn:
+DVIITEMS:                               ; the mailbox's name, _MBAn:
         .WORD   16, DVI$_DEVNAM
         .ADDRESS DEVNAM, DEVLEN
         .LONG   0
@@ -209,7 +209,7 @@ MAILBOX:
         BLBC    R0, 80$
         $GETDVIW_S CHAN=MCHAN, ITMLST=DVIITEMS
         BLBC    R0, 90$
-        MOVAB   M_CREATED, R1           ; %CREATE-I-CREATED, MBnn: created
+        MOVAB   M_CREATED, R1           ; %CREATE-I-CREATED, MBAn: created
         BSBW    LIN$TEXT
         MOVAB   DEVNAM+1, R1            ; without its underscore
         SUBL3   #1, DEVLEN, R2

@@ -2,7 +2,8 @@
 
 Oct 13, 2026 · @Marko Mikulicic
 
-Proposed. `PTD$CREATE` makes a pseudo terminal, `FTAn:`, which any
+Proposed; the second decision's `FTA0:` and unit numbers superseded by
+[ADR-0044](0044-the-io-database.md). `PTD$CREATE` makes a pseudo terminal, `FTAn:`, which any
 process uses as a terminal while the program that made it, its
 controller, types into it with `PTD$WRITE` and reads what it prints with
 `PTD$READ`. `FTAn` is a terminal UCB like `OPA0:` and `TNAn:`, with a

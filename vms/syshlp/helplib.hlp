@@ -452,7 +452,7 @@
   $ CREATE/DIRECTORY DKB0:[PROJECT.SOURCES]
   $ CREATE/FDL=CUSTOMERS.FDL
 2 /MAILBOX
-  Makes a mailbox, MBnn:, that the logical name stands for, so that
+  Makes a mailbox, MBAn:, that the logical name stands for, so that
   processes can send each other messages through it. A temporary
   mailbox, the default, takes TMPMBX and CMEXEC and goes when your
   process does; a permanent one, /PERMANENT, takes PRMMBX and stays.
@@ -1940,11 +1940,13 @@
   Shows the default device and directory. A search list's names follow,
   one a line.
 2 DEVICES
-  Lists the devices.
+  Lists the devices: the disks, the terminals, then the others, but the
+  mailboxes and the network's devices, which are listed only when named.
 
     SHOW DEVICES [device-name]
 
-  With a name, the devices whose names start with it.
+  With a name, the devices whose names start with it: SHOW DEVICES MB
+  lists the mailboxes.
 3 Qualifiers
 /FULL
   /FULL

@@ -3,7 +3,7 @@
 Oct 3, 2026 · @Marko Mikulicic
 
 How vaxpunk does TCP/IP: the TCP/IP component below the executive, the port
-the two share, the executive's port driver, `BGA0:`, and the programs on
+the two share, the executive's port driver, `BG0:`, and the programs on
 top of it. It implements [PRD-0002](../prd/0002-networking.md), with the
 choices [ADR-0016](../adr/0016-tcpip-component-and-bga0.md) makes, and adds
 to the PAL interface of [DESIGN-0001](0001-pal-interface.md): a doorbell
@@ -152,7 +152,7 @@ the executive never sends more than the component can hold. A `SEND` or
   packet, then where its socket names and ioctl results go, read from
   the caller's item lists, and a send's data last, copied from the
   caller's buffer at once. It sends the command if a tag is free, or queues the IRP on
-  `BGA0:`'s UCB until one is: `SENDCMD` writes the command, copies a
+  `BG0:`'s UCB until one is: `SENDCMD` writes the command, copies a
   send's data to the tag's buffer, and rings the doorbell.
 - `NET$INTERRUPT` requests `IPL$_NETPOST`; `NET$FORK`, at `IPL$_SYNCH`,
   completes each response's IRP with `IOC$REQCOM`, a receive's data copied
@@ -168,7 +168,8 @@ the executive never sends more than the component can hold. A `SEND` or
   `SS$_UNREACHABLE`, CLOSED `SS$_LINKDISCON`, NOLINKS `SS$_NOLINKS`,
   ISCONN `SS$_FILALRACC`, IVADDR `SS$_IVADDR`. Without the component,
   `SS$_DEVOFFLINE`.
-- **Cancel.** `IOC$CANCEL` calls `NET$CANCEL`. For `$CANCEL` the channel's
+- **Cancel.** `IOC$CANCEL` calls `NET$CANCEL`, the driver's
+  `DDT$L_CANCEL`, for each channel to a unit. For `$CANCEL` the channel's
   requests on the port end with `SS$_ABORT` at once, and a `CANCEL` goes
   to their connection; for a channel that goes, at `$DASSGN` or image
   rundown, they are freed. Either way the tag stays taken, an orphan,
@@ -177,14 +178,19 @@ the executive never sends more than the component can hold. A `SEND` or
 
 ### Devices
 
-`BGA0:` is a template device, as TCP/IP Services' `BG0:` was, and the
-system logical name `TCPIP$DEVICE`, which `SYSTARTUP_VMS.COM` defines,
-names it. A channel assigned to it makes a socket with `IO$_SETMODE` and
-goes to a unit of its own, a UCB cloned from `BGA0:`'s, named `BGnn`
-(01-99), holding the socket's connection number and protocol. `$ASSIGN`
-finds a unit by its name too, so a process can take another's
-connection by name; the unit counts its channels, which `$GETDVI`'s
-`DVI$_REFCNT` gives, and closes the connection when the last goes.
+`BG0:` is a template device, as TCP/IP Services' is, a unit of the I/O
+database ([ADR-0044](../adr/0044-the-io-database.md)), and the system
+logical name `TCPIP$DEVICE`, which `SYSTARTUP_VMS.COM` defines, names it
+`_BG0:`. A channel assigned to it goes to a unit of its own, which
+`$ASSIGN` clones from `BG0:`, `BGn`, the first number free from 1 to
+9999, and which needs `NETMBX`; `IO$_SETMODE` there makes its socket,
+and the unit holds its connection number and protocol. `$ASSIGN` finds
+a unit by its name too, so a process can take another's connection by
+name; the unit counts its channels, which `$GETDVI`'s `DVI$_REFCNT`
+gives, and closes the connection when the last goes, and goes. `BG0:`
+and its units are `DEV$M_REC`, `NET`, `AVL`, `MBX`, `IDV` and `ODV`, of
+class 0, as TCP/IP Services', so `SHOW DEVICES` lists them only when
+named, `SHOW DEVICES BG`.
 
 The functions are TCP/IP Services', with its symbols (`$INETSYMDEF`,
 `$SOCKADDRINDEF`, `$IFREQDEF`, `$ORTENTRYDEF`, `$SIOCDEF` in
@@ -200,11 +206,11 @@ longword request and the address of its argument.
 
 | On | Function | Does |
 | --- | --- | --- |
-| `BGA0:` | `IO$_SETMODE` | makes a socket: p1 = its characteristics, a word protocol, a byte type and a byte family: `TCPIP$C_TCP` and `TCPIP$C_STREAM`, `TCPIP$C_UDP` and `TCPIP$C_DGRAM`, or `TCPIP$C_ICMP` and `TCPIP$C_RAW`, which needs SYSPRV or BYPASS; then p3 and p4 as on a unit |
+| unit, no socket yet | `IO$_SETMODE` | makes a socket: p1 = its characteristics, a word protocol, a byte type and a byte family: `TCPIP$C_TCP` and `TCPIP$C_STREAM`, `TCPIP$C_UDP` and `TCPIP$C_DGRAM`, or `TCPIP$C_ICMP` and `TCPIP$C_RAW`, which needs SYSPRV or BYPASS; then p3 and p4 as on a unit |
 | unit | `IO$_SETMODE` | binds to the name p3; a port below 1024 needs SYSPRV or BYPASS; listens, backlog p4; or the ioctls of p5, which need OPER: `SIOCSIFADDR`, `SIOCSIFNETMASK`, `SIOCSIFDHCP` (vaxpunk's) on `WE0`, `SIOCADDRT`, `SIOCDELRT` of the default route |
 | unit | `IO$_SENSEMODE` | the local name to p3 and the peer's to p4; or the ioctls of p6: `SIOCGIFADDR`, `SIOCGIFNETMASK`, `SIOCGIFFLAGS` (`IFR$M_IFF_RUNNING` if the link is up), `SIOCGIFDNS` (vaxpunk's: DHCP's DNS server as the address) on `WE0`, `SIOCGETRT` of the default route, 4 at most |
 | unit | `IO$_ACCESS` | connects to the name p3; a datagram socket's peer |
-| unit | `IO$_ACCESS!IO$M_ACCEPT` | accepts a connection on a listening socket into the channel in the word at p4, assigned to `TCPIP$DEVICE:`; the peer's name to p3 |
+| unit | `IO$_ACCESS!IO$M_ACCEPT` | accepts a connection on a listening socket into the channel in the word at p4, assigned to `TCPIP$DEVICE:`, whose unit has no socket yet; the peer's name to p3 |
 | unit | `IO$_WRITEVBLK` | sends p2 bytes at p1, at most 4096 (`SS$_IVBUFLEN`, a datagram's `SS$_TOOMUCHDATA`); a datagram to the name p3 |
 | unit | `IO$_READVBLK` | receives up to p2 bytes at p1, those that came, or one datagram, its sender's name to p3; `SS$_LINKDISCON` once the peer has closed |
 | unit | `IO$_DEACCESS` | closes the socket; with `IO$M_SHUTDOWN`, p4 `TCPIP$C_DSC_RCV`, `_SND` or `_ALL` |
@@ -291,6 +297,4 @@ or the ioctls, in one request, not both; a unit is cloned at
   `OPA0:` for a process without one, so a remote session's output goes to
   its connection.
 
-ponytail: `BGA0:` and its units aren't among the devices `$DEVICE_SCAN`
-sees, and `$GETDVI` sees a unit by its channel only; a remote login has
-no username or password.
+ponytail: a remote login has no username or password.

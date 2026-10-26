@@ -44,13 +44,13 @@ same commit; `todography lint` checks it.
 | [ADR-0010](adr/0010-ctrly-calls-the-cli-on-top-of-the-image.md) | CTRL/Y calls the command interpreter on top of the stopped image, and $CONTINUE goes back to it | Superseded by ADR-0014 |
 | [ADR-0011](adr/0011-asts-on-the-kernel-stack.md) | The PAL requests AST delivery from bits in the HWPCB, and the executive calls AST routines on top of the kernel stack | Proposed |
 | [ADR-0012](adr/0012-data-disk-writable-files-11.md) | DKB0:, a second virtio disk the PAL writes, holds a Files-11 volume that outlives the system | Proposed; decision 4 superseded by ADR-0043 |
-| [ADR-0013](adr/0013-qio-irps-and-drivers.md) | $QIO queues an I/O request packet to the device's driver, and its completion is a kernel mode AST | Proposed |
+| [ADR-0013](adr/0013-qio-irps-and-drivers.md) | $QIO queues an I/O request packet to the device's driver, and its completion is a kernel mode AST | Proposed; decision 1 superseded by ADR-0044 |
 | [ADR-0014](adr/0014-ctrlc-ctrly-asts.md) | CTRL/C and CTRL/Y are ASTs enabled with IO$_SETMODE, and DCL's CTRL/Y AST stops the image | Proposed |
 | [ADR-0015](adr/0015-file-system-io-through-the-disk-driver.md) | The file system hands its block I/O to the disk's start I/O routine in an IRP of its own | Proposed |
-| [ADR-0016](adr/0016-tcpip-component-and-bga0.md) | The TCP/IP component is lwIP and a virtio-net driver of our own that the PAL starts, and BGA0: clones a unit per connection | Proposed |
+| [ADR-0016](adr/0016-tcpip-component-and-bga0.md) | The TCP/IP component is lwIP and a virtio-net driver of our own that the PAL starts, and BGA0: clones a unit per connection | Proposed; point 3's BGA0: superseded by ADR-0044 |
 | [ADR-0017](adr/0017-command-tables-from-cld-with-vcdu.md) | Commands are defined in CLD files that vcdu compiles at build time, and a parser library linked into each image reads them | Proposed |
 | [ADR-0018](adr/0018-set-command-and-foreign-commands.md) | SET COMMAND compiles CLD in DCL into tables DCL looks in first, and a foreign command's image gets its line as $LINE | Proposed |
-| [ADR-0019](adr/0019-mailboxes.md) | A mailbox is a unit of its own, MBnn, whose writes are done at once, and process deletion writes the termination message to it | Proposed |
+| [ADR-0019](adr/0019-mailboxes.md) | A mailbox is a unit of its own, MBnn, whose writes are done at once, and process deletion writes the termination message to it | Proposed; decision 1 superseded by ADR-0044 |
 | [ADR-0020](adr/0020-file-system-lock-below-ipl-synch.md) | The file system runs below IPL$_SYNCH, holding a lock of its own, as the XQP does | Proposed |
 | [ADR-0021](adr/0021-condition-handlers-run-in-the-mode-that-signals.md) | Condition handlers are found along the FP chain and run in the mode that signaled, from code in the vector | Proposed |
 | [ADR-0022](adr/0022-tcpip-utility-and-dhcp.md) | The network is set with TCP/IP Services' TCPIP utility, which parses its own commands, and lwIP's DHCP client can give the interface its address | Proposed |
@@ -64,7 +64,7 @@ same commit; `todography lint` checks it.
 | [ADR-0030](adr/0030-lock-manager-in-the-executive.md) | The lock manager is part of the executive, for one node, with VMS's $ENQ, $DEQ and $GETLKI, and its logic is BLISS-64 | Accepted; decision 5 superseded by ADR-0035 |
 | [ADR-0031](adr/0031-entropy-from-virtio-rng.md) | Random bytes come from VSI's $GET_ENTROPY, which the PAL serves from a virtio-rng device, and departures from VMS are marked in the sources | Proposed |
 | [ADR-0032](adr/0032-c-run-time-library-and-ssl3-on-mbed-tls.md) | C programs link a C run-time library with DEC C's names, and SSL3 is OpenSSL 3.0's API on Mbed TLS, which the build downloads into the user's cache with Mozilla's CAs | Proposed |
-| [ADR-0033](adr/0033-pseudo-terminals-are-a-port-of-the-terminal-driver.md) | A pseudo terminal, FTAn, is a third port of the terminal driver, cloned from FTA0:, and the PTD$ routines are $QIO calls in the vector | Proposed |
+| [ADR-0033](adr/0033-pseudo-terminals-are-a-port-of-the-terminal-driver.md) | A pseudo terminal, FTAn, is a third port of the terminal driver, cloned from FTA0:, and the PTD$ routines are $QIO calls in the vector | Proposed; FTA0: and the unit numbers superseded by ADR-0044 |
 | [ADR-0034](adr/0034-forms-grammar-as-data-and-form-files-as-trees.md) | FORMS has IFDL's grammar as data, and a .FORM file is the tree it parses, with the names of its rules | Proposed |
 | [ADR-0035](adr/0035-deadlock-search-after-deadlock-wait.md) | A lock request is searched for a deadlock once it has waited DEADLOCK_WAIT seconds, as on VMS | Accepted |
 | [ADR-0036](adr/0036-file-access-arbitration-locks.md) | Each open of a file holds an access arbitration lock on the lock manager, and an open file that is deleted goes at its last close | Proposed |
@@ -75,6 +75,7 @@ same commit; `todography lint` checks it.
 | [ADR-0041](adr/0041-virtual-terminals-take-the-telnet-line.md) | A virtual terminal, VTAn, takes its TELNET terminal's connection, which moves to another one when the user connects to it | Proposed |
 | [ADR-0042](adr/0042-opcom-reads-the-operators-mailbox.md) | OPCOM is a process that reads the operator's mailbox, MBA2:, which the executive makes at boot and $SNDOPR writes, and it writes on the console with $BRKTHRU | Proposed |
 | [ADR-0043](adr/0043-volumes-the-size-of-their-disk.md) | A volume is the size of its disk, in VMS's clusters, with bitmaps of as many blocks as it needs, and the PAL tells the executive the disk's size | Proposed |
+| [ADR-0044](adr/0044-the-io-database.md) | The devices are VMS's I/O database: a DDB per controller on IOC$GL_DEVLIST, its units' UCBs by number, a dispatch table per driver, and units cloned from templates | Proposed |
 
 ### PRDs
 

@@ -312,7 +312,7 @@ PCB$B_ASTEN = 436                       ; bit n: $SETAST has mode n's ASTs enabl
 PCB$B_ASTACT = 437                      ; bit n: an AST routine of mode n runs
 PCB$AL_CCB = 440                        ; channel n's device, at 4*n: its UCB
 PCB$AL_EXH = 568                        ; mode n's exit handlers, at 4*n: the first one's block, or 0
-PCB$L_TMBU = 584                        ; its termination mailbox's unit, MBnn, or 0
+PCB$L_TMBU = 584                        ; its termination mailbox's unit, MBAn, or 0
 PCB$L_FINALSTS = 588                    ; the status of its last $EXIT, or 0
 PCB$Q_PRIV = 592                        ; current privileges, $PRVDEF's bits: what the checks look at
 PCB$Q_AUTHPRIV = 600                    ; authorized: what $SETPRV may enable without SETPRV
@@ -471,64 +471,151 @@ VCB$V_WRITE = 1                         ; the volume can be written: the device 
 VCB$V_RAMDISK = 2                       ; the device is the ramdisk, MDA0:, not one of the PAL's disks
         .ENDM   $VCBDEF
 
+; $DDBDEF: a device data block: a controller, the device's name but its
+; unit's number, the controller's units and their driver
+; (vms/exec/qio.mar). IOC$GL_DEVLIST lists the DDBs, the I/O database.
+        .MACRO  $DDBDEF
+DDB$L_LINK = 0                          ; the next DDB, or 0
+DDB$L_UCB = 4                           ; its first unit's UCB, the others after it by UCB$L_LINK, by number
+DDB$W_SIZE = 8
+DDB$B_TYPE = 10                         ; DYN$C_DDB
+DDB$L_DDT = 12                          ; its units' driver's dispatch table
+DDB$T_NAME = 16                         ; its name, DDC, .ASCIC, 15 characters at most: a unit's is it and the unit's number
+DDB$K_LENGTH = 32
+DYN$C_DDB = 6                           ; DDB$B_TYPE
+        .ENDM   $DDBDEF
+
+; $DDTDEF: a driver dispatch table: the routines of a driver the executive
+; calls, the same for each of its units (vms/exec/qio.mar). One that
+; does nothing is IOC$RETURN.
+        .MACRO  $DDTDEF
+DDT$L_START = 0                         ; start I/O: R3 = an IRP, R5 = the UCB; the disks', which the file system calls too
+DDT$L_FDT = 4                           ; vaxpunk: the FDT routine, which $QIO JSBs, not VMS's table of functions
+DDT$L_CANCEL = 8                        ; cancel I/O, for each channel IOC$CANCEL cancels the I/O of
+DDT$L_UNITINIT = 12                     ; unit initialization: IOC$INIT's, at boot, for each unit then
+DDT$L_CLONEDUCB = 16                    ; cloned UCB: $ASSIGN's, for a unit it clones from a template
+DDT$K_LENGTH = 20
+        .ENDM   $DDTDEF
+
+; DDB: assembles a DDB at NAME, of the controller DDC, whose first unit's
+; UCB is FIRST, 0 for none yet, whose units' driver's DDT is DDT, and
+; whose next DDB is LINK. Unless one before it links to it, it isn't on
+; IOC$GL_DEVLIST until its driver links it there (IOC$LINK_DDB).
+        .MACRO  DDB     NAME, DDC, FIRST, DDT, LINK=0
+NAME::  .ADDRESS LINK                   ; DDB$L_LINK
+        .ADDRESS FIRST                  ; DDB$L_UCB
+        .WORD   DDB$K_LENGTH            ; DDB$W_SIZE
+        .BYTE   DYN$C_DDB, 0            ; DDB$B_TYPE
+        .ADDRESS DDT                    ; DDB$L_DDT
+        .ASCIC  /DDC/                   ; DDB$T_NAME
+        .BLKB   <NAME+DDB$K_LENGTH>-.
+        .ENDM   DDB
+
+; DDT: assembles a DDT at NAME, a driver's: its start I/O, FDT, cancel,
+; unit initialization and cloned UCB routines, IOC$RETURN for those it
+; hasn't.
+        .MACRO  DDT     NAME, FDT, START=IOC$RETURN, CANCEL=IOC$RETURN, UNITINIT=IOC$RETURN, CLONEDUCB=IOC$RETURN
+NAME::  .ADDRESS START                  ; DDT$L_START
+        .ADDRESS FDT                    ; DDT$L_FDT
+        .ADDRESS CANCEL                 ; DDT$L_CANCEL
+        .ADDRESS UNITINIT               ; DDT$L_UNITINIT
+        .ADDRESS CLONEDUCB              ; DDT$L_CLONEDUCB
+        .IIF NE, <.-NAME>-DDT$K_LENGTH, .ERROR the DDT macro and $DDTDEF disagree
+        .ENDM   DDT
+
+; UCB: assembles a UCB at NAME, SIZE bytes, its device-independent part
+; as $UCBDEF lays it out and the rest 0: unit UNIT of the controller whose
+; DDB is DDB, driven by DDT, with the DEV$ bits CHAR, of class CLASS and
+; type TYPE, its default buffer size BUFSIZ, and UCB$L_STS's bits STS.
+; It isn't one of its DDB's units until it is linked to it, or the DDB's
+; first.
+        .MACRO  UCB     NAME, DDB, DDT, CLASS, CHAR, BUFSIZ, TYPE=0, STS=0, UNIT=0, VCB=0, SIZE=UCB$K_LENGTH
+NAME::  .ADDRESS NAME, NAME             ; UCB$L_IOQFL, IOQBL: no IRPs
+        .WORD   SIZE                    ; UCB$W_SIZE
+        .BYTE   DYN$C_UCB, 0            ; UCB$B_TYPE
+        .ADDRESS DDB                    ; UCB$L_DDB
+        .LONG   0                       ; UCB$L_LINK
+        .ADDRESS DDT                    ; UCB$L_DDT
+        .ADDRESS VCB                    ; UCB$L_VCB
+        .LONG   0                       ; UCB$L_PID
+        .LONG   CHAR, 0                 ; UCB$L_DEVCHAR, DEVCHAR2
+        .BYTE   CLASS, TYPE             ; UCB$B_DEVCLASS, DEVTYPE
+        .WORD   BUFSIZ                  ; UCB$W_DEVBUFSIZ
+        .LONG   0, 0, 0                 ; UCB$L_DEVDEPEND, DEVDEPND2, DEVDEPND3
+        .LONG   STS                     ; UCB$L_STS
+        .WORD   UNIT, 0                 ; UCB$W_UNIT, REFC
+        .WORD   0, 0, 0, 0              ; UCB$W_DEVSTS, ERRCNT, UNIT_SEED, and a spare word
+        .IIF NE, <.-NAME>-UCB$K_LENGTH, .ERROR the UCB macro and $UCBDEF disagree
+        .BLKB   SIZE-UCB$K_LENGTH
+        .ENDM   UCB
+
 ; $UCBDEF: a unit control block: a device, the requests waiting for it,
-; and its driver (vms/exec/qio.mar). UCB$L_STS's bits are also
-; $GETDVI's DVI$_STS.
+; and its driver (vms/exec/qio.mar). Its DDB names it and lists it with
+; the other units of its controller. UCB$L_STS's bits are also $GETDVI's
+; DVI$_STS.
         .MACRO  $UCBDEF
 UCB$L_IOQFL = 0                         ; IRPs waiting for the device
 UCB$L_IOQBL = 4
-UCB$L_FDT = 8                           ; the driver's FDT routine, which $QIO JSBs
-UCB$L_VCB = 12                          ; a disk's VCB, or 0
-UCB$T_NAME = 16                         ; the device's name, DDCU, 4 characters
-UCB$L_START = 20                        ; a disk driver's start I/O routine, which does an IRP's I/O, or 0
-UCB$L_ERRCNT = 24                       ; the errors the device reported, SS$_DRVERR
-UCB$K_LENGTH = 28
-UCB$L_CONN = 28                         ; a network unit's or a TELNET terminal's connection on the port, 0 none
-UCB$L_MBSTS = 28                        ; a mailbox's UCB$V_PRMMBX
-UCB$L_LINK = 32                         ; a cloned unit's, a network unit's, a mailbox's or a terminal's: the next of its kind
-UCB$L_REFC = 36                         ; the channels assigned to it
-UCB$L_UNIT = 40                         ; its number, n in its name, BGnn, MBnn or TNAn
-UCB$L_PROTO = 44                        ; a network unit's socket's protocol, TCPIP$C_
-UCB$K_NETLENGTH = 48                    ; a network unit, which BGA0: clones
-UCB$L_MSGQFL = 44                       ; a mailbox's messages, oldest first
-UCB$L_MSGQBL = 48
-UCB$L_MAXMSG = 52                       ; the longest message it takes
-UCB$L_BUFQUO = 56                       ; the bytes of messages it may still hold
-UCB$K_MBLENGTH = 60                     ; a mailbox
-UCB$A_TT_CHAR = 44                      ; a terminal's characteristics, IO$_SENSEMODE's 12 bytes: class, type, width, TT$ bits and page, TT2$ bits
-UCB$L_TT_STS = 56                       ; UCB$V_TT_
-UCB$L_TT_PUT = 60                       ; the type-ahead buffer, a ring: where the next character received goes
-UCB$L_TT_GET = 64                       ; and where a read takes the next from
-UCB$Q_TT_CTRLC = 68                     ; the CTRL/C ASTs enabled: IRPs, as ACBs
-UCB$Q_TT_CTRLY = 76                     ; and the CTRL/Y ones
-UCB$L_TT_LEN = 84                       ; the line being read: its length,
-UCB$L_TT_CURSOR = 88                    ; where the cursor is in it,
-UCB$L_TT_BACK = 92                      ; and how many lines back a recall is, 0 none
-UCB$L_TT_ESC = 96                       ; an escape sequence being read: its state, and its length in the high word
-UCB$L_TT_RECALL = 100                   ; the recall buffer's slot the next line read goes in
-UCB$L_TT_NRECALL = 104                  ; how many lines the recall buffer holds
-UCB$Q_TT_WRTQ = 108                     ; a TELNET or pseudo terminal's writes waiting to be sent or read, IRPs
-UCB$L_TT_SEND = 116                     ; its send on the port, an IRP, or 0
-UCB$L_TT_OUTLEN = 120                   ; the bytes in UCB$A_TT_OUT
-UCB$L_TT_TELNET = 124                   ; Telnet's state, the command and option it is in, a subnegotiation's count
-UCB$L_TT_SB = 128                       ; a subnegotiation's last four bytes
-UCB$A_TT_TQE = 132                      ; a timed read's timer queue entry, TQE$K_LENGTH bytes
-UCB$A_TT_RING = 180                     ; the type-ahead buffer, UCB$K_TT_TYPEAHEAD bytes
-UCB$A_TT_RECALL = 436                   ; the lines read, UCB$K_TT_RECALL of 256 bytes, each .ASCIC
-UCB$A_TT_OUT = 4532                     ; a TELNET or pseudo terminal's echo and prompts, not yet sent or read, UCB$K_TT_OUTSIZE bytes
-UCB$L_TT_CTRL = 5556                    ; CTRL/C and CTRL/Y that came, for SERVICE: the console's interrupt sets them
-UCB$L_TT_PID = 5560                     ; its owner: the process created on it, which a hangup deletes, or 0
-UCB$Q_TT_PTDRD = 5564                   ; a pseudo terminal's: its controller's reads, PTD$READ's IRPs
-UCB$L_TT_CTLPID = 5572                  ; its controller, the process that made it with PTD$CREATE, or 0 once it is gone
-UCB$L_TT_CTLCHAN = 5576                 ; and that process's channel to it
-UCB$L_TT_CHAR3 = 5580                   ; its TT3$ bits, the fourth longword of IO$_SENSEMODE's 16 bytes
-UCB$W_TT_SPEED = 5584                   ; its speeds, TT$C_BAUD_: transmit in the low byte, receive in the high
-UCB$W_TT_PRMSPEED = 5586                ; and its permanent ones, which IO$_SETCHAR sets
-UCB$A_TT_PRMCHAR = 5588                 ; its permanent characteristics, IO$_SENSECHAR's 12 bytes, as UCB$A_TT_CHAR
-UCB$L_TT_PRMCHAR3 = 5600                ; and TT3$ bits: what it goes back to once no channel has it
-UCB$L_TT_PHY = 5604                     ; a virtual terminal's physical one, a TNAn, or 0 while disconnected
-UCB$L_TT_LOG = 5608                     ; a physical terminal's virtual one, which has its line
-UCB$K_TTLENGTH = 5612                   ; a terminal
+UCB$W_SIZE = 8                          ; the UCB's size, a template's its clones'
+UCB$B_TYPE = 10                         ; DYN$C_UCB
+UCB$L_DDB = 12                          ; its controller's DDB, which has the device's name but the unit, and its driver
+UCB$L_LINK = 16                         ; the DDB's next unit, by number, or 0
+UCB$L_DDT = 20                          ; its driver's dispatch table, the DDB's
+UCB$L_VCB = 24                          ; a disk's VCB, or 0
+UCB$L_PID = 28                          ; its owner: a terminal's, the process created on it, which a hangup deletes, or 0
+UCB$L_DEVCHAR = 32                      ; DEV$ bits, $GETDVI's DVI$_DEVCHAR
+UCB$L_DEVCHAR2 = 36                     ; and DEVCHAR2, DVI$_DEVCHAR2
+UCB$B_DEVCLASS = 40                     ; DC$_: with the next three, a terminal's characteristics, IO$_SENSEMODE's 12 bytes
+UCB$B_DEVTYPE = 41                      ; DT$_, 0 if unknown
+UCB$W_DEVBUFSIZ = 42                    ; its default buffer size: a disk's block, a terminal's width, a mailbox's longest message
+UCB$L_DEVDEPEND = 44                    ; device dependent: a terminal's TT$ bits, its page in the top byte
+UCB$L_DEVDEPND2 = 48                    ; a terminal's TT2$ bits
+UCB$L_DEVDEPND3 = 52                    ; a terminal's TT3$ bits, the fourth longword of IO$_SENSEMODE's 16 bytes
+UCB$L_STS = 56                          ; UCB$V_ bits, $GETDVI's DVI$_STS
+UCB$W_UNIT = 60                         ; its number, which follows its DDB's name in its own
+UCB$W_REFC = 62                         ; the channels assigned to it
+UCB$W_DEVSTS = 64                       ; device dependent status: a mailbox's UCB$V_PRMMBX and UCB$V_DELMBX
+UCB$W_ERRCNT = 66                       ; the errors the device reported, SS$_DRVERR
+UCB$W_UNIT_SEED = 68                    ; a template's: the unit last cloned from it
+UCB$K_LENGTH = 72
+UCB$L_CONN = 72                         ; a network unit's or a TELNET terminal's connection on the port, 0 none
+UCB$L_PROTO = 76                        ; a network unit's socket's protocol, TCPIP$C_, or 0 before it has one
+UCB$K_NETLENGTH = 80                    ; a network unit, cloned from BG0:
+UCB$L_MSGQFL = 72                       ; a mailbox's messages, oldest first
+UCB$L_MSGQBL = 76
+UCB$L_BUFQUO = 80                       ; the bytes of messages it may still hold
+UCB$K_MBLENGTH = 84                     ; a mailbox
+UCB$L_TT_STS = 76                       ; UCB$V_TT_
+UCB$L_TT_PUT = 80                       ; the type-ahead buffer, a ring: where the next character received goes
+UCB$L_TT_GET = 84                       ; and where a read takes the next from
+UCB$Q_TT_CTRLC = 88                     ; the CTRL/C ASTs enabled: IRPs, as ACBs
+UCB$Q_TT_CTRLY = 96                     ; and the CTRL/Y ones
+UCB$L_TT_LEN = 104                      ; the line being read: its length,
+UCB$L_TT_CURSOR = 108                   ; where the cursor is in it,
+UCB$L_TT_BACK = 112                     ; and how many lines back a recall is, 0 none
+UCB$L_TT_ESC = 116                      ; an escape sequence being read: its state, and its length in the high word
+UCB$L_TT_RECALL = 120                   ; the recall buffer's slot the next line read goes in
+UCB$L_TT_NRECALL = 124                  ; how many lines the recall buffer holds
+UCB$Q_TT_WRTQ = 128                     ; a TELNET or pseudo terminal's writes waiting to be sent or read, IRPs
+UCB$L_TT_SEND = 136                     ; its send on the port, an IRP, or 0
+UCB$L_TT_OUTLEN = 140                   ; the bytes in UCB$A_TT_OUT
+UCB$L_TT_TELNET = 144                   ; Telnet's state, the command and option it is in, a subnegotiation's count
+UCB$L_TT_SB = 148                       ; a subnegotiation's last four bytes
+UCB$A_TT_TQE = 152                      ; a timed read's timer queue entry, TQE$K_LENGTH bytes
+UCB$A_TT_RING = 200                     ; the type-ahead buffer, UCB$K_TT_TYPEAHEAD bytes
+UCB$A_TT_RECALL = 456                   ; the lines read, UCB$K_TT_RECALL of 256 bytes, each .ASCIC
+UCB$A_TT_OUT = 4552                     ; a TELNET or pseudo terminal's echo and prompts, not yet sent or read, UCB$K_TT_OUTSIZE bytes
+UCB$L_TT_CTRL = 5576                    ; CTRL/C and CTRL/Y that came, for SERVICE: the console's interrupt sets them
+UCB$Q_TT_PTDRD = 5580                   ; a pseudo terminal's: its controller's reads, PTD$READ's IRPs
+UCB$L_TT_CTLPID = 5588                  ; its controller, the process that made it with PTD$CREATE, or 0 once it is gone
+UCB$L_TT_CTLCHAN = 5592                 ; and that process's channel to it
+UCB$W_TT_SPEED = 5596                   ; its speeds, TT$C_BAUD_: transmit in the low byte, receive in the high
+UCB$W_TT_PRMSPEED = 5598                ; and its permanent ones, which IO$_SETCHAR sets
+UCB$A_TT_PRMCHAR = 5600                 ; its permanent characteristics, IO$_SENSECHAR's 12 bytes, as UCB$B_DEVCLASS's
+UCB$L_TT_PRMCHAR3 = 5612                ; and TT3$ bits: what it goes back to once no channel has it
+UCB$L_TT_PHY = 5616                     ; a virtual terminal's physical one, a TNAn, or 0 while disconnected
+UCB$L_TT_LOG = 5620                     ; a physical terminal's virtual one, which has its line
+UCB$K_TTLENGTH = 5624                   ; a terminal, its connection at UCB$L_CONN
 UCB$K_TT_TYPEAHEAD = 256
 UCB$K_TT_RECALL = 16                    ; a power of 2
 UCB$K_TT_OUTSIZE = 1024
@@ -541,12 +628,17 @@ UCB$V_TT_RECV = 5                       ; a TELNET terminal's receive is on the 
 UCB$V_TT_TN = 6                         ; a TELNET terminal, TNAn, not the console
 UCB$V_TT_FT = 7                         ; a pseudo terminal, FTAn, which a program drives with the PTD$ routines
 UCB$V_TT_VT = 8                         ; a virtual terminal, VTAn: a session that outlives its line
-UCB$V_TT_DET = 9                        ; a virtual terminal disconnected from its line: its I/O waits
-UCB$V_TT_RED = 10                       ; a physical terminal redirected to a virtual one, UCB$L_TT_LOG
-UCB$V_PRMMBX = 0                        ; UCB$L_MBSTS: permanent, until $DELMBX
-UCB$M_PRMMBX = 1
-UCB$V_ONLINE = 4                        ; the device is online
+UCB$V_ONLINE = 4                        ; UCB$L_STS: the device is online
 UCB$M_ONLINE = ^X10
+UCB$V_TEMPLATE = 13                     ; a template: $ASSIGN clones a unit of its own from it
+UCB$M_TEMPLATE = ^X2000
+UCB$V_DELETEUCB = 16                    ; delete it once no channel has it (IOC$DELETE_UCB)
+UCB$M_DELETEUCB = ^X10000
+UCB$V_PRMMBX = 0                        ; UCB$W_DEVSTS: a permanent mailbox, until $DELMBX
+UCB$M_PRMMBX = 1
+UCB$V_DELMBX = 1                        ; a mailbox $DELMBX marked for deletion
+UCB$M_DELMBX = 2
+DYN$C_UCB = 16                          ; UCB$B_TYPE
         .ENDM   $UCBDEF
 
 ; $IRPDEF: an I/O request packet, from pool, which a driver makes for a

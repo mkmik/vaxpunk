@@ -27,7 +27,7 @@ when the PAL asks, on top of the kernel stack, and
 request packet to the device's driver, and its completion is a kernel
 mode AST, and
 [ADR-0019](../adr/0019-mailboxes.md): a mailbox is a unit of its own,
-`MBnn`, and process deletion writes the termination message to it, and
+and process deletion writes the termination message to it, and
 [ADR-0027](../adr/0027-terminals-are-ucbs-and-telnet-is-in-the-driver.md):
 each terminal is a UCB of its own, and a remote login's is a TELNET
 terminal the terminal driver drives over its connection, and
@@ -789,7 +789,7 @@ service checks with `IFPRIV` and `IFNPRIV` from `lib.mlb`, and says
 | `GRPPRV` | the system access to the files and volumes of its UIC group |
 | `READALL` | reading any file |
 | `BYPASS` | any access to any file or volume |
-| `OPER` | `IO$_SETCHAR` on `BGA0:`, the network's interface |
+| `OPER` | the ioctls that set the network's interface, on a socket |
 
 `SET PROCESS/PRIVILEGES` changes the permanent ones, and `SHOW
 PROCESS/PRIVILEGES` lists the authorized and current ones, by the names
@@ -894,23 +894,40 @@ attributes. VMS's hash table and mutex replace the queues and IPL.
 device's driver in an I/O request packet, and comes back to the process
 as a kernel mode AST.
 
-- **Devices.** Each has a unit control block (`$UCBDEF`): the disks' in
-  `qio.mar`, `IOC$AB_UCB`, `DKA0:`, `DKB0:`, `MDA0:`; the terminals' in
-  `ttdriver.mar`'s list, `TT$GL_UNITS`, the console's, `OPA0:`, and a
-  TELNET terminal's, `TNAn:`, from pool; and the network's and the
-  mailboxes' units, cloned from pool too. A UCB holds a queue of
-  IRPs waiting for the device, its driver's FDT routine, a disk's VCB, a
-  disk driver's start I/O routine, which the file system calls too
-  ([ADR-0015](../adr/0015-file-system-io-through-the-disk-driver.md)),
-  and the count of errors the device reported, `UCB$L_ERRCNT`.
+- **Devices** are VMS's I/O database
+  ([ADR-0044](../adr/0044-the-io-database.md)). `IOC$GL_DEVLIST` lists a
+  device data block (`$DDBDEF`) for each controller: its name, `DKA`,
+  `OPA`, `TNA`, `MBA`, `BG`, its units' driver's dispatch table
+  (`$DDTDEF`: the FDT, start I/O, cancel, unit initialization and
+  cloned UCB routines), and its first unit's unit control block
+  (`$UCBDEF`), the others after it by number. A device's name is its
+  DDB's and its unit's number. The disks' DDBs and UCBs, `DKA0:`,
+  `DKB0:` and `MDA0:`, are `qio.mar`'s; `TTY$INIT`, `MB$INIT` and
+  `NET$INIT` link the terminals', the mailboxes' and the network's, and
+  `IOC$INIT` calls each unit's unit initialization, which puts a disk
+  the PAL has online. A UCB holds a queue of IRPs waiting for the
+  device, its DDB and DDT, a disk's VCB, its owner, and what `$GETDVI`
+  returns: `UCB$L_DEVCHAR`, `UCB$B_DEVCLASS`, `UCB$B_DEVTYPE`,
+  `UCB$W_DEVBUFSIZ`, `UCB$L_DEVDEPEND`, `UCB$W_UNIT`, `UCB$W_REFC`,
+  `UCB$L_STS`, `UCB$W_ERRCNT`. A disk driver's start I/O routine is the
+  one the file system calls too
+  ([ADR-0015](../adr/0015-file-system-io-through-the-disk-driver.md)). A
+  template, `BG0:`, `TNA0:`, `VTA0:` and the mailboxes' one, which isn't
+  listed, is the unit others are cloned from, from pool
+  (`IOC$CLONE_UCB`), numbered the first number free from 1 to 9999, and
+  deleted when their last channel goes (`IOC$DELETE_UCB`).
 - **Channels.** `$ASSIGN` gives one of 31, a bit in `PCB$L_CHANS`, with
-  the device's UCB in `PCB$AL_CCB`. It translates the device name it is
-  given first, as VMS does: without a colon at its end, in
-  `LNM$FILE_DEV`, and what that translates to, up to `LNM$C_MAXDEPTH`,
-  10, times, until a name doesn't translate, or starts with an
-  underscore, which says it is a device's own name and is dropped. So
-  `SYS$INPUT` is `_OPA0:`, the console. `$DASSGN` cancels the channel's
-  requests and gives it back.
+  the device's UCB in `PCB$AL_CCB`, which counts it, `UCB$W_REFC`. It
+  translates the device name it is given first, as VMS does: without a
+  colon at its end, in `LNM$FILE_DEV`, and what that translates to, up
+  to `LNM$C_MAXDEPTH`, 10, times, until a name doesn't translate, or
+  starts with an underscore, which says it is a device's own name and is
+  dropped. So `SYS$INPUT` is `_OPA0:`, the console. Then it finds the
+  device as VMS's `IOC$SEARCHDEV` does: a name without its controller's
+  letter is controller A's, `DK0:` `DKA0:`, and one without a number
+  unit 0's. A template's channel goes to a unit cloned for it, which its
+  driver's `DDT$L_CLONEDUCB` sets up or refuses; a network unit needs
+  `NETMBX`. `$DASSGN` cancels the channel's requests and gives it back.
 - **`$QIO`** checks the channel and that the caller can write the IOSB,
   clears the event flag, and calls the FDT routine at `IPL$_SYNCH` with
   its arguments. That checks the function and its parameters, a failure
@@ -933,12 +950,16 @@ as a kernel mode AST.
   IOSB, if there is one, has a status: a flag set before that, for
   something else, is cleared and waited for again, as VMS's `$SYNCH`
   does.
-- **Cancelling.** `IOC$CANCEL` takes a process's IRPs for some of its
-  channels off the UCBs, and its CTRL/C and CTRL/Y ASTs off the
-  terminals' queues (`TT$CANCEL`). `$CANCEL` completes the requests with `SS$_ABORT`, and leaves
-  those done already. Rundown and `$DASSGN` free them unfinished, from
-  its AST queue too: image rundown cancels the image's channels before
-  its P0 goes, process rundown all of them, `$DASSGN` the one.
+- **Cancelling.** `IOC$CANCEL` takes, for each of some of a process's
+  channels, its IRPs off the channel's UCB, then calls its driver's
+  cancel routine, `DDT$L_CANCEL`, for those the driver holds elsewhere:
+  a terminal's writes and its CTRL/C and CTRL/Y ASTs (`TT$CANCEL`), the
+  network's requests on the port (`NET$CANCEL`). `$CANCEL` completes the
+  requests with `SS$_ABORT`, and leaves those done already. Rundown and
+  `$DASSGN` free them unfinished, from its AST queue too: image rundown
+  cancels the image's channels before its P0 goes, process rundown all
+  of them, `$DASSGN` the one. A channel that goes is counted no more,
+  and a cloned unit whose last channel it was is deleted.
 
 The terminals' driver, `ttdriver.mar`, `TT$FDT`, as VMS's, the I/O
 User's Reference Manual's terminal chapter, with its function codes,
@@ -946,7 +967,7 @@ modifiers and IOSB. Each terminal is a UCB of its own, with its
 characteristics, its type-ahead buffer, the line being read, its recall
 buffer and its CTRL/C and CTRL/Y ASTs ($UCBDEF's `UCB$x_TT_`): the
 console, `OPA0:`, which `TTY$INIT` makes at boot, and a TELNET terminal,
-`TNA1:` to `TNA9:`, for each remote login
+`TNAn:`, cloned from `TNA0:`, for each remote login
 ([ADR-0027](../adr/0027-terminals-are-ucbs-and-telnet-is-in-the-driver.md)).
 
 - **Writing**, for `IO$_WRITEVBLK`, `IO$_WRITELBLK` and `IO$_WRITEPBLK`:
@@ -1022,8 +1043,8 @@ console, `OPA0:`, which `TTY$INIT` makes at boot, and a TELNET terminal,
   holds. A TELNET terminal starts with the console's, and `TT$M_REMOTE`;
   its width and page are what the client's NAWS says.
 - **TELNET terminals.** `IO$_TTY_PORT` on a connected TCP socket's
-  channel makes the connection a terminal: `TT$TNPORT` clones a UCB, the
-  first free `TNAn`, moves the connection and the channel to it, and the
+  channel makes the connection a terminal: `TT$TNPORT` clones a `TNAn`
+  from `TNA0:`, moves the connection and the channel to it, and the
   network unit goes once no channel has it. The terminal speaks Telnet
   (RFC 854): it offers `WILL ECHO` and `WILL SGA`, asks `DO NAWS`, takes
   the window size from its subnegotiation, refuses any other option, and
@@ -1033,11 +1054,11 @@ console, `OPA0:`, which `TTY$INIT` makes at boot, and a TELNET terminal,
   hangs up: its reads and writes end with `SS$_HANGUP`, which DCL
   quits at. Once its last channel goes, `TT$CANCEL` closes the
   connection, forgetting what the terminal has on the port
-  (`NET$TTCLOSE`), and frees the UCB.
+  (`NET$TTCLOSE`), and `IOC$CANCEL` deletes the UCB.
 - **Virtual terminals.** With `TT2$M_DISCONNECT` in `IO$_TTY_PORT`'s
   p1, which TELNETD passes while `TCPIP$TELNET_VTA` is TRUE, `VIRTUAL`
-  makes a `VTAn` too, which takes the connection and the channel, and
-  `TNAn` is redirected to it. When its connection goes and its owner is
+  makes a `VTAn` too, from `VTA0:`, which takes the connection and the
+  channel, and `TNAn` is redirected to it, `DEV$M_RED`. When its connection goes and its owner is
   logged in, `DETACH` disconnects it instead of hanging it up: its read
   waits to start again, its writes wait, and `TTY$GL_TIMEOUT` seconds
   later it hangs up. `IO$M_TT_CONNECT` moves a connected one's line to a
@@ -1073,42 +1094,48 @@ the programs that ask.
 
 ### Devices
 
-The devices are the disks, each a VCB (*Files*), and the terminals,
-`TT$GL_UNITS`, numbered in that order: `DKA0:`, `DKB0:`, `MDA0:`,
-`OPA0:`, then the `TNAn:` there are. What `$GETDVI` returns of a
-terminal is copied from its UCB at `IPL$_SYNCH`, since a TELNET terminal
-can go once the IPL drops.
+The devices are the I/O database's units (*I/O*), in its order: the
+disks, `DKA0:`, `DKB0:`, `MDA0:`, then the terminals, `OPA0:`, `FTA0:`
+and the pseudo terminals, the templates `TNA0:` and `VTA0:` and the
+TELNET and virtual terminals, then the mailboxes, `MBA2:` and the rest,
+and the network's `BG0:` and its units.
 `getdvi.mar` answers what they are, with VMS's services, item codes and
 bits (`$DVIDEF`, `$DVSDEF`, `$DCDEF`, `$DEVDEF` in `starlet.mlb`):
 
 - **`$DEVICE_SCAN return_devnam, retlen, search_devnam, itmlst, contxt`**
   returns the next device's name, `_DDCU:`, whose name matches
   `search_devnam`, with `*` and `%` (`FIL$MATCH`), and whose class is
-  `DVS$_DEVCLASS`'s, `DC$_DISK` or `DC$_TERM`, if the item list has it.
-  `contxt`, a quadword, 0 at first, keeps the next device's number.
-  `SS$_NOMOREDEV` after the last.
+  `DVS$_DEVCLASS`'s, if the item list has it. `contxt`, a quadword, 0
+  at first, keeps the device's DDB and the number past its unit's, so a
+  unit that goes between calls loses no other. `SS$_NOMOREDEV` after
+  the last.
 - **`$GETDVI efn, chan, devnam, itmlst, iosb, astadr, astprm, nullarg`**
-  finds the device `devnam` names, translated as `$ASSIGN` translates it
-  (`IOC$TRNDEVNAM`), or else `chan`'s, and returns the items
-  asked for: `DVI$_DEVCHAR` (`DEV$M_FOD`, `DIR`, `SHR`, `AVL`, `IDV`,
-  `ODV`, `RND` for a disk, with `MNT` once mounted and `SWL` too if read
-  only; `REC`, `CCL`, `TRM`, `AVL`, `IDV`, `ODV` for a terminal),
-  `DEVCLASS`, `UNIT` and `REFCNT` (a terminal's, 0 for a disk), `ERRCNT`
-  (a disk's UCB's, 0 for a terminal), a terminal's `DEVTYPE`,
-  `DEVBUFSIZ`, `DEVDEPEND` and `DEVDEPEND2`, its characteristics,
-  `DEVNAM`, `VOLNAM`, `FREEBLOCKS`
-  (`FIL$FREEBLOCKS`), `CLUSTER`, `MOUNTCNT`, the `AVL`, `MNT` and `SWL`
-  bits, and `STS`, `UCB$M_ONLINE` if the device is there: a terminal, a
-  mounted disk, the ramdisk once made, a PAL disk whose first block
-  reads. Others are `SS$_BADPARAM`. It clears and sets the event flag and
-  fills the IOSB, done at once; `$GETDVIW` is `$GETDVI`.
+  finds the device `devnam` names, as `$ASSIGN` finds it
+  (`IOC$SEARCHDEV`), or else `chan`'s, and returns the items asked
+  for, from its UCB, copied at `IPL$_SYNCH`, since a cloned unit can go
+  once the IPL drops: `DVI$_DEVCHAR` and `DVI$_DEVCHAR2`, `DEVCLASS`,
+  `DEVTYPE`, `DEVBUFSIZ`, `DEVDEPEND`, `DEVDEPEND2` and `DEVDEPEND3`, a
+  terminal's characteristics, `UNIT`, `REFCNT`, `ERRCNT`, `STS`, the
+  `AVL`, `MNT`, `ALL` and `SWL` bits, and `DEVNAM`; from a disk's VCB
+  `VOLNAM`, `FREEBLOCKS` (`FIL$FREEBLOCKS`), `CLUSTER` and `MOUNTCNT`;
+  and a terminal's `TT_PHYDEVNAM`. A disk is `DEV$M_FOD`, `DIR`, `SHR`,
+  `AVL`, `IDV`, `ODV`, `RND`, with `MNT` while a volume is mounted, `SWL`
+  too if it is read only and `ALL` if it is a job's, which `MOUNT` and
+  `DISMOUNT` set, and online if the PAL has it, the ramdisk once made; a
+  terminal `REC`, `CCL`, `TRM`, `AVL`, `IDV`, `ODV`; a mailbox `REC`,
+  `SHR`, `AVL`, `MBX`, `IDV`, `ODV`, of type `DT$_MBX`, its buffer size
+  its longest message; `BG0:` and its units `REC`, `NET`, `AVL`, `MBX`,
+  `IDV`, `ODV`, of class 0, as TCP/IP Services'. Other codes are
+  `SS$_BADPARAM`. It clears and sets the event flag and fills the IOSB,
+  done at once; `$GETDVIW` is `$GETDVI`.
 
-DCL's `SHOW DEVICES` scans the disks, then the terminals, and asks
-`$GETDVIW` about each; with `/MOUNTED` it lists only the devices with a
-volume mounted, and with `/FULL` it writes a paragraph about each, as
-VMS's, of what `$GETDVIW` returns. ponytail: a VCB, or none for a terminal, stands
-for the device rather than its UCB, which has no operation counts,
-device type or `MAXBLOCK` yet; no ASTs.
+DCL's `SHOW DEVICES` scans the disks, the terminals, then the rest, but
+the mailboxes and the devices with `DEV$M_MBX` unless a name is given,
+and asks `$GETDVIW` about each; with `/MOUNTED` it lists only the
+devices with a volume mounted, and with `/FULL` it writes a paragraph
+about each, as VMS's, of what `$GETDVIW` returns: its kind, type and
+state, then its `DEV$` bits, a phrase each. ponytail: no operation
+counts, owners, device protection or `MAXBLOCK` yet; no ASTs.
 
 ### Files
 

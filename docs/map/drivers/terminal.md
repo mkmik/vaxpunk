@@ -6,7 +6,7 @@ kind = "core"
 intent = "goal"
 research = "done"
 milestone = "m0"
-refs = ["docs/adr/0013-qio-irps-and-drivers.md", "docs/adr/0014-ctrlc-ctrly-asts.md", "docs/adr/0027-terminals-are-ucbs-and-telnet-is-in-the-driver.md", "docs/adr/0041-virtual-terminals-take-the-telnet-line.md", "docs/design/0002-executive-processes.md", "docs/prd/0003-multi-user-vms.md", "vms/exec/ttdriver.mar", "vms/sysexe/set.mar", "vms/sysexe/show.mar"]
+refs = ["docs/adr/0013-qio-irps-and-drivers.md", "docs/adr/0014-ctrlc-ctrly-asts.md", "docs/adr/0027-terminals-are-ucbs-and-telnet-is-in-the-driver.md", "docs/adr/0041-virtual-terminals-take-the-telnet-line.md", "docs/adr/0044-the-io-database.md", "docs/design/0002-executive-processes.md", "docs/prd/0003-multi-user-vms.md", "vms/exec/ttdriver.mar", "vms/sysexe/set.mar", "vms/sysexe/show.mar"]
 
 [[feature]]
 id = "reads-writes"
@@ -68,9 +68,9 @@ note = "PRD-0003 tier 1 #3"
 [[feature]]
 id = "more-units"
 title = "More than 9 TELNET terminals: device names past 4 characters"
-status = "todo"
+status = "done"
 milestone = "m1"
-note = "PRD-0003 tier 1 #3; DESIGN-0002 I/O"
+note = "ADR-0044: a name is its DDB's and its unit's number, TNA1 to TNA9999, cloned from TNA0:"
 
 [[feature]]
 id = "login-at-key"
@@ -164,13 +164,15 @@ redraws it. `SET TERMINAL` and `SHOW TERMINAL` set and show the
 characteristics; virtual terminals keep a session across a disconnect.
 
 vaxpunk's is `vms/exec/ttdriver.mar`. Each terminal is a UCB of its
-own: the console, `OPA0:`, a TELNET terminal, `TNA1:` to `TNA9:`,
-for each remote login, whose Telnet protocol the driver speaks over the
-TCP connection ([ADR-0027](../../adr/0027-terminals-are-ucbs-and-telnet-is-in-the-driver.md)),
-and a pseudo terminal, `FTA1:` to `FTA9:`, that a program drives with
+own, a unit of the I/O database
+([ADR-0044](../../adr/0044-the-io-database.md)): the console, `OPA0:`, a
+TELNET terminal, `TNAn:`, cloned from `TNA0:`, for each remote login,
+whose Telnet protocol the driver speaks over the TCP connection
+([ADR-0027](../../adr/0027-terminals-are-ucbs-and-telnet-is-in-the-driver.md)),
+and a pseudo terminal, `FTAn:`, that a program drives with
 the PTD$ routines (t8y:/drivers/pseudo-terminal, [ADR-0033](../../adr/0033-pseudo-terminals-are-a-port-of-the-terminal-driver.md)).
 While `TCPIP$TELNET_VTA` is TRUE, a TELNET login runs on a virtual
-terminal, `VTA1:` to `VTA9:`, which holds the connection, with `TNAn:`
+terminal, `VTAn:`, which holds the connection, with `TNAn:`
 its physical terminal; when the connection goes, the session waits,
 disconnected, for 15 minutes, and the user's next login, or `CONNECT`,
 connects to it again ([ADR-0041](../../adr/0041-virtual-terminals-take-the-telnet-line.md)).
@@ -178,7 +180,5 @@ Reads have VMS's modifiers, terminator masks, line editing and a
 16-line recall buffer; CTRL/C and CTRL/Y are ASTs
 ([ADR-0014](../../adr/0014-ctrlc-ctrly-asts.md)). `$BRKTHRU` writes
 a message on a terminal, a user's or all of them, through a read in
-progress, then writes the read's prompt and line again. What's left for
-Milestone 1 is PRD-0003 tier 1 #3: more than 9 TELNET
-terminals. CTRL/O, CTRL/T, XON/XOFF and
-formatted writes are tier 3 #29.
+progress, then writes the read's prompt and line again. CTRL/O, CTRL/T,
+XON/XOFF and formatted writes are PRD-0003 tier 3 #29.

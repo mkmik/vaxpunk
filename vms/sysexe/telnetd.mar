@@ -46,10 +46,10 @@ LCHAN:  .LONG   0                       ; the listening channel
 CHAN:   .LONG   0                       ; a connection's
 IOSB:   .BLKQ   1
 MS50:   .LONG   -500000, -1             ; 50 ms
-UNIT:   .LONG   6                       ; the terminal's name, _TNAn:
+UNIT:   .LONG   0                       ; the terminal's name, _TNAn:, its length NAMEITEM's
         .ADDRESS UNITNAME
 UNITNAME:
-        .BLKB   6
+        .BLKB   16
 REFCNT: .LONG   0                       ; the terminal's channels
 SYSTAB: .ASCID  "LNM$SYSTEM"
 VTANAME:.ASCID  "TCPIP$TELNET_VTA"
@@ -61,8 +61,8 @@ VTAVALUE:
 PORTCHAR:                               ; IO$_TTY_PORT's p1: TT2$M_DISCONNECT for a virtual terminal
         .LONG   0
 NAMEITEM:                               ; $GETDVI's items: the name
-        .WORD   6, DVI$_DEVNAM
-        .ADDRESS UNITNAME, 0
+        .WORD   16, DVI$_DEVNAM
+        .ADDRESS UNITNAME, UNIT
         .LONG   0
 REFITEM:                                ; the channels
         .WORD   4, DVI$_REFCNT

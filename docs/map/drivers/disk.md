@@ -1,12 +1,12 @@
 +++
 title = "Disk driver"
 summary = "DKA0: and DKB0:: logical and physical block I/O on virtio disks"
-aka = ["DK", "DKA0:", "DKB0:", "DK$FDT", "DK$STARTIO", "DKDRIVER", "SYS$DKDRIVER", "IO$_READLBLK", "IO$_WRITELBLK", "IO$_READPBLK", "virtio-blk", "LOG_IO", "PHY_IO"]
+aka = ["DK", "DKA0:", "DKB0:", "DK$DDT", "DK$FDT", "DK$STARTIO", "DK$UNITINIT", "DKDRIVER", "SYS$DKDRIVER", "IO$_READLBLK", "IO$_WRITELBLK", "IO$_READPBLK", "virtio-blk", "LOG_IO", "PHY_IO"]
 kind = "core"
 intent = "goal"
 research = "done"
 milestone = "m0"
-refs = ["docs/adr/0007-system-disk-files-11-and-rms.md", "docs/adr/0012-data-disk-writable-files-11.md", "docs/adr/0013-qio-irps-and-drivers.md", "docs/adr/0015-file-system-io-through-the-disk-driver.md", "docs/design/0001-pal-interface.md", "docs/design/0002-executive-processes.md", "vms/exec/f11.mar", "vms/exec/qio.mar", "pal/src/main.c"]
+refs = ["docs/adr/0007-system-disk-files-11-and-rms.md", "docs/adr/0012-data-disk-writable-files-11.md", "docs/adr/0013-qio-irps-and-drivers.md", "docs/adr/0015-file-system-io-through-the-disk-driver.md", "docs/adr/0044-the-io-database.md", "docs/design/0001-pal-interface.md", "docs/design/0002-executive-processes.md", "vms/exec/f11.mar", "vms/exec/qio.mar", "pal/src/main.c"]
 
 [[feature]]
 id = "system-disk"
@@ -38,15 +38,14 @@ note = "ADR-0015"
 
 [[feature]]
 id = "error-count"
-title = "The device's failures counted in UCB$L_ERRCNT, shown by SHOW DEVICES"
+title = "The device's failures counted in UCB$W_ERRCNT, shown by SHOW DEVICES"
 status = "done"
 
 [[feature]]
 id = "ucb-items"
-title = "$GETDVI from the disk's UCB, not its VCB: operation counts, MAXBLOCK, device type"
+title = "A disk's operation counts, MAXBLOCK and device type in its UCB, for $GETDVI"
 status = "todo"
-milestone = "m1"
-note = "PRD-0003 tier 1 #9; DESIGN-0002 Devices"
+note = "ADR-0044 answers $GETDVI from the disk's UCB, online by GETMAXBLOCK at boot (DK$UNITINIT), its MNT, SWL and ALL bits MOUNT's; UCB$L_MAXBLOCK, UCB$L_OPCNT and a DT$ type are left"
 
 [[feature]]
 id = "virtual-io"
@@ -112,9 +111,10 @@ the error log, and queue requests, which the controller completes by
 interrupt. `LDDRIVER`, in OpenVMS since V7.3-1, makes a container file
 a disk.
 
-vaxpunk's disk driver is `DK$FDT` and `DK$STARTIO` in
-`vms/exec/f11.mar`, with UCBs for `DKA0:`, `DKB0:` and `MDA0:` in
-`qio.mar`. The PAL drives the virtio-blk devices itself, polled and a
+vaxpunk's disk driver is `DK$DDT`, with `DK$FDT` and `DK$STARTIO`, in
+`vms/exec/f11.mar`, with DDBs and UCBs for `DKA0:`, `DKB0:` and `MDA0:`
+in `qio.mar`, the first on the I/O database
+([ADR-0044](../../adr/0044-the-io-database.md)). The PAL drives the virtio-blk devices itself, polled and a
 request at a time (`pal/src/main.c`): `READLBLK` reads either disk,
 `WRITELBLK` writes `DKB0:`; QEMU attaches `DKA0:` read only
 ([ADR-0007](../../adr/0007-system-disk-files-11-and-rms.md),

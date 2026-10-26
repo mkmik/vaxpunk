@@ -16,7 +16,7 @@ $ IF P8 .EQS. "" THEN P8 = F$EDIT(F$GETSYI("STARTUP_P8"), "TRIM,UPCASE")
 $ ! TCPIP$DEVICE names the network's template device, which a program
 $ ! assigns a channel to for a socket, as TCP/IP Services' TCPIP$STARTUP
 $ ! defines it.
-$ DEFINE/SYSTEM/NOLOG TCPIP$DEVICE _BGA0:
+$ DEFINE/SYSTEM/NOLOG TCPIP$DEVICE _BG0:
 $ ! It makes the ramdisk, MDA0:, afresh at each boot, 1 MB, and mounts it for
 $ ! every process, /SYSTEM: a MOUNT without is the job's, STARTUP's. It
 $ ! holds TCP/IP Services' files: the hosts database, TCPIP$HOST.DAT,

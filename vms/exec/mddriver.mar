@@ -5,7 +5,8 @@
 ; blocks are pages of S0 from MD_VA, which the first INITIALIZE of MDA0:
 ; makes ($INIT_VOL, f11wrt.mar) and every later one makes afresh, zeroed,
 ; INITIALIZE/SIZE's blocks, or as many as the last time, 1,024 at first.
-; Until then the device is offline. Reads and writes are copies, at once:
+; Until then the device is offline: its UCB, IOC$AB_MDA0, isn't
+; UCB$M_ONLINE. Reads and writes are copies, at once:
 ; the disks' driver (DK$STARTIO, f11.mar) calls MD$IO where it would
 ; call the PAL for DKA0:. The pages are the system's, so the volume outlives the processes
 ; that wrote it, but not the system.
@@ -14,9 +15,10 @@
         .LIBRARY "starlet.mlb"
         $PTEDEF
         $PRTDEF
+        $UCBDEF
         $SSDEF
 
-        .EXTERNAL MMG$CREPAG, MMG$DELPAG
+        .EXTERNAL MMG$CREPAG, MMG$DELPAG, IOC$AB_MDA0
 
 BLOCK = 512
 MD_VA = ^X50000000                      ; in S0, past the RPB
@@ -34,9 +36,10 @@ MD$GL_BLOCKS::                          ; its size in blocks, the last INITIALIZ
         .PSECT  $CODE$
 
 ; MD$CREATE: R1 = a size in blocks. Makes the ramdisk's pages, that many
-; blocks of them, zeroed, after deleting any it had. R0 = SS$_NORMAL,
-; SS$_BADPARAM for a size of 0 or past MD$C_MAXBLOCKS, the ramdisk as it
-; was, or SS$_INSFMEM, and the ramdisk offline. Uses R0-R3.
+; blocks of them, zeroed, after deleting any it had, and puts it online.
+; R0 = SS$_NORMAL, SS$_BADPARAM for a size of 0 or past MD$C_MAXBLOCKS,
+; the ramdisk as it was, or SS$_INSFMEM, and the ramdisk offline. Uses
+; R0-R3.
 MD$CREATE::
         .JSB_ENTRY  SCRATCH=<R2, R3>
         MOVL    #SS$_BADPARAM, R0
@@ -48,6 +51,8 @@ MD$CREATE::
         TSTL    MD$GL_BASE
         BEQL    10$
         CLRL    MD$GL_BASE
+        MOVAB   G^IOC$AB_MDA0, R0
+        BICL2   #UCB$M_ONLINE, UCB$L_STS(R0)
         BSBB    PAGES
         BSBW    MMG$DELPAG
 10$:    MOVL    R3, MD$GL_BLOCKS
@@ -56,6 +61,8 @@ MD$CREATE::
         BSBW    MMG$CREPAG
         BLBC    R0, 80$
         MOVL    #MD_VA, MD$GL_BASE
+        MOVAB   G^IOC$AB_MDA0, R2
+        BISL2   #UCB$M_ONLINE, UCB$L_STS(R2)
         RSB
 80$:    PUSHL   R0                      ; none left, not some
         BSBB    PAGES

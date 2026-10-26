@@ -9,7 +9,7 @@ refs = ["docs/research/openvms-dns.md", "docs/adr/0025-hosts-database.md", "docs
 
 [[feature]]
 id = "acpcontrol"
-title = "IO$_ACPCONTROL on BGA0: for GETHOSTBYNAME and GETHOSTBYADDR"
+title = "IO$_ACPCONTROL on BG0: for GETHOSTBYNAME and GETHOSTBYADDR"
 status = "todo"
 note = "ADR-0025 and ADR-0026 follow-ups; the research report gives the codes and statuses"
 
@@ -45,6 +45,6 @@ stack stopped, gethostbyname fails even for a dotted address
 
 vaxpunk has no ACP: programs look names up themselves with `HOST_ADDR`
 ([ADR-0025](../../adr/0025-hosts-database.md)). Both ADRs name the
-ACP as the next step, a process that serves `IO$_ACPCONTROL` on `BGA0:`
+ACP as the next step, a process that serves `IO$_ACPCONTROL` on `BG0:`
 with the same library, so that C programs' gethostbyname works as it
 does on VMS.

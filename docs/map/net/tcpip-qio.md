@@ -1,7 +1,7 @@
 +++
 title = "Sockets as $QIO"
 summary = "TCP/IP Services' socket interface: $QIO on BG devices, item lists, ioctls"
-aka = ["BG", "BGA0:", "TCPIP$DEVICE", "$INETSYMDEF", "TCPIP$INETDEF", "UCX$INETDEF"]
+aka = ["BG", "BG0:", "BGA0:", "TCPIP$DEVICE", "$INETSYMDEF", "TCPIP$INETDEF", "UCX$INETDEF"]
 kind = "core"
 intent = "goal"
 research = "done"
@@ -45,10 +45,11 @@ status = "done"
 
 [[feature]]
 id = "device-scan"
-title = "BGA0: and its units seen by $DEVICE_SCAN and $GETDVI"
-status = "todo"
+title = "BG0: and its units seen by $DEVICE_SCAN and $GETDVI"
+status = "done"
 milestone = "m1"
-note = "PRD-0003 tier 1 #9"
+needs = ["/drivers/network#device-scan"]
+note = "ADR-0044"
 
 [[feature]]
 id = "close-pool"
@@ -97,11 +98,11 @@ note = "PRD-0003 tier 3 #35"
 id = "auxs"
 title = "IO$_SETMODE with af TCPIP$C_AUXS on SYS$NET: take over a socket another process accepted"
 status = "todo"
-note = "For the auxiliary server (t8y:/net/aux-server#sys-net). A second process can $ASSIGN a BGnn unit already; SOCKMODE refuses a p1 on a unit with a socket (SS$_BADPARAM), starlet.mlb has no TCPIP$C_AUXS (127), and a unit has no owner or protection, so any process can assign any BGnn"
+note = "For the auxiliary server (t8y:/net/aux-server#sys-net). A second process can $ASSIGN a BGn unit already; SOCKMODE refuses a p1 on a unit with a socket (SS$_BADPARAM), starlet.mlb has no TCPIP$C_AUXS (127), and a unit has no owner or protection, so any process can assign any BGn"
 
 [[needs]]
 on = "/drivers/network"
-why = "BGA0: and its BGnn units carry the requests (netdriver.mar)"
+why = "BG0: and its BGn units carry the requests (netdriver.mar)"
 
 [[needs]]
 on = "/exec/qio"
@@ -117,7 +118,7 @@ why = "Ports below 1024 and raw sockets need SYSPRV or BYPASS; ioctls OPER"
 
 [[needs]]
 on = "/exec/logical-names"
-why = "TCPIP$DEVICE, a system logical name, names BGA0:"
+why = "TCPIP$DEVICE, a system logical name, names BG0:"
 +++
 
 On VMS with TCP/IP Services (UCX before V5), a program reaches the
@@ -131,7 +132,7 @@ MultiNet's and TCPware's compatible interfaces. The stack under it is a
 port of BSD's, in the executive.
 
 vaxpunk has the same interface ([ADR-0024](../../adr/0024-sockets-have-tcpip-services-qio-interface.md)):
-TCP, UDP and raw ICMP sockets on `BGA0:`, which `TCPIP$DEVICE` names, with
+TCP, UDP and raw ICMP sockets on units of `BG0:`, which `TCPIP$DEVICE` names, with
 TCP/IP Services' function codes, item lists and symbol values in
 `starlet.mlb`. The driver, `vms/exec/netdriver.mar`, turns each request
 into a message on a port of shared pages, and lwIP, in a component of

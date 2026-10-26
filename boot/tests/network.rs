@@ -21,8 +21,9 @@
 //! itself, as SYSTEM again, a character at a time on a TELNET terminal,
 //! TNA1:, which has the console's width and page, as Telnet's NAWS gives them: SHOW TERMINAL,
 //! EDIT's keypad mode there, SHOW SYSTEM, CTRL/] and the TELNET> prompt, and LOGOUT; SET HOST again, and
-//! CTRL/] and CLOSE while a procedure spins there, which deletes its process, so
-//! SHOW SYSTEM no longer lists _TNA1:; with TCPIP$TELNET_VTA TRUE, a login
+//! CTRL/] and CLOSE while a procedure spins there, on TNA2:, as VMS numbers
+//! the units it clones in turn, which deletes its process, so
+//! SHOW SYSTEM no longer lists _TNA2:; with TCPIP$TELNET_VTA TRUE, a login
 //! on a virtual terminal, VTA1:, that CLOSE disconnects, SHOW USERS shows
 //! Disconnected and the next login connects to again, DISCONNECT, a login
 //! that answers NO, CONNECT/NOLOGOUT and CONNECT; then TELNET, by a name DNS knows, to a port here,
@@ -562,19 +563,20 @@ fn network() {
         let at = vax.command("SHOW SYSTEM");
         let shown = &vax.text()[..at];
         let shown = &shown[shown.rfind("SHOW SYSTEM").unwrap()..];
-        if shown.contains("TCPIP$TELNET") && !shown.contains("_TNA1:") {
+        if shown.contains("TCPIP$TELNET") && !shown.contains("_TNA2:") {
             hung_up = true;
             break;
         }
         sleep(Duration::from_secs(1));
     }
-    assert!(hung_up, "the hangup left the process on _TNA1:");
+    assert!(hung_up, "the hangup left the process on _TNA2:");
     // Virtual terminals: with TCPIP$TELNET_VTA TRUE a remote login is on
-    // VTA1:, whose physical terminal is TNA1:. CTRL/] and CLOSE while READ
-    // waits disconnect it, as SHOW USERS says; the next login connects to
-    // it, where READ's prompt is written again; DISCONNECT disconnects it
-    // again; a login that answers NO is on VTA2:, CONNECT/NOLOGOUT goes
-    // to VTA1:, keeping VTA2:, and CONNECT back to VTA2: logs VTA1: out.
+    // VTA1:, whose physical terminal is TNA3:. CTRL/] and CLOSE while READ
+    // waits disconnect it, as SHOW USERS says; the next login, on VTA2:,
+    // connects to it, where READ's prompt is written again, its physical
+    // terminal TNA4: now; DISCONNECT disconnects it again; a login that
+    // answers NO is on VTA3:, CONNECT/NOLOGOUT goes to VTA1:, keeping
+    // VTA3:, and CONNECT back to VTA3: logs VTA1: out.
     vax.command("DEFINE/SYSTEM TCPIP$TELNET_VTA TRUE");
     vax.reply("SET HOST 10.0.2.15", "Username: ");
     vax.login("SYSTEM", "MANAGER");
@@ -602,7 +604,7 @@ fn network() {
     vax.command("SHOW TERMINAL");
     vax.command("CONNECT VTA9");
     vax.command("CONNECT/NOLOGOUT VTA1");
-    vax.command("CONNECT VTA2");
+    vax.command("CONNECT VTA3");
     vax.command("SHOW TERMINAL");
     vax.command("LOGOUT");
     vax.command("DEASSIGN/SYSTEM TCPIP$TELNET_VTA");
@@ -738,7 +740,8 @@ fn network() {
         "TCPTEST: ok",
         "TCPIP$TELNET    LEF     4 TELNETD.EXE",
         "Terminal: _TNA1:",
-        "Terminal: _VTA1:      Device_Type: VT100         Owner: _VTA1:\nPhysical Terminal: _TNA1:\n",
+        "Terminal: _VTA1:      Device_Type: VT100         Owner: _VTA1:\nPhysical Terminal: _TNA3:\n",
+        "Terminal: _VTA1:      Device_Type: VT100         Owner: _VTA1:\nPhysical Terminal: _TNA4:\n",
         "VTA1:          Disconnected\n$ SET HOST",
         "    You have the following disconnected process:\n\
          Terminal   Process name    Image name\n\
@@ -747,9 +750,9 @@ fn network() {
         "I am ME",
         "$ DISCONNECT\n%REM-S-END",
         "[YES]: NO\n",
-        "Terminal: _VTA2:      Device_Type: VT100         Owner: _VTA2:\nPhysical Terminal: _TNA1:\n",
+        "Terminal: _VTA3:      Device_Type: VT100         Owner: _VTA3:\nPhysical Terminal: _TNA5:\n",
         "CONNECT VTA9\n%SYSTEM-W-NOSUCHDEV",
-        "$ CONNECT/NOLOGOUT VTA1\n$ CONNECT VTA2\n$ SHOW TERMINAL\nTerminal: _VTA2:",
+        "$ CONNECT/NOLOGOUT VTA1\n$ CONNECT VTA3\n$ SHOW TERMINAL\nTerminal: _VTA3:",
         "    Total number of users = 1,  number of processes = 1\n",
         "   Input:    9600     LFfill:  0      Width: 100      Parity: None",
         "   Output:   9600     CRfill:  0      Page:   30",

@@ -51,6 +51,7 @@ LITERAL
     SS$_BADESCAPE = 60,  ! a terminal read: an escape sequence's syntax is wrong
     SS$_PARTESCAPE = 508,  ! a terminal read: the buffer filled in an escape sequence
     SS$_HANGUP = 716,  ! the terminal's line is gone: a TELNET connection closed
+    SS$_OPINCOMPL = 724,  ! IOC$LINK_UCB: a unit by that number is there already
     SS$_REJECT = 660,  ! the peer refused the connection
     SS$_FILALRACC = 164,  ! a datagram socket's peer is set already
     SS$_NOLINKS = 636,  ! the socket isn't connected, or a datagram has nowhere to go
@@ -121,6 +122,7 @@ LITERAL
     SS$_DEADLOCK = 3594,  ! the lock request closed a deadlock, and was refused
     SS$_NOWORLD = 10372,  ! another group's lock needs WORLD
     SS$_NOOPER = 10388,  ! $BRKTHRU to another's terminals needs OPER
+    SS$_NONETMBX = 10404,  ! a network device's unit needs NETMBX
     SS$_ACEIDMATCH = 1721,  ! success: an ACE's identifiers matched
     SS$_NOMOREITEMS = 1777,  ! success: no more items to return
     SS$_ACLEMPTY = 2512,  ! a warning: the object has no ACL
@@ -739,9 +741,9 @@ MACRO
 ! $DVIDEF
 LITERAL
     DVI$_DEVCHAR = 2,  ! the DEV$ bits, a longword
-    DVI$_DEVCLASS = 4,  ! DC$_DISK or DC$_TERM
-    DVI$_DEVTYPE = 6,  ! a terminal's DT$ type
-    DVI$_DEVBUFSIZ = 8,  ! a terminal's width, a disk's block size
+    DVI$_DEVCLASS = 4,  ! DC$_
+    DVI$_DEVTYPE = 6,  ! DT$_
+    DVI$_DEVBUFSIZ = 8,  ! a terminal's width, a disk's block size, a mailbox's longest message
     DVI$_DEVDEPEND = 10,  ! a terminal's TT$ bits, its page in the top byte
     DVI$_UNIT = 12,
     DVI$_ERRCNT = 20,
@@ -756,7 +758,7 @@ LITERAL
     DVI$_MNT = 100,
     DVI$_ALL = 108,
     DVI$_SWL = 112,
-    DVI$_STS = 226,  ! the UCB$ status bits: UCB$M_ONLINE
+    DVI$_STS = 226,  ! the UCB$ status bits: UCB$M_ONLINE, UCB$M_TEMPLATE
     DVI$_DEVCHAR2 = 230,  ! the DEV$ bits of DEVCHAR2: DET, RED
     DVI$_TT_PHYDEVNAM = 274,  ! a terminal's physical terminal, _DDCU:, none if disconnected
     DVI$_DEVDEPEND3 = 292;  ! a terminal's TT3$ bits
@@ -834,7 +836,8 @@ LITERAL
 LITERAL
     DC$_DISK = 1,
     DC$_TERM = 66,
-    DC$_MAILBOX = 160,
+    DC$_MAILBOX = 160,  ! a mailbox's; BG0: and its units have 0, as TCP/IP Services'
+    DT$_MBX = 1,  ! a mailbox's type: a local memory mailbox
     DT$_TTYUNKN = 0,  ! a terminal's type: unknown
     DT$_VT52 = 64,
     DT$_VT100 = 96,
@@ -964,12 +967,16 @@ LITERAL
     DEV$M_CCL = 2,  ! carriage control
     DEV$M_TRM = 4,  ! a terminal
     DEV$M_DIR = 8,  ! directory structured
+    DEV$M_NET = 8192,  ! a network device
+    DEV$V_NET = 13,
     DEV$M_FOD = 16384,  ! files oriented
     DEV$M_SHR = 65536,  ! shareable
     DEV$M_AVL = 262144,  ! available
     DEV$V_AVL = 18,
     DEV$M_MNT = 524288,  ! a volume is mounted
     DEV$V_MNT = 19,
+    DEV$M_MBX = 1048576,  ! a mailbox, or a device that behaves like one, as a network device
+    DEV$V_MBX = 20,
     DEV$M_ALL = 8388608,  ! allocated to a process: a private mount's
     DEV$V_ALL = 23,
     DEV$M_SWL = 33554432,  ! software write locked: the volume is read only

@@ -4,8 +4,9 @@
 ; A mailbox is a device that holds messages, as on VMS
 ; (docs/adr/0019-mailboxes.md): a process writes a message to it with
 ; $QIO, and one that reads it gets the oldest, or waits for one. $CREMBX
-; makes a mailbox, a unit of its own, MBnn, as BGA0: clones network
-; units, and assigns a channel to it. With a logical name, which goes in
+; makes a mailbox, a unit of its own, MBAn, which it clones from a
+; template that isn't one of the units, as VMS's (IOC$CLONE_UCB), and
+; assigns a channel to it. With a logical name, which goes in
 ; the system table, other processes assign theirs by that name, and
 ; $CREMBX with the same name finds it. A temporary mailbox is deleted
 ; when its last channel goes, a permanent one once $DELMBX has made it
@@ -28,7 +29,11 @@
         $IPLDEF
         $PCBDEF
         $PRVDEF
+        $DDBDEF
+        $DDTDEF
         $UCBDEF
+        $DCDEF
+        $DEVDEF
         $IRPDEF
         $IODEF
         $LNMDEF
@@ -37,7 +42,8 @@
         $OPCMSG
 
         .EXTERNAL SCH$GL_CURPCB, EXE$PROBER_DSC, EXE$ALONONPAGED, EXE$DEANONPGDSIZ
-        .EXTERNAL IOC$ALLOCIRP, IOC$RETQUOTA, IOC$REQCOM, IOC$ASSIGN, IOC$CANCELQ, IOC$TRNDEVNAM
+        .EXTERNAL IOC$ALLOCIRP, IOC$RETQUOTA, IOC$REQCOM, IOC$ASSIGN, IOC$SEARCHDEV, IOC$RETURN
+        .EXTERNAL IOC$CLONE_UCB, IOC$DELETE_UCB, IOC$CVT_DEVNAM, IOC$LINK_DDB
         .EXTERNAL LNM$GL_SYSTEM, LNM$CREATE, LNM$DELEQV
 
 DEFMBXMXMSG = 256                       ; a mailbox's longest message, by default, as VMS's SYSGEN has it
@@ -54,11 +60,12 @@ COMHDR = 38                             ; $SNDOPR's header, before the sender's 
 OPRMAXMSG = 1024                        ; MBA2:'s longest message, the header with it, as VMS's
 OPRBUFQUO = 8192                        ; and the bytes it holds: OPCOM may be behind at boot
 
+MBX = DEV$M_REC!DEV$M_SHR!DEV$M_AVL!DEV$M_MBX!DEV$M_IDV!DEV$M_ODV ; a mailbox's DEV$ bits
+
         .PSECT  EXEC$DATA, NOEXE, WRT, QUAD
-MB$GL_UNITS::                           ; the mailboxes, linked by UCB$L_LINK
-        .LONG   0
-MB$GL_UNIT::                            ; the last unit number given, 1-99 then again
-        .LONG   0
+        DDT     MB$DDT, MB$FDT, CANCEL=MB$CANCEL ; the mailbox driver's
+        DDB     MB$AB_MBADDB, MBA, 0, MB$DDT ; the mailboxes', which MB$INIT links
+        UCB     MB$AB_MBA0, MB$AB_MBADDB, MB$DDT, DC$_MAILBOX, MBX, DEFMBXMXMSG, TYPE=DT$_MBX, STS=UCB$M_ONLINE!UCB$M_TEMPLATE, SIZE=UCB$K_MBLENGTH ; their template
 SYS$GL_OPRMBX::                         ; the operator's mailbox, MBA2:: its UCB's address, or 0
         .LONG   0
 OPRARGS:                                ; $CREMBX's arguments for it, which NEWMBX takes:
@@ -67,14 +74,14 @@ OPRARGS:                                ; $CREMBX's arguments for it, which NEWM
         .PSECT  $CODE$
 
 ; $CREMBX prmflg, chan, maxmsg, bufquo, promsk, acmode, lognam, flags:
-; makes a mailbox, MBnn, and assigns a channel to it, whose number goes in
+; makes a mailbox, MBAn, and assigns a channel to it, whose number goes in
 ; chan, a word. prmflg = 1 makes it permanent, else it is temporary. It
 ; takes messages of up to maxmsg bytes, 256 for 0, and holds up to bufquo
 ; bytes of them, 1056 for 0. With lognam, a logical name in
-; LNM$SYSTEM_TABLE names it, _MBnn:, and if lognam, translated as $ASSIGN
+; LNM$SYSTEM_TABLE names it, _MBAn:, and if lognam, translated as $ASSIGN
 ; does, names a mailbox already, the channel is that one's instead.
 ; SS$_EXQUOTA for a maxmsg over 65535, SS$_IVLOGNAM for a lognam longer
-; than 255, SS$_NOIOCHAN, or SS$_INSFMEM, also when all 99 units are
+; than 255, SS$_NOIOCHAN, or SS$_INSFMEM, also when all 9999 units are
 ; taken. SS$_NOPRIV for a permanent mailbox without PRMMBX, a temporary
 ; one without TMPMBX, or a lognam that names no mailbox yet without
 ; SYSNAM. The channel's access mode is acmode or the caller's, whichever
@@ -105,20 +112,12 @@ OPRARGS:                                ; $CREMBX's arguments for it, which NEWM
 14$:    DSBINT  #IPL$_SYNCH
         TSTL    R7
         BEQL    20$
-        PUSHR   #^M<R6, R7>
-        MOVL    R7, R2
-        MOVL    R6, R3
-        BSBW    IOC$TRNDEVNAM
-        POPR    #^M<R6, R7>
-        CMPL    R2, #4
-        BEQL    15$
-        CMPL    R2, #5
-        BNEQ    20$
-        CMPB    4(R3), #^A/:/
-        BNEQ    20$
-15$:    BSBW    MB$FINDUNIT
-        TSTL    R5
-        BEQL    20$
+        MOVL    28(AP), R1
+        BSBW    IOC$SEARCHDEV
+        BLBC    R0, 20$
+        MOVL    R1, R5
+        BSBW    MAILBOX
+        BLBC    R0, 20$
         BSBW    IOC$ASSIGN              ; it names one already
         BRB     50$
 20$:    TSTL    R7
@@ -129,17 +128,17 @@ OPRARGS:                                ; $CREMBX's arguments for it, which NEWM
         BLBC    R0, 80$
         TSTL    R7
         BEQL    40$
-        SUBL2   #8, SP                  ; its name, _MBnn:, lognam's equivalence
-        MOVB    #^A/_/, (SP)
-        MOVL    UCB$T_NAME(R5), 1(SP)
-        MOVB    #^A/:/, 5(SP)
+        SUBL2   #24, SP                 ; its name, _MBAn:, lognam's equivalence
+        MOVL    #24, R0
+        MOVL    SP, R1
+        BSBW    IOC$CVT_DEVNAM
         MOVL    SP, R8
-        MOVL    #6, R9
+        MOVL    R1, R9
         PUSHL   R5
         MOVL    G^LNM$GL_SYSTEM, R5
         BSBW    LNM$CREATE
         MOVL    (SP)+, R5
-        ADDL2   #8, SP
+        ADDL2   #24, SP
         BLBC    R0, 60$
 40$:    BSBW    IOC$ASSIGN
         BLBC    R0, 60$
@@ -157,8 +156,10 @@ OPRARGS:                                ; $CREMBX's arguments for it, which NEWM
 58$:    MOVL    #SS$_NORMAL, R0
         BRB     80$
 60$:    PUSHL   R0                      ; the new one goes
-        BICL2   #UCB$M_PRMMBX, UCB$L_MBSTS(R5)
+        BICW2   #UCB$M_PRMMBX, UCB$W_DEVSTS(R5)
+        BISL2   #UCB$M_DELETEUCB, UCB$L_STS(R5)
         BSBW    UNUSED
+        BSBW    IOC$DELETE_UCB
         MOVL    (SP)+, R0
 80$:    ENBINT
 90$:    RET
@@ -172,74 +173,52 @@ OPRARGS:                                ; $CREMBX's arguments for it, which NEWM
         RET
 
 ; NEWMBX: AP = $CREMBX's arguments, checked. Makes a mailbox with no
-; channel yet, permanent for prmflg = 1, with the next unit number no
-; mailbox has. R5 = its UCB, R0 = SS$_NORMAL, or SS$_INSFMEM, also with
-; all 99 taken. IPL$_SYNCH. Uses R1 and R2.
+; channel yet, permanent for prmflg = 1, the next unit cloned from the
+; template (IOC$CLONE_UCB). R5 = its UCB, R0 = SS$_NORMAL, or
+; SS$_INSFMEM, also with all 9999 taken. IPL$_SYNCH. Uses R1-R3.
 NEWMBX:
-        .JSB_ENTRY  OUTPUT=<R5>, SCRATCH=<R2>
-        MOVL    #99, R1
-10$:    AOBLEQ  #99, MB$GL_UNIT, 20$
-        MOVL    #1, MB$GL_UNIT
-20$:    MOVL    MB$GL_UNIT, R0
-        BSBW    MB$FINDNUM
-        TSTL    R5
-        BEQL    30$
-        SOBGTR  R1, 10$
-        MOVL    #SS$_INSFMEM, R0
-        RSB
-30$:    MOVL    #UCB$K_MBLENGTH, R1
-        BSBW    EXE$ALONONPAGED
+        .JSB_ENTRY  OUTPUT=<R5>, SCRATCH=<R2, R3>
+        PUSHL   R5
+        MOVAB   MB$AB_MBA0, R5
+        BSBW    IOC$CLONE_UCB
+        MOVL    (SP)+, R5
         BLBC    R0, 90$
         MOVL    R2, R5
-        MOVL    R5, UCB$L_IOQFL(R5)
-        MOVL    R5, UCB$L_IOQBL(R5)
-        MOVAB   MB$FDT, UCB$L_FDT(R5)
-        CLRL    UCB$L_VCB(R5)
-        CLRL    UCB$L_START(R5)
-        CLRL    UCB$L_ERRCNT(R5)
-        CLRL    UCB$L_REFC(R5)
         MOVAL   UCB$L_MSGQFL(R5), R0
         MOVL    R0, (R0)
         MOVL    R0, 4(R0)
         MOVL    12(AP), R0
         BNEQ    40$
         MOVZWL  #DEFMBXMXMSG, R0
-40$:    MOVL    R0, UCB$L_MAXMSG(R5)
+40$:    MOVW    R0, UCB$W_DEVBUFSIZ(R5)
         MOVL    16(AP), R0
         BNEQ    45$
         MOVZWL  #DEFMBXBUFQUO, R0
 45$:    MOVL    R0, UCB$L_BUFQUO(R5)
-        CLRL    UCB$L_MBSTS(R5)
         BLBC    4(AP), 50$
-        BISL2   #UCB$M_PRMMBX, UCB$L_MBSTS(R5)
-50$:    MOVL    MB$GL_UNIT, R0
-        MOVL    R0, UCB$L_UNIT(R5)
-        MOVW    #^A/MB/, UCB$T_NAME(R5)
-        CLRL    R1                      ; nn: R1 tens, R0 ones
-        EDIV    #10, R0, R1, R0
-        ADDB3   #^A/0/, R1, UCB$T_NAME+2(R5)
-        ADDB3   #^A/0/, R0, UCB$T_NAME+3(R5)
-        MOVL    MB$GL_UNITS, UCB$L_LINK(R5)
-        MOVL    R5, MB$GL_UNITS
-        MOVL    #SS$_NORMAL, R0
+        BISW2   #UCB$M_PRMMBX, UCB$W_DEVSTS(R5) ; permanent: no channel deletes it
+        BICL2   #UCB$M_DELETEUCB, UCB$L_STS(R5)
+50$:    MOVL    #SS$_NORMAL, R0
 90$:    RSB
 
-; MB$INIT: makes the operator's mailbox, MBA2:, as VMS's executive
-; has it: permanent, with no channel until OPCOM assigns one, and its
-; UCB's address in SYS$GL_OPRMBX, where $SNDOPR finds it. Without pool
-; for it, SYS$GL_OPRMBX stays 0, and $SNDOPR says no operator is there.
-; Uses R0-R5.
+; MB$INIT: links the mailboxes' DDB on the I/O database, and makes the
+; operator's mailbox, MBA2:, as VMS's executive has it: permanent, with
+; no channel until OPCOM assigns one, and its UCB's address in
+; SYS$GL_OPRMBX, where $SNDOPR finds it. Without pool for it,
+; SYS$GL_OPRMBX stays 0, and $SNDOPR says no operator is there. Uses
+; R0-R5.
 MB$INIT::
         .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5>
+        MOVAB   MB$AB_MBADDB, R0
+        BSBW    IOC$LINK_DDB
         CALLG   OPRARGS, OPRMBX
         RSB
 
 ; OPRMBX: MB$INIT's, with AP = OPRARGS, for NEWMBX.
-        .ENTRY  OPRMBX, ^M<R2, R5>
-        MOVL    #1, MB$GL_UNIT          ; NEWMBX gives the next, 2
+        .ENTRY  OPRMBX, ^M<R2, R3, R5>
+        MOVW    #1, MB$AB_MBA0+UCB$W_UNIT_SEED  ; NEWMBX gives the next, 2
         BSBW    NEWMBX
         BLBC    R0, 90$
-        MOVL    #^A/MBA2/, UCB$T_NAME(R5)
         MOVL    R5, SYS$GL_OPRMBX
 90$:    RET
 
@@ -278,7 +257,7 @@ MB$INIT::
         MOVL    PCB$AL_CCB(R4)[R0], R5
         BSBW    MAILBOX
         BLBC    R0, 82$
-        MOVL    UCB$L_UNIT(R5), R3
+        MOVZWL  UCB$W_UNIT(R5), R3
 10$:    SUBL2   #OPRMAXMSG, SP          ; the header, then the message
         MOVW    #MSG$_OPRQST, (SP)
         MOVW    R3, 2(SP)
@@ -295,7 +274,7 @@ MB$INIT::
         MOVL    #OPC$_NOPERATOR, R0
         MOVL    SYS$GL_OPRMBX, R5
         BEQL    20$
-        TSTL    UCB$L_REFC(R5)          ; OPCOM's channel
+        TSTW    UCB$W_REFC(R5)          ; OPCOM's channel
         BEQL    20$
         MOVL    R7, R1
         MOVL    R6, R2
@@ -310,11 +289,11 @@ MB$INIT::
 85$:    MOVL    #SS$_BADPARAM, R0
 90$:    RET
 
-; $DELMBX chan: marks the mailbox chan is assigned to for deletion: it is
-; temporary now, and goes when its last channel does, with the logical
-; names that name it, as on VMS. SS$_IVCHAN for a channel that isn't
-; assigned, SS$_DEVNOTMBX for one that isn't a mailbox's, SS$_NOPRIV
-; without PRMMBX.
+; $DELMBX chan: marks the mailbox chan is assigned to for deletion,
+; UCB$V_DELMBX: it is temporary now, and goes when its last channel
+; does, with the logical names that name it, as on VMS. SS$_IVCHAN for a
+; channel that isn't assigned, SS$_DEVNOTMBX for one that isn't a
+; mailbox's, SS$_NOPRIV without PRMMBX.
         .ENTRY  EXE$DELMBX, ^M<R2, R3, R4, R5, R6, R7>
         MOVL    SCH$GL_CURPCB, R4
         MOVZWL  4(AP), R0
@@ -328,7 +307,9 @@ MB$INIT::
         MOVL    #SS$_NOPRIV, R0
         IFNPRIV PRMMBX, 90$
         DSBINT  #IPL$_SYNCH
-        BICL2   #UCB$M_PRMMBX, UCB$L_MBSTS(R5)
+        BICW2   #UCB$M_PRMMBX, UCB$W_DEVSTS(R5)
+        BISW2   #UCB$M_DELMBX, UCB$W_DEVSTS(R5)
+        BISL2   #UCB$M_DELETEUCB, UCB$L_STS(R5)
         ENBINT
         MOVL    #SS$_NORMAL, R0
         RET
@@ -377,8 +358,9 @@ MBWRITE:
         BEQL    5$
         MOVL    28(AP), R6
         MOVL    32(AP), R7
+        MOVZWL  UCB$W_DEVBUFSIZ(R5), R1
         MOVL    #SS$_MBTOOSML, R0
-        CMPL    R7, UCB$L_MAXMSG(R5)
+        CMPL    R7, R1
         BGTRU   90$
         IFNORD  R7, (R6), 85$
 5$:     CLRL    R1
@@ -411,9 +393,10 @@ MBWRITE:
 ; mailbox's longest message.
 MBREAD: MOVL    28(AP), R6
         MOVL    32(AP), R7
-        CMPL    R7, UCB$L_MAXMSG(R5)
+        MOVZWL  UCB$W_DEVBUFSIZ(R5), R0
+        CMPL    R7, R0
         BLEQU   10$
-        MOVL    UCB$L_MAXMSG(R5), R7
+        MOVL    R0, R7
 10$:    IFNOWRT R7, (R6), 85$
         MOVL    R7, R1
         BSBW    IOC$ALLOCIRP
@@ -443,10 +426,12 @@ MB$SEND::
         .JSB_ENTRY
         CMPL    R2, #EOF
         BEQL    5$
+        MOVZWL  UCB$W_DEVBUFSIZ(R5), R0
+        CMPL    R2, R0
+        BLEQU   3$
         MOVL    #SS$_MBTOOSML, R0
-        CMPL    R2, UCB$L_MAXMSG(R5)
-        BGTRU   90$
-        MOVL    #SS$_MBFULL, R0
+        BRB     90$
+3$:     MOVL    #SS$_MBFULL, R0
         CMPL    R2, UCB$L_BUFQUO(R5)
         BGTRU   90$
 5$:     PUSHR   #^M<R1, R2, R3, R4, R5>
@@ -519,105 +504,63 @@ HANDOUT:
         BRB     10$
 90$:    RSB
 
-; MB$CANCEL: R4 = the current PCB, R6 = a mask of its channels, R7 = a
-; status, or 0, as IOC$CANCEL has them. The reads the channels' mailboxes
-; hold for them end as IOC$CANCELQ ends them. For 0, the channels are
-; going: a mailbox whose last channel goes is deleted, unless it is
-; permanent. IPL$_SYNCH. Uses R0-R3.
+; MB$CANCEL: the mailboxes' cancel routine, their DDT$L_CANCEL. R2 = a
+; channel, R4 = the current PCB, R5 = a mailbox's UCB, R7 = a status, or
+; 0, as IOC$CANCEL has them, which has ended the channel's reads already.
+; For 0 the channel is going: once the last one has, a mailbox that
+; isn't permanent loses its messages and the logical names that name it,
+; and IOC$CANCEL deletes it. IPL$_SYNCH. Uses R0-R3.
 MB$CANCEL::
         .JSB_ENTRY  SCRATCH=<R2, R3>
-        PUSHR   #^M<R5, R8>
-        MOVL    #1, R8
-10$:    BBC     R8, R6, 30$
-        MOVL    PCB$AL_CCB(R4)[R8], R5
-        BSBB    MAILBOX
-        BLBC    R0, 30$
-        BSBW    IOC$CANCELQ
         TSTL    R7
-        BNEQ    30$
-        DECL    UCB$L_REFC(R5)
+        BNEQ    90$
+        TSTW    UCB$W_REFC(R5)
+        BNEQ    90$
+        BBS     #UCB$V_PRMMBX, UCB$W_DEVSTS(R5), 90$
         BSBB    UNUSED
-30$:    AOBLEQ  #PCB$C_MAXCHAN, R8, 10$
-        POPR    #^M<R5, R8>
-        RSB
+90$:    RSB
 
-; UNUSED: R5 = a mailbox's UCB. Deletes the mailbox if it is temporary
-; and no channel is assigned to it: its messages, the logical names that
-; name it, and its UCB. IPL$_SYNCH. Uses R0-R3.
+; UNUSED: R5 = a mailbox's UCB, temporary, which no channel has. Frees
+; its messages and deletes the logical names in the system table that
+; name it, _MBAn:, for its UCB to go. IPL$_SYNCH. Uses R0-R3.
 UNUSED:
         .JSB_ENTRY  SCRATCH=<R2, R3>
-        TSTL    UCB$L_REFC(R5)
-        BNEQ    90$
-        BBS     #UCB$V_PRMMBX, UCB$L_MBSTS(R5), 90$
         PUSHR   #^M<R6, R7>
-        BSBB    UNNAME
+        SUBL2   #24, SP                 ; its name
+        MOVL    #24, R0
+        MOVL    SP, R1
+        BSBW    IOC$CVT_DEVNAM
+        MOVL    SP, R6
+        MOVL    R1, R7
+        MOVL    G^LNM$GL_SYSTEM, R2
+        BSBW    LNM$DELEQV
+        ADDL2   #24, SP
         POPR    #^M<R6, R7>
 10$:    REMQUE  @UCB$L_MSGQFL(R5), R0
-        BVS     20$                     ; none left
+        BVS     90$                     ; none left
         MOVZWL  MBM$W_SIZE(R0), R1
         BSBW    EXE$DEANONPGDSIZ
         BRB     10$
-20$:    MOVAL   MB$GL_UNITS, R0         ; off the list
-30$:    CMPL    (R0), R5
-        BEQL    40$
-        MOVL    (R0), R0
-        ADDL2   #UCB$L_LINK, R0
-        BRB     30$
-40$:    MOVL    UCB$L_LINK(R5), (R0)
-        MOVL    R5, R0
-        MOVL    #UCB$K_MBLENGTH, R1
-        BSBW    EXE$DEANONPGDSIZ
 90$:    RSB
-
-; UNNAME: R5 = a mailbox's UCB. Deletes the logical names in the system
-; table that name it, _MBnn:. IPL$_SYNCH. Uses R0-R3, R6 and R7.
-UNNAME:
-        .JSB_ENTRY  SCRATCH=<R2, R3, R6, R7>
-        SUBL2   #8, SP
-        MOVB    #^A/_/, (SP)
-        MOVL    UCB$T_NAME(R5), 1(SP)
-        MOVB    #^A/:/, 5(SP)
-        MOVL    SP, R6
-        MOVL    #6, R7
-        MOVL    G^LNM$GL_SYSTEM, R2
-        BSBW    LNM$DELEQV
-        ADDL2   #8, SP
-        RSB
 
 ; MAILBOX: R5 = a UCB. R0 = 1 if it is a mailbox's, else 0. Keeps every
 ; other register.
 MAILBOX:
         .JSB_ENTRY
         CLRL    R0
-        PUSHL   R1
-        MOVAB   MB$FDT, R1
-        CMPL    UCB$L_FDT(R5), R1
+        CMPB    UCB$B_DEVCLASS(R5), #DC$_MAILBOX
         BNEQ    10$
         INCL    R0
-10$:    MOVL    (SP)+, R1
-        RSB
+10$:    RSB
 
-; MB$FINDUNIT: R3 = a device name's four characters, DDCU. R5 = the
-; mailbox by that name, or 0. Keeps every other register.
-MB$FINDUNIT::
-        .JSB_ENTRY  OUTPUT=<R5>
-        MOVL    MB$GL_UNITS, R5
-10$:    TSTL    R5
-        BEQL    90$
-        CMPL    (R3), UCB$T_NAME(R5)
-        BEQL    90$
-        MOVL    UCB$L_LINK(R5), R5
-        BRB     10$
-90$:    RSB
-
-; MB$FINDNUM: R0 = a unit number. R5 = the mailbox with it, MBnn, or 0.
-; Keeps every other register.
+; MB$FINDNUM: R0 = a unit number. R5 = the mailbox with it, MBAn, or 0.
+; IPL$_SYNCH. Keeps every other register.
 MB$FINDNUM::
         .JSB_ENTRY  OUTPUT=<R5>
-        MOVL    MB$GL_UNITS, R5
+        MOVL    MB$AB_MBADDB+DDB$L_UCB, R5
 10$:    TSTL    R5
         BEQL    90$
-        CMPL    R0, UCB$L_UNIT(R5)
+        CMPW    R0, UCB$W_UNIT(R5)
         BEQL    90$
         MOVL    UCB$L_LINK(R5), R5
         BRB     10$

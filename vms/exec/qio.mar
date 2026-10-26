@@ -1,5 +1,5 @@
-        .TITLE  QIO     Channels, I/O request packets and their completion
-        .IDENT  /V0.3/
+        .TITLE  QIO     The I/O database, channels, I/O request packets and their completion
+        .IDENT  /V0.4/
 ;
 ; A process does I/O as on VMS (docs/adr/0013-qio-irps-and-drivers.md):
 ; $ASSIGN gives it a channel to a device, named so or by a logical name,
@@ -10,17 +10,27 @@
 ; as a kernel mode AST, IOC$POST: there the data, the I/O status block
 ; and the event flag are written, and the caller's AST queued. $QIOW waits
 ; for that.
+; The devices are VMS's I/O database (docs/adr/0044-the-io-database.md):
+; IOC$GL_DEVLIST lists a DDB for each controller, which has its devices'
+; name but their units' numbers, and their driver's dispatch table, its
+; DDT; each DDB lists its units' UCBs, by number. A device's name is its
+; DDB's and its unit's number: DKA0, TNA12, MBA3. The disks' DDBs and
+; UCBs are here, the system disk's first, as VMS's boot device's; the
+; other drivers link their own at boot. A template, as BG0:, is a unit
+; $ASSIGN clones a unit of its own from, for the channel, which goes once
+; its last channel does (IOC$CLONE_UCB, IOC$DELETE_UCB).
 ; Each IRP of a $QIO is charged to its process's quotas, as on VMS: a
 ; disk's is a direct I/O, DIOCNT, the others' a buffered one, BIOCNT, and
 ; their size, BYTCNT; IOC$POST gives them back. A request past what is
 ; left waits, in resource wait (SCH$C_MWAIT), until one of the process's
 ; requests is done, or with $SETRWM's resource wait off fails with
 ; SS$_EXQUOTA.
-; The drivers: the terminals', ttdriver.mar, the disks', DK$FDT in
+; The drivers: the terminals', ttdriver.mar, the disks', DK$DDT in
 ; f11.mar, whose start I/O routine, DK$STARTIO, the file system's own
 ; reads and writes go through too, the network's, netdriver.mar, and the
-; mailboxes', mbdriver.mar. The pseudo terminals' template, FTA0:, is
-; the terminals' driver's too.
+; mailboxes', mbdriver.mar.
+; vaxpunk: no CRBs, IDBs, node names or allocation classes: a device has
+; one name, its DDB's and its unit's.
 ;
         .LIBRARY "lib.mlb"
         .LIBRARY "starlet.mlb"
@@ -29,49 +39,39 @@
         $IPLDEF
         $PCBDEF
         $STATEDEF
+        $DDBDEF
+        $DDTDEF
         $UCBDEF
         $IRPDEF
         $LNMBDEF
         $LNMDEF
+        $PRVDEF
+        $DEVDEF
+        $DCDEF
         $SSDEF
 
         .EXTERNAL SCH$GL_CURPCB, SCH$QAST, SCH$ASTBITS, SCH$GETEFC, SCH$POSTEF
         .EXTERNAL SCH$WAIT, SCH$GL_PCBVEC, SCH$GL_MAXPIX
         .EXTERNAL EXE$PROBER_DSC, EXE$CLREF, EXE$WAITFR
         .EXTERNAL EXE$ALONONPAGED, EXE$DEANONPGDSIZ
-        .EXTERNAL LNM$TRNLOG, DK$FDT, DK$STARTIO, TT$FINDUNIT, TT$CANCEL, FT$FDT
-        .EXTERNAL NET$FDT, NET$CANCEL, NET$FINDUNIT, MB$CANCEL, MB$FINDUNIT
+        .EXTERNAL LNM$TRNLOG, DK$DDT
         .EXTERNAL F11$AB_DKA0, F11$AB_DKB0, F11$AB_MDA0, XQP$GL_IRP, XQP$PERFORM, FIL$CHKALLOC
 
+DISK = DEV$M_FOD!DEV$M_DIR!DEV$M_SHR!DEV$M_AVL!DEV$M_IDV!DEV$M_ODV!DEV$M_RND
+MAXUNIT = 9999                          ; a clone's highest number, VMS's
+
         .PSECT  EXEC$DATA, NOEXE, WRT, QUAD
-IOC$AB_UCB::                            ; the devices' UCBs, which $ASSIGN looks through
-IOC$AB_DKA0::                           ; the system disk's
-        .ADDRESS IOC$AB_DKA0, IOC$AB_DKA0, DK$FDT, F11$AB_DKA0
-        .ASCII  /DKA0/
-        .ADDRESS DK$STARTIO
-        .LONG   0
-IOC$AB_DKB0::                           ; the data disk's
-        .ADDRESS IOC$AB_DKB0, IOC$AB_DKB0, DK$FDT, F11$AB_DKB0
-        .ASCII  /DKB0/
-        .ADDRESS DK$STARTIO
-        .LONG   0
-IOC$AB_MDA0::                           ; the ramdisk's
-        .ADDRESS IOC$AB_MDA0, IOC$AB_MDA0, DK$FDT, F11$AB_MDA0
-        .ASCII  /MDA0/
-        .ADDRESS DK$STARTIO
-        .LONG   0
-IOC$AB_BGA0::                           ; the network's template device (netdriver.mar)
-        .ADDRESS IOC$AB_BGA0, IOC$AB_BGA0, NET$FDT
-        .LONG   0
-        .ASCII  /BGA0/
-        .LONG   0, 0
-IOC$AB_FTA0::                           ; the pseudo terminals' template device (ttdriver.mar)
-        .ADDRESS IOC$AB_FTA0, IOC$AB_FTA0, FT$FDT
-        .LONG   0
-        .ASCII  /FTA0/
-        .LONG   0, 0
-IOC$A_UCBEND::                          ; past the last UCB
+IOC$GL_DEVLIST::                        ; the I/O database: the first DDB, the system disk's
+        .ADDRESS IOC$AB_DKADDB
 RWAITQ: .ADDRESS RWAITQ, RWAITQ         ; the processes waiting for I/O quota, SCH$C_MWAIT
+; The disks' DDBs, the system disk's first, and their UCBs, offline
+; until IOC$INIT calls DK$UNITINIT.
+        DDB     IOC$AB_DKADDB, DKA, IOC$AB_DKA0, DK$DDT, IOC$AB_DKBDDB ; the system disk's controller
+        DDB     IOC$AB_DKBDDB, DKB, IOC$AB_DKB0, DK$DDT, IOC$AB_MDADDB ; the data disk's
+        DDB     IOC$AB_MDADDB, MDA, IOC$AB_MDA0, DK$DDT ; the ramdisk's
+        UCB     IOC$AB_DKA0, IOC$AB_DKADDB, DK$DDT, DC$_DISK, DISK, 512, VCB=F11$AB_DKA0 ; DKA0:, the system disk
+        UCB     IOC$AB_DKB0, IOC$AB_DKBDDB, DK$DDT, DC$_DISK, DISK, 512, VCB=F11$AB_DKB0 ; DKB0:, the data disk
+        UCB     IOC$AB_MDA0, IOC$AB_MDADDB, DK$DDT, DC$_DISK, DISK, 512, VCB=F11$AB_MDA0 ; MDA0:, the ramdisk
 
         .PSECT  $CODE$
 
@@ -79,10 +79,12 @@ RWAITQ: .ADDRESS RWAITQ, RWAITQ         ; the processes waiting for I/O quota, S
 ; devnam names, and puts its number in chan, a word. devnam is translated
 ; as a logical name, without its colon, in LNM$FILE_DEV, and what it
 ; translates to, up to LNM$C_MAXDEPTH times, until a name starts with an
-; underscore, which is dropped, or doesn't translate. That must be a
-; device, DKA0, DKB0, MDA0, BGA0, FTA0, a terminal, OPA0, TNAn or FTAn,
-; a network unit, BGnn, or a mailbox, MBnn, with a colon or without.
-; SS$_DEVALLOC for a disk another job mounted privately (FIL$CHKALLOC).
+; underscore, which is dropped, or doesn't translate; that is a device's
+; name (IOC$SEARCHDEV). A template's channel goes to a unit of its own,
+; which $ASSIGN clones from it, and which needs NETMBX for a network
+; device; its driver's DDT$L_CLONEDUCB may refuse it. A physical
+; terminal redirected to a virtual one assigns the virtual one. A disk
+; another job mounted privately is SS$_DEVALLOC (FIL$CHKALLOC).
 ; A channel the command interpreter assigns, in supervisor mode, is one
 ; of PCB$L_CLICHANS, which outlive the image, as on VMS, where image
 ; rundown deassigns only user mode's: DCL's at the CTRL/Y prompt too.
@@ -91,40 +93,24 @@ RWAITQ: .ADDRESS RWAITQ, RWAITQ         ; the processes waiting for I/O quota, S
         BSBW    EXE$PROBER_DSC
         BLBC    R0, 90$
         IFNOWRT #2, @8(AP), 85$
-        MOVZWL  (R1), R2
-        MOVL    4(R1), R3
-        DSBINT  #IPL$_SYNCH             ; the names it translates to stay
-        BSBW    IOC$TRNDEVNAM
-        MOVL    #SS$_NOSUCHDEV, R0
-        CMPL    R2, #4
-        BEQL    10$
-        CMPL    R2, #5
-        BNEQ    80$
-        CMPB    4(R3), #^A/:/
-        BNEQ    80$
-10$:    MOVAB   IOC$AB_UCB, R5
-15$:    CMPL    (R3), UCB$T_NAME(R5)
-        BEQL    18$
-        ADDL2   #UCB$K_LENGTH, R5
-        MOVAB   IOC$A_UCBEND, R1
-        CMPL    R5, R1
-        BLSSU   15$
-        BSBW    TT$FINDUNIT             ; a terminal, OPA0 or TNAn?
-        TSTL    R5
-        BNEQ    18$
-        BSBW    NET$FINDUNIT            ; a network unit, BGnn?
-        TSTL    R5
-        BNEQ    18$
-        BSBW    MB$FINDUNIT             ; a mailbox, MBnn?
-        TSTL    R5
-        BEQL    80$
-18$:    MOVL    UCB$L_VCB(R5), R1
-        BEQL    19$
+        MOVL    SCH$GL_CURPCB, R4
+        DSBINT  #IPL$_SYNCH             ; the names it translates to and the devices stay
+        MOVL    4(AP), R1
+        BSBW    IOC$SEARCHDEV
+        BLBC    R0, 80$
+        MOVL    R1, R5
+        BBC     #DEV$V_RED, UCB$L_DEVCHAR2(R5), 10$
+        MOVL    UCB$L_TT_LOG(R5), R5    ; its virtual terminal
+10$:    MOVL    UCB$L_VCB(R5), R1
+        BEQL    15$
         BSBW    FIL$CHKALLOC
         BLBC    R0, 80$
-19$:    MOVL    SCH$GL_CURPCB, R4
-        BSBW    IOC$ASSIGN
+15$:    BSBW    IOC$FFCHAN              ; one is free, before a unit is cloned
         BLBC    R0, 80$
+        BBC     #UCB$V_TEMPLATE, UCB$L_STS(R5), 18$
+        BSBW    CLONE
+        BLBC    R0, 80$
+18$:    BSBW    IOC$ASSIGN
         MOVW    R1, @8(AP)
         CALL_PAL #PAL$_RD_PS
         EXTZV   #PSL$V_PRVMOD, #2, R0, R0
@@ -137,27 +123,55 @@ RWAITQ: .ADDRESS RWAITQ, RWAITQ         ; the processes waiting for I/O quota, S
 85$:    MOVL    #SS$_ACCVIO, R0
 90$:    RET
 
-; IOC$ASSIGN: R4 = the current PCB, R5 = a device's UCB. Assigns the
-; device a free channel: R1 = its number, R0 = SS$_NORMAL, or
-; SS$_NOIOCHAN with none free. A cloned unit, a network unit or a
-; mailbox, not one of IOC$AB_UCB's, counts one more channel. IPL$_SYNCH.
-IOC$ASSIGN::
+; CLONE: R4 = the current PCB, R5 = a template's UCB. Clones a unit of
+; its own from it (IOC$CLONE_UCB), for a channel, and lets its driver's
+; DDT$L_CLONEDUCB set it up or refuse it, which deletes it. A network
+; device's needs NETMBX. R0 = SS$_NORMAL and R5 = the unit, or
+; SS$_NONETMBX, IOC$CLONE_UCB's failure or the driver's, and R5 as it
+; was. IPL$_SYNCH. Uses R0-R3.
+CLONE:
+        .JSB_ENTRY  OUTPUT=<R5>, SCRATCH=<R2, R3>
+        BBC     #DEV$V_NET, UCB$L_DEVCHAR(R5), 10$
+        MOVZWL  #SS$_NONETMBX, R0
+        IFNPRIV NETMBX, 90$
+10$:    BSBW    IOC$CLONE_UCB
+        BLBC    R0, 90$
+        MOVL    UCB$L_DDT(R5), R3
+        JSB     @DDT$L_CLONEDUCB(R3)
+        BLBC    R0, 80$
+        MOVL    R2, R5
+        RSB
+80$:    PUSHR   #^M<R0, R5>             ; refused
+        MOVL    R2, R5
+        BSBW    IOC$DELETE_UCB
+        POPR    #^M<R0, R5>
+90$:    RSB
+
+; IOC$FFCHAN: R4 = the current PCB. R1 = the number of a channel it has
+; free, R0 = SS$_NORMAL, or SS$_NOIOCHAN with none free. Keeps every
+; other register.
+IOC$FFCHAN::
         .JSB_ENTRY
         MOVL    #1, R1
-10$:    BBCS    R1, PCB$L_CHANS(R4), 20$
+10$:    BBC     R1, PCB$L_CHANS(R4), 20$
         AOBLEQ  #PCB$C_MAXCHAN, R1, 10$
         MOVL    #SS$_NOIOCHAN, R0
         RSB
-20$:    MOVL    R5, PCB$AL_CCB(R4)[R1]
-        MOVAB   IOC$AB_UCB, R0
-        CMPL    R5, R0
-        BLSSU   30$
-        MOVAB   IOC$A_UCBEND, R0
-        CMPL    R5, R0
-        BLSSU   40$
-30$:    INCL    UCB$L_REFC(R5)
-40$:    MOVL    #SS$_NORMAL, R0
+20$:    MOVL    #SS$_NORMAL, R0
         RSB
+
+; IOC$ASSIGN: R4 = the current PCB, R5 = a device's UCB. Assigns the
+; device a free channel, which the UCB counts: R1 = its number, R0 =
+; SS$_NORMAL, or SS$_NOIOCHAN with none free. IPL$_SYNCH. Keeps every
+; other register.
+IOC$ASSIGN::
+        .JSB_ENTRY
+        BSBB    IOC$FFCHAN
+        BLBC    R0, 90$
+        BBSS    R1, PCB$L_CHANS(R4), 10$
+10$:    MOVL    R5, PCB$AL_CCB(R4)[R1]
+        INCW    UCB$W_REFC(R5)
+90$:    RSB
 
 ; IOC$TRNDEVNAM: R2 = a device name's length, R3 = its address.
 ; Translates it as $ASSIGN does: as a logical name, without its colon, in
@@ -192,6 +206,284 @@ IOC$TRNDEVNAM::
         MOVZBL  (R3)+, R2
         SOBGTR  R5, 2$
 8$:     RSB
+
+; IOC$SEARCHDEV: R1 = a device name's descriptor, which can be read.
+; Finds the device the name is, translated as $ASSIGN translates it
+; (IOC$TRNDEVNAM): DDCU, with a colon after it or not, its controller's
+; name, letters, and its unit's number, as VMS's physical device search:
+; a name without its controller's letter is controller A's, DK0 DKA0,
+; and one without a number unit 0's, OPA OPA0. R0 = SS$_NORMAL, R1 = its
+; UCB and R2 = its DDB; SS$_IVDEVNAM for a name that isn't a device's,
+; or SS$_NOSUCHDEV for one no device has. IPL$_SYNCH, which keeps the
+; logical names and the I/O database. Uses R0-R3.
+; vaxpunk: no node names or allocation classes, and no generic search.
+IOC$SEARCHDEV::
+        .JSB_ENTRY  OUTPUT=<R2>, SCRATCH=<R3>
+        PUSHR   #^M<R4, R5, R6, R7>
+        MOVZWL  (R1), R2
+        MOVL    4(R1), R3
+        BSBW    IOC$TRNDEVNAM
+        SUBL2   #16, SP                 ; the controller's name, in capitals
+        MOVL    #SS$_IVDEVNAM, R0
+        TSTL    R2
+        BEQL    80$
+        ADDL3   R2, R3, R1
+        CMPB    -1(R1), #^A/:/
+        BNEQ    5$
+        DECL    R2
+5$:     CLRL    R4                      ; its letters,
+10$:    CMPL    R4, R2
+        BGEQU   20$
+        BICB3   #^X20, (R3)[R4], R1
+        CMPB    R1, #^A/A/
+        BLSSU   20$
+        CMPB    R1, #^A/Z/
+        BGTRU   20$
+        CMPL    R4, #15
+        BGEQU   80$
+        MOVB    R1, (SP)[R4]
+        INCL    R4
+        BRB     10$
+20$:    TSTL    R4
+        BEQL    80$
+        CLRL    R5                      ; and the unit's number
+        MOVL    R4, R6
+30$:    CMPL    R6, R2
+        BGEQU   40$
+        SUBB3   #^A/0/, (R3)[R6], R1
+        CMPB    R1, #9
+        BGTRU   80$
+        MULL2   #10, R5
+        MOVZBL  R1, R1
+        ADDL2   R1, R5
+        CMPL    R5, #65535
+        BGTRU   80$
+        INCL    R6
+        BRB     30$
+40$:    MOVL    #SS$_NOSUCHDEV, R0
+        MOVL    IOC$GL_DEVLIST, R2
+50$:    TSTL    R2
+        BEQL    80$
+        MOVZBL  DDB$T_NAME(R2), R6
+        CMPL    R4, R6
+        BEQL    55$
+        DECL    R6                      ; without its controller's letter
+        CMPL    R4, R6
+        BNEQ    70$
+        CMPB    DDB$T_NAME+1(R2)[R6], #^A/A/
+        BNEQ    70$
+55$:    CLRL    R7
+57$:    CMPB    (SP)[R7], DDB$T_NAME+1(R2)[R7]
+        BNEQ    70$
+        AOBLSS  R4, R7, 57$
+        MOVL    DDB$L_UCB(R2), R1
+60$:    TSTL    R1
+        BEQL    70$
+        CMPW    R5, UCB$W_UNIT(R1)
+        BEQL    75$
+        MOVL    UCB$L_LINK(R1), R1
+        BRB     60$
+70$:    MOVL    DDB$L_LINK(R2), R2
+        BRB     50$
+75$:    MOVL    #SS$_NORMAL, R0
+80$:    ADDL2   #16, SP
+        POPR    #^M<R4, R5, R6, R7>
+        RSB
+
+; IOC$CVT_DEVNAM: R0 = a buffer's length, R1 = its address, R5 = a
+; device's UCB. Writes the device's name in the buffer, _DDCU:, its
+; DDB's name and its unit's number, as much as fits. R0 = SS$_NORMAL, or
+; SS$_BUFFEROVF if it didn't all fit; R1 = the length written. Keeps
+; every other register.
+; vaxpunk: one form, VMS's DVI$_DEVNAM's for a device of this node.
+IOC$CVT_DEVNAM::
+        .JSB_ENTRY
+        PUSHR   #^M<R2, R3, R4, R5, R6>
+        SUBL2   #24, SP                 ; the name, made here first
+        MOVL    SP, R3
+        MOVB    #^A/_/, (R3)+
+        MOVL    UCB$L_DDB(R5), R2
+        MOVZBL  DDB$T_NAME(R2), R4
+        MOVAB   DDB$T_NAME+1(R2), R2
+10$:    MOVB    (R2)+, (R3)+
+        SOBGTR  R4, 10$
+        MOVZWL  UCB$W_UNIT(R5), R4      ; the number: past its digits,
+        MOVL    R4, R2
+20$:    INCL    R3
+        DIVL2   #10, R2
+        BNEQ    20$
+        MOVB    #^A/:/, (R3)
+        MOVL    R3, R6
+30$:    CLRL    R5                      ; then each, from the last
+        EDIV    #10, R4, R4, R5
+        ADDB3   #^A/0/, R5, -(R6)
+        TSTL    R4
+        BNEQ    30$
+        SUBL3   SP, R3, R3              ; its length
+        INCL    R3
+        MOVL    #SS$_NORMAL, R2
+        CMPL    R3, R0
+        BLEQU   40$
+        MOVL    R0, R3
+        MOVL    #SS$_BUFFEROVF, R2
+40$:    CLRL    R4
+50$:    CMPL    R4, R3
+        BGEQU   60$
+        MOVB    (SP)[R4], (R1)[R4]
+        INCL    R4
+        BRB     50$
+60$:    MOVL    R2, R0
+        MOVL    R3, R1
+        ADDL2   #24, SP
+        POPR    #^M<R2, R3, R4, R5, R6>
+        RSB
+
+; IOC$LINK_DDB: R0 = a DDB, and the DDBs it links to. Links them last on
+; IOC$GL_DEVLIST, which their units are on then. IPL$_SYNCH. Uses R1.
+; vaxpunk: VMS's SYSGEN CONNECT and its autoconfiguration link the DDBs
+; of the drivers they load; here each driver's initialization links its
+; own.
+IOC$LINK_DDB::
+        .JSB_ENTRY
+        MOVAL   IOC$GL_DEVLIST, R1      ; the link to the last
+10$:    TSTL    (R1)
+        BEQL    20$
+        MOVL    (R1), R1
+        MOVAL   DDB$L_LINK(R1), R1
+        BRB     10$
+20$:    MOVL    R0, (R1)
+        RSB
+
+; IOC$SCAN_IODB: R11 = a DDB, or 0 to start, R10 = one of its units' UCB,
+; or 0 to go on with the next DDB. R10 = the next unit in the I/O
+; database, R11 = its DDB, R0 = 1; or R0 = 0 past the last. IPL$_SYNCH,
+; which keeps the database. Keeps every other register.
+IOC$SCAN_IODB::
+        .JSB_ENTRY  OUTPUT=<R10, R11>
+        MOVL    #1, R0
+        TSTL    R11
+        BEQL    40$
+        TSTL    R10
+        BEQL    10$
+        MOVL    UCB$L_LINK(R10), R10
+        BNEQ    90$
+10$:    MOVL    DDB$L_LINK(R11), R11
+20$:    TSTL    R11
+        BEQL    80$
+        MOVL    DDB$L_UCB(R11), R10
+        BEQL    10$
+        RSB
+40$:    MOVL    IOC$GL_DEVLIST, R11
+        BRB     20$
+80$:    CLRL    R0
+90$:    RSB
+
+; IOC$INIT: initializes the I/O database's units, at boot: calls each
+; one's driver's DDT$L_UNITINIT, the disks' DK$UNITINIT, which puts the
+; disks the PAL has online. Uses R0-R3.
+IOC$INIT::
+        .JSB_ENTRY  SCRATCH=<R2, R3>
+        PUSHR   #^M<R5, R10, R11>
+        CLRQ    R10
+10$:    BSBB    IOC$SCAN_IODB
+        BLBC    R0, 90$
+        MOVL    R10, R5
+        MOVL    UCB$L_DDT(R5), R0
+        JSB     @DDT$L_UNITINIT(R0)
+        BRB     10$
+90$:    POPR    #^M<R5, R10, R11>
+        RSB
+
+; IOC$RETURN: a driver's routine that has nothing to do, in a DDT.
+; Keeps every register.
+IOC$RETURN::
+        .JSB_ENTRY
+        RSB
+
+; IOC$CLONE_UCB: R5 = a template's UCB. Makes a unit of its own from it:
+; a copy, from pool, with no requests or channels, online, marked for
+; deletion once no channel has it (UCB$V_DELETEUCB), and numbered the
+; first number past the template's UCB$W_UNIT_SEED that none of its
+; DDB's units has, from 1 to 9999, and round again; and links it among
+; them (IOC$LINK_UCB). R0 = SS$_NORMAL and R2 = the new UCB, or
+; SS$_INSFMEM, without pool or a number free. IPL$_SYNCH. Uses R0-R3.
+IOC$CLONE_UCB::
+        .JSB_ENTRY  OUTPUT=<R2>, SCRATCH=<R3>
+        MOVZWL  UCB$W_SIZE(R5), R1
+        BSBW    EXE$ALONONPAGED
+        BLBC    R0, 90$
+        PUSHR   #^M<R2, R4, R5>
+        MOVC3   UCB$W_SIZE(R5), (R5), (R2)
+        POPR    #^M<R2, R4, R5>
+        MOVL    R2, UCB$L_IOQFL(R2)
+        MOVL    R2, UCB$L_IOQBL(R2)
+        CLRL    UCB$L_PID(R2)
+        MOVL    #UCB$M_ONLINE!UCB$M_DELETEUCB, UCB$L_STS(R2)
+        CLRW    UCB$W_REFC(R2)
+        CLRW    UCB$W_DEVSTS(R2)
+        CLRW    UCB$W_ERRCNT(R2)
+        CLRW    UCB$W_UNIT_SEED(R2)
+        MOVZWL  UCB$W_UNIT_SEED(R5), R3
+        PUSHL   #MAXUNIT                ; the numbers left to try
+10$:    AOBLEQ  #MAXUNIT, R3, 20$
+        MOVL    #1, R3
+20$:    MOVW    R3, UCB$W_UNIT(R2)
+        BSBW    IOC$LINK_UCB
+        BLBS    R0, 30$
+        SOBGTR  (SP), 10$
+        ADDL2   #4, SP                  ; none
+        MOVL    R2, R0
+        MOVZWL  UCB$W_SIZE(R0), R1
+        BSBW    EXE$DEANONPGDSIZ
+        MOVL    #SS$_INSFMEM, R0
+        RSB
+30$:    ADDL2   #4, SP
+        MOVW    R3, UCB$W_UNIT_SEED(R5)
+90$:    RSB
+
+; IOC$LINK_UCB: R2 = a UCB with its DDB and unit number. Links it among
+; the DDB's units, in order. R0 = SS$_NORMAL, or SS$_OPINCOMPL if one of
+; them has its number already. IPL$_SYNCH. Uses R1.
+IOC$LINK_UCB::
+        .JSB_ENTRY
+        PUSHL   R3
+        MOVL    UCB$L_DDB(R2), R1
+        MOVAL   DDB$L_UCB(R1), R1       ; the link to the next
+10$:    MOVL    (R1), R3
+        BEQL    20$
+        CMPW    UCB$W_UNIT(R2), UCB$W_UNIT(R3)
+        BLSSU   20$
+        BEQL    80$
+        MOVAL   UCB$L_LINK(R3), R1
+        BRB     10$
+20$:    MOVL    R3, UCB$L_LINK(R2)
+        MOVL    R2, (R1)
+        MOVL    #SS$_NORMAL, R0
+        BRB     90$
+80$:    MOVZWL  #SS$_OPINCOMPL, R0
+90$:    MOVL    (SP)+, R3
+        RSB
+
+; IOC$DELETE_UCB: R5 = a UCB. If it is marked for deletion,
+; UCB$V_DELETEUCB, and no channel has it, takes it off its DDB's units
+; and frees it. IPL$_SYNCH. Uses R0 and R1.
+IOC$DELETE_UCB::
+        .JSB_ENTRY
+        BBC     #UCB$V_DELETEUCB, UCB$L_STS(R5), 90$
+        TSTW    UCB$W_REFC(R5)
+        BNEQ    90$
+        MOVL    UCB$L_DDB(R5), R0
+        MOVAL   DDB$L_UCB(R0), R0       ; the link to it
+10$:    CMPL    (R0), R5
+        BEQL    20$
+        MOVL    (R0), R0
+        MOVAL   UCB$L_LINK(R0), R0
+        BRB     10$
+20$:    MOVL    UCB$L_LINK(R5), (R0)
+        MOVL    R5, R0
+        MOVZWL  UCB$W_SIZE(R5), R1
+        BRW     EXE$DEANONPGDSIZ
+90$:    RSB
 
 ; $DASSGN chan: deassigns a channel, and cancels its I/O (IOC$CANCEL).
         .ENTRY  EXE$DASSGN, ^M<R2, R3, R4, R5>
@@ -235,7 +527,8 @@ IOC$TRNDEVNAM::
 
 ; $QIO efn, chan, func, iosb, astadr, astprm, p1, p2, p3, p4, p5, p6:
 ; requests I/O on the channel's device: clears event flag efn and calls
-; the device's driver, whose FDT routine checks func and the parameters,
+; the device's driver, whose FDT routine, its DDT's DDT$L_FDT, checks
+; func and the parameters,
 ; which it may fail, and does the I/O or queues it. Once it is done,
 ; IOC$POST writes in iosb the status and the byte count, and what the
 ; driver puts in the second longword, sets the flag and calls astadr with
@@ -268,8 +561,8 @@ EXE$QIO::
         MOVZWL  8(AP), R0
         BBC     R0, PCB$L_CHANS(R4), 70$        ; an AST in the wait may deassign it
         MOVL    PCB$AL_CCB(R4)[R0], R5
-        MOVL    UCB$L_FDT(R5), R0
-        JSB     (R0)
+        MOVL    UCB$L_DDT(R5), R0
+        JSB     @DDT$L_FDT(R0)
         MOVL    SCH$GL_CURPCB, R4
         BBCC    #PCB$V_QUOWAIT, PCB$L_STS(R4), 30$
         BLBS    R0, 30$
@@ -332,8 +625,7 @@ IOC$ALLOCIRP::
         ADDL2   #IRP$K_LENGTH, R1
         CMPL    R1, #^XFFF0
         BGTRU   80$
-        MOVAB   G^DK$FDT, R0
-        CMPL    UCB$L_FDT(R5), R0
+        CMPB    UCB$B_DEVCLASS(R5), #DC$_DISK
         BNEQ    10$
         MOVL    #IRP$K_DIO, R2          ; a disk's
         TSTW    PCB$W_DIOLM(R4)
@@ -529,34 +821,51 @@ IOC$POST::
         BRW     EXE$DEANONPGDSIZ
 
 ; IOC$CANCEL: R4 = the current PCB, R0 = a mask of its channels, R1 = a
-; status, or 0. Disables their CTRL/C and CTRL/Y ASTs, and ends the
-; requests the devices' UCBs hold for them: with R1 as their status, for
-; $CANCEL, or, for 0, by freeing their IRPs unfinished, and those on its
-; AST queue too, done but not yet posted, or posted with an AST: the image
-; they were for is going, or the channel. The terminals' are TT$CANCEL's,
-; which starts the reads after those it held. IPL$_SYNCH. Uses R0-R3.
+; status, or 0. For each channel, ends the requests waiting on its
+; device's UCB for it, with R1 as their status, for $CANCEL, or, for 0,
+; by freeing their IRPs unfinished: the image they were for is going, or
+; the channel (IOC$CANCELQ); then calls its driver's cancel routine,
+; DDT$L_CANCEL, for those the driver holds elsewhere, with R2 = the
+; channel, R3 = the IRP that was at the head of the UCB's queue, the one
+; the driver may have started, R6 = the channel's bit and R7 = the
+; status, or 0. For 0 the device counts the channel no more before that,
+; and one whose last channel it was and that is marked for deletion, a
+; unit cloned from a template, is deleted after (IOC$DELETE_UCB). Then,
+; for 0, the process's IRPs for those channels on its AST queue, done
+; but not yet posted, or posted with an AST, are freed too. IPL$_SYNCH.
+; Uses R0-R3.
 ; ponytail: VMS waits for rundown's to end, for drivers that can't stop
 ; at once.
 IOC$CANCEL::
         .JSB_ENTRY  SCRATCH=<R2, R3>
-        PUSHR   #^M<R5, R6, R7>
-        MOVL    R0, R6
+        PUSHR   #^M<R5, R6, R7, R8, R9>
+        MOVL    R0, R8                  ; the channels
         MOVL    R1, R7
-        BSBW    NET$CANCEL              ; the requests on the port
-        BSBW    MB$CANCEL               ; and on the mailboxes
-        MOVAB   IOC$AB_UCB, R5
-10$:    BSBB    IOC$CANCELQ
-        ADDL2   #UCB$K_LENGTH, R5
-        MOVAB   IOC$A_UCBEND, R0
-        CMPL    R5, R0
-        BLSSU   10$
-        BSBW    TT$CANCEL
+        MOVL    #1, R9
+10$:    BBC     R9, R8, 40$
+        ASHL    R9, #1, R6
+        MOVL    PCB$AL_CCB(R4)[R9], R5
+        MOVL    UCB$L_IOQFL(R5), R3
+        PUSHL   R3
+        BSBW    IOC$CANCELQ
+        MOVL    (SP)+, R3
         TSTL    R7
         BNEQ    20$
+        DECW    UCB$W_REFC(R5)          ; the channel is going
+20$:    MOVL    R9, R2
+        MOVL    UCB$L_DDT(R5), R0
+        JSB     @DDT$L_CANCEL(R0)
+        TSTL    R7
+        BNEQ    40$
+        BSBW    IOC$DELETE_UCB
+40$:    AOBLEQ  #PCB$C_MAXCHAN, R9, 10$
+        TSTL    R7
+        BNEQ    90$
+        MOVL    R8, R6
         MOVAQ   PCB$Q_ASTQFL(R4), R5
         BSBB    IOC$CANCELQ
         BSBW    SCH$ASTBITS
-20$:    POPR    #^M<R5, R6, R7>
+90$:    POPR    #^M<R5, R6, R7, R8, R9>
         RSB
 
 ; IOC$CANCELQ: R5 = a queue of IRPs, or ACBs, R4 = a PCB, R6 = a mask of
