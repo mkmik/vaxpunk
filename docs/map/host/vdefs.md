@@ -23,6 +23,42 @@ note = "PRD-0004 step 10"
 id = "stale-check"
 title = "Its test fails when the files are stale"
 status = "done"
+
+[[feature]]
+id = "service-macros"
+title = "System service macros: $QIOW(CHAN = ..., FUNC = ...) and the rest, keyword macros calling SYS$name, with each service's EXTERNAL ROUTINE"
+status = "todo"
+note = "UM 8.3; DEC's STARLET.R64 has 549 keyword macros and 499 EXTERNAL ROUTINEs, vaxpunk's only LITERALs and field macros, so BLISS code calls SYS$QIOW by position. The argument lists are starlet.mlb's $name_S macros, which services.txt already reads"
+
+[[feature]]
+id = "rms-macros"
+title = "RMS control block macros: $FAB, $RAB, $NAM and the XABs, with their _INIT and _DECL forms"
+status = "todo"
+note = "UM 8.4: static FABs and RABs in OWN data, initialized at run time, or declared only"
+
+[[feature]]
+id = "helper-macros"
+title = "STARLET's helper macros: $BBLOCK, $DESCRIPTOR, $BITPOSITION, $FIELDWIDTH, $FIELDMASK, $EQULST, $SHR_MSGDEF"
+status = "todo"
+note = "V4.3 code uses each; $BBLOCK is BLOCK_BYTE under its old name"
+
+[[feature]]
+id = "vax-builtin-macros"
+title = "Macros for the VAX built-ins: FFS, FFC, MOVC3, MOVC5, CMPC3, LOCC, SKPC, SPANC, EMUL, EDIV, ASHQ, INSQUE, REMQUE, INSQHI, MTPR, MFPR, CALLG and the rest"
+status = "todo"
+note = "Waits for t8y:/host/vbliss#declaration-edges (a need would be a cycle). DEC's BLISS-32E STARLET.REQ includes BUILTINS.B32 (LIB.L64 for BLISS-64): FFS is a macro, which in BUILTIN FFS ends the list with BARRIER, declares the macro $FFS and starts a new list, and elsewhere calls $FFS, so VAX BLISS-32 code compiles unchanged: 34 built-ins as macros, CALLG and some PAL calls as routines. The compiler dropped the VAX built-ins and the library put them back. FFS alone stops 121 V4.3 modules"
+
+[[feature]]
+id = "other-requires"
+title = "TPAMAC.REQ for LIB$TPARSE's state tables, CLIMAC.REQ and ARCH_DEFS.REQ"
+status = "todo"
+note = "SYS$LIBRARY on OpenVMS Alpha; $INIT_STATE needs t8y:/host/vbliss#declaration-edges, and LIB$TPARSE isn't in t8y:/rtl/librtl yet"
+
+[[feature]]
+id = "field-signs"
+title = "Field signs as DEC's STARLET and LIB have them: CHF$L_SIG_NAME is 4,0,32,1, PCB$L_STS 128,0,32,0"
+status = "todo"
+note = "bliss64.md probe 14, answered from STARLET.R64 and LIB.R64 on the oracle's disk: SDL marks some $L_ fields signed. vdefs writes 0 for every $L_ field, since the macro libraries don't say"
 +++
 
 On VMS, definitions such as `$PCBDEF` or `SS$_NORMAL` come from one
@@ -33,3 +69,8 @@ vaxpunk's single source is its macro libraries, so `vdefs` reads
 them. A BLISS-64 program then reads a field of `$PCBDEF` at the offset
 MACRO-32 does. `just defs` regenerates them, and the test catches a
 library edited without them.
+
+DEC's STARLET and LIB require files hold more than definitions: a
+keyword macro for every system service, the RMS control block macros,
+helper macros, and macros that stand in for the VAX built-ins BLISS
+on Alpha dropped. vdefs writes the definitions only.

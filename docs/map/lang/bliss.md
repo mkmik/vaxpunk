@@ -69,8 +69,26 @@ note = "PRD-0004 The dot lint; recall 47%, no false positives on the V4.3 source
 id = "stage1"
 title = "Stage 1: BLISS.EXE, the compiler in BLISS-64, with VASM linked in"
 status = "todo"
-needs = ["#vasm-port"]
-note = "PRD-0004 step 14"
+needs = [
+    "#vasm-port",
+    "/host/vbliss#floating-point",
+    "/host/vbliss#general-calls",
+    "/host/vbliss#linkage-types",
+    "/host/vbliss#predeclared-linkages",
+    "/host/vbliss#routine-attributes",
+    "/host/vbliss#data-attributes",
+    "/host/vbliss#forward-data",
+    "/host/vbliss#psect-classes",
+    "/host/vbliss#codecomment",
+    "/host/vbliss#register-builtins",
+    "/host/vbliss#lexical-functions",
+    "/host/vbliss#macro-edges",
+    "/host/vbliss#declaration-edges",
+    "/host/vbliss#source-text",
+    "/host/vbliss#library-semantics",
+    "/host/vbliss#switches",
+]
+note = "PRD-0004 step 14; the language complete in stage 0 first, so the port's extent is known"
 
 [[feature]]
 id = "self-hosting"
@@ -83,14 +101,15 @@ note = "PRD-0004 step 15"
 id = "native"
 title = "BLISS at the DCL prompt on vaxpunk writes the same object as the host"
 status = "todo"
-needs = ["#self-hosting", "/rms/core", "/dcl/cld"]
+needs = ["#self-hosting", "/rms/core", "/dcl/cld", "/host/vbliss#qualifiers", "/host/vbliss#diagnostics"]
 note = "PRD-0004 step 16"
 
 [[feature]]
 id = "libraries"
 title = "Precompiled libraries (.L64) for STARLET and LIB"
 status = "todo"
-note = "PRD-0004 open question: LIBRARY reads the source today; only worth it if compile times hurt, likely under stage 1 on vaxpunk"
+needs = ["/host/vbliss#library-semantics"]
+note = "PRD-0004 open question: LIBRARY reads the source today; the binary format only worth it if compile times hurt, likely under stage 1 on vaxpunk"
 
 [[feature]]
 id = "debug-symbols"
@@ -130,9 +149,12 @@ libraries, has the dot lint, and generates code through a QBE-style IR
 and a simple ARM64 back end, with no LLVM. It is the system's BLISS
 compiler: `numtim.b64` is in the executive, and TPU, NSLOOKUP and the
 DNS resolver are BLISS-64. VASM, vasm rewritten in BLISS-64, is done,
-and stage 0 takes the whole language: default structure references,
+and stage 0 takes most of the language: default structure references,
 register data and the linkages that pass it, the machine-specific and
-PAL built-ins, and the dot lint's six rules.
+PAL built-ins, and the dot lint's six rules. What it doesn't take yet,
+floating point, general routine calls, the attributes and linkages
+DEC's STARLET uses, real `LIBRARY` semantics among them, is listed on
+`t8y:/host/vbliss` and goes in there before stage 1 ports it.
 Next come stage 1, `BLISS.EXE` in BLISS-64, then stages 2 and 3
 identical, then `BLISS` at the DCL prompt. Linking on vaxpunk is not
 this component's: `LINK` (`t8y:/utils/linker`) and `LIBRARY`
