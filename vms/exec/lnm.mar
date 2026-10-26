@@ -38,7 +38,8 @@
         $SSDEF
         $ARMDEF
 
-        .EXTERNAL SCH$GL_CURPCB, EXE$MATCHNAME, EXE$PROBER_DSC, FIL$CHKPRO
+        .EXTERNAL SCH$GL_CURPCB, SCH$GL_PCBVEC, SCH$GL_MAXPIX
+        .EXTERNAL EXE$MATCHNAME, EXE$PROBER_DSC, FIL$CHKPRO
         .EXTERNAL EXE$ALONONPAGED, EXE$DEANONPGDSIZ
 
 MAXINDEX = 127                          ; a search list's last index, at most
@@ -87,6 +88,12 @@ PROCNAMES:                              ; and in each process's
         .ASCIC  "LNM$PROCESS"
         .ASCIC  "LNM$PROCESS_TABLE"
         .BYTE   0
+        .BYTE   0
+PPNAMES:                                ; the process-permanent names $CREPRC gives a process
+        .ASCIC  "SYS$INPUT"
+        .ASCIC  "SYS$OUTPUT"
+        .ASCIC  "SYS$ERROR"
+        .ASCIC  "SYS$COMMAND"
         .BYTE   0
 NONAME: .ASCIC  "LNM$00000000"          ; $CRELNT's table without a name: its header's address
 HEX:    .ASCII  "0123456789ABCDEF"
@@ -177,6 +184,61 @@ LNM$DELPROC::
         BSBW    EXE$DEANONPGDSIZ
         ENBINT
 90$:    RSB
+
+; LNM$SPAWN: R4 = the current PCB, a subprocess's. Copies the names in
+; its owner's LNM$PROCESS_TABLE to its own, in place of those there, but
+; the process-permanent ones $CREPRC gave it, PPNAMES: what LOGINOUT does
+; for the subprocess SPAWN makes (EXE$LOGIN). An owner that is gone
+; leaves it as it is. R0 = SS$_NORMAL or SS$_INSFMEM. Uses R0-R3, R5-R7.
+; vaxpunk: VMS's SPAWN reads its process's names itself, in P1, which
+; DCL's supervisor mode can read, and passes them in its context
+; mailbox; ours are in pool, which only kernel mode reads.
+; ponytail: not the process's other tables, in LNM$PROCESS_DIRECTORY.
+LNM$SPAWN::
+        .JSB_ENTRY  SCRATCH=<R2, R3, R5, R6, R7>
+        DSBINT  #IPL$_SYNCH
+        MOVZWL  PCB$L_OWNER(R4), R0
+        CMPL    R0, SCH$GL_MAXPIX
+        BGEQU   80$
+        MOVL    @SCH$GL_PCBVEC[R0], R8
+        BEQL    80$
+        CMPL    PCB$L_PID(R8), PCB$L_OWNER(R4)
+        BNEQ    80$
+        MOVL    PCB$L_LNMTAB(R8), R8    ; its table, unless it is going
+        BEQL    80$
+        MOVL    R8, R9
+10$:    MOVL    (R9), R9                ; the next name
+        CMPL    R9, R8
+        BEQL    80$
+        MOVZBL  LNMB$T_NAME(R9), R7
+        MOVAB   LNMB$T_NAME+1(R9), R6
+        MOVAB   PPNAMES, R0
+20$:    TSTB    (R0)                    ; one of them?
+        BEQL    30$
+        PUSHL   R0
+        BSBW    EXE$MATCHNAME
+        BLBS    R0, 25$
+        MOVL    (SP)+, R0
+        MOVZBL  (R0), R1
+        ADDL2   R1, R0
+        INCL    R0
+        BRB     20$
+25$:    TSTL    (SP)+
+        BRB     10$
+30$:    MOVZWL  LNMB$W_SIZE(R9), R1     ; a copy, in its table
+        BSBW    EXE$ALONONPAGED
+        BLBC    R0, 90$
+        PUSHR   #^M<R1, R2, R4>
+        MOVC3   R1, (R9), (R2)
+        POPR    #^M<R1, R2, R4>
+        MOVW    R1, LNMB$W_SIZE(R2)
+        MOVL    PCB$L_LNMTAB(R4), R5
+        MOVAB   LNMB$T_NAME+1(R2), R6
+        BSBW    INSERT
+        BRB     10$
+80$:    MOVL    #SS$_NORMAL, R0
+90$:    ENBINT
+        RSB
 
 ; $CRELNT attr, resnam, reslen, quota, promsk, tabnam, partab, acmode:
 ; makes a logical name table, tabnam, under the one partab names: in the

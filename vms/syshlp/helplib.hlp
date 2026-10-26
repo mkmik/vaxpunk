@@ -2067,6 +2067,62 @@
   /FULL
 
   Lists each process and its terminal.
+1 SPAWN
+  Creates a subprocess of your process, which runs DCL with a copy of
+  your symbols, process logical names, default directory, privileges,
+  prompt and SET VERIFY. It does the command and logs out, or reads
+  commands from your terminal until you log out of it; your process
+  waits for it, then takes its final status as $STATUS.
+
+  Format
+
+    SPAWN [command]
+
+  The subprocess is called after you, USERNAME_1, or the next number
+  no process of your group has, and doesn't run LOGIN.COM. SPAWN says
+  that it spawned it and that the terminal is attached to it, and, once
+  it is gone, that control returned to your process. ATTACH, /OUTPUT,
+  /NOTIFY, /KEYPAD, /LOGICAL_NAMES, /CLI and /TABLE aren't there yet.
+2 Parameters
+
+ command
+
+  A command for the subprocess to do before it logs out. With /INPUT,
+  it does the command first, then the file.
+2 Qualifiers
+/INPUT
+  /INPUT=file-spec
+
+  A command procedure, .COM unless you give a type, or a device, that
+  the subprocess reads its commands from, instead of your terminal, and
+  then logs out.
+/LOG
+  /LOG (default)
+  /NOLOG
+
+  Says that the subprocess was spawned, that the terminal is attached
+  to it, and that control returned to your process.
+/PROCESS
+  /PROCESS=subprocess-name
+
+  The subprocess's name, 15 characters at most, instead of USERNAME_n.
+/PROMPT
+  /PROMPT[=string]
+
+  The subprocess's prompt; "$ " without a string. Without /PROMPT, your
+  own.
+/SYMBOLS
+  /SYMBOLS (default)
+  /NOSYMBOLS
+
+  Copies your global symbols and the local ones of the procedure
+  running to the subprocess.
+/WAIT
+  /WAIT (default)
+  /NOWAIT
+
+  With /NOWAIT, your process goes on as soon as the subprocess has its
+  copy, and both use the terminal: give it /INPUT, or a command.
 1 Specify
   How to write the values commands take.
 2 File_spec

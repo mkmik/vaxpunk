@@ -52,7 +52,7 @@
         .EXTERNAL MMG$SETPRT, EXE$RMVTIMQ, EXE$USRSTART, EXE$CLISTART
         .EXTERNAL FIL$OPENFILE, FIL$OPENSHR, FIL$READIMG, RMS$RUNDOWN, LCK$RUNDOWN, FIL$RUNDOWN
         .EXTERNAL EXE$OUTZSTRING, EXE$OUTCSTRING, EXE$OUTHEX, EXE$OUTCRLF
-        .EXTERNAL LNM$CREATE, LNM$CREPRC, LNM$DELPROC, SCH$QAST, EXE$FLUSHAST, IOC$CANCEL, SYS$EXIT
+        .EXTERNAL LNM$CREATE, LNM$CREPRC, LNM$DELPROC, LNM$SPAWN, SCH$QAST, EXE$FLUSHAST, IOC$CANCEL, SYS$EXIT
         .EXTERNAL MB$FINDNUM, MB$SEND, EXE$GQ_SYSTIME, TT$OWNER, IOC$CVT_DEVNAM
 
 KSTACK = 16384                          ; a process's kernel stack
@@ -125,6 +125,9 @@ KNOWN:  .ASCIC  "SETPWD.EXE"            ; SET PASSWORD writes SYSUAF.DAT
         .ASCIC  "SHOW.EXE"              ; SHOW LOGICAL reads the tables in kernel mode
         .ASCIC  "_DKA0:[SYSEXE]SHOW.EXE"
         .LONG   PRV$M_CMKRNL!<1@PRV$V_NETMBX>!PRV$M_WORLD, 0
+        .ASCIC  "LOGINOUT.EXE"          ; a subprocess's LOGINOUT calls EXE$LOGIN
+        .ASCIC  "_DKA0:[SYSEXE]LOGINOUT.EXE"
+        .LONG   PRV$M_CMKRNL, 0
         .BYTE   0
 CMDNAME:
         .ASCIC  "SYS$COMMAND"
@@ -1681,14 +1684,32 @@ SUSPEND:
 ; JPI$K_INTERACTIVE, at that terminal, which $GETJPI's JPI$_TERMINAL says.
 ; rights, if it is given, is the process's rights list: a longword count,
 ; then that many quadwords, an identifier and its attributes each, which
-; it gets a copy of (EXE$SETRIGHTS).
-; R0 = SS$_NORMAL, SS$_ACCVIO if the record or the list can't be read,
-; SS$_IVLOGNAM for a name longer than 35, SS$_INSFMEM, or IMG$ACTIVATE's
-; error: SS$_BADIMGHDR for an image that isn't a command interpreter.
+; it gets a copy of (EXE$SETRIGHTS). A record takes a process authorized
+; CMKRNL, as those the executive and TELNETD make are: LOGINOUT, a known
+; image, has CMKRNL while it runs, which isn't enough.
+; With uaf 0, for LOGINOUT in a subprocess, which SPAWN makes, the
+; process keeps the username, UIC, privileges, priority, quotas and
+; rights $CREPRC gave it, gets a copy of its owner's process logical
+; names (LNM$SPAWN), and DCL.EXE; it must be a subprocess without a
+; command interpreter yet.
+; R0 = SS$_NORMAL, SS$_NOPRIV, SS$_ACCVIO if the record or the list can't
+; be read, SS$_IVLOGNAM for a name longer than 35, SS$_INSFMEM, or
+; IMG$ACTIVATE's error: SS$_BADIMGHDR for an image that isn't a command
+; interpreter.
 ; vaxpunk: VMS's LOGINOUT gives the process its rights itself, in its
 ; persona.
         .ENTRY  EXE$LOGIN, ^M<R2, R3, R4, R5, R6, R7, R8>
+        MOVL    SCH$GL_CURPCB, R4
         MOVL    4(AP), R8
+        BNEQ    2$
+        TSTL    PCB$L_OWNER(R4)         ; a subprocess's, which has no DCL yet
+        BEQL    86$
+        TSTL    PCB$L_CLI(R4)
+        BNEQ    86$
+        BSBW    LNM$SPAWN
+        BLBC    R0, 90$
+        BRB     5$
+2$:     BBC     #PRV$V_CMKRNL, PCB$Q_AUTHPRIV(R4), 86$
         IFNORD  #UAF$C_FIXED, (R8), 85$
         CMPB    (AP), #2
         BLSSU   5$
@@ -1702,11 +1723,13 @@ SUSPEND:
         MOVL    SCH$GL_CURPCB, R4
         BSBW    EXE$SETRIGHTS
         BLBC    R0, 90$
-5$:
-        MOVAB   UAF$T_DEFCLI(R8), R6
+5$:     MOVAB   DCLNAME, R6
         MOVZBL  (R6)+, R7
-        BNEQ    10$
-        MOVAB   DCLNAME, R6
+        TSTL    R8
+        BEQL    10$
+        TSTB    UAF$T_DEFCLI(R8)
+        BEQL    10$
+        MOVAB   UAF$T_DEFCLI(R8), R6
         MOVZBL  (R6)+, R7
 10$:    CMPL    R7, #35
         BGTRU   87$
@@ -1721,6 +1744,8 @@ SUSPEND:
         BLBC    R0, 90$
         MOVL    SCH$GL_CURPCB, R4
         MOVL    PCB$L_CHANS(R4), PCB$L_CLICHANS(R4)
+        TSTL    R8
+        BEQL    15$
         MOVAB   PCB$T_USERNAME(R4), R0
         MOVB    #12, (R0)+
         MOVC3   #12, UAF$T_USERNAME(R8), (R0)
@@ -1742,7 +1767,7 @@ SUSPEND:
         ADDL2   R0, PCB$L_BYTCNT(R4)
         MOVL    UAF$L_BYTLM(R8), PCB$L_BYTLM(R4)
         ENBINT
-        MOVL    #PCB$C_MAXCHAN, R0      ; its terminal: a channel's
+15$:    MOVL    #PCB$C_MAXCHAN, R0      ; its terminal: a channel's
 20$:    BBC     R0, PCB$L_CHANS(R4), 25$
         MOVL    PCB$AL_CCB(R4)[R0], R5
         CMPB    UCB$B_DEVCLASS(R5), #DC$_TERM
@@ -1765,6 +1790,8 @@ SUSPEND:
 40$:    MOVL    #SS$_NORMAL, R0
         RET
 85$:    MOVL    #SS$_ACCVIO, R0
+        RET
+86$:    MOVL    #SS$_NOPRIV, R0
         RET
 87$:    MOVL    #SS$_IVLOGNAM, R0
 90$:    RET

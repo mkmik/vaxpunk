@@ -340,7 +340,8 @@ those of `DCL$TABLES` (*Commands*); a verb with an image runs it with
 | `CONTINUE` | returns from the CTRL/Y AST, which goes back to the image |
 | `STOP [process-name]`, `STOP/IDENTIFICATION=pid` | `$DELPRC`, by name or by the PID in hex; with no name, ends the procedures, and the image CTRL/Y stopped with `$EXIT` from DCL, which skips its exit handlers, user mode's, with `SS$_ABORT` |
 | `HELP [topic]` | `HELP.EXE`, which writes the topic from `SYS$HELP:HELPLIB.HLB` with `LBR$OUTPUT_HELP` and prompts for more (*The system disk's programs*) |
-| `LOGOUT` | writes `  username     logged out at  9-OCT-2026 10:00:00.00`, or `job terminated at` without a terminal, and `$DELPRC` |
+| `LOGOUT` | writes `  username     logged out at  9-OCT-2026 10:00:00.00`, or `job terminated at` without a terminal, or in a subprocess `  Process name logged out at`, nothing after `SPAWN`'s command, and `$EXIT`s with `$STATUS`, the final status, then `$DELPRC` |
+| `SPAWN [command]` | a subprocess, `USERNAME_1`, that runs `LOGINOUT`, then DCL with a copy of the process logical names, the symbols, the prompt and the verify state, which does the command or reads the terminal; the parent waits for its termination message ([ADR-0045](../adr/0045-spawn-passes-its-context-as-vms-does.md)) |
 | `MCR image [command]` | runs `SYS$SYSTEM:image.EXE` as a foreign command, with `command` |
 | `SET PASSWORD` | `SETPWD.EXE` |
 | `@file [p1 ... p8]` | reads `file.COM` with RMS and takes its `$` lines as commands |
@@ -392,7 +393,8 @@ Three failures end the image, and with it the process. A right one:
    `$CRELNM` defines `SYS$LOGIN_DEVICE` and `SYS$DISK` as
    `UAF$T_DEFDEV`, and `SYS$LOGIN` and `SYS$SCRATCH` as both, in the
    process's table.
-3. `$CMKRNL` calls `EXE$LOGIN` with the record. It activates the image
+3. `$CMKRNL` calls `EXE$LOGIN` with the record, which takes a process
+   authorized `CMKRNL`, as these are. It activates the image
    `UAF$T_DEFCLI` names, `DCL.EXE`, with `IMG$ACTIVATE`, which refuses
    one that isn't linked in P1, and makes the channels the process has,
    to its terminal, its command interpreter's, so that image rundown
@@ -402,6 +404,16 @@ Three failures end the image, and with it the process. A right one:
    `UAF$Q_DEF_PRIV` as its permanent and current ones.
 4. `LOGINOUT` writes `SYS$WELCOME`, or `Welcome to vaxpunk arm64 Operating System, Version V0.1`, and the failures, and exits:
    the executive runs it down and calls DCL, as for any image.
+
+DCL's `SPAWN` runs `LOGINOUT` in a subprocess
+([ADR-0045](../adr/0045-spawn-passes-its-context-as-vms-does.md)). There
+it asks nothing: it calls `EXE$LOGIN` without a record, which copies the
+owner's `LNM$PROCESS_TABLE`, but `SYS$INPUT`, `SYS$OUTPUT`, `SYS$ERROR`
+and `SYS$COMMAND`, into the process's (`LNM$SPAWN`), activates
+`DCL.EXE`, and leaves the username, UIC, privileges, priority, quotas
+and rights `$CREPRC` gave it. It may only for a subprocess without a
+command interpreter; `LOGINOUT`, a known image with `CMKRNL`, can call
+it in a subprocess of a user without privileges.
 
 `SYSUAF.DAT` is `SYSUAF`, with the default `SYS$SYSTEM:.DAT`;
 `SYSTARTUP_VMS.COM` copies `build.rs`'s from the system disk to the
@@ -805,7 +817,8 @@ it, until the image exits. They stay in `PCB$Q_IMAGPRIV`, which
 `$SETPRV` may enable again, but not permanently, as VMS's
 `PHD$Q_IMAGPRIV`: at CTRL/Y DCL prompts with the permanent privileges
 only, and `CONTINUE` enables the image's again. `SETPWD.EXE` gets
-`SYSPRV`, to write `SYSUAF.DAT`. ponytail: a fixed list until `INSTALL`.
+`SYSPRV`, to write `SYSUAF.DAT`, and `LOGINOUT.EXE` `CMKRNL`, for a
+subprocess's `EXE$LOGIN`. ponytail: a fixed list until `INSTALL`.
 
 ### Logical names
 
@@ -1468,7 +1481,7 @@ condition handling routines, with the symbol vector `librtl.opt` gives
 | `MOUNT` | `$MOUNT` with its parameters, the device and the label, if there is one, and `/OWNER_UIC` and `/PROTECTION`'s items |
 | `DISMOUNT` | `$DISMOU` with its parameter, the device |
 | `SET` | `$SETPRV`s each privilege of `SET PROCESS/PRIVILEGES`, `NO` before one to disable it, `ALL` for every one, permanently; `%DCL-W-IVKEYW` for a name it doesn't know. `SET PROTECTION=(code[,...]) file` and `SET FILE/OWNER_UIC=uic file` `$OPEN` the file with a protection XAB, change it and `$CLOSE` it |
-| `LOGINOUT` | logs a terminal's process in (*Logging in*) |
+| `LOGINOUT` | logs a terminal's process in, or gives a subprocess `SPAWN` makes DCL (*Logging in*) |
 | `AUTHORIZE` | `MCR AUTHORIZE`: opens `SYSUAF.DAT` and does the command after it, or each one after its `UAF>` prompt, parsed with its own tables, `sysexe/authorize.cld`: `ADD` from `DEFAULT`'s record, `MODIFY`, `REMOVE`, `SHOW` and `LIST`, which writes `SYSUAF.LIS`, with `/PASSWORD`, which it hashes with a new salt, `/UIC`, `/PRIVILEGES`, `/DEFPRIVILEGES`, `/DEVICE`, `/DIRECTORY`, `/OWNER`, `/ACCOUNT`, `/CLI`, `/PRIORITY` and the quotas |
 | `SETPWD` | `SET PASSWORD`: asks for the old password and the new one twice, without echoing them, and puts the new one's hash in the process's user's record, with `SYSPRV`, a known image's (*Privileges*) |
 | `OPCCRASH` | `MCR OPCCRASH`: in kernel mode, `HALT`s, and the PAL powers off |

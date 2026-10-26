@@ -6,7 +6,7 @@ kind = "core"
 intent = "goal"
 research = "done"
 milestone = "m1"
-refs = ["vms/sysexe/loginout.mar", "vms/exec/hashpwd.mar", "docs/adr/0029-loginout-and-sysuaf.md", "docs/prd/0003-multi-user-vms.md", "docs/design/0002-executive-processes.md", "https://docs.vmssoftware.com/vsi-openvms-system-manager-s-manual-volume-1-essentials/"]
+refs = ["vms/sysexe/loginout.mar", "vms/exec/hashpwd.mar", "docs/adr/0029-loginout-and-sysuaf.md", "docs/adr/0045-spawn-passes-its-context-as-vms-does.md", "docs/prd/0003-multi-user-vms.md", "docs/design/0002-executive-processes.md", "https://docs.vmssoftware.com/vsi-openvms-system-manager-s-manual-volume-1-essentials/"]
 
 [[feature]]
 id = "console"
@@ -34,6 +34,12 @@ id = "rights-list"
 title = "The rights list: the identifiers the user holds, INTERACTIVE, and LOCAL or REMOTE"
 status = "done"
 note = "ADR-0040; $FIND_HELD, given to EXE$LOGIN"
+
+[[feature]]
+id = "subprocess"
+title = "In a subprocess SPAWN makes: no username, DCL and a copy of the owner's process logical names"
+status = "done"
+note = "ADR-0045: a known image with CMKRNL, which calls EXE$LOGIN without a record"
 
 [[feature]]
 id = "failures"
@@ -216,6 +222,9 @@ terminal, which `TELNETD` starts. It reads the user's record by key,
 checks the hash with `$HASH_PASSWORD`, counts wrong passwords, defines
 `SYS$LOGIN`, `SYS$SCRATCH` and `SYS$DISK`, builds the rights list from
 `RIGHTSLIST.DAT`, and calls `EXE$LOGIN` in kernel mode, which makes the
-process the user's. `--autologin` writes a
+process the user's. In a subprocess, which DCL's `SPAWN` makes, it asks
+nothing: `EXE$LOGIN` gives the process DCL and a copy of its owner's
+process logical names
+([ADR-0045](../../adr/0045-spawn-passes-its-context-as-vms-does.md)). `--autologin` writes a
 text `SYSALF.DAT` for the console. Missing for Milestone 1: quotas,
 `LNM$JOB`, login at a key, and batch jobs.

@@ -84,6 +84,11 @@
 ;               runs SYS$SYSTEM:image.EXE, which takes command with
 ;               LIB$GET_FOREIGN
 ;   LOGOUT      says the user logged out, and ends the process
+;   SPAWN [command]
+;               makes a subprocess that runs DCL with a copy of this
+;               one's symbols, logical names and prompt, which does the
+;               command or reads the terminal until LOGOUT, and waits
+;               for it (dcl/spawn.mar)
 ;   PIPE command ; command && command || command
 ;               does the commands one after another, those after && only
 ;               if the one before succeeded, after || only if it failed
@@ -160,7 +165,11 @@
 ; after one that runs an image, up to the next that starts with $, are
 ; the image's SYS$INPUT, and READ SYS$INPUT's. When SYS$INPUT isn't a
 ; terminal, but a file, as STARTUP's is, it runs that as a procedure and
-; logs out.
+; logs out. In a subprocess SPAWN made, it runs neither SYLOGIN.COM nor
+; LOGIN.COM but takes its parent's context (DCL$SPAWNED); SPAWN's
+; command, if there is one, comes first, then the procedure SYS$INPUT
+; is, if it isn't a terminal, and it logs out without a word. At a
+; terminal without a command it reads commands until LOGOUT.
 ;
 ; CTRL/Y is DCL's supervisor mode AST, which it enables on the console
 ; with IO$_SETMODE (ADR-0014). It stops the image DCL runs, where it is,
@@ -195,11 +204,12 @@
 ; an image, CTRL/Y, CONTINUE and STOP. The rest are in dcl/: logical.mar
 ; has the logical name commands, setshow.mar SET and SHOW DEFAULT, SHOW
 ; DEVICES and SET COMMAND, proc.mar @ and the commands that steer a
-; procedure, IF and ON, pipe.mar PIPE, symbol.mar the symbols and their
-; commands, expr.mar symbol substitution and expressions, lexical.mar the
-; lexical functions, file.mar OPEN, READ, WRITE, CLOSE and INQUIRE,
-; message.mar the messages, and cdu.mar the CLD compiler. What they share
-; is global, named DCL$name, and dcl.mlb has their constants.
+; procedure, IF and ON, pipe.mar PIPE, spawn.mar SPAWN, symbol.mar the
+; symbols and their commands, expr.mar symbol substitution and
+; expressions, lexical.mar the lexical functions, file.mar OPEN, READ,
+; WRITE, CLOSE and INQUIRE, message.mar the messages, and cdu.mar the
+; CLD compiler. What they share is global, named DCL$name, and dcl.mlb
+; has their constants.
 ;
         .LIBRARY "lib.mlb"
         .LIBRARY "starlet.mlb"
@@ -226,6 +236,7 @@
         .EXTERNAL DCL$TOSTR, DCL$VSTACK, DCL$WRITE, DCL$ELSE, DCL$ENDIF
         .EXTERNAL DCL$DATAIN, DCL$DATAEND, DCL$DECK, DCL$ADDHEX, DCL$INQUIRE
         .EXTERNAL DCL$ON, DCL$ONACT, DCL$CYACT, DCL$HASCY, DCL$NOON
+        .EXTERNAL DCL$SPAWN, DCL$SPAWNED
 
         .PSECT  DATA, NOEXE, WRT, LONG
 DCL$CHAN::                              ; SYS$INPUT's channel, once assigned
@@ -326,6 +337,8 @@ ROUTINES:
         .ADDRESS DCL$SETCOMMAND
         .ASCIC  "SHOW"
         .ADDRESS DCL$SHOW
+        .ASCIC  "SPAWN"
+        .ADDRESS DCL$SPAWN
         .ASCIC  "STOP"
         .ADDRESS STOP
         .ASCIC  "WRITE"
@@ -335,8 +348,8 @@ FIRST:  .ASCIC  "@SYS$MANAGER:SYLOGIN"   ; the first commands on a terminal, unt
         .ASCIC  "@SYS$LOGIN:LOGIN"
         .BYTE   0
 BATCH:  .ASCIC  "@SYS$INPUT"             ; and when SYS$INPUT is a file
-        .ASCIC  "LOGOUT"
-        .BYTE   0
+BYE:    .ASCIC  "LOGOUT"                 ; and after a SPAWN's command
+NONE:   .BYTE   0                        ; and none, at a SPAWN's terminal
 CLASSITEM:                              ; $GETDVI's item: SYS$INPUT's class
         .WORD   4, DVI$_DEVCLASS
         .ADDRESS DEVCLASS, 0
@@ -347,12 +360,19 @@ D2ITEM: .WORD   4, DVI$_DEVDEPEND2      ; and its TT2$ bits
         .ADDRESS DEVDEP2, 0
         .LONG   0
 DEVDEP2:.LONG   0
-USERITEM:                               ; $GETJPI's: the username
+USERITEM:                               ; $GETJPI's: the username,
         .WORD   12, JPI$_USERNAME
         .ADDRESS USERNAME, 0
+        .WORD   4, JPI$_OWNER           ; the owner, a subprocess's,
+        .ADDRESS OWNER, 0
+        .WORD   15, JPI$_PRCNAM         ; and the process's name
+        .ADDRESS PRCNAM, PRCLEN
         .LONG   0
+OWNER:  .LONG   0
+PRCLEN: .WORD   0
 USERNAME:
         .BLKB   12
+PRCNAM: .BLKB   15
 TIMDSC: .LONG   23                      ; LOGOUT's time
         .ADDRESS TIMBUF
 TIMBUF: .BLKB   23
@@ -367,6 +387,9 @@ STARTED:                                ; 1 once DCL has started
         .LONG   0
 DCL$QUIET::                             ; 1: @ says nothing of a first command's procedure it can't open
         .LONG   0
+AUTOLOGO:                               ; 1: LOGOUT says nothing, after a SPAWN's command or file
+        .LONG   0
+ENDING: .LONG   0                       ; 1: LOGOUT set the final status, and the process goes
 IMGRUN: .LONG   0                       ; 1 while an image runs, or is about to
 DCL$CTRLYFP::                           ; while CTRL/Y has it stopped, FP in the AST, else 0
         .LONG   0
@@ -402,7 +425,9 @@ DCL$PTABVEC::                           ; the process's tables, for CLI$$DCL_PAR
         .ENTRY  DCL, ^M<R2, R3, R4, R5, R6, R7, R8, R9, R10, R11>
         MOVL    SP, DCL$SAVESP
         CLRL    IMGRUN
-        BBSS    #0, STARTED, 10$
+        BLBC    ENDING, 3$
+        $DELPRC_S                       ; LOGOUT's $EXIT
+3$:     BBSS    #0, STARTED, 10$
         $ASSIGN_S DEVNAM=INPUT, CHAN=CHAN
         BLBC    R0, 5$
         $GETDVIW_S CHAN=CHAN, ITMLST=CLASSITEM
@@ -411,9 +436,21 @@ DCL$PTABVEC::                           ; the process's tables, for CLI$$DCL_PAR
         $DASSGN_S CHAN=CHAN
 5$:     CLRL    CHAN                    ; a file: its commands, then LOGOUT
         MOVAB   BATCH, FIRSTP
-        BRB     DCL$NEXT
-7$:     BSBW    CTRLYON
-        BRB     DCL$NEXT
+        BRB     8$
+7$:     BSBW    DCL$CTRLYON
+8$:     BSBW    DCL$SPAWNED             ; a subprocess SPAWN made: its context
+        BLBC    R0, DCL$NEXT
+        MOVL    #1, AUTOLOGO            ; without LOGIN.COM, as VMS's
+        TSTL    CHAN
+        BEQL    9$                      ; the command, then the file
+        MOVAB   BYE, FIRSTP             ; the command, then LOGOUT
+        TSTL    R7
+        BNEQ    9$
+        CLRL    AUTOLOGO                ; or the terminal's
+        MOVAB   NONE, FIRSTP
+9$:     TSTL    R7
+        BEQL    DCL$NEXT
+        BRW     GOTLINE
 10$:    BSBW    DCL$DATAEND             ; an image ran: SYS$INPUT as it was
         MOVL    4(AP), R0
         BBCC    #0, PENDCY, 20$         ; the image CTRL/Y ran down: ON CONTROL_Y
@@ -595,24 +632,36 @@ VERBS:  SUBL3   R8, R6, R0              ; the command
 60$:    PRINT   "%DCL-W-INVROUT, invalid routine specified in command tables - check .CLD file"
         BRW     DCL$WARN
 ; LOGOUT: writes VMS's line, the username and the time, that the user
-; logged out, or that the job ended if SYS$INPUT isn't a terminal, and
-; ends the process.
-LOGOUT: $GETJPIW_S ITMLST=USERITEM
+; logged out, or that the job ended if SYS$INPUT isn't a terminal; in a
+; subprocess, its name and that it logged out; after a SPAWN's command
+; or file, nothing. Ends the process, with $STATUS its final status,
+; which a $EXIT from here sets: the executive calls DCL again, which
+; deletes it.
+LOGOUT: BLBS    AUTOLOGO, QUIT
+        $GETJPIW_S ITMLST=USERITEM
         $ASCTIM_S TIMBUF=TIMDSC
         ADDTEXT "  "
-        MOVAB   USERNAME, R1
+        TSTL    OWNER
+        BEQL    5$
+        ADDTEXT "Process "
+        MOVAB   PRCNAM, R1
+        MOVZWL  PRCLEN, R2
+        BSBW    DCL$ADD
+        BRB     7$
+5$:     MOVAB   USERNAME, R1
         MOVL    #12, R2
         BSBW    DCL$ADD
         TSTL    CHAN
         BEQL    10$
-        ADDTEXT " logged out at "
+7$:     ADDTEXT " logged out at "
         BRB     20$
 10$:    ADDTEXT " job terminated at "
 20$:    MOVAB   TIMBUF, R1
         MOVL    #23, R2
         BSBW    DCL$ADD
         BSBW    DCL$SAY
-QUIT:   $DELPRC_S
+QUIT:   MOVL    #1, ENDING
+        $EXIT_S DCL$LASTSTAT
 
 ; DCL$CONTINUE: returns from the CTRL/Y AST to the image it stopped,
 ; with CTRL/Y enabled again, or does nothing if there is none.
@@ -620,7 +669,7 @@ DCL$CONTINUE::
         .GLOBAL_LABEL
         TSTL    DCL$CTRLYFP
         BEQL    10$
-        BSBW    CTRLYON
+        BSBW    DCL$CTRLYON
         BSBW    IMGPRIVS
         MOVL    DCL$CTRLYFP, FP
         CLRL    DCL$CTRLYFP
@@ -700,7 +749,7 @@ STOP:   MOVAB   V_IDENT, R1
         TSTL    DCL$CTRLYFP
         BEQL    20$
         CLRL    DCL$CTRLYFP
-        BSBW    CTRLYON
+        BSBW    DCL$CTRLYON
         $EXIT_S #<SS$_ABORT!INHIB>
 20$:    MOVL    #<SS$_ABORT!INHIB>, R0
         BRW     DCL$DONE
@@ -910,7 +959,7 @@ SET:    MOVAB   V_PROMPT, R1
         CMPL    R0, #CLI$_NEGATED
         BNEQ    10$
         MOVL    #1, NOCTRLY
-10$:    BSBW    CTRLYON
+10$:    BSBW    DCL$CTRLYON
         BRW     DCL$OK
 
 SETPROMPT:
@@ -1091,9 +1140,9 @@ EXETYPE:
 RUNNING:
         .JSB_ENTRY
         MOVL    #1, IMGRUN
-; CTRLYON: enables DCL's CTRL/Y AST on the console, or disables it
+; DCL$CTRLYON: enables DCL's CTRL/Y AST on the console, or disables it
 ; after SET NOCONTROL. Uses R0 and R1.
-CTRLYON:
+DCL$CTRLYON::
         .JSB_ENTRY
         TSTL    CHAN                    ; no terminal
         BEQL    20$
@@ -1134,12 +1183,12 @@ IMGPRIVS:
         TSTL    IMGRUN
         BNEQ    10$
         MOVL    #1, CTRLYHIT
-        BSBW    CTRLYON
+        BSBW    DCL$CTRLYON
         RET
 10$:    BSBW    DCL$HASCY               ; ON CONTROL_Y: the image goes
         BLBC    R0, 20$
         MOVL    #1, PENDCY
-        BSBW    CTRLYON
+        BSBW    DCL$CTRLYON
         $EXIT_S #<SS$_ABORT!INHIB>
 20$:    MOVL    FP, DCL$CTRLYFP
         MOVL    SP, DCL$SAVESP

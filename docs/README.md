@@ -76,6 +76,7 @@ same commit; `todography lint` checks it.
 | [ADR-0042](adr/0042-opcom-reads-the-operators-mailbox.md) | OPCOM is a process that reads the operator's mailbox, MBA2:, which the executive makes at boot and $SNDOPR writes, and it writes on the console with $BRKTHRU | Proposed |
 | [ADR-0043](adr/0043-volumes-the-size-of-their-disk.md) | A volume is the size of its disk, in VMS's clusters, with bitmaps of as many blocks as it needs, and the PAL tells the executive the disk's size | Proposed |
 | [ADR-0044](adr/0044-the-io-database.md) | The devices are VMS's I/O database: a DDB per controller on IOC$GL_DEVLIST, its units' UCBs by number, a dispatch table per driver, and units cloned from templates | Proposed |
+| [ADR-0045](adr/0045-spawn-passes-its-context-as-vms-does.md) | SPAWN's subprocess runs LOGINOUT, a known image with CMKRNL, which copies its owner's process logical names, and DCL passes the rest of the context in a mailbox that is the subprocess's SYS$ERROR | Proposed |
 
 ### PRDs
 

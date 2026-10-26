@@ -25,6 +25,13 @@
 ; disconnected ones and asks which to connect to, as VMS's LOGINOUT
 ; does: the terminal's line goes to that one, and this process goes
 ; (docs/adr/0041-virtual-terminals-take-the-telnet-line.md).
+; In a subprocess, which DCL's SPAWN makes with this image, there is no
+; username or password: EXE$LOGIN gives it DCL and a copy of its owner's
+; process logical names, and it keeps the user, privileges and the rest
+; $CREPRC gave it (docs/adr/0045-spawn-passes-its-context-as-vms-does.md).
+; It is a known image with CMKRNL for that, as VMS installs it; a login
+; from SYSUAF.DAT takes a process authorized CMKRNL, as those the
+; executive and TELNETD make are.
 ; The system logical name SYS$ANNOUNCE, if there is one, is written
 ; before the first Username:, and SYS$WELCOME after the login, in place
 ; of the system's own welcome, with its version from $GETSYI, unless the record says DISWELCOME. A value that
@@ -55,6 +62,7 @@
         $JPIDEF
         $DEVDEF
         $TT2DEF
+        $DCDEF
 
         .EXTERNAL EXE$LOGIN, PUT_LINE, LIB$SIGNAL
 
@@ -88,6 +96,18 @@ UAFDEF: .ASCII  "SYS$SYSTEM:.DAT"
 UAFDEFLEN = .-UAFDEF
 REC:    .BLKB   UAF$C_LENGTH            ; the user's record
 FAILS:  .LONG   0                       ; its failures, before this login
+SUBARGS:.LONG   1, 0                    ; EXE$LOGIN's in a subprocess: no record
+OWNERITEM:                              ; $GETJPI's: the owner, if it is a subprocess
+        .WORD   4, JPI$_OWNER
+        .ADDRESS OWNER, 0
+        .LONG   0
+OWNER:  .LONG   0
+CLASSITEM:                              ; $GETDVI's: SYS$INPUT's class
+        .WORD   4, DVI$_DEVCLASS
+        .ADDRESS DEVCLASS, 0
+        .LONG   0
+DEVCLASS:
+        .LONG   0
 KARGS:  .LONG   2                       ; EXE$LOGIN's arguments: the record
         .ADDRESS REC
         .ADDRESS RLIST                  ; and the rights list
@@ -200,7 +220,11 @@ MSGLEN: .WORD   0
 
         .PSECT  CODE, EXE, LONG
         .ENTRY  START, ^M<R2, R3, R4, R5, R6>
-        $ASSIGN_S DEVNAM=INPUT, CHAN=CHAN
+        $GETJPIW_S ITMLST=OWNERITEM
+        TSTL    OWNER
+        BEQL    2$
+        BRW     SUBPROCESS
+2$:     $ASSIGN_S DEVNAM=INPUT, CHAN=CHAN
         BLBC    R0, 90$
         BSBW    ALF
         BLBC    R0, 5$
@@ -248,6 +272,24 @@ LOGIN:  MOVZWL  REC+UAF$W_LOGFAILS, FAILS
 80$:    PUSHL   R0
         CALLS   #1, G^LIB$SIGNAL
         $EXIT_S #SS$_NORMAL
+        RET
+
+; SUBPROCESS: in a subprocess, as SPAWN makes one, there is no username
+; or password: EXE$LOGIN gives the process DCL and a copy of its owner's
+; process logical names, and keeps the rest $CREPRC gave it. SYS$INPUT,
+; if it is a terminal, stays assigned, the process's terminal.
+SUBPROCESS:
+        $ASSIGN_S DEVNAM=INPUT, CHAN=CHAN
+        BLBC    R0, 10$
+        $GETDVIW_S CHAN=CHAN, ITMLST=CLASSITEM
+        CMPL    DEVCLASS, #DC$_TERM
+        BEQL    10$
+        $DASSGN_S CHAN=CHAN
+10$:    $CMKRNL_S ROUTIN=G^EXE$LOGIN, ARGLST=SUBARGS
+        BLBS    R0, 20$
+        PUSHL   R0
+        CALLS   #1, G^LIB$SIGNAL
+20$:    $EXIT_S #SS$_NORMAL
         RET
 
 ; RIGHTS: REC = the user's record, TERM = the terminal's name. Makes the

@@ -445,6 +445,21 @@ define syntax SHOW_TERMINAL
 	parameter P2, label=DEVICE_NAME
 	qualifier PERMANENT, nonnegatable
 
+! SPAWN [command]: a subprocess that runs DCL with a copy of this
+! process's symbols, logical names, default directory and prompt, which
+! does the command and logs out, or reads the terminal until LOGOUT;
+! this process waits for it unless /NOWAIT. ponytail: no /OUTPUT, /CLI,
+! /TABLE, /KEYPAD, /NOTIFY, /CARRIAGE_CONTROL or /[NO]LOGICAL_NAMES.
+define verb SPAWN
+	cliroutine SPAWN
+	parameter P1, label=COMMAND, value(type=$rest_of_line)
+	qualifier INPUT, value(required, type=$infile)
+	qualifier LOG, default
+	qualifier PROCESS, value(required)
+	qualifier PROMPT, value
+	qualifier SYMBOLS, default
+	qualifier WAIT, default
+
 define verb STOP
 	cliroutine STOP
 	parameter P1, label=PROCESS_NAME
