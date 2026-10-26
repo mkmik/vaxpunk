@@ -1703,7 +1703,8 @@ const USERS: Phase = Phase {
             ),
         ),
         ("  SYSTEM       logged out at ", 1, "\r"),
-        ("Username:", 4, "JOE\r"),
+        // AUTHORIZE's listings have Username: too: LOGINOUT's ANNOUNCE.TXT counts.
+        ("Log in as SYSTEM, password MANAGER", 2, "JOE\r"),
         ("Password:", 4, "joespw\r"),
         // The first two were TTSIZE's at SYSTEM's login and SET TERMINAL/INQUIRE's.
         ("\x1b[6n", 3, "\x1b[24;80R"),
@@ -1731,7 +1732,7 @@ const USERS: Phase = Phase {
             ),
         ),
         ("  JOE          logged out at ", 1, "\r"),
-        ("Username:", 5, "SYSTEM\r"),
+        ("Log in as SYSTEM, password MANAGER", 3, "SYSTEM\r"),
         ("Password:", 5, "newpw\r"),
         ("\x1b[6n", 4, "\x1b[50;100R"),
         (
