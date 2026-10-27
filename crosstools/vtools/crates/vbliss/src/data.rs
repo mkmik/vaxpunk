@@ -88,6 +88,9 @@ pub(crate) struct Attrs {
     pub psect: Option<String>,
     /// EXTERNAL_NAME('name'): the linker's name for it.
     pub external_name: Option<String>,
+    /// A range attribute, `SIGNED(n)` or `UNSIGNED(n)`: the bits a
+    /// literal's value fits in (LRM 9.12).
+    pub range: Option<(bool, i64)>,
 }
 
 /// The size in bytes of an allocation unit, if `name` is one.
@@ -130,7 +133,7 @@ pub fn rewrite(e: &Expr, f: &mut dyn FnMut(&Expr) -> Option<Expr>) -> Expr {
         Expr::Not(a) => Expr::Not(b(a)),
         Expr::Bin(op, x, y) => Expr::Bin(*op, b(x), b(y)),
         Expr::Assign(x, y) => Expr::Assign(b(x), b(y)),
-        Expr::Call(t, args, links) => Expr::Call(
+        Expr::Call(t, args, links, l) => Expr::Call(
             b(t),
             args.iter().map(|a| *b(a)).collect(),
             links
@@ -141,6 +144,7 @@ pub fn rewrite(e: &Expr, f: &mut dyn FnMut(&Expr) -> Option<Expr>) -> Expr {
                     output: k.output.as_ref().map(|x| *b(x)),
                 })
                 .collect(),
+            l.clone(),
         ),
         Expr::Block(es, v) => Expr::Block(es.iter().map(|a| *b(a)).collect(), *v),
         Expr::If(c, t, x) => Expr::If(b(c), b(t), x.as_ref().map(|x| b(x))),
@@ -338,6 +342,7 @@ impl Parser<'_> {
                     let f = self.name()?;
                     self.expect_punct('=')?;
                     let comps = self.components()?;
+                    self.field_attributes()?;
                     set.push(self.declare(f, Kind::Field(comps))?);
                     if !self.eat_punct(',') {
                         break;
@@ -347,12 +352,26 @@ impl Parser<'_> {
                 self.declare(name, Kind::FieldSet(set))?;
             } else {
                 let comps = self.components()?;
+                self.field_attributes()?;
                 self.declare(name, Kind::Field(comps))?;
             }
             if !self.eat_punct(',') {
                 return Ok(());
             }
         }
+    }
+
+    /// A field's attributes (RN 2.28): VOLATILE, which every access is
+    /// already, and NOCHECK_ALIGNMENT, for /CHECK=ALIGNMENT.
+    fn field_attributes(&mut self) -> R<()> {
+        if self.eat_punct(':') {
+            while self.eat("VOLATILE") || self.eat("NOCHECK_ALIGNMENT") {}
+            if !self.at_punct(',') && !self.at("TES") && !self.at_punct(';') {
+                let found = self.describe();
+                return self.err(format!("{found} is not a field attribute"));
+            }
+        }
+        Ok(())
     }
 
     /// A field's components: `[ctce, ...]`.
@@ -476,6 +495,10 @@ impl Parser<'_> {
                 "SIGNED" | "UNSIGNED" => {
                     self.pos += 1;
                     a.signed = Some(word == "SIGNED");
+                    if self.eat_punct('(') {
+                        a.range = Some((word == "SIGNED", self.ctce()?));
+                        self.expect_punct(')')?;
+                    }
                 }
                 "VOLATILE" => {
                     self.pos += 1;
@@ -513,22 +536,25 @@ impl Parser<'_> {
                     self.pos += 1;
                     a.external_name = Some(self.external_name()?);
                 }
-                "ALIGN" | "ADDRESSING_MODE" => {
-                    // Assumptions ARM64 doesn't need (docs/bliss64.md).
+                "ALIGN" | "ADDRESSING_MODE" | "GRANULARITY" => {
+                    // Assumptions ARM64 doesn't need, and byte writes it
+                    // has (docs/bliss64.md).
                     self.pos += 1;
-                    self.expect_punct('(')?;
-                    let mut depth = 1;
-                    while depth > 0 {
-                        match self.next() {
-                            Tok::Punct('(') => depth += 1,
-                            Tok::Punct(')') => depth -= 1,
-                            Tok::Eof => return self.err("unbalanced parentheses"),
-                            _ => {}
-                        }
-                    }
+                    self.skip_parenthesized()?;
                 }
                 "REF" => {
                     self.pos += 1;
+                    // Between REF and the structure, VOLATILE and ALIGN are
+                    // the structure's (RN 2.25): every access is one access
+                    // already, and ARM64 needs no alignment.
+                    loop {
+                        if self.eat("VOLATILE") {
+                        } else if self.eat("ALIGN") {
+                            self.skip_parenthesized()?;
+                        } else {
+                            break;
+                        }
+                    }
                     a.structure = Some(self.struct_attr(true)?);
                 }
                 "INITIAL" => {
@@ -566,6 +592,21 @@ impl Parser<'_> {
                 _ => return Ok(a),
             }
         }
+    }
+
+    /// `( ... )`, read past: an attribute's value vbliss has no use for.
+    pub(crate) fn skip_parenthesized(&mut self) -> R<()> {
+        self.expect_punct('(')?;
+        let mut depth = 1;
+        while depth > 0 {
+            match self.next() {
+                Tok::Punct('(') => depth += 1,
+                Tok::Punct(')') => depth -= 1,
+                Tok::Eof => return self.err("unbalanced parentheses"),
+                _ => {}
+            }
+        }
+        Ok(())
     }
 
     /// `('name')` after EXTERNAL_NAME: the name, upper case as vasm has
@@ -620,6 +661,22 @@ impl Parser<'_> {
         loop {
             let at = self.here();
             let name = self.name()?;
+            // An OWN or GLOBAL name is its address in its own INITIAL, as a
+            // queue head's (LRM 10.3): declared ahead, as FORWARD does.
+            let known = self.scopes.last().unwrap().get(&name).copied();
+            if matches!(storage, Storage::Own | Storage::Global)
+                && !known.is_some_and(|id| self.forward_data.contains(&id))
+            {
+                let kind = Kind::Data {
+                    storage,
+                    bytes: 0,
+                    size: self.m.dialect.fullword(),
+                    signed: false,
+                    structure: None,
+                };
+                let id = self.declare(name.clone(), kind)?;
+                self.forward_data.push(id);
+            }
             let mut a = if self.eat_punct(':') {
                 self.attributes()?
             } else {

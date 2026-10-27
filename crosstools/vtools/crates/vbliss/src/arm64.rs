@@ -167,7 +167,7 @@ fn operands(ins: &Ins) -> (Vec<u32>, Vec<&V>) {
         Ins::Store(v, a, _) => (None, vec![v, a]),
         Ins::Ext(d, v, p, s, _) => (Some(*d), vec![v, p, s]),
         Ins::Insert(d, b, v, p, s) => (Some(*d), vec![b, v, p, s]),
-        Ins::Arg(d, _) => (Some(*d), vec![]),
+        Ins::Arg(d, _) | Ins::StackArg(d, _) => (Some(*d), vec![]),
         Ins::Call(d, t, args) => (*d, std::iter::once(t).chain(args).collect()),
         Ins::RegArg(d, _) | Ins::ArgCount(d) | Ins::ArgPtr(d) => (Some(*d), vec![]),
         Ins::ArgN(d, i) => (Some(*d), vec![i]),
@@ -343,6 +343,9 @@ struct Routine<'a> {
     extra: u32,
     out: String,
 }
+
+/// The PAL call REI (DESIGN-0001).
+const REI: u32 = 0x92;
 
 impl<'a> Routine<'a> {
     fn new(f: &'a Func) -> Self {
@@ -536,7 +539,18 @@ impl<'a> Routine<'a> {
             self.line("ldp     x29, x30, [sp]");
             self.add_sp(n);
         }
-        self.line("ret");
+        match f.rei {
+            // An INTERRUPT routine pops the PAL's parameters, then REI
+            // restores everything from the PAL's frame (DESIGN-0001).
+            Some(params) => {
+                if params > 0 {
+                    self.add_sp(8 * params);
+                }
+                self.line(format!("mov     x7, #{REI}"));
+                self.line("svc     #0");
+            }
+            None => self.line("ret"),
+        }
         o.push_str(&self.out);
         // The descriptor: flags, saved registers, save area, frame size,
         // no static handler, the name.
@@ -689,6 +703,13 @@ impl<'a> Routine<'a> {
                 }
                 let r = self.dst(*d);
                 self.line(format!("mov     {r}, x16"));
+                self.done(*d);
+            }
+            Ins::StackArg(d, n) => {
+                // The stack at entry is above the frame.
+                let r = self.dst(*d);
+                let off = self.size + 8 * n;
+                self.line(format!("ldr     {r}, [x29, #{off}]"));
                 self.done(*d);
             }
             Ins::Arg(d, n) => {
@@ -892,7 +913,7 @@ impl<'a> Routine<'a> {
         }
         if c.jsb {
             self.line("mov     x18, sp");
-        } else {
+        } else if c.count {
             self.line(format!("mov     x9, #{}", c.args.len()));
         }
         match &c.target {

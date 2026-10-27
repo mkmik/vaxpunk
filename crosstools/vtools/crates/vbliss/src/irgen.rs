@@ -279,17 +279,21 @@ impl Gen<'_> {
             ..Func::default()
         };
         self.cur = self.block();
-        let params = match &sym.kind {
+        let (params, interrupt) = match &sym.kind {
             Kind::Routine {
                 linkage: Some(l), ..
-            } => l.params.clone(),
-            _ => Vec::new(),
+            } => (l.params.clone(), l.interrupt),
+            _ => (Vec::new(), false),
         };
+        if interrupt {
+            self.f.rei = Some(r.formals.len().saturating_sub(2) as u32);
+        }
         let mut standard = 0;
         for (i, &formal) in r.formals.iter().enumerate() {
             let t = self.temp();
             match params.get(i).copied().flatten() {
                 Some(reg) => self.emit(Ins::RegArg(t, reg)),
+                None if interrupt => self.emit(Ins::StackArg(t, i as u32)),
                 None => {
                     self.emit(Ins::Arg(t, standard));
                     standard += 1;
@@ -483,17 +487,36 @@ impl Gen<'_> {
                 self.store(p, v.clone());
                 v
             }
-            Expr::Call(target, args, links) => {
-                let mut linkage = None;
+            Expr::Call(target, args, links, general) => {
+                let mut linkage = general.clone();
                 let t = match **target {
-                    Expr::Name(id) => match &self.m.syms[id].kind {
+                    Expr::Name(id) if general.is_none() => match &self.m.syms[id].kind {
                         Kind::Routine { linkage: l, .. } => {
-                            linkage = l.clone().filter(|l| l.jsb || !links.is_empty());
+                            linkage = l.clone();
                             self.address(id)?
                         }
                         _ => return Err(format!("{} is not a routine", self.m.syms[id].name)),
                     },
                     ref t => self.value(t)?,
+                };
+                // A CALL without the count, by its linkage or the module's
+                // NOCOUNT, goes as a linkage call does.
+                let count = linkage
+                    .as_ref()
+                    .and_then(|l| l.count)
+                    .unwrap_or(!self.m.nocount);
+                let linkage = match linkage {
+                    Some(l) if l.jsb || !links.is_empty() || !count => Some(l),
+                    None if !count => Some(std::rc::Rc::new(crate::linkage::Linkage {
+                        jsb: false,
+                        interrupt: false,
+                        count: Some(false),
+                        params: Vec::new(),
+                        outs: Vec::new(),
+                        globals: Vec::new(),
+                        nopreserve: Vec::new(),
+                    })),
+                    _ => None,
                 };
                 let mut vals = Vec::new();
                 for a in args {
@@ -518,6 +541,7 @@ impl Gen<'_> {
                         dst: Some(d),
                         target: t,
                         jsb: l.jsb,
+                        count,
                         args: vals,
                         ins,
                         outs: outs.clone(),
@@ -1664,6 +1688,7 @@ fn jacket() -> Func {
         slots: Vec::new(),
         temps: 9,
         long_args: false,
+        rei: None,
         psect: "$CODE$".into(),
         blocks: vec![Block {
             ins,

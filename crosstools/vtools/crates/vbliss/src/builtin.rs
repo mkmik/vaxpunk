@@ -412,6 +412,20 @@ impl Parser<'_> {
                 "{name}: vaxpunk's PAL has no such call (DESIGN-0001), or ARM64 no such operation"
             ));
         }
+        // The linkage functions read the count a NOCOUNT call doesn't pass
+        // (RN 2.8.5).
+        if matches!(
+            name,
+            "ACTUALCOUNT" | "ACTUALPARAMETER" | "NULLPARAMETER" | "ARGPTR"
+        ) && !self
+            .linkage_now()
+            .and_then(|l| l.count)
+            .unwrap_or(!self.m.nocount)
+        {
+            return self.err(format!(
+                "{name} can't be used in a routine whose linkage is NOCOUNT"
+            ));
+        }
         let (mut args, mut outs) = self.builtin_args()?;
         let n = args.len();
         let takes_outputs = name.contains("_ATOMIC_")
@@ -562,7 +576,7 @@ impl Parser<'_> {
                 } else {
                     "LIB$STOP"
                 });
-                Expr::Call(Box::new(Expr::Name(r)), args, Vec::new())
+                Expr::Call(Box::new(Expr::Name(r)), args, Vec::new(), None)
             }
             "SETUNWIND" => {
                 want(self, 0)?;
@@ -571,6 +585,7 @@ impl Parser<'_> {
                     Box::new(Expr::Name(r)),
                     vec![Expr::Num(0), Expr::Num(0)],
                     Vec::new(),
+                    None,
                 )
             }
             "ESTABLISH" => {
@@ -741,7 +756,7 @@ impl Parser<'_> {
                     "LIB$STOP"
                 });
                 args[0] = Expr::Fetch(Box::new(word(args.remove(0))));
-                Expr::Call(Box::new(Expr::Name(r)), args, Vec::new())
+                Expr::Call(Box::new(Expr::Name(r)), args, Vec::new(), None)
             }
             "ADD_ATOMIC_LONG" | "ADD_ATOMIC_QUAD" | "AND_ATOMIC_LONG" | "AND_ATOMIC_QUAD"
             | "OR_ATOMIC_LONG" | "OR_ATOMIC_QUAD" => {

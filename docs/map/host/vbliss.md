@@ -65,20 +65,20 @@ note = "RN 2.10, 2.11; every literal is 'not supported yet' today. S and T map o
 [[feature]]
 id = "general-calls"
 title = "General routine calls, LINKAGE(address, actuals), and empty actuals, R(1, , 3)"
-status = "todo"
-note = "LRM 12.1, 12.2: L(.P, 5) says L is not a routine; R(1, , 3) and R(1, ) don't parse, and DEC's STARLET.R64 service macros leave a trailing empty actual ($ASSIGN)"
+status = "done"
+note = "LRM 12.1, 12.2: L(.P, 5) calls .P by L, and an actual left out passes 0, as DEC's STARLET.R64 service macros leave one ($ASSIGN); tests/language.rs"
 
 [[feature]]
 id = "linkage-types"
 title = "INTERRUPT and EXCEPTION linkages; the COUNT and NOCOUNT linkage options, module switch and /[NO]COUNT"
-status = "todo"
-note = "RN 2.8.4, 2.8.5: INTERRUPT is 'expected CALL or JSB'; CALL : NOCOUNT doesn't parse, and a NOCOUNT module switch is accepted but x9 is still set"
+status = "done"
+note = "RN 2.8.4, 2.8.5: an INTERRUPT or EXCEPTION routine takes its formals from the stack, pops the PAL's parameters and returns with REI, and can't be called; NOCOUNT, the linkage option, module switch or /NOCOUNT, passes no count in x9, and its routines can't read their argument lists"
 
 [[feature]]
 id = "predeclared-linkages"
 title = "The predeclared linkages BLISS, FORTRAN, FORTRAN_SUB and FORTRAN_FUNC, and the LINKAGE switch's default linkage"
-status = "todo"
-note = "LRM 12.1.3, 13.5: DEC's STARLET.R64 declares each service EXTERNAL ROUTINE SYS$x : BLISS ADDRESSING_MODE(GENERAL); SWITCHES LINKAGE(name) is accepted and ignored"
+status = "done"
+note = "LRM 12.1.3, 13.5: BLISS and the FORTRAN linkages are the calling standard; SWITCHES LINKAGE(name) gives routines declared after it, and calls through an address, its linkage. The module's names are a block inside the predeclared ones, which it may declare again"
 
 [[feature]]
 id = "routine-attributes"
@@ -89,14 +89,14 @@ note = "RN 2.21, 2.29, 2.19.8; ADDRESSING_MODE on a routine stops 40 V4.3 module
 [[feature]]
 id = "data-attributes"
 title = "Data attributes: RANGE on literals, EXTERNAL_NAME on literals, GRANULARITY, REF VOLATILE and REF ALIGN structures, VOLATILE and NOCHECK_ALIGNMENT fields"
-status = "todo"
-note = "LRM 9.12; RN 2.14, 2.16.1, 2.25, 2.28. GLOBAL LITERAL X = 12 : UNSIGNED(4) doesn't parse (BASRTL in V4.3); bliss64.md says GRANULARITY is accepted and ignored, it isn't yet"
+status = "done"
+note = "LRM 9.12; RN 2.14, 2.16.1, 2.25, 2.28: literal ranges checked (message 036), EXTERNAL_NAME on GLOBAL and EXTERNAL LITERAL, GRANULARITY ignored as ARM64 writes bytes, VOLATILE and ALIGN between REF and the structure, VOLATILE and NOCHECK_ALIGNMENT fields"
 
 [[feature]]
 id = "forward-data"
 title = "FORWARD data declarations, and a name in its own INITIAL"
-status = "todo"
-note = "LRM 10.3: FORWARD Y is 'expected ROUTINE after FORWARD'; OWN Q : VECTOR[2] INITIAL(Q, Q), a queue head, says Q is declared twice (F11X and RTPAD in V4.3)"
+status = "done"
+note = "LRM 10.3: FORWARD Y, then OWN or GLOBAL Y (message 086 if never), and an OWN or GLOBAL is its own address in its INITIAL, as a queue head is (F11X and RTPAD in V4.3)"
 
 [[feature]]
 id = "psect-classes"

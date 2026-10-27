@@ -78,6 +78,9 @@ pub enum Ins {
     Insert(u32, V, V, V, V),
     /// `dst = arg n`: the routine's argument n, from 0.
     Arg(u32, u32),
+    /// `dst = stackarg n`: quadword n of the stack at entry, an INTERRUPT
+    /// routine's formal: the PAL's parameters, then the PC and PSL.
+    StackArg(u32, u32),
     /// `dst = call target(args)`, by the calling standard.
     Call(Option<u32>, V, Vec<V>),
     /// `dst = jsb target(arg rN, ...) -> rN %t, ... nopreserve rN...`: a
@@ -127,6 +130,8 @@ pub struct LinkCall {
     pub dst: Option<u32>,
     pub target: V,
     pub jsb: bool,
+    /// Whether a CALL passes the argument count, as COUNT linkages do.
+    pub count: bool,
     /// The standard arguments, for CALL.
     pub args: Vec<V>,
     pub ins: Vec<(V, u8)>,
@@ -160,6 +165,9 @@ pub struct Func {
     /// Whether its argument list (argcount, argn, argptr) has longwords,
     /// for BLISS-32 and LONG_DEFAULT, rather than quadwords.
     pub long_args: bool,
+    /// An INTERRUPT routine: it pops this many quadwords, the PAL's
+    /// parameters, and returns with REI.
+    pub rei: Option<u32>,
     /// Block 0 is the entry.
     pub blocks: Vec<Block>,
 }
@@ -237,6 +245,7 @@ impl fmt::Display for Ins {
             Ins::Ext(d, v, p, s, e) => write!(f, "%{d} =l ext{} {v}, {p}, {s}", su(*e)),
             Ins::Insert(d, b, v, p, s) => write!(f, "%{d} =l ins {b}, {v}, {p}, {s}"),
             Ins::Arg(d, n) => write!(f, "%{d} =l arg {n}"),
+            Ins::StackArg(d, n) => write!(f, "%{d} =l stackarg {n}"),
             Ins::Call(d, t, args) => {
                 if let Some(d) = d {
                     write!(f, "%{d} =l ")?;
@@ -254,7 +263,12 @@ impl fmt::Display for Ins {
                 if let Some(d) = c.dst {
                     write!(f, "%{d} =l ")?;
                 }
-                write!(f, "{} {}(", if c.jsb { "jsb" } else { "call" }, c.target)?;
+                let call = match (c.jsb, c.count) {
+                    (true, _) => "jsb",
+                    (false, true) => "call",
+                    (false, false) => "call nocount",
+                };
+                write!(f, "{call} {}(", c.target)?;
                 for (i, a) in c.args.iter().enumerate() {
                     if i > 0 {
                         f.write_str(", ")?;
@@ -330,7 +344,10 @@ impl fmt::Display for Func {
             match &b.term {
                 Term::Jmp(t) => writeln!(f, "    jmp @{t}")?,
                 Term::Jlbs(v, t, e) => writeln!(f, "    jlbs {v}, @{t}, @{e}")?,
-                Term::Ret(v) => writeln!(f, "    ret {v}")?,
+                Term::Ret(v) => match self.rei {
+                    Some(n) => writeln!(f, "    rei {n}")?,
+                    None => writeln!(f, "    ret {v}")?,
+                },
             }
         }
         writeln!(f, "}}")

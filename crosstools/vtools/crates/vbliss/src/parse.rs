@@ -139,9 +139,11 @@ pub enum Expr {
     Not(Box<Expr>),
     Bin(BOp, Box<Expr>, Box<Expr>),
     Assign(Box<Expr>, Box<Expr>),
-    /// A call: the routine, its standard actuals, and what goes through
-    /// registers, as its linkage says (`linkage.rs`).
-    Call(Box<Expr>, Vec<Expr>, Vec<Link>),
+    /// A call: the routine, its standard actuals, what goes through
+    /// registers, as its linkage says (`linkage.rs`), and the linkage
+    /// itself where the routine is an address, not a routine's name: a
+    /// general routine call's, or the LINKAGE switch's.
+    Call(Box<Expr>, Vec<Expr>, Vec<Link>, Option<Rc<Linkage>>),
     /// A block's expressions; `value` unless it ends with a semicolon.
     Block(Vec<Expr>, bool),
     If(Box<Expr>, Box<Expr>, Option<Box<Expr>>),
@@ -256,6 +258,9 @@ pub struct Module {
     /// GLOBAL LITERALs and GLOBAL BINDs: names and values, link-time
     /// constants.
     pub global_literals: Vec<(String, Expr)>,
+    /// NOCOUNT, the module switch or /NOCOUNT: CALL linkages that say
+    /// neither COUNT nor NOCOUNT pass no argument count (RN 2.8.5).
+    pub nocount: bool,
 }
 
 /// A fatal error: the file, line and column (from 0) it is at.
@@ -294,6 +299,8 @@ impl Options {
         match name.to_ascii_uppercase().as_str() {
             "/A32" => self.dialect.a32 = true,
             "/A64" => self.dialect.a32 = false,
+            "/COUNT" => self.nocount = false,
+            "/NOCOUNT" => self.nocount = true,
             "/VARIANT" => {
                 self.variant = match value {
                     Some(n) => n.parse().map_err(|_| format!("bad /VARIANT value {n}"))?,
@@ -378,6 +385,8 @@ pub fn wrap(v: i64) -> i64 {
 pub struct Options {
     pub dialect: Dialect,
     pub variant: i64,
+    /// /NOCOUNT.
+    pub nocount: bool,
     /// Where REQUIRE and LIBRARY look for files after the source's own
     /// directory.
     pub include: Vec<std::path::PathBuf>,
@@ -445,6 +454,9 @@ pub struct Parser<'a> {
     routine_stack: Vec<u32>,
     routine_count: u32,
     pub(crate) local_owner: HashMap<usize, u32>,
+    /// OWN and GLOBAL names declared ahead of their declaration: by
+    /// FORWARD, or for their own INITIAL (LRM 10.3).
+    pub(crate) forward_data: Vec<usize>,
 }
 
 /// Parses the module in `text`, from file `name`.
@@ -496,9 +508,11 @@ pub fn parse(name: &str, text: &str, load: Loader, opts: &Options) -> Front {
         routine_stack: Vec::new(),
         routine_count: 0,
         local_owner: HashMap::new(),
+        forward_data: Vec::new(),
     };
     p.lx.variant = opts.variant;
     p.m.dialect = opts.dialect;
+    p.m.nocount = opts.nocount;
     WIDE32.set(opts.dialect.a32);
     p.predeclare();
     let mut module = p.module();
@@ -764,6 +778,7 @@ impl Parser<'_> {
     /// Declares the names every module starts with: the predeclared
     /// literals and the dialect macros.
     pub(crate) fn predeclare(&mut self) {
+        self.predeclare_linkages();
         let bits = 8 * i64::from(self.m.dialect.fullword());
         for (name, v) in [
             ("%BPVAL", bits),
@@ -870,6 +885,21 @@ impl Parser<'_> {
     /// Declares `name` in the innermost scope; a forward routine
     /// declaration is completed rather than redeclared.
     pub(crate) fn declare(&mut self, name: String, kind: Kind) -> R<usize> {
+        if let Some(&id) = self.scopes.last().unwrap().get(&name)
+            && let Some(i) = self.forward_data.iter().position(|&f| f == id)
+            && let Kind::Data {
+                storage: storage @ (Storage::Own | Storage::Global),
+                ..
+            } = kind
+        {
+            // A FORWARD name's OWN or GLOBAL declaration.
+            self.forward_data.remove(i);
+            self.m.syms[id].kind = kind;
+            if storage == Storage::Global {
+                self.m.syms[id].asm = name;
+            }
+            return Ok(id);
+        }
         if let Some(&id) = self.scopes.last().unwrap().get(&name) {
             let forward = matches!(self.m.syms[id].kind, Kind::Routine { external: true, .. })
                 && matches!(
@@ -880,7 +910,7 @@ impl Parser<'_> {
                     }
                 );
             if !forward {
-                return self.err(format!("{name} is declared twice"));
+                return self.err(format!("Name already declared in this block: {name}"));
             }
             self.m.syms[id].kind = kind;
             return Ok(id);
@@ -953,6 +983,9 @@ impl Parser<'_> {
         if !paren {
             self.expect("BEGIN")?;
         }
+        // The module's names are in a block inside the predeclared ones,
+        // which it may declare again (LRM 19.3).
+        self.scopes.push(HashMap::new());
         // The module's block stays open in the listing to ELUDOM.
         self.depth += 1;
         self.declarations()?;
@@ -964,6 +997,10 @@ impl Parser<'_> {
         self.expect("ELUDOM")?;
         if *self.peek() != Tok::Eof {
             return self.err("text after ELUDOM");
+        }
+        if let Some(&id) = self.forward_data.first() {
+            let n = self.m.syms[id].name.clone();
+            return self.err(format!("Name declared FORWARD is not defined: {n}"));
         }
         if let Some(main) = &self.m.main {
             let main = main.clone();
@@ -985,6 +1022,31 @@ impl Parser<'_> {
         })?;
         if name == "STRUCTURE" && self.at_punct('(') {
             return self.structure_switch();
+        }
+        if name == "COUNT" || name == "NOCOUNT" {
+            self.m.nocount = name == "NOCOUNT";
+            return Ok(());
+        }
+        if name == "LINKAGE" && self.eat_punct('(') {
+            // The default linkage for the block (LRM 18.2): `%LINKAGE`,
+            // which no source can declare.
+            let l = self.name()?;
+            let kind = match self.lookup(&l).map(|id| &self.m.syms[id].kind) {
+                Some(Kind::Linkage(k)) => Kind::Linkage(k.clone()),
+                _ => return self.err(format!("{l} is not a linkage")),
+            };
+            self.expect_punct(')')?;
+            let id = self.m.syms.len();
+            self.m.syms.push(Sym {
+                name: "%LINKAGE".into(),
+                asm: String::new(),
+                kind,
+            });
+            self.scopes
+                .last_mut()
+                .unwrap()
+                .insert("%LINKAGE".into(), id);
+            return Ok(());
         }
         if self.eat_punct('=') {
             match (name.as_str(), self.next()) {
@@ -1189,7 +1251,10 @@ impl Parser<'_> {
                     let routine = self.eat("ROUTINE");
                     return self.binds(routine, true).map(|_| true);
                 }
-                _ if forward => return self.err("expected ROUTINE after FORWARD"),
+                _ if forward => {
+                    self.pos += 1;
+                    return self.forward_data_names().map(|_| true);
+                }
                 _ => {}
             }
         }
@@ -1321,15 +1386,31 @@ impl Parser<'_> {
             let name = self.name()?;
             self.expect_punct('=')?;
             let v = self.ctce()?;
-            if global {
-                self.m.global_literals.push((name.clone(), Expr::Num(v)));
-            }
-            if self.eat_punct(':') {
-                while matches!(self.peek(), Tok::Name(n) if matches!(n.as_str(),
-                    "BYTE" | "WORD" | "LONG" | "QUAD" | "SIGNED" | "UNSIGNED"))
-                {
-                    self.pos += 1;
+            // A unit, a range (LRM 9.12) and EXTERNAL_NAME (RN 2.14).
+            let a = if self.eat_punct(':') {
+                self.attributes()?
+            } else {
+                crate::data::Attrs::default()
+            };
+            if let Some((signed, bits)) = a.range {
+                let fits = match (signed, bits) {
+                    (_, 64..) => true,
+                    (true, 1..) => (-(1i64 << (bits - 1))..1i64 << (bits - 1)).contains(&v),
+                    (false, 0..) => (0..1i64 << bits).contains(&v),
+                    _ => false,
+                };
+                if !fits {
+                    let at = self.last();
+                    self.diag(
+                        'E',
+                        &at,
+                        "Literal value cannot be represented in the declared number of bits".into(),
+                    );
                 }
+            }
+            if global {
+                let symbol = a.external_name.unwrap_or_else(|| name.clone());
+                self.m.global_literals.push((symbol, Expr::Num(v)));
             }
             self.declare(name, Kind::Literal(v))?;
             if !self.eat_punct(',') {
@@ -1342,10 +1423,15 @@ impl Parser<'_> {
     pub(crate) fn external_literals(&mut self) -> R<()> {
         loop {
             let name = self.name()?;
-            if self.eat_punct(':') {
-                self.attributes()?;
+            let a = if self.eat_punct(':') {
+                self.attributes()?
+            } else {
+                crate::data::Attrs::default()
+            };
+            let id = self.declare(name, Kind::ExternalLiteral)?;
+            if let Some(n) = a.external_name {
+                self.m.syms[id].asm = n;
             }
-            self.declare(name, Kind::ExternalLiteral)?;
             if !self.eat_punct(',') {
                 return Ok(());
             }
@@ -1423,11 +1509,31 @@ impl Parser<'_> {
         }
     }
 
+    /// FORWARD names, after the word: OWN or GLOBAL data declared later
+    /// in the block, its attributes given here too (LRM 10.3).
+    fn forward_data_names(&mut self) -> R<()> {
+        loop {
+            let name = self.name()?;
+            let mut a = if self.eat_punct(':') {
+                self.attributes()?
+            } else {
+                crate::data::Attrs::default()
+            };
+            let kind = self.data_kind(Storage::Own, &mut a)?;
+            let id = self.declare(name, kind)?;
+            self.forward_data.push(id);
+            if !self.eat_punct(',') {
+                return Ok(());
+            }
+        }
+    }
+
     /// EXTERNAL ROUTINE and FORWARD ROUTINE: names with attributes.
     pub(crate) fn routine_names(&mut self) -> R<()> {
         loop {
             let name = self.name()?;
             let (novalue, linkage) = self.routine_attributes()?;
+            let linkage = linkage.or_else(|| self.default_linkage());
             let id = self.declare(
                 name,
                 Kind::Routine {
@@ -1499,7 +1605,7 @@ impl Parser<'_> {
             }
             self.expect_punct(')')?;
         }
-        let (novalue, mut linkage) = self.routine_attributes()?;
+        let (mut novalue, mut linkage) = self.routine_attributes()?;
         let (asm, psect) = (self.routine_name.take(), self.routine_psect.take());
         if linkage.is_none()
             && let Some(Kind::Routine { linkage: l, .. }) = self
@@ -1511,6 +1617,19 @@ impl Parser<'_> {
         {
             // A FORWARD declaration's.
             linkage = l.clone();
+        }
+        if linkage.is_none() {
+            linkage = self.default_linkage();
+        }
+        if let Some(l) = &linkage
+            && l.interrupt
+        {
+            // Its formals are the stack at entry, the PC and the PSL last
+            // (LRM 13.3.4.2), and it returns nothing.
+            if !out_names.is_empty() {
+                return self.err(format!("{name} can't have output formals"));
+            }
+            novalue = true;
         }
         if let Some(l) = &linkage
             && l.jsb
@@ -1851,8 +1970,13 @@ impl Parser<'_> {
                 if !self.eat_punct(')') {
                     if !self.at_punct(';') {
                         loop {
-                            self.whole_actual = true;
-                            args.push(self.value()?);
+                            // An actual left out passes 0 (LRM 12.1.1).
+                            if self.at_punct(',') || self.at_punct(';') || self.at_punct(')') {
+                                args.push(Expr::Num(0));
+                            } else {
+                                self.whole_actual = true;
+                                args.push(self.value()?);
+                            }
                             if !self.eat_punct(',') {
                                 break;
                             }
@@ -1873,9 +1997,23 @@ impl Parser<'_> {
                     self.expect_punct(')')?;
                 }
                 let at = self.last();
+                // LINKAGE(address, actuals): a general routine call (LRM 12.2).
+                let general = match &e {
+                    Expr::Name(id) => match &self.m.syms[*id].kind {
+                        Kind::Linkage(l) => Some(l.clone()),
+                        _ => None,
+                    },
+                    _ => None,
+                };
+                if general.is_some() {
+                    if args.is_empty() {
+                        return self.err("a general routine call needs the routine's address");
+                    }
+                    e = args.remove(0);
+                }
                 self.lint_call(&e, &args, &at);
                 self.note_call(&e, &args, &at);
-                e = self.link_call(e, args, outs)?;
+                e = self.link_call(e, args, outs, general)?;
             } else if self.at_punct('<') {
                 if matches!(e, Expr::Field(..) | Expr::Let(..)) {
                     let at = self.here();
