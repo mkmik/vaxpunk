@@ -207,8 +207,8 @@ LITERAL
     PCB$V_QUOWAIT = 4,  ! vaxpunk: IOC$ALLOCIRP found a quota short, which $QIO waits for
     DYN$C_PCB = 1;  ! PCB$B_TYPE
 MACRO
-    PCB$L_SQFL = 0, 0, 32, 0 %,  ! state queue: COM queue or a wait queue
-    PCB$L_SQBL = 4, 0, 32, 0 %,
+    PCB$L_SQFL = 0, 0, 32, 1 %,  ! state queue: COM queue or a wait queue
+    PCB$L_SQBL = 4, 0, 32, 1 %,
     PCB$W_SIZE = 8, 0, 16, 0 %,
     PCB$B_TYPE = 10, 0, 8, 0 %,
     PCB$B_PRI = 11, 0, 8, 0 %,  ! current priority, 0-31, higher first
@@ -217,8 +217,8 @@ MACRO
     PCB$L_STS = 20, 0, 32, 0 %,  ! PCB$V_
     PCB$L_EFCS = 24, 0, 32, 0 %,  ! event flags 0-31
     PCB$L_EFCU = 28, 0, 32, 0 %,  ! 32-63
-    PCB$L_EFC2P = 32, 0, 32, 0 %,  ! common cluster 2 (64-95): its CEB
-    PCB$L_EFC3P = 36, 0, 32, 0 %,  ! 3 (96-127)
+    PCB$L_EFC2P = 32, 0, 32, 1 %,  ! common cluster 2 (64-95): its CEB
+    PCB$L_EFC3P = 36, 0, 32, 1 %,  ! 3 (96-127)
     PCB$L_EFWM = 40, 0, 32, 0 %,  ! a wait's flags
     PCB$L_WEFC = 44, 0, 32, 0 %,  ! and their cluster, 0-3
     PCB$L_KSTACK = 48, 0, 32, 0 %,  ! kernel stack, from pool
@@ -271,10 +271,10 @@ MACRO
 LITERAL
     CEB$K_LENGTH = 48;
 MACRO
-    CEB$L_CEBFL = 0, 0, 32, 0 %,  ! all clusters
-    CEB$L_CEBBL = 4, 0, 32, 0 %,
-    CEB$L_WQFL = 8, 0, 32, 0 %,  ! processes waiting on it
-    CEB$L_WQBL = 12, 0, 32, 0 %,
+    CEB$L_CEBFL = 0, 0, 32, 1 %,  ! all clusters
+    CEB$L_CEBBL = 4, 0, 32, 1 %,
+    CEB$L_WQFL = 8, 0, 32, 1 %,  ! processes waiting on it
+    CEB$L_WQBL = 12, 0, 32, 1 %,
     CEB$L_EFC = 16, 0, 32, 0 %,  ! the flags
     CEB$L_REFC = 20, 0, 32, 0 %,  ! processes associated
     CEB$T_EFCNAM = 24, 0, 0, 0 %;  ! name, .ASCIC, 15 characters
@@ -283,8 +283,8 @@ MACRO
 LITERAL
     GSD$K_LENGTH = 80;  ! without them
 MACRO
-    GSD$L_GSDFL = 0, 0, 32, 0 %,  ! MMG$GQ_GSDHD's queue, or 0 once $DGBLSC took it off
-    GSD$L_GSDBL = 4, 0, 32, 0 %,
+    GSD$L_GSDFL = 0, 0, 32, 1 %,  ! MMG$GQ_GSDHD's queue, or 0 once $DGBLSC took it off
+    GSD$L_GSDBL = 4, 0, 32, 1 %,
     GSD$L_SIZE = 8, 0, 32, 0 %,  ! its size, as allocated
     GSD$L_REFCNT = 12, 0, 32, 0 %,  ! PTEs that map its pages
     GSD$L_FLAGS = 16, 0, 32, 0 %,  ! SEC$M_WRT, SEC$M_PERM and SEC$M_SYSGBL
@@ -300,8 +300,8 @@ LITERAL
     LNMB$K_LENGTH = 16,  ! past that, the strings
     LNMB$M_NODELETE = 1;  ! $DELLNM can't delete it, $CRELNM and $CRELNT can't replace it
 MACRO
-    LNMB$L_FLINK = 0, 0, 32, 0 %,  ! the table
-    LNMB$L_BLINK = 4, 0, 32, 0 %,
+    LNMB$L_FLINK = 0, 0, 32, 1 %,  ! the table
+    LNMB$L_BLINK = 4, 0, 32, 1 %,
     LNMB$W_SIZE = 8, 0, 16, 0 %,  ! its size, as allocated
     LNMB$B_FLAGS = 10, 0, 8, 0 %,  ! LNMB$M_
     LNMB$L_LNMTH = 12, 0, 32, 0 %,  ! a table's header, else 0
@@ -315,8 +315,8 @@ LITERAL
 MACRO
     LNMTH$L_FLINK = 0, 0, 32, 0 %,  ! its names: LNMBs
     LNMTH$L_BLINK = 4, 0, 32, 0 %,
-    LNMTH$L_NAME = 8, 0, 32, 0 %,  ! its LNMB, in a directory
-    LNMTH$L_PARENT = 12, 0, 32, 0 %,  ! its parent table's header, 0 for a directory
+    LNMTH$L_NAME = 8, 0, 32, 1 %,  ! its LNMB, in a directory
+    LNMTH$L_PARENT = 12, 0, 32, 1 %,  ! its parent table's header, 0 for a directory
     LNMTH$L_OWNER = 16, 0, 32, 0 %,  ! a shareable table's owner, a UIC
     LNMTH$W_PROT = 20, 0, 16, 0 %,  ! and its protection mask, as a file's: R, W, C (make a table under it), D
     LNMTH$B_FLAGS = 22, 0, 8, 0 %;  ! LNMTH$M_
@@ -330,13 +330,13 @@ LITERAL
     TQE$C_SSSNGL = 3,  ! a driver's: JSBs TQE$L_AST with R5 = the entry, its own, at IPL$_SYNCH
     DYN$C_TQE = 15;  ! TQE$B_TYPE
 MACRO
-    TQE$L_TQFL = 0, 0, 32, 0 %,  ! timer queue
-    TQE$L_TQBL = 4, 0, 32, 0 %,
+    TQE$L_TQFL = 0, 0, 32, 1 %,  ! timer queue
+    TQE$L_TQBL = 4, 0, 32, 1 %,
     TQE$W_SIZE = 8, 0, 16, 0 %,
     TQE$B_TYPE = 10, 0, 8, 0 %,
     TQE$B_RQTYPE = 11, 0, 8, 0 %,  ! TQE$C_
     TQE$L_PID = 12, 0, 32, 0 %,  ! the process it is for
-    TQE$L_AST = 16, 0, 32, 0 %,  ! $SETIMR's AST routine, or 0
+    TQE$L_AST = 16, 0, 32, 1 %,  ! $SETIMR's AST routine, or 0
     TQE$L_ASTPRM = 20, 0, 32, 0 %,  ! $SETIMR's reqidt, the AST's parameter
     TQE$Q_TIME = 24, 0, 64, 0 %,  ! when it is due
     TQE$Q_DELTA = 32, 0, 64, 0 %,  ! a repeating $SCHDWK's interval
@@ -348,15 +348,15 @@ LITERAL
     ACB$K_LENGTH = 32,
     DYN$C_ACB = 2;  ! ACB$B_TYPE
 MACRO
-    ACB$L_ASTQFL = 0, 0, 32, 0 %,  ! the AST queue
-    ACB$L_ASTQBL = 4, 0, 32, 0 %,
+    ACB$L_ASTQFL = 0, 0, 32, 1 %,  ! the AST queue
+    ACB$L_ASTQBL = 4, 0, 32, 1 %,
     ACB$W_SIZE = 8, 0, 16, 0 %,
     ACB$B_TYPE = 10, 0, 8, 0 %,
     ACB$B_RMOD = 11, 0, 8, 0 %,  ! the access mode the AST is for
     ACB$L_PID = 12, 0, 32, 0 %,  ! the process it is for
-    ACB$L_AST = 16, 0, 32, 0 %,  ! the AST routine, called in that mode
+    ACB$L_AST = 16, 0, 32, 1 %,  ! the AST routine, called in that mode
     ACB$L_ASTPRM = 20, 0, 32, 0 %,  ! its parameter
-    ACB$L_KAST = 24, 0, 32, 0 %;  ! or the executive's routine, for a kernel mode AST: JSB'd with R4 = the PCB, R5 = the ACB, which it frees, at IPL$_SYNCH
+    ACB$L_KAST = 24, 0, 32, 1 %;  ! or the executive's routine, for a kernel mode AST: JSB'd with R4 = the PCB, R5 = the ACB, which it frees, at IPL$_SYNCH
 
 ! $VCBDEF
 LITERAL
@@ -390,11 +390,11 @@ LITERAL
     DDB$K_LENGTH = 32,
     DYN$C_DDB = 6;  ! DDB$B_TYPE
 MACRO
-    DDB$L_LINK = 0, 0, 32, 0 %,  ! the next DDB, or 0
-    DDB$L_UCB = 4, 0, 32, 0 %,  ! its first unit's UCB, the others after it by UCB$L_LINK, by number
+    DDB$L_LINK = 0, 0, 32, 1 %,  ! the next DDB, or 0
+    DDB$L_UCB = 4, 0, 32, 1 %,  ! its first unit's UCB, the others after it by UCB$L_LINK, by number
     DDB$W_SIZE = 8, 0, 16, 0 %,
     DDB$B_TYPE = 10, 0, 8, 0 %,  ! DYN$C_DDB
-    DDB$L_DDT = 12, 0, 32, 0 %,  ! its units' driver's dispatch table
+    DDB$L_DDT = 12, 0, 32, 1 %,  ! its units' driver's dispatch table
     DDB$T_NAME = 16, 0, 0, 0 %;  ! its name, DDC, .ASCIC, 15 characters at most: a unit's is it and the unit's number
 
 ! $DDTDEF
@@ -437,14 +437,14 @@ LITERAL
     UCB$M_DELMBX = 2,
     DYN$C_UCB = 16;  ! UCB$B_TYPE
 MACRO
-    UCB$L_IOQFL = 0, 0, 32, 0 %,  ! IRPs waiting for the device
-    UCB$L_IOQBL = 4, 0, 32, 0 %,
+    UCB$L_IOQFL = 0, 0, 32, 1 %,  ! IRPs waiting for the device
+    UCB$L_IOQBL = 4, 0, 32, 1 %,
     UCB$W_SIZE = 8, 0, 16, 0 %,  ! the UCB's size, a template's its clones'
     UCB$B_TYPE = 10, 0, 8, 0 %,  ! DYN$C_UCB
-    UCB$L_DDB = 12, 0, 32, 0 %,  ! its controller's DDB, which has the device's name but the unit, and its driver
-    UCB$L_LINK = 16, 0, 32, 0 %,  ! the DDB's next unit, by number, or 0
-    UCB$L_DDT = 20, 0, 32, 0 %,  ! its driver's dispatch table, the DDB's
-    UCB$L_VCB = 24, 0, 32, 0 %,  ! a disk's VCB, or 0
+    UCB$L_DDB = 12, 0, 32, 1 %,  ! its controller's DDB, which has the device's name but the unit, and its driver
+    UCB$L_LINK = 16, 0, 32, 1 %,  ! the DDB's next unit, by number, or 0
+    UCB$L_DDT = 20, 0, 32, 1 %,  ! its driver's dispatch table, the DDB's
+    UCB$L_VCB = 24, 0, 32, 1 %,  ! a disk's VCB, or 0
     UCB$L_PID = 28, 0, 32, 0 %,  ! its owner: a terminal's, the process created on it, which a hangup deletes, or 0
     UCB$L_DEVCHAR = 32, 0, 32, 0 %,  ! DEV$ bits, $GETDVI's DVI$_DEVCHAR
     UCB$L_DEVCHAR2 = 36, 0, 32, 0 %,  ! and DEVCHAR2, DVI$_DEVCHAR2
@@ -506,16 +506,16 @@ LITERAL
     IRP$V_STARTED = 1,  ! the terminal has written its prompt
     DYN$C_IRP = 10;  ! IRP$B_TYPE
 MACRO
-    IRP$L_IOQFL = 0, 0, 32, 0 %,  ! the UCB's queue, then the AST queue
-    IRP$L_IOQBL = 4, 0, 32, 0 %,
+    IRP$L_IOQFL = 0, 0, 32, 1 %,  ! the UCB's queue, then the AST queue
+    IRP$L_IOQBL = 4, 0, 32, 1 %,
     IRP$W_SIZE = 8, 0, 16, 0 %,  ! with the prompt and data
     IRP$B_TYPE = 10, 0, 8, 0 %,
     IRP$B_RMOD = 11, 0, 8, 0 %,  ! the AST's mode: kernel, then the caller's
     IRP$L_PID = 12, 0, 32, 0 %,  ! the process it is for
     IRP$L_AST = 16, 0, 32, 0 %,  ! the caller's AST routine, or 0
     IRP$L_ASTPRM = 20, 0, 32, 0 %,  ! its parameter
-    IRP$L_KAST = 24, 0, 32, 0 %,  ! IOC$POST once done, then 0
-    IRP$L_UCB = 28, 0, 32, 0 %,  ! the device
+    IRP$L_KAST = 24, 0, 32, 1 %,  ! IOC$POST once done, then 0
+    IRP$L_UCB = 28, 0, 32, 1 %,  ! the device
     IRP$L_FUNC = 32, 0, 32, 0 %,  ! the function code and its modifiers
     IRP$L_EFN = 36, 0, 32, 0 %,  ! the event flag
     IRP$L_IOSB = 40, 0, 32, 0 %,  ! the caller's I/O status block, or 0
@@ -527,7 +527,7 @@ MACRO
     IRP$L_BUFADR = 60, 0, 32, 0 %,  ! the caller's buffer, p1
     IRP$L_BCNT = 64, 0, 32, 0 %,  ! its size, p2
     IRP$L_PROMPT = 68, 0, 32, 0 %,  ! a read's prompt's size: it is past IRP$K_LENGTH, and the data past it
-    IRP$L_MEDIA = 72, 0, 32, 0 %,  ! a disk's LBN, p3
+    IRP$L_MEDIA = 72, 0, 32, 1 %,  ! a disk's LBN, p3
     IRP$L_POST = 76, 0, 32, 0 %,  ! a routine IOC$POST JSBs, R6 the IRP, in its process, or 0
     IRP$L_BOFF = 80, 0, 32, 0 %,  ! the bytes charged to its process's BYTCNT
     IRP$B_QUOTA = 84, 0, 8, 0 %;  ! what it is charged to: IRP$K_BIO, IRP$K_DIO, or 0 for nothing

@@ -589,19 +589,19 @@ MACRO
     FAB$B_FAC = 22, 0, 8, 0 %,  ! access wanted: FAB$M_PUT to FAB$M_BRO
     FAB$B_SHR = 23, 0, 8, 0 %,  ! access others may have: FAB$M_SHRPUT to FAB$M_NQL
     FAB$L_CTX = 24, 0, 32, 0 %,  ! the caller's
-    FAB$B_RTV = 28, 0, 8, 0 %,  ! retrieval window size
+    FAB$B_RTV = 28, 0, 8, 1 %,  ! retrieval window size
     FAB$B_ORG = 29, 0, 8, 0 %,  ! organization: FAB$C_SEQ, REL or IDX
     FAB$B_RAT = 30, 0, 8, 0 %,  ! record attributes: FAB$M_FTN to FAB$M_BLK
     FAB$B_RFM = 31, 0, 8, 0 %,  ! record format: FAB$C_UDF to FAB$C_STMCR
     FAB$B_JOURNAL = 32, 0, 8, 0 %,
-    FAB$L_XAB = 36, 0, 32, 0 %,  ! the first XAB, or 0
-    FAB$L_NAM = 40, 0, 32, 0 %,  ! a NAM block, or 0
-    FAB$L_FNA = 44, 0, 32, 0 %,  ! the file specification
-    FAB$L_DNA = 48, 0, 32, 0 %,  ! the default one
+    FAB$L_XAB = 36, 0, 32, 1 %,  ! the first XAB, or 0
+    FAB$L_NAM = 40, 0, 32, 1 %,  ! a NAM block, or 0
+    FAB$L_FNA = 44, 0, 32, 1 %,  ! the file specification
+    FAB$L_DNA = 48, 0, 32, 1 %,  ! the default one
     FAB$B_FNS = 52, 0, 8, 0 %,  ! their lengths
     FAB$B_DNS = 53, 0, 8, 0 %,
     FAB$W_MRS = 54, 0, 16, 0 %,  ! maximum record size, 0 for any
-    FAB$L_MRN = 56, 0, 32, 0 %,  ! maximum record number of a relative file
+    FAB$L_MRN = 56, 0, 32, 1 %,  ! maximum record number of a relative file
     FAB$W_BLS = 60, 0, 16, 0 %,  ! block size, magnetic tape
     FAB$B_BKS = 62, 0, 8, 0 %,  ! bucket size, blocks
     FAB$B_FSZ = 63, 0, 8, 0 %,  ! VFC header size
@@ -694,19 +694,19 @@ MACRO
     RAB$B_TMO = 31, 0, 8, 0 %,  ! timeout, seconds
     RAB$W_USZ = 32, 0, 16, 0 %,  ! the user's buffer: its size
     RAB$W_RSZ = 34, 0, 16, 0 %,  ! the record's size
-    RAB$L_UBF = 36, 0, 32, 0 %,  ! the user's buffer
-    RAB$L_RBF = 40, 0, 32, 0 %,  ! where $GET put the record, what $PUT writes
-    RAB$L_RHB = 44, 0, 32, 0 %,  ! a VFC record's fixed control header
-    RAB$L_KBF = 48, 0, 32, 0 %,  ! the key, or relative record number
-    RAB$L_PBF = 48, 0, 32, 0 %,  ! the prompt, for terminals
+    RAB$L_UBF = 36, 0, 32, 1 %,  ! the user's buffer
+    RAB$L_RBF = 40, 0, 32, 1 %,  ! where $GET put the record, what $PUT writes
+    RAB$L_RHB = 44, 0, 32, 1 %,  ! a VFC record's fixed control header
+    RAB$L_KBF = 48, 0, 32, 1 %,  ! the key, or relative record number
+    RAB$L_PBF = 48, 0, 32, 1 %,  ! the prompt, for terminals
     RAB$B_KSZ = 52, 0, 8, 0 %,  ! the key's size
     RAB$B_PSZ = 52, 0, 8, 0 %,
     RAB$B_KRF = 53, 0, 8, 0 %,  ! key of reference
-    RAB$B_MBF = 54, 0, 8, 0 %,  ! multibuffer count
+    RAB$B_MBF = 54, 0, 8, 1 %,  ! multibuffer count
     RAB$B_MBC = 55, 0, 8, 0 %,  ! multiblock count
     RAB$L_BKT = 56, 0, 32, 0 %,  ! bucket or VBN, for $READ, $WRITE, $SPACE; a relative file's record number
-    RAB$L_FAB = 60, 0, 32, 0 %,  ! the FAB $CONNECT connects to
-    RAB$L_XAB = 64, 0, 32, 0 %;
+    RAB$L_FAB = 60, 0, 32, 1 %,  ! the FAB $CONNECT connects to
+    RAB$L_XAB = 64, 0, 32, 1 %;
 
 ! $NAMDEF
 LITERAL
@@ -719,10 +719,10 @@ MACRO
     NAM$B_BLN = 1, 0, 8, 0 %,
     NAM$B_RSS = 2, 0, 8, 0 %,  ! the resultant string area: size
     NAM$B_RSL = 3, 0, 8, 0 %,  ! the string's length
-    NAM$L_RSA = 4, 0, 32, 0 %,  ! its address
+    NAM$L_RSA = 4, 0, 32, 1 %,  ! its address
     NAM$B_ESS = 10, 0, 8, 0 %,  ! the expanded string area: size
     NAM$B_ESL = 11, 0, 8, 0 %,
-    NAM$L_ESA = 12, 0, 32, 0 %,
+    NAM$L_ESA = 12, 0, 32, 1 %,
     NAM$W_FID = 36, 0, 16, 0 %,  ! file ID, 3 words
     NAM$W_DID = 42, 0, 16, 0 %,  ! directory ID, 3 words
     NAM$L_WCC = 48, 0, 32, 0 %,  ! $SEARCH's context
@@ -732,11 +732,11 @@ MACRO
     NAM$B_NAME = 59, 0, 8, 0 %,
     NAM$B_TYPE = 60, 0, 8, 0 %,
     NAM$B_VER = 61, 0, 8, 0 %,
-    NAM$L_DEV = 68, 0, 32, 0 %,  ! and their addresses
-    NAM$L_DIR = 72, 0, 32, 0 %,
-    NAM$L_NAME = 76, 0, 32, 0 %,
-    NAM$L_TYPE = 80, 0, 32, 0 %,
-    NAM$L_VER = 84, 0, 32, 0 %;
+    NAM$L_DEV = 68, 0, 32, 1 %,  ! and their addresses
+    NAM$L_DIR = 72, 0, 32, 1 %,
+    NAM$L_NAME = 76, 0, 32, 1 %,
+    NAM$L_TYPE = 80, 0, 32, 1 %,
+    NAM$L_VER = 84, 0, 32, 1 %;
 
 ! $DVIDEF
 LITERAL
@@ -1047,7 +1047,7 @@ LITERAL
 MACRO
     XAB$B_COD = 0, 0, 8, 0 %,  ! its type: XAB$C_KEY, ALL, SUM, FHC, DAT, RDT, PRO
     XAB$B_BLN = 1, 0, 8, 0 %,  ! its size
-    XAB$L_NXT = 4, 0, 32, 0 %;  ! the next XAB, or 0
+    XAB$L_NXT = 4, 0, 32, 1 %;  ! the next XAB, or 0
 
 ! $XABKEYDEF
 LITERAL
@@ -1109,7 +1109,7 @@ MACRO
     XAB$W_POS0 = 30, 0, 16, 0 %,
     XAB$B_SIZ = 46, 0, 8, 0 %,  ! segment sizes, 8 bytes
     XAB$B_SIZ0 = 46, 0, 8, 0 %,
-    XAB$L_KNM = 56, 0, 32, 0 %,  ! the key's name, 32 bytes, or 0
+    XAB$L_KNM = 56, 0, 32, 1 %,  ! the key's name, 32 bytes, or 0
     XAB$L_DVB = 60, 0, 32, 0 %,  ! first data bucket's VBN
     XAB$B_TYP = 64, 0, 8, 0 %,  ! segment types, 8 bytes
     XAB$B_TYP0 = 64, 0, 8, 0 %,
@@ -1181,10 +1181,10 @@ LITERAL
     XAB$C_DATLEN_V2 = 36;
 MACRO
     XAB$W_RVN = 8, 0, 16, 0 %,  ! revision number
-    XAB$Q_RDT = 12, 0, 64, 0 %,  ! revised
-    XAB$Q_CDT = 20, 0, 64, 0 %,  ! created
-    XAB$Q_EDT = 28, 0, 64, 0 %,  ! expires
-    XAB$Q_BDT = 36, 0, 64, 0 %;  ! backed up
+    XAB$Q_RDT = 12, 0, 64, 1 %,  ! revised
+    XAB$Q_CDT = 20, 0, 64, 1 %,  ! created
+    XAB$Q_EDT = 28, 0, 64, 1 %,  ! expires
+    XAB$Q_BDT = 36, 0, 64, 1 %;  ! backed up
 
 ! $XABRDTDEF
 LITERAL
@@ -1228,7 +1228,7 @@ MACRO
     DSC64$W_MBO = 0, 0, 16, 0 %,  ! 1
     DSC64$B_DTYPE = 2, 0, 8, 0 %,
     DSC64$B_CLASS = 3, 0, 8, 0 %,
-    DSC64$L_MBMO = 4, 0, 32, 0 %,  ! -1
+    DSC64$L_MBMO = 4, 0, 32, 1 %,  ! -1
     DSC64$Q_LENGTH = 8, 0, 64, 0 %,
     DSC64$PQ_POINTER = 16, 0, 64, 1 %;
 
@@ -1244,12 +1244,12 @@ MACRO
     ILE3$PS_RETLEN_ADDR = 8, 0, 32, 1 %,
     ILEA_64$W_MBO = 0, 0, 16, 0 %,  ! 1
     ILEA_64$W_CODE = 2, 0, 16, 0 %,
-    ILEA_64$L_MBMO = 4, 0, 32, 0 %,  ! -1
+    ILEA_64$L_MBMO = 4, 0, 32, 1 %,  ! -1
     ILEA_64$Q_LENGTH = 8, 0, 64, 0 %,
     ILEA_64$PQ_BUFADDR = 16, 0, 64, 1 %,
     ILEB_64$W_MBO = 0, 0, 16, 0 %,
     ILEB_64$W_CODE = 2, 0, 16, 0 %,
-    ILEB_64$L_MBMO = 4, 0, 32, 0 %,
+    ILEB_64$L_MBMO = 4, 0, 32, 1 %,
     ILEB_64$Q_LENGTH = 8, 0, 64, 0 %,
     ILEB_64$PQ_BUFADDR = 16, 0, 64, 1 %,
     ILEB_64$PQ_RETLEN_ADDR = 24, 0, 64, 1 %;
@@ -1258,15 +1258,15 @@ MACRO
 LITERAL
     CHF$S_MCH = 200;
 MACRO
-    CHF$L_SIGARGLST = 4, 0, 32, 0 %,  ! a handler's first argument
-    CHF$L_MCHARGLST = 8, 0, 32, 0 %,  ! its second
-    CHF$L_SIG_ARGS = 0, 0, 32, 0 %,  ! the signal array's count
-    CHF$L_SIG_NAME = 4, 0, 32, 0 %,  ! the condition
-    CHF$L_SIG_ARG1 = 8, 0, 32, 0 %,
-    CHF64$L_SIG_ARGS = 0, 0, 32, 0 %,  ! the 64-bit one's count
-    CHF64$L_SIGNAL64 = 4, 0, 32, 0 %,  ! SS$_SIGNAL64
-    CHF64$Q_SIG_NAME = 8, 0, 64, 0 %,  ! the condition
-    CHF64$Q_SIG_ARG1 = 16, 0, 64, 0 %,
+    CHF$L_SIGARGLST = 4, 0, 32, 1 %,  ! a handler's first argument
+    CHF$L_MCHARGLST = 8, 0, 32, 1 %,  ! its second
+    CHF$L_SIG_ARGS = 0, 0, 32, 1 %,  ! the signal array's count
+    CHF$L_SIG_NAME = 4, 0, 32, 1 %,  ! the condition
+    CHF$L_SIG_ARG1 = 8, 0, 32, 1 %,
+    CHF64$L_SIG_ARGS = 0, 0, 32, 1 %,  ! the 64-bit one's count
+    CHF64$L_SIGNAL64 = 4, 0, 32, 1 %,  ! SS$_SIGNAL64
+    CHF64$Q_SIG_NAME = 8, 0, 64, 1 %,  ! the condition
+    CHF64$Q_SIG_ARG1 = 16, 0, 64, 1 %,
     CHF$IS_MCH_ARGS = 0, 0, 32, 1 %,  ! the quadwords after the first, 24
     CHF$IS_MCH_FLAGS = 4, 0, 32, 1 %,
     CHF$PH_MCH_FRAME = 8, 0, 64, 1 %,  ! the establisher's FP
@@ -1872,7 +1872,7 @@ MACRO
     LKI$L_SYSID = 8, 0, 32, 0 %,  ! 0: one node
     LKI$B_RQMODE = 12, 0, 8, 0 %,
     LKI$B_GRMODE = 13, 0, 8, 0 %,
-    LKI$B_QUEUE = 14, 0, 8, 0 %,
+    LKI$B_QUEUE = 14, 0, 8, 1 %,
     LKI$L_REMLKID = 16, 0, 32, 0 %,  ! 0
     LKI$L_REMSYSID = 20, 0, 32, 0 %;  ! 0
 

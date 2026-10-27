@@ -57,8 +57,8 @@ note = "SYS$LIBRARY on OpenVMS Alpha; $INIT_STATE needs t8y:/host/vbliss#declara
 [[feature]]
 id = "field-signs"
 title = "Field signs as DEC's STARLET and LIB have them: CHF$L_SIG_NAME is 4,0,32,1, PCB$L_STS 128,0,32,0"
-status = "todo"
-note = "bliss64.md probe 14, answered from STARLET.R64 and LIB.R64 on the oracle's disk: SDL marks some $L_ fields signed. vdefs writes 0 for every $L_ field, since the macro libraries don't say"
+status = "done"
+note = "bliss64.md probe 14: SDL marks links, addresses, condition values and times signed, and the macro libraries don't say. vdefs's SIGNED table names the 75 fields of vaxpunk's libraries DEC's sign-extend; vaxpunk's 32-bit addresses are below 2 GB, so the sign changes no address"
 +++
 
 On VMS, definitions such as `$PCBDEF` or `SS$_NORMAL` come from one
