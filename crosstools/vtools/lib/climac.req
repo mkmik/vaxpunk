@@ -1,0 +1,64 @@
+! CLIMAC: macros for VAX/VMS's first command interface, the request
+! descriptors a utility passed the CLI to get its parameters and
+! qualifiers, written for vaxpunk after VAX/VMS's description of them.
+! OpenVMS Alpha's STARLET has no longer the request codes and offsets
+! (CLI$K_, CLI$C_, CLI$V_) these name, and neither has vaxpunk's: a
+! program using them declares them. CLI$PRESENT and CLI$GET_VALUE are the
+! interface to use.
+!
+!     DESC : $CLIREQDESC(RQTYPE = GETQUAL, QUALST = QUALS, RQFLGS = (...))
+!     QUALS : $CLIQUALDESC(QDCODE = OUTPUT, SETLST = (2)), END : $CLIQUALEND;
+!     $CLIQUALCODES(COPY, OUTPUT, LOG);
+
+KEYWORDMACRO
+    ! A request: its type and parameter bit, flags, the routines for an
+    ! error, a parameter present and absent, and its qualifiers.
+    $CLIREQDESC(RQTYPE, BITNUM = 0, RQFLGS, ERRACT = 0, PRSACT = 0, ABSACT = 0,
+            QUALST = 0) =
+        BLOCK[CLI$C_REQDESC, BYTE]
+        INITIAL(
+            BYTE(%NAME('CLI$K_', RQTYPE)),
+            BYTE(BITNUM),
+            BYTE($$CLI_BITS('CLI$V_', RQFLGS)),
+            BYTE(0),
+            LONG(ERRACT),
+            LONG(0, 0),
+            LONG(PRSACT),
+            LONG(ABSACT),
+            LONG(QUALST)) %,
+
+    ! A qualifier, 23 bytes, its size first: its code, flags, the
+    ! routines for it true and false, and the bits of a utility's flags,
+    ! 0 to 7, it tests, sets and clears.
+    $CLIQUALDESC(QDCODE, QDFLGS, TRUACT = 0, FLSACT = 0, TSTLST, SETLST, CLRLST) =
+        BLOCK[23, BYTE] ALIGN(0)
+        INITIAL(
+            BYTE(23),
+            BYTE(%NAME('CLI$K_', $$CLI_UTILITY, QDCODE)),
+            BYTE($$CLI_BITS('CLI$V_', QDFLGS)),
+            BYTE(0),
+            LONG(0, 0),
+            LONG(TRUACT),
+            LONG(FLSACT),
+            BYTE($$CLI_LIST(TSTLST)),
+            BYTE($$CLI_LIST(SETLST)),
+            BYTE($$CLI_LIST(CLRLST))) %;
+
+MACRO
+    ! The end of a list of qualifiers.
+    $CLIQUALEND = BYTE ALIGN(0) INITIAL(0) %,
+
+    ! The qualifier codes of utility UTIL, CLI$K_UTIL_name, from the CLI.
+    $CLIQUALCODES(UTIL) =
+        MACRO $$CLI_UTILITY = %STRING(UTIL, '_') %QUOTE %;
+        EXTERNAL LITERAL $$CLI_CODE(%REMAINING); %,
+    $$CLI_CODE[CODE] = %NAME('CLI$K_', $$CLI_UTILITY, CODE) %,
+
+    ! A list of flags, NAME or (NAME, ...), as the mask of PREFIX bits.
+    $$CLI_BITS(PREFIX, LIST) =
+        %IF %NULL(LIST) %THEN 0 %ELSE (0 OR $$CLI_BIT(PREFIX, %REMOVE(LIST))) %FI %,
+    $$CLI_BIT(PREFIX)[ITEM] = 1 ^ %NAME(PREFIX, ITEM) %,
+    ! A list of bit numbers as a byte's bits.
+    $$CLI_LIST(LIST) =
+        %IF %NULL(LIST) %THEN 0 %ELSE (0 OR $$CLI_NUMBER(%REMOVE(LIST))) %FI %,
+    $$CLI_NUMBER[N] = 1 ^ (N) %;

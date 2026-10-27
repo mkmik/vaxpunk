@@ -695,3 +695,36 @@ fn rms_and_helper_macros() {
         }
     }
 }
+
+#[test]
+fn other_requires() {
+    // vaxpunk's TPAMAC, ARCH_DEFS and CLIMAC: a LIB$TPARSE state table's
+    // transitions packed in _LIB$STATE$, each a word of type and flags
+    // and what the flags say follows; the keywords' text in _LIB$KEY1$.
+    let out = with_lib(
+        "MODULE T (MAIN = M) =\nBEGIN\nLIBRARY 'SYS$LIBRARY:STARLET';\n\
+         REQUIRE 'SYS$LIBRARY:TPAMAC';\nREQUIRE 'SYS$LIBRARY:ARCH_DEFS';\n\
+         REQUIRE 'SYS$LIBRARY:CLIMAC';\nOWN OPTS;\nFORWARD ROUTINE ACT;\n\
+         $INIT_STATE(STB, KTB);\n\
+         $STATE(, ('HELLO',,, 1, OPTS), ('BYE', NEXT, ACT,,, 7), ((SUB), TPA$_EXIT));\n\
+         $STATE(NEXT, ('X'), (TPA$_EOS, TPA$_EXIT));\n$STATE(SUB, (TPA$_DECIMAL, TPA$_EXIT));\n\
+         LITERAL CLI$C_REQDESC = 28, CLI$K_GETQUAL = 1;\n\
+         OWN DESC : $CLIREQDESC(RQTYPE = GETQUAL);\n\
+         ROUTINE ACT = 1;\nROUTINE M = %IF ALPHA AND ARM64 AND NOT VAX %THEN 1 %ELSE 0 %FI;\n\
+         END\nELUDOM\n",
+    );
+    assert!(out.diags.is_empty(), "{:?}", out.diags);
+    let asm = out.asm.unwrap();
+    for want in [
+        // HELLO: keyword 0 with an address and a mask.
+        "WORD_STB::\n$$TPA_WORD:\n        .WORD  24832\n$$TPA_ITEM:\n        .LONG  OPTS\n",
+        // BYE: keyword 1, a parameter, an action and a target.
+        "        .WORD  37633\n$$TPA_ITEM.2:\n        .BYTE  1\n$$TPA_ITEM.3:\n        .LONG  7\n",
+        // (SUB): the state's last, a subexpression, and a target.
+        "        .WORD  7672\n$$TPA_ITEM.6:\n        .LONG  SUB\n",
+        ".BYTE   72, 69, 76, 76, 79\n        .BYTE  255\n",
+    ] {
+        let want = want.replace("WORD_STB", "STB");
+        assert!(asm.contains(&want), "{want}: {asm}");
+    }
+}

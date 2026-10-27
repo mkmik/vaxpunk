@@ -51,8 +51,8 @@ note = "Waits for t8y:/host/vbliss#declaration-edges (a need would be a cycle). 
 [[feature]]
 id = "other-requires"
 title = "TPAMAC.REQ for LIB$TPARSE's state tables, CLIMAC.REQ and ARCH_DEFS.REQ"
-status = "todo"
-note = "SYS$LIBRARY on OpenVMS Alpha; $INIT_STATE needs t8y:/host/vbliss#declaration-edges, and LIB$TPARSE isn't in t8y:/rtl/librtl yet"
+status = "done"
+note = "lib/tpamac.req, arch_defs.req and climac.req, written for vaxpunk, and $TPADEF in starlet.mlb. TPAMAC makes VAX-format tables of 32-bit addresses for a LIB$TPARSE that t8y:/rtl/librtl doesn't have yet; ARCH_DEFS says Alpha, and ARM64; CLIMAC's request codes went from STARLET with OpenVMS Alpha, so a program declares them (the language test's other_requires)"
 
 [[feature]]
 id = "field-signs"
