@@ -1,0 +1,7 @@
+MODULE LANG (MAIN = M, LANGUAGE(COMMON)) =
+BEGIN
+! LANGUAGE(COMMON): what it says of constructs outside common BLISS.
+OWN X : LONG;
+ROUTINE M = (X = %X'FF'; .X<0, 8>);
+END
+ELUDOM

@@ -1,0 +1,56 @@
+                                Source Listing                  DD-MMM-YYYY HH:MM:SS  BLISS-64E V1.11-007-48G4L         Page 1
+                                                                DD-MMM-YYYY HH:MM:SS  SYS$SYSDEVICE:[ORACLE]CHKLW.B64;1
+
+    0	      1 ! BLISS: /CHECK=LONGWORD
+    0	      2 MODULE CHKLW (MAIN = M) =
+    0	      3 BEGIN
+    1	      4 ! /CHECK=LONGWORD: 64-bit values into 32-bit fields and actuals.
+    1	      5 EXTERNAL ROUTINE ER (A : LONG UNSIGNED) : NOVALUE;
+    1	      6 OWN
+    1	      7     LS : LONG SIGNED,
+    1	      8     LU : LONG UNSIGNED,
+    1	      9     LL : LONG,
+		.............1 
+%BLS64-W-TEXT, (1) The LONGWORD attribute defaults to UNSIGNED
+
+    1	     10     BB : BYTE,
+    1	     11     Q;
+    1	     12 ROUTINE R (A : LONG) = .A;
+    1	     13 ROUTINE M =
+    1	     14     BEGIN
+    2	     15     LS = .Q;
+		.......1     
+%BLS64-I-TEXT, (1) Storing 64 bits in a field of less than 64 bits
+
+    2	     16     LU = .Q + 1;
+		.......1         
+%BLS64-I-TEXT, (1) Storing 64 bits in a field of less than 64 bits
+
+    2	     17     BB = .Q;
+		.......1     
+%BLS64-I-TEXT, (1) Storing 64 bits in a field of less than 64 bits
+
+    2	     18     LS = 1;
+    2	     19     LS = .LU;
+    2	     20     LS = .LS + 1;
+    2	     21     ER(.Q);
+		.......1    
+%BLS64-I-TEXT, (1) Passing a 64-bit parameter
+
+    2	     22     R(.Q);
+		......1    
+%BLS64-I-TEXT, (1) Passing a 64-bit parameter
+
+    2	     23     Q = .LS;
+    2	     24     1
+    2	     25     END;
+    1	     26 END
+    1	     27 ELUDOM
+
+
+                                Source Listing                  DD-MMM-YYYY HH:MM:SS  BLISS-64E V1.11-007-48G4L         Page 2
+                                Source Listing                  DD-MMM-YYYY HH:MM:SS  SYS$SYSDEVICE:[ORACLE]CHKLW.B64;1
+
+COMMAND LINE:
+
+BLISS/A64/LIST/SOURCE_LIST=(EXPAND_MACROS,REQUIRE)/NOMACHINE_CODE/CHECK=LONGWORD CHKLW.B64

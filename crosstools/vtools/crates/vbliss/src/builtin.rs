@@ -1196,6 +1196,9 @@ impl Parser<'_> {
             if !known(&name) {
                 return Err(self.error_at(&at, format!("{name} is not a built-in vbliss knows")));
             }
+            if !matches!(name.as_str(), "ACTUALCOUNT" | "ACTUALPARAMETER") {
+                self.transport(&name, &at, true);
+            }
             // R2 to R11 in a routine are its register data, as `REGISTER
             // R2 = 2` declares it (docs/bliss64.md, *Registers*).
             if register(&name).is_some_and(|r| r >= 2) && self.slots_open() {

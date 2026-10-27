@@ -1,0 +1,17 @@
+! BLISS: /CHECK=SHORT_ADDRESS
+MODULE CHKSA (MAIN = M) =
+BEGIN
+! /CHECK=SHORT_ADDRESS: addresses in less than 64 bits.
+OWN X, P : LONG, Q : WORD, R;
+ROUTINE M =
+    BEGIN
+    P = X;
+    Q = X;
+    R = X;
+    R = .(.P);
+    .P = 1;
+    R = ..P;
+    1
+    END;
+END
+ELUDOM

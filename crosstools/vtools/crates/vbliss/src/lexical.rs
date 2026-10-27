@@ -952,6 +952,7 @@ impl Parser<'_> {
                         self.error_at(at, format!("Missing quoted string following {name}"))
                     );
                 };
+                self.transport(&name, &l, true);
                 let fmt = crate::float::Format::of(&name).unwrap();
                 let text = String::from_utf8_lossy(&s).into_owned();
                 let Some((bits, fit)) = crate::float::literal(fmt, &text) else {
@@ -988,6 +989,7 @@ impl Parser<'_> {
                 // BLISS-32's string encodings, which BLISSA64 has too
                 // (LRM B.2.1; 4.3, VAX packed decimal).
                 let (l, _) = self.scan()?;
+                self.transport(&name, &l, name == "%P");
                 let Tok::Str(s) = l.tok else {
                     return Err(
                         self.error_at(at, format!("Missing quoted string following {name}"))
@@ -1001,6 +1003,9 @@ impl Parser<'_> {
             }
             "%B" | "%O" | "%X" | "%DECIMAL" | "%C" | "%ASCII" | "%ASCIZ" | "%ASCIC" => {
                 let (l, _) = self.scan()?;
+                if name == "%ASCIC" {
+                    self.transport(&name, &l, true);
+                }
                 let Tok::Str(s) = l.tok.clone() else {
                     return Err(
                         self.error_at(at, format!("Missing quoted string following {name}"))

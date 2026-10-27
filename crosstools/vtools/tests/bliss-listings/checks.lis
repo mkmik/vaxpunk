@@ -1,0 +1,43 @@
+                                Source Listing                  DD-MMM-YYYY HH:MM:SS  BLISS-64E V1.11-007-48G4L         Page 1
+                                                                DD-MMM-YYYY HH:MM:SS  SYS$SYSDEVICE:[ORACLE]CHECKS.B64;1
+
+    0	      1 ! BLISS: /CHECK=ALL
+    0	      2 MODULE CHECKS (MAIN = M) =
+    0	      3 BEGIN
+    1	      4 ! /CHECK=ALL's messages.
+    1	      5 OWN
+    1	      6     L : LONG,
+		............1 
+%BLS64-W-TEXT, (1) The LONGWORD attribute defaults to UNSIGNED
+
+    1	      7     W : WORD,
+    1	      8     A,
+    1	      9     B : VECTOR[2, BYTE];
+    1	     10 ROUTINE R (P : REF VECTOR[4]) = .P[0];
+    1	     11 ROUTINE M =
+    1	     12     BEGIN
+    2	     13     L = A;
+		........1  
+%BLS64-I-TEXT, (1) Address of variable A in value context; assuming ALIAS attribute
+
+    2	     14     W = .A;
+		......1     
+%BLS64-I-TEXT, (1) Storing 64 bits in a field of less than 64 bits
+
+    2	     15     A = (IF .B THEN B ELSE A);
+		....................1          
+%BLS64-I-TEXT, (1) Address of variable B in value context; assuming ALIAS attribute
+
+    2	     16     R(B);
+    2	     17     1
+    2	     18     END;
+    1	     19 END
+    1	     20 ELUDOM
+
+
+                                Source Listing                  DD-MMM-YYYY HH:MM:SS  BLISS-64E V1.11-007-48G4L         Page 2
+                                Source Listing                  DD-MMM-YYYY HH:MM:SS  SYS$SYSDEVICE:[ORACLE]CHECKS.B64;1
+
+COMMAND LINE:
+
+BLISS/A64/LIST/SOURCE_LIST=(EXPAND_MACROS,REQUIRE)/NOMACHINE_CODE/CHECK=ALL CHECKS.B64

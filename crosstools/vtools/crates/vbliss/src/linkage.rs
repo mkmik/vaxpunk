@@ -225,6 +225,24 @@ impl Parser<'_> {
                 }
                 number = Some(r);
             } else if global {
+                // CHECK_REDECLARE: the linkage's global register again,
+                // which starts a lifetime of its own (RN 2.30).
+                if let Some(l) = self.linkage_now()
+                    && l.globals.iter().any(|(g, _)| *g == name)
+                    && self.switch_on("CHECK_REDECLARE")
+                {
+                    let lname = self
+                        .m
+                        .syms
+                        .iter()
+                        .find(|s| matches!(&s.kind, Kind::Linkage(k) if Rc::ptr_eq(k, &l)))
+                        .map_or(String::new(), |s| s.name.clone());
+                    let at = self.last();
+                    let msg = format!(
+                        "LINKAGE {lname}'s GLOBAL REGISTER {name} is being redeclared locally"
+                    );
+                    self.diag('I', &at, msg);
+                }
                 match number {
                     Some(2..=11) => {}
                     Some(r) => {

@@ -8,6 +8,7 @@
 
 mod arm64;
 mod builtin;
+mod checks;
 mod data;
 mod float;
 mod ir;

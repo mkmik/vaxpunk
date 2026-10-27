@@ -531,3 +531,54 @@ fn qualifiers() {
         "CROSS_REFERENCE not implemented in BLISS-64E"
     );
 }
+
+#[test]
+fn checks() {
+    // What /CHECK finds that the tests/bliss-listings probes don't show,
+    // in BLISSA64's words (oracle CHKAT, CHKRED; CHKSHR crashed GEM).
+    let msgs = |q: &str, src: &str| -> Vec<String> {
+        let mut o = vbliss::Options::default();
+        assert!(o.qualifier(q).unwrap());
+        let out = vbliss::translate(std::path::Path::new("c.b64"), src, &o);
+        assert!(out.error().is_none(), "{:?}", out.error());
+        out.diags.iter().map(|d| d.msg.clone()).collect()
+    };
+    let taken = msgs(
+        "/CHECK=ADDRESS_TAKEN",
+        &module(
+            "OWN O, V : VECTOR[2];",
+            "LOCAL A, B, C : ALIAS, D : VOLATILE, P;\nER(A); A = B; A = (IF .B THEN B ELSE A);\n\
+             IF A THEN P = 1; P = C; P = D; P = A + 4; P = O; P = V; P = V[1];",
+        )
+        .replace("ROUTINE M", "EXTERNAL ROUTINE ER : NOVALUE;\nROUTINE M"),
+    );
+    let want: Vec<String> = ["B", "A", "O", "V"]
+        .iter()
+        .map(|n| format!("Address of variable {n} in value context; assuming ALIAS attribute"))
+        .collect();
+    assert_eq!(taken, want);
+    let redeclared = msgs(
+        "/CHECK=REDECLARE",
+        "MODULE T =\nBEGIN\nOWN X;\nLINKAGE GL = CALL : GLOBAL(G = 5);\n\
+         ROUTINE R : GL = BEGIN GLOBAL REGISTER G = 5; G = 1; 0 END;\n\
+         ROUTINE M = BEGIN LOCAL X; X = 1; BEGIN LOCAL X; X = 2 END; .X END;\nEND\nELUDOM\n",
+    );
+    assert_eq!(
+        redeclared,
+        [
+            "LINKAGE GL's GLOBAL REGISTER G is being redeclared locally",
+            "Symbol X is declared OWN/GLOBAL in an outer block",
+            "Symbol X is declared LOCAL in an outer block"
+        ]
+    );
+    // An address in a shareable psect needs fixing up where the image
+    // is loaded, which makes its page the process's own.
+    let share = msgs(
+        "/CHECK=SHARE",
+        &module(
+            "PSECT OWN = SHRD (SHARE, NOWRITE);\nOWN X, P : INITIAL(X), K : INITIAL(1);",
+            "",
+        ),
+    );
+    assert_eq!(share, ["Non-shareable value in SHARE PSECT SHRD"]);
+}

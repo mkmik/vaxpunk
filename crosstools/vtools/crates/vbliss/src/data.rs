@@ -93,6 +93,8 @@ pub(crate) struct Attrs {
     pub range: Option<(bool, i64)>,
     /// ALIGN(n): static data goes at an address with n low zero bits.
     pub align: Option<u8>,
+    /// ALIAS: its address may be taken (RN 2.19.3).
+    pub alias: bool,
 }
 
 /// The size in bytes of an allocation unit, if `name` is one.
@@ -489,10 +491,17 @@ impl Parser<'_> {
                 Tok::Name(n) | Tok::Bound(n, _) => n.clone(),
                 _ => return Ok(a),
             };
+            // LANGUAGE's checks: BYTE, WORD and SIGNED as an extension are
+            // outside common BLISS, LONG and ALIGN outside the BLISS-16/32
+            // subset too (LRM C).
+            let at = self.here();
             match word.as_str() {
                 w if unit(w).is_some() => {
                     self.pos += 1;
                     a.unit = unit(w);
+                    if w != "QUAD" {
+                        self.transport(w, &at, w == "LONG");
+                    }
                 }
                 "SIGNED" | "UNSIGNED" => {
                     self.pos += 1;
@@ -500,13 +509,23 @@ impl Parser<'_> {
                     if self.eat_punct('(') {
                         a.range = Some((word == "SIGNED", self.ctce()?));
                         self.expect_punct(')')?;
+                    } else {
+                        self.transport(&word, &at, false);
                     }
                 }
                 "VOLATILE" => {
                     self.pos += 1;
                     a.volatile = true;
                 }
-                "ALIAS" | "WEAK" | "NOVALUE" => self.pos += 1,
+                "ALIAS" => {
+                    self.pos += 1;
+                    a.alias = true;
+                }
+                "WEAK" => {
+                    self.pos += 1;
+                    self.transport("WEAK", &at, true);
+                }
+                "NOVALUE" => self.pos += 1,
                 "FIELD" => {
                     self.pos += 1;
                     self.expect_punct('(')?;
@@ -540,6 +559,7 @@ impl Parser<'_> {
                 }
                 "ALIGN" => {
                     self.pos += 1;
+                    self.transport("ALIGN", &at, true);
                     self.expect_punct('(')?;
                     let n = self.ctce()?;
                     self.expect_punct(')')?;
@@ -549,6 +569,9 @@ impl Parser<'_> {
                     // Assumptions ARM64 doesn't need, and byte writes it
                     // has (docs/bliss64.md).
                     self.pos += 1;
+                    if word == "ADDRESSING_MODE" {
+                        self.transport(&word, &at, true);
+                    }
                     self.skip_parenthesized()?;
                 }
                 "REF" => {
@@ -695,21 +718,30 @@ impl Parser<'_> {
                 let found = self.describe();
                 return self.err(format!("attribute {found} is not supported yet"));
             }
+            self.check_long(&a);
+            if matches!(storage, Storage::Global | Storage::External) {
+                self.transport_global(&name, &at);
+            }
             if matches!(storage, Storage::External) && (a.initial.is_some() || a.preset.is_some()) {
                 return self.err("INITIAL or PRESET on EXTERNAL data");
             }
             let (initial, preset) = (a.initial.take(), a.preset.take());
             // A scalar is aligned to its size, a structure to a fullword
             // (LRM 9.5.3), unless ALIGN says otherwise.
-            let align = a.align.unwrap_or(match (&a.structure, a.unit) {
+            let natural = match (&a.structure, a.unit) {
                 (None, Some(u)) => u.trailing_zeros() as u8,
                 _ => 3,
-            });
+            };
+            let align = a.align.unwrap_or(natural);
+            let scalar = a.structure.is_none();
             let kind = self.data_kind(storage, &mut a)?;
             let Kind::Data { bytes, storage, .. } = kind else {
                 unreachable!()
             };
             let id = self.declare(name, kind)?;
+            if a.alias {
+                self.alias.push(id);
+            }
             if let Some(n) = a.external_name.take() {
                 if !matches!(storage, Storage::Global | Storage::External) {
                     return self.err("EXTERNAL_NAME on data that isn't GLOBAL or EXTERNAL");
@@ -741,6 +773,21 @@ impl Parser<'_> {
                         None if storage == Storage::Own => p.own.clone(),
                         None => p.global.clone(),
                     };
+                    // Where it goes in its psect, for CHECK_ALIGNMENT and
+                    // CHECK_SHARE.
+                    let cur = self.static_offsets.entry(psect.clone()).or_insert(0);
+                    let off = cur.next_multiple_of(1 << align);
+                    *cur = off + bytes;
+                    if scalar {
+                        self.check_align(off, align, natural);
+                    }
+                    if init
+                        .iter()
+                        .any(|i| matches!(i, Init::Val(e, _) if crate::parse::fold(e).is_none()))
+                    {
+                        let at = self.here();
+                        self.check_share(&psect, &at);
+                    }
                     self.m.statics.push(Static {
                         sym: id,
                         init,

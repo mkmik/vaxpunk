@@ -1,0 +1,6 @@
+MODULE LANG3 (MAIN = M, LANGUAGE(BLISS32)) =
+BEGIN
+! LANGUAGE naming another compiler only.
+ROUTINE M = 1;
+END
+ELUDOM

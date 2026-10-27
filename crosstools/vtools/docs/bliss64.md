@@ -607,6 +607,37 @@ fullwords bring:
   (RN 2.19.7)
 - `ADDRESS_TAKEN`: see ALIAS above; the dot lint's base.
 
+vaxpunk: vbliss makes every check, with BLISSA64's words and severities
+(`crates/vbliss/src/checks.rs`; oracle CHECKS, PARMCHK, CHK*):
+
+- `LONGWORD`: a warning at a `LONG` data declaration with neither sign; a
+  note where a quadword's value, or arithmetic on one, is stored in less
+  or passed to a formal declared shorter.
+- `ADDRESS_TAKEN`: a note the first time a variable's address, scalar or
+  structure, is stored as a value, through an `IF`'s branches too; not
+  for `ALIAS` or `VOLATILE` data, a routine's actual or address
+  arithmetic.
+- `SHORT_ADDRESS`: a note at a fetch or store through an address held in
+  a `LONG`, `WORD` or `BYTE`.
+- `ALIGNMENT`: an `ALIGN` below a scalar's natural alignment warns if
+  the data lands misaligned and notes if it lands aligned by chance.
+- `PARAMETERS`: more actuals than the routine has formals; an undotted
+  variable smaller than the `REF` structure a prototype's formal takes.
+- `REDECLARE`: a name an inner block declares again, and a linkage's
+  `GLOBAL` register declared again.
+- `SHARE`: an address in the `INITIAL` of data in a `SHARE` psect, which
+  must be fixed up where the image lands. BLISSA64's GEM crashes on the
+  probe, so what it checks is vaxpunk's reading of the message, "Non-
+  shareable value in SHARE PSECT".
+- `LANGUAGE` and `/LANGUAGE`: LRM appendix C's full checks under
+  `COMMON` (or `BLISS36` with another), the BLISS-16/BLISS-32 subset's
+  under `BLISS16, BLISS32`, and a warning if the list leaves out the
+  compiler in use. Field selectors aren't checked, as BLISSA64 doesn't.
+
+GEM's own informationals, "variable B is fetched, not initialized" and
+"routine R can never be called", need data and call flow that vbliss
+doesn't keep: they don't appear.
+
 ## Libraries: REQUIRE and LIBRARY
 
 `REQUIRE 'file'` reads source text in place, as the LRM says. `LIBRARY

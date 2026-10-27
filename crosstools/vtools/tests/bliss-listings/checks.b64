@@ -1,0 +1,20 @@
+! BLISS: /CHECK=ALL
+MODULE CHECKS (MAIN = M) =
+BEGIN
+! /CHECK=ALL's messages.
+OWN
+    L : LONG,
+    W : WORD,
+    A,
+    B : VECTOR[2, BYTE];
+ROUTINE R (P : REF VECTOR[4]) = .P[0];
+ROUTINE M =
+    BEGIN
+    L = A;
+    W = .A;
+    A = (IF .B THEN B ELSE A);
+    R(B);
+    1
+    END;
+END
+ELUDOM

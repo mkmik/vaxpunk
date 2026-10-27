@@ -168,8 +168,8 @@ note = "BLISS_AN.CLD, bliss64.md Switches and qualifiers: each sets its switch's
 [[feature]]
 id = "checks"
 title = "/CHECK and the CHECK_x switches: LONGWORD, SHORT_ADDRESS, ADDRESS_TAKEN, ALIGNMENT, FIELD, SHARE, REDECLARE, PARAMETERS; LANGUAGE's transportability checks"
-status = "todo"
-note = "RN 2.19.2-2.19.8, 2.26; LRM appendix C. bliss64.md names LONGWORD, SHORT_ADDRESS and ADDRESS_TAKEN as the ones that find 64-bit bugs; LANGUAGE(COMMON) is accepted and checks nothing"
+status = "done"
+note = "RN 2.19.2-2.19.8, 2.26; LRM appendix C; bliss64.md Switches and qualifiers. checks.rs, with BLISSA64's messages (tests/bliss-listings chk*, lang*, checks, parmchk; the language test's checks). GEM's UNINIT and UNCALLED informationals aren't given"
 
 [[feature]]
 id = "listing"

@@ -1,0 +1,17 @@
+! BLISS: /CHECK=PARAMETERS
+MODULE PARMCHK (MAIN = M) =
+BEGIN
+! /CHECK=PARAMETERS against a prototype.
+EXTERNAL ROUTINE
+    R (P : REF VECTOR[4]) : NOVALUE;
+OWN
+    B : VECTOR[2, BYTE];
+ROUTINE TWO (A, B) = .A + .B;
+ROUTINE M =
+    BEGIN
+    R(B);
+    TWO(1, 2, 3);
+    1
+    END;
+END
+ELUDOM

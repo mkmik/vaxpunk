@@ -616,8 +616,20 @@ pub struct Parser<'a> {
     pub(crate) inits: Vec<Expr>,
     /// Routines being parsed: nonzero where a frame exists.
     routines: u32,
-    /// Data declared VOLATILE.
+    /// Data declared VOLATILE, and ALIAS.
     pub(crate) volatile: Vec<usize>,
+    pub(crate) alias: Vec<usize>,
+    /// For the checks: the variables CHECK_ADDRESS_TAKEN has told of;
+    /// where each name was last read; each routine's formals as its
+    /// declaration or prototype gives them; how far each psect's static
+    /// data has come; the GLOBAL and EXTERNAL names so far.
+    pub(crate) taken: Vec<usize>,
+    pub(crate) name_at: HashMap<usize, Lexeme>,
+    pub(crate) formals: HashMap<usize, Vec<crate::checks::Formal>>,
+    pub(crate) static_offsets: HashMap<String, u32>,
+    pub(crate) global_names: Vec<String>,
+    /// Where the last field selector began.
+    pub(crate) field_at: Option<Lexeme>,
     /// The dot lint's warnings, and how deep in an address it is.
     pub(crate) lints: Vec<Diag>,
     /// Names used without a declaration.
@@ -708,6 +720,13 @@ pub fn parse(name: &str, text: &str, load: Loader, opts: &Options) -> Front {
         inits: Vec::new(),
         routines: 0,
         volatile: Vec::new(),
+        alias: Vec::new(),
+        taken: Vec::new(),
+        name_at: HashMap::new(),
+        formals: HashMap::new(),
+        static_offsets: HashMap::new(),
+        global_names: Vec::new(),
+        field_at: None,
         lints: Vec::new(),
         undeclared: Vec::new(),
         address_context: 0,
@@ -1276,6 +1295,7 @@ impl Parser<'_> {
             self.m.syms[id].kind = kind;
             return Ok(id);
         }
+        self.check_redeclare(&name);
         // Statics and routines are named in the assembly; locals aren't.
         let asm = match kind {
             Kind::Data {
@@ -1431,6 +1451,21 @@ impl Parser<'_> {
                 }
             }
             return self.expect_punct(')');
+        }
+        if name == "LANGUAGE" && self.at_punct('(') {
+            let at = self.last();
+            self.pos += 1;
+            let mut list = Vec::new();
+            while let Tok::Name(n) = self.peek().clone() {
+                self.pos += 1;
+                list.push(n);
+                if !self.eat_punct(',') {
+                    break;
+                }
+            }
+            self.expect_punct(')')?;
+            self.set_language(&list, &at);
+            return Ok(());
         }
         if name == "LINKAGE" && self.eat_punct('(') {
             // The default linkage for the block (LRM 18.2): `%LINKAGE`,
@@ -1891,11 +1926,15 @@ impl Parser<'_> {
                 }
             }
             "LINKAGE" => {
+                let at = self.here();
                 self.pos += 1;
+                self.transport("LINKAGE", &at, true);
                 self.linkages()?;
             }
             "PSECT" => {
                 self.pos += 1;
+                let at = self.here();
+                self.transport("PSECT", &at, true);
                 self.psect_declaration()?;
             }
             "SWITCHES" => {
@@ -1926,7 +1965,9 @@ impl Parser<'_> {
                 self.builtins()?;
             }
             "ENABLE" => {
+                let at = self.here();
                 self.pos += 1;
+                self.transport("ENABLE", &at, true);
                 self.enable()?;
             }
             "REGISTER" => {
@@ -2095,7 +2136,29 @@ impl Parser<'_> {
             let name = self.name()?;
             // A prototype: the formals, with their attributes (RN 2.19.8).
             let formals = if self.at_punct('(') {
-                Some(self.formal_list()?.0.len())
+                let list = self.formal_list()?.0;
+                Some(
+                    list.iter()
+                        .map(|(_, a)| crate::checks::Formal {
+                            unit: a.unit.filter(|_| a.structure.is_none()),
+                            ref_bytes: a
+                                .structure
+                                .as_ref()
+                                .filter(|s| s.refr)
+                                .and_then(|s| {
+                                    // The structure's own size, not the
+                                    // REF's.
+                                    self.struct_bytes(&crate::data::StructAttr {
+                                        st: s.st.clone(),
+                                        alloc: s.alloc.clone(),
+                                        refr: false,
+                                        fields: Vec::new(),
+                                    })
+                                })
+                                .map(|n| n as u32),
+                        })
+                        .collect::<Vec<_>>(),
+                )
             } else {
                 None
             };
@@ -2113,8 +2176,10 @@ impl Parser<'_> {
             if let Some(n) = self.routine_name.take() {
                 self.m.syms[id].asm = n;
             }
-            if let Some(n) = formals {
-                self.formal_counts.insert(id, (n, self.routine_variable));
+            if let Some(f) = formals {
+                self.formal_counts
+                    .insert(id, (f.len(), self.routine_variable));
+                self.formals.insert(id, f);
             }
             if !self.eat_punct(',') {
                 return Ok(());
@@ -2174,7 +2239,15 @@ impl Parser<'_> {
                     && let Some(Kind::Linkage(l)) = self.lookup(&n).map(|id| &self.m.syms[id].kind)
                 {
                     linkage = Some(l.clone());
+                    let at = self.here();
                     self.pos += 1;
+                    // LRM C: the FORTRAN ones are common, BLISS and
+                    // FORTRAN in the BLISS-16/BLISS-32 subset.
+                    match n.as_str() {
+                        "FORTRAN_FUNC" | "FORTRAN_SUB" => {}
+                        "BLISS" | "FORTRAN" => self.transport(&n, &at, false),
+                        _ => self.transport(&n, &at, true),
+                    }
                 } else {
                     break;
                 }
@@ -2283,6 +2356,14 @@ impl Parser<'_> {
             self.m.syms[sym].asm = n;
         }
         self.formal_counts.insert(sym, (names.len(), variable));
+        let units = names
+            .iter()
+            .map(|(_, a)| crate::checks::Formal {
+                unit: a.unit.filter(|_| a.structure.is_none()),
+                ref_bytes: None,
+            })
+            .collect();
+        self.formals.insert(sym, units);
         self.expect_punct('=')?;
         let outer = std::mem::take(&mut self.slots);
         self.scopes.push(HashMap::new());
@@ -2354,6 +2435,7 @@ impl Parser<'_> {
             // An actual `K = X` is a keyword macro's, if one undeclared.
             if !actual {
                 self.lint_store(&left, &right, &at);
+                self.check_store(&left, &right, &at);
             }
             return Ok(Expr::Assign(Box::new(left), Box::new(right)));
         }
@@ -2396,6 +2478,11 @@ impl Parser<'_> {
             return;
         }
         let first = off * 8 + pos;
+        // At the field selector, if there is one.
+        let at = match (place, &self.field_at) {
+            (Expr::Field(..), Some(f)) => &f.clone(),
+            _ => at,
+        };
         if first < 0 || first + size > i64::from(bytes) * 8 {
             let msg = format!(
                 "Reference outside of data segment {}, possible optimizations lost",
@@ -2593,6 +2680,7 @@ impl Parser<'_> {
             self.address_context -= 1;
             let e = e?;
             self.check_inside(&e, &at);
+            self.check_fetch(&e, &at);
             self.lint_fetch(&e, start, &at);
             self.note_use(&e, true);
             return Ok(Expr::Fetch(Box::new(e)));
@@ -2608,9 +2696,11 @@ impl Parser<'_> {
             if self.eat_punct('(') {
                 let (mut args, mut outs) = (Vec::new(), Vec::new());
                 let first = self.here();
+                let mut starts = Vec::new();
                 if !self.eat_punct(')') {
                     if !self.at_punct(';') {
                         loop {
+                            starts.push(self.here());
                             // An actual left out passes 0 (LRM 12.1.1).
                             if self.at_punct(',') || self.at_punct(';') || self.at_punct(')') {
                                 self.diag(
@@ -2669,6 +2759,7 @@ impl Parser<'_> {
                 }
                 self.lint_call(&e, &args, &at);
                 self.note_call(&e, &args, &at);
+                self.check_call(&e, &args, &starts);
                 e = self.link_call(e, args, outs, general)?;
             } else if self.at_punct('<') {
                 if matches!(e, Expr::Field(..) | Expr::Let(..)) {
@@ -2676,6 +2767,7 @@ impl Parser<'_> {
                     self.diag('W', &at, "Two consecutive field selectors".into());
                 }
                 self.note_use(&e, true);
+                let at = self.here();
                 self.pos += 1;
                 let pos = self.expr()?;
                 self.expect_punct(',')?;
@@ -2686,6 +2778,7 @@ impl Parser<'_> {
                     Expr::Num(0)
                 };
                 self.expect_punct('>')?;
+                self.field_at = Some(at);
                 e = Expr::Field(Box::new(e), Box::new(pos), Box::new(size), Box::new(ext));
             } else if self.at_punct('[') {
                 let attr = match e {
@@ -2725,9 +2818,12 @@ impl Parser<'_> {
         let at = self.here();
         match self.next() {
             Tok::Num(n) => Ok(Expr::Num(n)),
-            Tok::Str(s) => string_value(&s)
-                .map(Expr::Num)
-                .ok_or_else(|| self.error_at(&at, "string too long for a value")),
+            Tok::Str(s) => {
+                self.transport("", &at, true);
+                string_value(&s)
+                    .map(Expr::Num)
+                    .ok_or_else(|| self.error_at(&at, "string too long for a value"))
+            }
             Tok::Bound(n, id) => self.named(&n, id),
             Tok::Punct('(') => self.block(')'),
             Tok::Name(n) => match n.as_str() {
@@ -2829,10 +2925,14 @@ impl Parser<'_> {
                 "EXITLOOP" => Ok(Expr::Exitloop(self.optional_value()?)),
                 "RETURN" => Ok(Expr::Return(self.optional_value()?)),
                 "PLIT" | "UPLIT" => self.plit(n == "PLIT"),
-                "%ASCID" => match self.next() {
-                    Tok::Str(s) => Ok(Expr::Ascid(s)),
-                    _ => self.err("expected a string after %ASCID"),
-                },
+                "%ASCID" => {
+                    let at = self.here();
+                    self.transport("%ASCID", &at, true);
+                    match self.next() {
+                        Tok::Str(s) => Ok(Expr::Ascid(s)),
+                        _ => self.err("expected a string after %ASCID"),
+                    }
+                }
                 _ if RESERVED.contains(&n.as_str()) => {
                     Err(self.error_at(&at, format!("{n} can't start an expression")))
                 }
@@ -2908,7 +3008,11 @@ impl Parser<'_> {
             {
                 self.err(format!("Illegal up-level reference to {n}"))
             }
-            _ => Ok(Expr::Name(id)),
+            _ => {
+                let at = self.last();
+                self.name_at.insert(id, at);
+                Ok(Expr::Name(id))
+            }
         }
     }
 

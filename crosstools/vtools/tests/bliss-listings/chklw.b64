@@ -1,0 +1,27 @@
+! BLISS: /CHECK=LONGWORD
+MODULE CHKLW (MAIN = M) =
+BEGIN
+! /CHECK=LONGWORD: 64-bit values into 32-bit fields and actuals.
+EXTERNAL ROUTINE ER (A : LONG UNSIGNED) : NOVALUE;
+OWN
+    LS : LONG SIGNED,
+    LU : LONG UNSIGNED,
+    LL : LONG,
+    BB : BYTE,
+    Q;
+ROUTINE R (A : LONG) = .A;
+ROUTINE M =
+    BEGIN
+    LS = .Q;
+    LU = .Q + 1;
+    BB = .Q;
+    LS = 1;
+    LS = .LU;
+    LS = .LS + 1;
+    ER(.Q);
+    R(.Q);
+    Q = .LS;
+    1
+    END;
+END
+ELUDOM
