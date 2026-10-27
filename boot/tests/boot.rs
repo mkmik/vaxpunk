@@ -1986,10 +1986,17 @@ fn session(log: impl Fn() -> String, mut type_: impl FnMut(&str)) -> Result<(), 
                 step += 1;
                 continue;
             }
+            // STARTUP's processes print when they get there, which can be
+            // in the middle of a command's lines: without theirs too.
+            let quiet: String = plain
+                .lines()
+                .filter(|l| !STARTUP.lines.iter().any(|s| l.contains(s)))
+                .flat_map(|l| [l, "\n"])
+                .collect();
             let missing: Vec<_> = phase
                 .lines
                 .iter()
-                .filter(|l| !text.contains(*l) && !plain.contains(*l))
+                .filter(|l| !text.contains(*l) && !plain.contains(*l) && !quiet.contains(*l))
                 .collect();
             if step == phase.steps.len() && missing.is_empty() {
                 println!("{}: {:?}", phase.name, start.elapsed());
