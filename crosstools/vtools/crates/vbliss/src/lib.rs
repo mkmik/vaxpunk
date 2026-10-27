@@ -126,6 +126,20 @@ pub fn translate(path: &Path, source: &str, opts: &Options) -> Output {
     }
 }
 
+/// A source or require file's text: VMS files are DEC MCS, a character a
+/// byte, read here as Latin-1 so that every file reads.
+pub fn read_source(path: &Path) -> std::io::Result<String> {
+    fs::read(path).map(|b| b.into_iter().map(char::from).collect())
+}
+
+/// Text as the bytes it stands for in DEC MCS: a character a byte, `?` for
+/// one past Latin-1.
+pub fn latin1(text: &str) -> Vec<u8> {
+    text.chars()
+        .map(|c| u8::try_from(c).unwrap_or(b'?'))
+        .collect()
+}
+
 /// Compiles BLISS-64 `source` into object records, as `vmacro::compile`
 /// does MACRO-32; errors come back as the assembler's diagnostics.
 pub fn compile(source: &str, opts: &vasm::Options) -> Result<Object, Vec<Diagnostic>> {
@@ -204,6 +218,6 @@ fn require(dirs: &[std::path::PathBuf], name: &str, types: &[&str]) -> Result<St
                 .flat_map(|n| [n.clone(), n.to_ascii_lowercase(), n.to_ascii_uppercase()])
                 .map(move |n| d.join(n))
         })
-        .find_map(|p| fs::read_to_string(p).ok())
+        .find_map(|p| read_source(&p).ok())
         .ok_or_else(|| format!("can't find require file {name}"))
 }

@@ -440,6 +440,11 @@ pub struct Parser<'a> {
     /// REGISTER data and output formals, as `Routine` has them.
     pub(crate) exits: Vec<(Registers, Registers)>,
     linkages_now: Vec<Option<Rc<Linkage>>>,
+    /// The routines being parsed, by number, and the routine each LOCAL,
+    /// REGISTER and formal belongs to: another routine can't reach them.
+    routine_stack: Vec<u32>,
+    routine_count: u32,
+    pub(crate) local_owner: HashMap<usize, u32>,
 }
 
 /// Parses the module in `text`, from file `name`.
@@ -488,6 +493,9 @@ pub fn parse(name: &str, text: &str, load: Loader, opts: &Options) -> Front {
         reg_data: HashMap::new(),
         exits: Vec::new(),
         linkages_now: Vec::new(),
+        routine_stack: Vec::new(),
+        routine_count: 0,
+        local_owner: HashMap::new(),
     };
     p.lx.variant = opts.variant;
     p.m.dialect = opts.dialect;
@@ -897,6 +905,16 @@ impl Parser<'_> {
             }
         };
         let id = self.m.syms.len();
+        if let (
+            Kind::Data {
+                storage: Storage::Local(_),
+                ..
+            },
+            Some(&r),
+        ) = (&kind, self.routine_stack.last())
+        {
+            self.local_owner.insert(id, r);
+        }
         self.m.syms.push(Sym {
             name: name.clone(),
             asm,
@@ -1527,6 +1545,8 @@ impl Parser<'_> {
         self.expect_punct('=')?;
         let outer = std::mem::take(&mut self.slots);
         self.scopes.push(HashMap::new());
+        self.routine_count += 1;
+        self.routine_stack.push(self.routine_count);
         let mut formals = Vec::new();
         for (n, mut a) in names {
             let refr = a.structure.as_ref().is_some_and(|s| s.refr);
@@ -1560,6 +1580,7 @@ impl Parser<'_> {
         self.routines += 1;
         let body = self.expr();
         self.routines -= 1;
+        self.routine_stack.pop();
         self.linkages_now.pop();
         let (externals, outputs) = self.exits.pop().unwrap();
         let body = body?;
@@ -2049,6 +2070,13 @@ impl Parser<'_> {
             Kind::Builtin => self.builtin(n),
             Kind::Structure(_) | Kind::Field(_) | Kind::FieldSet(_) => {
                 self.err(format!("{n} used as a value"))
+            }
+            _ if self
+                .local_owner
+                .get(&id)
+                .is_some_and(|r| Some(r) != self.routine_stack.last()) =>
+            {
+                self.err(format!("Illegal up-level reference to {n}"))
             }
             _ => Ok(Expr::Name(id)),
         }

@@ -71,7 +71,7 @@ fn run() -> Result<(), String> {
     }
     let source = source.ok_or_else(usage)?;
     let text =
-        fs::read_to_string(&source).map_err(|e| format!("OPENIN, {}: {e}", source.display()))?;
+        vbliss::read_source(&source).map_err(|e| format!("OPENIN, {}: {e}", source.display()))?;
     let stem = source
         .file_stem()
         .map(|s| s.to_string_lossy().to_ascii_uppercase())
@@ -94,7 +94,8 @@ fn run() -> Result<(), String> {
     }
     if let Some(list) = list {
         let path = list.unwrap_or_else(|| source.with_extension("lis"));
-        fs::write(&path, &out.listing).map_err(|e| format!("WRITEERR, {}: {e}", path.display()))?;
+        fs::write(&path, vbliss::latin1(&out.listing))
+            .map_err(|e| format!("WRITEERR, {}: {e}", path.display()))?;
     }
     if out.error().is_some() {
         return Err("ENDDIAGS, compilation failed".into());
@@ -121,7 +122,7 @@ fn run() -> Result<(), String> {
 /// A diagnostic as BLISS writes it on the terminal: the line, a marker
 /// under the place, the message and where.
 fn report(d: &vbliss::Diag, facility: &str) {
-    let line = fs::read_to_string(Path::new(&d.file)).ok().and_then(|t| {
+    let line = vbliss::read_source(Path::new(&d.file)).ok().and_then(|t| {
         t.lines()
             .nth((d.line as usize).wrapping_sub(1))
             .map(String::from)

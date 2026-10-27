@@ -137,8 +137,8 @@ note = "TPAMAC.REQ's $INIT_STATE leaves a ; after a declaration; DEC's VAX built
 [[feature]]
 id = "source-text"
 title = "Sources in DEC MCS, Latin-1, not only UTF-8"
-status = "todo"
-note = "DEC's STARLET.R64 has a copyright sign, and 5 V4.3 modules other 8-bit characters: 'stream did not contain valid UTF-8'"
+status = "done"
+note = "vbliss::read_source reads a byte a character, and a string's bytes are the file's; DEC's STARLET.R64 has a copyright sign, and 5 V4.3 modules other 8-bit characters"
 
 [[feature]]
 id = "library-semantics"
@@ -181,7 +181,7 @@ note = "PRD-0004 Listing; the listing is the source part with expansions, whatev
 id = "diagnostics"
 title = "BLISS's messages: the user manual's 250 texts and severities, going on past the first error, the Alpha informationals"
 status = "todo"
-note = "vbliss writes BLISSA64's text for the 8 messages the tests meet, its own for the rest, and stops at the first error. Missing too: numeric literal overflow, SIGNAL's low 32 bits, names over 64 characters, a NOVALUE routine's value used. An up-level reference to an outer routine's LOCAL panics in arm64.rs"
+note = "vbliss writes BLISSA64's text for the 8 messages the tests meet, its own for the rest, and stops at the first error. Missing too: numeric literal overflow, SIGNAL's low 32 bits, names over 64 characters, a NOVALUE routine's value used. An up-level reference to an outer routine's LOCAL gets message 103, Illegal up-level reference"
 
 [[feature]]
 id = "probes"
