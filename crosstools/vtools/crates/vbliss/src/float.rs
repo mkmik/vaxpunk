@@ -4,6 +4,8 @@
 //! nearest with ties to even, from its exact value: VAX D's 56 bits are
 //! more than an f64's, so the conversion is done in integers.
 
+use std::cmp::Ordering;
+
 /// A float literal's format.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Format {
@@ -68,7 +70,7 @@ pub fn literal(fmt: Format, text: &str) -> Option<(u64, Fit)> {
     // BLISSA64 converts a D literal at G's precision, 53 bits, and widens
     // it (oracle FLTLIT2: %D'0.1' ends in D0, not CD).
     let rounded = if fmt == Format::D { 53 } else { bits };
-    let Some((e2, m)) = round(&digits, exp10, rounded) else {
+    let Some((e2, m, lost)) = round(&digits, exp10, rounded) else {
         return Some((sign(fmt, neg, 0), Fit::Exact));
     };
     let m = m << (bits - rounded);
@@ -93,14 +95,20 @@ pub fn literal(fmt: Format, text: &str) -> Option<(u64, Fit)> {
     let packed: u64 = if biased >= 1 {
         ((biased as u64) << (bits - 1)) | frac as u64
     } else if ieee {
-        // An IEEE subnormal: rounded again to the bits that are left.
+        // An IEEE subnormal: rounded again to the bits that are left. A
+        // rest of exactly half is half only if the first rounding was
+        // exact; otherwise the value is on the side that rounding left.
         let shift = (1 - biased) as u32;
-        if shift >= bits {
+        if shift > bits {
             0
         } else {
             let (q, r) = (m >> shift, m & ((1u128 << shift) - 1));
-            let half = 1u128 << (shift - 1);
-            (q + u128::from(r > half || r == half && q & 1 == 1)) as u64
+            let up = match r.cmp(&(1u128 << (shift - 1))).then(lost) {
+                Ordering::Greater => true,
+                Ordering::Less => false,
+                Ordering::Equal => q & 1 == 1,
+            };
+            (q + u128::from(up)) as u64
         }
     } else {
         // VAX has no subnormals: zero.
@@ -154,9 +162,10 @@ fn decimal(text: &str) -> Option<(bool, Vec<u8>, i32)> {
     Some((neg, digits, exp - frac.len() as i32))
 }
 
-/// digits * 10^exp10 rounded to `bits` bits, as (e, m): m has its top bit
-/// at bits - 1 and the value is m * 2^(e - bits + 1). None for zero.
-fn round(digits: &[u8], exp10: i32, bits: u32) -> Option<(i32, u128)> {
+/// digits * 10^exp10 rounded to `bits` bits, as (e, m, lost): m has its
+/// top bit at bits - 1, the value rounded is m * 2^(e - bits + 1), and
+/// `lost` is how the exact value compares with it. None for zero.
+fn round(digits: &[u8], exp10: i32, bits: u32) -> Option<(i32, u128, Ordering)> {
     let mut num = Big::from(0);
     for &d in digits {
         num.mul_add(10, u64::from(d));
@@ -189,9 +198,15 @@ fn round(digits: &[u8], exp10: i32, bits: u32) -> Option<(i32, u128)> {
     lost |= q & ((1u128 << (extra - 1)) - 1) != 0;
     let half = q >> (extra - 1) & 1 == 1;
     q >>= extra;
-    if half && (lost || q & 1 == 1) {
-        q += 1;
-    }
+    let up = half && (lost || q & 1 == 1);
+    q += u128::from(up);
+    let below = if up {
+        Ordering::Less
+    } else if half || lost {
+        Ordering::Greater
+    } else {
+        Ordering::Equal
+    };
     // The value is q * 2^(extra - shift); its top bit's power is the
     // exponent.
     let mut e = (qbits as i64 - 1 - shift) as i32;
@@ -199,7 +214,7 @@ fn round(digits: &[u8], exp10: i32, bits: u32) -> Option<(i32, u128)> {
         q >>= 1;
         e += 1;
     }
-    Some((e, q))
+    Some((e, q, below))
 }
 
 /// A natural number, 32-bit digits, least significant first: enough
@@ -313,6 +328,13 @@ mod tests {
         assert_eq!(lit(Format::S, "0.1"), Some(u64::from(0.1f32.to_bits())));
         assert_eq!(lit(Format::T, "1E-320"), Some(1e-320f64.to_bits()));
         assert_eq!(lit(Format::T, "0"), Some(0));
+        // Above half the smallest subnormal: it, not zero. At half, ties to
+        // even; just above a half the first rounding made exact, it.
+        assert_eq!(lit(Format::S, "1E-45"), Some(1));
+        assert_eq!(lit(Format::T, "4E-324"), Some(1));
+        assert_eq!(lit(Format::T, "2.4703282292062327E-324"), Some(0));
+        assert_eq!(lit(Format::T, "2.4703282292062328E-324"), Some(1));
+        assert_eq!(lit(Format::T, "1E-325"), Some(0));
         assert_eq!(literal(Format::T, "1E400").unwrap().1, Fit::Overflow);
         assert_eq!(literal(Format::T, "1E-320").unwrap().1, Fit::Underflow);
         assert_eq!(

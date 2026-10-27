@@ -312,6 +312,7 @@ fn libraries() {
     )
     .unwrap();
     std::fs::write(dir.join("lc.r64"), "OWN X;\n").unwrap();
+    std::fs::write(dir.join("ld.r64"), "SWITCHES ZIP;\nLITERAL D1 = 1;\n").unwrap();
     let path = dir.join("t.b64");
     let src = module(
         "MACRO IDENT = 'V1' %;\nLIBRARY 'LB';\nLIBRARY 'LB';\n\
@@ -321,6 +322,13 @@ fn libraries() {
     let out = vbliss::translate(&path, &src, &vbliss::Options::default());
     assert!(out.error().is_none(), "{:?}", out.error());
     assert!(out.listing.contains("%PRINT:\t0101"), "{}", out.listing);
+    // A library's switches are its own.
+    let out = vbliss::translate(
+        &path,
+        &module("LIBRARY 'LD';\n%PRINT(%SWITCHES(ZIP))", ""),
+        &vbliss::Options::default(),
+    );
+    assert!(out.listing.contains("%PRINT:\t0\n"), "{}", out.listing);
     let out = vbliss::translate(
         &path,
         &module("LIBRARY 'LC';", ""),
@@ -530,13 +538,9 @@ fn qualifiers() {
             .msg
             .contains("longer than 64 characters")
     );
-    // /NAMES=LOWERCASE names the linker's symbols as C does.
-    let out = with(
-        "/NAMES=LOWERCASE",
-        &module("EXTERNAL ROUTINE PUTS; GLOBAL G;", "PUTS(G);"),
-    );
-    let asm = out.asm.unwrap();
-    assert!(asm.contains("bl      puts") && asm.contains("g::"), "{asm}");
+    // vasm has every name in upper case: /NAMES can't make another.
+    assert!(o.qualifier("/NAMES=UPPERCASE").is_ok());
+    assert!(o.qualifier("/NAMES=LOWERCASE").is_err());
     // /NOCODE and /LIBRARY make no code; a library's source has only
     // declarations.
     assert!(with("/NOCODE", &module("", "")).nocode);

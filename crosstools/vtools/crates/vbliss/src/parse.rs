@@ -388,8 +388,12 @@ impl Options {
                 }
             }
             _ if is("/NAMES") => match values(value).as_slice() {
-                [v] if v == "UPPERCASE" => self.lowercase = false,
-                [v] if v == "LOWERCASE" => self.lowercase = true,
+                [v] if v == "UPPERCASE" => {}
+                // vasm has every name in upper case, so the linker never
+                // sees another.
+                [v] if v == "LOWERCASE" || v == "AS_IS" => {
+                    return Err(format!("/NAMES={v}: vasm has every name in upper case"));
+                }
                 _ => return bad(value.unwrap_or("")),
             },
             _ if is("/TERMINAL") => {
@@ -590,8 +594,6 @@ pub struct Options {
     pub machine_code: bool,
     /// /SYNTAX_LEVEL, 2 if not given.
     pub syntax_level: Option<u8>,
-    /// /NAMES=LOWERCASE: external names in lower case.
-    pub lowercase: bool,
     /// /LIBRARY: the source is a library's, which makes no object.
     pub library: bool,
     /// /ERROR_LIMIT: the errors after which the compiler gives up, 30 if
@@ -1372,11 +1374,7 @@ impl Parser<'_> {
             self.forward_data.remove(i);
             self.m.syms[id].kind = kind;
             if storage == Storage::Global {
-                self.m.syms[id].asm = if self.opts.lowercase {
-                    name.to_lowercase()
-                } else {
-                    name
-                };
+                self.m.syms[id].asm = name;
             }
             return Ok(id);
         }
@@ -1446,12 +1444,6 @@ impl Parser<'_> {
                 self.asm_names.insert(name.clone(), 1);
                 name.clone()
             }
-        };
-        // /NAMES=LOWERCASE: the linker's names in lower case, C's.
-        let asm = if self.opts.lowercase {
-            asm.to_lowercase()
-        } else {
-            asm
         };
         let id = self.m.syms.len();
         if let (
@@ -1809,12 +1801,13 @@ impl Parser<'_> {
         let imported = std::mem::replace(&mut self.library_imports, outer_imports);
         let mut scopes = std::mem::replace(&mut self.scopes, outer);
         r?;
-        // Names its own libraries gave it stay its own.
+        // Names its own libraries gave it stay its own, and so do its
+        // switches, `%SWITCH CODE` and the rest, which are no names.
         let mut names: Vec<(String, usize)> = scopes
             .pop()
             .unwrap()
             .into_iter()
-            .filter(|(_, id)| !imported.contains(id))
+            .filter(|(n, id)| !imported.contains(id) && !n.starts_with('%'))
             .collect();
         names.sort();
         Ok((names, bytes))

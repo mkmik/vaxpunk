@@ -144,13 +144,19 @@ note = "vbliss::read_source reads a byte a character, and a string's bytes are t
 id = "library-semantics"
 title = "LIBRARY as LRM 16.6 has it: lexical functions and switches fixed when the library is compiled, nested libraries' names kept out, /LIBRARY for sources of declarations only"
 status = "done"
-note = "LRM 16.6: a library's source is read in a context of its own, which sees the predeclared names and its own, with declarations only (message 200); the module gets the names it declares, not those its own libraries gave it; a library read twice gives the same names. %VARIANT in a library is the module's until probe 15 says otherwise; the .L64 format is t8y:/lang/bliss#libraries"
+note = "LRM 16.6: a library's source is read in a context of its own, which sees the predeclared names and its own, with declarations only (message 200); the module gets the names it declares, not those its own libraries gave it nor its switches; a library read twice gives the same names. %VARIANT in a library is the module's until probe 15 says otherwise; the .L64 format is t8y:/lang/bliss#libraries"
 
 [[feature]]
 id = "switches"
 title = "Switches that act: %SWITCHES and SWITCHES scopes, LIST, ERRS, NOCODE, OVERFLOW checking, QUAD_LITERALS"
 status = "done"
 note = "LRM 18.2, RN 2.26: on-off switches are kept block by block, %SWITCHES sees them (oracle SWIT); NOCODE makes no object; OVERFLOW checks a routine's +, - and * and signals SS$_INTOVF (BLISSA64's GEM crashes on it); NOQUAD_LITERALS sign-extends as BLISSA64 (oracle QLIT). LIST's options are #listing's, ERRS #qualifiers'"
+
+[[feature]]
+id = "switches-declaration"
+title = "A SWITCHES declaration takes only the switches LRM 18.2 allows in one"
+status = "todo"
+note = "BLISSA64 warns \"Missing or invalid switch specified\" at SWITCHES NOCODE (probe, 2026-10-27); vbliss takes every module switch there. Which others it refuses needs a probe each"
 
 [[feature]]
 id = "pal-builtins"
@@ -163,7 +169,7 @@ note = "bliss64.md Built-ins: PAL_REMQxx's entry an output parameter, as BLISSA6
 id = "qualifiers"
 title = "The BLISS verb's other qualifiers: /SOURCE_LIST, /MACHINE_CODE, /NAMES, /SYNTAX_LEVEL, /TERMINAL, /ERROR_LIMIT, /LANGUAGE, /DEBUG, /TRACEBACK, /[NO]CODE, Alpha's code generation ones ignored"
 status = "done"
-note = "BLISS_AN.CLD, bliss64.md Switches and qualifiers: each sets its switch's default (Options::qualifier, the language test's qualifiers). /SYNTAX_LEVEL=2, the default, reserves QUAD, ALIAS and the rest (oracle SYNLV, SYNLV1). /LANGUAGE's checks are #checks'. /DIAGNOSTICS and /ANALYSIS_DATA write nothing until t8y:/layered/lse and t8y:/layered/sca"
+note = "BLISS_AN.CLD, bliss64.md Switches and qualifiers: each sets its switch's default (Options::qualifier, the language test's qualifiers). /SYNTAX_LEVEL=2, the default, reserves QUAD, ALIAS and the rest (oracle SYNLV, SYNLV1). /NAMES=LOWERCASE and AS_IS are refused: vasm has every name in upper case. /LANGUAGE's checks are #checks'. /DIAGNOSTICS and /ANALYSIS_DATA write nothing until t8y:/layered/lse and t8y:/layered/sca"
 
 [[feature]]
 id = "checks"

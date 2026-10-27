@@ -596,8 +596,8 @@ vaxpunk: vbliss takes them all (`docs/vbliss.md`). `/ERROR_LIMIT`,
 generation ones change nothing; `/CROSS_REFERENCE` says, as BLISSA64
 does, "CROSS_REFERENCE not implemented in BLISS-64E" (oracle LSTXREF).
 `/LIBRARY` checks a library's source and writes no file, since `LIBRARY`
-reads the source itself. `/NAMES=AS_IS` is refused: vbliss doesn't keep
-a name's case.
+reads the source itself. `/NAMES=AS_IS` and `/NAMES=LOWERCASE` are
+refused: vasm has every name in upper case.
 
 The checks worth having in vbliss, because they find the bugs 64-bit
 fullwords bring:

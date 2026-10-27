@@ -78,8 +78,7 @@ pub fn generate(m: &parse::Module) -> R<ir::Module> {
     Ok(ir::Module {
         name: m.name.clone(),
         ident: m.ident.clone(),
-        // The routine's name in the assembly, lower case under
-        // /NAMES=LOWERCASE.
+        // The routine's name in the assembly.
         main: m.main.as_ref().map(|n| {
             m.syms
                 .iter()
