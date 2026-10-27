@@ -175,7 +175,9 @@ def run_emulator(cmds, logpath, port, config, boot, installed):
             raise RuntimeError("could not connect to the console port")
         with sock, open(logpath, "w", encoding="utf-8") as log, \
                 open(logpath + ".raw", "wb") as raw:
-            c = Console(sock, log, "$ " if installed else PROMPT, raw)
+            # The prompt at a line's start: a listing's "$CODE$ + 0010"
+            # can end a read too.
+            c = Console(sock, log, "\n$ " if installed else PROMPT, raw)
             c.wait(c.seen("P00>>>"), 300, "SRM prompt")
             c.send("show device\r")
             c.wait(c.seen("P00>>>"), 60, "show device")
