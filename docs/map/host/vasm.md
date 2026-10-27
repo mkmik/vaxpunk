@@ -31,9 +31,9 @@ note = "PRD-0001 step 8"
 
 [[feature]]
 id = "fp"
-title = "Floating point and SIMD arithmetic encodings"
-status = "todo"
-note = "assembler.md: not yet; PRD-0007 feasibility blocker, before IEEE built-ins in vmacro"
+title = "Scalar floating point encodings"
+status = "done"
+note = "Scalar S and D: arithmetic, FCMP, FCVT, conversions to and from integers, FMOV between register files; checked against GNU as, and in the BLISS-64 VASM too. SIMD and FMOV immediates not yet"
 
 [[feature]]
 id = "literal-pools"
@@ -69,6 +69,5 @@ MACRO-32 dialect, and vbliss and vcdu emit vasm source. It encodes from
 one template per instruction class, checked against GNU `as`, since no
 Rust crate encodes ARM64 correctly without LLVM. It has been ported to
 BLISS-64 as VASM (`crosstools/vtools/bliss/vasm`, PRD-0004 step 13),
-which writes the same objects. Missing: FP and SIMD arithmetic, which
-WASMRUN's floats wait for, literal pools, procedure descriptor
+which writes the same objects. Missing: SIMD arithmetic, literal pools, procedure descriptor
 directives and listings.

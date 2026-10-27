@@ -81,6 +81,10 @@ ROUTINE REG (N : REF VECTOR) =
 ROUTINE SF (R) =
     (RKIND(.R) EQL RK_X OR RKIND(.R) EQL RK_SP);
 
+! A general register, X, W, SP or WSP.
+ROUTINE IS_GPR (R) =
+    (RKIND(.R) GEQ RK_X AND RKIND(.R) LEQ RK_WSP);
+
 ROUTINE IS_SP (R) =
     (RKIND(.R) EQL RK_SP OR RKIND(.R) EQL RK_WSP);
 
@@ -163,6 +167,24 @@ ROUTINE SIMPLE (C : REF VECTOR, BLOCK, O : REF VECTOR) =
         HASH,
         E;
     HASH = LEX_EAT(.C, %C'#');
+    ! #0.0, the floating point zero FCMP compares with.
+    IF .HASH AND CLEFT(C) GEQ 3
+    THEN
+        IF CH$EQL(3, CREST(C), 3, UPLIT BYTE ('0.0'))
+        THEN
+            BEGIN
+            LOCAL
+                Z : VECTOR[C_SIZE];
+            C[C_AT] = .C[C_AT] + 3;
+            Z[C_LINE] = UPLIT BYTE ('0');
+            Z[C_LEN] = 1;
+            Z[C_AT] = 0;
+            E = EXPR_PARSE(Z, .BLOCK);
+            IF .E EQL 0 THEN RETURN FALSE;
+            O[O_KIND] = OK_IMM;
+            O[O_EXPR] = .E;
+            RETURN TRUE
+            END;
     IF LEX_PEEK(.C) EQL %C':'
     THEN
         BEGIN
@@ -547,6 +569,33 @@ ROUTINE SAME_SIZE (RESULT, I0, R0, I1, R1, I2, R2, I3, R3) =
     IF .I2 GEQ 0 THEN IF SF(.R2) NEQ .S THEN RETURN FAIL_TEXT(COL(.I2), T('register sizes don''t match'));
     IF .I3 GEQ 0 THEN IF SF(.R3) NEQ .S THEN RETURN FAIL_TEXT(COL(.I3), T('register sizes don''t match'));
     .RESULT = .S;
+    TRUE
+    END;
+
+! FP i, result: a floating point register, S or D.
+ROUTINE FP (I, RESULT) =
+    BEGIN
+    LOCAL
+        R;
+    TRY(GETREG(.I, R));
+    IF RKIND(.R) NEQ RK_S AND RKIND(.R) NEQ RK_D
+    THEN
+        RETURN FAIL_TEXT(COL(.I), T('expected an S or D register'));
+    .RESULT = .R;
+    TRUE
+    END;
+
+! SAME_FP result, i, r...: the type field of floating point registers r, at
+! operands i, which must all be alike: 0 for S, 1 for D; up to three, the
+! rest -1.
+ROUTINE SAME_FP (RESULT, I0, R0, I1, R1, I2, R2) =
+    BEGIN
+    LOCAL
+        K;
+    K = RKIND(.R0);
+    IF .I1 GEQ 0 THEN IF RKIND(.R1) NEQ .K THEN RETURN FAIL_TEXT(COL(.I1), T('register sizes don''t match'));
+    IF .I2 GEQ 0 THEN IF RKIND(.R2) NEQ .K THEN RETURN FAIL_TEXT(COL(.I2), T('register sizes don''t match'));
+    .RESULT = .K EQL RK_D;
     TRUE
     END;
 
@@ -1852,6 +1901,193 @@ ROUTINE INSN =
                 OR SLL(.KW EQL K_UMADDL OR .KW EQL K_UMSUBL OR .KW EQL K_UMULL, 23)
                 OR SLL(RNUM(.RM), 16) OR SLL(.KW EQL K_SMSUBL OR .KW EQL K_UMSUBL, 15)
                 OR SLL(RNUM(.RA), 10) OR SLL(RNUM(.RN), 5) OR RNUM(.RD))
+            END;
+        [K_FADD, K_FSUB, K_FMUL, K_FDIV, K_FMAX, K_FMIN, K_FMAXNM, K_FMINNM, K_FNMUL]:
+            BEGIN
+            LOCAL
+                RD,
+                RN,
+                RM,
+                TY,
+                OPCODE;
+            TRY(COUNT(3, 3));
+            TRY(FP(0, RD));
+            TRY(FP(1, RN));
+            TRY(FP(2, RM));
+            TRY(SAME_FP(TY, 0, .RD, 1, .RN, 2, .RM));
+            OPCODE =
+                (SELECTONE .KW OF
+                    SET
+                    [K_FMUL]: 0;
+                    [K_FDIV]: 1;
+                    [K_FADD]: 2;
+                    [K_FSUB]: 3;
+                    [K_FMAX]: 4;
+                    [K_FMIN]: 5;
+                    [K_FMAXNM]: 6;
+                    [K_FMINNM]: 7;
+                    [OTHERWISE]: 8;
+                    TES);
+            RETURN FIXED(%X'1E200800' OR SLL(.TY, 22) OR SLL(RNUM(.RM), 16) OR SLL(.OPCODE, 12)
+                OR SLL(RNUM(.RN), 5) OR RNUM(.RD))
+            END;
+        [K_FABS, K_FNEG, K_FSQRT, K_FRINTN, K_FRINTP, K_FRINTM, K_FRINTZ, K_FRINTA, K_FRINTX,
+            K_FRINTI]:
+            BEGIN
+            LOCAL
+                RD,
+                RN,
+                TY,
+                OPCODE;
+            TRY(COUNT(2, 2));
+            TRY(FP(0, RD));
+            TRY(FP(1, RN));
+            TRY(SAME_FP(TY, 0, .RD, 1, .RN, -1, 0));
+            OPCODE =
+                (SELECTONE .KW OF
+                    SET
+                    [K_FABS]: 1;
+                    [K_FNEG]: 2;
+                    [K_FSQRT]: 3;
+                    [K_FRINTN]: 8;
+                    [K_FRINTP]: 9;
+                    [K_FRINTM]: 10;
+                    [K_FRINTZ]: 11;
+                    [K_FRINTA]: 12;
+                    [K_FRINTX]: 14;
+                    [OTHERWISE]: 15;
+                    TES);
+            RETURN FIXED(%X'1E204000' OR SLL(.TY, 22) OR SLL(.OPCODE, 15) OR SLL(RNUM(.RN), 5)
+                OR RNUM(.RD))
+            END;
+        [K_FCVT]:
+            BEGIN
+            LOCAL
+                RD,
+                RN,
+                TY,
+                OPCODE;
+            TRY(COUNT(2, 2));
+            TRY(FP(0, RD));
+            TRY(FP(1, RN));
+            IF RKIND(.RD) EQL RK_S AND RKIND(.RN) EQL RK_D
+            THEN
+                (TY = 1; OPCODE = 4)
+            ELSE IF RKIND(.RD) EQL RK_D AND RKIND(.RN) EQL RK_S
+            THEN
+                (TY = 0; OPCODE = 5)
+            ELSE
+                RETURN FAIL_TEXT(COL(0), T('FCVT converts between S and D registers'));
+            RETURN FIXED(%X'1E204000' OR SLL(.TY, 22) OR SLL(.OPCODE, 15) OR SLL(RNUM(.RN), 5)
+                OR RNUM(.RD))
+            END;
+        [K_FCMP, K_FCMPE]:
+            BEGIN
+            LOCAL
+                RN,
+                RM,
+                TY,
+                E,
+                V;
+            TRY(COUNT(2, 2));
+            TRY(FP(0, RN));
+            E = .KW EQL K_FCMPE;
+            IF IS_REG(1)
+            THEN
+                BEGIN
+                TRY(FP(1, RM));
+                TRY(SAME_FP(TY, 0, .RN, 1, .RM, -1, 0));
+                RETURN FIXED(%X'1E202000' OR SLL(.TY, 22) OR SLL(RNUM(.RM), 16)
+                    OR SLL(RNUM(.RN), 5) OR SLL(.E, 4))
+                END;
+            ! FCMP Sn, #0.0: written #0 or #0.0.
+            TRY(SAME_FP(TY, 0, .RN, -1, 0, -1, 0));
+            TRY(IMMAT(1, V));
+            IF .V NEQ 0 THEN RETURN FAIL_TEXT(COL(1), T('FCMP compares with a register or #0.0'));
+            RETURN FIXED(%X'1E202008' OR SLL(.TY, 22) OR SLL(RNUM(.RN), 5) OR SLL(.E, 4))
+            END;
+        [K_SCVTF, K_UCVTF]:
+            BEGIN
+            LOCAL
+                RD,
+                RN,
+                TY;
+            TRY(COUNT(2, 2));
+            TRY(FP(0, RD));
+            TRY(GP(1, FALSE, RN));
+            TRY(SAME_FP(TY, 0, .RD, -1, 0, -1, 0));
+            RETURN FIXED(%X'1E200000' OR SLL(SF(.RN), 31) OR SLL(.TY, 22)
+                OR SLL((IF .KW EQL K_SCVTF THEN 2 ELSE 3), 16) OR SLL(RNUM(.RN), 5) OR RNUM(.RD))
+            END;
+        [K_FCVTZS, K_FCVTZU, K_FCVTNS, K_FCVTNU, K_FCVTAS, K_FCVTAU, K_FCVTPS, K_FCVTPU, K_FCVTMS,
+            K_FCVTMU]:
+            BEGIN
+            LOCAL
+                RD,
+                RN,
+                TY,
+                RMODE,
+                OPCODE;
+            TRY(COUNT(2, 2));
+            TRY(GP(0, FALSE, RD));
+            TRY(FP(1, RN));
+            TRY(SAME_FP(TY, 1, .RN, -1, 0, -1, 0));
+            ! Toward zero, to nearest with ties even, away, plus or minus
+            ! infinity; then signed or unsigned.
+            RMODE =
+                (SELECTONE .KW OF
+                    SET
+                    [K_FCVTZS, K_FCVTZU]: 3;
+                    [K_FCVTPS, K_FCVTPU]: 1;
+                    [K_FCVTMS, K_FCVTMU]: 2;
+                    [OTHERWISE]: 0;
+                    TES);
+            OPCODE =
+                (IF .KW EQL K_FCVTAS OR .KW EQL K_FCVTAU THEN 4 ELSE 0)
+                OR (SELECTONE .KW OF
+                    SET
+                    [K_FCVTZU, K_FCVTNU, K_FCVTAU, K_FCVTPU, K_FCVTMU]: 1;
+                    [OTHERWISE]: 0;
+                    TES);
+            RETURN FIXED(%X'1E200000' OR SLL(SF(.RD), 31) OR SLL(.TY, 22) OR SLL(.RMODE, 19)
+                OR SLL(.OPCODE, 16) OR SLL(RNUM(.RN), 5) OR RNUM(.RD))
+            END;
+        [K_FMOV]:
+            BEGIN
+            LOCAL
+                RD,
+                RN,
+                G,
+                F,
+                TY,
+                OPCODE;
+            TRY(COUNT(2, 2));
+            TRY(GETREG(0, RD));
+            TRY(GETREG(1, RN));
+            IF NOT IS_GPR(.RD) AND NOT IS_GPR(.RN)
+            THEN
+                BEGIN
+                TRY(FP(0, RD));
+                TRY(FP(1, RN));
+                TRY(SAME_FP(TY, 0, .RD, 1, .RN, -1, 0));
+                RETURN FIXED(%X'1E204000' OR SLL(.TY, 22) OR SLL(RNUM(.RN), 5) OR RNUM(.RD))
+                END;
+            IF IS_GPR(.RD) AND IS_GPR(.RN)
+            THEN
+                RETURN FAIL_TEXT(COL(0), T('FMOV moves floating point registers'));
+            ! The bits, unchanged, between a register file and the other:
+            ! Wd and Sn, Xd and Dn.
+            IF IS_GPR(.RD) THEN (G = .RD; F = .RN; OPCODE = 6) ELSE (G = .RN; F = .RD; OPCODE = 7);
+            IF RKIND(.G) EQL RK_W AND RKIND(.F) EQL RK_S
+            THEN
+                TY = 0
+            ELSE IF RKIND(.G) EQL RK_X AND RKIND(.F) EQL RK_D
+            THEN
+                TY = 1
+            ELSE
+                RETURN FAIL_TEXT(COL(0), T('FMOV moves between Wn and Sn, or Xn and Dn'));
+            RETURN FIXED(%X'1E200000' OR SLL(SF(.G), 31) OR SLL(.TY, 22) OR SLL(.OPCODE, 16)
+                OR SLL(RNUM(.RN), 5) OR RNUM(.RD))
             END;
         [K_SMULH, K_UMULH]:
             BEGIN

@@ -78,6 +78,54 @@ start:
     mneg x0, x1, x2
     smull x0, w1, w2
     umull x0, w1, w2
+    fadd d0, d1, d2
+    fadd s3, s4, s5
+    fsub d0, d1, d31
+    fmul s0, s1, s2
+    fdiv d7, d8, d9
+    fmax d0, d1, d2
+    fmin s0, s1, s2
+    fmaxnm d0, d1, d2
+    fminnm d0, d1, d2
+    fnmul d0, d1, d2
+    fabs d0, d1
+    fneg s2, s3
+    fsqrt d4, d5
+    frintn d0, d1
+    frintp s0, s1
+    frintm d0, d1
+    frintz d0, d1
+    frinta d0, d1
+    frintx d0, d1
+    frinti d0, d1
+    fcvt s0, d1
+    fcvt d2, s3
+    fcmp d0, d1
+    fcmp s2, s3
+    fcmpe d0, d1
+    fcmp d0, #0.0
+    fcmpe s1, #0.0
+    scvtf d0, x1
+    scvtf s0, w1
+    scvtf d0, w1
+    ucvtf s2, x3
+    fcvtzs x0, d1
+    fcvtzs w0, s1
+    fcvtzu x0, s1
+    fcvtns x0, d1
+    fcvtnu w2, d3
+    fcvtas x0, d1
+    fcvtau x0, d1
+    fcvtps x0, d1
+    fcvtpu x0, d1
+    fcvtms x0, d1
+    fcvtmu x0, d1
+    fmov d0, d1
+    fmov s0, s1
+    fmov x0, d1
+    fmov d2, x3
+    fmov w0, s1
+    fmov s2, w3
     smaddl x0, w1, w2, x3
     umsubl x0, w1, w2, x3
     smulh x0, x1, x2

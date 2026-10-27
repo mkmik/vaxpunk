@@ -146,6 +146,19 @@ fn sym(s: &str, off: i64) -> String {
     }
 }
 
+/// A symbol as an instruction's operand: `#` before one named like a
+/// register, X1 or FP, which vasm would read as the register.
+fn sym_op(s: &str, off: i64) -> String {
+    let reg = |s: &str| {
+        matches!(s, "SP" | "WSP" | "XZR" | "WZR" | "FP" | "LR")
+            || s.len() > 1
+                && s.starts_with(['X', 'W', 'B', 'H', 'S', 'D', 'Q'])
+                && s[1..].parse::<u32>().is_ok_and(|n| n <= 31)
+    };
+    let t = sym(s, off);
+    if reg(s) { format!("#{t}") } else { t }
+}
+
 /// What an instruction defines and uses.
 fn operands(ins: &Ins) -> (Vec<u32>, Vec<&V>) {
     if let Ins::Link(c) = ins {
@@ -451,8 +464,8 @@ impl<'a> Routine<'a> {
             },
             V::C(c) => self.mov_imm(r, *c),
             V::Sym(s, o) => {
-                let s = sym(s, *o);
-                self.line(format!("adrp    {r}, {s}"));
+                let (op, s) = (sym_op(s, *o), sym(s, *o));
+                self.line(format!("adrp    {r}, {op}"));
                 self.line(format!("add     {r}, {r}, #:lo12:{s}"));
             }
             V::Slot(n, o) => {
@@ -843,7 +856,7 @@ impl<'a> Routine<'a> {
                 }
                 self.line(format!("mov     x9, #{}", args.len()));
                 match target {
-                    V::Sym(s, 0) => self.line(format!("bl      {s}")),
+                    V::Sym(s, 0) => self.line(format!("bl      {}", sym_op(s, 0))),
                     t => {
                         self.load_into(t, "x17");
                         self.line("blr     x17");
@@ -918,7 +931,7 @@ impl<'a> Routine<'a> {
             self.line(format!("mov     x9, #{}", c.args.len()));
         }
         match &c.target {
-            V::Sym(s, 0) => self.line(format!("bl      {s}")),
+            V::Sym(s, 0) => self.line(format!("bl      {}", sym_op(s, 0))),
             _ => self.line("blr     x17"),
         }
         if stack > 0 {
