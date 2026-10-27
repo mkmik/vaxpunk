@@ -27,8 +27,8 @@ status = "done"
 [[feature]]
 id = "service-macros"
 title = "System service macros: $QIOW(CHAN = ..., FUNC = ...) and the rest, keyword macros calling SYS$name, with each service's EXTERNAL ROUTINE"
-status = "todo"
-note = "UM 8.3; DEC's STARLET.R64 has 549 keyword macros and 499 EXTERNAL ROUTINEs, vaxpunk's only LITERALs and field macros, so BLISS code calls SYS$QIOW by position. The argument lists are starlet.mlb's $name_S macros, which services.txt already reads"
+status = "done"
+note = "UM 8.3: a keyword macro for each of starlet.mlb's 92 $name_S macros, its formals and defaults, declaring the service in a block of its own; a required keyword left out is an error (the language test's service_macros)"
 
 [[feature]]
 id = "rms-macros"

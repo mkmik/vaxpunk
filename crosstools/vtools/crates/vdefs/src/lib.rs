@@ -10,6 +10,9 @@
 //! letters, as `SS$_NORMAL`) becomes a LITERAL. A letter the rule doesn't
 //! know is an error that names the symbol, to be fixed in the library.
 //!
+//! After the definitions come the system services' keyword macros, one for
+//! each `$name_S` macro (UM 8.3).
+//!
 //! DEC's STARLET.R64 has the same field macros, with `$A_`, `$IS_` and
 //! `$IH_` fields signed, but makes `$V_` names field macros too, since its
 //! sources know which field a bit is in; the macro libraries give only the
@@ -198,7 +201,101 @@ pub fn generate(source: &str, text: &str, dialect: Dialect) -> Result<String, St
             }
         }
     }
+    out.push_str(&service_macros(text));
     Ok(out)
+}
+
+/// The system service keyword macros, one for each `$name_S` macro in
+/// `text`, as UM 8.3 has them in STARLET: `$QIOW(CHAN = .C, FUNC = F)`
+/// calls SYS$QIOW with the keywords' values in the service's order, the
+/// MACRO-32 macro's defaults for those left out, and an error for a
+/// required one left out. Each declares its service in a block of its own,
+/// so a module that declares it too, or defines it, can.
+fn service_macros(text: &str) -> String {
+    let mut out = String::new();
+    let (mut name, mut formals): (Option<String>, Vec<(String, Option<String>)>) =
+        (None, Vec::new());
+    for line in text.lines() {
+        let code = line.split(';').next().unwrap_or("");
+        let words: Vec<&str> = code.split_whitespace().collect();
+        match words.as_slice() {
+            [w, n, ..] if w.eq_ignore_ascii_case(".MACRO") && n.ends_with("_S") => {
+                name = Some(n.trim_end_matches("_S").to_string());
+                let args = code.find(n).map_or("", |i| &code[i + n.len()..]);
+                formals = args
+                    .split(',')
+                    .map(str::trim)
+                    .filter(|a| !a.is_empty())
+                    .map(|a| match a.split_once('=') {
+                        Some((f, d)) => (
+                            f.trim().to_string(),
+                            Some(d.trim().trim_start_matches('#').to_string()),
+                        ),
+                        None => (a.to_string(), None),
+                    })
+                    .collect();
+            }
+            [w, _, target] if w.eq_ignore_ascii_case("CALLS") && !target.contains('\'') => {
+                let Some(name) = name.take() else {
+                    continue;
+                };
+                let routine = target.trim_start_matches("G^");
+                let list: Vec<String> = formals
+                    .iter()
+                    .map(|(f, d)| match d {
+                        Some(d) => format!("{f} = {d}"),
+                        None => f.clone(),
+                    })
+                    .collect();
+                let head = wrap(&name, &list);
+                out.push_str(&format!("    {head} =\n"));
+                for (f, _) in formals.iter().filter(|(_, d)| d.is_none()) {
+                    out.push_str(&format!(
+                        "        %IF %NULL({f}) %THEN %ERROR('{name} needs {f}') %FI\n"
+                    ));
+                }
+                let args: Vec<String> = formals.iter().map(|(f, _)| f.clone()).collect();
+                let call = wrap(routine, &args);
+                let call = if args.is_empty() {
+                    format!("{call}()")
+                } else {
+                    call
+                };
+                out.push_str(&format!(
+                    "        BEGIN\n        EXTERNAL ROUTINE {routine};\n        {call}\n        END %,\n"
+                ));
+            }
+            _ => {}
+        }
+    }
+    if out.is_empty() {
+        return out;
+    }
+    out.truncate(out.len() - 2);
+    format!("\n! The system services (UM 8.3)\nKEYWORDMACRO\n{out};\n")
+}
+
+/// `name(items)`, the items a line of them at a time, the lines after the
+/// first indented by 8; just `name` if there are none.
+fn wrap(name: &str, items: &[String]) -> String {
+    let mut out = name.to_string();
+    let mut width = 8 + out.len();
+    for (i, f) in items.iter().enumerate() {
+        let sep = if i == 0 { "(" } else { ", " };
+        if width + sep.len() + f.len() > 96 {
+            out.push_str(",\n            ");
+            width = 12;
+        } else {
+            out.push_str(sep);
+            width += sep.len();
+        }
+        out.push_str(f);
+        width += f.len();
+    }
+    if !items.is_empty() {
+        out.push(')');
+    }
+    out
 }
 
 /// The run-time library routines the lint knows, which no macro defines:
@@ -273,6 +370,24 @@ X$V_FLAG = 3
             generate("x.mlb", text, Dialect::Bliss32)
                 .unwrap()
                 .contains("X$Q_B = 8, 0, 0, 0 %;")
+        );
+        let services = "
+        .MACRO  $WAITFR_S EFN
+        PUSHL   EFN
+        CALLS   #1, G^SYS$WAITFR
+        .ENDM   $WAITFR_S
+        .MACRO  $HIBER_S
+        CALLS   #0, G^SYS$HIBER
+        .ENDM   $HIBER_S
+";
+        assert!(
+            generate("s.mlb", services, Dialect::Bliss64).unwrap().ends_with(
+                "\n! The system services (UM 8.3)\nKEYWORDMACRO\n    $WAITFR(EFN) =\n        \
+                 %IF %NULL(EFN) %THEN %ERROR('$WAITFR needs EFN') %FI\n        BEGIN\n        \
+                 EXTERNAL ROUTINE SYS$WAITFR;\n        SYS$WAITFR(EFN)\n        END %,\n    \
+                 $HIBER =\n        BEGIN\n        EXTERNAL ROUTINE SYS$HIBER;\n        SYS$HIBER()\n        \
+                 END %;\n"
+            )
         );
         let bad = ".MACRO $YDEF\nY$Z_FOO = 1\n.ENDM\n";
         assert!(

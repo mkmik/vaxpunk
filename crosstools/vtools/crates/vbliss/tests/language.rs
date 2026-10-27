@@ -613,3 +613,37 @@ fn diagnostics() {
     let not = translate(&module(nv, "LOCAL Z; Z = NV(); Z = (;"));
     assert!(not.diags.iter().all(|d| d.sev == 'E'), "{:?}", not.diags);
 }
+
+/// A module compiled against vaxpunk's own require files, `lib/`.
+fn with_lib(source: &str) -> vbliss::Output {
+    let opts = vbliss::Options {
+        include: vec![std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../lib")],
+        ..vbliss::Options::default()
+    };
+    vbliss::translate(std::path::Path::new("lib.b64"), source, &opts)
+}
+
+#[test]
+fn service_macros() {
+    // vdefs's keyword macros for the system services (UM 8.3): the
+    // keywords in any order, the left-out ones' defaults, $HIBER bare.
+    let out = with_lib(&module(
+        "LIBRARY 'SYS$LIBRARY:STARLET';\nOWN CHAN : WORD, IOSB : VECTOR[4, WORD];",
+        "$ASSIGN(CHAN = CHAN, DEVNAM = %ASCID 'TT');\n\
+         $QIOW(CHAN = .CHAN, FUNC = IO$_WRITEVBLK, IOSB = IOSB, P2 = 10);\n$HIBER;",
+    ));
+    assert!(out.error().is_none(), "{:?}", out.error());
+    let ir = out.ir.unwrap();
+    for call in [
+        "call $SYS$ASSIGN(",
+        "call $SYS$QIOW(0, ",
+        "call $SYS$HIBER()",
+    ] {
+        assert!(ir.contains(call), "{call}: {ir}");
+    }
+    let missing = with_lib(&module(
+        "LIBRARY 'SYS$LIBRARY:STARLET';",
+        "$QIOW(FUNC = 1);",
+    ));
+    assert_eq!(missing.error().unwrap().msg, "%ERROR:\t$QIOW needs CHAN");
+}
