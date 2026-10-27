@@ -291,23 +291,181 @@ pub struct Front {
     pub diags: Vec<(String, Diag)>,
     /// The dot lint's warnings.
     pub lints: Vec<(String, Diag)>,
-    pub listing: String,
+    /// What the listing shows, but the machine code, which isn't made yet.
+    pub listing: Listing,
     pub messages: Vec<String>,
 }
 
+/// The listing's makings: its entries, the files they come from by
+/// number, the diagnostics by file number, and the libraries' statistics
+/// (`listing::Layout`).
+#[derive(Default)]
+pub struct Listing {
+    pub entries: Vec<crate::listing::Entry>,
+    pub files: Vec<String>,
+    pub diags: Vec<Diag>,
+    pub module: String,
+    pub libraries: Vec<(String, usize, usize, usize)>,
+}
+
+/// A qualifier's values: `(A, B=1)` or `A`, upper case.
+fn values(v: Option<&str>) -> Vec<String> {
+    v.unwrap_or("")
+        .trim_matches(['(', ')'])
+        .split(',')
+        .map(|a| a.trim().to_ascii_uppercase())
+        .filter(|a| !a.is_empty())
+        .collect()
+}
+
 impl Options {
-    /// Applies a qualifier, `/A32`, `/A64`, `/ASSUME=(...)` or
-    /// `/VARIANT[=n]`; false if it isn't one of them.
+    fn set(&mut self, switch: &str, on: bool) {
+        self.switches.retain(|(s, _)| s != switch);
+        self.switches.push((switch.into(), on));
+    }
+
+    /// Applies one of the BLISS verb's qualifiers, but /OBJECT, /LIST and
+    /// /INCLUDE, which name files; false if it isn't one.
     pub fn qualifier(&mut self, q: &str) -> Result<bool, String> {
-        let (name, value) = match q.split_once('=') {
+        let (name, value) = match q.split_once(['=', ':']) {
             Some((n, v)) => (n, Some(v)),
             None => (q, None),
         };
-        match name.to_ascii_uppercase().as_str() {
+        let name = name.to_ascii_uppercase();
+        // A qualifier may be shortened to four characters, as DCL allows.
+        let is = |full: &str| name.len() >= full.len().min(5) && full.starts_with(&name[..]);
+        let bad = |v: &str| Err(format!("bad value {v} for {name}"));
+        match name.as_str() {
             "/A32" => self.dialect.a32 = true,
             "/A64" => self.dialect.a32 = false,
             "/COUNT" => self.nocount = false,
             "/NOCOUNT" => self.nocount = true,
+            _ if is("/SOURCE_LIST") => {
+                for v in values(value) {
+                    let (base, on) = match v.strip_prefix("NO") {
+                        Some(b) => (b, false),
+                        None => (v.as_str(), true),
+                    };
+                    let switch = match base {
+                        "SOURCE" => "LIST_SOURCE",
+                        "REQUIRE" => "LIST_REQUIRE",
+                        "EXPAND_MACROS" => "LIST_EXPAND",
+                        "TRACE_MACROS" => "LIST_TRACE",
+                        "LIBRARY" => "LIST_LIBRARY",
+                        _ => match v.split_once(['=', ':']) {
+                            Some(("PAGE_SIZE", n)) => {
+                                match n.parse() {
+                                    Ok(n @ 20..) => self.page_size = Some(n),
+                                    _ => return bad(&v),
+                                }
+                                continue;
+                            }
+                            _ => return bad(&v),
+                        },
+                    };
+                    self.set(switch, on);
+                }
+            }
+            _ if is("/MACHINE_CODE") => self.machine_code = true,
+            _ if is("/NOMACHINE_CODE") => self.machine_code = false,
+            _ if is("/SYNTAX_LEVEL") => {
+                self.syntax_level = match value.map(str::parse) {
+                    Some(Ok(n @ 1..=3)) => Some(n),
+                    _ => return bad(value.unwrap_or("")),
+                }
+            }
+            _ if is("/NAMES") => match values(value).as_slice() {
+                [v] if v == "UPPERCASE" => self.lowercase = false,
+                [v] if v == "LOWERCASE" => self.lowercase = true,
+                _ => return bad(value.unwrap_or("")),
+            },
+            _ if is("/TERMINAL") => {
+                for v in values(value) {
+                    match v.as_str() {
+                        "ERRORS" => self.set("ERRS", true),
+                        "NOERRORS" => self.set("ERRS", false),
+                        // BLISS-32's, gone from BLISS-64 (RN 2.19.15).
+                        _ => return bad(&v),
+                    }
+                }
+            }
+            _ if is("/CODE") => self.set("CODE", true),
+            _ if is("/NOCODE") => self.set("CODE", false),
+            _ if is("/DEBUG") => self.set("DEBUG", true),
+            _ if is("/NODEBUG") => self.set("DEBUG", false),
+            _ if is("/TRACEBACK") => self.set("TRACEBACK", true),
+            _ if is("/NOTRACEBACK") => self.set("TRACEBACK", false),
+            _ if is("/CHECK") => {
+                for v in values(value) {
+                    match v.as_str() {
+                        "ALL" | "NONE" => {
+                            for (s, _) in SWITCH_DEFAULTS
+                                .iter()
+                                .filter(|(s, _)| s.starts_with("CHECK_"))
+                            {
+                                self.set(s, v == "ALL");
+                            }
+                        }
+                        _ => {
+                            let (base, on) = match v.strip_prefix("NO") {
+                                Some(b) => (b, false),
+                                None => (v.as_str(), true),
+                            };
+                            let switch = format!("CHECK_{base}");
+                            if !SWITCH_DEFAULTS.iter().any(|(s, _)| *s == switch) {
+                                return bad(&v);
+                            }
+                            self.set(&switch, on);
+                        }
+                    }
+                }
+            }
+            _ if is("/LANGUAGE") => {
+                self.language = values(value);
+                for l in &self.language {
+                    if !LANGUAGES.contains(&l.as_str()) {
+                        return bad(l);
+                    }
+                }
+            }
+            _ if is("/LIBRARY") => self.library = true,
+            _ if is("/CROSS_REFERENCE") => self
+                .notes
+                .push("CROSS_REFERENCE not implemented in BLISS-64E".into()),
+            // Accepted, and nothing to do: /ERROR_LIMIT, as vbliss stops at
+            // the first error; /DIAGNOSTICS and /ANALYSIS_DATA, until LSE
+            // and SCA read them; /INITIAL_PSECT, as LOCAL initial values
+            // are code; and Alpha's code generation.
+            _ if [
+                "/ERROR_LIMIT",
+                "/NOERROR_LIMIT",
+                "/DIAGNOSTICS",
+                "/NODIAGNOSTICS",
+                "/ANALYSIS_DATA",
+                "/NOANALYSIS_DATA",
+                "/INITIAL_PSECT",
+                "/NOINITIAL_PSECT",
+                "/OPTIMIZE",
+                "/NOOPTIMIZE",
+                "/ARCHITECTURE",
+                "/GRANULARITY",
+                "/TIE",
+                "/NOTIE",
+                "/ALPHA_REGISTER_MAPPING",
+                "/NOALPHA_REGISTER_MAPPING",
+                "/ANNOTATIONS",
+                "/NOANNOTATIONS",
+            ]
+            .iter()
+            .any(|q| is(q)) => {}
+            _ if is("/ENVIRONMENT") => {
+                for v in values(value) {
+                    match v.as_str() {
+                        "FP" | "NOFP" => self.set("NOFP", v == "NOFP"),
+                        _ => return bad(&v),
+                    }
+                }
+            }
             "/VARIANT" => {
                 self.variant = match value {
                     Some(n) => n.parse().map_err(|_| format!("bad /VARIANT value {n}"))?,
@@ -322,6 +480,7 @@ impl Options {
                         "LONG_DEFAULT" => self.dialect.long_default = on,
                         "REF_LONG" => self.dialect.ref_long = on,
                         "SIGNED_LONG" => self.dialect.signed_long = on,
+                        "QUAD_LITERALS" => self.set("QUAD_LITERALS", on),
                         _ => {}
                     }
                 }
@@ -334,7 +493,12 @@ impl Options {
     /// The qualifiers on a test source's first line, `! BLISS: /A32` and
     /// the like, which the oracle compiles it with too.
     pub fn from_source(text: &str) -> Options {
-        let mut opts = Options::default();
+        Options::default().with_source(text)
+    }
+
+    /// These options, then the qualifiers on a test source's first line.
+    pub fn with_source(self, text: &str) -> Options {
+        let mut opts = self;
         if let Some(rest) = text.lines().next().and_then(|l| {
             l.get(..8)
                 .filter(|p| p.eq_ignore_ascii_case("! BLISS:"))
@@ -387,7 +551,8 @@ pub fn wrap(v: i64) -> i64 {
     if WIDE32.get() { v as i32 as i64 } else { v }
 }
 
-/// How to compile: `/VARIANT`, `/INCLUDE` and the dialect.
+/// How to compile: the BLISS verb's qualifiers (docs/bliss64.md,
+/// *Switches and qualifiers*).
 #[derive(Clone, Debug, Default)]
 pub struct Options {
     pub dialect: Dialect,
@@ -397,10 +562,33 @@ pub struct Options {
     /// Where REQUIRE and LIBRARY look for files after the source's own
     /// directory.
     pub include: Vec<std::path::PathBuf>,
+    /// The switch settings the qualifiers make the defaults, by the
+    /// switches' names (UM table 1-1): ("LIST_EXPAND", true) for
+    /// /SOURCE_LIST=EXPAND_MACROS, ("CODE", false) for /NOCODE.
+    pub switches: Vec<(String, bool)>,
+    /// /SOURCE_LIST=PAGE_SIZE: a listing page's lines, 60 if not given.
+    pub page_size: Option<u32>,
+    /// /MACHINE_CODE: the assembly after the source in the listing.
+    pub machine_code: bool,
+    /// /SYNTAX_LEVEL, 2 if not given.
+    pub syntax_level: Option<u8>,
+    /// /NAMES=LOWERCASE: external names in lower case.
+    pub lowercase: bool,
+    /// /LIBRARY: the source is a library's, which makes no object.
+    pub library: bool,
+    /// /LANGUAGE: the dialects whose subset the source is checked against.
+    pub language: Vec<String>,
+    /// Informational messages the qualifiers cause.
+    pub notes: Vec<String>,
+    /// The command line, which the listing ends with.
+    pub command: String,
+    /// The listing's date, `DD-MMM-YYYY HH:MM:SS`; now if not given.
+    pub date: Option<String>,
 }
 
 pub struct Parser<'a> {
     pub(crate) load: Loader<'a>,
+    pub(crate) opts: Options,
     /// The lexemes the parser has read, and the next one's index: read
     /// one at a time from the lexical processor, as BLISS reads them.
     pub(crate) toks: Vec<Lexeme>,
@@ -477,6 +665,13 @@ pub struct Parser<'a> {
     libraries: HashMap<String, Vec<(String, usize)>>,
     pub(crate) library_depth: u32,
     library_imports: Vec<usize>,
+    /// The libraries read: each one's name, how many names it gives and
+    /// its size; the library each of those names is from; and the names
+    /// in the order first looked up, which LIBRARY lists.
+    library_stats: Vec<(String, usize, usize)>,
+    library_of: HashMap<usize, usize>,
+    loaded: std::cell::RefCell<Vec<usize>>,
+    loaded_shown: usize,
     /// The routines being parsed, by name, for %ROUTINE.
     pub(crate) routine_names: Vec<String>,
 }
@@ -490,13 +685,14 @@ pub fn parse(name: &str, text: &str, load: Loader, opts: &Options) -> Front {
                 module: Err(e),
                 diags: Vec::new(),
                 lints: Vec::new(),
-                listing: String::new(),
+                listing: Listing::default(),
                 messages: Vec::new(),
             };
         }
     };
     let mut p = Parser {
         load,
+        opts: opts.clone(),
         toks: Vec::new(),
         pos: 0,
         lx,
@@ -537,14 +733,32 @@ pub fn parse(name: &str, text: &str, load: Loader, opts: &Options) -> Front {
         libraries: HashMap::new(),
         library_depth: 0,
         library_imports: Vec::new(),
+        library_stats: Vec::new(),
+        library_of: HashMap::new(),
+        loaded: Default::default(),
+        loaded_shown: 0,
         routine_names: Vec::new(),
     };
     p.lx.variant = opts.variant;
     p.m.dialect = opts.dialect;
     p.m.nocount = opts.nocount;
+    p.m.nofp = opts.switches.contains(&("NOFP".into(), true));
+    for msg in &opts.notes {
+        p.diags.push(Diag {
+            sev: 'I',
+            file: 0,
+            line: 0,
+            col: 0,
+            msg: msg.clone(),
+        });
+    }
     WIDE32.set(opts.dialect.a32);
     p.predeclare();
-    let mut module = p.module();
+    let mut module = if opts.library {
+        p.library_module()
+    } else {
+        p.module()
+    };
     if module.is_ok() {
         p.lint_formals();
     }
@@ -573,14 +787,23 @@ pub fn parse(name: &str, text: &str, load: Loader, opts: &Options) -> Front {
             msg: e.msg.clone(),
         });
     }
-    let header = format!(
-        "{:<32}Source Listing{:>52}\n{:<32}Source Listing{:>52}\n\n",
-        p.m.name,
-        crate::TOOL,
-        p.m.ident.clone().unwrap_or_default(),
-        name
-    );
-    let listing = crate::listing::render(&header, &p.lx.entries, &diags);
+    p.note_loaded();
+    let loaded = p.loaded.borrow().clone();
+    let listing = Listing {
+        entries: std::mem::take(&mut p.lx.entries),
+        files: p.lx.files.iter().map(|f| f.name.clone()).collect(),
+        diags: diags.clone(),
+        module: p.m.name.clone(),
+        libraries: p
+            .library_stats
+            .iter()
+            .enumerate()
+            .map(|(i, (name, total, bytes))| {
+                let used = loaded.iter().filter(|id| p.library_of[*id] == i).count();
+                (name.clone(), *total, used, *bytes)
+            })
+            .collect(),
+    };
     Front {
         diags: diags
             .into_iter()
@@ -866,8 +1089,10 @@ impl Parser<'_> {
             Some(b) if SWITCH_DEFAULTS.iter().any(|(s, _)| *s == b) => (b, true),
             _ => (name, false),
         };
+        let given = self.opts.switches.iter().find(|(s, _)| s == base);
         let on = match self.lookup(&format!("%SWITCH {base}")) {
             Some(id) => self.m.syms[id].kind == Kind::Literal(1),
+            None if given.is_some() => given.unwrap().1,
             None => SWITCH_DEFAULTS
                 .iter()
                 .find(|(s, _)| *s == base)
@@ -941,12 +1166,59 @@ impl Parser<'_> {
     }
 
     pub(crate) fn lookup(&self, name: &str) -> Option<usize> {
-        self.scopes.iter().rev().find_map(|s| s.get(name).copied())
+        let id = self
+            .scopes
+            .iter()
+            .rev()
+            .find_map(|s| s.get(name).copied())?;
+        // A library's name is loaded when first looked up, as BLISS loads
+        // it from the library file.
+        if self.library_of.contains_key(&id) && !self.loaded.borrow().contains(&id) {
+            self.loaded.borrow_mut().push(id);
+        }
+        Some(id)
+    }
+
+    /// LIBRARY's notes of the library names loaded since the last.
+    pub(crate) fn note_loaded(&mut self) {
+        let n = self.loaded.borrow().len();
+        if self.loaded_shown < n && self.switch_on("LIST_SOURCE") && self.switch_on("LIST_LIBRARY")
+        {
+            for k in self.loaded_shown..n {
+                let id = self.loaded.borrow()[k];
+                let library = &self.library_stats[self.library_of[&id]].0;
+                let note = format!(
+                    "Loaded symbol {} from library {library}",
+                    self.m.syms[id].name
+                );
+                self.lx.entries.push(crate::listing::Entry::Note(note));
+            }
+        }
+        self.loaded_shown = n;
     }
 
     /// Declares `name` in the innermost scope; a forward routine
     /// declaration is completed rather than redeclared.
     pub(crate) fn declare(&mut self, name: String, kind: Kind) -> R<usize> {
+        // The words each syntax level reserves (docs/bliss64.md, *Syntax
+        // levels*): level 2, the default, has QUAD and the like.
+        let level = self.opts.syntax_level.unwrap_or(2);
+        if level >= 2 && LEVEL2.contains(&name.as_str()) || level >= 3 && name == "VARIABLE" {
+            let at = self.last();
+            return Err(self.error_at(
+                &at,
+                format!("Name to be declared is a reserved word:  {name}"),
+            ));
+        }
+        if name.chars().count() > 64 {
+            let at = self.last();
+            let short: String = name.chars().take(64).collect();
+            self.diag(
+                'W',
+                &at,
+                format!("Name \"{short}\" longer than 64 characters"),
+            );
+        }
         if let Some(&id) = self.scopes.last().unwrap().get(&name)
             && let Some(i) = self.forward_data.iter().position(|&f| f == id)
             && let Kind::Data {
@@ -958,7 +1230,11 @@ impl Parser<'_> {
             self.forward_data.remove(i);
             self.m.syms[id].kind = kind;
             if storage == Storage::Global {
-                self.m.syms[id].asm = name;
+                self.m.syms[id].asm = if self.opts.lowercase {
+                    name.to_lowercase()
+                } else {
+                    name
+                };
             }
             return Ok(id);
         }
@@ -1018,6 +1294,12 @@ impl Parser<'_> {
                 self.asm_names.insert(name.clone(), 1);
                 name.clone()
             }
+        };
+        // /NAMES=LOWERCASE: the linker's names in lower case, C's.
+        let asm = if self.opts.lowercase {
+            asm.to_lowercase()
+        } else {
+            asm
         };
         let id = self.m.syms.len();
         if let (
@@ -1130,6 +1412,25 @@ impl Parser<'_> {
         }
         if !self.at_punct('(') && !self.at_punct('=') && self.set_switch(&name) {
             return Ok(());
+        }
+        if name == "LIST" && self.eat_punct('(') {
+            // Each option a LIST_ switch: LIST(NOEXPAND) is NOLIST_EXPAND.
+            loop {
+                let Tok::Name(o) = self.next() else {
+                    return self.err("expected a LIST option");
+                };
+                let (no, base) = match o.strip_prefix("NO") {
+                    Some(b) => ("NO", b),
+                    None => ("", o.as_str()),
+                };
+                if !self.set_switch(&format!("{no}LIST_{base}")) {
+                    return self.err(format!("{o} is not a LIST option"));
+                }
+                if !self.eat_punct(',') {
+                    break;
+                }
+            }
+            return self.expect_punct(')');
         }
         if name == "LINKAGE" && self.eat_punct('(') {
             // The default linkage for the block (LRM 18.2): `%LINKAGE`,
@@ -1272,7 +1573,24 @@ impl Parser<'_> {
         let names = match self.libraries.get(&name) {
             Some(names) => names.clone(),
             None => {
-                let names = self.read_library(&name)?;
+                let (names, bytes) = self.read_library(&name)?;
+                let i = self.library_stats.len();
+                let given: Vec<usize> = names
+                    .iter()
+                    .filter(|(n, _)| !n.starts_with('%'))
+                    .map(|&(_, id)| id)
+                    .collect();
+                self.library_stats.push((name.clone(), given.len(), bytes));
+                for id in given {
+                    self.library_of.entry(id).or_insert(i);
+                }
+                if self.switch_on("LIST_SOURCE") && self.switch_on("LIST_LIBRARY") {
+                    let date = self.opts.date.clone().unwrap_or_default();
+                    self.lx.entries.push(crate::listing::Entry::Note(format!(
+                        "Library file {name} produced by {} on {date}",
+                        crate::TOOL
+                    )));
+                }
                 self.libraries.insert(name, names.clone());
                 names
             }
@@ -1298,10 +1616,10 @@ impl Parser<'_> {
 
     /// Parses library `name`'s declarations in a context of their own;
     /// returns the names they declare.
-    fn read_library(&mut self, name: &str) -> R<Vec<(String, usize)>> {
+    fn read_library(&mut self, name: &str) -> R<(Vec<(String, usize)>, usize)> {
         // The lexemes already read ahead are the declaration's: none.
         self.toks.truncate(self.pos);
-        self.library_file(name)?;
+        let bytes = self.library_file(name)?;
         let predeclared = self.scopes[0].clone();
         let outer = std::mem::replace(&mut self.scopes, vec![predeclared, HashMap::new()]);
         let forward = std::mem::take(&mut self.forward_data);
@@ -1321,11 +1639,31 @@ impl Parser<'_> {
             .filter(|(_, id)| !imported.contains(id))
             .collect();
         names.sort();
-        Ok(names)
+        Ok((names, bytes))
     }
 
     /// The declarations of a library's source, up to its end.
     fn library_declarations(&mut self) -> R<()> {
+        self.library_body()?;
+        // The library's Eof, in `toks` at `pos`, goes with its stream.
+        self.toks.truncate(self.pos);
+        self.end_library();
+        Ok(())
+    }
+
+    /// A library's source compiled on its own, as /LIBRARY does: its
+    /// declarations, checked as LIBRARY reads them, and no code.
+    pub(crate) fn library_module(&mut self) -> R<()> {
+        self.predeclare_structures()?;
+        self.scopes.push(HashMap::new());
+        self.library_depth += 1;
+        let r = self.library_body();
+        self.library_depth -= 1;
+        self.m.nocode = true;
+        r
+    }
+
+    fn library_body(&mut self) -> R<()> {
         loop {
             if self.eat("REQUIRE") {
                 self.require()?;
@@ -1353,9 +1691,6 @@ impl Parser<'_> {
         if *self.peek() != Tok::Eof {
             return self.err("Library source module must contain only declarations");
         }
-        // The library's Eof, in `toks` at `pos`, goes with its stream.
-        self.toks.truncate(self.pos);
-        self.end_library();
         Ok(())
     }
 
@@ -2789,6 +3124,11 @@ fn string_value(s: &[u8]) -> Option<i64> {
 
 /// The value of a constant expression, as the fullword arithmetic gives
 /// it, or None.
+/// /LANGUAGE's and LANGUAGE's dialects (LRM 18.2, RN 2.26).
+pub const LANGUAGES: &[&str] = &[
+    "COMMON", "BLISS16", "BLISS32", "BLISS36", "BLISS32M", "BLISS32E", "BLISS64E",
+];
+
 /// The on-off switches and whether each is on by default: the LRM's
 /// (18.2, 19.2) and the Alpha compilers' (RN 2.8.5, 2.26), with the
 /// `/CHECK` options' defaults (RN 2.19.2).
@@ -2814,6 +3154,18 @@ const SWITCH_DEFAULTS: &[(&str, bool)] = &[
     ("CHECK_REDECLARE", false),
     ("CHECK_SHARE", true),
     ("CHECK_SHORT_ADDRESS", false),
+    // LIST's options (LRM 18.2): the source part's, as /SOURCE_LIST sets
+    // them, and the machine code's, which vbliss's listing doesn't vary.
+    ("LIST_SOURCE", true),
+    ("LIST_REQUIRE", false),
+    ("LIST_EXPAND", false),
+    ("LIST_TRACE", false),
+    ("LIST_LIBRARY", false),
+    ("LIST_OBJECT", true),
+    ("LIST_ASSEMBLY", false),
+    ("LIST_SYMBOLIC", true),
+    ("LIST_BINARY", true),
+    ("LIST_COMMENTARY", true),
 ];
 
 pub fn fold(e: &Expr) -> Option<i64> {
@@ -2877,6 +3229,15 @@ pub fn shift(a: i64, n: i64) -> i64 {
         _ => a >> 63,
     }
 }
+
+/// The words syntax level 2 reserves besides the manual's (RN 2.19.11).
+const LEVEL2: &[&str] = &[
+    "QUAD",
+    "SHARED",
+    "ALIAS",
+    "EXTERNAL_NAME",
+    "NOCHECK_ALIGNMENT",
+];
 
 /// Words that can't name anything.
 pub const RESERVED: &[&str] = &[

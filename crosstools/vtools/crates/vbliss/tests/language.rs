@@ -467,3 +467,67 @@ fn register_builtins() {
         "{bare}"
     );
 }
+
+#[test]
+fn qualifiers() {
+    // The BLISS verb's qualifiers, shortened to four characters as DCL
+    // allows; the switches they set the defaults of.
+    let mut o = vbliss::Options::default();
+    for q in [
+        "/MACH",
+        "/CHECK=(ALL,NOFIELD)",
+        "/OPTIMIZE=LEVEL=4",
+        "/TERM=NOERRORS",
+    ] {
+        assert!(o.qualifier(q).unwrap(), "{q}");
+    }
+    assert!(o.machine_code);
+    for s in [
+        ("CHECK_LONGWORD", true),
+        ("CHECK_FIELD", false),
+        ("ERRS", false),
+    ] {
+        assert!(o.switches.contains(&(s.0.into(), s.1)), "{s:?}");
+    }
+    assert!(o.qualifier("/SYNTAX_LEVEL=4").is_err());
+    assert!(o.qualifier("/SOURCE_LIST=HEADER").is_err());
+    assert!(!o.qualifier("/FOO").unwrap());
+    let with = |q: &str, src: &str| {
+        let mut o = vbliss::Options::default();
+        assert!(o.qualifier(q).unwrap());
+        vbliss::translate(std::path::Path::new("q.b64"), src, &o)
+    };
+    // Syntax level 2, the default, reserves QUAD; level 1 doesn't (oracle
+    // SYNLV, SYNLV1).
+    let quad = module("OWN QUAD;", "");
+    assert_eq!(
+        error(&quad),
+        "Name to be declared is a reserved word:  QUAD"
+    );
+    assert!(with("/SYNTAX_LEVEL=1", &quad).error().is_none());
+    let long = format!("OWN {};", "A".repeat(65));
+    assert!(
+        translate(&module(&long, "")).diags[0]
+            .msg
+            .contains("longer than 64 characters")
+    );
+    // /NAMES=LOWERCASE names the linker's symbols as C does.
+    let out = with(
+        "/NAMES=LOWERCASE",
+        &module("EXTERNAL ROUTINE PUTS; GLOBAL G;", "PUTS(G);"),
+    );
+    let asm = out.asm.unwrap();
+    assert!(asm.contains("bl      puts") && asm.contains("g::"), "{asm}");
+    // /NOCODE and /LIBRARY make no code; a library's source has only
+    // declarations.
+    assert!(with("/NOCODE", &module("", "")).nocode);
+    let lib = with("/LIBRARY", "LITERAL A = 1;\nMACRO M = 2 %;\n");
+    assert!(lib.nocode && lib.error().is_none());
+    let bad = with("/LIBRARY", "ROUTINE R = 1;\n");
+    assert!(bad.error().is_some());
+    let xref = with("/CROSS_REFERENCE", &module("", ""));
+    assert_eq!(
+        xref.diags[0].msg,
+        "CROSS_REFERENCE not implemented in BLISS-64E"
+    );
+}

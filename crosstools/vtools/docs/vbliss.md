@@ -8,9 +8,14 @@ describes the dialect.
 
 ```
 vbliss [/A64 | /A32] [/ASSUME=(LONG_DEFAULT, REF_LONG, SIGNED_LONG)]
-       [/OBJECT=file | -o file] [/LIST[=file]] [/VARIANT=n]
-       [/INCLUDE=(dir,...) | -I dir] [--ir] [--asm] SOURCE
+       [/OBJECT=file | -o file | /NOOBJECT] [/LIST[=file] | /NOLIST]
+       [/SOURCE_LIST=(...)] [/[NO]MACHINE_CODE] [/VARIANT=n]
+       [/INCLUDE=(dir,...) | -I dir] [/LIBRARY] [--ir] [--asm] SOURCE
 ```
+
+and the BLISS verb's other qualifiers, which `docs/bliss64.md` *Switches
+and qualifiers* lists: each sets the default of the switch it stands for
+(UM table 1-1), and DCL's first four characters are enough.
 
 A `.B32` source is BLISS-32, as `/A32` makes any source; `/A64` is the
 default. Require files are looked for as `.R64`, then `.REQ`, or under
@@ -275,11 +280,29 @@ as BLISSA64 lays them out. A run-time `BIND` and a `LOCAL`'s `INITIAL` or
 
 ## The listing
 
-`listing.rs` writes the source part of the listing as BLISSA64 does with
-`/SOURCE_LIST=(EXPAND_MACROS,REQUIRE)`, so the listings of `tests/bliss`
-compare with the oracle's line for line once page headers and the closing
-summary are dropped (the `listing` test):
+`listing.rs` writes the listing as BLISSA64 does, so the listings of
+`tests/bliss` and `tests/bliss-listings` compare with the oracle's line
+for line once page headers and the closing summary are dropped (the
+`listing` test, which compiles as the oracle does, with
+`/SOURCE_LIST=(EXPAND_MACROS,REQUIRE)`):
 
+- Pages of 60 lines, or `/SOURCE_LIST=PAGE_SIZE`'s, each under a header:
+  the module's name (blank on the first page, which BLISS writes before
+  it reads the name), the title, the date, vbliss and the page number;
+  then the subtitle, the date and the file the page's first line is
+  from. `%TITLE` and `%SBTTL` set the title and subtitle from the next
+  page on.
+- `/SOURCE_LIST` and the `LIST` switch, in the module head or a
+  `SWITCHES` declaration for its block, choose what the source part has:
+  `SOURCE` the lines at all, `REQUIRE` the require files' lines,
+  `EXPAND_MACROS` (`EXPAND`) the expansions, `TRACE_MACROS` (`TRACE`) each
+  call's parameter bindings and iterations too, and `LIBRARY` a line for
+  each library read and for each of its names when first used. The
+  defaults are BLISS's: source lines only. A line with a diagnostic shows
+  whatever they say.
+- After the source part: `/MACHINE_CODE`'s pages, the vasm source vbliss
+  made, without BLISSA64's addresses and binary; the libraries'
+  statistics; and a page with the command line.
 - A source line is listed when the parser asks for a lexeme on a later
   line, with the block depth at that moment, so a block's last line still
   shows its depth; a block closes in the listing once the lexeme after it

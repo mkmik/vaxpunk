@@ -162,8 +162,8 @@ note = "bliss64.md Built-ins: one the PAL lacks is a compile error. CMP_STORE_x 
 [[feature]]
 id = "qualifiers"
 title = "The BLISS verb's other qualifiers: /SOURCE_LIST, /MACHINE_CODE, /NAMES, /SYNTAX_LEVEL, /TERMINAL, /ERROR_LIMIT, /LANGUAGE, /DEBUG, /TRACEBACK, /[NO]CODE, Alpha's code generation ones ignored"
-status = "todo"
-note = "BLISS_AN.CLD, bliss64.md Switches and qualifiers: today /A32, /A64, /ASSUME, /VARIANT, /INCLUDE, /OBJECT and /LIST, any other a usage error. /SYNTAX_LEVEL=2 reserves QUAD and ALIAS, which are names today. /DIAGNOSTICS and /ANALYSIS_DATA write nothing until t8y:/layered/lse and t8y:/layered/sca"
+status = "done"
+note = "BLISS_AN.CLD, bliss64.md Switches and qualifiers: each sets its switch's default (Options::qualifier, the language test's qualifiers). /SYNTAX_LEVEL=2, the default, reserves QUAD, ALIAS and the rest (oracle SYNLV, SYNLV1). /LANGUAGE's checks are #checks'. /DIAGNOSTICS and /ANALYSIS_DATA write nothing until t8y:/layered/lse and t8y:/layered/sca"
 
 [[feature]]
 id = "checks"
@@ -174,8 +174,8 @@ note = "RN 2.19.2-2.19.8, 2.26; LRM appendix C. bliss64.md names LONGWORD, SHORT
 [[feature]]
 id = "listing"
 title = "The rest of the listing: /MACHINE_CODE's ARM64, /SOURCE_LIST and LIST options, %TITLE and %SBTTL headers, the closing summary"
-status = "todo"
-note = "PRD-0004 Listing; the listing is the source part with expansions, whatever LIST says, under a 'Source Listing' header"
+status = "done"
+note = "PRD-0004 Listing; vbliss.md The listing. Pages, headers, %TITLE and %SBTTL, /SOURCE_LIST and LIST, TRACE, LIBRARY, the statistics and the command line match BLISSA64 (tests/bliss-listings, oracle LST*). /MACHINE_CODE lists the vasm source, without addresses and binary"
 
 [[feature]]
 id = "diagnostics"

@@ -71,6 +71,10 @@ struct Stream {
 }
 
 /// An expansion the listing shows: `[NAME]=` and the lexemes it gave.
+/// An iterative macro's iteration, for TRACE: the separator before it
+/// (the opening grouper before the first), its actuals and its text.
+type Iteration = (Option<Tok>, Vec<Vec<Lexeme>>, Vec<Lexeme>);
+
 struct Expansion {
     id: usize,
     name: String,
@@ -177,7 +181,8 @@ impl Parser<'_> {
 
     /// Reads library `name`'s source next, unlisted. It ends with Eof,
     /// which `end_library` takes away once its declarations are read.
-    pub(crate) fn library_file(&mut self, name: &str) -> R<()> {
+    /// Its size in bytes.
+    pub(crate) fn library_file(&mut self, name: &str) -> R<usize> {
         let text = (self.load)(name).map_err(|e| self.error(e))?;
         self.lx.push_file(name, &text, false)?;
         self.lx.files.last_mut().unwrap().require = true;
@@ -185,7 +190,7 @@ impl Parser<'_> {
         f.listed = f.lines.len() as u32;
         // BLISSA64 numbers the library as one line.
         self.lx.listed += 1;
-        Ok(())
+        Ok(text.len())
     }
 
     /// Ends the library whose Eof the parser has read: its stream goes.
@@ -260,12 +265,16 @@ impl Parser<'_> {
 
     /// Lists the lines of `file` up to `upto`.
     fn list(&mut self, file: u16, upto: u32) {
+        self.note_loaded();
         let flag = self.lx.reading.last().copied().unwrap_or(' ');
+        let listed = self.switch_on("LIST_SOURCE")
+            && (!self.lx.files[file as usize].require || self.switch_on("LIST_REQUIRE"));
         let f = &mut self.lx.files[file as usize];
         while f.listed < upto.min(f.lines.len() as u32) {
             f.listed += 1;
             self.lx.listed += 1;
             self.lx.entries.push(Entry::Line {
+                listed,
                 flag,
                 require: f.require,
                 depth: self.depth,
@@ -279,12 +288,84 @@ impl Parser<'_> {
 
     /// Adds an expansion's line to the listing.
     fn show(&mut self, e: &Expansion) {
+        if !self.switch_on("LIST_SOURCE")
+            || !self.switch_on("LIST_EXPAND") && !self.switch_on("LIST_TRACE")
+        {
+            return;
+        }
         let text: Vec<String> = e.text.iter().map(|t| self.shown(t)).collect();
         self.lx.entries.push(Entry::Expansion {
             level: e.level,
-            name: e.name.clone(),
+            label: format!("[{}]", e.name),
             text: (!e.null).then_some(text),
         });
+    }
+
+    /// TRACE's account of a macro call, as it binds the actuals: for an
+    /// iterative macro, `iterations` gives each iteration's actuals and
+    /// the separators around them (UM 2.2.4.3).
+    fn trace(
+        &mut self,
+        name: &str,
+        level: usize,
+        bindings: &[Vec<Lexeme>],
+        iterations: &[Iteration],
+        right: Option<Tok>,
+    ) {
+        if !self.switch_on("LIST_SOURCE") || !self.switch_on("LIST_TRACE") {
+            return;
+        }
+        let text = |p: &Self, ls: &[Lexeme]| -> Option<Vec<String>> {
+            (!ls.is_empty()).then(|| ls.iter().map(|l| p.shown(&l.tok)).collect())
+        };
+        let step = |p: &mut Self, text: String| p.lx.entries.push(Entry::Trace { level, text });
+        step(self, format!("[{name}]: Parameter binding"));
+        for (i, b) in bindings.iter().enumerate() {
+            let text = text(self, b);
+            self.lx.entries.push(Entry::Expansion {
+                level,
+                label: format!("[{name}]({})", i + 1),
+                text,
+            });
+        }
+        step(self, format!("[{name}]: Expansion"));
+        for (k, (sep, args, body)) in iterations.iter().enumerate() {
+            let sep_line = |p: &mut Self| {
+                if let Some(s) = sep {
+                    let s = p.shown(s);
+                    step(p, format!("[{name}]: Separator   {s}"));
+                }
+            };
+            if k > 0 {
+                sep_line(self);
+            }
+            step(
+                self,
+                format!("[{name}][{k}]: Parameter binding / Expansion"),
+            );
+            for (i, a) in args.iter().enumerate() {
+                let text = text(self, a);
+                self.lx.entries.push(Entry::Expansion {
+                    level,
+                    label: format!("[{name}][{k}]({})", i + 1),
+                    text,
+                });
+            }
+            if k == 0 {
+                sep_line(self);
+            }
+            let mut shown: Vec<String> = sep.iter().map(|s| self.shown(s)).collect();
+            shown.extend(body.iter().map(|l| self.shown(&l.tok)));
+            self.lx.entries.push(Entry::Expansion {
+                level,
+                label: format!("[{name}][{k}]"),
+                text: Some(shown),
+            });
+        }
+        if let Some(r) = right {
+            let r = self.shown(&r);
+            step(self, format!("[{name}]: Separator   {r}"));
+        }
     }
 
     /// A lexeme as an expansion shows it: a literal's name as its value.
@@ -464,6 +545,7 @@ impl Parser<'_> {
                         Vec::new()
                     };
                     args.resize(n, Vec::new());
+                    self.trace(&m.name, level, &args, &[], None);
                     let count = if m.kind == MacroKind::Conditional && n > 0 {
                         depth
                     } else {
@@ -484,10 +566,17 @@ impl Parser<'_> {
                 let k = n - m.fixed;
                 let mut rest = actuals[m.fixed..].to_vec();
                 let mut count = 0;
+                let mut iterations = Vec::new();
                 while !rest.is_empty() {
                     let mut args = actuals[..m.fixed].to_vec();
                     args.extend(rest.drain(..k.min(rest.len())));
                     args.resize(n, Vec::new());
+                    let before = if count == 0 {
+                        left.clone()
+                    } else {
+                        Some(sep.clone())
+                    };
+                    iterations.push((before, args[m.fixed..].to_vec(), copy(&args)));
                     let mut s = stream(
                         copy(&args),
                         Some(Ctx {
@@ -516,6 +605,13 @@ impl Parser<'_> {
                         )
                     })
                 };
+                self.trace(
+                    &m.name,
+                    level,
+                    &actuals[..m.fixed],
+                    &iterations,
+                    right.clone(),
+                );
                 if let Some(s) = grouper(left) {
                     streams.insert(0, s);
                 }
@@ -976,6 +1072,7 @@ impl Parser<'_> {
                     "%QUOTENAME" => {
                         Lexical::Tok(lexeme(Tok::Name(String::from_utf8_lossy(&s).into())), true)
                     }
+                    "%PRINT" if !self.switch_on("LIST_SOURCE") => Lexical::Done,
                     "%PRINT" => {
                         self.lx
                             .entries
@@ -1347,11 +1444,17 @@ impl Parser<'_> {
             }
             "%TITLE" | "%SBTTL" => {
                 let (l, _) = self.scan()?;
-                if !matches!(l.tok, Tok::Str(_)) {
+                let Tok::Str(s) = l.tok else {
                     return Err(
                         self.error_at(at, format!("Missing quoted string following {name}"))
                     );
-                }
+                };
+                let s = String::from_utf8_lossy(&s).into_owned();
+                self.lx.entries.push(if name == "%TITLE" {
+                    Entry::Title(s)
+                } else {
+                    Entry::Subtitle(s)
+                });
                 Lexical::Done
             }
             _ => Lexical::Not,

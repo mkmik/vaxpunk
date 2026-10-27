@@ -69,6 +69,7 @@ pub fn translate(path: &Path, source: &str, opts: &Options) -> Output {
     let name = path.display().to_string();
     // A .B32 source is BLISS-32, as /A32 says.
     let mut opts = opts.clone();
+    opts.date.get_or_insert_with(vasm::date_time);
     if path
         .extension()
         .is_some_and(|e| e.eq_ignore_ascii_case("b32"))
@@ -105,6 +106,7 @@ pub fn translate(path: &Path, source: &str, opts: &Options) -> Output {
         .collect();
     let (mut ir, mut asm) = (None, None);
     let nocode = front.module.as_ref().is_ok_and(|m| m.nocode);
+    let mut listed = front.listing;
     if let Ok(module) = front.module
         && !module.nocode
     {
@@ -113,22 +115,42 @@ pub fn translate(path: &Path, source: &str, opts: &Options) -> Output {
                 asm = Some(arm64::module(&m));
                 ir = Some(m.to_string());
             }
-            Err(msg) => diags.push(Diag {
-                sev: 'E',
-                file: name,
-                line: 0,
-                col: 0,
-                msg,
-            }),
+            Err(msg) => {
+                let d = Diag {
+                    sev: 'E',
+                    file: name.clone(),
+                    line: 0,
+                    col: 0,
+                    msg,
+                };
+                listed.diags.push(listing::Diag {
+                    sev: d.sev,
+                    file: 0,
+                    line: 0,
+                    col: 0,
+                    msg: d.msg.clone(),
+                });
+                diags.push(d);
+            }
         }
     }
+    let layout = listing::Layout {
+        files: listed.files,
+        module: listed.module,
+        date: opts.date.clone().unwrap_or_default(),
+        page: opts.page_size.unwrap_or(60) as usize,
+        code: asm.as_deref().filter(|_| opts.machine_code),
+        libraries: listed.libraries,
+        command: opts.command.clone(),
+    };
+    let listing = listing::render(&layout, &listed.entries, &listed.diags);
     Output {
         ir,
         asm,
         nocode,
         diags,
         lints,
-        listing: front.listing,
+        listing,
         messages: front.messages,
     }
 }

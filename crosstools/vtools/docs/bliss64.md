@@ -588,6 +588,14 @@ Dropped from BLISS-32: `/DESIGN`, `/QUICK`, `/SOURCE_LIST=HEADER`, and
 `/MACHINE_CODE_LIST`'s keywords. An output qualifier after an input file
 puts the output next to it. (RN 2.19.15, 2.2.2)
 
+vaxpunk: vbliss takes them all (`docs/vbliss.md`). `/ERROR_LIMIT`,
+`/DIAGNOSTICS`, `/ANALYSIS_DATA`, `/INITIAL_PSECT` and the Alpha code
+generation ones change nothing; `/CROSS_REFERENCE` says, as BLISSA64
+does, "CROSS_REFERENCE not implemented in BLISS-64E" (oracle LSTXREF).
+`/LIBRARY` checks a library's source and writes no file, since `LIBRARY`
+reads the source itself. `/NAMES=AS_IS` is refused: vbliss doesn't keep
+a name's case.
+
 The checks worth having in vbliss, because they find the bugs 64-bit
 fullwords bring:
 

@@ -124,6 +124,13 @@ fn run(name: &str, mut dialect: Option<&mut dyn Dialect>) -> Result<bool, String
 /// Now, or `SOURCE_DATE_EPOCH` for reproducible output, as `dd-mmm-yyyy hh:mm`
 /// in UTC.
 pub fn date() -> [u8; 17] {
+    date_time().as_bytes()[..17]
+        .try_into()
+        .unwrap_or(*b"17-NOV-1858 00:00")
+}
+
+/// Now, or `SOURCE_DATE_EPOCH`, as `dd-mmm-yyyy hh:mm:ss` in UTC.
+pub fn date_time() -> String {
     let secs = env::var("SOURCE_DATE_EPOCH")
         .ok()
         .and_then(|s| s.parse::<i64>().ok())
@@ -145,11 +152,11 @@ pub fn date() -> [u8; 17] {
     const MONTHS: [&str; 12] = [
         "JAN", "FEB", "MAR", "APR", "MAY", "JUN", "JUL", "AUG", "SEP", "OCT", "NOV", "DEC",
     ];
-    let text = format!(
-        "{day:02}-{}-{year:04} {:02}:{:02}",
+    format!(
+        "{day:02}-{}-{year:04} {:02}:{:02}:{:02}",
         MONTHS[month as usize - 1],
         secs / 3600,
-        secs % 3600 / 60
-    );
-    text.as_bytes().try_into().unwrap_or(*b"17-NOV-1858 00:00")
+        secs % 3600 / 60,
+        secs % 60
+    )
 }

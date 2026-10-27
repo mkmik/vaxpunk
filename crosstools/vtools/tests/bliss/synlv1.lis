@@ -1,0 +1,19 @@
+                                Source Listing                  DD-MMM-YYYY HH:MM:SS  BLISS-64E V1.11-007-48G4L         Page 1
+                                                                DD-MMM-YYYY HH:MM:SS  SYS$SYSDEVICE:[ORACLE]SYNLV1.B64;1
+
+    0	      1 ! BLISS: /SYNTAX_LEVEL=1
+    0	      2 MODULE SYNLV1 (MAIN = M) =
+    0	      3 BEGIN
+    1	      4 ! At syntax level 1, QUAD and ALIAS are names.
+    1	      5 OWN QUAD, ALIAS;
+    1	      6 ROUTINE M = (QUAD = 1; .QUAD);
+    1	      7 END
+    1	      8 ELUDOM
+
+
+                                Source Listing                  DD-MMM-YYYY HH:MM:SS  BLISS-64E V1.11-007-48G4L         Page 2
+                                Source Listing                  DD-MMM-YYYY HH:MM:SS  SYS$SYSDEVICE:[ORACLE]SYNLV1.B64;1
+
+COMMAND LINE:
+
+BLISS/A64/LIST/SOURCE_LIST=(EXPAND_MACROS,REQUIRE)/NOMACHINE_CODE/SYNTAX_LEVEL=1 SYNLV1.B64
