@@ -757,7 +757,12 @@ macro that, in `BUILTIN FFS`, ends the list with `BARRIER`, declares
 built-ins (`FFS`, `FFC`, `MOVC3`, `MOVC5`, `CMPC3`, `LOCC`, `SKPC`,
 `SPANC`, `EMUL`, `EDIV`, `ASHQ`, `INSQUE`, `REMQUE`, `INSQHI`, `MTPR`,
 `MFPR` and more) and declares `CALLG` and some PAL calls as routines.
-vdefs doesn't write them yet (`t8y:/host/vdefs#vax-builtin-macros`).
+
+vaxpunk: vaxpunk's LIB has them back the same way, written anew
+(`crates/vdefs/src/lib.bli`): `BUILTIN FFS` marks the block with a
+literal, and `FFS` is then the macro `$FFS`. The string ones are `CH$`
+functions, the bit and multiword ones inline BLISS, the rest PAL calls;
+`tests/bliss/vaxbi32.b32` and `vaxbi64.b64` run them.
 (The oracle's `SYS$LIBRARY`, read for reference)
 
 ## STARLET and LIB

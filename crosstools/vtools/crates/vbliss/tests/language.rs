@@ -728,3 +728,37 @@ fn other_requires() {
         assert!(asm.contains(&want), "{want}: {asm}");
     }
 }
+
+#[test]
+fn vax_builtin_macros() {
+    // vaxpunk's LIB gives back the VAX built-ins as macros: BUILTIN X
+    // declares it for the block, X(...) then expands (tests/bliss/vaxbi32
+    // and vaxbi64 run the string and bit ones).
+    let out = with_lib(&module(
+        "LIBRARY 'SYS$LIBRARY:LIB';\nOWN Q : VECTOR[2], L, R, E, T : VECTOR[256, BYTE];",
+        "BUILTIN INSQUE, REMQUE, PROBER, MTPR, MFPR, CHMU, HALT, MOVPSL, EMUL, EDIV, ASHQ,\n\
+         INDEX, MOVTUC, SPANC, CALLG, BISPSW;\n\
+         INSQUE(E, Q); REMQUE(.Q[0], R); PROBER(%REF(0), %REF(8), Q);\n\
+         MTPR(%REF(2), PR$_IPL); MFPR(PR$_IPL, L); MOVPSL(L); BISPSW(%REF(32));\n\
+         EMUL(%REF(-3), %REF(4), %REF(5), Q); EDIV(%REF(7), Q, L, R); ASHQ(%REF(4), Q, Q);\n\
+         INDEX(%REF(2), %REF(0), %REF(9), %REF(4), %REF(0), L);\n\
+         MOVTUC(%REF(3), UPLIT('ABC'), %REF(%C'B'), T, %REF(3), Q);\n\
+         SPANC(%REF(3), UPLIT('ABC'), T, %REF(1)); CALLG(Q, 0);\n\
+         IF 0 THEN (CHMU(%REF(3)); HALT);",
+    ));
+    assert!(out.error().is_none(), "{:?}", out.error());
+    let ir = out.ir.unwrap();
+    for want in ["call $LIB$CALLG(", "pal "] {
+        assert!(ir.contains(want), "{want}: {ir}");
+    }
+    // The interlocked queues wait for the PAL's calls.
+    let insqhi = with_lib(&module(
+        "LIBRARY 'SYS$LIBRARY:LIB';\nOWN Q : VECTOR[2], E : VECTOR[2];",
+        "BUILTIN INSQHI; INSQHI(E, Q);",
+    ));
+    assert!(
+        insqhi.error().unwrap().msg.contains("PAL_INSQHIL"),
+        "{:?}",
+        insqhi.error()
+    );
+}

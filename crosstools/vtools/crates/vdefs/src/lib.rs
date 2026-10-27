@@ -12,7 +12,7 @@
 //!
 //! After the definitions come the system services' keyword macros, one for
 //! each `$name_S` macro (UM 8.3), and in STARLET the RMS and helper macros
-//! of `starlet.bli`.
+//! of `starlet.bli`, in LIB the VAX built-ins' macros of `lib.bli`.
 //!
 //! DEC's STARLET.R64 has the same field macros, with `$A_`, `$IS_` and
 //! `$IH_` fields signed, but makes `$V_` names field macros too, since its
@@ -289,8 +289,10 @@ pub fn generate(source: &str, text: &str, dialect: Dialect) -> Result<String, St
     }
     out.push_str(&service_macros(text));
     // What can't be had from the macro library: written for BLISS.
-    if source == "starlet.mlb" {
-        out.push_str(include_str!("starlet.bli"));
+    match source {
+        "starlet.mlb" => out.push_str(include_str!("starlet.bli")),
+        "lib.mlb" => out.push_str(include_str!("lib.bli")),
+        _ => {}
     }
     Ok(out)
 }

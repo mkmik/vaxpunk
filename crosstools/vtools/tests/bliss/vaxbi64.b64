@@ -1,0 +1,49 @@
+MODULE VAXBI64 (MAIN = M) =
+BEGIN
+! The VAX built-ins BLISS on Alpha dropped, as vaxpunk's LIB has them
+! back for BLISS-64 (t8y:/host/vdefs#vax-builtin-macros): no oracle, as
+! BLISSA64 has DEC's LIB; the output is what UM chapter 4 says.
+REQUIRE 'PRINT';
+LIBRARY 'SYS$LIBRARY:LIB';
+BUILTIN
+    FFS, FFC, LOCC, SKPC, MOVC3, MOVC5, CMPC3, CMPC5, MATCHC, SCANC, SPANC,
+    ADDM, SUBM, CMPM, INDEX, MOVTUC;
+OWN
+    W : VECTOR[2] INITIAL(%X'00F00000', 0),
+    POS,
+    STR : VECTOR[16, BYTE] INITIAL(BYTE('HELLO, WORLD    ')),
+    DST : VECTOR[16, BYTE],
+    TBL : VECTOR[256, BYTE],
+    A : VECTOR[2] INITIAL(-1, 1),
+    B : VECTOR[2] INITIAL(1, 2),
+    C : VECTOR[2];
+ROUTINE M =
+    BEGIN
+    PRINT(FFS(%REF(0), %REF(32), W, POS));
+    PRINT(.POS);
+    PRINT(FFC(%REF(20), %REF(8), W, POS));
+    PRINT(.POS);
+    PRINT(FFS(%REF(0), %REF(20), W, POS));
+    PRINT(.POS);
+    PRINT(LOCC(%REF(%C','), %REF(16), STR));
+    PRINT(LOCC(%REF(%C'X'), %REF(16), STR));
+    PRINT(SKPC(%REF(%C'H'), %REF(16), STR));
+    MOVC3(%REF(5), STR, DST);
+    PRINT(.DST[4]);
+    MOVC5(%REF(2), STR, %REF(%C'*'), %REF(4), DST);
+    PRINT(.DST[3]);
+    PRINT(CMPC3(%REF(5), STR, DST));
+    PRINT(MATCHC(%REF(5), UPLIT('WORLD'), %REF(16), STR));
+    TBL[%C'O'] = 1;
+    PRINT(SCANC(%REF(16), STR, TBL, %REF(1)) - STR);
+    ADDM(2, A, B, C);
+    PRINT(.C[0]);
+    PRINT(.C[1]);
+    SUBM(2, B, A, C);
+    PRINT(.C[0]);
+    PRINT(.C[1]);
+    PRINT(CMPM(2, A, B));
+    1
+    END;
+END
+ELUDOM

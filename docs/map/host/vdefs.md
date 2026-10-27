@@ -45,8 +45,8 @@ note = "starlet.bli: $BBLOCK, $DESCRIPTOR (a %ASCID), $BYTEOFFSET, $BITPOSITION,
 [[feature]]
 id = "vax-builtin-macros"
 title = "Macros for the VAX built-ins: FFS, FFC, MOVC3, MOVC5, CMPC3, LOCC, SKPC, SPANC, EMUL, EDIV, ASHQ, INSQUE, REMQUE, INSQHI, MTPR, MFPR, CALLG and the rest"
-status = "todo"
-note = "Waits for t8y:/host/vbliss#declaration-edges (a need would be a cycle). DEC's BLISS-32E STARLET.REQ includes BUILTINS.B32 (LIB.L64 for BLISS-64): FFS is a macro, which in BUILTIN FFS ends the list with BARRIER, declares the macro $FFS and starts a new list, and elsewhere calls $FFS, so VAX BLISS-32 code compiles unchanged: 34 built-ins as macros, CALLG and some PAL calls as routines. The compiler dropped the VAX built-ins and the library put them back. FFS alone stops 121 V4.3 modules"
+status = "done"
+note = "crates/vdefs/src/lib.bli, in LIB: 43 built-ins, each a macro that in BUILTIN X marks the block and elsewhere is $X, by CH$ functions, inline BLISS or PAL calls (tests/bliss/vaxbi32, vaxbi64; the language test's vax_builtin_macros). The V4.3 corpus compiles 50 modules, from 30. Left out: the decimal string ones and CRC; INSQHI and the other interlocked queues, BUGW and BUGL wait for t8y:/host/vbliss#pal-builtins; CALLG, and EMUL and EDIV under BLISS-32, call LIB$CALLG, LIB$EMUL and LIB$EDIV, which t8y:/rtl/librtl hasn't yet"
 
 [[feature]]
 id = "other-requires"
