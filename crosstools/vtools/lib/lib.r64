@@ -965,7 +965,9 @@ MACRO
     CHMU = %IF %DECLARED($$VAX_CHMU) %THEN $CHMU %ELSE $$VAX_BUILTIN($$VAX_CHMU, PAL_CHMU) %FI %,
     CALLG = %IF %DECLARED($$VAX_CALLG) %THEN $CALLG %ELSE $$VAX_BUILTIN($$VAX_CALLG) %FI %;
 
-! What each does.
+! What each does. A loop tests the length with IF, not AND: BLISS
+! evaluates both of AND's operands, and the byte past the end may be in
+! no page.
 MACRO
     ! FFS and FFC: the first bit set or clear in the field of .SIZA<0, 8>
     ! bits at bit .POSA of BASE; its position to DSTA, or the field's end;
@@ -978,7 +980,7 @@ MACRO
         $$B = BASE;
         $$P = .(POSA)<0, 32, 1>;
         $$E = .$$P + .(SIZA)<0, 8>;
-        WHILE .$$P LSS .$$E AND .(.$$B + .$$P ^ -3)<.$$P AND 7, 1> NEQ STATE DO
+        WHILE (IF .$$P LSS .$$E THEN .(.$$B + .$$P ^ -3)<.$$P AND 7, 1> NEQ STATE ELSE 0) DO
             $$P = .$$P + 1;
         (DSTA)<0, 32> = .$$P;
         .$$P GEQ .$$E
@@ -1013,7 +1015,7 @@ MACRO
         $$N = .(LENA)<0, 16>;
         $$T = TBL;
         $$M = .(MASKA)<0, 8>;
-        WHILE .$$N GTR 0 AND ((.(.$$T + .(.$$A)<0, 8>)<0, 8> AND .$$M) NEQ 0) NEQ HIT DO
+        WHILE (IF .$$N GTR 0 THEN ((.(.$$T + .(.$$A)<0, 8>)<0, 8> AND .$$M) NEQ 0) NEQ HIT ELSE 0) DO
             ($$A = .$$A + 1; $$N = .$$N - 1);
         IF .$$N GTR 0 THEN .$$A ELSE 0
         END %,
@@ -1027,8 +1029,7 @@ MACRO
         $$D = DST;
         $$T = TBL;
         $$N = MINU(.(SRCLENA)<0, 16>, .(DSTLENA)<0, 16>);
-        WHILE .$$N GTR 0 AND
-            ($$C = .(.$$T + .(.$$S)<0, 8>)<0, 8>) NEQ .(ESCA)<0, 8> DO
+        WHILE (IF .$$N GTR 0 THEN ($$C = .(.$$T + .(.$$S)<0, 8>)<0, 8>) NEQ .(ESCA)<0, 8> ELSE 0) DO
             ((.$$D)<0, 8> = .$$C; $$S = .$$S + 1; $$D = .$$D + 1; $$N = .$$N - 1);
         IF .$$N GTR 0 THEN .$$S ELSE 0
         END %,

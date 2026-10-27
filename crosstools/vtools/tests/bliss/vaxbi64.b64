@@ -36,6 +36,10 @@ ROUTINE M =
     PRINT(MATCHC(%REF(5), UPLIT('WORLD'), %REF(16), STR));
     TBL[%C'O'] = 1;
     PRINT(SCANC(%REF(16), STR, TBL, %REF(1)) - STR);
+    ! Nothing to look at: no byte read, not even at 0, which isn't mapped.
+    PRINT(SCANC(%REF(0), 0, TBL, %REF(1)));
+    PRINT(MOVTUC(%REF(0), 0, %REF(0), TBL, %REF(0), DST));
+    PRINT(FFS(%REF(0), %REF(0), 0, POS));
     ADDM(2, A, B, C);
     PRINT(.C[0]);
     PRINT(.C[1]);
