@@ -2556,7 +2556,13 @@ impl Parser<'_> {
             Kind::Label => self.err(format!("label {n} used as a value")),
             Kind::Macro(_) => self.err(format!("macro {n} used as a value")),
             Kind::Structure(st) if self.eat_punct('[') => self.general_ref(st),
-            Kind::Builtin => self.builtin(n),
+            Kind::Builtin => match crate::builtin::register(n) {
+                Some(r @ 0..2) => Ok(Expr::Special(crate::builtin::Special::Reg(r), Vec::new())),
+                // Declared outside the routine: BLISSA64 warns, and its code
+                // faults.
+                Some(_) => self.err(format!("Illegal up-level reference to {n}")),
+                None => self.builtin(n),
+            },
             Kind::Structure(_) | Kind::Field(_) | Kind::FieldSet(_) => {
                 self.err(format!("{n} used as a value"))
             }

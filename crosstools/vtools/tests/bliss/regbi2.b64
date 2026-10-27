@@ -1,0 +1,13 @@
+MODULE REGBI2 (MAIN = M) =
+BEGIN
+! Registers as built-ins, declared in the routine.
+REQUIRE 'PRINT';
+ROUTINE M =
+    BEGIN
+    BUILTIN R0, R2;
+    R2 = 7;
+    PRINT(.R2);
+    1
+    END;
+END
+ELUDOM

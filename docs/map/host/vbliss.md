@@ -113,8 +113,8 @@ note = "LRM 4.10: the texts are comments in the code, `comment` in the IR, ahead
 [[feature]]
 id = "register-builtins"
 title = "BUILTIN R0 ... R11: registers as built-ins, named as the linkages name them"
-status = "todo"
-note = "RN 2.9.1: Alpha BLISS reads registers with the VAX syntax; vbliss says R0 is not a built-in it knows. AP, FP, SP and PC stay errors, as on Alpha"
+status = "done"
+note = "RN 2.9.1: Alpha BLISS reads registers with the VAX syntax. R0 and R1 are x0 and x1; R2-R11 the routine's register data (docs/bliss64.md, Registers); tests/bliss/regbi2.b64 against the oracle. AP, FP, SP and PC stay errors, as on Alpha"
 
 [[feature]]
 id = "lexical-functions"

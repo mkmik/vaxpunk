@@ -447,6 +447,9 @@ impl Gen<'_> {
                         self.emit(Ins::FCvt(*from, *to, *r, a, d));
                         V::C(0)
                     }
+                    Special::Reg(r) => {
+                        return Err(format!("R{r} is a register: it has no address"));
+                    }
                     Special::Comment(n) => {
                         self.emit(Ins::Comment(self.m.comments[*n as usize].clone()));
                         V::C(0)
@@ -497,6 +500,11 @@ impl Gen<'_> {
                 self.value(body)?
             }
             Expr::Fetch(a) => {
+                if let Expr::Special(Special::Reg(r), _) = **a {
+                    let d = self.temp();
+                    self.emit(Ins::RegArg(d, r));
+                    return Ok(V::T(d));
+                }
                 let p = self.place(a)?;
                 self.load(p)
             }
@@ -534,6 +542,11 @@ impl Gen<'_> {
             }
             Expr::Assign(l, r) => {
                 let v = self.value(r)?;
+                if let Expr::Special(Special::Reg(r), _) = **l {
+                    let v = self.fix(v);
+                    self.emit(Ins::SetReg(r, v.clone()));
+                    return Ok(v);
+                }
                 let p = self.place(l)?;
                 self.store(p, v.clone());
                 v

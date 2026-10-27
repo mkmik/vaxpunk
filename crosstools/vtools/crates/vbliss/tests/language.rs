@@ -442,3 +442,28 @@ fn dec_macro_idioms() {
         assert!(ir.contains(want), "{want}: {ir}");
     }
 }
+
+#[test]
+fn register_builtins() {
+    // BUILTIN R0 and R1 are x0 and x1, fetched or assigned where the
+    // source says; R2 to R11 are the routine's register data, as
+    // REGISTER R2 = 2 would be. Declared outside the routine, R2 is an
+    // up-level reference (BLISSA64 warns, oracle REGBI); R12 is no
+    // register built-in.
+    let ir = ir(&module(
+        "ROUTINE S = 7;",
+        "BUILTIN R0, R2; S(); R2 = .R0; R0 = .R2;",
+    ));
+    assert!(ir.contains("regarg r0") && ir.contains("setreg r0"), "{ir}");
+    let up = module("BUILTIN R2;", "R2 = 1;");
+    assert_eq!(error(&up), "Illegal up-level reference to R2");
+    assert_eq!(
+        error(&module("", "BUILTIN R12;")),
+        "R12 is not a built-in vbliss knows"
+    );
+    let bare = error(&module("", "BUILTIN R0; LOCAL A; A = R0;"));
+    assert!(
+        bare.contains("R0 is a register: it has no address"),
+        "{bare}"
+    );
+}

@@ -90,6 +90,15 @@ pub enum Special {
     /// a + b, a - b or a * b under the OVERFLOW switch: an overflow
     /// signals SS$_INTOVF, and the value is the wrapped one.
     Checked(crate::ir::Op),
+    /// `BUILTIN R0` or `R1`: the register itself, x0 or x1, which may only
+    /// be fetched or assigned (LRM 10.7.4).
+    Reg(u8),
+}
+
+/// The register a register built-in names, R0 to R11.
+pub fn register(name: &str) -> Option<u8> {
+    let n: u8 = name.strip_prefix('R')?.parse().ok()?;
+    (n <= 11 && name.len() == if n < 10 { 2 } else { 3 }).then_some(n)
 }
 
 /// The format `%FFLOAT` to `%TFLOAT` name.
@@ -293,7 +302,8 @@ const MACHINE: &[&str] = &[
 
 /// Whether `name` is a built-in vbliss knows, for BUILTIN.
 fn known(name: &str) -> bool {
-    float_builtin(name, crate::ir::Fl::Q).is_some()
+    register(name).is_some()
+        || float_builtin(name, crate::ir::Fl::Q).is_some()
         || BUILTINS.contains(&name)
         || MACHINE.contains(&name)
         || NO_PAL.contains(&name)
@@ -1185,6 +1195,19 @@ impl Parser<'_> {
             };
             if !known(&name) {
                 return Err(self.error_at(&at, format!("{name} is not a built-in vbliss knows")));
+            }
+            // R2 to R11 in a routine are its register data, as `REGISTER
+            // R2 = 2` declares it (docs/bliss64.md, *Registers*).
+            if register(&name).is_some_and(|r| r >= 2) && self.slots_open() {
+                if !self.scopes.last().unwrap().contains_key(&name) {
+                    let kind =
+                        self.data_kind(Storage::Local(0), &mut crate::data::Attrs::default())?;
+                    self.declare(name, kind)?;
+                }
+                if !self.eat_punct(',') {
+                    return Ok(());
+                }
+                continue;
             }
             // Again in the same block is no new declaration: BLISSA64 takes
             // it, as DEC's VAX built-in macros need (t8y:/host/vdefs).

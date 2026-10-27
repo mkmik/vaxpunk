@@ -331,6 +331,13 @@ KIT)
   register parameters and any linkage's `GLOBAL` registers can't be R0 or
   R1, where the standard's arguments and result go: a register conflict,
   which VAX BLISS-32 code passing `CALL (REGISTER = 1)` meets.
+  `BUILTIN R0` and `R1` are x0 and x1, read or written where the source
+  fetches or assigns them, as DEC's `RETURN (BUILTIN R0; .R0)` after a
+  change mode expects. `BUILTIN R2` to `R11` declare the routine's own
+  register data, as `REGISTER R2 = 2` would: x19-x28 hold vbliss's
+  temporaries, and values pass through registers by linkages. Declared
+  outside the routine that uses it, R2 is an illegal up-level reference,
+  an error where BLISSA64 warns and its code faults.
 - **Global registers.** A `GLOBAL` register in a linkage that the routine
   doesn't declare `EXTERNAL REGISTER` is preserved; one it declares
   `GLOBAL REGISTER` again is preserved and starts a new lifetime,
