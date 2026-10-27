@@ -56,6 +56,148 @@ status = "done"
 note = "and EXTERNAL_NAME; crates/vbliss/tests/asm.rs"
 
 [[feature]]
+id = "floating-point"
+title = "Floating point: %E, %D, %G, %S and %T literals, the ADDx ... CVTxy built-ins, %FFLOAT to %TFLOAT, ENVIRONMENT(NOFP)"
+status = "todo"
+needs = ["/host/vasm#fp", "/exec/calling-standard#floating-point"]
+note = "RN 2.10, 2.11; every literal is 'not supported yet' today. S and T map onto ARM64's FPU; F, D and G have no hardware and need software; H stays VAX only, as on Alpha"
+
+[[feature]]
+id = "general-calls"
+title = "General routine calls, LINKAGE(address, actuals), and empty actuals, R(1, , 3)"
+status = "todo"
+note = "LRM 12.1, 12.2: L(.P, 5) says L is not a routine; R(1, , 3) and R(1, ) don't parse, and DEC's STARLET.R64 service macros leave a trailing empty actual ($ASSIGN)"
+
+[[feature]]
+id = "linkage-types"
+title = "INTERRUPT and EXCEPTION linkages; the COUNT and NOCOUNT linkage options, module switch and /[NO]COUNT"
+status = "todo"
+note = "RN 2.8.4, 2.8.5: INTERRUPT is 'expected CALL or JSB'; CALL : NOCOUNT doesn't parse, and a NOCOUNT module switch is accepted but x9 is still set"
+
+[[feature]]
+id = "predeclared-linkages"
+title = "The predeclared linkages BLISS, FORTRAN, FORTRAN_SUB and FORTRAN_FUNC, and the LINKAGE switch's default linkage"
+status = "todo"
+note = "LRM 12.1.3, 13.5: DEC's STARLET.R64 declares each service EXTERNAL ROUTINE SYS$x : BLISS ADDRESSING_MODE(GENERAL); SWITCHES LINKAGE(name) is accepted and ignored"
+
+[[feature]]
+id = "routine-attributes"
+title = "Routine attributes: ADDRESSING_MODE, the value's unit, sign, FIELD or [REF] structure, prototypes on EXTERNAL and FORWARD ROUTINE, VARIABLE"
+status = "todo"
+note = "RN 2.21, 2.29, 2.19.8; ADDRESSING_MODE on a routine stops 40 V4.3 modules; with prototypes %BLISS(PROTOTYPES) is 1, and calls whose actuals don't match the formals get BLISSA64's message unless VARIABLE"
+
+[[feature]]
+id = "data-attributes"
+title = "Data attributes: RANGE on literals, EXTERNAL_NAME on literals, GRANULARITY, REF VOLATILE and REF ALIGN structures, VOLATILE and NOCHECK_ALIGNMENT fields"
+status = "todo"
+note = "LRM 9.12; RN 2.14, 2.16.1, 2.25, 2.28. GLOBAL LITERAL X = 12 : UNSIGNED(4) doesn't parse (BASRTL in V4.3); bliss64.md says GRANULARITY is accepted and ignored, it isn't yet"
+
+[[feature]]
+id = "forward-data"
+title = "FORWARD data declarations, and a name in its own INITIAL"
+status = "todo"
+note = "LRM 10.3: FORWARD Y is 'expected ROUTINE after FORWARD'; OWN Q : VECTOR[2] INITIAL(Q, Q), a queue head, says Q is declared twice (F11X and RTPAD in V4.3)"
+
+[[feature]]
+id = "psect-classes"
+title = "PSECT LINK = and PSECT INITIAL =, and /[NO]INITIAL_PSECT"
+status = "todo"
+note = "RN 2.19.10, 2.22: 'not a storage class for PSECT' today, though bliss64.md says LINK = is accepted"
+
+[[feature]]
+id = "codecomment"
+title = "CODECOMMENT 'text', ... : block, its text in the machine code listing"
+status = "todo"
+note = "LRM 4.10; today an undeclared name, then a syntax error"
+
+[[feature]]
+id = "register-builtins"
+title = "BUILTIN R0 ... R11: registers as built-ins, named as the linkages name them"
+status = "todo"
+note = "RN 2.9.1: Alpha BLISS reads registers with the VAX syntax; vbliss says R0 is not a built-in it knows. AP, FP, SP and PC stay errors, as on Alpha"
+
+[[feature]]
+id = "lexical-functions"
+title = "%HOST, %TARGET and %BLISS32V; %RAD50_11 and %P under /A32"
+status = "todo"
+note = "RN 2.12; DEC's STARLET.R64 tests %TARGET(ALPHA), and bliss64.md plans %TARGET(ARM64) and %TARGET(VMS) true. The LRM gives %RAD50_11 and %P to BLISS-32 (V4.3's PATCH uses %RAD50_11); whether BLISS-32EN kept them is a probe"
+
+[[feature]]
+id = "macro-edges"
+title = "Macros as BLISSA64 reads DEC's: formals never expanded, KEYWORDMACRO without formals, %STRING of a keyword, empty macro actuals"
+status = "todo"
+note = "MACRO A = 5 %; MACRO M(A) = A + 1 % fails at the formal (V4.3 SORT32's MACRO IDENT meets STARLET's $CRMPSC(IDENT=0)); STARLET.R64 has 13 KEYWORDMACROs without formals; $SHR_MSGDEF does %STRING(GLOBAL), which the LRM forbids and BLISSA64 takes (probe); $FAB's $RMS_BITS recursion and $XABPRO() need BLISSA64's count of the actuals in M() and M(A, ) (probe)"
+
+[[feature]]
+id = "declaration-edges"
+title = "Declarations as BLISSA64 takes them: a stray ; between declarations, BUILTIN of a name already BUILTIN"
+status = "todo"
+note = "TPAMAC.REQ's $INIT_STATE leaves a ; after a declaration; DEC's VAX built-in macros end each BUILTIN list with BARRIER and start a new one (t8y:/host/vdefs#vax-builtin-macros)"
+
+[[feature]]
+id = "source-text"
+title = "Sources in DEC MCS, Latin-1, not only UTF-8"
+status = "todo"
+note = "DEC's STARLET.R64 has a copyright sign, and 5 V4.3 modules other 8-bit characters: 'stream did not contain valid UTF-8'"
+
+[[feature]]
+id = "library-semantics"
+title = "LIBRARY as LRM 16.6 has it: lexical functions and switches fixed when the library is compiled, nested libraries' names kept out, /LIBRARY for sources of declarations only"
+status = "todo"
+note = "LIBRARY reads the source as REQUIRE does: V4.3's DEBUG loads STRUCDEF.L32 through three libraries and gets its macros declared twice, and 36 V4.3 library sources stop at 'expected MODULE'. The .L64 format is t8y:/lang/bliss#libraries"
+
+[[feature]]
+id = "switches"
+title = "Switches that act: %SWITCHES and SWITCHES scopes, LIST, ERRS, NOCODE, OVERFLOW checking, QUAD_LITERALS"
+status = "todo"
+note = "parse.rs switch_on returns the defaults; the module head's and SWITCHES' settings are accepted and dropped, so NOCODE writes an object and OVERFLOW wraps. NOQUAD_LITERALS waits for bliss64.md probe 8"
+
+[[feature]]
+id = "pal-builtins"
+title = "The other PAL_ built-ins, as the PAL gains their calls: interlocked queues, IPIR and WHAMI, MCES, FEN"
+status = "todo"
+needs = ["/platform/pal#interlocked-queues", "/platform/pal#smp-calls", "/platform/pal#machine-checks", "/platform/pal#floating-point"]
+note = "bliss64.md Built-ins: one the PAL lacks is a compile error. CMP_STORE_x can't be one store-exclusive on ARM64 and WRITE_MBX means nothing here"
+
+[[feature]]
+id = "qualifiers"
+title = "The BLISS verb's other qualifiers: /SOURCE_LIST, /MACHINE_CODE, /NAMES, /SYNTAX_LEVEL, /TERMINAL, /ERROR_LIMIT, /LANGUAGE, /DEBUG, /TRACEBACK, /[NO]CODE, Alpha's code generation ones ignored"
+status = "todo"
+note = "BLISS_AN.CLD, bliss64.md Switches and qualifiers: today /A32, /A64, /ASSUME, /VARIANT, /INCLUDE, /OBJECT and /LIST, any other a usage error. /SYNTAX_LEVEL=2 reserves QUAD and ALIAS, which are names today. /DIAGNOSTICS and /ANALYSIS_DATA write nothing until t8y:/layered/lse and t8y:/layered/sca"
+
+[[feature]]
+id = "checks"
+title = "/CHECK and the CHECK_x switches: LONGWORD, SHORT_ADDRESS, ADDRESS_TAKEN, ALIGNMENT, FIELD, SHARE, REDECLARE, PARAMETERS; LANGUAGE's transportability checks"
+status = "todo"
+note = "RN 2.19.2-2.19.8, 2.26; LRM appendix C. bliss64.md names LONGWORD, SHORT_ADDRESS and ADDRESS_TAKEN as the ones that find 64-bit bugs; LANGUAGE(COMMON) is accepted and checks nothing"
+
+[[feature]]
+id = "listing"
+title = "The rest of the listing: /MACHINE_CODE's ARM64, /SOURCE_LIST and LIST options, %TITLE and %SBTTL headers, the closing summary"
+status = "todo"
+note = "PRD-0004 Listing; the listing is the source part with expansions, whatever LIST says, under a 'Source Listing' header"
+
+[[feature]]
+id = "diagnostics"
+title = "BLISS's messages: the user manual's 250 texts and severities, going on past the first error, the Alpha informationals"
+status = "todo"
+note = "vbliss writes BLISSA64's text for the 8 messages the tests meet, its own for the rest, and stops at the first error. Missing too: numeric literal overflow, SIGNAL's low 32 bits, names over 64 characters, a NOVALUE routine's value used. An up-level reference to an outer routine's LOCAL panics in arm64.rs"
+
+[[feature]]
+id = "probes"
+title = "The open probes of bliss64.md answered by the oracle: 5, 7, 8, 10, 12, 13, 15, 17"
+status = "todo"
+needs = ["/host/axpbox-oracle#bliss"]
+note = "ARGPTR's list, 64-bit edges, NOQUAD_LITERALS, the predeclared structures' text, SIGNAL with a 64-bit condition, the mechanism array, library lexical timing, /A32; with them the empty-actual and %STRING questions of #macro-edges"
+
+[[feature]]
+id = "dec-libraries"
+title = "DEC's STARLET, LIB, TPAMAC and CLIMAC require files compile and expand as under BLISSA64"
+status = "todo"
+needs = ["#source-text", "#lexical-functions", "#predeclared-linkages", "#routine-attributes", "#general-calls", "#macro-edges", "#declaration-edges"]
+note = "A local check, as the corpus test is: read from the oracle's SYS$LIBRARY, never committed. STARLET.R64 stops at line 26628 today. Patched by hand past those gaps, DEC's Alpha STARLET.REQ and LIB.REQ let 24 of the 1,260 V4.3 modules compile, against 19 with vaxpunk's; most of the rest need DEC's generated libraries or VAX built-ins"
+
+[[feature]]
 id = "debug-symbols"
 title = "Debug symbol table records, for a future DEBUG"
 status = "todo"
@@ -96,7 +238,17 @@ listings and behaviour.
 
 It is the system's BLISS-64 compiler today: `vms/build.rs` compiles
 `$NUMTIM`, TPU and EVE, the DNS resolver and other programs with it, and
-fails on any warning. It is throwaway by design. Stage 1, the compiler
+fails on any warning. It is throwaway by design.
+
+It doesn't yet take everything BLISSA64 takes. Its todo features come
+from checking it against the LRM, the release notes and
+`BLISS_AN.CLD`, one probe program per construct, and from compiling
+DEC's own require files from the oracle's `SYS$LIBRARY` and the V4.3
+sources against them, locally. The biggest are floating point, general
+routine calls, the attributes and linkages DEC's STARLET leans on, real
+`LIBRARY` semantics, switches that do something, and the compiler's
+interface: qualifiers, listing and messages. They land here first, so
+stage 1 ports a compiler whose extent is known. Stage 1, the compiler
 written in BLISS-64, and the self-hosting stages belong to
 `t8y:/lang/bliss`; once they pass, stage 0 is frozen and only starts the
 bootstrap.

@@ -688,10 +688,16 @@ What porting VAX BLISS-32 code still takes, as it did on Alpha (RN 2.3):
   rewritten.
 - What Alpha needed for byte and word writes, ARM64 doesn't.
 
-Open: vbliss could accept the commonest VAX built-ins under `/A32`
-(`CALLG`, `MOVC3`, `MOVC5`, `INSQUE`, `REMQUE`, `FFS`, `FFC`, `EMUL`,
-`EDIV`) to make porting cheaper still. DEC didn't; the first BLISS-32
-module worth porting shows which ones would pay.
+The compilers dropped the VAX built-ins, but DEC's libraries put most
+of them back as macros: the BLISS-32E `STARLET.REQ` on OpenVMS Alpha
+includes `BUILTINS.B32` (in `LIB.L64` for BLISS-64), where `FFS` is a
+macro that, in `BUILTIN FFS`, ends the list with `BARRIER`, declares
+`$FFS` and starts a new list, and elsewhere calls `$FFS`. It covers 34
+built-ins (`FFS`, `FFC`, `MOVC3`, `MOVC5`, `CMPC3`, `LOCC`, `SKPC`,
+`SPANC`, `EMUL`, `EDIV`, `ASHQ`, `INSQUE`, `REMQUE`, `INSQHI`, `MTPR`,
+`MFPR` and more) and declares `CALLG` and some PAL calls as routines.
+vdefs doesn't write them yet (`t8y:/host/vdefs#vax-builtin-macros`).
+(The oracle's `SYS$LIBRARY`, read for reference)
 
 ## STARLET and LIB
 
@@ -889,7 +895,10 @@ routine of a module.
     Listing: the extension DEC wrote for `$L_` fields, which vdefs
     follows. Also shows where `LIBRARY` finds `STARLET`. Reading
     `SYS$LIBRARY:STARLET.R64` on the oracle's disk answers the first
-    part without compiling.
+    part without compiling. **Answered** that way: SDL's sign decides,
+    not the letter, so `CHF$L_SIG_NAME` is `4,0,32,1` and LIB's
+    `PCB$L_STS` `128,0,32,0`; vdefs writes 0 for both
+    (`t8y:/host/vdefs#field-signs`).
 
 15. **Libraries.** That a library's lexical functions are fixed when it is
     compiled.
