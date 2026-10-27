@@ -58,9 +58,9 @@ note = "and EXTERNAL_NAME; crates/vbliss/tests/asm.rs"
 [[feature]]
 id = "floating-point"
 title = "Floating point: %E, %D, %G, %S and %T literals, the ADDx ... CVTxy built-ins, %FFLOAT to %TFLOAT, ENVIRONMENT(NOFP)"
-status = "todo"
+status = "done"
 needs = ["/host/vasm#fp", "/exec/calling-standard#floating-point"]
-note = "RN 2.10, 2.11; every literal is 'not supported yet' today. S and T map onto ARM64's FPU; F, D and G have no hardware and need software; H stays VAX only, as on Alpha"
+note = "RN 2.10, 2.11: literals as BLISSA64 encodes them (oracle FLTLIT2, FLTLIT3; D at G's precision), with its overflow and underflow warnings; the ADDx ... CVTRxy built-ins on operands in memory, VAX formats through IEEE double as Alpha does D through G, SUBx and DIVx in VAX operand order (tests/bliss/fltops, BLISSA64's output); %xFLOAT actuals and results by DESIGN-0004; ENVIRONMENT(NOFP)'s warning. BLISSA64 gives %E'-1.5' a stray low bit, vbliss the exact value"
 
 [[feature]]
 id = "general-calls"
@@ -83,8 +83,8 @@ note = "LRM 12.1.3, 13.5: BLISS and the FORTRAN linkages are the calling standar
 [[feature]]
 id = "routine-attributes"
 title = "Routine attributes: ADDRESSING_MODE, the value's unit, sign, FIELD or [REF] structure, prototypes on EXTERNAL and FORWARD ROUTINE, VARIABLE"
-status = "todo"
-note = "RN 2.21, 2.29, 2.19.8; ADDRESSING_MODE on a routine stops 40 V4.3 modules; with prototypes %BLISS(PROTOTYPES) is 1, and calls whose actuals don't match the formals get BLISSA64's message unless VARIABLE"
+status = "done"
+note = "RN 2.21, 2.29, 2.19.8: ADDRESSING_MODE ignored; a value's unit, sign or structure is accepted and, as in BLISSA64 (oracle RATTR), changes no code; prototypes and VARIABLE accepted, %BLISS(PROTOTYPES) 1. Checking actuals against formals is /CHECK=PARAMETERS's (#checks)"
 
 [[feature]]
 id = "data-attributes"
@@ -119,20 +119,20 @@ note = "RN 2.9.1: Alpha BLISS reads registers with the VAX syntax; vbliss says R
 [[feature]]
 id = "lexical-functions"
 title = "%HOST, %TARGET and %BLISS32V; %RAD50_11 and %P under /A32"
-status = "todo"
-note = "RN 2.12; DEC's STARLET.R64 tests %TARGET(ALPHA), and bliss64.md plans %TARGET(ARM64) and %TARGET(VMS) true. The LRM gives %RAD50_11 and %P to BLISS-32 (V4.3's PATCH uses %RAD50_11); whether BLISS-32EN kept them is a probe"
+status = "done"
+note = "RN 2.12, oracle HOST1-4: %HOST and %TARGET are 1 for ARM64 and VMS, as vaxpunk is; %BLISS32V is 0; %IDENT, %MODULE and %ROUTINE are strings; %BLISS(PROTOTYPES) is 1. %RAD50_11 and %P, which BLISSA64 has under /A64 too (oracle RAD64)"
 
 [[feature]]
 id = "macro-edges"
 title = "Macros as BLISSA64 reads DEC's: formals never expanded, KEYWORDMACRO without formals, %STRING of a keyword, empty macro actuals"
-status = "todo"
-note = "MACRO A = 5 %; MACRO M(A) = A + 1 % fails at the formal (V4.3 SORT32's MACRO IDENT meets STARLET's $CRMPSC(IDENT=0)); STARLET.R64 has 13 KEYWORDMACROs without formals; $SHR_MSGDEF does %STRING(GLOBAL), which the LRM forbids and BLISSA64 takes (probe); $FAB's $RMS_BITS recursion and $XABPRO() need BLISSA64's count of the actuals in M() and M(A, ) (probe)"
+status = "done"
+note = "Oracle MACCNT, STRKEY, KWNOF: empty actuals at the end of a macro call don't count, so $RMS_BITS and $RMS_VALPR2 recurse to an end; %STRING takes reserved words; a KEYWORDMACRO without formals is a simple macro. A macro name as a formal is expanded, as LRM 15.2.1's name-quote level says and BLISSA64 does (oracle FORMAC): SORT32's clash was a library's to avoid"
 
 [[feature]]
 id = "declaration-edges"
 title = "Declarations as BLISSA64 takes them: a stray ; between declarations, BUILTIN of a name already BUILTIN"
-status = "todo"
-note = "TPAMAC.REQ's $INIT_STATE leaves a ; after a declaration; DEC's VAX built-in macros end each BUILTIN list with BARRIER and start a new one (t8y:/host/vdefs#vax-builtin-macros)"
+status = "done"
+note = "Oracle STRAY, BLTWICE: a stray ; between a module's declarations; BUILTIN of a name already BUILTIN in the block"
 
 [[feature]]
 id = "source-text"

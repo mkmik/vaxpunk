@@ -1,0 +1,19 @@
+MODULE FLTLIT3 (MAIN = M) =
+BEGIN
+! Floating literals in INITIAL and a PLIT.
+REQUIRE 'PRINT';
+OWN
+    E : INITIAL(%E'1.5'),
+    T : INITIAL(%T'1.5');
+BIND
+    P = UPLIT(%E'2.0', %D'2.0') : VECTOR;
+ROUTINE M =
+    BEGIN
+    PRINT(.E);
+    PRINT(.T);
+    PRINT(.P[0]);
+    PRINT(.P[1]);
+    1
+    END;
+END
+ELUDOM

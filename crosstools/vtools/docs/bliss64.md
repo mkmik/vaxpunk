@@ -472,7 +472,7 @@ the executive can run.
 | `PAL_CHMK`, `PAL_CHME`, `PAL_CHMS`, `PAL_CHMU(code [, a0, ...])` | change mode | RN 2.9.2 | yes: the code in x7's bits 31:16, up to six arguments in x0-x5 |
 | `PAL_HALT`, `PAL_BPT`, `PAL_BUGCHK`, `PAL_GENTRAP` | halt, breakpoint, bugcheck, software trap | RN 2.9.2 | `HALT`; `BPT` as `brk`; the others no, as the PAL hasn't them |
 | `PAL_RD_PS`, `PAL_WR_PS_SW`, `PAL_SWASTEN`, `PAL_SWPCTX`, `PAL_RSCC`, `PAL_READ_UNQ`, `PAL_WRITE_UNQ`, `PAL_IMB`, `PAL_CFLUSH`, `PAL_DRAINA`, `PAL_LDQP`, `PAL_STQP` | the rest of OpenVMS's PAL | RN 2.9.2 | those the PAL has: `RD_PS`, `SWPCTX` |
-| `ADDx`, `SUBx`, `MULx`, `DIVx`, `CMPx`, `CVTxy`, `CVTRxy` (`F`, `D`, `G`, `S`, `T`, with `L`, `Q`, `I`) | floating point | RN 2.10.1 | no, until vasm has floating point |
+| `ADDx`, `SUBx`, `MULx`, `DIVx`, `CMPx`, `CVTxy`, `CVTRxy` (`F`, `D`, `G`, `S`, `T`, with `L`, `Q`, `I`) | floating point | RN 2.10.1 | yes: through IEEE double, VAX formats converted (*Floating point*) |
 
 **PAL calls.** The `PAL_` prefix keeps them apart from the VAX built-ins
 of the same names; inputs and outputs are the Alpha SRM's. RN and the
@@ -501,6 +501,18 @@ as signed, as BLISSA64's do: 5 + -2 sets no carry. (probe,
 **Floating point** also brings `%S` and `%T` literals, `%FFLOAT` to
 `%TFLOAT` to pass and return floating values by value, and
 `ENVIRONMENT(NOFP)`. (RN 2.10, 2.11)
+
+vaxpunk: ARM64 has IEEE single and double only, so vbliss computes in
+double: S and T directly, VAX F and G converted, D converted with its
+fraction rounded to 53 bits, as Alpha did D through G. The results are
+rounded back to their format; one out of a VAX format's range is zero
+below it and its largest magnitude above. `SUBx` and `DIVx` take the
+subtrahend and the divisor first, the VAX's order. A literal's bits are
+BLISSA64's, `%D` at G's precision too, with its overflow and underflow
+warnings; BLISSA64 gives `%E'-1.5'` a stray low bit, vbliss the exact
+value. `%SFLOAT` and `%TFLOAT` pass in v0-v7, with their classes in x9,
+and VAX formats as general arguments, as DESIGN-0004 says.
+(`tests/bliss/fltops`, `fltlit3`; oracle)
 
 **Not built-ins.** The executables also hold GEM's intrinsics
 (`EXCH_ATOMIC_x`, `INC_ATOMIC_x`, `MAX_ATOMIC_x`, `ENTER_CRITICAL`, the

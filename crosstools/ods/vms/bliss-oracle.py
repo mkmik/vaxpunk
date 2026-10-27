@@ -23,8 +23,9 @@ All files go in one boot of the system disk at $BLISS_ORACLE_DISK (default
 system with BLISSA64 installed and SYSTEM's password "system": a clone, so
 the disk itself never changes (run-vms.py --system). The files go into
 [ORACLE] on a clone of that clone with ods (`$ODS`, by default the
-workspace's target/release/ods), since the console loses lines typed in
-bulk. One way to make the disk is
+workspace's target/release/ods), with ORACLE.COM, the commands, so that
+one line is typed at the console, which loses characters of long input.
+One way to make the disk is
 an APFS clone of the playground's, while that VM is down:
     cp -c real_vms_playground/sys.img ~/Library/Caches/vaxpunk/bliss-oracle/golden-sys.img
 AXPbox hangs in about one run in six; a run that fails is retried twice.
@@ -55,8 +56,10 @@ def qualifiers(path):
 
 
 def script(files):
-    cmds = ["SET TERMINAL/WIDTH=255/PAGE=0/TAB",
-            "SET DEFAULT SYS$SYSDEVICE:[ORACLE]"]
+    """ORACLE.COM's commands: everything but starting it, which is the only
+    line typed at the console."""
+    # NOON: a program that fails doesn't end the procedure.
+    cmds = ["SET NOON", "SET DEFAULT SYS$SYSDEVICE:[ORACLE]"]
     # Libraries first: a require file whose first line asks for /LIBRARY.
     for path in files:
         name, ext = os.path.splitext(os.path.basename(path))
@@ -106,11 +109,15 @@ def sections(log):
 
 def disk(files, tmp):
     """A clone of the oracle's disk with the files in [ORACLE], a VAR
-    record a line, as CREATE would have made them."""
+    record a line, as CREATE would have made them, and ORACLE.COM, the
+    commands that compile and run them."""
     img = os.path.join(tmp, "sys.img")
     subprocess.run(["cp", "-c", DISK, img], check=True)
     subprocess.run([ODS, "mkdir", img, "[ORACLE]"], check=True)
-    for path in files:
+    com = os.path.join(tmp, "ORACLE.COM")
+    with open(com, "w", encoding="latin-1") as f:
+        f.write("".join(f"$ {c}\n" for c in script(files)))
+    for path in files + [com]:
         subprocess.run([ODS, "copy-in", "--mode", "lines-to-records", img, path,
                         f"[ORACLE]{os.path.basename(path).upper()}"], check=True)
     return img
@@ -123,9 +130,10 @@ def boot(files):
     # The clone sits next to the disk, on its file system, so cp -c can clone.
     with tempfile.TemporaryDirectory(dir=os.path.dirname(DISK)) as tmp:
         img = disk(files, tmp)
+        # Only this is typed: the console loses characters of long input.
         cmd = os.path.join(tmp, "oracle.dcl")
         with open(cmd, "w", encoding="latin-1") as f:
-            f.write("\n".join(script(files)) + "\n")
+            f.write("SET TERMINAL/WIDTH=255/PAGE=0/TAB\n@SYS$SYSDEVICE:[ORACLE]ORACLE\n")
         for attempt in range(3):
             run = subprocess.run([sys.executable, os.path.join(HERE, "run-vms.py"),
                                   "--system", img, cmd, log])

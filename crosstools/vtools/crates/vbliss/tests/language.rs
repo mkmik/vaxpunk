@@ -77,7 +77,16 @@ fn general_routine_calls() {
 #[test]
 fn empty_actuals() {
     // An actual left out passes 0 (LRM 12.1.1).
-    let ir = ir(&module("EXTERNAL ROUTINE R;", "R(1, , 3);\nR(1, );"));
+    let out = translate(&module("EXTERNAL ROUTINE R;", "R(1, , 3);\nR(1, );"));
+    // BLISSA64 says so, at the first actual (oracle MACITR).
+    assert_eq!(
+        out.diags
+            .iter()
+            .filter(|d| d.msg == "Null expression appears in value-required context")
+            .count(),
+        2
+    );
+    let ir = out.ir.unwrap();
     assert!(ir.contains("call $R(1, 0, 3)"), "{ir}");
     assert!(ir.contains("call $R(1, 0)"), "{ir}");
 }
@@ -201,10 +210,11 @@ fn data_attributes() {
         ir.contains("global $GLIT = 12") && ir.contains("$ELIT"),
         "{ir}"
     );
-    assert_eq!(
-        error(&module("LITERAL L = 99 : UNSIGNED(4);", "")),
-        "Literal value cannot be represented in the declared number of bits"
-    );
+    // A value out of the range is BLISSA64's warning (oracle RANGE).
+    let out = translate(&module("LITERAL L = 99 : UNSIGNED(4);", ""));
+    assert!(out.error().is_none());
+    assert!(out.diags.iter().any(|d| d.sev == 'W'
+        && d.msg == "Literal value cannot be represented in the declared number of bits"));
 }
 
 #[test]
@@ -315,4 +325,80 @@ fn dec_forms() {
          FORWARD ROUTINE F (A) : NOVALUE;\nROUTINE F (A) : NOVALUE = 0;\nOWN X;",
         "X = KZ + ROT(1, 1) + Q();\nP(1, X);\nF(2);",
     ));
+}
+
+#[test]
+fn floating_calls() {
+    // %xFLOAT actuals by value (RN 2.10.4, DESIGN-0004): S and T in
+    // v0-v7 with their class in x9, VAX formats general; results from v0
+    // or x0.
+    let out = translate(&module(
+        "EXTERNAL ROUTINE R, G;\nOWN T, SS, X, Y;",
+        "R(1, %TFLOAT(T), %SFLOAT(SS), 2);\nG(%GFLOAT(X); %GFLOAT(Y));\nR(%TFLOAT(T); %TFLOAT(Y));",
+    ));
+    let (ir, asm) = (out.ir.unwrap(), out.asm.unwrap());
+    assert!(ir.contains("fcall $R(1, t:$T, s:$SS, 2)"), "{ir}");
+    assert!(ir.contains("fcall $G(g:$X) -> g:$Y"), "{ir}");
+    // Four arguments, the second of class 2 (T), the third of class 1 (S).
+    assert!(
+        asm.contains(&format!("mov     x9, #{}", 4 | 2 << 10 | 1 << 12)),
+        "{asm}"
+    );
+    assert!(
+        asm.contains("ldr     d0, [x16]") && asm.contains("ldr     s1, [x16]"),
+        "{asm}"
+    );
+    assert!(asm.contains("str     d0, [x16]"), "{asm}");
+}
+
+#[test]
+fn floating_literals_and_nofp() {
+    // %H is the VAX's (oracle FLTERR); ENVIRONMENT(NOFP) warns of the
+    // floating built-ins (oracle NOFP).
+    let out = translate(&module("OWN X;", "X = %H'1.0';"));
+    assert!(
+        out.diags
+            .iter()
+            .any(|d| d.msg == "Language feature not present in BLISS-64E:  %H")
+    );
+    let out = translate(
+        "MODULE T (ENVIRONMENT(NOFP)) =\nBEGIN\nBUILTIN ADDT;\nOWN A, B, C;\n\
+         ROUTINE M = (ADDT(A, B, C); 1);\nEND\nELUDOM\n",
+    );
+    assert!(out.diags.iter().any(|d| d.sev == 'W'
+        && d.msg == "Illegal use of floating point built-in function with ENVIRONMENT(NOFP)"));
+}
+
+#[test]
+fn string_encodings() {
+    // %RAD50_11 and %P, which BLISSA64 has (oracle RAD64): RAD50 words,
+    // VAX packed decimal.
+    let ir = ir(&module(
+        "BIND R = UPLIT(%RAD50_11 'ABC123') : VECTOR[, WORD], P = UPLIT BYTE(%P'-123', %P'4567') : VECTOR[, BYTE];\nOWN X;",
+        "X = .R[0] + .P[0];",
+    ));
+    // ABC is 1683, 123 50913, words in memory order; -123 is 12 3D and
+    // 4567 04 56 7C.
+    assert!(ir.contains(r#""\x93\x06\xe1\xc6"#), "{ir}");
+    assert!(ir.contains(r#"{ "\x12=", "\x04V|""#), "{ir}");
+}
+
+#[test]
+fn macro_actuals() {
+    // Empty actuals at the end don't count (oracle MACCNT); %STRING takes
+    // a reserved word (oracle STRKEY); a module's declarations may have a
+    // stray semicolon (oracle STRAY).
+    let out = translate(&module(
+        "MACRO L(A) = %LENGTH %, C(A)[] = 1 %;\n\
+         %PRINT(L(), L(1), L(1,), L(1,,), L(,1), 0 C(,), C(1))\n\
+         %PRINT(%STRING(GLOBAL, ROUTINE));;",
+        "",
+    ));
+    assert!(out.error().is_none(), "{:?}", out.error());
+    assert!(out.listing.contains("%PRINT:\t0111201"), "{}", out.listing);
+    assert!(
+        out.listing.contains("%PRINT:\tGLOBALROUTINE"),
+        "{}",
+        out.listing
+    );
 }

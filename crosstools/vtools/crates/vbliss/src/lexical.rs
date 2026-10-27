@@ -385,7 +385,13 @@ impl Parser<'_> {
             let r = self.actual_list(&format!("macro {}", m.name), at);
             self.lx.reading.pop();
             self.lx.collecting -= 1;
-            r?
+            // Empty actuals at the end don't count: M(A, ) has one, as
+            // BLISSA64 counts them, so M(A, %REMAINING) recurses to an end.
+            let mut r = r?;
+            while r.last().is_some_and(Vec::is_empty) {
+                r.pop();
+            }
+            r
         };
         let place = |l: &Lexeme| Lexeme {
             col: NOPOS,
@@ -810,6 +816,63 @@ impl Parser<'_> {
                 Lexical::Done
             }
             "%FI" => Lexical::Done,
+            "%E" | "%D" | "%G" | "%S" | "%T" => {
+                // A float literal's bits (crate::float). Under BLISS-32 one
+                // of 8 bytes is two fullwords, for a PLIT or an INITIAL
+                // (LRM 4.2.2): the low longword, a comma, the high.
+                let (l, _) = self.scan()?;
+                let Tok::Str(s) = l.tok.clone() else {
+                    return Err(
+                        self.error_at(at, format!("Missing quoted string following {name}"))
+                    );
+                };
+                let fmt = crate::float::Format::of(&name).unwrap();
+                let text = String::from_utf8_lossy(&s).into_owned();
+                let Some((bits, fit)) = crate::float::literal(fmt, &text) else {
+                    return Err(self.error_at(at, format!("Illegal character in {name} literal")));
+                };
+                let what = match fit {
+                    crate::float::Fit::Exact => None,
+                    crate::float::Fit::Underflow => Some("Underflow"),
+                    crate::float::Fit::Overflow => Some("Overflow"),
+                };
+                if let Some(w) = what {
+                    let msg = format!("{w} occurred in floating point literal {name}'{text}'");
+                    self.diag('W', &l, msg);
+                }
+                if self.m.dialect.a32 && fmt.bytes() == 8 {
+                    self.push(vec![
+                        lexeme(Tok::Num(i64::from(bits as u32 as i32))),
+                        lexeme(Tok::Punct(',')),
+                        lexeme(Tok::Num(i64::from((bits >> 32) as u32 as i32))),
+                    ]);
+                    Lexical::Done
+                } else {
+                    Lexical::Tok(lexeme(Tok::Num(bits as i64)), false)
+                }
+            }
+            "%H" => {
+                // H floating is the VAX's only (RN 2.10.1).
+                let (l, _) = self.scan()?;
+                let msg = "Language feature not present in BLISS-64E:  %H".to_string();
+                self.diag('W', &l, msg);
+                Lexical::Tok(lexeme(Tok::Num(0)), false)
+            }
+            "%RAD50_11" | "%P" => {
+                // BLISS-32's string encodings, which BLISSA64 has too
+                // (LRM B.2.1; 4.3, VAX packed decimal).
+                let (l, _) = self.scan()?;
+                let Tok::Str(s) = l.tok else {
+                    return Err(
+                        self.error_at(at, format!("Missing quoted string following {name}"))
+                    );
+                };
+                let bytes = if name == "%P" { packed(&s) } else { rad50(&s) };
+                let Some(bytes) = bytes else {
+                    return Err(self.error_at(at, format!("Illegal character in {name} literal")));
+                };
+                Lexical::Tok(lexeme(Tok::Str(bytes)), false)
+            }
             "%B" | "%O" | "%X" | "%DECIMAL" | "%C" | "%ASCII" | "%ASCIZ" | "%ASCIC" => {
                 let (l, _) = self.scan()?;
                 let Tok::Str(s) = l.tok else {
@@ -1112,10 +1175,12 @@ impl Parser<'_> {
             }
             "%BLISS" => {
                 let ps = self.params(&name, at)?;
+                // PROTOTYPES: EXTERNAL and FORWARD ROUTINE take formals (RN
+                // 2.19.8).
                 let ours: &[&str] = if self.m.dialect.a32 {
-                    &["BLISS32", "BLISS32E"]
+                    &["BLISS32", "BLISS32E", "PROTOTYPES"]
                 } else {
-                    &["BLISS64E"]
+                    &["BLISS64E", "PROTOTYPES"]
                 };
                 flag(matches!(&ps[..], [p] if matches!(&p[..],
                     [Lexeme { tok: Tok::Name(n), .. }] if ours.contains(&n.as_str()))))
@@ -1153,7 +1218,25 @@ impl Parser<'_> {
                 flag(all)
             }
             "%VARIANT" => num(self.lx.variant),
-            "%MODULE" => Lexical::Tok(lexeme(Tok::Name(self.m.name.clone())), false),
+            // The compiler's state as strings (RN 2.12): the module's name
+            // and ident, and the routine being compiled.
+            "%MODULE" => Lexical::Tok(lexeme(Tok::Str(self.m.name.clone().into_bytes())), false),
+            "%IDENT" => Lexical::Tok(
+                lexeme(Tok::Str(
+                    self.m.ident.clone().unwrap_or_default().into_bytes(),
+                )),
+                false,
+            ),
+            "%ROUTINE" => Lexical::Tok(
+                lexeme(Tok::Str(
+                    self.routine_names
+                        .last()
+                        .cloned()
+                        .unwrap_or_default()
+                        .into_bytes(),
+                )),
+                false,
+            ),
             "%ALLOCATION" => {
                 let ps = self.params(&name, at)?;
                 let id = match &ps[..] {
@@ -1251,9 +1334,9 @@ impl Parser<'_> {
             [l] => match &l.tok {
                 Tok::Str(s) => s.clone(),
                 Tok::Num(n) => n.to_string().into_bytes(),
-                Tok::Name(n) | Tok::Bound(n, _) if !RESERVED.contains(&n.as_str()) => {
-                    n.clone().into_bytes()
-                }
+                // Reserved words too, which the LRM leaves out and BLISSA64
+                // takes: DEC's $SHR_MSGDEF does %STRING(GLOBAL).
+                Tok::Name(n) | Tok::Bound(n, _) => n.clone().into_bytes(),
                 _ => {
                     return Err(self.error_at(
                         l,
@@ -1277,6 +1360,50 @@ impl Parser<'_> {
 }
 
 /// Whether `p` is enclosed in a matched pair of brackets.
+/// RAD50_11 (LRM B.2.1): three characters a word, space, A-Z, $, ., an
+/// unused code, 0-9 as 0-39, the text padded with spaces.
+fn rad50(s: &[u8]) -> Option<Vec<u8>> {
+    let code = |c: u8| match c {
+        b' ' => Some(0),
+        b'A'..=b'Z' => Some(u16::from(c - b'A') + 1),
+        b'a'..=b'z' => Some(u16::from(c - b'a') + 1),
+        b'$' => Some(27),
+        b'.' => Some(28),
+        b'0'..=b'9' => Some(u16::from(c - b'0') + 30),
+        _ => None,
+    };
+    let mut out = Vec::new();
+    for chunk in s.chunks(3) {
+        let mut w = 0u16;
+        for i in 0..3 {
+            w = w * 40 + code(*chunk.get(i).unwrap_or(&b' '))?;
+        }
+        out.extend(w.to_le_bytes());
+    }
+    Some(out)
+}
+
+/// VAX packed decimal (LRM 4.3): an optional sign, digits two a byte,
+/// the first in the high half, and the sign in the last byte's low half,
+/// 12 for plus and 13 for minus; an even count starts with a zero.
+fn packed(s: &[u8]) -> Option<Vec<u8>> {
+    let (minus, digits) = match s.first() {
+        Some(b'-') => (true, &s[1..]),
+        Some(b'+') => (false, &s[1..]),
+        _ => (false, s),
+    };
+    if digits.is_empty() || !digits.iter().all(u8::is_ascii_digit) {
+        return None;
+    }
+    let mut nibbles: Vec<u8> = Vec::new();
+    if digits.len() % 2 == 0 {
+        nibbles.push(0);
+    }
+    nibbles.extend(digits.iter().map(|d| d - b'0'));
+    nibbles.push(if minus { 13 } else { 12 });
+    Some(nibbles.chunks(2).map(|p| p[0] << 4 | p[1]).collect())
+}
+
 fn enclosed(p: &[Lexeme]) -> bool {
     let close = match p.first().map(|l| &l.tok) {
         Some(Tok::Punct('(')) => ')',

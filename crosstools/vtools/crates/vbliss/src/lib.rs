@@ -9,6 +9,7 @@
 mod arm64;
 mod builtin;
 mod data;
+mod float;
 mod ir;
 mod irgen;
 mod lex;

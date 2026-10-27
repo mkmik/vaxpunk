@@ -77,6 +77,88 @@ pub enum Special {
     Rpcc,
     /// CODECOMMENT's text, the module's comment n: a comment in the code.
     Comment(u32),
+    /// The floating point built-ins (RN 2.10.1): ADDx and the like, CMPx,
+    /// and CVT[R]xy.
+    FArith(crate::ir::FOp, crate::ir::Fl),
+    FCmp(crate::ir::Fl),
+    FCvt(crate::ir::Fl, crate::ir::Fl, bool),
+    /// `%FFLOAT(a)` to `%TFLOAT(a)` as a call's actual (RN 2.10.4): the
+    /// floating value at a, passed by value; as an output actual, where
+    /// the routine's floating result is stored. Only in a call's actuals.
+    FloatIn(crate::ir::Fl),
+    FloatOut(crate::ir::Fl),
+}
+
+/// The format `%FFLOAT` to `%TFLOAT` name.
+pub fn float_actual(name: &str) -> Option<crate::ir::Fl> {
+    use crate::ir::Fl;
+    Some(match name {
+        "%FFLOAT" => Fl::F,
+        "%DFLOAT" => Fl::D,
+        "%GFLOAT" => Fl::G,
+        "%SFLOAT" => Fl::S,
+        "%TFLOAT" => Fl::T,
+        _ => return None,
+    })
+}
+
+/// A floating point built-in by its name, if `name` is one; `i` is the
+/// fullword integer's: L under BLISS-32, Q under BLISS-64.
+pub fn float_builtin(name: &str, i: crate::ir::Fl) -> Option<Special> {
+    use crate::ir::{FOp, Fl};
+    let fl = |c: u8| match c {
+        b'F' => Some(Fl::F),
+        b'D' => Some(Fl::D),
+        b'G' => Some(Fl::G),
+        b'S' => Some(Fl::S),
+        b'T' => Some(Fl::T),
+        b'L' => Some(Fl::L),
+        b'Q' => Some(Fl::Q),
+        b'I' => Some(i),
+        _ => None,
+    };
+    let is_float = |f: Fl| !matches!(f, Fl::L | Fl::Q);
+    let n = name.as_bytes();
+    if n.len() == 4 {
+        let op = match &name[..3] {
+            "ADD" => Some(FOp::Add),
+            "SUB" => Some(FOp::Sub),
+            "MUL" => Some(FOp::Mul),
+            "DIV" => Some(FOp::Div),
+            _ => None,
+        };
+        let f = fl(n[3]).filter(|&f| is_float(f) && n[3] != b'I')?;
+        return match (op, &name[..3]) {
+            (Some(op), _) => Some(Special::FArith(op, f)),
+            (None, "CMP") => Some(Special::FCmp(f)),
+            _ => None,
+        };
+    }
+    let rest = name.strip_prefix("CVT")?;
+    let (round, rest) = match rest.strip_prefix('R') {
+        Some(r) if r.len() == 2 => (true, r),
+        _ => (false, rest),
+    };
+    let [a, b] = rest.as_bytes() else {
+        return None;
+    };
+    let (from, to) = (fl(*a)?, fl(*b)?);
+    let ok = match (is_float(from), is_float(to)) {
+        // CVTRxL and CVTRxQ round; CVTxL, CVTxQ and CVTxI truncate.
+        (true, false) => !round || b"LQ".contains(b),
+        (false, true) => !round,
+        // RN's list, the provisional ones too.
+        (true, true) => {
+            !round
+                && [
+                    "FD", "DF", "FG", "GF", "ST", "TS", "DG", "GD", "FS", "SF", "DT", "TD", "GT",
+                    "TG",
+                ]
+                .contains(&rest)
+        }
+        (false, false) => false,
+    };
+    ok.then_some(Special::FCvt(from, to, round))
 }
 
 /// The PAL calls vaxpunk's PAL has (DESIGN-0001), as BLISS-64's PAL_
@@ -208,7 +290,8 @@ const MACHINE: &[&str] = &[
 
 /// Whether `name` is a built-in vbliss knows, for BUILTIN.
 fn known(name: &str) -> bool {
-    BUILTINS.contains(&name)
+    float_builtin(name, crate::ir::Fl::Q).is_some()
+        || BUILTINS.contains(&name)
         || MACHINE.contains(&name)
         || NO_PAL.contains(&name)
         || PAL.iter().any(|p| p.0 == name)
@@ -863,6 +946,21 @@ impl Parser<'_> {
                 want(self, 0)?;
                 Expr::Num(0)
             }
+            n if let Some(s) = float_builtin(n, self.int_fl()) => {
+                if self.m.nofp {
+                    let at = self.last();
+                    let msg =
+                        "Illegal use of floating point built-in function with ENVIRONMENT(NOFP)";
+                    self.diag('W', &at, msg.into());
+                }
+                // Operands by address; only CMPx has a value (RN 2.10.1).
+                let k = match s {
+                    Special::FArith(..) => 3,
+                    _ => 2,
+                };
+                want(self, k)?;
+                special(s, args)
+            }
             "UMULH" => {
                 want(self, 2)?;
                 Expr::Op(
@@ -1057,6 +1155,15 @@ impl Parser<'_> {
             .push(Expr::Special(Special::SetHandler, vec![Expr::Jacket]));
         self.m.jacket = true;
         Ok(())
+    }
+
+    /// The fullword integer the floating point built-ins' I means.
+    fn int_fl(&self) -> crate::ir::Fl {
+        if self.m.dialect.a32 {
+            crate::ir::Fl::L
+        } else {
+            crate::ir::Fl::Q
+        }
     }
 
     /// Whether `name` is a predeclared built-in, when no declaration

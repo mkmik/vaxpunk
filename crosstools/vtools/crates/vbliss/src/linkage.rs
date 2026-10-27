@@ -263,10 +263,25 @@ impl Parser<'_> {
     pub(crate) fn link_call(
         &mut self,
         target: Expr,
-        args: Vec<Expr>,
-        outs: Vec<Option<Expr>>,
+        mut args: Vec<Expr>,
+        mut outs: Vec<Option<Expr>>,
         general: Option<Rc<Linkage>>,
     ) -> R<Expr> {
+        // %xFLOAT output actuals are the routine's floating result, at most
+        // two of one format (RN 2.10.4): after the inputs, for irgen.
+        let floats: Vec<Expr> = outs
+            .iter()
+            .flatten()
+            .filter(|o| matches!(o, Expr::Special(crate::builtin::Special::FloatOut(_), _)))
+            .cloned()
+            .collect();
+        if !floats.is_empty() {
+            if floats.len() != outs.len() || floats.len() > 2 {
+                return self.err("a call's floating results are one or two %xFLOAT output actuals");
+            }
+            outs.clear();
+            args.extend(floats);
+        }
         // A routine's name calls by its linkage (LRM 12.1.3), an address by
         // the general call's, or the LINKAGE switch's.
         let named = match &target {

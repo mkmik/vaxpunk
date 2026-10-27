@@ -124,6 +124,69 @@ pub enum Ins {
     Bpt,
     /// `comment "text"`: CODECOMMENT's text, a comment in the code.
     Comment(String),
+    /// `fadd<f> a, b, dst` and the like: the floating point built-ins
+    /// (RN 2.10.1), on operands in memory at a and b, the result stored at
+    /// dst, all addresses.
+    FArith(FOp, Fl, V, V, V),
+    /// `dst = fcmp<f> a, b`: -1, 0 or 1.
+    FCmp(u32, Fl, V, V),
+    /// `cvt[r] <from> <to> a, dst`: a conversion, from memory at a to
+    /// memory at dst; `r` rounds to the nearest, ties away, else an
+    /// integer is truncated.
+    FCvt(Fl, Fl, bool, V, V),
+    /// `dst = fcall target(args) -> results`: a call by the calling
+    /// standard with floating arguments or results (RN 2.10.4,
+    /// DESIGN-0004): an argument `t:addr` is the value of that format at
+    /// addr, S and T in v0-v7 with their class in x9, VAX ones general;
+    /// a result `t:addr` is stored at addr, from v0 and v1 or x0 and x1.
+    FCall(Box<FCall>),
+}
+
+/// A call with floating arguments or results (`Ins::FCall`).
+#[derive(Clone, Debug, PartialEq)]
+pub struct FCall {
+    pub dst: u32,
+    pub target: V,
+    /// Each argument: a value, or a floating value's format and address.
+    pub args: Vec<(V, Option<Fl>)>,
+    pub results: Vec<(Fl, V)>,
+}
+
+/// A floating point built-in's arithmetic.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum FOp {
+    Add,
+    Sub,
+    Mul,
+    Div,
+}
+
+/// What the floating point built-ins work on: VAX F, D and G floating,
+/// IEEE S and T, and longword and quadword integers.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Fl {
+    F,
+    D,
+    G,
+    S,
+    T,
+    L,
+    Q,
+}
+
+impl Fl {
+    /// The letter the built-ins' names have for it.
+    pub fn letter(self) -> char {
+        match self {
+            Fl::F => 'f',
+            Fl::D => 'd',
+            Fl::G => 'g',
+            Fl::S => 's',
+            Fl::T => 't',
+            Fl::L => 'l',
+            Fl::Q => 'q',
+        }
+    }
 }
 
 /// A call by a linkage with registers (`Ins::Link`).
@@ -323,6 +386,45 @@ impl fmt::Display for Ins {
             Ins::Rpcc(d) => write!(f, "%{d} =l rpcc"),
             Ins::Bpt => f.write_str("bpt"),
             Ins::Comment(s) => write!(f, "comment {s:?}"),
+            Ins::FArith(op, t, a, b, d) => {
+                let op = match op {
+                    FOp::Add => "add",
+                    FOp::Sub => "sub",
+                    FOp::Mul => "mul",
+                    FOp::Div => "div",
+                };
+                write!(f, "f{op}{} {a}, {b}, {d}", t.letter())
+            }
+            Ins::FCmp(d, t, a, b) => write!(f, "%{d} =l fcmp{} {a}, {b}", t.letter()),
+            Ins::FCall(c) => {
+                write!(f, "%{} =l fcall {}(", c.dst, c.target)?;
+                for (i, (v, fl)) in c.args.iter().enumerate() {
+                    if i > 0 {
+                        f.write_str(", ")?;
+                    }
+                    if let Some(fl) = fl {
+                        write!(f, "{}:", fl.letter())?;
+                    }
+                    write!(f, "{v}")?;
+                }
+                f.write_str(")")?;
+                for (i, (fl, v)) in c.results.iter().enumerate() {
+                    write!(
+                        f,
+                        "{} {}:{v}",
+                        if i == 0 { " ->" } else { "," },
+                        fl.letter()
+                    )?;
+                }
+                Ok(())
+            }
+            Ins::FCvt(from, to, r, a, d) => write!(
+                f,
+                "cvt{} {} {} {a}, {d}",
+                if *r { "r" } else { "" },
+                from.letter(),
+                to.letter()
+            ),
         }
     }
 }

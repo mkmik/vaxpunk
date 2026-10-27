@@ -265,6 +265,8 @@ pub struct Module {
     pub comments: Vec<String>,
     /// NOCODE: the module is checked, and no code is made of it.
     pub nocode: bool,
+    /// ENVIRONMENT(NOFP): no floating point (RN 2.11).
+    pub nofp: bool,
 }
 
 /// A fatal error: the file, line and column (from 0) it is at.
@@ -474,6 +476,8 @@ pub struct Parser<'a> {
     libraries: HashMap<String, Vec<(String, usize)>>,
     pub(crate) library_depth: u32,
     library_imports: Vec<usize>,
+    /// The routines being parsed, by name, for %ROUTINE.
+    pub(crate) routine_names: Vec<String>,
 }
 
 /// Parses the module in `text`, from file `name`.
@@ -532,6 +536,7 @@ pub fn parse(name: &str, text: &str, load: Loader, opts: &Options) -> Front {
         libraries: HashMap::new(),
         library_depth: 0,
         library_imports: Vec::new(),
+        routine_names: Vec::new(),
     };
     p.lx.variant = opts.variant;
     p.m.dialect = opts.dialect;
@@ -1080,6 +1085,22 @@ impl Parser<'_> {
         if name == "STRUCTURE" && self.at_punct('(') {
             return self.structure_switch();
         }
+        if name == "ENVIRONMENT" && self.eat_punct('(') {
+            // FP or NOFP (RN 2.11); vaxpunk's integer division never needs
+            // floating point, so only the floating built-ins care.
+            loop {
+                match self.next() {
+                    Tok::Name(n) if n == "NOFP" => self.m.nofp = true,
+                    Tok::Name(n) if n == "FP" => self.m.nofp = false,
+                    Tok::Name(_) => {}
+                    _ => return self.err("expected an ENVIRONMENT option"),
+                }
+                if !self.eat_punct(',') {
+                    break;
+                }
+            }
+            return self.expect_punct(')');
+        }
         if name == "COUNT" || name == "NOCOUNT" {
             self.m.nocount = name == "NOCOUNT";
         }
@@ -1189,6 +1210,9 @@ impl Parser<'_> {
                 self.require()?;
             } else if self.eat("LIBRARY") {
                 self.library()?;
+            } else if self.depth == 1 && self.eat_punct(';') {
+                // A stray semicolon between a module's declarations, as
+                // TPAMAC.REQ's $INIT_STATE leaves one, which BLISSA64 takes.
             } else if self.declaration()? {
                 self.expect_punct(';')?;
             } else {
@@ -1568,7 +1592,7 @@ impl Parser<'_> {
                 if !fits {
                     let at = self.last();
                     self.diag(
-                        'E',
+                        'W',
                         &at,
                         "Literal value cannot be represented in the declared number of bits".into(),
                     );
@@ -1897,6 +1921,7 @@ impl Parser<'_> {
         self.scopes.push(HashMap::new());
         self.routine_count += 1;
         self.routine_stack.push(self.routine_count);
+        self.routine_names.push(self.m.syms[sym].name.clone());
         let mut formals = Vec::new();
         for (n, mut a) in names {
             let refr = a.structure.as_ref().is_some_and(|s| s.refr);
@@ -1931,6 +1956,7 @@ impl Parser<'_> {
         let body = self.expr();
         self.routines -= 1;
         self.routine_stack.pop();
+        self.routine_names.pop();
         self.linkages_now.pop();
         let (externals, outputs) = self.exits.pop().unwrap();
         let body = body?;
@@ -2198,12 +2224,23 @@ impl Parser<'_> {
         loop {
             if self.eat_punct('(') {
                 let (mut args, mut outs) = (Vec::new(), Vec::new());
+                let first = self.here();
                 if !self.eat_punct(')') {
                     if !self.at_punct(';') {
                         loop {
                             // An actual left out passes 0 (LRM 12.1.1).
                             if self.at_punct(',') || self.at_punct(';') || self.at_punct(')') {
+                                self.diag(
+                                    'I',
+                                    &first,
+                                    "Null expression appears in value-required context".into(),
+                                );
                                 args.push(Expr::Num(0));
+                            } else if let Some(f) = self.float_actual()? {
+                                args.push(Expr::Special(
+                                    crate::builtin::Special::FloatIn(f.0),
+                                    vec![f.1],
+                                ));
                             } else {
                                 self.whole_actual = true;
                                 args.push(self.value()?);
@@ -2217,6 +2254,11 @@ impl Parser<'_> {
                         loop {
                             outs.push(if self.at_punct(',') || self.at_punct(')') {
                                 None
+                            } else if let Some(f) = self.float_actual()? {
+                                Some(Expr::Special(
+                                    crate::builtin::Special::FloatOut(f.0),
+                                    vec![f.1],
+                                ))
                             } else {
                                 Some(self.expr()?)
                             });
@@ -2479,6 +2521,22 @@ impl Parser<'_> {
             }
             _ => Ok(Expr::Name(id)),
         }
+    }
+
+    /// `%FFLOAT(address)` to `%TFLOAT(address)`, if one is next: an
+    /// actual's floating format and the address (RN 2.10.4).
+    fn float_actual(&mut self) -> R<Option<(crate::ir::Fl, Expr)>> {
+        let Tok::Name(n) = self.peek().clone() else {
+            return Ok(None);
+        };
+        let Some(f) = crate::builtin::float_actual(&n) else {
+            return Ok(None);
+        };
+        self.pos += 1;
+        self.expect_punct('(')?;
+        let e = self.expr()?;
+        self.expect_punct(')')?;
+        Ok(Some((f, e)))
     }
 
     /// An expression, unless the next lexeme ends one.

@@ -11,7 +11,7 @@
 
 use std::fmt::Write;
 
-use crate::ir::{Func, Ins, Item, LinkCall, Module, Op, Term, Un, V};
+use crate::ir::{FCall, FOp, Fl, Func, Ins, Item, LinkCall, Module, Op, Term, Un, V};
 
 /// The registers temporaries live in.
 const POOL: std::ops::RangeInclusive<u8> = 19..=28;
@@ -186,6 +186,16 @@ fn operands(ins: &Ins) -> (Vec<u32>, Vec<&V>) {
         Ins::ArgN(d, i) => (Some(*d), vec![i]),
         Ins::SetHandler(v) | Ins::SetEnable(v) => (None, vec![v]),
         Ins::Barrier | Ins::Bpt | Ins::Comment(_) => (None, vec![]),
+        Ins::FArith(_, _, a, b, d) => (None, vec![a, b, d]),
+        Ins::FCmp(d, _, a, b) => (Some(*d), vec![a, b]),
+        Ins::FCvt(_, _, _, a, d) => (None, vec![a, d]),
+        Ins::FCall(c) => (
+            Some(c.dst),
+            std::iter::once(&c.target)
+                .chain(c.args.iter().map(|a| &a.0))
+                .chain(c.results.iter().map(|r| &r.1))
+                .collect(),
+        ),
         Ins::Cas(d, a, e, n, _) => (Some(*d), vec![a, e, n]),
         Ins::Pal(d, func, args) => (Some(*d), std::iter::once(func).chain(args).collect()),
         Ins::RetAddr(d) | Ins::Rpcc(d) => (Some(*d), vec![]),
@@ -452,6 +462,250 @@ impl<'a> Routine<'a> {
         } else {
             self.mov_imm("x17", off);
             self.line(format!("add     {r}, x29, x17"));
+        }
+    }
+
+    /// A call with floating arguments or results (DESIGN-0004 *Arguments*):
+    /// S and T arguments in v0-v7, the rest in x0-x7, those past either on
+    /// the stack in argument order; x9 the count and each argument's class.
+    fn fcall(&mut self, c: &FCall) {
+        // Where each argument goes: a register, or a stack slot.
+        let (mut gp, mut fp, mut slots) = (0u32, 0u32, 0u32);
+        let mut places = Vec::new();
+        let mut info: u64 = c.args.len() as u64;
+        for (i, (_, fl)) in c.args.iter().enumerate() {
+            let class = match fl {
+                Some(Fl::S) => 1,
+                Some(Fl::T) => 2,
+                _ => 0,
+            };
+            if i < 28 {
+                info |= class << (8 + 2 * i);
+            }
+            let place = match (class, gp, fp) {
+                (0, 0..=7, _) => {
+                    gp += 1;
+                    Ok(gp - 1)
+                }
+                (1 | 2, _, 0..=7) => {
+                    fp += 1;
+                    Ok(fp - 1)
+                }
+                _ => {
+                    slots += 1;
+                    Err(slots - 1)
+                }
+            };
+            places.push(place);
+        }
+        let stack = (8 * slots).next_multiple_of(16);
+        if stack > 0 {
+            self.sub_sp(stack);
+        }
+        // The stack's first, through x10, then the registers.
+        for ((v, fl), place) in c.args.iter().zip(&places) {
+            if let Err(n) = place {
+                self.fl_arg(v, *fl, "x10", "d16");
+                let r = if matches!(fl, Some(Fl::S | Fl::T)) {
+                    "d16"
+                } else {
+                    "x10"
+                };
+                self.line(format!("str     {r}, [sp, #{}]", 8 * n));
+            }
+        }
+        for ((v, fl), place) in c.args.iter().zip(&places) {
+            if let Ok(n) = place {
+                self.fl_arg(v, *fl, &format!("x{n}"), &format!("d{n}"));
+            }
+        }
+        self.mov_imm("x9", info as i64);
+        match &c.target {
+            V::Sym(s, 0) => self.line(format!("bl      {}", sym_op(s, 0))),
+            t => {
+                self.load_into(t, "x17");
+                self.line("blr     x17");
+            }
+        }
+        if stack > 0 {
+            self.add_sp(stack);
+        }
+        // Floating results: S and T in v0 and v1, VAX ones in x0 and x1.
+        for (k, (fl, a)) in c.results.iter().enumerate() {
+            let size = if matches!(fl, Fl::F | Fl::S) { 4 } else { 8 };
+            let m = self.mem(a, size);
+            let r = match fl {
+                Fl::S => format!("s{k}"),
+                Fl::T => format!("d{k}"),
+                Fl::F => format!("w{k}"),
+                _ => format!("x{k}"),
+            };
+            self.line(format!("str     {r}, {m}"));
+        }
+        let r = self.dst(c.dst);
+        self.line(format!("mov     {r}, x0"));
+        self.done(c.dst);
+    }
+
+    /// An argument into general register `x` or, S and T, double register
+    /// `d` (its S register for S): a value, or the floating value at an
+    /// address, a VAX one as its bits, a longword sign-extended.
+    fn fl_arg(&mut self, v: &V, fl: Option<Fl>, x: &str, d: &str) {
+        let Some(fl) = fl else {
+            return self.load_into(v, x);
+        };
+        let size = if matches!(fl, Fl::F | Fl::S) { 4 } else { 8 };
+        let m = self.mem(v, size);
+        match fl {
+            Fl::S => self.line(format!("ldr     s{}, {m}", &d[1..])),
+            Fl::T => self.line(format!("ldr     {d}, {m}")),
+            Fl::F => self.line(format!("ldrsw   {x}, {m}")),
+            _ => self.line(format!("ldr     {x}, {m}")),
+        }
+    }
+
+    /// Loads the operand of format `f` at address `a` into double
+    /// register `d`, as an IEEE double: VAX formats converted, with their
+    /// words in memory order (`docs/bliss64.md` *Floating point*).
+    fn fl_load(&mut self, f: Fl, a: &V, d: &str) {
+        let m = self.mem(
+            a,
+            if matches!(f, Fl::F | Fl::S | Fl::L) {
+                4
+            } else {
+                8
+            },
+        );
+        match f {
+            Fl::T => self.line(format!("ldr     {d}, {m}")),
+            Fl::S => {
+                let s = format!("s{}", &d[1..]);
+                self.line(format!("ldr     {s}, {m}"));
+                self.line(format!("fcvt    {d}, {s}"));
+            }
+            Fl::L => {
+                self.line(format!("ldrsw   x10, {m}"));
+                self.line(format!("scvtf   {d}, x10"));
+            }
+            Fl::Q => {
+                self.line(format!("ldr     x10, {m}"));
+                self.line(format!("scvtf   {d}, x10"));
+            }
+            Fl::F => {
+                // s|e8|f23, 1.f * 2^(e - 129): the double's exponent is
+                // e + 894; e = 0 is zero.
+                self.line(format!("ldr     w10, {m}"));
+                self.line("ror     w10, w10, #16");
+                self.line("ubfx    x11, x10, #23, #8");
+                self.line("ubfx    x12, x10, #0, #23");
+                self.line("lsl     x12, x12, #29");
+                self.line("add     x13, x11, #894");
+                self.line("orr     x12, x12, x13, lsl #52");
+                self.line("ubfx    x13, x10, #31, #1");
+                self.line("orr     x12, x12, x13, lsl #63");
+                self.line("cmp     x11, #0");
+                self.line("csel    x12, xzr, x12, eq");
+                self.line(format!("fmov    {d}, x12"));
+            }
+            Fl::G => {
+                // s|e11|f52, 1.f * 2^(e - 1025): the double's exponent is
+                // e - 2.
+                // ponytail: G's two smallest exponents, below the double's
+                // normal range, read as zero; subnormals if anyone cares.
+                self.line(format!("ldr     x10, {m}"));
+                self.line("rev     x10, x10");
+                self.line("rev16   x10, x10");
+                self.line("ubfx    x11, x10, #52, #11");
+                self.line("movz    x13, #32, lsl #48");
+                self.line("sub     x12, x10, x13");
+                self.line("cmp     x11, #2");
+                self.line("csel    x12, xzr, x12, ls");
+                self.line(format!("fmov    {d}, x12"));
+            }
+            Fl::D => {
+                // s|e8|f55, 1.f * 2^(e - 129): exponent e + 894, the
+                // fraction rounded to 52 bits, as Alpha does D in G: the
+                // carry of rounding goes into the exponent.
+                self.line(format!("ldr     x10, {m}"));
+                self.line("rev     x10, x10");
+                self.line("rev16   x10, x10");
+                self.line("ubfx    x11, x10, #55, #8");
+                self.line("ubfx    x12, x10, #0, #55");
+                self.line("add     x12, x12, #4");
+                self.line("add     x13, x11, #894");
+                self.line("add     x13, x13, x12, lsr #55");
+                self.line("ubfx    x12, x12, #3, #52");
+                self.line("orr     x12, x12, x13, lsl #52");
+                self.line("ubfx    x13, x10, #63, #1");
+                self.line("orr     x12, x12, x13, lsl #63");
+                self.line("cmp     x11, #0");
+                self.line("csel    x12, xzr, x12, eq");
+                self.line(format!("fmov    {d}, x12"));
+            }
+        }
+    }
+
+    /// Stores d16 at address `a` in floating format `f`, rounded to
+    /// nearest; a VAX result out of its range is zero below it and the
+    /// largest magnitude above.
+    fn fl_store(&mut self, f: Fl, a: &V) {
+        let m = self.mem(a, if matches!(f, Fl::F | Fl::S) { 4 } else { 8 });
+        match f {
+            Fl::T => self.line(format!("str     d16, {m}")),
+            Fl::S => {
+                self.line("fcvt    s16, d16");
+                self.line(format!("str     s16, {m}"));
+            }
+            Fl::F => {
+                // Single's exponent E: F's is E + 2.
+                self.line("fcvt    s16, d16");
+                self.line("fmov    w10, s16");
+                self.line("ubfx    w11, w10, #23, #8");
+                self.line("mov     w13, #0x1000000");
+                self.line("add     w12, w10, w13");
+                self.line("orr     w13, w10, #0x7fffffff");
+                self.line("cmp     w11, #253");
+                self.line("csel    w12, w13, w12, hi");
+                self.line("cmp     w11, #0");
+                self.line("csel    w12, wzr, w12, eq");
+                self.line("ror     w12, w12, #16");
+                self.line(format!("str     w12, {m}"));
+            }
+            Fl::G => {
+                // Double's exponent E: G's is E + 2.
+                self.line("fmov    x10, d16");
+                self.line("ubfx    x11, x10, #52, #11");
+                self.line("movz    x13, #32, lsl #48");
+                self.line("add     x12, x10, x13");
+                self.line("orr     x13, x10, #0x7fffffffffffffff");
+                self.line("cmp     x11, #2045");
+                self.line("csel    x12, x13, x12, hi");
+                self.line("cmp     x11, #0");
+                self.line("csel    x12, xzr, x12, eq");
+                self.line("rev16   x12, x12");
+                self.line("rev     x12, x12");
+                self.line(format!("str     x12, {m}"));
+            }
+            Fl::D => {
+                // Double's exponent E: D's is E - 894, 1 to 255.
+                self.line("fmov    x10, d16");
+                self.line("ubfx    x11, x10, #52, #11");
+                self.line("ubfx    x12, x10, #0, #52");
+                self.line("lsl     x12, x12, #3");
+                self.line("sub     x13, x11, #894");
+                self.line("orr     x12, x12, x13, lsl #55");
+                self.line("ubfx    x13, x10, #63, #1");
+                self.line("orr     x12, x12, x13, lsl #63");
+                self.line("orr     x13, x10, #0x7fffffffffffffff");
+                self.line("cmp     x11, #1149");
+                self.line("csel    x12, x13, x12, hi");
+                self.line("cmp     x11, #894");
+                self.line("csel    x12, xzr, x12, ls");
+                self.line("rev16   x12, x12");
+                self.line("rev     x12, x12");
+                self.line(format!("str     x12, {m}"));
+            }
+            Fl::L | Fl::Q => unreachable!(),
         }
     }
 
@@ -799,6 +1053,47 @@ impl<'a> Routine<'a> {
             Ins::Barrier => self.line("dmb     ish"),
             Ins::Bpt => self.line("brk     #0"),
             Ins::Comment(s) => self.line(format!("; {s}")),
+            Ins::FArith(op, f, a, b, d) => {
+                self.fl_load(*f, a, "d16");
+                self.fl_load(*f, b, "d17");
+                // VAX operand order: SUBx and DIVx take the subtrahend
+                // and the divisor first (UM 4.3).
+                let (op, x, y) = match op {
+                    FOp::Add => ("fadd", 16, 17),
+                    FOp::Sub => ("fsub", 17, 16),
+                    FOp::Mul => ("fmul", 16, 17),
+                    FOp::Div => ("fdiv", 17, 16),
+                };
+                self.line(format!("{op:<8}d16, d{x}, d{y}"));
+                self.fl_store(*f, d);
+            }
+            Ins::FCmp(dst, f, a, b) => {
+                self.fl_load(*f, a, "d16");
+                self.fl_load(*f, b, "d17");
+                let r = self.dst(*dst);
+                self.line("fcmp    d16, d17");
+                self.line("cset    x10, gt");
+                self.line("cset    x11, mi");
+                self.line(format!("sub     {r}, x10, x11"));
+                self.done(*dst);
+            }
+            Ins::FCall(c) => self.fcall(c),
+            Ins::FCvt(from, to, round, a, d) => match to {
+                Fl::L | Fl::Q => {
+                    // To an integer: truncated, or rounded with ties away
+                    // from zero as the VAX's CVTR rounds.
+                    self.fl_load(*from, a, "d16");
+                    let op = if *round { "fcvtas" } else { "fcvtzs" };
+                    self.line(format!("{op:<8}x10, d16"));
+                    let (r, size) = if *to == Fl::L { ("w10", 4) } else { ("x10", 8) };
+                    let m = self.mem(d, size);
+                    self.line(format!("str     {r}, {m}"));
+                }
+                _ => {
+                    self.fl_load(*from, a, "d16");
+                    self.fl_store(*to, d);
+                }
+            },
             Ins::RetAddr(d) => {
                 let rd = self.dst(*d);
                 self.line(format!("ldr     {rd}, [x29, #8]"));

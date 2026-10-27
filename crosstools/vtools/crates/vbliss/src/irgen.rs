@@ -400,6 +400,22 @@ impl Gen<'_> {
                         self.emit(Ins::Bpt);
                         V::C(0)
                     }
+                    Special::FArith(op, f) => {
+                        let (a, b, d) = (vals.remove(0), vals.remove(0), vals.remove(0));
+                        self.emit(Ins::FArith(*op, *f, a, b, d));
+                        V::C(0)
+                    }
+                    Special::FCmp(f) => {
+                        let d = self.temp();
+                        let (a, b) = (vals.remove(0), vals.remove(0));
+                        self.emit(Ins::FCmp(d, *f, a, b));
+                        V::T(d)
+                    }
+                    Special::FCvt(from, to, r) => {
+                        let (a, d) = (vals.remove(0), vals.remove(0));
+                        self.emit(Ins::FCvt(*from, *to, *r, a, d));
+                        V::C(0)
+                    }
                     Special::Comment(n) => {
                         self.emit(Ins::Comment(self.m.comments[*n as usize].clone()));
                         V::C(0)
@@ -490,6 +506,59 @@ impl Gen<'_> {
                 let p = self.place(l)?;
                 self.store(p, v.clone());
                 v
+            }
+            Expr::Call(target, args, links, general)
+                if args.iter().any(|a| {
+                    matches!(
+                        a,
+                        Expr::Special(Special::FloatIn(_) | Special::FloatOut(_), _)
+                    )
+                }) =>
+            {
+                let linkage = match **target {
+                    Expr::Name(id) => match &self.m.syms[id].kind {
+                        Kind::Routine { linkage: l, .. } => l.clone(),
+                        _ => None,
+                    },
+                    _ => general.clone(),
+                };
+                if linkage.is_some_and(|l| l.jsb) || !links.is_empty() {
+                    return Err("%xFLOAT actuals need the calling standard's linkage".into());
+                }
+                let t = match **target {
+                    Expr::Name(id) if general.is_none() => self.address(id)?,
+                    ref t => self.value(t)?,
+                };
+                let (mut vals, mut results) = (Vec::new(), Vec::new());
+                for a in args {
+                    match a {
+                        Expr::Special(Special::FloatIn(f), e) => {
+                            let v = self.value(&e[0])?;
+                            vals.push((self.fix(v), Some(*f)));
+                        }
+                        Expr::Special(Special::FloatOut(f), e) => {
+                            let v = self.value(&e[0])?;
+                            results.push((*f, self.fix(v)));
+                        }
+                        a => {
+                            let v = self.value(a)?;
+                            vals.push((self.fix(v), None));
+                        }
+                    }
+                }
+                let d = self.temp();
+                self.emit(Ins::FCall(Box::new(ir::FCall {
+                    dst: d,
+                    target: t,
+                    args: vals,
+                    results: results.clone(),
+                })));
+                // A call with a floating result has no other value.
+                if results.is_empty() {
+                    self.narrow(V::T(d))
+                } else {
+                    V::C(0)
+                }
             }
             Expr::Call(target, args, links, general) => {
                 let mut linkage = general.clone();
