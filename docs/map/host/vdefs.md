@@ -33,14 +33,14 @@ note = "UM 8.3: a keyword macro for each of starlet.mlb's 92 $name_S macros, its
 [[feature]]
 id = "rms-macros"
 title = "RMS control block macros: $FAB, $RAB, $NAM and the XABs, with their _INIT and _DECL forms"
-status = "todo"
-note = "UM 8.4: static FABs and RABs in OWN data, initialized at run time, or declared only"
+status = "done"
+note = "UM 8.4: crates/vdefs/src/starlet.bli, written for vaxpunk: $FAB, $RAB, $NAM and the XABs with their _INIT and _DECL forms, the keywords of the MACRO-32 macros plus FNM and DNM, and the RMS services with ERR and SUC. $XABKEY's key of reference is KREF, as REF is reserved (the language test's rms_and_helper_macros)"
 
 [[feature]]
 id = "helper-macros"
 title = "STARLET's helper macros: $BBLOCK, $DESCRIPTOR, $BITPOSITION, $FIELDWIDTH, $FIELDMASK, $EQULST, $SHR_MSGDEF"
-status = "todo"
-note = "V4.3 code uses each; $BBLOCK is BLOCK_BYTE under its old name"
+status = "done"
+note = "starlet.bli: $BBLOCK, $DESCRIPTOR (a %ASCID), $BYTEOFFSET, $BITPOSITION, $FIELDWIDTH, $EXTENSION and $FIELDMASK, which also take a $V_ bit number, $EQULST and $SHR_MSGDEF. vaxpunk's STARLET has no SHR$_ codes yet for $SHR_MSGDEF to add to"
 
 [[feature]]
 id = "vax-builtin-macros"
@@ -73,4 +73,6 @@ library edited without them.
 DEC's STARLET and LIB require files hold more than definitions: a
 keyword macro for every system service, the RMS control block macros,
 helper macros, and macros that stand in for the VAX built-ins BLISS
-on Alpha dropped. vdefs writes the definitions only.
+on Alpha dropped. vdefs writes the service macros from the `$name_S`
+macros and copies in the rest, written for vaxpunk in
+`crates/vdefs/src/*.bli`.

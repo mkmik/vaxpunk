@@ -647,3 +647,51 @@ fn service_macros() {
     ));
     assert_eq!(missing.error().unwrap().msg, "%ERROR:\t$QIOW needs CHAN");
 }
+
+#[test]
+fn rms_and_helper_macros() {
+    // vdefs's RMS control block macros (UM 8.4), static and at run time,
+    // the RMS services, and STARLET's helper macros.
+    let out = with_lib(&module(
+        "LIBRARY 'SYS$LIBRARY:STARLET';\nOWN BUF : $BBLOCK[132],\n\
+         INFAB : $FAB(FNM = 'MYFILE.SRC', FAC = <GET, PUT>, SHR = <GET, MSE>, RFM = FIX),\n\
+         INRAB : $RAB(UBF = BUF, USZ = 132, ROP = <LOC, RAH>, FAB = INFAB),\n\
+         KEY : $XABKEY(POS = <0, 10>, SIZ = <4, 6>, FLG = DUP), SUM : $XABSUM();\n\
+         LITERAL $EQULST(XX$_, LOCAL, 4, 2, (A), (B), (C, 10));\n\
+         LITERAL SHR$_BEGIN = 1000, SHR$_ENDED = 1000;\n$SHR_MSGDEF(COPY, 103, LOCAL, (BEGIN, INFO), (ENDED, 2))\n\
+         %PRINT(%NUMBER(COPY$_BEGIN), ' ', %NUMBER(COPY$_ENDED))",
+        "LOCAL F : $FAB_DECL;\n$FAB_INIT(FAB = F, FNM = 'Y.DAT');\n$OPEN(FAB = INFAB);\n\
+         $GET(RAB = INRAB, ERR = 0);\n\
+         %PRINT(%NUMBER(XX$_A), ' ', %NUMBER(XX$_B), ' ', %NUMBER(XX$_C), ' ', $FIELDWIDTH(FAB$B_FAC), ' ', $BYTEOFFSET(FAB$B_FAC))",
+    ));
+    assert!(out.error().is_none(), "{:?}", out.error());
+    assert!(
+        out.listing.contains("%PRINT:\t4 6 10 8 22"),
+        "{}",
+        out.listing
+    );
+    // SHR$_BEGIN + 103 * 65536 + STS$K_INFO, and + 2.
+    assert!(
+        out.listing.contains("%PRINT:\t6751211 6751210"),
+        "{}",
+        out.listing
+    );
+    let ir = out.ir.unwrap();
+    // The FAB: BID 3, BLN 80 ('P'); FAC GET|PUT and SHR GET|MSE at 22;
+    // FNA at 44, then FNS 10.
+    let fab = ir.lines().find(|l| l.starts_with("data $INFAB")).unwrap();
+    for want in [
+        "{ \"\\x03P",
+        "\\x03\\x12",
+        "4 $P.1, \"\\x00\\x00\\x00\\x00\\x0a",
+    ] {
+        assert!(fab.contains(want), "{want}: {fab}");
+    }
+    for call in ["call $SYS$OPEN(", "call $SYS$GET(", "call $LIB$SIGNAL"] {
+        if call.contains("SIGNAL") {
+            assert!(!ir.contains(call), "{ir}");
+        } else {
+            assert!(ir.contains(call), "{call}: {ir}");
+        }
+    }
+}

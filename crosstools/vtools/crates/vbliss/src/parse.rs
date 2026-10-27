@@ -922,7 +922,14 @@ impl Parser<'_> {
             msg: e.msg.clone(),
         });
         let errors = self.diags.iter().filter(|d| d.sev == 'E').count();
-        if errors >= self.opts.error_limit.unwrap_or(30) as usize || self.recovered.contains(&m.pos)
+        // The same error again, as the lexical processor's at the end of
+        // the source, is no going on.
+        let again = self.diags[..self.diags.len() - 1]
+            .iter()
+            .any(|d| d.sev == 'E' && d.line == e.line && d.col == e.col && d.msg == e.msg);
+        if errors >= self.opts.error_limit.unwrap_or(30) as usize
+            || self.recovered.contains(&m.pos)
+            || again
         {
             return Err(e);
         }

@@ -2532,3 +2532,352 @@ KEYWORDMACRO
         EXTERNAL ROUTINE SYS$SET_SECURITY;
         SYS$SET_SECURITY(CLSNAM, OBJNAM, OBJHAN, FLAGS, ITMLST, CONTXT, ACMODE)
         END %;
+
+! The RMS control blocks and services (UM 8.4) and STARLET's helper
+! macros, written for vaxpunk from VMS's documented interfaces; vdefs
+! copies this file in after the definitions.
+!
+! $FAB, $RAB, $NAM and the XABs make a block in OWN or GLOBAL data:
+!     INFAB : $FAB(FNM = 'MYFILE.SRC', FAC = GET)
+! with the keywords of the MACRO-32 macros, options alone or in angle
+! brackets (ROP = <LOC, RAH>), and FNM and DNM for the file names as
+! quoted strings. $name_INIT(name = address, ...) fills a block in at run
+! time, and $name_DECL is the block's attribute with nothing in it.
+
+MACRO
+    ! An option list as the mask of its PREFIX bits: GET or <GET, PUT>.
+    $$RMS_MASK(PREFIX, LIST) =
+        %IF %NULL(LIST) %THEN 0 %ELSE (0 OR $$RMS_BIT(PREFIX, %REMOVE(LIST))) %FI %,
+    $$RMS_BIT(PREFIX)[ITEM] = %NAME(PREFIX, ITEM) %,
+    ! FAB's SHR: GET, PUT, DEL and UPD are FAB$M_SHRx, MSE and NIL themselves.
+    $$RMS_SHR(LIST) =
+        %IF %NULL(LIST) %THEN 0 %ELSE (0 OR $$RMS_SHR_BIT(%REMOVE(LIST))) %FI %,
+    $$RMS_SHR_BIT[ITEM] =
+        %IF %IDENTICAL(ITEM, MSE) OR %IDENTICAL(ITEM, NIL)
+        %THEN %NAME('FAB$M_', ITEM)
+        %ELSE %NAME('FAB$M_SHR', ITEM)
+        %FI %,
+    ! A file name: the address and size a quoted string gives, else those
+    ! given.
+    $$RMS_TEXT(TEXT, ADDRESS) =
+        %IF %NULL(TEXT) %THEN ADDRESS %ELSE UPLIT(%STRING(TEXT)) %FI %,
+    $$RMS_SIZE(TEXT, SIZE) =
+        %IF %NULL(TEXT) %THEN SIZE %ELSE %CHARCOUNT(%STRING(TEXT)) %FI %,
+    ! A key's segments, POS = <0, 10>: their positions, words from
+    ! XAB$W_POS0, and sizes, bytes from XAB$B_SIZ0; and how many.
+    $$RMS_POS[P] = [$BYTEOFFSET(XAB$W_POS0) + 2 * %COUNT, 0, 16, 0] = P %,
+    $$RMS_SIZ[S] = [$BYTEOFFSET(XAB$B_SIZ0) + %COUNT, 0, 8, 0] = S %,
+    $$RMS_COUNT[] = %LENGTH %,
+    $$RMS_SEGMENTS(POS, SIZ) =
+        %IF NOT %NULL(POS) %THEN , $$RMS_POS(%REMOVE(POS)) %FI
+        %IF NOT %NULL(SIZ) %THEN , $$RMS_SIZ(%REMOVE(SIZ)) %FI %;
+
+! The FAB.
+KEYWORDMACRO
+    $FAB(FNM, DNM, FNA = 0, FNS = 0, DNA = 0, DNS = 0, NAM = 0, FAC, XAB = 0, ORG = SEQ,
+            RFM = VAR, RAT, MRS = 0, FOP, SHR, ALQ = 0, DEQ = 0, BKS = 0, FSZ = 0,
+            MRN = 0, CTX = 0, RTV = 0, GBC = 0) =
+        BLOCK[FAB$C_BLN, BYTE]
+        PRESET(
+            [FAB$B_BID] = FAB$C_BID,
+            [FAB$B_BLN] = FAB$C_BLN,
+            [FAB$L_FOP] = $$RMS_MASK('FAB$M_', FOP),
+            [FAB$L_ALQ] = ALQ,
+            [FAB$W_DEQ] = DEQ,
+            [FAB$B_FAC] = $$RMS_MASK('FAB$M_', FAC),
+            [FAB$B_SHR] = $$RMS_SHR(SHR),
+            [FAB$L_CTX] = CTX,
+            [FAB$B_RTV] = RTV,
+            [FAB$B_ORG] = %NAME('FAB$C_', ORG),
+            [FAB$B_RAT] = $$RMS_MASK('FAB$M_', RAT),
+            [FAB$B_RFM] = %NAME('FAB$C_', RFM),
+            [FAB$L_XAB] = XAB,
+            [FAB$L_NAM] = NAM,
+            [FAB$L_FNA] = $$RMS_TEXT(FNM, FNA),
+            [FAB$L_DNA] = $$RMS_TEXT(DNM, DNA),
+            [FAB$B_FNS] = $$RMS_SIZE(FNM, FNS),
+            [FAB$B_DNS] = $$RMS_SIZE(DNM, DNS),
+            [FAB$W_MRS] = MRS,
+            [FAB$L_MRN] = MRN,
+            [FAB$B_BKS] = BKS,
+            [FAB$B_FSZ] = FSZ,
+            [FAB$W_GBC] = GBC) %,
+    $FAB_INIT(FAB, FNM, DNM, FNA = 0, FNS = 0, DNA = 0, DNS = 0, NAM = 0, FAC, XAB = 0,
+            ORG = SEQ, RFM = VAR, RAT, MRS = 0, FOP, SHR, ALQ = 0, DEQ = 0, BKS = 0,
+            FSZ = 0, MRN = 0, CTX = 0, RTV = 0, GBC = 0) =
+        BEGIN
+        BIND $$RMS_BLOCK = FAB : BLOCK[, BYTE];
+        CH$FILL(0, FAB$C_BLN, $$RMS_BLOCK);
+        $$RMS_BLOCK[FAB$B_BID] = FAB$C_BID;
+        $$RMS_BLOCK[FAB$B_BLN] = FAB$C_BLN;
+        $$RMS_BLOCK[FAB$L_FOP] = $$RMS_MASK('FAB$M_', FOP);
+        $$RMS_BLOCK[FAB$L_ALQ] = ALQ;
+        $$RMS_BLOCK[FAB$W_DEQ] = DEQ;
+        $$RMS_BLOCK[FAB$B_FAC] = $$RMS_MASK('FAB$M_', FAC);
+        $$RMS_BLOCK[FAB$B_SHR] = $$RMS_SHR(SHR);
+        $$RMS_BLOCK[FAB$L_CTX] = CTX;
+        $$RMS_BLOCK[FAB$B_RTV] = RTV;
+        $$RMS_BLOCK[FAB$B_ORG] = %NAME('FAB$C_', ORG);
+        $$RMS_BLOCK[FAB$B_RAT] = $$RMS_MASK('FAB$M_', RAT);
+        $$RMS_BLOCK[FAB$B_RFM] = %NAME('FAB$C_', RFM);
+        $$RMS_BLOCK[FAB$L_XAB] = XAB;
+        $$RMS_BLOCK[FAB$L_NAM] = NAM;
+        $$RMS_BLOCK[FAB$L_FNA] = $$RMS_TEXT(FNM, FNA);
+        $$RMS_BLOCK[FAB$L_DNA] = $$RMS_TEXT(DNM, DNA);
+        $$RMS_BLOCK[FAB$B_FNS] = $$RMS_SIZE(FNM, FNS);
+        $$RMS_BLOCK[FAB$B_DNS] = $$RMS_SIZE(DNM, DNS);
+        $$RMS_BLOCK[FAB$W_MRS] = MRS;
+        $$RMS_BLOCK[FAB$L_MRN] = MRN;
+        $$RMS_BLOCK[FAB$B_BKS] = BKS;
+        $$RMS_BLOCK[FAB$B_FSZ] = FSZ;
+        $$RMS_BLOCK[FAB$W_GBC] = GBC
+        END %;
+MACRO
+    $FAB_DECL = BLOCK[FAB$C_BLN, BYTE] %;
+
+! The RAB.
+KEYWORDMACRO
+    $RAB(FAB = 0, UBF = 0, USZ = 0, RBF = 0, RSZ = 0, RAC = SEQ, ROP, KBF = 0, KSZ = 0,
+            KRF = 0, RHB = 0, PBF = 0, PSZ = 0, BKT = 0, XAB = 0, MBF = 0, MBC = 0,
+            CTX = 0, TMO = 0) =
+        BLOCK[RAB$C_BLN, BYTE]
+        PRESET(
+            [RAB$B_BID] = RAB$C_BID,
+            [RAB$B_BLN] = RAB$C_BLN,
+            [RAB$L_ROP] = $$RMS_MASK('RAB$M_', ROP),
+            [RAB$L_CTX] = CTX,
+            [RAB$B_RAC] = %NAME('RAB$C_', RAC),
+            [RAB$B_TMO] = TMO,
+            [RAB$W_USZ] = USZ,
+            [RAB$W_RSZ] = RSZ,
+            [RAB$L_UBF] = UBF,
+            [RAB$L_RBF] = RBF,
+            [RAB$L_RHB] = RHB,
+            [RAB$L_KBF] = KBF,
+            [RAB$B_KSZ] = KSZ,
+            [RAB$B_KRF] = KRF,
+            [RAB$L_PBF] = PBF,
+            [RAB$B_PSZ] = PSZ,
+            [RAB$B_MBF] = MBF,
+            [RAB$B_MBC] = MBC,
+            [RAB$L_BKT] = BKT,
+            [RAB$L_FAB] = FAB,
+            [RAB$L_XAB] = XAB) %,
+    $RAB_INIT(RAB, FAB = 0, UBF = 0, USZ = 0, RBF = 0, RSZ = 0, RAC = SEQ, ROP, KBF = 0,
+            KSZ = 0, KRF = 0, RHB = 0, PBF = 0, PSZ = 0, BKT = 0, XAB = 0, MBF = 0,
+            MBC = 0, CTX = 0, TMO = 0) =
+        BEGIN
+        BIND $$RMS_BLOCK = RAB : BLOCK[, BYTE];
+        CH$FILL(0, RAB$C_BLN, $$RMS_BLOCK);
+        $$RMS_BLOCK[RAB$B_BID] = RAB$C_BID;
+        $$RMS_BLOCK[RAB$B_BLN] = RAB$C_BLN;
+        $$RMS_BLOCK[RAB$L_ROP] = $$RMS_MASK('RAB$M_', ROP);
+        $$RMS_BLOCK[RAB$L_CTX] = CTX;
+        $$RMS_BLOCK[RAB$B_RAC] = %NAME('RAB$C_', RAC);
+        $$RMS_BLOCK[RAB$B_TMO] = TMO;
+        $$RMS_BLOCK[RAB$W_USZ] = USZ;
+        $$RMS_BLOCK[RAB$W_RSZ] = RSZ;
+        $$RMS_BLOCK[RAB$L_UBF] = UBF;
+        $$RMS_BLOCK[RAB$L_RBF] = RBF;
+        $$RMS_BLOCK[RAB$L_RHB] = RHB;
+        $$RMS_BLOCK[RAB$L_KBF] = KBF;
+        $$RMS_BLOCK[RAB$B_KSZ] = KSZ;
+        $$RMS_BLOCK[RAB$B_KRF] = KRF;
+        $$RMS_BLOCK[RAB$L_PBF] = PBF;
+        $$RMS_BLOCK[RAB$B_PSZ] = PSZ;
+        $$RMS_BLOCK[RAB$B_MBF] = MBF;
+        $$RMS_BLOCK[RAB$B_MBC] = MBC;
+        $$RMS_BLOCK[RAB$L_BKT] = BKT;
+        $$RMS_BLOCK[RAB$L_FAB] = FAB;
+        $$RMS_BLOCK[RAB$L_XAB] = XAB
+        END %;
+MACRO
+    $RAB_DECL = BLOCK[RAB$C_BLN, BYTE] %;
+
+! The NAM block.
+KEYWORDMACRO
+    $NAM(ESA = 0, ESS = 0, RSA = 0, RSS = 0) =
+        BLOCK[NAM$C_BLN, BYTE]
+        PRESET(
+            [NAM$B_BID] = NAM$C_BID,
+            [NAM$B_BLN] = NAM$C_BLN,
+            [NAM$L_ESA] = ESA,
+            [NAM$B_ESS] = ESS,
+            [NAM$L_RSA] = RSA,
+            [NAM$B_RSS] = RSS) %,
+    $NAM_INIT(NAM, ESA = 0, ESS = 0, RSA = 0, RSS = 0) =
+        BEGIN
+        BIND $$RMS_BLOCK = NAM : BLOCK[, BYTE];
+        CH$FILL(0, NAM$C_BLN, $$RMS_BLOCK);
+        $$RMS_BLOCK[NAM$B_BID] = NAM$C_BID;
+        $$RMS_BLOCK[NAM$B_BLN] = NAM$C_BLN;
+        $$RMS_BLOCK[NAM$L_ESA] = ESA;
+        $$RMS_BLOCK[NAM$B_ESS] = ESS;
+        $$RMS_BLOCK[NAM$L_RSA] = RSA;
+        $$RMS_BLOCK[NAM$B_RSS] = RSS
+        END %;
+MACRO
+    $NAM_DECL = BLOCK[NAM$C_BLN, BYTE] %;
+
+! The XABs. A key's POS and SIZ are a segment's or a list of them, and
+! its key of reference is KREF, as REF is a reserved word.
+KEYWORDMACRO
+    $XABKEY(KREF = 0, POS = 0, SIZ = 0, DTP = STG, FLG, PROLOG = 0, IAN = 0, LAN = 0,
+            DAN = 0, IFL = 0, DFL = 0, NUL = 0, KNM = 0, NXT = 0) =
+        BLOCK[XAB$C_KEYLEN, BYTE]
+        PRESET(
+            [XAB$B_COD] = XAB$C_KEY,
+            [XAB$B_BLN] = XAB$C_KEYLEN,
+            [XAB$L_NXT] = NXT,
+            [XAB$B_IAN] = IAN,
+            [XAB$B_LAN] = LAN,
+            [XAB$B_DAN] = DAN,
+            [XAB$B_FLG] = $$RMS_MASK('XAB$M_', FLG),
+            [XAB$B_DTP] = %NAME('XAB$C_', DTP),
+            [XAB$B_NSG] = $$RMS_COUNT(%REMOVE(POS)),
+            [XAB$B_NUL] = NUL,
+            [XAB$B_REF] = KREF,
+            [XAB$W_IFL] = IFL,
+            [XAB$W_DFL] = DFL,
+            [XAB$L_KNM] = KNM,
+            [XAB$B_PROLOG] = PROLOG
+            $$RMS_SEGMENTS(POS, SIZ)) %,
+    $XABALL(AID = 0, ALN = ANY, AOP, ALQ = 0, BKZ = 0, DEQ = 0, LOC = 0, VOL = 0,
+            NXT = 0) =
+        BLOCK[XAB$C_ALLLEN, BYTE]
+        PRESET(
+            [XAB$B_COD] = XAB$C_ALL,
+            [XAB$B_BLN] = XAB$C_ALLLEN,
+            [XAB$L_NXT] = NXT,
+            [XAB$B_AOP] = $$RMS_MASK('XAB$M_', AOP),
+            [XAB$B_ALN] = %NAME('XAB$C_', ALN),
+            [XAB$W_VOL] = VOL,
+            [XAB$L_LOC] = LOC,
+            [XAB$L_ALQ] = ALQ,
+            [XAB$W_DEQ] = DEQ,
+            [XAB$B_BKZ] = BKZ,
+            [XAB$B_AID] = AID) %,
+    $XABSUM(NXT = 0) = $$RMS_XAB('SUM', NXT) %,
+    $XABFHC(NXT = 0) = $$RMS_XAB('FHC', NXT) %,
+    $XABDAT(NXT = 0) = $$RMS_XAB('DAT', NXT) %,
+    $XABRDT(NXT = 0) = $$RMS_XAB('RDT', NXT) %,
+    $XABPRO(PRO = 0, UIC = 0, NXT = 0) =
+        BLOCK[XAB$C_PROLEN, BYTE]
+        PRESET(
+            [XAB$B_COD] = XAB$C_PRO,
+            [XAB$B_BLN] = XAB$C_PROLEN,
+            [XAB$L_NXT] = NXT,
+            [XAB$W_PRO] = PRO,
+            [XAB$L_UIC] = UIC) %,
+    $XABSUM_INIT(XAB, NXT = 0) = $$RMS_XAB_INIT('SUM', XAB, NXT) %,
+    $XABFHC_INIT(XAB, NXT = 0) = $$RMS_XAB_INIT('FHC', XAB, NXT) %,
+    $XABDAT_INIT(XAB, NXT = 0) = $$RMS_XAB_INIT('DAT', XAB, NXT) %,
+    $XABRDT_INIT(XAB, NXT = 0) = $$RMS_XAB_INIT('RDT', XAB, NXT) %,
+    $XABPRO_INIT(XAB, PRO = 0, UIC = 0, NXT = 0) =
+        BEGIN
+        BIND $$RMS_BLOCK = XAB : BLOCK[, BYTE];
+        $$RMS_XAB_INIT('PRO', $$RMS_BLOCK, NXT);
+        $$RMS_BLOCK[XAB$W_PRO] = PRO;
+        $$RMS_BLOCK[XAB$L_UIC] = UIC
+        END %;
+MACRO
+    ! An XAB of type TYPE, a quoted string, with only its header given.
+    $$RMS_XAB(TYPE, NXT) =
+        BLOCK[%NAME('XAB$C_', TYPE, 'LEN'), BYTE]
+        PRESET(
+            [XAB$B_COD] = %NAME('XAB$C_', TYPE),
+            [XAB$B_BLN] = %NAME('XAB$C_', TYPE, 'LEN'),
+            [XAB$L_NXT] = NXT) %,
+    $$RMS_XAB_INIT(TYPE, XAB, NXT) =
+        BEGIN
+        BIND $$RMS_HEAD = XAB : BLOCK[, BYTE];
+        CH$FILL(0, %NAME('XAB$C_', TYPE, 'LEN'), $$RMS_HEAD);
+        $$RMS_HEAD[XAB$B_COD] = %NAME('XAB$C_', TYPE);
+        $$RMS_HEAD[XAB$B_BLN] = %NAME('XAB$C_', TYPE, 'LEN');
+        $$RMS_HEAD[XAB$L_NXT] = NXT
+        END %,
+    $XABKEY_DECL = BLOCK[XAB$C_KEYLEN, BYTE] %,
+    $XABALL_DECL = BLOCK[XAB$C_ALLLEN, BYTE] %,
+    $XABSUM_DECL = BLOCK[XAB$C_SUMLEN, BYTE] %,
+    $XABFHC_DECL = BLOCK[XAB$C_FHCLEN, BYTE] %,
+    $XABDAT_DECL = BLOCK[XAB$C_DATLEN, BYTE] %,
+    $XABRDT_DECL = BLOCK[XAB$C_RDTLEN, BYTE] %,
+    $XABPRO_DECL = BLOCK[XAB$C_PROLEN, BYTE] %;
+
+! The RMS services, each given its block, and the error and success AST
+! routines, as $OPEN(FAB = INFAB).
+KEYWORDMACRO
+    $OPEN(FAB, ERR = 0, SUC = 0) = $$RMS_CALL(OPEN, FAB, ERR, SUC) %,
+    $CREATE(FAB, ERR = 0, SUC = 0) = $$RMS_CALL(CREATE, FAB, ERR, SUC) %,
+    $CLOSE(FAB, ERR = 0, SUC = 0) = $$RMS_CALL(CLOSE, FAB, ERR, SUC) %,
+    $ERASE(FAB, ERR = 0, SUC = 0) = $$RMS_CALL(ERASE, FAB, ERR, SUC) %,
+    $PARSE(FAB, ERR = 0, SUC = 0) = $$RMS_CALL(PARSE, FAB, ERR, SUC) %,
+    $SEARCH(FAB, ERR = 0, SUC = 0) = $$RMS_CALL(SEARCH, FAB, ERR, SUC) %,
+    $DISPLAY(FAB, ERR = 0, SUC = 0) = $$RMS_CALL(DISPLAY, FAB, ERR, SUC) %,
+    $CONNECT(RAB, ERR = 0, SUC = 0) = $$RMS_CALL(CONNECT, RAB, ERR, SUC) %,
+    $DISCONNECT(RAB, ERR = 0, SUC = 0) = $$RMS_CALL(DISCONNECT, RAB, ERR, SUC) %,
+    $GET(RAB, ERR = 0, SUC = 0) = $$RMS_CALL(GET, RAB, ERR, SUC) %,
+    $PUT(RAB, ERR = 0, SUC = 0) = $$RMS_CALL(PUT, RAB, ERR, SUC) %,
+    $FIND(RAB, ERR = 0, SUC = 0) = $$RMS_CALL(FIND, RAB, ERR, SUC) %,
+    $UPDATE(RAB, ERR = 0, SUC = 0) = $$RMS_CALL(UPDATE, RAB, ERR, SUC) %,
+    $DELETE(RAB, ERR = 0, SUC = 0) = $$RMS_CALL(DELETE, RAB, ERR, SUC) %,
+    $TRUNCATE(RAB, ERR = 0, SUC = 0) = $$RMS_CALL(TRUNCATE, RAB, ERR, SUC) %,
+    $REWIND(RAB, ERR = 0, SUC = 0) = $$RMS_CALL(REWIND, RAB, ERR, SUC) %,
+    $FLUSH(RAB, ERR = 0, SUC = 0) = $$RMS_CALL(FLUSH, RAB, ERR, SUC) %,
+    $READ(RAB, ERR = 0, SUC = 0) = $$RMS_CALL(READ, RAB, ERR, SUC) %,
+    $WRITE(RAB, ERR = 0, SUC = 0) = $$RMS_CALL(WRITE, RAB, ERR, SUC) %,
+    $SPACE(RAB, ERR = 0, SUC = 0) = $$RMS_CALL(SPACE, RAB, ERR, SUC) %,
+    $FREE(RAB, ERR = 0, SUC = 0) = $$RMS_CALL(FREE, RAB, ERR, SUC) %,
+    $RELEASE(RAB, ERR = 0, SUC = 0) = $$RMS_CALL(RELEASE, RAB, ERR, SUC) %,
+    $WAIT(RAB, ERR = 0, SUC = 0) = $$RMS_CALL(WAIT, RAB, ERR, SUC) %;
+MACRO
+    $$RMS_CALL(NAME, BLOCK, ERR, SUC) =
+        %IF %NULL(BLOCK) %THEN %ERROR(%STRING('$', NAME, ' needs its block')) %FI
+        BEGIN
+        EXTERNAL ROUTINE %NAME('SYS$', NAME);
+        %NAME('SYS$', NAME)(BLOCK, ERR, SUC)
+        END %;
+
+! A field macro's parts, and a field's mask. A bit's number, a $V_ name,
+! is a field one bit wide.
+MACRO
+    $BYTEOFFSET(OFFSET, POSITION, SIZE, SIGN) = OFFSET %,
+    $BITPOSITION(OFFSET, POSITION, SIZE, SIGN) =
+        %IF %NULL(POSITION) %THEN OFFSET %ELSE POSITION %FI %,
+    $FIELDWIDTH(OFFSET, POSITION, SIZE, SIGN) =
+        %IF %NULL(POSITION) %THEN 1 %ELSE SIZE %FI %,
+    $EXTENSION(OFFSET, POSITION, SIZE, SIGN) = SIGN %,
+    $FIELDMASK(OFFSET, POSITION, SIZE, SIGN) =
+        %IF %NULL(POSITION)
+        %THEN (1 ^ (OFFSET))
+        %ELSE (1 ^ ((POSITION) + (SIZE)) - 1 ^ (POSITION))
+        %FI %;
+
+! A BLOCK of bytes, by its older name, and a string's descriptor:
+! $DESCRIPTOR('SYS$OUTPUT').
+MACRO
+    $BBLOCK[] = BLOCK[%REMAINING, BYTE] %,
+    $DESCRIPTOR[] = %ASCID %STRING(%REMAINING) %;
+
+! Literals in a row, for a LITERAL declaration: $EQULST(XX$_, GBL, 0, 1,
+! (A), (B), (C, 10)) is XX$_A = 0, XX$_B = 1, XX$_C = 10, each name
+! without a value numbered START + n * STEP from the first's n of 0.
+MACRO
+    $EQULST(PREFIX, SCOPE, START, STEP)[ITEM] =
+        $$EQU(PREFIX, (START) + (STEP) * %COUNT, %REMOVE(ITEM)) %,
+    $$EQU(PREFIX, NUMBER, NAME, VALUE) =
+        %NAME(PREFIX, NAME) = %IF %NULL(VALUE) %THEN NUMBER %ELSE VALUE %FI %;
+
+! A facility's own codes for the shared messages: $SHR_MSGDEF(COPY, 103,
+! GLOBAL, (BEGIN, INFO)) is a LITERAL, GLOBAL if the scope says so,
+! COPY$_BEGIN = SHR$_BEGIN + 103 * 65536 + STS$K_INFO. A severity may be
+! a number.
+MACRO
+    $SHR_MSGDEF(FACILITY, CODE, SCOPE) =
+        %IF %IDENTICAL(SCOPE, GLOBAL) %THEN GLOBAL %FI
+        LITERAL $$SHR_MSG(FACILITY, CODE, %REMAINING); %,
+    $$SHR_MSG(FACILITY, CODE)[ITEM] = $$SHR_CODE(FACILITY, CODE, %REMOVE(ITEM)) %,
+    $$SHR_CODE(FACILITY, CODE, MESSAGE, SEVERITY) =
+        %NAME(FACILITY, '$_', MESSAGE) = %NAME('SHR$_', MESSAGE) + (CODE) * 65536 +
+            %IF %DECLARED(%NAME('STS$K_', SEVERITY))
+            %THEN %NAME('STS$K_', SEVERITY) %ELSE SEVERITY %FI %;
