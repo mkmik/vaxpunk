@@ -83,8 +83,9 @@ pub enum Ins {
     Insert(u32, V, V, V, V),
     /// `dst = arg n`: the routine's argument n, from 0.
     Arg(u32, u32),
-    /// `dst = stackarg n`: quadword n of the stack at entry, an INTERRUPT
-    /// routine's formal: the PAL's parameters, then the PC and PSL.
+    /// `dst = stackarg n`: an INTERRUPT routine's formal n, from the stack
+    /// at entry: the PAL's parameters, padded to 16 bytes, then its
+    /// frame's PC and PSL.
     StackArg(u32, u32),
     /// `dst = call target(args)`, by the calling standard.
     Call(Option<u32>, V, Vec<V>),
@@ -238,8 +239,8 @@ pub struct Func {
     /// Whether its argument list (argcount, argn, argptr) has longwords,
     /// for BLISS-32 and LONG_DEFAULT, rather than quadwords.
     pub long_args: bool,
-    /// An INTERRUPT routine: it pops this many quadwords, the PAL's
-    /// parameters, and returns with REI.
+    /// An INTERRUPT routine: it pops the PAL's parameters, this many, and
+    /// returns with REI.
     pub rei: Option<u32>,
     /// Block 0 is the entry.
     pub blocks: Vec<Block>,

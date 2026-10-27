@@ -57,6 +57,13 @@ fn dec_mcs_source() {
     let text = vbliss::read_source(&path).unwrap();
     assert!(ir(&text).contains("233"));
     assert_eq!(vbliss::latin1(&text), bytes);
+    // A literal's column counts them a byte each too.
+    let text = module("OWN X : INITIAL('\u{e9}\u{e9}\u{e9}'+1);", "");
+    assert!(
+        ir(&text).contains(&(0xE9E9E9 + 1).to_string()),
+        "{}",
+        ir(&text)
+    );
 }
 
 #[test]
@@ -131,10 +138,22 @@ fn interrupt_linkages() {
         ir.contains("stackarg 0") && ir.contains("rei 1") && ir.contains("rei 0"),
         "{ir}"
     );
+    // One parameter, padded to 16 bytes: the PC and PSL after it, and
+    // REI's frame at x18 past it.
     assert!(
-        asm.contains("add     sp, sp, #8\n        mov     x7, #146\n        svc     #0"),
+        asm.contains(
+            "add     sp, sp, #16\n        mov     x18, sp\n        mov     x7, #146\n        svc     #0"
+        ),
         "{asm}"
     );
+    let size: u32 = asm
+        .split_once("stp     x29, x30, [sp, #-")
+        .and_then(|(_, r)| r.split_once(']'))
+        .and_then(|(n, _)| n.parse().ok())
+        .unwrap();
+    for off in [size, size + 16, size + 24] {
+        assert!(asm.contains(&format!("[x29, #{off}]\n")), "{off}: {asm}");
+    }
     assert_eq!(
         error(&module(
             "LINKAGE INT = INTERRUPT;\nROUTINE H : INT = 0;",

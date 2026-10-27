@@ -1,0 +1,89 @@
+                                Source Listing                  DD-MMM-YYYY HH:MM:SS  BLISS-64E V1.11-007-48G4L         Page 1
+                                                                DD-MMM-YYYY HH:MM:SS  SYS$SYSDEVICE:[ORACLE]FLTSMALL.B64;1
+
+    0	      1 MODULE FLTSMALL (MAIN = M) =
+    0	      2 BEGIN
+    1	      3 ! F floating results at the ends of F's range, which single precision
+    1	      4 ! hasn't: 1E-38 and F's smallest, 2**-128, below single's normal range,
+    1	      5 ! the largest, and a product below the smallest, which is zero.
+    1	      6 REQUIRE 'PRINT';
+ R  1	      7 ! PRINT: prints a value as a signed decimal and as 16 hex digits, on a line
+ R  1	      8 ! of its own, through LIB$PUT_OUTPUT. The behaviour tests print with it,
+ R  1	      9 ! here under vrun and on OpenVMS for the oracle.
+ R  1	     10 
+ R  1	     11 EXTERNAL ROUTINE
+ R  1	     12     LIB$PUT_OUTPUT;
+ R  1	     13 
+ R  1	     14 ROUTINE PRINT (V) : NOVALUE =
+ R  1	     15     BEGIN
+ R  2	     16     LOCAL
+ R  2	     17         BUF : VECTOR[48, BYTE],
+ R  2	     18         DESC : VECTOR[2, LONG],
+ R  2	     19         X,
+ R  2	     20         I;
+ R  2	     21     I = 48;
+ R  2	     22     X = .V;
+ R  2	     23     INCR K FROM 1 TO 16 DO
+ R  2	     24         BEGIN
+ R  3	     25         LOCAL D;
+ R  3	     26         D = .X AND 15;
+ R  3	     27         I = .I - 1;
+ R  3	     28         BUF[.I] = (IF .D LSS 10 THEN %C'0' + .D ELSE %C'A' + .D - 10);
+ R  3	     29         X = .X ^ -4 AND %X'0FFFFFFFFFFFFFFF'
+ R  3	     30         END;
+ R  2	     31     I = .I - 1;
+ R  2	     32     BUF[.I] = %C' ';
+ R  2	     33     ! Digits from the remainders, negative for a negative value, so that
+ R  2	     34     ! the most negative one prints too.
+ R  2	     35     X = .V;
+ R  2	     36     DO
+ R  2	     37         BEGIN
+ R  3	     38         LOCAL D;
+ R  3	     39         D = .X - (.X / 10) * 10;
+ R  3	     40         IF .D LSS 0 THEN D = -.D;
+ R  3	     41         I = .I - 1;
+ R  3	     42         BUF[.I] = %C'0' + .D;
+ R  3	     43         X = .X / 10
+ R  3	     44         END
+ R  3	     45     UNTIL .X EQL 0;
+ R  2	     46     IF .V LSS 0
+ R  2	     47     THEN
+ R  2	     48         BEGIN
+ R  3	     49         I = .I - 1;
+ R  3	     50         BUF[.I] = %C'-'
+ R  3	     51         END;
+ R  2	     52     DESC[0] = 48 - .I + %X'010E0000';
+ R  2	     53     DESC[1] = BUF[.I];
+ R  2	     54     LIB$PUT_OUTPUT(DESC)
+ R  2	     55     END;
+    1	     56 BUILTIN
+    1	     57     ADDF, MULF, CVTGF;
+
+FLTSMALL                        Source Listing                  DD-MMM-YYYY HH:MM:SS  BLISS-64E V1.11-007-48G4L         Page 2
+                                                                DD-MMM-YYYY HH:MM:SS  SYS$SYSDEVICE:[ORACLE]FLTSMALL.B64;1
+
+    1	     58 OWN
+    1	     59     A, B, C;
+    1	     60 ROUTINE M =
+    1	     61     BEGIN
+    2	     62     B = %E'0';
+    2	     63     A = %E'1E-38'; ADDF(A, B, C); PRINT(.C);
+    2	     64     A = %E'1.5E-38'; ADDF(A, B, C); PRINT(.C);
+    2	     65     A = %X'80'; ADDF(A, B, C); PRINT(.C);
+    2	     66     A = %X'FFFF0080'; ADDF(A, B, C); PRINT(.C);
+    2	     67     A = %X'FFFF7FFF'; ADDF(A, B, C); PRINT(.C);
+    2	     68     A = %X'80'; B = %E'0.5'; MULF(A, B, C); PRINT(.C);
+    2	     69     A = %X'80'; B = %E'3'; MULF(A, B, C); PRINT(.C);
+    2	     70     A = %G'2E-38'; CVTGF(A, C); PRINT(.C);
+    2	     71     1
+    2	     72     END;
+    1	     73 END
+    1	     74 ELUDOM
+
+
+                                Source Listing                  DD-MMM-YYYY HH:MM:SS  BLISS-64E V1.11-007-48G4L         Page 3
+                                Source Listing                  DD-MMM-YYYY HH:MM:SS  SYS$SYSDEVICE:[ORACLE]FLTSMALL.B64;1
+
+COMMAND LINE:
+
+BLISS/A64/LIST/SOURCE_LIST=(EXPAND_MACROS,REQUIRE)/NOMACHINE_CODE FLTSMALL.B64

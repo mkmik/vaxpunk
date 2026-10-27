@@ -370,6 +370,12 @@ struct Routine<'a> {
 /// The PAL call REI (DESIGN-0001).
 const REI: u32 = 0x92;
 
+/// The bytes the PAL's n parameters take below its frame: 16-byte
+/// aligned, as it pushes them (DESIGN-0001).
+fn pal_params(n: u32) -> u32 {
+    (8 * n).next_multiple_of(16)
+}
+
 impl<'a> Routine<'a> {
     fn new(f: &'a Func) -> Self {
         let (mut loc, mut saved, spills) = allocate(f);
@@ -657,19 +663,29 @@ impl<'a> Routine<'a> {
                 self.line(format!("str     s16, {m}"));
             }
             Fl::F => {
-                // Single's exponent E: F's is E + 2.
-                self.line("fcvt    s16, d16");
-                self.line("fmov    w10, s16");
-                self.line("ubfx    w11, w10, #23, #8");
-                self.line("mov     w13, #0x1000000");
-                self.line("add     w12, w10, w13");
-                self.line("orr     w13, w10, #0x7fffffff");
-                self.line("cmp     w11, #253");
-                self.line("csel    w12, w13, w12, hi");
-                self.line("cmp     w11, #0");
-                self.line("csel    w12, wzr, w12, eq");
-                self.line("ror     w12, w12, #16");
-                self.line(format!("str     w12, {m}"));
+                // From the double, as F's smallest exponents are below
+                // single's normal range: the fraction rounded to 23 bits,
+                // to nearest even, the carry into the exponent E; F's is
+                // E - 894.
+                self.line("fmov    x10, d16");
+                self.line("ubfx    x11, x10, #29, #1");
+                self.line("add     x11, x10, x11");
+                self.mov_imm("x12", 0x0FFF_FFFF);
+                self.line("add     x11, x11, x12");
+                self.line("ubfx    x12, x11, #52, #11");
+                self.line("ubfx    x11, x11, #29, #23");
+                self.line("sub     x13, x12, #894");
+                self.line("and     x13, x13, #0xff");
+                self.line("orr     x11, x11, x13, lsl #23");
+                self.line("ubfx    x13, x10, #63, #1");
+                self.line("orr     x11, x11, x13, lsl #31");
+                self.line("orr     x13, x11, #0x7fffffff");
+                self.line("cmp     x12, #1149");
+                self.line("csel    x11, x13, x11, hi");
+                self.line("cmp     x12, #894");
+                self.line("csel    x11, xzr, x11, ls");
+                self.line("ror     w11, w11, #16");
+                self.line(format!("str     w11, {m}"));
             }
             Fl::G => {
                 // Double's exponent E: G's is E + 2.
@@ -808,11 +824,13 @@ impl<'a> Routine<'a> {
         }
         match f.rei {
             // An INTERRUPT routine pops the PAL's parameters, then REI
-            // restores everything from the PAL's frame (DESIGN-0001).
+            // restores everything from the PAL's frame, which it finds
+            // at x18, the VAX SP (DESIGN-0001).
             Some(params) => {
                 if params > 0 {
-                    self.add_sp(8 * params);
+                    self.add_sp(pal_params(params));
                 }
+                self.line("mov     x18, sp");
                 self.line(format!("mov     x7, #{REI}"));
                 self.line("svc     #0");
             }
@@ -973,9 +991,16 @@ impl<'a> Routine<'a> {
                 self.done(*d);
             }
             Ins::StackArg(d, n) => {
-                // The stack at entry is above the frame.
+                // The stack at entry is above the frame: the PAL's
+                // parameters, padded to 16 bytes, then its frame.
                 let r = self.dst(*d);
-                let off = self.size + 8 * n;
+                let params = self.f.rei.unwrap_or(0);
+                let pad = if *n < params {
+                    0
+                } else {
+                    pal_params(params) - 8 * params
+                };
+                let off = self.size + 8 * n + pad;
                 self.line(format!("ldr     {r}, [x29, #{off}]"));
                 self.done(*d);
             }

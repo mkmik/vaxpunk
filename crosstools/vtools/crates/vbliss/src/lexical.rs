@@ -212,10 +212,12 @@ impl Parser<'_> {
                 if let Some(f) = s.file {
                     self.list(f, if l.tok == Tok::Eof { u32::MAX } else { l.line });
                     if let Tok::Num(n) = l.tok {
-                        // A decimal literal: the source has its digits.
+                        // A decimal literal: the source has its digits, at
+                        // the column's character, a byte of DEC MCS.
                         let line = &self.lx.files[f as usize].lines[l.line as usize - 1];
-                        let digits: String = line[l.col as usize..]
+                        let digits: String = line
                             .chars()
+                            .skip(l.col as usize)
                             .take_while(char::is_ascii_digit)
                             .collect();
                         let n = self.literal_value(n, digits.parse::<u64>().is_err(), &l);
