@@ -751,14 +751,14 @@ fn vax_builtin_macros() {
     for want in ["call $LIB$CALLG(", "pal "] {
         assert!(ir.contains(want), "{want}: {ir}");
     }
-    // The interlocked queues wait for the PAL's calls.
+    // The interlocked queues are the PAL's calls, REMQHI's entry its R1.
     let insqhi = with_lib(&module(
-        "LIBRARY 'SYS$LIBRARY:LIB';\nOWN Q : VECTOR[2], E : VECTOR[2];",
-        "BUILTIN INSQHI; INSQHI(E, Q);",
+        "LIBRARY 'SYS$LIBRARY:LIB';\nOWN Q : VECTOR[2], E : VECTOR[2], A;",
+        "BUILTIN INSQHI, REMQHI; INSQHI(E, Q); REMQHI(Q, A);",
     ));
-    assert!(
-        insqhi.error().unwrap().msg.contains("PAL_INSQHIL"),
-        "{:?}",
-        insqhi.error()
-    );
+    assert!(insqhi.error().is_none(), "{:?}", insqhi.error());
+    let ir = insqhi.ir.unwrap();
+    for want in ["=l pal 135(", "=l pal 147(", "=l palr1"] {
+        assert!(ir.contains(want), "{want}: {ir}");
+    }
 }

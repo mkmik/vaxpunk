@@ -910,10 +910,9 @@ MACRO
 ! is $FFS, the macro that does the work. As on the VAX, the parameters
 ! are addresses, of a word for a length or of a byte for a character
 ! (%REF(n) gives one), and the output parameters after a semicolon are
-! not taken. The decimal string built-ins and CRC's are left out; the
-! interlocked queues, BUGW and BUGL wait for the PAL calls they need, and
-! CALLG, EMUL and EDIV under BLISS-32 for LIB$CALLG, LIB$EMUL and
-! LIB$EDIV.
+! not taken. The decimal string built-ins and CRC's are left out; BUGW
+! and BUGL wait for the PAL call they need, and CALLG, EMUL and EDIV
+! under BLISS-32 for LIB$CALLG, LIB$EMUL and LIB$EDIV.
 
 MACRO
     ! In a BUILTIN declaration: the mark that the block declared it, and

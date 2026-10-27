@@ -155,9 +155,9 @@ note = "LRM 18.2, RN 2.26: on-off switches are kept block by block, %SWITCHES se
 [[feature]]
 id = "pal-builtins"
 title = "The other PAL_ built-ins, as the PAL gains their calls: interlocked queues, IPIR and WHAMI, MCES, FEN"
-status = "todo"
-needs = ["/platform/pal#interlocked-queues", "/platform/pal#smp-calls", "/platform/pal#machine-checks", "/platform/pal#floating-point"]
-note = "bliss64.md Built-ins: one the PAL lacks is a compile error. CMP_STORE_x can't be one store-exclusive on ARM64 and WRITE_MBX means nothing here"
+status = "done"
+needs = ["/platform/pal#interlocked-queues", "/platform/pal#smp-calls", "/platform/pal#mces", "/platform/pal#floating-point"]
+note = "bliss64.md Built-ins: PAL_REMQxx's entry an output parameter, as BLISSA64's (probe); vms/sysexe/paltest.b64 runs them in the boot test. One the PAL lacks is a compile error. CMP_STORE_x can't be one store-exclusive on ARM64 and WRITE_MBX means nothing here"
 
 [[feature]]
 id = "qualifiers"

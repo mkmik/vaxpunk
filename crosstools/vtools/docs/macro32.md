@@ -414,7 +414,7 @@ none.
 | `EVAX_BEQ`, `BLT`, `BNE src, label` | branch if src's 64 bits are 0, negative, not 0 |
 | `EVAX_CMOVEQ`, `NE`, `LT`, `LE`, `GT`, `GE`, `LBC`, `LBS a, b, c` | c = b if a is 0, not 0, < 0, ≤ 0, > 0, ≥ 0, has its low bit clear, set |
 | `EVAX_MB` | a memory barrier (`dmb sy`) |
-| `EVAX_MTPR_x src`, `EVAX_MFPR_x` | the PAL call for processor register x (IPL, SCBB, SIRR, SISR, PCBB, TXDB, RXCS, RXDB, DOORBELL); R0 = its result |
+| `EVAX_MTPR_x src`, `EVAX_MFPR_x` | the PAL call for processor register x (IPL, SCBB, SIRR, SISR, PCBB, TXDB, RXCS, RXDB, DOORBELL, FEN, IPIR, MCES, WHAMI); R0 = its result |
 
 The rest of Alpha's (byte manipulation, `EVAX_TRAPB`, `RPCC`, the FPCR, the
 PAL calls vaxpunk has no meaning for) is an error that names the built-in.

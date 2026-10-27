@@ -198,7 +198,7 @@ fn operands(ins: &Ins) -> (Vec<u32>, Vec<&V>) {
         ),
         Ins::Cas(d, a, e, n, _) => (Some(*d), vec![a, e, n]),
         Ins::Pal(d, func, args) => (Some(*d), std::iter::once(func).chain(args).collect()),
-        Ins::RetAddr(d) | Ins::Rpcc(d) => (Some(*d), vec![]),
+        Ins::RetAddr(d) | Ins::Rpcc(d) | Ins::PalR1(d) => (Some(*d), vec![]),
         Ins::SetReg(_, v) => (None, vec![v]),
         Ins::Link(_) => unreachable!(),
     };
@@ -1102,6 +1102,11 @@ impl<'a> Routine<'a> {
             Ins::Rpcc(d) => {
                 let rd = self.dst(*d);
                 self.line(format!("mrs     {rd}, CNTVCT_EL0"));
+                self.done(*d);
+            }
+            Ins::PalR1(d) => {
+                let rd = self.dst(*d);
+                self.line(format!("mov     {rd}, x1"));
                 self.done(*d);
             }
             Ins::Cas(d, a, e, n, size) => {

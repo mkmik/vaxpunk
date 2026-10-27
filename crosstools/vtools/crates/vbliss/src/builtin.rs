@@ -71,6 +71,9 @@ pub enum Special {
     /// A PAL call with this function code; for CHMx, the first operand
     /// is the change mode code.
     Pal(u32),
+    /// A queue call that removes an entry, R1, the entry, stored in its
+    /// last operand, an output parameter.
+    PalOut(u32),
     Chm(u32),
     Bpt,
     RetAddr,
@@ -179,37 +182,44 @@ pub fn float_builtin(name: &str, i: crate::ir::Fl) -> Option<Special> {
 const PAL: &[(&str, u32, usize, bool)] = &[
     ("PAL_HALT", 0x00, 0, false),
     ("PAL_SWPCTX", 0x05, 1, true),
+    ("PAL_MFPR_FEN", 0x0B, 0, true),
+    ("PAL_MTPR_FEN", 0x0C, 1, false),
+    ("PAL_MTPR_IPIR", 0x0D, 1, false),
     ("PAL_MFPR_IPL", 0x0E, 0, true),
     ("PAL_MTPR_IPL", 0x0F, 1, true),
+    ("PAL_MFPR_MCES", 0x10, 0, true),
+    ("PAL_MTPR_MCES", 0x11, 1, false),
     ("PAL_MFPR_PCBB", 0x12, 0, true),
     ("PAL_MFPR_SCBB", 0x16, 0, true),
     ("PAL_MTPR_SCBB", 0x17, 1, false),
     ("PAL_MTPR_SIRR", 0x18, 1, false),
     ("PAL_MFPR_SISR", 0x19, 0, true),
+    ("PAL_MFPR_WHAMI", 0x3F, 0, true),
+    ("PAL_INSQHIL", 0x87, 2, true),
+    ("PAL_INSQTIL", 0x88, 2, true),
+    ("PAL_INSQHIQ", 0x89, 2, true),
+    ("PAL_INSQTIQ", 0x8A, 2, true),
     ("PAL_PROBER", 0x8F, 3, true),
     ("PAL_PROBEW", 0x90, 3, true),
     ("PAL_RD_PS", 0x91, 0, true),
+    // The removes take the entry removed as an output parameter too.
+    ("PAL_REMQHIL", 0x93, 1, true),
+    ("PAL_REMQTIL", 0x94, 1, true),
+    ("PAL_REMQHIQ", 0x95, 1, true),
+    ("PAL_REMQTIQ", 0x96, 1, true),
+    ("PAL_INSQHILR", 0xA2, 2, true),
+    ("PAL_INSQTILR", 0xA3, 2, true),
+    ("PAL_INSQHIQR", 0xA4, 2, true),
+    ("PAL_INSQTIQR", 0xA5, 2, true),
+    ("PAL_REMQHILR", 0xA6, 1, true),
+    ("PAL_REMQTILR", 0xA7, 1, true),
+    ("PAL_REMQHIQR", 0xA8, 1, true),
+    ("PAL_REMQTIQR", 0xA9, 1, true),
 ];
 
 /// BLISS-64's PAL built-ins vaxpunk's PAL doesn't have (RN 2.9.2): a
 /// compile error, but known names for BUILTIN.
 const NO_PAL: &[&str] = &[
-    "PAL_INSQHIL",
-    "PAL_INSQTIL",
-    "PAL_INSQHIQ",
-    "PAL_INSQTIQ",
-    "PAL_INSQHILR",
-    "PAL_INSQHIQR",
-    "PAL_INSQTILR",
-    "PAL_INSQTIQR",
-    "PAL_REMQHIL",
-    "PAL_REMQTIL",
-    "PAL_REMQHIQ",
-    "PAL_REMQTIQ",
-    "PAL_REMQHILR",
-    "PAL_REMQHIQR",
-    "PAL_REMQTILR",
-    "PAL_REMQTIQR",
     "PAL_BUGCHK",
     "PAL_IMB",
     "PAL_SWASTEN",
@@ -223,11 +233,8 @@ const NO_PAL: &[&str] = &[
     "PAL_READ_UNQ",
     "PAL_WRITE_UNQ",
     "PAL_MTPR_ASTSR",
-    "PAL_MTPR_FEN",
     "PAL_MTPR_PRBR",
     "PAL_MTPR_TBIAP",
-    "PAL_MTPR_IPIR",
-    "PAL_MTPR_MCES",
     "PAL_MTPR_TBIS",
     "PAL_MTPR_SSP",
     "PAL_MTPR_ASTEN",
@@ -240,14 +247,11 @@ const NO_PAL: &[&str] = &[
     "PAL_MTPR_DATFX",
     "PAL_MTPR_ASN",
     "PAL_MTPR_PERFMON",
-    "PAL_MFPR_MCES",
     "PAL_MFPR_SSP",
-    "PAL_MFPR_WHAMI",
     "PAL_MFPR_PTBR",
     "PAL_MFPR_TBCHK",
     "PAL_MFPR_ESP",
     "PAL_MFPR_USP",
-    "PAL_MFPR_FEN",
     "PAL_MFPR_PRBR",
     "PAL_MFPR_ASTEN",
     "PAL_MFPR_ASTSR",
@@ -528,18 +532,24 @@ impl Parser<'_> {
         let n = args.len();
         let takes_outputs = name.contains("_ATOMIC_")
             || name.starts_with("TESTBIT")
-            || name.starts_with("PAL_REMQUE");
-        if !outs.is_empty() && !takes_outputs {
-            return self.err(format!("{name} has no output parameters"));
-        }
-        if outs.len() > 1 {
-            return self.err(format!("{name} has one output parameter"));
+            || name.starts_with("PAL_REMQ");
+        // BLISSA64 warns, and goes on without them (probe).
+        let most = usize::from(takes_outputs);
+        if outs.len() > most {
+            let at = self.last();
+            let msg = "Extra output parameter in call to built-in function";
+            self.diag('W', &at, msg.into());
+            outs.truncate(most);
         }
         let want = |p: &mut Self, k: usize| -> R<()> {
-            if n == k {
-                Ok(())
-            } else {
-                p.err(format!("{name} takes {k} parameters, not {n}"))
+            match n.cmp(&k) {
+                std::cmp::Ordering::Equal => Ok(()),
+                std::cmp::Ordering::Greater => {
+                    p.err(format!("Extra actual parameters in call to {name}"))
+                }
+                std::cmp::Ordering::Less => p.err(format!(
+                    "Omitted actual parameter in call to {name} has no default value"
+                )),
             }
         };
         let special = |s: Special, args: Vec<Expr>| Expr::Special(s, args);
@@ -987,6 +997,11 @@ impl Parser<'_> {
                 self.byte_op(name, args.remove(0), args.remove(0))
             }
             _ => match PAL.iter().find(|p| p.0 == name) {
+                Some(&(_, code, k, _)) if !outs.is_empty() => {
+                    want(self, k)?;
+                    args.append(&mut outs);
+                    special(Special::PalOut(code), args)
+                }
                 Some(&(_, code, k, _)) => {
                     want(self, k)?;
                     special(Special::Pal(code), args)

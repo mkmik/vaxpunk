@@ -121,6 +121,9 @@ pub enum Ins {
     /// `dst = pal func(args)`: a PAL call (DESIGN-0001), the function
     /// code (x7) and up to six arguments (x0-x5); the result is x0.
     Pal(u32, V, Vec<V>),
+    /// `dst = palr1`: x1 as the PAL call just before left it, the entry a
+    /// queue call removed.
+    PalR1(u32),
     /// `dst = retaddr`: the routine's return address, in its frame.
     RetAddr(u32),
     /// `dst = rpcc`: the cycle counter, CNTVCT_EL0.
@@ -391,6 +394,7 @@ impl fmt::Display for Ins {
                 f.write_str(")")
             }
             Ins::RetAddr(d) => write!(f, "%{d} =l retaddr"),
+            Ins::PalR1(d) => write!(f, "%{d} =l palr1"),
             Ins::Rpcc(d) => write!(f, "%{d} =l rpcc"),
             Ins::Bpt => f.write_str("bpt"),
             Ins::Comment(s) => write!(f, "comment {s:?}"),

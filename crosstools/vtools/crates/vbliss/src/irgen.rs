@@ -367,7 +367,8 @@ impl Gen<'_> {
                 | Special::TestBit { .. }
                 | Special::Adawi
                 | Special::Insque { .. }
-                | Special::Remque { .. }),
+                | Special::Remque { .. }
+                | Special::PalOut(_)),
                 args,
             ) => self.machine(*s, args)?,
             Expr::Special(s, args) => {
@@ -1391,6 +1392,20 @@ impl Gen<'_> {
                 self.jump(out);
                 self.start(out);
                 V::T(r)
+            }
+            Special::PalOut(code) => {
+                let (out, ins) = args.split_last().unwrap();
+                let mut vals = Vec::new();
+                for a in ins {
+                    let v = self.value(a)?;
+                    vals.push(self.fix(v));
+                }
+                let place = self.place(out)?;
+                let (d, r1) = (self.temp(), self.temp());
+                self.emit(Ins::Pal(d, V::C(code.into()), vals));
+                self.emit(Ins::PalR1(r1));
+                self.store(place, V::T(r1));
+                V::T(d)
             }
             _ => unreachable!(),
         })

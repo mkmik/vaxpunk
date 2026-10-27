@@ -475,10 +475,10 @@ the executive can run.
 | `TESTBITSSI`, `TESTBITCCI` | the same, interlocked | RN 2.9.4 | yes |
 | `ADAWI(srcaddr, dstaddr)` | interlocked word add, returns faked VAX condition codes | UM 4.1; RN 2.9.4; probe | yes |
 | `CALL_PAL(code, ...)` | any PAL call, code a compile-time constant | RN 2.9.2 | yes, up to six arguments |
-| `PAL_INSQHIL`, `PAL_INSQTIL`, `PAL_REMQHIL`, `PAL_REMQTIL`, their `Q` (quadword) and `R` (resident) forms | interlocked queues | RN 2.9.2 | no: the PAL has none |
+| `PAL_INSQHIL`, `PAL_INSQTIL(header, entry)`, `PAL_REMQHIL`, `PAL_REMQTIL(header [; removed])`, their `Q` (quadword) and `R` (resident) forms | interlocked queues | RN 2.9.2; probe | yes |
 | `PAL_INSQUEL`, `PAL_INSQUEQ(pred, entry)`, `PAL_REMQUEL`, `PAL_REMQUEQ(entry [; removed])`, their `_D` forms | non-interlocked queues | RN 2.9.2; probe | yes, inline, as vmacro's `INSQUE` |
 | `PAL_PROBER`, `PAL_PROBEW(base, len, mode)` | probe access for a mode | RN 2.9.2 | yes: a length, not Alpha's offset |
-| `PAL_MTPR_x`, `PAL_MFPR_x` (`IPL`, `ASTEN`, `ASTSR`, `SIRR`, `SISR`, `PCBB`, `WHAMI`, `TBIA`, `TBIS`...) | processor registers | RN 2.9.2; KIT | those the PAL has: `IPL`, `PCBB`, `SCBB`, `SIRR`, `SISR` |
+| `PAL_MTPR_x`, `PAL_MFPR_x` (`IPL`, `ASTEN`, `ASTSR`, `SIRR`, `SISR`, `PCBB`, `WHAMI`, `TBIA`, `TBIS`...) | processor registers | RN 2.9.2; KIT | those the PAL has: `IPL`, `PCBB`, `SCBB`, `SIRR`, `SISR`, `FEN`, `IPIR`, `MCES`, `WHAMI` |
 | `PAL_CHMK`, `PAL_CHME`, `PAL_CHMS`, `PAL_CHMU(code [, a0, ...])` | change mode | RN 2.9.2 | yes: the code in x7's bits 31:16, up to six arguments in x0-x5 |
 | `PAL_HALT`, `PAL_BPT`, `PAL_BUGCHK`, `PAL_GENTRAP` | halt, breakpoint, bugcheck, software trap | RN 2.9.2 | `HALT`; `BPT` as `brk`; the others no, as the PAL hasn't them |
 | `PAL_RD_PS`, `PAL_WR_PS_SW`, `PAL_SWASTEN`, `PAL_SWPCTX`, `PAL_RSCC`, `PAL_READ_UNQ`, `PAL_WRITE_UNQ`, `PAL_IMB`, `PAL_CFLUSH`, `PAL_DRAINA`, `PAL_LDQP`, `PAL_STQP` | the rest of OpenVMS's PAL | RN 2.9.2 | those the PAL has: `RD_PS`, `SWPCTX` |
@@ -492,12 +492,15 @@ table differ at the edges: the table has `PAL_MFPR_ASN` where RN lists
 vaxpunk: the PAL keeps Alpha's numbers (DESIGN-0001), so each `PAL_x`
 built-in whose call vaxpunk implements is that call, and `CALL_PAL`
 reaches vaxpunk's own (0x40 and up). One the PAL doesn't implement is a
-compile error. The queue calls the PAL keeps but doesn't implement,
-since one thread runs at a time, are inline code, as vmacro's `INSQUE`
-and `REMQUE` are; their results are SIMH's VMS PALcode's: 1 if the entry
-inserted is the only one, and -1, 0 or 1 for a queue empty before, empty
-after, or not. `PAL_REMQUEx` gives the entry removed, Alpha's R1, as an
-output parameter (`PAL_REMQUEL(.HEAD; ENTRY)`), as BLISSA64 takes it.
+compile error. The queue calls by address, `PAL_INSQUEL` to
+`PAL_REMQUEQ_D`, are inline code, as vmacro's `INSQUE` and `REMQUE` are,
+since one thread runs at a time; their results are the PAL's: 1 if the
+entry inserted is the only one, and -1, 0 or 1 for a queue empty before,
+empty after, or not. A remove gives the entry removed, Alpha's R1, as an
+output parameter (`PAL_REMQUEL(.HEAD; ENTRY)`, `PAL_REMQHIL(HEAD;
+ENTRY)`), as BLISSA64 takes it, and may leave it out. A wrong number of
+actuals gets BLISSA64's errors, and an output parameter a built-in
+hasn't its warning. (probe)
 
 The atomic built-ins are loops of a plain load and one try at a
 compare-and-store by `ldaxr` and `stlxr`, until it stores or the retries

@@ -86,7 +86,8 @@ machine-specific built-ins of `docs/bliss64.md` *Built-ins*: the atomics,
 the `TESTBIT`s, `ADAWI`, the byte operations, the queue and other PAL
 calls the PAL has, `CALL_PAL`, `RETURNADDRESS`, `RPCC` and `SIGNALREF`
 (`tests/bliss/defaults.b64`, `machine.b64`, `registers.b64`, and
-`crates/vbliss/tests/asm.rs` for what only the executive runs). Step 10: the dot lint, and
+`crates/vbliss/tests/asm.rs` for what only the executive runs, and
+`vms/sysexe/paltest.b64`, which the boot test runs). Step 10: the dot lint, and
 on the way `PSECT` declarations (each storage class's psect and its
 attributes), `SWITCHES`, `EXTERNAL LITERAL`, `GLOBAL LITERAL`,
 `UNDECLARE`, and undeclared names taken as external with a warning, as
