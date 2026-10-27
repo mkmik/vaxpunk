@@ -180,6 +180,18 @@ fn nocount() {
         .replace("(MAIN = M)", "(MAIN = M, NOCOUNT)")
         .replace("WC = CALL : COUNT", "WC = CALL");
     assert!(self::ir(&src).contains("call nocount $W(3"));
+    // Only the module's: SWITCHES NOCOUNT is a warning, and changes no
+    // call (oracle NCT).
+    let out = translate(&module(
+        "EXTERNAL ROUTINE W;\nROUTINE X = BEGIN SWITCHES NOCOUNT; 0 END;",
+        "W(3);",
+    ));
+    assert!(
+        out.diags
+            .iter()
+            .any(|d| d.sev == 'W' && d.msg == "Missing or invalid switch specified")
+    );
+    assert!(!out.ir.unwrap().contains("nocount"));
     assert_eq!(
         error(&module(
             "LINKAGE NC = CALL : NOCOUNT;\nBUILTIN ACTUALCOUNT;\nROUTINE R : NC = ACTUALCOUNT();",

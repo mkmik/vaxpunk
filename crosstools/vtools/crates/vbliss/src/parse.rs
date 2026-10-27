@@ -2083,7 +2083,17 @@ impl Parser<'_> {
             "SWITCHES" => {
                 self.pos += 1;
                 loop {
-                    self.switch()?;
+                    // [NO]CODE and [NO]COUNT are the module's: BLISSA64
+                    // warns and goes on without them (oracle LSW, NCT).
+                    if let Tok::Name(n) = self.peek().clone()
+                        && matches!(n.as_str(), "CODE" | "NOCODE" | "COUNT" | "NOCOUNT")
+                    {
+                        let at = self.here();
+                        self.pos += 1;
+                        self.diag('W', &at, "Missing or invalid switch specified".into());
+                    } else {
+                        self.switch()?;
+                    }
                     if !self.eat_punct(',') {
                         break;
                     }

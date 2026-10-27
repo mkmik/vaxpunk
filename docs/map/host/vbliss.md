@@ -156,7 +156,7 @@ note = "LRM 18.2, RN 2.26: on-off switches are kept block by block, %SWITCHES se
 id = "switches-declaration"
 title = "A SWITCHES declaration takes only the switches LRM 18.2 allows in one"
 status = "todo"
-note = "BLISSA64 warns \"Missing or invalid switch specified\" at SWITCHES NOCODE (probe, 2026-10-27); vbliss takes every module switch there. Which others it refuses needs a probe each"
+note = "BLISSA64 warns \"Missing or invalid switch specified\" at SWITCHES NOCODE and NOCOUNT and goes on without them (probes LSW, NCT, 2026-10-27), as vbliss now does for [NO]CODE and [NO]COUNT; it takes every other module switch there. Which others BLISSA64 refuses needs a probe each"
 
 [[feature]]
 id = "pal-builtins"

@@ -564,7 +564,9 @@ switch for each `/CHECK` option. The module head also takes `LANGUAGE`,
 `ADDRESSING_MODE`, `ENVIRONMENT`, `OTS_LINKAGE` and `VERSION` besides
 the manual's `IDENT`, `MAIN`, `OPTLEVEL` and the rest. A switch in the
 module head beats the qualifier; a `SWITCHES` declaration beats both.
-(RN 2.26, 2.8.5; KIT; UM 1.3.10)
+`CODE` and `COUNT` are the module head's only: in a `SWITCHES`
+declaration BLISSA64 warns "Missing or invalid switch specified" and
+goes on without them (oracle LSW, NCT). (RN 2.26, 2.8.5; KIT; UM 1.3.10)
 
 The `BLISS` verb, as `BLISS_AN.CLD` defines it (CLD):
 
