@@ -225,8 +225,11 @@ form)
   aligned; `NATURAL` assumes each field is aligned as its offset allows.
   A wrong assumption costs an alignment fault, never a wrong result.
   vbliss accepts them and assumes nothing: ARM64 loads and stores work
-  unaligned on normal memory, and only atomics need the alignment.
-  (RN 2.5, 2.31; vaxpunk)
+  unaligned on normal memory, and only atomics need the alignment. On the
+  `OWN` and `GLOBAL` data vbliss allocates, `ALIGN(n)` places it, and
+  without it a scalar goes at its size's boundary and a structure at a
+  quadword's (LRM 9.5.3): DEC's TPAMAC packs its parse tables with
+  `ALIGN(0)`. (RN 2.5, 2.31; vaxpunk)
 - **Granularity.** Alpha writes bytes and words only through longwords, so
   BLISS-64 has `GRANULARITY(n)`, the `DEFAULT_GRANULARITY` switch and
   `/GRANULARITY`, to ask for byte-safe writes. ARM64 writes bytes and

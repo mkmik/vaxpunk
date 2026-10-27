@@ -91,6 +91,8 @@ pub(crate) struct Attrs {
     /// A range attribute, `SIGNED(n)` or `UNSIGNED(n)`: the bits a
     /// literal's value fits in (LRM 9.12).
     pub range: Option<(bool, i64)>,
+    /// ALIGN(n): static data goes at an address with n low zero bits.
+    pub align: Option<u8>,
 }
 
 /// The size in bytes of an allocation unit, if `name` is one.
@@ -536,7 +538,14 @@ impl Parser<'_> {
                     self.pos += 1;
                     a.external_name = Some(self.external_name()?);
                 }
-                "ALIGN" | "ADDRESSING_MODE" | "GRANULARITY" => {
+                "ALIGN" => {
+                    self.pos += 1;
+                    self.expect_punct('(')?;
+                    let n = self.ctce()?;
+                    self.expect_punct(')')?;
+                    a.align = Some(n.clamp(0, 63) as u8);
+                }
+                "ADDRESSING_MODE" | "GRANULARITY" => {
                     // Assumptions ARM64 doesn't need, and byte writes it
                     // has (docs/bliss64.md).
                     self.pos += 1;
@@ -690,6 +699,12 @@ impl Parser<'_> {
                 return self.err("INITIAL or PRESET on EXTERNAL data");
             }
             let (initial, preset) = (a.initial.take(), a.preset.take());
+            // A scalar is aligned to its size, a structure to a fullword
+            // (LRM 9.5.3), unless ALIGN says otherwise.
+            let align = a.align.unwrap_or(match (&a.structure, a.unit) {
+                (None, Some(u)) => u.trailing_zeros() as u8,
+                _ => 3,
+            });
             let kind = self.data_kind(storage, &mut a)?;
             let Kind::Data { bytes, storage, .. } = kind else {
                 unreachable!()
@@ -730,6 +745,7 @@ impl Parser<'_> {
                         sym: id,
                         init,
                         psect,
+                        align,
                     })
                 }
                 Storage::Local(_) if !init.is_empty() => {

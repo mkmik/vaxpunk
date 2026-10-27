@@ -214,6 +214,7 @@ pub struct Static {
     pub sym: usize,
     pub init: Vec<Init>,
     pub psect: String,
+    pub align: u8,
 }
 
 /// The psects the storage classes go in, as PSECT declarations set them.
@@ -2617,6 +2618,12 @@ impl Parser<'_> {
             }
         };
         while !at_close(self) {
+            // A null expression, between semicolons: a macro that
+            // expanded to nothing, as DEC's $RMS_VALFLD_INI may.
+            if self.eat_punct(';') {
+                value = false;
+                continue;
+            }
             exprs.push(self.expr()?);
             value = true;
             if !self.eat_punct(';') {

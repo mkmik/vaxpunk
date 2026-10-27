@@ -964,9 +964,8 @@ impl Parser<'_> {
                             }
                             toks.push(lexeme(Tok::Str(vec![*c])));
                         }
-                        if toks.is_empty() {
-                            toks.push(lexeme(Tok::Str(Vec::new())));
-                        }
+                        // Nothing for nothing: DEC's $XABPRO() explodes an
+                        // empty protection and counts the actuals.
                         self.push(toks);
                         Lexical::Done
                     }

@@ -193,9 +193,9 @@ note = "5, 7, 8, 12, 13 and 15 answered (bliss64.md), with tests/bliss programs 
 [[feature]]
 id = "dec-libraries"
 title = "DEC's STARLET, LIB, TPAMAC and CLIMAC require files compile and expand as under BLISSA64"
-status = "todo"
+status = "done"
 needs = ["#source-text", "#lexical-functions", "#predeclared-linkages", "#routine-attributes", "#general-calls", "#macro-edges", "#declaration-edges"]
-note = "A local check, as the corpus test is: read from the oracle's SYS$LIBRARY, never committed. STARLET.R64 stops at line 26628 today. Patched by hand past those gaps, DEC's Alpha STARLET.REQ and LIB.REQ let 24 of the 1,260 V4.3 modules compile, against 19 with vaxpunk's; most of the rest need DEC's generated libraries or VAX built-ins"
+note = "crates/vbliss/tests/dec.rs, ignored like the corpus test: reads the files from the oracle's SYS$LIBRARY, never committed, and expands $ASSIGN, $QIOW, $OPEN, $FAB, $RAB, $XABPRO, $FAB_INIT and TPAMAC's state tables. With DEC's STARLET and LIB, 34 of the 1,261 V4.3 modules compile; most of the rest need DEC's generated libraries or VAX built-ins"
 
 [[feature]]
 id = "debug-symbols"

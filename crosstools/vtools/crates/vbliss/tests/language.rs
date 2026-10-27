@@ -416,3 +416,29 @@ fn overflow_switch() {
     }
     assert!(!self::ir(&src.replace("(OVERFLOW)", "")).contains("addv"));
 }
+
+#[test]
+fn dec_macro_idioms() {
+    // What DEC's STARLET and TPAMAC lean on: a block may hold null
+    // expressions, where a macro expanded to nothing ($FAB_INIT); %EXPLODE
+    // of an empty string gives no actuals ($XABPRO()); ALIGN(0) packs
+    // static data (TPAMAC's tables), which otherwise goes at its natural
+    // boundary (LRM 9.5.3).
+    let src = module(
+        "MACRO N(X) = %LENGTH %;\n%PRINT(N(%EXPLODE('')), N(%EXPLODE('AB')))\n\
+         OWN B : BYTE, W : WORD, L : LONG ALIGN(0), V : VECTOR[1, BYTE];",
+        "(B = 1;; W = 2;);",
+    );
+    let out = translate(&src);
+    assert!(out.error().is_none(), "{:?}", out.error());
+    assert!(out.listing.contains("%PRINT:\t02"), "{}", out.listing);
+    let ir = out.ir.unwrap();
+    for want in [
+        "$B in $OWN$ align 1 ",
+        "$W in $OWN$ align 2 ",
+        "$L in $OWN$ align 1 ",
+        "$V in $OWN$ align 8 ",
+    ] {
+        assert!(ir.contains(want), "{want}: {ir}");
+    }
+}

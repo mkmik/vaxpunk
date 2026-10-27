@@ -190,7 +190,7 @@ impl Gen<'_> {
             psect: s.psect.clone(),
             name: sym.asm.clone(),
             global,
-            align: 3,
+            align: s.align,
             items,
         });
         Ok(())
