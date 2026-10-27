@@ -1987,16 +1987,30 @@ fn session(log: impl Fn() -> String, mut type_: impl FnMut(&str)) -> Result<(), 
                 continue;
             }
             // STARTUP's processes print when they get there, which can be
-            // in the middle of a command's lines: without theirs too.
-            let quiet: String = plain
-                .lines()
-                .filter(|l| !STARTUP.lines.iter().any(|s| l.contains(s)))
-                .flat_map(|l| [l, "\n"])
-                .collect();
+            // in the middle of a command's lines: without theirs too. So
+            // can DCL's prompt, after a RUN whose process prints on OPA0:
+            // too: without the prompts that start a line.
+            let unprompted = |s: &str| -> String {
+                s.lines()
+                    .map(|l| l.strip_prefix("$ ").unwrap_or(l))
+                    .flat_map(|l| [l, "\n"])
+                    .collect()
+            };
+            let quiet = unprompted(
+                &plain
+                    .lines()
+                    .filter(|l| !STARTUP.lines.iter().any(|s| l.contains(s)))
+                    .flat_map(|l| [l, "\n"])
+                    .collect::<String>(),
+            );
             let missing: Vec<_> = phase
                 .lines
                 .iter()
-                .filter(|l| !text.contains(*l) && !plain.contains(*l) && !quiet.contains(*l))
+                .filter(|l| {
+                    !text.contains(*l)
+                        && !plain.contains(*l)
+                        && !quiet.contains(unprompted(l).trim_end_matches('\n'))
+                })
                 .collect();
             if step == phase.steps.len() && missing.is_empty() {
                 println!("{}: {:?}", phase.name, start.elapsed());
