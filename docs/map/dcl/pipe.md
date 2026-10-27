@@ -18,7 +18,7 @@ id = "pipelines"
 title = "a | b: each segment a subprocess, joined by mailboxes, read as SYS$PIPE"
 status = "todo"
 needs = ["/dcl/spawn", "/exec/mailboxes", "/rms/core"]
-note = "pipe.mar ponytail: no SPAWN, no RMS on a mailbox (rms/core's devices feature)"
+note = "pipe.mar ponytail: no RMS on a mailbox (rms/core's devices feature)"
 
 [[feature]]
 id = "redirection"
@@ -68,5 +68,5 @@ create; `/TRUSTED` lets a captive account's procedure use it.
 
 vaxpunk's `PIPE` (`vms/sysexe/dcl/pipe.mar`) does `;`, `&&` and `||`,
 taking each command from the line before reading another. `|`, `&`,
-`<` and `>` are refused: they need subprocesses, which wait for `SPAWN`
+`<` and `>` are refused: they need subprocesses, as `SPAWN` makes
 (t8y:/dcl/spawn), and RMS on a mailbox.

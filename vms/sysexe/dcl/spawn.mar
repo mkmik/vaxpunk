@@ -1,0 +1,517 @@
+        .TITLE  SPAWN   DCL's SPAWN
+        .IDENT  /V0.1/
+;
+; SPAWN, which makes a subprocess that runs DCL with a copy of this
+; process's context, and DCL$SPAWNED, with which the subprocess's DCL
+; takes it, as VMS's DCL does
+; (docs/adr/0045-spawn-passes-its-context-as-vms-does.md). The
+; subprocess runs LOGINOUT, which gives it DCL and a copy of the process
+; logical names (EXE$LOGIN); SPAWN writes the rest to a mailbox, which
+; is the subprocess's SYS$ERROR, and waits on another, its termination
+; mailbox, where the subprocess first says, with an empty message, that
+; it has read it all, then sends its termination message.
+; A context record: its type, then a header's flags, prompt and the
+; termination mailbox's name, or a command's text, or a symbol as
+; DCL$SYMTAB has it, up to the end of its string.
+; One of DCL's modules: ../dcl.mar says how they fit.
+;
+        .LIBRARY "lib.mlb"
+        .LIBRARY "starlet.mlb"
+        .LIBRARY "../sysexe.mlb"
+        .LIBRARY "../dcl.mlb"
+        $SSDEF
+        $IODEF
+        $DCDEF
+        $FABDEF
+        $NAMDEF
+        $DVIDEF
+        $JPIDEF
+        $LNMDEF
+        $ACCDEF
+        $MSGDEF
+        $DCLDEF
+
+        .EXTERNAL DCL$ADD, DCL$CHAN, DCL$CTRLYFP, DCL$CTRLYON, DCL$DEPTH
+        .EXTERNAL DCL$DONE, DCL$GETVAL, DCL$ISPRES, DCL$LINE, DCL$OK
+        .EXTERNAL DCL$PROMPT, DCL$SAY, DCL$SETSYM, DCL$SYMEND, DCL$SYMNAM
+        .EXTERNAL DCL$SYMTAB, DCL$TOKEN, DCL$VERIFY
+
+CTX_TYPE = 0                            ; a context record's type: HEADER, COMMAND or SYMBOL
+CTX_FLAGS = 1                           ; a header's flags: 1 for SET VERIFY
+CTX_PROMPT = 2                          ; its prompt, .ASCIC
+CTX_ACK = CTX_PROMPT+PROMPTSIZE+1       ; and the termination mailbox's name, .ASCIC
+CTX_DATA = 4                            ; a command's text, or a symbol
+CTXSIZE = CTX_DATA+SYM$K_LENGTH         ; the longest record
+CTXQUO = 20480                          ; the context mailbox's room: the header, a command and NSYM symbols
+ACKSIZE = 17                            ; a mailbox's name, _MBAn:, .ASCIC
+HEADER = 1
+COMMAND = 2
+SYMBOL = 3
+
+        .PSECT  DATA, NOEXE, WRT, LONG
+WAIT:   .LONG   0                       ; 1 unless /NOWAIT
+LOG:    .LONG   0                       ; 1 unless /NOLOG
+SYMBOLS:.LONG   0                       ; 1 unless /NOSYMBOLS
+SEQ:    .LONG   0                       ; n of the name USERNAME_n, or 0 for /PROCESS's
+PID:    .LONG   0                       ; the subprocess's
+FINAL:  .LONG   0                       ; and its final status
+CTXCHAN:.LONG   0                       ; the context mailbox's channel, 0 for none
+TRMCHAN:.LONG   0                       ; the termination mailbox's
+TRMUNIT:.LONG   0                       ; and its unit
+OWNER:  .LONG   0                       ; DCL$SPAWNED's: the owner's PID
+PRIB:   .LONG   0                       ; this process's base priority
+IOSB:   .BLKQ   1
+CMDLEN: .LONG   0                       ; the command's length
+INDSC:  .LONG   0                       ; the subprocess's SYS$INPUT, none for 0
+        .ADDRESS INBUF
+OUTDSC: .LONG   0                       ; its SYS$OUTPUT, none for 0
+        .ADDRESS OUTBUF
+PRCDSC: .LONG   0                       ; its name
+        .ADDRESS PRCBUF
+CTXDSC: .LONG   0                       ; the context mailbox's name, its SYS$ERROR
+        .ADDRESS CTXNAM
+ACKDSC: .LONG   0                       ; DCL$SPAWNED's: the termination mailbox's
+        .ADDRESS ACKNAM+1
+LOGINOUT:
+        .ASCID  "LOGINOUT.EXE"
+PROCTAB:.ASCID  "LNM$PROCESS_TABLE"
+OUTNAM: .ASCID  "SYS$OUTPUT"
+ERRNAM: .ASCID  "SYS$ERROR"
+V_COMMAND:
+        .ASCID  "COMMAND"
+V_INPUT:.ASCID  "INPUT"
+V_PROCESS:
+        .ASCID  "PROCESS"
+V_PROMPT:
+        .ASCID  "PROMPT"
+V_LOG:  .ASCID  "LOG"
+V_SYMBOLS:
+        .ASCID  "SYMBOLS"
+V_WAIT: .ASCID  "WAIT"
+        .ALIGN  LONG
+JPIITEMS:                               ; $GETJPI's: this process's username,
+        .WORD   12, JPI$_USERNAME
+        .ADDRESS USERNAME, 0
+        .WORD   4, JPI$_PRIB            ; base priority
+        .ADDRESS PRIB, 0
+        .WORD   15, JPI$_PRCNAM         ; and name
+        .ADDRESS MYNAME, MYLEN
+        .LONG   0
+OWNERITEM:                              ; and DCL$SPAWNED's, its owner
+        .WORD   4, JPI$_OWNER
+        .ADDRESS OWNER, 0
+        .LONG   0
+INITEM: .WORD   LINESIZE, DVI$_DEVNAM   ; $GETDVI's: the terminal's name
+        .ADDRESS INBUF, INDSC
+        .LONG   0
+CTXITEM:.WORD   16, DVI$_DEVNAM         ; the context mailbox's
+        .ADDRESS CTXNAM, CTXDSC
+        .LONG   0
+TRMITEMS:                               ; the termination mailbox's,
+        .WORD   ACKSIZE-1, DVI$_DEVNAM
+        .ADDRESS ACKNAM+1, ACKLEN
+        .WORD   4, DVI$_UNIT            ; and its unit
+        .ADDRESS TRMUNIT, 0
+        .LONG   0
+OUTITEM:.WORD   LINESIZE, LNM$_STRING   ; $TRNLNM's: SYS$OUTPUT's string, or SYS$ERROR's
+        .ADDRESS OUTBUF, OUTDSC
+        .LONG   0
+CREITEM:.WORD   0, LNM$_STRING          ; $CRELNM's: SYS$ERROR's
+        .ADDRESS OUTBUF, 0
+        .LONG   0
+CLASSITEM:                              ; $GETDVI's: /INPUT's class
+        .WORD   4, DVI$_DEVCLASS
+        .ADDRESS DEVCLASS, 0
+        .LONG   0
+DEVCLASS:
+        .LONG   0
+INFAB:  $FAB    FNA=INBUF, DNA=COMTYPE, DNS=4, NAM=INNAM
+INNAM:  $NAM    ESA=EXPBUF, ESS=LINESIZE, RSA=RESBUF, RSS=LINESIZE
+COMTYPE:.ASCII  ".COM"
+MYLEN:  .WORD   0
+ACKLEN: .WORD   0
+        .ALIGN  LONG
+REC:    .BLKB   CTXSIZE                 ; a context record
+TRMMSG: .BLKB   ACC$K_TERMLEN           ; a message in the termination mailbox
+CMDBUF: .BLKB   LINESIZE                ; the command
+        .ALIGN  LONG
+INBUF:  .BLKB   LINESIZE
+        .ALIGN  LONG
+OUTBUF: .BLKB   LINESIZE                ; the subprocess's SYS$OUTPUT, or a translation
+EXPBUF: .BLKB   LINESIZE                ; /INPUT's file, as $PARSE expands it
+RESBUF: .BLKB   LINESIZE                ; and as $SEARCH finds it
+PRCBUF: .BLKB   16
+CTXNAM: .BLKB   16
+ACKNAM: .BLKB   ACKSIZE
+PRMBUF: .BLKB   PROMPTSIZE+1            ; the subprocess's prompt, .ASCIC
+USERNAME:
+        .BLKB   12
+MYNAME: .BLKB   16
+
+        .PSECT  CODE, EXE, LONG
+; DCL$SPAWN, SPAWN [command]: makes a subprocess named USERNAME_n, the
+; first n from 1 to 99 no process of the UIC group has, or /PROCESS's
+; name, that runs DCL, with this process's base priority, a copy of its
+; process logical names, which LOGINOUT gives it, and of the context
+; this writes to the mailbox that is its SYS$ERROR: the prompt, /PROMPT's
+; or "$ " for /PROMPT without a value; SET VERIFY; the global symbols and
+; the procedure running's local ones, unless /NOSYMBOLS; and the
+; command, which it does, then logs out without a word. Its SYS$INPUT is
+; /INPUT's, a device or a file, .COM by default, that must be there,
+; which it does after the command, else this process's terminal, or none
+; without one; its SYS$OUTPUT this one's. Unless /NOLOG it says the
+; subprocess was spawned and, with /WAIT, the default, that the
+; terminal is attached to it; then it waits, with CTRL/Y disabled, until
+; the subprocess is gone, says control returned to this process, and
+; makes its final status $STATUS. /NOWAIT goes on as soon as the
+; subprocess has its context. As VMS's.
+; ponytail: no ATTACH, /OUTPUT, which waits for SYS$OUTPUT to be a file
+; (t8y:/rms/ppf), /NOTIFY, /KEYPAD, /[NO]LOGICAL_NAMES, /CLI, /TABLE or
+; /CARRIAGE_CONTROL, and SET COMMAND's verbs stay here (t8y:/dcl/spawn).
+DCL$SPAWN::
+        .EXCEPTION_ENTRY
+        CLRQ    CTXCHAN                 ; and TRMCHAN: none yet
+        $GETJPIW_S ITMLST=JPIITEMS
+        MOVAB   V_COMMAND, R1           ; the command, kept from the next values
+        BSBW    DCL$GETVAL
+        MOVL    R8, CMDLEN
+        MOVC3   R8, DCL$TOKEN, CMDBUF
+        MOVAB   V_WAIT, R1
+        BSBW    DCL$ISPRES
+        BICL3   #^C1, R0, WAIT
+        MOVAB   V_LOG, R1
+        BSBW    DCL$ISPRES
+        BICL3   #^C1, R0, LOG
+        MOVAB   V_SYMBOLS, R1
+        BSBW    DCL$ISPRES
+        BICL3   #^C1, R0, SYMBOLS
+        MOVC3   #<PROMPTSIZE+1>, DCL$PROMPT, PRMBUF ; this process's prompt
+        MOVAB   V_PROMPT, R1
+        BSBW    DCL$ISPRES
+        BLBC    R0, 20$
+        MOVAB   V_PROMPT, R1            ; or /PROMPT's
+        BSBW    DCL$GETVAL
+        TSTL    R8
+        BNEQ    10$
+        MOVB    #^A/$/, DCL$TOKEN
+        MOVB    #^A/ /, DCL$TOKEN+1
+        MOVL    #2, R8
+10$:    CMPL    R8, #PROMPTSIZE
+        BLEQU   15$
+        MOVL    #PROMPTSIZE, R8
+15$:    MOVB    R8, PRMBUF
+        MOVC3   R8, DCL$TOKEN, PRMBUF+1
+20$:    MOVAB   V_INPUT, R1             ; SYS$INPUT: /INPUT's
+        BSBW    DCL$GETVAL
+        MOVL    R8, INDSC
+        MOVC3   R8, DCL$TOKEN, INBUF
+        TSTL    INDSC
+        BEQL    22$
+        BSBW    INFILE
+        BLBS    R0, 25$
+        BRW     FAIL
+22$:    TSTL    DCL$CHAN                ; or the terminal's
+        BEQL    25$
+        $GETDVIW_S CHAN=DCL$CHAN, ITMLST=INITEM
+25$:    CLRL    OUTDSC                  ; SYS$OUTPUT: this process's
+        $TRNLNM_S TABNAM=PROCTAB, LOGNAM=OUTNAM, ITMLST=OUTITEM
+        MOVAB   V_PROCESS, R1           ; the name: /PROCESS's
+        BSBW    DCL$GETVAL
+        CLRL    SEQ
+        MOVL    #SS$_IVLOGNAM, R0
+        CMPL    R8, #15
+        BLEQU   35$
+        BRW     FAIL
+35$:    MOVL    R8, PRCDSC
+        MOVC3   R8, DCL$TOKEN, PRCBUF
+        TSTL    PRCDSC
+        BNEQ    40$
+        INCL    SEQ                     ; or USERNAME_1
+        BSBW    PRCNAME
+; The mailboxes, and the context, all of it, before the subprocess reads.
+40$:    $CREMBX_S CHAN=CTXCHAN, MAXMSG=#CTXSIZE, BUFQUO=#CTXQUO
+        BLBC    R0, 45$
+        $GETDVIW_S CHAN=CTXCHAN, ITMLST=CTXITEM
+        BLBC    R0, 45$
+        $CREMBX_S CHAN=TRMCHAN, MAXMSG=#ACC$K_TERMLEN, BUFQUO=#<2*ACC$K_TERMLEN>
+        BLBC    R0, 45$
+        $GETDVIW_S CHAN=TRMCHAN, ITMLST=TRMITEMS
+        BLBC    R0, 45$
+        MOVB    ACKLEN, ACKNAM
+        MOVB    #HEADER, REC+CTX_TYPE
+        MOVB    DCL$VERIFY, REC+CTX_FLAGS
+        MOVC3   #<PROMPTSIZE+1>, PRMBUF, REC+CTX_PROMPT
+        MOVC3   #ACKSIZE, ACKNAM, REC+CTX_ACK
+        BSBW    PUTREC
+        BLBC    R0, 45$
+        MOVL    CMDLEN, R2
+        BEQL    50$
+        MOVB    #COMMAND, REC+CTX_TYPE
+        MOVC3   R2, CMDBUF, REC+CTX_DATA
+        BSBW    PUTREC
+45$:    BLBC    R0, FAIL
+50$:    TSTL    SYMBOLS
+        BEQL    65$
+        MOVAB   DCL$SYMTAB, R6
+55$:    TSTB    SYM$T_NAME(R6)
+        BEQL    60$
+        CMPL    SYM$L_LEVEL(R6), #GLOBAL
+        BEQL    57$
+        CMPL    SYM$L_LEVEL(R6), DCL$DEPTH
+        BNEQ    60$
+57$:    MOVB    #SYMBOL, REC+CTX_TYPE
+        MOVZBL  SYM$R_VALUE+VAL$T_STR(R6), R0   ; up to its string's end
+        ADDL2   #<SYM$R_VALUE+VAL$T_STR+1>, R0
+        MOVC3   R0, (R6), REC+CTX_DATA
+        BSBW    PUTREC
+        BLBC    R0, FAIL
+60$:    ADDL2   #SYM$K_LENGTH, R6
+        MOVAB   DCL$SYMEND, R0
+        CMPL    R6, R0
+        BLSSU   55$
+65$:    $QIOW_S CHAN=CTXCHAN, FUNC=#IO$_WRITEOF, IOSB=IOSB
+        BLBC    R0, FAIL
+        BSBW    YOFF
+; The subprocess, under the next name if USERNAME_n is taken.
+70$:    MOVAB   INDSC, R9
+        TSTL    INDSC
+        BNEQ    72$
+        CLRL    R9
+72$:    MOVAB   OUTDSC, R10
+        TSTL    OUTDSC
+        BNEQ    74$
+        CLRL    R10
+74$:    $CREPRC_S PIDADR=PID, IMAGE=LOGINOUT, INPUT=(R9), OUTPUT=(R10), ERROR=CTXDSC, PRCNAM=PRCDSC, BASPRI=PRIB, MBXUNT=TRMUNIT
+        BLBS    R0, 80$
+        CMPL    R0, #SS$_DUPLNAM
+        BNEQ    FAIL
+        TSTL    SEQ
+        BEQL    FAIL
+        AOBLEQ  #99, SEQ, 76$
+        BRB     FAIL
+76$:    BSBW    PRCNAME
+        BRB     70$
+80$:    BLBC    LOG, 85$
+        ADDTEXT "%DCL-S-SPAWNED, process "
+        BSBW    ADDPRC
+        ADDTEXT " spawned"
+        BSBW    DCL$SAY
+        BLBC    WAIT, 85$
+        ADDTEXT "%DCL-S-ATTACHED, terminal now attached to process "
+        BSBW    ADDPRC
+        BSBW    DCL$SAY
+85$:    BSBW    AWAIT                   ; it has read its context, or it went
+        MOVL    R0, R11
+        $DASSGN_S CHAN=CTXCHAN
+        CLRL    CTXCHAN
+        BLBS    R11, 90$
+        BLBS    WAIT, 87$
+        BSBW    CLEANUP                 ; /NOWAIT
+        BRW     DCL$OK
+87$:    BSBW    AWAIT
+90$:    BSBW    CLEANUP
+        BSBW    YON
+        BLBC    WAIT, 95$
+        BLBC    LOG, 95$
+        ADDTEXT "%DCL-S-RETURNED, control returned to process "
+        MOVAB   MYNAME, R1
+        MOVZWL  MYLEN, R2
+        BSBW    DCL$ADD
+        BSBW    DCL$SAY
+95$:    MOVL    FINAL, R0
+        BRW     DCL$DONE
+
+; FAIL: R0 = the status of what failed. Gives back the mailboxes and
+; CTRL/Y.
+FAIL:   PUSHL   R0
+        BSBW    CLEANUP
+        BSBW    YON
+        MOVL    (SP)+, R0
+        BRW     DCL$DONE
+
+; INFILE: INDSC = /INPUT's value. A device, but a disk, stays as it is;
+; else it is a file, .COM if it has no type, which INDSC becomes the full
+; name of, once $PARSE and $SEARCH have found it. R0 = SS$_NORMAL, or
+; their status. Uses R0-R5.
+INFILE:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5>
+        $GETDVIW_S DEVNAM=INDSC, ITMLST=CLASSITEM
+        BLBC    R0, 10$
+        CMPL    DEVCLASS, #DC$_DISK
+        BNEQ    80$
+10$:    MOVB    INDSC, INFAB+FAB$B_FNS
+        $PARSE  FAB=INFAB
+        BLBC    R0, 90$
+        $SEARCH FAB=INFAB
+        BLBC    R0, 90$
+        MOVZBL  INNAM+NAM$B_RSL, INDSC
+        MOVC3   INDSC, RESBUF, INBUF
+80$:    MOVL    #SS$_NORMAL, R0
+90$:    RSB
+
+; PRCNAME: makes PRCDSC USERNAME_n, n SEQ. Uses R0-R5.
+PRCNAME:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5>
+        LOCC    #^A/ /, #12, USERNAME
+        SUBL3   R0, #12, R2             ; without its blanks
+        MOVC3   R2, USERNAME, PRCBUF
+        MOVB    #^A/_/, (R3)+
+        MOVL    SEQ, R0
+        CMPL    R0, #10
+        BLSSU   10$
+        DIVL3   #10, R0, R1
+        ADDB3   #^A/0/, R1, (R3)+
+        MULL2   #10, R1
+        SUBL2   R1, R0
+10$:    ADDB3   #^A/0/, R0, (R3)+
+        MOVAB   PRCBUF, R0
+        SUBL3   R0, R3, PRCDSC
+        RSB
+
+; ADDPRC: appends the subprocess's name to DCL$MSG. Uses R0-R2.
+ADDPRC:
+        .JSB_ENTRY  SCRATCH=<R2>
+        MOVAB   PRCBUF, R1
+        MOVL    PRCDSC, R2
+        BRW     DCL$ADD
+
+; PUTREC: R3 = past a record made in REC. Writes it to the context
+; mailbox. R0 = its status. Uses R0 and R1.
+PUTREC:
+        .JSB_ENTRY
+        MOVAB   REC, R0
+        SUBL3   R0, R3, R1
+        $QIOW_S CHAN=CTXCHAN, FUNC=#IO$_WRITEVBLK, IOSB=IOSB, P1=REC, P2=R1
+        BLBC    R0, 90$
+        MOVZWL  IOSB, R0
+90$:    RSB
+
+; AWAIT: reads the termination mailbox until the subprocess, PID, writes
+; there or goes. R0 = 0 when it said, with an empty message, that it
+; has read its context, 1 when it went, with its final status in FINAL.
+; Uses R0 and R1.
+AWAIT:
+        .JSB_ENTRY
+10$:    $QIOW_S CHAN=TRMCHAN, FUNC=#IO$_READVBLK, IOSB=IOSB, P1=TRMMSG, P2=#ACC$K_TERMLEN
+        BLBC    R0, 80$
+        MOVZWL  IOSB, R0
+        BLBC    R0, 80$
+        TSTW    IOSB+2
+        BNEQ    20$
+        CMPL    IOSB+4, PID             ; its writer's
+        BNEQ    10$
+        CLRL    R0
+        RSB
+20$:    CMPW    TRMMSG+ACC$W_MSGTYP, #MSG$_DELPROC
+        BNEQ    10$
+        CMPL    TRMMSG+ACC$L_PID, PID
+        BNEQ    10$
+        MOVL    TRMMSG+ACC$L_FINALSTS, R0
+80$:    MOVL    R0, FINAL
+        MOVL    #1, R0
+        RSB
+
+; CLEANUP: deassigns the mailboxes' channels, which deletes them. Uses
+; R0 and R1.
+CLEANUP:
+        .JSB_ENTRY
+        TSTL    CTXCHAN
+        BEQL    10$
+        $DASSGN_S CHAN=CTXCHAN
+        CLRL    CTXCHAN
+10$:    TSTL    TRMCHAN
+        BEQL    20$
+        $DASSGN_S CHAN=TRMCHAN
+        CLRL    TRMCHAN
+20$:    RSB
+
+; YOFF: with /WAIT, disables DCL's CTRL/Y AST, for the subprocess's, but
+; at CTRL/Y, which disabled it. YON enables it again. Uses R0 and R1.
+YOFF:
+        .JSB_ENTRY
+        BLBC    WAIT, 10$
+        TSTL    DCL$CTRLYFP
+        BNEQ    10$
+        TSTL    DCL$CHAN
+        BEQL    10$
+        CLRL    R0
+        $QIOW_S CHAN=DCL$CHAN, FUNC=#IO$_SETMODE!IO$M_CTRLYAST, P1=(R0)
+10$:    RSB
+
+YON:
+        .JSB_ENTRY
+        BLBC    WAIT, 10$
+        TSTL    DCL$CTRLYFP
+        BNEQ    10$
+        BSBW    DCL$CTRLYON
+10$:    RSB
+
+; DCL$SPAWNED: at DCL's start. In a subprocess whose SYS$ERROR is a
+; mailbox, as SPAWN makes it, reads the context there up to its end of
+; file: SET VERIFY, the prompt, the symbols, the global ones global and
+; the others local to no procedure, and the command, which goes in
+; DCL$LINE, R7 its length, 0 for none. Then SYS$ERROR is SYS$OUTPUT's
+; again, as VMS's LOGINOUT makes it, and an empty message in the
+; termination mailbox tells SPAWN it has it all. R0 = 1 if so, else 0.
+; Uses R0-R10.
+DCL$SPAWNED::
+        .JSB_ENTRY  OUTPUT=<R7>, SCRATCH=<R2, R3, R4, R5, R6, R8, R9, R10>
+        CLRL    R7
+        $GETJPIW_S ITMLST=OWNERITEM
+        BLBC    R0, 80$
+        TSTL    OWNER
+        BEQL    80$
+        $TRNLNM_S TABNAM=PROCTAB, LOGNAM=ERRNAM, ITMLST=OUTITEM
+        BLBC    R0, 80$
+        CMPW    OUTDSC, #4
+        BLSSU   80$
+        CMPL    OUTBUF, #^A/_MBA/
+        BNEQ    80$
+        $ASSIGN_S DEVNAM=OUTDSC, CHAN=CTXCHAN
+        BLBC    R0, 80$
+        CLRB    ACKNAM
+10$:    $QIOW_S CHAN=CTXCHAN, FUNC=#IO$_READVBLK, IOSB=IOSB, P1=REC, P2=#CTXSIZE
+        BLBC    R0, 50$
+        MOVZWL  IOSB, R0
+        BLBC    R0, 50$                 ; its end
+        CMPB    REC+CTX_TYPE, #HEADER
+        BNEQ    20$
+        MOVZBL  REC+CTX_FLAGS, DCL$VERIFY
+        MOVC3   #<PROMPTSIZE+1>, REC+CTX_PROMPT, DCL$PROMPT
+        MOVC3   #ACKSIZE, REC+CTX_ACK, ACKNAM
+        BRB     10$
+20$:    CMPB    REC+CTX_TYPE, #COMMAND
+        BNEQ    30$
+        MOVZWL  IOSB+2, R7
+        SUBL2   #CTX_DATA, R7
+        MOVC3   R7, REC+CTX_DATA, DCL$LINE
+        BRB     10$
+30$:    CMPB    REC+CTX_TYPE, #SYMBOL
+        BNEQ    10$
+        MOVC3   #32, REC+CTX_DATA+SYM$T_NAME, DCL$SYMNAM
+        MOVL    REC+CTX_DATA+SYM$L_LEVEL, R10
+        CMPL    R10, #GLOBAL
+        BEQL    35$
+        CLRL    R10
+35$:    MOVAB   REC+CTX_DATA+SYM$R_VALUE, R9
+        BSBW    DCL$SETSYM
+        BRB     10$
+50$:    $DASSGN_S CHAN=CTXCHAN
+        CLRL    CTXCHAN
+        $TRNLNM_S TABNAM=PROCTAB, LOGNAM=OUTNAM, ITMLST=OUTITEM
+        BLBC    R0, 60$
+        MOVW    OUTDSC, CREITEM
+        $CRELNM_S TABNAM=PROCTAB, LOGNAM=ERRNAM, ITMLST=CREITEM
+60$:    MOVZBL  ACKNAM, ACKDSC
+        BEQL    70$
+        $ASSIGN_S DEVNAM=ACKDSC, CHAN=CTXCHAN
+        BLBC    R0, 70$
+        $QIOW_S CHAN=CTXCHAN, FUNC=#IO$_WRITEVBLK, IOSB=IOSB, P1=REC, P2=#0
+        $DASSGN_S CHAN=CTXCHAN
+        CLRL    CTXCHAN
+70$:    MOVL    #1, R0
+        RSB
+80$:    CLRL    R0
+        RSB
+
+        .END

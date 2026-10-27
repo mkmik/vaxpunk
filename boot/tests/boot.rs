@@ -1540,6 +1540,60 @@ const DETACHED: Phase = Phase {
     ],
 };
 
+/// SPAWN makes SYSTEM_1, a subprocess that runs DCL with a copy of the
+/// symbols and process logical names, SYS$ERROR the terminal again once it
+/// has read them, which reads the terminal until LOGOUT, and control
+/// returns to SYSTEM; one named SPAWNER with a prompt of its own; from a
+/// procedure, with its local symbols, and a command's status, which the
+/// subprocess's final status makes $STATUS; /INPUT that isn't there, and
+/// one that is, after the command; and /NOWAIT.
+const SPAWN: Phase = Phase {
+    name: "spawn",
+    secs: 30,
+    steps: &[
+        (
+            "DETACH: done",
+            1,
+            concat!(
+                "SPWNX = 7\rSPWNY == \"glob\"\rDEFINE SPWNFOO BAR\rSPAWN\r",
+                "SHOW SYMBOL SPWNX\rSHOW SYMBOL SPWNY\rSHOW LOGICAL SPWNFOO\rSHOW LOGICAL SYS$ERROR\r",
+                "WRITE SYS$OUTPUT \"SPAWNED: \", F$GETJPI(\"\",\"PRCNAM\"), \" \", F$MODE()\rLOGOUT\r",
+            ),
+        ),
+        (
+            "  Process SYSTEM_1 logged out at ",
+            1,
+            concat!(
+                "SPAWN/NOLOG/PROCESS=SPAWNER/PROMPT=\"SPAWNER$ \"\r",
+                "WRITE SYS$OUTPUT F$GETJPI(\"\",\"PRCNAM\")\rLOGOUT\r",
+                "CREATE MDA0:[000000]SPAWN.COM\r$ SPWNL = 5\r$ SPAWN/NOLOG SHOW SYMBOL SPWNL\r",
+                "$ SPAWN/NOLOG EXIT 5\r$ WRITE SYS$OUTPUT \"SPAWN: status \", $STATUS\r\x1a",
+                "@MDA0:[000000]SPAWN\rSPAWN/NOLOG/INPUT=NOSUCH\r",
+                "CREATE MDA0:[000000]SPAWNIN.COM\r$ WRITE SYS$OUTPUT \"SPAWN: from the file\"\r\x1a",
+                "SPAWN/NOLOG/INPUT=MDA0:[000000]SPAWNIN WRITE SYS$OUTPUT \"SPAWN: first\"\r",
+                "SPAWN/NOWAIT WRITE SYS$OUTPUT \"SPAWN: \", F$GETJPI(\"\",\"PRCNAM\"), \" nowait\"\r",
+            ),
+        ),
+    ],
+    lines: &[
+        "%DCL-S-SPAWNED, process SYSTEM_1 spawned\n%DCL-S-ATTACHED, terminal now attached to process SYSTEM_1\n",
+        "  SPWNX = 7   Hex = 00000007",
+        "  SPWNY == \"glob\"",
+        "\"SPWNFOO\" = \"BAR\" (LNM$PROCESS_TABLE)",
+        "\"SYS$ERROR\" = \"_OPA0:\" (LNM$PROCESS_TABLE)",
+        "SPAWNED: SYSTEM_1 INTERACTIVE",
+        "%DCL-S-RETURNED, control returned to process SYSTEM\n",
+        "SPAWNER$ WRITE SYS$OUTPUT F$GETJPI(\"\",\"PRCNAM\")\nSPAWNER\n",
+        "  Process SPAWNER logged out at ",
+        "  SPWNL = 5   Hex = 00000005",
+        "SPAWN: status 5\n",
+        "$ SPAWN/NOLOG/INPUT=NOSUCH\n%RMS-E-FNF, file not found",
+        "SPAWN: first\nSPAWN: from the file\n",
+        "%DCL-S-SPAWNED, process SYSTEM_1 spawned\n",
+        "SPAWN: SYSTEM_1 nowait",
+    ],
+};
+
 /// MOUNT/SYSTEM/OVERRIDE=IDENTIFICATION conflicts; MOUNT without a label
 /// asks for one, and without /SYSTEM mounts the volume for the job: the
 /// disk is allocated, DISK$DATA is in the process's table, and another
@@ -1553,7 +1607,7 @@ const MOUNTS: Phase = Phase {
     secs: 30,
     steps: &[
         (
-            "DETACH: done",
+            "SPAWN: SYSTEM_1 nowait",
             1,
             "DISMOUNT DKB0:\rMOUNT/SYSTEM/OVERRIDE=IDENTIFICATION DKB0:\rMOUNT DKB0:\r",
         ),
@@ -1659,7 +1713,8 @@ const STARTUP: Phase = Phase {
 /// lists his process's logical names without CMKRNL,
 /// reads the file, can't run AUTHORIZE or
 /// OPCCRASH, nor DEFINE/SYSTEM or make a table in the system's directory,
-/// but can in his own, and logs out; SYSTEM logs in with its new password, and
+/// but can in his own, spawns JOE_1, whose LOGINOUT, a known image, gives
+/// it his SYS$LOGIN, and logs out; SYSTEM logs in with its new password, and
 /// PHNTEST logs JOE in on a pseudo terminal: SYSTEM's PHONE rings him, he
 /// answers, each says something, SYSTEM lists who can be called with
 /// %DIRECTORY, reads %HELP DIAL from PHONEHELP.HLB, hangs up and leaves
@@ -1728,6 +1783,7 @@ const USERS: Phase = Phase {
                 "DEFINE/SYSTEM/NOLOG QQQ JOE\r",
                 "CREATE/NAME_TABLE/PARENT=LNM$SYSTEM_DIRECTORY JOETAB\r",
                 "CREATE/NAME_TABLE JOETAB\rDEFINE/TABLE=JOETAB A B\rSHOW LOGICAL/TABLE=JOETAB A\r",
+                "SPAWN/NOLOG WRITE SYS$OUTPUT \"SPAWN: \", F$GETJPI(\"\",\"PRCNAM\"), \" \", F$TRNLNM(\"SYS$LOGIN\")\r",
                 "LOGOUT\r",
             ),
         ),
@@ -1782,6 +1838,7 @@ const USERS: Phase = Phase {
         "$ DEFINE/SYSTEM/NOLOG QQQ JOE\n%SYSTEM-F-NOPRIV",
         "$ CREATE/NAME_TABLE/PARENT=LNM$SYSTEM_DIRECTORY JOETAB\n%SYSTEM-F-NOPRIV",
         "   \"A\" = \"B\" (JOETAB)",
+        "SPAWN: JOE_1 DKB0:[000000]",
         "  JOE          logged out at ",
         "Process name:       \"SYSTEM\"",
         // TTSIZE's, from the size the console said.
@@ -1820,6 +1877,7 @@ const PHASES: &[Phase] = &[
     MEMORY,
     MAILBOXES,
     DETACHED,
+    SPAWN,
     MOUNTS,
     STARTUP,
     USERS,

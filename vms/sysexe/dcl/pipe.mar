@@ -11,8 +11,8 @@
 ; || is there to catch it.
 ; ponytail: no pipelines, |, no redirection, < and >, no background, &,
 ; and no subshells, ( ), which on VMS run in subprocesses joined by
-; mailboxes: vaxpunk has no SPAWN, no IO$_WRITEOF and no RMS on a mailbox
-; yet. PIPE says so for |, &, < and >; parentheses are left to the
+; mailboxes, as SPAWN makes them (spawn.mar): vaxpunk has no RMS on a
+; mailbox yet. PIPE says so for |, &, < and >; parentheses are left to the
 ; commands, whose expressions have them.
 ; One of DCL's modules: ../dcl.mar says how they fit.
 ;
