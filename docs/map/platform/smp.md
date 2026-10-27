@@ -34,4 +34,5 @@ for one node, and only the current process's thread is runnable, so IPL
 protects the executive's data as on a uniprocessor VAX. SMP is a
 non-goal of PRD-0003, so an aspiration, not dropped. It would need a
 multicore seL4 build, spinlocks in the executive, a current process per
-CPU, and the PAL's `MTPR_IPIR` and `MFPR_WHAMI`.
+CPU, and an interrupt from the PAL's `MTPR_IPIR`, which with one CPU
+does nothing; `MFPR_WHAMI` gives 0.

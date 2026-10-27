@@ -846,6 +846,7 @@ static struct ctx {
 	/* A thread for each mode it has entered, and the mode's address space. */
 	seL4_CPtr tcb[4], vspace[4], reply;
 	int started, mode, prvmode; /* the PSL's current and previous modes */
+	int nofp;		    /* FEN clear: its threads have no floating point */
 	uint64_t *dir[SPACE_END >> TABLE_BITS]; /* its P0 and P1 PTE tables */
 	struct pmap *maps;			/* what its address spaces map */
 	/* Its PAL call's message while it waits in one: x0-x7, the svc's PC. */
@@ -1395,6 +1396,20 @@ static seL4_CPtr new_thread(seL4_CPtr vspace, seL4_Word badge)
 }
 
 /*
+ * FEN, Alpha's floating point enable, for context c: when it is clear,
+ * seL4 traps each floating point instruction of c's threads, which is a
+ * reserved instruction. A context starts with it set.
+ */
+static void set_fen(struct ctx *c, int on)
+{
+	c->nofp = !on;
+	for (int m = 0; m < 4; m++)
+		if (c->tcb[m])
+			seL4_TCB_SetFlags(c->tcb[m], seL4_TCBFlag_fpuDisabled,
+					  on ? 0 : seL4_TCBFlag_fpuDisabled);
+}
+
+/*
  * The context's thread for mode m, made the first time it enters that
  * mode, in an address space of its own, which fills on faults: its
  * process's pages and S0's that m may read (ADR-0037).
@@ -1406,6 +1421,8 @@ static void mode_thread(struct ctx *c, int m)
 	c->vspace[m] = alloc(seL4_ARM_VSpaceObject, 0);
 	assign_asid(c->vspace[m]);
 	c->tcb[m] = new_thread(c->vspace[m], ctx_badge(c, m));
+	if (c->nofp)
+		set_fen(c, 0);
 }
 
 /* A free slot for hwpcb, and its kernel-mode thread. */
@@ -1422,18 +1439,176 @@ static struct ctx *new_ctx(seL4_Word hwpcb)
 	}
 	c->hwpcb = hwpcb;
 	c->started = c->mode = c->prvmode = 0;
+	if (c->nofp) /* the slot's last context cleared FEN */
+		set_fen(c, 1);
 	return c;
 }
 
 /* PAL function codes (docs/design/0001-pal-interface.md). */
 enum {
-	HALT = 0x00, SWPCTX = 0x05, MFPR_IPL = 0x0e, MTPR_IPL = 0x0f, MFPR_PCBB = 0x12,
+	HALT = 0x00, SWPCTX = 0x05, MFPR_FEN = 0x0b, MTPR_FEN = 0x0c, MTPR_IPIR = 0x0d,
+	MFPR_IPL = 0x0e, MTPR_IPL = 0x0f, MFPR_MCES = 0x10, MTPR_MCES = 0x11, MFPR_PCBB = 0x12,
 	MFPR_SCBB = 0x16, MTPR_SCBB = 0x17, MTPR_SIRR = 0x18, MFPR_SISR = 0x19, WTINT = 0x3e,
-	MTPR_TXDB = 0x40, WRPTE = 0x41, DELCTX = 0x42, MTPR_RXCS = 0x43, MFPR_RXCS = 0x44,
-	MFPR_RXDB = 0x45, READLBLK = 0x46, WRITELBLK = 0x47, MTPR_DOORBELL = 0x48,
-	GETENTROPY = 0x49, GETMAXBLOCK = 0x4a, CHME = 0x82, CHMU = 0x85, PROBER = 0x8f,
-	PROBEW = 0x90, RD_PS = 0x91, REI = 0x92
+	MFPR_WHAMI = 0x3f, MTPR_TXDB = 0x40, WRPTE = 0x41, DELCTX = 0x42, MTPR_RXCS = 0x43,
+	MFPR_RXCS = 0x44, MFPR_RXDB = 0x45, READLBLK = 0x46, WRITELBLK = 0x47,
+	MTPR_DOORBELL = 0x48, GETENTROPY = 0x49, GETMAXBLOCK = 0x4a, CHME = 0x82, CHMU = 0x85,
+	INSQHIL = 0x87, INSQTIQ = 0x8a, INSQUEL = 0x8b, INSQUEQ_D = 0x8e, PROBER = 0x8f,
+	PROBEW = 0x90, RD_PS = 0x91, REI = 0x92, REMQHIL = 0x93, REMQTIQ = 0x96, REMQUEL = 0x97,
+	REMQUEQ_D = 0x9a, INSQHILR = 0xa2, INSQTIQR = 0xa5, REMQHILR = 0xa6, REMQTIQR = 0xa9,
+	CLRFEN = 0xae
 };
+
+/*
+ * The queue calls, INSQHIL to REMQTIQR: the VAX's queue instructions.
+ *
+ * INSQHI, INSQTI, REMQHI and REMQTI's queues, those of INSQHIL to INSQTIQ,
+ * REMQHIL to REMQTIQ and their resident forms, are self-relative: the
+ * header and each entry hold a forward and a backward link, the distance
+ * to the entry linked, longwords in quadword-aligned entries or quadwords
+ * in octaword-aligned ones. Bit 0 of the header's forward link is the
+ * secondary interlock, which a CPU holds while it works on the queue: a
+ * call that finds it set returns -1. The PAL makes each call while every
+ * thread of the executive waits, so the calls are interlocked without
+ * taking it, and the resident forms are the same calls. INSQUE and
+ * REMQUE's, INSQUEL to REMQUEQ/D, link by address, and their deferred
+ * forms take the address of the predecessor's or the entry's address.
+ *
+ * Inserting returns -1 if the interlock is set, 1 if the entry is now the
+ * only one, else 0. REMQHI and REMQTI return -1 if the interlock is set,
+ * 0 if the queue was empty, 1 if an entry was removed and some are left,
+ * 2 if none is; REMQUE -1 if the queue was empty, 0 if it is now, else 1.
+ * They give the entry removed in R1, or the header if there was none.
+ *
+ * Each link they touch, and a deferred form's address, must be one the
+ * current mode may write, else the call is an access violation at its
+ * address, and naturally aligned, else a reserved operand, which is a
+ * reserved instruction. Either leaves the queue as it was.
+ */
+enum { Q_DONE, Q_ROPRAND, Q_ACCVIO };
+static int q_why;
+static seL4_Word q_va; /* the link a queue call couldn't write */
+
+/* The PAL's view of the w-byte link at va, or 0 and why in q_why. */
+static void *q_link(seL4_Word va, unsigned w)
+{
+	uint64_t *pte = va < SPACE_END ? pte_at(va, 0) : 0;
+	if (va % w)
+		q_why = Q_ROPRAND;
+	else if (!pte || !mapped(*pte) || !can_write(*pte, cur->mode))
+		q_why = Q_ACCVIO, q_va = va;
+	else
+		return (void *)(PHYS + (seL4_Word)pte_pfn(*pte) * PAGE_SIZE + va % PAGE_SIZE);
+	return 0;
+}
+
+static int64_t q_get(const void *p, unsigned w)
+{
+	return w == 4 ? *(const int32_t *)p : *(const int64_t *)p;
+}
+
+static void q_put(void *p, unsigned w, int64_t v)
+{
+	if (w == 4)
+		*(int32_t *)p = v;
+	else
+		*(int64_t *)p = v;
+}
+
+/* Queue call code on a0 and a1, the header or predecessor or entry, and
+ * the entry to insert: Q_DONE with its status in v0 and R1 in r1, or why
+ * it can't. */
+static int queue(seL4_Word code, seL4_Word a0, seL4_Word a1, seL4_Word *v0, seL4_Word *r1)
+{
+	int ins = code < REMQHIL || (code >= INSQHILR && code < REMQHILR);
+	int self = !(code >= INSQUEL && code <= INSQUEQ_D) && !(code >= REMQUEL && code <= REMQUEQ_D);
+	/* The call's place in its group of four: its bits say tail, then
+	 * quadword, for a self-relative one; quadword, then deferred. */
+	seL4_Word j = (code - (code >= INSQHILR ? INSQHILR : INSQHIL)) % 4;
+	unsigned w = (self ? j >> 1 : j) & 1 ? 8 : 4;
+	int tail = self && j & 1;
+	void *hf, *hb, *ef, *eb, *x;
+	seL4_Word h = a0, e = a1, n;
+	if (self) {
+		if (h % (2 * w) || (ins && e % (2 * w)))
+			return Q_ROPRAND;
+		if (!(hf = q_link(h, w)) || !(hb = q_link(h + w, w)))
+			return q_why;
+		int64_t f = q_get(hf, w), b = q_get(hb, w);
+		if (f & 1) {
+			*v0 = -1;
+			return Q_DONE;
+		}
+		if ((f | b) % (2 * w))
+			return Q_ROPRAND;
+		if (ins) {
+			/* After the last entry, whose forward link changes, or
+			 * before the first, whose backward link does. */
+			n = h + (tail ? b : f);
+			if (!(ef = q_link(e, w)) || !(eb = q_link(e + w, w)) ||
+			    !(x = q_link(tail ? n : n + w, w)))
+				return q_why;
+			q_put(ef, w, (tail ? h : n) - e);
+			q_put(eb, w, (tail ? n : h) - e);
+			q_put(x, w, e - n);
+			q_put(tail ? hb : hf, w, e - h);
+			*v0 = f == 0;
+			return Q_DONE;
+		}
+		*r1 = h;
+		*v0 = 0;
+		if (!f)
+			return Q_DONE;
+		/* The entry and its neighbour, the next from the head or the
+		 * previous from the tail, which takes its place. */
+		e = h + (tail ? b : f);
+		if (!(ef = q_link(tail ? e + w : e, w)))
+			return q_why;
+		n = e + q_get(ef, w);
+		if (n % (2 * w))
+			return Q_ROPRAND;
+		if (!(x = q_link(tail ? n : n + w, w)))
+			return q_why;
+		q_put(tail ? hb : hf, w, n - h);
+		q_put(x, w, h - n);
+		*r1 = e;
+		*v0 = n == h ? 2 : 1;
+		return Q_DONE;
+	}
+	if (j >> 1) { /* deferred: the address is at a0 */
+		if (!(x = q_link(a0, w)))
+			return q_why;
+		a0 = q_get(x, w);
+	}
+	if (ins) {
+		/* After a0, before its successor s. */
+		if (!(hf = q_link(a0, w)) || !(ef = q_link(e, w)) || !(eb = q_link(e + w, w)))
+			return q_why;
+		seL4_Word s = q_get(hf, w);
+		if (!(x = q_link(s + w, w)))
+			return q_why;
+		q_put(ef, w, s);
+		q_put(eb, w, a0);
+		q_put(x, w, e);
+		q_put(hf, w, e);
+		*v0 = s == a0;
+		return Q_DONE;
+	}
+	/* a0 from between p and s. */
+	e = a0;
+	if (!(ef = q_link(e, w)) || !(eb = q_link(e + w, w)))
+		return q_why;
+	seL4_Word s = q_get(ef, w), p = q_get(eb, w);
+	*r1 = e;
+	*v0 = -1;
+	if (p == e)
+		return Q_DONE;
+	if (!(hf = q_link(p, w)) || !(x = q_link(s + w, w)))
+		return q_why;
+	q_put(hf, w, s);
+	q_put(x, w, p);
+	*v0 = s != p;
+	return Q_DONE;
+}
 
 /* The system control block's vectors the PAL delivers through, and the
  * interval timer's and console's IPLs, the VAX's. CHMx's is SCB_CHMK + 4 * x,
@@ -1465,6 +1640,11 @@ static seL4_CPtr tcpip_tick, doorbell;
 
 /* Set when the executive halts, rather than faults: the PAL powers off. */
 static int halted;
+
+/* The machine check error summary, Alpha's MCES: DPC and DSC, bits 3 and
+ * 4, which disable reports of correctable errors. The PAL takes no machine
+ * checks, so MCK, SCE and PCE, bits 0 to 2, are never set. */
+static seL4_Word mces;
 
 /* The frame on the stack an interrupt or exception pushes and REI pops
  * ($INTSTKDEF), in quadwords: every register of the code it stops. */
@@ -1668,7 +1848,8 @@ static void write_regs(int resume)
  * on the way the interrupts its IPL lets through. A PAL call is an svc with
  * the function code in x7, which seL4 hands over as an unknown syscall
  * fault: the reply sets x0 to x7 and the PC, which must move past the svc,
- * which seL4 would otherwise run again.
+ * which seL4 would otherwise run again. A call that returns R1 too leaves
+ * it in the message's x1.
  */
 static int ret(seL4_Word v0)
 {
@@ -1677,6 +1858,7 @@ static int ret(seL4_Word v0)
 		read_regs();
 		regs.pc = mr[seL4_UnknownSyscall_FaultIP] + 4;
 		regs.x0 = v0;
+		regs.x1 = mr[seL4_UnknownSyscall_X1];
 		if (!deliver(&regs))
 			return 0;
 		write_regs(0);
@@ -1861,6 +2043,23 @@ static int serve_one(seL4_MessageInfo_t msg)
 		return ret(v0);
 	case MFPR_PCBB:
 		return ret(cur->hwpcb);
+	case MFPR_FEN:
+		return ret(!cur->nofp);
+	case MTPR_FEN:
+	case CLRFEN:
+		set_fen(cur, code == MTPR_FEN && a0 & 1);
+		return ret(v0);
+	case MTPR_IPIR:
+		/* ponytail: one CPU (ADR-0003), so no other to interrupt: an
+		 * interrupt at IPL 22 when t8y:/platform/smp brings more. */
+		return ret(v0);
+	case MFPR_WHAMI:
+		return ret(0);
+	case MFPR_MCES:
+		return ret(mces);
+	case MTPR_MCES: /* a 1 clears bits 0 to 2 */
+		mces = (mces & ~a0 & 7) | (a0 & 0x18);
+		return ret(v0);
 	case MFPR_SCBB:
 		return ret(scbb);
 	case MTPR_SCBB:
@@ -1934,6 +2133,24 @@ static int serve_one(seL4_MessageInfo_t msg)
 		return ret(psl(seL4_GetMR(seL4_UnknownSyscall_SPSR)));
 	case REI:
 		return do_rei();
+	case INSQHIL ... INSQUEQ_D:
+	case REMQHIL ... REMQUEQ_D:
+	case INSQHILR ... REMQTIQR: {
+		seL4_Word r1 = a1;
+		int why = queue(code, a0, a1, &v0, &r1);
+		if (why == Q_ACCVIO) {
+			seL4_Word param[2] = { 4, q_va }; /* a write */
+			if (exception(SCB_ACCVIO, pc, param, 2))
+				return 1;
+			print("%%PAL-F-ACCVIO, access violation at 0x%lx, PC 0x%lx, HWPCB 0x%lx\n",
+			      q_va, pc, cur->hwpcb);
+			return 0;
+		}
+		if (why == Q_ROPRAND)
+			break;
+		mr[seL4_UnknownSyscall_X1] = r1;
+		return ret(v0);
+	}
 	}
 	if (exception(SCB_OPCDEC, pc, 0, 0))
 		return 1;
