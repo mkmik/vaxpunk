@@ -1,0 +1,20 @@
+MODULE EDGES7 (MAIN = M) =
+BEGIN
+! Probe 7: 64-bit arithmetic edges.
+REQUIRE 'PRINT';
+ROUTINE M =
+    BEGIN
+    LOCAL N, S;
+    S = 64;
+    PRINT(1^63);
+    PRINT(1^.S);
+    PRINT(-1^-.S);
+    PRINT(%X'80000000' LSS 0);
+    N = 0;
+    INCR I FROM %X'7FFFFFFFFFFFFFFE' TO %X'7FFFFFFFFFFFFFFF' DO
+        (PRINT(.I); IF (N = .N + 1) GTR 3 THEN EXITLOOP);
+    DECRU I FROM 2 TO 1 DO PRINT(.I);
+    1
+    END;
+END
+ELUDOM

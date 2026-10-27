@@ -1,0 +1,24 @@
+                                Source Listing                  DD-MMM-YYYY HH:MM:SS  BLISS-64E V1.11-007-48G4L         Page 1
+                                                                DD-MMM-YYYY HH:MM:SS  SYS$SYSDEVICE:[ORACLE]BLKSEMI.B64;1
+
+    0	      1 MODULE BLKSEMI (MAIN = M) =
+    0	      2 BEGIN
+    1	      3 ! A stray semicolon among a block's declarations.
+    1	      4 ROUTINE M =
+    1	      5     BEGIN
+    2	      6     LOCAL A;;
+    2	      7     LOCAL B;
+    2	      8     A = 1;
+    2	      9     B = .A;
+    2	     10     .B
+    2	     11     END;
+    1	     12 END
+    1	     13 ELUDOM
+
+
+                                Source Listing                  DD-MMM-YYYY HH:MM:SS  BLISS-64E V1.11-007-48G4L         Page 2
+                                Source Listing                  DD-MMM-YYYY HH:MM:SS  SYS$SYSDEVICE:[ORACLE]BLKSEMI.B64;1
+
+COMMAND LINE:
+
+BLISS/A64/LIST/SOURCE_LIST=(EXPAND_MACROS,REQUIRE)/NOMACHINE_CODE BLKSEMI.B64

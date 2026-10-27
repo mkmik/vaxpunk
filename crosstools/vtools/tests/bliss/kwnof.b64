@@ -1,0 +1,16 @@
+MODULE KWNOF (MAIN = M) =
+BEGIN
+! A KEYWORDMACRO without formals, and one called with ().
+REQUIRE 'PRINT';
+KEYWORDMACRO
+    KZ = 5 %,
+    KD(A = 1, B) = %IF %NULL(B) %THEN A %ELSE B %FI %;
+ROUTINE M =
+    BEGIN
+    PRINT(KZ);
+    PRINT(KD());
+    PRINT(KD(B = 9));
+    1
+    END;
+END
+ELUDOM

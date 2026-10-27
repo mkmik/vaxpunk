@@ -1,0 +1,14 @@
+MODULE STRAY (MAIN = M) =
+BEGIN
+! A stray semicolon between declarations, as TPAMAC's $INIT_STATE leaves.
+REQUIRE 'PRINT';
+OWN X : INITIAL(3);;
+OWN Y : INITIAL(4);
+;
+ROUTINE M =
+    BEGIN
+    PRINT(.X + .Y);
+    1
+    END;
+END
+ELUDOM

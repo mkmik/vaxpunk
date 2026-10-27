@@ -1,0 +1,17 @@
+MODULE LINT3 (MAIN = M) =
+BEGIN
+! NOCOUNT and COUNT linkages.
+REQUIRE 'PRINT';
+LINKAGE
+    NC = CALL : NOCOUNT,
+    WC = CALL : COUNT;
+ROUTINE RN (A, B) : NC = .A + .B;
+ROUTINE RW (A) : WC = .A;
+ROUTINE M =
+    BEGIN
+    PRINT(RN(1, 2));
+    PRINT(RW(3));
+    1
+    END;
+END
+ELUDOM

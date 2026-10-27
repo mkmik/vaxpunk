@@ -962,7 +962,8 @@ impl Parser<'_> {
             return Ok(id);
         }
         if let Some(&id) = self.scopes.last().unwrap().get(&name) {
-            let forward = matches!(self.m.syms[id].kind, Kind::Routine { external: true, .. })
+            let old = &self.m.syms[id].kind;
+            let forward = matches!(old, Kind::Routine { external: true, .. })
                 && matches!(
                     kind,
                     Kind::Routine {
@@ -970,8 +971,30 @@ impl Parser<'_> {
                         ..
                     }
                 );
+            // An external declared again is the same name: BLISSA64 takes
+            // it, as in PRINT.R64 and a module both declaring
+            // LIB$PUT_OUTPUT (oracle RATTR).
+            let again = matches!(
+                (old, &kind),
+                (
+                    Kind::Routine { external: true, .. },
+                    Kind::Routine { external: true, .. }
+                ) | (
+                    Kind::Data {
+                        storage: Storage::External,
+                        ..
+                    },
+                    Kind::Data {
+                        storage: Storage::External,
+                        ..
+                    }
+                ) | (Kind::ExternalLiteral, Kind::ExternalLiteral)
+            );
+            if again {
+                return Ok(id);
+            }
             if !forward {
-                return self.err(format!("Name already declared in this block: {name}"));
+                return self.err(format!("Name already declared in this block:  {name}"));
             }
             self.m.syms[id].kind = kind;
             return Ok(id);
@@ -1210,9 +1233,10 @@ impl Parser<'_> {
                 self.require()?;
             } else if self.eat("LIBRARY") {
                 self.library()?;
-            } else if self.depth == 1 && self.eat_punct(';') {
-                // A stray semicolon between a module's declarations, as
-                // TPAMAC.REQ's $INIT_STATE leaves one, which BLISSA64 takes.
+            } else if self.eat_punct(';') {
+                // A stray semicolon between declarations, as TPAMAC.REQ's
+                // $INIT_STATE leaves one, which BLISSA64 takes (oracle
+                // STRAY, BLKSEMI).
             } else if self.declaration()? {
                 self.expect_punct(';')?;
             } else {
@@ -1238,6 +1262,7 @@ impl Parser<'_> {
     /// declares, not those its own libraries brought it. A library read
     /// again gives the same names.
     pub(crate) fn library(&mut self) -> R<()> {
+        let at = self.here();
         let Tok::Str(name) = self.next() else {
             return self.err("Missing quoted string following REQUIRE or LIBRARY");
         };
@@ -1254,9 +1279,15 @@ impl Parser<'_> {
         for (n, id) in names {
             match self.scopes.last().unwrap().get(&n) {
                 Some(&old) if old != id => {
-                    return self.err(format!("Name already declared in this block: {n}"));
+                    return self.err(format!("Name already declared in this block:  {n}"));
                 }
-                _ => {
+                // The same library again: BLISSA64 warns of each name
+                // (oracle LIBS2).
+                Some(_) => {
+                    let msg = format!("Name already declared in this block:  {n}");
+                    self.diag('W', &at, msg);
+                }
+                None => {
                     self.scopes.last_mut().unwrap().insert(n, id);
                 }
             }

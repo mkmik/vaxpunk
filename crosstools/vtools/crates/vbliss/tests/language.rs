@@ -186,7 +186,7 @@ fn forward_data() {
     );
     assert_eq!(
         error(&module("OWN X;\nOWN X;", "")),
-        "Name already declared in this block: X"
+        "Name already declared in this block:  X"
     );
 }
 

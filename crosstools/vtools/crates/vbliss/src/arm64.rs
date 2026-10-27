@@ -1321,9 +1321,16 @@ impl<'a> Routine<'a> {
                 Op::Ror => self.line(three("ror")),
                 Op::Umulh => self.line(three("umulh")),
                 Op::Ash => {
+                    // A count past 63 shifts everything out, as BLISSA64's
+                    // code does (oracle EDGES7): 0 left, the sign right.
                     self.line(format!("neg     x12, {b}"));
-                    self.line(format!("lsl     x13, {a}, {b}"));
+                    self.line("cmp     x12, #63");
+                    self.line("mov     x13, #63");
+                    self.line("csel    x12, x13, x12, gt");
                     self.line(format!("asr     x12, {a}, x12"));
+                    self.line(format!("lsl     x13, {a}, {b}"));
+                    self.line(format!("cmp     {b}, #63"));
+                    self.line("csel    x13, xzr, x13, gt");
                     self.line(format!("cmp     {b}, #0"));
                     self.line(format!("csel    {r}, x13, x12, ge"));
                 }

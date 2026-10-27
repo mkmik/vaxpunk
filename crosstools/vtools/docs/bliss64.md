@@ -800,7 +800,8 @@ routine of a module.
    ```
 
    Output: count 3 in a quadword, the values whole, and what lies past
-   the count.
+   the count. **Answered** by `tests/bliss/argptr5.b64`: the count, then
+   the actuals whole, a quadword each.
 
 6. **Linkage registers.** Which numbers are a register conflict?
 
@@ -826,8 +827,10 @@ routine of a module.
 
    Output: whether `^` by 64 is 0 or undefined, the `A` comparisons'
    signedness, and whether `INCR` ending at the largest value stops.
-   **In part** by `tests/bliss/arith.b64`: `1^63` is the sign bit and the
-   `A` forms are unsigned.
+   **Answered** by `tests/bliss/arith.b64` and `edges7.b64`: `1^63` is
+   the sign bit, a shift by a count past 63 shifts everything out (0
+   left, the sign right), the `A` forms are unsigned, `%X'80000000'` is
+   positive, and `INCR` past the largest value wraps and goes on.
 
 8. **`QUAD_LITERALS`.** What `NOQUAD_LITERALS` changes.
 
@@ -837,6 +840,10 @@ routine of a module.
    ```
 
    Output, and the listing for a diagnostic on the last literal.
+   **Answered:** a literal with bit 31 set that fits a longword is
+   sign-extended from it, with the informational "Numeric literal with
+   bit 31 set will be sign extended": `%X'FFFFFFFF'` is -1. One past 32
+   bits keeps its value, with "Numeric literal overflow".
 
 9. **Overflow.** Which is the default, `OVERFLOW` or `NOOVERFLOW`?
 
@@ -881,7 +888,9 @@ routine of a module.
     with a handler that prints `.SIG[0]`, `.SIG[1]`, `.SIG[2]` as
     longwords and the 64-bit array through the mechanism array. Listing:
     which statement gets the "lower 32 bits" diagnostic. Output: how
-    LIB$SIGNAL receives quadword arguments.
+    LIB$SIGNAL receives quadword arguments. **Answered:** neither gets a
+    diagnostic; the signal array has the condition's low 32 bits and
+    each argument's, then the PC and PSL.
 
 13. **The mechanism array.** What a BLISS-64 handler sees.
 
@@ -895,7 +904,10 @@ routine of a module.
     signals; the routine's caller prints the
     value it gets back (42 if the unwind returns the saved R0). Also
     prints `.EN[0]` and the first enable actual to check the enable
-    vector.
+    vector. **Answered:** 44 mechanism arguments, depth 0, the enable
+    vector's count 1 and its actual, then the handler again for the
+    unwind, and 42 back in the caller. vaxpunk's mechanism array is
+    DESIGN-0004's, 24 arguments; the rest is the same.
 
 14. **STARLET's longword fields.** How DEC's `STARLET.L64` defines them.
 
@@ -921,7 +933,11 @@ routine of a module.
     LIBRARY 'LV'; PRINT(V);   ! compiled /VARIANT=5
     ```
 
-    Expected `3`.
+    Expected `3`. **Answered:** 3; and a library's `SWITCHES` don't reach
+    the module, nor its own libraries' names: they are undeclared in it,
+    though reading such a library again warns "Name already declared in
+    this block". vbliss compiles a library's source where it is used,
+    so its `%VARIANT` is the module's.
 
 16. **The listing itself.** One module with a macro, a `REQUIRE`, a
     `%PRINT`, a warning and a routine, listed `/SOURCE_LIST=(EXPAND_MACROS,

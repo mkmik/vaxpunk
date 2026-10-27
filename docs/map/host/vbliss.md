@@ -186,9 +186,9 @@ note = "vbliss writes BLISSA64's text for the 8 messages the tests meet, its own
 [[feature]]
 id = "probes"
 title = "The open probes of bliss64.md answered by the oracle: 5, 7, 8, 10, 12, 13, 15, 17"
-status = "todo"
+status = "wip"
 needs = ["/host/axpbox-oracle#bliss"]
-note = "ARGPTR's list, 64-bit edges, NOQUAD_LITERALS, the predeclared structures' text, SIGNAL with a 64-bit condition, the mechanism array, library lexical timing, /A32; with them the empty-actual and %STRING questions of #macro-edges"
+note = "5, 7, 8, 12, 13 and 15 answered (bliss64.md), with tests/bliss programs whose listings and output are BLISSA64's: argptr5, edges7, qlit, and the language probes kwnof, stray, bltwice, gencall, pscls, blksemi, lint3, host2-4, swit, fltops, fltlit3. Left: 10, the predeclared structures' text, and 17, /A32 against /A64"
 
 [[feature]]
 id = "dec-libraries"

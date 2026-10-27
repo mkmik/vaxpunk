@@ -1,0 +1,13 @@
+MODULE BLKSEMI (MAIN = M) =
+BEGIN
+! A stray semicolon among a block's declarations.
+ROUTINE M =
+    BEGIN
+    LOCAL A;;
+    LOCAL B;
+    A = 1;
+    B = .A;
+    .B
+    END;
+END
+ELUDOM

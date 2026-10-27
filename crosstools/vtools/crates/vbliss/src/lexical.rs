@@ -200,17 +200,47 @@ impl Parser<'_> {
             let i = self.lx.streams.len() - 1;
             let s = &mut self.lx.streams[i];
             if s.pos < s.toks.len() {
-                let l = s.toks[s.pos].clone();
+                let mut l = s.toks[s.pos].clone();
                 if l.tok != Tok::Eof {
                     s.pos += 1;
                 }
                 if let Some(f) = s.file {
                     self.list(f, if l.tok == Tok::Eof { u32::MAX } else { l.line });
+                    if let Tok::Num(n) = l.tok {
+                        // A decimal literal: the source has its digits.
+                        let line = &self.lx.files[f as usize].lines[l.line as usize - 1];
+                        let digits: String = line[l.col as usize..]
+                            .chars()
+                            .take_while(char::is_ascii_digit)
+                            .collect();
+                        let n = self.literal_value(n, digits.parse::<u64>().is_err(), &l);
+                        l.tok = Tok::Num(n);
+                    }
                 }
                 return Ok((l, i));
             }
             self.pop_stream();
         }
+    }
+
+    /// A numeric literal's value, with BLISSA64's informationals (oracle
+    /// MSGS, QLIT): one past 64 bits overflows; under NOQUAD_LITERALS one
+    /// with bit 31 set that fits a longword is sign-extended from it, and
+    /// one past 32 bits overflows, keeping its value.
+    fn literal_value(&mut self, n: i64, overflow: bool, at: &Lexeme) -> i64 {
+        let quad = self.switch_on("QUAD_LITERALS") || self.m.dialect.a32;
+        let wide = overflow || !quad && !(0..=0xFFFF_FFFF).contains(&n);
+        if wide {
+            self.diag('I', at, "Numeric literal overflow".into());
+        }
+        if !quad && n & 0x8000_0000 != 0 {
+            let msg = "Numeric literal with bit 31 set will be sign extended";
+            self.diag('I', at, msg.into());
+            if !wide {
+                return n as i32 as i64;
+            }
+        }
+        n
     }
 
     fn pop_stream(&mut self) {
@@ -875,7 +905,7 @@ impl Parser<'_> {
             }
             "%B" | "%O" | "%X" | "%DECIMAL" | "%C" | "%ASCII" | "%ASCIZ" | "%ASCIC" => {
                 let (l, _) = self.scan()?;
-                let Tok::Str(s) = l.tok else {
+                let Tok::Str(s) = l.tok.clone() else {
                     return Err(
                         self.error_at(at, format!("Missing quoted string following {name}"))
                     );
@@ -903,6 +933,8 @@ impl Parser<'_> {
                         let n = lex::number(digits.trim(), radix).ok_or_else(|| {
                             self.error_at(at, format!("Illegal character in {name} literal"))
                         })?;
+                        let wide = u64::from_str_radix(digits.trim(), radix).is_err();
+                        let n = self.literal_value(n, wide, &l);
                         Tok::Num(if neg { n.wrapping_neg() } else { n })
                     }
                 };

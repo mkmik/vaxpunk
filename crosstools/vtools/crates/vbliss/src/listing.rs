@@ -94,9 +94,21 @@ fn expansion(out: &mut String, level: usize, name: &str, text: &Option<Vec<Strin
 /// each.
 fn diags(out: &mut String, text: &str, ds: &[&Diag]) {
     let mut marker: Vec<char> = vec![' '; text.len() + 1];
-    for (i, d) in ds.iter().enumerate() {
+    // A number a place: diagnostics at the same column share one, as
+    // BLISSA64 numbers them (oracle QLIT).
+    let mut cols: Vec<usize> = Vec::new();
+    let mut numbers = Vec::new();
+    for d in ds {
         let col = (d.col as usize).min(text.len());
-        let digit = char::from_digit((i + 1) as u32 % 10, 10).unwrap();
+        let n = match cols.iter().position(|&c| c == col) {
+            Some(k) => k + 1,
+            None => {
+                cols.push(col);
+                cols.len()
+            }
+        };
+        numbers.push(n);
+        let digit = char::from_digit(n as u32 % 10, 10).unwrap();
         if col >= marker.len() {
             marker.resize(col + 1, ' ');
         }
@@ -108,10 +120,10 @@ fn diags(out: &mut String, text: &str, ds: &[&Diag]) {
     out.push_str("\t\t");
     out.extend(marker);
     out.push('\n');
-    for (i, d) in ds.iter().enumerate() {
-        out.push_str(&format!("%BLS64-{}-TEXT, ({}) {}\n", d.sev, i + 1, d.msg));
+    // A blank line after each message (oracle QLIT).
+    for (d, n) in ds.iter().zip(numbers) {
+        out.push_str(&format!("%BLS64-{}-TEXT, ({n}) {}\n\n", d.sev, d.msg));
     }
-    out.push('\n');
 }
 
 /// The listing's text: a header, then the entries with each line's
