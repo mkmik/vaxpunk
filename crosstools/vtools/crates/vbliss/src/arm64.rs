@@ -173,6 +173,15 @@ fn operands(ins: &Ins) -> (Vec<u32>, Vec<&V>) {
             .collect();
         return (defs, uses);
     }
+    if let Ins::FCall(c) = ins {
+        let defs = std::iter::once(c.dst)
+            .chain(c.results.iter().map(|r| r.1))
+            .collect();
+        let uses = std::iter::once(&c.target)
+            .chain(c.args.iter().map(|a| &a.0))
+            .collect();
+        return (defs, uses);
+    }
     let (d, u) = match ins {
         Ins::Bin(_, d, a, b) => (Some(*d), vec![a, b]),
         Ins::Un(_, d, a) => (Some(*d), vec![a]),
@@ -189,18 +198,11 @@ fn operands(ins: &Ins) -> (Vec<u32>, Vec<&V>) {
         Ins::FArith(_, _, a, b, d) => (None, vec![a, b, d]),
         Ins::FCmp(d, _, a, b) => (Some(*d), vec![a, b]),
         Ins::FCvt(_, _, _, a, d) => (None, vec![a, d]),
-        Ins::FCall(c) => (
-            Some(c.dst),
-            std::iter::once(&c.target)
-                .chain(c.args.iter().map(|a| &a.0))
-                .chain(c.results.iter().map(|r| &r.1))
-                .collect(),
-        ),
         Ins::Cas(d, a, e, n, _) => (Some(*d), vec![a, e, n]),
         Ins::Pal(d, func, args) => (Some(*d), std::iter::once(func).chain(args).collect()),
         Ins::RetAddr(d) | Ins::Rpcc(d) | Ins::PalR1(d) => (Some(*d), vec![]),
         Ins::SetReg(_, v) => (None, vec![v]),
-        Ins::Link(_) => unreachable!(),
+        Ins::Link(_) | Ins::FCall(_) => unreachable!(),
     };
     (d.into_iter().collect(), u)
 }
@@ -536,17 +538,18 @@ impl<'a> Routine<'a> {
         if stack > 0 {
             self.add_sp(stack);
         }
-        // Floating results: S and T in v0 and v1, VAX ones in x0 and x1.
-        for (k, (fl, a)) in c.results.iter().enumerate() {
-            let size = if matches!(fl, Fl::F | Fl::S) { 4 } else { 8 };
-            let m = self.mem(a, size);
-            let r = match fl {
-                Fl::S => format!("s{k}"),
-                Fl::T => format!("d{k}"),
-                Fl::F => format!("w{k}"),
-                _ => format!("x{k}"),
-            };
-            self.line(format!("str     {r}, {m}"));
+        // Floating results' bits: S and T from v0 and v1, VAX ones from
+        // x0 and x1.
+        for (k, (fl, t)) in c.results.iter().enumerate() {
+            let r = self.dst(*t);
+            let w = format!("w{}", &r[1..]);
+            match fl {
+                Fl::S => self.line(format!("fmov    {w}, s{k}")),
+                Fl::T => self.line(format!("fmov    {r}, d{k}")),
+                Fl::F => self.line(format!("mov     {w}, w{k}")),
+                _ => self.line(format!("mov     {r}, x{k}")),
+            }
+            self.done(*t);
         }
         let r = self.dst(c.dst);
         self.line(format!("mov     {r}, x0"));

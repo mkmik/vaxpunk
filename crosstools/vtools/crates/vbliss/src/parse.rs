@@ -1732,7 +1732,8 @@ impl Parser<'_> {
     /// predeclared names and its own, so that its lexical processing is
     /// its own; with declarations only; and giving the block the names it
     /// declares, not those its own libraries brought it. A library read
-    /// again gives the same names.
+    /// again gives the same names, but for COMPILETIME ones: each LIBRARY
+    /// declares its own, with the value the library left it.
     pub(crate) fn library(&mut self) -> R<()> {
         let at = self.here();
         let Tok::Str(name) = self.next() else {
@@ -1745,13 +1746,8 @@ impl Parser<'_> {
             None => {
                 let (names, bytes) = self.read_library(&name)?;
                 let i = self.library_stats.len();
-                let given: Vec<usize> = names
-                    .iter()
-                    .filter(|(n, _)| !n.starts_with('%'))
-                    .map(|&(_, id)| id)
-                    .collect();
-                self.library_stats.push((name.clone(), given.len(), bytes));
-                for id in given {
+                self.library_stats.push((name.clone(), names.len(), bytes));
+                for &(_, id) in &names {
                     self.library_of.entry(id).or_insert(i);
                 }
                 if self.switch_on("LIST_SOURCE") && self.switch_on("LIST_LIBRARY") {
@@ -1766,8 +1762,19 @@ impl Parser<'_> {
             }
         };
         for (n, id) in names {
+            // %ASSIGN changes a COMPILETIME name, so the library's stays
+            // as it left it and the block gets a copy.
+            let id = match self.m.syms[id].kind {
+                Kind::Compiletime(_) => {
+                    let copy = self.m.syms.len();
+                    self.m.syms.push(self.m.syms[id].clone());
+                    self.library_of.insert(copy, self.library_of[&id]);
+                    copy
+                }
+                _ => id,
+            };
             match self.scopes.last().unwrap().get(&n) {
-                Some(&old) if old != id => {
+                Some(&old) if self.library_of.get(&old) != self.library_of.get(&id) => {
                     return self.err(format!("Name already declared in this block:  {n}"));
                 }
                 // The same library again: BLISSA64 warns of each name

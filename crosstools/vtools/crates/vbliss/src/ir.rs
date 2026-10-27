@@ -147,7 +147,8 @@ pub enum Ins {
     /// standard with floating arguments or results (RN 2.10.4,
     /// DESIGN-0004): an argument `t:addr` is the value of that format at
     /// addr, S and T in v0-v7 with their class in x9, VAX ones general;
-    /// a result `t:addr` is stored at addr, from v0 and v1 or x0 and x1.
+    /// a result `t:%n` is temporary n, the bits from v0 and v1 or x0 and
+    /// x1, which the call's caller stores where it goes.
     FCall(Box<FCall>),
 }
 
@@ -158,7 +159,8 @@ pub struct FCall {
     pub target: V,
     /// Each argument: a value, or a floating value's format and address.
     pub args: Vec<(V, Option<Fl>)>,
-    pub results: Vec<(Fl, V)>,
+    /// Each result: its format and the temporary that gets its bits.
+    pub results: Vec<(Fl, u32)>,
 }
 
 /// A floating point built-in's arithmetic.
@@ -421,10 +423,10 @@ impl fmt::Display for Ins {
                     write!(f, "{v}")?;
                 }
                 f.write_str(")")?;
-                for (i, (fl, v)) in c.results.iter().enumerate() {
+                for (i, (fl, t)) in c.results.iter().enumerate() {
                     write!(
                         f,
-                        "{} {}:{v}",
+                        "{} {}:%{t}",
                         if i == 0 { " ->" } else { "," },
                         fl.letter()
                     )?;

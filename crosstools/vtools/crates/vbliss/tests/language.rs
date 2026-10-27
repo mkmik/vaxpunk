@@ -313,6 +313,7 @@ fn libraries() {
     .unwrap();
     std::fs::write(dir.join("lc.r64"), "OWN X;\n").unwrap();
     std::fs::write(dir.join("ld.r64"), "SWITCHES ZIP;\nLITERAL D1 = 1;\n").unwrap();
+    std::fs::write(dir.join("le.r64"), "COMPILETIME N = 0;\n").unwrap();
     let path = dir.join("t.b64");
     let src = module(
         "MACRO IDENT = 'V1' %;\nLIBRARY 'LB';\nLIBRARY 'LB';\n\
@@ -329,6 +330,23 @@ fn libraries() {
         &vbliss::Options::default(),
     );
     assert!(out.listing.contains("%PRINT:\t0\n"), "{}", out.listing);
+    // Each LIBRARY declares its own COMPILETIME names, with the library's
+    // values, which %ASSIGN in one block doesn't change in another (oracle
+    // LCTT).
+    let out = vbliss::translate(
+        &path,
+        "MODULE T =\nBEGIN\nLIBRARY 'LE';\n%ASSIGN(N, 3)\n\
+         ROUTINE A = BEGIN LIBRARY 'LE'; %PRINT(%NUMBER(N)) %ASSIGN(N, 5) 1 END;\n\
+         ROUTINE B = BEGIN LIBRARY 'LE'; %PRINT(%NUMBER(N)) 2 END;\n\
+         %PRINT(%NUMBER(N))\nEND\nELUDOM\n",
+        &vbliss::Options::default(),
+    );
+    let printed: Vec<&str> = out
+        .listing
+        .lines()
+        .filter_map(|l| l.split("%PRINT:\t").nth(1))
+        .collect();
+    assert_eq!(printed, ["0", "0", "3"], "{}", out.listing);
     let out = vbliss::translate(
         &path,
         &module("LIBRARY 'LC';", ""),
@@ -365,7 +383,7 @@ fn floating_calls() {
     ));
     let (ir, asm) = (out.ir.unwrap(), out.asm.unwrap());
     assert!(ir.contains("fcall $R(1, t:$T, s:$SS, 2)"), "{ir}");
-    assert!(ir.contains("fcall $G(g:$X) -> g:$Y"), "{ir}");
+    assert!(ir.contains("fcall $G(g:$X) -> g:%"), "{ir}");
     // Four arguments, the second of class 2 (T), the third of class 1 (S).
     assert!(
         asm.contains(&format!("mov     x9, #{}", 4 | 2 << 10 | 1 << 12)),
@@ -375,7 +393,13 @@ fn floating_calls() {
         asm.contains("ldr     d0, [x16]") && asm.contains("ldr     s1, [x16]"),
         "{asm}"
     );
-    assert!(asm.contains("str     d0, [x16]"), "{asm}");
+    assert!(asm.contains("fmov    x") && asm.contains(", d0\n"), "{asm}");
+    // A result's destination is found after the call, which may change it.
+    let ir = translate(&module("EXTERNAL ROUTINE R;\nOWN P;", "R(; %TFLOAT(.P));"))
+        .ir
+        .unwrap();
+    let (call, dest) = (ir.find("fcall $R() -> t:%"), ir.find("load8u $P"));
+    assert!(call.is_some() && dest > call, "{ir}");
 }
 
 #[test]

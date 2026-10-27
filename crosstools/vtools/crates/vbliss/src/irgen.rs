@@ -580,7 +580,7 @@ impl Gen<'_> {
                     Expr::Name(id) if general.is_none() => self.address(id)?,
                     ref t => self.value(t)?,
                 };
-                let (mut vals, mut results) = (Vec::new(), Vec::new());
+                let (mut vals, mut results, mut dests) = (Vec::new(), Vec::new(), Vec::new());
                 for a in args {
                     match a {
                         Expr::Special(Special::FloatIn(f), e) => {
@@ -588,8 +588,9 @@ impl Gen<'_> {
                             vals.push((self.fix(v), Some(*f)));
                         }
                         Expr::Special(Special::FloatOut(f), e) => {
-                            let v = self.value(&e[0])?;
-                            results.push((*f, self.fix(v)));
+                            let t = self.temp();
+                            results.push((*f, t));
+                            dests.push((&e[0], *f, t));
                         }
                         a => {
                             let v = self.value(a)?;
@@ -602,10 +603,23 @@ impl Gen<'_> {
                     dst: d,
                     target: t,
                     args: vals,
-                    results: results.clone(),
+                    results,
                 })));
+                // Where the results go, found after the call, as a
+                // linkage's output parameters are.
+                for (e, f, t) in &dests {
+                    let addr = self.value(e)?;
+                    let long = matches!(f, ir::Fl::F | ir::Fl::S);
+                    let p = Place {
+                        addr,
+                        pos: V::C(0),
+                        size: V::C(if long { 32 } else { 64 }),
+                        signed: false,
+                    };
+                    self.store(p, V::T(*t));
+                }
                 // A call with a floating result has no other value.
-                if results.is_empty() {
+                if dests.is_empty() {
                     self.narrow(V::T(d))
                 } else {
                     V::C(0)
@@ -1399,10 +1413,10 @@ impl Gen<'_> {
                     let v = self.value(a)?;
                     vals.push(self.fix(v));
                 }
-                let place = self.place(out)?;
                 let (d, r1) = (self.temp(), self.temp());
                 self.emit(Ins::Pal(d, V::C(code.into()), vals));
                 self.emit(Ins::PalR1(r1));
+                let place = self.place(out)?;
                 self.store(place, V::T(r1));
                 V::T(d)
             }
