@@ -101,7 +101,9 @@ impl Parser<'_> {
                         // The same register may be an input and an output.
                         let r = self.register()?;
                         if l.outs.contains(&r) {
-                            return self.err(format!("register {r} is given twice"));
+                            return self.err(format!(
+                                "Multiple specification of register {r} in LINKAGE declaration"
+                            ));
                         }
                         l.outs.push(r);
                         if !self.eat_punct(',') {
@@ -178,7 +180,9 @@ impl Parser<'_> {
     fn linkage_register(&mut self, used: &mut Vec<u8>, high: bool) -> R<u8> {
         let r = self.register()?;
         if used.contains(&r) {
-            return self.err(format!("register {r} is given twice"));
+            return self.err(format!(
+                "Multiple specification of register {r} in LINKAGE declaration"
+            ));
         }
         if high && r < 2 {
             return self.err(format!(

@@ -1,0 +1,14 @@
+MODULE A32CALL =
+BEGIN
+! Probe 17: a BLISS-32 routine called from BLISS-64 (P17.B64).
+REQUIRE '[-]PRINT32';
+GLOBAL ROUTINE R32 (A, B) : NOVALUE =
+    BEGIN
+    PRINT(.A);
+    PRINT(.B);
+    PRINT(.A + 1);
+    PRINT(.B GTRU 5)
+    END;
+GLOBAL ROUTINE V32 = -1;
+END
+ELUDOM

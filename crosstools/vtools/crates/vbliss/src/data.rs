@@ -400,7 +400,11 @@ impl Parser<'_> {
         let name = self.name()?;
         let st = match self.lookup(&name).map(|id| &self.m.syms[id].kind) {
             Some(Kind::Structure(st)) => st.clone(),
-            _ => return self.err(format!("{name} is not a structure")),
+            _ => {
+                return self.err(format!(
+                    "Name in attribute list not declared as a structure or linkage name:  {name}"
+                ));
+            }
         };
         let mut alloc = vec![None; st.defaults.len()];
         if self.eat_punct('[') {
@@ -535,7 +539,10 @@ impl Parser<'_> {
                         match self.lookup(&n).map(|id| (id, &self.m.syms[id].kind)) {
                             Some((id, Kind::Field(_))) => fields.push(id),
                             Some((_, Kind::FieldSet(set))) => fields.extend(set.iter().copied()),
-                            _ => return self.err(format!("{n} is not a field name")),
+                            _ => {
+                                return self
+                                    .err("Parameter of FIELD attribute must be a field or field-set name");
+                            }
                         }
                         if !self.eat_punct(',') {
                             break;
@@ -714,6 +721,22 @@ impl Parser<'_> {
             } else {
                 Attrs::default()
             };
+            // A name that is no attribute: BLISSA64 warns and goes on
+            // (oracle DIAG1).
+            if let Tok::Name(n) = self.peek().clone()
+                && matches!(self.peek2(), Tok::Punct(',' | ';'))
+                && !crate::parse::RESERVED.contains(&n.as_str())
+            {
+                let at = self.here();
+                if self.lookup(&n).is_none() {
+                    self.diag('W', &at, format!("Undeclared name:  {n}"));
+                }
+                let msg = format!(
+                    "Name in attribute list not declared as a structure or linkage name:  {n}"
+                );
+                self.diag('W', &at, msg);
+                self.pos += 1;
+            }
             if !self.at_punct(',') && !self.at_punct(';') {
                 let found = self.describe();
                 return self.err(format!("attribute {found} is not supported yet"));

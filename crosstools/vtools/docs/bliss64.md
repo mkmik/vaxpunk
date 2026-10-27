@@ -912,7 +912,12 @@ routine of a module.
     ```
 
     Listing, if it shows them; failing that, `%SIZE` of each with and
-    without a unit.
+    without a unit. **Answered** by `tests/bliss/struc10.b64`: the
+    listing doesn't show a structure's text, and the sizes and accesses
+    are vbliss's (`%SIZE(BITVECTOR[70])` 9, `BLOCKVECTOR[2, 3, WORD]` 12;
+    `BLOCKVECTOR[2, 3]`'s element 1, 2 at 40 bytes). A word field at an
+    odd byte, `B[1, 8, 16, 0]`, warns "Word field reference is not Word
+    aligned" under the default `CHECK_ALIGNMENT`.
 
 11. **The structure-formal bug.** Does BLISSA64 still miscompile it?
 
@@ -1002,3 +1007,7 @@ routine of a module.
 
 17. **Under `/A32`:** items 1 to 5 again, and what a BLISS-32 routine
     receives from a BLISS-64 caller passing `1^32 + 5` and `-1`.
+    **Answered** by `tests/bliss/bliss32.b32`, `asc32.b32` (the same
+    8-byte descriptor) and `p17/`, which the oracle links from two
+    modules (`! LINK:`): the BLISS-32 routine sees 5 and -1, the low 32
+    bits, and its -1 comes back to BLISS-64 sign-extended.

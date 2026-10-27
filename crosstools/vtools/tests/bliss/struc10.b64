@@ -1,0 +1,31 @@
+MODULE STRUC10 (MAIN = M) =
+BEGIN
+! Probe 10: the predeclared structures, by their sizes and accesses.
+REQUIRE 'PRINT';
+OWN
+    V : VECTOR[4, WORD, SIGNED] INITIAL(WORD(1, -2, 3, -4)),
+    B : BLOCK[2] INITIAL(%X'0123456789ABCDEF', -1),
+    BB : BLOCK[3, BYTE],
+    BV : BITVECTOR[70],
+    BK : BLOCKVECTOR[2, 3];
+%PRINT(%SIZE(VECTOR[4, WORD]), ' ', %SIZE(BITVECTOR[70]), ' ', %SIZE(BLOCKVECTOR[2, 3, WORD]))
+%PRINT(%ALLOCATION(BV), ' ', %ALLOCATION(BK), ' ', %ALLOCATION(BB))
+ROUTINE M =
+    BEGIN
+    PRINT(.V[1]);
+    PRINT(.V[3]);
+    PRINT(.B[1, 8, 16, 0]);
+    PRINT(.B[0, 56, 8, 1]);
+    BV[69] = 1;
+    BV[3] = 1;
+    PRINT(.BV[69]);
+    PRINT(.BV[3]);
+    PRINT(.BV[4]);
+    PRINT(.BV<0, 8>);
+    BK[1, 2, 0, 16, 0] = 77;
+    PRINT(.BK[1, 2, 0, 16, 0]);
+    PRINT(.(BK + 40));
+    1
+    END;
+END
+ELUDOM

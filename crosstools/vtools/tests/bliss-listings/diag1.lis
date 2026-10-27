@@ -1,0 +1,39 @@
+                                Source Listing                  DD-MMM-YYYY HH:MM:SS  BLISS-64E V1.11-007-48G4L         Page 1
+                                Source Listing                  DD-MMM-YYYY HH:MM:SS  SYS$SYSDEVICE:[ORACLE]DIAG1.B64;1
+
+    0	      1 MODULE DIAG1 (MAIN = M) =
+    0	      2 BEGIN
+    1	      3 ! Going on after errors: what BLISSA64 reports of a module with several.
+    1	      4 OWN QUAD;
+		....1     
+%BLS64-E-TEXT, (1) Name to be declared is a reserved word:  QUAD
+
+    1	      5 OWN X : FOO;
+		........1    
+%BLS64-W-TEXT, (1) Undeclared name:  FOO
+
+%BLS64-W-TEXT, (1) Name in attribute list not declared as a structure or linkage name:  FOO
+
+    1	      6 ROUTINE N = .Y;
+		.............1  
+%BLS64-W-TEXT, (1) Undeclared name:  Y
+
+    1	      7 ROUTINE P = (X = ; 1);
+		.................1     
+%BLS64-W-TEXT, (1) Missing operand following "=".  A literal zero has been inserted
+
+    1	      8 ROUTINE Q (A) = .A + ;
+		.....................1 
+%BLS64-W-TEXT, (1) Missing operand following "+".  A literal zero has been inserted
+
+    1	      9 ROUTINE M = 1;
+    1	     10 END
+    1	     11 ELUDOM
+
+
+DIAG1                           Source Listing                  DD-MMM-YYYY HH:MM:SS  BLISS-64E V1.11-007-48G4L         Page 2
+                                Source Listing                  DD-MMM-YYYY HH:MM:SS  SYS$SYSDEVICE:[ORACLE]DIAG1.B64;1
+
+COMMAND LINE:
+
+BLISS/A64/LIST/SOURCE_LIST=(EXPAND_MACROS,REQUIRE)/NOMACHINE_CODE DIAG1.B64

@@ -182,7 +182,7 @@ fn forward_data() {
     assert!(ir.contains("{ 8 $Q, 8 $Q }"), "{ir}");
     assert_eq!(
         error(&module("FORWARD Y;", "")),
-        "Name declared FORWARD is not defined: Y"
+        "Name declared FORWARD is not defined:  Y"
     );
     assert_eq!(
         error(&module("OWN X;\nOWN X;", "")),
@@ -581,4 +581,35 @@ fn checks() {
         ),
     );
     assert_eq!(share, ["Non-shareable value in SHARE PSECT SHRD"]);
+}
+
+#[test]
+fn diagnostics() {
+    // BLISSA64's messages, and going on after an error to report the
+    // module's others (oracle DIAG1, DIAG2, MSGS; tests/bliss-listings).
+    let out = translate(
+        "MODULE D =\nBEGIN\nOWN QUAD;\nROUTINE N = (IF 1 THEN 2 ELSE);\nROUTINE P = (.X = ; 1);\n\
+         ROUTINE Q = BEGIN 1 );\nEND\nELUDOM\n",
+    );
+    let msgs: Vec<(char, &str)> = out.diags.iter().map(|d| (d.sev, d.msg.as_str())).collect();
+    assert_eq!(
+        msgs,
+        [
+            ('E', "Name to be declared is a reserved word:  QUAD"),
+            ('E', "expected an expression, found )"),
+            ('W', "Undeclared name:  X"),
+            (
+                'W',
+                "Missing operand following \"=\".  A literal zero has been inserted"
+            ),
+            ('E', "BEGIN paired with right parenthesis"),
+        ]
+    );
+    // A NOVALUE routine's value: a warning, unless its routine has an
+    // error, as BLISSA64 looks at values only then.
+    let nv = "ROUTINE NV : NOVALUE = 0;";
+    let warned = translate(&module(nv, "LOCAL Z; Z = NV();"));
+    assert_eq!(warned.diags[0].msg, "ROUTINE NV has no value");
+    let not = translate(&module(nv, "LOCAL Z; Z = NV(); Z = (;"));
+    assert!(not.diags.iter().all(|d| d.sev == 'E'), "{:?}", not.diags);
 }

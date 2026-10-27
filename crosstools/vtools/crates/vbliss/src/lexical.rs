@@ -662,8 +662,12 @@ impl Parser<'_> {
             Tok::Punct('(') => ')',
             Tok::Punct('[') => ']',
             Tok::Punct('<') => '>',
+            // At what came in its place, which is read again after the
+            // error (oracle DIAG2).
             _ => {
-                return Err(self.error_at(at, format!("Missing actual parameter list for {of}")));
+                let e = self.error_at(&open, format!("Missing actual parameter list for {of}"));
+                self.push(vec![open]);
+                return Err(e);
             }
         };
         let nest = self.lx.nest;

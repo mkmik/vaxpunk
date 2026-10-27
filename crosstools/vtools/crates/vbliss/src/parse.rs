@@ -346,6 +346,19 @@ impl Options {
                         Some(b) => (b, false),
                         None => (v.as_str(), true),
                     };
+                    // A keyword shortened, as DCL takes it.
+                    let words = [
+                        "SOURCE",
+                        "REQUIRE",
+                        "EXPAND_MACROS",
+                        "TRACE_MACROS",
+                        "LIBRARY",
+                    ];
+                    let base = words
+                        .iter()
+                        .find(|w| base.len() >= 4.min(w.len()) && w.starts_with(base))
+                        .copied()
+                        .unwrap_or(base);
                     let switch = match base {
                         "SOURCE" => "LIST_SOURCE",
                         "REQUIRE" => "LIST_REQUIRE",
@@ -432,13 +445,18 @@ impl Options {
             _ if is("/CROSS_REFERENCE") => self
                 .notes
                 .push("CROSS_REFERENCE not implemented in BLISS-64E".into()),
-            // Accepted, and nothing to do: /ERROR_LIMIT, as vbliss stops at
-            // the first error; /DIAGNOSTICS and /ANALYSIS_DATA, until LSE
-            // and SCA read them; /INITIAL_PSECT, as LOCAL initial values
-            // are code; and Alpha's code generation.
+            _ if is("/ERROR_LIMIT") => {
+                self.error_limit = match value.map(str::parse) {
+                    Some(Ok(n)) => Some(n),
+                    None => Some(30),
+                    _ => return bad(value.unwrap_or("")),
+                }
+            }
+            _ if is("/NOERROR_LIMIT") => self.error_limit = Some(u32::MAX),
+            // Accepted, and nothing to do: /DIAGNOSTICS and /ANALYSIS_DATA,
+            // until LSE and SCA read them; /INITIAL_PSECT, as LOCAL initial
+            // values are code; and Alpha's code generation.
             _ if [
-                "/ERROR_LIMIT",
-                "/NOERROR_LIMIT",
                 "/DIAGNOSTICS",
                 "/NODIAGNOSTICS",
                 "/ANALYSIS_DATA",
@@ -576,6 +594,9 @@ pub struct Options {
     pub lowercase: bool,
     /// /LIBRARY: the source is a library's, which makes no object.
     pub library: bool,
+    /// /ERROR_LIMIT: the errors after which the compiler gives up, 30 if
+    /// not given; /NOERROR_LIMIT is no limit.
+    pub error_limit: Option<u32>,
     /// /LANGUAGE: the dialects whose subset the source is checked against.
     pub language: Vec<String>,
     /// Informational messages the qualifiers cause.
@@ -628,8 +649,14 @@ pub struct Parser<'a> {
     pub(crate) formals: HashMap<usize, Vec<crate::checks::Formal>>,
     pub(crate) static_offsets: HashMap<String, u32>,
     pub(crate) global_names: Vec<String>,
-    /// Where the last field selector began.
+    /// Where the parser went on after an error.
+    recovered: Vec<usize>,
+    /// The diagnostics, by index, that a routine with an error doesn't
+    /// keep: those BLISSA64 makes once it has parsed it.
+    pub(crate) late: Vec<usize>,
+    /// Where the last field selector and the last call's actuals began.
     pub(crate) field_at: Option<Lexeme>,
+    pub(crate) call_at: Option<Lexeme>,
     /// The dot lint's warnings, and how deep in an address it is.
     pub(crate) lints: Vec<Diag>,
     /// Names used without a declaration.
@@ -726,7 +753,10 @@ pub fn parse(name: &str, text: &str, load: Loader, opts: &Options) -> Front {
         formals: HashMap::new(),
         static_offsets: HashMap::new(),
         global_names: Vec::new(),
+        recovered: Vec::new(),
+        late: Vec::new(),
         field_at: None,
+        call_at: None,
         lints: Vec::new(),
         undeclared: Vec::new(),
         address_context: 0,
@@ -842,7 +872,97 @@ fn is_name(t: &Tok, n: &str) -> bool {
     matches!(t, Tok::Name(s) if s == n)
 }
 
+/// Where the parser was, to go back to after an error.
+pub(crate) struct Mark {
+    pos: usize,
+    scopes: usize,
+    depth: u32,
+    routines: usize,
+    names: usize,
+    exits: usize,
+    linkages: usize,
+    address_context: u32,
+    sub: u32,
+}
+
 impl Parser<'_> {
+    pub(crate) fn mark(&self) -> Mark {
+        Mark {
+            pos: self.pos,
+            scopes: self.scopes.len(),
+            depth: self.depth,
+            routines: self.routine_stack.len(),
+            names: self.routine_names.len(),
+            exits: self.exits.len(),
+            linkages: self.linkages_now.len(),
+            address_context: self.address_context,
+            sub: self.sub,
+        }
+    }
+
+    /// After error `e` in what began at `m`, a declaration or a block's
+    /// expression: reports it, then skips past the next semicolon at the
+    /// nesting `m` had, or up to the close of the block around it, so
+    /// that the parser goes on to find the module's other errors, as
+    /// BLISS does. Gives `e` back where there's no going on: at the
+    /// source's end, again at the same place, or past /ERROR_LIMIT.
+    pub(crate) fn recover(&mut self, e: Error, m: &Mark) -> R<()> {
+        let e = self.stash.take().unwrap_or(e);
+        let file = self
+            .lx
+            .files
+            .iter()
+            .position(|f| f.name == e.file)
+            .unwrap_or(0);
+        self.diags.push(Diag {
+            sev: 'E',
+            file: file as u16,
+            line: e.line,
+            col: e.col,
+            msg: e.msg.clone(),
+        });
+        let errors = self.diags.iter().filter(|d| d.sev == 'E').count();
+        if errors >= self.opts.error_limit.unwrap_or(30) as usize || self.recovered.contains(&m.pos)
+        {
+            return Err(e);
+        }
+        self.recovered.push(m.pos);
+        // The Eofs that stood for lexemes after the lexical processor's
+        // error go: it reads on.
+        while self.toks.len() > m.pos.max(self.pos)
+            && self.toks.last().is_some_and(|l| l.tok == Tok::Eof)
+        {
+            self.toks.pop();
+        }
+        self.scopes.truncate(m.scopes);
+        self.depth = m.depth;
+        self.routine_stack.truncate(m.routines);
+        self.routine_names.truncate(m.names);
+        self.exits.truncate(m.exits);
+        self.linkages_now.truncate(m.linkages);
+        self.address_context = m.address_context;
+        self.sub = m.sub;
+        self.pos = m.pos;
+        let mut nest = 0;
+        loop {
+            match self.peek().clone() {
+                Tok::Eof => return Err(e),
+                Tok::Punct('(' | '[') => nest += 1,
+                Tok::Name(n) if n == "BEGIN" => nest += 1,
+                Tok::Punct(')' | ']') if nest == 0 => return Ok(()),
+                Tok::Name(n) if (n == "END" || n == "ELUDOM") && nest == 0 => return Ok(()),
+                Tok::Punct(')' | ']') => nest -= 1,
+                Tok::Name(n) if n == "END" => nest -= 1,
+                Tok::Punct(';') if nest == 0 => {
+                    self.pos += 1;
+                    return Ok(());
+                }
+                _ => {}
+            }
+            self.pos += 1;
+        }
+    }
+
     /// Reads lexemes until the one `n` ahead of the next is in `toks`.
     pub(crate) fn fill(&mut self, n: usize) {
         while self.toks.len() <= self.pos + n {
@@ -986,6 +1106,11 @@ impl Parser<'_> {
             let found = self.describe();
             self.err(format!("expected {n}, found {found}"))
         }
+    }
+
+    /// Word `n` next, or BLISS's message `msg` (UM appendix B).
+    pub(crate) fn expect_or(&mut self, n: &str, msg: &str) -> R<()> {
+        if self.eat(n) { Ok(()) } else { self.err(msg) }
     }
 
     pub(crate) fn expect_punct(&mut self, c: char) -> R<()> {
@@ -1229,15 +1354,6 @@ impl Parser<'_> {
                 format!("Name to be declared is a reserved word:  {name}"),
             ));
         }
-        if name.chars().count() > 64 {
-            let at = self.last();
-            let short: String = name.chars().take(64).collect();
-            self.diag(
-                'W',
-                &at,
-                format!("Name \"{short}\" longer than 64 characters"),
-            );
-        }
         if let Some(&id) = self.scopes.last().unwrap().get(&name)
             && let Some(i) = self.forward_data.iter().position(|&f| f == id)
             && let Kind::Data {
@@ -1294,6 +1410,15 @@ impl Parser<'_> {
             }
             self.m.syms[id].kind = kind;
             return Ok(id);
+        }
+        if name.chars().count() > 64 {
+            let at = self.last();
+            let short: String = name.chars().take(64).collect();
+            self.diag(
+                'W',
+                &at,
+                format!("Name \"{short}\" longer than 64 characters"),
+            );
         }
         self.check_redeclare(&name);
         // Statics and routines are named in the assembly; locals aren't.
@@ -1381,14 +1506,14 @@ impl Parser<'_> {
         } else {
             self.expect("END")?;
         }
-        self.expect("ELUDOM")?;
+        self.expect_or("ELUDOM", "Missing ELUDOM following module")?;
         if *self.peek() != Tok::Eof {
             return self.err("text after ELUDOM");
         }
         self.m.nocode = !self.switch_on("CODE");
         if let Some(&id) = self.forward_data.first() {
             let n = self.m.syms[id].name.clone();
-            return self.err(format!("Name declared FORWARD is not defined: {n}"));
+            return self.err(format!("Name declared FORWARD is not defined:  {n}"));
         }
         if let Some(main) = &self.m.main {
             let main = main.clone();
@@ -1396,7 +1521,7 @@ impl Parser<'_> {
                 Some(Kind::Routine {
                     external: false, ..
                 }) => {}
-                _ => return self.err(format!("MAIN routine {main} is not defined")),
+                _ => return self.err("Routine specified as MAIN is not defined"),
             }
         }
         Ok(())
@@ -1473,7 +1598,11 @@ impl Parser<'_> {
             let l = self.name()?;
             let kind = match self.lookup(&l).map(|id| &self.m.syms[id].kind) {
                 Some(Kind::Linkage(k)) => Kind::Linkage(k.clone()),
-                _ => return self.err(format!("{l} is not a linkage")),
+                _ => {
+                    return self.err(format!(
+                        "Name in attribute list not declared as a structure or linkage name:  {l}"
+                    ));
+                }
             };
             self.expect_punct(')')?;
             let id = self.m.syms.len();
@@ -1566,18 +1695,25 @@ impl Parser<'_> {
         // ponytail: module-level declarations can't need code (run-time
         // BINDs, LOCALs), so only blocks collect `inits`.
         loop {
-            if self.eat("REQUIRE") {
-                self.require()?;
+            let m = self.mark();
+            let r = if self.eat("REQUIRE") {
+                self.require()
             } else if self.eat("LIBRARY") {
-                self.library()?;
+                self.library()
             } else if self.eat_punct(';') {
                 // A stray semicolon between declarations, as TPAMAC.REQ's
                 // $INIT_STATE leaves one, which BLISSA64 takes (oracle
                 // STRAY, BLKSEMI).
-            } else if self.declaration()? {
-                self.expect_punct(';')?;
+                Ok(())
             } else {
-                return Ok(());
+                match self.declaration() {
+                    Ok(true) => self.expect_punct(';'),
+                    Ok(false) => return Ok(()),
+                    Err(e) => Err(e),
+                }
+            };
+            if let Err(e) = r {
+                self.recover(e, &m)?;
             }
         }
     }
@@ -1585,7 +1721,7 @@ impl Parser<'_> {
     /// `REQUIRE 'file';`: the file's lexemes take the declaration's place.
     pub(crate) fn require(&mut self) -> R<()> {
         let Tok::Str(name) = self.next() else {
-            return self.err("expected a file name after REQUIRE");
+            return self.err("Missing quoted string following REQUIRE or LIBRARY");
         };
         self.expect_punct(';')?;
         self.require_file(&String::from_utf8_lossy(&name))
@@ -2292,6 +2428,7 @@ impl Parser<'_> {
     }
 
     pub(crate) fn routine(&mut self, global: bool) -> R<()> {
+        let first_diag = self.diags.len();
         let name = self.name()?;
         let (names, out_names) = if self.at_punct('(') {
             self.formal_list()?
@@ -2411,6 +2548,16 @@ impl Parser<'_> {
         self.scopes.pop();
         let slots = std::mem::replace(&mut self.slots, outer);
         let psect = psect.unwrap_or_else(|| self.m.psects.code.clone());
+        // BLISSA64 looks at a routine's values only if it has no error.
+        if self.diags[first_diag..].iter().any(|d| d.sev == 'E') {
+            let late = std::mem::take(&mut self.late);
+            let mut i = 0;
+            self.diags.retain(|_| {
+                i += 1;
+                !late.contains(&(i - 1))
+            });
+        }
+        self.late.retain(|&i| i < first_diag);
         self.m.routines.push(Routine {
             sym,
             formals,
@@ -2431,7 +2578,14 @@ impl Parser<'_> {
         if self.at_punct('=') {
             let at = self.here();
             self.pos += 1;
-            let right = self.value()?;
+            let right = if self.operand_next() || self.stash.is_some() {
+                self.value()?
+            } else {
+                let at = self.here();
+                let msg = "Missing operand following \"=\".  A literal zero has been inserted";
+                self.diag('W', &at, msg.into());
+                Expr::Num(0)
+            };
             // An actual `K = X` is a keyword macro's, if one undeclared.
             if !actual {
                 self.lint_store(&left, &right, &at);
@@ -2578,7 +2732,7 @@ impl Parser<'_> {
         while let Some(op) = self.operator(level) {
             let op_at = self.here();
             self.pos += 1;
-            let right = if self.operand_next() {
+            let right = if self.operand_next() || self.stash.is_some() {
                 self.binary(level + 1)?
             } else {
                 let op = self.toks[self.pos - 1].tok.clone();
@@ -2693,7 +2847,9 @@ impl Parser<'_> {
         }
         let mut e = self.primary()?;
         loop {
+            let paren = self.here();
             if self.eat_punct('(') {
+                self.call_at = Some(paren);
                 let (mut args, mut outs) = (Vec::new(), Vec::new());
                 let first = self.here();
                 let mut starts = Vec::new();
@@ -2805,9 +2961,11 @@ impl Parser<'_> {
                 };
                 self.pos += 1;
                 let access = self.access_actuals_of(id.map(|id| (id, &a.fields[..])))?;
+                let at = self.last();
                 self.expect_punct(']')?;
                 let seg = if a.refr { Expr::Fetch(Box::new(e)) } else { e };
                 e = self.instantiate(&a.st, seg, access, &a.alloc);
+                self.check_field_align(&e, &at);
             } else {
                 return Ok(e);
             }
@@ -2834,7 +2992,7 @@ impl Parser<'_> {
                     let mut texts = Vec::new();
                     loop {
                         let Tok::Str(s) = self.next() else {
-                            return self.err("expected a quoted string after CODECOMMENT");
+                            return self.err("Missing quoted string following CODECOMMENT");
                         };
                         texts.push(String::from_utf8_lossy(&s).into_owned());
                         if !self.eat_punct(',') {
@@ -2865,7 +3023,7 @@ impl Parser<'_> {
                         let msg = format!("Test expression is always {always}");
                         self.diag('I', &at, msg);
                     }
-                    self.expect("THEN")?;
+                    self.expect_or("THEN", "Missing THEN following IF")?;
                     let t = self.expr()?;
                     let e = if self.eat("ELSE") {
                         Some(Box::new(self.expr()?))
@@ -2877,7 +3035,7 @@ impl Parser<'_> {
                 "WHILE" | "UNTIL" => {
                     let cond = self.expr()?;
                     self.lint_test(&cond, &at);
-                    self.expect("DO")?;
+                    self.expect_or("DO", "Missing DO following WHILE or UNTIL")?;
                     let body = self.expr()?;
                     Ok(Expr::Loop {
                         until: n == "UNTIL",
@@ -2891,7 +3049,7 @@ impl Parser<'_> {
                     let until = if self.eat("UNTIL") {
                         true
                     } else {
-                        self.expect("WHILE")?;
+                        self.expect_or("WHILE", "Missing WHILE or UNTIL following DO")?;
                         false
                     };
                     let cond_at = self.here();
@@ -2988,8 +3146,9 @@ impl Parser<'_> {
         match self.m.syms[id].kind.clone() {
             Kind::Literal(v) | Kind::Compiletime(v) => Ok(Expr::Num(v)),
             Kind::Label if self.eat_punct(':') => Ok(Expr::Labeled(id, Box::new(self.expr()?))),
-            Kind::Label => self.err(format!("label {n} used as a value")),
-            Kind::Macro(_) => self.err(format!("macro {n} used as a value")),
+            Kind::Label | Kind::Macro(_) => {
+                self.err(format!("Name used in an expression has no value:  {n}"))
+            }
             Kind::Structure(st) if self.eat_punct('[') => self.general_ref(st),
             Kind::Builtin => match crate::builtin::register(n) {
                 Some(r @ 0..2) => Ok(Expr::Special(crate::builtin::Special::Reg(r), Vec::new())),
@@ -2999,7 +3158,7 @@ impl Parser<'_> {
                 None => self.builtin(n),
             },
             Kind::Structure(_) | Kind::Field(_) | Kind::FieldSet(_) => {
-                self.err(format!("{n} used as a value"))
+                self.err(format!("Name used in an expression has no value:  {n}"))
             }
             _ if self
                 .local_owner
@@ -3069,17 +3228,33 @@ impl Parser<'_> {
                 value = false;
                 continue;
             }
-            exprs.push(self.expr()?);
+            let m = self.mark();
+            match self.expr() {
+                Ok(e) => exprs.push(e),
+                Err(e) => {
+                    self.recover(e, &m)?;
+                    value = false;
+                    continue;
+                }
+            }
             value = true;
             if !self.eat_punct(';') {
                 break;
             }
             value = false;
         }
+        let msg =
+            "Missing semicolon, right parenthesis or END following a subexpression of a block";
         if close == 'E' {
-            self.expect("END")?;
-        } else {
-            self.expect_punct(')')?;
+            if self.at_punct(')') {
+                return self.err("BEGIN paired with right parenthesis");
+            }
+            self.expect_or("END", msg)?;
+        } else if !self.eat_punct(')') {
+            if self.at("END") {
+                return self.err("Left parenthesis paired with END");
+            }
+            return self.err(msg);
         }
         // BLISSA64 closes the block in the listing once it has read the
         // lexeme after it.
@@ -3113,7 +3288,7 @@ impl Parser<'_> {
         let from = part(self, "FROM")?;
         let to = part(self, "TO")?;
         let by = part(self, "BY")?;
-        self.expect("DO")?;
+        self.expect_or("DO", "Missing DO following INCR or DECR")?;
         let body = Box::new(self.expr()?);
         self.scopes.pop();
         Ok(Expr::Incr {
@@ -3129,12 +3304,12 @@ impl Parser<'_> {
 
     pub(crate) fn case(&mut self) -> R<Expr> {
         let sel = self.expr()?;
-        self.expect("FROM")?;
+        self.expect_or("FROM", "Missing FROM following CASE")?;
         let lo = self.ctce()?;
-        self.expect("TO")?;
+        self.expect_or("TO", "Missing TO following FROM in CASE expression")?;
         let hi = self.ctce()?;
-        self.expect("OF")?;
-        self.expect("SET")?;
+        self.expect_or("OF", "Missing OF following TO in CASE expression")?;
+        self.expect_or("SET", "Missing SET following OF in CASE expression")?;
         let mut arms = Vec::new();
         while self.eat_punct('[') {
             let mut labels = Vec::new();
@@ -3146,8 +3321,12 @@ impl Parser<'_> {
                 } else {
                     let a = self.ctce()?;
                     let b = if self.eat("TO") { self.ctce()? } else { a };
-                    if a < lo || b > hi || a > b {
-                        return self.err(format!("case label {a} TO {b} outside {lo} TO {hi}"));
+                    if a > b {
+                        return self.err("Lower bound of a range exceeds upper bound");
+                    }
+                    if a < lo || b > hi {
+                        return self
+                            .err("Value in CASE-label outside the range given by FROM and TO");
                     }
                     CaseLabel::Range(a, b)
                 });
@@ -3173,8 +3352,8 @@ impl Parser<'_> {
 
     pub(crate) fn select(&mut self, word: &str) -> R<Expr> {
         let sel = self.expr()?;
-        self.expect("OF")?;
-        self.expect("SET")?;
+        self.expect_or("OF", "Missing OF following SELECT")?;
+        self.expect_or("SET", "Missing SET following OF in SELECT expression")?;
         let mut arms = Vec::new();
         while self.eat_punct('[') {
             let mut labels = Vec::new();

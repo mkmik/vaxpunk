@@ -180,15 +180,15 @@ note = "PRD-0004 Listing; vbliss.md The listing. Pages, headers, %TITLE and %SBT
 [[feature]]
 id = "diagnostics"
 title = "BLISS's messages: the user manual's 250 texts and severities, going on past the first error, the Alpha informationals"
-status = "todo"
-note = "vbliss writes BLISSA64's text for the 8 messages the tests meet, its own for the rest, and stops at the first error. Missing too: numeric literal overflow, SIGNAL's low 32 bits, names over 64 characters, a NOVALUE routine's value used. An up-level reference to an outer routine's LOCAL gets message 103, Illegal up-level reference"
+status = "done"
+note = "vbliss.md Diagnostics. BLISSA64's words, from the compiler's own message table, wherever vbliss has the message; its own only for what is vaxpunk's (registers, PAL calls, limits). After an error it goes on from the next declaration or block expression, and repairs as BLISSA64 does: a missing operand is a zero, an undeclared name an external (tests/bliss-listings diag1, diag2, synlv). SIGNAL's lower 32 bits get no message, as probe 12 showed"
 
 [[feature]]
 id = "probes"
 title = "The open probes of bliss64.md answered by the oracle: 5, 7, 8, 10, 12, 13, 15, 17"
-status = "wip"
+status = "done"
 needs = ["/host/axpbox-oracle#bliss"]
-note = "5, 7, 8, 12, 13 and 15 answered (bliss64.md), with tests/bliss programs whose listings and output are BLISSA64's: argptr5, edges7, qlit, and the language probes kwnof, stray, bltwice, gencall, pscls, blksemi, lint3, host2-4, swit, fltops, fltlit3. Left: 10, the predeclared structures' text, and 17, /A32 against /A64"
+note = "All answered (bliss64.md), with tests/bliss programs whose listings and output are BLISSA64's: argptr5, edges7, qlit, struc10 (10), asc32 and p17 (17, a BLISS-64 caller and a BLISS-32 routine linked together), and the language probes kwnof, stray, bltwice, gencall, pscls, blksemi, lint3, host2-4, swit, fltops, fltlit3"
 
 [[feature]]
 id = "dec-libraries"

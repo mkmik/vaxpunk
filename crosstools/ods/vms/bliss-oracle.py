@@ -8,7 +8,8 @@ Each FILE.B64 is compiled with
     BLISS/A64/LIST/SOURCE_LIST=(EXPAND_MACROS,REQUIRE)/NOMACHINE_CODE
 and each FILE.B32 the same with /A32 in place of /A64,
 plus the qualifiers on its first line if it starts with `! BLISS:` (as
-`! BLISS: /A32/VARIANT=3`), linked and run. Other files (.R64, .REQ...) are
+`! BLISS: /A32/VARIANT=3`), linked and run; a line `! LINK: OTHER` links
+OTHER's object in too, from a program earlier on the command line. Other files (.R64, .REQ...) are
 only copied in, for REQUIRE, unless their first line asks for /LIBRARY:
 those are compiled first, `BLISS/A64/LIBRARY` (`/A32` for .R32 and .REQ),
 for LIBRARY. Next to each program it writes:
@@ -77,10 +78,14 @@ def script(files):
             continue
         extra = qualifiers(path)
         bliss = BLISS.replace("/A64", "/A32") if ext.upper() == ".B32" else BLISS
+        # `! LINK: OTHER` links OTHER's object too, compiled before.
+        with open(path, encoding="latin-1") as f:
+            other = re.search(r"^! LINK: (\w+)", f.read(), re.M)
+        objects = name + ("," + other.group(1) if other else "")
         cmds += [mark("BEGIN LOG", name),
                  f"{bliss}{extra} {name}{ext.upper()}",
                  f'WRITE SYS$OUTPUT "BLISS status ", $STATUS',
-                 f"LINK {name}",
+                 f"LINK {objects}",
                  f'WRITE SYS$OUTPUT "LINK status ", $STATUS',
                  mark("BEGIN LIS", name),
                  f"TYPE {name}.LIS",

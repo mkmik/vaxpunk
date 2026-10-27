@@ -136,6 +136,40 @@ impl Parser<'_> {
         }
     }
 
+    /// CHECK_ALIGNMENT, at a structure reference `e` whose field is a
+    /// word, longword or quadword not at a multiple of its size from the
+    /// data's start, as BLOCK[1, 8, 16, 0] (oracle STRUC10).
+    pub(crate) fn check_field_align(&mut self, e: &Expr, at: &Lexeme) {
+        let Expr::Field(addr, pos, size, _) = e else {
+            return;
+        };
+        let (Some(pos), Some(size)) = (crate::parse::fold(pos), crate::parse::fold(size)) else {
+            return;
+        };
+        let name = match size {
+            16 => "Word",
+            32 => "Longword",
+            64 => "Quadword",
+            _ => return,
+        };
+        // The constant part of the address: the field's byte offset.
+        fn offset(e: &Expr) -> i64 {
+            match e {
+                Expr::Num(n) => *n,
+                Expr::Bin(crate::parse::BOp::Add, a, b) => offset(a) + offset(b),
+                Expr::Bin(crate::parse::BOp::Sub, a, b) => offset(a) - offset(b),
+                _ => 0,
+            }
+        }
+        if (offset(addr) * 8 + pos).rem_euclid(size) != 0 && self.switch_on("CHECK_ALIGNMENT") {
+            self.diag(
+                'W',
+                at,
+                format!("{name} field reference is not {name} aligned"),
+            );
+        }
+    }
+
     /// CHECK_SHARE, at an INITIAL value that is an address, which the
     /// image activator must fix up, in psect `psect` (RN 2.19.6).
     pub(crate) fn check_share(&mut self, psect: &str, at: &Lexeme) {
@@ -202,6 +236,16 @@ impl Parser<'_> {
             && self.switch_on("CHECK_SHORT_ADDRESS")
         {
             self.diag('I', at, "Storing to a short address".into());
+        }
+        // A NOVALUE routine's call (oracle MSGS).
+        if let Expr::Call(t, ..) = right
+            && let Expr::Name(id) = **t
+            && let Kind::Routine { novalue: true, .. } = self.m.syms[id].kind
+            && let Some(at) = self.call_at.clone()
+        {
+            let msg = format!("ROUTINE {} has no value", self.m.syms[id].name);
+            self.late.push(self.diags.len());
+            self.diag('W', &at, msg);
         }
         // A field's value is its address only if it starts a byte's
         // first bit (LRM 5.1.2).

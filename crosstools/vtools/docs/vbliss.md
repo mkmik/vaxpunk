@@ -31,6 +31,21 @@ device before the name stands for those directories; a VMS directory,
 BLISS writes them on a terminal: the line, a marker under the place, the
 message and where.
 
+### Diagnostics
+
+The messages are BLISSA64's, in its words and severities, wherever vbliss
+has the same thing to say; only what is vaxpunk's own, its registers, PAL
+calls and limits, is said in vbliss's words. As BLISSA64 does, vbliss
+repairs what it can and goes on: a missing operand becomes a zero ("Missing
+operand following "=".  A literal zero has been inserted"), an undeclared
+name an external with a warning, and a name that is no attribute is
+skipped with one. After an error it skips to the end of the declaration
+or the block's expression it was in, and goes on to report the module's
+other errors, up to `/ERROR_LIMIT` (30). A routine with an error gets no
+warnings about values, as BLISSA64 checks them only in a routine that
+parsed. The compiler's message table is in `BLISS64EN.EXE` on the
+oracle's disk.
+
 ```
 vbliss hello.b64
 vmacro -o putoutput.obj crosstools/vtools/lib/putoutput.mar

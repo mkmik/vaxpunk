@@ -1,0 +1,33 @@
+                                Source Listing                  DD-MMM-YYYY HH:MM:SS  BLISS-64E V1.11-007-48G4L         Page 1
+                                Source Listing                  DD-MMM-YYYY HH:MM:SS  SYS$SYSDEVICE:[ORACLE]DIAG2.B64;1
+
+    0	      1 MODULE DIAG2 (MAIN = M) =
+    0	      2 BEGIN
+    1	      3 ! Messages: a NOVALUE routine's value used, a macro without its actuals,
+    1	      4 ! an unknown name in a block, an extra END.
+    1	      5 ROUTINE NV : NOVALUE = 0;
+    1	      6 MACRO TWO(A, B) = A + B %;
+    1	      7 ROUTINE M =
+    1	      8     BEGIN
+    2	      9     LOCAL Z;
+    2	     10     Z = NV();
+    2	     11     Z = TWO;
+		...........1 
+%BLS64-E-TEXT, (1) Missing actual parameter list for macro TWO
+
+    2	     12     Z = .UNKNOWN;
+		.........1        
+%BLS64-W-TEXT, (1) Undeclared name:  UNKNOWN
+
+    2	     13     1
+    2	     14     END;
+    1	     15 END
+    1	     16 ELUDOM
+
+
+DIAG2                           Source Listing                  DD-MMM-YYYY HH:MM:SS  BLISS-64E V1.11-007-48G4L         Page 2
+                                Source Listing                  DD-MMM-YYYY HH:MM:SS  SYS$SYSDEVICE:[ORACLE]DIAG2.B64;1
+
+COMMAND LINE:
+
+BLISS/A64/LIST/SOURCE_LIST=(EXPAND_MACROS,REQUIRE)/NOMACHINE_CODE DIAG2.B64
