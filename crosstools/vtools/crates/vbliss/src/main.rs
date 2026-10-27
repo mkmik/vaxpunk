@@ -100,6 +100,9 @@ fn run() -> Result<(), String> {
     if out.error().is_some() {
         return Err("ENDDIAGS, compilation failed".into());
     }
+    if out.nocode {
+        return Ok(());
+    }
     if ir || asm {
         print!("{}", if ir { out.ir } else { out.asm }.unwrap_or_default());
         return Ok(());

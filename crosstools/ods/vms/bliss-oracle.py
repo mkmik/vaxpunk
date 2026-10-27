@@ -9,16 +9,22 @@ Each FILE.B64 is compiled with
 and each FILE.B32 the same with /A32 in place of /A64,
 plus the qualifiers on its first line if it starts with `! BLISS:` (as
 `! BLISS: /A32/VARIANT=3`), linked and run. Other files (.R64, .REQ...) are
-only copied in, for REQUIRE. Next to each program it writes:
+only copied in, for REQUIRE, unless their first line asks for /LIBRARY:
+those are compiled first, `BLISS/A64/LIBRARY` (`/A32` for .R32 and .REQ),
+for LIBRARY. Next to each program it writes:
 
     FILE.lis     the listing, its dates blanked
     FILE.stdout  what the program printed (LIB$PUT_OUTPUT's lines)
     FILE.oracle  the compiler's and linker's messages and the exit status
+                 (for a library, the compiler's messages and status)
 
 All files go in one boot of the system disk at $BLISS_ORACLE_DISK (default
 ~/Library/Caches/vaxpunk/bliss-oracle/golden-sys.img), an OpenVMS Alpha
 system with BLISSA64 installed and SYSTEM's password "system": a clone, so
-the disk itself never changes (run-vms.py --system). One way to make it is
+the disk itself never changes (run-vms.py --system). The files go into
+[ORACLE] on a clone of that clone with ods (`$ODS`, by default the
+workspace's target/release/ods), since the console loses lines typed in
+bulk. One way to make the disk is
 an APFS clone of the playground's, while that VM is down:
     cp -c real_vms_playground/sys.img ~/Library/Caches/vaxpunk/bliss-oracle/golden-sys.img
 AXPbox hangs in about one run in six; a run that fails is retried twice.
@@ -32,6 +38,7 @@ DISK = os.environ.get("BLISS_ORACLE_DISK", os.path.expanduser(
     "~/Library/Caches/vaxpunk/bliss-oracle/golden-sys.img"))
 BLISS = "BLISS/A64/LIST/SOURCE_LIST=(EXPAND_MACROS,REQUIRE)/NOMACHINE_CODE"
 PROGRAMS = (".B64", ".B32")
+ODS = os.environ.get("ODS", os.path.join(HERE, "..", "..", "..", "target", "release", "ods"))
 MARK = "@@ORACLE"
 
 
@@ -40,21 +47,32 @@ def mark(what, name):
     return f'WRITE SYS$OUTPUT "@@","ORACLE {what} {name}"'
 
 
+def qualifiers(path):
+    """The qualifiers on a file's first line, `! BLISS: /A32/VARIANT=3`."""
+    with open(path, encoding="latin-1") as f:
+        first = f.readline()
+    return first.split(":", 1)[1].strip() if first.upper().startswith("! BLISS:") else ""
+
+
 def script(files):
     cmds = ["SET TERMINAL/WIDTH=255/PAGE=0/TAB",
-            "CREATE/DIRECTORY SYS$SYSDEVICE:[ORACLE]",
             "SET DEFAULT SYS$SYSDEVICE:[ORACLE]"]
+    # Libraries first: a require file whose first line asks for /LIBRARY.
     for path in files:
-        with open(path, encoding="latin-1") as f:
-            lines = f.read().splitlines()
-        cmds += [f"CREATE {os.path.basename(path)}", *lines, "@@CTRLZ"]
+        name, ext = os.path.splitext(os.path.basename(path))
+        extra = qualifiers(path)
+        if ext.upper() in PROGRAMS or "/LIBRARY" not in extra.upper():
+            continue
+        dialect = "/A32" if ext.upper() in (".R32", ".REQ") else "/A64"
+        cmds += [mark("BEGIN LIB", name),
+                 f"BLISS{dialect}{extra} {name}{ext.upper()}",
+                 'WRITE SYS$OUTPUT "BLISS status ", $STATUS',
+                 mark("END", name)]
     for path in files:
         name, ext = os.path.splitext(os.path.basename(path))
         if ext.upper() not in PROGRAMS:
             continue
-        with open(path, encoding="latin-1") as f:
-            first = f.readline()
-        extra = first.split(":", 1)[1].strip() if first.upper().startswith("! BLISS:") else ""
+        extra = qualifiers(path)
         bliss = BLISS.replace("/A64", "/A32") if ext.upper() == ".B32" else BLISS
         cmds += [mark("BEGIN LOG", name),
                  f"{bliss}{extra} {name}{ext.upper()}",
@@ -86,17 +104,31 @@ def sections(log):
     return out
 
 
+def disk(files, tmp):
+    """A clone of the oracle's disk with the files in [ORACLE], a VAR
+    record a line, as CREATE would have made them."""
+    img = os.path.join(tmp, "sys.img")
+    subprocess.run(["cp", "-c", DISK, img], check=True)
+    subprocess.run([ODS, "mkdir", img, "[ORACLE]"], check=True)
+    for path in files:
+        subprocess.run([ODS, "copy-in", "--mode", "lines-to-records", img, path,
+                        f"[ORACLE]{os.path.basename(path).upper()}"], check=True)
+    return img
+
+
 def boot(files):
     """Runs the files on the oracle's system; returns the console log."""
     os.makedirs(os.path.join(HERE, "logs"), exist_ok=True)
     log = os.path.join(HERE, "logs", time.strftime("oracle-%Y%m%d-%H%M%S.log"))
-    with tempfile.TemporaryDirectory() as tmp:
+    # The clone sits next to the disk, on its file system, so cp -c can clone.
+    with tempfile.TemporaryDirectory(dir=os.path.dirname(DISK)) as tmp:
+        img = disk(files, tmp)
         cmd = os.path.join(tmp, "oracle.dcl")
         with open(cmd, "w", encoding="latin-1") as f:
             f.write("\n".join(script(files)) + "\n")
         for attempt in range(3):
             run = subprocess.run([sys.executable, os.path.join(HERE, "run-vms.py"),
-                                  "--system", DISK, cmd, log])
+                                  "--system", img, cmd, log])
             if run.returncode == 0:
                 return log
             print(f"oracle run {attempt + 1} failed", file=sys.stderr)
@@ -109,6 +141,10 @@ def main(files, log=None):
     for path in files:
         name, ext = os.path.splitext(path)
         key = os.path.basename(name).upper()
+        if ("LIB", key) in found:
+            with open(name + ".oracle", "w") as f:
+                f.write("\n".join(found[("LIB", key)]) + "\n")
+            print(f"{path}: {' '.join(found[('LIB', key)][-1:])}")
         if ext.upper() not in PROGRAMS:
             continue
         if ("OUT", key) not in found:

@@ -43,6 +43,8 @@ pub struct Diag {
 pub struct Output {
     pub ir: Option<String>,
     pub asm: Option<String>,
+    /// NOCODE: no IR, assembly or object, and that's no error.
+    pub nocode: bool,
     pub diags: Vec<Diag>,
     /// The dot lint's warnings (PRD-0004 *The dot lint*), which aren't
     /// BLISS's diagnostics and stay out of the listing.
@@ -101,7 +103,10 @@ pub fn translate(path: &Path, source: &str, opts: &Options) -> Output {
         })
         .collect();
     let (mut ir, mut asm) = (None, None);
-    if let Ok(module) = front.module {
+    let nocode = front.module.as_ref().is_ok_and(|m| m.nocode);
+    if let Ok(module) = front.module
+        && !module.nocode
+    {
         match irgen::generate(&module) {
             Ok(m) => {
                 asm = Some(arm64::module(&m));
@@ -119,6 +124,7 @@ pub fn translate(path: &Path, source: &str, opts: &Options) -> Output {
     Output {
         ir,
         asm,
+        nocode,
         diags,
         lints,
         listing: front.listing,

@@ -122,6 +122,8 @@ pub enum Ins {
     Rpcc(u32),
     /// `bpt`: a breakpoint, `brk`.
     Bpt,
+    /// `comment "text"`: CODECOMMENT's text, a comment in the code.
+    Comment(String),
 }
 
 /// A call by a linkage with registers (`Ins::Link`).
@@ -320,6 +322,7 @@ impl fmt::Display for Ins {
             Ins::RetAddr(d) => write!(f, "%{d} =l retaddr"),
             Ins::Rpcc(d) => write!(f, "%{d} =l rpcc"),
             Ins::Bpt => f.write_str("bpt"),
+            Ins::Comment(s) => write!(f, "comment {s:?}"),
         }
     }
 }

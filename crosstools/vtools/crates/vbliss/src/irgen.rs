@@ -400,6 +400,10 @@ impl Gen<'_> {
                         self.emit(Ins::Bpt);
                         V::C(0)
                     }
+                    Special::Comment(n) => {
+                        self.emit(Ins::Comment(self.m.comments[*n as usize].clone()));
+                        V::C(0)
+                    }
                     Special::RetAddr => {
                         let d = self.temp();
                         self.emit(Ins::RetAddr(d));

@@ -75,6 +75,8 @@ pub enum Special {
     Bpt,
     RetAddr,
     Rpcc,
+    /// CODECOMMENT's text, the module's comment n: a comment in the code.
+    Comment(u32),
 }
 
 /// The PAL calls vaxpunk's PAL has (DESIGN-0001), as BLISS-64's PAL_
@@ -1074,7 +1076,17 @@ impl Parser<'_> {
             if !known(&name) {
                 return Err(self.error_at(&at, format!("{name} is not a built-in vbliss knows")));
             }
-            self.declare(name, Kind::Builtin)?;
+            // Again in the same block is no new declaration: BLISSA64 takes
+            // it, as DEC's VAX built-in macros need (t8y:/host/vdefs).
+            let again = self
+                .scopes
+                .last()
+                .unwrap()
+                .get(&name)
+                .is_some_and(|&id| self.m.syms[id].kind == Kind::Builtin);
+            if !again {
+                self.declare(name, Kind::Builtin)?;
+            }
             if !self.eat_punct(',') {
                 return Ok(());
             }

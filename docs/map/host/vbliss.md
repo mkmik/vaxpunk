@@ -101,14 +101,14 @@ note = "LRM 10.3: FORWARD Y, then OWN or GLOBAL Y (message 086 if never), and an
 [[feature]]
 id = "psect-classes"
 title = "PSECT LINK = and PSECT INITIAL =, and /[NO]INITIAL_PSECT"
-status = "todo"
-note = "RN 2.19.10, 2.22: 'not a storage class for PSECT' today, though bliss64.md says LINK = is accepted"
+status = "done"
+note = "RN 2.19.10, 2.22: accepted; nothing goes in either on ARM64, which has no linkage section and makes a LOCAL's INITIAL code. /[NO]INITIAL_PSECT is #qualifiers'"
 
 [[feature]]
 id = "codecomment"
 title = "CODECOMMENT 'text', ... : block, its text in the machine code listing"
-status = "todo"
-note = "LRM 4.10; today an undeclared name, then a syntax error"
+status = "done"
+note = "LRM 4.10: the texts are comments in the code, `comment` in the IR, ahead of the block's code; the machine code listing (#listing) will show them"
 
 [[feature]]
 id = "register-builtins"
@@ -143,8 +143,8 @@ note = "vbliss::read_source reads a byte a character, and a string's bytes are t
 [[feature]]
 id = "library-semantics"
 title = "LIBRARY as LRM 16.6 has it: lexical functions and switches fixed when the library is compiled, nested libraries' names kept out, /LIBRARY for sources of declarations only"
-status = "todo"
-note = "LIBRARY reads the source as REQUIRE does: V4.3's DEBUG loads STRUCDEF.L32 through three libraries and gets its macros declared twice, and 36 V4.3 library sources stop at 'expected MODULE'. The .L64 format is t8y:/lang/bliss#libraries"
+status = "done"
+note = "LRM 16.6: a library's source is read in a context of its own, which sees the predeclared names and its own, with declarations only (message 200); the module gets the names it declares, not those its own libraries gave it; a library read twice gives the same names. %VARIANT in a library is the module's until probe 15 says otherwise; the .L64 format is t8y:/lang/bliss#libraries"
 
 [[feature]]
 id = "switches"

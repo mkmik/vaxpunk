@@ -175,15 +175,22 @@ impl Parser<'_> {
         self.lx.push_file(name, &text, true)
     }
 
-    /// Reads library `name`'s source next, unlisted.
+    /// Reads library `name`'s source next, unlisted. It ends with Eof,
+    /// which `end_library` takes away once its declarations are read.
     pub(crate) fn library_file(&mut self, name: &str) -> R<()> {
         let text = (self.load)(name).map_err(|e| self.error(e))?;
-        self.lx.push_file(name, &text, true)?;
+        self.lx.push_file(name, &text, false)?;
+        self.lx.files.last_mut().unwrap().require = true;
         let f = self.lx.files.last_mut().unwrap();
         f.listed = f.lines.len() as u32;
         // BLISSA64 numbers the library as one line.
         self.lx.listed += 1;
         Ok(())
+    }
+
+    /// Ends the library whose Eof the parser has read: its stream goes.
+    pub(crate) fn end_library(&mut self) {
+        self.pop_stream();
     }
 
     /// The next lexeme from the streams, unexpanded, and the stream it came
@@ -1112,6 +1119,20 @@ impl Parser<'_> {
                 };
                 flag(matches!(&ps[..], [p] if matches!(&p[..],
                     [Lexeme { tok: Tok::Name(n), .. }] if ours.contains(&n.as_str()))))
+            }
+            "%HOST" | "%TARGET" => {
+                // An architecture and an operating system (RN 2.12): vbliss
+                // compiles for vaxpunk, ARM64 and VMS, and reads as if it
+                // ran there, so a source compiles the same on any host.
+                // Unknown keywords are 0, not an error.
+                let ps = self.params(&name, at)?;
+                flag(
+                    !ps.is_empty()
+                        && ps.iter().all(|p| {
+                            matches!(&p[..],
+                    [Lexeme { tok: Tok::Name(n), .. }] if n == "ARM64" || n == "VMS")
+                        }),
+                )
             }
             "%SWITCHES" => {
                 let mut all = true;

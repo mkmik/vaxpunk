@@ -172,7 +172,7 @@ fn operands(ins: &Ins) -> (Vec<u32>, Vec<&V>) {
         Ins::RegArg(d, _) | Ins::ArgCount(d) | Ins::ArgPtr(d) => (Some(*d), vec![]),
         Ins::ArgN(d, i) => (Some(*d), vec![i]),
         Ins::SetHandler(v) | Ins::SetEnable(v) => (None, vec![v]),
-        Ins::Barrier | Ins::Bpt => (None, vec![]),
+        Ins::Barrier | Ins::Bpt | Ins::Comment(_) => (None, vec![]),
         Ins::Cas(d, a, e, n, _) => (Some(*d), vec![a, e, n]),
         Ins::Pal(d, func, args) => (Some(*d), std::iter::once(func).chain(args).collect()),
         Ins::RetAddr(d) | Ins::Rpcc(d) => (Some(*d), vec![]),
@@ -785,6 +785,7 @@ impl<'a> Routine<'a> {
             }
             Ins::Barrier => self.line("dmb     ish"),
             Ins::Bpt => self.line("brk     #0"),
+            Ins::Comment(s) => self.line(format!("; {s}")),
             Ins::RetAddr(d) => {
                 let rd = self.dst(*d);
                 self.line(format!("ldr     {rd}, [x29, #8]"));

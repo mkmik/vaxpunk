@@ -261,6 +261,10 @@ pub struct Module {
     /// NOCOUNT, the module switch or /NOCOUNT: CALL linkages that say
     /// neither COUNT nor NOCOUNT pass no argument count (RN 2.8.5).
     pub nocount: bool,
+    /// CODECOMMENTs' texts, by number.
+    pub comments: Vec<String>,
+    /// NOCODE: the module is checked, and no code is made of it.
+    pub nocode: bool,
 }
 
 /// A fatal error: the file, line and column (from 0) it is at.
@@ -443,6 +447,10 @@ pub struct Parser<'a> {
     /// The EXTERNAL_NAME and PSECT the last routine attributes gave.
     routine_name: Option<String>,
     routine_psect: Option<String>,
+    /// VARIABLE, and the value's unit and sign (RN 2.29), the last routine
+    /// attributes gave.
+    routine_variable: bool,
+    pub(crate) routine_value: Option<(u8, bool)>,
     /// GLOBAL and EXTERNAL REGISTER data: their registers.
     pub(crate) reg_data: HashMap<usize, u8>,
     /// The routines being parsed: their linkages, and their EXTERNAL
@@ -457,6 +465,15 @@ pub struct Parser<'a> {
     /// OWN and GLOBAL names declared ahead of their declaration: by
     /// FORWARD, or for their own INITIAL (LRM 10.3).
     pub(crate) forward_data: Vec<usize>,
+    /// Routines' input formals, where a declaration or prototype says how
+    /// many, and whether they are VARIABLE: for the count check.
+    pub(crate) formal_counts: HashMap<usize, (usize, bool)>,
+    /// The libraries read, and the names each gives; how deep in a
+    /// library's declarations the parser is, and the names that
+    /// library's own libraries gave it.
+    libraries: HashMap<String, Vec<(String, usize)>>,
+    pub(crate) library_depth: u32,
+    library_imports: Vec<usize>,
 }
 
 /// Parses the module in `text`, from file `name`.
@@ -502,6 +519,8 @@ pub fn parse(name: &str, text: &str, load: Loader, opts: &Options) -> Front {
         whole_actual: false,
         routine_name: None,
         routine_psect: None,
+        routine_variable: false,
+        routine_value: None,
         reg_data: HashMap::new(),
         exits: Vec::new(),
         linkages_now: Vec::new(),
@@ -509,6 +528,10 @@ pub fn parse(name: &str, text: &str, load: Loader, opts: &Options) -> Front {
         routine_count: 0,
         local_owner: HashMap::new(),
         forward_data: Vec::new(),
+        formal_counts: HashMap::new(),
+        libraries: HashMap::new(),
+        library_depth: 0,
+        library_imports: Vec::new(),
     };
     p.lx.variant = opts.variant;
     p.m.dialect = opts.dialect;
@@ -803,6 +826,7 @@ impl Parser<'_> {
         for (name, on) in [
             ("%BLISS16", false),
             ("%BLISS32", a32),
+            ("%BLISS32V", false),
             ("%BLISS36", false),
             ("%BLISS32E", a32),
             ("%BLISS64E", !a32),
@@ -828,13 +852,45 @@ impl Parser<'_> {
         }
     }
 
-    /// Whether a %SWITCHES switch is on.
+    /// Whether on-off switch `name` is on in the block (`NOname` for its
+    /// off): as the innermost SWITCHES declaration or module head set it,
+    /// else by default (LRM 18.2, 19.2; RN 2.26).
     pub(crate) fn switch_on(&self, name: &str) -> bool {
-        // ponytail: the defaults only, until SWITCHES declarations matter.
-        matches!(
-            name,
-            "ERRS" | "OPTIMIZE" | "SAFE" | "NOZIP" | "CODE" | "NODEBUG" | "NOUNAMES"
-        )
+        let (base, off) = match name.strip_prefix("NO") {
+            Some(b) if SWITCH_DEFAULTS.iter().any(|(s, _)| *s == b) => (b, true),
+            _ => (name, false),
+        };
+        let on = match self.lookup(&format!("%SWITCH {base}")) {
+            Some(id) => self.m.syms[id].kind == Kind::Literal(1),
+            None => SWITCH_DEFAULTS
+                .iter()
+                .find(|(s, _)| *s == base)
+                .is_some_and(|(_, d)| *d),
+        };
+        on != off
+    }
+
+    /// Sets on-off switch `name` (or turns off `NOname`) in the block;
+    /// false if it isn't one.
+    fn set_switch(&mut self, name: &str) -> bool {
+        let (base, on) = match name.strip_prefix("NO") {
+            Some(b) if SWITCH_DEFAULTS.iter().any(|(s, _)| *s == b) => (b, false),
+            _ => (name, true),
+        };
+        if !SWITCH_DEFAULTS.iter().any(|(s, _)| *s == base) {
+            return false;
+        }
+        let id = self.m.syms.len();
+        self.m.syms.push(Sym {
+            name: format!("%SWITCH {base}"),
+            asm: String::new(),
+            kind: Kind::Literal(i64::from(on)),
+        });
+        self.scopes
+            .last_mut()
+            .unwrap()
+            .insert(format!("%SWITCH {base}"), id);
+        true
     }
 
     /// Whether `e` is a link-time constant: an address of static data or a
@@ -998,6 +1054,7 @@ impl Parser<'_> {
         if *self.peek() != Tok::Eof {
             return self.err("text after ELUDOM");
         }
+        self.m.nocode = !self.switch_on("CODE");
         if let Some(&id) = self.forward_data.first() {
             let n = self.m.syms[id].name.clone();
             return self.err(format!("Name declared FORWARD is not defined: {n}"));
@@ -1025,6 +1082,8 @@ impl Parser<'_> {
         }
         if name == "COUNT" || name == "NOCOUNT" {
             self.m.nocount = name == "NOCOUNT";
+        }
+        if !self.at_punct('(') && !self.at_punct('=') && self.set_switch(&name) {
             return Ok(());
         }
         if name == "LINKAGE" && self.eat_punct('(') {
@@ -1128,6 +1187,8 @@ impl Parser<'_> {
         loop {
             if self.eat("REQUIRE") {
                 self.require()?;
+            } else if self.eat("LIBRARY") {
+                self.library()?;
             } else if self.declaration()? {
                 self.expect_punct(';')?;
             } else {
@@ -1143,6 +1204,103 @@ impl Parser<'_> {
         };
         self.expect_punct(';')?;
         self.require_file(&String::from_utf8_lossy(&name))
+    }
+
+    /// `LIBRARY 'file';`, after the word: the declarations of the
+    /// library's source (docs/bliss64.md *Libraries*), read as LRM 16.6
+    /// has a precompiled library: in a context of its own, which sees the
+    /// predeclared names and its own, so that its lexical processing is
+    /// its own; with declarations only; and giving the block the names it
+    /// declares, not those its own libraries brought it. A library read
+    /// again gives the same names.
+    pub(crate) fn library(&mut self) -> R<()> {
+        let Tok::Str(name) = self.next() else {
+            return self.err("Missing quoted string following REQUIRE or LIBRARY");
+        };
+        self.expect_punct(';')?;
+        let name = String::from_utf8_lossy(&name).into_owned();
+        let names = match self.libraries.get(&name) {
+            Some(names) => names.clone(),
+            None => {
+                let names = self.read_library(&name)?;
+                self.libraries.insert(name, names.clone());
+                names
+            }
+        };
+        for (n, id) in names {
+            match self.scopes.last().unwrap().get(&n) {
+                Some(&old) if old != id => {
+                    return self.err(format!("Name already declared in this block: {n}"));
+                }
+                _ => {
+                    self.scopes.last_mut().unwrap().insert(n, id);
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Parses library `name`'s declarations in a context of their own;
+    /// returns the names they declare.
+    fn read_library(&mut self, name: &str) -> R<Vec<(String, usize)>> {
+        // The lexemes already read ahead are the declaration's: none.
+        self.toks.truncate(self.pos);
+        self.library_file(name)?;
+        let predeclared = self.scopes[0].clone();
+        let outer = std::mem::replace(&mut self.scopes, vec![predeclared, HashMap::new()]);
+        let forward = std::mem::take(&mut self.forward_data);
+        let outer_imports = std::mem::take(&mut self.library_imports);
+        self.library_depth += 1;
+        let r = self.library_declarations();
+        self.library_depth -= 1;
+        self.forward_data = forward;
+        let imported = std::mem::replace(&mut self.library_imports, outer_imports);
+        let mut scopes = std::mem::replace(&mut self.scopes, outer);
+        r?;
+        // Names its own libraries gave it stay its own.
+        let mut names: Vec<(String, usize)> = scopes
+            .pop()
+            .unwrap()
+            .into_iter()
+            .filter(|(_, id)| !imported.contains(id))
+            .collect();
+        names.sort();
+        Ok(names)
+    }
+
+    /// The declarations of a library's source, up to its end.
+    fn library_declarations(&mut self) -> R<()> {
+        loop {
+            if self.eat("REQUIRE") {
+                self.require()?;
+            } else if self.eat("LIBRARY") {
+                // Its names are the library's to use, not to give.
+                let before: Vec<usize> = self.scopes.last().unwrap().values().copied().collect();
+                self.library()?;
+                let new: Vec<usize> = self
+                    .scopes
+                    .last()
+                    .unwrap()
+                    .values()
+                    .copied()
+                    .filter(|id| !before.contains(id))
+                    .collect();
+                self.library_imports.extend(new);
+            } else if self.at_punct(';') {
+                self.pos += 1;
+            } else if self.declaration()? {
+                self.expect_punct(';')?;
+            } else {
+                break;
+            }
+        }
+        if *self.peek() != Tok::Eof {
+            return self.err("Library source module must contain only declarations");
+        }
+        // The library's Eof, in `toks` at `pos`, goes with its stream.
+        self.toks.truncate(self.pos);
+        self.end_library();
+        Ok(())
     }
 
     /// MACRO or KEYWORDMACRO definitions, after the word.
@@ -1184,7 +1342,9 @@ impl Parser<'_> {
                     }
                 }
             } else if keyword {
-                return self.err(format!("expected ( after keyword macro name {name}"));
+                // Without formals it is a simple macro, as BLISSA64 takes
+                // DEC's STARLET.R64's $CREATE_MAPPING and the like.
+                kind = MacroKind::Simple;
             }
             let fixed = formals.len();
             if !keyword && self.eat_punct('[') {
@@ -1222,6 +1382,25 @@ impl Parser<'_> {
         let Tok::Name(word) = self.peek().clone() else {
             return Ok(false);
         };
+        // A library declares names only (LRM 16.6.2).
+        let external = matches!(self.peek2(), Tok::Name(n) if n == "ROUTINE" || n == "LITERAL");
+        if self.library_depth > 0
+            && (matches!(
+                word.as_str(),
+                "OWN"
+                    | "GLOBAL"
+                    | "LOCAL"
+                    | "STACKLOCAL"
+                    | "REGISTER"
+                    | "ROUTINE"
+                    | "MAP"
+                    | "LABEL"
+                    | "ENABLE"
+                    | "PSECT"
+            ) || word == "FORWARD" && !external)
+        {
+            return self.err("Illegal declaration type in library source module");
+        }
         let global = word == "GLOBAL";
         let external = word == "EXTERNAL";
         let forward = word == "FORWARD";
@@ -1359,19 +1538,6 @@ impl Parser<'_> {
                 self.pos += 1;
                 self.enable()?;
             }
-            "LIBRARY" => {
-                self.pos += 1;
-                let Tok::Str(name) = self.next() else {
-                    return self.err("expected a file name after LIBRARY");
-                };
-                if !self.at_punct(';') {
-                    let found = self.describe();
-                    return self.err(format!("expected ;, found {found}"));
-                }
-                // The library's source, read as a require file the listing
-                // doesn't show (docs/bliss64.md, *Libraries*).
-                self.library_file(&String::from_utf8_lossy(&name))?;
-            }
             "REGISTER" => {
                 self.pos += 1;
                 self.registers(false, false)?;
@@ -1500,7 +1666,11 @@ impl Parser<'_> {
                 "GLOBAL" => p.global = name,
                 "PLIT" => p.plit = name,
                 "CODE" => p.code = name,
-                "NODEFAULT" => {}
+                // ARM64 code reaches its data PC-relative, with no linkage
+                // section, and a LOCAL's INITIAL is code, with no constant
+                // data behind it (docs/bliss64.md *Psects*): nothing goes
+                // in either.
+                "NODEFAULT" | "LINK" | "INITIAL" => {}
                 _ => return self.err(format!("{class} is not a storage class for PSECT")),
             }
             if !self.eat_punct(',') {
@@ -1532,6 +1702,12 @@ impl Parser<'_> {
     pub(crate) fn routine_names(&mut self) -> R<()> {
         loop {
             let name = self.name()?;
+            // A prototype: the formals, with their attributes (RN 2.19.8).
+            let formals = if self.at_punct('(') {
+                Some(self.formal_list()?.0.len())
+            } else {
+                None
+            };
             let (novalue, linkage) = self.routine_attributes()?;
             let linkage = linkage.or_else(|| self.default_linkage());
             let id = self.declare(
@@ -1546,6 +1722,9 @@ impl Parser<'_> {
             if let Some(n) = self.routine_name.take() {
                 self.m.syms[id].asm = n;
             }
+            if let Some(n) = formals {
+                self.formal_counts.insert(id, (n, self.routine_variable));
+            }
             if !self.eat_punct(',') {
                 return Ok(());
             }
@@ -1559,6 +1738,9 @@ impl Parser<'_> {
         let (mut novalue, mut linkage) = (false, None);
         self.routine_name = None;
         self.routine_psect = None;
+        self.routine_variable = false;
+        self.routine_value = None;
+        let (mut unit, mut signed) = (None, None);
         if self.eat_punct(':') {
             loop {
                 if self.eat("NOVALUE") {
@@ -1569,7 +1751,34 @@ impl Parser<'_> {
                     self.expect_punct('(')?;
                     self.routine_psect = Some(self.name()?);
                     self.expect_punct(')')?;
-                } else if self.eat("WEAK") || self.eat("VARIABLE") {
+                } else if self.eat("VARIABLE") {
+                    self.routine_variable = true;
+                } else if self.eat("WEAK") {
+                } else if self.eat("ADDRESSING_MODE") {
+                    // Meaningless on ARM64, as on Alpha (RN 2.21).
+                    self.skip_parenthesized()?;
+                } else if let Tok::Name(n) = self.peek().clone()
+                    && let Some(u) = crate::data::unit(&n)
+                {
+                    // The value's unit and sign (RN 2.29).
+                    self.pos += 1;
+                    unit = Some(u);
+                } else if self.eat("SIGNED") {
+                    signed = Some(true);
+                } else if self.eat("UNSIGNED") {
+                    signed = Some(false);
+                } else if self.eat("REF") {
+                    // The value is a pointer to such a structure.
+                    self.struct_attr(true)?;
+                } else if self.eat("FIELD") {
+                    self.skip_parenthesized()?;
+                } else if let Tok::Name(n) = self.peek().clone()
+                    && matches!(
+                        self.lookup(&n).map(|id| &self.m.syms[id].kind),
+                        Some(Kind::Structure(_))
+                    )
+                {
+                    self.struct_attr(false)?;
                 } else if let Tok::Name(n) = self.peek().clone()
                     && let Some(Kind::Linkage(l)) = self.lookup(&n).map(|id| &self.m.syms[id].kind)
                 {
@@ -1580,33 +1789,54 @@ impl Parser<'_> {
                 }
             }
         }
+        if unit.is_some() || signed.is_some() {
+            let u = unit.unwrap_or(self.m.dialect.fullword());
+            self.routine_value = Some((u, signed.unwrap_or(false)));
+        }
         Ok((novalue, linkage))
+    }
+
+    /// `(formal : attributes, ...; output, ...)`: a routine's formals
+    /// and its output formals.
+    #[allow(clippy::type_complexity)]
+    fn formal_list(
+        &mut self,
+    ) -> R<(
+        Vec<(String, crate::data::Attrs)>,
+        Vec<(String, crate::data::Attrs)>,
+    )> {
+        let (mut names, mut out_names) = (Vec::new(), Vec::new());
+        self.expect_punct('(')?;
+        let mut list = &mut names;
+        loop {
+            if self.eat_punct(';') {
+                list = &mut out_names;
+            }
+            let n = self.name()?;
+            let a = if self.eat_punct(':') {
+                self.attributes()?
+            } else {
+                crate::data::Attrs::default()
+            };
+            list.push((n, a));
+            if !self.eat_punct(',') && !self.at_punct(';') {
+                break;
+            }
+        }
+        self.expect_punct(')')?;
+        Ok((names, out_names))
     }
 
     pub(crate) fn routine(&mut self, global: bool) -> R<()> {
         let name = self.name()?;
-        let (mut names, mut out_names) = (Vec::new(), Vec::new());
-        if self.eat_punct('(') {
-            let mut list = &mut names;
-            loop {
-                if self.eat_punct(';') {
-                    list = &mut out_names;
-                }
-                let n = self.name()?;
-                let a = if self.eat_punct(':') {
-                    self.attributes()?
-                } else {
-                    crate::data::Attrs::default()
-                };
-                list.push((n, a));
-                if !self.eat_punct(',') && !self.at_punct(';') {
-                    break;
-                }
-            }
-            self.expect_punct(')')?;
-        }
+        let (names, out_names) = if self.at_punct('(') {
+            self.formal_list()?
+        } else {
+            (Vec::new(), Vec::new())
+        };
         let (mut novalue, mut linkage) = self.routine_attributes()?;
         let (asm, psect) = (self.routine_name.take(), self.routine_psect.take());
+        let variable = self.routine_variable;
         if linkage.is_none()
             && let Some(Kind::Routine { linkage: l, .. }) = self
                 .scopes
@@ -1661,6 +1891,7 @@ impl Parser<'_> {
         if let Some(n) = asm {
             self.m.syms[sym].asm = n;
         }
+        self.formal_counts.insert(sym, (names.len(), variable));
         self.expect_punct('=')?;
         let outer = std::mem::take(&mut self.slots);
         self.scopes.push(HashMap::new());
@@ -2076,6 +2307,36 @@ impl Parser<'_> {
             Tok::Punct('(') => self.block(')'),
             Tok::Name(n) => match n.as_str() {
                 "BEGIN" => self.block('E'),
+                "CODECOMMENT" => {
+                    // CODECOMMENT 'text', ... : block (LRM 4.10): the texts
+                    // go in the code as comments, before the block's.
+                    let mut texts = Vec::new();
+                    loop {
+                        let Tok::Str(s) = self.next() else {
+                            return self.err("expected a quoted string after CODECOMMENT");
+                        };
+                        texts.push(String::from_utf8_lossy(&s).into_owned());
+                        if !self.eat_punct(',') {
+                            break;
+                        }
+                    }
+                    self.expect_punct(':')?;
+                    let mut es: Vec<Expr> = texts
+                        .into_iter()
+                        .map(|t| {
+                            self.m.comments.push(t);
+                            let n = self.m.comments.len() as u32 - 1;
+                            Expr::Special(crate::builtin::Special::Comment(n), Vec::new())
+                        })
+                        .collect();
+                    let at = self.here();
+                    let block = self.primary()?;
+                    if !matches!(block, Expr::Block(..)) {
+                        return Err(self.error_at(&at, "CODECOMMENT's text is followed by a block"));
+                    }
+                    es.push(block);
+                    Ok(Expr::Block(es, true))
+                }
                 "IF" => {
                     let c = self.expr()?;
                     self.lint_test(&c, &at);
@@ -2410,6 +2671,33 @@ fn string_value(s: &[u8]) -> Option<i64> {
 
 /// The value of a constant expression, as the fullword arithmetic gives
 /// it, or None.
+/// The on-off switches and whether each is on by default: the LRM's
+/// (18.2, 19.2) and the Alpha compilers' (RN 2.8.5, 2.26), with the
+/// `/CHECK` options' defaults (RN 2.19.2).
+const SWITCH_DEFAULTS: &[(&str, bool)] = &[
+    ("ERRS", true),
+    ("OPTIMIZE", true),
+    ("SAFE", true),
+    ("ZIP", false),
+    ("CODE", true),
+    ("DEBUG", false),
+    ("TRACEBACK", true),
+    ("UNAMES", false),
+    ("OVERFLOW", false),
+    ("COUNT", true),
+    ("QUAD_LITERALS", true),
+    ("ALPHA_REGISTER_MAPPING", false),
+    ("CHECK_ADDRESS_TAKEN", false),
+    ("CHECK_ALIGNMENT", true),
+    ("CHECK_FIELD", true),
+    ("CHECK_LONGWORD", false),
+    ("CHECK_OPTIMIZE", true),
+    ("CHECK_PARAMETERS", false),
+    ("CHECK_REDECLARE", false),
+    ("CHECK_SHARE", true),
+    ("CHECK_SHORT_ADDRESS", false),
+];
+
 pub fn fold(e: &Expr) -> Option<i64> {
     Some(wrap(match e {
         Expr::Num(n) => *n,

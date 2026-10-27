@@ -206,3 +206,113 @@ fn data_attributes() {
         "Literal value cannot be represented in the declared number of bits"
     );
 }
+
+#[test]
+fn psect_classes() {
+    // Nothing goes in a linkage section or $INITIAL$ on ARM64 (RN 2.22).
+    ir(&module(
+        "PSECT LINK = MYLINK (READ, NOWRITE), INITIAL = MYINIT (NOWRITE);",
+        "BEGIN\nLOCAL L : VECTOR[3] INITIAL(1, 2, 3);\n.L[2]\nEND;",
+    ));
+}
+
+#[test]
+fn codecomment() {
+    // CODECOMMENT's texts are comments in the code; its value is the
+    // block's (LRM 4.10).
+    let out = translate(&module(
+        "OWN X;",
+        "X = CODECOMMENT 'one', 'two' : BEGIN 5 END;",
+    ));
+    let (ir, asm) = (out.ir.unwrap(), out.asm.unwrap());
+    assert!(
+        ir.contains("comment \"one\"") && ir.contains("store8 5, $X"),
+        "{ir}"
+    );
+    assert!(asm.contains("; one\n        ; two"), "{asm}");
+}
+
+#[test]
+fn host_and_target() {
+    // vaxpunk is ARM64 and VMS; an unknown keyword is 0 (RN 2.12).
+    let out = translate(&module(
+        "%PRINT(%TARGET(ARM64), %TARGET(VMS), %TARGET(ARM64, VMS), %TARGET(ALPHA), %HOST(VMS), \
+         %HOST(FOO), %BLISS(BLISS32V), '[', %BLISS32V(1), ']')",
+        "",
+    ));
+    assert!(
+        out.listing.contains("%PRINT:\t1110100[]"),
+        "{}",
+        out.listing
+    );
+}
+
+#[test]
+fn switches() {
+    // %SWITCHES sees the module head's and SWITCHES' settings, block by
+    // block (LRM 18.2); NOCODE checks the module and makes no code.
+    let out = translate(
+        "MODULE T (NOSAFE, ZIP) =\nBEGIN\n%PRINT(%SWITCHES(SAFE), %SWITCHES(ZIP), %SWITCHES(ERRS))\n\
+         SWITCHES SAFE, NOCHECK_ALIGNMENT;\n%PRINT(%SWITCHES(SAFE), %SWITCHES(CHECK_ALIGNMENT))\n\
+         ROUTINE R = BEGIN SWITCHES NOSAFE; %PRINT(%SWITCHES(SAFE)) 0 END;\n\
+         %PRINT(%SWITCHES(SAFE), %SWITCHES(OVERFLOW), %SWITCHES(QUAD_LITERALS))\nEND\nELUDOM\n",
+    );
+    for want in [
+        "%PRINT:\t011",
+        "%PRINT:\t10",
+        "%PRINT:\t0\n",
+        "%PRINT:\t101",
+    ] {
+        assert!(out.listing.contains(want), "{want}: {}", out.listing);
+    }
+    let out = translate("MODULE T (NOCODE) =\nBEGIN\nROUTINE R = 1;\nEND\nELUDOM\n");
+    assert!(out.error().is_none() && out.nocode && out.asm.is_none());
+}
+
+#[test]
+fn libraries() {
+    // A library's source is read in a context of its own: it doesn't see
+    // the module's names, gives the module only the names it declares
+    // itself, and holds declarations only (LRM 16.6).
+    let dir = std::path::Path::new(env!("CARGO_TARGET_TMPDIR")).join("libraries");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("la.r64"), "LITERAL A1 = 1;\nMACRO MA = 2 %;\n").unwrap();
+    std::fs::write(
+        dir.join("lb.r64"),
+        "LIBRARY 'LA';\nKEYWORDMACRO K(IDENT = 0) = IDENT + A1 %;\nLITERAL B1 = A1 + 1;\n",
+    )
+    .unwrap();
+    std::fs::write(dir.join("lc.r64"), "OWN X;\n").unwrap();
+    let path = dir.join("t.b64");
+    let src = module(
+        "MACRO IDENT = 'V1' %;\nLIBRARY 'LB';\nLIBRARY 'LB';\n\
+         %PRINT(%DECLARED(A1), %DECLARED(B1), %DECLARED(%QUOTE MA), %DECLARED(%QUOTE K))",
+        "",
+    );
+    let out = vbliss::translate(&path, &src, &vbliss::Options::default());
+    assert!(out.error().is_none(), "{:?}", out.error());
+    assert!(out.listing.contains("%PRINT:\t0101"), "{}", out.listing);
+    let out = vbliss::translate(
+        &path,
+        &module("LIBRARY 'LC';", ""),
+        &vbliss::Options::default(),
+    );
+    assert_eq!(
+        out.error().map(|d| d.msg.as_str()),
+        Some("Illegal declaration type in library source module")
+    );
+}
+
+#[test]
+fn dec_forms() {
+    // What DEC's own libraries lean on, which BLISSA64 takes: a
+    // KEYWORDMACRO without formals, BUILTIN again in a block, prototypes,
+    // routine value attributes and ADDRESSING_MODE.
+    ir(&module(
+        "KEYWORDMACRO KZ = 5 %;\nBUILTIN ROT;\nBUILTIN ROT, BARRIER;\n\
+         EXTERNAL ROUTINE P (A, B : REF VECTOR) : NOVALUE ADDRESSING_MODE(GENERAL),\n\
+         Q : BLISS ADDRESSING_MODE(GENERAL) LONG SIGNED;\n\
+         FORWARD ROUTINE F (A) : NOVALUE;\nROUTINE F (A) : NOVALUE = 0;\nOWN X;",
+        "X = KZ + ROT(1, 1) + Q();\nP(1, X);\nF(2);",
+    ));
+}
