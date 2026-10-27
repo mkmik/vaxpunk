@@ -1320,6 +1320,18 @@ impl<'a> Routine<'a> {
                 Op::Sar => self.line(three("asr")),
                 Op::Ror => self.line(three("ror")),
                 Op::Umulh => self.line(three("umulh")),
+                Op::Addv | Op::Subv => {
+                    let m = if op == Op::Addv { "adds" } else { "subs" };
+                    self.line(format!("{m:<8}xzr, {a}, {b}"));
+                    self.line(format!("cset    {r}, vs"));
+                }
+                Op::Mulv => {
+                    // The product fits if its high half is its sign.
+                    self.line(format!("mul     x12, {a}, {b}"));
+                    self.line(format!("smulh   x13, {a}, {b}"));
+                    self.line("cmp     x13, x12, asr #63");
+                    self.line(format!("cset    {r}, ne"));
+                }
                 Op::Ash => {
                     // A count past 63 shifts everything out, as BLISSA64's
                     // code does (oracle EDGES7): 0 left, the sign right.

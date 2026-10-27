@@ -2175,7 +2175,23 @@ impl Parser<'_> {
                 Expr::Num(0)
             };
             self.lint_operands(op, &left, &right, &op_at);
-            left = Expr::Bin(op, Box::new(left), Box::new(right));
+            let checked = match op {
+                BOp::Add => Some(crate::ir::Op::Add),
+                BOp::Sub => Some(crate::ir::Op::Sub),
+                BOp::Mul => Some(crate::ir::Op::Mul),
+                _ => None,
+            };
+            left = match checked {
+                // OVERFLOW: arithmetic that signals (RN 2.26).
+                Some(o)
+                    if self.slots_open()
+                        && self.switch_on("OVERFLOW")
+                        && (fold(&left).is_none() || fold(&right).is_none()) =>
+                {
+                    Expr::Special(crate::builtin::Special::Checked(o), vec![left, right])
+                }
+                _ => Expr::Bin(op, Box::new(left), Box::new(right)),
+            };
         }
         Ok(left)
     }
@@ -2794,6 +2810,14 @@ pub fn fold(e: &Expr) -> Option<i64> {
         Expr::Not(a) => !fold(a)?,
         Expr::Block(es, true) if es.len() == 1 => fold(&es[0])?,
         Expr::Bin(op, a, b) => binop(*op, fold(a)?, fold(b)?)?,
+        Expr::Special(crate::builtin::Special::Checked(o), args) => {
+            let op = match o {
+                crate::ir::Op::Add => BOp::Add,
+                crate::ir::Op::Sub => BOp::Sub,
+                _ => BOp::Mul,
+            };
+            binop(op, fold(&args[0])?, fold(&args[1])?)?
+        }
         _ => return None,
     }))
 }

@@ -42,6 +42,11 @@ pub enum Op {
     Ror,
     /// The high 64 bits of the unsigned 128-bit product.
     Umulh,
+    /// 1 if a + b, a - b or a * b overflows 64 bits, else 0: for the
+    /// OVERFLOW switch.
+    Addv,
+    Subv,
+    Mulv,
     /// Comparisons, 1 if true, else 0; `u` unsigned.
     Ceq,
     Cne,
@@ -278,6 +283,9 @@ impl Op {
             Ash => "ash",
             Ror => "ror",
             Umulh => "umulh",
+            Addv => "addv",
+            Subv => "subv",
+            Mulv => "mulv",
             Ceq => "ceq",
             Cne => "cne",
             Clt => "clt",

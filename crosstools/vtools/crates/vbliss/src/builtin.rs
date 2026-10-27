@@ -87,6 +87,9 @@ pub enum Special {
     /// the routine's floating result is stored. Only in a call's actuals.
     FloatIn(crate::ir::Fl),
     FloatOut(crate::ir::Fl),
+    /// a + b, a - b or a * b under the OVERFLOW switch: an overflow
+    /// signals SS$_INTOVF, and the value is the wrapped one.
+    Checked(crate::ir::Op),
 }
 
 /// The format `%FFLOAT` to `%TFLOAT` name.

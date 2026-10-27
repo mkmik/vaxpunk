@@ -402,3 +402,17 @@ fn macro_actuals() {
         out.listing
     );
 }
+
+#[test]
+fn overflow_switch() {
+    // OVERFLOW checks a routine's +, - and *, signaling SS$_INTOVF and
+    // going on with the wrapped value (RN 2.26); compile-time arithmetic
+    // and NOOVERFLOW, the default, don't.
+    let src = "MODULE T (OVERFLOW) =\nBEGIN\nOWN X, V : VECTOR[2 * 3];\n\
+               ROUTINE R = X = .X + 1 - .X * 2;\nEND\nELUDOM\n";
+    let ir = ir(src);
+    for want in ["addv", "subv", "mulv", "call $LIB$SIGNAL(1148)", "z 48"] {
+        assert!(ir.contains(want), "{want}: {ir}");
+    }
+    assert!(!self::ir(&src.replace("(OVERFLOW)", "")).contains("addv"));
+}

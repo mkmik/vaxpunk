@@ -405,6 +405,37 @@ impl Gen<'_> {
                         self.emit(Ins::FArith(*op, *f, a, b, d));
                         V::C(0)
                     }
+                    Special::Checked(o) => {
+                        // The wrapped value, and SS$_INTOVF (1148, VMS's)
+                        // signaled if it overflowed: 64 bits, or under
+                        // BLISS-32 32.
+                        let (a, b) = (vals.remove(0), vals.remove(0));
+                        let r = self.bin(*o, a.clone(), b.clone());
+                        let flag = if self.m.dialect.a32 {
+                            let n = self.narrow(r.clone());
+                            self.bin(Op::Cne, r.clone(), n)
+                        } else {
+                            let v = match o {
+                                Op::Add => Op::Addv,
+                                Op::Sub => Op::Subv,
+                                _ => Op::Mulv,
+                            };
+                            self.bin(v, a, b)
+                        };
+                        let (sig, ok) = (self.block(), self.block());
+                        self.end(Term::Jlbs(flag, sig, ok));
+                        self.start(sig);
+                        self.externals.insert("LIB$SIGNAL".into());
+                        let d = self.temp();
+                        self.emit(Ins::Call(
+                            Some(d),
+                            V::Sym("LIB$SIGNAL".into(), 0),
+                            vec![V::C(1148)],
+                        ));
+                        self.jump(ok);
+                        self.start(ok);
+                        self.narrow(r)
+                    }
                     Special::FCmp(f) => {
                         let d = self.temp();
                         let (a, b) = (vals.remove(0), vals.remove(0));

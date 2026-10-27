@@ -149,8 +149,8 @@ note = "LRM 16.6: a library's source is read in a context of its own, which sees
 [[feature]]
 id = "switches"
 title = "Switches that act: %SWITCHES and SWITCHES scopes, LIST, ERRS, NOCODE, OVERFLOW checking, QUAD_LITERALS"
-status = "todo"
-note = "parse.rs switch_on returns the defaults; the module head's and SWITCHES' settings are accepted and dropped, so NOCODE writes an object and OVERFLOW wraps. NOQUAD_LITERALS waits for bliss64.md probe 8"
+status = "done"
+note = "LRM 18.2, RN 2.26: on-off switches are kept block by block, %SWITCHES sees them (oracle SWIT); NOCODE makes no object; OVERFLOW checks a routine's +, - and * and signals SS$_INTOVF (BLISSA64's GEM crashes on it); NOQUAD_LITERALS sign-extends as BLISSA64 (oracle QLIT). LIST's options are #listing's, ERRS #qualifiers'"
 
 [[feature]]
 id = "pal-builtins"
