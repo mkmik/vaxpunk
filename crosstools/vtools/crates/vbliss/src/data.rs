@@ -347,8 +347,12 @@ impl Parser<'_> {
                     let f = self.name()?;
                     self.expect_punct('=')?;
                     let comps = self.components()?;
-                    self.field_attributes()?;
-                    set.push(self.declare(f, Kind::Field(comps))?);
+                    let nocheck = self.field_attributes()?;
+                    let id = self.declare(f, Kind::Field(comps))?;
+                    if nocheck {
+                        self.nocheck_fields.push(id);
+                    }
+                    set.push(id);
                     if !self.eat_punct(',') {
                         break;
                     }
@@ -357,8 +361,11 @@ impl Parser<'_> {
                 self.declare(name, Kind::FieldSet(set))?;
             } else {
                 let comps = self.components()?;
-                self.field_attributes()?;
-                self.declare(name, Kind::Field(comps))?;
+                let nocheck = self.field_attributes()?;
+                let id = self.declare(name, Kind::Field(comps))?;
+                if nocheck {
+                    self.nocheck_fields.push(id);
+                }
             }
             if !self.eat_punct(',') {
                 return Ok(());
@@ -367,16 +374,24 @@ impl Parser<'_> {
     }
 
     /// A field's attributes (RN 2.28): VOLATILE, which every access is
-    /// already, and NOCHECK_ALIGNMENT, for /CHECK=ALIGNMENT.
-    fn field_attributes(&mut self) -> R<()> {
+    /// already, and NOCHECK_ALIGNMENT, which keeps /CHECK=ALIGNMENT off
+    /// references with the field: whether it has that.
+    fn field_attributes(&mut self) -> R<bool> {
+        let mut nocheck = false;
         if self.eat_punct(':') {
-            while self.eat("VOLATILE") || self.eat("NOCHECK_ALIGNMENT") {}
+            loop {
+                if self.eat("NOCHECK_ALIGNMENT") {
+                    nocheck = true;
+                } else if !self.eat("VOLATILE") {
+                    break;
+                }
+            }
             if !self.at_punct(',') && !self.at("TES") && !self.at_punct(';') {
                 let found = self.describe();
                 return self.err(format!("{found} is not a field attribute"));
             }
         }
-        Ok(())
+        Ok(nocheck)
     }
 
     /// A field's components: `[ctce, ...]`.
@@ -1072,6 +1087,9 @@ impl Parser<'_> {
                     self.m.syms[data].name
                 );
                 self.diag('W', &at, msg);
+            }
+            if let Some((id, ..)) = &field {
+                self.nocheck_used |= self.nocheck_fields.contains(id);
             }
             let field = field.map(|(_, _, c)| c);
             if self.at_punct(',') || self.at_punct(']') || self.at_punct(';') {

@@ -660,6 +660,10 @@ pub struct Parser<'a> {
     /// Where the last field selector and the last call's actuals began.
     pub(crate) field_at: Option<Lexeme>,
     pub(crate) call_at: Option<Lexeme>,
+    /// The fields declared NOCHECK_ALIGNMENT, and whether the structure
+    /// reference being read has used one.
+    pub(crate) nocheck_fields: Vec<usize>,
+    pub(crate) nocheck_used: bool,
     /// The dot lint's warnings, and how deep in an address it is.
     pub(crate) lints: Vec<Diag>,
     /// Names used without a declaration.
@@ -760,6 +764,8 @@ pub fn parse(name: &str, text: &str, load: Loader, opts: &Options) -> Front {
         late: Vec::new(),
         field_at: None,
         call_at: None,
+        nocheck_fields: Vec::new(),
+        nocheck_used: false,
         lints: Vec::new(),
         undeclared: Vec::new(),
         address_context: 0,
@@ -3005,12 +3011,17 @@ impl Parser<'_> {
                     );
                 };
                 self.pos += 1;
-                let access = self.access_actuals_of(id.map(|id| (id, &a.fields[..])))?;
+                let outer = std::mem::take(&mut self.nocheck_used);
+                let access = self.access_actuals_of(id.map(|id| (id, &a.fields[..])));
+                let nocheck = std::mem::replace(&mut self.nocheck_used, outer);
+                let access = access?;
                 let at = self.last();
                 self.expect_punct(']')?;
                 let seg = if a.refr { Expr::Fetch(Box::new(e)) } else { e };
                 e = self.instantiate(&a.st, seg, access, &a.alloc);
-                self.check_field_align(&e, &at);
+                if !nocheck {
+                    self.check_field_align(&e, &at);
+                }
             } else {
                 return Ok(e);
             }

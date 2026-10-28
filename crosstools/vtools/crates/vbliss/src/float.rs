@@ -66,6 +66,18 @@ pub enum Fit {
 /// in range. None if it isn't a number.
 pub fn literal(fmt: Format, text: &str) -> Option<(u64, Fit)> {
     let (neg, digits, exp10) = decimal(text)?;
+    // A value past 10^400 or below 10^-400 is out of every format's
+    // range: 10^400 or 10^-400 stands for it, to overflow or underflow
+    // without arithmetic on its own exponent.
+    let top = digits
+        .iter()
+        .position(|&d| d != 0)
+        .map(|i| exp10.saturating_add((digits.len() - i) as i64));
+    let (digits, exp10) = match top {
+        Some(t) if t > 400 => (vec![1], 400),
+        Some(t) if t < -400 => (vec![1], -400),
+        _ => (digits, exp10 as i32),
+    };
     let (bits, bias, width) = fmt.layout();
     // BLISSA64 converts a D literal at G's precision, 53 bits, and widens
     // it (oracle FLTLIT2: %D'0.1' ends in D0, not CD).
@@ -138,7 +150,7 @@ pub fn swap_words(v: u64) -> u64 {
 
 /// `[+-] digits [. digits] [E|D|G|Q|S|T [+-] digits]`: the sign, the
 /// digits and the power of ten they are multiplied by.
-fn decimal(text: &str) -> Option<(bool, Vec<u8>, i32)> {
+fn decimal(text: &str) -> Option<(bool, Vec<u8>, i64)> {
     let t = text.trim();
     let (neg, t) = match t.as_bytes().first() {
         Some(b'-') => (true, &t[1..]),
@@ -150,7 +162,7 @@ fn decimal(text: &str) -> Option<(bool, Vec<u8>, i32)> {
         Some(i) => (&t[..i], Some(&t[i + 1..])),
         None => (t, None),
     };
-    let exp: i32 = match exp {
+    let exp: i64 = match exp {
         Some(e) => e.trim().parse().ok()?,
         None => 0,
     };
@@ -161,7 +173,7 @@ fn decimal(text: &str) -> Option<(bool, Vec<u8>, i32)> {
         return None;
     }
     let digits: Vec<u8> = int.bytes().chain(frac.bytes()).map(|c| c - b'0').collect();
-    Some((neg, digits, exp - frac.len() as i32))
+    Some((neg, digits, exp.saturating_sub(frac.len() as i64)))
 }
 
 /// digits * 10^exp10 rounded to `bits` bits, as (e, m, lost): m has its
@@ -344,6 +356,19 @@ mod tests {
         assert_eq!(lit(Format::T, "1E-325"), Some(0));
         assert_eq!(literal(Format::T, "1E400").unwrap().1, Fit::Overflow);
         assert_eq!(literal(Format::T, "1E-320").unwrap().1, Fit::Underflow);
+        // Exponents far out of range, without the arithmetic they'd take.
+        assert_eq!(
+            literal(Format::T, "1E-2147483648"),
+            Some((0, Fit::Underflow))
+        );
+        assert_eq!(
+            literal(Format::T, "-1E-9223372036854775808"),
+            Some((1 << 63, Fit::Underflow))
+        );
+        assert_eq!(
+            literal(Format::T, "1E2147483647"),
+            Some((f64::INFINITY.to_bits(), Fit::Overflow))
+        );
         assert_eq!(
             lit(Format::S, "3.4028235E38"),
             Some(u64::from(f32::MAX.to_bits()))

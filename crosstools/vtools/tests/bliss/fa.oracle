@@ -1,0 +1,15 @@
+
+    PRINT(.X[1, 0, 32, 0]);
+.......................^
+%BLS64-W-TEXT, Longword field reference is not Longword aligned
+at line number 16 in file SYS$SYSDEVICE:[ORACLE]FA.B64;1
+
+    PRINT(.X[G]);
+.............^
+%BLS64-W-TEXT, Longword field reference is not Longword aligned
+at line number 18 in file SYS$SYSDEVICE:[ORACLE]FA.B64;1
+BLISS status %X106F1260
+%LINK-W-WRNERS, compilation warnings
+	in module FA file SYS$SYSDEVICE:[ORACLE]FA.OBJ;1
+LINK status %X10648268
+RUN status %X00010001

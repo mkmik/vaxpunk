@@ -90,7 +90,7 @@ note = "RN 2.21, 2.29, 2.19.8: ADDRESSING_MODE ignored; a value's unit, sign or 
 id = "data-attributes"
 title = "Data attributes: RANGE on literals, EXTERNAL_NAME on literals, GRANULARITY, REF VOLATILE and REF ALIGN structures, VOLATILE and NOCHECK_ALIGNMENT fields"
 status = "done"
-note = "LRM 9.12; RN 2.14, 2.16.1, 2.25, 2.28: literal ranges checked (message 036), EXTERNAL_NAME on GLOBAL and EXTERNAL LITERAL, GRANULARITY ignored as ARM64 writes bytes, VOLATILE and ALIGN between REF and the structure, VOLATILE and NOCHECK_ALIGNMENT fields"
+note = "LRM 9.12; RN 2.14, 2.16.1, 2.25, 2.28: literal ranges checked (message 036), EXTERNAL_NAME on GLOBAL and EXTERNAL LITERAL, GRANULARITY ignored as ARM64 writes bytes, VOLATILE and ALIGN between REF and the structure, VOLATILE and NOCHECK_ALIGNMENT fields: a reference with a NOCHECK_ALIGNMENT field gets no alignment warning, and the others are checked by byte offset and bit position together (tests/bliss/fa, oracle FA)"
 
 [[feature]]
 id = "forward-data"

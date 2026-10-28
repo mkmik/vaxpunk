@@ -1,0 +1,22 @@
+MODULE FA (MAIN = M) =
+BEGIN
+! CHECK_ALIGNMENT on a byte BLOCK's fields: by the byte offset and the
+! bit position together, and not for a NOCHECK_ALIGNMENT field.
+REQUIRE 'PRINT';
+FIELD
+    S = SET
+        F = [0, 8, 32, 0] : NOCHECK_ALIGNMENT,
+        G = [0, 8, 32, 0]
+    TES;
+OWN X : BLOCK[8, BYTE] FIELD(S);
+ROUTINE M =
+    BEGIN
+    X[4, 0, 32, 0] = 7;
+    PRINT(.X[3, 8, 32, 0]);
+    PRINT(.X[1, 0, 32, 0]);
+    PRINT(.X[F]);
+    PRINT(.X[G]);
+    1
+    END;
+END
+ELUDOM

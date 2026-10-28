@@ -1,0 +1,20 @@
+
+    A : INITIAL(%T'1E-2147483648'),
+..................^
+%BLS64-W-TEXT, Underflow occurred in floating point literal %T'1E-2147483648'
+at line number 7 in file SYS$SYSDEVICE:[ORACLE]FE.B64;1
+
+    B : INITIAL(%T'1E2147483647'),
+..................^
+%BLS64-W-TEXT, Overflow occurred in floating point literal %T'1E2147483647'
+at line number 8 in file SYS$SYSDEVICE:[ORACLE]FE.B64;1
+
+    C : INITIAL(%T'-1E-99999');
+..................^
+%BLS64-W-TEXT, Underflow occurred in floating point literal %T'-1E-99999'
+at line number 9 in file SYS$SYSDEVICE:[ORACLE]FE.B64;1
+BLISS status %X106F1260
+%LINK-W-WRNERS, compilation warnings
+	in module FE file SYS$SYSDEVICE:[ORACLE]FE.OBJ;1
+LINK status %X10648268
+RUN status %X00010001

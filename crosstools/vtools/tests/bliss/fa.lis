@@ -1,0 +1,92 @@
+                                Source Listing                  DD-MMM-YYYY HH:MM:SS  BLISS-64E V1.11-007-48G4L         Page 1
+                                                                DD-MMM-YYYY HH:MM:SS  SYS$SYSDEVICE:[ORACLE]FA.B64;1
+
+    0	      1 MODULE FA (MAIN = M) =
+    0	      2 BEGIN
+    1	      3 ! CHECK_ALIGNMENT on a byte BLOCK's fields: by the byte offset and the
+    1	      4 ! bit position together, and not for a NOCHECK_ALIGNMENT field.
+    1	      5 REQUIRE 'PRINT';
+ R  1	      6 ! PRINT: prints a value as a signed decimal and as 16 hex digits, on a line
+ R  1	      7 ! of its own, through LIB$PUT_OUTPUT. The behaviour tests print with it,
+ R  1	      8 ! here under vrun and on OpenVMS for the oracle.
+ R  1	      9 
+ R  1	     10 EXTERNAL ROUTINE
+ R  1	     11     LIB$PUT_OUTPUT;
+ R  1	     12 
+ R  1	     13 ROUTINE PRINT (V) : NOVALUE =
+ R  1	     14     BEGIN
+ R  2	     15     LOCAL
+ R  2	     16         BUF : VECTOR[48, BYTE],
+ R  2	     17         DESC : VECTOR[2, LONG],
+ R  2	     18         X,
+ R  2	     19         I;
+ R  2	     20     I = 48;
+ R  2	     21     X = .V;
+ R  2	     22     INCR K FROM 1 TO 16 DO
+ R  2	     23         BEGIN
+ R  3	     24         LOCAL D;
+ R  3	     25         D = .X AND 15;
+ R  3	     26         I = .I - 1;
+ R  3	     27         BUF[.I] = (IF .D LSS 10 THEN %C'0' + .D ELSE %C'A' + .D - 10);
+ R  3	     28         X = .X ^ -4 AND %X'0FFFFFFFFFFFFFFF'
+ R  3	     29         END;
+ R  2	     30     I = .I - 1;
+ R  2	     31     BUF[.I] = %C' ';
+ R  2	     32     ! Digits from the remainders, negative for a negative value, so that
+ R  2	     33     ! the most negative one prints too.
+ R  2	     34     X = .V;
+ R  2	     35     DO
+ R  2	     36         BEGIN
+ R  3	     37         LOCAL D;
+ R  3	     38         D = .X - (.X / 10) * 10;
+ R  3	     39         IF .D LSS 0 THEN D = -.D;
+ R  3	     40         I = .I - 1;
+ R  3	     41         BUF[.I] = %C'0' + .D;
+ R  3	     42         X = .X / 10
+ R  3	     43         END
+ R  3	     44     UNTIL .X EQL 0;
+ R  2	     45     IF .V LSS 0
+ R  2	     46     THEN
+ R  2	     47         BEGIN
+ R  3	     48         I = .I - 1;
+ R  3	     49         BUF[.I] = %C'-'
+ R  3	     50         END;
+ R  2	     51     DESC[0] = 48 - .I + %X'010E0000';
+ R  2	     52     DESC[1] = BUF[.I];
+ R  2	     53     LIB$PUT_OUTPUT(DESC)
+ R  2	     54     END;
+    1	     55 FIELD
+    1	     56     S = SET
+    1	     57         F = [0, 8, 32, 0] : NOCHECK_ALIGNMENT,
+
+FA                              Source Listing                  DD-MMM-YYYY HH:MM:SS  BLISS-64E V1.11-007-48G4L         Page 2
+                                                                DD-MMM-YYYY HH:MM:SS  SYS$SYSDEVICE:[ORACLE]FA.B64;1
+
+    1	     58         G = [0, 8, 32, 0]
+    1	     59     TES;
+    1	     60 OWN X : BLOCK[8, BYTE] FIELD(S);
+    1	     61 ROUTINE M =
+    1	     62     BEGIN
+    2	     63     X[4, 0, 32, 0] = 7;
+    2	     64     PRINT(.X[3, 8, 32, 0]);
+    2	     65     PRINT(.X[1, 0, 32, 0]);
+		.......................1    
+%BLS64-W-TEXT, (1) Longword field reference is not Longword aligned
+
+    2	     66     PRINT(.X[F]);
+    2	     67     PRINT(.X[G]);
+		.............1    
+%BLS64-W-TEXT, (1) Longword field reference is not Longword aligned
+
+    2	     68     1
+    2	     69     END;
+    1	     70 END
+    1	     71 ELUDOM
+
+
+                                Source Listing                  DD-MMM-YYYY HH:MM:SS  BLISS-64E V1.11-007-48G4L         Page 3
+                                Source Listing                  DD-MMM-YYYY HH:MM:SS  SYS$SYSDEVICE:[ORACLE]FA.B64;1
+
+COMMAND LINE:
+
+BLISS/A64/LIST/SOURCE_LIST=(EXPAND_MACROS,REQUIRE)/NOMACHINE_CODE FA.B64

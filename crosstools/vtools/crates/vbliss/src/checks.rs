@@ -152,16 +152,21 @@ impl Parser<'_> {
             64 => "Quadword",
             _ => return,
         };
-        // The constant part of the address: the field's byte offset.
+        // The constant part of the address: the field's byte offset, which
+        // BLOCK writes as (BLOCK + O * UNIT).
         fn offset(e: &Expr) -> i64 {
+            if let Some(n) = crate::parse::fold(e) {
+                return n;
+            }
             match e {
-                Expr::Num(n) => *n,
-                Expr::Bin(crate::parse::BOp::Add, a, b) => offset(a) + offset(b),
-                Expr::Bin(crate::parse::BOp::Sub, a, b) => offset(a) - offset(b),
+                Expr::Block(es, _) if es.len() == 1 => offset(&es[0]),
+                Expr::Bin(crate::parse::BOp::Add, a, b) => offset(a).wrapping_add(offset(b)),
+                Expr::Bin(crate::parse::BOp::Sub, a, b) => offset(a).wrapping_sub(offset(b)),
                 _ => 0,
             }
         }
-        if (offset(addr) * 8 + pos).rem_euclid(size) != 0 && self.switch_on("CHECK_ALIGNMENT") {
+        let bit = offset(addr).wrapping_mul(8).wrapping_add(pos);
+        if bit.rem_euclid(size) != 0 && self.switch_on("CHECK_ALIGNMENT") {
             self.diag(
                 'W',
                 at,
