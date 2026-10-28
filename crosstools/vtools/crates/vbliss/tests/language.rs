@@ -505,6 +505,12 @@ fn overflow_switch() {
         assert!(ir.contains(want), "{want}: {ir}");
     }
     assert!(!self::ir(&src.replace("(OVERFLOW)", "")).contains("addv"));
+    // Nor link-time constants, which the linker works out (oracle OVFL).
+    let ir = self::ir(&src.replace(
+        "ROUTINE R = ",
+        "ROUTINE R = BEGIN OWN P : INITIAL(X + 8); BIND Q = UPLIT(X + 16, X - 8); .P + .Q END;\nROUTINE S = ",
+    ));
+    assert!(ir.contains("$X+8") && ir.contains("$X+16"), "{ir}");
 }
 
 #[test]

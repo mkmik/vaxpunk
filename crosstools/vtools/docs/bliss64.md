@@ -137,9 +137,12 @@ The core of the dialect: a BLISS value, the fullword, is a quadword.
   `LSSU` and the `U` forms unsigned, `LSSA` and the `A` forms address
   comparisons, which are unsigned: `-1 LSSA 0` is 0. The `[NO]OVERFLOW`
   switch turns overflow checking on and off; RN doesn't say which is the
-  default, and BLISSA64 wraps without it, so `NOOVERFLOW` is. vbliss
-  wraps and accepts the switch. (LRM 5.1; RN 2.26; oracle,
-  `tests/bliss/arith.b64`; vaxpunk)
+  default, and BLISSA64 wraps without it, so `NOOVERFLOW` is. Under
+  `OVERFLOW` vbliss checks a routine's `+`, `-` and `*` and signals
+  SS$_INTOVF, but not a link-time constant, `X + 8` in an `INITIAL` or a
+  `UPLIT`: the linker works it out, and no code runs that could check
+  it. (LRM 5.1; RN 2.26; oracle, `tests/bliss/arith.b64`,
+  `tests/bliss/ovfl.b64`; vaxpunk)
 
 ### Signs
 

@@ -1,0 +1,15 @@
+MODULE VF2 (MAIN = M) =
+BEGIN
+! A field of a local whose size, 64, is known only when it runs.
+REQUIRE 'PRINT';
+ROUTINE M =
+    BEGIN
+    LOCAL G, N;
+    N = 64;
+    G = 0;
+    G<0, .N> = -5;
+    PRINT(.G);
+    1
+    END;
+END
+ELUDOM

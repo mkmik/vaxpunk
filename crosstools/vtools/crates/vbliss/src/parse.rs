@@ -2775,16 +2775,18 @@ impl Parser<'_> {
                 BOp::Mul => Some(crate::ir::Op::Mul),
                 _ => None,
             };
+            let e = Expr::Bin(op, Box::new(left), Box::new(right));
             left = match checked {
-                // OVERFLOW: arithmetic that signals (RN 2.26).
-                Some(o)
-                    if self.slots_open()
-                        && self.switch_on("OVERFLOW")
-                        && (fold(&left).is_none() || fold(&right).is_none()) =>
-                {
-                    Expr::Special(crate::builtin::Special::Checked(o), vec![left, right])
+                // OVERFLOW: arithmetic that signals (RN 2.26). A link-time
+                // constant, X + 8 in an INITIAL or a UPLIT, is no code that
+                // could.
+                Some(o) if self.slots_open() && self.switch_on("OVERFLOW") && !self.ltce(&e) => {
+                    let Expr::Bin(_, a, b) = e else {
+                        unreachable!()
+                    };
+                    Expr::Special(crate::builtin::Special::Checked(o), vec![*a, *b])
                 }
-                _ => Expr::Bin(op, Box::new(left), Box::new(right)),
+                _ => e,
             };
         }
         Ok(left)

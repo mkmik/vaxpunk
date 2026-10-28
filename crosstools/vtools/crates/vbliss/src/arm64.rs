@@ -977,12 +977,14 @@ impl<'a> Routine<'a> {
                     self.line(format!("mov     x16, {base}"));
                     self.line(format!("bfi     x16, {v}, #{p}, #{s}"));
                 } else {
-                    // mask = ~(-1 << s) << p; (base & ~mask) | (v << p & mask)
+                    // mask = -1 >> (64 - s) << p, which a shift by 64, a
+                    // shift by 0 to ARM64, leaves all ones for a size of 64;
+                    // (base & ~mask) | (v << p & mask)
                     let p = self.src(p, "x12");
                     let s = self.src(s, "x13");
                     self.line("mov     x16, #-1");
-                    self.line(format!("lsl     x16, x16, {s}"));
-                    self.line("mvn     x16, x16");
+                    self.line(format!("neg     x17, {s}"));
+                    self.line("lsr     x16, x16, x17");
                     self.line(format!("lsl     x16, x16, {p}"));
                     self.line(format!("lsl     x17, {v}, {p}"));
                     self.line("and     x17, x17, x16");
