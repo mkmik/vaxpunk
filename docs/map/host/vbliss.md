@@ -72,7 +72,7 @@ note = "LRM 12.1, 12.2: L(.P, 5) calls .P by L, L(R, 5) a routine R by L too, no
 id = "linkage-types"
 title = "INTERRUPT and EXCEPTION linkages; the COUNT and NOCOUNT linkage options, module switch and /[NO]COUNT"
 status = "done"
-note = "RN 2.8.4, 2.8.5: an INTERRUPT or EXCEPTION routine's formals are the stack the PAL left, so a PC or PSL it stores is what REI restores; it pops the PAL's parameters and returns with REI, and can't be called; NOCOUNT, the linkage option, module switch or /NOCOUNT, passes no count in x9, and its routines can't read their argument lists"
+note = "RN 2.8.4, 2.8.5: an INTERRUPT or EXCEPTION routine's formals are the stack the PAL left, so a PC or PSL it stores is what REI restores; it pops the PAL's parameters and returns with REI, and can't be called; NOCOUNT, the linkage option, module switch or /NOCOUNT, passes no count in x9, and its routines can't read their argument lists; SIGNAL's call to LIB$SIGNAL passes it all the same, where BLISSA64 sends garbage (oracle SNC)"
 
 [[feature]]
 id = "predeclared-linkages"

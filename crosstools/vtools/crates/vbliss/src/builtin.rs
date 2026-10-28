@@ -412,15 +412,25 @@ fn add(a: Expr, b: Expr) -> Expr {
 
 impl Parser<'_> {
     /// A routine the module calls without declaring it: the run-time
-    /// library's, for SIGNAL and the like.
+    /// library's, for SIGNAL and the like. Its calls pass the count, as
+    /// LIB$SIGNAL needs it, under NOCOUNT too.
     fn library_routine(&mut self, name: &str) -> usize {
-        if let Some(id) =
-            self.m.syms.iter().position(|s| {
-                s.asm == name && matches!(s.kind, Kind::Routine { external: true, .. })
-            })
-        {
+        let counted = |s: &Sym| {
+            matches!(&s.kind, Kind::Routine { external: true, linkage: Some(l), .. }
+                if l.count == Some(true) && !l.jsb)
+        };
+        if let Some(id) = self.m.syms.iter().position(|s| s.asm == name && counted(s)) {
             return id;
         }
+        let linkage = crate::linkage::Linkage {
+            jsb: false,
+            interrupt: false,
+            count: Some(true),
+            params: Vec::new(),
+            outs: Vec::new(),
+            globals: Vec::new(),
+            nopreserve: Vec::new(),
+        };
         self.m.syms.push(Sym {
             name: name.into(),
             asm: name.into(),
@@ -428,7 +438,7 @@ impl Parser<'_> {
                 global: false,
                 external: true,
                 novalue: false,
-                linkage: None,
+                linkage: Some(std::rc::Rc::new(linkage)),
             },
         });
         self.m.syms.len() - 1

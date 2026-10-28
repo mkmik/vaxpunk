@@ -245,6 +245,11 @@ fn nocount() {
         )),
         "ACTUALCOUNT can't be used in a routine whose linkage is NOCOUNT"
     );
+    // SIGNAL's LIB$SIGNAL gets the count all the same: it builds the
+    // signal array from it.
+    let src = module("", "SIGNAL(1148, 99);").replace("(MAIN = M)", "(MAIN = M, NOCOUNT)");
+    let ir = self::ir(&src);
+    assert!(ir.contains("call $LIB$SIGNAL(1148, 99)"), "{ir}");
 }
 
 #[test]

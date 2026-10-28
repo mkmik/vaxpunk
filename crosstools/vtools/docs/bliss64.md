@@ -311,7 +311,11 @@ KIT)
   (RN 2.8.1, 2.8.5)
 
   vaxpunk: CALL is DESIGN-0004: arguments in x0-x7 and on the stack, the
-  count in x9's bits 7:0. `NOCOUNT` leaves x9 unset, as a call into C would.
+  count in x9's bits 7:0. `NOCOUNT` leaves x9 unset, as a call into C would,
+  but for the calls `SIGNAL` and `SIGNAL_STOP` make: `LIB$SIGNAL` builds
+  the signal array from the count. BLISSA64 leaves it out there too, and
+  the handler gets an array as long as whatever R25 held, 8 longwords for
+  4 in oracle SNC.
 - **JSB** routines are frameless: they don't change FP. (RN 2.8.2)
 
   vaxpunk: `bl` and `ret`, as DESIGN-0004 *JSB* says. A JSB routine that
