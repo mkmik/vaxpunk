@@ -1080,7 +1080,12 @@ impl<'a> Routine<'a> {
             }
             Ins::Barrier => self.line("dmb     ish"),
             Ins::Bpt => self.line("brk     #0"),
-            Ins::Comment(s) => self.line(format!("; {s}")),
+            // Each line of the text a comment line, so none is code.
+            Ins::Comment(s) => {
+                for l in s.split('\n') {
+                    self.line(format!("; {l}"));
+                }
+            }
             Ins::FArith(op, f, a, b, d) => {
                 self.fl_load(*f, a, "d16");
                 self.fl_load(*f, b, "d17");

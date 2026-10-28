@@ -1,0 +1,28 @@
+MODULE RFLD (MAIN = M) =
+BEGIN
+! Field references on BUILTIN registers, fetched and stored: R0, a
+! register, and R2, register data.
+REQUIRE 'PRINT';
+ROUTINE M =
+    BEGIN
+    LOCAL A, B, C, D, E;
+    BUILTIN R0, R2;
+    R0 = 257;
+    A = .R0<0, 8>;
+    B = .R0<8, 8>;
+    R0<0, 8> = 3;
+    C = .R0;
+    R0 = -1;
+    D = .R0<60, 4, 1>;
+    R2 = 257;
+    R2<8, 8> = 2;
+    E = .R2;
+    PRINT(.A);
+    PRINT(.B);
+    PRINT(.C);
+    PRINT(.D);
+    PRINT(.E);
+    1
+    END;
+END
+ELUDOM

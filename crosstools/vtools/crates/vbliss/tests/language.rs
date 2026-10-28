@@ -75,6 +75,14 @@ fn general_routine_calls() {
     ));
     assert!(ir.contains("jsb %"), "{ir}");
     assert!(ir.contains("(6)"), "{ir}");
+    // Even a routine's name, declared with another (oracle GCL).
+    let ir = translate(&module(
+        "LINKAGE L = JSB (REGISTER = 2);\nEXTERNAL ROUTINE EXT;\nOWN X;",
+        "X = L(EXT, 7);",
+    ))
+    .ir
+    .unwrap();
+    assert!(ir.contains("jsb $EXT"), "{ir}");
     assert_eq!(
         error(&module("LINKAGE L = CALL;", "L();")),
         "a general routine call needs the routine's address"
@@ -263,14 +271,18 @@ fn codecomment() {
     // block's (LRM 4.10).
     let out = translate(&module(
         "OWN X;",
-        "X = CODECOMMENT 'one', 'two' : BEGIN 5 END;",
+        "X = CODECOMMENT 'one', %STRING('two', %CHAR(10), 'nop') : BEGIN 5 END;",
     ));
     let (ir, asm) = (out.ir.unwrap(), out.asm.unwrap());
     assert!(
         ir.contains("comment \"one\"") && ir.contains("store8 5, $X"),
         "{ir}"
     );
-    assert!(asm.contains("; one\n        ; two"), "{asm}");
+    // A text of two lines is two comment lines, not a NOP.
+    assert!(
+        asm.contains("; one\n        ; two\n        ; nop\n"),
+        "{asm}"
+    );
 }
 
 #[test]
@@ -412,6 +424,21 @@ fn floating_calls() {
         .unwrap();
     let (call, dest) = (ir.find("fcall $R() -> t:%"), ir.find("load8u $P"));
     assert!(call.is_some() && dest > call, "{ir}");
+    // Not in a linkage's register.
+    assert_eq!(
+        error(&module(
+            "LINKAGE J = JSB (REGISTER = 2);\nEXTERNAL ROUTINE R : J;\nOWN T;",
+            "R(%TFLOAT(T));"
+        )),
+        "%xFLOAT actuals need the calling standard's linkage"
+    );
+    assert_eq!(
+        error(&module(
+            "LINKAGE J = JSB (REGISTER = 2);\nEXTERNAL ROUTINE R : J;\nOWN T;",
+            "R(; %TFLOAT(T));"
+        )),
+        "%xFLOAT actuals need the calling standard's linkage"
+    );
 }
 
 #[test]

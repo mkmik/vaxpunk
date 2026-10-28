@@ -13,6 +13,7 @@
 
 use std::rc::Rc;
 
+use crate::builtin::Special;
 use crate::lex::Tok;
 use crate::parse::{Expr, Kind, Link, Parser, R, Storage};
 
@@ -294,7 +295,7 @@ impl Parser<'_> {
         let floats: Vec<Expr> = outs
             .iter()
             .flatten()
-            .filter(|o| matches!(o, Expr::Special(crate::builtin::Special::FloatOut(_), _)))
+            .filter(|o| matches!(o, Expr::Special(Special::FloatOut(_), _)))
             .cloned()
             .collect();
         if !floats.is_empty() {
@@ -304,8 +305,9 @@ impl Parser<'_> {
             outs.clear();
             args.extend(floats);
         }
-        // A routine's name calls by its linkage (LRM 12.1.3), an address by
-        // the general call's, or the LINKAGE switch's.
+        // A general call calls by the linkage it names, even a routine's
+        // name (LRM 12.2.3, oracle GCL); a routine's name otherwise by its
+        // linkage (LRM 12.1.3), an address by the LINKAGE switch's.
         let named = match &target {
             Expr::Name(id) => match &self.m.syms[*id].kind {
                 Kind::Routine { linkage, .. } => Some(linkage.clone()),
@@ -314,10 +316,10 @@ impl Parser<'_> {
             _ => None,
         };
         let explicit = match named {
-            Some(_) => None,
+            Some(_) => general,
             None => general.or_else(|| self.default_linkage()),
         };
-        let linkage = named.flatten().or_else(|| explicit.clone());
+        let linkage = explicit.clone().or_else(|| named.flatten());
         if linkage.as_ref().is_some_and(|l| l.interrupt) {
             return self.err("a routine with an INTERRUPT or EXCEPTION linkage can't be called");
         }
@@ -336,6 +338,16 @@ impl Parser<'_> {
         let (mut std, mut links) = (Vec::new(), Vec::new());
         for (i, a) in args.into_iter().enumerate() {
             match l.params.get(i).copied().flatten() {
+                // Floating actuals go in floating registers, which only
+                // the calling standard's linkage has.
+                Some(_)
+                    if matches!(
+                        a,
+                        Expr::Special(Special::FloatIn(_) | Special::FloatOut(_), _)
+                    ) =>
+                {
+                    return self.err("%xFLOAT actuals need the calling standard's linkage");
+                }
                 Some(reg) => links.push(Link {
                     reg,
                     input: Some(a),

@@ -141,8 +141,8 @@ pub enum Expr {
     Assign(Box<Expr>, Box<Expr>),
     /// A call: the routine, its standard actuals, what goes through
     /// registers, as its linkage says (`linkage.rs`), and the linkage
-    /// itself where the routine is an address, not a routine's name: a
-    /// general routine call's, or the LINKAGE switch's.
+    /// itself where it isn't a routine name's own: a general routine
+    /// call's, or the LINKAGE switch's.
     Call(Box<Expr>, Vec<Expr>, Vec<Link>, Option<Rc<Linkage>>),
     /// A block's expressions; `value` unless it ends with a semicolon.
     Block(Vec<Expr>, bool),

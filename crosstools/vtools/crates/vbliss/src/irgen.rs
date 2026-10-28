@@ -512,6 +512,16 @@ impl Gen<'_> {
                     self.emit(Ins::RegArg(d, r));
                     return Ok(V::T(d));
                 }
+                if let Expr::Field(b, pos, size, ext) = &**a
+                    && let Expr::Special(Special::Reg(r), _) = **b
+                {
+                    let (pos, size, signed) = self.reg_field(pos, size, ext)?;
+                    let d = self.temp();
+                    self.emit(Ins::RegArg(d, r));
+                    let e = self.temp();
+                    self.emit(Ins::Ext(e, V::T(d), pos, size, signed));
+                    return Ok(V::T(e));
+                }
                 let p = self.place(a)?;
                 self.load(p)
             }
@@ -554,6 +564,18 @@ impl Gen<'_> {
                     self.emit(Ins::SetReg(r, v.clone()));
                     return Ok(v);
                 }
+                if let Expr::Field(b, pos, size, ext) = &**l
+                    && let Expr::Special(Special::Reg(r), _) = **b
+                {
+                    let (pos, size, _) = self.reg_field(pos, size, ext)?;
+                    let v = self.fix(v);
+                    let d = self.temp();
+                    self.emit(Ins::RegArg(d, r));
+                    let n = self.temp();
+                    self.emit(Ins::Insert(n, V::T(d), v.clone(), pos, size));
+                    self.emit(Ins::SetReg(r, V::T(n)));
+                    return Ok(v);
+                }
                 let p = self.place(l)?;
                 self.store(p, v.clone());
                 v
@@ -567,7 +589,7 @@ impl Gen<'_> {
                 }) =>
             {
                 let linkage = match **target {
-                    Expr::Name(id) => match &self.m.syms[id].kind {
+                    Expr::Name(id) if general.is_none() => match &self.m.syms[id].kind {
                         Kind::Routine { linkage: l, .. } => l.clone(),
                         _ => None,
                     },
@@ -1583,6 +1605,21 @@ impl Gen<'_> {
                 self.full(addr)
             }
         })
+    }
+
+    /// A field of a register (LRM 11.2, oracle RFLD): its position, size
+    /// and sign extension, in the register's 64 bits, not memory's.
+    fn reg_field(&mut self, pos: &Expr, size: &Expr, ext: &Expr) -> R<(V, V, bool)> {
+        let (pos, size) = (self.value(pos)?, self.value(size)?);
+        if let (V::C(p), V::C(s)) = (&pos, &size)
+            && (*p < 0 || *s < 1 || p + s > 64)
+        {
+            return Err(format!("field <{p}, {s}> out of range"));
+        }
+        match parse::fold(ext) {
+            Some(x) => Ok((pos, size, x & 1 != 0)),
+            None => Err("a field's sign extension isn't constant".into()),
+        }
     }
 
     /// The width of memory to access for a field, and where: for constant

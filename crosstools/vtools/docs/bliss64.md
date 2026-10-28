@@ -332,8 +332,8 @@ KIT)
   R1, where the standard's arguments and result go: a register conflict,
   which VAX BLISS-32 code passing `CALL (REGISTER = 1)` meets.
   `BUILTIN R0` and `R1` are x0 and x1, read or written where the source
-  fetches or assigns them, as DEC's `RETURN (BUILTIN R0; .R0)` after a
-  change mode expects. `BUILTIN R2` to `R11` declare the routine's own
+  fetches or assigns them or a field of them (`.R0<0, 8>`), as DEC's
+  `RETURN (BUILTIN R0; .R0)` after a change mode expects. `BUILTIN R2` to `R11` declare the routine's own
   register data, as `REGISTER R2 = 2` would: x19-x28 hold vbliss's
   temporaries, and values pass through registers by linkages. Declared
   outside the routine that uses it, R2 is an illegal up-level reference,

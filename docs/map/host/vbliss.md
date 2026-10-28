@@ -66,7 +66,7 @@ note = "RN 2.10, 2.11: literals as BLISSA64 encodes them (oracle FLTLIT2, FLTLIT
 id = "general-calls"
 title = "General routine calls, LINKAGE(address, actuals), and empty actuals, R(1, , 3)"
 status = "done"
-note = "LRM 12.1, 12.2: L(.P, 5) calls .P by L, and an actual left out passes 0, as DEC's STARLET.R64 service macros leave one ($ASSIGN); tests/language.rs"
+note = "LRM 12.1, 12.2: L(.P, 5) calls .P by L, L(R, 5) a routine R by L too, not by R's own linkage (oracle GCL), and an actual left out passes 0, as DEC's STARLET.R64 service macros leave one ($ASSIGN); tests/language.rs"
 
 [[feature]]
 id = "linkage-types"
@@ -114,7 +114,7 @@ note = "LRM 4.10: the texts are comments in the code, `comment` in the IR, ahead
 id = "register-builtins"
 title = "BUILTIN R0 ... R11: registers as built-ins, named as the linkages name them"
 status = "done"
-note = "RN 2.9.1: Alpha BLISS reads registers with the VAX syntax. R0 and R1 are x0 and x1; R2-R11 the routine's register data (docs/bliss64.md, Registers); tests/bliss/regbi2.b64 against the oracle. AP, FP, SP and PC stay errors, as on Alpha"
+note = "RN 2.9.1: Alpha BLISS reads registers with the VAX syntax. R0 and R1 are x0 and x1; R2-R11 the routine's register data (docs/bliss64.md, Registers); field references on them too, .R0<0, 8>; tests/bliss/regbi2.b64 and rfld.b64 against the oracle. AP, FP, SP and PC stay errors, as on Alpha"
 
 [[feature]]
 id = "lexical-functions"
