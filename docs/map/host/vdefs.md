@@ -34,7 +34,7 @@ note = "UM 8.3: a keyword macro for each of starlet.mlb's 92 $name_S macros, its
 id = "rms-macros"
 title = "RMS control block macros: $FAB, $RAB, $NAM and the XABs, with their _INIT and _DECL forms"
 status = "done"
-note = "UM 8.4: crates/vdefs/src/starlet.bli, written for vaxpunk: $FAB, $RAB, $NAM and the XABs with their _INIT and _DECL forms, the keywords of the MACRO-32 macros plus FNM and DNM, and the RMS services with ERR and SUC. $XABKEY's key of reference is KREF, as REF is reserved (the language test's rms_and_helper_macros)"
+note = "UM 8.4: crates/vdefs/src/starlet.bli, written for vaxpunk: $FAB, $RAB, $NAM and the XABs with their _INIT and _DECL forms, the keywords of the MACRO-32 macros plus FNM and DNM, and the RMS services with ERR and SUC. $XABKEY's key of reference is KREF, as REF is reserved (the language test's rms_and_helper_macros). The RAB's key and prompt share a field, set from PBF and PSZ if given, else KBF and KSZ, as DEC's STARLET has it (tests/bliss/rabkey, oracle RABKEY)"
 
 [[feature]]
 id = "helper-macros"

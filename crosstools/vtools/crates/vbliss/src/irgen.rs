@@ -38,6 +38,10 @@ struct Gen<'a> {
     ascids: HashMap<Vec<u8>, V>,
     /// The registers the routine leaves values in when it returns.
     exits: Vec<(u8, usize)>,
+    /// An INTERRUPT routine's formals, by number: they are the stack the
+    /// PAL left, so that what the routine stores in the PC and PSL is
+    /// what REI restores.
+    frame: HashMap<usize, u32>,
 }
 
 /// Generates the IR of a parsed module.
@@ -54,6 +58,7 @@ pub fn generate(m: &parse::Module) -> R<ir::Module> {
         plits: HashMap::new(),
         ascids: HashMap::new(),
         exits: Vec::new(),
+        frame: HashMap::new(),
     };
     for s in &m.statics {
         g.statics(s)?;
@@ -236,6 +241,11 @@ impl Gen<'_> {
 
     /// The address a data or routine name stands for.
     fn address(&mut self, id: usize) -> R<V> {
+        if let Some(&n) = self.frame.get(&id) {
+            let d = self.temp();
+            self.emit(Ins::StackAddr(d, n));
+            return Ok(V::T(d));
+        }
         let sym = &self.m.syms[id];
         Ok(match sym.kind {
             Kind::Data {
@@ -289,11 +299,19 @@ impl Gen<'_> {
             self.f.rei = Some(r.formals.len().saturating_sub(2) as u32);
         }
         let mut standard = 0;
+        self.frame.clear();
         for (i, &formal) in r.formals.iter().enumerate() {
+            if interrupt {
+                self.frame.insert(formal, i as u32);
+                continue;
+            }
             let t = self.temp();
             match params.get(i).copied().flatten() {
                 Some(reg) => self.emit(Ins::RegArg(t, reg)),
-                None if interrupt => self.emit(Ins::StackArg(t, i as u32)),
+                // The general arguments in order, as AAPCS64 places them
+                // (DESIGN-0004): %xFLOAT actuals are for other languages'
+                // routines (RN 2.10.4), and a BLISS routine passed one
+                // reads its arguments with ACTUALPARAMETER, by x9's classes.
                 None => {
                     self.emit(Ins::Arg(t, standard));
                     standard += 1;

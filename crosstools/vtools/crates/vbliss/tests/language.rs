@@ -146,18 +146,20 @@ fn linkage_switch() {
 
 #[test]
 fn interrupt_linkages() {
-    // Entered by the PAL: formals from the stack, the PC and PSL last; the
-    // parameters popped, then REI (LRM 13.3.4.2, RN 2.8.4).
+    // Entered by the PAL: formals on the stack, the PC and PSL last; the
+    // parameters popped, then REI (LRM 13.3.4.2, RN 2.8.4). The formals
+    // are those locations, so a new PC is where REI goes.
     let src = "MODULE T =\nBEGIN\nLINKAGE INT = INTERRUPT, EXC = EXCEPTION;\n\
-        ROUTINE H (CODE, PC, PSL) : INT = (OWN X; X = .CODE);\n\
+        ROUTINE H (CODE, PC, PSL) : INT = (OWN X; X = .CODE; PC = .PC + 4; X = PSL);\n\
         ROUTINE E : EXC = 0;\nEND\nELUDOM\n";
     let out = translate(src);
     assert!(out.error().is_none(), "{:?}", out.error());
     let (ir, asm) = (out.ir.unwrap(), out.asm.unwrap());
     assert!(
-        ir.contains("stackarg 0") && ir.contains("rei 1") && ir.contains("rei 0"),
+        ir.contains("stackaddr 0") && ir.contains("rei 1") && ir.contains("rei 0"),
         "{ir}"
     );
+    assert!(ir.contains("store8 %"), "{ir}");
     // One parameter, padded to 16 bytes: the PC and PSL after it, and
     // REI's frame at x18 past it.
     assert!(
@@ -172,7 +174,7 @@ fn interrupt_linkages() {
         .and_then(|(n, _)| n.parse().ok())
         .unwrap();
     for off in [size, size + 16, size + 24] {
-        assert!(asm.contains(&format!("[x29, #{off}]\n")), "{off}: {asm}");
+        assert!(asm.contains(&format!("x29, #{off}\n")), "{off}: {asm}");
     }
     assert_eq!(
         error(&module(

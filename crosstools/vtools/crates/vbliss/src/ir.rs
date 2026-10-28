@@ -83,10 +83,10 @@ pub enum Ins {
     Insert(u32, V, V, V, V),
     /// `dst = arg n`: the routine's argument n, from 0.
     Arg(u32, u32),
-    /// `dst = stackarg n`: an INTERRUPT routine's formal n, from the stack
-    /// at entry: the PAL's parameters, padded to 16 bytes, then its
-    /// frame's PC and PSL.
-    StackArg(u32, u32),
+    /// `dst = stackaddr n`: the address of an INTERRUPT routine's formal
+    /// n, on the stack at entry: the PAL's parameters, padded to 16 bytes,
+    /// then its frame's PC and PSL, which REI restores.
+    StackAddr(u32, u32),
     /// `dst = call target(args)`, by the calling standard.
     Call(Option<u32>, V, Vec<V>),
     /// `dst = jsb target(arg rN, ...) -> rN %t, ... nopreserve rN...`: a
@@ -324,7 +324,7 @@ impl fmt::Display for Ins {
             Ins::Ext(d, v, p, s, e) => write!(f, "%{d} =l ext{} {v}, {p}, {s}", su(*e)),
             Ins::Insert(d, b, v, p, s) => write!(f, "%{d} =l ins {b}, {v}, {p}, {s}"),
             Ins::Arg(d, n) => write!(f, "%{d} =l arg {n}"),
-            Ins::StackArg(d, n) => write!(f, "%{d} =l stackarg {n}"),
+            Ins::StackAddr(d, n) => write!(f, "%{d} =l stackaddr {n}"),
             Ins::Call(d, t, args) => {
                 if let Some(d) = d {
                     write!(f, "%{d} =l ")?;

@@ -2246,7 +2246,16 @@ impl Parser<'_> {
                     if a == "ALIGN" || a == "ADDRESSING_MODE" {
                         self.expect_punct('(')?;
                         if a == "ALIGN" {
-                            attrs.push(self.ctce()?.to_string());
+                            // 0 to 16, else BLISSA64's warning and 0
+                            // (oracle PA1, PA2).
+                            let mut n = self.ctce()?;
+                            if !(0..=16).contains(&n) {
+                                let at = self.last();
+                                let msg = "Value of attribute outside permitted range";
+                                self.diag('W', &at, msg.into());
+                                n = 0;
+                            }
+                            attrs.push(n.to_string());
                         } else {
                             self.name()?;
                         }

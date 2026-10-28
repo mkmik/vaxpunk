@@ -2697,7 +2697,7 @@ MACRO
 ! The RAB.
 KEYWORDMACRO
     $RAB(FAB = 0, UBF = 0, USZ = 0, RBF = 0, RSZ = 0, RAC = SEQ, ROP, KBF = 0, KSZ = 0,
-            KRF = 0, RHB = 0, PBF = 0, PSZ = 0, BKT = 0, XAB = 0, MBF = 0, MBC = 0,
+            KRF = 0, RHB = 0, PBF, PSZ, BKT = 0, XAB = 0, MBF = 0, MBC = 0,
             CTX = 0, TMO = 0) =
         BLOCK[RAB$C_BLN, BYTE]
         PRESET(
@@ -2712,18 +2712,16 @@ KEYWORDMACRO
             [RAB$L_UBF] = UBF,
             [RAB$L_RBF] = RBF,
             [RAB$L_RHB] = RHB,
-            [RAB$L_KBF] = KBF,
-            [RAB$B_KSZ] = KSZ,
+            [RAB$L_KBF] = $$RAB_EITHER(PBF, KBF),
+            [RAB$B_KSZ] = $$RAB_EITHER(PSZ, KSZ),
             [RAB$B_KRF] = KRF,
-            [RAB$L_PBF] = PBF,
-            [RAB$B_PSZ] = PSZ,
             [RAB$B_MBF] = MBF,
             [RAB$B_MBC] = MBC,
             [RAB$L_BKT] = BKT,
             [RAB$L_FAB] = FAB,
             [RAB$L_XAB] = XAB) %,
     $RAB_INIT(RAB, FAB = 0, UBF = 0, USZ = 0, RBF = 0, RSZ = 0, RAC = SEQ, ROP, KBF = 0,
-            KSZ = 0, KRF = 0, RHB = 0, PBF = 0, PSZ = 0, BKT = 0, XAB = 0, MBF = 0,
+            KSZ = 0, KRF = 0, RHB = 0, PBF, PSZ, BKT = 0, XAB = 0, MBF = 0,
             MBC = 0, CTX = 0, TMO = 0) =
         BEGIN
         BIND $$RMS_BLOCK = RAB : BLOCK[, BYTE];
@@ -2739,11 +2737,9 @@ KEYWORDMACRO
         $$RMS_BLOCK[RAB$L_UBF] = UBF;
         $$RMS_BLOCK[RAB$L_RBF] = RBF;
         $$RMS_BLOCK[RAB$L_RHB] = RHB;
-        $$RMS_BLOCK[RAB$L_KBF] = KBF;
-        $$RMS_BLOCK[RAB$B_KSZ] = KSZ;
+        $$RMS_BLOCK[RAB$L_KBF] = $$RAB_EITHER(PBF, KBF);
+        $$RMS_BLOCK[RAB$B_KSZ] = $$RAB_EITHER(PSZ, KSZ);
         $$RMS_BLOCK[RAB$B_KRF] = KRF;
-        $$RMS_BLOCK[RAB$L_PBF] = PBF;
-        $$RMS_BLOCK[RAB$B_PSZ] = PSZ;
         $$RMS_BLOCK[RAB$B_MBF] = MBF;
         $$RMS_BLOCK[RAB$B_MBC] = MBC;
         $$RMS_BLOCK[RAB$L_BKT] = BKT;
@@ -2751,7 +2747,10 @@ KEYWORDMACRO
         $$RMS_BLOCK[RAB$L_XAB] = XAB
         END %;
 MACRO
-    $RAB_DECL = BLOCK[RAB$C_BLN, BYTE] %;
+    $RAB_DECL = BLOCK[RAB$C_BLN, BYTE] %,
+    ! The key and the prompt share a field: the prompt's, if given, else
+    ! the key's.
+    $$RAB_EITHER(PROMPT, KEY) = %IF %NULL(PROMPT) %THEN KEY %ELSE PROMPT %FI %;
 
 ! The NAM block.
 KEYWORDMACRO

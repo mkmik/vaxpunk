@@ -1,0 +1,14 @@
+MODULE PA2 (MAIN = M) =
+BEGIN
+! A psect's ALIGN(20), and an OWN's ALIGN(17) in it.
+REQUIRE 'PRINT';
+PSECT OWN = DATA (ALIGN(20));
+OWN X : ALIGN(17);
+ROUTINE M =
+    BEGIN
+    X = 5;
+    PRINT(.X);
+    1
+    END;
+END
+ELUDOM

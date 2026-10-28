@@ -189,7 +189,7 @@ fn operands(ins: &Ins) -> (Vec<u32>, Vec<&V>) {
         Ins::Store(v, a, _) => (None, vec![v, a]),
         Ins::Ext(d, v, p, s, _) => (Some(*d), vec![v, p, s]),
         Ins::Insert(d, b, v, p, s) => (Some(*d), vec![b, v, p, s]),
-        Ins::Arg(d, _) | Ins::StackArg(d, _) => (Some(*d), vec![]),
+        Ins::Arg(d, _) | Ins::StackAddr(d, _) => (Some(*d), vec![]),
         Ins::Call(d, t, args) => (*d, std::iter::once(t).chain(args).collect()),
         Ins::RegArg(d, _) | Ins::ArgCount(d) | Ins::ArgPtr(d) => (Some(*d), vec![]),
         Ins::ArgN(d, i) => (Some(*d), vec![i]),
@@ -1044,7 +1044,7 @@ impl<'a> Routine<'a> {
                 self.line(format!("mov     {r}, x16"));
                 self.done(*d);
             }
-            Ins::StackArg(d, n) => {
+            Ins::StackAddr(d, n) => {
                 // The stack at entry is above the frame: the PAL's
                 // parameters, padded to 16 bytes, then its frame.
                 let r = self.dst(*d);
@@ -1055,7 +1055,7 @@ impl<'a> Routine<'a> {
                     pal_params(params) - 8 * params
                 };
                 let off = self.size + 8 * n + pad;
-                self.line(format!("ldr     {r}, [x29, #{off}]"));
+                self.frame_address(&r, off.into());
                 self.done(*d);
             }
             Ins::Arg(d, n) => {
