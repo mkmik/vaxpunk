@@ -254,6 +254,12 @@ fn data_attributes() {
     assert!(out.error().is_none());
     assert!(out.diags.iter().any(|d| d.sev == 'W'
         && d.msg == "Literal value cannot be represented in the declared number of bits"));
+    // The widest ranges short of 64 bits too.
+    let out = translate(&module(
+        "LITERAL U = %X'7FFFFFFFFFFFFFFF' : UNSIGNED(63), S = -1 : SIGNED(63);",
+        "",
+    ));
+    assert!(out.error().is_none() && out.diags.is_empty());
 }
 
 #[test]

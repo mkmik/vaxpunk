@@ -2150,10 +2150,12 @@ impl Parser<'_> {
                 crate::data::Attrs::default()
             };
             if let Some((signed, bits)) = a.range {
+                // In 128 bits, where UNSIGNED(63)'s 1 << 63 is positive.
+                let v = v as i128;
                 let fits = match (signed, bits) {
                     (_, 64..) => true,
-                    (true, 1..) => (-(1i64 << (bits - 1))..1i64 << (bits - 1)).contains(&v),
-                    (false, 0..) => (0..1i64 << bits).contains(&v),
+                    (true, 1..) => (-(1 << (bits - 1))..1 << (bits - 1)).contains(&v),
+                    (false, 0..) => (0..1 << bits).contains(&v),
                     _ => false,
                 };
                 if !fits {

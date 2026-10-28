@@ -16,7 +16,8 @@ OWN
     TBL : VECTOR[256, BYTE],
     A : VECTOR[2] INITIAL(-1, 1),
     B : VECTOR[2] INITIAL(1, 2),
-    C : VECTOR[2];
+    C : VECTOR[2],
+    OVL : VECTOR[8, BYTE] INITIAL(BYTE('ABCDEF  '));
 MACRO
     ! Another macro, whose actual parameter ends at a comma.
     ID(X) = X %;
@@ -53,6 +54,13 @@ ROUTINE M =
     ! In its actual parameter: none of LIB's macros has a comma outside
     ! brackets.
     PRINT(ID(CMPM(2, A, B)));
+    ! Overlapping strings move as if the source were read first: ABCDEF
+    ! to the next byte is AABCDE, and AAB to two bytes on, then *, AAAAB*.
+    MOVC3(%REF(5), OVL, OVL[1]);
+    PRINT(.OVL[5]);
+    MOVC5(%REF(3), OVL, %REF(%C'*'), %REF(4), OVL[2]);
+    PRINT(.OVL[4]);
+    PRINT(.OVL[5]);
     1
     END;
 END

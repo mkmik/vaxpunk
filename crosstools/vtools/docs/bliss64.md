@@ -770,7 +770,13 @@ vaxpunk: vaxpunk's LIB has them back the same way, written anew
 (`crates/vdefs/src/lib.bli`): `BUILTIN FFS` marks the block with a
 literal, and `FFS` is then the macro `$FFS`. The string ones are `CH$`
 functions, the bit and multiword ones inline BLISS, the rest PAL calls;
-`tests/bliss/vaxbi32.b32` and `vaxbi64.b64` run them. `INSQHI` and the
+`tests/bliss/vaxbi32.b32` and `vaxbi64.b64` run them. `MOVC3` and
+`MOVC5` copy backwards when the destination is after the source: the
+VAX's strings may overlap, and `CH$MOVE`'s must not. As with DEC's
+macros, a block inside one that declared `FFS` can't declare it again:
+`BUILTIN FFS` there is a call of `$FFS` without its parameters, an error
+in BLISSA64 too (oracle NESTB). The inner block needn't declare it: it
+sees the outer declaration. `INSQHI` and the
 other queue ones turn the PAL's statuses into the VAX's, as DEC's do,
 but stay on longword queues under BLISS-64 too, where DEC's use the
 quadword PAL calls: a removed entry's address goes in a longword, as
