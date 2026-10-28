@@ -7,13 +7,16 @@ BEGIN
 ! one of quadwords: inserts at the head and the tail, removes from both,
 ! each status and entry removed, and the links they leave; a secondary
 ! interlock some code set, which they don't take; a misaligned header, a
-! reserved instruction, and one in no page, an access violation. INSQUE
+! reserved instruction, and one in no page, an access violation. LIB's
+! VAX built-ins on them, INSQHI and the rest, with the VAX's statuses
+! and a longword for the entry a remove gives. INSQUE
 ! and REMQUE's calls, by CALL_PAL. In kernel mode: MFPR_WHAMI, MCES's
 ! bits, MTPR_IPIR and FEN, which CLRFEN clears from user mode, after
 ! which a floating point instruction is a reserved instruction, until
 ! MTPR_FEN sets it. Prints PALTEST: ok, or the check that failed.
 !
 LIBRARY 'SYS$LIBRARY:STARLET';
+LIBRARY 'SYS$LIBRARY:LIB';
 
 EXTERNAL ROUTINE
     LIB$PUT_OUTPUT,
@@ -61,6 +64,7 @@ OWN
     AH : VECTOR[2, LONG],
     A1 : VECTOR[2, LONG],
     GOT,                                ! the entry a remove gave
+    VAXGOT : VECTOR[2, LONG],           ! and a VAX built-in's, a longword
     WHO,                                ! what kernel mode read
     MCES,
     FEN;
@@ -125,6 +129,30 @@ ROUTINE SETFEN =
     SS$_NORMAL
     END;
 
+! LIB's VAX built-ins (UM 4.64, 4.83): an insert 2 if the entry is the
+! first, else 0; a remove 0, or 2 for the last entry, or 3 for none, the
+! entry's address in a longword; 1 if the interlock is set. 0 if all is
+! well, else the check that failed.
+ROUTINE VAXQUEUES =
+    BEGIN
+    BUILTIN
+        INSQHI,
+        INSQTI,
+        REMQHI,
+        REMQTI;
+    VAXGOT[1] = 7;
+    CHECK(28, INSQHI(L1, LH) EQL 2);
+    CHECK(29, INSQTI(L2, LH) EQL 0);
+    CHECK(30, REMQHI(LH, VAXGOT) EQL 0 AND .VAXGOT[0] EQL L1);
+    CHECK(31, REMQTI(LH, VAXGOT) EQL 2 AND .VAXGOT[0] EQL L2);
+    CHECK(32, REMQHI(LH, VAXGOT) EQL 3 AND .VAXGOT[1] EQL 7);
+    LH[0] = 1;
+    CHECK(33, INSQTI(L1, LH) EQL 1);
+    CHECK(34, REMQTI(LH, VAXGOT) EQL 1);
+    LH[0] = 0;
+    0
+    END;
+
 ROUTINE CHECKS =
     BEGIN
     ! L1 alone, its links and the header's to each other.
@@ -166,7 +194,7 @@ ROUTINE CHECKS =
     CHECK(25, FLOATS() EQL SS$_OPCDEC);
     CHECK(26, $CMKRNL(ROUTIN = SETFEN) EQL SS$_NORMAL AND .FEN EQL 1);
     CHECK(27, FLOATS() EQL 1);
-    0
+    VAXQUEUES()
     END;
 
 ROUTINE START =

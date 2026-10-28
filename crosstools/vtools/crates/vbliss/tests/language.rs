@@ -336,7 +336,11 @@ fn libraries() {
     )
     .unwrap();
     std::fs::write(dir.join("lc.r64"), "OWN X;\n").unwrap();
-    std::fs::write(dir.join("ld.r64"), "SWITCHES ZIP;\nLITERAL D1 = 1;\n").unwrap();
+    std::fs::write(
+        dir.join("ld.r64"),
+        "SWITCHES ZIP;\nLITERAL D1 = 1, D2 = %X'FFFFFFFF';\n",
+    )
+    .unwrap();
     std::fs::write(dir.join("le.r64"), "COMPILETIME N = 0;\n").unwrap();
     let path = dir.join("t.b64");
     let src = module(
@@ -354,6 +358,21 @@ fn libraries() {
         &vbliss::Options::default(),
     );
     assert!(out.listing.contains("%PRINT:\t0\n"), "{}", out.listing);
+    // And the module's aren't the library's: NOQUAD_LITERALS in the
+    // module head leaves the library's %X'FFFFFFFF' 4294967295.
+    let out = vbliss::translate(
+        &path,
+        &module("LIBRARY 'LD';\n%PRINT(%NUMBER(D2))", "").replace(
+            "MODULE T (MAIN = M)",
+            "MODULE T (MAIN = M, NOQUAD_LITERALS)",
+        ),
+        &vbliss::Options::default(),
+    );
+    assert!(
+        out.listing.contains("%PRINT:\t4294967295\n"),
+        "{}",
+        out.listing
+    );
     // Each LIBRARY declares its own COMPILETIME names, with the library's
     // values, which %ASSIGN in one block doesn't change in another (oracle
     // LCTT).

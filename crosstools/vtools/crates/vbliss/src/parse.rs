@@ -1797,7 +1797,13 @@ impl Parser<'_> {
         // The lexemes already read ahead are the declaration's: none.
         self.toks.truncate(self.pos);
         let bytes = self.library_file(name)?;
-        let predeclared = self.scopes[0].clone();
+        // The predeclared names, but not the module head's switches: the
+        // library is compiled on its own, with its own.
+        let predeclared = self.scopes[0]
+            .iter()
+            .filter(|(n, _)| !n.starts_with("%SWITCH ") && *n != "%LINKAGE" && *n != "%STRUCTURE")
+            .map(|(n, id)| (n.clone(), *id))
+            .collect();
         let outer = std::mem::replace(&mut self.scopes, vec![predeclared, HashMap::new()]);
         let forward = std::mem::take(&mut self.forward_data);
         let outer_imports = std::mem::take(&mut self.library_imports);

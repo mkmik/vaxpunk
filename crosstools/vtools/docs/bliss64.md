@@ -770,7 +770,11 @@ vaxpunk: vaxpunk's LIB has them back the same way, written anew
 (`crates/vdefs/src/lib.bli`): `BUILTIN FFS` marks the block with a
 literal, and `FFS` is then the macro `$FFS`. The string ones are `CH$`
 functions, the bit and multiword ones inline BLISS, the rest PAL calls;
-`tests/bliss/vaxbi32.b32` and `vaxbi64.b64` run them.
+`tests/bliss/vaxbi32.b32` and `vaxbi64.b64` run them. `INSQHI` and the
+other queue ones turn the PAL's statuses into the VAX's, as DEC's do,
+but stay on longword queues under BLISS-64 too, where DEC's use the
+quadword PAL calls: a removed entry's address goes in a longword, as
+on the VAX.
 (The oracle's `SYS$LIBRARY`, read for reference)
 
 ## STARLET and LIB

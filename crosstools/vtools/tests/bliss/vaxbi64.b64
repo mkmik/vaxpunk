@@ -17,6 +17,9 @@ OWN
     A : VECTOR[2] INITIAL(-1, 1),
     B : VECTOR[2] INITIAL(1, 2),
     C : VECTOR[2];
+MACRO
+    ! Another macro, whose actual parameter ends at a comma.
+    ID(X) = X %;
 ROUTINE M =
     BEGIN
     PRINT(FFS(%REF(0), %REF(32), W, POS));
@@ -47,6 +50,9 @@ ROUTINE M =
     PRINT(.C[0]);
     PRINT(.C[1]);
     PRINT(CMPM(2, A, B));
+    ! In its actual parameter: none of LIB's macros has a comma outside
+    ! brackets.
+    PRINT(ID(CMPM(2, A, B)));
     1
     END;
 END
