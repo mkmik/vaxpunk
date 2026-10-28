@@ -33,6 +33,18 @@ fn error(source: &str) -> String {
 }
 
 #[test]
+fn main_routine() {
+    // MAIN names the module's routine, not one an inner block declared
+    // EXTERNAL under the same name.
+    let out = translate(&module(
+        "ROUTINE A = BEGIN EXTERNAL ROUTINE M : EXTERNAL_NAME('INNER'); 0 END;",
+        "",
+    ));
+    let asm = out.asm.unwrap();
+    assert!(asm.contains(".END    M\n"), "{asm}");
+}
+
+#[test]
 fn up_level_local() {
     let src = module(
         "ROUTINE OUTER =\n    BEGIN\n    LOCAL L;\n    ROUTINE INNER = .L;\n    INNER()\n    END;",
@@ -169,6 +181,30 @@ fn interrupt_linkages() {
         )),
         "a routine with an INTERRUPT or EXCEPTION linkage can't be called"
     );
+}
+
+#[test]
+fn switches_count() {
+    // %SWITCHES(COUNT) and %SWITCHES(NOCOUNT) are both 1 in BLISSA64,
+    // under /NOCOUNT or the module's NOCOUNT too (oracle SWC, SW3).
+    let src = module(
+        "OWN X : INITIAL(%SWITCHES(COUNT) + 2 * %SWITCHES(NOCOUNT));",
+        "",
+    );
+    let mut opts = vbliss::Options::default();
+    assert_eq!(opts.qualifier("/NOCOUNT"), Ok(true));
+    for (src, opts) in [
+        (src.clone(), vbliss::Options::default()),
+        (src.clone(), opts),
+        (
+            src.replace("(MAIN = M)", "(MAIN = M, NOCOUNT)"),
+            vbliss::Options::default(),
+        ),
+    ] {
+        let out = vbliss::translate(std::path::Path::new("language.b64"), &src, &opts);
+        let ir = out.ir.unwrap();
+        assert!(ir.contains("data $X in $OWN$ align 8 { 8 3 }"), "{ir}");
+    }
 }
 
 #[test]

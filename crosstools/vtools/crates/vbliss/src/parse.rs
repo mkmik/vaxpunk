@@ -241,6 +241,7 @@ impl Default for Psects {
 pub struct Module {
     pub name: String,
     pub ident: Option<String>,
+    /// MAIN's routine: its name, then, checked, its name in the assembly.
     pub main: Option<String>,
     pub syms: Vec<Sym>,
     pub routines: Vec<Routine>,
@@ -1514,14 +1515,22 @@ impl Parser<'_> {
             let n = self.m.syms[id].name.clone();
             return self.err(format!("Name declared FORWARD is not defined:  {n}"));
         }
-        if let Some(main) = &self.m.main {
-            let main = main.clone();
-            match self.lookup(&main).map(|id| &self.m.syms[id].kind) {
-                Some(Kind::Routine {
-                    external: false, ..
-                }) => {}
-                _ => return self.err("Routine specified as MAIN is not defined"),
-            }
+        // MAIN becomes the module-level routine's name in the assembly.
+        if let Some(main) = self.m.main.clone() {
+            let s = self.lookup(&main).map(|id| &self.m.syms[id]);
+            let local = |s: &&Sym| {
+                matches!(
+                    s.kind,
+                    Kind::Routine {
+                        external: false,
+                        ..
+                    }
+                )
+            };
+            let Some(s) = s.filter(local) else {
+                return self.err("Routine specified as MAIN is not defined");
+            };
+            self.m.main = Some(s.asm.clone());
         }
         Ok(())
     }

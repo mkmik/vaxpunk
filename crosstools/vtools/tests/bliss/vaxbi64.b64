@@ -61,6 +61,9 @@ ROUTINE M =
     MOVC5(%REF(3), OVL, %REF(%C'*'), %REF(4), OVL[2]);
     PRINT(.OVL[4]);
     PRINT(.OVL[5]);
+    ! MOVC5's fill byte is read before the move, though the move writes it.
+    MOVC5(%REF(2), UPLIT('XY'), OVL, %REF(4), OVL);
+    PRINT(.OVL[3]);
     1
     END;
 END

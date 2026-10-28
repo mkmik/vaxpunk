@@ -78,13 +78,7 @@ pub fn generate(m: &parse::Module) -> R<ir::Module> {
     Ok(ir::Module {
         name: m.name.clone(),
         ident: m.ident.clone(),
-        // The routine's name in the assembly.
-        main: m.main.as_ref().map(|n| {
-            m.syms
-                .iter()
-                .find(|s| &s.name == n && matches!(s.kind, Kind::Routine { .. }))
-                .map_or(n.clone(), |s| s.asm.clone())
-        }),
+        main: m.main.clone(),
         externals: g.externals.into_iter().collect(),
         data: g.data,
         funcs,

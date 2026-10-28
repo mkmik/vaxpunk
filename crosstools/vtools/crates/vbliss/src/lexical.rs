@@ -1352,7 +1352,9 @@ impl Parser<'_> {
                             "Illegal parameter in call to lexical function %SWITCHES",
                         ));
                     };
-                    all &= self.switch_on(s);
+                    // COUNT and NOCOUNT are both on to BLISSA64 whatever
+                    // /NOCOUNT or the module says (oracle SW3, SWC, SWD).
+                    all &= matches!(&s[..], "COUNT" | "NOCOUNT") || self.switch_on(s);
                 }
                 flag(all)
             }

@@ -996,18 +996,20 @@ MACRO
         CH$FAIL(CH$FIND_NOT_CH(.(LENA)<0, 16>, ADDR, .(CHARA)<0, 8>)) EQL 0 %,
     $MATCHC(OBJLENA, OBJ, SRCLENA, SRC) =
         CH$FAIL(CH$FIND_SUB(.(SRCLENA)<0, 16>, SRC, .(OBJLENA)<0, 16>, OBJ)) EQL 0 %,
-    ! MOVC3 and MOVC5 move as if the source were all read first, so that
-    ! the strings may overlap, which CH$MOVE's and CH$COPY's must not
-    ! (LRM 20.2.5.1): backwards when the destination is after it.
+    ! MOVC3 and MOVC5 move as if the operands and the source were all
+    ! read first, so that the strings may overlap, which CH$MOVE's and
+    ! CH$COPY's must not (LRM 20.2.5.1): backwards when the destination is
+    ! after the source; MOVC5's fill byte before anything moves.
     $MOVC3(LENA, SRC, DST) = $$VAX_MOVE(.(LENA)<0, 16>, SRC, DST) %,
     $MOVC5(SRCLENA, SRC, FILLA, DSTLENA, DST) =
         BEGIN
-        LOCAL $$N; LOCAL $$M; LOCAL $$D;
+        LOCAL $$N; LOCAL $$M; LOCAL $$D; LOCAL $$F;
+        $$F = .(FILLA)<0, 8>;
         $$N = .(DSTLENA)<0, 16>;
         $$M = MINU(.(SRCLENA)<0, 16>, .$$N);
         $$D = DST;
         $$VAX_MOVE(.$$M, SRC, .$$D);
-        CH$FILL(.(FILLA)<0, 8>, .$$N - .$$M, .$$D + .$$M);
+        CH$FILL(.$$F, .$$N - .$$M, .$$D + .$$M);
         END %,
     $$VAX_MOVE(LEN, SRC, DST) =
         BEGIN

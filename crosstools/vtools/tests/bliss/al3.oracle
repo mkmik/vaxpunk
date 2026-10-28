@@ -1,0 +1,15 @@
+
+OWN A : ALIGN(32);
+........^
+%BLS64-W-TEXT, ALIGN request negative or exceeds that of PSECT (or stack)
+at line number 6 in file SYS$SYSDEVICE:[ORACLE]AL3.B64;1
+
+    LOCAL L : ALIGN(32);
+..............^
+%BLS64-W-TEXT, ALIGN request negative or exceeds that of PSECT (or stack)
+at line number 9 in file SYS$SYSDEVICE:[ORACLE]AL3.B64;1
+BLISS status %X106F1260
+%LINK-W-WRNERS, compilation warnings
+	in module AL3 file SYS$SYSDEVICE:[ORACLE]AL3.OBJ;1
+LINK status %X10648268
+RUN status %X00010001

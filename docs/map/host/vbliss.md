@@ -150,7 +150,7 @@ note = "LRM 16.6: a library's source is read in a context of its own, which sees
 id = "switches"
 title = "Switches that act: %SWITCHES and SWITCHES scopes, LIST, ERRS, NOCODE, OVERFLOW checking, QUAD_LITERALS"
 status = "done"
-note = "LRM 18.2, RN 2.26: on-off switches are kept block by block, %SWITCHES sees them (oracle SWIT); NOCODE makes no object; OVERFLOW checks a routine's +, - and * and signals SS$_INTOVF (BLISSA64's GEM crashes on it), but not link-time constants, X + 8 in an INITIAL or a UPLIT (oracle OVFL); NOQUAD_LITERALS sign-extends as BLISSA64 (oracle QLIT). LIST's options are #listing's, ERRS #qualifiers'"
+note = "LRM 18.2, RN 2.26: on-off switches are kept block by block, %SWITCHES sees them (oracle SWIT), but COUNT and NOCOUNT are both 1 to it, as to BLISSA64 (oracle SWC); NOCODE makes no object; OVERFLOW checks a routine's +, - and * and signals SS$_INTOVF (BLISSA64's GEM crashes on it), but not link-time constants, X + 8 in an INITIAL or a UPLIT (oracle OVFL); NOQUAD_LITERALS sign-extends as BLISSA64 (oracle QLIT). LIST's options are #listing's, ERRS #qualifiers'"
 
 [[feature]]
 id = "switches-declaration"

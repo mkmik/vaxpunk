@@ -11,7 +11,7 @@
 use std::collections::HashMap;
 use std::rc::Rc;
 
-use crate::lex::Tok;
+use crate::lex::{Lexeme, Tok};
 use crate::parse::{BOp, Expr, Kind, Parser, R, SelectLabel, Static, Storage, Sym, fold};
 
 /// The predeclared structures (`docs/bliss64.md`), with the dialect's
@@ -91,8 +91,9 @@ pub(crate) struct Attrs {
     /// A range attribute, `SIGNED(n)` or `UNSIGNED(n)`: the bits a
     /// literal's value fits in (LRM 9.12).
     pub range: Option<(bool, i64)>,
-    /// ALIGN(n): static data goes at an address with n low zero bits.
-    pub align: Option<u8>,
+    /// ALIGN(n): static data goes at an address with n low zero bits;
+    /// where it was, for its warning.
+    pub align: Option<(i64, Lexeme)>,
     /// ALIAS: its address may be taken (RN 2.19.3).
     pub alias: bool,
 }
@@ -570,7 +571,7 @@ impl Parser<'_> {
                     self.expect_punct('(')?;
                     let n = self.ctce()?;
                     self.expect_punct(')')?;
-                    a.align = Some(n.clamp(0, 63) as u8);
+                    a.align = Some((n, at.clone()));
                 }
                 "ADDRESSING_MODE" | "GRANULARITY" => {
                     // Assumptions ARM64 doesn't need, and byte writes it
@@ -755,7 +756,32 @@ impl Parser<'_> {
                 (None, Some(u)) => u.trailing_zeros() as u8,
                 _ => 3,
             };
-            let align = a.align.unwrap_or(natural);
+            let align = match a.align.take() {
+                Some((n, at)) => {
+                    // No more than the psect's, octaword unless it says
+                    // (RN 2.20), or the stack's; more is the most, with
+                    // BLISSA64's warning (oracle AL).
+                    let psect = match (&a.psect, storage) {
+                        (Some(p), _) => Some(p),
+                        (None, Storage::Own) => Some(&self.m.psects.own),
+                        (None, Storage::Global) => Some(&self.m.psects.global),
+                        _ => None,
+                    };
+                    let most = psect
+                        .and_then(|p| self.m.psect_attrs.iter().find(|(n, _)| n == p))
+                        .and_then(|(_, attrs)| attrs.split(", ").find_map(|w| w.parse().ok()))
+                        .unwrap_or(4);
+                    if !(0..=most).contains(&n) {
+                        self.diag(
+                            'W',
+                            &at,
+                            "ALIGN request negative or exceeds that of PSECT (or stack)".into(),
+                        );
+                    }
+                    n.clamp(0, most) as u8
+                }
+                None => natural,
+            };
             let scalar = a.structure.is_none();
             let kind = self.data_kind(storage, &mut a)?;
             let Kind::Data { bytes, storage, .. } = kind else {

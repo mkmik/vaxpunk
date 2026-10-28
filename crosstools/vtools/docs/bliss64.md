@@ -244,7 +244,9 @@ form)
 
 - Code and data never share a psect. The code psect defaults to `SHARE`,
   `NOREAD`. Psects default to octaword alignment. The absolute psect is
-  `$ABS$` and the literal one `$LITERAL$`. (RN 2.20)
+  `$ABS$` and the literal one `$LITERAL$`. (RN 2.20) An `ALIGN` past
+  its psect's, or the stack's for a `LOCAL`, is BLISSA64's warning and
+  the most there is. (oracle AL2, AL3)
 - Besides BLISS-32's `$CODE$`, `$PLIT$`, `$OWN$` and `$GLOBAL$`, every
   module is as if inside two more declarations:
   `LINK = $LINK$ (READ, NOWRITE, NOEXECUTE, NOSHARE, NOPIC, CONCATENATE,

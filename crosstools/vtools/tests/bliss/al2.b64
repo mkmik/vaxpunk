@@ -1,0 +1,15 @@
+MODULE AL2 (MAIN = M) =
+BEGIN
+! In a psect of a larger alignment, as much as it has.
+REQUIRE 'PRINT';
+PSECT OWN = BIG (ALIGN(6));
+OWN
+    C : ALIGN(6),
+    D : ALIGN(7);
+ROUTINE M =
+    BEGIN
+    PRINT(C AND 63);
+    1
+    END;
+END
+ELUDOM
