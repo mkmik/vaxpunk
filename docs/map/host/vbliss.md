@@ -114,7 +114,7 @@ note = "LRM 4.10: the texts are comments in the code, `comment` in the IR, ahead
 id = "register-builtins"
 title = "BUILTIN R0 ... R11: registers as built-ins, named as the linkages name them"
 status = "done"
-note = "RN 2.9.1: Alpha BLISS reads registers with the VAX syntax. R0 and R1 are x0 and x1; R2-R11 the routine's register data (docs/bliss64.md, Registers); field references on them too, .R0<0, 8>, of a size known only when it runs too (vf1.b64; 0 fetches 0 and stores nothing, fz.b64); tests/bliss/regbi2.b64 and rfld.b64 against the oracle. AP, FP, SP and PC stay errors, as on Alpha"
+note = "RN 2.9.1: Alpha BLISS reads registers with the VAX syntax. R0 and R1 are x0 and x1; R2-R11 the routine's register data (docs/bliss64.md, Registers); field references on them too, .R0<0, 8>, of a size known only when it runs too (vf1.b64; 0 fetches 0 and stores nothing, fz.b64, and a constant 0 is BLISSA64's warning too, rz.b64); tests/bliss/regbi2.b64 and rfld.b64 against the oracle. AP, FP, SP and PC stay errors, as on Alpha"
 
 [[feature]]
 id = "lexical-functions"
@@ -126,7 +126,7 @@ note = "RN 2.12, oracle HOST1-4: %HOST and %TARGET are 1 for ARM64 and VMS, as v
 id = "macro-edges"
 title = "Macros as BLISSA64 reads DEC's: formals never expanded, KEYWORDMACRO without formals, %STRING of a keyword, empty macro actuals"
 status = "done"
-note = "Oracle MACCNT, STRKEY, KWNOF: empty actuals at the end of a macro call don't count, so $RMS_BITS and $RMS_VALPR2 recurse to an end; %STRING takes reserved words; a KEYWORDMACRO without formals is a simple macro. A macro name as a formal is expanded, as LRM 15.2.1's name-quote level says and BLISSA64 does (oracle FORMAC): SORT32's clash was a library's to avoid"
+note = "Oracle MACCNT, STRKEY, KWNOF: empty actuals at the end of a macro call don't count, so $RMS_BITS and $RMS_VALPR2 recurse to an end; %STRING takes reserved words; a KEYWORDMACRO without formals is a simple macro. A macro name as a formal is expanded, as LRM 15.2.1's name-quote level says and BLISSA64 does (oracle FORMAC): SORT32's clash was a library's to avoid. %UNQUOTE of a COMPILETIME name in a macro body is its value then, not when the macro expands, from a library or a REQUIRE (tests/bliss/ctl, ctr)"
 
 [[feature]]
 id = "declaration-edges"

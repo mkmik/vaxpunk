@@ -754,9 +754,14 @@ impl Parser<'_> {
                     body.push(match &next.tok {
                         Tok::Name(n) => match formals.iter().position(|f| f == n) {
                             Some(i) => Item::Formal(i),
+                            // A COMPILETIME name is bound to its value now,
+                            // not when the macro expands (oracle CTR).
                             None => match self.lookup(n) {
                                 Some(id) => Item::Lex(Lexeme {
-                                    tok: Tok::Bound(n.clone(), id),
+                                    tok: match self.m.syms[id].kind {
+                                        Kind::Compiletime(v) => Tok::Num(v),
+                                        _ => Tok::Bound(n.clone(), id),
+                                    },
                                     ..next
                                 }),
                                 None => Item::Lex(next),

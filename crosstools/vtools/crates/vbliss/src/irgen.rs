@@ -510,6 +510,9 @@ impl Gen<'_> {
                     && let Expr::Special(Special::Reg(r), _) = **b
                 {
                     let (pos, size, signed) = self.reg_field(pos, size, ext)?;
+                    if size == V::C(0) {
+                        return Ok(V::C(0));
+                    }
                     let d = self.temp();
                     self.emit(Ins::RegArg(d, r));
                     let e = self.temp();
@@ -563,6 +566,9 @@ impl Gen<'_> {
                 {
                     let (pos, size, _) = self.reg_field(pos, size, ext)?;
                     let v = self.fix(v);
+                    if size == V::C(0) {
+                        return Ok(v);
+                    }
                     let d = self.temp();
                     self.emit(Ins::RegArg(d, r));
                     let n = self.temp();
@@ -1602,11 +1608,12 @@ impl Gen<'_> {
     }
 
     /// A field of a register (LRM 11.2, oracle RFLD): its position, size
-    /// and sign extension, in the register's 64 bits, not memory's.
+    /// and sign extension, in the register's 64 bits, not memory's; of a
+    /// size of 0, as in memory, 0 to fetch and nothing to store.
     fn reg_field(&mut self, pos: &Expr, size: &Expr, ext: &Expr) -> R<(V, V, bool)> {
         let (pos, size) = (self.value(pos)?, self.value(size)?);
         if let (V::C(p), V::C(s)) = (&pos, &size)
-            && (*p < 0 || *s < 1 || p + s > 64)
+            && (*p < 0 || *s < 0 || p + s > 64)
         {
             return Err(format!("field <{p}, {s}> out of range"));
         }

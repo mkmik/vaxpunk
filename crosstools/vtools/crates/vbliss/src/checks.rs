@@ -224,6 +224,7 @@ impl Parser<'_> {
     /// less, CHECK_SHORT_ADDRESS's store through an address held in less
     /// than 64 bits, and CHECK_ADDRESS_TAKEN's address stored as a value.
     pub(crate) fn check_store(&mut self, left: &Expr, right: &Expr, at: &Lexeme) {
+        self.check_zero_size(left, at);
         if self.switch_on("CHECK_LONGWORD")
             && self.scalar_size(left).is_some_and(|n| n < 8)
             && self.wide(right)
@@ -268,11 +269,23 @@ impl Parser<'_> {
             Expr::Block(es, true) if es.len() == 1 => &es[0],
             e => e,
         };
+        self.check_zero_size(operand, at);
         if let Expr::Fetch(a) = operand
             && self.scalar_size(a).is_some_and(|n| n < 8)
             && self.switch_on("CHECK_SHORT_ADDRESS")
         {
             self.diag('I', at, "Fetching from a short address".into());
+        }
+    }
+
+    /// A field of a constant size of 0, which a fetch reads as 0 and a
+    /// store leaves alone, is BLISSA64's warning (oracle RZ).
+    fn check_zero_size(&mut self, e: &Expr, at: &Lexeme) {
+        if let Expr::Field(_, _, s, _) = e
+            && crate::parse::fold(s) == Some(0)
+        {
+            let msg = "Fetch or store applied to field of zero size".to_string();
+            self.diag('W', at, msg);
         }
     }
 

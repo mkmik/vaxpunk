@@ -1,0 +1,35 @@
+
+    R0<0, 0> = 123;
+.............^
+%BLS64-W-TEXT, Fetch or store applied to field of zero size
+at line number 12 in file SYS$SYSDEVICE:[ORACLE]RZ.B64;1
+
+    B = .R0<3, 0>;
+........^
+%BLS64-W-TEXT, Fetch or store applied to field of zero size
+at line number 15 in file SYS$SYSDEVICE:[ORACLE]RZ.B64;1
+
+    R2<5, 0> = 1;
+.............^
+%BLS64-W-TEXT, Fetch or store applied to field of zero size
+at line number 17 in file SYS$SYSDEVICE:[ORACLE]RZ.B64;1
+
+    C = .R2 + .R2<0, 0, 1>;
+..............^
+%BLS64-W-TEXT, Fetch or store applied to field of zero size
+at line number 18 in file SYS$SYSDEVICE:[ORACLE]RZ.B64;1
+
+    W<4, 0> = 1;
+............^
+%BLS64-W-TEXT, Fetch or store applied to field of zero size
+at line number 20 in file SYS$SYSDEVICE:[ORACLE]RZ.B64;1
+
+    D = .W + .W<2, 0>;
+.............^
+%BLS64-W-TEXT, Fetch or store applied to field of zero size
+at line number 21 in file SYS$SYSDEVICE:[ORACLE]RZ.B64;1
+BLISS status %X106F1260
+%LINK-W-WRNERS, compilation warnings
+	in module RZ file SYS$SYSDEVICE:[ORACLE]RZ.OBJ;1
+LINK status %X10648268
+RUN status %X00010001
