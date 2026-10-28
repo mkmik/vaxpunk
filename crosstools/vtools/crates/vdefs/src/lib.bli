@@ -144,16 +144,17 @@ MACRO
         IF .$$N GTR 0 THEN .$$A ELSE 0
         END %,
 
-    ! MOVTUC: translates until the escape character; 0, or the address of
-    ! the source byte that was it.
+    ! MOVTUC: translates until the escape character, read before anything
+    ! moves; 0, or the address of the source byte that was it.
     $MOVTUC(SRCLENA, SRC, ESCA, TBL, DSTLENA, DST) =
         BEGIN
-        LOCAL $$S; LOCAL $$D; LOCAL $$N; LOCAL $$T; LOCAL $$C;
+        LOCAL $$S; LOCAL $$D; LOCAL $$N; LOCAL $$T; LOCAL $$C; LOCAL $$E;
         $$S = SRC;
+        $$E = .(ESCA)<0, 8>;
         $$D = DST;
         $$T = TBL;
         $$N = MINU(.(SRCLENA)<0, 16>, .(DSTLENA)<0, 16>);
-        WHILE (IF .$$N GTR 0 THEN ($$C = .(.$$T + .(.$$S)<0, 8>)<0, 8>) NEQ .(ESCA)<0, 8> ELSE 0) DO
+        WHILE (IF .$$N GTR 0 THEN ($$C = .(.$$T + .(.$$S)<0, 8>)<0, 8>) NEQ .$$E ELSE 0) DO
             ((.$$D)<0, 8> = .$$C; $$S = .$$S + 1; $$D = .$$D + 1; $$N = .$$N - 1);
         IF .$$N GTR 0 THEN .$$S ELSE 0
         END %,

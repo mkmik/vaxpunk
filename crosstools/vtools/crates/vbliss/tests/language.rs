@@ -481,6 +481,14 @@ fn floating_calls() {
         "{asm}"
     );
     assert!(asm.contains("fmov    x") && asm.contains(", d0\n"), "{asm}");
+    // No more than 255 arguments, x9's count, with a floating one too.
+    let many = format!("R({}%TFLOAT(T));", "1, ".repeat(255));
+    assert_eq!(
+        translate(&module("EXTERNAL ROUTINE R;\nOWN T;", &many))
+            .error()
+            .map(|d| d.msg.clone()),
+        Some("more than 255 arguments".into())
+    );
     // A result's destination is found after the call, which may change it.
     let ir = translate(&module("EXTERNAL ROUTINE R;\nOWN P;", "R(; %TFLOAT(.P));"))
         .ir

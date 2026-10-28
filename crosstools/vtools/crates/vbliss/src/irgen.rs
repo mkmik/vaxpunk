@@ -638,6 +638,10 @@ impl Gen<'_> {
                         }
                     }
                 }
+                // x9's count is 8 bits, as in a call without them.
+                if vals.len() > 255 {
+                    return Err("more than 255 arguments".into());
+                }
                 let d = self.temp();
                 self.emit(Ins::FCall(Box::new(ir::FCall {
                     dst: d,

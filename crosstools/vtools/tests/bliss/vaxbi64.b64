@@ -64,6 +64,10 @@ ROUTINE M =
     ! MOVC5's fill byte is read before the move, though the move writes it.
     MOVC5(%REF(2), UPLIT('XY'), OVL, %REF(4), OVL);
     PRINT(.OVL[3]);
+    ! So is MOVTUC's escape byte: L stops it at HE.
+    INCR I FROM 0 TO 255 DO TBL[.I] = .I;
+    OVL[0] = %C'L';
+    PRINT(MOVTUC(%REF(5), STR, OVL, TBL, %REF(5), OVL) EQL STR + 2);
     1
     END;
 END
