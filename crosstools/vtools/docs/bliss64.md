@@ -526,9 +526,13 @@ below it and its largest magnitude above. `SUBx` and `DIVx` take the
 subtrahend and the divisor first, the VAX's order. A literal's bits are
 BLISSA64's, `%D` at G's precision too, with its overflow and underflow
 warnings; BLISSA64 gives `%E'-1.5'` a stray low bit, vbliss the exact
-value. `%SFLOAT` and `%TFLOAT` pass in v0-v7, with their classes in x9,
-and VAX formats as general arguments, as DESIGN-0004 says.
-(`tests/bliss/fltops`, `fltlit3`; oracle)
+value. `%S'-0.0'` and `%T'-0.0'` are negative zeros, as is a negative
+value too small for them; VAX formats have no negative zero. `%SFLOAT`
+and `%TFLOAT` pass in v0-v7, with their classes in x9, and VAX formats
+as general arguments, as DESIGN-0004 says. A routine that homes its
+arguments for `ACTUALPARAMETER` reads x9's classes to take each from
+x0-x7, v0-v7 or the stack; an S argument there is its 32 bits, as in
+BLISSA64. (`tests/bliss/fltops`, `fltlit3`, `nz`, `ap`, `ap2`; oracle)
 
 **Not built-ins.** The executables also hold GEM's intrinsics
 (`EXCH_ATOMIC_x`, `INC_ATOMIC_x`, `MAX_ATOMIC_x`, `ENTER_CRITICAL`, the

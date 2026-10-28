@@ -118,9 +118,11 @@ pub fn literal(fmt: Format, text: &str) -> Option<(u64, Fit)> {
 }
 
 /// The sign added, and a VAX format's 16-bit words put in memory order.
+/// IEEE has a negative zero, VAX doesn't (oracle NZ, NZ2).
 fn sign(fmt: Format, neg: bool, packed: u64) -> u64 {
     let total = 8 * u32::from(fmt.bytes());
-    let v = packed | (u64::from(neg && packed != 0) << (total - 1));
+    let ieee = matches!(fmt, Format::S | Format::T);
+    let v = packed | (u64::from(neg && (packed != 0 || ieee)) << (total - 1));
     match fmt {
         Format::S | Format::T => v,
         Format::F => (v >> 16 | v << 16) & 0xFFFF_FFFF,
@@ -328,6 +330,11 @@ mod tests {
         assert_eq!(lit(Format::S, "0.1"), Some(u64::from(0.1f32.to_bits())));
         assert_eq!(lit(Format::T, "1E-320"), Some(1e-320f64.to_bits()));
         assert_eq!(lit(Format::T, "0"), Some(0));
+        // Negative zero, and a negative value too small for the format.
+        assert_eq!(lit(Format::T, "-0.0"), Some(1 << 63));
+        assert_eq!(lit(Format::S, "-0.0"), Some(1 << 31));
+        assert_eq!(lit(Format::T, "-1E-400"), Some(1 << 63));
+        assert_eq!(lit(Format::S, "-1E-50"), Some(1 << 31));
         // Above half the smallest subnormal: it, not zero. At half, ties to
         // even; just above a half the first rounding made exact, it.
         assert_eq!(lit(Format::S, "1E-45"), Some(1));
@@ -350,6 +357,11 @@ mod tests {
         let lit = |f, t| literal(f, t).map(|(b, _)| b);
         assert_eq!(lit(Format::F, "1.5"), Some(0x0000_40C0));
         assert_eq!(lit(Format::F, "-1.5"), Some(0x0000_C0C0));
+        // No negative zero: the sign with a zero exponent is a reserved
+        // operand.
+        for f in [Format::F, Format::D, Format::G] {
+            assert_eq!(lit(f, "-0.0"), Some(0));
+        }
         assert_eq!(lit(Format::G, "1.5"), Some(0x0000_0000_0000_4018));
         assert_eq!(lit(Format::D, "1.5"), Some(0x0000_0000_0000_40C0));
         // 0.1: D at G's 53 bits, as BLISSA64 has it, widened.

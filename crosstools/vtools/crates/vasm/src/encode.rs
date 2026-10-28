@@ -896,6 +896,7 @@ pub fn encode<S: Scope>(mn: &str, ops: &[Operand], cx: &Cx<S>) -> Result<Encoded
             let (rd, rn) = (a.reg(0)?, a.reg(1)?);
             match (rd.is_gp(), rn.is_gp()) {
                 (false, false) => {
+                    let (rd, rn) = (a.fp(0)?, a.fp(1)?);
                     let ty = a.same_fp(&[(0, rd), (1, rn)])?;
                     fixed(0x1e20_4000 | ty << 22 | rn.n << 5 | rd.n)
                 }

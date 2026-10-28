@@ -1,0 +1,21 @@
+MODULE FZ (MAIN = M) =
+BEGIN
+! Fields of a run-time size of 0: a store changes nothing, a fetch is 0.
+REQUIRE 'PRINT';
+OWN A, N, P;
+ROUTINE M =
+    BEGIN
+    A = 42;
+    N = 0;
+    P = 3;
+    A<.P, .N> = 123;
+    PRINT(.A);
+    A<0, .N> = 123;
+    PRINT(.A);
+    A = -1;
+    PRINT(.A<.P, .N>);
+    PRINT(.A<.P, .N, 1>);
+    1
+    END;
+END
+ELUDOM

@@ -870,10 +870,14 @@ impl<'a> Routine<'a> {
     }
 
     /// Copies the argument list to `at` from FP: the count from x9, x0-x7,
-    /// and those past them from the caller's stack.
+    /// and those past them from the caller's stack. With S or T arguments,
+    /// x9's classes say which come from x0-x7, which from v0-v7 and which
+    /// from the stack (DESIGN-0004 *Arguments*): an S one's bits are the
+    /// low longword, as in BLISSA64 (oracle AP).
     fn home(&mut self, at: u32) {
         let end = self.f.blocks.len() as u32;
         let (again, done) = (self.label(end + 1), self.label(end + 2));
+        let [classes, next, fl, stack, store, out] = [(); 6].map(|_| self.extra_label());
         // Longwords, or quadwords.
         let (n, r) = if self.f.long_args { (4, "w") } else { (8, "x") };
         self.line("and     x10, x9, #255");
@@ -882,15 +886,55 @@ impl<'a> Routine<'a> {
             let off = at + n * (1 + i);
             self.line(format!("stp     {r}{i}, {r}{}, [x29, #{off}]", i + 1));
         }
+        self.frame_address("x11", self.size.into());
+        self.line("lsr     x16, x9, #8");
+        self.line(format!("cbnz    x16, {classes}"));
         self.line("subs    x10, x10, #8");
         self.line(format!("b.le    {done}"));
-        self.frame_address("x11", self.size.into());
         self.frame_address("x12", i64::from(at + 9 * n));
         self.out.push_str(&format!("{again}:\n"));
         self.line("ldr     x13, [x11], #8");
         self.line(format!("str     {r}13, [x12], #{n}"));
         self.line("subs    x10, x10, #1");
         self.line(format!("b.ne    {again}"));
+        self.line(format!("b       {done}"));
+        // x0-x7 and v0-v7 below SP, to take in turn: x13 counts the
+        // general ones taken, x14 the floating ones from 8, x17 the
+        // classes left.
+        self.out.push_str(&format!("{classes}:\n"));
+        self.frame_address("x12", i64::from(at + n));
+        self.line("sub     sp, sp, #128");
+        for i in (0..8).step_by(2) {
+            self.line(format!("stp     x{i}, x{}, [sp, #{}]", i + 1, 8 * i));
+            self.line(format!("stp     d{i}, d{}, [sp, #{}]", i + 1, 64 + 8 * i));
+        }
+        self.line("mov     x13, #0");
+        self.line("mov     x14, #8");
+        self.line("mov     x17, x16");
+        self.out.push_str(&format!("{next}:\n"));
+        self.line(format!("cbz     x10, {out}"));
+        self.line("and     x16, x17, #3");
+        self.line("lsr     x17, x17, #2");
+        self.line(format!("cbnz    x16, {fl}"));
+        self.line("cmp     x13, #8");
+        self.line(format!("b.hs    {stack}"));
+        self.line("ldr     x16, [sp, x13, lsl #3]");
+        self.line("add     x13, x13, #1");
+        self.line(format!("b       {store}"));
+        self.out.push_str(&format!("{fl}:\n"));
+        self.line("cmp     x14, #16");
+        self.line(format!("b.hs    {stack}"));
+        self.line("ldr     x16, [sp, x14, lsl #3]");
+        self.line("add     x14, x14, #1");
+        self.line(format!("b       {store}"));
+        self.out.push_str(&format!("{stack}:\n"));
+        self.line("ldr     x16, [x11], #8");
+        self.out.push_str(&format!("{store}:\n"));
+        self.line(format!("str     {r}16, [x12], #{n}"));
+        self.line("sub     x10, x10, #1");
+        self.line(format!("b       {next}"));
+        self.out.push_str(&format!("{out}:\n"));
+        self.line("add     sp, sp, #128");
         self.out.push_str(&format!("{done}:\n"));
     }
 
@@ -959,14 +1003,17 @@ impl<'a> Routine<'a> {
                     let m = if *signed { "sbfx" } else { "ubfx" };
                     self.line(format!("{m}    {r}, {v}, #{p}, #{s}"));
                 } else {
-                    // (v >> p) << (64 - s) >> (64 - s)
+                    // (v >> p) << (64 - s) >> (64 - s), and 0 for a size
+                    // of 0, which those shifts by 64, by 0 to ARM64, miss.
                     let p = self.src(p, "x11");
                     let s = self.src(s, "x12");
+                    self.line(format!("cmp     {s}, #0"));
                     self.line(format!("lsr     x13, {v}, {p}"));
                     self.line(format!("neg     x12, {s}"));
                     self.line("lsl     x13, x13, x12");
                     let m = if *signed { "asr" } else { "lsr" };
-                    self.line(format!("{m}     {r}, x13, x12"));
+                    self.line(format!("{m}     x13, x13, x12"));
+                    self.line(format!("csel    {r}, xzr, x13, eq"));
                 }
                 self.done(*d);
             }
@@ -978,13 +1025,15 @@ impl<'a> Routine<'a> {
                     self.line(format!("bfi     x16, {v}, #{p}, #{s}"));
                 } else {
                     // mask = -1 >> (64 - s) << p, which a shift by 64, a
-                    // shift by 0 to ARM64, leaves all ones for a size of 64;
-                    // (base & ~mask) | (v << p & mask)
+                    // shift by 0 to ARM64, leaves all ones for a size of 64,
+                    // and 0 for a size of 0; (base & ~mask) | (v << p & mask)
                     let p = self.src(p, "x12");
                     let s = self.src(s, "x13");
                     self.line("mov     x16, #-1");
                     self.line(format!("neg     x17, {s}"));
                     self.line("lsr     x16, x16, x17");
+                    self.line(format!("cmp     {s}, #0"));
+                    self.line("csel    x16, xzr, x16, eq");
                     self.line(format!("lsl     x16, x16, {p}"));
                     self.line(format!("lsl     x17, {v}, {p}"));
                     self.line("and     x17, x17, x16");

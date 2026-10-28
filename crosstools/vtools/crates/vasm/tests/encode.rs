@@ -397,3 +397,16 @@ fn matches_gnu_as() {
         bad.join("\n")
     );
 }
+
+#[test]
+fn fmov_registers() {
+    // FMOV between floating point registers moves an S or a D one: Q and
+    // H registers are errors, not an S move.
+    for line in ["fmov q0, q1", "fmov h2, h3"] {
+        let source = format!("start:\n    {line}\n");
+        assert!(
+            vasm::assemble(&source, &vasm::Options::default()).is_err(),
+            "{line}"
+        );
+    }
+}

@@ -60,7 +60,7 @@ id = "floating-point"
 title = "Floating point: %E, %D, %G, %S and %T literals, the ADDx ... CVTxy built-ins, %FFLOAT to %TFLOAT, ENVIRONMENT(NOFP)"
 status = "done"
 needs = ["/host/vasm#fp", "/exec/calling-standard#floating-point"]
-note = "RN 2.10, 2.11: literals as BLISSA64 encodes them (oracle FLTLIT2, FLTLIT3; D at G's precision), with its overflow and underflow warnings; the ADDx ... CVTRxy built-ins on operands in memory, VAX formats through IEEE double as Alpha does D through G, SUBx and DIVx in VAX operand order (tests/bliss/fltops, BLISSA64's output); %xFLOAT actuals and results by DESIGN-0004; ENVIRONMENT(NOFP)'s warning. BLISSA64 gives %E'-1.5' a stray low bit, vbliss the exact value"
+note = "RN 2.10, 2.11: literals as BLISSA64 encodes them (oracle FLTLIT2, FLTLIT3; D at G's precision), with its overflow and underflow warnings; the ADDx ... CVTRxy built-ins on operands in memory, VAX formats through IEEE double as Alpha does D through G, SUBx and DIVx in VAX operand order (tests/bliss/fltops, BLISSA64's output); %xFLOAT actuals and results by DESIGN-0004, homed for ACTUALPARAMETER by x9's classes (tests/bliss/ap, ap2); IEEE negative zero (nz.b64); ENVIRONMENT(NOFP)'s warning. BLISSA64 gives %E'-1.5' a stray low bit, vbliss the exact value"
 
 [[feature]]
 id = "general-calls"
@@ -114,7 +114,7 @@ note = "LRM 4.10: the texts are comments in the code, `comment` in the IR, ahead
 id = "register-builtins"
 title = "BUILTIN R0 ... R11: registers as built-ins, named as the linkages name them"
 status = "done"
-note = "RN 2.9.1: Alpha BLISS reads registers with the VAX syntax. R0 and R1 are x0 and x1; R2-R11 the routine's register data (docs/bliss64.md, Registers); field references on them too, .R0<0, 8>, of a size known only when it runs too (vf1.b64); tests/bliss/regbi2.b64 and rfld.b64 against the oracle. AP, FP, SP and PC stay errors, as on Alpha"
+note = "RN 2.9.1: Alpha BLISS reads registers with the VAX syntax. R0 and R1 are x0 and x1; R2-R11 the routine's register data (docs/bliss64.md, Registers); field references on them too, .R0<0, 8>, of a size known only when it runs too (vf1.b64; 0 fetches 0 and stores nothing, fz.b64); tests/bliss/regbi2.b64 and rfld.b64 against the oracle. AP, FP, SP and PC stay errors, as on Alpha"
 
 [[feature]]
 id = "lexical-functions"
