@@ -167,7 +167,7 @@ MACRO
         %IF %BPVAL EQL 64 %THEN
             ((PROD)<0, 64> = .(MULR)<0, 32, 1> * .(MULD)<0, 32, 1> + .(ADDA)<0, 32, 1>; 1)
         %ELSE
-            BEGIN EXTERNAL ROUTINE LIB$EMUL; LIB$EMUL(MULR, MULD, ADDA, PROD); 1 END
+            BEGIN EXTERNAL ROUTINE LIB$EMUL : BLISS; LIB$EMUL(MULR, MULD, ADDA, PROD); 1 END
         %FI %,
     $EDIV(DIVR, DVD, QUO, RMD) =
         %IF %BPVAL EQL 64 %THEN
@@ -180,7 +180,7 @@ MACRO
             1
             END
         %ELSE
-            BEGIN EXTERNAL ROUTINE LIB$EDIV; LIB$EDIV(DIVR, DVD, QUO, RMD); 1 END
+            BEGIN EXTERNAL ROUTINE LIB$EDIV : BLISS; LIB$EDIV(DIVR, DVD, QUO, RMD); 1 END
         %FI %,
     $ASHQ(SHIFTA, SRC, DST) =
         %IF %BPVAL EQL 64 %THEN
@@ -195,6 +195,8 @@ MACRO
     $SUBM(SIZE, SRC1, SRC2, DST) = $$VAX_MULTI(-1, SIZE, SRC1, SRC2, DST) %,
     $$VAX_MULTI(SIGN, SIZE, SRC1, SRC2, DST) =
         BEGIN
+        ! Each fullword wraps into the carry, under the caller's OVERFLOW too.
+        SWITCHES NOOVERFLOW;
         LOCAL $$C; LOCAL $$K; LOCAL $$A; LOCAL $$B; LOCAL $$S;
         $$C = 0;
         INCR $$I FROM 0 TO (SIZE) - 1 DO
@@ -314,4 +316,4 @@ MACRO
 
     ! CALLG: the routine called with the argument list at ARGLIST.
     $CALLG(ARGLIST, RTN) =
-        BEGIN EXTERNAL ROUTINE LIB$CALLG; LIB$CALLG(ARGLIST, RTN) END %;
+        BEGIN EXTERNAL ROUTINE LIB$CALLG : BLISS; LIB$CALLG(ARGLIST, RTN) END %;

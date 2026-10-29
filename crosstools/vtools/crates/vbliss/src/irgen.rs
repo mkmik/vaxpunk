@@ -522,14 +522,19 @@ impl Gen<'_> {
                 if let Expr::Special(Special::Reg(r), _) = **a {
                     let d = self.temp();
                     self.emit(Ins::RegArg(d, r));
-                    return Ok(V::T(d));
+                    return Ok(self.narrow(V::T(d)));
                 }
                 if let Expr::Field(b, pos, size, ext) = &**a
                     && let Expr::Special(Special::Reg(r), _) = **b
                 {
-                    let (pos, size, signed) = self.reg_field(pos, size, ext)?;
+                    let (pos, size, mut signed) = self.reg_field(pos, size, ext)?;
                     if size == V::C(0) {
                         return Ok(V::C(0));
+                    }
+                    // A BLISS-32 fullword is kept sign-extended, as load()
+                    // keeps one from memory.
+                    if self.m.dialect.a32 && size == V::C(32) {
+                        signed = true;
                     }
                     let d = self.temp();
                     self.emit(Ins::RegArg(d, r));

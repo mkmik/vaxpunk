@@ -1,0 +1,83 @@
+                                Source Listing                  DD-MMM-YYYY HH:MM:SS  BLISS-32E V1.11-007-48G4L         Page 1
+                                                                DD-MMM-YYYY HH:MM:SS  SYS$SYSDEVICE:[ORACLE]RF32.B32;1
+
+    0	      1 MODULE RF32 (MAIN = M) =
+    0	      2 BEGIN
+    1	      3 ! Under /A32 a register's longword field is a fullword, sign-extended as
+    1	      4 ! one in memory is.
+    1	      5 REQUIRE 'PRINT32';
+ R  1	      6 ! PRINT for BLISS-32 programs: prints a value as a signed decimal and as 8
+ R  1	      7 ! hex digits, on a line of its own, through LIB$PUT_OUTPUT, under vrun and
+ R  1	      8 ! on OpenVMS for the oracle.
+ R  1	      9 
+ R  1	     10 EXTERNAL ROUTINE
+ R  1	     11     LIB$PUT_OUTPUT;
+ R  1	     12 
+ R  1	     13 ROUTINE PRINT (V) : NOVALUE =
+ R  1	     14     BEGIN
+ R  2	     15     LOCAL
+ R  2	     16         BUF : VECTOR[32, BYTE],
+ R  2	     17         DESC : VECTOR[2],
+ R  2	     18         X,
+ R  2	     19         I;
+ R  2	     20     I = 32;
+ R  2	     21     X = .V;
+ R  2	     22     INCR K FROM 1 TO 8 DO
+ R  2	     23         BEGIN
+ R  3	     24         LOCAL D;
+ R  3	     25         D = .X AND 15;
+ R  3	     26         I = .I - 1;
+ R  3	     27         BUF[.I] = (IF .D LSS 10 THEN %C'0' + .D ELSE %C'A' + .D - 10);
+ R  3	     28         X = .X ^ -4 AND %X'0FFFFFFF'
+ R  3	     29         END;
+ R  2	     30     I = .I - 1;
+ R  2	     31     BUF[.I] = %C' ';
+ R  2	     32     X = .V;
+ R  2	     33     DO
+ R  2	     34         BEGIN
+ R  3	     35         LOCAL D;
+ R  3	     36         D = .X - (.X / 10) * 10;
+ R  3	     37         IF .D LSS 0 THEN D = -.D;
+ R  3	     38         I = .I - 1;
+ R  3	     39         BUF[.I] = %C'0' + .D;
+ R  3	     40         X = .X / 10
+ R  3	     41         END
+ R  3	     42     UNTIL .X EQL 0;
+ R  2	     43     IF .V LSS 0
+ R  2	     44     THEN
+ R  2	     45         BEGIN
+ R  3	     46         I = .I - 1;
+ R  3	     47         BUF[.I] = %C'-'
+ R  3	     48         END;
+ R  2	     49     DESC[0] = 32 - .I + %X'010E0000';
+ R  2	     50     DESC[1] = BUF[.I];
+ R  2	     51     LIB$PUT_OUTPUT(DESC)
+ R  2	     52     END;
+    1	     53 OWN X;
+    1	     54 ROUTINE F =
+    1	     55     BEGIN
+    2	     56     BUILTIN R0;
+    2	     57     R0 = -1;
+
+RF32                            Source Listing                  DD-MMM-YYYY HH:MM:SS  BLISS-32E V1.11-007-48G4L         Page 2
+                                                                DD-MMM-YYYY HH:MM:SS  SYS$SYSDEVICE:[ORACLE]RF32.B32;1
+
+    2	     58     IF .R0<0, 32, 0> EQL -1 THEN 1 ELSE 2
+    2	     59     END;
+    1	     60 ROUTINE M =
+    1	     61     BEGIN
+    2	     62     X = -1;
+    2	     63     PRINT(IF .X<0, 32, 0> EQL -1 THEN 1 ELSE 2);
+    2	     64     PRINT(F());
+    2	     65     1
+    2	     66     END;
+    1	     67 END
+    1	     68 ELUDOM
+
+
+                                Source Listing                  DD-MMM-YYYY HH:MM:SS  BLISS-32E V1.11-007-48G4L         Page 3
+                                Source Listing                  DD-MMM-YYYY HH:MM:SS  SYS$SYSDEVICE:[ORACLE]RF32.B32;1
+
+COMMAND LINE:
+
+BLISS/A32/LIST/SOURCE_LIST=(EXPAND_MACROS,REQUIRE)/NOMACHINE_CODE RF32.B32

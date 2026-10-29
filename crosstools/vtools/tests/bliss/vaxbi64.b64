@@ -21,6 +21,22 @@ OWN
 MACRO
     ! Another macro, whose actual parameter ends at a comma.
     ID(X) = X %;
+ROUTINE OVF : NOVALUE =
+    BEGIN
+    ! Under OVERFLOW too, each fullword wraps into the carry or borrow:
+    ! 2^63 - 1 and 1 add to 2^63, which fits two fullwords, and back.
+    SWITCHES OVERFLOW;
+    A[0] = %X'7FFFFFFFFFFFFFFF';
+    A[1] = 0;
+    B[0] = 1;
+    B[1] = 0;
+    ADDM(2, A, B, C);
+    PRINT(.C[0]);
+    PRINT(.C[1]);
+    SUBM(2, B, C, C);
+    PRINT(.C[0]);
+    PRINT(.C[1])
+    END;
 ROUTINE M =
     BEGIN
     PRINT(FFS(%REF(0), %REF(32), W, POS));
@@ -68,6 +84,7 @@ ROUTINE M =
     INCR I FROM 0 TO 255 DO TBL[.I] = .I;
     OVL[0] = %C'L';
     PRINT(MOVTUC(%REF(5), STR, OVL, TBL, %REF(5), OVL) EQL STR + 2);
+    OVF();
     1
     END;
 END

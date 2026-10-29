@@ -299,7 +299,7 @@ MACRO
     $$RMS_CALL(NAME, BLOCK, ERR, SUC) =
         %IF %NULL(BLOCK) %THEN %ERROR(%STRING('$', NAME, ' needs its block')) %FI
         BEGIN
-        EXTERNAL ROUTINE %NAME('SYS$', NAME);
+        EXTERNAL ROUTINE %NAME('SYS$', NAME) : BLISS;
         %NAME('SYS$', NAME)(BLOCK, ERR, SUC)
         END %;
 

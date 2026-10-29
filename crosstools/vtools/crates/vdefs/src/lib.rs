@@ -353,8 +353,10 @@ fn service_macros(text: &str) -> String {
                 } else {
                     call
                 };
+                // BLISS, as DEC's STARLET says: not the caller's SWITCHES
+                // LINKAGE.
                 out.push_str(&format!(
-                    "        BEGIN\n        EXTERNAL ROUTINE {routine};\n        {call}\n        END %,\n"
+                    "        BEGIN\n        EXTERNAL ROUTINE {routine} : BLISS;\n        {call}\n        END %,\n"
                 ));
             }
             _ => {}
@@ -476,8 +478,8 @@ X$V_FLAG = 3
             generate("s.mlb", services, Dialect::Bliss64).unwrap().ends_with(
                 "\n! The system services (UM 8.3)\nKEYWORDMACRO\n    $WAITFR(EFN) =\n        \
                  %IF %NULL(EFN) %THEN %ERROR('$WAITFR needs EFN') %FI\n        BEGIN\n        \
-                 EXTERNAL ROUTINE SYS$WAITFR;\n        SYS$WAITFR(EFN)\n        END %,\n    \
-                 $HIBER =\n        BEGIN\n        EXTERNAL ROUTINE SYS$HIBER;\n        SYS$HIBER()\n        \
+                 EXTERNAL ROUTINE SYS$WAITFR : BLISS;\n        SYS$WAITFR(EFN)\n        END %,\n    \
+                 $HIBER =\n        BEGIN\n        EXTERNAL ROUTINE SYS$HIBER : BLISS;\n        SYS$HIBER()\n        \
                  END %;\n"
             )
         );

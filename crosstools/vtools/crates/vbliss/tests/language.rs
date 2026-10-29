@@ -809,6 +809,17 @@ fn service_macros() {
     ] {
         assert!(ir.contains(call), "{call}: {ir}");
     }
+    // By the calling standard, whatever the caller's LINKAGE switch: the
+    // services are declared BLISS, as in DEC's STARLET.
+    let out = with_lib(&module(
+        "LIBRARY 'SYS$LIBRARY:STARLET';\nLINKAGE J = JSB (REGISTER = 2);\nSWITCHES LINKAGE(J);\n\
+         OWN FAB : $FAB();",
+        "$WAITFR(EFN = 7);\n$OPEN(FAB = FAB);",
+    ));
+    let ir = out.ir.unwrap();
+    for call in ["call $SYS$WAITFR(7)", "call $SYS$OPEN($FAB, 0, 0)"] {
+        assert!(ir.contains(call), "{call}: {ir}");
+    }
     let missing = with_lib(&module(
         "LIBRARY 'SYS$LIBRARY:STARLET';",
         "$QIOW(FUNC = 1);",
