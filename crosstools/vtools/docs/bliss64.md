@@ -646,9 +646,11 @@ fullwords bring:
 vaxpunk: vbliss makes every check, with BLISSA64's words and severities
 (`crates/vbliss/src/checks.rs`; oracle CHECKS, PARMCHK, CHK*):
 
-- `LONGWORD`: a warning at a `LONG` data declaration with neither sign; a
-  note where a quadword's value, or arithmetic on one, is stored in less
-  or passed to a formal declared shorter.
+- `LONGWORD`: a warning at a `LONG` data declaration or routine value
+  with neither sign; a note where a quadword's value, or arithmetic on
+  one, is stored in less or passed to a formal declared shorter, and
+  where a call is stored in less, unless its routine's value is declared
+  shorter (oracle CHKRV: not a call in arithmetic or as an actual).
 - `ADDRESS_TAKEN`: a note the first time a variable's address, scalar or
   structure, is stored as a value, through an `IF`'s branches too; not
   for `ALIAS` or `VOLATILE` data, a routine's actual or address

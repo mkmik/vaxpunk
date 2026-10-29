@@ -650,6 +650,8 @@ pub struct Parser<'a> {
     pub(crate) taken: Vec<usize>,
     pub(crate) name_at: HashMap<usize, Lexeme>,
     pub(crate) formals: HashMap<usize, Vec<crate::checks::Formal>>,
+    /// The routines whose value is declared less than a fullword.
+    pub(crate) short_value: Vec<usize>,
     pub(crate) static_offsets: HashMap<String, u32>,
     pub(crate) global_names: Vec<String>,
     /// Where the parser went on after an error.
@@ -792,6 +794,7 @@ pub fn parse(name: &str, text: &str, load: Loader, opts: &Options) -> Front {
         forward_data: Vec::new(),
         declaring: None,
         formal_counts: HashMap::new(),
+        short_value: Vec::new(),
         libraries: HashMap::new(),
         library_depth: 0,
         library_imports: Vec::new(),
@@ -2368,6 +2371,7 @@ impl Parser<'_> {
             if let Some(n) = self.routine_name.take() {
                 self.m.syms[id].asm = n;
             }
+            self.note_value(id);
             if let Some(f) = formals {
                 self.formal_counts
                     .insert(id, (f.len(), self.routine_variable));
@@ -2448,6 +2452,11 @@ impl Parser<'_> {
         if unit.is_some() || signed.is_some() {
             let u = unit.unwrap_or(self.m.dialect.fullword());
             self.routine_value = Some((u, signed.unwrap_or(false)));
+            self.check_long(&crate::data::Attrs {
+                unit,
+                signed,
+                ..Default::default()
+            });
         }
         Ok((novalue, linkage))
     }
@@ -2549,6 +2558,7 @@ impl Parser<'_> {
             self.m.syms[sym].asm = n;
         }
         self.formal_counts.insert(sym, (names.len(), variable));
+        self.note_value(sym);
         let units = names
             .iter()
             .map(|(_, a)| crate::checks::Formal {

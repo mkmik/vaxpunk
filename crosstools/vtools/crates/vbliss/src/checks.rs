@@ -215,7 +215,7 @@ impl Parser<'_> {
         self.check_zero_size(left, at);
         if self.switch_on("CHECK_LONGWORD")
             && self.scalar_size(left).is_some_and(|n| n < 8)
-            && self.wide(right)
+            && (self.wide(right) || self.wide_call(right))
         {
             let msg = "Storing 64 bits in a field of less than 64 bits".to_string();
             self.diag('I', at, msg);
@@ -285,6 +285,30 @@ impl Parser<'_> {
             Expr::Bin(_, a, b) => self.wide(a) || self.wide(b),
             Expr::Neg(a) | Expr::Not(a) => self.wide(a),
             _ => false,
+        }
+    }
+
+    /// A call whose value is a fullword: one of a routine not declared
+    /// with a shorter value. BLISSA64 flags it stored as it is, not in
+    /// arithmetic or as an actual (oracle RW).
+    fn wide_call(&self, e: &Expr) -> bool {
+        match e {
+            Expr::Call(t, ..) => match **t {
+                Expr::Name(id) => {
+                    !self.short_value.contains(&id)
+                        && !matches!(self.m.syms[id].kind, Kind::Routine { novalue: true, .. })
+                }
+                _ => true,
+            },
+            _ => false,
+        }
+    }
+
+    /// Records routine `id` if the attributes just read declare its value
+    /// less than a fullword.
+    pub(crate) fn note_value(&mut self, id: usize) {
+        if self.routine_value.is_some_and(|(u, _)| u < 8) {
+            self.short_value.push(id);
         }
     }
 
