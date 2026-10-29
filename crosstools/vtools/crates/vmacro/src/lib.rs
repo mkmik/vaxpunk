@@ -1583,7 +1583,9 @@ fn call_prologue(f: &Frame, fdsc: &str, label: u32) -> Vec<String> {
         if n > 0 {
             // x0-x7 and v0-v7 below SP, to take in turn: x13 counts the
             // general ones taken, x14 the floating ones from 8, x17 holds
-            // the classes left.
+            // the classes left, x9 the argument's. An S argument is its 32
+            // bits: the rest of its register, or stack slot, may hold
+            // anything.
             out.extend([
                 format!("\tb {done}"),
                 format!("{classes}:"),
@@ -1599,9 +1601,9 @@ fn call_prologue(f: &Frame, fdsc: &str, label: u32) -> Vec<String> {
                 "\tmov x13, #0".into(),
                 "\tmov x14, #8".into(),
                 format!("{next}:\tcbz x16, {end}"),
-                "\tand x15, x17, #3".into(),
+                "\tand x9, x17, #3".into(),
                 "\tlsr x17, x17, #2".into(),
-                format!("\tcbnz x15, {fl}"),
+                format!("\tcbnz x9, {fl}"),
                 "\tcmp x13, #8".into(),
                 format!("\tb.hs {stack}"),
                 "\tldr x15, [sp, x13, lsl #3]".into(),
@@ -1613,7 +1615,10 @@ fn call_prologue(f: &Frame, fdsc: &str, label: u32) -> Vec<String> {
                 "\tadd x14, x14, #1".into(),
                 format!("\tb {store}"),
                 format!("{stack}:\tldr x15, [x11], #8"),
-                format!("{store}:\tstr {r}15, [x10], #{slot}"),
+                format!("{store}:\tcmp x9, #1"),
+                "\tmov w9, w15".into(),
+                "\tcsel x15, x9, x15, eq".into(),
+                format!("\tstr {r}15, [x10], #{slot}"),
                 "\tsub x16, x16, #1".into(),
                 format!("\tb {next}"),
                 format!("{end}:\tadd sp, sp, #128"),

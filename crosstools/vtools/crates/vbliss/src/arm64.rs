@@ -915,7 +915,7 @@ impl<'a> Routine<'a> {
         self.line(format!("b       {done}"));
         // x0-x7 and v0-v7 below SP, to take in turn: x13 counts the
         // general ones taken, x14 the floating ones from 8, x17 the
-        // classes left.
+        // classes left, x15 the argument's.
         self.out.push_str(&format!("{classes}:\n"));
         self.frame_address("x12", i64::from(at + n));
         self.line("sub     sp, sp, #128");
@@ -928,9 +928,9 @@ impl<'a> Routine<'a> {
         self.line("mov     x17, x16");
         self.out.push_str(&format!("{next}:\n"));
         self.line(format!("cbz     x10, {out}"));
-        self.line("and     x16, x17, #3");
+        self.line("and     x15, x17, #3");
         self.line("lsr     x17, x17, #2");
-        self.line(format!("cbnz    x16, {fl}"));
+        self.line(format!("cbnz    x15, {fl}"));
         self.line("cmp     x13, #8");
         self.line(format!("b.hs    {stack}"));
         self.line("ldr     x16, [sp, x13, lsl #3]");
@@ -944,7 +944,12 @@ impl<'a> Routine<'a> {
         self.line(format!("b       {store}"));
         self.out.push_str(&format!("{stack}:\n"));
         self.line("ldr     x16, [x11], #8");
+        // An S argument is its 32 bits: the rest of its register, or of
+        // its stack slot, may hold anything.
         self.out.push_str(&format!("{store}:\n"));
+        self.line("cmp     x15, #1");
+        self.line("mov     w15, w16");
+        self.line("csel    x16, x15, x16, eq");
         self.line(format!("str     {r}16, [x12], #{n}"));
         self.line("sub     x10, x10, #1");
         self.line(format!("b       {next}"));

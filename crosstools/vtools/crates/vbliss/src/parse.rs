@@ -2898,7 +2898,15 @@ impl Parser<'_> {
             return Ok(Expr::Fetch(Box::new(e)));
         }
         if self.eat_punct('-') {
-            return Ok(Expr::Neg(Box::new(self.unary()?)));
+            let e = Expr::Neg(Box::new(self.unary()?));
+            // OVERFLOW: 0 - x, which signals for the most negative
+            // fullword, as BLISSA64's does (oracle NEGO).
+            if self.slots_open() && self.switch_on("OVERFLOW") && !self.ltce(&e) {
+                let Expr::Neg(a) = e else { unreachable!() };
+                let sub = crate::builtin::Special::Checked(crate::ir::Op::Sub);
+                return Ok(Expr::Special(sub, vec![Expr::Num(0), *a]));
+            }
+            return Ok(e);
         }
         if self.eat_punct('+') {
             return self.unary();

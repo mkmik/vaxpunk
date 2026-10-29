@@ -138,11 +138,12 @@ The core of the dialect: a BLISS value, the fullword, is a quadword.
   comparisons, which are unsigned: `-1 LSSA 0` is 0. The `[NO]OVERFLOW`
   switch turns overflow checking on and off; RN doesn't say which is the
   default, and BLISSA64 wraps without it, so `NOOVERFLOW` is. Under
-  `OVERFLOW` vbliss checks a routine's `+`, `-` and `*` and signals
+  `OVERFLOW` vbliss checks a routine's `+`, `-` and `*`, and unary minus
+  as BLISSA64 does (`-.N` of the most negative fullword), and signals
   SS$_INTOVF, but not a link-time constant, `X + 8` in an `INITIAL` or a
   `UPLIT`: the linker works it out, and no code runs that could check
   it. (LRM 5.1; RN 2.26; oracle, `tests/bliss/arith.b64`,
-  `tests/bliss/ovfl.b64`; vaxpunk)
+  `tests/bliss/ovfl.b64`, `tests/bliss/nego.b64`; vaxpunk)
 
 ### Signs
 
@@ -543,8 +544,8 @@ as general arguments, as DESIGN-0004 says, each value read where its
 actual is evaluated (`tests/bliss/fv`). A routine that homes its
 arguments for `ACTUALPARAMETER` reads x9's classes to take each from
 x0-x7, v0-v7 or the stack; an S argument there is its 32 bits, as in
-BLISSA64. A MACRO-32 routine's AP list is homed the same way
-(`tests/bliss/interop`). The `%xFLOAT` actuals are for routines in other languages (RN
+BLISSA64, whatever the rest of its register or stack slot holds. A
+MACRO-32 routine's AP list is homed the same way (`tests/bliss/interop`). The `%xFLOAT` actuals are for routines in other languages (RN
 2.10.4): a BLISS routine passed one reads its arguments with
 `ACTUALPARAMETER`, as its named formals are the general arguments in
 AAPCS64's order, where Alpha placed each by its position. (`tests/bliss/fltops`, `fltlit3`, `nz`, `ap`, `ap2`; oracle)
