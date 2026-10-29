@@ -216,11 +216,13 @@ MACRO
     $EDIV(DIVR, DVD, QUO, RMD) =
         %IF %BPVAL EQL 64 %THEN
             BEGIN
-            LOCAL $$Q; LOCAL $$D;
+            LOCAL $$Q; LOCAL $$D; LOCAL $$QA; LOCAL $$RA;
             $$D = .(DIVR)<0, 32, 1>;
             $$Q = .(DVD)<0, 64>;
-            (QUO)<0, 32> = .$$Q / .$$D;
-            (RMD)<0, 32> = .$$Q MOD .$$D;
+            $$QA = QUO;
+            $$RA = RMD;
+            (.$$QA)<0, 32> = .$$Q / .$$D;
+            (.$$RA)<0, 32> = .$$Q MOD .$$D;
             1
             END
         %ELSE
@@ -326,9 +328,11 @@ MACRO
         END %,
     $REMQUE(ENTRY, ADDR) =
         BEGIN
-        LOCAL $$R; LOCAL $$E;
-        $$R = PAL_REMQUEL(ENTRY; $$E);
-        (ADDR)<0, 32> = .$$E;
+        LOCAL $$R; LOCAL $$E; LOCAL $$N; LOCAL $$A;
+        $$N = ENTRY;
+        $$A = ADDR;
+        $$R = PAL_REMQUEL(.$$N; $$E);
+        (.$$A)<0, 32> = .$$E;
         IF .$$R LSS 0 THEN 3 ELSE IF .$$R EQL 0 THEN 2 ELSE 0
         END %,
     $INSQHI(ENTRY, HEADER) = $$INSQI(PAL_INSQHIL, ENTRY, HEADER) %,
@@ -346,9 +350,11 @@ MACRO
     ! The PAL's -1, 0, 1 and 2 for a remove.
     $$REMQI(CALL, HEADER, ADDR) =
         BEGIN
-        LOCAL $$R; LOCAL $$E;
-        $$R = CALL(HEADER; $$E);
-        (ADDR)<0, 32> = .$$E;
+        LOCAL $$R; LOCAL $$E; LOCAL $$H; LOCAL $$A;
+        $$H = HEADER;
+        $$A = ADDR;
+        $$R = CALL(.$$H; $$E);
+        (.$$A)<0, 32> = .$$E;
         IF .$$R LSS 0 THEN 1 ELSE IF .$$R EQL 0 THEN 3 ELSE IF .$$R EQL 1 THEN 0 ELSE 2
         END %,
 

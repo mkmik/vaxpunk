@@ -78,7 +78,12 @@ ROUTINE ORD : NOVALUE =
     TR = 0; CMPM(T(1, 2), T(2, A), T(3, B)); PRINT(.TR);
     TR = 0; EMUL(T(1, %REF(3)), T(2, %REF(4)), T(3, %REF(5)), T(4, C)); PRINT(.TR);
     TR = 0; EDIV(T(1, %REF(3)), T(2, %REF(17)), T(3, POS), T(4, C)); PRINT(.TR);
-    TR = 0; ASHQ(T(1, %REF(1)), T(2, %REF(3)), T(3, C)); PRINT(.TR)
+    TR = 0; ASHQ(T(1, %REF(1)), T(2, %REF(3)), T(3, C)); PRINT(.TR);
+    ! Both destinations too before either is written: 7 / 3 is 2 to C[0],
+    ! though finding C[1] sets C[0] to 99.
+    EDIV(%REF(3), %REF(7), C, (C[0] = 99; C[1]));
+    PRINT(.C[0]);
+    PRINT(.C[1])
     END;
 ROUTINE M =
     BEGIN
